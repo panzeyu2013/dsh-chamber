@@ -3,6 +3,8 @@ import { useEffect, useState } from 'react'
 import { Button, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
 import { chamberBridge, fetchInstanceSnapshot, getInstanceClient } from '@dsh-chamber/dsh-client-ui-sidebar/shared'
 import { gitCoordinator, removeWorktree, WorktreeDirtyError } from '../shared/coordinator.ts'
+import { GitSagaError } from '../shared/saga.ts'
+import { GitWorktreeRpcError } from '../shared/git-api.ts'
 import { collectSessionClosure } from '../shared/git-facts.ts'
 import type { WorkspaceGitInjected } from './injected.ts'
 import css from './SidebarGit.module.css'
@@ -24,6 +26,16 @@ interface RemoveSessionFacts {
   closure: number
   /** Direct sessions (id + title, up to the render cap); the rest are counted. */
   directTitles: Array<{ id: string; title: string }>
+}
+
+/** The host refusal `worktree-submodules` is a DETERMINISTIC pre-mutation
+ *  rejection (the target still exists; nothing was removed — the saga never
+ *  mints a recovery for it). The dialog force-shows the submodule discard
+ *  authorization so the user can retry with `discardChanges` (--force)
+ *  without closing (2026-09). */
+function isSubmoduleRefusal(error: unknown): boolean {
+  const original = error instanceof GitSagaError ? error.original : error
+  return original instanceof GitWorktreeRpcError && original.code === 'worktree-submodules'
 }
 
 export interface RemoveWorktreeDialogProps {
@@ -48,6 +60,12 @@ export function RemoveWorktreeDialog({
    *  (modified/untracked). The branch and its commits are never touched —
    *  only the working-tree files are lost (design 08 §6 amendment 2026-08). */
   const [discardChanges, setDiscardChanges] = useState(false)
+  /** Set when the host refused with `worktree-submodules`: the row fact
+   *  cannot know submodule presence, so the refusal surfaces in-dialog and
+   *  force-shows a dedicated discard authorization (the same --force path,
+   *  which git requires to bypass its submodule guard). */
+  const [submoduleBlock, setSubmoduleBlock] = useState(false)
+  const [discardSubmodules, setDiscardSubmodules] = useState(false)
   const [removeError, setRemoveError] = useState<string | null>(null)
   /** Set when the removal succeeded but the optional branch delete failed. */
   const [branchDeleteFailed, setBranchDeleteFailed] = useState(false)
@@ -66,6 +84,7 @@ export function RemoveWorktreeDialog({
     // user might unknowingly drop unarchived sessions (review P2-6).
     || sessionFactsError !== null
     || (needsDiscardConfirmation && !discardChanges)
+    || (submoduleBlock && !discardSubmodules)
 
   // Enumerate the full session tree (direct + transitive subsessions) the
   // removal would orphan, for explicit confirmation copy.
@@ -75,6 +94,8 @@ export function RemoveWorktreeDialog({
     setDeleteBranch(false)
     setDiscardChanges(false)
     setFreshDirty(false)
+    setSubmoduleBlock(false)
+    setDiscardSubmodules(false)
     setSessionFacts(null)
     setSessionFactsError(null)
     setRemoveError(null)
@@ -131,10 +152,16 @@ export function RemoveWorktreeDialog({
     if (target === null) return
     setRemoveError(null)
     try {
+      // Both authorizations map to the same `discardChanges` wire flag: the
+      // host force-removes (--force) only under explicit user consent —
+      // dirty files (design 08 §6) and/or a submodule checkout inside the
+      // worktree (2026-09) are discarded; branch/commits/HEAD untouched.
+      const discardAuthorized = (needsDiscardConfirmation && discardChanges)
+        || (submoduleBlock && discardSubmodules)
       const result = await removeWorktree(sourceId, target, {
         archiveSessions,
         ...(deleteBranch && target.branch !== null ? { deleteBranch: target.branch } : {}),
-        ...(needsDiscardConfirmation && discardChanges ? { discardChanges: true } : {}),
+        ...(discardAuthorized ? { discardChanges: true } : {}),
       })
       // Honest outcome (2026-08 client review): a failed branch delete keeps
       // the dialog open with an explanation — the worktree removal stands.
@@ -147,9 +174,18 @@ export function RemoveWorktreeDialog({
       // Surface the failure in-dialog; recovery (ambiguous failures) also
       // renders on the per-workspace line so the source can never stay locked.
       // A fresh-preflight dirty rejection force-shows the discard checkbox
-      // (review 2026-08 P2-1) so the user can authorize without closing.
-      if (error instanceof WorktreeDirtyError) setFreshDirty(true)
-      setRemoveError(error instanceof Error ? error.message : String(error))
+      // (review 2026-08 P2-1), and the deterministic `worktree-submodules`
+      // refusal force-shows the submodule discard authorization (2026-09) —
+      // both so the user can authorize and retry without closing.
+      if (error instanceof WorktreeDirtyError) {
+        setFreshDirty(true)
+        setRemoveError(error instanceof Error ? error.message : String(error))
+      } else if (isSubmoduleRefusal(error)) {
+        setSubmoduleBlock(true)
+        setDiscardSubmodules(false)
+      } else {
+        setRemoveError(error instanceof Error ? error.message : String(error))
+      }
     }
   }
 
@@ -217,6 +253,20 @@ export function RemoveWorktreeDialog({
                   onChange={event => setDiscardChanges(event.target.checked)}
                 />
                 <span>{t('dirtyDiscardLabel')}</span>
+              </label>
+            </div>
+          )}
+          {submoduleBlock && (
+            <div className={css.dirtyWarning}>
+              <span role="alert">{t('submoduleDiscardWarning')}</span>
+              <label className={css.archiveToggle}>
+                <input
+                  type="checkbox"
+                  checked={discardSubmodules}
+                  disabled={actionLocked}
+                  onChange={event => setDiscardSubmodules(event.target.checked)}
+                />
+                <span>{t('submoduleDiscardLabel')}</span>
               </label>
             </div>
           )}

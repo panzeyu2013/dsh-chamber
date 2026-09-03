@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   decodeCreateValue, decodeRemoveValue, decodeRollbackCreateValue, GitWorktreeRpcError, gitWorktreeApi,
-  isAmbiguousGitRpcFailure,
+  isAmbiguousGitRpcFailure, isDeterministicGitRejection,
 } from '../src/shared/git-api.ts'
 import type { PreviewCreateResult } from '../src/shared/types.ts'
 
@@ -66,6 +66,27 @@ test('all methods unwrap the explicit domain result and preserve stable domain e
   } finally {
     globalThis.fetch = original
   }
+})
+
+test('worktree-submodules is a deterministic pre-mutation rejection; git refusals stay ambiguous unless the host proves otherwise', () => {
+  // The typed submodule refusal can NEVER have committed a mutation: like
+  // worktree-dirty it must surface as a plain dismissible error (2026-09).
+  assert.equal(
+    isDeterministicGitRejection(new GitWorktreeRpcError('worktree-submodules', 'refused')),
+    true,
+  )
+  // A reclassified pre-mutation refusal keeps the git-command-failed code;
+  // only the host's EXPLICIT retryable: false marks the proof ("target still
+  // exists, nothing removed"). Without that proof the code must stay
+  // ambiguous-capable — a post-mutation failure of the same command has to
+  // remain recoverable through the same-operation replay.
+  const unproven = new GitWorktreeRpcError('git-command-failed', 'failed')
+  assert.equal(isDeterministicGitRejection(unproven), false)
+  assert.equal(isAmbiguousGitRpcFailure(unproven), false)
+  assert.equal(
+    isAmbiguousGitRpcFailure(new GitWorktreeRpcError('git-command-failed', 'failed', undefined, true)),
+    true,
+  )
 })
 
 test('create decoder requires full preview correlation and treats malformed success as ambiguous', () => {

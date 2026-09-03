@@ -10,6 +10,12 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 > 中文版: [CHANGELOG.md](../CHANGELOG.md)
 
+## [Unreleased]
+
+### Fixed
+
+- **Git worktree removal: submodule worktrees no longer wedge the source (design 08 §6/§7/§11.3)** — git refuses a plain `git worktree remove` on a worktree containing submodule checkouts (exit 128, pre-mutation die). The deterministic failure used to be classified as an "uncertain outcome": the sidebar alert strip offered only Retry with no dismiss, locked every git action on the source, and same-reason retries could never succeed. The host now mirrors git's guard before removal: without an explicit discard authorization a submodule worktree is refused with the deterministic code `worktree-submodules` (zero git mutations; `retryable: false` is serialized explicitly); the remove dialog shows an in-place submodule warning with a checkbox authorization, and once checked the removal proceeds with `--force` in one step (the same path as the dirty discard authorization). The host also re-checks the topology after any git failure (target still listed in the same repository, directory still present and worktree still clean ⇒ pre-mutation refusal) and reclassifies `git-command-failed` as deterministic; the client clears a pending git-remove recovery on the `retryable: false` proof — the error becomes dismissible and the source is never locked again. Genuinely ambiguous failures (target already gone, etc.) keep their recovery semantics unchanged. Review pass (2026-09, three-way subagent audit) added: the post-failure recheck now requires the SAME target (same repository identity AND branch/HEAD); when git's stderr names submodules the refusal is upgraded to the same typed code, so legacy gitdir layouts and races also flow through the dialog's discard consent; the terminal fallback guidance in the host message and dialog copy was corrected to removing the leftover submodule gitdirs (empirically `git submodule deinit -f --all` does not clear the admin `modules/` dir and git keeps refusing); two historical facts in design 08 §6 were corrected (a single `--force` does not bypass git's own lock check — `-f -f` is required; git deletes the worktree directory first, then the admin entry).
+
 ## [0.2.0-beta.8] - 2026-09-03
 
 > After the v0.2.0 stable release was retracted over severe defects, the 0.2

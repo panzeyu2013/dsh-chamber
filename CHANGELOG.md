@@ -10,6 +10,29 @@
 
 > English: [docs/CHANGELOG.en-US.md](docs/CHANGELOG.en-US.md)
 
+## [Unreleased]
+
+### 修复
+
+- **Git 工作树删除：含子模块工作树不再锁死来源（设计 08 §6/§7/§11.3）** ——
+  git 拒绝不带 `--force` 的 `worktree remove` 删除含子模块检出的工作树
+  （exit 128，变更前 die）；此前该确定性失败被当作"结果不确定"，侧边栏
+  顶部恢复条只有重试、无关闭出口且锁定该来源全部 git 操作，同一原因的重试
+  永远失败。现在 host 在删除前镜像 git 守卫：未授权丢弃 → 确定性拒绝码
+  `worktree-submodules`（零 git 变更、`retryable: false` 显式序列化）；
+  删除对话框就地显示子模块警示与勾选授权，勾选后以 `--force` 一步删除
+  （dirty 授权同一条路径）。host 在 git 失败后复查拓扑（目标仍在同仓库
+  列出、目录仍在且仍干净 ⇒ 变更前拒绝）改判 `git-command-failed` 为
+  确定性错误；客户端凭 `retryable: false` 信号清除未决的 git-remove
+  恢复——错误可关闭、来源不再被锁死；真正歧义的失败（目标已消失等）
+  保持原恢复语义不变。复查轮（2026-09 subagent 三路审查）追加：失败后
+  复查要求**同一目标**（同仓库身份且 branch/HEAD 相同），git stderr 明确
+  为子模块拒绝时升级为同一 typed 码（历史 gitdir 布局/竞态同样走对话框
+  授权流）；host 与对话框的终端备选指引修正为删除残留子模块 git 目录
+  （实测 `git submodule deinit -f --all` 不会清空 admin `modules/`，
+  守卫依旧拒绝）；design 08 §6 两处历史事实修正（单 `--force` 不绕过 git
+  锁检查——需 `-f -f`；删除顺序为先工作目录后 admin entry）。
+
 ## [0.2.0-beta.8] - 2026-09-03
 
 > v0.2.0 正式版因严重缺陷撤回后，0.2 线以 beta.8 恢复验证；本版内容 = dsh 基线
