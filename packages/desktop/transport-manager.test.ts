@@ -167,6 +167,10 @@ function makeManager(t: TestContext, overrides: {
       : [{ id: 's1', label: 'home-server', host: 'home.example.com', user: 'alice', remotePort: 2222 }]),
     ...(overrides.instances ?? []),
   ])
+  // Dispose after the test: ready-state heartbeat / reconnect timers are
+  // unref'd, but a disposed manager cannot keep probing or emitting into
+  // later tests of the suite.
+  t?.after?.(() => { manager.dispose() })
   return {
     manager,
     spawnCalls,
@@ -2755,4 +2759,164 @@ test('dispose(): exec children get SIGTERM plus a SIGKILL escalation that dispos
   await disposePromise
   assert.equal(disposeSettled, true)
   assert.equal((await resultPromise).ok, false)
+})
+
+test('ready-state heartbeat: a terminal verification failure while ready lands error:requires_user_action with no auto-retry', async t => {
+  let outcome: TransportVerifyResult = { ok: true }
+  const { manager, setProbe, spawnCalls } = makeManager(t, {
+    options: { readyVerifyIntervalMs: 20, readyVerifyMinIntervalMs: 5 },
+    verifyProbe: async () => outcome,
+  })
+  setProbe(true)
+  manager.connect('s1')
+  await waitFor(() => manager.status('s1')!.phase === 'ready', 3000, 'ready')
+  // A dead gateway session (remote password change): the probe 401 is
+  // terminal — the machine must leave ready within one heartbeat tick.
+  outcome = { ok: false, terminal: true, detail: 'the gateway rejected the password authentication (401) — re-enter the password' }
+  await waitFor(() => manager.status('s1')!.phase === 'error', 3000, 'heartbeat terminal error')
+  const status = manager.status('s1')!
+  assert.equal(status.requiresUserAction, true)
+  assert.equal(status.userActionKind, 'endpoint')
+  assert.match(status.logSummary, /re-enter the password/)
+  // Terminal failures never auto-retry: no new transport attempt appears.
+  await sleep(80)
+  assert.equal(manager.status('s1')!.phase, 'error')
+  assert.equal(spawnCalls.length, 1)
+})
+
+test('ready-state heartbeat: a transient verification failure reconnects through degraded and recovers on its own', async t => {
+  let outcome: TransportVerifyResult = { ok: true }
+  const { manager, setProbe } = makeManager(t, {
+    options: {
+      readyVerifyIntervalMs: 15,
+      readyVerifyMinIntervalMs: 5,
+      readyTimeoutMs: 50,
+      retryBaseMs: 10,
+      retryMaxMs: 20,
+      maxRetryAttempts: 3,
+    },
+    verifyProbe: async () => outcome,
+  })
+  setProbe(true)
+  manager.connect('s1')
+  await waitFor(() => manager.status('s1')!.phase === 'ready', 3000, 'ready')
+  // A transient probe failure (remote restart window) takes the bounded
+  // reconnect path — degraded first, then a fresh attempt.
+  outcome = { ok: false, detail: 'connection reset' }
+  await waitFor(() => manager.status('s1')!.phase === 'degraded', 3000, 'degraded after transient heartbeat failure')
+  outcome = { ok: true }
+  await waitFor(() => manager.status('s1')!.phase === 'ready', 3000, 'recovered ready')
+  assert.equal(manager.status('s1')!.retryAttempt, 0)
+})
+
+test('reverify(): on-demand probe runs once, is quiet-windowed, and is a no-op while not ready', async t => {
+  let verifyCalls = 0
+  const { manager, setProbe } = makeManager(t, {
+    // Heartbeat far away (the on-demand quiet window is the tested gate).
+    options: { readyVerifyIntervalMs: 60_000, readyVerifyMinIntervalMs: 5_000 },
+    verifyProbe: async () => { verifyCalls += 1; return { ok: true } },
+  })
+  setProbe(true)
+  manager.connect('s1')
+  await waitFor(() => manager.status('s1')!.phase === 'ready', 3000, 'ready')
+  const atReady = verifyCalls // the connect-time verification
+  manager.reverify('s1')
+  await sleep(30)
+  assert.equal(verifyCalls, atReady + 1, 'on-demand reverify runs one probe')
+  // Quiet window: a second immediate reverify must not pile another probe.
+  manager.reverify('s1')
+  await sleep(30)
+  assert.equal(verifyCalls, atReady + 1, 'quiet window suppresses repeat on-demand probes')
+  // Not ready (manual disconnect): reverify is a no-op.
+  manager.disconnect('s1')
+  await waitFor(() => manager.status('s1')!.phase === 'idle', 3000, 'idle')
+  const before = verifyCalls
+  manager.reverify('s1')
+  await sleep(30)
+  assert.equal(verifyCalls, before, 'reverify is a no-op while not ready')
+})
+
+test('leaving ready cancels the ready-state heartbeat', async t => {
+  let verifyCalls = 0
+  const { manager, setProbe } = makeManager(t, {
+    options: { readyVerifyIntervalMs: 30, readyVerifyMinIntervalMs: 5 },
+    verifyProbe: async () => { verifyCalls += 1; return { ok: true } },
+  })
+  setProbe(true)
+  manager.connect('s1')
+  await waitFor(() => manager.status('s1')!.phase === 'ready', 3000, 'ready')
+  manager.disconnect('s1')
+  await waitFor(() => manager.status('s1')!.phase === 'idle', 3000, 'idle')
+  const atIdle = verifyCalls
+  await sleep(120)
+  assert.equal(verifyCalls, atIdle, 'no heartbeat probes fire after leaving ready')
+})
+
+test('onVerified fires after every successful ready-state re-verification, never on failures', async t => {
+  let outcome: TransportVerifyResult = { ok: true }
+  const verified: string[] = []
+  const { manager, setProbe } = makeManager(t, {
+    options: {
+      readyVerifyIntervalMs: 15,
+      readyVerifyMinIntervalMs: 5,
+      readyTimeoutMs: 50,
+      retryBaseMs: 10,
+      retryMaxMs: 20,
+      maxRetryAttempts: 3,
+      slowRetryMs: 30,
+    },
+    verifyProbe: async () => outcome,
+  })
+  setProbe(true)
+  manager.onVerified(id => { verified.push(id) })
+  manager.connect('s1')
+  await waitFor(() => manager.status('s1')!.phase === 'ready', 3000, 'ready')
+  // The periodic heartbeat succeeds → onVerified fires.
+  await waitFor(() => verified.length >= 1, 3000, 'onVerified after heartbeat success')
+  const afterSuccess = verified.length
+  // A transient failure (reconnect path) must never emit onVerified.
+  outcome = { ok: false, detail: 'connection reset' }
+  await waitFor(() => manager.status('s1')!.phase === 'degraded', 3000, 'degraded')
+  outcome = { ok: true }
+  // The machine recovers through its own reconnect; the next successful
+  // heartbeat fires again — count grows only on successes.
+  await waitFor(() => manager.status('s1')!.phase === 'ready', 3000, 'recovered')
+  await waitFor(() => verified.length > afterSuccess, 3000, 'onVerified after recovery heartbeat')
+})
+
+test('a user reverify overlapping the periodic tick does not kill the heartbeat chain (single-flight collision)', async t => {
+  let outcome: TransportVerifyResult = { ok: true }
+  let hold = false
+  // Object holder (not a bare let): property narrowing across the closure
+  // boundary keeps the release call type-safe for the strict checker.
+  const gate = { release: null as (() => void) | null }
+  let verifyCalls = 0
+  const { manager, setProbe } = makeManager(t, {
+    options: { readyVerifyIntervalMs: 25, readyVerifyMinIntervalMs: 5 },
+    verifyProbe: async () => {
+      verifyCalls += 1
+      if (hold) await new Promise<void>(resolve => { gate.release = resolve })
+      return outcome
+    },
+  })
+  setProbe(true)
+  manager.connect('s1')
+  await waitFor(() => manager.status('s1')!.phase === 'ready', 3000, 'ready')
+  // Start a user reverify and HOLD its probe in flight across the next
+  // periodic tick: the tick is eaten by single-flight and (without the
+  // chain-continuation fix) nothing ever re-arms the heartbeat.
+  hold = true
+  manager.reverify('s1')
+  await waitFor(() => gate.release !== null, 1000, 'user probe held in flight')
+  const heldCalls = verifyCalls
+  await sleep(80) // comfortably past one readyVerifyIntervalMs tick
+  assert.equal(verifyCalls, heldCalls, 'the periodic tick was eaten by the in-flight user probe')
+  // Release the user probe successfully.
+  outcome = { ok: true }
+  hold = false
+  gate.release!()
+  gate.release = null
+  // The chain must continue: the next periodic probe fires on its own.
+  await waitFor(() => verifyCalls > heldCalls, 3000, 'heartbeat chain continues after the collision')
+  assert.equal(manager.status('s1')!.phase, 'ready')
 })

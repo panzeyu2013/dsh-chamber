@@ -105,18 +105,19 @@ var RETRYABLE_CODES = /* @__PURE__ */ new Set([
   "workspace-path-unavailable",
   "running-agent-cwd-unavailable"
 ]);
+var SUBMODULE_REFUSAL_MESSAGE = "worktrees containing submodule checkouts cannot be removed directly: delete the leftover submodule gitdirs under the worktree admin git dir (<worktree .git pointer target>/modules) first \u2014 plain git submodule deinit does not clear them \u2014 or re-run with discardChanges to authorize a --force removal (the reliable path; the submodule checkouts are re-cloneable from their committed gitlinks)";
 async function domainResult(operation) {
   try {
     return { ok: true, value: await operation() };
   } catch (error) {
     if (!(error instanceof GitWorktreeError)) throw error;
-    const retryable = error.retryable ?? RETRYABLE_CODES.has(error.code);
+    const retryable = error.retryable ?? (RETRYABLE_CODES.has(error.code) ? true : void 0);
     return {
       ok: false,
       error: {
         code: error.code,
         message: error.message,
-        ...retryable ? { retryable: true } : {},
+        ...retryable === void 0 ? {} : { retryable },
         ...error.details === void 0 ? {} : { details: error.details }
       }
     };
@@ -1158,7 +1159,7 @@ var GitWorktreeCore = class {
       record.result = result;
       return result;
     } catch (error) {
-      record.state = record.attemptedRemove ? "uncertain" : "ready";
+      record.state = record.attemptedRemove && !(error instanceof GitWorktreeError && error.retryable === false) ? "uncertain" : "ready";
       record.updatedAt = this.now();
       record.promise = void 0;
       throw error;
@@ -1587,9 +1588,25 @@ var GitWorktreeCore = class {
     if (await this.isDirty(finalTarget.path) && intent.discardChanges !== true) {
       fail("worktree-dirty", "worktree became dirty immediately before removal");
     }
+    if (intent.discardChanges !== true && await this.worktreeHasSubmodules(finalTarget.path)) {
+      throw new GitWorktreeError("worktree-submodules", SUBMODULE_REFUSAL_MESSAGE, { retryable: false });
+    }
     operation.attemptedRemove = true;
     const removeArgs = intent.discardChanges === true ? ["worktree", "remove", "--force", "--", intent.path] : ["worktree", "remove", "--", intent.path];
-    await this.gitChecked(finalTopology.mainPath, removeArgs, true);
+    try {
+      await this.gitChecked(finalTopology.mainPath, removeArgs, true);
+    } catch (error) {
+      if (!(error instanceof GitWorktreeError) || error.code !== "git-command-failed") throw error;
+      const reconciled = await this.topology(finalTopology.mainPath).catch(() => void 0);
+      const target = reconciled?.worktrees.find((candidate) => candidate.path === intent.path);
+      const targetStillThere = reconciled !== void 0 && reconciled.commonDir === intent.commonDir && reconciled.mainPath === intent.mainPath && target !== void 0 && target.branch === intent.branch && target.head === intent.head && await this.fs.exists(intent.path).catch(() => false);
+      const stillClean = targetStillThere && !await this.isDirty(intent.path).catch(() => true);
+      if (!stillClean) throw error;
+      if (/submodule/i.test(error.message)) {
+        throw new GitWorktreeError("worktree-submodules", SUBMODULE_REFUSAL_MESSAGE, { retryable: false });
+      }
+      throw new GitWorktreeError(error.code, error.message, { retryable: false });
+    }
     const after = await this.topology(finalTopology.mainPath);
     if (after.commonDir !== intent.commonDir || after.worktrees.some((worktree) => worktree.path === intent.path)) {
       fail("postcondition-failed", "Git still reports the removed worktree or repository identity changed");
@@ -1916,6 +1933,19 @@ var GitWorktreeCore = class {
   async isDirty(path) {
     const result = await this.gitChecked(path, ["status", "--porcelain=v1", "-z", "--untracked-files=normal"]);
     return result.stdout.length > 0;
+  }
+  /** Git's own removal guard mirrored (see commitBoundRemove): does this
+   *  worktree's admin git dir host a `modules` directory (submodule gitdirs)?
+   *  Best-effort — an unreadable `.git` pointer reads as false, and git's own
+   *  refusal is then reclassified deterministically by the caller instead. */
+  async worktreeHasSubmodules(path) {
+    const gitDir = await worktreeGitDir(path, this.fs);
+    if (gitDir === null) return false;
+    try {
+      return await this.fs.exists(join(gitDir, "modules"));
+    } catch {
+      return false;
+    }
   }
   async gitChecked(cwd, args, mutation = false) {
     const result = await this.gitCommand(cwd, args, mutation);

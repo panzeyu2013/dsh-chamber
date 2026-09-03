@@ -236,6 +236,78 @@ test('a forbidden external origin is rejected before auth or dsh proxying', asyn
   assert.equal(state.httpProxyCalls, 0)
 })
 
+test('boundary rejections: browsers get the HTML error page, API clients keep JSON + detail', async () => {
+  const auth: AuthProvider = { kind: 'token', async verify() { return null } }
+  const { dispatch } = setup(auth)
+
+  // A browser document navigation from another site (no Origin, cross-site
+  // sec-fetch) is answered with the rendered HTML page — never raw JSON.
+  const html = await runHttp(dispatch, new FakeRequest('GET', '/', {
+    host: 'gateway.example:3000',
+    'sec-fetch-site': 'cross-site',
+    accept: 'text/html,application/xhtml+xml',
+  }))
+  assert.equal(html.status, 403)
+  assert.match(String(html.headers['content-type']), /^text\/html/)
+  assert.match(String(html.headers['content-security-policy']), /form-action 'self'/)
+  assert.match(String(html.headers['content-security-policy']), /img-src data:/)
+  assert.doesNotMatch(String(html.headers['content-security-policy']), /script-src/)
+  const page = String(html.body)
+  assert.match(page, /<!doctype html>/i)
+  assert.ok(page.includes('Access denied'))
+  assert.ok(page.includes('no Origin header'))
+  assert.doesNotMatch(page, /<script/i)
+  assert.doesNotMatch(page, /value="/)
+
+  // A browser form POST with a mismatched Origin also renders HTML.
+  const htmlPost = await runHttp(dispatch, new FakeRequest('POST', '/auth/login', {
+    host: 'gateway.example:3000',
+    origin: 'http://attacker.example',
+    accept: 'text/html',
+    'content-type': 'application/x-www-form-urlencoded',
+  }))
+  assert.equal(htmlPost.status, 403)
+  assert.match(String(htmlPost.headers['content-type']), /^text\/html/)
+  assert.ok(String(htmlPost.body).includes('origin'), 'the page explains the failing check')
+
+  // An API client without an HTML Accept keeps the JSON shape + additive detail.
+  const api = await runHttp(dispatch, new FakeRequest('POST', '/api/session/create', {
+    host: 'gateway.example:3000',
+    origin: 'http://attacker.example',
+    accept: 'application/json',
+  }))
+  assert.equal(api.status, 403)
+  assert.match(String(api.headers['content-type']), /application\/json/)
+  const body = JSON.parse(String(api.body)) as { error: string; code: string; detail?: string }
+  assert.equal(body.code, 'origin_forbidden')
+  assert.equal(body.error, 'request origin is not allowed')
+  assert.ok(body.detail !== undefined && /attacker\.example/.test(body.detail), 'JSON clients get a non-secret detail line')
+
+  // HEAD browsers get the HTML headers and status, no body.
+  const head = await runHttp(dispatch, new FakeRequest('HEAD', '/', {
+    host: 'gateway.example:3000',
+    'sec-fetch-site': 'cross-site',
+    accept: 'text/html',
+  }))
+  assert.equal(head.status, 403)
+  assert.match(String(head.headers['content-type']), /^text\/html/)
+  assert.equal(String(head.body), '')
+})
+
+test('a host-rejected browser GET renders the 421 page with the offending Host', async () => {
+  const auth: AuthProvider = { kind: 'token', async verify() { return null } }
+  const { dispatch } = setup(auth)
+  const res = await runHttp(dispatch, new FakeRequest('GET', '/', {
+    host: '203.0.113.9:3000',
+    accept: 'text/html',
+  }))
+  assert.equal(res.status, 421)
+  const page = String(res.body)
+  assert.ok(page.includes('203.0.113.9:3000'), 'the offending Host value is shown')
+  assert.ok(page.includes('HTTP 421'))
+  assert.match(String(res.headers['content-type']), /^text\/html/)
+})
+
 test('WS applies the same Host policy before auth and proxies an allowed authenticated stream', async () => {
   let verifyCalls = 0
   const auth: AuthProvider = {
@@ -841,7 +913,13 @@ test('oversized credential-change bodies are 413 and destroy the request socket'
 // ── Gateway login-page behavior (rendered by src/login-page.ts) ──
 
 /** Every HTML login response must carry the full header set: the no-script
- * login CSP (C1), no-store, no-referrer and nosniff (design 17 §7.1). */
+ * login CSP (C1), no-store, and nosniff (design 17 §7.1). `referrer-policy`
+ * is `same-origin` — never `no-referrer`: per the fetch spec "append a
+ * request Origin header" algorithm (2019; Chromium + WebKit r259036/2020),
+ * a no-referrer document makes same-origin form POSTs carry `Origin: null`,
+ * which the gateway's own origin fence rejects fail-closed (403
+ * origin_forbidden — live finding 2026-09, reproduced on Chrome 151; curl
+ * without an Origin was never affected, which is why only browsers hit it). */
 function assertLoginHtmlResponse(res: FakeResponse, status: number): void {
   assert.equal(res.status, status)
   assert.match(String(res.headers['content-type']), /^text\/html/)
@@ -850,7 +928,7 @@ function assertLoginHtmlResponse(res: FakeResponse, status: number): void {
   assert.match(csp, /img-src data:/)
   assert.doesNotMatch(csp, /script-src/)
   assert.equal(String(res.headers['cache-control']), 'no-store')
-  assert.equal(String(res.headers['referrer-policy']), 'no-referrer')
+  assert.equal(String(res.headers['referrer-policy']), 'same-origin')
   assert.equal(String(res.headers['x-content-type-options']), 'nosniff')
 }
 

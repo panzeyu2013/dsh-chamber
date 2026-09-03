@@ -105,6 +105,12 @@ kind 决定**目标语义**：dsh 目标永不注入认证头、永不挂载 `/c
 
 **依赖 gateway 的功能（dsh 运行时管理、凭据面板、插件同步）只能经 gateway 连接触达；
 直连 dsh（无论 ssh 隧道还是 http 直连）物理上不存在 `/chamber/*` 面，无法挂载。**
+**2026-09 修订（用户拍板）：dsh×http 组合禁用**——0.1.2 直连 dsh 的宿主被
+browser-auth 门硬阻断（launch token 为远端进程内存随机数、不可远程恢复），http
+直连 dsh 无法验证/附加；连接表单不再提供该组合（http 传输 schema 只服务 gateway），
+主进程 http provider `validateSpec` 拒绝 dsh kind（注册表保存即拒绝、旧条目加载时
+按无效条目丢弃）。ssh 成为 dsh 唯一传输。上游提供 token 检索机制后，恢复点 =
+connection-form http schema `targetKinds` + http provider `validateSpec` 两处。
 settings-bridge 按来源 kind 装配子 ctx，同一设置页对不同来源显示不同分区：
 
 | 能力 | dsh（ssh 隧道） | dsh（http 直连） | gateway |
@@ -589,6 +595,23 @@ ssh-config alias/DNS 名，绝不能拿来触发 gateway Host policy 421。隧�
 - **刷新失败→有界重连走 verifyUp**：预过期重登失败（网络/429/503）保持旧注册
   （旧 cookie 到期前仍有效）并在过期时刻重试；已过期后仍失败则如实告警，残余
   窗口交给断开→重连路径（verifyUp 用存储密码重登），绝不静默。
+- **ready 态周期再验证 + 用户意图即时探测（2026-09，transport-manager）**：
+  预过期刷新只覆盖"缓存 TTL 到期"，**服务端提前吊销**（远端改密轮换
+  jwt-secret、gateway 重启、auth:none→要认证）与 **http 直连/隧道后实例死亡**
+  在刷新定时器触发前会长期呈现为 ready（绿点 + 401/502 洪流，无任何自动恢复）。
+  因此每个 READY 传输以 `READY_VERIFY_INTERVAL_MS`（60s）周期重跑 provider
+  `verifyUp`（与连接期同一条身份探测缝）：gateway 密码目标经
+  `verifyGatewayPasswordSession` 的"缓存 Cookie 探测 → 401 → 失效 → 用存储密码
+  单次自动重登"流，仅被吊销的会话**无感自愈**（会话轮换后经 `onVerified`
+  按注册认证头指纹差异重注册代理——`registerInstanceTransport` 会撤销在途流量，
+  故健康注册绝不无谓重注册，只有 Cookie 真变化才替换）；重登仍被拒 → 终态
+  `error:requires_user_action`（红点 + 连接页「重新输入密码」）；瞬态失败 →
+  复用隧道掉线同款 `scheduleReconnect`（degraded → 有界重试 → error + 慢速重探）。
+  生命周期锚点 = transport-manager `transition()`：进 ready 武装、离开 ready
+  取消，无独立 arm/disarm 面；单飞 + epoch 围栏，探测结果不跨代提交。
+  用户点击来源头/打开会话（renderer `selectView` 单点）经
+  `desktop_ssh_reverify` 立即触发一次探测（`READY_VERIFY_MIN_INTERVAL_MS` 10s
+  静默窗 + 单飞防叠），把"正要操作的实例"的失效检测延迟收敛到一次探测 RTT。
 - **SPKI pre-write 门**：gateway+HTTPS 配置 pin 时，desktop 登录与 verifyUp 探针、
   control-plane HTTP/WS 反代均先在 TLS `secureConnect` 匹配 peer SPKI，再调用请求
   `write/end` 或发送 upgrade handshake；匹配前不发送 header、Bearer/Cookie、密码 body
@@ -688,14 +711,19 @@ code 映射为可读文案（「输入当前密码以变更凭据」「不能移
 等）只随桌面复合 bundle 分发，不注入 gateway 托管的前端。因此浏览器直连
 没有 chamber 的「连接管理 / 设置壳 / 侧边栏」等扩展面，只有官方前端本体。
 
-- **官方设置页在非 loopback 主机名下不可用**（上游既定行为，gateway 不绕过）：
+- **官方设置页的 loopback 门控由 gateway 出口信任声明解除**（S0，2026-09）：
   官方 `dsh-client-ui-settings` 以 `ctx.remote.$host.isLoopback` 决定持久化
-  模式——`isLoopback=false`（经公网主机名访问）→ `persistence='memory'`
-  → 设置 scope 终态 `unavailable`，页面呈现「settings are unavailable in
-  this browser」一类不可用态；仅当页面经 `127.0.0.1` / `localhost` 访问
-  （`isLoopback=true`）时设置面可用并持久化到宿主。浏览器直连本就不是
-  chamber 设置面的目标通道（桌面 settings-bridge 经实例反代触达
-  `/chamber/runtime`，§10 项 3/design 18 §9.3），故不依赖该门。
+  模式——`isLoopback=false`（非 loopback 主机名访问）→ `persistence='memory'`
+  → 设置 scope 终态 `unavailable`。gateway 代理出口对托管 dsh 的
+  `text/html` 文档（≤64KiB、identity 编码、幂等、fail-soft）注入
+  `window.__DSH_TRANSPORT__={ownsHost:true}`（上游文档化钩子契约，
+  `packages/gateway/src/html-inject.ts`），使官方前端
+  `connection.isLoopback=true` → 设置持久化进入 host 模式，浏览器直连
+  （任意 origin）的 settings/models/插件面可用并写宿主。**信任决策**：
+  auth 门在先、能登录即受信（`--no-auth` 可信网络部署同语义）——非鉴权
+  绕过（服务端 RPC 本就不区分来源，该门是纯客户端 UI 策略）；上游移除
+  钩子/改压缩行为则注入静默失效（fail-soft，设置退回受限态，升级 dsh
+  版本需复验）。实现与验收见 STATUS.md「http 连接链路修复（S0/S2）」。
 - **`/chamber/` 运维仪表盘**是浏览器侧的运维面（§10）：同源 cookie 会话、
   Credentials 面板与 dsh 运行时管理（版本 / 选择 / apply / rollback / restore /
   retry / restart / registry）。它是 gateway 自有的运维入口，与托管前端并列，
@@ -1062,7 +1090,7 @@ PWA 安装、离线缓存和 UA 移动轻面已由 §18 转正为独立设计面
 | 层 | 承担者 | 职责 | 与仓库纪律的关系 |
 |---|---|---|---|
 | 移动适配（覆盖层） | chamber 自研 dsh 客户端插件（`packages/dsh-chamber-client-ui-mobile-*`） | 窄屏下对官方前端做布局/触控/PWA 适配 | 复用 dsh 官方插件机制（design 09 方案 A `--patch` seed / bundle），**不改官方源码**；不写第二套聊天 UI、不消费会话内容（P1/P2/P3 均不触碰） |
-| 暴露与入口（路由层） | gateway | UA 体验分流（可选）、认证边界（§7）、PWA 资产、反代 | 保持流式透传（**无 HTML 改写**）；UA 只是体验分流，**不是安全边界**（认证仍是唯一边界，S1/S2） |
+| 暴露与入口（路由层） | gateway | UA 体验分流（可选）、认证边界（§7）、PWA 资产、反代 | 保持流式透传（**无 HTML 改写**——S0 信任声明注入除外，§10.5，非布局改写）；UA 只是体验分流，**不是安全边界**（认证仍是唯一边界，S1/S2） |
 
 **契约修订（2026-12 与编排面剥离同步收窄）**：§10.5「chamber 自研插件不注入
 gateway 托管前端」与 §3 装配矩阵已定义移动例外——`dsh-chamber-client-ui-mobile`
@@ -1086,14 +1114,14 @@ settings-bridge/git/open-in）依旧不注入。机制上无需新能力：控�
 | 登录流转（未认证移动访问 → 登录页 → 回移动入口） | **gateway 独占**（dispatch `shouldRedirectToLogin`，与桌面浏览器同流转） | 插件不注入、不重定向、不感知认证状态 |
 | UA 体验分流 | **gateway 独占**（dispatch step 4.5，认证门后，仅体验分流） | 插件不读 UA |
 | PWA 资产挂载与 SW 纪律 | gateway 占位 + 插件 P2 期 node 半部（§18.7） | SW 不缓存认证响应（§18.5） |
-| 布局/触控/行为层/视觉 | **插件独占** | gateway 不注入样式、不改写 HTML（流式透传） |
+| 布局/触控/行为层/视觉 | **插件独占** | gateway 不注入样式、不改写 HTML（流式透传；S0 信任声明注入除外，§10.5） |
 | dsh 运行时版本管理、seed registry、`/chamber/*` 运维面 | **gateway 独占**（§10 项 2/3、design 18 §9） | 插件不感知运行时状态 |
 
 ### 18.3 方案结构
 
 ```
 手机浏览器 ──(UA 路由，可选)──▶ gateway 认证边界（§7，唯一安全边界）
-                                   │ 反代（流式透传，无改写）
+                                   │ 反代（流式透传，无改写；S0 信任声明注入除外，§10.5）
                                    ▼
                           gateway 托管的本地 dsh（web profile）
                                    │ 打包 seed（§3 矩阵移动例外：插件随

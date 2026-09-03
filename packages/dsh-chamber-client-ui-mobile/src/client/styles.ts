@@ -1,8 +1,9 @@
 /**
  * Mobile adaptation stylesheet (design 17 §18.4.3/§18.4.5): a single global
  * sheet injected at apply() as `<style data-plugin="…">`. Anchors are the
- * OFFICIAL stable attributes confirmed against the dsh 0.1.2-alpha.3 DOM
- * (CDP empirical audit, 2026-12) plus the plugin's own `data-mobile-*`
+ * OFFICIAL stable attributes confirmed against the dsh 0.1.2-alpha.4 DOM
+ * (CDP empirical audit; ui-layout AppFrame byte-identical with the alpha.3
+ * pin — alpha.4 anchor audit) plus the plugin's own `data-mobile-*`
  * stamps — no hashed class names except the `[class$="_…"]` suffix
  * convention where the official DOM exposes no attribute.
  *
@@ -28,7 +29,7 @@
  * untouched (the official layout must not be affected), and the hamburger
  * has an explicit `display: none` default outside the touch tier.
  *
- * Empirical anchor notes (dsh 0.1.2-alpha.3, CDP audit):
+ * Empirical anchor notes (dsh 0.1.2-alpha.4, CDP audit):
  *  - `data-sidebar-collapsed` on the frame: present "true" when collapsed,
  *    REMOVED when expanded — `:not([data-sidebar-collapsed])` is the open
  *    drawer condition.

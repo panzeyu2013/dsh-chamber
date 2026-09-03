@@ -338,6 +338,7 @@ var VIEWPORT_TOKENS = ["viewport-fit=cover", "interactive-widget=resizes-content
 var PLUGIN_STYLE_TAG = "dsh-chamber-client-ui-mobile";
 
 // src/client/markup.ts
+var ROOT_SLOT_SELECTOR = '[data-slot="root"]';
 var MOBILE_FRAME_ATTR = "data-mobile-frame";
 var MOBILE_ROLE_ATTR = "data-mobile-role";
 function findFrame(root) {
@@ -366,6 +367,25 @@ function stampFrame(root) {
 }
 function deriveCollapsed(snapshot) {
   return snapshot.narrow ? !snapshot.narrowExpanded : snapshot.sidebar === 0;
+}
+function isStructuralTarget(target) {
+  if (target === null || target === void 0) return false;
+  const parent = target.parentElement;
+  const grandparent = parent?.parentElement ?? null;
+  return target.matches(ROOT_SLOT_SELECTOR) || target.matches(`[${MOBILE_FRAME_ATTR}]`) || target.matches(`[${MOBILE_ROLE_ATTR}]`) || parent?.matches(ROOT_SLOT_SELECTOR) === true || parent?.matches(`[${MOBILE_FRAME_ATTR}]`) === true || grandparent?.matches(`[${MOBILE_FRAME_ATTR}]`) === true;
+}
+function isElementNode(node) {
+  return typeof node === "object" && node !== null && typeof node.matches === "function";
+}
+function shouldRestamp(mutations) {
+  return mutations.some((mutation) => {
+    if (mutation.type !== "childList") return false;
+    for (let index = 0; index < mutation.addedNodes.length; index++) {
+      const node = mutation.addedNodes[index];
+      if (isElementNode(node) && isStructuralTarget(node)) return true;
+    }
+    return false;
+  });
 }
 
 // src/client/composer.ts
@@ -655,9 +675,9 @@ function createLayoutFactSource(ctx) {
     notify();
   };
   attach();
-  const isStructuralTarget = (node) => node instanceof Element && (node.matches('[data-slot="root"]') || node.parentElement?.matches('[data-slot="root"]') === true);
+  const isStructuralTarget2 = (node) => node instanceof Element && (node.matches('[data-slot="root"]') || node.parentElement?.matches('[data-slot="root"]') === true);
   const bodyObserver = new MutationObserver((mutations) => {
-    if (mutations.some((mutation) => mutation.type === "childList" && Array.from(mutation.addedNodes).some((node) => isStructuralTarget(node)))) {
+    if (mutations.some((mutation) => mutation.type === "childList" && Array.from(mutation.addedNodes).some((node) => isStructuralTarget2(node)))) {
       attach();
     }
   });
@@ -732,7 +752,6 @@ function MobileNavToggle({ toggleSidebar, t }) {
 
 // src/client/index.ts
 var NS = "dsh-chamber.mobile";
-var ROOT_SLOT_SELECTOR = '[data-slot="root"]';
 var inject = ["slots", "locale", "layout"];
 function apply(ctx) {
   const t = ctx.locale.bind(NS);
@@ -786,21 +805,38 @@ function apply(ctx) {
     };
   }, "dsh-chamber: mobile assets");
   ctx.effect(() => {
+    let frameAttributeObserver = null;
     const stamp = () => {
-      for (const root of document.querySelectorAll(ROOT_SLOT_SELECTOR)) {
+      const roots = document.querySelectorAll(ROOT_SLOT_SELECTOR);
+      for (const root of roots) {
         stampFrame(root);
       }
-    };
-    const isStructuralTarget = (target) => target instanceof Element && (target.matches(ROOT_SLOT_SELECTOR) || target.matches("[data-mobile-frame]") || target.matches("[data-mobile-role]") || target.parentElement?.matches(ROOT_SLOT_SELECTOR) === true || target.parentElement?.matches("[data-mobile-frame]") === true);
-    const onMutations = (mutations) => {
-      if (mutations.some((mutation) => mutation.type === "childList" && Array.from(mutation.addedNodes).some((node) => isStructuralTarget(node)))) {
-        stamp();
+      frameAttributeObserver?.disconnect();
+      frameAttributeObserver = null;
+      const frames = [];
+      for (const root of roots) {
+        const frame = root.firstElementChild;
+        if (frame instanceof Element) frames.push(frame);
+      }
+      if (frames.length === 0) return;
+      frameAttributeObserver = new MutationObserver(() => stamp());
+      for (const frame of frames) {
+        frameAttributeObserver.observe(frame, {
+          attributes: true,
+          attributeFilter: ["data-sidebar-collapsed", "data-details-collapsed"]
+        });
       }
     };
+    const onMutations = (mutations) => {
+      if (shouldRestamp(mutations)) stamp();
+    };
     stamp();
-    const observer = new MutationObserver(onMutations);
-    observer.observe(document.body, { childList: true, subtree: true });
-    return () => observer.disconnect();
+    const childListObserver = new MutationObserver(onMutations);
+    childListObserver.observe(document.body, { childList: true, subtree: true });
+    return () => {
+      childListObserver.disconnect();
+      frameAttributeObserver?.disconnect();
+    };
   }, "dsh-chamber: mobile frame stamping");
   const layoutSource = createLayoutFactSource(ctx);
   ctx.effect(() => {

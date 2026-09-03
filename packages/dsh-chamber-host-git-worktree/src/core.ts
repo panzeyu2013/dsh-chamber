@@ -314,7 +314,16 @@ export type GitWorktreeDomainResult<T> =
   | { readonly ok: true; readonly value: T }
   | { readonly ok: false; readonly error: GitWorktreeDomainError }
 
-/** Stable action error code; Typert transports the Error message to clients. */
+/** Stable action error code; Typert transports the Error message to clients.
+ *  INVARIANT (2026-09): an explicit `retryable: false` is a host-proven
+ *  PRE-MUTATION refusal — the mutation provably did not commit (the
+ *  worktree-submodules gate and the commitBoundRemove reclassification are
+ *  the only emitters, both after proving the target still exists). Never
+ *  throw with explicit `retryable: false` from a path that may have mutated:
+ *  the client clears a pending "uncertain outcome" recovery on that signal.
+ *  An explicit `retryable: true` and an absent flag (code in RETRYABLE_CODES
+ *  ⇒ serialized true) both mean "outcome unverified — same-operation replay
+ *  is the safe route". */
 export class GitWorktreeError extends Error {
   readonly code: string
   readonly retryable?: boolean
@@ -354,19 +363,43 @@ const RETRYABLE_CODES = new Set([
   'running-agent-cwd-unavailable',
 ])
 
+/** Actionable message for the typed submodule refusal (pre-mutation gate and
+ *  the reclassification upgrade). NOTE (2026-09 review, empirically verified
+ *  on git 2.50.1): plain `git submodule deinit` does NOT clear git's guard —
+ *  git keeps the submodule gitdirs under the worktree admin git dir
+ *  (`<wt gitdir>/modules`) and keeps refusing until they are gone. The
+ *  reliable in-UI path is the discard authorization (--force), which
+ *  discards only re-cloneable submodule checkouts; branch/commits/HEAD are
+ *  never touched. */
+const SUBMODULE_REFUSAL_MESSAGE =
+  'worktrees containing submodule checkouts cannot be removed directly: '
+  + 'delete the leftover submodule gitdirs under the worktree admin git dir '
+  + '(<worktree .git pointer target>/modules) first — plain git submodule '
+  + 'deinit does not clear them — or re-run with discardChanges to authorize '
+  + 'a --force removal (the reliable path; the submodule checkouts are '
+  + 're-cloneable from their committed gitlinks)'
+
 /** Convert only known domain failures; unexpected programming failures remain internal throws. */
 export async function domainResult<T>(operation: () => Promise<T>): Promise<GitWorktreeDomainResult<T>> {
   try {
     return { ok: true, value: await operation() }
   } catch (error) {
     if (!(error instanceof GitWorktreeError)) throw error
-    const retryable = error.retryable ?? RETRYABLE_CODES.has(error.code)
+    // Explicit true/false is the host's own classification and is serialized
+    // as-is; an EXPLICIT false is a host-proven PRE-MUTATION refusal (nothing
+    // was changed — only the commitBoundRemove gate/reclassification emit it
+    // after proving the target still exists) and must reach the client
+    // distinct from "not in RETRYABLE_CODES", which simply omits the flag:
+    // the client clears a pending "uncertain outcome" recovery on this
+    // signal. Codes in RETRYABLE_CODES without an explicit flag default to
+    // true (an outcome the host could not verify).
+    const retryable = error.retryable ?? (RETRYABLE_CODES.has(error.code) ? true : undefined)
     return {
       ok: false,
       error: {
         code: error.code,
         message: error.message,
-        ...(retryable ? { retryable: true } : {}),
+        ...(retryable === undefined ? {} : { retryable }),
         ...(error.details === undefined ? {} : { details: error.details }),
       },
     }
@@ -1710,7 +1743,16 @@ export class GitWorktreeCore {
       record.result = result
       return result
     } catch (error) {
-      record.state = record.attemptedRemove ? 'uncertain' : 'ready'
+      // A host-proven pre-mutation refusal (explicit retryable: false — the
+      // gate or the reclassification, both after proving the target still
+      // exists) leaves NO uncertainty to reconcile: label the record 'ready'
+      // exactly like the pre-mutation guard failures, even though a git
+      // mutation attempt was made. Every other failure after the attempt
+      // stays 'uncertain' (same-operation replay reconciles it).
+      record.state = record.attemptedRemove
+        && !(error instanceof GitWorktreeError && error.retryable === false)
+        ? 'uncertain'
+        : 'ready'
       record.updatedAt = this.now()
       record.promise = undefined
       throw error
@@ -2258,14 +2300,71 @@ export class GitWorktreeCore {
     if (await this.isDirty(finalTarget.path) && intent.discardChanges !== true) {
       fail('worktree-dirty', 'worktree became dirty immediately before removal')
     }
+    // Git refuses a plain `git worktree remove` on a worktree containing
+    // submodule checkouts — git's own guard (builtin/worktree.c
+    // validate_no_submodules) dies PRE-mutation; only `--force` bypasses it.
+    // Mirror that guard as a typed DETERMINISTIC refusal (2026-09): without
+    // an explicit discard authorization the removal can never succeed, so the
+    // client must get a dismissible error — never an endless "uncertain
+    // outcome" recovery replaying the same refusal forever. Submodule gitdirs
+    // of a linked worktree live under its admin git dir (`<gitdir>/modules`),
+    // the same criterion git checks first. Best-effort: an unreadable `.git`
+    // pointer reads as "no submodules", and git's own refusal is then
+    // reclassified deterministically by the catch below instead.
+    if (intent.discardChanges !== true && await this.worktreeHasSubmodules(finalTarget.path)) {
+      throw new GitWorktreeError('worktree-submodules', SUBMODULE_REFUSAL_MESSAGE, { retryable: false })
+    }
     operation.attemptedRemove = true
     // `--force` is used ONLY under explicit user authorization
     // (input.discardChanges); it discards the working-tree files but never
-    // touches the branch, commits or HEAD (design 08 §6 amendment 2026-08).
+    // touches the branch, commits or HEAD (design 08 §6 amendment 2026-08;
+    // a submodule checkout inside the worktree is discarded the same way —
+    // its files are re-cloneable from the committed gitlink).
     const removeArgs = intent.discardChanges === true
       ? ['worktree', 'remove', '--force', '--', intent.path]
       : ['worktree', 'remove', '--', intent.path]
-    await this.gitChecked(finalTopology.mainPath, removeArgs, true)
+    try {
+      await this.gitChecked(finalTopology.mainPath, removeArgs, true)
+    } catch (error) {
+      // A `git worktree remove` failure can be a PRE-MUTATION refusal (git
+      // dies before deleting anything — e.g. its own submodule guard when
+      // the best-effort preflight above missed it, or another die() in the
+      // command) or a post-mutation partial failure. Only git-command-failed
+      // exits (die()/partial-delete error returns) are candidates; timeouts
+      // and spawn failures keep their semantics without paying for the
+      // probes below. Re-read the topology: when the VERY SAME target (same
+      // repository identity AND same branch/HEAD) is still listed, its
+      // directory still exists AND the worktree is still clean, git provably
+      // removed nothing — replaying the same refusal can never converge, so
+      // surface a DETERMINISTIC error (retryable: false) that the client may
+      // dismiss instead of wedging the source in an endless "uncertain
+      // outcome" recovery (design 08 §7; 2026-09 submodule report). Any
+      // failed probe keeps the original retryable error.
+      if (!(error instanceof GitWorktreeError) || error.code !== 'git-command-failed') throw error
+      const reconciled = await this.topology(finalTopology.mainPath).catch(() => undefined)
+      const target = reconciled?.worktrees.find(candidate => candidate.path === intent.path)
+      const targetStillThere = reconciled !== undefined
+        && reconciled.commonDir === intent.commonDir
+        && reconciled.mainPath === intent.mainPath
+        && target !== undefined
+        && target.branch === intent.branch
+        && target.head === intent.head
+        && await this.fs.exists(intent.path).catch(() => false)
+      const stillClean = targetStillThere
+        && !(await this.isDirty(intent.path).catch(() => true))
+      if (!stillClean) throw error
+      // git's own die text identifies the submodule refusal when the
+      // best-effort preflight missed it (gitdir layouts without the admin
+      // `modules` dir, races): upgrade to the typed code so the client's
+      // dialog offers the discard authorization instead of a bare error.
+      // The git runner pins LC_ALL=C (see below), so the message is stable
+      // English; a false positive would only route the user to --force,
+      // which git itself allows and which converges.
+      if (/submodule/i.test(error.message)) {
+        throw new GitWorktreeError('worktree-submodules', SUBMODULE_REFUSAL_MESSAGE, { retryable: false })
+      }
+      throw new GitWorktreeError(error.code, error.message, { retryable: false })
+    }
     const after = await this.topology(finalTopology.mainPath)
     if (after.commonDir !== intent.commonDir
       || after.worktrees.some(worktree => worktree.path === intent.path)) {
@@ -2650,6 +2749,20 @@ export class GitWorktreeCore {
   private async isDirty(path: string): Promise<boolean> {
     const result = await this.gitChecked(path, ['status', '--porcelain=v1', '-z', '--untracked-files=normal'])
     return result.stdout.length > 0
+  }
+
+  /** Git's own removal guard mirrored (see commitBoundRemove): does this
+   *  worktree's admin git dir host a `modules` directory (submodule gitdirs)?
+   *  Best-effort — an unreadable `.git` pointer reads as false, and git's own
+   *  refusal is then reclassified deterministically by the caller instead. */
+  private async worktreeHasSubmodules(path: string): Promise<boolean> {
+    const gitDir = await worktreeGitDir(path, this.fs)
+    if (gitDir === null) return false
+    try {
+      return await this.fs.exists(join(gitDir, 'modules'))
+    } catch {
+      return false
+    }
   }
 
   private async gitChecked(cwd: string, args: readonly string[], mutation = false): Promise<GitCommandResult> {

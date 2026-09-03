@@ -52,13 +52,46 @@ export interface ChamberServerAggregate {
   dshVersion?: string
   /** Renderer-local client-plugin boot health for this source. */
   pluginDiagnostic?: {
-    state: 'ok' | 'not-injected' | 'graph-unreachable' | 'bundle-load-failed' | 'restart-required' | 'instance-version-conflict'
+    state: PluginGraphDiagnosticState
     message?: string
     pluginId?: string
     updatedAt: number
   }
   updatedAt: number
 }
+
+/** One source's client-plugin runtime-loading outcome (design 09 §3.5) —
+ *  mirror of the REAL PluginGraphDiagnosticState (aggregate-store.ts). */
+export type PluginGraphDiagnosticState =
+  | 'ok'
+  | 'not-injected'
+  | 'graph-unreachable'
+  | 'bundle-load-failed'
+  | 'restart-required'
+  | 'instance-version-conflict'
+
+/** Outcome of one host-graph channel recheck (design 09 §3.5 recheck
+ *  contract) — mirror of the REAL PluginGraphRecheckOutcome
+ *  (plugin-graph-recheck.ts). */
+export type PluginGraphRecheckOutcome =
+  | 'reported-ok'
+  | 'reported-not-injected'
+  | 'reported-graph-unreachable'
+  | 'unchanged'
+  | 'skipped'
+
+/** True for the diagnostics that describe the host-graph CHANNEL at the last
+ *  shell boot (self-heal candidates) — never for boot-fact classes. Mirror of
+ *  the REAL isChannelClassDiagnostic (plugin-graph-recheck.ts). */
+export function isChannelClassDiagnostic(state: PluginGraphDiagnosticState | undefined): boolean
+
+/** Re-check one source's host boot-graph channel and write the verdict back
+ *  through chamberBridge when the verdict STATE differs from the recorded
+ *  diagnostic. Mirror of the REAL recheckPluginGraphDiagnostic
+ *  (plugin-graph-recheck.ts) — this ambient face is a COMPATIBLE SUBSET of
+ *  the real signature `(sourceId, deps?: PluginGraphRecheckDeps)`; a real
+ *  signature change would not surface as a settings-bridge type error. */
+export function recheckPluginGraphDiagnostic(sourceId: string): Promise<PluginGraphRecheckOutcome>
 
 /** The renderer-shared chamberBridge singleton (non-authoritative projection). */
 export const chamberBridge: {

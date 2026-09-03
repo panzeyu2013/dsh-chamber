@@ -60,10 +60,22 @@ import {
 import type { Logger } from './types.ts'
 import type { ApiCorsEvaluator, ApiRequest, ApiResponse, ApiSurface } from './api.ts'
 
-/** Browser hardening shared by static, API, proxy, and error responses. */
+/** Browser hardening shared by static, API, proxy, and error responses.
+ *
+ * `referrer-policy` is `same-origin`, deliberately NOT `no-referrer` (live
+ * finding 2026-09, reproduced on Chrome 151): per the fetch spec "append a
+ * request Origin header" algorithm (2019; Chromium and WebKit
+ * r259036/2020 — Safari — compliant), a document with no-referrer policy
+ * serializes the Origin of same-origin HTML form submissions as `null`,
+ * which the chamber origin fences (loopback API + gateway request policy)
+ * reject fail-closed — a self-inflicted 403 on any same-origin form
+ * (gateway login, /chamber/runtime actions). `same-origin` preserves the
+ * privacy intent (referers never leave the origin; these surfaces have no
+ * cross-site outbound document requests) without nulling the Origin of form
+ * POSTs. JSON/fetch traffic is unaffected by the policy either way. */
 export const CONTROL_PLANE_SECURITY_HEADERS: Readonly<Record<string, string>> = Object.freeze({
   'cross-origin-opener-policy': 'same-origin',
-  'referrer-policy': 'no-referrer',
+  'referrer-policy': 'same-origin',
   'x-content-type-options': 'nosniff',
   'x-frame-options': 'DENY',
 })

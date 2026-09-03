@@ -58,7 +58,7 @@ import {
   type RendererDeliveryCoordinates,
   type SourceOwnershipToken,
 } from './deep-link-activation.ts'
-import { openInstanceSession, disposeAllShells, disposeInstanceShell, type ShellState } from './shell.ts'
+import { openInstanceSession, reconnectInstanceConnection, disposeAllShells, disposeInstanceShell, type ShellState } from './shell.ts'
 import { runViewTransition } from './view-transition.ts'
 import { captureSidebarScrollAnchor, restoreSidebarScroll } from './sidebar-scroll-sync.ts'
 import {
@@ -71,6 +71,7 @@ import {
   refreshPullStillCurrent,
   remoteRetiredSourceIds,
   retireSelectedSource,
+  shouldReconnectStaleMounted,
   withoutRemovedSourceIds,
   withoutRemovedSourceKeys,
 } from './aggregate-refresh.ts'
@@ -91,6 +92,19 @@ import InstanceView from './components/InstanceView.tsx'
  * presumed to have a dead push channel and is re-pulled from the authority.
  */
 const AGGREGATE_FALLBACK_POLL_MS = 30_000
+/** Minimum gap between two connection reconnects of one stale MOUNTED source
+ * (S2): the watchdog may mark a healthy-but-quiet producer stale on recency
+ * alone, so a failed (or unnecessary) reconnect must not retry every tick. */
+const AGGREGATE_RECONNECT_BACKOFF_MS = 60_000
+/** Staleness threshold for the S2 reconnect arm (deliberately ABOVE the 30s
+ * pull threshold): the App cannot distinguish a frozen push channel from a
+ * healthy-but-quiet one (producers only push on content changes), and every
+ * reconnect replays baselines — so the steady-state cadence for an idle
+ * healthy direct-http source is one lightweight connection bounce per
+ * AGGREGATE_RECONNECT_STALE_MS (≈2min), the inherent cost of healing a real
+ * freeze within that bound (review M2: honest idle cadence, halved vs the
+ * original 60s). The unary pull keeps its own 30s cadence untouched. */
+const AGGREGATE_RECONNECT_STALE_MS = 120_000
 /** Bounded wave over whatever edge-triggered refresh set a poll produces. */
 const AGGREGATE_POLL_CONCURRENCY = 4
 /** First-screen retry: a transient aggregate snapshot failure (0.1.2 wire:
@@ -408,6 +422,12 @@ export default function App() {
   // client exposes no per-source connection state, and a silently dead push
   // channel never fires the producer withdrawal (aggregate-store clear()).
   const snapshotAtRef = useRef<Record<string, number>>({})
+  // Last connection-reconnect timestamp per source (S2, ms epoch; absent =
+  // never reconnected). The staleness watchdog records it so
+  // shouldReconnectStaleMounted can bound repeat reconnects of one stale
+  // mounted source (AGGREGATE_RECONNECT_BACKOFF_MS). Reaped with the source
+  // like snapshotAtRef (a same-id re-add must start a fresh backoff window).
+  const lastReconnectAtRef = useRef<Record<string, number>>({})
   // Synchronous connection-generation edge memory. A mounted producer may
   // suppress an identical post-reconnect snapshot, while the App has already
   // replaced its aggregate with not-connected; one authoritative pull on each
@@ -586,6 +606,14 @@ export default function App() {
         delete snapshotAtRef.current[id]
       }
     }
+    // S2: last-reconnect recency is source-scoped too — a same-id re-add must
+    // start a fresh reconnect-backoff window (mirrors the snapshotAtRef
+    // lockstep above; the reconnect only ever ran for mounted sources).
+    for (const id of Object.keys(lastReconnectAtRef.current)) {
+      if (!servers.some(server => server.id === id)) {
+        delete lastReconnectAtRef.current[id]
+      }
+    }
     setPluginDiagnostics(prev => {
       const next = { ...prev }
       let changed = false
@@ -702,6 +730,10 @@ export default function App() {
     for (const sourceId of retired) {
       delete aggregatePollSeqRef.current[sourceId]
       delete mutationRefreshSeqRef.current[sourceId]
+      // S2: last-reconnect recency retires with the source (same-id re-add
+      // starts a fresh backoff window; the state-backed aggregate maps are
+      // covered by the pure invalidation below, this keyed ref retires here).
+      delete lastReconnectAtRef.current[sourceId]
     }
 
     // Force the supplied authoritative delta through the aggregate generation
@@ -1085,11 +1117,75 @@ export default function App() {
   // sources are never pulled; the bounded wave keeps quiet-fleet cost at a
   // handful of loopback requests per minute and the signature dedup keeps
   // unchanged state churn-free.
+  // S2 (对齐 ssh 断链自动恢复): a stale MOUNTED direct-http source (registry
+  // spec transport === 'http', whatever the target kind) additionally gets a
+  // lightweight connection reconnect (bounded by lastReconnectAtRef) so the
+  // ctx's own reconnect chain re-establishes the frozen workspace follow —
+  // the unary pull only refreshes session rows, it cannot heal the push
+  // channel. The reconnect is an ADDITION, never a replacement of the pull.
+  // Cadence (two distinct regimes, review M2/Low-2): a HEALTHY-but-quiet
+  // source rebaselines after each reconnect, whose baseline push refreshes
+  // snapshotAt — the next reconnect fires ~AGGREGATE_RECONNECT_STALE_MS later
+  // (this depends on the producer's withdraw→re-publish chain resurfacing the
+  // baseline; if that chain stays silent the regime degrades to the backoff
+  // gate below). A TRULY dead channel gets no push after a reconnect, so once
+  // stale it retries every AGGREGATE_RECONNECT_BACKOFF_MS — bounded churn
+  // that keeps probing until the channel heals or the source leaves ready.
   useEffect(() => {
     const timer = setInterval(() => {
-      const staleIds = collectReadySourceIds(health, remoteStatus, remoteInstances).ready
-        .filter(id => isSnapshotStale(snapshotAtRef.current[id], Date.now(), AGGREGATE_FALLBACK_POLL_MS))
+      const now = Date.now()
+      const ready = collectReadySourceIds(health, remoteStatus, remoteInstances).ready
+      const staleIds = ready
+        .filter(id => isSnapshotStale(snapshotAtRef.current[id], now, AGGREGATE_FALLBACK_POLL_MS))
       if (staleIds.length > 0) runBoundedAggregateWave(staleIds)
+      // The reconnect arm is scoped to DIRECT-HTTP sources (registry spec
+      // transport === 'http' — gateway-kind AND dsh-kind alike); ssh-transport
+      // targets (any kind) are excluded: the tunnel's ssh keepalive and
+      // loopback stability already protect them, so churning their ctxs would
+      // be pure cost (M1 review fix: the axis is the transport, not the target
+      // kind). No host-loopback exclusion here — unlike S2-a (whose transport
+      // keepalive is pointless on a loopback leg that cannot half-open), this
+      // arm also heals ctx-level push-channel freezes that are NOT
+      // transport-caused (e.g. a dsh-restart rebaseline gap), so a
+      // loopback-host direct-http target (local gateway dev) stays covered; a
+      // healthy idle one there merely bounces every ~2min (bounded, dev form).
+      const directHttpSourceIds = new Set(
+        remoteInstances
+          .filter(instance => instance.transport === 'http')
+          .map(instance => sourceIdForInstance(instance)),
+      )
+      for (const id of ready) {
+        if (id === LOCAL_INSTANCE_ID || !directHttpSourceIds.has(id)) continue
+        // mounted here means "the ctx producer pushed at least one snapshot
+        // this generation" (snapshotSources) — the S2 target class is a
+        // channel that worked and then went silent; a channel dead from its
+        // first boot never pushes and stays on the unary fallback, which
+        // already covers it (KNOWN DEGRADATION scope, M3 review note).
+        if (!shouldReconnectStaleMounted({
+          mounted: snapshotSourcesRef.current[id] === true,
+          lastSnapshotAt: snapshotAtRef.current[id],
+          lastReconnectAt: lastReconnectAtRef.current[id],
+          now,
+          stalenessMs: AGGREGATE_RECONNECT_STALE_MS,
+          reconnectBackoffMs: AGGREGATE_RECONNECT_BACKOFF_MS,
+        })) continue
+        // Record the attempt synchronously with firing so overlapping
+        // ticks/effect re-arms cannot double-fire while a reconnect is in
+        // flight — but only when reconnect() was actually invoked: a no-op
+        // (shell not booted / ctx missing, e.g. a boot-failure retry window)
+        // must not consume the backoff window and delay the first effective
+        // reconnect (M4 review fix).
+        // NOTE (review P2-3): each reconnect resets the ctx connection's
+        // official exponential backoff to an immediate retry (MANUAL_RECONNECT
+        // semantics) — while a target stays ready-but-dead this yields a
+        // fixed ~60s probe cadence instead of the official backoff ceiling.
+        // Bounded and intended (it is the healing probe); a long-dead target
+        // eventually flips to not-connected via the main-process reverify
+        // path, which removes it from this arm.
+        if (reconnectInstanceConnection(id)) {
+          lastReconnectAtRef.current[id] = now
+        }
+      }
     }, AGGREGATE_FALLBACK_POLL_MS)
     return () => { clearInterval(timer) }
   }, [health, remoteStatus, remoteInstances, runBoundedAggregateWave])
@@ -1424,6 +1520,29 @@ export default function App() {
     })
   }, [])
 
+  /**
+   * 用户意图即时再验证（ready-state heartbeat 的即时加速）：点击/打开一个
+   * 远程来源 = 「现在就想要这个 server」。与 ensureRemoteConnected 互补——
+   * 非 ready 的 error/degraded 来源走隧道重连（connecting 已在途、idle 手动
+   * 断开不触碰）；**ready 但会话/远端已死**（远端改密吊销 gateway 会话、远端
+   * 进程掉线等，transport 相位不变、心跳要等最多一个周期）由主进程 reverify
+   * 立即探测一次：终端失败（401 重登被拒等）相位翻 error（红点 + 连接页错误
+   * 指引），瞬态失败走有界重连。fire-and-forget：权威状态以相位推送为准；
+   * reverify 对非 ready/静默窗内的调用是主进程侧 no-op，故重复点击无副作用。
+   */
+  const probeRemoteReady = useCallback((viewId: string) => {
+    if (viewId === LOCAL_INSTANCE_ID) return
+    const ssh = window.dshChamber?.desktopSsh
+    if (ssh === undefined || ssh.reverify === undefined) return
+    const rawId = rawInstanceIdFromSourceId(viewId)
+    if (rawId === null) return
+    void ssh.reverify(rawId).catch(() => {
+      // 探测失败保持现状：权威状态仍由 onStatusChanged 推送/轮询兜底；
+      // 但失败本身值得留痕（IPC/主进程侧异常，非实例状态）。
+      console.warn(`[renderer] ready-state reverify ${rawId} failed`)
+    })
+  }, [])
+
   /** 视图切换（设计 05 §4）：经 View Transition 包装（view-transition.ts）——
    * 旧视图静态快照保持到新视图渲染就绪，随后短 crossfade；reveal 重排期间
    * 无黑帧；prefers-reduced-motion/不支持时降级即时切换。未就绪目标视图
@@ -1435,6 +1554,9 @@ export default function App() {
    * boot 很贵，且回收 effect 的回滚会造成一闪而过的幽灵骨架屏。local 常驻。
    */
   const selectView = useCallback((viewId: string) => {
+    // 用户点击 = 意图使用该来源：ready 但会话/远端已死的来源立即探测一次
+    //（heartbeat 的即时加速；fire-and-forget，见 probeRemoteReady）。
+    probeRemoteReady(viewId)
     // 用户点击 = 意图使用该来源：error/degraded 隧道立即再试（慢速重探的
     // 即时加速；idle 手动断开不触碰——见 ensureRemoteConnected）。
     ensureRemoteConnected(viewId)
@@ -1479,7 +1601,7 @@ export default function App() {
       setMountedViews(prev => (prev.includes(viewId) ? prev : [...prev, viewId]))
       if (scrollAnchor !== null) restoreSidebarScroll(viewId, scrollAnchor)
     })
-  }, [ensureRemoteConnected])
+  }, [ensureRemoteConnected, probeRemoteReady])
 
   /** Replay the one cold-start remote activation only after the first
    * authoritative instances_get result committed the same roster generation.
@@ -2208,9 +2330,11 @@ export default function App() {
             <button
               className="btn primary"
               onClick={() => {
-                // 重试 = 重新 boot 该视图；error/degraded 隧道同时立即再试
-                // （与 selectView 同语义——boot 失败若由隧道故障引起，不重连
+                // 重试 = 重新 boot 该视图；error/degraded 隧道同时立即再试，
+                // ready 但会话/远端已死的来源立即探测一次（与 selectView
+                // 同语义——boot 失败若由隧道故障或死会话引起，不重连/不探测
                 // 则重试只会再次失败）。
+                probeRemoteReady(activeView)
                 ensureRemoteConnected(activeView)
                 setRetryTokens(prev => ({ ...prev, [activeView]: (prev[activeView] ?? 0) + 1 }))
               }}

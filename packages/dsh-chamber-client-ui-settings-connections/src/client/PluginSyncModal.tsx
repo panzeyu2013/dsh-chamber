@@ -100,10 +100,15 @@ function isActionable(kind: PluginRowKind): boolean {
  *   reason — that instance cards deliberately keep short.
  * @param props.onClose - close (ignored while applying, §5.7).
  */
-export function PluginSyncModal({ t, spec, diagnostic, onClose }: {
+export function PluginSyncModal({ t, spec, diagnostic, onRecheckDiagnostic, onClose }: {
   t: (key: SettingsConnectionsKey) => string
   spec: SshInstanceSpec | null
   diagnostic?: PluginDiagnostic | undefined
+  /** Host-provided CHANNEL-class self-heal recheck (design 09 §3.5): fired
+   *  when the banner is visible on open / turns channel-class, so a
+   *  diagnostic that healed since the source's last shell boot clears
+   *  without an app restart. */
+  onRecheckDiagnostic?: () => void
   onClose: () => void
 }): ReactNode {
   const isRemote = spec !== null
@@ -163,6 +168,16 @@ export function PluginSyncModal({ t, spec, diagnostic, onClose }: {
   const [remoteRemoveBusy, setRemoteRemoveBusy] = useState(false)
   /** Main-process undo confirm + inverse apply in flight (its own dialog). */
   const [undoBusy, setUndoBusy] = useState(false)
+
+  // Diagnostic self-heal (design 09 §3.5): the banner can describe the
+  // source's LAST shell boot while the channel healed since. Whenever the
+  // banner shows a problem, ask the host to re-check — the host runner
+  // re-verifies CHANNEL-class states only and skips boot-fact classes without
+  // fetching, so this cannot loop.
+  useEffect(() => {
+    if (diagnostic === undefined || diagnostic.state === 'ok') return
+    onRecheckDiagnostic?.()
+  }, [diagnostic?.state])
 
   const loadLocalList = useCallback(async (): Promise<void> => {
     setLocalLoading(true)
@@ -307,6 +322,10 @@ export function PluginSyncModal({ t, spec, diagnostic, onClose }: {
         setRestartError(res.error)
       } else {
         setPendingRestart(false)
+        // The restart IS the canonical heal action for a channel-class
+        // diagnostic — ask the host to re-check (the runner skips boot-fact
+        // classes and never writes during the restart window's 503s).
+        onRecheckDiagnostic?.()
       }
     } catch (err) {
       setRestartError(errorMessage(err))
@@ -314,7 +333,7 @@ export function PluginSyncModal({ t, spec, diagnostic, onClose }: {
       setRestartBusy(false)
       await loadSync(true)
     }
-  }, [isRemote, spec, restartBusy, seedBusy, loadSync])
+  }, [isRemote, spec, restartBusy, seedBusy, loadSync, onRecheckDiagnostic])
 
   /**
    * Row-level REMOVE on the remote installed list (design 21 §6.6 次序② ssh
@@ -601,13 +620,13 @@ export function PluginSyncModal({ t, spec, diagnostic, onClose }: {
       return undefined
     }
     if (phase === 'error') {
-      return <Button variant="ghost" icon={<IconRefreshOutline16 />} onClick={() => { void loadSync() }}>{t('pluginsRetry')}</Button>
+      return <Button variant="ghost" icon={<IconRefreshOutline16 />} onClick={() => { void loadSync(); onRecheckDiagnostic?.() }}>{t('pluginsRetry')}</Button>
     }
     if (phase === 'applying') {
       return <Button variant="outline" disabled>{t('saving')}</Button>
     }
     if (phase === 'done') {
-      return <Button variant="ghost" icon={<IconRefreshOutline16 />} onClick={() => { void loadSync() }}>{t('pluginsRefresh')}</Button>
+      return <Button variant="ghost" icon={<IconRefreshOutline16 />} onClick={() => { void loadSync(); onRecheckDiagnostic?.() }}>{t('pluginsRefresh')}</Button>
     }
     // ready
     return (

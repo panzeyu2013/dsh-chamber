@@ -169,21 +169,51 @@ fresh-preflight -> git-removing -> git-removed
   host 以 `git worktree remove --force` 移除（§11.3）。**force 只经显式授权**：
   - 分支/提交/HEAD 永不触碰：`--force` 只丢弃工作树工作区文件
     （已修改/未跟踪文件），`branchPreserved: true` 无条件成立；
-  - 身份/锁/主 checkout/running-agent 守卫全部保留，force 只放行 dirty
-    （注意：`git worktree remove --force` 同时绕过 **git 自身**的锁检查——
-    host 层 `worktree-locked` 守卫无条件保留，但 finalTopology 读取与 git
-    调用之间被外部 `git worktree lock` 的窄窗口不再被 git 拒绝，属 §7 已
-    声明的外部 Git TOCTOU 剩余边界）；
+  - 身份/锁/主 checkout/running-agent 守卫全部保留，force 只放行 dirty。
+    **2026-09 事实修正（对照 git 源码 2.39→master 复核）**：
+    `git worktree remove --force` 并**不**绕过 git 自身的锁检查——remove
+    的锁 die 需 `-f -f`（force ≥ 2）才放行，单 `--force` 仍被 git 拒绝；
+    因此 finalTopology 读取与 git 调用之间被外部 `git worktree lock` 的窄
+    窗口内，git 会在**变更前** die 拒绝（属 §7 声明的外部 Git TOCTOU
+    剩余边界），2026-09 起该拒绝经失败后拓扑复查被改判为确定性错误
+    （可关闭、不锁来源），host 层 `worktree-locked` 守卫无条件保留不变；
   - argv 白名单新增精确文法 `worktree remove --force -- <abs-path>`，
     `--force` 不能以任何其它形态混入；
   - `discardChanges` 参与输入指纹：恢复重放必须携带原值，否则
     `operation-conflict`（恢复永久卡死的反面：明确报错而非静默换语义）；
-  - 剩余边界（§7 既有，force 下略更常见）：git 先删 admin entry 再删工作
-    目录，若递归删除目录因权限等失败，git 退出非零、admin entry 已不在
-    list——重试对账按"topology 无此 worktree"收敛成功，但**目录可能残留**
-    （如 2026-08 实机 `server-side/` 空目录），需用户手动清理；收敛语义
-    与 §6「topology 已无该 worktree 为成功对账条件」一致，不做目录存在性
-    反向校验。
+  - 剩余边界（§7 既有，force 下略更常见；**2026-09 对照 git 源码修正删除
+    顺序**）：git 先删**工作目录**（递归），即便目录删除失败也继续删
+    admin entry——若递归删除目录因权限等失败，git 退出非零、admin entry
+    已不在 list——重试对账按"topology 无此 worktree"收敛成功，但**目录
+    可能残留**（如 2026-08 实机 `server-side/` 空目录），需用户手动清理；
+    收敛语义与 §6「topology 已无该 worktree 为成功对账条件」一致，不做
+    目录存在性反向校验。
+- **2026-09 修订（子模块拒绝，实机报告）**：git 自身拒绝不带 `--force`
+  的 `git worktree remove` 删除**含子模块检出**的工作树——builtin/worktree.c
+  `validate_no_submodules` 在变更前 die（exit 128，"working trees
+  containing submodules cannot be moved or removed"），`--force` 是唯一
+  绕过（linked worktree 的子模块 gitdir 位于其 admin git dir 的
+  `modules/` 下，与 git 判据一致）。host 在最终变更前镜像该守卫：
+  - 含子模块工作树未授权丢弃 → 确定性拒绝码 `worktree-submodules`
+    （`retryable: false` 显式标记），**不发起任何 git 变更**；对话框就地
+    呈现子模块丢弃授权（勾选后 `discardChanges: true` → `--force`，
+    §11.3）——子模块工作区文件与 dirty 文件同属「显式授权才丢弃」的一类
+    （gitlink 已提交，内容可重新检出），分支/提交/HEAD、身份/锁/
+    running 守卫全部不变；
+  - 守卫 best-effort：`.git` 指针不可读时读作"无子模块"；git 的 index
+    回退判据（admin `modules/` 缺失但 index 中有已检出 gitlink——历史/共享
+    gitdir 布局）**不镜像**。git 自身仍拒绝时 host 在失败后复查 topology：
+    **同一个**目标（同仓库身份且 branch/HEAD 相同）仍在列出、目录仍存在
+    且工作树仍干净 ⇒ 必然**变更前拒绝** ⇒ 改判确定性（`retryable:
+    false`）；git 的 stderr 明确为子模块拒绝时升级为同一 typed 码
+    `worktree-submodules`（git 子进程固定 LC_ALL=C，文本稳定），对话框
+    授权流同样可用。目标已消失/身份漂移/变脏等无法证明的失败保持原
+    retryable 语义，恢复重放照旧；
+  - `domainResult` 显式序列化 `retryable: false`（区别于"不在
+    RETRYABLE_CODES 因而省略该字段"）作为"已证明未变更"的线上信号；
+    客户端凭该信号把未决的 git-remove 恢复判为已解决（"未删除"）并清除
+    ——§7「UI 保留未决」的有界例外（仅限 host 可证明的变更前拒绝；
+    歧义失败与 definitive conflict 行为不变）。
 - 然后调 `workspace.delete`：它只解注册，会话日志保留并转 Ungrouped。
 - workspace delete 失败时保留完整的 `operationId + workspaceId + opaque expected + path`
   恢复项。首次及每次重试 registry delete 前，都先重放 host remove 终态验证：目标仍
@@ -222,6 +252,14 @@ fresh-preflight -> git-removing -> git-removed
 - 浏览器 recovery 只在当前页面/进程内持有。host 重启或外部 identity 改变可令旧
   operation 永久 definitive conflict；UI 保留未决并阻止同目标新动作，不提供把
   “放弃”伪装成成功的按钮。用户需 reload 后依据 fresh topology 手工核对。
+  **2026-09 有界例外**：host 显式 `retryable: false` 的拒绝 = 已证明变更前
+  未动（目标仍在、目录仍在、仍干净，见 §6）——同一删除的未决性已被解决为
+  “未删除”，客户端清除该 git-remove 恢复并呈现可关闭错误，不再要求
+  无出口的重试；definitive conflict（身份漂移等）仍按上文保留未决。
+  **2026-09 补充（既有残余，非本次回归）**：脏竞态（git 因树变脏在变更前
+  die）因复查的"仍干净"条件不成立而保持 retryable，其恢复重试随后撞上
+  确定性 `worktree-dirty`（不带证明标记，恢复保留）——脏需外部清理后
+  重试收敛，与 identity 漂移同属"原因可修/需外部核对"的类别。
 - 绝不记录命令输出中的凭据/URL；v1 不提供网络 Git 动词。仓库配置的 checkout
   filter 可能自行访问网络，按 §3.1 的受信边界处理。
 - 远程与本地运行同一 host 包，所以同一套路径/参数/运行会话守卫生效；
@@ -393,6 +431,18 @@ subagent 复查的修复。除仓库特性外，前端形态与 OpenChamber 一�
   分支与已提交内容不受影响"）+ 勾选框「我了解这些更改将被丢弃，仅移除
   工作树（保留分支）」；未勾选时确认按钮禁用，勾选后才发送
   `discardChanges: true`（§6）。
+- **含子模块工作树（2026-09 修订）**：行事实不含子模块信息，首次删除被
+  host 确定性拒绝（`worktree-submodules`，变更前、`retryable: false`、
+  可关闭、不锁来源）后，对话框就地显示警示 + 勾选框「我了解该工作树中的
+  子模块检出将被丢弃，仅移除工作树（保留分支）」；勾选后同一
+  `discardChanges` 授权重试 → host `--force` 一步删除（主路径）。终端备选
+  需删除该工作树残留的子模块 git 目录——**实测（git 2.50.1）`git submodule
+  deinit -f --all` 不会清空 admin `modules/`，守卫依旧拒绝**，文案如实
+  提示。守卫只镜像 git 的主判据（admin `modules/` 目录）；git 的 index
+  回退判据（历史布局）或竞态导致的拒绝经失败后复查**升级为同一 typed
+  码**（§6），对话框流程一致可用。未注册行删除（window.confirm，无
+  对话框授权流）沿用 dirty 的不对称：确定性拒绝 + host 英文提示（终端
+  删除 modules 目录或 --force）。
 - 硬阻断（locked/running/current/unhealthy/status-unknown）保留；
   main/unregistered 仍不可从此入口删除。
 

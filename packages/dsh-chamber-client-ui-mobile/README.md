@@ -30,8 +30,12 @@ pnpm run test:mobile
 
 ## Anchor baseline
 
-Official dsh **v0.1.2-alpha.3** (harness.commit=dd6322d6) DOM, empirically
-audited via CDP (2026-12): `data-sidebar-collapsed` present=collapsed /
+Official dsh **v0.1.2-alpha.4** DOM, empirically audited via CDP; the
+ui-layout AppFrame is byte-identical with the alpha.3 pin (alpha.4 anchor
+audit, harness pin 4e84901e): `data-sidebar-collapsed` present=collapsed /
 removed=expanded; the composer is a Lexical `[data-composer-input]` (no
 textarea); the settings dialog renders INSIDE the sidebar DOM (the drawer
-open state uses `transform: none` for the containing-block rule).
+open state uses `transform: none` for the containing-block rule). The
+details column SHELL is resident from first paint while its
+`[data-slot=details]` outlet is session-gated — stamping re-triggers when
+the outlet mounts (markup.ts `isStructuralTarget`).

@@ -3,7 +3,9 @@
  * OFFICIAL dsh web shell to touch/narrow viewports. Zero code copied from
  * community plugins — the mechanisms (attribute stamping, enter-to-newline,
  * editability recovery, layout-source-driven drawer) are re-implemented
- * against the empirical 0.1.2-alpha.3 DOM on the chamber base:
+ * against the empirical 0.1.2-alpha.4 DOM on the chamber base (the alpha.4
+ * anchor audit re-verified the anchors; the ui-layout AppFrame is
+ * byte-identical with the alpha.3 pin):
  *  - panel state comes from the two-tier layout source (layout-facts.ts):
  *    the chamber layout fork's `layoutFacts` service when present, the
  *    official `data-sidebar-collapsed` attribute observation otherwise —
@@ -22,7 +24,12 @@ import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import type {} from '@deepseek-ai/dsh-client-ui-slots'
 import { en, zh, type MobileKey } from './locales.ts'
 import { MOBILE_CSS, PLUGIN_STYLE_TAG, VIEWPORT_TOKENS } from './styles.ts'
-import { stampFrame } from './markup.ts'
+import {
+  ROOT_SLOT_SELECTOR,
+  shouldRestamp,
+  stampFrame,
+  type MutationLike,
+} from './markup.ts'
 import { createLayoutFactSource } from './layout-facts.ts'
 import {
   installComposerSelfHeal, installEditabilityRecovery, installEnterToNewline,
@@ -40,7 +47,6 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 }
 
 const NS = 'dsh-chamber.mobile'
-const ROOT_SLOT_SELECTOR = '[data-slot="root"]'
 
 // Official services only — the gateway-hosted instance has NO chamber layout
 // fork, so `layoutFacts` (a chamber-only service) must NOT be a hard inject;
@@ -113,37 +119,67 @@ export function apply(ctx: ClientContext): void {
 
   // ---- markup: stamp the frame and its columns (N-ctx: every instance
   // root, idempotent, survives frame remounts). The observer skips deep
-  // content mutations (P2-4): only childList changes whose target IS a
-  // root slot / frame / column candidate can affect the stamping — chat
-  // streaming and typing commit thousands of deep childList batches.
+  // content mutations (P2-4): only childList changes that can affect the
+  // stamp set (root slot / frame / column shell / session-gated slot outlet
+  // mounting inside a resident column shell — see isStructuralTarget in
+  // markup.ts) trigger a re-stamp; chat streaming and typing commit
+  // thousands of deep childList batches that never match. The batch
+  // decision is a pure function (shouldRestamp), unit-tested without a DOM.
+  //
+  // alpha.4 anchor audit (2026-09): the official AppFrame renders the
+  // details column SHELL from first paint while its [data-slot="details"]
+  // outlet is session-gated (a3/a4 ui-layout byte-identical) — the old
+  // "details column appearing with a session" model was a with-session
+  // snapshot. The childList channel below (a) covers the outlet mounting
+  // into the resident shell; a separate frame-attribute channel (b) covers
+  // attribute-only state flips and any deeper drift. The two channels are
+  // deliberately independent: attribute records never reach the childList
+  // batch decision.
   ctx.effect(() => {
     // stampFrame is idempotent (setAttribute on stable anchors), so repeated
     // stamps on remounts are harmless and need no dedup bookkeeping.
+    let frameAttributeObserver: MutationObserver | null = null
     const stamp = (): void => {
-      for (const root of document.querySelectorAll(ROOT_SLOT_SELECTOR)) {
+      const roots = document.querySelectorAll(ROOT_SLOT_SELECTOR)
+      for (const root of roots) {
         stampFrame(root)
       }
-    }
-    const isStructuralTarget = (target: Node): boolean =>
-      target instanceof Element
-      && (target.matches(ROOT_SLOT_SELECTOR)
-        || target.matches('[data-mobile-frame]')
-        || target.matches('[data-mobile-role]')
-        || target.parentElement?.matches(ROOT_SLOT_SELECTOR) === true
-        // A column container newly mounted directly under the stamped
-        // frame (e.g. the details column appearing with a session) — the
-        // frame is already stamped, so it alone would not retrigger.
-        || target.parentElement?.matches('[data-mobile-frame]') === true)
-    const onMutations = (mutations: MutationRecord[]): void => {
-      if (mutations.some(mutation => mutation.type === 'childList'
-        && Array.from(mutation.addedNodes).some(node => isStructuralTarget(node)))) {
-        stamp()
+      // (b) Frame state attributes (collapsed flags) drive the drawer/overlay
+      // geometry and can flip in the same commit as a session activation, or
+      // on attribute-only paths the childList observer never sees. Re-attach
+      // after every stamp so a remounted frame is observed; stampFrame never
+      // writes these attributes, so there is no self-trigger loop. Frequency
+      // is user-action level (drawer open/close, details open) — zero
+      // streaming noise. NOTE: this observer channel is wiring-only and has
+      // no unit test (no DOM/MutationObserver test base in this package) —
+      // verified on device (§18.6); the pure batch decision below is the
+      // unit-tested part.
+      frameAttributeObserver?.disconnect()
+      frameAttributeObserver = null
+      const frames: Element[] = []
+      for (const root of roots) {
+        const frame = root.firstElementChild
+        if (frame instanceof Element) frames.push(frame)
+      }
+      if (frames.length === 0) return
+      frameAttributeObserver = new MutationObserver(() => stamp())
+      for (const frame of frames) {
+        frameAttributeObserver.observe(frame, {
+          attributes: true,
+          attributeFilter: ['data-sidebar-collapsed', 'data-details-collapsed'],
+        })
       }
     }
+    const onMutations = (mutations: MutationRecord[]): void => {
+      if (shouldRestamp(mutations as unknown as MutationLike[])) stamp()
+    }
     stamp()
-    const observer = new MutationObserver(onMutations)
-    observer.observe(document.body, { childList: true, subtree: true })
-    return () => observer.disconnect()
+    const childListObserver = new MutationObserver(onMutations)
+    childListObserver.observe(document.body, { childList: true, subtree: true })
+    return () => {
+      childListObserver.disconnect()
+      frameAttributeObserver?.disconnect()
+    }
   }, 'dsh-chamber: mobile frame stamping')
 
   // ---- drawer body scroll lock (layout-source-driven; design 17 §18.4

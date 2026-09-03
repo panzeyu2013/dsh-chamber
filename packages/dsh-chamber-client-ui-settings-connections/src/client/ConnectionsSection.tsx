@@ -97,6 +97,11 @@ export type ConnectionsSectionProps =
   & {
     /** Per-instance diagnostics keyed by source id ('local' | '<kind>-<id>'); optional outside the chamber shell. */
     pluginDiagnostics?: Readonly<Record<string, PluginDiagnostic | undefined>>
+    /** Self-heal recheck for CHANNEL-class diagnostics (design 09 §3.5):
+     *  the host owns the shared plugin-diagnostic store, so the write-back
+     *  comes from the host (settings-bridge) — this section only asks.
+     *  Absent outside the chamber shell. */
+    onRecheckDiagnostic?: (sourceId: string) => void
   }
 
 /** Host-log page size (04 §3.3: default 200, cap 1000). */
@@ -339,7 +344,7 @@ function GatewaySpkiField({ draft, onChange, fieldError, fieldId, t }: {
  * @returns the section.
  */
 export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
-  const { t, pluginDiagnostics } = props
+  const { t, pluginDiagnostics, onRecheckDiagnostic } = props
   // Per-instance input ids (useId): the dialog renders inside N-ctx panels in
   // the SAME document — static ids would alias across panels. One id per
   // credential/pin field; the transport branches render one set at a time.
@@ -1583,7 +1588,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                       >
                         {spec.kind === 'gateway' ? t('restartGatewayService') : t('restartInstance')}
                       </Button>
-                    )}
+                      )}
                     <div className={css.cardFoot}>
                       {/* 插件入口对每个连接渲染：SSH 通道的 dsh 目标打开
                           同步对话框（desktopSsh 插件表面）；gateway 与 http
@@ -2175,6 +2180,9 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
             spec={pluginFor === 'local' ? null : pluginFor}
             diagnostic={pluginDiagnostics?.[pluginFor === 'local' ? 'local' : `${pluginFor.kind}-${pluginFor.id}`]}
             onClose={() => { setPluginFor(null) }}
+            onRecheckDiagnostic={onRecheckDiagnostic === undefined
+              ? undefined
+              : () => onRecheckDiagnostic(pluginFor === 'local' ? 'local' : `${pluginFor.kind}-${pluginFor.id}`)}
           />
         : null}
 
@@ -2185,6 +2193,9 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
             label={inventoryFor.label}
             diagnostic={pluginDiagnostics?.[`${inventoryFor.kind}-${inventoryFor.id}`]}
             onClose={() => { setInventoryFor(null) }}
+            onRecheckDiagnostic={onRecheckDiagnostic === undefined
+              ? undefined
+              : () => onRecheckDiagnostic(`${inventoryFor.kind}-${inventoryFor.id}`)}
           />
         : null}
     </div>

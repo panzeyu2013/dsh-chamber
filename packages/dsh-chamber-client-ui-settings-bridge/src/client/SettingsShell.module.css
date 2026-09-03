@@ -49,6 +49,7 @@
   gap: 0;
   padding: 0;
   border-radius: 50%;
+  corner-shape: round;
 }
 
 .triggerLabel {
@@ -321,6 +322,7 @@
   width: 8px;
   height: 8px;
   border-radius: 50%;
+  corner-shape: round;
   flex: none;
 }
 
@@ -781,6 +783,7 @@
   width: 16px;
   height: 16px;
   border-radius: 50%;
+  corner-shape: round;
   background: var(--dsw-alias-label-primary-foreground);
   transition: transform 120ms ease;
 }
@@ -1008,6 +1011,7 @@
   padding: 1px 8px;
   border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 999px;
+  corner-shape: round;
   font-size: 11px;
   line-height: 16px;
   color: var(--dsw-alias-label-tertiary);

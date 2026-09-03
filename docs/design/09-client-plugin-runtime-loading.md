@@ -265,6 +265,23 @@ dsh 官方 web 的客户端插件链路是完整的（已核 vendor 源码）：
   chamber 自有诊断。
   诊断发布还必须同时命中 boot 的 current generation 与未取消阈值；同 id
   retry 已开始后，旧 graph Promise 的迟到成功/失败都没有发布权。
+  **通道类诊断自愈复检（2026-09 契约增补）**：诊断按其语义分为两类——
+  `not-injected`/`graph-unreachable` 是 **host-graph 通道事实**（记录于该来源
+  最近一次 shell boot），可能**不经重 boot 自愈**（gateway 受管 dsh 在 boot 记下
+  404 之后才带桌面同步的 chamber host 包受控重启；ssh 目标宿主包种子落地；传输
+  恰好未就绪）；`bundle-load-failed`/`restart-required`/
+  `instance-version-conflict` 是 **boot 事实**——只有重 boot 才能改变合并结果，
+  任何通道复检不得触碰。连接设置页与插件弹窗因此对通道类诊断执行**复检**：
+  连接页激活时与弹窗打开/刷新时，按 boot 拉图同一 wire（`/api/i/<id>/api/
+  clientGraph/graph`、同一 envelope 与状态分类、同一消息文案）重新判定并写回
+  chamberBridge（shared 面单源：`plugin-graph-recheck.ts`）。**写回纪律（防循环
+  与新鲜度的契约前提）**：仅当判定**状态**与已记录诊断**不同**才写回——消息级
+  漂移（如非确定性网络错误文案）永不写回，杜绝自触发乒乓；写回前同步重读
+  store，记录若在拉图期间已被权威写入者（shell boot/退役清除）改动则放弃本次
+  判定——迟到的复检判定绝不覆盖更新的记录；503 `instance_unavailable`（实例
+  启动中/传输缺失）视为"无法判定"，永不写回。boot 仍是诊断的权威写入者；复检
+  只是把已自愈的通道事实收敛为 `ok`，把仍坏的通道事实留在原样，等待下一次
+  boot 或下一次复检。
 
 ## 4. 信任模型与边界（写进设计即写进契约；已同步进代码注释）
 

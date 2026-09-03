@@ -18,9 +18,6 @@
 
 *Main user interface — a single window with the dsh-native sidebar listing every source's sessions/workspaces, and the pure-dsh shell of the active instance.*
 
-> [!WARNING]
-> **Public beta (v0.2.0-beta.x)** — the protocol and API are still evolving and may introduce breaking changes.
-
 > 中文版: [README.md](../README.md) · Development: [docs/DEVELOPMENT.en-US.md](DEVELOPMENT.en-US.md) · Design entry: [design/01-overview.md](design/01-overview.md) · Progress: [progress/STATUS.md](progress/STATUS.md)
 
 ## Quick start
@@ -68,6 +65,8 @@ After installation:
 #### Option B: remote dsh instance + systemd
 
 Without a gateway, persist the server's dsh instance directly with **systemd** (system or user unit, running as a non-root user), and the desktop app connects over an SSH tunnel. Full configuration and troubleshooting: [deploy/remote-dsh-instance.md](deploy/remote-dsh-instance.md).
+
+Already running such a direct instance and switching to the Gateway? Existing data does not follow automatically — after installing the gateway, run the one-time migration in [deploy-gateway.md §3 "Migrating from a direct dsh instance to the Gateway"](deploy/deploy-gateway.md) so your sessions/workspaces carry over seamlessly.
 
 ### 4 · Add a remote host
 

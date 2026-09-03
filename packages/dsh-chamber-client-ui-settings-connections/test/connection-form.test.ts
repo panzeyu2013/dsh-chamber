@@ -43,15 +43,14 @@ function spec(overrides: Partial<SshInstanceSpec>): SshInstanceSpec {
   }
 }
 
-test('transport schema registry exposes both shipped field groups to both target kinds', () => {
+test('transport schema registry: gateway gets both transports, dsh is ssh-only (dsh×http disabled 2026-09)', () => {
   assert.deepEqual(TRANSPORT_FORM_OPTIONS.map(schema => schema.method), ['ssh', 'http'])
   assert.equal(transportFormSchema('ssh').fieldGroup, 'ssh')
   assert.equal(transportFormSchema('http').fieldGroup, 'url')
-  for (const kind of ['dsh', 'gateway'] as const) {
-    for (const method of ['ssh', 'http'] as const) {
-      assert.equal(transportSupportsTarget(method, kind), true, `${kind}+${method}`)
-    }
-  }
+  assert.equal(transportSupportsTarget('ssh', 'dsh'), true)
+  assert.equal(transportSupportsTarget('http', 'dsh'), false, 'dsh×http is disabled (0.1.2 browser-auth gate blocks direct dsh attach)')
+  assert.equal(transportSupportsTarget('ssh', 'gateway'), true)
+  assert.equal(transportSupportsTarget('http', 'gateway'), true)
   assert.deepEqual(transportFormSchema('ssh').defaultRemotePort, { dsh: 30800, gateway: 30801 })
 })
 
@@ -168,22 +167,31 @@ test('edit backfill covers all four target/transport combinations with write-onl
   }
 })
 
-test('kind and transport changes stay orthogonal, clear only transiently inapplicable fields, and preserve custom ports', () => {
-  const initial = draft({
-    kind: 'dsh', transport: 'http', remotePort: '30800', gatewayUrl: 'https://dsh.example.com:30800',
+test('kind and transport changes preserve what the new combination supports and move defaulted ports', () => {
+  // dsh×http cannot exist (2026-09 disable): a kind switch INTO dsh must move
+  // an http draft onto ssh — the only dsh transport.
+  const httpGateway = draft({
+    kind: 'gateway', transport: 'http', remotePort: '443', gatewayUrl: 'https://gw.example.com',
     password: 'ssh-secret', gatewayToken: 'token', gatewayPassword: 'password', spkiPin: PIN,
   })
-  const gateway = changeDraftKind(initial, 'gateway')
-  assert.equal(gateway.transport, 'http', 'kind change must preserve transport')
-  assert.equal(gateway.remotePort, '443')
-  assert.equal(gateway.password, '')
-  assert.equal(gateway.gatewayToken, '')
-  assert.equal(gateway.gatewayPassword, '')
-  assert.equal(gateway.spkiPin, '')
+  const dsh = changeDraftKind(httpGateway, 'dsh')
+  assert.equal(dsh.transport, 'ssh', 'kind switch into dsh must leave the disabled http transport')
+  assert.equal(dsh.remotePort, '30800', 'the still-defaulted port moves to the ssh dsh default')
+  assert.equal(dsh.password, '')
+  assert.equal(dsh.gatewayToken, '')
+  assert.equal(dsh.gatewayPassword, '')
+  assert.equal(dsh.spkiPin, '')
 
-  const tunneled = changeDraftTransport({ ...gateway, gatewayToken: 'new-token', gatewayPassword: 'new-password', spkiPin: PIN }, 'ssh')
+  // dsh → gateway on ssh preserves the supported transport and moves the
+  // still-defaulted port to the gateway ssh default.
+  const gateway = changeDraftKind({ ...dsh, password: 'ssh-secret' }, 'gateway')
+  assert.equal(gateway.transport, 'ssh', 'kind change must preserve a supported transport')
+  assert.equal(gateway.remotePort, '30801')
+  assert.equal(gateway.password, '', 'kind change clears transient credentials')
+
+  const tunneled = changeDraftTransport({ ...gateway, gatewayToken: 'new-token', gatewayPassword: 'new-password', spkiPin: PIN }, 'http')
   assert.equal(tunneled.kind, 'gateway', 'transport change must preserve target')
-  assert.equal(tunneled.remotePort, '30801')
+  assert.equal(tunneled.remotePort, '443')
   assert.equal(tunneled.gatewayToken, 'new-token', 'gateway target auth survives a transport choice change')
   assert.equal(tunneled.gatewayPassword, 'new-password')
   assert.equal(tunneled.spkiPin, '', 'SPKI cannot survive leaving direct HTTPS')

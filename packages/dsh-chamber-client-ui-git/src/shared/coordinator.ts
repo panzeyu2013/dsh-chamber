@@ -21,7 +21,7 @@ import { canTargetSession, findWorktree, removeBlockReason } from './git-facts.t
 // test/visibility-gate.ts).
 import { isPollEligible, visibilityEvents } from './visibility-gate.ts'
 import {
-  GitSagaError, recoveryForFailure, runAdoptSessionSaga, runCreateSaga, runPreRemoveArchive,
+  GitSagaError, isProvenPreMutationRefusal, recoveryForFailure, runAdoptSessionSaga, runCreateSaga, runPreRemoveArchive,
   runRemoveSaga, runRollbackRecovery, runWorkspaceAdoptRecovery, runWorkspaceDeleteRecovery,
 } from './saga.ts'
 import type {
@@ -569,7 +569,17 @@ async function performRemoveSaga(
     })
   } catch (error) {
     if (error instanceof GitSagaError) {
-      setRecovery(sourceId, recoveryForFailure(error, previousRecovery))
+      // A host-PROVEN pre-mutation refusal (original serialized with
+      // retryable: false — the host re-checked the topology and the target
+      // still exists: git removed nothing, core.ts commitBoundRemove)
+      // resolves a pending git-remove recovery replaying THIS same removal
+      // as "not removed": clear the recovery instead of preserving an
+      // endless same-reason retry with no dismiss (design 08 §7 bounded
+      // exception, 2026-09 submodule report). Every genuinely ambiguous
+      // failure and every saga-minted recovery keep their semantics.
+      setRecovery(sourceId, isProvenPreMutationRefusal(error)
+        ? undefined
+        : recoveryForFailure(error, previousRecovery))
       if (error.refreshNeeded || previousRecovery !== undefined) finishMutation(sourceId)
     }
     throw error

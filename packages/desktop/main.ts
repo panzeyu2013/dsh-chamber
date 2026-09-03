@@ -28,6 +28,7 @@
 
 import { app, BrowserWindow, crashReporter, dialog, ipcMain, Menu, Notification, Tray, nativeImage, powerMonitor, powerSaveBlocker, safeStorage, session, shell } from 'electron';
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync, promises as fsp } from 'node:fs';
+import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -1970,6 +1971,15 @@ if (!gotTheLock) {
           ...(tls === undefined ? {} : tls),
           ...(authority === undefined ? {} : { authority }),
         });
+        // Keep the registered-auth fingerprint in lockstep: the refresh
+        // re-registration REPLACES the proxy headers, so the onVerified
+        // fingerprint gate must see the rotated cookie as "already
+        // registered" — otherwise the next successful ready-state probe
+        // (≤60s later) re-registers AGAIN, an unconditional traffic
+        // revocation the gate exists to prevent.
+        registeredAuthFingerprints.set(`gateway:${id}`, authHeadersFingerprint(
+          headers === undefined ? undefined : sanitizedRegistrationHeaders(headers),
+        ));
       },
       // Bounded dead-cookie recovery (design 17 §9.3, P2-1): a re-login that
       // failed AFTER the old cookie died would otherwise leave a healthy
@@ -2210,6 +2220,68 @@ if (!gotTheLock) {
         logger: { warn: message => console.warn(message), log: message => console.log(message) },
       });
     };
+    /**
+     * Current ready-registration auth facts for one gateway instance (design
+     * 17 §9.3): token/password existence, the live cached login cookie +
+     * registration auth proof (keyed to the TRANSPORT's origin — for an ssh
+     * tunnel the loopback endpoint `http://127.0.0.1:<localPort>` plus the
+     * exact connection/target scope; for a direct http(s) endpoint the same
+     * key as verifyUp minted), the tunnel Host authority and the SPKI pin.
+     * S23: the SPKI pin rides the registration so the reverse proxy gates
+     * every outbound https connection on it (the identity probe already
+     * enforced it in verifyUp; a pin edit while live restarts the transport,
+     * so this derivation always carries the current pin).
+     * Derived identically by the ready registration and the post-verify
+     * re-registration (onVerified below) so the two can never drift.
+     */
+    const currentGatewayAuth = (id: string, url: string, registered: TransportInstanceSpec | undefined): {
+      auth: ReturnType<typeof gatewayRegistrationAuthHeaders>;
+      tunnelAuthority: string | undefined;
+      scope: string | undefined;
+      spkiPin: string | undefined;
+    } => {
+      const token = getGatewayToken(id);
+      const password = getGatewayPassword(id);
+      const tunnelAuthority = registered !== undefined && registered.transport === 'ssh'
+        ? gatewayTunnelAuthority(registered.remotePort)
+        : undefined;
+      const scope = registered === undefined ? undefined : gatewaySessionScopeForConnection(registered);
+      let cookie: string | null = null;
+      let authProof: GatewayRegistrationAuthProof | null = null;
+      if (password !== null) {
+        const origin = gatewaySessionOriginForUrl(url, undefined, tunnelAuthority, scope);
+        cookie = origin === null ? null : gatewaySessions?.cachedCookie(origin) ?? null;
+        authProof = origin === null ? null : gatewaySessions?.registrationAuthProof(origin) ?? null;
+      }
+      return {
+        auth: gatewayRegistrationAuthHeaders(token, password !== null, cookie, authProof),
+        tunnelAuthority,
+        scope,
+        spkiPin: registered !== undefined ? registered.spkiPin : undefined,
+      };
+    };
+    /**
+     * Proxy-registration auth-header fingerprints (design 17 §9.3): the ready
+     * registration captures the session Cookie at ready time; a ready-state
+     * re-verification (heartbeat / user activation) that finds the session
+     * revoked and re-logs in (verifyUp's 401 → one stored-password re-login)
+     * leaves the session manager with a FRESH cookie while the proxy keeps
+     * riding the OLD (dead) one — live traffic would answer 401 until the
+     * pre-expiry refresh timer (potentially hours away) or a manual
+     * reconnect. The onVerified subscription below therefore re-registers
+     * whenever the CURRENT auth headers differ from the registered ones.
+     * Only NON-SECRET sha256 fingerprints are kept — header VALUES never
+     * enter this map (credentials stay in the session manager / stores).
+     */
+    const registeredAuthFingerprints = new Map<string, string>();
+    const authHeadersFingerprint = (headers: Record<string, string> | undefined): string => {
+      const canonical = headers === undefined
+        ? 'none'
+        : Object.keys(headers).sort().map(key => `${key}:${headers[key]}`).join('|');
+      return createHash('sha256').update(canonical).digest('hex');
+    };
+    const sanitizedRegistrationHeaders = (headers: Record<string, string>): Record<string, string> | undefined =>
+      Object.keys(headers).length === 0 ? undefined : headers;
     sm.onStatusChanged((id, status) => {
       // S24 audit (design 17 §13.4.4): record non-secret phase TRANSITIONS
       // only (connecting/ready/error, incl. the requiresUserAction terminal
@@ -2258,34 +2330,9 @@ if (!gotTheLock) {
               // dsh targets never inject auth headers (transport-
               // independent, §2.1/§9.3); the instance-proxy re-validates
               // the 0..2 whitelist on every registration.
-              const token = getGatewayToken(id);
               const registered = sm.listInstances().find(instance => instance.id === id);
-              const password = getGatewayPassword(id);
-              const tunnelAuthority = registered !== undefined && registered.transport === 'ssh'
-                ? gatewayTunnelAuthority(registered.remotePort)
-                : undefined;
-              const scope = registered === undefined
-                ? undefined
-                : gatewaySessionScopeForConnection(registered);
-              let cookie: string | null = null;
-              let authProof: GatewayRegistrationAuthProof | null = null;
-              if (password !== null) {
-                // The login session is keyed to the TRANSPORT's origin
-                // (design 17 §9.3), which for an ssh tunnel is the loopback
-                // endpoint `http://127.0.0.1:<localPort>` plus the exact
-                // connection/target scope (the ssh provider minted the same
-                // scoped origin). The remote loopback authority remains the
-                // Host header, not the owner: different ids/SSH targets never
-                // share a cookie even if both ports happen to coincide.
-                // verifyUp ensured the session before this registration, so
-                // the cached cookie is header-ready; a direct http(s)
-                // endpoint derives the same key as before (URL.origin
-                // normalizes default-port elision).
-                const origin = gatewaySessionOriginForUrl(url, undefined, tunnelAuthority, scope);
-                cookie = origin === null ? null : gatewaySessions?.cachedCookie(origin) ?? null;
-                authProof = origin === null ? null : gatewaySessions?.registrationAuthProof(origin) ?? null;
-              }
-              const auth = gatewayRegistrationAuthHeaders(token, password !== null, cookie, authProof);
+              const facts = currentGatewayAuth(id, url, registered);
+              const auth = facts.auth;
               if (!auth.ok) {
                 // Fail closed on the verify→ready→register TOCTOU. A
                 // password-only gateway must never be registered headerless
@@ -2293,8 +2340,13 @@ if (!gotTheLock) {
                 // gap. When a token is also configured, the pure decision
                 // helper permits the intentional OR-principal bearer fallback.
                 cp.unregisterInstanceTransport(`${status.kind}:${id}`);
+                registeredAuthFingerprints.delete(`${status.kind}:${id}`);
                 sessionRefresh?.disarm(id);
                 sm.appendLog(id, 'warn', 'gateway session changed before proxy registration; re-authenticating');
+                // Capture ONLY the scope for the recovery microtask — never
+                // close over the whole facts object (its auth.headers carry
+                // the session cookie).
+                const scope = facts.scope;
                 queueMicrotask(() => {
                   const currentStatus = sm.status(id);
                   const currentSpec = sm.listInstances().find(instance => instance.id === id);
@@ -2308,24 +2360,19 @@ if (!gotTheLock) {
                 });
                 return;
               }
-              const headers = auth.headers;
-              // S23: the configured SPKI certificate pin rides the
-              // registration so the reverse proxy gates every outbound https
-              // connection on it (the identity probe already enforced it in
-              // verifyUp). A pin edit while live restarts the transport
-              // (transport-manager transportFieldsChanged), so this
-              // registration always carries the current pin.
-              const spkiPin = registered !== undefined ? registered.spkiPin : undefined;
+              const connectionId = `${status.kind}:${id}`;
+              const headers = sanitizedRegistrationHeaders(auth.headers);
               cp.registerInstanceTransport(
-                `${status.kind}:${id}`,
+                connectionId,
                 url,
-                Object.keys(headers).length === 0 ? undefined : headers,
+                headers,
                 {
                   ...(registered === undefined ? {} : { transport: proxyTransport(registered.transport) }),
-                  ...(spkiPin === undefined ? {} : { tls: { spkiPin } }),
-                  ...(tunnelAuthority === undefined ? {} : { authority: tunnelAuthority }),
+                  ...(facts.spkiPin === undefined ? {} : { tls: { spkiPin: facts.spkiPin } }),
+                  ...(facts.tunnelAuthority === undefined ? {} : { authority: facts.tunnelAuthority }),
                 },
               );
+              registeredAuthFingerprints.set(connectionId, authHeadersFingerprint(headers));
               // 2026-12 Phase 3: desktop-synced chamber host packages — after
               // every gateway ready registration, best-effort sync the local
               // host packages into the gateway seed cache (idempotent: only
@@ -2341,12 +2388,13 @@ if (!gotTheLock) {
               // only — never renderer-supplied, never persisted or logged)
               // so a later gateway_plugin_sync(id) can re-run this exact
               // sync without waiting for a fresh ready edge.
-              setGatewaySyncRegistration(id, { url, headers: { ...headers }, spkiPin: spkiPin ?? null });
-              void syncGatewayChamberPluginsFor(id, url, headers, spkiPin ?? null);
+              setGatewaySyncRegistration(id, { url, headers: { ...auth.headers }, spkiPin: facts.spkiPin ?? null });
+              void syncGatewayChamberPluginsFor(id, url, auth.headers, facts.spkiPin ?? null);
             } else {
               cp.registerInstanceTransport(`${status.kind}:${id}`, url, undefined, {
                 transport: proxyTransport(status.transport),
               });
+              registeredAuthFingerprints.set(`${status.kind}:${id}`, authHeadersFingerprint(undefined));
             }
             // Live-proxy session self-healing (design 17 §9.3): arm the
             // pre-expiry refresh for every gateway target — the controller
@@ -2371,6 +2419,7 @@ if (!gotTheLock) {
           }
         } else {
           cp.unregisterInstanceTransport(`${status.kind}:${id}`);
+          registeredAuthFingerprints.delete(`${status.kind}:${id}`);
           // Leaving ready cancels the pre-expiry refresh — a disconnected /
           // removed transport must not re-login or re-register (a later ready
           // re-arms with the fresh session).
@@ -2414,6 +2463,44 @@ if (!gotTheLock) {
           try { console.warn(`[dsh-chamber] transport 状态已更新但 renderer push 失败：${pushed.error}`); } catch { /* callback boundary */ }
         }
       }
+    });
+
+    // Ready-state re-verification → proxy re-registration (design 17 §9.3):
+    // a heartbeat/user probe can rotate the password session inside verifyUp
+    // (401 → one stored-password re-login), leaving the proxy riding the
+    // registered (dead) cookie. Re-register ONLY when the current auth
+    // headers differ from the registered ones — registerInstanceTransport
+    // revokes live traffic, so an unchanged healthy registration must never
+    // be re-registered (the 60s heartbeat would otherwise blink every
+    // instance every minute). dsh targets have no auth surface and no-op
+    // here; failures never emit (they flip the phase instead).
+    sm.onVerified(id => {
+      const cp = controlPlane;
+      const current = sm.status(id);
+      if (cp === null || current === null || current.phase !== 'ready' || current.kind !== 'gateway') return;
+      const url = sm.readyUrl(id);
+      const registered = sm.listInstances().find(instance => instance.id === id);
+      if (url === null || registered === undefined || registered.kind !== 'gateway') return;
+      const facts = currentGatewayAuth(id, url, registered);
+      // Fail closed like the ready registration: never replace the live
+      // registration with a headerless one because the cookie vanished in
+      // the gap — the next probe/heartbeat re-evaluates.
+      if (!facts.auth.ok) return;
+      const connectionId = `gateway:${id}`;
+      const headers = sanitizedRegistrationHeaders(facts.auth.headers);
+      if (authHeadersFingerprint(headers) === registeredAuthFingerprints.get(connectionId)) return;
+      cp.registerInstanceTransport(
+        connectionId,
+        url,
+        headers,
+        {
+          transport: proxyTransport(registered.transport),
+          ...(facts.spkiPin === undefined ? {} : { tls: { spkiPin: facts.spkiPin } }),
+          ...(facts.tunnelAuthority === undefined ? {} : { authority: facts.tunnelAuthority }),
+        },
+      );
+      registeredAuthFingerprints.set(connectionId, authHeadersFingerprint(headers));
+      sm.appendLog(id, 'info', 'gateway session re-established — proxy registration refreshed with the new session');
     });
 
     /** The gateway-session origin for a registered instance (design 17 §9.3
@@ -2882,6 +2969,12 @@ if (!gotTheLock) {
       return sm.status(id);
     }));
     ipcMain.handle(IPC_CHANNELS.SSH_STATUS, trustedIpc(({ id }) => sm.status(id)));
+    // On-demand ready-state re-verification (user activation of a source/
+    // session): one immediate identity probe for a READY transport — a dead
+    // gateway session or remote endpoint flips the phase within one probe
+    // round-trip instead of waiting for the periodic heartbeat (transport-
+    // manager reverify; see READY_VERIFY_INTERVAL_MS).
+    ipcMain.handle(IPC_CHANNELS.SSH_REVERIFY, trustedIpc(({ id }) => sm.reverify(id)));
     ipcMain.handle(IPC_CHANNELS.SSH_LOGS, trustedIpc(({ id }) => sm.logs(id)));
     ipcMain.handle(IPC_CHANNELS.SSH_LOGS_CLEAR, trustedIpc(({ id }) => sm.clearLogs(id)));
     // Provider exec channel (design 05 §7.4, ssh: remote systemd): the fresh

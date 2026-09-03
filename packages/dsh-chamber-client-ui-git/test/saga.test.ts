@@ -1,11 +1,11 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  GitSagaError, recoveryForFailure, runAdoptSessionSaga, runCreateSaga, runPreRemoveArchive,
+  GitSagaError, isProvenPreMutationRefusal, recoveryForFailure, runAdoptSessionSaga, runCreateSaga, runPreRemoveArchive,
   runRemoveSaga, runRollbackRecovery, runWorkspaceAdoptRecovery, runWorkspaceDeleteRecovery,
 } from '../src/shared/saga.ts'
 import {
-  decodeCreateValue, decodeRemoveValue, decodeRollbackCreateValue, isAmbiguousGitRpcFailure,
+  decodeCreateValue, decodeRemoveValue, decodeRollbackCreateValue, GitWorktreeRpcError, isAmbiguousGitRpcFailure,
 } from '../src/shared/git-api.ts'
 import type {
   CreateWorktreeResult, GitRecovery, PreviewCreateResult, RemoveWorktreeResult,
@@ -298,6 +298,37 @@ test('a definitive retry error does not erase an older unknown-operation recover
     recoveryForFailure(new GitSagaError(new Error('workspace failed'), undefined, true, false), previous),
     undefined,
   )
+})
+
+test('only a host-proven pre-mutation refusal may clear a pending git-remove recovery', () => {
+  // Both host proof carriers: the typed gate code and the reclassified
+  // git-command-failed, each with an EXPLICIT retryable: false.
+  assert.equal(isProvenPreMutationRefusal(
+    new GitSagaError(new GitWorktreeRpcError('worktree-submodules', 'refused', undefined, false)),
+  ), true)
+  assert.equal(isProvenPreMutationRefusal(
+    new GitSagaError(new GitWorktreeRpcError('git-command-failed', 'refused', undefined, false)),
+  ), true)
+  // No proof: plain failures, flag-less or retryable:true RPC errors.
+  assert.equal(isProvenPreMutationRefusal(new GitSagaError(new Error('boom'))), false)
+  assert.equal(isProvenPreMutationRefusal(
+    new GitSagaError(new GitWorktreeRpcError('worktree-submodules', 'refused')),
+  ), false)
+  assert.equal(isProvenPreMutationRefusal(
+    new GitSagaError(new GitWorktreeRpcError('git-command-failed', 'refused', undefined, true)),
+  ), false)
+  // A saga-minted recovery (e.g. workspace-delete, which exists only after a
+  // git-removal receipt) is NEVER a pre-mutation proof, even when the
+  // original happens to carry retryable: false.
+  const deleteRecovery: GitRecovery = {
+    kind: 'workspace-delete', operationId: 'op-remove', workspaceId: 'ws-2',
+    expected: { repoId: REPO_ID, worktreeId: WORKTREE_ID, branch: null, head: HEAD },
+    path: '/feature', message: 'registry unavailable',
+  }
+  assert.equal(isProvenPreMutationRefusal(new GitSagaError(
+    new GitWorktreeRpcError('git-command-failed', 'refused', undefined, false),
+    deleteRecovery,
+  )), false)
 })
 
 test('remove is Git-first; ambiguous response retains the exact operation and opaque expectation', async () => {

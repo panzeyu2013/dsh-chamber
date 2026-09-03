@@ -7,7 +7,7 @@
 ## 未完成 / 待执行
 
 **0.1.2 线已知降级（仍有效）**：
-- **远端/直连 0.1.2 dsh 附加被硬阻断**（launch token 为远端进程内存随机数、隧道不可恢复；verify 探针 401 诚实分类；上游提供 token 检索机制前保持阻断）。
+- **远端/直连 0.1.2 dsh 附加被硬阻断**（launch token 为远端进程内存随机数、隧道不可恢复；verify 探针 401 诚实分类；上游提供 token 检索机制前保持阻断）。**2026-09：dsh×http 组合已在连接表单与主进程校验禁用**（http 只服务 gateway；ssh 为 dsh 唯一传输——设计 17 §3 记有恢复点）。
 - **版本芯片**：本地实例已接线（desktop 桥运行时版本），远端实例隐藏（D2 兜底）。
 - **cookie Max-Age=30 天无会话中重换**：过期后约 10 分钟健康失败窗口触发重启换新（自愈，后续排期「cookie 过期即重交换」）。
 - **remote-stream 接收面帧校验宽松于上游 exactKeys**（接受未知键，前向兼容容差）。
@@ -178,12 +178,12 @@
   **P1 实现已落地（2026-12）**：`packages/dsh-chamber-client-ui-mobile`（移动适配
   插件本体——触屏档抽屉化布局/44px 触控/safe-area/设置全屏/弹层限宽/输入行单行、
   回车换行与 editability 恢复行为层、layoutFacts 双源驱动的抽屉滚动锁（gateway 官方 ui-layout 回退属性观察，§18.4 项 3 部署例外）、shell.overlay
-  汉堡+backdrop；零代码复制、按 v0.1.2-alpha.3 基线重写；typecheck/21 测试/
+  汉堡+backdrop；零代码复制、按 v0.1.2-alpha.3 基线重写；typecheck/29 测试/
   构建全绿）+ `dsh-chamber-client-ui-layout` fork 订阅面（`ctx.layoutFacts`：
   getLayoutSnapshot/subscribeLayout，回归全绿）+ gateway 接线（build.mjs
   host-packages 拷贝、seedFiles 含 lib/client.js、UA 分流开关默认关闭——
-  `--mobile-ua-redirect`/`--mobile-entry`，9 个 UA 用例 + 4 个 config 用例全绿，
-  test:gateway 全绿（fail 0，含 9 UA + 4 config + build 产物断言））
+  `--mobile-ua-redirect`/`--mobile-entry`，13 个 UA 用例 + 4 个 config 用例全绿，
+  test:gateway 全绿（fail 0，含 13 UA + 4 config + build 产物断言））
   **P1.5 已完成（2026-12）**：IME 恢复完整五层（程序化 focus 丢弃循环/
   editability 翻转/pointerup 手势 refocus/visualViewport 键盘判定/键盘钉住）、
   composer 30s busy 自愈、共享 layout source（滚动锁/Esc 单实例）、
@@ -191,7 +191,21 @@
   登录流转为 gateway 独占，插件零认证引用已 grep 验证）。
   **剩余**：实机门禁（§18.6：真机抽检——触控目标比例/抽屉开合/弹层不出屏/
   键盘遮挡/安全区）；P2（PWA 安装 + SW 壳离线，per-instance scope，尊重官方
-  "不完整离线"立场）；**0.1.2-alpha.4 DOM 锚点重审计**（锚点出处现记录为 alpha.3/harness.commit=dd6322d6；上游 a4 重构了 ui-chat/ui-conversation——按新基线复验 AppFrame/sidebar/composer 锚点后刷新出处记录）；P3（公网认证流转正式化、Web Push）。先行形态 =
+  "不完整离线"立场）；**0.1.2-alpha.4 DOM 锚点重审计**（布局壳部分已执行：
+   双 pin（a3=dd6322d6 / a4=4e84901e）的 ui-layout **AppFrame 组件源码逐字节一致**
+   （组件级 git diff 空；ui-layout 包内另有 AppFrame.module.css 纯视觉边框微调，不影响锚点）；审计发现 **details 打标缺口**——官方 details 列壳自首帧常驻、其
+  `[data-slot=details]` 出口按会话门控后挂，观察器原谓词漏"出口挂入常驻列壳"
+  （frame 孙级挂载）→ **已修（2026-09）**：(a) 谓词补孙级分支（markup.ts
+  `isStructuralTarget`）+ (b) frame 属性观察双保险（`data-sidebar-collapsed`/
+  `data-details-collapsed` 变更→重打标，独立通路；**其接线仅实机可验**——单测无 DOM 观察器基建，只覆盖纯函数谓词/批决策）；谓词/批决策纯函数化，
+  markup.test.ts 补 boot 空壳 + 晚挂载回归用例；代码注释与 README 出处已刷新为
+  a4。缺口定性：潜伏（官方当前无可达的 details 打开路径——`panels.details`
+  默认 0、`openDetails` 注入面为死代码、官方 ui-layout spec 仅证 details 为 session scope 且无 UI 消费方；
+  手机 <996px 让步链上开不了；恒关时打标/不打标视觉等价），非 a4 回归（自插件
+  首提交即携带）。**剩余**：`[class$=_…]` 后缀选择器命名契约的测试固定、
+  composer 锚点 fixture 化、Android 键盘盲区真机门禁（`interactive-widget=
+  resizes-content` 下 visualViewport 键盘判定恒 false——IME 层 1 可能关掉发送后
+  刚开着的键盘，iOS 不受影响，§18.6 项））；P3（公网认证流转正式化、Web Push）。先行形态 =
   内网/可信网络（`--no-auth` 显式可信网络或 tailscale）。契约：§3 装配矩阵 +
   §10 项 2 的移动例外——`dsh-chamber-client-ui-mobile` 是唯一随 gateway
   发行物打包 seed 的 chamber 客户端插件（链路无桌面，不参与 `/chamber/plugins`
@@ -213,6 +227,32 @@
     独占锁、`gateway auth` 停机态 CLI、`/chamber/` 凭据面板与 S25 不变量，2026-09
     全量修复轮已完成）。**剩余**：desktop settings-bridge 便捷重置（Phase 4
     推迟项）、真实 TLS 反代下改密/轮换/停机态 CLI 恢复的实机门禁。
+  - **http 连接链路修复（S0/S2，2026-09，本地单测全绿，待实机部署验证）**：
+    - S0：gateway 代理出口对托管 dsh 的 HTML 注入 `__DSH_TRANSPORT__.ownsHost`
+      （上游文档化钩子契约），解除官方设置页在非 loopback 页面上的
+      memory 持久化门控（"settings are unavailable in this browser"）——网页直连
+      settings/models/插件可用；**取代 design 17 §10.5「gateway 不绕过」旧表述**，
+      文档待同步；属"能登录即受信"的信任边界决策（auth 门在先，非鉴权绕过）。
+    - S2：control-plane 对**非 loopback 上游腿**（direct-http(s)，含 gateway 与
+      dsh 两种 kind；判别轴为解析后目标的 host 而非来源 id——ssh 隧道恒为
+      loopback 本地腿）启用 OS 级 TCP keepalive（30s，对齐 ssh
+      `ServerAliveInterval` 语义）；renderer staleness 看门狗对
+      **transport=http 来源**（registry spec 判别）的静默 mounted 推送触发轻量
+      `connection.reconnect()` 自愈（staleness 120s / 退避 60s；mounted=本代曾
+      推送；不作用于 local/ssh 隧道来源）。稳态代价如实记录：健康空闲
+      direct-http 来源约每 2 分钟一次轻量连接重连（依赖撤稿→重发链刷新
+      新鲜度；链不浮现则退化为退避门 ~60s），真死 channel 自 stale 后每
+      ~60s 重试一次——均为治愈冻结局的固有取舍（App 层无法区分冻结与
+      空闲；活跃来源不受影响）。
+    - S2-c：调宽 dsh 2s/2miss mux 心跳为可选增强，**未实现**。可行性已确认：
+      补丁层格式本就支持 id-targeted config override（既有
+      cordis.patch.yml 机制，desktop plugin-sync 保留用户行；形如
+      `{id: typert-gateway, config: {websocketHeartbeatIntervalMs}}`，
+      匹配不到 warn+skip）——但 chamber 代码零引用 typert-gateway id，
+      需先扩展 gateway 的 patch 写入器，故单列。
+    - **剩余验收**：打包态实机——浏览器直连 gateway 的 Models/插件设置可写；
+      杀托管 dsh / 断网注入后 sidebar 60–120s 自动恢复；升级 dsh 版本复验
+      （`__DSH_TRANSPORT__` 钩子与 typert-gateway id 跨版本存在性）。
 
 ## 设计未决（02 §5 / 04 §7）
 

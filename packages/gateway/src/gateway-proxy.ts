@@ -33,6 +33,7 @@ import {
   type ProxySocket,
   authCookieFor,
 } from '@dsh-chamber/control-plane'
+import { injectTrustDeclaration } from './html-inject.ts'
 
 export interface GatewayProxyDeps {
   logger: Logger
@@ -97,6 +98,18 @@ export function createGatewayProxy(deps: GatewayProxyDeps): GatewayProxy {
     // the managed dsh are stripped to their path so a `Location:
     // http://127.0.0.1:<port>/…` can never escape the public origin.
     responseBasePath: '',
+    // HTML trust injection (S0): the browser-facing official dsh frontend
+    // must reach host persistence when served through this proxy, so the
+    // small index document declares itself host-owned to the documented
+    // client hook (`__DSH_TRANSPORT__.ownsHost`, html-inject.ts). This rides
+    // the proxy CSP (dispatch.ts GATEWAY_PROXY_CSP allows 'unsafe-inline')
+    // and never weakens the auth gate — only authenticated viewers reach
+    // this proxy. The adapter maps the fail-soft HtmlInjectResult onto the
+    // shared seam (null = forward the upstream body untouched).
+    injectHtmlDocument: html => {
+      const result = injectTrustDeclaration(html)
+      return result.injected ? result.html : null
+    },
   }
 
   /** Resolve the single target (the local dsh loopback origin). Loud 503 when

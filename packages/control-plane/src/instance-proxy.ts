@@ -191,6 +191,58 @@ export function parseInstanceId(id: string): 'local' | 'dsh' | 'gateway' | null 
   return null
 }
 
+/** TCP keepalive cadence (ms) for the upstream leg of a direct-http target
+ * (S2 sidebar-stability patch). NOTE: this is the INITIAL-IDLE threshold only
+ * — Node's setKeepAlive(true, ms) sets TCP_KEEPIDLE; the probe interval and
+ * failure count follow OS defaults (Linux ~75s × 9, macOS ~75s × 8), so a
+ * half-open leg surfaces on the order of ~10 minutes, never "30s". The fast
+ * real-world healer for a frozen push channel is the renderer staleness
+ * watchdog's lightweight reconnect (~120s, App.tsx) — this keepalive is the
+ * backstop that eventually forces the splice down when the watchdog cannot
+ * run. The 30s value coincides with the browser-leg WS_PING (30s/1miss,
+ * proxy-forward.ts) and ssh ServerAliveInterval (30×3) — same number, three
+ * unrelated rationales (NAT/keepalive convention / ws README example / ssh
+ * default); do not merge them. */
+const DIRECT_HTTP_TCP_KEEPALIVE_MS = 30_000
+
+/** True when an upstream base URL points at the loopback interface — the
+ * local instance and every ssh-tunnel local leg. Such legs cannot die
+ * half-open on their own (loopback), and tunnels are covered by ssh keepalive
+ * (proxy-forward.ts WS_PING_* note), so they keep the documented no-heartbeat
+ * design. Anything unparseable fails toward loopback (no keepalive). */
+export function isLoopbackUpstreamBaseUrl(baseUrl: string): boolean {
+  let hostname: string
+  try {
+    hostname = new URL(baseUrl).hostname
+  } catch {
+    return true
+  }
+  if (hostname === 'localhost' || hostname === '::1' || hostname === '[::1]') return true
+  // IPv4-mapped IPv6 loopback spellings are loopback too — without this a
+  // loopback-routed leg would get a pointless keepalive arm (harmless
+  // over-arm, but wrong). WHATWG serializes mapped addresses canonically:
+  // '[::ffff:127.0.0.1]' arrives as '[::ffff:7f00:1]' (hex), so match both
+  // canonical forms.
+  const bare = hostname.startsWith('[') && hostname.endsWith(']') ? hostname.slice(1, -1) : hostname
+  if (/^::ffff:(127\.|7f00)/.test(bare)) return true
+  return /^127\./.test(hostname)
+}
+
+/** The upstream-leg TCP keepalive cadence for one resolved upstream target, or
+ * `undefined` to keep the documented no-heartbeat design (design 03 §3.4 —
+ * the upstream leg of a splice deliberately has no application heartbeat).
+ * NON-loopback upstreams get OS-level TCP keepalive: they are the desktop's
+ * direct-http(s) shape (gateway-kind OR dsh-kind with the http transport — the
+ * id prefix alone cannot see the transport dimension, the resolved target
+ * can), and their leg has no ssh keepalive to cover it, so an idle half-open
+ * connection (NAT/proxy GC) would freeze the stream silently. Loopback legs
+ * (ssh tunnels, the local instance) return `undefined` — ssh keepalive covers
+ * tunnels and loopback cannot die half-open. */
+export function tcpKeepAliveMsForUpstream(baseUrl: string): number | undefined {
+  if (isLoopbackUpstreamBaseUrl(baseUrl)) return undefined
+  return DIRECT_HTTP_TCP_KEEPALIVE_MS
+}
+
 /** Strip the /api/i/<id> prefix; null when the path is not an instance path.
  * Accepts the raw request target (path + optional query). */
 export function parseInstancePath(raw: string): InstancePath | null {
@@ -476,6 +528,17 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
         await forwardUpgrade(req, socket, head, forwardTarget, releaseHandshake, logger, counters, {
           ...forwardDeps,
           id: parsed.id,
+          // S2: OS-level TCP keepalive for the upstream leg — non-loopback
+          // (direct-http(s)) targets arm it; loopback legs (ssh tunnels, the
+          // local instance) keep the documented no-heartbeat design (ssh
+          // keepalive / loopback own their liveness, see proxy-forward.ts
+          // WS_PING_* note). The discriminator is the RESOLVED target's
+          // host, not the source-id kind: ssh tunnels always resolve to a
+          // loopback base URL while direct-http targets of either kind do
+          // not, so the transport dimension is honored even though the id
+          // prefix cannot see it. HTTP forwarding never reads this field, so
+          // handleHttp's deps stay untouched.
+          tcpKeepAliveMs: tcpKeepAliveMsForUpstream(target.baseUrl),
           ...(connectionId === null ? {} : { streamOwner: connectionId }),
         }, extraHeaders, target.tls, target.authority)
       } catch (error) {

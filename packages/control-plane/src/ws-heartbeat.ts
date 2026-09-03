@@ -5,15 +5,21 @@
  *
  * ## Why
  *
- * `/api/remote.mux` is the Typert Remote stream WebSocket with no heartbeat
- * on either side: the dsh host never pings, and its ws server closes (1008)
- * only INVALID client frames (binary frames 1003; malformed JSON 1008 —
- * `cancel` frames are accepted), so the browser cannot probe the connection
- * itself with arbitrary traffic.
- * After an OS sleep/wake the BROWSER leg of the splice can silently die
- * (half-open TCP) without any 'error'/'close' firing — the proxy would hold
- * the stream open forever while the browser's pump stays "connected" but
- * receives nothing (stuck "Deep diving..." UI, backend still processing).
+ * `/api/remote.mux` is the Typert Remote stream WebSocket (0.1.2). 0.1.2
+ * FACT CORRECTION: unlike the 0.1.1 events.mux/events.host downlinks (which
+ * were heartbeat-free read-only streams — the original motivation of this
+ * heartbeat), the 0.1.2 mux HOST pings every downstream socket every
+ * `websocketHeartbeatIntervalMs` (default 2s) and terminates it after two
+ * missed pongs (~6s) — so a healthy mux leg already carries regular host
+ * pings and browser auto-pongs. The remaining gap this proxy heartbeat
+ * covers is the OS sleep/wake case: during sleep the host's pings simply
+ * fail (no pongs) and the host terminates the leg, but after wake the
+ * BROWSER leg of the splice can be half-open in a way that fires no
+ * 'error'/'close' locally — the proxy would hold the stream open while the
+ * browser's pump stays "connected" but receives nothing (stuck "Deep
+ * diving..." UI, backend still processing). The proxy-side downstream ping
+ * is therefore a REDUNDANT FALLBACK for the browser leg across sleep/wake,
+ * not the primary liveness signal (that is the host's 2s/2miss heartbeat).
  *
  * The proxy owns the DOWNSTREAM leg's liveness (it is the one point that sees
  * it, and neither the browser nor the host can probe it):

@@ -22,9 +22,15 @@ export interface TransportFormSchema {
   defaultRemotePort: Readonly<Record<TransportKind, number>>
 }
 
-/** Shipped transport schemas. Both target kinds are deliberately available
- * on both transports (dsh/gateway × ssh/http); target semantics such as
- * gateway authentication remain a separate decision below. */
+/** Shipped transport schemas. The dsh×http combination is DISABLED
+ *  (2026-09 user decision): direct-attaching a dsh web profile over http is
+ *  hard-blocked on the 0.1.2 line — its host answers 401 without the
+ *  spawn-time browser-auth launch token, which is unrecoverable remotely
+ *  (STATUS「远端/直连 0.1.2 dsh 附加被硬阻断」; re-enable when upstream
+ *  exposes token retrieval). ssh remains the only dsh transport; gateway
+ *  keeps both transports. The main-process http provider refuses the
+ *  combination at validateSpec (same flip point). Target semantics such as
+ *  gateway authentication remain a separate decision below. */
 export const TRANSPORT_FORM_SCHEMAS: Readonly<Record<TransportMethod, TransportFormSchema>> = {
   ssh: {
     method: 'ssh',
@@ -35,7 +41,7 @@ export const TRANSPORT_FORM_SCHEMAS: Readonly<Record<TransportMethod, TransportF
   http: {
     method: 'http',
     fieldGroup: 'url',
-    targetKinds: ['dsh', 'gateway'],
+    targetKinds: ['gateway'],
     // Direct endpoints derive their actual port from the URL. These values
     // are only draft fallbacks used when moving between form schemas.
     defaultRemotePort: { dsh: 30800, gateway: 443 },
@@ -210,15 +216,19 @@ export function draftToInput(draft: HostDraft): SshInstanceInput {
   return input
 }
 
-/** Target changes preserve the independently selected transport. Transient
- * credentials are cleared so switching away and back cannot accidentally
- * submit a value typed for another target. */
+/** Target changes preserve the independently selected transport WHEN the new
+ *  target supports it. The dsh×http combination is disabled (2026-09), so a
+ *  kind switch INTO dsh moves an http draft onto ssh (the only dsh transport)
+ *  with the ssh port default. Transient credentials are cleared so switching
+ *  away and back cannot accidentally submit a value typed for another target. */
 export function changeDraftKind(draft: HostDraft, kind: TransportKind): HostDraft {
   if (kind === draft.kind) return draft
+  const transport = transportSupportsTarget(draft.transport, kind) ? draft.transport : 'ssh'
   return {
     ...draft,
     kind,
-    remotePort: nextDefaultedRemotePort(draft.remotePort, draft.kind, draft.transport, kind, draft.transport),
+    transport,
+    remotePort: nextDefaultedRemotePort(draft.remotePort, draft.kind, draft.transport, kind, transport),
     gatewayToken: '',
     gatewayPassword: '',
     password: '',

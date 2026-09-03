@@ -57,6 +57,7 @@ export function isDeterministicGitRejection(error: unknown): boolean {
     case 'main-worktree':
     case 'worktree-locked':
     case 'worktree-dirty':
+    case 'worktree-submodules':
     case 'nested-workspace':
     case 'workspace-registered':
     case 'workspace-path-unavailable':

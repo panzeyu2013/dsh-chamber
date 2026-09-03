@@ -1,5 +1,6 @@
 /** Pure two-domain saga policy. Transport adapters live in coordinator.ts. */
 import { collectSessionClosure } from './git-facts.ts'
+import { GitWorktreeRpcError } from './git-api.ts'
 import type {
   CreateWorktreeResult, GitRecovery, PreviewCreateResult, RemoveWorktreeResult,
 } from './types.ts'
@@ -31,6 +32,23 @@ export class GitSagaError extends Error {
     this.refreshNeeded = refreshNeeded
     this.preservePrevious = preservePrevious
   }
+}
+
+/** True when a remove failure is a host-PROVEN pre-mutation refusal: the host
+ *  serializes an explicit `retryable: false` only after proving the target
+ *  still exists and nothing was removed (host core commitBoundRemove — the
+ *  typed `worktree-submodules` gate and the reclassified `git-command-failed`
+ *  both carry it). Such a refusal resolves a pending git-remove recovery that
+ *  replays the SAME removal as "not removed", so the recovery may be cleared
+ *  instead of retrying the same refusal forever (design 08 §7 bounded
+ *  exception, 2026-09). Saga-minted recoveries (e.g. workspace-delete, which
+ *  exists only after a git-removal receipt) are never pre-mutation proofs and
+ *  are excluded by the `recovery === undefined` guard — a future host path
+ *  must never emit explicit `retryable: false` from a mutated path. */
+export function isProvenPreMutationRefusal(error: GitSagaError): boolean {
+  return error.recovery === undefined
+    && error.original instanceof GitWorktreeRpcError
+    && error.original.retryable === false
 }
 
 export interface CreateSagaDeps {

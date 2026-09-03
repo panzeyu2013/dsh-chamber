@@ -1,13 +1,16 @@
 {
   "name": "@dsh-chamber/dsh-client-ui-mobile",
   "description": "Chamber mobile adaptation plugin for the dsh web shell (design 17 §18): narrow-viewport layout/touch adaptation for the official frontend, seeded into the gateway-hosted instance as the single packaged client-plugin exception.",
-  "version": "0.2.0-beta.5",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",
   "exports": {
-    ".": { "types": "./lib/types/index.d.ts", "default": "./lib/index.js" },
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    },
     "./client": "./lib/client.js",
     "./src/*": "./src/*",
     "./package.json": "./package.json"

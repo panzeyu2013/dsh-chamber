@@ -53,6 +53,10 @@ export const zh = {
   serviceStop: '停止服务',
   serviceCheck: '查询服务状态',
   restartInstance: '重启实例',
+  /** Gateway rows restart the MANAGED dsh through the gateway's own runtime
+   *  controller (/chamber/runtime/restart, design 18 §9.3) — reachable only
+   *  while the transport is connected, hence the disabled hint. */
+  gatewayRestartHint: '需先连接该 gateway',
   serviceUnconfigured: '未配置服务',
   logs: '连接日志',
   gatewayHostLogs: '网关主机日志',
@@ -360,6 +364,10 @@ export const en: Record<SettingsConnectionsKey, string> = {
   serviceStop: 'Stop service',
   serviceCheck: 'Check service status',
   restartInstance: 'Restart instance',
+  /** Gateway rows restart the MANAGED dsh through the gateway's own runtime
+   *  controller (/chamber/runtime/restart, design 18 §9.3) — reachable only
+   *  while the transport is connected, hence the disabled hint. */
+  gatewayRestartHint: 'Connect the gateway first',
   serviceUnconfigured: 'No service configured',
   logs: 'Connection logs',
   gatewayHostLogs: 'Gateway host logs',
