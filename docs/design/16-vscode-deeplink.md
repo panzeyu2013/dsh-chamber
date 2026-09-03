@@ -203,7 +203,7 @@ vscode handler 为第一个实现；未来"在终端打开/浏览器打开"等�
   mac `CFBundleURLTypes` / linux desktop `MimeType` / Windows 注册表项）；
 - dev 深链测试：`electron-dev.mjs` 支持透传 argv 注入（URL 作为冷启动 argv），
   不依赖真实 OS 协议事件；
-- Windows（design 21 M4 已解锁）：打包态同样走无参数 `setAsDefaultProtocolClient`
+- Windows（design 23 M4 已解锁）：打包态同样走无参数 `setAsDefaultProtocolClient`
   （electron-builder `protocols` 的 Windows 注册表项是否同时写入为 M0.5 实证项，
   同目标幂等）；`open-url` 为 mac 专属事件，win/linux 由 `second-instance` argv
   扫描 + 冷启动 argv 扫描投递。
@@ -371,7 +371,9 @@ detectVscodeAvailability(platform): { available: boolean }
 - 可用性探测为 coarse proxy（存在性/可执行位），文档明示不覆盖 Insiders/Cursor/
   VSCodium；探测时机 = coordinator attach 时单飞 + getter 每次实探；
 - 深链到不存在路径 → VS Code 自会报错/开空目录，文案明示"不做路径校验"诚实边界；
-- Windows 首版暂缓；dev/打包协议注册差异（§4.3）；
+- Windows 首版支持推进中（design 23）：打包态协议注册已随 M4 解锁（§4.3 无参
+  `setAsDefaultProtocolClient`；electron-builder 注册表项写入为 M0.5 实证项，同目标
+  幂等），real-runner 门禁（M3/M4 实机矩阵、win32 打包态深链冷/热启动验收）仍为外部门；
 - a11y：aria-label / tooltip / 键盘聚焦（click-through opt-in 条目必须可聚焦）。
 
 ### 10.2 实现后审查记录（2026-08，两轮独立审查 + 修复）

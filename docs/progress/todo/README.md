@@ -11,6 +11,7 @@
 | 1 | [subagents-in-sidebar.md](subagents-in-sidebar.md) | session 的 subagents 在侧边栏中的显示 | 想法，未设计 / 未排期 |
 | 2 | [12-todo-archived-sessions.md](12-todo-archived-sessions.md) | 已归档会话管理（归档单向且不可见；A 前端浏览区先行 + C 上游 wire 根治，B 特权层冻结） | 设计待评审，实现未排期（2026-08） |
 | 3 | [21-gateway-plugin-parity-plan.md](21-gateway-plugin-parity-plan.md) | gateway 插件能力对齐执行计划（design 21 companion：B→C+共享迁移→A0→A1 写面单元→UI 全闭环→文档归位，逐阶段门禁） | 执行中：Phase 1-5 已实现并通过执行级门禁（零 P0/P1，2026-12）；Phase 6 文档归位收尾 |
+| 4 | [windows-v1.md](windows-v1.md) | Windows v1 推进执行台账（design 23 companion：M0 CI 契约腿 → M1 生命周期 → M2a env 门控后台能力 → M3 桌面实机全链 → M4 决策解锁 → M5 发布面 → M6 收口，外部门禁逐项标注） | 执行中：M0–M4 代码项已落地并通过 POSIX 单测（2026-12）；真实 Windows runner/实机矩阵为外部门禁 |
 
 ## 纪律
 

@@ -30,7 +30,7 @@
 - **Windows**：NSIS 安装器（`.exe`）
 - **Linux**：`dsh-chamber-<version>.AppImage`（x64；需要 FUSE 或
   `APPIMAGE_EXTRACT_AND_RUN=1`，自动更新需从可写路径启动 AppImage，
-  见 `docs/design/21-linux-desktop.md`）
+  见 `docs/design/22-linux-desktop.md`）
 
 ### 2 · 启动应用
 
@@ -98,10 +98,10 @@ bash install-gateway.sh
 - **远程实例需要什么？** — dsh 目标需要可达的 API profile；gateway 目标需要已部署的 `@dsh-chamber/gateway`。两者都可经 SSH 隧道或显式 HTTP(S) 直连；远端无需单独安装 web 前端，UI 来自本地复用前端并经同源反代。
 - **agent preset / profile 在各实例间怎么工作？** — 按实例权威。每个实例的 `settings`/`credentials`/`llm`/`agentPreset` 配置平面只存在于该实例一侧（本地 = 本机，远程 = 远端服务器）。编辑远程预设 = 切到该来源的 shell，在其「设置 → Agent presets」页操作。
 - **前端从哪来？** — dsh 官方前端源码复用自建；每个实例保持原生 UI。
-- **Windows 安装慢 / 卡在"正在安装"？** — Windows Defender 对 ~33k 个运行时文件逐文件实扫所致。属已知取舍（design 21 F3）：等待完成即可；可对 `%APPDATA%\dsh-chamber` 加 Defender 排除目录显著提速；安装/更新状态行有明示。
+- **Windows 安装慢 / 卡在"正在安装"？** — Windows Defender 对 ~33k 个运行时文件逐文件实扫所致。属已知取舍（design 23 F3）：等待完成即可；可对 `%APPDATA%\dsh-chamber` 加 Defender 排除目录显著提速；安装/更新状态行有明示。
 - **Windows 上 SSH 连接能用密码吗？** — 不能（askpass 需要 PE 可执行）。请使用密钥或 ssh-agent（Pageant）——保存连接时拒绝密码并有引导提示。
-- **Windows 上 dsh 运行时版本管理？** — 推进中（design 21）：默认只读投影；开发验证态经 `DSH_CHAMBER_WINDOWS_RUNTIME_MUTATIONS=1` 开启，正式解锁以真实 Windows 验证记录为准。
-- **Windows 版为什么有 SmartScreen 提示？** — 安装包尚未 Authenticode 签名（已知取舍，design 21 F6）；sha512 校验只证明下载完整性。选择「更多信息 → 仍要运行」即可（从本仓库 Release 下载时）。
+- **Windows 上 dsh 运行时版本管理？** — 推进中（design 23）：默认只读投影；开发验证态经 `DSH_CHAMBER_WINDOWS_RUNTIME_MUTATIONS=1` 开启，正式解锁以真实 Windows 验证记录为准。
+- **Windows 版为什么有 SmartScreen 提示？** — 安装包尚未 Authenticode 签名（已知取舍，design 23 F6）；sha512 校验只证明下载完整性。选择「更多信息 → 仍要运行」即可（从本仓库 Release 下载时）。
 
 ## 文档
 

@@ -18,11 +18,13 @@
  * `export (declare )?(const|function|type|interface|class) NAME` shape the
  * ambient mirrors declare.
  *
- * NOTE: the consumer ambients are extended by the settings-bridge rewire step
- * (design 21 §5.2 ambient mirror sync; MIRROR WARNING headers). Until that
- * extension lands, the new-face assertions below FAIL BY DESIGN — they are
- * the lockstep contract: once the ambients declare the moved export set they
- * must stay green and catch every future drift of either side.
+ * NOTE: the consumer ambients were extended as part of the settings-bridge
+ * rewire (design 21 §5.2 ambient mirror sync; MIRROR WARNING headers) and now
+ * declare the full moved export set — including the recover-metadata-era
+ * additions (metadataHealth/metadataComponents/canRecoverMetadata,
+ * removableVersions and the cleanup-version/restore-pre-rollback/
+ * recover-metadata action kinds). The assertions below are the lockstep
+ * contract: they stay green and catch every future drift of either side.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'

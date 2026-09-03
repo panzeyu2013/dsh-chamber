@@ -376,20 +376,17 @@ export function createRuntimeRoutes(manager: () => GatewayRuntimeManager, logger
         // /restart: the guarded startLocal runs in the background and progress
         // is polled via /status (start running/ok/failed + operationError).
         // Every synchronous refusal is answered synchronously before any 202:
-        // recovery phases only expose their matching retry + restore-builtin
-        // (a start never bypasses the recovery gate), installing/applying
-        // windows refuse busy, a held profile-write lease defers, a second
-        // start refuses, and a running/starting dsh is not a start target.
+        // the recovery gate (M1, 2026-12) refuses every startupBlockedReason —
+        // phase-less FATAL metadata blocks (journal-corrupt / current-corrupt /
+        // override-corrupt / journal-mismatch) included — and recovery phases
+        // only expose their matching retry + restore-builtin (a start never
+        // bypasses the recovery gate), installing/applying windows refuse
+        // busy, a held profile-write lease defers, a second start refuses, and
+        // a running/starting dsh is not a start target.
         const status = await m.status()
         if (rejectRecoveryGate(res, status, 'start')) return true
         if (status.phase === 'applying' || status.phase === 'installing') {
           return json(res, 409, { error: 'runtime mutation in progress; start refused', code: 'runtime_busy' })
-        }
-        if (typeof status.startupBlockedReason === 'string' && status.startupBlockedReason !== '') {
-          // Phase-less in-memory blocks (journal-corrupt / current-corrupt /
-          // override-corrupt / journal-mismatch) never surface a recovery
-          // phase string, yet a raw start must not bypass the verdict.
-          return json(res, 409, { error: `runtime recovery ${status.startupBlockedReason} is required; only retry-apply/retry-restore/restore-builtin are allowed`, code: 'runtime_recovery_required' })
         }
         if (m.profileWriteInFlight?.()) {
           return json(res, 409, { error: 'managed profile write in flight (plugin mutation); start refused', code: 'runtime_busy' })

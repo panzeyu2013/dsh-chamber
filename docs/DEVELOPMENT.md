@@ -129,7 +129,7 @@ pnpm run dist:desktop:win    # 打包 Windows 应用（nsis + zip；须在 Windo
 
 > Windows 安装慢/卡"正在安装"的排障（Windows Defender 逐文件扫描）见 README「常见问题」。
 
-### Windows 支持矩阵（design 21,推进中）
+### Windows 支持矩阵（design 23,推进中）
 
 | 面 | 状态 |
 |---|---|
@@ -140,7 +140,7 @@ pnpm run dist:desktop:win    # 打包 Windows 应用（nsis + zip；须在 Windo
 | 桌面能力(M3) | AUMID/托盘候选收敛/preload loud 失败已接;实机矩阵待执行 |
 | 决策解锁(M4) | 登录自启、深链注册、open-in 本地路径、SSH 密码门引导已解锁(代码);NSIS 卸载 Run 清理 include 已接 |
 | 已知限制 | 未签名(SmartScreen);SSH 密码禁用(keys/Pageant);运行时 mutation 只读;0700/0600 以 icacls/ACL 表达 |
-| 权威记录 | `docs/design/21-windows-support.md`、`docs/progress/todo/windows-v1.md`、`docs/progress/windows-baseline.md` |
+| 权威记录 | `docs/design/23-windows-support.md`、`docs/progress/todo/windows-v1.md`、`docs/progress/windows-baseline.md` |
 
 ## 5. CI 与发布
 

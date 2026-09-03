@@ -14,7 +14,7 @@
 
 ### 新增
 
-- **Linux 桌面首版支持（设计 21）** —— AppImage（x64）发行形态（electron-builder
+- **Linux 桌面首版支持（设计 22）** —— AppImage（x64）发行形态（electron-builder
   linux target/desktop.entry/executableName）、Linux 自动更新解锁（形态门：
   打包且从可写 $APPIMAGE 启动才启用；dev/解包/deb 形态保持历史 inert 文案与
   settings 按钮门，零 UX 回退）、每次打包态启动重写的用户级协议 .desktop
@@ -23,7 +23,7 @@
   目录 fsync EINVAL/ENOTSUP 平台无关容错（NFS/FUSE 家庭目录）、
   resolvePnpmBinDir 增补 Linux 安装根、release.yml `build-linux` 腿
   （ubuntu-22.04 基线）与发布策略测试 4 腿。契约与剩余实机门禁见
-  `docs/design/21-linux-desktop.md`。
+  `docs/design/22-linux-desktop.md`。
 
 ### 变更
 

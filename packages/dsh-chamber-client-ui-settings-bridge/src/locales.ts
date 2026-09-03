@@ -81,6 +81,10 @@ export const zh = {
   dshRuntimeActionSwitch: '切换到',
   dshRuntimeInstalling: '正在安装…',
   dshRuntimeResetBuiltin: '恢复内建',
+  // 方案 2（2026-12 用户决策）：下拉选中与随应用内建同版本的行且尚未装成
+  // 受管树时，主按钮引导「恢复内建」（回到随应用副本，零下载）。
+  dshRuntimeBuiltinGuideHint: '随应用已内建 v{version}：「恢复内建」将清除用户选择并回到随应用副本，无需下载；版本树与快照保留。',
+  dshRuntimeInstallBuiltinTree: '仍下载 v{version} 并安装为受管版本',
   dshRuntimeStatusDownloading: '下载 dsh {version}…',
   dshRuntimeStatusInstalling: '安装 dsh {version}…',
   dshRuntimeStatusPending: '将于下次启动切换到 {version}',
@@ -294,6 +298,12 @@ export const en: Record<keyof typeof zh, string> = {
   dshRuntimeActionSwitch: 'Switch to',
   dshRuntimeInstalling: 'Installing…',
   dshRuntimeResetBuiltin: 'Restore bundled',
+  // Option 2 (2026-12 user decision): when the dropdown selects the row whose
+  // version equals the app-bundled one and no managed tree exists yet, the
+  // primary button guides to "Restore bundled" (back to the bundled copy, no
+  // download).
+  dshRuntimeBuiltinGuideHint: 'The app already bundles v{version}: "Restore bundled" clears your selection and returns to the bundled copy without downloading; version trees and snapshots are kept.',
+  dshRuntimeInstallBuiltinTree: 'Download v{version} and install it as a managed tree anyway',
   dshRuntimeStatusDownloading: 'Downloading dsh {version}…',
   dshRuntimeStatusInstalling: 'Installing dsh {version}…',
   dshRuntimeStatusPending: 'Will switch to {version} on next launch',

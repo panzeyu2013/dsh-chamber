@@ -44,7 +44,9 @@
 > 平台范围（2026-08 审查明确）：**macOS/Linux 是运行时安装、切换与数据恢复的
 > 管理契约目标**；Windows 会投影版本与状态，但安装、选择、切换、清理等 mutation
 > 在 controller/main/UI 三层均门控为**只读**，不把未经 Windows 实机验证的恢复与
-> 进程组语义声明为可用。
+> 进程组语义声明为可用。只读为**默认口径**：`DSH_CHAMBER_WINDOWS_RUNTIME_MUTATIONS=1`
+> （严格 `'1'`，默认关）仅向开发/CI 验证开放 mutation（design 23 M2a 后台能力），
+> 正式解锁以真实 Windows 验证记录为准（design 23 §2/§4）。
 >
 > 审查记录（2026-08，三轮共 4 次独立审查）：
 > - 自审 17 项（P0×4/P1×6/P2×7）→ 已吸收；
@@ -648,7 +650,9 @@ resourcesPath manifest；「激活 vX」= resolve 结果；「最新 vY」= regi
   + 两阶段恢复 + pre-rollback 暂存 + 一键恢复 + 失败记录引导「升级应用求兼容」。
   boot 层版本漂移容忍（设计 09 §3.5/§4）作纵深防御。
 - **平台范围**：macOS/Linux 为 mutation 契约目标；Windows 仅展示只读状态，安装、
-  切换、回滚、清理等动作由 controller/main/UI 三层拒绝。
+  切换、回滚、清理等动作由 controller/main/UI 三层拒绝。只读为默认口径——验证
+  门 `DSH_CHAMBER_WINDOWS_RUNTIME_MUTATIONS=1`（严格 `'1'`、默认关、开发/CI 验证
+  专用）可开放 mutation，正式解锁待真实 Windows 验证记录（design 23 M2a/M2b）。
 - **单飞与幂等**：切换单飞守卫覆盖 install+apply 全程；选择当前版本无操作；周期/
   手动检查同路径；apply 期间挂起检查。
 
@@ -770,7 +774,7 @@ interface RuntimeHostAdapter {
   restartHost(): Promise<void>   // 事务重启：plane.restartLocal()（§9.3）
   registerInstallChild(child: ChildProcess): void  // desktop will-quit / gateway stop() 回收
   notify(snapshot: RuntimeStatusProjection): void  // desktop IPC / gateway status 轮询
-  platformGate(): { mutationsAllowed: boolean; reason?: string }  // Windows 只读
+  platformGate(): { mutationsAllowed: boolean; reason?: string }  // Windows 默认只读（env 验证门例外，见上文平台范围）
 }
 ```
 
@@ -971,7 +975,8 @@ npm registry（§6 已并入）；spawn 的 dsh 子进程与控制面保持零�
 `build:gateway` + pack/install smoke 含 pnpm 依赖；frozen lockfile；i18n）；
 实机（服务端安装候选 → 重启 gateway → 探针 → 故障注入回退 → DSH_HOME 数据
 恢复（Linux server 记录）；生产 TLS 反代下 `/chamber/runtime` status 轮询与认证
-行为）；Windows 只读口径沿用。
+行为）；Windows 只读口径沿用（默认只读，`DSH_CHAMBER_WINDOWS_RUNTIME_MUTATIONS=1`
+验证门例外同桌面，正式解锁待真实 Windows 验证记录）。
 
 ### 9.6 打包与依赖决策（D2/D3）
 

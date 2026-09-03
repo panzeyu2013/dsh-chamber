@@ -537,10 +537,10 @@ gateway 目标即其入口本身（自带认证边界，17 §5.1/§6）。该形
 
 > 各条目以 5.x 编号供外部引用（STATUS「设计未决」按此引用）。
 
-### 5.1 Windows 路径退化(→ design 21 M1 已落地为契约)
+### 5.1 Windows 路径退化(→ design 23 M1 已落地为契约)
 
 `detached` 语义、进程组信号、`lsof` 均不可用——Windows 实现见
-`packages/control-plane/src/win-probes.ts`(design 21 M1):身份 = PowerShell CIM
+`packages/control-plane/src/win-probes.ts`(design 23 M1):身份 = PowerShell CIM
 (命令行/PPID)、端口归属 = netstat、树终止 = `taskkill /T /F` + CIM 残余后代
 清扫;reaper/spawn-dsh 平台自适应接线,全部 fail-closed(不可证即保留/拒绝)。
 残余语义让步(妥协 F1/C6-C8):无 SIGTERM 握手 → 硬终止 + 事务恢复;身份证明

@@ -293,6 +293,46 @@ test('remoteRuntimeAction apply-now POSTs /chamber/runtime/apply-now and accepts
   )
 })
 
+test('remoteRuntimeAction serializes the recover-metadata-era kinds onto their exact routes and bodies', async () => {
+  // cleanup-version carries { version }; restore-pre-rollback carries
+  // { stashName }; recover-metadata is a bare POST. Each must hit its own
+  // suffix — a misrouted recovery action would be refused (or worse, act on
+  // the wrong surface) server-side, so the wire shape is pinned here.
+  const cases: Array<{ kind: Parameters<typeof remoteRuntimeAction>[1]; url: string; body: unknown }> = [
+    {
+      kind: { kind: 'cleanup-version', version: '1.0.0' },
+      url: '/api/i/gateway-x/chamber/runtime/cleanup-version',
+      body: JSON.stringify({ version: '1.0.0' }),
+    },
+    {
+      kind: { kind: 'restore-pre-rollback', stashName: '1700000000000-deadbeef' },
+      url: '/api/i/gateway-x/chamber/runtime/restore-pre-rollback',
+      body: JSON.stringify({ stashName: '1700000000000-deadbeef' }),
+    },
+    {
+      kind: { kind: 'recover-metadata' },
+      url: '/api/i/gateway-x/chamber/runtime/recover-metadata',
+      body: undefined,
+    },
+  ]
+  for (const entry of cases) {
+    const seen: { url: string | null; method: string | null; body: unknown } = {
+      url: null, method: null, body: undefined,
+    }
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      seen.url = String(input)
+      seen.method = init?.method ?? null
+      seen.body = init?.body
+      return statusResponse({ accepted: true }, 202)
+    }) as unknown as typeof fetch
+    const result = await remoteRuntimeAction('gateway-x', entry.kind, { fetchImpl })
+    assert.deepEqual(result, { accepted: true, status: 202 })
+    assert.equal(seen.url, entry.url, `${entry.kind.kind} hits its own suffix`)
+    assert.equal(seen.method, 'POST')
+    assert.equal(seen.body, entry.body, `${entry.kind.kind} carries the exact body`)
+  }
+})
+
 test('the canonical gateway chamber id is validated before any request leaves the client', async () => {
   await assert.rejects(
     remoteRuntimeAction('local', { kind: 'apply' }),

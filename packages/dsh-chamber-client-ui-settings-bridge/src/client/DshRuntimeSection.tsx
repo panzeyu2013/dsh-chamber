@@ -1398,6 +1398,17 @@ export function DshRuntimeSection({
   const resetEscapeHatch = phase === 'pending' || phase === 'applying' || phase === 'snapshot-failed'
   const canResetVisible = canReset
     && (resetEscapeHatch || active === null || bundled === null || active !== bundled)
+  // 「内建版本」行引导（方案 2，2026-12 用户决策）：下拉选中与随应用内建
+  // 同版本的行、存在用户选择（hasOverride）且该版本尚未装成受管树时，主
+  // 按钮引导「恢复内建」（回到随应用副本，零下载）——把同版本下载并另装
+  // 受管树降级为显式次要动作；该版本已缓存（曾装树）时保持普通切换。
+  const builtinGuide = chosen !== null
+    && !isActive
+    && bundled !== null
+    && chosen === bundled
+    && state?.hasOverride === true
+    && canReset
+    && !(versions.some((entry) => entry.version === chosen && entry.cached))
   // Immediate-apply (design 18 addendum §6.1): visible only in the pending
   // phase; env/runtimeBlocked/managementSupported gates are already folded
   // into the action set by runtimeAllowedActions.
@@ -1649,16 +1660,22 @@ export function DshRuntimeSection({
             <button
               type="button"
               className={css.updatePrimaryButton}
-              onClick={onInstall}
-              disabled={mutationDisabled || !canInstall}
+              onClick={builtinGuide ? onReset : onInstall}
+              disabled={builtinGuide
+                ? (mutationDisabled || !canReset)
+                : (mutationDisabled || !canInstall)}
             >
-              {/* Unified direction-aware copy (2026-11 review): the downgrade
-                  action is a version SWITCH like any other — 切换到/更新到,
-                  never 回滚到 (the data-restore semantics are decided
-                  server-side by the direction formula, not by the label). */}
-              {busy && (phase === 'downloading' || phase === 'installing')
-                ? t('dshRuntimeInstalling')
-                : `${selectionDirection === 'rollback' ? t('dshRuntimeActionSwitch') : t('dshRuntimeActionUpdate')} v${chosen}`}
+              {/* 方案 2（2026-12 用户决策）：选中「内建版本」行且未装受管树时，
+                  主按钮是「恢复内建」（回到随应用副本，零下载）。 */}
+              {builtinGuide
+                ? t('dshRuntimeResetBuiltin')
+                : busy && (phase === 'downloading' || phase === 'installing')
+                  ? t('dshRuntimeInstalling')
+                  // Unified direction-aware copy (2026-11 review): the downgrade
+                  // action is a version SWITCH like any other — 切换到/更新到,
+                  // never 回滚到 (the data-restore semantics are decided
+                  // server-side by the direction formula, not by the label).
+                  : `${selectionDirection === 'rollback' ? t('dshRuntimeActionSwitch') : t('dshRuntimeActionUpdate')} v${chosen}`}
             </button>
           )}
           {/* 重启 dsh（design 18 §3.6 项 8）：暂态不可用（busy/pending/
@@ -1672,6 +1689,24 @@ export function DshRuntimeSection({
             {restarting ? t('dshRuntimeRestarting') : t('dshRuntimeRestartAction')}
           </button>
         </div>
+        {/* 方案 2 引导行：说明随应用副本已存在（恢复内建零下载），并把「仍
+            下载并安装为受管版本」保留为显式次要动作（受管树语义：回滚/
+            快照/清理台账的一部分，独立于随应用版本）。 */}
+        {builtinGuide && (
+          <div className={css.updateStatusLine}>
+            <span className={css.generalHint} role="status">
+              {t('dshRuntimeBuiltinGuideHint', { version: chosen ?? '' })}
+            </span>
+            <button
+              type="button"
+              className={css.updateButton}
+              onClick={onInstall}
+              disabled={mutationDisabled || !canInstall}
+            >
+              {t('dshRuntimeInstallBuiltinTree', { version: chosen ?? '' })}
+            </button>
+          </div>
+        )}
         {restartNote !== null && (
           <p className={css.generalHint} role="status">{restartNote}</p>
         )}

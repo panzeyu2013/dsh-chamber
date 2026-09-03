@@ -1,6 +1,6 @@
 # Windows v1 推进执行台账(M0–M6)
 
-> 契约与决策:docs/design/21-windows-support.md。基线:docs/progress/windows-baseline.md。
+> 契约与决策:docs/design/23-windows-support.md。基线:docs/progress/windows-baseline.md。
 > 勾选原则:代码就绪 + 对应验证通过才算完成;凡需真实 Windows/CI 的项必须标注"外部门禁"。
 
 ## M0 — CI 契约腿与基线
@@ -57,7 +57,7 @@
 - [ ] **外部门禁**:Windows 11 实机故障注入全链 + 只读投影文案移除记录
 
 ## M3 — 桌面实机全链 + 打包修复
-- [x] 打包态 `app.setAppUserModelId('com.dshchamber.desktop')`(win32,whenReady 顶部;design 21 M3)
+- [x] 打包态 `app.setAppUserModelId('com.dshchamber.desktop')`(win32,whenReady 顶部;design 23 M3)
 - [x] 打包闭包 P2 代码(全闭环):托盘候选收敛;preload 缺失 loud(对话框+exit(1));
       `!dist/**/*.map` 出包排除;renderer 输出隔离 `dist/web`(standalone build:renderer
       不再清空共享 dist)——打包验证以 CI/release 产物为准
@@ -71,26 +71,26 @@
       (customUnInstall 宏删 Run 值;打包验证待 runner)
 - [x] 深链:打包态注册解锁(no-args 形态;dev 仍 skip);deep-link.ts/main 注释与测试同步(60/60 绿)
 - [x] open-in 本地路径:`runOpenInLaunch`/finder 按 local 选 `validateLocalPath`
-      (盘符/UNC);新增 4 用例(39/39 绿);design 20 注记见 design 21 §7
+      (盘符/UNC);新增 4 用例(39/39 绿);design 20 注记见 design 23 §7
 - [x] SSH:win32 密码门消息带 keys/Pageant 引导(main);一键免密(密钥推送)UI = 后续独立特性
 - [ ] **外部门禁**:登录自启注册表实测/卸载残留、深链冷热启动 + `&` 字符 URL、open-in 盘符
       实机、NSIS protocols 实证(与 M0.5 合并)
 
 ## M5 — 发布面
-- [x] 决策记录与评估框架落盘(design 21 §9:签名 A/B/C、NSIS↔MSIX、dry-run 演练门禁);
+- [x] 决策记录与评估框架落盘(design 23 §9:签名 A/B/C、NSIS↔MSIX、dry-run 演练门禁);
       workflow YAML(ci/release)校验通过
 - [ ] Azure Trusted Signing / MSIX 形态评估执行(需凭据/发行决策)
 - [ ] **外部门禁**:dry-run 全链 + 实机 Release 安装 + 更新链路演练
 
 ## M6 — 收口
 - [x] STATUS.md Windows 条目逐项状态 + 妥协清单引用;README FAQ(双语)Windows 四条已补
-- [x] design 21/todo/基线台账同步;DEVELOPMENT(双语)Windows 支持矩阵段已补
-- [x] design 02 §5.1 / 14 D6 / 16 §4.3 / 20 §9 历史门控表述已改写(design 21 M1/M4 落地)
+- [x] design 23/todo/基线台账同步;DEVELOPMENT(双语)Windows 支持矩阵段已补
+- [x] design 02 §5.1 / 14 D6 / 16 §4.3 / 20 §9 历史门控表述已改写(design 23 M1/M4 落地)
 - [ ] CHANGELOG 条目(随正式版本)
 - [x] **第二轮独立检查(3 个全新 subagent,2026)已汇入并修复**:修复核验全部通过;
       空白面补扫:windowsHide 误报(windows-process 创建时已含)、killFailedSpawn 无生产调用方
       (docstring 已注明 await+捕获)、verify-first 已实现(稳态省 6 次 icacls)、env 打包态风险句
-      已入 design21 纪律、deep-link platform 显式契约注记;终态一致性 4 low 已修(design02
+      已入 design 23 纪律、deep-link platform 显式契约注记;终态一致性 4 low 已修(design02
       L299 括注/design09 L372 指针/STATUS 腿归属/todo nsis.include 措辞);CIM 缓存 TTL
       双模块统一 500ms(互指注释)。修复后 8 套件全绿(9/15/5/60/7/19/39/12)。
 - [x] **独立验收(3 个 subagent,2026)已汇入并修复**:报告覆盖平台门控纪律/fail-closed/
@@ -99,7 +99,7 @@
       gone 判定本地化兜底(kill(0) 实探,双模块)、CIM 缓存时间戳后置、win-acl principal
       精确匹配(域前缀,弃 substring)+ 本地化近似注记、preload 缺失改对话框+exit(1)
       (打包态 UX)、注释/文档漂移(chamber-settings/preload.cts/open-in/README 双语/
-      design15/baseline 行号与登记/design21 §5-§6)。修复后 8 套件+2 集成装载全绿。
+      design15/baseline 行号与登记/design 23 §5-§6)。修复后 8 套件+2 集成装载全绿。
       未修复(记录在案):supervisor win32 sendSignal 无宽限重试(low,方向 fail-closed);
       双模块解析器重复(low,已加互指注释+双端 CI 测试);decideDeepLink 的 platform
       入参保留为显式契约(nit)。

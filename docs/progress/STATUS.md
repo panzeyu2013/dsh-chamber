@@ -108,7 +108,7 @@
   解锁（07 §3/§4）。设计见 `docs/design/07-models-params.md`。
 - **SSH 密码认证可选增强（05 §8 例外主体已落地）**：一键免密引导与系统
   钥匙串尚未实现；现行 SSH 密码镜像仍是 endpoint-bound 0600 明文文件。
-- **Windows 首版支持推进中（design 21；台账 `docs/progress/todo/windows-v1.md`，
+- **Windows 首版支持推进中（design 23；台账 `docs/progress/todo/windows-v1.md`，
   基线 `docs/progress/windows-baseline.md`）**：M0（ci.yml `test-windows` 契约腿）
   与 M1 生命周期契约（`win-probes.ts`：PowerShell CIM 身份 / netstat 端口 /
   taskkill 树终止；reaper 与 spawn-dsh 平台自适应接线；win32-only 集成测试）已
@@ -124,7 +124,7 @@
   保持只读/禁用门控直至 M2a 验证完成。Gateway owner-private 目录在 Windows 只
   验证 real-dir/no-follow/identity 并继承 OS ACL（icacls 显式收紧已接线）：
   Node 的 mode/chmod 无法诚实证明 POSIX 0700，不能把该让步写成已有等价权限保障。
-- **Linux 桌面首版支持（设计 21，2026-12 落地）**：AppImage（x64）发行 + 形态门
+- **Linux 桌面首版支持（设计 22，2026-12 落地）**：AppImage（x64）发行 + 形态门
   自动更新 + 桌面集成修复已入库（打包配置；updater 形态门——探针按
   AppImageUpdater 真实替换语义校验启动形态/绝对常规文件/父目录可写，2026-12
   review 加固；XDG（仅绝对路径）/APPIMAGE 自启与协议 .desktop 每启重写 +
@@ -135,7 +135,7 @@
   （url/size/sha512）、AppImage 内 .desktop 身份、afterPack 断言全部通过；
   双形态无头冒烟（AppImage 提取运行 / 解包目录）验证协议 .desktop 指向、
   形态门开关与本地 dsh 实例全链。细节入 CHANGELOG/发布笔记。
-  **剩余实机门禁**（真实桌面矩阵 GNOME X11+Wayland、KDE 抽验，清单见设计 21
+  **剩余实机门禁**（真实桌面矩阵 GNOME X11+Wayland、KDE 抽验，清单见设计 22
   §8）：XDG 定制自启、深链冷/热启动与 **CHROME_DESKTOP/xdg-mime 路由**及
   AppImage 升级后重注册、托盘可见性、通知点击、safeStorage 有无 keyring、
   SSH 密码全链、运行时安装/切换/apply-now/restartLocal 打包态全链、
@@ -147,9 +147,9 @@
   闭包已知 P2」条目（同事实）；gateway 裸 CLI 默认 stateDir ~/.dsh-chamber 与
   control-plane standalone 同目录（裸跑形态运维提示待加；安装器形态
   DSH_GATEWAY_STATE 无此问题）；不做独立 verify-linux-appimage 脚本（取舍见
-  设计 21 §5，以 afterPack + workflow 内联 + 无头冒烟覆盖）；XDG_DATA_HOME 偏移
+  设计 22 §5，以 afterPack + workflow 内联 + 无头冒烟覆盖）；XDG_DATA_HOME 偏移
   的 pnpm home 与 macOS ~/Library/pnpm 未纳入 resolvePnpmBinDir（低优）；
-  dsh-runtime private-fs.ts syncPinnedDirectory 保持严格目录 fsync（设计 21 §6
+  dsh-runtime private-fs.ts syncPinnedDirectory 保持严格目录 fsync（设计 22 §6
   审计结论，未并入容错）；userData 实测 ~/.config/@dsh-chamber/desktop（可选
   优化 app.setName，未做）；electron-builder desktopName/syncDesktopName 提示
   （WM_CLASS 关联，低优）。
@@ -337,7 +337,7 @@
 - **safeStorage 的诚实回退**：Gateway token/密码优先 safeStorage；OS 加密不可用
   时按用户决策回退 target-bound 0600 明文文件并在非秘密投影/UI 中如实显示，
   不把 plaintext 冒充密文。SSH 密码仍采用 endpoint-bound 0600 明文镜像。
-  **Windows 分支例外（design 21 C16）**：win32 上 DPAPI（safeStorage）不可用时
+  **Windows 分支例外（design 23 C16）**：win32 上 DPAPI（safeStorage）不可用时
   拒绝明文落盘——凭据仅本次会话内存驻留（file=null），每次连接需重录；S22
   明文兜底仅适用于非 win32 平台（0600 语义在 Windows 不可诚实表达）。
 - **Windows 发布身份让步**：Windows x64 安装包当前未做 Authenticode 签名，
@@ -386,6 +386,14 @@
   https-only、gateway 允许 http-loopback（共享 canonical 更宽，桌面层收紧）；
   desktop 15s+6h 周期检查不移植 gateway（避免周期出网；进页拉取 + 手动检查）；
   gateway 组件级交互仍以纯函数/API 客户端测试代证（原实机门禁项维持）。
+
+- **「内建版本」行引导（2026-12 用户决策，方案 2，登记桌面本地分支）**：下拉
+  选中与随应用内建同版本的行且该版本尚未装成受管树（无 cached 树）、存在用户
+  选择（hasOverride）时，主按钮从「更新/切换到 vX」改为引导「恢复内建」（清除
+  用户指针回到随应用副本，零下载；树/快照保留）；「仍下载并安装为受管版本」
+  保留为显式次要动作。避免把随应用已含字节重复下载成第二棵受管树的同时，不
+  剥夺受管树语义（回滚/快照/清理台账、独立于应用更新）。已缓存（曾装树）时
+  保持普通切换不变。gateway 分支（部署锚）是否镜像同款引导待定。
 
 - **2026-12 review 轮次修复与登记（设计 18 §9.3 配套）**：① FATAL 启动块下所有普通
   mutation 拒绝（路由 recovery-gate 增 startupBlockedReason 门，仅放行各自恢复面）；

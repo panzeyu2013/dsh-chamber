@@ -776,8 +776,8 @@ Gateway 拒绝把文件系统根、用户 HOME 或系统 temp 根本身作为 `s
 且绝不碰 broad root）；`dsh-runtime/` 子目录同样收敛为 `0700`。Windows 的 Node
 `chmod/stat.mode` 只能表达
 有限的只读属性，不能诚实证明 POSIX `0700`；该目录边界仅保留 real-dir/no-follow/identity
-校验并继承 OS ACL，既不伪报 `0700` 也不改 ACL（Windows 首版整体支持仍按 STATUS
-暂缓）。所有 JSON main/backup/tmp 与 secret 写入收敛为 `0600`；正常
+校验并继承 OS ACL，既不伪报 `0700` 也不改 ACL（Windows 首版整体支持推进中——
+design 23；该让步登记见 design 23 §7 C1/C2 与 STATUS）。所有 JSON main/backup/tmp 与 secret 写入收敛为 `0600`；正常
 store 加载可显式迁移合法 legacy secret 到 `0600`，而 `gateway auth status` 只验证不
 改权限。secret 读取以 KiB 级上限约束，并先以 no-follow/inode 校验拒绝 symlink 与
 非普通文件。凭据 JSON 文档经 `createJsonStore` 的 owner-only 原子写路径持久化，写

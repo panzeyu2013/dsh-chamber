@@ -137,7 +137,7 @@ artifacts.
 
 > Windows install slowness/hangs on "Installing" (Windows Defender per-file scanning) — see the README FAQ.
 
-### Windows support matrix (design 21, in progress)
+### Windows support matrix (design 23, in progress)
 
 | Area | Status |
 |---|---|
@@ -148,7 +148,7 @@ artifacts.
 | Desktop capabilities (M3) | AUMID / tray-candidate convergence / loud preload failure wired; real-machine matrix pending |
 | Decision unlocks (M4) | Login autostart, deep-link registration, open-in local paths, SSH password gate guidance unlocked (code); NSIS uninstall Run-key cleanup include wired |
 | Known limits | Unsigned (SmartScreen); SSH passwords disabled (use keys/Pageant); runtime mutations read-only; 0700/0600 expressed via icacls/ACLs |
-| Authority records | `docs/design/21-windows-support.md`, `docs/progress/todo/windows-v1.md`, `docs/progress/windows-baseline.md` |
+| Authority records | `docs/design/23-windows-support.md`, `docs/progress/todo/windows-v1.md`, `docs/progress/windows-baseline.md` |
 
 ## 5. CI & releases
 

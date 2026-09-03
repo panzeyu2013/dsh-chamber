@@ -1,6 +1,6 @@
 # Windows 行为基线台账(M0)
 
-> 用途:Windows 首版推进(design 21)的**修复前基线**。第一次 `test-windows` CI 腿跑绿后,
+> 用途:Windows 首版推进(design 23)的**修复前基线**。第一次 `test-windows` CI 腿跑绿后,
 > 把每个测试在 win32 上的 pass/skip 集合与每个平台门控的拒绝行为填入下表;此后每个
 > 里程碑的 win32 测试变化必须对照本表归因(diff = 预期解锁集,不允许"顺手改绿")。
 

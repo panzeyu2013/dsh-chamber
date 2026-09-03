@@ -1,4 +1,4 @@
-# 21. Windows 支持推进方案(v3,反思修订版)
+# 23. Windows 支持推进方案(v3,反思修订版)
 
 > 范围:dsh-chamber 桌面端(本地实例 + ssh/gateway 远程连接 + dsh 运行时版本管理)在
 > Windows 上的首版支持推进。权威进度记录:`docs/progress/STATUS.md`;执行台账:

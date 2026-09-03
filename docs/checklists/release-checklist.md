@@ -90,7 +90,7 @@ CI:    §7b dry_run 先行（新路径必须验证过一次）→ §7c 正式 ta
       （dist/control-plane、dist/preload.cjs、dist/host-*-package、vendor/dsh）。
 - [ ] **本地不做打包/签名/公证**：安装包/更新源由 release.yml 的
       build-macos / build-windows / build-linux 在 CI 生成，发布者本机无需 hdiutil/密钥。
-- [ ] **Linux 腿（design 21）**：build-linux 在 ubuntu-22.04 构建 AppImage（x64）；
+- [ ] **Linux 腿（design 22）**：build-linux 在 ubuntu-22.04 构建 AppImage（x64）；
       非 dry_run 断言 `latest-linux.yml`（或 beta 的 `beta-linux.yml`）存在且互斥、
       无 .blockmap；打包 dsh runtime 平台前缀 `linux-`。
 - [ ] `pnpm run smoke` 通过（dsh 已封装时真跑；未安装时 SKIP 属正常）。
