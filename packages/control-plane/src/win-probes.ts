@@ -35,8 +35,13 @@
 import { spawnSync } from 'node:child_process'
 
 /** Every probe/termination exec is bounded; a hung host tool cannot hang the
- *  reaper or a spawn attempt. */
-const WINDOWS_PROBE_TIMEOUT_MS = 10_000
+ *  reaper or a spawn attempt. 30s (2026-09 first real-runner finding): fresh
+ *  windows-2022 runners pay Windows PowerShell 5.1 first-run + Defender
+ *  real-time scan latency that exceeded 10s (spawnSync ETIMEDOUT in the
+ *  win32 lifecycle integration); the 500ms table cache means the slow path
+ *  is paid once per TTL, not per poll. MUST stay in sync with
+ *  windows-process.ts PROBE_TIMEOUT_MS (sibling-parity audit). */
+const WINDOWS_PROBE_TIMEOUT_MS = 30_000
 
 /** CIM table cache TTL — MUST match windows-process.ts (sibling-parity audit, round 2). */
 const TABLE_CACHE_TTL_MS = 500

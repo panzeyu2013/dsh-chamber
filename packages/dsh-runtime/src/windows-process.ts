@@ -25,7 +25,10 @@
 
 import { spawnSync } from 'node:child_process'
 
-const PROBE_TIMEOUT_MS = 10_000
+// 30s (2026-09 real-runner finding; sibling parity with win-probes.ts
+// WINDOWS_PROBE_TIMEOUT_MS): PowerShell 5.1 first-run + Defender scan on
+// fresh windows runners exceeded 10s; the table cache bounds the cost.
+const PROBE_TIMEOUT_MS = 30_000
 const TABLE_CACHE_TTL_MS = 500
 
 /** One normalized Win32_Process row (pid + stale parent chain only). */
