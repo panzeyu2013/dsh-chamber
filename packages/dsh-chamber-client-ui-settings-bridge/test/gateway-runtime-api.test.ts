@@ -13,6 +13,7 @@ import {
   parseRemoteRuntimeStatus,
   parseRemoteVersions,
   pollRemoteRuntimeUntilSettled,
+  projectRemoteRuntimeBadge,
   remoteRuntimeAction,
   remoteRuntimeActionGates,
   remoteRuntimeSetRegistry,
@@ -90,6 +91,52 @@ function fetchSequence(responses: Array<{ payload: unknown; status?: number }>) 
   }) as unknown as typeof fetch
   return { fetchImpl, calls: () => calls }
 }
+
+test('projectRemoteRuntimeBadge maps remote states onto the unified badge vocabulary', () => {
+  assert.equal(projectRemoteRuntimeBadge(null), null)
+  assert.deepEqual(projectRemoteRuntimeBadge(status()), { label: 'ok', tone: 'ok' })
+  assert.deepEqual(
+    projectRemoteRuntimeBadge(status({ phase: 'installing' })),
+    { label: 'installing', tone: 'busy' },
+  )
+  assert.deepEqual(
+    projectRemoteRuntimeBadge(status({ phase: 'applying' })),
+    { label: 'applying', tone: 'busy' },
+  )
+  assert.deepEqual(
+    projectRemoteRuntimeBadge(status({ phase: 'pending', pending: '1.1.0' })),
+    { label: 'pending', tone: 'warn' },
+  )
+  assert.deepEqual(
+    projectRemoteRuntimeBadge(status({ phase: 'swap-attempted', startupBlockedReason: 'swap-attempted' })),
+    { label: 'swap-attempted', tone: 'danger' },
+  )
+  assert.deepEqual(
+    projectRemoteRuntimeBadge(status({ phase: 'snapshot-failed', startupBlockedReason: 'snapshot-failed' })),
+    { label: 'snapshot-failed', tone: 'danger' },
+  )
+  assert.deepEqual(
+    projectRemoteRuntimeBadge(status({ phase: 'restore-blocked', startupBlockedReason: 'restore-half' })),
+    { label: 'restore-blocked', tone: 'danger' },
+  )
+  assert.deepEqual(
+    projectRemoteRuntimeBadge(status({ restart: 'running' })),
+    { label: 'restarting', tone: 'busy' },
+  )
+  assert.deepEqual(
+    projectRemoteRuntimeBadge(status({ phase: 'idle', startupBlockedReason: 'journal corrupt' })),
+    { label: 'blocked', tone: 'danger' },
+    'a blocked idle projection never renders next to the ok pill',
+  )
+  assert.deepEqual(
+    projectRemoteRuntimeBadge(status({ operationError: 'install failed: x' })),
+    { label: 'failed', tone: 'danger' },
+  )
+  assert.deepEqual(
+    projectRemoteRuntimeBadge(status({ restart: 'failed', operationError: 'did not reach ready' })),
+    { label: 'failed', tone: 'danger' },
+  )
+})
 
 test('remoteRuntimeStatusView maps the remote status to the four render kinds without inventing fields', () => {
   // busy: in-flight apply (pending is the version param; the applying window
@@ -389,7 +436,7 @@ test('fetchRemoteRuntimeStatus/fetchRemoteRuntimeVersions consume the documented
 
   const versionsOk = fetchSequence([{ payload: { registryOrigin: 'https://registry.npmjs.org', versions: [] } }])
   const versions = await fetchRemoteRuntimeVersions('gateway-x', { fetchImpl: versionsOk.fetchImpl })
-  assert.deepEqual(versions, { registryOrigin: 'https://registry.npmjs.org', versions: [] })
+  assert.deepEqual(versions, { registryOrigin: 'https://registry.npmjs.org', versions: [], removableVersions: [] })
 })
 
 test('remoteRuntimeSetRegistry PUTs the origin and passes bad-registry rejections through', async () => {
@@ -683,12 +730,27 @@ test('versions parsing: whitelist projection, error field preserved, malformed e
       { version: '1.2.0', latest: true, cached: false, belowBaseline: false },
       { version: '1.0.0', latest: false, cached: true, belowBaseline: true },
     ],
+    removableVersions: [],
   })
   assert.deepEqual(parseRemoteVersions({
     registryOrigin: 'https://registry.npmmirror.com',
     versions: [],
     error: 'registry unreachable',
-  }), { registryOrigin: 'https://registry.npmmirror.com', versions: [], error: 'registry unreachable' })
+  }), {
+    registryOrigin: 'https://registry.npmmirror.com',
+    versions: [],
+    removableVersions: [],
+    error: 'registry unreachable',
+  })
+  assert.deepEqual(parseRemoteVersions({
+    registryOrigin: 'https://registry.npmjs.org',
+    versions: [],
+    removableVersions: ['1.0.0', '0.9.0'],
+  }), {
+    registryOrigin: 'https://registry.npmjs.org',
+    versions: [],
+    removableVersions: ['1.0.0', '0.9.0'],
+  })
   assert.throws(
     () => parseRemoteVersions({ registryOrigin: 'x', versions: [{ version: 1 }] }),
     /malformed runtime version entry\.version/,
@@ -696,5 +758,51 @@ test('versions parsing: whitelist projection, error field preserved, malformed e
   assert.throws(
     () => parseRemoteVersions({ registryOrigin: 'x', versions: 'nope' }),
     /malformed runtime versions\.versions/,
+  )
+  assert.throws(
+    () => parseRemoteVersions({ registryOrigin: 'x', versions: [], removableVersions: 'nope' }),
+    /malformed runtime versions\.removableVersions/,
+  )
+  assert.throws(
+    () => parseRemoteVersions({ registryOrigin: 'x', versions: [], removableVersions: [42] }),
+    /malformed runtime versions\.removableVersions/,
+  )
+})
+
+test('metadata health fields: legacy defaults, fail-closed edges and the badge precedence', () => {
+  // Legacy server (no field) → advisory defaults, never a fake block.
+  const legacy = parseRemoteRuntimeStatus({ kind: 'dsh-chamber-gateway-runtime' })
+  assert.equal(legacy.metadataHealth, null)
+  assert.equal(legacy.metadataComponents, undefined)
+  assert.equal(legacy.canRecoverMetadata, false)
+  // Unknown/malformed values fail closed instead of enabling a fake recovery.
+  assert.throws(
+    () => parseRemoteRuntimeStatus({ kind: 'dsh-chamber-gateway-runtime', metadataHealth: 'future-health' }),
+    /unsupported runtime status\.metadataHealth/,
+  )
+  assert.throws(
+    () => parseRemoteRuntimeStatus({ kind: 'dsh-chamber-gateway-runtime', metadataComponents: 'nope' }),
+    /malformed runtime status\.metadataComponents/,
+  )
+  assert.throws(
+    () => parseRemoteRuntimeStatus({ kind: 'dsh-chamber-gateway-runtime', metadataComponents: ['future-component'] }),
+    /malformed runtime status\.metadataComponents/,
+  )
+  assert.throws(
+    () => parseRemoteRuntimeStatus({ kind: 'dsh-chamber-gateway-runtime', canRecoverMetadata: 'yes' }),
+    /malformed runtime status\.canRecoverMetadata/,
+  )
+  // Corrupt metadata names its own danger badge on the gateway branch too.
+  assert.deepEqual(
+    projectRemoteRuntimeBadge(status({ metadataHealth: 'selection-corrupt', startupBlockedReason: 'journal-corrupt' })),
+    { label: 'metadata', tone: 'danger' },
+  )
+  assert.deepEqual(
+    projectRemoteRuntimeBadge(status({ metadataHealth: 'recovery-in-progress' })),
+    { label: 'metadata', tone: 'danger' },
+  )
+  assert.deepEqual(
+    projectRemoteRuntimeBadge(status({ metadataHealth: 'recovery-marker-corrupt' })),
+    { label: 'metadata', tone: 'danger' },
   )
 })

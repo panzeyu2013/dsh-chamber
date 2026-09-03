@@ -211,8 +211,20 @@ export function runtimeAllowedActions(state: RuntimeState | null): readonly Runt
     && (state.phase === 'rollback' || state.phase === 'failed')
   // Unsupported platforms may still need to finish a crash-interrupted data
   // restore. That recovery action is deliberately narrower than version-tree
-  // management and remains the sole escape hatch.
-  if (state.managementSupported === false) return canRetryRestore ? ['retry-restore'] : []
+  // management and remains the sole escape hatch. 「重启 dsh」是来源/平台无关
+  // 的进程动作（design 18 §3.6 项 8 口径）：只读投影下仍可用（与 gateway
+  // win32 行为一致），仅 runtimeBlocked 与忙碌相位排除。
+  if (state.managementSupported === false) {
+    const actions: RuntimeAction[] = canRetryRestore ? ['retry-restore'] : []
+    // This branch runs BEFORE the runtimeBlocked early return, so the blocked
+    // state must be checked here explicitly: blocked recovery phases never
+    // offer restart.
+    if (state.runtimeBlocked !== true
+      && (BASE_ACTIONS[state.phase] ?? []).includes('restart-dsh')) {
+      actions.push('restart-dsh')
+    }
+    return actions
+  }
   if (state.runtimeBlocked === true) {
     // An interrupted DSH_HOME restore must complete before selection metadata
     // can be archived. A retryable 'half' restore is therefore the sole
@@ -243,11 +255,16 @@ export function runtimeAllowedActions(state: RuntimeState | null): readonly Runt
     }
     return actions
   }
-  // An env-selected tree outranks every persisted override. Read-only checks
-  // remain useful and an interrupted data restore must remain recoverable;
-  // version selection/reset/apply would otherwise be misleading.
+  // An env-selected tree outranks every persisted override. Version
+  // selection/reset/apply/registry stay disabled, but 检查更新与「重启 dsh」
+  // 是来源无关动作（design 18 §3.6 项 8：env 源不禁 restart），中断的数据
+  // 恢复仍可续作。
   if (state.source === 'env') {
-    const actions: RuntimeAction[] = (BASE_ACTIONS[state.phase] ?? []).includes('check') ? ['check'] : []
+    const base = BASE_ACTIONS[state.phase] ?? []
+    const actions: RuntimeAction[] = base.includes('check') ? ['check'] : []
+    if (base.includes('restart-dsh')) {
+      actions.push('restart-dsh')
+    }
     if (canRetryRestore) {
       actions.unshift('retry-restore')
     }
@@ -407,6 +424,100 @@ export function projectRuntimeSnapshot(state: RuntimeState | null): RuntimeSnaps
     return { kind: 'ready', count: state.snapshotCount, latestAt: state.latestSnapshotAt ?? null, detail: null }
   }
   return { kind: 'unknown', count: null, latestAt: null, detail: null }
+}
+
+/** Unified status-indicator vocabulary (2026-12 runtime-settings unification):
+ *  a coloured pill beside the current-version row in BOTH the local and the
+ *  gateway settings branches. The badge names the machine state only — it
+ *  never claims "up to date" / "new version available" (registry-verdict copy
+ *  was removed because it could contradict the visible version list). */
+export type RuntimeBadgeLabel =
+  | 'ok'
+  | 'checking'
+  | 'downloading'
+  | 'installing'
+  | 'pending'
+  | 'applying'
+  | 'rolling-back'
+  | 'restarting'
+  | 'swap-attempted'
+  | 'snapshot-failed'
+  | 'restore-blocked'
+  | 'blocked'
+  | 'failed'
+  | 'error'
+  | 'metadata'
+
+export type RuntimeBadgeTone = 'ok' | 'busy' | 'warn' | 'danger'
+
+export interface RuntimeBadgeView {
+  label: RuntimeBadgeLabel
+  tone: RuntimeBadgeTone
+}
+
+const badgeOk: RuntimeBadgeView = { label: 'ok', tone: 'ok' }
+const badgeBusy = (label: RuntimeBadgeLabel): RuntimeBadgeView => ({ label, tone: 'busy' })
+const badgeWarn = (label: RuntimeBadgeLabel): RuntimeBadgeView => ({ label, tone: 'warn' })
+const badgeDanger = (label: RuntimeBadgeLabel): RuntimeBadgeView => ({ label, tone: 'danger' })
+
+function badgeRestoreState(state: RuntimeState): RuntimeBadgeView | null {
+  if (state.restoreOutcome === 'half' || state.restoreOutcome === 'incomplete') {
+    return badgeDanger('restore-blocked')
+  }
+  return null
+}
+
+/** Local (main-process) status → badge. `null` = not hydrated (no badge).
+ *  Blocked/metadata/failed/recovery states suppress the ok badge exactly like
+ *  the gateway branch suppresses its phase chip on blocked views — a red
+ *  state must never sit next to a green "runtime healthy" pill. */
+export function projectRuntimeBadge(state: RuntimeState | null): RuntimeBadgeView | null {
+  if (state === null) return null
+  // swap-attempted dominates the failed terminal (projectRuntimeStatus parity).
+  if (state.swapAttempted === true && state.phase === 'failed') {
+    return badgeDanger('swap-attempted')
+  }
+  if (state.runtimeBlocked === true) {
+    const health = state.metadataHealth
+    if (health === 'selection-corrupt' || health === 'recovery-in-progress'
+      || health === 'recovery-marker-corrupt' || health === 'recovery-finalized') {
+      return badgeDanger('metadata')
+    }
+    if (state.canRetryRestore === true) {
+      const restore = badgeRestoreState(state)
+      if (restore !== null) return restore
+    }
+  }
+  const view = (() => {
+    switch (state.phase) {
+      case 'checking': return badgeBusy('checking')
+      case 'downloading': return badgeBusy('downloading')
+      case 'installing': return badgeBusy('installing')
+      case 'pending': return badgeWarn('pending')
+      case 'applying': return badgeBusy('applying')
+      case 'applied': return badgeOk
+      case 'snapshot-failed': return badgeDanger('snapshot-failed')
+      case 'rollback':
+      case 'failed': {
+        const restore = badgeRestoreState(state)
+        if (restore !== null) return restore
+        // A terminal complete rollback (data restored) is a healthy end
+        // state — never a lingering 'rolling-back' warn pill.
+        if (state.phase === 'rollback' && state.restoreOutcome === 'complete') return badgeOk
+        return state.phase === 'rollback' ? badgeWarn('rolling-back') : badgeDanger('failed')
+      }
+      case 'error': return badgeDanger('error')
+      case 'idle':
+      case 'available':
+        return badgeOk
+    }
+  })()
+  // A blocked projection without corrupt metadata or an interrupted restore
+  // (unknown future reason) must never sit next to the ok pill.
+  if (state.runtimeBlocked === true && view.label === 'ok') {
+    return badgeDanger('blocked')
+  }
+  return view
 }
 
 /** Stable compact formatter for the settings disk-accounting projection. */

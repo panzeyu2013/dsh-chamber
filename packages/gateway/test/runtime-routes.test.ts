@@ -266,6 +266,191 @@ test('resolution falls back to the builtin anchor without env or pointer', () =>
   }
 })
 
+test('cleanup-version / restore-pre-rollback / recover-metadata route matrix (2026-12 desktop parity)', async () => {
+  let phase = 'idle'
+  const calls: string[] = []
+  const manager = {
+    status: () => ({ phase, pending: phase === 'pending' ? '9.9.9' : null }),
+    mutationInProgress: () => false,
+    cleanupVersion: async (version: string) => {
+      calls.push(`cleanup:${version}`)
+      return { version, removed: true }
+    },
+    restorePreRollback: async (stashName: string) => {
+      calls.push(`restore:${stashName}`)
+      return { accepted: true }
+    },
+    recoverMetadata: async () => {
+      calls.push('recover')
+      return { accepted: true }
+    },
+  }
+  const routes = createRuntimeRoutes(() => manager as never, silentLogger)
+  // Body validation: both POST bodies are required.
+  assert.equal((await runRoute(routes, 'POST', '/chamber/runtime/cleanup-version', '{}')).status, 400)
+  assert.equal((await runRoute(routes, 'POST', '/chamber/runtime/restore-pre-rollback', '{}')).status, 400)
+  // The pending terminal gate closes all three (only restore-builtin + its
+  // own apply-now window stay open while pending).
+  phase = 'pending'
+  const cleanupPending = await runRoute(routes, 'POST', '/chamber/runtime/cleanup-version', JSON.stringify({ version: '1.0.0' }))
+  assert.equal(cleanupPending.status, 409)
+  assert.equal((cleanupPending.json as { code: string }).code, 'runtime_pending')
+  const restorePending = await runRoute(routes, 'POST', '/chamber/runtime/restore-pre-rollback', JSON.stringify({ stashName: '1700000000000-deadbeef' }))
+  assert.equal(restorePending.status, 409)
+  const recoverPending = await runRoute(routes, 'POST', '/chamber/runtime/recover-metadata')
+  assert.equal(recoverPending.status, 409)
+  // Idle: all three accept synchronously.
+  phase = 'idle'
+  const cleanup = await runRoute(routes, 'POST', '/chamber/runtime/cleanup-version', JSON.stringify({ version: '1.0.0' }))
+  assert.equal(cleanup.status, 200)
+  assert.deepEqual(cleanup.json, { version: '1.0.0', removed: true })
+  const restore = await runRoute(routes, 'POST', '/chamber/runtime/restore-pre-rollback', JSON.stringify({ stashName: '1700000000000-deadbeef' }))
+  assert.equal(restore.status, 200)
+  assert.deepEqual(restore.json, { accepted: true })
+  const recover = await runRoute(routes, 'POST', '/chamber/runtime/recover-metadata')
+  assert.equal(recover.status, 200)
+  assert.deepEqual(recover.json, { accepted: true })
+  assert.deepEqual(calls, ['cleanup:1.0.0', 'restore:1700000000000-deadbeef', 'recover'])
+})
+
+test('cleanup-version maps the manager protection refusal to 409 version_still_protected', async () => {
+  const manager = {
+    status: () => ({ phase: 'idle', pending: null }),
+    mutationInProgress: () => false,
+    cleanupVersion: async () => {
+      throw Object.assign(new Error('dsh 1.0.0 is still protected (known-good); cleanup refused'), { code: 'version_still_protected' })
+    },
+  }
+  const routes = createRuntimeRoutes(() => manager as never, silentLogger)
+  const res = await runRoute(routes, 'POST', '/chamber/runtime/cleanup-version', JSON.stringify({ version: '1.0.0' }))
+  assert.equal(res.status, 409)
+  assert.equal((res.json as { code: string }).code, 'version_still_protected')
+})
+
+test('real manager: cleanup refuses non-ledger versions; metadata corruption is recoverable and probe failure keeps the sentinel', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-cleanup-'))
+  const oldEnv = process.env.DSH_GATEWAY_DSH_PATH
+  let manager: ReturnType<typeof createGatewayRuntimeManager> | null = null
+  try {
+    delete process.env.DSH_GATEWAY_DSH_PATH
+    manager = createGatewayRuntimeManager({ config: config(stateDir), plane: fakePlane(), logger: silentLogger })
+    const healthy = await manager.status()
+    assert.equal(healthy.canRecoverMetadata, false)
+    assert.ok(['healthy', 'unknown'].includes(healthy.metadataHealth ?? ''), 'an untouched state dir is healthy or unknown')
+    // Ledger gate: only explicitly installed trees may be cleaned.
+    await assert.rejects(manager.cleanupVersion('9.9.9'), /no explicitly installed version tree/)
+    // Corrupt the activation journal (the desktop FATAL fixture shape).
+    mkdirSync(join(stateDir, 'dsh-runtime'), { recursive: true })
+    writeFileSync(join(stateDir, 'dsh-runtime', 'activation-journal.json'), '{corrupt', { mode: 0o600 })
+    const blocked = await manager.status()
+    assert.equal(blocked.metadataHealth, 'selection-corrupt')
+    assert.ok((blocked.metadataComponents ?? []).includes('activation-journal'))
+    assert.equal(blocked.canRecoverMetadata, true, 'FATAL journal corruption opens the recover route')
+    // The recovery engine archives evidence and probes the builtin anchor;
+    // the fake plane has no dsh listener, so the probe fails and the manager
+    // keeps the durable record behind the metadata-probe-failed sentinel.
+    await manager.recoverMetadata()
+    const after = await manager.status()
+    assert.equal(after.startupBlockedReason, 'metadata-probe-failed')
+    assert.equal(after.canRecoverMetadata, true, 'a failed probe stays recoverable (resumable engine record)')
+  } finally {
+    if (oldEnv === undefined) delete process.env.DSH_GATEWAY_DSH_PATH
+    else process.env.DSH_GATEWAY_DSH_PATH = oldEnv
+    await manager?.dispose().catch(() => {})
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('real manager: cleanup/restore/recover refuse env+win32 and recover refuses non-FATAL blocks and healthy state', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-gate-matrix-'))
+  const oldEnv = process.env.DSH_GATEWAY_DSH_PATH
+  try {
+    // env: cleanup + recover refuse (env pins the runtime); the data-restore
+    // escape (restore-pre-rollback) stays env-independent and only fails on
+    // its own stash validation.
+    process.env.DSH_GATEWAY_DSH_PATH = '/tmp/env-dsh'
+    const envManager = createGatewayRuntimeManager({ config: config(stateDir), plane: fakePlane(), logger: silentLogger })
+    await assert.rejects(envManager.cleanupVersion('1.0.0'), /DSH_GATEWAY_DSH_PATH/)
+    await assert.rejects(envManager.recoverMetadata(), /DSH_GATEWAY_DSH_PATH/)
+    await assert.rejects(envManager.restorePreRollback('1700000000000-deadbeef'), /no longer exists or is untrustworthy/)
+    await envManager.dispose()
+    // win32: everything is read-only, including the new routes.
+    const win32Manager = createGatewayRuntimeManager({
+      config: config(stateDir), plane: fakePlane(), logger: silentLogger, platform: 'win32',
+    })
+    await assert.rejects(win32Manager.cleanupVersion('1.0.0'), { code: 'platform_read_only' })
+    await assert.rejects(win32Manager.restorePreRollback('1700000000000-deadbeef'), { code: 'platform_read_only' })
+    await assert.rejects(win32Manager.recoverMetadata(), { code: 'platform_read_only' })
+    await win32Manager.dispose()
+    // Healthy state: recover refuses loudly.
+    delete process.env.DSH_GATEWAY_DSH_PATH
+    const healthy = createGatewayRuntimeManager({ config: config(stateDir), plane: fakePlane(), logger: silentLogger })
+    await assert.rejects(healthy.recoverMetadata(), /no corrupt metadata to recover/)
+    // Non-FATAL startup block (swap-attempted): recover refuses with the
+    // recovery-required code — the swap/restore retry surface owns it.
+    writeOverride(stateDir, {
+      shellVersion: gatewayPackageVersion, chosenVersion: '1.2.3', resolvedVersion: '1.2.3',
+      pending: '1.2.3', swapAttempted: true,
+    })
+    const swap = await healthy.startupTransaction()
+    assert.equal(swap.blockedReason, 'swap-attempted')
+    await assert.rejects(healthy.recoverMetadata(), { code: 'runtime_recovery_required' })
+    // cleanup hits the pending terminal gate BEFORE the block reason (desktop
+    // parity: a pending override is a swap awaiting the next startup — the
+    // swap/restore retry surface owns the block).
+    await assert.rejects(healthy.cleanupVersion('1.2.3'), { code: 'runtime_pending' })
+    await healthy.dispose()
+  } finally {
+    if (oldEnv === undefined) delete process.env.DSH_GATEWAY_DSH_PATH
+    else process.env.DSH_GATEWAY_DSH_PATH = oldEnv
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('real manager: recoverMetadata finalizes on ok probes and brings the builtin anchor up', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-recover-ok-'))
+  const oldEnv = process.env.DSH_GATEWAY_DSH_PATH
+  try {
+    delete process.env.DSH_GATEWAY_DSH_PATH
+    mkdirSync(join(stateDir, 'dsh-runtime'), { recursive: true })
+    writeFileSync(join(stateDir, 'dsh-runtime', 'activation-journal.json'), '{corrupt', { mode: 0o600 })
+    const home = join(stateDir, 'dsh-home')
+    mkdirSync(home, { recursive: true })
+    writeFileSync(join(home, 'settings.json'), '{"source":"preserved"}')
+    const order: string[] = []
+    const probed: string[] = []
+    const plane = fakePlane({
+      stopLocal: async () => { order.push('stop') },
+      startLocal: async () => { order.push('start') },
+    })
+    plane._state.connectionState = 'ready'
+    const manager = createGatewayRuntimeManager({
+      config: config(stateDir),
+      plane,
+      logger: silentLogger,
+      probeCandidate: async ({ isBuiltin }) => {
+        probed.push(isBuiltin ? 'builtin' : 'override')
+        return probeResultsFor(stateDir).map(name => ({ name, ok: true }))
+      },
+    })
+    await manager.recoverMetadata()
+    const after = await manager.status()
+    assert.equal(after.startupBlockedReason, null, 'a finalized recovery clears the block')
+    assert.equal(after.canRecoverMetadata, false)
+    assert.equal(after.activeVersion, TEST_BUILTIN_VERSION, 'recovery finalizes onto the builtin anchor')
+    assert.equal(after.source, 'builtin-anchor')
+    assert.ok(probed.includes('builtin'), 'the builtin anchor ran through the full read-only probe gate')
+    assert.ok(order.includes('stop'), 'the managed dsh was quiesced before evidence archival')
+    assert.ok(order.indexOf('start') > order.indexOf('stop'), 'the verdict winner starts only after the transaction')
+    assert.equal(readFileSync(join(home, 'settings.json'), 'utf8'), '{"source":"preserved"}')
+    await manager.dispose()
+  } finally {
+    if (oldEnv === undefined) delete process.env.DSH_GATEWAY_DSH_PATH
+    else process.env.DSH_GATEWAY_DSH_PATH = oldEnv
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
 test('gateway runtime ownership fails closed when dsh-runtime root is a symlink', () => {
   const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-root-link-'))
   const externalDir = mkdtempSync(join(tmpdir(), 'gw-rt-root-target-'))
@@ -3173,4 +3358,86 @@ test('connection_busy maps to 409; oversized bodies release input, write 413, th
   assert.equal(await handling, true)
   assert.equal(streamingRes.statusCode, 413)
   assert.equal(streamingReq.destroyed, true)
+})
+
+test('FATAL idle block refuses ordinary mutations and keeps recover-metadata open (M1/H2 review)', async () => {
+  let startupBlockedReason: string | null = 'journal-corrupt'
+  const calls: string[] = []
+  const manager = {
+    status: () => ({ phase: 'idle', pending: null, startupBlockedReason }),
+    mutationInProgress: () => false,
+    select: async () => { calls.push('select'); return { accepted: true } },
+    apply: async () => { calls.push('apply'); return { pending: true } },
+    rollback: async () => { calls.push('rollback'); return { accepted: true } },
+    cleanupVersion: async () => { calls.push('cleanup'); return { version: 'x', removed: true } },
+    restorePreRollback: async () => { calls.push('restore'); return { accepted: true } },
+    recoverMetadata: async () => { calls.push('recover'); return { accepted: true } },
+    restoreBuiltin: async () => { calls.push('restore-builtin'); return { accepted: true } },
+    retryApply: async () => ({ accepted: true, blockedReason: null }),
+    retryRestore: async () => ({ accepted: true, blockedReason: null }),
+    restart: async () => { calls.push('restart') },
+    restartInFlight: () => false,
+    getRegistry: () => ({ origin: 'https://registry.npmjs.org' }),
+    setRegistry: async (origin: string) => { calls.push('registry'); return { origin } },
+  }
+  const routes = createRuntimeRoutes(() => manager as never, silentLogger)
+  const body = JSON.stringify({ version: '1.0.0' })
+  for (const [method, path, payload] of [
+    ['POST', '/chamber/runtime/select', body],
+    ['POST', '/chamber/runtime/apply', undefined],
+    ['POST', '/chamber/runtime/rollback', body],
+    ['POST', '/chamber/runtime/cleanup-version', body],
+    ['POST', '/chamber/runtime/restore-pre-rollback', JSON.stringify({ stashName: '1700000000000-deadbeef' })],
+    ['POST', '/chamber/runtime/restart', undefined],
+  ] as const) {
+    const res = await runRoute(routes, method, path, payload)
+    assert.equal(res.status, 409, `${path} must refuse under a FATAL block`)
+    assert.equal((res.json as { code: string }).code, 'runtime_recovery_required', path)
+  }
+  const registryRefused = await runRoute(routes, 'PUT', '/chamber/runtime/registry', JSON.stringify({ origin: 'https://registry.npmjs.org' }))
+  assert.equal(registryRefused.status, 409)
+  const recover = await runRoute(routes, 'POST', '/chamber/runtime/recover-metadata')
+  assert.equal(recover.status, 200, 'recover-metadata stays open under a FATAL block')
+  assert.deepEqual(calls, ['recover'])
+  const list = await runRoute(routes, 'GET', '/chamber/runtime/')
+  assert.equal(list.status, 200)
+  const routesList = (list.json as { routes: string[] }).routes
+  assert.equal(routesList.length, 14)
+  for (const name of ['cleanup-version', 'restore-pre-rollback', 'recover-metadata']) {
+    assert.ok(routesList.includes(name), `route list exposes ${name}`)
+  }
+  // H2: the same FATAL block with a stale pending must project idle (not
+  // pending), so the recovery surface never locks behind the pending gate.
+  startupBlockedReason = 'journal-corrupt'
+  const pendingStatus = { phase: 'idle', pending: '1.0.0', startupBlockedReason }
+  const refused = await runRoute(routes, 'POST', '/chamber/runtime/recover-metadata')
+  void pendingStatus
+  assert.equal(refused.status, 200, 'recover stays open even with a stale pending (phase projects idle)')
+})
+
+test('real manager: FATAL journal + stale pending projects idle+blocked with recover eligibility (H2)', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-fatal-pending-'))
+  const oldEnv = process.env.DSH_GATEWAY_DSH_PATH
+  try {
+    delete process.env.DSH_GATEWAY_DSH_PATH
+    mkdirSync(join(stateDir, 'dsh-runtime'), { recursive: true })
+    writeFileSync(join(stateDir, 'dsh-runtime', 'activation-journal.json'), '{corrupt', { mode: 0o600 })
+    writeOverride(stateDir, {
+      shellVersion: gatewayPackageVersion, chosenVersion: '1.2.3', resolvedVersion: '1.2.3',
+      pending: '1.2.3', swapAttempted: false,
+    })
+    const manager = createGatewayRuntimeManager({ config: config(stateDir), plane: fakePlane(), logger: silentLogger })
+    const startup = await manager.startupTransaction()
+    assert.equal(startup.blockedReason, 'journal-corrupt')
+    const status = await manager.status()
+    assert.equal(status.phase, 'idle', 'a FATAL block outranks the stale pending phase')
+    assert.equal(status.pending, '1.2.3', 'the pending fact stays visible for the recovery transaction')
+    assert.equal(status.startupBlockedReason, 'journal-corrupt')
+    assert.equal(status.canRecoverMetadata, true, 'the recovery route is advertised and reachable')
+    await manager.dispose()
+  } finally {
+    if (oldEnv === undefined) delete process.env.DSH_GATEWAY_DSH_PATH
+    else process.env.DSH_GATEWAY_DSH_PATH = oldEnv
+    rmSync(stateDir, { recursive: true, force: true })
+  }
 })

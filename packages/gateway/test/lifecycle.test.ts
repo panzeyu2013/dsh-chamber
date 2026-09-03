@@ -139,7 +139,7 @@ test('gateway start quarantines and stops a blocked verdict that left its probe 
   }
 })
 
-test('gateway start: metadata corruption fails loud and rolls the plane back (FATAL block)', async () => {
+test('gateway start: metadata corruption keeps the gateway alive with dsh stopped (FATAL → recover-metadata surface)', async () => {
   const stateDir = mkdtempSync(join(tmpdir(), 'gateway-fatal-'))
   try {
     mkdirSync(join(stateDir, 'dsh-runtime'), { recursive: true })
@@ -151,9 +151,14 @@ test('gateway start: metadata corruption fails loud and rolls the plane back (FA
       logger: silentLogger,
       deps: compositionDeps(compositionPlane(state, order)),
     })
-    await assert.rejects(gateway.start(), /journal-corrupt/)
-    assert.ok(order.includes('plane:stop'), 'startup failure rolls the plane back')
+    // 2026-12 (desktop blocked-but-alive parity): a FATAL metadata block no
+    // longer kills the whole gateway — the gateway stays up with the managed
+    // dsh stopped so POST /chamber/runtime/recover-metadata stays reachable.
+    await gateway.start()
+    assert.equal(gateway.connectionState, 'stopped', 'managed dsh left stopped')
     assert.ok(!order.includes('local:start'), 'no dsh spawn on a FATAL block')
+    await gateway.stop()
+    assert.ok(order.includes('plane:stop'))
   } finally {
     rmSync(stateDir, { recursive: true, force: true })
   }

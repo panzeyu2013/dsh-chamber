@@ -352,22 +352,45 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
         // (pending) snapshot → pointer switch → spawn candidate → probe gate.
         const startup = await runtimeManager.startupTransaction()
         assertStartEpoch(epoch)
-        if (startup.blockedReason !== null && FATAL_RUNTIME_BLOCKS.has(startup.blockedReason)) {
-          throw new Error(`gateway runtime startup blocked: ${startup.blockedReason}`)
-        }
-        // Desktop-mirror blocked startups (design 18 §3.6/§9.3 review fix): a
-        // mid-transaction pointer switch (swap-attempted) or an interrupted
-        // snapshot restore (restore-half / restore-incomplete) must NOT be
-        // exposed — keep the gateway up with the managed dsh stopped and let
-        // the operator resume via POST /chamber/runtime/retry-apply |
-        // retry-restore (the runtime controller is mounted and not
-        // ready-gated, so the recovery surface stays reachable).
-        if (startup.blockedReason === 'swap-attempted' || startup.blockedReason === 'restore-half' || startup.blockedReason === 'restore-incomplete') {
-          logger.error(`gateway runtime startup blocked: ${startup.blockedReason}; managed dsh left stopped — resume via POST /chamber/runtime/retry-apply|retry-restore`)
+        // Desktop-mirror blocked startups (design 18 §3.6/§9.3 review fix):
+        // FATAL metadata corruption (journal/current/override corrupt,
+        // journal-mismatch), a mid-transaction pointer switch (swap-attempted)
+        // or an interrupted snapshot restore (restore-half / restore-
+        // incomplete) must NOT be exposed — keep the gateway up with the
+        // managed dsh stopped so the runtime controller (mounted and not
+        // ready-gated) can serve the recovery surface. FATAL is resumable via
+        // POST /chamber/runtime/recover-metadata (2026-12 desktop parity);
+        // swap/restore blocks resume via retry-apply | retry-restore.
+        if (startup.blockedReason !== null && (FATAL_RUNTIME_BLOCKS.has(startup.blockedReason)
+          || startup.blockedReason === 'swap-attempted'
+          || startup.blockedReason === 'restore-half'
+          || startup.blockedReason === 'restore-incomplete')) {
+          const resume = FATAL_RUNTIME_BLOCKS.has(startup.blockedReason)
+            ? 'recover-metadata'
+            : 'retry-apply|retry-restore'
+          logger.error(`gateway runtime startup blocked: ${startup.blockedReason}; managed dsh left stopped — resume via POST /chamber/runtime/${resume}`)
           // Production startupTransaction already stops a probe-left process
           // before releasing activation quarantine. Repeat the idempotent stop
           // at the composition boundary so a future/custom manager cannot turn
           // a blocked-but-ready verdict into public exposure.
+          await createdPlane.stopLocal()
+          assertStartEpoch(epoch)
+          unsubscribeLocalState = createdPlane.onLocalStateChange(snapshot => syncFeatures(snapshot.status))
+          started = true
+          return
+        }
+        // H1 review fix (desktop parity): a durable metadata-recovery
+        // transaction mid-flight (record not finalized) or a corrupt recovery
+        // marker must NEVER serve DSH_HOME through the builtin anchor without
+        // the probe gate — the startup transaction sees archived metadata as
+        // clean and would otherwise bypass it. Keep the gateway up with the
+        // managed dsh stopped and resume via recover-metadata. (Duck-typed:
+        // composition tests inject fake managers without the new seam.)
+        const recoveryPreflight = (runtimeManager as { metadataRecoveryPending?: () => boolean }).metadataRecoveryPending
+        if (startup.blockedReason === null
+          && typeof recoveryPreflight === 'function'
+          && recoveryPreflight.call(runtimeManager)) {
+          logger.error('gateway runtime metadata recovery is pending (mid-recovery record or corrupt marker); managed dsh left stopped — resume via POST /chamber/runtime/recover-metadata')
           await createdPlane.stopLocal()
           assertStartEpoch(epoch)
           unsubscribeLocalState = createdPlane.onLocalStateChange(snapshot => syncFeatures(snapshot.status))
@@ -387,6 +410,11 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
         assertStartEpoch(epoch)
         syncFeatures(createdPlane.connectionState)
         createdPlane.refreshLocalExposure()
+        // L1 review fix (desktop parity): eviction on the startup path writes
+        // the durable store-prune marker — consume it at the boot boundary
+        // (never inside the shared transaction, which tests exercise heavily).
+        const pruneBoot = (runtimeManager as { pruneStoreIfNeeded?: () => Promise<void> }).pruneStoreIfNeeded
+        if (typeof pruneBoot === 'function') void pruneBoot.call(runtimeManager)
         started = true
       } catch (error) {
         // The HTTP server is opened before the runtime startup transaction.

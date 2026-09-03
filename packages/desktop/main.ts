@@ -4410,10 +4410,13 @@ if (!gotTheLock) {
       const busyPhase = state.phase === 'checking' || state.phase === 'downloading'
         || state.phase === 'installing' || state.phase === 'applying' || state.phase === 'pending';
       if (runtimeOperation !== null || runtimeWriterFence.busy || busyPhase
-        || state.managementSupported === false || state.runtimeBlocked === true
-        || state.source === 'env' || state.phase === 'snapshot-failed') {
+        || state.runtimeBlocked === true
+        || state.phase === 'snapshot-failed') {
         // Honest refusal (R7 review): a busy runtime must not resolve into a
         // silent no-op "success" — the renderer shows the failure line.
+        // 2026-12：env 来源与只读平台（managementSupported=false）不再拒绝
+        // 重启——「重启 dsh」是来源/平台无关动作（design 18 §3.6 项 8，
+        // 与 gateway 行为一致）。
         const reason = state.runtimeBlocked === true
           ? state.runtimeBlockedReason ?? 'runtime blocked'
           : 'dsh runtime is busy (another runtime operation is in progress)'

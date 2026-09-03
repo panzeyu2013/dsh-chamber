@@ -28,12 +28,16 @@ import {
   formatRuntimeBytes,
   getRuntimeState,
   preferredRuntimeVersion,
+  projectRuntimeBadge,
   projectRuntimeSnapshot,
   projectRuntimeStatus,
   runtimeAllowedActions,
   runtimeRestartAllowed,
   runtimeSelectionDirection,
   subscribeRuntimeState,
+  type RuntimeBadgeLabel,
+  type RuntimeBadgeTone,
+  type RuntimeBadgeView,
   type RuntimeMetadataComponent,
   type RuntimeVersionEntry,
 } from '../../../../packages/renderer/src/runtime-management.ts'
@@ -43,6 +47,7 @@ import {
   fetchRemoteRuntimeStatus,
   fetchRemoteRuntimeVersions,
   pollRemoteRuntimeUntilSettled,
+  projectRemoteRuntimeBadge,
   remoteRuntimeAction,
   remoteRuntimeActionGates,
   remoteRuntimeSetRegistry,
@@ -61,6 +66,42 @@ const CUSTOM_REGISTRY = '__custom__'
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+/* Unified coloured status badge (2026-12): one pill vocabulary shared by the
+   local and gateway branches — label keys + dsw tone classes. The badge
+   names the machine state; registry verdicts were removed from the copy. */
+const RUNTIME_BADGE_KEYS: Record<RuntimeBadgeLabel, SettingsBridgeKey> = {
+  ok: 'dshRuntimeBadgeOk',
+  checking: 'dshRuntimeBadgeChecking',
+  downloading: 'dshRuntimeBadgeDownloading',
+  installing: 'dshRuntimeBadgeInstalling',
+  pending: 'dshRuntimeBadgePending',
+  applying: 'dshRuntimeBadgeApplying',
+  'rolling-back': 'dshRuntimeBadgeRollingBack',
+  restarting: 'dshRuntimeBadgeRestarting',
+  'swap-attempted': 'dshRuntimeBadgeSwapAttempted',
+  'snapshot-failed': 'dshRuntimeBadgeSnapshotFailed',
+  'restore-blocked': 'dshRuntimeBadgeRestoreBlocked',
+  blocked: 'dshRuntimeBadgeBlocked',
+  failed: 'dshRuntimeBadgeFailed',
+  error: 'dshRuntimeBadgeError',
+  metadata: 'dshRuntimeBadgeMetadata',
+}
+
+const RUNTIME_BADGE_TONE_CLASS: Record<RuntimeBadgeTone, string> = {
+  ok: css.runtimeBadgeOk,
+  busy: css.runtimeBadgeBusy,
+  warn: css.runtimeBadgeWarn,
+  danger: css.runtimeBadgeDanger,
+}
+
+function RuntimeBadge({ view, t }: { view: RuntimeBadgeView; t: RuntimeTranslate }) {
+  return (
+    <span className={clsx(css.runtimeBadge, RUNTIME_BADGE_TONE_CLASS[view.tone])} role="status">
+      {t(RUNTIME_BADGE_KEYS[view.label])}
+    </span>
+  )
 }
 
 /** Localize a projected ISO timestamp before it reaches user copy. The locale
@@ -352,24 +393,85 @@ function GatewayRuntimeSection({
 
   const onRestoreBuiltin = useCallback(() => {
     if (restoreBuiltinDisabled) return
+    // 2026-12 (review fix): desktop runs a native confirm for this action;
+    // the gateway mirrors the same confirmation depth with window.confirm.
+    const message = `${t('dshRuntimeRestoreBuiltinConfirmTitle')}\n\n${t('dshRuntimeRestoreBuiltinConfirmBody')}`
+    if (!window.confirm(message)) return
     void runRemoteAction(async (signal) => {
       await remoteRuntimeAction(chamberInstanceId, { kind: 'restore-builtin' }, { signal })
     })
-  }, [chamberInstanceId, restoreBuiltinDisabled, runRemoteAction])
+  }, [chamberInstanceId, restoreBuiltinDisabled, t, runRemoteAction])
 
   const onRetryApply = useCallback(() => {
     if (retryApplyDisabled) return
+    const message = `${t('dshRuntimeRetryApplyConfirmTitle')}\n\n${t('dshRuntimeRetryApplyConfirmBody')}`
+    if (!window.confirm(message)) return
     void runRemoteAction(async (signal) => {
       await remoteRuntimeAction(chamberInstanceId, { kind: 'retry-apply' }, { signal })
     })
-  }, [chamberInstanceId, retryApplyDisabled, runRemoteAction])
+  }, [chamberInstanceId, retryApplyDisabled, t, runRemoteAction])
 
   const onRetryRestore = useCallback(() => {
     if (retryRestoreDisabled) return
+    const message = `${t('dshRuntimeRetryRestoreConfirmTitle')}\n\n${t('dshRuntimeRetryRestoreConfirmBody')}`
+    if (!window.confirm(message)) return
     void runRemoteAction(async (signal) => {
       await remoteRuntimeAction(chamberInstanceId, { kind: 'retry-restore' }, { signal })
     })
-  }, [chamberInstanceId, retryRestoreDisabled, runRemoteAction])
+  }, [chamberInstanceId, retryRestoreDisabled, t, runRemoteAction])
+
+  // 清理已安装版本（2026-12 desktop 对齐）：候选来自服务端 removableVersions
+  // 投影；gateway 无原生对话框，用 window.confirm（与桌面原生确认同深度）。
+  const onCleanupRemote = useCallback((version: string) => {
+    if (mutationDisabled) return
+    const message = `${t('dshRuntimeCleanupConfirmTitle', { version })}\n\n${t('dshRuntimeCleanupConfirmBody')}`
+    if (!window.confirm(message)) return
+    void runRemoteAction(async (signal) => {
+      await remoteRuntimeAction(chamberInstanceId, { kind: 'cleanup-version', version }, { signal })
+      // The removed tree leaves the version list and the candidate list.
+      setVersionsEpoch((epoch) => epoch + 1)
+    })
+  }, [chamberInstanceId, mutationDisabled, t, runRemoteAction])
+
+  // 恢复回滚前数据（2026-12 desktop 对齐）：row 在 idle 且存在暂存时出现，
+  // 恢复 half 会进入 restore-blocked 由 retry-restore 续作。
+  const canRestorePreRollbackRemote = remoteStatus !== null
+    && !envGatedRemote
+    && remoteStatus.phase === 'idle'
+    && remoteStatus.startupBlockedReason === null
+    && (remoteStatus.preRollbackCount ?? 0) > 0
+    && remoteStatus.preRollbackLatestName !== null
+  const onRestorePreRollbackRemote = useCallback(() => {
+    const stashName = remoteStatus?.preRollbackLatestName ?? null
+    if (remoteStatus === null || stashName === null || !canRestorePreRollbackRemote || mutationDisabled) return
+    const message = `${t('dshRuntimeRestorePreRollbackConfirmTitle')}\n\n${t('dshRuntimeRestorePreRollbackConfirmBody')}`
+    if (!window.confirm(message)) return
+    void runRemoteAction(async (signal) => {
+      await remoteRuntimeAction(chamberInstanceId, { kind: 'restore-pre-rollback', stashName }, { signal })
+    })
+  }, [remoteStatus, canRestorePreRollbackRemote, mutationDisabled, t, chamberInstanceId, runRemoteAction])
+
+  // 元数据救援（2026-12 desktop 对齐）：状态投影给出可救援能力时才显示。
+  const canRecoverMetadataRemote = remoteStatus?.canRecoverMetadata === true
+  const onRecoverMetadataRemote = useCallback(() => {
+    if (!canRecoverMetadataRemote || mutationDisabled) return
+    const message = `${t('dshRuntimeRecoverMetadataConfirmTitle')}\n\n${t('dshRuntimeRecoverMetadataConfirmBody')}`
+    if (!window.confirm(message)) return
+    void runRemoteAction(async (signal) => {
+      await remoteRuntimeAction(chamberInstanceId, { kind: 'recover-metadata' }, { signal })
+    })
+  }, [canRecoverMetadataRemote, mutationDisabled, t, chamberInstanceId, runRemoteAction])
+
+  // Metadata corruption notice rows (mirror the local branch copy; the fields
+  // are absent on pre-recovery servers, so the block simply never renders).
+  const metadataComponentsText = (remoteStatus?.metadataComponents ?? []).length > 0
+    ? (remoteStatus?.metadataComponents ?? []).map(component => metadataComponentText(component as RuntimeMetadataComponent, t))
+      .join(t('dshRuntimeMetadataComponentSeparator'))
+    : t('dshRuntimeMetadataComponentUnknown')
+  const remoteMetadataBlocked = remoteStatus !== null
+    && (remoteStatus.metadataHealth === 'selection-corrupt'
+      || remoteStatus.metadataHealth === 'recovery-in-progress'
+      || remoteStatus.metadataHealth === 'recovery-marker-corrupt')
 
   // Apply now on the gateway (design 18 addendum §5.1/§6.3): the pending
   // immediate-switch action goes through the 202 route, polls the applying
@@ -423,6 +525,12 @@ function GatewayRuntimeSection({
     }
   }, [chamberInstanceId])
 
+  // 「检查更新」(2026-12 统一)：gateway 侧 = 从 registry 重拉版本列表（与
+  // local 的主进程 registry 检查同观感；服务端无周期出网）。
+  const onRefreshVersions = useCallback((): void => {
+    setVersionsEpoch((epoch) => epoch + 1)
+  }, [])
+
   // Retryability derives from the server's own phase projection (the routes
   // refuse with 409 no_retry_target otherwise): retry-apply resumes an
   // interrupted pointer switch / snapshot failure; retry-restore resumes an
@@ -452,21 +560,10 @@ function GatewayRuntimeSection({
       || remoteStatus.activeVersion !== remoteStatus.builtinVersion)
 
   const view = remoteStatus === null ? null : remoteRuntimeStatusView(remoteStatus)
-  const phaseBadgeKey = remoteStatus === null
-    ? null
-    : remoteStatus.phase === 'installing'
-      ? 'dshRuntimeRemotePhaseInstalling'
-      : remoteStatus.phase === 'pending'
-        ? 'dshRuntimeRemotePhasePending'
-        : remoteStatus.phase === 'applying'
-          ? 'dshRuntimeRemotePhaseApplying'
-          : remoteStatus.phase === 'snapshot-failed'
-            ? 'dshRuntimeRemotePhaseSnapshotFailed'
-            : remoteStatus.phase === 'swap-attempted'
-              ? 'dshRuntimeRemotePhaseSwapAttempted'
-              : remoteStatus.phase === 'restore-blocked'
-                ? 'dshRuntimeRemotePhaseRestoreBlocked'
-                : 'dshRuntimeRemotePhaseIdle'
+  // Unified status badge (2026-12): same pill vocabulary as the local branch.
+  // The projection suppresses the ok badge for blocked/failed states, so no
+  // extra view-kind guard is needed here.
+  const badge = projectRemoteRuntimeBadge(remoteStatus)
   const statusText = useMemo(() => {
     if (view === null) return null
     const title = t(view.titleKey, view.params)
@@ -474,6 +571,11 @@ function GatewayRuntimeSection({
       ? `${title}：${view.detail}`
       : title
   }, [view, t])
+  // Idle has no claim line (已是最新/可用 verdicts removed, 2026-12): the
+  // healthy state is carried by the badge alone. Pending keeps its detail
+  // line ("将于下次启动切换到 vX") like the local branch.
+  const statusTextVisible = view !== null
+    && (view.kind !== 'idle' || remoteStatus?.phase === 'pending')
 
   const remoteProgress = remoteStatus?.progress ?? null
   const remoteShowProgress = remoteProgress !== null
@@ -562,18 +664,16 @@ function GatewayRuntimeSection({
       <div className={css.updateVersionRow}>
         <p className={css.updateRow}>
           {t('updateCurrentVersion', { version: remoteStatus.activeVersion ?? t('dshRuntimeVersionUnknown') })}
-          {/* A FATAL metadata block projects phase idle while
-              startupBlockedReason is set — an idle badge next to a blocked
-              status line would be contradictory, so suppress it there. */}
-          {phaseBadgeKey !== null
-            && !(view !== null && view.kind === 'blocked' && remoteStatus.phase === 'idle') && (
-            <span className={css.runtimeBadge} role="status">{t(phaseBadgeKey)}</span>
-          )}
+          {/* Unified coloured status badge (2026-12): replaces the plain phase
+              chip; blocked/failed states project their own danger badge. */}
+          {badge !== null && <RuntimeBadge view={badge} t={t} />}
         </p>
       </div>
-      <div className={css.updateStatus} aria-live="polite">
-        <p className={css.updateStatusText}>{statusText}</p>
-      </div>
+      {statusTextVisible && (
+        <div className={css.updateStatus} aria-live="polite">
+          <p className={css.updateStatusText}>{statusText}</p>
+        </div>
+      )}
       {remoteShowProgress && (
         <div className={css.runtimeProgressBlock} role="status" aria-live="polite">
           <span className={css.runtimeProgressLabel}>{remoteProgressLabel}</span>
@@ -587,12 +687,17 @@ function GatewayRuntimeSection({
       )}
       {remoteStatus.activeVersion !== null && remoteStatus.builtinVersion !== null
         && remoteStatus.activeVersion !== remoteStatus.builtinVersion && (
-        <p className={css.generalHint}>{t('dshRuntimeBundledRow')} v{remoteStatus.builtinVersion}</p>
+        /* 部署锚口径（2026-12 修正，design 18 §3.6 A1）：gateway 的"内建"是
+           部署者经 --dsh-path 提供的锚，不是随包版本——不再复用 local 的
+           「随应用内建」文案。 */
+        <p className={css.generalHint}>{t('dshRuntimeDeployAnchorRow')} v{remoteStatus.builtinVersion}</p>
       )}
       {/* 数据快照（2026-12 修订：带标签行 + 说明，置于当前状态组——与
           「随应用内建」等状态事实归组，用户不再需要猜测它标注什么。
           2026-12 复审：标签降级为与状态事实同级的 12px hint，避免块内
           层级倒挂。 */}
+      {/* 数据快照 + 运行时占用（2026-12 统一：两行同组放在「当前状态」内，
+          不再有版本源块末尾的磁盘脚注）。 */}
       {remoteSnapshotText !== null && (
         <>
           <div className={css.updateVersionRow}>
@@ -602,6 +707,38 @@ function GatewayRuntimeSection({
           <p className={css.generalHint}>{t('dshRuntimeSnapshotHint')}</p>
         </>
       )}
+      {remoteStatus.diskUsage !== null && (
+        <p className={css.generalHint}>
+          {t('dshRuntimeDiskSummary', {
+            total: formatRuntimeBytes(remoteStatus.diskUsage.totalBytes),
+            trees: remoteStatus.diskUsage.versionTrees,
+            treeBytes: formatRuntimeBytes(remoteStatus.diskUsage.versionTreeBytes),
+            storeBytes: formatRuntimeBytes(remoteStatus.diskUsage.storeBytes),
+            cacheBytes: formatRuntimeBytes(
+              remoteStatus.diskUsage.cacheBytes
+              + remoteStatus.diskUsage.installHomeBytes
+              + remoteStatus.diskUsage.xdgCacheBytes
+              + remoteStatus.diskUsage.workBytes,
+            ),
+            snapshotBytes: formatRuntimeBytes(remoteStatus.diskUsage.snapshotBytes),
+            recoveryBytes: formatRuntimeBytes(
+              remoteStatus.diskUsage.preRollbackBytes
+              + remoteStatus.diskUsage.restoreBackupBytes
+              + remoteStatus.diskUsage.failureBytes,
+            ),
+          })}
+        </p>
+      )}
+      {remoteStatus.diskError !== null && (
+        <p className={css.generalError} role="alert">
+          {t('dshRuntimeDiskError', { error: remoteStatus.diskError })}
+        </p>
+      )}
+      {remoteStatus.diskLimitExceeded === true && remoteStatus.diskLimitBytes !== null && (
+        <p className={css.generalError} role="status">
+          {t('dshRuntimeDiskQuotaWarning', { limit: formatRuntimeBytes(remoteStatus.diskLimitBytes) })}
+        </p>
+      )}
 
       {statusError !== null && <p className={css.generalHint} role="status">{statusError}</p>}
       {remoteStatus.connectionState !== null && remoteStatus.connectionState !== 'ready' && (
@@ -610,8 +747,25 @@ function GatewayRuntimeSection({
         </p>
       )}
       {envGatedRemote && <p className={css.generalHint}>{t('dshRuntimeRemoteEnvHint')}</p>}
-      {remoteStatus.pending !== null && remoteStatus.phase !== 'applying' && (
-        <p className={css.generalHint}>{t('dshRuntimePendingRecord', { version: remoteStatus.pending })}</p>
+      {/* 元数据损坏提示行（2026-12 recover-metadata 对齐，与 local 分支同构
+          文案；旧服务器不投影字段 → 不渲染）。 */}
+      {remoteMetadataBlocked && (
+        <>
+          <p className={css.generalError} role="alert">
+            {t(
+              remoteStatus.metadataHealth === 'recovery-marker-corrupt'
+                ? 'dshRuntimeMetadataMarkerCorrupt'
+                : remoteStatus.metadataHealth === 'recovery-in-progress'
+                  ? 'dshRuntimeMetadataRecoveryInProgress'
+                  : 'dshRuntimeMetadataBlocked',
+              { components: metadataComponentsText },
+            )}
+          </p>
+          <p className={css.generalHint}>{t('dshRuntimeMetadataEvidenceHint')}</p>
+          {remoteStatus.metadataHealth === 'recovery-marker-corrupt' && canRecoverMetadataRemote && (
+            <p className={css.generalHint}>{t('dshRuntimeMetadataMarkerRescueHint')}</p>
+          )}
+        </>
       )}
       {/* Failure rows stay honest and separate when the status line does not
           already carry them (a failed view renders operationError in its
@@ -686,19 +840,54 @@ function GatewayRuntimeSection({
           {t('dshRuntimeRemoteVersionsUnavailable', { error: versionsError })}
         </p>
       )}
+      {/* 2026-12 (review fix): a 200 response with an embedded registry error
+          (server fell back to the cached list) must be visible, never a
+          silent stale list. */}
+      {versionsError === null && remoteVersions?.error != null && (
+        <p className={css.generalHint} role="status">
+          {t('dshRuntimeRemoteVersionsUnavailable', { error: remoteVersions.error })}
+        </p>
+      )}
 
-      <div className={css.updateStatusLine}>
-        {/* Pending = the gateway's apply-now window (design 18 addendum
-            §5.1/§6.1): the immediate-switch primary action appears only while
-            the server-side gates are open (not busy/recovery/env/read-only
-            and the managed dsh live). */}
-        {remoteStatus.phase === 'pending' && remoteStatus.pending !== null && !remoteGates.applyNowDisabled && (
+      {/* Pending = the gateway's apply-now window (design 18 addendum
+          §5.1/§6.1): the immediate-switch primary action appears only while
+          the server-side gates are open (not busy/recovery/env/read-only
+          and the managed dsh live). 2026-12 unified with the local branch:
+          its own block, then the pending record line with local semantics. */}
+      {remoteStatus.phase === 'pending' && remoteStatus.pending !== null && !remoteGates.applyNowDisabled && (
+        <div className={css.updateStatusLine}>
           <button
             type="button"
             className={css.updatePrimaryButton}
             onClick={() => { void onApplyNowRemote() }}
           >
             {t('dshRuntimeApplyNowAction')}
+          </button>
+        </div>
+      )}
+      {remoteStatus.pending !== null && remoteStatus.phase !== 'pending' && remoteStatus.phase !== 'applying' && (
+        <p className={css.generalHint}>{t('dshRuntimePendingRecord', { version: remoteStatus.pending })}</p>
+      )}
+
+      <div className={css.updateStatusLine}>
+        {canRestorePreRollbackRemote && (
+          <button
+            type="button"
+            className={css.updateButton}
+            onClick={() => { void onRestorePreRollbackRemote() }}
+            disabled={mutationDisabled}
+          >
+            {t('dshRuntimeRestorePreRollback')}
+          </button>
+        )}
+        {canRecoverMetadataRemote && (
+          <button
+            type="button"
+            className={css.updateButton}
+            onClick={() => { void onRecoverMetadataRemote() }}
+            disabled={mutationDisabled}
+          >
+            {t('dshRuntimeRecoverMetadata')}
           </button>
         )}
         {/* 恢复内建仅在与内建版本不一致（或逃生口相位）时显示（2026-12 修订）。 */}
@@ -723,6 +912,26 @@ function GatewayRuntimeSection({
           </button>
         )}
       </div>
+
+      {/* 常驻「清理已安装版本」入口（2026-12 统一，与 local 分支同构）：
+          候选 = 服务端 removableVersions；旧服务器不投影该字段 → 行隐藏。 */}
+      {(remoteVersions?.removableVersions ?? []).length > 0 && (
+        <div className={css.updateStatusLine}>
+          <span className={css.generalHint}>{t('dshRuntimeCleanupCandidatesLabel')}</span>
+          {(remoteVersions?.removableVersions ?? []).map((version) => (
+            <button
+              key={version}
+              type="button"
+              className={css.updateButton}
+              disabled={mutationDisabled}
+              title={t('dshRuntimeCleanupConfirmTitle', { version })}
+              onClick={() => { onCleanupRemote(version) }}
+            >
+              {t('dshRuntimeCleanupVersion')} v{version}
+            </button>
+          ))}
+        </div>
+      )}
 
       {remoteStatus.failure !== null && (
         <p className={css.generalError} role="alert">
@@ -770,6 +979,11 @@ function GatewayRuntimeSection({
                 placeholder="https://registry.example.com"
                 disabled={mutationDisabled}
                 onChange={(event) => setCustomOrigin(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && customOrigin.trim() !== '') {
+                    void onApplyRegistry(customOrigin.trim())
+                  }
+                }}
               />
             )}
             <button
@@ -789,7 +1003,15 @@ function GatewayRuntimeSection({
               type="button"
               className={css.updateButton}
               disabled={registryBusy}
-              onClick={() => setRegistryEditing(false)}
+              onClick={() => {
+                // 2026-12 (review fix): cancel resets the controls to the
+                // still-effective origin — a stale unapplied choice must not
+                // survive reopening the edit form.
+                setRegistryEditing(false)
+                setRegistrySelection(registryMode)
+                if (registryMode === CUSTOM_REGISTRY) setCustomOrigin(registryOrigin)
+                else setCustomOrigin('')
+              }}
             >
               {t('dshRuntimeRegistryCancel')}
             </button>
@@ -799,6 +1021,14 @@ function GatewayRuntimeSection({
             <span className={css.generalHint}>
               {t('dshRuntimeRegistryCurrent', { origin: registryOrigin !== '' ? registryOrigin : '—' })}
             </span>
+            <button
+              type="button"
+              className={css.updateButton}
+              disabled={remoteStatus === null || registryBusy}
+              onClick={onRefreshVersions}
+            >
+              {t('dshRuntimeRegistryCheck')}
+            </button>
             <button
               type="button"
               className={css.updateButton}
@@ -815,39 +1045,6 @@ function GatewayRuntimeSection({
       {remoteStatus.registryError !== null && (
         <p className={css.generalError} role="alert">{remoteStatus.registryError}</p>
       )}
-      {/* 磁盘占用（2026-12 有意保留）：段落脚注，同 local 分支口径。 */}
-      {remoteStatus.diskUsage !== null && (
-        <p className={css.generalHint}>
-          {t('dshRuntimeDiskSummary', {
-            total: formatRuntimeBytes(remoteStatus.diskUsage.totalBytes),
-            trees: remoteStatus.diskUsage.versionTrees,
-            treeBytes: formatRuntimeBytes(remoteStatus.diskUsage.versionTreeBytes),
-            storeBytes: formatRuntimeBytes(remoteStatus.diskUsage.storeBytes),
-            cacheBytes: formatRuntimeBytes(
-              remoteStatus.diskUsage.cacheBytes
-              + remoteStatus.diskUsage.installHomeBytes
-              + remoteStatus.diskUsage.xdgCacheBytes
-              + remoteStatus.diskUsage.workBytes,
-            ),
-            snapshotBytes: formatRuntimeBytes(remoteStatus.diskUsage.snapshotBytes),
-            recoveryBytes: formatRuntimeBytes(
-              remoteStatus.diskUsage.preRollbackBytes
-              + remoteStatus.diskUsage.restoreBackupBytes
-              + remoteStatus.diskUsage.failureBytes,
-            ),
-          })}
-        </p>
-      )}
-      {remoteStatus.diskError !== null && (
-        <p className={css.generalError} role="alert">
-          {t('dshRuntimeDiskError', { error: remoteStatus.diskError })}
-        </p>
-      )}
-      {remoteStatus.diskLimitExceeded === true && remoteStatus.diskLimitBytes !== null && (
-        <p className={css.generalError} role="status">
-          {t('dshRuntimeDiskQuotaWarning', { limit: formatRuntimeBytes(remoteStatus.diskLimitBytes) })}
-        </p>
-      )}
     </div>
   )
 }
@@ -860,7 +1057,6 @@ export function DshRuntimeSection({
   // Per-instance labelledby ids (useId): N-ctx shells mount one settings panel
   // each in the SAME document — a static id would alias across panels.
   const selectVersionId = useId()
-  const registryCustomId = useId()
   const state = useSyncExternalStore(subscribeRuntimeState, getRuntimeState)
   const settingsStatus = useSyncExternalStore(subscribeSettings, getSettingsStatus)
   const [busy, setBusy] = useState(false)
@@ -878,10 +1074,10 @@ export function DshRuntimeSection({
   const selectionExplicit = useRef(false)
   const [customOrigin, setCustomOrigin] = useState('')
   const [registrySelection, setRegistrySelection] = useState(NPMJS)
+  const [registryEditing, setRegistryEditing] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
   const [registryError, setRegistryError] = useState<string | null>(null)
   const [originError, setOriginError] = useState<string | null>(null)
-  const [registryReachable, setRegistryReachable] = useState(false)
   const [testingRegistry, setTestingRegistry] = useState(false)
   const [applyingRegistry, setApplyingRegistry] = useState(false)
 
@@ -936,10 +1132,16 @@ export function DshRuntimeSection({
     bundled,
   )
   const isActive = chosen !== null && chosen === active
-  const cleanupEligible = chosen !== null
-    && !isActive
-    && (state?.explicitlyInstalledVersions ?? []).includes(chosen)
   const selectionDirection = runtimeSelectionDirection(chosen, active)
+  // 常驻「清理已安装版本」候选（2026-12 统一）：显式安装台账中非当前激活、
+  // 非待应用的版本；受保护项（known-good/失败现场/回退目标等）由主进程在
+  // 删除点权威裁决并如实报错。
+  const cleanupCandidates = useMemo(() => {
+    if (envGated) return []
+    return (state?.explicitlyInstalledVersions ?? [])
+      .filter((version) => version !== active && version !== pending)
+      .sort((a, b) => compareSemver(b, a) ?? 0)
+  }, [envGated, state, active, pending])
 
   const runRuntimeAction = useCallback(async (task: () => Promise<unknown>): Promise<void> => {
     setBusy(true)
@@ -1060,10 +1262,10 @@ export function DshRuntimeSection({
     void runRuntimeAction(() => runtime.restorePreRollback(state?.preRollbackLatestName ?? ''))
   }, [runtime, actions, state, runRuntimeAction])
 
-  const onCleanupVersion = useCallback(() => {
-    if (runtime === null || chosen === null || !cleanupEligible || !actions.has('cleanup-version')) return
-    void runRuntimeAction(() => runtime.cleanupVersion(chosen))
-  }, [runtime, chosen, cleanupEligible, actions, runRuntimeAction])
+  const onCleanupVersionDirect = useCallback((version: string) => {
+    if (runtime === null || envGated || !actions.has('cleanup-version')) return
+    void runRuntimeAction(() => runtime.cleanupVersion(version))
+  }, [runtime, envGated, actions, runRuntimeAction])
 
   const onApplyRegistry = useCallback(async (
     origin: string,
@@ -1074,13 +1276,21 @@ export function DshRuntimeSection({
     setApplyingRegistry(true)
     setRegistryError(null)
     setOriginError(null)
-    setRegistryReachable(false)
     try {
       const result = await applySettingsPatch({ registryOrigin: origin })
       if (!result.ok) {
         // The confirm dialog was declined — not an error; the caller reverts
-        // the dropdown so it never claims an origin that was not applied.
-        if (result.code === 'cancelled') return { ok: false, cancelled: true }
+        // the edit form so it never claims an origin that was not applied.
+        if (result.code === 'cancelled') {
+          // 2026-12 (review fix): the native confirm was declined — close the
+          // edit form and reset the controls to the still-effective origin so
+          // a stale unapplied choice never survives.
+          setRegistryEditing(false)
+          setRegistrySelection(registryMode)
+          if (registryMode === CUSTOM_REGISTRY) setCustomOrigin(registryOrigin)
+          else setCustomOrigin('')
+          return { ok: false, cancelled: true }
+        }
         // A validation failure is an inline field error on the custom origin;
         // any other apply failure surfaces on the general registry line.
         const error = localizeRegistryError(result.code, result.error, t)
@@ -1088,6 +1298,8 @@ export function DshRuntimeSection({
         else setRegistryError(error)
         return { ok: false, cancelled: false }
       }
+      // Success closes the edit form (2026-12 unified edit-mode registry row).
+      setRegistryEditing(false)
       return { ok: true, cancelled: false }
     } catch (error) {
       const message = errorMessage(error)
@@ -1098,20 +1310,19 @@ export function DshRuntimeSection({
       setApplyingRegistry(false)
       setBusy(false)
     }
-  }, [envGated, actions, t])
+  }, [envGated, actions, t, registryMode, registryOrigin])
 
   const onTestRegistry = useCallback(async (): Promise<void> => {
     if (runtime === null || !actions.has('check')) return
     setTestingRegistry(true)
     setRegistryError(null)
-    setRegistryReachable(false)
     try {
       const result = await runtime.check()
       if (result.phase === 'error') {
         setRegistryError(result.error ?? t('dshRuntimeRegistryUnreachable'))
-      } else {
-        setRegistryReachable(true)
       }
+      // Success needs no verdict line (2026-12: registry-verdict copy removed;
+      // the refreshed version list is the feedback).
     } catch (error) {
       setRegistryError(errorMessage(error))
     } finally {
@@ -1126,10 +1337,13 @@ export function DshRuntimeSection({
     const version = status.version ?? '—'
     const detail = status.detail ?? '—'
     switch (status.kind) {
-      case 'not-checked': return t('dshRuntimeStatusNotChecked')
-      case 'idle': return t('dshRuntimeStatusIdle')
-      case 'checking': return t('dshRuntimeStatusChecking')
-      case 'available': return t('dshRuntimeStatusAvailable', { version })
+      // 2026-12：registry 结论行全部移除（已是最新/尚未检查/有可用更新/
+      // 检查中）——空闲状态只由徽标表达；详情行仅承载真实状态/操作/失败。
+      case 'not-checked':
+      case 'idle':
+      case 'checking':
+      case 'available':
+        return null
       case 'downloading': return t('dshRuntimeStatusDownloading', { version })
       case 'installing': return t('dshRuntimeStatusInstalling', { version })
       case 'pending': return t('dshRuntimeStatusPending', { version })
@@ -1151,6 +1365,11 @@ export function DshRuntimeSection({
       case 'error': return t('dshRuntimeStatusError', { error: detail })
     }
   }, [status, t, applyNowInFlight])
+
+  // 统一彩色状态徽标（2026-12）：local/gateway 同一词汇；blocked/failed 由
+  // 投影抑制 ok 徽标。
+  const badge = projectRuntimeBadge(state)
+  const detailStatusVisible = statusText !== null
 
   const snapshotText = useMemo(() => {
     switch (snapshot.kind) {
@@ -1182,7 +1401,6 @@ export function DshRuntimeSection({
   const canRetryApply = actions.has('retry-apply') && state?.canRetryApply === true
   const canRetryRestore = actions.has('retry-restore') && state?.canRetryRestore === true
   const canRecoverMetadata = actions.has('recover-metadata') && state?.canRecoverMetadata === true
-  const canCleanup = actions.has('cleanup-version') && cleanupEligible
   const canCheck = actions.has('check')
   const canRestorePreRollback = actions.has('restore-pre-rollback')
     && (state?.preRollbackCount ?? 0) > 0
@@ -1256,16 +1474,24 @@ export function DshRuntimeSection({
 
       <h4 className={css.generalGroupTitle}>{t('dshRuntimeGroupStatus')}</h4>
 
+      {!hydrated && (
+        <p className={css.generalHint} role="status">{t('dshRuntimeRemoteLoading')}</p>
+      )}
       <div className={css.updateVersionRow}>
         <p className={css.updateRow}>
           {t('updateCurrentVersion', {
             version: active === null ? t('dshRuntimeVersionUnknown') : active,
           })}
+          {/* 统一彩色状态徽标（2026-12）：与 gateway 分支同一词汇；空闲即
+              「运行时正常」，claim 文案（已是最新/尚未检查/有可用更新）已移除。 */}
+          {badge !== null && <RuntimeBadge view={badge} t={t} />}
         </p>
       </div>
-      <div className={css.updateStatus} aria-live="polite">
-        <p className={css.updateStatusText}>{statusText}</p>
-      </div>
+      {detailStatusVisible && (
+        <div className={css.updateStatus} aria-live="polite">
+          <p className={css.updateStatusText}>{statusText}</p>
+        </div>
+      )}
       {showProgress && (
         <div className={css.runtimeProgressBlock} role="status" aria-live="polite">
           <span className={css.runtimeProgressLabel}>{progressLabel}</span>
@@ -1292,6 +1518,38 @@ export function DshRuntimeSection({
           </div>
           <p className={css.generalHint}>{t('dshRuntimeSnapshotHint')}</p>
         </>
+      )}
+      {/* 数据快照 + 运行时占用（2026-12 统一：两行同组放在「当前状态」内，
+          不再有版本源块末尾的磁盘脚注，与 gateway 分支同构）。 */}
+      {state?.diskUsage != null && (
+        <p className={css.generalHint}>
+          {t('dshRuntimeDiskSummary', {
+            total: formatRuntimeBytes(state.diskUsage.totalBytes),
+            trees: state.diskUsage.versionTrees,
+            treeBytes: formatRuntimeBytes(state.diskUsage.versionTreeBytes),
+            storeBytes: formatRuntimeBytes(state.diskUsage.storeBytes),
+            cacheBytes: formatRuntimeBytes(
+              state.diskUsage.cacheBytes
+              + state.diskUsage.installHomeBytes
+              + state.diskUsage.xdgCacheBytes
+              + state.diskUsage.workBytes,
+            ),
+            snapshotBytes: formatRuntimeBytes(state.diskUsage.snapshotBytes),
+            recoveryBytes: formatRuntimeBytes(
+              state.diskUsage.preRollbackBytes
+              + state.diskUsage.restoreBackupBytes
+              + state.diskUsage.failureBytes,
+            ),
+          })}
+        </p>
+      )}
+      {state?.diskError != null && (
+        <p className={css.generalError} role="alert">{t('dshRuntimeDiskError', { error: state.diskError })}</p>
+      )}
+      {state?.diskLimitExceeded === true && state.diskLimitBytes !== undefined && (
+        <p className={css.generalError} role="status">
+          {t('dshRuntimeDiskQuotaWarning', { limit: formatRuntimeBytes(state.diskLimitBytes) })}
+        </p>
       )}
       {envGated && <p className={css.generalHint}>{t('dshRuntimeEnvHint')}</p>}
       {managementGated && state?.managementUnsupportedReason != null && (
@@ -1320,6 +1578,16 @@ export function DshRuntimeSection({
             <p className={css.generalHint}>{t('dshRuntimeMetadataMarkerRescueHint')}</p>
           )}
         </>
+      )}
+      {/* 2026-12 (review fix): a blocked projection without a metadata-copy
+          row (generic runtimeBlockedReason) must still explain itself — never
+          only a red badge with everything disabled. */}
+      {state?.runtimeBlocked === true
+        && state.runtimeBlockedReason != null
+        && state.metadataHealth !== 'selection-corrupt'
+        && state.metadataHealth !== 'recovery-in-progress'
+        && state.metadataHealth !== 'recovery-marker-corrupt' && (
+        <p className={css.generalError} role="alert">{state.runtimeBlockedReason}</p>
       )}
       {state?.invalidationNotice != null && (
         <p className={css.generalHint} role="status">
@@ -1428,10 +1696,9 @@ export function DshRuntimeSection({
         <p className={css.generalHint}>{t('dshRuntimePendingRecord', { version: pending })}</p>
       )}
 
-      {/* 恢复/清理行动行（2026-12 修订）：清理版本从版本选择主行移入此处
-          ——主行保持 select + 更新到 + 重启 三件套，任何 locale 单行成立；
-          清理是低频动作，与「恢复内建」同排语义连贯。 */}
-      {(canRetryApply || canRetryRestore || canRestorePreRollback || canRecoverMetadata || canResetVisible || canCleanup) && (
+      {/* 恢复/清理行动行（2026-12 修订）：清理版本独立为下方常驻入口——
+          恢复行保持 retry/恢复内建/元数据救援语义连贯。 */}
+      {(canRetryApply || canRetryRestore || canRestorePreRollback || canRecoverMetadata || canResetVisible) && (
         <div className={css.updateStatusLine}>
           {canRetryApply && (
             <button type="button" className={css.updateButton} onClick={onRetryApply} disabled={mutationDisabled}>
@@ -1464,11 +1731,28 @@ export function DshRuntimeSection({
               {t('dshRuntimeResetBuiltin')}
             </button>
           )}
-          {canCleanup && chosen !== null && (
-            <button type="button" className={css.updateButton} onClick={onCleanupVersion} disabled={mutationDisabled}>
-              {t('dshRuntimeCleanupVersion')} v{chosen}
+        </div>
+      )}
+
+      {/* 常驻「清理已安装版本」入口（2026-12 统一）：不再要求先在下拉选中
+          某个版本；每颗胶囊对应一个可清理版本，确认由主进程原生对话框把关，
+          受保护项的拒绝以错误行如实呈现。忙碌相位（安装/应用/pending 等）
+          动作集不包含 cleanup-version，整行随之隐藏。 */}
+      {cleanupCandidates.length > 0 && actions.has('cleanup-version') && (
+        <div className={css.updateStatusLine}>
+          <span className={css.generalHint}>{t('dshRuntimeCleanupCandidatesLabel')}</span>
+          {cleanupCandidates.map((version) => (
+            <button
+              key={version}
+              type="button"
+              className={css.updateButton}
+              disabled={mutationDisabled}
+              title={t('dshRuntimeCleanupConfirmTitle', { version })}
+              onClick={() => { onCleanupVersionDirect(version) }}
+            >
+              {t('dshRuntimeCleanupVersion')} v{version}
             </button>
-          )}
+          ))}
         </div>
       )}
 
@@ -1484,120 +1768,99 @@ export function DshRuntimeSection({
 
       <h4 className={clsx(css.generalGroupTitle, css.generalGroupTitleBlock)}>{t('dshRuntimeGroupSource')}</h4>
 
-      {/* 2026-12 修订：h4 块标题即「版本源」，内联字段标签删除（select 用
-          aria-label 保持可访问名称）；外层 label 改为 div——select 与按钮
-          不可同处一个 label（HTML 规范，见版本操作行注释）。 */}
+      {/* 2026-12 修订 + 统一：registry 行与 gateway 分支同构——只读行
+          （当前源 + [检查更新] + [编辑]）⇄ 编辑态（select + 自定义输入 +
+          [应用][取消]）；切换源即切换信任边界，桌面侧应用仍走主进程原生
+          确认。提示性说明文字（dshRuntimeRegistryHint）已删除。 */}
       <div className={css.generalRow}>
-        <div className={css.runtimeSelectRow}>
-          <span className={css.runtimeSelectWrap}>
-            <select
-              className={clsx(css.runtimeField, css.runtimeSelect)}
-              aria-label={t('dshRuntimeRegistryLabel')}
-              value={registrySelection}
-              disabled={registryDisabled}
-              onChange={(event) => {
-                const value = event.target.value
-                setRegistrySelection(value)
-                if (value !== CUSTOM_REGISTRY) {
-                  void onApplyRegistry(value, false).then((result) => {
-                    // Any failed/declined apply reverts the dropdown: it must
-                    // never claim an origin that was not applied. The error text
-                    // (originError) stays visible; a custom origin is handled by
-                    // its own input below and keeps its editable value.
-                    if (!result.ok) setRegistrySelection(registryMode)
-                  })
-                }
-              }}
-            >
-              <option value={NPMJS}>{t('dshRuntimeRegistryNpmjs')}</option>
-              <option value={NPMMIRROR}>{t('dshRuntimeRegistryNpmmirror')}</option>
-              <option value={CUSTOM_REGISTRY}>{t('dshRuntimeRegistryCustomLabel')}</option>
-            </select>
-            <IconChevronDownOutline14 className={css.runtimeSelectChevron} aria-hidden="true" />
-          </span>
-          {canCheck && (
+        {registryEditing ? (
+          <div className={css.runtimeSelectRow}>
+            <span className={css.runtimeSelectWrap}>
+              <select
+                className={clsx(css.runtimeField, css.runtimeSelect)}
+                aria-label={t('dshRuntimeRegistryLabel')}
+                value={registrySelection}
+                disabled={registryDisabled}
+                onChange={(event) => {
+                  const value = event.target.value
+                  setRegistrySelection(value)
+                  if (value !== CUSTOM_REGISTRY) setCustomOrigin('')
+                }}
+              >
+                <option value={NPMJS}>{t('dshRuntimeRegistryNpmjs')}</option>
+                <option value={NPMMIRROR}>{t('dshRuntimeRegistryNpmmirror')}</option>
+                <option value={CUSTOM_REGISTRY}>{t('dshRuntimeRegistryCustomLabel')}</option>
+              </select>
+              <IconChevronDownOutline14 className={css.runtimeSelectChevron} aria-hidden="true" />
+            </span>
+            {registrySelection === CUSTOM_REGISTRY && (
+              <input
+                type="url"
+                className={css.runtimeField}
+                aria-label={t('dshRuntimeRegistryCustomLabel')}
+                value={customOrigin}
+                placeholder="https://registry.example.com"
+                disabled={registryDisabled}
+                onChange={(event) => setCustomOrigin(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && customOrigin.trim() !== '') {
+                    void onApplyRegistry(customOrigin.trim(), true)
+                  }
+                }}
+              />
+            )}
             <button
               type="button"
               className={css.updateButton}
-              disabled={testingRegistry || busy}
-              onClick={() => { void onTestRegistry() }}
+              disabled={registryDisabled
+                || (registrySelection === CUSTOM_REGISTRY && customOrigin.trim() === '')}
+              onClick={() => {
+                void onApplyRegistry(
+                  registrySelection === CUSTOM_REGISTRY ? customOrigin.trim() : registrySelection,
+                  true,
+                )
+              }}
             >
-              {testingRegistry ? t('dshRuntimeRegistryChecking') : t('dshRuntimeRegistryCheck')}
+              {applyingRegistry ? t('dshRuntimeRegistryApplying') : t('dshRuntimeRegistryApply')}
             </button>
-          )}
-        </div>
-        <span className={css.generalHint}>
-          {t('dshRuntimeRegistryHint')}
-          {' '}
-          {t('dshRuntimeRegistryCurrent', { origin: registryOrigin })}
-        </span>
+            <button
+              type="button"
+              className={css.updateButton}
+              disabled={applyingRegistry}
+              onClick={() => setRegistryEditing(false)}
+            >
+              {t('dshRuntimeRegistryCancel')}
+            </button>
+            {originError !== null && <p className={css.generalError} role="alert">{originError}</p>}
+          </div>
+        ) : (
+          <div className={css.updateStatusLine}>
+            <span className={css.generalHint}>
+              {t('dshRuntimeRegistryCurrent', { origin: registryOrigin !== '' ? registryOrigin : '—' })}
+            </span>
+            {canCheck && (
+              <button
+                type="button"
+                className={css.updateButton}
+                disabled={testingRegistry || busy}
+                onClick={() => { void onTestRegistry() }}
+              >
+                {testingRegistry ? t('dshRuntimeRegistryChecking') : t('dshRuntimeRegistryCheck')}
+              </button>
+            )}
+            <button
+              type="button"
+              className={css.updateButton}
+              disabled={registryDisabled}
+              onClick={() => setRegistryEditing(true)}
+            >
+              {t('dshRuntimeRegistryEdit')}
+            </button>
+          </div>
+        )}
       </div>
 
-      {registrySelection === CUSTOM_REGISTRY && (
-        <div className={css.generalRow}>
-          <label className={css.generalFieldLabel} htmlFor={registryCustomId}>{t('dshRuntimeRegistryCustomLabel')}</label>
-          <input
-            id={registryCustomId}
-            type="url"
-            className={css.runtimeField}
-            value={customOrigin}
-            placeholder="https://registry.example.com"
-            disabled={registryDisabled}
-            onChange={(event) => setCustomOrigin(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' && customOrigin.trim() !== '') {
-                void onApplyRegistry(customOrigin.trim(), true)
-              }
-            }}
-          />
-          <button
-            type="button"
-            className={css.updateButton}
-            disabled={registryDisabled || customOrigin.trim() === ''}
-            onClick={() => { void onApplyRegistry(customOrigin.trim(), true) }}
-          >
-            {applyingRegistry ? t('dshRuntimeRegistryApplying') : t('dshRuntimeRegistryApply')}
-          </button>
-          {originError !== null && <p className={css.generalError} role="alert">{originError}</p>}
-        </div>
-      )}
-
       {registryError !== null && <p className={css.generalError} role="alert">{registryError}</p>}
-      {registryReachable && <p className={css.generalHint} role="status">{t('dshRuntimeRegistryReachable')}</p>}
-
-      {/* 磁盘占用（2026-12 有意保留）：作为段落脚注留在版本源块末尾，不
-          移入当前状态组——状态组已含版本/快照/环境事实，再叠加存储统计
-          会过载；脚注位置读取顺序自然。 */}
-      {state?.diskUsage != null && (
-        <p className={css.generalHint}>
-          {t('dshRuntimeDiskSummary', {
-            total: formatRuntimeBytes(state.diskUsage.totalBytes),
-            trees: state.diskUsage.versionTrees,
-            treeBytes: formatRuntimeBytes(state.diskUsage.versionTreeBytes),
-            storeBytes: formatRuntimeBytes(state.diskUsage.storeBytes),
-            cacheBytes: formatRuntimeBytes(
-              state.diskUsage.cacheBytes
-              + state.diskUsage.installHomeBytes
-              + state.diskUsage.xdgCacheBytes
-              + state.diskUsage.workBytes,
-            ),
-            snapshotBytes: formatRuntimeBytes(state.diskUsage.snapshotBytes),
-            recoveryBytes: formatRuntimeBytes(
-              state.diskUsage.preRollbackBytes
-              + state.diskUsage.restoreBackupBytes
-              + state.diskUsage.failureBytes,
-            ),
-          })}
-        </p>
-      )}
-      {state?.diskError != null && (
-        <p className={css.generalError} role="alert">{t('dshRuntimeDiskError', { error: state.diskError })}</p>
-      )}
-      {state?.diskLimitExceeded === true && state.diskLimitBytes !== undefined && (
-        <p className={css.generalError} role="status">
-          {t('dshRuntimeDiskQuotaWarning', { limit: formatRuntimeBytes(state.diskLimitBytes) })}
-        </p>
-      )}
     </div>
   )
 }

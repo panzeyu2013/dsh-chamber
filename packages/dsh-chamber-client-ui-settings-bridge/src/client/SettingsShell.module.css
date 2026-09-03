@@ -999,9 +999,8 @@
   100% { transform: translateX(250%); }
 }
 
-/* Compact phase chip on the gateway runtime version row (design 18 §3.6
-   A.1 phase badge; the `.badge` vocabulary: pill, hairline border, 11px).
-   2026-12 复审：margin-left 取代版本文字与徽标之间的 `{' '}` 文本节点。 */
+/* Unified status badge on the runtime version row (2026-12: local and
+   gateway branches share one pill vocabulary; tone variants below). */
 .runtimeBadge {
   display: inline-flex;
   align-items: center;
@@ -1015,6 +1014,30 @@
   font-size: 11px;
   line-height: 16px;
   color: var(--dsw-alias-label-tertiary);
+}
+
+/* Coloured badge tones (2026-12 runtime-settings unification): the pill
+   reuses the .runtimeBadge base and tints text + hairline with one dsw
+   semantic token per tone (transparent background — tokens stay the only
+   colour source). */
+.runtimeBadgeOk {
+  color: var(--dsw-alias-state-success-primary);
+  border-color: var(--dsw-alias-state-success-primary);
+}
+
+.runtimeBadgeBusy {
+  color: var(--dsw-alias-state-business-primary);
+  border-color: var(--dsw-alias-state-business-primary);
+}
+
+.runtimeBadgeWarn {
+  color: var(--dsw-alias-state-warning-primary);
+  border-color: var(--dsw-alias-state-warning-primary);
+}
+
+.runtimeBadgeDanger {
+  color: var(--dsw-alias-state-error-primary);
+  border-color: var(--dsw-alias-state-error-primary);
 }
 
 /* Form-shaped select/input for the runtime section (2026-11): a boxed field
