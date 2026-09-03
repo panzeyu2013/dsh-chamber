@@ -30,6 +30,12 @@ import {
   type PrivateFileIdentity,
 } from './private-file.ts'
 import type { Logger } from './types.ts'
+import {
+  hasWindowsResidualTree,
+  treeKillWindows,
+  windowsIdentity,
+  windowsPortOwnedBy,
+} from './win-probes.ts'
 
 const TERM_WAIT_MS = 1500
 const TERM_POLL_MS = 100
@@ -124,6 +130,13 @@ function groupAlive(pid: number): boolean {
 }
 
 function realManagedTreeAlive(pid: number): boolean {
+  if (process.platform === 'win32') {
+    // Windows: no process groups — the leader pid + any CIM-discoverable
+    // residual descendants are the tree (design 02 §5.1 parity work, M1).
+    // The residual probe fails closed (true on doubt) so orphan evidence is
+    // never erased because PowerShell hiccupped.
+    return realAlive(pid) || hasWindowsResidualTree(pid)
+  }
   return groupAlive(pid) || realAlive(pid)
 }
 
@@ -227,15 +240,34 @@ async function realProcPort(pid: number, port: number): Promise<boolean | null> 
   return false
 }
 
-/** Merge partial deps over the real defaults (production behavior unchanged). */
+/** taskkill maps every signal to the same bounded tree force-kill: Windows
+ *  has no graceful signal for console-less processes (kill(pid, sig) is
+ *  TerminateProcess), so the SIGTERM and SIGKILL stages of the Unix sequence
+ *  share one shape. Returns false only when nothing existed (the ESRCH
+ *  equivalent); every real failure throws (record kept). */
+function windowsTreeSignal(pid: number, _signal: NodeJS.Signals): boolean {
+  return treeKillWindows(pid)
+}
+
+/**
+ * Merge partial deps over the real defaults. Production behavior on POSIX is
+ * unchanged; win32 defaults swap every probe for its Windows counterpart
+ * (design 02 §5.1 parity work, M1): ps → CIM identity (win-probes.ts),
+ * lsof/ss/proc → netstat, process-group signals → taskkill /T /F tree
+ * termination, group liveness → kill(0) + residual-descendant scan. A probe
+ * that cannot prove absence still fails closed (record kept).
+ */
 function resolveDeps(deps?: ReaperDeps): Required<ReaperDeps> {
   const resolvedAlive = deps?.alive ?? realAlive
+  const isWindows = process.platform === 'win32'
+  const unavailablePortProbe = (): null => null
+  const unavailableAsyncPortProbe = async (): Promise<null> => null
   return {
-    psIdentity: deps?.psIdentity ?? realPsIdentity,
-    lsofPort: deps?.lsofPort ?? realLsofPort,
-    ssPort: deps?.ssPort ?? realSsPort,
-    procPort: deps?.procPort ?? realProcPort,
-    signal: deps?.signal ?? realSignal,
+    psIdentity: deps?.psIdentity ?? (isWindows ? windowsIdentity : realPsIdentity),
+    lsofPort: deps?.lsofPort ?? (isWindows ? windowsPortOwnedBy : realLsofPort),
+    ssPort: deps?.ssPort ?? (isWindows ? unavailablePortProbe : realSsPort),
+    procPort: deps?.procPort ?? (isWindows ? unavailableAsyncPortProbe : realProcPort),
+    signal: deps?.signal ?? (isWindows ? windowsTreeSignal : realSignal),
     alive: resolvedAlive,
     // Existing focused tests inject a synthetic pid-liveness function. Use it
     // for tree liveness too unless they explicitly model a residual group;

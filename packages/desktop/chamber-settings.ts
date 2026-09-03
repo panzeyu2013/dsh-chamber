@@ -34,7 +34,7 @@ export interface ChamberNotificationSettings {
 /** Chamber-global runtime settings (design 14 v1 scope). */
 export interface ChamberSettings {
   windowCloseBehavior: WindowCloseBehavior
-  /** Login autostart (design 14 D6): mac/linux; win gated off in v1. */
+  /** Login autostart (design 14 D6): darwin/win32/linux (design 21 M4). */
   launchAtLogin: boolean
   /** prevent-app-suspension (design 14 D5); default off. */
   keepAwake: boolean
@@ -53,7 +53,9 @@ export interface ChamberSettings {
 export interface ChamberSettingsStatus {
   settings: ChamberSettings
   supported: {
-    /** false on win32 (v1 gate — STATUS「Windows 首版支持暂缓」). */
+    /** All shipping platforms (darwin/win32/linux) support login autostart
+     *  (design 14 D6; win32 = HKCU Run key via setLoginItemSettings,
+     *  design 21 M4). */
     launchAtLogin: boolean
     /** false when no tray recovery surface exists (dev, no icons); macOS is
      *  always safe (Dock icon recovery), so darwin reports true. */
@@ -251,13 +253,14 @@ export function closeToTrayRecoveryAvailable(
   return platform === 'darwin' || trayAvailable;
 }
 
-/** Platform capability gates (design 14 D6/D1). */
+/** Platform capability gates (design 14 D6/D1; design 21 M4: launchAtLogin
+ *  unlocked on win32 — setLoginItemSettings writes the HKCU Run key). */
 export function computeSupported(
   platform: NodeJS.Platform,
   trayAvailable: boolean,
 ): ChamberSettingsStatus['supported'] {
   return {
-    launchAtLogin: platform !== 'win32',
+    launchAtLogin: true,
     closeToTray: closeToTrayRecoveryAvailable(platform, trayAvailable),
   };
 }

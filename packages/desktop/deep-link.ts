@@ -289,12 +289,22 @@ export class BoundedAckDeliveryQueue<T extends object> {
 /** Runtime protocol registration is packaged-only in this app. A packaged
  * Linux launch must not persist argv[1]: on a cold protocol start argv[1] can
  * itself be the URL. Electron's executable+script args form is only for the
- * `process.defaultApp` development shape, which this app deliberately skips. */
+ * `process.defaultApp` development shape, which this app deliberately skips.
+ * Windows (design 21 M4): the win32 v1 gate is lifted — packaged builds call
+ * Electron's no-args setAsDefaultProtocolClient form; the NSIS installer may
+ * additionally write HKCU\Software\Classes entries (electron-builder
+ * `protocols`, M0.5 实证项) — same target, idempotent. Dev builds never
+ * register on any platform. */
 export function decideDeepLinkProtocolRegistration(input: {
   isPackaged: boolean
   platform: string
 }): { action: 'skip' } | { action: 'register' } {
-  if (!input.isPackaged || input.platform === 'win32') return { action: 'skip' }
+  // `platform` is intentionally NOT read yet: dev-skip is platform-independent
+  // and packaged registration is the no-args form everywhere. It stays as an
+  // explicit input contract so a future per-platform policy (e.g. installer
+  // vs runtime registration) can branch without changing the signature;
+  // callers keep passing process.platform.
+  if (!input.isPackaged) return { action: 'skip' }
   return { action: 'register' }
 }
 

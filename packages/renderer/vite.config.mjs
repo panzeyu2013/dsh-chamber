@@ -210,7 +210,10 @@ export default defineConfig({
         },
       },
     },
-    outDir: '../desktop/dist',
+    // P2-4 (STATUS): renderer output is isolated under dist/web so a
+    // standalone `build:renderer` can never wipe sibling desktop artifacts
+    // (preload.cjs / control-plane / host packages) that share dist/.
+    outDir: '../desktop/dist/web',
     emptyOutDir: true,
   },
   resolve: {

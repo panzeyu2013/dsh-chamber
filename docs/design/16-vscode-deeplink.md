@@ -203,8 +203,10 @@ vscode handler 为第一个实现；未来"在终端打开/浏览器打开"等�
   mac `CFBundleURLTypes` / linux desktop `MimeType` / Windows 注册表项）；
 - dev 深链测试：`electron-dev.mjs` 支持透传 argv 注入（URL 作为冷启动 argv），
   不依赖真实 OS 协议事件；
-- Windows 首版暂缓一致性：win32 门控 `setAsDefaultProtocolClient` + argv 扫描
-  （镜像 ssh 密码 askpass 门控 main.ts:1086）；`open-url` 为 mac 专属事件。
+- Windows（design 21 M4 已解锁）：打包态同样走无参数 `setAsDefaultProtocolClient`
+  （electron-builder `protocols` 的 Windows 注册表项是否同时写入为 M0.5 实证项，
+  同目标幂等）；`open-url` 为 mac 专属事件，win/linux 由 `second-instance` argv
+  扫描 + 冷启动 argv 扫描投递。
 
 ## 5. VS Code 可用性探测（默认口径，用户拍板）
 

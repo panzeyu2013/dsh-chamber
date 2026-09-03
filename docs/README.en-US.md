@@ -85,7 +85,7 @@ In Settings → Connections, select a target (`dsh` / `gateway`) and a transport
 - **Open-in registry** — one unified open surface in the session header: reveal directories in Finder/file manager for local sources, and launch VS Code for local (`vscode://file/`) or SSH-transport remote sources (Remote-SSH); supports `dsh-chamber://` deep links
 - **Desktop notifications** — native notifications when a session completes or asks/requests approval; clicking opens the session; toggle per the Settings "Notifications" group
 - **Desktop updates** — stable and beta use independent configuration and feeds; checks stay silent, Settings shows a low-key "Update" section, download starts only after confirmation, and installation happens on quit
-- **Sleep / background persistence** — close behavior is configurable (hide to tray and keep running, or quit with confirmation); launch at login (mac/linux); immediate reconnect on OS wake; keep-awake toggle
+- **Sleep / background persistence** — close behavior is configurable (hide to tray and keep running, or quit with confirmation); launch at login (macOS/Windows/Linux); immediate reconnect on OS wake; keep-awake toggle
 - **Chamber settings page** — fixed Settings-shell entries: Connections / General; chamber-global settings stay strictly separate from per-instance config planes
 - **Backend version tolerance** — instances whose backend dsh frontend version differs from the chamber shell keep working: extra plugin rows the shell does not cover degrade to absent features (never a whole-boot crash)
 
@@ -95,6 +95,10 @@ In Settings → Connections, select a target (`dsh` / `gateway`) and a transport
 - **What does a remote instance need?** — a reachable API-profile dsh target, or a deployed `@dsh-chamber/gateway` target. Either may use an SSH tunnel or an explicitly configured HTTP(S) endpoint. No separate remote web frontend is needed: the reused local UI reaches it through same-origin proxying.
 - **How do agent presets / profiles work across instances?** — per-instance authoritative. Each instance's `settings`/`credentials`/`llm`/`agentPreset` config plane lives only on that instance's side (local = this machine, remote = the far server). To edit a remote preset, switch to that source's shell and use its Settings → Agent presets page.
 - **Where does the frontend come from?** — the dsh official frontend, source-reused and self-built; every instance keeps its native UI.
+- **Windows install is slow / stuck on "Installing"?** — Windows Defender scans the ~33k runtime files one by one. Known tradeoff (design 21 F3): wait for completion, or exclude `%APPDATA%\dsh-chamber` from Defender real-time scanning for a large speedup. Install/update progress lines say so.
+- **Can I use an SSH password on Windows?** — No (askpass needs a PE executable). Use a key or ssh-agent (Pageant) — the save gate refuses passwords and guides you.
+- **dsh runtime version management on Windows?** — in progress (design 21): read-only projection by default; development validation uses `DSH_CHAMBER_WINDOWS_RUNTIME_MUTATIONS=1`; the official unlock waits for real-Windows validation records.
+- **Why does Windows show a SmartScreen warning?** — the installer is not yet Authenticode-signed (known tradeoff, design 21 F6); sha512 only proves download integrity. Choose "More info → Run anyway" when downloading from this repository's Releases.
 
 ## Documentation
 

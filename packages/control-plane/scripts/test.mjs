@@ -40,6 +40,11 @@ const FILES = [
   'rpc-envelope.test.ts',
   'cordis-inserts.test.ts',
   'reaper.test.ts',
+  // Windows probe parsers/classifiers run on every leg; the win32-only
+  // lifecycle integration test self-skips on POSIX and runs on the Windows
+  // CI leg (design 02 §5.1 parity work, M1).
+  'win-probes.test.ts',
+  'win32-lifecycle.integration.test.ts',
 ]
 
 for (const file of FILES) {

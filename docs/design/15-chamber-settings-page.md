@@ -32,7 +32,7 @@
   落点**，按 OpenChamber 式**控制组**组织（组标题 + 平铺行，settings-panel
   设计语言）——
   - **启动与关闭**：关闭窗口行为（`windowCloseBehavior`：hide-to-tray / quit，
-    可设）；登录自启（`launchAtLogin`，可设；mac/linux，win 门控置灰）；
+    可设）；登录自启（`launchAtLogin`，可设；macOS/Windows/Linux，design 21 M4 win 已解锁）；
   - **运行**：保持唤醒（`keepAwake`，默认关）；退出确认（`quitConfirmation`，
     2026-08 新增可设开关，默认开——仅本地实例运行中时确认，远程隧道不影响
     关闭，更新已下载时豁免，见设计 14 D2 修订）；

@@ -31,6 +31,7 @@ import { fetchRegistryResponse } from './registry-metadata.ts'
 import { canonicalRegistryOrigin, isAllowedRegistryUrl, registryRedirectOrigins } from './registry-url.ts'
 import { sanitizeErrorText } from './sanitize-error.ts'
 import { assertSafeVersion } from './version-safety.ts'
+import { hasWindowsDescendants, killWindowsTreeWithResidual } from './windows-process.ts'
 import {
   assertRuntimeRootNoFollow,
   atomicWriteRuntimeFileNoFollow,
@@ -423,13 +424,22 @@ export class RuntimeInstallerSupervisor {
   }
 
   /** Signal the whole Unix group. ESRCH alone proves that there is no writer;
-   * EPERM means the group is alive but not signalable and must remain fenced. */
+   * EPERM means the group is alive but not signalable and must remain fenced.
+   * On Windows every signal maps to the same bounded taskkill /T /F tree kill
+   * (no POSIX signals exist); a dead leader's residual descendants are killed
+   * individually so a daemonized lifecycle script cannot outlive the reap. */
   private sendSignal(tracked: TrackedChild, signal: NodeJS.Signals): 'sent' | 'quiet' | 'alive' {
     const pid = tracked.pid
     if (pid === null) return tracked.childClosed ? 'quiet' : 'alive'
+    if (process.platform === 'win32') {
+      try {
+        return killWindowsTreeWithResidual(pid) ? 'sent' : 'quiet'
+      } catch (error) {
+        throw writerUnsafeError(`runtime installer could not terminate windows child tree (${(error as NodeJS.ErrnoException).code ?? 'unknown error'})`, error)
+      }
+    }
     try {
-      if (process.platform !== 'win32') process.kill(-pid, signal)
-      else tracked.child.kill(signal)
+      process.kill(-pid, signal)
       return 'sent'
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code
@@ -440,7 +450,10 @@ export class RuntimeInstallerSupervisor {
   }
 
   /** Probe writer liveness without treating an unknown failure as absence.
-   * `kill(..., 0)` success and EPERM both mean alive; only ESRCH means quiet. */
+   * `kill(..., 0)` success and EPERM both mean alive; only ESRCH means quiet.
+   * On Windows a dead leader is not proof of quiescence: stale ParentProcessId
+   * descendants can keep writing the install tree, so the CIM table is
+   * consulted before reporting quiet (fail closed on probe doubt). */
   private processGroupState(tracked: TrackedChild): 'alive' | 'quiet' {
     const pid = tracked.pid
     if (pid === null) return tracked.childClosed ? 'quiet' : 'alive'
@@ -449,7 +462,10 @@ export class RuntimeInstallerSupervisor {
       return 'alive'
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code
-      if (code === 'ESRCH') return 'quiet'
+      if (code === 'ESRCH') {
+        if (process.platform !== 'win32') return 'quiet'
+        return hasWindowsDescendants(pid) ? 'alive' : 'quiet'
+      }
       if (code === 'EPERM') return 'alive'
       throw writerUnsafeError(`runtime installer could not verify child process group (${code ?? 'unknown error'})`, error)
     }

@@ -129,6 +129,19 @@ pnpm run dist:desktop:win    # 打包 Windows 应用（nsis + zip；须在 Windo
 
 > Windows 安装慢/卡"正在安装"的排障（Windows Defender 逐文件扫描）见 README「常见问题」。
 
+### Windows 支持矩阵（design 21,推进中）
+
+| 面 | 状态 |
+|---|---|
+| 目标形态 | Windows 11 x64,NSIS 打包(`dist:desktop:win`,须在 Windows 上运行) |
+| CI | `test-windows`(windows-2022)契约腿已定义(ci.yml);打包在 release.yml `build-windows` |
+| 生命周期(M1) | win-probes(CIM 身份/netstat/taskkill 树终止)+ reaper/spawn-dsh 平台自适应:代码就绪,POSIX 单测绿,win32-only 集成测试就位 |
+| 运行时管理(M2a/M2b) | 默认**只读**;验证态 `DSH_CHAMBER_WINDOWS_RUNTIME_MUTATIONS=1`;M2b UI 翻转纪律门禁 |
+| 桌面能力(M3) | AUMID/托盘候选收敛/preload loud 失败已接;实机矩阵待执行 |
+| 决策解锁(M4) | 登录自启、深链注册、open-in 本地路径、SSH 密码门引导已解锁(代码);NSIS 卸载 Run 清理 include 已接 |
+| 已知限制 | 未签名(SmartScreen);SSH 密码禁用(keys/Pageant);运行时 mutation 只读;0700/0600 以 icacls/ACL 表达 |
+| 权威记录 | `docs/design/21-windows-support.md`、`docs/progress/todo/windows-v1.md`、`docs/progress/windows-baseline.md` |
+
 ## 5. CI 与发布
 
 - `.github/workflows/ci.yml`：每次 push/PR 运行——纯验证链（frozen install → 根/gateway/runtime/两个 host 包/client 插件 typecheck → i18n → 控制面/runtime/desktop/gateway/renderer/client/host 单测〔含 `test:git`、`test:host-git`〕→ **workflow action SHA 门禁**（`release-preflight --actions-only`，2026-09 起）→ smoke〔未捆绑运行时 SKIP〕→ renderer/host/desktop 子构建 → gateway 打包安装冒烟〔`pack` → 临时 prefix 安装 → `gateway --help`〕），**不产出发布包**；桌面打包与真实 smoke 验证在 `release.yml`（tag/手动触发）进行。

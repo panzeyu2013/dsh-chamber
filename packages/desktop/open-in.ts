@@ -22,8 +22,10 @@
  *   (id / displayKind / remoteCapable / available) for the renderer UI.
  * - runOpenInLaunch: the single execution pipeline shared by any IPC entry
  *   point — appId whitelist → instanceId validation (mirror of
- *   runVscodeLaunch's symmetric gate) → path validation (validateRemotePath
- *   hoisted into the pipeline) → remoteCapable gate → availability re-check
+ *   runVscodeLaunch's symmetric gate) → path validation (validateLocalPath
+ *   for instanceId 'local' — Windows drive/UNC paths included, design 21 M4;
+ *   validateRemotePath hoisted for every remote dsh session, POSIX-only) →
+ *   remoteCapable gate → availability re-check
  *   via the injected ctx (defense in depth; vscode's runVscodeLaunch has its
  *   own re-check inside, keeping the double guard) → app.open. Every failure
  *   is loud, never a silent success.
@@ -35,7 +37,7 @@
  */
 
 import { INSTANCE_ID_PATTERN } from './transport-provider.ts'
-import { describeUnknownError, runVscodeLaunch, validateRemotePath } from './deep-link.ts'
+import { describeUnknownError, runVscodeLaunch, validateLocalPath, validateRemotePath } from './deep-link.ts'
 
 /** A normalized open-in launch request (renderer IPC payload, untrusted). */
 export interface OpenInRequest {
@@ -115,8 +117,10 @@ export function shouldRevealDirectoryInsteadOfOpen(platform: string): boolean {
  * path has nothing to reveal in THIS machine's file manager, so any non-local
  * instanceId is refused loudly (defense in depth: the pipeline's
  * remoteCapable gate would already have refused, but the provider re-checks).
- * Path discipline mirrors deep-link (absolute / control-char-free / ≤ 4096 via
- * validateRemotePath); files are revealed. Directories use openPath outside
+ * Path discipline mirrors deep-link (absolute / control-char-free / ≤ 4096);
+ * local workspaces validate via validateLocalPath (drive/UNC included,
+ * design 21 M4), remote dsh paths stay validateRemotePath. Files are
+ * revealed. Directories use openPath outside
  * macOS; every macOS directory is revealed because LaunchServices package
  * classification cannot be exhaustively predicted from a suffix list.
  */
@@ -129,7 +133,12 @@ const finderApp = Object.freeze<OpenInApp>({
     if (req.instanceId !== 'local') {
       return { ok: false, error: 'finder is only available for the local instance' }
     }
-    const validated = validateRemotePath(req.path)
+    // design 21 M4: the local instance's workspace lives on THIS machine, so
+    // drive-absolute/UNC paths validate on win32 hosts (validateLocalPath);
+    // remote dsh paths stay POSIX-only (validateRemotePath).
+    const validated = req.instanceId === 'local'
+      ? validateLocalPath(req.path)
+      : validateRemotePath(req.path)
     if (!validated.ok) return validated
     const entry = await ctx.stat(validated.path)
     if (entry === null) {
@@ -289,7 +298,11 @@ export async function runOpenInLaunch(
   if (typeof req.instanceId !== 'string' || (req.instanceId !== 'local' && !INSTANCE_ID_PATTERN.test(req.instanceId))) {
     return { ok: false, error: 'invalid instance id' }
   }
-  const validatedPath = validateRemotePath(req.path)
+  // design 21 M4: local workspaces may be Windows drive/UNC paths; remote dsh
+  // session paths are always POSIX.
+  const validatedPath = req.instanceId === 'local'
+    ? validateLocalPath(req.path)
+    : validateRemotePath(req.path)
   if (!validatedPath.ok) return validatedPath
   if (req.instanceId !== 'local' && !app.remoteCapable) {
     return { ok: false, error: `${app.id} is not available for remote instances` }
