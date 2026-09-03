@@ -5,6 +5,12 @@
 
 ## M0 — CI 契约腿与基线
 - [x] ci.yml 新增 `test-windows`(windows-2022,autocrlf/symlinks 前置 + 关键套件)
+- [x] 首跑归因(2026-09-03,d12c5ef):pin 守卫 Windows 路径分隔符 bug 已修;全量
+      POSIX 套件在 win32 不可跑属设计事实(private-fs 无 O_NOFOLLOW fail-closed,
+      M2b 前无 win32 语义)——腿收敛为 **Windows 有效子集**:dsh-runtime
+      (windows-process/rename-retry/win32-readonly-rm 决策门/dist-sync/
+      sanitize-error)+ control-plane(win-probes/win32-lifecycle 集成)+ desktop
+      (win-acl);全量套件归 POSIX 腿,M2b 解锁后再扩。
 - [ ] **外部门禁**:push 后 `test-windows` 首次跑绿(连续 3 次)
 - [ ] windows-baseline.md 首份真实数据入库(首跑结果)
 

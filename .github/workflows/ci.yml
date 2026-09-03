@@ -192,11 +192,18 @@ jobs:
           pnpm run typecheck:host-git
           pnpm run typecheck:gateway
           pnpm run typecheck:runtime
-      - name: Shared runtime core unit tests (packages/dsh-runtime)
-        run: pnpm run test:runtime
-      - name: Control-plane unit tests (win32 lifecycle integration included)
-        run: pnpm run test:control-plane
-      - name: Desktop unit tests (lifecycle / transports / credentials / runtime / native edges)
-        run: pnpm run test:desktop
-      - name: Gateway unit tests (win32 read-only projection included)
-        run: pnpm run test:gateway
+      # Windows-valid SUBSET, not the full POSIX suites (design 23 M0 契约腿,
+      # todo/windows-v1.md): pre-M2b the dsh-runtime store semantics are
+      # POSIX-only by design — private-fs fails closed without O_NOFOLLOW, so
+      # test:runtime / test:control-plane / test:desktop / test:gateway can
+      # only pass on the POSIX legs. This leg runs every win32-real or
+      # platform-neutral unit/integration gate; the full-suite parity joins
+      # after M2b unlocks mutations (then extend this list, never fake it).
+      - name: dsh-runtime win32 units + decision gates (packages/dsh-runtime)
+        run: |
+          node packages/dsh-runtime/test/windows-process.test.ts && node packages/dsh-runtime/test/rename-retry.test.ts && node packages/dsh-runtime/test/win32-readonly-rm.integration.test.ts && node packages/dsh-runtime/test/dist-sync.test.ts && node packages/dsh-runtime/test/sanitize-error.test.ts
+      - name: Control-plane win32 probes + lifecycle integration (real CIM/netstat/taskkill)
+        run: |
+          node packages/control-plane/test/win-probes.test.ts && node packages/control-plane/test/win32-lifecycle.integration.test.ts
+      - name: Desktop win32 ACL units (real icacls when present)
+        run: node packages/desktop/win-acl.test.ts
