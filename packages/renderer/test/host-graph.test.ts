@@ -180,11 +180,13 @@ test('collectExtraRows: a shared concurrent rejection fails every waiter and rem
       collectExtraRows('failure-a', '/api/i/local', { loadModuleBundle }),
       collectExtraRows('failure-b', '/api/i/ssh-b', { loadModuleBundle }),
     ])
-    assert.equal(loads, 1)
+    // The owner's ordinary failure runs its bounded recovery retry (load 2)
+    // before failing loud; the shared-load waiter fails loud immediately.
+    assert.equal(loads, 2)
     assert.ok(results.every(result => result.status === 'rejected'))
     shouldFail = false
     await collectExtraRows('failure-retry', '/api/i/local', { loadModuleBundle })
-    assert.equal(loads, 2)
+    assert.equal(loads, 3)
   } finally {
     stub.restore()
   }
@@ -428,7 +430,7 @@ test('collectExtraRows: keeps non-covered rows and preloads each once (real cove
   }
 })
 
-test('collectExtraRows: a failing bundle load rejects loud (never degrades)', async () => {
+test('collectExtraRows: a bundle load failing BOTH attempts rejects loud (never degrades)', async () => {
   const stub = stubFetch(200, envelope([row('@scope/bad-plugin')]))
   const loaded: string[] = []
   try {
@@ -440,10 +442,85 @@ test('collectExtraRows: a failing bundle load rejects loud (never degrades)', as
       }, reportDiagnostic: (_sourceId, next) => { diagnostic = next } }),
       /bundle .* exploded/,
     )
-    assert.deepEqual(loaded, ['/api/i/local/plugins/??@scope/bad-plugin&rev=abc123'])
+    // One bounded recovery cycle: the refetched graph carries the same rev
+    // (no restart), the retried load fails identically, and the boot fails
+    // loud — a broken plugin never silently disappears.
+    assert.deepEqual(loaded, [
+      '/api/i/local/plugins/??@scope/bad-plugin&rev=abc123',
+      '/api/i/local/plugins/??@scope/bad-plugin&rev=abc123',
+    ])
     assert.equal(diagnostic?.state, 'bundle-load-failed')
   } finally {
     stub.restore()
+  }
+})
+
+test('collectExtraRows: a restart-straddled boot recovers — stale-rev bundle failures reload at the fresh graph rev', async () => {
+  // Upstream bundle revs are opaque per-process nonces (dsh-client-modules
+  // allocateInitialRevision): an instance restart between the graph fetch and
+  // the bundle loads 404s every not-yet-loaded row on its stale rev. The
+  // bounded recovery pass re-fetches the graph and reloads the failed row at
+  // the fresh rev, so the boot proceeds instead of failing loud.
+  const id = '@scope/restart-straddle'
+  let calls = 0
+  const original = globalThis.fetch
+  globalThis.fetch = (() => {
+    calls += 1
+    const rev = calls === 1 ? 'stale-rev' : 'fresh-rev'
+    const body = envelope([row(id, { rev, url: `/plugins/??${id}&rev=${rev}` })])
+    return Promise.resolve(new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    }))
+  }) as typeof fetch
+  const loaded: string[] = []
+  try {
+    let diagnostic: { state: string } | undefined
+    const rows = await collectExtraRows('local', '/api/i/local', {
+      loadModuleBundle: async url => {
+        if (url.includes('stale-rev')) throw new Error(`stale rev bundle 404: ${url}`)
+        loaded.push(url)
+      },
+      reportDiagnostic: (_sourceId, next) => { diagnostic = next },
+    })
+    assert.equal(calls, 2, 'one bounded recovery refetch, no more')
+    assert.deepEqual(loaded, [`/api/i/local/plugins/??${id}&rev=fresh-rev`])
+    assert.equal(rows.length, 1)
+    assert.equal(rows[0]!.rev, 'fresh-rev')
+    assert.equal(diagnostic?.state, 'ok')
+  } finally {
+    globalThis.fetch = original
+  }
+})
+
+test('collectExtraRows: a recovery-refetch channel failure keeps the original bundle failure loud', async () => {
+  const id = '@scope/recovery-channel-down'
+  let calls = 0
+  const original = globalThis.fetch
+  globalThis.fetch = (() => {
+    calls += 1
+    if (calls === 1) {
+      return Promise.resolve(new Response(JSON.stringify(envelope([row(id)])), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }))
+    }
+    return Promise.reject(new Error('network down on refetch'))
+  }) as typeof fetch
+  try {
+    let diagnostic: { state: string; pluginId?: string } | undefined
+    await assert.rejects(
+      collectExtraRows('local', '/api/i/local', {
+        loadModuleBundle: async () => { throw new Error('bundle exploded') },
+        reportDiagnostic: (_sourceId, next) => { diagnostic = next },
+      }),
+      /bundle exploded/,
+    )
+    assert.equal(calls, 2)
+    assert.equal(diagnostic?.state, 'bundle-load-failed')
+    assert.equal(diagnostic?.pluginId, id)
+  } finally {
+    globalThis.fetch = original
   }
 })
 
@@ -567,21 +644,26 @@ test('collectExtraRows: a failed owner preload rolls the id back so ANOTHER inst
   }
 })
 
-test('collectExtraRows: a failed preload is NOT marked — a retry re-triggers the loader; success marks once', async () => {
+test('collectExtraRows: a transient load failure is healed inside the same boot; success marks once', async () => {
   const stub = stubFetch(200, envelope([row('@scope/retry-plugin')]))
   let calls = 0
   const loadModuleBundle = async (): Promise<void> => {
     calls += 1
-    if (calls === 1) throw new Error('first attempt failed')
+    if (calls === 1) throw new Error('first attempt failed (transient)')
   }
   try {
-    // First boot: the load fails → collectExtraRows rejects (fail loud) and
-    // the id must NOT stay marked.
-    await assert.rejects(collectExtraRows('local', '/api/i/local', { loadModuleBundle }), /first attempt failed/)
-    assert.equal(calls, 1)
-    // Retry boot: not permanently marked → the loader runs again and succeeds.
-    const rows = await collectExtraRows('local', '/api/i/local', { loadModuleBundle })
+    // First boot: the fresh load fails once (a network blip, or a bundle URL
+    // invalidated by an instance restart — the recovery refetch returns the
+    // same rev here, so the retried load runs against the same URL and
+    // succeeds). The boot proceeds; the failure is never silently dropped —
+    // it was retried once before it healed.
+    let diagnostic: { state: string } | undefined
+    const rows = await collectExtraRows('local', '/api/i/local', {
+      loadModuleBundle,
+      reportDiagnostic: (_sourceId, next) => { diagnostic = next },
+    })
     assert.equal(calls, 2)
+    assert.equal(diagnostic?.state, 'ok')
     assert.deepEqual(rows, [{
       id: '@scope/retry-plugin',
       url: '/api/i/local/plugins/??@scope/retry-plugin&rev=abc123',
@@ -589,7 +671,7 @@ test('collectExtraRows: a failed preload is NOT marked — a retry re-triggers t
       rev: 'abc123',
       inject: [],
     }])
-    // Third boot: marked after the success → the loader is not re-triggered.
+    // Second boot: marked after the success → the loader is not re-triggered.
     await collectExtraRows('local', '/api/i/local', { loadModuleBundle })
     assert.equal(calls, 2)
   } finally {
@@ -664,7 +746,7 @@ test('collectExtraRows: rows sharing one combo url preload that combo exactly on
   }
 })
 
-test('collectExtraRows: a shared combo url failure fails every row and clears the whole combo for retry', async () => {
+test('collectExtraRows: a shared combo url failure is healed by the in-boot recovery; success marks once', async () => {
   const comboUrl = '/plugins/??@scope/combo-fail-a/client.js,@scope/combo-fail-b/client.js&rev=combo-fail'
   const stub = stubFetch(200, envelope([
     row('@scope/combo-fail-a', { url: comboUrl, rev: 'combo-fail' }),
@@ -676,12 +758,13 @@ test('collectExtraRows: a shared combo url failure fails every row and clears th
     if (calls === 1) throw new Error('combo exploded')
   }
   try {
-    await assert.rejects(
-      collectExtraRows('local', '/api/i/local', { loadModuleBundle }),
-      /combo exploded/,
-    )
-    assert.equal(calls, 1)
-    // The whole combo was cleared: a retry re-preloads the one script.
+    // One failed attempt, then the recovery pass re-preloads the single combo
+    // script (the whole combo was cleared, so the retry is safe) — the boot
+    // proceeds with both rows.
+    const rows = await collectExtraRows('local', '/api/i/local', { loadModuleBundle })
+    assert.equal(calls, 2)
+    assert.equal(rows.length, 2)
+    // Both rows are marked: a later boot does not re-trigger the loader.
     await collectExtraRows('local', '/api/i/local', { loadModuleBundle })
     assert.equal(calls, 2)
   } finally {

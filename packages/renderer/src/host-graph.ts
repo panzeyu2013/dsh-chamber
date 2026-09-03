@@ -51,7 +51,9 @@ export interface HostGraphRow {
   id: string
   /** Bundle endpoint, '/plugins/??<id>/client.js&rev=<rev>' (host-root-relative). */
   url: string
-  /** Bundle content hash (cache-busting consistency anchor). */
+  /** Opaque bundle revision (`<per-process nonce>-<ordinal>` upstream; a
+   *  cache-busting consistency anchor, NOT a content hash — every instance
+   *  restart reallocates every rev, invalidating all previous bundle URLs). */
   rev: string
   /** Package-name dependency edges, informational. */
   inject?: string[]
@@ -283,8 +285,12 @@ export function toExtraRows(rows: readonly HostGraphRow[], basePath: string): Ex
  * as done — the module system does NOT re-fetch extra bundles on its own (an
  * extra row has no boot-graph row; a later system.ts import() would throw
  * "cannot resolve"), so a permanent mark would strand the plugin for the rest
- * of the page lifetime. A failed load instead fails THIS instance's boot loud
- * (design 09 §4 fail-loud) and a retry boot re-preloads the bundle.
+ * of the page lifetime. An ordinary failed load is therefore recovered once
+ * inside the SAME boot (a fresh graph re-fetch + reload, see collectExtraRows
+ * below — upstream revs are opaque per-process nonces, so an instance
+ * restart between graph fetch and bundle loads 404s every not-yet-loaded
+ * row on a stale rev); a load that still fails then fails THIS instance's
+ * boot loud (design 09 §4 fail-loud) and a retry boot re-preloads the bundle.
  *
  * First-load-wins (union-table model, design 09 §3.2): the combo that first
  * executed a factory owns the id forever; a later instance carrying the id at
@@ -387,10 +393,26 @@ export interface CollectExtraRowsDeps {
  * retried on a bounded budget (the instance's graph appears moments after the
  * proxy stops answering 503 — see CollectExtraRowsDeps.retry) and only then
  * degrades silently, so a shell that boots inside the spawn window still gets
- * its profile plugins instead of losing them for the rest of the boot. A
- * bundle that fails to LOAD is NOT a degrade: it throws, the instance's boot
- * fails loud and shows the error — a broken extra plugin must never silently
- * disappear (design 09 §4 fail-loud).
+ * its profile plugins instead of losing them for the rest of the boot.
+ *
+ * A bundle that fails to LOAD is NOT a degrade: it throws, the instance's
+ * boot fails loud and shows the error — a broken extra plugin must never
+ * silently disappear (design 09 §4 fail-loud). Ordinary load failures get ONE
+ * bounded recovery cycle first (2026-09, restart-straddle fix): upstream
+ * bundle revs are opaque PER-PROCESS nonces (`<random>-<ordinal>`,
+ * dsh-client-modules `allocateInitialRevision`), so every dsh instance
+ * restart invalidates every bundle URL of the previous process generation —
+ * a boot whose graph fetch and bundle loads straddle a restart (runtime
+ * switches / restart-dsh / plugin-sync restarts are normal chamber
+ * lifecycle) 404s every not-yet-loaded row. The recovery pass re-fetches the
+ * host graph on the same bounded retry budget and reloads every failed row at
+ * its fresh URL — a restart-stale rev re-resolves at the new one, a transient
+ * transport blip gets one more attempt at the same one; only rows that STILL
+ * fail (a genuine plugin problem — the unchanged-rev retry failed too — or
+ * another restart during recovery) fail the boot loud. A DOM
+ * script TIMEOUT is not part of the recovery cycle: its tagged tombstone
+ * keeps observing the original element's eventual outcome (a late load is
+ * success; a late error allows a later retry), exactly as before.
  */
 export async function collectExtraRows(
   instanceId: string,
@@ -402,37 +424,55 @@ export async function collectExtraRows(
     delayMs: deps.retry?.delayMs ?? 500,
     sleep: deps.retry?.sleep ?? ((ms: number) => new Promise(resolve => setTimeout(resolve, ms))),
   }
-  let entries: HostGraphRow[] | null = null
-  let lastError: unknown = null
-  for (let attempt = 1; attempt <= retry.attempts; attempt++) {
-    try {
-      entries = await fetchHostGraph(basePath)
-    } catch (error) {
-      // Non-503 channel failures are NOT transient — fail fast as before
-      // (a hung fetch already consumed its own 30s timeout; retrying would
-      // only stack them).
-      lastError = error
-      break
+  /** Fetch the host graph on the bounded 503-retry budget. Resolves the rows,
+   *  or `{ rows: null, error }` when the channel failed (non-503 — fail fast,
+   *  a hung fetch already consumed its own 30s timeout) and `{ rows: null,
+   *  error: null }` when the 503 budget ran out (instance still starting). */
+  const fetchWithRetry = async (): Promise<{ rows: HostGraphRow[] | null; error: unknown }> => {
+    let lastError: unknown = null
+    for (let attempt = 1; attempt <= retry.attempts; attempt++) {
+      try {
+        const entries = await fetchHostGraph(basePath)
+        if (entries !== null) return { rows: entries, error: null }
+      } catch (error) {
+        // Non-503 channel failures are NOT transient — fail fast as before
+        // (a hung fetch already consumed its own 30s timeout; retrying would
+        // only stack them).
+        lastError = error
+        break
+      }
+      // 503 instance_unavailable: instance still starting. Bounded retry.
+      if (attempt < retry.attempts) await retry.sleep(retry.delayMs)
     }
-    if (entries !== null) break
-    // 503 instance_unavailable: instance still starting. Bounded retry.
-    if (attempt < retry.attempts) await retry.sleep(retry.delayMs)
+    return { rows: null, error: lastError }
   }
-  if (lastError !== null) {
-    console.error(`[shell] instance ${instanceId} host boot-graph fetch failed; booting without extra plugins`, lastError)
+  const firstFetch = await fetchWithRetry()
+  if (firstFetch.error !== null) {
+    console.error(`[shell] instance ${instanceId} host boot-graph fetch failed; booting without extra plugins`, firstFetch.error)
     reportDiagnostic(
       instanceId,
-      lastError instanceof HostGraphChannelError ? lastError.diagnosticState : 'graph-unreachable',
-      { message: lastError instanceof Error ? lastError.message : String(lastError) },
+      firstFetch.error instanceof HostGraphChannelError ? firstFetch.error.diagnosticState : 'graph-unreachable',
+      { message: firstFetch.error instanceof Error ? firstFetch.error.message : String(firstFetch.error) },
       deps.reportDiagnostic,
     )
     return []
   }
-  if (entries === null) return []
-  const rows = toExtraRows(dedupeHostEntries(entries, CHAMBER_COVERED_IDS), basePath)
+  if (firstFetch.rows === null) return []
+  const rows = toExtraRows(dedupeHostEntries(firstFetch.rows, CHAMBER_COVERED_IDS), basePath)
   let restartConflict: ExtraModuleRow | undefined
   let versionConflict: ExtraModuleRow | undefined
-  await Promise.all(rows.map(async (row) => {
+  /** Rows whose FRESH load failed with an ordinary error (not a DOM-script
+   *  timeout): candidates for the single bounded recovery pass below. */
+  const failedRows: { row: ExtraModuleRow; error: unknown }[] = []
+
+  /** Load one row's bundle once (shared-combo discipline). Throws for the
+   *  non-recoverable classes — a DOM-script timeout (its tagged tombstone
+   *  keeps observing the original element's eventual outcome), a failure of
+   *  an already-claimed shared load, and (with `deferOrdinary = false`, the
+   *  recovery pass) an ordinary failure. Ordinary fresh-load failures in the
+   *  FIRST pass are recorded in `failedRows` and resolved by the recovery
+   *  pass instead of failing the boot immediately. */
+  const loadRow = async (row: ExtraModuleRow, deferOrdinary = true): Promise<void> => {
     // A script already executed a factory for this id (the id's combo record
     // is published at preload). A DIFFERENT rev (the combo query carries the
     // rev, so a newer plugin revision means a different script) cannot swap
@@ -493,9 +533,8 @@ export async function collectExtraRows(
       await combo.load
     } catch (error) {
       // 预加载失败不永久标记（见 Map 注释：模块系统不会自取 extra bundle，
-      // 永久标记会把该插件在本页面永久卡死）——删除标记后重抛，本次 boot
-      // 响亮失败，重试 boot 会重新预加载。The combo record is the owner: a
-      // retry installs a NEW record for the same url, so a later catch in
+      // 永久标记会把该插件在本页面永久卡死）。The combo record is the owner:
+      // a retry installs a NEW record for the same url, so a later catch in
       // another waiter of the old promise must not clear the new one.
       const bundleOutcome = error instanceof BundleLoadTimeoutError ? error.bundleOutcome : null
       const clearCombo = (): void => {
@@ -506,8 +545,21 @@ export async function collectExtraRows(
         }
       }
       if (bundleOutcome === null) {
+        // Ordinary failure — records are cleared so a later load of the same
+        // or a newer URL is safe. The FIRST pass defers to the recovery pass
+        // below; a recovery retry (`deferOrdinary = false`) has no further
+        // recovery to defer to and fails loud.
         clearCombo()
+        if (deferOrdinary) {
+          failedRows.push({ row, error })
+        } else {
+          throw error
+        }
       } else {
+        // DOM-script timeout: removing the element does not reliably cancel
+        // its fetch, so leave the tagged tombstone attached and observe the
+        // eventual outcome (late load → success, late error → a later retry
+        // is safe). A timeout is NOT part of the recovery cycle.
         void bundleOutcome.then(
           succeeded => {
             if (preloadedCombos.get(row.url) !== combo) return
@@ -516,22 +568,84 @@ export async function collectExtraRows(
           },
           () => { clearCombo() },
         )
+        reportDiagnostic(instanceId, 'bundle-load-failed', {
+          pluginId: row.id,
+          message: error instanceof Error ? error.message : String(error),
+        }, deps.reportDiagnostic)
+        throw error
       }
-      reportDiagnostic(instanceId, 'bundle-load-failed', {
-        pluginId: row.id,
-        message: error instanceof Error ? error.message : String(error),
-      }, deps.reportDiagnostic)
-      throw error
     }
-  }))
+  }
+  await Promise.all(rows.map(row => loadRow(row)))
+  // Bounded recovery cycle (2026-09 restart-straddle fix, module docstring):
+  // upstream bundle revs are opaque per-process nonces, so an instance
+  // restart between the graph fetch and the bundle loads makes every
+  // not-yet-loaded row 404 on a stale rev. Re-fetch the host graph on the
+  // same retry budget and reload every failed row at its fresh URL (a stale
+  // rev re-resolves; a transient blip gets one more attempt at the same
+  // URL). Only rows that STILL fail — a genuine plugin problem, or the
+  // instance restarted again mid-recovery; a row missing from the fresh
+  // graph was removed mid-boot — fail this boot loud with their (latest)
+  // error. One cycle only: a boot that straddles another restart during
+  // recovery fails loud and the shell's manual retry re-boots cleanly.
+  if (failedRows.length > 0) {
+    const secondFetch = await fetchWithRetry()
+    const keptFailures: { row: ExtraModuleRow; error: unknown }[] = []
+    const recoveredRows: ExtraModuleRow[] = []
+    if (secondFetch.error !== null || secondFetch.rows === null) {
+      // The graph channel failed again (or the 503 budget ran out): no fresh
+      // verdict is available — keep every original failure loud.
+      keptFailures.push(...failedRows)
+    } else {
+      const freshById = new Map(
+        toExtraRows(dedupeHostEntries(secondFetch.rows, CHAMBER_COVERED_IDS), basePath)
+          .map(fresh => [fresh.id, fresh] as const),
+      )
+      for (const failure of failedRows) {
+        const fresh = freshById.get(failure.row.id)
+        if (fresh === undefined) {
+          keptFailures.push(failure)
+          continue
+        }
+        try {
+          // A recovery retry failing ordinary has no further recovery to
+          // defer to — fail loud so the kept-failure set below is exact.
+          await loadRow(fresh, false)
+          recoveredRows.push(fresh)
+        } catch (error) {
+          keptFailures.push({ row: fresh, error })
+        }
+      }
+    }
+    // The recovered rows were loaded at their FRESH urls/revs — surface those
+    // in the returned extra rows (the pass-1 urls died with the old process
+    // generation and must never reach the boot kernel as loadable sources).
+    if (recoveredRows.length > 0) {
+      const recoveredById = new Map(recoveredRows.map(fresh => [fresh.id, fresh] as const))
+      for (let index = 0; index < rows.length; index++) {
+        const fresh = recoveredById.get(rows[index]!.id)
+        if (fresh !== undefined) rows[index] = fresh
+      }
+    }
+    if (keptFailures.length > 0) {
+      for (const failure of keptFailures) {
+        reportDiagnostic(instanceId, 'bundle-load-failed', {
+          pluginId: failure.row.id,
+          message: failure.error instanceof Error ? failure.error.message : String(failure.error),
+        }, deps.reportDiagnostic)
+      }
+      throw keptFailures[0]!.error
+    }
+  }
   if (versionConflict !== undefined) {
     // Cross-instance plugin version drift (design 09 §3.5): a different
     // instance first claimed this id at another rev — the page keeps the
     // first-load-wins factory, and NO restart of the app can switch it
     // (the same first-load-wins claim would re-run). The honest copy names
     // the actual fix: align the two instances' dsh runtimes (or their
-    // installed plugin versions — the rev is a bundle content hash, so
-    // either source can produce the drift), after which the plugin revs
+    // installed plugin versions — a rev is an opaque per-process bundle
+    // revision, so a different dsh runtime generation or content change can
+    // both produce the drift), after which the plugin revs
     // match and the diagnostic disappears.
     const ownerSourceId = preloadedIds.get(versionConflict.id)?.ownerSourceId ?? '—'
     reportDiagnostic(instanceId, 'instance-version-conflict', {

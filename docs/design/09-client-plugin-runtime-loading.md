@@ -238,7 +238,22 @@ dsh 官方 web 的客户端插件链路是完整的（已核 vendor 源码）：
   提供完整官方壳，仅丢失 profile 新装的插件；畸形图响亮报错——错图是 boot 危害，
   不做猜测式合并）；503 `instance_unavailable` 是未就绪预期态，静默（图通道不可达
   时不会伪装成“本实例无额外插件”）。额外 **bundle 加载**失败**不降级**——响亮失败、
-  该实例 boot 报错呈现（坏插件绝不静默消失，§4 fail-loud）。**分层表述（2026-08
+  该实例 boot 报错呈现（坏插件绝不静默消失，§4 fail-loud）。**2026-09 修订
+  （实例重启跨代恢复）**：普通加载失败先经**一轮有界恢复**再响亮失败——上游
+  bundle rev 是**每进程随机 nonce + 行序号**（`dsh-client-modules`
+  `allocateInitialRevision`，非内容哈希），实例每次重启都会令上一进程代的
+  所有 bundle URL 失效；boot 的拉图与 bundle 加载若跨过重启（运行时切换 /
+  restart-dsh / 插件同步重启均为 chamber 常规生命周期），未加载行会以陈旧 rev
+  全部 404。`collectExtraRows` 因而对普通失败行重拉一次宿主图（同一 503 重试
+  预算）并按 fresh URL 重载；仍失败（真插件问题——同 rev 重试也失败，或恢复
+  期间再次重启）才响亮失败。DOM script **超时**不进恢复轮（tombstone 语义
+  不变：迟到 load 收敛成功、迟到 error 允许后续重试）。恢复成功的行以 fresh
+  url/rev 返回 boot 内核（旧代 URL 已死，不得作为可加载源下发）。
+  **根治方向在上游（vendor 只读，登记不修）**：`allocateInitialRevision`
+  改用内容哈希即可让 rev 跨重启稳定、整类 404 消失——激活扫描本就把每个
+  bundle 读入内存（`initialBundleSnapshot`），哈希近乎零成本；chamber 侧
+  恢复轮是约束下的缓解，非根治。
+  **分层表述（2026-08
   精度修订）**："加载"由 chamber 预加载层负责（host-graph.ts `collectExtraRows`
   的 `loadModuleBundle` 失败即 throw → 该实例 boot 响亮失败）；预加载成功后内核
   不再为额外行发起新加载（factory 已注册进共享模块表），故 boot 内核层见到的额外
