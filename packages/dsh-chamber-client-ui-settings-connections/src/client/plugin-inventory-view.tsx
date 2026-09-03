@@ -399,7 +399,9 @@ export function PluginInventoryView({ t, sourceId, label, diagnostic, onRecheckD
       }
       if ('failed' in outcome) {
         const counts = partialCounts(outcome)
-        const partialText = counts === null
+        // 0-done refusals are pure submissions — the error explains itself;
+        // only real partials (≥1 op ran) get the n/m prefix.
+        const partialText = counts === null || counts.done === 0
           ? ''
           : `${t('partialNofM').replace('{done}', String(counts.done)).replace('{total}', String(counts.total))}${t('partialSep')}`
         setManageStatus({ tone: 'error', text: `${partialText}${outcome.failed.error}` })
@@ -520,7 +522,7 @@ export function PluginInventoryView({ t, sourceId, label, diagnostic, onRecheckD
         {driftState === 'drift'
           ? (
             <span
-              className={css.error}
+              className={css.pluginWarn}
               title={`${t('chamberVersionDrift')}: v${localFor} ≠ gateway v${cachedVersion}`}
             >
               {t('chamberVersionDrift')}
@@ -610,11 +612,10 @@ export function PluginInventoryView({ t, sourceId, label, diagnostic, onRecheckD
       const installedRows = installed !== null && installed.ok === true
         ? filterDeniedRows(Object.entries(installed.dependencies).map(([name, spec]) => ({ name, spec }))).allowed
         : []
-      const undoLatest = taskRows === null ? null : undoForLatest(taskRows)
-      const undoReasonKey: SettingsConnectionsKey | null = undoLatest !== null && undoLatest.action === null
-        ? (undoLatest.reason === 'remove-lacks-spec' ? 'undoUnavailableRemove' : 'undoUnavailableNone')
-        : null
-      const undoDisabled = opsBlocked || taskRows === null || undoLatest === null || undoLatest.action === null
+      // Undo mirrors the ssh modal's interaction: disabled only while an op
+      // is in flight (or the journal is still loading); a click with nothing
+      // undoable reveals the reason (undoUnavailable*) in the status line.
+      const undoDisabled = opsBlocked || taskRows === null
       const statusTone = manageStatus?.tone
       return (
         <div className={css.pluginManageSections}>
@@ -625,7 +626,6 @@ export function PluginInventoryView({ t, sourceId, label, diagnostic, onRecheckD
                 variant="ghost"
                 size="sm"
                 disabled={undoDisabled}
-                data-tip={undoDisabled && undoReasonKey !== null ? t(undoReasonKey) : undefined}
                 onClick={requestUndo}
               >
                 {t('undoAvailable')}
@@ -671,8 +671,8 @@ export function PluginInventoryView({ t, sourceId, label, diagnostic, onRecheckD
                                   type="button"
                                   className={css.iconButton}
                                   disabled={opsBlocked}
-                                  data-tip={t('pluginsLocalRemove')}
-                                  aria-label={`${t('pluginsLocalRemove')}: ${row.name}`}
+                                  data-tip={t('pluginsRemoveRow')}
+                                  aria-label={`${t('pluginsRemoveRow')}: ${row.name}`}
                                   onClick={() => { setManageStatus(null); setRemoveTarget(row.name); setRemoveOrigin('row') }}
                                 >
                                   <IconTrashOutline16 />
@@ -730,9 +730,13 @@ export function PluginInventoryView({ t, sourceId, label, diagnostic, onRecheckD
                             : row.status === 'pending'
                               ? <span className={css.dim}>{t('taskPending')}</span>
                               : row.status === 'failed'
-                                ? <span className={css.error} role="alert">{t('taskFailed').replace('{error}', row.error ?? '')}</span>
+                                // Journal rows are a persistent history —
+                                // role=alert would re-announce every failed
+                                // op on each reload/open; the error text stays
+                                // visible inline and zone errors keep alert.
+                                ? <span className={css.error}>{t('taskFailed').replace('{error}', row.error ?? '')}</span>
                                 : row.status === 'blocked'
-                                  ? <span className={css.error} role="alert">{t('taskBlocked').replace('{error}', row.error ?? '')}</span>
+                                  ? <span className={css.error}>{t('taskBlocked').replace('{error}', row.error ?? '')}</span>
                                   : null}
                         </div>
                       ))}

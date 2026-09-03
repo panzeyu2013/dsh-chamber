@@ -456,7 +456,15 @@ export function PluginSyncModal({ t, spec, diagnostic, onRecheckDiagnostic, onCl
           || (undone.restarted === true && undone.ready !== false)
         if (clean) {
           setRemoteListStatus({ tone: 'ok', text: t('undoDone') })
+        } else if (undone.restarted === false) {
+          // Change applied without a restart (e.g. the instance was
+          // stopped) — the same pending-restart shape the gateway undo
+          // reports, not a failure.
+          const note = undone.readyNote === undefined ? '' : ` ${undone.readyNote}`
+          setRemoteListStatus({ tone: 'warn', text: `${t('undoDone')} · ${t('restartNeededHint')}${note}` })
         } else {
+          // A restart ran but the instance did not come back ready — honest
+          // failure surface (its own undoNotEffective copy).
           const note = undone.readyNote === undefined ? '' : ` ${undone.readyNote}`
           setRemoteListStatus({ tone: 'error', text: `${t('undoNotEffective')}${note}` })
         }
@@ -623,7 +631,7 @@ export function PluginSyncModal({ t, spec, diagnostic, onRecheckDiagnostic, onCl
       return <Button variant="ghost" icon={<IconRefreshOutline16 />} onClick={() => { void loadSync(); onRecheckDiagnostic?.() }}>{t('pluginsRetry')}</Button>
     }
     if (phase === 'applying') {
-      return <Button variant="outline" disabled>{t('saving')}</Button>
+      return <Button variant="outline" disabled>{t('busyTasks')}</Button>
     }
     if (phase === 'done') {
       return <Button variant="ghost" icon={<IconRefreshOutline16 />} onClick={() => { void loadSync(); onRecheckDiagnostic?.() }}>{t('pluginsRefresh')}</Button>
@@ -788,7 +796,7 @@ export function PluginSyncModal({ t, spec, diagnostic, onRecheckDiagnostic, onCl
     if (phase === 'applying') {
       return (
         <div className={css.pluginStack}>
-          <p className={css.dim}>{t('saving')}</p>
+          <p className={css.dim}>{t('busyTasks')}</p>
           <p className={css.hint}>{t('pluginsApply')} {changeCount}</p>
         </div>
       )
@@ -899,7 +907,7 @@ export function PluginSyncModal({ t, spec, diagnostic, onRecheckDiagnostic, onCl
                   disabled={restartBusy || seedBusy}
                   onClick={() => { void doRestartNow() }}
                 >
-                  {restartBusy ? t('chamberRestarting') : t('chamberRestart')}
+                  {restartBusy ? t('restartManagedDshBusy') : t('restartApplyInPanel')}
                 </button>
               )
               : null}
@@ -928,7 +936,7 @@ export function PluginSyncModal({ t, spec, diagnostic, onRecheckDiagnostic, onCl
     return (
       <div className={css.pluginStack}>
         {renderChamberBlock()}
-        {profileNotInit ? <p className={css.pluginBanner}>{t('pluginsProfileNotInitialized')}</p> : null}
+        {profileNotInit ? <p className={css.pluginBanner} role="status">{t('pluginsProfileNotInitialized')}</p> : null}
         {total === 0
           ? <p className={css.dim}>{t('pluginsNoThirdParty')}</p>
           : (
@@ -1138,8 +1146,8 @@ export function PluginSyncModal({ t, spec, diagnostic, onRecheckDiagnostic, onCl
                   type="button"
                   className={css.iconButton}
                   disabled={localRemoveBusy || applying}
-                  data-tip={t('pluginsLocalRemove')}
-                  aria-label={`${t('pluginsLocalRemove')}: ${name}`}
+                  data-tip={t('pluginsRemoveRow')}
+                  aria-label={`${t('pluginsRemoveRow')}: ${name}`}
                   onClick={() => { setLocalRemoveTarget(name); setLocalRemoveError(null) }}
                 >
                   <IconTrashOutline16 />
@@ -1176,7 +1184,10 @@ export function PluginSyncModal({ t, spec, diagnostic, onRecheckDiagnostic, onCl
     const statusTone = remoteListStatus?.tone
     return (
       <div className={css.pluginStack}>
-        {profileNotInit ? <p className={css.pluginBanner}>{t('profileAbsentBanner')}</p> : null}
+        {/* ssh backend has no defer/cache surface: an absent profile is
+            auto-created on the next apply — same copy as the sync tab
+            (gateway keeps profileAbsentBanner's cache-intent copy). */}
+        {profileNotInit ? <p className={css.pluginBanner} role="status">{t('pluginsProfileNotInitialized')}</p> : null}
         <div className={css.pluginToolbar}>
           <Button variant="ghost" size="sm" disabled={opsBlocked} onClick={() => { void doUndo() }}>
             {t('undoAvailable')}
@@ -1222,8 +1233,8 @@ export function PluginSyncModal({ t, spec, diagnostic, onRecheckDiagnostic, onCl
                         type="button"
                         className={css.iconButton}
                         disabled={opsBlocked}
-                        data-tip={t('pluginsLocalRemove')}
-                        aria-label={`${t('pluginsLocalRemove')}: ${name}`}
+                        data-tip={t('pluginsRemoveRow')}
+                        aria-label={`${t('pluginsRemoveRow')}: ${name}`}
                         onClick={() => { setRemoteRemoveTarget(name) }}
                       >
                         <IconTrashOutline16 />

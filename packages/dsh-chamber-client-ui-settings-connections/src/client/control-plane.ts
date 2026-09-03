@@ -104,7 +104,9 @@ export const cp = {
 /** The desktop SSH surface, or a loud throw when the bridge is not yet up. */
 function desktopSsh() {
   const surface = window.dshChamber?.desktopSsh
-  if (surface == null) throw new Error('桌面端 SSH 面不可用（desktopSsh 未就绪）')
+  // English verbatim per the unlocalized-error convention (main-process /
+  // capability errors surface as-is in both locales).
+  if (surface == null) throw new Error('The desktop SSH surface is unavailable (desktopSsh not ready)')
   return surface
 }
 

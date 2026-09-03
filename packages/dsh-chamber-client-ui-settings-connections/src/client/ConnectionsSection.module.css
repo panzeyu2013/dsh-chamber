@@ -842,6 +842,10 @@
   background: var(--dsw-alias-bg-layer-2);
 }
 
+/* Zone-title tier shared by every plugin-management section: the chamber
+   injection zone (modal + inventory) AND the installed/tasks manage sections
+   (design 21 Phase 5) reuse the same 12/600 secondary title. Rename
+   candidate: .pluginZoneTitle (no longer chamber-only). */
 .pluginChamberTitle {
   margin: 0;
   font-size: 12px;

@@ -855,7 +855,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
       // current registry. If the
       // deletion did not land, say so instead of a silent no-op.
       if (saved.some(instance => instance.id === pendingDelete.id)) {
-        setOpError(prev => ({ ...prev, [pendingDelete.id]: '删除未生效：主进程拒绝了该变更（连接状态变化或状态目录不可写？）' }))
+        setOpError(prev => ({ ...prev, [pendingDelete.id]: t('deleteNotEffective') }))
       } else {
         clearOpError(pendingDelete.id)
       }
@@ -1547,7 +1547,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                           // aria-label 配对——aria-label = tip（禁用原因或启用态说明）；
                           // 此按钮 tip 恒存在，故恒等于 tip 文案。
                           data-tip={!connected ? t('restartNotConnected') : t('restartManagedDshTip')}
-                          aria-label={!connected ? t('restartNotConnected') : t('restartManagedDshTip')}
+                          aria-label={restartingIds[spec.id] === true ? t('restartManagedDshBusy') : !connected ? t('restartNotConnected') : t('restartManagedDshTip')}
                           disabled={specBusy || !connected || restartingIds[spec.id] === true || startBusyIds[spec.id] === true}
                           onClick={() => { setRestartConfirmFor(spec) }}
                         >
