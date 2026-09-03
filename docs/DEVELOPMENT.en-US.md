@@ -137,6 +137,19 @@ artifacts.
 
 > Windows install slowness/hangs on "Installing" (Windows Defender per-file scanning) — see the README FAQ.
 
+### Windows support matrix (design 21, in progress)
+
+| Area | Status |
+|---|---|
+| Target shape | Windows 11 x64, NSIS packaging (`dist:desktop:win`, must run on Windows) |
+| CI | `test-windows` (windows-2022) contract leg defined in ci.yml; packaging in release.yml `build-windows` |
+| Lifecycle (M1) | win-probes (CIM identity / netstat port / taskkill tree kill) + platform-adaptive reaper/spawn-dsh: code ready, POSIX unit tests green, win32-only integration tests in place |
+| Runtime management (M2a/M2b) | Read-only by default; validation via `DSH_CHAMBER_WINDOWS_RUNTIME_MUTATIONS=1`; M2b UI flip is a discipline gate |
+| Desktop capabilities (M3) | AUMID / tray-candidate convergence / loud preload failure wired; real-machine matrix pending |
+| Decision unlocks (M4) | Login autostart, deep-link registration, open-in local paths, SSH password gate guidance unlocked (code); NSIS uninstall Run-key cleanup include wired |
+| Known limits | Unsigned (SmartScreen); SSH passwords disabled (use keys/Pageant); runtime mutations read-only; 0700/0600 expressed via icacls/ACLs |
+| Authority records | `docs/design/21-windows-support.md`, `docs/progress/todo/windows-v1.md`, `docs/progress/windows-baseline.md` |
+
 ## 5. CI & releases
 
 - `.github/workflows/ci.yml`: runs on every push/PR — validation chain only (frozen install → root/gateway/runtime/two-host-package/client-plugin type checks → i18n → control-plane/runtime/desktop/gateway/renderer/client/host tests, including `test:git` and `test:host-git` → **workflow action-SHA gate** (`release-preflight --actions-only`, since 2026-09) → smoke [SKIPs without a bundled runtime] → renderer/host/desktop sub-builds → gateway pack-and-install smoke [`pack` → temporary prefix install → `gateway --help`]); it **does not produce release artifacts**. Desktop packaging and the real smoke run live in `release.yml` (tag/manual trigger).

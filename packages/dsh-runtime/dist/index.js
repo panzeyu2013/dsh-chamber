@@ -3163,6 +3163,162 @@ var ALLOW_BUILDS = [
   "@deepseek-ai/dsh-subprocess-local"
 ];
 
+// src/windows-process.ts
+import { spawnSync } from "node:child_process";
+var PROBE_TIMEOUT_MS = 1e4;
+var TABLE_CACHE_TTL_MS = 500;
+function assertWindows() {
+  if (process.platform !== "win32") {
+    throw new Error("windows process probes are only available on win32");
+  }
+}
+function execWindowsTool(file, args) {
+  const res = spawnSync(file, args, {
+    encoding: "utf8",
+    timeout: PROBE_TIMEOUT_MS,
+    windowsHide: true,
+    maxBuffer: 4 * 1024 * 1024
+  });
+  if (res.error !== void 0) throw res.error;
+  return { status: res.status, stdout: res.stdout ?? "", stderr: res.stderr ?? "" };
+}
+function parseProcessTable(text) {
+  if (typeof text !== "string" || text.trim() === "") return [];
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return [];
+  }
+  const rows = [];
+  const visit = (value) => {
+    if (Array.isArray(value)) {
+      for (const item of value) visit(item);
+      return;
+    }
+    if (value === null || typeof value !== "object") return;
+    const record = value;
+    const pid = toInt(record.ProcessId);
+    if (pid === null) return;
+    rows.push({ pid, ppid: toInt(record.ParentProcessId) });
+  };
+  visit(parsed);
+  return rows;
+}
+function toInt(value) {
+  if (typeof value === "number" && Number.isInteger(value)) return value;
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Number(value);
+    if (Number.isInteger(parsed)) return parsed;
+  }
+  return null;
+}
+function descendantPidsOf(rows, rootPid) {
+  const childrenOf = /* @__PURE__ */ new Map();
+  for (const row of rows) {
+    if (row.ppid === null || row.ppid === row.pid) continue;
+    const siblings = childrenOf.get(row.ppid);
+    if (siblings === void 0) childrenOf.set(row.ppid, [row.pid]);
+    else siblings.push(row.pid);
+  }
+  const found = [];
+  const seen = /* @__PURE__ */ new Set();
+  const stack = [rootPid];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    for (const child of childrenOf.get(current) ?? []) {
+      if (child === rootPid || seen.has(child)) continue;
+      seen.add(child);
+      found.push(child);
+      stack.push(child);
+    }
+  }
+  return found;
+}
+function taskkillTreeArgs(pid) {
+  return ["/PID", String(pid), "/T", "/F"];
+}
+function classifyTaskkill(status, combined) {
+  if (status === 0) return "signalled";
+  if (/not found|no running instance/i.test(combined)) return "gone";
+  return "error";
+}
+function processTableCommand() {
+  return [
+    "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8",
+    "$rows = @(Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId)",
+    "ConvertTo-Json -InputObject $rows -Compress"
+  ].join("; ");
+}
+function queryWindowsProcessTable() {
+  assertWindows();
+  const now = Date.now();
+  if (tableCache !== null && now - tableCache.at < TABLE_CACHE_TTL_MS) return tableCache.rows;
+  const { status, stdout, stderr } = execWindowsTool("powershell.exe", [
+    "-NoProfile",
+    "-NonInteractive",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-Command",
+    processTableCommand()
+  ]);
+  const rows = status === 0 ? parseProcessTable(stdout) : [];
+  if (rows.length === 0) {
+    throw new Error(`windows CIM process table unavailable (exit ${String(status)}): ${stderr.trim().slice(0, 512) || "empty output"}`);
+  }
+  tableCache = { at: Date.now(), rows };
+  return rows;
+}
+var tableCache = null;
+function hasWindowsDescendants(pid) {
+  assertWindows();
+  let rows;
+  try {
+    rows = queryWindowsProcessTable();
+  } catch {
+    return true;
+  }
+  return descendantPidsOf(rows, pid).length > 0;
+}
+function killWindowsTree(pid) {
+  assertWindows();
+  const { status, stdout, stderr } = execWindowsTool("taskkill.exe", taskkillTreeArgs(pid));
+  let outcome = classifyTaskkill(status, `${stdout}
+${stderr}`);
+  if (outcome === "error") {
+    if (!windowsPidExists(pid)) outcome = "gone";
+    else throw new Error(`taskkill tree ${pid} failed`);
+  }
+  if (outcome === "signalled") return true;
+  return false;
+}
+function windowsPidExists(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    const code = error.code;
+    if (code === "ESRCH") return false;
+    return true;
+  }
+}
+function killWindowsTreeWithResidual(pid) {
+  assertWindows();
+  if (killWindowsTree(pid)) return true;
+  let rows;
+  try {
+    rows = queryWindowsProcessTable();
+  } catch (error) {
+    throw new Error(`taskkill tree ${pid}: leader gone but residual probe unavailable: ${String(error)}`);
+  }
+  const residual = descendantPidsOf(rows, pid);
+  let killedAny = false;
+  for (const childPid of residual) {
+    if (killWindowsTree(childPid)) killedAny = true;
+  }
+  return killedAny;
+}
+
 // src/runtime-installer.ts
 var DEFAULT_INSTALL_TIMEOUT_MS = 10 * 60 * 1e3;
 var INSTALL_TERMINATE_GRACE_MS = 1e3;
@@ -3412,13 +3568,22 @@ var RuntimeInstallerSupervisor = class {
     return this.active.size;
   }
   /** Signal the whole Unix group. ESRCH alone proves that there is no writer;
-   * EPERM means the group is alive but not signalable and must remain fenced. */
+   * EPERM means the group is alive but not signalable and must remain fenced.
+   * On Windows every signal maps to the same bounded taskkill /T /F tree kill
+   * (no POSIX signals exist); a dead leader's residual descendants are killed
+   * individually so a daemonized lifecycle script cannot outlive the reap. */
   sendSignal(tracked, signal) {
     const pid = tracked.pid;
     if (pid === null) return tracked.childClosed ? "quiet" : "alive";
+    if (process.platform === "win32") {
+      try {
+        return killWindowsTreeWithResidual(pid) ? "sent" : "quiet";
+      } catch (error) {
+        throw writerUnsafeError(`runtime installer could not terminate windows child tree (${error.code ?? "unknown error"})`, error);
+      }
+    }
     try {
-      if (process.platform !== "win32") process.kill(-pid, signal);
-      else tracked.child.kill(signal);
+      process.kill(-pid, signal);
       return "sent";
     } catch (error) {
       const code = error.code;
@@ -3428,7 +3593,10 @@ var RuntimeInstallerSupervisor = class {
     }
   }
   /** Probe writer liveness without treating an unknown failure as absence.
-   * `kill(..., 0)` success and EPERM both mean alive; only ESRCH means quiet. */
+   * `kill(..., 0)` success and EPERM both mean alive; only ESRCH means quiet.
+   * On Windows a dead leader is not proof of quiescence: stale ParentProcessId
+   * descendants can keep writing the install tree, so the CIM table is
+   * consulted before reporting quiet (fail closed on probe doubt). */
   processGroupState(tracked) {
     const pid = tracked.pid;
     if (pid === null) return tracked.childClosed ? "quiet" : "alive";
@@ -3437,7 +3605,10 @@ var RuntimeInstallerSupervisor = class {
       return "alive";
     } catch (error) {
       const code = error.code;
-      if (code === "ESRCH") return "quiet";
+      if (code === "ESRCH") {
+        if (process.platform !== "win32") return "quiet";
+        return hasWindowsDescendants(pid) ? "alive" : "quiet";
+      }
       if (code === "EPERM") return "alive";
       throw writerUnsafeError(`runtime installer could not verify child process group (${code ?? "unknown error"})`, error);
     }
@@ -4113,6 +4284,44 @@ import {
 } from "node:fs";
 import { basename as basename5, dirname as dirname3, join as join6, resolve, sep as sep2 } from "node:path";
 import { randomBytes as randomBytes4 } from "node:crypto";
+
+// src/rename-retry.ts
+import { rename as renameFile } from "node:fs/promises";
+var WINDOWS_RENAME_RETRY_DELAYS_MS = [100, 250, 500, 1e3];
+function isTransientWindowsRenameError(error) {
+  const code = error?.code;
+  return code === "EPERM" || code === "EBUSY" || code === "EACCES";
+}
+function delay2(ms) {
+  return new Promise((resolve3) => {
+    setTimeout(resolve3, ms);
+  });
+}
+async function renameWithWindowsRetry(from, to, deps = {}) {
+  const rename2 = deps.renameFn ?? renameFile;
+  const isWindows = deps.isWindows ?? process.platform === "win32";
+  if (!isWindows) {
+    await rename2(from, to);
+    return;
+  }
+  const sleep = deps.sleep ?? delay2;
+  let lastError;
+  for (let attempt = 0; attempt <= WINDOWS_RENAME_RETRY_DELAYS_MS.length; attempt++) {
+    try {
+      await rename2(from, to);
+      return;
+    } catch (error) {
+      lastError = error;
+      if (!isTransientWindowsRenameError(error)) throw error;
+      if (attempt < WINDOWS_RENAME_RETRY_DELAYS_MS.length) {
+        await sleep(WINDOWS_RENAME_RETRY_DELAYS_MS[attempt]);
+      }
+    }
+  }
+  throw lastError;
+}
+
+// src/snapshot-store.ts
 var PRIVATE_DIR_MODE = 448;
 var PRIVATE_FILE_MODE = 384;
 var MAX_RESTORE_MARKER_BYTES = 128 * 1024;
@@ -4461,7 +4670,7 @@ async function snapshotDshHome(baseDir, dshHome, sourceVersion, copyFn = default
     if (sourceState === "unsafe") throw new Error("DSH_HOME \u4E0D\u662F\u5B89\u5168\u7684\u771F\u5B9E\u76EE\u5F55");
     if (sourceState === "directory") await copyFn(dshHome, staging);
     if (ownedDirectoryState(paths.snapshotsDir) !== "directory" || !tightenOwnedDirectory(staging)) throw new Error("\u5FEB\u7167\u6682\u5B58\u76EE\u5F55\u8EAB\u4EFD\u4E0D\u518D\u53EF\u4FE1");
-    await rename(staging, finalPath);
+    await renameWithWindowsRetry(staging, finalPath);
     if (ownedDirectoryState(paths.snapshotsDir) !== "directory" || !tightenOwnedDirectory(finalPath)) throw new Error("\u5FEB\u7167\u53D1\u5E03\u76EE\u5F55\u8EAB\u4EFD\u4E0D\u518D\u53EF\u4FE1");
     return finalPath;
   } catch (error) {
@@ -4588,7 +4797,7 @@ async function runRestoreTransaction(baseDir, dshHome, marker, copyFn, hooks) {
         if (homeState === "missing" && backupState === "missing") return "incomplete";
         if (homeState === "directory") {
           if (!tightenOwnedDirectory(dshHome)) return "incomplete";
-          await rename(dshHome, marker.backupPath);
+          await renameWithWindowsRetry(dshHome, marker.backupPath);
           homeState = ownedDirectoryState(dshHome);
           backupState = ownedDirectoryState(marker.backupPath);
           if (homeState !== "missing" || backupState !== "directory") return "incomplete";
@@ -4607,7 +4816,7 @@ async function runRestoreTransaction(baseDir, dshHome, marker, copyFn, hooks) {
       if (stagingState === "missing" && homeState === "missing") return "incomplete";
       if (stagingState === "directory") {
         if (!tightenOwnedDirectory(marker.stagingPath)) return "incomplete";
-        await rename(marker.stagingPath, dshHome);
+        await renameWithWindowsRetry(marker.stagingPath, dshHome);
         stagingState = ownedDirectoryState(marker.stagingPath);
         homeState = ownedDirectoryState(dshHome);
         if (stagingState !== "missing" || homeState !== "directory") return "incomplete";
@@ -4766,7 +4975,7 @@ async function stashPreRollback(baseDir, dshHome, copyFn = defaultCopy) {
     if (sourceState === "unsafe") throw new Error("DSH_HOME \u4E0D\u662F\u5B89\u5168\u7684\u771F\u5B9E\u76EE\u5F55");
     if (sourceState === "directory") await copyFn(dshHome, staging);
     if (ownedDirectoryState(preRollbackDir) !== "directory" || !tightenOwnedDirectory(staging)) throw new Error("\u56DE\u6EDA\u6682\u5B58\u76EE\u5F55\u8EAB\u4EFD\u4E0D\u518D\u53EF\u4FE1");
-    await rename(staging, dest);
+    await renameWithWindowsRetry(staging, dest);
     if (ownedDirectoryState(preRollbackDir) !== "directory" || !tightenOwnedDirectory(dest)) throw new Error("\u56DE\u6EDA\u6682\u5B58\u53D1\u5E03\u76EE\u5F55\u8EAB\u4EFD\u4E0D\u518D\u53EF\u4FE1");
   } catch (error) {
     await rm(staging, { recursive: true, force: true }).catch(() => {
@@ -5014,7 +5223,7 @@ function fsyncRealDirectory(path, label) {
       fsyncSync2(descriptor);
     } catch (error) {
       const code = error.code;
-      if (process.platform !== "win32" || code !== "EINVAL" && code !== "ENOTSUP") throw error;
+      if (code !== "EINVAL" && code !== "ENOTSUP") throw error;
     }
   } finally {
     if (descriptor !== null) closeSync3(descriptor);

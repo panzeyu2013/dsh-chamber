@@ -24,7 +24,7 @@
  * Groups (all chamber-GLOBAL, owned by the main process chamber-settings.json,
  * never any instance's dsh home — 01 §2 P2):
  * - 启动与关闭: 关闭窗口行为 (windowCloseBehavior: hide-to-tray / quit);
- *   登录自启 (launchAtLogin, mac/linux; win gated off);
+ *   登录自启 (launchAtLogin, darwin/win32/linux — design 21 M4 win32 解锁);
  * - 运行: 保持唤醒 (keepAwake, default off); 退出确认 (quitConfirmation,
  *   2026-08: confirm only while the LOCAL instance runs — remote tunnels
  *   never prompt; update-downloaded exempt);

@@ -357,8 +357,12 @@ test('an identity edit while VS Code launch awaits prevents post-success rendere
 test('packaged protocol registration never persists a cold-start URL as a fixed relaunch arg', () => {
   assert.deepEqual(decideDeepLinkProtocolRegistration({ isPackaged: true, platform: 'linux' }), { action: 'register' })
   assert.deepEqual(decideDeepLinkProtocolRegistration({ isPackaged: true, platform: 'darwin' }), { action: 'register' })
-  assert.deepEqual(decideDeepLinkProtocolRegistration({ isPackaged: true, platform: 'win32' }), { action: 'skip' })
+  // design 21 M4: the win32 v1 gate is lifted — packaged Windows registers the
+  // no-args form too (NSIS `protocols` registry entries, when present, are
+  // the same target; runtime registration is idempotent).
+  assert.deepEqual(decideDeepLinkProtocolRegistration({ isPackaged: true, platform: 'win32' }), { action: 'register' })
   assert.deepEqual(decideDeepLinkProtocolRegistration({ isPackaged: false, platform: 'linux' }), { action: 'skip' })
+  assert.deepEqual(decideDeepLinkProtocolRegistration({ isPackaged: false, platform: 'win32' }), { action: 'skip' })
   // The decision intentionally exposes no executable/args fields: packaged
   // registration always calls Electron's no-args form.
   assert.deepEqual(Object.keys(decideDeepLinkProtocolRegistration({ isPackaged: true, platform: 'linux' })), ['action'])

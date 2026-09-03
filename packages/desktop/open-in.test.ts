@@ -376,3 +376,51 @@ test('invokeOpenPath normalizes Electron resolve/reject without duplicating the 
   )
   assert.deepEqual(result, { ok: false, error: 'open path failed: rejected' })
 })
+
+// design 21 M4: the local instance's workspace lives on the desktop host, so
+// the shared pipeline and the finder provider accept Windows drive/UNC paths
+// for instanceId 'local' (validateLocalPath) while remote dsh paths stay
+// POSIX-only (validateRemotePath).
+test('runOpenInLaunch opens a Windows drive path for the local instance via finder', async () => {
+  const opened: string[] = []
+  const result = await runOpenInLaunch(
+    { appId: 'finder', instanceId: 'local', path: 'C:\\work\\repo' },
+    context({
+      platform: 'win32',
+      stat: async () => ({ kind: 'dir' }),
+      openPath: async (path: string) => { opened.push(path); return null },
+    }),
+  )
+  assert.deepEqual(result, { ok: true })
+  assert.deepEqual(opened, ['C:\\work\\repo'])
+})
+
+test('runOpenInLaunch still accepts POSIX paths for the local instance', async () => {
+  const opened: string[] = []
+  const result = await runOpenInLaunch(
+    { appId: 'finder', instanceId: 'local', path: '/workspace' },
+    context({ openPath: async (path: string) => { opened.push(path); return null } }),
+  )
+  assert.deepEqual(result, { ok: true })
+  assert.deepEqual(opened, ['/workspace'])
+})
+
+test('runOpenInLaunch opens a Windows drive path for the local instance via vscode', async () => {
+  const urls: string[] = []
+  const result = await runOpenInLaunch(
+    { appId: 'vscode', instanceId: 'local', path: 'C:\\work\\repo' },
+    context({ platform: 'win32', openVscodeUrl: async (url: string) => { urls.push(url); return { ok: true } } }),
+  )
+  assert.deepEqual(result, { ok: true })
+  assert.equal(urls.length, 1)
+  assert.match(urls[0], /^vscode:\/\/file\/C:\/work\/repo$/)
+})
+
+test('remote dsh session paths remain POSIX-only (drive paths fail loudly)', async () => {
+  const result = await runOpenInLaunch(
+    { appId: 'vscode', instanceId: 'web-1', path: 'C:\\work\\repo' },
+    context(),
+  )
+  assert.equal(result.ok, false)
+  assert.match((result as { error: string }).error, /leading \//)
+})

@@ -504,7 +504,8 @@ export type WindowCloseBehavior = 'hide-to-tray' | 'quit'
 /** Chamber-global runtime settings (design 14 v1 scope). */
 export interface ChamberSettings {
   windowCloseBehavior: WindowCloseBehavior
-  /** Login autostart (design 14 D6): mac/linux; win gated off in v1. */
+  /** Login autostart (design 14 D6): darwin/win32/linux (win32 = HKCU Run
+   *  key via setLoginItemSettings, design 21 M4). */
   launchAtLogin: boolean
   /** prevent-app-suspension (design 14 D5); default off. */
   keepAwake: boolean
@@ -538,7 +539,7 @@ export interface ChamberNotificationSettings {
 export interface ChamberSettingsStatus {
   settings: ChamberSettings
   supported: {
-    /** false on win32 (v1 gate). */
+    /** True on all shipping platforms (design 21 M4). */
     launchAtLogin: boolean
     /** false when no tray recovery surface exists (dev); macOS always safe. */
     closeToTray: boolean

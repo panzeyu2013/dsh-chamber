@@ -108,11 +108,22 @@
   解锁（07 §3/§4）。设计见 `docs/design/07-models-params.md`。
 - **SSH 密码认证可选增强（05 §8 例外主体已落地）**：一键免密引导与系统
   钥匙串尚未实现；现行 SSH 密码镜像仍是 endpoint-bound 0600 明文文件。
-- **Windows 首版支持暂缓**：detached/进程组/lsof 降级路径仍未形成与 Unix
-  等价的运行时契约；dsh-runtime mutation 与 SSH askpass 密码认证保持只读/
-  禁用门控。Gateway owner-private 目录在 Windows 只验证 real-dir/no-follow/identity
-  并继承 OS ACL：Node 的 mode/chmod 无法诚实证明 POSIX 0700，不能把该让步写成
-  已有等价权限保障。
+- **Windows 首版支持推进中（design 21；台账 `docs/progress/todo/windows-v1.md`，
+  基线 `docs/progress/windows-baseline.md`）**：M0（ci.yml `test-windows` 契约腿）
+  与 M1 生命周期契约（`win-probes.ts`：PowerShell CIM 身份 / netstat 端口 /
+  taskkill 树终止；reaper 与 spawn-dsh 平台自适应接线；win32-only 集成测试）已
+  代码就绪，POSIX 单测绿；M2a 运行时管理后台能力（env 门控
+  `DSH_CHAMBER_WINDOWS_RUNTIME_MUTATIONS=1`、supervisor 树终止、icacls/rename 续作、
+  C16 safeStorage-only）与 M3 代码项（AUMID、托盘候选路径、preload loud 失败）、
+  M4 代码解锁（登录自启 win32、深链打包态注册、open-in 本地盘符路径、NSIS 卸载
+  清理 include、SSH 密码门引导）均已落地（本地纯模块测试全绿）。**外部门禁**：
+  真实 Windows runner 首跑（含 submodule 物化 + junction 建链）、M0.5 上游/NSIS/
+  Defender 实证、M2a 事务矩阵与 M2b UI 翻转（纪律：能力先于开关）、M3/M4 实机
+  矩阵。仍保留的语义事实：detached/进程组/SIGTERM dispose 在 Windows 不可等价
+  （硬终止 + 事务恢复，妥协 F1）；dsh-runtime mutation 与 SSH askpass 密码认证
+  保持只读/禁用门控直至 M2a 验证完成。Gateway owner-private 目录在 Windows 只
+  验证 real-dir/no-follow/identity 并继承 OS ACL（icacls 显式收紧已接线）：
+  Node 的 mode/chmod 无法诚实证明 POSIX 0700，不能把该让步写成已有等价权限保障。
 - **Linux 桌面首版支持（设计 21，2026-12 落地）**：AppImage（x64）发行 + 形态门
   自动更新 + 桌面集成修复已入库（打包配置；updater 形态门——探针按
   AppImageUpdater 真实替换语义校验启动形态/绝对常规文件/父目录可写，2026-12
@@ -175,10 +186,12 @@
 - **Gateway npm 分发延后**：现行正式分发只有 GitHub Release 中的 gateway `.tgz`
   与同名 `.tgz.sha256`；workflow 会 pack、安装到干净前缀并执行 `gateway --help`，
   **不会**执行 npm publish 或维护 dist-tag。是否开放 npm 正式发布需另行决策与门禁。
-- **desktop 打包闭包已知 P2（非阻塞）**：托盘图标存在两个永不命中的候选路径；
-  `dist/**/*.map` 未排除；打包态缺 `dist/preload.cjs` 时回退 `preload.cts` 会
-  SyntaxError，应改为 loud 失败；单独运行 `build:renderer` 会因共享 dist +
-  `emptyOutDir` 清掉其他 desktop 构建产物（完整 `build:desktop` 顺序安全）。
+- **desktop 打包闭包 P2（2026 修复轮已全闭环）**：托盘图标候选路径已收敛（只留
+  extraResources 真实资源）；打包态缺 `dist/preload.cjs` 已改 loud 失败（对话框 +
+  exit(1)，不再静默回退 `preload.cts`）；`dist/**/*.map` 已排除出包；`build:renderer`
+  输出已隔离到 `dist/web`（vite emptyOutDir 只清 web/，不再触碰共享 dist/ 下的
+  preload/control-plane/host 包产物）。打包验证以 CI build:renderer + Desktop
+  build sub-steps 及 release 产物为准。
 - **打包闭包自检（长期建议）**：CI 增加"desktop 主进程传递模块闭包 vs
   `build.files` 清单"机械检查，替代纯手工核对。
 
@@ -188,8 +201,8 @@
   submodule（`ensure-harness-vendor.mjs` 硬校验 submodule HEAD == `harness.commit`
   并断言链接集合 == 锁文件 vendor importer 集合；升级唯一入口
   `scripts/dev/update-vendor.mjs <tag>`）。**剩余验收**：Windows runner 上
-  submodule 物化 + junction 建链（`build-windows` 腿）、CI 真跑（push 后 ci.yml
-  全绿）、release.yml 改动后的 `workflow_dispatch` dry_run 全链验证
+  submodule 物化 + `ensure-harness-vendor.mjs` junction 建链（ci.yml `test-windows`
+  腿即该验收；release `build-windows` 腿同步覆盖）、CI 真跑（push 后 ci.yml 全绿）、release.yml 改动后的 `workflow_dispatch` dry_run 全链验证
   （release-checklist §7b 纪律）。
 - **桌面通知（设计 19）**：自动化主链已完成；剩余 macOS 系统通知权限/
   拒绝行为、点击打开、关窗/托盘/后台三形态与打包态实机验收。
@@ -324,6 +337,9 @@
 - **safeStorage 的诚实回退**：Gateway token/密码优先 safeStorage；OS 加密不可用
   时按用户决策回退 target-bound 0600 明文文件并在非秘密投影/UI 中如实显示，
   不把 plaintext 冒充密文。SSH 密码仍采用 endpoint-bound 0600 明文镜像。
+  **Windows 分支例外（design 21 C16）**：win32 上 DPAPI（safeStorage）不可用时
+  拒绝明文落盘——凭据仅本次会话内存驻留（file=null），每次连接需重录；S22
+  明文兜底仅适用于非 win32 平台（0600 语义在 Windows 不可诚实表达）。
 - **Windows 发布身份让步**：Windows x64 安装包当前未做 Authenticode 签名，
   SmartScreen 提示是已知取舍；update feed 的 sha512 只证明下载完整性，不等价于
   发行者签名。

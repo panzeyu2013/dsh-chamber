@@ -140,3 +140,63 @@ jobs:
           pnpm --filter @dsh-chamber/gateway pack --pack-destination /tmp/dsh-gateway-pack
           npm install --ignore-scripts --prefix /tmp/dsh-gateway-install /tmp/dsh-gateway-pack/*.tgz
           /tmp/dsh-gateway-install/node_modules/.bin/gateway --help
+
+  # Windows contract leg (Windows 首版推进, M0): mirrors the linux test job
+  # for the platform-sensitive suites. This is where the win32-only lifecycle
+  # integration tests run and where the remaining `skip: platform === 'win32'`
+  # points are tracked (docs/progress/windows-baseline.md is the ledger).
+  # Packaging stays in release.yml (build-windows); no smoke/builds here yet.
+  test-windows:
+    runs-on: windows-2022
+    steps:
+      # Normalize BEFORE checkout: actions/checkout materializes the tree with
+      # the runner's global git config — autocrlf would rewrite text files and
+      # make the lockfile diff assertion (below) fail on every run, and
+      # core.symlinks=false would degrade any repository symlink to a plain
+      # file copy.
+      - name: Normalize git autocrlf and symlink handling
+        shell: bash
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.symlinks true
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          # The pinned harness source tree is a git submodule
+          # (vendor/harness-checkout, gitlink == harness.commit). The gitlink
+          # pins an exact commit, so the submodule is materialized at that
+          # commit regardless of clone depth. STATUS.md tracks the remaining
+          # acceptance: submodule materialization + junction link creation on
+          # a real Windows runner (this job IS that acceptance).
+          submodules: true
+      - name: Verify workflow action pins
+        run: node scripts/dev/verify-workflow-action-pins.mjs
+      - uses: pnpm/action-setup@fe02b34f77f8bc703788d5817da081398fad5dd2 # v4.1.0
+        with:
+          version: 11.21.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+          cache: pnpm
+      # Bootstrap the vendor symlink/junction tree BEFORE pnpm install (same
+      # ordering rationale as the linux leg; ensure-harness-vendor.mjs already
+      # creates junctions on win32).
+      - name: Bootstrap vendor tree (verify pin + ensure links)
+        run: node scripts/dev/ensure-harness-vendor.mjs
+      - run: pnpm install --frozen-lockfile
+      - name: Assert lockfile not rewritten
+        run: git diff --exit-code -- pnpm-lock.yaml
+      - name: Type check (tsc + chamber host packages + gateway + runtime)
+        run: |
+          pnpm run typecheck
+          pnpm run typecheck:host-graph
+          pnpm run typecheck:host-git
+          pnpm run typecheck:gateway
+          pnpm run typecheck:runtime
+      - name: Shared runtime core unit tests (packages/dsh-runtime)
+        run: pnpm run test:runtime
+      - name: Control-plane unit tests (win32 lifecycle integration included)
+        run: pnpm run test:control-plane
+      - name: Desktop unit tests (lifecycle / transports / credentials / runtime / native edges)
+        run: pnpm run test:desktop
+      - name: Gateway unit tests (win32 read-only projection included)
+        run: pnpm run test:gateway

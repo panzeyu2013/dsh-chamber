@@ -73,6 +73,7 @@ import {
 } from './private-file.ts'
 import type { Logger } from './types.ts'
 import { ensureInstanceId, isValidInstanceId } from './instance-id.ts'
+import { treeKillWindows } from './win-probes.ts'
 
 /**
  * Default first port attempted for a managed local dsh host (the local
@@ -593,8 +594,11 @@ async function spawnAttempt({
     }),
     stdio: ['ignore', 'pipe', 'pipe'],
     // Own process group: the host outlives a control-plane crash and the
-    // orphan reaper (design 02 §3.4.2) reclaims it.
+    // orphan reaper (design 02 §3.4.2) reclaims it. On Windows a detached
+    // child would otherwise get its own visible console window; windowsHide
+    // keeps the managed host headless (harmless no-op on POSIX).
     detached: true,
+    windowsHide: true,
   })
   // A spawn failure (ENOENT/EACCES/Electron fuse) arrives as an async
   // 'error' event. Attach a listener BEFORE the pid check: if the pid check
@@ -904,11 +908,11 @@ async function spawnAttempt({
 /** Signal the whole process group of a detached child; fall back to the pid. */
 function signalManagedGroup(child: ChildProcess, pid: number, signal: NodeJS.Signals): void {
   if (process.platform === 'win32') {
-    try {
-      child.kill(signal)
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error
-    }
+    // Windows has no POSIX group signals: force-terminate the whole managed
+    // tree with taskkill /T /F (design 02 §5.1 parity work, M1 — win-probes
+    // also reaps residual descendants of an already-dead leader). false
+    // (nothing existed) is the ESRCH equivalent; real failures throw loudly.
+    treeKillWindows(pid)
     return
   }
   try {
@@ -975,8 +979,11 @@ async function waitForManagedGroupExit(child: ChildProcess, timeoutMs: number): 
  * terminateChild's group discipline; the record is removed only after the
  * process is confirmed dead (design 02 §3.3: 注销只在确认进程已退出后) — a
  * child that somehow survives the SIGKILL stays tracked for the orphan reaper.
- * (main's H3 helper; the merged spawnAttempt failure paths use the stronger
- * terminateAndProveQuiet, this remains exported for direct cleanup callers.)
+ * (H3 helper — round-2 audit note: the merged spawnAttempt failure paths use
+ * the stronger terminateAndProveQuiet, and there are currently NO production
+ * callers of this export. Callers MUST await and catch: on Windows a failed
+ * tree kill throws, the pid record is retained (fail closed) and the orphan
+ * reaper is the fallback. Tests cover the POSIX group-kill semantics.)
  */
 export async function killFailedSpawn(stateDir: string, child: ChildProcess): Promise<void> {
   const pid = child.pid

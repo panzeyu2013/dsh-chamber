@@ -384,7 +384,8 @@ dsh 官方 web 的客户端插件链路是完整的（已核 vendor 源码）：
 - **与 STATUS 预留通道的关系**：settings 页 `ns.inject('settings.section')` 通道
   仍可用于后续插件化——本方案是通用客户端插件运行时加载，settings 区只是
   一种座位，两者不冲突（本方案落地后该通道仍可用）。
-- **Windows**：首版暂缓（与「Windows 首版支持暂缓」全局状态一致）。
+- **Windows**：支持推进见 design 21（首版发布未出；插件运行时 win32 验证随 M3/M4
+  实机门禁与 design 21 §8 矩阵）。
 
 ## 7. 相关文档
 

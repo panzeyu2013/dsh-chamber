@@ -296,7 +296,7 @@ ready
       `--profile web` 与 `--port <recordedPort>`（不做 substring 猜测）；
    c. 端口归属：探测该端口的监听 pid == 记录 pid
       （lsof → ss → /proc 三级探测；全部不可用或 port 缺失/非法时 **fail-closed
-      保留不杀**——无法证明归属就不动；Windows：tasklist 镜像名匹配，见 §5）
+      保留不杀**——无法证明归属就不动；Windows 身份判定见 §5.1（CIM 表；tasklist 无父进程信息故不用））
       —— 防 pid 复用：回收的 pid 指向无关进程（哪怕它恰巧也是 dsh）时放行
    d. a/b/c 任一不成立 → 不杀，保留文件；诊断只记 pid/判定，不回显被复用
       pid 的完整命令行（它可能属于无关进程并携带凭据）
@@ -537,11 +537,15 @@ gateway 目标即其入口本身（自带认证边界，17 §5.1/§6）。该形
 
 > 各条目以 5.x 编号供外部引用（STATUS「设计未决」按此引用）。
 
-### 5.1 Windows 路径退化
+### 5.1 Windows 路径退化(→ design 21 M1 已落地为契约)
 
-`detached` 语义、进程组信号、`lsof` 均不可用——
-Windows 上退化为：reaper 仅"owner 死亡 + tasklist 镜像名"判定、终止走
-`taskkill /T` 序列。是否支持 Windows 首版存疑，先以 Unix 为契约目标。
+`detached` 语义、进程组信号、`lsof` 均不可用——Windows 实现见
+`packages/control-plane/src/win-probes.ts`(design 21 M1):身份 = PowerShell CIM
+(命令行/PPID)、端口归属 = netstat、树终止 = `taskkill /T /F` + CIM 残余后代
+清扫;reaper/spawn-dsh 平台自适应接线,全部 fail-closed(不可证即保留/拒绝)。
+残余语义让步(妥协 F1/C6-C8):无 SIGTERM 握手 → 硬终止 + 事务恢复;身份证明
+依赖 PowerShell 与同行权限可读 CommandLine。Windows 契约腿 = ci.yml
+`test-windows`;win32-only 集成测试见 `win32-lifecycle.integration.test.ts`。
 
 ### 5.2 起始端口选择
 

@@ -302,8 +302,9 @@ design 16 文档保留为 OS 深链与 vscode 拉起的契约（§3.4/§5.2/§6.
 
 ## 9. 已知边界与实机验收
 
-- **Windows 盘符路径**：`validateRemotePath` 要求 `/` 开头（POSIX 口径），win32
-  上 finder/vscode-file loud 失败——"Windows 首版暂缓"口径一致，非回归；
+- **Windows 盘符路径**（design 21 M4 已解锁）：本地实例（`instanceId='local'`）的
+  工作区走 `validateLocalPath`（接受盘符/UNC）；远端 dsh 会话路径仍
+  `validateRemotePath` POSIX 口径；win32 实机验收见 design 21 §8；
 - **`showItemInFolder` 为 Electron void API**：同步 throw 已被执行管线归一为 loud
   结果，但 API 不提供 reveal 完成/失败回执；非 macOS 目录的 `openPath` 有完整错误串；
   Darwin 上任意注册扩展/package bit 都可能改变目录的 LaunchServices 分类，因此所有

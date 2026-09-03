@@ -212,10 +212,10 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
 
 - 新设置 `launchAtLogin`（**用户可设**，settings 壳「通用」入口）：登录时自动
   启动 dsh-chamber（**开窗**启动；v1 不做无窗口后台启动）。
-- 实现：macOS `app.setLoginItemSettings({ openAtLogin })`；Linux 写 XDG
-  autostart `.desktop`（对齐 OpenChamber `linux-autostart.mjs` 形态）；
-  **Windows 首版门控**（`supported=false` 置灰并说明，与 STATUS「Windows
-  首版支持暂缓」一致）。
+- 实现：macOS `app.setLoginItemSettings({ openAtLogin })`；Windows 同 API
+  （HKCU Run 键，**design 21 M4 已解锁**；NSIS 卸载段清理 Run 值见
+  `packages/desktop/scripts/nsis-uninstall-cleanup.nsh`）；Linux 写 XDG autostart `.desktop`
+  （对齐 OpenChamber `linux-autostart.mjs` 形态）。
 - `--background` 无窗口后台启动（对齐 OpenChamber `shouldStartInBackground`）
   **v1 明确不做**：登录自启 = 开窗启动；「无窗口常驻」由「关窗到托盘」覆盖。
 

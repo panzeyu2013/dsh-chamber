@@ -3,8 +3,8 @@
  *
  * The single window loads the control plane origin directly
  * (loadURL http://127.0.0.1:<cp.port>/) — one frame, one origin; the
- * control plane serves the built dsh frontend (webDistDir = <pkg>/dist in
- * dev and packaged alike, design 05 §7.1) and proxies every instance over
+ * control plane serves the built dsh frontend (webDistDir = <pkg>/dist/web in
+ * dev and packaged alike — P2-4 renderer/dist isolation — design 05 §7.1) and proxies every instance over
  * /api/i/<id>/*. There are no injected connection adapters anymore: remote
  * instances reach the control plane through registerInstanceTransport /
  * unregisterInstanceTransport (design 03 §2.2), driven by the transport
@@ -41,6 +41,7 @@ import { canonicalizeTransportInstanceInput, type TransportInstanceInput, type T
 import { deleteConnectionTransaction, saveConnectionTransaction, validateDeleteOnlyReplacement, type ConnectionCredentialMutations } from './connection-save.ts';
 import { MAX_SSH_PASSWORD_CHARS, sshProvider, probeClientGraphLive, probeGitWorktreeLive } from './ssh-provider.ts';
 import { cleanupStaleAskpassHelpers, configureSshPasswordStore, getSshPassword, setSshPassword, sshPasswordSupported } from './ssh-provider.ts';
+import { applyWindowsAclTightening } from './win-acl.ts';
 import { configureGatewaySecretStore, configureGatewaySessionProvider, gatewayChamberApplyBatch, gatewayChamberMaterialize, gatewayPasswordValidationError, gatewayProvider, gatewaySecretStorageMode, gatewayTokenValidationError, getGatewayPassword, getGatewayToken, setGatewayPassword, setGatewayToken, setInstanceSecrets, syncGatewayChamberPlugins } from './gateway-provider.ts';
 import type { LocalChamberHostPackage } from './gateway-provider.ts';
 import { getGatewaySyncRegistration, setGatewaySyncRegistration } from './gateway-sync-registry.ts';
@@ -669,22 +670,24 @@ const chamberSettingsFile = (): string => path.join(app.getPath('userData'), 'ch
  * Minimal tray（桌面一体形态的最小托盘：状态 tooltip + 显示/退出菜单）: status
  * tooltip + show/quit menu. Defensive by construction — only created when
  * packaged and an icon resource exists; any failure skips the tray with a
- * log and never blocks startup. The repo ships no icon assets yet, so on a
- * stock checkout this logs the skip reason and does nothing.
+ * log and never blocks startup. The packaged icon resource is icon.png
+ * (extraResources); dev checkouts log the skip reason and do nothing.
  */
 function maybeCreateTray(cp: PlaneHandle) {
   if (!app.isPackaged) {
     console.log('[dsh-chamber] 跳过托盘：开发模式（app.isPackaged=false）');
     return;
   }
+  // 打包闭包 P2（STATUS）：候选路径收敛到真实打包资源 resources/icon.png
+  // （extraResources 将 resources/icon.png 拷入 resources/ 根）；原先的
+  // resourcesPath/icons/tray.png 与 resourcesPath/tray.png 永不随包（两条
+  // 永不命中路径）。未来引入专用托盘图标资产时改这里。
   const candidates = [
-    path.join(process.resourcesPath, 'icons', 'tray.png'),
-    path.join(process.resourcesPath, 'tray.png'),
     path.join(process.resourcesPath, 'icon.png'),
   ];
   const iconPath = candidates.find((candidate) => existsSync(candidate));
   if (iconPath === undefined) {
-    console.warn('[dsh-chamber] 未找到托盘图标资源（resourcesPath/icons/tray.png 等），跳过托盘');
+    console.warn('[dsh-chamber] 未找到托盘图标资源（resourcesPath/icon.png），跳过托盘');
     return;
   }
   try {
@@ -712,14 +715,13 @@ function maybeCreateTray(cp: PlaneHandle) {
 }
 
 /**
- * 深链协议注册（design 16 §4.3）：`app.isPackaged` 门控——开发态注册会把裸
- * Electron 注册成 scheme handler，污染 LaunchServices，与打包版 bundle id
- * （com.dshchamber.desktop）冲突（镜像托盘先例）。win32 首版门控（暂缓一致性，
- * 镜像 ssh 密码 askpass 门控）；打包 Linux/macOS 都使用无 relaunch args 形态——
- * argv[1] 可能正是本次冷启动 URL，绝不能将它固化到后续协议启动；macOS 打包版
- * 另由 electron-builder `protocols` 键自动生成
- * CFBundleURLTypes，此处 setAsDefaultProtocolClient 兜底。失败 loud，绝不
- * 打断启动。
+ * 深链协议注册（design 16 §4.3 / 21 M4）：`app.isPackaged` 门控——开发态注册
+ * 会把裸 Electron 注册成 scheme handler，污染 LaunchServices/注册表，与打包
+ * 版身份冲突（镜像托盘先例）。打包 Linux/macOS/Windows 都使用无 relaunch
+ * args 形态——argv[1] 可能正是本次冷启动 URL，绝不能将它固化到后续协议启动；
+ * macOS 打包版另由 electron-builder `protocols` 键自动生成 CFBundleURLTypes，
+ * Windows NSIS 安装器可能同样写 HKCU\Software\Classes（M0.5 实证项），此处
+ * setAsDefaultProtocolClient 统一兜底（同目标幂等）。失败 loud，绝不打断启动。
  */
 function registerDeepLinkProtocol(): void {
   const decision = decideDeepLinkProtocolRegistration({ isPackaged: app.isPackaged, platform: process.platform });
@@ -960,15 +962,16 @@ function setKeepAwakeActive(enabled: boolean): void {
 
 /**
  * 登录自启（design 14 D6）：macOS setLoginItemSettings；Linux XDG autostart
- * （手写最小 .desktop）；Windows v1 门控（supported=false，调用方不得持久化）。
+ * （手写最小 .desktop）；Windows setLoginItemSettings（HKCU Run 键,design 21
+ * M4 解锁）。卸载残留由 NSIS 卸载段清理（scripts/nsis-uninstall-cleanup.nsh）。
  * 失败 loud 返回 {error}，绝不静默假成功。
  */
 function applyLaunchAtLogin(enabled: boolean): { ok: true } | { ok: false; error: string } {
-  if (process.platform === 'win32') {
-    return { ok: false, error: 'not supported on this platform' };
-  }
   try {
-    if (process.platform === 'darwin') {
+    if (process.platform === 'darwin' || process.platform === 'win32') {
+      // Windows 上 Electron 写入 HKCU\...\Run（当前用户,无需管理员）;路径为
+      // process.execPath(打包态=dsh-chamber.exe)。开发态同样可用,但仅打包
+      // 形态属于产品承诺(design 14 D6 / 21 M4)。
       app.setLoginItemSettings({ openAtLogin: enabled });
       return { ok: true };
     }
@@ -1242,6 +1245,20 @@ function createMainWindow(rendererOrigin: string, fatalOnLoadFailure: boolean): 
   // request handler (2026-08 fix).
   const url = `${rendererOrigin.replace(/\/+$/, '')}/`;
   mainWindowUrl = url;
+  // 打包闭包 P2（STATUS）：沙箱 preload 只接受 build:preload 的编译产物
+  // dist/preload.cjs（纯 CJS，无 TS 类型擦除）。源码 preload.cts 不再是静默
+  // 回退——Electron 在沙箱/CJS 语义下加载 .cts 会 SyntaxError，缺失即 loud
+  // 失败（宁可启动失败也不带病开窗）。
+  const preloadPath = path.join(pkgDir, 'dist', 'preload.cjs');
+  if (!existsSync(preloadPath)) {
+    // 打包闭包 P2:缺失 = 安装/构建回归。必须 loud——dev 终端可见抛错即可,
+    // 但打包态(stderr 不可见)直接 throw 会让用户只见闪退;统一走启动失败
+    // 对话框 + 退出(与 loadURL 失败同 UX,见 fatalOnLoadFailure 路径)。
+    const message = `preload 构建产物缺失：${preloadPath}（先运行 build:preload）`;
+    console.error(`[dsh-chamber] ${message}`);
+    dialog.showErrorBox('dsh-chamber 启动失败', message);
+    app.exit(1);
+  }
   const win = new BrowserWindow({
     width: 1280,
     height: 800,
@@ -1252,11 +1269,7 @@ function createMainWindow(rendererOrigin: string, fatalOnLoadFailure: boolean): 
     // 原生标题栏会随选中会话变化。单 frame 壳的品牌标识恒定，会话名在应用内可见。
     title: 'dsh-chamber',
     webPreferences: {
-      // 沙箱 preload 以纯 CJS 执行（无 TS 类型擦除），统一加载编译产物
-      // dist/preload.cjs（build:preload 生成）；缺省回退源码仅为兜底。
-      preload: existsSync(path.join(pkgDir, 'dist', 'preload.cjs'))
-        ? path.join(pkgDir, 'dist', 'preload.cjs')
-        : path.join(pkgDir, 'preload.cts'),
+      preload: preloadPath,
       contextIsolation: true,
       nodeIntegration: false,
       // Keep Electron's renderer sandbox explicit: this window only needs the
@@ -1561,6 +1574,12 @@ if (!gotTheLock) {
   });
 
   app.whenReady().then(async () => {
+    // Windows toast identity (design 21 M3): native notifications require the
+    // AppUserModelID to match the NSIS-installed shortcut; set it explicitly
+    // so packaged builds bind Action Center reliably. Dev/portable builds
+    // stay best-effort (Electron toasts without a shortcut may be suppressed
+    // by Action Center — documented in design 21 F5). POSIX unaffected.
+    if (process.platform === 'win32') app.setAppUserModelId('com.dshchamber.desktop');
     // 冷启动深链 argv（design 16 §4.2）：macOS argv 含 -psn_ 噪声，防御式扫描
     // （非深链 argv 零副作用、绝不 throw 打断启动）；与 open-url 双触发由去重兜底。
     for (const url of scanDeepLinkUrls(process.argv)) enqueueDeepLink(url);
@@ -1568,7 +1587,13 @@ if (!gotTheLock) {
     const localDshHome = path.join(runtimeBaseDir, 'state', 'dsh-home');
     const runtimeWriterFence = new RuntimeOperationFence();
     const envOverrideActive = Boolean(process.env.DSH_CHAMBER_DSH_PATH);
-    const runtimeManagementSupported = process.platform !== 'win32';
+    // Windows runtime mutations stay read-only until the M2a ability gate is
+    // validated on real win32 runners (design 21 M2a/M2b discipline — 能力先于
+    // 开关): DSH_CHAMBER_WINDOWS_RUNTIME_MUTATIONS=1 is the development-only
+    // opt-in that enables the mutation path for validation; it must never be
+    // on by default, and the UI flip (M2b) waits for the validation record.
+    const runtimeManagementSupported = process.platform !== 'win32'
+      || process.env.DSH_CHAMBER_WINDOWS_RUNTIME_MUTATIONS === '1';
     const bundledVersion = readDshVersion(builtinDshWorkspace);
     const stalePluginWriter = await reapStaleLocalPluginWriters(localDshHome);
     const runtimeBootstrapWriterUnsafe = !stalePluginWriter.ok;
@@ -1664,8 +1689,10 @@ if (!gotTheLock) {
         // quarantined until the full probe verdict opens runtimeStartBlocked.
         canExposeLocal: () => !runtimeStartBlocked,
         // The built dsh frontend (renderer vite output) served by the control
-        // plane (design 05 §3.3): <pkg>/dist in dev and packaged (asar) alike.
-        webDistDir: path.join(pkgDir, 'dist'),
+        // plane (design 05 §3.3): <pkg>/dist/web in dev and packaged (asar)
+        // alike (P2-4 isolation: renderer owns dist/web only; preload.cjs /
+        // control-plane / host packages live beside it in dist/).
+        webDistDir: path.join(pkgDir, 'dist', 'web'),
         // Host-graph package source (design 09 §3.5): the control plane seeds
         // it into the local web profile at start. Dev reads the source tree;
         // the packaged app uses the copy bundled into dist/ by
@@ -1760,7 +1787,8 @@ if (!gotTheLock) {
     if (settingsLoad.notice !== null) console.error(`[dsh-chamber] ${settingsLoad.notice}`);
     chamberSettings = settingsLoad.settings;
     setKeepAwakeActive(chamberSettings.keepAwake);
-    if (process.platform !== 'win32') {
+    // 登录自启 reconcile 覆盖全部三平台（design 21 M4:win32 已解锁）。
+    {
       const loginItemResult = applyLaunchAtLogin(chamberSettings.launchAtLogin);
       if (!loginItemResult.ok) {
         console.warn(`[dsh-chamber] 登录自启 reconcile 失败：${loginItemResult.error}`);
@@ -1885,20 +1913,48 @@ if (!gotTheLock) {
         decrypt: (blob: string) => safeStorage.decryptString(Buffer.from(blob, 'base64')),
       }
       : undefined;
+    // design 21 C16: on Windows, DPAPI (Electron safeStorage) is available in
+    // every interactive session; an unavailable keychain must NEVER silently
+    // fall back to a plaintext mirror whose 0600 cannot be expressed there.
+    // The store is configured memory-only (file null) so credentials survive
+    // only for the session and re-entry is required per connect.
+    const windowsRefusePlaintext = process.platform === 'win32' && gatewaySecretsCrypto === undefined;
     if (gatewaySecretsCrypto === undefined) {
-      // S22 (design 17 §13.4.1): the OS keychain is unavailable — the store
-      // falls back to the documented 0600 plaintext mirror. LOUD registration
-      // (never silent) AND a renderer-visible read-only projection
-      // (instances_get merges secretStorage: 'plaintext') so the settings
-      // page shows the fallback path.
-      console.warn('[dsh-chamber] OS keychain (Electron safeStorage) is unavailable — gateway credentials will be mirrored to the 0600 plaintext file fallback (design 17 §12/S22)');
+      if (windowsRefusePlaintext) {
+        // S22 does not apply on win32: loud refusal instead of the plaintext
+        // fallback (design 17 §12 exception bounded by design 21 C16).
+        console.error('[dsh-chamber] Windows safeStorage (DPAPI) 不可用 — 拒绝明文镜像回退 (design 21 C16)；gateway 凭据仅本次会话内存驻留，每次连接需重录');
+      } else {
+        // S22 (design 17 §13.4.1): the OS keychain is unavailable — the store
+        // falls back to the documented 0600 plaintext mirror. LOUD registration
+        // (never silent) AND a renderer-visible read-only projection
+        // (instances_get merges secretStorage: 'plaintext') so the settings
+        // page shows the fallback path.
+        console.warn('[dsh-chamber] OS keychain (Electron safeStorage) is unavailable — gateway credentials will be mirrored to the 0600 plaintext file fallback (design 17 §12/S22)');
+      }
     }
     const gatewaySecretNotice = configureGatewaySecretStore(
-      path.join(app.getPath('userData'), 'gateway-secrets.json'),
+      windowsRefusePlaintext ? null : path.join(app.getPath('userData'), 'gateway-secrets.json'),
       gatewaySecretsCrypto,
       resolveCredentialSpec,
     );
     if (gatewaySecretNotice !== null) console.error(`[dsh-chamber] gateway secrets store: ${gatewaySecretNotice}`);
+    // Windows privacy tightening (design 21 M2a / C1): POSIX 0700/0600 has no
+    // Windows equivalent, so the owner-private state root and any pre-existing
+    // secret leaves are given explicit user-only ACLs at startup. Directory
+    // grants propagate (OI)(CI) to future children. Failures are loud and
+    // never block startup; POSIX hosts are unaffected (win32-gated executor).
+    if (process.platform === 'win32') {
+      const aclErrors = applyWindowsAclTightening([
+        { path: runtimeBaseDir, kind: 'directory' },
+        { path: path.join(runtimeBaseDir, 'state'), kind: 'directory' },
+        { path: path.join(runtimeBaseDir, 'ssh-passwords.json'), kind: 'file' },
+        { path: path.join(runtimeBaseDir, 'gateway-secrets.json'), kind: 'file' },
+        { path: chamberSettingsFile(), kind: 'file' },
+        { path: path.join(runtimeBaseDir, 'audit-log.jsonl'), kind: 'file' },
+      ]);
+      for (const aclError of aclErrors) console.error(`[dsh-chamber] windows ACL tightening failed: ${aclError}`);
+    }
     // Gateway password-session manager (design 17 §7.1/§9.3): the login
     // exchange (POST /auth/login → 3xx + dsh_gateway_session cookie) and the
     // 12h session cookie live ONLY in this manager's main-process memory,
@@ -2731,7 +2787,9 @@ if (!gotTheLock) {
           return refuse(`SSH password is limited to ${MAX_SSH_PASSWORD_CHARS} characters`);
         }
         if (!sshPasswordSupported()) {
-          return refuse('SSH password auth is not supported on this platform yet — use a key or ssh-agent');
+          // design 21 C15: Windows 密码认证不可用(askpass 需 PE 可执行)——门控
+          // 拒绝并给出主路径引导(密钥 / ssh-agent / Pageant)。
+          return refuse('SSH password auth is not supported on Windows yet — use a key or ssh-agent (Pageant) instead');
         }
       }
       const tokenError = gatewayTokenValidationError(gatewayToken ?? null);

@@ -24,6 +24,7 @@ import {
 } from 'node:fs'
 import { basename, dirname, join, resolve, sep } from 'node:path'
 import { randomBytes } from 'node:crypto'
+import { renameWithWindowsRetry } from './rename-retry.ts'
 import { assertSafeVersion, isSafeVersion } from './version-safety.ts'
 
 const PRIVATE_DIR_MODE = 0o700
@@ -547,7 +548,9 @@ export async function snapshotDshHome(
     if (sourceState === 'directory') await copyFn(dshHome, staging)
     if (ownedDirectoryState(paths.snapshotsDir) !== 'directory'
       || !tightenOwnedDirectory(staging)) throw new Error('快照暂存目录身份不再可信')
-    await rename(staging, finalPath)
+    // Directory publish: bounded Windows retry absorbs third-party handle
+    // occupancy (Defender/indexer/Explorer); POSIX is a plain rename.
+    await renameWithWindowsRetry(staging, finalPath)
     if (ownedDirectoryState(paths.snapshotsDir) !== 'directory'
       || !tightenOwnedDirectory(finalPath)) throw new Error('快照发布目录身份不再可信')
     return finalPath
@@ -707,7 +710,7 @@ async function runRestoreTransaction(
         if (homeState === 'missing' && backupState === 'missing') return 'incomplete'
         if (homeState === 'directory') {
           if (!tightenOwnedDirectory(dshHome)) return 'incomplete'
-          await rename(dshHome, marker.backupPath)
+          await renameWithWindowsRetry(dshHome, marker.backupPath)
           homeState = ownedDirectoryState(dshHome)
           backupState = ownedDirectoryState(marker.backupPath)
           if (homeState !== 'missing' || backupState !== 'directory') return 'incomplete'
@@ -728,7 +731,7 @@ async function runRestoreTransaction(
       if (stagingState === 'missing' && homeState === 'missing') return 'incomplete'
       if (stagingState === 'directory') {
         if (!tightenOwnedDirectory(marker.stagingPath)) return 'incomplete'
-        await rename(marker.stagingPath, dshHome)
+        await renameWithWindowsRetry(marker.stagingPath, dshHome)
         stagingState = ownedDirectoryState(marker.stagingPath)
         homeState = ownedDirectoryState(dshHome)
         if (stagingState !== 'missing' || homeState !== 'directory') return 'incomplete'
@@ -969,7 +972,7 @@ export async function stashPreRollback(
     if (sourceState === 'directory') await copyFn(dshHome, staging)
     if (ownedDirectoryState(preRollbackDir) !== 'directory'
       || !tightenOwnedDirectory(staging)) throw new Error('回滚暂存目录身份不再可信')
-    await rename(staging, dest)
+    await renameWithWindowsRetry(staging, dest)
     if (ownedDirectoryState(preRollbackDir) !== 'directory'
       || !tightenOwnedDirectory(dest)) throw new Error('回滚暂存发布目录身份不再可信')
   } catch (error) {
