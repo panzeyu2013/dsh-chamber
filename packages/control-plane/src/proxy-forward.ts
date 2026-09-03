@@ -22,6 +22,7 @@
 import { request as httpRequest } from 'node:http'
 import { request as httpsRequest } from 'node:https'
 import type { ClientRequest, IncomingMessage } from 'node:http'
+import type { Socket } from 'node:net'
 import type { TLSSocket } from 'node:tls'
 import { createHash, X509Certificate } from 'node:crypto'
 import type { Duplex } from 'node:stream'
@@ -108,6 +109,12 @@ export function attachSpkiPinVerifier(req: ClientRequest, pin: string, dispatch:
 /** Response body cap for non-SSE responses (design 03 §3.4; aligned with the upstream dsh 0.1.2-alpha.4 300MiB request cap / 200MiB image admission). */
 export const MAX_RESPONSE_BODY_BYTES = 300 * 1024 * 1024
 
+/** HTML-document injection budget (S0): an upstream text/html response is
+ * buffered for the owner's injector only when it is at most this large
+ * (declared or actual). The gateway's html-inject.ts HTML_INJECT_MAX_BYTES
+ * must stay equal — control-plane cannot import the gateway package. */
+export const MAX_HTML_INJECTION_BYTES = 64 * 1024
+
 /** Shared memory budget plus per-proxy concurrency defaults. The byte budget
  * is enforced process-wide across instance-proxy and gateway-proxy owners. */
 export const MAX_BUFFERED_REQUEST_BYTES = 300 * 1024 * 1024
@@ -147,25 +154,35 @@ export const CLIENT_BODY_IDLE_TIMEOUT_MS = 30_000
 
 /**
  * WebSocket heartbeat (design 14 extension — sleep/wake stuck-deep-diving
- * fix): ping cadence for the spliced event downlinks. The events streams are
- * downlink-only with no heartbeat from either side, so the BROWSER leg of the
- * splice can silently die (half-open TCP after an OS sleep/wake) without any
- * 'error'/'close' firing — the splice would hold forever while the browser's
- * pump stays "connected" but blind. The proxy pings the browser; after
- * `WS_PING_MISSES_BEFORE_TEARDOWN` cycles without a pong, the splice is torn
- * down so the browser's WebSocket closes and the renderer pump reconnects
- * (fresh stream → host baseline replay → UI re-sync).
+ * fix): ping cadence for the spliced mux downstream. 0.1.2 FACT CORRECTION:
+ * the original motivation was the 0.1.1 events.mux/events.host downlinks
+ * (downlink-only, no heartbeat from either side); the 0.1.2 `/api/remote.mux`
+ * host pings every downstream every `websocketHeartbeatIntervalMs` (default
+ * 2s) and terminates after two missed pongs (~6s, see ws-heartbeat.ts), so
+ * this proxy-side BROWSER-leg ping is now a REDUNDANT FALLBACK for the
+ * sleep/wake case: the host heartbeat cannot guard the browser leg across an
+ * OS sleep/wake (its pings simply fail during sleep), where the half-open
+ * browser leg may fire no 'error'/'close' — the splice would hold forever
+ * while the browser's pump stays "connected" but blind. The proxy pings the
+ * browser; after `WS_PING_MISSES_BEFORE_TEARDOWN` cycles without a pong, the
+ * splice is torn down so the browser's WebSocket closes and the renderer
+ * pump reconnects (fresh stream → host baseline replay → UI re-sync).
  *
  * Values follow the canonical `ws` README heartbeat example (30s interval,
  * one unanswered ping cycle → terminate): the pong round-trip is loopback, so
  * a full cycle without one is a real death, not scheduler noise.
  *
- * The UPSTREAM (host) leg deliberately has no heartbeat: its death is covered
- * by SSH keepalive for remote tunnels (`ServerAliveInterval=30 × CountMax=3`
- * ≈ 90s, ssh-provider), socket 'error'/'close' for local host death/restart,
- * and the host's own send-failure close. A proxy-side upstream ping would
- * only race SSH keepalive into a reconnect flap against a half-open tunnel
+ * The UPSTREAM (host) leg deliberately has no APPLICATION heartbeat: its
+ * death is covered by SSH keepalive for remote tunnels
+ * (`ServerAliveInterval=30 × CountMax=3` ≈ 90s, ssh-provider), socket
+ * 'error'/'close' for local host death/restart, the host's own send-failure
+ * close, and — for direct-http targets only — the S2 OS-level TCP keepalive
+ * (instance-proxy passes tcpKeepAliveMs; initial idle 30s, OS-default probes,
+ * see instance-proxy.ts). A proxy-side upstream APPLICATION ping would only
+ * race SSH keepalive into a reconnect flap against a half-open tunnel
  * (strict tolerance) or fire later than it (lenient tolerance — useless).
+ * (The 30s values of TCP keepalive idle / WS_PING / ServerAlive coincide;
+ * rationales differ — do not merge them.)
  */
 export const WS_PING_INTERVAL_MS = 30_000
 
@@ -362,6 +379,21 @@ export interface ProxyForwardDeps {
   wsPingIntervalMs: number
   /** Consecutive ping cycles without a browser pong before the splice is torn down. */
   wsPingMissesBeforeTeardown: number
+  /**
+   * Optional OS-level TCP keepalive for the UPSTREAM leg of a spliced
+   * WebSocket, armed before the splice (S2 sidebar-stability patch). Only a
+   * direct-http target enables it: the upstream leg deliberately has no
+   * application heartbeat (see the WS_PING_* notes) — an ssh-tunneled target
+   * is covered by ssh keepalive, but a direct http(s) target has no such
+   * coverage, so an idle half-open connection (NAT/proxy GC) would freeze
+   * the stream with no 'error'/'close' ever firing. instance-proxy passes
+   * the value for any NON-loopback resolved target (the desktop's direct
+   * http(s) shape — gateway-kind and dsh-kind alike, discriminated by the
+   * upstream host, not the source-id kind);
+   * `undefined` (the default — local, ssh-tunneled and gateway-proxy
+   * splices) keeps the documented no-heartbeat design untouched.
+   */
+  readonly tcpKeepAliveMs?: number
   maxBufferedRequestBytes: number
   /**
    * Browser-visible prefix for an attached instance. Same-origin upstream
@@ -373,6 +405,17 @@ export interface ProxyForwardDeps {
    * passthrough default for owners without a mounted prefix.
    */
   responseBasePath?: string
+  /**
+   * Optional HTML-document trust injector (S0): when set, an unencoded
+   * `text/html` response no larger than MAX_HTML_INJECTION_BYTES is buffered
+   * whole and rewritten through this seam before it reaches the browser —
+   * the gateway uses it to declare the proxied official dsh frontend
+   * host-owned (`__DSH_TRANSPORT__.ownsHost`, gateway html-inject.ts).
+   * Return the replacement document, or null to forward the body untouched.
+   * `undefined` (the control-plane default) keeps the plain streaming
+   * passthrough byte for byte.
+   */
+  readonly injectHtmlDocument?: (html: string) => string | null
   /**
    * Live spliced WS streams (downstream browser leg + upstream host leg),
    * shared with the owner so its stop() can force-close them: an upgraded
@@ -826,11 +869,46 @@ export async function forwardHttp(req: ProxyRequest, res: ProxyResponse, target:
     if (!isSse && Number.isFinite(declaredBytes)) headers['content-length'] = String(declaredBytes)
     const corsHeaders = { ...(res._corsHeaders ?? {}) }
     mergeVary(headers, corsHeaders)
-    res.writeHead(upstreamRes.statusCode ?? 502, { ...headers, ...corsHeaders })
-    // Headers are out: a stalled non-SSE body gets the same explicit
-    // teardown (headersSent=true → destroy, the browser sees the stream cut).
+    const responseHeaders = { ...headers, ...corsHeaders }
+    const responseStatus = upstreamRes.statusCode ?? 502
+    // HTML trust-injection seam (S0, gateway html-inject.ts): when the owner
+    // configured an injector, a small unencoded text/html response is
+    // buffered whole so the document can be rewritten before it reaches the
+    // browser. writeHead is deferred for that case — Node's ServerResponse
+    // rejects setHeader() after writeHead() (ERR_HTTP_HEADERS_SENT), so an
+    // injected content-length can only go out with the final headers. Every
+    // other response (and every response when no injector is configured —
+    // the control-plane default) keeps the immediate passthrough writeHead
+    // below, byte for byte. SSE never enters this path.
+    const injectHtmlDocument = deps.injectHtmlDocument
+    const contentEncoding = upstreamRes.headers['content-encoding']
+    const htmlInjectable = injectHtmlDocument !== undefined && !isSse
+      && contentType.startsWith('text/html')
+      && (contentEncoding === undefined || String(contentEncoding).toLowerCase() === 'identity')
+      && (!Number.isFinite(declaredBytes) || declaredBytes <= MAX_HTML_INJECTION_BYTES)
+    if (!htmlInjectable) res.writeHead(responseStatus, responseHeaders)
+    // Headers are out (or held back only for a small htmlInjectable body): a
+    // stalled non-SSE body gets the same explicit teardown (headersSent=true
+    // → destroy, the browser sees the stream cut).
     if (!isSse) clearUpstreamTimeout = armUpstreamTimeout(deps, counters, logger, timeoutAbort)
     let received = 0
+    // Buffered htmlInjectable body ([] = still accumulating, null = flushed
+    // or never eligible). The buffer is capped at MAX_HTML_INJECTION_BYTES;
+    // exceeding it falls back to the byte-exact streaming passthrough.
+    let htmlChunks: Buffer[] | null = htmlInjectable ? [] : null
+    let htmlBytes = 0
+    let htmlHeadSent = !htmlInjectable
+    const sendHtmlHead = (): void => {
+      if (htmlHeadSent) return
+      htmlHeadSent = true
+      res.writeHead(responseStatus, responseHeaders)
+    }
+    const writeChunk = (chunk: Buffer): void => {
+      if (!res.write(chunk)) {
+        upstreamRes.pause()
+        void waitForDrain(res).then(() => upstreamRes.resume())
+      }
+    }
     upstreamRes.on('data', (chunk: Buffer) => {
       // This is an IDLE timeout, not a total-duration deadline. Every body
       // chunk proves progress and starts a fresh idle window.
@@ -852,10 +930,23 @@ export async function forwardHttp(req: ProxyRequest, res: ProxyResponse, target:
         else res.destroy()
         return
       }
-      if (!res.write(chunk)) {
-        upstreamRes.pause()
-        void waitForDrain(res).then(() => upstreamRes.resume())
+      if (htmlChunks !== null) {
+        if (htmlBytes + chunk.length <= MAX_HTML_INJECTION_BYTES) {
+          htmlChunks.push(chunk)
+          htmlBytes += chunk.length
+          return
+        }
+        // Over budget: the document cannot be rewritten. Send the headers
+        // with the upstream content-length — every byte below is forwarded
+        // unchanged, so the declared length stays truthful — and fall back
+        // to the plain streaming passthrough for the buffered + remaining
+        // bytes.
+        sendHtmlHead()
+        for (const buffered of htmlChunks) res.write(buffered)
+        htmlChunks = null
+        htmlBytes = 0
       }
+      writeChunk(chunk)
     })
     upstreamRes.on('error', () => {
       clearTimeoutGuards()
@@ -876,6 +967,37 @@ export async function forwardHttp(req: ProxyRequest, res: ProxyResponse, target:
       releaseRequest()
       responseEnded = true
       cleanupClientListeners()
+      if (htmlChunks === null) {
+        res.end()
+        return
+      }
+      // The whole small htmlInjectable document is buffered: hand it to the
+      // owner's injector, then emit the final headers + body in one
+      // writeHead/end pair so content-length matches what is actually sent.
+      const buffered = htmlChunks
+      htmlChunks = null
+      const html = Buffer.concat(buffered, htmlBytes).toString('utf8')
+      let injected: string | null = null
+      if (injectHtmlDocument !== undefined) {
+        try {
+          injected = injectHtmlDocument(html)
+        } catch (injectError) {
+          // Fail-soft: an injector throwing must never break the request
+          // (this runs inside an event listener — an uncaught throw would
+          // crash the process). The original document is forwarded instead.
+          logger.warn(`${deps.logPrefix}: html document injection failed: ${String(injectError)}`)
+        }
+      }
+      if (injected !== null) {
+        // The declaration is pure ASCII, but the document may not be: use
+        // the byte length for the rewritten content-length.
+        if (Number.isFinite(declaredBytes)) responseHeaders['content-length'] = String(Buffer.byteLength(injected))
+        sendHtmlHead()
+        res.end(injected)
+        return
+      }
+      sendHtmlHead()
+      for (const bufferedChunk of buffered) res.write(bufferedChunk)
       res.end()
     })
   })
@@ -1054,6 +1176,19 @@ export async function forwardUpgrade(req: ProxyRequest, socket: ProxySocket, hea
     // Client head bytes (pre-sent frame data, RFC 6455 pipelining) flow to
     // the upstream socket only after the upstream accepted the upgrade.
     if (head.length > 0) upstreamSocket.write(head)
+    // chamber patch (S2): OS-level TCP keepalive for the upstream leg of a
+    // direct-http target, armed before the splice. Only owners that opted in
+    // (instance-proxy passes tcpKeepAliveMs for NON-loopback resolved targets
+    // — direct http(s), whatever the source-id kind) hit
+    // this: ssh tunnels already have ssh keepalive covering the leg, so the
+    // local/ssh splices keep the documented no-heartbeat design (see the
+    // WS_PING_* comment above) — a direct http(s) leg has no such coverage
+    // and would otherwise freeze silently on a half-open connection.
+    if (deps.tcpKeepAliveMs !== undefined) {
+      // The upgrade socket is a net.Socket at runtime (node:http types it as
+      // Duplex); setKeepAlive is the net.Socket surface used here.
+      ;(upstreamSocket as Socket).setKeepAlive(true, deps.tcpKeepAliveMs)
+    }
     // Socket splice: downstream ↔ upstream; either closing tears both.
     upstreamSocket.pipe(socket as never)
     socket.pipe(upstreamSocket as never)

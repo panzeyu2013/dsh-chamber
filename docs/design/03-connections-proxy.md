@@ -305,6 +305,13 @@ WS   /api/i/<id>/api/events.host   → 实例 WS  /api/events.host
   与 `ws` README 官方心跳示例对齐）；PongScanner 被动扫描、不消费字节；
   上游（宿主）腿刻意无心跳（活性由 SSH keepalive / socket error 覆盖）——
   契约与参数见 14-sleep-background.md D4 扩展与 `ws-frames.ts`/`ws-heartbeat.ts`。
+  **直连腿例外（S2，2026-09）**：对**非 loopback 上游**（direct-http(s)
+  目标，判别轴为解析后 baseUrl 的 host，含 gateway 与 dsh 两种 kind）经
+  `instance-proxy` 启用 OS 级 TCP keepalive（初始空闲 30s；
+  `tcpKeepAliveMsForUpstream`）——ssh 隧道腿恒为 loopback（由 ssh keepalive
+  覆盖）、本地腿不受影响；应用层上游心跳仍不存在（TCP keepalive 是内核
+  层惰性探测；另注意 0.1.2 宿主侧 mux 自带 2s/2miss 心跳，见 14 D4 注，
+  三者 30s 数值同值属巧合、理由各异，勿合并）。
 - 写路径背压（Node 双流适配，`res.write === false → waitForDrain`）；
   浏览器断连 → abort 上游（不泄漏 socket / 流资源）。
 

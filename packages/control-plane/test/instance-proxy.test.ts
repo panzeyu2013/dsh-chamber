@@ -18,6 +18,8 @@ import {
   createInstanceProxy,
   parseInstanceId,
   parseInstancePath,
+  tcpKeepAliveMsForUpstream,
+  isLoopbackUpstreamBaseUrl,
   MAX_REQUEST_BODY_BYTES,
   getProcessBufferedRequestBytes,
 } from '../src/instance-proxy.ts'
@@ -74,6 +76,13 @@ function fakeHttpRequest(handler: (url: URL, options: any) => UpstreamBehavior |
         upstreamSocket.write = () => true
         upstreamSocket.pipe = (target: unknown) => target
         upstreamSocket.destroy = () => {}
+        // S2: NON-loopback (direct-http) splices arm OS-level TCP keepalive
+        // on the upstream leg — real node sockets carry net.Socket.setKeepAlive;
+        // record the configuration here so wiring tests can assert it.
+        upstreamSocket.keepAliveCalls = []
+        upstreamSocket.setKeepAlive = (enable: boolean, delay?: number) => {
+          upstreamSocket.keepAliveCalls.push({ enable, delay })
+        }
         req.emit('upgrade', upstreamRes, upstreamSocket, behavior.upgrade.head ?? Buffer.alloc(0))
         return
       }
@@ -213,6 +222,39 @@ test('parseInstanceId: dsh-<id> and gateway-<id> map to their kinds; ssh-<id> is
   assert.equal(parseInstanceId('local'), 'local')
   assert.equal(parseInstanceId('other'), null)
   assert.equal(parseInstanceId('ssh-'), null)
+})
+
+test('tcpKeepAliveMsForUpstream: non-loopback upstreams get the direct-http TCP keepalive cadence', () => {
+  // S2: a non-loopback upstream is the desktop's direct-http(s) shape (the
+  // id kind cannot see the transport dimension, the resolved target can) —
+  // no ssh keepalive covers its upstream WS leg, so the proxy arms OS-level
+  // TCP keepalive. gateway-kind AND dsh-kind direct targets both qualify.
+  assert.equal(tcpKeepAliveMsForUpstream('http://192.168.110.172:30801'), 30_000)
+  assert.equal(tcpKeepAliveMsForUpstream('https://dsh.example.com:8443'), 30_000)
+  assert.equal(tcpKeepAliveMsForUpstream('http://10.0.0.7:30800'), 30_000)
+})
+
+test('tcpKeepAliveMsForUpstream: loopback upstreams (ssh tunnels / local) stay keepalive-free', () => {
+  // ssh tunnels resolve to loopback base URLs (ssh keepalive covers them),
+  // loopback (local) legs cannot die half-open, and unparseable targets fail
+  // toward no keepalive — all keep the documented no-heartbeat upstream
+  // design (design 03 §3.4).
+  assert.equal(tcpKeepAliveMsForUpstream('http://127.0.0.1:56001'), undefined)
+  assert.equal(tcpKeepAliveMsForUpstream('http://localhost:56001'), undefined)
+  assert.equal(tcpKeepAliveMsForUpstream('http://[::1]:56001'), undefined)
+  assert.equal(tcpKeepAliveMsForUpstream('http://127.8.8.8:30800'), undefined)
+  assert.equal(tcpKeepAliveMsForUpstream('not a url'), undefined)
+  assert.equal(tcpKeepAliveMsForUpstream(''), undefined)
+})
+
+test('isLoopbackUpstreamBaseUrl: loopback spellings and malformed targets', () => {
+  assert.equal(isLoopbackUpstreamBaseUrl('http://127.0.0.1:1'), true)
+  assert.equal(isLoopbackUpstreamBaseUrl('http://localhost:1'), true)
+  assert.equal(isLoopbackUpstreamBaseUrl('http://[::1]:1'), true)
+  assert.equal(isLoopbackUpstreamBaseUrl('http://[::ffff:127.0.0.1]:1'), true) // IPv4-mapped IPv6 loopback
+  assert.equal(isLoopbackUpstreamBaseUrl('http://::1:1'), true) // unbracketed → invalid URL → loopback fail-safe
+  assert.equal(isLoopbackUpstreamBaseUrl('http://192.168.110.172:30801'), false)
+  assert.equal(isLoopbackUpstreamBaseUrl('nonsense'), true)
 })
 
 // ---------------------------------------------------------------------------
@@ -725,6 +767,104 @@ test('upgrade: only the remote.mux stream path forwards; other WS paths answer 4
   assert.match(other.written, /404/)
   assert.ok(other.closed)
   assert.equal(upstream.calls.length, 2)
+})
+
+// ---------------------------------------------------------------------------
+// S2: upstream-leg TCP keepalive (direct-http liveness)
+// ---------------------------------------------------------------------------
+
+/** An upgrade factory exposing every spliced upstream socket with its
+ * TCP-keepalive configuration (S2: net.Socket.setKeepAlive recording). */
+function keepAliveUpgradeFactory() {
+  const upstreamSockets: any[] = []
+  const fn: any = () => {
+    const req = new EventEmitter() as any
+    req.write = () => true
+    req.end = () => {
+      const upstreamRes = new EventEmitter() as any
+      upstreamRes.statusCode = 101
+      upstreamRes.headers = { upgrade: 'websocket', connection: 'Upgrade' }
+      const upstreamSocket = new EventEmitter() as any
+      upstreamSocket.write = () => true
+      upstreamSocket.destroy = () => { upstreamSocket.destroyed = true }
+      upstreamSocket.pipe = (target: unknown) => target
+      upstreamSocket.keepAliveCalls = []
+      upstreamSocket.setKeepAlive = (enable: boolean, delay?: number) => {
+        upstreamSocket.keepAliveCalls.push({ enable, delay })
+      }
+      upstreamSockets.push(upstreamSocket)
+      req.emit('upgrade', upstreamRes, upstreamSocket, Buffer.alloc(0))
+    }
+    return req
+  }
+  return { fn, upstreamSockets }
+}
+
+test('S2: a gateway-<id> WS upgrade arms TCP keepalive on the upstream leg before the splice', async () => {
+  // gateway-<id> is the desktop's http(s) direct shape: no ssh keepalive
+  // covers its upstream leg, so the proxy arms OS-level TCP keepalive so a
+  // half-open connection eventually surfaces (or stays NAT-alive) instead of
+  // freezing the splice silently.
+  const factory = keepAliveUpgradeFactory()
+  const proxy = createInstanceProxy({
+    logger: quietLogger,
+    getLocalState: () => 'ready',
+    getLocalDshPort: () => 17510,
+    httpRequest: factory.fn,
+  })
+  proxy.registerTransport('gateway:gw-s2', 'http://192.0.2.10:30801', undefined, { transport: 'http' })
+  const down = fakeSocket()
+  await proxy.handleUpgrade(fakeRequest('/api/i/gateway-gw-s2/api/remote.mux', 'GET'), down, Buffer.alloc(0))
+  assert.equal(proxy.getDiagnostics().activeStreams, 1)
+  assert.equal(factory.upstreamSockets.length, 1)
+  assert.deepEqual(factory.upstreamSockets[0].keepAliveCalls, [{ enable: true, delay: 30_000 }])
+})
+
+test('S2: a dsh-<id> direct-http (non-loopback) WS upgrade also arms TCP keepalive', async () => {
+  // M1 review fix: the discriminator is the RESOLVED upstream host, not the
+  // source-id kind — a dsh-kind target with the http transport (registered at
+  // a non-loopback base URL) has the same no-ssh-keepalive freeze class as a
+  // gateway-kind direct target and must arm keepalive too.
+  const factory = keepAliveUpgradeFactory()
+  const proxy = createInstanceProxy({
+    logger: quietLogger,
+    getLocalState: () => 'ready',
+    getLocalDshPort: () => 17510,
+    httpRequest: factory.fn,
+  })
+  proxy.registerTransport('dsh:direct-http', 'http://192.0.2.20:30800', undefined, { transport: 'http' })
+  const down = fakeSocket()
+  await proxy.handleUpgrade(fakeRequest('/api/i/dsh-direct-http/api/remote.mux', 'GET'), down, Buffer.alloc(0))
+  assert.equal(proxy.getDiagnostics().activeStreams, 1)
+  assert.equal(factory.upstreamSockets.length, 1)
+  assert.deepEqual(factory.upstreamSockets[0].keepAliveCalls, [{ enable: true, delay: 30_000 }])
+})
+
+test('S2: local / dsh-<id> / ssh-<id> WS upgrades leave the upstream leg keepalive-free', async () => {
+  // ssh tunnels are covered by ssh keepalive and loopback (local) legs
+  // cannot die half-open — those splices keep the documented no-heartbeat
+  // design (proxy-forward.ts WS_PING_* note); the keepalive must only be
+  // armed when tcpKeepAliveMs is configured.
+  const factory = keepAliveUpgradeFactory()
+  const proxy = createInstanceProxy({
+    logger: quietLogger,
+    getLocalState: () => 'ready',
+    getLocalDshPort: () => DEFAULT_DSH_START_PORT,
+    httpRequest: factory.fn,
+  })
+  proxy.registerTransport('dsh:rem', 'http://127.0.0.1:22011')
+  proxy.registerTransport('ssh:legacy', 'http://127.0.0.1:22012')
+  const localSocket = fakeSocket()
+  await proxy.handleUpgrade(fakeRequest('/api/i/local/api/remote.mux', 'GET'), localSocket, Buffer.alloc(0))
+  const dshSocket = fakeSocket()
+  await proxy.handleUpgrade(fakeRequest('/api/i/dsh-rem/api/remote.mux', 'GET'), dshSocket, Buffer.alloc(0))
+  const sshSocket = fakeSocket()
+  await proxy.handleUpgrade(fakeRequest('/api/i/ssh-legacy/api/remote.mux', 'GET'), sshSocket, Buffer.alloc(0))
+  assert.equal(proxy.getDiagnostics().activeStreams, 3)
+  assert.equal(factory.upstreamSockets.length, 3)
+  for (const upstreamSocket of factory.upstreamSockets) {
+    assert.deepEqual(upstreamSocket.keepAliveCalls, [], 'local/dsh/ssh legs must not arm TCP keepalive')
+  }
 })
 
 test('upgrade: a 503 instance resolution rejects the socket explicitly', async () => {

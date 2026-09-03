@@ -1,7 +1,9 @@
 /**
  * Gateway single-target proxy unit tests (design 17 §6): the SSRF guard
- * (non-origin-form targets rejected), the loud 503 (dsh not ready), and the WS
- * path whitelist. Run with `node packages/gateway/test/gateway-proxy.test.ts`.
+ * (non-origin-form targets rejected), the loud 503 (dsh not ready), the WS
+ * path whitelist, and the S0 HTML trust-injection seam (a small text/html
+ * upstream document is rewritten through html-inject.ts before reaching the
+ * browser). Run with `node packages/gateway/test/gateway-proxy.test.ts`.
  */
 
 import { test } from 'node:test'
@@ -12,6 +14,8 @@ import { PassThrough } from 'node:stream'
 import type { HttpRequestFactory, ProxyRequest, ProxyResponse, ProxySocket } from '@dsh-chamber/control-plane'
 import { clearAuthCookie, registerAuthCookie } from '@dsh-chamber/control-plane'
 import { createGatewayProxy } from '../src/gateway-proxy.ts'
+import { TRUST_DECLARATION_SCRIPT } from '../src/html-inject.ts'
+import { FakeRequest, FakeResponse } from './utils.ts'
 
 const quietLogger = { log() {}, warn() {}, error() {} }
 
@@ -223,4 +227,158 @@ test('closeAllStreams aborts a WebSocket while its upstream handshake is pending
   assert.equal((upstreamSignal as AbortSignal | null)?.aborted, true,
     'destroying the downstream aborts the pending upstream request')
   assert.equal(proxy.getDiagnostics().pendingUpgrades, 0)
+})
+
+// ---------------------------------------------------------------------------
+// S0 HTML trust-injection seam: the gateway forwards a small text/html
+// upstream document through html-inject.ts before it reaches the browser.
+// The shared forwarding core is driven with an injected request factory whose
+// fake ClientRequest answers `response` synchronously; the test then emits
+// the upstream body chunks and `end` on the fake IncomingMessage.
+// ---------------------------------------------------------------------------
+
+interface HtmlUpstreamFixture {
+  /** The fake upstream IncomingMessage (emits 'data'/'end' from the test). */
+  upstreamRes: EventEmitter & { headers: Record<string, string>; statusCode: number; destroy(): void }
+  proxy: ReturnType<typeof createGatewayProxy>
+}
+
+function htmlUpstreamFixture(headers: Record<string, string>): HtmlUpstreamFixture {
+  const upstreamRes = new EventEmitter() as EventEmitter & {
+    headers: Record<string, string>
+    statusCode: number
+    destroy(): void
+  }
+  upstreamRes.headers = headers
+  upstreamRes.statusCode = 200
+  upstreamRes.destroy = () => {}
+  const httpRequest = (() => {
+    const upstream = new EventEmitter() as EventEmitter & {
+      destroyed: boolean
+      write(chunk: unknown): boolean
+      end(): void
+      destroy(): void
+    }
+    upstream.destroyed = false
+    upstream.write = () => true
+    upstream.destroy = () => { upstream.destroyed = true }
+    // The shared core attaches its 'response' listener before dispatching, so
+    // answering synchronously from end() is safe and deterministic.
+    upstream.end = () => { upstream.emit('response', upstreamRes) }
+    return upstream
+  }) as unknown as HttpRequestFactory
+  const proxy = createGatewayProxy({
+    logger: quietLogger,
+    getLocalDshPort: () => 17510,
+    getLocalState: () => 'ready',
+    httpRequest,
+    upstreamTimeoutMs: 1_000,
+  })
+  return { upstreamRes, proxy }
+}
+
+test('S0: a text/html upstream document is trust-injected and content-length is rewritten', async () => {
+  const html = '<!doctype html><html><head><meta charset="utf-8"><title>dsh</title></head><body>ok</body></html>'
+  const declared = Buffer.byteLength(html)
+  const { upstreamRes, proxy } = htmlUpstreamFixture({
+    'content-type': 'text/html; charset=utf-8',
+    'content-length': String(declared),
+  })
+  const res = new FakeResponse()
+  await proxy.handleHttp(new FakeRequest('GET', '/'), res)
+  // Delivered in two chunks — the buffered path must reassemble the document.
+  const middle = Math.floor(html.length / 2)
+  upstreamRes.emit('data', Buffer.from(html.slice(0, middle)))
+  upstreamRes.emit('data', Buffer.from(html.slice(middle)))
+  upstreamRes.emit('end')
+
+  assert.equal(res.statusCode, 200)
+  assert.equal(res.headers['content-type'], 'text/html; charset=utf-8')
+  assert.ok(res.body.includes(TRUST_DECLARATION_SCRIPT), 'the trust declaration is present')
+  assert.ok(res.body.indexOf(TRUST_DECLARATION_SCRIPT) < res.body.indexOf('</head>'),
+    'the declaration is inserted before </head>')
+  assert.equal(res.body.split('__DSH_TRANSPORT__').length, 2, 'injected exactly once')
+  assert.equal(Buffer.byteLength(res.body), declared + Buffer.byteLength(TRUST_DECLARATION_SCRIPT))
+  assert.equal(res.headers['content-length'], String(Buffer.byteLength(res.body)),
+    'content-length reflects the injected document')
+  assert.equal(res.endCalls, 1)
+})
+
+test('S0: a non-text/html response is forwarded untouched (no injection)', async () => {
+  const body = '{"ok":1}'
+  const { upstreamRes, proxy } = htmlUpstreamFixture({
+    'content-type': 'application/json',
+    'content-length': String(Buffer.byteLength(body)),
+  })
+  const res = new FakeResponse()
+  await proxy.handleHttp(new FakeRequest('GET', '/'), res)
+  upstreamRes.emit('data', Buffer.from(body))
+  upstreamRes.emit('end')
+
+  assert.equal(res.statusCode, 200)
+  assert.equal(res.body, body)
+  assert.equal(res.body.includes('__DSH_TRANSPORT__'), false)
+  assert.equal(res.headers['content-type'], 'application/json')
+  assert.equal(res.headers['content-length'], String(Buffer.byteLength(body)))
+  assert.equal(res.endCalls, 1)
+})
+
+test('S0: html without a </head> close tag is forwarded untouched (injector returned null)', async () => {
+  const body = '<html><body><p>no head close tag here</p></body></html>'
+  const { upstreamRes, proxy } = htmlUpstreamFixture({
+    'content-type': 'text/html',
+    'content-length': String(Buffer.byteLength(body)),
+  })
+  const res = new FakeResponse()
+  await proxy.handleHttp(new FakeRequest('GET', '/'), res)
+  upstreamRes.emit('data', Buffer.from(body))
+  upstreamRes.emit('end')
+
+  assert.equal(res.statusCode, 200)
+  assert.equal(res.body, body, 'the buffered body is forwarded byte for byte')
+  assert.equal(res.body.includes('__DSH_TRANSPORT__'), false)
+  assert.equal(res.headers['content-length'], String(Buffer.byteLength(body)),
+    'the original content-length is kept')
+  assert.equal(res.endCalls, 1)
+})
+
+test('S0: a content-encoded text/html response bypasses the injection buffer', async () => {
+  const chunks = [Buffer.from([0x1f, 0x8b, 0x08, 0x00, 0x00]), Buffer.from('gzip-ish payload bytes')]
+  const total = chunks.reduce((sum, chunk) => sum + chunk.length, 0)
+  const { upstreamRes, proxy } = htmlUpstreamFixture({
+    'content-type': 'text/html',
+    'content-encoding': 'gzip',
+    'content-length': String(total),
+  })
+  const res = new FakeResponse()
+  await proxy.handleHttp(new FakeRequest('GET', '/'), res)
+  for (const chunk of chunks) upstreamRes.emit('data', chunk)
+  upstreamRes.emit('end')
+
+  assert.equal(res.body.includes('__DSH_TRANSPORT__'), false)
+  assert.equal(res.headers['content-length'], String(total))
+  assert.equal(res.chunks.length, chunks.length)
+  assert.deepEqual(res.chunks, chunks.map(chunk => String(chunk)),
+    'compressed bytes are streamed through untouched')
+})
+
+test('S0: an html body over the 64KiB injection budget is flushed and streamed untouched', async () => {
+  const body = '<html><head><title>big</title></head><body>' + 'x'.repeat(70_000) + '</body></html>'
+  const { upstreamRes, proxy } = htmlUpstreamFixture({
+    // No content-length: the upstream frames the body itself (chunked), so
+    // only the actual byte count can drive the overflow.
+    'content-type': 'text/html',
+  })
+  const res = new FakeResponse()
+  await proxy.handleHttp(new FakeRequest('GET', '/'), res)
+  upstreamRes.emit('data', Buffer.from(body.slice(0, 30_000)))
+  upstreamRes.emit('data', Buffer.from(body.slice(30_000, 60_000)))
+  upstreamRes.emit('data', Buffer.from(body.slice(60_000)))
+  upstreamRes.emit('end')
+
+  assert.equal(res.statusCode, 200)
+  assert.equal(res.body.includes('__DSH_TRANSPORT__'), false)
+  assert.equal(res.headers['content-length'], undefined)
+  assert.equal(res.body, body, 'every byte is forwarded exactly once')
+  assert.equal(res.endCalls, 1)
 })

@@ -749,5 +749,55 @@ export function disposeAllShells(): void {
   pendingOpens.rejectAll(new Error('全部实例 shell 已释放，排队的会话未打开'))
 }
 
+/**
+ * Lightweight reconnect of one instance's connection loop (S2 sidebar
+ * stability, 对齐 ssh 断链自动恢复): the App staleness watchdog calls this
+ * when a MOUNTED source's pushed snapshots go silent while the transport
+ * still reports ready — the ctx's own reconnect chain is healthy, it only
+ * lacks a trigger when a half-open upstream leg (direct-http targets — no
+ * ssh keepalive covers them) never fires 'error'/'close'. Reconnect() aborts
+ * the current connection generation and opens a fresh one, whose baseline
+ * replay re-establishes the workspace follow and resumes pushes. Deliberately
+ * NO shell reboot: the shell, ctx stores and UI state stay mounted — only the
+ * underlying connection is replaced (the official runtime's reconnect
+ * semantics).
+ *
+ * Guard discipline mirrors dispatchOpen: no holder (never booted / already
+ * disposed) and no runtime ctx are no-ops, and every external access is
+ * try/catch-wrapped — errors are logged, never thrown (a watchdog timer must
+ * not surface into the App).
+ *
+ * @returns true only when reconnect() was actually invoked — callers use the
+ *   return to decide whether a no-op attempt should consume their backoff
+ *   window (M4 review fix: a boot-failure retry window or a missing ctx must
+ *   not delay the first effective reconnect by a full backoff period).
+ */
+export function reconnectInstanceConnection(instanceId: string): boolean {
+  const holder = entries.get(instanceId)
+  if (holder === undefined) return false
+  try {
+    const ctx = holder.entry.runtimeCtx
+    if (ctx === undefined) return false
+    // runtimeCtx is a cordis Context whose services live behind a proxy; the
+    // connection service is the ConnectionHandle face of
+    // @deepseek-ai/dsh-client-connection (ctx.connection.reconnect()).
+    // Shape-typed here: the renderer's ambient cordis module only declares
+    // the sessions face, so read the connection service through its minimal
+    // surface instead of extending vendor-modules.d.ts.
+    const connection = (ctx as { connection?: { reconnect(): void } }).connection
+    if (connection === undefined || typeof connection.reconnect !== 'function') return false
+    connection.reconnect()
+    // The ConnectionHandle.reconnect() itself is a silent no-op when the
+    // connection loop has no owner (never started / already stopped) — that
+    // deep no-op still reports true here. Unreachable for the S2 caller (a
+    // source that pushed once has an api-gateway client that started the
+    // loop), noted for completeness.
+    return true
+  } catch (reason) {
+    console.error(`[shell] instance ${instanceId} reconnect failed: ${describeShellError(reason)}`)
+    return false
+  }
+}
+
 /** The boot-graph row id this page's manifest must carry (gen-boot-manifest.mjs). */
 export const BOOT_PLUGIN_ID = CHAMBER_BOOT

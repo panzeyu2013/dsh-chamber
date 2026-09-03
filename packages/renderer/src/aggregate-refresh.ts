@@ -143,6 +143,38 @@ export function isSnapshotStale(
 }
 
 /**
+ * Reconnect predicate for the staleness watchdog (S2 sidebar stability, 对齐
+ * ssh 断链自动恢复): a MOUNTED source whose push channel went silent — stale
+ * per {@link isSnapshotStale} — gets a lightweight connection reconnect so
+ * the ctx's own healthy reconnect chain re-establishes the workspace follow
+ * (a half-open direct-http upstream leg fires no 'error'/'close', so nothing
+ * else ever triggers it). Unmounted sources are excluded (no shell owns a
+ * connection to reconnect — they stay on the unary fallback), and the
+ * `lastReconnectAt` backoff bounds repeat attempts so a reconnect that did
+ * not heal (or a healthy-but-quiet producer) is not retried on every tick.
+ * The unary pull keeps running regardless — the reconnect is an additional
+ * action, never a replacement.
+ *
+ * `mounted` is CALLER-DEFINED — the App passes "the ctx producer pushed at
+ * least one snapshot this generation" (worked-then-went-silent, the S2 target
+ * class); a channel dead from its first boot never pushes and is covered by
+ * the unary fallback instead (KNOWN DEGRADATION scope, M3 review note). Tests
+ * exercise the predicate with explicit `mounted` values.
+ */
+export function shouldReconnectStaleMounted(opts: {
+  mounted: boolean
+  lastSnapshotAt: number | undefined
+  lastReconnectAt: number | undefined
+  now: number
+  stalenessMs: number
+  reconnectBackoffMs: number
+}): boolean {
+  return opts.mounted === true
+    && isSnapshotStale(opts.lastSnapshotAt, opts.now, opts.stalenessMs)
+    && (opts.lastReconnectAt === undefined || opts.now - opts.lastReconnectAt >= opts.reconnectBackoffMs)
+}
+
+/**
  * Decide whether an aggregate pull still owns its commit. Mutation-triggered
  * pulls use a dedicated sequence because a producer push can expose the
  * mutation's interim host-frame cross-section; ordinary pulls remain fenced

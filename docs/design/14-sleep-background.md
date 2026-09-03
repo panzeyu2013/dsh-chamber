@@ -190,6 +190,17 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
 >    已配）覆盖，本地宿主死亡/重启由 socket error/close 覆盖，宿主自身发送
 >    失败即关——代理侧上游 ping 只会与 SSH keepalive 抢跑成"半开隧道上反复
 >    重连"的抖动环（严格容忍）或比它更晚（宽松容忍=无用）。
+>    **直连腿例外（S2，2026-09）**：direct-http(s) 目标（非 loopback 上游，
+>    无 ssh keepalive 覆盖）经 instance-proxy 启用 OS 级 TCP keepalive
+>    （`tcpKeepAliveMsForUpstream`，初始空闲 30s；探测间隔/次数走 OS 默认
+>    → 半开发现约 ~10min 级，非 30s 裁决；现实快愈者 = renderer staleness
+>    看门狗的 120s 轻量 reconnect，见 STATUS.md「http 连接链路修复」）。
+>    **0.1.2 事实修正**：本段「宿主从不 ping」仅适用于 0.1.1 的
+>    events.mux/events.host；0.1.2 的 `/api/remote.mux` 宿主侧每
+>    `websocketHeartbeatIntervalMs`（默认 2s）ping 下游、2 次未答 terminate
+>    （~6s）——控制面 30s 浏览器腿心跳对 mux 已退化为睡眠/唤醒场景的冗余
+>    兜底；30s 三重合（TCP keepalive 初始空闲 / WS_PING / ServerAlive）
+>    同值属巧合、理由各异，勿合并。
 
 ### D5 keep-awake（v1 设置项，默认关）
 

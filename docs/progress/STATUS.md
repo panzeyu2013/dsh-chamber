@@ -154,6 +154,32 @@
     独占锁、`gateway auth` 停机态 CLI、`/chamber/` 凭据面板与 S25 不变量，2026-09
     全量修复轮已完成）。**剩余**：desktop settings-bridge 便捷重置（Phase 4
     推迟项）、真实 TLS 反代下改密/轮换/停机态 CLI 恢复的实机门禁。
+  - **http 连接链路修复（S0/S2，2026-09，本地单测全绿，待实机部署验证）**：
+    - S0：gateway 代理出口对托管 dsh 的 HTML 注入 `__DSH_TRANSPORT__.ownsHost`
+      （上游文档化钩子契约），解除官方设置页在非 loopback 页面上的
+      memory 持久化门控（"settings are unavailable in this browser"）——网页直连
+      settings/models/插件可用；**取代 design 17 §10.5「gateway 不绕过」旧表述**，
+      文档待同步；属"能登录即受信"的信任边界决策（auth 门在先，非鉴权绕过）。
+    - S2：control-plane 对**非 loopback 上游腿**（direct-http(s)，含 gateway 与
+      dsh 两种 kind；判别轴为解析后目标的 host 而非来源 id——ssh 隧道恒为
+      loopback 本地腿）启用 OS 级 TCP keepalive（30s，对齐 ssh
+      `ServerAliveInterval` 语义）；renderer staleness 看门狗对
+      **transport=http 来源**（registry spec 判别）的静默 mounted 推送触发轻量
+      `connection.reconnect()` 自愈（staleness 120s / 退避 60s；mounted=本代曾
+      推送；不作用于 local/ssh 隧道来源）。稳态代价如实记录：健康空闲
+      direct-http 来源约每 2 分钟一次轻量连接重连（依赖撤稿→重发链刷新
+      新鲜度；链不浮现则退化为退避门 ~60s），真死 channel 自 stale 后每
+      ~60s 重试一次——均为治愈冻结局的固有取舍（App 层无法区分冻结与
+      空闲；活跃来源不受影响）。
+    - S2-c：调宽 dsh 2s/2miss mux 心跳为可选增强，**未实现**。可行性已确认：
+      补丁层格式本就支持 id-targeted config override（既有
+      cordis.patch.yml 机制，desktop plugin-sync 保留用户行；形如
+      `{id: typert-gateway, config: {websocketHeartbeatIntervalMs}}`，
+      匹配不到 warn+skip）——但 chamber 代码零引用 typert-gateway id，
+      需先扩展 gateway 的 patch 写入器，故单列。
+    - **剩余验收**：打包态实机——浏览器直连 gateway 的 Models/插件设置可写；
+      杀托管 dsh / 断网注入后 sidebar 60–120s 自动恢复；升级 dsh 版本复验
+      （`__DSH_TRANSPORT__` 钩子与 typert-gateway id 跨版本存在性）。
 
 ## 设计未决（02 §5 / 04 §7）
 
