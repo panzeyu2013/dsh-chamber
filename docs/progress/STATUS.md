@@ -190,8 +190,10 @@
   extraResources 真实资源）；打包态缺 `dist/preload.cjs` 已改 loud 失败（对话框 +
   exit(1)，不再静默回退 `preload.cts`）；`dist/**/*.map` 已排除出包；`build:renderer`
   输出已隔离到 `dist/web`（vite emptyOutDir 只清 web/，不再触碰共享 dist/ 下的
-  preload/control-plane/host 包产物）。打包验证以 CI build:renderer + Desktop
-  build sub-steps 及 release 产物为准。
+  preload/control-plane/host 包产物）。2026-09-03 修订：`gen-boot-manifest.mjs`
+  随迁 `dist/web`（manifest/预载/CSS 全部读写 web/，与 webDistDir 服务根一致；
+  此前读根 `.vite` 只在残留旧产物下假绿，干净构建会失败）。打包验证以 CI
+  build:renderer + Desktop build sub-steps 及 release 产物为准。
 - **打包闭包自检（长期建议）**：CI 增加"desktop 主进程传递模块闭包 vs
   `build.files` 清单"机械检查，替代纯手工核对。
 

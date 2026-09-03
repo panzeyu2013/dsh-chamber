@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
- * gen-boot-manifest.mjs — writes the `__DSH_BOOT__` wire (dist/manifest.json)
- * from the vite build output (design 05 §2/§3.3).
+ * gen-boot-manifest.mjs — writes the `__DSH_BOOT__` wire (dist/web/manifest.json,
+ * the renderer-owned vite output; P2-4: vite outDir = ../desktop/dist/web
+ * and the control plane serves webDistDir = <pkg>/dist/web — design 05 §2/§3.3).
  *
  * The boot graph carries ONE plugin row: the chamber composite bundle
  * (`chamber` input → dist/assets/chamber-<hash>.js), which self-registers as
@@ -37,9 +38,9 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 const DIST = fileURLToPath(new URL('../../desktop/dist/', import.meta.url))
-const VITE_MANIFEST = fileURLToPath(new URL('../../desktop/dist/.vite/manifest.json', import.meta.url))
-const INDEX_HTML = fileURLToPath(new URL('../../desktop/dist/index.html', import.meta.url))
-const OUT_MANIFEST = fileURLToPath(new URL('../../desktop/dist/manifest.json', import.meta.url))
+const VITE_MANIFEST = fileURLToPath(new URL('../../desktop/dist/web/.vite/manifest.json', import.meta.url))
+const INDEX_HTML = fileURLToPath(new URL('../../desktop/dist/web/index.html', import.meta.url))
+const OUT_MANIFEST = fileURLToPath(new URL('../../desktop/dist/web/manifest.json', import.meta.url))
 
 /** dsh boot-graph row id (see src/chamber-entry.ts). */
 const CHAMBER_ID = '@dsh-chamber/app'
@@ -75,7 +76,7 @@ if (chamberRow === undefined) {
 }
 
 const bundleFile = chamberRow.file // e.g. assets/chamber-abc123.js
-const bundlePath = fileURLToPath(new URL(`../../desktop/dist/${bundleFile}`, import.meta.url))
+const bundlePath = fileURLToPath(new URL(`../../desktop/dist/web/${bundleFile}`, import.meta.url))
 if (!existsSync(bundlePath)) fail(`chamber bundle missing (${bundleFile})`)
 const bundleRev = shortHash(readFileSync(bundlePath))
 
