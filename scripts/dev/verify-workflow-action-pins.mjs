@@ -10,7 +10,7 @@
 
 import assert from 'node:assert/strict'
 import { readFileSync, readdirSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { basename, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const root = resolve(fileURLToPath(new URL('../../', import.meta.url)))
@@ -50,13 +50,16 @@ for (const [action, pins] of actionPins) {
 for (const action of sharedActions) {
   const escaped = action.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   const pattern = new RegExp(`uses:\\s*${escaped}@`, 'g')
-  for (const source of sources.filter(source => /\/(ci|release)\.yml$/.test(source.path))) {
+  // basename, not the full path: Windows runners use backslash separators and
+  // a '/ci.yml'-style suffix check silently matches nothing there (the
+  // test-windows leg caught this — the guard must be path-separator agnostic).
+  for (const source of sources.filter(source => /^(ci|release)\.yml$/.test(basename(source.path)))) {
     const matches = [...source.text.matchAll(pattern)]
     assert.ok(matches.length > 0, `${action} must be pinned in ${source.path}`)
   }
 }
 
-const releaseWorkflow = sources.find(source => source.path.endsWith('/release.yml'))
+const releaseWorkflow = sources.find(source => basename(source.path) === 'release.yml')
 assert.ok(releaseWorkflow, 'release workflow must be included in the guard')
 assert.match(
   releaseWorkflow.text,
