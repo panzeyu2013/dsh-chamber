@@ -343,10 +343,15 @@ jobs:
 
   build-gateway:
     # Gateway is distributed in this release only as a GitHub Release tarball
-    # plus SHA256. Wait for both desktop artifacts so a failed signing or
-    # packaging leg cannot leave a partial public release. npm publication is
+    # plus SHA256. Runs in PARALLEL with the desktop build legs (2026-09
+    # decision): it packs from the same tag-bound SHA (S16) and downloads no
+    # desktop artifact, so nothing serializes on the platform legs. Public
+    # atomicity is enforced by finalize-release, which needs every build leg
+    # (gateway + macos + windows + linux) before flipping the draft public —
+    # a failed leg keeps the release private, and the next run's create-release
+    # stale-draft replacement clears any orphan assets. npm publication is
     # deliberately out of scope and has no dormant workflow step here.
-    needs: [create-release, build-macos, build-windows]
+    needs: [create-release, validation]
     runs-on: ubuntu-latest
     permissions:
       contents: write
