@@ -10,7 +10,16 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 > 中文版: [CHANGELOG.md](../CHANGELOG.md)
 
-## [Unreleased]
+## [0.2.0-beta.8] - 2026-09-03
+
+> After the v0.2.0 stable release was retracted over severe defects, the 0.2
+> line resumes validation as beta.8; this release contains the dsh
+> 0.1.2-alpha.5 baseline upgrade plus the http-connection fixes (S0/S2).
+
+### Fixed
+
+- **Gateway web settings gate lifted (S0)** — the gateway proxy injects the upstream-documented hook `window.__DSH_TRANSPORT__={ownsHost:true}` into managed-dsh HTML documents (≤64KiB, identity-encoded, idempotent, fail-soft), so authenticated browser access at any origin runs the official settings page in host persistence — settings/models/plugins become usable and write to the host (the upstream "settings are unavailable in this browser" loopback-only gate is lifted). Trust = the login gate (login means trusted; `--no-auth` trusted-network deployments share the semantics); this is not an auth bypass — the host never reads the client-side flag (verified against the pinned upstream); upstream hook removal degrades silently to the restricted state (re-verify on dsh upgrades). Design 17 §10.5/§18 updated accordingly.
+- **Sidebar push freeze heals itself on direct-http sources (S2)** — the desktop client's ctx push channel over direct http could freeze silently (missing sidebar workspaces / archived-session revival, previously only healed by a manual disconnect/reconnect): control-plane now arms OS-level TCP keepalive on NON-loopback WS upstream legs (discriminated by the resolved baseUrl host, covering gateway-kind and dsh-kind http targets; ssh-tunnel and local legs unchanged — ssh keepalive/loopback already own their liveness), and the renderer staleness watchdog triggers a lightweight `connection.reconnect()` for silent mounted direct-http sources (120s staleness / 60s backoff, transport-axis scoped, mounted = pushed this generation, no-op attempts do not consume the backoff) — a broken channel re-baselines automatically. Design 03 §3.4 / 14 D4 record the exception and the heartbeat fact corrections.
 
 ### Changed
 

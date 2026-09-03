@@ -10,7 +10,15 @@
 
 > English: [docs/CHANGELOG.en-US.md](docs/CHANGELOG.en-US.md)
 
-## [Unreleased]
+## [0.2.0-beta.8] - 2026-09-03
+
+> v0.2.0 正式版因严重缺陷撤回后，0.2 线以 beta.8 恢复验证；本版内容 = dsh 基线
+> 0.1.2-alpha.5 升级 + http 连接链路修复（S0/S2）。
+
+### 修复
+
+- **gateway 网页设置门控解除（S0）** —— gateway 代理出口对托管 dsh 的 HTML 文档注入上游文档化钩子 `window.__DSH_TRANSPORT__={ownsHost:true}`（≤64KiB、identity 编码、幂等、fail-soft），使经 gateway 认证的浏览器直连（任意 origin）页面进入 host 持久化——官方设置页的 settings/models/插件可用并写宿主（原「settings are unavailable in this browser」仅限 loopback 页面的上游门控解除）。信任 = 登录门（能登录即受信，`--no-auth` 可信网络部署同语义），非鉴权绕过——服务端本就不读该客户端标志（已对 pinned 上游核实）；上游钩子移除则静默退化到受限态（升级 dsh 需复验）。design 17 §10.5/§18 表述同步。
+- **http 直连 sidebar 推送冻结自愈（S2）** —— 桌面客户端经 http 直连的 ctx 推送通道在链路静默后会冻结（sidebar 工作区缺失/已归档会话回浮，此前只能手动断开重连）：control-plane 对**非 loopback** WS 上游腿启用 OS 级 TCP keepalive（判别轴 = 解析后 baseUrl 的 host，覆盖 gateway/dsh 两种 http 目标；ssh 隧道与本地腿不变——ssh keepalive/loopback 已覆盖），renderer staleness 看门狗对静默的 mounted direct-http 来源触发轻量 `connection.reconnect()`（120s staleness / 60s 退避，transport 轴限定，mounted=本代曾推送，no-op 不消耗退避）——断链后自动重连重基线，无需手动干预。design 03 §3.4 / 14 D4 已记录例外与心跳事实修正。
 
 ### 变更
 

@@ -1,7 +1,7 @@
 {
   "name": "@dsh-chamber/dsh-host-client-graph",
   "description": "Chamber host gateway exposing the instance's dsh.client boot graph (clientModules.graph()) to the chamber frontend over the wire — read-only, no write/execute surface",
-  "version": "0.2.0",
+  "version": "0.2.0-beta.8",
   "private": true,
   "type": "module",
   "main": "dist/index.js",
