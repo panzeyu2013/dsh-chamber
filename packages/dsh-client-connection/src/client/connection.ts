@@ -38,6 +38,9 @@ export interface ConnectionGeneration {
  * settlement / controller cancellation remain the abort paths); the chamber
  * loopEpoch guard below is unaffected. v0.1.2-alpha.4 baseline: upstream
  * changed only fixture.ts (SessionSeq branding) — no connection.ts changes.
+ *
+ * v0.1.2-alpha.5 baseline: upstream changed only package.json (version) —
+ * no connection.ts changes.
  */
 export interface ConnectionConfig {
   /** First-retry backoff cap in ms (jittered: actual delay is cap/2..cap). */
