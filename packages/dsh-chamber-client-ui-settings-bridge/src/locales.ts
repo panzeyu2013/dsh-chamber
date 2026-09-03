@@ -85,6 +85,8 @@ export const zh = {
   // 受管树时，主按钮引导「恢复内建」（回到随应用副本，零下载）。
   dshRuntimeBuiltinGuideHint: '随应用已内建 v{version}：「恢复内建」将清除用户选择并回到随应用副本，无需下载；版本树与快照保留。',
   dshRuntimeInstallBuiltinTree: '仍下载 v{version} 并安装为受管版本',
+  // gateway 镜像（方案 2，与 local 分支全面统一）：服务器内建锚口径。
+  dshRuntimeAnchorGuideHint: '服务器已内建（部署锚）v{version}：「恢复内建」将清除选择并回到内建锚，无需下载；版本树与快照保留。',
   dshRuntimeStatusDownloading: '下载 dsh {version}…',
   dshRuntimeStatusInstalling: '安装 dsh {version}…',
   dshRuntimeStatusPending: '将于下次启动切换到 {version}',
@@ -304,6 +306,9 @@ export const en: Record<keyof typeof zh, string> = {
   // download).
   dshRuntimeBuiltinGuideHint: 'The app already bundles v{version}: "Restore bundled" clears your selection and returns to the bundled copy without downloading; version trees and snapshots are kept.',
   dshRuntimeInstallBuiltinTree: 'Download v{version} and install it as a managed tree anyway',
+  // Gateway mirror (option 2, fully unified with the local branch): the
+  // server built-in anchor wording.
+  dshRuntimeAnchorGuideHint: 'The server already has v{version} as its built-in anchor: "Restore bundled" clears the selection and returns to the anchor without downloading; version trees and snapshots are kept.',
   dshRuntimeStatusDownloading: 'Downloading dsh {version}…',
   dshRuntimeStatusInstalling: 'Installing dsh {version}…',
   dshRuntimeStatusPending: 'Will switch to {version} on next launch',

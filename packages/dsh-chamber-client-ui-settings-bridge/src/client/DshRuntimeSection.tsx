@@ -562,6 +562,19 @@ function GatewayRuntimeSection({
       || remoteStatus.activeVersion === null
       || remoteStatus.builtinVersion === null
       || remoteStatus.activeVersion !== remoteStatus.builtinVersion)
+  // 「内建版本」行引导（方案 2 gateway 镜像，2026-12 用户决策：与 local 分支
+  // 全面统一）：下拉选中与服务器内建锚同版本的行、存在用户选择（hasOverride）
+  // 且该版本尚未装成受管树时，主按钮引导「恢复内建」（restore-builtin = 清
+  // 指针回内建锚的事务，零下载）——把同版本下载并另装受管树降级为显式次要
+  // 动作；该版本已缓存（曾装树）时保持普通切换。
+  const remoteBuiltinGuide = chosenRemote !== null
+    && !isActiveRemote
+    && remoteStatus !== null
+    && remoteStatus.builtinVersion !== null
+    && chosenRemote === remoteStatus.builtinVersion
+    && remoteStatus.hasOverride === true
+    && !restoreBuiltinDisabled
+    && !sortedVersions.some((entry) => entry.version === chosenRemote && entry.cached)
 
   const view = remoteStatus === null ? null : remoteRuntimeStatusView(remoteStatus)
   // Unified status badge (2026-12): same pill vocabulary as the local branch.
@@ -814,28 +827,53 @@ function GatewayRuntimeSection({
           </span>
           {/* 更新/切换到 vX 仅在选择版本 ≠ 当前版本时显示（2026-12 修订：
               与当前版本一致时按钮是必然 no-op，不常驻）。忙碌期间选中版本
-              仍 ≠ 当前版本，按钮保持可见（带「正在应用…」文案）仅禁用。 */}
+              仍 ≠ 当前版本，按钮保持可见（带「正在应用…」文案）仅禁用。
+              方案 2 镜像：选中「内建版本」行且未装受管树时主按钮为
+              「恢复内建」（回到内建锚，零下载）。 */}
           {!isActiveRemote && chosenRemote !== null && (
             <button
               type="button"
               className={css.updatePrimaryButton}
-              onClick={() => { void onApplySelected() }}
-              disabled={mutationDisabled}
+              onClick={() => { void (remoteBuiltinGuide ? onRestoreBuiltin() : onApplySelected()) }}
+              disabled={remoteBuiltinGuide
+                ? (mutationDisabled || restoreBuiltinDisabled)
+                : mutationDisabled}
             >
-              {actionBusy
-                ? t('dshRuntimeRemoteApplying')
-                : `${gatewayDirection === 'rollback' ? t('dshRuntimeActionSwitch') : t('dshRuntimeActionUpdate')} v${chosenRemote}`}
+              {remoteBuiltinGuide
+                ? t('dshRuntimeResetBuiltin')
+                : actionBusy
+                  ? t('dshRuntimeRemoteApplying')
+                  : `${gatewayDirection === 'rollback' ? t('dshRuntimeActionSwitch') : t('dshRuntimeActionUpdate')} v${chosenRemote}`}
             </button>
           )}
           {restartButton}
         </div>
+        {/* 方案 2 引导行（gateway 镜像，与 local 分支统一）：说明内建锚已存在
+            （恢复内建零下载），并把「仍下载并安装为受管版本」保留为显式次要
+            动作。 */}
+        {remoteBuiltinGuide && (
+          <div className={css.updateStatusLine}>
+            <span className={css.generalHint} role="status">
+              {t('dshRuntimeAnchorGuideHint', { version: chosenRemote ?? '' })}
+            </span>
+            <button
+              type="button"
+              className={css.updateButton}
+              onClick={() => { void onApplySelected() }}
+              disabled={mutationDisabled}
+            >
+              {t('dshRuntimeInstallBuiltinTree', { version: chosenRemote ?? '' })}
+            </button>
+          </div>
+        )}
         {restartFeedback}
       </div>
 
       {/* The merged primary action installs (if needed) and arms the switch —
           the next-launch semantics the button label no longer spells out.
-          2026-12 复审：hint 随按钮可见性渲染（按钮隐藏时无对象）。 */}
-      {!isActiveRemote && chosenRemote !== null && (
+          2026-12 复审：hint 随按钮可见性渲染（按钮隐藏时无对象）；方案 2
+          引导态下由引导行文案取代。 */}
+      {!isActiveRemote && chosenRemote !== null && !remoteBuiltinGuide && (
         <p className={css.generalHint}>{t('dshRuntimeApplyNextLaunchHint')}</p>
       )}
 
@@ -895,7 +933,7 @@ function GatewayRuntimeSection({
           </button>
         )}
         {/* 恢复内建仅在与内建版本不一致（或逃生口相位）时显示（2026-12 修订）。 */}
-        {restoreBuiltinVisible && (
+        {restoreBuiltinVisible && !remoteBuiltinGuide && (
           <button
             type="button"
             className={css.updateButton}
@@ -1765,7 +1803,7 @@ export function DshRuntimeSection({
             </button>
           )}
           {/* 恢复内建仅在与内建版本不一致（或逃生口相位）时显示（2026-12 修订）。 */}
-          {canResetVisible && (
+          {canResetVisible && !builtinGuide && (
             <button type="button" className={css.updateButton} onClick={onReset} disabled={mutationDisabled}>
               {t('dshRuntimeResetBuiltin')}
             </button>
