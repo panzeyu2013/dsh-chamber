@@ -30,6 +30,79 @@
 
 - **已归档会话管理（设计 12）**：方案 A（前端已归档浏览区先行）+ C（上游
   wire 根治）；实现未排期。设计见 `docs/progress/todo/12-todo-archived-sessions.md`。
+- **gateway 连接插件能力对齐（A/B/C，2026-12 用户提出；Phase 1-5 已实现 + 质量审核修复轮已落地，见 design 21/本段）**：
+  gateway 连接缺 ssh+dsh 的第三方插件「添加/同步」（design 17 §3/§10 收窄的
+  副作用）、connections 页缺 gateway 受控重启入口、日志/主机日志按钮不可区分。
+  B（连接日志/网关主机日志改名 + 图标去重）与 C（gateway 卡 + 插件面板「重启
+  dsh」，经实例代理 `/chamber/runtime/restart` + 202/status 轮询；gateway-runtime
+  parse/poll 纯核心迁 sidebar/shared）已定稿；A v1 已拍板：**单一插件管理模型、
+  仅最终执行阶段分叉**（gateway 宿主 spawn vs ssh exec，非双通道同权）；registry
+  spec 直装 + 文件夹直推双通道（出网允许、registry 来源不限定、lifecycle scripts
+  默认允许），第三方同步仅手动、批量一次确认，runtime 单写者栅栏 + ready 边沿
+  deferred 排空；含远端「已安装」列表显式移除（模型统一、ssh/gateway 同权）、
+  `POST /chamber/runtime/start` 停机恢复原语、journal/备份撤销最近操作、故障域
+  恢复（评审 P1 修正已并入 v2）。契约见
+  `docs/design/21-gateway-plugin-parity.md`（原 todo 评审稿已并入该 design）；执行计划见
+  `docs/progress/todo/21-gateway-plugin-parity-plan.md`（Phase 0-6，逐阶段门禁）。
+  **实现进度（2026-12，执行级门禁零 P0/P1）**：Phase 1 B ✅、Phase 2（C + gateway-runtime parse/poll 迁
+  sidebar/shared + ambient 镜像 + 卡片/面板「重启 dsh」）✅、Phase 3 A0（gateway installed 读路由 +
+  desktop `gateway_plugin_sync` IPC + 视图 chamber 同步/漂移）✅、Phase 4 A1 写面 ✅、Phase 5 UI 全闭环
+  ✅（详情见下三段）；
+  其中 Phase 4.3 的白名单族前置已先行落地：spec/name/materialize 白名单 + MAX 字符 +
+  WRITE_FILE/RUN_STDOUT 上限迁 `control-plane/src/plugin-spec.ts`（design 21 §6.2 单一来源；desktop
+  经 control-plane-module.ts 双路径 facade 与原 ssh-provider 再导出消费、gateway 经包导出直引），新增
+  `isDeniedPluginName` 保留名谓词（@deepseek-ai/* + @dsh-chamber/*，decision 19），渲染端 ADD_SPEC 镜像
+  锁步测试落地（gateway/test/plugin-spec-lockstep.test.ts；ssh 侧 applyPlugins 保留名拒绝接线随统一增量）；
+  运行级验证（typecheck/test/实机）待可运行工作区执行（登记残余风险，不虚报）。
+  **运行级验证状态更新（2026-12 后期）**：本工作树已可用 `~/.nvm/versions/node/v24.20.0` + pnpm 装入
+  node_modules（vendor/harness-checkout 子模块仍缺失，仅影响需 vendor 源码的构建如 build:renderer/打包）——
+  已落地内容在可运行子集上**已执行验证**：test:gateway 全绿、test:connections 10/10、test:sidebar（含镜像
+  锁步 5/5）、test:settings-bridge、desktop 受触套件（gateway-sync-registry/plugin-sync/ssh-provider/
+  transport-manager/ipc-surface-mirror/renderer-trust/cross-package-contract/gateway-provider）全绿；
+  typecheck:gateway/:connections/:sidebar/:settings-bridge 0 错误；Phase 4 起门禁以执行级为准（子代理默认 shell
+  无 nvm PATH——命令需显式 export 或在父代理侧运行）。
+  **Phase 4 进度（2026-12，执行级验证）**：4A 白名单共享迁移、journal+串行执行器（含 XDG_CONFIG_HOME pin/
+  前后双检/onTerminal）、写栅栏 beginProfileWrite（双向互斥）+ start 原语 + beforeSpawnCheckpoint 生产接线、
+  plugins-tasks 编排器（lease/deferred.json/单飞 drain）与 install/remove/materialize(流式 32MiB+tgz 上限)/
+  tasks 四条写路由均已实现——gateway 全套 481 测试（478 通过 0 失败 3 平台跳过）+ typecheck 0 错误；
+  Phase 4 已勾销（2026-12，执行级门禁零 P0/P1：汇总门禁 FAIL 1 P1 → I4 修复 → P1 关闭复核 CLOSED；
+  gateway 487/484/0fail/3 平台跳过、desktop 全链 724/724 26 文件、root typecheck 0）：4G apply/materialize
+  IPC、F7×租约串行化（waitForProfileWriteIdle 先于 restore）、executor canRun 窗口复核（等待-再-阻断）、
+  code 族统一（reserved）、remove-before-add（decision 5）、256MiB 解包上限对齐均落地。Phase 6 归口登记：
+  remove not_installed/no_manifest 409-vs-400 定夺、dispatch/routes 陈旧注释清扫、journal 保留窗口、
+  'too_large' 双档、任务面措辞回写。
+  **Phase 5 进度②③（2026-12，执行级）**：② ssh 模态新增远程「已安装」list tab（逐行移除确认 + 撤销
+  undo IPC、fail-loud verified/ready 标记照实呈现；等价表逐键保持、local 模式零改动）；③ gateway 统一视图
+  增量（PluginInventoryView：已安装行/移除/撤销/变更记录 tasks 投影（deferred 意图+busy+recovery 提示）/
+  profile_absent-corrupt 横幅/停机 chamber 区降级标签；修复 Phase-3 遗留 seed-cache 双前缀真 bug）+ 卡片
+  「启动实例」start 动作（runtime 探测门控 stopped/error/restart-exhausted、202+poll）；A 键表 34+1 键
+  （296/296）。connections 全链 112/0、typecheck 0。Phase 6 归口（非阻断）：who/when 归因 tooltip 渲染
+  （initiator 投影）、gateway 拒绝码→本地化文案映射（queue_busy 等）、统一单组件双后端合体未做（功能等价
+  双面，已登记）、实机 E2E 矩阵门禁不可在本树执行（照实登记）。
+  **Phase 5 进度①（2026-12，执行级）**：纯模型层 plugin-model.ts（deny 镜像/orderApplyOps/
+  ApplyOutcome 分类（含 ssh fail-loud verified/ready/readyNote 诚实携带）/projectTasks/undoForLatest/
+  分派表/BATCH_FAILURE_POLICY 单一取舍；35 测试 + 控制面 lockstep）✅ 门禁修复后零 P0/P1；ssh 统一增量
+  （readManifest 掩码统一挂接 SSH_PLUGIN_LIST、保留名整批拒绝（decision 19 同集）、ssh-plugin-journal +
+  SSH_PLUGIN_UNDO IPC（撤销=恢复语义、file-backed/out-of-model 不投影）、undo 诚实面）✅ 门禁 PASS +
+  两条 P2 修复（upgrade-restore 对称恢复、executed-but-not-effective 投影）。
+  **质量审核修复轮（2026-12，审核后执行；全量验证绿）**：4×P1 已修复——executor
+  租约泄漏（journal 终态写失败/记录丢失仍触发终态钩子，plugins-exec complete()）、
+  executor env 白名单化（INSTALL_ENV_WHITELIST 共享常量，同 dsh-runtime 源）、
+  deferred 排空后自动受控 restart 一次（全部排空 op 终态后请求——首 op 终态请求会撞后续
+  op 租约门，第二轮扫描修正为末 op 终态点；index.ts restartManaged 门控镜像 /restart 同步
+  拒绝族）、ssh undo journal 操作目标指纹绑定（latestOkForTarget + 删除/编辑
+  转换路径 clear 接线）；8×P2 已修复——错误脱敏升级（sanitizeInstallerOutput 族 +
+  2000B 有界）、tasks/deferred 投影 file: 掩码、崩溃孤儿子进程 pid journal + 启动
+  对账击杀、手动 chamber 同步失败显式化 ok:false（both-false 遗留 P2 勾销）、
+  gateway_plugin_apply 确认后重检、deferred drain 波浪续排（>8 积压自清）、staged
+  tgz 三处 GC、persistence_failed 500 错误码族；均带失败注入/行为测试。文档归位
+  本次补全：design 17（§3 表 F4 勘误 + §10 写面 + §4.1 barrier 语言）、design 18
+  （§6 出网登记 + §9.3 start 行/互斥矩阵/兜底链更正）、design 05 §5（F4 勘误 +
+  design 21 增补）、design 13（收敛表述）、sidebar/settings-bridge README 双语文档
+  与哈希重录——修复明细见 design 21 §10「质量审核修复补录」。
+  第二轮扫描修正（复核修复轮自身，⑭–⑰）：drain 自动重启请求点改为本轮全部排空 op 终态后
+  （原首 op 终态会撞在途租约门）、materialize 路由 500 分支补 staged GC、tasks 投影删除
+  childPid（活进程 pid 不出网）、波浪测试强化（200ms 慢关 + 租约授予时序证明，5 次连跑稳定）。
 - **模型额外参数 + 默认推理等级（设计 07）**：实现推迟——wire 白名单无泛化
   透传、host 组合不可注入、`agent-default-model` 未对客户端暴露，待上游
   解锁（07 §3/§4）。设计见 `docs/design/07-models-params.md`。

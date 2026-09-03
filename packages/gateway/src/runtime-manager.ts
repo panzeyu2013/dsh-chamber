@@ -170,6 +170,16 @@ export const RECOVERABLE_METADATA_BLOCKS = new Set<string>([
   'metadata-start-failed',
 ])
 
+/**
+ * Rollback-vs-lease serialization bound (design 21 §6.3 decision 6/17 F7
+ * review gate): the automatic restart-exhausted rollback waits at most this
+ * long for the managed profile-write lease counter to drain before it DEFERS
+ * — a DSH_HOME write must never interleave a live plugin pnpm child, and the
+ * only lease-aware point inside the rollback transaction (the spawn
+ * checkpoint) comes AFTER its restore step writes DSH_HOME.
+ */
+export const ROLLBACK_LEASE_WAIT_MS = 15 * 60_000
+
 /** Gateway-owned registry source persistence (owner-only 0600; design 18 §9.3). */
 function registryFile(baseDir: string): string {
   return join(baseDir, 'dsh-runtime', 'registry.json')
@@ -432,6 +442,12 @@ export type GatewayRuntimeStatus = RuntimeStatusProjection & {
   mutationsAllowed: boolean
   operationError: string | null
   restart: 'ok' | 'failed' | 'running' | null
+  /** Last explicit start outcome (design 21 decision 12 / §6.3), projected
+   * exactly like `restart`: 'running' from the moment a start is accepted
+   * until it settles; 'ok'/'failed' terminal. The settings poll uses this to
+   * distinguish a post-202 entry rejection (operationError set, connectionState
+   * still stopped) from a genuine start success. */
+  start: 'ok' | 'failed' | 'running' | null
   restoreOutcome: string | null
   snapshotCount: number | null
   latestSnapshotAt: string | null
@@ -451,6 +467,17 @@ export type GatewayRuntimeStatus = RuntimeStatusProjection & {
   canRecoverMetadata: boolean
 }
 
+/** Managed profile-write lease refusal codes (design 21 §6.3 decision 6/17).
+ * Every code maps to an existing /chamber/runtime 409 family. */
+export type ProfileWriteRefusalCode = 'runtime_busy' | 'runtime_pending' | 'runtime_recovery_required'
+
+/** The lease handed out by GatewayRuntimeManager.beginProfileWrite(). The
+ * caller holds it across its complete `dsh plugin` write and MUST release it
+ * in all paths; release is idempotence-free and underflow-guarded (fail-loud). */
+export type ProfileWriteLease =
+  | { ok: true; release: () => void }
+  | { ok: false; code: ProfileWriteRefusalCode; error: string }
+
 export interface GatewayRuntimeManager {
   stateRoot(): string
   resolveWorkspace(): ResolvedWorkspace
@@ -462,6 +489,12 @@ export interface GatewayRuntimeManager {
   /** All runtime writers are single-flight, but only activation transactions
    * quarantine the already-running dsh from proxy/feature exposure. */
   mutationInProgress(): boolean
+  /** Design 21 decision 6/7 execution-window accessor (wired as the A1
+   * executor's canRun gate): true while any runtime mutation writer —
+   * activation transaction (rollback/restore/retry), apply-now, install,
+   * restart, start or the automatic restart-exhausted rollback — is in
+   * flight. Same internal flag set as mutationInProgress(). */
+  mutationInFlight(): boolean
   activationInProgress(): boolean
   /** Sticky public-exposure fence. Unlike activationInProgress(), this remains
    * true after an unsafe blocked verdict so recovery routes stay reachable
@@ -513,6 +546,27 @@ export interface GatewayRuntimeManager {
   retryRestore(): Promise<{ accepted: boolean; blockedReason: string | null }>
   restart(): Promise<void>
   restartInFlight(): boolean
+  /** Explicit start primitive (design 21 decision 12, §6.3 r1): bring the
+   * managed dsh up from stopped/error/restart-exhausted through the plane's
+   * guarded startLocal path. Refuses while any runtime mutation/profile write
+   * is in flight, while a recovery block or ordinary pending is armed, and
+   * while the managed dsh is already running. 202 semantics — the route
+   * answers synchronously from the refusal gates; the outcome is projected via
+   * status().start / operationError (resolve ≠ success). */
+  start(): Promise<void>
+  startInFlight(): boolean
+  /** Design 21 §6.3 lifecycle writer barrier (decision 6/17): true while a
+   * managed profile write lease is held. Runtime mutations (assertMutationIdle)
+   * and every spawn (beforeSpawnCheckpoint) refuse while a plugin write could
+   * interleave DSH_HOME/profile node_modules. */
+  profileWriteInFlight(): boolean
+  /** Acquire the managed profile-write lease. Synchronous: returns a refusal
+   * ({ ok:false }) when a runtime transaction/mutation is in flight, when a
+   * durable recovery/pending phase is armed, or while the managed dsh is
+   * starting/restarting — mirroring the executor's own 409 family. Success
+   * increments the write counter; the returned release() decrements it
+   * (underflow-guarded). New acquisitions refuse once dispose() has started. */
+  beginProfileWrite(): ProfileWriteLease
   /** True while an apply-now transaction is running (route gate + status). */
   applyNowInFlight(): boolean
   getRegistry(): { origin: string }
@@ -545,6 +599,9 @@ export interface GatewayRuntimeManagerOptions {
   /** Platform adapter seam. Production omits this and uses process.platform;
    * tests use it to prove Windows stays entirely outside POSIX writer paths. */
   platform?: NodeJS.Platform
+  /** Rollback-vs-lease drain bound override (tests only; production keeps
+   * ROLLBACK_LEASE_WAIT_MS = 15 minutes). */
+  rollbackLeaseWaitMs?: number
   /** Deterministic stale-takeover race seam; production callers omit it. */
   ownerTakeoverBeforeRename?: () => void
   /** Host composition hook: detach dsh-derived consumers as soon as an
@@ -583,6 +640,15 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
    * detached rollback promise yields, so repeated restart-exhausted
    * notifications cannot enqueue two writers. */
   let restartExhaustedRollbackInFlight = false
+  /** Design 21 §6.3 managed profile-write lease counter (decision 6/17). A
+   * count (not a bool) lets the A1 executor nest per-operation acquisitions
+   * inside a wider queue-drain lease; the barrier opens only at zero. Runtime
+   * writers refuse while it is non-zero and beginProfileWrite refuses while
+   * any runtime writer is live, so the two write families never interleave. */
+  let profileWriteCount = 0
+  /** Waiter set for the rollback-vs-lease drain (release() resolves waiters
+   * at zero; waiters are removed by their own completion). */
+  const profileWriteIdleWaiters = new Set<() => void>()
   /** Lifecycle writer barrier. Every public mutation is tracked through its
    * complete promise (including post-installer metadata writes), while the
    * abort signal reaches candidate probes/install children. dispose() retains
@@ -965,7 +1031,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
 
   function mutationInProgress(): boolean {
     return activationInProgress() || installInFlight || restartInFlight || applyNowInFlight
-      || restartExhaustedRollbackInFlight
+      || restartExhaustedRollbackInFlight || startInFlight
   }
 
   function persistedPendingVersion(): string | null {
@@ -1019,6 +1085,118 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     if (restartExhaustedRollbackInFlight) {
       throw Object.assign(new Error('an automatic restart-exhausted rollback is in flight; runtime mutations are refused'), { code: 'runtime_busy' })
     }
+    if (startInFlight) {
+      throw Object.assign(new Error('a start is in flight; runtime mutations are refused'), { code: 'runtime_busy' })
+    }
+    // Design 21 §6.3 (decision 6/17): a managed profile write (plugin add/
+    // remove pnpm child) must never interleave a runtime transaction — every
+    // runtime writer is a DSH_HOME/profile writer too (snapshot/restore/seed).
+    if (profileWriteInFlight()) {
+      throw Object.assign(new Error('managed profile write in flight (plugin mutation); runtime mutations are refused'), { code: 'runtime_busy' })
+    }
+  }
+
+  /**
+   * Design 21 §6.3 profile-write gate (decision 6/17): the synchronous refusal
+   * matrix beginProfileWrite() answers with. Order mirrors assertMutationIdle
+   * (in-flight writers) → durable recovery/pending phases → live plane window,
+   * so the executor's 409 family stays consistent with the route table.
+   * Corrupt selection metadata is a hard recovery condition, never an
+   * acquisition: a plugin write must not land mid-recovery-authority work.
+   */
+  function profileWriteRefusal(): { code: ProfileWriteRefusalCode; error: string } | null {
+    if (disposed) return { code: 'runtime_busy', error: 'gateway runtime manager is disposing; managed profile write refused' }
+    if (activationInProgress()) return { code: 'runtime_busy', error: 'runtime activation in progress; managed profile write refused' }
+    if (installInFlight) return { code: 'runtime_busy', error: 'a runtime install is in flight; managed profile write refused' }
+    if (restartInFlight) return { code: 'runtime_busy', error: 'a restart is in flight; managed profile write refused' }
+    if (applyNowInFlight) return { code: 'runtime_busy', error: 'an apply-now transaction is in flight; managed profile write refused' }
+    // The F7 latch is armed SYNCHRONOUSLY before its async body drains/
+    // waits, so this refusal covers the whole rollback window (including the
+    // lease-drain wait): no new lease can ever start mid-rollback.
+    if (restartExhaustedRollbackInFlight) {
+      return { code: 'runtime_busy', error: 'an automatic restart-exhausted rollback is in flight; managed profile write refused' }
+    }
+    if (startInFlight) return { code: 'runtime_busy', error: 'a start is in flight; managed profile write refused' }
+    // Recovery phases expose only their matching retry plus restore-builtin;
+    // a plugin write is not on that surface and must not slip past it.
+    if (startupBlockReason !== null) {
+      return {
+        code: 'runtime_recovery_required',
+        error: `runtime recovery ${startupBlockReason} is required; only retry-apply/retry-restore/restore-builtin are allowed`,
+      }
+    }
+    let pending: string | null = null
+    try {
+      pending = ordinaryPendingVersion()
+    } catch (error) {
+      return {
+        code: 'runtime_recovery_required',
+        error: `runtime selection metadata is corrupt; managed profile write refused until recovery: ${sanitizeRouteError(error instanceof Error ? error.message : String(error))}`,
+      }
+    }
+    if (pending !== null) {
+      return { code: 'runtime_pending', error: `runtime version ${pending} is pending; only restore-builtin is allowed until the next startup` }
+    }
+    const connectionState = plane.connectionState
+    if (connectionState === 'starting' || connectionState === 'restarting') {
+      return { code: 'runtime_busy', error: `managed dsh is ${connectionState}; managed profile write refused until it settles` }
+    }
+    return null
+  }
+
+  function profileWriteInFlight(): boolean {
+    return profileWriteCount > 0
+  }
+
+  function releaseProfileWrite(): void {
+    if (profileWriteCount <= 0) throw new Error('gateway runtime profile write lease underflow')
+    profileWriteCount -= 1
+    // Release only decrements, so a release that lands after dispose() still
+    // opens the barrier and resolves waiters — dispose() additionally aborts
+    // any pending wait so shutdown never stalls behind an undrained lease.
+    if (profileWriteCount === 0 && profileWriteIdleWaiters.size > 0) {
+      for (const wake of [...profileWriteIdleWaiters]) wake()
+    }
+  }
+
+  /**
+   * Internal rollback-vs-lease wait: resolves 'idle' the moment the
+   * profile-write counter hits zero, 'timeout' when timeoutMs elapses or the
+   * lifecycle abort fires. Never rejects. New acquisitions are refused while
+   * the F7 latch is armed (profileWriteRefusal), so the count can only fall
+   * during this wait.
+   */
+  function waitForProfileWriteIdle(timeoutMs: number): Promise<'idle' | 'timeout'> {
+    if (lifecycleAbort.signal.aborted || !profileWriteInFlight()) {
+      return Promise.resolve(lifecycleAbort.signal.aborted ? 'timeout' : 'idle')
+    }
+    return new Promise(resolve => {
+      const timer = setTimeout(() => finish('timeout'), timeoutMs)
+      const onAbort = (): void => finish('timeout')
+      function finish(outcome: 'idle' | 'timeout'): void {
+        clearTimeout(timer)
+        profileWriteIdleWaiters.delete(wake)
+        lifecycleAbort.signal.removeEventListener('abort', onAbort)
+        resolve(outcome)
+      }
+      function wake(): void {
+        if (!profileWriteInFlight()) finish('idle')
+      }
+      profileWriteIdleWaiters.add(wake)
+      lifecycleAbort.signal.addEventListener('abort', onAbort, { once: true })
+    })
+  }
+
+  function beginProfileWrite(): ProfileWriteLease {
+    const refusal = profileWriteRefusal()
+    if (refusal !== null) return { ok: false, code: refusal.code, error: refusal.error }
+    profileWriteCount += 1
+    return {
+      ok: true,
+      release: () => {
+        releaseProfileWrite()
+      },
+    }
   }
 
   function assertManagerReadable(): void {
@@ -1056,6 +1234,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     }
 
     restartExhaustedRollbackInFlight = true
+    const rollbackLeaseWaitMs = options.rollbackLeaseWaitMs ?? ROLLBACK_LEASE_WAIT_MS
     let operation!: Promise<void>
     let rollbackDurablyLatched = false
     operation = (async () => {
@@ -1077,6 +1256,29 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
         || plane.connectionState !== 'restart-exhausted') return
       const active = resolveWorkspace()
       if (active.source !== 'override' || active.version === null) return
+
+      // Rollback-vs-lease serialization (design 21 §6.3 decision 6/17, F7
+      // review gate): the transaction's restore step writes DSH_HOME BEFORE
+      // the only lease-aware point (the spawn checkpoint inside
+      // plane.startLocal) — a plugin mutation whose pnpm child is live under
+      // a held profile-write lease must drain first, or this rollback would
+      // write DSH_HOME under a concurrent writer. New leases cannot start
+      // while this latch is armed (beginProfileWrite refusal matrix below),
+      // so the wait only drains already-held leases. A lease that outlives
+      // the bound DEFERS the rollback with NO writes: the instance stays in
+      // restart-exhausted with its existing honest projection and
+      // start/restore-builtin remain available; the next restart-exhausted
+      // edge (or gateway restart) re-arms it. dispose() aborts the wait, so
+      // shutdown never stalls behind an undrained lease even though index.ts
+      // disposes the manager before the executor releases those leases.
+      if (profileWriteInFlight()) {
+        const leaseOutcome = await waitForProfileWriteIdle(rollbackLeaseWaitMs)
+        if (disposed || lifecycleAbort.signal.aborted) return
+        if (leaseOutcome !== 'idle') {
+          logger.error('plugin mutation lease held too long; restart-exhausted rollback deferred')
+          return
+        }
+      }
 
       const failedVersion = active.version
       const plan = planRestartExhaustedRollback({
@@ -1250,6 +1452,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
         mutationsAllowed: false,
         operationError,
         restart: restartOutcome,
+        start: startOutcome,
         restoreOutcome: null,
         snapshotCount: null,
         latestSnapshotAt: null,
@@ -1372,6 +1575,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
       // rejection (operationError set, connectionState still 'ready') from a
       // genuine success.
       restart: restartOutcome,
+      start: startOutcome,
       restoreOutcome: override?.restoreOutcome ?? null,
       snapshotCount,
       latestSnapshotAt,
@@ -1474,6 +1678,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     if (resolveWorkspace().version === version) {
       operationError = null
       restartOutcome = null
+      startOutcome = null
       return { accepted: true, version }
     }
     const currentAtSelection = currentPointerVersion()
@@ -1512,6 +1717,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
       }
       operationError = null
       restartOutcome = null
+      startOutcome = null
       return { accepted: true, version }
     }
     // Install is a writer single-flight, but NOT an activation quarantine:
@@ -1583,6 +1789,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
       })
       operationError = null
       restartOutcome = null
+      startOutcome = null
       invalidateDiskCache()
       return { accepted: true, version }
     } catch (error) {
@@ -1643,6 +1850,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     startupBlockReason = null // round-4: a fresh apply supersedes the in-memory block marker
     operationError = null
     restartOutcome = null
+    startOutcome = null
     return { pending: true }
   }
 
@@ -1714,6 +1922,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     startupBlockReason = null
     operationError = null
     restartOutcome = null
+    startOutcome = null
     return { accepted: true }
   }
 
@@ -2052,6 +2261,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     startupBlockReason = null
     operationError = null
     restartOutcome = null
+    startOutcome = null
     return { accepted: true }
   }
 
@@ -2061,12 +2271,17 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
    * poll must be able to distinguish a post-202 entry rejection from success
    * even when connectionState has already returned to 'ready'. */
   let restartOutcome: 'ok' | 'failed' | 'running' | null = null
+  /** Decision-12 start primitive single-flight + outcome (mirrors restart). */
+  let startInFlight = false
+  let startOutcome: 'ok' | 'failed' | 'running' | null = null
 
   async function restart(): Promise<void> {
     assertMutationIdle()
     assertNoPending()
     restartInFlight = true
     restartOutcome = 'running'
+    // A fresh restart epoch supersedes any earlier start verdict.
+    startOutcome = null
     try {
       await plane.restartLocal()
       // CONTRACT (design 18 §9.3): resolve ≠ success — restartLocal() also
@@ -2095,6 +2310,75 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
       throw error
     } finally {
       restartInFlight = false
+    }
+  }
+
+  /**
+   * Decision-12 start primitive (design 21 §6.3 r1): bring the managed dsh up
+   * from stopped/error/restart-exhausted through the plane's guarded
+   * startLocal path. Every synchronous refusal runs BEFORE any plane effect:
+   * a second start in flight, any runtime mutation/profile write in flight
+   * (assertMutationIdle), a recovery block or ordinary pending (the start
+   * surface never bypasses retry/restore-builtin), and a connection state
+   * outside the start window. 202 semantics — the route answers synchronously
+   * from these gates and the outcome is projected via status().start /
+   * operationError (resolve ≠ success: a resolve that did not reach ready is
+   * 'failed', exactly like restart()).
+   */
+  async function start(): Promise<void> {
+    if (startInFlight) {
+      throw Object.assign(new Error('a start is already in flight'), { code: 'runtime_busy' })
+    }
+    assertMutationIdle()
+    // Recovery gate (decision 12: "恢复门不可绕过"): an in-memory startup
+    // block is the authoritative recovery verdict; only its matching retry and
+    // restore-builtin may run. F7's auto-rollback tail and gateway-boot blocks
+    // all land here, so a raw start can never skip the probe/restore gate.
+    if (startupBlockReason !== null) {
+      throw Object.assign(
+        new Error(`runtime recovery ${startupBlockReason} is required; only retry-apply/retry-restore/restore-builtin are allowed`),
+        { code: 'runtime_recovery_required' },
+      )
+    }
+    // Durable ordinary pending (mirror restart): the armed switch is consumed
+    // by the startup transaction, not by a bare spawn of the old workspace.
+    assertNoPending()
+    const connectionState = plane.connectionState
+    if (connectionState !== 'stopped' && connectionState !== 'error' && connectionState !== 'restart-exhausted') {
+      throw Object.assign(
+        new Error(`managed dsh is running (${connectionState}); start applies to stopped/error/restart-exhausted`),
+        { code: 'runtime_busy' },
+      )
+    }
+    startInFlight = true
+    startOutcome = 'running'
+    // A fresh start epoch supersedes any earlier restart verdict (e.g. an F7
+    // auto-rollback 'failed' marker) — the poll must not echo the old verdict
+    // while the r1 recovery is in progress.
+    restartOutcome = null
+    try {
+      await plane.startLocal()
+      // CONTRACT (restart parity): resolve ≠ success — startLocal() resolves
+      // only after its spawn settles, but a concurrent stop/epoch bump can
+      // land the machine on stopped/error/restart-exhausted; only a live
+      // ready/degraded settle counts as 'ok'.
+      const reached = plane.connectionState
+      if (reached !== 'ready' && reached !== 'degraded') {
+        const message = `dsh start did not reach ready (${reached})`
+        operationError = message
+        startOutcome = 'failed'
+        throw new Error(message)
+      }
+      operationError = null
+      startOutcome = 'ok'
+    } catch (error) {
+      if (startOutcome !== 'failed') {
+        operationError = sanitizeRouteError(error instanceof Error ? error.message : String(error))
+        startOutcome = 'failed'
+      }
+      throw error
+    } finally {
+      startInFlight = false
     }
   }
 
@@ -2234,6 +2518,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
       startupBlockReason = null
       operationError = null
       restartOutcome = null
+      startOutcome = null
     }
     return target
   }
@@ -2471,6 +2756,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
       return activationFacts()
     },
     mutationInProgress,
+    mutationInFlight: mutationInProgress,
     activationInProgress,
     exposureQuarantined,
     internalSpawnActive,
@@ -2491,6 +2777,10 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     retryRestore: () => trackOperation(retryRestore()),
     restart: () => trackOperation(restart()),
     restartInFlight: () => restartInFlight,
+    start: () => trackOperation(start()),
+    startInFlight: () => startInFlight,
+    profileWriteInFlight,
+    beginProfileWrite,
     applyNowInFlight: () => applyNowInFlight,
     getRegistry,
     setRegistry: (origin) => trackOperation(setRegistry(origin)),

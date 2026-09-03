@@ -49,3 +49,51 @@ export function chamberRemoteKey(
   if (entry.fiberPhase === 'failed') return 'chamberRemoteFailed'
   return 'chamberRemoteInjectedUnknown'
 }
+
+/* ---- Gateway chamber seed-cache drift (design 21 §6.2/§6.5, plan Phase 3:
+ * A0 read side) ----
+ * The gateway plugin view's manual chamber sync reads the desktop's own
+ * local chamber versions (localPluginList chamber projection — the versions
+ * the sync would upload) against the gateway's seed cache (GET
+ * /chamber/plugins items). The comparison below is the pure drift the view
+ * renders and the「立即同步」action resolves. */
+
+/** The desktop's local chamber versions (its own profile manifest). */
+export interface ChamberLocalVersions {
+  hostGraph: string | null
+  gitWorktree: string | null
+}
+
+/** Per-package local ↔ gateway-cache comparison state. */
+export type ChamberSeedDriftState = 'drift' | 'match' | 'absent-cache' | 'absent-local'
+
+/** Both chamber packages' drift states at once (name-keyed cache map). */
+export interface ChamberSeedDriftProjection {
+  hostGraph: ChamberSeedDriftState
+  gitWorktree: ChamberSeedDriftState
+}
+
+/** One package's state: a cache missing the package/version is the dominant
+ *  fact ('absent-cache' — the gateway is fresh or the sync never landed);
+ *  an unknown LOCAL version next to a cached package ('absent-local' — the
+ *  local manifest was unreadable) can never claim a version mismatch; only
+ *  both-known inequality is a real drift. */
+function chamberSeedState(localVersion: string | null, cachedVersion: string | null): ChamberSeedDriftState {
+  if (cachedVersion === null) return 'absent-cache'
+  if (localVersion === null) return 'absent-local'
+  return localVersion === cachedVersion ? 'match' : 'drift'
+}
+
+/** Compare the local chamber versions against the gateway seed cache (the
+ *  GET /chamber/plugins items keyed by package name). Cache entries the map
+ *  does not name count as absent-cache; unknown (non-chamber) names in the
+ *  map are ignored. */
+export function chamberSeedDrift(
+  local: ChamberLocalVersions,
+  cached: Record<string, string | null>,
+): ChamberSeedDriftProjection {
+  return {
+    hostGraph: chamberSeedState(local.hostGraph, cached[HOST_GRAPH_PACKAGE] ?? null),
+    gitWorktree: chamberSeedState(local.gitWorktree, cached[GIT_WORKTREE_PACKAGE] ?? null),
+  }
+}

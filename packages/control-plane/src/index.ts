@@ -1063,3 +1063,17 @@ export type {
   PrivateFileRead,
   PrivateFileReadOptions,
 } from './private-file.ts'
+// The plugin spec/name whitelist family + reserved-name deny predicate
+// (design 21 §6.2/§6.7 — single source for the desktop main via
+// control-plane-module.ts and the gateway executor). Renderer mirrors stay
+// hand-written and are pinned by the gateway lockstep test
+// (plugin-spec-lockstep.test.ts).
+export {
+  isDeniedPluginName,
+  MATERIALIZE_FILE_SPEC_PATTERN,
+  MAX_PLUGIN_SPEC_CHARS,
+  PLUGIN_NAME_PATTERN,
+  PLUGIN_SPEC_PATTERN,
+  RUN_STDOUT_MAX_BYTES,
+  WRITE_FILE_MAX_BYTES,
+} from './plugin-spec.ts'

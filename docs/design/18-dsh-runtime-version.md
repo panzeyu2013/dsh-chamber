@@ -637,7 +637,11 @@ resourcesPath manifest；「激活 vX」= resolve 结果；「最新 vY」= regi
   导出，评估相对路径覆盖。
 - **出网面**：desktop = 仅主进程访问 npm registry；gateway = 仅 gateway 进程
   访问（§9.3），控制面与 spawn 的 dsh 子进程两侧都保持零出网、
-  loopback 闭环不变。
+  loopback 闭环不变。**design 21 登记（2026-12，决策 1 落实）**：gateway 第三方
+  插件安装子进程随宿主受控出网（`dsh plugin add` 的 pnpm 子进程，env 白名单 =
+  共享 `INSTALL_ENV_WHITELIST`（PATH+代理族）+ 私有目录 pins——`runtime-installer`
+  与 gateway executor 同一常量；安装代码 = gateway 用户级等价，脚本默认允许，
+  见 design 21 §6.1/§6.3）。
 - **隐私**：不携带用户/SSH 材料；失败记录仅版本/时间戳/探测结果/脱敏路径。
 - **已接受让步（用户拍板）**：无验证 + 自由选版本 = 壳可能跑在未重基的 dsh 上；
   安全网 = 探针门控（含延迟裁决）+ known-good 终态 + 三版本现场 + 无快照不切换
@@ -807,7 +811,13 @@ work 目录）。权限纪律并入 design 17 §12（目录 0700、JSON/secret 0
 删除。manager dispose 先 abort 新入口并 fixed-point drain 完整 writer promise（含
 installer 后的 metadata tail、apply-now/F7/retry/restore/restart），最终停 host 后才
 删除 owner；disposed manager 的 status/registry 等入口直接拒绝，不能隔离或改写后继
-owner 的文件。违反部署纪律（如克隆 stateDir）仍是损坏风险。
+owner 的文件。违反部署纪律（如克隆 stateDir）仍是损坏风险。**design 21 插件写互斥
+（2026-12）**：第三方插件队列 executor 挂入同一 writer 族——managed profile 单写
+者租约 `beginProfileWrite`（count 制；`assertMutationIdle` 与全部 spawn 前的
+`beforeSpawnCheckpoint`（control-plane local-connection DI 缝，desktop 不接线、
+gateway index.ts 生产接线为 profile-write 检查）双向互斥；executor 子进程 pid 记入
+journal，崩溃孤儿由下次启动 reconcile 击杀；executor 在 manager dispose 之后
+dispose（租约门封死间隙）——design 17 §4.1/§12 与 design 21 §6.3 同源表述。
 
 **解析链**（§3.5 已并入）：`DSH_GATEWAY_DSH_PATH`（env 恒最高）→ override
 （未失效时）→ 内建锚（`--dsh-path` ?? `findDshWorkspace`）。`--dsh-path` 从
@@ -889,6 +899,7 @@ ready——就绪窗口可达 90s），进度与结果经 `GET /chamber/runtime/
 | `POST /chamber/runtime/retry-apply` | 恢复被中断的指针切换（swap-attempted）或快照失败（snapshot-failed）：清标志 → 重跑启动事务 → 干净时拉起 dsh（desktop retry-apply 对齐） |
 | `POST /chamber/runtime/retry-restore` | 从持久 journal 继续被中断的快照恢复（restore-half/restore-incomplete）：重跑启动事务续作 |
 | `POST /chamber/runtime/restart` | 受控重启 gateway 托管的 dsh 进程（§3.6 项 8：刷新插件挂载；指针不动、无快照/探针；ready 过渡订阅仅把权威状态转发给 runtime 管理器——2026-12 剥离后无 feature 面可 detach/attach）；202 接受、结果经 status().restart（running/ok/failed）+ operationError 轮询，resolve ≠ success |
+| `POST /chamber/runtime/start` | **停机恢复原语（design 21 决策 12，2026-12）**：仅 `stopped/error/restart-exhausted` 放行，受 canStartLocal/exposureQuarantine/单飞与 profile-write 栅栏守卫，**恢复门不可绕过**（recovery phase 与 phase-less `startupBlockedReason` 只开放各自 retry/restore-builtin）；202 + status().start（running/ok/failed）+ operationError 轮询（resolve ≠ success）；r1 恢复闭环（停机移除插件后回到可启动入口）与 connections 卡片「启动实例」入口同源 |
 | `GET/PUT /chamber/runtime/registry` | registry 源设置（owner-only 0600；URL 白名单校验同 §6；仅文件真实缺失时回默认 npmjs；损坏/符号链接/硬链接隔离保留并响亮失败；原子写，激活/安装期间禁止换源） |
 
 普通 `phase:'pending'` 是 core + route + 两套 UI 的一致终态门：除
@@ -910,7 +921,12 @@ blocked-but-alive 语义）；**元数据损坏（journal/current/override corru
 journal-mismatch）2026-12 修订**：与桌面 blocked-but-alive 对齐——FATAL
 不再拒启整个 gateway，gateway 保持存活、托管 dsh 停机、管理面可轮询，
 恢复面 = `POST /chamber/runtime/recover-metadata`（归档证据 + 内建锚探针 +
-仅成功后恢复访问；探针失败保留持久记录可重试）。**挂载点纪律（不随 ready
+仅成功后恢复访问；探针失败保留持久记录可重试）。**r2 兜底链更正（design 21
+§6.8，审计 F4）**：`restore-builtin` **不能**治愈 profile_corrupt（它与 corrupt
+profile 探同一 dsh-home、不随目标版本更换 dsh-home）——兜底 = operator runbook
+（从 `<stateDir>/dsh-runtime/snapshots/` 手工恢复 dsh-home 快照）；`start` 原语
+与 restart-exhausted 自动回退衔接（F7 auto-rollback 尾不在 start 窗口内重复触
+发——start 经同一 assertMutationIdle/恢复门）。**挂载点纪律（不随 ready
 detach）**：runtime 面是挂在 gateway dispatch 面的自有 runtime 控制器（与
 auth/dispatch 同级）——2026-12 剥离后没有 feature host（session index /
 approvals / notify / scheduler / git 均已删除），ready 过渡订阅只把权威状态

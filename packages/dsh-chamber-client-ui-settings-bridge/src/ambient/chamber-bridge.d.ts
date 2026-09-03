@@ -98,3 +98,267 @@ export const chamberBridge: {
   getServers(): ChamberServerAggregate[]
   subscribe(listener: () => void): () => void
 } = undefined as never
+
+/**
+ * MIRROR WARNING (gateway dsh-runtime face, design 21 §5.2 split): the pure
+ * gateway runtime core + the restart poll moved INTO the sidebar package
+ * shared face (packages/dsh-chamber-client-ui-sidebar/src/shared/
+ * gateway-runtime.ts + gateway-runtime-poll.ts, exported through
+ * `@dsh-chamber/dsh-client-ui-sidebar/shared`). The rewired runtime client
+ * imports that face, so the declarations below mirror the REAL shared exports
+ * this package consumes — keep them in sync with the shared sources (the
+ * sidebar test/gateway-runtime-mirror.test.ts locks this ambient to the real
+ * export set). The status VIEW mapping (remoteRuntimeStatusView /
+ * RemoteRuntimeStatusView) stays LOCAL to this package's
+ * src/client/gateway-runtime-api.ts (SettingsBridgeKey-keyed) and is not part
+ * of the shared face.
+ */
+
+/** Same-origin client timeouts/kind for the gateway dsh-runtime surface
+ *  (design 18 §9.3; the shared installer's 10-minute budget + delivery
+ *  margin). Values match gateway-runtime.ts exactly. */
+export const REMOTE_STATUS_POLL_INTERVAL_MS: number
+export const REMOTE_STATUS_POLL_TIMEOUT_MS: number
+export const GATEWAY_RUNTIME_STATUS_KIND: 'dsh-chamber-gateway-runtime'
+
+export interface GatewayRuntimeApiDeps {
+  fetchImpl?: typeof fetch
+  sleepMs?: (ms: number) => Promise<void>
+  pollIntervalMs?: number
+  timeoutMs?: number
+  signal?: AbortSignal
+}
+
+/** Gateway restart readiness polling deps (gateway-runtime-poll.ts). */
+export interface GatewayPollDeps {
+  fetchImpl?: typeof fetch
+  sleepMs?: (ms: number) => Promise<void>
+  timeoutMs?: number
+  pollIntervalMs?: number
+}
+
+/** Instance-scoped request owners used by the gateway runtime section (kept
+ *  structural so instance-switch cancellation is node-testable). */
+export interface RemoteRuntimeActivityOwners {
+  actionController: { current: AbortController | null }
+  actionInFlight: { current: boolean }
+  registryController: { current: AbortController | null }
+  registryInFlight: { current: boolean }
+}
+
+/** Abort both request owners; returns the visible idle flags for the newly
+ *  selected instance. */
+export function resetRemoteRuntimeActivityOwners(owners: RemoteRuntimeActivityOwners): {
+  actionBusy: false
+  registryBusy: false
+}
+
+/** The two production callers have deliberately different terminal contracts:
+ *  `select` only waits for the asynchronous install job, while `apply-now`
+ *  must also observe the post-activation host recovery verdict. */
+export type RemoteRuntimeSettleExpectation = 'select' | 'apply-now'
+
+export type RemoteRuntimePhase =
+  | 'installing'
+  | 'pending'
+  | 'applying'
+  | 'snapshot-failed'
+  | 'swap-attempted'
+  | 'restore-blocked'
+  | 'idle'
+export type RemoteRuntimeSource = 'user-selected' | 'env' | 'builtin-anchor'
+export type RemoteRestartOutcome = 'running' | 'ok' | 'failed'
+
+export interface RemoteRuntimeFailure {
+  version: string
+  at: string
+  reason: string
+}
+
+export interface RemoteRuntimeDiskUsage {
+  versionTrees: number
+  versionTreeBytes: number
+  storeBytes: number
+  cacheBytes: number
+  installHomeBytes: number
+  xdgCacheBytes: number
+  workBytes: number
+  failureBytes: number
+  snapshotBytes: number
+  preRollbackBytes: number
+  restoreBackupBytes: number
+  totalBytes: number
+  storePruneNeeded: boolean
+}
+
+export interface RemoteRuntimeProgress {
+  stage: 'download' | 'install' | 'prune' | 'smoke' | 'publish' | 'done' | (string & {})
+  received?: number
+  total?: number | null
+}
+
+/** `GET /chamber/runtime/status` (design 18 §9.3) — verbatim projection
+ *  (30 fields). */
+export interface RemoteRuntimeStatus {
+  kind: typeof GATEWAY_RUNTIME_STATUS_KIND
+  activeVersion: string | null
+  builtinVersion: string | null
+  currentVersion: string | null
+  selectedVersion: string | null
+  hasOverride: boolean
+  source: RemoteRuntimeSource | null
+  phase: RemoteRuntimePhase
+  startupBlockedReason: string | null
+  pending: string | null
+  connectionState: string | null
+  registry: string | null
+  registryError: string | null
+  platform: string | null
+  mutationsAllowed: boolean
+  operationError: string | null
+  restart: RemoteRestartOutcome | null
+  restoreOutcome: string | null
+  snapshotCount: number | null
+  latestSnapshotAt: string | null
+  snapshotError: string | null
+  restoreInProgress: boolean | null
+  preRollbackCount: number | null
+  preRollbackLatestName: string | null
+  failure: RemoteRuntimeFailure | null
+  diskUsage: RemoteRuntimeDiskUsage | null
+  diskError: string | null
+  diskLimitBytes: number | null
+  diskLimitExceeded: boolean | null
+  progress: RemoteRuntimeProgress | null
+  /** Desktop-shaped metadata health projection (recover-metadata parity):
+   *  absent on pre-recovery servers — UI rows stay hidden. */
+  metadataHealth?: 'unknown' | 'healthy' | 'selection-corrupt' | 'recovery-in-progress' | 'recovery-finalized' | 'recovery-marker-corrupt' | null
+  metadataComponents?: string[]
+  canRecoverMetadata?: boolean
+}
+
+export interface RemoteVersionEntry {
+  version: string
+  latest: boolean
+  cached: boolean
+  belowBaseline: boolean
+}
+
+/** `GET /chamber/runtime/versions` — the server's VersionListEntry list. */
+export interface RemoteVersions {
+  registryOrigin: string
+  versions: RemoteVersionEntry[]
+  /** Cleanup candidates (desktop parity): ledger entries the server would
+   *  actually delete. Absent on older servers → empty (UI row hidden). */
+  removableVersions: string[]
+  error?: string
+}
+
+/** Known-enum arrays (exported by the shared core for the settings-bridge
+ *  view mapping's fail-closed known-phase/source/restart guards). */
+export const REMOTE_PHASES: readonly RemoteRuntimePhase[]
+export const REMOTE_SOURCES: readonly RemoteRuntimeSource[]
+export const REMOTE_RESTART: readonly RemoteRestartOutcome[]
+
+/** Thrown for every remote runtime failure; `status` is the HTTP status when
+ *  known (null for network errors), `code` the server's machine-readable code
+ *  when one was projected. */
+export class RemoteRuntimeApiError extends Error {
+  readonly status: number | null
+  readonly code: string | undefined
+
+  constructor(message: string, status: number | null, code?: string)
+}
+
+export type RemoteRuntimeAction =
+  | { kind: 'select'; version: string }
+  | { kind: 'apply' }
+  | { kind: 'rollback'; version: string }
+  | { kind: 'cleanup-version'; version: string }
+  | { kind: 'restore-pre-rollback'; stashName: string }
+  | { kind: 'recover-metadata' }
+  | { kind: 'restore-builtin' }
+  | { kind: 'retry-apply' }
+  | { kind: 'retry-restore' }
+  | { kind: 'apply-now' }
+
+export interface RemoteRuntimeActionResult {
+  accepted: true
+  status: number
+}
+
+export interface RemoteRuntimeActionGates {
+  mutationDisabled: boolean
+  restoreBuiltinDisabled: boolean
+  retryApplyDisabled: boolean
+  retryRestoreDisabled: boolean
+  restartDisabled: boolean
+  /** Apply-now (design 18 addendum §5.1/§6.1): the pending immediate-switch
+   *  action mirrors the route's synchronous refusals — a plain pending with a
+   *  live instance is enabled; busy tasks, recovery phases, env sources,
+   *  read-only platforms and non-ready/degraded connection states disable it. */
+  applyNowDisabled: boolean
+}
+
+/** Fetch + parse `GET /chamber/runtime/status` over the per-instance chamber
+ *  proxy (the renderer never accepts a URL or a token — the desktop gateway
+ *  transport injects Authorization after the request crossed the renderer
+ *  boundary, design 17 §7.2/§12). */
+export function fetchRemoteRuntimeStatus(
+  chamberInstanceId: string,
+  deps?: { fetchImpl?: typeof fetch; signal?: AbortSignal },
+): Promise<RemoteRuntimeStatus>
+
+export function fetchRemoteRuntimeVersions(
+  chamberInstanceId: string,
+  deps?: { fetchImpl?: typeof fetch; signal?: AbortSignal },
+): Promise<RemoteVersions>
+
+/** POST one runtime action (select/apply/rollback/restore-builtin/
+ *  retry-apply/retry-restore/apply-now); 200/202 → accepted, 409/400 →
+ *  rejection with the server's actionable `error` passed through verbatim,
+ *  401/403/5xx/network → classified copy (never secrets). */
+export function remoteRuntimeAction(
+  chamberInstanceId: string,
+  action: RemoteRuntimeAction,
+  deps?: { fetchImpl?: typeof fetch; signal?: AbortSignal },
+): Promise<RemoteRuntimeActionResult>
+
+/** PUT the registry origin. */
+export function remoteRuntimeSetRegistry(
+  chamberInstanceId: string,
+  origin: string,
+  deps?: { fetchImpl?: typeof fetch; signal?: AbortSignal },
+): Promise<{ origin: string }>
+
+/** Pure UI mirror of the gateway's authoritative mutation fences (shared
+ *  core; the settings-bridge runtime section consumes it from shared). */
+export function remoteRuntimeActionGates(
+  status: RemoteRuntimeStatus | null,
+  clientBusy?: boolean,
+): RemoteRuntimeActionGates
+
+/** Poll `status` after a 202 action until the requested job settles
+ *  (`select` = install contract; `apply-now` = post-activation recovery
+ *  verdict). Interval/timeout are parameters (defaults 2s / 11min). */
+export function pollRemoteRuntimeUntilSettled(
+  chamberInstanceId: string,
+  expectation: RemoteRuntimeSettleExpectation,
+  deps?: GatewayRuntimeApiDeps,
+): Promise<RemoteRuntimeStatus>
+
+/** Parse the status payload (shared core). */
+export function parseRemoteRuntimeStatus(value: unknown): RemoteRuntimeStatus
+
+/** Parse the versions payload (shared core). */
+export function parseRemoteVersions(value: unknown): RemoteVersions
+
+/** Gateway restart readiness poll (design 18 §9.3: restart is 202 + status
+ *  polling; shared core, gateway-runtime-poll.ts). Resolves once the
+ *  connection is ready/degraded with a clean restart outcome; rejects on
+ *  terminal states, config errors (fail fast) and timeout. */
+export function pollGatewayReady(
+  chamberInstanceId: string,
+  signal?: AbortSignal,
+  deps?: GatewayPollDeps,
+): Promise<void>

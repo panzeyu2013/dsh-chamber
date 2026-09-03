@@ -27,9 +27,10 @@ import {
   type HostLogsResponse,
 } from '@dsh-chamber/dsh-client-ui-sidebar/shared'
 import type {
-  LocalPluginManifest, NpmSearchPackage, PluginApplyInput, PluginApplyResult, RemotePluginManifest,
-  SshExecIpcResult, SshLocalPluginExecIpcResult, SshMaterializeResult, SshSeedHostGraphResult,
+  GatewayPluginApplyIpcResult, GatewayPluginApplyInput, GatewayPluginSyncIpcResult, LocalPluginManifest, NpmSearchPackage, PluginApplyInput, PluginApplyResult, RemotePluginManifest,
+  SshExecIpcResult, SshLocalPluginExecIpcResult, SshMaterializeResult, SshPluginUndoIpcResult, SshSeedHostGraphResult,
 } from '../global.d.ts'
+import type { GatewayTasksShape } from './plugin-model.ts'
 
 /** 统一错误形状（design 04 D1：{error, code?}）+ HTTP 状态 + 响应体 + 限流提示。 */
 export type {
@@ -103,7 +104,9 @@ export const cp = {
 /** The desktop SSH surface, or a loud throw when the bridge is not yet up. */
 function desktopSsh() {
   const surface = window.dshChamber?.desktopSsh
-  if (surface == null) throw new Error('桌面端 SSH 面不可用（desktopSsh 未就绪）')
+  // English verbatim per the unlocalized-error convention (main-process /
+  // capability errors surface as-is in both locales).
+  if (surface == null) throw new Error('The desktop SSH surface is unavailable (desktopSsh not ready)')
   return surface
 }
 
@@ -111,6 +114,22 @@ export type LocalPluginListResult = { ok: true; manifest: LocalPluginManifest } 
 export type RemotePluginListResult = { ok: true; manifest: RemotePluginManifest } | { ok: false; error: string }
 export type PluginApplyResult2 = { ok: true; result: PluginApplyResult } | { ok: true; cancelled: true } | { ok: false; error: string }
 export type NpmSearchResult = { ok: true; packages: NpmSearchPackage[] } | { ok: false; error: string }
+
+/** GET /chamber/plugins seed-cache projection (design 17 §9.3, unchanged):
+ *  name + version per synced chamber host package; version null = that
+ *  package was never synced onto the gateway yet. */
+export interface ChamberSeedCacheProjection {
+  name: string
+  version: string | null
+}
+
+/** GET /chamber/plugins/installed projection (design 21 §6.2 readManifest —
+ *  the gateway implementation of the model readManifest verb): the managed
+ *  web profile's (already masked) dependency map + bundles; HTTP 404/500 map
+ *  to the absent/corrupt codes, every other refusal stays a loud ApiError. */
+export type GatewayInstalledProjection =
+  | { ok: true; dependencies: Record<string, string>; bundles: string[]; profileExists: true }
+  | { ok: false; code: 'profile_absent' | 'profile_corrupt' }
 
 /** Local plugin manifest (main reads the authoritative local profile path). */
 export function localPluginList(): Promise<LocalPluginListResult> {
@@ -165,4 +184,75 @@ export function localPluginAddFile(): Promise<SshLocalPluginExecIpcResult> {
 /** Remove a plugin from the LOCAL dsh profile. */
 export function localPluginRemove(name: string): Promise<SshLocalPluginExecIpcResult> {
   return desktopSsh().local_plugin_remove(name)
+}
+
+/** Undo the latest ok ssh plugin change of a remote instance (design 21
+ *  §6.4, plan Phase 5 ssh 统一增量): the MAIN process consults its ssh
+ *  journal, confirms with the user (cancelled = dismissed), and re-executes
+ *  the inverse row through the same ssh plugin_apply flow (restart-to-apply,
+ *  journaled). The renderer never supplies a spec — the id-only intent keeps
+ *  the journal authoritative. */
+export function sshPluginUndo(id: string): Promise<SshPluginUndoIpcResult> {
+  return desktopSsh().ssh_plugin_undo(id)
+}
+
+/* ---- Gateway A0 read side + manual chamber sync (design 21 §6.2/§6.5, plan
+ * Phase 3) ----
+ * The reads ride the per-instance proxy like gatewayHostLogs above
+ * (`/api/i/gateway-<id>/…` — the shared request throws the unified ApiError
+ * on any non-2xx); the sync IPC takes the RAW registry instance id (no
+ * `gateway-` proxy prefix — the main process validates INSTANCE_ID_PATTERN
+ * against the registry key, the same id `save_connection`/`connect` use).
+ * Every value is non-secret: package names/versions and ok/code statuses,
+ * plus an id-only sync intent — never a URL or credential. */
+
+/** GET /chamber/plugins (design 17 §9.3 seed cache, unchanged): name+version
+ *  per synced chamber host package (version null = never synced). A non-2xx
+ *  answer throws the shared ApiError — never a silent empty list. */
+export async function gatewayChamberSeedCache(id: string): Promise<{ items: ChamberSeedCacheProjection[] }> {
+  return request<{ items: ChamberSeedCacheProjection[] }>(`/api/i/gateway-${id}/chamber/plugins`)
+}
+
+/** GET /chamber/plugins/installed (design 21 §6.2 readManifest): 200 ok
+ *  projection / 404 profile_absent / 500 profile_corrupt map to the typed
+ *  union; any other refusal (network, 401/403, proxy 503 …) rethrows the
+ *  shared ApiError — a failure is never folded into an ok shape. */
+export async function gatewayInstalled(id: string): Promise<GatewayInstalledProjection> {
+  try {
+    return await request<GatewayInstalledProjection>(`/api/i/gateway-${id}/chamber/plugins/installed`)
+  } catch (error) {
+    const status = (error as ApiError)?.status
+    if (status === 404) return { ok: false, code: 'profile_absent' }
+    if (status === 500) return { ok: false, code: 'profile_corrupt' }
+    throw error
+  }
+}
+
+/** GET /chamber/plugins/tasks (design 21 §6.2 task projection, plan Phase
+ *  5.③): journal ops (newest first, retention-capped) + durable deferred
+ *  intents + the executor busy flag — the read side of the 202 contract.
+ *  The wire type is the model layer's structural twin
+ *  (plugin-model.ts GatewayTasksShape — single twin shared by the REST
+ *  boundary and the row projection); a non-2xx answer throws the shared
+ *  ApiError, never a silent empty list. */
+export async function gatewayTasks(id: string): Promise<GatewayTasksShape> {
+  return request<GatewayTasksShape>(`/api/i/gateway-${id}/chamber/plugins/tasks`)
+}
+
+/** Re-run the chamber host-package seed-cache sync on a gateway instance
+ *  (design 21 §6.5): the ready registration's auto-sync on demand, over the
+ *  main-process-owned registered transport — {uploaded, skipped} answers the
+ *  awaited auto path, ok:false is loud (no registration / instance gone). */
+export function gatewayPluginSync(id: string): Promise<GatewayPluginSyncIpcResult> {
+  return desktopSsh().gateway_plugin_sync(id)
+}
+
+/** Batch registry add/remove + restart-to-apply on a gateway instance
+ *  (design 21 §6.5/§6.6): id-only (the main process validates every spec
+ *  against the shared whitelist family), main-process confirmation first
+ *  (cancelled = the user dismissed it), ok:true executed arm / ok:false
+ *  loud with partial ops. Classified through the model layer
+ *  (classifyGatewayApplyResult) by the callers. */
+export function gatewayPluginApply(id: string, input: GatewayPluginApplyInput): Promise<GatewayPluginApplyIpcResult> {
+  return desktopSsh().gateway_plugin_apply(id, input)
 }

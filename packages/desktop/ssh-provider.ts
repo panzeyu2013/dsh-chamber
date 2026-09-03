@@ -69,6 +69,18 @@ import { dirname, join } from 'node:path'
 // compiled dist/control-plane, dev → workspace source). The envelope shape
 // can never drift from the control-plane unary client's.
 import { buildClientRequest, mintRpcId, parseServerResponse, postClientRequest } from './control-plane-module.ts'
+// The plugin spec/name whitelist family + reserved-name deny predicate
+// (control-plane plugin-spec.ts, design 21 §6.2/§6.7 — the single source
+// shared with the gateway; re-exported below for this provider's consumers).
+import {
+  isDeniedPluginName,
+  MATERIALIZE_FILE_SPEC_PATTERN,
+  MAX_PLUGIN_SPEC_CHARS,
+  PLUGIN_NAME_PATTERN,
+  PLUGIN_SPEC_PATTERN,
+  RUN_STDOUT_MAX_BYTES,
+  WRITE_FILE_MAX_BYTES,
+} from './control-plane-module.ts'
 import { CHILD_LINE_MAX_CHARS, createBoundedLineProcessor } from './bounded-lines.ts'
 import { gatewayHttpFailureIsTerminal, getGatewayPassword, getGatewaySessionHooks, getGatewayToken, isGatewayRuntimeStatus, verifyGatewayPasswordSession } from './gateway-provider.ts'
 import { INSTANCE_ID_PATTERN, MAX_INSTANCE_LABEL_CHARS } from './transport-provider.ts'
@@ -127,48 +139,26 @@ export const MAX_SSH_USER_CHARS = 64
 export const MAX_SERVICE_NAME_CHARS = 255
 export const MAX_REMOTE_DSH_HOME_CHARS = 1024
 export const MAX_SSH_PASSWORD_CHARS = 4096
-export const MAX_PLUGIN_SPEC_CHARS = 512
-
 /**
- * Package spec whitelist (design 13 §7.2): registry name (+ optional scope)
- * with an optional `@version` (exact / `^`range / `~`range / dist-tag). The
- * character class is deliberately shell-safe — NO `| < > *` space quotes `$`
- * `; & ( )` backtick — because ssh hands the argument to the REMOTE shell
- * verbatim. Ranges (`>=1.2.3 <2`), `||`, wildcards, `npm:` aliases, `git+` /
- * URL specs and `file:`/`link:`/relative paths are all REFUSED here (they are
- * injection surface, or are materialized via a separate path, design 13 §4.6).
+ * Package-spec whitelist family (design 13 §7.2) + reserved-name deny
+ * predicate — SINGLE-SOURCED in control-plane `plugin-spec.ts` (design 21
+ * §6.2/§6.7: the gateway executor and the desktop share one source; the
+ * renderer's ADD_SPEC stays a hand mirror pinned by the lockstep test in
+ * gateway/test/plugin-spec-lockstep.test.ts). Consumed through
+ * control-plane-module.ts — the desktop dual-path facade (packaged →
+ * compiled dist/control-plane, dev → workspace source), the same A2 rule as
+ * the rpc-envelope/cordis-inserts primitives above — and re-exported here so
+ * this provider's consumers and tests keep one unchanged import surface.
  */
-export const PLUGIN_SPEC_PATTERN = /^(@[a-zA-Z0-9][a-zA-Z0-9._-]*\/)?[a-zA-Z0-9][a-zA-Z0-9._-]*(@(\^|~)?([0-9A-Za-z][0-9A-Za-z._+-]*|latest|next))?$/
-
-/** Name-only form for `dsh plugin remove <name>`. */
-export const PLUGIN_NAME_PATTERN = /^(@[a-zA-Z0-9][a-zA-Z0-9._-]*\/)?[a-zA-Z0-9][a-zA-Z0-9._-]*$/
-
-/**
- * The materialize-add `file:` spec whitelist (design 13 §4.6 / §7.2): only the
- * ABSOLUTE form of the materialized-tarball stable dir may reach the remote
- * `dsh plugin add` command — `<remote-home>/.dsh-chamber/plugins/<name>-<hash>.tgz`.
- * The path is constrained to the `.dsh-chamber/plugins/` subtree (the same
- * fixed surface resolveWriteTarget allows writes into), shell-safe, and the
- * argv is only ever constructed by the main-process materialize orchestration
- * (the renderer has no channel that forwards a `file:` spec to a remote
- * `run` — applyPlugins re-validates against PLUGIN_SPEC_PATTERN, which
- * refuses `file:`). `~` is never accepted here: a word-middle `~` is not
- * expanded by the remote shell/pnpm, so the absolute form is mandatory.
- */
-export const MATERIALIZE_FILE_SPEC_PATTERN = /^file:\/([a-zA-Z0-9._-]+\/)*\.dsh-chamber\/plugins\/[a-zA-Z0-9._-]+\.tgz$/
-
-/**
- * write-file content cap (design 13 §4.1: 50MiB suggested): bounds both the
- * base64 payload decoded in the main process and the materialize/seed
- * orchestration payloads that flow through write-file.
- */
-export const WRITE_FILE_MAX_BYTES = 50 * 1024 * 1024
-
-/** Captured stdout cap for whitelisted remote reads. Remote profile files
- * are not trusted to be small; without a byte budget a corrupt/malicious
- * remote `cat` could exhaust Electron's main-process memory. The cap also
- * admits the largest write-file read-back exactly. */
-export const RUN_STDOUT_MAX_BYTES = WRITE_FILE_MAX_BYTES
+export {
+  isDeniedPluginName,
+  MATERIALIZE_FILE_SPEC_PATTERN,
+  MAX_PLUGIN_SPEC_CHARS,
+  PLUGIN_NAME_PATTERN,
+  PLUGIN_SPEC_PATTERN,
+  RUN_STDOUT_MAX_BYTES,
+  WRITE_FILE_MAX_BYTES,
+}
 
 /** Bound of the redacted stderr detail attached to failed `run` errors. */
 const RUN_STDERR_DETAIL_MAX_CHARS = 2048

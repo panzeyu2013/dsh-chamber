@@ -67,6 +67,10 @@ import type {
 import { gatewaySessionScopeForConnection } from './gateway-session.ts'
 import type { GatewayRegistrationAuthProof, GatewaySessionOrigin, GatewaySessionResult } from './gateway-session.ts'
 import { readOwnerOnlySecretFile } from './owner-only-secret-file.ts'
+import { parseSpecArg } from './gateway-ipc-shared.ts'
+import { isDeniedPluginName, PLUGIN_NAME_PATTERN } from './control-plane-module.ts'
+import { GATEWAY_PLUGIN_VERSION_PATTERN, TARBALL_MAX_ARCHIVE_BYTES } from './plugin-tarball.ts'
+import { sanitizeErrorText } from './sanitize-error.ts'
 
 /** Gateway hostname whitelist: a bare hostname/IPv4 (NO colon — the port is
  * carried separately in `remotePort`, never embedded in the host) or a fully
@@ -1275,6 +1279,17 @@ export interface GatewayPluginSyncResult {
   uploaded: boolean
   /** True when the sync was skipped (no local packages to sync). */
   skipped: boolean
+  /**
+   * Honesty marker (design 21 review P2-B1): true when the sync did NOT
+   * complete — a GET/PUT non-200 or a network failure. The renderer-facing
+   * manual-sync IPC maps this to {ok:false} so a failure can never project
+   * as "already up to date" (the both-false tuple stays reserved for the
+   * genuine all-versions-matched case). The fire-and-forget auto path
+   * ignores the marker (its outcome was always warn-only).
+   */
+  failed?: boolean
+  /** First failure detail when failed (already sanitized for IPC). */
+  error?: string
 }
 
 /** Bounded JSON request to a gateway endpoint with the S23 pin discipline. */
@@ -1359,6 +1374,7 @@ export async function syncGatewayChamberPlugins(options: {
 }): Promise<GatewayPluginSyncResult> {
   const timeoutMs = options.timeoutMs ?? 10_000
   if (options.packages.length === 0) return { uploaded: false, skipped: true }
+  let firstFailure: string | null = null
   const origin = options.origin
   const insecure = !origin.startsWith('https://')
   const requestHeaders = { ...options.headers }
@@ -1378,7 +1394,7 @@ export async function syncGatewayChamberPlugins(options: {
     })
     if (status.status !== 200) {
       options.logger.warn(`[dsh-chamber] gateway plugin sync: status projection failed (HTTP ${status.status}); skipped`)
-      return { uploaded: false, skipped: false }
+      return { uploaded: false, skipped: false, failed: true, error: `gateway plugin status projection failed (HTTP ${status.status})` }
     }
     const rows = (status.payload as { items?: Array<{ name?: unknown; version?: unknown }> })?.items ?? []
     const cached = new Map(rows
@@ -1410,6 +1426,7 @@ export async function syncGatewayChamberPlugins(options: {
       })
       if (put.status !== 200) {
         options.logger.warn(`[dsh-chamber] gateway plugin sync: uploading ${pkg.name} failed (HTTP ${put.status}); the managed dsh keeps running without it`)
+        if (firstFailure === null) firstFailure = `uploading ${pkg.name} failed (HTTP ${put.status})`
         continue
       }
       // Byte-identical upload (same version, same bytes) → nothing to apply;
@@ -1437,9 +1454,508 @@ export async function syncGatewayChamberPlugins(options: {
         options.logger.warn(`[dsh-chamber] gateway plugin sync: dsh restart after upload failed: ${error instanceof Error ? error.message : String(error)}`)
       }
     }
+    if (firstFailure !== null) {
+      return { uploaded, skipped: false, failed: true, error: firstFailure }
+    }
     return { uploaded, skipped: false }
   } catch (error) {
     options.logger.warn(`[dsh-chamber] gateway plugin sync failed: ${error instanceof Error ? error.message : String(error)}`)
-    return { uploaded: false, skipped: false }
+    return {
+      uploaded: false,
+      skipped: false,
+      failed: true,
+      error: `gateway plugin sync failed: ${sanitizeErrorText(error instanceof Error ? error.message : String(error))}`,
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Gateway plugin batch apply + folder materialize (design 21 §6.5, plan
+// Phase 4.6): the /chamber/plugins write surface is 202-async — every
+// install/remove submission is accepted onto the gateway's serial executor
+// queue (opId) or persisted as a deferred intent (intentId; executed at the
+// next ready edge). The batch provider therefore:
+//  1. submits removes (POST /chamber/plugins/remove) first, then add specs
+//     (PUT /chamber/plugins/install) — decision 5 先 remove 后 add — serial,
+//     aborting at the FIRST refusal with the honest partial outcome (prior
+//     accepted ops already executed);
+//  2. unless deferRestart, waits for its own accepted ops to terminally
+//     settle (GET /chamber/plugins/tasks — a restart is REFUSED while any
+//     executor lease is held) and only then asks for the controlled restart
+//     (POST /chamber/runtime/restart → 202) and polls the runtime status
+//     projection until the managed dsh settles (the same decision table as
+//     the renderer-side pollGatewayReady: restart ok / failed,
+//     connectionState ready|degraded fallback, terminal failure states);
+//  3. maps the outcome into a result union — ok:false failures that happen
+//     after ops were accepted carry the partial outcome so the caller can
+//     show exactly what executed before the failure (restart refusal is a
+//     failure, never silently swallowed).
+//
+// Materialize uploads a desktop-built tgz (folder pick → buildPluginTarball
+// in plugin-tarball.ts) with the x-plugin-name/x-plugin-version headers and
+// maps the 202/400/409/411/413/500 family honestly.
+//
+// All requests ride the REGISTERED transport origin + auth headers + SPKI
+// pin (the sync discipline above): never a renderer-supplied URL or
+// credential; `authority` is the ssh-tunnel Host-header override.
+// ---------------------------------------------------------------------------
+
+/** Batch apply request/option surface (main.ts maps the IPC payload here). */
+export interface GatewayPluginApplyOptions {
+  /** Registry specs (`name@spec` | `name`; `file:` refused — folder pushes
+   *  go through gatewayChamberMaterialize). */
+  add: string[]
+  /** Installed-list names to remove (never deferred by the gateway). */
+  remove: string[]
+  /** true = only record the change; the restart-to-apply is skipped (the
+   *  change applies on the gateway's next dsh restart). */
+  deferRestart?: boolean
+}
+
+export interface GatewayPluginApplyOutcome {
+  /** Names whose install/remove submission the executor ACCEPTED (202 +
+   *  opId). Accepted ≠ terminally completed: an op that later fails in the
+   *  executor surfaces in the batch error (the batch does not restart over
+   *  a failed op). */
+  installed: string[]
+  removed: string[]
+  /** true only after a restart 202 AND the status poll confirmed the
+   *  managed dsh settled (restart ok, or ready/degraded on legacy
+   *  gateways without the restart-outcome field). */
+  restarted: boolean
+  /** Names whose submission was persisted as a DEFERRED install intent
+   *  (202 + intentId): the gateway executes them — restart included — at
+   *  the next ready edge; they are never counted as installed here. */
+  deferredOps: string[]
+}
+
+export type GatewayChamberApplyBatchResult =
+  | { ok: true; outcome: GatewayPluginApplyOutcome }
+  | { ok: false; error: string; outcome?: GatewayPluginApplyOutcome }
+
+/** Per-request timeout of the apply/materialize HTTP calls. */
+export const GATEWAY_APPLY_REQUEST_TIMEOUT_MS = 15_000
+/** Executor-settle poll budget: 1s × 120 (the plan's bounded poll). */
+export const GATEWAY_APPLY_OP_SETTLE_TIMEOUT_MS = 120_000
+/** Restart readiness poll budget: 1s × 120. */
+export const GATEWAY_APPLY_RESTART_POLL_TIMEOUT_MS = 120_000
+/** Poll interval shared by the settle + restart loops. */
+export const GATEWAY_APPLY_POLL_INTERVAL_MS = 1_000
+/** Materialize upload request timeout (a 32 MiB body over a tunnel). */
+export const GATEWAY_MATERIALIZE_TIMEOUT_MS = 60_000
+
+export async function gatewayChamberApplyBatch(params: {
+  /** Instance id (caller-validated). */
+  id: string
+  /** Registered transport origin (the ready URL; tunnel loopback for ssh). */
+  url: string
+  /** Registration auth headers — main-process only, may be empty
+   *  (a --no-auth deployment). */
+  headers: Record<string, string>
+  /** Registered SPKI pin; null = unpinned. */
+  spkiPin: string | null
+  options: GatewayPluginApplyOptions
+  /** Tunnel Host-header override (the REMOTE gateway authority). */
+  authority?: string
+  signal?: AbortSignal
+  requestTimeoutMs?: number
+  settleIntervalMs?: number
+  settleTimeoutMs?: number
+  restartPollIntervalMs?: number
+  restartPollTimeoutMs?: number
+}): Promise<GatewayChamberApplyBatchResult> {
+  const { url } = params
+  const timeoutMs = params.requestTimeoutMs ?? GATEWAY_APPLY_REQUEST_TIMEOUT_MS
+  const insecure = !url.startsWith('https://')
+  const requestHeaders = { ...params.headers }
+  if (params.authority !== undefined) requestHeaders.host = params.authority
+  const request = (
+    method: 'GET' | 'PUT' | 'POST',
+    path: string,
+    body?: unknown,
+  ): Promise<{ status: number; payload: unknown }> => gatewayJsonRequest(`${url}${path}`, {
+    method,
+    headers: requestHeaders,
+    body,
+    insecure,
+    spkiPin: params.spkiPin,
+    timeoutMs,
+  })
+
+  const outcome: GatewayPluginApplyOutcome = { installed: [], removed: [], restarted: false, deferredOps: [] }
+  const opIds: string[] = []
+  const add = Array.isArray(params.options.add) ? params.options.add : []
+  const remove = Array.isArray(params.options.remove) ? params.options.remove : []
+  const deferRestart = params.options.deferRestart === true
+
+  // Pre-validate the WHOLE batch before any submission (a malformed item is
+  // a client mistake — nothing executes on its account).
+  for (const spec of add) {
+    if (parseSpecArg(spec) === null) return { ok: false, error: `invalid add spec: ${JSON.stringify(spec)}` }
+  }
+  for (const name of remove) {
+    if (typeof name !== 'string' || !PLUGIN_NAME_PATTERN.test(name) || isDeniedPluginName(name)) {
+      return { ok: false, error: `invalid remove name: ${JSON.stringify(name)}` }
+    }
+  }
+  if (add.length === 0 && remove.length === 0) {
+    return { ok: false, error: 'nothing to apply: add and remove are both empty' }
+  }
+
+  const aborted = (): boolean => params.signal?.aborted === true
+  const refusalText = (op: string, status: number, payload: unknown): string => {
+    const record = payload as { error?: unknown; code?: unknown } | null
+    const bodyError = record !== null && typeof record.error === 'string' && record.error !== '' ? record.error : '(no error body)'
+    const code = record !== null && typeof record.code === 'string' && record.code !== '' ? record.code : null
+    return `${op} refused (HTTP ${status}${code === null ? '' : `, code ${code}`}): ${bodyError}`
+  }
+  const partialFailure = (message: string): GatewayChamberApplyBatchResult => {
+    const executed = outcome.installed.length + outcome.removed.length
+    const text = executed > 0
+      ? `${message} — ops already executed before the failure: ${executed}`
+      : message
+    return executed > 0 ? { ok: false, error: text, outcome } : { ok: false, error: text }
+  }
+
+  try {
+    // Remove-before-add (design 21 decision 5 / §5 table row 5 + §6.2 apply
+    // row): the batch applies removals FIRST so an upgrade/swap (remove old
+    // + add new) never leaves a window where the new plugin is added while
+    // the conflicting old one is still installed; failure stops the batch
+    // exactly like the per-row serial contract (installs stay untouched when
+    // a removal fails).
+    for (const name of remove) {
+      if (aborted()) return { ok: false, error: 'gateway plugin apply cancelled', outcome }
+      const response = await request('POST', '/chamber/plugins/remove', { name })
+      if (response.status !== 202) {
+        return partialFailure(refusalText(`remove of ${name}`, response.status, response.payload))
+      }
+      outcome.removed.push(name)
+      const accepted = response.payload as { opId?: unknown } | null
+      if (typeof accepted?.opId === 'string' && accepted.opId !== '') opIds.push(accepted.opId)
+    }
+    for (const spec of add) {
+      if (aborted()) return { ok: false, error: 'gateway plugin apply cancelled', ...(outcome.installed.length + outcome.removed.length > 0 ? { outcome } : {}) }
+      const parsed = parseSpecArg(spec)
+      if (parsed === null) return partialFailure(`invalid add spec: ${JSON.stringify(spec)}`)
+      const response = await request('PUT', '/chamber/plugins/install', { name: parsed.name, spec })
+      if (response.status !== 202) {
+        return partialFailure(refusalText(`install of ${parsed.name}`, response.status, response.payload))
+      }
+      const accepted = response.payload as { deferred?: unknown; opId?: unknown; intentId?: unknown } | null
+      if (accepted?.deferred === true) {
+        outcome.deferredOps.push(parsed.name)
+      } else {
+        outcome.installed.push(parsed.name)
+        if (typeof accepted?.opId === 'string' && accepted.opId !== '') opIds.push(accepted.opId)
+      }
+    }
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    return partialFailure(`gateway plugin apply request failed: ${detail}`)
+  }
+
+  // Restart-to-apply (design 21 §6.3): unless the user deferred, wait for
+  // the accepted ops to settle (the restart route REFUSES while the
+  // executor holds profile-write leases), then ask for the controlled
+  // restart and poll the runtime status projection.
+  if (!deferRestart && (outcome.installed.length > 0 || outcome.removed.length > 0)) {
+    if (opIds.length > 0) {
+      const settled = await waitForOpsToSettle({ request, opIds, signal: params.signal, intervalMs: params.settleIntervalMs ?? GATEWAY_APPLY_POLL_INTERVAL_MS, timeoutMs: params.settleTimeoutMs ?? GATEWAY_APPLY_OP_SETTLE_TIMEOUT_MS })
+      if (!settled.ok) return { ok: false, error: settled.error, outcome }
+    }
+    try {
+      const restart = await request('POST', '/chamber/runtime/restart')
+      if (restart.status !== 202 && restart.status !== 200) {
+        // Honest: the batch executed but the restart was refused — never a
+        // silent success. The caller surfaces the partial outcome; the user
+        // can restart from the instance later (r0).
+        return partialFailure(refusalText('restart of the managed dsh', restart.status, restart.payload))
+      }
+      const polled = await pollRestartSettled({
+        request,
+        signal: params.signal,
+        intervalMs: params.restartPollIntervalMs ?? GATEWAY_APPLY_POLL_INTERVAL_MS,
+        timeoutMs: params.restartPollTimeoutMs ?? GATEWAY_APPLY_RESTART_POLL_TIMEOUT_MS,
+      })
+      if (!polled.ok) {
+        // The restart 202 was accepted; the poll failed to confirm
+        // readiness — partial outcome, honest about what executed.
+        return { ok: false, error: polled.error, outcome }
+      }
+      outcome.restarted = true
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      return partialFailure(`gateway restart request failed: ${detail}`)
+    }
+  }
+  return { ok: true, outcome }
+}
+
+/** Journal entry subset the settle poll reads (plugins-journal.ts shape). */
+interface SettleJournalEntry {
+  id?: unknown
+  kind?: unknown
+  name?: unknown
+  status?: unknown
+  error?: unknown
+}
+
+type GatewayJsonFn = (method: 'GET' | 'PUT' | 'POST', path: string, body?: unknown) => Promise<{ status: number; payload: unknown }>
+
+const TERMINAL_JOURNAL_STATUSES = new Set(['ok', 'failed', 'blocked'])
+
+/** Bound the poll loop with abort sensitivity; mirrors the renderer-side
+ *  pollGatewayReady sleep/abort discipline. */
+function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal === undefined) return new Promise(resolve => setTimeout(resolve, ms))
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', handleAbort)
+      resolve()
+    }, ms)
+    const handleAbort = (): void => {
+      clearTimeout(timer)
+      reject(new Error('gateway plugin apply cancelled'))
+    }
+    signal.addEventListener('abort', handleAbort, { once: true })
+  })
+}
+
+/** Wait until every accepted opId has terminally settled in the gateway's
+ *  task journal (GET /chamber/plugins/tasks). A terminal failed/blocked op
+ *  is a loud {ok:false} — the batch must not restart over a failed op.
+ *  401/403/404 fail fast; other transient answers keep polling until the
+ *  deadline. */
+async function waitForOpsToSettle(params: {
+  request: GatewayJsonFn
+  opIds: string[]
+  signal?: AbortSignal
+  intervalMs: number
+  timeoutMs: number
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (params.opIds.length === 0) return { ok: true }
+  const deadline = Date.now() + params.timeoutMs
+  for (;;) {
+    if (params.signal?.aborted === true) return { ok: false, error: 'gateway plugin apply cancelled' }
+    let response: { status: number; payload: unknown }
+    try {
+      response = await params.request('GET', '/chamber/plugins/tasks')
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      return { ok: false, error: `gateway plugin task projection failed: ${detail}` }
+    }
+    if (response.status === 200) {
+      const tasks = ((response.payload as { tasks?: unknown } | null)?.tasks ?? []) as SettleJournalEntry[]
+      const ours = tasks.filter(entry => typeof entry.id === 'string' && params.opIds.includes(entry.id))
+      const terminal = ours.filter(entry => typeof entry.status === 'string' && TERMINAL_JOURNAL_STATUSES.has(entry.status as string))
+      const failed = terminal.filter(entry => entry.status !== 'ok')
+      if (failed.length > 0) {
+        const detail = failed.map(entry => {
+          const kind = typeof entry.kind === 'string' ? entry.kind : 'op'
+          const name = typeof entry.name === 'string' ? entry.name : String(entry.id ?? '?')
+          const reason = typeof entry.error === 'string' && entry.error !== '' ? entry.error : '(no detail)'
+          return `${kind} of ${name} failed on the gateway: ${reason}`
+        }).join('; ')
+        return { ok: false, error: detail }
+      }
+      if (terminal.length === params.opIds.length) return { ok: true }
+    } else if (response.status === 401 || response.status === 403 || response.status === 404) {
+      return { ok: false, error: `gateway refused the plugin task projection (HTTP ${response.status}); cannot confirm the accepted ops settled` }
+    }
+    // Any other answer (5xx / network hiccup while ops still run) is
+    // transient — keep polling until the deadline.
+    if (Date.now() >= deadline) break
+    await abortableSleep(params.intervalMs, params.signal)
+  }
+  return { ok: false, error: `the gateway has not finished applying the plugin ops within ${params.timeoutMs}ms; no restart was requested — check the instance plugin task list and restart from the instance when it settles` }
+}
+
+/** Poll the runtime status projection after a restart 202 (the same
+ *  decision table as the renderer pollGatewayReady): restart 'failed' or a
+ *  terminal connection state is a loud failure (never success); 'ok', or
+ *  ready/degraded without a pending 'running' outcome (legacy gateways),
+ *  settles success; 401/403/404 fail fast; everything else keeps polling
+ *  until the bounded deadline. */
+async function pollRestartSettled(params: {
+  request: GatewayJsonFn
+  signal?: AbortSignal
+  intervalMs: number
+  timeoutMs: number
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  const deadline = Date.now() + params.timeoutMs
+  const fail = (detail: string): { ok: false; error: string } => {
+    const reason = detail !== '' ? detail : 'unknown restart failure'
+    return { ok: false, error: `restart failed: ${reason}` }
+  }
+  for (;;) {
+    if (params.signal?.aborted === true) return { ok: false, error: 'gateway plugin apply cancelled' }
+    let response: { status: number; payload: unknown }
+    try {
+      response = await params.request('GET', '/chamber/runtime/status')
+    } catch {
+      // dsh is down/restarting — the status endpoint can be transiently
+      // unreachable; keep polling until the deadline.
+      if (Date.now() >= deadline) break
+      await abortableSleep(params.intervalMs, params.signal)
+      continue
+    }
+    if (response.status === 200) {
+      const status = response.payload as { connectionState?: unknown; operationError?: unknown; restart?: unknown } | null
+      const operationError = typeof status?.operationError === 'string' ? status.operationError : ''
+      // A restart rejected AFTER the 202 (a gate that closed between the
+      // route pre-checks and the transaction) sets restart:'failed' while
+      // connectionState is still 'ready' — loud failure, never success.
+      if (status?.restart === 'failed') return fail(operationError)
+      if (status?.connectionState === 'error'
+        || status?.connectionState === 'restart-exhausted'
+        || status?.connectionState === 'stopped') return fail(operationError)
+      if (status?.restart === 'ok') return { ok: true }
+      // Backward-compatible fallback for gateways without the restart
+      // outcome field: 'degraded' counts as success too (process alive,
+      // next probe returns to ready).
+      if ((status?.connectionState === 'ready' || status?.connectionState === 'degraded') && status?.restart !== 'running') {
+        return { ok: true }
+      }
+    } else if (response.status === 401 || response.status === 403 || response.status === 404) {
+      const detail = response.status === 401
+        ? 'unauthorized (401) — check the gateway token'
+        : response.status === 404
+          ? 'gateway does not expose /chamber/runtime (404)'
+          : 'forbidden (403)'
+      return fail(detail)
+    }
+    if (Date.now() >= deadline) break
+    await abortableSleep(params.intervalMs, params.signal)
+  }
+  return { ok: false, error: 'restart accepted but the gateway did not reach ready in time' }
+}
+
+/** Materialize result: ok:true deferred = the submission was persisted as a
+ *  deferred install intent (executed at the next ready edge); deferred
+ *  false = accepted onto the executor queue. */
+export type GatewayChamberMaterializeResult =
+  | { ok: true; deferred: boolean }
+  | { ok: false; error: string }
+
+/** Raw-body PUT with the S23 pin discipline: the tarball bytes never leave
+ *  the machine before the peer key matches a configured pin. */
+function gatewayRawBodyPut(
+  url: string,
+  options: {
+    headers: Record<string, string>
+    body: Buffer
+    insecure: boolean
+    spkiPin: string | null
+    timeoutMs: number
+  },
+): Promise<{ status: number; payload: unknown }> {
+  return new Promise((resolve, reject) => {
+    const request = options.insecure ? httpRequest : httpsRequest
+    const req = request(url, {
+      method: 'PUT',
+      headers: {
+        accept: 'application/json',
+        ...options.headers,
+      },
+      ...(options.insecure || options.spkiPin === null ? {} : { rejectUnauthorized: false, agent: false }),
+    }, res => {
+      const chunks: Buffer[] = []
+      let size = 0
+      res.on('data', chunk => {
+        size += chunk.length
+        if (size > 8 * 1024 * 1024) {
+          res.destroy()
+          reject(new Error('gateway plugin materialize response exceeds the size bound'))
+          return
+        }
+        chunks.push(chunk)
+      })
+      res.on('end', () => {
+        let payload: unknown
+        try {
+          payload = chunks.length === 0 ? null : JSON.parse(Buffer.concat(chunks).toString('utf8'))
+        } catch {
+          payload = null
+        }
+        resolve({ status: res.statusCode ?? 0, payload })
+      })
+      res.on('error', error => reject(error))
+    })
+    req.on('error', error => reject(error))
+    const timer = setTimeout(() => {
+      req.destroy(new Error('gateway plugin materialize timed out'))
+    }, options.timeoutMs)
+    timer.unref?.()
+    req.on('close', () => clearTimeout(timer))
+    const dispatch = (): void => { req.end(options.body) }
+    if (options.spkiPin === null || options.insecure) dispatch()
+    else attachSpkiPinVerifier(req, options.spkiPin, dispatch)
+  })
+}
+
+/** Upload a desktop-built plugin tarball to PUT /chamber/plugins/materialize
+ *  with the x-plugin-name / x-plugin-version headers (both pre-validated
+ *  here against the shared whitelists + the route's version grammar). The
+ *  archive size is re-checked against TARBALL_MAX_ARCHIVE_BYTES before any
+ *  byte is sent. Non-202 answers map their {error, code} body honestly. */
+export async function gatewayChamberMaterialize(params: {
+  /** Instance id (caller-validated). */
+  id: string
+  /** Registered transport origin (the ready URL; tunnel loopback for ssh). */
+  url: string
+  /** Registration auth headers — main-process only, may be empty. */
+  headers: Record<string, string>
+  /** Registered SPKI pin; null = unpinned. */
+  spkiPin: string | null
+  /** The gzip plugin archive (buildPluginTarball output). */
+  tarball: Buffer
+  name: string
+  version: string
+  /** Tunnel Host-header override (the REMOTE gateway authority). */
+  authority?: string
+  timeoutMs?: number
+}): Promise<GatewayChamberMaterializeResult> {
+  const { url } = params
+  if (typeof params.name !== 'string' || !PLUGIN_NAME_PATTERN.test(params.name) || isDeniedPluginName(params.name)) {
+    return { ok: false, error: 'invalid plugin name for the materialize upload' }
+  }
+  if (typeof params.version !== 'string' || !GATEWAY_PLUGIN_VERSION_PATTERN.test(params.version)) {
+    return { ok: false, error: 'invalid plugin version for the materialize upload (exact semver required)' }
+  }
+  if (!Buffer.isBuffer(params.tarball) || params.tarball.length === 0) {
+    return { ok: false, error: 'no plugin archive to upload' }
+  }
+  if (params.tarball.length > TARBALL_MAX_ARCHIVE_BYTES) {
+    return { ok: false, error: `the plugin archive is ${params.tarball.length} bytes, beyond the ${TARBALL_MAX_ARCHIVE_BYTES}-byte upload cap` }
+  }
+  const insecure = !url.startsWith('https://')
+  const requestHeaders: Record<string, string> = {
+    ...params.headers,
+    'x-plugin-name': params.name,
+    'x-plugin-version': params.version,
+    'content-type': 'application/gzip',
+    'content-length': String(params.tarball.length),
+  }
+  if (params.authority !== undefined) requestHeaders.host = params.authority
+  try {
+    const response = await gatewayRawBodyPut(`${url}/chamber/plugins/materialize`, {
+      headers: requestHeaders,
+      body: params.tarball,
+      insecure,
+      spkiPin: params.spkiPin,
+      timeoutMs: params.timeoutMs ?? GATEWAY_MATERIALIZE_TIMEOUT_MS,
+    })
+    if (response.status !== 202) {
+      const record = response.payload as { error?: unknown; code?: unknown } | null
+      const bodyError = record !== null && typeof record.error === 'string' && record.error !== '' ? record.error : '(no error body)'
+      const code = record !== null && typeof record.code === 'string' && record.code !== '' ? record.code : null
+      return { ok: false, error: `materialize of ${params.name}@${params.version} refused (HTTP ${response.status}${code === null ? '' : `, code ${code}`}): ${bodyError}` }
+    }
+    const accepted = response.payload as { deferred?: unknown } | null
+    return { ok: true, deferred: accepted?.deferred === true }
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    return { ok: false, error: `gateway plugin materialize failed: ${detail}` }
   }
 }

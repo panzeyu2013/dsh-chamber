@@ -115,14 +115,15 @@ settings-bridge 按来源 kind 装配子 ctx，同一设置页对不同来源显
 
 | 能力 | dsh（ssh 隧道） | dsh（http 直连） | gateway |
 |---|---|---|---|
-| dsh-runtime 设置分节（design 18 §3.6） | **不挂载**（2026-12 复核：与 http 直连列一致——远端运行时 systemd 部署、无 `/chamber` 管理面；重启经 connections 卡服务操作） | **不挂载**（无管理面、无 ssh 通道、无 `/chamber`） | 挂载，**代理 `/chamber/runtime`** 全功能（status/versions/select/apply/apply-now/rollback/cleanup-version/restore-pre-rollback/recover-metadata/restore-builtin/retry-apply/retry-restore/registry/restart，2026-12 补齐 desktop 对齐动作） |
-| 重启 dsh 动作 | `restart_service`（systemd IPC） | 无 | `/chamber/runtime/restart`（事务化受控重启，刷新插件挂载） |
+| dsh-runtime 设置分节（design 18 §3.6） | **不挂载**（2026-12 复核：与 http 直连列一致——远端运行时 systemd 部署、无 `/chamber` 管理面；重启经 connections 卡服务操作） | **不挂载**（无管理面、无 ssh 通道、无 `/chamber`） | 挂载，**代理 `/chamber/runtime`** 全功能（status/versions/select/apply/apply-now/rollback/cleanup-version/restore-pre-rollback/recover-metadata/restore-builtin/retry-apply/retry-restore/registry/restart/start，2026-12 补齐 desktop 对齐动作；`start` = design 21 决策 12 的停机/错误/restart-exhausted 恢复原语） |
+| 重启 dsh 动作 | `restart_service`（systemd IPC，连接管理面） | 无 | `/chamber/runtime/restart`（事务化受控重启，刷新插件挂载）；停机/错误/restart-exhausted 恢复 = `/chamber/runtime/start`（design 21 决策 12） |
+| 第三方插件管理（install/remove/materialize/tasks/undo） | 有（design 13 插件同步 IPC，单一模型 ssh 后端） | 无（无执行后端） | **有（2026-12 design 21 A1**：`/chamber/plugins/install`+`remove`+`materialize`+`tasks` 写面 + journal/队列，`/chamber/plugins/installed` 读面；单一插件管理模型、末段执行分叉） |
 | 网关编排入口（settings-bridge 导航） | 不挂载 | 不挂载 | **2026-12 修订（用户拍板）**：不挂载——桌面设置不重放网关编排，审批/提问经侧边栏既有事实通道呈现 |
 | 通知与审批转发 | 无（dsh 原生审批，前端承担） | 无（同左） | **无（2026-12 剥离**——聚合视图是重复呈现，官方前端已覆盖审批全流程） |
 | 派生会话摘要 | 无（会话业务由 dsh 前端直接呈现） | 无 | **无（2026-12 剥离**——索引随 feature host 移除） |
 | 跨会话调度 | 无 | 无 | **无（2026-12 剥离**——dsh 没有定时能力，gateway 不添加） |
 | Git worktree 编排 | 有（design 08 实例内插件） | 有（同左） | **无服务器侧记录（2026-12 剥离**；侧边栏走 design 08 实例内插件——托管 dsh 由网关 seed chamber 宿主包，本地/gateway 同一通道） |
-| chamber 宿主包 seed（client-graph / git-worktree） | 远程 seed（design 13 插件同步） | 远程 seed（同左） | **桌面同步（2026-12 Phase 3**：`PUT /chamber/plugins` 上传 → 缓存 `<stateDir>/chamber-plugins/` → 每次 spawn 经控制面 seed 注入托管 profile；版本跟随连接的桌面） |
+| chamber 宿主包 seed（client-graph / git-worktree） | 远程 seed（design 13 插件同步） | **无**（seed 门控 `kind==='dsh' && transport==='ssh'`，http 直连无 ssh 通道——审计勘误：原「同左」与代码不符） | **桌面同步（2026-12 Phase 3**：`PUT /chamber/plugins` 上传 → 缓存 `<stateDir>/chamber-plugins/` → 每次 spawn 经控制面 seed 注入托管 profile；版本跟随连接的桌面） |
 | 移动适配插件（`dsh-chamber-client-ui-mobile`） | 不适用 | 不适用 | **打包 seed（例外**：移动访问绑定 gateway、无桌面在场，插件随 gateway 发行物分发） |
 
 装配规则（design 17 契约）：**gateway 连接** → 仅挂载 dsh-runtime 代理分节
@@ -185,6 +186,11 @@ managed dsh 并释放 `.gateway.lock`。启动失败回滚走同一屏障，绝�
 consumers，ready 过渡订阅只把权威状态转发给 runtime 管理器。**例外**：
 `/chamber/runtime` 是 gateway 自有 runtime 控制器（挂在 dispatch 面，不随 ready
 detach）——dsh 停机/重启/applying 窗口内必须持续可轮询进度（design 18 §9.3）。
+**design 21 写面扩展（2026-12）**：`/chamber/plugins/*` 写路由在 dispatch 面之后
+202 异步落执行器——生命周期 writer barrier 语言随之扩展：插件串行队列与 executor
+子进程纳入 quiesce/dispose/stop 证明（dispose 先于 executor 子进程 kill；executor
+在 manager dispose 之后 dispose，租约门封死间隙——两 stop 路径均如此，见 gateway
+index.ts 装配注释）；plugin 写路由与 runtime 写路由同属 operator-scope。
 
 ## 5. 配置与部署
 
@@ -649,14 +655,25 @@ version）。每次 spawn 时控制面种子注册表从缓存注入托管 profi
 - **移动例外**：`dsh-chamber-client-ui-mobile` 不参与同步——移动访问绑定
   gateway（链路无桌面），插件随 gateway 发行物打包 seed（§3 装配矩阵）。
 
+**2b. `/chamber/plugins/installed|install|remove|materialize|tasks`（2026-12
+design 21 A1 写面；契约见 design 21 §6.2/§6.3）**：托管 profile 第三方插件管理——
+`GET …/installed` = readManifest 投影（file: 值掩码、profile_absent 404 /
+profile_corrupt 500）；`PUT …/install`（registry spec，202 异步/400/409/deferred）、
+`POST …/remove`（停机态可用，not_installed 409）、`PUT …/materialize`（≤32 MiB
+独立流式上传 + tgz 上限）、`GET …/tasks`（journal + deferred 投影，file: spec 掩
+码）——串行队列 + 持久 journal + 单写者租约（runtime-manager profile-write
+lease）+ deferred ready 边沿排空（装完自动受控 restart 一次）；执行器 env 白名
+单、子进程 pid journal（崩溃孤儿启动对账击杀）、错误 `persistence_failed` 500 族。
+
 **3. `/chamber/runtime` + `/chamber/` 仪表盘**：dsh 运行时版本管理（design 18
 §9.3）——`status`/`versions` 投影、`select`/`apply`/`rollback`/`restore-builtin`/
-`retry-apply`/`retry-restore`/`restart` 动作、`registry` 源设置（owner-only
-0600）；`restart` = 事务化受控重启托管 dsh 刷新插件挂载（design 18 §3.6 项
-8/§9.3：202 + status 轮询，指针不动、无快照/探针）；该面挂在 dispatch 的
-runtime 控制器上、**不随 ready detach**（dsh 停机窗口可轮询进度）。仪表盘 =
-**Credentials 面板 + Runtime 块**（settings/approvals/sessions/schedule/worktrees
-区块随编排面删除）。
+`retry-apply`/`retry-restore`/`restart`/`start` 动作（`start` = design 21 决策 12
+停机恢复原语：仅 stopped/error/restart-exhausted，恢复门不可绕过，202 + status
+轮询）、`registry` 源设置（owner-only 0600）；`restart` = 事务化受控重启托管 dsh
+刷新插件挂载（design 18 §3.6 项 8/§9.3：202 + status 轮询，指针不动、无快照/
+探针）；该面挂在 dispatch 的 runtime 控制器上、**不随 ready detach**（dsh 停机
+窗口可轮询进度）。仪表盘 = **Credentials 面板 + Runtime 块**（settings/approvals/
+sessions/schedule/worktrees 区块随编排面删除）。
 
 **Desktop 连接卡的 gateway 主机日志**（2026-11 接线）：gateway 自己的控制面复用
 control-plane 管理面（dispatch 在 dsh 代理 fallthrough 之前认领 `/api/host/*`，
@@ -991,8 +1008,9 @@ dry-run 无条件清空签名/公证环境变量与 `GH_TOKEN`（即使仓库已
 3. 打包 Desktop：新增 Gateway（https+凭据 / http 明文+凭据 / http 无认证三种形态）、
    重启后自动连接（safeStorage 解密 + 密码会话重登）、token/密码更新/清除撤销既有流、
    N-ctx 与 Gateway settings 页面（dsh-runtime 分节挂载差异验证：gateway 完整管理面
-   （版本选择/状态/快照/更新/回滚/恢复内建/registry/restart 与轮询）/ dsh ssh
-   版本只读 / dsh http 直连不挂载）；
+   （版本选择/状态/快照/更新/回滚/恢复内建/registry/restart/start/apply-now 与轮询）
+   / **dsh 直连（ssh/http）均不挂载**——审计 F4 勘误：原「dsh ssh 版本只读」为过期
+   表述，与 §3 能力表/design 18 §9.3/AGENTS 一致为不挂载）；
 4. macOS 发布产物完成 Developer ID 签名/公证/安装；Windows 未签名产物验证安装与
    SmartScreen 已知提示（首版不把 Authenticode 当完成条件）；
 5. 服务端 dsh runtime 实机：安装候选版本 → 重启 Gateway → 探针 → 故障注入回退 →

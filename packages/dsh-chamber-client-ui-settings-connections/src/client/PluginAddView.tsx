@@ -67,7 +67,7 @@ export function PluginAddView({ t, spec, onInstalled }: {
           // or the manifest assertion failed (design 13 §4.5) — fail loud and
           // keep the input; never report a false success.
           const first = res.result.failed[0]
-          setDraftError(first !== undefined ? `${value}：${first.error}` : t('pluginsVerifyFailed'))
+          setDraftError(first !== undefined ? `${value}${t('partialSep')}${first.error}` : t('pluginsVerifyFailed'))
         } else {
           setResult(t('pluginsDeferred'))
           setDraft('')
@@ -148,7 +148,7 @@ export function PluginAddView({ t, spec, onInstalled }: {
       </label>
       <div className={css.pluginAddActions}>
         <Button variant="primary" size="sm" disabled={installing} onClick={() => { void installSpec(draft) }}>
-          {installing ? t('saving') : t('pluginsAddInstall')}
+          {installing ? t('busyTasks') : t('pluginsAddInstall')}
         </Button>
       </div>
 

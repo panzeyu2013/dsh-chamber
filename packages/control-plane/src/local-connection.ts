@@ -83,9 +83,13 @@ export interface LocalConnectionDeps {
   }) => Promise<SpawnedDsh>
   describeCapabilities?: DescribeCapabilitiesFn
   /**
-   * Test-only scheduling seam. Production leaves this absent; race tests use
-   * it to suspend a start after the public entry gate but before any
-   * DSH_HOME seed or process spawn.
+   * Spawn scheduling seam, invoked on BOTH spawn paths (startLocal and the
+   * health auto-restart loop) after the public entry gate but before any
+   * DSH_HOME seed or process spawn. The desktop control plane leaves this
+   * absent; the gateway server wires it in production (design 21 §6.3
+   * decision 17: spawn-checkpoint.ts refuses the spawn while a managed
+   * profile-write lease is held, closing the DSH_HOME TOCTOU). Race tests
+   * use the same seam to suspend a start.
    */
   beforeSpawnCheckpoint?: (kind: 'start' | 'restart') => void | Promise<void>
 }

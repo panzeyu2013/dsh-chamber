@@ -129,8 +129,11 @@ const CRITICAL_RUNTIME_FILES = [
 ] as const
 const FAILED_ERROR_LIMIT = 2_000
 
-/** Only variables pnpm/network needs may cross the process boundary. */
-const INSTALL_ENV_WHITELIST = /^(PATH|HTTP_PROXY|HTTPS_PROXY|NO_PROXY|http_proxy|https_proxy|no_proxy)$/
+/** Only variables pnpm/network needs may cross the process boundary. Shared
+ * (design 21 §6.3 env discipline): the desktop runtime installer AND the
+ * gateway plugin executor apply this same canonical whitelist to their
+ * install children. */
+export const INSTALL_ENV_WHITELIST = /^(PATH|HTTP_PROXY|HTTPS_PROXY|NO_PROXY|http_proxy|https_proxy|no_proxy)$/
 
 export function scrubInstallEnv(base: NodeJS.ProcessEnv): Record<string, string> {
   const out: Record<string, string> = {}
@@ -140,7 +143,14 @@ export function scrubInstallEnv(base: NodeJS.ProcessEnv): Record<string, string>
   return out
 }
 
-function sanitizeInstallerOutput(raw: string, limit: number): string {
+/** Sanitize installer/executor child output for durable projections: URLs
+ * are reduced to their origin (userinfo/query/path capability tokens
+ * removed), named secrets redacted, absolute paths removed, then
+ * byte-bounded. Shared (design 21 §6.3): the desktop runtime installer and
+ * the gateway plugin executor apply the same sanitizer family to child
+ * stderr before it can land in a journal/task projection served verbatim to
+ * clients. */
+export function sanitizeInstallerOutput(raw: string, limit: number): string {
   const withoutUrlSecrets = raw.replace(/https?:\/\/[^\s"'<>]+/gi, (token) => {
     try {
       const url = new URL(token)

@@ -29,10 +29,12 @@ import {
   IconCloseOutline16,
   IconDataOutline16,
   IconEditOutline16,
+  IconFolderOpenOutline16,
   IconLinkOutline16,
   IconPlayOutline16,
   IconPlusOutline16,
   IconRefreshOutline16,
+  IconSearchOutline16,
   IconStopFill16,
   IconTrashOutline16,
   Modal,
@@ -40,11 +42,13 @@ import {
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 // Type-only: pulls the settings shell's SlotMap merge ('settings.section').
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
+import { pollGatewayReady } from '@dsh-chamber/dsh-client-ui-sidebar/shared'
 import type {
   DesktopSshSurface, SshConfigDiscovery, SshConfigHost, SshInstanceSpec, SshLogEntry, SshPhase, SshStatusProjection, TransportKind, TransportMethod,
 } from '../global.d.ts'
 import type { SettingsConnectionsKey } from '../locales.ts'
 import { cp, type ConnectionSummary, type HealthResponse, type HostLogsResponse } from './control-plane.ts'
+import { classifyRestartError, serverRefusalText } from './managed-restart.ts'
 import { PluginSyncModal } from './PluginSyncModal.tsx'
 import { PluginDiagnosticLine } from './plugin-diagnostic.tsx'
 import type { PluginDiagnostic } from './plugin-diagnostic.ts'
@@ -103,6 +107,24 @@ export type ConnectionsSectionProps =
 /** Host-log page size (04 §3.3: default 200, cap 1000). */
 const HOST_LOG_LIMIT = 200
 const MIN_GATEWAY_TOKEN_CHARS = 32
+
+/** Gateway-card runtime-probe cadence (design 21 §6.8 r1): while the section
+ *  is mounted, connected gateway cards re-read /chamber/runtime/status at
+ *  this interval so the「启动实例」action appears/disappears with the managed
+ *  dsh's own state (a host-side crash/restart-exhausted needs no user action
+ *  on this desktop to surface). */
+const GATEWAY_RUNTIME_PROBE_INTERVAL_MS = 20_000
+
+/** Runtime connection states the「启动实例」action applies to (design 21
+ *  §6.8 r1 / decision 12 — the /chamber/runtime/start route's own gate,
+ *  runtime-routes.ts). */
+const STARTABLE_RUNTIME_STATES = new Set(['stopped', 'error', 'restart-exhausted'])
+
+/** 每卡受控重启/启动的结果行（design 21 §5.1/§6.8）：tone 'error' 以
+ *  css.error + role="alert" 渲染（opError 同款红字），'ok' 以 css.hint +
+ *  role="status"（P2-1：结果行必须带语气渲染，接受/完成 = ok，拒绝/失败/
+ *  超时 = error）。 */
+type RestartNote = { tone: 'ok' | 'error'; text: string }
 
 /** Local-card connection-row poll cadence: 状态由 /api/host/health-events
  * 推送（05 §3），此处只兜底行字段（label/dshPort）与流异常收敛。 */
@@ -396,6 +418,32 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
   const [pluginFor, setPluginFor] = useState<SshInstanceSpec | 'local' | null>(null)
   const [inventoryFor, setInventoryFor] = useState<SshInstanceSpec | null>(null)
 
+  // ---- gateway 托管 dsh 受控重启（design 21 §5.1）----
+  /** 哪个 gateway 卡的「重启 dsh」确认 Modal 开着。 */
+  const [restartConfirmFor, setRestartConfirmFor] = useState<SshInstanceSpec | null>(null)
+  /** 每卡独立单飞（与 busy[id] 同款模型）：正在重启的 gateway 卡 id 集。
+   *  A 卡在飞不影响 B 卡按钮/Modal；收尾只清自己的 id，绝不静默关闭他卡。 */
+  const [restartingIds, setRestartingIds] = useState<Record<string, boolean>>({})
+  /** 每卡重启/启动结果行（成功/失败/超时/拒绝），按卡片 id 落独立行；tone
+   *  决定渲染：'error' = css.error + role="alert"（opError 同款红字），
+   *  'ok' = css.hint + role="status"。 */
+  const [restartNotes, setRestartNotes] = useState<Record<string, RestartNote | null>>({})
+  /** 每卡在飞重启的 AbortController（同卡新尝试先中止旧的；卸载时全部中止）。 */
+  const restartAbortRefs = useRef<Record<string, AbortController>>({})
+
+  // ---- gateway 托管 dsh 启动（design 21 §6.8 r1 / decision 12）----
+  /** 正在启动的 gateway 卡 id 集（与 restartingIds 同款每卡单飞；同卡
+   *  重启/启动互斥 —— 二者写同一 runtime）。 */
+  const [startBusyIds, setStartBusyIds] = useState<Record<string, boolean>>({})
+  /** 每卡在飞启动的 AbortController。 */
+  const startAbortRefs = useRef<Record<string, AbortController>>({})
+  /** 每卡托管 dsh runtime connectionState（design 21 §6.8 r1 启动门控）：
+   *  隧道 phase 只证明 gateway 宿主可达 —— 托管 dsh 是否在跑由
+   *  /chamber/runtime/status 的 connectionState 投影回答；「启动实例」
+   *  仅在该状态 ∈ {stopped, error, restart-exhausted} 时出现。卡条目只在
+   *  宿主答 200 后写入。 */
+  const [runtimeConnectionById, setRuntimeConnectionById] = useState<Record<string, string | undefined>>({})
+
   const clearOpError = useCallback((id: string): void => {
     setOpError(prev => {
       if (!(id in prev)) return prev
@@ -538,37 +586,156 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
   }, [clearOpError])
 
   /**
-   * Gateway 目标的受控重启（design 18 §9.3）：ssh dsh 行走 systemd
-   * restart_service（主进程 exec），gateway 行没有该表面——它的受管 dsh 经
-   * gateway 自己的运行时控制器重启：POST /api/i/gateway-<id>/chamber/
-   * runtime/restart（实例代理注入会话凭据；202 = 已接受，事务化重启后台
-   * 执行；同步拒绝 409 等携带服务器原因）。按钮在传输未连接时禁用——代理
-   * 无注册传输只会答 503。
+   * 受控重启 gateway 托管的 dsh（design 21 §5.1）：POST
+   * /api/i/gateway-<id>/chamber/runtime/restart —— 仅 202 接受；409/400 拒绝
+   * 逐字投影 body.error（serverRefusalText）。202 后按 shared pollGatewayReady
+   * 语义轮询 /chamber/runtime/status（1s/120s；restart failed / 终态 / 401/403/
+   * 404 快失败；超时诚实投影）。结果落在该卡独立结果行（restartNotes：
+   * tone 分流渲染，error = 红字 alert、ok = 灰字 status），
+   * 成功顺带刷新卡片状态投影。桌面零改动：写走既有反代（auth 主进程注入）。
    */
-  const runGatewayRestart = useCallback(async (spec: SshInstanceSpec): Promise<void> => {
-    const id = spec.id
-    setBusy(prev => ({ ...prev, [id]: true }))
+  const restartManagedDsh = useCallback(async (spec: SshInstanceSpec): Promise<void> => {
+    // 每卡独立单飞：同卡重复确认被门挡住；他卡在飞不受影响。
+    if (restartingIds[spec.id] === true) return
+    const id = `gateway-${spec.id}`
+    // 同卡新尝试（防御性，单飞门已挡并发）先中止上一轮，互不串扰。
+    restartAbortRefs.current[spec.id]?.abort()
+    const controller = new AbortController()
+    restartAbortRefs.current[spec.id] = controller
+    setRestartingIds(prev => ({ ...prev, [spec.id]: true }))
+    setRestartNotes(prev => ({ ...prev, [spec.id]: null }))
+    const note = (value: RestartNote | null): void => {
+      setRestartNotes(prev => ({ ...prev, [spec.id]: value }))
+    }
     try {
-      const response = await fetch(`/api/i/${spec.kind}-${id}/chamber/runtime/restart`, { method: 'POST' })
-      if (response.status === 202) {
-        clearOpError(id)
+      let response: Response
+      try {
+        response = await fetch(`/api/i/${id}/chamber/runtime/restart`, { method: 'POST' })
+      } catch (err) {
+        if (controller.signal.aborted) return
+        note({ tone: 'error', text: errorMessage(err) })
         return
       }
-      let serverReason = ''
+      if (response.status !== 202) {
+        let body: unknown = null
+        try { body = await response.json() } catch { body = null }
+        note({ tone: 'error', text: serverRefusalText(body, response.status) })
+        return
+      }
       try {
-        const body = await response.json() as { error?: unknown }
-        if (typeof body.error === 'string' && body.error !== '') serverReason = body.error
-      } catch { /* non-JSON body — fall back to the status */ }
-      setOpError(prev => ({
-        ...prev,
-        [id]: serverReason !== '' ? `restart refused: ${serverReason}` : `restart refused (${response.status})`,
-      }))
-    } catch (err) {
-      setOpError(prev => ({ ...prev, [id]: errorMessage(err) }))
+        await pollGatewayReady(id, controller.signal)
+        note({ tone: 'ok', text: t('restartManagedDshOk') })
+        // 成功/失败刷新卡片状态投影（design 21 §5.1）：registry 不变，只重读
+        // 各实例 phase/service 激活态。
+        void loadRemote()
+      } catch (err) {
+        if (controller.signal.aborted) return
+        const cls = classifyRestartError(err)
+        // accepted-timeout = 重启已接受、仍在恢复 → 本地化说明（ok 语气：动作
+        // 已被接受，仅提示仍在恢复）；其余 = 轮询/服务的英文错误串原样透出
+        // （error 语气；未本地化文案登记接受，design 21 §5.2）。
+        note(cls.kind === 'accepted-timeout'
+          ? { tone: 'ok', text: t('restartManagedDshAccepted') }
+          : { tone: 'error', text: cls.detail })
+      }
     } finally {
-      setBusy(prev => ({ ...prev, [id]: false }))
+      // 收尾只清自己的 id：A 卡完成绝不静默关闭/解锁 B 卡的在飞状态。
+      setRestartingIds(prev => {
+        if (prev[spec.id] !== true) return prev
+        const next = { ...prev }
+        delete next[spec.id]
+        return next
+      })
+      // 只关闭「正在收尾这张卡」的确认 Modal；他卡 Modal 保持原样。
+      setRestartConfirmFor(prev => (prev !== null && prev.id === spec.id ? null : prev))
+      if (restartAbortRefs.current[spec.id] === controller) delete restartAbortRefs.current[spec.id]
     }
-  }, [clearOpError])
+  }, [restartingIds, t, loadRemote])
+
+  /**
+   * 托管 dsh runtime 探针（design 21 §6.8 r1）：GET /api/i/gateway-<id>/
+   *  chamber/runtime/status —— 只投影 connectionState（启动动作的门控输入）。
+   *  /chamber 管理面挂宿主、非 ready-gated：托管 dsh 停机时宿主仍答 200，
+   *  所以隧道 'ready' 与 runtime 'stopped' 可以并存，二者都必须诚实呈现。
+   *  失败/非 200 = 状态未知 —— 不写条目（启动按钮随之不渲染）；200 只更新
+   *  change 的卡（同值不重写，避免无谓渲染）。
+   */
+  const probeGatewayRuntime = useCallback(async (specId: string): Promise<void> => {
+    let connectionState: string | null = null
+    try {
+      const response = await fetch(`/api/i/gateway-${specId}/chamber/runtime/status`)
+      if (response.status !== 200) return
+      const payload = await response.json() as { connectionState?: unknown } | null
+      connectionState = typeof payload?.connectionState === 'string' ? payload.connectionState : null
+    } catch {
+      return
+    }
+    if (connectionState === null) return
+    setRuntimeConnectionById(prev => prev[specId] === connectionState ? prev : { ...prev, [specId]: connectionState })
+  }, [])
+
+  /** 「启动实例」（design 21 §6.8 r1 / decision 12, start 原语）：POST
+   *  /api/i/gateway-<id>/chamber/runtime/start —— 与 restart 同一 202 +
+   *  pollGatewayReady 语义（仅 stopped/error/restart-exhausted 可启动，
+   *  其余 409 body.error 逐字经 serverRefusalText；202 后共享轮询按
+   *  connectionState 收敛，start:'failed'/终态快失败、超时诚实投影）。
+   *  每卡独立单飞（startBusyIds）+ 与重启互斥；结果落 restartNotes 槽位
+   *  （同一张卡同一时刻只允许一个 runtime 动作在飞）。成功刷新卡片投影并
+   *  立即重探 runtime（按钮随 connectionState 收敛而消失）。
+   */
+  const startManagedDsh = useCallback(async (spec: SshInstanceSpec): Promise<void> => {
+    if (startBusyIds[spec.id] === true) return
+    if (restartingIds[spec.id] === true) return
+    const id = `gateway-${spec.id}`
+    startAbortRefs.current[spec.id]?.abort()
+    const controller = new AbortController()
+    startAbortRefs.current[spec.id] = controller
+    setStartBusyIds(prev => ({ ...prev, [spec.id]: true }))
+    setRestartNotes(prev => ({ ...prev, [spec.id]: null }))
+    const note = (value: RestartNote | null): void => {
+      setRestartNotes(prev => ({ ...prev, [spec.id]: value }))
+    }
+    try {
+      let response: Response
+      try {
+        response = await fetch(`/api/i/${id}/chamber/runtime/start`, { method: 'POST', signal: controller.signal })
+      } catch (err) {
+        if (controller.signal.aborted) return
+        note({ tone: 'error', text: errorMessage(err) })
+        return
+      }
+      if (response.status !== 202) {
+        let body: unknown = null
+        try { body = await response.json() } catch { body = null }
+        note({ tone: 'error', text: serverRefusalText(body, response.status) })
+        return
+      }
+      try {
+        await pollGatewayReady(id, controller.signal)
+        note({ tone: 'ok', text: t('startManagedDshOk') })
+        void loadRemote()
+        void probeGatewayRuntime(spec.id)
+      } catch (err) {
+        if (controller.signal.aborted) return
+        const cls = classifyRestartError(err)
+        // accepted-timeout = 启动已接受、仍在恢复：轮询的英文超时串原样透出
+        // （error 语气；无 start 专用 zh 超时键；restartManagedDshAccepted 的
+        // 「重启」措辞对启动不准确，未借用 —— 未本地化文案登记接受，design 21
+        // §5.2）；其余 = 启动失败 + 逐字 detail（error 语气）。
+        note({ tone: 'error', text: cls.kind === 'accepted-timeout'
+          ? errorMessage(err)
+          : t('startManagedDshFailed').replace('{error}', cls.detail) })
+      }
+    } finally {
+      setStartBusyIds(prev => {
+        if (prev[spec.id] !== true) return prev
+        const next = { ...prev }
+        delete next[spec.id]
+        return next
+      })
+      if (startAbortRefs.current[spec.id] === controller) delete startAbortRefs.current[spec.id]
+    }
+  }, [startBusyIds, restartingIds, t, loadRemote, probeGatewayRuntime])
 
   const openLogs = useCallback(async (spec: SshInstanceSpec): Promise<void> => {
     logsTargetRef.current = spec.id
@@ -688,7 +855,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
       // current registry. If the
       // deletion did not land, say so instead of a silent no-op.
       if (saved.some(instance => instance.id === pendingDelete.id)) {
-        setOpError(prev => ({ ...prev, [pendingDelete.id]: '删除未生效：主进程拒绝了该变更（连接状态变化或状态目录不可写？）' }))
+        setOpError(prev => ({ ...prev, [pendingDelete.id]: t('deleteNotEffective') }))
       } else {
         clearOpError(pendingDelete.id)
       }
@@ -1066,9 +1233,41 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
     return () => { clearInterval(timer) }
   }, [bridgeUp])
 
+  // 卸载即中止全部在飞的重启/启动轮询（pollGatewayReady 对 AbortSignal
+  // 敏感）：迟到的响应绝不能改写已卸载页面的状态。
+  useEffect(() => {
+    return () => {
+      for (const controller of Object.values(restartAbortRefs.current)) controller.abort()
+      for (const controller of Object.values(startAbortRefs.current)) controller.abort()
+    }
+  }, [])
+
+  // Gateway 卡 runtime 探针节奏（design 21 §6.8 r1）：注册表/状态变化时立即
+  // 探一次已连接 gateway 卡，此后按固定间隔维持（宿主侧自发停机/恢复无桌面
+  // 事件可依赖）；transport 断开（phase 非 ready/degraded）的卡不探 ——
+  // 启动动作本身以 connected 门控，未知/断连时绝不渲染。
+  useEffect(() => {
+    if (!bridgeUp) return
+    const connectedGatewaySpecs = (): SshInstanceSpec[] => instances.filter(spec =>
+      spec.kind === 'gateway'
+      // Kind guard mirrors the card's stale-projection suppression: a kind
+      // switch keeps the id, so a status pushed for the OLD kind must never
+      // drive the runtime probe.
+      && statuses[spec.id]?.kind === 'gateway'
+      && (statuses[spec.id]?.phase === 'ready' || statuses[spec.id]?.phase === 'degraded'))
+    const probe = (): void => {
+      for (const spec of connectedGatewaySpecs()) void probeGatewayRuntime(spec.id)
+    }
+    probe()
+    const timer = setInterval(probe, GATEWAY_RUNTIME_PROBE_INTERVAL_MS)
+    return () => { clearInterval(timer) }
+  }, [bridgeUp, instances, statuses, probeGatewayRuntime])
+
   const dsh = health?.dsh
   const healthy = dsh?.status === 'ready' || dsh?.status === 'degraded'
   const starting = dsh?.status === 'starting' || dsh?.status === 'restarting'
+  /** 确认 Modal 的目标卡是否正处「本卡重启」忙碌态（他卡在飞不影响本 Modal）。 */
+  const restartConfirmBusy = restartConfirmFor !== null && restartingIds[restartConfirmFor.id] === true
 
   // dsh 运行时版本（design 18 §3.6 B）：优先读同一个 runtime state；旧壳
   // 尚未提供完整状态时才回退 M0 的 info 投影，null/空串时不编造 chip。
@@ -1144,7 +1343,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                 aria-label={t('pluginsOpen')}
                 onClick={() => { setPluginFor('local') }}
               >
-                <IconChecklistOutline14 />
+                <IconFolderOpenOutline16 />
               </button>
               <button
                 type="button"
@@ -1234,6 +1433,15 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                 const phase = status?.phase
                 const connected = phase === 'ready' || phase === 'degraded'
                 const specBusy = busy[spec.id] === true
+                // Gateway runtime startability (design 21 §6.8 r1): the
+                // tunnel phase proves the gateway HOST answers — the managed
+                // dsh's own state comes from the runtime probe
+                // (runtimeConnectionById). startBusy keeps the button
+                // rendered while the per-card start is in flight.
+                const runtimeConnectionState = runtimeConnectionById[spec.id]
+                const runtimeStartable = runtimeConnectionState !== undefined
+                  && STARTABLE_RUNTIME_STATES.has(runtimeConnectionState)
+                const startBusy = startBusyIds[spec.id] === true
                 const serviceActive = status?.serviceActive
                 // systemd control rides the ssh transport (dsh or gateway
                 // over a tunnel both exec systemctl over ssh); http direct
@@ -1243,6 +1451,8 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                 // SSH 隧道本身正常、问题在远端 dsh 实例——绝不展示 SSH 认证失败
                 // 提示（误导性信息修复）。
                 const hintKey = actionHintKey(spec, status, phase)
+                // 本卡重启/启动结果行（null = 无）；tone 分流渲染（见下）。
+                const restartNote = restartNotes[spec.id]
                 return (
                   <li key={spec.id} className={css.card}>
                     <div className={css.cardHead}>
@@ -1308,6 +1518,11 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                     {status?.logSummary !== '' ? <p className={css.hint}>{status?.logSummary}</p> : null}
                     {hintKey !== null ? <p className={css.hint}>{t(hintKey)}</p> : null}
                     {opError[spec.id] !== undefined ? <p className={css.error} role="alert">{opError[spec.id]}</p> : null}
+                    {restartNote !== undefined && restartNote !== null
+                      ? restartNote.tone === 'error'
+                        ? <p className={css.error} role="alert">{restartNote.text}</p>
+                        : <p className={css.hint} role="status">{restartNote.text}</p>
+                      : null}
                     <PluginDiagnosticLine diagnostic={pluginDiagnostics?.[`${spec.kind}-${spec.id}`]} t={t} />
                     <Button
                       variant={connected ? 'outline' : 'primary'}
@@ -1319,29 +1534,59 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                     >
                       {connected ? t('disconnect') : phase === 'connecting' ? t('phaseConnecting') : t('connect')}
                     </Button>
-                    {spec.kind === 'gateway'
-                      ? (
+                    {spec.kind === 'gateway' && (
+                      <>
                         <Button
                           variant="outline"
                           size="sm"
                           className={css.restartTip}
-                          disabled={specBusy || !connected}
-                          data-tip={!connected ? t('gatewayRestartHint') : undefined}
-                          onClick={() => { void runGatewayRestart(spec) }}
+                          // 启用态 tooltip = restartManagedDshTip；未连接（禁用态）改
+                          // 提示 restartNotConnected。busy 期间仍显示 tip（文案对 busy
+                          // 也准确，且按钮标签已显「重启中…」，不另做隐藏分支）。
+                          // aria 配对（P3）：文本按钮沿用图标按钮的 data-tip ↔
+                          // aria-label 配对——aria-label = tip（禁用原因或启用态说明）；
+                          // 此按钮 tip 恒存在，故恒等于 tip 文案。
+                          data-tip={!connected ? t('restartNotConnected') : t('restartManagedDshTip')}
+                          aria-label={restartingIds[spec.id] === true ? t('restartManagedDshBusy') : !connected ? t('restartNotConnected') : t('restartManagedDshTip')}
+                          disabled={specBusy || !connected || restartingIds[spec.id] === true || startBusyIds[spec.id] === true}
+                          onClick={() => { setRestartConfirmFor(spec) }}
                         >
-                          {t('restartInstance')}
+                          {restartingIds[spec.id] === true ? t('restartManagedDshBusy') : t('restartManagedDsh')}
                         </Button>
-                      )
-                      : spec.transport === 'ssh' && (
+                        {/* 「启动实例」（design 21 §6.8 r1）：托管 dsh 处于
+                            stopped/error/restart-exhausted（runtime 探针投影）
+                            且传输已连接时出现；在飞期间保持渲染（busy 标签）。 */}
+                        {(runtimeStartable || startBusy) && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className={css.restartTip}
+                            // aria 配对（P3）：同款规则——tip 存在（禁用原因）即
+                            // 为 aria-label，否则回退可见标签（busy/常态）。
+                            data-tip={!connected ? t('restartNotConnected') : undefined}
+                            aria-label={!connected ? t('restartNotConnected') : startBusy ? t('startManagedDshBusy') : t('startManagedDsh')}
+                            disabled={specBusy || !connected || startBusy || restartingIds[spec.id] === true}
+                            onClick={() => { void startManagedDsh(spec) }}
+                          >
+                            {startBusy ? t('startManagedDshBusy') : t('startManagedDsh')}
+                          </Button>
+                        )}
+                      </>
+                    )}
+                    {spec.transport === 'ssh' && (
                       <Button
                         variant="outline"
                         size="sm"
                         className={css.restartTip}
                         disabled={specBusy || !serviceConfigured}
-                        data-tip={!serviceConfigured ? t('serviceUnconfigured') : undefined}
+                        // aria 配对（P3）：同款规则——tip 存在（未配置原因 /
+                        // gateway 的 systemd 重启说明）即为 aria-label，否则回退
+                        // 可见标签（dsh 实例的「重启实例」）。
+                        data-tip={!serviceConfigured ? t('serviceUnconfigured') : spec.kind === 'gateway' ? t('restartServiceTip') : undefined}
+                        aria-label={!serviceConfigured ? t('serviceUnconfigured') : spec.kind === 'gateway' ? t('restartServiceTip') : t('restartInstance')}
                         onClick={() => { void runServiceOp(spec.id, 'restart_service') }}
                       >
-                        {t('restartInstance')}
+                        {spec.kind === 'gateway' ? t('restartGatewayService') : t('restartInstance')}
                       </Button>
                       )}
                     <div className={css.cardFoot}>
@@ -1360,7 +1605,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                           else setInventoryFor(spec)
                         }}
                       >
-                        <IconChecklistOutline14 />
+                        <IconFolderOpenOutline16 />
                       </button>
                       <span className={css.footSpacer} />
                       {spec.transport === 'ssh'
@@ -1395,8 +1640,8 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                             type="button"
                             className={css.iconButton}
                             disabled={specBusy}
-                            data-tip={t('hostLogs')}
-                            aria-label={`${t('hostLogs')}: ${spec.label}`}
+                            data-tip={t('gatewayHostLogs')}
+                            aria-label={`${t('gatewayHostLogs')}: ${spec.label}`}
                             onClick={() => { void openGatewayHostLogs(spec) }}
                           >
                             <IconDataOutline16 />
@@ -1411,7 +1656,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                         aria-label={`${t('logs')}: ${spec.label}`}
                         onClick={() => { void openLogs(spec) }}
                       >
-                        <IconChecklistOutline14 />
+                        <IconSearchOutline16 />
                       </button>
                       <button
                         type="button"
@@ -1457,6 +1702,34 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
             </Button>
             <Button variant="outline" className={css.deleteConfirm} disabled={stopping} onClick={() => { void stopLocal() }}>
               {stopping ? t('stopping') : t('stopConfirm')}
+            </Button>
+          </>
+        )}
+      />
+
+      {/* 受控重启 gateway 托管的 dsh（design 21 §5.1）：确认含多用户中断文案；
+          运行期间保持弹窗 + busy 标签（与 stopConfirm 同款模态纪律）。忙碌判定
+          只看本 Modal 的目标卡（restartConfirmBusy）：他卡在飞不锁本卡确认，
+          本卡收尾也只关本卡 Modal —— 每卡独立单飞。 */}
+      <Modal
+        open={restartConfirmFor !== null}
+        onClose={() => { if (!restartConfirmBusy) setRestartConfirmFor(null) }}
+        title={t('restartManagedDshConfirmTitle')}
+        closeLabel={t('close')}
+        description={t('restartManagedDshConfirmDescription')}
+        className={css.deleteDialog}
+        footer={(
+          <>
+            <Button variant="outline" autoFocus disabled={restartConfirmBusy} onClick={() => { setRestartConfirmFor(null) }}>
+              {t('cancel')}
+            </Button>
+            <Button
+              variant="outline"
+              className={css.deleteConfirm}
+              disabled={restartConfirmBusy}
+              onClick={() => { if (restartConfirmFor !== null) void restartManagedDsh(restartConfirmFor) }}
+            >
+              {restartConfirmBusy ? t('restartManagedDshBusy') : t('restartManagedDsh')}
             </Button>
           </>
         )}
@@ -1843,6 +2116,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
           </>
         )}
       >
+        <p className={css.hint}>{t('logsModalHint')}</p>
         {remoteLogsError !== null
           ? <p className={css.error} role="alert">{remoteLogsError}</p>
           : remoteLogs.length === 0
@@ -1864,7 +2138,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
       <Modal
         open={gatewayLogsFor !== null}
         onClose={() => { gatewayLogsTargetRef.current = null; setGatewayLogsFor(null) }}
-        title={gatewayLogsFor === null ? '' : `${t('hostLogs')} · ${gatewayLogsFor.label}`}
+        title={gatewayLogsFor === null ? '' : `${t('gatewayHostLogs')} · ${gatewayLogsFor.label}`}
         closeLabel={t('close')}
         className={css.dialog}
         footer={(
@@ -1881,6 +2155,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
           </>
         )}
       >
+        <p className={css.hint}>{t('gatewayHostLogsModalHint')}</p>
         {gatewayHostLogsError !== null
           ? <p className={css.error} role="alert">{gatewayHostLogsError}</p>
           : gatewayHostLogs === null

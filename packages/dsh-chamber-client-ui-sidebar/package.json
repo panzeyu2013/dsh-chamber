@@ -40,7 +40,7 @@
   "scripts": {
     "bundle": "tsdown",
     "watch": "tsdown --watch",
-    "test": "node test/derive.test.ts && node test/aggregate-store.test.ts && node test/plugin-graph-recheck.test.ts && node test/view-prefs.test.ts && node test/search-state.test.ts && node test/pending-click.test.ts && node test/workspace-git-flags.test.ts && node test/instance-mutation-values.test.ts && node test/instance-api.test.ts && node test/control-plane-client.test.ts"
+    "test": "node test/derive.test.ts && node test/aggregate-store.test.ts && node test/plugin-graph-recheck.test.ts && node test/view-prefs.test.ts && node test/search-state.test.ts && node test/pending-click.test.ts && node test/workspace-git-flags.test.ts && node test/instance-mutation-values.test.ts && node test/instance-api.test.ts && node test/control-plane-client.test.ts && node test/gateway-runtime.test.ts && node test/gateway-runtime-poll.test.ts && node test/gateway-runtime-mirror.test.ts"
   },
   "license": "MIT",
   "dependencies": {

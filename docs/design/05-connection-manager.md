@@ -337,19 +337,22 @@ export const chamberBridge: {
   服务器的子上下文 ledger、紧随 agent-presets 渲染；**connections 是壳的
   固定 nav 入口**（在分隔线之下、不占 ledger order），故「dsh 运行时」在
   视觉上位于 server 段列表内 agent-presets 之后。local = 完整运行时管理面，
-  gateway = 经反代触达该 gateway 的 `/chamber/runtime`，ssh = 版本只读行，
-  **dsh（http 直连）= 不挂载**（无管理面、无 ssh 通道、无 `/chamber` 面，
-  design 17 §3 能力差异表——该来源设置段不渲染 dsh-runtime 分节）。
-  **不再位于 chamber 全局「通用」视图**（design 15 的 `__general` 控制组不含
-  运行时块）。
-- 三种来源均含**「重启 dsh」动作**（design 18 §3.6 项 8，刷新插件挂载）：
-  local = 控制面事务接口 `restartLocal()`（design 18 §9.3，与健康状态机重启
-  单飞行串行化——**不是**连接页裸 启动/停止 的组合）；gateway =
-  `POST /chamber/runtime/restart`（经 `/api/i/gateway-<id>/chamber/*` 反代，
-  202 + status 轮询）；ssh = 既有 `restart_service` systemd IPC（03 §2.2，
-  重启窗口内隧道 phase 保持 ready、目标连接拒绝显式 503）。二次确认 +
-  状态行，与健康状态机 `restarting` 单飞行互斥、applying 期间禁用。
-  （dsh http 直连来源不挂载本段、无重启动作，design 17 §3。）
+  gateway = 经反代触达该 gateway 的 `/chamber/runtime`，**dsh 直连（ssh/http）
+  = 不挂载**（dsh 直连无 `/chamber` 面、无 ssh exec 管理通道——「ssh = 版本只读
+  行」为过期表述，2026-12 审计 F4 勘误：18 §3.6/AGENTS/design 17 §3 一致口径；
+  该来源设置段不渲染 dsh-runtime 分节）。**不再位于 chamber 全局「通用」视图**
+  （design 15 的 `__general` 控制组不含运行时块）。
+- **「重启 dsh」动作只在本地与 gateway 两源**（2026-12 审计 F4 勘误——「三种来源
+  均含」为过期表述；design 18 §3.6 项 8，刷新插件挂载）：local = 控制面事务接口
+  `restartLocal()`（design 18 §9.3，与健康状态机重启单飞行串行化——**不是**连接页
+  裸 启动/停止 的组合）；gateway = `POST /chamber/runtime/restart`（经
+  `/api/i/gateway-<id>/chamber/*` 反代，202 + status 轮询）+ `POST
+  /chamber/runtime/start`（design 21 决策 12 停机恢复：stopped/error/
+  restart-exhausted，卡片「启动实例」入口）。二次确认 + 状态行，与健康状态机
+  `restarting` 单飞行互斥、applying 期间禁用。ssh（dsh 直连）的 systemd
+  `restart_service` 属**连接管理面**（重启 gateway/dsh 服务本身，非插件模型动词，
+  design 21 §3 目标语境差异登记），dsh（ssh/http）直连不挂载 dsh-runtime 段、无
+  插件模型重启动作。（http 直连来源无任何重启动作，design 17 §3。）
 - **职责划分**：连接页本地卡的 启动/停止 = 连接生命周期（开机常驻与否）；
   「dsh 运行时」段的 重启 dsh = 运行时维护（刷新插件挂载、恢复服务）——两者
   不合并、文案不混用（起停不改运行时事实，重启不改指针/版本）。
@@ -358,6 +361,13 @@ export const chamberBridge: {
   user@host:port + phase 徽标 + 隧道 localPort + serviceName + logSummary；
   连接/断开 + systemd 起停/查询 + 日志 Modal（logs/logs_clear）+ 编辑 +
   删除 + dashed"添加主机"卡 → Modal 表单）。
+- **design 21 增补（2026-12）**：卡片日志入口命名区分（「连接日志」= 本机连接
+  通道事件 / gateway 卡「网关主机日志」= 服务器侧 gateway 进程与托管 dsh spawn
+  日志；图标去重）+ gateway 卡「重启 dsh」/「启动实例」动作（phase 门控 + 每卡
+  单飞 + 共享 pollGatewayReady 轮询，多用户中断确认文案）+ **单一插件管理模型
+  视图**（ssh 模态与 gateway 视图功能等价双面：diff/add/已安装列表逐行移除/撤销
+  最近变更（undo journal）/chamber 区同步/任务投影；恢复提示 r0–r4 文案双后端
+  同权；契约与余留见 design 21 §6.6/§10 勘误⑥⑦）。
 - 操作全走现有 `desktop_ssh_*` IPC 与 `/api/connections`；表单收非秘密
   元数据（id/label/kind/transport/insecureHttp/host/user/sshPort/remotePort/
   serviceName，id 白名单

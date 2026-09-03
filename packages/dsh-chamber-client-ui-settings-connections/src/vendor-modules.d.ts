@@ -19,6 +19,11 @@ declare module '@deepseek-ai/dsh-client-ui-primitives' {
     className?: string
     onClick?: () => void
     children?: ReactNode
+    /** Keep in sync with the primitives Button surface; this package's
+     *  buttons pair data-tip with aria-label (icon buttons and the text
+     *  action buttons alike). */
+    'data-tip'?: string
+    'aria-label'?: string
   }
   export function Button(props: ButtonProps): ReactNode
   export interface ModalProps {
@@ -43,10 +48,12 @@ declare module '@deepseek-ai/dsh-client-ui-primitives' {
   export function IconCloseOutline16(props?: IconProps): ReactNode
   export function IconDataOutline16(props?: IconProps): ReactNode
   export function IconEditOutline16(props?: IconProps): ReactNode
+  export function IconFolderOpenOutline16(props?: IconProps): ReactNode
   export function IconLinkOutline16(props?: IconProps): ReactNode
   export function IconPlayOutline16(props?: IconProps): ReactNode
   export function IconPlusOutline16(props?: IconProps): ReactNode
   export function IconRefreshOutline16(props?: IconProps): ReactNode
+  export function IconSearchOutline16(props?: IconProps): ReactNode
   export function IconStopFill16(props?: IconProps): ReactNode
   export function IconTrashOutline16(props?: IconProps): ReactNode
 }

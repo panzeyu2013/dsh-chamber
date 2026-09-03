@@ -716,11 +716,16 @@ export function createGatewayDispatch(
       await getRuntime().handle(req, res, pathname)
       return true
     }
-    // 4. Chamber surface (design 17 §8.5, 2026-12 strip): /chamber/* is the
-    // gateway's own operations surface — channels projection + browser
-    // dashboard assets only (feature settings, approvals, schedule, worktree
-    // records were removed with the orchestration strip). Read-only: no
-    // readiness coupling.
+    // 4. Chamber surface (design 17 §8.5, 2026-12 strip + design 21 A1):
+    // /chamber/* is the gateway's own operations surface — channels
+    // projection + browser dashboard assets + the desktop-synced plugin seed
+    // cache + the managed-profile plugin read/write routes (installed/
+    // install/remove/materialize/tasks, design 21 §6.2; the write routes
+    // answer 202 before their executor children run — quiesce/dispose
+    // accounting lives in index.ts) + /chamber/runtime. Feature settings,
+    // approvals, schedule and worktree records were removed with the
+    // orchestration strip; the surface is NOT ready-gated (no readiness
+    // coupling — dsh-down windows stay pollable).
     if (pathname.startsWith('/chamber/')) {
       if (rejectStaleHttp(res, authenticatedPrincipal)) return true
       await getFeatures().handle(req, res, pathname)

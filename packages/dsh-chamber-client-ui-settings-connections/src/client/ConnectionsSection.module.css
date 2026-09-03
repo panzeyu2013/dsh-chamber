@@ -327,10 +327,14 @@
   opacity: 1;
 }
 
-/* The restart button shows its own text label while enabled; only the
-   disabled state needs a hint (serviceName null = nothing to restart), so
-   the bubble exists solely while data-tip is present — same vocabulary as
-   the icon-button tooltip above. */
+/* Shared by the card's text action buttons (重启 dsh / 启动实例 / systemd
+   restart): the bubble exists solely while data-tip is present. The 重启 dsh
+   button tips in both states (enabled: restartManagedDshTip — what the
+   restart does; disabled: restartNotConnected); the 启动实例 / systemd
+   buttons tip only when the reason is not already the visible label
+   (disabled states — serviceName null / not connected). Same vocabulary as
+   the icon-button tooltip above. Rename candidate: the class is no longer
+   restart-only — .textActionTip would name the shared use. */
 .restartTip {
   position: relative;
 }
@@ -838,6 +842,10 @@
   background: var(--dsw-alias-bg-layer-2);
 }
 
+/* Zone-title tier shared by every plugin-management section: the chamber
+   injection zone (modal + inventory) AND the installed/tasks manage sections
+   (design 21 Phase 5) reuse the same 12/600 secondary title. Rename
+   candidate: .pluginZoneTitle (no longer chamber-only). */
 .pluginChamberTitle {
   margin: 0;
   font-size: 12px;
@@ -961,6 +969,14 @@
 /* Local-list rows: name / category / spec / remove-action (no diff columns). */
 .pluginRowLocal {
   grid-template-columns: minmax(180px, 1.4fr) auto minmax(0, 1fr) auto;
+}
+
+/* Remote installed-list rows (design 21 §6.6): name / spec-or-masked-chip /
+   remove-action — the remote projection classifies no category, so the
+   category column is absent (three columns, unlike the four-column local
+   list). */
+.pluginRowRemote {
+  grid-template-columns: minmax(180px, 1.4fr) minmax(0, 1fr) auto;
 }
 
 .pluginRowHead {
@@ -1099,6 +1115,16 @@
   border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 8px;
   font-size: 12px;
+}
+
+/* Phase 5 ③ gateway 管理区（已安装 / 变更记录）：dialogContent 内段落一律
+   margin:0、pluginStack 的间距只作用于其直接子项 —— 跨区堆叠需要显式外边距
+   把管理区与上方 chamber/差异区隔开（http+dsh 直连不渲染该区，无副作用）。 */
+.pluginManageSections {
+  margin-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
 .pluginDeferRow {

@@ -4,5 +4,5 @@
 # hashes here (manually verified with `shasum -a 256`).
 # Chamber package (design 05 §2): the official ui-sidebar README copies were replaced on
 # 2026-08-15 by descriptions of the self-built multi-source sidebar plugin (zh = key source).
-README.md: a9958bbfc83d11a51e120aaa1f3d612ceaefbaebceaf502794c6684fa2c60d6b
-README.zh.md: c1559609de34f7663a3f0653492a3e2bd51a7f3a7a762c2d108f699a1eb0c871
+README.md: 81e50f3239234d0fb822cfd21151efa36eb6215a283cdb584dc3f5e722806914
+README.zh.md: 98f9f112b1bc433a8db56ab8dc7b11ee7d5f116e522b1870975c2b5d4415dd57

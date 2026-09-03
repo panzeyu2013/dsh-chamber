@@ -41,8 +41,11 @@ import { canonicalizeTransportInstanceInput, type TransportInstanceInput, type T
 import { deleteConnectionTransaction, saveConnectionTransaction, validateDeleteOnlyReplacement, type ConnectionCredentialMutations } from './connection-save.ts';
 import { MAX_SSH_PASSWORD_CHARS, sshProvider, probeClientGraphLive, probeGitWorktreeLive } from './ssh-provider.ts';
 import { cleanupStaleAskpassHelpers, configureSshPasswordStore, getSshPassword, setSshPassword, sshPasswordSupported } from './ssh-provider.ts';
-import { configureGatewaySecretStore, configureGatewaySessionProvider, gatewayPasswordValidationError, gatewayProvider, gatewaySecretStorageMode, gatewayTokenValidationError, getGatewayPassword, getGatewayToken, setGatewayPassword, setGatewayToken, setInstanceSecrets, syncGatewayChamberPlugins } from './gateway-provider.ts';
+import { configureGatewaySecretStore, configureGatewaySessionProvider, gatewayChamberApplyBatch, gatewayChamberMaterialize, gatewayPasswordValidationError, gatewayProvider, gatewaySecretStorageMode, gatewayTokenValidationError, getGatewayPassword, getGatewayToken, setGatewayPassword, setGatewayToken, setInstanceSecrets, syncGatewayChamberPlugins } from './gateway-provider.ts';
 import type { LocalChamberHostPackage } from './gateway-provider.ts';
+import { getGatewaySyncRegistration, setGatewaySyncRegistration } from './gateway-sync-registry.ts';
+import { buildPluginTarball } from './plugin-tarball.ts';
+import { buildApplyConfirmMessage, validateApplyPayload } from './gateway-ipc-shared.ts';
 import { createGatewaySessionManager, gatewayRegistrationAuthHeaders, gatewaySessionScopeForConnection } from './gateway-session.ts';
 import { createGatewaySessionRefresh, gatewaySessionOriginForUrl, gatewayTunnelAuthority } from './gateway-session-refresh.ts';
 import type { GatewaySessionRefresh } from './gateway-session-refresh.ts';
@@ -162,6 +165,7 @@ import {
   GIT_WORKTREE_PACKAGE_NAME,
   localPluginList,
   materializeAndAdd,
+  redactRemotePluginManifest,
   remoteHome,
   remotePluginList,
   ReadyPhaseEdges,
@@ -201,6 +205,13 @@ import {
 } from './notifications.ts';
 import type { NotificationOpenIntent, NotificationSettingsLike, NotificationSourceToken } from './notifications.ts';
 import { IPC_CHANNELS } from './ipc-events.ts';
+import {
+  buildSshApplyRows,
+  buildSshUndoDecision,
+  describeReservedNameRefusal,
+  describeSshUndoConfirmation,
+} from './ssh-apply-rows.ts';
+import { createSshPluginJournal } from './ssh-plugin-journal.ts';
 
 // Last-resort crash boundary. Expected socket/stream failures are handled at
 // their owners; an unknown uncaught exception means the privileged main
@@ -1726,6 +1737,16 @@ if (!gotTheLock) {
         return { ok: false, error: `native confirmation failed: ${describeUnknownError(error)}` };
       }
     };
+    // ssh plugin undo journal (design 21 §6.4, plan Phase 5 ssh 统一增量): the
+    // desktop main-process-persisted journal of every executed remote plugin
+    // change (applyPlugins records each row with its pre-change remote spec).
+    // File <userData>/ssh-plugin-journal.json — 0600, atomic, no-follow reads
+    // bounded to 64 KiB, newest-50 retention, corrupt → aside + fresh. The
+    // journal instance is inert until an apply records into it.
+    const sshPluginJournal = createSshPluginJournal(app.getPath('userData'), {
+      log: (...args) => console.log('[dsh-chamber]', ...args),
+      warn: (...args) => console.warn('[dsh-chamber]', ...args),
+    });
     ipcMain.handle(IPC_CHANNELS.INFO, trustedIpc(() => ({
       controlPlaneUrl: `http://127.0.0.1:${cp.port}`,
       dshVersion: resolveActiveRuntime(runtimeBaseDir).version,
@@ -2213,9 +2234,18 @@ if (!gotTheLock) {
         { name: '@dsh-chamber/dsh-host-git-worktree', packageJsonPath: path.join(gitDir, 'package.json'), distIndexPath: path.join(gitDir, 'dist', 'index.js') },
       ];
     };
-    const syncGatewayChamberPluginsFor = (id: string, url: string, headers: Record<string, string>, spkiPin: string | null): void => {
+    // Resolves the awaited sync outcome for the caller (the manual
+    // gateway_plugin_sync IPC, design 21 §6.5) or null when the instance is
+    // missing / no longer a gateway. The ready-registration call site keeps
+    // the original fire-and-forget behavior via `void`.
+    const syncGatewayChamberPluginsFor = async (
+      id: string,
+      url: string,
+      headers: Record<string, string>,
+      spkiPin: string | null,
+    ): Promise<{ uploaded: boolean; skipped: boolean; failed?: boolean; error?: string } | null> => {
       const instance = sm.listInstances().find(candidate => candidate.id === id);
-      if (instance === undefined || instance.kind !== 'gateway') return;
+      if (instance === undefined || instance.kind !== 'gateway') return null;
       const packages: LocalChamberHostPackage[] = [];
       for (const source of localChamberHostPackageSources()) {
         try {
@@ -2228,7 +2258,7 @@ if (!gotTheLock) {
           // Not built/bundled in this runtime — nothing to sync for this entry.
         }
       }
-      void syncGatewayChamberPlugins({
+      return syncGatewayChamberPlugins({
         // Sync through the REGISTERED transport origin (the ready URL): for
         // an ssh tunnel that is the loopback endpoint the user verified,
         // never the (usually unreachable) remote host:port. The tunnel
@@ -2407,7 +2437,13 @@ if (!gotTheLock) {
               // this desktop. Mobile access is NOT covered here: the mobile
               // plugin ships inside the gateway distribution instead (its
               // access chain has no desktop).
-              syncGatewayChamberPluginsFor(id, url, auth.headers, facts.spkiPin ?? null);
+              // Manual-sync re-entry parameters (design 21 §6.5): keep the
+              // registration-time origin/auth headers/SPKI pin (main process
+              // only — never renderer-supplied, never persisted or logged)
+              // so a later gateway_plugin_sync(id) can re-run this exact
+              // sync without waiting for a fresh ready edge.
+              setGatewaySyncRegistration(id, { url, headers: { ...auth.headers }, spkiPin: facts.spkiPin ?? null });
+              void syncGatewayChamberPluginsFor(id, url, auth.headers, facts.spkiPin ?? null);
             } else {
               cp.registerInstanceTransport(`${status.kind}:${id}`, url, undefined, {
                 transport: proxyTransport(status.transport),
@@ -2442,6 +2478,10 @@ if (!gotTheLock) {
           // removed transport must not re-login or re-register (a later ready
           // re-arms with the fresh session).
           sessionRefresh?.disarm(id);
+          // Manual gateway_plugin_sync re-entry dies with the ready
+          // registration: its transport origin/headers/pin are only valid
+          // while the instance is ready (design 21 §6.5).
+          setGatewaySyncRegistration(id, null);
           if (auditRegistered.delete(id)) {
             audit({
               ts: new Date().toISOString(),
@@ -2575,6 +2615,13 @@ if (!gotTheLock) {
       const projectedSaved = projected.map(projectInstanceSecrets);
 
       const removedIds = computeRemovedInstanceIds(before, after);
+      // Manual gateway-sync re-entry dies with the instance (design 21 §6.5):
+      // a removed row must never keep a registration a later
+      // gateway_plugin_sync(id) call could sync against.
+      for (const id of removedIds) {
+        setGatewaySyncRegistration(id, null);
+        sshPluginJournal.clear(id);
+      }
       const retiredIds = computeRetiredInstanceIds(before, after);
       const afterById = new Map(after.map(instance => [instance.id, instance]));
       const reseedIds: string[] = [];
@@ -2583,6 +2630,11 @@ if (!gotTheLock) {
         if (current === undefined || operationalFingerprint(previous) !== operationalFingerprint(current)) {
           readySeedEdges.forget(previous.id);
           hostPackageSeeding.revoke(previous.id);
+          // The plugin undo journal is bound to the OPERATIONAL target: an
+          // id-stable edit that changed host/user/service/home invalidates
+          // every op recorded on the previous target (design 21 §6.4 review
+          // P1) — drop them here AND at undo time (latestOkForTarget).
+          sshPluginJournal.clear(previous.id);
           if (current?.kind === 'dsh' && current.transport === 'ssh') reseedIds.push(previous.id);
         }
       }
@@ -3007,13 +3059,22 @@ if (!gotTheLock) {
     ipcMain.handle(IPC_CHANNELS.SSH_PLUGIN_LIST, trustedIpc(async ({ id }) => {
       const target = findRemoteTarget(id);
       if (target === null) return { ok: false, error: 'ssh instance not found' };
-      return runWithFinalOwnership(
+      const result = await runWithFinalOwnership(
         () => ownsRemoteTarget(target),
         () => remotePluginList(scopedExecForTarget(target), target.spec, {
           liveProbe: scopedProbeForTarget(target, liveProbeFor(id)),
           gitWorktreeLiveProbe: scopedProbeForTarget(target, gitWorktreeLiveProbeFor(id)),
         }),
       );
+      // readManifest 投影统一掩码 (design 21 §6.2/§6.4, decision 18): the
+      // renderer projection masks remote-local `file:` dependency values
+      // (MATERIALIZED_VALUE_MASK, `file:` prefix preserved) exactly like the
+      // gateway installed route — remote paths never leave the main process
+      // through this RPC. The main-process-internal manifest (verifyApplied
+      // read-backs, the undo journal snapshot, materialize resolution) is
+      // never redacted — only this IPC response is.
+      if (!result.ok) return result;
+      return { ok: true, manifest: redactRemotePluginManifest(result.manifest) };
     }));
     ipcMain.handle(IPC_CHANNELS.SSH_PLUGIN_APPLY, trustedIpc(async ({ id, add, remove, restart }) => {
       const target = findRemoteTarget(id);
@@ -3023,6 +3084,15 @@ if (!gotTheLock) {
       // before any exec (applyPlugins re-checks too, defense in depth).
       if (restart !== undefined && typeof restart !== 'boolean') {
         return { ok: false, error: 'restart must be a boolean' };
+      }
+      // Reserved-name deny (design 21 §6.4/decision 19, same set as the
+      // gateway): whole-batch refusal listing the denied names BEFORE any
+      // transport work — @deepseek-ai/* and @dsh-chamber/* can never be
+      // installed or removed through the plugin model. applyPlugins re-checks
+      // (defense in depth) with the same copy.
+      const assembled = buildSshApplyRows(add, remove);
+      if (assembled.refused.length > 0) {
+        return { ok: false, error: describeReservedNameRefusal(assembled.refused) };
       }
       // Known bundle packages for the §4.5 ④ bundles assertion (design 13):
       // the LOCAL manifest's bundle-declaring dependency names. When the
@@ -3043,9 +3113,287 @@ if (!gotTheLock) {
           scopedStatusForTarget(target),
           target.spec,
           { add, remove, restart },
-          { knownBundles, ownershipKey: `${target.sourceToken.generation}:${target.fingerprint}` },
+          {
+            knownBundles,
+            ownershipKey: `${target.sourceToken.generation}:${target.fingerprint}`,
+            journal: sshPluginJournal,
+            targetFingerprint: target.fingerprint,
+          },
         ),
       );
+    }));
+    // Undo the latest ok ssh plugin change (design 21 §6.4, plan Phase 5 ssh
+    // 统一增量): the undo journal (applyPlugins records every executed row
+    // with its pre-change remote spec) answers 「撤销最近变更」. v1 undo =
+    // the inverse row through the SAME ssh apply flow — undoing an ok add
+    // removes that name; undoing an ok remove re-adds the previous REGISTRY
+    // spec (a remove whose previous spec was a remote file: package cannot
+    // be re-added in v1 → {ok:false, unavailable:'file-backed'}). The undo
+    // is a user-initiated MAIN-process confirmation (default cancel, decision
+    // 14) and re-executes with restart-to-apply, journaled, so further undos
+    // chain. Never a silent script action.
+    ipcMain.handle(IPC_CHANNELS.SSH_PLUGIN_UNDO, trustedIpc(async ({ id }) => {
+      if (typeof id !== 'string' || !INSTANCE_ID_PATTERN.test(id)) {
+        return { ok: false as const, error: 'invalid or unknown instance id' };
+      }
+      const target = findRemoteTarget(id);
+      if (target === null) return { ok: false as const, error: 'ssh instance not found' };
+      // Target binding (design 21 §6.4 review P1): only ops recorded on the
+      // CURRENT operational target are undoable — a connection edit under
+      // the same id (new host/user/service/home) must never replay a change
+      // onto the wrong machine. Ops recorded before target binding existed
+      // (fingerprint null) are never undoable either (their target cannot be
+      // proven).
+      const op = sshPluginJournal.latestOkForTarget(id, target.fingerprint);
+      if (op === null) return { ok: false as const, error: 'no recent plugin change to undo on this target', unavailable: 'none' as const };
+      const decision = buildSshUndoDecision(op);
+      if (!decision.ok) {
+        return { ok: false as const, error: decision.error, unavailable: decision.info.unavailable };
+      }
+      // Main-process confirmation with the undo copy (default cancel — the
+      // undo re-executes a remote write + restart, never a silent action).
+      const instance = sm.listInstances().find(candidate => candidate.id === id);
+      const confirm = await confirmPluginAction(mainWindow, describeSshUndoConfirmation({
+        targetLabel: instance?.label ?? null,
+        targetId: id,
+        opKind: op.kind,
+        name: op.name,
+        spec: decision.action.kind === 'add' ? decision.action.spec : null,
+      }));
+      if ('cancelled' in confirm) return { ok: true as const, cancelled: true };
+      if (!confirm.ok) return { ok: false as const, error: confirm.error };
+      // Execute the inverse row through the same apply flow (journaled so
+      // further undos chain) with restart-to-apply.
+      const undoActions: { add: string[]; remove: string[]; restart: boolean } =
+        decision.action.kind === 'add'
+          ? { add: [decision.action.spec], remove: [], restart: true }
+          : { add: [], remove: [decision.action.name], restart: true };
+      return runWithFinalOwnership(
+        () => ownsRemoteTarget(target),
+        async () => {
+          const result = await applyPlugins(
+            scopedExecForTarget(target),
+            scopedStatusForTarget(target),
+            target.spec,
+            undoActions,
+            {
+              ownershipKey: `${target.sourceToken.generation}:${target.fingerprint}`,
+              journal: sshPluginJournal,
+              targetFingerprint: target.fingerprint,
+            },
+          );
+          if (!result.ok) return { ok: false as const, error: result.error };
+          if (result.result.applied === 0 && result.result.failed.length > 0) {
+            return { ok: false as const, error: `undo failed: ${result.result.failed[0].error}` };
+          }
+          // Honest undo outcome (P2-2): a change that EXECUTED but did not
+          // fully take effect must never project as a clean success. The
+          // undone arm carries the outcome fields ({restarted, ready,
+          // readyNote}) whenever the undo is not clean — a failed restart,
+          // a failed post-change verification, or a failed readiness
+          // re-check. A clean undo (rows executed + restart ok + verified +
+          // readiness ok or not-checked-with-note) omits the fields
+          // entirely, so the PRESENCE of undone.restarted is the renderer's
+          // "executed but not fully effective" signal (mirror shape,
+          // backward compatible with the clean {kind, name} arm).
+          const outcome = result.result;
+          const cleanUndo =
+            outcome.applied > 0
+            && outcome.restarted
+            && outcome.verified
+            && outcome.ready !== false;
+          if (cleanUndo) return { ok: true as const, undone: { kind: op.kind, name: op.name } };
+          return {
+            ok: true as const,
+            undone: {
+              kind: op.kind,
+              name: op.name,
+              restarted: outcome.restarted,
+              ready: outcome.ready,
+              ...(outcome.readyNote === undefined ? {} : { readyNote: outcome.readyNote }),
+            },
+          };
+        },
+      );
+    }));
+    // Manual chamber-plugin sync onto a gateway instance (design 21 §6.5,
+    // Phase 3b): re-run the seed-cache sync the ready registration performs
+    // automatically, over the REGISTERED transport origin/headers/SPKI pin —
+    // never a renderer-supplied URL or credential. No ready registration →
+    // loud {ok:false}; otherwise the awaited auto-sync path answers with the
+    // same {uploaded, skipped} projection (or null → instance vanished).
+    ipcMain.handle(IPC_CHANNELS.GATEWAY_PLUGIN_SYNC, trustedIpc(async ({ id }) => {
+      if (typeof id !== 'string' || !INSTANCE_ID_PATTERN.test(id)) {
+        return { ok: false as const, error: 'invalid or unknown instance id' };
+      }
+      const reg = getGatewaySyncRegistration(id);
+      if (reg === undefined) return { ok: false as const, error: 'no active gateway registration' };
+      // Live-state re-check (design 21 §6.5, honesty): the registry entry is
+      // cleared when the transport leaves ready, but a manual sync can still
+      // race a disconnect after the hit — a stale-ready dead transport must
+      // never be swallowed as a completed sync ({uploaded:false, skipped:false}
+      // would read as success). Same `sm.status(id)?.phase` access as the
+      // sibling seed/registration code paths.
+      if (sm.status(id)?.phase !== 'ready') {
+        return { ok: false as const, error: 'gateway is not ready' };
+      }
+      try {
+        const result = await syncGatewayChamberPluginsFor(id, reg.url, reg.headers, reg.spkiPin);
+        if (result === null) return { ok: false as const, error: 'gateway instance not found' };
+        // Honesty (design 21 review P2-B1): a sync that failed on the wire is
+        // {ok:false} — the both-false tuple must never masquerade as the
+        // "already up to date" answer.
+        if (result.failed === true) {
+          return { ok: false as const, error: result.error ?? 'gateway plugin sync failed' };
+        }
+        return { ok: true as const, uploaded: result.uploaded, skipped: result.skipped };
+      } catch (error) {
+        return { ok: false as const, error: `gateway plugin sync failed: ${sanitizeErrorText(describeUnknownError(error))}` };
+      }
+    }));
+    // Gateway batch plugin apply (design 21 §6.5, plan Phase 4.6): registry
+    // add/remove over the REGISTERED transport origin/headers/SPKI pin —
+    // never a renderer-supplied URL or credential. Main-process confirmation
+    // (decision 14 桌面通道纪律): the batch modifies the gateway's managed
+    // dsh profile — a persistent, globally-visible (multi-desktop)
+    // execution-surface change, never a silent script action. Cancelled →
+    // {ok:true, cancelled:true}; partial failures (an op refused mid-batch
+    // or a restart refused after execution) carry the executed
+    // installed/removed lists honestly.
+    ipcMain.handle(IPC_CHANNELS.GATEWAY_PLUGIN_APPLY, trustedIpc(async ({ id, add, remove, deferRestart }) => {
+      if (typeof id !== 'string' || !INSTANCE_ID_PATTERN.test(id)) {
+        return { ok: false as const, error: 'invalid or unknown instance id' };
+      }
+      const validated = validateApplyPayload({ add, remove, deferRestart });
+      if (!validated.ok) return { ok: false as const, error: validated.error };
+      const reg = getGatewaySyncRegistration(id);
+      if (reg === undefined) return { ok: false as const, error: 'no active gateway registration' };
+      // Live-state re-check (design 21 §6.5, honesty) — same
+      // `sm.status(id)?.phase` access as the sibling sync handler.
+      if (sm.status(id)?.phase !== 'ready') {
+        return { ok: false as const, error: 'gateway is not ready' };
+      }
+      const instance = sm.listInstances().find(candidate => candidate.id === id);
+      if (instance === undefined || instance.kind !== 'gateway') {
+        return { ok: false as const, error: 'gateway instance not found' };
+      }
+      // Batch confirmation with the restart/multi-desktop copy (default
+      // cancel — same convention as the local plugin actions).
+      const confirm = await confirmPluginAction(mainWindow, buildApplyConfirmMessage({
+        targetLabel: instance.label ?? null,
+        targetId: id,
+        add: validated.value.add,
+        remove: validated.value.remove,
+        deferRestart: validated.value.deferRestart,
+      }));
+      if ('cancelled' in confirm) return { ok: true as const, cancelled: true };
+      if (!confirm.ok) return { ok: false as const, error: confirm.error };
+      // Post-confirm re-check (design 21 review P2-B2, mirroring the
+      // materialize handler): the user may have kept the dialog open across
+      // a disconnect/reconnect — the batch must execute on the CURRENT
+      // registration/ready state, never on the pre-dialog snapshot.
+      const liveReg = getGatewaySyncRegistration(id);
+      if (liveReg === undefined || sm.status(id)?.phase !== 'ready') {
+        return { ok: false as const, error: 'gateway connection changed while the confirmation was open; nothing was applied' };
+      }
+      const liveInstance = sm.listInstances().find(candidate => candidate.id === id);
+      if (liveInstance === undefined || liveInstance.kind !== 'gateway') {
+        return { ok: false as const, error: 'gateway connection changed while the confirmation was open; nothing was applied' };
+      }
+      try {
+        const result = await gatewayChamberApplyBatch({
+          id,
+          url: liveReg.url,
+          headers: liveReg.headers,
+          spkiPin: liveReg.spkiPin,
+          // Tunnel Host override: the same discipline as
+          // syncGatewayChamberPluginsFor — an ssh transport presents the
+          // remote gateway authority, never the loopback tunnel endpoint.
+          authority: liveInstance.transport === 'ssh' ? gatewayTunnelAuthority(liveInstance.remotePort) : undefined,
+          options: {
+            add: validated.value.add,
+            remove: validated.value.remove,
+            deferRestart: validated.value.deferRestart,
+          },
+        });
+        if (!result.ok) {
+          const partial = result.outcome !== undefined && (result.outcome.installed.length > 0 || result.outcome.removed.length > 0)
+            ? { installed: result.outcome.installed, removed: result.outcome.removed }
+            : undefined;
+          return {
+            ok: false as const,
+            error: sanitizeErrorText(result.error),
+            ...(partial === undefined ? {} : { partial }),
+          };
+        }
+        const outcome = result.outcome;
+        return {
+          ok: true as const,
+          installed: outcome.installed,
+          removed: outcome.removed,
+          restarted: outcome.restarted,
+          ...(outcome.deferredOps.length > 0 ? { deferred: true } : {}),
+        };
+      } catch (error) {
+        return { ok: false as const, error: `gateway plugin apply failed: ${sanitizeErrorText(describeUnknownError(error))}` };
+      }
+    }));
+    // Gateway folder materialize (design 21 §6.5, plan Phase 4.6): PICK-ONLY —
+    // the folder picker runs here in the main process, so a compromised
+    // renderer can never drive the pack/upload surface to an arbitrary local
+    // directory (the same hardening as the ssh materialize_add_pick path).
+    // No separate confirmation dialog is needed: choosing the folder IS the
+    // user intent (design 21 §6.5, pick-only per design). The picked folder
+    // is packed into a plugin tgz in the main process (bounded caps), its
+    // package.json name/version become the x-plugin-name/x-plugin-version
+    // headers, and the upload rides the REGISTERED transport origin.
+    ipcMain.handle(IPC_CHANNELS.GATEWAY_PLUGIN_MATERIALIZE, trustedIpc(async ({ id }) => {
+      if (typeof id !== 'string' || !INSTANCE_ID_PATTERN.test(id)) {
+        return { ok: false as const, error: 'invalid or unknown instance id' };
+      }
+      const reg = getGatewaySyncRegistration(id);
+      if (reg === undefined) return { ok: false as const, error: 'no active gateway registration' };
+      if (sm.status(id)?.phase !== 'ready') {
+        return { ok: false as const, error: 'gateway is not ready' };
+      }
+      if (mainWindow === null || mainWindow.isDestroyed()) return { ok: false as const, error: 'no main window' };
+      const instance = sm.listInstances().find(candidate => candidate.id === id);
+      if (instance === undefined || instance.kind !== 'gateway') {
+        return { ok: false as const, error: 'gateway instance not found' };
+      }
+      const picked = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] });
+      if (picked.canceled || picked.filePaths.length === 0) return { ok: true as const, cancelled: true };
+      // Post-pick re-check: the user browsed for a while — the registration
+      // and ready phase must still hold before any upload (the same
+      // discipline as the ssh picker's ownsRemoteTarget re-check).
+      const liveReg = getGatewaySyncRegistration(id);
+      if (liveReg === undefined || sm.status(id)?.phase !== 'ready') {
+        return { ok: false as const, error: 'gateway connection changed while the folder picker was open' };
+      }
+      try {
+        const built = await buildPluginTarball(picked.filePaths[0]);
+        if (!built.manifest.ok) {
+          return { ok: false as const, error: sanitizeErrorText(built.manifest.error) };
+        }
+        const result = await gatewayChamberMaterialize({
+          id,
+          url: liveReg.url,
+          headers: liveReg.headers,
+          spkiPin: liveReg.spkiPin,
+          tarball: built.buffer,
+          name: built.manifest.name,
+          version: built.manifest.version,
+          authority: instance.transport === 'ssh' ? gatewayTunnelAuthority(instance.remotePort) : undefined,
+        });
+        return result.ok
+          ? { ok: true as const, deferred: result.deferred }
+          : { ok: false as const, error: sanitizeErrorText(result.error) };
+      } catch (error) {
+        // Builder errors carry machine codes (path too long / cap exceeded /
+        // folder changed while packing / unreadable) whose message text is
+        // already specific — keep it loud and sanitized.
+        return { ok: false as const, error: `gateway plugin materialize failed: ${sanitizeErrorText(describeUnknownError(error))}` };
+      }
     }));
     ipcMain.handle(IPC_CHANNELS.LOCAL_PLUGIN_LIST, trustedIpc(() => {
       try {

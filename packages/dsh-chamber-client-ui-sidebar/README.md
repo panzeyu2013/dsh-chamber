@@ -153,3 +153,20 @@ place of the official ui-sidebar (which stays untouched in
   the current source), the wide/rail fold state machine (slide + crossfade,
   rail-in animation), the pointer-followed scrollbar discipline, the foot
   (`sidebar.footer.action` + `sidebar.settings`), i18n namespace `sidebar` (zh key source; `src/client/locales.ts`).
+
+## Shared gateway-runtime face (design 21 §5.2)
+
+- `src/shared/gateway-runtime.ts` + `src/shared/gateway-runtime-poll.ts` hold the
+  pure gateway dsh-runtime core (status parse/fetch, action gates, error
+  classification, restart-readiness poll — `pollGatewayReady`, 1 s interval /
+  120 s cap, abort-aware), exported through `@dsh-chamber/dsh-client-ui-sidebar/shared`
+  (`./shared` → `./src/shared/index.ts`, no build step; vite consumers bundle the
+  real source).
+- Consumer packages (settings-bridge, connections, …) typecheck against their
+  OWN handwritten ambient mirrors (`src/ambient/*.d.ts`, MIRROR WARNING headers)
+  — never against this package's sources; `test/gateway-runtime-mirror.test.ts`
+  keeps the mirrors' export sets locked to the real modules (runtime + type-only
+  names; shape drift stays a manual-compare discipline, see the test header).
+- The settings-bridge `remoteRuntimeStatusView` view mapping and its
+  SettingsBridgeKey coupling stay in settings-bridge; nothing in this face
+  imports settings-bridge.

@@ -42,20 +42,24 @@ import {
   type RuntimeVersionEntry,
 } from '../../../../packages/renderer/src/runtime-management.ts'
 import { applySettingsPatch, getSettingsStatus, subscribeSettings } from './settings-store.ts'
-import { pollGatewayReady } from './gateway-runtime-poll.ts'
+// Pure gateway runtime core (design 21 §5.2 split): parsers/fetchers/action
+// gates/errors/settle poll + the restart-readiness poll moved to the sidebar
+// package's shared face; only the local view mappings stay here — the
+// SettingsBridgeKey-keyed remoteRuntimeStatusView and the renderer-vocabulary
+// projectRemoteRuntimeBadge (both carry the bridge's UI keys/renderer types).
 import {
   fetchRemoteRuntimeStatus,
   fetchRemoteRuntimeVersions,
+  pollGatewayReady,
   pollRemoteRuntimeUntilSettled,
-  projectRemoteRuntimeBadge,
   remoteRuntimeAction,
   remoteRuntimeActionGates,
   remoteRuntimeSetRegistry,
-  remoteRuntimeStatusView,
   resetRemoteRuntimeActivityOwners,
   type RemoteRuntimeStatus,
   type RemoteVersions,
-} from './gateway-runtime-api.ts'
+} from '@dsh-chamber/dsh-client-ui-sidebar/shared'
+import { projectRemoteRuntimeBadge, remoteRuntimeStatusView } from './gateway-runtime-api.ts'
 import css from './SettingsShell.module.css'
 
 type RuntimeTranslate = (key: SettingsBridgeKey, params?: Record<string, unknown>) => string

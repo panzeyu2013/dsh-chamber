@@ -82,3 +82,34 @@ export interface HostLogsResponse {
   lines: HostLogLine[]
   truncated: boolean
 }
+
+/**
+ * MIRROR WARNING (gateway restart poll face, design 21 §5.2): the gateway
+ * restart-readiness poll moved into the sidebar shared face
+ * (packages/dsh-chamber-client-ui-sidebar/src/shared/gateway-runtime-poll.ts,
+ * exported through `@dsh-chamber/dsh-client-ui-sidebar/shared`); the
+ * connections restart flow (Phase 2.2) consumes pollGatewayReady from there.
+ * Keep the declarations below in sync with the REAL module (the sidebar
+ * test/gateway-runtime-mirror.test.ts locks this ambient to the real export
+ * set).
+ */
+
+/** Gateway restart readiness polling deps（design 18 §9.3：restart = 202 +
+ *  status 轮询；可注入 fetch/sleep 供 node 测试覆盖成功/超时/中止路径）。 */
+export interface GatewayPollDeps {
+  fetchImpl?: typeof fetch
+  sleepMs?: (ms: number) => Promise<void>
+  timeoutMs?: number
+  pollIntervalMs?: number
+}
+
+/** Poll `/chamber/runtime/status` after a 202 restart until the managed dsh
+ *  reaches ready (resolves on restart:'ok', or ready/degraded connectionState
+ *  with the backward-compatible fallback); rejects on restart:'failed',
+ *  terminal connection states (error / restart-exhausted / stopped), config
+ *  errors (401/403/404 — fail fast) and timeout. */
+export function pollGatewayReady(
+  chamberInstanceId: string,
+  signal?: AbortSignal,
+  deps?: GatewayPollDeps,
+): Promise<void>
