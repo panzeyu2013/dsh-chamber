@@ -8,9 +8,11 @@
 - [x] 首跑归因(2026-09-03,d12c5ef):pin 守卫 Windows 路径分隔符 bug 已修;全量
       POSIX 套件在 win32 不可跑属设计事实(private-fs 无 O_NOFOLLOW fail-closed,
       M2b 前无 win32 语义)——腿收敛为 **Windows 有效子集**:dsh-runtime
-      (windows-process/rename-retry/win32-readonly-rm 决策门/dist-sync/
-      sanitize-error)+ control-plane(win-probes/win32-lifecycle 集成)+ desktop
-      (win-acl);全量套件归 POSIX 腿,M2b 解锁后再扩。
+      (test:win32 清单 = windows-process/rename-retry/win32-readonly-rm 决策
+      门/dist-sync/sanitize-error)+ control-plane(test:win32 = win-probes/
+      win32-lifecycle 集成)+ desktop(test:win32 = win-acl);**清单即单一事实源**
+      (per-package package.json,CI 只消费清单,YAML 无测试文件名),全量套件归
+      POSIX 腿,M2b 解锁后在各包 test:win32 内扩展。
 - [ ] **外部门禁**:push 后 `test-windows` 首次跑绿(连续 3 次)
 - [ ] windows-baseline.md 首份真实数据入库(首跑结果)
 

@@ -192,18 +192,17 @@ jobs:
           pnpm run typecheck:host-git
           pnpm run typecheck:gateway
           pnpm run typecheck:runtime
-      # Windows-valid SUBSET, not the full POSIX suites (design 23 M0 契约腿,
-      # todo/windows-v1.md): pre-M2b the dsh-runtime store semantics are
-      # POSIX-only by design — private-fs fails closed without O_NOFOLLOW, so
-      # test:runtime / test:control-plane / test:desktop / test:gateway can
-      # only pass on the POSIX legs. This leg runs every win32-real or
-      # platform-neutral unit/integration gate; the full-suite parity joins
-      # after M2b unlocks mutations (then extend this list, never fake it).
-      - name: dsh-runtime win32 units + decision gates (packages/dsh-runtime)
-        run: |
-          node packages/dsh-runtime/test/windows-process.test.ts && node packages/dsh-runtime/test/rename-retry.test.ts && node packages/dsh-runtime/test/win32-readonly-rm.integration.test.ts && node packages/dsh-runtime/test/dist-sync.test.ts && node packages/dsh-runtime/test/sanitize-error.test.ts
-      - name: Control-plane win32 probes + lifecycle integration (real CIM/netstat/taskkill)
-        run: |
-          node packages/control-plane/test/win-probes.test.ts && node packages/control-plane/test/win32-lifecycle.integration.test.ts
-      - name: Desktop win32 ACL units (real icacls when present)
-        run: node packages/desktop/win-acl.test.ts
+      # Windows leg consumes each package's platform manifest — `test:win32`
+      # scripts in package.json are the single source of truth (structural
+      # rule, 2026-09): no test file lists live in this YAML. Pre-M2b the
+      # dsh-runtime store semantics are POSIX-only by design (private-fs fails
+      # closed without O_NOFOLLOW), so the full POSIX suites run on the POSIX
+      # legs; each package's test:win32 lists its win32-real / platform-
+      # neutral gates and is extended as Windows semantics land (M2b) — in
+      # the package, next to the tests, never here.
+      - name: dsh-runtime test:win32 manifest
+        run: pnpm --filter @dsh-chamber/dsh-runtime run test:win32
+      - name: control-plane test:win32 manifest (real CIM/netstat/taskkill integration)
+        run: pnpm --filter @dsh-chamber/control-plane run test:win32
+      - name: desktop test:win32 manifest (real icacls)
+        run: pnpm --filter @dsh-chamber/desktop run test:win32

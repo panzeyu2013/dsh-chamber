@@ -8,6 +8,14 @@
  * Every listed file is required: silently skipping a deleted/renamed test
  * would make the aggregate command pass with less coverage than AGENTS.md and
  * CI claim.
+ *
+ * Platform split (2026-09, structural — no file lists in workflow YAML): the
+ * POSIX-semantics suites (private-fs O_NOFOLLOW/0700 etc., fail-closed on
+ * win32 by design) run on the POSIX legs via `test`. The Windows CI leg runs
+ * `pnpm --filter @dsh-chamber/control-plane run test:win32` (= this script
+ * with `--win32`), which runs WIN32_FILES below — win32-real or
+ * platform-neutral units only. Extend WIN32_FILES as Windows semantics land
+ * (M2b), never by hand-copying lists into ci.yml.
  */
 
 import { spawnSync } from 'node:child_process'
@@ -47,7 +55,22 @@ const FILES = [
   'win32-lifecycle.integration.test.ts',
 ]
 
-for (const file of FILES) {
+/** Windows CI leg set (`test:win32` / `--win32`): win32-real or
+ *  platform-neutral tests. win32-lifecycle self-skips on POSIX and runs the
+ *  real CIM/netstat/taskkill gates on windows-2022. */
+const WIN32_FILES = [
+  'win-probes.test.ts',
+  'win32-lifecycle.integration.test.ts',
+]
+
+const win32 = process.argv.includes('--win32')
+if (win32 && process.platform !== 'win32') {
+  // The lifecycle integration self-skips on POSIX anyway; run the set so a
+  // POSIX machine still exercises the parsers and the skip path.
+}
+const selected = win32 ? WIN32_FILES : FILES
+
+for (const file of selected) {
   const path = join(TEST_DIR, file)
   const result = spawnSync(process.execPath, [path], { stdio: 'inherit' })
   if (result.status !== 0) {

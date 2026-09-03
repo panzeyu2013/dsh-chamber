@@ -11,7 +11,8 @@
     "dsh-chamber-control-plane": "./src/standalone.ts"
   },
   "scripts": {
-    "test": "node ./scripts/test.mjs"
+    "test": "node ./scripts/test.mjs",
+    "test:win32": "node ./scripts/test.mjs --win32"
   },
   "license": "MIT",
   "dependencies": {
