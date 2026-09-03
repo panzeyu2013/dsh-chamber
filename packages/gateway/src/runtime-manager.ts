@@ -41,27 +41,35 @@ import {
   buildCachedVersionList,
   buildVersionList,
   canonicalRegistryOrigin,
+  cleanupExplicitRuntimeVersion,
   cleanupStaleInstalls,
-  clearCurrentPointer,
   clearActivationJournal,
+  clearCurrentPointer,
+  clearStorePruneRequest,
   compareRuntimeVersions,
   completeInterruptedRestore,
   createRuntimeFileExclusiveNoFollow,
   deleteOverride,
+  detectRuntimeMetadataHealth,
   downloadVerifiedRegistryTarball,
   evictVersions,
   ensureRuntimeRootNoFollow,
   fetchRegistryMetadata,
   disposeRuntimeInstaller,
   installRuntimeVersion,
+  inspectCorruptMetadataRecoveryMarker,
   invalidate,
+  isProtectedVersion,
   isSafeVersion,
   latestKnownGood,
+  listExplicitlyInstalledVersions,
   listKnownGoodVersions,
+  listPreRollbackStashes,
   listValidVersionTrees,
   noteBoot,
   planRestartExhaustedRollback,
   promoteDueCandidates,
+  pruneRuntimeStore,
   quarantineRuntimeFileNoFollow,
   prepareManualRollbackData,
   readActivationJournalState,
@@ -70,13 +78,17 @@ import {
   readOverride,
   readOverrideState,
   readPrivateFileNoFollow,
+  readStorePruneRequest,
   recordExplicitInstall,
+  recoverRuntimeMetadata,
+  rescueCorruptMetadataRecoveryMarker,
   PROBE_NAMES_WITHOUT_HOST_DOMAINS,
   recordProbePass,
   recordRuntimeFailure,
   removeKnownGoodCandidate,
   removeRuntimeFileNoFollow,
   resetCandidateHealthWindow,
+  restorePreRollback,
   restoreSnapshot,
   resolveSnapshotName,
   runRuntimeActivationProbes,
@@ -143,6 +155,20 @@ const DSH_PACKAGE_NAME = '@deepseek-ai/dsh'
 const DEFAULT_REGISTRY_ORIGIN = 'https://registry.npmjs.org'
 const GATEWAY_RUNTIME_LOGICAL_DISK_LIMIT_BYTES = 10 * 1024 ** 3
 export const GATEWAY_RUNTIME_STATUS_KIND = 'dsh-chamber-gateway-runtime' as const
+
+/** FATAL metadata blocks plus the recover-route probe-failed sentinel: the
+ *  startup-block reasons the recover-metadata route may act on. Everything
+ *  else (restore-half/incomplete, swap-attempted…) must resume through its
+ *  own retry first. Mirrors index.ts FATAL_RUNTIME_BLOCKS plus the sentinel
+ *  the manager sets after a failed builtin recovery probe. */
+export const RECOVERABLE_METADATA_BLOCKS = new Set<string>([
+  'journal-corrupt',
+  'current-corrupt',
+  'override-corrupt',
+  'journal-mismatch',
+  'metadata-probe-failed',
+  'metadata-start-failed',
+])
 
 /** Gateway-owned registry source persistence (owner-only 0600; design 18 §9.3). */
 function registryFile(baseDir: string): string {
@@ -419,6 +445,10 @@ export type GatewayRuntimeStatus = RuntimeStatusProjection & {
   diskLimitBytes: number
   diskLimitExceeded: boolean | null
   progress: RuntimeInstallProgress | null
+  /** Desktop-shaped metadata health projection (2026-12 recover-metadata). */
+  metadataHealth: 'unknown' | 'healthy' | 'selection-corrupt' | 'recovery-in-progress' | 'recovery-finalized' | 'recovery-marker-corrupt'
+  metadataComponents: string[]
+  canRecoverMetadata: boolean
 }
 
 export interface GatewayRuntimeManager {
@@ -456,6 +486,23 @@ export interface GatewayRuntimeManager {
    * never settles. Returns the resolved target version. */
   applyNowPreflight(): string
   rollback(version: string): Promise<{ accepted: boolean }>
+  /** User-authorized cleanup of one explicitly installed version tree
+   *  (desktop-parity, 2026-12): ledger-gated + protection-set re-read at the
+   *  deletion point; consumes the durable store-prune marker afterwards. */
+  cleanupVersion(version: string): Promise<{ version: string; removed: boolean }>
+  /** Restore the newest pre-rollback stash over DSH_HOME (desktop-parity,
+   *  2026-12); half leaves restore-blocked for retry-restore to resume. */
+  restorePreRollback(stashName: string): Promise<{ accepted: true }>
+  /** Metadata FATAL rescue (desktop-parity, 2026-12): archives corrupt
+   *  selection metadata with a full DSH_HOME copy and runs the builtin
+   *  anchor through the probe gate before restoring access. */
+  recoverMetadata(): Promise<{ accepted: true }>
+  /** True while a durable metadata-recovery transaction is pending or the
+   *  recovery marker is corrupt (boot preflight gate, H1 review fix). */
+  metadataRecoveryPending(): boolean
+  /** Consume the durable store-prune marker if present (boot boundary, L1
+   *  review fix); single-flight, marker retained on failure. */
+  pruneStoreIfNeeded(): Promise<void>
   restoreBuiltin(): Promise<{ accepted: boolean }>
   /** Resume an interrupted pointer switch (swap-attempted) by re-running the
    * startup transaction; brings the managed dsh up on a clean verdict. */
@@ -599,6 +646,37 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
   }
 
   let transactionWorkspace: string | null = null
+
+  /** Store-prune executor (2026-12 parity fix): the shared core leaves a
+   *  durable `store-prune-needed` marker after explicit cleanup/eviction;
+   *  desktop consumes it (main.ts runStorePruneIfNeeded) but the gateway had
+   *  no consumer, so the pnpm store only ever grew. Single-flight, marker
+   *  retained on failure (retried by the next cleanup/operation). */
+  let storePruneOperation: Promise<void> | null = null
+  const runStorePruneIfNeeded = (): Promise<void> => {
+    if (storePruneOperation !== null) return storePruneOperation
+    if (disposed || readStorePruneRequest(baseDir) === null) return Promise.resolve()
+    const operation = pruneRuntimeStore({
+      baseDir,
+      pnpmEntry: pnpmEntry(),
+      deps: {
+        // The gateway has no Electron-as-node branch: plain node (design 18
+        // §9.2: the gateway install chain is pure node).
+        node: () => ({ file: process.execPath, args: [], env: {} }),
+      },
+    })
+      .then(() => { clearStorePruneRequest(baseDir) })
+      .catch((error: unknown) => {
+        // Retain the marker: the next safe cleanup/startup retries. Prune
+        // failure is disk hygiene, not permission to block a verified tree.
+        logger.warn(`gateway runtime store prune failed: ${sanitizeRouteError(error instanceof Error ? error.message : String(error))}`)
+      })
+      .finally(() => {
+        if (storePruneOperation === operation) storePruneOperation = null
+      })
+    storePruneOperation = operation
+    return operation
+  }
 
   function notifyActivationQuarantine(active: boolean): void {
     try {
@@ -1149,6 +1227,9 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
 
   async function status(): Promise<GatewayRuntimeStatus> {
     assertManagerReadable()
+    // Desktop-shaped metadata health projection (2026-12 recover-metadata
+    // parity): category-only components, never paths.
+    const metadata = metadataProjection()
     if (platform === 'win32') {
       const resolved = resolveWorkspace()
       return {
@@ -1182,6 +1263,9 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
         diskLimitBytes: GATEWAY_RUNTIME_LOGICAL_DISK_LIMIT_BYTES,
         diskLimitExceeded: null,
         progress: null,
+        metadataHealth: metadata.metadataHealth,
+        metadataComponents: metadata.metadataComponents,
+        canRecoverMetadata: metadata.canRecoverMetadata,
       }
     }
     const overrideState = readOverrideState(baseDir)
@@ -1234,13 +1318,19 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     const effectiveBlockedReason = startupBlockReason ?? resolutionError
     const effectivePending = envPath === null && override !== null && !shouldInvalidate(override, shellVersion) && override.pending !== null
       ? override.pending : null
+    // 2026-12 (H2 review fix): a FATAL/RECOVERABLE metadata block must also
+    // suppress the ordinary-pending phase — journal-corrupt + stale pending
+    // would otherwise lock the only recovery surface behind the pending gate.
+    const blockOutranksPending = startupBlockReason !== null
+      && (RECOVERABLE_METADATA_BLOCKS.has(startupBlockReason)
+        || startupBlockReason === 'swap-attempted'
+        || startupBlockReason === 'snapshot-failed'
+        || startupBlockReason === 'restore-half'
+        || startupBlockReason === 'restore-incomplete')
     const ordinaryPending = effectivePending !== null
       && override?.swapAttempted !== true
       && override?.lastOutcome !== 'snapshot-failed'
-      && startupBlockReason !== 'swap-attempted'
-      && startupBlockReason !== 'snapshot-failed'
-      && startupBlockReason !== 'restore-half'
-      && startupBlockReason !== 'restore-incomplete'
+      && !blockOutranksPending
     return {
       kind: GATEWAY_RUNTIME_STATUS_KIND,
       activeVersion: resolved?.version ?? null,
@@ -1297,6 +1387,25 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
         ? null
         : diskUsage.totalBytes >= GATEWAY_RUNTIME_LOGICAL_DISK_LIMIT_BYTES,
       progress: installProgress,
+      metadataHealth: metadata.metadataHealth,
+      metadataComponents: metadata.metadataComponents,
+      canRecoverMetadata: metadata.canRecoverMetadata,
+    }
+  }
+
+  /** Cleanup candidates for the settings UI (2026-12 desktop parity): the
+   *  explicit-install ledger minus everything the deletion-point protection
+   *  set would refuse (current/pending/chosen/known-good/failure evidence).
+   *  Fail-closed: any read trouble projects an empty list — the cleanup route
+   *  stays authoritative and re-validates. */
+  function removableCleanupVersions(): string[] {
+    if (platform === 'win32') return []
+    try {
+      return listExplicitlyInstalledVersions(baseDir)
+        .filter((version) => !isProtectedVersion(baseDir, version, { ignoreExplicitInstall: true }))
+        .sort((a, b) => compareRuntimeVersions(b, a) ?? 0)
+    } catch {
+      return []
     }
   }
 
@@ -1318,6 +1427,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
           cachedVersions,
           compatibilityBaseline: null,
         }),
+        removableVersions: removableCleanupVersions(),
       }
     } catch (error) {
       const versions = buildCachedVersionList(cachedVersions, active).map(entry => (
@@ -1328,6 +1438,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
       return {
         registryOrigin: origin,
         versions,
+        removableVersions: removableCleanupVersions(),
         error: sanitizeErrorText(String(error)),
       }
     }
@@ -1603,6 +1714,286 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     startupBlockReason = null
     operationError = null
     restartOutcome = null
+    return { accepted: true }
+  }
+
+  /** User-authorized cleanup of one explicitly retained version tree (2026-12
+   *  desktop-parity route): mirrors desktop RUNTIME_CLEANUP_VERSION — ledger
+   *  membership is required (never an arbitrary tree), the shared core
+   *  re-reads the complete protection set at the deletion point, the durable
+   *  store-prune marker is consumed by runStorePruneIfNeeded, and a success
+   *  supersedes a stale operation error (desktop resets the disk-gate error
+   *  phase the same way). */
+  async function cleanupVersion(version: string): Promise<{ version: string; removed: boolean }> {
+    if (platform === 'win32') throw Object.assign(new Error('windows runtime mutations are read-only'), { code: 'platform_read_only' })
+    assertMutationIdle()
+    if (envPath !== null) throw Object.assign(new Error('runtime is pinned by DSH_GATEWAY_DSH_PATH (env always wins); version mutations are disabled'), { code: 'env_override_active' })
+    assertNoPending()
+    if (startupBlockReason !== null) {
+      throw Object.assign(new Error(`runtime recovery ${startupBlockReason} is required before cleanup`), { code: 'runtime_recovery_required' })
+    }
+    const safe = isSafeVersion(version) ? version.trim() : ''
+    if (safe === '' || !listExplicitlyInstalledVersions(baseDir).includes(safe)) {
+      throw Object.assign(new Error(`no explicitly installed version tree for ${version}`), { code: 'invalid_target' })
+    }
+    const result = cleanupExplicitRuntimeVersion(baseDir, safe)
+    if (result.stillProtected) {
+      throw Object.assign(
+        new Error(`dsh ${safe} is still protected (active/pending/known-good/recovery/failure evidence); cleanup refused`),
+        { code: 'version_still_protected' },
+      )
+    }
+    invalidateDiskCache()
+    await runStorePruneIfNeeded()
+    operationError = null
+    return { version: safe, removed: result.removed }
+  }
+
+  /** Restore the newest pre-rollback stash over DSH_HOME (2026-12 desktop
+   *  parity, main.ts RUNTIME_RESTORE_PRE_ROLLBACK): stash-name whitelist →
+   *  stop the managed dsh → shared crash-safe restorePreRollback →
+   *  resume/blocked projection. env stays allowed (data recovery is
+   *  source-independent, design 18 §3.6); win32 read-only refuses. */
+  async function restorePreRollbackStash(stashName: string): Promise<{ accepted: true }> {
+    if (platform === 'win32') throw Object.assign(new Error('windows runtime mutations are read-only'), { code: 'platform_read_only' })
+    assertMutationIdle()
+    if (!/^\d{13}-[0-9a-f]{8}$/.test(stashName)) {
+      throw Object.assign(new Error('invalid pre-rollback stash name'), { code: 'invalid_target' })
+    }
+    const stashes = await listPreRollbackStashes(baseDir)
+    if (!stashes.includes(stashName)) {
+      throw Object.assign(new Error('pre-rollback stash no longer exists or is untrustworthy; refused'), { code: 'invalid_target' })
+    }
+    let outcome: Awaited<ReturnType<typeof restorePreRollback>> | null = null
+    let restoreError: string | null = null
+    beginActivation()
+    try {
+      await plane.stopLocal()
+      try {
+        outcome = await restorePreRollback(baseDir, dshHome, stashName)
+      } catch (error) {
+        restoreError = sanitizeRouteError(error instanceof Error ? error.message : String(error))
+      }
+    } finally {
+      endActivation()
+      invalidateDiskCache()
+    }
+    if (restoreError !== null) {
+      // Desktop parity: an errored restore is recorded, not hard-blocked —
+      // bring the managed dsh back up and surface the failure loudly.
+      await resumeAfterBlockedStartup()
+      throw Object.assign(new Error(`pre-rollback restore failed: ${restoreError}`), { code: 'restore_failed' })
+    }
+    switch (outcome) {
+      case 'complete':
+        await resumeAfterBlockedStartup()
+        startupBlockReason = null
+        operationError = null
+        return { accepted: true }
+      case 'half':
+        // Desktop parity: the restore left a durable marker — keep the
+        // managed dsh down and project restore-blocked so retry-restore
+        // resumes the journaled transaction.
+        startupBlockReason = 'restore-half'
+        operationError = null
+        return { accepted: true }
+      case 'incomplete':
+      default:
+        // Untrustworthy/missing stash or unsupported marker: DSH_HOME was
+        // never touched — restart the instance and refuse loudly (desktop
+        // incomplete branch semantics).
+        await resumeAfterBlockedStartup()
+        throw Object.assign(new Error('pre-rollback stash is missing or untrustworthy; restore refused'), { code: 'invalid_target' })
+    }
+  }
+
+  /** Desktop-shaped metadata health projection (main.ts 3422-3470 mirror) for
+   *  /status: category-only components + explicit recover eligibility. */
+  function metadataProjection(): {
+    metadataHealth: 'unknown' | 'healthy' | 'selection-corrupt' | 'recovery-in-progress' | 'recovery-finalized' | 'recovery-marker-corrupt'
+    metadataComponents: string[]
+    canRecoverMetadata: boolean
+  } {
+    if (platform === 'win32') {
+      return { metadataHealth: 'unknown', metadataComponents: [], canRecoverMetadata: false }
+    }
+    try {
+      const health = detectRuntimeMetadataHealth(baseDir, shellVersion)
+      const components = new Set<string>()
+      if (health.current.kind === 'corrupt'
+        || health.corruptEvidence.some(name => name.startsWith('current.'))) components.add('current')
+      if (health.override.kind === 'corrupt'
+        || health.corruptEvidence.some(name => name.startsWith('override.json.'))) components.add('override')
+      if (health.activationJournal.kind === 'corrupt'
+        || health.corruptEvidence.some(name => name.startsWith('activation-journal.json.'))) components.add('activation-journal')
+      if (health.recovery.kind === 'corrupt'
+        || (health.recovery.kind === 'valid' && health.recovery.record.phase !== 'finalized')) {
+        components.add('recovery-marker')
+      }
+      if (health.corruptEvidence.length > 0) components.add('retained-evidence')
+      const markerRescueAvailable = health.status === 'recovery-marker-corrupt'
+        && inspectCorruptMetadataRecoveryMarker(baseDir).recoverable
+      const needsRecovery = health.status === 'selection-corrupt'
+        || health.status === 'recovery-in-progress'
+        || markerRescueAvailable
+      // The recover route may act only on a FATAL metadata block (or a
+      // recovery attempt whose builtin probe failed and kept its durable
+      // record, or a finalized recovery whose resume start failed) —
+      // restore/swap recovery phases resume through their retry.
+      const recoverableBlock = startupBlockReason === null
+        || RECOVERABLE_METADATA_BLOCKS.has(startupBlockReason)
+      // L4 review fix: no busy-phase/task gate may advertise recovery while an
+      // activation/install/restart owns the writer.
+      const writerBusy = activationInProgress() || installInFlight
+        || restartInFlight || applyNowInFlight || restartExhaustedRollbackInFlight
+      const canRecoverMetadata = (needsRecovery || startupBlockReason === 'metadata-start-failed')
+        && recoverableBlock
+        && !writerBusy
+        && envPath === null
+        && builtinVersion !== null
+        && isSafeVersion(builtinVersion)
+        && !disposed
+      return {
+        metadataHealth: health.status,
+        metadataComponents: [...components],
+        canRecoverMetadata,
+      }
+    } catch {
+      return { metadataHealth: 'unknown', metadataComponents: [], canRecoverMetadata: false }
+    }
+  }
+
+  /** H1 review fix: true while a durable metadata-recovery transaction is
+   *  pending (engine record mid-flight) or the recovery marker is corrupt.
+   *  The boot path consults this BEFORE starting the managed dsh — an
+   *  archived/metadata-cleared state must never serve DSH_HOME through the
+   *  builtin anchor without the probe gate. */
+  function metadataRecoveryPending(): boolean {
+    if (platform === 'win32') return false
+    try {
+      const health = detectRuntimeMetadataHealth(baseDir, shellVersion)
+      return health.status === 'recovery-in-progress'
+        || health.status === 'recovery-marker-corrupt'
+        || (health.recovery.kind === 'valid' && health.recovery.record.phase !== 'finalized')
+    } catch {
+      return false
+    }
+  }
+
+  /** Metadata FATAL rescue (2026-12 desktop parity, main.ts executeMetadataRecovery
+   *  mirror): archives corrupt selection metadata byte-for-byte while keeping a
+   *  full DSH_HOME copy, runs the builtin anchor through the full read-only
+   *  probe gate, and only then finalizes access. The shared engine owns the
+   *  crash-safe transaction (stash/evidence/probe-required checkpoints). */
+  async function recoverMetadata(): Promise<{ accepted: true }> {
+    if (platform === 'win32') throw Object.assign(new Error('windows runtime mutations are read-only'), { code: 'platform_read_only' })
+    assertMutationIdle()
+    if (envPath !== null) throw Object.assign(new Error('runtime is pinned by DSH_GATEWAY_DSH_PATH (env always wins); metadata recovery is disabled'), { code: 'env_override_active' })
+    const builtin = requireBuiltinVersion()
+    if (builtin === null || !isSafeVersion(builtin)) {
+      throw Object.assign(new Error('gateway builtin dsh anchor does not expose a stable version; metadata recovery refused'), { code: 'invalid_target' })
+    }
+    if (startupBlockReason !== null && !RECOVERABLE_METADATA_BLOCKS.has(startupBlockReason)) {
+      throw Object.assign(new Error(`runtime recovery ${startupBlockReason} is required first; only the matching retry applies`), { code: 'runtime_recovery_required' })
+    }
+    let health: ReturnType<typeof detectRuntimeMetadataHealth>
+    try {
+      health = detectRuntimeMetadataHealth(baseDir, shellVersion)
+    } catch (error) {
+      throw Object.assign(new Error(`cannot read runtime metadata for recovery: ${sanitizeRouteError(error instanceof Error ? error.message : String(error))}`), { code: 'runtime_recovery_required' })
+    }
+    const markerRescueAvailable = health.status === 'recovery-marker-corrupt'
+      && inspectCorruptMetadataRecoveryMarker(baseDir).recoverable
+    const needsRecovery = health.status === 'selection-corrupt'
+      || health.status === 'recovery-in-progress'
+      || markerRescueAvailable
+    if (startupBlockReason === 'metadata-start-failed') {
+      // M3 review fix: the metadata is healthy behind a failed resume start —
+      // recover simply retries the plain start of the builtin anchor.
+      if (!disposed) {
+        await plane.startLocal()
+        plane.refreshLocalExposure()
+      }
+      startupBlockReason = null
+      operationError = null
+      return { accepted: true }
+    }
+    if (!needsRecovery) {
+      throw Object.assign(new Error('no corrupt metadata to recover'), { code: 'no_retry_target' })
+    }
+    const hostDomains = hasSyncedHostSeed(baseDir)
+    const engineOptions = {
+      baseDir,
+      dshHome,
+      builtinVersion: builtin,
+      shellVersion,
+      stopHost: () => plane.stopLocal(),
+      completeRestore: () => completeInterruptedRestore(baseDir, dshHome),
+      probeBuiltin: async () => {
+        const probes = await spawnAndProbeCandidate(builtin, true, hostDomains, lifecycleAbort.signal)
+        const passed = probes.length > 0 && probes.every(probe => probe.ok)
+        if (passed) return { ok: true as const }
+        const failures = probes.filter(probe => !probe.ok).map(probe => probe.name ?? 'unknown probe').join(', ')
+        return { ok: false as const, error: failures === '' ? 'no probe results' : `builtin activation probes failed: ${failures}` }
+      },
+    }
+    let result:
+      | Awaited<ReturnType<typeof recoverRuntimeMetadata>>
+      | Awaited<ReturnType<typeof rescueCorruptMetadataRecoveryMarker>>
+    beginActivation()
+    try {
+      await plane.stopLocal()
+      // engine requires failure-free? no: engine handles
+      result = health.status === 'recovery-marker-corrupt'
+        ? await rescueCorruptMetadataRecoveryMarker(engineOptions)
+        : await recoverRuntimeMetadata(engineOptions)
+    } catch (error) {
+      operationError = sanitizeRouteError(error instanceof Error ? error.message : String(error))
+      // Engine invariants throw without a code: keep the failure loud but
+      // mapped (409), never a bare 500 — the corrupt state remains readable
+      // and the route stays retryable.
+      const code = (error as { code?: unknown }).code
+      if (typeof code !== 'string') {
+        throw Object.assign(error instanceof Error ? error : new Error(String(error)), { code: 'runtime_activation_failed' })
+      }
+      throw error
+    } finally {
+      endActivation()
+      invalidateDiskCache()
+    }
+    if (result.status === 'finalized') {
+      operationError = null
+      restartOutcome = null
+      if (!disposed) {
+        try {
+          await plane.startLocal()
+          plane.refreshLocalExposure()
+        } catch (error) {
+          // M3 review fix: a failed resume start must stay recoverable — the
+          // metadata is healthy now, so keep a dedicated sentinel the recover
+          // route resolves by retrying the plain start.
+          startupBlockReason = 'metadata-start-failed'
+          operationError = sanitizeRouteError(error instanceof Error ? error.message : String(error))
+          throw Object.assign(
+            new Error(`metadata recovery finalized but the managed dsh failed to start: ${operationError}`),
+            { code: 'runtime_activation_failed' },
+          )
+        }
+      }
+      startupBlockReason = null
+      return { accepted: true }
+    }
+    if (result.status === 'restore-blocked') {
+      // Engine outcome name clash: this is a metadata-recovery transaction
+      // blocked on an interrupted SNAPSHOT restore — retry-restore resumes it.
+      startupBlockReason = result.restoreOutcome === 'half' ? 'restore-half' : 'restore-incomplete'
+      operationError = result.error
+      return { accepted: true }
+    }
+    // probe-failed (or unexpected status): keep the durable record and the
+    // managed dsh stopped; the recover route stays eligible to resume.
+    startupBlockReason = 'metadata-probe-failed'
+    operationError = sanitizeRouteError(result.error || 'metadata recovery probe failed')
     return { accepted: true }
   }
 
@@ -1963,7 +2354,9 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
   async function retryRestore(): Promise<{ accepted: boolean; blockedReason: string | null }> {
     if (platform === 'win32') throw Object.assign(new Error('windows runtime mutations are read-only'), { code: 'platform_read_only' })
     assertMutationIdle()
-    if (envPath !== null) throw Object.assign(new Error('runtime is pinned by DSH_GATEWAY_DSH_PATH (env always wins); version mutations are disabled'), { code: 'env_override_active' })
+    // 2026-12 parity fix (audit h): interrupted data-restore continuation is
+    // source-independent — desktop never refuses env here, so neither does the
+    // gateway (retry-apply stays env-refused: it resumes a VERSION switch).
     assertNoOrdinaryPending()
     if (startupBlockReason !== 'restore-half' && startupBlockReason !== 'restore-incomplete') {
       throw Object.assign(new Error('no interrupted restore to retry'), { code: 'no_retry_target' })
@@ -2088,6 +2481,11 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     applyNow,
     applyNowPreflight,
     rollback: (version) => trackOperation(rollback(version)),
+    cleanupVersion: (version) => trackOperation(cleanupVersion(version)),
+    restorePreRollback: (stashName) => trackOperation(restorePreRollbackStash(stashName)),
+    recoverMetadata: () => trackOperation(recoverMetadata()),
+    metadataRecoveryPending,
+    pruneStoreIfNeeded: runStorePruneIfNeeded,
     restoreBuiltin: () => trackOperation(restoreBuiltin()),
     retryApply: () => trackOperation(retryApply()),
     retryRestore: () => trackOperation(retryRestore()),

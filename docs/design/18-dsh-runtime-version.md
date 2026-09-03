@@ -314,7 +314,9 @@ resourcesPath manifest；「激活 vX」= resolve 结果；「最新 vY」= regi
      是部署者提供的锚，不是随包版本（§9.3/§7 口径）；
    - env 来源时 tag 显 `(env)`，版本选择/registry/restore mutation 禁用，提示
      「由 env 路径指定」；来源无关的 `[重启 dsh]` 在进程 ready/degraded 时仍可用
-     （desktop = `DSH_CHAMBER_DSH_PATH`；gateway = `DSH_GATEWAY_DSH_PATH`）。
+     （desktop = `DSH_CHAMBER_DSH_PATH`；gateway = `DSH_GATEWAY_DSH_PATH`；
+     2026-12：desktop 落地此口径——修复原 main.ts 拒 env/只读平台重启的偏差，
+     与 gateway 行为一致）。
 2. **版本选择器**（下拉）：置顶当前版本（「当前」；内建版本行另加「内建」后缀）→
    其余 registry 版本纯 semver 降序 → 离线时追加缓存版本（「已缓存」）；
    **默认选中当前激活版本**（默认态即内建版本；2026-10 拍板，决策 11：不推荐
@@ -324,14 +326,22 @@ resourcesPath manifest；「激活 vX」= resolve 结果；「最新 vY」= regi
    `[恢复内建]`（清 override 含 pending）/ `[重启 dsh]`（见 8；运行中可用——
    applying/pending/checking/downloading/installing 拒绝；env 源不禁 restart）；
    pending/applying 期间除 `[恢复内建]` 外禁用；选当前版本 = 无操作。
+   （2026-12 追加：`[清理版本]` 常驻可清理入口、`[恢复回滚前数据]`、`[保留数据并
+   恢复内建]` 为恢复行动行按钮集；状态/快照/磁盘布局两分支同构，快照与磁盘行
+   并入「当前状态」组。）
 4. **版本源设置行**（registry 源用户自设）：下拉 `npmjs（默认）` / `npmmirror` /
    `自定义…`；自定义走 §6 URL 白名单校验（origin 精确、拒绝 userinfo、decode
    归一化）；附 `[检查更新]`（宿主进程执行一次检查：desktop 主进程 / gateway 进程，
    metadata 请求 + 更新判定，失败回显原因）；
-   小字说明「安装与版本检查均来自所选源，切换源即切换信任边界」。
-5. **状态/进度行**（上下文驱动）：idle「已是最新版本 / 有可用更新 vY」；checking
-   「检查更新中…」；installing「安装 dsh vY…」；pending「将于下次启动切换到 vY」；
-   applying「应用 dsh vY…」；applied「已更新到 vY」；rollback/failed「错误文案（脱敏）」。
+   （2026-12：说明文字移除；版本源行统一为「只读当前源 + [检查更新] + [编辑] ⇄
+   编辑态 select + 自定义输入 + [应用/取消]」，桌面侧应用仍走原生确认。）
+5. **状态/进度行**（上下文驱动）：2026-12 修订——claim 类文案整体移除
+   （「已是最新版本 / 尚未检查更新 / 有可用更新 vY」不再出现）；机器状态由
+   版本行后**统一彩色徽标**表达（正常/检查中/下载中/安装中/待应用/应用中/回退中/
+   重启中/切换失败/快照失败/恢复受阻/启动受阻/操作失败/错误/元数据异常，绿/蓝/黄/
+   红四色）；详情行仅承载真实状态/操作/终态结果/失败（checking「检查更新中…」；
+   installing「安装 dsh vY…」；pending「将于下次启动切换到 vY」；applying
+   「应用 dsh vY…」；applied「已更新到 vY」；rollback/failed 错误文案（脱敏））。
 6. **失败记录行**（仅失败时）：「vY 安装失败：<原因> — 建议升级 dsh-chamber / 重试」。
 7. **数据快照状态行**：「数据快照 N 份（最近 <时间>）」；快照失败态「快照失败：<原因>
    [重试应用] [恢复内建]」。
@@ -402,6 +412,9 @@ resourcesPath manifest；「激活 vX」= resolve 结果；「最新 vY」= regi
     管理面：版本选择器、状态/失败、快照、更新/回滚/恢复内建、registry 与
     restart 均经认证反代代理；剩余仅为 STATUS 登记的组件级与实机验收门禁
     （§9.5），不再以缩减视图作为产品契约；
+   （2026-12：补齐 cleanup-version / restore-pre-rollback / recover-metadata 路由
+   与 metadata 健康投影，动作面与 desktop 对齐；清理/恢复/救援入口、彩色状态
+   徽标与快照+磁盘分组两分支同构。）
   - **dsh（ssh/http 直连）**：**不挂载**——远端运行时由 systemd 部署、无
     chamber 运行时管理面、无 `/chamber` 通道（design 17 §3 能力差异表），
     该来源设置段不渲染 dsh-runtime 分节、无任何版本/重启动作；远端重启经
@@ -868,6 +881,10 @@ ready——就绪窗口可达 90s），进度与结果经 `GET /chamber/runtime/
 | `POST /chamber/runtime/select` | 绑定源/版本/tarball/SRI → 下载+SRI → pnpm `file:` install → prune → 冒烟 → 只读原子发布（异步 job，进度经 status 轮询） |
 | `POST /chamber/runtime/apply` | 置 pending（下次 gateway 重启应用） |
 | `POST /chamber/runtime/rollback` | 手动回滚（pre-rollback 暂存 + 快照语义同 §3.7） |
+| `POST /chamber/runtime/apply-now` | 立即执行待应用/已选版本的切换事务（18-addendum §5.1）：202 接受、结果经 status 轮询 |
+| `POST /chamber/runtime/cleanup-version` | 2026-12（desktop 对齐）：台账门 + 删除点保护集重读的一次性显式版本清理（§3.6 清理版本语义），随后消费 `store-prune-needed` 标记执行共享 store prune；成功解除磁盘软上限门 |
+| `POST /chamber/runtime/restore-pre-rollback` | 2026-12（desktop 对齐）：把最近一次手动回滚前暂存还原到 DSH_HOME（完整 → 恢复启动；half → restore-blocked 由 retry-restore 续作）；env 不禁（数据恢复来源无关） |
+| `POST /chamber/runtime/recover-metadata` | 2026-12（desktop 对齐）：FATAL 元数据救援——另存 DSH_HOME 副本 + 损坏元数据按原字节归档 + 内建锚全量只读探针通过后才恢复访问（marker-corrupt 走二阶 rescue）；失败保留持久记录可重试 |
 | `POST /chamber/runtime/restore-builtin` | 写 `reset-builtin` intent 后执行与版本切换相同的数据安全事务：停机 → 快照 → 原子清指针 → 内建锚全量探针；失败切回旧指针并恢复快照，只有成功才删除 override/journal。snapshot-failed 恢复未改动来源，其余硬恢复阻塞保持 dsh 停机且管理面可轮询 |
 | `POST /chamber/runtime/retry-apply` | 恢复被中断的指针切换（swap-attempted）或快照失败（snapshot-failed）：清标志 → 重跑启动事务 → 干净时拉起 dsh（desktop retry-apply 对齐） |
 | `POST /chamber/runtime/retry-restore` | 从持久 journal 继续被中断的快照恢复（restore-half/restore-incomplete）：重跑启动事务续作 |
@@ -875,7 +892,8 @@ ready——就绪窗口可达 90s），进度与结果经 `GET /chamber/runtime/
 | `GET/PUT /chamber/runtime/registry` | registry 源设置（owner-only 0600；URL 白名单校验同 §6；仅文件真实缺失时回默认 npmjs；损坏/符号链接/硬链接隔离保留并响亮失败；原子写，激活/安装期间禁止换源） |
 
 普通 `phase:'pending'` 是 core + route + 两套 UI 的一致终态门：除
-`restore-builtin` 外，select/apply/rollback/retry/restart/registry mutation 全部拒绝
+`restore-builtin` 外，select/apply/rollback/cleanup-version/restore-pre-rollback/
+recover-metadata/retry/restart/registry mutation 全部拒绝
 `409 runtime_pending`；snapshot-failed/swap-attempted/restore-half 等持久记录虽可能仍含
 pending，但属于显式 recovery phase，只开放各自 retry 与 restore-builtin，不能被普通
 pending 分支吞掉或被 select 清除。
@@ -888,8 +906,11 @@ Gateway runtime。**blocked 启动保持存活（2026-09 评审落地）**：启
 `swap-attempted`/`restore-half`/`restore-incomplete` 时 gateway **不**中止
 启动——管理面保持可轮询、托管 dsh 停机，`status().startupBlockedReason`
 投影原因，恢复面为 `retry-apply`/`retry-restore`（镜像 desktop
-blocked-but-alive 语义）；元数据损坏（journal/current/override corrupt、
-journal-mismatch）仍是 FATAL，拒启保护 DSH_HOME。**挂载点纪律（不随 ready
+blocked-but-alive 语义）；**元数据损坏（journal/current/override corrupt、
+journal-mismatch）2026-12 修订**：与桌面 blocked-but-alive 对齐——FATAL
+不再拒启整个 gateway，gateway 保持存活、托管 dsh 停机、管理面可轮询，
+恢复面 = `POST /chamber/runtime/recover-metadata`（归档证据 + 内建锚探针 +
+仅成功后恢复访问；探针失败保留持久记录可重试）。**挂载点纪律（不随 ready
 detach）**：runtime 面是挂在 gateway dispatch 面的自有 runtime 控制器（与
 auth/dispatch 同级）——2026-12 剥离后没有 feature host（session index /
 approvals / notify / scheduler / git 均已删除），ready 过渡订阅只把权威状态

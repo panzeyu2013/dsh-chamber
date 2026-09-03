@@ -357,7 +357,7 @@ async function main(): Promise<number | null> {
     if (gateway.connectionState === 'ready' || gateway.connectionState === 'degraded') {
       logger.log('boot: gateway listening; local dsh is ready')
     } else {
-      logger.error(`boot: gateway listening but local dsh is ${gateway.connectionState} — resume via POST /chamber/runtime/retry-apply|retry-restore or restart the gateway service`)
+      logger.error(`boot: gateway listening but local dsh is ${gateway.connectionState} — resume via POST /chamber/runtime/recover-metadata (metadata block) or retry-apply|retry-restore (switch/restore block), or restart the gateway service`)
     }
     return null // keep running
   } catch (error) {

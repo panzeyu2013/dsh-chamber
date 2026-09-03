@@ -20,6 +20,7 @@
  * / startupBlockedReason / pending. Nothing is invented.
  */
 import type { SettingsBridgeKey } from '../locales.ts'
+import type { RuntimeBadgeView } from '../../../../packages/renderer/src/runtime-management.ts'
 
 export const REMOTE_STATUS_POLL_INTERVAL_MS = 2_000
 // The shared installer has one 10-minute wall-clock budget. A legitimate slow
@@ -138,6 +139,11 @@ export interface RemoteRuntimeStatus {
   diskLimitBytes: number | null
   diskLimitExceeded: boolean | null
   progress: RemoteRuntimeProgress | null
+  /** Desktop-shaped metadata health projection (2026-12 recover-metadata
+   *  parity). Absent on pre-recovery servers — UI rows stay hidden. */
+  metadataHealth?: 'unknown' | 'healthy' | 'selection-corrupt' | 'recovery-in-progress' | 'recovery-finalized' | 'recovery-marker-corrupt' | null
+  metadataComponents?: string[]
+  canRecoverMetadata?: boolean
 }
 
 export interface RemoteVersionEntry {
@@ -151,6 +157,9 @@ export interface RemoteVersionEntry {
 export interface RemoteVersions {
   registryOrigin: string
   versions: RemoteVersionEntry[]
+  /** Cleanup candidates (2026-12 desktop parity): ledger entries the server
+   *  would actually delete. Absent on older servers → empty (UI row hidden). */
+  removableVersions: string[]
   error?: string
 }
 
@@ -161,6 +170,12 @@ const REMOTE_SOURCES: readonly RemoteRuntimeSource[] = [
   'user-selected', 'env', 'builtin-anchor',
 ]
 const REMOTE_RESTART: readonly RemoteRestartOutcome[] = ['running', 'ok', 'failed']
+const METADATA_HEALTHS = [
+  'unknown', 'healthy', 'selection-corrupt', 'recovery-in-progress', 'recovery-finalized', 'recovery-marker-corrupt',
+] as const
+const METADATA_COMPONENTS: readonly string[] = [
+  'current', 'override', 'activation-journal', 'recovery-marker', 'retained-evidence',
+]
 const GATEWAY_SOURCE_ID = /^gateway-[a-zA-Z0-9_-]{1,64}$/
 
 function record(value: unknown, label: string): Record<string, unknown> {
@@ -330,7 +345,24 @@ export function parseRemoteRuntimeStatus(value: unknown): RemoteRuntimeStatus {
     diskLimitBytes: nullableNumber(row, 'diskLimitBytes', 'runtime status'),
     diskLimitExceeded: nullableBoolean(row, 'diskLimitExceeded', 'runtime status'),
     progress: parseProgress(row.progress),
+    // Metadata health (2026-12): absent/unknown values are advisory — they
+    // only control the rescue rows, so an unrecognised future status fails
+    // closed to absent rather than to a mutable idle.
+    metadataHealth: enumOr(row, 'metadataHealth', METADATA_HEALTHS, null, 'runtime status'),
+    metadataComponents: parseMetadataComponents(row.metadataComponents),
+    canRecoverMetadata: booleanOr(row, 'canRecoverMetadata', false, 'runtime status'),
   }
+}
+
+function parseMetadataComponents(value: unknown): string[] | undefined {
+  if (value === undefined || value === null) return undefined
+  if (!Array.isArray(value)) throw new Error('Gateway returned malformed runtime status.metadataComponents')
+  for (const entry of value) {
+    if (typeof entry !== 'string' || !METADATA_COMPONENTS.includes(entry)) {
+      throw new Error('Gateway returned malformed runtime status.metadataComponents')
+    }
+  }
+  return value as string[]
 }
 
 export function parseRemoteVersions(value: unknown): RemoteVersions {
@@ -346,9 +378,27 @@ export function parseRemoteVersions(value: unknown): RemoteVersions {
     }
   })
   const error = nullableString(row, 'error', 'runtime versions')
+  // Cleanup candidates (2026-12): a pre-cleanup server projects no field →
+  // empty list (UI row hidden); a malformed present field fails closed.
+  const removable = row.removableVersions
+  if (removable === undefined || removable === null) {
+    return {
+      registryOrigin: stringField(row, 'registryOrigin', 'runtime versions'),
+      versions,
+      removableVersions: [],
+      ...(error !== null ? { error } : {}),
+    }
+  }
+  if (!Array.isArray(removable)) throw new Error('Gateway returned malformed runtime versions.removableVersions')
+  for (const entry of removable) {
+    if (typeof entry !== 'string' || entry === '') {
+      throw new Error('Gateway returned malformed runtime versions.removableVersions')
+    }
+  }
   return {
     registryOrigin: stringField(row, 'registryOrigin', 'runtime versions'),
     versions,
+    removableVersions: removable as string[],
     ...(error !== null ? { error } : {}),
   }
 }
@@ -473,6 +523,9 @@ export type RemoteRuntimeAction =
   | { kind: 'select'; version: string }
   | { kind: 'apply' }
   | { kind: 'rollback'; version: string }
+  | { kind: 'cleanup-version'; version: string }
+  | { kind: 'restore-pre-rollback'; stashName: string }
+  | { kind: 'recover-metadata' }
   | { kind: 'restore-builtin' }
   | { kind: 'retry-apply' }
   | { kind: 'retry-restore' }
@@ -488,6 +541,9 @@ function actionSuffix(action: RemoteRuntimeAction): string {
     case 'select': return 'select'
     case 'apply': return 'apply'
     case 'rollback': return 'rollback'
+    case 'cleanup-version': return 'cleanup-version'
+    case 'restore-pre-rollback': return 'restore-pre-rollback'
+    case 'recover-metadata': return 'recover-metadata'
     case 'restore-builtin': return 'restore-builtin'
     case 'retry-apply': return 'retry-apply'
     case 'retry-restore': return 'retry-restore'
@@ -500,9 +556,11 @@ export async function remoteRuntimeAction(
   action: RemoteRuntimeAction,
   deps: { fetchImpl?: typeof fetch; signal?: AbortSignal } = {},
 ): Promise<RemoteRuntimeActionResult> {
-  const body = action.kind === 'select' || action.kind === 'rollback'
+  const body = action.kind === 'select' || action.kind === 'rollback' || action.kind === 'cleanup-version'
     ? { version: action.version }
-    : undefined
+    : action.kind === 'restore-pre-rollback'
+      ? { stashName: action.stashName }
+      : undefined
   const { status, body: payload } = await request(
     deps.fetchImpl ?? fetch,
     runtimePath(chamberInstanceId, actionSuffix(action)),
@@ -673,6 +731,39 @@ export function remoteRuntimeStatusView(status: RemoteRuntimeStatus): RemoteRunt
     return { kind: 'idle', titleKey: 'dshRuntimeStatusPending', params: { version: status.pending ?? '—' }, detail: null }
   }
   return { kind: 'idle', titleKey: 'dshRuntimeRemoteStatusIdle', params: undefined, detail: null }
+}
+
+/** Gateway status → unified badge (same vocabulary as the local branch's
+ *  projectRuntimeBadge — both settings sections render one shared pill).
+ *  Idle = 运行时正常, never an "up to date" claim; recovery/blocked/failed
+ *  states suppress the ok badge. */
+export function projectRemoteRuntimeBadge(status: RemoteRuntimeStatus | null): RuntimeBadgeView | null {
+  if (status === null) return null
+  if (status.restart === 'running') return { label: 'restarting', tone: 'busy' }
+  switch (status.phase) {
+    case 'installing': return { label: 'installing', tone: 'busy' }
+    case 'applying': return { label: 'applying', tone: 'busy' }
+    case 'pending': return { label: 'pending', tone: 'warn' }
+    case 'swap-attempted': return { label: 'swap-attempted', tone: 'danger' }
+    case 'snapshot-failed': return { label: 'snapshot-failed', tone: 'danger' }
+    case 'restore-blocked': return { label: 'restore-blocked', tone: 'danger' }
+    case 'idle': break
+  }
+  // Corrupt metadata (recover-metadata parity, 2026-12) names its own danger
+  // badge and outranks the generic startup-blocked label.
+  if (status.metadataHealth === 'selection-corrupt'
+    || status.metadataHealth === 'recovery-in-progress'
+    || status.metadataHealth === 'recovery-marker-corrupt') {
+    return { label: 'metadata', tone: 'danger' }
+  }
+  if (status.startupBlockedReason !== null && status.startupBlockedReason !== '') {
+    return { label: status.phase === 'idle' ? 'blocked' : 'restore-blocked', tone: 'danger' }
+  }
+  if (status.restart === 'failed'
+    || (status.operationError !== null && status.operationError !== '')) {
+    return { label: 'failed', tone: 'danger' }
+  }
+  return { label: 'ok', tone: 'ok' }
 }
 
 /** Poll `status` after a 202 action until the requested job settles.

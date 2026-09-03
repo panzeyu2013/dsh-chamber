@@ -8,7 +8,7 @@
 import type { ApiRequest, ApiResponse, Logger } from '@dsh-chamber/control-plane'
 import { sanitizeRouteError } from './sanitize-route-error.ts'
 export { sanitizeRouteError }
-import type { GatewayRuntimeManager } from './runtime-manager.ts'
+import { RECOVERABLE_METADATA_BLOCKS, type GatewayRuntimeManager } from './runtime-manager.ts'
 
 function json(res: ApiResponse, status: number, body: unknown): true {
   res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' })
@@ -68,6 +68,8 @@ function codeToStatus(code: string | undefined): number {
     case 'bad_registry_origin': return 400
     case 'no_selection': return 409
     case 'env_override_active': return 409
+    case 'version_still_protected': return 409
+    case 'restore_failed': return 409
     case 'runtime_disk_unavailable': return 409
     case 'runtime_disk_limit': return 409
     case 'runtime_activation_failed': return 409
@@ -82,6 +84,9 @@ type RuntimeMutationAction =
   | 'apply'
   | 'apply-now'
   | 'rollback'
+  | 'cleanup-version'
+  | 'restore-pre-rollback'
+  | 'recover-metadata'
   | 'retry-apply'
   | 'retry-restore'
   | 'restore-builtin'
@@ -97,7 +102,7 @@ const APPLY_RECOVERY_PHASES = new Set(['snapshot-failed', 'swap-attempted'])
  * pending exposes only restore-builtin (design 18 §9.3).
  */
 function recoveryGateRefusal(
-  status: { phase?: unknown; pending?: unknown },
+  status: { phase?: unknown; pending?: unknown; startupBlockedReason?: unknown },
   action: RuntimeMutationAction,
 ): { error: string; code: 'runtime_pending' | 'runtime_recovery_required' } | null {
   const phase = typeof status.phase === 'string' ? status.phase : 'unknown'
@@ -112,6 +117,30 @@ function recoveryGateRefusal(
     return {
       error: `runtime recovery ${phase} is required; only ${retryAction} and restore-builtin are allowed`,
       code: 'runtime_recovery_required',
+    }
+  }
+
+  // 2026-12 (M1 review fix): any projected startup block (FATAL metadata or
+  // a swap/restore recovery phase projected through startupBlockedReason)
+  // closes every ordinary mutation — desktop parity: only the exact recovery
+  // surface stays open. Retry routes keep their phase-driven gates above.
+  const blockedReason = typeof status.startupBlockedReason === 'string'
+    && status.startupBlockedReason !== ''
+    ? status.startupBlockedReason
+    : null
+  if (blockedReason !== null) {
+    const swapLike = blockedReason === 'swap-attempted' || blockedReason === 'snapshot-failed'
+    const restoreLike = blockedReason === 'restore-half' || blockedReason === 'restore-incomplete'
+    const fatalLike = RECOVERABLE_METADATA_BLOCKS.has(blockedReason)
+    const allowed = (action === 'retry-apply' && swapLike)
+      || (action === 'retry-restore' && restoreLike)
+      || (action === 'restore-builtin' && (swapLike || restoreLike))
+      || (action === 'recover-metadata' && fatalLike)
+    if (!allowed) {
+      return {
+        error: `runtime startup block ${blockedReason} requires recovery first; only the matching recovery route applies`,
+        code: 'runtime_recovery_required',
+      }
     }
   }
 
@@ -243,6 +272,48 @@ export function createRuntimeRoutes(manager: () => GatewayRuntimeManager, logger
         if (rejectRecoveryGate(res, status, 'rollback')) return true
         return json(res, 200, await m.rollback(body.version))
       }
+      if (suffix === '/cleanup-version' && req.method === 'POST') {
+        // Desktop-parity cleanup (2026-12): ledger-gated deletion of one
+        // explicitly installed version tree + store prune. Synchronous 200
+        // like /apply; refusals (pending/recovery/env/win32/busy/protected)
+        // answer their mapped status synchronously through the manager throw.
+        const body = (await readJsonBody(req)) as { version?: unknown } | undefined
+        if (body === undefined || typeof body.version !== 'string' || body.version === '') {
+          return json(res, 400, { error: 'version is required', code: 'bad_request' })
+        }
+        const status = await m.status()
+        if (rejectRecoveryGate(res, status, 'cleanup-version')) return true
+        if (m.mutationInProgress()) {
+          return json(res, 409, { error: 'another runtime mutation is in flight', code: 'runtime_busy' })
+        }
+        return json(res, 200, await m.cleanupVersion(body.version))
+      }
+      if (suffix === '/restore-pre-rollback' && req.method === 'POST') {
+        // Desktop-parity pre-rollback data restore (2026-12): stash-name
+        // whitelist + re-listing live in the manager; env stays allowed.
+        const body = (await readJsonBody(req)) as { stashName?: unknown } | undefined
+        if (body === undefined || typeof body.stashName !== 'string' || body.stashName === '') {
+          return json(res, 400, { error: 'stashName is required', code: 'bad_request' })
+        }
+        const status = await m.status()
+        if (rejectRecoveryGate(res, status, 'restore-pre-rollback')) return true
+        if (m.mutationInProgress()) {
+          return json(res, 409, { error: 'another runtime mutation is in flight', code: 'runtime_busy' })
+        }
+        return json(res, 200, await m.restorePreRollback(body.stashName))
+      }
+      if (suffix === '/recover-metadata' && req.method === 'POST') {
+        // Metadata FATAL rescue (2026-12 desktop parity): archives corrupt
+        // selection metadata with a full DSH_HOME copy and runs the builtin
+        // anchor through the probe gate. Synchronous refusals come from the
+        // manager (platform/env/busy/wrong-recovery-phase/no-corruption).
+        const status = await m.status()
+        if (rejectRecoveryGate(res, status, 'recover-metadata')) return true
+        if (m.mutationInProgress()) {
+          return json(res, 409, { error: 'another runtime mutation is in flight', code: 'runtime_busy' })
+        }
+        return json(res, 200, await m.recoverMetadata())
+      }
       if (suffix === '/retry-apply' && req.method === 'POST') {
         // Resume an interrupted pointer switch (swap-attempted): the startup
         // transaction re-runs and, on a clean verdict, the managed dsh comes
@@ -296,7 +367,7 @@ export function createRuntimeRoutes(manager: () => GatewayRuntimeManager, logger
         return json(res, 200, await m.setRegistry(body.origin))
       }
       if (suffix === '/' || suffix === '') {
-        return json(res, 200, { routes: ['status', 'versions', 'select', 'apply', 'apply-now', 'rollback', 'restore-builtin', 'restart', 'retry-apply', 'retry-restore', 'registry'] })
+        return json(res, 200, { routes: ['status', 'versions', 'select', 'apply', 'apply-now', 'rollback', 'cleanup-version', 'restore-pre-rollback', 'recover-metadata', 'restore-builtin', 'restart', 'retry-apply', 'retry-restore', 'registry'] })
       }
       return json(res, 404, { error: 'unknown /chamber/runtime route', code: 'not_found' })
     } catch (error) {

@@ -115,7 +115,7 @@ settings-bridge 按来源 kind 装配子 ctx，同一设置页对不同来源显
 
 | 能力 | dsh（ssh 隧道） | dsh（http 直连） | gateway |
 |---|---|---|---|
-| dsh-runtime 设置分节（design 18 §3.6） | 挂载，**版本只读**投影 | **不挂载**（无管理面、无 ssh 通道、无 `/chamber`） | 挂载，**代理 `/chamber/runtime`** 全功能（status/versions/select/apply/rollback/restore-builtin/registry/restart） |
+| dsh-runtime 设置分节（design 18 §3.6） | **不挂载**（2026-12 复核：与 http 直连列一致——远端运行时 systemd 部署、无 `/chamber` 管理面；重启经 connections 卡服务操作） | **不挂载**（无管理面、无 ssh 通道、无 `/chamber`） | 挂载，**代理 `/chamber/runtime`** 全功能（status/versions/select/apply/apply-now/rollback/cleanup-version/restore-pre-rollback/recover-metadata/restore-builtin/retry-apply/retry-restore/registry/restart，2026-12 补齐 desktop 对齐动作） |
 | 重启 dsh 动作 | `restart_service`（systemd IPC） | 无 | `/chamber/runtime/restart`（事务化受控重启，刷新插件挂载） |
 | 网关编排入口（settings-bridge 导航） | 不挂载 | 不挂载 | **2026-12 修订（用户拍板）**：不挂载——桌面设置不重放网关编排，审批/提问经侧边栏既有事实通道呈现 |
 | 通知与审批转发 | 无（dsh 原生审批，前端承担） | 无（同左） | **无（2026-12 剥离**——聚合视图是重复呈现，官方前端已覆盖审批全流程） |

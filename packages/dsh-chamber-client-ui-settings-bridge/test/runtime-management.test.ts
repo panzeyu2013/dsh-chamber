@@ -16,6 +16,7 @@ import {
   compareSemver,
   formatRuntimeBytes,
   preferredRuntimeVersion,
+  projectRuntimeBadge,
   projectRuntimeSnapshot,
   projectRuntimeStatus,
   runtimeAllowedActions,
@@ -251,6 +252,11 @@ test('restart-dsh gate (design 18 §3.6 项 8): allowed in non-busy phases, bloc
   assert.equal(runtimeRestartAllowed(runtimeState('pending')), false)
   assert.equal(runtimeRestartAllowed(runtimeState('idle', { runtimeBlocked: true })), false)
   assert.equal(runtimeRestartAllowed(null), false)
+  // 2026-12: env source & read-only platforms keep restart (design 18 §3.6 项 8,
+  // gateway parity); blocked states still refuse it.
+  assert.equal(runtimeRestartAllowed(runtimeState('idle', { source: 'env' })), true)
+  assert.equal(runtimeRestartAllowed(runtimeState('idle', { managementSupported: false })), true)
+  assert.equal(runtimeRestartAllowed(runtimeState('idle', { source: 'env', runtimeBlocked: true })), false)
 })
 
 test('reset-builtin stays visible on error/failed/rollback/applied only when an override exists', () => {
@@ -284,11 +290,11 @@ test('retry actions require explicit capabilities and never pierce pending/apply
     runtimeAllowedActions(runtimeState('applying', { canRetryApply: true, canRetryRestore: true })),
     ['reset-builtin'],
   )
-  assert.deepEqual(runtimeAllowedActions(runtimeState('idle', { source: 'env' })), ['check'])
+  assert.deepEqual(runtimeAllowedActions(runtimeState('idle', { source: 'env' })), ['check', 'restart-dsh'])
   assert.deepEqual(
     runtimeAllowedActions(runtimeState('failed', { source: 'env', canRetryRestore: true })),
-    ['retry-restore', 'check'],
-    'env source still exposes the mandatory interrupted-data recovery action',
+    ['retry-restore', 'check', 'restart-dsh'],
+    'env source still exposes the mandatory interrupted-data recovery action; restart is source-independent (2026-12)',
   )
   assert.equal(
     runtimeAllowedActions(runtimeState('idle', { canRetryRestore: true })).includes('retry-restore'),
@@ -362,10 +368,11 @@ test('metadata recovery is the sole blocked action and restore retry has priorit
   })).includes('recover-metadata'), false, 'probe success/finalization removes the recovery action')
 })
 
-test('unsupported platform is read-only except for mandatory interrupted restore recovery', () => {
+test('unsupported platform is read-only except for mandatory interrupted restore recovery and the source-independent restart', () => {
   assert.deepEqual(
     runtimeAllowedActions(runtimeState('available', { managementSupported: false })),
-    [],
+    ['restart-dsh'],
+    'restart stays available on read-only platforms (gateway parity, design 18 §3.6 项 8)',
   )
   assert.deepEqual(
     runtimeAllowedActions(runtimeState('failed', {
@@ -375,7 +382,12 @@ test('unsupported platform is read-only except for mandatory interrupted restore
       canRetryRestore: true,
       restoreOutcome: 'incomplete',
     })),
-    ['retry-restore'],
+    ['retry-restore', 'restart-dsh'],
+  )
+  assert.deepEqual(
+    runtimeAllowedActions(runtimeState('applying', { managementSupported: false })),
+    [],
+    'busy phases keep hiding restart even on read-only platforms',
   )
 })
 
@@ -475,6 +487,61 @@ test('status projection covers all phases without silently calling an unknown ph
     projectRuntimeStatus(runtimeState('idle', { latest: null })).kind,
     'not-checked',
     'cached versions before a successful registry read do not mean up to date',
+  )
+})
+
+test('projectRuntimeBadge maps local states onto the unified badge vocabulary without verdict claims', () => {
+  assert.equal(projectRuntimeBadge(null), null)
+  assert.deepEqual(projectRuntimeBadge(runtimeState('idle')), { label: 'ok', tone: 'ok' })
+  assert.deepEqual(projectRuntimeBadge(runtimeState('available')), { label: 'ok', tone: 'ok' })
+  assert.deepEqual(projectRuntimeBadge(runtimeState('applied')), { label: 'ok', tone: 'ok' })
+  assert.deepEqual(projectRuntimeBadge(runtimeState('checking')), { label: 'checking', tone: 'busy' })
+  assert.deepEqual(projectRuntimeBadge(runtimeState('downloading')), { label: 'downloading', tone: 'busy' })
+  assert.deepEqual(projectRuntimeBadge(runtimeState('installing')), { label: 'installing', tone: 'busy' })
+  assert.deepEqual(projectRuntimeBadge(runtimeState('pending')), { label: 'pending', tone: 'warn' })
+  assert.deepEqual(projectRuntimeBadge(runtimeState('applying')), { label: 'applying', tone: 'busy' })
+  assert.deepEqual(projectRuntimeBadge(runtimeState('error')), { label: 'error', tone: 'danger' })
+  assert.deepEqual(projectRuntimeBadge(runtimeState('failed')), { label: 'failed', tone: 'danger' })
+  assert.deepEqual(projectRuntimeBadge(runtimeState('snapshot-failed')), { label: 'snapshot-failed', tone: 'danger' })
+  assert.deepEqual(
+    projectRuntimeBadge(runtimeState('rollback', { restoreOutcome: 'half' })),
+    { label: 'restore-blocked', tone: 'danger' },
+    'half restore never renders next to a healthy pill',
+  )
+  assert.deepEqual(
+    projectRuntimeBadge(runtimeState('rollback')),
+    { label: 'rolling-back', tone: 'warn' },
+  )
+  assert.deepEqual(
+    projectRuntimeBadge(runtimeState('rollback', { restoreOutcome: 'complete' })),
+    { label: 'ok', tone: 'ok' },
+    'a terminal complete rollback (data restored) never lingers as a rolling-back warn pill',
+  )
+  assert.deepEqual(
+    projectRuntimeBadge(runtimeState('failed', { swapAttempted: true, error: 'pointer rename denied' })),
+    { label: 'swap-attempted', tone: 'danger' },
+  )
+  assert.deepEqual(
+    projectRuntimeBadge(runtimeState('failed', {
+      runtimeBlocked: true,
+      metadataHealth: 'selection-corrupt',
+      metadataComponents: ['current'],
+      canRecoverMetadata: true,
+    })),
+    { label: 'metadata', tone: 'danger' },
+  )
+  assert.deepEqual(
+    projectRuntimeBadge(runtimeState('failed', {
+      runtimeBlocked: true,
+      canRetryRestore: true,
+      restoreOutcome: 'half',
+    })),
+    { label: 'restore-blocked', tone: 'danger' },
+  )
+  assert.deepEqual(
+    projectRuntimeBadge(runtimeState('idle', { runtimeBlocked: true, metadataHealth: 'healthy' })),
+    { label: 'blocked', tone: 'danger' },
+    'a blocked projection without a specific reason must never sit next to the ok pill',
   )
 })
 

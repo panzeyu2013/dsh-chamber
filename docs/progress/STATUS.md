@@ -281,3 +281,33 @@
 - **dev 实例隔离**：dev 使用独立 `packages/desktop/.dev-user-data`；控制面端口从
   17520 起自动退避到首个空闲端口（`DSH_CHAMBER_CP_PORT` 可固定覆盖，退避区间
   全占时回退系统临时端口），多个 dev worktree 可与打包版的 userData/17500 共存。
+
+- **dsh 运行时设置面统一（2026-12 实施，登记契约变更与残余偏差）**：两分支同构
+  UI——彩色状态徽标（正常/检查中/下载中/安装中/待应用/应用中/回退中/重启中/切换失败/
+  快照失败/恢复受阻/启动受阻/操作失败/错误/元数据异常，四色）取代「已是最新/可用更新」
+  claim 文案；快照+磁盘占用并入「当前状态」组；registry 只读行+编辑态统一；常驻
+  「清理已安装版本」入口；gateway「部署锚」口径。desktop env/只读平台放行「重启 dsh」
+  （design 18 §3.6 落地）。gateway 新增 `cleanup-version` / `restore-pre-rollback` /
+  `recover-metadata` 路由、FATAL blocked-alive（不再进程级拒启，status 可轮询 +
+  救援路由）、status 的 metadata 健康投影（metadataHealth/metadataComponents/
+  canRecoverMetadata）、store-prune 标记消费（消除 10GiB 软上限死锁）。
+  残余登记（有意保留）：desktop SETTINGS_SET 在 env 下允许更换 registry（设计文字
+  禁，代码行为有意更宽）；restore-builtin × restore-half 逃生集 desktop 更保守
+  （先 retry-restore）而 gateway 沿用设计允许集；registry 白名单形状 desktop
+  https-only、gateway 允许 http-loopback（共享 canonical 更宽，桌面层收紧）；
+  desktop 15s+6h 周期检查不移植 gateway（避免周期出网；进页拉取 + 手动检查）；
+  gateway 组件级交互仍以纯函数/API 客户端测试代证（原实机门禁项维持）。
+
+- **2026-12 review 轮次修复与登记（设计 18 §9.3 配套）**：① FATAL 启动块下所有普通
+  mutation 拒绝（路由 recovery-gate 增 startupBlockedReason 门，仅放行各自恢复面）；
+  ② FATAL×stale-pending 相位投影为 idle+startupBlockedReason（恢复面不被 pending
+  门锁死，canRecoverMetadata 与路由可达一致）；③ boot 前 `metadataRecoveryPending()`
+  预检——引擎归档元数据后 gateway 重启不再绕过探针门直接以内建服务 DSH_HOME；
+  ④ recover 成功后 resume-start 失败转入 `metadata-start-failed` 哨兵（可重试）；
+  ⑤ store-prune 标记在 boot 边界消费（desktop 同款语义）；⑥ 徽标/registry 编辑复位/
+  versions 内嵌 error/恢复行 window.confirm/blocked 原因行等 review 项已修。
+  登记（有意保留）：desktop main.ts 的 RUNTIME_RESTART 等 handler 内联无单测
+  （renderer 镜像 + lockstep 代证；抽取纯函数排期）；env×FATAL（dormant corrupt
+  selection）gateway 死锁需清 env（共享 `shouldProbeEnvWithDormantCorruptSelection`
+  通路未移植，登记）；`status()` 每次轮询跑 metadata health 检测无缓存（小文件读，
+  TTL 排期）；metadata 恢复期 pnpm prune 子进程不可 abort（退出延迟登记）。
