@@ -206,12 +206,18 @@ interface NotificationRequest {
      不再对每个新 key 全表扫描；claim 在裁决之后；'test' 不走 claim）；
   7. **全局呈现预算**：所有实际呈现尝试（**含 `test`**）共享 5s/8 次滑窗硬上限
      （1.6 次/秒，容纳适度多来源同时完成但不允许 banner 风暴）；
-     `activeNotifications` 另设 16 条硬上限，覆盖通知对象跨多个速率窗口仍不 close 的
-     OS 生命周期。饱和 loud/fail-closed。该宿主预算不读取 session roster（控制面/
-     主进程仍不成为 session consumer）；
+     `BoundedActiveNotifications`（`activeNotifications`）把跨多个速率窗口仍不
+     close 的存活通知对象硬上界在 16 条。上界约束「存活引用/OS 监听器」数量而
+     非投递配额：**满员时不拒发**——macOS 横幅进入通知中心后不触发 Electron
+     close（通常只有用户手动清除才触发），若满员 fail-closed，16 条未清除的
+     存量横幅就会永久卡死通知流（2026-09 实机复现：第 16 条横幅后设置页
+     「发送测试通知」与事件通知全部返回 false，OS 侧无任何请求记录）。因此
+     满员时按插入序 loud 淘汰最旧一条（close 退役）并继续登记新通知——硬上界
+     不变、通知流不被存量横幅卡死，仅最旧（价值最低）条目的 click 随之失效。
+     该宿主预算不读取 session roster（控制面/主进程仍不成为 session consumer）；
   8. `new Notification({title, body, silent: false, sound: 'Glass'(darwin)})`，
-     `activeNotifications` Map 持有 notification → 来源 token（既防 GC 吞 click，
-     又允许按退役来源关闭旧 banner）；IPC 的 `true` 只在原生
+     `BoundedActiveNotifications` Map 持有 notification → 来源 token（既防 GC
+     吞 click，又允许按退役来源关闭旧 banner）；IPC 的 `true` 只在原生
      `show` 事件后返回，异步 `failed`、同步 throw、show 前 close 或 5s 超时均返回
      `false` 并释放 claim，绝不把“调用了 void show()”冒充“已显示”；
   9. click → 先复验创建 banner 时捕获的 ownership token，再聚焦/显示窗口（macOS

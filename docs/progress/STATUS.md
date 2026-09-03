@@ -206,8 +206,13 @@
   submodule 物化 + `ensure-harness-vendor.mjs` junction 建链（ci.yml `test-windows`
   腿即该验收；release `build-windows` 腿同步覆盖）、CI 真跑（push 后 ci.yml 全绿）、release.yml 改动后的 `workflow_dispatch` dry_run 全链验证
   （release-checklist §7b 纪律）。
-- **桌面通知（设计 19）**：自动化主链已完成；剩余 macOS 系统通知权限/
-  拒绝行为、点击打开、关窗/托盘/后台三形态与打包态实机验收。
+- **桌面通知（设计 19）**：自动化主链已完成；**2026-09 实机修复**——macOS 横幅
+  进入通知中心后不触发 Electron close（通常仅用户手动清除才触发），16 条未清除
+  的存量横幅曾占满 `activeNotifications` 16 条硬上限，导致后续通知（含设置页
+  「发送测试通知」，UI 报「测试通知发送失败」且 OS 侧无任何请求记录）被永久
+  拒发；已改为 `BoundedActiveNotifications` 满员按插入序 loud 淘汰最旧一条并
+  close 退役、新通知照常登记显示（硬上界不变，仅最旧条目 click 失效）。
+  剩余 macOS 系统通知权限/拒绝行为、点击打开、关窗/托盘/后台三形态与打包态实机验收。
 - **VS Code 深链 + open-in（设计 16/20）**：剩余 macOS 深链冷/热启动、打包态、
   托盘/退出在途、N-ctx、VS Code 缺失、`sshPort != 22`、Finder 下拉在 vendor
   会话头部的定位/层叠，以及远程来源仅 VS Code 的实机验收。

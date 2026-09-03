@@ -2,13 +2,15 @@
  * notifications.ts pure-logic tests (design 19 §3.3) — node:test, no
  * electron. Covers the decideNotification matrix (test bypass / disabled /
  * kind switches / requireHidden / mode) / dedupe claim (5s TTL) / payload
- * whitelist validation.
+ * whitelist validation / bounded active-notification registry (FIFO
+ * eviction instead of reject-on-full).
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { BoundedAckDeliveryQueue } from './deep-link.ts';
 import {
+  BoundedActiveNotifications,
   BoundedRateLimiter,
   MAX_ACTIVE_NATIVE_NOTIFICATIONS,
   MAX_NOTIFICATION_CLAIMS,
@@ -577,4 +579,91 @@ test('validateNotificationRequest: unknown extra fields ignored (whitelist seman
   const extra = { ...makeRequest(), futureField: 'x', secret: 42 };
   const result = validateNotificationRequest(extra);
   assert.ok(result.ok, '白名单校验只检查必要字段');
+});
+
+test('BoundedActiveNotifications: constructor rejects non-positive or fractional limits', () => {
+  assert.throws(() => new BoundedActiveNotifications(0), RangeError);
+  assert.throws(() => new BoundedActiveNotifications(-1), RangeError);
+  assert.throws(() => new BoundedActiveNotifications(1.5), RangeError);
+  assert.equal(new BoundedActiveNotifications(1).size, 0);
+});
+
+test('BoundedActiveNotifications: grows below the limit without evicting', () => {
+  const registry = new BoundedActiveNotifications<string>(3);
+  assert.equal(registry.add('a', null), null);
+  assert.equal(registry.add('b', null), null);
+  assert.equal(registry.add('c', null), null);
+  assert.equal(registry.size, 3);
+  assert.ok(registry.has('a') && registry.has('b') && registry.has('c'));
+});
+
+test('BoundedActiveNotifications: full add evicts the oldest (FIFO) and returns it — never rejects', () => {
+  const registry = new BoundedActiveNotifications<string>(3);
+  registry.add('a', null);
+  registry.add('b', null);
+  registry.add('c', null);
+  const evicted = registry.add('d', null);
+  assert.equal(evicted, 'a', '最旧插入项先被淘汰');
+  assert.equal(registry.size, 3, '硬上界不变');
+  assert.equal(registry.has('a'), false, '被淘汰项已离开登记');
+  assert.ok(registry.has('b') && registry.has('c') && registry.has('d'));
+  // 连续满员添加继续按插入序淘汰：b → c → d。
+  assert.equal(registry.add('e', null), 'b');
+  assert.equal(registry.add('f', null), 'c');
+  assert.equal(registry.add('g', null), 'd');
+  assert.equal(registry.size, 3);
+});
+
+test('BoundedActiveNotifications: delete frees capacity so the next add evicts nothing', () => {
+  const registry = new BoundedActiveNotifications<string>(3);
+  registry.add('a', null);
+  registry.add('b', null);
+  registry.add('c', null);
+  registry.delete('a');
+  assert.equal(registry.size, 2);
+  assert.equal(registry.add('d', null), null, '有空位不淘汰');
+  assert.equal(registry.size, 3);
+  assert.ok(registry.has('b') && registry.has('c') && registry.has('d'));
+});
+
+test('BoundedActiveNotifications: eviction order follows surviving insertion order', () => {
+  const registry = new BoundedActiveNotifications<string>(3);
+  registry.add('a', null);
+  registry.add('b', null);
+  registry.add('c', null);
+  registry.delete('b'); // 存活顺序 a → c
+  assert.equal(registry.add('d', null), null, '有空位（size 2 < 3）不淘汰');
+  assert.equal(registry.add('e', null), 'a', '再满员时淘汰最早插入的存活项 a');
+  // 存活顺序 c → d → e
+  registry.delete('c');
+  assert.equal(registry.add('f', null), null, '删除腾位后不淘汰');
+  assert.equal(registry.add('g', null), 'd', '淘汰按剩余插入序（d 早于 e、f）');
+  assert.equal(registry.size, 3);
+  assert.ok(registry.has('e') && registry.has('f') && registry.has('g'));
+});
+
+test('BoundedActiveNotifications: duplicate add is a no-op that keeps the original token', () => {
+  const registry = new BoundedActiveNotifications<string>(2);
+  const token = { sourceId: 'dsh-x1', fingerprint: 'a'.repeat(64), generation: 7 };
+  registry.add('n', token);
+  assert.equal(registry.add('n', null), null, '重复登记不淘汰、不替换');
+  const pairs = [...registry.entries()];
+  assert.equal(pairs.length, 1);
+  assert.deepEqual(pairs[0][1], token, '原 token 保留（click 路由不受影响）');
+});
+
+test('BoundedActiveNotifications: entries() yields live insertion-ordered pairs and tolerates delete-during-iteration', () => {
+  const registry = new BoundedActiveNotifications<string>(5);
+  registry.add('a', null);
+  registry.add('b', null);
+  registry.add('c', null);
+  const seen: string[] = [];
+  for (const [item, token] of registry.entries()) {
+    seen.push(item);
+    if (item === 'a') registry.delete(item); // 边迭代边删（Map 语义安全）
+    assert.ok(token === null);
+  }
+  assert.deepEqual(seen, ['a', 'b', 'c']);
+  assert.equal(registry.size, 2);
+  assert.ok(!registry.has('a'));
 });

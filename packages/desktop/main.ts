@@ -190,6 +190,7 @@ import {
 } from './chamber-settings.ts';
 import type { ChamberSettings, ChamberSettingsStatus } from './chamber-settings.ts';
 import {
+  BoundedActiveNotifications,
   BoundedRateLimiter,
   claimNotificationDetailed,
   decideNotification,
@@ -497,7 +498,7 @@ let drainingNotificationOpens = false;
  *  dsh-chamber:notifications-ready 置位——did-finish-load 早于监听注册，推送
  *  必须在就绪后才放行，否则窗口重建路径的点击事件会被 IPC 丢弃。 */
 let notificationOpenDrainReady = false;
-const activeNotifications = new Map<Notification, NotificationSourceToken | null>();
+const activeNotifications = new BoundedActiveNotifications<Notification>();
 const nativeNotificationRateLimiter = new BoundedRateLimiter();
 
 /** 扫描 argv 中的 dsh-chamber:// 深链（防御式：非深链 argv 零副作用、绝不 throw）。 */
@@ -882,11 +883,6 @@ async function maybeShowNativeNotification(payload: unknown): Promise<boolean> {
     }
     return false;
   }
-  if (activeNotifications.size >= MAX_ACTIVE_NATIVE_NOTIFICATIONS) {
-    releaseNotificationClaim(claim.token);
-    console.warn(`[dsh-chamber] 活跃原生通知已达 ${MAX_ACTIVE_NATIVE_NOTIFICATIONS} 条硬上限，拒绝新通知`);
-    return false;
-  }
   if (!nativeNotificationRateLimiter.tryAcquire()) {
     releaseNotificationClaim(claim.token);
     console.warn('[dsh-chamber] 原生通知发送速率达到硬上限，拒绝新通知');
@@ -902,8 +898,15 @@ async function maybeShowNativeNotification(payload: unknown): Promise<boolean> {
       ...(process.platform === 'darwin' ? { sound: 'Glass' } : {}),
     });
     notification = created;
-    // activeNotifications 持有存活引用防 GC 吞 click（macOS 已知坑）。
-    activeNotifications.set(created, sourceToken);
+    // 有界登记持有存活引用防 GC 吞 click（macOS 已知坑）。满员不拒发：macOS
+    // 横幅进入通知中心后不触发 close，拒发会让未清除的存量横幅永久卡死通知流
+    // （2026-09 实测 16 条后测试/事件通知全部失败且 OS 无记录）——登记按插入序
+    // 淘汰最旧一条，由调用方 close 退役后新通知照常显示。
+    const evicted = activeNotifications.add(created, sourceToken);
+    if (evicted !== null) {
+      console.warn(`[dsh-chamber] 活跃原生通知已达上限 ${MAX_ACTIVE_NATIVE_NOTIFICATIONS} 条，淘汰最旧一条以继续显示`);
+      try { evicted.close(); } catch { /* best-effort host cleanup */ }
+    }
     created.on('click', () => {
       try {
         // The native object can outlive registry removal + same-id re-add. Its
@@ -2699,7 +2702,7 @@ if (!gotTheLock) {
       if (retiredNotificationSources.size > 0) {
         pendingNotificationOpens.discardWhere(intent => retiredNotificationSources.has(intent.sourceId));
         pendingRendererIntents.discardWhere(intent => retiredNotificationSources.has(intent.sourceId));
-        for (const [notification, token] of activeNotifications) {
+        for (const [notification, token] of activeNotifications.entries()) {
           if (token === null || !retiredNotificationSources.has(token.sourceId)) continue;
           activeNotifications.delete(notification);
           try { notification.close(); } catch { /* best-effort stale banner retirement */ }

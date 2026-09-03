@@ -401,6 +401,62 @@ export class BoundedRateLimiter {
   }
 }
 
+/**
+ * 活跃原生通知的有界登记（design 19 §3.3 项 7）。上界约束的是「为保住 click
+ * 监听不被 GC 回收而持有的存活引用/OS 监听器」数量，不是投递配额。macOS 横幅
+ * 进入通知中心后不触发 Electron close（通常只有用户手动清除才触发）——若满员
+ * 即拒发，16 条未清除的存量横幅就会永久卡死通知流（2026-09 实机复现：第 16 条
+ * 横幅之后设置页「发送测试通知」与事件通知全部返回 false，OS 侧无任何请求
+ * 记录）。因此满员时按插入序淘汰最旧一条并交还调用方退役（close），新通知
+ * 照常登记显示：硬上界不变、通知流不被存量横幅卡死，仅最旧（价值最低）条目
+ * 的 click 随之失效。
+ */
+export class BoundedActiveNotifications<T> {
+  readonly #limit: number
+  readonly #current = new Map<T, NotificationSourceToken | null>()
+
+  constructor(limit = MAX_ACTIVE_NATIVE_NOTIFICATIONS) {
+    if (!Number.isInteger(limit) || limit < 1) {
+      throw new RangeError('active notification limit must be a positive integer')
+    }
+    this.#limit = limit
+  }
+
+  /** 登记一条活跃通知（携带 click 路由 token）。已满员时先按插入序淘汰最旧
+   *  一条并返回它（调用方负责退役，如 close()）——永不因满员拒发。同一 item
+   *  重复登记是 no-op（返回 null，不改变既有条目）。 */
+  add(item: T, token: NotificationSourceToken | null): T | null {
+    if (this.#current.has(item)) return null
+    let evicted: T | null = null
+    if (this.#current.size >= this.#limit) {
+      const oldest = this.#current.keys().next()
+      if (oldest.done !== true) {
+        evicted = oldest.value
+        this.#current.delete(evicted)
+      }
+    }
+    this.#current.set(item, token)
+    return evicted
+  }
+
+  delete(item: T): void {
+    this.#current.delete(item)
+  }
+
+  has(item: T): boolean {
+    return this.#current.has(item)
+  }
+
+  /** 存活条目（插入序）。调用方可边迭代边 delete（Map 迭代语义安全）。 */
+  entries(): IterableIterator<[T, NotificationSourceToken | null]> {
+    return this.#current.entries()
+  }
+
+  get size(): number {
+    return this.#current.size
+  }
+}
+
 export interface NativeNotificationLike {
   on(event: 'show' | 'failed' | 'close', listener: (...args: unknown[]) => void): unknown
   removeListener(event: 'show' | 'failed' | 'close', listener: (...args: unknown[]) => void): unknown
