@@ -10,7 +10,7 @@
 
 > English: [docs/CHANGELOG.en-US.md](docs/CHANGELOG.en-US.md)
 
-## [Unreleased]
+## [0.2.1-beta.1] - 2026-09-03
 
 ### 新增
 
@@ -24,6 +24,33 @@
   resolvePnpmBinDir 增补 Linux 安装根、release.yml `build-linux` 腿
   （ubuntu-22.04 基线）与发布策略测试 4 腿。契约与剩余实机门禁见
   `docs/design/22-linux-desktop.md`。
+- **Windows 首版支持推进（设计 23）** —— M0–M6 代码落地：CI `test-windows`
+  契约腿与 win32 生命周期探针（`win-probes.ts`：PowerShell CIM 身份 /
+  netstat 端口 / taskkill 树终止；reaper 与 spawn-dsh 平台自适应接线）、
+  `win-acl.ts` 启动路径 ACL 收紧、NSIS 卸载清理、win32 登录自启与深链打包态
+  注册、open-in 本地盘符路径、SSH 密码门引导；dsh-runtime 新增
+  `windows-process.ts`（supervisor 树终止）/ `rename-retry.ts`（Windows
+  重命名重试），快照发布/恢复/stash 全改走重试路径。运行时管理在 Windows
+  默认只读投影，`DSH_CHAMBER_WINDOWS_RUNTIME_MUTATIONS=1` 为开发/验证门
+  （严格 '1'、默认关）。真实 Windows runner 首跑与实机矩阵仍为外部门禁，
+  见 `docs/design/23-windows-support.md` 与台账。
+- **Gateway 与 SSH 插件管理统一（设计 21）** —— gateway 新增
+  `/chamber/plugins` install/remove/materialize/tasks 写面 + journal/队列与
+  `/chamber/plugins/installed` 读面、tgz 扫描 + 插件 spec 校验；桌面侧
+  plugin-tarball 构建/同步与 SSH 后端同模型（apply-rows/journal）；managed
+  profile 写租约与运行时事务互斥，新增 `/chamber/runtime/start` 原语
+  （停机/错误/restart-exhausted 恢复，决策 12）。契约见
+  `docs/design/21-gateway-plugin-parity.md`。
+- **dsh 运行时设置面统一（本地 × gateway 同构）** —— 彩色状态徽标词表、
+  快照/磁盘并入「当前状态」组、registry 只读行 + 编辑态统一、常驻「清理已
+  安装版本」；gateway 补齐 `cleanup-version` / `restore-pre-rollback` /
+  `recover-metadata` 路由；FATAL 元数据损坏改 blocked-alive（gateway 存活、
+  托管 dsh 停机、管理面可轮询，恢复面 = recover-metadata）；status 增
+  metadata 健康投影；desktop env/只读平台放行「重启 dsh」。
+- **「内建版本」行引导（2026-12 用户决策）** —— 桌面与 gateway 设置中选中
+  与内建（随应用/部署锚）同版本的行且该版本尚未装成受管树时，主按钮引导
+  「恢复内建」（清除用户选择回到内建副本/锚，零下载）；「仍下载并安装为
+  受管版本」为显式次要动作；已缓存（曾装树）时保持普通切换。
 
 ### 变更
 
@@ -33,7 +60,19 @@
   「可写 AppImage 运行形态」门（`probeLinuxAppImage`）；非 AppImage 形态的
   blocked 文案 `'auto-update is not supported on this platform'` 与
   settings-bridge 按钮门保持不变。
+- **Electron 二进制惰性安装（每机器共享 dist）** —— 根 postinstall 默认跳过
+  Electron 下载，`DSH_CHAMBER_ELECTRON=1` 或 dev 首启按需物化到平台缓存共享
+  dist（多 worktree 并行开发共用一份）；dev 控制面端口自 17520 自动退避到
+  首个空闲端口（`DSH_CHAMBER_CP_PORT` 可固定覆盖）。
 - **dsh 基线升级至 0.1.2-rc.1** —— 源码线（submodule pin）与捆绑运行时（`@deepseek-ai/dsh`）双线同步至 dsh-v0.1.2-rc.1（a66e4702）；上游 rc.1 相对 alpha.5 **零代码改动**——全仓 252 个 `package.json` 仅版本行 bump（alpha.5 → rc.1，diff 复核），客户端/wire/存储/DOM 面无任何增量——in-repo fork 副本（connection/web/api-gateway）零源码重放、仅版本标记同步，DOM 锚点与 wire 契约沿用 alpha.5 审计基线。
+- **gateway 运行时客户端核心重构（design 21 §5.2）** —— 纯核心（解析/
+  动作门/错误分类/轮询）迁入 sidebar 共享面，settings-bridge 仅保留 view
+  映射；consumer ambient 镜像同步并由 lockstep 测试锁定。
+
+### 修复
+
+- **渲染器 extra-bundle 跨重启加载恢复** —— 实例重启窗口内到达的
+  extra-bundle 加载不再被丢弃：重启完成后正确续载，避免该行插件静默缺失。
 
 ## [0.2.0] - 2026-09-03
 
