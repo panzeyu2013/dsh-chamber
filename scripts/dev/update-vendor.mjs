@@ -167,7 +167,7 @@ function main() {
     console.log('  - 若上游 workspace 集合变化，vendor/harness-packages/@deepseek-ai 链接会随 ensure 自动对齐')
     console.log('注意：提交 gitlink 前不要运行 `git submodule update`（会把 HEAD 拉回旧 gitlink）；')
     console.log('运行时线同步见 checklist §2（bundle-dsh / release.yml env / install-gateway.sh 常量）。')
-    console.log('回归：按 docs/checklists/dsh-upgrade-checklist.md §6 全量炮组 + typecheck + 构建 + smoke')
+    console.log('回归：按 docs/checklists/dsh-upgrade-checklist.md §6 全量测试套件 + typecheck + 构建 + smoke')
   } catch (err) {
     console.error(`✗ update-vendor: ${err.message}`)
     if (oldPin !== null) {
