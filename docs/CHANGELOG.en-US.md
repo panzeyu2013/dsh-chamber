@@ -10,48 +10,26 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 > 中文版: [CHANGELOG.md](../CHANGELOG.md)
 
-## [Unreleased]
-
-### Fixed
-
-- **Git worktree removal: submodule worktrees no longer wedge the source (design 08 §6/§7/§11.3)** — git refuses a plain `git worktree remove` on a worktree containing submodule checkouts (exit 128, pre-mutation die). The deterministic failure used to be classified as an "uncertain outcome": the sidebar alert strip offered only Retry with no dismiss, locked every git action on the source, and same-reason retries could never succeed. The host now mirrors git's guard before removal: without an explicit discard authorization a submodule worktree is refused with the deterministic code `worktree-submodules` (zero git mutations; `retryable: false` is serialized explicitly); the remove dialog shows an in-place submodule warning with a checkbox authorization, and once checked the removal proceeds with `--force` in one step (the same path as the dirty discard authorization). The host also re-checks the topology after any git failure (target still listed in the same repository, directory still present and worktree still clean ⇒ pre-mutation refusal) and reclassifies `git-command-failed` as deterministic; the client clears a pending git-remove recovery on the `retryable: false` proof — the error becomes dismissible and the source is never locked again. Genuinely ambiguous failures (target already gone, etc.) keep their recovery semantics unchanged. Review pass (2026-09, three-way subagent audit) added: the post-failure recheck now requires the SAME target (same repository identity AND branch/HEAD); when git's stderr names submodules the refusal is upgraded to the same typed code, so legacy gitdir layouts and races also flow through the dialog's discard consent; the terminal fallback guidance in the host message and dialog copy was corrected to removing the leftover submodule gitdirs (empirically `git submodule deinit -f --all` does not clear the admin `modules/` dir and git keeps refusing); two historical facts in design 08 §6 were corrected (a single `--force` does not bypass git's own lock check — `-f -f` is required; git deletes the worktree directory first, then the admin entry).
-
-## [0.2.0-beta.8] - 2026-09-03
-
-> After the v0.2.0 stable release was retracted over severe defects, the 0.2
-> line resumes validation as beta.8; this release contains the dsh
-> 0.1.2-alpha.5 baseline upgrade plus the http-connection fixes (S0/S2).
-
-### Fixed
-
-- **Gateway web settings gate lifted (S0)** — the gateway proxy injects the upstream-documented hook `window.__DSH_TRANSPORT__={ownsHost:true}` into managed-dsh HTML documents (≤64KiB, identity-encoded, idempotent, fail-soft), so authenticated browser access at any origin runs the official settings page in host persistence — settings/models/plugins become usable and write to the host (the upstream "settings are unavailable in this browser" loopback-only gate is lifted). Trust = the login gate (login means trusted; `--no-auth` trusted-network deployments share the semantics); this is not an auth bypass — the host never reads the client-side flag (verified against the pinned upstream); upstream hook removal degrades silently to the restricted state (re-verify on dsh upgrades). Design 17 §10.5/§18 updated accordingly.
-- **Sidebar push freeze heals itself on direct-http sources (S2)** — the desktop client's ctx push channel over direct http could freeze silently (missing sidebar workspaces / archived-session revival, previously only healed by a manual disconnect/reconnect): control-plane now arms OS-level TCP keepalive on NON-loopback WS upstream legs (discriminated by the resolved baseUrl host, covering gateway-kind and dsh-kind http targets; ssh-tunnel and local legs unchanged — ssh keepalive/loopback already own their liveness), and the renderer staleness watchdog triggers a lightweight `connection.reconnect()` for silent mounted direct-http sources (120s staleness / 60s backoff, transport-axis scoped, mounted = pushed this generation, no-op attempts do not consume the backoff) — a broken channel re-baselines automatically. Design 03 §3.4 / 14 D4 record the exception and the heartbeat fact corrections.
-
-### Changed
-
-- **dsh baseline upgraded to 0.1.2-alpha.5** — both the build-time source line (submodule pin) and the bundled runtime (`@deepseek-ai/dsh`) advance to dsh-v0.1.2-alpha.5; upstream's changes relative to 0.1.2-alpha.4 are all host-side storage (session-projection-cache/storage cross-version read compatibility: `session_projcache` v5 declares `compatibleVersions` [3,4] and corrupt records are salvaged via `backup-and-skip`, fixing app-start failures and missing session-list titles when upgrading from 0.1.1-rc.2 / 0.1.2-alpha.3); the client/wire/protocol surface is untouched — the in-repo fork copies (connection/web/api-gateway) need no code replay and only sync their version markers; DOM anchors and wire contracts need no re-audit (verified by diff).
-
-## [0.2.0] - 2026-09-02
-
-> v0.2.0 is the first stable release of the 0.2 line (graduated after seven beta rounds since v0.2.0-beta.1 on 2026-08-25; the dsh baseline settles on 0.1.2-alpha.4). This section summarizes the features and changes of the 0.2 line against v0.1.5 (the previous stable); minor in-process fixes are omitted — the per-beta details live in the historical beta release notes on GitHub Releases.
+## [0.2.0] - 2026-09-03
 
 ### Added
 
-- **Authenticated server-side Gateway (design 17)** — a separately deployable `@dsh-chamber/gateway` hosting a single loopback dsh instance and exposing the official frontend/API through a unified HTTP/WS request boundary that is authenticated by default (password login + bearer token) with bounded proxying; the login page and request-boundary diagnostic pages follow the official dsh-blue design language and the browser display mode, rejected browser requests receive same-status localized explanation pages (echoed values HTML-escaped, no scripts), and API clients keep the `{error, code}` shape; external deployments are authenticated by default and `--no-auth` is only an explicit trusted-network exception. Ships with the `install-gateway.sh` one-shot installer: interactive wizard (ESC-back, validation loops, offline-package auto-detection), offline `--tgz` installs with content-fingerprint updates, transactional `update` with automatic rollback, `--service-user` dedicated run user, systemd/user/foreground service shapes and 0700 state-layout convergence. The Gateway is distributed as a `.tgz` on GitHub Releases (npm publishing deferred).
-- **dsh runtime version management (design 18)** — install/switch/roll back the dsh runtime at run time: registry-origin binding + SRI verification, embedded-pnpm `file:` installs, probe-gated atomic activation with two-phase rollback/recovery, and a journal/snapshot/stash data-safety loop; user-triggered immediate apply (apply-now) is supported. The core is extracted into the shared pure-Node `packages/dsh-runtime`, and desktop and Gateway settings share the same runtime-management surface (the `dsh-runtime` settings section: full local management, proxied `/chamber/runtime` for gateways, not mounted for ssh/http direct targets); the installer seeds a controlled dsh anchor that can be switched at run time via `/chamber/runtime`.
-- **Unified open registry open-in (design 20)** — the former VS Code deep link (design 16) grew into a unified open surface: the per-session open entry goes through the main-process OpenInApp provider registry (Finder, local and remote VS Code) with a six-step loud execution pipeline and source-lifecycle proof; remote VS Code opens over the SSH tunnel; the plugin package is renamed `dsh-chamber-client-ui-open-in`.
-- **Native desktop notifications (design 19)** — session completion / agent questions / approval requests push native notifications (opt-in via settings): the renderer detects edges on the runtime fact channel, the main process renders Electron Notifications, and clicking opens the session; multi-instance (N-ctx) routing is generation-fenced.
-- **Sidebar enhancements (design 06)** — sessions/workspaces grouped and collapsible per source, drag-sorting with live cross-instance sync (persisted view prefs), in-place workspace rename (visible and working while the group is folded), Git worktree topology with identity-derived family colors; session create/fork convergence fixes (no row/icon/position jumping) and restored pending indicators and notification edges for questions/approvals.
-- **Connection model v2 and direct targets (design 17 rewrite)** — desktop transport and target are decoupled: `ssh | http` × `dsh | gateway` combine freely, with new http-direct dsh targets; connection failures now distinguish "SSH transport error" from "dsh instance probe failure"; the connections settings page gains a plugin-inventory view and per-server runtime section.
-- **Gateway runtime credential management (design 17 §7.4)** — v2 credential envelope, `/auth/change-password` `/auth/change-token` `/auth/credentials`, and the stopped-state `gateway auth` CLI; desktop credential panel with change-password/token-rotation entry points.
-- **Mobile web access surface (design 17 §18)** — the `dsh-chamber-client-ui-mobile` adaptation plugin: narrow-viewport drawer layout, 44px touch targets, safe-area handling, single-line composer input with full IME recovery, and a dual-source drawer scroll lock over `layoutFacts`; the UA redirect switch is off by default; it ships with the Gateway artifact as the single packaged chamber client-plugin seed.
+- **Authenticated server-side Gateway** — a separately deployable `@dsh-chamber/gateway` hosting a single loopback dsh instance and exposing the official frontend/API through a unified HTTP/WS request boundary that is authenticated by default (password login + bearer token) with bounded proxying; the login page and request-boundary diagnostic pages follow the official dsh-blue design language and the browser display mode, rejected browser requests receive same-status localized explanation pages (echoed values HTML-escaped, no scripts), and API clients keep the `{error, code}` shape; external deployments are authenticated by default and `--no-auth` is only an explicit trusted-network exception. Ships with the `install-gateway.sh` one-shot installer: interactive wizard (ESC-back, validation loops, offline-package auto-detection), offline `--tgz` installs with content-fingerprint updates, transactional `update` with automatic rollback, `--service-user` dedicated run user, systemd/user/foreground service shapes and 0700 state-layout convergence. The Gateway is distributed as a `.tgz` on GitHub Releases (npm publishing deferred).
+- **dsh runtime version management** — install/switch/roll back the dsh runtime at run time: registry-origin binding + SRI verification, embedded-pnpm `file:` installs, probe-gated atomic activation with two-phase rollback/recovery, and a journal/snapshot/stash data-safety loop; user-triggered immediate apply (apply-now) is supported. The core is extracted into the shared pure-Node `packages/dsh-runtime`, and desktop and Gateway settings share the same runtime-management surface (the `dsh-runtime` settings section: full local management, proxied `/chamber/runtime` for gateways, not mounted for ssh/http direct targets); the installer seeds a controlled dsh anchor that can be switched at run time via `/chamber/runtime`.
+- **Unified open registry open-in** — the former VS Code deep link grew into a unified open surface: the per-session open entry goes through the main-process OpenInApp provider registry (Finder, local and remote VS Code) with a six-step loud execution pipeline and source-lifecycle proof; remote VS Code opens over the SSH tunnel; the plugin package is renamed `dsh-chamber-client-ui-open-in`.
+- **Native desktop notifications** — session completion / agent questions / approval requests push native notifications (opt-in via settings): the renderer detects edges on the runtime fact channel, the main process renders Electron Notifications, and clicking opens the session; multi-instance (N-ctx) routing is generation-fenced.
+- **Sidebar enhancements** — sessions/workspaces grouped and collapsible per source, drag-sorting with live cross-instance sync (persisted view prefs), in-place workspace rename (visible and working while the group is folded), Git worktree topology with identity-derived family colors; session create/fork convergence fixes (no row/icon/position jumping) and restored pending indicators and notification edges for questions/approvals.
+- **Connection model v2 and direct targets** — desktop transport and target are decoupled: `ssh | http` × `dsh | gateway` combinations (http-direct dsh is disabled before this release on the 0.1.2 line — see Changed; ssh is the only dsh transport); connection failures now distinguish "SSH transport error" from "dsh instance probe failure"; the connections settings page gains a plugin-inventory view and per-server runtime section.
+- **Gateway runtime credential management** — v2 credential envelope, `/auth/change-password` `/auth/change-token` `/auth/credentials`, and the stopped-state `gateway auth` CLI; desktop credential panel with change-password/token-rotation entry points.
+- **Mobile web access surface** — the `dsh-chamber-client-ui-mobile` adaptation plugin: narrow-viewport drawer layout, 44px touch targets, safe-area handling, single-line composer input with full IME recovery, and a dual-source drawer scroll lock over `layoutFacts`; the UA redirect switch is off by default; it ships with the Gateway artifact as the single packaged chamber client-plugin seed.
 - **chamber host-plugin seed registry** — the desktop syncs chamber host packages (host graph, Git worktree) into the server state dir via `PUT /chamber/plugins`, version-locked to the connecting desktop, so managed dsh instances gain chamber host extensions at every spawn (the activation probe skips the chamber host domains until a sync exists).
 
 ### Changed
 
-- **dsh baseline upgraded to 0.1.2-alpha.4** — the build-time source line (submodule pin) and the bundled runtime (`@deepseek-ai/dsh`) are synced on both lines, and the in-repo fork copies (connection/web/api-gateway) replay the upstream changes step by step; the breaking 0.1.2 wire changes (`workspace.list`, `SessionSummary.pendingInteraction` and `host.describe` removal, smooth-corners visuals, …) are adapted explicitly on the chamber side — sidebar archive/state flows over the push channel, pending switches to the official ui-session registry, and notification edges and host facts move to the new channels.
-- **Gateway shape consolidation (user decision)** — the orchestration surface is stripped entirely: the Gateway is auth + reverse-proxy shell + host duties + seed registry; the desktop "gateway orchestration" section is removed, and cross-session scheduling/approval proxies/session indexes no longer exist server-side — session business is entirely the official dsh frontend's.
-- **Credential and connection hardening** — desktop credential storage moves to safeStorage v3 (target-bound, honest 0600 plaintext fallback), with the SSH password mirror and Gateway secrets under the same discipline; with an HTTPS SPKI pin no application bytes flow before the peer key matches; connection reconfiguration is generation-fenced so stale credentials/sessions never cross; a lightweight non-secret audit trail (S24) is added.
+- **dsh baseline upgraded to 0.1.2-alpha.5** — the 0.2 line moves the dsh baseline from the 0.1.x line of the v0.1.5 era onto 0.1.2: the breaking 0.1.2 wire changes (`workspace.list`, `SessionSummary.pendingInteraction` and `host.describe` removal, smooth-corners visuals, …) are adapted explicitly on the chamber side — sidebar archive/state flows over the push channel, pending switches to the official ui-session registry, and notification edges and host facts move to the new channels; the alpha.5 delta is entirely host-side storage (session-projection-cache/storage cross-version read compatibility: `session_projcache` v5 declares `compatibleVersions` [3,4], corrupt records are salvaged via `backup-and-skip`, fixing app-start failures and missing session-list titles when upgrading from 0.1.1-rc.2 / 0.1.2-alpha.3) — the client/wire/protocol surface is untouched, the in-repo fork copies (connection/web/api-gateway) need no code replay and only sync their version markers, and DOM anchors and wire contracts need no re-audit (verified by diff).
+- **dsh×http direct combination disabled** — the http-direct dsh target is hard-blocked on the 0.1.2 line (the host answers 401 without the spawn-time browser-auth launch token; unrecoverable remotely): the connection form no longer offers http for dsh (a kind switch into dsh moves an http draft onto ssh) and the main-process http provider refuses kind dsh at the registry mutation point; ssh is the only dsh transport and http serves gateway targets only.
+- **Gateway shape consolidation** — the orchestration surface is stripped entirely: the Gateway is auth + reverse-proxy shell + host duties + seed registry; the desktop "gateway orchestration" section is removed, and cross-session scheduling/approval proxies/session indexes no longer exist server-side — session business is entirely the official dsh frontend's.
+- **Credential and connection hardening** — desktop credential storage moves to safeStorage v3 (target-bound, honest 0600 plaintext fallback), with the SSH password mirror and Gateway secrets under the same discipline; with an HTTPS SPKI pin no application bytes flow before the peer key matches; connection reconfiguration is generation-fenced so stale credentials/sessions never cross; a lightweight non-secret audit trail is added.
 - **Install and runtime surface hardening** — gateway state roots auto-tighten to 0700 with owner checks (foreign owners fail closed); the installer private layout converges to 0700; the systemd unit `EnvironmentFile=` quoting template is fixed; instance reverse-proxy capability bounds and bounded request-body reads; plugin actions require main-process confirmation and local paths are masked (v1 security mitigations).
 - **Build and release infrastructure** — the build-time vendor source tree becomes a pinned git submodule with link-set assertions; the release pipeline gains full-chain dry-run validation, action-SHA preflight, and strict stable/beta update-feed isolation; Electron binaries install lazily (desktop installs no longer download ~100 MB by default).
 
@@ -67,13 +45,13 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 ### Added
 
-- **VS Code deep-link plugin (design 16)** — `dsh-chamber://` OS deep links
+- **VS Code deep-link plugin** — `dsh-chamber://` OS deep links
   plus an in-app button that launches the local VS Code Remote-SSH session
   for the target server instance (local: `vscode://file/`, remote:
   `ssh-remote+`); the button sits in the official session-header utilities
   slot (left of session-log) with the icon taken from the local VS Code
   official resources.
-- **Git worktree removal enhancement (design 08 §6 amendment, user decision)**
+- **Git worktree removal enhancement**
   — a dirty worktree no longer hard-blocks removal: the remove dialog warns
   "uncommitted changes will be discarded, the branch is kept" and requires a
   checkbox before the host removes it with `git worktree remove --force`;
@@ -123,7 +101,7 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 ### Added
 
-- **Git worktree plugin OpenChamber presentation alignment (design 08 §11)**
+- **Git worktree plugin OpenChamber presentation alignment**
   — the **workspace row IS the git surface**: the occupant renders inside the
   workspace header row (always-visible branch chip, inline create/remove
   actions revealed together with the row's "+"/kebab on hover, status badges
@@ -217,7 +195,7 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 ## [0.1.3] - 2026-08-20
 ### Added
 
-- **Independent Git worktree plugin (design 08)** — adds the in-instance
+- **Independent Git worktree plugin** — adds the in-instance
   `@dsh-chamber/dsh-host-git-worktree` Remote and the first-screen static
   `@dsh-chamber/dsh-client-ui-git`: 30-second single-flight topology,
   a `sidebar.git` seat, a compensating worktree/workspace/session create saga,
@@ -244,12 +222,12 @@ Release artifacts and per-release notes also live on the GitHub Releases page
   all subsessions, states that sessions are kept as Ungrouped and never
   deleted, and offers archiving the whole session tree first (any archive
   failure aborts with nothing removed).
-- **In-app "Check for updates" button and update settings section** (design 11
-  revision) — the settings General section gains `UpdateSection`, letting the
+- **In-app "Check for updates" button and update settings section** — the
+  settings General section gains `UpdateSection`, letting the
   user trigger an explicit update check (same path as the startup/periodic
   silent checks, never auto-downloads); `update-gate` phase gate + unit test.
 
-- **rc.8 backend version tolerance (design 09 §3.3 revision)** — an instance
+- **rc.8 backend version tolerance** — an instance
   whose backend dsh frontend version differs from the chamber shell no longer
   fails the whole boot: extra host-graph rows the shell does not cover
   (including core rows rc.8 added, e.g. the `dsh-client-ui-attachment` client
@@ -270,7 +248,7 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 ### Fixed
 
 
-- **Quit-flow hardening** (design 14 review round) — the quit confirmation now
+- **Quit-flow hardening** — the quit confirmation now
   appears only while a local dsh process is actually alive (`localProcessAlive`,
   a state-string-independent fact); SIGTERM/SIGINT take the graceful quit path
   (will-quit full cleanup — hard kills no longer leave detached orphan hosts
@@ -298,7 +276,7 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 ### Changed
 
 
-- **Full dsh rc.8 baseline alignment (design 09 §4)** — `harness.commit` →
+- **Full dsh rc.8 baseline alignment** — `harness.commit` →
   141eb6fef8 (dsh 0.1.0-rc.8): the vendor source is materialized as the in-repo
   managed snapshot `vendor/harness-checkout` (avoids the pnpm 11 lockfile pruning;
   `--frozen-lockfile` passes); the boot kernel moves to the rc.8 module-system
@@ -317,7 +295,7 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 - The shell seed word table drops the rc.7-era platform words
   (`dsh-client-web-react` / `dsh-client-ui-attachment` /
   `dsh-client-schema-form`), matching the official rc.8 set.
-- Design 09's failure-degrade semantics are stated per layer: load failures
+- The failure-degrade semantics are stated per layer: load failures
   stay loud at the preload layer (collectExtraRows), apply/materialize
   failures degrade at the boot-kernel layer.
 
@@ -325,19 +303,19 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 ### Added
 
-- **Desktop auto-update (design 11)** — silent update checks (startup delay +
+- **Desktop auto-update** — silent update checks (startup delay +
   6h interval), a low-key Settings "Update" section, download only after explicit
   user confirmation, install on quit. Update feed shipped for both platforms
   (`latest.yml` / `latest-mac.yml`; beta channel via a semver prerelease
   version). macOS install leg reports honestly when a Developer ID signature
   is absent (manual-install hint, never a fake success).
-- **Sleep / background persistence (design 14)** — configurable close behavior
+- **Sleep / background persistence** — configurable close behavior
   (hide to tray while dsh keeps running, or quit, with a quit confirmation
   when active tunnels or the local instance would be stopped), launch at login
   (mac/linux), immediate reconnect on OS wake (no heartbeat watchdog wait),
   keep-awake toggle. Settings persist in the main-process
   `chamber-settings.json` (0600, atomic, corrupt-file preserved).
-- **Chamber settings page (design 15, v1 flat form)** — fixed Settings-shell
+- **Chamber settings page (v1 flat form)** — fixed Settings-shell
   entries Connections / General / Update; chamber-global settings kept strictly
   separate from per-instance config planes.
 - **First-paint performance (P4)** — static skeleton + critical CSS in the
@@ -399,7 +377,7 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 - Chamber host-graph injection surfaced in plugin management (local/remote
   seed wiring, `--patch` overlay, install-level fallback).
-- Client plugin runtime loading (design 09): per-instance host-graph merge,
+- Client plugin runtime loading: per-instance host-graph merge,
   extra-entry preloading, covered-set dedupe.
 - Remote plugin management over the SSH exec channel (list / add / remove /
   restart, spec whitelist).
@@ -422,7 +400,7 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 - dsh 0.1.0-rc.7 integrated (harness pin + CI bundle pin + lockfile sync).
 - macOS x64 CI builds dropped for v1 (arm64 only).
-- Auto-update redesigned as a quiet settings-based flow (design 11 scoping).
+- Auto-update redesigned as a quiet settings-based flow.
 
 ## [0.1.0] - 2026-08-15
 

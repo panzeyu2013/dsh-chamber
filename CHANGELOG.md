@@ -10,64 +10,26 @@
 
 > English: [docs/CHANGELOG.en-US.md](docs/CHANGELOG.en-US.md)
 
-## [Unreleased]
-
-### 修复
-
-- **Git 工作树删除：含子模块工作树不再锁死来源（设计 08 §6/§7/§11.3）** ——
-  git 拒绝不带 `--force` 的 `worktree remove` 删除含子模块检出的工作树
-  （exit 128，变更前 die）；此前该确定性失败被当作"结果不确定"，侧边栏
-  顶部恢复条只有重试、无关闭出口且锁定该来源全部 git 操作，同一原因的重试
-  永远失败。现在 host 在删除前镜像 git 守卫：未授权丢弃 → 确定性拒绝码
-  `worktree-submodules`（零 git 变更、`retryable: false` 显式序列化）；
-  删除对话框就地显示子模块警示与勾选授权，勾选后以 `--force` 一步删除
-  （dirty 授权同一条路径）。host 在 git 失败后复查拓扑（目标仍在同仓库
-  列出、目录仍在且仍干净 ⇒ 变更前拒绝）改判 `git-command-failed` 为
-  确定性错误；客户端凭 `retryable: false` 信号清除未决的 git-remove
-  恢复——错误可关闭、来源不再被锁死；真正歧义的失败（目标已消失等）
-  保持原恢复语义不变。复查轮（2026-09 subagent 三路审查）追加：失败后
-  复查要求**同一目标**（同仓库身份且 branch/HEAD 相同），git stderr 明确
-  为子模块拒绝时升级为同一 typed 码（历史 gitdir 布局/竞态同样走对话框
-  授权流）；host 与对话框的终端备选指引修正为删除残留子模块 git 目录
-  （实测 `git submodule deinit -f --all` 不会清空 admin `modules/`，
-  守卫依旧拒绝）；design 08 §6 两处历史事实修正（单 `--force` 不绕过 git
-  锁检查——需 `-f -f`；删除顺序为先工作目录后 admin entry）。
-
-## [0.2.0-beta.8] - 2026-09-03
-
-> v0.2.0 正式版因严重缺陷撤回后，0.2 线以 beta.8 恢复验证；本版内容 = dsh 基线
-> 0.1.2-alpha.5 升级 + http 连接链路修复（S0/S2）。
-
-### 修复
-
-- **gateway 网页设置门控解除（S0）** —— gateway 代理出口对托管 dsh 的 HTML 文档注入上游文档化钩子 `window.__DSH_TRANSPORT__={ownsHost:true}`（≤64KiB、identity 编码、幂等、fail-soft），使经 gateway 认证的浏览器直连（任意 origin）页面进入 host 持久化——官方设置页的 settings/models/插件可用并写宿主（原「settings are unavailable in this browser」仅限 loopback 页面的上游门控解除）。信任 = 登录门（能登录即受信，`--no-auth` 可信网络部署同语义），非鉴权绕过——服务端本就不读该客户端标志（已对 pinned 上游核实）；上游钩子移除则静默退化到受限态（升级 dsh 需复验）。design 17 §10.5/§18 表述同步。
-- **http 直连 sidebar 推送冻结自愈（S2）** —— 桌面客户端经 http 直连的 ctx 推送通道在链路静默后会冻结（sidebar 工作区缺失/已归档会话回浮，此前只能手动断开重连）：control-plane 对**非 loopback** WS 上游腿启用 OS 级 TCP keepalive（判别轴 = 解析后 baseUrl 的 host，覆盖 gateway/dsh 两种 http 目标；ssh 隧道与本地腿不变——ssh keepalive/loopback 已覆盖），renderer staleness 看门狗对静默的 mounted direct-http 来源触发轻量 `connection.reconnect()`（120s staleness / 60s 退避，transport 轴限定，mounted=本代曾推送，no-op 不消耗退避）——断链后自动重连重基线，无需手动干预。design 03 §3.4 / 14 D4 已记录例外与心跳事实修正。
-
-### 变更
-
-- **dsh 基线升级至 0.1.2-alpha.5** —— 构建期源码（submodule pin）与捆绑运行时（`@deepseek-ai/dsh`）双线同步至 dsh-v0.1.2-alpha.5；本轮上游相对 0.1.2-alpha.4 的改动全部在 host 侧存储面（session-projection-cache/storage 跨版本读兼容：`session_projcache` v5 声明 `compatibleVersions` [3,4]、损坏记录 `backup-and-skip` salvage，修复从 0.1.1-rc.2 / 0.1.2-alpha.3 升级时的启动失败与会话列表标题丢失），客户端/wire/协议面零改动——in-repo fork 副本（connection/web/api-gateway）零源码重放、仅版本标记同步，DOM 锚点与 wire 契约无需重审计（diff 复核）。
-
-## [0.2.0] - 2026-09-02
-
-> v0.2.0 是 0.2 主线的首个正式版（2026-08-25 v0.2.0-beta.1 起经七轮 beta 验证转正，dsh 基线最终定格 0.1.2-alpha.4）。本节以 v0.1.5（上一正式版）为比较基线，汇总 0.2 线的功能与变更；开发过程中的小修复从略，每轮 beta 的完整明细见 GitHub Releases 的历史 beta 发布说明。
+## [0.2.0] - 2026-09-03
 
 ### 新增
 
-- **认证服务端 Gateway（设计 17）** —— 新增可独立部署的 `@dsh-chamber/gateway`：托管单个 loopback dsh 实例，经默认全量认证的统一 HTTP/WS 请求边界（密码登录 + bearer token）与有界反代暴露官方前端与 API；登录页与请求边界诊断页采用官方 dsh 蓝设计语言并跟随浏览器显示模式，被拒的浏览器请求收到同状态码的本地化解释页（回显值 HTML 转义、无脚本），API 客户端保持 `{error, code}` 形状；对外部署默认认证，`--no-auth` 仅为显式可信网络例外。配套 `install-gateway.sh` 一键安装器：交互向导（ESC 返回、校验循环、离线包自动探测）、离线 `--tgz` 安装与内容指纹更新、`update` 事务与失败自动回滚、`--service-user` 专用运行用户、systemd/用户态/前台三形态与 state 目录 0700 收敛。Gateway 经 GitHub Release 的 `.tgz` 分发（npm 发布暂缓）。
-- **dsh 运行时版本管理（设计 18）** —— 运行期安装/切换/回滚 dsh 运行时：registry origin 绑定 + SRI 校验、内嵌 pnpm `file:` 安装、探针门控的原子激活事务与两阶段回滚/恢复、journal/快照/stash 的数据安全闭环；支持用户触发的「立即应用」（apply-now）。核心抽取为共享纯 Node 包 `packages/dsh-runtime`，桌面与 Gateway 的设置共用同一运行时管理面（settings 的 `dsh-runtime` 分节：本地全量管理，gateway 经 `/chamber/runtime` 代理，ssh/http 直连目标不挂载）；安装脚本内置「受控锚」dsh，运行期可经 `/chamber/runtime` 切换。
-- **统一打开注册表 open-in（设计 20）** —— 原 VS Code 深链（设计 16）演进为统一打开面：会话头部的打开入口经主进程 OpenInApp provider 注册表（Finder、本地与远程 VS Code）与六步 loud 执行管线打开，来源生命周期证明防串扰；远程 VS Code 经 SSH 隧道；插件包重命名为 `dsh-chamber-client-ui-open-in`。
-- **桌面原生通知（设计 19）** —— 会话完成/代理提问/审批请求推送桌面通知（设置可开关）：渲染器复用运行时事实通道做边沿检测，主进程 Electron Notification 呈现，点击打开对应会话；多实例（N-ctx）按实例代际正确路由。
-- **侧边栏增强（design 06）** —— 会话/工作区按来源分组与整来源收拢、跨实例实时联动的拖拽排序（显示偏好持久化）、工作区就地改名（折叠态可见可改）、Git worktree 拓扑与按身份的家族色；会话创建/fork 的收敛延迟修复（行出现/状态图标/位置不再跳动），提问/审批 pending 指示与通知边沿恢复。
-- **连接模型 v2 与直连目标（design 17 重写）** —— 桌面传输与目标解耦：`ssh | http` × `dsh | gateway` 自由组合，新增 http 直连 dsh 目标；连接失败提示区分「SSH 传输错误」与「dsh 实例探测失败」；连接设置页新增插件清单视图与服务器运行时分节。
-- **Gateway 运行时凭据管理（design 17 §7.4）** —— v2 凭据信封、`/auth/change-password` `/auth/change-token` `/auth/credentials` 与停机态 `gateway auth` CLI；桌面凭据面板与「修改密码/轮换 Token」入口。
-- **移动端 Web 访问面（design 17 §18）** —— `dsh-chamber-client-ui-mobile` 移动适配插件：窄视口抽屉化布局、44px 触控目标、safe-area、输入行单行 + IME 完整恢复、`layoutFacts` 双源驱动的抽屉滚动锁；UA 分流开关默认关闭；随 Gateway 发行物作为唯一打包的 chamber 客户端插件种子。
+- **认证服务端 Gateway** —— 新增可独立部署的 `@dsh-chamber/gateway`：托管单个 loopback dsh 实例，经默认全量认证的统一 HTTP/WS 请求边界（密码登录 + bearer token）与有界反代暴露官方前端与 API；登录页与请求边界诊断页采用官方 dsh 蓝设计语言并跟随浏览器显示模式，被拒的浏览器请求收到同状态码的本地化解释页（回显值 HTML 转义、无脚本），API 客户端保持 `{error, code}` 形状；对外部署默认认证，`--no-auth` 仅为显式可信网络例外。配套 `install-gateway.sh` 一键安装器：交互向导（ESC 返回、校验循环、离线包自动探测）、离线 `--tgz` 安装与内容指纹更新、`update` 事务与失败自动回滚、`--service-user` 专用运行用户、systemd/用户态/前台三形态与 state 目录 0700 收敛。Gateway 经 GitHub Release 的 `.tgz` 分发（npm 发布暂缓）。
+- **dsh 运行时版本管理** —— 运行期安装/切换/回滚 dsh 运行时：registry origin 绑定 + SRI 校验、内嵌 pnpm `file:` 安装、探针门控的原子激活事务与两阶段回滚/恢复、journal/快照/stash 的数据安全闭环；支持用户触发的「立即应用」（apply-now）。核心抽取为共享纯 Node 包 `packages/dsh-runtime`，桌面与 Gateway 的设置共用同一运行时管理面（settings 的 `dsh-runtime` 分节：本地全量管理，gateway 经 `/chamber/runtime` 代理，ssh/http 直连目标不挂载）；安装脚本内置「受控锚」dsh，运行期可经 `/chamber/runtime` 切换。
+- **统一打开注册表 open-in** —— 原 VS Code 深链演进为统一打开面：会话头部的打开入口经主进程 OpenInApp provider 注册表（Finder、本地与远程 VS Code）与六步 loud 执行管线打开，来源生命周期证明防串扰；远程 VS Code 经 SSH 隧道；插件包重命名为 `dsh-chamber-client-ui-open-in`。
+- **桌面原生通知** —— 会话完成/代理提问/审批请求推送桌面通知（设置可开关）：渲染器复用运行时事实通道做边沿检测，主进程 Electron Notification 呈现，点击打开对应会话；多实例（N-ctx）按实例代际正确路由。
+- **侧边栏增强** —— 会话/工作区按来源分组与整来源收拢、跨实例实时联动的拖拽排序（显示偏好持久化）、工作区就地改名（折叠态可见可改）、Git worktree 拓扑与按身份的家族色；会话创建/fork 的收敛延迟修复（行出现/状态图标/位置不再跳动），提问/审批 pending 指示与通知边沿恢复。
+- **连接模型 v2 与直连目标** —— 桌面传输与目标解耦：`ssh | http` × `dsh | gateway` 组合（http 直连 dsh 因 0.1.2 线硬阻断在正式发布前禁用，见变更——ssh 为 dsh 唯一传输）；连接失败提示区分「SSH 传输错误」与「dsh 实例探测失败」；连接设置页新增插件清单视图与服务器运行时分节。
+- **Gateway 运行时凭据管理** —— v2 凭据信封、`/auth/change-password` `/auth/change-token` `/auth/credentials` 与停机态 `gateway auth` CLI；桌面凭据面板与「修改密码/轮换 Token」入口。
+- **移动端 Web 访问面** —— `dsh-chamber-client-ui-mobile` 移动适配插件：窄视口抽屉化布局、44px 触控目标、safe-area、输入行单行 + IME 完整恢复、`layoutFacts` 双源驱动的抽屉滚动锁；UA 分流开关默认关闭；随 Gateway 发行物作为唯一打包的 chamber 客户端插件种子。
 - **chamber host 插件种子注册表** —— 桌面把 chamber host 包（host graph、Git worktree）经 `PUT /chamber/plugins` 同步进服务器 state 目录并版本锁定到连接桌面，受管 dsh 实例每次 spawn 即获得 chamber 宿主扩展（激活探针在同步存在前跳过 chamber 宿主域）。
 
 ### 变更
 
-- **dsh 基线升级至 0.1.2-alpha.4** —— 构建期源码（submodule pin）与捆绑运行时（`@deepseek-ai/dsh`）双线同步，in-repo fork 副本（connection/web/api-gateway）逐级重放上游改动；0.1.2 的破坏性 wire 变化（`workspace.list`、`SessionSummary.pendingInteraction`、`host.describe` 删除，smooth-corners 视觉等）由 chamber 侧显式适配——侧边栏归档集/状态改走推送通道、pending 改接官方 ui-session 注册表、通知边沿与宿主事实改接新通道。
-- **Gateway 形态收口（用户拍板）** —— 编排面整体剥离：Gateway = 认证 + 反代壳 + 宿主职责 + 种子注册表；桌面「网关编排」分区移除，跨会话调度/审批代理/会话索引等不再存在于服务端，会话业务完全由官方 dsh 前端承担。
-- **凭据与连接安全收紧** —— 桌面凭据存储升级 safeStorage v3（按目标绑定、诚实 0600 明文回退），SSH 密码镜像与 Gateway 密钥同纪律；SPKI 证书固定下握手前零应用字节转发；连接重配置按代际隔离，陈旧凭据/会话不串扰；新增轻量非秘密审计（S24）。
+- **dsh 基线升级至 0.1.2-alpha.5** —— 0.2 线把 dsh 基线从 v0.1.5 时代的 0.1.x 线迁到 0.1.2：破坏性 wire 变化（`workspace.list`、`SessionSummary.pendingInteraction`、`host.describe` 删除，smooth-corners 视觉等）由 chamber 侧显式适配——侧边栏归档集/状态改走推送通道、pending 改接官方 ui-session 注册表、通知边沿与宿主事实改接新通道；alpha.5 增量全在 host 侧存储面（session-projection-cache/storage 跨版本读兼容：`session_projcache` v5 声明 `compatibleVersions` [3,4]、损坏记录 `backup-and-skip` salvage，修复从 0.1.1-rc.2 / 0.1.2-alpha.3 升级时的启动失败与会话列表标题丢失）——客户端/wire/协议面零改动，in-repo fork 副本（connection/web/api-gateway）零源码重放、仅版本标记同步，DOM 锚点与 wire 契约无需重审计（diff 复核）。
+- **dsh×http 直连组合禁用** —— 0.1.2 线 http 直连 dsh 目标被硬阻断（宿主无 spawn 期 browser-auth launch token 即回 401、远端不可恢复）：连接表单不再为 dsh 提供 http（kind 切至 dsh 时 http 草稿自动落 ssh），主进程 http provider 在注册表变更点拒绝 kind dsh；ssh 为 dsh 唯一传输、http 仅服务 gateway。
+- **Gateway 形态收口** —— 编排面整体剥离：Gateway = 认证 + 反代壳 + 宿主职责 + 种子注册表；桌面「网关编排」分区移除，跨会话调度/审批代理/会话索引等不再存在于服务端，会话业务完全由官方 dsh 前端承担。
+- **凭据与连接安全收紧** —— 桌面凭据存储升级 safeStorage v3（按目标绑定、诚实 0600 明文回退），SSH 密码镜像与 Gateway 密钥同纪律；SPKI 证书固定下握手前零应用字节转发；连接重配置按代际隔离，陈旧凭据/会话不串扰；新增轻量非秘密审计。
 - **安装与运行面加固** —— Gateway state 根目录自动收紧 0700 + 属主校验（异主 fail-closed）；安装器私有布局 0700；systemd unit `EnvironmentFile=` 去引号模板修复；实例反代能力边界与请求体有界读取；插件动作主进程确认与本地路径脱敏（v1 安全缓解）。
 - **构建与发布基础设施** —— 构建期 vendor 源 submodule 化（固定 commit pin + 链接集断言）；发布流水线引入 dry_run 全链验证、action SHA 预检与 stable/beta 更新通道严格隔离；Electron 二进制惰性安装（桌面安装不再默认下载约 100MB）。
 
@@ -83,11 +45,11 @@
 
 ### 新增
 
-- **VS Code 深链插件（设计 16）** —— `dsh-chamber://` OS 深链 + 应用内按钮
+- **VS Code 深链插件** —— `dsh-chamber://` OS 深链 + 应用内按钮
   快速拉起本机 VS Code Remote-SSH 打开对应 server 实例目录（本地走
   `vscode://file/`、远程走 `ssh-remote+`）；按钮位于官方会话头部 utilities
   槽（session-log 左侧），图标取自本机 VS Code 官方资源。
-- **Git 工作树删除增强（设计 08 §6 修订，用户拍板）** —— dirty 工作树不再
+- **Git 工作树删除增强** —— dirty 工作树不再
   硬性阻断删除：删除对话框警示「未提交更改将被丢弃、分支保留」+ 勾选框，
   勾选后以 `git worktree remove --force` 移除；**分支/提交/HEAD 永不触碰**，
   身份/锁/主 checkout/running 守卫全部保留。
@@ -126,7 +88,7 @@
 
 ### 新增
 
-- **Git Worktree 插件 OpenChamber 呈现对齐（设计 08 §11）** —— **workspace
+- **Git Worktree 插件 OpenChamber 呈现对齐** —— **workspace
   行即 Git 表面**：occupant 渲染进 workspace 头部行内（分支 chip 常显、
   行内创建/删除动作与 "+"/kebab 同 hover 触发、状态徽标 dirty/↑↓
   ahead-behind/健康/attention），独立 git 行与独立面板座位移除
@@ -194,7 +156,7 @@
 ## [0.1.3] - 2026-08-20
 ### 新增
 
-- **Git Worktree 独立插件（设计 08）** —— 新增实例内
+- **Git Worktree 独立插件** —— 新增实例内
   `@dsh-chamber/dsh-host-git-worktree` Remote 与首屏静态
   `@dsh-chamber/dsh-client-ui-git`：30 秒单飞拓扑、`sidebar.git` 座位、创建
   worktree/workspace/session 补偿事务，以及 Git-first/workspace-delete 可重试删除。
@@ -213,11 +175,11 @@
   徽标，删除对不健康工作树显式阻断；③ 删除级联语义对齐：删除确认时递归枚举
   （`parentSessionId` 闭包）直接 + 全部子会话，文案明示「会话保留并转未分组，
   不删除」，并可选先归档整棵会话树（归档失败即中止，不删任何工作树）。
-- **「检查更新」按钮与更新设置段**（design 11 修订）——设置「通用」段并入
+- **「检查更新」按钮与更新设置段** —— 设置「通用」段并入
   `UpdateSection`，用户可显式触发更新检查（与启动/周期静默检查同一条路径，
   从不自动下载）；`update-gate` 相位门 + 单测。
 
-- **rc.8 后端版本容忍（设计 09 §3.3 修订）** —— 实例后端 dsh 官方前端版本与
+- **rc.8 后端版本容忍** —— 实例后端 dsh 官方前端版本与
   chamber 壳不同步时不再整 boot 崩溃：壳未覆盖的宿主图额外行（含 rc.8 新增
   `dsh-client-ui-attachment` client half 等核心行）apply/materialize 失败降级为
   **特性缺席**（console.error + status `failed`，shell 照常 boot）；壳种子词表对齐
@@ -232,7 +194,7 @@
 ### 修复
 
 
-- **退出流程加固**（design 14 review 轮）——退出确认仅在本地 dsh 进程实际
+- **退出流程加固** —— 退出确认仅在本地 dsh 进程实际
   存活时弹出（`localProcessAlive`，状态串独立事实）；SIGTERM/SIGINT 走优雅
   退出路径（will-quit 完整回收，强停不再残留 detached 孤儿进程占端口）；
   控制面 stop 先强关连接再 close（滞留 SSE/WS 不再挂死退出）；设置壳重构为
@@ -254,7 +216,7 @@
 ### 变更
 
 
-- **全量对齐 dsh rc.8 baseline（设计 09 §4）** —— `harness.commit` →
+- **全量对齐 dsh rc.8 baseline** —— `harness.commit` →
   141eb6fef8（dsh 0.1.0-rc.8）：vendor 源物化为仓库内受管快照
   `vendor/harness-checkout`（规避 pnpm 11 锁文件剪枝，`--frozen-lockfile` 通过）；
   boot 内核迁 rc.8 模块系统 bootstrap（`boot.ts` 类结构 + `__ModuleLoader__`
@@ -269,16 +231,16 @@
 
 - 壳种子词表移除 rc.7 遗留平台词（`dsh-client-web-react` /
   `dsh-client-ui-attachment` / `dsh-client-schema-form`），与 rc.8 官方一致。
-- 设计 09 失败降级语义按层表述：加载失败响亮归预加载层（collectExtraRows），
+- 失败降级语义按层表述：加载失败响亮归预加载层（collectExtraRows），
   apply/materialize 失败降级归 boot 内核层。
 
 ## [0.1.2] - 2026-08-19
 
 ### 新增
 
-- **桌面自动更新（设计 11）** —— 静默更新检查（启动延迟 + 6 小时周期）、设置页低调的「更新」分区、仅在用户明确确认后下载、退出时安装。双平台更新源已随发布提供（`latest.yml` / `latest-mac.yml`；beta 频道经 semver 预发布版本）。macOS 安装环节在缺少 Developer ID 签名时如实提示（给出手动安装指引，绝不假报成功）。
-- **睡眠/后台常驻（设计 14）** —— 关窗行为可配置（隐藏到托盘让 dsh 继续运行，或退出；退出前若会停掉活动隧道或本地实例则先确认）、登录自启（mac/linux）、OS 唤醒即时重连（不等心跳 watchdog）、保持唤醒开关。设置持久化于主进程 `chamber-settings.json`（0600、原子写、损坏文件保留）。
-- **Chamber 设置页（设计 15，v1 平铺表单）** —— 设置壳固定入口 Connections / General / Update；chamber 全局设置与实例配置平面严格分离。
+- **桌面自动更新** —— 静默更新检查（启动延迟 + 6 小时周期）、设置页低调的「更新」分区、仅在用户明确确认后下载、退出时安装。双平台更新源已随发布提供（`latest.yml` / `latest-mac.yml`；beta 频道经 semver 预发布版本）。macOS 安装环节在缺少 Developer ID 签名时如实提示（给出手动安装指引，绝不假报成功）。
+- **睡眠/后台常驻** —— 关窗行为可配置（隐藏到托盘让 dsh 继续运行，或退出；退出前若会停掉活动隧道或本地实例则先确认）、登录自启（mac/linux）、OS 唤醒即时重连（不等心跳 watchdog）、保持唤醒开关。设置持久化于主进程 `chamber-settings.json`（0600、原子写、损坏文件保留）。
+- **Chamber 设置页（v1 平铺表单）** —— 设置壳固定入口 Connections / General / Update；chamber 全局设置与实例配置平面严格分离。
 - **首屏性能（P4）** —— 服务 HTML 中的静态骨架 + 关键 CSS、并行 boot、host-graph 拉取与 boot 链重叠、非首屏 ui-* 系列拆为懒加载 chunk（入口 chunk 934KB → 650KB）、与清单 URL 匹配的绝对 modulepreload、控制面 `/assets/*` 即时 gzip + 不可变缓存。
 - **侧边栏 UX 批量改进** —— 单击立即打开会话、双击重命名；经 chamber ui-layout fork 跨 shell 与重启持久化侧边栏宽度；N-ctx 切换服务器时保留侧边栏滚动位置；显式排序菜单 + 官方 updated-order 语义（手动顺序 + 活动提升）。
 - **Host-graph 可见性** —— chamber 注入的宿主包行展示模块 A 版本与实时生效三态（已生效 / 重启后生效 / 未知），经隧道 RPC 探测。
@@ -307,7 +269,7 @@
 ### 新增
 
 - Chamber host-graph 注入在插件管理中可见（本地/远程 seed 接线、`--patch` 覆盖、安装级回退）。
-- 客户端插件运行时加载（设计 09）：每实例 host-graph 合并、额外 entry 预加载、covered 集去重。
+- 客户端插件运行时加载：每实例 host-graph 合并、额外 entry 预加载、covered 集去重。
 - 经 SSH exec 通道的远程插件管理（list / add / remove / restart、spec 白名单）。
 - 多来源侧边栏增强批次（workspace 分组、信息卡、运行中 subagent 指示、跨 ctx 实时同步）。
 - 可信 IPC + 导航围栏到控制面主 frame；拒绝非 loopback 的 HTTP/WS origin。
@@ -321,7 +283,7 @@
 
 - 集成 dsh 0.1.0-rc.7（harness 固定 + CI bundle 固定 + lockfile 同步）。
 - v1 放弃 macOS x64 CI 构建（仅 arm64）。
-- 自动更新重设计为低调的设置流（设计 11 范围）。
+- 自动更新重设计为低调的设置流。
 
 ## [0.1.0] - 2026-08-15
 
