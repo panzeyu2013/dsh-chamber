@@ -142,7 +142,12 @@ test(
     assert.equal(treeKillWindows(childPid), true, 'first kill signals the tree')
     const bothGone = await waitFor(() => !alive(childPid) && !alive(grandchildPid), 10_000)
     assert.equal(bothGone, true, 'leader and descendant are gone after the tree kill')
-    assert.equal(hasWindowsResidualTree(childPid), false, 'no residual descendants remain')
+    // Residual teardown trails process exit on real runners (console hosts and
+    // reaped descendants can linger a beat after the leader is gone), so the
+    // residual verdict gets the same bounded poll as the alive check — a
+    // verdict that is still true after the deadline is a real tree leak.
+    const residualGone = await waitFor(() => !hasWindowsResidualTree(childPid), 10_000)
+    assert.equal(residualGone, true, 'no residual descendants remain (bounded teardown poll)')
     assert.equal(treeKillWindows(childPid), false, 'a second kill reports nothing to signal (gone)')
     assert.equal(treeKillWindows(grandchildPid), false, 'gone applies to the dead descendant too')
   },
