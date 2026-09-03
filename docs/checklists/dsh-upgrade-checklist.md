@@ -42,7 +42,7 @@
       同步（此 env 仅存在于 release.yml，CI 不打包；若将来把打包 job 加回
       ci.yml，必须连同 ci.yml 一起同步）。
 - [ ] **安装脚本常量同步**：`scripts/install-gateway.sh` 内置
-      `DSH_CHAMBER_DSH_VERSION`（当前 `0.1.2-alpha.5`）→ 目标版本（与 release.yml
+      `DSH_CHAMBER_DSH_VERSION`（当前 `0.1.2-rc.1`）→ 目标版本（与 release.yml
       的 env 同步；脚本默认安装该版本，用户可交互覆盖）。
 - [ ] 重建 vendor 树：`node scripts/dev/ensure-harness-vendor.mjs` → 链接数 = 目标
       版本包数（240 之类），无告警（submodule HEAD==pin）。

@@ -10,6 +10,12 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 > 中文版: [CHANGELOG.md](../CHANGELOG.md)
 
+## [Unreleased]
+
+### Changed
+
+- **dsh baseline upgraded to 0.1.2-rc.1** — both the build-time source line (submodule pin) and the bundled runtime (`@deepseek-ai/dsh`) advance to dsh-v0.1.2-rc.1 (a66e4702); upstream rc.1 carries **zero code changes** relative to alpha.5 — all 252 repository `package.json` files only bump their version line (alpha.5 → rc.1, verified by diff), with no client/wire/storage/DOM additions — the in-repo fork copies (connection/web/api-gateway) need no code replay and only sync their version markers; DOM anchors and wire contracts inherit the alpha.5 audit baseline.
+
 ## [0.2.0] - 2026-09-03
 
 ### Added

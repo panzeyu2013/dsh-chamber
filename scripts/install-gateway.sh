@@ -54,7 +54,7 @@ umask 077
 # DSH_CHAMBER_DSH_VERSION 是「内建/回退锚」默认版本（design 18 §9）：运行期
 # 可经 /chamber/runtime 切换，此常量仅决定本脚本安装的锚版本。
 # ---------------------------------------------------------------------------
-DSH_CHAMBER_DSH_VERSION="${DSH_CHAMBER_DSH_VERSION:-0.1.2-alpha.5}"
+DSH_CHAMBER_DSH_VERSION="${DSH_CHAMBER_DSH_VERSION:-0.1.2-rc.1}"
 GITHUB_REPO="${DSH_CHAMBER_GITHUB_REPO:-panzeyu2013/dsh-chamber}"
 BASE_DIR="${DSH_CHAMBER_BASE_DIR:-${HOME:?HOME 环境变量未设置（可用 DSH_CHAMBER_BASE_DIR 指定安装位置）}/.dsh-chamber}"
 # 从自复制位置反推 BASE_DIR（C 区 #9）：install_self 把本脚本复制到
