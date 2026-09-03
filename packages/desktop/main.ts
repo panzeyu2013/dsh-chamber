@@ -51,6 +51,7 @@ import type { GatewayRegistrationAuthProof, GatewaySessionManager, GatewaySessio
 import { discoverSshConfigHosts } from './ssh-config.ts';
 import { createTrustedIpc, isExternalLinkUrl, isTrustedIpcSender, isTrustedRendererUrl } from './renderer-trust.ts';
 import { call, createControlPlane } from './control-plane-module.ts';
+import { findFreePort } from './free-port.ts';
 import {
   attemptDeepLinkProtocolRegistration,
   BoundedAckDeliveryQueue,
@@ -230,18 +231,32 @@ process.on('unhandledRejection', (reason) => {
 
 // Control-plane port (design 05 §3.3): the packaged app keeps the documented
 // default 17500; the dev launcher (electron-dev.mjs) runs with an isolated
-// user-data dir, so its control plane must also avoid the packaged app's port
-// — dev defaults to 17520 and can be overridden with DSH_CHAMBER_CP_PORT. The
-// renderer origin is derived from the actually bound port at runtime
-// (controlPlane.port), so nothing else hardcodes the address.
-function resolveControlPlanePort(): number {
+// user-data dir, so its control plane must also avoid the packaged app's port.
+// Dev starts at 17520 and auto-backs off to the first free port (parallel
+// worktrees each land on their own port); DSH_CHAMBER_CP_PORT pins a fixed
+// port. The renderer origin is derived from the actually bound port at
+// runtime (controlPlane.port), so nothing else hardcodes the address. Port 0
+// lets the OS pick an ephemeral port — the last resort when the whole dev
+// backoff range is exhausted.
+const DEV_CONTROL_PLANE_PORT_BASE = 17520;
+const DEV_CONTROL_PLANE_PORT_ATTEMPTS = 200;
+async function resolveControlPlanePort(): Promise<number> {
   const fromEnv = process.env.DSH_CHAMBER_CP_PORT;
   if (fromEnv !== undefined && fromEnv !== '') {
     const parsed = Number(fromEnv);
     if (Number.isInteger(parsed) && parsed >= 1 && parsed <= 65535) return parsed;
-    console.error(`[dsh-chamber] 忽略非法 DSH_CHAMBER_CP_PORT="${fromEnv}"（须为 1–65535 整数），使用默认端口`);
+    const fallback = process.env.DSH_CHAMBER_ELECTRON_DEV === '1' ? 'dev 自动退避端口' : '默认端口 17500';
+    console.error(`[dsh-chamber] 忽略非法 DSH_CHAMBER_CP_PORT="${fromEnv}"（须为 1–65535 整数），使用${fallback}`);
   }
-  return process.env.DSH_CHAMBER_ELECTRON_DEV === '1' ? 17520 : 17500;
+  if (process.env.DSH_CHAMBER_ELECTRON_DEV !== '1') return 17500;
+  try {
+    return await findFreePort(DEV_CONTROL_PLANE_PORT_BASE, { attempts: DEV_CONTROL_PLANE_PORT_ATTEMPTS });
+  } catch {
+    console.warn(
+      `[dsh-chamber] dev 端口 ${DEV_CONTROL_PLANE_PORT_BASE}..${DEV_CONTROL_PLANE_PORT_BASE + DEV_CONTROL_PLANE_PORT_ATTEMPTS - 1} 均被占用，回退到系统临时端口（0）`,
+    );
+    return 0;
+  }
 }
 
 // 本地崩溃记录（不上传）：主/渲染/GPU 等进程崩溃时由 Crashpad 落盘到
@@ -1575,8 +1590,13 @@ if (!gotTheLock) {
       }
     }
     try {
-      const controlPlanePort = resolveControlPlanePort();
-      console.log(`[dsh-chamber] 控制面端口：${controlPlanePort}（${process.env.DSH_CHAMBER_CP_PORT ? 'DSH_CHAMBER_CP_PORT 覆盖' : process.env.DSH_CHAMBER_ELECTRON_DEV === '1' ? 'dev 默认' : '打包默认'}）`);
+      const controlPlanePort = await resolveControlPlanePort();
+      const portSourceLabel = process.env.DSH_CHAMBER_CP_PORT
+        ? 'DSH_CHAMBER_CP_PORT 固定覆盖'
+        : process.env.DSH_CHAMBER_ELECTRON_DEV === '1'
+          ? 'dev 自动退避（17520 起，首个空闲端口）'
+          : '打包默认';
+      console.log(`[dsh-chamber] 控制面端口：${controlPlanePort}（${portSourceLabel}${controlPlanePort === 0 ? '；0 = 系统临时分配' : ''}）`);
       controlPlane = createControlPlane({
         port: controlPlanePort,
         stateDir: path.join(app.getPath('userData'), 'state'),

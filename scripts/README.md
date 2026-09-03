@@ -14,7 +14,9 @@
 ## `scripts/dev/` —— 开发者 / 维护者 / 测试脚本
 
 - `ensure-harness-vendor.mjs`、`ensure-electron.mjs` —— 安装链（preinstall/postinstall 引导；
-  vendor 树由 submodule 单源引导：硬校验 pin + 幂等建链 + 锁文件集合断言，`--check` 只校验）
+  vendor 树由 submodule 单源引导：硬校验 pin + 幂等建链 + 锁文件集合断言，`--check` 只校验；
+  ensure-electron 物化**每机器共享** Electron dist，逻辑见
+  `packages/desktop/scripts/electron-shared.mjs`）
 - `update-vendor.mjs` —— 上游 dsh 源码 pin 升级（submodule 原子流程）：
   `node scripts/dev/update-vendor.mjs <tag>`（tag 如 `dsh-v0.1.1-rc.2`）：fetch+校验 tag →
   切 submodule → 更新 `harness.commit` → 差量建链 → 原子重生成锁文件 → frozen 验证。

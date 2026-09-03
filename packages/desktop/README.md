@@ -23,7 +23,7 @@ dsh-chamber 的 Electron 壳（v4 连接管理器形态）：单 frame 加载控
 - `scripts/bundle-dsh.mjs` — 将官方发布包 `@deepseek-ai/dsh` 安装为本地运行时（`vendor/dsh`）
 - `scripts/build-control-plane.mjs` — 打包态将 `@dsh-chamber/control-plane` 编译为 JS（`dist/control-plane/`，见下）
 - `scripts/build-preload.mjs` — 将 `preload.cts` 编译为纯 CJS（`dist/preload.cjs`；沙箱 preload 无 TS 类型擦除，`import type` 直接 SyntaxError，dev/打包统一用编译产物）
-- `scripts/electron-dev.mjs` — dev 编排：二进制缺失时自动补装（ensure-electron + DSH_CHAMBER_ELECTRON=1）→ 按需构建 renderer/preload → 以进程组方式启动 Electron → 信号/退出时清理子进程
+- `scripts/electron-dev.mjs` — dev 编排：共享 Electron dist（每机器一份，worktree 共用，见 `scripts/electron-shared.mjs`）缺失时自动物化 → 按需构建 renderer/preload → 以进程组方式启动 Electron → 信号/退出时清理子进程
 - `dist/` — 渲染层构建产物（由 renderer 包构建输出到这里，不在此提交）
 
 ## 依赖安装
@@ -33,7 +33,7 @@ dsh-chamber 的 Electron 壳（v4 连接管理器形态）：单 frame 加载控
 pnpm install
 ```
 
-- pnpm install 默认不再下载 Electron 二进制（DSH_CHAMBER_ELECTRON=1 或 electron-dev 首启时经 electron_mirror 下载）。
+- pnpm install 默认不再下载 Electron 二进制（DSH_CHAMBER_ELECTRON=1 或 dev:desktop 首启时经 electron_mirror 物化）。二进制是**每机器共享 dist**（见 `scripts/electron-shared.mjs`）：位于平台缓存目录、按 `<版本>-<平台>-<架构>` 分键（macOS `~/Library/Caches/dsh-chamber/electron/v43.4.0-darwin-arm64/`；Linux `$XDG_CACHE_HOME|~/.cache/dsh-chamber/electron/...`；Windows `%LOCALAPPDATA%\dsh-chamber\Cache\electron\...`），所有 git worktree / 重复 dev 运行共用同一份——每台机器每个 (版本, 平台, 架构) 只需下载解压一次，不再每个 worktree 各 ~300MB。旧流程遗留的本地 dist（electron 包目录内、版本匹配）会被自动复用（status=legacy，离线可用），`DSH_CHAMBER_ELECTRON_DIST` 可显式指向任意现成 dist 目录并跳过缓存。
 - `@dsh-chamber/control-plane` 是工作区包，`main.ts` 直接 `import` 使用。
 
 ## 运行
@@ -91,7 +91,7 @@ pnpm run dist:desktop
 
 ### 控制面
 
-`createControlPlane({ stateDir: <userData>/state, dshWorkspacePath })`：`stateDir` 固定为 `app.getPath('userData')/state`；`dshWorkspacePath` 为 dsh 工作区解析结果（打包态 `<resources>/vendor/dsh`；开发态环境变量 `DSH_CHAMBER_DSH_PATH` → `<repoRoot>/ref-dsh` → `<pkg>/vendor/dsh`；找不到时为 null，控制面内部回退到默认解析）。port 默认 17500、host 默认 127.0.0.1，start 后经 `controlPlane.port` 读取实际绑定端口。**dev 隔离**：`electron-dev.mjs` 以独立 `--user-data-dir`（`packages/desktop/.dev-user-data`，gitignored）启动，且 dev 模式控制面端口回落为 17520（`DSH_CHAMBER_CP_PORT` 可覆盖）——与运行中的打包版实例（共享同一应用名 `@dsh-chamber/desktop` → 同一 userData 与单实例锁、占用 17500）互不冲突；dev 的注册表/密码/状态独立存放，绝不触碰打包版线上数据。
+`createControlPlane({ stateDir: <userData>/state, dshWorkspacePath })`：`stateDir` 固定为 `app.getPath('userData')/state`；`dshWorkspacePath` 为 dsh 工作区解析结果（打包态 `<resources>/vendor/dsh`；开发态环境变量 `DSH_CHAMBER_DSH_PATH` → `<repoRoot>/ref-dsh` → `<pkg>/vendor/dsh`；找不到时为 null，控制面内部回退到默认解析）。port 默认 17500、host 默认 127.0.0.1，start 后经 `controlPlane.port` 读取实际绑定端口。**dev 隔离**：`electron-dev.mjs` 以独立 `--user-data-dir`（`packages/desktop/.dev-user-data`，gitignored）启动，且 dev 模式控制面端口从 17520 起**自动退避到首个空闲端口**（多 worktree 并行 dev 各占各的端口；`DSH_CHAMBER_CP_PORT` 可固定覆盖；退避区间全占时回退系统临时端口）——与运行中的打包版实例（共享同一应用名 `@dsh-chamber/desktop` → 同一 userData 与单实例锁、占用 17500）互不冲突；renderer origin 始终取自实际绑定端口（`controlPlane.port`），无硬编码地址。dev 的注册表/密码/状态独立存放，绝不触碰打包版线上数据。
 
 ### transport-manager + providers（transport-provider.ts / transport-manager.ts / ssh-provider.ts / gateway-provider.ts）
 

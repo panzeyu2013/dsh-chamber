@@ -235,8 +235,11 @@
 - **默认排序 `manual`（06 §3.1）**：按 wire 顺序，与官方默认 `updated` 不同，
   是有意产品取舍。
 - **窗口标题冻结**：桌面原生标题固定为 `dsh-chamber`，会话名只在应用内呈现。
-- **Electron 二进制惰性安装**：根 postinstall 默认跳过，仅
-  `DSH_CHAMBER_ELECTRON=1` 或 `dev:desktop` 首启按需下载；Gateway/control-plane/
-  CLI 不携带 Electron。
-- **dev 实例隔离**：dev 使用独立 `packages/desktop/.dev-user-data` 与默认控制面
-  端口 17520，可与打包版的 userData/17500 共存。
+- **Electron 二进制惰性安装（每机器共享 dist）**：根 postinstall 默认跳过，仅
+  `DSH_CHAMBER_ELECTRON=1` 或 `dev:desktop` 首启按需物化到平台缓存共享 dist
+  （macOS `~/Library/Caches/dsh-chamber/electron/v<版本>-<平台>-<架构>/` 等，逻辑见
+  `packages/desktop/scripts/electron-shared.mjs`）；worktree 并行开发共用同一份，
+  不再每个 worktree 下载/解压 ~300MB。Gateway/control-plane/CLI 不携带 Electron。
+- **dev 实例隔离**：dev 使用独立 `packages/desktop/.dev-user-data`；控制面端口从
+  17520 起自动退避到首个空闲端口（`DSH_CHAMBER_CP_PORT` 可固定覆盖，退避区间
+  全占时回退系统临时端口），多个 dev worktree 可与打包版的 userData/17500 共存。
