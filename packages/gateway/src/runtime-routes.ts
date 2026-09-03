@@ -86,6 +86,7 @@ type RuntimeMutationAction =
   | 'retry-restore'
   | 'restore-builtin'
   | 'restart'
+  | 'start'
   | 'registry'
 
 const APPLY_RECOVERY_PHASES = new Set(['snapshot-failed', 'swap-attempted'])
@@ -178,7 +179,13 @@ export function createRuntimeRoutes(manager: () => GatewayRuntimeManager, logger
         const status = await m.status()
         if (rejectRecoveryGate(res, status, 'select')) return true
         // Honest acceptance (R7 review): synchronous refusals are answered
-        // synchronously, not swallowed behind a fake 202.
+        // synchronously, not swallowed behind a fake 202. A managed profile
+        // write is a lifecycle writer (design 21 §6.3 decision 6/17): the
+        // install window is refused here so select's 202 never precedes the
+        // manager fence throw.
+        if (m.profileWriteInFlight?.()) {
+          return json(res, 409, { error: 'managed profile write in flight (plugin mutation); runtime mutations are refused', code: 'runtime_busy' })
+        }
         if (m.mutationInProgress()) {
           return json(res, 409, { error: 'another runtime mutation is in flight', code: 'runtime_busy' })
         }
@@ -265,22 +272,65 @@ export function createRuntimeRoutes(manager: () => GatewayRuntimeManager, logger
         // 202: restart acceptance never blocks on readiness (design 18 §9.3);
         // the transactional restart runs in the background and progress is
         // polled via /status. Synchronous refusals are answered synchronously:
-        // installing/applying/pending refuse 409; a dsh that never reached ready refuses 409
-        // (an in-flight restart is single-flight merged by restartLocal).
+        // installing/applying/pending refuse 409; a dsh that never reached
+        // ready refuses 409 (an in-flight restart is single-flight merged by
+        // restartLocal).
         const status = await m.status()
         if (rejectRecoveryGate(res, status, 'restart')) return true
         if (status.phase === 'applying' || status.phase === 'installing') {
           return json(res, 409, { error: 'runtime mutation in progress; restart refused', code: 'runtime_busy' })
         }
         if (status.connectionState !== 'ready' && status.connectionState !== 'degraded') {
-          // Round-4 wording: no start route exists — recovery is restore-builtin
-          // / retry-apply / retry-restore (or a gateway restart), not a start.
-          return json(res, 409, { error: `managed dsh is not running (${status.connectionState}); restore the builtin or retry the interrupted apply/restore before restarting`, code: 'runtime_busy' })
+          // Round-4 wording updated for decision 12: restartLocal rejects every
+          // non-ready state — the r1 recovery surface is POST
+          // /chamber/runtime/start (stopped/error/restart-exhausted), while
+          // interrupted apply/restore windows keep their retry/restore routes.
+          return json(res, 409, { error: `managed dsh is not running (${status.connectionState}); start the managed dsh (start applies to stopped/error/restart-exhausted) or retry the interrupted apply/restore`, code: 'runtime_busy' })
+        }
+        if (m.profileWriteInFlight?.()) {
+          // design 21 §6.3 (decision 6/17): a restart respawns the managed dsh
+          // and its seed thunk writes DSH_HOME — never while a plugin pnpm
+          // child holds the profile-write lease.
+          return json(res, 409, { error: 'managed profile write in flight (plugin mutation); restart refused', code: 'runtime_busy' })
         }
         if (m.restartInFlight()) {
           return json(res, 409, { error: 'a restart is already in flight', code: 'runtime_busy' })
         }
         void m.restart().catch(error => logger.error(`runtime restart failed: ${sanitizeRouteError(error instanceof Error ? error.message : String(error))}`))
+        return json(res, 202, { accepted: true })
+      }
+      if (suffix === '/start' && req.method === 'POST') {
+        // Decision-12 start primitive (design 21 §6.3 r1): bring the managed
+        // dsh up from stopped/error/restart-exhausted. 202 semantics mirror
+        // /restart: the guarded startLocal runs in the background and progress
+        // is polled via /status (start running/ok/failed + operationError).
+        // Every synchronous refusal is answered synchronously before any 202:
+        // recovery phases only expose their matching retry + restore-builtin
+        // (a start never bypasses the recovery gate), installing/applying
+        // windows refuse busy, a held profile-write lease defers, a second
+        // start refuses, and a running/starting dsh is not a start target.
+        const status = await m.status()
+        if (rejectRecoveryGate(res, status, 'start')) return true
+        if (status.phase === 'applying' || status.phase === 'installing') {
+          return json(res, 409, { error: 'runtime mutation in progress; start refused', code: 'runtime_busy' })
+        }
+        if (typeof status.startupBlockedReason === 'string' && status.startupBlockedReason !== '') {
+          // Phase-less in-memory blocks (journal-corrupt / current-corrupt /
+          // override-corrupt / journal-mismatch) never surface a recovery
+          // phase string, yet a raw start must not bypass the verdict.
+          return json(res, 409, { error: `runtime recovery ${status.startupBlockedReason} is required; only retry-apply/retry-restore/restore-builtin are allowed`, code: 'runtime_recovery_required' })
+        }
+        if (m.profileWriteInFlight?.()) {
+          return json(res, 409, { error: 'managed profile write in flight (plugin mutation); start refused', code: 'runtime_busy' })
+        }
+        if (m.startInFlight?.()) {
+          return json(res, 409, { error: 'a start is already in flight', code: 'runtime_busy' })
+        }
+        if (status.connectionState !== 'stopped' && status.connectionState !== 'error'
+          && status.connectionState !== 'restart-exhausted') {
+          return json(res, 409, { error: `managed dsh is running (${status.connectionState}); start applies to stopped/error/restart-exhausted`, code: 'runtime_busy' })
+        }
+        void m.start().catch(error => logger.error(`runtime start failed: ${sanitizeRouteError(error instanceof Error ? error.message : String(error))}`))
         return json(res, 202, { accepted: true })
       }
       if (suffix === '/registry' && req.method === 'GET') {
@@ -296,7 +346,7 @@ export function createRuntimeRoutes(manager: () => GatewayRuntimeManager, logger
         return json(res, 200, await m.setRegistry(body.origin))
       }
       if (suffix === '/' || suffix === '') {
-        return json(res, 200, { routes: ['status', 'versions', 'select', 'apply', 'apply-now', 'rollback', 'restore-builtin', 'restart', 'retry-apply', 'retry-restore', 'registry'] })
+        return json(res, 200, { routes: ['status', 'versions', 'select', 'apply', 'apply-now', 'rollback', 'restore-builtin', 'restart', 'start', 'retry-apply', 'retry-restore', 'registry'] })
       }
       return json(res, 404, { error: 'unknown /chamber/runtime route', code: 'not_found' })
     } catch (error) {

@@ -40,6 +40,8 @@ import {
   materializePluginsDir,
   packageNameFromSpec,
   redactLocalPluginManifest,
+  redactRemotePluginManifest,
+  remoteManifestPath,
   remotePluginList,
   ReadyPhaseEdges,
   reapStaleLocalPluginWriters,
@@ -51,7 +53,7 @@ import {
   PLUGIN_SPEC_PATTERN,
   PLUGIN_NAME_PATTERN,
 } from './plugin-sync.ts'
-import type { ChamberHostPackageSeed, ExecFn, ExecResult, StatusFn, RemoteSpec } from './plugin-sync.ts'
+import type { ChamberHostPackageSeed, ExecFn, ExecResult, SshApplyJournalSink, StatusFn, RemoteSpec } from './plugin-sync.ts'
 import type { TransportRunPayload } from './transport-provider.ts'
 import { NotificationSourceIncarnations } from './notifications.ts'
 
@@ -947,6 +949,170 @@ test('applyPlugins: a changed operational owner is not blocked by the reusable i
   )
 })
 
+test('applyPlugins: reserved names (@deepseek-ai/* + @dsh-chamber/*) refuse the WHOLE batch before any exec', async () => {
+  // Design 21 §6.4/decision 19: same deny set as the gateway — the refusal
+  // must happen before ANY remote change, and must LIST the denied names.
+  let execCalls = 0
+  const exec: ExecFn = async () => {
+    execCalls += 1
+    return ok()
+  }
+  const spec: RemoteSpec = { id: 's1', remoteDshHome: null }
+
+  const chamberAdd = await applyPlugins(exec, readyStatus, spec, { add: ['@dsh-chamber/dsh-host-client-graph@1.2.3'], remove: [] })
+  assert.equal(chamberAdd.ok, false)
+  if (!chamberAdd.ok) {
+    assert.match(chamberAdd.error, /reserved plugin name\(s\): @dsh-chamber\/dsh-host-client-graph/)
+  }
+
+  const officialRemove = await applyPlugins(exec, readyStatus, spec, { add: [], remove: ['@deepseek-ai/ui'] })
+  assert.equal(officialRemove.ok, false)
+  if (!officialRemove.ok) {
+    assert.match(officialRemove.error, /reserved plugin name\(s\): @deepseek-ai\/ui/)
+  }
+
+  // A MIXED batch (valid rows alongside a denied one) is refused in full:
+  // the valid rows must never execute around the refused row.
+  const mixed = await applyPlugins(exec, readyStatus, spec, {
+    add: ['fine-pkg@1.0.0', '@deepseek-ai/official@^2.0.0'],
+    remove: ['@dsh-chamber/host-git'],
+  })
+  assert.equal(mixed.ok, false)
+  if (!mixed.ok) {
+    assert.match(mixed.error, /@deepseek-ai\/official/)
+    assert.match(mixed.error, /@dsh-chamber\/host-git/)
+  }
+  assert.equal(execCalls, 0, 'no exec (not even a snapshot read) may run for a refused batch')
+})
+
+test('applyPlugins: with a journal sink, every executed row records its PRE-CHANGE spec (snapshot first)', async () => {
+  const order: string[] = []
+  let manifestCats = 0
+  const PRE = { dependencies: { 'old-pkg': '^2.0.0', 'up-pkg': '^1.0.0' } }
+  const POST = { dependencies: { 'new-pkg': '^1.0.0', 'up-pkg': '^2.0.0' } }
+  const exec: ExecFn = async (_id, action, payload) => {
+    if (action === 'run' && payload?.op === 'exec' && payload.command === 'dsh') {
+      const verb = payload.argv?.[0] === 'plugin' ? payload.argv[3] : '?'
+      order.push(`${verb}:${payload.argv?.[4]}`)
+      return ok()
+    }
+    if (action === 'run' && payload?.op === 'exec' && payload.command === 'cat') {
+      const target = payload.argv?.[0] ?? ''
+      if (target === remoteManifestPath(null)) {
+        manifestCats += 1
+        order.push(`cat:manifest#${manifestCats}`)
+        return ok(JSON.stringify(manifestCats === 1 ? PRE : POST))
+      }
+      // Chamber probe files: absent (never loud).
+      order.push('cat:probe-absent')
+      return err('cat: /root/.dsh/profiles/x/package.json: No such file or directory')
+    }
+    order.push(action)
+    return ok()
+  }
+  const recorded: Array<{ name: string; kind: string; specBefore: string | null; ok: boolean }> = []
+  const journal: SshApplyJournalSink = {
+    record: entry => recorded.push({ name: entry.name, kind: entry.kind, specBefore: entry.specBefore, ok: entry.ok }),
+  }
+  const result = await applyPlugins(exec, readyStatus, { id: 's1', remoteDshHome: null }, {
+    remove: ['old-pkg'],
+    add: ['new-pkg@^1.0.0', 'up-pkg@^2.0.0'],
+    restart: false,
+  }, { journal })
+  assert.equal(result.ok, true)
+  if (result.ok) {
+    assert.equal(result.result.applied, 3)
+    assert.equal(result.result.verified, true)
+    assert.equal(result.result.deferred, true)
+  }
+  // Snapshot read happens BEFORE the first remote change…
+  const snapshotIndex = order.indexOf('cat:manifest#1')
+  const firstRowIndex = order.findIndex(call => call.startsWith('remove:') || call.startsWith('add:'))
+  assert.ok(snapshotIndex !== -1 && snapshotIndex < firstRowIndex, 'the journal snapshot must precede every remote change')
+  // …the verify read-back comes after the rows.
+  assert.ok(order.indexOf('cat:manifest#2') > firstRowIndex)
+  // Rows are journaled in execution order with the PRE-change specs: an add
+  // of an absent name has specBefore null; an in-place upgrade records the
+  // version it replaced; a remove records the spec it removed.
+  assert.deepEqual(recorded, [
+    { name: 'old-pkg', kind: 'remove', specBefore: '^2.0.0', ok: true },
+    { name: 'new-pkg', kind: 'add', specBefore: null, ok: true },
+    { name: 'up-pkg', kind: 'add', specBefore: '^1.0.0', ok: true },
+  ])
+})
+
+test('applyPlugins: failed rows are journaled with ok:false and their error, never undoable', async () => {
+  const order: string[] = []
+  const exec: ExecFn = async (_id, action, payload) => {
+    if (action === 'run' && payload?.op === 'exec' && payload.command === 'dsh') {
+      const spec = payload.argv?.[4]
+      order.push(`add:${spec}`)
+      return spec === 'bad-pkg@1.0.0'
+        ? err('remote: bad package name')
+        : ok()
+    }
+    if (action === 'run' && payload?.op === 'exec' && payload.command === 'cat') {
+      return ok(JSON.stringify({ dependencies: {} }))
+    }
+    return ok()
+  }
+  const recorded: Array<{ name: string; ok: boolean; error?: string }> = []
+  const journal: SshApplyJournalSink = { record: entry => recorded.push(entry) }
+  const result = await applyPlugins(exec, readyStatus, { id: 's1', remoteDshHome: null }, {
+    add: ['good-pkg@1.0.0', 'bad-pkg@1.0.0'],
+    remove: [],
+    restart: false,
+  }, { journal })
+  assert.equal(result.ok, true)
+  if (result.ok) assert.deepEqual(result.result.failed, [{ spec: 'bad-pkg@1.0.0', error: 'remote: bad package name' }])
+  assert.deepEqual(recorded, [
+    { instanceId: 's1', name: 'good-pkg', kind: 'add', specBefore: null, ok: true },
+    { instanceId: 's1', name: 'bad-pkg', kind: 'add', specBefore: null, ok: false, error: 'remote: bad package name' },
+  ])
+})
+
+test('applyPlugins: without a journal sink the historical exec sequence is unchanged (no snapshot read)', async () => {
+  const order: string[] = []
+  const exec: ExecFn = async (_id, action, payload) => {
+    if (action === 'run' && payload?.op === 'exec' && payload.command === 'dsh') {
+      order.push(`dsh:${payload.argv?.[3]}:${payload.argv?.[4]}`)
+      return ok()
+    }
+    if (action === 'run' && payload?.op === 'exec' && payload.command === 'cat') {
+      order.push('cat:verify')
+      return ok(JSON.stringify({ dependencies: { 'pkg-a': '^1.0.0' }, dsh: { profile: { bundles: [] } } }))
+    }
+    if (action === 'restart') {
+      order.push('restart')
+      return ok()
+    }
+    return err(`unexpected ${action}`)
+  }
+  const result = await applyPlugins(exec, readyStatus, { id: 's1', remoteDshHome: null }, { add: ['pkg-a@^1.0.0'], remove: [] })
+  assert.equal(result.ok, true)
+  assert.deepEqual(order[0], 'dsh:add:pkg-a@^1.0.0', 'the first exec is the change itself — no snapshot read without a journal')
+})
+
+test('materializeAndAdd: a folder whose manifest claims a reserved name is refused before any exec', async () => {
+  const root = tempDir()
+  const pluginDir = join(root, 'pkg')
+  mkdirSync(pluginDir)
+  writeFileSync(join(pluginDir, 'package.json'), JSON.stringify({ name: '@dsh-chamber/evil-impersonator', version: '1.0.0' }))
+  let execCalls = 0
+  const exec: ExecFn = async () => {
+    execCalls += 1
+    return ok()
+  }
+  const result = await materializeAndAdd(exec, { id: 's1', remoteDshHome: null }, pluginDir, async () => {
+    throw new Error('pack must not run for a denied materialize')
+  })
+  assert.equal(result.ok, false)
+  if (!result.ok) {
+    assert.match(result.error, /reserved plugin name\(s\): @dsh-chamber\/evil-impersonator/)
+  }
+  assert.equal(execCalls, 0, 'the remote write/add chain never runs')
+})
+
 // ============================================================================
 // computeCordisPatchUpdate (seed cordis.patch.yml)
 // ============================================================================
@@ -1836,4 +2002,58 @@ test('describeSeedConfirmation names the target and the write/restart effect', (
   assert.match(copy.detail, /写入 chamber host 包/)
   const fallback = describeSeedConfirmation({ targetLabel: null, targetId: 'ssh-2' })
   assert.match(fallback.message, /ssh-2/, 'target falls back to the instance id')
+})
+
+test('redactRemotePluginManifest: file: dependency values are masked (file: prefix kept), registry values untouched', () => {
+  // Design 21 §6.2/§6.4 readManifest 投影统一掩码 (decision 18): the ssh
+  // plugin_list RPC projection masks remote-local `file:` values exactly like
+  // the gateway installed route — including remote materialized tarballs.
+  const manifest = {
+    dependencies: {
+      'file-dep': 'file:/root/.dsh/profiles/plugins/x.tgz',
+      'tarball-dep': 'file:/root/.dsh-chamber/plugins/@scope-name-1a2b.tgz',
+      'uppercase-file': 'FILE:/root/x',
+      'registry-dep': '^1.2.3',
+      'pinned-dep': '1.2.3',
+      'tag-dep': 'latest',
+      // link:/relative/absolute values cannot reach a profile through
+      // `dsh plugin` (only file: forms do) — gateway parity: left untouched.
+      'link-dep': 'link:/root/x',
+    },
+    bundles: ['file-dep'],
+    profileExists: true,
+    chamber: { ok: true, hostGraph: { installed: true, patched: true, version: '1.0.0', live: null }, gitWorktree: { installed: false, patched: false, version: null, live: null } },
+  }
+  const redacted = redactRemotePluginManifest(manifest as never)
+  assert.equal(redacted.dependencies['file-dep'], MATERIALIZED_VALUE_MASK)
+  assert.equal(redacted.dependencies['tarball-dep'], MATERIALIZED_VALUE_MASK)
+  assert.equal(redacted.dependencies['uppercase-file'], MATERIALIZED_VALUE_MASK)
+  assert.equal(redacted.dependencies['registry-dep'], '^1.2.3')
+  assert.equal(redacted.dependencies['pinned-dep'], '1.2.3')
+  assert.equal(redacted.dependencies['tag-dep'], 'latest')
+  assert.equal(redacted.dependencies['link-dep'], 'link:/root/x')
+  assert.deepEqual(redacted.bundles, ['file-dep'])
+  assert.equal(redacted.profileExists, true)
+  assert.equal(redacted.chamber.ok, true)
+})
+
+test('redactRemotePluginManifest: the mask keeps materialize classification (name-based diff keeps working)', () => {
+  // The client diff keys materialize rows on name + isPathSpec; the mask's
+  // kept `file:` prefix must classify identically on both sides.
+  assert.equal(classifyDependencyValue(MATERIALIZED_VALUE_MASK).kind, 'materialize')
+  assert.equal(classifyDependencyValue(redactRemotePluginManifest({ dependencies: { x: 'file:/a/b.tgz' }, bundles: [], profileExists: true, chamber: { ok: true, hostGraph: { installed: true, patched: true, version: null, live: null }, gitWorktree: { installed: false, patched: false, version: null, live: null } } } as never).dependencies.x).kind, 'materialize')
+})
+
+test('redactRemotePluginManifest: masks only the dependencies projection — error/profile fields untouched', () => {
+  const manifest = {
+    dependencies: { broken: 'file:/srv/x' },
+    bundles: [],
+    profileExists: true,
+    error: 'failed to parse remote package.json: boom',
+    chamber: { ok: false, error: 'probe failed' },
+  }
+  const redacted = redactRemotePluginManifest(manifest as never)
+  assert.equal(redacted.dependencies.broken, MATERIALIZED_VALUE_MASK)
+  assert.equal(redacted.error, 'failed to parse remote package.json: boom')
+  assert.equal(redacted.chamber.ok, false)
 })

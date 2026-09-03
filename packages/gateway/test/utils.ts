@@ -15,6 +15,7 @@
  * which emits right after starting the route handler.
  */
 import { EventEmitter } from 'node:events'
+import type { ChamberSurfacePluginTasks } from '../src/routes.ts'
 
 export class FakeRequest extends EventEmitter {
   method: string
@@ -120,5 +121,19 @@ export class FakeResponse extends EventEmitter {
 
   json(): any {
     return JSON.parse(this.chunks.join(''))
+  }
+}
+
+/** No-op orchestrator stub for surfaces that do not exercise the A1 write
+ * routes (design 21 §6.2; plan Phase 4.4): submit/tasks exist so the
+ * structural ChamberSurfaceDeps check passes; every submit is refused with
+ * queue_busy unless overridden. Reuse — do not re-declare locally. */
+export function stubPluginTasks(
+  overrides: Partial<Pick<ChamberSurfacePluginTasks, 'submit' | 'tasks'>> = {},
+): ChamberSurfacePluginTasks {
+  return {
+    submit: overrides.submit
+      ?? (async () => ({ ok: false as const, code: 'queue_busy' as const, error: 'stub tasks: no submit handler' })),
+    tasks: overrides.tasks ?? (() => ({ tasks: [], deferred: [], busy: false })),
   }
 }

@@ -35,10 +35,13 @@ import { createGatewayDispatch } from './dispatch.ts'
 import { createGatewayRequestPolicy } from './middleware.ts'
 import { createChamberSurface, type ChamberSurface } from './routes.ts'
 import { createChamberPlugins, syncedSourceDir } from './plugins.ts'
+import { createChamberInstalled } from './plugins-installed.ts'
+import { createChamberPluginTasks, type ChamberPluginTasks } from './plugins-tasks.ts'
 import { createGatewayStore, type GatewayStore } from './store.ts'
 import { createChannelRegistry } from './channels.ts'
 import { createGatewayRuntimeManager, type GatewayRuntimeManager } from './runtime-manager.ts'
 import { createRuntimeRoutes } from './runtime-routes.ts'
+import { createPluginWriteCheckpoint } from './spawn-checkpoint.ts'
 
 /** Startup-block reasons that fail gateway boot loudly (design 18 §9.3).
  * Metadata corruption is a hard boot failure — DSH_HOME stays protected and
@@ -134,8 +137,23 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
   // surface need createdPlane.getLocalDshPort()). They dereference lazily at request time.
   let proxy: GatewayProxy | null = null
   let runtimeManager: GatewayRuntimeManager | null = null
+  // Getter-backed lazy manager reference for the plane's spawn checkpoint:
+  // localConnectionDeps is captured by createControlPlane BEFORE the manager
+  // exists, and the live `runtimeManager` variable stays the single source of
+  // truth — `current` dereferences it at checkpoint time (design 21 §6.3).
+  const runtimeManagerRef: { current: GatewayRuntimeManager | null } = {
+    get current() { return runtimeManager },
+  }
   let createdPlane!: PlaneHandle
   let chamberSurface!: ChamberSurface
+  // Design 21 §6.3 A1 mutation orchestrator (plan Phase 4.4): journal +
+  // serial executor + deferred intents behind the runtime-manager
+  // profile-write lease. Built in the construction transaction below; its
+  // executor is lazy (spawns only under a granted lease), its dispose runs
+  // in both shutdown paths AFTER the manager disposal (a disposing manager
+  // refuses new leases, so no op can start between the barrier and the
+  // executor kill).
+  let pluginTasks!: ChamberPluginTasks
   let dispatch!: ReturnType<typeof createGatewayDispatch>
   let started = false
   let startPromise: Promise<void> | null = null
@@ -194,14 +212,60 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
     // chamber host packages come from a connecting desktop's upload; the
     // mobile client-plugin slot stays packaged in the gateway distribution.
     const plugins = createChamberPlugins(options.config.plane.stateDir, logger)
+    // Managed-profile plugin read projection (design 21 §6.2 A0 read surface):
+    // readManifest's gateway implementation over <stateDir>/dsh-home/profiles/
+    // web/package.json (bounded no-follow read; file: values masked).
+    const installed = createChamberInstalled(options.config.plane.stateDir)
+    // Design 21 §6.3 A1 mutation orchestrator (plan Phase 4.2-4.5 wiring):
+    // journal + serial executor + deferred install intents behind the
+    // runtime-manager profile-write lease. Status probes dereference the
+    // plane lazily (the surface is built before the plane below); boot
+    // reconciliation runs once here — journal pending ops from a previous
+    // run are marked failed with their preImage retained.
+    pluginTasks = createChamberPluginTasks({
+      stateDir: options.config.plane.stateDir,
+      manager: () => runtimeManager,
+      statusProbe: () => createdPlane.connectionState,
+      logger,
+      installed,
+      // design 21 §6.3 "装完自动受控 restart 一次": after drained installs
+      // ran to ok, one controlled restart mounts them on the running
+      // instance. Every gate below mirrors POST /chamber/runtime/restart's
+      // synchronous refusals (recovery/pending phases, applying/installing
+      // windows, ready/degraded only, profile-write lease and restart
+      // single-flight); a closed gate is a SKIP — the orchestrator never
+      // sees an error, and the next natural event re-evaluates.
+      restartManaged: async () => {
+        const manager = runtimeManager
+        if (manager === null || stopping) return
+        try {
+          const status = await manager.status()
+          if (typeof status.startupBlockedReason === 'string' && status.startupBlockedReason !== '') return
+          if (status.pending !== null) return
+          if (status.phase === 'pending' || status.phase === 'applying' || status.phase === 'installing'
+            || status.phase === 'snapshot-failed' || status.phase === 'swap-attempted' || status.phase === 'restore-blocked') return
+          if (status.connectionState !== 'ready' && status.connectionState !== 'degraded') return
+          if (manager.profileWriteInFlight() || manager.restartInFlight()) return
+          await manager.restart()
+        } catch (error) {
+          logger.warn(`gateway plugin drain restart failed: ${error instanceof Error ? error.message : String(error)}`)
+        }
+      },
+    })
+    pluginTasks.reconcileJournal()
     // The chamber surface (2026-12 strip): channels projection + browser
-    // dashboard assets + plugin-sync cache — no feature host, no readiness
+    // dashboard assets + plugin-sync cache + the managed-profile installed
+    // projection (design 21 A0) + the A1 write routes (install/materialize/
+    // remove/tasks, design 21 §6.2) — no feature host, no readiness
     // coupling. The runtime controller below is the gateway's only other
     // /chamber writer surface besides credentials (auth.ts).
     chamberSurface = (options.deps?.createChamberSurface ?? createChamberSurface)({
       logger,
       channels,
       plugins,
+      installed,
+      tasks: pluginTasks,
+      stateDir: options.config.plane.stateDir,
     })
     // The runtime controller is gateway-owned and NOT ready-gated (design 18
     // §9.3): it dereferences the manager lazily so dsh-down windows stay pollable.
@@ -291,6 +355,20 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
         return { ok: true }
       },
       canExposeLocal: () => !stopping && !runtimeExposureQuarantined(),
+      // Design 21 §6.3 (decisions 6/17): the A1 managed profile-write lease
+      // (runtime-manager profileWriteInFlight/beginProfileWrite) makes
+      // beforeSpawnCheckpoint PRODUCTION — it was documented as a test-only
+      // scheduling seam (local-connection.ts) until the gateway plugin
+      // executor joined the runtime-manager single-writer fence. Every spawn
+      // (manual start and the health auto-restart, both pre-seed paths)
+      // refuses while the lease is held, closing the DSH_HOME TOCTOU between
+      // the executor's `dsh plugin` pnpm child and the spawn's seed thunk.
+      // No other production path sets localConnectionDeps; the closure
+      // dereferences runtimeManager lazily (null before manager construction
+      // → no lease can exist → spawn proceeds).
+      localConnectionDeps: {
+        beforeSpawnCheckpoint: createPluginWriteCheckpoint(runtimeManagerRef),
+      },
       ...(options.config.plane.dshPort === undefined ? {} : { dshPortBase: options.config.plane.dshPort }),
       logger,
       corsOrigins: options.config.corsOrigins,
@@ -316,6 +394,19 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
     // coupling — the ready-transition subscription now only forwards the
     // authoritative state to the runtime manager (design 18 §9.3).
     runtimeManager?.observeLocalState?.(status)
+    // Design 21 §6.3 deferred-intent drain (plan Phase 4.4): install/
+    // materialize intents persisted while the runtime was busy, the manager
+    // was not built yet, or the profile did not exist are re-submitted on
+    // the next ready/degraded edge — the execution window is open and the
+    // managed profile has been seeded by the spawn. The lease refusal
+    // matrix is the real gate (a still-busy runtime refuses and leaves the
+    // intent), and drainDeferred is single-flight inside the orchestrator,
+    // so overlapping edges collapse safely.
+    if ((status === 'ready' || status === 'degraded') && runtimeManager !== null && !stopping) {
+      void pluginTasks.drainDeferred().catch(error => {
+        logger.warn(`gateway plugin deferred-intent drain failed: ${String(error)}`)
+      })
+    }
   }
 
   function assertStartEpoch(epoch: number): void {
@@ -392,10 +483,12 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
         // The HTTP server is opened before the runtime startup transaction.
         // Fence credential writers and break authenticated requests that are
         // still waiting for body bytes. Mutations beyond that boundary remain
-        // tracked until their complete route tail has settled. (Since the
-        // 2026-12 orchestration strip the only other /chamber writer is the
-        // synchronous plugin-sync cache put, which completes before its route
-        // tail settles — no drain entry needed.)
+        // tracked until their complete route tail has settled. Since design
+        // 21 §6.2 (plan Phase 4.4) the /chamber plugin write routes answer
+        // 202 BEFORE their mutation runs — the A1 executor children are
+        // killed by pluginTasks.dispose() below, AFTER the manager disposal
+        // (a disposing manager refuses new profile-write leases, so no op
+        // can start in the gap).
         const dispatchQuiescence = dispatch.quiesce()
         syncFeatures('error')
         unsubscribeLocalState?.()
@@ -408,6 +501,13 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
           logger.warn(`gateway runtime disposal failed; stateDir lock retained: ${String(stopError)}`)
         }
         if (runtimeDisposalError === null) runtimeManager = null
+        let pluginTasksDisposalError: unknown = null
+        try {
+          await pluginTasks.dispose()
+        } catch (stopError) {
+          pluginTasksDisposalError = stopError
+          logger.warn(`gateway plugin executor disposal failed; stateDir lock retained: ${String(stopError)}`)
+        }
         let dispatchQuiescenceError: unknown = null
         try {
           await dispatchQuiescence
@@ -421,10 +521,10 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
         // If runtime disposal could not prove every writer quiescent, retain
         // the outer state lock and owner record: allowing another gateway to
         // enter would turn a cleanup failure into concurrent state mutation.
-        if (runtimeDisposalError === null && dispatchQuiescenceError === null) store.close()
-        if (runtimeDisposalError !== null || dispatchQuiescenceError !== null) {
+        if (runtimeDisposalError === null && pluginTasksDisposalError === null && dispatchQuiescenceError === null) store.close()
+        if (runtimeDisposalError !== null || pluginTasksDisposalError !== null || dispatchQuiescenceError !== null) {
           throw new AggregateError(
-            [error, runtimeDisposalError, dispatchQuiescenceError].filter(reason => reason !== null),
+            [error, runtimeDisposalError, pluginTasksDisposalError, dispatchQuiescenceError].filter(reason => reason !== null),
             'gateway startup rollback could not prove all state writers quiescent; stateDir lock retained',
           )
         }
@@ -448,11 +548,11 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
     lifecycleEpoch += 1
     // Admission closes synchronously inside quiesce(), before any async
     // teardown can release the state lock or stop the dsh dependency of an
-    // already-entered saga. (Since the 2026-12 orchestration strip the
-    // credential/runtime writers remain behind the dispatch fence, plus the
-    // synchronous plugin-sync cache put — the drain tracks the credential/
-    // runtime writers; the plugin put is synchronous and completes before
-    // quiesce observes it.)
+    // already-entered saga. (The credential/runtime writers remain behind the
+    // dispatch fence; since design 21 §6.2 the /chamber plugin mutation
+    // routes answer 202 before their executor children run — pluginTasks.
+    // dispose() below kills those children AFTER the manager disposal, when
+    // no new lease can be granted.)
     const dispatchQuiescence = dispatch.quiesce()
     const pendingStart = startPromise
     const managerAtStop = runtimeManager
@@ -463,10 +563,14 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
 
     // Start quiescing immediately instead of waiting for startPromise. A real
     // manager makes this the lifecycle-abort + writer barrier. The async IIFE
-    // invokes dispose() synchronously up to its first await.
+    // invokes dispose() synchronously up to its first await. The plugin
+    // executor (design 21 §6.3) is disposed after the manager: a disposing
+    // manager refuses new profile-write leases, so no executor rebuild can
+    // start a child in the gap.
     const runtimeDisposal = (async (): Promise<unknown> => {
       try {
         await managerAtStop?.dispose()
+        await pluginTasks.dispose()
         return null
       } catch (stopError) {
         logger.warn(`gateway runtime disposal failed; stateDir lock retained: ${String(stopError)}`)

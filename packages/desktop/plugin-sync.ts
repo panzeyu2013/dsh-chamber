@@ -6,8 +6,11 @@
  * the whole surface is unit-testable without electron or a real SSH host.
  * The exec/status contract is re-declared locally (contract A below) — no
  * `transport-manager.ts` import — and the desktop `main.ts` adapts the
- * transport manager's runtime surface onto it. Only the §7.2 whitelist regexes
- * are imported (from `ssh-provider.ts`, the single source of truth).
+ * transport manager's runtime surface onto it. The §7.2 spec/name whitelist
+ * constants are imported from control-plane `plugin-spec.ts` (via
+ * control-plane-module.ts — the single source shared with the gateway), and
+ * only ssh-specific classification (ENOENT_PATTERN) is imported from
+ * `ssh-provider.ts`.
  *
  * Contract A (consumed; produced by the parallel transport agent):
  *   - `restart`                    = exec(id, 'restart')
@@ -53,15 +56,23 @@ import { homedir, tmpdir } from 'node:os'
 // / append / fail-loud) and message wording stay here.
 import { hasExactInsert, insertConflict, renderCordisInserts } from './control-plane-module.ts'
 import type { CordisInsert, InsertConflictKind } from './control-plane-module.ts'
-// Canonical whitelists (design 13 §7.2) — reused from ssh-provider.ts so the
-// orchestration-side二次校验 and the exec-side argv whitelist share one source
-// of truth and can never drift. Importing ssh-provider only pulls these pure
-// regex constants (no electron, no transport runtime side effects).
+// Canonical whitelists (design 13 §7.2; the single source moved to
+// control-plane plugin-spec.ts, design 21 §6.2) — consumed through
+// control-plane-module.ts (the desktop dual-path facade: packaged → compiled
+// dist/control-plane, dev/tests → workspace source) so the orchestration-side
+// 二次校验, the exec-side argv whitelist (ssh-provider.ts re-exports the same
+// names) and the gateway executor share one source and can never drift.
+import { isDeniedPluginName, MAX_PLUGIN_SPEC_CHARS, PLUGIN_NAME_PATTERN, PLUGIN_SPEC_PATTERN } from './control-plane-module.ts'
+// ssh unified increments (design 21 §6.4, plan Phase 5): the reserved-name
+// deny + row assembly helpers (parseSpecName / buildSshApplyRows /
+// describeReservedNameRefusal — ssh-apply-rows.ts). Pure module, imports no
+// Electron and nothing from plugin-sync (no cycle).
+import { buildSshApplyRows, describeReservedNameRefusal, parseSpecName } from './ssh-apply-rows.ts'
 // ENOENT_PATTERN ("absent remote file" classification) is shared the same way:
 // ssh-provider classifies the RAW stderr line against it (redaction can hide a
 // `.ssh*`-named home path), so the provider-side classification and this
 // caller-side error-text test can never drift apart.
-import { ENOENT_PATTERN, MAX_PLUGIN_SPEC_CHARS, PLUGIN_SPEC_PATTERN, PLUGIN_NAME_PATTERN } from './ssh-provider.ts'
+import { ENOENT_PATTERN } from './ssh-provider.ts'
 // Contract A types (design 13 §4.1) are SHARED from transport-provider.ts —
 // the provider's single source of truth (transport-provider has no runtime
 // imports, so this pulls no transport-manager/electron surface). The copied
@@ -213,8 +224,10 @@ export function scopeExecToOwnership(
 }
 
 // ============================================================================
-// Whitelists (design 13 §7.2 — contract C): re-exported from ssh-provider.ts;
-// ENOENT_PATTERN is likewise imported from there (see the import note above).
+// Whitelists (design 13 §7.2 — contract C): imported from the control-plane
+// shared module (plugin-spec.ts via control-plane-module.ts) and re-exported
+// for the main-process consumers; ENOENT_PATTERN comes from ssh-provider.ts
+// (see the import note above).
 // ============================================================================
 
 // ============================================================================
@@ -679,6 +692,37 @@ export function redactLocalPluginManifest(manifest: LocalPluginManifest): LocalP
   return { ...manifest, dependencies }
 }
 
+/** Is this dependency spec a remote-local-path `file:` value? Case-
+ *  insensitive, mirroring the gateway installed-route semantics (design 21
+ *  §6.2: on a dsh-managed profile only `file:` forms can name machine-local
+ *  paths — the write flows land registry or file: entries; link:/relative/
+ *  absolute forms cannot reach a profile through `dsh plugin`). */
+export function isRemoteFileValue(spec: string): boolean {
+  return /^file:/i.test(spec)
+}
+
+/**
+ * Project a REMOTE manifest for the renderer (design 21 §6.2/§6.4 readManifest
+ * 投影统一掩码, decision 18): dependency VALUES that are `file:` specs would
+ * name remote-machine paths and must never leave the main process in a
+ * renderer-bound IPC response. Each is replaced with MATERIALIZED_VALUE_MASK
+ * (file:-prefixed only — exactly the gateway `/chamber/plugins/installed`
+ * semantics); the mask keeps the `file:` prefix so both sides' spec
+ * classifiers still classify the value as materialize and the name-based diff
+ * matching (plugin-diff.ts §4.5) keeps working unchanged. Names, bundles,
+ * profileExists, error and the chamber block pass through untouched. The
+ * main-process-internal manifest (verifyApplied's post-change read-back, the
+ * undo journal snapshot, materialize resolution) is NEVER projected — only
+ * the plugin_list IPC response is redacted (main.ts SSH_PLUGIN_LIST handler).
+ */
+export function redactRemotePluginManifest(manifest: RemotePluginManifest): RemotePluginManifest {
+  const dependencies: Record<string, string> = {}
+  for (const [name, spec] of Object.entries(manifest.dependencies)) {
+    dependencies[name] = isRemoteFileValue(spec) ? MATERIALIZED_VALUE_MASK : spec
+  }
+  return { ...manifest, dependencies }
+}
+
 /** Confirmation-dialog copy builder (pure, tested): pack-and-transfer. */
 export function describeMaterializeConfirmation(info: {
   pluginName: string
@@ -973,6 +1017,43 @@ export interface ApplyActions {
   restart?: boolean
 }
 
+/**
+ * Durable per-instance ssh apply journal sink (design 21 §6.4, plan Phase 5
+ * ssh 统一增量 — produced by ssh-plugin-journal.ts createSshPluginJournal).
+ * STRUCTURAL on purpose: plugin-sync never imports the journal module, and an
+ * apply without a journal keeps its exact historical exec/read behavior. The
+ * implementor never throws (journaling is best-effort; a persistence failure
+ * must never break an apply).
+ */
+export interface SshApplyJournalSink {
+  record(entry: {
+    instanceId: string
+    name: string
+    kind: 'add' | 'remove'
+    specBefore: string | null
+    ok: boolean
+    error?: string
+  }): void
+}
+
+/** Pre-change remote manifest read used ONLY by the journal capture: a single
+ *  quiet `cat` + parse of the profile manifest (no chamber probes — the
+ *  journal only needs the dependency rows). Returns the dependency map, or
+ *  null when the read failed with a real ssh error (an absent profile is an
+ *  empty map — ENOENT classification rides the result). */
+async function readJournalSnapshot(exec: ExecFn, spec: RemoteSpec): Promise<Record<string, string> | null> {
+  const res = await exec(spec.id, 'run', {
+    op: 'exec',
+    command: 'cat',
+    argv: [remoteManifestPath(spec.remoteDshHome)],
+    quiet: true,
+  })
+  if (!res.ok) {
+    return ENOENT_PATTERN.test(res.error) ? {} : null
+  }
+  return parseRemoteManifest(res.stdout ?? '').dependencies
+}
+
 /** In-flight apply guards (single-flight per instance, design 13 §4.5 ⑥). */
 const applyInFlight = new Set<string>()
 
@@ -1044,7 +1125,23 @@ export async function applyPlugins(
   status: StatusFn,
   spec: RemoteSpec,
   actions: ApplyActions,
-  opts?: { verifyReadyTimeoutMs?: number; verifyReadyIntervalMs?: number; knownBundles?: string[]; ownershipKey?: string },
+  opts?: {
+    verifyReadyTimeoutMs?: number
+    verifyReadyIntervalMs?: number
+    knownBundles?: string[]
+    ownershipKey?: string
+    /** Undo journal sink (design 21 §6.4): when present, a pre-change
+     *  manifest snapshot is read BEFORE the first remote change and every
+     *  executed row is recorded with its pre-change spec (`specBefore`).
+     *  Absent → the apply keeps its historical exec sequence (no extra read,
+     *  no journaling). */
+    journal?: SshApplyJournalSink
+    /** Operational target fingerprint (main.ts operationalFingerprint) of
+     *  the instance the rows execute on; recorded on every journal entry so
+     *  an undo can never replay a change onto a different host that reuses
+     *  the same connection id after an edit (design 21 §6.4 review P1). */
+    targetFingerprint?: string | null
+  },
 ): Promise<ApplyPluginsResult> {
   const id = spec.id
   const inFlightKey = `${id}\u0000${opts?.ownershipKey ?? ''}`
@@ -1068,6 +1165,18 @@ export async function applyPlugins(
       return { ok: false, error: `invalid remove name: ${JSON.stringify(name)}` }
     }
   }
+  // Reserved-name deny (design 21 §6.4/decision 19, same set as the gateway):
+  // @deepseek-ai/* and @dsh-chamber/* are the official/chamber domains and
+  // can never be installed or removed through the plugin model — refuse the
+  // WHOLE batch, loudly, listing the denied names, BEFORE any remote change
+  // (never a partial apply around a refused row). parseSpecName extracts the
+  // name of every add row (the rows are already whitelist-shaped above);
+  // remove rows carry their name directly. buildSshApplyRows stays the
+  // shared assembly both here and the main-process IPC preflight use.
+  const assembled = buildSshApplyRows(add, remove)
+  if (assembled.refused.length > 0) {
+    return { ok: false, error: describeReservedNameRefusal(assembled.refused) }
+  }
   // A non-boolean `restart` (e.g. the string 'false') must never be treated
   // as truthy and trigger an unwanted restart.
   if (actions.restart !== undefined && typeof actions.restart !== 'boolean') {
@@ -1079,16 +1188,51 @@ export async function applyPlugins(
     const failed: { spec: string; error: string }[] = []
     let applied = 0
 
+    // Journal capture (design 21 §6.4): read the pre-change manifest BEFORE
+    // the first remote change so every executed row can be recorded with the
+    // spec the touched name had before the op (add: null when the name was
+    // absent; remove: the previous spec string — the undo journal's undoable
+    // fact). A failed snapshot (real ssh error) never aborts the apply — the
+    // rows are recorded with specBefore null and the row outcome still tells
+    // the truth; an absent profile (ENOENT) is an empty snapshot.
+    const journal = opts?.journal
+    const snapshot = journal === undefined ? null : await readJournalSnapshot(exec, spec)
+    const specBeforeOf = (name: string): string | null =>
+      snapshot === null ? null : (snapshot[name] ?? null)
+
     // ② remove first (releases old layers), then add — serial, isolated.
     for (const name of remove) {
       const res = await exec(id, 'run', { op: 'exec', command: 'dsh', argv: ['plugin', '--profile', 'web', 'remove', name] })
       if (res.ok) applied += 1
       else failed.push({ spec: name, error: res.error })
+      if (journal !== undefined) {
+        journal.record({
+          instanceId: id,
+          name,
+          kind: 'remove',
+          ...(opts?.targetFingerprint === undefined ? {} : { fingerprint: opts.targetFingerprint }),
+          specBefore: specBeforeOf(name),
+          ok: res.ok,
+          ...(res.ok ? {} : { error: res.error }),
+        })
+      }
     }
     for (const s of add) {
       const res = await exec(id, 'run', { op: 'exec', command: 'dsh', argv: ['plugin', '--profile', 'web', 'add', s] })
       if (res.ok) applied += 1
       else failed.push({ spec: s, error: res.error })
+      if (journal !== undefined) {
+        const name = parseSpecName(s) ?? s
+        journal.record({
+          instanceId: id,
+          name,
+          kind: 'add',
+          ...(opts?.targetFingerprint === undefined ? {} : { fingerprint: opts.targetFingerprint }),
+          specBefore: specBeforeOf(name),
+          ok: res.ok,
+          ...(res.ok ? {} : { error: res.error }),
+        })
+      }
     }
 
     const changed = applied > 0
@@ -1724,7 +1868,8 @@ async function packDirectory(localDir: string): Promise<{ bytes: Buffer } | null
  * (kept, never cleaned — pnpm persists `file:` deps against it) → resolve the
  * tarball's ABSOLUTE remote path from the remote `$HOME` (never the local
  * home) → `dsh plugin add file:<absolute path>` (the exec-side argv whitelist
- * has a dedicated `file:` branch, ssh-provider MATERIALIZE_FILE_SPEC_PATTERN).
+ * has a dedicated `file:` branch, the shared MATERIALIZE_FILE_SPEC_PATTERN
+ * (control-plane plugin-spec.ts, re-exported by ssh-provider.ts).
  * The tarball filename is normalized for scoped names (`@scope/name` →
  * `scope-name`) so it passes the write-target filename whitelist. Fails loud
  * on any step — including an unresolvable/unsafe remote `$HOME` — never
@@ -1747,6 +1892,14 @@ export async function materializeAndAdd(
     name = pkg.name
   } catch {
     return { ok: false, error: 'materialize: cannot read package.json' }
+  }
+  // Reserved-name deny (design 21 §6.4, decision 19 — same set as the dialog
+  // row filter and the apply rows): a picked folder whose manifest claims an
+  // official/chamber domain name is refused BEFORE the pack/upload/write
+  // chain touches anything (the package.json is user-picked code, but its
+  // declared name decides what would be installed into the managed profile).
+  if (isDeniedPluginName(name)) {
+    return { ok: false, error: describeReservedNameRefusal([name]) }
   }
   const packed = await (pack ?? packDirectory)(localDir)
   if (packed === null) return { ok: false, error: 'materialize: pnpm pack failed' }

@@ -1,28 +1,33 @@
 /**
- * Plugin management dialog (design 13 §5): the per-instance plugin surface.
+ * Plugin management dialog (design 13 §5 / design 21 §6.6): the per-instance
+ * plugin surface.
  *
- * Remote instances get a three-view sync flow (loading → error ⇄ ready →
- * applying → done) plus an "add" tab; the local instance is the source, so it
- * gets a list (local_plugin_list + local remove) plus the "add" tab. The sync
- * view is a pure projection: plugin-diff.ts computes the rows; registry rows
- * (missing/update) and removes forward through pluginApply, materialize rows
- * (local path specs) forward through pluginMaterializeAdd — the main process
- * re-validates every spec, execs serially (remove before add), restarts
- * (unless deferred), asserts, and re-checks readiness (§4.5). No host frames,
- * no execution here.
+ * Remote instances get the three-view sync flow (loading → error ⇄ ready →
+ * applying → done) plus an "add" tab and the installed-plugins "list" tab
+ * (design 21 §6.6 次序② ssh 增量: per-row remove through the same ssh apply
+ * flow + 「撤销最近变更」 via the main-process undo journal); the local
+ * instance is the source, so it gets a list (local_plugin_list + local
+ * remove) plus the "add" tab. The sync view is a pure projection:
+ * plugin-diff.ts computes the rows; registry rows (missing/update) and
+ * removes forward through pluginApply, materialize rows (local path specs)
+ * forward through pluginMaterializeAdd — the main process re-validates every
+ * spec, execs serially (remove before add), restarts (unless deferred),
+ * asserts, and re-checks readiness (§4.5). No host frames, no execution
+ * here.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import clsx from 'clsx'
 import { Button, IconRefreshOutline16, IconTrashOutline16, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ChamberHostGraphState, LocalPluginManifest, PluginApplyFailure, PluginApplyResult, RemotePluginManifest, SshInstanceSpec } from '../global.d.ts'
 import type { SettingsConnectionsKey } from '../locales.ts'
-import { localPluginList, localPluginRemove, pluginApply, pluginList, pluginMaterializeAdd, restartService, seedHostGraph } from './control-plane.ts'
+import { localPluginList, localPluginRemove, pluginApply, pluginList, pluginMaterializeAdd, restartService, seedHostGraph, sshPluginUndo } from './control-plane.ts'
 import {
   computePluginDiff, defaultChecked, isDifferenceRow, rowAddArg,
   type PluginDiff, type PluginRow, type PluginRowKind,
 } from './plugin-diff.ts'
+import { classifySshApplyResult, isDeniedPluginName } from './plugin-model.ts'
 import { PluginAddView } from './PluginAddView.tsx'
 import { pluginDiagnosticText, pluginDiagnosticTone, type PluginDiagnostic } from './plugin-diagnostic.ts'
 import css from './ConnectionsSection.module.css'
@@ -31,6 +36,24 @@ type PluginPhase = 'loading' | 'error' | 'ready' | 'applying' | 'done'
 type PluginTab = 'sync' | 'list' | 'add'
 type CategoryFilter = 'all' | 'bundle' | 'plain' | 'client'
 type StatusFilter = 'diff' | 'all'
+
+/** Tone of the remote-list operation status line (design 21 §6.6 list tab). */
+type RemoteListTone = 'ok' | 'warn' | 'error'
+
+/** One operation outcome line (undo / row-remove executed outcomes). */
+interface RemoteListStatus {
+  tone: RemoteListTone
+  text: string
+}
+
+/** Remote-list status tone → the shared copy class it renders with. */
+function remoteStatusClass(tone: RemoteListTone): string {
+  switch (tone) {
+    case 'ok': return css.hint
+    case 'warn': return css.pluginWarn
+    default: return css.error
+  }
+}
 
 /** The chamber-injected host package surfaced as a non-actionable info row
  *  (design 09 方案 A, module A) — the single source of truth for the name is
@@ -125,6 +148,21 @@ export function PluginSyncModal({ t, spec, diagnostic, onClose }: {
   const [localRemoveTarget, setLocalRemoveTarget] = useState<string | null>(null)
   const [localRemoveBusy, setLocalRemoveBusy] = useState(false)
   const [localRemoveError, setLocalRemoveError] = useState<string | null>(null)
+
+  // ---- remote installed-list state (design 21 §6.6, ssh list tab) ----
+  /** Operation outcome line (undo / row-remove executed outcomes) above the
+   *  rows; survives the post-op manifest reload (loadSync only touches the
+   *  sync-tab result state). */
+  const [remoteListStatus, setRemoteListStatus] = useState<RemoteListStatus | null>(null)
+  /** Per-row verbatim failures (English, unlocalized per convention) shown
+   *  under the row that is still installed — the row never left the profile,
+   *  so retry stays possible. */
+  const [remoteRowErrors, setRemoteRowErrors] = useState<Record<string, string>>({})
+  /** Row awaiting its per-row remove confirmation (opens the confirm modal). */
+  const [remoteRemoveTarget, setRemoteRemoveTarget] = useState<string | null>(null)
+  const [remoteRemoveBusy, setRemoteRemoveBusy] = useState(false)
+  /** Main-process undo confirm + inverse apply in flight (its own dialog). */
+  const [undoBusy, setUndoBusy] = useState(false)
 
   const loadLocalList = useCallback(async (): Promise<void> => {
     setLocalLoading(true)
@@ -278,6 +316,148 @@ export function PluginSyncModal({ t, spec, diagnostic, onClose }: {
     }
   }, [isRemote, spec, restartBusy, seedBusy, loadSync])
 
+  /**
+   * Row-level REMOVE on the remote installed list (design 21 §6.6 次序② ssh
+   * 等价): after the per-row confirm modal, the row forwards as a one-row
+   * remove batch through the SAME ssh plugin_apply surface the sync flow uses
+   * ({remove:[name]}, restart per the modal's 重启生效 checkbox — the modal
+   * state, never a fixed constant), and the outcome is classified through
+   * the model layer. Row-level honesty: a refused or executed-but-failed
+   * remove leaves the plugin installed — the failure is attached to the ROW
+   * as a verbatim (unlocalized) line under it, and no reload runs (nothing
+   * changed). An executed remove reloads the projection (the row left the
+   * profile) and its not-fully-effective states (deferred / verification or
+   * readiness failure) surface as the status line above the list.
+   */
+  const confirmRemoteRemove = useCallback(async (): Promise<void> => {
+    if (!isRemote || spec === null || remoteRemoveTarget === null) return
+    if (remoteRemoveBusy || undoBusy) return
+    if (applyingRef.current || seedBusy || restartBusy) return
+    const name = remoteRemoveTarget
+    setRemoteRemoveBusy(true)
+    setRemoteListStatus(null)
+    setRemoteRowErrors(prev => {
+      const next = { ...prev }
+      delete next[name]
+      return next
+    })
+    try {
+      const res = await pluginApply(spec.id, { add: [], remove: [name], restart })
+      if ('cancelled' in res) {
+        // User dismissed the main-process confirmation: silent no-op.
+      } else if ('error' in res) {
+        // Wholesale refusal (single-flight / invalid input / ownership):
+        // nothing ran, the row is untouched.
+        setRemoteRowErrors(prev => ({ ...prev, [name]: res.error }))
+      } else {
+        const r = res.result
+        const failed = r.failed.find(item => item.spec === name)
+        if (failed !== undefined) {
+          // The remove exec itself failed: nothing left the profile — verbatim
+          // failure under the row, no reload (a reload would not change it).
+          setRemoteRowErrors(prev => ({ ...prev, [name]: failed.error }))
+        } else {
+          // Fully executed. Model-layer classification (ssh apply
+          // normalization, plugin-model.ts §3): the executed summary keeps
+          // the producer's fail-loud markers — mirror the sync result view's
+          // honest copy (never collapse them into a clean success).
+          const outcome = classifySshApplyResult(res)
+          if ('cancelled' in outcome) {
+            // Defensive: the wrapper's cancelled arm is handled above.
+          } else if ('failed' in outcome) {
+            setRemoteListStatus({ tone: 'error', text: outcome.failed.error })
+          } else {
+            const executed = outcome.executed
+            let tone: RemoteListTone
+            let text: string
+            if (executed.verified === false) {
+              // Post-change assertion failed (fail-loud, no rollback); the
+              // readyNote (English, verbatim) explains when present.
+              tone = 'error'
+              text = `${t('pluginsVerifyFailed')}${executed.readyNote === undefined ? '' : ` ${executed.readyNote}`}`
+            } else if (executed.ready === false) {
+              // Restart executed but the readiness recheck failed — same loud
+              // copy as the sync result view's ready-failed line.
+              tone = 'error'
+              text = t('pluginsReadyFailed')
+            } else if (executed.restarted) {
+              // Clean success (or restart ok with the readiness recheck
+              // skipped — its readyNote, verbatim, rides along). Short
+              // success copy reuses the apply result's own success word.
+              tone = 'ok'
+              text = `${t('pluginsApplied')}${executed.readyNote === undefined ? '' : ` · ${executed.readyNote}`}`
+            } else {
+              // Deferred (the 重启生效 checkbox was off) or the restart
+              // itself failed: applied but not active — restartNeededHint.
+              tone = 'warn'
+              text = t('restartNeededHint')
+            }
+            setRemoteListStatus({ tone, text })
+            // Executed removes reload the projection (the row left the
+            // profile); keepChecked preserves any sync-tab selection across
+            // the reload.
+            await loadSync(true)
+          }
+        }
+      }
+    } catch (err) {
+      setRemoteRowErrors(prev => ({ ...prev, [name]: errorMessage(err) }))
+    } finally {
+      setRemoteRemoveBusy(false)
+      setRemoteRemoveTarget(null)
+      setRestart(true)
+    }
+  }, [isRemote, spec, remoteRemoveTarget, remoteRemoveBusy, undoBusy, restart, loadSync, t])
+
+  /**
+   * 「撤销最近变更」 on the remote installed list (design 21 §6.4/§6.6 ssh
+   * journal undo): id-only intent into the main-process undo — the journal
+   * is authoritative, the renderer never supplies a spec. cancelled (the
+   * user dismissed the main-process dialog) is a silent no-op; ok:true arms
+   * re-executed the inverse row, so the projection reloads after them. The
+   * undo outcome's executed-but-not-effective signal is the PRESENCE of
+   * undone.restarted (main.ts undo handler): clean (absent, or restarted
+   * with ready !== false) → 已撤销最近变更; restarted false / ready false →
+   * honest undoNotEffective.
+   */
+  const doUndo = useCallback(async (): Promise<void> => {
+    if (!isRemote || spec === null) return
+    if (undoBusy || remoteRemoveBusy) return
+    if (applyingRef.current || seedBusy || restartBusy) return
+    setUndoBusy(true)
+    setRemoteListStatus(null)
+    setRemoteRowErrors({})
+    try {
+      const res = await sshPluginUndo(spec.id)
+      if ('cancelled' in res) {
+        // User dismissed the main-process undo confirmation: silent no-op.
+      } else if (res.ok) {
+        const undone = res.undone
+        const clean = undone.restarted === undefined
+          || (undone.restarted === true && undone.ready !== false)
+        if (clean) {
+          setRemoteListStatus({ tone: 'ok', text: t('undoDone') })
+        } else {
+          const note = undone.readyNote === undefined ? '' : ` ${undone.readyNote}`
+          setRemoteListStatus({ tone: 'error', text: `${t('undoNotEffective')}${note}` })
+        }
+        await loadSync(true)
+      } else if (res.unavailable === 'none') {
+        setRemoteListStatus({ tone: 'ok', text: t('undoUnavailableNone') })
+      } else if (res.unavailable === 'file-backed') {
+        setRemoteListStatus({ tone: 'warn', text: t('undoUnavailableFileBacked') })
+      } else {
+        // No unavailable code (unknown id / instance gone / refused): the
+        // error text is a main-process message — verbatim per convention.
+        setRemoteListStatus({ tone: 'error', text: res.error })
+      }
+    } catch (err) {
+      setRemoteListStatus({ tone: 'error', text: errorMessage(err) })
+    } finally {
+      setUndoBusy(false)
+    }
+  }, [isRemote, spec, undoBusy, remoteRemoveBusy, loadSync, t])
+
   useEffect(() => {
     if (isRemote) void loadSync()
     else void loadLocalList()
@@ -302,7 +482,9 @@ export function PluginSyncModal({ t, spec, diagnostic, onClose }: {
     if (!isRemote || spec === null || diff === null || applyingRef.current) return
     // A seed 注入 in flight mutates the same remote profile (module A files +
     // cordis.patch.yml) — never apply while it is mid-write (2026-08 review).
-    if (seedBusy || restartBusy) return
+    // An in-flight installed-list op (row remove / undo) also writes the same
+    // profile through the same main-process surface — never overlap them.
+    if (seedBusy || restartBusy || remoteRemoveBusy || undoBusy) return
     const sel = diff.rows.filter(row => checked.has(row.name))
     const materializeRows = sel.filter(row => row.kind === 'materialize')
     const add = sel
@@ -367,7 +549,7 @@ export function PluginSyncModal({ t, spec, diagnostic, onClose }: {
       setRestart(true)
       setPhase('done')
     }
-  }, [isRemote, spec, diff, checked, restart, seedBusy, restartBusy, t])
+  }, [isRemote, spec, diff, checked, restart, seedBusy, restartBusy, remoteRemoveBusy, undoBusy, t])
 
   const onApplyClick = useCallback((): void => {
     if (applyingRef.current) return
@@ -394,9 +576,9 @@ export function PluginSyncModal({ t, spec, diagnostic, onClose }: {
     // without this gate one Escape would ALSO close this main modal (its
     // listener runs too), discarding the user's checked selection (2026-08
     // review). The nested modals close themselves via their own onClose.
-    if (confirmRemove || confirmApply || localRemoveTarget !== null) return
+    if (confirmRemove || confirmApply || localRemoveTarget !== null || remoteRemoveTarget !== null) return
     onClose()
-  }, [onClose, confirmRemove, confirmApply, localRemoveTarget])
+  }, [onClose, confirmRemove, confirmApply, localRemoveTarget, remoteRemoveTarget])
 
   const title = `${t('pluginsTitle')} · ${spec === null ? t('localTitle') : spec.label}`
   const applying = phase === 'applying'
@@ -466,7 +648,10 @@ export function PluginSyncModal({ t, spec, diagnostic, onClose }: {
           )
           : null}
         <div className={css.pluginTabs}>
-          {(isRemote ? (['sync', 'add'] as const) : (['list', 'add'] as const)).map(id => (
+          {/* Remote tab order sync / add / list (design 21 §6.6 text order):
+              the new installed list is APPENDED so the two pre-existing
+              remote tabs keep their exact positions; local keeps list / add. */}
+          {(isRemote ? (['sync', 'add', 'list'] as const) : (['list', 'add'] as const)).map(id => (
             <button
               key={id}
               type="button"
@@ -474,7 +659,7 @@ export function PluginSyncModal({ t, spec, diagnostic, onClose }: {
               disabled={applying}
               onClick={() => { setTab(id) }}
             >
-              {t(id === 'sync' ? 'pluginsSyncTab' : id === 'list' ? 'pluginsListTab' : 'pluginsAddTab')}
+              {t(id === 'sync' ? 'pluginsSyncTab' : id === 'add' ? 'pluginsAddTab' : isRemote ? 'installedTab' : 'pluginsListTab')}
             </button>
           ))}
         </div>
@@ -482,7 +667,7 @@ export function PluginSyncModal({ t, spec, diagnostic, onClose }: {
         {tab === 'add'
           ? <PluginAddView t={t} spec={spec} onInstalled={() => { if (isRemote) void loadSync(); else void loadLocalList() }} />
           : tab === 'list'
-            ? renderLocalList()
+            ? isRemote ? renderRemoteList() : renderLocalList()
             : renderSyncView()}
       </Modal>
 
@@ -537,6 +722,35 @@ export function PluginSyncModal({ t, spec, diagnostic, onClose }: {
           </>
         )}
       />
+
+      {/* Per-row remove confirm on the REMOTE installed list (design 21 §6.6):
+          mirrors the local-remove pattern; the same 重启生效 checkbox state
+          the sync apply flow uses governs the restart (removal applies on the
+          next restart when unchecked — the checkbox state, never a silent
+          constant). removeRowConfirmDescription carries a {name} placeholder;
+          the bound locale translate is key-only, so the placeholder is
+          substituted here (both dictionaries use the same token). */}
+      <Modal
+        open={remoteRemoveTarget !== null}
+        onClose={() => { if (!remoteRemoveBusy) setRemoteRemoveTarget(null) }}
+        title={t('removeRowConfirmTitle')}
+        closeLabel={t('close')}
+        description={t('removeRowConfirmDescription').replace('{name}', remoteRemoveTarget ?? '')}
+        className={css.deleteDialog}
+        footer={(
+          <>
+            <Button variant="outline" autoFocus disabled={remoteRemoveBusy} onClick={() => { setRemoteRemoveTarget(null) }}>{t('cancel')}</Button>
+            <Button variant="outline" className={css.deleteConfirm} disabled={remoteRemoveBusy} onClick={() => { void confirmRemoteRemove() }}>
+              {remoteRemoveBusy ? t('deleting') : t('deleteConfirm')}
+            </Button>
+          </>
+        )}
+      >
+        <label className={css.pluginDeferRow}>
+          <input type="checkbox" checked={!restart} disabled={remoteRemoveBusy} onChange={event => { setRestart(!event.target.checked) }} />
+          <span>{t('pluginsDeferRestart')}</span>
+        </label>
+      </Modal>
     </>
   )
 
@@ -915,6 +1129,94 @@ export function PluginSyncModal({ t, spec, diagnostic, onClose }: {
             )
           })}
         </div>
+      </div>
+    )
+  }
+
+  /**
+   * The REMOTE installed-plugins list (design 21 §6.6 次序② ssh 增量): the
+   * third-party subset of the (main-side masked) remote manifest — official/
+   * chamber domains are reserved and never listed here (deny mirror, same
+   * predicate the model and the main process share). Per-row remove forwards
+   * through the same ssh plugin_apply flow; the header carries the
+   * 「撤销最近变更」 entry into the main-process undo journal. Rows ride the
+   * sync projection, so the loading/error phases share the sync tab's views
+   * verbatim. SSH-equivalence guardrails: local-mode code paths, existing tab
+   * labels/positions, and the sync/add views are untouched; every new key is
+   * from the Phase-5 family already in locales.ts (0 locale edits).
+   */
+  function renderRemoteList(): ReactNode {
+    // The sync tab owns the phase machine; the list rows ride its projection,
+    // so the load/error views are the sync ones (identical recovery surface).
+    if (phase === 'loading' || phase === 'error') return renderSyncView()
+    if (remoteManifest === null) return <p className={css.dim}>{t('pluginsLoading')}</p>
+    const deps = Object.entries(remoteManifest.dependencies)
+      .filter(([name]) => !isDeniedPluginName(name))
+    const opBusy = remoteRemoveBusy || undoBusy
+    const opsBlocked = opBusy || applying || seedBusy || restartBusy
+    const statusTone = remoteListStatus?.tone
+    return (
+      <div className={css.pluginStack}>
+        {profileNotInit ? <p className={css.pluginBanner}>{t('profileAbsentBanner')}</p> : null}
+        <div className={css.pluginToolbar}>
+          <Button variant="ghost" size="sm" disabled={opsBlocked} onClick={() => { void doUndo() }}>
+            {t('undoAvailable')}
+          </Button>
+        </div>
+        {remoteListStatus !== null
+          ? (
+            <p className={remoteStatusClass(statusTone ?? 'ok')} role={statusTone === 'error' ? 'alert' : 'status'}>
+              {remoteListStatus.text}
+            </p>
+          )
+          : null}
+        {profileNotInit
+          ? null
+          : deps.length === 0
+            ? <p className={css.dim}>{t('installedEmpty')}</p>
+            : (
+              <div className={css.pluginRows}>
+                <div className={clsx(css.pluginRow, css.pluginRowRemote, css.pluginRowHead)}>
+                  <span className={css.pluginCellName}>{t('pluginsColName')}</span>
+                  <span className={css.pluginCellSpec}>{t('pluginsRemoteCol')}</span>
+                  <span className={css.pluginCellCat} />
+                </div>
+                {deps.map(([name, spec]) => (
+                  // The row and its under-row error note are adjacent list
+                  // entries (the .pluginRows column gap spaces them) so a
+                  // failed remove — the row is still installed — keeps its
+                  // verbatim failure visible for retry.
+                  <Fragment key={name}>
+                    <div className={clsx(css.pluginRow, css.pluginRowRemote)}>
+                      <label className={clsx(css.pluginCell, css.pluginCellName)}>
+                        <code className={css.pluginName}>{name}</code>
+                      </label>
+                      <span className={clsx(css.pluginCell, css.pluginCellSpec)}>
+                        {/* file: values are the main-side mask of remote
+                            materialized copies — never a remote path in the
+                            renderer; the chip names what it is. */}
+                        {spec.startsWith('file:')
+                          ? <span className={clsx(css.pluginKindBadge, css.pluginKindPlain)}>{t('installedFromMask')}</span>
+                          : <code className={css.pluginSpec}>{spec}</code>}
+                      </span>
+                      <button
+                        type="button"
+                        className={css.iconButton}
+                        disabled={opsBlocked}
+                        data-tip={t('pluginsLocalRemove')}
+                        aria-label={`${t('pluginsLocalRemove')}: ${name}`}
+                        onClick={() => { setRemoteRemoveTarget(name) }}
+                      >
+                        <IconTrashOutline16 />
+                      </button>
+                    </div>
+                    {remoteRowErrors[name] !== undefined
+                      ? <p className={css.error} role="alert">{remoteRowErrors[name]}</p>
+                      : null}
+                  </Fragment>
+                ))}
+              </div>
+            )}
       </div>
     )
   }

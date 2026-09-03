@@ -78,6 +78,24 @@ export interface DesktopSshSurface {
    * save_connection. Clearing also invalidates cached login sessions.
    */
   set_gateway_password(id: string, password: null): Promise<{ ok: true } | { error: string }>
+  /**
+   * Re-run the chamber-plugin seed-cache sync on a gateway instance's
+   * registered transport (design 21 §6.5) — the same sync the ready
+   * registration performs automatically; id-only, never a URL or credential.
+   */
+  gateway_plugin_sync(id: string): Promise<GatewayPluginSyncIpcResult>
+  /**
+   * Batch registry add/remove + restart-to-apply on a gateway instance's
+   * registered transport (design 21 §6.5): the main process confirms first
+   * (cancelled = the user dismissed the dialog) and re-validates every spec.
+   */
+  gateway_plugin_apply(id: string, input: GatewayPluginApplyInput): Promise<GatewayPluginApplyIpcResult>
+  /**
+   * Pick a local plugin-source FOLDER in the main process and upload it to a
+   * gateway instance (pick-only, design 21 §6.5): no renderer-supplied path
+   * is ever accepted.
+   */
+  gateway_plugin_materialize(id: string): Promise<GatewayPluginMaterializeIpcResult>
   /** ~/.ssh/config discovery: non-secret host projections or {error}. */
   config_list(): Promise<SshConfigDiscovery>
   connect(id: string): Promise<SshStatusProjection | null>
@@ -94,6 +112,9 @@ export interface DesktopSshSurface {
   plugin_list(id: string): Promise<SshRemotePluginListResult>
   /** Apply a plugin-set change to a remote instance (design 13 §4.3/§4.5). */
   plugin_apply(id: string, input: SshPluginApplyInput): Promise<SshPluginApplyIpcResult>
+  /** Undo the latest OK plugin change of a remote instance (design 21 §6.4):
+   *  main-process journal + confirm; id-only, no renderer-supplied spec. */
+  ssh_plugin_undo(id: string): Promise<SshPluginUndoIpcResult>
   /** Read the LOCAL instance's plugin manifest (design 13 §4.3). */
   local_plugin_list(): Promise<SshLocalPluginListResult>
   /** Best-effort npm registry search (main-process fetch; design 13 §5.8). */
@@ -196,6 +217,27 @@ export type SshPluginApplyIpcResult =
   | { ok: true; result: SshPluginApplyResult }
   | { ok: false; error: string }
 
+/** Undo outcome of the ssh plugin journal (design 21 §6.4, plan Phase 5):
+ *  the main process confirms the undo (cancelled = the user dismissed the
+ *  dialog), re-executes the inverse op through the same ssh plugin_apply
+ *  flow (restart-to-apply), and journals the undo op so further undos chain.
+ *  ok:true undone.kind = the kind of the op that was undone ('add' — a
+ *  fresh install was removed again, an in-place upgrade was restored to its
+ *  previous spec; 'remove' — the name was re-added with its previous
+ *  registry spec). undone carries NO further fields on a CLEAN undo (rows
+ *  executed + restart ok + verified + no failed readiness re-check); when
+ *  the change executed but is not fully effective (restart failed /
+ *  verification failed / readiness failed) the arm carries {restarted,
+ *  ready, readyNote?} — the presence of undone.restarted is the renderer's
+ *  "executed but not fully effective" signal, never a fake clean success.
+ *  ok:false carries unavailable: 'none' when there is no undoable op (or
+ *  the previous spec cannot be restored) or 'file-backed' when the previous
+ *  spec was a remote file: package that v1 cannot re-add. */
+export type SshPluginUndoIpcResult =
+  | { ok: true; cancelled: true }
+  | { ok: true; undone: { kind: 'add' | 'remove'; name: string; restarted?: boolean; ready?: boolean | null; readyNote?: string } }
+  | { ok: false; error: string; unavailable?: 'none' | 'file-backed' }
+
 /** Apply input (renderer → main; main re-validates every spec, design 13 §7.2). */
 export interface SshPluginApplyInput {
   add: string[]
@@ -230,6 +272,50 @@ export type SshMaterializeResult =
 export type SshLocalPluginExecIpcResult =
   | { ok: true }
   | { ok: true; cancelled: true }
+  | { ok: false; error: string }
+
+/** Manual chamber-plugin sync outcome (design 21 §6.5): the seed-cache sync
+ *  the gateway ready registration performs automatically, re-run on demand.
+ *  ok:true carries the same {uploaded, skipped} projection as the auto path;
+ *  ok:false is loud (no ready registration / instance gone / sync error). */
+export type GatewayPluginSyncIpcResult =
+  | { ok: true; uploaded: boolean; skipped: boolean }
+  | { ok: false; error: string }
+
+/** Batch apply input (renderer → main; main re-validates every spec against
+ *  the same shared whitelists the gateway routes use — defense in depth). */
+export interface GatewayPluginApplyInput {
+  add: string[]
+  remove: string[]
+  /** true = record the change only; the restart-to-apply is skipped. */
+  deferRestart?: boolean
+}
+
+/** Partial outcome of a failed batch: the ops already accepted by the
+ *  gateway executor before the failure (restart refusal included) — never
+ *  hidden behind the error text. */
+export interface GatewayPluginApplyPartial {
+  installed: string[]
+  removed: string[]
+}
+
+/** Batch apply outcome (design 21 §6.5): cancelled = the user dismissed the
+ *  main-process confirmation; ok:true carries installed/removed (accepted
+ *  ops), restarted (restart confirmed via the status poll) and deferred
+ *  (true when some submissions were cached as ready-edge install intents);
+ *  ok:false is loud and carries `partial` when ops executed before it. */
+export type GatewayPluginApplyIpcResult =
+  | { ok: true; cancelled: true }
+  | { ok: true; installed: string[]; removed: string[]; restarted: boolean; deferred?: boolean }
+  | { ok: false; error: string; partial?: GatewayPluginApplyPartial }
+
+/** Folder materialize outcome (design 21 §6.5): cancelled = the user
+ *  dismissed the picker; ok:true deferred = the gateway cached the install
+ *  intent for the next ready edge (false = accepted onto the executor
+ *  queue); ok:false is loud. */
+export type GatewayPluginMaterializeIpcResult =
+  | { ok: true; cancelled: true }
+  | { ok: true; deferred: boolean }
   | { ok: false; error: string }
 
 /**
@@ -452,6 +538,9 @@ function desktopSshApi(): DesktopSshSurface {
     set_password: (id, password) => ipcRenderer.invoke('desktop_ssh_set_password', { id, password }),
     set_gateway_token: (id, token) => ipcRenderer.invoke('desktop_gateway_set_token', { id, token }),
     set_gateway_password: (id, password) => ipcRenderer.invoke('desktop_gateway_set_password', { id, password }),
+    gateway_plugin_sync: id => ipcRenderer.invoke('desktop_gateway_plugin_sync', { id }),
+    gateway_plugin_apply: (id, input) => ipcRenderer.invoke('desktop_gateway_plugin_apply', { id, add: input.add, remove: input.remove, deferRestart: input.deferRestart }),
+    gateway_plugin_materialize: id => ipcRenderer.invoke('desktop_gateway_plugin_materialize', { id }),
     config_list: () => ipcRenderer.invoke('desktop_ssh_config_list'),
     connect: id => ipcRenderer.invoke('desktop_ssh_connect', { id }),
     disconnect: id => ipcRenderer.invoke('desktop_ssh_disconnect', { id }),
@@ -464,6 +553,7 @@ function desktopSshApi(): DesktopSshSurface {
     restart_service: id => ipcRenderer.invoke('desktop_ssh_restart_service', { id }),
     plugin_list: id => ipcRenderer.invoke('desktop_ssh_plugin_list', { id }),
     plugin_apply: (id, input) => ipcRenderer.invoke('desktop_ssh_plugin_apply', { id, add: input.add, remove: input.remove, restart: input.restart }),
+    ssh_plugin_undo: id => ipcRenderer.invoke('desktop_ssh_plugin_undo', { id }),
     local_plugin_list: () => ipcRenderer.invoke('desktop_local_plugin_list'),
     npm_search: query => ipcRenderer.invoke('desktop_npm_search', { query }),
     seed_host_graph: id => ipcRenderer.invoke('desktop_ssh_seed_host_graph', { id }),

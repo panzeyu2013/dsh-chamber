@@ -1009,6 +1009,15 @@ test('applyNowInFlight fences every other runtime mutation at the manager level 
     })
     await manager.applyNow()
     assert.equal(manager.applyNowInFlight(), true)
+    // The managed profile-write lease is refused for the whole apply-now
+    // window (phase 'applying'): a plugin pnpm child must never interleave
+    // the stop → snapshot → pointer switch → probe transaction.
+    const leased = manager.beginProfileWrite()
+    assert.equal(leased.ok, false)
+    if (!leased.ok) {
+      assert.equal(leased.code, 'runtime_busy')
+      assert.match(leased.error, /apply-now transaction is in flight|runtime activation in progress/)
+    }
     // applyNowInFlight feeds assertMutationIdle directly — the fence no longer
     // depends on activationDepth's timing coincidence (review R3/R5).
     for (const refuse of [
@@ -2512,6 +2521,181 @@ test('dispose drains a persisted F7 rollback and final-stop fences its fallback 
   }
 })
 
+test('restart-exhausted rollback holds every write while the profile-write lease is held and completes after release (F7 lease gate)', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-f7-lease-'))
+  try {
+    makeValidTree(stateDir, '1.0.0')
+    makeValidTree(stateDir, '2.0.0')
+    writeCurrentPointer(stateDir, '1.0.0')
+    writeActivationIntent(stateDir, {
+      targetVersion: '2.0.0', targetIsBuiltin: false, manualRollback: false, intentKind: 'version-switch',
+    })
+    writeOverride(stateDir, {
+      shellVersion: gatewayPackageVersion, chosenVersion: '2.0.0', resolvedVersion: '1.0.0',
+      pending: '2.0.0', swapAttempted: false, selectedOnly: false, lastOutcome: 'applied',
+    })
+    const home = join(stateDir, 'dsh-home')
+    mkdirSync(home, { recursive: true })
+    writeFileSync(join(home, 'settings.json'), '{"source":"v1"}')
+
+    let phase: 'initial-apply' | 'f7' | 'cleanup' = 'initial-apply'
+    let f7Stops = 0
+    const plane = fakePlane()
+    plane._state.connectionState = 'ready'
+    plane.stopLocal = async () => {
+      if (phase === 'f7') f7Stops += 1
+      plane._state.connectionState = 'stopped'
+    }
+    plane.startLocal = async () => { plane._state.connectionState = 'ready' }
+    const manager = createGatewayRuntimeManager({
+      config: config(stateDir),
+      plane,
+      logger: silentLogger,
+      waitBeforeRetry: async () => {},
+      scheduleKnownGoodPromotion: () => () => {},
+      probeCandidate: async () => probeResultsFor(stateDir).map(name => ({ name, ok: true })),
+    })
+
+    await manager.applyNow()
+    await waitForSettle(manager)
+    assert.equal(readCurrentPointer(stateDir), '2.0.0')
+    writeFileSync(join(home, 'settings.json'), '{"source":"v2-migrated"}')
+
+    // A plugin mutation holds the profile-write lease exactly when the host
+    // lands on restart-exhausted (the F7 auto-rollback races a pnpm child).
+    const lease = manager.beginProfileWrite()
+    assert.equal(lease.ok, true)
+    if (!lease.ok) return
+    phase = 'f7'
+    plane._state.connectionState = 'restart-exhausted'
+    manager.observeLocalState('restart-exhausted')
+
+    // While the lease is held the armed rollback must not start ANY effect:
+    // its restore step writes DSH_HOME before the only lease-aware point
+    // (the spawn checkpoint), so it waits for the lease to drain instead.
+    await new Promise(resolve => setTimeout(resolve, 60))
+    assert.equal(manager.mutationInProgress(), true, 'the F7 writer latch is armed and waiting on the lease')
+    assert.equal(f7Stops, 0, 'no host stop while the lease is held')
+    const waiting = readActivationJournalState(stateDir)
+    assert.equal(waiting.kind, 'valid')
+    if (waiting.kind === 'valid') {
+      assert.equal(waiting.journal.phase, 'applied-monitoring', 'no durable rollback-needed write while the lease is held')
+    }
+    assert.equal(readCurrentPointer(stateDir), '2.0.0', 'no pointer switch while the lease is held')
+    assert.equal(readFileSync(join(home, 'settings.json'), 'utf8'), '{"source":"v2-migrated"}',
+      'no DSH_HOME restore while the lease is held')
+
+    // The refusal matrix covers the rollback wait: no NEW lease can start
+    // mid-rollback (only the already-held lease can drain).
+    const refused = manager.beginProfileWrite()
+    assert.equal(refused.ok, false)
+    if (!refused.ok) {
+      assert.equal(refused.code, 'runtime_busy')
+      assert.match(refused.error, /rollback is in flight/)
+    }
+
+    // The plugin mutation completes: the wait resolves 'idle' and the
+    // rollback transaction runs to its safe terminal state.
+    lease.release()
+    await waitForMutationSettle(manager)
+    assert.equal(f7Stops, 1)
+    assert.equal(readCurrentPointer(stateDir), '1.0.0')
+    assert.equal(readFileSync(join(home, 'settings.json'), 'utf8'), '{"source":"v1"}')
+    assert.equal(readActivationJournalState(stateDir).kind, 'missing', 'safe terminal rollback consumes the F7 journal')
+    assert.match((await manager.status()).operationError ?? '', /automatically rolled back/)
+
+    phase = 'cleanup'
+    await manager.dispose()
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('restart-exhausted rollback defers with no writes when the lease outlives the wait bound; the next exhausted edge re-arms it', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-f7-lease-timeout-'))
+  try {
+    makeValidTree(stateDir, '1.0.0')
+    makeValidTree(stateDir, '2.0.0')
+    writeCurrentPointer(stateDir, '1.0.0')
+    writeActivationIntent(stateDir, {
+      targetVersion: '2.0.0', targetIsBuiltin: false, manualRollback: false, intentKind: 'version-switch',
+    })
+    writeOverride(stateDir, {
+      shellVersion: gatewayPackageVersion, chosenVersion: '2.0.0', resolvedVersion: '1.0.0',
+      pending: '2.0.0', swapAttempted: false, selectedOnly: false, lastOutcome: 'applied',
+    })
+    const home = join(stateDir, 'dsh-home')
+    mkdirSync(home, { recursive: true })
+    writeFileSync(join(home, 'settings.json'), '{"source":"v1"}')
+
+    let phase: 'initial-apply' | 'f7' | 'cleanup' = 'initial-apply'
+    let f7Stops = 0
+    const errors: string[] = []
+    const captureLogger: Logger = { log() {}, warn() {}, error(message: string) { errors.push(message) } }
+    const plane = fakePlane()
+    plane._state.connectionState = 'ready'
+    plane.stopLocal = async () => {
+      if (phase === 'f7') f7Stops += 1
+      plane._state.connectionState = 'stopped'
+    }
+    plane.startLocal = async () => { plane._state.connectionState = 'ready' }
+    const manager = createGatewayRuntimeManager({
+      config: config(stateDir),
+      plane,
+      logger: captureLogger,
+      waitBeforeRetry: async () => {},
+      scheduleKnownGoodPromotion: () => () => {},
+      // Test-injected bound: the plugin mutation below holds the lease far
+      // longer than the rollback is willing to wait.
+      rollbackLeaseWaitMs: 60,
+      probeCandidate: async () => probeResultsFor(stateDir).map(name => ({ name, ok: true })),
+    })
+
+    await manager.applyNow()
+    await waitForSettle(manager)
+    assert.equal(readCurrentPointer(stateDir), '2.0.0')
+    writeFileSync(join(home, 'settings.json'), '{"source":"v2-migrated"}')
+
+    const lease = manager.beginProfileWrite()
+    assert.equal(lease.ok, true)
+    if (!lease.ok) return
+    phase = 'f7'
+    plane._state.connectionState = 'restart-exhausted'
+    manager.observeLocalState('restart-exhausted')
+
+    // The lease never drains within the injected bound: the rollback DEFERS.
+    await new Promise(resolve => setTimeout(resolve, 200))
+    assert.ok(errors.some(text => /plugin mutation lease held too long/.test(text)),
+      `the deferral is logged loudly (${errors.join('; ')})`)
+    assert.equal(manager.mutationInProgress(), false, 'the deferred rollback releases its writer latch')
+    assert.equal(f7Stops, 0, 'no host effect on the deferred path')
+    const deferred = readActivationJournalState(stateDir)
+    assert.equal(deferred.kind, 'valid')
+    if (deferred.kind === 'valid') {
+      assert.equal(deferred.journal.phase, 'applied-monitoring', 'no durable write on the deferred path')
+    }
+    assert.equal(readCurrentPointer(stateDir), '2.0.0', 'no pointer switch on the deferred path')
+    assert.equal(readFileSync(join(home, 'settings.json'), 'utf8'), '{"source":"v2-migrated"}',
+      'no DSH_HOME restore on the deferred path — the instance keeps its honest restart-exhausted projection')
+
+    // The plugin mutation finishes; a later authoritative restart-exhausted
+    // edge re-arms the rollback, which now completes normally.
+    lease.release()
+    plane._state.connectionState = 'restart-exhausted'
+    manager.observeLocalState('restart-exhausted')
+    await waitForMutationSettle(manager)
+    assert.equal(f7Stops, 1, 'the re-armed rollback executes one transaction')
+    assert.equal(readCurrentPointer(stateDir), '1.0.0')
+    assert.equal(readFileSync(join(home, 'settings.json'), 'utf8'), '{"source":"v1"}')
+    assert.equal(readActivationJournalState(stateDir).kind, 'missing')
+
+    phase = 'cleanup'
+    await manager.dispose()
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
 test('a rejected plane.restartLocal() surfaces as status().operationError (sanitized)', async () => {
   const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-restart-fail-'))
   try {
@@ -3173,4 +3357,480 @@ test('connection_busy maps to 409; oversized bodies release input, write 413, th
   assert.equal(await handling, true)
   assert.equal(streamingRes.statusCode, 413)
   assert.equal(streamingReq.destroyed, true)
+})
+
+// ---------------------------------------------------------------------------
+// Design 21 decision 12 + §6.3 (Phase 4.1/4.5): start primitive and the
+// managed profile-write lease (lifecycle writer barrier)
+// ---------------------------------------------------------------------------
+
+test('start route: 202 from stopped/error/restart-exhausted; 409 while running/starting; double start 409', async () => {
+  let connectionState = 'stopped'
+  let starts = 0
+  let starting = false
+  const manager = {
+    status: () => ({ phase: 'idle', connectionState, startupBlockedReason: null }),
+    start: async () => { starts += 1 },
+    startInFlight: () => starting,
+  }
+  const routes = createRuntimeRoutes(() => manager as never, silentLogger)
+  const stopped = await runRoute(routes, 'POST', '/chamber/runtime/start')
+  assert.equal(stopped.status, 202)
+  assert.equal((stopped.json as { accepted: boolean }).accepted, true)
+  assert.equal(starts, 1)
+  connectionState = 'error'
+  const errored = await runRoute(routes, 'POST', '/chamber/runtime/start')
+  assert.equal(errored.status, 202, 'error is a start window state')
+  assert.equal(starts, 2)
+  connectionState = 'restart-exhausted'
+  const exhausted = await runRoute(routes, 'POST', '/chamber/runtime/start')
+  assert.equal(exhausted.status, 202, 'restart-exhausted is the r1 recovery window (F7 coordination via the manager gate)')
+  assert.equal(starts, 3)
+  connectionState = 'ready'
+  const running = await runRoute(routes, 'POST', '/chamber/runtime/start')
+  assert.equal(running.status, 409)
+  assert.equal((running.json as { code: string }).code, 'runtime_busy')
+  assert.match((running.json as { error: string }).error, /managed dsh is running \(ready\)/)
+  assert.equal(starts, 3, 'a running dsh is not a start target — no fake 202')
+  connectionState = 'starting'
+  const startingState = await runRoute(routes, 'POST', '/chamber/runtime/start')
+  assert.equal(startingState.status, 409, 'a spawn already in flight is not a start target')
+  assert.equal(starts, 3)
+  // Double start: the single-flight refusal must answer BEFORE the connection
+  // gate can swallow it (a start in flight projects 'starting' on a real plane).
+  connectionState = 'stopped'
+  starting = true
+  const double = await runRoute(routes, 'POST', '/chamber/runtime/start')
+  assert.equal(double.status, 409)
+  assert.equal((double.json as { code: string }).code, 'runtime_busy')
+  assert.match((double.json as { error: string }).error, /a start is already in flight/)
+  assert.equal(starts, 3)
+})
+
+test('start route: busy phases, phase-less recovery blocks, pending and profile-write lease refuse 409 before any 202', async () => {
+  let phase = 'idle'
+  let connectionState = 'stopped'
+  let startupBlockedReason: string | null = null
+  let profileWrite = false
+  let starts = 0
+  const manager = {
+    status: () => ({ phase, connectionState, startupBlockedReason, pending: null }),
+    start: async () => { starts += 1 },
+    startInFlight: () => false,
+    profileWriteInFlight: () => profileWrite,
+  }
+  const routes = createRuntimeRoutes(() => manager as never, silentLogger)
+  phase = 'applying'
+  const applying = await runRoute(routes, 'POST', '/chamber/runtime/start')
+  assert.equal(applying.status, 409)
+  assert.equal((applying.json as { code: string }).code, 'runtime_busy')
+  assert.match((applying.json as { error: string }).error, /runtime mutation in progress; start refused/)
+  phase = 'installing'
+  const installing = await runRoute(routes, 'POST', '/chamber/runtime/start')
+  assert.equal(installing.status, 409)
+  assert.equal((installing.json as { code: string }).code, 'runtime_busy')
+  assert.equal(starts, 0)
+  // Recovery gate is not bypassable: recovery phases only expose their
+  // matching retry plus restore-builtin (decision 12).
+  phase = 'swap-attempted'
+  const swap = await runRoute(routes, 'POST', '/chamber/runtime/start')
+  assert.equal(swap.status, 409)
+  assert.equal((swap.json as { code: string }).code, 'runtime_recovery_required')
+  assert.match((swap.json as { error: string }).error, /only retry-apply and restore-builtin are allowed/)
+  phase = 'restore-blocked'
+  const restore = await runRoute(routes, 'POST', '/chamber/runtime/start')
+  assert.equal(restore.status, 409)
+  assert.equal((restore.json as { code: string }).code, 'runtime_recovery_required')
+  assert.match((restore.json as { error: string }).error, /only retry-restore and restore-builtin are allowed/)
+  phase = 'snapshot-failed'
+  const snapshot = await runRoute(routes, 'POST', '/chamber/runtime/start')
+  assert.equal(snapshot.status, 409)
+  assert.equal((snapshot.json as { code: string }).code, 'runtime_recovery_required')
+  phase = 'pending'
+  const pending = await runRoute(routes, 'POST', '/chamber/runtime/start')
+  assert.equal(pending.status, 409)
+  assert.equal((pending.json as { code: string }).code, 'runtime_pending')
+  assert.equal(starts, 0)
+  // A phase-less in-memory block (fatal metadata verdicts never surface a
+  // recovery phase string) must not leak a raw start past the verdict.
+  phase = 'idle'
+  startupBlockedReason = 'journal-corrupt'
+  const corrupt = await runRoute(routes, 'POST', '/chamber/runtime/start')
+  assert.equal(corrupt.status, 409)
+  assert.equal((corrupt.json as { code: string }).code, 'runtime_recovery_required')
+  assert.match((corrupt.json as { error: string }).error, /runtime recovery journal-corrupt is required/)
+  startupBlockedReason = null
+  profileWrite = true
+  const leased = await runRoute(routes, 'POST', '/chamber/runtime/start')
+  assert.equal(leased.status, 409)
+  assert.equal((leased.json as { code: string }).code, 'runtime_busy')
+  assert.match((leased.json as { error: string }).error, /managed profile write in flight \(plugin mutation\); start refused/)
+  profileWrite = false
+  const accepted = await runRoute(routes, 'POST', '/chamber/runtime/start')
+  assert.equal(accepted.status, 202)
+  assert.equal(starts, 1)
+})
+
+test('restart and select refuse 409 while the profile-write lease is held (no fake 202)', async () => {
+  let profileWrite = true
+  let restarts = 0
+  const manager = {
+    status: () => ({ phase: 'idle', connectionState: 'ready', startupBlockedReason: null }),
+    profileWriteInFlight: () => profileWrite,
+    restart: async () => { restarts += 1 },
+    restartInFlight: () => false,
+    select: async () => { throw new Error('must not be called while the lease is held') },
+  }
+  const routes = createRuntimeRoutes(() => manager as never, silentLogger)
+  const restart = await runRoute(routes, 'POST', '/chamber/runtime/restart')
+  assert.equal(restart.status, 409)
+  assert.equal((restart.json as { code: string }).code, 'runtime_busy')
+  assert.match((restart.json as { error: string }).error, /managed profile write in flight \(plugin mutation\); restart refused/)
+  const select = await runRoute(routes, 'POST', '/chamber/runtime/select', JSON.stringify({ version: '1.2.3' }))
+  assert.equal(select.status, 409)
+  assert.equal((select.json as { code: string }).code, 'runtime_busy')
+  assert.match((select.json as { error: string }).error, /profile write in flight/)
+  assert.equal(restarts, 0)
+  profileWrite = false
+  const restartOk = await runRoute(routes, 'POST', '/chamber/runtime/restart')
+  assert.equal(restartOk.status, 202)
+  assert.equal(restarts, 1)
+})
+
+test('route inventory lists start and /status passes the start field through', async () => {
+  let startField: 'ok' | 'failed' | 'running' | null = 'running'
+  const manager = {
+    status: async () => ({ kind: 'dsh-chamber-gateway-runtime', phase: 'idle', connectionState: 'stopped', start: startField }),
+  }
+  const routes = createRuntimeRoutes(() => manager as never, silentLogger)
+  const status = await runRoute(routes, 'GET', '/chamber/runtime/status')
+  assert.equal(status.status, 200)
+  assert.equal((status.json as { start: string }).start, 'running')
+  startField = null
+  const cleared = await runRoute(routes, 'GET', '/chamber/runtime/status')
+  assert.equal((cleared.json as { start: string | null }).start, null)
+  const inventory = await runRoute(routes, 'GET', '/chamber/runtime')
+  assert.equal(inventory.status, 200)
+  const routesList = (inventory.json as { routes: string[] }).routes
+  assert.ok(routesList.includes('start'), `route inventory must include start (${routesList.join(',')})`)
+  assert.ok(routesList.includes('restart'))
+})
+
+test('profile-write lease: acquisition, projection, nested release, underflow guard and post-dispose refusal', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-lease-'))
+  try {
+    const manager = createGatewayRuntimeManager({ config: config(stateDir), plane: fakePlane(), logger: silentLogger })
+    assert.equal(manager.profileWriteInFlight(), false)
+    const first = manager.beginProfileWrite()
+    assert.equal(first.ok, true)
+    assert.equal(manager.profileWriteInFlight(), true)
+    // The count model permits nested acquisition (the A1 queue may hold a
+    // drain-wide lease around per-operation leases); the barrier opens only
+    // when every holder releases.
+    const second = manager.beginProfileWrite()
+    assert.equal(second.ok, true)
+    assert.equal(manager.profileWriteInFlight(), true, 'one remaining holder keeps the fence closed')
+    if (first.ok && second.ok) {
+      first.release()
+      assert.equal(manager.profileWriteInFlight(), true)
+      second.release()
+      assert.equal(manager.profileWriteInFlight(), false)
+      assert.throws(() => second.release(), /lease underflow/, 'double release must fail loud, never reopen silently')
+      assert.equal(manager.profileWriteInFlight(), false)
+    }
+    await manager.dispose()
+    const afterDispose = manager.beginProfileWrite()
+    assert.equal(afterDispose.ok, false)
+    if (!afterDispose.ok) {
+      assert.equal(afterDispose.code, 'runtime_busy')
+      assert.match(afterDispose.error, /disposing/)
+    }
+    assert.equal(manager.profileWriteInFlight(), false, 'a refused acquisition never increments the counter')
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('beginProfileWrite refuses while a restart, install or start is in flight and while dsh is starting/restarting', async () => {
+  const restartDir = mkdtempSync(join(tmpdir(), 'gw-rt-lease-restart-'))
+  try {
+    let releaseRestart!: () => void
+    const restartGate = new Promise<void>((resolve) => { releaseRestart = resolve })
+    const plane = fakePlane()
+    plane.restartLocal = async () => { plane._state.connectionState = 'ready'; await restartGate }
+    const manager = createGatewayRuntimeManager({ config: config(restartDir), plane, logger: silentLogger })
+    const inflight = manager.restart()
+    const lease = manager.beginProfileWrite()
+    assert.equal(lease.ok, false)
+    if (!lease.ok) {
+      assert.equal(lease.code, 'runtime_busy')
+      assert.match(lease.error, /restart is in flight/)
+    }
+    releaseRestart()
+    await inflight
+    const after = manager.beginProfileWrite()
+    assert.equal(after.ok, true)
+    if (after.ok) after.release()
+    await manager.dispose()
+  } finally {
+    rmSync(restartDir, { recursive: true, force: true })
+  }
+
+  const installDir = mkdtempSync(join(tmpdir(), 'gw-rt-lease-install-'))
+  try {
+    let rejectFetch!: (error: Error) => void
+    const plane = fakePlane()
+    plane._state.connectionState = 'ready'
+    const manager = createGatewayRuntimeManager({
+      config: config(installDir),
+      plane,
+      logger: silentLogger,
+      fetchMetadata: async () => new Promise((_, reject) => { rejectFetch = reject }),
+    })
+    const install = manager.select('2.0.0')
+    const lease = manager.beginProfileWrite()
+    assert.equal(lease.ok, false)
+    if (!lease.ok) {
+      assert.equal(lease.code, 'runtime_busy')
+      assert.match(lease.error, /install is in flight/)
+    }
+    rejectFetch(new Error('test install cancelled'))
+    await assert.rejects(install, /test install cancelled/)
+    await manager.dispose()
+  } finally {
+    rmSync(installDir, { recursive: true, force: true })
+  }
+
+  const startDir = mkdtempSync(join(tmpdir(), 'gw-rt-lease-start-'))
+  try {
+    let releaseStart!: () => void
+    const startGate = new Promise<void>((resolve) => { releaseStart = resolve })
+    const plane = fakePlane()
+    plane.startLocal = async () => { plane._state.connectionState = 'ready'; await startGate }
+    const manager = createGatewayRuntimeManager({ config: config(startDir), plane, logger: silentLogger })
+    const start = manager.start()
+    const lease = manager.beginProfileWrite()
+    assert.equal(lease.ok, false)
+    if (!lease.ok) {
+      assert.equal(lease.code, 'runtime_busy')
+      assert.match(lease.error, /start is in flight/)
+    }
+    releaseStart()
+    await start
+    await manager.dispose()
+  } finally {
+    rmSync(startDir, { recursive: true, force: true })
+  }
+
+  const windowDir = mkdtempSync(join(tmpdir(), 'gw-rt-lease-window-'))
+  try {
+    const plane = fakePlane()
+    const manager = createGatewayRuntimeManager({ config: config(windowDir), plane, logger: silentLogger })
+    for (const state of ['starting', 'restarting'] as const) {
+      plane._state.connectionState = state
+      const lease = manager.beginProfileWrite()
+      assert.equal(lease.ok, false)
+      if (!lease.ok) {
+        assert.equal(lease.code, 'runtime_busy')
+        assert.match(lease.error, new RegExp(`managed dsh is ${state}`))
+      }
+    }
+    plane._state.connectionState = 'ready'
+    const lease = manager.beginProfileWrite()
+    assert.equal(lease.ok, true)
+    if (lease.ok) lease.release()
+    await manager.dispose()
+  } finally {
+    rmSync(windowDir, { recursive: true, force: true })
+  }
+})
+
+test('beginProfileWrite refuses pending and recovery phases (runtime_pending / runtime_recovery_required)', async () => {
+  const pendingDir = mkdtempSync(join(tmpdir(), 'gw-rt-lease-pending-'))
+  try {
+    writeOverride(pendingDir, {
+      shellVersion: gatewayPackageVersion, chosenVersion: '1.2.3', resolvedVersion: '1.2.3',
+      pending: '1.2.3', swapAttempted: false,
+    })
+    const manager = createGatewayRuntimeManager({ config: config(pendingDir), plane: fakePlane(), logger: silentLogger })
+    const lease = manager.beginProfileWrite()
+    assert.equal(lease.ok, false)
+    if (!lease.ok) {
+      assert.equal(lease.code, 'runtime_pending')
+      assert.match(lease.error, /only restore-builtin is allowed until the next startup/)
+    }
+    await manager.dispose()
+  } finally {
+    rmSync(pendingDir, { recursive: true, force: true })
+  }
+
+  const recoveryDir = mkdtempSync(join(tmpdir(), 'gw-rt-lease-recovery-'))
+  try {
+    makeValidTree(recoveryDir, '1.2.3')
+    writeOverride(recoveryDir, {
+      shellVersion: gatewayPackageVersion, chosenVersion: '1.2.3', resolvedVersion: '1.2.3',
+      pending: '1.2.3', swapAttempted: true,
+    })
+    const plane = fakePlane()
+    const manager = createGatewayRuntimeManager({ config: config(recoveryDir), plane, logger: silentLogger })
+    // Derive the authoritative in-memory block exactly like gateway boot does.
+    const startup = await manager.startupTransaction()
+    assert.equal(startup.blockedReason, 'swap-attempted')
+    assert.equal(plane.connectionState, 'stopped')
+    const lease = manager.beginProfileWrite()
+    assert.equal(lease.ok, false)
+    if (!lease.ok) {
+      assert.equal(lease.code, 'runtime_recovery_required')
+      assert.match(lease.error, /only retry-apply\/retry-restore\/restore-builtin are allowed/)
+    }
+    await manager.dispose()
+  } finally {
+    rmSync(recoveryDir, { recursive: true, force: true })
+  }
+})
+
+test('runtime mutations and start/restart refuse while the profile-write lease is held (both directions fenced)', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-lease-fence-'))
+  try {
+    makeValidTree(stateDir, '1.0.0')
+    const plane = fakePlane()
+    plane._state.connectionState = 'stopped'
+    plane.restartLocal = async () => { plane._state.connectionState = 'ready' }
+    plane.startLocal = async () => { plane._state.connectionState = 'ready' }
+    const manager = createGatewayRuntimeManager({ config: config(stateDir), plane, logger: silentLogger })
+    const lease = manager.beginProfileWrite()
+    assert.equal(lease.ok, true)
+    const busyRefusal = (error: unknown): boolean =>
+      (error as { code?: string }).code === 'runtime_busy'
+      && /profile write in flight/.test((error as Error).message)
+    if (lease.ok) {
+      // Runtime transactions cannot interleave the plugin pnpm child.
+      await assert.rejects(manager.restart(), busyRefusal)
+      await assert.rejects(manager.start(), busyRefusal)
+      await assert.rejects(manager.applyNow(), busyRefusal, 'apply-now preflight refuses synchronously under the lease')
+      await assert.rejects(manager.setRegistry('https://registry.npmmirror.com'), busyRefusal)
+      assert.equal(manager.mutationInProgress(), false, 'the lease is not a runtime mutation flag — route gates consult profileWriteInFlight')
+      lease.release()
+    }
+    // Released lease: the same actions reach their own gates again.
+    await assert.rejects(manager.apply(), /no runtime version selected/)
+    await manager.restart()
+    assert.equal((await manager.status()).restart, 'ok')
+    await manager.dispose()
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('start() state matrix: stopped/error/restart-exhausted reach ok; running/starting/degraded refuse; failure projects failed + operationError', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-start-matrix-'))
+  try {
+    const plane = fakePlane()
+    plane.startLocal = async () => { plane._state.connectionState = 'ready' }
+    const manager = createGatewayRuntimeManager({ config: config(stateDir), plane, logger: silentLogger })
+    await manager.start()
+    assert.equal((await manager.status()).start, 'ok')
+    assert.equal((await manager.status()).operationError, null, 'a successful start clears the stale operationError')
+    // Running/degraded/starting states are not start targets.
+    for (const runningState of ['ready', 'degraded', 'starting', 'restarting']) {
+      plane._state.connectionState = runningState
+      await assert.rejects(manager.start(), (error: unknown) =>
+        (error as { code?: string }).code === 'runtime_busy'
+        && (error as Error).message === `managed dsh is running (${runningState}); start applies to stopped/error/restart-exhausted`)
+    }
+    // error and restart-exhausted are r1 windows.
+    plane._state.connectionState = 'error'
+    await manager.start()
+    assert.equal((await manager.status()).start, 'ok')
+    plane._state.connectionState = 'restart-exhausted'
+    await manager.start()
+    assert.equal((await manager.status()).start, 'ok')
+    // RESOLVE ≠ SUCCESS: startLocal() that settles without a live process is
+    // 'failed', never a false 'ok'.
+    plane._state.connectionState = 'stopped'
+    plane.startLocal = async () => { plane._state.connectionState = 'stopped' }
+    await assert.rejects(manager.start(), /dsh start did not reach ready \(stopped\)/)
+    assert.equal((await manager.status()).start, 'failed')
+    assert.match((await manager.status()).operationError ?? '', /did not reach ready \(stopped\)/)
+    // A throwing startLocal projects the sanitized failure.
+    plane._state.connectionState = 'stopped'
+    plane.startLocal = async () => { throw new Error('spawn denied /secret/token=abc') }
+    await assert.rejects(manager.start(), /spawn denied/)
+    const operationError = (await manager.status()).operationError as string
+    assert.ok(!operationError.includes('/secret'), 'paths redacted')
+    assert.ok(!operationError.includes('token=abc'), 'credentials redacted')
+    await manager.dispose()
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('start() outcome lifecycle: status().start projects running → ok; double start 409; a fresh start supersedes the restart verdict', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-start-outcome-'))
+  try {
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const plane = fakePlane()
+    plane.startLocal = async () => { plane._state.connectionState = 'ready'; await gate }
+    const manager = createGatewayRuntimeManager({ config: config(stateDir), plane, logger: silentLogger })
+    // A prior restart verdict must not linger across a fresh start epoch.
+    await manager.restart()
+    assert.equal((await manager.status()).restart, 'ok')
+    plane._state.connectionState = 'stopped'
+    const inflight = manager.start()
+    assert.equal((await manager.status()).start, 'running',
+      "'running' must be visible the moment the 202 poll can read status")
+    assert.equal((await manager.status()).restart, null, 'the fresh start epoch clears the stale restart verdict')
+    await assert.rejects(manager.start(), (error: unknown) =>
+      (error as { code?: string }).code === 'runtime_busy'
+      && /a start is already in flight/.test((error as Error).message))
+    release()
+    await inflight
+    assert.equal((await manager.status()).start, 'ok')
+    // Double-start refusal leaves the outcome fields untouched.
+    await manager.dispose()
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('start() never bypasses the recovery gate or an ordinary pending', async () => {
+  const pendingDir = mkdtempSync(join(tmpdir(), 'gw-rt-start-pending-'))
+  try {
+    writeOverride(pendingDir, {
+      shellVersion: gatewayPackageVersion, chosenVersion: '1.2.3', resolvedVersion: '1.2.3',
+      pending: '1.2.3', swapAttempted: false,
+    })
+    const plane = fakePlane()
+    plane.startLocal = async () => { plane._state.connectionState = 'ready' }
+    const manager = createGatewayRuntimeManager({ config: config(pendingDir), plane, logger: silentLogger })
+    await assert.rejects(manager.start(), (error: unknown) =>
+      (error as { code?: string }).code === 'runtime_pending'
+      && /only restore-builtin is allowed until the next startup/.test((error as Error).message))
+    assert.equal(plane.connectionState, 'stopped', 'a refused start never touches the plane')
+    await manager.dispose()
+  } finally {
+    rmSync(pendingDir, { recursive: true, force: true })
+  }
+
+  const recoveryDir = mkdtempSync(join(tmpdir(), 'gw-rt-start-recovery-'))
+  try {
+    makeValidTree(recoveryDir, '1.2.3')
+    writeOverride(recoveryDir, {
+      shellVersion: gatewayPackageVersion, chosenVersion: '1.2.3', resolvedVersion: '1.2.3',
+      pending: '1.2.3', swapAttempted: true,
+    })
+    const plane = fakePlane()
+    plane.startLocal = async () => { plane._state.connectionState = 'ready' }
+    const manager = createGatewayRuntimeManager({ config: config(recoveryDir), plane, logger: silentLogger })
+    const startup = await manager.startupTransaction()
+    assert.equal(startup.blockedReason, 'swap-attempted')
+    await assert.rejects(manager.start(), (error: unknown) =>
+      (error as { code?: string }).code === 'runtime_recovery_required'
+      && /runtime recovery swap-attempted is required; only retry-apply\/retry-restore\/restore-builtin are allowed/.test((error as Error).message))
+    assert.equal(plane.connectionState, 'stopped', 'the recovery gate stops a start cold')
+    await manager.dispose()
+  } finally {
+    rmSync(recoveryDir, { recursive: true, force: true })
+  }
 })

@@ -17,8 +17,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ApiRequest, ApiResponse } from '@dsh-chamber/control-plane'
 import { createChamberPlugins, SYNCED_ARTIFACT_MAX_BYTES, SYNCED_PACKAGE_MAX_BYTES } from '../src/plugins.ts'
+import { createChamberInstalled } from '../src/plugins-installed.ts'
 import { createChamberSurface } from '../src/routes.ts'
-import { FakeRequest, FakeResponse } from './utils.ts'
+import { FakeRequest, FakeResponse, stubPluginTasks } from './utils.ts'
 
 const logger = {
   log() {},
@@ -57,7 +58,8 @@ function surface(t?: { after(fn: () => void): void }) {
   const stateDir = mkdtempSync(join(tmpdir(), 'gateway-surface-'))
   t?.after(() => rmSync(stateDir, { recursive: true, force: true }))
   const plugins = createChamberPlugins(stateDir, logger)
-  return createChamberSurface({ logger, channels, plugins })
+  const installed = createChamberInstalled(stateDir)
+  return createChamberSurface({ logger, channels, plugins, installed, tasks: stubPluginTasks(), stateDir })
 }
 
 async function handle(surfaceHost: ReturnType<typeof surface>, method: string, path: string): Promise<FakeResponse> {
@@ -267,7 +269,14 @@ test('chamber plugins upload maps persistence failures to a coded 500, not 400',
       throw Object.assign(new Error('disk full'), { code: 'ENOSPC' })
     },
   }
-  const host = createChamberSurface({ logger, channels, plugins: failing })
+  const host = createChamberSurface({
+    logger,
+    channels,
+    plugins: failing,
+    installed: createChamberInstalled(stateDir),
+    tasks: stubPluginTasks(),
+    stateDir,
+  })
   const response = new FakeResponse()
   const request = new UploadRequest()
   const pending = host.handle(request as unknown as ApiRequest, response as unknown as ApiResponse, '/chamber/plugins')

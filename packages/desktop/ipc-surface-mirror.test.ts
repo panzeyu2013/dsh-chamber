@@ -165,13 +165,13 @@ test('DesktopSshSurface matches the GOLDEN baseline — a method deleted from AL
   // method is genuinely removed; a synchronized three-way deletion otherwise
   // stays green in the pairwise comparison above).
   const golden = [
-    'config_list', 'connect', 'delete_connection', 'disconnect', 'instances_get', 'instances_set',
+    'config_list', 'connect', 'delete_connection', 'disconnect', 'gateway_plugin_apply', 'gateway_plugin_materialize', 'gateway_plugin_sync', 'instances_get', 'instances_set',
     'is_active', 'local_plugin_add', 'local_plugin_add_file', 'local_plugin_list',
     'local_plugin_remove', 'logs', 'logs_clear', 'npm_search', 'onInstancesChanged',
     'onStatusChanged', 'plugin_apply', 'plugin_list', 'plugin_materialize_add',
     'plugin_materialize_add_pick', 'restart_service', 'seed_host_graph',
     'save_connection', 'set_gateway_password', 'set_gateway_token', 'set_password', 'start_service',
-    'status', 'stop_service',
+    'status', 'stop_service', 'ssh_plugin_undo',
   ].sort()
   assert.deepEqual(interfaceMethodNames(preload, 'DesktopSshSurface'), golden, 'DesktopSshSurface drifted from the golden baseline')
 })
@@ -251,17 +251,73 @@ test('the IPC result unions carry identical FIELD SETS across the mirrors that n
   const aliasPairs: Array<[string, string, string]> = [
     ['SshMaterializeResult', 'SshMaterializeResult', 'SshMaterializeResult'],
     ['SshLocalPluginExecIpcResult', 'SshLocalPluginExecIpcResult', 'SshLocalPluginExecIpcResult'],
+    ['GatewayPluginSyncIpcResult', 'GatewayPluginSyncIpcResult', 'GatewayPluginSyncIpcResult'],
+    ['GatewayPluginApplyIpcResult', 'GatewayPluginApplyIpcResult', 'GatewayPluginApplyIpcResult'],
+    ['GatewayPluginMaterializeIpcResult', 'GatewayPluginMaterializeIpcResult', 'GatewayPluginMaterializeIpcResult'],
+    ['SshPluginUndoIpcResult', 'SshPluginUndoIpcResult', 'SshPluginUndoIpcResult'],
   ]
   for (const [preloadName, rendererName] of aliasPairs) {
     const fields = interfaceFieldNames(preload, preloadName)
     assert.deepEqual(interfaceFieldNames(renderer, rendererName), fields, `${rendererName} renderer mirror drifted`)
   }
+  // GatewayPluginSyncIpcResult (design 21 §6.5; the IPC-side twin of
+  // gateway-provider's same-named sync result, deliberately suffixed) is a
+  // discriminated ok-union whose member set is exact by construction:
+  // uploaded/skipped live ONLY on the ok:true arm, error ONLY on ok:false
+  // (no cancelled/wider shapes).
+  assert.deepEqual(
+    interfaceFieldNames(preload, 'GatewayPluginSyncIpcResult'),
+    ['error', 'ok', 'skipped', 'uploaded'],
+    'gateway_plugin_sync result union must remain exact',
+  )
+  // GatewayPluginApplyIpcResult (design 21 §6.5, plan Phase 4.6): the
+  // batch+cancelled union — cancelled ONLY on the ok:true cancelled member,
+  // installed/removed/restarted/deferred ONLY on the completed member,
+  // partial/error ONLY on the ok:false member. A producer/consumer contract
+  // mistake (e.g. partial silently dropped, or cancelled widened into a
+  // completion) must fail here.
+  assert.deepEqual(
+    interfaceFieldNames(preload, 'GatewayPluginApplyIpcResult'),
+    ['cancelled', 'deferred', 'error', 'installed', 'ok', 'partial', 'removed', 'restarted'],
+    'gateway_plugin_apply result union must remain exact',
+  )
+  assert.deepEqual(
+    interfaceFieldNames(preload, 'GatewayPluginMaterializeIpcResult'),
+    ['cancelled', 'deferred', 'error', 'ok'],
+    'gateway_plugin_materialize result union must remain exact',
+  )
+  // The partial-outcome summary shape is itself exact: installed/removed
+  // only, matching the main-handler projection.
+  assert.deepEqual(
+    interfaceFieldNames(preload, 'GatewayPluginApplyPartial'),
+    ['installed', 'removed'],
+    'gateway_plugin_apply partial summary must remain exact',
+  )
+  // The apply input shape is exact too (deferRestart optional; main
+  // re-validates the boolean-ness).
+  assert.deepEqual(
+    interfaceFieldNames(preload, 'GatewayPluginApplyInput'),
+    ['add', 'deferRestart', 'remove'],
+    'gateway_plugin_apply input must remain exact',
+  )
   // SshPluginApplyIpcResult is a NAMED alias in preload only; the client
   // mirrors inline it into the plugin_apply signature. plugin_apply has no
   // picker or other cancellation path; widening it with a cancelled member
   // would hide a producer/consumer contract mistake.
   const applyFields = interfaceFieldNames(preload, 'SshPluginApplyIpcResult')
   assert.deepEqual(applyFields, ['error', 'ok', 'result'], 'plugin_apply result union must remain exact')
+  // SshPluginUndoIpcResult (design 21 §6.4 ssh undo journal IPC): exact
+  // member shapes — cancelled only on its own ok:true member, undone
+  // (kind/name + the optional restarted/ready/readyNote "not fully
+  // effective" projection) only on the completed member, unavailable only
+  // on the ok:false member. Widening any arm (e.g. dropping unavailable, or
+  // adding a spec projection that would leak a remote file: path) must fail
+  // here.
+  assert.deepEqual(
+    interfaceFieldNames(preload, 'SshPluginUndoIpcResult'),
+    ['cancelled', 'error', 'kind', 'name', 'ok', 'ready', 'readyNote', 'restarted', 'unavailable', 'undone'],
+    'ssh_plugin_undo result union must remain exact',
+  )
 })
 
 test('the apply-result and notification-settings shapes are type-identical across mirrors (L3 — type-sensitive drift guard)', () => {

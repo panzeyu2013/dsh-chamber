@@ -13,10 +13,12 @@
  *   - main.ts consumes createControlPlane;
  *   - ssh-provider.ts consumes the RPC envelope primitives
  *     (buildClientRequest / parseServerResponse / postClientRequest) for
- *     verifyDshEndpoint / probeRemoteMethod;
+ *     verifyDshEndpoint / probeRemoteMethod, and re-exports the plugin
+ *     spec/name whitelist family (plugin-spec.ts) to its own consumers;
  *   - plugin-sync.ts consumes the cordis insert primitives
  *     (renderCordisInserts / parseLoaderRows / hasExactInsert / fieldCount /
- *     insertConflict) for the remote cordis.patch.yml seed merge.
+ *     insertConflict) for the remote cordis.patch.yml seed merge, and the
+ *     plugin-spec whitelist constants for its add/remove re-validation.
  *
  * The packaged-runtime gate deliberately uses process metadata rather than
  * importing `electron`: this facade is also consumed by pure-node modules
@@ -88,6 +90,18 @@ export const parseLoaderRows = controlPlaneModule.parseLoaderRows
 export const hasExactInsert = controlPlaneModule.hasExactInsert
 export const fieldCount = controlPlaneModule.fieldCount
 export const insertConflict = controlPlaneModule.insertConflict
+
+// Plugin spec/name whitelist family + reserved-name deny predicate
+// (plugin-spec.ts, design 21 §6.2/§6.7 — the shared source for the desktop
+// main (ssh-provider re-export / plugin-sync) and the gateway executor) —
+// consumed by ssh-provider.ts and plugin-sync.ts.
+export const isDeniedPluginName = controlPlaneModule.isDeniedPluginName
+export const MATERIALIZE_FILE_SPEC_PATTERN = controlPlaneModule.MATERIALIZE_FILE_SPEC_PATTERN
+export const MAX_PLUGIN_SPEC_CHARS = controlPlaneModule.MAX_PLUGIN_SPEC_CHARS
+export const PLUGIN_NAME_PATTERN = controlPlaneModule.PLUGIN_NAME_PATTERN
+export const PLUGIN_SPEC_PATTERN = controlPlaneModule.PLUGIN_SPEC_PATTERN
+export const RUN_STDOUT_MAX_BYTES = controlPlaneModule.RUN_STDOUT_MAX_BYTES
+export const WRITE_FILE_MAX_BYTES = controlPlaneModule.WRITE_FILE_MAX_BYTES
 
 // Types ride the same single source; type-only exports are erased at build
 // time, so re-exporting from the workspace package costs nothing at runtime.

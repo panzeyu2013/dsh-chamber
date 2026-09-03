@@ -48,6 +48,17 @@ export const IPC_CHANNELS = {
   SSH_SET_PASSWORD: 'desktop_ssh_set_password',
   GATEWAY_SET_TOKEN: 'desktop_gateway_set_token',
   GATEWAY_SET_PASSWORD: 'desktop_gateway_set_password',
+  /** Manual chamber-plugin seed-cache sync onto a gateway instance (design 21 §6.5). */
+  GATEWAY_PLUGIN_SYNC: 'desktop_gateway_plugin_sync',
+  /** Batch registry install/remove + restart-to-apply onto a gateway
+   *  instance (design 21 §6.5, plan Phase 4.6): main-process confirmation
+   *  (showMessageBox), serial per-op submissions over the registered
+   *  transport, bounded executor-settle + restart readiness polls. */
+  GATEWAY_PLUGIN_APPLY: 'desktop_gateway_plugin_apply',
+  /** Folder pick → tarball upload onto a gateway instance (design 21 §6.5,
+   *  plan Phase 4.6): PICK-ONLY (main opens the folder dialog, no
+   *  renderer-supplied path). */
+  GATEWAY_PLUGIN_MATERIALIZE: 'desktop_gateway_plugin_materialize',
   SSH_CONFIG_LIST: 'desktop_ssh_config_list',
   SSH_CONNECT: 'desktop_ssh_connect',
   SSH_DISCONNECT: 'desktop_ssh_disconnect',
@@ -61,6 +72,9 @@ export const IPC_CHANNELS = {
 
   SSH_PLUGIN_LIST: 'desktop_ssh_plugin_list',
   SSH_PLUGIN_APPLY: 'desktop_ssh_plugin_apply',
+  /** Undo the latest ok ssh plugin change (design 21 §6.4 undo journal:
+   *  main-process confirm → inverse row through the same ssh apply flow). */
+  SSH_PLUGIN_UNDO: 'desktop_ssh_plugin_undo',
   LOCAL_PLUGIN_LIST: 'desktop_local_plugin_list',
   NPM_SEARCH: 'desktop_npm_search',
   SSH_SEED_HOST_GRAPH: 'desktop_ssh_seed_host_graph',
