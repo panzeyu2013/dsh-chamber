@@ -41,6 +41,9 @@ export interface ConnectionGeneration {
  *
  * v0.1.2-alpha.5 baseline: upstream changed only package.json (version) —
  * no connection.ts changes.
+ *
+ * v0.1.2-rc.1 baseline: upstream changed only package.json (version) —
+ * no connection.ts changes.
  */
 export interface ConnectionConfig {
   /** First-retry backoff cap in ms (jittered: actual delay is cap/2..cap). */
