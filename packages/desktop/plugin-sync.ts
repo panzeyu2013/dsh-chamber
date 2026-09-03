@@ -1783,10 +1783,12 @@ function pathDelimiter(): string {
 
 /**
  * Resolve a directory holding a `pnpm` executable (for local `dsh plugin` and
- * `pnpm pack` under a Finder-launched packaged app, whose PATH is minimal —
+ * `pnpm pack` under a desktop-launched packaged app, whose PATH is minimal —
  * `/usr/bin:/bin:/usr/sbin:/sbin` — and lacks pnpm). Scans PATH first, then
- * well-known install roots (nvm versions, volta, homebrew). Returns null when
- * no pnpm is found — the caller then fails with an honest "pnpm not found".
+ * well-known install roots (nvm versions, volta, homebrew, and the Linux
+ * official-installer roots ~/.local/share/pnpm and ~/.local/bin — design 21).
+ * Returns null when no pnpm is found — the caller then fails with an honest
+ * "pnpm not found".
  */
 export function resolvePnpmBinDir(): string | null {
   const name = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm'
@@ -1800,6 +1802,8 @@ export function resolvePnpmBinDir(): string | null {
   }
   candidates.push(
     join(homedir(), '.volta', 'bin'),
+    join(homedir(), '.local', 'share', 'pnpm'),
+    join(homedir(), '.local', 'bin'),
     '/opt/homebrew/bin',
     '/usr/local/bin',
     '/usr/bin',

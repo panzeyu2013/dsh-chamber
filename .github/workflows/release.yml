@@ -7,8 +7,10 @@ name: Release
 # uploads the update feed, see below), and a finalize job flips the draft to
 # public. Since design 11 (desktop auto-update) each platform also ships its
 # UPDATE FEED: stable builds use the package's GitHub publish configuration
-# and upload latest.yml / latest-mac.yml; canonical beta.N builds select the explicit
-# electron-builder.beta.yml configuration and upload beta.yml / beta-mac.yml.
+# and upload latest.yml / latest-mac.yml / latest-linux.yml; canonical beta.N
+# builds select the explicit electron-builder.beta.yml configuration and
+# upload beta.yml / beta-mac.yml / beta-linux.yml (linux leg added 2026-12,
+# design 21).
 # The two channels are generated, verified, and consumed independently — beta
 # never overwrites the stable feed. A beta is also a GitHub prerelease. NO
 # .blockmap sidecars ship
@@ -613,8 +615,85 @@ jobs:
         env:
           VERSION: ${{ needs.create-release.outputs.version }}
 
+  build-linux:
+    needs: [create-release, validation]
+    permissions:
+      contents: write
+    # ubuntu-22.04, not ubuntu-latest: the AppImage's glibc floor equals the
+    # BUILD runner's (2.35 on 22.04) — building on 24.04 would exclude every
+    # 22.04-era desktop (design 21, Linux desktop support). x64 only for now —
+    # bundle:dsh bakes native modules for the host platform; arm64 needs a
+    # native arm runner leg (deferred, mirror OpenChamber's per-arch matrix).
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          # Build from the exact SHA the create-release job bound the tag to
+          # (S16): a branch advance between jobs must not ship an unvalidated
+          # commit under a validated tag.
+          ref: ${{ github.sha }}
+          # Pinned harness source tree is a git submodule (gitlink ==
+          # harness.commit); shallow keeps the 240-package monorepo fast.
+          submodules: true
+      - uses: pnpm/action-setup@fe02b34f77f8bc703788d5817da081398fad5dd2 # v4.1.0
+        with:
+          version: 11.21.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Bootstrap vendor tree (verify pin + ensure links)
+        run: node scripts/dev/ensure-harness-vendor.mjs
+      - run: pnpm install --frozen-lockfile
+      - name: Assert lockfile not rewritten
+        run: git diff --exit-code -- pnpm-lock.yaml
+
+      - name: Build and package Linux AppImage
+        shell: bash
+        run: |
+          if [[ "$DRY_RUN" == "true" ]]; then unset GH_TOKEN; fi
+          pnpm run build:desktop
+          BUILDER_CONFIG=()
+          if [[ "$VERSION" == *-* ]]; then
+            BUILDER_CONFIG=(--config electron-builder.beta.yml)
+          fi
+          pnpm --filter @dsh-chamber/desktop exec electron-builder --linux --x64 "${BUILDER_CONFIG[@]}" --publish=${{ github.event.inputs.dry_run == 'true' && 'never' || 'always' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.create-release.outputs.version }}
+          DRY_RUN: ${{ github.event.inputs.dry_run == 'true' && 'true' || 'false' }}
+
+      - name: Verify packaged Linux AppImage (OpenChamber-style)
+        # Assert the runner is linux-x64 (bundle:dsh bakes the host platform)
+        # and that the linux dsh runtime made it into the unpacked app. When
+        # not dry-running, also assert the UPDATE FEED (design 11 §6 / 21):
+        # electron-updater consumes latest-linux.yml / beta-linux.yml on
+        # linux-x64. NO .blockmap is expected (AppImage ships none; the feed
+        # never references one — updates fall back to full downloads).
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(node -p 'process.platform + "-" + process.arch')" = "linux-x64"
+          test -d packages/desktop/release/linux-unpacked
+          RUNTIME=packages/desktop/release/linux-unpacked/resources/vendor/dsh
+          test -f "$RUNTIME/node_modules/@deepseek-ai/dsh/package.json"
+          node -e "const fs=require('node:fs');const p=JSON.parse(fs.readFileSync('$RUNTIME/package.json','utf8'));if(!p.dsh?.platform?.startsWith('linux-')){throw new Error('wrong bundled dsh platform: '+p.dsh?.platform)};console.log('bundled dsh: '+(p.dependencies?.['@deepseek-ai/dsh']??'?')+' ('+p.dsh.platform+')')"
+          test -n "$(ls packages/desktop/release/*.AppImage 2>/dev/null | head -n 1)"
+          if [[ "${{ github.event.inputs.dry_run }}" != "true" ]]; then
+            test -z "$(ls packages/desktop/release/*.blockmap 2>/dev/null | head -n 1)"
+            if [[ "$VERSION" == *-* ]]; then
+              test -f packages/desktop/release/beta-linux.yml
+              test ! -e packages/desktop/release/latest-linux.yml
+            else
+              test -f packages/desktop/release/latest-linux.yml
+              test ! -e packages/desktop/release/beta-linux.yml
+            fi
+          fi
+        env:
+          VERSION: ${{ needs.create-release.outputs.version }}
+
   finalize-release:
-    needs: [create-release, build-gateway, build-macos, build-windows]
+    needs: [create-release, build-gateway, build-macos, build-windows, build-linux]
     runs-on: ubuntu-latest
     permissions:
       contents: write

@@ -10,7 +10,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -23,7 +23,13 @@ import {
   canRestoreMainWindow,
   decideDeepLinkProtocolRegistration,
   detectVscodeAvailability,
+  ensureLinuxProtocolDesktopFile,
+  linuxAutostartDesktopEntry,
+  linuxAutostartDirectory,
+  linuxProtocolDesktopEntry,
   parseOpenVscodeIntent,
+  quoteDesktopExecValue,
+  resolveLinuxLaunchExecutable,
   runVscodeLaunch,
 } from './deep-link.ts'
 import type { VscodeLaunchContext, VscodeLaunchRequest } from './deep-link.ts'
@@ -648,4 +654,172 @@ test('runVscodeLaunch cannot be made to reject by a hostile thrown value', async
     context({ openVscodeUrl: async () => Promise.reject(hostile) }),
   )
   assert.deepEqual(result, { ok: false, error: 'open vscode url failed: unknown error' })
+})
+
+test('quoteDesktopExecValue quotes only when needed and escapes spec-reserved characters', () => {
+  assert.equal(quoteDesktopExecValue('/opt/dsh-chamber.AppImage'), '/opt/dsh-chamber.AppImage')
+  assert.equal(quoteDesktopExecValue('/opt/my app/dsh-chamber'), '"/opt/my app/dsh-chamber"')
+  assert.equal(quoteDesktopExecValue('/opt/a"b$c`d\\e'), '"/opt/a\\"b\\$c\\`d\\\\e"')
+  // Literal % is doubled per spec so paths can never parse as field codes.
+  assert.equal(quoteDesktopExecValue('/opt/v2%beta/dsh-chamber'), '/opt/v2%%beta/dsh-chamber')
+  assert.equal(quoteDesktopExecValue('/opt/100%cute dir/dsh'), '"/opt/100%%cute dir/dsh"')
+  assert.equal(quoteDesktopExecValue('/opt/%c'), '/opt/%%c')
+})
+
+test('linuxAutostartDirectory honors only an absolute XDG_CONFIG_HOME', () => {
+  const home = '/home/user'
+  assert.equal(linuxAutostartDirectory({ env: {}, homeDir: home }), '/home/user/.config/autostart')
+  assert.equal(
+    linuxAutostartDirectory({ env: { XDG_CONFIG_HOME: '/custom/config' }, homeDir: home }),
+    '/custom/config/autostart',
+  )
+  // Empty / relative / ~ values fall back (XDG Base Dir Spec: relative = unset).
+  assert.equal(linuxAutostartDirectory({ env: { XDG_CONFIG_HOME: '' }, homeDir: home }), '/home/user/.config/autostart')
+  assert.equal(
+    linuxAutostartDirectory({ env: { XDG_CONFIG_HOME: 'relative/config' }, homeDir: home }),
+    '/home/user/.config/autostart',
+  )
+  assert.equal(
+    linuxAutostartDirectory({ env: { XDG_CONFIG_HOME: '~/config' }, homeDir: home }),
+    '/home/user/.config/autostart',
+  )
+})
+
+test('resolveLinuxLaunchExecutable prefers an absolute APPIMAGE over execPath', () => {
+  const execPath = '/tmp/.mount-dsh-chamber-xxx/dsh-chamber'
+  assert.equal(resolveLinuxLaunchExecutable({ env: {}, execPath }), execPath)
+  assert.equal(
+    resolveLinuxLaunchExecutable({ env: { APPIMAGE: '/home/user/bin/dsh-chamber.AppImage' }, execPath }),
+    '/home/user/bin/dsh-chamber.AppImage',
+  )
+  // A relative or empty APPIMAGE must never be persisted.
+  assert.equal(resolveLinuxLaunchExecutable({ env: { APPIMAGE: 'dsh-chamber.AppImage' }, execPath }), execPath)
+  assert.equal(resolveLinuxLaunchExecutable({ env: { APPIMAGE: '' }, execPath }), execPath)
+})
+
+test('linuxAutostartDesktopEntry targets the launch binary with XDG autostart keys', () => {
+  const entry = linuxAutostartDesktopEntry({ executable: '/home/user/bin/dsh-chamber.AppImage' })
+  assert.ok(entry !== null)
+  const lines = (entry as string).split(/\r?\n/)
+  for (const required of [
+    '[Desktop Entry]',
+    'Type=Application',
+    'Name=dsh-chamber',
+    'Exec=/home/user/bin/dsh-chamber.AppImage',
+    'Terminal=false',
+    'X-GNOME-Autostart-enabled=true',
+    'StartupWMClass=dsh-chamber',
+    'Icon=dsh-chamber',
+  ]) {
+    assert.ok(lines.includes(required), `autostart entry must contain ${required}`)
+  }
+  // Quoted when the path has spaces.
+  const spaced = linuxAutostartDesktopEntry({ executable: '/opt/my apps/dsh-chamber.AppImage' })
+  assert.ok(spaced?.includes('Exec="/opt/my apps/dsh-chamber.AppImage"'))
+  // A bare / relative executable is never persisted.
+  assert.equal(linuxAutostartDesktopEntry({ executable: 'dsh-chamber.AppImage' }), null)
+  assert.equal(linuxAutostartDesktopEntry({ executable: 'sub/dir/dsh-chamber' }), null)
+})
+
+test('linuxProtocolDesktopEntry declares the x-scheme-handler MimeType with %u', () => {
+  const entry = linuxProtocolDesktopEntry({ executable: '/home/user/bin/dsh-chamber.AppImage' })
+  assert.ok(entry !== null)
+  const lines = (entry as string).split(/\r?\n/)
+  for (const required of [
+    '[Desktop Entry]',
+    'Type=Application',
+    'Name=dsh-chamber',
+    'Exec=/home/user/bin/dsh-chamber.AppImage %u',
+    'NoDisplay=true',
+    'MimeType=x-scheme-handler/dsh-chamber;',
+  ]) {
+    assert.ok(lines.includes(required), `protocol entry must contain ${required}`)
+  }
+  assert.equal(linuxProtocolDesktopEntry({ executable: 'relative/path' }), null)
+  assert.equal(linuxProtocolDesktopEntry({ scheme: 'dsh chamber', executable: '/opt/x' }), null)
+  assert.equal(linuxProtocolDesktopEntry({ scheme: '../evil', executable: '/opt/x' }), null)
+  // Scheme must start with an ASCII letter (RFC 3986 / Electron validation).
+  assert.equal(linuxProtocolDesktopEntry({ scheme: '1dsh', executable: '/opt/x' }), null)
+  assert.equal(linuxProtocolDesktopEntry({ scheme: '-dsh', executable: '/opt/x' }), null)
+})
+
+test('ensureLinuxProtocolDesktopFile writes into XDG_DATA_HOME applications and reports loud failures', () => {
+  const base = mkdtempSync(join(tmpdir(), 'dsh-linux-proto-'))
+  try {
+    const home = join(base, 'home')
+    const written: Array<{ file: string; data: string }> = []
+    const result = ensureLinuxProtocolDesktopFile({
+      executable: '/home/user/bin/dsh-chamber.AppImage',
+      env: {},
+      homeDir: home,
+      writeFileSync: (file, data) => { written.push({ file, data }) },
+    })
+    assert.equal(result.ok, true)
+    assert.equal(written.length, 1)
+    assert.ok(written[0].file.endsWith(join('.local', 'share', 'applications', 'dsh-chamber.desktop')))
+    assert.ok(written[0].data.includes('MimeType=x-scheme-handler/dsh-chamber;'))
+
+    // A RELATIVE XDG_DATA_HOME is treated as unset (XDG Base Dir Spec) —
+    // never a silent write under the cwd.
+    written.length = 0
+    const relative = ensureLinuxProtocolDesktopFile({
+      executable: '/home/user/bin/dsh-chamber.AppImage',
+      env: { XDG_DATA_HOME: 'relative/data' },
+      homeDir: home,
+      writeFileSync: (file, data) => { written.push({ file, data }) },
+    })
+    assert.equal(relative.ok, true)
+    assert.ok(written[0].file.endsWith(join('.local', 'share', 'applications', 'dsh-chamber.desktop')))
+
+    // Custom absolute XDG_DATA_HOME wins over the home fallback.
+    written.length = 0
+    const custom = ensureLinuxProtocolDesktopFile({
+      executable: '/home/user/bin/dsh-chamber.AppImage',
+      env: { XDG_DATA_HOME: join(base, 'data') },
+      homeDir: home,
+      writeFileSync: (file, data) => { written.push({ file, data }) },
+    })
+    assert.equal(custom.ok, true)
+    assert.ok(written[0].file.startsWith(join(base, 'data', 'applications')))
+
+    // Loud failure for an invalid entry — never a silent partial write.
+    const bad = ensureLinuxProtocolDesktopFile({
+      executable: 'not-absolute',
+      homeDir: home,
+      writeFileSync: (file, data) => { written.push({ file, data }) },
+    })
+    assert.deepEqual(bad, { ok: false, error: 'invalid linux protocol desktop entry' })
+    assert.equal(written.length, 1, 'no write may happen for an invalid entry')
+  } finally {
+    rmSync(base, { recursive: true, force: true })
+  }
+})
+
+test('ensureLinuxProtocolDesktopFile default fs branch writes a real 0644 file and fails loud on mkdir errors', () => {
+  const base = mkdtempSync(join(tmpdir(), 'dsh-linux-proto-real-'))
+  try {
+    const home = join(base, 'home')
+    const result = ensureLinuxProtocolDesktopFile({
+      executable: '/home/user/bin/dsh-chamber.AppImage',
+      env: {},
+      homeDir: home,
+    })
+    assert.equal(result.ok, true)
+    const file = join(home, '.local', 'share', 'applications', 'dsh-chamber.desktop')
+    const stat = statSync(file)
+    assert.ok(stat.isFile())
+    assert.equal(stat.mode & 0o022, 0, 'the per-user handler entry must not be group/world-writable')
+    assert.ok(readFileSync(file, 'utf8').includes('MimeType=x-scheme-handler/dsh-chamber;'))
+
+    // A throwing mkdirSync surfaces as a loud structured failure.
+    const denied = ensureLinuxProtocolDesktopFile({
+      executable: '/home/user/bin/dsh-chamber.AppImage',
+      env: {},
+      homeDir: home,
+      mkdirSync: () => { throw new Error('EPERM: mkdir denied') },
+    })
+    assert.deepEqual(denied, { ok: false, error: 'EPERM: mkdir denied' })
+  } finally {
+    rmSync(base, { recursive: true, force: true })
+  }
 })

@@ -22,12 +22,17 @@
  *   link and the renderer button IPC (§3.4) — registry lookup → authority
  *   construction → availability re-check → openExternal; every failure is
  *   loud, never a silent success.
+ * - Linux desktop integration (design 21): XDG autostart and per-user
+ *   protocol-handler .desktop entries that target the RUNNING AppImage
+ *   ($APPIMAGE) instead of the per-launch squashfs mount, plus the Exec-field
+ *   quoting/escaping they share.
  *
  * main.ts only wires this module (open-url / pendingIntents / second-instance
- * argv / protocol registration / IPC handlers); it holds no deep-link logic.
+ * argv / protocol registration / Linux desktop entries / IPC handlers); it
+ * holds no deep-link logic.
  */
 
-import { accessSync, constants as fsConstants, existsSync, statSync } from 'node:fs'
+import { accessSync, constants as fsConstants, existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { INSTANCE_ID_PATTERN } from './transport-provider.ts'
@@ -313,6 +318,140 @@ export function attemptDeepLinkProtocolRegistration(register: () => boolean):
       : { ok: false, error: 'setAsDefaultProtocolClient returned false' }
   } catch (error) {
     return { ok: false, error: `setAsDefaultProtocolClient failed: ${describeUnknownError(error)}` }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Linux desktop integration (design 21): Linux distributes BOTH protocol
+// handlers and XDG autostart through .desktop files. A packaged AppImage's
+// process.execPath is the per-launch squashfs mount (/tmp/.mount-*), which
+// disappears on exit — every persistent Linux desktop entry MUST target the
+// running AppImage itself ($APPIMAGE) instead. These helpers are pure /
+// injectable so the plain-node suite can test them.
+// ---------------------------------------------------------------------------
+
+/** Desktop Exec-field quoting (Desktop Entry Specification): a value is
+ *  quoted only when it needs to be, and the spec-reserved characters are
+ *  escaped inside the quotes. Literal `%` must be doubled (`%%`) so a path
+ *  like `/opt/v2%beta/` can never be parsed as a field code (`%b`, `%c` …). */
+export function quoteDesktopExecValue(value: string): string {
+  const escapedPercent = value.replace(/%/g, '%%')
+  if (!/[ \t\n"\\]/.test(escapedPercent)) return escapedPercent
+  return `"${escapedPercent.replace(/(["\\`$])/g, '\\$1')}"`
+}
+
+/** The launch target for persistent Linux desktop entries: the running
+ *  AppImage when the app was started from one ($APPIMAGE, absolute path),
+ *  otherwise the main-process binary (unpacked dir / deb / dev). */
+export function resolveLinuxLaunchExecutable(input: {
+  env?: Record<string, string | undefined>
+  execPath: string
+}): string {
+  const env = input.env ?? process.env
+  const appImage = env.APPIMAGE
+  if (typeof appImage === 'string' && appImage !== '' && path.isAbsolute(appImage)) return appImage
+  return input.execPath
+}
+
+/** XDG base-directory resolution: only an ABSOLUTE env value is honored —
+ *  the XDG Base Dir Spec treats relative values as unset, and silently
+ *  writing under the cwd would leave a .desktop the desktop never reads. */
+function xdgBaseDirectory(envValue: string | undefined, fallback: string): string {
+  if (typeof envValue === 'string' && envValue.trim() !== '' && path.isAbsolute(envValue.trim())) {
+    return envValue.trim()
+  }
+  return fallback
+}
+
+/** Linux XDG autostart directory (design 14 D6 / 21): honors an absolute
+ *  XDG_CONFIG_HOME; otherwise ~/.config/autostart. Shared by enable and
+ *  disable so both always address the same file. */
+export function linuxAutostartDirectory(input: {
+  env?: Record<string, string | undefined>
+  homeDir?: string
+} = {}): string {
+  const env = input.env ?? process.env
+  const homeDir = input.homeDir ?? os.homedir()
+  return path.join(xdgBaseDirectory(env.XDG_CONFIG_HOME, path.join(homeDir, '.config')), 'autostart')
+}
+
+/** XDG autostart .desktop content (design 14 D6 Linux branch / 21). Returns
+ *  null when the executable is not an absolute path (never persist a
+ *  mount-relative or bare launch target). */
+export function linuxAutostartDesktopEntry(input: {
+  name?: string
+  executable: string
+}): string | null {
+  const { executable } = input
+  if (typeof executable !== 'string' || executable === '' || !path.isAbsolute(executable)) return null
+  const name = (input.name ?? 'dsh-chamber').replace(/[\r\n]/g, ' ').trim() || 'dsh-chamber'
+  return [
+    '[Desktop Entry]',
+    'Type=Application',
+    `Name=${name}`,
+    `Exec=${quoteDesktopExecValue(executable)}`,
+    'Terminal=false',
+    'X-GNOME-Autostart-enabled=true',
+    'StartupWMClass=dsh-chamber',
+    'Icon=dsh-chamber',
+    '',
+  ].join('\n')
+}
+
+const LINUX_SCHEME_PATTERN = /^[a-z][a-z0-9+.-]{0,63}$/
+
+/** Per-user protocol-handler .desktop content: declares the
+ *  `x-scheme-handler/<scheme>` MimeType that makes `dsh-chamber://` URLs
+ *  routable (design 16 §4.3 / 21). `%u` passes the full URL as argv. Returns
+ *  null for an invalid scheme or a non-absolute executable. */
+export function linuxProtocolDesktopEntry(input: {
+  name?: string
+  scheme?: string
+  executable: string
+}): string | null {
+  const scheme = input.scheme ?? 'dsh-chamber'
+  if (!LINUX_SCHEME_PATTERN.test(scheme)) return null
+  const { executable } = input
+  if (typeof executable !== 'string' || executable === '' || !path.isAbsolute(executable)) return null
+  const name = (input.name ?? 'dsh-chamber').replace(/[\r\n]/g, ' ').trim() || 'dsh-chamber'
+  return [
+    '[Desktop Entry]',
+    'Type=Application',
+    `Name=${name}`,
+    `Exec=${quoteDesktopExecValue(executable)} %u`,
+    'Terminal=false',
+    'NoDisplay=true',
+    `MimeType=x-scheme-handler/${scheme};`,
+    '',
+  ].join('\n')
+}
+
+/** Write (or refresh) the per-user protocol-handler entry under
+ *  $XDG_DATA_HOME/applications (default ~/.local/share/applications) —
+ *  rewritten on every packaged-Linux launch so an upgraded AppImage with a
+ *  new path keeps `dsh-chamber://` routable. Loud failure, never silent. */
+export function ensureLinuxProtocolDesktopFile(input: {
+  executable: string
+  scheme?: string
+  env?: Record<string, string | undefined>
+  homeDir?: string
+  mkdirSync?: (dir: string, options: { recursive: boolean }) => void
+  writeFileSync?: (file: string, data: string, options: { mode: number }) => void
+}): { ok: true } | { ok: false; error: string } {
+  try {
+    const env = input.env ?? process.env
+    const homeDir = input.homeDir ?? os.homedir()
+    const entry = linuxProtocolDesktopEntry({ scheme: input.scheme, executable: input.executable })
+    if (entry === null) return { ok: false, error: 'invalid linux protocol desktop entry' }
+    const dataHome = xdgBaseDirectory(env.XDG_DATA_HOME, path.join(homeDir, '.local', 'share'))
+    const applicationsDir = path.join(dataHome, 'applications')
+    const makeDirs = input.mkdirSync ?? mkdirSync
+    const write = input.writeFileSync ?? writeFileSync
+    makeDirs(applicationsDir, { recursive: true })
+    write(path.join(applicationsDir, 'dsh-chamber.desktop'), entry, { mode: 0o644 })
+    return { ok: true }
+  } catch (error) {
+    return { ok: false, error: describeUnknownError(error) }
   }
 }
 

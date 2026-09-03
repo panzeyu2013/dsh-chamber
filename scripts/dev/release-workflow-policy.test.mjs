@@ -28,7 +28,8 @@ const create = between('      - name: Create GitHub Release (draft)', '\n  valid
 const validation = between('\n  validation:', '\n  build-gateway:')
 const gatewayBuild = between('\n  build-gateway:', '\n  build-macos:')
 const macBuild = between('\n  build-macos:', '\n  build-windows:')
-const windowsBuild = between('\n  build-windows:', '\n  finalize-release:')
+const windowsBuild = between('\n  build-windows:', '\n  build-linux:')
+const linuxBuild = between('\n  build-linux:', '\n  finalize-release:')
 
 assert.match(tagBinding, /git rev-parse "\$\{TAG\}\^\{commit\}"/)
 assert.match(tagBinding, /TAG_SHA.*RELEASE_SHA/)
@@ -64,7 +65,7 @@ assert.doesNotMatch(workflow, /npm publish|npm dist-tag/)
 assert.match(gatewayBuild, /sha256sum/)
 assert.match(gatewayBuild, /packages\/gateway\/release\/\*\.tgz\.sha256/)
 assert.match(gatewayBuild, /Upload gateway package to the draft release/)
-for (const build of [macBuild, windowsBuild]) {
+for (const build of [macBuild, windowsBuild, linuxBuild]) {
   assert.match(build, /electron-builder\.beta\.yml/)
   assert.match(build, /VERSION.*\*-\*/s)
   assert.match(build, /if \[\[ "\$DRY_RUN" == "true" \]\]/)
@@ -77,8 +78,11 @@ assert.match(macBuild, /beta-mac\.yml/)
 assert.match(macBuild, /latest-mac\.yml/)
 assert.match(windowsBuild, /beta\.yml/)
 assert.match(windowsBuild, /latest\.yml/)
+assert.match(linuxBuild, /beta-linux\.yml/)
+assert.match(linuxBuild, /latest-linux\.yml/)
 assert.match(workflow, /make_latest=false/)
 assert.match(workflow, /make_latest=true/)
+assert.match(workflow, /needs: \[create-release, build-gateway, build-macos, build-windows, build-linux\]/)
 for (const requiredGate of [
   'pnpm run typecheck:gateway',
   'pnpm run typecheck:runtime',
@@ -110,15 +114,15 @@ assert.equal(
   'formal desktop builds must not trust a committed third-party Electron mirror',
 )
 
-// Every build job (build-gateway / build-macos / build-windows) must build
-// from the exact SHA the create-release job validated and bound the tag to;
-// a default-branch advance between jobs must never ship an unvalidated
-// commit under a validated tag (S16).
+// Every build job (build-gateway / build-macos / build-windows / build-linux)
+// must build from the exact SHA the create-release job validated and bound
+// the tag to; a default-branch advance between jobs must never ship an
+// unvalidated commit under a validated tag (S16).
 const buildJobs = workflow.slice(workflow.indexOf('  build-gateway:'))
 const buildRefPins = buildJobs.match(/ref: \$\{\{ github\.sha \}\}/g) ?? []
 assert.equal(
   buildRefPins.length,
-  3,
+  4,
   'every build-job checkout must pin ref: ${{ github.sha }} to the validated workflow SHA',
 )
 

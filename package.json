@@ -28,6 +28,7 @@
     "dist:desktop": "pnpm run build:desktop && pnpm --filter @dsh-chamber/desktop run dist",
     "dist:desktop:mac": "pnpm run build:desktop && pnpm --filter @dsh-chamber/desktop run dist:mac",
     "dist:desktop:win": "pnpm run build:desktop && pnpm --filter @dsh-chamber/desktop run dist:win",
+    "dist:desktop:linux": "pnpm run build:desktop && pnpm --filter @dsh-chamber/desktop run dist:linux",
     "acceptance:runtime:fake-registry": "node packages/desktop/scripts/runtime-fake-registry-acceptance.mjs",
     "acceptance:runtime:mac-packaged": "node packages/desktop/scripts/runtime-mac-packaged-smoke.mjs",
     "dev:desktop": "pnpm run build:dsh-runtime && pnpm --filter @dsh-chamber/desktop run dev",

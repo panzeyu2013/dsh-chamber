@@ -28,6 +28,9 @@ Grab the installer for your platform from [GitHub Releases](https://github.com/p
 
 - **macOS**: `dsh-chamber-<version>-<arch>.dmg`
 - **Windows**: NSIS installer (`.exe`)
+- **Linux**: `dsh-chamber-<version>.AppImage` (x64; needs FUSE or
+  `APPIMAGE_EXTRACT_AND_RUN=1`; auto-update requires starting the AppImage
+  from a writable path — see `docs/design/21-linux-desktop.md`)
 
 ### 2 · Open the app
 

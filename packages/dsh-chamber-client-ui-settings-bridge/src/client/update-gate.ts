@@ -13,11 +13,13 @@ export function updateCheckDisabled(phase: UpdatePhase | undefined): boolean {
 
 /**
  * Whether a manual check is pointless on this platform: the main process
- * refuses checkNow() on linux (dir target — no installer feed) and never
- * schedules checks there, so an enabled button would be a permanently silent
- * no-op. mac WITHOUT a Developer ID signature must stay checkable (a check is
- * still meaningful there — only the install leg is blocked), so this keys on
- * the exact linux reason string, not on any installBlockedReason.
+ * refuses checkNow() on Linux NON-AppImage shapes (dev / unpacked dir / deb —
+ * no installer feed; the AppImage shape schedules and checks like mac/win,
+ * design 21 shape gate) and never schedules checks there, so an enabled
+ * button would be a permanently silent no-op. mac WITHOUT a Developer ID
+ * signature must stay checkable (a check is still meaningful there — only
+ * the install leg is blocked), so this keys on the exact linux reason
+ * string, not on any installBlockedReason.
  */
 export function updateCheckPlatformBlocked(installBlockedReason: string | null | undefined): boolean {
   return installBlockedReason === 'auto-update is not supported on this platform'

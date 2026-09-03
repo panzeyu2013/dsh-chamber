@@ -52,7 +52,7 @@
 
 import { spawn } from 'node:child_process'
 import type { ChildProcess } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { accessSync, constants, existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
 import { createConnection } from 'node:net'
@@ -437,9 +437,21 @@ export function resolveNodeExecutable(): { file: string; args: string[]; env: Re
   }
   const fromPath = searchPathForNode()
   if (fromPath !== null) return { file: fromPath, args: [], env: {} }
-  const known = KNOWN_NODE_LOCATIONS.find(candidate => existsSync(candidate))
+  const known = knownNodeLocations().find(candidate => isExecutableFile(candidate))
   if (known !== undefined) return { file: known, args: [], env: {} }
   return { file: 'node', args: [], env: {} }
+}
+
+/** Only a regular file with the execute bit counts as a node candidate — a
+ *  same-named directory or non-executable file must not shadow a later valid
+ *  entry (silent EACCES trap on the spawn). */
+function isExecutableFile(target: string): boolean {
+  try {
+    accessSync(target, constants.X_OK)
+    return statSync(target).isFile()
+  } catch {
+    return false
+  }
 }
 
 /** Locate a `node` executable by scanning PATH (first match wins). */
@@ -450,21 +462,80 @@ function searchPathForNode(): string | null {
     if (dir === '') continue
     for (const name of names) {
       const candidate = join(dir, name)
-      if (existsSync(candidate)) return candidate
+      if (isExecutableFile(candidate)) return candidate
     }
   }
   return null
 }
 
-/** Well-known node install roots used as a fallback when PATH has no node. */
-const KNOWN_NODE_LOCATIONS = [
-  '/opt/homebrew/bin/node',
-  '/usr/local/bin/node',
-  '/usr/bin/node',
-  join(homedir(), '.nvm', 'current', 'bin', 'node'),
-  join(homedir(), '.volta', 'bin', 'node'),
-  join(homedir(), '.fnm', 'aliases', 'default', 'bin', 'node'),
-]
+/** Compare nvm version dir names (`v24.20.0`) numerically, descending — the
+ *  most recently installed node is the best fallback (readdir order is
+ *  filesystem-defined and must never decide the version). */
+function compareNodeVersionsDesc(left: string, right: string): number {
+  const parse = (value: string): number[] =>
+    value.replace(/^v/, '').split('.').map(segment => Number.parseInt(segment, 10) || 0)
+  const a = parse(left)
+  const b = parse(right)
+  for (let index = 0; index < Math.max(a.length, b.length); index += 1) {
+    const diff = (b[index] ?? 0) - (a[index] ?? 0)
+    if (diff !== 0) return diff
+  }
+  return 0
+}
+
+/** nvm-installed node binaries (darwin + linux share the nvm layout): the
+ *  version named by ~/.nvm/alias/default first (nvm's own choice), then every
+ *  ~/.nvm/versions/node/<v>/bin/node, newest first. Every fs access is
+ *  guarded — this is a best-effort fallback and must never throw. */
+function nvmNodeCandidates(home: string): string[] {
+  const versionsRoot = join(home, '.nvm', 'versions', 'node')
+  if (!existsSync(versionsRoot)) return []
+  const candidates: string[] = []
+  const defaultAlias = join(home, '.nvm', 'alias', 'default')
+  try {
+    const alias = readFileSync(defaultAlias, 'utf8').trim()
+    if (alias !== '' && !alias.includes('/') && !alias.includes('..')) {
+      candidates.push(join(versionsRoot, alias, 'bin', 'node'))
+    }
+  } catch {
+    // alias missing/unreadable — fall through to the full scan
+  }
+  try {
+    const versions = readdirSync(versionsRoot)
+      .filter(version => /^v\d+\.\d+\.\d+$/.test(version))
+      .sort(compareNodeVersionsDesc)
+    for (const version of versions) candidates.push(join(versionsRoot, version, 'bin', 'node'))
+  } catch {
+    // Unreadable nvm dir (0711 / NFS ESTALE / …) must not break the fallback:
+    // later candidates and the bare-name last resort stay reachable.
+  }
+  return candidates
+}
+
+/** Well-known node install roots used as a fallback when PATH has no node,
+ *  platform-adapted (design 21). nvm layout is identical on darwin and linux
+ *  (`~/.nvm/current` only exists with NVM_SYMLINK_CURRENT=true — version
+ *  scan + alias/default are the reliable shape on both). */
+function knownNodeLocations(): string[] {
+  const home = homedir()
+  const nvmBins = nvmNodeCandidates(home)
+  const systemBins = ['/usr/local/bin/node', '/usr/bin/node']
+  const versionManagers = [
+    join(home, '.nvm', 'current', 'bin', 'node'),
+    join(home, '.volta', 'bin', 'node'),
+    join(home, '.fnm', 'aliases', 'default', 'bin', 'node'),
+  ]
+  if (process.platform === 'darwin') {
+    return ['/opt/homebrew/bin/node', ...systemBins, ...versionManagers, ...nvmBins]
+  }
+  if (process.platform === 'linux') {
+    // User-land nvm/pnpm/snap nodes come BEFORE the distro /usr/bin node —
+    // the distro copy is the last-resort system default (deliberate inversion
+    // of the darwin order, which keeps Homebrew first).
+    return [...nvmBins, join(home, '.local', 'bin', 'node'), '/snap/bin/node', ...systemBins, ...versionManagers]
+  }
+  return [...versionManagers, ...systemBins]
+}
 
 /** A ready spawned child and the wire facts about it. */
 interface SpawnAttemptResult {

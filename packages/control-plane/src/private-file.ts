@@ -129,7 +129,19 @@ function syncParent(pin: PinnedParent): void {
   // Windows cannot open a directory through Node's portable fs flags. Rename
   // durability there is delegated to CreateFile/MoveFile semantics; POSIX must
   // fsync the exact pinned directory before success is reported.
-  if (pin.fd !== null) fsyncSync(pin.fd)
+  if (pin.fd !== null) {
+    try {
+      fsyncSync(pin.fd)
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code
+      // Directory fsync is a filesystem property, not a Windows one: NFS /
+      // CIFS / FUSE mounts commonly reject an O_RDONLY directory fsync with
+      // EINVAL/ENOTSUP (e.g. Linux desktops with network/encrypted home
+      // directories). That is a durability fallback, never an identity
+      // failure — tolerate those two codes on every platform.
+      if (code !== 'EINVAL' && code !== 'ENOTSUP') throw error
+    }
+  }
   verifyParent(pin)
 }
 

@@ -61,7 +61,11 @@ import {
   decideDeepLinkProtocolRegistration,
   describeUnknownError,
   detectVscodeAvailability,
+  ensureLinuxProtocolDesktopFile,
+  linuxAutostartDesktopEntry,
+  linuxAutostartDirectory,
   parseOpenVscodeIntent,
+  resolveLinuxLaunchExecutable,
   runVscodeLaunch,
 } from './deep-link.ts';
 import type { VscodeLaunchContext, VscodeLaunchRequest } from './deep-link.ts';
@@ -713,6 +717,25 @@ function registerDeepLinkProtocol(): void {
   // the cold-start protocol URL; persisting it as a relaunch arg poisons all
   // subsequent launches. The executable+script form is only for defaultApp
   // development, and development registration is deliberately gated off.
+  // Linux additionally rewrites the per-user handler entry on EVERY launch
+  // (design 21): the entry must target the running AppImage ($APPIMAGE), and
+  // an upgraded AppImage changes path — a stale Exec would silently break
+  // `dsh-chamber://` after the next upgrade.
+  if (process.platform === 'linux') {
+    const launchExecutable = resolveLinuxLaunchExecutable({ execPath: process.execPath });
+    const ensured = ensureLinuxProtocolDesktopFile({
+      executable: launchExecutable,
+    });
+    if (!ensured.ok) {
+      console.error(`[dsh-chamber] Linux 协议 .desktop 写入失败：${ensured.error}`);
+    }
+    // Electron's Linux setAsDefaultProtocolClient resolves the handler
+    // .desktop through $CHROME_DESKTOP (g_desktop_app_info_new); the AppImage
+    // runtime usually does not export it, so point it at OUR per-user entry
+    // unless the launcher already chose one. Electron never creates/overwrites
+    // desktop files itself — the write above is the registration carrier.
+    process.env.CHROME_DESKTOP ??= 'dsh-chamber.desktop';
+  }
   const result = attemptDeepLinkProtocolRegistration(() => app.setAsDefaultProtocolClient('dsh-chamber'));
   if (!result.ok) {
     console.error(`[dsh-chamber] 深链协议注册失败：${result.error}`);
@@ -938,18 +961,29 @@ function applyLaunchAtLogin(enabled: boolean): { ok: true } | { ok: false; error
       app.setLoginItemSettings({ openAtLogin: enabled });
       return { ok: true };
     }
-    const autostartDir = path.join(os.homedir(), '.config', 'autostart');
+    // Linux XDG autostart (design 14 D6 / 21): honor an absolute
+    // XDG_CONFIG_HOME and target the RUNNING AppImage ($APPIMAGE) —
+    // process.execPath under an AppImage is the per-launch squashfs mount,
+    // dead after reboot.
+    const autostartDir = linuxAutostartDirectory();
     const desktopFile = path.join(autostartDir, 'dsh-chamber.desktop');
     if (enabled) {
+      const entry = linuxAutostartDesktopEntry({
+        executable: resolveLinuxLaunchExecutable({ execPath: process.execPath }),
+      });
+      if (entry === null) {
+        return { ok: false, error: 'refusing autostart entry for non-absolute executable' };
+      }
       mkdirSync(autostartDir, { recursive: true });
-      writeFileSync(
-        desktopFile,
-        '[Desktop Entry]\nType=Application\nName=dsh-chamber\n' +
-          `Exec="${process.execPath}"\nX-GNOME-Autostart-enabled=true\n`,
-        { mode: 0o600 },
-      );
+      writeFileSync(desktopFile, entry, { mode: 0o600 });
     } else {
       rmSync(desktopFile, { force: true });
+      // Env-change hygiene: if the autostart entry was written under the
+      // OTHER XDG_CONFIG_HOME resolution (or by the pre-design-21 fixed
+      // ~/.config path), remove it there too — disabling must never leave a
+      // live entry behind with a silent ok:true.
+      const legacyFile = path.join(os.homedir(), '.config', 'autostart', 'dsh-chamber.desktop');
+      if (legacyFile !== desktopFile) rmSync(legacyFile, { force: true });
     }
     return { ok: true };
   } catch (error) {

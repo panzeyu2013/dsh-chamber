@@ -40,6 +40,35 @@
   禁用门控。Gateway owner-private 目录在 Windows 只验证 real-dir/no-follow/identity
   并继承 OS ACL：Node 的 mode/chmod 无法诚实证明 POSIX 0700，不能把该让步写成
   已有等价权限保障。
+- **Linux 桌面首版支持（设计 21，2026-12 落地）**：AppImage（x64）发行 + 形态门
+  自动更新 + 桌面集成修复已入库（打包配置；updater 形态门——探针按
+  AppImageUpdater 真实替换语义校验启动形态/绝对常规文件/父目录可写，2026-12
+  review 加固；XDG（仅绝对路径）/APPIMAGE 自启与协议 .desktop 每启重写 +
+  CHROME_DESKTOP 指回；node 兜底平台分表 + X_OK；目录 fsync EINVAL/ENOTSUP
+  平台无关容错；resolvePnpmBinDir Linux 根；release.yml build-linux 腿与策略
+  测试 4 腿）。**无头验证（Ubuntu 22.04 测试机）**：Linux 原生 CI 对齐全量套件
+  全绿（node 24.20、非 root runner 形态）；`dist:desktop:linux` 产物与 feed
+  （url/size/sha512）、AppImage 内 .desktop 身份、afterPack 断言全部通过；
+  双形态无头冒烟（AppImage 提取运行 / 解包目录）验证协议 .desktop 指向、
+  形态门开关与本地 dsh 实例全链。细节入 CHANGELOG/发布笔记。
+  **剩余实机门禁**（真实桌面矩阵 GNOME X11+Wayland、KDE 抽验，清单见设计 21
+  §8）：XDG 定制自启、深链冷/热启动与 **CHROME_DESKTOP/xdg-mime 路由**及
+  AppImage 升级后重注册、托盘可见性、通知点击、safeStorage 有无 keyring、
+  SSH 密码全链、运行时安装/切换/apply-now/restartLocal 打包态全链、
+  **自动更新端到端（已下载→退出→$APPIMAGE 原位替换→重启；stable+beta；
+  二次更新）**、AppImage 沙箱与 Wayland 焦点、before-quit 确认框的无头挂住行为
+  确认；另有 release.yml dry_run 全链验证（需 GitHub 可达，见下方 submodule
+  剩余验收同纪律）与 deb/arm64 后续排期。
+- **Linux 桌面已知未动项（登记）**：托盘图标候选两死路径见既有「desktop 打包
+  闭包已知 P2」条目（同事实）；gateway 裸 CLI 默认 stateDir ~/.dsh-chamber 与
+  control-plane standalone 同目录（裸跑形态运维提示待加；安装器形态
+  DSH_GATEWAY_STATE 无此问题）；不做独立 verify-linux-appimage 脚本（取舍见
+  设计 21 §5，以 afterPack + workflow 内联 + 无头冒烟覆盖）；XDG_DATA_HOME 偏移
+  的 pnpm home 与 macOS ~/Library/pnpm 未纳入 resolvePnpmBinDir（低优）；
+  dsh-runtime private-fs.ts syncPinnedDirectory 保持严格目录 fsync（设计 21 §6
+  审计结论，未并入容错）；userData 实测 ~/.config/@dsh-chamber/desktop（可选
+  优化 app.setName，未做）；electron-builder desktopName/syncDesktopName 提示
+  （WM_CLASS 关联，低优）。
 - **chamber shell 内官方 bundle 的实例相对绝对路径（已知缺陷类，2026-08）**：
   官方客户端 bundle 若绕过 patched connection carrier、以实例 origin 相对
   路径直接请求（读 `location.origin` 或硬编码 `/…`），在 chamber 页面（控制面

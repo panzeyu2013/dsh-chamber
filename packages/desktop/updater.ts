@@ -23,10 +23,17 @@
  * - The state projection is non-secret only: versions, channel, a release
  *   page URL, a short error text. Never credentials, never paths.
  *
- * Linux is not covered: the release target is `dir` (no installer feed), so
- * the controller is inert there (installBlockedReason set, no checks).
+ * Linux coverage is SHAPE-gated (design 21): electron-updater's AppImage
+ * updater replaces the running .AppImage file, so updates are possible only
+ * when the packaged app was started from a writable AppImage
+ * (process.env.APPIMAGE — absolute, regular file, W_OK). Any other Linux
+ * shape (dev, unpacked dir, deb) keeps the historic inert state — same
+ * installBlockedReason string, so the settings「检查更新」gate (keyed on that
+ * exact reason) never offers a pointless button.
  */
 import { execFile } from 'node:child_process'
+import { accessSync, constants, statSync } from 'node:fs'
+import { basename, dirname, isAbsolute } from 'node:path'
 import { createRequire } from 'node:module'
 import type { UpdateInfo } from 'electron-updater'
 import { sanitizeErrorText } from './sanitize-error.ts'
@@ -80,7 +87,9 @@ export interface UpdateState {
   downloadPercent: number | null
   /** GitHub release page for the latest version (manual-install path). */
   releaseUrl: string | null
-  /** Why automatic installation cannot run (platform / mac signing); null = OK. */
+  /** Why automatic installation cannot run (platform / mac signing / Linux
+   *  non-AppImage shape — evaluated ONCE at controller creation; fixing the
+   *  environment at runtime requires an app restart to re-probe); null = OK. */
   installBlockedReason: string | null
   /** Non-secret error text (check/download failure); null = none. */
   error: string | null
@@ -89,6 +98,72 @@ export interface UpdateState {
 /** The subset of electron's `App` the controller reads (test-injectable). */
 export interface ElectronAppLike {
   isPackaged: boolean
+}
+
+/** Linux blocked reason (design 21): any non-AppImage Linux shape keeps this
+ *  exact string — the renderer「检查更新」button gate keys on it, so a dev /
+ *  unpacked-dir / deb install never offers a check that could not install. */
+export const LINUX_UPDATE_UNSUPPORTED_REASON = 'auto-update is not supported on this platform'
+
+/** Result of the Linux AppImage capability probe; null = updates impossible. */
+export type LinuxAppImageProbe = { path: string } | null
+
+export interface LinuxAppImageProbeDeps {
+  /** Default: process.env. */
+  env?: Record<string, string | undefined>
+  /** Default: fs.statSync — must return a Stats-like object with isFile(). */
+  stat?: (path: string) => { isFile(): boolean }
+  /** Default: fs.accessSync. */
+  access?: (path: string, mode: number) => void
+  /** `process.execPath`; default: the real value. */
+  execPath?: string
+}
+
+function realProbeStat(path: string): { isFile(): boolean } {
+  return statSync(path)
+}
+
+function realProbeAccess(path: string, mode: number): void {
+  accessSync(path, mode)
+}
+
+/** The AppImage runtime launches the inner binary from a per-launch squashfs
+ *  mount (`/tmp/.mount_*`) or extraction (`/tmp/appimage_extracted_*`). Only
+ *  those launch shapes may hold a REAL APPIMAGE; an unpacked-dir/dev process
+ *  with a stale inherited APPIMAGE env must never open the update gate (its
+ *  quit-install would unlink an unrelated foreign file). */
+function launchedFromAppImage(execPath: string): boolean {
+  const parent = basename(dirname(execPath))
+  return parent.startsWith('.mount') || parent.startsWith('appimage_extracted_')
+}
+
+/** Linux AppImage update capability (design 21 / 11 §3.1 shape gate):
+ *  electron-updater's AppImageUpdater replaces the RUNNING file on quit
+ *  (`unlink` + move — both parent-directory operations), so updates are
+ *  possible only when the app really was started from an AppImage
+ *  (launch-shape check + absolute APPIMAGE that is a regular file inside a
+ *  writable parent directory). Any probe failure is a loud-null (updates
+ *  stay off; never a silent partial enable). */
+export function probeLinuxAppImage(deps: LinuxAppImageProbeDeps = {}): LinuxAppImageProbe {
+  const env = deps.env ?? process.env
+  const stat = deps.stat ?? realProbeStat
+  const access = deps.access ?? realProbeAccess
+  const execPath = deps.execPath ?? process.execPath
+  const appImagePath = env.APPIMAGE
+  if (typeof appImagePath !== 'string' || appImagePath === '' || !isAbsolute(appImagePath)) return null
+  if (!launchedFromAppImage(execPath)) return null
+  try {
+    if (!stat(appImagePath).isFile()) return null
+  } catch {
+    return null
+  }
+  // The file's PARENT directory is what the quit-replacement writes into.
+  try {
+    access(dirname(appImagePath), constants.W_OK)
+  } catch {
+    return null
+  }
+  return { path: appImagePath }
 }
 
 /**
@@ -160,6 +235,9 @@ export interface UpdateControllerDeps {
   autoUpdater?: AutoUpdaterLike
   /** `process.platform`; default: the real platform. */
   platform?: NodeJS.Platform
+  /** Linux AppImage capability (design 21 shape gate). Default: probed from
+   *  the real process.env.APPIMAGE + fs; tests inject to stay pure. */
+  linuxAppImage?: LinuxAppImageProbe
   /** Resolve the exact GitHub release download base for beta checks. The
    * default uses the bounded public releases-list API; tests inject this so
    * no network is touched. A rejection fails closed before electron-updater
@@ -285,14 +363,18 @@ function releaseUrlFor(version: string): string | null {
 }
 
 /**
- * Platform-level install-block reason that is known WITHOUT probing
- * (linux / dev mac). macOS packaged is probed asynchronously (signature);
- * until the probe resolves it stays blocked. The security decision is
- * fail-closed: a renderer call racing startup cannot begin a download before
- * the Developer ID verdict exists.
+ * Platform/install-shape-level install-block reason that is known WITHOUT
+ * probing (linux non-AppImage / dev mac). macOS packaged is probed
+ * asynchronously (signature); until the probe resolves it stays blocked. The
+ * security decision is fail-closed: a renderer call racing startup cannot
+ * begin a download before the Developer ID verdict exists. Linux packaged
+ * AppImage builds pass the gate (shape probe, see probeLinuxAppImage); every
+ * other Linux shape keeps LINUX_UPDATE_UNSUPPORTED_REASON.
  */
-function platformBlockedReason(platform: NodeJS.Platform, app: ElectronAppLike): string | null {
-  if (platform === 'linux') return 'auto-update is not supported on this platform'
+function platformBlockedReason(platform: NodeJS.Platform, app: ElectronAppLike, linuxAppImage: LinuxAppImageProbe): string | null {
+  if (platform === 'linux') {
+    return app.isPackaged && linuxAppImage !== null ? null : LINUX_UPDATE_UNSUPPORTED_REASON
+  }
   if (platform !== 'darwin') return null
   if (!app.isPackaged) return 'development build'
   return 'verifying Developer ID signature'
@@ -336,6 +418,7 @@ export function createUpdateController(options: UpdateControllerOptions, deps?: 
   const app = deps?.app ?? getRealApp()
   const autoUpdater = deps?.autoUpdater ?? getRealAutoUpdater()
   const platform = deps?.platform ?? process.platform
+  const linuxAppImage = deps?.linuxAppImage !== undefined ? deps.linuxAppImage : probeLinuxAppImage()
   const channel = resolveChannel(version)
   const resolveBetaFeed = deps?.resolveBetaFeed ?? resolveRuntimeBetaFeed
 
@@ -346,7 +429,7 @@ export function createUpdateController(options: UpdateControllerOptions, deps?: 
     channel,
     downloadPercent: null,
     releaseUrl: null,
-    installBlockedReason: platformBlockedReason(platform, app),
+    installBlockedReason: platformBlockedReason(platform, app, linuxAppImage),
     error: null,
   }
   const listeners = new Set<(state: UpdateState) => void>()
@@ -478,8 +561,12 @@ export function createUpdateController(options: UpdateControllerOptions, deps?: 
       return () => listeners.delete(listener)
     },
     start() {
-      if (state.installBlockedReason !== null && platform === 'linux') {
-        logger.log('[updater] 跳过更新检查：当前平台不支持（linux dir target）');
+      // Linux shape gate (design 21): a packaged writable AppImage may
+      // schedule checks; every other Linux shape stays inert (no timers) —
+      // the renderer gate keys on the same installBlockedReason string, so
+      // nothing is offered that could not install.
+      if (platform === 'linux' && state.installBlockedReason !== null) {
+        logger.log('[updater] 跳过更新检查：当前 Linux 运行形态不支持自动更新（需从可写 AppImage 启动）');
         return
       }
       const initial = setTimeout(() => void runCheck(), CHECK_DELAY_MS)
@@ -489,11 +576,12 @@ export function createUpdateController(options: UpdateControllerOptions, deps?: 
       logger.log(`[updater] 更新检查已启动（channel=${channel}，${CHECK_DELAY_MS / 1000}s 后首次检查，之后每 ${CHECK_INTERVAL_MS / 3_600_000}h）`);
     },
     async checkNow() {
-      // Linux is inert (dir target — no installer feed): refuse loudly
-      // instead of letting the feed lookup fail obscurely.
-      if (platform === 'linux') {
-        logger.log('[updater] 手动检查更新被跳过：当前平台不支持（linux dir target）')
-        return { ok: false, error: 'auto-update is not supported on this platform' }
+      // Linux shape gate (design 21): refuse loudly for non-AppImage shapes
+      // instead of letting the feed lookup fail obscurely; an AppImage build
+      // (installBlockedReason === null) falls through to the shared check path.
+      if (platform === 'linux' && state.installBlockedReason !== null) {
+        logger.log('[updater] 手动检查更新被跳过：当前 Linux 运行形态不支持自动更新（需从可写 AppImage 启动）')
+        return { ok: false, error: LINUX_UPDATE_UNSUPPORTED_REASON }
       }
       // Same guarded path as the periodic check: a check/download already in
       // flight or a completed download (phase gates in runCheck) are no-ops —

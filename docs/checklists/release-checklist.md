@@ -89,7 +89,10 @@ CI:    §7b dry_run 先行（新路径必须验证过一次）→ §7c 正式 ta
       main.ts 传递 import 闭包 ⊆ `build.files`；构建链产物齐全
       （dist/control-plane、dist/preload.cjs、dist/host-*-package、vendor/dsh）。
 - [ ] **本地不做打包/签名/公证**：安装包/更新源由 release.yml 的
-      build-macos / build-windows 在 CI 生成，发布者本机无需 hdiutil/密钥。
+      build-macos / build-windows / build-linux 在 CI 生成，发布者本机无需 hdiutil/密钥。
+- [ ] **Linux 腿（design 21）**：build-linux 在 ubuntu-22.04 构建 AppImage（x64）；
+      非 dry_run 断言 `latest-linux.yml`（或 beta 的 `beta-linux.yml`）存在且互斥、
+      无 .blockmap；打包 dsh runtime 平台前缀 `linux-`。
 - [ ] `pnpm run smoke` 通过（dsh 已封装时真跑；未安装时 SKIP 属正常）。
 
 ## 5. 工作区健康
@@ -124,7 +127,7 @@ CI:    §7b dry_run 先行（新路径必须验证过一次）→ §7c 正式 ta
       任何一步失败：修复 → 重新本地验证 → 再 dry-run，直到全绿。
 - [ ] 正式发布：`git push origin <分支> && git push origin v<版本>` → 触发 Release workflow。
 - [ ] 监控 `actions/runs`：create-release（版本断言/changelog/建 draft）→
-      validation → build-macos → build-windows → build-gateway →
+      validation → build-macos → build-windows → build-linux → build-gateway →
       finalize-release（draft 转公开）。**确认 validation job 的 "Set up job" 通过**
       （action SHA 解析失败会在这一步暴露）。
 

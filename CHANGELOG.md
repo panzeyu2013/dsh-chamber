@@ -12,8 +12,27 @@
 
 ## [Unreleased]
 
+### 新增
+
+- **Linux 桌面首版支持（设计 21）** —— AppImage（x64）发行形态（electron-builder
+  linux target/desktop.entry/executableName）、Linux 自动更新解锁（形态门：
+  打包且从可写 $APPIMAGE 启动才启用；dev/解包/deb 形态保持历史 inert 文案与
+  settings 按钮门，零 UX 回退）、每次打包态启动重写的用户级协议 .desktop
+  （MimeType=x-scheme-handler，Exec 指向 $APPIMAGE）与 XDG 规范自启（尊重
+  XDG_CONFIG_HOME、补 Icon/StartupWMClass）、node 兜底平台分表 + X_OK 校验、
+  目录 fsync EINVAL/ENOTSUP 平台无关容错（NFS/FUSE 家庭目录）、
+  resolvePnpmBinDir 增补 Linux 安装根、release.yml `build-linux` 腿
+  （ubuntu-22.04 基线）与发布策略测试 4 腿。契约与剩余实机门禁见
+  `docs/design/21-linux-desktop.md`。
+
 ### 变更
 
+- **desktop 打包配置** —— `build.linux` 目标从 `dir` 改为 `AppImage`；新增
+  `dist:desktop:linux` / `dist:linux` 脚本。
+- **updater.ts Linux 门控形态化** —— `platform==='linux'` 无条件硬门改为
+  「可写 AppImage 运行形态」门（`probeLinuxAppImage`）；非 AppImage 形态的
+  blocked 文案 `'auto-update is not supported on this platform'` 与
+  settings-bridge 按钮门保持不变。
 - **dsh 基线升级至 0.1.2-rc.1** —— 源码线（submodule pin）与捆绑运行时（`@deepseek-ai/dsh`）双线同步至 dsh-v0.1.2-rc.1（a66e4702）；上游 rc.1 相对 alpha.5 **零代码改动**——全仓 252 个 `package.json` 仅版本行 bump（alpha.5 → rc.1，diff 复核），客户端/wire/存储/DOM 面无任何增量——in-repo fork 副本（connection/web/api-gateway）零源码重放、仅版本标记同步，DOM 锚点与 wire 契约沿用 alpha.5 审计基线。
 
 ## [0.2.0] - 2026-09-03

@@ -21,6 +21,10 @@
 > 实例。本设计为其引入「后台**静默**检查 → settings 低调提示 → **用户明确确认后**
 > 后台下载 → 退出时安装」，并以**通道模型（beta → stable）**实现滚动/灰度发布。
 >
+> **Linux 增补（2026-12，见设计 21）**：Linux 自动更新按**运行形态**门控——打包且
+> 从可写 `$APPIMAGE` 启动（AppImage 发行形态）才启用；dev/解包/deb 形态保持历史
+> inert 文案。feed 为 `latest-linux.yml` / `beta-linux.yml`。
+>
 > 决策记录（2026-08，用户拍板）：
 > 1. feed/检查源 = **GitHub Releases**（零新增服务器）；
 > 2. 灰度策略 = **通道模型 beta → stable**（非百分比灰度）；
