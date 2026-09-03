@@ -1,16 +1,18 @@
 /**
  * The `http` transport provider (design 17 §2.2/§9.2): a DIRECT ENDPOINT
  * provider — no local tunnel child process. v2 semantics: it serves the
- * `http` TRANSPORT for the shipped target kinds (`dsh` | `gateway` —
- * design 17 §2.2: one provider per transport, serving both target kinds; the
- * kind decides target semantics, auth-header injection etc., §2.1). The
+ * `http` TRANSPORT for the GATEWAY target (`dsh`×`http` is DISABLED 2026-09 —
+ * direct-attaching a dsh web profile over http is hard-blocked on the 0.1.2
+ * line: its host answers 401 without the spawn-time browser-auth launch
+ * token, which is unrecoverable remotely; ssh is the only dsh transport.
+ * Re-enable point: upstream token retrieval + the connection-form schema +
+ * this provider's validateSpec refusal). The
  * "endpoint" is the target's http(s) URL (scheme from `insecureHttp`,
- * default https), reached as-is. A gateway target may be authenticated with
+ * default https), reached as-is. The gateway target may be authenticated with
  * a shared bearer token and/or a login password, held in main-process memory
  * (mirrored to `<userData>/gateway-secrets.json`, bound schemaVersion 3, 0600, for
  * restart auto-connect — safeStorage-encrypted blobs with a documented 0600
- * plaintext fallback, design 17 §12); a dsh target NEVER injects auth
- * headers (design 17 §2.1/§9.3). An over-ssh spec (transport 'ssh') is
+ * plaintext fallback, design 17 §12). An over-ssh spec (transport 'ssh') is
  * REFUSED here — the ssh tunnel provider machinery is the separate ssh
  * provider (design 17 §9.2) and must never be mis-served as a direct
  * endpoint.
@@ -40,7 +42,7 @@ import { request as httpsRequest } from 'node:https'
 import { request as httpRequest } from 'node:http'
 import type { ClientRequest } from 'node:http'
 import type { TLSSocket } from 'node:tls'
-import { createHash, randomUUID, X509Certificate } from 'node:crypto'
+import { createHash, X509Certificate } from 'node:crypto'
 import {
   closeSync,
   existsSync,
@@ -802,89 +804,13 @@ export function gatewaySecretStorageMode(): 'safeStorage' | 'plaintext' {
 
 // ---------------------------------------------------------------------------
 
-/** Direct http(s) dsh identity probe. Unlike a gateway target, a dsh target
- * owns no /chamber surface and never receives authentication headers; its
- * authoritative identity remains the session/list RPC handshake (slash-path
- * wire, upstream 0.1.2-alpha.1 — host.describe is deleted there). */
-function verifyDirectDshEndpoint(
-  spec: TransportInstanceSpec,
-  timeoutMs = GATEWAY_VERIFY_TIMEOUT_MS,
-  maxBodyBytes = GATEWAY_VERIFY_MAX_BODY_BYTES,
-): Promise<TransportVerifyResult> {
-  return new Promise(resolve => {
-    const request = spec.insecureHttp ? httpRequest : httpsRequest
-    const url = `${spec.insecureHttp ? 'http' : 'https'}://${spec.host}:${spec.remotePort}/api/session/list`
-    const rpcId = randomUUID()
-    let settled = false
-    let timer: ReturnType<typeof setTimeout> | null = null
-    const done = (ok: boolean, detail?: string, terminal?: boolean): void => {
-      if (settled) return
-      settled = true
-      if (timer !== null) { clearTimeout(timer); timer = null }
-      req.destroy()
-      resolve(ok ? { ok: true } : { ok: false, detail, terminal })
-    }
-    const req = request(url, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-    }, res => {
-      res.on('error', () => {})
-      if (res.statusCode !== 200) {
-        const code = res.statusCode ?? 0
-        res.resume()
-        // 0.1.2 browser-auth gate (review-round4 P2): a 401 answer is the
-        // web-profile host's signed-cookie gate — the launch token is
-        // unrecoverable remotely, fail loud with the honest reason (the
-        // signature probe is gated the same way, so it cannot discriminate;
-        // the message hedges the non-dsh 401 case, round5).
-        if (code === 401) {
-          done(false, 'the destination answered HTTP 401 — a 0.1.2 browser-auth-gated dsh (its launch token is unrecoverable remotely; attach is blocked until upstream exposes a token retrieval mechanism) or a non-dsh server', true)
-          return
-        }
-        done(false, `the destination answered HTTP ${res.statusCode ?? '?'} to the dsh identity probe`, gatewayHttpFailureIsTerminal(code))
-        return
-      }
-      const chunks: Buffer[] = []
-      let size = 0
-      res.on('data', chunk => {
-        if (settled) return
-        size += chunk.length
-        if (size > maxBodyBytes) {
-          chunks.length = 0
-          done(false, 'the destination answered an oversized dsh identity probe response', true)
-          return
-        }
-        chunks.push(chunk)
-      })
-      res.on('end', () => {
-        if (settled) return
-        let envelope: { type?: unknown; rpcId?: unknown; result?: { ok?: unknown } } | null = null
-        try { envelope = JSON.parse(Buffer.concat(chunks).toString('utf8')) } catch { envelope = null }
-        if (envelope?.type !== 'server-response'
-          || envelope.rpcId !== rpcId
-          || typeof envelope.result !== 'object' || envelope.result === null
-          || envelope.result.ok !== true) {
-          done(false, 'the destination answered an unexpected dsh identity response — it does not appear to be a compatible dsh instance', true)
-          return
-        }
-        done(true)
-      })
-    })
-    timer = setTimeout(() => done(false, `the destination did not answer the dsh identity probe within ${timeoutMs}ms`), timeoutMs)
-    timer.unref?.()
-    req.on('error', () => done(false, 'the destination did not answer the dsh identity probe'))
-    // session/list is a Typert Remote on the 0.1.2 wire: {args} payload form
-    // ({_request:{}} = no typed args), same as the control-plane readiness.
-    req.end(JSON.stringify({ type: 'client-request', rpcId, method: 'session/list', payload: { args: { _request: {} } } }))
-  })
-}
-
 // ---------------------------------------------------------------------------
 // Gateway endpoint identity verification (design 17 §7 / design 18 §9.3): a
 // gateway transport is serviceable when its authenticated, gateway-owned
 // runtime controller answers — independently of the managed dsh lifecycle.
 // This distinction keeps /chamber/runtime reachable for recovery while dsh is
-// blocked/down. A plain dsh target still uses the session/list handshake in ssh-provider.
+// blocked/down. (dsh×http was disabled 2026-09 — a plain dsh target's only
+// transport is ssh, whose provider owns the session/list handshake.)
 // ---------------------------------------------------------------------------
 
 export const GATEWAY_RUNTIME_IDENTITY = 'dsh-chamber-gateway-runtime'
@@ -1216,15 +1142,25 @@ export async function verifyGatewayPasswordSession(
 }
 
 /** The http transport provider: validate → direct-endpoint (no child) →
- * http(s) probe. Serves both shipped target kinds (design 17 §2.2); `kind` stays the
- * legacy registry key this provider is registered under (main.ts
- * `providers: { gateway: … }`; transport-keyed `{ http: … }` also works). */
+ * http(s) probe. Serves the GATEWAY target only — the dsh×http combination
+ * is disabled (2026-09 user decision): direct-attaching a dsh web profile
+ * over http is hard-blocked on the 0.1.2 line (its host answers 401 without
+ * the spawn-time browser-auth launch token, which is unrecoverable remotely;
+ * see the connection-form schema comment for the re-enable point). ssh is
+ * the only dsh transport. `kind` stays the legacy registry key this provider
+ * is registered under (main.ts `providers: { gateway: … }`; transport-keyed
+ * `{ http: … }` also works). */
 export const gatewayProvider: TransportProvider = {
   kind: 'gateway',
 
   validateSpec(input: unknown): TransportInstanceSpec | null {
     if (!isValidGatewayInstance(input)) return null
     const record = input as unknown as Record<string, unknown>
+    // dsh×http disabled (2026-09): refuse at the registry mutation point so
+    // the combination can never be created behind the UI (load drops legacy
+    // rows the same way; re-enable together with the form schema when
+    // upstream exposes token retrieval).
+    if (record.kind !== 'gateway') return null
     return {
       id: record.id as string,
       label: record.label as string,
@@ -1266,18 +1202,16 @@ export const gatewayProvider: TransportProvider = {
       : `https://${spec.host}:${spec.remotePort}`
   },
 
-  /** Identity verification: a gateway target must answer the authenticated
+  /** Identity verification: the gateway target must answer the authenticated
    * gateway-owned runtime status identity, which remains available while its
-   * managed dsh is blocked/down; a plain dsh target must answer the
-   * session/list handshake.
+   * managed dsh is blocked/down (a dsh target never reaches this provider —
+   * dsh×http disabled 2026-09; its ssh transport owns the session/list
+   * handshake).
    * A missing
    * token is NOT a pre-flight refusal (design 17 §2.3): the probe is sent
    * WITHOUT an Authorization header and the gateway's own answer is
    * classified (a `--no-auth` deployment is ready; a 401 = terminal "configure
-   * the token"). A configured token rides the probe as Bearer. Kind decides
-   * whether auth applies (dsh target: never; gateway target: optional,
-   * design 17 §2.1) — the token store is keyed by instance id, so a dsh
-   * target with a stale token entry still probes without auth. A gateway
+   * the token"). A configured token rides the probe as Bearer. A gateway
    * target with a configured password rides the password login session's
    * Cookie. When both exist the probe carries BOTH independent headers; the
    * gateway accepts either principal, so a rotated token can fall back to a
@@ -1287,9 +1221,8 @@ export const gatewayProvider: TransportProvider = {
    * the verify URL needs the bracketed literal. */
   verifyUp(spec: TransportInstanceSpec, endpoint: TransportProbeEndpoint): Promise<TransportVerifyResult> {
     void endpoint
-    if (spec.kind !== 'gateway') return verifyDirectDshEndpoint(spec)
-    const token = spec.kind === 'gateway' ? getGatewayToken(spec.id) : null
-    const password = spec.kind === 'gateway' ? getGatewayPassword(spec.id) : null
+    const token = getGatewayToken(spec.id)
+    const password = getGatewayPassword(spec.id)
     // A configured password + wired session hooks: ensure a login session and
     // probe with its Cookie plus the independent Bearer when present (the
     // shared verifyGatewayPasswordSession

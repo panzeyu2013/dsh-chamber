@@ -39,6 +39,9 @@ import {
   getServers, subscribeServers, type BridgeServerRow,
 } from './bridge-servers.ts'
 import {
+  isChannelClassDiagnostic, recheckPluginGraphDiagnostic,
+} from '@dsh-chamber/dsh-client-ui-sidebar/shared'
+import {
   mountBridgeSession, sectionRows, type BridgeSession,
 } from './bridge-context.ts'
 import {
@@ -406,6 +409,51 @@ function SettingsPanel({
     return map
   }, [servers])
 
+  // CHANNEL-class diagnostic self-heal pass (design 09 §3.5): the recorded
+  // diagnostic describes the source's LAST shell boot; a 404 `not-injected` /
+  // `graph-unreachable` can heal without a re-boot (e.g. the gateway's
+  // managed dsh restarted with the desktop-synced chamber host packages right
+  // after the boot that recorded the 404). While the connections page is
+  // open, re-check every source whose diagnostic is a channel fact — once per
+  // activation and once per channel-diagnostic change (the effect keys on a
+  // channel-class signature, never on unrelated roster republishes — another
+  // server's session/phase flips cannot re-probe a still-broken source).
+  // Loop-freedom comes from the recheck contract itself: it writes back only
+  // on a verdict STATE change, so a still-broken channel re-verifies silently
+  // and the pass cannot re-trigger through its own writes; the in-flight set
+  // only collapses republish races.
+  const channelDiagnosticsSignature = useMemo(
+    () => servers
+      .filter(server => server.pluginDiagnostic !== undefined && isChannelClassDiagnostic(server.pluginDiagnostic.state))
+      .map(server => `${server.id}:${server.pluginDiagnostic?.state}:${server.pluginDiagnostic?.message ?? ''}`)
+      .join('|'),
+    [servers],
+  )
+  const recheckInFlight = useRef<ReadonlySet<string>>(new Set())
+  const activeConnections = active === CONNECTIONS_SECTION_ID
+  useEffect(() => {
+    if (!activeConnections) return
+    for (const server of servers) {
+      const diagnostic = server.pluginDiagnostic
+      if (diagnostic === undefined || !isChannelClassDiagnostic(diagnostic.state)) continue
+      if (recheckInFlight.current.has(server.id)) continue
+      const next = new Set(recheckInFlight.current)
+      next.add(server.id)
+      recheckInFlight.current = next
+      void recheckPluginGraphDiagnostic(server.id).finally(() => {
+        const after = new Set(recheckInFlight.current)
+        after.delete(server.id)
+        recheckInFlight.current = after
+      })
+    }
+  }, [activeConnections, channelDiagnosticsSignature])
+
+  // Explicit dialog-triggered rechecks (plugin dialogs ask for their own
+  // source on open/refresh) — same host-owned write-back.
+  const recheckDiagnostic = useCallback((sourceId: string): void => {
+    void recheckPluginGraphDiagnostic(sourceId)
+  }, [])
+
   return (
     <div className={css.overlay} role="presentation">
       <div className={css.mask} aria-hidden="true" onClick={onClose} />
@@ -496,7 +544,7 @@ function SettingsPanel({
             {active === CONNECTIONS_SECTION_ID ? (
               /* Chamber-global connection management: independent of the
                  selected server (never refetched on server switch). */
-              <ConnectionsSection t={connectionsT} pluginDiagnostics={pluginDiagnostics} />
+              <ConnectionsSection t={connectionsT} pluginDiagnostics={pluginDiagnostics} onRecheckDiagnostic={recheckDiagnostic} />
             ) : active === GENERAL_SECTION_ID ? (
               /* Chamber-global runtime settings (design 14 D7 / design 15):
                  close-window behavior / launch at login / keep awake / quit

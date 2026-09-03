@@ -53,12 +53,17 @@ function errorMessage(error: unknown): string {
  * @param props.label - connection label for the dialog title.
  * @param props.diagnostic - this instance's client-plugin runtime diagnostic
  *   (design 09 §3.5), shown as the same detail banner as the sync dialog.
+ * @param props.onRecheckDiagnostic - host-provided CHANNEL-class self-heal
+ *   recheck (design 09 §3.5): fired when the banner is visible on open and
+ *   on every explicit 刷新, so a diagnostic that healed since the source's
+ *   last shell boot clears without an app restart.
  */
-export function PluginInventoryView({ t, sourceId, label, diagnostic, onClose }: {
+export function PluginInventoryView({ t, sourceId, label, diagnostic, onRecheckDiagnostic, onClose }: {
   t: (key: SettingsConnectionsKey) => string
   sourceId: string
   label: string
   diagnostic?: PluginDiagnostic
+  onRecheckDiagnostic?: () => void
   onClose: () => void
 }) {
   const [phase, setPhase] = useState<ViewPhase>('loading')
@@ -126,12 +131,23 @@ export function PluginInventoryView({ t, sourceId, label, diagnostic, onClose }:
     return () => { cancelled = true }
   }, [reloadNonce])
 
+  // Diagnostic self-heal (design 09 §3.5): the banner can describe the
+  // source's LAST shell boot while the channel healed since (e.g. the
+  // gateway's managed dsh restarted with the synced chamber host packages).
+  // Whenever the banner shows a problem, ask the host to re-check — the host
+  // runner re-verifies CHANNEL-class states only and skips boot-fact classes
+  // without fetching, so this cannot loop (an explicit 刷新 re-checks too).
+  useEffect(() => {
+    if (diagnostic === undefined || diagnostic.state === 'ok') return
+    onRecheckDiagnostic?.()
+  }, [diagnostic?.state])
+
   const footer = ((): ReactNode => {
     if (phase === 'loading') return undefined
     if (phase === 'error') {
       return <Button variant="ghost" icon={<IconRefreshOutline16 />} onClick={() => { setReloadNonce(n => n + 1) }}>{t('pluginsRetry')}</Button>
     }
-    return <Button variant="ghost" icon={<IconRefreshOutline16 />} onClick={() => { setReloadNonce(n => n + 1) }}>{t('pluginsRefresh')}</Button>
+    return <Button variant="ghost" icon={<IconRefreshOutline16 />} onClick={() => { setReloadNonce(n => n + 1); onRecheckDiagnostic?.() }}>{t('pluginsRefresh')}</Button>
   })()
 
   const title = `${t('pluginsTitle')} · ${label}`

@@ -105,6 +105,12 @@ kind 决定**目标语义**：dsh 目标永不注入认证头、永不挂载 `/c
 
 **依赖 gateway 的功能（dsh 运行时管理、凭据面板、插件同步）只能经 gateway 连接触达；
 直连 dsh（无论 ssh 隧道还是 http 直连）物理上不存在 `/chamber/*` 面，无法挂载。**
+**2026-09 修订（用户拍板）：dsh×http 组合禁用**——0.1.2 直连 dsh 的宿主被
+browser-auth 门硬阻断（launch token 为远端进程内存随机数、不可远程恢复），http
+直连 dsh 无法验证/附加；连接表单不再提供该组合（http 传输 schema 只服务 gateway），
+主进程 http provider `validateSpec` 拒绝 dsh kind（注册表保存即拒绝、旧条目加载时
+按无效条目丢弃）。ssh 成为 dsh 唯一传输。上游提供 token 检索机制后，恢复点 =
+connection-form http schema `targetKinds` + http provider `validateSpec` 两处。
 settings-bridge 按来源 kind 装配子 ctx，同一设置页对不同来源显示不同分区：
 
 | 能力 | dsh（ssh 隧道） | dsh（http 直连） | gateway |

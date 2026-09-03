@@ -196,7 +196,7 @@ export interface TransportManagerDeps {
   provider: TransportProvider
   /** Optional per-spec overrides (design 17 §2.2/§7): the registry is
    * resolved BY TRANSPORT first (`{ ssh, http }` — one provider per
-   * mechanism, serving both target kinds), then by the legacy kind key
+   * mechanism; validateSpec enforces the shipped kind×transport matrix — dsh×http disabled 2026-09), then by the legacy kind key
    * (`{ gateway }`, v1 style), then the default `provider`. A key present
    * here wins for every spec whose transport/kind matches it. */
   providers?: Partial<Record<TransportKind, TransportProvider>>

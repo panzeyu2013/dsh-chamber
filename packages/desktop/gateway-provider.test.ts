@@ -712,14 +712,11 @@ test('gateway validateSpec normalizes http for shipped kinds and refuses future 
     assert.equal(viaKind.transport, 'http')
     assert.equal(viaKind.insecureHttp, false)
   }
-  // kind 'dsh' over http is equally this provider's spec (one provider per
-  // transport, serving both target kinds); kind is returned as-is.
-  const dshKind = gatewayProvider.validateSpec({ id: 'g1d', label: 'g', kind: 'dsh', transport: 'http', host: 'dsh.example.com', remotePort: 3080 })
-  assert.ok(dshKind !== null)
-  if (dshKind !== null) {
-    assert.equal(dshKind.kind, 'dsh')
-    assert.equal(dshKind.transport, 'http')
-  }
+  // kind 'dsh' over http is REFUSED — the dsh×http combination is disabled
+  // (2026-09): direct-attaching a dsh web profile over http is hard-blocked
+  // on the 0.1.2 line (browser-auth launch token unrecoverable remotely);
+  // ssh is the only dsh transport.
+  assert.equal(gatewayProvider.validateSpec({ id: 'g1d', label: 'g', kind: 'dsh', transport: 'http', host: 'dsh.example.com', remotePort: 3080 }), null, 'dsh×http refused')
   // insecureHttp normalized to a strict boolean.
   const insecure = gatewayProvider.validateSpec({ id: 'g2', label: 'g', kind: 'gateway', transport: 'http', host: 'gw.example.com', remotePort: 8080, insecureHttp: true })
   assert.ok(insecure !== null)
@@ -731,7 +728,8 @@ test('gateway validateSpec normalizes http for shipped kinds and refuses future 
   assert.equal(gatewayProvider.validateSpec({ id: 'g3', label: 'g', kind: 'gateway', transport: 'ssh', host: 'gw.example.com', remotePort: 443 }), null)
   assert.equal(gatewayProvider.validateSpec({ id: 'g3b', label: 'g', kind: 'dsh', transport: 'ssh', host: 'gw.example.com', remotePort: 3080 }), null)
   // transport omitted + kind 'dsh' → inferred ssh → refused (this provider
-  // serves http only); a missing kind defaults to {dsh, ssh} → refused.
+  // serves http + gateway only); a missing kind defaults to {dsh, ssh} →
+  // refused; an explicit dsh×http is refused by the 2026-09 disable.
   assert.equal(gatewayProvider.validateSpec({ id: 'g4', label: 'g', kind: 'dsh', host: 'dsh.example.com', remotePort: 3080 }), null)
   assert.equal(gatewayProvider.validateSpec({ id: 'g5', label: 'g', host: 'gw.example.com', remotePort: 443 }), null)
   // A future target needs its own provider: accepting it here would let the
@@ -867,7 +865,15 @@ test('verifyUp: 403/421 stay terminal and 5xx stays transient (design 17 §7.3 s
   }
 })
 
-test('verifyUp: a dsh-kind target never carries auth, even with a stored token (design 17 §2.1/§9.3)', async () => {
+test('verifyUp is unreachable for dsh-kind targets — validateSpec refuses the dsh×http combination (2026-09)', async () => {
+  // The dsh×http combination is disabled at the registry mutation point
+  // (direct dsh attach is hard-blocked on the 0.1.2 line: browser-auth
+  // launch token unrecoverable remotely), so no dsh-kind spec can exist for
+  // this provider — the old probe path (session/list handshake with its 401
+  // browser-auth classification) was removed with the combination.
+  assert.equal(gatewayProvider.validateSpec({ id: 'dsh-refused', label: 'g', kind: 'dsh', transport: 'http', host: 'dsh.example.com', remotePort: 3080 }), null)
+  // The gateway probe itself is unaffected: no auth header is sent without a
+  // configured credential, and the gateway's own 401 is the answer.
   let sawAuthorization: string | undefined
   const server = await startHttpProbeServer((req, res) => {
     sawAuthorization = req.headers.authorization
@@ -875,18 +881,14 @@ test('verifyUp: a dsh-kind target never carries auth, even with a stored token (
     res.end()
   })
   try {
-    setGatewayToken('dsh-auth-probe', TOKEN)
-    const spec = gatewayProvider.validateSpec({ id: 'dsh-auth-probe', label: 'g', kind: 'dsh', transport: 'http', host: '127.0.0.1', remotePort: server.port, insecureHttp: true })
+    const spec = gatewayProvider.validateSpec({ id: 'gw-auth-probe', label: 'g', kind: 'gateway', transport: 'http', host: '127.0.0.1', remotePort: server.port, insecureHttp: true })
     assert.ok(spec !== null)
     const result = await gatewayProvider.verifyUp!(spec!, { host: '127.0.0.1', port: server.port })
-    assert.equal(sawAuthorization, undefined, 'a dsh target never injects the Authorization header')
-    assert.equal(result.ok, false, 'the 0.1.2 browser-auth 401 gate must reject the probe')
+    assert.equal(sawAuthorization, undefined, 'no credential configured → the probe carries no Authorization header')
+    assert.equal(result.ok, false, 'an auth-requiring gateway answers 401')
     assert.equal(result.terminal, true)
-    // The 401 answer is the 0.1.2 browser-auth gate — the hedged message
-    // names it (round5: the signature probe is gated too).
     assert.match(result.detail ?? '', /401/)
   } finally {
-    setGatewayToken('dsh-auth-probe', null)
     await server.close()
   }
 })
@@ -1298,7 +1300,7 @@ test('validateSpec: an SPKI pin must be a 64-hex sha256, https-only AND gateway-
   // carrying a pin would HALF-execute (the identity probe pins, the reverse
   // proxy refuses pins for non-gateway transports), so the spec is refused
   // outright instead of claiming protection that never happens.
-  assert.equal(gatewayProvider.validateSpec({ id: 'pin-dsh', label: 'g', kind: 'dsh', transport: 'http', host: 'gw.example.com', remotePort: 443, spkiPin: PIN_A }), null, 'a dsh-kind https target never carries a pin (probe-pinned-but-proxy-unpinned would be a false claim)')
+  assert.equal(gatewayProvider.validateSpec({ id: 'pin-dsh', label: 'g', kind: 'dsh', transport: 'http', host: 'gw.example.com', remotePort: 443, spkiPin: PIN_A }), null, 'a dsh-kind target is refused outright (dsh×http disabled 2026-09)')
   assert.equal(gatewayProvider.validateSpec({ id: 'pin-future', label: 'g', kind: 'future-target', transport: 'http', host: 'gw.example.com', remotePort: 443, spkiPin: PIN_A }), null, 'any non-gateway kind refuses a pin')
 })
 

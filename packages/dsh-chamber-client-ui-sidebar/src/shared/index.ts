@@ -3,6 +3,7 @@
 export * from './instance-api.ts'
 export * from './control-plane-client.ts'
 export * from './aggregate-store.ts'
+export * from './plugin-graph-recheck.ts'
 export * from './derive.ts'
 export * from './view-prefs.ts'
 export * from './search-state.ts'

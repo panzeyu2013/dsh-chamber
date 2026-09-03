@@ -93,6 +93,11 @@ export type ConnectionsSectionProps =
   & {
     /** Per-instance diagnostics keyed by source id ('local' | '<kind>-<id>'); optional outside the chamber shell. */
     pluginDiagnostics?: Readonly<Record<string, PluginDiagnostic | undefined>>
+    /** Self-heal recheck for CHANNEL-class diagnostics (design 09 §3.5):
+     *  the host owns the shared plugin-diagnostic store, so the write-back
+     *  comes from the host (settings-bridge) — this section only asks.
+     *  Absent outside the chamber shell. */
+    onRecheckDiagnostic?: (sourceId: string) => void
   }
 
 /** Host-log page size (04 §3.3: default 200, cap 1000). */
@@ -317,7 +322,7 @@ function GatewaySpkiField({ draft, onChange, fieldError, fieldId, t }: {
  * @returns the section.
  */
 export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
-  const { t, pluginDiagnostics } = props
+  const { t, pluginDiagnostics, onRecheckDiagnostic } = props
   // Per-instance input ids (useId): the dialog renders inside N-ctx panels in
   // the SAME document — static ids would alias across panels. One id per
   // credential/pin field; the transport branches render one set at a time.
@@ -525,6 +530,39 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
         setStatuses(prev => ({ ...prev, [id]: result }))
         clearOpError(id)
       }
+    } catch (err) {
+      setOpError(prev => ({ ...prev, [id]: errorMessage(err) }))
+    } finally {
+      setBusy(prev => ({ ...prev, [id]: false }))
+    }
+  }, [clearOpError])
+
+  /**
+   * Gateway 目标的受控重启（design 18 §9.3）：ssh dsh 行走 systemd
+   * restart_service（主进程 exec），gateway 行没有该表面——它的受管 dsh 经
+   * gateway 自己的运行时控制器重启：POST /api/i/gateway-<id>/chamber/
+   * runtime/restart（实例代理注入会话凭据；202 = 已接受，事务化重启后台
+   * 执行；同步拒绝 409 等携带服务器原因）。按钮在传输未连接时禁用——代理
+   * 无注册传输只会答 503。
+   */
+  const runGatewayRestart = useCallback(async (spec: SshInstanceSpec): Promise<void> => {
+    const id = spec.id
+    setBusy(prev => ({ ...prev, [id]: true }))
+    try {
+      const response = await fetch(`/api/i/${spec.kind}-${id}/chamber/runtime/restart`, { method: 'POST' })
+      if (response.status === 202) {
+        clearOpError(id)
+        return
+      }
+      let serverReason = ''
+      try {
+        const body = await response.json() as { error?: unknown }
+        if (typeof body.error === 'string' && body.error !== '') serverReason = body.error
+      } catch { /* non-JSON body — fall back to the status */ }
+      setOpError(prev => ({
+        ...prev,
+        [id]: serverReason !== '' ? `restart refused: ${serverReason}` : `restart refused (${response.status})`,
+      }))
     } catch (err) {
       setOpError(prev => ({ ...prev, [id]: errorMessage(err) }))
     } finally {
@@ -1281,7 +1319,20 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                     >
                       {connected ? t('disconnect') : phase === 'connecting' ? t('phaseConnecting') : t('connect')}
                     </Button>
-                    {spec.transport === 'ssh' && (
+                    {spec.kind === 'gateway'
+                      ? (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className={css.restartTip}
+                          disabled={specBusy || !connected}
+                          data-tip={!connected ? t('gatewayRestartHint') : undefined}
+                          onClick={() => { void runGatewayRestart(spec) }}
+                        >
+                          {t('restartInstance')}
+                        </Button>
+                      )
+                      : spec.transport === 'ssh' && (
                       <Button
                         variant="outline"
                         size="sm"
@@ -1292,7 +1343,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                       >
                         {t('restartInstance')}
                       </Button>
-                    )}
+                      )}
                     <div className={css.cardFoot}>
                       {/* 插件入口对每个连接渲染：SSH 通道的 dsh 目标打开
                           同步对话框（desktopSsh 插件表面）；gateway 与 http
@@ -1854,6 +1905,9 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
             spec={pluginFor === 'local' ? null : pluginFor}
             diagnostic={pluginDiagnostics?.[pluginFor === 'local' ? 'local' : `${pluginFor.kind}-${pluginFor.id}`]}
             onClose={() => { setPluginFor(null) }}
+            onRecheckDiagnostic={onRecheckDiagnostic === undefined
+              ? undefined
+              : () => onRecheckDiagnostic(pluginFor === 'local' ? 'local' : `${pluginFor.kind}-${pluginFor.id}`)}
           />
         : null}
 
@@ -1864,6 +1918,9 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
             label={inventoryFor.label}
             diagnostic={pluginDiagnostics?.[`${inventoryFor.kind}-${inventoryFor.id}`]}
             onClose={() => { setInventoryFor(null) }}
+            onRecheckDiagnostic={onRecheckDiagnostic === undefined
+              ? undefined
+              : () => onRecheckDiagnostic(`${inventoryFor.kind}-${inventoryFor.id}`)}
           />
         : null}
     </div>
