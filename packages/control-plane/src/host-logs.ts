@@ -183,7 +183,17 @@ async function verifyDirectory(pin: PinnedDirectory): Promise<void> {
 
 async function syncDirectory(pin: PinnedDirectory): Promise<void> {
   await verifyDirectory(pin)
-  if (pin.handle !== null) await pin.handle.sync()
+  if (pin.handle !== null) {
+    try {
+      await pin.handle.sync()
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code
+      // Directory fsync is a filesystem property: NFS/CIFS/FUSE mounts
+      // commonly reject an O_RDONLY directory fsync (EINVAL/ENOTSUP) on
+      // Linux/macOS desktops alike — tolerate it, keep the identity checks.
+      if (code !== 'EINVAL' && code !== 'ENOTSUP') throw error
+    }
+  }
   await verifyDirectory(pin)
 }
 

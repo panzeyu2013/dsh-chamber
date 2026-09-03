@@ -10,6 +10,17 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 > 中文版: [CHANGELOG.md](../CHANGELOG.md)
 
+## [Unreleased]
+
+### Added
+
+- **Linux desktop first-party support (design 21)** — AppImage (x64) distribution shape (electron-builder linux target / desktop.entry / executableName), Linux auto-update unlocked behind an install-shape gate (packaged AND started from a writable `$APPIMAGE`; dev / unpacked-dir / deb shapes keep the historic inert reason string and settings button gate — zero UX regression), per-user protocol-handler `.desktop` rewritten on every packaged launch (MimeType=x-scheme-handler, Exec targeting `$APPIMAGE`), XDG-compliant autostart (honors `XDG_CONFIG_HOME`, adds Icon/StartupWMClass), platform-split node fallback roots with X_OK checks, platform-neutral EINVAL/ENOTSUP tolerance for directory fsync (NFS/FUSE home dirs), Linux install roots added to pnpm resolution, plus a `build-linux` release.yml leg (ubuntu-22.04 baseline) and the 4-leg release policy test. Contract and remaining real-machine gates: `docs/design/21-linux-desktop.md`.
+
+### Changed
+
+- **Desktop packaging config** — `build.linux` target moves from `dir` to `AppImage`; new `dist:desktop:linux` / `dist:linux` scripts.
+- **updater.ts Linux gate is shape-based** — the unconditional `platform==='linux'` gates become a "writable AppImage runtime" gate (`probeLinuxAppImage`); non-AppImage Linux keeps the same blocked reason and settings-bridge button gate unchanged.
+
 ## [0.2.0] - 2026-09-03
 
 ### Added

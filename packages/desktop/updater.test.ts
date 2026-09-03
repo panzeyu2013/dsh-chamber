@@ -16,7 +16,9 @@ import {
   betaReleaseDownloadBase,
   createUpdateController,
   isAllowedReleaseUrl,
+  LINUX_UPDATE_UNSUPPORTED_REASON,
   openReleasePage,
+  probeLinuxAppImage,
   resolveGithubBetaFeed,
   sanitizeErrorText,
 } from './updater.ts'
@@ -101,6 +103,9 @@ function makeController(overrides: {
     app: { isPackaged: false },
     autoUpdater: fake,
     platform: 'win32',
+    // The default probe would touch the REAL process.env + fs; tests inject
+    // the Linux shape explicitly (pure by construction) or keep it closed.
+    linuxAppImage: null,
     ...overrides.deps,
   }
   const prevChannel = process.env.DSH_CHAMBER_UPDATE_CHANNEL
@@ -137,11 +142,76 @@ test('initial state is idle with the injected version/channel (win32: no install
   assert.equal(state.error, null)
 })
 
-test('installBlockedReason follows the injected platform/app (linux / darwin dev build)', () => {
-  const linux = makeController({ deps: { platform: 'linux' } }).controller.state()
-  assert.equal(linux.installBlockedReason, 'auto-update is not supported on this platform')
+test('installBlockedReason follows platform/install shape (linux AppImage vs other shapes, darwin dev)', () => {
+  // Linux packaged but NOT started from a writable AppImage (dev / unpacked
+  // dir / deb): the historic inert reason — the renderer gate keys on it.
+  const linuxUnpacked = makeController({ deps: { platform: 'linux', app: { isPackaged: true }, linuxAppImage: null } }).controller.state()
+  assert.equal(linuxUnpacked.installBlockedReason, LINUX_UPDATE_UNSUPPORTED_REASON)
+  const linuxDev = makeController({ deps: { platform: 'linux', app: { isPackaged: false } } }).controller.state()
+  assert.equal(linuxDev.installBlockedReason, LINUX_UPDATE_UNSUPPORTED_REASON)
+  // dev + a NON-NULL probe must still stay blocked: only the packaged shape
+  // may open the gate (isPackaged is the second half of the AND).
+  const linuxDevWithProbe = makeController({
+    deps: { platform: 'linux', app: { isPackaged: false }, linuxAppImage: { path: '/opt/dsh-chamber.AppImage' } },
+  }).controller.state()
+  assert.equal(linuxDevWithProbe.installBlockedReason, LINUX_UPDATE_UNSUPPORTED_REASON)
+  // Linux packaged AppImage: the shape gate passes — updates are possible.
+  const linuxAppImage = makeController({
+    deps: { platform: 'linux', app: { isPackaged: true }, linuxAppImage: { path: '/opt/dsh-chamber.AppImage' } },
+  }).controller.state()
+  assert.equal(linuxAppImage.installBlockedReason, null)
   const darwinDev = makeController({ deps: { platform: 'darwin', app: { isPackaged: false } } }).controller.state()
   assert.equal(darwinDev.installBlockedReason, 'development build')
+})
+
+test('probeLinuxAppImage requires an AppImage launch shape with an absolute regular file in a writable parent', () => {
+  const mountExec = '/tmp/.mount_dsh-chamberAbC123/dsh-chamber'
+  const extractExec = '/tmp/appimage_extracted_a119dd1b0/dsh-chamber'
+  const file = () => ({ isFile: () => true })
+  const notFile = () => ({ isFile: () => false })
+  const ok = { access: () => {} }
+  const base = { env: { APPIMAGE: '/opt/dsh-chamber.AppImage' }, stat: file, ...ok }
+  assert.deepEqual(probeLinuxAppImage({ ...base, execPath: mountExec }), { path: '/opt/dsh-chamber.AppImage' })
+  assert.deepEqual(probeLinuxAppImage({ ...base, execPath: extractExec }), { path: '/opt/dsh-chamber.AppImage' })
+  // Unpacked-dir / dev launch shapes never open the gate, even with a stale
+  // inherited APPIMAGE pointing at a real writable file (quit-install must
+  // never unlink a foreign file).
+  assert.equal(probeLinuxAppImage({ ...base, execPath: '/opt/dsh-chamber/linux-unpacked/dsh-chamber' }), null)
+  assert.equal(probeLinuxAppImage({ ...base, execPath: '/home/user/bin/dsh-chamber' }), null)
+  // Missing / relative / non-file APPIMAGE → null.
+  assert.equal(probeLinuxAppImage({ env: {}, stat: file, ...ok, execPath: mountExec }), null)
+  assert.equal(probeLinuxAppImage({ env: { APPIMAGE: '' }, stat: file, ...ok, execPath: mountExec }), null)
+  assert.equal(probeLinuxAppImage({ env: { APPIMAGE: 'dsh-chamber.AppImage' }, stat: file, ...ok, execPath: mountExec }), null)
+  assert.equal(probeLinuxAppImage({ env: { APPIMAGE: '/opt/x' }, stat: notFile, ...ok, execPath: mountExec }), null)
+  // stat failure → null.
+  assert.equal(
+    probeLinuxAppImage({ env: { APPIMAGE: '/opt/x' }, stat: () => { throw new Error('ENOENT') }, ...ok, execPath: mountExec }),
+    null,
+  )
+  // Parent-directory write denied → null (AppImageUpdater unlinks + moves
+  // INTO the parent; the file's own mode is irrelevant to replacement).
+  assert.equal(
+    probeLinuxAppImage({
+      env: { APPIMAGE: '/opt/dsh-chamber.AppImage' },
+      stat: file,
+      access: () => { throw new Error('EACCES') },
+      execPath: mountExec,
+    }),
+    null,
+  )
+  // File writable but parent read-only → null (the operative permission).
+  assert.equal(
+    probeLinuxAppImage({
+      env: { APPIMAGE: '/opt/dsh-chamber.AppImage' },
+      stat: file,
+      access: (target, _mode) => {
+        if (String(target).endsWith('.AppImage')) return
+        throw new Error('EACCES')
+      },
+      execPath: mountExec,
+    }),
+    null,
+  )
 })
 
 test('contract invariants are asserted on the injected fake (stable channel + dev app)', () => {
@@ -325,12 +395,21 @@ test('subscribe pushes every transition and unsubscribe stops them', () => {
   assert.deepEqual(seen, ['checking', 'available'], 'an unsubscribed listener must not be called')
 })
 
-test('checkNow refuses loudly on linux (dir target) without touching the fake', async () => {
-  const { fake, controller } = makeController({ deps: { platform: 'linux' } })
+test('checkNow refuses loudly on linux non-AppImage shapes without touching the fake', async () => {
+  const { fake, controller } = makeController({ deps: { platform: 'linux', linuxAppImage: null } })
   const result = await controller.checkNow()
   assert.equal(result.ok, false)
-  if (!result.ok) assert.equal(result.error, 'auto-update is not supported on this platform')
+  if (!result.ok) assert.equal(result.error, LINUX_UPDATE_UNSUPPORTED_REASON)
   assert.equal(fake.checkCalls, 0)
+})
+
+test('checkNow runs the shared check path on a linux AppImage build (shape gate open)', async () => {
+  const { fake, controller } = makeController({
+    deps: { platform: 'linux', app: { isPackaged: true }, linuxAppImage: { path: '/opt/dsh-chamber.AppImage' } },
+  })
+  const result = await controller.checkNow()
+  assert.equal(result.ok, true)
+  assert.equal(fake.checkCalls, 1, 'AppImage linux must reach electron-updater like mac/win')
 })
 
 test('checkNow is a no-op once a download completed (downloaded is final)', async () => {
@@ -394,13 +473,23 @@ test('download refuses after a check failure (latestVersion cleared — never a 
   assert.equal(fake.downloadCalls, 0)
 })
 
-test('download refuses when automatic installation is blocked (linux)', async () => {
-  const { fake, controller } = makeController({ deps: { platform: 'linux' } })
+test('download refuses when automatic installation is blocked (linux non-AppImage shape)', async () => {
+  const { fake, controller } = makeController({ deps: { platform: 'linux', linuxAppImage: null } })
   fake.emit('update-available', { version: '0.2.0' })
   const result = await controller.download()
   assert.equal(result.ok, false)
   if (!result.ok) assert.equal(result.error, 'automatic installation blocked on this platform')
   assert.equal(fake.downloadCalls, 0)
+})
+
+test('download proceeds on a linux AppImage build (shape gate open)', async () => {
+  const { fake, controller } = makeController({
+    deps: { platform: 'linux', app: { isPackaged: true }, linuxAppImage: { path: '/opt/dsh-chamber.AppImage' } },
+  })
+  fake.emit('update-available', { version: '0.2.0' })
+  const result = await controller.download()
+  assert.equal(result.ok, true)
+  assert.equal(fake.downloadCalls, 1, 'AppImage linux must reach the electron-updater download like mac/win')
 })
 
 test('download single-flights (a second click before the first progress event is refused)', async () => {
@@ -468,7 +557,7 @@ test('after a check failure, checkNow retries from error and can reach available
   assert.equal(state.error, null, 'a successful retry clears the error')
 })
 
-test('start() on linux is inert (no timers, just a log)', () => {
+test('start() on linux non-AppImage shapes is inert (no timers, just a log)', () => {
   const logs: string[] = []
   const fake = new FakeAutoUpdater()
   const controller = createUpdateController(
@@ -476,11 +565,31 @@ test('start() on linux is inert (no timers, just a log)', () => {
       version: '0.1.5',
       logger: { log: (...args: unknown[]) => logs.push(args.join(' ')), warn: () => {}, error: () => {} },
     },
-    { app: { isPackaged: true }, autoUpdater: fake, platform: 'linux' },
+    { app: { isPackaged: true }, autoUpdater: fake, platform: 'linux', linuxAppImage: null },
   )
   controller.start()
-  assert.ok(logs.some(line => line.includes('跳过更新检查')), 'linux start must log the skip and never schedule')
+  assert.ok(logs.some(line => line.includes('跳过更新检查')), 'non-AppImage linux start must log the skip and never schedule')
   assert.equal(fake.checkCalls, 0)
+})
+
+test('start() schedules checks on a linux AppImage build (shape gate open)', () => {
+  const logs: string[] = []
+  const fake = new FakeAutoUpdater()
+  const controller = createUpdateController(
+    {
+      version: '0.1.5',
+      logger: { log: (...args: unknown[]) => logs.push(args.join(' ')), warn: () => {}, error: () => {} },
+    },
+    {
+      app: { isPackaged: true },
+      autoUpdater: fake,
+      platform: 'linux',
+      linuxAppImage: { path: '/opt/dsh-chamber.AppImage' },
+    },
+  )
+  assert.equal(controller.state().installBlockedReason, null)
+  controller.start()
+  assert.ok(logs.some(line => line.includes('更新检查已启动')), 'AppImage linux start must schedule the periodic checks')
 })
 
 test('sanitizeErrorText replaces POSIX absolute paths', () => {

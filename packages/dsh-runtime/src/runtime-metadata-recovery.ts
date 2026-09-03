@@ -421,7 +421,10 @@ function fsyncRealDirectory(path: string, label: string): void {
       fsyncSync(descriptor)
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code
-      if (process.platform !== 'win32' || (code !== 'EINVAL' && code !== 'ENOTSUP')) throw error
+      // Directory fsync is a filesystem property, not a Windows one: NFS /
+      // CIFS / FUSE mounts may reject an O_RDONLY directory fsync with
+      // EINVAL/ENOTSUP on any platform — tolerate exactly those two codes.
+      if (code !== 'EINVAL' && code !== 'ENOTSUP') throw error
     }
   } finally {
     if (descriptor !== null) closeSync(descriptor)

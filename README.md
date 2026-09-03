@@ -28,6 +28,9 @@
 
 - **macOS**：`dsh-chamber-<version>-<arch>.dmg`
 - **Windows**：NSIS 安装器（`.exe`）
+- **Linux**：`dsh-chamber-<version>.AppImage`（x64；需要 FUSE 或
+  `APPIMAGE_EXTRACT_AND_RUN=1`，自动更新需从可写路径启动 AppImage，
+  见 `docs/design/21-linux-desktop.md`）
 
 ### 2 · 启动应用
 
