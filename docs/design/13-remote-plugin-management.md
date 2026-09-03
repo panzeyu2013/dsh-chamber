@@ -10,6 +10,20 @@
 > 范围纪律：只做**编排**（远端 dsh plugin CLI 经 exec 通道驱动），不重造
 > dsh 宿主插件系统本身。设计 08 增加的 Git 执行仍在远端 dsh 实例内；本设计
 > 只负责把 chamber 自带的 host package 分发过去，绝不增加 `ssh ... git ...`。
+>
+> **2026-12 收敛表述（design 21 §3，用户重申口径）**：ssh 与 gateway 不是
+> 「双通道各一套同权功能」，而是**单一插件管理模型、末段执行分叉**——UI、
+> 流程、差异语义、状态机、文案与恢复能力全仓只有一份（ssh = 桌面主进程
+> exec 后端；gateway = 宿主 spawn 后端）；本设计各节是 ssh 后端的既有行为
+> 权威，design 21 是模型与双后端契约的收敛权威。**统一增量已落地**：ssh 已
+> 安装列表逐行移除（consistent 行缺口修复，经 apply remove）、remove/install
+> 保留名拒绝（@deepseek-ai/* + @dsh-chamber/*，与 gateway 同集，applyPlugins
+> 整批拒绝）、撤销 journal（SSH_PLUGIN_UNDO：变更前远端 spec 快照 +
+> 操作目标指纹绑定）、SSH_PLUGIN_LIST 掩码投影（redactRemotePluginManifest，
+> design 21 决策 18）；spec/name 白名单族单一来源迁
+> `control-plane/src/plugin-spec.ts`（desktop 经 control-plane-module.ts 双路径
+> facade 与原 ssh-provider 再导出消费、gateway 经包导出直引——§7.2 权威归属
+> 变化，常量不可再在 ssh-provider 内重声明）。
 
 ## 1. 动机与范围
 
@@ -147,10 +161,19 @@
   `{ok:true,cancelled:true}`（`SshPluginApplyIpcResult` 增补该变体，三处镜像
   同步）。空 add/remove 的 apply 是 **no-op**（`applyPlugins` 仅在存在变更时
   重启），脚本无法借 plugin_apply 触发无变更重启。
+  > **2026-12 落地状态勘误（design 21 §10 ①）**：ssh plugin_apply/seed_host_
+  > graph/materialize_add(_pick) 主进程对话框**仍未实现**（仅 gateway
+  > gateway_plugin_apply/undo 与 ssh_plugin_undo 有确认；gateway materialize
+  > 为「pick 即意图」设计）——本节为设计意图（决策 14 桌面通道纪律），缺口
+  > 登记开放项，勿按已落地理解。
 - `desktop_local_plugin_list` 的依赖值投影脱敏：materialize 类（file:/link:/
   相对/绝对/`~/`）值掩码为 `file:<hidden>`（保持双端 materialize 分类与名称
   匹配语义），本地绝对路径不回显 renderer。主进程内部仍持有完整 manifest
   （`resolveLocalMaterializeDirectory` 等不受影响）。
+  > **2026-12 落地状态勘误（design 21 §10 ①/缺陷③）**：本地清单（LOCAL_PLUGIN_LIST）
+  > **保持原样透传**（本地 file: 绝对路径可经 IPC 进 renderer——登记缺陷③，修复另
+  > 行排期）；ssh 远端清单（SSH_PLUGIN_LIST）已经 redactRemotePluginManifest 掩码
+  > （与 gateway readManifest 同纪律）。
 
 ### 7.1 双侧二次校验
 

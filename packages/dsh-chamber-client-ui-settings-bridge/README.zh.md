@@ -19,6 +19,17 @@ chamber 自研**设置壳**插件（2026-08 设计讨论）：以低于官方 Se
   D7/15，退出确认/自启/防休眠 + design 11 更新状态）。
 - 配置事实留在目标宿主：无 chamber 侧持久化、无新控制面 API。
 
+
+## 共享 gateway-runtime split（design 21 §5.2）
+
+- gateway dsh-runtime 纯核心（status parse/fetch、动作门、错误分类、重启就绪轮询）
+  已迁出本包进入 sidebar 共享面（`@dsh-chamber/dsh-client-ui-sidebar/shared`）；
+  本包在其 gateway dsh-runtime 段回引该共享面，并对其手写 ambient 镜像
+  （`src/ambient/chamber-bridge.d.ts`，MIRROR WARNING 头——sidebar
+  `gateway-runtime-mirror.test.ts` 锁步到真实模块）做 typecheck。
+- 本包只保留本地视图映射：`remoteRuntimeStatusView` /
+  `RemoteRuntimeStatusView`（SettingsBridgeKey 耦合）驻
+  `src/client/gateway-runtime-api.ts`。
 ## keyed 插槽与全量隔离（2026-08）
 
 - bridge 出口支持 root+keyed（`settings.plugin.item`，entryKey 分发 +

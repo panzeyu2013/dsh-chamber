@@ -122,3 +122,17 @@ chamber 自研侧边栏插件（设计 05 §2）：拷贝官方 ui-sidebar 外�
   wide/rail 折叠状态机（滑动 + 交叉淡化、rail-in 动画）、跟随指针的滚动条
   纪律、foot（`sidebar.footer.action` + `sidebar.settings`）。
 - i18n 命名空间 `sidebar`（zh 键源；见 `src/client/locales.ts`）。
+
+## 共享 gateway-runtime 面（design 21 §5.2）
+
+- `src/shared/gateway-runtime.ts` + `src/shared/gateway-runtime-poll.ts` 承载
+  gateway dsh-runtime 纯核心（status parse/fetch、动作门、错误分类、重启就绪
+  轮询 `pollGatewayReady`：1s/120s、abort 感知），经
+  `@dsh-chamber/dsh-client-ui-sidebar/shared` 导出（`./shared` →
+  `./src/shared/index.ts`，免构建；vite 消费者打真实源码单实例）。
+- 消费包（settings-bridge/connections 等）对**各自手写 ambient 镜像**
+  （`src/ambient/*.d.ts`，MIRROR WARNING 头）做 typecheck，不对本包源码做
+  typecheck——`test/gateway-runtime-mirror.test.ts` 把镜像导出集锁步到真实模块
+  （runtime 与 type-only 名；形状漂移仍为人工比对纪律，见测试头注释）。
+- settings-bridge 的 `remoteRuntimeStatusView` 视图映射与其 SettingsBridgeKey
+  耦合留在 settings-bridge；本面不 import settings-bridge。

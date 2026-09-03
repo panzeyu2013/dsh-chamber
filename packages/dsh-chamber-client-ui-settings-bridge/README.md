@@ -26,6 +26,19 @@ the ledger and its `settings.*` children declarations remain valid.
 - Config facts stay on the target host: no chamber-side persistence, no new
   control-plane API.
 
+
+## Shared gateway-runtime split (design 21 §5.2)
+
+- The pure gateway dsh-runtime core (status parse/fetch, action gates, error
+  classification, restart-readiness poll) moved OUT of this package into the
+  sidebar shared face (`@dsh-chamber/dsh-client-ui-sidebar/shared`, exported from
+  `src/shared/gateway-runtime*.ts`); this package imports it back for its
+  gateway dsh-runtime section and typechecks it against its own handwritten
+  ambient mirror (`src/ambient/chamber-bridge.d.ts`, MIRROR WARNING header —
+  locked to the real modules by the sidebar `gateway-runtime-mirror.test.ts`).
+- Only the settings-bridge-local view mapping stays here:
+  `remoteRuntimeStatusView` / `RemoteRuntimeStatusView` (SettingsBridgeKey
+  coupling) in `src/client/gateway-runtime-api.ts`.
 ## Keyed slots & containment (2026-08)
 
 - The bridge outlet supports root+keyed slots (`settings.plugin.item`,
