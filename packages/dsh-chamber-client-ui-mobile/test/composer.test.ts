@@ -1,11 +1,26 @@
 /**
- * Composer behavior pure-logic tests (P1.5): the keyboard heuristic and the
- * self-heal constant — the DOM-bound installers stay integration-tested on
- * device, the pure decision functions are covered here.
+ * Composer behavior pure-logic tests (P1.5 + 2026 review round): the
+ * keyboard heuristic, the self-heal constant and the layer-1
+ * navigation-gesture predicate — the DOM-bound installers stay
+ * integration-tested on device, the pure decision functions are covered
+ * here.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { isKeyboardOpen, BUSY_STUCK_MS, TOUCH_TIER_QUERY } from '../src/client/composer.ts'
+import {
+  isKeyboardOpen, BUSY_STUCK_MS, TOUCH_TIER_QUERY,
+  isNavigationGestureTarget, NAV_GESTURE_SELECTOR,
+  type ClosestLike,
+} from '../src/client/composer.ts'
+
+/** A closest() stub: per-selector match answer. */
+class ClosestStub implements ClosestLike {
+  readonly match: Record<string, boolean>
+  constructor(match: Record<string, boolean>) { this.match = match }
+  closest(selector: string): ClosestLike | null {
+    return this.match[selector] === true ? this : null
+  }
+}
 
 test('keyboard heuristic: >120px AND >20% of layout height', () => {
   // 812 layout, 812 visual → closed
@@ -26,4 +41,30 @@ test('self-heal threshold is 30 seconds', () => {
 
 test('touch tier query is the single source (shared with layout source and CSS)', () => {
   assert.equal(TOUCH_TIER_QUERY, '(max-width: 1023px) and (pointer: coarse)')
+})
+
+test('layer-1 navigation-gesture selector covers drawer and session header', () => {
+  assert.ok(NAV_GESTURE_SELECTOR.includes('[data-mobile-role="sidebar"]'))
+  assert.ok(NAV_GESTURE_SELECTOR.includes('[data-slot="conversation.session.header"]'))
+})
+
+test('isNavigationGestureTarget: drawer/header gestures are navigation', () => {
+  // The predicate asks closest() with the COMBINED nav selector — a drawer
+  // row or a header crumb matches it (single closest call).
+  const drawerRow = new ClosestStub({ [NAV_GESTURE_SELECTOR]: true })
+  assert.equal(isNavigationGestureTarget(drawerRow), true)
+  const crumb = new ClosestStub({ [NAV_GESTURE_SELECTOR]: true })
+  assert.equal(isNavigationGestureTarget(crumb), true)
+  const noMatch = new ClosestStub({})
+  assert.equal(isNavigationGestureTarget(noMatch), false)
+})
+
+test('isNavigationGestureTarget: non-navigation gestures are typing intent', () => {
+  // Composer seat, portaled picker menus, message area — none navigates.
+  assert.equal(isNavigationGestureTarget(new ClosestStub({})), false)
+  assert.equal(isNavigationGestureTarget(null), false)
+  // A target inside the seat but NOT inside a nav region (single closest
+  // match answered for the nav selector only).
+  const seatOnly = new ClosestStub({})
+  assert.equal(isNavigationGestureTarget(seatOnly), false)
 })

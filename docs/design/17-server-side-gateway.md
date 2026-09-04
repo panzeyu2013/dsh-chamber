@@ -1239,6 +1239,36 @@ append-only 无删除方法），走 dsh 实例自身 host 插件（`ctx.inject(
   （`[aria-modal]` + nav 首子元素）打标是外部插件的妥协，chamber 在 fork 内
   直接打标；
 - **输入工具行单行**：`flex-wrap: nowrap` + 触发器限宽 112px + 字号 12px；
+- **设置整页适配（2026 移动适配轮，手机档 ≤768px；平板 >768 保留桌面弹窗
+  几何；实机门禁 §18.6）**：取代上条 P1 取舍（只全屏 + 整列滚动、nav 不
+  横向滚动）。官方壳是 800px `flex-row`（188px 竖排 nav rail + 内容列），
+  手机档把 panel 改 `flex-direction: column` 全屏堆叠：nav rail 变顶部横条
+  （标题 + **横向滚动分区 chips**，44px 触控，顶部安全区）；内容列 header
+  （actions+Close）以 `position: sticky` 固定不再随内容滚走（P1 的"整个
+  content 滚动"会让 Close 滚出屏），内容列自身保留**兜底纵向滚动**
+  （官方子结构 header+options 精确匹配时仅 options 内滚，永不双重滚动；
+  结构漂移时兜底滚动 + sticky header，杜绝硬锁死），options 区纵向滚动并
+  补底部安全区；导航条与 options 的左右 padding 带
+  `env(safe-area-inset-left/right)`（刘海横屏）；分区内网格降级：
+  Models provider 行 4 列 grid → 2×2、Plugins inventory 两列卡片 → 单列。
+  官方内部格子无稳定属性，两处使用**哈希不敏感 `[class*="_<local>_"]`
+  局部名匹配**（生产命名 `_<local>_<hash>_<idx>` 已实证；命名翻转时
+  fail-soft 回官方网格，属记录在案的例外锚点族，与 `[class$=_…]` 后缀
+  契约同待实机固定）；其他 `aria-modal` 弹层（onboarding 步骤/选择器）
+  限宽 `100vw-24px`；弹窗内可编辑字段套用 composer 同款 16px 聚焦缩放
+  底线；
+- **会话头部（会话页顶部标题/面包屑行）**：官方 header 为桌面宽度 chrome，
+  移动面三轴冲突全部以结构化锚点覆盖（不依赖哈希类名）——
+  (a) 浮动汉堡（左上 44px）与头部内容重叠 → 头部预留左 gutter
+  （`[data-slot="conversation.session.header"] > header` 直接子结构，
+  `padding-left` 同步让出 tab 行）；
+  (b) 官方 crumbs 行 nowrap + overflow hidden 会静默截断长标题链/谱系
+  chip（如「N 个子代理」目录触发器）→ 换行不裁切（单段省略号保留）；
+  (c) 官方 session-log-export 的「Session 日志」胶囊（header utilities，
+  min-width 111px+ 药丸）在手机上吃满标题行而移动端几乎不导出 → 手机档由
+  markup.ts 按官方双语文案 + 下载图标结构打标
+  （`data-mobile-dismiss="session-log-export"`，幂等、剪枝搜索，聊天滚动体
+  不遍历）收成 44px 圆形图标（label 用 font-size:0 保留可访问名）。
 - **安全区一次做全**：`viewport-fit=cover` + `env(safe-area-inset-*)` 全表面 +
   `100dvh`/`dvh` + `theme-color` 跟随主题 + `interactive-widget=resizes-content`；
   `touch-action` 需给 textarea 恢复 `auto`（否则吞光标）；
@@ -1261,6 +1291,25 @@ Promise 链（返回 `originalSink()` 否则输入框永久卡死，社区 v0.1.
 focus 丢弃循环 / editability 翻转 / pointerup 手势 refocus / visualViewport 键盘判定
 / 键盘钉住）+ 30s busy 自愈 + 键盘遮挡兜底（实现见
 `packages/dsh-chamber-client-ui-mobile/src/client/composer.ts`）。
+移动导航机制再补两条（2026 移动适配轮；实机门禁见 §18.6）：
+- **抽屉点击自愈**：iOS Safari 抑制抽屉内点击的合成 click（行 hover
+  展开使命中元素在 touchstart/touchend 间位移；社区实测为合成 click 可
+  整体缺失、与 DOM 变更时序无关）→ 单击会话行无反应、双击才生效。机制：
+  稳定 tap（位移 ≤ slop、touch/pen、touch 档）的 pointerup 后 120ms 宽限
+  内真实 click 未到达时，从 pointerup 目标重发非受信 bubbling click——
+  React 委托的行 onClick 照常执行导航；真实 click 到达则零干预（宽限
+  吸收迟到的真实 click）；自愈后 150ms 内同坐标的受信 click 视为迟到真实
+  click 被抑制（防双重激活）。起点按 pointerId 跟踪（多点触控安全、响应
+  pointercancel）。平移/滚动意图（位移超 slop）、表单控件（含任意非 false
+  态 contenteditable）、抽屉之外一律不触发（`drawer-taps.ts`，纯判定单测
+  覆盖；桌面不受影响）；
+- **导航后不弹键盘**：官方 InputBar 在会话切换/解锁时把焦点还给 composer
+  （桌面惯例）——从抽屉点会话行切换后 iOS 会立刻弹键盘。IME 阶梯 layer-1
+  的 gesture 判定改为**导航区语义**：仅当手势起始于导航区（抽屉
+  `[data-mobile-role="sidebar"]` 或会话头 `[data-slot="conversation.session.header"]`）
+  时丢弃程序化回焦；composer seat 内手势、发送键、鼠标/硬键盘聚焦与
+  portal 型选择器流程（工作区/代理预设菜单）均视为输入意图保留（键盘已开
+  时不丢，连续输入不中断；粗指针设备配硬键盘不受影响）。
 
 **18.4.5 官方机制确认与 PWA**
 
@@ -1349,6 +1398,13 @@ PWA / Web Push 社区实现机制（dsh-ui-mobile，jasondu，npm 0.1.8，MIT，
 - 实机（移动视口清单，CDP 设备模拟 + 真机抽检）：
   - 触控目标 ≥44px 比例、无横向溢出、抽屉开合、弹层不出屏、设置全屏可滚动、
     输入行单行、安全区/100dvh、键盘不遮挡输入区；
+  - 会话头：汉堡不重叠头部内容、crumbs 长链/chip 换行不裁切、「Session 日志」
+    手机档图标化且可点；抽屉里单击会话行即切换（iOS Safari 自愈生效）、
+    切换不弹键盘（composer 意图焦点不受影响）；
+  - 设置（手机档）：竖排 nav 变顶部横向 chips 且分类可达/可滚动、Close 固定
+    不随内容滚走、各分区（General/Models/Agent presets/Plugins+inventory）
+    无横向溢出且模型行/卡片网格降级生效、onboarding 等弹层不出屏可滚动、
+    输入框聚焦不触发页面缩放、键盘弹出不遮输入、深浅色与横竖屏走查；
   - PWA：manifest 生效、SW 注册、安装引导（分期验收）。
 
 ### 18.7 分期

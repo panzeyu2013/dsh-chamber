@@ -270,8 +270,45 @@
   composer 30s busy 自愈、共享 layout source（滚动锁/Esc 单实例）、
   职责区分显式化（§18.2 管理面 vs 适配面矩阵——认证/凭据/会话边界/UA 分流/
   登录流转为 gateway 独占，插件零认证引用已 grep 验证）。
+  **移动适配轮（2026，mobile-adaption 工作树，实机门禁 §18.6 项 2）**：
+  会话头三轴适配已落地——汉堡 gutter（`conversation.session.header` 出口
+  直接子结构 `> header` padding-left，覆盖 titleRow 与 tab 行）、crumbs
+  换行不裁切（官方 nowrap+overflow hidden 静默截断标题链/「N 个子代理」
+  谱系 chip）、「Session 日志」导出胶囊手机档 44px 图标化（markup.ts 按
+  官方双语文案+下载图标打标 `data-mobile-dismiss="session-log-export"`，
+  幂等且剪枝搜索不遍历聊天滚动体）；抽屉导航两条行为补丁——iOS 合成
+  click 抑制自愈（`drawer-taps.ts`：稳定 tap 的 pointerup 后 120ms 宽限内真实
+  click 未达则重发非受信 click，单击即切换；平移/表单/抽屉外不触发）+
+  导航后不弹键盘（IME layer-1 gesture 判定改为导航区语义：仅抽屉/会话头导航手势丢弃回焦，
+  seat 内手势、发送键、鼠标/硬键盘与 portal 选择器流程保留输入意图）。
+  设置页手机档整页适配同轮落地：官方壳（800px flex-row、188px 竖排 nav
+  rail）改全屏堆叠——panel `flex-direction: column`、nav rail 变顶部横条
+  （标题+横向滚动分区 chips）、Close 固定（P1"整列滚动"会让 Close 滚出屏，
+  已收回到 options 区滚动并补底部安全区）、Models 行 4 列 grid→2×2 与
+  Plugins inventory 两列卡片→单列（官方内部格子无稳定属性，两处启用
+  `[class*="_<local>_"]` 哈希不敏感局部名匹配——命名翻转 fail-soft，
+  属记录在案的例外锚点族，与 `[class$=_…]` 后缀契约同待实机固定）、
+  其他 aria-modal 弹层限宽 100vw-24px、弹窗内可编辑字段套用 composer
+  16px 聚焦缩放底线。
+  **Review 轮加固（2026，四路独立 review 后执行，typecheck/test/build 全绿）**：
+  抽屉自愈防双激活（愈合后 150ms 内同坐标受信 click 抑制；起点按 pointerId
+  跟踪并响应 pointercancel；contenteditable 任意非 false 态均排除）；会话头
+  胶囊打标补晚挂载路径（`isStructuralTarget` 有界 4 跳祖先走查——frame > col
+  > conversation outlet > .root > 会话头出口可达，聊天滚动体 ≥6 跳仍过滤）；
+  拖拽把手死规则替换为官方属性锚点（`[data-width-handle]` /
+  `[data-side]:not([role="tooltip"])`），清理已证伪的 `[class$="_titleRow"]`
+  死规则并刷新样式表头部旧锚点声明。
   **剩余**：实机门禁（§18.6：真机抽检——触控目标比例/抽屉开合/弹层不出屏/
-  键盘遮挡/安全区）；P2（PWA 安装 + SW 壳离线，per-instance scope，尊重官方
+  键盘遮挡/安全区；本轮新增：汉堡不重叠、crumbs 换行、Session 日志图标化
+  可点、iOS 单击切换生效、切换不弹键盘且输入意图焦点不回归、设置各分区
+  手机档走查——顶部 chips 可达/Close 固定/无横向溢出/输入聚焦不缩放、
+   刘海横屏左右安全区、深层谱系标题高度、composer 工具栏遗留死规则
+   （`.row/.trigger` 后缀）、composer 覆盖层自愈增强（周期扫掠/遮罩中和，
+   Yui 模式）、layer-3 聚焦态+键盘关同击分支、769-1023 粗指针弹窗带、
+   设置 chips 尾项可窥/换行、抽屉行点击不自动关闭的 UX 复核（社区
+   one-tap-close 预期）、自动聚焦弹层搜索框）；
+  P2（PWA
+  安装 + SW 壳离线，per-instance scope，尊重官方
   "不完整离线"立场）；**0.1.2-alpha.4 DOM 锚点重审计**（布局壳部分已执行：
    双 pin（a3=dd6322d6 / a4=4e84901e）的 ui-layout **AppFrame 组件源码逐字节一致**
    （组件级 git diff 空；ui-layout 包内另有 AppFrame.module.css 纯视觉边框微调，不影响锚点）；审计发现 **details 打标缺口**——官方 details 列壳自首帧常驻、其

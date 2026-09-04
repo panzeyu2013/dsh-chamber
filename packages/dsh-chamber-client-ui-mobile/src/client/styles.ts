@@ -4,8 +4,12 @@
  * OFFICIAL stable attributes confirmed against the dsh 0.1.2-alpha.4 DOM
  * (CDP empirical audit; ui-layout AppFrame byte-identical with the alpha.3
  * pin — alpha.4 anchor audit) plus the plugin's own `data-mobile-*`
- * stamps — no hashed class names except the `[class$="_…"]` suffix
- * convention where the official DOM exposes no attribute.
+ * stamps — no hashed class names. Production CSS-modules naming is
+ * `_<local>_<hash>_<idx>` (verified on the production bundle), so
+ * `[class$="_<local>"]` suffix selectors can never match — legacy suffix
+ * rules predate that verification and are migrated to attribute anchors;
+ * the documented exception is the hash-insensitive infix
+ * `[class*="_<local>_"]` (settings section grids, see below).
  *
  * VISUAL LANGUAGE: everything rides the official `--dsw-*`/`--ds-*` tokens
  * (no literal colors except token fallbacks); the drawer reuses the official
@@ -23,8 +27,10 @@
  *    window narrower than 1024 must NOT get the mobile UI) — applied to
  *    BOTH tiers and mirrored in the JS behavior layer.
  *  - `(max-width: 768px) and (pointer: coarse)` — the phone tier: composer
- *    toolbar single line, popups constrained to the viewport, settings
- *    full-screen, safe-area guarantees.
+ *    toolbar single line, popups constrained to the viewport, settings as a
+ *    stacked full-screen sheet (nav strip + pinned close + scrolling
+ *    options), section grids degraded, dialogs edge-capped, editable
+ *    fields ≥16px (iOS focus zoom), safe-area guarantees.
  * EVERY rule lives inside a media query — desktop widths are byte-for-byte
  * untouched (the official layout must not be affected), and the hamburger
  * has an explicit `display: none` default outside the touch tier.
@@ -163,9 +169,15 @@ export const MOBILE_CSS = `
   }
 
   /* Drag handles are desktop affordances (mouse resizing) — hidden on
-     touch where the drawer/overlay geometry replaces them. */
-  [data-mobile-frame] [class$="_widthHandle"],
-  [data-mobile-frame] [class$="_handle"] {
+     touch where the drawer/overlay geometry replaces them. Anchored on the
+     official attribute seams: the AppFrame resize strips carry
+     [data-side] (no role), the conversation width strips carry
+     [data-width-handle]; the ui-primitives Tooltip bubble also carries
+     [data-side] for placement and must NOT be hidden (role="tooltip"
+     exclusion). Attribute anchors replace the legacy hashed-suffix rules
+     ([class$="_handle"]) that cannot match production class naming. */
+  [data-mobile-frame] [data-width-handle],
+  [data-mobile-frame] [data-side]:not([role="tooltip"]) {
     display: none !important;
   }
 
@@ -180,7 +192,7 @@ export const MOBILE_CSS = `
   .dsh-mobile-nav-toggle {
     position: fixed;
     top: max(10px, env(safe-area-inset-top, 0px));
-    left: 10px;
+    left: max(10px, env(safe-area-inset-left, 0px));
     z-index: 41;
     display: inline-flex;
     align-items: center;
@@ -226,6 +238,29 @@ export const MOBILE_CSS = `
   .dsh-mobile-nav-toggle-bars::after { top: 6px; }
   [data-mobile-frame]:not([data-sidebar-collapsed]) .dsh-mobile-nav-toggle {
     display: none;
+  }
+
+  /* Conversation session header: the floating toggle (44px, top-left) must
+     never overlap the header content. The header is the DIRECT child of the
+     session-header slot outlet (anchor-audited shape: outlet wrapper >
+     <header> > titleRow [+ tabs]) — a structural selector, no hashed
+     classes. The gutter reserves the toggle box plus an 8px gap; padding on
+     the header (not the title row) also clears the tab strip when a session
+     has multiple views. */
+  [data-mobile-frame] [data-slot="conversation.session.header"] > header {
+    padding-left: calc(62px + env(safe-area-inset-left, 0px)) !important;
+  }
+
+  /* Crumbs/lineage chain: wrap instead of clip. The official .crumbs row is
+     nowrap + overflow hidden (desktop-width assumption): on a phone a long
+     title chain or the lineage chips ("N 个子代理" catalog triggers) get
+     silently CUT (the observed truncated/collapsed header labels). Wrapping
+     keeps every crumb segment and chip on its own line; per-crumb ellipsis
+     (official .crumb max-width) still bounds single titles. */
+  [data-mobile-frame] [data-slot="conversation.session.header"] nav {
+    flex-wrap: wrap;
+    overflow: visible;
+    white-space: normal;
   }
 
   /* Touch targets: high-frequency controls get the 44px floor (Apple HIG;
@@ -287,10 +322,15 @@ export const MOBILE_CSS = `
     max-width: calc(100vw - 24px) !important;
   }
 
-  /* Settings dialog → full-screen sheet with its own scrolling; the
-     official 800px dialog is unusable on a phone. The :has() anchor is fine
-     here: this rule is static (no per-DOM-change re-evaluation hot path).
-     A 100vh fallback precedes 100dvh for older engines. */
+  /* Settings sheet (official ui-settings-general shell): the desktop modal
+     is 800px wide and flex-row — a fixed 188px nav RAIL + content column.
+     A phone needs the sheet stacked: the nav becomes a top strip (title +
+     horizontally scrolling section chips), the content header row (actions
+     + Close) stays pinned and only the section options scroll under it.
+     All anchors are structural (panel [role=dialog][aria-modal] carrying
+     the settings.header seat; direct nav/content children) — the :has()
+     anchor is static, no per-DOM-change re-evaluation hot path. A 100vh
+     fallback precedes 100dvh for older engines. */
   [role="dialog"][aria-modal="true"]:has([data-slot="settings.header"]) {
     position: fixed !important;
     inset: 0 !important;
@@ -300,15 +340,102 @@ export const MOBILE_CSS = `
     height: 100dvh !important;
     max-height: none !important;
     border-radius: 0 !important;
+    flex-direction: column !important;
   }
-  [role="dialog"][aria-modal="true"]:has([data-slot="settings.header"]) nav {
-    padding: calc(10px + env(safe-area-inset-top)) 12px 10px !important;
+  /* Nav rail → top strip: title + chips row, safe-area padded. */
+  [role="dialog"][aria-modal="true"]:has([data-slot="settings.header"]) > nav {
+    flex: none;
+    flex-direction: row;
+    align-items: center;
+    gap: 4px;
+    width: auto;
+    padding:
+      calc(8px + env(safe-area-inset-top))
+      calc(8px + env(safe-area-inset-right))
+      2px
+      calc(12px + env(safe-area-inset-left));
+    overflow: hidden;
   }
+  [role="dialog"][aria-modal="true"]:has([data-slot="settings.header"]) > nav > div:first-child {
+    flex: none;
+    padding-right: 6px;
+  }
+  [role="dialog"][aria-modal="true"]:has([data-slot="settings.header"]) > nav > div:last-child {
+    display: flex;
+    flex-direction: row;
+    gap: 2px;
+    flex: 1;
+    min-width: 0;
+    overflow-x: auto;
+  }
+  [role="dialog"][aria-modal="true"]:has([data-slot="settings.header"]) > nav button {
+    flex: none;
+    min-height: 44px;
+  }
+  /* Content column: pin the header row (actions + Close) and let only the
+     options area scroll (the earlier shell rule scrolled the whole column —
+     the Close button scrolled out of reach on a phone). The content column
+     itself stays a FALLBACK scroller (overflow-y auto) instead of
+     overflow:hidden: on the verified header+options child grammar the
+     pinned header + inner options scroller fill the column exactly (no
+     double scroll), while an upstream wrapper drift cannot hard-lock the
+     sheet — the column scrolls and the sticky header keeps Close visible. */
   [role="dialog"][aria-modal="true"]:has([data-slot="settings.header"]) > div:last-child {
     flex: 1;
     min-height: 0;
     overflow-y: auto;
-    padding-bottom: env(safe-area-inset-bottom);
+    overscroll-behavior: contain;
+  }
+  [role="dialog"][aria-modal="true"]:has([data-slot="settings.header"]) > div:last-child > div:first-child {
+    flex: none;
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: var(--dsw-alias-bg-layer-2, #ffffff);
+  }
+  [role="dialog"][aria-modal="true"]:has([data-slot="settings.header"]) > div:last-child > div:last-child {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding-right: calc(16px + env(safe-area-inset-right));
+    padding-bottom: calc(16px + env(safe-area-inset-bottom));
+    padding-left: calc(16px + env(safe-area-inset-left));
+  }
+  /* Section inner grids that assume desktop width. Official inner cells
+     carry no stable attribute — the [class*="_<local>_"] local-name match
+     is the documented hash-insensitive exception (naming
+     "_<local>_<hash>_<idx>" verified on the production bundle; a naming
+     flip fails SOFT — the official grid stays).
+     - Models provider row (two text inputs + chevron + trash on one
+       4-column line) → TWO equal columns: the four children auto-place
+       2×2 (inputs on the first row, the two icon actions under them).
+     - ".cards" two-column grids → single column. Only ONE settings
+       section is mounted at a time under [data-slot="settings.section"],
+       so this reaches whichever page is open: the Plugins inventory
+       (repeat(2, …) card grid) and, when the agent-presets section is
+       active, its auto-fill .cards (already single-column at phone
+       widths by auto-fit; forcing one column only changes 590-768px,
+       where two ~268px cards would otherwise fit). */
+  [data-slot="settings.section"] [class*="_modelRow_"] {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+  [data-slot="settings.section"] [class*="_cards_"] {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+  /* Other aria-modal dialogs (onboarding steps, pickers) keep their own
+     chrome but must never touch the screen edges. The settings sheet above
+     is excluded (it owns the full screen). */
+  [role="dialog"][aria-modal="true"]:not(:has([data-slot="settings.header"])) {
+    max-width: calc(100vw - 24px) !important;
+  }
+  /* iOS focus zoom: any editable field below 16px triggers the automatic
+     page zoom on focus. The composer already carries its own rule; the
+     settings sheet and its dialogs get the same floor (respecting the
+     official content-size preference when set larger). */
+  [role="dialog"] input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+  [role="dialog"] select,
+  [role="dialog"] textarea {
+    font-size: max(16px, var(--dsh-content-font-size, 16px)) !important;
   }
 
   /* Composer seat: respect the home-indicator inset. The official seat is
@@ -325,10 +452,27 @@ export const MOBILE_CSS = `
     font-size: max(16px, var(--dsh-content-font-size, 16px)) !important;
   }
 
-  /* Conversation header: allow the title cluster to wrap instead of
-     overflowing (the official row assumes desktop width). */
-  [data-slot="conversation.session.header"] [class$="_titleRow"] {
-    flex-wrap: wrap;
+  /* "Session 日志" export capsule (official session-log-export, header
+     utilities): a 111px+ min-width pill that eats the whole phone title
+     row. Mobile users rarely export session ZIPs — compact it to a round
+     44px icon target (the stamp data-mobile-dismiss="session-log-export"
+     is applied by markup.ts when the capsule copy matches). The label span
+     is zeroed (font-size, not display:none) so the accessible name stays in
+     the tree; the official download icon grows to the target center. */
+  [data-mobile-dismiss="session-log-export"] {
+    width: 44px !important;
+    height: 44px !important;
+    min-width: 44px !important;
+    gap: 0 !important;
+    padding: 0 !important;
+    border-radius: 50% !important;
+  }
+  [data-mobile-dismiss="session-log-export"] span {
+    font-size: 0;
+  }
+  [data-mobile-dismiss="session-log-export"] svg {
+    width: 18px;
+    height: 18px;
   }
 
   /* Scrolling body: the official padding-bottom for the composer is a
