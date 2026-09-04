@@ -28,13 +28,21 @@
  */
 
 /**
- * Minimal structural slice of one source's runtime-facts report
- * (InstanceRuntimeReport): only the `runningSubagents` row field matters for
- * suppression. Deliberately NOT imported from the sidebar shared module so
- * this module keeps zero imports and stays runnable anywhere.
+ * Structural slice of one source's runtime-facts report (InstanceRuntimeReport
+ * sessions rows): suppression reads only the `runningSubagents` row field, but
+ * the sibling fields real rows carry (`running`, `completed`, `pending`) are
+ * part of the shape so realistic row literals typecheck without casts.
+ * Deliberately NOT imported from the sidebar shared module so this module
+ * keeps zero imports and stays runnable anywhere.
  */
 export interface BadgeSuppressionFacts {
-  sessions?: Record<string, { runningSubagents?: number }>
+  sessions?: Record<string, {
+    running?: boolean
+    completed?: boolean
+    pending?: 'approval' | 'plan-review' | 'question'
+    /** Running subagent descendants; absent = 0. */
+    runningSubagents?: number
+  }>
 }
 
 /**
