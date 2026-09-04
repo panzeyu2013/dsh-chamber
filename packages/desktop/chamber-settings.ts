@@ -34,6 +34,20 @@ export interface ChamberNotificationSettings {
   badgeEnabled: boolean
 }
 
+/** 侧边栏「会话待办区」设置（sidebar todo area）：chamber 侧边栏顶部固定
+ *  待办区（宽栏、空时零占用）的主开关与事件开关。默认全开——待办区是被动
+ *  呈现（仅在有条目时出现），不是打扰型通知，默认值不同于 notifications。 */
+export interface ChamberSessionTodoSettings {
+  /** 主开关；默认 true。关闭后侧边栏完全不渲染待办区。 */
+  enabled: boolean
+  /** 会话完成未读时（默认 true）。 */
+  onComplete: boolean
+  /** 代理提问等待回答（pending 'question'）时（默认 true）。 */
+  onAsk: boolean
+  /** 工具调用/计划审批请求（pending 'approval' | 'plan-review'）时（默认 true）。 */
+  onRequest: boolean
+}
+
 /** Chamber-global runtime settings (design 14 v1 scope). */
 export interface ChamberSettings {
   windowCloseBehavior: WindowCloseBehavior
@@ -50,6 +64,8 @@ export interface ChamberSettings {
   registryOrigin: string
   /** Desktop notifications (design 19): 主进程裁决权威，渲染端只负责检测与组装。 */
   notifications: ChamberNotificationSettings
+  /** 侧边栏「会话待办区」（sidebar todo area）：侧边栏插件消费，主进程仅持久化。 */
+  sessionTodo: ChamberSessionTodoSettings
 }
 
 /** Non-secret status projection: current settings + platform capability gates. */
@@ -80,6 +96,12 @@ export const DEFAULT_CHAMBER_SETTINGS: ChamberSettings = {
     onRequest: true,
     badgeEnabled: true,
   },
+  sessionTodo: {
+    enabled: true,
+    onComplete: true,
+    onAsk: true,
+    onRequest: true,
+  },
 };
 
 const SETTINGS_KEYS: ReadonlyArray<keyof ChamberSettings> = [
@@ -89,6 +111,7 @@ const SETTINGS_KEYS: ReadonlyArray<keyof ChamberSettings> = [
   'quitConfirmation',
   'registryOrigin',
   'notifications',
+  'sessionTodo',
 ];
 
 /** Normalize a registry origin (design 18 M4): a valid https:// URL with no
@@ -134,6 +157,26 @@ function normalizeNotificationSettings(input: unknown): ChamberNotificationSetti
   return notifications;
 }
 
+const SESSION_TODO_SETTINGS_KEYS: ReadonlyArray<keyof ChamberSessionTodoSettings> = [
+  'enabled',
+  'onComplete',
+  'onAsk',
+  'onRequest',
+];
+
+/** 嵌套 sessionTodo 归一：缺失字段用默认；非法值回落默认（持久化读路径，
+ *  响亮校验在 validatePatch）。非对象（null/数组/标量）整组回落默认。 */
+function normalizeSessionTodoSettings(input: unknown): ChamberSessionTodoSettings {
+  const sessionTodo: ChamberSessionTodoSettings = { ...DEFAULT_CHAMBER_SETTINGS.sessionTodo };
+  if (input === null || typeof input !== 'object' || Array.isArray(input)) return sessionTodo;
+  const record = input as Record<string, unknown>;
+  if (typeof record.enabled === 'boolean') sessionTodo.enabled = record.enabled;
+  if (typeof record.onComplete === 'boolean') sessionTodo.onComplete = record.onComplete;
+  if (typeof record.onAsk === 'boolean') sessionTodo.onAsk = record.onAsk;
+  if (typeof record.onRequest === 'boolean') sessionTodo.onRequest = record.onRequest;
+  return sessionTodo;
+}
+
 /** Validate and normalize an unknown settings payload; unknown keys ignored. */
 export function normalizeSettings(input: unknown): ChamberSettings {
   const base: ChamberSettings = { ...DEFAULT_CHAMBER_SETTINGS };
@@ -149,6 +192,9 @@ export function normalizeSettings(input: unknown): ChamberSettings {
   if (origin !== null) base.registryOrigin = origin;
   if (record.notifications !== undefined) {
     base.notifications = normalizeNotificationSettings(record.notifications);
+  }
+  if (record.sessionTodo !== undefined) {
+    base.sessionTodo = normalizeSessionTodoSettings(record.sessionTodo);
   }
   return base;
 }
@@ -183,6 +229,17 @@ function isValidSettingsFile(input: unknown): input is Record<string, unknown> {
     const nested = notifications as Record<string, unknown>;
     if (nested.mode !== undefined && nested.mode !== 'hidden-only' && nested.mode !== 'always') return false;
     for (const key of ['enabled', 'onComplete', 'onAsk', 'onRequest', 'badgeEnabled'] as const) {
+      if (nested[key] !== undefined && typeof nested[key] !== 'boolean') return false;
+    }
+  }
+  // Nested sessionTodo shape: same discipline as notifications — a wrongly
+  // typed sub-block (e.g. a string in place of the master switch) is
+  // corruption, never a silent reinterpretation of the user's UI choice.
+  if (record.sessionTodo !== undefined) {
+    const sessionTodo = record.sessionTodo;
+    if (sessionTodo === null || typeof sessionTodo !== 'object' || Array.isArray(sessionTodo)) return false;
+    const nested = sessionTodo as Record<string, unknown>;
+    for (const key of ['enabled', 'onComplete', 'onAsk', 'onRequest'] as const) {
       if (nested[key] !== undefined && typeof nested[key] !== 'boolean') return false;
     }
   }
@@ -340,6 +397,10 @@ export function validatePatch(
       // Partial 嵌套 patch 经 record 投影存入（同下方布尔分支的既有写法）；
       // 由 applySettingsPatch deep-merge 补全为完整对象。
       (result as Record<string, unknown>)[key] = validated.patch;
+    } else if (key === 'sessionTodo') {
+      const validated = validateSessionTodoSettingsPatch(record[key]);
+      if (!validated.ok) return validated;
+      (result as Record<string, unknown>)[key] = validated.patch;
     } else if (typeof record[key] !== 'boolean') {
       return { ok: false, error: `${key} must be a boolean` };
     } else {
@@ -373,6 +434,28 @@ function validateNotificationSettingsPatch(
     } else {
       (result as Record<string, unknown>)[key] = record[key];
     }
+  }
+  return { ok: true, patch: result };
+}
+
+/** 嵌套 sessionTodo patch 校验：必须是非数组对象；全部布尔；
+ *  未知嵌套键拒绝（缺字段 = 不修改该项，由调用方 deep-merge 兜底）。 */
+function validateSessionTodoSettingsPatch(
+  input: unknown,
+): { ok: true; patch: Partial<ChamberSessionTodoSettings> } | { ok: false; error: string } {
+  if (input === null || typeof input !== 'object' || Array.isArray(input)) {
+    return { ok: false, error: 'sessionTodo must be an object' };
+  }
+  const record = input as Record<string, unknown>;
+  const result: Partial<ChamberSessionTodoSettings> = {};
+  for (const key of Object.keys(record)) {
+    if (!(SESSION_TODO_SETTINGS_KEYS as readonly string[]).includes(key)) {
+      return { ok: false, error: `unknown sessionTodo key: ${key}` };
+    }
+    if (typeof record[key] !== 'boolean') {
+      return { ok: false, error: `sessionTodo.${key} must be a boolean` };
+    }
+    (result as Record<string, unknown>)[key] = record[key];
   }
   return { ok: true, patch: result };
 }

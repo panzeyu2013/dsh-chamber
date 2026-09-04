@@ -618,3 +618,81 @@ await 中），我们单点只显示子 agent 计数文案，官方同快照显�
   确认弹窗/菜单/建会话/切视图）；`rowHalf` 对零高行防御；chamber 列表
   区域包一层 `ChamberListBoundary`——意外渲染错误只让列表区显示错误
   文本，绝不带走整个 shell（应用级 ErrorBoundary 不再触发）。
+
+---
+
+## 8. 会话待办区（sidebar todo area，2026-12）
+
+**问题**：会话数量多时，行尾状态指示（蓝点/琥珀徽章）随列表滚出视野，用户需要频繁
+上下滑动检查「哪个会话完成了 / 在等批准 / 在等回答」。桌面通知与 Dock 徽标已有，缺
+一个**常驻、免滚动**的侧边栏内呈现面。
+
+### 8.1 机制（镜子，非盒子）
+
+待办区是对 chamberBridge 投影的**纯派生视图**（`shared/todo-attention.ts`），不持有
+任何条目记忆：
+
+- 输入 = 每来源每会话的**合并运行时事实**（App `completedBySource` 蓝点 ∪ vendor
+  `completed` ∪ `pending` 注册表——与行尾指示完全同一事实源）；
+- 输出 = 「此刻需要你注意」的条目（来源 + 会话 + kind：`approval / plan-review /
+  question / completed`）；
+- 条目出现/消失 = 投影刷新后的重算结果：断连来源无 runtime → 不臆造条目（重连后按
+  真实状态重现或不再出现）；会话重新 running / 已读解除 / pending 注册表清除 → 自动
+  消失。**移除从来不是动作，而是重算。**
+
+派生纪律（与 `sessionStateDot` 同优先级，待办区绝不声称行指示未呈现的注意）：
+
+1. `pending` 压过一切；`question` 归 ask 门，`approval`/`plan-review` 归 request 门；
+2. completed 仅在 `runningSubagents === 0`、合并 completed 为真时出现，且受
+   completed 门控——**completed 优先于运行环**（sessionStateDot 同序：pending >
+   子代理 > completed > running；wire running 只在无 completed 时渲染环，vendor
+   completed 与 wire running 的通道错位窗口内不得漏报）；
+3. 正在查看的会话（`server.id === chamberInstanceId && current`，同高亮 currentId
+   单选纪律）不进入；
+4. 排序：等待类在前（阻塞 agent）、完成未读在后，组内保持列表扫描序（确定、跨 ctx
+   一致）；上限 3 条 +「还有 N 项」展开（组件本地态，条目数回到上限即自动收起；
+   展开侧有界——行区内部滚动约 8 行，「收起」常驻行区之外，积压再多也不会挤压
+   会话列表或埋掉折叠钮）。
+
+### 8.2 交互：点击即跳转，权威式移除
+
+点击条目 = `chamberBridge.requestOpenSession(sourceId, sessionId)` —— 与列表行点击、
+通知点击同一条权威路径：目标来源未常驻自动挂载 boot，跨来源自动切活动视图。
+
+- **completed 条目**：目标会话真正打开（成为活动来源 current）→ App 已读状态机解除
+  → 条目随投影消失。打开失败（断连/来源移除）→ 条目保留、可重试，绝不丢提醒。
+- **pending 条目**：打开**不**移除——只有交互被真正处理（批了/答了/agent 继续，
+  ui-session pending 注册表清除）才消失；切走看别的会话条目仍在，直到处理完毕。
+
+**不做**自动展开/滚动定位：跳转目的地是会话正文；折叠/滚动是用户布局状态（跨 ctx
+共享持久偏好），跳转从不改写；方位感由条目上下文（tooltip：状态 · 来源 · 工作区）、
+多来源时的来源色点与既有 current 高亮提供。业界同构（GitHub/Linear inbox：跳转与树
+可见性解耦，树状态归用户；显式 reveal 仅 IDE 有、不入 v1）。
+
+### 8.3 设置（chamber 全局，通用页新组）
+
+`sessionTodo` 嵌套块（`ChamberSessionTodoSettings`：`enabled/onComplete/onAsk/
+onRequest`），**默认全开**——被动呈现（空时零占用），区别于通知的 opt-in 默认关。
+通用页「运行」与「通知」组之间新增「会话待办区」组：主开关（无边框披露行）+ 展开后
+三类事件开关（卡片内行，通知组同节奏）。持久化在主进程 chamber-settings.json（白名单
++ 嵌套校验 + 损坏保留纪律同 notifications；main `applySettingsPatch` 嵌套 deep-merge）；
+三处类型镜像（preload ↔ renderer 由 ipc-surface-mirror 守护；desktop store 为
+手工镜像——与 notifications 同纪律同缺口）。侧边栏经
+`shared/todo-prefs.ts` 只读订阅（get + onChanged；值域校验 + 未知键过滤 + 未水合回落
+默认——漂移最坏退化为默认，绝不假 off/假 on 之外的状态）。
+
+### 8.4 代码落点
+
+- 派生：`packages/dsh-chamber-client-ui-sidebar/src/shared/todo-attention.ts`
+  （纯函数 + `test/todo-attention.test.ts`）；
+- 设置订阅：同包 `shared/todo-prefs.ts`（只读水合 + `test/todo-prefs.test.ts`）；
+- UI：同包 `client/SessionTodoArea.tsx` + `sidebar-chamber.module.css` `.todo*` 类；
+  `SidebarRoot` 在 `regionArea` 内、滚动容器**外**渲染（`wide` 门控；rail 无待办区；
+  在 `ChamberListBoundary` **之内**——region 渲染错误纪律覆盖待办区）。打开经
+  SidebarRoot 守卫回调（拖拽尾随 click 抑制 + 同会话内联重命名保护），来源色点复用
+  `shared/derive.ts sourceAccentColor` 单一调色板（列表/rail/待办共用）；
+- 设置面：`desktop/chamber-settings.ts`（类型/默认/校验）、`desktop/main.ts`
+  （deep-merge）、`desktop/preload.cts` + `renderer/src/global.d.ts`（镜像）、
+  `settings-bridge`（`session-todo-settings.ts` 助手 + `GeneralView` 新组 +
+  `settings-store.ts` 乐观 overlay 嵌套合并扩展 + zh/en 各 6 键）、sidebar 文案
+  zh/en 各 5 键（`todo.*`）。

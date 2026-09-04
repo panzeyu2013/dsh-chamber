@@ -521,6 +521,9 @@ export interface ChamberSettings {
   /** 桌面通知设置（design 19 §3.4）：嵌套键，默认值镜像 desktop
    *  chamber-settings.ts 的 DEFAULT_CHAMBER_SETTINGS.notifications。 */
   notifications: ChamberNotificationSettings
+  /** 侧边栏「会话待办区」（sidebar todo area）：嵌套键，默认值镜像 desktop
+   *  chamber-settings.ts 的 DEFAULT_CHAMBER_SETTINGS.sessionTodo。 */
+  sessionTodo: ChamberSessionTodoSettings
 }
 
 /** 桌面通知设置子块（design 19 §3.4 + §3.7）——结构与 desktop/chamber-settings.ts
@@ -539,6 +542,21 @@ export interface ChamberNotificationSettings {
   /** 未读计数徽标（默认 true）：Dock/任务栏图标上的红色数字气泡，被动指示、
    *  独立于横幅主开关；关闭时主进程裁决强制清零。 */
   badgeEnabled: boolean
+}
+
+/** 侧边栏「会话待办区」设置子块（sidebar todo area）——结构与
+ *  desktop/chamber-settings.ts 的 ChamberSessionTodoSettings 保持一致
+ *  （镜像同步纪律）。默认全开：待办区是被动呈现（仅在有条目时出现），
+ *  非打扰型通知，默认值不同于 notifications。 */
+export interface ChamberSessionTodoSettings {
+  /** 主开关（默认 true）。 */
+  enabled: boolean
+  /** 会话完成未读时（默认 true）。 */
+  onComplete: boolean
+  /** 代理提问等待回答（pending 'question'）时（默认 true）。 */
+  onAsk: boolean
+  /** 工具调用/计划审批请求（pending 'approval' | 'plan-review'）时（默认 true）。 */
+  onRequest: boolean
 }
 
 /** Non-secret status projection: current settings + platform capability gates. */

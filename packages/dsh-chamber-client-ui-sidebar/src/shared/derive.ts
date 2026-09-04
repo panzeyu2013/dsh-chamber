@@ -113,6 +113,18 @@ export function hashString(input: string): number {
 }
 
 /**
+ * Deterministic per-source accent color (05 §2; 2026-10 soft palette: 34%/
+ * 61% saturation/lightness): remote sources carry a hue hash of their source
+ * id, the LOCAL source omits the accent and falls back to the default ink
+ * (undefined). The single palette definition for every surface (source
+ * header dot / rail dots / active insets, the session-todo source dot) — the
+ * 2026-10 palette churn must not be re-implemented in per-surface copies.
+ */
+export function sourceAccentColor(sourceId: string): string | undefined {
+  return sourceId === 'local' ? undefined : `hsl(${hashString(sourceId) % 360} 34% 61%)`
+}
+
+/**
  * Per-workspace accent CSS variable for the workspace header row (the fold
  * toggle's folder/branch glyph inherits currentColor). `undefined` for the
  * ungrouped bucket, so the CSS fallback chain keeps today's visuals there.

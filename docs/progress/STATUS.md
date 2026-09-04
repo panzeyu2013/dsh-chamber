@@ -236,6 +236,29 @@
   Dash to Dock 消费同一 DBus API 可见；默认 GNOME/KDE 无效果，文档化平台限制）；
   Windows 任务栏 overlay（`setOverlayIcon` 数字角标图）v1 门控未接线——设计 23
   实机矩阵排期。
+- **会话待办区（sidebar todo area，2026-12 已落地）**：侧边栏宽栏滚动区上方固定
+  待办块（仅在有内容时出现、零占用；最多 3 条 +「还有 N 项」展开——展开侧有界：
+  行区内部滚动，「收起」常驻，条目回落即自动收起）——对 chamberBridge 投影的
+  **纯派生**（`shared/todo-attention.ts`：完成未读 ∪ 待交互 approval/plan-review/
+  question，与行尾指示同一优先级纪律 pending > 子代理 > completed > 运行环
+  （completed 优先于环，通道错位窗口不漏报）；断连不臆造、重连随真实状态重现；
+  正在查看的会话排除，同高亮 currentId 单选纪律）。点击 = 权威 open 路径（跨来源
+  切 shell + 打开会话；经 SidebarRoot 守卫回调——拖拽尾随 click 抑制 + 同会话内联
+  重命名保护）；**移除 = 已读/pending 解除的投影驱动结果，从不乐观、与列表可见性
+  解耦**——点击即跳转，不做自动展开/滚动（不触碰共享折叠偏好）。设置新增 chamber
+  全局 `sessionTodo` 嵌套块（主开关 + 完成/提问/审批三类事件开关，**默认全开**——
+  被动呈现非打扰，与通知默认关不同）；通用页新组「会话待办区」
+  （`session-todo-settings.ts` 镜像助手 + `settings-store.ts` 乐观 overlay 嵌套合并
+  扩展 + zh/en i18n）；desktop store/preload/renderer 三处类型镜像（preload↔renderer
+  由 ipc-surface-mirror 守护；desktop store 手工镜像，同 notifications 纪律）+ main
+  applySettingsPatch 嵌套 deep-merge；sidebar `shared/todo-prefs.ts` 只读订阅（未水合
+  回落默认）+ `todo.*` zh/en 文案。自动化覆盖：desktop chamber-settings 用例、
+  settings-bridge session-todo-settings/settings-store 用例、sidebar
+  todo-attention/todo-prefs 用例。
+  **剩余实机门禁**：运行级验收——通用页开关即时生效、同源/跨来源/未常驻跳转与权威
+  移除、折叠来源中目标会话、断连→重连条目重现、rail 不渲染、「还有 N 项」展开/收起
+  与自动收起、展开后内部滚动（8 行上限）、拖拽尾随点击不误开、同会话内联重命名期间
+  点击不打断、打包态。
 - **VS Code 深链 + open-in（设计 16/20）**：剩余 macOS 深链冷/热启动、打包态、
   托盘/退出在途、N-ctx、VS Code 缺失、`sshPort != 22`、Finder 下拉在 vendor
   会话头部的定位/层叠，以及远程来源仅 VS Code 的实机验收。

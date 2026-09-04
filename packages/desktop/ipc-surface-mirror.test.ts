@@ -340,13 +340,24 @@ test('the IPC result unions carry identical FIELD SETS across the mirrors that n
   )
 })
 
-test('the apply-result and notification-settings shapes are type-identical across mirrors (L3 — type-sensitive drift guard)', () => {
+test('the apply-result and notification/sessionTodo settings shapes are type-identical across mirrors (L3 — type-sensitive drift guard)', () => {
   // PluginApplyResult: preload names it SshPluginApplyResult; clients drop the prefix.
   const applyResult = interfaceFieldSignatures(preload, 'SshPluginApplyResult')
   assert.deepEqual(interfaceFieldSignatures(renderer, 'PluginApplyResult'), applyResult, 'renderer PluginApplyResult drifted')
   // ChamberNotificationSettings (nested under ChamberSettings.notifications).
   const notificationSettings = interfaceFieldSignatures(preload, 'ChamberNotificationSettings')
-  assert.deepEqual(interfaceFieldSignatures(renderer, 'ChamberNotificationSettings'), notificationSettings, 'renderer ChamberNotificationSettings drifted')
+  assert.deepEqual(
+    interfaceFieldSignatures(renderer, 'ChamberNotificationSettings'),
+    notificationSettings,
+    'ChamberNotificationSettings preload/renderer drifted',
+  )
+  // ChamberSessionTodoSettings (nested under ChamberSettings.sessionTodo).
+  const sessionTodoSettings = interfaceFieldSignatures(preload, 'ChamberSessionTodoSettings')
+  assert.deepEqual(
+    interfaceFieldSignatures(renderer, 'ChamberSessionTodoSettings'),
+    sessionTodoSettings,
+    'ChamberSessionTodoSettings preload/renderer drifted',
+  )
 })
 
 test('flat shared interfaces are TYPE-identical across preload and renderer (L3 — not just field names)', () => {

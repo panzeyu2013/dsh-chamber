@@ -103,6 +103,19 @@
  * scrollbar at all: the shell tracks the pointer and rebinds ui-theme's
  * scrollbar indirection away while it is elsewhere, so a list the user is not
  * pointing at carries no bar.
+ *
+ * Chamber fourth round (2026-12, 会话待办区): a PINNED attention block above
+ * the scroll region (wide only) — the pure projection derivation
+ * (shared/todo-attention.ts) over the SAME merged runtime facts the rows
+ * render: completed-but-unread sessions and sessions waiting for an
+ * interaction (approval / plan-review / question). Cap 3 +「还有 N 项」
+ * expand; click = the authoritative open path (switch source shell if
+ * needed + open the conversation) — removal is projection-driven (read /
+ * interaction resolved), never optimistic and never dependent on list
+ * visibility; the strip never mutates shared fold/view prefs. The master
+ * switch + per-kind gates live in the chamber-global「通用」settings
+ * (sessionTodo block) and are mirrored read-only here
+ * (shared/todo-prefs.ts).
  */
 import { Component, Fragment, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from 'react'
 import clsx from 'clsx'
@@ -118,9 +131,9 @@ import type { SidebarKey } from './locales.ts'
 import { IconMonitorOutline16 } from './icons.tsx'
 import { chamberBridge, type ChamberServerAggregate, type ChamberServerWorkspace } from '../shared/aggregate-store.ts'
 import {
-  armBlankGhost, BLANK_GHOST_GRACE_MS, deriveLocalSearchMatches, hashString, increasedForkTitle, mergeSearchResults,
+  armBlankGhost, BLANK_GHOST_GRACE_MS, deriveLocalSearchMatches, increasedForkTitle, mergeSearchResults,
   nextServerOrder, nextUpdatedOrder, orderServersForDisplay, orderUngroupedSessions, reconciledSessionOrder, relativeTimeBucket,
-  runningRingVisible, sanitizeSearchQuery, serversProjectionSignature, SEARCH_QUERY_MAX_CODE_UNITS, workspaceAccentStyle,
+  runningRingVisible, sanitizeSearchQuery, serversProjectionSignature, SEARCH_QUERY_MAX_CODE_UNITS, sourceAccentColor, workspaceAccentStyle,
   type SessionOrderBy,
 } from '../shared/derive.ts'
 import {
@@ -133,6 +146,7 @@ import {
   clearSearch, collapseSearch, expandSearch, getSearchStates, setSearchFetcher, setSearchQuery, subscribeSearch,
   type SourceSearchState,
 } from '../shared/search-state.ts'
+import { SessionTodoArea } from './SessionTodoArea.tsx'
 import {
   clearSourceBookkeeping, getViewPrefs, subscribeViewPrefs, updateViewPrefs, type ChamberSidebarViewPrefs,
 } from '../shared/view-prefs.ts'
@@ -164,22 +178,19 @@ const SCROLLBAR_LINGER_MS = 2000
  * the wire caps the actual page.
  */
 
-/** Stable per-source accent: deterministic hue hash of the source id (05 §2). */
-function sourceHue(sourceId: string): number {
-  return hashString(sourceId) % 360
-}
-
 /**
  * Remote sources carry the derived accent; the local source keeps the default
  * dot. Soft palette (user feedback 2026-10): 34% saturation at 61% lightness,
  * matching the workspace icon accents — the old 65%/52% jewel tone read as
  * harsh next to the (now softer) workspace hues. The source-header identity
  * DOT is gone (2026-10, user feedback); this color survives on the rail dots,
- * the active-source left inset and the source fold-toggle glyph only.
+ * the active-source left inset and the source fold-toggle glyph only. ONE
+ * palette definition: shared/derive.ts sourceAccentColor (the session-todo
+ * source dot consumes the same helper).
  */
 function sourceDotStyle(server: ChamberServerAggregate): CSSProperties | undefined {
-  if (server.kind === 'local') return undefined
-  return { backgroundColor: `hsl(${sourceHue(server.id)} 34% 61%)` }
+  const color = sourceAccentColor(server.id)
+  return color === undefined ? undefined : { backgroundColor: color }
 }
 
 /**
@@ -188,8 +199,8 @@ function sourceDotStyle(server: ChamberServerAggregate): CSSProperties | undefin
  * falls back to the default ink (visual audit P2-3).
  */
 function sourceAccentStyle(server: ChamberServerAggregate): { '--dsh-source-accent': string } | undefined {
-  const dot = sourceDotStyle(server)
-  return dot === undefined ? undefined : { '--dsh-source-accent': dot.backgroundColor ?? '' }
+  const color = sourceAccentColor(server.id)
+  return color === undefined ? undefined : { '--dsh-source-accent': color }
 }
 
 /** Connection-status visual kind: dot colors plus the connecting spinner. */
@@ -946,6 +957,18 @@ export function SidebarRoot({
     chamberBridge.requestOpenSession(serverId, sessionId)
   }
 
+  // chamber (2026-12, 会话待办区): the strip's guarded open — same authority
+  // as a row click, plus the two guards a row click already gets at its call
+  // site: the drag-end trailing-click suppression (suppressClickRef) and the
+  // same-session inline-rename exclusion (opening the session whose rename
+  // form is on screen would discard the edit mid-typing).
+  const requestTodoOpen = (sourceId: string, sessionId: string): void => {
+    if (suppressClickRef.current) return
+    if (renaming !== null && renaming.kind === 'session'
+      && renaming.sourceId === sourceId && renaming.id === sessionId) return
+    openSession(sourceId, sessionId)
+  }
+
   /**
    * chamber (2026-08 review fix, design 06 §2.2): arm the blank-row GHOST
    * slot. Called SYNCHRONOUSLY in a session-row onClick BEFORE the open —
@@ -1507,12 +1530,24 @@ export function SidebarRoot({
           take the shell (or the app) down. */}
       <div className={css.regionArea}>
         <ChamberListBoundary>
+        {/* chamber (2026-12, 会话待办区): the pinned attention block above the
+            scroll region — wide only, renders only while it has entries (pure
+            projection derivation, see SessionTodoArea.tsx). INSIDE the region
+            boundary: a malformed projection or a translate throw must never
+            take the whole shell down (boundary discipline). */}
+        {wide ? (
+          <>
+          <SessionTodoArea
+            servers={orderedServers}
+            chamberInstanceId={chamberInstanceId ?? ''}
+            requestOpen={requestTodoOpen}
+            t={t}
+          />
         {/* chamber (2026-08 scroll sync): the scroll container carries
             data-chamber-sidebar-scroll + each row data-chamber-row so the
             renderer's sidebar-scroll-sync can anchor the outgoing shell's
             scroll and restore the same rows at the same screen position in
             the incoming shell on N-ctx view switch. */}
-        {wide ? (
           <div className={cc.chamberList} data-chamber-sidebar-scroll="">
             {orderedServers.map((server) => {
               // chamber (06 §1.2): per-source search read from the shared
@@ -2888,6 +2923,7 @@ export function SidebarRoot({
               <div className={cc.empty}>{t('list.empty')}</div>
             )}
           </div>
+          </>
         ) : (
           <div className={cc.railDots}>
             {orderedServers.map((server) => (
