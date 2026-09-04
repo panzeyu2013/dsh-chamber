@@ -24,7 +24,7 @@ import {
   clearActionError, createSessionHere, currentSessionIsBlank, gitCoordinator, removeUnregisteredWorktree, retryRecovery,
 } from '../shared/coordinator.ts'
 import { gitFactsForWorkspace, removeBlockReason } from '../shared/git-facts.ts'
-import type { GitBusyKind, GitRecovery } from '../shared/types.ts'
+import type { GitBusyKind, GitRecovery, GitWorktreeInfo } from '../shared/types.ts'
 import type { GitSidebarKey } from '../locales.ts'
 import { CreateWorktreeDialog } from './CreateWorktreeDialog.tsx'
 import { RemoveWorktreeDialog, type RemoveViewTarget } from './RemoveWorktreeDialog.tsx'
@@ -73,12 +73,22 @@ function busyLabel(kind: GitBusyKind, t: SidebarWorkspaceGitInjected['t']): stri
   return t('busyRecovery')
 }
 
-function blockLabel(reason: ReturnType<typeof removeBlockReason>, t: SidebarWorkspaceGitInjected['t']): string | undefined {
+function blockLabel(
+  reason: ReturnType<typeof removeBlockReason>,
+  status: GitWorktreeInfo['status'],
+  t: SidebarWorkspaceGitInjected['t'],
+): string | undefined {
   if (reason === 'running') return t('runningBlocked')
   if (reason === 'current') return t('currentBlocked')
   if (reason === 'runtime-unknown') return t('runtimeUnknownBlocked')
   if (reason === 'locked') return t('lockedBlocked')
-  if (reason === 'unhealthy') return t('unhealthyBlocked')
+  if (reason === 'unhealthy') {
+    // Actionable guidance instead of a dead end: a MISSING path has an
+    // in-app registration-only exit (the sidebar's "Missing"/「已消失」
+    // badge) plus the terminal repair route for moved directories; a
+    // present-but-broken path needs git worktree repair/prune first.
+    return status === 'missing' ? t('unhealthyMissingBlocked') : t('unhealthyInvalidBlocked')
+  }
   if (reason === 'dirty') return t('dirtyBlocked')
   if (reason === 'status-unknown') return t('dirtyUnknownBlocked')
   return undefined
@@ -133,8 +143,17 @@ export function SidebarWorkspaceGitLine({
           // the REGISTERED occupant offers the discard-changes dialog for
           // dirty worktrees, but this unregistered row's window.confirm flow
           // cannot collect that authorization, so dirty stays hard-blocked.
-          const blocked = worktree.status !== 'ready' || worktree.locked
-            || worktree.isMain || worktree.dirty === true
+          // The reason is kept for the tooltip so a blocked row tells the
+          // user WHAT to do instead of just "cannot remove".
+          const blockedReason: ReturnType<typeof removeBlockReason> = worktree.isMain
+            ? 'main'
+            : worktree.locked
+              ? 'locked'
+              : worktree.status !== 'ready'
+                ? 'unhealthy'
+                : worktree.dirty === true
+                  ? 'dirty'
+                  : undefined
           return (
             <div className={css.unregisteredRow} key={worktree.worktreeId} role="group">
               <IconBranchOutline16 size={14} className={css.unregisteredIcon} />
@@ -154,7 +173,7 @@ export function SidebarWorkspaceGitLine({
                   // A vanished/missing path cannot host a session — the
                   // adopt would fail at the host anyway (cross-review P3-4).
                   || worktree.status !== 'ready'}
-                title={worktree.status === 'ready' ? t('unregisteredAdoptTitle') : t('unregisteredBlocked')}
+                title={worktree.status === 'ready' ? t('unregisteredAdoptTitle') : t('unhealthyTarget')}
                 aria-label={t('unregisteredAdopt')}
                 onClick={() => { void createSessionHere(context.sourceId, worktree.path).catch(() => {}) }}
               >
@@ -163,8 +182,14 @@ export function SidebarWorkspaceGitLine({
               <button
                 type="button"
                 className={`${css.unregisteredAction} ${css.unregisteredActionDanger}`}
-                disabled={busy || source.recovery !== undefined || blocked}
-                title={blocked ? t('unregisteredBlocked') : t('remove')}
+                disabled={busy || source.recovery !== undefined || blockedReason !== undefined}
+                title={blockedReason === undefined ? t('remove') : (
+                  // Unregistered rows have no workspace/「已消失」badge exit —
+                  // their missing-path guidance is terminal cleanup instead.
+                  blockedReason === 'unhealthy' && worktree.status === 'missing'
+                    ? t('unregisteredMissingBlocked')
+                    : (blockLabel(blockedReason, worktree.status, t) ?? t('remove'))
+                )}
                 aria-label={t('remove')}
                 onClick={() => {
                   if (!window.confirm(t('unregisteredRemoveConfirm').replace('{name}', pathName(worktree.path)))) return
@@ -270,8 +295,8 @@ export function SidebarWorkspaceGitLine({
             // amendment 2026-08). Every other block (running/current/locked/
             // unhealthy/status-unknown) stays a hard disable.
             disabled={actionLocked || (blocked !== undefined && blocked !== 'dirty')}
-            aria-label={blocked === 'dirty' ? t('dirtyRemoveTitle') : (blockLabel(blocked, t) ?? t('remove'))}
-            title={blocked === 'dirty' ? t('dirtyRemoveTitle') : (blockLabel(blocked, t) ?? t('remove'))}
+            aria-label={blocked === 'dirty' ? t('dirtyRemoveTitle') : (blockLabel(blocked, primary.status, t) ?? t('remove'))}
+            title={blocked === 'dirty' ? t('dirtyRemoveTitle') : (blockLabel(blocked, primary.status, t) ?? t('remove'))}
             onClick={() => setRemoveTarget({
               repoId: rows[0]!.repoId,
               worktreeId: primary.worktreeId,
