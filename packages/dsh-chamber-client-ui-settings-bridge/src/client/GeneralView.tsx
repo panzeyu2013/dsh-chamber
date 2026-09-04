@@ -32,6 +32,8 @@
  *   never prompt; update-downloaded exempt); VS Code 新窗口 (vscodeOpenInNewWindow,
  *   design 16 §3.3, default on — 会话目录在 VS Code 新窗口打开，避免
  *   VS Code 默认策略复用并替换最近活动窗口);
+ * - 会话待办区 (sidebar todo area, 2026-12): 主开关 + 三类事件开关（完成未读 /
+ *   提问 / 审批），默认全开——被动呈现（仅在有内容时出现，零占用）;
  * - 通知 (design 19, merged into General — no new nav entry): 主开关 + 未读
  *   徽标开关（design 19 §3.7，独立于主开关、始终可见）+ 启用后展开的子设置
  *   (通知时机 hidden-only / always + 事件开关 complete / ask / request +
@@ -56,6 +58,7 @@ import type { SettingsBridgeKey } from '../locales.ts'
 import type { ChamberSettingsStatus, NotificationSurface } from '../ambient/settings-bridge.d.ts'
 import { applySettingsPatch, getSettingsStatus, subscribeSettings } from './settings-store.ts'
 import { notificationsOf, notificationsPatch } from './notifications-settings.ts'
+import { sessionTodoOf, sessionTodoPatch } from './session-todo-settings.ts'
 import { SegmentedControl } from './SegmentedControl.tsx'
 import { UpdateSection } from './UpdateSection.tsx'
 import css from './SettingsShell.module.css'
@@ -143,6 +146,8 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
   // Same scoping for the unfolded notifications sub-settings (the master
   // switch's aria-controls target).
   const notifyBodyId = useId()
+  // Same scoping for the session-todo sub-settings card (aria-controls).
+  const todoBodyId = useId()
   const [notifyBusy, setNotifyBusy] = useState(false)
   const [notifyResult, setNotifyResult] = useState<'sent' | 'failed' | null>(null)
 
@@ -193,10 +198,14 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
   // Notifications block (design 19 §3.4): design defaults while absent — never
   // a fake off (unknown/future keys filtered in notificationsOf).
   const notifications = notificationsOf(settings)
+  // Session-todo block (sidebar todo area): design defaults (ALL ON) while
+  // absent — never a fake off.
+  const sessionTodo = sessionTodoOf(settings)
 
   // The dsh runtime block moved to the per-server「dsh 运行时」settings.section
-  // (design 18 §3.6, 2026-09 修订): GeneralView keeps only the design-15
-  // control groups (startup/shutdown / runtime / update).
+  // (design 18 §3.6, 2026-09 修订). The full group set rendered below (启动与
+  // 关闭 / 运行 / 会话待办区 2026-12 / 通知 design 19 / 更新 design 11) is
+  // enumerated in this file's top doc block — keep that in sync, not here.
 
   return (
     <div className={css.generalSection}>
@@ -283,6 +292,61 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
             onChange={(next) => save({ vscodeOpenInNewWindow: next })}
           />
         </div>
+      </div>
+
+      {/* 会话待办区（sidebar todo area）：被动呈现开关组——主开关（默认开）
+          是无边框披露行，开启后展开子设置（三类事件开关收入唯一一张卡片，
+          与通知组同节奏）。默认全开：待办区仅在有条目时出现（零占用），
+          不是打扰型通知。 */}
+      <div className={css.generalGroup}>
+        <h3 className={css.generalGroupTitle}>{t('generalGroupSessionTodo')}</h3>
+
+        <label className={clsx(css.generalSwitchRow, !hydrated && css.generalDisabled)}>
+          <div className={css.generalCardText}>
+            <span className={css.generalFieldLabel}>{t('generalSessionTodoEnabled')}</span>
+            <p className={css.generalHint}>{t('generalSessionTodoEnabledDesc')}</p>
+          </div>
+          <span className={css.generalSwitchBox}>
+            <input
+              type="checkbox"
+              role="switch"
+              className={css.generalSwitchInput}
+              checked={sessionTodo.enabled === true}
+              disabled={!hydrated}
+              aria-expanded={sessionTodo.enabled === true}
+              aria-controls={sessionTodo.enabled === true ? todoBodyId : undefined}
+              onChange={(event) => save(sessionTodoPatch({ enabled: event.target.checked }))}
+            />
+            <span className={css.generalSwitch} aria-hidden="true">
+              <span className={css.generalSwitchThumb} />
+            </span>
+          </span>
+        </label>
+
+        {sessionTodo.enabled === true && (
+          <div id={todoBodyId} className={css.generalNotifyCard}>
+            <div className={css.generalEventGrid}>
+              <ToggleEvent
+                label={t('generalSessionTodoOnComplete')}
+                checked={sessionTodo.onComplete !== false}
+                disabled={!hydrated}
+                onChange={(next) => save(sessionTodoPatch({ onComplete: next }))}
+              />
+              <ToggleEvent
+                label={t('generalSessionTodoOnAsk')}
+                checked={sessionTodo.onAsk !== false}
+                disabled={!hydrated}
+                onChange={(next) => save(sessionTodoPatch({ onAsk: next }))}
+              />
+              <ToggleEvent
+                label={t('generalSessionTodoOnRequest')}
+                checked={sessionTodo.onRequest !== false}
+                disabled={!hydrated}
+                onChange={(next) => save(sessionTodoPatch({ onRequest: next }))}
+              />
+            </div>
+          </div>
+        )}
       </div>
 
       {/* 通知 (design 19, merged into General — no new nav entry): 主开关 +

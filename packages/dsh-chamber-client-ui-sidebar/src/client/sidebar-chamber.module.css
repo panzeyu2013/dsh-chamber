@@ -1141,3 +1141,140 @@
 .railDotActive {
   box-shadow: 0 0 0 2px var(--dsh-source-accent, var(--dsw-alias-label-primary));
 }
+
+/* 会话待办区（sidebar todo area, 2026-12）: pinned block between the New
+   Session control and the scroll region (wide only — the rail carries no
+   strip). Pure projection derivation: the whole area renders only while at
+   least one attention entry exists (zero footprint), capped at 3 rows + a
+   「还有 N 项」toggle. Never inside the scroll container, so long lists can
+   never push it out of view; never mutates shared fold/view prefs. */
+.todoArea {
+  flex: none;
+  box-sizing: border-box;
+  min-width: 0;
+  padding: 2px 8px 6px 0;
+}
+
+.todoHeader {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px 2px 8px;
+}
+
+.todoTitle {
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.todoCount {
+  flex: none;
+  font-size: 11px;
+  line-height: 16px;
+  padding: 0 6px;
+  border-radius: 8px;
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-secondary);
+}
+
+/* The row box — BOUNDED when expanded: a weekend backlog must never squeeze
+   the session list to zero or bury the toggle (the toggle itself lives
+   OUTSIDE this box, pinned below it). Max shows ~8 rows (26px pitch) before
+   the internal scroll takes over. The box carries the pointer everywhere
+   (gaps/rows are all part of the same attention surface — list discipline). */
+.todoRows {
+  display: flex;
+  flex-direction: column;
+  max-height: 208px;
+  overflow-y: auto;
+  cursor: pointer;
+}
+
+/* FIXED height (24px, border-box) — same layout-shift discipline as
+   .sessionRow: hover must never change the row height under the moving
+   pointer. The whole row is a button; the click is the authoritative open
+   (jump to the session), identical to a session-row click. */
+.todoRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  box-sizing: border-box;
+  height: 24px;
+  margin: 1px 0;
+  padding: 3px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.todoRow:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+/* Leading 14px slot mirrors the session rows' pending-interaction badge
+   geometry; the completed dot (6px) centers inside it. */
+.todoKindSlot {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+}
+
+.todoRowTitle {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+/* Source identity dot shown only with multiple sources (accent hue via
+   inline style for remotes); the local source falls back to the default ink
+   — the source-header identity discipline. */
+.todoSourceDot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  corner-shape: round;
+}
+
+.todoSourceDotLocal {
+  background: var(--dsw-alias-label-secondary);
+  opacity: 0.65;
+}
+
+.todoMore {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  box-sizing: border-box;
+  height: 22px;
+  margin: 1px 0;
+  padding: 2px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font: inherit;
+  font-size: 12px;
+  line-height: 16px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.todoMore:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}

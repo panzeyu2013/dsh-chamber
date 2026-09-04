@@ -10,6 +10,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import type { ChamberSettings, ChamberSettingsStatus, SettingsSurface } from '../src/ambient/settings-bridge.d.ts'
 import { notificationsPatch } from '../src/client/notifications-settings.ts'
+import { sessionTodoPatch } from '../src/client/session-todo-settings.ts'
 
 function statusWith(overrides?: Partial<ChamberSettings>): ChamberSettingsStatus {
   const base: ChamberSettings = {
@@ -20,6 +21,7 @@ function statusWith(overrides?: Partial<ChamberSettings>): ChamberSettingsStatus
     vscodeOpenInNewWindow: true,
     registryOrigin: 'https://registry.npmjs.org',
     notifications: { enabled: false, mode: 'hidden-only', onComplete: true, onAsk: true, onRequest: true, badgeEnabled: true },
+    sessionTodo: { enabled: true, onComplete: true, onAsk: true, onRequest: true },
   }
   return {
     settings: overrides === undefined ? base : { ...base, ...overrides },
@@ -57,6 +59,9 @@ function fakeSurface(behavior: {
         notifications: patch.notifications !== undefined
           ? { ...surface.applied.notifications, ...patch.notifications }
           : surface.applied.notifications,
+        sessionTodo: patch.sessionTodo !== undefined
+          ? { ...surface.applied.sessionTodo, ...patch.sessionTodo }
+          : surface.applied.sessionTodo,
       }
       return statusWith(surface.applied)
     },
@@ -140,11 +145,17 @@ test('a pending save overlays the snapshot optimistically (no flash window)', as
     assert.equal(store.getSettingsStatus()?.settings.notifications.enabled, true)
     assert.equal(store.getSettingsStatus()?.settings.notifications.mode, 'hidden-only', 'sibling keys survive the overlay')
     assert.equal(store.getSettingsStatus()?.settings.keepAwake, true, 'earlier top-level overlay still applied')
-    const [first, second] = await Promise.all([pending, pendingNested])
+    // Nested sessionTodo patch: same deep-merge discipline.
+    const pendingTodo = store.applySettingsPatch(sessionTodoPatch({ enabled: false }))
+    assert.equal(store.getSettingsStatus()?.settings.sessionTodo.enabled, false)
+    assert.equal(store.getSettingsStatus()?.settings.sessionTodo.onComplete, true, 'sessionTodo sibling keys survive the overlay')
+    const [first, second, third] = await Promise.all([pending, pendingNested, pendingTodo])
     assert.equal(first.ok, true)
     assert.equal(second.ok, true)
+    assert.equal(third.ok, true)
     assert.equal(store.getSettingsStatus()?.settings.keepAwake, true)
     assert.equal(store.getSettingsStatus()?.settings.notifications.enabled, true)
+    assert.equal(store.getSettingsStatus()?.settings.sessionTodo.enabled, false)
   } finally {
     delete (globalThis as Record<string, unknown>).window
   }
@@ -160,6 +171,13 @@ test('a failed save rolls the optimistic overlay back', async () => {
     const result = await store.applySettingsPatch({ keepAwake: true })
     assert.equal(result.ok, false)
     assert.equal(store.getSettingsStatus()?.settings.keepAwake, false, 'rollback restores the authoritative value')
+    // A failed NESTED sessionTodo save rolls back the same way — sibling keys
+    // and the whole block stay authoritative (dropOptimistic is
+    // block-agnostic; this pins the nested path).
+    const nested = await store.applySettingsPatch(sessionTodoPatch({ enabled: false }))
+    assert.equal(nested.ok, false)
+    assert.equal(store.getSettingsStatus()?.settings.sessionTodo.enabled, true, 'nested rollback restores the authoritative value')
+    assert.equal(store.getSettingsStatus()?.settings.sessionTodo.onComplete, true, 'sibling keys stay authoritative')
   } finally {
     delete (globalThis as Record<string, unknown>).window
   }

@@ -29,7 +29,12 @@ test('normalizeSettings: defaults for null / non-object', () => {
 
 test('normalizeSettings: accepts valid fields, rejects bad values, ignores unknown keys', () => {
   const ok = normalizeSettings({ windowCloseBehavior: 'quit', launchAtLogin: true, keepAwake: true, quitConfirmation: false, vscodeOpenInNewWindow: false, registryOrigin: 'https://registry.npmmirror.com', futureKey: 42 });
-  assert.deepEqual(ok, { windowCloseBehavior: 'quit', launchAtLogin: true, keepAwake: true, quitConfirmation: false, vscodeOpenInNewWindow: false, registryOrigin: 'https://registry.npmmirror.com', notifications: DEFAULT_CHAMBER_SETTINGS.notifications });
+  assert.deepEqual(ok, {
+    windowCloseBehavior: 'quit', launchAtLogin: true, keepAwake: true, quitConfirmation: false,
+    vscodeOpenInNewWindow: false,
+    registryOrigin: 'https://registry.npmmirror.com', notifications: DEFAULT_CHAMBER_SETTINGS.notifications,
+    sessionTodo: DEFAULT_CHAMBER_SETTINGS.sessionTodo,
+  });
   // Bad enum / non-boolean values fall back to defaults silently (normalize is
   // the persistence read path; loud validation lives in validatePatch).
   const bad = normalizeSettings({ windowCloseBehavior: 'minimize', launchAtLogin: 'yes', keepAwake: 1, quitConfirmation: 'yes', vscodeOpenInNewWindow: 'yes' });
@@ -73,6 +78,7 @@ test('writeSettingsFile + readSettingsFile round-trip (atomic, 0600)', () => {
     vscodeOpenInNewWindow: false,
     registryOrigin: 'https://registry.npmjs.org',
     notifications: { enabled: true, mode: 'always' as const, onComplete: false, onAsk: true, onRequest: false, badgeEnabled: false },
+    sessionTodo: { enabled: false, onComplete: false, onAsk: true, onRequest: false },
   };
   writeSettingsFile(file, settings);
   const read = readSettingsFile(file);
@@ -183,6 +189,95 @@ test('readSettingsFile: wrongly-typed vscodeOpenInNewWindow is preserved as corr
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('normalizeSettings: nested sessionTodo (sidebar todo area) — missing/invalid fields fall back to defaults', () => {
+  // 缺字段 → 整组默认（默认全开：被动呈现，非打扰型通知）。
+  assert.deepEqual(normalizeSettings({ sessionTodo: {} }).sessionTodo, DEFAULT_CHAMBER_SETTINGS.sessionTodo);
+  // 非对象（null/数组/标量）→ 整组默认。
+  assert.deepEqual(normalizeSettings({ sessionTodo: null }).sessionTodo, DEFAULT_CHAMBER_SETTINGS.sessionTodo);
+  assert.deepEqual(normalizeSettings({ sessionTodo: 'yes' }).sessionTodo, DEFAULT_CHAMBER_SETTINGS.sessionTodo);
+  assert.deepEqual(normalizeSettings({ sessionTodo: ['x'] }).sessionTodo, DEFAULT_CHAMBER_SETTINGS.sessionTodo);
+  // 部分字段 → 缺失用默认；合法字段保留；非法值回落默认。
+  const partial = normalizeSettings({ sessionTodo: { enabled: false, onAsk: false, onComplete: 'yes' } });
+  assert.deepEqual(partial.sessionTodo, { enabled: false, onComplete: true, onAsk: false, onRequest: true });
+  const invalid = normalizeSettings({ sessionTodo: { enabled: 'yes', onRequest: 1 } });
+  assert.deepEqual(invalid.sessionTodo, DEFAULT_CHAMBER_SETTINGS.sessionTodo);
+  // 未知嵌套键忽略（前向兼容，persistence 读路径语义同顶层）。
+  const unknown = normalizeSettings({ sessionTodo: { enabled: false, futureNested: 42 } });
+  assert.deepEqual(unknown.sessionTodo, { enabled: false, onComplete: true, onAsk: true, onRequest: true });
+});
+
+test('readSettingsFile: malformed nested sessionTodo block is preserved as corrupt', () => {
+  // Same shape discipline as notifications: a scalar/array/wrongly-typed
+  // sub-block is corruption, never silently re-normalized to defaults.
+  const malformed: unknown[] = [
+    { sessionTodo: 'enabled' },
+    { sessionTodo: ['enabled', true] },
+    { sessionTodo: { enabled: true, onComplete: 1 } },
+    { sessionTodo: { enabled: 'yes' } },
+  ];
+  for (const [index, payload] of malformed.entries()) {
+    const dir = mkdtempSync(path.join(tmpdir(), `chamber-settings-bad-session-todo-${index}-`));
+    const file = path.join(dir, 'chamber-settings.json');
+    try {
+      writeFileSync(file, JSON.stringify(payload));
+      const read = readSettingsFile(file);
+      assert.match(read.notice ?? '', /corrupt/, `sessionTodo payload #${index} must be corrupt`);
+      assert.deepEqual(read.settings, DEFAULT_CHAMBER_SETTINGS, `sessionTodo payload #${index} falls back to defaults`);
+      assert.equal(existsSync(file), false, `sessionTodo payload #${index} file moved away`);
+      assert.equal(existsSync(`${file}.corrupt`), true, `sessionTodo payload #${index} preserved`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+  // A well-formed sessionTodo block stays valid (unknown nested keys remain a
+  // forward-compat tolerance, like the top level).
+  const dir = mkdtempSync(path.join(tmpdir(), 'chamber-settings-good-session-todo-'));
+  const file = path.join(dir, 'chamber-settings.json');
+  try {
+    writeFileSync(file, JSON.stringify({
+      sessionTodo: { enabled: false, onComplete: false, onAsk: true, onRequest: false, futureKey: 'x' },
+    }));
+    const read = readSettingsFile(file);
+    assert.equal(read.notice, null, 'well-formed sessionTodo block reads clean');
+    assert.deepEqual(read.settings.sessionTodo, { enabled: false, onComplete: false, onAsk: true, onRequest: false });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('validatePatch: nested sessionTodo — valid partial patches accepted', () => {
+  const full = validatePatch({ sessionTodo: { enabled: false, onComplete: false, onAsk: true, onRequest: false } });
+  assert.ok(full.ok);
+  if (full.ok) assert.deepEqual(full.patch.sessionTodo, { enabled: false, onComplete: false, onAsk: true, onRequest: false });
+  // 部分嵌套字段合法（未提供的字段不落 patch，由 applySettingsPatch deep-merge 兜底）。
+  const partial = validatePatch({ sessionTodo: { enabled: false } });
+  assert.ok(partial.ok);
+  if (partial.ok) assert.deepEqual(partial.patch.sessionTodo, { enabled: false });
+  // 顶层合法键 + 嵌套 partial 组合通过（整体采纳）。
+  const mixed = validatePatch({ keepAwake: true, sessionTodo: { enabled: false, onAsk: false } });
+  assert.ok(mixed.ok);
+  if (mixed.ok) assert.deepEqual(mixed.patch, { keepAwake: true, sessionTodo: { enabled: false, onAsk: false } });
+  // 空对象也是合法 partial（无操作）。
+  const empty = validatePatch({ sessionTodo: {} });
+  assert.ok(empty.ok);
+});
+
+test('validatePatch: nested sessionTodo — invalid values rejected loudly', () => {
+  const notObject = validatePatch({ sessionTodo: 'yes' });
+  assert.equal(notObject.ok, false);
+  const nullNested = validatePatch({ sessionTodo: null });
+  assert.equal(nullNested.ok, false);
+  const arrayNested = validatePatch({ sessionTodo: ['enabled'] });
+  assert.equal(arrayNested.ok, false);
+  const badBool = validatePatch({ sessionTodo: { onComplete: 'yes' } });
+  assert.equal(badBool.ok, false);
+  const unknownNested = validatePatch({ sessionTodo: { enabled: true, futureNested: 42 } });
+  assert.equal(unknownNested.ok, false);
+  // 嵌套非法时顶层合法键也不应被采纳（整体失败）。
+  const mixedBad = validatePatch({ keepAwake: true, sessionTodo: { enabled: 'yes' } });
+  assert.equal(mixedBad.ok, false);
 });
 
 test('computeSupported: launchAtLogin on all shipping platforms; closeToTray follows tray availability, always on darwin', () => {

@@ -75,6 +75,6 @@
     "lib/types/**/*.d.ts"
   ],
   "scripts": {
-    "test": "node test/busy-enter-policy.test.ts && node test/permission-controller.test.ts && node test/gateway-runtime-api.test.ts && node test/mount-retry.test.ts && node test/nav-active.test.ts && node test/server-selector.test.ts && node test/update-gate.test.ts && node test/runtime-management.test.ts && node test/settings-store.test.ts && node test/notifications-settings.test.ts"
+    "test": "node test/busy-enter-policy.test.ts && node test/permission-controller.test.ts && node test/gateway-runtime-api.test.ts && node test/mount-retry.test.ts && node test/nav-active.test.ts && node test/server-selector.test.ts && node test/update-gate.test.ts && node test/runtime-management.test.ts && node test/settings-store.test.ts && node test/notifications-settings.test.ts && node test/session-todo-settings.test.ts"
   }
 }

@@ -373,6 +373,9 @@ export interface ChamberSettings {
   /** 桌面通知设置（design 19 §3.4）：嵌套键，与 chamber-settings.ts 权威 store
    *  及 renderer global.d.ts 的结构镜像保持一致（镜像同步纪律）。 */
   notifications: ChamberNotificationSettings
+  /** 侧边栏「会话待办区」（sidebar todo area）：嵌套键，镜像同步纪律同
+   *  notifications。 */
+  sessionTodo: ChamberSessionTodoSettings
 }
 
 /** 桌面通知设置子块（design 19 §3.4 + §3.7）——结构与 desktop/chamber-settings.ts 的
@@ -385,6 +388,15 @@ export interface ChamberNotificationSettings {
   onRequest: boolean
   /** 未读计数徽标（默认 true，被动指示，独立于横幅主开关）。 */
   badgeEnabled: boolean
+}
+
+/** 侧边栏「会话待办区」设置子块——结构与 desktop/chamber-settings.ts 的
+ *  ChamberSessionTodoSettings 保持一致；默认全开（被动呈现，非打扰型）。 */
+export interface ChamberSessionTodoSettings {
+  enabled: boolean
+  onComplete: boolean
+  onAsk: boolean
+  onRequest: boolean
 }
 
 /** Non-secret status projection: current settings + platform capability gates. */

@@ -54,8 +54,9 @@ let optimisticStatus: ChamberSettingsStatus | null = null
  *  the main process) never flashes an intermediate value. */
 let saveSeq = 0
 
-/** Deep-merge a partial patch over a settings object (notifications is a
- *  nested block — a partial patch must never drop sibling keys). */
+/** Deep-merge a partial patch over a settings object (notifications and
+ *  sessionTodo are nested blocks — a partial patch must never drop sibling
+ *  keys). */
 function mergeSettings(base: ChamberSettings, patch: Partial<ChamberSettings>): ChamberSettings {
   return {
     ...base,
@@ -63,6 +64,9 @@ function mergeSettings(base: ChamberSettings, patch: Partial<ChamberSettings>): 
     notifications: patch.notifications !== undefined
       ? { ...base.notifications, ...patch.notifications }
       : base.notifications,
+    sessionTodo: patch.sessionTodo !== undefined
+      ? { ...base.sessionTodo, ...patch.sessionTodo }
+      : base.sessionTodo,
   }
 }
 

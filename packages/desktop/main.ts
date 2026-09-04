@@ -1057,14 +1057,18 @@ function applyLaunchAtLogin(enabled: boolean): { ok: true } | { ok: false; error
  * windowCloseBehavior 无副作用（影响未来的 close 事件）。
  */
 function applySettingsPatch(patch: Partial<ChamberSettings>): { ok: true } | { ok: false; error: string } {
-  // notifications 是嵌套对象：patch 可能只带部分子键（validatePatch 允许 partial），
-  // 必须 deep-merge 到当前值，绝不整组替换丢开关。
+  // notifications / sessionTodo 是嵌套对象：patch 可能只带部分子键
+  // （validatePatch 允许 partial），必须 deep-merge 到当前值，绝不整组
+  // 替换丢开关。
   const next: ChamberSettings = {
     ...chamberSettings,
     ...patch,
     notifications: patch.notifications !== undefined
       ? { ...chamberSettings.notifications, ...patch.notifications }
       : chamberSettings.notifications,
+    sessionTodo: patch.sessionTodo !== undefined
+      ? { ...chamberSettings.sessionTodo, ...patch.sessionTodo }
+      : chamberSettings.sessionTodo,
   };
   // 副作用应用包 try：powerSaveBlocker / 登录自启意外抛异常时 loud 失败并
   // best-effort 回滚 keepAwake，绝不带病继续（绝不落半个设置）。

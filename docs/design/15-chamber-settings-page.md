@@ -89,3 +89,37 @@
 - 设计 14（睡眠/后台常驻）：`__general` 的内容来源；
 - 设计 11（自动更新）：更新块并入 `__general`；
 - `docs/progress/STATUS.md`（进度唯一记录）。
+
+---
+
+## 6. 会话待办区设置组（2026-12 增补）
+
+「通用」（`__general`）在「运行」与「通知」组之间新增「会话待办区」组（sidebar todo
+area，契约见设计 06 §8）：主开关（无边框披露行）+ 展开后三类事件开关（已完成未读 /
+等待回答 / 等待批准，卡片内行——通知组同节奏、同视觉语言）。对应 chamber 全局设置
+新嵌套块：
+
+```ts
+ChamberSettings.sessionTodo: {
+  enabled: boolean      // 默认 true（被动呈现，空时零占用）
+  onComplete: boolean   // 默认 true
+  onAsk: boolean        // 默认 true（pending 'question'）
+  onRequest: boolean    // 默认 true（pending 'approval' | 'plan-review'）
+}
+```
+
+- 持久化：主进程 `<userData>/chamber-settings.json`（`chamber-settings.ts`：类型/默认/
+  白名单/嵌套归一与损坏校验/validatePatch 同 notifications 纪律；`main.ts`
+  `applySettingsPatch` 嵌套 deep-merge，绝不全组替换）；
+- 类型镜像三处：`desktop/chamber-settings.ts`（store 权威）、`desktop/preload.cts`、
+  `renderer/src/global.d.ts`（preload↔renderer 由 ipc-surface-mirror.test.ts 守护，
+  含嵌套类型签名比对；desktop store 为手工镜像——同 notifications 纪律）；
+- 渲染端助手：`settings-bridge/src/client/session-todo-settings.ts`
+  （`sessionTodoOf`/`sessionTodoPatch`/`SESSION_TODO_DEFAULTS`，partial 嵌套 patch
+  只带改动的键上 wire）；`settings-store.ts` 乐观 overlay 的 `mergeSettings` 同步
+  嵌套 deep-merge（通知组先例同款扩展）；
+- 消费者：侧边栏 `ui-sidebar/src/shared/todo-prefs.ts` 只读镜像（get + onChanged，
+  未水合回落默认——功能默认开，与「绝不假 off」占位纪律不冲突，因为本块的默认值
+  本身就是开）。
+
+**关联（补 2026-12）**：设计 06 §8（会话待办区交互/派生契约）；设计 19 §3.4（通知组并入通用的先例：事件类别 vocabulary 复用 complete/ask/request）。
