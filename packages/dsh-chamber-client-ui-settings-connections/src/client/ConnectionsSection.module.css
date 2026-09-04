@@ -328,10 +328,9 @@
 }
 
 /* Shared by the card's text action buttons (重启 dsh / 启动实例 / systemd
-   restart): the bubble exists solely while data-tip is present. The 重启 dsh
-   button tips in both states (enabled: restartManagedDshTip — what the
-   restart does; disabled: restartNotConnected); the 启动实例 / systemd
-   buttons tip only when the reason is not already the visible label
+   restart): the bubble exists solely while data-tip is present. D8 (plan 24):
+   the 重启 dsh button dropped its data-tip (aria-label only); the 启动实例 /
+   systemd buttons tip only when the reason is not already the visible label
    (disabled states — serviceName null / not connected). Same vocabulary as
    the icon-button tooltip above. Rename candidate: the class is no longer
    restart-only — .textActionTip would name the shared use. */
@@ -1193,4 +1192,55 @@
 .pluginFolder {
   padding-top: 8px;
   border-top: 1px solid var(--dsw-alias-border-l2);
+}
+
+/* ---- unified plugin dialog: chamber built-in table (plan 24 B1.5) ----
+   Compact grid: package | local badge | remote/gateway badge | version.
+   Badges reuse the .badge pill family (chamberBadgeClass maps the tone:
+   ok = .badgeOk, warn = .badgeWarn, danger = .badgeBad, muted = .badge). */
+
+.chamberTable {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.chamberTableRow {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.4fr) auto auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 3px 6px;
+  font-size: 12px;
+}
+
+.chamberTableHead {
+  font-size: 11px;
+  color: var(--dsw-alias-label-dimmed);
+}
+
+.chamberCell {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 12px;
+}
+
+/* ---- gateway recovery banner (plan 24 B1.6 / design 21 §6.8 r1) ----
+   The runtimeDown-gated undo affordance: the copy plus the
+   recoveryUninstallRestart action in one warning-tone row. */
+
+.recoveryBanner {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--dsw-alias-state-warn-primary);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-2);
+  font-size: 12px;
+  color: var(--dsw-alias-state-warn-label);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
 }

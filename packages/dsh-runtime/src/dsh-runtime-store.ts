@@ -125,7 +125,21 @@ export interface RuntimeDiskSummary {
   snapshotBytes: number
   preRollbackBytes: number
   restoreBackupBytes: number
-  /** Logical category sum; hard-linked tree/store bytes may be counted twice. */
+  /** Deduped bytes inside the runtime root that belong to no known category
+   * (version trees / store / caches / work / failed trees / publish backups
+   * / failure family / snapshots / pre-rollback / metadata recovery family)
+   * — stray residue plus the small metadata authority files. */
+  unclassifiedBytes: number
+  /**
+   * Real byte figure: the runtime root plus the dsh-home.old* restore
+   * backups are walked once and every entry is counted by (dev, ino)
+   * identity exactly once, so hard-linked tree/store entries are never
+   * double counted. Category fields keep their historical per-path sums
+   * (a shared hard link is still charged to both categories).
+   * Honest boundary: (dev, ino) dedupe cannot see APFS clone/reflink copies
+   * (shared physical blocks, distinct inodes), so on APFS this remains an
+   * upper bound of allocated blocks — the same known approximation as `du`.
+   */
   totalBytes: number
   storePruneNeeded: boolean
 }
@@ -1298,7 +1312,12 @@ export function cleanupExplicitRuntimeVersion(
     rmSync(treePath, { recursive: true, force: true })
   }
   forgetExplicitInstall(baseDir, safe)
-  if (exists) markStorePruneNeeded(baseDir, `explicit-cleanup:${safe}`)
+  if (exists) {
+    markStorePruneNeeded(baseDir, `explicit-cleanup:${safe}`)
+    // Removing a hard-linked tree orphans its package cache entries; ask the
+    // store prune to also reclaim the private .pnpm-cache/.xdg-cache content.
+    markStorePruneNeeded(baseDir, 'cache-reclaim')
+  }
   return { removed: exists, retentionCleared: true, stillProtected: false }
 }
 
@@ -1367,7 +1386,12 @@ export function evictVersions(baseDir: string, keep = 3): string[] {
     evicted.push(version)
     total -= 1
   }
-  if (evicted.length > 0) markStorePruneNeeded(baseDir, `evicted:${evicted.join(',')}`)
+  if (evicted.length > 0) {
+    markStorePruneNeeded(baseDir, `evicted:${evicted.join(',')}`)
+    // Evicted hard-linked trees orphan package cache entries the same way an
+    // explicit cleanup does; recycle the private caches after the prune.
+    markStorePruneNeeded(baseDir, 'cache-reclaim')
+  }
   return evicted
 }
 
@@ -1483,6 +1507,35 @@ function measurePathBytes(path: string): number {
   return total
 }
 
+/** Same walk discipline as measurePathBytes (lstat only, symlinks never
+ * followed, directory entries charged), but every entry is counted by
+ * (dev, ino) identity exactly once across ALL roots — the real-bytes
+ * companion for totalBytes/unclassifiedBytes. A root that vanished entirely
+ * is zero; anything else (including a nested entry that vanished between
+ * listing and lstat) propagates like the per-path sums. */
+function measureDedupedBytes(roots: string[]): number {
+  const seen = new Set<string>()
+  const visit = (entryPath: string, missingIsZero: boolean): number => {
+    let info
+    try {
+      info = lstatSync(entryPath)
+    } catch (error) {
+      if (missingIsZero && (error as NodeJS.ErrnoException).code === 'ENOENT') return 0
+      throw error
+    }
+    const key = `${info.dev}:${info.ino}`
+    if (seen.has(key)) return 0
+    seen.add(key)
+    if (info.isSymbolicLink() || !info.isDirectory()) return info.size
+    let total = info.size
+    for (const entry of readdirSync(entryPath)) total += visit(join(entryPath, entry), false)
+    return total
+  }
+  let total = 0
+  for (const root of roots) total += visit(root, true)
+  return total
+}
+
 function isRuntimePublishBackupName(name: string): boolean {
   const match = PUBLISH_BACKUP_NAME.exec(name)
   if (!match) return false
@@ -1497,13 +1550,23 @@ function isRuntimePublishBackupName(name: string): boolean {
  * hot UI loop; callers should run it only after install/cleanup or on demand.
  * `dshHome` defaults to the desktop owner layout; the separately invoked
  * gateway passes its sibling `<stateDir>/dsh-home` explicitly so interrupted
- * restore backups are charged to the same logical runtime quota. */
+ * restore backups are charged to the same logical runtime quota.
+ *
+ * Accounting contract (settings polish D1-A): `totalBytes` is the real byte
+ * figure — the runtime root plus the `dsh-home.old*` backups are walked once
+ * with (dev, ino) dedupe, so hard-linked tree/store bytes are never counted
+ * twice. Category fields keep their historical per-path sum semantics.
+ * `unclassifiedBytes` is the deduped residue of entries that fall into no
+ * known category, so stray directories and metadata authorities stop being
+ * invisible to the UI and the fresh-install soft gate. See RuntimeDiskSummary
+ * for the honest APFS-reflink approximation boundary. */
 export function runtimeDiskSummary(
   baseDir: string,
   dshHome: string = join(baseDir, 'state', 'dsh-home'),
 ): RuntimeDiskSummary {
   const runtime = runtimeDirPath(baseDir)
   const trees = listVersionTrees(baseDir)
+  const treeSet = new Set(trees)
   const runtimeEntries = (() => {
     try {
       return readdirSync(runtime, { withFileTypes: true })
@@ -1530,6 +1593,29 @@ export function runtimeDiskSummary(
       throw error
     }
   })()
+  // One entry belongs to at most one known category; everything else is
+  // unclassified residue. Classification mirrors the exact category sums
+  // below (same name/dirent filters), so no entry can be silently counted
+  // in neither the categories nor the residue.
+  const unclassifiedPaths: string[] = []
+  for (const entry of runtimeEntries) {
+    const name = entry.name
+    const known = (treeSet.has(name) && entry.isDirectory())
+      || (entry.isDirectory() && name.startsWith('.work-'))
+      || (entry.isDirectory() && name.endsWith('.failed'))
+      || isRuntimePublishBackupName(name)
+      || name === 'failures'
+      || name === 'metadata-recovery-data'
+      || name === 'metadata-recovery-rescue-data'
+      || name === 'metadata-recovery.json'
+      || name === '.pnpm-store'
+      || name === '.pnpm-cache'
+      || name === '.install-home'
+      || name === '.xdg-cache'
+      || name === 'snapshots'
+      || name === 'pre-rollback'
+    if (!known) unclassifiedPaths.push(join(runtime, name))
+  }
   const versionTreeBytes = trees.reduce((sum, version) => sum + measurePathBytes(join(runtime, version)), 0)
   const storeBytes = measurePathBytes(join(runtime, '.pnpm-store'))
   const cacheBytes = measurePathBytes(join(runtime, '.pnpm-cache'))
@@ -1548,9 +1634,13 @@ export function runtimeDiskSummary(
   const snapshotBytes = measurePathBytes(join(runtime, 'snapshots'))
   const preRollbackBytes = measurePathBytes(join(runtime, 'pre-rollback'))
   const restoreBackupBytes = restoreBackups.reduce((sum, backup) => sum + measurePathBytes(backup), 0)
-  const totalBytes = versionTreeBytes + storeBytes + cacheBytes + installHomeBytes
-    + xdgCacheBytes + workBytes + failureBytes + snapshotBytes
-    + preRollbackBytes + restoreBackupBytes
+  const unclassifiedBytes = measureDedupedBytes(unclassifiedPaths)
+  // One walk, one identity set: a hard link shared between a version tree
+  // and the store (or a restore backup) is charged to real totalBytes once.
+  const totalBytes = measureDedupedBytes([
+    ...runtimeEntries.map((entry) => join(runtime, entry.name)),
+    ...restoreBackups,
+  ])
   return {
     versionTrees: trees.length,
     versionTreeBytes,
@@ -1563,6 +1653,7 @@ export function runtimeDiskSummary(
     snapshotBytes,
     preRollbackBytes,
     restoreBackupBytes,
+    unclassifiedBytes,
     totalBytes,
     storePruneNeeded: existsSync(storePruneMarkerPath(baseDir)),
   }

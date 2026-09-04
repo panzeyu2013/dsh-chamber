@@ -146,6 +146,13 @@
   host-graph 的 installed 投影冒充自身状态，而是按来源调用 `gitWorktree`
   Remote。缺包或尚未重启生效时保留明确的来源错误；ready-time 注入日志说明
   “重启后生效”，不得把 RPC 不可达渲染成空仓库。
+- **2026-12 收敛（design 21 §6.6，plan 24）**：插件管理对话框已合体为唯一
+  `PluginDialog`（connections 包）——local / ssh+dsh / gateway / http 直连四来源按
+  后端能力矩阵渲染同一组件，分叉仅在数据源与动作分发（design 21 §3 单一模型、
+  末段执行分叉）；ssh 面的同步差异/添加/已安装列表逐行移除/撤销最近变更行为在
+  合体中逐字节保留；gateway 添加双通道（registry spec 直装 + 文件夹直推）接线、
+  「变更记录」区移除（后端 journal/备份保留）、恢复撤销仅 gateway；http 直连
+  只读不变。本节与 §5 IPC 面仍为 ssh/远端行为的权威契约。
 
 ## 7. 安全
 
@@ -208,7 +215,7 @@ stdoutBytes。
   plugin_list/plugin_apply/seed_host_graph/materialize_add/materialize_add_pick
   + 本地 local_plugin_list/add/remove/add_file + npm_search）、前端
   PluginSyncModal/PluginAddView/plugin-diff、chamber 内建注入可见化 +
-  生效三态。
+  生效三态。（历史基线；已由 PluginDialog 收敛——见 design 21 §6.6 落地状态，2026-12）
 - **设计 08 扩展已落地（2026-08-20）**：通用双 host-package seed、精确
   id/name pair merge、ready-time 单飞注入与 packaged 双包复制；未改变
   TransportExecAction/run 形状或普通插件 manifest schema。

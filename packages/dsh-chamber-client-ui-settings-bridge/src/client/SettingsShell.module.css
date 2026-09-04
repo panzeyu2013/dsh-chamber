@@ -561,9 +561,11 @@
   color: var(--dsw-alias-label-tertiary);
 }
 
-/* 组内块分栏（2026-12，dsh 运行时段三块：当前状态 / 版本操作 / 版本源）：
-   与通用页组间分隔同词汇——border-l2 发丝线 + 12px 上内距；块间距由所在
-   group 的 10px gap 提供，线与上一块内容之间视觉居中。 */
+/* 组内块分栏（2026-12，dsh 运行时段两块：版本操作 / 版本源；D6-A 紧凑
+   事实块——数据快照 + 运行时占用——复用本类的 border-l2 发丝线置于「版本
+   源」块内容之后、段尾）：与通用页组间分隔同词汇——border-l2 发丝线 +
+   12px 上内距；块间距由所在 group 的 10px gap 提供，线与上一块内容之间
+   视觉居中。 */
 .generalGroupTitleBlock {
   border-top: 1px solid var(--dsw-alias-border-l2);
   padding-top: 12px;
@@ -1104,4 +1106,40 @@
 
 .runtimeSelect:disabled + .runtimeSelectChevron {
   opacity: 0.5;
+}
+
+/* ---- 紧凑事实块（D6-A，2026-12）----
+   数据快照 + 运行时占用两行移出「当前状态」，置于「版本源」块内容之后、
+   段尾（与版本源错误行同区域）；发丝线分隔复用 .generalGroupTitleBlock。 */
+
+/* 事实行：标签 12px tertiary，数值 12px/600 primary 加粗。 */
+.runtimeFactRow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.runtimeFactLabel {
+  flex: none;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.runtimeFactValue {
+  min-width: 0;
+  font-size: 12px;
+  line-height: 18px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-primary);
+}
+
+/* 事实块容器：4px 紧凑纵向 gap（磁盘行文案自身带头「运行时占用 {total}」，
+   无独立标签——数值整行加粗）。 */
+.runtimeDiskFacts {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }

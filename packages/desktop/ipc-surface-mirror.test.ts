@@ -176,6 +176,22 @@ test('DesktopSshSurface matches the GOLDEN baseline — a method deleted from AL
   assert.deepEqual(interfaceMethodNames(preload, 'DesktopSshSurface'), golden, 'DesktopSshSurface drifted from the golden baseline')
 })
 
+test('RuntimeSurface matches the GOLDEN baseline across preload and renderer mirrors (L3 golden guard)', () => {
+  // The renderer's runtime-management.ts is the authoritative contract; the
+  // preload duplicates the interface (single-file build) and the renderer
+  // global.d.ts re-exports it. A method removed from ALL mirrors still fails
+  // against this golden.
+  const runtimeManagement = readFileSync(join(ROOT, 'packages/renderer/src/runtime-management.ts'), 'utf8')
+  const golden = [
+    'applyNow', 'check', 'cleanupVersion', 'clearFailure', 'install', 'onChanged',
+    'recoverMetadata', 'resetBuiltin', 'restart', 'restorePreRollback', 'retryApply',
+    'retryRestore', 'state',
+  ].sort()
+  assert.deepEqual(interfaceMethodNames(preload, 'RuntimeSurface'), golden, 'preload RuntimeSurface drifted from the golden baseline')
+  assert.deepEqual(interfaceMethodNames(runtimeManagement, 'RuntimeSurface'), golden, 'renderer runtime-management RuntimeSurface drifted from the golden baseline')
+  assert.match(renderer, /RuntimeSurface[\s\S]*?}\s*from '\.\/runtime-management\.ts'/, 'renderer global.d.ts must re-export the runtime surface')
+})
+
 test('main-owned connection transaction is wired through the preload without returning credentials', () => {
   const credentialFields = interfaceFieldSignatures(connectionSave, 'ConnectionCredentialMutations')
   assert.deepEqual(interfaceFieldSignatures(preload, 'ConnectionCredentialMutations'), credentialFields,

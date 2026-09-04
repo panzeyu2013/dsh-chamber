@@ -32,6 +32,7 @@ export type {
   ConnectionCredentialMutations,
   GatewayPluginApplyIpcResult,
   GatewayPluginApplyInput,
+  GatewayPluginMaterializeIpcResult,
   GatewayPluginSyncIpcResult,
   ChamberNotificationSettings,
   ChamberSettings,

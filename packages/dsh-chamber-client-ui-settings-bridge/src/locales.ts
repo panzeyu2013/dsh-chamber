@@ -117,17 +117,20 @@ export const zh = {
   dshRuntimeMetadataComponentSeparator: '、',
   dshRuntimeMetadataComponentUnknown: '未知组件',
   dshRuntimeCleanupVersion: '清理版本',
+  dshRuntimeClearFailure: '清除',
   dshRuntimeFailureRecord: 'dsh {version} 失败（{at}）：{reason}。请重试；若持续失败，可更换版本源或升级 dsh-chamber。',
   dshRuntimePendingRecord: '仍有待处理版本 {version}',
   dshRuntimeSnapshotUnknown: '数据快照状态尚不可用',
   dshRuntimeSnapshotLabel: '数据快照',
   dshRuntimeSnapshotSummary: '{count} 份（最近 {at}）',
-  dshRuntimeSnapshotHint: '切换版本前自动创建，用于失败回滚',
   dshRuntimeSnapshotNever: '暂无',
   dshRuntimeSnapshotFailed: '快照失败：{error}',
   dshRuntimeSnapshotRestoreHalf: '运行时树已回退，但数据恢复失败；.old 现场已保留。',
   dshRuntimeSnapshotRestoreIncomplete: '数据恢复尚未完成；现场与恢复标记已保留。',
-  dshRuntimeDiskSummary: '运行时逻辑占用 {total}：{trees} 个版本树 {treeBytes}，pnpm store {storeBytes}，安装缓存/现场 {cacheBytes}，快照 {snapshotBytes}，恢复/失败现场 {recoveryBytes}',
+  // D 小项③（D1-A 口径）：磁盘行文案改「运行时占用」——total 为真实字节
+  // 口径（inode 去重 + 未分类残留桶）；unclassifiedBytes>0 时追加残留片段。
+  dshRuntimeDiskSummary: '运行时占用 {total}：{trees} 个版本树 {treeBytes}，pnpm store {storeBytes}，安装缓存/现场 {cacheBytes}，快照 {snapshotBytes}，恢复/失败现场 {recoveryBytes}',
+  dshRuntimeDiskUnclassified: '，未分类残留 {unclassifiedBytes}',
   dshRuntimeDiskError: '无法统计运行时磁盘占用：{error}',
   dshRuntimeDiskQuotaWarning: '已达到 {limit} 逻辑占用软上限；新版本下载已暂停，请先清理不再使用的版本。缓存切换与恢复仍可用。',
   // 统一状态徽标（2026-12：local/gateway 共用一套词汇；只表机器状态，不下
@@ -204,7 +207,6 @@ export const zh = {
   dshRuntimeApplyNextLaunchHint: '点按该按钮：安装（如需）并在下次启动切换到所选版本。',
 
   dshRuntimeRegistryCurrent: '当前：{origin}',
-  dshRuntimeGroupStatus: '当前状态',
   dshRuntimeGroupActions: '版本操作',
   dshRuntimeGroupSource: '版本源',
   dshRuntimeProgressDownloading: '正在下载 {percent}%',
@@ -339,17 +341,21 @@ export const en: Record<keyof typeof zh, string> = {
   dshRuntimeMetadataComponentSeparator: ', ',
   dshRuntimeMetadataComponentUnknown: 'unknown component',
   dshRuntimeCleanupVersion: 'Clean up version',
+  dshRuntimeClearFailure: 'Clear',
   dshRuntimeFailureRecord: 'dsh {version} failed ({at}): {reason}. Retry it; if it keeps failing, switch the registry source or upgrade dsh-chamber.',
   dshRuntimePendingRecord: 'Pending version {version} still requires attention',
   dshRuntimeSnapshotUnknown: 'Data snapshot status is not available yet',
   dshRuntimeSnapshotLabel: 'Data snapshots',
   dshRuntimeSnapshotSummary: '{count} (latest {at})',
-  dshRuntimeSnapshotHint: 'Created automatically before a version switch; used to roll back a failed switch',
   dshRuntimeSnapshotNever: 'none',
   dshRuntimeSnapshotFailed: 'Snapshot failed: {error}',
   dshRuntimeSnapshotRestoreHalf: 'The runtime tree rolled back, but data restore failed; the .old recovery state is retained.',
   dshRuntimeSnapshotRestoreIncomplete: 'Data restore is incomplete; the recovery state and marker are retained.',
-  dshRuntimeDiskSummary: 'Logical runtime usage {total}: {trees} version tree(s) {treeBytes}, pnpm store {storeBytes}, install cache/work {cacheBytes}, snapshots {snapshotBytes}, recovery/failure state {recoveryBytes}',
+  // D 小项③ (D1-A accounting): the disk row copy now leads with "Runtime
+  // usage" — total is the real-byte figure (inode dedup + unclassified
+  // residue bucket); the residue fragment is appended only when > 0.
+  dshRuntimeDiskSummary: 'Runtime usage {total}: {trees} version tree(s) {treeBytes}, pnpm store {storeBytes}, install cache/work {cacheBytes}, snapshots {snapshotBytes}, recovery/failure state {recoveryBytes}',
+  dshRuntimeDiskUnclassified: ', unclassified residue {unclassifiedBytes}',
   dshRuntimeDiskError: 'Unable to measure runtime disk usage: {error}',
   dshRuntimeDiskQuotaWarning: 'The {limit} logical-usage soft limit has been reached. New downloads are paused; clean up an unused version first. Cached switching and recovery remain available.',
   // Unified status badge (2026-12: one vocabulary shared by local/gateway;
@@ -429,7 +435,6 @@ export const en: Record<keyof typeof zh, string> = {
   dshRuntimeApplyNextLaunchHint: 'Click the button: it installs the selected version if needed and switches to it on the next launch.',
 
   dshRuntimeRegistryCurrent: 'Current: {origin}',
-  dshRuntimeGroupStatus: 'Current status',
   dshRuntimeGroupActions: 'Version actions',
   dshRuntimeGroupSource: 'Version source',
   dshRuntimeProgressDownloading: 'Downloading {percent}%',

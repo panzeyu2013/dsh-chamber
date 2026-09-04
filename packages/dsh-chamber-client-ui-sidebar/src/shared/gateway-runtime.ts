@@ -104,6 +104,10 @@ export interface RemoteRuntimeDiskUsage {
   snapshotBytes: number
   preRollbackBytes: number
   restoreBackupBytes: number
+  /** Deduped bytes inside the runtime root not owned by any known category
+   *  (D1-A real-byte accounting). Older servers omit it — parseDiskUsage
+   *  defaults to 0. */
+  unclassifiedBytes: number
   totalBytes: number
   storePruneNeeded: boolean
 }
@@ -262,8 +266,10 @@ function parseDiskUsage(value: unknown): RemoteRuntimeDiskUsage | null {
     const parsed = nullableNumber(row, key, 'runtime status.diskUsage')
     if (parsed === null) throw new Error(`Gateway returned malformed runtime status.diskUsage.${key}`)
     return [key, parsed]
-  })) as unknown as Omit<RemoteRuntimeDiskUsage, 'storePruneNeeded'>
-  return { ...numbers, storePruneNeeded: booleanField(row, 'storePruneNeeded', 'runtime status.diskUsage') }
+  })) as unknown as Omit<RemoteRuntimeDiskUsage, 'storePruneNeeded' | 'unclassifiedBytes'>
+  // Old servers (pre-D1-A) omit unclassifiedBytes — default the bucket to 0.
+  const unclassifiedBytes = nullableNumber(row, 'unclassifiedBytes', 'runtime status.diskUsage') ?? 0
+  return { ...numbers, unclassifiedBytes, storePruneNeeded: booleanField(row, 'storePruneNeeded', 'runtime status.diskUsage') }
 }
 
 function parseProgress(value: unknown): RemoteRuntimeProgress | null {

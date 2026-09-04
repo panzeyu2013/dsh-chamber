@@ -49,10 +49,9 @@ import type {
 import type { SettingsConnectionsKey } from '../locales.ts'
 import { cp, type ConnectionSummary, type HealthResponse, type HostLogsResponse } from './control-plane.ts'
 import { classifyRestartError, serverRefusalText } from './managed-restart.ts'
-import { PluginSyncModal } from './PluginSyncModal.tsx'
+import { PluginDialog, type PluginDialogTarget } from './PluginDialog.tsx'
 import { PluginDiagnosticLine } from './plugin-diagnostic.tsx'
 import type { PluginDiagnostic } from './plugin-diagnostic.ts'
-import { PluginInventoryView } from './plugin-inventory-view.tsx'
 import { formatGatewayUrl, parseGatewayUrl } from './gateway-url.ts'
 import { actionHintKey } from './action-hint.ts'
 import {
@@ -410,13 +409,11 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
   const [gatewayHostLogs, setGatewayHostLogs] = useState<HostLogsResponse | null>(null)
   const [gatewayHostLogsError, setGatewayHostLogsError] = useState<string | null>(null)
   const [gatewayHostLogsBusy, setGatewayHostLogsBusy] = useState(false)
-  /** 插件管理对话框：'local' = 本地实例，否则为远程主机 spec。SSH 通道的
-   *  dsh 目标走 PluginSyncModal（desktopSsh 表面）；gateway（任意传输）与
-   *  http 直连目标没有 SSH exec 通道，走 PluginInventoryView（经实例
-   *  代理读宿主 pluginInventory Remote；chamber 内建组件由桌面主进程经
-   *  gateway /chamber/plugins 通道自动同步）。 */
-  const [pluginFor, setPluginFor] = useState<SshInstanceSpec | 'local' | null>(null)
-  const [inventoryFor, setInventoryFor] = useState<SshInstanceSpec | null>(null)
+  /** 插件管理对话框（plan 24 D5-A / design 21 §6.6 勘误⑥ 收敛）：四类卡片
+   *  统一开 PluginDialog —— 分叉仅在 target 描述符（本地 / ssh+dsh spec /
+   *  gateway 源 / http 直连只读）；gateway 卡在托管 dsh 处于
+   *  stopped/error/restart-exhausted 时传 runtimeDown（恢复撤销面门控）。 */
+  const [pluginDialogFor, setPluginDialogFor] = useState<PluginDialogTarget | null>(null)
 
   // ---- gateway 托管 dsh 受控重启（design 21 §5.1）----
   /** 哪个 gateway 卡的「重启 dsh」确认 Modal 开着。 */
@@ -1341,7 +1338,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                 className={css.iconButton}
                 data-tip={t('pluginsOpen')}
                 aria-label={t('pluginsOpen')}
-                onClick={() => { setPluginFor('local') }}
+                onClick={() => { setPluginDialogFor({ kind: 'local' }) }}
               >
                 <IconFolderOpenOutline16 />
               </button>
@@ -1540,14 +1537,10 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                           variant="outline"
                           size="sm"
                           className={css.restartTip}
-                          // 启用态 tooltip = restartManagedDshTip；未连接（禁用态）改
-                          // 提示 restartNotConnected。busy 期间仍显示 tip（文案对 busy
-                          // 也准确，且按钮标签已显「重启中…」，不另做隐藏分支）。
-                          // aria 配对（P3）：文本按钮沿用图标按钮的 data-tip ↔
-                          // aria-label 配对——aria-label = tip（禁用原因或启用态说明）；
-                          // 此按钮 tip 恒存在，故恒等于 tip 文案。
-                          data-tip={!connected ? t('restartNotConnected') : t('restartManagedDshTip')}
-                          aria-label={restartingIds[spec.id] === true ? t('restartManagedDshBusy') : !connected ? t('restartNotConnected') : t('restartManagedDshTip')}
+                          // D8（plan 24）：删除 data-tip（restartManagedDshTip
+                          // 用法移除）；aria-label 保留——busy/未连接时携带
+                          // 禁用原因，常态回退可见标签（restartManagedDsh）。
+                          aria-label={restartingIds[spec.id] === true ? t('restartManagedDshBusy') : !connected ? t('restartNotConnected') : t('restartManagedDsh')}
                           disabled={specBusy || !connected || restartingIds[spec.id] === true || startBusyIds[spec.id] === true}
                           onClick={() => { setRestartConfirmFor(spec) }}
                         >
@@ -1590,10 +1583,11 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                       </Button>
                       )}
                     <div className={css.cardFoot}>
-                      {/* 插件入口对每个连接渲染：SSH 通道的 dsh 目标打开
-                          同步对话框（desktopSsh 插件表面）；gateway 与 http
-                          直连目标没有该表面，打开只读插件清单（经实例代理读
-                          宿主 pluginInventory，design 17 §9.3）。 */}
+                      {/* 插件入口对每个连接渲染，统一开 PluginDialog（plan 24
+                          D5-A）：SSH 通道的 dsh 目标走 ssh 后端（desktopSsh 插
+                          件表面）；gateway（任意传输）走 gateway 后端（/chamber
+                          读面 + gateway IPC 写面，runtimeDown 门控恢复撤销面）；
+                          http 直连 dsh 目标无执行表面，只读 Loader 清单。 */}
                       <button
                         type="button"
                         className={css.iconButton}
@@ -1601,8 +1595,13 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                         data-tip={t('pluginsOpen')}
                         aria-label={`${t('pluginsOpen')}: ${spec.label}`}
                         onClick={() => {
-                          if (spec.transport === 'ssh' && spec.kind === 'dsh') setPluginFor(spec)
-                          else setInventoryFor(spec)
+                          if (spec.transport === 'ssh' && spec.kind === 'dsh') {
+                            setPluginDialogFor({ kind: 'ssh', spec })
+                          } else if (spec.kind === 'gateway') {
+                            setPluginDialogFor({ kind: 'gateway', sourceId: `${spec.kind}-${spec.id}`, label: spec.label })
+                          } else {
+                            setPluginDialogFor({ kind: 'http', sourceId: `${spec.kind}-${spec.id}`, label: spec.label })
+                          }
                         }}
                       >
                         <IconFolderOpenOutline16 />
@@ -2174,29 +2173,39 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
               )}
       </Modal>
 
-      {pluginFor !== null
-        ? <PluginSyncModal
-            t={t}
-            spec={pluginFor === 'local' ? null : pluginFor}
-            diagnostic={pluginDiagnostics?.[pluginFor === 'local' ? 'local' : `${pluginFor.kind}-${pluginFor.id}`]}
-            onClose={() => { setPluginFor(null) }}
-            onRecheckDiagnostic={onRecheckDiagnostic === undefined
-              ? undefined
-              : () => onRecheckDiagnostic(pluginFor === 'local' ? 'local' : `${pluginFor.kind}-${pluginFor.id}`)}
-          />
-        : null}
-
-      {inventoryFor !== null
-        ? <PluginInventoryView
-            t={t}
-            sourceId={`${inventoryFor.kind}-${inventoryFor.id}`}
-            label={inventoryFor.label}
-            diagnostic={pluginDiagnostics?.[`${inventoryFor.kind}-${inventoryFor.id}`]}
-            onClose={() => { setInventoryFor(null) }}
-            onRecheckDiagnostic={onRecheckDiagnostic === undefined
-              ? undefined
-              : () => onRecheckDiagnostic(`${inventoryFor.kind}-${inventoryFor.id}`)}
-          />
+      {pluginDialogFor !== null
+        ? (() => {
+          // Diagnostic key: 'local' | '<kind>-<id>'; for ssh targets the
+          // registry key is the SPEC kind ('dsh'), not the dialog target
+          // kind; for gateway/http the target sourceId IS '<kind>-<id>' already.
+          const sourceKey = pluginDialogFor.kind === 'local'
+            ? 'local'
+            : pluginDialogFor.kind === 'ssh'
+              ? `${pluginDialogFor.spec.kind}-${pluginDialogFor.spec.id}`
+              : pluginDialogFor.sourceId
+          // Gateway recovery gate (plan 24 B1.6): the card's existing
+          // runtime projection (runtimeConnectionById, stopped/error/
+          // restart-exhausted) becomes the dialog's runtimeDown signal.
+          const runtimeDown = pluginDialogFor.kind === 'gateway'
+            ? (() => {
+              const rawId = pluginDialogFor.sourceId.slice('gateway-'.length)
+              const state = runtimeConnectionById[rawId]
+              return state !== undefined && STARTABLE_RUNTIME_STATES.has(state)
+            })()
+            : undefined
+          return (
+            <PluginDialog
+              t={t}
+              target={pluginDialogFor}
+              diagnostic={pluginDiagnostics?.[sourceKey]}
+              runtimeDown={runtimeDown}
+              onClose={() => { setPluginDialogFor(null) }}
+              onRecheckDiagnostic={onRecheckDiagnostic === undefined
+                ? undefined
+                : () => onRecheckDiagnostic(sourceKey)}
+            />
+          )
+        })()
         : null}
     </div>
   )

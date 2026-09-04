@@ -365,9 +365,14 @@ export const chamberBridge: {
   通道事件 / gateway 卡「网关主机日志」= 服务器侧 gateway 进程与托管 dsh spawn
   日志；图标去重）+ gateway 卡「重启 dsh」/「启动实例」动作（phase 门控 + 每卡
   单飞 + 共享 pollGatewayReady 轮询，多用户中断确认文案）+ **单一插件管理模型
-  视图**（ssh 模态与 gateway 视图功能等价双面：diff/add/已安装列表逐行移除/撤销
-  最近变更（undo journal）/chamber 区同步/任务投影；恢复提示 r0–r4 文案双后端
-  同权；契约与余留见 design 21 §6.6/§10 勘误⑥⑦）。
+  视图（2026-12 plan 24 已合体为唯一 `PluginDialog` 组件）**：统一区域 = 诊断横幅
+  （状态名 + message 去重）→ chamber 内建组件表（client-graph / git-worktree /
+  mobile 移动端入口三行，badge 化；mobile 仅 gateway 源显示、标注网关随发行物
+  注入）→ 第三方插件区（已安装列表 + 逐行卸载 + 添加：spec 输入 + npm 搜索 +
+  文件夹导入）→ 恢复/动作行；gateway 添加双通道（registry spec 直装 +
+  文件夹直推）已接线；「变更记录」区已移除（后端 journal/备份保留）；恢复撤销
+  仅 gateway（崩溃/恢复态恢复横幅）；http 直连只读不变；恢复提示 r0–r4 文案双
+  后端同权；契约与余留见 design 21 §6.6/§10 勘误⑥⑦。
 - 操作全走现有 `desktop_ssh_*` IPC 与 `/api/connections`；表单收非秘密
   元数据（id/label/kind/transport/insecureHttp/host/user/sshPort/remotePort/
   serviceName，id 白名单

@@ -7,7 +7,7 @@
  * (remove before add), batch failure policy (the SINGLE definition shared by
  * the ssh and gateway flows), apply-result normalization for both backends,
  * the gateway task projection → row model, the v1 undo derive (撤销最近变更,
- * §6.4/§6.8 r2), the reserved-name filter and the backend dispatch table.
+ * §6.4/§6.8 r2) and the reserved-name filter.
  *
  * Discipline notes:
  * - PURE + LOCALE-FREE: imports nothing, touches no window/ambient surface,
@@ -507,61 +507,4 @@ export function filterDeniedRows<T extends { name: string }>(rows: readonly T[])
     else allowed.push(row)
   }
   return { allowed, denied }
-}
-
-/* ---------------------------------------------------------------------------
- * 8. Backend dispatch table (design 21 §3 matrix — adapter selection)
- * ---------------------------------------------------------------------------
- * Target kind (`local | dsh | gateway`) × transport (`local | ssh | http`)
- * → the model surface that serves the target. THIS table is which BACKEND
- * serves a target; which DIALOG opens is dialogForSurface (v1 target UI
- * mapping mirrors the current ConnectionsSection routing so the step-②/③
- * refactor can key off it).
- *
- * Ground truth — ConnectionsSection.tsx current routing (2026-12):
- *   - the local instance card button → setPluginFor('local') (the sync modal
- *     in LOCAL mode; ~L1190-1198);
- *   - remote rows: `spec.transport === 'ssh' && spec.kind === 'dsh'` →
- *     setPluginFor(spec) (ssh sync modal), everything else (gateway over ssh
- *     OR http, dsh over http) → setInventoryFor(spec) (~L1408-1417);
- *   - the modals render PluginSyncModal for pluginFor and PluginInventoryView
- *     for inventoryFor (~L1988-2005; design 21 §6.5: http+dsh 只读不变 — the
- *     inventory view IS today's read-only surface that the gateway unified
- *     view evolves from in steps ②/③).
- * Kind 'local' never appears in the SshInstanceSpec registry; its transport
- * is irrelevant here (loopback instance → 'local' surface). A dsh target
- * over any non-ssh transport can never claim a writable surface in v1 →
- * 'readonly-http' (the conservative answer; registry rows today only carry
- * ssh|http). */
-export type ModelTargetKind = 'local' | 'dsh' | 'gateway'
-export type ModelTransport = 'local' | 'ssh' | 'http' | null
-
-/** Which model surface serves a target. 'local' = the local dsh profile
- *  (desktopSsh local_plugin_* verbs); 'ssh' = the ssh plugin surface
- *  (plugin_apply family); 'gateway' = the gateway backend (gateway IPC +
- *  /chamber routes via the instance proxy); 'readonly-http' = a direct http
- *  dsh target with NO plugin execution surface (inventory reads only). */
-export type TargetSurface = 'local' | 'ssh' | 'gateway' | 'readonly-http'
-
-export function targetSurfaceFor(kind: ModelTargetKind, transport: ModelTransport): TargetSurface {
-  if (kind === 'local') return 'local'
-  if (kind === 'gateway') return 'gateway'
-  return transport === 'ssh' ? 'ssh' : 'readonly-http'
-}
-
-/** Which dialog opens for a surface (design 21 §6.6 — v1 mirrors the current
- *  routing: ssh AND local open the sync modal — the local arm in local mode
- *  (spec null); gateway targets open the unified plugin view (today's
- *  PluginInventoryView container, which becomes the unified view in step ②/③
- *  while PluginInventoryView narrows to http+dsh 只读); readonly-http stays on
- *  the inventory-readonly projection. */
-export type DialogTarget = 'sync-modal' | 'unified-view' | 'inventory-readonly'
-
-export function dialogForSurface(surface: TargetSurface): DialogTarget {
-  switch (surface) {
-    case 'local': return 'sync-modal'
-    case 'ssh': return 'sync-modal'
-    case 'gateway': return 'unified-view'
-    case 'readonly-http': return 'inventory-readonly'
-  }
 }

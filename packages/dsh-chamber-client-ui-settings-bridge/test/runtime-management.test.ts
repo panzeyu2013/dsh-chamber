@@ -497,6 +497,7 @@ function surfaceHarness(initial: Promise<RuntimeState>) {
     recoverMetadata: async () => runtimeState('applying'),
     restorePreRollback: async () => runtimeState('idle'),
     cleanupVersion: async () => runtimeState('idle'),
+    clearFailure: async () => runtimeState('idle'),
     restart: async () => runtimeState('idle'),
     onChanged: (callback) => {
       subscriptions += 1
@@ -574,6 +575,7 @@ test('runtime store tears down and retries after a transient hydration failure',
     recoverMetadata: async () => runtimeState('applying'),
     restorePreRollback: async () => runtimeState('idle'),
     cleanupVersion: async () => runtimeState('idle'),
+    clearFailure: async () => runtimeState('idle'),
     restart: async () => runtimeState('idle'),
     onChanged: () => {
       subscriptions += 1

@@ -187,6 +187,10 @@ export interface RemoteRuntimeDiskUsage {
   snapshotBytes: number
   preRollbackBytes: number
   restoreBackupBytes: number
+  /** Unclassified residue bucket (D1-A real-byte accounting): entries under
+   *  the runtime root that fall outside every known category. Required on the
+   *  shared face — parseDiskUsage defaults it to 0 for older servers. */
+  unclassifiedBytes: number
   totalBytes: number
   storePruneNeeded: boolean
 }

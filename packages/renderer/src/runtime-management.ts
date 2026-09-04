@@ -72,6 +72,9 @@ export interface RuntimeDiskUsage {
   snapshotBytes: number
   preRollbackBytes: number
   restoreBackupBytes: number
+  /** Deduped bytes inside the runtime root not owned by any known category. */
+  unclassifiedBytes: number
+  /** Real (dev, ino)-deduped bytes across the runtime root + restore backups. */
   totalBytes: number
   storePruneNeeded: boolean
 }
@@ -155,6 +158,9 @@ export interface RuntimeSurface {
   /** No renderer-controlled path/version input is accepted. */
   recoverMetadata(): Promise<RuntimeState>
   cleanupVersion(version: string): Promise<RuntimeState>
+  /** Clear the retained failure record for one version (local-only entry;
+   *  main re-reads the failure record set; version trees stay untouched). */
+  clearFailure(version: string): Promise<RuntimeState>
   /** Restore the newest pre-rollback stash over DSH_HOME (main-validated name). */
   restorePreRollback(stashName: string): Promise<RuntimeState>
   /** Transactional managed-dsh restart (design 18 §3.6 项 8): refreshes mounted

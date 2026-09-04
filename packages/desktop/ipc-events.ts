@@ -94,6 +94,7 @@ export const IPC_CHANNELS = {
   RUNTIME_CHECK: 'dsh-chamber:runtime-check',
   RUNTIME_INSTALL: 'dsh-chamber:runtime-install',
   RUNTIME_CLEANUP_VERSION: 'dsh-chamber:runtime-cleanup-version',
+  RUNTIME_CLEAR_FAILURE: 'dsh-chamber:runtime-clear-failure',
   RUNTIME_RECOVER_METADATA: 'dsh-chamber:runtime-recover-metadata',
   RUNTIME_RESET_BUILTIN: 'dsh-chamber:runtime-reset-builtin',
   RUNTIME_RESTART: 'dsh-chamber:runtime-restart',

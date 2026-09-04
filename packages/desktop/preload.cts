@@ -519,6 +519,10 @@ export interface RuntimeSurface {
   retryRestore(): Promise<RuntimeState>
   recoverMetadata(): Promise<RuntimeState>
   cleanupVersion(version: string): Promise<RuntimeState>
+  /** Clear the retained failure record for one version (settings polish
+   *  D3-A, local-only entry): main re-reads the failure record set and never
+   *  trusts a renderer-provided version; version trees stay untouched. */
+  clearFailure(version: string): Promise<RuntimeState>
   /** Write-only data-restore action: the main process validates the stash name
    *  against its private pre-rollback listing; no path is ever accepted. */
   restorePreRollback(stashName: string): Promise<RuntimeState>
@@ -664,6 +668,7 @@ function runtimeApi(): RuntimeSurface {
     retryRestore: () => ipcRenderer.invoke('dsh-chamber:runtime-retry-restore'),
     recoverMetadata: () => ipcRenderer.invoke('dsh-chamber:runtime-recover-metadata'),
     cleanupVersion: version => ipcRenderer.invoke('dsh-chamber:runtime-cleanup-version', { version }),
+    clearFailure: version => ipcRenderer.invoke('dsh-chamber:runtime-clear-failure', { version }),
     restorePreRollback: stashName => ipcRenderer.invoke('dsh-chamber:runtime-restore-pre-rollback', { stashName }),
     restart: () => ipcRenderer.invoke('dsh-chamber:runtime-restart'),
     onChanged: callback => {
