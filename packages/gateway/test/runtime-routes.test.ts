@@ -4100,3 +4100,228 @@ test('start() never bypasses the recovery gate or an ordinary pending', async ()
     rmSync(recoveryDir, { recursive: true, force: true })
   }
 })
+
+test('a stranded F4 invalidation (pointer + invalidatedAt, journal lost) self-heals through re-armed shell-invalidation instead of failing boot', async () => {
+  // Durable state after an interrupted gateway-update F4 whose intent journal
+  // was lost (e.g. the installer rolled back to an older shell that consumed
+  // the journal): current pointer still names the old tree, override carries
+  // invalidatedAt, no journal, no pending. Before the fix this booted "clean"
+  // through startupTransaction and then crashed at the first startLocal with
+  // 'gateway runtime current pointer has no matching active override' — a
+  // crash loop with no HTTP recovery surface.
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-stranded-f4-'))
+  try {
+    makeValidTree(stateDir, '1.0.0')
+    mkdirSync(join(stateDir, 'dsh-home'), { recursive: true })
+    writeFileSync(join(stateDir, 'dsh-home', 'settings.json'), '{"source":"v1"}')
+    writeCurrentPointer(stateDir, '1.0.0')
+    writeOverride(stateDir, {
+      shellVersion: '0.2.0-beta.8', // the pre-update gateway shell
+      chosenVersion: '1.0.0',
+      resolvedVersion: '1.0.0',
+      pending: null,
+      swapAttempted: false,
+      selectedOnly: false,
+      invalidatedAt: '2026-09-03T07:28:00.000Z',
+      invalidatedReason: 'shell-version-changed',
+      lastInvalidatedAt: '2026-09-03T07:28:00.000Z',
+      lastInvalidatedReason: 'shell-version-changed',
+      lastInvalidatedFromVersion: '1.0.0',
+      lastInvalidationRecovered: false,
+    })
+    assert.equal(readActivationJournalState(stateDir).kind, 'missing', 'the stranded state has no resumable journal')
+
+    const manager = createGatewayRuntimeManager({
+      config: config(stateDir),
+      plane: fakePlane(),
+      logger: silentLogger,
+      probeCandidate: async () => probeResultsFor(stateDir).map(name => ({ name, ok: true })),
+    })
+    try {
+      const startup = await manager.startupTransaction()
+      assert.deepEqual(startup, { blockedReason: null }, 'the re-armed F4 transaction completes cleanly')
+      assert.deepEqual(manager.resolveWorkspace(), {
+        path: join(stateDir, 'builtin-anchor'),
+        version: TEST_BUILTIN_VERSION,
+        source: 'builtin',
+      }, 'the stranded pointer was cleared through the probe-gated builtin switch — no resolveWorkspace crash')
+      assert.equal(readCurrentPointer(stateDir), null, 'current pointer cleared by the builtin switch')
+      assert.equal(readActivationJournalState(stateDir).kind, 'missing', 'transaction journal consumed')
+      const preserved = readOverride(stateDir)
+      assert.equal(preserved?.chosenVersion, '1.0.0', 'the historical selection is preserved for re-selection')
+      assert.equal(preserved?.invalidatedAt, '2026-09-03T07:28:00.000Z', 'invalidation record retained')
+    } finally {
+      await manager.dispose()
+    }
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('a settled F4 invalidation (pointer cleared) is NOT re-armed on later boots', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-settled-f4-'))
+  try {
+    makeValidTree(stateDir, '1.0.0')
+    writeOverride(stateDir, {
+      shellVersion: '0.2.0-beta.8',
+      chosenVersion: '1.0.0',
+      resolvedVersion: '1.0.0',
+      pending: null,
+      swapAttempted: false,
+      selectedOnly: false,
+      invalidatedAt: '2026-09-03T07:28:00.000Z',
+      invalidatedReason: 'shell-version-changed',
+      lastInvalidatedAt: '2026-09-03T07:28:00.000Z',
+      lastInvalidatedReason: 'shell-version-changed',
+      lastInvalidatedFromVersion: '1.0.0',
+      lastInvalidationRecovered: false,
+      lastOutcome: 'applied',
+    })
+    const manager = createGatewayRuntimeManager({
+      config: config(stateDir),
+      plane: fakePlane(),
+      logger: silentLogger,
+      // Deterministic tripwire: if a re-arm regression ever fires here, the
+      // transaction would probe — fail loudly instead of hitting the real
+      // 127.0.0.1:17510.
+      probeCandidate: async () => { throw new Error('settled state must never probe') },
+    })
+    try {
+      const startup = await manager.startupTransaction()
+      assert.deepEqual(startup, { blockedReason: null })
+      assert.equal(readActivationJournalState(stateDir).kind, 'missing', 'no transaction was manufactured')
+      assert.deepEqual(manager.resolveWorkspace(), {
+        path: join(stateDir, 'builtin-anchor'),
+        version: TEST_BUILTIN_VERSION,
+        source: 'builtin',
+      }, 'builtin stays authoritative with no extra snapshot/switch cycle')
+    } finally {
+      await manager.dispose()
+    }
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('a stranded F4 invalidation carrying stale failure markers still self-heals (markers superseded on re-arm)', async () => {
+  // runStartupPhase blocks on override.lastOutcome === 'snapshot-failed' (or
+  // swapAttempted) BEFORE consuming the re-armed intent; since snapshot-failed
+  // is not a blocked-but-alive reason in index.ts, the gateway would
+  // crash-loop at startLocal. Re-arming must clear the stale markers
+  // (fresh-transaction-supersedes parity with apply()/applyNowPreflight),
+  // while preserving the historical fields.
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-stranded-markers-'))
+  try {
+    makeValidTree(stateDir, '1.0.0')
+    mkdirSync(join(stateDir, 'dsh-home'), { recursive: true })
+    writeFileSync(join(stateDir, 'dsh-home', 'settings.json'), '{}')
+    writeCurrentPointer(stateDir, '1.0.0')
+    writeOverride(stateDir, {
+      shellVersion: '0.2.0-beta.8',
+      chosenVersion: '1.0.0',
+      resolvedVersion: '1.0.0',
+      pending: null,
+      swapAttempted: true,
+      selectedOnly: false,
+      invalidatedAt: '2026-09-03T07:28:00.000Z',
+      invalidatedReason: 'shell-version-changed',
+      lastInvalidatedAt: '2026-09-03T07:28:00.000Z',
+      lastInvalidatedReason: 'shell-version-changed',
+      lastInvalidatedFromVersion: '1.0.0',
+      lastInvalidationRecovered: false,
+      lastOutcome: 'snapshot-failed',
+      lastError: 'stale snapshot failure from before the interruption',
+    })
+    const manager = createGatewayRuntimeManager({
+      config: config(stateDir),
+      plane: fakePlane(),
+      logger: silentLogger,
+      probeCandidate: async () => probeResultsFor(stateDir).map(name => ({ name, ok: true })),
+    })
+    try {
+      const startup = await manager.startupTransaction()
+      assert.deepEqual(startup, { blockedReason: null }, 'stale failure markers must not block the re-armed transaction')
+      assert.deepEqual(manager.resolveWorkspace(), {
+        path: join(stateDir, 'builtin-anchor'),
+        version: TEST_BUILTIN_VERSION,
+        source: 'builtin',
+      })
+      assert.equal(readCurrentPointer(stateDir), null, 'pointer cleared through the builtin switch')
+      const record = readOverride(stateDir)
+      assert.equal(record?.lastOutcome, 'applied', 'the re-armed transaction ran and committed its own verdict (stale snapshot-failed superseded)')
+      assert.equal(record?.lastError, null, 'stale lastError superseded')
+      assert.equal(record?.swapAttempted, false, 'stale swapAttempted superseded')
+      assert.equal(record?.chosenVersion, '1.0.0', 'historical selection preserved')
+      assert.equal(record?.invalidatedAt, '2026-09-03T07:28:00.000Z', 'invalidation record preserved')
+    } finally {
+      await manager.dispose()
+    }
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('an interrupted F4 apply that failed at snapshot (intent journal + stale markers) resumes and heals on the next boot', async () => {
+  // The F4 arm wrote the shell-invalidation intent and invalidated the
+  // record, but the builtin-switch apply kept failing at the
+  // pre-swap snapshot — leaving an intent-phase journal PLUS stale
+  // lastOutcome/swapAttempted markers. runStartupPhase blocks on the markers
+  // before resuming, and index.ts spawns through 'snapshot-failed' — with an
+  // invalidated override + valid pointer the spawn-time resolution throws →
+  // permanent crash loop even after the snapshot cause clears. The stale
+  // markers must be superseded so the next boot retries and heals.
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-intent-snapshot-fail-'))
+  try {
+    makeValidTree(stateDir, '1.0.0')
+    mkdirSync(join(stateDir, 'dsh-home'), { recursive: true })
+    writeFileSync(join(stateDir, 'dsh-home', 'settings.json'), '{"source":"v1"}')
+    writeCurrentPointer(stateDir, '1.0.0')
+    writeActivationIntent(stateDir, {
+      targetVersion: TEST_BUILTIN_VERSION,
+      targetIsBuiltin: true,
+      manualRollback: false,
+      intentKind: 'shell-invalidation',
+    })
+    writeOverride(stateDir, {
+      shellVersion: '0.2.0-beta.8',
+      chosenVersion: '1.0.0',
+      resolvedVersion: '1.0.0',
+      pending: null,
+      swapAttempted: true,
+      selectedOnly: false,
+      invalidatedAt: '2026-09-03T07:28:00.000Z',
+      invalidatedReason: 'shell-version-changed',
+      lastInvalidatedAt: '2026-09-03T07:28:00.000Z',
+      lastInvalidatedReason: 'shell-version-changed',
+      lastInvalidatedFromVersion: '1.0.0',
+      lastInvalidationRecovered: false,
+      lastOutcome: 'snapshot-failed',
+      lastError: 'snapshot kept failing while the cause (disk/DSH_HOME) was present',
+    })
+    const manager = createGatewayRuntimeManager({
+      config: config(stateDir),
+      plane: fakePlane(),
+      logger: silentLogger,
+      probeCandidate: async () => probeResultsFor(stateDir).map(name => ({ name, ok: true })),
+    })
+    try {
+      const startup = await manager.startupTransaction()
+      assert.deepEqual(startup, { blockedReason: null }, 'stale markers must not block the journaled resume')
+      assert.deepEqual(manager.resolveWorkspace(), {
+        path: join(stateDir, 'builtin-anchor'),
+        version: TEST_BUILTIN_VERSION,
+        source: 'builtin',
+      })
+      assert.equal(readCurrentPointer(stateDir), null)
+      assert.equal(readActivationJournalState(stateDir).kind, 'missing', 'intent journal consumed')
+      const record = readOverride(stateDir)
+      assert.equal(record?.lastOutcome, 'applied', 'the resumed transaction committed its own verdict')
+      assert.equal(record?.lastError, null)
+      assert.equal(record?.swapAttempted, false)
+    } finally {
+      await manager.dispose()
+    }
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})

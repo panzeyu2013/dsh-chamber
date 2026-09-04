@@ -1636,12 +1636,26 @@ if (!gotTheLock) {
       runtimeManagementSupported
       && !envOverrideActive
       && startupOverrideState.kind === 'valid'
-      // A durable invalidation means the builtin fallback verdict already
-      // committed. Do not manufacture a fresh snapshot/switch transaction on
-      // every later boot; only a newly observed shell-version mismatch starts
-      // F4. An interrupted first transaction is resumed from its journal.
-      && startupOverrideState.record.invalidatedAt == null
-      && startupOverrideState.record.shellVersion !== version
+      // A newly observed shell-version mismatch starts F4. A durable
+      // invalidation normally means the builtin fallback verdict already
+      // committed — do not manufacture a fresh snapshot/switch transaction on
+      // every later boot. EXCEPTION: an interrupted first transaction whose
+      // journal was lost (e.g. an update rollback booted an older shell that
+      // consumed the newer shell's journal) strands the current pointer on
+      // the old tree with no resumable evidence; resolveActiveRuntime then
+      // blocks every later boot on 'pointer has no matching active override'.
+      // Re-arm F4 in that case so the snapshot + probe-gated builtin switch
+      // finishes the stranded transaction — a settled invalidation always
+      // leaves the pointer cleared (applied) or the record reactivated
+      // (rolled back), so pointer-valid + invalidatedAt-set + journal-missing
+      // uniquely identifies the stranded state.
+      && (
+        (startupOverrideState.record.invalidatedAt == null
+          && startupOverrideState.record.shellVersion !== version)
+        || (startupOverrideState.record.invalidatedAt != null
+          && startupPointerState.kind === 'valid'
+          && readActivationJournalState(runtimeBaseDir).kind === 'missing')
+      )
     ) {
       if (bundledVersion === null || !isSafeVersion(bundledVersion)) {
         runtimeBootstrapFailure = '无法确认内建 dsh 运行时版本；拒绝执行 shell 更新回落';
@@ -1653,10 +1667,12 @@ if (!gotTheLock) {
             manualRollback: false,
             intentKind: 'shell-invalidation',
           });
-          writeOverride(
-            runtimeBaseDir,
-            invalidate(startupOverrideState.record, `shell updated to ${version}`),
-          );
+          if (startupOverrideState.record.invalidatedAt == null) {
+            writeOverride(
+              runtimeBaseDir,
+              invalidate(startupOverrideState.record, `shell updated to ${version}`),
+            );
+          }
         } catch (error) {
           runtimeBootstrapFailure = `无法持久化 shell 更新回落事务：${sanitizeErrorText(error instanceof Error ? error.message : String(error))}`;
         }

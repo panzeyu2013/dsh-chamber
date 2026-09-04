@@ -952,21 +952,89 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     } catch (error) {
       logger.warn(`gateway runtime known-good health reset failed: ${sanitizeErrorText(String(error))}`)
     }
-    // F4 shell-upgrade fallback (design 18 §3.5): a durable invalidation
-    // means the fallback verdict already committed; only a newly observed
-    // shell-version mismatch starts the shell-invalidation transaction.
+    // F4 shell-upgrade fallback (design 18 §3.5): a shell-version mismatch
+    // invalidates the persisted override and starts the builtin-switch
+    // transaction. The durable intent journal is normally the resume proof of
+    // an interrupted first transaction — but an update rollback (installer
+    // restarts an older gateway shell against the newer shell's journal) or a
+    // crash window can consume/clear that journal while the pointer still
+    // names the old tree. The stranded result — pointer set + override
+    // invalidated + no resumable journal — makes resolveWorkspace fail loud
+    // on EVERY boot with no HTTP recovery surface (the gateway never reaches
+    // startLocal), so it must self-heal instead of crash-looping. Re-arm F4
+    // whenever the current pointer has no ACTIVE override and nothing
+    // resumable is on disk: the snapshot + probe-gated builtin switch is
+    // exactly the transaction the interrupted invalidation never finished.
+    // A settled invalidation always leaves the pointer cleared (F4 applied)
+    // or the record reactivated (F4 rolled back), so pointer-valid +
+    // invalidatedAt-set + journal-missing uniquely identifies the stranded
+    // state — never a healthy post-F4 boot.
     if (envPath === null) {
       const record = readOverride(baseDir)
       const existingJournal = readActivationJournalState(baseDir)
-      if (record !== null && record.invalidatedAt == null && record.shellVersion !== shellVersion
-        && existingJournal.kind === 'missing') {
+      const pointerState = readCurrentPointerState(baseDir)
+      const shellMismatch = record !== null
+        && record.invalidatedAt == null
+        && record.shellVersion !== shellVersion
+      const strandedInvalidation = record !== null
+        && record.invalidatedAt != null
+        && pointerState.kind === 'valid'
+      // Journal-present resume supersede: an interrupted F4 whose apply kept
+      // failing at snapshot leaves an intent-phase
+      // shell-invalidation journal PLUS a lastOutcome='snapshot-failed' /
+      // swapAttempted marker — runStartupPhase blocks on the marker before
+      // resuming (:421-428), and index.ts treats snapshot-failed as
+      // spawn-through, but with an invalidated override + valid pointer the
+      // spawn-time resolveWorkspace throws → permanent crash loop even after
+      // the underlying cause (disk/DSH_HOME) clears. Clear the stale markers
+      // so every boot retries the F4 apply and heals once the cause clears.
+      // Gated to builtin shell-invalidation intents: version-switch /
+      // rollback resume journals keep their blocked-alive + retry-apply
+      // semantics.
+      if (record !== null
+        && (record.lastOutcome === 'snapshot-failed' || record.swapAttempted || record.lastError !== null)
+        && existingJournal.kind === 'valid'
+        && existingJournal.journal.phase === 'intent'
+        && existingJournal.journal.targetIsBuiltin
+        && existingJournal.journal.intentKind === 'shell-invalidation') {
+        writeOverride(baseDir, {
+          ...record,
+          swapAttempted: false,
+          lastOutcome: null,
+          lastError: null,
+        })
+      }
+      if (existingJournal.kind === 'missing' && (shellMismatch || strandedInvalidation)) {
         writeActivationIntent(baseDir, {
           targetVersion: requireBuiltinVersion(),
           targetIsBuiltin: true,
           manualRollback: false,
           intentKind: 'shell-invalidation',
         })
-        writeOverride(baseDir, invalidate(record, `gateway shell updated to ${shellVersion}`))
+        // Fresh-transaction-supersedes (apply()/applyNowPreflight parity): a
+        // stranded record may carry stale failure markers (lastOutcome
+        // 'snapshot-failed' / swapAttempted) from before the interruption —
+        // runStartupPhase blocks on them (:421-428) BEFORE consuming the
+        // re-armed intent, which would crash-loop the gateway at startLocal
+        // (snapshot-failed is not a blocked-but-alive reason in index.ts).
+        // invalidate() already resets swapAttempted; clear the remaining
+        // markers whenever one exists (invalidatedAt == null always writes
+        // the invalidation). Historical fields (chosen/resolved/invalidated*)
+        // stay intact.
+        if (record.invalidatedAt == null
+          || record.swapAttempted
+          || record.lastOutcome !== null
+          || record.lastError !== null) {
+          const superseded = record.invalidatedAt == null
+            ? invalidate(record, `gateway shell updated to ${shellVersion}`)
+            : record
+          writeOverride(baseDir, {
+            ...superseded,
+            swapAttempted: false,
+            lastOutcome: null,
+            lastError: null,
+          })
+        }
       }
     }
     const startup = await runStartupPhase(buildStartupDeps(), signal)
