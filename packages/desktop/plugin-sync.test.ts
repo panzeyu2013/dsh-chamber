@@ -32,6 +32,7 @@ import {
   ExactOwnershipRegistry,
   GIT_WORKTREE_INSERT_ID,
   GIT_WORKTREE_PACKAGE_NAME,
+  isAllowedLocalFileSpec,
   localPluginList,
   localPluginWriterLedgerPath,
   MATERIALIZED_VALUE_MASK,
@@ -46,6 +47,7 @@ import {
   ReadyPhaseEdges,
   reapStaleLocalPluginWriters,
   resolveLocalMaterializeDirectory,
+  runLocalDshPlugin,
   scopeExecToOwnership,
   runWithFinalOwnership,
   seedRemoteChamberHostPackages,
@@ -2056,4 +2058,42 @@ test('redactRemotePluginManifest: masks only the dependencies projection — err
   assert.equal(redacted.dependencies.broken, MATERIALIZED_VALUE_MASK)
   assert.equal(redacted.error, 'failed to parse remote package.json: boom')
   assert.equal(redacted.chamber.ok, false)
+})
+
+// ---------------------------------------------------------------------------
+// Local folder-pick add gate (design 21 §10 缺陷①, plan 24 小项④)
+// ---------------------------------------------------------------------------
+
+test('isAllowedLocalFileSpec: absolute POSIX/Windows/UNC paths only — relative and control-char input refused', () => {
+  assert.equal(isAllowedLocalFileSpec('file:/Users/x/plugin'), true, 'POSIX absolute path')
+  assert.equal(isAllowedLocalFileSpec('file:C:\\Users\\x\\plugin'), true, 'Windows drive path')
+  assert.equal(isAllowedLocalFileSpec('file:\\\\server\\share\\plugin'), true, 'UNC path')
+  assert.equal(isAllowedLocalFileSpec('file:../relative'), false, 'relative path')
+  assert.equal(isAllowedLocalFileSpec('file:./relative'), false, 'dot-relative path')
+  assert.equal(isAllowedLocalFileSpec('file:'), false, 'empty selection')
+  assert.equal(isAllowedLocalFileSpec('file:/tmp/x\nrm -rf'), false, 'control characters')
+  assert.equal(isAllowedLocalFileSpec('plain-registry-spec'), false, 'no file: prefix')
+})
+
+test('runLocalDshPlugin: a file: pick is refused without allowFileSpec and passes the gate with it', async () => {
+  // Empty workspace: both CLI entry probes miss, so a value that passed the
+  // spec gate deterministically stops at the missing-CLI error — proving the
+  // gate opened without spawning anything.
+  const dir = tempDir()
+  try {
+    // Without the capability flag the spec gate refuses every file: value
+    // BEFORE any CLI lookup (the renderer-submitted form must never pass).
+    const refused = await runLocalDshPlugin(dir, dir, 'add', 'file:/tmp/picked-folder')
+    assert.equal(refused.ok, false)
+    assert.match(refused.error ?? '', /invalid add spec/)
+
+    // With allowFileSpec (the MAIN-process folder-picker path, desktop_local_
+    // plugin_add_file) the same pick passes the gate and proceeds to the
+    // workspace's (absent) dsh CLI entry — design 21 §10 缺陷① fixed.
+    const gated = await runLocalDshPlugin(dir, dir, 'add', 'file:/tmp/picked-folder', { allowFileSpec: true })
+    assert.equal(gated.ok, false)
+    assert.match(gated.error ?? '', /no dsh CLI entry found/)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 })

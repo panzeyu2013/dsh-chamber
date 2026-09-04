@@ -95,6 +95,7 @@ import {
   latestKnownGood,
   listKnownGoodVersions,
   listExplicitlyInstalledVersions,
+  listRuntimeFailures,
   listValidVersionTrees,
   queueActivationIntent,
   readActivationJournalState,
@@ -3602,7 +3603,11 @@ if (!gotTheLock) {
       const picked = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] });
       if (picked.canceled || picked.filePaths.length === 0) return { ok: true, cancelled: true };
       return runLocalPluginMutation('plugin:add-file', async (dshWorkspace) => {
-        const result = await runLocalDshPlugin(dshWorkspace, localDshHome, 'add', `file:${picked.filePaths[0]}`);
+        // design 21 §10 缺陷① fix (plan 24 小项④): the main-process folder
+        // picker IS the sanctioned file: source — pass the capability flag so
+        // the picked absolute path passes runLocalDshPlugin's gate (without it
+        // every file: pick was refused as an invalid add spec).
+        const result = await runLocalDshPlugin(dshWorkspace, localDshHome, 'add', `file:${picked.filePaths[0]}`, { allowFileSpec: true });
         return result.ok ? { ok: true } : { ok: false, error: result.error ?? 'local add failed' };
       });
     }));
@@ -5047,6 +5052,32 @@ if (!gotTheLock) {
       } finally {
         lease.release();
       }
+    }));
+    // 失败现场清除（settings polish D3-A）：仅本地入口（gateway 无现成路由，
+    // 登记偏差）。版本必须真实存在于失败记录名集（主进程 re-read，绝不信任
+    // renderer），且不得有在飞运行时事务；只删除 failures/*.json 记录本身，
+    // 不动任何版本树/快照/回滚现场。清除后刷新磁盘与失败投影并返回最新 state。
+    ipcMain.handle(IPC_CHANNELS.RUNTIME_CLEAR_FAILURE, trustedIpc(async (args) => {
+      const rawVersion = args !== null && typeof args === 'object'
+        ? (args as Record<string, unknown>).version
+        : undefined;
+      if (typeof rawVersion !== 'string' || rawVersion.length > 128 || !isSafeVersion(rawVersion)) {
+        return runtimeInstance.getState();
+      }
+      const requestedVersion = rawVersion.trim();
+      if (runtimeOperation !== null
+        || !listRuntimeFailures(runtimeBaseDir).some((failure) => failure.version === requestedVersion)) {
+        return runtimeInstance.getState();
+      }
+      try {
+        clearRuntimeFailure(runtimeBaseDir, requestedVersion);
+      } catch (error) {
+        const message = sanitizeErrorText(error instanceof Error ? error.message : String(error));
+        console.warn('[dsh-chamber] clear runtime failure scene failed:', message);
+        throw new Error(message);
+      }
+      await refreshRuntimeEvidence();
+      return runtimeInstance.getState();
     }));
     ipcMain.handle(IPC_CHANNELS.RUNTIME_RECOVER_METADATA, trustedIpc(async () => {
       const before = runtimeInstance.getState();

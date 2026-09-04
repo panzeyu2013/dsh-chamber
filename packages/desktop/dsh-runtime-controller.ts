@@ -56,9 +56,10 @@ export type RuntimeMetadataComponent =
   | 'retained-evidence'
 
 /** Soft logical-usage ceiling for fresh downloads. Cached activation and all
- * recovery paths deliberately bypass it. RuntimeDiskSummary may double-count
- * hard-linked tree/store bytes, so this is a conservative hygiene gate rather
- * than a claim about physical free space. */
+ * recovery paths deliberately bypass it. totalBytes is a real (dev, ino)
+ * deduped walk but category fields may double-count hard-linked tree/store
+ * bytes and APFS reflink sharing stays invisible to stat, so this is a
+ * conservative hygiene gate rather than a claim about physical free space. */
 export const DEFAULT_RUNTIME_LOGICAL_DISK_LIMIT_BYTES = 10 * 1024 ** 3
 
 export interface RuntimeState {
@@ -99,8 +100,9 @@ export interface RuntimeState {
   /** Durable F4 notice; remains visible even if the old user tree was
    * automatically reactivated after the bundled compatibility probe failed. */
   invalidationNotice?: RuntimeInvalidationNotice | null
-  /** On-demand logical disk accounting; hard-linked tree/store bytes may be
-   * counted in both categories (see RuntimeDiskSummary). */
+  /** On-demand disk accounting; category fields keep per-path sums (a hard
+   * link may be charged to both categories) while totalBytes is the real
+   * (dev, ino) deduped figure (see RuntimeDiskSummary). */
   diskUsage?: RuntimeDiskSummary | null
   diskError?: string | null
   diskLimitBytes?: number

@@ -921,6 +921,8 @@ test('explicit install retention survives auto eviction until explicit cleanup',
   assert.ok(existsSync(path.join(base, 'dsh-runtime', '1.0.2')));
   assert.ok(existsSync(path.join(base, 'dsh-runtime', '1.0.3')), 'explicit tree retained');
   assert.ok(readStorePruneRequest(base)?.reasons.some((reason) => reason.startsWith('evicted:')));
+  assert.equal(readStorePruneRequest(base)?.reasons.includes('cache-reclaim'), true,
+    'eviction of hard-linked trees must ask the store prune to reclaim the private caches');
   clearStorePruneRequest(base);
   assert.equal(readStorePruneRequest(base), null);
 });
@@ -936,6 +938,8 @@ test('explicit cleanup removes only an otherwise-unprotected immutable tree and 
   });
   assert.equal(existsSync(tree), false);
   assert.equal(readStorePruneRequest(base)?.reasons.includes('explicit-cleanup:1.0.0'), true);
+  assert.equal(readStorePruneRequest(base)?.reasons.includes('cache-reclaim'), true,
+    'explicit cleanup must ask the store prune to reclaim the private caches');
 
   makeVersionTree(base, '2.0.0');
   recordExplicitInstall(base, '2.0.0');
@@ -980,6 +984,9 @@ test('stale-install cleanup only removes a proven empty pre-spawn work dir', () 
   mkdirSync(emptyWork, { recursive: true });
   assert.deepEqual(cleanupStaleInstalls(emptyBase), ['.work-empty']);
   assert.equal(existsSync(emptyWork), false);
+  assert.equal(readStorePruneRequest(emptyBase)?.reasons.includes('stale-work:1'), true);
+  assert.equal(readStorePruneRequest(emptyBase)?.reasons.includes('cache-reclaim'), false,
+    'stale-work cleanup must never trigger private-cache reclamation');
 
   const missingBase = freshBase();
   const missingWork = path.join(missingBase, 'dsh-runtime', '.work-missing-pid');
@@ -1207,11 +1214,15 @@ test('runtimeDiskSummary accounts every runtime-owned tree, cache, snapshot, and
   assert.ok(summary.snapshotBytes > 0);
   assert.ok(summary.preRollbackBytes > 0);
   assert.ok(summary.restoreBackupBytes > 0);
+  // This fixture hard-links nothing and every runtime entry falls into a known
+  // category, so the deduped total equals the per-path category sum plus the
+  // (empty) residue bucket — real totals only ever go BELOW that sum.
+  assert.equal(summary.unclassifiedBytes, 0);
   assert.equal(summary.totalBytes,
     summary.versionTreeBytes + summary.storeBytes + summary.cacheBytes
     + summary.installHomeBytes + summary.xdgCacheBytes + summary.workBytes
     + summary.failureBytes + summary.snapshotBytes + summary.preRollbackBytes
-    + summary.restoreBackupBytes);
+    + summary.restoreBackupBytes + summary.unclassifiedBytes);
 
   const unrelated = path.join(base, 'state', 'dsh-home.oldish', 'data');
   mkdirSync(path.dirname(unrelated), { recursive: true });
@@ -1258,6 +1269,77 @@ test('runtimeDiskSummary propagates non-ENOENT accounting errors instead of repo
   writeFileSync(path.join(base, 'state'), 'not a directory');
   assert.throws(() => runtimeDiskSummary(base), (error: unknown) =>
     (error as NodeJS.ErrnoException).code === 'ENOTDIR');
+});
+
+test('runtimeDiskSummary dedupes hard-linked tree/store bytes in the real total while categories keep per-path sums', () => {
+  const base = freshBase();
+  const tree = makeVersionTree(base, '1.0.0');
+  const payload = Buffer.alloc(1024 * 1024);
+  writeFileSync(path.join(tree, 'shared-payload.bin'), payload);
+  const storeDir = path.join(base, 'dsh-runtime', '.pnpm-store');
+  mkdirSync(storeDir, { recursive: true });
+  linkSync(path.join(tree, 'shared-payload.bin'), path.join(storeDir, 'shared-payload.bin'));
+  const summary = runtimeDiskSummary(base);
+  // Category sums keep the historical per-path semantics: the shared inode is
+  // charged to BOTH the version tree and the store.
+  assert.ok(summary.storeBytes >= 1024 * 1024);
+  assert.ok(summary.versionTreeBytes >= 1024 * 1024);
+  // The real total walks by (dev, ino) and charges the shared payload once.
+  const categorySum = summary.versionTreeBytes + summary.storeBytes
+    + summary.cacheBytes + summary.installHomeBytes + summary.xdgCacheBytes
+    + summary.workBytes + summary.failureBytes + summary.snapshotBytes
+    + summary.preRollbackBytes + summary.restoreBackupBytes + summary.unclassifiedBytes;
+  assert.ok(summary.totalBytes < categorySum, 'the shared payload must not be double charged');
+  assert.equal(summary.totalBytes, categorySum - 1024 * 1024);
+});
+
+test('runtimeDiskSummary buckets stray residue and metadata authorities into unclassifiedBytes', () => {
+  const base = freshBase();
+  makeVersionTree(base, '1.0.0');
+  const stray = path.join(base, 'dsh-runtime', 'leftover', 'data.bin');
+  mkdirSync(path.dirname(stray), { recursive: true });
+  writeFileSync(stray, Buffer.alloc(1024));
+  writeFileSync(path.join(base, 'dsh-runtime', 'current'), '{"version":"1.0.0"}', 'utf8');
+  const summary = runtimeDiskSummary(base);
+  assert.ok(summary.unclassifiedBytes > 1024,
+    'stray directories and metadata authorities are quota-visible residue');
+  assert.equal(summary.totalBytes,
+    summary.versionTreeBytes + summary.storeBytes + summary.cacheBytes
+    + summary.installHomeBytes + summary.xdgCacheBytes + summary.workBytes
+    + summary.failureBytes + summary.snapshotBytes + summary.preRollbackBytes
+    + summary.restoreBackupBytes + summary.unclassifiedBytes,
+    'without hard links the real total equals the category sum plus the residue bucket');
+});
+
+test('runtimeDiskSummary counts an unclassified symlink itself without following the external target', {
+  skip: process.platform === 'win32' ? 'symlink fixture requires Unix permissions' : false,
+}, () => {
+  const base = freshBase();
+  const outside = path.join(base, 'outside-large');
+  writeFileSync(outside, Buffer.alloc(1024 * 1024));
+  const link = path.join(base, 'dsh-runtime', 'stray-link');
+  mkdirSync(path.dirname(link), { recursive: true });
+  symlinkSync(outside, link, 'file');
+  const summary = runtimeDiskSummary(base);
+  assert.ok(summary.unclassifiedBytes > 0, 'the link entry itself is accounted');
+  assert.ok(summary.unclassifiedBytes < 1024 * 1024, 'the external target is never charged');
+  assert.ok(summary.totalBytes < 1024 * 1024);
+});
+
+test('runtimeDiskSummary charges restore backups in the real total and dedupes hard links across roots', () => {
+  const base = freshBase();
+  const runtimeFile = path.join(base, 'dsh-runtime', 'leftover', 'data.bin');
+  mkdirSync(path.dirname(runtimeFile), { recursive: true });
+  writeFileSync(runtimeFile, Buffer.alloc(4096));
+  const backupFile = path.join(base, 'state', 'dsh-home.old', 'data.bin');
+  mkdirSync(path.dirname(backupFile), { recursive: true });
+  linkSync(runtimeFile, backupFile);
+  const summary = runtimeDiskSummary(base);
+  assert.ok(summary.restoreBackupBytes > 0);
+  assert.ok(summary.unclassifiedBytes > 0);
+  assert.equal(summary.totalBytes,
+    summary.restoreBackupBytes + summary.unclassifiedBytes - 4096,
+    'the inode shared by the residue and the restore backup is charged exactly once');
 });
 
 test('builtin activation intents accept the exact builtin-anchor sentinel (F4 shell-invalidation regression)', () => {

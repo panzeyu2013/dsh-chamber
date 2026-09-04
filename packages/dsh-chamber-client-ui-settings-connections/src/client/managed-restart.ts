@@ -1,8 +1,8 @@
 /**
  * Gateway managed-dsh restart result helpers (design 21 §5.1/§5.3): pure,
  * node-testable classification shared by the connection-card restart flow
- * (ConnectionsSection) and the plugin-inventory restart-to-apply action
- * (PluginInventoryView).
+ * (ConnectionsSection) and the plugin dialog's restart-to-apply action
+ * (PluginDialog).
  *
  * The restart action is 202 + readiness polling: POST
  * /api/i/gateway-<id>/chamber/runtime/restart accepts with 202 only; a

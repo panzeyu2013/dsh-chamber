@@ -27,7 +27,7 @@ import {
   type HostLogsResponse,
 } from '@dsh-chamber/dsh-client-ui-sidebar/shared'
 import type {
-  GatewayPluginApplyIpcResult, GatewayPluginApplyInput, GatewayPluginSyncIpcResult, LocalPluginManifest, NpmSearchPackage, PluginApplyInput, PluginApplyResult, RemotePluginManifest,
+  GatewayPluginApplyIpcResult, GatewayPluginApplyInput, GatewayPluginMaterializeIpcResult, GatewayPluginSyncIpcResult, LocalPluginManifest, NpmSearchPackage, PluginApplyInput, PluginApplyResult, RemotePluginManifest,
   SshExecIpcResult, SshLocalPluginExecIpcResult, SshMaterializeResult, SshPluginUndoIpcResult, SshSeedHostGraphResult,
 } from '../global.d.ts'
 import type { GatewayTasksShape } from './plugin-model.ts'
@@ -255,4 +255,12 @@ export function gatewayPluginSync(id: string): Promise<GatewayPluginSyncIpcResul
  *  (classifyGatewayApplyResult) by the callers. */
 export function gatewayPluginApply(id: string, input: GatewayPluginApplyInput): Promise<GatewayPluginApplyIpcResult> {
   return desktopSsh().gateway_plugin_apply(id, input)
+}
+
+/** Pick a local plugin-source folder in MAIN and upload it to a gateway
+ *  instance (pick-only, design 21 §6.5): cancelled = the picker was
+ *  dismissed; ok:true deferred = the gateway cached the install intent for
+ *  the next ready edge (false = accepted onto the executor queue). */
+export function gatewayPluginMaterialize(id: string): Promise<GatewayPluginMaterializeIpcResult> {
+  return desktopSsh().gateway_plugin_materialize(id)
 }

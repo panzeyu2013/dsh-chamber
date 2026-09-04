@@ -6,8 +6,8 @@
  * normalization for both backends (gateway + ssh shapes as they really are on
  * the wire — incl. the ssh producer's fail-loud ok:true markers verified/
  * ready/readyNote, never collapsed into a clean success), the gateway task
- * projection → row model, the v1 ok-only undo derive, the denied-row filter,
- * the backend dispatch table and the batch failure policy constant.
+ * projection → row model, the v1 ok-only undo derive, the denied-row filter
+ * and the batch failure policy constant.
  */
 
 import { test } from 'node:test'
@@ -21,13 +21,11 @@ import {
   classifyGatewayApplyResult,
   classifySshApplyResult,
   describeBatchPolicy,
-  dialogForSurface,
   filterDeniedRows,
   isDeniedPluginName,
   orderApplyOps,
   partialCounts,
   projectTasks,
-  targetSurfaceFor,
   undoForLatest,
   UNDO_V1_POLICY,
   type ApplyOutcome,
@@ -569,28 +567,4 @@ test('filterDeniedRows: partitions name rows into allowed and denied (official +
 
 test('filterDeniedRows: empty input stays empty on both sides', () => {
   assert.deepEqual(filterDeniedRows([]), { allowed: [], denied: [] })
-})
-
-// ---------------------------------------------------------------------------
-// 8. Backend dispatch table (design 21 §3 matrix + §6.6 dialog routing)
-// ---------------------------------------------------------------------------
-
-test('targetSurfaceFor matrix: local kind → local, gateway kind → gateway, ssh-dsh → ssh, http/other dsh → readonly-http', () => {
-  assert.equal(targetSurfaceFor('local', 'local'), 'local')
-  assert.equal(targetSurfaceFor('local', 'http'), 'local', 'local+http is still the loopback local instance')
-  assert.equal(targetSurfaceFor('local', null), 'local')
-  assert.equal(targetSurfaceFor('dsh', 'ssh'), 'ssh')
-  assert.equal(targetSurfaceFor('dsh', 'http'), 'readonly-http')
-  assert.equal(targetSurfaceFor('dsh', null), 'readonly-http', 'a dsh target over a non-ssh transport can never claim a writable surface')
-  assert.equal(targetSurfaceFor('dsh', 'local'), 'readonly-http')
-  assert.equal(targetSurfaceFor('gateway', 'ssh'), 'gateway')
-  assert.equal(targetSurfaceFor('gateway', 'http'), 'gateway')
-  assert.equal(targetSurfaceFor('gateway', null), 'gateway')
-})
-
-test('dialogForSurface matrix: sync modal for ssh AND local (local mode), unified view for gateway, inventory for readonly-http', () => {
-  assert.equal(dialogForSurface('ssh'), 'sync-modal')
-  assert.equal(dialogForSurface('local'), 'sync-modal')
-  assert.equal(dialogForSurface('gateway'), 'unified-view')
-  assert.equal(dialogForSurface('readonly-http'), 'inventory-readonly')
 })

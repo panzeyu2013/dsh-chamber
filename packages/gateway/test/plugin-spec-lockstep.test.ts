@@ -34,7 +34,7 @@ const pluginSpecSource = () => readFileSync(
   'utf8',
 )
 const pluginAddViewSource = () => readFileSync(
-  join(REPO_ROOT, 'packages', 'dsh-chamber-client-ui-settings-connections', 'src', 'client', 'PluginAddView.tsx'),
+  join(REPO_ROOT, 'packages', 'dsh-chamber-client-ui-settings-connections', 'src', 'client', 'PluginDialog.tsx'),
   'utf8',
 )
 const sshProviderSource = () => readFileSync(
@@ -63,7 +63,7 @@ test('the renderer ADD_SPEC literal is byte-identical to the shared PLUGIN_SPEC_
   const renderer = regexLiteral(pluginAddViewSource(), 'const ADD_SPEC')
   const shared = regexLiteral(pluginSpecSource(), 'export const PLUGIN_SPEC_PATTERN')
   assert.equal(renderer, shared,
-    'PluginAddView ADD_SPEC must stay a byte-identical hand mirror of control-plane PLUGIN_SPEC_PATTERN (the renderer cannot import the Node-side module; change both sides together)')
+    'PluginDialog ADD_SPEC must stay a byte-identical hand mirror of control-plane PLUGIN_SPEC_PATTERN (the renderer cannot import the Node-side module; change both sides together)')
   // The extracted literal must also be the live constant the gateway and the
   // desktop consume through the package export — guards a stale copy surviving
   // next to the real declaration.

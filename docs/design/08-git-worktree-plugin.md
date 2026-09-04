@@ -498,3 +498,4 @@ typecheck（含根）、verify:i18n、build:host-git（dist 重建且与 src 字
   "重启生效"（pendingRestart）态；`ChamberInjectionState` 新增 `gitWorktree`
   探测（`probeRemoteChamber` 探 pkg+dist），`remoteNeedsSeed` 条件
   = hostGraph 未(installed&&patched) || 未装 gitWorktree。
+  （历史基线；chamber 块已由 PluginDialog 收敛——见 design 21 §6.6 落地状态，2026-12）

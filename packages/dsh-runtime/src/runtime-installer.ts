@@ -24,7 +24,7 @@ import {
 import { open } from 'node:fs/promises'
 import { isAbsolute, join, relative } from 'node:path'
 import { ALLOW_BUILDS } from './allow-builds.mjs'
-import { validateVersionTree } from './dsh-runtime-store.ts'
+import { validateVersionTree, readStorePruneRequest } from './dsh-runtime-store.ts'
 import type { RuntimeInstallResolution } from './dsh-runtime-updater.ts'
 import { createIntegrityVerifier, isSupportedIntegrity } from './registry-integrity.ts'
 import { fetchRegistryResponse } from './registry-metadata.ts'
@@ -928,12 +928,50 @@ export interface PruneRuntimeStoreOptions {
   deps?: Partial<Pick<InstallerDeps, 'node' | 'run'>>
 }
 
+/** Bounded cache reclamation after a successful store prune (settings polish
+ * D2-A): only the CONTENT of the two private cache dirs is removed — the dirs
+ * themselves stay (installers re-create state inside them on the next run).
+ * Every entry is lstat'd (never followed) before deletion, so a symlink is
+ * removed as the link itself and can never drag an external target in; the
+ * removal set is exactly the direct children of `.pnpm-cache`/`.xdg-cache`
+ * and never reaches outside those two directories. */
+function reclaimRuntimeCacheContents(baseDir: string): void {
+  ensureRuntimeRootNoFollow(baseDir)
+  for (const segment of ['.pnpm-cache', '.xdg-cache'] as const) {
+    const dir = ensureRuntimeSubdirectoryNoFollow(baseDir, segment)
+    let entries
+    try {
+      entries = readdirSync(dir, { withFileTypes: true })
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue
+      throw error
+    }
+    for (const entry of entries) {
+      const entryPath = join(dir, entry.name)
+      let info
+      try {
+        info = lstatSync(entryPath)
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue
+        throw error
+      }
+      // No-follow removal: a symlink (even to a directory) is unlinked as the
+      // link; only a real directory is removed recursively.
+      rmSync(entryPath, { recursive: info.isDirectory() && !info.isSymbolicLink(), force: true })
+    }
+  }
+}
+
 /**
  * Reclaim unreferenced pnpm content after version eviction. The caller owns
  * the durable `store-prune-needed` marker and must clear it only after this
  * promise resolves. The command shares the install supervisor, bounded
  * output, source-scrubbed environment and shell-managed empty userconfig.
- */
+ * After a successful store prune, a `cache-reclaim` reason in the durable
+ * request additionally recycles the private .pnpm-cache/.xdg-cache content
+ * (cleanup/eviction of hard-linked trees is what orphans those entries);
+ * a reclaim failure rejects like the prune itself so the caller keeps the
+ * marker and retries instead of silently leaking the cache dirs. */
 export async function pruneRuntimeStore(opts: PruneRuntimeStoreOptions): Promise<void> {
   const runtimeDir = ensureRuntimeRootNoFollow(opts.baseDir)
   const deadline = createOperationDeadline(opts.signal, opts.timeoutMs ?? DEFAULT_INSTALL_TIMEOUT_MS)
@@ -972,6 +1010,10 @@ export async function pruneRuntimeStore(opts: PruneRuntimeStoreOptions): Promise
     if (result.status !== 0) {
       const detail = sanitizeInstallerOutput((result.stderr || result.stdout).trim(), 800)
       throw new Error(`dsh runtime store prune failed (exit ${result.status}): ${detail}`)
+    }
+    const request = readStorePruneRequest(opts.baseDir)
+    if (request !== null && request.reasons.includes('cache-reclaim')) {
+      reclaimRuntimeCacheContents(opts.baseDir)
     }
   } finally {
     deadline.cleanup()

@@ -54,6 +54,7 @@ function diskSummary(totalBytes: number): RuntimeDiskSummary {
     snapshotBytes: 0,
     preRollbackBytes: 0,
     restoreBackupBytes: 0,
+    unclassifiedBytes: 0,
     totalBytes,
     storePruneNeeded: false,
   };

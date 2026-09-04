@@ -76,9 +76,9 @@
   增量（PluginInventoryView：已安装行/移除/撤销/变更记录 tasks 投影（deferred 意图+busy+recovery 提示）/
   profile_absent-corrupt 横幅/停机 chamber 区降级标签；修复 Phase-3 遗留 seed-cache 双前缀真 bug）+ 卡片
   「启动实例」start 动作（runtime 探测门控 stopped/error/restart-exhausted、202+poll）；A 键表 34+1 键
-  （296/296）。connections 全链 112/0、typecheck 0。Phase 6 归口（非阻断）：who/when 归因 tooltip 渲染
-  （initiator 投影）、gateway 拒绝码→本地化文案映射（queue_busy 等）、统一单组件双后端合体未做（功能等价
-  双面，已登记）、实机 E2E 矩阵门禁不可在本树执行（照实登记）。
+  （296/296）。connections 全链 112/0、typecheck 0。Phase 6 归口（2026-12 settings 两页微调 round 已收口，见下段；
+  统一单组件合体完成、变更记录区移除、恢复化撤销、add 双通道、缺陷①修复；
+  余留 who/when 归因与拒绝码本地化（照实）。
   **Phase 5 进度①（2026-12，执行级）**：纯模型层 plugin-model.ts（deny 镜像/orderApplyOps/
   ApplyOutcome 分类（含 ssh fail-loud verified/ready/readyNote 诚实携带）/projectTasks/undoForLatest/
   分派表/BATCH_FAILURE_POLICY 单一取舍；35 测试 + 控制面 lockstep）✅ 门禁修复后零 P0/P1；ssh 统一增量
@@ -103,6 +103,17 @@
   第二轮扫描修正（复核修复轮自身，⑭–⑰）：drain 自动重启请求点改为本轮全部排空 op 终态后
   （原首 op 终态会撞在途租约门）、materialize 路由 500 分支补 staged GC、tasks 投影删除
   childPid（活进程 pid 不出网）、波浪测试强化（200ms 慢关 + 租约授予时序证明，5 次连跑稳定）。
+   **settings 两页微调 round（plan 24，2026-12；`docs/progress/todo/24-settings-ui-polish.md` 已实施）**：
+   Phase 6 归口收口——统一单组件合体**已完成**（`PluginDialog.tsx` 单对话框取代 PluginSyncModal/
+   PluginInventoryView 功能等价双面，分叉收敛至数据源与动作分发；chamber 内建表三行 badge 化
+   （client-graph/git-worktree/mobile 移动端行，仅 gateway 源显示）、诊断横幅去重（状态名 +
+   message，pluginId 仅无 message 时兜底）、「重新同步 chamber 组件」按钮语义、http 直连只读不变）；
+   「变更记录」tasks 区已移除（后端 journal/备份保留，journal 仅供 undoForLatest 派生）；撤销
+   **恢复化仅 gateway**（runtimeDown 恢复横幅入口；ssh list tab 撤销按钮保留原样——范围偏差登记）；
+   gateway 添加双通道已接线（registry spec → gateway_plugin_apply、文件夹 → gateway_plugin_materialize）；
+   缺陷① `desktop_local_plugin_add_file` 已修复（allowFileSpec 补传 + plugin-sync 门测试）。余留照实：
+   who/when 归因 tooltip 未渲染、gateway 拒绝码→本地化文案映射未做（409 逐字英文）；实机 E2E 矩阵仍
+   不可在本树执行（design 21 §10 勘误⑦ 未勾销）。验证与偏差见 plan 24 实施偏差登记。
 - **模型额外参数 + 默认推理等级（设计 07）**：实现推迟——wire 白名单无泛化
   透传、host 组合不可注入、`agent-default-model` 未对客户端暴露，待上游
   解锁（07 §3/§4）。设计见 `docs/design/07-models-params.md`。
@@ -381,12 +392,18 @@
 - **dsh 运行时设置面统一（2026-12 实施，登记契约变更与残余偏差）**：两分支同构
   UI——彩色状态徽标（正常/检查中/下载中/安装中/待应用/应用中/回退中/重启中/切换失败/
   快照失败/恢复受阻/启动受阻/操作失败/错误/元数据异常，四色）取代「已是最新/可用更新」
-  claim 文案；快照+磁盘占用并入「当前状态」组；registry 只读行+编辑态统一；常驻
+  claim 文案；快照+磁盘占用移至「版本源」块下方段尾事实块（plan 24 D6-A）；registry 只读行+编辑态统一；常驻
   「清理已安装版本」入口；gateway「部署锚」口径。desktop env/只读平台放行「重启 dsh」
   （design 18 §3.6 落地）。gateway 新增 `cleanup-version` / `restore-pre-rollback` /
   `recover-metadata` 路由、FATAL blocked-alive（不再进程级拒启，status 可轮询 +
   救援路由）、status 的 metadata 健康投影（metadataHealth/metadataComponents/
   canRecoverMetadata）、store-prune 标记消费（消除 10GiB 软上限死锁）。
+   plan 24 round（2026-12）：磁盘行改「运行时占用」+ D1-A 真实字节口径（`runtimeDiskSummary` 整树一次
+   walk、`(dev, ino)` 去重消除硬链接双计 + `unclassifiedBytes` 未分类残留桶，total = Σ分类含未分类；
+   APFS reflink 近似边界登记）；「当前状态」h4 与 `dshRuntimeGroupStatus` 键、「选择版本」字段 label
+   移除（select 走 aria-label，键保留）；快照说明句删除、数值 12px/600 加粗、行距收紧；失败现场
+   清除入口仅本地（`dsh-chamber:runtime-clear-failure` trustedIpc + 共享核心 `clearRuntimeFailure`；
+   gateway 无对应清除路由，偏差登记）。
   残余登记（有意保留）：desktop SETTINGS_SET 在 env 下允许更换 registry（设计文字
   禁，代码行为有意更宽）；restore-builtin × restore-half 逃生集 desktop 更保守
   （先 retry-restore）而 gateway 沿用设计允许集；registry 白名单形状 desktop

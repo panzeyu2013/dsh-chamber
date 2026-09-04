@@ -2218,7 +2218,10 @@ function cleanupExplicitRuntimeVersion(baseDir, version) {
     rmSync(treePath, { recursive: true, force: true });
   }
   forgetExplicitInstall(baseDir, safe);
-  if (exists) markStorePruneNeeded(baseDir, `explicit-cleanup:${safe}`);
+  if (exists) {
+    markStorePruneNeeded(baseDir, `explicit-cleanup:${safe}`);
+    markStorePruneNeeded(baseDir, "cache-reclaim");
+  }
   return { removed: exists, retentionCleared: true, stillProtected: false };
 }
 function storePruneMarkerPath(baseDir) {
@@ -2285,7 +2288,10 @@ function evictVersions(baseDir, keep = 3) {
     evicted.push(version);
     total -= 1;
   }
-  if (evicted.length > 0) markStorePruneNeeded(baseDir, `evicted:${evicted.join(",")}`);
+  if (evicted.length > 0) {
+    markStorePruneNeeded(baseDir, `evicted:${evicted.join(",")}`);
+    markStorePruneNeeded(baseDir, "cache-reclaim");
+  }
   return evicted;
 }
 function isPidAlive(pid, group = false) {
@@ -2376,6 +2382,28 @@ function measurePathBytes(path) {
   for (const entry of readdirSync(path)) total += measurePathBytes(join2(path, entry));
   return total;
 }
+function measureDedupedBytes(roots) {
+  const seen = /* @__PURE__ */ new Set();
+  const visit = (entryPath, missingIsZero) => {
+    let info;
+    try {
+      info = lstatSync2(entryPath);
+    } catch (error) {
+      if (missingIsZero && error.code === "ENOENT") return 0;
+      throw error;
+    }
+    const key = `${info.dev}:${info.ino}`;
+    if (seen.has(key)) return 0;
+    seen.add(key);
+    if (info.isSymbolicLink() || !info.isDirectory()) return info.size;
+    let total2 = info.size;
+    for (const entry of readdirSync(entryPath)) total2 += visit(join2(entryPath, entry), false);
+    return total2;
+  };
+  let total = 0;
+  for (const root of roots) total += visit(root, true);
+  return total;
+}
 function isRuntimePublishBackupName(name) {
   const match = PUBLISH_BACKUP_NAME.exec(name);
   if (!match) return false;
@@ -2385,6 +2413,7 @@ function isRuntimePublishBackupName(name) {
 function runtimeDiskSummary(baseDir, dshHome = join2(baseDir, "state", "dsh-home")) {
   const runtime = runtimeDirPath(baseDir);
   const trees = listVersionTrees(baseDir);
+  const treeSet = new Set(trees);
   const runtimeEntries = (() => {
     try {
       return readdirSync(runtime, { withFileTypes: true });
@@ -2406,6 +2435,12 @@ function runtimeDiskSummary(baseDir, dshHome = join2(baseDir, "state", "dsh-home
       throw error;
     }
   })();
+  const unclassifiedPaths = [];
+  for (const entry of runtimeEntries) {
+    const name = entry.name;
+    const known = treeSet.has(name) && entry.isDirectory() || entry.isDirectory() && name.startsWith(".work-") || entry.isDirectory() && name.endsWith(".failed") || isRuntimePublishBackupName(name) || name === "failures" || name === "metadata-recovery-data" || name === "metadata-recovery-rescue-data" || name === "metadata-recovery.json" || name === ".pnpm-store" || name === ".pnpm-cache" || name === ".install-home" || name === ".xdg-cache" || name === "snapshots" || name === "pre-rollback";
+    if (!known) unclassifiedPaths.push(join2(runtime, name));
+  }
   const versionTreeBytes = trees.reduce((sum, version) => sum + measurePathBytes(join2(runtime, version)), 0);
   const storeBytes = measurePathBytes(join2(runtime, ".pnpm-store"));
   const cacheBytes = measurePathBytes(join2(runtime, ".pnpm-cache"));
@@ -2416,7 +2451,11 @@ function runtimeDiskSummary(baseDir, dshHome = join2(baseDir, "state", "dsh-home
   const snapshotBytes = measurePathBytes(join2(runtime, "snapshots"));
   const preRollbackBytes = measurePathBytes(join2(runtime, "pre-rollback"));
   const restoreBackupBytes = restoreBackups.reduce((sum, backup) => sum + measurePathBytes(backup), 0);
-  const totalBytes = versionTreeBytes + storeBytes + cacheBytes + installHomeBytes + xdgCacheBytes + workBytes + failureBytes + snapshotBytes + preRollbackBytes + restoreBackupBytes;
+  const unclassifiedBytes = measureDedupedBytes(unclassifiedPaths);
+  const totalBytes = measureDedupedBytes([
+    ...runtimeEntries.map((entry) => join2(runtime, entry.name)),
+    ...restoreBackups
+  ]);
   return {
     versionTrees: trees.length,
     versionTreeBytes,
@@ -2429,6 +2468,7 @@ function runtimeDiskSummary(baseDir, dshHome = join2(baseDir, "state", "dsh-home
     snapshotBytes,
     preRollbackBytes,
     restoreBackupBytes,
+    unclassifiedBytes,
     totalBytes,
     storePruneNeeded: existsSync(storePruneMarkerPath(baseDir))
   };
@@ -3165,7 +3205,7 @@ var ALLOW_BUILDS = [
 
 // src/windows-process.ts
 import { spawnSync } from "node:child_process";
-var PROBE_TIMEOUT_MS = 1e4;
+var PROBE_TIMEOUT_MS = 3e4;
 var TABLE_CACHE_TTL_MS = 500;
 function assertWindows() {
   if (process.platform !== "win32") {
@@ -3955,6 +3995,30 @@ function createOperationDeadline(external, timeoutMs) {
     }
   };
 }
+function reclaimRuntimeCacheContents(baseDir) {
+  ensureRuntimeRootNoFollow(baseDir);
+  for (const segment of [".pnpm-cache", ".xdg-cache"]) {
+    const dir = ensureRuntimeSubdirectoryNoFollow(baseDir, segment);
+    let entries;
+    try {
+      entries = readdirSync3(dir, { withFileTypes: true });
+    } catch (error) {
+      if (error.code === "ENOENT") continue;
+      throw error;
+    }
+    for (const entry of entries) {
+      const entryPath = join5(dir, entry.name);
+      let info;
+      try {
+        info = lstatSync3(entryPath);
+      } catch (error) {
+        if (error.code === "ENOENT") continue;
+        throw error;
+      }
+      rmSync3(entryPath, { recursive: info.isDirectory() && !info.isSymbolicLink(), force: true });
+    }
+  }
+}
 async function pruneRuntimeStore(opts) {
   const runtimeDir = ensureRuntimeRootNoFollow(opts.baseDir);
   const deadline = createOperationDeadline(opts.signal, opts.timeoutMs ?? DEFAULT_INSTALL_TIMEOUT_MS);
@@ -3993,6 +4057,10 @@ async function pruneRuntimeStore(opts) {
     if (result.status !== 0) {
       const detail = sanitizeInstallerOutput((result.stderr || result.stdout).trim(), 800);
       throw new Error(`dsh runtime store prune failed (exit ${result.status}): ${detail}`);
+    }
+    const request = readStorePruneRequest(opts.baseDir);
+    if (request !== null && request.reasons.includes("cache-reclaim")) {
+      reclaimRuntimeCacheContents(opts.baseDir);
     }
   } finally {
     deadline.cleanup();

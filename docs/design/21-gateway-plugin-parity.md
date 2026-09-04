@@ -73,6 +73,7 @@ remove 先于 add、可 defer 重启；write-file 上限 50 MiB；spec/name 白�
 PluginAddView、plugin-diff.ts 纯函数族（missing/update/extra/materialize/unsyncable/consistent——**无 scope 逻辑**）、
 plugin-inventory-text/plugin-diagnostic 纯投影（thirdPartyEntries 过滤 @deepseek-ai/* + chamber 两包，仅用于
 Loader 已加载事实层）。测试 = connections 8 个纯模块文件，**无组件级测试**。
+（历史基线；已由 PluginDialog 收敛——见 §6.6 落地状态，2026-12）
 
 ### 2.4 chamber 宿主包同步与 seed【已实现】
 桌面 ready 自动 `syncGatewayChamberPlugins`（gateway-provider.ts:1408+；main.ts:2152-2182 装配）；
@@ -118,7 +119,7 @@ dsh-home（runtime-manager.ts:769/792，snapshotDshHome 全树拷贝；`/restart
 
 **后端矩阵**：local（本地 profile，list+add 语义，既有）、ssh（既有 + 【统一增量】已落地）、gateway（已实现）、
 http+dsh 直连（无任何执行后端——无 /chamber、无 ssh exec、无管理面（17 §3），PluginInventoryView 只读保留，
-无法也不应“一致”）。
+无法也不应“一致”）。（历史基线；已由 PluginDialog 收敛——见 §6.6 落地状态，2026-12）
 
 **目标语境差异（不再是功能差异，登记为唯一可见差异）**：gateway+ssh 卡的 systemd 「重启实例」按钮属**连接
 管理面**（重启 gateway 服务本身，非插件模型动词），保留并改 tooltip/文案区分（B/C 章节）；插件模型内无其他
@@ -252,6 +253,7 @@ chamberProvision=seed_host_graph、restartToApply/startFromStopped=restart_servi
   撤销 = 恢复备份 + 必要 remove；
 - 恢复引导 UI 与 gateway 一致（r0-r4 通用文案，后端差异仅在“启动/重启”动作映射）。
 改动均落在主进程/纯函数层，PluginSyncModal 的 ssh 路径行为由既有纯测试 + 新增模型层测试守护。
+（历史基线；已由 PluginDialog 收敛——见 §6.6 落地状态，2026-12）
 
 ### 6.5 桌面 IPC / 渲染层
 - 模型动词经渲染层统一调用点（主进程按目标解析后端）；gateway 后端 IPC（命名待实现确认 → 落地记录）：
@@ -261,7 +263,7 @@ chamberProvision=seed_host_graph、restartToApply/startFromStopped=restart_servi
   （IPC 联合类型名 `GatewayPluginSyncIpcResult`，与 gateway-provider 内部同名 sync 结果 interface 区分）；
   读侧经实例代理 GET `/chamber/plugins`（种子缓存投影）与 `/chamber/plugins/installed`（§6.2）驱动 chamber
   区版本漂移显示与「立即同步」（视图层实现，§6.6 前驻 PluginInventoryView、gatewaySource 门控、http+dsh
-  只读不变）。
+  只读不变）。（历史基线；已由 PluginDialog 收敛——见 §6.6 落地状态，2026-12）
   `gateway_plugin_apply(id, {add[], remove[], defer})` / `gateway_plugin_materialize(id)`（pick-only，取消 =
   {ok:true, cancelled:true}）**已实现（2026-12，Phase 4.6/5B）**——全部主进程执行 + showMessageBox 确认
   （apply 默认取消）+ 经注册 origin（SPKI/隧道 Host 纪律同 syncGatewayChamberPlugins）；apply = remove 先于
@@ -276,7 +278,14 @@ chamberProvision=seed_host_graph、restartToApply/startFromStopped=restart_servi
   1 测试 + 条件性 re-export；
 - 读侧（installed/tasks/status/Loader）全经实例代理 GET。
 
-### 6.6 UI：单一模型视图（【重构等保】ssh 等价 + 【统一增量】双后端）
+### 6.6 UI：单一模型视图（【已实现 · 2026-12】ssh 等价 + 【统一增量】双后端）
+> **落地状态（2026-12 settings 两页微调 round，plan 24）**：统一单组件合体**已完成**——
+> `PluginDialog.tsx`（connections 包）成为唯一插件对话框，PluginSyncModal（local+ssh）与
+> PluginInventoryView（gateway+http 直连）收敛为同一组件，后端分叉仅在数据源与动作分发；
+> gateway 添加双通道已接线（registry spec → `gateway_plugin_apply(id,{add:[...],deferRestart:false})`、
+> 文件夹导入 → `gateway_plugin_materialize(id)`）；「变更记录」tasks 区已移除（后端 journal/备份
+> 保留，journal 仅供 undoForLatest 派生）；撤销恢复化**仅 gateway**（ssh list tab 撤销按钮保留
+> 原样，登记为范围偏差）；缺陷① `desktop_local_plugin_add_file` 已修复。余留与偏差见 §10 勘误⑥⑦。
 - 方向：PluginSyncModal 演进为单一模型视图（不再“ssh 版 + gateway 新统一版”两份叙述）——远程模式
   sync（chamber 区 + 差异区）+ add + **list（已安装列表，含逐行移除与撤销最近变更入口）**；本地模式 list+add
   不变；gateway 卡片改开同一视图；PluginInventoryView 收窄为 http+dsh 直连只读；
@@ -418,7 +427,7 @@ chamber 移动端参与第三方管理；安装期脚本默认禁行与 OS 用�
   （gateway materialize 为设计意图「pick 即意图」；ssh 端确认缺口登记为开放项，2026-12 质量审核
   复核措辞收紧，不再声称全量补齐）；③ 已由 5B 挂接掩码（SSH_PLUGIN_LIST 经 redactRemotePluginManifest 掩码；LOCAL_PLUGIN_LIST 按
   local 模式保持原样——readManifest 统一挂接即本意，掩码 helper 现有一处生产调用点）；缺陷①
-  `desktop_local_plugin_add_file` 仍待修（登记未变）。
+  `desktop_local_plugin_add_file` 已修复（2026-12 settings 两页微调 round：main.ts 调用点补 `{allowFileSpec:true}` + plugin-sync.test.ts 门测试）。
   ② remove 路由 not_installed/no_manifest 应答**裁定为 409**（routes submitRefusalStatus；§6.2 表 400 措辞以
   实现为准，409 语义与 queue/runtime 拒绝族一致——客户端按 status+code 判别）。
   ③ 'too_large' code 双档（上传体 413 / tgz 扫描 400）以状态区分，客户端按 status+code 组合判别。
@@ -426,8 +435,17 @@ chamber 移动端参与第三方管理；安装期脚本默认禁行与 OS 用�
   落地（tgz-scan/tarball 锁步）。
   ⑤ 5C 修复 Phase-3 引入的 seed-cache **双前缀真 bug**（gatewayChamberSeedCache(sourceId) 曾双写
   gateway-gateway-<id>；现全部调用点传 raw id、wrapper 前缀一次）。
-  ⑥ unified-view 现状（2026-12）：ssh 模态与 gateway 视图为**功能等价双面**（PluginSyncModal remote
-  sync/add/list + PluginInventoryView 已安装/变更记录/撤销/降级），统一单组件合体未做（登记余留）；
+  ⑥ unified-view 现状（2026-12 后期更新；settings 两页微调 round，plan 24）：**统一单组件合体已完成**
+  （`PluginDialog.tsx`——PluginSyncModal（local+ssh）与 PluginInventoryView（gateway+http 直连）合并为
+  唯一插件对话框，后端分叉收敛至数据源与动作分发；区域统一：诊断横幅（bannerProjection 去重）→
+  chamber 内建表（client-graph/git-worktree/mobile 三行 badge 化，mobile 仅 gateway 源显示、标注网关随
+  发行物注入）→ 第三方区（已安装 + 逐行卸载 + 添加：spec 输入 + npm 搜索 + 文件夹导入）→ 恢复/动作行；
+  http 直连只读不变）；**gateway 添加双通道已接线**（registry spec → `gateway_plugin_apply`；文件夹导入 →
+  `gateway_plugin_materialize`（pick-only））；**变更记录区已移除**（UI 不再渲染 task 行，后端 journal/备份
+  保留，journal 仅供 undoForLatest 派生——D4-A）；**撤销恢复化仅 gateway**（runtimeDown（stopped/error/
+  restart-exhausted）且 undoForLatest 有动作时在恢复横幅显示恢复撤销入口；ssh list tab「撤销最近变更」按钮
+  保留原样——登记为范围偏差，见 plan 24 实施偏差登记）；缺陷① `desktop_local_plugin_add_file` **已修复**
+  （main.ts 调用点补传 `{allowFileSpec:true}` + plugin-sync.test.ts 门测试）。未变余留（如实保留登记）：
   who/when 归因 tooltip 未渲染（TaskRow 未投影 initiator）；A 键表 296/296（34+1 键），预置未用键
   （blockedTask/queueBusy/lastFailedHint/reservedNameRefused/opAttribution*/startManagedDshConfirmTitle）
   待归口文案接线或删除；gateway 拒绝码→本地化文案映射未做（409 逐字英文，登记接受）。

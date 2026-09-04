@@ -591,7 +591,7 @@ test('status parsing: documented contract, backward defaults, unknown safety enu
       versionTrees: 2, versionTreeBytes: 100, storeBytes: 200, cacheBytes: 30,
       installHomeBytes: 4, xdgCacheBytes: 5, workBytes: 6, failureBytes: 7,
       snapshotBytes: 8, preRollbackBytes: 9, restoreBackupBytes: 10,
-      totalBytes: 379, storePruneNeeded: false,
+      unclassifiedBytes: 11, totalBytes: 390, storePruneNeeded: false,
     },
     diskError: null,
     diskLimitBytes: 10 * 1024 ** 3,
@@ -608,7 +608,10 @@ test('status parsing: documented contract, backward defaults, unknown safety enu
   assert.equal(parsed.preRollbackCount, 1)
   assert.equal(parsed.preRollbackLatestName, '1735344000000')
   assert.equal(parsed.failure?.reason, 'probe failed')
-  assert.equal(parsed.diskUsage?.totalBytes, 379)
+  assert.equal(parsed.diskUsage?.totalBytes, 390)
+  // D1-A: present on new servers → parsed verbatim; omitted on older
+  // servers → defaults to 0 (the legacy fixtures below).
+  assert.equal(parsed.diskUsage?.unclassifiedBytes, 11)
   assert.deepEqual(parsed.progress, { stage: 'download', received: 50, total: 100 })
 
   // Older gateways: absent restart → null, absent mutationsAllowed → true

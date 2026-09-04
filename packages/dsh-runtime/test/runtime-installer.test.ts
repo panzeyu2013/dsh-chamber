@@ -16,6 +16,7 @@ import {
 } from '../src/runtime-installer.ts'
 import type { InstallerDeps, RunOptions, RunResult } from '../src/runtime-installer.ts'
 import type { RuntimeInstallResolution } from '../src/dsh-runtime-updater.ts'
+import { markStorePruneNeeded } from '../src/dsh-runtime-store.ts'
 
 const VERSION = '0.1.1-rc.2'
 const TARBALL = Buffer.from('controlled top-level dsh tarball fixture')
@@ -779,6 +780,83 @@ test('pruneRuntimeStore: uses the supervised embedded pnpm and private store pat
   assert.equal(runOpts.env?.HOME, path.join(runtimeDir, '.install-home'))
   assert.equal(runOpts.env?.XDG_CACHE_HOME, path.join(runtimeDir, '.xdg-cache'))
   assert.equal(runOpts.signal?.aborted, false)
+})
+
+test('pruneRuntimeStore: reclaims .pnpm-cache/.xdg-cache content after a successful prune when the durable request carries cache-reclaim', async () => {
+  const baseDir = makeBaseDir()
+  const runtimeDir = path.join(baseDir, 'dsh-runtime')
+  mkdirSync(runtimeDir, { recursive: true })
+  const cacheFile = path.join(runtimeDir, '.pnpm-cache', 'metadata', 'registry.json')
+  const xdgFile = path.join(runtimeDir, '.xdg-cache', 'dl', 'tarball')
+  mkdirSync(path.dirname(cacheFile), { recursive: true })
+  mkdirSync(path.dirname(xdgFile), { recursive: true })
+  writeFileSync(cacheFile, 'cache-entry')
+  writeFileSync(xdgFile, 'xdg-entry')
+  markStorePruneNeeded(baseDir, 'cache-reclaim')
+  await pruneRuntimeStore({
+    baseDir,
+    pnpmEntry: '/pnpm/bin/pnpm.cjs',
+    deps: { node: nodeFn, run: async () => ({ status: 0, stdout: '', stderr: '' }) },
+  })
+  // The cache directories themselves stay (installers keep state inside them).
+  assert.equal(existsSync(path.join(runtimeDir, '.pnpm-cache')), true)
+  assert.equal(existsSync(path.join(runtimeDir, '.xdg-cache')), true)
+  assert.equal(existsSync(cacheFile), false, '.pnpm-cache content is reclaimed')
+  assert.equal(existsSync(xdgFile), false, 'nested .xdg-cache content is reclaimed')
+})
+
+test('pruneRuntimeStore: leaves the private caches byte-for-byte intact without a cache-reclaim reason', async () => {
+  const baseDir = makeBaseDir()
+  const runtimeDir = path.join(baseDir, 'dsh-runtime')
+  mkdirSync(runtimeDir, { recursive: true })
+  const cacheFile = path.join(runtimeDir, '.pnpm-cache', 'keep.json')
+  mkdirSync(path.dirname(cacheFile), { recursive: true })
+  writeFileSync(cacheFile, 'keep-me')
+  markStorePruneNeeded(baseDir, 'explicit-cleanup:1.0.0')
+  await pruneRuntimeStore({
+    baseDir,
+    pnpmEntry: '/pnpm/bin/pnpm.cjs',
+    deps: { node: nodeFn, run: async () => ({ status: 0, stdout: '', stderr: '' }) },
+  })
+  assert.equal(readFileSync(cacheFile, 'utf8'), 'keep-me',
+    'a plain prune must never touch the private caches')
+})
+
+test('pruneRuntimeStore: cache reclaim removes a symlink entry itself and never follows it out of the private dirs', {
+  skip: process.platform === 'win32' ? 'symlink fixture requires Unix permissions' : false,
+}, async () => {
+  const baseDir = makeBaseDir()
+  const runtimeDir = path.join(baseDir, 'dsh-runtime')
+  mkdirSync(runtimeDir, { recursive: true })
+  const outside = path.join(baseDir, 'outside-cache-target')
+  writeFileSync(outside, 'DO_NOT_DELETE')
+  const link = path.join(runtimeDir, '.pnpm-cache', 'evil-link')
+  mkdirSync(path.dirname(link), { recursive: true })
+  symlinkSync(outside, link)
+  markStorePruneNeeded(baseDir, 'cache-reclaim')
+  await pruneRuntimeStore({
+    baseDir,
+    pnpmEntry: '/pnpm/bin/pnpm.cjs',
+    deps: { node: nodeFn, run: async () => ({ status: 0, stdout: '', stderr: '' }) },
+  })
+  assert.equal(existsSync(link), false, 'the symlink entry itself is removed')
+  assert.equal(readFileSync(outside, 'utf8'), 'DO_NOT_DELETE', 'the external target is untouched')
+})
+
+test('pruneRuntimeStore: a failed prune performs no cache reclamation even with the reason present', async () => {
+  const baseDir = makeBaseDir()
+  const runtimeDir = path.join(baseDir, 'dsh-runtime')
+  mkdirSync(runtimeDir, { recursive: true })
+  const cacheFile = path.join(runtimeDir, '.pnpm-cache', 'survive.json')
+  mkdirSync(path.dirname(cacheFile), { recursive: true })
+  writeFileSync(cacheFile, 'survive')
+  markStorePruneNeeded(baseDir, 'cache-reclaim')
+  await assert.rejects(pruneRuntimeStore({
+    baseDir,
+    pnpmEntry: '/pnpm/bin/pnpm.cjs',
+    deps: { node: nodeFn, run: async () => ({ status: 1, stdout: '', stderr: 'boom' }) },
+  }), /store prune failed/)
+  assert.equal(existsSync(cacheFile), true, 'reclamation only rides a successful prune')
 })
 
 test('pruneRuntimeStore: rejects a symlinked .npmrc without truncating its target or spawning pnpm', {

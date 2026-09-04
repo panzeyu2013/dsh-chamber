@@ -329,8 +329,8 @@ resourcesPath manifest；「激活 vX」= resolve 结果；「最新 vY」= regi
    applying/pending/checking/downloading/installing 拒绝；env 源不禁 restart）；
    pending/applying 期间除 `[恢复内建]` 外禁用；选当前版本 = 无操作。
    （2026-12 追加：`[清理版本]` 常驻可清理入口、`[恢复回滚前数据]`、`[保留数据并
-   恢复内建]` 为恢复行动行按钮集；状态/快照/磁盘布局两分支同构，快照与磁盘行
-   并入「当前状态」组。）
+   恢复内建]` 为恢复行动行按钮集；状态/快照/磁盘布局两分支同构，快照与磁盘行移至
+   段尾事实块（见 UI 修订注 D6-A）。）
 4. **版本源设置行**（registry 源用户自设）：下拉 `npmjs（默认）` / `npmmirror` /
    `自定义…`；自定义走 §6 URL 白名单校验（origin 精确、拒绝 userinfo、decode
    归一化）；附 `[检查更新]`（宿主进程执行一次检查：desktop 主进程 / gateway 进程，
@@ -367,7 +367,8 @@ resourcesPath manifest；「激活 vX」= resolve 结果；「最新 vY」= regi
    Electron 壳无需重启：插件
    挂载在每次 dsh 进程 boot 时重新确定，不是 Electron 会话级事实（02 §2.6）。
 
-**UI 修订注（2026-12，纯展示层，不动状态机/动作矩阵；2026-12 复审修订措辞）**：
+**UI 修订注（2026-12，纯展示层，不动状态机/动作矩阵；2026-12 复审修订措辞；settings 两页微调
+round（plan 24）再修订——D6-A 用户拍板）**：
 - 当前版本行删除来源 tag 括号（「（内建）/（用户选择）/（env）」）——来源信息
   由下拉选项的「· 内建」标记与 env 提示行承载；
 - 「更新到/切换到 vX」仅在所选版本 ≠ **当前激活版本**时显示（与当前激活一致时是
@@ -377,17 +378,30 @@ resourcesPath manifest；「激活 vX」= resolve 结果；「最新 vY」= regi
   active/bundled 未知时保守显示）；「重启 dsh」移入版本选择行（暂态不可用时禁用
   而非隐藏）；「清理版本」移入下方恢复行动行，保证版本选择主行（select + 更新到 +
   重启）任何 locale 下单行成立；
-- 「数据快照」改为带标签行 + 说明，移入「当前状态」块（标签与状态事实同级 12px，
-  未水合时不渲染）；
-- 段内三块（当前状态 / 版本操作 / 版本源）以发丝线分隔；「版本源」块标题与字段
-  标签去重（select 以 aria-label 命名）；
+- **「当前状态」h4 标题与 `dshRuntimeGroupStatus` 键删除**（状态事实行不带块标题直接
+  呈现，段内三块以发丝线分隔）；**「选择版本」字段 label 删除**（select 以
+  `aria-label={t('dshRuntimeSelectVersion')}` 保持可访问名称，键保留）；「版本源」块
+  标题与字段标签去重（select 以 aria-label 命名）；
 - chamber 下拉箭头统一为 `IconChevronDownOutline14`（appearance:none + 自定义
   chevron，右缘与文字左缘对称；文字↔箭头净间隙 ≥6px）；
-- **有意保留**（偏离声明确认）：磁盘占用行留在「版本源」块末尾作段落脚注（不移入
-  当前状态块，避免状态块过载）；下拉文本字号不强统一（服务器下拉 13px/600 为导航
-  选择器强调，运行时/表单字段 12px/400 为紧凑行——仅统一箭头词汇，本节下方样式
-  规格中旧的 `.dropdownTrigger` 13px 描述以 2026-11 表单化改造的实现为准：
-  `.runtimeField` radius 8px / bg layer-1 / 12px）。
+- **快照 + 占用行（D6-A，2026-12 用户拍板，推翻本注旧「快照移入当前状态块」与「磁盘行
+  留版本源块末尾」两条）**：紧凑事实块（`.runtimeDiskFacts` gap 4px）整体移出「当前状态」，
+  置于「版本源」块内容之后、段尾（与版本源错误行同区域，发丝线分隔），local/gateway 两分支
+  同构。快照行 = 标签 + 值（说明句 `dshRuntimeSnapshotHint` 删除）；磁盘行无独立标签，文案
+  自身带头「运行时占用 {total}」（D 小项③ + D1-A 口径：真实字节——整棵 runtime 根 +
+  `dsh-home.old*` 备份一次 walk、按 `(dev, ino)` 去重累计，消除硬链接双计；
+  `unclassifiedBytes` 未分类残留桶计入不落入已知分类的条目，`totalBytes = Σ分类（含
+  unclassified）`，与真实可见字节一致；`unclassifiedBytes>0` 时追加「，未分类残留 {n}」；
+  诚实边界：APFS reflink/clone 共享物理块经 stat 不可识别（不同 inode），统计对 reflink
+  副本重复计数——与 macOS `du` 行为一致的已知近似）；数值 12px/600 加粗
+  （`.runtimeFactValue`）、标签 12px tertiary、行距收紧；
+- 失败现场清除入口（D3-A）**仅本地**：desktop 经 `dsh-chamber:runtime-clear-failure`
+  trustedIpc 调共享核心 `clearRuntimeFailure`（保护集复核后显式删除对应 `failures/*.json`）；
+  gateway 分支不加清除按钮——无现成 `/chamber/runtime` 清除路由，按 plan 24 A3 预案降级为
+  仅 local（登记偏差，见 STATUS/plan 24 实施偏差登记）；
+- 下拉文本字号不强统一（服务器下拉 13px/600 为导航选择器强调，运行时/表单字段 12px/400
+  为紧凑行——仅统一箭头词汇，本节下方样式规格中旧的 `.dropdownTrigger` 13px 描述以
+  2026-11 表单化改造的实现为准：`.runtimeField` radius 8px / bg layer-1 / 12px）。
 
 **B. connections 本地实例卡片**：加一行/chip「dsh v0.1.2」，读同一 resolve 结果，
 与 settings 块同源一致（M0 接线）。
@@ -416,7 +430,8 @@ resourcesPath manifest；「激活 vX」= resolve 结果；「最新 vY」= regi
     （§9.5），不再以缩减视图作为产品契约；
    （2026-12：补齐 cleanup-version / restore-pre-rollback / recover-metadata 路由
    与 metadata 健康投影，动作面与 desktop 对齐；清理/恢复/救援入口、彩色状态
-   徽标与快照+磁盘分组两分支同构。）
+   徽标与快照+占用段尾事实块两分支同构；失败现场清除入口仅本地——偏差登记见
+   UI 修订注。）
   - **dsh（ssh/http 直连）**：**不挂载**——远端运行时由 systemd 部署、无
     chamber 运行时管理面、无 `/chamber` 通道（design 17 §3 能力差异表），
     该来源设置段不渲染 dsh-runtime 分节、无任何版本/重启动作；远端重启经
@@ -430,8 +445,9 @@ resourcesPath manifest；「激活 vX」= resolve 结果；「最新 vY」= regi
     .runtimeFieldRow                 版本源（field label + select + [检查更新]）
     .runtimeActionsRow               动作按钮组（更新 / 回滚 / 恢复内建 / 重启 dsh）
     .runtimeStatus                   状态/进度行（aria-live="polite"）
-    .runtimeFailureRow               失败记录（仅失败时，role="alert"）
-    .runtimeSnapshotRow              快照状态行
+    .runtimeFailureRow               失败记录（仅失败时，role="alert"；本地含清除按钮）
+    .runtimeDiskFacts                快照 + 运行时占用事实块（版本源块之后、段尾；
+                                      2026-12 D6-A，见 UI 修订注）
   ```
 - connections 壳：`ConnectionsSection` 的本地卡 `.localCard` → `.localMeta` 追加
   一个版本 chip（`.mono` 字体），与端口 / label 同一行内联，不新增独立卡片区。

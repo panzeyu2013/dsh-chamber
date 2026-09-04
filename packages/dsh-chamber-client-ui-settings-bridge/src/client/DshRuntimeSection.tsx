@@ -633,6 +633,10 @@ function GatewayRuntimeSection({
                   : t('dshRuntimeSnapshotNever'),
               })
 
+  // D1-A 未分类残留桶：shared 面已含必填 unclassifiedBytes（parseDiskUsage
+  // 对旧服务器缺省 0）；diskUsage 本身仍可为 null，故保留可选链与 ?? 0。
+  const remoteUnclassifiedBytes = remoteStatus?.diskUsage?.unclassifiedBytes ?? 0
+
   const remoteRestartDisabled = remoteGates.restartDisabled
 
   // 重启 dsh（2026-12 布局修订）：按钮移入版本选择行（与 select 同一行高
@@ -676,8 +680,6 @@ function GatewayRuntimeSection({
     <div className={css.generalGroup}>
       <h3 className={css.generalGroupTitle}>{t('dshRuntimeTitle')}</h3>
 
-      <h4 className={css.generalGroupTitle}>{t('dshRuntimeGroupStatus')}</h4>
-
       <div className={css.updateVersionRow}>
         <p className={css.updateRow}>
           {t('updateCurrentVersion', { version: remoteStatus.activeVersion ?? t('dshRuntimeVersionUnknown') })}
@@ -708,43 +710,6 @@ function GatewayRuntimeSection({
            部署者经 --dsh-path 提供的锚，不是随包版本——不再复用 local 的
            「随应用内建」文案。 */
         <p className={css.generalHint}>{t('dshRuntimeDeployAnchorRow')} v{remoteStatus.builtinVersion}</p>
-      )}
-      {/* 数据快照（2026-12 修订：带标签行 + 说明，置于当前状态组——与
-          「随应用内建」等状态事实归组，用户不再需要猜测它标注什么。
-          2026-12 复审：标签降级为与状态事实同级的 12px hint，避免块内
-          层级倒挂。 */}
-      {/* 数据快照 + 运行时占用（2026-12 统一：两行同组放在「当前状态」内，
-          不再有版本源块末尾的磁盘脚注）。 */}
-      {remoteSnapshotText !== null && (
-        <>
-          <div className={css.updateVersionRow}>
-            <span className={css.generalHint}>{t('dshRuntimeSnapshotLabel')}</span>
-            <span className={css.generalHint}>{remoteSnapshotText}</span>
-          </div>
-          <p className={css.generalHint}>{t('dshRuntimeSnapshotHint')}</p>
-        </>
-      )}
-      {remoteStatus.diskUsage !== null && (
-        <p className={css.generalHint}>
-          {t('dshRuntimeDiskSummary', {
-            total: formatRuntimeBytes(remoteStatus.diskUsage.totalBytes),
-            trees: remoteStatus.diskUsage.versionTrees,
-            treeBytes: formatRuntimeBytes(remoteStatus.diskUsage.versionTreeBytes),
-            storeBytes: formatRuntimeBytes(remoteStatus.diskUsage.storeBytes),
-            cacheBytes: formatRuntimeBytes(
-              remoteStatus.diskUsage.cacheBytes
-              + remoteStatus.diskUsage.installHomeBytes
-              + remoteStatus.diskUsage.xdgCacheBytes
-              + remoteStatus.diskUsage.workBytes,
-            ),
-            snapshotBytes: formatRuntimeBytes(remoteStatus.diskUsage.snapshotBytes),
-            recoveryBytes: formatRuntimeBytes(
-              remoteStatus.diskUsage.preRollbackBytes
-              + remoteStatus.diskUsage.restoreBackupBytes
-              + remoteStatus.diskUsage.failureBytes,
-            ),
-          })}
-        </p>
       )}
       {remoteStatus.diskError !== null && (
         <p className={css.generalError} role="alert">
@@ -798,13 +763,15 @@ function GatewayRuntimeSection({
 
       <h4 className={clsx(css.generalGroupTitle, css.generalGroupTitleBlock)}>{t('dshRuntimeGroupActions')}</h4>
 
+      {/* 2026-12 D 小项②：「选择版本」字段 label 删除（select 以
+          aria-label 保持可访问名称）。 */}
       <div className={css.generalRow}>
-        <label className={css.generalFieldLabel} htmlFor={selectVersionId}>{t('dshRuntimeSelectVersion')}</label>
         <div className={css.runtimeSelectRow}>
           <span className={css.runtimeSelectWrap}>
             <select
               id={selectVersionId}
               className={clsx(css.runtimeField, css.runtimeSelect)}
+              aria-label={t('dshRuntimeSelectVersion')}
               value={chosenRemote ?? ''}
               disabled={mutationDisabled}
               onChange={(event) => {
@@ -1087,6 +1054,47 @@ function GatewayRuntimeSection({
       {remoteStatus.registryError !== null && (
         <p className={css.generalError} role="alert">{remoteStatus.registryError}</p>
       )}
+
+      {/* 数据快照 + 运行时占用（D6-A，2026-12 用户拍板）：紧凑事实块移出
+          「当前状态」，置于「版本源」块内容之后、段尾（与版本源错误行同
+          区域，发丝线分隔）；快照行 = 标签 + 值，磁盘行文案带头
+          「运行时占用 {total}」，unclassifiedBytes>0 时追加未分类残留。 */}
+      {(remoteSnapshotText !== null || remoteStatus.diskUsage !== null) && (
+        <div className={clsx(css.generalGroupTitleBlock, css.runtimeDiskFacts)}>
+          {remoteSnapshotText !== null && (
+            <div className={css.runtimeFactRow}>
+              <span className={css.runtimeFactLabel}>{t('dshRuntimeSnapshotLabel')}</span>
+              <span className={css.runtimeFactValue}>{remoteSnapshotText}</span>
+            </div>
+          )}
+          {remoteStatus.diskUsage !== null && (
+            <div className={css.runtimeFactRow}>
+              <span className={css.runtimeFactValue}>
+                {t('dshRuntimeDiskSummary', {
+                  total: formatRuntimeBytes(remoteStatus.diskUsage.totalBytes),
+                  trees: remoteStatus.diskUsage.versionTrees,
+                  treeBytes: formatRuntimeBytes(remoteStatus.diskUsage.versionTreeBytes),
+                  storeBytes: formatRuntimeBytes(remoteStatus.diskUsage.storeBytes),
+                  cacheBytes: formatRuntimeBytes(
+                    remoteStatus.diskUsage.cacheBytes
+                    + remoteStatus.diskUsage.installHomeBytes
+                    + remoteStatus.diskUsage.xdgCacheBytes
+                    + remoteStatus.diskUsage.workBytes,
+                  ),
+                  snapshotBytes: formatRuntimeBytes(remoteStatus.diskUsage.snapshotBytes),
+                  recoveryBytes: formatRuntimeBytes(
+                    remoteStatus.diskUsage.preRollbackBytes
+                    + remoteStatus.diskUsage.restoreBackupBytes
+                    + remoteStatus.diskUsage.failureBytes,
+                  ),
+                })}
+                {remoteUnclassifiedBytes > 0
+                  && t('dshRuntimeDiskUnclassified', { unclassifiedBytes: formatRuntimeBytes(remoteUnclassifiedBytes) })}
+              </span>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }
@@ -1309,6 +1317,18 @@ export function DshRuntimeSection({
     void runRuntimeAction(() => runtime.cleanupVersion(version))
   }, [runtime, envGated, actions, runRuntimeAction])
 
+  // 失败现场显式清除（D3-A，2026-12 用户拍板）：主进程权威删除该版本的
+  // failures/*.json 记录；surface 在点击时刻重取——桥接在渲染与点击之间
+  // 拆除时绝不能谎报清除成功（与 apply-now 同纪律）。clearFailure 已是真实
+  // RuntimeSurface 成员（renderer/preload/main 并行落地，2026-12）。
+  const onClearFailure = useCallback(() => {
+    const failure = state?.failure
+    if (failure == null) return
+    const surface = currentRuntimeSurface()
+    if (surface === null) return
+    void runRuntimeAction(() => surface.clearFailure(failure.version))
+  }, [state, runRuntimeAction])
+
   const onApplyRegistry = useCallback(async (
     origin: string,
     inline: boolean,
@@ -1426,6 +1446,10 @@ export function DshRuntimeSection({
     }
   }, [snapshot, t])
 
+  // D1-A 未分类残留桶：渲染层 RuntimeDiskUsage 已含必填 unclassifiedBytes
+  // （真实接口落地，2026-12）；diskUsage 本身仍可为 null，保留 ?? 0。
+  const diskUnclassifiedBytes = state?.diskUsage?.unclassifiedBytes ?? 0
+
   const canSelect = actions.has('select-version')
   const canInstall = actions.has('install')
   const canReset = actions.has('reset-builtin')
@@ -1525,8 +1549,6 @@ export function DshRuntimeSection({
     <div className={css.generalGroup}>
       <h3 className={css.generalGroupTitle}>{t('dshRuntimeTitle')}</h3>
 
-      <h4 className={css.generalGroupTitle}>{t('dshRuntimeGroupStatus')}</h4>
-
       {!hydrated && (
         <p className={css.generalHint} role="status">{t('dshRuntimeRemoteLoading')}</p>
       )}
@@ -1558,43 +1580,6 @@ export function DshRuntimeSection({
       )}
       {active !== null && bundled !== null && active !== bundled && (
         <p className={css.generalHint}>{t('dshRuntimeBundledRow')} v{bundled}</p>
-      )}
-      {/* 数据快照（2026-12 修订：带标签行 + 说明，置于当前状态组——与
-          「随应用内建」等状态事实归组，用户不再需要猜测它标注什么。
-          2026-12 复审：标签降级为与状态事实同级的 12px hint（不再用
-          14px/500 字段词汇，避免块内层级倒挂）；未水合时不渲染。 */}
-      {hydrated && (
-        <>
-          <div className={css.updateVersionRow}>
-            <span className={css.generalHint}>{t('dshRuntimeSnapshotLabel')}</span>
-            <span className={css.generalHint}>{snapshotText}</span>
-          </div>
-          <p className={css.generalHint}>{t('dshRuntimeSnapshotHint')}</p>
-        </>
-      )}
-      {/* 数据快照 + 运行时占用（2026-12 统一：两行同组放在「当前状态」内，
-          不再有版本源块末尾的磁盘脚注，与 gateway 分支同构）。 */}
-      {state?.diskUsage != null && (
-        <p className={css.generalHint}>
-          {t('dshRuntimeDiskSummary', {
-            total: formatRuntimeBytes(state.diskUsage.totalBytes),
-            trees: state.diskUsage.versionTrees,
-            treeBytes: formatRuntimeBytes(state.diskUsage.versionTreeBytes),
-            storeBytes: formatRuntimeBytes(state.diskUsage.storeBytes),
-            cacheBytes: formatRuntimeBytes(
-              state.diskUsage.cacheBytes
-              + state.diskUsage.installHomeBytes
-              + state.diskUsage.xdgCacheBytes
-              + state.diskUsage.workBytes,
-            ),
-            snapshotBytes: formatRuntimeBytes(state.diskUsage.snapshotBytes),
-            recoveryBytes: formatRuntimeBytes(
-              state.diskUsage.preRollbackBytes
-              + state.diskUsage.restoreBackupBytes
-              + state.diskUsage.failureBytes,
-            ),
-          })}
-        </p>
       )}
       {state?.diskError != null && (
         <p className={css.generalError} role="alert">{t('dshRuntimeDiskError', { error: state.diskError })}</p>
@@ -1658,17 +1643,18 @@ export function DshRuntimeSection({
 
       <h4 className={clsx(css.generalGroupTitle, css.generalGroupTitleBlock)}>{t('dshRuntimeGroupActions')}</h4>
 
-      {/* 2026-12 修订：外层 label 改为 div——select 与按钮不可同处一个 label
-          （HTML 规范：labeled control 之外不得含其他 labelable 元素，按钮
-          点击会触发 label 隐式激活转发到 select）；label 经 htmlFor 关联。
-          重启 dsh 按钮移入本行（与 select 同一 28px 行高基线）。 */}
+      {/* 2026-12 修订 + D 小项②：「选择版本」字段 label 删除（select 以
+          aria-label 保持可访问名称）；外层仍是 div——select 与按钮不可同处
+          一个 label（HTML 规范：labeled control 之外不得含其他 labelable
+          元素，按钮点击会触发 label 隐式激活转发到 select）。重启 dsh
+          按钮移入本行（与 select 同一 28px 行高基线）。 */}
       <div className={css.generalRow}>
-        <label className={css.generalFieldLabel} htmlFor={selectVersionId}>{t('dshRuntimeSelectVersion')}</label>
         <div className={css.runtimeSelectRow}>
           <span className={css.runtimeSelectWrap}>
             <select
               id={selectVersionId}
               className={clsx(css.runtimeField, css.runtimeSelect)}
+              aria-label={t('dshRuntimeSelectVersion')}
               value={chosen ?? ''}
               disabled={mutationDisabled || !canSelect}
               onChange={(event) => {
@@ -1833,14 +1819,27 @@ export function DshRuntimeSection({
         </div>
       )}
 
+      {/* 失败现场保留展示 + 显式清除入口（D3-A，2026-12 用户拍板）：清除
+          走主进程权威 clearFailure；gateway 分支不加清除按钮（如无现成
+          清除路由，登记偏差）。 */}
       {state?.failure != null && (
-        <p className={css.generalError} role="alert">
-          {t('dshRuntimeFailureRecord', {
-            version: state.failure.version,
-            at: formatTimestamp(state.failure.at),
-            reason: state.failure.reason,
-          })}
-        </p>
+        <div className={css.updateStatusLine}>
+          <p className={css.generalError} role="alert">
+            {t('dshRuntimeFailureRecord', {
+              version: state.failure.version,
+              at: formatTimestamp(state.failure.at),
+              reason: state.failure.reason,
+            })}
+          </p>
+          <button
+            type="button"
+            className={css.updateButton}
+            disabled={operationDisabled}
+            onClick={onClearFailure}
+          >
+            {t('dshRuntimeClearFailure')}
+          </button>
+        </div>
       )}
 
       <h4 className={clsx(css.generalGroupTitle, css.generalGroupTitleBlock)}>{t('dshRuntimeGroupSource')}</h4>
@@ -1938,6 +1937,45 @@ export function DshRuntimeSection({
       </div>
 
       {registryError !== null && <p className={css.generalError} role="alert">{registryError}</p>}
+
+      {/* 数据快照 + 运行时占用（D6-A，2026-12 用户拍板）：紧凑事实块移出
+          「当前状态」，置于「版本源」块内容之后、段尾（与版本源错误行同
+          区域，发丝线分隔）；快照行 = 标签 + 值，磁盘行文案带头
+          「运行时占用 {total}」，unclassifiedBytes>0 时追加未分类残留。 */}
+      {hydrated && (
+        <div className={clsx(css.generalGroupTitleBlock, css.runtimeDiskFacts)}>
+          <div className={css.runtimeFactRow}>
+            <span className={css.runtimeFactLabel}>{t('dshRuntimeSnapshotLabel')}</span>
+            <span className={css.runtimeFactValue}>{snapshotText}</span>
+          </div>
+          {state?.diskUsage != null && (
+            <div className={css.runtimeFactRow}>
+              <span className={css.runtimeFactValue}>
+                {t('dshRuntimeDiskSummary', {
+                  total: formatRuntimeBytes(state.diskUsage.totalBytes),
+                  trees: state.diskUsage.versionTrees,
+                  treeBytes: formatRuntimeBytes(state.diskUsage.versionTreeBytes),
+                  storeBytes: formatRuntimeBytes(state.diskUsage.storeBytes),
+                  cacheBytes: formatRuntimeBytes(
+                    state.diskUsage.cacheBytes
+                    + state.diskUsage.installHomeBytes
+                    + state.diskUsage.xdgCacheBytes
+                    + state.diskUsage.workBytes,
+                  ),
+                  snapshotBytes: formatRuntimeBytes(state.diskUsage.snapshotBytes),
+                  recoveryBytes: formatRuntimeBytes(
+                    state.diskUsage.preRollbackBytes
+                    + state.diskUsage.restoreBackupBytes
+                    + state.diskUsage.failureBytes,
+                  ),
+                })}
+                {diskUnclassifiedBytes > 0
+                  && t('dshRuntimeDiskUnclassified', { unclassifiedBytes: formatRuntimeBytes(diskUnclassifiedBytes) })}
+              </span>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }

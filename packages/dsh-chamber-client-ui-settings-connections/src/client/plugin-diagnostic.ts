@@ -3,7 +3,8 @@
  * UI-free projection helpers for one instance's plugin-graph load outcome.
  * Split from plugin-diagnostic.tsx so the plain-node test suite (which cannot
  * execute .tsx or CSS modules) can cover the state → tone/text decision —
- * mirroring the plugin-diff.ts / PluginSyncModal.tsx split.
+ * mirroring the plugin-diff.ts split (plan 24 D5-A merged the former
+ * PluginSyncModal/PluginInventoryView split into PluginDialog).
  */
 
 import type { SettingsConnectionsKey } from '../locales.ts'
@@ -35,4 +36,31 @@ export function pluginDiagnosticTone(state: PluginDiagnostic['state']): 'ok' | '
   if (state === 'ok') return 'ok'
   if (state === 'instance-version-conflict') return 'info'
   return 'problem'
+}
+
+/** De-duplicated diagnostic banner projection (plan 24 B1.4): the renderer
+ *  prints only `title：detail`. The short state name is the title; the
+ *  detail is the message when present (the richest fact), otherwise the
+ *  pluginId, otherwise null — the state-name + plugin-id + full-message
+ *  triple repetition of one fact never reaches the screen. */
+export interface PluginDiagnosticBanner {
+  title: string
+  detail: string | null
+}
+
+/** Fold one diagnostic into the de-duplicated banner projection. */
+export function bannerProjection(
+  diagnostic: PluginDiagnostic,
+  t: (key: SettingsConnectionsKey) => string,
+): PluginDiagnosticBanner {
+  const message = diagnostic.message !== undefined && diagnostic.message !== ''
+    ? diagnostic.message
+    : null
+  const pluginId = diagnostic.pluginId !== undefined && diagnostic.pluginId !== ''
+    ? diagnostic.pluginId
+    : null
+  return {
+    title: pluginDiagnosticText(diagnostic.state, t),
+    detail: message ?? pluginId,
+  }
 }
