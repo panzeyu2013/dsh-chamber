@@ -1,19 +1,29 @@
 /**
  * Gateway configuration (design 17 §3.1): the parsed config of the
  * server-side access shape — bind host/port, state/dsh roots, auth kind,
- * channels/ui flags, CORS origins, optional TLS. `parseGatewayConfig` enforces
+ * CORS origins, optional TLS. `parseGatewayConfig` enforces
  * the S1 exposure guard at config time: a non-loopback bind without auth is a
  * configuration error (the CLI surfaces it as exit 2).
  */
 
 import { isIP } from 'node:net'
+import {
+  GATEWAY_PASSWORD_MAX_CHARS,
+  GATEWAY_PASSWORD_MIN_CHARS,
+  GATEWAY_TOKEN_MAX_CHARS,
+  GATEWAY_TOKEN_MIN_CHARS,
+} from '@dsh-chamber/control-plane'
 
 export type GatewayBindHost = '127.0.0.1' | '0.0.0.0'
 export type GatewayAuthKind = 'none' | 'password' | 'token' | 'password+token'
-export const MIN_GATEWAY_PASSWORD_CHARS = 12
-export const MAX_GATEWAY_PASSWORD_CHARS = 1024
-export const MIN_GATEWAY_TOKEN_CHARS = 32
-export const MAX_GATEWAY_TOKEN_CHARS = 4096
+// Credential bounds = the shared wire-protocol single source
+// (control-plane gateway-session-protocol.ts, design 17 §5.2/§7.1) — the
+// same values the proxy injection gate and the desktop client enforce.
+// Local names stay as aliases for CLI/config call sites and their tests.
+export const MIN_GATEWAY_PASSWORD_CHARS = GATEWAY_PASSWORD_MIN_CHARS
+export const MAX_GATEWAY_PASSWORD_CHARS = GATEWAY_PASSWORD_MAX_CHARS
+export const MIN_GATEWAY_TOKEN_CHARS = GATEWAY_TOKEN_MIN_CHARS
+export const MAX_GATEWAY_TOKEN_CHARS = GATEWAY_TOKEN_MAX_CHARS
 /** Default target of the mobile UA experience shunting (design 17 §18): the
  * chamber surface's mobile entry placeholder. */
 export const DEFAULT_MOBILE_ENTRY_PATH = '/chamber/mobile.html'
@@ -36,7 +46,6 @@ export interface GatewayConfig {
     /** shared bearer token (design 17 §5.2). May coexist with password. */
     token?: string
   }
-  channels: { direct: boolean; ssh: boolean }
   corsOrigins: string[]
   /** Exact proxy peer IPs whose Forwarded/X-Forwarded facts may be trusted.
    * Empty by default: a direct client can never self-assert its address/TLS. */
@@ -233,11 +242,11 @@ export function parseGatewayConfig(input: GatewayConfigInput, stateDir: string, 
   // silently surface later as a misdirecting 302 once the flag is flipped.
   const mobileUaRedirect = input.mobileUaRedirect ?? envBoolean('DSH_GATEWAY_MOBILE_UA_REDIRECT') ?? false
   const mobileEntryPath = normalizeMobileEntryPath(input.mobileEntryPath ?? DEFAULT_MOBILE_ENTRY_PATH)
-  // S1 (design 17 §11): exposure is a semantic deployment fact, not just the
-  // socket bind. A loopback listener behind an explicitly configured public
-  // origin or trusted reverse proxy is still public and therefore needs auth.
-  // --no-auth is an explicit, loudly-warned operator override
-  // (documented deviation) for trusted networks only.
+  // S1 (design 17 §17 安全不变量摘要): exposure is a semantic deployment
+  // fact, not just the socket bind. A loopback listener behind an explicitly
+  // configured public origin or trusted reverse proxy is still public and
+  // therefore needs auth. --no-auth is an explicit, loudly-warned operator
+  // override (documented deviation) for trusted networks only.
   if ((host !== '127.0.0.1' || publicOrigin !== undefined || trustedProxies.length > 0)
     && kind === 'none' && !allowAnonymousExternal) {
     throw new GatewayConfigError('refusing externally reachable gateway configuration without authentication: pass --ui-password or --api-token (or --no-auth to override)')
@@ -255,7 +264,6 @@ export function parseGatewayConfig(input: GatewayConfigInput, stateDir: string, 
       ...(password !== undefined ? { password } : {}),
       ...(token !== undefined ? { token } : {}),
     },
-    channels: { direct: host === '0.0.0.0', ssh: false },
     corsOrigins,
     trustedProxies,
     ...(publicOrigin !== undefined ? { publicOrigin } : {}),

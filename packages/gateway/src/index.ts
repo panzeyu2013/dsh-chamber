@@ -10,6 +10,7 @@
 
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { FATAL_STARTUP_BLOCK_REASONS } from '@dsh-chamber/dsh-runtime'
 import {
   DEFAULT_STATE_DIR,
   createControlPlane,
@@ -48,13 +49,11 @@ import { createPluginWriteCheckpoint } from './spawn-checkpoint.ts'
  * the operator must intervene. swap-attempted and restore-half/incomplete are
  * NOT fatal (review fix): they keep the gateway up with the managed dsh
  * stopped and are resumable via POST /chamber/runtime/retry-apply |
- * retry-restore, mirroring the desktop's blocked-but-alive app semantics. */
-const FATAL_RUNTIME_BLOCKS = new Set<string>([
-  'journal-corrupt',
-  'current-corrupt',
-  'override-corrupt',
-  'journal-mismatch',
-])
+ * retry-restore, mirroring the desktop's blocked-but-alive app semantics.
+ * The four FATAL reasons are the shared core set (dsh-runtime
+ * FATAL_STARTUP_BLOCK_REASONS) — the desktop main blocks on the same
+ * constant. */
+const FATAL_RUNTIME_BLOCKS = new Set<string>(FATAL_STARTUP_BLOCK_REASONS)
 
 export interface GatewayOptions {
   config: GatewayConfig
@@ -455,11 +454,19 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
         if (startup.blockedReason !== null && (FATAL_RUNTIME_BLOCKS.has(startup.blockedReason)
           || startup.blockedReason === 'swap-attempted'
           || startup.blockedReason === 'restore-half'
-          || startup.blockedReason === 'restore-incomplete')) {
-          const resume = FATAL_RUNTIME_BLOCKS.has(startup.blockedReason)
-            ? 'recover-metadata'
-            : 'retry-apply|retry-restore'
-          logger.error(`gateway runtime startup blocked: ${startup.blockedReason}; managed dsh left stopped — resume via POST /chamber/runtime/${resume}`)
+          || startup.blockedReason === 'restore-incomplete'
+          // A-U2 desktop parity: an env-override runtime that failed the
+          // activation probe gate must NOT be exposed — keep the gateway up
+          // with the managed dsh stopped. Env is externally pinned, so there
+          // is no recovery route: fix the DSH_GATEWAY_DSH_PATH target and
+          // restart the gateway (the next startup transaction re-probes).
+          || startup.blockedReason === 'env-probe-failed')) {
+          const resume = startup.blockedReason === 'env-probe-failed'
+            ? null
+            : FATAL_RUNTIME_BLOCKS.has(startup.blockedReason)
+              ? 'recover-metadata'
+              : 'retry-apply|retry-restore'
+          logger.error(`gateway runtime startup blocked: ${startup.blockedReason}; managed dsh left stopped${resume === null ? ' — fix the DSH_GATEWAY_DSH_PATH runtime target and restart the gateway' : ` — resume via POST /chamber/runtime/${resume}`}`)
           // Production startupTransaction already stops a probe-left process
           // before releasing activation quarantine. Repeat the idempotent stop
           // at the composition boundary so a future/custom manager cannot turn

@@ -51,10 +51,21 @@ import {
 
 /** Entry-count cap (tar headers incl. directory entries). */
 export const TARBALL_MAX_ENTRIES = 4096
-/** Unpacked footprint cap: 512-byte header + padded data per entry, exactly
- *  the route scan's `totalBytes` accounting (design 21 §6.9 default: 256 MiB,
- *  mirroring tgz-scan.ts TGZ_MAX_UNPACKED_BYTES). */
+/** Unpacked footprint cap (design 21 §6.9 default: 256 MiB, mirroring
+ *  tgz-scan.ts TGZ_MAX_UNPACKED_BYTES). Accounting equals the gateway's
+ *  ACTUAL-INFLATED-BYTES budget — 512-byte header + padded data
+ *  (ceil(size/512)*512) per entry + the 1024-byte end-of-archive marker
+ *  (which is real inflate output). The scan's declared `totalBytes` formula
+ *  is the same per-entry arithmetic but stops at the end marker, so a
+ *  builder archive within this budget passes BOTH the route's declared cap
+ *  and its inflated guard. The raw-byte (unpadded) accounting this bound
+ *  replaces could approve a folder whose real padded archive the route then
+ *  refused (the ~254–256 MiB acceptance window). */
 export const TARBALL_MAX_UNPACKED_BYTES = 256 * 1024 * 1024
+/** Classic end-of-archive marker: two all-zero 512-byte blocks. They are real
+ *  inflated bytes on the gateway, so the builder reserves them inside the
+ *  unpacked cap instead of hiding them from its own accounting. */
+const TAR_END_MARKER_BYTES = 2 * 512
 /** Uploaded (gzip) archive cap — the route's MATERIALIZE_MAX_BYTES. */
 export const TARBALL_MAX_ARCHIVE_BYTES = 32 * 1024 * 1024
 /** package.json read cap for the folder manifest (bounded single file). */
@@ -306,7 +317,11 @@ function buildSync(
   const entries: string[] = []
   const skipped: string[] = []
   let entryCount = 0
-  let unpackedBytes = 0
+  // Padded-footprint accounting, byte-for-byte the gateway scan's formula:
+  // the two-block end-of-archive marker is reserved up front (it is part of
+  // the real inflated archive the route counts), each header adds 512, each
+  // file body adds its padded 512-boundary length.
+  let unpackedBytes = TAR_END_MARKER_BYTES
   /** Whether the validated `package/package.json` was actually packed as a
    *  regular file (a symlinked/unreadable manifest must never produce an
    *  archive that contradicts the upload headers). */
@@ -330,11 +345,16 @@ function buildSync(
     }
     const header = ustarHeader(archivePath, 0o644, body.length, '0')
     trackEntry(archivePath)
-    unpackedBytes += body.length
+    // Padded data length — the ustar layout pads each body to a 512-byte
+    // boundary and the gateway scan counts the padded area, so the builder
+    // must count it too (raw-byte counting under-accounted by up to 511
+    // bytes per entry and let a desktop-OK archive fail the route's scan).
+    const padded = paddedBlock(body)
+    unpackedBytes += padded.length
     if (unpackedBytes > limits.maxUnpackedBytes) {
       throw tarError('too_large', `the folder unpacks beyond the ${limits.maxUnpackedBytes}-byte bound`)
     }
-    blocks.push(header, paddedBlock(body))
+    blocks.push(header, padded)
   }
 
   const addDirectory = (archivePath: string): void => {
@@ -435,10 +455,11 @@ export interface TgzPackageManifest {
 export function listTgzManifest(archive: Buffer): TgzPackageManifest | null {
   let tar: Buffer
   try {
-    // Inflate bound: the desktop archive builder itself emits ≤
-    // TARBALL_MAX_UNPACKED_BYTES of tar (headers included), plus the
-    // two-block end marker — the small margin keeps the largest legal
-    // desktop-built archive readable while still refusing zip-bomb growth.
+    // Inflate bound: the desktop archive builder emits at most
+    // TARBALL_MAX_UNPACKED_BYTES of tar including the two-block end marker
+    // (padded-footprint accounting, gateway-scan parity) — the small margin
+    // keeps the largest legal desktop-built archive readable while still
+    // refusing zip-bomb growth.
     tar = gunzipSync(archive, { maxOutputLength: TARBALL_MAX_UNPACKED_BYTES + 4 * 1024 * 1024 })
   } catch {
     return null

@@ -302,7 +302,7 @@ export const zh = {
   startManagedDshConfirmTitle: '启动托管的 dsh？',
   startManagedDshOk: '已启动并恢复就绪',
   startManagedDshFailed: '启动失败：{error}',
-  recoveryHintDeferred: '实例处于恢复态；仅允许重试/回滚/恢复内置——插件变更已推迟',
+  recoveryHintDeferred: '实例处于恢复态；仅允许对应的重试恢复动作——插件变更已推迟',
   restartNeededHint: '变更已应用，重启实例后生效',
 } satisfies Record<string, string>
 
@@ -611,6 +611,6 @@ export const en: Record<SettingsConnectionsKey, string> = {
   startManagedDshConfirmTitle: 'Start the managed dsh?',
   startManagedDshOk: 'Started and ready',
   startManagedDshFailed: 'Start failed: {error}',
-  recoveryHintDeferred: 'The instance is in a recovery state; only retry/rollback/restore-builtin are allowed \u2014 plugin changes are deferred.',
+  recoveryHintDeferred: 'The instance is in a recovery state; only its matching retry recovery action is allowed \u2014 plugin changes are deferred.',
   restartNeededHint: 'Applied; restart the instance to activate',
 }

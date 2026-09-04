@@ -2382,6 +2382,7 @@ function isRuntimePublishBackupName(name) {
   const version = match[1];
   return version === version.trim() && isSafeVersion(version);
 }
+var RUNTIME_LOGICAL_DISK_LIMIT_BYTES = 10 * 1024 ** 3;
 function runtimeDiskSummary(baseDir, dshHome = join2(baseDir, "state", "dsh-home")) {
   const runtime = runtimeDirPath(baseDir);
   const trees = listVersionTrees(baseDir);
@@ -5062,6 +5063,22 @@ async function pruneSnapshots(baseDir, policy) {
   }
   return removed;
 }
+async function pruneRuntimeSnapshots(baseDir, dshHome, keepRecentUnprotected = 3) {
+  const artifactCleanup = await cleanupSnapshotArtifacts(baseDir, dshHome);
+  if (artifactCleanup.restoreBackupCleanup === "blocked-marker") {
+    return { removedSnapshots: [], artifactCleanup, skippedReason: "blocked-marker" };
+  }
+  const retention = runtimeSnapshotRetentionState(baseDir);
+  if (retention.kind === "corrupt") {
+    return { removedSnapshots: [], artifactCleanup, skippedReason: "retention-corrupt" };
+  }
+  const removedSnapshots = await pruneSnapshots(baseDir, {
+    protectedVersions: retention.protectedVersions,
+    protectedSnapshotNames: retention.protectedSnapshotNames,
+    keepRecentUnprotected
+  });
+  return { removedSnapshots, artifactCleanup, skippedReason: "none" };
+}
 async function prepareManualRollbackData(baseDir, dshHome, targetVersion) {
   const snapshotPath = await findLatestSnapshotForVersion(baseDir, targetVersion);
   if (snapshotPath === null) return { snapshotPath: null, stashPath: null };
@@ -6610,6 +6627,12 @@ async function runRuntimeActivationProbes(opts) {
 }
 
 // src/runtime-startup.ts
+var FATAL_STARTUP_BLOCK_REASONS = [
+  "journal-corrupt",
+  "current-corrupt",
+  "override-corrupt",
+  "journal-mismatch"
+];
 function shouldProbeEnvWithDormantCorruptSelection(status, envOverrideActive) {
   return envOverrideActive && status === "selection-corrupt";
 }
@@ -7244,6 +7267,7 @@ export {
   DEFAULT_REGISTRY_TIMEOUT_MS,
   DEFAULT_TARBALL_MAX_BYTES,
   EXACT_SEMVER,
+  FATAL_STARTUP_BLOCK_REASONS,
   HOST_DOMAIN_PROBE_NAMES,
   INSTALL_ENV_WHITELIST,
   INSTALL_OUTPUT_LIMIT_BYTES,
@@ -7257,6 +7281,7 @@ export {
   REQUIRED_ACTIVATION_PROBES,
   RUNTIME_INSTALLER_RESIDUAL_PROCESS_GROUP_ERROR,
   RUNTIME_INSTALLER_WRITER_UNSAFE_ERROR,
+  RUNTIME_LOGICAL_DISK_LIMIT_BYTES,
   RuntimeInstallerSupervisor,
   RuntimeOperationFence,
   SETTINGS_FILE_MAX_BYTES,
@@ -7331,6 +7356,7 @@ export {
   probeKoffiLoadable,
   promoteDueCandidates,
   pruneRuntimeArtifacts,
+  pruneRuntimeSnapshots,
   pruneRuntimeStore,
   pruneSnapshots,
   quarantineRuntimeFileNoFollow,

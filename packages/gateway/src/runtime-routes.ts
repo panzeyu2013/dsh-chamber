@@ -73,6 +73,7 @@ function codeToStatus(code: string | undefined): number {
     case 'runtime_disk_unavailable': return 409
     case 'runtime_disk_limit': return 409
     case 'runtime_activation_failed': return 409
+    case 'runtime_no_override': return 409
     case 'body_too_large': return 413
     case 'bad_request': return 400
     default: return 500
@@ -99,11 +100,32 @@ const APPLY_RECOVERY_PHASES = new Set(['snapshot-failed', 'swap-attempted'])
 /**
  * Durable recovery state is an authoritative terminal gate, not merely UI
  * copy. A recovery phase takes precedence over a lingering `pending` value:
- * it exposes exactly its matching retry plus restore-builtin. Ordinary
- * pending exposes only restore-builtin (design 18 §9.3).
+ * it exposes exactly its matching retry (desktop parity, 2026 audit R2 —
+ * restore-builtin is NOT offered inside an interrupted apply/restore: the
+ * shared core re-blocks an armed reset against durable swap/snapshot/restore
+ * markers, stopping the dsh for nothing and leaving an armed reset intent
+ * that would hijack the later retry's semantics). Ordinary pending exposes
+ * only restore-builtin; healthy idle selections keep the full surface
+ * (design 18 §9.3).
+ *
+ * Mid-run metadata drift (2026 audit R4): when the process stays alive past
+ * a healthy startup and the CURRENT/OVERRIDE/JOURNAL files go corrupt
+ * afterwards, no in-memory block exists yet — status() projects the
+ * resolveWorkspace error text as startupBlockedReason AND reports
+ * canRecoverMetadata=true (the manager's own recover gate accepts). The
+ * free-text blockedReason is not a canonical sentinel, so this gate
+ * classifies by the authoritative `canRecoverMetadata` flag: a flagged
+ * state opens recover-metadata (and only it) regardless of the reason text
+ * or a lingering pending, keeping status/canRecoverMetadata/manager/UI and
+ * the recovery route mutually consistent.
  */
 function recoveryGateRefusal(
-  status: { phase?: unknown; pending?: unknown; startupBlockedReason?: unknown },
+  status: {
+    phase?: unknown
+    pending?: unknown
+    startupBlockedReason?: unknown
+    canRecoverMetadata?: unknown
+  },
   action: RuntimeMutationAction,
 ): { error: string; code: 'runtime_pending' | 'runtime_recovery_required' } | null {
   const phase = typeof status.phase === 'string' ? status.phase : 'unknown'
@@ -114,9 +136,9 @@ function recoveryGateRefusal(
       : null
 
   if (retryAction !== null) {
-    if (action === retryAction || action === 'restore-builtin') return null
+    if (action === retryAction) return null
     return {
-      error: `runtime recovery ${phase} is required; only ${retryAction} and restore-builtin are allowed`,
+      error: `runtime recovery ${phase} is required; only ${retryAction} is allowed`,
       code: 'runtime_recovery_required',
     }
   }
@@ -129,23 +151,65 @@ function recoveryGateRefusal(
     && status.startupBlockedReason !== ''
     ? status.startupBlockedReason
     : null
+  // Authoritative recoverability: the status projection derives this from
+  // the durable metadata health, not from the (possibly free-text) blocked
+  // reason above (R4 mid-run drift classification).
+  const canRecoverMetadata = status.canRecoverMetadata === true
   if (blockedReason !== null) {
     const swapLike = blockedReason === 'swap-attempted' || blockedReason === 'snapshot-failed'
     const restoreLike = blockedReason === 'restore-half' || blockedReason === 'restore-incomplete'
     const fatalLike = RECOVERABLE_METADATA_BLOCKS.has(blockedReason)
+    // An UNRECOGNIZED blockedReason (free-text resolution error from
+    // mid-run metadata drift) must not lock out the very recovery route the
+    // projection advertises — recover-metadata opens whenever the status
+    // reports canRecoverMetadata, for canonical FATAL sentinels and for
+    // drifted free-text reasons alike. Everything else stays closed.
+    const recoverOpen = fatalLike
+      || (canRecoverMetadata && !swapLike && !restoreLike && blockedReason !== 'env-probe-failed')
     const allowed = (action === 'retry-apply' && swapLike)
       || (action === 'retry-restore' && restoreLike)
-      || (action === 'restore-builtin' && (swapLike || restoreLike))
-      || (action === 'recover-metadata' && fatalLike)
-    if (!allowed) {
+      || (action === 'recover-metadata' && recoverOpen)
+    if (allowed) {
+      // 2026 audit R3 (FATAL + stale pending deadlock): an allowed recovery
+      // action returns HERE — a startup block OUTRANKS a lingering pending
+      // value. Falling through to the pending terminal gate below would
+      // refuse recover-metadata with runtime_pending while restore-builtin
+      // (pending's own escape) is simultaneously refused by this block
+      // branch — the recovery surface would be fully locked behind a block
+      // that only the recovery route can clear (H2: blockOutranksPending
+      // only re-labels the projected phase; the gate itself must honor it).
+      return null
+    }
+    // env-probe-failed has NO matching recovery route (the runtime is
+    // externally pinned) — say so instead of promising a route that does
+    // not exist (A-U2 review): the operator must fix the
+    // DSH_GATEWAY_DSH_PATH target and restart the gateway.
+    if (blockedReason === 'env-probe-failed') {
       return {
-        error: `runtime startup block ${blockedReason} requires recovery first; only the matching recovery route applies`,
+        error: 'runtime startup block env-probe-failed: the DSH_GATEWAY_DSH_PATH runtime failed activation probes; fix the target and restart the gateway (no recovery route applies)',
         code: 'runtime_recovery_required',
       }
     }
+    return {
+      error: canRecoverMetadata
+        ? `runtime startup block ${blockedReason} requires recovery first; only recover-metadata is allowed`
+        : `runtime startup block ${blockedReason} requires recovery first; no recovery route matches (restart the gateway if this persists)`,
+      code: 'runtime_recovery_required',
+    }
   }
 
-  if ((status.pending !== null && status.pending !== undefined) || phase === 'pending') {
+  // Same mid-run drift with no projected block text: FATAL metadata
+  // corruption beneath an armed pending must not hide recover-metadata
+  // behind the pending terminal gate (the pending escape restore-builtin is
+  // refused by the manager's durable guard for corrupt metadata —
+  // recover-metadata is the actual recovery surface; R4).
+  if (action === 'recover-metadata' && canRecoverMetadata) return null
+
+  // The ordinary-pending terminal gate applies only when NO startup block is
+  // armed — a blocked startup projects its own recovery surface above and a
+  // stale pending must not relabel refusals (H2/2026 audit R3).
+  if (blockedReason === null
+    && ((status.pending !== null && status.pending !== undefined) || phase === 'pending')) {
     if (action === 'restore-builtin') return null
     // apply-now's semantic premise is exactly this pending/selection state —
     // it is the in-session execution of the armed switch, not a competing
@@ -165,7 +229,7 @@ function recoveryGateRefusal(
 
 function rejectRecoveryGate(
   res: ApiResponse,
-  status: { phase?: unknown; pending?: unknown },
+  status: { phase?: unknown; pending?: unknown; startupBlockedReason?: unknown; canRecoverMetadata?: unknown },
   action: RuntimeMutationAction,
 ): boolean {
   const refusal = recoveryGateRefusal(status, action)
@@ -337,6 +401,19 @@ export function createRuntimeRoutes(manager: () => GatewayRuntimeManager, logger
         return json(res, 200, await m.retryRestore())
       }
       if (suffix === '/restore-builtin' && req.method === 'POST') {
+        // Route-level gate (desktop parity, A-U4 + R2): restore-builtin is
+        // the escape for a PENDING selection or a HEALTHY selection with an
+        // override only. Inside an interrupted apply (swap-attempted /
+        // snapshot-failed) or data restore (restore-blocked) the shared core
+        // re-blocks an armed reset against the durable markers — the gate
+        // therefore exposes only the matching retry there (never a reset
+        // that would stop the dsh for nothing and leave an armed reset
+        // intent behind). A FATAL metadata block or an in-flight writer must
+        // resume through its own surface (recover-metadata / mutation
+        // completion). The manager adds the hasOverride preflight
+        // (runtime_no_override) and the durable-marker guard.
+        const status = await m.status()
+        if (rejectRecoveryGate(res, status, 'restore-builtin')) return true
         return json(res, 200, await m.restoreBuiltin())
       }
       if (suffix === '/restart' && req.method === 'POST') {
@@ -379,7 +456,7 @@ export function createRuntimeRoutes(manager: () => GatewayRuntimeManager, logger
         // the recovery gate (M1, 2026-12) refuses every startupBlockedReason —
         // phase-less FATAL metadata blocks (journal-corrupt / current-corrupt /
         // override-corrupt / journal-mismatch) included — and recovery phases
-        // only expose their matching retry + restore-builtin (a start never
+        // only expose their matching retry — restore-builtin applies to pending/healthy selections only (2026 audit R2), and a start never
         // bypasses the recovery gate), installing/applying windows refuse
         // busy, a held profile-write lease defers, a second start refuses, and
         // a running/starting dsh is not a start target.

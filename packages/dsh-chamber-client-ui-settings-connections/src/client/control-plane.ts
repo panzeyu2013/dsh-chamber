@@ -112,7 +112,15 @@ function desktopSsh() {
 
 export type LocalPluginListResult = { ok: true; manifest: LocalPluginManifest } | { ok: false; error: string }
 export type RemotePluginListResult = { ok: true; manifest: RemotePluginManifest } | { ok: false; error: string }
-export type PluginApplyResult2 = { ok: true; result: PluginApplyResult } | { ok: true; cancelled: true } | { ok: false; error: string }
+/** plugin_apply (ssh) result — exactly the main-process SSH_PLUGIN_APPLY
+ *  union (renderer global.d.ts DesktopSshSurface.plugin_apply / preload
+ *  SshPluginApplyIpcResult). NO `{ok:true,cancelled:true}` arm: the ssh apply
+ *  handler has no confirmation dialog or picker to dismiss (design 21 §10 —
+ *  the ssh apply confirm gap is a registered open item; the gateway apply
+ *  union carries the cancelled arm instead), so this wrapper can never see a
+ *  user-cancelled result (ipc-surface-mirror.test.ts pins the producer
+ *  union). */
+export type PluginApplyResult2 = { ok: true; result: PluginApplyResult } | { ok: false; error: string }
 export type NpmSearchResult = { ok: true; packages: NpmSearchPackage[] } | { ok: false; error: string }
 
 /** GET /chamber/plugins seed-cache projection (design 17 §9.3, unchanged):

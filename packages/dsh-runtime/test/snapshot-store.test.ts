@@ -25,6 +25,7 @@ import {
   findLatestSnapshotForVersion,
   listPreRollbackStashes,
   prepareManualRollbackData,
+  pruneRuntimeSnapshots,
   pruneSnapshots,
   restoreMarkerAuthorityStatus,
   restorePreRollback,
@@ -464,6 +465,53 @@ test('pruneSnapshots protects an active restore snapshot and fails closed on a c
   }), [])
   assert.ok(existsSync(active))
   assert.ok(existsSync(another))
+})
+
+test('pruneRuntimeSnapshots composite: artifact cleanup + retention pruning in one pass (desktop/gateway shared routine)', async () => {
+  const { base, dshHome } = makeDirs()
+  const paths = snapshotPaths(base)
+  const dir = paths.snapshotsDir
+  for (const name of ['1.0.0-100', '2.0.0-200', '3.0.0-300']) {
+    mkdirSync(path.join(dir, name), { recursive: true })
+  }
+  mkdirSync(path.join(dir, 'unparseable'), { recursive: true })
+  // Completed restore backups beside DSH_HOME: cleanup keeps the newest one.
+  mkdirSync(`${dshHome}.old-10`, { recursive: true })
+  mkdirSync(`${dshHome}.old-20`, { recursive: true })
+
+  const first = await pruneRuntimeSnapshots(base, dshHome, 1)
+  assert.equal(first.skippedReason, 'none')
+  assert.deepEqual(first.removedSnapshots.sort(), ['1.0.0-100', '2.0.0-200'])
+  assert.deepEqual(readdirSync(dir).sort(), ['3.0.0-300', 'unparseable'])
+  assert.deepEqual(first.artifactCleanup.removedRestoreBackups, ['dsh-home.old-10'])
+  assert.ok(existsSync(`${dshHome}.old-20`), 'the newest completed restore backup is retained')
+  assert.equal(first.artifactCleanup.restoreBackupCleanup, 'completed')
+
+  // An authoritative restore marker blocks the whole pass (fail closed).
+  const marker = paths.restoreMarker
+  writeFileSync(marker, JSON.stringify({ snapshotPath: path.join(dir, '3.0.0-300') }), 'utf8')
+  const blocked = await pruneRuntimeSnapshots(base, dshHome, 0)
+  assert.equal(blocked.skippedReason, 'blocked-marker')
+  assert.deepEqual(blocked.removedSnapshots, [])
+  assert.deepEqual(blocked.artifactCleanup.removedRestoreBackups, [])
+  assert.ok(existsSync(path.join(dir, '3.0.0-300')))
+
+  // A corrupt marker also preserves everything.
+  writeFileSync(marker, '{ broken', 'utf8')
+  const corrupt = await pruneRuntimeSnapshots(base, dshHome, 0)
+  assert.equal(corrupt.skippedReason, 'blocked-marker')
+  assert.deepEqual(corrupt.removedSnapshots, [])
+  assert.ok(existsSync(path.join(dir, '3.0.0-300')))
+
+  // Corrupt RETENTION metadata (the override record) fails closed too: the
+  // composite must report 'retention-corrupt' and delete nothing — this is
+  // the branch that drives the desktop/gateway maintenance warns.
+  rmSync(marker, { force: true })
+  writeFileSync(path.join(base, 'dsh-runtime', 'override.json'), '{broken', { mode: 0o600 })
+  const corruptRetention = await pruneRuntimeSnapshots(base, dshHome, 0)
+  assert.equal(corruptRetention.skippedReason, 'retention-corrupt')
+  assert.deepEqual(corruptRetention.removedSnapshots, [])
+  assert.ok(existsSync(path.join(dir, '3.0.0-300')), 'retention-corrupt preserves every snapshot')
 })
 
 test('cleanupSnapshotArtifacts removes crash temps and keeps only the newest of four completed restores', async () => {

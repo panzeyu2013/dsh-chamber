@@ -95,10 +95,24 @@ type SpecClass =
   | { type: 'materialize' }
   | { type: 'unsyncable'; reason: string }
 
+/** True when the version VALUE contains a semver x-wildcard (`x`, `1.x`,
+ *  `1.2.x`, with an optional `^`/`~` prefix) — mirror of the main-process
+ *  gate (desktop plugin-sync `hasXWildcard`, 2026 audit R4): an x-wildcard
+ *  is a RANGE, and the authoritative apply path rejects the whole batch as
+ *  unsyncable. The UI classifier must refuse it up front so a row is never
+ *  offered as actionable while the main process would wholesale-reject it. */
+export function hasXWildcard(versionOrValue: string): boolean {
+  const bare = versionOrValue.replace(/^[\^~]/, '')
+  return /(^|\.)x(\.|$)/i.test(bare)
+}
+
 /** Classify a dependency spec VALUE into syncable / materialize / refused. */
 export function classifySpec(spec: string): SpecClass {
   if (isPathSpec(spec)) return { type: 'materialize' }
   if (REGISTRY_SPEC.test(spec)) {
+    if (hasXWildcard(spec)) {
+      return { type: 'unsyncable', reason: 'x-wildcard version is a range, not a locked version (use an exact version)' }
+    }
     return { type: 'registry', unlocked: !PINNED.test(spec) }
   }
   return { type: 'unsyncable', reason: unsyncableReason(spec) }

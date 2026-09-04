@@ -60,8 +60,9 @@ export function PluginAddView({ t, spec, onInstalled }: {
     try {
       if (isRemote && spec !== null) {
         const res = await pluginApply(spec.id, { add: [value], remove: [], restart: false })
-        if ('cancelled' in res) { /* silent no-op (user dismissed the main-process confirmation) */ }
-        else if ('error' in res) setDraftError(res.error)
+        // plugin_apply has no cancelled arm (no main-process confirm on the
+        // ssh apply — design 21 §10 open item); a refusal is always ok:false.
+        if ('error' in res) setDraftError(res.error)
         else if (res.result.failed.length > 0 || !res.result.verified) {
           // pluginApply resolves {ok:true} even when an individual add failed
           // or the manifest assertion failed (design 13 §4.5) — fail loud and

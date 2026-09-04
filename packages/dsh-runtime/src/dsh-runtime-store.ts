@@ -1493,6 +1493,13 @@ function isRuntimePublishBackupName(name: string): boolean {
   return version === version.trim() && isSafeVersion(version)
 }
 
+/** Logical runtime disk soft-limit (10 GiB, design 18) — shared single
+ * source. Both owners project it as their `diskLimitBytes` and gate installs
+ * against it (desktop dsh-runtime-controller / gateway runtime-manager used
+ * to hard-code the same value in each package; alias exports keep their
+ * public constant names). */
+export const RUNTIME_LOGICAL_DISK_LIMIT_BYTES = 10 * 1024 ** 3
+
 /** On-demand disk accounting. It performs a full tree walk and is not for a
  * hot UI loop; callers should run it only after install/cleanup or on demand.
  * `dshHome` defaults to the desktop owner layout; the separately invoked

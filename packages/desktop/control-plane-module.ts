@@ -103,6 +103,26 @@ export const PLUGIN_SPEC_PATTERN = controlPlaneModule.PLUGIN_SPEC_PATTERN
 export const RUN_STDOUT_MAX_BYTES = controlPlaneModule.RUN_STDOUT_MAX_BYTES
 export const WRITE_FILE_MAX_BYTES = controlPlaneModule.WRITE_FILE_MAX_BYTES
 
+// Gateway wire-protocol credential/session facts + SPKI pin helpers — the
+// cross-shape single source (control-plane gateway-session-protocol.ts /
+// spki-pin.ts, design 17 §7.1/§9.3/§13.4.2/S23): the gateway server imports
+// the same module, so the desktop client and the server can no longer drift
+// on cookie name / TTL / bearer & password bounds / cookie caps. Consumed by
+// gateway-session.ts (login cache + expiry) and gateway-provider.ts (SPKI
+// probe gate + form validation mirrors).
+export const GATEWAY_PASSWORD_MAX_CHARS = controlPlaneModule.GATEWAY_PASSWORD_MAX_CHARS
+export const GATEWAY_PASSWORD_MIN_CHARS = controlPlaneModule.GATEWAY_PASSWORD_MIN_CHARS
+export const GATEWAY_SESSION_COOKIE_NAME = controlPlaneModule.GATEWAY_SESSION_COOKIE_NAME
+export const GATEWAY_SESSION_COOKIE_VALUE_MAX_CHARS = controlPlaneModule.GATEWAY_SESSION_COOKIE_VALUE_MAX_CHARS
+export const GATEWAY_SESSION_TTL_SECONDS = controlPlaneModule.GATEWAY_SESSION_TTL_SECONDS
+export const GATEWAY_TOKEN_MAX_CHARS = controlPlaneModule.GATEWAY_TOKEN_MAX_CHARS
+export const GATEWAY_TOKEN_MIN_CHARS = controlPlaneModule.GATEWAY_TOKEN_MIN_CHARS
+export const GATEWAY_TOKEN_VISIBLE_ASCII_PATTERN = controlPlaneModule.GATEWAY_TOKEN_VISIBLE_ASCII_PATTERN
+export const SPKI_PIN_PATTERN = controlPlaneModule.SPKI_PIN_PATTERN
+export const SPKI_PIN_MISMATCH_CODE = controlPlaneModule.SPKI_PIN_MISMATCH_CODE
+export const spkiPinOfPeerCertificate = controlPlaneModule.spkiPinOfPeerCertificate
+export const attachSpkiPinVerifier = controlPlaneModule.attachSpkiPinVerifier
+
 // Types ride the same single source; type-only exports are erased at build
 // time, so re-exporting from the workspace package costs nothing at runtime.
 export type {

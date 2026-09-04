@@ -140,7 +140,10 @@ export type GatewayApplyShape =
 export interface SshApplyResultShape {
   /** Ops that executed successfully (removes + adds). */
   applied: number
-  /** Ops never attempted (e.g. the user dismissed a confirmation). */
+  /** Ops never attempted (refused up front by whitelist/deny/skip policy —
+   *  never a user dismissal: ssh plugin_apply has no cancellation path; the
+   *  v1 producer always reports 0 here — whole-batch refusals surface as
+   *  ok:false, per-item failures land in failed[]). */
   skipped: number
   /** Per-item failures (single-item isolation — never blocks the rest). */
   failed: { spec: string; error: string }[]
@@ -151,13 +154,14 @@ export interface SshApplyResultShape {
   readyNote?: string
 }
 
-/** Local structural twin of the ssh plugin_apply IPC union (authority: renderer
- *  global.d.ts DesktopSshSurface.plugin_apply) plus the `{ok:true,
- *  cancelled:true}` arm this package's own wrapper already declares
- *  (control-plane.ts PluginApplyResult2 — the design-21 A confirmation chain
- *  lands cancelled there first). */
+/** Local structural twin of the ssh plugin_apply IPC union (authority:
+ *  renderer global.d.ts DesktopSshSurface.plugin_apply / desktop preload.cts
+ *  SshPluginApplyIpcResult — ipc-surface-mirror.test.ts pins the producer
+ *  union). NO `{ok:true,cancelled:true}` arm: the ssh apply handler has no
+ *  confirmation dialog or picker to dismiss (design 21 §10 — the ssh apply
+ *  confirm gap is a registered open item), so the twin carries no cancelled
+ *  arm — the gateway twin keeps it (classifyGatewayApplyResult). */
 export type SshApplyShape =
-  | { ok: true; cancelled: true }
   | { ok: true; result: SshApplyResultShape }
   | { ok: false; error: string }
 
@@ -247,11 +251,13 @@ export function classifyGatewayApplyResult(result: GatewayApplyShape, attemptedO
  *  (single-flight / invalid input) — nothing of the registry batch ran;
  *  `attemptedOps` supplies the total when the caller wants an n/m frame
  *  (defaults to 0 = render no counts). */
-export function classifySshApplyResult(result: SshApplyShape, attemptedOps?: number): ApplyOutcome {
+export function classifySshApplyResult(result: SshApplyShape, attemptedOps?: number): Exclude<ApplyOutcome, { cancelled: true }> {
   if (!result.ok) {
     return { failed: { error: result.error, partialDone: 0, partialTotal: attemptedOps ?? 0 } }
   }
-  if ('cancelled' in result) return { cancelled: true }
+  // No cancelled arm: plugin_apply has no cancellation path (the ssh apply
+  // confirm gap, design 21 §10) — the only cancelled producer is the gateway
+  // apply, classified by classifyGatewayApplyResult.
   const r = result.result
   const partial = r.failed.length > 0
     ? { done: r.applied, total: r.applied + r.failed.length }

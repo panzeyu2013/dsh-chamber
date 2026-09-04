@@ -25,6 +25,7 @@ import {
 import { basename, dirname, join, resolve, sep } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { renameWithWindowsRetry } from './rename-retry.ts'
+import { runtimeSnapshotRetentionState } from './dsh-runtime-store.ts'
 import { assertSafeVersion, isSafeVersion } from './version-safety.ts'
 
 const PRIVATE_DIR_MODE = 0o700
@@ -1109,6 +1110,51 @@ export async function pruneSnapshots(baseDir: string, policy: SnapshotRetentionP
     removed.push(entry.name)
   }
   return removed
+}
+
+/** Summary of one bounded-maintenance pass (desktop + gateway parity). */
+export interface RuntimeSnapshotPruneResult {
+  /** Snapshot directories removed by retention pruning. */
+  removedSnapshots: string[]
+  /** Crash-only staging / restore-backup cleanup outcome. */
+  artifactCleanup: SnapshotArtifactCleanupResult
+  /** Why pruning was skipped this pass, or null when it ran to completion.
+   *  These are fail-closed conditions, never silent no-ops. */
+  skippedReason: 'none' | 'blocked-marker' | 'retention-corrupt'
+}
+
+/**
+ * The single bounded-maintenance routine every owner runs after a runtime
+ * transaction (design 18): clean crash-only staging + bound completed restore
+ * backups, then prune snapshots to the retention policy. Desktop and gateway
+ * owners differ only in WHEN they call it (transaction tail) and in their own
+ * writer serialization — the routine itself is one shared implementation so
+ * one owner can never silently stop bounding snapshot growth.
+ *
+ * Fail-closed ordering (identical to the former desktop-only routine): an
+ * authoritative restore marker blocks ALL cleanup (its evidence may name the
+ * only recovery snapshot); corrupt retention metadata preserves every
+ * snapshot instead of guessing.
+ */
+export async function pruneRuntimeSnapshots(
+  baseDir: string,
+  dshHome: string,
+  keepRecentUnprotected = 3,
+): Promise<RuntimeSnapshotPruneResult> {
+  const artifactCleanup = await cleanupSnapshotArtifacts(baseDir, dshHome)
+  if (artifactCleanup.restoreBackupCleanup === 'blocked-marker') {
+    return { removedSnapshots: [], artifactCleanup, skippedReason: 'blocked-marker' }
+  }
+  const retention = runtimeSnapshotRetentionState(baseDir)
+  if (retention.kind === 'corrupt') {
+    return { removedSnapshots: [], artifactCleanup, skippedReason: 'retention-corrupt' }
+  }
+  const removedSnapshots = await pruneSnapshots(baseDir, {
+    protectedVersions: retention.protectedVersions,
+    protectedSnapshotNames: retention.protectedSnapshotNames,
+    keepRecentUnprotected,
+  })
+  return { removedSnapshots, artifactCleanup, skippedReason: 'none' }
 }
 
 /** Find target-version data and stash current data only when restore is needed. */

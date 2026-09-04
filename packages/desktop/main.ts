@@ -107,7 +107,6 @@ import {
   recordRuntimeFailure,
   runtimeDiskSummary,
   runtimeFailureSummary,
-  runtimeSnapshotRetentionState,
   validateVersionTree,
   writeActivationIntent,
   writeActivationJournal,
@@ -116,11 +115,10 @@ import {
 } from './dsh-runtime-store.ts';
 import type { ActivationJournalState } from './dsh-runtime-store.ts';
 import {
-  cleanupSnapshotArtifacts,
   completeInterruptedRestore,
   listPreRollbackStashes,
   prepareManualRollbackData,
-  pruneSnapshots,
+  pruneRuntimeSnapshots,
   resolveSnapshotName,
   restoreMarkerAuthorityStatus,
   restorePreRollback,
@@ -137,6 +135,7 @@ import {
 } from './known-good-monitor.ts';
 import { invalidate } from './override-lifecycle.ts';
 import {
+  FATAL_STARTUP_BLOCK_REASONS,
   runDelayedRollback,
   runStartupPhase,
   shouldProbeEnvWithDormantCorruptSelection,
@@ -3598,8 +3597,16 @@ if (!gotTheLock) {
       if (mainWindow === null || mainWindow.isDestroyed()) return { ok: false, error: 'no main window' };
       const picked = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] });
       if (picked.canceled || picked.filePaths.length === 0) return { ok: true, cancelled: true };
+      // Local same-machine folder install (design 13 §5.8 pick-only, design 21
+      // §10 defect ① fix): the folder was chosen through the MAIN-process
+      // picker, so the `file:` spec is main-chosen — pass allowFileSpec so
+      // runLocalDshPlugin admits it through isAllowedLocalFileSpec (absolute
+      // POSIX/Windows-drive/UNC path, no control characters, ≤ 4096 chars —
+      // nothing beyond the existing whitelist is relaxed). Every
+      // renderer-submitted spec channel (LOCAL_PLUGIN_ADD below) still
+      // refuses `file:` outright; no filesystem privilege boundary widens.
       return runLocalPluginMutation('plugin:add-file', async (dshWorkspace) => {
-        const result = await runLocalDshPlugin(dshWorkspace, localDshHome, 'add', `file:${picked.filePaths[0]}`);
+        const result = await runLocalDshPlugin(dshWorkspace, localDshHome, 'add', `file:${picked.filePaths[0]}`, { allowFileSpec: true });
         return result.ok ? { ok: true } : { ok: false, error: result.error ?? 'local add failed' };
       });
     }));
@@ -4142,30 +4149,30 @@ if (!gotTheLock) {
       };
     };
 
-    const pruneRuntimeSnapshots = async () => {
+    const runSnapshotMaintenance = async () => {
       // Retention evidence and deletion must be one transaction. Otherwise a
       // new activation can publish a journal/snapshot after this function
-      // reads the protected set but before it deletes the old tail.
+      // reads the protected set but before it deletes the old tail. The
+      // maintenance routine itself is the shared dsh-runtime composite
+      // `pruneRuntimeSnapshots` (cleanupSnapshotArtifacts → retention state →
+      // pruneSnapshots), the same implementation the gateway runtime manager
+      // runs at its own transaction tails — snapshot bounding can never
+      // drift between owners.
       const lease = await runtimeWriterFence.acquire('maintenance:snapshot-prune');
       try {
-        const artifactCleanup = await cleanupSnapshotArtifacts(runtimeBaseDir, localDshHome);
-        if (artifactCleanup.removedTemporaryEntries.length > 0
-          || artifactCleanup.removedRestoreBackups.length > 0) {
+        const maintenance = await pruneRuntimeSnapshots(runtimeBaseDir, localDshHome, 3);
+        if (maintenance.artifactCleanup.removedTemporaryEntries.length > 0
+          || maintenance.artifactCleanup.removedRestoreBackups.length > 0) {
           console.log(
-            `[dsh-chamber] runtime snapshot cleanup removed ${artifactCleanup.removedTemporaryEntries.length} temporary entr${artifactCleanup.removedTemporaryEntries.length === 1 ? 'y' : 'ies'} and ${artifactCleanup.removedRestoreBackups.length} completed restore backup(s)`,
+            `[dsh-chamber] runtime snapshot cleanup removed ${maintenance.artifactCleanup.removedTemporaryEntries.length} temporary entr${maintenance.artifactCleanup.removedTemporaryEntries.length === 1 ? 'y' : 'ies'} and ${maintenance.artifactCleanup.removedRestoreBackups.length} completed restore backup(s)`,
           );
         }
-        if (artifactCleanup.restoreBackupCleanup !== 'completed') {
-          console.warn(`[dsh-chamber] runtime restore-backup cleanup skipped: ${artifactCleanup.restoreBackupCleanup}`);
+        if (maintenance.artifactCleanup.restoreBackupCleanup !== 'completed') {
+          console.warn(`[dsh-chamber] runtime restore-backup cleanup skipped: ${maintenance.artifactCleanup.restoreBackupCleanup}`);
         }
-        if (artifactCleanup.restoreBackupCleanup === 'blocked-marker') return;
-        const retention = runtimeSnapshotRetentionState(runtimeBaseDir);
-        if (retention.kind === 'corrupt') return;
-        await pruneSnapshots(runtimeBaseDir, {
-          protectedVersions: retention.protectedVersions,
-          protectedSnapshotNames: retention.protectedSnapshotNames,
-          keepRecentUnprotected: 3,
-        });
+        if (maintenance.skippedReason === 'retention-corrupt') {
+          console.warn('[dsh-chamber] runtime snapshot retention metadata is corrupt; snapshots preserved (fail closed)');
+        }
       } finally {
         lease.release();
       }
@@ -4621,12 +4628,9 @@ if (!gotTheLock) {
           return result;
         }
 
-        const hardBlockedReasons = new Set([
-          'journal-corrupt',
-          'current-corrupt',
-          'override-corrupt',
-          'journal-mismatch',
-        ]);
+        // FATAL metadata-corruption set — shared single source with the
+        // gateway composition boundary (dsh-runtime FATAL_STARTUP_BLOCK_REASONS).
+        const hardBlockedReasons = new Set<string>(FATAL_STARTUP_BLOCK_REASONS);
         if (result.blockedReason !== null && hardBlockedReasons.has(result.blockedReason)) {
           await publishBlockedStartup(`运行时恢复元数据异常（${result.blockedReason}）；拒绝启动以保护 DSH_HOME`);
           return result;
@@ -4693,8 +4697,8 @@ if (!gotTheLock) {
         runtimeOperationAbort = null;
         runtimeOperation = null;
         void runStorePruneIfNeeded();
-        void pruneRuntimeSnapshots().catch(error => {
-          console.error('[dsh-chamber] dsh runtime snapshot prune failed:', sanitizeErrorText(error instanceof Error ? error.message : String(error)));
+        void runSnapshotMaintenance().catch(error => {
+          console.error('[dsh-chamber] dsh runtime snapshot maintenance failed:', sanitizeErrorText(error instanceof Error ? error.message : String(error)));
         });
       });
       runtimeOperation = operation;
@@ -4764,8 +4768,8 @@ if (!gotTheLock) {
         runtimeOperationAbort = null;
         runtimeOperation = null;
         void runStorePruneIfNeeded();
-        void pruneRuntimeSnapshots().catch(error => {
-          console.error('[dsh-chamber] dsh runtime snapshot prune failed:', sanitizeErrorText(error instanceof Error ? error.message : String(error)));
+        void runSnapshotMaintenance().catch(error => {
+          console.error('[dsh-chamber] dsh runtime snapshot maintenance failed:', sanitizeErrorText(error instanceof Error ? error.message : String(error)));
         });
       });
       runtimeOperation = operation;

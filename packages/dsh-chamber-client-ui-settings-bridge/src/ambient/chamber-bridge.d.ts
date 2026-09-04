@@ -1,6 +1,7 @@
 /**
  * Local declaration for the chamberBridge shared face
- * (packages/dsh-client-ui-sidebar/src/shared): the renderer-published
+ * (packages/dsh-chamber-client-ui-sidebar/src/shared, package specifier
+ * `@dsh-chamber/dsh-client-ui-sidebar/shared`): the renderer-published
  * multi-source projection (design 05 §3). This package resolves the specifier
  * to THIS file via tsconfig paths — the sidebar package's own sources are
  * never compiled here; at runtime vite's shared chunk keeps one instance.
@@ -31,6 +32,11 @@ export interface ChamberServerAggregate {
     title: string
     /** True only for the synthetic trailing ungrouped bucket. */
     ungrouped?: boolean
+    /** True only for the fallback's cwd-derived groups (`__cwd__:` ids,
+     *  fetchInstanceSnapshot) — display-only: the host does not know these
+     *  ids, so workspace-scoped mutations must be disabled on them
+     *  (ungrouped-bucket parity, 2026-11 fix). */
+    synthetic?: boolean
     sessions: { id: string; title: string; running?: boolean; updatedAt?: number; blank?: boolean }[]
   }>
   /** True when the per-instance aggregate snapshot has actually landed. */
@@ -198,7 +204,8 @@ export interface RemoteRuntimeProgress {
 }
 
 /** `GET /chamber/runtime/status` (design 18 §9.3) — verbatim projection
- *  (30 fields). */
+ *  (33 members: 30 required + the 3 optional metadataHealth /
+ *  metadataComponents / canRecoverMetadata below). */
 export interface RemoteRuntimeStatus {
   kind: typeof GATEWAY_RUNTIME_STATUS_KIND
   activeVersion: string | null
@@ -292,6 +299,11 @@ export interface RemoteRuntimeActionGates {
   restoreBuiltinDisabled: boolean
   retryApplyDisabled: boolean
   retryRestoreDisabled: boolean
+  /** Recover-metadata: the ONLY action a FATAL metadata block leaves open —
+   *  enabled exactly when the status advertises canRecoverMetadata and the
+   *  instance is not busy/env/read-only (2026 audit R4 — mirror of the
+   *  sidebar gateway-runtime member of the same name). */
+  recoverMetadataDisabled: boolean
   restartDisabled: boolean
   /** Apply-now (design 18 addendum §5.1/§6.1): the pending immediate-switch
    *  action mirrors the route's synchronous refusals — a plain pending with a

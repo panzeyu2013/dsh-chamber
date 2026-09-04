@@ -287,10 +287,10 @@ export function PluginSyncModal({ t, spec, diagnostic, onRecheckDiagnostic, onCl
     setSeedError(null)
     try {
       const res = await seedHostGraph(spec.id)
-      if ('cancelled' in res) {
-        // User dismissed the main-process confirmation: a silent no-op.
-        setPendingRestart(false)
-      } else if (res.ok) {
+      // seed_host_graph never returns cancelled: the main-process seed
+      // handler has no confirmation dialog to dismiss (design 21 §10 — the
+      // ssh seed confirm gap is a registered open item).
+      if (res.ok) {
         setPendingRestart(res.wrote === true || res.patched === true)
       } else {
         setSeedError(res.error)
@@ -362,9 +362,9 @@ export function PluginSyncModal({ t, spec, diagnostic, onRecheckDiagnostic, onCl
     })
     try {
       const res = await pluginApply(spec.id, { add: [], remove: [name], restart })
-      if ('cancelled' in res) {
-        // User dismissed the main-process confirmation: silent no-op.
-      } else if ('error' in res) {
+      // plugin_apply has no cancelled arm (no main-process confirm on the ssh
+      // apply — design 21 §10 open item): a refusal is always ok:false.
+      if ('error' in res) {
         // Wholesale refusal (single-flight / invalid input / ownership):
         // nothing ran, the row is untouched.
         setRemoteRowErrors(prev => ({ ...prev, [name]: res.error }))
@@ -381,11 +381,11 @@ export function PluginSyncModal({ t, spec, diagnostic, onRecheckDiagnostic, onCl
           // the producer's fail-loud markers — mirror the sync result view's
           // honest copy (never collapse them into a clean success).
           const outcome = classifySshApplyResult(res)
-          if ('cancelled' in outcome) {
-            // Defensive: the wrapper's cancelled arm is handled above.
-          } else if ('failed' in outcome) {
+          // No cancelled outcome on the ssh path (plugin_apply has no cancel);
+          // the executed arm is narrowed by its own member.
+          if ('failed' in outcome) {
             setRemoteListStatus({ tone: 'error', text: outcome.failed.error })
-          } else {
+          } else if ('executed' in outcome) {
             const executed = outcome.executed
             let tone: RemoteListTone
             let text: string
@@ -531,8 +531,10 @@ export function PluginSyncModal({ t, spec, diagnostic, onRecheckDiagnostic, onCl
       let applied = 0
       for (const row of materializeRows) {
         const res = await pluginMaterializeAdd(spec.id, row.name)
+        // materialize_add (name-resolved) has no picker/confirm to dismiss,
+        // so no cancelled arm exists at this call site (the pick variant
+        // plugin_materialize_add_pick carries it — PluginAddView handles it).
         if ('error' in res) failed.push({ spec: row.name, error: res.error })
-        else if ('cancelled' in res) { /* user dismissed the confirmation: skipped, never counted as applied */ }
         else applied += 1
       }
 
@@ -540,12 +542,9 @@ export function PluginSyncModal({ t, spec, diagnostic, onRecheckDiagnostic, onCl
       // (remove-first, serial, restart unless deferred, assert, ready recheck).
       if (add.length > 0 || remove.length > 0) {
         const res = await pluginApply(spec.id, { add, remove, restart })
-        if ('cancelled' in res) {
-          // User dismissed the MAIN-PROCESS confirmation: the registry rows
-          // were skipped — frame the materialized installs (if any) as
-          // deferred, never as applied.
-          setResult({ applied, failed, skipped: add.length + remove.length, restarted: false, deferred: true, verified: failed.length === 0, ready: null })
-        } else if ('error' in res) {
+        // plugin_apply has no cancelled arm (no main-process confirm on the
+        // ssh apply — design 21 §10 open item); a refusal is always ok:false.
+        if ('error' in res) {
           setResultError(res.error)
           // The registry apply was refused outright (e.g. apply in progress):
           // no restart was attempted — the materialized installs (if any) take

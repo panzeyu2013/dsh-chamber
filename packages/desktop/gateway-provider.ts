@@ -40,9 +40,6 @@
 
 import { request as httpsRequest } from 'node:https'
 import { request as httpRequest } from 'node:http'
-import type { ClientRequest } from 'node:http'
-import type { TLSSocket } from 'node:tls'
-import { createHash, X509Certificate } from 'node:crypto'
 import {
   closeSync,
   existsSync,
@@ -68,7 +65,19 @@ import { gatewaySessionScopeForConnection } from './gateway-session.ts'
 import type { GatewayRegistrationAuthProof, GatewaySessionOrigin, GatewaySessionResult } from './gateway-session.ts'
 import { readOwnerOnlySecretFile } from './owner-only-secret-file.ts'
 import { parseSpecArg } from './gateway-ipc-shared.ts'
-import { isDeniedPluginName, PLUGIN_NAME_PATTERN } from './control-plane-module.ts'
+import {
+  attachSpkiPinVerifier,
+  GATEWAY_PASSWORD_MAX_CHARS,
+  GATEWAY_PASSWORD_MIN_CHARS,
+  GATEWAY_TOKEN_MAX_CHARS,
+  GATEWAY_TOKEN_MIN_CHARS,
+  GATEWAY_TOKEN_VISIBLE_ASCII_PATTERN,
+  isDeniedPluginName,
+  PLUGIN_NAME_PATTERN,
+  SPKI_PIN_MISMATCH_CODE,
+  SPKI_PIN_PATTERN,
+  spkiPinOfPeerCertificate,
+} from './control-plane-module.ts'
 import { GATEWAY_PLUGIN_VERSION_PATTERN, TARBALL_MAX_ARCHIVE_BYTES } from './plugin-tarball.ts'
 import { sanitizeErrorText } from './sanitize-error.ts'
 
@@ -79,82 +88,34 @@ import { sanitizeErrorText } from './sanitize-error.ts'
  * it, so an embedded `host:8443` would silently override/break the URL port. */
 export const GATEWAY_HOST_PATTERN = /^(?:[a-zA-Z0-9._-]+|\[[0-9a-fA-F:.]+\])$/
 export const MAX_GATEWAY_HOST_CHARS = 253
-export const MAX_GATEWAY_TOKEN_CHARS = 4096
-export const MIN_GATEWAY_TOKEN_CHARS = 32
-export const MAX_GATEWAY_PASSWORD_CHARS = 1024
-export const MIN_GATEWAY_PASSWORD_CHARS = 12
-const GATEWAY_CREDENTIAL_HEADER_PATTERN = /^[\x20-\x7e]+$/
+// Gateway credential bounds are the shared wire-protocol single source
+// (control-plane gateway-session-protocol.ts via control-plane-module.ts) —
+// the same values the gateway server (config.ts/auth.ts) and the proxy
+// injection gate (instance-proxy.ts) enforce. These local names are kept as
+// aliases for the form/validation call sites and their tests.
+export const MAX_GATEWAY_TOKEN_CHARS = GATEWAY_TOKEN_MAX_CHARS
+export const MIN_GATEWAY_TOKEN_CHARS = GATEWAY_TOKEN_MIN_CHARS
+export const MAX_GATEWAY_PASSWORD_CHARS = GATEWAY_PASSWORD_MAX_CHARS
+export const MIN_GATEWAY_PASSWORD_CHARS = GATEWAY_PASSWORD_MIN_CHARS
+const GATEWAY_CREDENTIAL_HEADER_PATTERN = GATEWAY_TOKEN_VISIBLE_ASCII_PATTERN
 
 // ---------------------------------------------------------------------------
-// SPKI certificate pinning (design 17 §13.4.2 / S23): an https-only optional
-// gate — the user pins the expected server certificate's SPKI fingerprint;
-// the identity probe AND the reverse proxy reject any peer whose public key
-// does not match. This directly solves the internal-CA trust pain: a Caddy
-// `tls internal` gateway needs no NODE_EXTRA_CA_CERTS injection — the pin IS
-// the trust anchor for that single connection.
-//
-// Mechanism note (verified on Node 22.22.3): checkServerIdentity's error
-// return is silently IGNORED when `rejectUnauthorized: false`, and with
-// `rejectUnauthorized: true` an untrusted (internal-CA) chain fails BEFORE
-// checkServerIdentity runs — so neither combination can enforce a pin against
-// an internal CA. The pin check therefore runs on the TLS socket's
-// 'secureConnect' event with `rejectUnauthorized: false` (the pin alone
-// decides trust) and `agent: false` (every pinned request opens a fresh
-// connection, so 'secureConnect' always fires). Crucially, callers do not
-// call `end`/`write` until this gate invokes `dispatch`: a wrong-key peer sees
-// zero HTTP headers, credential bytes, or login body.
+// SPKI certificate pinning (design 17 §13.4.2 / S23): shared single source in
+// control-plane spki-pin.ts — re-exported through the dual-path facade. The
+// identity probe AND the control-plane proxy forwarding gate import the SAME
+// helpers (the former "identical copies in two packages, kept in sync by
+// comment" arrangement was removed when the facade made the control plane
+// importable from the packaged desktop). Mechanism note: checkServerIdentity
+// cannot enforce a pin against an internal CA (see spki-pin.ts), so the pin
+// check runs on the TLS socket 'secureConnect' event with
+// rejectUnauthorized:false + agent:false — a wrong-key peer sees zero HTTP
+// headers, credential bytes, or login body before this gate invokes
+// `dispatch`.
 // ---------------------------------------------------------------------------
 
-/** A valid SPKI pin: exactly 64 hex chars (hex sha256 of the SPKI DER). */
-export const SPKI_PIN_PATTERN = /^[0-9a-fA-F]{64}$/
-
-/** Error code attached to the destroy() error of a rejected pin. */
-export const SPKI_PIN_MISMATCH_CODE = 'ERR_SPKI_PIN_MISMATCH'
-
-/** The hex sha256 of a peer certificate's SPKI DER (S23) — the digest the
- * user pins. `rawDer` is the peer certificate's DER (TLSSocket
- * getPeerCertificate().raw): X509Certificate exposes the KeyObject whose
- * SPKI export is the canonical fingerprint. */
-export function spkiPinOfPeerCertificate(rawDer: Buffer): string {
-  return createHash('sha256')
-    .update(new X509Certificate(rawDer).publicKey.export({ type: 'spki', format: 'der' }))
-    .digest('hex')
-}
-
-/** Attach the pre-write SPKI pin gate to an outbound https request (S23): on TLS
- * handshake completion the peer certificate's SPKI digest is compared
- * case-insensitively with the pinned value; a mismatch destroys the request
- * with SPKI_PIN_MISMATCH_CODE, while a match invokes `dispatch` exactly once.
- * The caller MUST NOT write/end the request anywhere else: this is what keeps
- * HTTP headers and bodies behind the authenticated handshake. Callers must
- * ALSO pass `rejectUnauthorized:
- * false` (the pin replaces CA trust for this connection — the internal-CA use
- * case) and `agent: false` (so 'secureConnect' always fires). */
-export function attachSpkiPinVerifier(req: ClientRequest, pin: string, dispatch: () => void): void {
-  let dispatched = false
-  req.on('socket', (socket: NodeJS.Socket) => {
-    ;(socket as TLSSocket).once('secureConnect', () => {
-      let digest: string
-      try {
-        digest = spkiPinOfPeerCertificate((socket as TLSSocket).getPeerCertificate().raw)
-      } catch {
-        const error: NodeJS.ErrnoException = new Error('the gateway certificate could not be read for the SPKI pin check')
-        error.code = SPKI_PIN_MISMATCH_CODE
-        req.destroy(error)
-        return
-      }
-      if (digest.toLowerCase() !== pin.toLowerCase()) {
-        const error: NodeJS.ErrnoException = new Error('SPKI pin mismatch')
-        error.code = SPKI_PIN_MISMATCH_CODE
-        req.destroy(error)
-        return
-      }
-      if (req.destroyed || dispatched) return
-      dispatched = true
-      dispatch()
-    })
-  })
-}
+// Re-exported for module consumers (gateway-session.ts login pinning, tests)
+// — the implementations above come from the shared single source.
+export { attachSpkiPinVerifier, spkiPinOfPeerCertificate, SPKI_PIN_MISMATCH_CODE, SPKI_PIN_PATTERN }
 
 /** Validate a token before any live transport is disconnected. */
 export function gatewayTokenValidationError(token: string | null): string | null {

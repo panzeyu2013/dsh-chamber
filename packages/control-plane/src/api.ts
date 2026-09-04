@@ -4,6 +4,11 @@
  * Contract (04-control-plane-api-data.md §3, verbatim for renderer/desktop):
  * - GET /health → {ok:true, dsh:{status:'stopped'|'starting'|'ready'|'degraded'|
  *   'restarting'|'restart-exhausted'|'error', port, error?}}
+ * - HEAD /health → the no-body twin of GET (same 200 + JSON headers; the
+ *   owning server suppresses the body on HEAD), so a monitoring HEAD /health
+ *   never 404s the public liveness probe. The gateway auth gate exempts
+ *   HEAD /health for the same reason (dispatch isPublicRequest), so both
+ *   shapes answer it identically.
  * - GET /api/connections → {connection:{id:'local', label?, accentColor?,
  *   status, dshPort?}} — the single local connection row projection
  * - POST /api/connections {kind:'local', label?, accentColor?} → idempotent
@@ -327,7 +332,14 @@ export function createApi(deps: ApiDeps) {
 
   /** Resolve a route from {pathname, method}; returns {handler} or null. */
   function route(method: string | undefined, segments: string[], res: ApiResponse, req: ApiRequest): RouteHandler | null {
-    if (segments[0] === 'health' && segments.length === 1 && method === 'GET') return async () => json(res, 200, deps.getHealth())
+    // /health is the public liveness probe (04 §3): HEAD is accepted as the
+    // no-body twin of GET (same 200 + JSON headers; the node:http owner
+    // suppresses the body on HEAD responses). An unmapped method would fall
+    // to the generic 404, which is why a monitoring HEAD /health must not be
+    // treated as unknown — the gateway auth gate exempts HEAD /health too.
+    if (segments[0] === 'health' && segments.length === 1 && (method === 'GET' || method === 'HEAD')) {
+      return async () => json(res, 200, deps.getHealth())
+    }
     if (segments[0] === 'api') {
       const [a, b] = [segments[1], segments[2]]
       if (a === 'host' && b === 'health-events' && segments.length === 3 && method === 'GET' && deps.subscribeHealthEvents !== undefined) {

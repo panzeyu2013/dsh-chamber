@@ -136,7 +136,7 @@ pnpm run dist:desktop
 | `desktop_ssh_logs` / `desktop_ssh_logs_clear` | invoke | 环形日志读取/清空 |
 | `desktop_ssh_start_service` / `stop_service` / `is_active` / `restart_service` | invoke | 远端 systemctl 起停/查询/重启 |
 | `desktop_ssh_plugin_list` | invoke | 远端插件清单投影（cat 远端 manifest + 本地解析） |
-| `desktop_ssh_plugin_apply` | invoke | 远端插件增删（**registry add/remove 须主进程确认**，设计 09 §4；取消 `{ok,cancelled}`） |
+| `desktop_ssh_plugin_apply` | invoke | 远端插件增删（registry add/remove 经主进程白名单复核后执行；**plugin_apply 无取消路径**——`{ok,cancelled}` 只存在于 ssh undo、本地 add/remove 与 materialize pick 等带对话框的通道，2026 audit C-F5 勘误） |
 | `desktop_ssh_seed_host_graph` | invoke | 向远端注入 chamber host 包（idempotent，hash-skip） |
 | `desktop_ssh_plugin_materialize_add` | invoke | 本地 manifest 依赖打包上传远端（**主进程确认**；name-only，路径由主进程解析） |
 | `desktop_ssh_plugin_materialize_add_pick` | invoke | 文件夹选择器打包上传远端（pick-only） |

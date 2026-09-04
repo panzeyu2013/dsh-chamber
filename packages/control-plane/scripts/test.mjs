@@ -40,6 +40,11 @@ const FILES = [
   'rpc-envelope.test.ts',
   'cordis-inserts.test.ts',
   'reaper.test.ts',
+  // S0 twin-cap lockstep: proxy-forward MAX_HTML_INJECTION_BYTES vs the
+  // gateway's html-inject HTML_INJECT_MAX_BYTES (soft comment pin — the test
+  // imports the gateway source directly; precedent: desktop
+  // plugin-tarball.test.ts pins gateway route literals the same way).
+  'html-inject-lockstep.test.ts',
   // Windows probe parsers/classifiers run on every leg; the win32-only
   // lifecycle integration test self-skips on POSIX and runs on the Windows
   // CI leg (design 02 §5.1 parity work, M1).

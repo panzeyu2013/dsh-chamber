@@ -350,6 +350,10 @@ function GatewayRuntimeSection({
   const restoreBuiltinDisabled = remoteGates.restoreBuiltinDisabled
   const retryApplyDisabled = remoteGates.retryApplyDisabled
   const retryRestoreDisabled = remoteGates.retryRestoreDisabled
+  // Recover-metadata is the ONLY action a FATAL metadata block leaves open —
+  // its enablement must come from the dedicated gate (never mutationDisabled,
+  // which is true in exactly the states this row exists for; R4 F2).
+  const recoverMetadataDisabled = remoteGates.recoverMetadataDisabled
 
   const runRemoteAction = useCallback(async (task: (signal: AbortSignal) => Promise<unknown>): Promise<void> => {
     // React state is not a synchronous mutex: two clicks in the same render
@@ -544,20 +548,38 @@ function GatewayRuntimeSection({
   const canRetryRestoreRemote = remoteStatus !== null
     && remoteStatus.phase === 'restore-blocked'
 
-  // 「恢复内建」可见性（2026-12 修订）：版本一致（active == builtin）时恢复
-  // 是 no-op，按钮不显示；pending/applying/snapshot-failed 是持久化事务的
-  // 逃生口（可能 active == builtin 但 reset 仍有意——中止待应用切换），保留。
+  // 「恢复内建」可见性（2026-12 修订 + 2026 audit R2 收窄）：版本一致
+  // （active == builtin）时恢复是 no-op，按钮不显示；仅普通 pending（待应用
+  // 切换等待下次启动）保留逃生口（中止待应用切换语义）——snapshot-failed/
+  // swap-attempted/restore-blocked 等 recovery 相位与一切 startupBlocked 状态
+  // 不显示（server 恢复门只开放各自 retry/recover-metadata；armed reset 在
+  // 持久恢复标记下会被核心复阻并残留、劫持后续 retry 语义）；installing/
+  // applying 忙碌窗仍渲染（忙碌时随行禁用，与其余动作同口径——2026 audit R4
+  // 注，勿与 recovery 相位混同）。
   // active/builtin 任一未知时保守显示（无法判断一致性，宁显不藏）。
-  // 注：gateway server 的 restore-builtin 路由本身不检查 hasOverride（恢复
-  // 相位显式放行），此处要求 hasOverride 是 UI 侧保守对称——常态下
-  // hasOverride === false ⟺ active === builtin，仅异常态可能触及，与 local
-  // 侧 main 的 hasOverride !== true 一律拒绝同口径。
+  // 注：gateway server 的 restore-builtin 路由现检查 hasOverride
+  // （runtime_no_override）并收窄恢复期矩阵（2026 audit R2），此处 hasOverride
+  // 要求与 server 同口径——常态下 hasOverride === false ⟺ active === builtin，
+  // 仅异常态可能触及，与 local 侧 main 的 hasOverride !== true 一律拒绝同口径。
+  // 2026 audit R3: the visibility predicate itself must exclude recovery
+  // phases and any projected startup block (phase-less FATAL /
+  // env-probe-failed / resolution failure) — the server's recovery gate
+  // refuses restore-builtin there, so offering the button would be a 409
+  // dead end. Healthy idle with an override (or an unknown active/builtin)
+  // and the plain-pending escape keep the button.
+  const remoteRecoveryPhase = remoteStatus !== null
+    && (remoteStatus.phase === 'swap-attempted'
+      || remoteStatus.phase === 'snapshot-failed'
+      || remoteStatus.phase === 'restore-blocked')
+  const remoteStartupBlocked = remoteStatus !== null
+    && remoteStatus.startupBlockedReason !== null
+    && remoteStatus.startupBlockedReason !== ''
   const remoteResetEscapeHatch = remoteStatus !== null
-    && (remoteStatus.phase === 'pending'
-      || remoteStatus.phase === 'applying'
-      || remoteStatus.phase === 'snapshot-failed')
+    && remoteStatus.phase === 'pending'
   const restoreBuiltinVisible = remoteStatus !== null
     && remoteStatus.hasOverride
+    && !remoteRecoveryPhase
+    && !remoteStartupBlocked
     && (remoteResetEscapeHatch
       || remoteStatus.activeVersion === null
       || remoteStatus.builtinVersion === null
@@ -927,12 +949,12 @@ function GatewayRuntimeSection({
             type="button"
             className={css.updateButton}
             onClick={() => { void onRecoverMetadataRemote() }}
-            disabled={mutationDisabled}
+            disabled={recoverMetadataDisabled}
           >
             {t('dshRuntimeRecoverMetadata')}
           </button>
         )}
-        {/* 恢复内建仅在与内建版本不一致（或逃生口相位）时显示（2026-12 修订）。 */}
+        {/* 恢复内建仅在与内建版本不一致（或普通 pending 逃生口）时显示（2026-12 修订 + 2026 audit R2 收窄：recovery 相位/忙碌窗不显示）。 */}
         {restoreBuiltinVisible && !remoteBuiltinGuide && (
           <button
             type="button"
@@ -1200,10 +1222,19 @@ export function DshRuntimeSection({
   // 重启 dsh（design 18 §3.6 项 8）：受控进程重启刷新插件挂载；指针/版本树
   // 不动。local = 事务化 control-plane restartLocal()；gateway = 该 server 的
   // /chamber/runtime/restart（202 + status 轮询）。
+  // 确认文案（多用户中断）归口（2026-12 audit D-4）：本段用 window.confirm。
+  // gateway 源使用专用键 dshRuntimeRestartGatewayConfirm（含「其他用户的会
+  // 话将短暂断开」，与 connections 卡片受控重启确认
+  // settings-connections locales restartManagedDshConfirmDescription 同语义；
+  // CS 卡文案为准，两处改语义先改 CS 卡）；local 源用简短键
+  // dshRuntimeRestartConfirm（本机实例无多用户影响）。
   const canRestartDsh = runtimeRestartAllowed(state)
   const onRestartDsh = useCallback(async (): Promise<void> => {
     if (restartingRef.current) return
-    if (window.confirm(t('dshRuntimeRestartConfirm'))) {
+    const restartConfirmKey = instanceSource === 'gateway'
+      ? 'dshRuntimeRestartGatewayConfirm'
+      : 'dshRuntimeRestartConfirm'
+    if (window.confirm(t(restartConfirmKey))) {
       restartingRef.current = true
       setRestarting(true)
       setActionError(null)
@@ -1802,7 +1833,7 @@ export function DshRuntimeSection({
               {t('dshRuntimeRecoverMetadata')}
             </button>
           )}
-          {/* 恢复内建仅在与内建版本不一致（或逃生口相位）时显示（2026-12 修订）。 */}
+          {/* 恢复内建仅在与内建版本不一致（或普通 pending 逃生口）时显示（2026-12 修订 + 2026 audit R2 收窄：recovery 相位/忙碌窗不显示）。 */}
           {canResetVisible && !builtinGuide && (
             <button type="button" className={css.updateButton} onClick={onReset} disabled={mutationDisabled}>
               {t('dshRuntimeResetBuiltin')}
