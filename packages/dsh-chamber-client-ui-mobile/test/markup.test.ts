@@ -11,6 +11,9 @@ import type { ElementLike } from '../src/client/markup.ts'
 import {
   findFrame, findColumn, stampFrame,
   isStructuralTarget, isElementNode, shouldRestamp,
+  stampSessionLogDismiss, isSessionLogExportButton,
+  SESSION_LOG_DISMISS_ATTR, SESSION_LOG_DISMISS_VALUE,
+  CONVERSATION_SESSION_HEADER_SLOT,
 } from '../src/client/markup.ts'
 
 /**
@@ -22,6 +25,8 @@ class FakeElement implements ElementLike {
   readonly attributes = new Map<string, string>()
   readonly tag: string
   parent: FakeElement | null = null
+  /** Text copy for label matching (real DOM: Element.textContent). */
+  textContent = ''
   constructor(tag: string) { this.tag = tag }
   setAttribute(name: string, value: string): void { this.attributes.set(name, value) }
   getAttribute(name: string): string | null { return this.attributes.get(name) ?? null }
@@ -168,25 +173,37 @@ test('isStructuralTarget: the same late-outlet shape works for sidebar/conversat
   }
 })
 
-test('isStructuralTarget: deep content under a stamped column is NOT structural (streaming filter)', () => {
+test('isStructuralTarget: streaming content under the scroll body is NOT structural (streaming filter)', () => {
   const { root } = fullFrame()
   stampFrame(root)
-  // Chat streaming mounts content inside the conversation outlet — several
-  // levels below the frame: outlet > block > node.
+  // Real conversation depth: outlet > .root[data-phase] > .body >
+  // [data-conversation-scroll] > streamed messages — six hops to the frame.
   const frame = findFrame(root) as FakeElement
   const conversationCol = frame.children[1]
   const conversationOutlet = conversationCol.children[0]
-  const block = new FakeElement('div')
-  attach(conversationOutlet, block)
+  const rootDiv = new FakeElement('div')
+  attach(conversationOutlet, rootDiv)
+  const bodyDiv = new FakeElement('div')
+  attach(rootDiv, bodyDiv)
+  const scrollBody = new FakeElement('div')
+  scrollBody.setAttribute('data-conversation-scroll', '')
+  attach(bodyDiv, scrollBody)
   const streamed = new FakeElement('div')
-  attach(block, streamed)
-  assert.equal(isStructuralTarget(streamed), false, 'deep content never matches')
-  assert.equal(isStructuralTarget(block), false, 'one level inside the outlet never matches')
-  // Even a DIRECT child of the stamped outlet container is not structural:
-  // its grandparent is the stamped COLUMN, not the frame.
-  const direct = new FakeElement('div')
-  attach(conversationOutlet, direct)
-  assert.equal(isStructuralTarget(direct), false)
+  attach(scrollBody, streamed)
+  const block = new FakeElement('div')
+  attach(scrollBody, block)
+  // Streaming nodes sit ≥6 hops below the frame: never structural.
+  assert.equal(isStructuralTarget(streamed), false, 'deep streamed content never matches')
+  assert.equal(isStructuralTarget(block), false, 'content directly inside the scroll body never matches')
+  // The CONVERSATION ROOT container mounting under the outlet (three hops to
+  // the column role) IS structural — it carries the session header outlet;
+  // without it the header chrome stamp could miss a late header mount
+  // (2026 review widening: bounded walk covers node + 4 ancestors).
+  assert.equal(isStructuralTarget(rootDiv), true, 'the ConversationRoot mount must re-stamp')
+  const headerOutlet = outlet(CONVERSATION_SESSION_HEADER_SLOT)
+  attach(rootDiv, headerOutlet)
+  assert.equal(isStructuralTarget(headerOutlet), true,
+    'the session header slot outlet mounting four levels under the frame is structural')
 })
 
 test('isStructuralTarget: whole-column and frame mounts still trigger (regression)', () => {
@@ -251,4 +268,102 @@ test('isElementNode guards non-element additions', () => {
   assert.equal(isElementNode(null), false)
   assert.equal(isElementNode(undefined), false)
   assert.equal(isElementNode({}), false)
+})
+
+// ---------------------------------------------------------------------------
+// Session-header chrome stamps: the "Session 日志" export capsule
+// (official session-log-export, header utilities) gets the phone-tier
+// compact mark. The stamp walks the anchor shape (conversation column →
+// session-header slot outlet → buttons) and matches the bilingual official
+// copy + the structural download-icon guard.
+// ---------------------------------------------------------------------------
+
+/** The with-session header DOM shape: resident conversation column with the
+ * session-gated header outlet mounted (session open). */
+function headerFrame(labels: Array<{ text: string; svg: boolean }>): { root: FakeElement; buttons: FakeElement[] } {
+  const { root, frame } = fullFrame()
+  const conversationCol = frame.children[1]
+  const conversationOutlet = conversationCol.children[0]
+  const rootDiv = new FakeElement('div')
+  attach(conversationOutlet, rootDiv)
+  const headerSlot = new FakeElement('div')
+  headerSlot.setAttribute('data-slot', CONVERSATION_SESSION_HEADER_SLOT)
+  attach(rootDiv, headerSlot)
+  const header = new FakeElement('header')
+  attach(headerSlot, header)
+  const titleRow = new FakeElement('div')
+  attach(header, titleRow)
+  const utilities = new FakeElement('div')
+  attach(titleRow, utilities)
+  const buttons: FakeElement[] = []
+  for (const { text, svg } of labels) {
+    const button = new FakeElement('button')
+    button.textContent = text
+    if (svg) attach(button, new FakeElement('svg'))
+    attach(utilities, button)
+    buttons.push(button)
+  }
+  return { root, buttons }
+}
+
+test('stampSessionLogDismiss: no session header (hero/boot) stamps nothing', () => {
+  const { root } = fullFrame()
+  assert.equal(stampSessionLogDismiss(findFrame(root) as FakeElement), null)
+  const { root: boot } = bootFrame()
+  assert.equal(stampSessionLogDismiss(findFrame(boot) as FakeElement), null)
+})
+
+test('stampSessionLogDismiss: zh capsule is stamped (idempotent)', () => {
+  const { root, buttons } = headerFrame([{ text: 'Session 日志', svg: true }])
+  const frame = findFrame(root) as FakeElement
+  const stamped = stampSessionLogDismiss(frame)
+  assert.equal(stamped, buttons[0])
+  assert.equal(buttons[0].getAttribute(SESSION_LOG_DISMISS_ATTR), SESSION_LOG_DISMISS_VALUE)
+  // Idempotent: a second stamp keeps the single button marked.
+  assert.equal(stampSessionLogDismiss(frame), buttons[0])
+  assert.equal(buttons[0].getAttribute(SESSION_LOG_DISMISS_ATTR), SESSION_LOG_DISMISS_VALUE)
+})
+
+test('stampSessionLogDismiss: en capsule copy matches too', () => {
+  const { root, buttons } = headerFrame([{ text: 'Session log', svg: true }])
+  const stamped = stampSessionLogDismiss(findFrame(root) as FakeElement)
+  assert.equal(stamped, buttons[0])
+  assert.equal(buttons[0].getAttribute(SESSION_LOG_DISMISS_ATTR), SESSION_LOG_DISMISS_VALUE)
+})
+
+test('stampSessionLogDismiss: trailing whitespace does not defeat the match', () => {
+  const { root } = headerFrame([{ text: '  Session 日志  ', svg: true }])
+  assert.notEqual(stampSessionLogDismiss(findFrame(root) as FakeElement), null)
+})
+
+test('stampSessionLogDismiss: same copy without the download icon is NOT the capsule', () => {
+  const { root } = headerFrame([{ text: 'Session 日志', svg: false }])
+  assert.equal(stampSessionLogDismiss(findFrame(root) as FakeElement), null)
+})
+
+test('stampSessionLogDismiss: unrelated header buttons never match', () => {
+  const { root, buttons } = headerFrame([
+    { text: '3 个子代理', svg: true },
+    { text: 'Session 日誌', svg: true }, // close but not the official copy
+    { text: '设置', svg: false },
+  ])
+  const frame = findFrame(root) as FakeElement
+  assert.equal(stampSessionLogDismiss(frame), null)
+  for (const button of buttons) {
+    assert.equal(button.hasAttribute(SESSION_LOG_DISMISS_ATTR), false)
+  }
+})
+
+test('isSessionLogExportButton: pure label + icon decision', () => {
+  const zh = new FakeElement('button')
+  zh.textContent = 'Session 日志'
+  attach(zh, new FakeElement('svg'))
+  assert.equal(isSessionLogExportButton(zh), true)
+  const plain = new FakeElement('button')
+  plain.textContent = 'Session 日志'
+  assert.equal(isSessionLogExportButton(plain), false)
+  const other = new FakeElement('button')
+  other.textContent = '下载'
+  attach(other, new FakeElement('svg'))
+  assert.equal(isSessionLogExportButton(other), false)
 })

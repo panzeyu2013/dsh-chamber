@@ -12,7 +12,9 @@
  *    the gateway-hosted instance runs the OFFICIAL ui-layout (design 17
  *    §18.4 项 3 deployment-matrix exception);
  *  - frame stamping is per instance root (`[data-slot="root"]`),
- *    idempotent and remount-safe (项 2); the behavior effects are
+ *    idempotent and remount-safe (项 2); the session-header chrome stamps
+ *    (the "Session 日志" export capsule compact mark, markup.ts) ride the
+ *    same re-stamp channels; the behavior effects are
  *    document-level single-instance BY DESIGN (the gateway deployment is
  *    single-shell; a future multi-shell renderer mount must scope them);
  *  - the mobile tier activates on `(max-width:1023px) and (pointer:coarse)`
@@ -28,6 +30,7 @@ import {
   ROOT_SLOT_SELECTOR,
   shouldRestamp,
   stampFrame,
+  stampSessionLogDismiss,
   type MutationLike,
 } from './markup.ts'
 import { createLayoutFactSource } from './layout-facts.ts'
@@ -35,6 +38,7 @@ import {
   installComposerSelfHeal, installEditabilityRecovery, installEnterToNewline,
   installImeLadder, installKeyboardPinning, TOUCH_TIER_QUERY,
 } from './composer.ts'
+import { installDrawerTapHeal } from './drawer-taps.ts'
 import { MobileNavToggle, type MobileNavToggleInjected } from './MobileNavToggle.tsx'
 
 export type { MobileNavToggleInjected } from './MobileNavToggle.tsx'
@@ -142,7 +146,12 @@ export function apply(ctx: ClientContext): void {
     const stamp = (): void => {
       const roots = document.querySelectorAll(ROOT_SLOT_SELECTOR)
       for (const root of roots) {
-        stampFrame(root)
+        const frame = stampFrame(root)
+        // Session-header chrome stamps (late-mounting, idempotent): the
+        // "Session 日志" export capsule gets the phone-tier compact mark.
+        // Runs on every structural/attribute re-stamp — it simply finds no
+        // header before a session mounts.
+        if (frame !== null) stampSessionLogDismiss(frame)
       }
       // (b) Frame state attributes (collapsed flags) drive the drawer/overlay
       // geometry and can flip in the same commit as a session activation, or
@@ -239,9 +248,10 @@ export function apply(ctx: ClientContext): void {
   // The shared layout source is released when the ctx dies.
   ctx.effect(() => () => layoutSource.dispose(), 'dsh-chamber: mobile layout source')
 
-  // ---- composer behavior (touch tier only — the "PC leak" guard applies
-  // to JS too: desktop must keep the official Enter=send convention).
-  // Installed/uninstalled dynamically as the tier matches/unmatches. ----
+  // ---- composer + drawer behavior (touch tier only — the "PC leak" guard
+  // applies to JS too: desktop must keep the official Enter=send convention
+  // and its native click delivery). Installed/uninstalled dynamically as
+  // the tier matches/unmatches. ----
   ctx.effect(() => {
     const touchTier = window.matchMedia(TOUCH_TIER_QUERY)
     let disposers: Array<() => void> = []
@@ -254,6 +264,10 @@ export function apply(ctx: ClientContext): void {
             installEditabilityRecovery(),
             installKeyboardPinning(),
             installComposerSelfHeal(),
+            // iOS suppresses the compatibility click for drawer taps (the
+            // hover-reveal layout shift) — heal the lost activation so one
+            // tap switches sessions (drawer-taps.ts).
+            installDrawerTapHeal(() => touchTier.matches),
             ladder.attach(),
           ]
         }

@@ -60,9 +60,10 @@ function createComposingGuard(): { isComposingNow(): boolean; attach(): () => vo
 
 /**
  * Enter sends in the official desktop convention; on a touch keyboard a
- * stray Enter tap fires a message. The mobile convention (community
- * consensus, design 17 §18.4.4): Enter inserts a line break, the explicit
- * send affordance is the send button. Composition (IME) input is never
+ * stray Enter tap fires a message. The mobile convention (surveyed in
+ * design 17 §18.4.4 — NOT unanimous: the community splits between
+ * Enter=newline and Enter=send with enterkeyhint): Enter inserts a line
+ * break, the explicit send affordance is the send button. Composition (IME) input is never
  * intercepted (isComposing AND the legacy keyCode 229 guard, plus the
  * Safari 10ms recently-composing window).
  *
@@ -207,7 +208,11 @@ export function isKeyboardOpen(layoutHeight: number, visualHeight: number): bool
  *   1. programmatic-focus drop loop — a focus that did NOT come from a
  *      pointer gesture is dropped (blur) and re-dropped for up to 12 rAF
  *      frames (the official React submit effect re-focuses programmatically,
- *      which leaves the IME closed on Android WebView);
+ *      which leaves the IME closed on Android WebView). Mobile-navigation
+ *      gestures (drawer rows, session header breadcrumbs) are treated like
+ *      programmatic focus: the official InputBar returns focus to the box on
+ *      session change, and on iOS that would pop the keyboard right after a
+ *      drawer-driven switch — see isNavigationGestureTarget below.
  *   3. pointerup refocus — a tap INSIDE the composer with the keyboard
  *      closed re-focuses within the same gesture (focus({preventScroll})
  *      after pointerup is a user gesture, so the IME opens);
@@ -217,6 +222,32 @@ export function isKeyboardOpen(layoutHeight: number, visualHeight: number): bool
  * (keyboard-visible composer pinning) lives in the stylesheet
  * (interactive-widget=resizes-content) + installKeyboardPinning below.
  */
+
+/**
+ * Gesture regions that are MOBILE NAVIGATION, not typing intent: anything
+ * inside the sidebar drawer (its rows are the session switcher) and inside
+ * the conversation session header (crumbs/breadcrumbs navigate sessions;
+ * the lineage chips open subagent catalogs). A programmatic composer
+ * refocus that follows a pointer gesture in these regions (the official
+ * InputBar returns focus to the box on session change) must be dropped —
+ * otherwise iOS pops the keyboard right after every drawer switch.
+ */
+export const NAV_GESTURE_SELECTOR = '[data-mobile-role="sidebar"], [data-slot="conversation.session.header"]'
+
+/** The minimal element face the navigation-gesture predicate needs. */
+export interface ClosestLike {
+  closest(selector: string): ClosestLike | null
+}
+
+/** Pure decision: did this pointer gesture start in a navigation region?
+ *  Everything else (composer seat, portaled menus, message area) is NOT
+ *  navigation — those keep the pre-change behavior (gesture = typing
+ *  intent), so picker-then-type flows and mouse/hardware-keyboard focus on
+ *  coarse devices are not dropped. */
+export function isNavigationGestureTarget(target: ClosestLike | null): boolean {
+  return target !== null && target.closest(NAV_GESTURE_SELECTOR) !== null
+}
+
 export interface ImeLadder {
   attach(): () => void
   isKeyboardOpen(): boolean
@@ -224,6 +255,13 @@ export interface ImeLadder {
 
 export function installImeLadder(root: ParentNode = document): ImeLadder {
   let lastPointerDown = 0
+  /** The gesture that produced the last pointerdown started in a NAVIGATION
+   *  region (drawer / session header) — layer 1's gesture test uses it: a
+   *  programmatic composer refocus after such a gesture (a sidebar session
+   *  switch — the official InputBar returns focus to the box on session
+   *  change) must NOT count as user-intended typing: it would pop the iOS
+   *  keyboard right after navigation. */
+  let lastPointerDownNav = false
   let keyboardOpen = false
 
   const syncKeyboard = (): void => {
@@ -232,19 +270,27 @@ export function installImeLadder(root: ParentNode = document): ImeLadder {
   }
 
   const onPointerDown = (event: PointerEvent): void => {
-    if (event.pointerType === 'mouse') return
+    // Every pointer type is tracked (mouse included): on coarse-primary
+    // devices with an attached mouse/hardware keyboard a real click into
+    // the composer is typing intent and must not be dropped; only gestures
+    // that start in a NAVIGATION region are treated as non-typing.
+    const target = event.target instanceof Element ? event.target : null
     lastPointerDown = Date.now()
+    lastPointerDownNav = isNavigationGestureTarget(target)
   }
 
   const onFocusIn = (event: FocusEvent): void => {
     const input = root.querySelector(COMPOSER_INPUT_SELECTOR)
     if (!(input instanceof HTMLElement)) return
     if (event.target !== input && !input.contains(event.target as Node)) return
-    const fromGesture = Date.now() - lastPointerDown < 500
+    // Layer 1: a recent gesture that did NOT start in a navigation region
+    // is user-intended typing. Programmatic refocus after a navigation
+    // gesture (drawer/breadcrumb session switch) is dropped the same way as
+    // a purely programmatic focus — and kept dropping for 12 rAF frames
+    // (the official submit effect re-focuses within the commit). A fresh
+    // pointer gesture cancels the drop loop (the tap must win).
+    const fromGesture = Date.now() - lastPointerDown < 500 && !lastPointerDownNav
     if (fromGesture) return
-    // Layer 1: drop the programmatic focus and keep dropping for 12 rAF
-    // frames (the official submit effect re-focuses within the commit).
-    // A fresh pointer gesture cancels the drop loop (the tap must win).
     let frames = 0
     let cancelled = false
     const onGestureCancel = (): void => { cancelled = true }

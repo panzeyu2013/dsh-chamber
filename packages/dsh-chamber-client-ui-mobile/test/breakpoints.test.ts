@@ -90,6 +90,74 @@ test('settings full-screen rule targets the official settings dialog shape', () 
   assert.ok(MOBILE_CSS.includes('[role="dialog"][aria-modal="true"]:has([data-slot="settings.header"])'))
 })
 
+test('settings sheet stacks vertically with a pinned header and scrolling options', () => {
+  // Whitespace-normalized phone tier (comments stripped): assertions are
+  // anchored to selector+block pairs, not to raw formatting.
+  const phone = normalizePhoneTier()
+  const sheet = '[role="dialog"][aria-modal="true"]:has([data-slot="settings.header"])'
+  // Panel: desktop flex-row (188px nav rail + content) → phone column stack.
+  const panel = cssBlock(phone, sheet)
+  assert.ok(panel !== null && panel.includes('position: fixed !important;'), 'sheet goes full-screen')
+  assert.ok(panel !== null && panel.includes('flex-direction: column !important;'), 'sheet stacks vertically')
+  // Nav rail → top strip: title + horizontal chip row that scrolls.
+  const nav = cssBlock(phone, `${sheet} > nav`)
+  assert.ok(nav !== null && nav.includes('flex-direction: row;'), 'nav becomes a row strip')
+  const navList = cssBlock(phone, `${sheet} > nav > div:last-child`)
+  assert.ok(navList !== null && navList.includes('overflow-x: auto;'), 'chip row scrolls horizontally')
+  assert.ok(navList !== null && navList.includes('flex-direction: row;'), 'chip row lays out horizontally')
+  // The content column keeps a fallback scroll (never a hard lock) and the
+  // header row (actions + Close) is pinned — sticky when the column itself
+  // ever scrolls; the options area is the inner scroller.
+  const content = cssBlock(phone, `${sheet} > div:last-child`)
+  assert.ok(content !== null && content.includes('overflow-y: auto;'), 'content column stays a fallback scroller')
+  const headerRow = cssBlock(phone, `${sheet} > div:last-child > div:first-child`)
+  assert.ok(headerRow !== null && headerRow.includes('position: sticky;'), 'header row is pinned (sticky)')
+  assert.ok(headerRow !== null && headerRow.includes('flex: none;'), 'header row never grows')
+  const options = cssBlock(phone, `${sheet} > div:last-child > div:last-child`)
+  assert.ok(options !== null && options.includes('overflow-y: auto;'), 'options area is the inner scroller')
+})
+
+test('settings section inner grids degrade to two/single column (hash-insensitive local names)', () => {
+  const phone = normalizePhoneTier()
+  const modelRow = cssBlock(phone, '[data-slot="settings.section"] [class*="_modelRow_"]')
+  assert.ok(modelRow !== null && modelRow.includes('grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);'))
+  const cards = cssBlock(phone, '[data-slot="settings.section"] [class*="_cards_"]')
+  assert.ok(cards !== null && cards.includes('grid-template-columns: minmax(0, 1fr) !important;'))
+})
+
+test('non-settings aria-modal dialogs are edge-capped and editable fields keep the 16px floor', () => {
+  const phone = normalizePhoneTier()
+  const capped = cssBlock(phone, '[role="dialog"][aria-modal="true"]:not(:has([data-slot="settings.header"]))')
+  assert.ok(capped !== null && capped.includes('max-width: calc(100vw - 24px) !important;'))
+  const fields = cssBlock(
+    phone,
+    '[role="dialog"] input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), '
+      + '[role="dialog"] select, [role="dialog"] textarea',
+  )
+  assert.ok(fields !== null && fields.includes('max(16px, var(--dsh-content-font-size, 16px)) !important;'))
+})
+
+/** The phone tier, whitespace-normalized with comments stripped: whitespace
+ *  and formatting changes never break the assertions; comments (which may
+ *  quote declarations) never satisfy them. */
+function normalizePhoneTier(): string {
+  return MOBILE_CSS
+    .slice(MOBILE_CSS.indexOf('@media (max-width: 768px)'))
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\s+/g, ' ')
+}
+
+/** The CSS block `selector { … }` (normalized form), or null. */
+function cssBlock(css: string, selector: string): string | null {
+  const at = css.indexOf(selector)
+  if (at === -1) return null
+  const open = css.indexOf('{', at)
+  if (open === -1) return null
+  const close = css.indexOf('}', open)
+  if (close === -1) return null
+  return css.slice(at, close + 1)
+}
+
 test('safe-area tokens present on the phone tier', () => {
   assert.ok(MOBILE_CSS.includes('env(safe-area-inset-bottom)'))
   assert.ok(MOBILE_CSS.includes('env(safe-area-inset-top)'))

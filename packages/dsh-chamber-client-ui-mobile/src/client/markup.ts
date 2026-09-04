@@ -10,6 +10,8 @@
  *     ├─ div.<sidebarCol> > div[data-slot="sidebar"]   (root scope; outlet
  *     │    present from first paint)
  *     ├─ div.<centerCol>  > div[data-slot="conversation"]
+ *     │    └─ div.root[data-phase] > div[data-slot="conversation.session.header"]
+ *     │         └─ <header> (session-gated; children: titleRow [+ tabs]))
  *     ├─ div.<detailsCol> (resident SHELL from first paint; its inner
  *     │    [data-slot="details"] outlet is session-gated — it mounts only
  *     │    once a session activates. a3 and a4 behave identically; the old
@@ -21,7 +23,10 @@
  * structural addition could have changed the stamp set — a root slot, a
  * frame, a column shell, or a session-gated slot OUTLET mounting inside a
  * resident column shell (two levels under the frame). The predicate below
- * is the pure decision; index.ts wires it to the MutationObserver.
+ * is the pure decision; index.ts wires it to the MutationObserver. The
+ * session-header chrome stamps (stampSessionLogDismiss) ride the same
+ * re-stamp channels with a PRUNED search (the chat scroll body is never
+ * walked — the streaming filter applies to the stamp cadence too).
  */
 
 export const ROOT_SLOT_SELECTOR = '[data-slot="root"]'
@@ -29,6 +34,63 @@ export const MOBILE_FRAME_ATTR = 'data-mobile-frame'
 export const MOBILE_ROLE_ATTR = 'data-mobile-role'
 
 export type MobileColumnRole = 'sidebar' | 'conversation' | 'details'
+
+/** The official per-session conversation header slot outlet (session scope). */
+export const CONVERSATION_SESSION_HEADER_SLOT = 'conversation.session.header'
+
+/**
+ * The plugin's own dismissal/compact stamp for official header controls that
+ * are desktop-first chrome. The "Session 日志" export capsule is the phone
+ * victim: 111px+ min-width pill in the header utilities that eats most of a
+ * 375px title row (the mobile round of the adaptation surface — design 17
+ * §18.4.3, header-row compaction).
+ */
+export const SESSION_LOG_DISMISS_ATTR = 'data-mobile-dismiss'
+export const SESSION_LOG_DISMISS_VALUE = 'session-log-export'
+
+/**
+ * Official session-log-export visible label (`header.action` in the
+ * `session-log-download` locale NS — zh/en are the only shipped
+ * dictionaries at the 0.1.2-rc.1 pin; matching is exact + trim so an
+ * upstream copy change fails SOFT (no stamp, the pill keeps its official
+ * width) instead of mis-stamping another control). The download icon check
+ * is structural: the official capsule is `span(label) + svg(IconDownload)`.
+ */
+export const SESSION_LOG_EXPORT_LABELS = ['Session 日志', 'Session log'] as const
+
+/** A button whose text is readable for label matching (real Element + fakes). */
+export interface ButtonTextLike extends ElementLike {
+  readonly textContent: string | null
+}
+
+/** Is this button the official session-log export capsule? Pure label + icon test. */
+export function isSessionLogExportButton(button: ButtonTextLike): boolean {
+  if ((SESSION_LOG_EXPORT_LABELS as readonly string[]).includes((button.textContent ?? '').trim())) {
+    // Structural guard: the capsule always pairs the label with the download
+    // icon — a stray button reusing the same copy must not be stamped.
+    return findDescendant(button, el => el !== button && isSvgElement(el)) !== null
+  }
+  return false
+}
+
+function isSvgElement(el: ElementLike): boolean {
+  const tag = (el as { tag?: unknown; tagName?: unknown }).tag
+  const tagName = (el as { tagName?: unknown }).tagName
+  const name = typeof tag === 'string' ? tag : tagName
+  return typeof name === 'string' && name.toLowerCase() === 'svg'
+}
+
+/** First descendant (breadth by tree order) satisfying the predicate. */
+export function findDescendant(root: ElementLike, test: (el: ElementLike) => boolean): ElementLike | null {
+  const stack: ElementLike[] = []
+  for (const child of root.children) stack.push(child)
+  while (stack.length > 0) {
+    const current = stack.shift() as ElementLike
+    if (test(current)) return current
+    for (const child of current.children) stack.push(child)
+  }
+  return null
+}
 
 /**
  * The minimal element face the markup helpers need — satisfied by the real
@@ -90,6 +152,54 @@ export function stampFrame(root: ElementLike): ElementLike | null {
   return frame
 }
 
+/**
+ * Stamp the official session-log export capsule for phone-tier compaction
+ * (idempotent; returns the stamped button or null). The header DOM carries
+ * no stable attribute on the capsule itself (hashed classes only), so the
+ * stamp walks the official anchor shape — conversation column → session
+ * header slot outlet → buttons — and marks the one whose copy is the
+ * official `session-log-download` label (bilingual). Mounts late: the
+ * session header outlet is session-gated, so this runs on every re-stamp
+ * (the frame-attribute and structural channels in index.ts) and simply
+ * finds nothing until a session header exists. Never throws on partial
+ * shapes (hero, blank session, header hidden). The search PRUNES the chat
+ * scroll body (`[data-conversation-scroll]`, the streaming subtree) and the
+ * composer seat — the header slot lives ABOVE them under the conversation
+ * root, and the re-stamp cadence (drawer flips) must never rescan
+ * thousands of streamed nodes.
+ */
+export function stampSessionLogDismiss(frame: ElementLike): ElementLike | null {
+  const conversation = findColumn(frame, 'conversation')
+  if (conversation === null) return null
+  const headerSlot = findHeaderSlot(conversation)
+  if (headerSlot === null) return null
+  const buttons = headerSlot.querySelectorAll('button')
+  for (let index = 0; index < buttons.length; index++) {
+    const button = buttons[index]
+    const candidate = button as ButtonTextLike
+    if (isSessionLogExportButton(candidate)) {
+      button.setAttribute(SESSION_LOG_DISMISS_ATTR, SESSION_LOG_DISMISS_VALUE)
+      return button
+    }
+  }
+  return null
+}
+
+/** Deep first-match by slot attribute (the documented column/outlet shape).
+ *  Prunes chat-scroll and composer subtrees: the session header outlet is a
+ *  shallow ancestor of the conversation column — the deep streaming DOM
+ *  must never be walked on the re-stamp cadence. */
+function findHeaderSlot(root: ElementLike): ElementLike | null {
+  for (const child of root.children) {
+    if (child.getAttribute('data-slot') === CONVERSATION_SESSION_HEADER_SLOT) return child
+    if (child.hasAttribute('data-conversation-scroll')) continue
+    if (child.hasAttribute('data-composer-seat')) continue
+    const nested = findHeaderSlot(child)
+    if (nested !== null) return nested
+  }
+  return null
+}
+
 /** Derive the collapsed flag from a layout snapshot (design 17 §18.4 项 3:
  *  store preference → the AppFrame derivation). */
 export function deriveCollapsed(snapshot: {
@@ -124,14 +234,26 @@ export function deriveCollapsed(snapshot: {
  */
 export function isStructuralTarget(target: StructuralNodeLike | null | undefined): boolean {
   if (target === null || target === undefined) return false
-  const parent = target.parentElement
-  const grandparent = parent?.parentElement ?? null
-  return target.matches(ROOT_SLOT_SELECTOR)
-    || target.matches(`[${MOBILE_FRAME_ATTR}]`)
-    || target.matches(`[${MOBILE_ROLE_ATTR}]`)
-    || parent?.matches(ROOT_SLOT_SELECTOR) === true
-    || parent?.matches(`[${MOBILE_FRAME_ATTR}]`) === true
-    || grandparent?.matches(`[${MOBILE_FRAME_ATTR}]`) === true
+  // The stamp set includes the SESSION-header chrome (stampSessionLogDismiss),
+  // whose outlet mounts FOUR levels under the frame (frame > col >
+  // [data-slot=conversation] > .root[data-phase] >
+  // [data-slot=conversation.session.header]) — so the walk covers the node
+  // AND its first four ancestors looking for the root slot / frame /
+  // column-role attributes. The walk is BOUNDED at four hops, which keeps
+  // the streaming filter intact: real chat content mounts under
+  // [data-conversation-scroll] at ≥6 hops from the frame, so a streaming
+  // batch never reaches the frame within the window.
+  let cursor: StructuralNodeLike | null | undefined = target
+  for (let hop = 0; hop <= 4; hop += 1) {
+    if (cursor === null || cursor === undefined) return false
+    if (
+      cursor.matches(ROOT_SLOT_SELECTOR)
+      || cursor.matches(`[${MOBILE_FRAME_ATTR}]`)
+      || cursor.matches(`[${MOBILE_ROLE_ATTR}]`)
+    ) return true
+    cursor = cursor.parentElement
+  }
+  return false
 }
 
 /** DOM-side guard: only element-like added nodes can be structural (text and
