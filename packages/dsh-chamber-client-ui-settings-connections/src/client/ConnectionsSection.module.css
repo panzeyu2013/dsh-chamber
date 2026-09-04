@@ -778,41 +778,6 @@
 
 /* ---- plugin management dialog (todo 13 §5) ---- */
 
-.pluginTabs {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  margin-bottom: 12px;
-  border-bottom: 1px solid var(--dsw-alias-border-l2);
-}
-
-.pluginTab {
-  appearance: none;
-  border: 0;
-  border-bottom: 2px solid transparent;
-  background: none;
-  padding: 8px 12px;
-  font: inherit;
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--dsw-alias-label-tertiary);
-  cursor: pointer;
-}
-
-.pluginTab:hover {
-  color: var(--dsw-alias-label-primary);
-}
-
-.pluginTab:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
-
-.pluginTabActive {
-  color: var(--dsw-alias-label-primary);
-  border-bottom-color: var(--dsw-alias-brand-primary);
-}
-
 .pluginStack {
   display: flex;
   flex-direction: column;
@@ -856,6 +821,15 @@
    the hint under the title to label-secondary too; the shared class is left
    untouched for loading/empty states. */
 .pluginChamberTitle .dim {
+  color: var(--dsw-alias-label-secondary);
+}
+
+/* 范围注（UX 重构 P1）：chamber 区与第三方区之间的成段引导正文——同标题下
+   hint 用 label-secondary（AA），成段文本加行高。 */
+.pluginScopeNote {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
   color: var(--dsw-alias-label-secondary);
 }
 

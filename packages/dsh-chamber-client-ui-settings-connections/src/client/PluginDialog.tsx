@@ -108,7 +108,6 @@ import css from './ConnectionsSection.module.css'
 const ADD_SPEC = /^(@[a-zA-Z0-9][a-zA-Z0-9._-]*\/)?[a-zA-Z0-9][a-zA-Z0-9._-]*(@(\^|~)?([0-9A-Za-z][0-9A-Za-z._+-]*|latest|next))?$/
 
 type PluginPhase = 'loading' | 'error' | 'ready' | 'applying' | 'done'
-type PluginTab = 'sync' | 'list' | 'add'
 type CategoryFilter = 'all' | 'bundle' | 'plain' | 'client'
 type StatusFilter = 'diff' | 'all'
 type ViewPhase = 'loading' | 'error' | 'ready'
@@ -263,7 +262,8 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
    *  /api/i/gateway-<id> prefix themselves). */
   const gatewayId = target.kind === 'gateway' ? target.sourceId.slice('gateway-'.length) : null
 
-  const [tab, setTab] = useState<PluginTab>('sync')
+  // ---- ssh 对账视图（UX 重构 P1）：legacy 整盘 diff 默认折叠，展开时应用。----
+  const [diffOpen, setDiffOpen] = useState(false)
 
   // ---- ssh sync three-view state ----
   const [phase, setPhase] = useState<PluginPhase>('loading')
@@ -1872,6 +1872,45 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
     )
   }
 
+  /** ssh 统一主视图（UX 重构 P1 / design 21 §10 登记偏离）：已安装列表 + 添加
+   *  区，与 gateway/local 骨架同构；legacy 整盘 diff 折叠为「对账」次级入口
+   *  （rows/filter/apply/undo 语义逐字保留，仅默认收起）。 */
+  const sshZone = isSsh
+    ? ((): ReactNode => {
+      const diffCount = diff === null ? 0 : diff.rows.filter(row => isDifferenceRow(row.kind)).length
+      // 收起时若处于 done（应用成功但 diff/清单尚未重载），先重载再折叠，主视图不陈旧。
+      const toggleDiff = (): void => {
+        if (diffOpen) {
+          setDiffOpen(false)
+          if (phase === 'done') void loadSync(true)
+        } else {
+          setDiffOpen(true)
+        }
+      }
+      return (
+        <div className={css.pluginStack}>
+          <p className={css.pluginChamberTitle}>{t('installedTab')}</p>
+          {diffCount > 0 || diffOpen ? (
+            <div className={css.pluginToolbar}>
+              <button
+                type="button"
+                className={clsx(css.pluginPill, diffOpen && css.pluginPillActive)}
+                disabled={applying || (phase !== 'ready' && phase !== 'done')}
+                aria-expanded={diffOpen}
+                onClick={toggleDiff}
+              >
+                {diffOpen ? t('pluginsDiffCollapse') : t('pluginsDiffSummary').replace('{n}', String(diffCount))}
+              </button>
+            </div>
+          ) : null}
+          {diffOpen && phase !== 'loading' && phase !== 'error' ? renderSyncView() : null}
+          {renderRemoteList()}
+          {addSection}
+        </div>
+      )
+    })()
+    : null
+
   const footer = ((): ReactNode => {
     if (isLocal) return undefined
     if (isSsh) {
@@ -1885,10 +1924,11 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
       if (phase === 'done') {
         return <Button variant="ghost" icon={<IconRefreshOutline16 />} onClick={() => { void loadSync(); onRecheckDiagnostic?.() }}>{t('pluginsRefresh')}</Button>
       }
+      if (!diffOpen) return undefined
       return (
         <>
           <Button variant="outline" onClick={close}>{t('cancel')}</Button>
-          <Button variant="primary" disabled={changeCount === 0 || seedBusy || restartBusy} onClick={onApplyClick}>
+          <Button variant="primary" disabled={changeCount === 0 || seedBusy || restartBusy || undoBusy || remoteRemoveBusy} onClick={onApplyClick}>
             {t('pluginsApply')} {changeCount > 0 ? `${changeCount}` : ''}
           </Button>
         </>
@@ -1938,6 +1978,9 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
             </p>
           )
           : null}
+        {diagnostic !== undefined && diagnostic.state === 'instance-version-conflict' && (isLocal || isGateway)
+          ? <p className={css.hint}>{t('pluginDiagnosticVersionConflictHint')}</p>
+          : null}
         {(isGateway || isHttp) && restartNote !== null
           ? restartNote.tone === 'error'
             ? <p className={css.error} role="alert">{restartNote.text}</p>
@@ -1947,31 +1990,9 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
         <div className={css.pluginManageSections}>
           {chamberZone}
 
-          {isSsh
-            ? (
-              <div className={css.pluginStack}>
-                <div className={css.pluginTabs}>
-                  {(['sync', 'add', 'list'] as const).map(id => (
-                    <button
-                      key={id}
-                      type="button"
-                      className={clsx(css.pluginTab, tab === id && css.pluginTabActive)}
-                      disabled={applying}
-                      onClick={() => { setTab(id) }}
-                    >
-                      {t(id === 'sync' ? 'pluginsSyncTab' : id === 'add' ? 'pluginsAddTab' : 'installedTab')}
-                    </button>
-                  ))}
-                </div>
-                {tab === 'add'
-                  ? addSection
-                  : tab === 'list'
-                    ? renderRemoteList()
-                    : renderSyncView()}
-              </div>
-            )
-            : null}
+          {!isHttp ? <p className={css.pluginScopeNote}>{t('pluginsScopeNote')}</p> : null}
 
+          {isSsh ? sshZone : null}
           {isLocal ? localZone : null}
           {isGateway ? gatewayZone : null}
           {isHttp ? httpZone : null}
@@ -2000,7 +2021,7 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
         onClose={() => { setConfirmApply(false) }}
         title={t('pluginsApplyTitle')}
         closeLabel={t('close')}
-        description={t('pluginsRestartWarning')}
+        description={isSsh && sshSpec !== null && sshSpec.serviceName === null ? t('pluginsRestartUnconfiguredHint') : t('pluginsRestartWarning')}
         className={css.dialog}
         footer={(
           <>
@@ -2040,7 +2061,7 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
         onClose={() => { if (!remoteRemoveBusy) setRemoteRemoveTarget(null) }}
         title={t('removeRowConfirmTitle')}
         closeLabel={t('close')}
-        description={t('removeRowConfirmDescription').replace('{name}', remoteRemoveTarget ?? '')}
+        description={isSsh && sshSpec !== null && sshSpec.serviceName === null ? t('pluginsRestartUnconfiguredHint') : t('removeRowConfirmDescription').replace('{name}', remoteRemoveTarget ?? '')}
         className={css.deleteDialog}
         footer={(
           <>

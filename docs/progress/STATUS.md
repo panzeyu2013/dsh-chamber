@@ -546,6 +546,7 @@
   DISK_CACHE_TTL_MS，原「TTL 排期」措辞仅指 metadata health，范围限定）；metadata
   恢复期 pnpm prune 子进程不可 abort（退出延迟登记）。
 
+- **settings/connection 插件管理面 UX 重构已落地（2026-12；原「插件管理面 UX 重构」todo 已落地并移出目录）**：P0 文案/空态修正（方向词、空态范围注、未配置服务常驻提示、重启未配置事前警告、版本冲突横幅指引）；P1 ssh 默认视图与 gateway/local 同构、legacy diff 折叠为对账次级入口（design 21 §10 已登记偏离：纯层与后端行为不变，仅默认呈现改变）；P2a 插件入口自绘语义图标；P3 术语收敛（入口=管理插件、chamber 受管组件）。范围：仅 settings-connections 渲染层（PluginDialog/ConnectionsSection）与 locales 文案键值，纯层/IPC/域 deny 零改动。门禁：typecheck:connections、test:connections 已本地通过；build:renderer 由 CI/发布链路执行。
 ## 2026 分域一致性审计（desktop vs gateway，5 域 60+ 项）验证与修复轮
 
 > 对审计清单逐条只读复核（A/C/B/E/D 五域独立核验 + 主代理抽验），18/19 项 A-F、
