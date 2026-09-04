@@ -208,9 +208,18 @@ test('classifySpec: pinned/tag specs are registry, paths are materialize, else u
   assert.deepEqual(classifySpec('LINK:../x'), { type: 'materialize' }, 'scheme matching is case-insensitive (main-side parity)')
   assert.deepEqual(classifySpec('./x'), { type: 'materialize' })
   assert.deepEqual(classifySpec('/abs/x'), { type: 'materialize' })
-  assert.equal(classifySpec('workspace:*').type, 'unsyncable')
-  assert.equal(classifySpec('git+https://x/y.git').type, 'unsyncable')
-  assert.equal(classifySpec('>=1.0.0 <2.0.0').type, 'unsyncable')
+  assert.deepEqual(classifySpec('workspace:*').type, 'unsyncable')
+  assert.deepEqual(classifySpec('git+https://x/y.git').type, 'unsyncable')
+  assert.deepEqual(classifySpec('>=1.0.0 <2.0.0').type, 'unsyncable')
+  // x-wildcards are RANGES: the main-process apply path rejects the whole
+  // batch as unsyncable (desktop plugin-sync hasXWildcard) — the UI
+  // classifier refuses them up front so no row is offered as actionable
+  // (2026 audit R4 parity pin).
+  for (const spec of ['x', '1.x', '1.2.x', '^1.x', '~2.x', 'v1.x']) {
+    assert.deepEqual(classifySpec(spec), { type: 'unsyncable', reason: 'x-wildcard version is a range, not a locked version (use an exact version)' }, `${spec} is refused like the main process`)
+  }
+  assert.deepEqual(classifySpec('next'), { type: 'registry', unlocked: true }, 'dist-tags never trip the x-wildcard refusal')
+  assert.deepEqual(classifySpec('lexical'), { type: 'registry', unlocked: true }, 'a tag merely CONTAINING x is not an x-wildcard (segment-anchored check)')
 })
 
 test('classifySpec: v-prefixed versions are pinned registry specs, never unlocked', () => {

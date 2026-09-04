@@ -1,7 +1,9 @@
 /**
  * S19 error sanitization for the public runtime surface: path stripping from
- * the shared core PLUS URL userinfo/query and credential-pattern redaction
- * (mirrors the installer's internal sanitizer; it is not exported).
+ * the shared core PLUS URL userinfo/query and credential-pattern redaction.
+ * ("not exported" note removed 2026 audit: the installer's internal
+ * sanitizer — sanitizeInstallerOutput — has been exported from the shared
+ * core and is consumed by the plugin executor; this route layer mirrors it.)
  */
 import { sanitizeErrorText } from '@dsh-chamber/dsh-runtime'
 

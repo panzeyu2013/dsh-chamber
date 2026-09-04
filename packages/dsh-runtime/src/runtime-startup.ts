@@ -86,6 +86,20 @@ export type StartupBlockedReason =
   | 'override-corrupt'
   | 'journal-mismatch'
 
+/** The FATAL metadata-corruption blocked reasons (journal/current/override
+ *  corrupt + journal-mismatch). Shared single source for both owners — the
+ *  desktop main (hard-blocked startup surface) and the gateway composition
+ *  boundary (index.ts FATAL_RUNTIME_BLOCKS) plus the gateway manager's
+ *  RECOVERABLE_METADATA_BLOCKS (which extends this set with its two recovery
+ *  sentinels). One owner can no longer drift its block classification from
+ *  the other's. */
+export const FATAL_STARTUP_BLOCK_REASONS: readonly StartupBlockedReason[] = [
+  'journal-corrupt',
+  'current-corrupt',
+  'override-corrupt',
+  'journal-mismatch',
+]
+
 export interface StartupResult {
   applyOutcome: ApplyOutcome | null
   restored: 'none' | 'complete' | 'half' | 'incomplete'

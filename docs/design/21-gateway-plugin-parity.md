@@ -45,7 +45,7 @@
 | 15 | C 共享模块 | gateway-runtime 纯核心（parse + poll）迁 `@dsh-chamber/dsh-client-ui-sidebar/shared`（split 边界 + ambient 镜像同步清单，见 §5.2）★ |
 | 16 | B 命名/图标 | 「连接日志」「网关主机日志」+ 图标去重；本地卡折叠区不改名 |
 | 17 | A 生命周期 writer barrier ★ | gateway 后端 executor 挂入 runtime-manager tracked-writers（activeOperations/单飞门），dispose()/dispatch.quiesce() 排空、stop 杀安装子进程、锁释放前 writer 证明——17 §4.1/§12、18 §9.3 表述随 §8 更新 |
-| 18 | 掩码语义 ★ | gateway readManifest 的远端 file: 值**一律掩码**（`MATERIALIZED_VALUE_MASK` 同常量：保留 file: 前缀供 name 基 diff、gateway 本地路径不进 renderer，§6.2）；ssh 现状为**原样透传**（SSH_PLUGIN_LIST main.ts:2860-2870 与 LOCAL_PLUGIN_LIST main.ts:2903-2905 均未掩码；掩码常量与 redactLocalPluginManifest（plugin-sync.ts:663/674-680）存在但**无生产调用点**——A 的掩码投影是新契约，实现时统一挂接模型层 readManifest |
+| 18 | 掩码语义 ★ | gateway readManifest 的远端 file: 值**一律掩码**（`MATERIALIZED_VALUE_MASK` 同常量：保留 file: 前缀供 name 基 diff、gateway 本地路径不进 renderer，§6.2）。**现状勘误（2026-12 audit 修订）**：ssh 清单已挂接掩码（`redactRemotePluginManifest`，plugin-sync.ts）；本地 LOCAL_PLUGIN_LIST 仍**原样透传**（main.ts:3456-3462，本地 file: 绝对路径可进 renderer）——按 §10 ③ 与 design 13 §7.0 勘误登记为已知分歧（本地侧 `redactLocalPluginManifest` 仍零生产调用点）；模型层 readManifest 挂接时统一收敛。旧文本“ssh/local 均未掩码、掩码常量无生产调用点”已过时 |
 | 19 | scope 过滤统一 ★ | 第三方行过滤与移除/安装拒绝集合在**模型层**单一定义（官方域 + chamber 域 + seed/overlay 名）：对话框行、两后端 remove、gateway install 拒绝集一致（ssh 后端补官方/chamber 域拒绝 = 与 gateway 同权） |
 | 20 | 信任声明 ★ | “已安装代码 = gateway 用户级等价”（进程隔离≠主体隔离）；OS 用户分离列二期硬化 |
 
@@ -69,10 +69,10 @@ remove 先于 add、可 defer 重启；write-file 上限 50 MiB；spec/name 白�
 
 ### 2.3 插件管理 UI【已实现】
 卡片分流（ConnectionsSection.tsx:1307-1310）：ssh+dsh → PluginSyncModal（远程 sync/add）；本地 → PluginSyncModal
-（spec=null，list/add）；gateway/http 直连 → PluginInventoryView（只读）。PluginSyncModal 921 行双模式组件、
-PluginAddView、plugin-diff.ts 纯函数族（missing/update/extra/materialize/unsyncable/consistent——**无 scope 逻辑**）、
-plugin-inventory-text/plugin-diagnostic 纯投影（thirdPartyEntries 过滤 @deepseek-ai/* + chamber 两包，仅用于
-Loader 已加载事实层）。测试 = connections 8 个纯模块文件，**无组件级测试**。
+（spec=null，list/add）；gateway/http 直连 → PluginInventoryView（**2026-12 audit 勘误：非只读**——已含已安装
+行/移除/撤销/restart 面板/tasks 投影/sync 状态）。PluginSyncModal/PluginAddView、plugin-diff.ts 纯函数族
+（missing/update/extra/materialize/unsyncable/consistent——**无 scope 逻辑**）、plugin-inventory-text/plugin-diagnostic
+纯投影（thirdPartyEntries 过滤 @deepseek-ai/* + chamber 两包，仅用于 Loader 已加载事实层）。测试 = connections 纯模块文件，**无组件级测试**。
 （历史基线；已由 PluginDialog 收敛——见 §6.6 落地状态，2026-12）
 
 ### 2.4 chamber 宿主包同步与 seed【已实现】
@@ -168,7 +168,7 @@ typecheck——四个插件经各自 tsconfig paths 引用手写 ambient 声明�
 settings-bridge `src/ambient/chamber-bridge.d.ts`（含 MIRROR WARNING）；git `src/ambient/sidebar-shared.d.ts`；
 layout `src/ambient/chamber-view-prefs.d.ts`），renderer 无 tsconfig paths、经 `vendor-modules.d.ts` `declare
 module`（:208-510）——git/layout 不走 vendor-modules.d.ts；迁移须
-同步扩展这些镜像（RemoteRuntimeStatus 现 **30 字段**/parse/gates/Error/poll 符号），并在 sidebar 增加“镜像导出
+同步扩展这些镜像（RemoteRuntimeStatus 现 **33 字段（30 必填+3 可选，2026 audit 复核）**/parse/gates/Error/poll 符号），并在 sidebar 增加“镜像导出
 集锁步”测试；
 poll 的英文错误串随迁（connections 会显示未本地化文案，登记接受）。**测试迁移**：pollGatewayReady 用例现驻
 settings-bridge/test/runtime-management.test.ts:124-217（import 迁移而非补建）；gateway-runtime-api.test.ts
@@ -183,7 +183,7 @@ restartManagedDsh 重启 dsh / restartManagedDshTip（受控重启 gateway 托�
 会话**短暂断开）/ restartManagedDshBusy / restartManagedDshOk / restartManagedDshAccepted / restartNotConnected /
 restartApplyInPanel 重启生效 / restartGatewayService 重启网关服务（gateway+ssh systemd 按钮 label，与 dsh 目标
 的 restartInstance 区分）/ restartServiceTip 重启 gateway 服务（systemd，整个服务；仅 ssh 传输可用）。
-> 落地记录（2026-12）：connections locales 261+261 键；卡片按钮/确认 Modal/每卡单飞 per-id/共享 pollGatewayReady/
+> 落地记录（2026-12）：connections locales 296+296 键（2026 audit R4 复核计数）；卡片按钮/确认 Modal/每卡单飞 per-id/共享 pollGatewayReady/
 > 面板「重启生效」（gatewaySource 门控）均已实现（§4.2 轮询语义精确一致）；http+dsh 直连无按钮。
 
 ## 6. A · 统一插件管理模型 v1
@@ -207,7 +207,7 @@ restartApplyInPanel 重启生效 / restartGatewayService 重启网关服务（ga
 | `PUT /chamber/plugins/install` | body `{name, spec}`：spec 白名单族（**模型层常量单一来源迁 control-plane 共享纯模块**：desktop 经双路径 facade control-plane-module.ts 与打包产物同源、gateway 直接引用；渲染端 ADD_SPEC 手写镜像保留并**新增锁步测试**）；**保留名拒绝**（@dsh-chamber/*、seed/overlay 名与官方域，与 remove 拒绝集一致、与对话框行过滤一致）；202 异步、队列串行 + 单写者栅栏；队列忙 → 409（code 见表）；输入错 → 400；profile 缺失 → deferred；执行失败 → 任务面持久投影 |
 | `PUT /chamber/plugins/materialize` | 文件夹直推：**独立流式上传读体**（不复用 8 MiB readUploadJsonBody；≤32 MiB、413+destroy、解包大小/文件数上限防膨胀）；name/version 校验 + 保留名拒绝；落 `chamber-plugins/third-party/<escaped>/<name>-<hash>.tgz`（0700/0600/原子 no-follow）；idle → `add file:`；否则 deferred |
 | `POST /chamber/plugins/remove` | body `{name}`：installed 投影内名字 + 保留名拒绝（模型层一致）；202 异步；**停机态可用** |
-| `POST /chamber/runtime/start` ★ | **新原语**（决策 12）：仅 connectionState ∈ {stopped, error, restart-exhausted} 允许；202 + status 轮询（复用 restart 语义面：start: running/ok/failed + operationError）；受守卫：canStartLocal/exposureQuarantine/恢复门（recovery phase 只允许既有 retry/restore-builtin，不得被 start 绕过）/单飞与写栅栏；语义 = 受守卫 spawn（同 startup 事务后的 startLocal 路径），失败诚实投影（不伪装成功） |
+| `POST /chamber/runtime/start` ★ | **新原语**（决策 12）：仅 connectionState ∈ {stopped, error, restart-exhausted} 允许；202 + status 轮询（复用 restart 语义面：start: running/ok/failed + operationError）；受守卫：canStartLocal/exposureQuarantine/恢复门（recovery phase 只开放各自 retry；restore-builtin 仅限 pending/健康选择——2026 audit R2 收窄，不得被 start 绕过）/单飞与写栅栏；语义 = 受守卫 spawn（同 startup 事务后的 startLocal 路径），失败诚实投影（不伪装成功） |
 | `GET /chamber/plugins/tasks` | 任务投影 pending/running/blocked/failed[{name,error}] + 最近完成保留期；持久来源 = 操作 journal（§6.3）；默认独立端点（并入 installed 的合并决定在 A1 起点定死） |
 
 错误码总表（新增，遵循既有 `{error, code}` 蛇形约定）：`invalid_input` 400、`body_too_large` 413、
@@ -346,7 +346,8 @@ chamberProvision=seed_host_graph、restartToApply/startFromStopped=restart_servi
   activeOperations drain）→ journal/备份 → 串行队列执行器（**纯 node 单测单元：journal 状态机/门矩阵/队列模型/
   injectable spawn+env 断言**）→ tasks 面 → apply/materialize IPC + 确认链 → ⑤ UI 全闭环（先纯模型层测试后接线）；
   每步独立验收（per-route 验收挂 §6.2 路由行与 §9 矩阵）。
-- 工程默认（可否决）：202 异步 + 任务面；队列深度 ≤8、单 op 超时 10 分钟、blocked 上限 5 分钟、journal 最近
+- 工程默认（可否决）：202 异步 + 任务面；队列深度 ≤8、单 op 超时 10 分钟、blocked 上限 **120s**（2026-12 audit
+  勘误：代码 `CAN_RUN_WAIT_MAX_MS=120_000`，plugins-exec.ts；旧文本"5 分钟"未随决策 6/7 执行窗口实现更新）、journal 最近
   50 笔/7 天、上传前磁盘预检；文件夹 ≤32 MiB 独立流式路由 + 解包上限（≤4096 文件/解压 ≤256 MiB 默认值）；
   保留名/scope 拒绝模型层单一实现；tasks 默认独立端点（A1 起点定死合并决定）；执行窗口含停机态。
 
@@ -402,14 +403,15 @@ chamber 移动端参与第三方管理；安装期脚本默认禁行与 OS 用�
 ## 10. 实现前置条件与勘误记录
 - 本工作树依赖未就绪（vendor/node_modules 未物化）：实现/测试前先 pnpm install；候选图标与 primitives 导出
   届时核对（B 不阻塞于字面图标）；
-- 勘误记录（2026-12 全量核查期核对，供实现参考）：掩码语义（§1 #18：ssh/local 现状原样透传、掩码 helper 无
-  生产调用点）；ADD_SPEC 无锁步测试（§6.2 补）；pollGatewayReady 测试现驻 runtime-management.test.ts:124-217
+- 勘误记录（2026-12 全量核查期核对，供实现参考——**历史快照；其中数行已被后续修订取代，标有 【2026 audit】 的行请以修订处为准**）：掩码语义（§1 #18：ssh/local 现状原样透传、掩码 helper 无
+  生产调用点【2026 audit：已过时——ssh 已挂接 redactRemotePluginManifest、本地透传为登记分歧，见 §1 决策 18 修订与 STATUS audit 块】）；ADD_SPEC 无锁步测试（§6.2 补）；pollGatewayReady 测试现驻 runtime-management.test.ts:124-217
   （import 迁移）；connections global.d.ts 为 re-export 型；PluginApplyResult2 的 `{ok:true,cancelled:true}` 成员
   **不可生产**（SSH_PLUGIN_APPLY handler 只回 ok/error，main.ts:2871-2902 无取消；ipc-surface-mirror.test.ts
-  :259-265 钉死无 cancelled；PluginSyncModal:334 分支为死代码——模型层结果联合收敛时**删除**该成员）；17 §3 seed 行与代码不符（§8 勘误）；`runExclusiveProfileWrite` 为 A1 新建符号、
+  :259-265 钉死无 cancelled；PluginSyncModal:334 分支为死代码——模型层结果联合收敛时**删除**该成员【2026 audit：已删除（C-F5），含 SshApplyShape/SshSeedHostGraphResult 同族】）；17 §3 seed 行与代码不符（§8 勘误）；`runExclusiveProfileWrite` 为 A1 新建符号、
   `beforeSpawnCheckpoint` 现为 test-only 调度缝（local-connection.ts:87-90）；local 插件 handler 区段
   main.ts:3044-3083；/chamber/plugins 上传读体 8 MiB 上限在 routes.ts:57-109 而非 plugins.ts；XDG_CONFIG_HOME
-  不在 runtime-installer 既有先例中（executor 新增）；RemoteRuntimeStatus 现 30 字段；restoreBuiltin 全程
+  不在 runtime-installer 既有先例中（executor 新增）；RemoteRuntimeStatus 现 30 字段【2026 audit 复核：33 字段
+  = 30 必填 + 3 可选，见 STATUS D-3】；restoreBuiltin 全程
   runtime-manager.ts:1608-1665；gateway CLI 除 serve 外仅 auth 操作子命令（AUTH_HELP cli.ts:70-101）；
   connections README.i18n.yaml 记录哈希已过期（README.md/README.zh.md 均有新值，Phase 1 重录）；
   pollGatewayReady 英文错误串随迁 shared 后为未本地化文案（登记接受）。
@@ -419,7 +421,8 @@ chamber 移动端参与第三方管理；安装期脚本默认禁行与 OS 用�
   plugin_apply/materialize/seed 主进程确认在 main.ts 未实现（仅本地 add/remove 有确认：3064/3076）——设计意图
   保留，A 确认链按 decision 14 落地时补齐并登记该缺口；③ 掩码 helper（redactLocalPluginManifest）注释声称
   “IPC 响应已掩码”但无任何生产调用点（LOCAL/SSH_PLUGIN_LIST 均原样返回，本地 file: 绝对路径可跨 IPC 进
-  renderer）——design 13 §7.0 相应表述同样过期，模型层 readManifest 挂接时一并修正。
+  renderer）——design 13 §7.0 相应表述同样过期，模型层 readManifest 挂接时一并修正【2026 audit 修订：ssh
+  清单已由 redactRemotePluginManifest 掩码（main.ts:3134），LOCAL 侧透传仍为登记分歧——见 §1 决策 18 修订】。
 - **实现勘误与裁定补录（2026-12，Phase 1-5 落地后回写）**：
   ① §10 缺陷登记② 缺口已在 A 确认链落地时**部分**补齐并登记撤销——落地的确认 = gateway
   gateway_plugin_apply/undo + ssh_plugin_undo 主进程对话框（4G/5B）；**ssh 端 plugin_apply /
@@ -497,7 +500,9 @@ chamber 移动端参与第三方管理；安装期脚本默认禁行与 OS 用�
   重启确认（restartManagedDshConfirmDescription）落地；视图面板「重启生效」为直发动作、
   settings-bridge runtime 段 gateway 重启确认沿用 design-18 既有文案（dshRuntimeRestart
   Confirm）——两处差异为**已登记的有意范围**（§5.3 落地记录只认卡片入口），后续如需
-  统一按此条补键/补文案。
+  统一按此条补键/补文案。【2026 audit D-4 修订：settings-bridge runtime 段 gateway 源重启
+  确认已改用专用键 dshRuntimeRestartGatewayConfirm（zh/en 成对，含多用户中断披露），与
+  卡片文案同语义；「视图面板重启生效为直发动作」部分仍成立；文案语义统一仍以卡片为准】
 - **第二轮扫描修正补录（2026-12，复核修复轮自身；全量验证绿）**：
   ⑭ drain 自动重启请求点修正（第一轮 ③ 的实现缺陷）：原在首个 ok op 终态即请求，会撞上
   同一轮仍在途排空 op 的 profile-write 租约而被 index 门控跳过且永不重试——现改为本轮

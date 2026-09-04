@@ -237,6 +237,7 @@ const CHAMBER_APP_HTML = `<!doctype html>
           <button id="runtime-retry-apply" type="button" disabled>Retry apply</button>
           <button id="runtime-retry-restore" type="button" disabled>Retry restore</button>
           <button id="runtime-restart" type="button" disabled>Restart dsh</button>
+          <button id="runtime-start" type="button" disabled title="Bring the managed dsh back up (start applies to a stopped / error / restart-exhausted runtime)">Start dsh</button>
         </div>
       </div>
       <p class="subtle">Switch: select a version, then Apply on next start (installs if needed); Rollback is for installed older versions.</p>
@@ -273,6 +274,7 @@ const CHAMBER_APP_JS = `(function () {
     retryApply: '/chamber/runtime/retry-apply',
     retryRestore: '/chamber/runtime/retry-restore',
     restart: '/chamber/runtime/restart',
+    start: '/chamber/runtime/start',
     registry: '/chamber/runtime/registry'
   };
   function byId(id) { return document.getElementById(id); }
@@ -428,9 +430,16 @@ const CHAMBER_APP_JS = `(function () {
   function setRuntimeControls() {
     var row = runtimeSnapshot;
     var selected = runtimeVersion();
-    var busy = row === null || runtimeActionRunning || row.phase === 'installing' || row.phase === 'applying' || row.restart === 'running';
+    var busy = row === null || runtimeActionRunning || row.phase === 'installing' || row.phase === 'applying' || row.restart === 'running' || row.start === 'running';
     var pendingBlocked = row !== null && row.phase === 'pending';
-    var baseMutationBlocked = busy || row.mutationsAllowed !== true || row.source === 'env';
+    // Recovery phases and any projected startup block (FATAL / swap / restore /
+    // env-probe-failed / resolution failure) disable every mutation surface —
+    // the server's recovery gate refuses them (2026 audit R2/R3); declared
+    // before baseMutationBlocked so select/apply/rollback/registry/restore and
+    // the recovery escape buttons all share the same truth.
+    var recoveryPhase = row !== null && (row.phase === 'swap-attempted' || row.phase === 'snapshot-failed' || row.phase === 'restore-blocked');
+    var startupBlocked = row !== null && row.startupBlockedReason !== null && row.startupBlockedReason !== '';
+    var baseMutationBlocked = busy || row.mutationsAllowed !== true || row.source === 'env' || recoveryPhase || startupBlocked;
     var mutationBlocked = baseMutationBlocked || pendingBlocked;
     byId('runtime-version').disabled = mutationBlocked;
     byId('runtime-select').disabled = mutationBlocked || selected === null || selected === row.activeVersion;
@@ -446,7 +455,6 @@ const CHAMBER_APP_JS = `(function () {
     // (row.selectedVersion = override.chosenVersion), NOT the dropdown's local
     // value — a merely highlighted dropdown row has no persisted selection, so
     // preflight would answer 409 noop_target/no_selection for it.
-    var recoveryPhase = row !== null && (row.phase === 'swap-attempted' || row.phase === 'snapshot-failed' || row.phase === 'restore-blocked');
     var applyNowBlocked = baseMutationBlocked || recoveryPhase
       || (row.connectionState !== 'ready' && row.connectionState !== 'degraded');
     var applyNowAvailable = row !== null && (row.phase === 'pending' || (row.selectedVersion != null && row.selectedVersion !== row.activeVersion));
@@ -468,10 +476,25 @@ const CHAMBER_APP_JS = `(function () {
     byId('runtime-rollback').disabled = mutationBlocked || !rollbackTarget;
     // Design 18 pending terminal gate: restore-builtin is the sole escape.
     // It remains disabled for live install/apply/restart and env/read-only.
-    byId('runtime-restore').disabled = baseMutationBlocked || row.hasOverride !== true;
-    byId('runtime-retry-apply').disabled = mutationBlocked || (row.phase !== 'swap-attempted' && row.phase !== 'snapshot-failed');
-    byId('runtime-retry-restore').disabled = mutationBlocked || row.phase !== 'restore-blocked';
-    byId('runtime-restart').disabled = pendingBlocked || busy || (row.connectionState !== 'ready' && row.connectionState !== 'degraded');
+    byId('runtime-restore').disabled = baseMutationBlocked || recoveryPhase || startupBlocked || row.hasOverride !== true;
+    // Matching retries stay ENABLED in their recovery phases: on the real
+    // wire phase and startupBlockedReason co-project from the same in-memory
+    // block, so the reason must not re-disable the retry the phase advertises
+    // (2026 audit R4 F1 — busy/env/read-only only, never mutationBlocked).
+    byId('runtime-retry-apply').disabled = busy || row.mutationsAllowed !== true || row.source === 'env' || (row.phase !== 'swap-attempted' && row.phase !== 'snapshot-failed');
+    byId('runtime-retry-restore').disabled = busy || row.mutationsAllowed !== true || row.source === 'env' || row.phase !== 'restore-blocked';
+    byId('runtime-restart').disabled = busy || pendingBlocked || recoveryPhase || startupBlocked || (row.connectionState !== 'ready' && row.connectionState !== 'degraded');
+    // Start (design 21 §6.8 r1 / decision-12 recovery primitive): brings the
+    // managed dsh up from stopped/error/restart-exhausted. The enablement
+    // mirrors the /chamber/runtime/start route gate (runtime-routes.ts): the
+    // recovery gate (startupBlockedReason + swap/snapshot/restore recovery
+    // phases), a pending armed switch, installing/applying windows and any
+    // non-startable connection state all refuse — the UI disables up front
+    // instead of surfacing the 409. Restart stays the ready/degraded surface;
+    // start is its stopped-runtime counterpart, so the server copy that told
+    // the operator to "start the managed dsh" is now reachable from this page.
+    var startableConnection = row !== null && (row.connectionState === 'stopped' || row.connectionState === 'error' || row.connectionState === 'restart-exhausted');
+    byId('runtime-start').disabled = busy || pendingBlocked || recoveryPhase || startupBlocked || !startableConnection;
     byId('runtime-registry').disabled = mutationBlocked;
     byId('runtime-registry-save').disabled = mutationBlocked || byId('runtime-registry').value.trim().length === 0;
   }
@@ -774,6 +797,7 @@ const CHAMBER_APP_JS = `(function () {
   byId('runtime-retry-apply').addEventListener('click', function () { void runtimeAction(RUNTIME_PATHS.retryApply, undefined, 'Apply retry'); });
   byId('runtime-retry-restore').addEventListener('click', function () { void runtimeAction(RUNTIME_PATHS.retryRestore, undefined, 'Restore retry'); });
   byId('runtime-restart').addEventListener('click', function () { void runtimeAction(RUNTIME_PATHS.restart, undefined, 'dsh restart'); });
+  byId('runtime-start').addEventListener('click', function () { void runtimeAction(RUNTIME_PATHS.start, undefined, 'dsh start'); });
   byId('runtime-registry-save').addEventListener('click', function () { void saveRuntimeRegistry(); });
   byId('cred-change-password').addEventListener('click', function () { void changePassword(); });
   byId('cred-remove-password').addEventListener('click', function () { void removePassword(); });

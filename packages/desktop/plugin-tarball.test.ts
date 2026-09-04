@@ -20,6 +20,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { gunzipSync } from 'node:zlib'
+import { scanTgzMetadata } from '../gateway/src/tgz-scan.ts'
 import {
   buildPluginTarball,
   GATEWAY_PLUGIN_VERSION_PATTERN,
@@ -229,6 +230,68 @@ test('buildPluginTarball: injected entry-cap and unpacked-byte limits error with
     )
   } finally {
     gz.cleanup()
+  }
+})
+
+test('buildPluginTarball: padded-footprint accounting (gateway-scan parity) rejects the raw-bytes acceptance window', async () => {
+  const fixture = makeFolder()
+  try {
+    // 1 directory + package.json + 6 one-byte files: 8 headers × 512 +
+    // padded data. RAW accounting (headers + unpadded body bytes ≈ 4138)
+    // fits a 5000-byte bound, but padded accounting (7680 bytes without
+    // the end marker, 8704 with it) does not — the padded-vs-raw divergence
+    // is what this window pins. The dedicated marker case below pins the
+    // 1024-byte end-marker reservation itself.
+    write(fixture.path, 'package.json', JSON.stringify({ name: 'cap-pkg', version: '1.0.0' }))
+    for (let index = 0; index < 6; index += 1) write(fixture.path, `f${index}.js`, 'x')
+    await assert.rejects(
+      buildPluginTarball(fixture.path, { limits: { maxUnpackedBytes: 5000 } }),
+      (error: unknown) => (error as Error & { code?: string }).code === 'too_large',
+    )
+  } finally {
+    fixture.cleanup()
+  }
+})
+
+test('every archive the desktop builder accepts is accepted by the real gateway tgz scan', async () => {
+  const fixture = makeFolder()
+  try {
+    // A deliberately tight builder bound (default caps would need hundreds
+    // of MiB of fixtures). Any archive that passes the builder's padded
+    // pre-check must also pass the gateway route's scan with the DEFAULT
+    // caps — the two accounting formulas must agree, end marker included.
+    for (let index = 0; index < 12; index += 1) write(fixture.path, `lib/m${index}.js`, `export const m${index} = ${index}\n`)
+    write(fixture.path, 'package.json', JSON.stringify({ name: 'parity-pkg', version: '0.1.0' }))
+    const result = await buildPluginTarball(fixture.path, { limits: { maxUnpackedBytes: 16 * 1024 } })
+    const scanned = await scanTgzMetadata(result.buffer)
+    assert.deepEqual(
+      { ok: scanned.ok, entries: scanned.ok ? scanned.entries : null, error: scanned.ok ? null : scanned.error },
+      { ok: true, entries: 15, error: null },
+      'a desktop-built archive must always pass the gateway materialize scan (entries: package/ + package/lib/ + package.json + 12 files)',
+    )
+  } finally {
+    fixture.cleanup()
+  }
+})
+
+test('the 1024-byte end-of-archive marker is part of the unpacked budget (gateway inflated-bytes parity)', async () => {
+  const fixture = makeFolder()
+  try {
+    // Same folder shape as the parity test: 15 entries (headers 15×512) +
+    // 13 padded file bodies (13×512) = 14336 bytes WITHOUT the two-block
+    // end marker, 15360 WITH it. A 15000-byte cap therefore accepts the
+    // padded bodies and rejects ONLY because the marker is reserved — this
+    // pins the marker accounting itself (the gateway's actual-inflated-bytes
+    // guard counts the marker as real inflate output; its declared
+    // totalBytes stops at the end marker).
+    for (let index = 0; index < 12; index += 1) write(fixture.path, `lib/m${index}.js`, `export const m${index} = ${index}\n`)
+    write(fixture.path, 'package.json', JSON.stringify({ name: 'marker-pkg', version: '0.1.0' }))
+    await assert.rejects(
+      buildPluginTarball(fixture.path, { limits: { maxUnpackedBytes: 15000 } }),
+      (error: unknown) => (error as Error & { code?: string }).code === 'too_large',
+    )
+  } finally {
+    fixture.cleanup()
   }
 })
 

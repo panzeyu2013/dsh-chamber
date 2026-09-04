@@ -1077,3 +1077,19 @@ export {
   RUN_STDOUT_MAX_BYTES,
   WRITE_FILE_MAX_BYTES,
 } from './plugin-spec.ts'
+// Gateway wire-protocol credential/session facts + SPKI pin helpers (design
+// 17 §7.1/§9.3/§13.4.2/S23) — the single source shared by the gateway server
+// (auth.ts/config.ts), the proxy injection gate (instance-proxy.ts) and the
+// desktop client (gateway-session.ts / gateway-provider.ts through
+// control-plane-module.ts). spki-pin.ts exports ride the proxy-forward
+// `export *` above.
+export {
+  GATEWAY_PASSWORD_MAX_CHARS,
+  GATEWAY_PASSWORD_MIN_CHARS,
+  GATEWAY_SESSION_COOKIE_NAME,
+  GATEWAY_SESSION_COOKIE_VALUE_MAX_CHARS,
+  GATEWAY_SESSION_TTL_SECONDS,
+  GATEWAY_TOKEN_MAX_CHARS,
+  GATEWAY_TOKEN_MIN_CHARS,
+  GATEWAY_TOKEN_VISIBLE_ASCII_PATTERN,
+} from './gateway-session-protocol.ts'

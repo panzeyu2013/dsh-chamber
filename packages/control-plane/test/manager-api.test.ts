@@ -154,6 +154,19 @@ test('health + connections: idempotent create, ready projection, no double spawn
   }
 })
 
+test('HEAD /health is the no-body twin of GET (monitoring probes answer 200)', async () => {
+  const holder = await makePlane()
+  try {
+    const response = await fetch(`${holder.base}/health`, { method: 'HEAD' })
+    assert.equal(response.status, 200)
+    assert.equal(response.headers.get('content-type'), 'application/json')
+    assert.equal(await response.text(), '', 'HEAD carries no body')
+  } finally {
+    await holder.plane.stop()
+    rmSync(holder.stateDir, { recursive: true, force: true })
+  }
+})
+
 test('candidate quarantine hides ready/port until the activation verdict opens exposure', async () => {
   const stateDir = mkdtempSync(join(tmpdir(), 'dsh-chamber-quarantine-'))
   const wire = fakeWire()

@@ -57,6 +57,12 @@
 
 import { authCookieFor } from './browser-auth-cookie.ts'
 import {
+  GATEWAY_SESSION_COOKIE_NAME,
+  GATEWAY_SESSION_COOKIE_VALUE_MAX_CHARS,
+  GATEWAY_TOKEN_MAX_CHARS,
+  GATEWAY_TOKEN_MIN_CHARS,
+} from './gateway-session-protocol.ts'
+import {
   CLIENT_BODY_IDLE_TIMEOUT_MS,
   MAX_BUFFERED_REQUEST_BYTES,
   MAX_CONCURRENT_HTTP_REQUESTS,
@@ -626,7 +632,11 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
         }
         // 0..2 sanctioned headers, each bounded and whitelist-checked:
         // Authorization (Bearer) and Cookie (dsh_gateway_session) — anything
-        // else, duplicates or unbounded values are rejected.
+        // else, duplicates or unbounded values are rejected. The bounds come
+        // from gateway-session-protocol.ts (the cross-shape single source:
+        // gateway server auth.ts/config.ts + desktop client gates).
+        const cookiePrefix = `${GATEWAY_SESSION_COOKIE_NAME}=`
+        const bearerPattern = new RegExp(`^Bearer [\\x20-\\x7e]{${GATEWAY_TOKEN_MIN_CHARS},${GATEWAY_TOKEN_MAX_CHARS}}$`)
         const entries = extraHeaders === undefined ? [] : Object.entries(extraHeaders)
         const injected: Record<string, string> = {}
         for (const [name, rawValue] of entries) {
@@ -635,17 +645,17 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
             if (injected.authorization !== undefined) {
               throw new TypeError('registerInstanceTransport: gateway Authorization may be given at most once')
             }
-            if (typeof rawValue !== 'string' || !/^Bearer [\x20-\x7e]{32,4096}$/.test(rawValue)) {
-              throw new TypeError('registerInstanceTransport: gateway Authorization Bearer credential must contain 32–4096 visible-ASCII characters')
+            if (typeof rawValue !== 'string' || !bearerPattern.test(rawValue)) {
+              throw new TypeError(`registerInstanceTransport: gateway Authorization Bearer credential must contain ${GATEWAY_TOKEN_MIN_CHARS}–${GATEWAY_TOKEN_MAX_CHARS} visible-ASCII characters`)
             }
             injected.authorization = rawValue
           } else if (lower === 'cookie') {
             if (injected.cookie !== undefined) {
               throw new TypeError('registerInstanceTransport: gateway Cookie may be given at most once')
             }
-            if (typeof rawValue !== 'string' || !rawValue.startsWith('dsh_gateway_session=')
-              || rawValue.length <= 'dsh_gateway_session='.length
-              || rawValue.length > 'dsh_gateway_session='.length + 4096
+            if (typeof rawValue !== 'string' || !rawValue.startsWith(cookiePrefix)
+              || rawValue.length <= cookiePrefix.length
+              || rawValue.length > cookiePrefix.length + GATEWAY_SESSION_COOKIE_VALUE_MAX_CHARS
               || /[\r\n\0;,]/.test(rawValue)) {
               throw new TypeError('registerInstanceTransport: gateway Cookie must be a bounded dsh_gateway_session credential')
             }

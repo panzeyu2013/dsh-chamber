@@ -102,7 +102,7 @@
 ### 4.2 journal + 备份模块
 - 新模块（gateway/src 插件区）：写入序 pending（ts/kind/name/spec/preImage/操作者标签）→ 原子备份
   package.json+lockfile（**成对校验**）→ 执行 → 终态；启动对账残留 pending → failed（附 preImage）；
-  保留策略默认（最近 50 笔/7 天；队列深 ≤8；op 超时 10 分钟；blocked 上限 5 分钟）；磁盘预检（镜像
+  保留策略默认（最近 50 笔/7 天；队列深 ≤8；op 超时 10 分钟；blocked 上限 120s——2026-12 audit 勘误，见 design 21 §6.9 与 plugins-exec.ts CAN_RUN_WAIT_MAX_MS）；磁盘预检（镜像
   runtime disk soft-limit）；非秘密（0700/0600/no-follow 复用 private-file 原语）。
 
 ### 4.3 串行队列执行器
@@ -125,7 +125,7 @@
 
 ### 4.5 start 原语（design 21 决策 12）
 - runtime-routes：`POST /chamber/runtime/start`——仅 connectionState ∈ {stopped, error, restart-exhausted}；
-  恢复门不可绕过（recovery phase 只允许既有 retry/restore-builtin）；canStartLocal/exposureQuarantine/单飞/
+  恢复门不可绕过（recovery phase 只开放各自 retry；restore-builtin 仅限 pending/健康选择——2026 audit R2 收窄）；canStartLocal/exposureQuarantine/单飞/
   写栅栏；202 + status 轮询 start: running/ok/failed + operationError（resolve≠success 语义）；
   manager：受守卫 startLocal 路径；r1 恢复闭环与 F7 auto-rollback 衔接（不重复触发）。
 
@@ -151,11 +151,13 @@
   （design 21 §6.6）——单测先行，无依赖可先写。
 - 统一视图重构（design 21 §6.6 次序）：PluginSyncModal 拆共享子组件（chamber 区/差异表/结果区/已安装列表行）
   → tabs sync/add/**list（已安装列表，逐行移除 + 撤销最近变更）**；本地模式 list+add 不变；http 直连保留
-  PluginInventoryView 只读；**ssh 行为等价回归门**（步骤③前显式手动/E2E 门禁，含既有纯测试）。
+  PluginInventoryView（2026 audit 勘误：非只读——已含已安装行/移除/撤销/restart/tasks，见 design 21 §2.3；
+  统一单组件双后端合体为 §10⑥ 开放项）；**ssh 行为等价回归门**（步骤③前显式手动/E2E 门禁，含既有纯测试）。
 - gateway 卡片改开统一视图 + 后端分派接入；**ssh 统一增量**（design 21 §6.4）：已安装列表 remove、
   保留名拒绝（主进程 applyPlugins 侧，与 gateway 同集）、undo journal（主进程侧持久化 + 远端 package.json
-  变更前备份）、**readManifest 投影统一掩码**（决策 18：现 plugin_list 原样透传 raw，main.ts:2860-2870/
-  2903-2905；掩码常量/helper 已存在但无生产挂接——本步在模型层挂接并补测试）、恢复引导文案同权。
+  变更前备份）、**readManifest 投影统一掩码**（2026 audit 勘误：ssh 清单已挂接 redactRemotePluginManifest，
+  本地 LOCAL_PLUGIN_LIST 原样透传为已登记分歧（design 21 §1 决策 18 修订/§10③）；剩余 = 模型层 readManifest
+  收敛与本地掩码定夺，挂接时补测试）、恢复引导文案同权。
 - A 键表与文案家谱落地：partial/blocked/queue_busy/deferred 离线执行确认（“可能在你断开后自动执行”）/
   多用户中断（C 复用）/start 恢复自然语言成功文案（「已移除 X，实例已重新就绪」）/profile_corrupt 横幅/
   who-when tooltip（连接 label 级）。

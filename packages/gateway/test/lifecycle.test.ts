@@ -175,7 +175,6 @@ function config(stateDir: string): GatewayConfig {
   return {
     plane: { host: '127.0.0.1', port: 3000, stateDir, dshWorkspacePath: builtinWorkspace },
     auth: { kind: 'none' },
-    channels: { direct: false, ssh: false },
     corsOrigins: [],
     trustedProxies: [],
   }

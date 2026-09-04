@@ -274,7 +274,7 @@ override（未失效时）→ 内建锚（`--dsh-path` ?? `findDshWorkspace`）�
 ```
 idle → checking → available → downloading → installing → installed/pending
   →（下次启动）applying → applied | rollback | failed
-pending → [恢复内建]（清 pending）→ idle/checking
+pending → [恢复内建]（清 pending，放弃切换）→ idle/checking（2026 audit R4 注：pending 另允许 apply-now 立即执行切换，addendum §5.1；恢复内建仍是唯一"中止待应用切换"逃生口）
 applying → 回退连续失败 → 落内建树（终态）
 applied → 下一周期 checking；rollback/failed → 终态（回滚后可再选版本）
 任意态 → error（网络/校验/安装/探测失败，带 error 分支）
@@ -348,7 +348,7 @@ resourcesPath manifest；「激活 vX」= resolve 结果；「最新 vY」= regi
 3. **动作**（依状态切换）：`[更新到 vY]`（较新）/ `[回滚到 vZ]`（较旧）/
    `[恢复内建]`（清 override 含 pending）/ `[重启 dsh]`（见 8；运行中可用——
    applying/pending/checking/downloading/installing 拒绝；env 源不禁 restart）；
-   pending/applying 期间除 `[恢复内建]` 外禁用；选当前版本 = 无操作。
+   pending/applying 期间除 `[恢复内建]` 外禁用（apply-now 例外见 addendum §5.1——2026 audit R4 注）；选当前版本 = 无操作。
    （2026-12 追加：`[清理版本]` 常驻可清理入口、`[恢复回滚前数据]`、`[保留数据并
    恢复内建]` 为恢复行动行按钮集；状态/快照/磁盘布局两分支同构，快照与磁盘行移至
    段尾事实块（见 UI 修订注 D6-A）。）
@@ -395,8 +395,10 @@ round（plan 24）再修订——D6-A 用户拍板）**：
 - 「更新到/切换到 vX」仅在所选版本 ≠ **当前激活版本**时显示（与当前激活一致时是
   必然 no-op）；相位门控期间（downloading/installing/applying 等）按钮保留显示但
   禁用（忙碌副本「正在安装…」+ 进度条），local/gateway 两分支同口径；「恢复内建」
-  仅在激活 ≠ 内建版本时显示（保留 pending/applying/snapshot-failed 逃生口相位，
-  active/bundled 未知时保守显示）；「重启 dsh」移入版本选择行（暂态不可用时禁用
+  仅在激活 ≠ 内建版本时显示（local 分支的 pending/applying/snapshot-failed 展示性
+  逃生口随主进程 allowedActions 状态机裁决；gateway 分支 2026 audit R2 收窄——恢复门
+  只放行各自 retry/recover-metadata，restore-builtin 仅限普通 pending 与健康选择，
+  applying/snapshot-failed 等不再显示；active/bundled 未知时保守显示）；「重启 dsh」移入版本选择行（暂态不可用时禁用
   而非隐藏）；「清理版本」移入下方恢复行动行，保证版本选择主行（select + 更新到 +
   重启）任何 locale 下单行成立；
 - **「当前状态」h4 标题与 `dshRuntimeGroupStatus` 键删除**（状态事实行不带块标题直接
@@ -940,14 +942,14 @@ ready——就绪窗口可达 90s），进度与结果经 `GET /chamber/runtime/
 | `POST /chamber/runtime/retry-apply` | 恢复被中断的指针切换（swap-attempted）或快照失败（snapshot-failed）：清标志 → 重跑启动事务 → 干净时拉起 dsh（desktop retry-apply 对齐） |
 | `POST /chamber/runtime/retry-restore` | 从持久 journal 继续被中断的快照恢复（restore-half/restore-incomplete）：重跑启动事务续作 |
 | `POST /chamber/runtime/restart` | 受控重启 gateway 托管的 dsh 进程（§3.6 项 8：刷新插件挂载；指针不动、无快照/探针；ready 过渡订阅仅把权威状态转发给 runtime 管理器——2026-12 剥离后无 feature 面可 detach/attach）；202 接受、结果经 status().restart（running/ok/failed）+ operationError 轮询，resolve ≠ success |
-| `POST /chamber/runtime/start` | **停机恢复原语（design 21 决策 12，2026-12）**：仅 `stopped/error/restart-exhausted` 放行，受 canStartLocal/exposureQuarantine/单飞与 profile-write 栅栏守卫，**恢复门不可绕过**（recovery phase 与 phase-less `startupBlockedReason` 只开放各自 retry/restore-builtin）；202 + status().start（running/ok/failed）+ operationError 轮询（resolve ≠ success）；r1 恢复闭环（停机移除插件后回到可启动入口）与 connections 卡片「启动实例」入口同源 |
+| `POST /chamber/runtime/start` | **停机恢复原语（design 21 决策 12，2026-12）**：仅 `stopped/error/restart-exhausted` 放行，受 canStartLocal/exposureQuarantine/单飞与 profile-write 栅栏守卫，**恢复门不可绕过**（recovery phase 与 phase-less `startupBlockedReason` 只开放各自 retry，FATAL 只开放 recover-metadata；restore-builtin 仅限 pending/健康选择——2026 audit R2 收窄，与桌面 blocked 面一致）；202 + status().start（running/ok/failed）+ operationError 轮询（resolve ≠ success）；r1 恢复闭环（停机移除插件后回到可启动入口）与 connections 卡片「启动实例」入口同源 |
 | `GET/PUT /chamber/runtime/registry` | registry 源设置（owner-only 0600；URL 白名单校验同 §6；仅文件真实缺失时回默认 npmjs；损坏/符号链接/硬链接隔离保留并响亮失败；原子写，激活/安装期间禁止换源） |
 
 普通 `phase:'pending'` 是 core + route + 两套 UI 的一致终态门：除
 `restore-builtin` 外，select/apply/rollback/cleanup-version/restore-pre-rollback/
 recover-metadata/retry/restart/registry mutation 全部拒绝
 `409 runtime_pending`；snapshot-failed/swap-attempted/restore-half 等持久记录虽可能仍含
-pending，但属于显式 recovery phase，只开放各自 retry 与 restore-builtin，不能被普通
+pending，但属于显式 recovery phase，只开放各自 retry（restore-builtin 仅限 pending/健康选择——2026 audit R2 收窄），不能被普通
 pending 分支吞掉或被 select 清除。
 
 状态机 × 可见动作 × 文案矩阵沿用 §3.6 M4 口径；`/chamber/` 浏览器页提供

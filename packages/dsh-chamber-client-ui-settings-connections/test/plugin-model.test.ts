@@ -221,14 +221,10 @@ test('gateway: ok:false without partial reports 0 done / 0 total (nothing ran)',
 
 // ---------------------------------------------------------------------------
 // 3b. Apply-result normalization — ssh shape (plugin_apply union twin:
-// {ok:true,result}|{ok:true,cancelled:true}|{ok:false,error}; result reports
-// COUNTS only — applied/skipped/failed, never per-name success)
+// {ok:true,result}|{ok:false,error}; result reports COUNTS only —
+// applied/skipped/failed, never per-name success; no cancelled arm —
+// plugin_apply has no cancellation path, design 21 §10)
 // ---------------------------------------------------------------------------
-
-test('ssh: cancelled arm (the A confirmation-chain wrapper arm) maps to {cancelled:true}', () => {
-  const result: SshApplyShape = { ok: true, cancelled: true }
-  assert.deepEqual(classifySshApplyResult(result), { cancelled: true })
-})
 
 test('ssh: ok:true clean result executes with restarted/deferred passthrough; no name lists (counts-only result)', () => {
   const result: SshApplyShape = {

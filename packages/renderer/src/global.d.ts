@@ -377,10 +377,13 @@ export type SshConfigDiscovery =
   | { error: string }
 
 /** Host-graph seed outcome (design 13 §4.6): wrote = a module A file was written,
- *  patched = cordis.patch.yml gained the insert line. */
+ *  patched = cordis.patch.yml gained the insert line. No `{ok:true,
+ *  cancelled:true}` arm: the main-process seed handler has no confirmation
+ *  dialog or picker to dismiss (design 21 §10 — the ssh seed confirm gap is a
+ *  registered open item), so this union can never carry a user-cancelled
+ *  result (parity: preload.cts SshSeedHostGraphResult). */
 export type SshSeedHostGraphResult =
   | { ok: true; wrote: boolean; patched: boolean }
-  | { ok: true; cancelled: true }
   | { ok: false; error: string }
 
 /** Materialize-and-add outcome (design 13 §4.6). `cancelled` = the user dismissed

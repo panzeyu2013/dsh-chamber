@@ -57,6 +57,7 @@ import {
   MIN_GATEWAY_PASSWORD_CHARS,
   MIN_GATEWAY_TOKEN_CHARS,
 } from './config.ts'
+import { GATEWAY_SESSION_COOKIE_NAME, GATEWAY_SESSION_TTL_SECONDS, GATEWAY_TOKEN_VISIBLE_ASCII_PATTERN } from '@dsh-chamber/control-plane'
 
 export interface AuthPrincipal {
   kind: 'password' | 'token' | 'passkey' | 'none'
@@ -245,8 +246,11 @@ function parseCookie(header: string | undefined): Record<string, string> {
   return out
 }
 
-export const SESSION_COOKIE = 'dsh_gateway_session'
-const SESSION_TTL_SECONDS = 12 * 3600 // 12h
+/** The 12h session cookie name (design 17 §7.1) — shared wire-protocol
+ * single source (control-plane gateway-session-protocol.ts): the desktop
+ * login cache and the proxy injection gate use the same constant. */
+export const SESSION_COOKIE = GATEWAY_SESSION_COOKIE_NAME
+const SESSION_TTL_SECONDS = GATEWAY_SESSION_TTL_SECONDS // 12h, wire-protocol single source
 
 function validSessionExpiry(value: unknown, nowSeconds: number): value is number {
   // NumericDate is an integral epoch-second value. Keeping it inside the
@@ -453,7 +457,7 @@ function createTokenProvider(
         || value.length > prefix.length + MAX_GATEWAY_TOKEN_CHARS
         || value.slice(0, prefix.length).toLowerCase() !== prefix.toLowerCase()) return null
       const candidate = value.slice(prefix.length)
-      if (!/^[\x20-\x7e]+$/.test(candidate)) return null
+      if (!GATEWAY_TOKEN_VISIBLE_ASCII_PATTERN.test(candidate)) return null
       const admittedGeneration = generation()
       const stored = store.getTokenHash()
       if (stored === null) return null
@@ -735,7 +739,7 @@ function createDynamicAuthProvider(config: AuthConfig, store: GatewayStore, deps
           tokenValue = randomBytes(32).toString('base64url')
         }
         if (tokenValue.length < MIN_GATEWAY_TOKEN_CHARS || tokenValue.length > MAX_GATEWAY_TOKEN_CHARS
-          || !/^[\x20-\x7e]+$/.test(tokenValue)) {
+          || !GATEWAY_TOKEN_VISIBLE_ASCII_PATTERN.test(tokenValue)) {
           throw coded('bad_request', `new token must be ${MIN_GATEWAY_TOKEN_CHARS}-${MAX_GATEWAY_TOKEN_CHARS} visible ASCII characters`)
         }
       }
@@ -864,7 +868,7 @@ export function createAuth(
     throw new TypeError(`gateway password must be ${MIN_GATEWAY_PASSWORD_CHARS}-${MAX_GATEWAY_PASSWORD_CHARS} characters`)
   }
   if (hasToken && (config.token!.length < MIN_GATEWAY_TOKEN_CHARS || config.token!.length > MAX_GATEWAY_TOKEN_CHARS
-    || !/^[\x20-\x7e]+$/.test(config.token!))) {
+    || !GATEWAY_TOKEN_VISIBLE_ASCII_PATTERN.test(config.token!))) {
     throw new TypeError(`gateway token must be ${MIN_GATEWAY_TOKEN_CHARS}-${MAX_GATEWAY_TOKEN_CHARS} visible ASCII characters`)
   }
   seedCredentialsFromConfig(config, store, logger)

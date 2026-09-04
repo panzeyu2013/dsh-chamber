@@ -48,6 +48,18 @@ export function apply(ctx: ClientContext): void {
   const t = ctx.locale.bind(NS)
   const injected = (): ConnectionsSectionInjected => ({ t })
 
+  // NOTE (2026-12 audit D-5): this host-ctx (chamber boot ctx) settings.section
+  // ledger entry id 'connections' has NO renderer in any current shape — the
+  // desktop chamber settings shell always renders ConnectionsSection through
+  // its fixed nav id '__connections' (settings-bridge SettingsShell.tsx +
+  // nav-active.ts CONNECTIONS_SECTION_ID) and the shell's child-ctx ledgers
+  // (bridge-context mountBridgeSession) never mount this plugin. It is a
+  // leftover of the settings-shell nav rework (the section used to be a plain
+  // ledger row of the official settings page). Kept on purpose: removing it
+  // changes the host-ctx ledger shape, and if a future host-ctx ledger
+  // rendering path ever appears it would show a SECOND connections page next
+  // to the fixed one — delete this registration when that path is designed
+  // (the fixed '__connections' entry renders the same component).
   ctx.slots.inject('settings.section', () => ctx.slots.register({
     name: 'settings.section',
     id: 'connections',

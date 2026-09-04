@@ -23,8 +23,6 @@ import { request as httpRequest } from 'node:http'
 import { request as httpsRequest } from 'node:https'
 import type { ClientRequest, IncomingMessage } from 'node:http'
 import type { Socket } from 'node:net'
-import type { TLSSocket } from 'node:tls'
-import { createHash, X509Certificate } from 'node:crypto'
 import type { Duplex } from 'node:stream'
 import type { Logger } from './types.ts'
 import { startWsHeartbeat } from './ws-heartbeat.ts'
@@ -33,78 +31,20 @@ import { startWsHeartbeat } from './ws-heartbeat.ts'
 export const MAX_REQUEST_BODY_BYTES = 300 * 1024 * 1024
 
 // ---------------------------------------------------------------------------
-// SPKI certificate pinning (design 17 §13.4.2 / S23): an https-only optional
-// gate for gateway transports — the user pins the expected server
-// certificate's SPKI fingerprint and the reverse proxy rejects any peer
-// whose public key does not match (the identity probe side lives in the
-// desktop's gateway-provider.ts, with an identical copy of these helpers).
-//
-// Mechanism note (verified on Node 22.22.3): checkServerIdentity's error
-// return is silently IGNORED when `rejectUnauthorized: false`, and with
-// `rejectUnauthorized: true` an untrusted (internal-CA) chain fails BEFORE
-// checkServerIdentity runs — so neither combination can enforce a pin against
-// an internal CA. The pin check therefore runs on the TLS socket's
-// 'secureConnect' event with `rejectUnauthorized: false` (the pin alone
-// decides trust) and `agent: false` (every pinned request opens a fresh
-// connection, so 'secureConnect' always fires): a mismatch destroys the
-// request with SPKI_PIN_MISMATCH_CODE, which the caller's upstream 'error'
-// path turns into an explicit 502 upstream_failed.
+// SPKI certificate pinning (design 17 §13.4.2 / S23): shared single source in
+// spki-pin.ts — the desktop identity probe (gateway-provider.ts) and this
+// proxy core both import it through their own package boundaries, so the two
+// owners can never drift again (they used to carry byte-identical copies).
+// Re-exported here for the instance-proxy gate and existing importers.
 // ---------------------------------------------------------------------------
 
-/** A valid SPKI pin: exactly 64 hex chars (hex sha256 of the SPKI DER). */
-export const SPKI_PIN_PATTERN = /^[0-9a-fA-F]{64}$/
-
-/** Error code attached to the destroy() error of a rejected pin. */
-export const SPKI_PIN_MISMATCH_CODE = 'ERR_SPKI_PIN_MISMATCH'
-
-/** The hex sha256 of a peer certificate's SPKI DER (S23) — the digest the
- * user pins. `rawDer` is the peer certificate's DER (TLSSocket
- * getPeerCertificate().raw): X509Certificate exposes the KeyObject whose
- * SPKI export is the canonical fingerprint. */
-export function spkiPinOfPeerCertificate(rawDer: Buffer): string {
-  return createHash('sha256')
-    .update(new X509Certificate(rawDer).publicKey.export({ type: 'spki', format: 'der' }))
-    .digest('hex')
-}
-
-/** Attach the pre-write SPKI pin gate to an outbound https request (S23): on TLS
- * handshake completion the peer certificate's SPKI digest is compared
- * case-insensitively with the pinned value; a mismatch destroys the request
- * with SPKI_PIN_MISMATCH_CODE, while a match invokes `dispatch` exactly once.
- * The caller MUST NOT write/end the request anywhere else: this is what keeps
- * HTTP headers and bodies behind the authenticated handshake. Callers must
- * ALSO pass `rejectUnauthorized:
- * false` (the pin replaces CA trust for this connection — the internal-CA use
- * case) and `agent: false` (so 'secureConnect' always fires). MUST stay
- * byte-for-byte consistent with gateway-provider.ts's copy of this helper —
- * the packaged desktop cannot import the control plane (workspace TS sources
- * are excluded from the asar), so the two files keep identical
- * implementations. */
-export function attachSpkiPinVerifier(req: ClientRequest, pin: string, dispatch: () => void): void {
-  let dispatched = false
-  req.on('socket', (socket: NodeJS.Socket) => {
-    ;(socket as TLSSocket).once('secureConnect', () => {
-      let digest: string
-      try {
-        digest = spkiPinOfPeerCertificate((socket as TLSSocket).getPeerCertificate().raw)
-      } catch {
-        const error: NodeJS.ErrnoException = new Error('the gateway certificate could not be read for the SPKI pin check')
-        error.code = SPKI_PIN_MISMATCH_CODE
-        req.destroy(error)
-        return
-      }
-      if (digest.toLowerCase() !== pin.toLowerCase()) {
-        const error: NodeJS.ErrnoException = new Error('SPKI pin mismatch')
-        error.code = SPKI_PIN_MISMATCH_CODE
-        req.destroy(error)
-        return
-      }
-      if (req.destroyed || dispatched) return
-      dispatched = true
-      dispatch()
-    })
-  })
-}
+export {
+  attachSpkiPinVerifier,
+  spkiPinOfPeerCertificate,
+  SPKI_PIN_MISMATCH_CODE,
+  SPKI_PIN_PATTERN,
+} from './spki-pin.ts'
+import { attachSpkiPinVerifier } from './spki-pin.ts'
 
 /** Response body cap for non-SSE responses (design 03 §3.4; aligned with the upstream dsh 0.1.2-alpha.4 300MiB request cap / 200MiB image admission). */
 export const MAX_RESPONSE_BODY_BYTES = 300 * 1024 * 1024

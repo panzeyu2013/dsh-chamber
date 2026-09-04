@@ -24,9 +24,9 @@ test('anonymous control-plane cannot opt into a network bind with only a permiss
   }), /HTTP\/upgrade middleware/)
 })
 
-function get(port: number, path: string, headers: Record<string, string>): Promise<{ status: number; headers: Record<string, string | string[] | undefined>; body: string }> {
+function get(port: number, path: string, headers: Record<string, string>, method: 'GET' | 'OPTIONS' | 'HEAD' | 'POST' = path === '/chamber/settings' ? 'OPTIONS' : 'GET'): Promise<{ status: number; headers: Record<string, string | string[] | undefined>; body: string }> {
   return new Promise((resolve, reject) => {
-    const req = httpRequest({ host: '127.0.0.1', port, path, method: path === '/chamber/settings' ? 'OPTIONS' : 'GET', headers }, res => {
+    const req = httpRequest({ host: '127.0.0.1', port, path, method, headers }, res => {
       const chunks: Buffer[] = []
       res.on('data', chunk => chunks.push(Buffer.from(chunk)))
       res.on('end', () => resolve({ status: res.statusCode ?? 0, headers: res.headers, body: Buffer.concat(chunks).toString('utf8') }))
@@ -98,6 +98,16 @@ test('public Host health/preflight pass while an unknown authority is rejected',
     })
     assert.equal(health.status, 200)
     assert.equal(health.headers['access-control-allow-origin'], 'http://gateway.example:3000')
+
+    // HEAD /health is public like GET /health (isPublicRequest exempts both)
+    // and must reach the plane's 200 twin, not a 404 — the full chain from
+    // the gateway boundary through the auth gate to api.handle.
+    const head = await get(plane.port!, '/health', {
+      host: 'gateway.example:3000',
+      origin: 'http://gateway.example:3000',
+    }, 'HEAD')
+    assert.equal(head.status, 200)
+    assert.equal(head.body, '', 'HEAD /health carries no body')
 
     const rejected = await get(plane.port!, '/health', { host: 'attacker.example' })
     assert.equal(rejected.status, 421)

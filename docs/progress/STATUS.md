@@ -312,8 +312,9 @@
     - S0：gateway 代理出口对托管 dsh 的 HTML 注入 `__DSH_TRANSPORT__.ownsHost`
       （上游文档化钩子契约），解除官方设置页在非 loopback 页面上的
       memory 持久化门控（"settings are unavailable in this browser"）——网页直连
-      settings/models/插件可用；**取代 design 17 §10.5「gateway 不绕过」旧表述**，
-      文档待同步；属"能登录即受信"的信任边界决策（auth 门在先，非鉴权绕过）。
+      settings/models/插件可用；**2026 audit 勘误：design 17 §10.5 已含 S0 全文
+      （≤64KiB/identity/fail-soft/钩子契约），本行「文档待同步」已过期**；属
+      "能登录即受信"的信任边界决策（auth 门在先，非鉴权绕过）。
     - S2：control-plane 对**非 loopback 上游腿**（direct-http(s)，含 gateway 与
       dsh 两种 kind；判别轴为解析后目标的 host 而非来源 id——ssh 隧道恒为
       loopback 本地腿）启用 OS 级 TCP keepalive（30s，对齐 ssh
@@ -417,8 +418,12 @@
    清除入口仅本地（`dsh-chamber:runtime-clear-failure` trustedIpc + 共享核心 `clearRuntimeFailure`；
    gateway 无对应清除路由，偏差登记）。
   残余登记（有意保留）：desktop SETTINGS_SET 在 env 下允许更换 registry（设计文字
-  禁，代码行为有意更宽）；restore-builtin × restore-half 逃生集 desktop 更保守
-  （先 retry-restore）而 gateway 沿用设计允许集；registry 白名单形状 desktop
+  禁，代码行为有意更宽）；~~restore-builtin × restore-half 逃生集 desktop 更保守
+  （先 retry-restore）而 gateway 沿用设计允许集~~（**2026 audit R2 修订**：gateway 恢复期
+  已与桌面对齐收窄——swap-attempted/snapshot-failed/restore-blocked/FATAL 只开放各自
+  retry 与 recover-metadata，restore-builtin 仅限 pending/健康选择；原因：共享核心对
+  armed reset 在持久恢复标记下必然复阻，旧矩阵格不可执行且失败会残留 armed reset
+  intent 劫持后续 retry 语义）；registry 白名单形状 desktop
   https-only、gateway 允许 http-loopback（共享 canonical 更宽，桌面层收紧）；
   desktop 15s+6h 周期检查不移植 gateway（避免周期出网；进页拉取 + 手动检查）；
   gateway 组件级交互仍以纯函数/API 客户端测试代证（原实机门禁项维持）。
@@ -437,13 +442,158 @@
 - **2026-12 review 轮次修复与登记（设计 18 §9.3 配套）**：① FATAL 启动块下所有普通
   mutation 拒绝（路由 recovery-gate 增 startupBlockedReason 门，仅放行各自恢复面）；
   ② FATAL×stale-pending 相位投影为 idle+startupBlockedReason（恢复面不被 pending
-  门锁死，canRecoverMetadata 与路由可达一致）；③ boot 前 `metadataRecoveryPending()`
+  门锁死——**2026 audit R3 勘误**：原登记「canRecoverMetadata 与路由可达一致」不成立——
+  路由 gate 在 blockedReason 分支放行后落穿 pending 门，recover-metadata 曾被 409
+  runtime_pending 拒、restore-builtin 又被 block 分支拒 → 恢复面全锁死；R3 修复为
+  block 分支 allowed 即早退 return null（block outranks pending，pending 分支仅
+  blockedReason===null 时生效），fake 与 real manager 两层测试补钉）；③ boot 前 `metadataRecoveryPending()`
   预检——引擎归档元数据后 gateway 重启不再绕过探针门直接以内建服务 DSH_HOME；
   ④ recover 成功后 resume-start 失败转入 `metadata-start-failed` 哨兵（可重试）；
   ⑤ store-prune 标记在 boot 边界消费（desktop 同款语义）；⑥ 徽标/registry 编辑复位/
   versions 内嵌 error/恢复行 window.confirm/blocked 原因行等 review 项已修。
   登记（有意保留）：desktop main.ts 的 RUNTIME_RESTART 等 handler 内联无单测
-  （renderer 镜像 + lockstep 代证；抽取纯函数排期）；env×FATAL（dormant corrupt
-  selection）gateway 死锁需清 env（共享 `shouldProbeEnvWithDormantCorruptSelection`
-  通路未移植，登记）；`status()` 每次轮询跑 metadata health 检测无缓存（小文件读，
-  TTL 排期）；metadata 恢复期 pnpm prune 子进程不可 abort（退出延迟登记）。
+  （renderer 镜像 + lockstep 代证；**2026 audit 勘误**：非「抽取纯函数排期」——apply-now
+  门已抽为 apply-now-gate.ts 且有测试，其余 handler 内联仍无单测）；env×FATAL（dormant
+  corrupt selection）预路由 `shouldProbeEnvWithDormantCorruptSelection` 为 desktop 独有
+  （gateway env pin 经共享核心 env-override 分支等效处理；**A-U2 已补**：gateway env-override
+  启动现跑激活探针门，失败 → `env-probe-failed` 停机阻塞，见下段 audit 块）；
+  `status()` 的 metadata health 检测无缓存（小文件读；**磁盘投影已有 30s TTL 缓存**——
+  DISK_CACHE_TTL_MS，原「TTL 排期」措辞仅指 metadata health，范围限定）；metadata
+  恢复期 pnpm prune 子进程不可 abort（退出延迟登记）。
+
+## 2026 分域一致性审计（desktop vs gateway，5 域 60+ 项）验证与修复轮
+
+> 对审计清单逐条只读复核（A/C/B/E/D 五域独立核验 + 主代理抽验），18/19 项 A-F、
+> 14/15 项 C-F、13/13 项 B、9/9 项 D-1..D-7、10 项 E-1..E-17（E-5/E-7/E-17 由主代理
+> 复核）与清单相符（PARTIAL 6：A-F4/C-F2/D-6 措辞/E-2/E-8/E-13 精确化）。本块登记
+> 「修复了什么、确认属实但按现有登记收口、新登记开放项」。验证与测试计数见各条目。
+
+**已修复（本工作树，测试绿；详见 CHANGELOG 待并入）**
+- E-7（P1，高）：desktop plugin-tarball.ts 核算改为与 gateway tgz-scan 完全同式
+  （512 头 + padded 数据 + 1024 端标记预占），消除「desktop 放行、网关 400 too_large」
+  ~254–256MiB 窗口；新增 2 回归测试（含真实调用 gateway scanTgzMetadata 的跨形状
+  一致性断言）。desktop plugin-tarball 15/15。
+- A-U1（P1，中）：共享核心新增 `pruneRuntimeSnapshots` 组合（cleanupSnapshotArtifacts
+  → retention → pruneSnapshots，blocked-marker/retention-corrupt fail-closed 语义内聚）；
+  desktop main 收敛为栅栏 + 组合调用（行为不变）；**gateway runtime-manager 每次启动
+  事务尾部（boot/apply-now/restore-builtin/F7 全经 executeStartupTransaction）执行同一
+  组合**——gateway 从此有快照保留裁剪（keepRecent 3），不再无上限累积。snapshot-store
+  32/32（新增组合测试）、runtime-routes 103/103。
+- A-U2（P1，中低）：gateway env-override（DSH_GATEWAY_DSH_PATH）启动不再直接归一
+  健康——现于 executeStartupTransaction 内对 env 运行时执行激活探针门（hostDomains
+  shape gate 与受管树探针同款），失败 → `env-probe-failed` 停机阻塞 + 状态投影 +
+  index.ts 组合边界处理（无恢复路由：修 env 目标后重启 gateway）；2 新测试。
+- E-5/E-17（P1，高）：会话信任链常量收敛到 control-plane 新单源
+  `gateway-session-protocol.ts`（cookie 名/TTL 12h/cookie 值 4096/Bearer 32–4096
+  visible-ASCII/密码 12–1024）+ `spki-pin.ts`（SPKI 探针/转发双消费方单源，desktop
+  双份副本删除、经 dual-path facade 引用）；gateway auth/config 与 instance-proxy 门
+  全部改引共享常量（本地名保持别名）。跨侧漂移由导入关系机械消除。
+- A-U4（P3，低）：gateway restore-builtin 补 hasOverride 前置
+  （`runtime_no_override` 409，无 override 不再制造无谓停机+快照）+ 路由 recovery-gate
+  （FATAL 阻塞时 restore-builtin 回到 recover-metadata 面，与桌面 blocked 面一致）。
+  **R2 扩展（2026 audit 第二轮复审）**：恢复期矩阵进一步与桌面收窄——swap-attempted/
+  snapshot-failed/restore-blocked 相位及对应 phase-less blockedReason 只开放各自 retry
+  （route gate + manager 直调双重收口：manager.restoreBuiltin 前置守卫覆盖 durable swap/
+  snapshot 标记、restore marker、journal/pointer/override corrupt 与内存块，任何 stop 或
+  intent 写入之前拒绝）；manager restorePreRollback 'complete' 分支仅当 resume 判决干净
+  才清块（restore-pre-rollback/retry-restore 的 env-probe-failed 或 FATAL resume 判决不再
+  被吞）；env-probe-failed 路由拒绝文案给出显式无恢复路由指引；新增 3 回归测试
+  （durable guards / env-probe-failed resume / gate 矩阵）+ runtime-routes 106/106。
+- B-6c：control-plane /health 现接受 HEAD（监控探针 200，与 auth 门豁免注释一致）；
+  新增 manager-api 与 public-http 全链断言。
+- B-6e：新增 control-plane html-inject-lockstep 测试（64KiB 双常量文本锁步）。
+- B-6a/6d/6f：dispatch/middleware 失效「§11 S14」引用改自述；gateway config.ts 删除
+  死字段 channels{direct,ssh}（类型+赋值，零消费者零断言）；/api/i/local 双路同达 +
+  远端 id 恒 503 结构事实补注释（含两路 CSP/注入文档面不等价注明）。
+- C-F4：desktop_local_plugin_add_file 现传 allowFileSpec:true——本地文件夹直装可用
+  （设计 21 §10 缺陷①闭环；渲染层提交通道仍拒 file:，安全边界不变）。
+- C-F5：删除 `{ok:true,cancelled:true}` 死成员（PluginApplyResult2/SshApplyShape/
+  SshSeedHostGraphResult 及对应死分支与测试断言；ssh undo/local add-remove/materialize
+  pick/gateway apply 的真实 cancelled 保留）；ipc-surface-mirror 增补
+  SshSeedHostGraphResult 漂移护栏。
+- D-2 部分：gateway 浏览器运维页补「Start dsh」按钮（RUNTIME_PATHS.start；门控镜像
+  服务端 /start 路由 stopped/error/restart-exhausted + 非 blocked），消除停机态
+  Restart 409 死胡同文案；dashboard 仍为独立第三份运行时 UI（不共享 sidebar 核心）
+  ——共享核心迁移登记为开放项（下）。
+- D-3：ambient RemoteRuntimeStatus 注释 30→33 字段；settings-bridge 的
+  ChamberServerAggregate workspaces 镜像补齐 `synthetic?: boolean`（2026 audit 复核：
+  renderer vendor-modules.d.ts 与 git ambient sidebar-shared.d.ts **早已含**该字段——
+  commit 874df40；settings-bridge ambient 是最后补齐者，无遗留待补镜像）。
+- D-4/D-5：settings-connections 'connections'(order 30) 宿主 ctx 死注册分析落注释
+  （固定 '__connections' 直渲，未来宿主 ledger 渲染路径出现即双份，届时删注册）；
+  DshRuntimeSection 多用户中断文案归口注释（CS 卡 Modal 为准）。
+- A-F1/A-F13：4 元 FATAL 阻塞集收敛 dsh-runtime `FATAL_STARTUP_BLOCK_REASONS`
+  （desktop main / gateway index FATAL_RUNTIME_BLOCKS / manager RECOVERABLE_METADATA_BLOCKS
+  同源）；10GiB 磁盘软限收敛 dsh-runtime `RUNTIME_LOGICAL_DISK_LIMIT_BYTES`（两 owner
+  常量名保持为别名导出）。
+- 文档纠偏：design 21 §1 决策 18 与 §2.3 陈旧段（ssh 已掩码、PIV 非只读、gateway add
+  入口缺失为开放项）、§6.9/plan 4.2 的 blocked 上限 5min → 120s（CAN_RUN_WAIT_MAX_MS）；
+  STATUS S0「文档待同步」与 RUNTIME handler「抽取纯函数排期」过期措辞修订。
+
+**新登记开放项（核实属实、未做行为修复或归口后续）**
+- **R3 遗留登记**：~~运行中静默损坏（无内存块/boot 判决）时 status() 将 resolveWorkspace
+  自由文本投影为 startupBlockedReason——gate 视其为未知 sentinel 全路由 409（含
+  recover-metadata），重启 gateway 可恢复~~（**2026 audit R4 修订**：路由 gate 现按
+  status 的权威 canRecoverMetadata 归类——漂移态 recover-metadata 可达（200，探针 +
+  108 测试钉死：real-manager 中运行 current 损坏 + route recover 200 并治愈），其余
+  mutation 409 且文案指向「only recover-metadata is allowed」；无恢复面提示的未知文本
+  保持 fail-closed 并加「restart the gateway if this persists」指引）；并发 retry 撞在途
+  事务时 runtime_pending 文案误导（拒绝对、文案属罕见竞态，登记）；三 UI 面与 R4 门对齐
+  （见 R4 登记块）。
+- **R4 复审修复与登记（第四轮全量复审，两代理零 MAJOR 复证、一代理 2+1 已修复）**：
+  F1——恢复相位线上与 startupBlockedReason 共投影，sidebar 镜像/dashboard 曾把共投影
+  reason 再折入 retry 禁用（匹配 retry 死钮）：retry 门改用 phase 为权威选择器（仅
+  busy/env/read-only 禁用），测试补共投影夹具（swap/restore/snapshot 相位 retry 开启）；
+  F2——FATAL 元数据块的 recover-metadata 行曾被 mutationDisabled 恒禁：新增共享门成员
+  recoverMetadataDisabled（canRecoverMetadata 时开启），settings 行改用该成员，dashboard
+  无 recover 控件（登记表面缺口）；M1——plugin-diff UI 分类器补 x-wildcard 拒绝（与主
+  进程 plugin-sync 同语义 + 钉值测试）；UI 矩阵逐格复核对齐（pending 逃生、FATAL+pending
+  全禁仅 recover 开、env-probe-failed 全禁）。登记项：connections 卡 Start/Restart 仅看
+  隧道+connectionState、恢复相位/blocked 下点亮收服务端诚实 409（既有 over-offer，登记）；
+  202 路由跨客户端竞态下同步前缀拒绝不投影 operationError（单客户端 UI 单飞不自触发）；
+  codeToStatus 无 runtime_disposed 兜底 500（窄竞态）；pending 拒绝文案未提 apply-now 同
+  为逃生口（复制级 MINOR）；dashboard 无 recover/cleanup/pre-rollback 控件（表面缺口）；
+  ipc-surface-mirror 仅锁 preload↔renderer（main 侧无静态绑定）；Windows file: 反斜杠
+  直装路径无 e2e（响亮 ok:false，无安全影响）。
+- C-F6（中）：gateway 第三方「添加」桌面 UI 无入口——PIV 恒 add:[]、materialize IPC
+  渲染层零调用；与 design 21 决策 2 冲突（§10 ⑥已有「双面未合体」登记，add 入口
+  缺失本块补点名；UI 闭环列二期）。
+- C-F7（中）：undo 语义不对称——ssh「撤销=恢复」（remove/upgrade 可恢复、指纹绑定）
+  vs gateway v1 undoForLatest 仅最新 ok install→remove；服务端 preImage 备份无运行时
+  恢复消费方（§6.8 r2-r4 列二期）。
+- C-F8（低中）：GET /chamber/plugins/installed 裸读未入写栅栏（plugins-installed.ts
+  自注释承诺随 A1 executor 落地实现；现撕裂读仅 loud 500——修复列入写面后续）。
+- C-F9/C-F11：批量容量三档（ssh ≤64 行 vs gateway IPC 20+20/200 字符 vs 服务端队列
+  ≤8）与双份常量族（journal 50 双份/50MiB 本地重声明/SEED_FILES 注释名过期/2000B vs
+  2048 字符）——逐项核实，无行为修复（登记）。
+- C-F12（低）：desktop 本地 plugin add 子进程 env 未 scrub（gateway executor 与共享
+  runtime installer 已白名单化）——desktop 侧接线列后续。
+- C-F13：readManifest 三后端形状无共享联合（design 21 §3「单一定义」措辞未兑现，
+  已核实的模型层挂接路径）；C-F1（掩码常量双份+单向文本锁步）、C-F3（ssh 确认链
+  缺口开放项维持）、C-F10 文档已纠。
+- E-3（高，P2 排期）：私有文件纪律三实现——cp private-file.ts（抛错式）/ dsh-runtime
+  private-fs.ts（kind 结果式）同名 readPrivateFileNoFollow 异签 + desktop 三处弱化
+  原子写（固定 .tmp 无 O_EXCL/父 fsync/.bak）；统一路线（cp 版协议下沉共享或 desktop
+  收编）未排期，登记防静默迁移混淆。
+- E-8（高）：有界输出族值表（journal 64KiB vs 256KiB 系不同工件、同包 deferred 64KiB
+  自洽；2000B vs 2048 字符；exec 512KiB vs 安装 64KiB）逐值核实登记，跨侧统一未排期。
+- E-4/E-2/E-10（中）：audit serialize/WRITTEN_FIELDS/5MiB 逐字双份（appendAuditEvent
+  签名异）；sanitize 四成员语义矩阵（core 删路径段 → desktop 保 URL / gateway 再删
+  query、route 注释「not exported」过期已随本块修订；installer 缩到 origin+[redacted]）；
+  win-probes/windows-process 孪生互注 sibling-parity、无机械锁步——对拍/锁步测试排期。
+- E-12/E-13/E-14/E-16（低中）：状态字面量族零 pin（SshPhase 5 值/NotificationKind
+  'test'/12-phase 静态表/metadataHealth 6 值跨 6 包；runtime kind 常量 5 源值同名异、
+  routes.ts 模板内内联逃逸常量体系；sidebar instance-api 信封第 4 份无字节 pin；轮询
+  数值靠注释互许）——plugin-spec-lockstep 式文本锁步复用排期。
+- D-1（高）：PSM 1252 行（wc -l）vs PIV 854 行 9 类重复未合体（§10⑥/本 STATUS「统一单组件
+  双后端合体未做」登记维持；PIV sourceId 前缀推导与 runtime-source 原则不同构，
+  本块补点名）。
+- D-2 剩余：dashboard 不共享 sidebar parse/poll 核心、错误文案双映射——共享核心
+  迁移列后续（start 入口本块已补）。
+- A-U3（低）：registry 变更门不对称——desktop SETTINGS_SET 无 busy/pending/env 门
+  （env 维度有意放行为既有登记，busy/pending 维度未上锁；gateway PUT /registry 全拒
+  env + assertNoPending + assertMutationIdle）——desktop 侧门对称列后续决策。
+- A-F16（低）：DSH_HOME 布局默认值偏 desktop（userData/state/dsh-home vs gateway
+  stateDir/dsh-home）——共享默认注释已言明，新登记防未来共享代码推导点忘传参会错读。
+- A-F14/A-F10/F7 等 wire 形状/周期/哨兵差异：均为设计内形态差异，按上列既有登记
+  收口（snapshot-failed 两侧同款非阻塞存活补证）。

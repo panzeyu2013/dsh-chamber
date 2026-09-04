@@ -6,6 +6,16 @@
  * control-plane's per-instance proxy (shared `proxy-forward.ts`, design 17
  * §6.2 方案 A). Unlike instance-proxy, there is no `/api/i/<id>` prefix and no
  * transports table: the target is always the managed local dsh.
+ *
+ * Structural shape fact of this deployment: this root mount and the
+ * control-plane `/api/i/local/*` alias (claimed by dispatch.ts after the auth
+ * gate) are the TWO forwarding paths to the SAME managed dsh — the gateway
+ * never registers instance transports, so dsh-/gateway-/ssh- prefixed
+ * instance ids are a constant 503 'no transport is available for this
+ * instance' here. The two paths are not document-equivalent for browsers:
+ * this proxy carries GATEWAY_PROXY_CSP (unsafe-inline) plus the S0 trust
+ * declaration, while /api/i/local/* keeps the control-plane shell's nonce CSP
+ * and no trust injection (known divergence, deliberately unchanged).
  */
 
 import type { Duplex } from 'node:stream'

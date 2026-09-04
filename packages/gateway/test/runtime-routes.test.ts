@@ -9,7 +9,7 @@ import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { chmodSync, existsSync, linkSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, basename, join } from 'node:path'
 import { EventEmitter } from 'node:events'
 import { createRequire } from 'node:module'
 import type { ApiRequest, ApiResponse, Logger, PlaneHandle } from '@dsh-chamber/control-plane'
@@ -30,6 +30,7 @@ import {
   writeActivationJournal,
   writeCurrentPointer,
   writeOverride,
+  stashPreRollback,
   type ActivationJournal,
 } from '@dsh-chamber/dsh-runtime'
 import { createRuntimeRoutes, sanitizeRouteError, type RuntimeRoutes } from '../src/runtime-routes.ts'
@@ -56,7 +57,6 @@ function config(stateDir: string): GatewayConfig {
   return {
     plane: { host: '127.0.0.1', port: 3000, stateDir, dshWorkspacePath: anchor },
     auth: { kind: 'none' },
-    channels: { direct: false, ssh: false },
     corsOrigins: [],
     trustedProxies: [],
   }
@@ -449,6 +449,83 @@ test('real manager: recoverMetadata finalizes on ok probes and brings the builti
     else process.env.DSH_GATEWAY_DSH_PATH = oldEnv
     rmSync(stateDir, { recursive: true, force: true })
   }
+})
+
+test('mid-run metadata drift: recover-metadata opens through the free-text block (status/UI/route consistency, 2026 audit R4)', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-drift-recover-'))
+  const oldEnv = process.env.DSH_GATEWAY_DSH_PATH
+  try {
+    delete process.env.DSH_GATEWAY_DSH_PATH
+    mkdirSync(join(stateDir, 'dsh-runtime'), { recursive: true })
+    // A healthy selection whose CURRENT pointer then rots MID-RUN (no boot
+    // verdict since the corruption): status projects the resolution error
+    // text AND reports canRecoverMetadata — the route gate must classify by
+    // the flag, not the free text (the old gate refused the very recovery
+    // route it advertised, locking every mutation until a gateway restart).
+    writeOverride(stateDir, {
+      shellVersion: gatewayPackageVersion, chosenVersion: '1.0.0', resolvedVersion: '1.0.0',
+      pending: null, swapAttempted: false,
+    })
+    writeFileSync(join(stateDir, 'dsh-runtime', 'current'), '{corrupt', { mode: 0o600 })
+    const home = join(stateDir, 'dsh-home')
+    mkdirSync(home, { recursive: true })
+    writeFileSync(join(home, 'settings.json'), '{"source":"preserved"}')
+    const order: string[] = []
+    const plane = fakePlane({
+      stopLocal: async () => { order.push('stop') },
+      startLocal: async () => { order.push('start') },
+    })
+    plane._state.connectionState = 'ready'
+    const manager = createGatewayRuntimeManager({
+      config: config(stateDir),
+      plane,
+      logger: silentLogger,
+      probeCandidate: async () => probeResultsFor(stateDir).map(name => ({ name, ok: true })),
+    })
+    const before = await manager.status()
+    assert.equal(before.phase, 'idle')
+    assert.match(before.startupBlockedReason ?? '', /current pointer is corrupt/, 'the drift surfaces as a free-text block')
+    assert.equal(before.canRecoverMetadata, true, 'the projection advertises the recovery route')
+
+    const routes = createRuntimeRoutes(() => manager, silentLogger)
+    const refused = await runRoute(routes, 'POST', '/chamber/runtime/select', JSON.stringify({ version: '1.0.0' }))
+    assert.equal(refused.status, 409)
+    assert.equal((refused.json as { code: string }).code, 'runtime_recovery_required')
+    assert.match((refused.json as { error: string }).error, /only recover-metadata is allowed/, 'the refusal names the real open route')
+    const recovered = await runRoute(routes, 'POST', '/chamber/runtime/recover-metadata')
+    assert.equal(recovered.status, 200, 'recover-metadata is reachable through the free-text block (R4)')
+
+    const after = await manager.status()
+    assert.equal(after.startupBlockedReason, null, 'a finalized recovery clears the drift block')
+    assert.equal(after.canRecoverMetadata, false)
+    assert.equal(after.activeVersion, TEST_BUILTIN_VERSION, 'recovery finalizes onto the builtin anchor')
+    assert.equal(after.source, 'builtin-anchor')
+    assert.ok(order.indexOf('start') > order.indexOf('stop'), 'the verdict winner starts only after the transaction')
+    assert.equal(readFileSync(join(home, 'settings.json'), 'utf8'), '{"source":"preserved"}')
+    await manager.dispose()
+  } finally {
+    if (oldEnv === undefined) delete process.env.DSH_GATEWAY_DSH_PATH
+    else process.env.DSH_GATEWAY_DSH_PATH = oldEnv
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('gate: recover-metadata opens when canRecoverMetadata is projected under a pending with no block text (R4 drift variant)', async () => {
+  const calls: string[] = []
+  const manager = {
+    status: () => ({ phase: 'idle', pending: '1.1.0', startupBlockedReason: null, canRecoverMetadata: true }),
+    mutationInProgress: () => false,
+    select: async () => { calls.push('select'); return { accepted: true } },
+    recoverMetadata: async () => { calls.push('recover'); return { accepted: true } },
+  }
+  const routes = createRuntimeRoutes(() => manager as never, silentLogger)
+  const recovered = await runRoute(routes, 'POST', '/chamber/runtime/recover-metadata')
+  assert.equal(recovered.status, 200, 'corrupt metadata under an armed pending must not hide recover-metadata behind the pending gate')
+  assert.deepEqual(calls, ['recover'])
+  const select = await runRoute(routes, 'POST', '/chamber/runtime/select', JSON.stringify({ version: '1.1.0' }))
+  assert.equal(select.status, 409)
+  assert.equal((select.json as { code: string }).code, 'runtime_pending')
+  assert.deepEqual(calls, ['recover'], 'ordinary mutations stay refused by the pending terminal gate')
 })
 
 test('gateway runtime ownership fails closed when dsh-runtime root is a symlink', () => {
@@ -1009,7 +1086,8 @@ test('apply-now route matrix: 202 with pending, 409 recovery/busy/env/read-only/
   assert.equal((ok.json as { version: string }).version, '1.0.0', 'the 202 body carries the preflighted target')
   assert.equal(applyNowCalls, 1)
 
-  // Recovery phases refuse apply-now (only their exact retry + restore-builtin).
+  // Recovery phases refuse apply-now (only their exact retry; restore-builtin
+  // applies to pending/healthy selections only — 2026 audit R2).
   for (const recoveryPhase of ['snapshot-failed', 'swap-attempted', 'restore-blocked']) {
     phase = recoveryPhase
     const recovery = await runRoute(routes, 'POST', '/chamber/runtime/apply-now')
@@ -2030,7 +2108,7 @@ test('applyNow rolled-back runs the rolled-back version and projects operationEr
   }
 })
 
-test('env override is a healthy startup bypass: pending is deferred without blocked/error status', async () => {
+test('env override is a healthy startup bypass after the activation probe gate (A-U2 parity)', async () => {
   const previous = process.env.DSH_GATEWAY_DSH_PATH
   process.env.DSH_GATEWAY_DSH_PATH = '/tmp/env-dsh'
   const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-env-pending-'))
@@ -2040,6 +2118,10 @@ test('env override is a healthy startup bypass: pending is deferred without bloc
       config: config(stateDir),
       plane: fakePlane(),
       logger: { log() {}, warn() {}, error(message) { errors.push(String(message)) } },
+      // Desktop parity: env boot only opens after the activation probe set
+      // passes against the env runtime. Tests inject the closed probe set
+      // (the same seam managed-tree activations use).
+      probeCandidate: async () => probeResultsFor(stateDir).map(name => ({ name, ok: true })),
     })
     writeOverride(stateDir, { shellVersion: gatewayPackageVersion, chosenVersion: '1.0.0', resolvedVersion: '1.0.0', pending: '1.0.0', swapAttempted: false })
     assert.deepEqual(await manager.startupTransaction(), { blockedReason: null })
@@ -2054,6 +2136,230 @@ test('env override is a healthy startup bypass: pending is deferred without bloc
     if (previous === undefined) delete process.env.DSH_GATEWAY_DSH_PATH
     else process.env.DSH_GATEWAY_DSH_PATH = previous
     rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('env override probe failure keeps the managed dsh stopped with an honest blocked verdict (A-U2 parity)', async () => {
+  const previous = process.env.DSH_GATEWAY_DSH_PATH
+  process.env.DSH_GATEWAY_DSH_PATH = '/tmp/env-dsh'
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-env-probe-fail-'))
+  const errors: string[] = []
+  try {
+    const stopped: string[] = []
+    const manager = createGatewayRuntimeManager({
+      config: config(stateDir),
+      plane: fakePlane({
+        stopLocal: async () => { stopped.push('stopLocal') },
+      }),
+      logger: { log() {}, warn() {}, error(message) { errors.push(String(message)) } },
+      // One probe fails: the env runtime answered the plane health check but
+      // lacks a required feature — desktop would refuse to open the gate too.
+      probeCandidate: async () => probeResultsFor(stateDir).map((name, index) => ({ name, ok: index !== 0 })),
+    })
+    const startup = await manager.startupTransaction()
+    assert.equal(startup.blockedReason, 'env-probe-failed')
+    assert.ok(stopped.includes('stopLocal'), 'the probe-left env process is stopped before exposure')
+    const status = await manager.status()
+    assert.equal(status.phase, 'idle')
+    assert.equal(status.startupBlockedReason, 'env-probe-failed')
+    assert.equal(status.source, 'env')
+    assert.equal(status.operationError?.includes('env runtime activation probes failed'), true)
+    assert.ok(errors.length >= 1 && errors[0].includes('env-override runtime activation probes failed'), 'probe failure is logged loudly')
+    await manager.dispose()
+  } finally {
+    if (previous === undefined) delete process.env.DSH_GATEWAY_DSH_PATH
+    else process.env.DSH_GATEWAY_DSH_PATH = previous
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('restore-builtin refuses without an override and route-gates FATAL blocks (A-U4 desktop parity)', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-restore-no-override-'))
+  const previous = process.env.DSH_GATEWAY_DSH_PATH
+  try {
+    delete process.env.DSH_GATEWAY_DSH_PATH
+    const manager = createGatewayRuntimeManager({ config: config(stateDir), plane: fakePlane(), logger: silentLogger })
+    // No override → the builtin anchor is already authoritative: refusing
+    // avoids a pointless stop → snapshot → probe cycle (desktop only offers
+    // reset-builtin when hasOverride).
+    await assert.rejects(manager.restoreBuiltin(), { code: 'runtime_no_override' })
+    // The route answers the same refusal as a 409 (not a 500).
+    const routes = createRuntimeRoutes(() => manager, silentLogger)
+    const refused = await runRoute(routes, 'POST', '/chamber/runtime/restore-builtin', '{}')
+    assert.equal(refused.status, 409)
+    assert.equal((refused.json as { code: string }).code, 'runtime_no_override')
+    // With a real override the escape stays open when no block is armed…
+    writeOverride(stateDir, { shellVersion: gatewayPackageVersion, chosenVersion: '1.0.0', resolvedVersion: '1.0.0', pending: null, swapAttempted: false })
+    // …but a BOOTED FATAL metadata block route-gates it to its own recovery
+    // surface instead of running a blind reset against corrupt authority.
+    // Fixture (review fix): corrupt the journal FIRST, then run a real
+    // startup transaction so the manager arms its in-memory FATAL block —
+    // the route gate reads status().startupBlockedReason, which is that
+    // memory verdict, not a disk re-read.
+    writeFileSync(join(stateDir, 'dsh-runtime', 'activation-journal.json'), '{corrupt', { mode: 0o600 })
+    assert.deepEqual(await manager.startupTransaction(), { blockedReason: 'journal-corrupt' })
+    const fatal = await runRoute(routes, 'POST', '/chamber/runtime/restore-builtin', '{}')
+    assert.equal(fatal.status, 409)
+    assert.equal((fatal.json as { code: string }).code, 'runtime_recovery_required')
+    assert.match((fatal.json as { error: string }).error, /journal-corrupt/)
+    // The matching recovery surface (recover-metadata) stays open for the
+    // same blocked state.
+    const status = await manager.status()
+    assert.equal(status.startupBlockedReason, 'journal-corrupt')
+    assert.equal(status.phase, 'idle', 'FATAL projects idle (never pending) so the recovery surface stays reachable')
+    assert.equal(status.canRecoverMetadata, true, 'recover-metadata is advertised for the FATAL block')
+    await manager.dispose()
+  } finally {
+    if (previous === undefined) delete process.env.DSH_GATEWAY_DSH_PATH
+    else process.env.DSH_GATEWAY_DSH_PATH = previous
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('restore-builtin durable guards: interrupted apply / restore marker / corrupt metadata refuse before any stop or intent (2026 audit R2)', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-restore-guards-'))
+  const previous = process.env.DSH_GATEWAY_DSH_PATH
+  const stops: string[] = []
+  try {
+    delete process.env.DSH_GATEWAY_DSH_PATH
+    mkdirSync(join(stateDir, 'dsh-runtime'), { recursive: true })
+    const makeManager = () => createGatewayRuntimeManager({
+      config: config(stateDir),
+      plane: fakePlane({ stopLocal: async () => { stops.push('stopLocal') } }),
+      logger: silentLogger,
+    })
+
+    // (a) Durable interrupted-apply marker (swap-attempted) without any boot:
+    //     an armed reset would be re-blocked by the shared core after
+    //     stopping the dsh — the guard refuses BEFORE any stop or intent.
+    writeOverride(stateDir, {
+      shellVersion: gatewayPackageVersion, chosenVersion: '1.0.0', resolvedVersion: '1.0.0',
+      pending: null, swapAttempted: true,
+    })
+    const swapManager = makeManager()
+    await assert.rejects(swapManager.restoreBuiltin(), {
+      code: 'runtime_recovery_required',
+      message: /swap-attempted/,
+    })
+    assert.deepEqual(stops, [], 'a refused reset never stops the managed dsh')
+    assert.equal(readOverride(stateDir)?.swapAttempted, true, 'the durable marker is untouched by a refused reset')
+    assert.equal(readActivationJournalState(stateDir).kind, 'missing', 'a refused reset writes no intent journal')
+    // Route-level parity on the real manager: the recovery gate refuses too.
+    const routes = createRuntimeRoutes(() => swapManager, silentLogger)
+    const routeRestore = await runRoute(routes, 'POST', '/chamber/runtime/restore-builtin', '{}')
+    assert.equal(routeRestore.status, 409)
+    assert.equal((routeRestore.json as { code: string }).code, 'runtime_recovery_required')
+    await swapManager.dispose()
+    stops.length = 0
+    rmSync(join(stateDir, 'dsh-runtime', 'override.json'), { force: true })
+
+    // (b) Durable interrupted data restore (restore marker presence is
+    //     authoritative, corrupt or not — desktop only offers retry-restore).
+    writeOverride(stateDir, {
+      shellVersion: gatewayPackageVersion, chosenVersion: '1.0.0', resolvedVersion: '1.0.0',
+      pending: null, swapAttempted: false,
+    })
+    writeFileSync(join(stateDir, 'dsh-runtime', 'restore-in-progress'), '{broken', { mode: 0o600 })
+    const markerManager = makeManager()
+    await assert.rejects(markerManager.restoreBuiltin(), {
+      code: 'runtime_recovery_required',
+      message: /restore-half/,
+    })
+    assert.ok(existsSync(join(stateDir, 'dsh-runtime', 'restore-in-progress')), 'a refused reset leaves the restore marker intact')
+    assert.deepEqual(stops, [], 'no stop before the marker refusal either')
+    await markerManager.dispose()
+    stops.length = 0
+    rmSync(join(stateDir, 'dsh-runtime', 'restore-in-progress'), { force: true })
+
+    // (c) FATAL corrupt journal without a boot verdict: same refusal class.
+    writeFileSync(join(stateDir, 'dsh-runtime', 'activation-journal.json'), '{corrupt', { mode: 0o600 })
+    const corruptManager = makeManager()
+    await assert.rejects(corruptManager.restoreBuiltin(), {
+      code: 'runtime_recovery_required',
+      message: /journal-corrupt/,
+    })
+    assert.deepEqual(stops, [], 'a refused reset never stops the managed dsh (FATAL case)')
+    await corruptManager.dispose()
+  } finally {
+    if (previous === undefined) delete process.env.DSH_GATEWAY_DSH_PATH
+    else process.env.DSH_GATEWAY_DSH_PATH = previous
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('restore-pre-rollback complete keeps an env-probe-failed resume verdict (MAJOR-1 regression)', async () => {
+  const previous = process.env.DSH_GATEWAY_DSH_PATH
+  process.env.DSH_GATEWAY_DSH_PATH = '/tmp/env-dsh'
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-restore-resume-env-'))
+  const home = join(stateDir, 'dsh-home')
+  try {
+    mkdirSync(home, { recursive: true })
+    writeFileSync(join(home, 'settings.json'), '{"source":"v1"}')
+    const stashPath = await stashPreRollback(stateDir, home)
+    assert.ok(stashPath.startsWith(join(stateDir, 'dsh-runtime', 'pre-rollback')), 'the stash lives under the pre-rollback dir')
+    writeFileSync(join(home, 'settings.json'), '{"source":"v2"}')
+
+    const manager = createGatewayRuntimeManager({
+      config: config(stateDir),
+      plane: fakePlane(),
+      logger: silentLogger,
+      // The env probe in the RESUME transaction fails: the runtime answers
+      // the plane health check but lacks a required feature (A-U2).
+      probeCandidate: async () => probeResultsFor(stateDir).map((name, index) => ({ name, ok: index !== 0 })),
+    })
+    const res = await manager.restorePreRollback(basename(stashPath))
+    assert.deepEqual(res, { accepted: true })
+    const s = await manager.status()
+    assert.equal(s.startupBlockedReason, 'env-probe-failed', 'the resume verdict must survive the complete branch (the old code cleared it, leaving stopped + clean)')
+    assert.match(s.operationError ?? '', /env runtime activation probes failed/)
+    assert.equal(readFileSync(join(home, 'settings.json'), 'utf8'), '{"source":"v1"}', 'DSH_HOME was restored from the stash')
+    await manager.dispose()
+
+    // Re-probe on the next startup transaction (fix the target → restart the
+    // gateway semantics): an all-ok probe manager on the same state clears it.
+    const recovered = createGatewayRuntimeManager({
+      config: config(stateDir),
+      plane: fakePlane(),
+      logger: silentLogger,
+      probeCandidate: async () => probeResultsFor(stateDir).map(name => ({ name, ok: true })),
+    })
+    assert.deepEqual(await recovered.startupTransaction(), { blockedReason: null })
+    assert.equal((await recovered.status()).startupBlockedReason, null)
+    await recovered.dispose()
+  } finally {
+    if (previous === undefined) delete process.env.DSH_GATEWAY_DSH_PATH
+    else process.env.DSH_GATEWAY_DSH_PATH = previous
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('env-probe-failed closes every mutation route with an explicit no-recovery-route refusal (A-U2 gate coverage)', async () => {
+  const manager = {
+    status: () => ({ phase: 'idle', pending: null, startupBlockedReason: 'env-probe-failed' }),
+    mutationInProgress: () => false,
+    restartInFlight: () => false,
+    startInFlight: () => false,
+  }
+  const routes = createRuntimeRoutes(() => manager as never, silentLogger)
+  for (const [suffix, method, payload] of [
+    ['select', 'POST', JSON.stringify({ version: '1.0.0' })],
+    ['apply', 'POST', undefined],
+    ['apply-now', 'POST', undefined],
+    ['rollback', 'POST', JSON.stringify({ version: '1.0.0' })],
+    ['cleanup-version', 'POST', JSON.stringify({ version: '1.0.0' })],
+    ['restore-pre-rollback', 'POST', JSON.stringify({ stashName: '1700000000000-deadbeef' })],
+    ['retry-apply', 'POST', undefined],
+    ['retry-restore', 'POST', undefined],
+    ['restore-builtin', 'POST', undefined],
+    ['recover-metadata', 'POST', undefined],
+    ['restart', 'POST', undefined],
+    ['start', 'POST', undefined],
+    ['registry', 'PUT', JSON.stringify({ origin: 'https://registry.npmmirror.com' })],
+  ] as const) {
+    const response = await runRoute(routes, method, `/chamber/runtime/${suffix}`, payload)
+    assert.equal(response.status, 409, `${suffix} must refuse under env-probe-failed`)
+    assert.equal((response.json as { code: string }).code, 'runtime_recovery_required', suffix)
+    assert.match((response.json as { error: string }).error, /no recovery route applies/, suffix)
   }
 })
 
@@ -3546,9 +3852,10 @@ test('connection_busy maps to 409; oversized bodies release input, write 413, th
 
 test('FATAL idle block refuses ordinary mutations and keeps recover-metadata open (M1/H2 review)', async () => {
   let startupBlockedReason: string | null = 'journal-corrupt'
+  let pending: string | null = null
   const calls: string[] = []
   const manager = {
-    status: () => ({ phase: 'idle', pending: null, startupBlockedReason }),
+    status: () => ({ phase: 'idle', pending, startupBlockedReason }),
     mutationInProgress: () => false,
     select: async () => { calls.push('select'); return { accepted: true } },
     apply: async () => { calls.push('apply'); return { pending: true } },
@@ -3590,13 +3897,24 @@ test('FATAL idle block refuses ordinary mutations and keeps recover-metadata ope
   for (const name of ['cleanup-version', 'restore-pre-rollback', 'recover-metadata']) {
     assert.ok(routesList.includes(name), `route list exposes ${name}`)
   }
-  // H2: the same FATAL block with a stale pending must project idle (not
-  // pending), so the recovery surface never locks behind the pending gate.
-  startupBlockedReason = 'journal-corrupt'
-  const pendingStatus = { phase: 'idle', pending: '1.0.0', startupBlockedReason }
-  const refused = await runRoute(routes, 'POST', '/chamber/runtime/recover-metadata')
-  void pendingStatus
-  assert.equal(refused.status, 200, 'recover stays open even with a stale pending (phase projects idle)')
+  // H2: the same FATAL block with a stale pending must keep the recovery
+  // surface open — a startup block OUTRANKS a lingering pending value in the
+  // gate itself (2026 audit R3: falling through to the pending terminal gate
+  // used to refuse recover-metadata with runtime_pending while
+  // restore-builtin was simultaneously refused by the block branch — a fully
+  // locked recovery surface). Restore-builtin/ordinary mutations stay
+  // refused, labeled by the startup block, never by the stale pending.
+  pending = '1.0.0'
+  const recoverWithPending = await runRoute(routes, 'POST', '/chamber/runtime/recover-metadata')
+  assert.equal(recoverWithPending.status, 200, 'recover stays open even with a stale pending (block outranks pending)')
+  assert.deepEqual(calls, ['recover', 'recover'])
+  const restoreUnderFatalPending = await runRoute(routes, 'POST', '/chamber/runtime/restore-builtin', '{}')
+  assert.equal(restoreUnderFatalPending.status, 409)
+  assert.equal((restoreUnderFatalPending.json as { code: string }).code, 'runtime_recovery_required')
+  const selectUnderFatalPending = await runRoute(routes, 'POST', '/chamber/runtime/select', body)
+  assert.equal(selectUnderFatalPending.status, 409)
+  assert.equal((selectUnderFatalPending.json as { code: string }).code, 'runtime_recovery_required', 'a startup block labels refusals, not the stale pending')
+  assert.deepEqual(calls, ['recover', 'recover'], 'the refused actions never reach the manager')
 })
 
 test('real manager: FATAL journal + stale pending projects idle+blocked with recover eligibility (H2)', async () => {
@@ -3618,6 +3936,16 @@ test('real manager: FATAL journal + stale pending projects idle+blocked with rec
     assert.equal(status.pending, '1.2.3', 'the pending fact stays visible for the recovery transaction')
     assert.equal(status.startupBlockedReason, 'journal-corrupt')
     assert.equal(status.canRecoverMetadata, true, 'the recovery route is advertised and reachable')
+    // Route-level parity on the REAL manager: the gate must let
+    // recover-metadata through (block outranks the stale pending — 2026
+    // audit R3) while restore-builtin stays refused as a startup block.
+    const routes = createRuntimeRoutes(() => manager, silentLogger)
+    const restore = await runRoute(routes, 'POST', '/chamber/runtime/restore-builtin', '{}')
+    assert.equal(restore.status, 409)
+    assert.equal((restore.json as { code: string }).code, 'runtime_recovery_required')
+    const select = await runRoute(routes, 'POST', '/chamber/runtime/select', JSON.stringify({ version: '1.2.3' }))
+    assert.equal(select.status, 409)
+    assert.equal((select.json as { code: string }).code, 'runtime_recovery_required')
     await manager.dispose()
   } finally {
     if (oldEnv === undefined) delete process.env.DSH_GATEWAY_DSH_PATH
@@ -3697,17 +4025,18 @@ test('start route: busy phases, phase-less recovery blocks, pending and profile-
   assert.equal((installing.json as { code: string }).code, 'runtime_busy')
   assert.equal(starts, 0)
   // Recovery gate is not bypassable: recovery phases only expose their
-  // matching retry plus restore-builtin (decision 12).
+  // matching retry (decision 12; restore-builtin applies to pending/healthy
+  // selections only — 2026 audit R2).
   phase = 'swap-attempted'
   const swap = await runRoute(routes, 'POST', '/chamber/runtime/start')
   assert.equal(swap.status, 409)
   assert.equal((swap.json as { code: string }).code, 'runtime_recovery_required')
-  assert.match((swap.json as { error: string }).error, /only retry-apply and restore-builtin are allowed/)
+  assert.match((swap.json as { error: string }).error, /only retry-apply is allowed/)
   phase = 'restore-blocked'
   const restore = await runRoute(routes, 'POST', '/chamber/runtime/start')
   assert.equal(restore.status, 409)
   assert.equal((restore.json as { code: string }).code, 'runtime_recovery_required')
-  assert.match((restore.json as { error: string }).error, /only retry-restore and restore-builtin are allowed/)
+  assert.match((restore.json as { error: string }).error, /only retry-restore is allowed/)
   phase = 'snapshot-failed'
   const snapshot = await runRoute(routes, 'POST', '/chamber/runtime/start')
   assert.equal(snapshot.status, 409)
@@ -3947,7 +4276,7 @@ test('beginProfileWrite refuses pending and recovery phases (runtime_pending / r
     assert.equal(lease.ok, false)
     if (!lease.ok) {
       assert.equal(lease.code, 'runtime_recovery_required')
-      assert.match(lease.error, /only retry-apply\/retry-restore\/restore-builtin are allowed/)
+      assert.match(lease.error, /resume via the matching retry route \(restore-builtin applies to pending or healthy selections only\)/)
     }
     await manager.dispose()
   } finally {
@@ -4093,7 +4422,7 @@ test('start() never bypasses the recovery gate or an ordinary pending', async ()
     assert.equal(startup.blockedReason, 'swap-attempted')
     await assert.rejects(manager.start(), (error: unknown) =>
       (error as { code?: string }).code === 'runtime_recovery_required'
-      && /runtime recovery swap-attempted is required; only retry-apply\/retry-restore\/restore-builtin are allowed/.test((error as Error).message))
+      && /runtime recovery swap-attempted is required; resume via the matching retry route \(restore-builtin applies to pending or healthy selections only\)/.test((error as Error).message))
     assert.equal(plane.connectionState, 'stopped', 'the recovery gate stops a start cold')
     await manager.dispose()
   } finally {

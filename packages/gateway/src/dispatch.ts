@@ -63,12 +63,18 @@ function shouldRedirectToLogin(req: ApiRequest, pathname: string, auth: AuthProv
 }
 
 /**
- * CSP for the PROXIED dsh frontend (design 17 §11 S14): the control-plane
- * shell sets a per-response nonce CSP with `unsafe-inline` closed, but the
- * gateway cannot backfill that nonce into dsh's streamed HTML (its inline
+ * CSP for the PROXIED dsh frontend — a gateway-only relaxation. (It has no
+ * design-17 anchor: the former "§11 S14" citation pointed at a section that
+ * was stripped with the 2026-12 orchestration removal, and the design's S14
+ * label now denotes the session-content non-persistence invariant.) The
+ * control-plane shell — shared by both shapes — answers every request with a
+ * per-response nonce CSP with `unsafe-inline` closed, but the gateway cannot
+ * backfill that nonce into dsh's streamed HTML (its inline
  * `__DSH_BOOT__`/loader scripts). Rather than white-screen the frontend, the
  * proxy path relaxes script-src to `unsafe-inline` — the frontend is dsh's own
- * and already behind the auth gate. Every other directive stays identical.
+ * and already behind the auth gate. The anonymous desktop shape never sees
+ * this header: it serves the chamber composite through the control-plane
+ * nonce CSP. Every other directive stays identical.
  */
 const GATEWAY_PROXY_CSP = "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'none'; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:"
 
@@ -685,6 +691,17 @@ export function createGatewayDispatch(
     }
     // 3. Management routes → fall through to api.handle (prefix-match so
     // `/api/connections/local` PATCH/DELETE and `/api/host/*` all reach it).
+    // /api/i/<id>/* shape facts in THIS (gateway) deployment: the gateway
+    // never registers instance transports (no registerInstanceTransport caller
+    // exists in this package — desktop-only, main.ts), so only the `local`
+    // alias can resolve, through the SAME managed-dsh port the "/" proxy
+    // below uses (forwarding-level dual path to one managed dsh). Every
+    // dsh-/gateway-/ssh- prefixed id is structurally unregistered here and
+    // answers a constant 503 'no transport is available for this instance'.
+    // The two reachable paths are NOT document-equivalent for browsers: the
+    // "/" proxy applies GATEWAY_PROXY_CSP + the S0 trust declaration, while
+    // /api/i/local/* keeps the shell's nonce CSP without injection (known
+    // divergence, deliberately unchanged).
     if (pathname === '/health') return false
     if (pathname.startsWith('/api/connections') || pathname.startsWith('/api/host/') || pathname.startsWith('/api/i/')) {
       if (rejectStaleHttp(res, authenticatedPrincipal)) return true
@@ -756,7 +773,8 @@ export function createGatewayDispatch(
       return true
     }
     // 5. Everything else (/api/* rest, /plugins/*, / and assets) → gateway-proxy.
-    // Relax the shell's nonce CSP for the proxied dsh HTML (S14): the proxy
+    // Relax the shell's nonce CSP for the proxied dsh HTML (the gateway-only
+    // relaxation carried by GATEWAY_PROXY_CSP — see its note above): the proxy
     // cannot backfill the nonce, so script-src must allow dsh's inline scripts.
     res.setHeader('content-security-policy', GATEWAY_PROXY_CSP)
     if (rejectStaleHttp(res, authenticatedPrincipal)) return true

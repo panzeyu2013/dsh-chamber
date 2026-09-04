@@ -51,6 +51,11 @@ import { createHash } from 'node:crypto'
 import type { ClientRequest, IncomingMessage } from 'node:http'
 import { attachSpkiPinVerifier, SPKI_PIN_MISMATCH_CODE } from './gateway-provider.ts'
 import type { TransportInstanceSpec } from './transport-provider.ts'
+import {
+  GATEWAY_SESSION_COOKIE_NAME as PROTO_SESSION_COOKIE_NAME,
+  GATEWAY_SESSION_COOKIE_VALUE_MAX_CHARS as PROTO_SESSION_COOKIE_VALUE_MAX_CHARS,
+  GATEWAY_SESSION_TTL_SECONDS as PROTO_SESSION_TTL_SECONDS,
+} from './control-plane-module.ts'
 
 /** The injectable outbound request factory — the same shape as
  * proxy-forward's `HttpRequestFactory` (`typeof node:http request`, design
@@ -189,8 +194,10 @@ export interface GatewaySessionDeps {
   now?: () => number
 }
 
-/** Server-side session TTL (design 17 §7.1: 12 hours). */
-export const GATEWAY_SESSION_TTL_MS = 12 * 60 * 60 * 1000
+/** Server-side session TTL (design 17 §7.1: 12 hours) — derived from the
+ * shared wire-protocol source (control-plane gateway-session-protocol.ts;
+ * seconds there, milliseconds here for Date.now arithmetic). */
+export const GATEWAY_SESSION_TTL_MS = PROTO_SESSION_TTL_SECONDS * 1000
 /** Client-side expiry skew: re-login before the server actually rejects the
  * cookie, so a proxied request never races the 401 → re-login window. */
 export const GATEWAY_SESSION_EXPIRY_SKEW_MS = 5 * 60 * 1000
@@ -204,11 +211,13 @@ export const GATEWAY_LOGIN_TIMEOUT_MS = 10_000
  * cheap 429s. The server rate limiter remains the real authority — this is
  * a bounded courtesy, not a bypass. */
 export const GATEWAY_LOGIN_RATE_LIMIT_BACKOFF_MS = 5 * 60 * 1000
-/** The session cookie name (design 17 §7.1). */
-export const GATEWAY_SESSION_COOKIE_NAME = 'dsh_gateway_session'
-/** Defensive bound on the cookie VALUE, mirroring the instance-proxy
- * injection gate (design 17 §9.3: `Cookie` bounded to the name + 4096). */
-export const GATEWAY_SESSION_MAX_COOKIE_CHARS = 4096
+/** The session cookie name (design 17 §7.1) — shared wire-protocol single
+ * source with the gateway server (auth.ts) and the proxy injection gate. */
+export const GATEWAY_SESSION_COOKIE_NAME = PROTO_SESSION_COOKIE_NAME
+/** Defensive bound on the cookie VALUE (design 17 §9.3: `Cookie` bounded to
+ * the name + 4096) — same shared source as the instance-proxy injection
+ * gate and the gateway token cap. */
+export const GATEWAY_SESSION_MAX_COOKIE_CHARS = PROTO_SESSION_COOKIE_VALUE_MAX_CHARS
 
 interface CachedSession {
   cookie: string

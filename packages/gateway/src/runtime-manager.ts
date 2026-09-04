@@ -69,9 +69,12 @@ import {
   noteBoot,
   planRestartExhaustedRollback,
   promoteDueCandidates,
+  pruneRuntimeSnapshots,
   pruneRuntimeStore,
   quarantineRuntimeFileNoFollow,
   prepareManualRollbackData,
+  RUNTIME_LOGICAL_DISK_LIMIT_BYTES,
+  FATAL_STARTUP_BLOCK_REASONS,
   readActivationJournalState,
   readCurrentPointer,
   readCurrentPointerState,
@@ -88,6 +91,7 @@ import {
   removeKnownGoodCandidate,
   removeRuntimeFileNoFollow,
   resetCandidateHealthWindow,
+  restoreMarkerAuthorityStatus,
   restorePreRollback,
   restoreSnapshot,
   resolveSnapshotName,
@@ -153,19 +157,21 @@ export function readBuiltinVersion(anchorPath: string): string | null {
 const GATEWAY_PACKAGE_VERSION: string = gatewayRequire('../package.json').version as string
 const DSH_PACKAGE_NAME = '@deepseek-ai/dsh'
 const DEFAULT_REGISTRY_ORIGIN = 'https://registry.npmjs.org'
-const GATEWAY_RUNTIME_LOGICAL_DISK_LIMIT_BYTES = 10 * 1024 ** 3
+/** 10 GiB logical disk soft-limit — shared core value (dsh-runtime
+ * RUNTIME_LOGICAL_DISK_LIMIT_BYTES); the desktop owner projects the same
+ * constant as its diskLimitBytes. */
+const GATEWAY_RUNTIME_LOGICAL_DISK_LIMIT_BYTES = RUNTIME_LOGICAL_DISK_LIMIT_BYTES
 export const GATEWAY_RUNTIME_STATUS_KIND = 'dsh-chamber-gateway-runtime' as const
 
 /** FATAL metadata blocks plus the recover-route probe-failed sentinel: the
  *  startup-block reasons the recover-metadata route may act on. Everything
  *  else (restore-half/incomplete, swap-attempted…) must resume through its
- *  own retry first. Mirrors index.ts FATAL_RUNTIME_BLOCKS plus the sentinel
- *  the manager sets after a failed builtin recovery probe. */
+ *  own retry first. The four FATAL reasons are the shared core set
+ *  (dsh-runtime FATAL_STARTUP_BLOCK_REASONS, the same set index.ts and the
+ *  desktop main block on) plus the two sentinels the manager sets after a
+ *  failed builtin recovery probe/start. */
 export const RECOVERABLE_METADATA_BLOCKS = new Set<string>([
-  'journal-corrupt',
-  'current-corrupt',
-  'override-corrupt',
-  'journal-mismatch',
+  ...FATAL_STARTUP_BLOCK_REASONS,
   'metadata-probe-failed',
   'metadata-start-failed',
 ])
@@ -862,6 +868,62 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     }
   }
 
+  /** Env-override activation probe (A-U2 desktop parity): spawn the env
+   *  workspace through the plane and run the shared activation probe set
+   *  against it. Returns null when every probe passed, otherwise a
+   *  sanitized failure summary. The probe engine converts transport/timeout
+   *  failures into per-probe ok:false results, so the production path does
+   *  not throw; only an injected `probeCandidate` seam may throw, and its
+   *  callers treat that as a surfaced error (it is a test-only injection).
+   *  The probe shape applies the same
+   *  hostDomains gate as managed-tree probes (chamber host domains are only
+   *  expected once a desktop sync exists), snapshot ONCE per env boot. */
+  async function probeEnvOverrideRuntime(signal?: AbortSignal): Promise<string | null> {
+    // Env resolution happens through resolveWorkspace(), so the
+    // transactionWorkspace override must stay unset for this spawn.
+    transactionWorkspace = null
+    internalSpawn = true
+    try {
+      try {
+        await plane.startLocal()
+      } catch (error) {
+        return `managed dsh did not reach readiness for env runtime probes: ${sanitizeErrorText(String(error))}`
+      }
+      const port = plane.getLocalDshPort()
+      if (port === null || !Number.isInteger(port)) {
+        return 'managed dsh did not publish a probe port for the env runtime'
+      }
+      const baseUrl = `http://127.0.0.1:${port}`
+      const probes = options.probeCandidate !== undefined
+        ? await options.probeCandidate({
+            // This branch only runs under env override, so envPath is set;
+            // the seam type requires a string, so an empty fallback is a
+            // shape-only impossibility.
+            version: envPath ?? '',
+            isBuiltin: false,
+            baseUrl,
+            dshHome,
+            signal,
+          })
+        : await runRuntimeActivationProbes({
+            baseUrl,
+            dshHome,
+            signal,
+            hostDomains: hasSyncedHostSeed(config.plane.stateDir),
+            call: async (url, method, payload, opts) => {
+              const response = await dshCall(url, method, payload, { signal: opts?.signal, timeoutMs: opts?.timeoutMs })
+              return { result: response.result }
+            },
+          })
+      const failed = probes.filter(probe => !probe.ok)
+      return failed.length === 0
+        ? null
+        : failed.map(probe => `${probe.name}${probe.error === undefined ? '' : `: ${sanitizeErrorText(probe.error)}`}`).join('; ')
+    } finally {
+      internalSpawn = false
+    }
+  }
+
   function activationFacts(): { sourceVersion: string | null; sourceIsBuiltin: boolean; sourceWasKnownGood: boolean; knownGoodVersion: string | null } {
     if (platform === 'win32') {
       return {
@@ -1040,8 +1102,37 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     const startup = await runStartupPhase(buildStartupDeps(), signal)
     // The shared core reports `env-override` as a deliberate bypass marker so
     // persisted pending is not touched. For the gateway host this is a healthy
-    // startup outcome: env is the highest-priority active runtime, not a block
-    // and not an error banner/log entry.
+    // startup outcome only AFTER the env runtime has passed the activation
+    // probe gate: env is the highest-priority active runtime, but it is also
+    // the one selection the core NEVER probes itself (no activation
+    // transaction runs for it). Desktop parity (A-U2): the desktop opens an
+    // env boot only when the full current-runtime probe set passes; the
+    // gateway previously normalized env-override to healthy with no probe at
+    // all, so a runtime that answered the control-plane health check but
+    // lacked required features was exposed and marked healthy. Probe the env
+    // runtime here; a failed probe keeps the managed dsh stopped with an
+    // honest blocked verdict (resume: fix the DSH_GATEWAY_DSH_PATH target and
+    // restart the gateway — the next startup transaction re-probes).
+    if (startup.blockedReason === 'env-override') {
+      const probeFailure = await probeEnvOverrideRuntime(signal)
+      if (probeFailure !== null) {
+        await plane.stopLocal()
+        invalidateDiskCache()
+        startupBlockReason = 'env-probe-failed'
+        operationError = `env runtime activation probes failed: ${probeFailure}`
+        logger.error(`gateway env-override runtime activation probes failed: ${probeFailure}`)
+        // Synthetic blocked reason outside the shared core's union. The
+        // startupTransaction composition boundary (index.ts) treats it as a
+        // terminal boot block, but it can also surface through the resume
+        // paths that run startup transactions under env (retry-restore and
+        // restore-pre-rollback are env-allowed data-restore continuations) —
+        // those callers MUST preserve the verdict, never clear it.
+        return {
+          ...startup,
+          blockedReason: 'env-probe-failed',
+        } as unknown as Awaited<ReturnType<typeof runStartupPhase>>
+      }
+    }
     const result = startup.blockedReason === 'env-override'
       ? { ...startup, blockedReason: null }
       : startup
@@ -1059,7 +1150,45 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     if (result.blockedReason !== null && result.blockedReason !== 'snapshot-failed') {
       await plane.stopLocal()
     }
+    // Snapshot bounding (desktop parity): the desktop main process runs the
+    // shared retention prune after every runtime startup operation; this
+    // gateway never did, so every activation/rollback snapshot accumulated
+    // without bound against the 10 GiB logical disk limit. Every
+    // snapshot-creating transaction funnels through this function (boot,
+    // apply-now, restore-builtin and the automatic restart-exhausted
+    // rollback), so one call here closes the gap for all of them. It runs
+    // INSIDE the activation window (single-flight) and never fails the
+    // transaction — a prune error is logged and bounded at the next one.
+    await maintenanceSnapshotPrune()
     return result
+  }
+
+  /**
+   * Run the shared dsh-runtime bounded-maintenance routine (artifact
+   * cleanup → retention state → pruneSnapshots; keepRecentUnprotected 3, the
+   * same policy as the desktop owner). Fail-closed outcomes (restore marker
+   * present, corrupt retention metadata) preserve every snapshot and are
+   * logged, never silent. Never throws — transaction tails must not fail
+   * because maintenance hiccuped.
+   */
+  async function maintenanceSnapshotPrune(): Promise<void> {
+    try {
+      const maintenance = await pruneRuntimeSnapshots(baseDir, dshHome, 3)
+      if (maintenance.removedSnapshots.length > 0
+        || maintenance.artifactCleanup.removedTemporaryEntries.length > 0
+        || maintenance.artifactCleanup.removedRestoreBackups.length > 0) {
+        logger.log(
+          `gateway runtime snapshot maintenance removed ${maintenance.removedSnapshots.length} snapshot(s), ${maintenance.artifactCleanup.removedTemporaryEntries.length} temporary entr${maintenance.artifactCleanup.removedTemporaryEntries.length === 1 ? 'y' : 'ies'} and ${maintenance.artifactCleanup.removedRestoreBackups.length} restore backup(s)`,
+        )
+      }
+      if (maintenance.artifactCleanup.restoreBackupCleanup !== 'completed') {
+        logger.warn(`gateway runtime restore-backup cleanup skipped: ${maintenance.artifactCleanup.restoreBackupCleanup}`)
+      } else if (maintenance.skippedReason === 'retention-corrupt') {
+        logger.warn('gateway runtime snapshot retention metadata is corrupt; snapshots preserved (fail closed)')
+      }
+    } catch (error) {
+      logger.warn(`gateway runtime snapshot maintenance failed (bounded at the next transaction): ${sanitizeErrorText(String(error))}`)
+    }
   }
 
   async function startupTransaction(): Promise<{ blockedReason: string | null }> {
@@ -1185,12 +1314,13 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
       return { code: 'runtime_busy', error: 'an automatic restart-exhausted rollback is in flight; managed profile write refused' }
     }
     if (startInFlight) return { code: 'runtime_busy', error: 'a start is in flight; managed profile write refused' }
-    // Recovery phases expose only their matching retry plus restore-builtin;
-    // a plugin write is not on that surface and must not slip past it.
+    // Recovery states expose only their matching retry (recover-metadata for
+    // FATAL); restore-builtin applies to pending/healthy selections only — a
+    // plugin write is not on that surface and must not slip past it.
     if (startupBlockReason !== null) {
       return {
         code: 'runtime_recovery_required',
-        error: `runtime recovery ${startupBlockReason} is required; only retry-apply/retry-restore/restore-builtin are allowed`,
+        error: `runtime recovery ${startupBlockReason} is required; resume via the matching retry route (restore-builtin applies to pending or healthy selections only)`,
       }
     }
     let pending: string | null = null
@@ -1335,7 +1465,9 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
       // so the wait only drains already-held leases. A lease that outlives
       // the bound DEFERS the rollback with NO writes: the instance stays in
       // restart-exhausted with its existing honest projection and
-      // start/restore-builtin remain available; the next restart-exhausted
+      // start remains available; restore-builtin stays restricted to
+      // pending/healthy selections (2026 audit R2 — recovery-marked states
+      // expose only their matching retry). The next restart-exhausted
       // edge (or gateway restart) re-arms it. dispose() aborts the wait, so
       // shutdown never stalls behind an undrained lease even though index.ts
       // disposes the manager before the executor releases those leases.
@@ -2062,11 +2194,21 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
       throw Object.assign(new Error(`pre-rollback restore failed: ${restoreError}`), { code: 'restore_failed' })
     }
     switch (outcome) {
-      case 'complete':
-        await resumeAfterBlockedStartup()
-        startupBlockReason = null
-        operationError = null
+      case 'complete': {
+        // Resume the runtime through a full startup transaction. Only a CLEAN
+        // verdict may clear the blocked projection: the resume can surface its
+        // own terminal state (FATAL metadata discovered at startup, an
+        // env-override probe failure on the env boot path, swap-attempted…)
+        // and that verdict must stay visible for its own recovery surface —
+        // unconditionally clearing it here would leave the managed dsh
+        // stopped behind a clean status and re-open an unprobed start.
+        const resumed = await resumeAfterBlockedStartup()
+        if (resumed.blockedReason === null) {
+          startupBlockReason = null
+          operationError = null
+        }
         return { accepted: true }
+      }
       case 'half':
         // Desktop parity: the restore left a durable marker — keep the
         // managed dsh down and project restore-blocked so retry-restore
@@ -2278,6 +2420,46 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     if (platform === 'win32') throw Object.assign(new Error('windows runtime mutations are read-only'), { code: 'platform_read_only' })
     assertMutationIdle()
     if (envPath !== null) throw Object.assign(new Error('runtime is pinned by DSH_GATEWAY_DSH_PATH (env always wins); version mutations are disabled'), { code: 'env_override_active' })
+    // Desktop parity (A-U4): reset-builtin without an override is a pointless
+    // stop → snapshot → probe cycle (the anchor is already authoritative and
+    // there is nothing to clear) — the desktop only offers the action when
+    // hasOverride, and a no-override API call must not manufacture downtime.
+    const overrideState = readOverrideState(baseDir)
+    if (overrideState.kind === 'missing') {
+      throw Object.assign(new Error('no override exists — the runtime is already on the builtin anchor; nothing to restore'), { code: 'runtime_no_override' })
+    }
+    // Desktop parity (A-F5 + 2026 audit R2): reset-builtin only applies to a
+    // HEALTHY or ordinary-pending selection. Inside an interrupted apply
+    // (durable swapAttempted / lastOutcome snapshot-failed), an interrupted
+    // data restore (restore marker), a corrupt override, or any armed memory
+    // block, the shared core re-blocks an armed reset intent — running this
+    // transaction would stop the managed dsh for nothing and leave the armed
+    // reset intent behind, hijacking the later retry-apply/retry-restore
+    // semantics. Refuse BEFORE any stop or intent write; the desktop never
+    // offers reset-builtin in these states either (only the matching retry
+    // and recover-metadata).
+    const durable = overrideState.kind === 'valid' ? overrideState.record : null
+    const journalState = readActivationJournalState(baseDir)
+    const pointerState = readCurrentPointerState(baseDir)
+    const recoveryReason = startupBlockReason !== null
+      ? startupBlockReason
+      : journalState.kind === 'corrupt'
+        ? 'journal-corrupt'
+        : pointerState.kind === 'corrupt'
+          ? 'current-corrupt'
+          : overrideState.kind === 'corrupt'
+            ? 'override-corrupt'
+            : durable !== null && (durable.swapAttempted === true || durable.lastOutcome === 'snapshot-failed')
+              ? durable.swapAttempted === true ? 'swap-attempted' : 'snapshot-failed'
+              : restoreMarkerAuthorityStatus(baseDir) !== 'missing'
+                ? 'restore-half'
+                : null
+    if (recoveryReason !== null) {
+      throw Object.assign(
+        new Error(`runtime recovery ${recoveryReason} is required; resume via the matching retry route (restore-builtin applies to pending or healthy selections only)`),
+        { code: 'runtime_recovery_required' },
+      )
+    }
 
     // Reset-builtin is an activation transaction, not metadata deletion:
     // durable intent → quiesce DSH_HOME → snapshot → atomic pointer clear →
@@ -2387,7 +2569,9 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
    * startLocal path. Every synchronous refusal runs BEFORE any plane effect:
    * a second start in flight, any runtime mutation/profile write in flight
    * (assertMutationIdle), a recovery block or ordinary pending (the start
-   * surface never bypasses retry/restore-builtin), and a connection state
+   * surface never bypasses the recovery gate: retry / recover-metadata;
+   * restore-builtin applies to pending/healthy selections only), and a
+   * connection state
    * outside the start window. 202 semantics — the route answers synchronously
    * from these gates and the outcome is projected via status().start /
    * operationError (resolve ≠ success: a resolve that did not reach ready is
@@ -2399,12 +2583,16 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     }
     assertMutationIdle()
     // Recovery gate (decision 12: "恢复门不可绕过"): an in-memory startup
-    // block is the authoritative recovery verdict; only its matching retry and
-    // restore-builtin may run. F7's auto-rollback tail and gateway-boot blocks
-    // all land here, so a raw start can never skip the probe/restore gate.
+    // block is the authoritative recovery verdict; only its matching retry
+    // (recover-metadata for FATAL) may run — restore-builtin applies to
+    // pending/healthy selections only (2026 audit R2: an armed reset is
+    // re-blocked by the shared core against durable recovery markers, so the
+    // recovery surface never includes it). F7's auto-rollback tail and
+    // gateway-boot blocks all land here, so a raw start can never skip the
+    // probe/restore gate.
     if (startupBlockReason !== null) {
       throw Object.assign(
-        new Error(`runtime recovery ${startupBlockReason} is required; only retry-apply/retry-restore/restore-builtin are allowed`),
+        new Error(`runtime recovery ${startupBlockReason} is required; resume via the matching retry route (restore-builtin applies to pending or healthy selections only)`),
         { code: 'runtime_recovery_required' },
       )
     }
@@ -2486,7 +2674,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     // incomplete / corrupt metadata) refuses apply-now identically when the
     // manager is called directly, not only through /chamber/runtime/apply-now.
     if (startupBlockReason !== null) {
-      throw Object.assign(new Error(`runtime recovery ${startupBlockReason} is required; only the matching retry and restore-builtin are allowed`), { code: 'runtime_recovery_required' })
+      throw Object.assign(new Error(`runtime recovery ${startupBlockReason} is required; resume via the matching retry route (restore-builtin applies to pending or healthy selections only)`), { code: 'runtime_recovery_required' })
     }
     // Direct-call parity with the route's connection gate: a managed dsh that
     // never reached ready cannot be switched in-session (mirrors /restart).

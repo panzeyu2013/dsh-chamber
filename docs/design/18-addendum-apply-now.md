@@ -84,7 +84,7 @@ design 18 现行契约：apply 只置 pending，激活事务在下次启动相�
 - 202 接受即返回（镜像 restart 语义，runtime-routes.ts:222-243）；异步 job 经 status() 轮询。
 - **同步 preflight（202 前的唯一权威门）**：路由在发 202 前调用 manager 的同步 `applyNowPreflight()`，任何同步门失败都以 409/403 先于 202 返回（杜绝「202 + 仅日志 + 轮询永不 settle」）。preflight 与 applyNow 共用同一门面（路由与直接调用语义一致），preflight 在 202 前完成 F2 arm（202 丢失时退化为「下次启动应用」，无害）。
 - 同步拒门：
-  - 409 `runtime_recovery_required`：recovery 相位（snapshot-failed/swap-attempted/restore-blocked）——`recoveryGateRefusal` 对 `'apply-now'` 特判：**普通 pending 允许 apply-now**（这是本动作的语义前提），recovery 相位仍拒绝（走 retry-apply/retry-restore/restore-builtin）；
+  - 409 `runtime_recovery_required`：recovery 相位（snapshot-failed/swap-attempted/restore-blocked）——`recoveryGateRefusal` 对 `'apply-now'` 特判：**普通 pending 允许 apply-now**（这是本动作的语义前提），recovery 相位仍拒绝（只走各自 retry；restore-builtin 仅限 pending/健康选择——2026 audit R2 收窄）；
   - 409 `runtime_busy`（installing/applying/restart 在途、已有 apply-now 在途；`assertMutationIdle` 已并入 `applyNowInFlight`，与 mutationInProgress 语义对齐）；
   - 409 `env_override_active`、403 `platform_read_only`；
   - 409 `no_selection`（preflight 内**失效过滤**的目标解析：pending 与未失效 chosenVersion 双空）；

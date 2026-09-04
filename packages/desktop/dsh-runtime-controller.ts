@@ -19,6 +19,7 @@ import {
   buildCachedVersionList,
   versionExists,
 } from './dsh-runtime-updater.ts'
+import { RUNTIME_LOGICAL_DISK_LIMIT_BYTES } from './dsh-runtime-store.ts'
 import type { ActivationIntentInput, OverrideRecord, RuntimeDiskSummary } from './dsh-runtime-store.ts'
 import type { InstallOptions, InstallResult, RuntimeInstallProgress } from './runtime-installer.ts'
 import { sanitizeErrorText } from './sanitize-error.ts'
@@ -59,8 +60,10 @@ export type RuntimeMetadataComponent =
  * recovery paths deliberately bypass it. totalBytes is a real (dev, ino)
  * deduped walk but category fields may double-count hard-linked tree/store
  * bytes and APFS reflink sharing stays invisible to stat, so this is a
- * conservative hygiene gate rather than a claim about physical free space. */
-export const DEFAULT_RUNTIME_LOGICAL_DISK_LIMIT_BYTES = 10 * 1024 ** 3
+ * conservative hygiene gate rather than a claim about physical free space.
+ * Value = the shared core constant (dsh-runtime RUNTIME_LOGICAL_DISK_LIMIT_BYTES);
+ * this alias keeps the controller's public export name. */
+export const DEFAULT_RUNTIME_LOGICAL_DISK_LIMIT_BYTES = RUNTIME_LOGICAL_DISK_LIMIT_BYTES
 
 export interface RuntimeState {
   /** The active runtime version (current pointer, falling back to bundled). */
