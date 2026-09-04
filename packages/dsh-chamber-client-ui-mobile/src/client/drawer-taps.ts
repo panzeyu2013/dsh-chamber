@@ -25,7 +25,10 @@
  *    activation (movement beyond the slop, or a pointerup after the drawer
  *    scrolled, is a scroll intent);
  *  - only taps inside the drawer (`[data-mobile-role="sidebar"]`) heal —
- *    the floating toggle and backdrop are ordinary buttons outside it;
+ *    the floating toggle and backdrop are ordinary buttons outside it; BOTH
+ *    the pointerdown origin and the pointerup target must be inside, so a
+ *    tap that starts on the backdrop edge (≤12px outside, then slips in) is
+ *    never healed on top of the backdrop's own close action;
  *  - form fields (the drawer search box, inline editors) never heal: a
  *    suppressed tap there is a focus/selection concern, not an activation.
  *
@@ -73,6 +76,38 @@ export function isHealableDrawerTarget(target: ClosestFace | null): boolean {
   return target.closest(DRAWER_SIDEBAR_SELECTOR) !== null
 }
 
+/** Ancestor-relation facts of a real click vs the pending tap target. */
+export interface HealClearFacts {
+  /** The click landed at/inside the pointerup target (a normally delivered
+   *  compatibility click). */
+  atOrInsideTapTarget: boolean
+  /** The click landed on an ANCESTOR of the pointerup target: iOS retargets a
+   *  delayed synthesized click to the common ancestor of its down/up targets,
+   *  and with the hover-reveal shift that ancestor sits ABOVE the pointerup
+   *  target — the ancestor click already bubbled through the row's delegated
+   *  activation, so a heal would activate it a second time. */
+  ancestorOfTapTarget: boolean
+}
+
+/** A real click clears the pending heal iff it relates to the tap target in
+ *  either direction — a click that already activated the row must never be
+ *  re-healed. A click unrelated to the tap target (elsewhere in the drawer,
+ *  outside it) keeps the heal armed. Pure decision — unit-tested. */
+export function shouldClearPendingHeal(facts: HealClearFacts): boolean {
+  return facts.atOrInsideTapTarget || facts.ancestorOfTapTarget
+}
+
+/** Late-real-click suppression decision (after a heal fired): a TRUSTED click
+ *  at nearly the healed coordinates inside the suppression window is the
+ *  click the browser delayed (or a ghost click after the drawer re-laid
+ *  out) — the heal already ran the row's activation, so it must be stopped
+ *  before React's delegated listeners see it. Pure decision — unit-tested. */
+export function isSuppressedLateClick(healFiredAtMs: number, nowMs: number, dx: number, dy: number): boolean {
+  const since = nowMs - healFiredAtMs
+  if (since < 0 || since > HEAL_SUPPRESS_MS) return false
+  return Math.abs(dx) <= TAP_SLOP_PX && Math.abs(dy) <= TAP_SLOP_PX
+}
+
 interface PendingTap {
   target: Element
   timer: ReturnType<typeof setTimeout> | null
@@ -92,8 +127,9 @@ interface HealFire {
 export function installDrawerTapHeal(active: () => boolean): () => void {
   // Per-pointerId origins: two simultaneous touches (thumb rest + tap) each
   // keep their own start, so a suppressed tap is never silently dropped by
-  // the other finger's pointerup.
-  const pointerStarts = new Map<number, { x: number; y: number }>()
+  // the other finger's pointerup. The down target is kept too: healing
+  // requires the WHOLE gesture inside the drawer (see the guards above).
+  const pointerStarts = new Map<number, { x: number; y: number; downTarget: Element | null }>()
   let pending: PendingTap | null = null
   /** The last heal that fired, for late-real-click suppression. */
   let healFired: HealFire | null = null
@@ -107,7 +143,8 @@ export function installDrawerTapHeal(active: () => boolean): () => void {
   const onPointerDown = (event: PointerEvent): void => {
     if (!active()) return
     if (event.pointerType !== 'touch' && event.pointerType !== 'pen') return
-    pointerStarts.set(event.pointerId, { x: event.clientX, y: event.clientY })
+    const downTarget = event.target instanceof Element ? event.target : null
+    pointerStarts.set(event.pointerId, { x: event.clientX, y: event.clientY, downTarget })
     // A new gesture disarms the post-heal suppression window.
     healFired = null
   }
@@ -121,6 +158,10 @@ export function installDrawerTapHeal(active: () => boolean): () => void {
     const target = event.target
     if (!(target instanceof Element)) return
     if (!isStableTap({ startX: start.x, startY: start.y, endX: event.clientX, endY: event.clientY })) return
+    // Both endpoints must be inside the drawer: a tap that BEGAN on the
+    // backdrop (its edge is within the 12px slop of the drawer) and ended
+    // inside must not heal on top of the backdrop's own close action.
+    if (!isHealableDrawerTarget(start.downTarget)) return
     if (!isHealableDrawerTarget(target)) return
     clearPending()
     const record: PendingTap = { target, timer: null }
@@ -157,10 +198,18 @@ export function installDrawerTapHeal(active: () => boolean): () => void {
   const onClick = (event: MouseEvent): void => {
     if (pending !== null) {
       if (!(event.target instanceof Node)) return
-      // A real click from the tap target's subtree (or the target itself)
-      // satisfies the pending heal. Our own synthesized click never reaches
-      // this branch: the timer clears `pending` before dispatching.
-      if (pending.target === event.target || pending.target.contains(event.target)) {
+      // A real click that relates to the tap target clears the pending heal —
+      // in EITHER direction: at/inside the pointerup target (a normally
+      // delivered compatibility click), or on an ANCESTOR of it. iOS
+      // retargets a delayed synthesized click to the common ancestor of its
+      // down/up targets; with the hover-reveal shift that ancestor lies
+      // ABOVE the pointerup target, and the row already activated through
+      // React's delegation — healing would double-open it. Our own
+      // synthesized click never reaches this branch: the timer clears
+      // `pending` before dispatching.
+      const clickInsidePending = pending.target === event.target || pending.target.contains(event.target)
+      const pendingInsideClick = event.target instanceof Element && event.target.contains(pending.target)
+      if (shouldClearPendingHeal({ atOrInsideTapTarget: clickInsidePending, ancestorOfTapTarget: pendingInsideClick })) {
         clearPending()
       }
       return
@@ -171,10 +220,7 @@ export function installDrawerTapHeal(active: () => boolean): () => void {
     // heal already ran the row's activation; stop it before React's
     // delegated listeners see it (capture phase at document, above #root).
     if (healFired === null || !event.isTrusted || !(event.target instanceof Node)) return
-    const since = Date.now() - healFired.time
-    if (since < 0 || since > HEAL_SUPPRESS_MS) return
-    if (Math.abs(event.clientX - healFired.x) > TAP_SLOP_PX
-      || Math.abs(event.clientY - healFired.y) > TAP_SLOP_PX) return
+    if (!isSuppressedLateClick(healFired.time, Date.now(), event.clientX - healFired.x, event.clientY - healFired.y)) return
     healFired = null
     event.stopPropagation()
   }

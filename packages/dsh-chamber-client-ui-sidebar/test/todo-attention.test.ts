@@ -49,6 +49,20 @@ test('an empty projection or a disconnected source yields no entries', () => {
   assert.deepEqual(deriveTodoAttention([disconnected], { viewingSourceId: 'local', filters: ALL }), [])
 })
 
+test('a connected source WITHOUT a runtime snapshot yields no entries (defensive branch)', () => {
+  // App 只对 connected 来源附加 merged runtime，但存在「connected 但
+  // runtime 尚未到达/为空」的窗口——todo-attention.ts 的
+  // `runtime === undefined` 显式再查一次是防御纵深（未知 ≠ 待办，不臆造）：
+  // 有 workspaces/sessions 也必须有 runtime 快照才可能出条目。此用例直击该
+  // 分支（此前仅被空投影用例间接覆盖）。
+  const connectedNoRuntime = server('r1', [workspace('w', [session('s1'), session('s2')])], undefined)
+  assert.deepEqual(
+    deriveTodoAttention([connectedNoRuntime], { viewingSourceId: 'local', filters: ALL }),
+    [],
+    'no runtime snapshot → no attention entries',
+  )
+})
+
 test('completed-but-unread rides the merged dot state (vendor/App union) and its display gates', () => {
   const withCompleted = server('r1', [workspace('w', [session('s1')])], {
     sessions: { s1: { completed: true } },

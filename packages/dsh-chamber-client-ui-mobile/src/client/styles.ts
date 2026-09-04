@@ -175,7 +175,12 @@ export const MOBILE_CSS = `
      [data-width-handle]; the ui-primitives Tooltip bubble also carries
      [data-side] for placement and must NOT be hidden (role="tooltip"
      exclusion). Attribute anchors replace the legacy hashed-suffix rules
-     ([class$="_handle"]) that cannot match production class naming. */
+     ([class$="_handle"]) that cannot match production class naming.
+     FUTURE-FRAGILE ANCHOR NOTE (2026-12 audit): the [data-side] exclusion
+     was verified safe across the whole tree at audit time — no other
+     [data-side] carriers beyond the AppFrame handles / width strips /
+     role="tooltip" bubbles; re-grep [data-side] when the vendored base
+     moves before trusting this rule. */
   [data-mobile-frame] [data-width-handle],
   [data-mobile-frame] [data-side]:not([role="tooltip"]) {
     display: none !important;

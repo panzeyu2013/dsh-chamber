@@ -371,6 +371,31 @@ test('flat shared interfaces are TYPE-identical across preload and renderer (L3 
   assert.deepEqual(interfaceFieldSignatures(renderer, 'LocalPluginManifest'), localManifest, 'LocalPluginManifest renderer type drift')
 })
 
+test('the desktop chamber-settings store mirrors preload\'s settings types (L3 — the manual-mirror leg)', () => {
+  // preload ↔ renderer is guarded above; the desktop AUTHORITATIVE store
+  // (chamber-settings.ts) is a documented MANUAL mirror of the same shapes
+  // (the notifications discipline extended to sessionTodo/vscode keys) with
+  // NO automated guard of its own — a field/type drift there would pass
+  // silently until a settings round-trip breaks. Guard it with the same
+  // type-sensitive signature comparison. ChamberSettingsStatus is excluded:
+  // its `supported` member is a nested object literal (signature extraction
+  // is flat-interface only) — its flat top-level field names are covered by
+  // interfaceFieldNames below.
+  const store = readFileSync(join(ROOT, 'packages/desktop/chamber-settings.ts'), 'utf8')
+  for (const typeName of ['ChamberSettings', 'ChamberNotificationSettings', 'ChamberSessionTodoSettings']) {
+    assert.deepEqual(
+      interfaceFieldSignatures(store, typeName),
+      interfaceFieldSignatures(preload, typeName),
+      `chamber-settings.ts store drifted from preload: ${typeName}`,
+    )
+  }
+  assert.deepEqual(
+    interfaceFieldNames(store, 'ChamberSettingsStatus'),
+    interfaceFieldNames(preload, 'ChamberSettingsStatus'),
+    'chamber-settings.ts ChamberSettingsStatus top-level fields drifted from preload',
+  )
+})
+
 test('settings-connections re-exports the whole IPC face from the renderer (single source of truth, L3)', () => {
   // T1 (2026 review): the settings plugin no longer structurally mirrors the
   // IPC types — it re-exports them from the renderer's authoritative

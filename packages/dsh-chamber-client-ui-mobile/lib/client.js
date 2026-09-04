@@ -165,7 +165,12 @@ var MOBILE_CSS = `
      [data-width-handle]; the ui-primitives Tooltip bubble also carries
      [data-side] for placement and must NOT be hidden (role="tooltip"
      exclusion). Attribute anchors replace the legacy hashed-suffix rules
-     ([class$="_handle"]) that cannot match production class naming. */
+     ([class$="_handle"]) that cannot match production class naming.
+     FUTURE-FRAGILE ANCHOR NOTE (2026-12 audit): the [data-side] exclusion
+     was verified safe across the whole tree at audit time \u2014 no other
+     [data-side] carriers beyond the AppFrame handles / width strips /
+     role="tooltip" bubbles; re-grep [data-side] when the vendored base
+     moves before trusting this rule. */
   [data-mobile-frame] [data-width-handle],
   [data-mobile-frame] [data-side]:not([role="tooltip"]) {
     display: none !important;
@@ -687,33 +692,35 @@ function isKeyboardOpen(layoutHeight, visualHeight) {
   const gap = layoutHeight - visualHeight;
   return gap > 120 && gap > layoutHeight * 0.2;
 }
-var NAV_GESTURE_SELECTOR = '[data-mobile-role="sidebar"], [data-slot="conversation.session.header"]';
-function isNavigationGestureTarget(target) {
-  return target !== null && target.closest(NAV_GESTURE_SELECTOR) !== null;
-}
 function installImeLadder(root = document) {
   let lastPointerDown = 0;
-  let lastPointerDownNav = false;
+  let lastPointerDownInSeat = false;
   let keyboardOpen = false;
   const syncKeyboard = () => {
     const vv = window.visualViewport;
     keyboardOpen = vv !== null && isKeyboardOpen(window.innerHeight, vv.height);
   };
+  const gestureInSeat = (event) => {
+    const input = root.querySelector(COMPOSER_INPUT_SELECTOR);
+    if (!(input instanceof Element)) return false;
+    const seat = input.closest("[data-composer-seat]");
+    const zone = seat instanceof Element ? seat : input;
+    return event.target instanceof Node && zone.contains(event.target);
+  };
   const onPointerDown = (event) => {
-    const target = event.target instanceof Element ? event.target : null;
     lastPointerDown = Date.now();
-    lastPointerDownNav = isNavigationGestureTarget(target);
+    lastPointerDownInSeat = gestureInSeat(event);
   };
   const onFocusIn = (event) => {
     const input = root.querySelector(COMPOSER_INPUT_SELECTOR);
     if (!(input instanceof HTMLElement)) return;
     if (event.target !== input && !input.contains(event.target)) return;
-    const fromGesture = Date.now() - lastPointerDown < 500 && !lastPointerDownNav;
+    const fromGesture = Date.now() - lastPointerDown < 500 && lastPointerDownInSeat;
     if (fromGesture) return;
     let frames = 0;
     let cancelled = false;
-    const onGestureCancel = () => {
-      cancelled = true;
+    const onGestureCancel = (event2) => {
+      if (gestureInSeat(event2)) cancelled = true;
     };
     document.addEventListener("pointerdown", onGestureCancel, true);
     const drop = () => {
@@ -916,6 +923,14 @@ function isHealableDrawerTarget(target) {
   if (target.closest(HEAL_FORM_SELECTOR) !== null) return false;
   return target.closest(DRAWER_SIDEBAR_SELECTOR) !== null;
 }
+function shouldClearPendingHeal(facts) {
+  return facts.atOrInsideTapTarget || facts.ancestorOfTapTarget;
+}
+function isSuppressedLateClick(healFiredAtMs, nowMs, dx, dy) {
+  const since = nowMs - healFiredAtMs;
+  if (since < 0 || since > HEAL_SUPPRESS_MS) return false;
+  return Math.abs(dx) <= TAP_SLOP_PX && Math.abs(dy) <= TAP_SLOP_PX;
+}
 function installDrawerTapHeal(active) {
   const pointerStarts = /* @__PURE__ */ new Map();
   let pending = null;
@@ -928,7 +943,8 @@ function installDrawerTapHeal(active) {
   const onPointerDown = (event) => {
     if (!active()) return;
     if (event.pointerType !== "touch" && event.pointerType !== "pen") return;
-    pointerStarts.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    const downTarget = event.target instanceof Element ? event.target : null;
+    pointerStarts.set(event.pointerId, { x: event.clientX, y: event.clientY, downTarget });
     healFired = null;
   };
   const onPointerUp = (event) => {
@@ -940,6 +956,7 @@ function installDrawerTapHeal(active) {
     const target = event.target;
     if (!(target instanceof Element)) return;
     if (!isStableTap({ startX: start.x, startY: start.y, endX: event.clientX, endY: event.clientY })) return;
+    if (!isHealableDrawerTarget(start.downTarget)) return;
     if (!isHealableDrawerTarget(target)) return;
     clearPending();
     const record = { target, timer: null };
@@ -963,15 +980,15 @@ function installDrawerTapHeal(active) {
   const onClick = (event) => {
     if (pending !== null) {
       if (!(event.target instanceof Node)) return;
-      if (pending.target === event.target || pending.target.contains(event.target)) {
+      const clickInsidePending = pending.target === event.target || pending.target.contains(event.target);
+      const pendingInsideClick = event.target instanceof Element && event.target.contains(pending.target);
+      if (shouldClearPendingHeal({ atOrInsideTapTarget: clickInsidePending, ancestorOfTapTarget: pendingInsideClick })) {
         clearPending();
       }
       return;
     }
     if (healFired === null || !event.isTrusted || !(event.target instanceof Node)) return;
-    const since = Date.now() - healFired.time;
-    if (since < 0 || since > HEAL_SUPPRESS_MS) return;
-    if (Math.abs(event.clientX - healFired.x) > TAP_SLOP_PX || Math.abs(event.clientY - healFired.y) > TAP_SLOP_PX) return;
+    if (!isSuppressedLateClick(healFired.time, Date.now(), event.clientX - healFired.x, event.clientY - healFired.y)) return;
     healFired = null;
     event.stopPropagation();
   };

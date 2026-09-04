@@ -2061,7 +2061,9 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
         onClose={() => { if (!remoteRemoveBusy) setRemoteRemoveTarget(null) }}
         title={t('removeRowConfirmTitle')}
         closeLabel={t('close')}
-        description={isSsh && sshSpec !== null && sshSpec.serviceName === null ? t('pluginsRestartUnconfiguredHint') : t('removeRowConfirmDescription').replace('{name}', remoteRemoveTarget ?? '')}
+        description={isSsh && sshSpec !== null && sshSpec.serviceName === null
+          ? t('removeRowConfirmUnconfiguredDescription').replace('{name}', remoteRemoveTarget ?? '')
+          : t('removeRowConfirmDescription').replace('{name}', remoteRemoveTarget ?? '')}
         className={css.deleteDialog}
         footer={(
           <>

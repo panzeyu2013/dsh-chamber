@@ -519,5 +519,4 @@ chamber 移动端参与第三方管理；安装期脚本默认禁行与 OS 用�
   200ms 慢关 + 租约授予时序证明：wave1 全 10 意图尝试（8 持租约 + 2 queue_full 释放）、
   第 11 次授予须等首波终态腾槽（gap ≥100ms 断言），5 次连跑稳定。
 - 代码行号以 2026-12 评审期核对为准，实现以实际文件为准。
-- 代码行号以 2026-12 评审期核对为准，实现以实际文件为准。
 - **UX 重构登记（2026-12，插件管理面 UX 重构 P1 形态同构落地）**：ssh 分支不再默认呈现整盘 diff 表（原 sync 三标签首屏），改为与 gateway/local 同骨架的主视图（已安装列表 + 添加区 + 范围注），legacy diff 折叠为「与本地插件组合存在 {n} 处差异 — 展开对账」次级入口；展开后 rows/filter/apply/undo 语义与按钮逐字保留，应用动作仅在展开态出现在 footer。§6.6/§10 中「ssh 视图逐字保留 / 纯测试守护」承诺相应修订为：**纯模型层与后端行为不变，仅默认呈现与入口层级改变**（原 sync/add/list 标签条移除、添加区并入主视图「已安装」列表下方；改动全在 settings-connections 渲染层（PluginDialog 与 ConnectionsSection）与 locales 文案键值（新增 6 键 × zh/en，其余值级）；门禁：typecheck:connections / test:connections / build:renderer）。动因：ssh 与 gateway 观感一致性（用户走查 P1：同模型两种长相）。

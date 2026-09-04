@@ -19,6 +19,14 @@
  *    single-shell; a future multi-shell renderer mount must scope them);
  *  - the mobile tier activates on `(max-width:1023px) and (pointer:coarse)`
  *    (项 5) — the CSS is fully media-query scoped, desktop untouched.
+ *
+ *  Anchor-version note: the alpha.4 anchor audit (2026-09) describes the DOM
+ *  shapes the mechanisms were built against; the vendored base is now
+ *  0.1.2-rc.1 and the anchors were re-verified against the rc.1 source
+ *  (2026-12 review). The dsh version actually injected into a gateway
+ *  instance is decided by the dsh-runtime on the serving desktop/gateway —
+ *  anchors must be re-audited when the vendored pin moves (markup.ts pins
+ *  the stamped dictionary copy at rc.1 separately).
  */
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-locale/client'

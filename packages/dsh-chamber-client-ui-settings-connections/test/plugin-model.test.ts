@@ -74,7 +74,8 @@ test('deny mirror matrix: official and chamber domains denied, third-party allow
     '@deepseek-ai/dsh-client-ui-primitives',
     '@dsh-chamber/dsh-host-client-graph',
     '@dsh-chamber/dsh-host-git-worktree',
-    '@dsh-chamber/dsh-chamber-client-ui-mobile',
+    // 真实 registry 名（mobile 是 gateway 打包的单例例外，无桌面链路）。
+    '@dsh-chamber/dsh-client-ui-mobile',
     '@dsh-chamber/anything-else',
   ]) {
     assert.equal(isDeniedPluginName(denied), true, `${denied} must be denied`)

@@ -240,10 +240,13 @@ export interface ClosestLike {
 }
 
 /** Pure decision: did this pointer gesture start in a navigation region?
- *  Everything else (composer seat, portaled menus, message area) is NOT
- *  navigation — those keep the pre-change behavior (gesture = typing
- *  intent), so picker-then-type flows and mouse/hardware-keyboard focus on
- *  coarse devices are not dropped. */
+ *  Layer 1 (installImeLadder) no longer reads this directly — navigation
+ *  regions are never inside the composer seat, so nav gestures classify as
+ *  non-typing by construction (the seat test alone decides typing intent;
+ *  M2 review narrowing). Kept exported as the semantic name for
+ *  drawer/session-header gestures: picker/menu and message-area gestures
+ *  are neither navigation NOR typing (a message-area scroll must neither
+ *  arm typing intent nor cancel a pending navigation drop). */
 export function isNavigationGestureTarget(target: ClosestLike | null): boolean {
   return target !== null && target.closest(NAV_GESTURE_SELECTOR) !== null
 }
@@ -255,13 +258,14 @@ export interface ImeLadder {
 
 export function installImeLadder(root: ParentNode = document): ImeLadder {
   let lastPointerDown = 0
-  /** The gesture that produced the last pointerdown started in a NAVIGATION
-   *  region (drawer / session header) — layer 1's gesture test uses it: a
-   *  programmatic composer refocus after such a gesture (a sidebar session
-   *  switch — the official InputBar returns focus to the box on session
-   *  change) must NOT count as user-intended typing: it would pop the iOS
-   *  keyboard right after navigation. */
-  let lastPointerDownNav = false
+  /** The gesture that produced the last pointerdown was TYPING INTENT — it
+   *  started INSIDE the composer seat. This is layer 1's gesture test: a
+   *  programmatic composer refocus after a non-seat gesture (a sidebar
+   *  session switch — the official InputBar returns focus to the box on
+   *  session change; but also any scroll/tap in the message area) must NOT
+   *  count as user-intended typing: it would pop the iOS keyboard right
+   *  after navigation. Only a seat pointerdown is typing intent. */
+  let lastPointerDownInSeat = false
   let keyboardOpen = false
 
   const syncKeyboard = (): void => {
@@ -269,31 +273,54 @@ export function installImeLadder(root: ParentNode = document): ImeLadder {
     keyboardOpen = vv !== null && isKeyboardOpen(window.innerHeight, vv.height)
   }
 
+  /** Did this pointerdown land inside the composer seat (the input plus its
+   *  `[data-composer-seat]` wrapper — send button etc.)? */
+  const gestureInSeat = (event: { target: EventTarget | null }): boolean => {
+    const input = root.querySelector(COMPOSER_INPUT_SELECTOR)
+    if (!(input instanceof Element)) return false
+    const seat = input.closest('[data-composer-seat]')
+    const zone = seat instanceof Element ? seat : input
+    return event.target instanceof Node && zone.contains(event.target)
+  }
+
   const onPointerDown = (event: PointerEvent): void => {
     // Every pointer type is tracked (mouse included): on coarse-primary
     // devices with an attached mouse/hardware keyboard a real click into
-    // the composer is typing intent and must not be dropped; only gestures
-    // that start in a NAVIGATION region are treated as non-typing.
-    const target = event.target instanceof Element ? event.target : null
+    // the composer is typing intent and must not be dropped. Navigation
+    // gestures (drawer rows, header crumbs — isNavigationGestureTarget)
+    // are never inside the seat, so they classify as non-typing by
+    // construction.
     lastPointerDown = Date.now()
-    lastPointerDownNav = isNavigationGestureTarget(target)
+    // Typing intent requires the pointerdown INSIDE the composer seat. A
+    // mid-window pointerdown in the message area (a scroll, a tap on a
+    // bubble) is NEITHER navigation NOR typing: it must not reclassify the
+    // pending navigation refocus as intended typing, and it must not cancel
+    // an in-flight drop loop (review M2: 切会 + 500ms 内滚动仍弹键盘).
+    lastPointerDownInSeat = gestureInSeat(event)
   }
 
   const onFocusIn = (event: FocusEvent): void => {
     const input = root.querySelector(COMPOSER_INPUT_SELECTOR)
     if (!(input instanceof HTMLElement)) return
     if (event.target !== input && !input.contains(event.target as Node)) return
-    // Layer 1: a recent gesture that did NOT start in a navigation region
-    // is user-intended typing. Programmatic refocus after a navigation
-    // gesture (drawer/breadcrumb session switch) is dropped the same way as
-    // a purely programmatic focus — and kept dropping for 12 rAF frames
-    // (the official submit effect re-focuses within the commit). A fresh
-    // pointer gesture cancels the drop loop (the tap must win).
-    const fromGesture = Date.now() - lastPointerDown < 500 && !lastPointerDownNav
+    // Layer 1: a recent SEAT gesture is user-intended typing (the tap that
+    // put the caret there). Programmatic refocus after anything else (a
+    // navigation gesture, or a non-seat pointerdown such as a message-area
+    // scroll inside the navigation window) is dropped — and kept dropping
+    // for 12 rAF frames (the official submit effect re-focuses within the
+    // commit). A fresh seat pointerdown cancels the drop loop (the new tap
+    // must win).
+    const fromGesture = Date.now() - lastPointerDown < 500 && lastPointerDownInSeat
     if (fromGesture) return
     let frames = 0
     let cancelled = false
-    const onGestureCancel = (): void => { cancelled = true }
+    const onGestureCancel = (event: PointerEvent): void => {
+      // Only a NEW typing gesture (composer seat pointerdown) cancels the
+      // drop loop — a neutral pointerdown (message-area scroll mid-window)
+      // must not interrupt the ongoing drop of a navigation refocus (review
+      // M2), and a navigation gesture starts its own drop instead.
+      if (gestureInSeat(event)) cancelled = true
+    }
     document.addEventListener('pointerdown', onGestureCancel, true)
     const drop = (): void => {
       frames += 1

@@ -280,10 +280,11 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
           />
 
           {/* VS Code 会话目录打开策略（design 16 §3.3 / 20 §4.3，2026-12）：
-              chamber 设置 vscodeOpenInNewWindow 默认 ON——从会话头部打开目录
-              时在 VS Code 新窗口打开（URL 追加 ?windowId=_blank，VS Code 运行
-              中也先聚焦已打开的相同文件夹，不重复开）；关闭则交还 VS Code
-              自身默认策略（运行中可能复用并替换最近活动窗口）。 */}
+              chamber 设置 vscodeOpenInNewWindow 默认 ON——会话头按钮与 OS 深链
+              （dsh-chamber://open-vscode）共用同一管线：从会话头部打开目录时在
+              VS Code 新窗口打开（URL 追加 ?windowId=_blank，VS Code 运行中也
+              先聚焦已打开的相同文件夹，不重复开）；关闭则交还 VS Code 自身
+              默认策略（运行中可能复用并替换最近活动窗口）。 */}
           <ToggleCard
             label={t('generalVscodeNewWindow')}
             hint={t('generalVscodeNewWindowDesc')}

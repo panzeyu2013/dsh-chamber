@@ -259,8 +259,9 @@
   自动化覆盖（2026-12 实测）：desktop chamber-settings / deep-link / open-in /
   ipc-surface-mirror 套件 + desktop tsc（含 main.ts 接线）+ build:preload +
   typecheck:settings-bridge（GeneralView/类型镜像）；build:renderer 与三列布局
-  的整窗视觉待 vendor 树就绪后补跑。**剩余实机门禁**：见下条 macOS 实机验收
-  （新窗口/复用两态在打包态 VS Code 的真机确认仍属外部门）。
+  的整窗视觉待 vendor 树就绪后补跑。**剩余实机门禁**：见『VS Code 深链 +
+  open-in（design 16/20）』条目的 macOS 实机验收（新窗口/复用两态在打包态
+  VS Code 的真机确认仍属外部门）。
 - **会话待办区（sidebar todo area，2026-12 已落地）**：侧边栏宽栏滚动区上方固定
   待办块（仅在有内容时出现、零占用；最多 3 条 +「还有 N 项」展开——展开侧有界：
   行区内部滚动，「收起」常驻，条目回落即自动收起）——对 chamberBridge 投影的
@@ -346,6 +347,20 @@
   拖拽把手死规则替换为官方属性锚点（`[data-width-handle]` /
   `[data-side]:not([role="tooltip"])`），清理已证伪的 `[class$="_titleRow"]`
   死规则并刷新样式表头部旧锚点声明。
+  **五合并复审加固（2026-12，合并后 multi-agent 审查轮，typecheck/test 全绿）**：
+  抽屉自愈单击清除改**双向判定**——真实 click 落在 pointerup 目标或其子树上
+  清除 pending，落在其**祖先**上同样清除（iOS 把迟到的合成 click 重定向到
+  down/up 目标的最近共同祖先，hover-reveal 位移后祖先点击已冒泡激活行，不再
+  由 heal 双激活；`shouldClearPendingHeal` 纯谓词化 + 边界单测）；heal 起点
+  防漏——pointerdown 起点也须在抽屉内（backdrop 边缘 12px 内起手滑入的 tap
+  不得叠在 backdrop 关闭动作上 heal）；晚到受信 click 抑制窗判定抽为
+  `isSuppressedLateClick` 纯函数并补边界用例（负时间/超窗/超 slop）；
+  IME layer-1 输入意图收紧为**仅 composer seat 内 pointerdown**（导航后 500ms
+  窗口内消息区滚动/点按既不再被当作输入意图、也不再取消进行中的导航回焦
+  丢弃——「切会 + 快速滚动」子场景不再弹键盘；seat 内手势/发送键/鼠标与
+  硬键盘输入意图保留，picker 流在键盘开启态不受影响）；breakpoints 测试
+  锚点收紧为 `selector {` 定位（前缀假阳），常量钉改名并标注 device-gated；
+  anchor/产物注释刷新（rc.1 复核注与 `[data-side]` 审计注）。
   **剩余**：实机门禁（§18.6：真机抽检——触控目标比例/抽屉开合/弹层不出屏/
   键盘遮挡/安全区；本轮新增：汉堡不重叠、crumbs 换行、Session 日志图标化
   可点、iOS 单击切换生效、切换不弹键盘且输入意图焦点不回归、设置各分区
@@ -547,6 +562,7 @@
   恢复期 pnpm prune 子进程不可 abort（退出延迟登记）。
 
 - **settings/connection 插件管理面 UX 重构已落地（2026-12；原「插件管理面 UX 重构」todo 已落地并移出目录）**：P0 文案/空态修正（方向词、空态范围注、未配置服务常驻提示、重启未配置事前警告、版本冲突横幅指引）；P1 ssh 默认视图与 gateway/local 同构、legacy diff 折叠为对账次级入口（design 21 §10 已登记偏离：纯层与后端行为不变，仅默认呈现改变）；P2a 插件入口自绘语义图标；P3 术语收敛（入口=管理插件、chamber 受管组件）。范围：仅 settings-connections 渲染层（PluginDialog/ConnectionsSection）与 locales 文案键值，纯层/IPC/域 deny 零改动。门禁：typecheck:connections、test:connections 已本地通过；build:renderer 由 CI/发布链路执行。
+
 ## 2026 分域一致性审计（desktop vs gateway，5 域 60+ 项）验证与修复轮
 
 > 对审计清单逐条只读复核（A/C/B/E/D 五域独立核验 + 主代理抽验），18/19 项 A-F、

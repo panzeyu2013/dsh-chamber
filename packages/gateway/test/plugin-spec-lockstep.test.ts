@@ -138,7 +138,8 @@ test('isDeniedPluginName denies the official and chamber domains (design 21 §6.
   assert.equal(isDeniedPluginName('@deepseek-ai/dsh'), true, 'official domain is denied')
   assert.equal(isDeniedPluginName('@dsh-chamber/dsh-host-client-graph'), true, 'seed host package is denied')
   assert.equal(isDeniedPluginName('@dsh-chamber/dsh-host-git-worktree'), true, 'seed host package is denied')
-  assert.equal(isDeniedPluginName('@dsh-chamber/dsh-chamber-client-ui-mobile'), true, 'mobile exception is denied')
+  // 真实 registry 名（mobile 是 gateway 打包的单例例外，无桌面链路）。
+  assert.equal(isDeniedPluginName('@dsh-chamber/dsh-client-ui-mobile'), true, 'mobile exception is denied')
   assert.equal(isDeniedPluginName('@dsh-chamber/anything-else'), true, 'chamber domain is entirely chamber-managed')
   // A versioned spec still matches by prefix when a caller forgets to extract
   // the name first.

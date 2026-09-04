@@ -126,3 +126,12 @@ test('projectBadgeCount: suppressed rows are still armed (count returns without 
   ]
   assert.deepEqual(reports.map(report => projectBadgeCount(completed, report)), [0, 0, 1])
 })
+
+test('projectBadgeCount: an explicit zero runningSubagents row is NOT suppressed', () => {
+  // 生产投影是稀疏的——derive.ts 只在 >0 时写 runningSubagents 键，显式 0 行
+  // 不可达；但实现的 `?? 0` 兜底把 0 语义定为「无子代理存活 = 不压制」，此
+  // 用例钉住该文档语义，防未来改判（0 必须照常计入）。
+  const completed = { local: { a: true } }
+  const explicitZero = { local: { sessions: { a: { runningSubagents: 0 } } } }
+  assert.equal(projectBadgeCount(completed, explicitZero), 1)
+})

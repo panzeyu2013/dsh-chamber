@@ -1,14 +1,16 @@
 /**
- * Drawer tap self-heal pure-logic tests: the tap/pan discriminator and the
- * heal-target predicate — the DOM-bound installer stays integration-tested
- * on device (repo convention: behavior installers are device-gated, the
- * pure decisions are covered here).
+ * Drawer tap self-heal pure-logic tests: the tap/pan discriminator, the
+ * heal-target predicate, the real-click clear decision and the
+ * late-real-click suppression window — the DOM-bound installer stays
+ * integration-tested on device (repo convention: behavior installers are
+ * device-gated, the pure decisions are covered here).
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   isStableTap, isHealableDrawerTarget, TAP_SLOP_PX, HEAL_GRACE_MS, HEAL_SUPPRESS_MS,
-  HEAL_FORM_SELECTOR, type ClosestFace,
+  HEAL_FORM_SELECTOR, shouldClearPendingHeal, isSuppressedLateClick,
+  type ClosestFace,
 } from '../src/client/drawer-taps.ts'
 
 /** A closest() stub: per-selector match answer (an element matches many
@@ -37,13 +39,43 @@ test('isStableTap: beyond the slop is a pan/scroll intent (never healed)', () =>
   assert.equal(isStableTap({ startX: 100, startY: 100, endX: 100, endY: 400 }), false)
 })
 
-test('heal timing constants: grace absorbs delayed clicks, suppression eats late real ones', () => {
-  // Grace: long enough for the engine to deliver a delayed-but-real click
-  // first (so the heal never fires), short enough to feel immediate.
+test('heal timing constants stay pinned at the documented values', () => {
+  // 常量钉:grace 是「等真实 click 先到」的窗口,抑制窗覆盖 heal 之后的迟到
+  // click——两者的「行为」由下方 isSuppressedLateClick 边界测试与实机门禁
+  // 覆盖(installer 时序为 device-gated,仓库惯例),这里只防意外改值。
   assert.equal(HEAL_GRACE_MS, 120)
-  // Suppression window: a TRUSTED click at the healed coordinates shortly
-  // after the heal is the delayed real click — never a second activation.
   assert.equal(HEAL_SUPPRESS_MS, 150)
+})
+
+test('isSuppressedLateClick: only a same-spot click inside the window is suppressed', () => {
+  // 窗口内(含两端边界)且距离在 slop 内 → 抑制。
+  assert.equal(isSuppressedLateClick(1_000, 1_000, 0, 0), true)
+  assert.equal(isSuppressedLateClick(1_000, 1_150, 0, 0), true)
+  assert.equal(isSuppressedLateClick(1_000, 1_050, TAP_SLOP_PX, -TAP_SLOP_PX), true)
+  // 超窗 / 负时间(时钟回退、异序事件)→ 不抑制。
+  assert.equal(isSuppressedLateClick(1_000, 1_151, 0, 0), false)
+  assert.equal(isSuppressedLateClick(1_000, 999, 0, 0), false)
+  // 超 slop → 是另一处点击,不抑制。
+  assert.equal(isSuppressedLateClick(1_000, 1_050, TAP_SLOP_PX + 1, 0), false)
+  assert.equal(isSuppressedLateClick(1_000, 1_050, 0, TAP_SLOP_PX + 1), false)
+})
+
+test('shouldClearPendingHeal: a click at/inside the tap target clears (delivered real click)', () => {
+  // 到达的兼容 click 落在 row 或其子树内:已激活,heal 必须取消。
+  assert.equal(shouldClearPendingHeal({ atOrInsideTapTarget: true, ancestorOfTapTarget: false }), true)
+})
+
+test('shouldClearPendingHeal: an ANCESTOR click clears too (hover-reveal retargeting)', () => {
+  // iOS 把迟到的合成 click 重定向到 down/up 目标的最近共同祖先;hover-reveal
+  // 位移后该祖先行在 pointerup 目标之上,click 已沿祖先冒泡激活 row——同样
+  // 不得再 heal(否则双激活)。
+  assert.equal(shouldClearPendingHeal({ atOrInsideTapTarget: false, ancestorOfTapTarget: true }), true)
+})
+
+test('shouldClearPendingHeal: an unrelated click keeps the heal armed', () => {
+  // 与 tap 目标无关的 click(其它行/抽屉外)不清除——heal 语义是「该 tap 的
+  // 真实 click 到达则零干预」,别的 click 不取消它。
+  assert.equal(shouldClearPendingHeal({ atOrInsideTapTarget: false, ancestorOfTapTarget: false }), false)
 })
 
 test('isHealableDrawerTarget: rows inside the drawer heal', () => {

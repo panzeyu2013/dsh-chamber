@@ -147,9 +147,12 @@ function normalizePhoneTier(): string {
     .replace(/\s+/g, ' ')
 }
 
-/** The CSS block `selector { … }` (normalized form), or null. */
+/** The CSS block `selector { … }` (normalized form), or null. Anchored on the
+ *  selector followed by its opening brace: a LONGER rule that merely starts
+ *  with the same prefix (e.g. `A > B > C` for `A > B`) can never satisfy a
+ *  shorter selector's assertion (prefix false-positive). */
 function cssBlock(css: string, selector: string): string | null {
-  const at = css.indexOf(selector)
+  const at = css.indexOf(`${selector} {`)
   if (at === -1) return null
   const open = css.indexOf('{', at)
   if (open === -1) return null
