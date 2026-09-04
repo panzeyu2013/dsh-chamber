@@ -2270,8 +2270,15 @@ export default function App() {
 
   // 未读徽标（design 19 §3.7）：completedBySource（完成未读蓝点集）是徽标计数的
   // 唯一事实源——跨来源求未读会话数（projectBadgeCount，纯函数），推给主进程
-  // 呈现 Dock/任务栏红气泡。计数与蓝点同源同规则（武装/解除同一状态机），两
-  // 面永不分叉；0 = 清除。桥未就绪（window.dshChamber 异步 expose）时静默跳过
+  // 呈现 Dock/任务栏红气泡。计数与蓝点同源同规则（武装/解除同一状态机），两面
+  // 永不分叉；0 = 清除。子代理压制（06 §4.5 同规）：父回合结束
+  // 但后台子代理仍存活（runningSubagents > 0）的会话虽然已武装蓝点，窗口内点
+  // 被运行环压制、complete 通知被过滤，徽标同样不计——投影须读最新运行时事实
+  // （runtimeFacts 行），否则 Dock 会在「主分支闲置等子代理」期间误亮红气泡。
+  // 子代理全部结束后 armed 蓝点正常浮现计入（与侧边栏同语义）。runtimeFacts
+  // 在依赖里：子代理计数归零（事实行变化）时无需蓝点变化也要重推当前计数。
+  // 通道-only 变化可能重推相同计数值——主进程 setBadgeCount 幂等，无副作用。
+  // 桥未就绪（window.dshChamber 异步 expose）时静默跳过
   // ——计数变化发生在运行时上报之后（远晚于桥暴露），首个真实计数不会丢；
   // 重载后复位为 0 的兜底推送由下方挂载 effect 负责。reject 兜底（review B1）：
   // 同进程 IPC 偶发拒绝不得让徽标停滞到下一次计数变化——按 LISTENER_READY 预算
@@ -2295,16 +2302,17 @@ export default function App() {
     })
   }, [])
   useEffect(() => {
-    const count = projectBadgeCount(completedBySource)
+    const count = projectBadgeCount(completedBySource, runtimeFacts)
     badgeCountRef.current = count
     pushBadgeWithRetry(LISTENER_READY_RETRY_LIMIT)
-  }, [completedBySource, pushBadgeWithRetry])
+  }, [completedBySource, runtimeFacts, pushBadgeWithRetry])
 
   // 桥迟到的兜底（同 LISTENER_READY 重试纪律，见通知就绪手shake）：窗口重载/
   // 重建后 completedBySource 复位为 {}，必须向主进程推 0 清除遗留徽标——桥经
-  // requestAppInfo 异步暴露，可能晚于首个 [completedBySource] effect 的提交
-  // 时机（该 effect 在挂载帧即推 0，此时桥大概率未就绪）。有界重试直至桥出现，
-  // 推一次当前计数（0）后停止；预算耗尽静默放弃（dev 无桥场景的正常路径）。
+  // requestAppInfo 异步暴露，可能晚于首个 [completedBySource, runtimeFacts]
+  // effect 的提交时机（该 effect 在挂载帧即推 0，此时桥大概率未就绪）。有界重试
+  // 直至桥出现，推一次当前计数（0）后停止；预算耗尽静默放弃（dev 无桥场景的
+  // 正常路径）。
   useEffect(() => {
     if (window.dshChamber?.badge !== undefined) return
     let attempts = 0

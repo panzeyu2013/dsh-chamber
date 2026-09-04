@@ -229,8 +229,17 @@
   `dsh-chamber:badge-count` trustedIpc → 主进程白名单（有限非负整数 ≤9999）+
   `badgeEnabled` 裁决（关闭强制清零、重开 reconcile 恢复）+ 平台门
   `app.setBadgeCount`；设置新增 `notifications.badgeEnabled`（默认 true，通用页
-  「通知」组独立开关行，zh/en i18n）。自动化覆盖：`badge.test.ts`（desktop）、
-  `badge-count.test.ts`（renderer）、chamber-settings 与 notifications-settings
+  「通知」组独立开关行，zh/en i18n）。**子代理压制修复**：父回合结束但后台
+  子代理仍存活（`runningSubagents > 0`，06 §4.5 后台模式）的武装蓝点不再计入
+  徽标——`projectBadgeCount` 增加运行时事实压制参数（App badge effect 同时依赖
+  `runtimeFacts`，子代理计数归零即重推），与窗口内运行环压制/complete 通知抑制
+  同规，修复「主分支闲置等待子代理期间 Dock 误亮红气泡」误报；子代理全部结束后
+  蓝点正常浮现计入。已知呈现边界（设计 19 §3.7 计数语义，文档化取舍）：徽标只计
+  App 账本武装的完成——vendor completed 兜底行仅窗口内呈现（首观察/撤回窗口）；
+  断连窗口徽标按保留账本计数、子代理压制数据随来源事实清空而短暂缺失（重连后
+  事实行带回 runningSubagents 自动归零，自愈）。自动化覆盖：`badge.test.ts`
+  （desktop）、`badge-count.test.ts`
+  （renderer，含子代理压制用例）、chamber-settings 与 notifications-settings
   新键用例。**剩余实机门禁**：macOS Dock 红气泡打包态实机（武装/阅读解除/来源
   退役三态 + 重载清零 + 退出清零）；Linux 仅 Unity launcher 家族可见（GNOME 的
   Dash to Dock 消费同一 DBus API 可见；默认 GNOME/KDE 无效果，文档化平台限制）；

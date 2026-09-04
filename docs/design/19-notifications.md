@@ -326,8 +326,15 @@ interface ChamberSettings {
   窗口稍后隐藏不会重新触发该完成——与「仅窗口隐藏时打扰」语义一致，侧边栏
   蓝点仍覆盖，故不补发。
 - **子代理运行期不视为完成**：父会话回合结束但 `runningSubagents > 0` 时抑制
-  complete 通知（与官方 Rows / 侧边栏呈现优先级一致；抑制在去重之前、不记账，
-  vendor 若在子代理全部结束后才武装 completed，届时正常补发）。
+  complete 通知（与官方 Rows / 侧边栏呈现优先级一致；抑制在去重之前、不记账）。
+  补发语义依赖 vendor 武装 completed 的时序，两种分支均为文档化行为：vendor
+  **晚武装**（子代理全部结束后才武装）→ completed 边沿届时正常补发横幅；
+  vendor **早武装**（官方 manager 在父 idle 边沿武装的时序，子代理存活期间
+  completed 已为 true）→ 滤除的边沿不记账、子代理结束后无新 completed 边沿，
+  该完成不再有横幅补发（窗口内完成点与未读徽标不受影响，仍正常呈现）。
+  **未读徽标（§3.7）应用同一压制**——蓝点账本保持武装（与官方「completed 保持
+  武装、subagents 分支优先呈现」同构），徽标投影只计「App 账本武装且未被运行环
+  压制」的会话；vendor completed 兜底行与断连窗口的呈现边界见 §3.7 计数语义。
 - 通知失败（isSupported false / 系统权限拒绝）**静默降级不误报**：会话业务不受
   影响，蓝点照常。
 - notification-open 的 `send()` 返回不等于消费成功：所有未 ACK 项跨 renderer
@@ -354,9 +361,12 @@ OpenChamber 参考实现：`packages/electron/main.mjs` 的 `desktop_tray_update
 会话数**（`unseenCount > 0`，`dockBadgeEnabled` 开关控制）。dsh-chamber 移植要点：
 
 ```
-completedBySource（App 完成未读蓝点集，06 §4.1，只读复用——徽标与蓝点同源同
-规则，两面永不分叉）
-  → projectBadgeCount()（renderer 纯函数，跨来源求未读会话数，0 = 清除）
+completedBySource（App 完成未读蓝点集，06 §4.1，只读复用——徽标与窗口内蓝点
+同源同规则，并同样应用子代理运行环压制（06 §4.5）；对 App 账本驱动的完成
+两面永不分叉，vendor completed 兜底与断连窗口的呈现边界见「计数语义」）
+  → projectBadgeCount(completedBySource, runtimeFacts)（renderer 纯函数，跨来源
+    求「用户实际可见」的未读会话数——最新事实行 runningSubagents > 0（后台子
+    代理存活）的武装蓝点不计入；0 = 清除）
   → window.dshChamber.badge.set(count)                 ← 新 IPC（invoke）
   → 主进程：白名单校验 → 记录意图 → 设置裁决（badgeEnabled 关 → 强制 0）
     → 平台门（app.setBadgeCount：darwin/linux；win32 overlay 门控）→ 呈现
@@ -365,6 +375,24 @@ completedBySource（App 完成未读蓝点集，06 §4.1，只读复用——徽
 - **计数语义**：一个未读会话 = 1（与 OpenChamber「chats with unseen activity」
   同款，不是通知条数）；pending（ask/request）不计数（蓝点面不覆盖，侧边栏
   pending 徽标仍承担窗口内提醒）。
+- **呈现边界（既有窗口，徽标只计 App 账本）**：窗口内完成点 = App 账本 ∪
+  vendor `completed` 兜底行（`mergeRuntimeFacts`），徽标只投影 App 账本——①
+  vendor-only 完成的会话（首观察/撤回窗口内完成、从未被 App 观察到
+  running→idle 边沿）窗口内显示完成点而徽标恒为 0（App 未确认的完成不上 Dock，
+  诚实不臆测）；② 断连（来源 not-ready）窗口清空运行时事实而蓝点账本跨断连
+  保留（06 §4.2），徽标按保留账本继续计数、窗口内该来源无行可显示——两者均为
+  既有设计取舍的诚实边界，不是分叉缺陷。
+- **子代理压制（与窗口内蓝点同语义）**：父会话回合结束但后台子代理仍存活
+  （`runningSubagents > 0`，06 §4.5 后台模式）时，该会话已武装的完成蓝点**不计
+  入徽标**——窗口内蓝点此刻被侧边栏运行环压制、complete 横幅被同规过滤
+  （§3.2），徽标投影必须一致，否则「主分支闲置等子代理」期间 Dock 误亮红气泡；
+  压制信息取来源最新运行时事实行（App 的 badge effect 同时依赖
+  `completedBySource` 与 `runtimeFacts`：子代理计数归零时无需蓝点变化即可重推）。
+  子代理全部结束后 armed 蓝点正常浮现计入（与侧边栏「子 agent 全结束才显示
+  完成点」同刻）；父会话重新运行（蓝点解除）自然归零。**断连窗口**：来源
+  not-ready 即清运行时事实（压制数据随 generation 事实失效，06 §4.2）而蓝点
+  账本保留——若断连时子代理仍在远端运行，已武装蓝点短暂计入；重连后事实行
+  带回 `runningSubagents > 0` 自动回到 0，自愈窗口，接受。
 - **主进程裁决与状态**：`pendingBadgeCount`（最近一次 renderer 意图）+ 设置
   权威裁决——`badgeEnabled` 关闭即强制清零，重新开启经 `reconcileBadgeCount`
   恢复当前未读数（settings-set 后即时收敛，不等下一次推送）；quit 在途兜底
@@ -379,8 +407,9 @@ completedBySource（App 完成未读蓝点集，06 §4.1，只读复用——徽
   「始终开启」与 OpenChamber 默认开启；与横幅主开关 `enabled` 独立）。设置 UI
   在通用页「通知」组加一条始终可见的无边框开关行（主开关下方、子设置卡上方），
   不增加边框层数；zh/en i18n。
-- **renderer 推送**：`[completedBySource]` effect 每次变化推当前计数（蓝点
-  武装/阅读解除/来源退役自然驱动徽标增减）；挂载时推 0 兜底（窗口重载后蓝点
+- **renderer 推送**：`[completedBySource, runtimeFacts]` effect 每次变化推当前
+  计数（蓝点武装/阅读解除/来源退役/子代理计数归零自然驱动徽标增减；通道-only
+  变化重推同值——主进程 setBadgeCount 幂等）；挂载时推 0 兜底（窗口重载后蓝点
   复位为 {}，主进程遗留徽标必须清除）+ 桥迟到有界重试（复用
   `LISTENER_READY_RETRY_*` 预算）。桥缺失（web/dev）静默跳过。
 - **校验**：`{ count }` 必须为有限数（结构化克隆可携带 NaN/Infinity，显式
