@@ -10,6 +10,53 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 > 中文版: [CHANGELOG.md](../CHANGELOG.md)
 
+## [Unreleased]
+
+### Added
+
+- **`update` syncs the dsh anchor by default (design 17/18 consistency)** —
+  `install-gateway.sh update` gains `--dsh-upgrade/--no-dsh-upgrade`
+  (**default: upgrade**). The target gateway asset carries its release line's
+  paired dsh baseline (`dshAnchorVersion` in `packages/gateway/package.json`,
+  hard-asserted in sync with the installer constant and the release.yml env by
+  release-preflight; assets without the field fall back to the running
+  script's constant). After the hot switch the `dsh-anchor` is upgraded to
+  that baseline via staging + an atomic swap, so the F4 shell-upgrade fallback
+  on first boot lands on the new baseline — the managed dsh stays consistent
+  with the gateway. `--no-dsh-upgrade` (or declining the interactive confirm)
+  pins the pre-upgrade dsh version. Failures (npm install/verify/swap) roll
+  back with the update (old anchor restored); INT/TERM restores the anchor
+  best-effort, and crash leftovers under `.anchor.*` are cleaned by the next
+  `acquire_lock`. The npm mirror chosen at install time is persisted into
+  gateway.conf (`NPM_REGISTRY`) from this release onward and reused by the
+  update-time anchor sync (mirror choices of older installs lived only in the
+  wizard's memory — add `NPM_REGISTRY` to gateway.conf before the first anchor
+  sync on such deployments; the failure hint points there). Sites: `scripts/install-gateway.sh` (cmd_update + anchor
+  helpers), `packages/gateway/package.json`,
+  `scripts/dev/release-preflight.mjs` (three-source assertion),
+  release-checklist and deploy-gateway.md docs.
+
+### Fixed
+
+- **Gateway crash-loop self-healing after an interrupted upgrade (design 18 F4)** —
+  An interrupted F4 shell-upgrade fallback whose intent journal was lost (e.g. the
+  installer's health-check timeout rolled back to an older gateway shell, which
+  consumed the newer shell's journal) strands the durable state as "current
+  pointer still on the old tree + override invalidated + no journal": the startup
+  transaction reports clean, yet the first startLocal's resolveWorkspace throws
+  `gateway runtime current pointer has no matching active override`, hard-exiting
+  the process into a systemd crash loop with no HTTP recovery surface. The
+  gateway/desktop boot F4 gate now re-arms the shell-invalidation transaction
+  (snapshot + probe-gated builtin fallback) whenever the pointer exists with an
+  invalidated override and no resumable journal, self-healing instead of
+  crash-looping; the invalidated record and historical selection are preserved.
+  Stale failure markers (lastOutcome=snapshot-failed/swapAttempted) are
+  superseded per fresh-transaction semantics — an F4 whose journaled apply
+  kept failing at the snapshot retries every boot and heals once the cause
+  clears. Fix sites: `packages/gateway/src/runtime-manager.ts`
+  executeStartupTransaction,
+  `packages/desktop/main.ts` boot F4 gate (parity).
+
 ## [0.2.1-beta.1] - 2026-09-03
 
 ### Added

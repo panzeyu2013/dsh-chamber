@@ -36,14 +36,18 @@ CI:    §7b dry_run 先行（新路径必须验证过一次）→ §7c 正式 ta
       同样经 preflight 硬断言该基线。
 - [ ] **安装脚本 dsh 版本常量**：`scripts/install-gateway.sh` 内置的
       `DSH_CHAMBER_DSH_VERSION`（当前 `0.1.2-rc.1`）与
-      `.github/workflows/release.yml` 的 `env.DSH_CHAMBER_DSH_VERSION` 一致
-      ——dsh 运行时版本变更时必须同步改脚本常量（该常量为脚本默认安装
-      版本，用户可交互覆盖）。
+      `.github/workflows/release.yml` 的 `env.DSH_CHAMBER_DSH_VERSION`、
+      `packages/gateway/package.json` 的 `dshAnchorVersion` 三者一致
+      ——dsh 运行时版本变更时必须同步改脚本常量与 gateway 包字段
+      （脚本常量为全新安装默认装锚版本；`dshAnchorVersion` 随 gateway
+      tarball 携带，是 `update --dsh-upgrade`（默认开启）升级已有部署
+      内建锚的权威基线——旧资产无该字段时 update 回退运行脚本常量）。
+      三者一致性由 release-preflight 硬断言。
 
 ## 1.5 机械门禁：release:preflight
 
 - [ ] `node scripts/dev/release-preflight.mjs <版本>` 全绿（版本统一性含 fork 副本与
-      安装脚本 dsh 常量、changelog 中英对等、verify:i18n、**全部 workflow action SHA
+      安装脚本/release.yml/gateway 包三源 dsh 常量、changelog 中英对等、verify:i18n、**全部 workflow action SHA
       可解析上游**（`--offline` 跳过网络）、冲突标记、git 干净、frozen install、
       test:release-workflow；最后提示 §3 全量测试套件须在**精确发布提交**上跑）。
 - [ ] 网络受限时 `--offline` 至少通过非网络检查；CI 的 test job 已内置

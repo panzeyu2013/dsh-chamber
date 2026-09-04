@@ -10,6 +10,42 @@
 
 > English: [docs/CHANGELOG.en-US.md](docs/CHANGELOG.en-US.md)
 
+## [Unreleased]
+
+### 新增
+
+- **gateway update 默认同步升级 dsh 内建锚（设计 17/18 一致性）** ——
+  `install-gateway.sh update` 新增 `--dsh-upgrade/--no-dsh-upgrade`（**默认
+  升级**）：目标 gateway 资产携带发行线配套 dsh 基线（`packages/gateway/
+  package.json` 的 `dshAnchorVersion`，release-preflight 硬断言与脚本常量、
+  release.yml env 三者同步；旧资产无该字段时回退运行脚本常量），热切换后把
+  `dsh-anchor` **staging + 原子交换**升级到该基线——升级后首次启动的 F4 壳
+  失效回落即落到新基线，托管 dsh 与 gateway 保持一致；`--no-dsh-upgrade`
+  （或交互确认拒绝）保持升级前的 dsh 版本（pin）。失败（npm 安装/验证/交换）
+  随 update 统一回滚（旧锚退避换回）；INT/TERM 中断尽力复原锚，崩溃残余
+  `.anchor.*` 由下次 acquire_lock 清理；安装时选择的 npm 镜像自本版起持久化进
+  gateway.conf（NPM_REGISTRY），update 锚同步沿用同一源（更早部署的镜像
+  选择只在向导内存中，首次锚同步前可在 gateway.conf 补设 NPM_REGISTRY
+  ——失败提示会给出该指引）。改点：`scripts/install-gateway.sh`
+  （cmd_update + 锚同步辅助函数）、`packages/gateway/package.json`、
+  `scripts/dev/release-preflight.mjs`（三源断言）、release-checklist 与
+  deploy-gateway.md 文档。
+
+### 修复
+
+- **gateway 升级中断后崩溃循环自愈（设计 18 F4）** —— F4 壳升级回落事务被中断且
+  其 intent journal 丢失（如安装器健康检查超时回滚到旧壳、旧壳消费了新壳的 journal）
+  会把 durable 状态卡在「current 指针仍指向旧树 + override 已失效 + 无 journal」：
+  启动事务报干净、首个 startLocal 的 resolveWorkspace 却抛
+  `gateway runtime current pointer has no matching active override`，进程硬退 +
+  systemd 崩溃循环且无任何 HTTP 恢复面。现在网关/桌面启动 F4 门在
+  指针存在 + override 已失效 + 无可续 journal 时自动重新武装 shell-invalidation
+  事务（快照 + 探针门控的内建回落），自我修复而不是每启崩溃；已失效记录与历史选择保留。
+  陈旧失败标记（lastOutcome=snapshot-failed/swapAttempted）按 fresh-transaction-
+  supersedes 清除——journal 在途 + 快照持续失败的 F4 也会每启重试、病因消除即自愈。
+  修复点：`packages/gateway/src/runtime-manager.ts` executeStartupTransaction、
+  `packages/desktop/main.ts` 启动 F4 门（parity）。
+
 ## [0.2.1-beta.1] - 2026-09-03
 
 ### 新增

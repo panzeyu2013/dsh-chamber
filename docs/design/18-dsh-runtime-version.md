@@ -215,6 +215,14 @@ override（未失效时）→ 内建锚（`--dsh-path` ?? `findDshWorkspace`）�
 `shellVersion` = gateway 包版本；"恢复内建" = 经 §3.3/§3.7 完整激活事务回落
 锚链，成功裁决才删除 override/journal。既有
 "仅设 `DSH_GATEWAY_DSH_PATH`"的部署行为不变（env 恒最高）。
+  - **2026-09 修订（gateway update 默认同步内建锚）**：gateway 发行与其配套 dsh
+    基线（内建锚版本）同代发布，基线随 gateway 资产携带（`packages/gateway/
+    package.json` 的 `dshAnchorVersion`；install-gateway.sh 常量 = release.yml
+    env = 该字段，release-preflight 硬断言）。`install-gateway.sh update` 默认
+    （`--dsh-upgrade`）在热切换 gateway 后把 dsh-anchor **staging + 原子交换**
+    升级到该基线——升级后首启 F4 回落即落到新基线，托管 dsh 与 gateway 一致；
+    `--no-dsh-upgrade` 或交互拒绝保持升级前锚版本（pin）。旧资产无该字段时回退
+    运行脚本常量。失败随 update 统一回滚（旧锚换回先于重启旧服务）。
 
 - **gateway staged selection 证明**：gateway 的 select/apply 分步。仅当 select 当下
   `current` 本来就缺失（内建锚是权威）时写 `selectedOnly:true`，允许“已缓存/已安装但
@@ -230,6 +238,19 @@ override（未失效时）→ 内建锚（`--dsh-path` ?? `findDshWorkspace`）�
   过数据、内建 pin（默认 0.1.2-rc.1，不随壳移动）可能读不了新格式数据；探测失败
   → **自动恢复上一 override 树（受保护类，仍在）+ 响亮提示**。「单调向前」**仅对
   壳版本成立**（§7）。
+  - **2026-09 修订（中断失效自愈，gateway/desktop 启动 F4 门）**：「durable 失效
+    = 回落裁决已提交」有一条例外——F4 首事务被中断且其 intent journal 丢失
+    （如安装器健康超时回滚旧壳、旧壳消费新壳 journal）会把 durable 状态卡在
+    「current 指针仍在旧树 + override 已失效 + 无 journal」：启动事务报干净、
+    首个 startLocal 的解析却 fail-loud（gateway `resolveWorkspace` 抛
+    'current pointer has no matching active override'，进程崩溃循环且无 HTTP
+    恢复面；desktop 永久阻塞且无恢复动作）。指针-有效 + 已失效 + journal-缺失
+    唯一对应「裁决已提交、事务从未持久启动」（settled 失效必为指针已清或记录
+    已重新激活），故两 owner 的启动 F4 门在该指纹下重新武装 shell-invalidation
+    事务（快照 + 探针门控回落内建；陈旧 lastOutcome/swapAttempted 标记按
+    fresh-transaction-supersedes 清除；settled 状态不触发）。兄弟 fail-closed
+    状态（override 缺失 + 指针在、旧壳 builtin journal）不在自愈范围，保持各自
+    的阻塞/恢复面。
 - **失效的用户可见记录（R3-3 UX-P1-F1）**：壳更新导致运行时选择失效时，settings
   记录一行「因应用更新，dsh 运行时已回落内建 vX（原选择 vY 保留，可重新选用）」——
   用户的运行时选择**绝不无声消失**。

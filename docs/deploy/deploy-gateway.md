@@ -183,10 +183,19 @@ gateway.example.com {
 | `install-gateway.sh status` | 版本/端口/服务状态/健康 |
 | `install-gateway.sh logs` | journalctl / 前台日志 tail -f |
 | `install-gateway.sh restart` | 重启 gateway（systemd 重启单元 / 前台按 pid 记录重启） |
-| `install-gateway.sh update [--version X] [--channel beta]` | 升级：下载+校验→热切换→健康检查→失败自动回滚（旧版保留） |
+| `install-gateway.sh update [--version X] [--channel beta] [--no-dsh-upgrade]` | 升级：下载+校验→热切换→健康检查→失败自动回滚（旧版保留）。**默认把 dsh 内建锚同步升级**到新 gateway 发行线配套的 dsh 基线（staging + 原子交换，失败随 update 一并回滚；`--no-dsh-upgrade` 拒绝以保持升级前的 dsh 版本） |
 | `install-gateway.sh uninstall [--purge]` | 卸载：停服务→删单元→npm 卸载；默认保留数据，`--purge` 全清 |
 
 已有安装时直接运行脚本会重走完整向导（预览页会提示"检测到已有安装，将原地复用数据并覆盖配置"）；日常管理用子命令（status/logs/restart/update/uninstall）。
+
+> **dsh 版本一致性（update 默认同步锚）**：gateway 发行与其配套 dsh 基线
+> （内建锚版本）同代发布，基线随 gateway tarball 的 `dshAnchorVersion` 携带。
+> `update`（默认，`--dsh-upgrade`）在热切换 gateway 后把 `dsh-anchor` 原子升级
+> 到该基线——升级后首次启动的「壳失效回落（F4）」即落到新基线，托管 dsh 与
+> gateway 保持一致；拒绝同步（`--no-dsh-upgrade`，交互确认亦可拒绝）则锚保持
+> 升级前版本（pin）。升级前你在运行时面板自选的 dsh 版本树仍保留在磁盘，
+> 可经 `/chamber/runtime` 重新选用。旧 gateway 资产（无 `dshAnchorVersion`
+> 字段）回退到运行脚本的内置 dsh 常量。
 
 ## 7. 非交互 / CI
 
