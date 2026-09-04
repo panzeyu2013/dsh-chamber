@@ -29,7 +29,6 @@ import {
   IconCloseOutline16,
   IconDataOutline16,
   IconEditOutline16,
-  IconFolderOpenOutline16,
   IconLinkOutline16,
   IconPlayOutline16,
   IconPlusOutline16,
@@ -132,6 +131,28 @@ const LOCAL_ROW_POLL_MS = 30_000
 /** Slugify a ~/.ssh/config alias into the id whitelist (^[a-zA-Z0-9_-]+$). */
 function slugifyAlias(alias: string): string {
   return alias.toLowerCase().replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/^-+|-+$/g, '')
+}
+
+/** 插件管理入口图标（UX 重构 P2a）：primitives 无 cordis/插件候选，按 sidebar
+ *  本地自绘先例自绘（16px，stroke 跟随 currentColor）。
+ *  字形来源：lucide `plug`，ISC License，https://lucide.dev/license */
+function PluginManageIcon16() {
+  return (
+    <svg
+      width={16}
+      height={16}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      focusable={false}
+    >
+      <path d="M12 22v-5M9 8V2M15 8V2M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z" />
+    </svg>
+  )
 }
 
 function credentialReentryEdit(editing: SshInstanceSpec | 'new' | null, value: HostDraft): { sshPassword: boolean; gatewayToken: boolean; gatewayPassword: boolean } {
@@ -1340,7 +1361,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                 aria-label={t('pluginsOpen')}
                 onClick={() => { setPluginDialogFor({ kind: 'local' }) }}
               >
-                <IconFolderOpenOutline16 />
+                <PluginManageIcon16 />
               </button>
               <button
                 type="button"
@@ -1520,6 +1541,9 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                         ? <p className={css.error} role="alert">{restartNote.text}</p>
                         : <p className={css.hint} role="status">{restartNote.text}</p>
                       : null}
+                    {spec.transport === 'ssh' && spec.serviceName === null && spec.kind === 'dsh'
+                      ? <p className={css.hint}>{t('serviceUnconfiguredHint')}</p>
+                      : null}
                     <PluginDiagnosticLine diagnostic={pluginDiagnostics?.[`${spec.kind}-${spec.id}`]} t={t} />
                     <Button
                       variant={connected ? 'outline' : 'primary'}
@@ -1604,7 +1628,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                           }
                         }}
                       >
-                        <IconFolderOpenOutline16 />
+                        <PluginManageIcon16 />
                       </button>
                       <span className={css.footSpacer} />
                       {spec.transport === 'ssh'
