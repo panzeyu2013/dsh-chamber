@@ -5,8 +5,10 @@
  * panel's design language (`--dsw-alias-*` tokens).
  *
  * Layout: compact cards —「text left/top, control right/bottom」. Short
- * toggle groups (启动与关闭 / 运行) are a two-column card grid
- * (.generalGrid + .generalCard, auto-fit collapses on narrow panels), the
+ * toggle groups (启动与关闭) are a two-column card grid
+ * (.generalGrid + .generalCard, auto-fit collapses on narrow panels); the
+ * 运行 group is the three-column variant (.generalGridTriple — its three
+ * short toggle cards stay on one row), the
  * two radio pairs (关闭窗口时 / 通知时机) render as slider-style segmented
  * controls (SegmentedControl: OFFICIAL business-blue thumb + inverted
  * selected text), the notification master toggle as the official switch
@@ -27,7 +29,9 @@
  *   登录自启 (launchAtLogin, darwin/win32/linux — design 21 M4 win32 解锁);
  * - 运行: 保持唤醒 (keepAwake, default off); 退出确认 (quitConfirmation,
  *   2026-08: confirm only while the LOCAL instance runs — remote tunnels
- *   never prompt; update-downloaded exempt);
+ *   never prompt; update-downloaded exempt); VS Code 新窗口 (vscodeOpenInNewWindow,
+ *   design 16 §3.3, default on — 会话目录在 VS Code 新窗口打开，避免
+ *   VS Code 默认策略复用并替换最近活动窗口);
  * - 通知 (design 19, merged into General — no new nav entry): 主开关 + 未读
  *   徽标开关（design 19 §3.7，独立于主开关、始终可见）+ 启用后展开的子设置
  *   (通知时机 hidden-only / always + 事件开关 complete / ask / request +
@@ -244,7 +248,9 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
       <div className={css.generalGroup}>
         <h3 className={css.generalGroupTitle}>{t('generalGroupRuntime')}</h3>
 
-        <div className={css.generalGrid}>
+        {/* 三列网格（.generalGridTriple）：保持唤醒 / 退出确认 / VS Code 新窗口
+            固定同一行——三张都是短开关卡，见 SettingsShell.module.css。 */}
+        <div className={clsx(css.generalGrid, css.generalGridTriple)}>
           <ToggleCard
             label={t('generalKeepAwake')}
             hint={t('generalKeepAwakeDesc')}
@@ -262,6 +268,19 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
             checked={settings?.quitConfirmation !== false}
             disabled={!hydrated}
             onChange={(next) => save({ quitConfirmation: next })}
+          />
+
+          {/* VS Code 会话目录打开策略（design 16 §3.3 / 20 §4.3，2026-12）：
+              chamber 设置 vscodeOpenInNewWindow 默认 ON——从会话头部打开目录
+              时在 VS Code 新窗口打开（URL 追加 ?windowId=_blank，VS Code 运行
+              中也先聚焦已打开的相同文件夹，不重复开）；关闭则交还 VS Code
+              自身默认策略（运行中可能复用并替换最近活动窗口）。 */}
+          <ToggleCard
+            label={t('generalVscodeNewWindow')}
+            hint={t('generalVscodeNewWindowDesc')}
+            checked={settings?.vscodeOpenInNewWindow !== false}
+            disabled={!hydrated}
+            onChange={(next) => save({ vscodeOpenInNewWindow: next })}
           />
         </div>
       </div>

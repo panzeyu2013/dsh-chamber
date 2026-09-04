@@ -44,6 +44,14 @@ export interface ChamberSettings {
   /** Quit confirmation (design 14 D2, 2026-08 修订): confirm before quitting
    *  while the LOCAL dsh instance is running; remote tunnels never prompt. */
   quitConfirmation: boolean
+  /** VS Code open-in window policy (design 16 §3.3 / 20 §4.3, 2026-12):
+   *  true (default) → session folders open in a NEW VS Code window — the
+   *  vscode:// URL gains `?windowId=_blank`, which VS Code's main process
+   *  honors before its own reuse decision (a folder already open in some
+   *  window still gets focused, never duplicated);
+   *  false → hand VS Code the bare URL and let ITS default policy decide
+   *  (with a running instance it reuses/replaces the last active window). */
+  vscodeOpenInNewWindow: boolean
   /** dsh runtime npm registry origin (design 18 M4): default npmjs; a
    *  user-selected mirror/custom origin, validated as an https:// URL with
    *  no userinfo (trust anchor — switching origin switches the trust anchor). */
@@ -71,6 +79,7 @@ export const DEFAULT_CHAMBER_SETTINGS: ChamberSettings = {
   launchAtLogin: false,
   keepAwake: false,
   quitConfirmation: true,
+  vscodeOpenInNewWindow: true,
   registryOrigin: 'https://registry.npmjs.org',
   notifications: {
     enabled: false,
@@ -87,6 +96,7 @@ const SETTINGS_KEYS: ReadonlyArray<keyof ChamberSettings> = [
   'launchAtLogin',
   'keepAwake',
   'quitConfirmation',
+  'vscodeOpenInNewWindow',
   'registryOrigin',
   'notifications',
 ];
@@ -145,6 +155,7 @@ export function normalizeSettings(input: unknown): ChamberSettings {
   if (typeof record.launchAtLogin === 'boolean') base.launchAtLogin = record.launchAtLogin;
   if (typeof record.keepAwake === 'boolean') base.keepAwake = record.keepAwake;
   if (typeof record.quitConfirmation === 'boolean') base.quitConfirmation = record.quitConfirmation;
+  if (typeof record.vscodeOpenInNewWindow === 'boolean') base.vscodeOpenInNewWindow = record.vscodeOpenInNewWindow;
   const origin = normalizeRegistryOrigin(record.registryOrigin);
   if (origin !== null) base.registryOrigin = origin;
   if (record.notifications !== undefined) {
@@ -166,7 +177,7 @@ function isValidSettingsFile(input: unknown): input is Record<string, unknown> {
   if (record.windowCloseBehavior !== undefined
     && record.windowCloseBehavior !== 'hide-to-tray'
     && record.windowCloseBehavior !== 'quit') return false;
-  for (const key of ['launchAtLogin', 'keepAwake', 'quitConfirmation'] as const) {
+  for (const key of ['launchAtLogin', 'keepAwake', 'quitConfirmation', 'vscodeOpenInNewWindow'] as const) {
     if (record[key] !== undefined && typeof record[key] !== 'boolean') return false;
   }
   // Once persisted, an invalid registry trust anchor is corruption, not a

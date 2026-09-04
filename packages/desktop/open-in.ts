@@ -63,6 +63,11 @@ export interface OpenInLaunchContext {
   vscodeAvailable(): boolean
   /** Open a vscode:// URL (main-process shell.openExternal wrapper; loud failure). */
   openVscodeUrl(url: string): Promise<{ ok: true } | { ok: false; error: string }>
+  /** Chamber setting `vscodeOpenInNewWindow` (design 16 §3.3): lazy per-launch
+   *  read like vscodeAvailable; absent/undefined → bare URL (VS Code's own
+   *  default reuse/replace policy). Passed through to runVscodeLaunch by the
+   *  vscode provider. */
+  vscodeOpenInNewWindow?(): boolean
   /** Host stat wrapper (follows symlinks in production). */
   stat(path: string): Promise<{ kind: 'dir' | 'file' } | null>
   /** shell.openPath wrapper: success (null or empty string) → null, failure → error string. */

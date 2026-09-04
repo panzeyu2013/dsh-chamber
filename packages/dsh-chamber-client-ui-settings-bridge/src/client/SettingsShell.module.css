@@ -607,6 +607,14 @@
   gap: 10px;
 }
 
+/* 运行组三列变体（2026-12）：保持唤醒 / 退出确认 / VS Code 新窗口 三个开关
+   固定同一行。列宽允许收缩（.generalCard 有 min-width:0 + 文案自动换行），
+   窄面板呈紧凑三列而非降列换行——该组三张都是短开关卡，240px 列宽下限只
+   服务于双卡组（启动与关闭）。 */
+.generalGridTriple {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 /* 一张设置卡片：文字区在上/左，控件在下/右。 */
 .generalCard {
   display: flex;

@@ -57,10 +57,34 @@ export interface VscodeLaunchContext {
   vscodeAvailable(): boolean
   /** Open a vscode:// URL (main-process shell.openExternal wrapper; loud failure). */
   openVscodeUrl(url: string): Promise<{ ok: true } | { ok: false; error: string }>
+  /** Chamber setting `vscodeOpenInNewWindow` (design 16 §3.3): read lazily
+   *  per launch like vscodeAvailable so a mid-session settings change applies
+   *  to the next launch. Absent/undefined → false (bare URL, VS Code's own
+   *  default reuse policy decides). */
+  vscodeOpenInNewWindow?(): boolean
 }
 
 /** Remote path budget (design 16 §3.1). */
 const MAX_REMOTE_PATH_CHARS = 4096
+
+/**
+ * VS Code's own per-launch "open in a NEW window" directive on its
+ * custom-protocol URL. While VS Code is already running its main process
+ * (`handleProtocolUrl` in the shipped 1.135 bundle — and the long-standing
+ * desktop/web URL convention) otherwise falls through to its DEFAULT reuse
+ * policy for externally opened folder URLs: the last active window gets
+ * unloaded and reloaded with the target folder (`window.openFoldersInNewWindow`
+ * only overrides when set literally to on/off). `windowId=_blank` forces the
+ * new-window branch BEFORE that decision — with the folder-already-open
+ * dedupe still intact (VS Code focuses the existing window instead of
+ * duplicating). Chamber gates the directive on its `vscodeOpenInNewWindow`
+ * setting (default on, design 16 §3.3). A future VS Code that ignores or
+ * renames the parameter degrades to today's reuse behavior — never to an
+ * error, since it is only a query parameter on an otherwise valid URL.
+ */
+export function appendVscodeNewWindowParam(url: string): string {
+  return url.includes('?') ? `${url}&windowId=_blank` : `${url}?windowId=_blank`
+}
 
 /** Convert an arbitrary thrown value into a stable, non-empty diagnostic.
  * Even hostile proxies/getters/toString implementations must not make an
@@ -646,6 +670,7 @@ export function buildVscodeRemoteUrl(
   user: string | null,
   sshPort: number | null,
   remotePath: string,
+  newWindow = false,
 ): { ok: true; url: string } | { ok: false; error: string } {
   if (typeof host !== 'string' || host.length === 0) {
     return { ok: false, error: 'host is required' }
@@ -674,7 +699,8 @@ export function buildVscodeRemoteUrl(
   }
 
   const userPart = user === null || user === '' ? '' : `${encodeURIComponent(user)}@`
-  return { ok: true, url: `vscode://vscode-remote/ssh-remote+${userPart}${authorityHost}${encodeRemotePath(validatedPath.path)}` }
+  const url = `vscode://vscode-remote/ssh-remote+${userPart}${authorityHost}${encodeRemotePath(validatedPath.path)}`
+  return { ok: true, url: newWindow ? appendVscodeNewWindowParam(url) : url }
 }
 
 /**
@@ -684,7 +710,7 @@ export function buildVscodeRemoteUrl(
  * path discipline as the remote URL: absolute, control-char-free, ≤ 4096,
  * segment-wise encoded; the scheme is hardcoded `vscode:`.
  */
-export function buildVscodeFileUrl(remotePath: string): { ok: true; url: string } | { ok: false; error: string } {
+export function buildVscodeFileUrl(remotePath: string, newWindow = false): { ok: true; url: string } | { ok: false; error: string } {
   const validatedPath = validateLocalPath(remotePath)
   if (!validatedPath.ok) return validatedPath
   const windowsStyle = /^[a-zA-Z]:[\\/]/.test(validatedPath.path) || validatedPath.path.startsWith('\\\\')
@@ -693,7 +719,8 @@ export function buildVscodeFileUrl(remotePath: string): { ok: true; url: string 
   // VS Code documents drive targets as vscode://file/c:/...; keep only that
   // drive colon literal while encoding every user-controlled segment.
   const encoded = encodeRemotePath(absolute).replace(/^\/([a-zA-Z])%3A(?=\/|$)/i, '/$1:')
-  return { ok: true, url: `vscode://file${encoded}` }
+  const url = `vscode://file${encoded}`
+  return { ok: true, url: newWindow ? appendVscodeNewWindowParam(url) : url }
 }
 
 /** Default executable-FILE check: access(X_OK) + isFile(). On POSIX a
@@ -808,11 +835,16 @@ async function runVscodeLaunchUnchecked(req: VscodeLaunchRequest, ctx: VscodeLau
   if (typeof req.instanceId !== 'string' || (req.instanceId !== 'local' && !INSTANCE_ID_PATTERN.test(req.instanceId))) {
     return { ok: false, error: 'invalid instance id' }
   }
+  // New-window directive (chamber setting vscodeOpenInNewWindow, design 16
+  // §3.3): read lazily per launch through the injected ctx like the
+  // availability probe; absent → bare URL, VS Code's own default reuse
+  // policy decides (a running instance replaces the last active window).
+  const newWindow = ctx.vscodeOpenInNewWindow?.() === true
   // Local instance branch (user decision 2026-08): the workspace path lives on
   // this machine — open it as a local folder (vscode://file/), no registry
   // lookup, no sshPort/authority. Availability is still re-checked.
   if (req.instanceId === 'local') {
-    const built = buildVscodeFileUrl(req.path)
+    const built = buildVscodeFileUrl(req.path, newWindow)
     if (!built.ok) return built
     if (!ctx.vscodeAvailable()) {
       return { ok: false, error: 'vscode not detected' }
@@ -830,7 +862,7 @@ async function runVscodeLaunchUnchecked(req: VscodeLaunchRequest, ctx: VscodeLau
   if (instance.transport !== 'ssh') {
     return { ok: false, error: `instance ${req.instanceId} is not an ssh transport instance (transport=${instance.transport})` }
   }
-  const built = buildVscodeRemoteUrl(instance.host, instance.user, instance.sshPort, req.path)
+  const built = buildVscodeRemoteUrl(instance.host, instance.user, instance.sshPort, req.path, newWindow)
   if (!built.ok) {
     return { ok: false, error: built.error }
   }

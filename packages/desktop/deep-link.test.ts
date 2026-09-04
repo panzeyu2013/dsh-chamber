@@ -14,6 +14,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writ
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
+  appendVscodeNewWindowParam,
   attemptDeepLinkProtocolRegistration,
   BoundedAckDeliveryQueue,
   BoundedVscodeIntentQueue,
@@ -44,6 +45,7 @@ function context(overrides: Partial<VscodeLaunchContext> & { lookup?: VscodeLaun
     lookupInstance: overrides.lookupInstance ?? (() => ({ ...sshInstance })),
     vscodeAvailable: overrides.vscodeAvailable ?? (() => true),
     openVscodeUrl: overrides.openVscodeUrl ?? (async () => ({ ok: true })),
+    vscodeOpenInNewWindow: overrides.vscodeOpenInNewWindow,
   }
 }
 
@@ -658,6 +660,87 @@ test('runVscodeLaunch cannot be made to reject by a hostile thrown value', async
     context({ openVscodeUrl: async () => Promise.reject(hostile) }),
   )
   assert.deepEqual(result, { ok: false, error: 'open vscode url failed: unknown error' })
+})
+
+test('appendVscodeNewWindowParam appends the directive, preserving an existing query', () => {
+  assert.equal(appendVscodeNewWindowParam('vscode://file/foo'), 'vscode://file/foo?windowId=_blank')
+  assert.equal(appendVscodeNewWindowParam('vscode://file/foo?x=1'), 'vscode://file/foo?x=1&windowId=_blank')
+})
+
+test('buildVscodeRemoteUrl appends the new-window directive only when requested (design 16 §3.3)', () => {
+  const bare = buildVscodeRemoteUrl('h.example.com', 'root', null, '/foo')
+  assert.equal(bare.ok, true)
+  if (bare.ok) assert.equal(bare.url, 'vscode://vscode-remote/ssh-remote+root@h.example.com/foo')
+  const newWindow = buildVscodeRemoteUrl('h.example.com', 'root', null, '/foo', true)
+  assert.equal(newWindow.ok, true)
+  if (newWindow.ok) {
+    assert.equal(newWindow.url, 'vscode://vscode-remote/ssh-remote+root@h.example.com/foo?windowId=_blank')
+  }
+  // The directive lands after the fully-encoded path — segment encoding stays
+  // intact and the query never touches the path bytes.
+  const encoded = buildVscodeRemoteUrl('h.example.com', null, null, '/a b/中文', true)
+  assert.equal(encoded.ok, true)
+  if (encoded.ok) {
+    assert.equal(encoded.url, 'vscode://vscode-remote/ssh-remote+h.example.com/a%20b/%E4%B8%AD%E6%96%87?windowId=_blank')
+  }
+})
+
+test('buildVscodeFileUrl appends the new-window directive only when requested', () => {
+  const bare = buildVscodeFileUrl('/home/user/local-ws')
+  assert.equal(bare.ok, true)
+  if (bare.ok) assert.equal(bare.url, 'vscode://file/home/user/local-ws')
+  const newWindow = buildVscodeFileUrl('/home/user/local-ws', true)
+  assert.equal(newWindow.ok, true)
+  if (newWindow.ok) assert.equal(newWindow.url, 'vscode://file/home/user/local-ws?windowId=_blank')
+})
+
+test('runVscodeLaunch honors the per-launch new-window preference; absent preference keeps the bare URL', async () => {
+  // Absent preference (default ctx) → bare URL; VS Code's own reuse/replace
+  // policy applies (chamber setting vscodeOpenInNewWindow=false semantics).
+  let bareOpened: string | null = null
+  await runVscodeLaunch(
+    { instanceId: 'web-1', path: '/home/user/proj' },
+    context({ openVscodeUrl: async url => { bareOpened = url; return { ok: true } } }),
+  )
+  assert.equal(bareOpened, 'vscode://vscode-remote/ssh-remote+root@h.example.com/home/user/proj')
+
+  // Preference on → the new-window directive reaches openVscodeUrl for both
+  // the remote and the local branch (button + OS deep link share runVscodeLaunch).
+  let remoteOpened: string | null = null
+  const remote = await runVscodeLaunch(
+    { instanceId: 'web-1', path: '/home/user/proj' },
+    context({
+      vscodeOpenInNewWindow: () => true,
+      openVscodeUrl: async url => { remoteOpened = url; return { ok: true } },
+    }),
+  )
+  assert.equal(remote.ok, true)
+  assert.equal(remoteOpened, 'vscode://vscode-remote/ssh-remote+root@h.example.com/home/user/proj?windowId=_blank')
+
+  let localOpened: string | null = null
+  const local = await runVscodeLaunch(
+    { instanceId: 'local', path: '/home/user/local-ws' },
+    context({
+      lookupInstance: () => null,
+      vscodeOpenInNewWindow: () => true,
+      openVscodeUrl: async url => { localOpened = url; return { ok: true } },
+    }),
+  )
+  assert.equal(local.ok, true)
+  assert.equal(localOpened, 'vscode://file/home/user/local-ws?windowId=_blank')
+})
+
+test('runVscodeLaunch: a hostile vscodeOpenInNewWindow preference still resolves loudly', async () => {
+  const hostile = new Proxy({}, { get() { throw new Error('settings trap') } })
+  const result = await runVscodeLaunch(
+    { instanceId: 'local', path: '/home/user/local-ws' },
+    context({
+      lookupInstance: () => null,
+      vscodeOpenInNewWindow: () => { throw hostile },
+      openVscodeUrl: async () => { throw new Error('must not be reached') },
+    }),
+  )
+  assert.deepEqual(result, { ok: false, error: 'vscode launch failed: unknown error' })
 })
 
 test('quoteDesktopExecValue quotes only when needed and escapes spec-reserved characters', () => {
