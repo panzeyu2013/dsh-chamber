@@ -32,8 +32,19 @@
 #         --bind HOST --origin URL --trusted-proxy IP
 #         --ui-password P --api-token T
 #         --no-auth --local --foreground --purge
+#         --dsh-upgrade 更新 gateway 时把 dsh 内建锚一并升级到该 gateway
+#           发行线配套的 dsh 基线（默认开启，与 gateway 保持一致）
+#         --no-dsh-upgrade 拒绝 dsh 锚升级，保持升级前的 dsh 版本（pin）
 #         --service-user USER 以专用系统用户运行 gateway（unit 加 User=，
 #           运行数据目录 dsh-anchor/data/run 移交该用户；仅 root + systemd）
+#
+# dsh 版本一致性（2026-09 决策修订）：gateway 发行与其配套 dsh 基线（内建
+# 锚版本）同代发布——install-gateway.sh 的 DSH_CHAMBER_DSH_VERSION、
+# release.yml env 与 packages/gateway/package.json 的 dshAnchorVersion 三者
+# 由 release-preflight 硬断言同步。gateway update 默认把 dsh 锚原子升级到
+# 目标 gateway 资产携带的 dshAnchorVersion（旧资产无该字段时回退本脚本
+# 常量）；升级后首次启动的 F4 壳失效回落即落到新基线，托管 dsh 与 gateway
+# 保持一致。--no-dsh-upgrade 可拒绝（锚保持旧版本）。
 #
 # 交互向导（小白主线 8 步，每步有说明与校验循环，q 退出 / ESC/back 返回上一步）：
 #   1 版本通道（稳定/beta/精确列出全部可用版本/离线） → 2 访问方式（本机/反代/直连/高级）
@@ -82,6 +93,10 @@ ASSET_PREFIX="dsh-chamber-gateway"
 # 全局状态
 # ---------------------------------------------------------------------------
 NONINTERACTIVE=0
+# update 时是否把 dsh 内建锚同步升级到目标 gateway 发行线配套的 dsh 基线
+# （默认升级；--no-dsh-upgrade 拒绝以保持升级前的 dsh 版本）。
+DSH_UPGRADE=1
+DSH_UPGRADE_FLAG=0     # --dsh-upgrade/--no-dsh-upgrade 显式给出（非 update 子命令警告用）
 VERSION=""
 CHANNEL="stable"
 OFFLINE_TGZ=""
@@ -231,11 +246,37 @@ acquire_lock() {
   fi
   LOCK_OWNED=1
   printf '%s\n' "$$" > "$LOCK_DIR/pid" 2>/dev/null || true
-  # 崩溃残留卫生(锁在手即无并发写入者):离线 stage/退避树/版本 stage/mv_T
-  # aside 目录(.stage.*/.mv-t.* 为各版本切换临时产物,B-L11/D-L5)
+  # 崩溃残留卫生(锁在手即无并发写入者):离线 stage/退避树/版本 stage/dsh 锚
+  # stage/锚退避/mv_T aside 目录(.stage.*/.anchor.*/.mv-t.* 为各版本切换临时
+  # 产物,B-L11/D-L5)
   rm -rf "$VERSIONS_DIR"/.offline.* "$VERSIONS_DIR"/.local.prev.* \
-         "$VERSIONS_DIR"/.*.stage.* "$VERSIONS_DIR"/*.mv-t.* \
+         "$VERSIONS_DIR"/.*.stage.* \
+         "$VERSIONS_DIR"/*.mv-t.* \
          "$GATEWAY_DIR"/*.mv-t.* 2>/dev/null || true
+  # dsh 锚崩溃残留：kill -9 落在双 mv 之间会使 dsh-anchor 缺失而退避旧锚
+  # 残留——先把退避锚还原（mv 回原路径），只在锚目录确实存在时才清理退避
+  # 副本；绝不把唯一锚副本当垃圾删掉（删了会自隐藏：后续 update 判无锚而
+  # 跳过同步，部署静默失去内建锚）。
+  # 判定必须按「内容」而非「存在」：cmd_update/do_install 在取锁前已跑
+  # ensure_private_layout（无条件 mkdir -p dsh-anchor），崩溃重试路径上锚
+  # 目录恒存在（空占位）——按存在判定会把崩溃重试路径上唯一的退避旧锚当垃圾删除。
+  if [[ -d "$GATEWAY_DIR/dsh-anchor" ]] && ls -A "$GATEWAY_DIR/dsh-anchor" 2>/dev/null | grep -q .; then
+    rm -rf "$VERSIONS_DIR"/.anchor.prev.* 2>/dev/null || true
+  else
+    local _anchor_prev
+    for _anchor_prev in "$VERSIONS_DIR"/.anchor.prev.*; do
+      [[ -e "$_anchor_prev" ]] || continue
+      # 空占位目标先移除（占位目录无内容，rmdir 安全），再 mv 还原旧锚。
+      if [[ -d "$GATEWAY_DIR/dsh-anchor" ]] && ! ls -A "$GATEWAY_DIR/dsh-anchor" 2>/dev/null | grep -q .; then
+        rmdir "$GATEWAY_DIR/dsh-anchor" 2>/dev/null || true
+      fi
+      if [[ -d "$GATEWAY_DIR" ]] && mv_T "$_anchor_prev" "$GATEWAY_DIR/dsh-anchor" >/dev/null 2>&1; then
+        warn "已还原中断的 dsh 锚交换（退避锚 mv 回 dsh-anchor）"
+        break
+      fi
+    done
+  fi
+  rm -rf "$VERSIONS_DIR"/.anchor-stage.* 2>/dev/null || true
 }
 prune_version_trees() {
   # F9：release 版本树只增不减——保留最近 N 个（current 指向的树在其中；
@@ -1147,6 +1188,106 @@ install_dsh() {
 }
 
 # ---------------------------------------------------------------------------
+# dsh 内建锚同步（update --dsh-upgrade 默认；2026-09 gateway↔dsh 一致性决策）
+#
+# gateway 发行与其配套 dsh 基线（内建锚版本）同代发布：packages/gateway/
+# package.json 的 dshAnchorVersion 字段随 tarball 携带（release-preflight 硬
+# 断言与 install-gateway.sh 常量、release.yml env 三者同步），update 升级锚
+# 时以「目标 gateway 资产自带的值」为权威——自复制的旧脚本常量不可信。
+# 旧资产（无该字段）诚实回退本脚本 DSH_CHAMBER_DSH_VERSION。
+# ---------------------------------------------------------------------------
+
+# 读取单个 package.json 里的 dshAnchorVersion（canonical SemVer，非法即空）。
+dsh_baseline_of_manifest() {
+  local file="$1"
+  [[ -f "$file" ]] || return 1
+  node -e '
+const fs = require("node:fs")
+let manifest
+try { manifest = JSON.parse(fs.readFileSync(process.argv[1], "utf8")) } catch { process.exit(1) }
+const value = manifest && typeof manifest === "object" ? manifest.dshAnchorVersion : undefined
+const SEMVER = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?(\+[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$/
+if (typeof value !== "string" || !SEMVER.test(value)) process.exit(1)
+process.stdout.write(value)
+' "$file" 2>/dev/null || return 1
+}
+
+# 目标 gateway 版本树（local 形态：VERSIONS_DIR/<ver>，已 strip package/ 前缀）
+# 携带的 dsh 基线；缺失/非法 → 空。
+dsh_baseline_of_tree() {
+  local tree="$1"
+  dsh_baseline_of_manifest "$tree/package.json" || true
+}
+
+# 目标 gateway tgz（global 形态缓存资产）携带的 dsh 基线。npm pack 布局带
+# package/ 前缀，个别手工打包无前缀——两种都试；缺失/非法 → 空。
+dsh_baseline_of_tgz() {
+  local tgz="$1" tmp="" out=""
+  [[ -f "$tgz" ]] || return 0
+  tmp=$(mktemp "${TMPDIR:-/tmp}/dsh-baseline.XXXXXX" 2>/dev/null) || tmp=""
+  [[ -n "$tmp" ]] || return 0
+  if tar -xzOf "$tgz" package/package.json > "$tmp" 2>/dev/null \
+    || tar -xzOf "$tgz" package.json > "$tmp" 2>/dev/null; then
+    out=$(dsh_baseline_of_manifest "$tmp" || true)
+  fi
+  rm -f "$tmp"
+  printf '%s' "$out"
+}
+
+# 当前受控锚的精确 dsh 版本（读锚 workspace 的 @deepseek-ai/dsh manifest；
+# 读不出/非法 → 空，调用方按「版本未知」处理）。
+dsh_anchor_version() {
+  local pkg="$GATEWAY_DIR/dsh-anchor/node_modules/@deepseek-ai/dsh/package.json"
+  local ver=""
+  [[ -f "$pkg" ]] || return 1
+  ver=$(node -e 'const m = require(process.argv[1]); process.stdout.write(typeof m === "object" && typeof m.version === "string" ? m.version : "")' "$pkg" 2>/dev/null || true)
+  [[ "$ver" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?(\+[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]] \
+    || { printf ''; return 1; }
+  printf '%s' "$ver"
+}
+
+
+# 受控 dsh 锚存在判定：ensure_private_layout 恒建 dsh-anchor 空目录，「有锚」
+# 必须按 workspace 入口判定（install_dsh 装出 node_modules/@deepseek-ai/dsh 后）。
+controlled_anchor_present() {
+  [[ -d "$GATEWAY_DIR/dsh-anchor" && -f "$GATEWAY_DIR/dsh-anchor/node_modules/@deepseek-ai/dsh/lib/bin.js" ]]
+}
+
+# 在 stage 目录安装并验证 dsh 内建锚（不动活锚：stage 就绪后才由调用方做
+# 原子交换）。成功输出 stage 目录路径；失败清理并返回 1。npm 镜像语义与
+# install_dsh 一致（安装时选择的镜像仅在向导内存中，update 走系统配置）。
+stage_dsh_anchor_upgrade() {
+  local target="$1"
+  local stage="" registry="" ver=""
+  have npm || return 1
+  stage=$(mktemp -d "$VERSIONS_DIR/.anchor-stage.XXXXXX") || return 1
+  registry=$(npm config get registry 2>/dev/null || printf 'https://registry.npmjs.org')
+  if [[ -n "$npm_mirror" ]]; then registry="$npm_mirror"; fi
+  # 进度行走 stderr：本函数以 stdout 返回 stage 路径，任何 stdout 输出都会
+  # 污染调用方的 $( ) 捕获（cmd_update 的 anchor_stage）。npm 自身（以及
+  # dsh lifecycle 脚本）也会向 stdout 打印进度——一并重定向到 stderr，
+  # 否则 "added 1 package in 2s" 之类输出会让 mv_T 拿到一个假路径。
+  log "安装 dsh 内建锚 @${target}（staging，镜像 ${registry}）…" >&2
+  if ! npm install --prefix "$stage" "@deepseek-ai/dsh@${target}" --registry "$registry" >&2; then
+    warn "dsh 锚安装失败：@deepseek-ai/dsh@${target}（若为构建脚本错误，请确认服务器有 make/g++/python3，或改用带 prebuild 的平台；若为镜像/网络问题，可在 gateway.conf 设 NPM_REGISTRY=<镜像> 后重试，或加 --no-dsh-upgrade 跳过锚同步）" >&2
+    rm -rf "$stage"
+    return 1
+  fi
+  dsh_workspace_has_entry "$stage" || {
+    warn "dsh 锚安装后缺少运行入口：$stage" >&2
+    rm -rf "$stage"
+    return 1
+  }
+  ver=$(verify_dsh "$stage" || true)
+  if [[ -z "$ver" || "$ver" != "$target" ]]; then
+    warn "dsh 锚安装后版本验证失败：期望 ${target}，得到 ${ver:-未知}" >&2
+    rm -rf "$stage"
+    return 1
+  fi
+  printf '%s' "$stage"
+}
+
+# ---------------------------------------------------------------------------
 # 配置落盘
 # ---------------------------------------------------------------------------
 
@@ -1312,6 +1453,11 @@ write_config() {
     printf 'ENV_ANCHOR=%q\n' "$ENV_ANCHOR"
     printf 'UI_PASSWORD=%q\n' "$UI_PASSWORD"
     printf 'API_TOKEN=%q\n' "$API_TOKEN"
+    # dsh 锚安装镜像持久化（update --dsh-upgrade 的锚同步沿用同一源——
+    # 纯 npmjs 不可达、安装时选了镜像的部署，update 阶段必须复用镜像）。
+    if [[ -n "${npm_mirror:-}" ]]; then
+      printf 'NPM_REGISTRY=%q\n' "$npm_mirror"
+    fi
   } > "$tmp"; then
     rm -f "$tmp"
     return 1
@@ -2234,13 +2380,13 @@ stage8_preview() {
   local access_desc="仅本机"
   if [[ -n "$PUBLIC_ORIGIN" ]]; then
     if [[ "$BIND_HOST" == "0.0.0.0" ]]; then
-      access_desc="直接暴露 0.0.0.0（origin 已设：$PUBLIC_ORIGIN）"
+      access_desc="直接暴露 0.0.0.0（origin 已设：${PUBLIC_ORIGIN}）"
     else
       access_desc="反向代理 → $PUBLIC_ORIGIN"
     fi
   elif [[ -n "$TRUSTED_PROXY" ]]; then
     # D3:仅有 trusted-proxy(无 origin)= 反代直连内网形态,不是"仅本机"
-    access_desc="反代直连（trusted proxy: $TRUSTED_PROXY，origin 未设）"
+    access_desc="反代直连（trusted proxy: ${TRUSTED_PROXY}，origin 未设）"
   elif [[ "$BIND_HOST" == "0.0.0.0" ]]; then
     access_desc="直接暴露（0.0.0.0）"
   fi
@@ -2515,6 +2661,21 @@ EOF
     fi
   }
   [[ -n "${do_prev:-}" && -e "$do_prev" ]] && restore_prev=1
+  # 重装/覆盖安装沿用既有 conf 持久化的 dsh 锚镜像（install 路径不 load_conf；
+  # 目的仅为让镜像依赖部署在【后续 update 锚同步】时沿用同一源——本次安装的
+  # 锚安装发生在向导第 1 步、早于此处，不受影响）。用户本次明确选了「跟随
+  # 系统」（MIRROR_CHOICE=system）时不沿用；未表态（空）时沿用旧配置属合理
+  # 默认。只接受裸 ASCII registry 值（%q 仅在非常规字符时转义，URL 源均为
+  # ASCII）。
+  if [[ -z "$npm_mirror" && "${MIRROR_CHOICE:-}" != "system" && -f "$CONF_FILE" ]] \
+    && grep -q '^NPM_REGISTRY=' "$CONF_FILE" 2>/dev/null; then
+    local _persisted_registry=""
+    _persisted_registry=$(sed -nE 's/^NPM_REGISTRY=(.+)$/\1/p' "$CONF_FILE" 2>/dev/null | head -1 || true)
+    if [[ -n "$_persisted_registry" && "$_persisted_registry" =~ ^[A-Za-z0-9.:/_-]+$ ]]; then
+      npm_mirror="$_persisted_registry"
+      log "沿用既有配置的 dsh 锚安装镜像：$npm_mirror"
+    fi
+  fi
   # 6) 配置/凭据落盘(失败即回滚重启旧部署)
   write_config || { restore_overlay_install; die "安装配置写入失败（旧部署已尽力恢复）"; }
   write_env || { restore_overlay_install; die "凭据文件写入失败（旧部署已尽力恢复）"; }
@@ -2752,14 +2913,20 @@ load_conf() {
   fi
   if ! bash -n "$CONF_FILE" 2>/dev/null; then
     # M3:语法损坏的 conf 在 source 时会裸报 bash 错;预检给出可操作出口
-    die "安装配置语法损坏，无法安全加载：$CONF_FILE（卸载可用 uninstall --purge 强制清理后重装）"
+    die "安装配置语法损坏，无法安全加载：${CONF_FILE}（卸载可用 uninstall --purge 强制清理后重装）"
   fi
-  local has_env_anchor=0 has_password=0 has_token=0
+  local has_env_anchor=0 has_password=0 has_token=0 has_registry=0
   grep -q '^ENV_ANCHOR=' "$CONF_FILE" && has_env_anchor=1
   grep -q '^UI_PASSWORD=' "$CONF_FILE" && has_password=1
   grep -q '^API_TOKEN=' "$CONF_FILE" && has_token=1
+  grep -q '^NPM_REGISTRY=' "$CONF_FILE" && has_registry=1
   # shellcheck disable=SC1090
   . "$CONF_FILE"
+  # 持久化的 dsh 锚安装镜像：仅当 conf 确实带该键时采纳——source 不清理环境，
+  # 无键 conf + 环境里恰好导出同名变量会静默改道镜像源并回写持久化。
+  if [[ "$has_registry" == "1" && -n "${NPM_REGISTRY:-}" ]]; then
+    npm_mirror="$NPM_REGISTRY"
+  fi
   # Migrate configurations written before foreground launch values were added
   # to gateway.conf. Decode only our known EnvironmentFile assignments; never
   # execute that file as shell code.
@@ -2953,6 +3120,30 @@ cmd_update() {
   fi
   if [[ "$target_version" == "$old_version" && "$offline_replace" == "0" ]]; then
     log "已是最新版本 ${target_version}（指针/树身份校验通过）"
+    # dsh 锚收敛提示：网关版本未变时不做锚同步，但若锚落后于当前 gateway
+    # 资产基线（例如上次升级用了 --no-dsh-upgrade / 交互拒绝），给出显式
+    # 提示——下次 gateway 版本更新会默认自动同步。基线取当前资产自带值：
+    # local = current 树 manifest；global = npm 全局安装的 gateway manifest；
+    # 自复制脚本的常量可能陈旧，只作最后手段。只提示落后（version_lt），
+    # 锚比基线新属正常（运行期面板/手动升级过锚），不提示、更不误导降级。
+    if [[ "$DSH_UPGRADE" == "1" ]] && controlled_anchor_present; then
+      local cur_anchor="" cur_tree="" tree_base="" global_root=""
+      cur_anchor=$(dsh_anchor_version || true)
+      cur_tree=$(readlink "$GATEWAY_DIR/current" 2>/dev/null || true)
+      if [[ -n "$cur_tree" && -f "$cur_tree/package.json" ]]; then
+        tree_base=$(dsh_baseline_of_tree "$cur_tree" || true)
+      fi
+      if [[ -z "$tree_base" && "$INSTALL_METHOD" == "global" ]]; then
+        global_root=$(npm root -g 2>/dev/null || true)
+        if [[ -n "$global_root" && -f "$global_root/@dsh-chamber/gateway/package.json" ]]; then
+          tree_base=$(dsh_baseline_of_manifest "$global_root/@dsh-chamber/gateway/package.json" || true)
+        fi
+      fi
+      if [[ -z "$tree_base" ]]; then tree_base="$DSH_CHAMBER_DSH_VERSION"; fi
+      if [[ -n "$cur_anchor" && -n "$tree_base" ]] && version_lt "$cur_anchor" "$tree_base"; then
+        log "提示：dsh 内建锚 v${cur_anchor} 落后于当前 gateway 基线 v${tree_base}——下一次 gateway 版本更新会默认同步（--no-dsh-upgrade 可跳过）"
+      fi
+    fi
     return 0
   fi
   # F3：目标低于当前(如 beta 装过、stable 通道取到更旧)必须显式确认——不静默降级
@@ -2979,6 +3170,15 @@ cmd_update() {
     # H2:管道输入可取消(与 install stage8/uninstall 一致)
     warn "stdin 不是终端：升级确认读取管道输入（输入 n 取消；完全自动请加 -y）"
     if ! confirm "$confirm_label" "y"; then die "已取消——未做任何修改"; fi
+  fi
+
+  # --tgz 离线路径：锚同步所需 npm 必须在离线树交换（不可逆点）之前确认存在
+  # ——否则缺 npm 的 die 会留下已交换树，而内容指纹短路让重跑跳过锚决策，
+  # 锚永不收敛。在线路径的同一检查在锚决策块内（切换前，同样
+  # 早于任何变更）。
+  if [[ "$DSH_UPGRADE" == "1" && "$offline_replace" == "1" ]] \
+    && controlled_anchor_present && ! have npm; then
+    die "缺少 npm：dsh 锚同步需要 npm（可加 --no-dsh-upgrade 跳过锚同步后重试；离线服务器请先预装 npm）"
   fi
 
   # ---- 目标资产准备 ----
@@ -3065,6 +3265,47 @@ cmd_update() {
     staged_fresh=1
   fi
 
+  # ---- dsh 内建锚同步（--dsh-upgrade 默认开启；--no-dsh-upgrade pin 旧版）----
+  # 目标基线 = 目标 gateway 资产携带的 dshAnchorVersion（权威：随 tarball 走，
+  # 自复制的旧脚本常量不可信）；旧资产无该字段时回退本脚本常量（与运行脚本
+  # 同代，诚实降级）。受控锚不存在（env/外部锚部署、--skip-dsh）时跳过。
+  # 交互确认与 npm 前置检查都在 gateway 指针切换 / 停旧服务之前完成——失败
+  # 即中止，在线路径旧部署未动。例外：--tgz 离线替换的版本树交换发生在资产
+  # 准备阶段、早于本块——此处缺 npm 的 die 会留下已交换树与 .local.prev：
+  # 服务未重启仍运行旧进程，重跑同包更新按内容指纹幂等收敛，退避目录由下次
+  # acquire_lock 清理（本块之后的锚执行阶段由 INT/TERM trap 复原）。
+  local dsh_upgrade_target="" anchor_dir="$GATEWAY_DIR/dsh-anchor" anchor_prev="" anchor_stage="" current_anchor=""
+  if [[ "$DSH_UPGRADE" == "1" ]] && controlled_anchor_present; then
+    if [[ "$INSTALL_METHOD" == "local" ]]; then
+      dsh_upgrade_target=$(dsh_baseline_of_tree "$new_local_target" || true)
+    else
+      dsh_upgrade_target=$(dsh_baseline_of_tgz "$target_tgz" || true)
+    fi
+    if [[ -z "$dsh_upgrade_target" ]]; then
+      dsh_upgrade_target="$DSH_CHAMBER_DSH_VERSION"
+    fi
+    current_anchor=$(dsh_anchor_version || true)
+    if [[ -z "$dsh_upgrade_target" || "$dsh_upgrade_target" == "$current_anchor" ]]; then
+      if [[ -n "$current_anchor" ]]; then
+        log "dsh 内建锚已是 v${current_anchor}，无需同步"
+      fi
+      dsh_upgrade_target=""
+    else
+      have npm || die "缺少 npm：dsh 锚同步需要 npm（可加 --no-dsh-upgrade 跳过锚同步后重试）"
+      local _anchor_direction=""
+      if [[ -n "$current_anchor" ]] && version_lt "$dsh_upgrade_target" "$current_anchor"; then
+        _anchor_direction="（低于当前锚版本，属降级——锚可能是运行期面板/手动升过的）"
+      fi
+      if [[ "$NONINTERACTIVE" == "1" && -n "$_anchor_direction" ]]; then
+        warn "非交互模式按默认同步 dsh 锚：v${current_anchor} → v${dsh_upgrade_target}${_anchor_direction}"
+      fi
+      if ! confirm "dsh 内建锚将由 v${current_anchor:-未知} 同步到 v${dsh_upgrade_target}${_anchor_direction}（--no-dsh-upgrade 可拒绝以保持旧版）" "y"; then
+        log "已拒绝 dsh 锚同步，保持 v${current_anchor:-现有}（默认同步可用 --dsh-upgrade 恢复）"
+        dsh_upgrade_target=""
+      fi
+    fi
+  fi
+
   if [[ "$SERVICE_MODE" == "foreground" ]]; then
     if [[ -f "$(foreground_record_file)" ]]; then
       if ! stop_foreground; then
@@ -3076,14 +3317,31 @@ cmd_update() {
   fi
 
   local failure_reason=""
+  # 锚交换中断复原：退避旧锚换回（双 mv 的毫秒窗口之外锚目录恒存在；
+  # kill -9 无法拦截，残余 .anchor.* 由下次 acquire_lock 清理）。trap 在
+  # restart/health 期间仍武装——若中断落在交换完成之后（anchor_dir 已存在
+  # 新锚），同样换回旧锚，避免「旧 gateway + 新基线锚」的不一致配对。
+  restore_anchor_on_interrupt() {
+    if [[ -n "${anchor_prev:-}" && -d "${anchor_prev:-}" ]]; then
+      if [[ -d "$anchor_dir" ]]; then
+        rm -rf "$anchor_dir" >/dev/null 2>&1 || true
+      fi
+      mv_T "$anchor_prev" "$anchor_dir" >/dev/null 2>&1 || true
+    fi
+  }
   # F11：指针切换 ↔ 配置提交窗口的信号防护：中断先复原指针再退出
   if [[ "$INSTALL_METHOD" == "local" ]]; then
     if [[ "$offline_replace" == "1" ]]; then
       # 离线替换指针未动（同路径）：中断时把退避旧树 mv 回，不留 .local.prev
-      trap 'if [[ -n "$offline_prev" && -e "$offline_prev" ]]; then mv_T "$offline_prev" "$new_local_target" >/dev/null 2>&1 || true; fi; die "升级被中断，旧版本树已还原"' INT TERM
+      trap 'restore_anchor_on_interrupt; if [[ -n "$offline_prev" && -e "$offline_prev" ]]; then mv_T "$offline_prev" "$new_local_target" >/dev/null 2>&1 || true; fi; die "升级被中断，gateway 版本树与 dsh 锚已尽力复原"' INT TERM
     else
-      trap 'switch_local_current "$old_local_target" >/dev/null 2>&1 || true; die "升级被中断，gateway/current 已复原"' INT TERM
+      trap 'restore_anchor_on_interrupt; switch_local_current "$old_local_target" >/dev/null 2>&1 || true; die "升级被中断，gateway/current 与 dsh 锚已尽力复原"' INT TERM
     fi
+  elif [[ -n "$dsh_upgrade_target" ]]; then
+    # global 形态没有指针可复原，但锚交换仍应尽力复原（旧锚与新 gateway
+    # 树的组合总比缺失锚目录健康）。中断早于任何锚移动时复原为空操作，
+    # 文案用「尽力」如实描述。
+    trap 'restore_anchor_on_interrupt; die "升级被中断，dsh 锚已尽力复原（如网关回滚请人工核对 npm 全局树）"' INT TERM
   fi
   local expected_version=""
   [[ "$target_version" == "local" ]] || expected_version="$target_version"
@@ -3091,6 +3349,26 @@ cmd_update() {
     npm install -g --no-audit --no-fund "$target_tgz" || failure_reason="npm 安装新版本失败"
   else
     switch_local_current "$new_local_target" || failure_reason="原子切换 gateway/current 失败"
+  fi
+
+  # ---- dsh 内建锚同步执行（stage 就绪后原子交换；失败并入统一回滚）----
+  if [[ -z "$failure_reason" && -n "$dsh_upgrade_target" ]]; then
+    anchor_stage=$(stage_dsh_anchor_upgrade "$dsh_upgrade_target") || failure_reason="dsh 内建锚升级失败（安装/验证）"
+    if [[ -z "$failure_reason" ]]; then
+      anchor_prev="$VERSIONS_DIR/.anchor.prev.$$"
+      rm -rf "$anchor_prev" 2>/dev/null || true
+      if ! mv_T "$anchor_dir" "$anchor_prev"; then
+        rm -rf "$anchor_stage" 2>/dev/null || true
+        failure_reason="dsh 内建锚升级失败（旧锚退避失败）"
+      elif ! mv_T "$anchor_stage" "$anchor_dir"; then
+        mv_T "$anchor_prev" "$anchor_dir" >/dev/null 2>&1 || true
+        anchor_prev=""
+        rm -rf "$anchor_stage" 2>/dev/null || true
+        failure_reason="dsh 内建锚升级失败（新锚发布失败，旧锚已还原）"
+      else
+        log "dsh 内建锚已同步：v${current_anchor:-旧版} → v${dsh_upgrade_target}"
+      fi
+    fi
   fi
 
   if [[ -z "$failure_reason" ]]; then
@@ -3137,6 +3415,17 @@ cmd_update() {
         rollback_ok=0
       fi
     fi
+    # dsh 锚回滚：升级期间换入的新锚移除、退避旧锚换回（未发生交换时
+    # anchor_prev 为空，无操作）。放在 restart 之前：回滚后的旧 gateway
+    # 以旧锚启动，绝不带新锚运行。
+    if [[ -n "$anchor_prev" && -d "$anchor_prev" ]]; then
+      rm -rf "$anchor_dir" 2>/dev/null || true
+      if mv_T "$anchor_prev" "$anchor_dir"; then
+        log "dsh 内建锚已回滚到旧版本"
+      else
+        rollback_ok=0
+      fi
+    fi
     VERSION="$old_version"
     if [[ "$SERVICE_MODE" == "foreground" ]]; then
       start_foreground "$rollback_expected_version" "$rollback_previous" || rollback_ok=0
@@ -3156,9 +3445,12 @@ cmd_update() {
     die "升级失败且回滚未完全成功，请人工介入：$failure_reason"
   fi
 
-  # 成功后清理（F9）：退避旧树删除；缓存 tgz 两形态都清（回滚资产可网络重取）
+  # 成功后清理（F9）：退避旧树/旧锚删除；缓存 tgz 两形态都清（回滚资产可网络重取）
   if [[ "$offline_replace" == "1" && -n "$offline_prev" && -e "$offline_prev" ]]; then
     rm -rf "$offline_prev"
+  fi
+  if [[ -n "$anchor_prev" && -d "$anchor_prev" ]]; then
+    rm -rf "$anchor_prev"
   fi
   rm -f "$GATEWAY_DIR"/dsh-chamber-gateway-*.tgz 2>/dev/null || true
   if [[ "$INSTALL_METHOD" == "local" ]]; then
@@ -3304,6 +3596,8 @@ while [[ $# -gt 0 ]]; do
     --service-user) [[ $# -ge 2 ]] || die "--service-user 需要值"; SERVICE_USER="$2"; shift 2 ;;
     --foreground) SERVICE_MODE="foreground"; shift ;;
     --skip-dsh) SKIP_DSH=1; shift ;;
+    --dsh-upgrade) DSH_UPGRADE=1; DSH_UPGRADE_FLAG=1; shift ;;
+    --no-dsh-upgrade) DSH_UPGRADE=0; DSH_UPGRADE_FLAG=1; shift ;;
     --purge) PURGE=1; shift ;;
     *) die "未知选项：$1（--help 查看用法）" ;;
   esac
@@ -3340,7 +3634,10 @@ fi
 # 子命令 × 选项矩阵：仅 install 的形态/向导选项在其它子命令下无意义——
 # 警告而非静默忽略（F10）。
 case "$SUBCOMMAND" in
-  install|help|-h|--help) ;;
+  install|help|-h|--help)
+    [[ "$DSH_UPGRADE_FLAG" != "1" ]] \
+      || warn "dsh 锚同步选项只影响 update（当前 $SUBCOMMAND 忽略，安装按脚本常量装锚）：--dsh-upgrade/--no-dsh-upgrade"
+    ;;
   update)
     # update 合法：--version/--channel（离线 --tgz 由 cmd_update 明确拒绝）
     [[ -z "$UI_PASSWORD" && -z "$API_TOKEN" && "$NO_AUTH" == "0" ]] \
@@ -3358,6 +3655,8 @@ case "$SUBCOMMAND" in
     if [[ "$FLAG_VERSION" == "1" ]]; then
       warn "版本类选项只影响 install/update（当前 $SUBCOMMAND 忽略）：--version/--channel/--tgz"
     fi
+    [[ "$DSH_UPGRADE_FLAG" != "1" ]] \
+      || warn "dsh 锚同步选项只影响 update（当前 $SUBCOMMAND 忽略）：--dsh-upgrade/--no-dsh-upgrade"
     [[ -z "$UI_PASSWORD" && -z "$API_TOKEN" && "$NO_AUTH" == "0" ]] \
       || warn "凭据类选项只影响 install（当前 $SUBCOMMAND 忽略）：--ui-password/--api-token/--no-auth"
     [[ -z "$BIND_HOST" && -z "$PUBLIC_ORIGIN" && -z "$TRUSTED_PROXY" ]] \

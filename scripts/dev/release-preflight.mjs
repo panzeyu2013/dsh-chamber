@@ -112,16 +112,24 @@ function checkVersionUniformity() {
   const scriptMatch = /DSH_CHAMBER_DSH_VERSION="\$\{DSH_CHAMBER_DSH_VERSION:-([^}]+)\}"/.exec(installer)
   const workflow = readFileSync(join(REPO_ROOT, '.github/workflows/release.yml'), 'utf8')
   const envMatch = /env:\s*\n\s*DSH_CHAMBER_DSH_VERSION:\s*([^\s]+)/.exec(workflow)
+  let pkgMatch = null
+  try {
+    const gatewayPkg = readJson(join('packages', 'gateway', 'package.json'))
+    const anchor = gatewayPkg?.dshAnchorVersion
+    if (typeof anchor === 'string' && /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?(\+[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$/.test(anchor)) {
+      pkgMatch = anchor
+    }
+  } catch { /* missing gateway manifest → mismatch below */ }
   const scriptVer = scriptMatch?.[1]
   const envVer = envMatch?.[1]
-  if (scriptVer === undefined || envVer === undefined) {
-    mismatches.push('DSH_CHAMBER_DSH_VERSION 常量在 install-gateway.sh / release.yml 中缺失或格式不符')
-  } else if (scriptVer !== envVer) {
-    mismatches.push(`install-gateway.sh=${scriptVer} != release.yml env=${envVer}`)
+  if (scriptVer === undefined || envVer === undefined || pkgMatch === null) {
+    mismatches.push('DSH_CHAMBER_DSH_VERSION 常量在 install-gateway.sh / release.yml / packages/gateway/package.json(dshAnchorVersion) 中缺失或格式不符')
+  } else if (scriptVer !== envVer || pkgMatch !== scriptVer) {
+    mismatches.push(`dsh 锚基线不一致: install-gateway.sh=${scriptVer} release.yml env=${envVer} gateway pkg dshAnchorVersion=${pkgMatch}`)
   }
 
   if (mismatches.length > 0) fail(c, mismatches.join('; '))
-  ok(c, `${VERSION} across root+${packageCount} packages; fork copies @ ${FORK_VERSION}; installer dsh constant in sync`)
+  ok(c, `${VERSION} across root+${packageCount} packages; fork copies @ ${FORK_VERSION}; installer/release.yml/gateway pkg dsh anchor constant in sync`)
 }
 
 /**
