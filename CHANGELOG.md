@@ -10,105 +10,30 @@
 
 > English: [docs/CHANGELOG.en-US.md](docs/CHANGELOG.en-US.md)
 
-## [Unreleased]
+## [0.2.1] - 2026-09-04
 
 ### 新增
 
-- **gateway update 默认同步升级 dsh 内建锚（设计 17/18 一致性）** ——
-  `install-gateway.sh update` 新增 `--dsh-upgrade/--no-dsh-upgrade`（**默认
-  升级**）：目标 gateway 资产携带发行线配套 dsh 基线（`packages/gateway/
-  package.json` 的 `dshAnchorVersion`，release-preflight 硬断言与脚本常量、
-  release.yml env 三者同步；旧资产无该字段时回退运行脚本常量），热切换后把
-  `dsh-anchor` **staging + 原子交换**升级到该基线——升级后首次启动的 F4 壳
-  失效回落即落到新基线，托管 dsh 与 gateway 保持一致；`--no-dsh-upgrade`
-  （或交互确认拒绝）保持升级前的 dsh 版本（pin）。失败（npm 安装/验证/交换）
-  随 update 统一回滚（旧锚退避换回）；INT/TERM 中断尽力复原锚，崩溃残余
-  `.anchor.*` 由下次 acquire_lock 清理；安装时选择的 npm 镜像自本版起持久化进
-  gateway.conf（NPM_REGISTRY），update 锚同步沿用同一源（更早部署的镜像
-  选择只在向导内存中，首次锚同步前可在 gateway.conf 补设 NPM_REGISTRY
-  ——失败提示会给出该指引）。改点：`scripts/install-gateway.sh`
-  （cmd_update + 锚同步辅助函数）、`packages/gateway/package.json`、
-  `scripts/dev/release-preflight.mjs`（三源断言）、release-checklist 与
-  deploy-gateway.md 文档。
-
-### 修复
-
-- **gateway 升级中断后崩溃循环自愈（设计 18 F4）** —— F4 壳升级回落事务被中断且
-  其 intent journal 丢失（如安装器健康检查超时回滚到旧壳、旧壳消费了新壳的 journal）
-  会把 durable 状态卡在「current 指针仍指向旧树 + override 已失效 + 无 journal」：
-  启动事务报干净、首个 startLocal 的 resolveWorkspace 却抛
-  `gateway runtime current pointer has no matching active override`，进程硬退 +
-  systemd 崩溃循环且无任何 HTTP 恢复面。现在网关/桌面启动 F4 门在
-  指针存在 + override 已失效 + 无可续 journal 时自动重新武装 shell-invalidation
-  事务（快照 + 探针门控的内建回落），自我修复而不是每启崩溃；已失效记录与历史选择保留。
-  陈旧失败标记（lastOutcome=snapshot-failed/swapAttempted）按 fresh-transaction-
-  supersedes 清除——journal 在途 + 快照持续失败的 F4 也会每启重试、病因消除即自愈。
-  修复点：`packages/gateway/src/runtime-manager.ts` executeStartupTransaction、
-  `packages/desktop/main.ts` 启动 F4 门（parity）。
-
-## [0.2.1-beta.1] - 2026-09-03
-
-### 新增
-
-- **Linux 桌面首版支持（设计 22）** —— AppImage（x64）发行形态（electron-builder
-  linux target/desktop.entry/executableName）、Linux 自动更新解锁（形态门：
-  打包且从可写 $APPIMAGE 启动才启用；dev/解包/deb 形态保持历史 inert 文案与
-  settings 按钮门，零 UX 回退）、每次打包态启动重写的用户级协议 .desktop
-  （MimeType=x-scheme-handler，Exec 指向 $APPIMAGE）与 XDG 规范自启（尊重
-  XDG_CONFIG_HOME、补 Icon/StartupWMClass）、node 兜底平台分表 + X_OK 校验、
-  目录 fsync EINVAL/ENOTSUP 平台无关容错（NFS/FUSE 家庭目录）、
-  resolvePnpmBinDir 增补 Linux 安装根、release.yml `build-linux` 腿
-  （ubuntu-22.04 基线）与发布策略测试 4 腿。契约与剩余实机门禁见
-  `docs/design/22-linux-desktop.md`。
-- **Windows 首版支持推进（设计 23）** —— M0–M6 代码落地：CI `test-windows`
-  契约腿与 win32 生命周期探针（`win-probes.ts`：PowerShell CIM 身份 /
-  netstat 端口 / taskkill 树终止；reaper 与 spawn-dsh 平台自适应接线）、
-  `win-acl.ts` 启动路径 ACL 收紧、NSIS 卸载清理、win32 登录自启与深链打包态
-  注册、open-in 本地盘符路径、SSH 密码门引导；dsh-runtime 新增
-  `windows-process.ts`（supervisor 树终止）/ `rename-retry.ts`（Windows
-  重命名重试），快照发布/恢复/stash 全改走重试路径。运行时管理在 Windows
-  默认只读投影，`DSH_CHAMBER_WINDOWS_RUNTIME_MUTATIONS=1` 为开发/验证门
-  （严格 '1'、默认关）。真实 Windows runner 首跑与实机矩阵仍为外部门禁，
-  见 `docs/design/23-windows-support.md` 与台账。
-- **Gateway 与 SSH 插件管理统一（设计 21）** —— gateway 新增
-  `/chamber/plugins` install/remove/materialize/tasks 写面 + journal/队列与
-  `/chamber/plugins/installed` 读面、tgz 扫描 + 插件 spec 校验；桌面侧
-  plugin-tarball 构建/同步与 SSH 后端同模型（apply-rows/journal）；managed
-  profile 写租约与运行时事务互斥，新增 `/chamber/runtime/start` 原语
-  （停机/错误/restart-exhausted 恢复，决策 12）。契约见
-  `docs/design/21-gateway-plugin-parity.md`。
-- **dsh 运行时设置面统一（本地 × gateway 同构）** —— 彩色状态徽标词表、
-  快照/磁盘并入「当前状态」组、registry 只读行 + 编辑态统一、常驻「清理已
-  安装版本」；gateway 补齐 `cleanup-version` / `restore-pre-rollback` /
-  `recover-metadata` 路由；FATAL 元数据损坏改 blocked-alive（gateway 存活、
-  托管 dsh 停机、管理面可轮询，恢复面 = recover-metadata）；status 增
-  metadata 健康投影；desktop env/只读平台放行「重启 dsh」。
-- **「内建版本」行引导（2026-12 用户决策）** —— 桌面与 gateway 设置中选中
-  与内建（随应用/部署锚）同版本的行且该版本尚未装成受管树时，主按钮引导
-  「恢复内建」（清除用户选择回到内建副本/锚，零下载）；「仍下载并安装为
-  受管版本」为显式次要动作；已缓存（曾装树）时保持普通切换。
+- **Linux 桌面首版支持（设计 22）** —— AppImage（x64）发行形态（electron-builder linux target / desktop.entry / executableName）、可写 `$APPIMAGE` 形态门的 Linux 自动更新（dev / 解包 / deb 形态保持历史 inert 文案与设置按钮门，零 UX 回退）、每次打包态启动重写的用户级协议 `.desktop` 与 XDG 规范自启（尊重 XDG_CONFIG_HOME、补 Icon/StartupWMClass）、node 兜底平台分表 + X_OK 校验、目录 fsync EINVAL/ENOTSUP 平台无关容错（NFS/FUSE 家庭目录）、resolvePnpmBinDir 增补 Linux 安装根、release.yml `build-linux` 腿（ubuntu-22.04 基线）与发布策略测试 4 腿。契约与剩余实机门禁见 `docs/design/22-linux-desktop.md`。
+- **Windows 首版支持推进（设计 23）** —— M0–M6 代码落地：CI `test-windows` 契约腿与 win32 生命周期探针（PowerShell CIM 身份 / netstat 端口 / taskkill 树终止；reaper 与 spawn-dsh 平台自适应接线）、`win-acl.ts` 启动路径 ACL 收紧、NSIS 卸载清理、win32 登录自启与深链打包态注册、open-in 本地盘符路径、SSH 密码门引导；dsh-runtime 新增 `windows-process.ts`（supervisor 树终止）/ `rename-retry.ts`（Windows 重命名重试），快照发布/恢复/stash 全改走重试路径。运行时管理在 Windows 默认只读投影（`DSH_CHAMBER_WINDOWS_RUNTIME_MUTATIONS=1` 为开发/验证门）；真实 Windows runner 首跑与实机矩阵仍为外部门禁。
+- **Gateway 与 SSH 插件管理统一（设计 21）** —— gateway 新增 `/chamber/plugins` install/remove/materialize/tasks 写面 + journal/队列与 `/chamber/plugins/installed` 读面、tgz 扫描 + 插件 spec 校验；桌面侧 plugin-tarball 构建/同步与 SSH 后端同模型（apply-rows/journal）；managed profile 写租约与运行时事务互斥，新增 `/chamber/runtime/start` 原语（停机/错误/restart-exhausted 恢复）。契约见 `docs/design/21-gateway-plugin-parity.md`。
+- **dsh 运行时设置面统一（本地 × gateway 同构）** —— 彩色状态徽标词表、快照/磁盘并入「当前状态」组、registry 只读行 + 编辑态统一、常驻「清理已安装版本」；gateway 补齐 `cleanup-version` / `restore-pre-rollback` / `recover-metadata` 路由；FATAL 元数据损坏改 blocked-alive（gateway 存活、托管 dsh 停机、管理面可轮询）；status 增 metadata 健康投影；desktop env/只读平台放行「重启 dsh」；设置面细节打磨与插件对话框统一（2026-12）。
+- **「内建版本」行引导（2026-12 用户决策）** —— 桌面与 gateway 设置中选中与内建（随应用/部署锚）同版本的行且该版本尚未装成受管树时，主按钮引导「恢复内建」（清除用户选择回到内建副本/锚，零下载）；「仍下载并安装为受管版本」为显式次要动作；已缓存（曾装树）时保持普通切换。
+- **Dock/任务栏未读徽标（设计 19 §3.7）** —— 应用图标红数字气泡：renderer 未读计数投影经 `dsh-chamber:badge-count` IPC 送达主进程，主进程白名单校验 + 设置裁决（`notifications.badgeEnabled`，默认开，关闭强制清零）与平台门（darwin Dock 红气泡；Windows 任务栏 overlay 门控未接线，设计 23 排期）。
+- **gateway update 默认同步升级 dsh 内建锚（设计 17/18 一致性）** —— `install-gateway.sh update` 新增 `--dsh-upgrade/--no-dsh-upgrade`（**默认升级**）：目标 gateway 资产携带发行线配套 dsh 基线（`dshAnchorVersion`，release-preflight 硬断言与脚本常量、release.yml env 三者同步；旧资产无该字段时回退运行脚本常量），热切换后把 `dsh-anchor` **staging + 原子交换**升级到该基线——升级后首次启动的 F4 壳失效回落即落到新基线，托管 dsh 与 gateway 保持一致；`--no-dsh-upgrade` 保持升级前的 dsh 版本（pin）。失败（npm 安装/验证/交换）随 update 统一回滚（旧锚退避换回）；INT/TERM 中断尽力复原锚，崩溃残余 `.anchor.*` 由下次 acquire_lock 清理；安装时选择的 npm 镜像自本版起持久化进 gateway.conf（NPM_REGISTRY），update 锚同步沿用同一源。
 
 ### 变更
 
-- **desktop 打包配置** —— `build.linux` 目标从 `dir` 改为 `AppImage`；新增
-  `dist:desktop:linux` / `dist:linux` 脚本。
-- **updater.ts Linux 门控形态化** —— `platform==='linux'` 无条件硬门改为
-  「可写 AppImage 运行形态」门（`probeLinuxAppImage`）；非 AppImage 形态的
-  blocked 文案 `'auto-update is not supported on this platform'` 与
-  settings-bridge 按钮门保持不变。
-- **Electron 二进制惰性安装（每机器共享 dist）** —— 根 postinstall 默认跳过
-  Electron 下载，`DSH_CHAMBER_ELECTRON=1` 或 dev 首启按需物化到平台缓存共享
-  dist（多 worktree 并行开发共用一份）；dev 控制面端口自 17520 自动退避到
-  首个空闲端口（`DSH_CHAMBER_CP_PORT` 可固定覆盖）。
+- **desktop 打包配置** —— `build.linux` 目标从 `dir` 改为 `AppImage`；新增 `dist:desktop:linux` / `dist:linux` 脚本。
+- **updater.ts Linux 门控形态化** —— `platform==='linux'` 无条件硬门改为「可写 AppImage 运行形态」门（`probeLinuxAppImage`）；非 AppImage 形态的 blocked 文案与 settings-bridge 按钮门保持不变。
+- **Electron 二进制惰性安装（每机器共享 dist）** —— 根 postinstall 默认跳过 Electron 下载，`DSH_CHAMBER_ELECTRON=1` 或 dev 首启按需物化到平台缓存共享 dist（多 worktree 并行开发共用一份）；dev 控制面端口自 17520 自动退避到首个空闲端口（`DSH_CHAMBER_CP_PORT` 可固定覆盖）。
 - **dsh 基线升级至 0.1.2-rc.1** —— 源码线（submodule pin）与捆绑运行时（`@deepseek-ai/dsh`）双线同步至 dsh-v0.1.2-rc.1（a66e4702）；上游 rc.1 相对 alpha.5 **零代码改动**——全仓 252 个 `package.json` 仅版本行 bump（alpha.5 → rc.1，diff 复核），客户端/wire/存储/DOM 面无任何增量——in-repo fork 副本（connection/web/api-gateway）零源码重放、仅版本标记同步，DOM 锚点与 wire 契约沿用 alpha.5 审计基线。
-- **gateway 运行时客户端核心重构（design 21 §5.2）** —— 纯核心（解析/
-  动作门/错误分类/轮询）迁入 sidebar 共享面，settings-bridge 仅保留 view
-  映射；consumer ambient 镜像同步并由 lockstep 测试锁定。
+- **gateway 运行时客户端核心重构（design 21 §5.2）** —— 纯核心（解析/动作门/错误分类/轮询）迁入 sidebar 共享面，settings-bridge 仅保留 view 映射；consumer ambient 镜像同步并由 lockstep 测试锁定。
 
 ### 修复
 
-- **渲染器 extra-bundle 跨重启加载恢复** —— 实例重启窗口内到达的
-  extra-bundle 加载不再被丢弃：重启完成后正确续载，避免该行插件静默缺失。
+- **渲染器 extra-bundle 跨重启加载恢复** —— 实例重启窗口内到达的 extra-bundle 加载不再被丢弃：重启完成后正确续载，避免该行插件静默缺失。
+- **gateway 升级中断后崩溃循环自愈（设计 18 F4）** —— F4 壳升级回落事务被中断且其 intent journal 丢失（如安装器健康检查超时回滚到旧壳、旧壳消费了新壳的 journal）会把 durable 状态卡在「current 指针仍指向旧树 + override 已失效 + 无 journal」：启动事务报干净、首个 startLocal 的 resolveWorkspace 却抛 `gateway runtime current pointer has no matching active override`，进程硬退 + systemd 崩溃循环且无任何 HTTP 恢复面。现在网关/桌面启动 F4 门在指针存在 + override 已失效 + 无可续 journal 时自动重新武装 shell-invalidation 事务（快照 + 探针门控的内建回落），自我修复而不是每启崩溃；陈旧失败标记（lastOutcome=snapshot-failed/swapAttempted）按 fresh-transaction-supersedes 清除——journal 在途 + 快照持续失败的 F4 也会每启重试、病因消除即自愈。
 
 ## [0.2.0] - 2026-09-03
 

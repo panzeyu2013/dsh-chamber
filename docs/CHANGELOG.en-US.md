@@ -10,66 +10,21 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 > 中文版: [CHANGELOG.md](../CHANGELOG.md)
 
-## [Unreleased]
+## [0.2.1] - 2026-09-04
 
 ### Added
 
-- **`update` syncs the dsh anchor by default (design 17/18 consistency)** —
-  `install-gateway.sh update` gains `--dsh-upgrade/--no-dsh-upgrade`
-  (**default: upgrade**). The target gateway asset carries its release line's
-  paired dsh baseline (`dshAnchorVersion` in `packages/gateway/package.json`,
-  hard-asserted in sync with the installer constant and the release.yml env by
-  release-preflight; assets without the field fall back to the running
-  script's constant). After the hot switch the `dsh-anchor` is upgraded to
-  that baseline via staging + an atomic swap, so the F4 shell-upgrade fallback
-  on first boot lands on the new baseline — the managed dsh stays consistent
-  with the gateway. `--no-dsh-upgrade` (or declining the interactive confirm)
-  pins the pre-upgrade dsh version. Failures (npm install/verify/swap) roll
-  back with the update (old anchor restored); INT/TERM restores the anchor
-  best-effort, and crash leftovers under `.anchor.*` are cleaned by the next
-  `acquire_lock`. The npm mirror chosen at install time is persisted into
-  gateway.conf (`NPM_REGISTRY`) from this release onward and reused by the
-  update-time anchor sync (mirror choices of older installs lived only in the
-  wizard's memory — add `NPM_REGISTRY` to gateway.conf before the first anchor
-  sync on such deployments; the failure hint points there). Sites: `scripts/install-gateway.sh` (cmd_update + anchor
-  helpers), `packages/gateway/package.json`,
-  `scripts/dev/release-preflight.mjs` (three-source assertion),
-  release-checklist and deploy-gateway.md docs.
-
-### Fixed
-
-- **Gateway crash-loop self-healing after an interrupted upgrade (design 18 F4)** —
-  An interrupted F4 shell-upgrade fallback whose intent journal was lost (e.g. the
-  installer's health-check timeout rolled back to an older gateway shell, which
-  consumed the newer shell's journal) strands the durable state as "current
-  pointer still on the old tree + override invalidated + no journal": the startup
-  transaction reports clean, yet the first startLocal's resolveWorkspace throws
-  `gateway runtime current pointer has no matching active override`, hard-exiting
-  the process into a systemd crash loop with no HTTP recovery surface. The
-  gateway/desktop boot F4 gate now re-arms the shell-invalidation transaction
-  (snapshot + probe-gated builtin fallback) whenever the pointer exists with an
-  invalidated override and no resumable journal, self-healing instead of
-  crash-looping; the invalidated record and historical selection are preserved.
-  Stale failure markers (lastOutcome=snapshot-failed/swapAttempted) are
-  superseded per fresh-transaction semantics — an F4 whose journaled apply
-  kept failing at the snapshot retries every boot and heals once the cause
-  clears. Fix sites: `packages/gateway/src/runtime-manager.ts`
-  executeStartupTransaction,
-  `packages/desktop/main.ts` boot F4 gate (parity).
-
-## [0.2.1-beta.1] - 2026-09-03
-
-### Added
-
-- **Linux desktop first-party support (design 22)** — AppImage (x64) distribution shape (electron-builder linux target / desktop.entry / executableName), Linux auto-update unlocked behind an install-shape gate (packaged AND started from a writable `$APPIMAGE`; dev / unpacked-dir / deb shapes keep the historic inert reason string and settings button gate — zero UX regression), per-user protocol-handler `.desktop` rewritten on every packaged launch (MimeType=x-scheme-handler, Exec targeting `$APPIMAGE`), XDG-compliant autostart (honors `XDG_CONFIG_HOME`, adds Icon/StartupWMClass), platform-split node fallback roots with X_OK checks, platform-neutral EINVAL/ENOTSUP tolerance for directory fsync (NFS/FUSE home dirs), Linux install roots added to pnpm resolution, plus a `build-linux` release.yml leg (ubuntu-22.04 baseline) and the 4-leg release policy test. Contract and remaining real-machine gates: `docs/design/22-linux-desktop.md`.
-- **Windows first-party support progress (design 23)** — M0–M6 code landed: CI `test-windows` contract leg and win32 lifecycle probes (`win-probes.ts`: PowerShell CIM identity / netstat port / taskkill tree kill; platform-adaptive reaper and spawn-dsh wiring), `win-acl.ts` ACL tightening on the startup path, NSIS uninstall cleanup, win32 login autostart and packaged deep-link registration, open-in local drive-letter paths, SSH password gate guidance; dsh-runtime gains `windows-process.ts` (supervisor tree termination) / `rename-retry.ts` (Windows rename retry), and snapshot publish/restore/stash all move onto the retry path. Runtime management stays read-only by default on Windows with `DSH_CHAMBER_WINDOWS_RUNTIME_MUTATIONS=1` as the dev/validation gate (strict '1', off by default). Real-Windows runner first run and the real-machine matrix remain external gates — see `docs/design/23-windows-support.md` and the ledger.
-- **Unified gateway and SSH plugin management (design 21)** — the gateway gains a `/chamber/plugins` install/remove/materialize/tasks write surface with journal/queue plus the `/chamber/plugins/installed` read face, tgz scanning and plugin-spec validation; the desktop side builds/syncs plugin tarballs and the SSH backend shares the same model (apply-rows/journal); a managed profile-write lease serializes against runtime transactions, and the `/chamber/runtime/start` primitive (stopped/error/restart-exhausted recovery, decision 12) is added. Contract: `docs/design/21-gateway-plugin-parity.md`.
-- **Unified dsh runtime settings surface (local × gateway isomorphism)** — a shared colored status-badge vocabulary, snapshots/disk folded into the current-state group, unified registry read-only row + edit mode, always-visible "clean up installed versions"; the gateway gains `cleanup-version` / `restore-pre-rollback` / `recover-metadata` routes; FATAL metadata corruption becomes blocked-alive (gateway stays up, the managed dsh stops, the management surface stays pollable, recovery = recover-metadata); status gains the metadata-health projection; desktop env/read-only platforms may now restart dsh.
+- **Linux desktop first-party support (design 22)** — AppImage (x64) distribution shape (electron-builder linux target / desktop.entry / executableName), Linux auto-update unlocked behind a writable-`$APPIMAGE` install-shape gate (dev / unpacked-dir / deb shapes keep the historic inert reason string and settings button gate — zero UX regression), per-user protocol-handler `.desktop` rewritten on every packaged launch and XDG-compliant autostart (honoring `XDG_CONFIG_HOME`, adding Icon/StartupWMClass), platform-split node fallback roots with X_OK checks, platform-neutral EINVAL/ENOTSUP tolerance for directory fsync (NFS/FUSE home dirs), Linux install roots added to pnpm resolution, plus a `build-linux` release.yml leg (ubuntu-22.04 baseline) and the 4-leg release policy test. Contract and remaining real-machine gates: `docs/design/22-linux-desktop.md`.
+- **Windows first-party support progress (design 23)** — M0–M6 code landed: CI `test-windows` contract leg and win32 lifecycle probes (PowerShell CIM identity / netstat port / taskkill tree kill; platform-adaptive reaper and spawn-dsh wiring), `win-acl.ts` ACL tightening on the startup path, NSIS uninstall cleanup, win32 login autostart and packaged deep-link registration, open-in local drive-letter paths, SSH password gate guidance; dsh-runtime gains `windows-process.ts` (supervisor tree termination) / `rename-retry.ts` (Windows rename retry), and snapshot publish/restore/stash all move onto the retry path. Runtime management stays read-only by default on Windows (`DSH_CHAMBER_WINDOWS_RUNTIME_MUTATIONS=1` as the dev/validation gate); the real-Windows runner first run and the real-machine matrix remain external gates.
+- **Unified gateway and SSH plugin management (design 21)** — the gateway gains a `/chamber/plugins` install/remove/materialize/tasks write surface with journal/queue plus the `/chamber/plugins/installed` read face, tgz scanning and plugin-spec validation; the desktop side builds/syncs plugin tarballs and the SSH backend shares the same model (apply-rows/journal); a managed profile-write lease serializes against runtime transactions, and the `/chamber/runtime/start` primitive (stopped/error/restart-exhausted recovery) is added. Contract: `docs/design/21-gateway-plugin-parity.md`.
+- **Unified dsh runtime settings surface (local × gateway isomorphism)** — a shared colored status-badge vocabulary, snapshots/disk folded into the current-state group, unified registry read-only row + edit mode, always-visible "clean up installed versions"; the gateway gains `cleanup-version` / `restore-pre-rollback` / `recover-metadata` routes; FATAL metadata corruption becomes blocked-alive (gateway stays up, the managed dsh stops, the management surface stays pollable); status gains the metadata-health projection; desktop env/read-only platforms may now restart dsh; the section received a detail polish pass and the plugin dialog was unified (2026-12).
 - **Built-in-version row guidance (2026-12 user decision)** — in both the desktop and gateway settings, selecting the row whose version equals the built-in (bundled copy / deployment anchor) while no managed tree exists turns the primary button into "Restore bundled" (clears the user selection back to the built-in copy/anchor, zero download); "download and install it as a managed tree anyway" stays as an explicit secondary action; cached rows keep the ordinary switch.
+- **Dock/taskbar unread badge (design 19 §3.7)** — the red numeric bubble on the app icon: the renderer unseen-count projection reaches the main process over the `dsh-chamber:badge-count` IPC, with main-process allowlist validation and setting arbitration (`notifications.badgeEnabled`, on by default, forced to zero when off) plus a platform gate (darwin Dock bubble; the Windows taskbar overlay is not wired, deferred to design 23).
+- **`update` syncs the dsh anchor by default (design 17/18 consistency)** — `install-gateway.sh update` gains `--dsh-upgrade/--no-dsh-upgrade` (**default: upgrade**): the target gateway asset carries its release line's paired dsh baseline (`dshAnchorVersion`, hard-asserted in sync with the installer constant and the release.yml env by release-preflight; assets without the field fall back to the running script's constant), and after the hot switch the `dsh-anchor` is upgraded to that baseline via staging + an atomic swap, so the F4 shell-upgrade fallback on first boot lands on the new baseline — the managed dsh stays consistent with the gateway. `--no-dsh-upgrade` pins the pre-upgrade dsh version. Failures (npm install/verify/swap) roll back with the update (old anchor restored); INT/TERM restores the anchor best-effort, and crash leftovers under `.anchor.*` are cleaned by the next `acquire_lock`. The npm mirror chosen at install time is persisted into gateway.conf (`NPM_REGISTRY`) from this release onward and reused by the update-time anchor sync.
 
 ### Changed
 
-- **Desktop packaging config** — `build.linux` target moves from `dir` to `AppImage`; new `dist:desktop:linux` / `dist:linux` scripts.
+- **Desktop packaging config** — the `build.linux` target moves from `dir` to `AppImage`; new `dist:desktop:linux` / `dist:linux` scripts.
 - **updater.ts Linux gate is shape-based** — the unconditional `platform==='linux'` gates become a "writable AppImage runtime" gate (`probeLinuxAppImage`); non-AppImage Linux keeps the same blocked reason and settings-bridge button gate unchanged.
 - **Lazy Electron binaries (machine-shared dist)** — the root postinstall no longer downloads Electron by default; `DSH_CHAMBER_ELECTRON=1` or the first dev launch materializes it into a platform-cache shared dist (one copy across parallel worktrees); the dev control-plane port auto-backoffs from 17520 to the first free port (`DSH_CHAMBER_CP_PORT` pins it).
 - **dsh baseline upgraded to 0.1.2-rc.1** — both the build-time source line (submodule pin) and the bundled runtime (`@deepseek-ai/dsh`) advance to dsh-v0.1.2-rc.1 (a66e4702); upstream rc.1 carries **zero code changes** relative to alpha.5 — all 252 repository `package.json` files only bump their version line (alpha.5 → rc.1, verified by diff), with no client/wire/storage/DOM additions — the in-repo fork copies (connection/web/api-gateway) need no code replay and only sync their version markers; DOM anchors and wire contracts inherit the alpha.5 audit baseline.
@@ -78,6 +33,7 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 ### Fixed
 
 - **Renderer extra-bundle recovery across instance restarts** — extra-bundle loads that arrive inside an instance-restart window are no longer dropped: they resume correctly after the restart instead of leaving that plugin row silently missing.
+- **Gateway crash-loop self-healing after an interrupted upgrade (design 18 F4)** — an interrupted F4 shell-upgrade fallback whose intent journal was lost (e.g. the installer's health-check timeout rolled back to an older gateway shell, which consumed the newer shell's journal) strands the durable state as "current pointer still on the old tree + override invalidated + no journal": the startup transaction reports clean, yet the first startLocal's resolveWorkspace throws `gateway runtime current pointer has no matching active override`, hard-exiting the process into a systemd crash loop with no HTTP recovery surface. The gateway/desktop boot F4 gate now re-arms the shell-invalidation transaction (snapshot + probe-gated builtin fallback) whenever the pointer exists with an invalidated override and no resumable journal, self-healing instead of crash-looping; stale failure markers (lastOutcome=snapshot-failed/swapAttempted) are superseded per fresh-transaction semantics — an F4 whose journaled apply kept failing at the snapshot retries every boot and heals once the cause clears.
 
 ## [0.2.0] - 2026-09-03
 
