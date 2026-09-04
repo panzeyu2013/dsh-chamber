@@ -520,7 +520,7 @@ export interface ChamberSettings {
   notifications: ChamberNotificationSettings
 }
 
-/** 桌面通知设置子块（design 19 §3.4）——结构与 desktop/chamber-settings.ts
+/** 桌面通知设置子块（design 19 §3.4 + §3.7）——结构与 desktop/chamber-settings.ts
  *  的 ChamberNotificationSettings 保持一致（镜像同步纪律）。 */
 export interface ChamberNotificationSettings {
   /** 主开关（默认 false：低打扰，用户显式开启）。 */
@@ -533,6 +533,9 @@ export interface ChamberNotificationSettings {
   onAsk: boolean
   /** 审批请求时（默认 true）。 */
   onRequest: boolean
+  /** 未读计数徽标（默认 true）：Dock/任务栏图标上的红色数字气泡，被动指示、
+   *  独立于横幅主开关；关闭时主进程裁决强制清零。 */
+  badgeEnabled: boolean
 }
 
 /** Non-secret status projection: current settings + platform capability gates. */
@@ -648,8 +651,19 @@ export type {
   RuntimeVersionEntry,
 } from './runtime-management.ts'
 
+/** window.dshChamber.badge — 未读徽标计数（design 19 §3.7）：推当前「完成未读」
+ *  会话数（0 = 清除）；主进程白名单校验 + badgeEnabled 裁决 + 平台门后应用
+ *  app.setBadgeCount（macOS Dock / Linux Unity launcher 家族）。返回 true =
+ *  已提交给 OS 徽标 API，不是可见性保证（GNOME/KDE 默认形态无可见效果，
+ *  文档化平台限制）；win32 v1 门控。
+ *  桥与 desktopSsh 同一批 expose，desktopSsh 存在则 badge 必存在。 */
+export interface BadgeSurface {
+  /** invoke 'dsh-chamber:badge-count'；返回主进程是否实际应用（含清除）。 */
+  set(count: number): Promise<boolean>
+}
+
 /** The full bridge: app info + platform + ssh + update + chamber settings
- *  + system resume + open-in + deep-link + notifications + dsh runtime
+ *  + system resume + open-in + deep-link + notifications + badge + dsh runtime
  *  management surfaces. */
 
 export interface DshChamberBridge {
@@ -665,6 +679,7 @@ export interface DshChamberBridge {
   deepLink: DeepLinkSurface
   runtime: RuntimeSurface
   notifications: NotificationSurface
+  badge: BadgeSurface
 }
 
 declare global {

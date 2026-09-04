@@ -370,7 +370,7 @@ export interface ChamberSettings {
   notifications: ChamberNotificationSettings
 }
 
-/** 桌面通知设置子块（design 19 §3.4）——结构与 desktop/chamber-settings.ts 的
+/** 桌面通知设置子块（design 19 §3.4 + §3.7）——结构与 desktop/chamber-settings.ts 的
  *  ChamberNotificationSettings 保持一致。 */
 export interface ChamberNotificationSettings {
   enabled: boolean
@@ -378,6 +378,8 @@ export interface ChamberNotificationSettings {
   onComplete: boolean
   onAsk: boolean
   onRequest: boolean
+  /** 未读计数徽标（默认 true，被动指示，独立于横幅主开关）。 */
+  badgeEnabled: boolean
 }
 
 /** Non-secret status projection: current settings + platform capability gates. */
@@ -490,8 +492,18 @@ export interface NotificationSurface {
   onOpen(callback: (req: NotificationOpenRequest) => void): () => void
 }
 
+/** 未读徽标计数面（design 19 §3.7）：renderer 推当前「完成未读」会话数
+ *  （0 = 清除），主进程按 notifications.badgeEnabled 裁决并经平台门应用
+ *  app.setBadgeCount。返回 true 表示已提交给 OS 徽标 API（macOS Dock /
+ *  Linux Unity launcher 家族），**不是可见性保证**——无消费方的桌面环境
+ *  （如 GNOME/KDE 默认形态）无可见效果（文档化平台限制）。平台不支持时
+ *  false + 主进程 loud 记一次日志——渲染端静默容忍 false。 */
+export interface BadgeSurface {
+  set(count: number): Promise<boolean>
+}
+
 /** The full bridge: app info + platform + ssh + update + chamber settings
- *  + system resume + open-in + deep-link + notifications surfaces. */
+ *  + system resume + open-in + deep-link + notifications + badge surfaces. */
 export interface DshChamberBridge {
   controlPlaneUrl: string | null
   dshVersion: string | null
@@ -505,6 +517,7 @@ export interface DshChamberBridge {
   deepLink: DeepLinkSurface
   runtime: RuntimeSurface
   notifications: NotificationSurface
+  badge: BadgeSurface
 }
 
 /** dsh runtime version management surface (design 18 M2 IPC). */
@@ -779,6 +792,16 @@ function notificationsApi(): NotificationSurface {
   };
 }
 
+/** The badge surface (design 19 §3.7): a single invoke carrying the current
+ *  unseen-session count; 0 clears. The main process validates the payload,
+ *  adjudicates against notifications.badgeEnabled and applies it through the
+ *  platform gate — the boolean result reports whether it was applied. */
+function badgeApi(): BadgeSurface {
+  return {
+    set: count => ipcRenderer.invoke('dsh-chamber:badge-count', { count }),
+  };
+}
+
 /**
  * Fetch the app-info payload for the bridge. The main-process IPC sender
  * fence (design 05 §7.4) may reject a bootstrap invoke fired before the main
@@ -822,6 +845,7 @@ requestAppInfo().then(
       deepLink: deepLinkApi(),
       runtime: runtimeApi(),
       notifications: notificationsApi(),
+      badge: badgeApi(),
     });
   },
   (err: unknown) => {
@@ -839,6 +863,7 @@ requestAppInfo().then(
       deepLink: deepLinkApi(),
       runtime: runtimeApi(),
       notifications: notificationsApi(),
+      badge: badgeApi(),
     });
   },
 );

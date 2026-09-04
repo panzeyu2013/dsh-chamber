@@ -28,9 +28,10 @@
  * - 运行: 保持唤醒 (keepAwake, default off); 退出确认 (quitConfirmation,
  *   2026-08: confirm only while the LOCAL instance runs — remote tunnels
  *   never prompt; update-downloaded exempt);
- * - 通知 (design 19, merged into General — no new nav entry): 主开关 + 启用后
- *   展开的子设置 (通知时机 hidden-only / always + 事件开关 complete / ask /
- *   request + 「发送测试通知」);
+ * - 通知 (design 19, merged into General — no new nav entry): 主开关 + 未读
+ *   徽标开关（design 19 §3.7，独立于主开关、始终可见）+ 启用后展开的子设置
+ *   (通知时机 hidden-only / always + 事件开关 complete / ask / request +
+ *   「发送测试通知」);
  * - 更新 (design 11, merged into General): current version +「检查更新」+
  *   low-key status (UpdateSection).
  *
@@ -292,6 +293,30 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
               aria-expanded={notifications.enabled === true}
               aria-controls={notifications.enabled === true ? notifyBodyId : undefined}
               onChange={(event) => save(notificationsPatch({ enabled: event.target.checked }))}
+            />
+            <span className={css.generalSwitch} aria-hidden="true">
+              <span className={css.generalSwitchThumb} />
+            </span>
+          </span>
+        </label>
+
+        {/* 未读徽标（design 19 §3.7）：被动指示，独立于横幅主开关——默认开启，
+            Dock/任务栏应用图标上的红色数字气泡（未读会话数）。关闭时主进程
+            裁决强制清零（开关一切立即清除，行为诚实）。同样用无边框披露行
+            （.generalSwitchRow），与主开关同节奏，不增加边框层数。 */}
+        <label className={clsx(css.generalSwitchRow, !hydrated && css.generalDisabled)}>
+          <div className={css.generalCardText}>
+            <span className={css.generalFieldLabel}>{t('generalNotificationsBadge')}</span>
+            <p className={css.generalHint}>{t('generalNotificationsBadgeDesc')}</p>
+          </div>
+          <span className={css.generalSwitchBox}>
+            <input
+              type="checkbox"
+              role="switch"
+              className={css.generalSwitchInput}
+              checked={notifications.badgeEnabled !== false}
+              disabled={!hydrated}
+              onChange={(event) => save(notificationsPatch({ badgeEnabled: event.target.checked }))}
             />
             <span className={css.generalSwitch} aria-hidden="true">
               <span className={css.generalSwitchThumb} />

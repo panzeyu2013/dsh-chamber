@@ -207,6 +207,7 @@ import {
   validateNotificationRequest,
 } from './notifications.ts';
 import type { NotificationOpenIntent, NotificationSettingsLike, NotificationSourceToken } from './notifications.ts';
+import { adjudicateBadgeCount, badgePlatformGate, validateBadgeRequest } from './badge.ts';
 import { IPC_CHANNELS } from './ipc-events.ts';
 import {
   buildSshApplyRows,
@@ -501,6 +502,47 @@ let drainingNotificationOpens = false;
 let notificationOpenDrainReady = false;
 const activeNotifications = new BoundedActiveNotifications<Notification>();
 const nativeNotificationRateLimiter = new BoundedRateLimiter();
+
+// 未读徽标（design 19 §3.7）：renderer 推真实未读计数，主进程持「最近一次
+// 意图」并按当前设置裁决呈现（badgeEnabled 关闭 → 强制 0 清除；重新开启 →
+// reconcileBadgeCount 恢复）。quit 在途兜底清除。badgeUnsupportedLogged 把
+// 平台不支持（win32 / API 缺失）的 loud 日志压成一次，badgeApplyErrorLogged
+// 把持续抛错的 setBadgeCount 同样压成一次——防重复推送刷屏。
+let pendingBadgeCount: number | null = null;
+let badgeUnsupportedLogged = false;
+let badgeApplyErrorLogged = false;
+
+/** 平台门 + app.setBadgeCount 副作用（try/catch 防御，绝不 throw 出 IPC）。 */
+function applyNativeBadgeCount(count: number): boolean {
+  const gate = badgePlatformGate(process.platform, typeof app.setBadgeCount === 'function');
+  if (!gate.supported) {
+    if (!badgeUnsupportedLogged) {
+      badgeUnsupportedLogged = true;
+      console.warn(`[dsh-chamber] 应用图标未读徽标不可用：${gate.reason}`);
+    }
+    return false;
+  }
+  try {
+    app.setBadgeCount(count);
+    return true;
+  } catch (error) {
+    if (!badgeApplyErrorLogged) {
+      badgeApplyErrorLogged = true;
+      console.warn('[dsh-chamber] 应用图标未读徽标设置失败：', describeUnknownError(error));
+    }
+    return false;
+  }
+}
+
+/** 按当前设置重新裁决最近一次 renderer 计数意图（设置切换后的即时收敛）。 */
+function reconcileBadgeCount(): void {
+  if (pendingBadgeCount === null) return;
+  const count = adjudicateBadgeCount(
+    { badgeEnabled: chamberSettings.notifications.badgeEnabled },
+    pendingBadgeCount,
+  );
+  applyNativeBadgeCount(count);
+}
 
 /** 扫描 argv 中的 dsh-chamber:// 深链（防御式：非深链 argv 零副作用、绝不 throw）。 */
 function scanDeepLinkUrls(argv: readonly string[]): string[] {
@@ -1523,6 +1565,13 @@ if (!gotTheLock) {
     // （design 14 D5）。确认/豁免已在 before-quit 完成，这里只剩清理。
     quitRequested = true;
     setKeepAwakeActive(false);
+    // 兜底清除未读徽标（退出在途不留 Dock 残留；曾有意图才触碰，避免无谓日志）。
+    if (pendingBadgeCount !== null) {
+      try {
+        if (typeof app.setBadgeCount === 'function') app.setBadgeCount(0);
+      } catch { /* best-effort on the way out */ }
+      pendingBadgeCount = null;
+    }
     // 立即移除托盘：退出在途不需要恢复入口，残留托盘图标是「退不干净」观感。
     if (tray !== null) {
       try {
@@ -1842,6 +1891,12 @@ if (!gotTheLock) {
       }
       const applied = applySettingsPatch(validated.patch);
       if (!applied.ok) return applied;
+      // badgeEnabled 翻转的即时收敛：仅在本次 patch 实际携带该键时重新裁决
+      // 最近一次 renderer 计数意图（关闭 → 立即清零；开启 → 恢复当前未读数），
+      // 绝不等到下一次推送；无关设置变更不重发 setBadgeCount。
+      if (validated.patch.notifications?.badgeEnabled !== undefined) {
+        reconcileBadgeCount();
+      }
       pushSettingsChanged();
       return chamberSettingsStatus();
     }));
@@ -1864,6 +1919,22 @@ if (!gotTheLock) {
       if (payload === null || typeof payload !== 'object') return false;
       const { deliveryId, attempt } = payload as { deliveryId?: unknown; attempt?: unknown };
       return pendingNotificationOpens.acknowledge(deliveryId as number, attempt as number);
+    }));
+    // 未读徽标计数（design 19 §3.7）：renderer 推真实计数（0 = 清除）→ 白名单
+    // 校验 → 记录意图 → 设置裁决（badgeEnabled）→ 平台门 + app.setBadgeCount。
+    // 返回是否实际应用；渲染端静默容忍 false（主进程已 loud 记平台/失败原因）。
+    ipcMain.handle(IPC_CHANNELS.BADGE_COUNT, trustedIpc((payload: unknown) => {
+      const validated = validateBadgeRequest(payload);
+      if (!validated.ok) {
+        console.error(`[dsh-chamber] 徽标计数请求校验失败：${validated.error}`);
+        return false;
+      }
+      pendingBadgeCount = validated.count;
+      const count = adjudicateBadgeCount(
+        { badgeEnabled: chamberSettings.notifications.badgeEnabled },
+        validated.count,
+      );
+      return applyNativeBadgeCount(count);
     }));
     // Deep-link renderer readiness (design 16 hold/replay): App invokes this
     // only after installing deepLink.onIntent. Successful cold-start launches

@@ -455,3 +455,20 @@ test('every preload channel literal is a known IPC_CHANNELS value (B8 — consta
     assert.ok(known.has(channel), `preload references a channel that is not in IPC_CHANNELS: ${channel}`)
   }
 })
+
+// ---------------------------------------------------------------------------
+// design 19 §3.7: badge wiring pin. The badge IPC handler has no direct unit
+// seam (registration + toggle reconcile + quit clear live in main.ts glue),
+// so the three load-bearing call shapes are pinned as source assertions — a
+// rename, a dropped call, or an un-gated reconcile fails loudly here.
+// ---------------------------------------------------------------------------
+
+test('badge wiring is pinned: handler registration + toggle-gated reconcile + quit clear (design 19 §3.7)', () => {
+  const mainSource = mainSideSource()
+  assert.match(mainSource, /ipcMain\.handle\(IPC_CHANNELS\.BADGE_COUNT, trustedIpc/, 'BADGE_COUNT handler must stay registered')
+  // 设置切换收敛仅在实际携带 badgeEnabled 键时执行（无关设置变更不重发）。
+  assert.match(mainSource, /validated\.patch\.notifications\?\.badgeEnabled !== undefined/, 'reconcile must stay gated on badgeEnabled flips only')
+  assert.match(mainSource, /reconcileBadgeCount\(\)/, 'toggle reconcile call must stay wired')
+  assert.match(mainSource, /if \(pendingBadgeCount !== null\)/, 'quit-time clear guard must stay')
+  assert.match(mainSource, /app\.setBadgeCount\(0\)/, 'quit-time clear must stay a real native call')
+})

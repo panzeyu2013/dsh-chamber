@@ -35,14 +35,15 @@ test('notificationsOf: a partial block fills missing keys from the defaults', ()
   assert.equal(got.onComplete, true);
   assert.equal(got.onAsk, true);
   assert.equal(got.onRequest, true);
+  assert.equal(got.badgeEnabled, true, '未读徽标缺省回落默认 true（被动指示）');
 });
 
 test('notificationsOf: a full block passes through untouched', () => {
   const got = notificationsOf(settings({
-    notifications: { enabled: true, mode: 'always', onComplete: false, onAsk: true, onRequest: false },
+    notifications: { enabled: true, mode: 'always', onComplete: false, onAsk: true, onRequest: false, badgeEnabled: false },
   }));
   assert.deepEqual(got, {
-    enabled: true, mode: 'always', onComplete: false, onAsk: true, onRequest: false,
+    enabled: true, mode: 'always', onComplete: false, onAsk: true, onRequest: false, badgeEnabled: false,
   });
 });
 
@@ -69,6 +70,10 @@ test('notificationsPatch: rides PARTIAL nested keys only (deep-merge lives in th
   assert.deepEqual(notificationsPatch({ mode: 'always' }), {
     notifications: { mode: 'always' },
   });
+  // 未读徽标（design 19 §3.7）同样只骑自己的键——开关切换不携带兄弟键。
+  assert.deepEqual(notificationsPatch({ badgeEnabled: false }), {
+    notifications: { badgeEnabled: false },
+  });
 });
 
 test('notificationsPatch: never carries sibling keys of the current snapshot', () => {
@@ -76,6 +81,9 @@ test('notificationsPatch: never carries sibling keys of the current snapshot', (
   assert.deepEqual(patch, { notifications: { onComplete: false } });
   assert.equal('enabled' in patch.notifications, false, '陈旧快照的兄弟键不得上 wire');
   assert.equal('mode' in patch.notifications, false);
+  const badge = notificationsPatch({ badgeEnabled: true });
+  assert.ok(badge.notifications !== undefined, 'badge patch 携带 notifications 子块');
+  assert.equal('enabled' in badge.notifications, false, 'badge 开关 patch 不携带主开关');
 });
 
 test('NOTIFICATIONS_DEFAULTS mirrors the desktop store defaults (chamber-settings.ts)', () => {
@@ -87,5 +95,6 @@ test('NOTIFICATIONS_DEFAULTS mirrors the desktop store defaults (chamber-setting
     onComplete: true,
     onAsk: true,
     onRequest: true,
+    badgeEnabled: true,
   });
 });

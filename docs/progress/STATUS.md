@@ -224,6 +224,18 @@
   拒发；已改为 `BoundedActiveNotifications` 满员按插入序 loud 淘汰最旧一条并
   close 退役、新通知照常登记显示（硬上界不变，仅最旧条目 click 失效）。
   剩余 macOS 系统通知权限/拒绝行为、点击打开、关窗/托盘/后台三形态与打包态实机验收。
+- **未读徽标（设计 19 §3.7，2026-12 M1–M2 已落地）**：Dock/任务栏应用图标红气泡
+  ——renderer `projectBadgeCount`（完成未读蓝点集跨来源计数，`badge-count.ts`）→
+  `dsh-chamber:badge-count` trustedIpc → 主进程白名单（有限非负整数 ≤9999）+
+  `badgeEnabled` 裁决（关闭强制清零、重开 reconcile 恢复）+ 平台门
+  `app.setBadgeCount`；设置新增 `notifications.badgeEnabled`（默认 true，通用页
+  「通知」组独立开关行，zh/en i18n）。自动化覆盖：`badge.test.ts`（desktop）、
+  `badge-count.test.ts`（renderer）、chamber-settings 与 notifications-settings
+  新键用例。**剩余实机门禁**：macOS Dock 红气泡打包态实机（武装/阅读解除/来源
+  退役三态 + 重载清零 + 退出清零）；Linux 仅 Unity launcher 家族可见（GNOME 的
+  Dash to Dock 消费同一 DBus API 可见；默认 GNOME/KDE 无效果，文档化平台限制）；
+  Windows 任务栏 overlay（`setOverlayIcon` 数字角标图）v1 门控未接线——设计 23
+  实机矩阵排期。
 - **VS Code 深链 + open-in（设计 16/20）**：剩余 macOS 深链冷/热启动、打包态、
   托盘/退出在途、N-ctx、VS Code 缺失、`sshPort != 22`、Finder 下拉在 vendor
   会话头部的定位/层叠，以及远程来源仅 VS Code 的实机验收。

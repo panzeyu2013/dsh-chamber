@@ -42,6 +42,7 @@ import {
   type PluginGraphDiagnostic,
 } from '@dsh-chamber/dsh-client-ui-sidebar/shared'
 import { detectNotificationEdges, dedupeCompleteEdges, type SessionFacts } from './notification-edges.ts'
+import { projectBadgeCount } from './badge-count.ts'
 import {
   acknowledgeRendererDelivery,
   authoritativeSourceRetirements,
@@ -2266,6 +2267,64 @@ export default function App() {
       return { ...prev, [activeView]: nextCompleted }
     })
   }, [activeView])
+
+  // 未读徽标（design 19 §3.7）：completedBySource（完成未读蓝点集）是徽标计数的
+  // 唯一事实源——跨来源求未读会话数（projectBadgeCount，纯函数），推给主进程
+  // 呈现 Dock/任务栏红气泡。计数与蓝点同源同规则（武装/解除同一状态机），两
+  // 面永不分叉；0 = 清除。桥未就绪（window.dshChamber 异步 expose）时静默跳过
+  // ——计数变化发生在运行时上报之后（远晚于桥暴露），首个真实计数不会丢；
+  // 重载后复位为 0 的兜底推送由下方挂载 effect 负责。reject 兜底（review B1）：
+  // 同进程 IPC 偶发拒绝不得让徽标停滞到下一次计数变化——按 LISTENER_READY 预算
+  // 有界重推当前计数（badgeCountRef 始终最新），预算耗尽 loud 一次。
+  const badgeCountRef = useRef(0)
+  const badgeRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pushBadgeWithRetry = useCallback((attemptsLeft: number): void => {
+    const badge = window.dshChamber?.badge
+    // typeof 守卫（review C1）：与设置页 testNotifySurface 同款版本偏斜防护——
+    // 旧主进程 + 新渲染端的窗口重建窗口内 badge 面可能缺失 set 方法。
+    if (badge === undefined || typeof badge.set !== 'function') return
+    void badge.set(badgeCountRef.current).catch(error => {
+      if (attemptsLeft <= 0) {
+        console.warn('[badge] 徽标计数推送失败：', error)
+        return
+      }
+      badgeRetryTimerRef.current = setTimeout(
+        () => pushBadgeWithRetry(attemptsLeft - 1),
+        LISTENER_READY_RETRY_MS,
+      )
+    })
+  }, [])
+  useEffect(() => {
+    const count = projectBadgeCount(completedBySource)
+    badgeCountRef.current = count
+    pushBadgeWithRetry(LISTENER_READY_RETRY_LIMIT)
+  }, [completedBySource, pushBadgeWithRetry])
+
+  // 桥迟到的兜底（同 LISTENER_READY 重试纪律，见通知就绪手shake）：窗口重载/
+  // 重建后 completedBySource 复位为 {}，必须向主进程推 0 清除遗留徽标——桥经
+  // requestAppInfo 异步暴露，可能晚于首个 [completedBySource] effect 的提交
+  // 时机（该 effect 在挂载帧即推 0，此时桥大概率未就绪）。有界重试直至桥出现，
+  // 推一次当前计数（0）后停止；预算耗尽静默放弃（dev 无桥场景的正常路径）。
+  useEffect(() => {
+    if (window.dshChamber?.badge !== undefined) return
+    let attempts = 0
+    const timer = setInterval(() => {
+      attempts += 1
+      const badge = window.dshChamber?.badge
+      if (badge !== undefined && typeof badge.set === 'function') {
+        clearInterval(timer)
+        pushBadgeWithRetry(LISTENER_READY_RETRY_LIMIT)
+        return
+      }
+      if (attempts >= LISTENER_READY_RETRY_LIMIT) clearInterval(timer)
+    }, LISTENER_READY_RETRY_MS)
+    return () => clearInterval(timer)
+  }, [pushBadgeWithRetry])
+
+  // reject 重推计时器的卸载清理（挂载期内可能由 pushBadgeWithRetry 排入）。
+  useEffect(() => () => {
+    if (badgeRetryTimerRef.current !== null) clearTimeout(badgeRetryTimerRef.current)
+  }, [])
 
   // 控制面失联 = 覆盖式致命屏（视图保持挂载、恢复即续会话，05 §4）。判定：
   // 健康错误**持续**存在超过宽容窗才呈现——首帧（health 从未拉到）立即呈现；

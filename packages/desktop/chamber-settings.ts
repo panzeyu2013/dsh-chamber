@@ -17,7 +17,7 @@ import { dirname } from 'node:path';
 /** Close-window behavior (design 14 D1): hide to tray (dsh keeps running) or quit. */
 export type WindowCloseBehavior = 'hide-to-tray' | 'quit';
 
-/** Desktop notification settings (design 19 §3.4): opt-in, low-noise by default. */
+/** Desktop notification settings (design 19 §3.4 + §3.7): opt-in, low-noise by default. */
 export interface ChamberNotificationSettings {
   /** 主开关；默认 false（低打扰，用户显式开启）。 */
   enabled: boolean
@@ -29,6 +29,9 @@ export interface ChamberNotificationSettings {
   onAsk: boolean
   /** 工具调用/计划审批请求（pending 'approval' | 'plan-review'）。 */
   onRequest: boolean
+  /** 未读计数徽标（design 19 §3.7）：Dock/任务栏应用图标上的红色数字气泡
+   *  ——被动指示（与横幅主开关独立），默认 true；关闭时主进程裁决强制清零。 */
+  badgeEnabled: boolean
 }
 
 /** Chamber-global runtime settings (design 14 v1 scope). */
@@ -75,6 +78,7 @@ export const DEFAULT_CHAMBER_SETTINGS: ChamberSettings = {
     onComplete: true,
     onAsk: true,
     onRequest: true,
+    badgeEnabled: true,
   },
 };
 
@@ -112,6 +116,7 @@ const NOTIFICATION_SETTINGS_KEYS: ReadonlyArray<keyof ChamberNotificationSetting
   'onComplete',
   'onAsk',
   'onRequest',
+  'badgeEnabled',
 ];
 
 /** 嵌套 notifications 归一：缺失字段用默认；非法值回落默认（持久化读路径，
@@ -125,6 +130,7 @@ function normalizeNotificationSettings(input: unknown): ChamberNotificationSetti
   if (typeof record.onComplete === 'boolean') notifications.onComplete = record.onComplete;
   if (typeof record.onAsk === 'boolean') notifications.onAsk = record.onAsk;
   if (typeof record.onRequest === 'boolean') notifications.onRequest = record.onRequest;
+  if (typeof record.badgeEnabled === 'boolean') notifications.badgeEnabled = record.badgeEnabled;
   return notifications;
 }
 
@@ -176,7 +182,7 @@ function isValidSettingsFile(input: unknown): input is Record<string, unknown> {
     if (notifications === null || typeof notifications !== 'object' || Array.isArray(notifications)) return false;
     const nested = notifications as Record<string, unknown>;
     if (nested.mode !== undefined && nested.mode !== 'hidden-only' && nested.mode !== 'always') return false;
-    for (const key of ['enabled', 'onComplete', 'onAsk', 'onRequest'] as const) {
+    for (const key of ['enabled', 'onComplete', 'onAsk', 'onRequest', 'badgeEnabled'] as const) {
       if (nested[key] !== undefined && typeof nested[key] !== 'boolean') return false;
     }
   }

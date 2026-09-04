@@ -18,7 +18,7 @@ function statusWith(overrides?: Partial<ChamberSettings>): ChamberSettingsStatus
     keepAwake: false,
     quitConfirmation: true,
     registryOrigin: 'https://registry.npmjs.org',
-    notifications: { enabled: false, mode: 'hidden-only', onComplete: true, onAsk: true, onRequest: true },
+    notifications: { enabled: false, mode: 'hidden-only', onComplete: true, onAsk: true, onRequest: true, badgeEnabled: true },
   }
   return {
     settings: overrides === undefined ? base : { ...base, ...overrides },

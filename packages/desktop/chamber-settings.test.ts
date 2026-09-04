@@ -47,12 +47,15 @@ test('normalizeSettings: nested notifications — missing/invalid fields fall ba
   assert.deepEqual(normalizeSettings({ notifications: ['x'] }).notifications, DEFAULT_CHAMBER_SETTINGS.notifications);
   // 部分字段 → 缺失用默认；合法字段保留；非法值回落默认。
   const partial = normalizeSettings({ notifications: { enabled: true, mode: 'always', onAsk: false, onComplete: 'yes' } });
-  assert.deepEqual(partial.notifications, { enabled: true, mode: 'always', onComplete: true, onAsk: false, onRequest: true });
+  assert.deepEqual(partial.notifications, { enabled: true, mode: 'always', onComplete: true, onAsk: false, onRequest: true, badgeEnabled: true });
   const invalid = normalizeSettings({ notifications: { enabled: 'yes', mode: 'sometimes', onRequest: 1 } });
   assert.deepEqual(invalid.notifications, DEFAULT_CHAMBER_SETTINGS.notifications);
   // 未知嵌套键忽略（前向兼容，persistence 读路径语义同顶层）。
   const unknown = normalizeSettings({ notifications: { enabled: true, futureNested: 42 } });
-  assert.deepEqual(unknown.notifications, { enabled: true, mode: 'hidden-only', onComplete: true, onAsk: true, onRequest: true });
+  assert.deepEqual(unknown.notifications, { enabled: true, mode: 'hidden-only', onComplete: true, onAsk: true, onRequest: true, badgeEnabled: true });
+  // badgeEnabled（design 19 §3.7）：合法布尔保留，非法回落默认 true。
+  assert.equal(normalizeSettings({ notifications: { badgeEnabled: false } }).notifications.badgeEnabled, false);
+  assert.equal(normalizeSettings({ notifications: { badgeEnabled: 'yes' } }).notifications.badgeEnabled, true);
 });
 
 test('writeSettingsFile + readSettingsFile round-trip (atomic, 0600)', () => {
@@ -64,7 +67,7 @@ test('writeSettingsFile + readSettingsFile round-trip (atomic, 0600)', () => {
     keepAwake: true,
     quitConfirmation: false,
     registryOrigin: 'https://registry.npmjs.org',
-    notifications: { enabled: true, mode: 'always' as const, onComplete: false, onAsk: true, onRequest: false },
+    notifications: { enabled: true, mode: 'always' as const, onComplete: false, onAsk: true, onRequest: false, badgeEnabled: false },
   };
   writeSettingsFile(file, settings);
   const read = readSettingsFile(file);
@@ -128,6 +131,7 @@ test('readSettingsFile: malformed nested notifications block is preserved as cor
     { notifications: { enabled: true, mode: 'sometimes' } },
     { notifications: { enabled: 'yes', mode: 'always' } },
     { notifications: { enabled: true, mode: 'always', onComplete: 1 } },
+    { notifications: { badgeEnabled: 'yes' } },
   ];
   for (const [index, payload] of malformed.entries()) {
     const dir = mkdtempSync(path.join(tmpdir(), `chamber-settings-bad-notifications-${index}-`));
@@ -153,7 +157,7 @@ test('readSettingsFile: malformed nested notifications block is preserved as cor
     }));
     const read = readSettingsFile(file);
     assert.equal(read.notice, null, 'well-formed notifications block reads clean');
-    assert.deepEqual(read.settings.notifications, { enabled: true, mode: 'always', onComplete: false, onAsk: true, onRequest: false });
+    assert.deepEqual(read.settings.notifications, { enabled: true, mode: 'always', onComplete: false, onAsk: true, onRequest: false, badgeEnabled: true });
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -233,6 +237,16 @@ test('validatePatch: nested notifications — valid partial patches accepted', (
   // 空对象也是合法 partial（无操作）。
   const empty = validatePatch({ notifications: {} });
   assert.ok(empty.ok);
+});
+
+test('validatePatch: nested notifications — badgeEnabled rides as its own partial key', () => {
+  const off = validatePatch({ notifications: { badgeEnabled: false } });
+  assert.ok(off.ok);
+  if (off.ok) assert.deepEqual(off.patch.notifications, { badgeEnabled: false });
+  // 兄弟键不随 patch 上 wire（deep-merge 在主进程）。
+  if (off.ok) assert.equal('enabled' in (off.patch.notifications as object), false);
+  const bad = validatePatch({ notifications: { badgeEnabled: 'yes' } });
+  assert.equal(bad.ok, false);
 });
 
 test('validatePatch: nested notifications — invalid values rejected loudly', () => {

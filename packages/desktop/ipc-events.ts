@@ -26,6 +26,9 @@ export const IPC_CHANNELS = {
   NOTIFICATIONS_READY: 'dsh-chamber:notifications-ready',
   NOTIFICATION_OPEN_ACK: 'dsh-chamber:notification-open-ack',
   NOTIFICATION_OPEN: 'dsh-chamber:notification-open',
+  /** Unread badge count (design 19 §3.7): renderer push → main adjudication
+   *  (badgeEnabled) + platform-gated app.setBadgeCount. */
+  BADGE_COUNT: 'dsh-chamber:badge-count',
 
   UPDATE_STATE: 'dsh-chamber:update-state',
   UPDATE_CHECK: 'dsh-chamber:update-check',

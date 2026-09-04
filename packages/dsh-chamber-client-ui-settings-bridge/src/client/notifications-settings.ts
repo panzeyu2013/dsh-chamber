@@ -6,9 +6,9 @@
  */
 import type { ChamberSettings } from '../ambient/settings-bridge.d.ts'
 
-/** The notifications settings block (design 19 §3.4) — mirrors the renderer
- *  ChamberNotificationSettings shape (global.d.ts) and the desktop store
- *  (packages/desktop/chamber-settings.ts ChamberNotificationSettings). */
+/** The notifications settings block (design 19 §3.4 + §3.7) — mirrors the
+ *  renderer ChamberNotificationSettings shape (global.d.ts) and the desktop
+ *  store (packages/desktop/chamber-settings.ts ChamberNotificationSettings). */
 export interface NotificationsSettings {
   /** Master switch; default false (low disturbance — opt-in). */
   enabled: boolean
@@ -20,17 +20,21 @@ export interface NotificationsSettings {
   onAsk: boolean
   /** Notify when approval is requested; default true. */
   onRequest: boolean
+  /** Unread-count badge on the Dock/taskbar icon (design 19 §3.7); default
+   *  true — a passive indicator independent of the banner master switch. */
+  badgeEnabled: boolean
 }
 
-/** Design defaults (design 19 §3.4) — must stay in sync with the desktop
- *  DEFAULT_CHAMBER_SETTINGS.notifications (chamber-settings.ts); the test
- *  file asserts the mirror. */
+/** Design defaults (design 19 §3.4 + §3.7) — must stay in sync with the
+ *  desktop DEFAULT_CHAMBER_SETTINGS.notifications (chamber-settings.ts); the
+ *  test file asserts the mirror. */
 export const NOTIFICATIONS_DEFAULTS: NotificationsSettings = {
   enabled: false,
   mode: 'hidden-only',
   onComplete: true,
   onAsk: true,
   onRequest: true,
+  badgeEnabled: true,
 }
 
 const KNOWN_KEYS: ReadonlyArray<keyof NotificationsSettings> = [
@@ -39,6 +43,7 @@ const KNOWN_KEYS: ReadonlyArray<keyof NotificationsSettings> = [
   'onComplete',
   'onAsk',
   'onRequest',
+  'badgeEnabled',
 ]
 
 /** Read the notifications block with defaults — optional chaining only, never

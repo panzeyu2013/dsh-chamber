@@ -2,7 +2,10 @@
 
 > **状态：M1–M2 已实现，合并前竞态加固与自动化复验已完成；M3 的 macOS
 > 权限/打包态实机验收仍未完成（2026-09；实现与验证记录见
-> `docs/progress/STATUS.md`，入口形态以 §3.4 的 2026-09 用户拍板为准）**。
+> `docs/progress/STATUS.md`，入口形态以 §3.4 的 2026-09 用户拍板为准）。
+> **未读徽标（§3.7）M1–M2 已实现（2026-12）**：Dock/任务栏应用图标上的
+> 红色数字气泡——renderer 未读计数投影 + `dsh-chamber:badge-count` IPC +
+> 主进程设置裁决与平台门；Windows 任务栏 overlay 门控未接线（设计 23 排期）。
 > 需求来源：用户要求「一个 session 在 complete、ask、request 时给用户推送通知」，
 > 做成设置中的可选项。本文先给出
 > **OpenChamber 通知功能调研**（外部参考，本地源码
@@ -342,6 +345,50 @@ interface ChamberSettings {
   proof——侧边栏同源数据，无隧道 URL、无 SSH 材料）；proof 不持久化，也不含可逆
   host/user/port 信息。
 - 控制面零改动；无新 host 插件；不消费宿主帧；设置不落实例 dsh home。
+
+### 3.7 未读徽标：Dock/任务栏应用图标红气泡（2026-12，M1–M2）
+
+OpenChamber 参考实现：`packages/electron/main.mjs` 的 `desktop_tray_update`
+分支读 `args.dockBadgeCount` → `app.setBadgeCount(Math.max(0, Math.floor(count)))`
+（0 = 清除）；计数由 `packages/ui/src/hooks/useTraySync.ts` 计算——**有未读活动的
+会话数**（`unseenCount > 0`，`dockBadgeEnabled` 开关控制）。dsh-chamber 移植要点：
+
+```
+completedBySource（App 完成未读蓝点集，06 §4.1，只读复用——徽标与蓝点同源同
+规则，两面永不分叉）
+  → projectBadgeCount()（renderer 纯函数，跨来源求未读会话数，0 = 清除）
+  → window.dshChamber.badge.set(count)                 ← 新 IPC（invoke）
+  → 主进程：白名单校验 → 记录意图 → 设置裁决（badgeEnabled 关 → 强制 0）
+    → 平台门（app.setBadgeCount：darwin/linux；win32 overlay 门控）→ 呈现
+```
+
+- **计数语义**：一个未读会话 = 1（与 OpenChamber「chats with unseen activity」
+  同款，不是通知条数）；pending（ask/request）不计数（蓝点面不覆盖，侧边栏
+  pending 徽标仍承担窗口内提醒）。
+- **主进程裁决与状态**：`pendingBadgeCount`（最近一次 renderer 意图）+ 设置
+  权威裁决——`badgeEnabled` 关闭即强制清零，重新开启经 `reconcileBadgeCount`
+  恢复当前未读数（settings-set 后即时收敛，不等下一次推送）；quit 在途兜底
+  清零。renderer 始终推真实计数（开关裁决在主进程，与横幅通知同纪律）。
+- **平台门**（`badgePlatformGate`，诚实不假装）：darwin = Dock 红气泡；
+  linux = Unity launcher DBus API（GNOME 的 Dash to Dock 等消费同一 API 的
+  扩展同样可见；无消费方的桌面环境无可见效果——文档化平台限制，返回 true
+  表示已提交给 OS API 而非可见性保证）；win32 = v1 门控跳过 + loud 记一次
+  日志（`setOverlayIcon` 数字角标图属设计 23 排期；平台判定先于 API 可用性
+  判定，win32 上 setBadgeCount 恒为 undefined，专属原因不被泛化吞掉）。
+- **设置**：`notifications.badgeEnabled`（默认 **true**——被动指示，镜像蓝点
+  「始终开启」与 OpenChamber 默认开启；与横幅主开关 `enabled` 独立）。设置 UI
+  在通用页「通知」组加一条始终可见的无边框开关行（主开关下方、子设置卡上方），
+  不增加边框层数；zh/en i18n。
+- **renderer 推送**：`[completedBySource]` effect 每次变化推当前计数（蓝点
+  武装/阅读解除/来源退役自然驱动徽标增减）；挂载时推 0 兜底（窗口重载后蓝点
+  复位为 {}，主进程遗留徽标必须清除）+ 桥迟到有界重试（复用
+  `LISTENER_READY_RETRY_*` 预算）。桥缺失（web/dev）静默跳过。
+- **校验**：`{ count }` 必须为有限数（结构化克隆可携带 NaN/Infinity，显式
+  拒绝）、非负、≤ 9999（超上限响亮拒绝不静默截断）；小数 `Math.floor` 归一
+  （OpenChamber 同款容忍）。返回 boolean = 是否实际应用；渲染端静默容忍
+  false（主进程已 loud 记平台/失败原因，重复推送不刷屏）。
+- **纪律**：控制面零改动、无新 host 插件、不消费宿主帧、不建通知历史/中心
+  （01 §4 移出域不变）；计数是瞬时投影，绝不持久化。
 
 ---
 
