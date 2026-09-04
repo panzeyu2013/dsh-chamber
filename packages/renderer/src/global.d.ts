@@ -515,6 +515,11 @@ export interface ChamberSettings {
   /** Quit confirmation (design 14 D2): confirm only while the local dsh
    *  instance runs; remote tunnels never prompt. Default on. */
   quitConfirmation: boolean
+  /** VS Code open-in window policy (design 16 §3.3 / 20 §4.3): true (default)
+   *  → session folders open in a NEW VS Code window (vscode:// URL gains
+   *  `?windowId=_blank`); false → bare URL, VS Code's own default policy
+   *  decides (a running instance may reuse/replace the active window). */
+  vscodeOpenInNewWindow: boolean
   /** dsh runtime npm registry origin (design 18 M4): default npmjs; a
    *  user-selected mirror/custom https origin (trust anchor). */
   registryOrigin: string

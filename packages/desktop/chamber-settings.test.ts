@@ -28,14 +28,18 @@ test('normalizeSettings: defaults for null / non-object', () => {
 });
 
 test('normalizeSettings: accepts valid fields, rejects bad values, ignores unknown keys', () => {
-  const ok = normalizeSettings({ windowCloseBehavior: 'quit', launchAtLogin: true, keepAwake: true, quitConfirmation: false, registryOrigin: 'https://registry.npmmirror.com', futureKey: 42 });
-  assert.deepEqual(ok, { windowCloseBehavior: 'quit', launchAtLogin: true, keepAwake: true, quitConfirmation: false, registryOrigin: 'https://registry.npmmirror.com', notifications: DEFAULT_CHAMBER_SETTINGS.notifications });
+  const ok = normalizeSettings({ windowCloseBehavior: 'quit', launchAtLogin: true, keepAwake: true, quitConfirmation: false, vscodeOpenInNewWindow: false, registryOrigin: 'https://registry.npmmirror.com', futureKey: 42 });
+  assert.deepEqual(ok, { windowCloseBehavior: 'quit', launchAtLogin: true, keepAwake: true, quitConfirmation: false, vscodeOpenInNewWindow: false, registryOrigin: 'https://registry.npmmirror.com', notifications: DEFAULT_CHAMBER_SETTINGS.notifications });
   // Bad enum / non-boolean values fall back to defaults silently (normalize is
   // the persistence read path; loud validation lives in validatePatch).
-  const bad = normalizeSettings({ windowCloseBehavior: 'minimize', launchAtLogin: 'yes', keepAwake: 1, quitConfirmation: 'yes' });
+  const bad = normalizeSettings({ windowCloseBehavior: 'minimize', launchAtLogin: 'yes', keepAwake: 1, quitConfirmation: 'yes', vscodeOpenInNewWindow: 'yes' });
   assert.deepEqual(bad, DEFAULT_CHAMBER_SETTINGS);
   assert.equal(normalizeSettings({ registryOrigin: 'https://registry.example/private' }).registryOrigin, DEFAULT_CHAMBER_SETTINGS.registryOrigin);
   assert.equal(normalizeSettings({ registryOrigin: 'https://registry.example/?token=x' }).registryOrigin, DEFAULT_CHAMBER_SETTINGS.registryOrigin);
+  // vscodeOpenInNewWindow (design 16 §3.3): 合法布尔保留；缺字段/非法回落默认 true。
+  assert.equal(normalizeSettings({ vscodeOpenInNewWindow: false }).vscodeOpenInNewWindow, false);
+  assert.equal(normalizeSettings({}).vscodeOpenInNewWindow, true);
+  assert.equal(DEFAULT_CHAMBER_SETTINGS.vscodeOpenInNewWindow, true, 'new-window policy defaults ON');
 });
 
 test('normalizeSettings: nested notifications — missing/invalid fields fall back to defaults', () => {
@@ -66,6 +70,7 @@ test('writeSettingsFile + readSettingsFile round-trip (atomic, 0600)', () => {
     launchAtLogin: true,
     keepAwake: true,
     quitConfirmation: false,
+    vscodeOpenInNewWindow: false,
     registryOrigin: 'https://registry.npmjs.org',
     notifications: { enabled: true, mode: 'always' as const, onComplete: false, onAsk: true, onRequest: false, badgeEnabled: false },
   };
@@ -163,6 +168,23 @@ test('readSettingsFile: malformed nested notifications block is preserved as cor
   }
 });
 
+test('readSettingsFile: wrongly-typed vscodeOpenInNewWindow is preserved as corrupt', () => {
+  // Top-level boolean keys are part of the file's SHAPE: a wrong type must
+  // never be silently re-normalized (corrupt-preserve discipline).
+  const dir = mkdtempSync(path.join(tmpdir(), 'chamber-settings-bad-vscode-open-'));
+  const file = path.join(dir, 'chamber-settings.json');
+  try {
+    writeFileSync(file, JSON.stringify({ vscodeOpenInNewWindow: 'yes' }));
+    const read = readSettingsFile(file);
+    assert.match(read.notice ?? '', /corrupt/);
+    assert.deepEqual(read.settings, DEFAULT_CHAMBER_SETTINGS);
+    assert.equal(existsSync(file), false);
+    assert.equal(existsSync(`${file}.corrupt`), true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('computeSupported: launchAtLogin on all shipping platforms; closeToTray follows tray availability, always on darwin', () => {
   // design 21 M4: win32 launchAtLogin unlocked (HKCU Run key).
   assert.deepEqual(computeSupported('win32', true), { launchAtLogin: true, closeToTray: true });
@@ -216,6 +238,8 @@ test('validatePatch: rejects unknown keys and bad types loudly', () => {
   assert.equal(badEnum.ok, false);
   const badBool = validatePatch({ keepAwake: 'yes' });
   assert.equal(badBool.ok, false);
+  const badVscodeBool = validatePatch({ vscodeOpenInNewWindow: 'yes' });
+  assert.equal(badVscodeBool.ok, false);
   const notObject = validatePatch('x');
   assert.equal(notObject.ok, false);
 });
@@ -224,6 +248,10 @@ test('validatePatch: accepts known partial patches', () => {
   const ok = validatePatch({ windowCloseBehavior: 'quit', keepAwake: true, quitConfirmation: false });
   assert.ok(ok.ok);
   if (ok.ok) assert.deepEqual(ok.patch, { windowCloseBehavior: 'quit', keepAwake: true, quitConfirmation: false });
+  // vscodeOpenInNewWindow 是通用布尔分支的普通键：单键 partial 可独立上 wire。
+  const vscodeOff = validatePatch({ vscodeOpenInNewWindow: false });
+  assert.ok(vscodeOff.ok);
+  if (vscodeOff.ok) assert.deepEqual(vscodeOff.patch, { vscodeOpenInNewWindow: false });
 });
 
 test('validatePatch: nested notifications — valid partial patches accepted', () => {

@@ -3751,6 +3751,10 @@ if (!gotTheLock) {
         return { id: instance.id, host: instance.host, user: instance.user, sshPort: instance.sshPort, transport: instance.transport };
       },
       vscodeAvailable: () => detectVscodeAvailability(process.platform).available,
+      // Chamber setting `vscodeOpenInNewWindow`（design 16 §3.3）：每次拉起惰性
+      // 读取（与 vscodeAvailable 同款 getter），设置变更即时作用于下一次拉起；
+      // 由 open-in 按钮与 OS 深链两条入口共享（同一 wiredCtx）。
+      vscodeOpenInNewWindow: () => chamberSettings.vscodeOpenInNewWindow,
       openVscodeUrl: async (url) => {
         // Injection-point scheme re-verification (security-review P2-1, mirror
         // of isAllowedReleaseUrl's discipline): only our constructed targets
@@ -3782,6 +3786,7 @@ if (!gotTheLock) {
       platform: process.platform,
       lookupInstance: wiredCtx.lookupInstance,
       vscodeAvailable: wiredCtx.vscodeAvailable,
+      vscodeOpenInNewWindow: wiredCtx.vscodeOpenInNewWindow,
       openVscodeUrl: wiredCtx.openVscodeUrl,
       stat: p => classifyLocalPath(value => fsp.stat(value), p),
       openPath: async (p) => {

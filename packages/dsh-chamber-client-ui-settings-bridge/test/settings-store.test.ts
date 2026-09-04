@@ -17,6 +17,7 @@ function statusWith(overrides?: Partial<ChamberSettings>): ChamberSettingsStatus
     launchAtLogin: false,
     keepAwake: false,
     quitConfirmation: true,
+    vscodeOpenInNewWindow: true,
     registryOrigin: 'https://registry.npmjs.org',
     notifications: { enabled: false, mode: 'hidden-only', onComplete: true, onAsk: true, onRequest: true, badgeEnabled: true },
   }

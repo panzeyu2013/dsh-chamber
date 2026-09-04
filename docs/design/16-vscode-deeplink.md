@@ -135,6 +135,17 @@ buildVscodeFileUrl(path): string
   （对比 `isAllowedReleaseUrl` 白名单纪律，main.ts:189）；
 - path 逐段 `encodeURIComponent`（首 `/` 保留），空格/中文/`#`/`?`/`&`/`%` 均有
   单测覆盖；控制字符在 §3.1 已拒绝；
+- **新窗口默认（2026-12，chamber 设置驱动）**：两个构造器在 chamber 设置
+  `vscodeOpenInNewWindow`（chamber-settings.json，通用页「运行」组，默认开）
+  开启时统一追加 `?windowId=_blank`。背景：VS Code 运行中收到外部协议 URL 时，
+  其主进程对外部文件夹 URL 默认走「复用最近活动窗口并替换内容」（
+  `window.openFoldersInNewWindow` 默认 `default` 不参与覆盖，CLI 与 URL 的默认
+  分支不同）——该参数在复用决策**之前**强制新窗口分支，且目标文件夹已开在某
+  窗口时仍聚焦旧窗口、不重复开（行为依据：本机 VS Code 1.135 主进程 bundle 的
+  `handleProtocolUrl`/`shouldOpenNewWindow`/`openInBrowserWindow` 逐级核实）。
+  关闭设置则保持裸 URL，交还 VS Code 自身策略。参数只追加在编码后的 path 之
+  后，不触碰逐段编码纪律与 scheme 硬编码；主进程注入点前缀复验不受影响
+  （URL 仍以 `vscode://file/` 或 `vscode://vscode-remote/` 开头）。
 - 失败路径全部 loud：对话框（VS Code 未装）/ 日志 / `{error}` 返回，绝不静默假成功。
 
 ### 3.4 入口一致性

@@ -236,6 +236,22 @@
   Dash to Dock 消费同一 DBus API 可见；默认 GNOME/KDE 无效果，文档化平台限制）；
   Windows 任务栏 overlay（`setOverlayIcon` 数字角标图）v1 门控未接线——设计 23
   实机矩阵排期。
+- **open-in 的 VS Code 窗口策略（2026-12 核查 + 修复）**：核查确认 dsh-chamber
+  以 `vscode://` URL 拉起会话目录时，若 VS Code 已在运行，其默认策略是**复用
+  最近活动窗口并替换其内容**（`window.openFoldersInNewWindow` 默认 `default`，
+  外部协议 URL 无 new-window 指令 → 主进程 `handleProtocolUrl` 走 reuse 分支；
+  已在本机 VS Code 1.135 主进程 bundle 源码逐级核实；CLI `code <path>` 因
+  preferNewWindow 默认新开，故按钮与 CLI 体感不同）。修复：新增 chamber 设置
+  `vscodeOpenInNewWindow`（默认开；chamber-settings.json + 通用页「运行」组
+  开关，zh/en）——开 → 本地 `vscode://file/` 与远程 `vscode://vscode-remote/`
+  两种目标统一追加 `?windowId=_blank`（VS Code 在复用决策前强制新窗口分支；
+  目标文件夹已开在某窗口时仍聚焦旧窗口不重复开）；关 → 保持裸 URL 交还 VS
+  Code 自身策略。按钮与 OS 深链同管线（wiredCtx 每次拉起惰性读取）。
+  自动化覆盖（2026-12 实测）：desktop chamber-settings / deep-link / open-in /
+  ipc-surface-mirror 套件 + desktop tsc（含 main.ts 接线）+ build:preload +
+  typecheck:settings-bridge（GeneralView/类型镜像）；build:renderer 与三列布局
+  的整窗视觉待 vendor 树就绪后补跑。**剩余实机门禁**：见下条 macOS 实机验收
+  （新窗口/复用两态在打包态 VS Code 的真机确认仍属外部门）。
 - **VS Code 深链 + open-in（设计 16/20）**：剩余 macOS 深链冷/热启动、打包态、
   托盘/退出在途、N-ctx、VS Code 缺失、`sshPort != 22`、Finder 下拉在 vendor
   会话头部的定位/层叠，以及远程来源仅 VS Code 的实机验收。

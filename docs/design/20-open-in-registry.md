@@ -171,7 +171,9 @@ interface OpenInApp {
   黑名单、绝不把任何目录交给 `openPath`；同步异常可结构化，Electron void 完成态
   限制见 §9；
 - **vscode**：`available: (ctx) => ctx.vscodeAvailable()`；open 直通
-  `runVscodeLaunch`（注册表实查 + authority 构造 + scheme 复验，零行为变化）。
+  `runVscodeLaunch`（注册表实查 + authority 构造 + scheme 复验，零行为变化）；
+  新窗口偏好经 ctx `vscodeOpenInNewWindow` 惰性读取并透传（chamber 设置，默认
+  开 → 目标 URL 追加 `?windowId=_blank`，见设计 16 §3.3）。
 
 ### 4.4 normalizeOpenPathError
 
