@@ -4268,15 +4268,33 @@ test('beginProfileWrite refuses while a restart, install or start is in flight a
   const installDir = mkdtempSync(join(tmpdir(), 'gw-rt-lease-install-'))
   try {
     let rejectFetch!: (error: Error) => void
+    let resolveFetchStarted!: () => void
+    const fetchStarted = new Promise<void>((resolve) => { resolveFetchStarted = resolve })
     const plane = fakePlane()
     plane._state.connectionState = 'ready'
     const manager = createGatewayRuntimeManager({
       config: config(installDir),
       plane,
       logger: silentLogger,
-      fetchMetadata: async () => new Promise((_, reject) => { rejectFetch = reject }),
+      // perf T3（2026-09）：磁盘闸口改异步（runtimeDiskSummaryAsync）后
+      // fetchMetadata 不再于 select() 的同步前缀内启动——测试等待其实际
+      // 启动再断言 lease 拒绝（installInFlight 仍同步置位，语义不变）。
+      fetchMetadata: async () => new Promise((_, reject) => {
+        rejectFetch = reject
+        resolveFetchStarted()
+      }),
     })
     const install = manager.select('2.0.0')
+    // 2026-09 review（A5）：race 兜底——若未来 select() 在达 fetchMetadata
+    // 前 reject/return（回归），测试立即失败而非因 fetchStarted 永不 resolve
+    // 而永挂。
+    await Promise.race([
+      fetchStarted,
+      install.then(
+        () => { throw new Error('select settled before fetchMetadata started') },
+        (error: unknown) => { throw error },
+      ),
+    ])
     const lease = manager.beginProfileWrite()
     assert.equal(lease.ok, false)
     if (!lease.ok) {

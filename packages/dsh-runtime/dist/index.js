@@ -856,6 +856,37 @@ async function applyPendingVersion(opts) {
   }
 }
 
+// src/coalesced-refresh.ts
+function createCoalescedRefresher(compute, options = {}) {
+  const maxReruns = options.maxReruns ?? 3;
+  let chain = null;
+  let arrivedDuringRun = false;
+  let reruns = 0;
+  const runLoop = async () => {
+    try {
+      let last;
+      do {
+        arrivedDuringRun = false;
+        last = await compute();
+        reruns += 1;
+      } while (arrivedDuringRun && reruns < maxReruns);
+      return last;
+    } finally {
+      chain = null;
+      reruns = 0;
+      arrivedDuringRun = false;
+    }
+  };
+  return (request) => {
+    if (chain === null) {
+      chain = runLoop();
+    } else if (request?.rerunOnJoin !== false) {
+      arrivedDuringRun = true;
+    }
+    return chain;
+  };
+}
+
 // src/dsh-runtime-store.ts
 import {
   chmodSync,
@@ -867,6 +898,7 @@ import {
   rmSync,
   statSync
 } from "node:fs";
+import { lstat as lstatP, readdir as readdirP } from "node:fs/promises";
 import { basename as basename3, dirname as dirname2, isAbsolute, join as join2, relative as relative2 } from "node:path";
 import { createHash, randomBytes as randomBytes2 } from "node:crypto";
 
@@ -2470,6 +2502,171 @@ function runtimeDiskSummary(baseDir, dshHome = join2(baseDir, "state", "dsh-home
     restoreBackupBytes,
     unclassifiedBytes,
     totalBytes,
+    storePruneNeeded: existsSync(storePruneMarkerPath(baseDir))
+  };
+}
+async function yieldToEventLoop() {
+  await new Promise((resolve3) => setImmediate(resolve3));
+}
+async function chargeNodeAsync(path, target, rootMissingIsZero, acc, opts) {
+  let info;
+  try {
+    info = await lstatP(path);
+  } catch (error) {
+    if (rootMissingIsZero && error.code === "ENOENT") return;
+    throw error;
+  }
+  acc.visited += 1;
+  if (acc.visited % opts.yieldEvery === 0) {
+    opts.onVisited?.(acc.visited);
+    await yieldToEventLoop();
+  }
+  const key = `${info.dev}:${info.ino}`;
+  switch (target) {
+    case "versionTree":
+      acc.versionTreeBytes += info.size;
+      break;
+    case "store":
+      acc.storeBytes += info.size;
+      break;
+    case "cache":
+      acc.cacheBytes += info.size;
+      break;
+    case "installHome":
+      acc.installHomeBytes += info.size;
+      break;
+    case "xdgCache":
+      acc.xdgCacheBytes += info.size;
+      break;
+    case "work":
+      acc.workBytes += info.size;
+      break;
+    case "failure":
+      acc.failureBytes += info.size;
+      break;
+    case "snapshot":
+      acc.snapshotBytes += info.size;
+      break;
+    case "preRollback":
+      acc.preRollbackBytes += info.size;
+      break;
+    case "restoreBackup":
+      acc.restoreBackupBytes += info.size;
+      break;
+    default:
+      break;
+  }
+  if (target === "unclassified" && !acc.unclassSeen.has(key)) {
+    acc.unclassSeen.add(key);
+    acc.unclassifiedBytes += info.size;
+  }
+  if (!acc.totalSeen.has(key)) {
+    acc.totalSeen.add(key);
+    acc.totalBytes += info.size;
+  }
+  if (!info.isDirectory()) return;
+  const names = await readdirP(path);
+  for (const name of names) {
+    await chargeNodeAsync(join2(path, name), target, false, acc, opts);
+  }
+}
+function asyncTargetForEntry(name, isDirectory, treeSet) {
+  const known = treeSet.has(name) && isDirectory || isDirectory && name.startsWith(".work-") || isDirectory && name.endsWith(".failed") || isRuntimePublishBackupName(name) || name === "failures" || name === "metadata-recovery-data" || name === "metadata-recovery-rescue-data" || name === "metadata-recovery.json" || name === ".pnpm-store" || name === ".pnpm-cache" || name === ".install-home" || name === ".xdg-cache" || name === "snapshots" || name === "pre-rollback";
+  if (!known) return "unclassified";
+  if (treeSet.has(name) && isDirectory) return "versionTree";
+  if (isDirectory && name.startsWith(".work-")) return "work";
+  if (isDirectory && name.endsWith(".failed")) return "failure";
+  if (isRuntimePublishBackupName(name)) return "failure";
+  switch (name) {
+    case "failures":
+    case "metadata-recovery-data":
+    case "metadata-recovery-rescue-data":
+    case "metadata-recovery.json":
+      return "failure";
+    case ".pnpm-store":
+      return "store";
+    case ".pnpm-cache":
+      return "cache";
+    case ".install-home":
+      return "installHome";
+    case ".xdg-cache":
+      return "xdgCache";
+    case "snapshots":
+      return "snapshot";
+    case "pre-rollback":
+      return "preRollback";
+    default:
+      return "none";
+  }
+}
+async function runtimeDiskSummaryAsync(baseDir, dshHome = join2(baseDir, "state", "dsh-home"), options = {}) {
+  const opts = {
+    // yieldEvery ≤0 会让 visited % yieldEvery 恒为 NaN 而永不让渡（静默退化
+    // 为阻塞遍历，2026-09 review）——钳制到 ≥1。
+    yieldEvery: Math.max(1, Math.floor(options.yieldEvery ?? 512)),
+    onVisited: options.onVisited ?? (() => void 0)
+  };
+  const runtime = runtimeDirPath(baseDir);
+  const trees = listVersionTrees(baseDir);
+  const treeSet = new Set(trees);
+  const acc = {
+    versionTreeBytes: 0,
+    storeBytes: 0,
+    cacheBytes: 0,
+    installHomeBytes: 0,
+    xdgCacheBytes: 0,
+    workBytes: 0,
+    failureBytes: 0,
+    snapshotBytes: 0,
+    preRollbackBytes: 0,
+    restoreBackupBytes: 0,
+    unclassifiedBytes: 0,
+    totalBytes: 0,
+    totalSeen: /* @__PURE__ */ new Set(),
+    unclassSeen: /* @__PURE__ */ new Set(),
+    visited: 0
+  };
+  const dshHomeParent = dirname2(dshHome);
+  const dshHomeName = basename3(dshHome);
+  let runtimeEntries;
+  try {
+    runtimeEntries = (await readdirP(runtime, { withFileTypes: true })).map((entry) => ({ name: entry.name, isDirectory: entry.isDirectory() }));
+  } catch (error) {
+    if (error.code === "ENOENT") runtimeEntries = [];
+    else throw error;
+  }
+  let restoreBackups = [];
+  try {
+    restoreBackups = (await readdirP(dshHomeParent, { withFileTypes: true })).filter((entry) => entry.isDirectory() && (entry.name === `${dshHomeName}.old` || entry.name.startsWith(`${dshHomeName}.old-`))).map((entry) => join2(dshHomeParent, entry.name));
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+  for (const entry of runtimeEntries) {
+    await chargeNodeAsync(
+      join2(runtime, entry.name),
+      asyncTargetForEntry(entry.name, entry.isDirectory, treeSet),
+      true,
+      acc,
+      opts
+    );
+  }
+  for (const backup of restoreBackups) {
+    await chargeNodeAsync(backup, "restoreBackup", true, acc, opts);
+  }
+  return {
+    versionTrees: trees.length,
+    versionTreeBytes: acc.versionTreeBytes,
+    storeBytes: acc.storeBytes,
+    cacheBytes: acc.cacheBytes,
+    installHomeBytes: acc.installHomeBytes,
+    xdgCacheBytes: acc.xdgCacheBytes,
+    workBytes: acc.workBytes,
+    failureBytes: acc.failureBytes,
+    snapshotBytes: acc.snapshotBytes,
+    preRollbackBytes: acc.preRollbackBytes,
+    restoreBackupBytes: acc.restoreBackupBytes,
+    unclassifiedBytes: acc.unclassifiedBytes,
+    totalBytes: acc.totalBytes,
     storePruneNeeded: existsSync(storePruneMarkerPath(baseDir))
   };
 }
@@ -7392,6 +7589,7 @@ export {
   clearStorePruneRequest,
   compareRuntimeVersions,
   completeInterruptedRestore,
+  createCoalescedRefresher,
   createIntegrityVerifier,
   createPrivateDirectoryNoFollow,
   createRuntimeFileExclusiveNoFollow,
@@ -7476,6 +7674,7 @@ export {
   runRuntimeActivationProbes,
   runStartupPhase,
   runtimeDiskSummary,
+  runtimeDiskSummaryAsync,
   runtimeFailureSummary,
   runtimeRootPath,
   runtimeSnapshotRetentionState,

@@ -148,7 +148,9 @@ import {
 } from '../shared/search-state.ts'
 import { SessionTodoArea } from './SessionTodoArea.tsx'
 import {
-  clearSourceBookkeeping, getViewPrefs, subscribeViewPrefs, updateViewPrefs, type ChamberSidebarViewPrefs,
+  clearSourceBookkeeping, flushScheduledActivityWrites, getViewPrefs, scheduleUpdatedOrderWrite,
+  subscribeViewPrefs, updateViewPrefs,
+  type ChamberSidebarViewPrefs,
 } from '../shared/view-prefs.ts'
 import { clearPendingClick, isClickInsidePendingRow, noteSessionRowClick } from '../shared/pending-click.ts'
 import { getSourceRepoLayouts, getWorkspaceGitFlag, getWorkspaceGitFlagsVersion, isSourceGitFlagsLoaded, subscribeWorkspaceGitFlags } from '../shared/workspace-git-flags.ts'
@@ -588,6 +590,10 @@ export function SidebarRoot({
   // lands before the next projection; entering manual restores wire order.
   const setOrderBy = (server: ChamberServerAggregate, mode: SessionOrderBy): void => {
     if ((viewPrefs.orderBy?.[server.id] ?? 'manual') === mode) return
+    // perf T4 review（2026-09，F2）：先终刷防抖窗内 pending 的 promotion
+    // 簿记再落盘——否则窗末 flush 会把刚被清掉的簿记重新合并回去，
+    // switchedToUpdated 的一次性全量 recency 排序被跳过。
+    flushScheduledActivityWrites()
     updateViewPrefs(prev => {
       const orderBy = { ...prev.orderBy, [server.id]: mode }
       if (mode !== 'updated') return { ...prev, orderBy }
@@ -728,17 +734,17 @@ export function SidebarRoot({
       }
     }
     if (Object.keys(pendingOrder).length === 0 && Object.keys(pendingTimestamps).length === 0) return
-    // Merge into prev (not the render snapshot) so a concurrent write from
-    // another shell on a key we did not touch is never clobbered.
-    updateViewPrefs(prev => ({
-      ...prev,
-      ...(Object.keys(pendingOrder).length > 0
-        ? { updatedOrder: { ...prev.updatedOrder, ...pendingOrder } }
-        : {}),
-      ...(Object.keys(pendingTimestamps).length > 0
-        ? { sessionUpdatedAtByAccount: { ...prev.sessionUpdatedAtByAccount, ...pendingTimestamps } }
-        : {}),
-    }))
+    // perf T4（2026-09，M4）：置顶写回**防抖**——会话流式更新期间每个投影
+    // tick 都推进 updatedAt，逐 tick 直写会把整份 prefs 的落盘 + 全壳通知
+    // 放大到更新频率。派生结果改经共享固定窗（scheduleUpdatedOrderWrite，
+    // view-prefs.ts）按账户合并、窗末终刷一次；末 tick 自窗基态重派生、结果
+    // 自洽（与逐 tick 落盘在交错突发/首观察窗存在排序级差异，无数据丢失，
+    // 2026-09 review F3）。合并目标仍是 updateViewPrefs 的 prev（共享缓存，
+    // 非渲染快照）——其它 shell 的落盘不被覆盖；离散写（拖拽/排序切换）在
+    // 写前先 flush（review F1/F2），窗末终刷绝不覆盖更新的用户手势。
+    for (const [accountKey, order] of Object.entries(pendingOrder)) {
+      scheduleUpdatedOrderWrite(accountKey, order, pendingTimestamps[accountKey])
+    }
   }, [servers, viewPrefs])
 
   // chamber (06 §1.2, 2026-08 — cross-ctx live sync): per-source search state
@@ -1220,6 +1226,10 @@ export function SidebarRoot({
     // this render's viewPrefs snapshot): a promotion write can land between
     // this render and the drop, and stale anchor math would then clobber the
     // un-rendered promotion on the same account key.
+    // perf T4 review（2026-09，F1）：先终刷防抖窗内 pending 的派生 order
+    // 再取锚点——否则窗末 flush 会用 tick 前派生的旧 order 整体覆盖本次
+    // 拖拽提交（静默回退且不自愈）。
+    if (orderBy === 'updated') flushScheduledActivityWrites()
     const renderedOrder = orderBy === 'updated'
       ? reconciledSessionOrder(getViewPrefs().updatedOrder?.[accountKey] ?? [], wireIds)
       : workspace.ungrouped === true

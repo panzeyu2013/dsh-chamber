@@ -21,6 +21,7 @@ import {
   rmSync,
   statSync,
 } from 'node:fs'
+import { lstat as lstatP, readdir as readdirP } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, relative } from 'node:path'
 import { createHash, randomBytes } from 'node:crypto'
 import { EXACT_SEMVER, assertSafeVersion, isSafeVersion } from './version-safety.ts'
@@ -1662,6 +1663,246 @@ export function runtimeDiskSummary(
     restoreBackupBytes,
     unclassifiedBytes,
     totalBytes,
+    storePruneNeeded: existsSync(storePruneMarkerPath(baseDir)),
+  }
+}
+
+/* ============================================================================
+ * perf T3（2026-09，D8 组合方案：异步分批单遍遍历 + 节流/单飞/终态一次）
+ *
+ * `runtimeDiskSummary`（上方，保留为兼容面）对每个已知类别各做一整遍全树
+ * 遍历、再加两遍 (dev,ino) 去重遍历——一次调用约 15 遍重叠遍历。store 达
+ * 10⁵–10⁶ 项量级时单遍即数秒到数十秒（scripts/perf/disk-walk-baseline.mjs
+ * 合成曲线），版本事务（desktop owner 15 个 refresh 调用点）会把这个成本
+ * 再放大。异步兄弟函数对每个 runtime 拥有的根只遍历**一遍**，会计契约与
+ * 同步版逐字段一致：
+ *   - 类别字段保持"逐路径求和"语义（每处出现都计）；
+ *   - unclassifiedBytes 在"未分类残渣"集合内去重（独立 identity 集）；
+ *   - totalBytes 跨 runtime 根与 dsh-home.old* 恢复备份共享同一 identity
+ *     集（硬链接树/store 字节只计一次）。
+ * 遍历按 `yieldEvery` 个节点一批，向事件循环让渡（macrotask），超大 store
+ * 不再冻结 owner 进程；调用方（desktop main / gateway runtime-manager）经
+ * coalesced-refresh.ts 的 createCoalescedRefresher 叠加节流/单飞/终态一次。
+ *
+ * 残差登记（2026-09 review，均仅并发竞态/文件系统病理，稳定状态无差异）：
+ * - 嵌套 lstat ENOENT（list 与 lstat 间并发删除）：sync 逐路径类别 = 0、
+ *   sync 去重与 async = 抛（宁失败不静默低估），见 chargeNodeAsync 注；
+ * - 版本名同名**非目录** dirent：sync 按 listVersionTrees 名称对文件也计
+ *   类别（并同时落入 unclassified 双计），async 单桶归 unclassified——仅
+ *   两次列目录间 dirent 类型翻转才触发；
+ * - bind-mount/overlay 重复目录 inode：sync 去重跳整棵子树 vs 本实现逐节点
+ *   查重——和值恒等，仅多余遍历代价（实际运行时布局不存在）。
+ * ========================================================================== */
+
+export interface RuntimeDiskWalkOptions {
+  /** 每处理这么多节点让渡一次事件循环（默认 512）。 */
+  yieldEvery?: number
+  /** 测试专用进度钩子（已访问节点数）；生产不传。 */
+  onVisited?: (visited: number) => void
+}
+
+type AsyncWalkTarget =
+  | 'versionTree' | 'store' | 'cache' | 'installHome' | 'xdgCache'
+  | 'work' | 'failure' | 'snapshot' | 'preRollback' | 'restoreBackup'
+  | 'unclassified' | 'none'
+
+interface AsyncDiskAcc {
+  versionTreeBytes: number
+  storeBytes: number
+  cacheBytes: number
+  installHomeBytes: number
+  xdgCacheBytes: number
+  workBytes: number
+  failureBytes: number
+  snapshotBytes: number
+  preRollbackBytes: number
+  restoreBackupBytes: number
+  unclassifiedBytes: number
+  totalBytes: number
+  /** totalBytes 的共享 identity 集（遍历顺序 = runtimeEntries 后 restore 备份）。 */
+  totalSeen: Set<string>
+  /** unclassifiedBytes 的独立 identity 集（仅未分类根之间去重）。 */
+  unclassSeen: Set<string>
+  visited: number
+}
+
+async function yieldToEventLoop(): Promise<void> {
+  await new Promise<void>((resolve) => setImmediate(resolve))
+}
+
+async function chargeNodeAsync(
+  path: string,
+  target: AsyncWalkTarget,
+  rootMissingIsZero: boolean,
+  acc: AsyncDiskAcc,
+  opts: Required<Pick<RuntimeDiskWalkOptions, 'yieldEvery' | 'onVisited'>>,
+): Promise<void> {
+  let info
+  try {
+    info = await lstatP(path)
+  } catch (error) {
+    // 根级 ENOENT = 该根不存在（与同步版各 walker 的 missing→0 语义一致）；
+    // 嵌套 ENOENT（list 与 lstat 之间被并发删除）：同步版**逐路径**类别
+    // walker（measurePathBytes）在该点返回 0、**去重** walker
+    // （measureDedupedBytes）抛错；单遍异步无法同时复现分裂语义，选择与
+    // total 去重侧一致的"抛错"（宁失败不静默低估，2026-09 review P2-1 精确
+    // 化声明；稳定状态与对等测试不受竞态窗口影响）。
+    if (rootMissingIsZero && (error as NodeJS.ErrnoException).code === 'ENOENT') return
+    throw error
+  }
+  acc.visited += 1
+  if (acc.visited % opts.yieldEvery === 0) {
+    opts.onVisited?.(acc.visited)
+    await yieldToEventLoop()
+  }
+  const key = `${info.dev}:${info.ino}`
+  // 类别逐路径求和：每处出现都计（与 measurePathBytes 一致），与去重无关。
+  switch (target) {
+    case 'versionTree': acc.versionTreeBytes += info.size; break
+    case 'store': acc.storeBytes += info.size; break
+    case 'cache': acc.cacheBytes += info.size; break
+    case 'installHome': acc.installHomeBytes += info.size; break
+    case 'xdgCache': acc.xdgCacheBytes += info.size; break
+    case 'work': acc.workBytes += info.size; break
+    case 'failure': acc.failureBytes += info.size; break
+    case 'snapshot': acc.snapshotBytes += info.size; break
+    case 'preRollback': acc.preRollbackBytes += info.size; break
+    case 'restoreBackup': acc.restoreBackupBytes += info.size; break
+    default: break // 'unclassified' / 'none' 无逐路径类别和
+  }
+  if (target === 'unclassified' && !acc.unclassSeen.has(key)) {
+    acc.unclassSeen.add(key)
+    acc.unclassifiedBytes += info.size
+  }
+  if (!acc.totalSeen.has(key)) {
+    acc.totalSeen.add(key)
+    acc.totalBytes += info.size
+  }
+  if (!info.isDirectory()) return
+  // readdir 竞态（lstat 与 readdir 之间目录消失）让错误直接向上传播——同步
+  // 版 measurePathBytes/measureDedupedBytes 的 readdirSync 同点抛 ENOENT，
+  // 保持一致（绝不把并发删除静默计成 0）。
+  const names = await readdirP(path)
+  for (const name of names) {
+    await chargeNodeAsync(join(path, name), target, false, acc, opts)
+  }
+}
+
+/** runtimeEntries 顶层条目 → 会计类别（与 runtimeDiskSummary 的分类完全同构；
+ *  返回 null 表示条目属于"未分类残渣"→ 用 'unclassified' 目标）。 */
+function asyncTargetForEntry(name: string, isDirectory: boolean, treeSet: Set<string>): AsyncWalkTarget {
+  const known = (treeSet.has(name) && isDirectory)
+    || (isDirectory && name.startsWith('.work-'))
+    || (isDirectory && name.endsWith('.failed'))
+    || isRuntimePublishBackupName(name)
+    || name === 'failures'
+    || name === 'metadata-recovery-data'
+    || name === 'metadata-recovery-rescue-data'
+    || name === 'metadata-recovery.json'
+    || name === '.pnpm-store'
+    || name === '.pnpm-cache'
+    || name === '.install-home'
+    || name === '.xdg-cache'
+    || name === 'snapshots'
+    || name === 'pre-rollback'
+  if (!known) return 'unclassified'
+  if (treeSet.has(name) && isDirectory) return 'versionTree'
+  if (isDirectory && name.startsWith('.work-')) return 'work'
+  if (isDirectory && name.endsWith('.failed')) return 'failure'
+  if (isRuntimePublishBackupName(name)) return 'failure'
+  switch (name) {
+    case 'failures':
+    case 'metadata-recovery-data':
+    case 'metadata-recovery-rescue-data':
+    case 'metadata-recovery.json':
+      return 'failure'
+    case '.pnpm-store': return 'store'
+    case '.pnpm-cache': return 'cache'
+    case '.install-home': return 'installHome'
+    case '.xdg-cache': return 'xdgCache'
+    case 'snapshots': return 'snapshot'
+    case 'pre-rollback': return 'preRollback'
+    default: return 'none'
+  }
+}
+
+/** 异步单遍磁盘统计（perf T3）。会计契约与 `runtimeDiskSummary` 逐字段一致
+ *  （并发删除的竞态窗口除外——嵌套 ENOENT 抛错 vs 同步逐路径类别的 0，见
+ *  chargeNodeAsync 注，2026-09 review P2-1）；
+ *  真实布局 + 硬链接/符号链接 fixture 的对等测试见 dsh-runtime-store.test.ts。 */
+export async function runtimeDiskSummaryAsync(
+  baseDir: string,
+  dshHome: string = join(baseDir, 'state', 'dsh-home'),
+  options: RuntimeDiskWalkOptions = {},
+): Promise<RuntimeDiskSummary> {
+  const opts = {
+    // yieldEvery ≤0 会让 visited % yieldEvery 恒为 NaN 而永不让渡（静默退化
+    // 为阻塞遍历，2026-09 review）——钳制到 ≥1。
+    yieldEvery: Math.max(1, Math.floor(options.yieldEvery ?? 512)),
+    onVisited: options.onVisited ?? (() => undefined),
+  }
+  const runtime = runtimeDirPath(baseDir)
+  const trees = listVersionTrees(baseDir)
+  const treeSet = new Set(trees)
+  const acc: AsyncDiskAcc = {
+    versionTreeBytes: 0, storeBytes: 0, cacheBytes: 0, installHomeBytes: 0,
+    xdgCacheBytes: 0, workBytes: 0, failureBytes: 0, snapshotBytes: 0,
+    preRollbackBytes: 0, restoreBackupBytes: 0, unclassifiedBytes: 0,
+    totalBytes: 0,
+    totalSeen: new Set(),
+    unclassSeen: new Set(),
+    visited: 0,
+  }
+  // restore 备份发现（与同步版相同）：dshHomeParent 下 dsh-home.old* 目录。
+  const dshHomeParent = dirname(dshHome)
+  const dshHomeName = basename(dshHome)
+  let runtimeEntries: Array<{ name: string; isDirectory: boolean }>
+  try {
+    runtimeEntries = (await readdirP(runtime, { withFileTypes: true }))
+      .map((entry) => ({ name: entry.name, isDirectory: entry.isDirectory() }))
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') runtimeEntries = []
+    else throw error
+  }
+  let restoreBackups: string[] = []
+  try {
+    restoreBackups = (await readdirP(dshHomeParent, { withFileTypes: true }))
+      .filter((entry) => entry.isDirectory()
+        && (entry.name === `${dshHomeName}.old` || entry.name.startsWith(`${dshHomeName}.old-`)))
+      .map((entry) => join(dshHomeParent, entry.name))
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+  }
+  // 单遍主循环：runtimeEntries（readdir 顺序）→ restore 备份。根级缺失为 0；
+  // 嵌套并发删除向上抛（与同步版一致）。
+  for (const entry of runtimeEntries) {
+    await chargeNodeAsync(
+      join(runtime, entry.name),
+      asyncTargetForEntry(entry.name, entry.isDirectory, treeSet),
+      true,
+      acc,
+      opts,
+    )
+  }
+  for (const backup of restoreBackups) {
+    // backup 已是绝对路径（discovery 用 join(dshHomeParent, name) 构造）；
+    // path.join 对绝对第二参是拼接而非重定基，绝不能再次 join。
+    await chargeNodeAsync(backup, 'restoreBackup', true, acc, opts)
+  }
+  return {
+    versionTrees: trees.length,
+    versionTreeBytes: acc.versionTreeBytes,
+    storeBytes: acc.storeBytes,
+    cacheBytes: acc.cacheBytes,
+    installHomeBytes: acc.installHomeBytes,
+    xdgCacheBytes: acc.xdgCacheBytes,
+    workBytes: acc.workBytes,
+    failureBytes: acc.failureBytes,
+    snapshotBytes: acc.snapshotBytes,
+    preRollbackBytes: acc.preRollbackBytes,
+    restoreBackupBytes: acc.restoreBackupBytes,
+    unclassifiedBytes: acc.unclassifiedBytes,
+    totalBytes: acc.totalBytes,
     storePruneNeeded: existsSync(storePruneMarkerPath(baseDir)),
   }
 }

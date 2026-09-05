@@ -97,7 +97,8 @@ import {
   resolveSnapshotName,
   runRuntimeActivationProbes,
   runStartupPhase,
-  runtimeDiskSummary,
+  createCoalescedRefresher,
+  runtimeDiskSummaryAsync,
   runtimeFailureSummary,
   sanitizeErrorText,
   snapshotSummary,
@@ -679,13 +680,23 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     diskCache = null
   }
 
-  function diskProjection(force = false): { usage: RuntimeDiskSummary | null; error: string | null } {
+  // perf T3（2026-09，D8）：磁盘统计走异步单遍遍历（runtimeDiskSummaryAsync，
+  // 按批让渡事件循环）+ 节流/单飞。TTL 缓存挡住认证的 3s UI 轮询；冷缓存
+  // 与 force 路径经 createCoalescedRefresher 合并并发请求——大 store 下冷
+  // 缓存/安装闸口的多次全树统计不再串行叠加、也绝不冻结网关进程。
+  // 2026-09 review（A4）：非 force 冷缓存请求在链在途时**静默 join**（共享
+  // 在途一遍、不置位补跑）——TTL 语义本已允许 30s 陈旧，长遍历期间 3s 轮询
+  // 的持续到达不再驱动补跑到 cap（消除 ~90s 长尾）；force（安装闸口）保持
+  // 默认补跑语义，闸口新鲜度不变。
+  const refreshDiskUsage = createCoalescedRefresher(() => runtimeDiskSummaryAsync(baseDir, dshHome));
+
+  async function diskProjection(force = false): Promise<{ usage: RuntimeDiskSummary | null; error: string | null }> {
     const now = Date.now()
     if (!force && diskCache !== null && now - diskCache.checkedAt < DISK_CACHE_TTL_MS) {
       return { usage: diskCache.usage, error: diskCache.error }
     }
     try {
-      const usage = runtimeDiskSummary(baseDir, dshHome)
+      const usage = await refreshDiskUsage(force ? undefined : { rerunOnJoin: false })
       diskCache = { checkedAt: now, usage, error: null }
     } catch (error) {
       diskCache = {
@@ -1728,10 +1739,11 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
       at: failures.latest.lastFailedAt,
       reason: failures.latest.error,
     }
-    // Full logical accounting is a synchronous tree walk. Cache it so the
-    // authenticated 3s UI poll and gateway identity probes never turn status
-    // into a hot 10 GiB filesystem walk; mutations invalidate the cache.
-    const { usage: diskUsage, error: diskError } = diskProjection()
+    // Full logical accounting is a batched async tree walk (perf T3). Cache
+    // it so the authenticated 3s UI poll and gateway identity probes never
+    // turn status into a hot 10 GiB filesystem walk; mutations invalidate the
+    // cache.
+    const { usage: diskUsage, error: diskError } = await diskProjection()
     const effectiveBlockedReason = startupBlockReason ?? resolutionError
     const effectivePending = envPath === null && override !== null && !shouldInvalidate(override, shellVersion) && override.pending !== null
       ? override.pending : null
@@ -1942,7 +1954,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     try {
       // Design 18's 10 GiB limit gates NEW downloads only. Cached selection,
       // rollback and recovery remain available above the soft ceiling.
-      const disk = diskProjection(true)
+      const disk = await diskProjection(true)
       if (disk.error !== null || disk.usage === null) {
         throw Object.assign(new Error(`cannot confirm gateway runtime disk usage; refusing a new install: ${disk.error ?? 'unknown accounting failure'}`), {
           code: 'runtime_disk_unavailable',

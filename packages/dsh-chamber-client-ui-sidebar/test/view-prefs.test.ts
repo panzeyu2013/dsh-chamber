@@ -11,11 +11,14 @@ import assert from 'node:assert/strict'
 import {
   __resetViewPrefsForTests,
   clearSourceBookkeeping,
+  flushScheduledActivityWrites,
   getViewPrefs,
   loadViewPrefs,
   saveViewPrefs,
+  scheduleUpdatedOrderWrite,
   subscribeViewPrefs,
   updateViewPrefs,
+  VIEW_PREFS_ACTIVITY_DEBOUNCE_MS,
   VIEW_PREFS_KEY,
   type ChamberSidebarViewPrefs,
   type StorageLike,
@@ -701,4 +704,169 @@ test('sourceFolded/serverOrder prune with the source: seen-then-vanished only, n
   const pruned = getViewPrefs()
   assert.deepEqual(pruned.sourceFolded, { local: true, ghost: true })
   assert.deepEqual(pruned.serverOrder, ['local', 'ghost'])
+})
+
+// ---- perf T4（2026-09，M4）：置顶写回防抖 ----
+
+test('scheduleUpdatedOrderWrite debounces a tick burst into ONE trailing write (latest intent per account)', () => {
+  __resetViewPrefsForTests()
+  let notified = 0
+  const unsubscribe = subscribeViewPrefs(() => { notified += 1 })
+  // 同一账户同窗 3 tick（后到派生已含先到效果 → 最新意图胜出）+ 另一账户
+  // 同窗 1 tick：终刷应为单次写/单次通知，两账户都落盘。
+  scheduleUpdatedOrderWrite('local/w1', ['s3', 's1', 's2'], { s1: 1, s2: 2 })
+  scheduleUpdatedOrderWrite('local/w1', ['s3', 's2', 's1'], { s1: 1, s2: 3 })
+  scheduleUpdatedOrderWrite('local/w1', ['s3', 's2'], { s2: 4 })
+  scheduleUpdatedOrderWrite('ssh-b/w9', ['s9'], { s9: 9 })
+  assert.equal(notified, 0, '防抖窗内不落盘不通知')
+  flushScheduledActivityWrites()
+  const prefs = getViewPrefs()
+  assert.deepEqual(prefs.updatedOrder?.['local/w1'], ['s3', 's2'], '每账户最新意图胜出')
+  assert.deepEqual(prefs.sessionUpdatedAtByAccount?.['local/w1'], { s2: 4 })
+  assert.deepEqual(prefs.updatedOrder?.['ssh-b/w9'], ['s9'])
+  assert.equal(notified, 1, '同窗突发合并为一次通知')
+  unsubscribe()
+})
+
+test('scheduled activity write auto-flushes once the debounce window elapses', async () => {
+  __resetViewPrefsForTests()
+  scheduleUpdatedOrderWrite('local/w1', ['s1'], { s1: 1 })
+  assert.equal(getViewPrefs().updatedOrder?.['local/w1'], undefined)
+  await new Promise(resolve => setTimeout(resolve, VIEW_PREFS_ACTIVITY_DEBOUNCE_MS + 80))
+  assert.deepEqual(getViewPrefs().updatedOrder?.['local/w1'], ['s1'])
+  assert.deepEqual(getViewPrefs().sessionUpdatedAtByAccount?.['local/w1'], { s1: 1 })
+})
+
+test('an idempotent updateViewPrefs writes neither persists nor notifies', () => {
+  __resetViewPrefsForTests()
+  updateViewPrefs(prev => ({ ...prev, folded: { ...prev.folded, 'local/w1': true } }))
+  let notified = 0
+  const unsubscribe = subscribeViewPrefs(() => { notified += 1 })
+  const before = getViewPrefs()
+  // 规范化等价写（折叠集与缓存一致）→ 不落盘、不通知、缓存引用不被替换。
+  updateViewPrefs(prev => ({ ...prev }))
+  assert.equal(notified, 0)
+  assert.equal(getViewPrefs(), before)
+  // 真正的变化仍照常单次通知。
+  updateViewPrefs(prev => ({ ...prev, folded: { ...prev.folded, 'local/w2': true } }))
+  assert.equal(notified, 1)
+  unsubscribe()
+})
+
+test('__resetViewPrefsForTests drops pending debounced activity writes', () => {
+  __resetViewPrefsForTests()
+  scheduleUpdatedOrderWrite('local/w1', ['s1'], { s1: 1 })
+  __resetViewPrefsForTests()
+  // 无 pending → 终刷为 no-op（不写不抛）。
+  flushScheduledActivityWrites()
+  assert.equal(getViewPrefs().updatedOrder?.['local/w1'], undefined)
+})
+
+test('flush before a discrete write pins the ordering contract (review F1 regression)', () => {
+  // 契约：离散写（拖拽/排序切换）前先 flushScheduledActivityWrites——
+  // 窗末终刷不得用旧派生覆盖更新的用户手势。本测试在 store 层钉死该顺序：
+  // schedule → flush → 离散写 → 再 flush 为 no-op，最终值 = 离散写结果。
+  __resetViewPrefsForTests()
+  let notified = 0
+  const unsubscribe = subscribeViewPrefs(() => { notified += 1 })
+  // 旧派生（会被离散写覆盖的"窗末终刷"内容）。
+  scheduleUpdatedOrderWrite('local/w1', ['s3', 's1', 's2'], { s1: 1, s2: 2 })
+  // 离散写前 flush（SidebarRoot commitSessionDrag / setOrderBy 的写前调用）。
+  flushScheduledActivityWrites()
+  assert.deepEqual(getViewPrefs().updatedOrder?.['local/w1'], ['s3', 's1', 's2'])
+  const notifiedAfterFlush = notified
+  // 离散写（拖拽提交）覆盖同账户。
+  updateViewPrefs(prev => ({ ...prev, updatedOrder: { ...prev.updatedOrder, 'local/w1': ['s1', 's2'] } }))
+  assert.deepEqual(getViewPrefs().updatedOrder?.['local/w1'], ['s1', 's2'])
+  // 窗末终刷若此时才到 → pending 已空 → no-op，拖拽不被回退。
+  flushScheduledActivityWrites()
+  assert.deepEqual(getViewPrefs().updatedOrder?.['local/w1'], ['s1', 's2'])
+  assert.ok(notified >= notifiedAfterFlush + 1, '离散写本身仍通知一次')
+  unsubscribe()
+})
+
+test('equal-value suppression never swallows prune bookkeeping (review F8 gap 1)', () => {
+  __resetViewPrefsForTests()
+  // 投影新增来源：下一次任何写入都会让 seenSources 增长——等值抑制不得吞掉
+  // 该 prune 副作用（否则"来源已见"簿记永缺，将来真删除时无法安全裁剪）。
+  chamberBridge.publish([
+    {
+      id: 'local', sourceFingerprint: 'local', kind: 'local', transport: 'local', label: 'L',
+      connected: true, phase: 'ready', workspaces: [], updatedAt: 0,
+    },
+  ])
+  updateViewPrefs(prev => ({ ...prev, folded: { ...prev.folded, 'local/w1': true } }))
+  chamberBridge.publish([
+    {
+      id: 'local', sourceFingerprint: 'local', kind: 'local', transport: 'local', label: 'L',
+      connected: true, phase: 'ready', workspaces: [], updatedAt: 0,
+    },
+    {
+      id: 'ssh-x', sourceFingerprint: 'x'.repeat(64), kind: 'dsh', transport: 'ssh', label: 'X',
+      connected: false, phase: 'stopped', workspaces: [], updatedAt: 0,
+    },
+  ])
+  let notified = 0
+  const unsubscribe = subscribeViewPrefs(() => { notified += 1 })
+  // 字段级等值写（folded 不变），但 prune 会记录新见来源 ssh-x → 必须通知。
+  updateViewPrefs(prev => ({ ...prev }))
+  assert.equal(notified, 1, 'seenSources 增长不得被等值抑制吞掉')
+  assert.deepEqual(getViewPrefs().seenSources, ['local', 'ssh-x'])
+  unsubscribe()
+})
+
+test('a flush whose merged result equals the cache notifies nobody (review F8 gap 3)', () => {
+  __resetViewPrefsForTests()
+  updateViewPrefs(prev => ({
+    ...prev,
+    updatedOrder: { ...prev.updatedOrder, 'local/w1': ['s1'] },
+    sessionUpdatedAtByAccount: { ...prev.sessionUpdatedAtByAccount, 'local/w1': { s1: 1 } },
+  }))
+  let notified = 0
+  const unsubscribe = subscribeViewPrefs(() => { notified += 1 })
+  // 与缓存完全一致的派生 → 终刷合并等值 → 0 通知（头号性能场景）。
+  scheduleUpdatedOrderWrite('local/w1', ['s1'], { s1: 1 })
+  flushScheduledActivityWrites()
+  assert.equal(notified, 0)
+  unsubscribe()
+})
+
+test('flush opens a fresh window for schedules arriving after it (review F8 gap 2)', () => {
+  __resetViewPrefsForTests()
+  let notified = 0
+  const unsubscribe = subscribeViewPrefs(() => { notified += 1 })
+  scheduleUpdatedOrderWrite('local/w1', ['s1'], { s1: 1 })
+  flushScheduledActivityWrites()
+  const afterFirstFlush = notified
+  assert.equal(afterFirstFlush, 1)
+  // flush 后同 tick 新 schedule → 新窗；再 flush 落盘第二笔。
+  scheduleUpdatedOrderWrite('local/w2', ['s2'], { s2: 2 })
+  flushScheduledActivityWrites()
+  assert.equal(notified, afterFirstFlush + 1)
+  assert.deepEqual(getViewPrefs().updatedOrder?.['local/w2'], ['s2'])
+  unsubscribe()
+})
+
+test('flush skips a stale account whose cached timestamps advanced past the pending derivation (review F4)', () => {
+  __resetViewPrefsForTests()
+  // 缓存先落盘更新观测（另一 shell 的新投影）。
+  updateViewPrefs(prev => ({
+    ...prev,
+    updatedOrder: { ...prev.updatedOrder, 'local/w1': ['s2', 's1'] },
+    sessionUpdatedAtByAccount: { ...prev.sessionUpdatedAtByAccount, 'local/w1': { s1: 5, s2: 9 } },
+  }))
+  // 旧投影派生的 pending：s1 TS=1 严格小于缓存 5 → 整条跳过，不得覆盖。
+  scheduleUpdatedOrderWrite('local/w1', ['s1', 's2'], { s1: 1, s2: 9 })
+  let notified = 0
+  const unsubscribe = subscribeViewPrefs(() => { notified += 1 })
+  flushScheduledActivityWrites()
+  assert.equal(notified, 0, '陈旧 pending 被跳过 → 无写无通知')
+  assert.deepEqual(getViewPrefs().updatedOrder?.['local/w1'], ['s2', 's1'])
+  assert.deepEqual(getViewPrefs().sessionUpdatedAtByAccount?.['local/w1'], { s1: 5, s2: 9 })
+  // 非陈旧账户不受影响。
+  scheduleUpdatedOrderWrite('ssh-b/w9', ['s9'], { s9: 9 })
+  flushScheduledActivityWrites()
+  assert.equal(notified, 1)
+  assert.deepEqual(getViewPrefs().updatedOrder?.['ssh-b/w9'], ['s9'])
+  unsubscribe()
 })

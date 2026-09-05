@@ -1,0 +1,65 @@
+{
+  "at": "2026-09-04T15:36:33.672Z",
+  "results": [
+    {
+      "phase": "A→B #1",
+      "ltCount": 0,
+      "maxLongtaskMs": 0,
+      "topLongtasksMs": [],
+      "cls": 0.001,
+      "fcpMs": 40,
+      "domContentLoadedMs": 13,
+      "loadEndMs": 13,
+      "clicked": "OK",
+      "clickToSettledMs": 1,
+      "skeletonWindowMs": null,
+      "skeletonSeen": false,
+      "longtasksDelta": 0
+    },
+    {
+      "phase": "B→A #1",
+      "ltCount": 0,
+      "maxLongtaskMs": 0,
+      "topLongtasksMs": [],
+      "cls": 0.001,
+      "fcpMs": 40,
+      "domContentLoadedMs": 13,
+      "loadEndMs": 13,
+      "clicked": "OK",
+      "clickToSettledMs": 1,
+      "skeletonWindowMs": null,
+      "skeletonSeen": false,
+      "longtasksDelta": 0
+    },
+    {
+      "phase": "A→B #2",
+      "ltCount": 0,
+      "maxLongtaskMs": 0,
+      "topLongtasksMs": [],
+      "cls": 0.001,
+      "fcpMs": 40,
+      "domContentLoadedMs": 13,
+      "loadEndMs": 13,
+      "clicked": "OK",
+      "clickToSettledMs": 1,
+      "skeletonWindowMs": null,
+      "skeletonSeen": false,
+      "longtasksDelta": 0
+    },
+    {
+      "phase": "B→A #2",
+      "ltCount": 0,
+      "maxLongtaskMs": 0,
+      "topLongtasksMs": [],
+      "cls": 0.001,
+      "fcpMs": 40,
+      "domContentLoadedMs": 13,
+      "loadEndMs": 13,
+      "clicked": "OK",
+      "clickToSettledMs": 1,
+      "skeletonWindowMs": null,
+      "skeletonSeen": false,
+      "longtasksDelta": 0
+    }
+  ]
+}

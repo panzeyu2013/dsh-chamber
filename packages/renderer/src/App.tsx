@@ -1582,6 +1582,8 @@ export default function App() {
     // sidebar-scroll-sync.ts).
     const scrollAnchor = captureSidebarScrollAnchor(activeViewRef.current)
     pendingViewRef.current = viewId
+    // 键 'view'：与 settle 流隔离；同键突发意图在 view-transition 层单槽合并
+    // （perf T2）——被取代意图不进快照/动画，末意图胜出语义不变。
     runViewTransition(() => {
       // A roster-removal retirement or a newer click clears/replaces this
       // intent while a View Transition callback is deferred. Membership alone
@@ -1601,7 +1603,7 @@ export default function App() {
       setActiveView(viewId)
       setMountedViews(prev => (prev.includes(viewId) ? prev : [...prev, viewId]))
       if (scrollAnchor !== null) restoreSidebarScroll(viewId, scrollAnchor)
-    })
+    }, 'view')
   }, [ensureRemoteConnected, probeRemoteReady])
 
   /** Replay the one cold-start remote activation only after the first

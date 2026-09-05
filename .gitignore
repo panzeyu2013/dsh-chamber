@@ -33,6 +33,8 @@ build/
 
 # Local runtime state (control-plane data, audit log, dsh host state)
 data/
+# scripts/perf 测量数据（T0 场景表锚点）需要入库供前后对照（性能整改台账）
+!scripts/perf/data/
 *.pid
 audit.log
 

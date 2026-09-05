@@ -1,0 +1,18 @@
+{
+  "at": "2026-09-04T15:40:58.886Z",
+  "results": [
+    {
+      "phase": "rapid-x10",
+      "ltCount": 0,
+      "maxLongtaskMs": 0,
+      "topLongtasksMs": [],
+      "cls": 0.002,
+      "fcpMs": 40,
+      "domContentLoadedMs": 13,
+      "loadEndMs": 13,
+      "clicksMs": 921,
+      "lastClickToQuietMs": 1,
+      "longtasksDelta": 0
+    }
+  ]
+}

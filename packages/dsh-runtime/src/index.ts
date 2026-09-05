@@ -8,6 +8,7 @@
  */
 export * from './activation-gate.ts'
 export * from './apply-phase.ts'
+export * from './coalesced-refresh.ts'
 export * from './dsh-runtime-store.ts'
 export * from './dsh-runtime-updater.ts'
 export * from './known-good-monitor.ts'

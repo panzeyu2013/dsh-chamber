@@ -1,0 +1,63 @@
+{
+  "impl": "sync",
+  "at": "2026-09-04T16:05:23.878Z",
+  "env": {
+    "node": "v24.20.0",
+    "platform": "darwin",
+    "arch": "arm64"
+  },
+  "points": [
+    {
+      "approxEntries": 8500,
+      "runsMs": [
+        422.7,
+        426.8,
+        427,
+        428.5,
+        442.2
+      ],
+      "medianMs": 427,
+      "maxMs": 442.2,
+      "totalBytes": 3537186
+    },
+    {
+      "approxEntries": 34000,
+      "runsMs": [
+        1993.3,
+        2045.6,
+        2049.9,
+        2065.3,
+        2075.9
+      ],
+      "medianMs": 2049.9,
+      "maxMs": 2075.9,
+      "totalBytes": 14157186
+    },
+    {
+      "approxEntries": 136000,
+      "runsMs": [
+        9381.9,
+        9418.7,
+        9491.3,
+        9545.1,
+        9552
+      ],
+      "medianMs": 9491.3,
+      "maxMs": 9552,
+      "totalBytes": 56703186
+    },
+    {
+      "approxEntries": 425000,
+      "runsMs": [
+        50086.2,
+        50337.1,
+        50994.9,
+        57287.9,
+        57318.9
+      ],
+      "medianMs": 50994.9,
+      "maxMs": 57318.9,
+      "totalBytes": 177267186
+    }
+  ]
+}
