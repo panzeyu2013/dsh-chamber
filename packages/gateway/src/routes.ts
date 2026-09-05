@@ -56,6 +56,7 @@ import type { ChamberInstalled } from './plugins-installed.ts'
 import { thirdPartyRoot } from './plugins-journal.ts'
 import type { PluginTaskSubmitInput, PluginTaskSubmitResult, PluginTaskTasksProjection } from './plugins-tasks.ts'
 import { scanTgzMetadata, TGZ_MAX_ENTRIES, TGZ_MAX_UNPACKED_BYTES } from './tgz-scan.ts'
+import { codedError, headerValue, jsonResponse, readBoundedBody } from './http-utils.ts'
 
 /** The A1 mutation-orchestrator surface the routes drive (design 21 §6.2;
  * plan Phase 4.4): submit + projection only — the routes never drain or
@@ -89,68 +90,22 @@ export interface ChamberSurface {
   handle(req: ApiRequest, res: ApiResponse, pathname: string): Promise<boolean>
 }
 
-function json(res: ApiResponse, status: number, body: unknown): void {
-  res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' })
-  res.end(JSON.stringify(body))
-}
-
 /** Bounded JSON body reader for the plugin-sync upload (2026-12 Phase 3).
  * Cap: 8 MiB — two host packages, each up to 4 MiB artifact + manifest, as
  * JSON strings. An oversized body is answered 413 and the request socket is
  * destroyed instead of drained (a slow authenticated upload must not pin the
  * connection). */
-function readUploadJsonBody(req: ApiRequest): Promise<unknown> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = []
-    let size = 0
-    let settled = false
-    const MAX = 8 * 1024 * 1024
-
-    const cleanup = (): void => {
-      req.removeListener('data', onData)
-      req.removeListener('end', onEnd)
-      req.removeListener('error', onError)
-      req.removeListener('aborted', onAborted)
-      req.removeListener('close', onClose)
-    }
-    const fail = (error: unknown): void => {
-      if (settled) return
-      settled = true
-      chunks.length = 0
-      cleanup()
-      reject(error)
-    }
-    const onData = (chunk: Buffer): void => {
-      if (settled) return
-      size += chunk.length
-      if (size > MAX) {
-        fail(Object.assign(new Error('request body exceeds 8 MiB'), { code: 'body_too_large' }))
-        return
-      }
-      chunks.push(chunk)
-    }
-    const onEnd = (): void => {
-      if (settled) return
-      try {
-        const body = chunks.length === 0 ? {} : JSON.parse(Buffer.concat(chunks).toString('utf8'))
-        settled = true
-        chunks.length = 0
-        cleanup()
-        resolve(body)
-      } catch {
-        fail(Object.assign(new Error('request body is not valid JSON'), { code: 'bad_request' }))
-      }
-    }
-    const onError = (): void => fail(Object.assign(new Error('request body stream failed'), { code: 'request_aborted' }))
-    const onAborted = (): void => fail(Object.assign(new Error('request body was aborted'), { code: 'request_aborted' }))
-    const onClose = (): void => fail(Object.assign(new Error('request body was closed'), { code: 'request_aborted' }))
-
-    req.on('data', onData)
-    req.on('end', onEnd)
-    req.on('error', onError)
-    req.on('aborted', onAborted)
-    req.on('close', onClose)
-  })
+async function readUploadJsonBody(req: ApiRequest): Promise<unknown> {
+  const outcome = await readBoundedBody(req, 8 * 1024 * 1024)
+  if (outcome.kind === 'oversize') throw codedError('body_too_large', 'request body exceeds 8 MiB')
+  if (outcome.kind === 'aborted') throw codedError('request_aborted', 'request body was aborted')
+  if (outcome.kind === 'closed') throw codedError('request_aborted', 'request body was closed')
+  if (outcome.kind === 'stream-error') throw codedError('request_aborted', 'request body stream failed')
+  try {
+    return outcome.buffer.length === 0 ? {} : JSON.parse(outcome.buffer.toString('utf8'))
+  } catch {
+    throw codedError('bad_request', 'request body is not valid JSON')
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -863,7 +818,7 @@ function isAssetMethod(method: string | undefined): boolean {
 }
 
 function methodNotAllowed(res: ApiResponse): true {
-  json(res, 405, { error: 'method_not_allowed', code: 'method_not_allowed' })
+  jsonResponse(res, 405, { error: 'method_not_allowed', code: 'method_not_allowed' })
   return true
 }
 
@@ -888,68 +843,33 @@ type MaterializeReadResult =
  * enforced while collecting (an oversize body is answered 413 and the
  * request socket destroyed instead of drained — a slow authenticated upload
  * must not pin the connection), and the bounded buffer is handed to the tgz
- * scan. */
-function readMaterializeBody(req: ApiRequest, maxBytes = MATERIALIZE_MAX_BYTES): Promise<MaterializeReadResult> {
-  return new Promise(resolve => {
-    const rawLength = Array.isArray(req.headers['content-length'])
-      ? req.headers['content-length'][0]
-      : req.headers['content-length']
-    const declared = typeof rawLength === 'string' ? Number(rawLength) : NaN
-    if (!Number.isFinite(declared) || declared < 0) {
-      resolve({ ok: false, code: 'length_required', error: 'content-length header is required' })
-      return
-    }
-    if (declared > maxBytes) {
-      resolve({ ok: false, code: 'too_large', error: `archive exceeds the ${maxBytes} byte upload cap` })
-      return
-    }
-
-    const chunks: Buffer[] = []
-    let size = 0
-    let settled = false
-    const cleanup = (): void => {
-      req.removeListener('data', onData)
-      req.removeListener('end', onEnd)
-      req.removeListener('error', onError)
-      req.removeListener('aborted', onAborted)
-      req.removeListener('close', onClose)
-    }
-    const fail = (result: { ok: false; code: 'too_large' | 'request_aborted'; error: string }): void => {
-      if (settled) return
-      settled = true
-      chunks.length = 0
-      cleanup()
-      resolve(result)
-    }
-    const onData = (chunk: Buffer): void => {
-      if (settled) return
-      size += chunk.length
-      if (size > maxBytes) {
-        fail({ ok: false, code: 'too_large', error: `archive exceeds the ${maxBytes} byte upload cap` })
-        return
-      }
-      chunks.push(chunk)
-    }
-    const onEnd = (): void => {
-      if (settled) return
-      const buffer = Buffer.concat(chunks)
-      settled = true
-      chunks.length = 0
-      cleanup()
-      resolve({ ok: true, buffer })
-    }
-    const onError = (): void => fail({ ok: false, code: 'request_aborted', error: 'request body stream failed' })
-    const onAborted = (): void => fail({ ok: false, code: 'request_aborted', error: 'request body was aborted' })
-    const onClose = (): void => fail({ ok: false, code: 'request_aborted', error: 'request body was closed' })
-
-    req.on('data', onData)
-    req.on('end', onEnd)
-    req.on('error', onError)
-    req.on('aborted', onAborted)
-    req.on('close', onClose)
-  })
+ * scan. The reader resolves a result instead of throwing; the raw bytes are
+ * preserved (binary tgz content — the shared kernel collects bytes, only the
+ * text readers decode utf8). */
+async function readMaterializeBody(req: ApiRequest, maxBytes = MATERIALIZE_MAX_BYTES): Promise<MaterializeReadResult> {
+  const rawLength = Array.isArray(req.headers['content-length'])
+    ? req.headers['content-length'][0]
+    : req.headers['content-length']
+  const declared = typeof rawLength === 'string' ? Number(rawLength) : NaN
+  if (!Number.isFinite(declared) || declared < 0) {
+    return { ok: false, code: 'length_required', error: 'content-length header is required' }
+  }
+  if (declared > maxBytes) {
+    return { ok: false, code: 'too_large', error: `archive exceeds the ${maxBytes} byte upload cap` }
+  }
+  const outcome = await readBoundedBody(req, maxBytes)
+  if (outcome.kind === 'body') return { ok: true, buffer: outcome.buffer }
+  if (outcome.kind === 'oversize') {
+    return { ok: false, code: 'too_large', error: `archive exceeds the ${maxBytes} byte upload cap` }
+  }
+  if (outcome.kind === 'aborted') {
+    return { ok: false, code: 'request_aborted', error: 'request body was aborted' }
+  }
+  if (outcome.kind === 'closed') {
+    return { ok: false, code: 'request_aborted', error: 'request body was closed' }
+  }
+  return { ok: false, code: 'request_aborted', error: 'request body stream failed' }
 }
-
 /** Map an orchestrator refusal onto the design 21 §6.2 HTTP family: input/
  * reserved failures are the client's (400); queue/runtime/state failures
  * are 409 (retryable). */
@@ -966,17 +886,16 @@ function submitRefusalStatus(code: string): number {
  * intent until the ready-edge drain picks it up). */
 function submitAccepted(res: ApiResponse, result: Extract<PluginTaskSubmitResult, { ok: true }>): void {
   if (result.deferred) {
-    json(res, 202, { accepted: true, deferred: true, intentId: result.intentId })
+    jsonResponse(res, 202, { accepted: true, deferred: true, intentId: result.intentId })
   } else {
-    json(res, 202, { accepted: true, opId: result.opId })
+    jsonResponse(res, 202, { accepted: true, opId: result.opId })
   }
 }
 
 /** The mutation initiator label (design 21 §6.2 who-when attribution): the
  * request's Host header when present, 'chamber' otherwise. */
 function mutationInitiator(req: ApiRequest): string {
-  const host = req.headers['host']
-  const value = Array.isArray(host) ? host[0] : host
+  const value = headerValue(req.headers, 'host')
   return typeof value === 'string' && value !== '' ? value : 'chamber'
 }
 
@@ -993,12 +912,12 @@ async function readMutationJsonBody(
   } catch (error) {
     const code = (error as { code?: unknown })?.code
     if (code === 'body_too_large') {
-      json(res, 413, { error: 'body_too_large', code: 'body_too_large' })
+      jsonResponse(res, 413, { error: 'body_too_large', code: 'body_too_large' })
       req.destroy?.()
       return null
     }
     if (code === 'bad_request') {
-      json(res, 400, { error: 'bad_request', code: 'bad_request' })
+      jsonResponse(res, 400, { error: 'bad_request', code: 'bad_request' })
       return null
     }
     // aborted/closed body: the client is gone — nothing to answer.
@@ -1034,10 +953,10 @@ export function createChamberSurface(deps: ChamberSurfaceDeps): ChamberSurface {
     // /chamber/channels: the channel registry projection (§7; MVP empty).
     if (pathname === '/chamber/channels') {
       if (req.method !== 'GET') {
-        json(res, 405, { error: 'method_not_allowed', code: 'method_not_allowed' })
+        jsonResponse(res, 405, { error: 'method_not_allowed', code: 'method_not_allowed' })
         return true
       }
-      json(res, 200, { items: channels.list() })
+      jsonResponse(res, 200, { items: channels.list() })
       return true
     }
 
@@ -1048,7 +967,7 @@ export function createChamberSurface(deps: ChamberSurfaceDeps): ChamberSurface {
     // controlled /chamber/runtime/restart to refresh the running profile).
     if (pathname === '/chamber/plugins' || pathname === '/chamber/plugins/') {
       if (req.method === 'GET') {
-        json(res, 200, { items: deps.plugins.list() })
+        jsonResponse(res, 200, { items: deps.plugins.list() })
         return true
       }
       if (req.method === 'PUT') {
@@ -1056,44 +975,44 @@ export function createChamberSurface(deps: ChamberSurfaceDeps): ChamberSurface {
           const body = (await readUploadJsonBody(req)) as { name?: unknown; files?: unknown }
           const name = typeof body?.name === 'string' ? body.name : null
           if (name === null || body?.files === null || typeof body?.files !== 'object' || Array.isArray(body.files)) {
-            json(res, 400, { error: 'invalid_input', code: 'invalid_input' })
+            jsonResponse(res, 400, { error: 'invalid_input', code: 'invalid_input' })
             return true
           }
           const files = body.files as Record<string, unknown>
           const packageJson = typeof files['package.json'] === 'string' ? files['package.json'] : null
           const distIndex = typeof files['dist/index.js'] === 'string' ? files['dist/index.js'] : null
           if (packageJson === null || distIndex === null) {
-            json(res, 400, { error: 'invalid_input', code: 'invalid_input' })
+            jsonResponse(res, 400, { error: 'invalid_input', code: 'invalid_input' })
             return true
           }
           const outcome = await deps.plugins.put(name, { 'package.json': packageJson, 'dist/index.js': distIndex })
-          json(res, 200, { ok: true, changed: outcome.changed })
+          jsonResponse(res, 200, { ok: true, changed: outcome.changed })
         } catch (error) {
           const code = (error as { code?: unknown })?.code
           if (code === 'body_too_large') {
-            json(res, 413, { error: 'body_too_large', code: 'body_too_large' })
+            jsonResponse(res, 413, { error: 'body_too_large', code: 'body_too_large' })
             req.destroy?.()
             return true
           }
           if (code === 'bad_request') {
-            json(res, 400, { error: 'bad_request', code: 'bad_request' })
+            jsonResponse(res, 400, { error: 'bad_request', code: 'bad_request' })
             return true
           }
           if (code === 'request_aborted') return true
           if (code === 'invalid_input') {
-            json(res, 400, { error: 'invalid_input', code: 'invalid_input' })
+            jsonResponse(res, 400, { error: 'invalid_input', code: 'invalid_input' })
             return true
           }
           // Any other throw is a persistence failure (fs write, permissions,
           // disk full …) — the client must be able to distinguish "your input
           // was bad" from "the gateway could not write" (proxy honesty).
           logger.warn(`chamber-plugins: persistence failure: ${String(error)}`)
-          json(res, 500, { error: 'persistence_failed', code: 'persistence_failed' })
+          jsonResponse(res, 500, { error: 'persistence_failed', code: 'persistence_failed' })
           return true
         }
         return true
       }
-      json(res, 405, { error: 'method_not_allowed', code: 'method_not_allowed' })
+      jsonResponse(res, 405, { error: 'method_not_allowed', code: 'method_not_allowed' })
       return true
     }
 
@@ -1120,14 +1039,14 @@ export function createChamberSurface(deps: ChamberSurfaceDeps): ChamberSurface {
       const projection = deps.installed.read()
       if (!projection.ok) {
         if (projection.code === 'profile_absent') {
-          json(res, 404, { error: 'managed profile is not initialized', code: 'profile_absent' })
+          jsonResponse(res, 404, { error: 'managed profile is not initialized', code: 'profile_absent' })
         } else {
           logger.warn(`chamber-plugins-installed: ${projection.error ?? projection.code}`)
-          json(res, 500, { error: 'managed profile is corrupted', code: 'profile_corrupt' })
+          jsonResponse(res, 500, { error: 'managed profile is corrupted', code: 'profile_corrupt' })
         }
         return true
       }
-      json(res, 200, projection)
+      jsonResponse(res, 200, projection)
       return true
     }
 
@@ -1148,13 +1067,13 @@ export function createChamberSurface(deps: ChamberSurfaceDeps): ChamberSurface {
         // Deferred-intent persistence failure (design 21 §6.2 persistence_
         // failed 500 family) — never a generic uncoded 500.
         logger.warn(`chamber-plugins-install: deferred-intent persistence failure: ${String(error)}`)
-        json(res, 500, { error: 'persistence_failed', code: 'persistence_failed' })
+        jsonResponse(res, 500, { error: 'persistence_failed', code: 'persistence_failed' })
         return true
       }
       if (result.ok) {
         submitAccepted(res, result)
       } else {
-        json(res, submitRefusalStatus(result.code), { error: result.error, code: result.code })
+        jsonResponse(res, submitRefusalStatus(result.code), { error: result.error, code: result.code })
       }
       return true
     }
@@ -1173,13 +1092,13 @@ export function createChamberSurface(deps: ChamberSurfaceDeps): ChamberSurface {
         result = await deps.tasks.submit({ kind: 'remove', name, initiator: mutationInitiator(req) })
       } catch (error) {
         logger.warn(`chamber-plugins-remove: deferred-intent persistence failure: ${String(error)}`)
-        json(res, 500, { error: 'persistence_failed', code: 'persistence_failed' })
+        jsonResponse(res, 500, { error: 'persistence_failed', code: 'persistence_failed' })
         return true
       }
       if (result.ok) {
         submitAccepted(res, result)
       } else {
-        json(res, submitRefusalStatus(result.code), { error: result.error, code: result.code })
+        jsonResponse(res, submitRefusalStatus(result.code), { error: result.error, code: result.code })
       }
       return true
     }
@@ -1190,7 +1109,7 @@ export function createChamberSurface(deps: ChamberSurfaceDeps): ChamberSurface {
     // is the read side of the 202 contract.
     if (pathname === '/chamber/plugins/tasks' || pathname === '/chamber/plugins/tasks/') {
       if (req.method !== 'GET') return methodNotAllowed(res)
-      json(res, 200, { ok: true, ...deps.tasks.tasks() })
+      jsonResponse(res, 200, { ok: true, ...deps.tasks.tasks() })
       return true
     }
 
@@ -1207,9 +1126,9 @@ export function createChamberSurface(deps: ChamberSurfaceDeps): ChamberSurface {
       const read = await readMaterializeBody(req)
       if (!read.ok) {
         if (read.code === 'length_required') {
-          json(res, 411, { error: read.error, code: 'length_required' })
+          jsonResponse(res, 411, { error: read.error, code: 'length_required' })
         } else if (read.code === 'too_large') {
-          json(res, 413, { error: 'archive too large', code: 'too_large' })
+          jsonResponse(res, 413, { error: 'archive too large', code: 'too_large' })
           req.destroy?.()
         }
         return true
@@ -1223,19 +1142,17 @@ export function createChamberSurface(deps: ChamberSurfaceDeps): ChamberSurface {
           : scan.error === 'too_many_entries'
             ? { error: `archive has more than ${TGZ_MAX_ENTRIES} entries`, code: 'too_many_entries' }
             : { error: `archive unpacks beyond ${TGZ_MAX_UNPACKED_BYTES} bytes`, code: 'too_large' }
-        json(res, 400, failure)
+        jsonResponse(res, 400, failure)
         return true
       }
-      const nameHeader = req.headers['x-plugin-name']
-      const versionHeader = req.headers['x-plugin-version']
-      const name = Array.isArray(nameHeader) ? nameHeader[0] : nameHeader
-      const version = Array.isArray(versionHeader) ? versionHeader[0] : versionHeader
+      const name = headerValue(req.headers, 'x-plugin-name')
+      const version = headerValue(req.headers, 'x-plugin-version')
       if (typeof name !== 'string' || !PLUGIN_NAME_PATTERN.test(name)) {
-        json(res, 400, { error: 'invalid plugin name header (x-plugin-name)', code: 'invalid_input' })
+        jsonResponse(res, 400, { error: 'invalid plugin name header (x-plugin-name)', code: 'invalid_input' })
         return true
       }
       if (isDeniedPluginName(name)) {
-        json(res, 400, {
+        jsonResponse(res, 400, {
           error: 'plugin name is reserved (@deepseek-ai/* and @dsh-chamber/* cannot be installed or removed through the plugin model)',
           // Code-name parity with the install/remove submit refusals
           // (plugins-tasks.ts 'reserved' + design 21 §6.2 code table).
@@ -1244,7 +1161,7 @@ export function createChamberSurface(deps: ChamberSurfaceDeps): ChamberSurface {
         return true
       }
       if (typeof version !== 'string' || !PLUGIN_VERSION_PATTERN.test(version)) {
-        json(res, 400, { error: 'invalid plugin version header (x-plugin-version)', code: 'invalid_input' })
+        jsonResponse(res, 400, { error: 'invalid plugin version header (x-plugin-version)', code: 'invalid_input' })
         return true
       }
       // Stage the archive (gateway-owned tree, 0700 dir + 0600 atomic
@@ -1258,7 +1175,7 @@ export function createChamberSurface(deps: ChamberSurfaceDeps): ChamberSurface {
         atomicWritePrivateFileNoFollow(stagedPath, read.buffer, { mode: 0o600 })
       } catch (error) {
         logger.warn(`chamber-plugins-materialize: staging failure: ${String(error)}`)
-        json(res, 500, { error: 'persistence_failed', code: 'persistence_failed' })
+        jsonResponse(res, 500, { error: 'persistence_failed', code: 'persistence_failed' })
         return true
       }
       let result: PluginTaskSubmitResult
@@ -1276,7 +1193,7 @@ export function createChamberSurface(deps: ChamberSurfaceDeps): ChamberSurface {
           logger.warn(`chamber-plugins-materialize: could not remove the staged archive ${stagedPath}: ${String(unlinkError)}`)
         }
         logger.warn(`chamber-plugins-materialize: deferred-intent persistence failure: ${String(error)}`)
-        json(res, 500, { error: 'persistence_failed', code: 'persistence_failed' })
+        jsonResponse(res, 500, { error: 'persistence_failed', code: 'persistence_failed' })
         return true
       }
       if (!result.ok) {
@@ -1288,7 +1205,7 @@ export function createChamberSurface(deps: ChamberSurfaceDeps): ChamberSurface {
         } catch (error) {
           logger.warn(`chamber-plugins-materialize: could not remove the staged archive ${stagedPath}: ${String(error)}`)
         }
-        json(res, submitRefusalStatus(result.code), { error: result.error, code: result.code })
+        jsonResponse(res, submitRefusalStatus(result.code), { error: result.error, code: result.code })
         return true
       }
       submitAccepted(res, result)
@@ -1336,7 +1253,7 @@ export function createChamberSurface(deps: ChamberSurfaceDeps): ChamberSurface {
     }
 
     // Unknown /chamber/* → 404 (claimed, so the default dispatch does not run).
-    json(res, 404, { error: 'not_found', code: 'not_found' })
+    jsonResponse(res, 404, { error: 'not_found', code: 'not_found' })
     return true
   }
 

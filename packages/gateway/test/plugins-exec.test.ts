@@ -7,8 +7,6 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { EventEmitter } from 'node:events'
-import type { SpawnOptions } from 'node:child_process'
 import {
   existsSync,
   mkdirSync,
@@ -33,86 +31,14 @@ import {
   scrubInstallEnv,
   truncateOutputTail,
 } from '../src/plugins-exec.ts'
-import type { EnqueueResult, OnOpTerminal, SpawnFn, SpawnedChild, SpawnedProcessStream } from '../src/plugins-exec.ts'
+import type { EnqueueResult, OnOpTerminal, SpawnFn } from '../src/plugins-exec.ts'
 import { backupDirFor, createPluginsJournal, thirdPartyRoot } from '../src/plugins-journal.ts'
 import type { JournalLogger } from '../src/plugins-journal.ts'
+import { makeSpawnHarness, waitFor } from './plugins-tasks-fixtures.ts'
 
 const silent: JournalLogger = { log() {}, warn() {} }
 const posix = process.platform !== 'win32'
 const mode = (path: string): number => statSync(path).mode & 0o777
-
-async function waitFor(condition: () => boolean, what: string, timeoutMs = 4000): Promise<void> {
-  const deadline = Date.now() + timeoutMs
-  while (!condition()) {
-    if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`)
-    await new Promise(resolve => setTimeout(resolve, 5))
-  }
-}
-
-class FakeStream extends EventEmitter {
-  emitChunk(chunk: string): void {
-    this.emit('data', Buffer.from(chunk, 'utf8'))
-  }
-}
-
-class FakeChild implements SpawnedChild {
-  pid: number
-  stdout: SpawnedProcessStream = new FakeStream()
-  stderr: SpawnedProcessStream = new FakeStream()
-  readonly signals: NodeJS.Signals[] = []
-  readonly killTimes: number[] = []
-  closeOnKill = false
-  private readonly emitter = new EventEmitter()
-
-  constructor(pid: number) {
-    this.pid = pid
-  }
-
-  once(event: 'error' | 'close', listener: (...args: any[]) => void): void {
-    this.emitter.once(event, listener as (...args: any[]) => void)
-  }
-
-  kill(signal?: NodeJS.Signals | number): boolean {
-    const resolved = (signal as NodeJS.Signals | undefined) ?? 'SIGTERM'
-    this.signals.push(resolved)
-    this.killTimes.push(Date.now())
-    if (this.closeOnKill) queueMicrotask(() => this.close(null, resolved))
-    return true
-  }
-
-  stderrLine(line: string): void {
-    ;(this.stderr as FakeStream).emitChunk(`${line}\n`)
-  }
-
-  stdoutLine(line: string): void {
-    ;(this.stdout as FakeStream).emitChunk(`${line}\n`)
-  }
-
-  error(error: Error): void {
-    this.emitter.emit('error', error)
-  }
-
-  close(code: number | null, signal: NodeJS.Signals | null = null): void {
-    this.emitter.emit('close', code, signal)
-  }
-}
-
-interface SpawnCall {
-  command: string
-  args: string[]
-  options: SpawnOptions
-  child: FakeChild
-}
-
-function makeSpawnHarness(): { spawn: SpawnFn; calls: SpawnCall[] } {
-  const calls: SpawnCall[] = []
-  const spawn: SpawnFn = (command, args, options) => {
-    const child = new FakeChild(9000 + calls.length)
-    calls.push({ command, args, options, child })
-    return child
-  }
-  return { spawn, calls }
-}
 
 interface ExecHarness {
   stateDir: string

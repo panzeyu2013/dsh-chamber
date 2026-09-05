@@ -47,6 +47,7 @@ import {
   clearCurrentPointer,
   clearStorePruneRequest,
   compareRuntimeVersions,
+  isVersionDowngrade,
   completeInterruptedRestore,
   createRuntimeFileExclusiveNoFollow,
   deleteOverride,
@@ -74,7 +75,6 @@ import {
   quarantineRuntimeFileNoFollow,
   prepareManualRollbackData,
   RUNTIME_LOGICAL_DISK_LIMIT_BYTES,
-  FATAL_STARTUP_BLOCK_REASONS,
   readActivationJournalState,
   readCurrentPointer,
   readCurrentPointerState,
@@ -121,6 +121,25 @@ import {
 } from '@dsh-chamber/dsh-runtime'
 import { sanitizeRouteError } from './sanitize-route-error.ts'
 import type { GatewayConfig } from './config.ts'
+// Refusal construction + recovery-name classification single sources (audit
+// N2): every code/message this manager shares with the route pre-gates in
+// runtime-routes.ts comes from runtime-refusals.ts; canonical recovery reason
+// sets (incl. RECOVERABLE_METADATA_BLOCKS, formerly defined here) live there
+// and are consumed by both runtime layers.
+import {
+  applyNowNotRunningRefusal,
+  envPinnedRefusal,
+  pendingOnlyRefusal,
+  profileWriteBusyRefusal,
+  RECOVERABLE_METADATA_BLOCKS,
+  recoveryRetryRequiredRefusal,
+  refusalError,
+  RETRY_APPLY_REASONS,
+  RETRY_RESTORE_REASONS,
+  startAlreadyInFlightRefusal,
+  startNotApplicableRefusal,
+  startupBlockReasonOutranksPending,
+} from './runtime-refusals.ts'
 
 const gatewayRequire = nodeCreateRequire(import.meta.url)
 
@@ -162,19 +181,6 @@ const DEFAULT_REGISTRY_ORIGIN = 'https://registry.npmjs.org'
  * constant as its diskLimitBytes. */
 const GATEWAY_RUNTIME_LOGICAL_DISK_LIMIT_BYTES = RUNTIME_LOGICAL_DISK_LIMIT_BYTES
 export const GATEWAY_RUNTIME_STATUS_KIND = 'dsh-chamber-gateway-runtime' as const
-
-/** FATAL metadata blocks plus the recover-route probe-failed sentinel: the
- *  startup-block reasons the recover-metadata route may act on. Everything
- *  else (restore-half/incomplete, swap-attempted…) must resume through its
- *  own retry first. The four FATAL reasons are the shared core set
- *  (dsh-runtime FATAL_STARTUP_BLOCK_REASONS, the same set index.ts and the
- *  desktop main block on) plus the two sentinels the manager sets after a
- *  failed builtin recovery probe/start. */
-export const RECOVERABLE_METADATA_BLOCKS = new Set<string>([
-  ...FATAL_STARTUP_BLOCK_REASONS,
-  'metadata-probe-failed',
-  'metadata-start-failed',
-])
 
 /**
  * Rollback-vs-lease serialization bound (design 21 §6.3 decision 6/17 F7
@@ -1259,28 +1265,34 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     const state = readOverrideState(baseDir)
     if (state.kind !== 'valid') return null
     // These are explicit recovery phases with their own Design 18 actions,
-    // not the normal installed/pending terminal state.
+    // not the normal installed/pending terminal state. The recovery-name
+    // classification is the route layer's canonical set (audit N2:
+    // RETRY_APPLY_REASONS / RETRY_RESTORE_REASONS from runtime-refusals.ts).
+    // NOTE: only the interrupted-apply/restore reasons carve the pending out
+    // here — a FATAL metadata block does NOT (that suppression lives in
+    // status()'s startupBlockReasonOutranksPending, a deliberately wider
+    // predicate — see runtime-refusals.ts).
     if (state.record.swapAttempted === true || state.record.lastOutcome === 'snapshot-failed'
-      || startupBlockReason === 'swap-attempted' || startupBlockReason === 'snapshot-failed'
-      || startupBlockReason === 'restore-half' || startupBlockReason === 'restore-incomplete') return null
+      || (startupBlockReason !== null
+        && (RETRY_APPLY_REASONS.has(startupBlockReason) || RETRY_RESTORE_REASONS.has(startupBlockReason)))) {
+      return null
+    }
     return pending
   }
 
   function assertNoOrdinaryPending(): void {
     const pending = ordinaryPendingVersion()
     if (pending !== null) {
-      throw Object.assign(new Error(`runtime version ${pending} is pending; only restore-builtin is allowed until the next startup`), {
-        code: 'runtime_pending',
-      })
+      // Same code/message as the route recovery gate and profileWriteRefusal
+      // (audit N2: pendingOnlyRefusal).
+      throw refusalError(pendingOnlyRefusal(pending))
     }
   }
 
   function assertNoPending(): void {
     const pending = persistedPendingVersion()
     if (pending !== null) {
-      throw Object.assign(new Error(`runtime version ${pending} is pending; only restore-builtin is allowed until the next startup`), {
-        code: 'runtime_pending',
-      })
+      throw refusalError(pendingOnlyRefusal(pending))
     }
   }
 
@@ -1303,7 +1315,9 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     // remove pnpm child) must never interleave a runtime transaction — every
     // runtime writer is a DSH_HOME/profile writer too (snapshot/restore/seed).
     if (profileWriteInFlight()) {
-      throw Object.assign(new Error('managed profile write in flight (plugin mutation); runtime mutations are refused'), { code: 'runtime_busy' })
+      // Same code/message as the route /select pre-gate (audit N2:
+      // profileWriteBusyRefusal).
+      throw refusalError(profileWriteBusyRefusal('runtime mutations'))
     }
   }
 
@@ -1330,12 +1344,11 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     if (startInFlight) return { code: 'runtime_busy', error: 'a start is in flight; managed profile write refused' }
     // Recovery states expose only their matching retry (recover-metadata for
     // FATAL); restore-builtin applies to pending/healthy selections only — a
-    // plugin write is not on that surface and must not slip past it.
+    // plugin write is not on that surface and must not slip past it. Same
+    // code/message as start()/applyNowPreflight/restoreBuiltin (audit N2:
+    // recoveryRetryRequiredRefusal).
     if (startupBlockReason !== null) {
-      return {
-        code: 'runtime_recovery_required',
-        error: `runtime recovery ${startupBlockReason} is required; resume via the matching retry route (restore-builtin applies to pending or healthy selections only)`,
-      }
+      return recoveryRetryRequiredRefusal(startupBlockReason)
     }
     let pending: string | null = null
     try {
@@ -1347,7 +1360,9 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
       }
     }
     if (pending !== null) {
-      return { code: 'runtime_pending', error: `runtime version ${pending} is pending; only restore-builtin is allowed until the next startup` }
+      // Same code/message as assertNoPending/assertNoOrdinaryPending and the
+      // route pending gate (audit N2: pendingOnlyRefusal).
+      return pendingOnlyRefusal(pending)
     }
     const connectionState = plane.connectionState
     if (connectionState === 'starting' || connectionState === 'restarting') {
@@ -1738,12 +1753,10 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     // 2026-12 (H2 review fix): a FATAL/RECOVERABLE metadata block must also
     // suppress the ordinary-pending phase — journal-corrupt + stale pending
     // would otherwise lock the only recovery surface behind the pending gate.
-    const blockOutranksPending = startupBlockReason !== null
-      && (RECOVERABLE_METADATA_BLOCKS.has(startupBlockReason)
-        || startupBlockReason === 'swap-attempted'
-        || startupBlockReason === 'snapshot-failed'
-        || startupBlockReason === 'restore-half'
-        || startupBlockReason === 'restore-incomplete')
+    // Block-outranks-pending classification single source (audit N2:
+    // startupBlockReasonOutranksPending — RECOVERABLE ∪ retry-apply ∪
+    // retry-restore reasons).
+    const blockOutranksPending = startupBlockReasonOutranksPending(startupBlockReason)
     const ordinaryPending = effectivePending !== null
       && override?.swapAttempted !== true
       && override?.lastOutcome !== 'snapshot-failed'
@@ -1883,7 +1896,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
   async function select(version: string): Promise<{ accepted: boolean; version: string }> {
     if (platform === 'win32') throw Object.assign(new Error('windows runtime mutations are read-only'), { code: 'platform_read_only' })
     assertMutationIdle()
-    if (envPath !== null) throw Object.assign(new Error('runtime is pinned by DSH_GATEWAY_DSH_PATH (env always wins); version mutations are disabled'), { code: 'env_override_active' })
+    if (envPath !== null) throw refusalError(envPinnedRefusal('version mutations'))
     assertNoPending()
 
     // The version selector always places the active version first. Selecting
@@ -2019,7 +2032,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
   async function apply(): Promise<{ pending: boolean }> {
     if (platform === 'win32') throw Object.assign(new Error('windows runtime mutations are read-only'), { code: 'platform_read_only' })
     assertMutationIdle()
-    if (envPath !== null) throw Object.assign(new Error('runtime is pinned by DSH_GATEWAY_DSH_PATH (env always wins); version mutations are disabled'), { code: 'env_override_active' })
+    if (envPath !== null) throw refusalError(envPinnedRefusal('version mutations'))
     assertNoPending()
 
     const record: OverrideRecord = readOverride(baseDir) ?? {
@@ -2045,7 +2058,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
       writeActivationIntent(baseDir, {
         targetVersion: record.chosenVersion,
         targetIsBuiltin: false,
-        manualRollback: current !== null && compareRuntimeVersions(record.chosenVersion, current) === -1,
+        manualRollback: isVersionDowngrade(record.chosenVersion, current),
         intentKind: 'version-switch',
       })
     } catch (error) {
@@ -2071,7 +2084,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
   async function rollback(version: string): Promise<{ accepted: boolean }> {
     if (platform === 'win32') throw Object.assign(new Error('windows runtime mutations are read-only'), { code: 'platform_read_only' })
     assertMutationIdle()
-    if (envPath !== null) throw Object.assign(new Error('runtime is pinned by DSH_GATEWAY_DSH_PATH (env always wins); version mutations are disabled'), { code: 'env_override_active' })
+    if (envPath !== null) throw refusalError(envPinnedRefusal('version mutations'))
     assertNoPending()
 
     if (!listValidVersionTrees(baseDir).includes(version)) {
@@ -2150,7 +2163,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
   async function cleanupVersion(version: string): Promise<{ version: string; removed: boolean }> {
     if (platform === 'win32') throw Object.assign(new Error('windows runtime mutations are read-only'), { code: 'platform_read_only' })
     assertMutationIdle()
-    if (envPath !== null) throw Object.assign(new Error('runtime is pinned by DSH_GATEWAY_DSH_PATH (env always wins); version mutations are disabled'), { code: 'env_override_active' })
+    if (envPath !== null) throw refusalError(envPinnedRefusal('version mutations'))
     assertNoPending()
     if (startupBlockReason !== null) {
       throw Object.assign(new Error(`runtime recovery ${startupBlockReason} is required before cleanup`), { code: 'runtime_recovery_required' })
@@ -2321,7 +2334,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
   async function recoverMetadata(): Promise<{ accepted: true }> {
     if (platform === 'win32') throw Object.assign(new Error('windows runtime mutations are read-only'), { code: 'platform_read_only' })
     assertMutationIdle()
-    if (envPath !== null) throw Object.assign(new Error('runtime is pinned by DSH_GATEWAY_DSH_PATH (env always wins); metadata recovery is disabled'), { code: 'env_override_active' })
+    if (envPath !== null) throw refusalError(envPinnedRefusal('metadata recovery'))
     const builtin = requireBuiltinVersion()
     if (builtin === null || !isSafeVersion(builtin)) {
       throw Object.assign(new Error('gateway builtin dsh anchor does not expose a stable version; metadata recovery refused'), { code: 'invalid_target' })
@@ -2433,7 +2446,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
   async function restoreBuiltin(): Promise<{ accepted: boolean }> {
     if (platform === 'win32') throw Object.assign(new Error('windows runtime mutations are read-only'), { code: 'platform_read_only' })
     assertMutationIdle()
-    if (envPath !== null) throw Object.assign(new Error('runtime is pinned by DSH_GATEWAY_DSH_PATH (env always wins); version mutations are disabled'), { code: 'env_override_active' })
+    if (envPath !== null) throw refusalError(envPinnedRefusal('version mutations'))
     // Desktop parity (A-U4): reset-builtin without an override is a pointless
     // stop → snapshot → probe cycle (the anchor is already authoritative and
     // there is nothing to clear) — the desktop only offers the action when
@@ -2469,10 +2482,9 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
                 ? 'restore-half'
                 : null
     if (recoveryReason !== null) {
-      throw Object.assign(
-        new Error(`runtime recovery ${recoveryReason} is required; resume via the matching retry route (restore-builtin applies to pending or healthy selections only)`),
-        { code: 'runtime_recovery_required' },
-      )
+      // Same code/message as start()/applyNowPreflight/profileWriteRefusal
+      // (audit N2: recoveryRetryRequiredRefusal).
+      throw refusalError(recoveryRetryRequiredRefusal(recoveryReason))
     }
 
     // Reset-builtin is an activation transaction, not metadata deletion:
@@ -2593,7 +2605,9 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
    */
   async function start(): Promise<void> {
     if (startInFlight) {
-      throw Object.assign(new Error('a start is already in flight'), { code: 'runtime_busy' })
+      // Same code/message as the route /start pre-gate (audit N2:
+      // startAlreadyInFlightRefusal).
+      throw refusalError(startAlreadyInFlightRefusal())
     }
     assertMutationIdle()
     // Recovery gate (decision 12: "恢复门不可绕过"): an in-memory startup
@@ -2605,20 +2619,16 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     // gateway-boot blocks all land here, so a raw start can never skip the
     // probe/restore gate.
     if (startupBlockReason !== null) {
-      throw Object.assign(
-        new Error(`runtime recovery ${startupBlockReason} is required; resume via the matching retry route (restore-builtin applies to pending or healthy selections only)`),
-        { code: 'runtime_recovery_required' },
-      )
+      throw refusalError(recoveryRetryRequiredRefusal(startupBlockReason))
     }
     // Durable ordinary pending (mirror restart): the armed switch is consumed
     // by the startup transaction, not by a bare spawn of the old workspace.
     assertNoPending()
     const connectionState = plane.connectionState
     if (connectionState !== 'stopped' && connectionState !== 'error' && connectionState !== 'restart-exhausted') {
-      throw Object.assign(
-        new Error(`managed dsh is running (${connectionState}); start applies to stopped/error/restart-exhausted`),
-        { code: 'runtime_busy' },
-      )
+      // Same code/message as the route /start pre-gate (audit N2:
+      // startNotApplicableRefusal).
+      throw refusalError(startNotApplicableRefusal(connectionState))
     }
     startInFlight = true
     startOutcome = 'running'
@@ -2673,7 +2683,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
   function applyNowPreflight(): string {
     if (platform === 'win32') throw Object.assign(new Error('windows runtime mutations are read-only'), { code: 'platform_read_only' })
     assertMutationIdle()
-    if (envPath !== null) throw Object.assign(new Error('runtime is pinned by DSH_GATEWAY_DSH_PATH (env always wins); version mutations are disabled'), { code: 'env_override_active' })
+    if (envPath !== null) throw refusalError(envPinnedRefusal('version mutations'))
 
     // P2-1 (review fix): a corrupt activation journal must fail closed BEFORE
     // any 202/stop can go out. The startup transaction cannot read it either
@@ -2688,12 +2698,14 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     // incomplete / corrupt metadata) refuses apply-now identically when the
     // manager is called directly, not only through /chamber/runtime/apply-now.
     if (startupBlockReason !== null) {
-      throw Object.assign(new Error(`runtime recovery ${startupBlockReason} is required; resume via the matching retry route (restore-builtin applies to pending or healthy selections only)`), { code: 'runtime_recovery_required' })
+      throw refusalError(recoveryRetryRequiredRefusal(startupBlockReason))
     }
     // Direct-call parity with the route's connection gate: a managed dsh that
     // never reached ready cannot be switched in-session (mirrors /restart).
     if (plane.connectionState !== 'ready' && plane.connectionState !== 'degraded') {
-      throw Object.assign(new Error(`managed dsh is not running (${plane.connectionState}); restore the builtin or retry the interrupted apply/restore before applying now`), { code: 'runtime_busy' })
+      // Same code/message as the route /apply-now pre-gate (audit N2:
+      // applyNowNotRunningRefusal).
+      throw refusalError(applyNowNotRunningRefusal(plane.connectionState))
     }
 
     // F2: the target is the ordinary pending version when one exists, else the
@@ -2764,7 +2776,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
           // of a hardcoded false — a staged downgrade (chosen < current) arms
           // a real manual rollback intent so runStartupPhase prepares the
           // pre-rollback stash, exactly like a rollback()-armed switch.
-          manualRollback: current !== null && compareRuntimeVersions(target, current) === -1,
+          manualRollback: isVersionDowngrade(target, current),
           intentKind: 'version-switch',
         })
       } catch (error) {
@@ -2888,7 +2900,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
   async function retryApply(): Promise<{ accepted: boolean; blockedReason: string | null }> {
     if (platform === 'win32') throw Object.assign(new Error('windows runtime mutations are read-only'), { code: 'platform_read_only' })
     assertMutationIdle()
-    if (envPath !== null) throw Object.assign(new Error('runtime is pinned by DSH_GATEWAY_DSH_PATH (env always wins); version mutations are disabled'), { code: 'env_override_active' })
+    if (envPath !== null) throw refusalError(envPinnedRefusal('version mutations'))
     assertNoOrdinaryPending()
     const record = readOverride(baseDir)
     const interrupted = record !== null && (record.swapAttempted === true || record.lastOutcome === 'snapshot-failed')
@@ -2913,7 +2925,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     // source-independent — desktop never refuses env here, so neither does the
     // gateway (retry-apply stays env-refused: it resumes a VERSION switch).
     assertNoOrdinaryPending()
-    if (startupBlockReason !== 'restore-half' && startupBlockReason !== 'restore-incomplete') {
+    if (startupBlockReason === null || !RETRY_RESTORE_REASONS.has(startupBlockReason)) {
       throw Object.assign(new Error('no interrupted restore to retry'), { code: 'no_retry_target' })
     }
     // The startup transaction itself performs the restore completion (its
@@ -2930,7 +2942,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
   async function setRegistry(origin: string): Promise<{ origin: string }> {
     if (platform === 'win32') throw Object.assign(new Error('windows runtime mutations are read-only'), { code: 'platform_read_only' })
     assertMutationIdle()
-    if (envPath !== null) throw Object.assign(new Error('runtime is pinned by DSH_GATEWAY_DSH_PATH (env always wins); registry mutation is disabled'), { code: 'env_override_active' })
+    if (envPath !== null) throw refusalError(envPinnedRefusal('registry mutation'))
     assertNoPending()
     const canonical = canonicalRegistryOrigin(origin)
     if (canonical === null) throw Object.assign(new Error('invalid registry origin'), { code: 'bad_registry_origin' })

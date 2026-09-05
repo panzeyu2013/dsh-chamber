@@ -25,6 +25,8 @@
 import { existsSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import {
+  HOST_GIT_WORKTREE_INSERT,
+  HOST_GRAPH_INSERT,
   atomicWritePrivateFileNoFollow,
   ensurePrivateDirectoryNoFollow,
   readPrivateFileNoFollow,
@@ -34,10 +36,12 @@ import type { Logger } from '@dsh-chamber/control-plane'
 /** Cache root under the gateway stateDir. */
 export const SYNCED_PLUGIN_DIR = 'chamber-plugins'
 
-/** The syncable chamber host packages (desktop-provided since 2026-12). */
+/** The syncable chamber host packages (desktop-provided since 2026-12);
+ *  insert id/name single-sourced from the control-plane seed registry
+ *  (dedupe audit N3). */
 export const SYNCABLE_HOST_PACKAGES = [
-  { id: 'client-graph', name: '@dsh-chamber/dsh-host-client-graph' },
-  { id: 'git-worktree', name: '@dsh-chamber/dsh-host-git-worktree' },
+  HOST_GRAPH_INSERT,
+  HOST_GIT_WORKTREE_INSERT,
 ] as const
 
 export const SYNCED_PACKAGE_MAX_BYTES = 64 * 1024
