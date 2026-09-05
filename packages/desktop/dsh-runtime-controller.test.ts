@@ -221,7 +221,7 @@ test('install: logical disk soft limit blocks only a fresh download', async () =
   const store = makeStore();
   let installCalls = 0;
   const deps = makeDeps(store);
-  deps.store.runtimeDiskSummary = () => diskSummary(100);
+  deps.store.runtimeDiskSummary = async () => diskSummary(100);
   deps.install = async () => {
     installCalls += 1;
     return { versionTreeDir: '/x', resolvedVersion: '0.2.0' };

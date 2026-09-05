@@ -170,8 +170,11 @@ export interface ControllerDeps {
     validateVersionTree?: (baseDir: string, version: string) => { ok: boolean; error?: string }
     recordFailure?: (baseDir: string, failure: RuntimeFailure) => void
     recordExplicitInstall?: (baseDir: string, version: string) => void
-    /** Full logical accounting used to fail closed before a fresh download. */
-    runtimeDiskSummary?: (baseDir: string) => RuntimeDiskSummary
+    /** Full logical accounting used to fail closed before a fresh download.
+     *  perf T3（2026-09）：异步单遍遍历（runtimeDiskSummaryAsync）——大
+     *  store 下同步全树遍历会冻结主进程，安装闸口等同一段墙钟时间但进程
+     *  保持响应。 */
+    runtimeDiskSummary?: (baseDir: string) => Promise<RuntimeDiskSummary>
     /** Persist the activation intent before override.pending is published. */
     writeActivationIntent: (baseDir: string, input: ActivationIntentInput) => void
     /** Explicit reset clears any safe intent/monitoring journal selected by main. */
@@ -475,7 +478,7 @@ export class DshRuntimeController {
     if (!cached && this.deps.store.runtimeDiskSummary !== undefined) {
       let disk: RuntimeDiskSummary
       try {
-        disk = this.deps.store.runtimeDiskSummary(this.baseDir)
+        disk = await this.deps.store.runtimeDiskSummary(this.baseDir)
       } catch (err) {
         const detail = sanitizeErrorText(err instanceof Error ? err.message : String(err))
         this.error = `无法确认 dsh 运行时磁盘占用；拒绝开始新安装：${detail}`

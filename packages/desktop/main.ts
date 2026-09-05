@@ -90,6 +90,7 @@ import {
   clearCurrentPointer,
   clearRuntimeFailure,
   clearStorePruneRequest,
+  createCoalescedRefresher,
   deleteOverride,
   evictVersions,
   latestKnownGood,
@@ -106,7 +107,7 @@ import {
   readStorePruneRequest,
   recordExplicitInstall,
   recordRuntimeFailure,
-  runtimeDiskSummary,
+  runtimeDiskSummaryAsync,
   runtimeFailureSummary,
   validateVersionTree,
   writeActivationIntent,
@@ -3951,7 +3952,9 @@ if (!gotTheLock) {
           deleteOverride: (b) => deleteOverride(b),
           clearCurrentPointer: (b) => clearCurrentPointer(b),
           recordExplicitInstall: (b, runtimeVersion) => recordExplicitInstall(b, runtimeVersion),
-          runtimeDiskSummary: (b) => runtimeDiskSummary(b),
+          // perf T3（2026-09）：闸口走异步单遍遍历——等待同一段墙钟时间但
+          // 主进程保持响应（大 store 下同步遍历会冻结整个应用）。
+          runtimeDiskSummary: (b) => runtimeDiskSummaryAsync(b),
           writeActivationIntent: (b, input) => { writeActivationIntent(b, input); },
           clearActivationJournal: (b) => clearActivationJournal(b),
           recordFailure: (b, failure) => {
@@ -4032,6 +4035,19 @@ if (!gotTheLock) {
         canRecoverMetadata,
       };
     };
+    // perf T3（2026-09，D8）：磁盘统计"节流/单飞/终态一次"——版本事务的
+    // 15 个 refresh 调用点与 UI/事件驱动的刷新突发共享遍历：单飞合并并发
+    // 请求，运行期间到达者补跑一遍（终态一次），全树统计绝不重复并发。
+    // runtimeDiskSummaryAsync 本身按批让渡事件循环，主进程全程不被冻结。
+    const refreshDiskUsage = createCoalescedRefresher(() => runtimeDiskSummaryAsync(runtimeBaseDir));
+    // 最近一次完成的全树磁盘投影（含错误投影）。D7 进度跳过复用其值——
+    // 终态/content 相位永远现场重走，绝不因复用而把陈旧终态交给 UI。
+    let lastDiskEvidence: { usage: Awaited<ReturnType<typeof runtimeDiskSummaryAsync>> | null; error: string | null } | null = null;
+    /** D7（2026-09，M1 调度收口）：纯进度相位不打全树遍历。download/
+     *  install/apply 进行中 patch 的磁盘面复用最近一次完整投影（其内容
+     *  相位由终态刷新保证现场重走）；其余（终态、内容相位、无相位 patch）
+     *  一律走 coalescer 完整刷新。 */
+    const DISK_SKIP_PROGRESS_PHASES: ReadonlySet<string> = new Set(['downloading', 'installing', 'applying']);
     const refreshRuntimeEvidence = async (patch: Parameters<typeof runtimeInstance.setLifecycle>[0] = {}) => {
       const effectivePhase = patch.phase ?? runtimeInstance.getState().phase;
       const effectiveCanRetryRestore = patch.canRetryRestore
@@ -4063,23 +4079,43 @@ if (!gotTheLock) {
         };
       }
       let diskProjection: Parameters<typeof runtimeInstance.setLifecycle>[0];
-      try {
-        const diskUsage = runtimeDiskSummary(runtimeBaseDir);
+      const skipDisk = DISK_SKIP_PROGRESS_PHASES.has(effectivePhase);
+      if (skipDisk && lastDiskEvidence !== null) {
+        // 进度相位：复用最近一次完整投影（无新遍历）；快照/版本清单等轻量
+        // 面照常现场刷新。diskLimitExceeded 等派生字段随复用值同步给出。
         diskProjection = {
-          diskUsage,
-          diskError: null,
+          diskUsage: lastDiskEvidence.usage,
+          diskError: lastDiskEvidence.error,
           diskLimitBytes: DEFAULT_RUNTIME_LOGICAL_DISK_LIMIT_BYTES,
-          diskLimitExceeded: diskUsage.totalBytes >= DEFAULT_RUNTIME_LOGICAL_DISK_LIMIT_BYTES,
+          diskLimitExceeded: lastDiskEvidence.usage === null
+            ? null
+            : lastDiskEvidence.usage.totalBytes >= DEFAULT_RUNTIME_LOGICAL_DISK_LIMIT_BYTES,
           explicitlyInstalledVersions: listExplicitlyInstalledVersions(runtimeBaseDir),
         };
-      } catch (error) {
-        diskProjection = {
-          diskUsage: null,
-          diskError: sanitizeErrorText(error instanceof Error ? error.message : String(error)),
-          diskLimitBytes: DEFAULT_RUNTIME_LOGICAL_DISK_LIMIT_BYTES,
-          diskLimitExceeded: null,
-          explicitlyInstalledVersions: [],
-        };
+      } else {
+        try {
+          const diskUsage = await refreshDiskUsage();
+          lastDiskEvidence = { usage: diskUsage, error: null };
+          diskProjection = {
+            diskUsage,
+            diskError: null,
+            diskLimitBytes: DEFAULT_RUNTIME_LOGICAL_DISK_LIMIT_BYTES,
+            diskLimitExceeded: diskUsage.totalBytes >= DEFAULT_RUNTIME_LOGICAL_DISK_LIMIT_BYTES,
+            explicitlyInstalledVersions: listExplicitlyInstalledVersions(runtimeBaseDir),
+          };
+        } catch (error) {
+          lastDiskEvidence = {
+            usage: null,
+            error: sanitizeErrorText(error instanceof Error ? error.message : String(error)),
+          };
+          diskProjection = {
+            diskUsage: null,
+            diskError: lastDiskEvidence.error,
+            diskLimitBytes: DEFAULT_RUNTIME_LOGICAL_DISK_LIMIT_BYTES,
+            diskLimitExceeded: null,
+            explicitlyInstalledVersions: [],
+          };
+        }
       }
       runtimeInstance.setLifecycle({
         ...snapshotProjection,
