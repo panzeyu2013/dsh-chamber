@@ -13,15 +13,20 @@
  * shell pays on reveal when its content kept streaming while hidden (the
  * content-visibility render cache was invalidated by those DOM changes).
  *
- * This component owns the per-view loading state: a layout-mimicking skeleton
- * (`.instance-loading`, design 05 §4 — NN/g skeleton pattern) shown while the
- * shell boots. The skeleton covers the dsh in-shell boot page (z-index above
- * the shell), so no opacity tricks are needed. When the boot settles, the
- * settle state is applied through a second View Transition (skeleton → real
- * UI, or the failure report + retry). Background-booted views (idle prewarm,
- * or a view the user left mid-boot) use `.instance-pending`: visibility-only
- * hidden, layout kept alive so the vendor shells' measurement /
- * IntersectionObserver machinery works during boot.
+ * This component owns the per-view loading state: a full-area same-tone veil
+ * (`.instance-loading`, design 05 §4) shown while the shell boots. Perf T1
+ * (2026-09, D1=A) dropped the layout-mimicking skeleton blocks (rail + sidebar
+ * placeholders): the real sidebar width is layout-store persisted and
+ * user-draggable, so a fixed 280px mock geometry mismatched widened instances
+ * and could shift the main-area left edge on settle reveal (CLS on the
+ * reduced-motion/degraded paths). The veil makes no geometric claim. It covers
+ * the dsh in-shell boot page (z-index above the shell), so no opacity tricks
+ * are needed. When the boot settles, the settle state is applied through a
+ * second View Transition (veil → real UI, or the failure report + retry).
+ * Background-booted views (idle prewarm, or a view the user left mid-boot)
+ * use `.instance-pending`: visibility-only hidden, layout kept alive so the
+ * vendor shells' measurement / IntersectionObserver machinery works during
+ * boot.
  */
 import { useEffect, useRef, useState } from 'react'
 import { bootInstanceShell, shellStateIdle, type ChamberTransport, type ShellState } from '../shell.ts'
@@ -86,7 +91,9 @@ export default function InstanceView({
       if (!aliveRef.current) return
       // settle 落地：可见视图用 View Transition（骨架 → 内容/失败报告）；
       // 后台 boot（预热）即时落位——用户点击切换时的过渡由 App 层覆盖。
-      if (activeRef.current) runViewTransition(() => setShell(next))
+      // 键 'settle'（perf T2）：与视图切换流跨键隔离——settle 若被同键吞并
+      // 会导致骨架 veil 永驻；同视图连续 settle（重试链）单槽合并。
+      if (activeRef.current) runViewTransition(() => setShell(next), 'settle')
       else setShell(next)
       onSettled?.(instanceId)
       // 失败呈现由 App 统一负责（覆盖层）：每次 settle 上报最终状态。
@@ -118,24 +125,10 @@ export default function InstanceView({
       <div ref={containerRef} className="instance-shell" />
       {!settled && (
         <div className="instance-loading" aria-busy="true">
-          <div className="instance-loading-frame">
-            <div className="instance-loading-rail">
-              <div className="instance-loading-block" />
-              <div className="instance-loading-block" />
-              <div className="instance-loading-block" />
-              <div className="instance-loading-block" />
-            </div>
-            <div className="instance-loading-sidebar">
-              <div className="instance-loading-block" />
-              <div className="instance-loading-block" />
-              <div className="instance-loading-block" />
-              <div className="instance-loading-block" />
-            </div>
-            <div className="instance-loading-main">
-              <div className="instance-loading-spinner" />
-              <div className="instance-loading-title">正在加载 {label}…</div>
-              <div className="instance-loading-hint">首次打开需加载完整界面</div>
-            </div>
+          <div className="instance-loading-main">
+            <div className="instance-loading-spinner" />
+            <div className="instance-loading-title">正在加载 {label}…</div>
+            <div className="instance-loading-hint">首次打开需加载完整界面</div>
           </div>
         </div>
       )}

@@ -58,6 +58,11 @@ body {
   /* 与 dsh 主题同底色：骨架屏/切换过渡的底层永远不是"黑"，加载与切换观感
      跟随实例主题（主题 token 未加载时回退 chamber 暗色）。 */
   background: var(--dsw-alias-bg-base, var(--bg));
+  /* 2026-09 review（P0）：隔离自身 stacking context——veil 的 z-index:1
+     只在视图内与 shell 内容比价，壳内未来任何更高 z 的元素都不可能穿透
+     veil（固化"veil 必盖 dsh 启动页"的未来不变量，不依赖 dsh 侧无高 z
+     元素的现状）。 */
+  isolation: isolate;
 }
 
 /* 隐藏视图（非活动且已 settle）：即时隐藏——visibility+opacity+pointer-events
@@ -95,26 +100,15 @@ body {
   display: block;
 }
 
-/* ---------- 骨架屏（加载中间态，NN/g skeleton 模式，设计 05 §4） ----------
+/* ---------- 骨架屏（加载中间态，design 05 §4） ----------
    盖在 shell 之上（shell 内部 dsh 启动页被骨架完全覆盖，无需 opacity 隐藏
-   技巧）；结构模仿 dsh 布局（图标 rail + 侧边栏列表 + 主区），背景跟随
-   主题——旧视图 → 骨架 → 真实内容的两次 View Transition 都是同底色平滑
-   过渡。 */
-
-.instance-plugin-degraded {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  z-index: 2;
-  padding: 6px 12px;
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--dsw-alias-text-secondary, inherit);
-  background: var(--dsw-alias-bg-warning, rgba(255, 196, 0, 0.12));
-  border-bottom: 1px solid var(--dsw-alias-line, rgba(128, 128, 128, 0.25));
-  pointer-events: none;
-}
+   技巧）。性能整改 T1（2026-09，D1=A）：不再模仿 dsh 布局几何（rail +
+   侧栏占位块）——真实侧栏宽度由 layout store 持久化、用户可拖到任意值，
+   骨架固定 280px 的假几何必然与曾拖宽的实例失配：settle 揭幕在
+   reduced-motion / 降级路径产生主区左缘位移（可入 CLS 数值分）。现收敛为
+   全屏同底色 veil + 居中 spinner/文案：零几何主张、零失配可能；旧视图 →
+   veil → 真实内容可能的两段 View Transition（后台已 settle 的视图切入时仅
+   一段）保持同底色平滑过渡。 */
 
 .instance-loading {
   position: absolute;
@@ -123,52 +117,6 @@ body {
   display: flex;
   flex-direction: column;
   background: var(--dsw-alias-bg-base, var(--bg));
-}
-
-.instance-loading-frame {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-}
-
-.instance-loading-rail {
-  /* 官方折叠 rail 宽（layout columns.ts SIDEBAR_COLLAPSED = 56）。 */
-  width: 56px;
-  flex-shrink: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 10px;
-  padding: 14px 0;
-  border-right: 1px solid var(--dsw-alias-border-l1, var(--border));
-}
-
-.instance-loading-rail .instance-loading-block {
-  width: 28px;
-  height: 28px;
-  border-radius: 8px;
-}
-
-.instance-loading-sidebar {
-  /* rail(56) + sidebar(224) = 280 = 官方侧栏默认宽（SIDEBAR_DEFAULT）——
-     骨架屏主区左缘与真实展开态侧栏（280px）严格对齐，settle 换入真实
-     shell 时对话区不跳动；rail 取官方折叠宽（56），各自对齐官方几何。 */
-  width: 224px;
-  flex-shrink: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 18px 14px;
-  border-right: 1px solid var(--dsw-alias-border-l1, var(--border));
-}
-
-.instance-loading-sidebar .instance-loading-block {
-  height: 14px;
-  border-radius: 4px;
-}
-
-.instance-loading-sidebar .instance-loading-block:nth-child(3n) {
-  width: 76%;
 }
 
 .instance-loading-main {
@@ -180,13 +128,6 @@ body {
   justify-content: center;
   gap: 12px;
   padding: 24px;
-}
-
-.instance-loading-block {
-  /* dsh 主题的暗色值为深灰；token 未加载时的回退也应是暗色（骨架屏盖在
-     chamber 暗色底上，亮色块会突兀闪烁）。 */
-  background: var(--dsw-alias-bg-module-platform, var(--panel-2));
-  animation: instance-loading-pulse 1.2s ease-in-out infinite;
 }
 
 .instance-loading-spinner {
@@ -213,11 +154,6 @@ body {
   to { transform: rotate(360deg); }
 }
 
-@keyframes instance-loading-pulse {
-  0%, 100% { opacity: 0.45; }
-  50% { opacity: 1; }
-}
-
 /* 注：实例失败态不再有 .instance-fatal——失败呈现（报告 + 重试 + 服务器
    切换）由 App 在活动视图上统一渲染为 .fatal-overlay 覆盖层（05 §4 失败
    呈现修订），InstanceView 只负责骨架屏与 shell 生命周期。 */
@@ -225,7 +161,6 @@ body {
 /* ---------- 动效偏好 ---------- */
 
 @media (prefers-reduced-motion: reduce) {
-  .instance-loading-block,
   .instance-loading-spinner {
     animation: none;
   }
