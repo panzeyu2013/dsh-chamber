@@ -27,6 +27,7 @@ import { startWsHeartbeat } from '../src/ws-heartbeat.ts'
 import { clearAuthCookie, registerAuthCookie } from '../src/browser-auth-cookie.ts'
 import { DEFAULT_DSH_START_PORT } from '../src/spawn-dsh.ts'
 import type { ProxyRequest, ProxyResponse, ProxySocket } from '../src/instance-proxy.ts'
+import { pongFrame } from './utils.ts'
 
 const quietLogger = { log: () => {}, warn: () => {}, error: () => {} }
 const GATEWAY_AUTHORIZATION = `Bearer ${'t'.repeat(32)}`
@@ -1432,22 +1433,6 @@ test('transport revoke is owner-scoped and closeAllStreams aborts every remainin
 // ---------------------------------------------------------------------------
 // WebSocket heartbeat (design 14 extension: sleep/wake silent-death recovery)
 // ---------------------------------------------------------------------------
-
-/** Build a complete pong frame (opcode 0xA) to feed the heartbeat scanners. */
-function pongFrame(payload: Buffer, masked: boolean): Buffer {
-  const header = Buffer.allocUnsafe(masked ? 6 : 2)
-  header[0] = 0x80 | 0xa
-  if (!masked) {
-    header[1] = payload.length
-    return Buffer.concat([header, payload])
-  }
-  header[1] = 0x80 | payload.length
-  const key = Buffer.from([1, 2, 3, 4])
-  key.copy(header, 2)
-  const maskedPayload = Buffer.allocUnsafe(payload.length)
-  for (let i = 0; i < payload.length; i++) maskedPayload[i] = payload[i] ^ key[i % 4]
-  return Buffer.concat([header, maskedPayload])
-}
 
 /** An upgrade factory that exposes the spliced upstream socket and records its writes. */
 function heartbeatUpgradeFactory() {

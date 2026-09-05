@@ -1050,6 +1050,8 @@ export type {
   ParsedInsertRow,
 } from './cordis-inserts.ts'
 export type { Logger } from './types.ts'
+export { HOST_GRAPH_INSERT, HOST_GIT_WORKTREE_INSERT } from './host-graph-seed.ts'
+export type { HostPackageInsert } from './host-graph-seed.ts'
 export type { ApiCorsDecision, ApiCorsEvaluator, ApiRequest, ApiResponse, ApiSurface } from './api.ts'
 // Shared forwarding core (design 17 §6.2, 方案 A): extracted from
 // instance-proxy.ts so `gateway-proxy.ts` reuses the same Host/Origin
@@ -1073,6 +1075,11 @@ export type {
   PrivateFileRead,
   PrivateFileReadOptions,
 } from './private-file.ts'
+// The shared owner-only audit-trail core (design 17 §13.4.4, S24): one
+// serializer + append/rotate implementation for the gateway server audit and
+// the desktop audit log (dedupe audit E-4/N11, 2026-09).
+export { AUDIT_TRAIL_MAX_BYTES, appendAuditTrailLine, serializeAuditEvent } from './audit-trail.ts'
+export type { AuditTrailEvent } from './audit-trail.ts'
 // The plugin spec/name whitelist family + reserved-name deny predicate
 // (design 21 §6.2/§6.7 — single source for the desktop main via
 // control-plane-module.ts and the gateway executor). Renderer mirrors stay

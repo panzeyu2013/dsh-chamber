@@ -11,8 +11,7 @@ import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { execFileSync } from 'node:child_process'
 import { EventEmitter } from 'node:events'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   formatChildOutputChunk,
@@ -25,12 +24,9 @@ import {
   MAX_CHILD_OUTPUT_CHUNK_BYTES,
 } from '../src/spawn-dsh.ts'
 import { authCookieFor, clearAuthCookie } from '../src/browser-auth-cookie.ts'
+import { tempDir } from './utils.ts'
 
 const silentLogger = { log() {}, warn() {}, error() {} }
-
-function tempDir(): string {
-  return mkdtempSync(join(tmpdir(), 'dsh-spawn-'))
-}
 
 /** A fake dsh CLI entry under a fake workspace (node runs it directly). */
 function writeFakeDshEntry(dshWorkspacePath: string, body: string): string {

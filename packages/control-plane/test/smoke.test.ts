@@ -15,6 +15,7 @@ import { join, resolve } from 'node:path'
 import { mkdtempSync, rmSync, existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { createControlPlane } from '../src/index.ts'
+import { fetchJson, waitFor } from './utils.ts'
 
 const repoRoot = resolve(fileURLToPath(new URL('../../..', import.meta.url)))
 
@@ -42,31 +43,6 @@ function resolveDshWorkspace(): string | null {
     if (existsSync(candidate) && hasDshCli(candidate)) return candidate
   }
   return null
-}
-
-async function fetchJson(base: string, path: string, init?: RequestInit): Promise<{ status: number; body: any }> {
-  const response = await fetch(`${base}${path}`, init)
-  const text = await response.text()
-  let body: any = null
-  try {
-    body = text === '' ? null : JSON.parse(text)
-  } catch {
-    body = null
-  }
-  return { status: response.status, body }
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms))
-}
-
-async function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs: number, what: string): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
-    if (await predicate()) return true
-    await sleep(250)
-  }
-  throw new Error(`timed out waiting for ${what} (${timeoutMs}ms)`)
 }
 
 async function main() {
@@ -115,7 +91,10 @@ async function main() {
     if (again.status !== 200) throw new Error(`idempotent POST failed: ${JSON.stringify(again)}`)
     console.log('ok: POST /api/connections is idempotent')
 
-    await waitFor(async () => (await fetchJson(base, '/health')).body?.dsh?.status === 'ready', 90_000, 'dsh ready')
+    // 250 ms poll — the historical smoke polling granularity, preserved by an
+    // explicit pollMs (the shared waitFor defaults to 25 ms). The shared
+    // helper throws the same `timed out waiting for …` error on expiry.
+    await waitFor(async () => (await fetchJson(base, '/health')).body?.dsh?.status === 'ready', 90_000, 'dsh ready', 250)
     console.log('ok: dsh ready')
 
     const read = await fetchJson(base, '/api/connections')

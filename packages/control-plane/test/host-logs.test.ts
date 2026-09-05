@@ -19,16 +19,13 @@
  */
 
 import { test } from 'node:test'
-import type { TestContext } from 'node:test'
 import assert from 'node:assert/strict'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
-  mkdtempSync,
   readFileSync,
   rmSync,
   statSync,
@@ -41,6 +38,7 @@ import {
 } from '../src/host-logs.ts'
 import { writePidRecord, DEFAULT_DSH_START_PORT } from '../src/spawn-dsh.ts'
 import type { Logger } from '../src/types.ts'
+import { tempDir } from './utils.ts'
 
 const silentLogger: Logger = { log() {}, warn() {}, error() {} }
 
@@ -48,12 +46,6 @@ const silentLogger: Logger = { log() {}, warn() {}, error() {} }
 function codeOf(error: unknown): string | undefined {
   if (typeof error !== 'object' || error === null) return undefined
   return 'code' in error ? String((error as { code?: unknown }).code) : undefined
-}
-
-function tempDir(t: TestContext): string {
-  const dir = mkdtempSync(join(tmpdir(), 'dsh-hostlogs-'))
-  t.after(() => rmSync(dir, { recursive: true, force: true }))
-  return dir
 }
 
 function makeLogs(stateDir: string): void {

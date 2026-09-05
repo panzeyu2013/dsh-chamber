@@ -23,6 +23,7 @@ import {
 import { HOST_IDENTITY_METHOD, LEGACY_HOST_PROBE_METHOD } from '../src/rpc-envelope.ts'
 import { DEFAULT_DSH_START_PORT } from '../src/spawn-dsh.ts'
 import { clearAuthCookie, registerAuthCookie } from '../src/browser-auth-cookie.ts'
+import { jsonResponse } from './utils.ts'
 
 const HOST = `http://127.0.0.1:${DEFAULT_DSH_START_PORT}`
 
@@ -33,10 +34,6 @@ let portCounter = 0
 function uniqueHost(): string {
   portCounter += 1
   return `http://127.0.0.1:${DEFAULT_DSH_START_PORT + portCounter}`
-}
-
-function jsonResponse(body: any, status = 200): Response {
-  return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
 }
 
 /** One recorded fetch: {url, init, body} — body is the parsed client-request. */

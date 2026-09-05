@@ -28,35 +28,9 @@ import { join } from 'node:path'
 import { createLocalConnection } from '../src/local-connection.ts'
 import type { SpawnedDsh } from '../src/local-connection.ts'
 import { createControlPlane } from '../src/index.ts'
+import { mockIdentityProbe, waitFor } from './utils.ts'
 
 const quietLogger = { log: () => {}, warn: () => {}, error: () => {} }
-
-/** A host-identity probe mock: healthy by default; `state.healthy` toggles
- *  failures. The health path speaks the identity seam (probeHostIdentity) —
- *  it never re-reads session data. */
-function mockIdentityProbe() {
-  const state = { healthy: true }
-  return {
-    state,
-    probeHostIdentity: async () => {
-      if (!state.healthy) throw new Error('mock identity probe failure')
-      return true
-    },
-  }
-}
-
-function sleep(ms: number) {
-  return new Promise(resolve => setTimeout(resolve, ms))
-}
-
-async function waitFor(predicate: () => unknown, timeoutMs: number, what: string) {
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
-    if (await predicate()) return
-    await sleep(25)
-  }
-  throw new Error(`timed out waiting for ${what} (${timeoutMs}ms)`)
-}
 
 /** A ready child on a fixed port; the exit listener is captured for death injection. */
 function controllableChild(port: number, exitHook: { fire?: (code: number | null, sig: string | null) => void }): SpawnedDsh {

@@ -26,25 +26,9 @@ import { connect } from 'node:net'
 import { createControlPlane } from '../src/index.ts'
 import { createStaticServing } from '../src/static-serving.ts'
 import type { ApiRequest, ApiResponse } from '../src/api.ts'
-import { DEFAULT_DSH_START_PORT } from '../src/spawn-dsh.ts'
-import type { SpawnedDsh } from '../src/local-connection.ts'
+import { fakeWire } from './utils.ts'
 
 const silentLogger = { log() {}, warn() {}, error() {} }
-
-/** A fake spawn: immediate ready on a fixed port; counts spawn attempts. */
-function fakeWire() {
-  let spawns = 0
-  const spawnDsh = async (): Promise<SpawnedDsh> => {
-    spawns += 1
-    return {
-      child: { on: () => {}, exitCode: null },
-      port: DEFAULT_DSH_START_PORT,
-      stop: async () => {},
-    }
-  }
-  const probeHostIdentity = async () => true
-  return { spawnDsh, probeHostIdentity, get spawns() { return spawns } }
-}
 
 interface Fixture {
   dir: string

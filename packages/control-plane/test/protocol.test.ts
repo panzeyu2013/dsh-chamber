@@ -38,13 +38,9 @@ import {
   writePidRecord,
 } from '../src/spawn-dsh.ts'
 import { commandMatchesEntry, runReaper } from '../src/reaper.ts'
+import { jsonResponse, mockIdentityProbe, waitFor } from './utils.ts'
 
 const HOST = `http://127.0.0.1:${DEFAULT_DSH_START_PORT}`
-
-/** A JSON Response body for the mock fetch. */
-function jsonResponse(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
-}
 
 function deferred<T = unknown>() {
   let resolve!: (value?: T) => void
@@ -58,15 +54,6 @@ function deferred<T = unknown>() {
 
 function sleep(ms: number) {
   return new Promise(resolve => setTimeout(resolve, ms))
-}
-
-async function waitFor(predicate: () => unknown, timeoutMs: number, what: string) {
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
-    if (await predicate()) return
-    await sleep(50)
-  }
-  throw new Error(`timed out waiting for ${what} (${timeoutMs}ms)`)
 }
 
 async function createEventStreamServer() {
@@ -504,20 +491,6 @@ function mockSpawn(): Promise<SpawnedDsh> {
     port: 17910 + spawnCounter,
     stop: async () => {},
   })
-}
-
-/** A host-identity probe mock: healthy by default; `state.healthy` toggles
- *  failures. The health path speaks the identity seam (probeHostIdentity) —
- *  it must never re-read session data. */
-function mockIdentityProbe() {
-  const state = { healthy: true }
-  return {
-    state,
-    probeHostIdentity: async () => {
-      if (!state.healthy) throw new Error('mock identity probe failure')
-      return true
-    },
-  }
 }
 
 test('start spawns and lands on ready; stop terminates and lands on stopped', async () => {

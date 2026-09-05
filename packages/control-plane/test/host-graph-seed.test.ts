@@ -18,9 +18,9 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync, existsSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, readFileSync, readdirSync, statSync, symlinkSync, writeFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
+import { tempDir } from './utils.ts'
 import {
   buildPatchOverlay,
   ensureHostPackage,
@@ -67,12 +67,6 @@ const EXPECTED_BOTH_OVERLAY = `- insert:
     - id: git-worktree
       name: '@dsh-chamber/dsh-host-git-worktree'
 `
-
-function tempDir(t: any) {
-  const dir = mkdtempSync(join(tmpdir(), 'dsh-host-graph-seed-'))
-  t.after(() => rmSync(dir, { recursive: true, force: true }))
-  return dir
-}
 
 /** The seeded package location inside a managed dsh home. */
 function seedTarget(dshHome: string) {
