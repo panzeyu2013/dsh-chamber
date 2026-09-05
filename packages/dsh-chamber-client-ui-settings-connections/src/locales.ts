@@ -75,6 +75,9 @@ export const zh = {
   delete: '删除',
   deleteTitle: '删除该连接？',
   deleteDescription: '连接将从注册表移除，当前传输随之断开，且本机保存的密码或令牌会被清除；远端内容不受影响。',
+  // 「删除」词族专用连接删除域；插件管理域统一为 移除（动作层）/卸载（技术
+  // 后果或复合恢复语境层）——2026-12 UX 修订约定，勿回潮（插件域请用
+  // pluginsRemoveRow/pluginsConfirmRemove/pluginsRemoving）。
   deleteConfirm: '删除',
   deleting: '删除中…',
   deleteNotEffective: '删除未生效：主进程拒绝了该变更（连接状态变化或状态目录不可写？）',
@@ -177,11 +180,12 @@ export const zh = {
   pluginsRemoteCol: '远端',
   pluginsRowAdd: '新增',
   pluginsRowUpdate: '更新',
-  pluginsRowRemove: '删除',
+  pluginsRowRemove: '移除',
   pluginsRowUnsyncable: '不可同步',
   pluginsRowMaterialize: '本地路径',
   pluginsUnlockedLatest: '远端将安装最新版（latest）',
   pluginsRemoveRisk: '将从远端移除该插件（破坏性操作）。',
+  pluginsRemoveRiskN: '将从远端移除选中的 {n} 个插件（破坏性操作）。',
   pluginsRestartWarning: '重启将中断该远端实例的活跃会话。',
   pluginsDeferRestart: '只应用变更，不重启（下次重启生效）',
   pluginsProfileNotInitialized: '远端 profile 尚未初始化，首次应用时将自动创建。',
@@ -200,6 +204,8 @@ export const zh = {
   pluginsNoLocalPlugins: '本地实例未安装第三方插件',
   pluginsNoThirdParty: '没有可同步的第三方插件',
   pluginsNoMatch: '没有匹配的插件',
+  // npm 搜索零命中（与列表过滤的 pluginsNoMatch 区分语境）。
+  pluginsSearchNoMatch: '没有匹配的 npm 包',
   chamberInjectedTitle: 'chamber 受管组件',
   chamberInjectedHint: 'chamber 自带组件；自动同步失败或版本漂移时可手动重推',
   chamberRemoteLive: '远端：已注入并已生效',
@@ -216,6 +222,7 @@ export const zh = {
   pluginsColName: '包名',
   pluginsColCategory: '类别',
   pluginsColStatus: '状态',
+  pluginsColAction: '操作',
   pluginsFilterAll: '全部',
   pluginsFilterDiff: '仅差异',
   pluginsCatAll: '全部类别',
@@ -229,11 +236,22 @@ export const zh = {
   pluginsAddSpecPlaceholder: '如 pkg 或 pkg@^1.2.3',
   pluginsAddSpecInvalid: '请输入合法的包名或 name@version（仅 registry 名 + 安全版本）。',
   pluginsAddInstall: '安装',
+  // 安装中短文案（2026-12 UI 修订）：busyTasks 是「正在执行变更…」全宽文案，
+  // 作安装按钮 busy 文案会导致按钮宽度跳动 ~80-100px；安装中专用短文案把
+  // 跳动压到 ~13-23px（busyTasks 保留给 footer/应用态）。
+  pluginsAddInstalling: '安装中…',
   pluginsAddSearch: '搜索',
   pluginsAddSearchPlaceholder: '搜索 npm registry…',
-  pluginsAddSearchHint: '搜索在主进程执行，结果为便利参考（非承诺）。',
   pluginsAddFolder: '从文件夹导入',
+  // 文件夹导入 busy 短文案（与 pluginsAddInstalling 同族）：导入中按钮显示
+  // 「导入中…」，避免「安装」按钮误显「安装中…」（2026-12 UX 修订）。
+  pluginsImporting: '导入中…',
   pluginsRemoveRow: '移除',
+  // 行级移除确认键（2026-12 UI 修订）：与共享键 deleteConfirm（「删除」，
+  // 连接删除沿用）区分——移除流程按钮与标题/描述动词一致，busy 用
+  // pluginsRemoving 而非 deleting。
+  pluginsConfirmRemove: '移除',
+  pluginsRemoving: '移除中…',
   pluginsLocalRemoveTitle: '移除本地插件？',
   pluginsLocalRemoveDescription: '将从本地 dsh 实例卸载该插件及其依赖；如需恢复请重新添加。',
   pluginsRestartUnconfigured: '未配置 systemd 服务，无法自动重启；插件已安装，将在下次重启后生效。',
@@ -271,7 +289,7 @@ export const zh = {
   profileAbsentBanner: '实例尚未初始化，将缓存安装意图，实例就绪后自动安装',
   profileCorruptBanner: '托管实例的插件清单损坏（profile_corrupt）。请在网关侧恢复或重试',
   instanceNotReadyZone: '实例未就绪——chamber 区降级显示',
-  installedFromMask: '本地固化副本',
+  installedFromMask: '本地副本',
   installedTab: '已安装',
   installedEmpty: '尚未安装第三方插件',
   installedAddHint: '在下方添加区按包名搜索安装，或从文件夹导入。',
@@ -289,8 +307,7 @@ export const zh = {
   startManagedDshOk: '已启动并恢复就绪',
   startManagedDshFailed: '启动失败：{error}',
   restartNeededHint: '变更已应用，重启实例后生效',
-  // UX 重构（design 21 §10 已登记；原 todo 落地后移出）：范围注/对账入口/事前警告/横幅指引/服务提示。
-  pluginsScopeNote: '官方组件随 dsh 运行时版本注入；chamber 组件见上方组件表（未注入/漂移时按行内状态注入或重新同步），不在此安装/卸载。本区仅管理第三方插件。',
+  // UX 重构（design 21 §10 已登记；原 todo 落地后移出）：对账入口/事前警告/横幅指引/服务提示。
   pluginsDiffSummary: '与本地插件组合存在 {n} 处差异——展开对账',
   pluginsDiffCollapse: '收起对账',
   pluginsRestartUnconfiguredHint: '该实例未配置 systemd 服务：变更将只应用、不自动重启，需手动重启远端后才生效。',
@@ -376,6 +393,10 @@ export const en: Record<SettingsConnectionsKey, string> = {
   delete: 'Delete',
   deleteTitle: 'Delete this connection?',
   deleteDescription: 'The connection is removed from the registry, its transport disconnects, and its locally stored password or token is cleared; remote content is not touched.',
+  // The "Delete" word family is reserved for connection deletion; the plugin
+  // domain uses Remove (action layer) / Uninstall (consequence or composite
+  // recovery layer) — 2026-12 UX revision convention (see pluginsRemoveRow /
+  // pluginsConfirmRemove / pluginsRemoving).
   deleteConfirm: 'Delete',
   deleting: 'Deleting…',
   deleteNotEffective: 'Delete did not land: the main process refused the change (the connection state changed or the state directory is unwritable?)',
@@ -483,6 +504,7 @@ export const en: Record<SettingsConnectionsKey, string> = {
   pluginsRowMaterialize: 'Local path',
   pluginsUnlockedLatest: 'The remote will install latest.',
   pluginsRemoveRisk: 'This plugin will be removed from the remote (destructive).',
+  pluginsRemoveRiskN: 'These {n} plugins will be removed from the remote (destructive).',
   pluginsRestartWarning: 'Restarting will interrupt the active sessions on that remote instance.',
   pluginsDeferRestart: 'Apply changes only, don\u2019t restart (takes effect next restart)',
   pluginsProfileNotInitialized: 'The remote profile is not initialized yet; it will be created on first apply.',
@@ -501,6 +523,8 @@ export const en: Record<SettingsConnectionsKey, string> = {
   pluginsNoLocalPlugins: 'No third-party plugins installed locally',
   pluginsNoThirdParty: 'No third-party plugins to sync',
   pluginsNoMatch: 'No matching plugins',
+  // npm search zero hits (distinct context from the list-filter pluginsNoMatch).
+  pluginsSearchNoMatch: 'No matching npm packages',
   chamberInjectedTitle: 'Chamber-managed components',
   chamberInjectedHint: 'Chamber-bundled components; re-push manually if auto-sync fails or versions drift',
   chamberRemoteLive: 'Remote: injected and live',
@@ -517,6 +541,7 @@ export const en: Record<SettingsConnectionsKey, string> = {
   pluginsColName: 'Name',
   pluginsColCategory: 'Category',
   pluginsColStatus: 'Status',
+  pluginsColAction: 'Actions',
   pluginsFilterAll: 'All',
   pluginsFilterDiff: 'Differences',
   pluginsCatAll: 'All categories',
@@ -530,11 +555,22 @@ export const en: Record<SettingsConnectionsKey, string> = {
   pluginsAddSpecPlaceholder: 'e.g. pkg or pkg@^1.2.3',
   pluginsAddSpecInvalid: 'Enter a valid package name or name@version (registry name + safe version only).',
   pluginsAddInstall: 'Install',
+  // Short busy copy (2026-12 UI revision): busyTasks ("A change is running…")
+  // makes the install button jump ~80-100px wide while busy; this short key
+  // caps the jump at ~13-23px (busyTasks stays for footer/apply states).
+  pluginsAddInstalling: 'Installing…',
   pluginsAddSearch: 'Search',
   pluginsAddSearchPlaceholder: 'Search npm registry…',
-  pluginsAddSearchHint: 'Search runs in the main process; results are a convenience, not a promise.',
   pluginsAddFolder: 'Import from folder',
+  // Folder-import busy copy (same family as pluginsAddInstalling): the import
+  // button shows "Importing…" while busy (2026-12 UX revision).
+  pluginsImporting: 'Importing…',
   pluginsRemoveRow: 'Remove',
+  // Row-remove confirm keys (2026-12 UI revision): distinct from the shared
+  // deleteConfirm ("Delete", kept for connection deletion) so the remove flow
+  // keeps one verb across button/title/description; busy uses pluginsRemoving.
+  pluginsConfirmRemove: 'Remove',
+  pluginsRemoving: 'Removing…',
   pluginsLocalRemoveTitle: 'Remove this local plugin?',
   pluginsLocalRemoveDescription: 'The plugin and its dependencies are uninstalled from the local dsh instance; re-add it to restore.',
   pluginsRestartUnconfigured: 'No systemd service is configured, so no automatic restart; the plugin is installed and takes effect on the next restart.',
@@ -573,7 +609,7 @@ export const en: Record<SettingsConnectionsKey, string> = {
   profileAbsentBanner: 'The instance is not initialized yet; the install intent will be cached and applied when it becomes ready.',
   profileCorruptBanner: 'The managed profile is corrupted (profile_corrupt). Restore or retry on the gateway.',
   instanceNotReadyZone: 'Instance not ready \u2014 chamber zone degraded',
-  installedFromMask: 'Local materialized copy',
+  installedFromMask: 'Local copy',
   installedTab: 'Installed',
   installedEmpty: 'No third-party plugins installed yet',
   installedAddHint: 'Install by package name in the add area below, or import from a folder.',
@@ -591,8 +627,7 @@ export const en: Record<SettingsConnectionsKey, string> = {
   startManagedDshOk: 'Started and ready',
   startManagedDshFailed: 'Start failed: {error}',
   restartNeededHint: 'Applied; restart the instance to activate',
-  // UX rework (registered in design 21 §10; the todo entry was removed after landing): scope note / reconcile entry / pre-warning / banner guidance / service hint.
-  pluginsScopeNote: 'Official components come with the dsh runtime version; chamber components are listed in the component table above (inject or re-sync from their row states when missing or drifted) \u2014 never installed or removed here. This section manages third-party plugins only.',
+  // UX rework (registered in design 21 §10; the todo entry was removed after landing): reconcile entry / pre-warning / banner guidance / service hint.
   pluginsDiffSummary: 'There are {n} differences vs the local plugin set \u2014 expand reconcile',
   pluginsDiffCollapse: 'Collapse reconcile',
   pluginsRestartUnconfiguredHint: 'No systemd service is configured on this instance: changes will be applied without an automatic restart \u2014 restart the remote manually for them to take effect.',

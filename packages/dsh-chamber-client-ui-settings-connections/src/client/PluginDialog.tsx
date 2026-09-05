@@ -24,7 +24,8 @@
  *            restartService / seedHostGraph / sshPluginUndo — the sync diff
  *            tab behavior (rows, filters, apply orchestration, chamber
  *            seed/restart actions, installed list with per-row remove and
- *            the「撤销最近变更」toolbar entry) is preserved byte-for-byte;
+ *            the「撤销最近变更」toolbar entry) keeps its behavior verbatim
+ *            (2026-12 UI 修订仅重排列表 markup/控件，状态机与语义未动);
  *   gateway→ pluginInventory read (Loader badges) + gatewayChamberSeedCache
  *            / gatewayInstalled / gatewayTasks (read-only undo derive — task
  *            rows are NEVER rendered, design D4-A) / gatewayPluginApply /
@@ -44,7 +45,7 @@
  * scope: this round makes GATEWAY recovery-shaped only).
  */
 
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import clsx from 'clsx'
 import { Button, IconRefreshOutline16, IconTrashOutline16, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
@@ -256,6 +257,9 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
   const isGateway = target.kind === 'gateway'
   const isHttp = target.kind === 'http'
   const sshSpec = target.kind === 'ssh' ? target.spec : null
+  /** Add-spec label/input pairing id — useId, never a static id: the same
+   *  plugin can render dialogs in multiple N-ctx panels in one document. */
+  const specInputId = useId()
   const sourceId = target.kind === 'gateway' || target.kind === 'http' ? target.sourceId : null
   /** The RAW registry instance id (no `gateway-` proxy prefix) — every
    *  /chamber REST wrapper and gateway IPC takes it (the wrappers own the
@@ -317,6 +321,11 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
   const [viewError, setViewError] = useState<string | null>(null)
   const [snapshot, setSnapshot] = useState<PluginInventorySnapshot | null>(null)
   const [reloadNonce, setReloadNonce] = useState(0)
+  /** 最近一次 Loader 快照镜像：reload 期间保留旧帧渲染、仅首载显示 loading，
+   *  避免每次操作后的「loading→footer 闪没 + 瞬时谎报未注入」（UX 评审 S1）。 */
+  const snapshotRef = useRef<PluginInventorySnapshot | null>(null)
+  /** reload 进行中：刷新按钮 in-flight 禁用（防重复并发 + 隐式 busy 提示）。 */
+  const [reloading, setReloading] = useState(false)
   // The LOCAL side of the chamber rows (gateway/http): the desktop's own
   // profile manifest — unreadable is the same loud hint, never a silent
   // "not injected". Re-runs on every reload.
@@ -356,11 +365,17 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
   const [draft, setDraft] = useState('')
   const [draftError, setDraftError] = useState<string | null>(null)
   const [installing, setInstalling] = useState(false)
+  /** 文件夹导入专用 busy（与 installing 并存）：导入中时安装按钮不显示
+   *  「安装中…」，避免语义错位（2026-12 UX 修订）。 */
+  const [folderBusy, setFolderBusy] = useState(false)
   const [addResult, setAddResult] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [searching, setSearching] = useState(false)
   const [hits, setHits] = useState<NpmSearchPackage[]>([])
   const [searchError, setSearchError] = useState<string | null>(null)
+  /** 最近一次成功完成的搜索词：hits 为空且无错误时用于渲染零命中空态
+   *  （改词即失配隐藏；仅在有结果的搜索后清空由下一次搜索覆盖）。 */
+  const [searchDone, setSearchDone] = useState<string | null>(null)
 
   // Diagnostic self-heal (design 09 §3.5): whenever the banner shows a
   // problem, ask the host to re-check — the host runner re-verifies
@@ -403,15 +418,19 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
     try {
       const res = await localPluginRemove(localRemoveTarget)
       if ('error' in res) {
+        // 失败即关 Modal：错误落到 zone 顶部 alert 可见（ssh/gateway 同语义；
+        // 不关闭时错误被确认 Modal 叠层遮挡）。
         setLocalRemoveError(res.error)
-      } else {
         setLocalRemoveTarget(null)
+      } else {
         // Main-process confirmation dismissed: silent no-op — nothing was
         // removed, keep the list as-is (never a misleading refresh).
+        setLocalRemoveTarget(null)
         if (!('cancelled' in res)) await loadLocalList()
       }
     } catch (err) {
       setLocalRemoveError(errorMessage(err))
+      setLocalRemoveTarget(null)
     } finally {
       setLocalRemoveBusy(false)
     }
@@ -639,17 +658,34 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
   useEffect(() => {
     if (sourceId === null) return
     let cancelled = false
-    setViewPhase('loading')
-    setViewError(null)
+    // 首载（无旧帧）才显示 loading；reload 保留旧快照渲染，避免操作后
+    // footer 闪没 + chamber 远端 badge 瞬时谎报「未注入」（UX 评审 S1）。
+    const hadData = snapshotRef.current !== null
+    if (!hadData) {
+      setViewPhase('loading')
+      setViewError(null)
+    } else {
+      setReloading(true)
+    }
     loadPluginInventory(sourceId).then(next => {
       if (cancelled) return
+      setReloading(false)
+      snapshotRef.current = next
       setSnapshot(next)
+      setViewError(null)
       setViewPhase('ready')
     }).catch(err => {
       if (cancelled) return
-      setSnapshot(null)
-      setViewError(errorMessage(err))
-      setViewPhase('error')
+      setReloading(false)
+      if (hadData) {
+        // reload 失败：保留旧帧并如实显示错误（不闪 loading、不谎报状态）。
+        setViewError(errorMessage(err))
+      } else {
+        snapshotRef.current = null
+        setSnapshot(null)
+        setViewError(errorMessage(err))
+        setViewPhase('error')
+      }
     })
     return () => { cancelled = true }
   }, [sourceId, reloadNonce])
@@ -859,6 +895,8 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
 
   const installSpec = useCallback(async (raw: string): Promise<void> => {
     const value = raw.trim()
+    // 空词 = silent no-op（与搜索按钮空词禁用一致，不误报「格式非法」）。
+    if (value === '') return
     if (!ADD_SPEC.test(value)) {
       setDraftError(t('pluginsAddSpecInvalid'))
       return
@@ -914,6 +952,7 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
 
   const importFolder = useCallback(async (): Promise<void> => {
     setInstalling(true)
+    setFolderBusy(true)
     setDraftError(null)
     setAddResult(null)
     try {
@@ -943,6 +982,7 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
       setDraftError(errorMessage(err))
     } finally {
       setInstalling(false)
+      setFolderBusy(false)
     }
   }, [isSsh, sshSpec, isGateway, gatewayId, t, reloadAfterAdd])
 
@@ -954,7 +994,10 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
     try {
       const res = await npmSearch(value)
       if ('error' in res) setSearchError(res.error)
-      else setHits(res.packages)
+      else {
+        setHits(res.packages)
+        setSearchDone(value)
+      }
     } catch (err) {
       setSearchError(errorMessage(err))
     } finally {
@@ -1188,12 +1231,15 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
     // gateway / http-direct: the Loader inventory answers the remote badges;
     // only gateway has the seed-cache drift surface.
     const entries = snapshot?.entries ?? []
+    /** Loader 快照尚缺（首载/读取失败）时，远端徽标用「未知」——绝不把
+     *  「读取中/失败」谎报成「未注入」（诚实信号纪律）。 */
+    const unknownBadge: ChamberBadge = { labelKey: 'chamberBadgeUnknown', tone: 'muted' }
     const rows: ChamberRowView[] = [
       {
         key: 'host-graph',
         nameCell: <code className={css.pluginName}>{HOST_GRAPH_PACKAGE}</code>,
         localBadge: localChamberBadge(localInjected?.hostGraph ?? null, localSideFailed),
-        remoteBadge: remoteChamberBadge(entries, HOST_GRAPH_PACKAGE),
+        remoteBadge: snapshot === null ? unknownBadge : remoteChamberBadge(entries, HOST_GRAPH_PACKAGE),
         versionCell: isGateway
           ? gatewayVersionCell(HOST_GRAPH_PACKAGE, driftStates?.hostGraph ?? null)
           : localVersion?.hostGraph != null
@@ -1204,7 +1250,7 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
         key: 'git-worktree',
         nameCell: <code className={css.pluginName}>{GIT_WORKTREE_PACKAGE}</code>,
         localBadge: localChamberBadge(localInjected?.gitWorktree ?? null, localSideFailed),
-        remoteBadge: remoteChamberBadge(entries, GIT_WORKTREE_PACKAGE),
+        remoteBadge: snapshot === null ? unknownBadge : remoteChamberBadge(entries, GIT_WORKTREE_PACKAGE),
         versionCell: isGateway
           ? gatewayVersionCell(GIT_WORKTREE_PACKAGE, driftStates?.gitWorktree ?? null)
           : localVersion?.gitWorktree != null
@@ -1222,7 +1268,7 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
           </span>
         ),
         localBadge: null,
-        remoteBadge: remoteChamberBadge(entries, MOBILE_PACKAGE),
+        remoteBadge: snapshot === null ? unknownBadge : remoteChamberBadge(entries, MOBILE_PACKAGE),
         versionCell: <span className={css.dim}>{t('chamberMobileHint')}</span>,
       })
     }
@@ -1272,7 +1318,7 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
             <button
               type="button"
               className={css.chamberSeedButton}
-              disabled={syncing || restarting || removeBusy}
+              disabled={syncing || restarting || removeBusy || installing || folderBusy}
               onClick={() => { void chamberSyncNow() }}
             >
               {syncing ? t('chamberSyncBusy') : t('chamberSyncNow')}
@@ -1323,27 +1369,43 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
     ? null
     : (
       <div className={css.pluginAdd}>
-        <label className={css.field}>
-          <span className={css.fieldLabel}>{t('pluginsAddSpec')}</span>
-          <input
-            className={css.input}
-            value={draft}
-            spellCheck={false}
-            disabled={installing}
-            placeholder={t('pluginsAddSpecPlaceholder')}
-            onChange={event => { setDraft(event.target.value); setDraftError(null) }}
-            onKeyDown={event => { if (event.key === 'Enter' && !installing) void installSpec(draft) }}
-          />
+        <div className={css.pluginAddSpec}>
+          <label className={css.fieldLabel} htmlFor={specInputId}>{t('pluginsAddSpec')}</label>
+          <div className={css.pluginAddRow}>
+            <input
+              id={specInputId}
+              className={clsx(css.input, css.pluginAddSpecInput)}
+              value={draft}
+              spellCheck={false}
+              disabled={installing || folderBusy}
+              placeholder={t('pluginsAddSpecPlaceholder')}
+              onChange={event => { setDraft(event.target.value); setDraftError(null); setAddResult(null) }}
+              onKeyDown={event => { if (event.key === 'Enter' && !installing && !folderBusy) void installSpec(draft) }}
+            />
+            {/* installing busy 用短文案 pluginsAddInstalling（安装中…），避免
+                busyTasks 全宽文案使按钮宽度跳动 ~80-100px（2026-12 UI 修订；
+                busyTasks 仍供 footer/应用态使用）。 */}
+            <Button
+              variant="primary"
+              size="sm"
+              className={css.pluginCtlButton}
+              disabled={installing || folderBusy || draft.trim() === ''}
+              onClick={() => { void installSpec(draft) }}
+            >
+              {installing && !folderBusy ? t('pluginsAddInstalling') : t('pluginsAddInstall')}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className={css.pluginCtlButton}
+              disabled={installing || folderBusy}
+              onClick={() => { void importFolder() }}
+            >
+              {folderBusy ? t('pluginsImporting') : t('pluginsAddFolder')}
+            </Button>
+          </div>
           {draftError !== null ? <span className={css.error} role="alert">{draftError}</span> : null}
           {addResult !== null && draftError === null ? <span className={css.hint}>{addResult}</span> : null}
-        </label>
-        <div className={css.pluginAddActions}>
-          {/* installing 态按钮文案原样继承旧 PluginAddView.tsx:151（合并前基线：
-              busyTasks=「正在执行变更…」作安装中按钮文案，语义偏宽但属既有
-              继承，非本轮新引入——保留不动）。 */}
-          <Button variant="primary" size="sm" disabled={installing} onClick={() => { void installSpec(draft) }}>
-            {installing ? t('busyTasks') : t('pluginsAddInstall')}
-          </Button>
         </div>
 
         <div className={css.pluginSearch}>
@@ -1355,15 +1417,18 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
               spellCheck={false}
               disabled={searching}
               placeholder={t('pluginsAddSearchPlaceholder')}
+              aria-label={t('pluginsAddSearch')}
               onChange={event => { setSearchQuery(event.target.value) }}
               onKeyDown={event => { if (event.key === 'Enter' && !searching) void runSearch() }}
             />
-            <Button variant="outline" size="sm" disabled={searching || searchQuery.trim() === ''} onClick={() => { void runSearch() }}>
+            <Button variant="outline" size="sm" className={css.pluginCtlButton} disabled={searching || searchQuery.trim() === ''} onClick={() => { void runSearch() }}>
               {searching ? t('loading') : t('pluginsAddSearch')}
             </Button>
           </div>
-          <p className={css.dim}>{t('pluginsAddSearchHint')}</p>
           {searchError !== null ? <p className={css.error} role="alert">{searchError}</p> : null}
+          {searchDone !== null && searchDone !== '' && searchDone === searchQuery.trim() && !searching && searchError === null && hits.length === 0
+            ? <p className={css.dim} role="status">{t('pluginsSearchNoMatch')}</p>
+            : null}
           {hits.length > 0
             ? (
               <ul className={css.pluginHits}>
@@ -1376,7 +1441,8 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
                     <Button
                       variant="outline"
                       size="sm"
-                      disabled={installing}
+                      className={css.pluginCtlButton}
+                      disabled={installing || folderBusy}
                       onClick={() => { void installSpec(`${hit.name}@${hit.version}`) }}
                     >
                       {t('pluginsAddInstall')}
@@ -1387,12 +1453,6 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
             )
             : null}
         </div>
-
-        <div className={css.pluginFolder}>
-          <Button variant="ghost" size="sm" disabled={installing} onClick={() => { void importFolder() }}>
-            {t('pluginsAddFolder')}
-          </Button>
-        </div>
       </div>
     )
 
@@ -1400,7 +1460,7 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
    *  the former list tab and add tab stacked in one zone). */
   const localZone = isLocal
     ? ((): ReactNode => {
-      if (localLoading) return <p className={css.dim}>{t('loading')}</p>
+      if (localLoading) return <p className={css.dim}>{t('pluginsLoading')}</p>
       if (localListError !== null) {
         return (
           <div className={css.pluginStack}>
@@ -1412,51 +1472,62 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
         )
       }
       if (localList === null) return null
-      const deps = Object.entries(localList.dependencies)
+      // 与 ssh/gateway 列表对称：保留域包（官方/chamber 受管）不进第三方列表。
+      const deps = Object.entries(localList.dependencies).filter(([name]) => !isDeniedPluginName(name))
       return (
         <div className={css.pluginStack}>
           <p className={css.pluginChamberTitle}>{t('installedTab')}</p>
           {localRemoveError !== null ? <p className={css.error} role="alert">{localRemoveError}</p> : null}
           {deps.length === 0 && localList.unsyncable.length === 0
-            ? <p className={css.dim}>{t('pluginsNoLocalPlugins')}</p>
+            ? (
+              <>
+                <p className={css.pluginEmptyLead}>{t('pluginsNoLocalPlugins')}</p>
+                <p className={css.dim}>{t('installedAddHint')}</p>
+              </>
+            )
             : (
-              <div className={css.pluginRows}>
-                <div className={clsx(css.pluginRow, css.pluginRowLocal, css.pluginRowHead)}>
+              <div className={clsx(css.pluginRows, css.pluginRowsColsLocal)}>
+                <div className={clsx(css.pluginRow, css.pluginRowHead)}>
                   <span className={css.pluginCellName}>{t('pluginsColName')}</span>
                   <span className={css.pluginCellCat}>{t('pluginsColCategory')}</span>
                   <span className={css.pluginCellSpec}>{t('pluginsLocalCol')}</span>
-                  <span className={css.pluginCellCat} />
+                  <span className={css.pluginCellAction}>{t('pluginsColAction')}</span>
                 </div>
-                {deps.map(([name, spec]) => {
-                  const rowCategory = localList.bundles.includes(name) ? 'bundle' : localList.clientLines.includes(name) ? 'client' : 'plain'
-                  const unsync = localList.unsyncable.find(item => item.name === name)
-                  return (
-                    <div key={name} className={clsx(css.pluginRow, css.pluginRowLocal, unsync !== undefined && css.pluginRowGray)}>
-                      <label className={clsx(css.pluginCell, css.pluginCellName)}>
-                        <code className={css.pluginName}>{name}</code>
-                      </label>
-                      <span className={clsx(css.pluginCell, css.pluginCellCat)}>
-                        <span className={clsx(css.pluginKindBadge, rowCategory === 'bundle' && css.pluginKindBundle, rowCategory === 'client' && css.pluginKindClient, rowCategory === 'plain' && css.pluginKindPlain)}>
-                          {t(categoryLabel(rowCategory))}
+                <div className={css.pluginRowsBody} aria-busy={localRemoveBusy || applying}>
+                  {deps.map(([name, spec]) => {
+                    const rowCategory = localList.bundles.includes(name) ? 'bundle' : localList.clientLines.includes(name) ? 'client' : 'plain'
+                    const unsync = localList.unsyncable.find(item => item.name === name)
+                    return (
+                      <div key={name} className={clsx(css.pluginRow, unsync !== undefined && css.pluginRowGray)}>
+                        <label className={clsx(css.pluginCell, css.pluginCellName)}>
+                          <code className={css.pluginName}>{name}</code>
+                        </label>
+                        <span className={clsx(css.pluginCell, css.pluginCellCat)}>
+                          <span className={clsx(css.pluginKindBadge, rowCategory === 'bundle' && css.pluginKindBundle, rowCategory === 'client' && css.pluginKindClient, rowCategory === 'plain' && css.pluginKindPlain)}>
+                            {t(categoryLabel(rowCategory))}
+                          </span>
                         </span>
-                      </span>
-                      <span className={clsx(css.pluginCell, css.pluginCellSpec)}>
-                        <code className={css.pluginSpec} title={unsync?.reason}>{spec}</code>
-                        {unsync !== undefined ? <span className={css.pluginKindUnsync}> · {t('pluginsRowUnsyncable')}</span> : null}
-                      </span>
-                      <button
-                        type="button"
-                        className={css.iconButton}
-                        disabled={localRemoveBusy || applying}
-                        data-tip={t('pluginsRemoveRow')}
-                        aria-label={`${t('pluginsRemoveRow')}: ${name}`}
-                        onClick={() => { setLocalRemoveTarget(name); setLocalRemoveError(null) }}
-                      >
-                        <IconTrashOutline16 />
-                      </button>
-                    </div>
-                  )
-                })}
+                        <span className={clsx(css.pluginCell, css.pluginCellSpec)}>
+                          {/* 与 ssh/gateway 列表对称：file: 掩码芯片化，不直显本地路径。 */}
+                          {spec.startsWith('file:')
+                            ? <span className={clsx(css.pluginKindBadge, css.pluginKindPlain)} title={unsync?.reason}>{t('installedFromMask')}</span>
+                            : <code className={css.pluginSpec} title={unsync?.reason}>{spec}</code>}
+                          {unsync !== undefined && !spec.startsWith('file:') ? <span className={css.pluginKindUnsync}> · {t('pluginsRowUnsyncable')}</span> : null}
+                        </span>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          icon={<IconTrashOutline16 />}
+                          disabled={localRemoveBusy || applying || installing || folderBusy}
+                          aria-label={`${t('pluginsRemoveRow')}: ${name}`}
+                          onClick={() => { setLocalRemoveTarget(name); setLocalRemoveError(null) }}
+                        >
+                          {t('pluginsRemoveRow')}
+                        </Button>
+                      </div>
+                    )
+                  })}
+                </div>
               </div>
             )}
           {addSection}
@@ -1468,7 +1539,7 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
   /** The gateway third-party zone (installed list + per-row remove + add). */
   const gatewayZone = isGateway
     ? ((): ReactNode => {
-      const opsBlocked = removeBusy || restarting || syncing
+      const opsBlocked = removeBusy || restarting || syncing || installing || folderBusy
       const installedRows = installed !== null && installed.ok === true
         ? filterDeniedRows(Object.entries(installed.dependencies).map(([name, spec]) => ({ name, spec }))).allowed
         : []
@@ -1486,49 +1557,51 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
           {installedError !== null
             ? <p className={css.error} role="alert">{installedError}</p>
             : installed === null
-              ? <p className={css.dim}>{t('loading')}</p>
+              ? <p className={css.dim}>{t('pluginsLoading')}</p>
               : installed.ok
                 ? (
                   <>
                     {installedRows.length === 0
                       ? (
                         <>
-                          <p className={css.dim}>{t('installedEmpty')}</p>
+                          <p className={css.pluginEmptyLead}>{t('installedEmpty')}</p>
                           <p className={css.dim}>{t('installedAddHint')}</p>
                         </>
                       )
                       : (
-                        <div className={css.pluginRows}>
-                          <div className={clsx(css.pluginRow, css.pluginRowRemote, css.pluginRowHead)}>
+                        <div className={clsx(css.pluginRows, css.pluginRowsColsRemote)}>
+                          <div className={clsx(css.pluginRow, css.pluginRowHead)}>
                             <span className={css.pluginCellName}>{t('pluginsColName')}</span>
                             <span className={css.pluginCellSpec}>{t('pluginsRemoteCol')}</span>
-                            <span className={css.pluginCellCat} />
+                            <span className={css.pluginCellAction}>{t('pluginsColAction')}</span>
                           </div>
-                          {installedRows.map(row => (
-                            <div key={row.name} className={clsx(css.pluginRow, css.pluginRowRemote)}>
-                              <label className={clsx(css.pluginCell, css.pluginCellName)}>
-                                <code className={css.pluginName}>{row.name}</code>
-                              </label>
-                              <span className={clsx(css.pluginCell, css.pluginCellSpec)}>
-                                {/* file: values are the server-side mask of
-                                    materialized copies — the chip names what
-                                    it is (ssh-modal mirror). */}
-                                {row.spec.startsWith('file:')
-                                  ? <span className={clsx(css.pluginKindBadge, css.pluginKindPlain)}>{t('installedFromMask')}</span>
-                                  : <code className={css.pluginSpec}>{row.spec}</code>}
-                              </span>
-                              <button
-                                type="button"
-                                className={css.iconButton}
-                                disabled={opsBlocked}
-                                data-tip={t('pluginsRemoveRow')}
-                                aria-label={`${t('pluginsRemoveRow')}: ${row.name}`}
-                                onClick={() => { setManageStatus(null); setRemoveTarget(row.name); setRemoveOrigin('row') }}
-                              >
-                                <IconTrashOutline16 />
-                              </button>
-                            </div>
-                          ))}
+                          <div className={css.pluginRowsBody} aria-busy={opsBlocked}>
+                            {installedRows.map(row => (
+                              <div key={row.name} className={css.pluginRow}>
+                                <label className={clsx(css.pluginCell, css.pluginCellName)}>
+                                  <code className={css.pluginName}>{row.name}</code>
+                                </label>
+                                <span className={clsx(css.pluginCell, css.pluginCellSpec)}>
+                                  {/* file: values are the server-side mask of
+                                      materialized copies — the chip names what
+                                      it is (ssh-modal mirror). */}
+                                  {row.spec.startsWith('file:')
+                                    ? <span className={clsx(css.pluginKindBadge, css.pluginKindPlain)} title={t('installedFromMask')}>{t('installedFromMask')}</span>
+                                    : <code className={css.pluginSpec}>{row.spec}</code>}
+                                </span>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  icon={<IconTrashOutline16 />}
+                                  disabled={opsBlocked}
+                                  aria-label={`${t('pluginsRemoveRow')}: ${row.name}`}
+                                  onClick={() => { setManageStatus(null); setRemoveTarget(row.name); setRemoveOrigin('row') }}
+                                >
+                                  {t('pluginsRemoveRow')}
+                                </Button>
+                              </div>
+                            ))}
+                          </div>
                         </div>
                       )}
                   </>
@@ -1614,7 +1687,7 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
     })()
     : null
 
-  // ---- ssh views (byte-preserved from the sync modal) ----
+  // ---- ssh views (sync-modal semantics preserved; 2026-12 UI 修订重排行结构) ----
   function renderSyncView(): ReactNode {
     if (phase === 'loading') {
       return <p className={css.dim}>{t('pluginsLoading')}</p>
@@ -1669,6 +1742,7 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
                   value={query}
                   spellCheck={false}
                   placeholder={t('pluginsSearchPlaceholder')}
+                  aria-label={t('pluginsSearchPlaceholder')}
                   onChange={event => { setQuery(event.target.value) }}
                 />
                 <div className={css.pluginFilterGroup}>
@@ -1677,6 +1751,7 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
                     <button
                       key={c}
                       type="button"
+                      aria-pressed={category === c}
                       className={clsx(css.pluginPill, category === c && css.pluginPillActive)}
                       onClick={() => { setCategory(c) }}
                     >
@@ -1690,6 +1765,7 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
                     <button
                       key={s}
                       type="button"
+                      aria-pressed={status === s}
                       className={clsx(css.pluginPill, status === s && css.pluginPillActive)}
                       onClick={() => { setStatus(s) }}
                     >
@@ -1700,9 +1776,9 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
               </div>
 
               {visibleRows.length === 0
-                ? <p className={css.dim}>{t('pluginsNoMatch')}</p>
+                ? <p className={css.dim} role="status">{t('pluginsNoMatch')}</p>
                 : (
-                  <div className={css.pluginRows}>
+                  <div className={clsx(css.pluginRows, css.pluginRowsColsDiff)}>
                     <div className={clsx(css.pluginRow, css.pluginRowHead)}>
                       <span className={css.pluginCellName}>{t('pluginsColName')}</span>
                       <span className={css.pluginCellCat}>{t('pluginsColCategory')}</span>
@@ -1710,7 +1786,9 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
                       <span className={css.pluginCellSpec}>{t('pluginsLocalCol')}</span>
                       <span className={css.pluginCellSpec}>{t('pluginsRemoteCol')}</span>
                     </div>
-                    {visibleRows.map(row => renderRow(row))}
+                    <div className={css.pluginRowsBody}>
+                      {visibleRows.map(row => renderRow(row))}
+                    </div>
                   </div>
                 )}
             </>
@@ -1752,7 +1830,6 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
         <span className={clsx(css.pluginCell, css.pluginCellSpec)}>
           {isUpdate ? <span className={css.pluginArrow}>→</span> : null}
           <code className={css.pluginSpec}>{row.remoteSpec ?? '—'}</code>
-          {row.kind === 'materialize' ? <span className={css.dim}> · {t('pluginsRowMaterialize')}</span> : null}
         </span>
         {isExtra && isChecked ? <p className={css.pluginRisk}>{t('pluginsRemoveRisk')}</p> : null}
       </div>
@@ -1803,7 +1880,8 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
     )
   }
 
-  /** The ssh installed-plugins list (design 21 §6.6 list tab, byte-preserved:
+  /** The ssh installed-plugins list (design 21 §6.6 list tab, semantics
+   *  preserved from the sync modal:
    *  per-row remove + the「撤销最近变更」toolbar entry). */
   function renderRemoteList(): ReactNode {
     if (phase === 'loading' || phase === 'error') return renderSyncView()
@@ -1811,7 +1889,7 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
     const deps = Object.entries(remoteManifest.dependencies)
       .filter(([name]) => !isDeniedPluginName(name))
     const opBusy = remoteRemoveBusy || undoBusy
-    const opsBlocked = opBusy || applying || seedBusy || restartBusy
+    const opsBlocked = opBusy || applying || seedBusy || restartBusy || installing || folderBusy
     const statusTone = remoteListStatus?.tone
     return (
       <div className={css.pluginStack}>
@@ -1831,41 +1909,48 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
         {profileNotInit
           ? null
           : deps.length === 0
-            ? <p className={css.dim}>{t('installedEmpty')}</p>
+            ? (
+              <>
+                <p className={css.pluginEmptyLead}>{t('installedEmpty')}</p>
+                <p className={css.dim}>{t('installedAddHint')}</p>
+              </>
+            )
             : (
-              <div className={css.pluginRows}>
-                <div className={clsx(css.pluginRow, css.pluginRowRemote, css.pluginRowHead)}>
+              <div className={clsx(css.pluginRows, css.pluginRowsColsRemote)}>
+                <div className={clsx(css.pluginRow, css.pluginRowHead)}>
                   <span className={css.pluginCellName}>{t('pluginsColName')}</span>
                   <span className={css.pluginCellSpec}>{t('pluginsRemoteCol')}</span>
-                  <span className={css.pluginCellCat} />
+                  <span className={css.pluginCellAction}>{t('pluginsColAction')}</span>
                 </div>
-                {deps.map(([name, spec]) => (
-                  <Fragment key={name}>
-                    <div className={clsx(css.pluginRow, css.pluginRowRemote)}>
-                      <label className={clsx(css.pluginCell, css.pluginCellName)}>
-                        <code className={css.pluginName}>{name}</code>
-                      </label>
-                      <span className={clsx(css.pluginCell, css.pluginCellSpec)}>
-                        {spec.startsWith('file:')
-                          ? <span className={clsx(css.pluginKindBadge, css.pluginKindPlain)}>{t('installedFromMask')}</span>
-                          : <code className={css.pluginSpec}>{spec}</code>}
-                      </span>
-                      <button
-                        type="button"
-                        className={css.iconButton}
-                        disabled={opsBlocked}
-                        data-tip={t('pluginsRemoveRow')}
-                        aria-label={`${t('pluginsRemoveRow')}: ${name}`}
-                        onClick={() => { setRemoteRemoveTarget(name) }}
-                      >
-                        <IconTrashOutline16 />
-                      </button>
-                    </div>
-                    {remoteRowErrors[name] !== undefined
-                      ? <p className={css.error} role="alert">{remoteRowErrors[name]}</p>
-                      : null}
-                  </Fragment>
-                ))}
+                <div className={css.pluginRowsBody} aria-busy={opsBlocked}>
+                  {deps.map(([name, spec]) => (
+                    <Fragment key={name}>
+                      <div className={css.pluginRow}>
+                        <label className={clsx(css.pluginCell, css.pluginCellName)}>
+                          <code className={css.pluginName}>{name}</code>
+                        </label>
+                        <span className={clsx(css.pluginCell, css.pluginCellSpec)}>
+                          {spec.startsWith('file:')
+                            ? <span className={clsx(css.pluginKindBadge, css.pluginKindPlain)} title={t('installedFromMask')}>{t('installedFromMask')}</span>
+                            : <code className={css.pluginSpec}>{spec}</code>}
+                        </span>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          icon={<IconTrashOutline16 />}
+                          disabled={opsBlocked}
+                          aria-label={`${t('pluginsRemoveRow')}: ${name}`}
+                          onClick={() => { setRemoteRemoveTarget(name) }}
+                        >
+                          {t('pluginsRemoveRow')}
+                        </Button>
+                      </div>
+                      {remoteRowErrors[name] !== undefined
+                        ? <p className={css.error} role="alert">{remoteRowErrors[name]}</p>
+                        : null}
+                    </Fragment>
+                  ))}
+                </div>
               </div>
             )}
       </div>
@@ -1928,7 +2013,7 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
       return (
         <>
           <Button variant="outline" onClick={close}>{t('cancel')}</Button>
-          <Button variant="primary" disabled={changeCount === 0 || seedBusy || restartBusy || undoBusy || remoteRemoveBusy} onClick={onApplyClick}>
+          <Button variant="primary" disabled={changeCount === 0 || seedBusy || restartBusy || undoBusy || remoteRemoveBusy || installing || folderBusy} onClick={onApplyClick}>
             {t('pluginsApply')} {changeCount > 0 ? `${changeCount}` : ''}
           </Button>
         </>
@@ -1938,12 +2023,17 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
     if (viewPhase === 'loading') return undefined
     return (
       <>
-        <Button variant="ghost" icon={<IconRefreshOutline16 />} onClick={() => { setReloadNonce(n => n + 1) }}>
+        <Button
+          variant="ghost"
+          icon={<IconRefreshOutline16 />}
+          disabled={reloading || installing || folderBusy || restarting || syncing || removeBusy}
+          onClick={() => { setReloadNonce(n => n + 1) }}
+        >
           {viewPhase === 'error' ? t('pluginsRetry') : t('pluginsRefresh')}
         </Button>
         {isGateway
           ? (
-            <Button variant="outline" disabled={restarting || syncing || removeBusy} onClick={() => { void restartManagedDsh() }}>
+            <Button variant="outline" disabled={restarting || syncing || removeBusy || installing || folderBusy} onClick={() => { void restartManagedDsh() }}>
               {restarting ? t('restartManagedDshBusy') : t('restartApplyInPanel')}
             </Button>
           )
@@ -1974,7 +2064,7 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
               role="status"
             >
               <strong>{diagnosticBanner.title}</strong>
-              {diagnosticBanner.detail !== null ? <span>：{diagnosticBanner.detail}</span> : null}
+              {diagnosticBanner.detail !== null ? <span>{t('partialSep')}{diagnosticBanner.detail}</span> : null}
             </p>
           )
           : null}
@@ -1986,18 +2076,25 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
             ? <p className={css.error} role="alert">{restartNote.text}</p>
             : <p className={css.hint} role="status">{restartNote.text}</p>
           : null}
+        {/* Loader 读失败横幅（首载失败或 reload 失败保留旧帧时）：gateway
+            任何非 loading 相位都显示；http 直连仅 reload 失败（首载错误已在
+            httpZone 内渲染，避免重复）。 */}
+        {isGateway && viewError !== null && viewPhase !== 'loading'
+          ? <p className={css.error} role="alert">{viewError}</p>
+          : isHttp && viewError !== null && viewPhase === 'ready'
+            ? <p className={css.error} role="alert">{viewError}</p>
+            : null}
 
         <div className={css.pluginManageSections}>
-          {chamberZone}
+          {/* 恢复面置顶：实例停机时打开对话框的主目标是恢复（UX 评审 S2）。 */}
+          {recoveryZone}
 
-          {!isHttp ? <p className={css.pluginScopeNote}>{t('pluginsScopeNote')}</p> : null}
+          {chamberZone}
 
           {isSsh ? sshZone : null}
           {isLocal ? localZone : null}
           {isGateway ? gatewayZone : null}
           {isHttp ? httpZone : null}
-
-          {recoveryZone}
         </div>
       </Modal>
 
@@ -2006,12 +2103,12 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
         onClose={() => { setConfirmRemove(false) }}
         title={t('pluginsApplyTitle')}
         closeLabel={t('close')}
-        description={t('pluginsRemoveRisk')}
+        description={removeRows.length === 1 ? t('pluginsRemoveRisk') : t('pluginsRemoveRiskN').replace('{n}', String(removeRows.length))}
         className={css.deleteDialog}
         footer={(
           <>
             <Button variant="outline" autoFocus onClick={() => { setConfirmRemove(false) }}>{t('cancel')}</Button>
-            <Button variant="outline" className={css.deleteConfirm} onClick={onRemoveConfirm}>{t('deleteConfirm')}</Button>
+            <Button variant="outline" className={css.deleteConfirm} onClick={onRemoveConfirm}>{t('pluginsConfirmRemove')}</Button>
           </>
         )}
       />
@@ -2047,7 +2144,7 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
           <>
             <Button variant="outline" autoFocus disabled={localRemoveBusy} onClick={() => { setLocalRemoveTarget(null) }}>{t('cancel')}</Button>
             <Button variant="outline" className={css.deleteConfirm} disabled={localRemoveBusy} onClick={() => { void confirmLocalRemove() }}>
-              {localRemoveBusy ? t('deleting') : t('deleteConfirm')}
+              {localRemoveBusy ? t('pluginsRemoving') : t('pluginsConfirmRemove')}
             </Button>
           </>
         )}
@@ -2069,7 +2166,7 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
           <>
             <Button variant="outline" autoFocus disabled={remoteRemoveBusy} onClick={() => { setRemoteRemoveTarget(null) }}>{t('cancel')}</Button>
             <Button variant="outline" className={css.deleteConfirm} disabled={remoteRemoveBusy} onClick={() => { void confirmRemoteRemove() }}>
-              {remoteRemoveBusy ? t('deleting') : t('deleteConfirm')}
+              {remoteRemoveBusy ? t('pluginsRemoving') : t('pluginsConfirmRemove')}
             </Button>
           </>
         )}
@@ -2103,7 +2200,7 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
                   disabled={removeBusy}
                   onClick={() => { if (removeTarget !== null && removeOrigin !== null) void applyRemove(removeTarget, removeOrigin) }}
                 >
-                  {removeBusy ? t('deleting') : t('deleteConfirm')}
+                  {removeBusy ? t('pluginsRemoving') : t('pluginsConfirmRemove')}
                 </Button>
               </>
             )}

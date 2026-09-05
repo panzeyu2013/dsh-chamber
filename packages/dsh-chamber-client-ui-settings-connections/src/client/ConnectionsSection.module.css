@@ -461,7 +461,8 @@
   color: var(--dsw-alias-label-secondary);
 }
 
-/* Diagnostic detail block inside the plugin dialog (above the tabs). */
+/* Diagnostic detail block inside the plugin dialog (above the manage sections;
+   2026-12：对话框合并后已无 tab 结构)。 */
 .pluginDiagnosticDetail {
   margin: 0 0 10px;
 }
@@ -788,7 +789,7 @@
   overflow-wrap: anywhere;
 }
 
-/* ---- plugin management dialog (todo 13 §5) ---- */
+/* ---- plugin management dialog (design 21 §6.6 / plan 24 B1) ---- */
 
 .pluginStack {
   display: flex;
@@ -836,14 +837,16 @@
   color: var(--dsw-alias-label-secondary);
 }
 
-/* 范围注（UX 重构 P1）：chamber 区与第三方区之间的成段引导正文——同标题下
-   hint 用 label-secondary（AA），成段文本加行高。 */
-.pluginScopeNote {
+/* 空态首句（数据主体层）：secondary 可读；引导次句保持 dim 弱化（2026-12
+   视觉评审：整段 dim 双行几乎不可读）。 */
+.pluginEmptyLead {
   margin: 0;
   font-size: 12px;
-  line-height: 1.5;
   color: var(--dsw-alias-label-secondary);
 }
+
+/* 范围注已移除（2026-12 UI 修订）：chamber 区与第三方区的区分由各自表头
+   与行内操作承担，不再渲染成段引导正文。 */
 
 .pluginChamberRow {
   display: flex;
@@ -928,52 +931,81 @@
   color: var(--dsw-alias-bg-layer-3);
 }
 
+/* 表外层网格：默认 5 列 = 对账表；local/remote 容器由 pluginRowsCols* 覆盖。
+   表头（pluginRowHead）与数据滚动体（pluginRowsBody）共享同一组轨道——
+   表头常驻、数据行在滚动体内 subgrid，任何内容宽度下列都对齐。 */
 .pluginRows {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+  display: grid;
+  grid-template-columns: minmax(180px, 1.4fr) auto auto minmax(64px, 1fr) minmax(64px, 1fr);
+  column-gap: 10px;
+  row-gap: 6px;
+}
+
+/* 本地列表：包名 / 类别 / 本地 spec / 移除操作。 */
+.pluginRowsColsLocal {
+  grid-template-columns: minmax(180px, 1.4fr) auto minmax(0, 1fr) auto;
+}
+
+/* 远端已安装列表（ssh / gateway）：包名 / spec 或掩码 chip / 移除操作。 */
+.pluginRowsColsRemote {
+  grid-template-columns: minmax(180px, 1.4fr) minmax(0, 1fr) auto;
+}
+
+/* 对账差异表：包名 / 类别 / 状态 / 本地 / 远端。 */
+.pluginRowsColsDiff {
+  grid-template-columns: minmax(180px, 1.4fr) auto auto minmax(64px, 1fr) minmax(64px, 1fr);
+}
+
+/* 数据行滚动体：subgrid 链让数据行与上方表头共享外层轨道（表头不随内容
+   滚走）；46vh 上限与滚动条变量随之从 .pluginRows 移到这里。 */
+.pluginRowsBody {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: subgrid;
+  row-gap: 6px;
   max-height: min(46vh, 420px);
   overflow: auto;
   --dsh-scrollbar-thumb: var(--dsw-alias-scrollbar-bg-l2);
   --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2);
 }
 
+/* 非行子项（行级失败提示等）占满整行；左右 11px 内距与行内容
+   （1px 边框 + 10px padding）起点/终点对齐。 */
+.pluginRowsBody > :not(.pluginRow) {
+  grid-column: 1 / -1;
+  padding: 0 11px;
+}
+
+/* Rows span the container's full width and inherit the container's column
+   tracks (subgrid): every row + the header share one set of columns. */
 .pluginRow {
+  grid-column: 1 / -1;
   display: grid;
-  grid-template-columns: minmax(180px, 1.4fr) auto auto minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-columns: subgrid;
   align-items: center;
-  gap: 10px;
   padding: 8px 10px;
   border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 10px;
   background: var(--dsw-alias-bg-layer-3);
   position: relative;
-  flex-wrap: wrap;
 }
 
-/* Local-list rows: name / category / spec / remove-action (no diff columns). */
-.pluginRowLocal {
-  grid-template-columns: minmax(180px, 1.4fr) auto minmax(0, 1fr) auto;
-}
-
-/* Remote installed-list rows (design 21 §6.6): name / spec-or-masked-chip /
-   remove-action — the remote projection classifies no category, so the
-   category column is absent (three columns, unlike the four-column local
-   list). */
-.pluginRowRemote {
-  grid-template-columns: minmax(180px, 1.4fr) minmax(0, 1fr) auto;
-}
-
+/* 表头行补透明边框，使其水平盒度量与数据行一致（数据行 = 1px 边框 +
+   10px padding，内容起点 11px；表头无边框时内容起点仅 10px）——内容起点
+   对齐，避免表头列相对数据列 ≤1px 平移。轨道由构造共享，不涉及锚定差异。 */
 .pluginRowHead {
-  border: 0;
+  border: 1px solid transparent;
   background: none;
   padding-top: 4px;
-  font-size: 11px;
-  color: var(--dsw-alias-label-dimmed);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--dsw-alias-label-primary);
 }
 
+/* 不可同步/灰色行：0.55 整行降权过重（叠加 dimmed 后缀几乎不可读），
+   提到 0.7 —— 仍弱于普通行，但内容可辨。 */
 .pluginRowGray {
-  opacity: 0.55;
+  opacity: 0.7;
 }
 
 .pluginCell {
@@ -993,6 +1025,13 @@
 
 .pluginCellKind {
   flex: none;
+}
+
+/* 操作列表头：轨道宽由行内按钮（同宽）决定，表头文字居中于按钮上方，
+   避免左对齐错位 ~14-23px（2026-12 视觉评审 G4②）。 */
+.pluginCellAction {
+  flex: none;
+  text-align: center;
 }
 
 .pluginCellSpec {
@@ -1022,8 +1061,10 @@
   color: var(--dsw-alias-label-secondary);
 }
 
+/* 不可同步标注：dimmed 叠加灰行降权后不可读，提到 label-secondary
+   （与 spec 同层、靠文字本身传达）。 */
 .pluginKindUnsync {
-  color: var(--dsw-alias-label-dimmed);
+  color: var(--dsw-alias-label-secondary);
 }
 
 .pluginKindBadge {
@@ -1060,9 +1101,10 @@
   margin: 0;
 }
 
+/* 单 grid 化后行内无纵向 gap：风险提示与上一行内容保持 6px 间距。 */
 .pluginRisk {
   grid-column: 1 / -1;
-  margin: 0;
+  margin: 6px 0 0;
   padding: 4px 6px;
   border-radius: 6px;
   background: var(--dsw-alias-interactive-bg-hover-danger);
@@ -1102,9 +1144,9 @@
   font-size: 12px;
 }
 
-/* Phase 5 ③ gateway 管理区（已安装 / 变更记录）：dialogContent 内段落一律
-   margin:0、pluginStack 的间距只作用于其直接子项 —— 跨区堆叠需要显式外边距
-   把管理区与上方 chamber/差异区隔开（http+dsh 直连不渲染该区，无副作用）。 */
+/* 管理分区共用容器（local/ssh/gateway/http 各 zone 均渲染在内；「变更记录」
+   区已随 D4-A 删除）：dialogContent 内段落一律 margin:0、pluginStack 间距只
+   作用于直接子项 —— 跨区堆叠用显式外边距/间距与上方 chamber 区分隔。 */
 .pluginManageSections {
   margin-top: 14px;
   display: flex;
@@ -1122,30 +1164,75 @@
   cursor: pointer;
 }
 
-/* ---- plugin add view (todo 13 §5.8) ---- */
+/* ---- plugin add view (design 21 §6.6 add zone) ----
+   2026-12 UI 修订：spec 输入缩短并与安装同排；「从文件夹导入」outline 化并
+   上移同排（无分隔线）；添加区输入与 sm 按钮统一定高（--chamber-ctl-h）。 */
 
 .pluginAdd {
   display: flex;
   flex-direction: column;
   gap: 14px;
+  --chamber-ctl-h: 28px;
 }
 
-.pluginAddActions {
+.pluginAddSpec {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* 安装排（spec 输入 + 安装 + 从文件夹导入）与搜索排共用的行容器。 */
+.pluginAddRow,
+.pluginSearchRow {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* spec 输入缩短为固定宽度，不再占满整行。 */
+.pluginAddSpecInput {
+  flex: none;
+  width: 260px;
+  max-width: 100%;
+}
+
+.pluginSearchRow .input {
+  flex: 1 1 180px;
+  min-width: 150px;
+}
+
+/* 按钮以 className 显式限高（primitives sm 默认高度不齐）；输入框改为
+   padding-block: 0 + 显式 height，两条控制排完全等高。 */
+.pluginCtlButton {
+  box-sizing: border-box;
+  height: var(--chamber-ctl-h);
+}
+
+.pluginAdd .input {
+  box-sizing: border-box;
+  height: var(--chamber-ctl-h);
+  padding-block: 0;
+}
+
+/* 键盘焦点可见（2026-12 UI 修订）：添加区输入框补 focus-visible ring
+   （iconButton 同款 2px brand 词汇；.input:focus 只有边框变色，键盘用户
+   不可辨）。 */
+.pluginAdd .input:focus-visible {
+  outline: 2px solid var(--dsw-alias-brand-primary);
+  outline-offset: -1px;
+}
+
+/* 对账过滤输入（.pluginToolbar 内）同款键盘焦点环（终审 cb7b1555 建议②）。 */
+.pluginSearchInput:focus-visible {
+  outline: 2px solid var(--dsw-alias-brand-primary);
+  outline-offset: -1px;
 }
 
 .pluginSearch {
   display: flex;
   flex-direction: column;
   gap: 6px;
-}
-
-.pluginSearchRow {
-  display: flex;
-  align-items: center;
-  gap: 8px;
 }
 
 .pluginHits {
@@ -1172,45 +1259,62 @@
 .pluginHitVersion {
   flex: none;
   font-size: 11px;
-  color: var(--dsw-alias-label-dimmed);
+  color: var(--dsw-alias-label-tertiary);
 }
 
-.pluginFolder {
-  padding-top: 8px;
-  border-top: 1px solid var(--dsw-alias-border-l2);
+/* file: 掩码 chip 防越列：芯片不超 spec 轨道宽，超宽时省略号 + title 兜底
+   （en「Local copy」/zh「本地副本」常态不触发）。 */
+.pluginCellSpec > .pluginKindBadge {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* ---- unified plugin dialog: chamber built-in table (plan 24 B1.5) ----
-   Compact grid: package | local badge | remote/gateway badge | version.
+   Compact shared grid: package | local badge | remote/gateway badge | version.
    Badges reuse the .badge pill family (chamberBadgeClass maps the tone:
    ok = .badgeOk, warn = .badgeWarn, danger = .badgeBad, muted = .badge). */
 
+/* chamber 表（单共享 grid，display:contents 行）：版本轨 ≥144px 且 name 轨
+   降至 136px——en「Failed to load/Not injected」徽标组合不把表挤出容器，
+   漂移态「vX · gateway vY + 版本漂移」仍在段边界折行（数字内断字是底线）。 */
 .chamberTable {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+  display: grid;
+  grid-template-columns: minmax(136px, 1fr) auto auto minmax(144px, 1fr);
+  column-gap: 10px;
+  row-gap: 6px;
+  align-items: center;
 }
 
+/* 行容器 display:contents —— 表头与所有数据行直接落入外层共享轨道，任何
+   badge/版本内容宽度下列都严格对齐（各列一次定宽，不再逐行自算）。 */
 .chamberTableRow {
-  display: grid;
-  grid-template-columns: minmax(180px, 1.4fr) auto auto minmax(0, 1fr);
-  align-items: center;
-  gap: 10px;
-  padding: 3px 6px;
-  font-size: 12px;
+  display: contents;
 }
 
 .chamberTableHead {
-  font-size: 11px;
-  color: var(--dsw-alias-label-dimmed);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--dsw-alias-label-primary);
 }
 
 .chamberCell {
   display: inline-flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
   min-width: 0;
+  overflow-wrap: anywhere;
   font-size: 12px;
+}
+
+/* chamber 表内 .dim（版本串/占位/未同步旁注）是状态数据主体：颜色提到
+   label-secondary（tertiary ≈3.7:1 偏淡；同 .pluginChamberTitle .dim 先例）。
+   裸文本版本格同时允许收缩换行。 */
+.chamberTable .dim {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--dsw-alias-label-secondary);
 }
 
 /* ---- gateway recovery banner (plan 24 B1.6 / design 21 §6.8 r1) ----
