@@ -289,7 +289,9 @@
    the ask-user state is the plan's motivating case). Colors stay on the dsh
    state tokens: question/plan-review = business (info blue), approval = warn
    (amber) — the 06 §4.3 "all-blue" unification is intentionally revised for
-   pending rows. */
+   pending rows. The todo strip rows reuse these very slot/mark classes
+   (SessionTodoArea TodoRow), so the pinned strip's dots/badges paint in the
+   same trailing column and band as the list rows' (2026-12 style fix). */
 .sessionStateSlot {
   flex: none;
   display: inline-flex;
@@ -1147,22 +1149,36 @@
    strip). Pure projection derivation: the whole area renders only while at
    least one attention entry exists (zero footprint), capped at 3 rows + a
    「还有 N 项」toggle. Never inside the scroll container, so long lists can
-   never push it out of view; never mutates shared fold/view prefs. */
+   never push it out of view; never mutates shared fold/view prefs.
+   POINTER (2026-12): the strip is one attention surface — the container
+   carries the pointer (like .chamberList's pointer-everywhere discipline) so
+   the caption band and the row margins never flip the cursor to the arrow
+   while scanning the strip. */
 .todoArea {
   flex: none;
   box-sizing: border-box;
   min-width: 0;
   padding: 2px 8px 6px 0;
+  cursor: pointer;
 }
 
 .todoHeader {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 2px 8px 2px 8px;
+  /* 28px left: the caption shares the strip's text column (40px — where the
+     row titles and the source labels below start). 4px right (not 8): the
+     count pill is pinned by .todoTitle's flex:1 and ends on the same right
+     column as the rows' trailing state slots and the workspace count pills. */
+  padding: 2px 4px 2px 28px;
 }
 
 .todoTitle {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 12px;
   line-height: 16px;
   font-weight: 600;
@@ -1183,19 +1199,39 @@
    the session list to zero or bury the toggle (the toggle itself lives
    OUTSIDE this box, pinned below it). Max shows ~8 rows (26px pitch) before
    the internal scroll takes over. The box carries the pointer everywhere
-   (gaps/rows are all part of the same attention surface — list discipline). */
+   (gaps/rows are all part of the same attention surface — list discipline).
+   The scrollport bleeds 8px right (margin-right -8 + padding-right 8 —
+   exactly .chamberList's pattern): the strip's OWN scrollbar band, drawn
+   when the expanded backlog overflows, stays in that same right-hand gutter
+   (right of the rows' right edge), so the trailing state slots keep their
+   session-row column even while the backlog scrolls — assuming the shell's
+   thin custom scrollbars (the list's reservation makes the same
+   assumption; a Windows always-show-scrollbars pass is part of the
+   packaged-state gate). */
 .todoRows {
   display: flex;
   flex-direction: column;
   max-height: 208px;
   overflow-y: auto;
   cursor: pointer;
+  margin-right: -8px;
+  padding-right: 8px;
 }
 
 /* FIXED height (24px, border-box) — same layout-shift discipline as
    .sessionRow: hover must never change the row height under the moving
    pointer. The whole row is a button; the click is the authoritative open
-   (jump to the session), identical to a session-row click. */
+   (jump to the session), identical to a session-row click.
+   Horizontal grid (2026-12 style fix, user feedback): row content runs
+   6px/4px (left/right) so the strip's columns line up with the list below
+   it — the leading slot sits in the source-header glyph column (the same
+   6px inset as .sourceHeader) and the trailing slot ends 4px short of the
+   row's right edge, exactly like a session row's own trailing slot (rows
+   end at the same right edge as session rows; the 8px scrollbar gutters of
+   .chamberList and .todoRows sit to the right of both, never over the
+   slots). Unlike session rows there is no hover action swap: the trailing
+   state slot stays visible on row hover. Ink follows the session rows:
+   secondary at rest, primary on hover. */
 .todoRow {
   display: flex;
   align-items: center;
@@ -1204,11 +1240,11 @@
   box-sizing: border-box;
   height: 24px;
   margin: 1px 0;
-  padding: 3px 8px;
+  padding: 3px 4px 3px 6px;
   border: 0;
   border-radius: 8px;
   background: transparent;
-  color: var(--dsw-alias-label-primary);
+  color: var(--dsw-alias-label-secondary);
   font: inherit;
   text-align: left;
   cursor: pointer;
@@ -1216,16 +1252,26 @@
 
 .todoRow:hover {
   background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
 }
 
-/* Leading 14px slot mirrors the session rows' pending-interaction badge
-   geometry; the completed dot (6px) centers inside it. */
-.todoKindSlot {
+.todoRow:focus-visible {
+  outline: 1px solid var(--dsw-alias-brand-primary);
+  outline-offset: -1px;
+}
+
+/* Leading identity slot (the SOURCE dot when multiple sources exist): 16px
+   wide to occupy the same glyph column as the source headers' fold/monitor
+   buttons (the strip is a top-level sibling of the source sections). The
+   slot always renders — empty without multiple sources, so the title column
+   never shifts. Decorative (aria-hidden): the row label/tooltip carry the
+   state · source · workspace context. */
+.todoLeadSlot {
   flex: none;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 14px;
+  width: 16px;
   height: 14px;
 }
 
@@ -1241,7 +1287,9 @@
 
 /* Source identity dot shown only with multiple sources (accent hue via
    inline style for remotes); the local source falls back to the default ink
-   — the source-header identity discipline. */
+   — the source-header identity discipline. Rendered inside the leading
+   .todoLeadSlot (never trailing: state lives at the row END, identity at the
+   head — session-row order, 2026-12 style fix). */
 .todoSourceDot {
   flex: none;
   width: 6px;
@@ -1255,6 +1303,9 @@
   opacity: 0.65;
 }
 
+/* 「还有 N 项」/「收起」toggle: a caption row under the entries — its text
+   shares the strip's text column (28px left = 40px, the row-title column),
+   and it carries the same brand focus ring as .todoRow (both are buttons). */
 .todoMore {
   display: flex;
   align-items: center;
@@ -1262,7 +1313,7 @@
   box-sizing: border-box;
   height: 22px;
   margin: 1px 0;
-  padding: 2px 8px;
+  padding: 2px 4px 2px 28px;
   border: 0;
   border-radius: 8px;
   background: transparent;
@@ -1277,4 +1328,9 @@
 .todoMore:hover {
   background: var(--dsw-alias-interactive-bg-hover);
   color: var(--dsw-alias-label-primary);
+}
+
+.todoMore:focus-visible {
+  outline: 1px solid var(--dsw-alias-brand-primary);
+  outline-offset: -1px;
 }
