@@ -8,6 +8,30 @@
 
 ## 未完成 / 部分完成（剩余验收）
 
+> **2026-09 dsh 基线对齐记录（0.1.3-alpha.1，临时驻留；发布收口时并入 CHANGELOG 后移除）**：
+> 源码线 pin → dsh-v0.1.3-alpha.1（d347e7039，`update-vendor.mjs` 原子升级，tag 与远程一致；
+> 锁文件重生成后 frozen 稳定；vendor 链接 267（较 rc.1 增 6 个上游包目录：client/file-upload、
+> session/session-format、session/session-format-catalog、session/session-format-v0-to-v1、
+> session/session-format-v1-to-v2、util/http-proxy）。上游相对 rc.1 是**实质内容版本**
+> （328 commits）：fork 副本重放——connection 采纳流式 body 上传路由与 fixture 的
+> session-format v2 / live assistant-stream 重构（chunk-rows 面移除；tsconfig 补
+> `dsh-llm/assistant-stream` 别名；`src/client/index.ts` 上游注释净改动未回抄）、
+> api-gateway 采纳 journal-stream 无游标 notification 帧（vendor dsh-api-session-controller
+> 在 NEW 以 5 参消费，重放为强制项）、web 仅版本行；三副本版本标记 → 0.1.3-alpha.1。
+> chamber 适配：激活探针 `commands/execute` 载荷按 0.1.3 client 投影改名
+> `images` → `attachments`（typert 生成 wire key 未提交，需实机验证）；
+> allow-builds 增 `fs-ext`（0.1.3 session-persistence-jsonl 写租约 flock 引入，
+> 根树否认、运行时/打包树放行）。**运行时线未动**：`@deepseek-ai/dsh@0.1.3-alpha.1`
+> 未发布 npm → bundle 锁文件 / bundle-dsh 兜底 / release.yml env / install-gateway.sh 锚
+> 仍为 0.1.2-rc.1；release-preflight `FORK_VERSION` 默认随 fork 标记推进到 0.1.3-alpha.1
+> （双线门在运行时线跟随前会诚实失败，发布须等 npm publish）。
+> 验证：ensure --check、根/各包 typecheck、全套测试套件、build:renderer（含
+> gen-typert-remotes host lib 补 `ESNext.Disposable`——0.1.3 file-upload 的
+> `PromptFileBinding extends Disposable`）、verify:i18n、test:release-workflow 均绿；
+> 控制面『spawnDsh: abort during the post-TCP session/list wait…』为 rc.1 基线既有
+> 失败（unchanged main worktree 复现），与本次升级无关。实机探针验证（attachments
+> wire key）待 npm 发布、运行时线跟随后执行。
+
 - **dsh 运行时版本管理（design 18 §3.6/§9，M5–M7 已落地）**：剩余——macOS 打包态
   `.app` 内共享 dsh-runtime/内嵌 pnpm/koffi 与完整激活-故障回退-恢复链的实机；Linux
   server 同款端到端；Gateway 重启窗口的前端重连与 connections 的 SSH

@@ -78,7 +78,7 @@ test('real probe runner executes the closed read-only set with bounded RPCs', as
       args: {
         agentId: '__dsh_chamber_missing_session_probe__',
         line: 'dsh-chamber-activation-probe',
-        images: [],
+        attachments: [],
       },
     })
     assert.deepEqual(fx.calls.find(entry => entry.method === 'session/canOpenWorkspacePath')?.payload, { args: {} })

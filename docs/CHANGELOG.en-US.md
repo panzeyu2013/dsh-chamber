@@ -10,6 +10,12 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 > 中文版: [CHANGELOG.md](../CHANGELOG.md)
 
+## [Unreleased]
+
+### Changed
+
+- **dsh source line upgraded to 0.1.3-alpha.1** — the build-time vendor source (submodule pin) advances to dsh-v0.1.3-alpha.1 (d347e7039): upstream is a real content release relative to rc.1 (328 commits, 6 new packages), and the fork copies replay accordingly — connection adopts the upstream streaming-body upload routes and the fixture's session-format v2 / live assistant-stream rework (chunk-rows surface removed, the tsconfigs gain a `dsh-llm/assistant-stream` alias), api-gateway adopts the cursorless `notification` frames on journal-stream, web is version-only; the activation probe `commands/execute` payload follows the 0.1.3 wire rename `images` → `attachments`. **Runtime line unchanged**: `@deepseek-ai/dsh@0.1.3-alpha.1` is not yet published to npm, so the bundled-runtime anchors stay at 0.1.2-rc.1 (the dual-line gate closes when the npm publish lands).
+
 ## [0.2.3] - 2026-09-07
 
 ### Fixed

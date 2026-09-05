@@ -11,7 +11,8 @@ test('rc.8 dsh-api-remotes assembly and renderer generation stay in lockstep', (
   const packages = remotePackagesFromAssembly(source)
   // dsh-v0.1.2-alpha.1 assembly: api-remotes' client now value-imports the
   // settings/session/workspace controllers' /remote faces (P2-10); the old
-  // dsh-file-reference row is gone from the assembly.
+  // dsh-file-reference row is gone from the assembly. dsh-v0.1.3-alpha.1:
+  // the generic file-upload remote row joins the assembly.
   assert.deepEqual(packages, [
     '@deepseek-ai/dsh-agent-presets',
     '@deepseek-ai/dsh-commands',
@@ -21,6 +22,7 @@ test('rc.8 dsh-api-remotes assembly and renderer generation stay in lockstep', (
     '@deepseek-ai/dsh-cordis-host-runner',
     '@deepseek-ai/dsh-host-plugin-inventory',
     '@deepseek-ai/dsh-message-feedback',
+    '@deepseek-ai/dsh-client-file-upload',
     '@deepseek-ai/dsh-session-reference',
     '@deepseek-ai/dsh-subagent',
     '@deepseek-ai/dsh-api-session-controller',

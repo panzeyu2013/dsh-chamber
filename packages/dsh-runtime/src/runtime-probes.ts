@@ -21,8 +21,14 @@
  * fallback fires the optional `warn` sink when the caller wired one (the
  * desktop control-plane's own identity probes warn on the same condition via
  * their logger — see control-plane dsh-client probeHostIdentity).
- * `commands/execute` keeps the `{agentId, line, images}`
- * wire and its `session/not-found` lookup miss (audit W11).
+ *
+ * dsh-v0.1.3-alpha.1 delta (source line, 2026-09): the `commands/execute`
+ * third wire argument was renamed `images` → `attachments` (`readonly
+ * CommandSubmitAttachment[]` in the session-controller client projection;
+ * host execute param `submittedAttachments`) — the probe payload below follows
+ * the rename; upstream's generated typert wire key is not committed, so a
+ * live 0.1.3 install re-verification is still owed before the runtime line
+ * follows (see STATUS dsh 基线对齐记录).
  */
 import { constants } from 'node:fs'
 import { open } from 'node:fs/promises'
@@ -421,14 +427,16 @@ export async function runRuntimeActivationProbes(opts: RuntimeProbeOptions): Pro
     // resume it before CommandRuntime sees even a syntax-miss line. A fixed
     // nonexistent identity must fail at the read-only persistence lookup with
     // session/not-found, before Agent publication or command/run appends.
-    // dsh-v0.1.2-alpha.1 keeps execute(agent: Agent, line, images, signal): the
-    // Agent parameter is a typert lookup wired as `agentId` (session-controller
-    // resolveAgent) whose cold miss still surfaces session/not-found.
+    // dsh-v0.1.3-alpha.1 projection execute(agentId, line, attachments, signal):
+    // the Agent parameter is a typert lookup wired as `agentId`
+    // (session-controller resolveAgent) whose cold miss still surfaces
+    // session/not-found; the third argument was renamed images -> attachments
+    // (CommandSubmitAttachment[]) on the 0.1.3 wire.
     await call('commands/execute', {
       args: {
         agentId: COMMAND_MISSING_SESSION,
         line: COMMAND_SYNTAX_MISS,
-        images: [],
+        attachments: [],
       },
     })
     commands = { name: 'commands/execute', ok: false, error: 'missing-session command probe unexpectedly executed' }

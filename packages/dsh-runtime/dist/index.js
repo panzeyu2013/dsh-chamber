@@ -3432,6 +3432,7 @@ import { join as join6 } from "node:path";
 var ALLOW_BUILDS = [
   "node-pty",
   "koffi",
+  "fs-ext",
   "protobufjs",
   "@google/genai",
   "@deepseek-ai/dsh-subprocess-local"
@@ -6853,7 +6854,7 @@ async function runRuntimeActivationProbes(opts) {
       args: {
         agentId: COMMAND_MISSING_SESSION,
         line: COMMAND_SYNTAX_MISS,
-        images: []
+        attachments: []
       }
     });
     commands = { name: "commands/execute", ok: false, error: "missing-session command probe unexpectedly executed" };

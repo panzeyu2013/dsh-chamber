@@ -37,6 +37,11 @@ allowBuilds:
   # 不需要其原生二进制。
   "node-pty": false
   "koffi": false
+  # fs-ext（dsh 0.1.3 线 session-persistence-jsonl 写租约 flock 引入）：同为
+  # 原生模块——chamber 树不构建/不执行（运行时由 bundle:dsh 独立安装树自带，
+  # 见 dsh-runtime/src/allow-builds.mjs 的 ALLOW_BUILDS 清单）。显式否认，
+  # 避免 pnpm 报 ignored builds。
+  "fs-ext": false
   "protobufjs": false
   "@google/genai": false
 

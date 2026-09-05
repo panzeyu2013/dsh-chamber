@@ -622,8 +622,9 @@ round（plan 24）再修订——D6-A 用户拍板）**：
   **不做按 locale 的静默默认切换**——语言≠地理位置，且静默换 registry 等于静默换
   信任锚。默认 npmjs；用户切换后 metadata 与 integrity 一并来自所选源，信任边界
   显式可见。
-- **allowBuilds（R3-2 F6/F7，P1）**：白名单（node-pty/koffi/protobufjs/
-  @google/genai/@deepseek-ai/dsh-subprocess-local）**单一来源常量**（bundle-dsh.mjs
+- **allowBuilds（R3-2 F6/F7，P1）**：白名单（node-pty/koffi/fs-ext/protobufjs/
+  @google/genai/@deepseek-ai/dsh-subprocess-local；fs-ext 为 0.1.3 线
+  session-persistence-jsonl 写租约 flock 引入）**单一来源常量**（bundle-dsh.mjs
   与运行期安装器编译产物同源，R3-5 P2-3）；运行期 work 目录只写 `true`、**绝不写
   `false`**（显式 false 实测静默跳过脚本，破坏 fail-safe）；**work 目录必须先写
   pnpm-workspace.yaml 再跑 pnpm**（完全缺失 allowBuilds 配置实测硬失败），且
@@ -634,7 +635,7 @@ round（plan 24）再修订——D6-A 用户拍板）**：
   lockfile（`packages/desktop/vendor/dsh/pnpm-lock.yaml`）同样不记录
   `hasInstallScript` 字段——因此**无法从 lockfile 推导 build-script 覆盖**，白名单
   覆盖以「单一来源常量 + 漂移钉死测试 + 白名单 miss 硬失败」三层兜底（allow-builds
-  测试钉死 5 项；新增 build-script 依赖的检测由真实安装的 ERR_PNPM_IGNORED_BUILDS
+  测试钉死 6 项；新增 build-script 依赖的检测由真实安装的 ERR_PNPM_IGNORED_BUILDS
   显式失败暴露，UI 引导升级，不静默跳过）。
 - **prune 打包纪律**：`packages/desktop/prune-runtime.mjs` 由 desktop `files`
   显式枚举，打包态不依赖会被排除的根 `scripts/`；**版本切换 = current

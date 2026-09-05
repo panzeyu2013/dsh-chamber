@@ -44,6 +44,12 @@ export interface ConnectionGeneration {
  *
  * v0.1.2-rc.1 baseline: upstream changed only package.json (version) —
  * no connection.ts changes.
+ *
+ * v0.1.3-alpha.1 baseline: upstream added host-side streaming-body fetch
+ * routes (http-bridge/rpc/rpc-host/index replayed as pure upstream copies)
+ * and reworked fixture.ts (session format v2 + live assistant-stream frames,
+ * chunk-rows dropped); src/client/index.ts upstream delta was doc-only and
+ * is not re-synced (chamber prose kept). No connection.ts changes.
  */
 export interface ConnectionConfig {
   /** First-retry backoff cap in ms (jittered: actual delay is cap/2..cap). */

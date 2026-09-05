@@ -15,7 +15,10 @@
  *  - the external repo's own tsconfigs resolve their ambient types through
  *    the external repo's node_modules, which does not exist here; we analyze
  *    with a chamber-owned host aggregate (hostConfig) that pins lib
- *    ES2024+DOM and maps every @deepseek-ai/* import onto the vendor source
+ *    ES2024+DOM+ESNext.Disposable (the disposable lib covers the 0.1.3-line
+ *    `Disposable`/`AsyncDisposable` heritage in file-upload/session-query/
+ *    session(-persistence); absent from TS6 es2024 defaults) and maps every
+ *    @deepseek-ai/* import onto the vendor source
  *    tree via tsconfig paths (realpaths, so module identities compare);
  *  - default-lib discovery of the bundled typescript resolves against the
  *    bundle directory, and the analyzer's standard-lib checks require a
@@ -362,7 +365,7 @@ async function main() {
       target: 'es2024',
       module: 'esnext',
       moduleResolution: 'bundler',
-      lib: ['ES2024', 'DOM', 'DOM.Iterable'],
+      lib: ['ES2024', 'DOM', 'DOM.Iterable', 'ESNext.Disposable'],
       skipLibCheck: true,
       strict: true,
       noEmit: true,

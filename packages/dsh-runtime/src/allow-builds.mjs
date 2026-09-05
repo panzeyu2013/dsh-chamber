@@ -14,6 +14,7 @@
 export const ALLOW_BUILDS = [
   'node-pty',
   'koffi',
+  'fs-ext',
   'protobufjs',
   '@google/genai',
   '@deepseek-ai/dsh-subprocess-local',

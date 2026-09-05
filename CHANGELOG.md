@@ -10,6 +10,12 @@
 
 > English: [docs/CHANGELOG.en-US.md](docs/CHANGELOG.en-US.md)
 
+## [Unreleased]
+
+### 变更
+
+- **dsh 源码线升级至 0.1.3-alpha.1** —— 构建期 vendor 源（submodule pin）推进到 dsh-v0.1.3-alpha.1（d347e7039）：上游相对 rc.1 是实质内容版本（328 commits、6 个新包），fork 副本随之重放——connection 采纳上游流式 body 上传路由与 fixture 的 session-format v2 / live assistant-stream 重构（chunk-rows 面移除，tsconfig 补 `dsh-llm/assistant-stream` 别名）、api-gateway 采纳 journal-stream 的无游标 notification 帧、web 仅版本行；激活探针 `commands/execute` 载荷按 0.1.3 wire 改名 `images` → `attachments`。**运行时线未动**：`@deepseek-ai/dsh@0.1.3-alpha.1` 尚未发布 npm，捆绑运行时四锚仍为 0.1.2-rc.1（双线门待 npm 发布后收口）。
+
 ## [0.2.3] - 2026-09-07
 
 ### 修复
