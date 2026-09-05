@@ -10,6 +10,101 @@
 
 > English: [docs/CHANGELOG.en-US.md](docs/CHANGELOG.en-US.md)
 
+## [0.2.2] - 2026-09-05
+
+### 新增
+
+- **侧栏会话待办区（设计 06 §8）** —— 注意力会话（待交互 approval / plan-review /
+  question ∪ 完成未读）以固定条带钉在会话列表上方：纯投影派生（不读宿主
+  事实、对 chamberBridge 只读），点击权威打开、移除即「已读」解除的投影
+  结果（非乐观、与会话行可见性解耦）；条带仅在有内容时占用空间，超过 3 条
+  收进「还有 N 项」展开。配套 chamber 全局 `sessionTodo` 设置块（主开关 +
+  三类事件门，默认全开，与桌面设置默认镜像）；行尾条带标记与会话行右缘对齐
+  （2026-09 复审）。实现：`packages/dsh-chamber-client-ui-sidebar`（
+  SessionTodoArea 等）与 settings-bridge 设置项；design 06 §8.2/§8.5 注释同步。
+- **open-in：VS Code 默认新窗口策略（设计 15/16/20）** —— 核查确认
+  `vscode://` 拉起默认复用最近窗口（VS Code 1.135 主进程 bundle 逐级核实）
+  后，新增 chamber 设置 `vscodeOpenInNewWindow`（默认开）：开 → 本地/远程
+  URL 统一追加 `?windowId=_blank` 强制新窗口（已开窗口仍聚焦、不重复开），
+  侧栏按钮与 OS 深链同管线；设置行收紧为标题式开关并保留可选卡片提示。
+- **chamber 探针与随会话数据量彻底解耦（design 02 §3.2/§3.5、design 18
+  §3.4，2026-12 定稿并实施）** —— 身份/健康/就绪/激活探针统一到固定小体积
+  契约：`session/canOpenWorkspacePath`（零参 boolean Typert Remote，纯平台
+  检测、不读会话数据、不激活 Agent、无 IO）入列激活探针集（现 6 项），
+  `data.sessions` 探针与 `session/list` 退出激活契约、`describeCapabilities`
+  /能力缓存删除——会话/归档列表膨胀不再影响实例健康语义；探针响应上限
+  64 KiB（per-call），HTTP 404 自动回退 legacy `session/list`（1 MiB 上限，
+  **回退成功才**按连续 legacy 期节流 warn），其余失败如实报错不回退；
+  settings/describe 探针上限放宽至 16 MiB（与配置上限对齐，gateway 两处
+  call seam 同步转发）；desktop SSH attach 底线随之上移至 ≥ 0.1.2-rc.1，
+  旧版 dsh 由签名路径给出确定性 terminal「check or upgrade」；提交态
+  dsh-runtime dist 重建并补跨包常量锁步护栏（探针集/settings cap
+  deepEqual + 激活集 ↔ 控制面常量断言）。
+- **性能治理批次（2026-09 整改 P0–P2 完成；台账与基线见
+  docs/progress/performance-baseline.md）** —— 渲染器首屏骨架几何改为全屏
+  同底色 veil（骨架不再猜测侧栏持久化宽度，settle 不再挪动主边），视图
+  过渡改键控单槽合并（同键最新意图胜出、跨键先入先出）；dsh-runtime 磁盘
+  证据改异步单遍核算（`runtimeDiskSummaryAsync`）+ 合并刷新原语
+  （`createCoalescedRefresher`：单飞、progress 相位复用最近投影、终态相位
+  现场重走），desktop 与 gateway 两 owner 共用同一原语——合成 42.5 万项
+  磁盘账目下不再有整树同步遍历冻结主进程；侧栏 updated-mode 置顶顺序写回
+  250ms 防抖、等值写不落盘不通知；新增 CDP 测量工具箱与基线快照
+  （scripts/perf：boot/switch/eval/disk-walk）。
+
+### 变更
+
+- **移动端触控适配轮（gateway 移动插件，design 17 §18.4/§18.6）** ——
+  会话头三轴适配（汉堡 gutter、crumbs 换行不裁切、Session 日志导出按钮
+  手机档图标化）；抽屉切换 iOS 合成 click 自愈（120ms+150ms 双向判定、
+  per-pointerId、尊重 pointercancel）；导航后不弹键盘（IME layer-1 内
+  pointerdown 才算输入意图）；设置页手机档整页堆叠（nav 横条 chips、
+  Close 固定、grid 降级、16px 聚焦底线）。
+- **连接插件管理对话框打磨（settings/connections）** —— 插件管理对话框
+  8 项重构：三类列表（chamber/本地/远端）表头常驻、列严格对齐（chamber
+  单共享 grid、列表行 subgrid 滚动体），行尾按钮 icon+文字可见化并补
+  「操作」列头；安装/导入/搜索 busy 拆分并纳入互斥矩阵（`pluginsAddInstalling`
+  /`pluginsImporting` 等键），移除确认链动词统一（复数风险文案）；本地
+  列表补保留域过滤、`file:` 掩码 chip 化；spec 输入与安装/从文件夹导入
+  同排、统一 28px 控件高；a11y 补齐（useId 关联、aria-label/aria-pressed/
+  aria-busy、role=status、焦点 ring）；gateway/http 读失败横幅、reload
+  保旧帧与 in-flight 禁用、恢复面置顶；术语分层（删除=连接域、插件域=
+  移除/卸载）写入 locale 注释约定；chamber 表空态/零命中文案补齐。连接
+  表单 kind/transport 下拉铺满列宽、chevron 保持在框内（与运行时 select
+  同节奏），禁用时与本体同步淡化。
+- **dsh-runtime 设置页「检查更新」行为统一（本地 × gateway）** ——
+  gateway：「检查更新」忙碌态仅用户点击点亮（checkingVersions +
+  checkIntent 同步围栏 + versionsController identity 围栏，settle 前保持
+  busy），后台拉取静默；版本拉取加 30s 传输级兜底（超时回显中性文案）；
+  检查在途冻结变更控件与重启、镜像本地动作集清空语义并显示检查中徽标；
+  检查按钮按本地口径逐相位禁用（常驻显示而非隐藏）；PUT registry 成功后
+  以服务端回显立即更新只读行。本地：检查按钮常驻显示、逐相位禁用而非
+  隐藏，补同帧双击围栏（testInFlight），restarting 计入禁用。登记偏差：
+  gateway 检查失败不进机器 error 相位（读取失败不改运行状态）。
+
+### 修复
+
+- **Dock/任务栏未读徽标子代理误报（design 19 §3.5/§3.7 增量）** ——
+  父回合结束但后台子代理仍存活（runningSubagents > 0）的武装蓝点不再计入
+  徽标（与窗口内运行环压制/通知抑制同规），子代理全部结束后蓝点自动浮现；
+  无压制信息时照旧计入；badge 抑制事实类型随行镜像真实报告行修复。
+- **Git 删除阻断提示可行动化（design 08）** —— 不可删除 tooltips 按行状态
+  分流：registered missing → 侧栏孤儿徽标 + `git worktree repair`；
+  present-but-broken / 未注册 missing → repair/prune；locked →
+  `git worktree unlock`；未注册行按因分发。
+- **侧边栏 Git 仓库组折叠与行尾 rest 态清理（design 08 §11.7，2026-09
+  用户决策）** —— 折叠 git main workspace 即整体隐藏其派生 worktree 行
+  （纯展示派生、不写派生行折叠偏好；`hiddenByMainWorkspaceFold` 谓词带主行
+  存在性守卫——主行注册消失时陈旧折叠偏好绝不锁死派生行）；折叠态拖放
+  after 锚点跳过隐藏行锚到下一可见行（视图与提交一致）；git occupant 动作、
+  会话计数与折叠字形交换改 pointer-safe 揭示（hover / kebab / 键盘焦点，
+  修 Chromium 点击焦点残留导致折叠行 rest 态常驻动作图标与计数列跳动）；
+  计数徽标右对齐共享右缘。
+- **跨五合并复审加固（mobile/desktop/sidebar，2026-09）** —— 抽屉自愈
+  双向判定与输入意图收紧、desktop IPC 面镜像 L3 自动护栏（chamber-settings
+  权威 store）、VS Code 开关文案与管线说明同步、ssh 无 systemd 服务时移除
+  确认保留插件名、badge 测试钉 runningSubagents:0 语义修正、todo-attention
+  直连无运行时用例等复审修复随行落地。
+
 ## [0.2.1] - 2026-09-04
 
 ### 新增

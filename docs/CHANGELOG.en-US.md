@@ -10,6 +10,143 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 > 中文版: [CHANGELOG.md](../CHANGELOG.md)
 
+## [0.2.2] - 2026-09-05
+
+### Added
+
+- **Sidebar session-todo strip (design 06 §8)** — attention sessions (pending
+  approval / plan-review / question ∪ completed-but-unread) pin as a strip
+  above the session list: purely derived from the chamberBridge projection
+  (no host-fact reads), clicks open authoritatively, dismissal is the
+  projection result of "read" (not optimistic, decoupled from row
+  visibility); the strip occupies space only when it has content and folds
+  past 3 rows into an "N more" expansion. Ships with a chamber-global
+  `sessionTodo` settings block (master switch + three event gates, all on by
+  default, mirroring the desktop store defaults); trailing strip markers
+  align with the session-row right edge (2026-09 review pass).
+- **open-in: VS Code opens a new window by default (designs 15/16/20)** —
+  after verifying that a bare `vscode://` launch reuses the most recent
+  window (VS Code 1.135 main-process bundle, checked level by level), a new
+  chamber setting `vscodeOpenInNewWindow` (default on) was added: when on,
+  both local and remote URLs append `?windowId=_blank` to force a new window
+  (an already-open window keeps focus instead of duplicating), and the
+  sidebar button and OS deep link share one pipeline; the settings row was
+  tightened to a title-only toggle with optional card hints.
+- **Chamber probes fully decoupled from session-data growth (design 02
+  §3.2/§3.5, design 18 §3.4, finalised and implemented 2026-12)** — the
+  identity/health/readiness/activation probes settle on one fixed, small
+  contract: `session/canOpenWorkspacePath` (zero-arg boolean Typert Remote —
+  pure platform check, no session-data reads, no Agent activation, no IO)
+  joins the activation probe set (now 6), while the `data.sessions` probe
+  and `session/list` leave the activation contract and
+  `describeCapabilities`/the capability cache are deleted — session/archive
+  list growth can no longer affect instance health semantics; probe
+  responses cap at 64 KiB (per call), HTTP 404 falls back to the legacy
+  `session/list` (1 MiB cap) with the warning written **only after a
+  successful fallback**, throttled per legacy episode, and all other
+  failures surface honestly without fallback; the settings/describe probe
+  cap widens to 16 MiB (aligned with the settings file limit; both gateway
+  call seams forward it); the desktop SSH attach floor moves up to ≥
+  0.1.2-rc.1, with legacy dsh trees reaching a deterministic terminal
+  "check or upgrade" verdict through the signature path; the committed
+  dsh-runtime dist was rebuilt and cross-package constant lockstep guards
+  were added (deepEqual on the probe set/settings cap + an activation-set ↔
+  control-plane constant assertion).
+- **Performance remediation batch (2026-09 P0–P2 complete; ledger and
+  baselines in docs/progress/performance-baseline.md)** — the renderer
+  first-screen skeleton geometry becomes a full-viewport same-tone veil
+  (the skeleton no longer guesses the persisted sidebar width, so settle no
+  longer shifts the main edge), and view transitions merge through a
+  keyed single slot (latest intent per key wins, cross-key FIFO);
+  dsh-runtime disk evidence moves to an async single-pass walk
+  (`runtimeDiskSummaryAsync`) plus a coalesced refresher primitive
+  (`createCoalescedRefresher`: single-flight, progress phases reuse the
+  recent projection, terminal phases re-walk live) shared verbatim by the
+  desktop and gateway owners — no synchronous whole-tree traversal freezes
+  the main process on synthetic 425k-entry disk accounts; sidebar
+  updated-mode pin-order write-backs debounce at 250ms and equal-value
+  writes neither persist nor notify; new CDP measurement tooling and
+  baseline snapshots land under scripts/perf (boot/switch/eval/disk-walk).
+
+### Changed
+
+- **Mobile touch-adaptation round (gateway mobile plugin, design 17
+  §18.4/§18.6)** — session-header adaptation on three axes (hamburger
+  gutter, wrapping non-clipped crumbs, phone-grade 44px iconified Session
+  log export); drawer switching self-heals iOS synthetic clicks (120ms +
+  150ms two-way arbitration, per-pointerId, pointercancel respected); the
+  keyboard stays down after navigation (IME layer-1: only pointerdown inside
+  the composer seat counts as input intent); the settings page stacks
+  full-page on phones (nav chip row, fixed Close, grid fallback, 16px focus
+  baseline).
+- **Connections plugin-management dialog polish (settings/connections)** —
+  an 8-item rework of the plugin dialog: persistent headers across the three
+  lists (chamber/local/remote) with strictly aligned columns (single shared
+  chamber grid; subgrid scrolling bodies for the lists), row-end buttons
+  made visible with icon + text and an "action" header column; install/
+  import/search busy states split and folded into the exclusion matrix
+  (`pluginsAddInstalling`/`pluginsImporting` etc.), with unified
+  remove-confirmation verbs (plural risk copy); the local list gains
+  reserved-domain filtering and `file:` masks as chips; the spec input lines
+  up with install/import-from-folder at a uniform 28px control height; a11y
+  additions (useId associations, aria-label/aria-pressed/aria-busy,
+  role=status, focus rings); gateway/http read-failure banners, reload keeps
+  the old frame with in-flight disabling, recovery surfaces pinned to the
+  top; terminology layering (delete = connections domain, remove/uninstall =
+  plugin domain) documented in the locale comments; empty/zero-hit chamber
+  states get copy. The connections form's kind/transport selects now fill
+  the form column with the custom chevron kept inside the box (same rhythm
+  as the runtime select), dimmed together with the box when disabled.
+- **Unified "check updates" behaviour on the dsh-runtime settings page
+  (local × gateway)** — gateway: the check busy state lights up only on a
+  user click (checkingVersions + a checkIntent synchronous fence + a
+  versionsController identity fence, held until the list truly settles)
+  while background pulls stay silent; version fetches gain a 30s transport
+  fallback (neutral timeout copy); an in-flight check freezes mutation
+  controls and restart, mirrors the local empty-action-set semantics and
+  shows a checking badge; the check button stays visible and disables
+  per-phase on the local canCheck basis; a successful PUT registry updates
+  the read-only rows immediately from the server echo. Local: the button
+  stays visible and disables per phase instead of hiding, gains a
+  same-frame double-click fence (testInFlight), and restarting counts into
+  the disabled set. Documented deviation: a failed gateway check never
+  enters the machine error phase (a read failure does not change the running
+  state).
+
+### Fixed
+
+- **Dock/taskbar unread badge subagent false positives (design 19
+  §3.5/§3.7 increment)** — an armed dot whose parent turn ended while
+  background subagents are still alive (runningSubagents > 0) no longer
+  counts toward the badge (same rule as the in-window run-ring suppression
+  and notification suppression), and the dot surfaces automatically once the
+  subagents finish; rows without suppression facts still count as before;
+  the badge-suppression facts type was fixed to mirror the real report rows.
+- **Actionable Git removal-blocked tooltips (design 08)** — undeletable
+  tooltips branch by row state: registered missing → sidebar orphan badge +
+  `git worktree repair`; present-but-broken / unregistered missing →
+  repair/prune; locked → `git worktree unlock`; unregistered rows split by
+  cause.
+- **Sidebar git repo-group folding and rest-state row-end cleanup (design
+  08 §11.7, 2026-09 user decision)** — folding a git main workspace hides
+  its derived worktree rows as one repo group (purely presentational — the
+  derived rows' own fold prefs are untouched; the
+  `hiddenByMainWorkspaceFold` predicate carries a main-row existence guard,
+  so a stale fold pref can never lock derived rows hidden once the main
+  registration vanishes); drag-after anchors skip hidden rows and land on
+  the next visible one (view and commit agree); git occupant actions, the
+  session count and the fold-glyph swaps move to pointer-safe reveal
+  (hover / kebab / keyboard focus — fixing Chromium's mousedown focus
+  residue that kept action icons and a jittering count column visible at
+  rest on folded rows); count digits right-align on one shared right edge.
+- **Cross-five-merge review hardening (mobile/desktop/sidebar, 2026-09)** —
+  drawer self-heal two-way arbitration and input-intent tightening, desktop
+  IPC-surface-mirror L3 auto guard (chamber-settings authoritative store),
+  VS Code toggle copy synced with the pipeline note, ssh remove-confirm
+  keeping the plugin name when no systemd service exists, badge test pin
+  corrected to the runningSubagents:0 semantics, and a direct-connect
+  no-runtime case for todo-attention landed together.
+
 ## [0.2.1] - 2026-09-04
 
 ### Added
