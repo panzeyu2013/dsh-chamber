@@ -93,6 +93,9 @@ function drainNext(): void {
   }
   // 两条链都必须挂 catch：finished 在过渡被跳过（窗口隐藏/UA 跳过/回调抛错
   // 未被边界捕获）时 reject；updateCallbackDone 的 rejection 同样吞掉。
+  // NOTE（2026-09 perf review n2）：回调内 claimAndApply 若因渲染抛错（flushSync
+  // 抛），已 pop 的意图丢失且 updateCallbackDone 拒绝被吞——与旧链式实现同
+  // 性质、非回归；队列继续，不遗留钉死状态。
   transition.updateCallbackDone.catch(() => undefined)
   void transition.finished.then(
     () => { activeKey = null; drainNext() },

@@ -858,7 +858,8 @@ async function applyPendingVersion(opts) {
 
 // src/coalesced-refresh.ts
 function createCoalescedRefresher(compute, options = {}) {
-  const maxReruns = options.maxReruns ?? 3;
+  const rawMaxReruns = options.maxReruns ?? 3;
+  const maxReruns = Math.max(1, Math.floor(rawMaxReruns) || 1);
   let chain = null;
   let arrivedDuringRun = false;
   let reruns = 0;
@@ -2570,34 +2571,27 @@ async function chargeNodeAsync(path, target, rootMissingIsZero, acc, opts) {
     await chargeNodeAsync(join2(path, name), target, false, acc, opts);
   }
 }
+var ENTRY_TARGET_RULES = [
+  { test: (name, isDirectory, treeSet) => treeSet.has(name) && isDirectory, target: "versionTree" },
+  { test: (name, isDirectory) => isDirectory && name.startsWith(".work-"), target: "work" },
+  { test: (name, isDirectory) => isDirectory && name.endsWith(".failed"), target: "failure" },
+  { test: (name) => isRuntimePublishBackupName(name), target: "failure" },
+  {
+    test: (name) => name === "failures" || name === "metadata-recovery-data" || name === "metadata-recovery-rescue-data" || name === "metadata-recovery.json",
+    target: "failure"
+  },
+  { test: (name) => name === ".pnpm-store", target: "store" },
+  { test: (name) => name === ".pnpm-cache", target: "cache" },
+  { test: (name) => name === ".install-home", target: "installHome" },
+  { test: (name) => name === ".xdg-cache", target: "xdgCache" },
+  { test: (name) => name === "snapshots", target: "snapshot" },
+  { test: (name) => name === "pre-rollback", target: "preRollback" }
+];
 function asyncTargetForEntry(name, isDirectory, treeSet) {
-  const known = treeSet.has(name) && isDirectory || isDirectory && name.startsWith(".work-") || isDirectory && name.endsWith(".failed") || isRuntimePublishBackupName(name) || name === "failures" || name === "metadata-recovery-data" || name === "metadata-recovery-rescue-data" || name === "metadata-recovery.json" || name === ".pnpm-store" || name === ".pnpm-cache" || name === ".install-home" || name === ".xdg-cache" || name === "snapshots" || name === "pre-rollback";
-  if (!known) return "unclassified";
-  if (treeSet.has(name) && isDirectory) return "versionTree";
-  if (isDirectory && name.startsWith(".work-")) return "work";
-  if (isDirectory && name.endsWith(".failed")) return "failure";
-  if (isRuntimePublishBackupName(name)) return "failure";
-  switch (name) {
-    case "failures":
-    case "metadata-recovery-data":
-    case "metadata-recovery-rescue-data":
-    case "metadata-recovery.json":
-      return "failure";
-    case ".pnpm-store":
-      return "store";
-    case ".pnpm-cache":
-      return "cache";
-    case ".install-home":
-      return "installHome";
-    case ".xdg-cache":
-      return "xdgCache";
-    case "snapshots":
-      return "snapshot";
-    case "pre-rollback":
-      return "preRollback";
-    default:
-      return "none";
+  for (const rule of ENTRY_TARGET_RULES) {
+    if (rule.test(name, isDirectory, treeSet)) return rule.target;
   }
+  return "unclassified";
 }
 async function runtimeDiskSummaryAsync(baseDir, dshHome = join2(baseDir, "state", "dsh-home"), options = {}) {
   const opts = {

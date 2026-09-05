@@ -110,3 +110,61 @@ test('rerunOnJoin:false joins the in-flight run silently without a trailing reru
   assert.equal(await second, 3)
   assert.equal(runs, 3, '默认 rerunOnJoin 保持终态补跑')
 })
+
+test('cap 触顶那遍的加入者拿到该遍结果（≤1 遍有界陈旧，确定性钉死）', async () => {
+  // 文件头声明的有界陈旧语义：cap 触顶时，cap 遍运行期间到达的加入者拿到
+  // 的是**已启动于其到达之前**的那遍结果（≤1 遍陈旧窗口）——本用例用可控
+  // 门闩逐遍放行，确定性断言「触顶遍的到达者绝不再触发第 3 遍、且其值 =
+  // 触顶遍结果」。
+  let runs = 0
+  const gates: Array<() => void> = []
+  let releaseRun: () => void = () => undefined
+  const refresh = createCoalescedRefresher(async () => {
+    runs += 1
+    await new Promise<void>(resolve => {
+      releaseRun = resolve
+      gates.push(resolve)
+    })
+    return runs
+  }, { maxReruns: 2 })
+  const until = async (predicate: () => boolean): Promise<void> => {
+    while (!predicate()) await new Promise(resolve => setImmediate(resolve))
+  }
+  try {
+    const first = refresh() // run 1 在途
+    const duringRun1 = refresh() // 加入 run 1 → 置位补跑
+    await until(() => gates.length === 1)
+    releaseRun() // run 1 完成 → reruns=1 < 2 → run 2 补跑开始
+    await until(() => gates.length === 2)
+    const duringRun2 = refresh() // 加入 run 2（cap 触顶那遍）→ 置位但不再补跑
+    releaseRun() // run 2 完成 → reruns=2 触顶 → 链结束
+    assert.equal(await first, 2)
+    assert.equal(await duringRun1, 2, 'run1 加入者拿到补跑（run 2）结果')
+    assert.equal(await duringRun2, 2, '触顶遍加入者拿到 run 2 结果（≤1 遍有界陈旧）')
+    assert.equal(runs, 2, 'cap=2：链内恰 2 遍，触顶遍到达者绝不触发第 3 遍')
+    // 链结束后新请求 = 全新链（第 3 遍），陈旧窗口随链终结而结束。
+    const next = refresh()
+    await until(() => gates.length === 3)
+    releaseRun()
+    assert.equal(await next, 3)
+    assert.equal(runs, 3)
+  } finally {
+    // 确保任何遗留门闩都被放行，测试永不悬挂。
+    while (gates.length > 0) gates.pop()?.()
+  }
+})
+
+test('maxReruns 钳制：0/负数/NaN 按 1（链仍至少跑首遍）', async () => {
+  for (const bogus of [0, -5, Number.NaN]) {
+    let runs = 0
+    const refresh = createCoalescedRefresher(async () => {
+      runs += 1
+      await sleep(10)
+      return runs
+    }, { maxReruns: bogus })
+    const first = refresh()
+    void refresh()
+    assert.equal(await first, 1, `maxReruns=${String(bogus)} 钳制为 1：无补跑`)
+    assert.equal(runs, 1)
+  }
+})

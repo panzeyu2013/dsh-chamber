@@ -514,6 +514,10 @@ function canonicalEquals(a: ChamberSidebarViewPrefs, b: ChamberSidebarViewPrefs)
 //     簿记不丢（丢了会退化为官方首次观察的全量 recency 排序）。
 // 离散写（拖拽提交/排序切换，SidebarRoot）在写前先 flushScheduledActivity
 // Writes()——窗末终刷不得用旧派生覆盖更新的用户手势（review F1/F2）。
+// 可视侧（2026-09 perf review m1）：T4 防抖后，置顶/固定顺序的可视更新
+// 最多滞后一个防抖窗（250ms）——显示延迟而非数据丢失；渲染路径直接读
+// 持久账户（updatedOrder/sessionUpdatedAtByAccount），无 render-time
+// promotion 之类的中间派生面。
 // ---------------------------------------------------------------------------
 
 /** 置顶写回防抖窗（固定窗：首 arm 起 250ms）。突发流式 tick 收敛为 ≤1 次
@@ -545,7 +549,12 @@ export function scheduleUpdatedOrderWrite(
  *  2026-09 review（F4）陈旧守卫：合并前逐账户检查——若**缓存**中同一账户
  *  存在某会话的 TS 严格大于 pending 对应 TS（另一 shell 已落盘更新观测），
  *  说明本 pending 派生自更旧的投影，整条跳过（不覆盖新 promotion/簿记；
- *  该账户由持有新投影的 shell 的下一次派生重新武装，≤1 轮自愈）。 */
+ *  该账户由持有新投影的 shell 的下一次派生重新武装，≤1 轮自愈）。
+ *  m2（2026-09 perf review）守卫精度：比较按 pending 内**已知会话**逐条做
+ *  （见下方循环）——若陈旧派生整体缺失某会话（其投影过期、从未含该会话），
+ *  该账户不会因缺条而判 stale，整条覆盖会短暂抹掉该会话的簿记；由持有新
+ *  投影的 shell 下一次派生重新武装（≤1 轮自愈）。可选加固方向 = 账户级
+ *  会话集合比对（把"缺会话"也判为陈旧信号）。 */
 export function flushScheduledActivityWrites(): void {
   if (activityTimer !== null) {
     clearTimeout(activityTimer)

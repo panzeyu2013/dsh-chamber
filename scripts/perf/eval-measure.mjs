@@ -13,12 +13,20 @@
  * 用法：node scripts/perf/eval-measure.mjs [runs=3] [--out ...json]
  * 前置：dev Electron 实例已以 --remote-debugging-port=9333 运行。
  */
-import { writeFileSync } from 'node:fs'
+import { mkdirSync, writeFileSync } from 'node:fs'
+import { dirname } from 'node:path'
 import { findPageTarget, connect, installEarlyObservers, pollState, readPerf } from './cdp-lib.mjs'
 
 const runs = Number(process.argv[2] ?? 3)
 const outFlag = process.argv.indexOf('--out')
 const outPath = outFlag >= 0 ? process.argv[outFlag + 1] : 'scripts/perf/data/eval-baseline.json'
+// nit2 (2026-09 review)：与 boot-measure 同病——runs 非有限正整数（含首参误为
+// --out 得 NaN）时静默跑 0 次并写出空文件，改为显式报错退出
+if (!Number.isInteger(runs) || runs < 1) {
+  console.error('用法：node scripts/perf/eval-measure.mjs [runs=3] [--out scripts/perf/data/eval-baseline.json]')
+  console.error(`runs 须为 ≥1 的整数，收到：${JSON.stringify(process.argv[2] ?? '(缺省)')}`)
+  process.exit(1)
+}
 const sleep = ms => new Promise(r => setTimeout(r, ms))
 
 const results = []
@@ -49,5 +57,7 @@ for (let i = 0; i < runs; i++) {
   cdp.close()
   await sleep(1000)
 }
+// nit1 (2026-09 review)：--out 目标目录未必已存在，写前先建（仿 disk-walk-baseline.mjs）
+mkdirSync(dirname(outPath), { recursive: true })
 writeFileSync(outPath, JSON.stringify({ at: new Date().toISOString(), env: { node: process.version }, results }, null, 2))
 console.log(`written: ${outPath}`)

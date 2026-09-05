@@ -1788,42 +1788,39 @@ async function chargeNodeAsync(
   }
 }
 
-/** runtimeEntries 顶层条目 → 会计类别（与 runtimeDiskSummary 的分类完全同构；
- *  返回 null 表示条目属于"未分类残渣"→ 用 'unclassified' 目标）。 */
+/** runtimeEntries 顶层条目 → 会计类别规则表。**单一来源**：known 判定与类别
+ *  分类共用同一有序规则（按声明序取首个命中；无命中 = 'unclassified' 残渣），
+ *  新增类别只改这一处——杜绝「谓词认了而 switch 漏分类」的双份维护陷阱
+ *  （2026-09 perf review M2；'none' 死分支随之消失）。顺序与原实现等价：
+ *  versionTree 最优先，.work-/.failed/备份名三类 failure 系先于固定名。 */
+const ENTRY_TARGET_RULES: ReadonlyArray<{
+  test: (name: string, isDirectory: boolean, treeSet: Set<string>) => boolean
+  target: AsyncWalkTarget
+}> = [
+  { test: (name, isDirectory, treeSet) => treeSet.has(name) && isDirectory, target: 'versionTree' },
+  { test: (name, isDirectory) => isDirectory && name.startsWith('.work-'), target: 'work' },
+  { test: (name, isDirectory) => isDirectory && name.endsWith('.failed'), target: 'failure' },
+  { test: name => isRuntimePublishBackupName(name), target: 'failure' },
+  {
+    test: name => name === 'failures' || name === 'metadata-recovery-data'
+      || name === 'metadata-recovery-rescue-data' || name === 'metadata-recovery.json',
+    target: 'failure',
+  },
+  { test: name => name === '.pnpm-store', target: 'store' },
+  { test: name => name === '.pnpm-cache', target: 'cache' },
+  { test: name => name === '.install-home', target: 'installHome' },
+  { test: name => name === '.xdg-cache', target: 'xdgCache' },
+  { test: name => name === 'snapshots', target: 'snapshot' },
+  { test: name => name === 'pre-rollback', target: 'preRollback' },
+]
+
+/** runtimeEntries 顶层条目 → 会计类别（规则表驱动，与 runtimeDiskSummary 的
+ *  分类完全同构；返回 'unclassified' 表示条目属于"未分类残渣"）。 */
 function asyncTargetForEntry(name: string, isDirectory: boolean, treeSet: Set<string>): AsyncWalkTarget {
-  const known = (treeSet.has(name) && isDirectory)
-    || (isDirectory && name.startsWith('.work-'))
-    || (isDirectory && name.endsWith('.failed'))
-    || isRuntimePublishBackupName(name)
-    || name === 'failures'
-    || name === 'metadata-recovery-data'
-    || name === 'metadata-recovery-rescue-data'
-    || name === 'metadata-recovery.json'
-    || name === '.pnpm-store'
-    || name === '.pnpm-cache'
-    || name === '.install-home'
-    || name === '.xdg-cache'
-    || name === 'snapshots'
-    || name === 'pre-rollback'
-  if (!known) return 'unclassified'
-  if (treeSet.has(name) && isDirectory) return 'versionTree'
-  if (isDirectory && name.startsWith('.work-')) return 'work'
-  if (isDirectory && name.endsWith('.failed')) return 'failure'
-  if (isRuntimePublishBackupName(name)) return 'failure'
-  switch (name) {
-    case 'failures':
-    case 'metadata-recovery-data':
-    case 'metadata-recovery-rescue-data':
-    case 'metadata-recovery.json':
-      return 'failure'
-    case '.pnpm-store': return 'store'
-    case '.pnpm-cache': return 'cache'
-    case '.install-home': return 'installHome'
-    case '.xdg-cache': return 'xdgCache'
-    case 'snapshots': return 'snapshot'
-    case 'pre-rollback': return 'preRollback'
-    default: return 'none'
+  for (const rule of ENTRY_TARGET_RULES) {
+    if (rule.test(name, isDirectory, treeSet)) return rule.target
   }
+  return 'unclassified'
 }
 
 /** 异步单遍磁盘统计（perf T3）。会计契约与 `runtimeDiskSummary` 逐字段一致

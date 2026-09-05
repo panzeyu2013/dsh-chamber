@@ -82,6 +82,7 @@ import { fetchRegistryMetadata } from './registry-metadata.ts';
 import { isAllowedRegistryUrl } from './registry-url.ts';
 import { sanitizeErrorText } from './sanitize-error.ts';
 import { evaluateApplyNowGate, type ApplyNowGateInput } from './apply-now-gate.ts';
+import { shouldSkipDiskRefresh } from './disk-evidence-gate.ts';
 import { disposeRuntimeInstaller, installRuntimeVersion, pruneRuntimeStore } from './runtime-installer.ts';
 import {
   cleanupStaleInstalls,
@@ -3963,6 +3964,11 @@ if (!gotTheLock) {
           recordExplicitInstall: (b, runtimeVersion) => recordExplicitInstall(b, runtimeVersion),
           // perf T3（2026-09）：闸口走异步单遍遍历——等待同一段墙钟时间但
           // 主进程保持响应（大 store 下同步遍历会冻结整个应用）。
+          // review N1（2026-09）：此 DI 回调由 controller install() 直接
+          // await（安装闸口，见 dsh-runtime-controller.ts），绕过下方
+          // refreshDiskUsage coalescer——与证据刷新并发时可能出现两遍全树
+          // 遍历（罕见窗口、多一遍墙钟时间，无正确性影响；"绝不重复并发"
+          // 不变量只对 coalescer 内的调用点成立）。
           runtimeDiskSummary: (b) => runtimeDiskSummaryAsync(b),
           writeActivationIntent: (b, input) => { writeActivationIntent(b, input); },
           clearActivationJournal: (b) => clearActivationJournal(b),
@@ -4046,17 +4052,17 @@ if (!gotTheLock) {
     };
     // perf T3（2026-09，D8）：磁盘统计"节流/单飞/终态一次"——版本事务的
     // 15 个 refresh 调用点与 UI/事件驱动的刷新突发共享遍历：单飞合并并发
-    // 请求，运行期间到达者补跑一遍（终态一次），全树统计绝不重复并发。
-    // runtimeDiskSummaryAsync 本身按批让渡事件循环，主进程全程不被冻结。
+    // 请求，运行期间到达者补跑一遍（终态一次）。"全树统计绝不重复并发"
+    // 不变量仅对经本 coalescer 的 refresh 调用点成立——安装闸口经 controller
+    // DI 直接 await runtimeDiskSummaryAsync、绕过本 coalescer（见上方
+    // deps.store.runtimeDiskSummary 映射旁注，review N1）。runtimeDiskSummaryAsync
+    // 本身按批让渡事件循环，主进程全程不被冻结。
     const refreshDiskUsage = createCoalescedRefresher(() => runtimeDiskSummaryAsync(runtimeBaseDir));
     // 最近一次完成的全树磁盘投影（含错误投影）。D7 进度跳过复用其值——
     // 终态/content 相位永远现场重走，绝不因复用而把陈旧终态交给 UI。
     let lastDiskEvidence: { usage: Awaited<ReturnType<typeof runtimeDiskSummaryAsync>> | null; error: string | null } | null = null;
-    /** D7（2026-09，M1 调度收口）：纯进度相位不打全树遍历。download/
-     *  install/apply 进行中 patch 的磁盘面复用最近一次完整投影（其内容
-     *  相位由终态刷新保证现场重走）；其余（终态、内容相位、无相位 patch）
-     *  一律走 coalescer 完整刷新。 */
-    const DISK_SKIP_PROGRESS_PHASES: ReadonlySet<string> = new Set(['downloading', 'installing', 'applying']);
+    // D7 进度跳过的 skip 集与判定在 ./disk-evidence-gate.ts（纯模块 + 单测，
+    // 2026-09 perf review M1；判定经 shouldSkipDiskRefresh 注入下方调用）。
     const refreshRuntimeEvidence = async (patch: Parameters<typeof runtimeInstance.setLifecycle>[0] = {}) => {
       const effectivePhase = patch.phase ?? runtimeInstance.getState().phase;
       const effectiveCanRetryRestore = patch.canRetryRestore
@@ -4088,10 +4094,13 @@ if (!gotTheLock) {
         };
       }
       let diskProjection: Parameters<typeof runtimeInstance.setLifecycle>[0];
-      const skipDisk = DISK_SKIP_PROGRESS_PHASES.has(effectivePhase);
+      const skipDisk = shouldSkipDiskRefresh(effectivePhase);
       if (skipDisk && lastDiskEvidence !== null) {
-        // 进度相位：复用最近一次完整投影（无新遍历）；快照/版本清单等轻量
-        // 面照常现场刷新。diskLimitExceeded 等派生字段随复用值同步给出。
+        // 进度相位：复用最近一次完整投影（无新遍历）——复用的是最近一次
+        // **成功或失败**投影（review N4）：error 投影（如磁盘统计失败）在
+        // 长下载事务中会持续展示，直到终态 patch 现场重走才自愈（取舍：
+        // 进度相位优先低延迟展示，而非阻塞在重试统计上）；快照/版本清单等
+        // 轻量面照常现场刷新。diskLimitExceeded 等派生字段随复用值同步给出。
         diskProjection = {
           diskUsage: lastDiskEvidence.usage,
           diskError: lastDiskEvidence.error,

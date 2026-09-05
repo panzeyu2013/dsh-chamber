@@ -120,7 +120,7 @@ envelope padding——cap 抬至 1 MiB 即变 'dsh'，必红）；ready 心跳�
   typecheck 全绿；场景①同环境 A/B wall ≈880–1162ms（PRE run1 1162 / 中位 890↔888）、
   长任务形态 0–2×80–105ms/启（PRE run1 105ms 为上限，AFTER 4/6 run 为 0）、
   CLS<0.002；design 05 §4 已同步修订注记。
-- **2026-09 review 处置**（5 面独立审查，修复未提交）：sidebar 拖拽-防抖竞态
+- **2026-09 review 处置**（5 面独立审查，修复已并入分支提交）：sidebar 拖拽-防抖竞态
   （F1，写前 flush）、文档 3 处 P1（boot-after-final 交代/PRE 长任务数字/T7–T12
   去向对账，见 performance-baseline.md §9）、渲染层 P2 硬化（catch try/finally、
   直通路径统一入队）、maxReruns 文档与代码对齐 + 边界测试、gateway 测试 race

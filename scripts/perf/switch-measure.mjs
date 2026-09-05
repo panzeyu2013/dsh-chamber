@@ -10,7 +10,8 @@
  *
  * 用法：node scripts/perf/switch-measure.mjs [cycles=3] [--rapid N] [--out ...json]
  */
-import { writeFileSync } from 'node:fs'
+import { mkdirSync, writeFileSync } from 'node:fs'
+import { dirname } from 'node:path'
 import { findPageTarget, connect, installEarlyObservers, pollState, readPerf, summarize } from './cdp-lib.mjs'
 
 const cycles = Number(process.argv[2] ?? 3)
@@ -18,6 +19,21 @@ const rapidFlag = process.argv.indexOf('--rapid')
 const rapidN = rapidFlag >= 0 ? Number(process.argv[rapidFlag + 1]) : 0
 const outFlag = process.argv.indexOf('--out')
 const outPath = outFlag >= 0 ? process.argv[outFlag + 1] : 'scripts/perf/data/switch-baseline.json'
+// nit2 (2026-09 review)：与 boot-measure 同病——非有限正整数（含首参误为 --out
+// 得 NaN）时静默跑 0 次并写出空文件，改为显式报错退出；rapid 模式不消费 cycles，
+// 只校验所用模式的那个参数
+const USAGE = '用法：node scripts/perf/switch-measure.mjs [cycles=3] [--rapid N] [--out scripts/perf/data/switch-baseline.json]'
+if (rapidFlag >= 0) {
+  if (!Number.isInteger(rapidN) || rapidN < 1) {
+    console.error(USAGE)
+    console.error(`--rapid 须为 ≥1 的整数，收到：${JSON.stringify(process.argv[rapidFlag + 1] ?? '(缺失)')}`)
+    process.exit(1)
+  }
+} else if (!Number.isInteger(cycles) || cycles < 1) {
+  console.error(USAGE)
+  console.error(`cycles 须为 ≥1 的整数，收到：${JSON.stringify(process.argv[2] ?? '(缺省)')}`)
+  process.exit(1)
+}
 
 const page = await findPageTarget(9333)
 const cdp = connect(page.webSocketDebuggerUrl)
@@ -76,6 +92,9 @@ async function switchAndMeasure(label, target) {
   const skelEnd = skelIdx >= 0 ? trail.findIndex((s, i) => i > skelIdx && !s.skeleton) : -1
   const s = summarize(after, label)
   s.clicked = clicked
+  // 口径（2026-09 review minor2，见 README「指标口径」）：click → 首个「安静」
+  // 轮询间隔 = settle **下界**，非内容稳定证明——轮询只断言 !skeleton &&
+  // quietMs>700，不校验目标视图/内容确已切换
   s.clickToSettledMs = res.elapsedMs
   s.skeletonWindowMs = skelIdx >= 0 && skelEnd > skelIdx ? trail[skelEnd].at - trail[skelIdx].at : null
   s.skeletonSeen = skelIdx >= 0
@@ -108,6 +127,8 @@ if (rapidN > 0) {
   const after = await readPerf(cdp, cdp.send)
   const s = summarize(after, `rapid-x${rapidN}`)
   s.clicksMs = Date.now() - t0
+  // 口径（2026-09 review minor2，同 clickToSettledMs）：末次 click → 首个「安静」
+  // 轮询间隔 = settle **下界**（只断言 !skeleton && quietMs>900），不证明内容就绪
   s.lastClickToQuietMs = res.elapsedMs
   s.longtasksDelta = after.longtasks.length - (before?.longtasks?.length ?? 0)
   console.log(JSON.stringify(s, null, 1))
@@ -121,7 +142,10 @@ if (rapidN > 0) {
   }
 }
 
-writeFileSync(outPath, JSON.stringify({ at: new Date().toISOString(), results }, null, 2))
+// nit4 (2026-09 review)：输出补 env 键（与 boot/eval/disk-walk 的 env 键同构）；
+// nit1：--out 目标目录未必已存在，写前先建（仿 disk-walk-baseline.mjs）
+mkdirSync(dirname(outPath), { recursive: true })
+writeFileSync(outPath, JSON.stringify({ at: new Date().toISOString(), env: { node: process.version }, results }, null, 2))
 console.log(`written: ${outPath}`)
 cdp.close()
 process.exit(0)

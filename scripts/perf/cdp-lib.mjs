@@ -12,9 +12,17 @@ const WebSocket = require('ws')
 
 export async function findPageTarget(port = 9333) {
   const list = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()
-  const page = list.find(t => t.type === 'page')
-  if (!page) throw new Error(`no page target on :${port}: ${JSON.stringify(list.map(t => t.type))}`)
-  return page
+  const pages = list.filter(t => t.type === 'page')
+  if (!pages.length) throw new Error(`no page target on :${port}: ${JSON.stringify(list.map(t => t.type))}`)
+  // nit3 (2026-09 review)：取首个 page target 无校验——DevTools/多窗口打开时首
+  // target 未必是脚本要驱动的被测视图。各 measure 只传 CDP 端口、不传目标 URL，
+  // lib 无法判定“正确”target：最小处置 = 候选 >1 时警告并列出 url/title（实测
+  // dev 实例单窗口时列表首项即被测页），仍按首匹配取用。
+  if (pages.length > 1) {
+    console.warn(`findPageTarget: :${port} 上有 ${pages.length} 个 page target，取首个：${pages[0].url}`)
+    for (const t of pages) console.warn(`  - ${t.url}${t.title ? `（${t.title}）` : ''}`)
+  }
+  return pages[0]
 }
 
 export function connect(targetWsUrl) {

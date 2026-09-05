@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "node scripts/gen-typert-remotes.mjs && vite build && node scripts/gen-boot-manifest.mjs",
     "preview": "vite preview",
-    "test": "node scripts/typert-remote-contract.test.mjs && node test/pending-open-queue.test.ts && node test/deep-link-activation.test.ts && node test/aggregate-refresh.test.ts && node test/aggregate-reconnect.test.ts && node test/notification-edges.test.ts && node test/badge-count.test.ts && node test/host-graph.test.ts && node test/sidebar-scroll-sync.test.ts && node --import ../../scripts/dev/test-shell-register.mjs test/shell.test.ts"
+    "test": "node scripts/typert-remote-contract.test.mjs && node test/pending-open-queue.test.ts && node test/deep-link-activation.test.ts && node test/aggregate-refresh.test.ts && node test/aggregate-reconnect.test.ts && node test/notification-edges.test.ts && node test/badge-count.test.ts && node test/view-transition.test.ts && node test/host-graph.test.ts && node test/sidebar-scroll-sync.test.ts && node --import ../../scripts/dev/test-shell-register.mjs test/shell.test.ts"
   },
   "dependencies": {
     "react": "^19.0.0",

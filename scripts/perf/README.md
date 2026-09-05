@@ -2,7 +2,12 @@
 
 本目录是 dsh-chamber 性能整改的实机测量工具箱。全部为**零新依赖**的纯 Node
 （`ws` 复用 control-plane 包依赖解析，`node:` 内置模块 + node 24 类型擦除直跑
-TS）；所有脚本只读测量，不修改被测应用状态。
+TS）。**「只读」措辞的精确含义**（2026-09 review nit6）：脚本不修改被测应用的
+数据/存储，但会**改变被测页面运行时**——boot/eval/switch 经 CDP 向页面注入
+`window.__dshPerf` 标记并注册 `PerformanceObserver`（longtask/layout-shift/
+paint/resource，buffered），boot/eval 每个 run 还执行 `Page.reload`（switch
+为合成点击驱动切换）；仅 `disk-walk-baseline.mjs` 跑在合成 fixture 上、完全
+不触被测应用。
 
 | 文件 | 用途 |
 |---|---|
@@ -36,6 +41,15 @@ node scripts/perf/disk-walk-baseline.mjs --async    --out scripts/perf/data/disk
 
 > --out 一律写 `scripts/perf/data/`（.gitignore 白名单例外入库供前后对照）；写到
 > 仓库根 `data/` 会被忽略且不随整改台账保存。
+
+## 指标口径（settle 语义的下界，2026-09 review minor2）
+
+`switch-measure.mjs` 场景②的 `clickToSettledMs` 与场景③（`--rapid`）的
+`lastClickToQuietMs` 都定义为 **click（末次 click）→ 首个「安静」轮询的间隔**，
+是 settle 时长的**下界、不是内容稳定证明**：轮询只断言 `!skeleton && quietMs`
+超过阈值（场景② 700ms / 场景③ 900ms），**不校验目标视图/内容确已切换**——
+同文档热切换形态下可能首轮即安静（数值≈0 属正常形态），真实内容就绪只会晚
+于该刻度；对照解读时把它当「安静下界」而非「切换完成点」。
 
 ## 已知限制（诚实测量纪律）
 

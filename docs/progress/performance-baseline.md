@@ -122,7 +122,8 @@ promise/线程池开销，无管线），sync 约 3–8µs。记录为后续优�
 
 ## 6. T4/T5/T6 测量面与结论
 
-- **T4（M4 置顶写回防抖）**：单元面（test:sidebar view-prefs 34 用例）钉死语义——
+- **T4（M4 置顶写回防抖）**：单元面（test:sidebar view-prefs 39 用例：fork 基线
+  30 + 074a772 防抖轮 +9）钉死语义——
   防抖窗内 N tick 合并 1 次写/通知、每账户最新意图胜出、等值写不落盘不通知、reset
   清窗。运行面无独立实机指标（写频率由会话更新节奏驱动，属真实机项 §7-4）。
 - **T5（M1 调度 + D7）**：主进程逻辑收口，无独立 UI 指标；语义（进度相位跳盘、终态
@@ -181,5 +182,5 @@ disk-walk-after-t3}.json（14 个，全部入库于 scripts/perf/data/，.gitign
   dev 实例烟测、文档完成态——未沿用 T7–T12 编号以免伪造原案粒度。
 - review 轮处置（2026-09，5 面独立审查）：F1 拖拽竞态（P1）、文档 3×P1
   （boot-after-final 交代/PRE 数字/T7–T12 去向）、渲染层 P2 硬化×2、
-  注释措辞批量、maxReruns 边界测试、gateway 测试 race 兜底等——修复明细见
-  工作树（未提交）与 STATUS.md 条目。
+  注释措辞批量、maxReruns 边界测试、gateway 测试 race 兜底等——修复已并入
+  分支提交（明细见 STATUS.md 对应条目）。
