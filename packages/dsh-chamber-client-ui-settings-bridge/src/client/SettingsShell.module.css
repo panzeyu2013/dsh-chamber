@@ -699,10 +699,15 @@
   min-width: 0;
 }
 
-/* 通知事件开关：卡内一行三个（窄面板自动降列；min() 下限同
-   .generalGrid 防窄窗溢出）。行本身无边框无底色（.generalNotifyCard
-   是唯一边界），保留垂直内距维持点按区域。 */
+/* 事件开关（会话完成时 / 代理提问时 / 审批请求时）：卡内一行三个（窄面板
+   自动降列；min() 下限同 .generalGrid 防窄窗溢出）。行本身无边框无底色
+   （.generalNotifyCard 是唯一边界），保留垂直内距维持点按区域。
+   2026-09 布局修订（用户反馈）：勾选框**紧跟**其所属选项文字（去掉
+   space-between 拉伸——原先勾选被推到单元右缘、视觉上与下一列的文字
+   连在一起），单元之间以竖分隔线明确分割；降列（一列/两列）时不画竖线
+   （容器查询：只有能并排三列时才加分隔线），行间距提供分割。 */
 .generalEventGrid {
+  container-type: inline-size;
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr));
   gap: 8px;
@@ -711,7 +716,7 @@
 .generalEventRow {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 8px;
   min-width: 0;
   padding: 6px 0;
@@ -723,6 +728,15 @@
   font-size: 13px;
   line-height: 20px;
   color: var(--dsw-alias-label-primary);
+}
+
+/* 三列并排时（内容宽 ≥ 3×150 + 2×8 分隔线间隙），后两列以 1px 竖线 +
+   内距与前一单元分割；降列布局不画竖线（首列/独行的竖线会悬空误导）。 */
+@container (min-width: 470px) {
+  .generalEventRow + .generalEventRow {
+    border-left: 1px solid var(--dsw-alias-border-l2);
+    padding-left: 10px;
+  }
 }
 
 /* 通知组测试按钮行：动作靠右，结果内联。 */

@@ -32,8 +32,9 @@
  *   never prompt; update-downloaded exempt); VS Code 新窗口 (vscodeOpenInNewWindow,
  *   design 16 §3.3, default on — 会话目录在 VS Code 新窗口打开，避免
  *   VS Code 默认策略复用并替换最近活动窗口);
- * - 会话待办区 (sidebar todo area, 2026-12): 主开关 + 三类事件开关（完成未读 /
- *   提问 / 审批），默认全开——被动呈现（仅在有内容时出现，零占用）;
+ * - 会话待办区 (sidebar todo area, 2026-12): 主开关 + 三类事件开关（会话完成时 /
+ *   代理提问时 / 审批请求时，与通知组共用同一组文案，2026-09 措辞统一），
+ *   默认全开——被动呈现（仅在有内容时出现，零占用）;
  * - 通知 (design 19, merged into General — no new nav entry): 主开关 + 未读
  *   徽标开关（design 19 §3.7，独立于主开关、始终可见）+ 启用后展开的子设置
  *   (通知时机 hidden-only / always + 事件开关 complete / ask / request +
@@ -307,7 +308,6 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
         <label className={clsx(css.generalSwitchRow, !hydrated && css.generalDisabled)}>
           <div className={css.generalCardText}>
             <span className={css.generalFieldLabel}>{t('generalSessionTodoEnabled')}</span>
-            <p className={css.generalHint}>{t('generalSessionTodoEnabledDesc')}</p>
           </div>
           <span className={css.generalSwitchBox}>
             <input
@@ -330,19 +330,19 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
           <div id={todoBodyId} className={css.generalNotifyCard}>
             <div className={css.generalEventGrid}>
               <ToggleEvent
-                label={t('generalSessionTodoOnComplete')}
+                label={t('generalNotifyOnComplete')}
                 checked={sessionTodo.onComplete !== false}
                 disabled={!hydrated}
                 onChange={(next) => save(sessionTodoPatch({ onComplete: next }))}
               />
               <ToggleEvent
-                label={t('generalSessionTodoOnAsk')}
+                label={t('generalNotifyOnAsk')}
                 checked={sessionTodo.onAsk !== false}
                 disabled={!hydrated}
                 onChange={(next) => save(sessionTodoPatch({ onAsk: next }))}
               />
               <ToggleEvent
-                label={t('generalSessionTodoOnRequest')}
+                label={t('generalNotifyOnRequest')}
                 checked={sessionTodo.onRequest !== false}
                 disabled={!hydrated}
                 onChange={(next) => save(sessionTodoPatch({ onRequest: next }))}
@@ -393,7 +393,6 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
         <label className={clsx(css.generalSwitchRow, !hydrated && css.generalDisabled)}>
           <div className={css.generalCardText}>
             <span className={css.generalFieldLabel}>{t('generalNotificationsBadge')}</span>
-            <p className={css.generalHint}>{t('generalNotificationsBadgeDesc')}</p>
           </div>
           <span className={css.generalSwitchBox}>
             <input
