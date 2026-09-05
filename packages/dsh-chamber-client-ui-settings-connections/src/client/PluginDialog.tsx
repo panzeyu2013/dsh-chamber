@@ -1100,8 +1100,13 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
     if (applyingRef.current) return
     if (confirmRemove || confirmApply || localRemoveTarget !== null || remoteRemoveTarget !== null) return
     if (removeTarget !== null || removeBusy) return
+    // 2026-12 review P2-2 落实：非模态 busy 一并门控——安装/导入/撤销/
+    // seed/重启在跑时关框会让主进程操作继续而结果无处呈现（restarting
+    // 受管重启有 unmount abort 属例外，不在此列）。
+    if (installing || folderBusy || undoBusy || seedBusy || restartBusy || syncing) return
     onClose()
-  }, [onClose, confirmRemove, confirmApply, localRemoveTarget, remoteRemoveTarget, removeTarget, removeBusy])
+  }, [onClose, confirmRemove, confirmApply, localRemoveTarget, remoteRemoveTarget, removeTarget, removeBusy,
+    installing, folderBusy, undoBusy, seedBusy, restartBusy, syncing])
 
   const label = isLocal ? t('localTitle') : isSsh && sshSpec !== null ? sshSpec.label : target.kind === 'gateway' || target.kind === 'http' ? target.label : ''
   const title = `${t('pluginsTitle')} · ${label}`
