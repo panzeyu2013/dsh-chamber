@@ -41,6 +41,7 @@ import {
   recordExplicitInstall,
   recordRuntimeFailure,
   runtimeDiskSummary,
+  runtimeDiskSummaryAsync,
   cleanupExplicitRuntimeVersion,
   runtimeFailureSummary,
   runtimeSnapshotRetentionState,
@@ -1340,6 +1341,127 @@ test('runtimeDiskSummary charges restore backups in the real total and dedupes h
   assert.equal(summary.totalBytes,
     summary.restoreBackupBytes + summary.unclassifiedBytes - 4096,
     'the inode shared by the residue and the restore backup is charged exactly once');
+});
+
+// ---- perf T3（2026-09）：runtimeDiskSummaryAsync 与同步版逐字段对等 ----
+
+/** 组装覆盖全部类别的真实形态 fixture（版本树/store/缓存/工作目录/失败族/
+ *  快照/预回滚/恢复备份/发布备份/未分类残渣/元数据权威），硬链接 + 符号链接
+ *  面齐备。返回 base。 */
+function makeRichAccountingFixture(base: string): void {
+  const tree = makeVersionTree(base, '1.0.0');
+  writeFileSync(path.join(tree, 'payload-shared.bin'), Buffer.alloc(1024 * 1024));
+  mkdirSync(path.join(base, 'dsh-runtime', '.pnpm-store', 'pkg', 'x'), { recursive: true });
+  writeFileSync(path.join(base, 'dsh-runtime', '.pnpm-store', 'pkg', 'x', 'index.js'), 'store-content');
+  // 版本树 ↔ store 硬链接：totalBytes 只计一次，类别逐路径和两处都计。
+  linkSync(path.join(tree, 'payload-shared.bin'), path.join(base, 'dsh-runtime', '.pnpm-store', 'payload-shared.bin'));
+  writeFileSync(path.join(base, 'dsh-runtime', '.pnpm-store', 'pkg', 'x', 'bin'), 'store-bin');
+  mkdirSync(path.join(base, 'dsh-runtime', '.pnpm-cache'), { recursive: true });
+  writeFileSync(path.join(base, 'dsh-runtime', '.pnpm-cache', 'meta.json'), 'cache');
+  for (const [relative, content] of [
+    ['.install-home/home/pnpm.cjs', 'install-home'],
+    ['.xdg-cache/cache/data', 'xdg-cache'],
+    ['.work-active/work/pid', 'work'],
+    ['.3.0.0.failed/tree/payload', 'failed-tree'],
+    ['failures/1.0.0.json', '{"count":1}'],
+    ['.9.9.9.publish-backup-cafebabe/payload', 'publish-backup'],
+    ['metadata-recovery-data/tx/evidence/current', 'recovery'],
+    ['metadata-recovery-rescue-data/tx/evidence/stash', 'rescue'],
+    ['metadata-recovery.json', '{"phase":"finalized"}'],
+    ['snapshots/1.0.0-1/data', 'snapshot'],
+    ['pre-rollback/1.0.0-2/data', 'stash'],
+    ['leftover/stray-dir/data.bin', Buffer.alloc(2048)],
+  ] as const) {
+    const file = path.join(base, 'dsh-runtime', relative);
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(file, content);
+  }
+  writeFileSync(path.join(base, 'dsh-runtime', 'current'), '{"version":"1.0.0"}', 'utf8');
+  const outside = path.join(base, 'outside-large.bin');
+  writeFileSync(outside, Buffer.alloc(1024 * 1024));
+  symlinkSync(outside, path.join(base, 'dsh-runtime', 'leftover', 'stray-link'), 'file');
+  for (const [name, content] of [
+    ['dsh-home.old', 'restore-one'],
+    ['dsh-home.old-123', 'restore-two'],
+  ] as const) {
+    const file = path.join(base, 'state', name, 'data.bin');
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(file, content);
+  }
+  const backupLink = path.join(base, 'state', 'dsh-home.old', 'hardlinked.bin');
+  linkSync(path.join(base, 'dsh-runtime', '.pnpm-store', 'pkg', 'x', 'index.js'), backupLink);
+}
+
+function summaryFields(summary: ReturnType<typeof runtimeDiskSummary>): Record<string, number | boolean> {
+  const { versionTrees, versionTreeBytes, storeBytes, cacheBytes, installHomeBytes, xdgCacheBytes,
+    workBytes, failureBytes, snapshotBytes, preRollbackBytes, restoreBackupBytes,
+    unclassifiedBytes, totalBytes, storePruneNeeded } = summary;
+  return { versionTrees, versionTreeBytes, storeBytes, cacheBytes, installHomeBytes, xdgCacheBytes,
+    workBytes, failureBytes, snapshotBytes, preRollbackBytes, restoreBackupBytes,
+    unclassifiedBytes, totalBytes, storePruneNeeded };
+}
+
+test('runtimeDiskSummaryAsync is field-for-field identical to the sync walk on a rich fixture', async () => {
+  const base = freshBase();
+  makeRichAccountingFixture(base);
+  const syncSummary = runtimeDiskSummary(base);
+  const asyncSummary = await runtimeDiskSummaryAsync(base);
+  assert.deepEqual(summaryFields(asyncSummary), summaryFields(syncSummary));
+  // 富 fixture 必须真的覆盖到各面（防对等测试空转）：类别与残渣都非零。
+  assert.ok(syncSummary.versionTreeBytes > 0 && syncSummary.storeBytes > 0);
+  assert.ok(syncSummary.unclassifiedBytes > 0 && syncSummary.restoreBackupBytes > 0);
+  assert.ok(syncSummary.failureBytes > 1024, 'failure family incl. publish backup is quota-visible');
+});
+
+test('runtimeDiskSummaryAsync matches the sync walk on an empty and a gateway-layout base', async () => {
+  const empty = freshBase();
+  assert.deepEqual(summaryFields(await runtimeDiskSummaryAsync(empty)), summaryFields(runtimeDiskSummary(empty)));
+  const gatewayBase = freshBase();
+  const gatewayHome = path.join(gatewayBase, 'dsh-home');
+  const backup = path.join(gatewayBase, 'dsh-home.old-123', 'data');
+  mkdirSync(path.dirname(backup), { recursive: true });
+  writeFileSync(backup, 'gateway-restore-backup');
+  const gatewayExpected = runtimeDiskSummary(gatewayBase, gatewayHome);
+  assert.ok(gatewayExpected.restoreBackupBytes > 0);
+  assert.deepEqual(summaryFields(await runtimeDiskSummaryAsync(gatewayBase, gatewayHome)),
+    summaryFields(gatewayExpected));
+});
+
+test('runtimeDiskSummaryAsync propagates the same non-ENOENT accounting errors as the sync walk', async () => {
+  const base = freshBase();
+  makeVersionTree(base, '1.0.0');
+  writeFileSync(path.join(base, 'state'), 'not a directory');
+  await assert.rejects(() => runtimeDiskSummaryAsync(base), (error: unknown) =>
+    (error as NodeJS.ErrnoException).code === 'ENOTDIR');
+});
+
+test('runtimeDiskSummaryAsync batches: yields to the event loop and reports progress via onVisited', async () => {
+  const base = freshBase();
+  // 300+ 目录 × 12 文件 ≈ 3.9k 节点：yieldEvery=64 → 确定性多次让渡。
+  for (let d = 0; d < 300; d += 1) {
+    const dir = path.join(base, 'dsh-runtime', 'leftover', `dir-${d}`);
+    mkdirSync(dir, { recursive: true });
+    for (let f = 0; f < 12; f += 1) writeFileSync(path.join(dir, `f-${f}`), 'x');
+  }
+  let visited = 0;
+  let yields = 0;
+  let macrotaskRounds = 0;
+  let keepTicking = true;
+  setImmediate(function tick() {
+    macrotaskRounds += 1;
+    if (keepTicking) setImmediate(tick);
+  });
+  const summary = await runtimeDiskSummaryAsync(base, undefined, {
+    yieldEvery: 64,
+    onVisited: (n) => { visited = n; yields += 1; },
+  });
+  keepTicking = false;
+  assert.ok(yields >= 10, `yieldEvery=64 下 3.9k 节点应让渡 ≥10 次，实际 ${yields}`);
+  assert.ok(visited > 3000);
+  assert.ok(macrotaskRounds >= 10, 'macrotask 链在遍历期间取得 ≥10 轮进展（未被冻结）');
+  assert.ok(summary.unclassifiedBytes > 0);
+  assert.equal(summary.totalBytes, summary.unclassifiedBytes,
+    '无硬链接时真实总量 = 去重残渣桶');
 });
 
 test('builtin activation intents accept the exact builtin-anchor sentinel (F4 shell-invalidation regression)', () => {
