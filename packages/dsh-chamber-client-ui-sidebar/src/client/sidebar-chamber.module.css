@@ -603,7 +603,13 @@
 /* OpenChamber SessionGroupSection swap (08 §11): a normal workspace shows
    the FOLDER glyph (project-row parity), a worktree (derived) workspace the
    git-branch glyph, at rest — and both swap to the collapse chevron on row
-   hover / focus / kebab-open, in the same slot, so nothing shifts. */
+   hover / KEYBOARD focus (:has(:focus-visible)) / kebab-open, in the same
+   slot, so nothing shifts. Pointer-safe like the occupant reveal (08 §11.7):
+   plain :focus-within would keep the chevron swapped in after a pointer
+   click on the fold toggle (Chromium leaves focus on the clicked button),
+   leaving a hover-like glyph at rest; with :has(:focus-visible) a mouse
+   click leaves no residue and the fold direction shows on hover / keyboard
+   focus / open menu. */
 .foldToggleFolder .foldChevron {
   display: none;
 }
@@ -613,20 +619,21 @@
 }
 
 .workspaceHeader:hover .foldToggleFolder .foldChevron,
-.workspaceHeader:focus-within .foldToggleFolder .foldChevron,
+.workspaceHeader:has(:focus-visible) .foldToggleFolder .foldChevron,
 .workspaceHeader:has(.rowActionsVisible) .foldToggleFolder .foldChevron {
   display: inline-flex;
 }
 
 .workspaceHeader:hover .foldToggleFolder .foldFolder,
-.workspaceHeader:focus-within .foldToggleFolder .foldFolder,
+.workspaceHeader:has(:focus-visible) .foldToggleFolder .foldFolder,
 .workspaceHeader:has(.rowActionsVisible) .foldToggleFolder .foldFolder {
   display: none;
 }
 
 /* OpenChamber SessionGroupSection swap (08 §11): a worktree (derived)
    workspace shows the git-branch glyph at rest and the collapse chevron on
-   row hover / focus / kebab-open — the same slot, so nothing shifts. */
+   row hover / KEYBOARD focus / kebab-open — the same slot, so nothing
+   shifts (pointer-safe, see the folder variant note above). */
 .foldToggleGit .foldChevron {
   display: none;
 }
@@ -636,13 +643,13 @@
 }
 
 .workspaceHeader:hover .foldToggleGit .foldChevron,
-.workspaceHeader:focus-within .foldToggleGit .foldChevron,
+.workspaceHeader:has(:focus-visible) .foldToggleGit .foldChevron,
 .workspaceHeader:has(.rowActionsVisible) .foldToggleGit .foldChevron {
   display: inline-flex;
 }
 
 .workspaceHeader:hover .foldToggleGit .foldBranch,
-.workspaceHeader:focus-within .foldToggleGit .foldBranch,
+.workspaceHeader:has(:focus-visible) .foldToggleGit .foldBranch,
 .workspaceHeader:has(.rowActionsVisible) .foldToggleGit .foldBranch {
   display: none;
 }
@@ -655,9 +662,11 @@
    feedback): SOURCE-level fold toggle (collapses the server's whole
    workspace list) — workspace-parity swap: a MONITOR glyph at rest (server =
    machine; the workspace FOLDER glyph would read as another workspace), the
-   collapse chevron on header hover/focus, same 16px slot, so nothing
-   shifts. The chevron rotates exactly like the workspace fold chevron (down
-   while expanded, right while folded). The source header's fixed 28px height
+   collapse chevron on header hover / KEYBOARD focus, same 16px slot, so
+   nothing shifts (pointer-safe, workspace fold-toggle parity: plain
+   :focus-within would leave the chevron in after a pointer click). The
+   chevron rotates exactly like the workspace fold chevron (down while
+   expanded, right while folded). The source header's fixed 28px height
    absorbs the button; the slot reserves its 16px at rest so the label never
    reflows. */
 .sourceFoldToggle {
@@ -699,12 +708,12 @@
 }
 
 .sourceHeader:hover .sourceFoldChevron,
-.sourceHeader:focus-within .sourceFoldChevron {
+.sourceHeader:has(:focus-visible) .sourceFoldChevron {
   display: inline-flex;
 }
 
 .sourceHeader:hover .sourceFoldGlyph,
-.sourceHeader:focus-within .sourceFoldGlyph {
+.sourceHeader:has(:focus-visible) .sourceFoldGlyph {
   display: none;
 }
 
@@ -714,8 +723,13 @@
 
 /* Session count badge: small tertiary pill, shown only when sessions exist.
    Sits at the workspace header's right end at rest (the actions take no
-   space until shown); on hover / open-menu its slot is taken by the row
-   actions (+ / kebab) — a true swap. */
+   space until shown); on hover / keyboard focus / open-menu its slot is
+   taken by the row actions (+ / kebab) — a true swap. Digits are
+   RIGHT-aligned (2026-09): the pill is the trailing element of every row,
+   so a shared right edge gives every workspace's count the same distance
+   from the row end regardless of digit count — centered text inside the
+   min-width content box set 1-digit counts visibly further left than
+   2-digit counts. */
 .workspaceCount {
   flex: none;
   min-width: 16px;
@@ -723,7 +737,7 @@
   border-radius: 8px;
   font-size: 12px;
   line-height: 16px;
-  text-align: center;
+  text-align: right;
   color: var(--dsw-alias-label-tertiary);
   background: var(--dsw-alias-interactive-bg-hover);
 }
@@ -844,7 +858,14 @@
    space, so the state icon really sits at the row end). Hovering the row
    (or keeping a kebab menu open, .rowActionsVisible) swaps them IN while
    the trailing state slot and the session-time slot are swapped OUT — a
-   true replacement, not a fade-over-an-invisible-gap. */
+   true replacement, not a fade-over-an-invisible-gap.
+   Reveal is pointer-safe (2026-09): the occupant/action reveal keys on
+   row hover, kebab-open and KEYBOARD focus (:has(:focus-visible)) — never
+   on plain :focus. Chromium focuses a clicked button on mousedown, so a
+   :focus-within reveal would keep the hover-revealed content (git occupant
+   actions, row actions) visible after the pointer leaves a just-clicked
+   row — a folded git row then showed its count AND a stray branch/delete
+   action at rest, and the count column lost its shared right edge. */
 .rowActions {
   flex: none;
   display: none;
@@ -857,12 +878,13 @@
 }
 
 .workspaceHeader:hover :global(.git-ws-action),
-.workspaceHeader:focus-within :global(.git-ws-action),
+.workspaceHeader:has(:focus-visible) :global(.git-ws-action),
 .workspaceHeader:has(.rowActionsVisible) :global(.git-ws-action) {
   display: inline-flex;
 }
 
 .workspaceHeader:hover .rowActions,
+.workspaceHeader:has(:focus-visible) .rowActions,
 .sessionRow:hover .rowActions {
   display: inline-flex;
 }
@@ -871,19 +893,20 @@
    revealed (the reveal rules set display; these keep the disabled opacity on
    every reveal path — client review P3-6/P3-1). */
 .workspaceHeader:hover :global(.git-ws-action:disabled),
-.workspaceHeader:focus-within :global(.git-ws-action:disabled),
+.workspaceHeader:has(:focus-visible) :global(.git-ws-action:disabled),
 .workspaceHeader:has(.rowActionsVisible) :global(.git-ws-action:disabled) {
   opacity: .42;
 }
 
 /* The row/header state indicators swap OUT while the actions are in: on
-   hover, or while a kebab menu keeps them visible. */
+   hover or keyboard focus, or while a kebab menu keeps them visible. */
 .sessionRow:hover .sessionStateSlot,
 .sessionRow:has(.rowActionsVisible) .sessionStateSlot {
   display: none;
 }
 
 .workspaceHeader:hover .workspaceCount,
+.workspaceHeader:has(:focus-visible) .workspaceCount,
 .workspaceHeader:has(.rowActionsVisible) .workspaceCount {
   display: none;
 }
@@ -1033,21 +1056,24 @@
 /* While editing in place, the fold-glyph hover/focus swap is suppressed —
    the row is in edit mode, so the chevron affordance must not displace the
    folder glyph under the pointer or the focused input. Same specificity as
-   the .workspaceHeader:hover/:focus-within rules above, declared later so
-   they win. Only the FOLDER variant is needed: in the flags-resolved steady
-   state rename can never arm on a derived (worktree) workspace (no kebab
-   rename / dblclick gate), so a renaming header always carries
-   .foldToggleFolder. Before a source's git flags resolve (isWorktree still
-   unknown) the gates do not yet exclude a worktree row — pre-existing
-   arming-window caveat; a mid-edit flag flip would only mean the glyph
-   hover swap is not suppressed for the rest of that edit (cosmetic). */
+   the .workspaceHeader:hover/:has(:focus-visible) rules above, declared
+   later so they win. (A focused text input matches :focus-visible even
+   after a pointer click, so :has(:focus-visible) covers both the keyboard
+   and the mouse-armed rename.) Only the FOLDER variant is needed: in the
+   flags-resolved steady state rename can never arm on a derived (worktree)
+   workspace (no kebab rename / dblclick gate), so a renaming header always
+   carries .foldToggleFolder. Before a source's git flags resolve
+   (isWorktree still unknown) the gates do not yet exclude a worktree row —
+   pre-existing arming-window caveat; a mid-edit flag flip would only mean
+   the glyph hover swap is not suppressed for the rest of that edit
+   (cosmetic). */
 .workspaceRenaming:hover .foldToggleFolder .foldChevron,
-.workspaceRenaming:focus-within .foldToggleFolder .foldChevron {
+.workspaceRenaming:has(:focus-visible) .foldToggleFolder .foldChevron {
   display: none;
 }
 
 .workspaceRenaming:hover .foldToggleFolder .foldFolder,
-.workspaceRenaming:focus-within .foldToggleFolder .foldFolder {
+.workspaceRenaming:has(:focus-visible) .foldToggleFolder .foldFolder {
   display: inline-flex;
 }
 

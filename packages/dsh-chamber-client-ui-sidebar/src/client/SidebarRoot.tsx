@@ -153,7 +153,7 @@ import {
   type ChamberSidebarViewPrefs,
 } from '../shared/view-prefs.ts'
 import { clearPendingClick, isClickInsidePendingRow, noteSessionRowClick } from '../shared/pending-click.ts'
-import { getSourceRepoLayouts, getWorkspaceGitFlag, getWorkspaceGitFlagsVersion, isSourceGitFlagsLoaded, subscribeWorkspaceGitFlags } from '../shared/workspace-git-flags.ts'
+import { getSourceRepoLayouts, getWorkspaceGitFlag, getWorkspaceGitFlagsVersion, hiddenByMainWorkspaceFold, isSourceGitFlagsLoaded, subscribeWorkspaceGitFlags } from '../shared/workspace-git-flags.ts'
 import css from './SidebarRoot.module.css'
 import cc from './sidebar-chamber.module.css'
 
@@ -1296,7 +1296,29 @@ export function SidebarRoot({
       workspace.ungrouped !== true && workspace.synthetic !== true)
     const targetIndex = realWorkspaces.findIndex(workspace => workspace.id === over.id)
     if (targetIndex === -1) return
-    const anchor = over.half === 'before' ? over.id : realWorkspaces[targetIndex + 1]?.id
+    // chamber (08 §11.7): rows hidden by their main's repo-group fold render
+    // nothing between the visible rows — an 'after' drop must anchor on the
+    // next VISIBLE row, or the marker (drawn below the visible row) and the
+    // committed position would disagree about where the hidden rows sit.
+    // The scan applies the render filter's own predicate
+    // (hiddenByMainWorkspaceFold: derived-of-a-folded-present-main), so view
+    // and commit stay in lockstep; with nothing folded it stops immediately
+    // and the anchor is the old one (the next registry row).
+    const realIds = new Set(realWorkspaces.map(workspace => workspace.id))
+    let afterIndex = targetIndex + 1
+    if (over.half === 'after') {
+      while (afterIndex < realWorkspaces.length) {
+        const candidate = realWorkspaces[afterIndex]!
+        const candidateFlag = getWorkspaceGitFlag(server.id, candidate.id)
+        const candidateMain = candidateFlag?.mainWorkspaceId
+        if (candidateMain === undefined) break
+        const candidateMainFolded = viewPrefs.folded[`${server.id}/${candidateMain}`] === true
+        const candidateMainPresent = realIds.has(candidateMain)
+        if (!hiddenByMainWorkspaceFold(candidateFlag, candidateMainFolded, candidateMainPresent)) break
+        afterIndex += 1
+      }
+    }
+    const anchor = over.half === 'before' ? over.id : realWorkspaces[afterIndex]?.id
     if (anchor === activeDrag.workspaceId) return
     const renderedOrder = workspaceOrderOverride[server.id] ?? realWorkspaces.map(workspace => workspace.id)
     const sourceIndex = renderedOrder.findIndex(id => id === activeDrag.workspaceId)
@@ -2195,7 +2217,38 @@ export function SidebarRoot({
                           <span className={cc.listTopDropIndicator} aria-hidden="true" />
                         )}
                         {(() => {
-                          return orderedWorkspaces.map(workspace => {
+                          // chamber (08 §11.7, user decision 2026-09): folding
+                          // a git MAIN workspace folds the WHOLE repository
+                          // group — its derived (worktree) workspace rows
+                          // render hidden while the main's row is folded and
+                          // return on expand (each with its own saved state).
+                          // A derived row is a registered workspace whose git
+                          // flag carries mainWorkspaceId (workspace-git-flags
+                          // .ts); worktrees of an unregistered main (no main
+                          // row to fold) and non-git workspaces stay visible.
+                          // The main must still EXIST in the aggregate: once
+                          // its registration vanishes (external deletion),
+                          // the stale fold pref must not lock the derived
+                          // rows hidden with no expand control — they surface
+                          // again until the next git snapshot re-publish
+                          // drops the mainWorkspaceId association. Rows
+                          // carry no destructive in-flight state: git saga
+                          // progress/errors surface through the source-level
+                          // coordinator strip and rowErrors restore as-is on
+                          // expand, so hiding loses nothing.
+                          const visibleOrderedWorkspaces = (() => {
+                            const liveWorkspaceIds = new Set(server.workspaces.map(row => row.id))
+                            return orderedWorkspaces.filter(workspace => {
+                              if (workspace.ungrouped === true || workspace.synthetic === true) return true
+                              const flag = getWorkspaceGitFlag(server.id, workspace.id)
+                              const mainId = flag?.mainWorkspaceId
+                              if (mainId === undefined) return true
+                              const foldedMain = viewPrefs.folded[`${server.id}/${mainId}`] === true
+                              const mainPresent = liveWorkspaceIds.has(mainId)
+                              return !hiddenByMainWorkspaceFold(flag, foldedMain, mainPresent)
+                            })
+                          })()
+                          return visibleOrderedWorkspaces.map(workspace => {
                           const workspaceKey = `${server.id}/${workspace.id}`
                           const folded = viewPrefs.folded[workspaceKey] === true
                           // chamber: while THIS workspace's inline rename is

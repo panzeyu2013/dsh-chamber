@@ -162,10 +162,14 @@
 /* OpenChamber-style row actions: hidden at rest; revealed together with the
    row's own "+"/kebab cluster when the whole workspace row is hovered (the
    sidebar css reveals :global(.git-ws-action) on .workspaceHeader:hover /
-   focus-within / kebab-open). Keyboard focus on the git chip also reveals. */
+   :has(:focus-visible) / kebab-open). Keyboard focus on the occupant also
+   reveals. The reveal is pointer-safe (2026-09): it never keys on plain
+   :focus-within, which Chromium's mousedown-focus would keep matched after
+   a pointer click — a folded row would then keep its occupant action
+   visible at rest next to the session count. */
 /* The resting state is HIDDEN — display:none lives on the button's own
    module class (specificity 0,1,0) so it can never be beaten by a later
-   same-specificity rule; every reveal rule (0,3,0) overrides it. Also out
+   same-specificity rule; every reveal rule (0,3,0)+ overrides it. Also out
    of the Tab order / a11y tree, like the sidebar's own rowActions.
    (2026-08 fix: hiding via :global(.git-ws-action) lost to
    .headerGitAction's inline-flex on equal specificity — actions showed at
@@ -185,7 +189,7 @@
   cursor: pointer;
 }
 
-.headerGit:focus-within :global(.git-ws-action) {
+.headerGit:has(:focus-visible) :global(.git-ws-action) {
   display: inline-flex;
 }
 

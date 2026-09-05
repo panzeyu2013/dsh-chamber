@@ -9,7 +9,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   clearWorkspaceGitFlags, getSourceRepoLayouts, getWorkspaceGitFlag, getWorkspaceGitFlagsVersion,
-  isSourceGitFlagsLoaded, markSourceGitFlagsLoaded, retainSourceWorkspaceFlags, setSourceRepoLayouts, setWorkspaceGitFlag,
+  hiddenByMainWorkspaceFold, isSourceGitFlagsLoaded, markSourceGitFlagsLoaded, retainSourceWorkspaceFlags, setSourceRepoLayouts, setWorkspaceGitFlag,
 } from '../src/shared/workspace-git-flags.ts'
 
 test('set/clear + version counter bumps on change only', () => {
@@ -62,4 +62,18 @@ test('git-flags-loaded marker: per-source, idempotent, reset on clear (2026-10, 
   clearWorkspaceGitFlags('s')
   assert.equal(isSourceGitFlagsLoaded('s'), false, 'disconnect/clear resets the marker (reconnect re-gates)')
   assert.ok(getWorkspaceGitFlagsVersion() > v1, 'reset bumps')
+})
+
+test('repo-group fold predicate (08 §11.7): derived rows hide only while the main is folded AND still present', () => {
+  const derived = { isWorktree: true, isMain: false, mainWorkspaceId: 'main-1', repoKey: 'r' }
+  const derivedNoMain = { isWorktree: true, isMain: false, repoKey: 'r' }
+  assert.equal(hiddenByMainWorkspaceFold(derived, true, true), true, 'main folded + present: derived row hidden with the group')
+  assert.equal(hiddenByMainWorkspaceFold(derived, false, true), false, 'main expanded: derived row visible')
+  assert.equal(hiddenByMainWorkspaceFold(derived, true, false), false,
+    'main vanished from the aggregate: no fold control exists, derived row must not be locked hidden')
+  assert.equal(hiddenByMainWorkspaceFold(undefined, true, true), false, 'no flag (non-git / unresolved): visible')
+  assert.equal(hiddenByMainWorkspaceFold(derivedNoMain, true, true), false,
+    'derived of an UNREGISTERED main (no main row to fold): visible')
+  const mainFlag = { isWorktree: false, isMain: true, repoKey: 'r' }
+  assert.equal(hiddenByMainWorkspaceFold(mainFlag, true, true), false, 'the main row itself is never hidden by its own fold')
 })
