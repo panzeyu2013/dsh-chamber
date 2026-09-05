@@ -339,6 +339,8 @@ subagent 复查的修复。除仓库特性外，前端形态与 OpenChamber 一�
   揭示；静止时 `display:none`（零布局占用、移出 Tab 序）；**hover 时 chip
   （`git-ws-chip`）原位隐藏、动作在同一位置换入**（镜像侧栏
   count→rowActions 的原位换入，无布局漂移）；禁用态 hover 下保持 .42。
+  （本节为 2026-08 轮实现记录；揭示触发语义后经 §11.7 修订为 pointer-safe
+  ——hover / kebab 展开 / 键盘焦点，鼠标点击产生的普通 focus 不再揭示。）
   **禁止二次派生（OpenChamber 对齐）**：创建入口只在仓库**主 checkout**
   行（worktree 行只有删除）；创建对话框的来源下拉也只提供主 checkout
   workspace（`createSourceOptions` 优先 `isMain`）。
@@ -499,3 +501,40 @@ typecheck（含根）、verify:i18n、build:host-git（dist 重建且与 src 字
   探测（`probeRemoteChamber` 探 pkg+dist），`remoteNeedsSeed` 条件
   = hostGraph 未(installed&&patched) || 未装 gitWorktree。
   （历史基线；chamber 块已由 PluginDialog 收敛——见 design 21 §6.6 落地状态，2026-12）
+
+### 11.7 仓库组折叠与行内动作揭示修复（2026-09，用户报告）
+
+- **折叠主 checkout = 折叠整个仓库组（用户决策）**：主行折叠按钮点击后，
+  同仓库的派生（worktree）workspace 行**整组隐藏**（渲染级过滤，像源折叠
+  那样整组收起），展开主行即恢复——各派生行自己的折叠状态保留，恢复后
+  原样呈现。实现：纯谓词 `hiddenByMainWorkspaceFold`（`workspace-git-flags
+  .ts`，渲染过滤器与拖拽锚点共用）按 `mainWorkspaceId` 归属判定，主行
+  `viewPrefs.folded[mainKey] === true` 时跳过其派生行（不写派生行的
+  folded 偏好，纯展示派生）。**主行存在性守卫**：主行注册从聚合消失（外
+  部删除）而旧 folded 偏好残留时，谓词要求主行仍在列表中——消失的主行没
+  有折叠钮可点，派生行不得被锁在隐藏态（git 快照随后重发布会去掉
+  mainWorkspaceId 关联，窗口有界且自愈）。隐藏行不携带破坏性在途状态：
+  git saga 进度/错误经 coordinator 源级条带浮现、sidebar 行错误展开后
+  原样恢复。派生行不得排到主 checkout 之前的拖拽钳制不变；**折叠态拖放锚
+  点**：派生行隐藏期间，任意可见行的 after 半区落点会跳过其后被隐藏的派
+  生行、锚到下一可见行（与标记/视觉一致，纯谓词复用保证视图与提交不漂
+  移）——想插到主行与派生行之间需先展开该组。未注册 worktree 块（Plan A）
+  与主未注册（无主行可折叠）的派生行不受影响。
+- **行内动作揭示 pointer-safe（消除折叠行常驻动作图标）**：git occupant
+  （主行「分支+」创建 / worktree 行删除）、计数徽标与**折叠字形交换**
+  （workspace folder/branch ↔ chevron、source monitor ↔ chevron、rename 期
+  抑制）的触发从 `:focus-within` 统一改为 **`:has(:focus-visible)`**
+  （hover / kebab 展开 / 键盘焦点三种触发不变）。原因：Chromium 在
+  mousedown 时聚焦被点按钮，点击折叠钮后焦点留在行内 → `:focus-within`
+  持续命中 → 鼠标移开后折叠行右端仍常驻「计数徽标 + 动作图标」（主行=
+  分支图标、worktree 行=删除图标）、行左端折叠字形也停留在换出态
+  （chevron），且计数徽标不再贴行尾、各行数字右缘间距不一。统一后鼠标
+  点击在行上不留下任何 hover 态残留（折叠方向在 hover / 键盘焦点 / kebab
+  展开时显示，行左端字形常态回到身份图标），键盘 Tab / Enter 的
+  `:focus-visible` 揭示与悬停换入完全保留；计数徽标在同一揭示状态下与动
+  作原位换出（换入/换出成对）。
+- **计数徽标右对齐**：`.workspaceCount` 由 `text-align: center` 改为
+  `right`——徽标内容盒 `min-width: 16px` 的钳位使居中数字的右缘随位数
+  浮动（1 位数字距徽标右缘约 10px、2/3 位约 5-6px），右对齐后不同位数
+  （1/2/3 位）的数字右缘共享同一 x，消除各行计数距右侧间距不齐；hover
+  原位换出规则不变。

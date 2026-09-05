@@ -51,6 +51,25 @@ export interface RepoGitLayout {
   unregistered: UnregisteredWorktreeInfo[]
 }
 
+/**
+ * chamber (08 §11.7): the repo-group-collapse predicate — whether a derived
+ * workspace row is hidden by its git MAIN workspace's fold. Pure, so the
+ * sidebar's render filter and drag-anchor math share one verdict and cannot
+ * drift. `mainPresent` guards the stale window after the main's workspace
+ * registration vanishes from the aggregate while its git flags have not been
+ * re-published yet: a missing main row offers no expand control, so its
+ * derived rows must stay visible instead of being locked hidden behind a
+ * fold pref nobody can toggle (the next git snapshot re-publish drops the
+ * mainWorkspaceId association anyway).
+ */
+export function hiddenByMainWorkspaceFold(
+  flag: WorkspaceGitFlag | undefined,
+  foldedMain: boolean,
+  mainPresent: boolean,
+): boolean {
+  return flag?.mainWorkspaceId !== undefined && foldedMain && mainPresent
+}
+
 const flags = new Map<string, WorkspaceGitFlag>()
 const repoLayouts = new Map<string, RepoGitLayout[]>()
 /** Sources whose FIRST git snapshot has been published (2026-10 review,
