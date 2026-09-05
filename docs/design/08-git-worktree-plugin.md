@@ -340,7 +340,12 @@ subagent 复查的修复。除仓库特性外，前端形态与 OpenChamber 一�
   （`git-ws-chip`）原位隐藏、动作在同一位置换入**（镜像侧栏
   count→rowActions 的原位换入，无布局漂移）；禁用态 hover 下保持 .42。
   （本节为 2026-08 轮实现记录；揭示触发语义后经 §11.7 修订为 pointer-safe
-  ——hover / kebab 展开 / 键盘焦点，鼠标点击产生的普通 focus 不再揭示。）
+  ——hover / kebab 展开 / 键盘焦点，鼠标点击产生的普通 focus 不再揭示。
+  **2026-09 §11.7 再修订：常显分支 chip 契约作废**——行内 occupant 不再
+  渲染分支 chip（全仓无 `git-ws-chip` 类/标记）：worktree 行 rest 态行尾
+  只保留计数徽标，分支身份随行 hover / 键盘焦点 / kebab 揭示的动作与
+  工作区管理对话框呈现（§11.7 计数右缘与揭示前提以「rest 行尾只有计数」
+  为准，本段 chip 常显/原位换出两句不再成立）。）
   **禁止二次派生（OpenChamber 对齐）**：创建入口只在仓库**主 checkout**
   行（worktree 行只有删除）；创建对话框的来源下拉也只提供主 checkout
   workspace（`createSourceOptions` 优先 `isMain`）。
