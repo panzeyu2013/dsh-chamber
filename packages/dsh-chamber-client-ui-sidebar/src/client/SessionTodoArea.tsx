@@ -111,7 +111,9 @@ export function SessionTodoArea({
     servers.find(server => server.id === sourceId)?.label ?? sourceId
 
   return (
-    <div className={cc.todoArea} role="region" aria-label={t('todo.region.aria')}>
+    // Region name carries the live entry count ({n}) so a screen-reader user
+    // hears it without needing the aria-hidden pill.
+    <div className={cc.todoArea} role="region" aria-label={t('todo.region.aria', { n: entries.length })}>
       <div className={cc.todoHeader}>
         <span className={cc.todoTitle}>{t('todo.title')}</span>
         <span className={cc.todoCount} aria-hidden="true">{entries.length}</span>
@@ -185,26 +187,53 @@ function TodoRow({
     ? undefined
     : { backgroundColor: accent, opacity: 1 }
 
+  // Tooltip shows the FULL title first (a truncated row title is otherwise
+  // unrecoverable — the ellipsized span holds it all) plus the state · source
+  // · workspace context; the hover card therefore mirrors a session row's
+  // title + meta hover card.
+  const hoverLabel = `${title} · ${context}`
+
+  // Row anatomy (2026-12 style fix, user feedback): identity LEADING, state
+  // TRAILING — the same order a session row reads in the list (its source
+  // group/identity at the left, its state slot at the row end). The trailing
+  // slot reuses the session rows' own .sessionStateSlot geometry (10px slot,
+  // 14px while a pending interaction shows; the completed dot paints in the
+  // same band as the list's completed dots), so strip and list state marks
+  // line up in one column. The leading 16px source-dot slot occupies the
+  // source-header glyph column (and stays reserved without multiple sources,
+  // so the title column never shifts). Both slots are decorative (aria-hidden)
+  // — the button's aria-label carries state + title + source, so nothing is
+  // announced twice (the hover card itself is not announced: the vendor
+  // tooltip has no aria-describedby). Accepted (documented) a11y gap: unlike
+  // the list rows' conditional role="status", the strip adds no live
+  // announcements when entries appear/disappear (the strip is a pinned
+  // projection; live chatter on every projection change was judged worse —
+  // the unread state is still announced when a strip row is focused).
   return (
-    <Tooltip label={context} delayMs={400}>
+    <Tooltip label={hoverLabel} delayMs={400}>
       <button
         type="button"
         className={cc.todoRow}
-        aria-label={t('todo.row.aria', { state: status, title })}
+        aria-label={t('todo.row.aria', { state: status, title, source: sourceLabel })}
         onClick={() => {
           requestOpen(entry.sourceId, entry.sessionId)
         }}
       >
-        <span className={cc.todoKindSlot}>
+        <span className={cc.todoLeadSlot} aria-hidden="true">
+          {showSourceDot && (
+            <span className={clsx(cc.todoSourceDot, dotStyle === undefined && cc.todoSourceDotLocal)} style={dotStyle} />
+          )}
+        </span>
+        <span className={cc.todoRowTitle}>{title}</span>
+        <span
+          className={clsx(cc.sessionStateSlot, entry.kind !== 'completed' && cc.sessionStateSlotPending)}
+          aria-hidden="true"
+        >
           {entry.kind === 'approval' && <IconWarningOutline16 className={cc.statePendingApproval} />}
           {entry.kind === 'plan-review' && <IconChecklistOutline14 className={cc.statePendingPlan} />}
           {entry.kind === 'question' && <IconQuestionOutline14 className={cc.statePendingQuestion} />}
           {entry.kind === 'completed' && <span className={cc.stateCompleted} />}
         </span>
-        <span className={cc.todoRowTitle}>{title}</span>
-        {showSourceDot && (
-          <span className={clsx(cc.todoSourceDot, dotStyle === undefined && cc.todoSourceDotLocal)} style={dotStyle} />
-        )}
       </button>
     </Tooltip>
   )
