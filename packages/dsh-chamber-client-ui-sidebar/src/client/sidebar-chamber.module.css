@@ -1201,13 +1201,14 @@
    the internal scroll takes over. The box carries the pointer everywhere
    (gaps/rows are all part of the same attention surface — list discipline).
    The scrollport bleeds 8px right (margin-right -8 + padding-right 8 —
-   exactly .chamberList's pattern): the strip's OWN scrollbar band, drawn
-   when the expanded backlog overflows, stays in that same right-hand gutter
-   (right of the rows' right edge), so the trailing state slots keep their
-   session-row column even while the backlog scrolls — assuming the shell's
-   thin custom scrollbars (the list's reservation makes the same
-   assumption; a Windows always-show-scrollbars pass is part of the
-   packaged-state gate). */
+   reserving the same right-hand gutter .chamberList reserves with its own
+   padding-right 8; the mechanisms differ, the final geometry matches): the
+   strip's OWN scrollbar band, drawn when the expanded backlog overflows,
+   stays in that same right-hand gutter (right of the rows' right edge), so
+   the trailing state slots keep their session-row column even while the
+   backlog scrolls — assuming the shell's thin custom scrollbars (the list's
+   reservation makes the same assumption; a Windows always-show-scrollbars
+   pass is part of the packaged-state gate). */
 .todoRows {
   display: flex;
   flex-direction: column;
