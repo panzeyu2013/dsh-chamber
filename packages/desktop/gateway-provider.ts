@@ -775,7 +775,8 @@ export function gatewaySecretStorageMode(): 'safeStorage' | 'plaintext' {
 // runtime controller answers — independently of the managed dsh lifecycle.
 // This distinction keeps /chamber/runtime reachable for recovery while dsh is
 // blocked/down. (dsh×http was disabled 2026-09 — a plain dsh target's only
-// transport is ssh, whose provider owns the session/list handshake.)
+// transport is ssh, whose provider owns the dsh host-identity handshake:
+// session/canOpenWorkspacePath with its legacy session/list fallback.)
 // ---------------------------------------------------------------------------
 
 export const GATEWAY_RUNTIME_IDENTITY = 'dsh-chamber-gateway-runtime'
@@ -1170,8 +1171,9 @@ export const gatewayProvider: TransportProvider = {
   /** Identity verification: the gateway target must answer the authenticated
    * gateway-owned runtime status identity, which remains available while its
    * managed dsh is blocked/down (a dsh target never reaches this provider —
-   * dsh×http disabled 2026-09; its ssh transport owns the session/list
-   * handshake).
+   * dsh×http disabled 2026-09; its ssh transport owns the dsh host-identity
+   * handshake: session/canOpenWorkspacePath with its legacy session/list
+   * fallback).
    * A missing
    * token is NOT a pre-flight refusal (design 17 §2.3): the probe is sent
    * WITHOUT an Authorization header and the gateway's own answer is

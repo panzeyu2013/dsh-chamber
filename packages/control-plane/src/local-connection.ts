@@ -9,19 +9,22 @@
  * process-level facts:
  *
  * - spawn via spawn-dsh.ts (web profile, fixed port + P+1 retry, pid record);
- * - readiness = the spawn's TCP + session/list probe (spawn-dsh owns it;
+ * - readiness = the spawn's TCP + unified host-identity probe (spawn-dsh owns
+ *   it; probeHostIdentity speaks the fixed-size session/canOpenWorkspacePath
+ *   boolean with a legacy session/list fallback for pre-0.1.2-rc.1 trees —
  *   the old host.describe readiness handshake was deleted upstream in dsh
  *   0.1.2-alpha.1);
- * - health monitoring (design 02 §3.5): a periodic session/list probe (30s
- *   default, 5s unary timeout, single-flight with a 750ms result cache)
- *   shares one failure counter with the transport triggers (child exit,
- *   probe failures). Failures 1..N-1 land on degraded; the Nth failure
- *   enters the restart sequence. A dead child skips counting and restarts
- *   immediately. Restarts within a window are bounded (backoff 1s → 60s,
- *   max restarts per 10min window) before the machine lands on
- *   restart-exhausted. Any probe success resets the counter and returns to
- *   ready. Probes and restarts are suppressed while stopping and during an
- *   in-flight restart.
+ * - health monitoring (design 02 §3.5): a periodic unified host-identity
+ *   probe (30s default, 5s unary timeout, single-flight with a 750ms result
+ *   cache) shares one failure counter with the transport triggers (child
+ *   exit, probe failures). The probe never re-reads session data, so its
+ *   verdict and response size are independent of session count. Failures
+ *   1..N-1 land on degraded; the Nth failure enters the restart sequence. A
+ *   dead child skips counting and restarts immediately. Restarts within a
+ *   window are bounded (backoff 1s → 60s, max restarts per 10min window)
+ *   before the machine lands on restart-exhausted. Any probe success resets
+ *   the counter and returns to ready. Probes and restarts are suppressed
+ *   while stopping and during an in-flight restart.
  * - state machine (design 02 §3.5):
  *   stopped → starting → ready ⇄ degraded → restarting → restart-exhausted →
  *   stopped; spawn failures land on 'error' (fail-loud; start() respawns);
@@ -40,7 +43,7 @@
 
 import { isWriterQuiescenceUnknown, spawnDsh } from './spawn-dsh.ts'
 import { clearAuthCookie } from './browser-auth-cookie.ts'
-import { describeCapabilities as describeCapabilitiesFn } from './dsh-client.ts'
+import { probeHostIdentity as probeHostIdentityFn } from './dsh-client.ts'
 import { createHostLogWriter } from './host-logs.ts'
 import type { Logger } from './types.ts'
 
@@ -60,11 +63,14 @@ export interface SpawnedDsh {
   stop(): Promise<void>
 }
 
-/** Unary dsh call surface (the deps.call seam, narrowed to what this uses). */
-export type DescribeCapabilitiesFn = (
+/** Unified host-identity probe seam (deps.probeHostIdentity — the narrow
+ *  surface this adapter uses). Resolution = the host answered the identity
+ *  handshake; both identity-method boolean answers and the legacy fallback
+ *  are healthy, and failures throw. */
+export type ProbeIdentityFn = (
   baseUrl: string,
-  options: { generationSignal?: AbortSignal; force?: boolean; timeoutMs?: number },
-) => Promise<{ value?: any; cachedAt?: number }>
+  options: { signal?: AbortSignal; generationSignal?: AbortSignal; timeoutMs?: number | null; logger: { warn(line: string): void } },
+) => Promise<boolean>
 
 /** Injectable connection-adapter dependencies (test seams for the wire). */
 export interface LocalConnectionDeps {
@@ -81,7 +87,7 @@ export interface LocalConnectionDeps {
     /** Aborted by stop() so a readiness wait cannot outlive writer quiescence. */
     signal?: AbortSignal
   }) => Promise<SpawnedDsh>
-  describeCapabilities?: DescribeCapabilitiesFn
+  probeHostIdentity?: ProbeIdentityFn
   /**
    * Spawn scheduling seam, invoked on BOTH spawn paths (startLocal and the
    * health auto-restart loop) after the public entry gate but before any
@@ -135,7 +141,6 @@ export interface LocalConnection {
   getDshPort(): number | null
   getError(): string | null
   getConsecutiveFailures(): number
-  /** 0.1.2 wire: session/list snapshot (host.describe was deleted upstream). */
 
   /**
    * Whether a real dsh process is currently alive under this connection
@@ -203,7 +208,7 @@ export const MAX_RESTARTS_IN_WINDOW = 5
  *   options? {failureThrottleMs?, healthIntervalMs?, healthProbeTimeoutMs?,
  *   healthResultCacheMs?, restartFailureThreshold?, restartBackoffFloorMs?,
  *   restartBackoffCeilMs?, restartWindowMs?, maxRestartsInWindow?},
- *   deps? {spawnDsh?, describeCapabilities?}} — the deps are injectable so
+ *   deps? {spawnDsh?, probeHostIdentity?}} — the deps are injectable so
  *   unit tests can mock the wire.
  */
 export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, logger, options = {}, deps = {} }: {
@@ -231,7 +236,7 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, log
   const dshPortBase = options.dshPortBase
   const ownerInstanceId = options.ownerInstanceId
   const spawnDshFn = (deps.spawnDsh ?? spawnDsh) as NonNullable<LocalConnectionDeps['spawnDsh']>
-  const describeCapabilities = deps.describeCapabilities ?? describeCapabilitiesFn
+  const probeHostIdentity = deps.probeHostIdentity ?? probeHostIdentityFn
 
   function connectionBusy(reason: string): Error & { code: string } {
     const busy = new Error(reason) as Error & { code: string }
@@ -287,9 +292,6 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, log
   let startPromise: Promise<void> | null = null
   let consecutiveFailures = 0
   let lastFailureAt = 0
-  /** The latest session/list probe snapshot (health probe side effect). The
-   *  old host.describe capability facts are gone upstream (dsh 0.1.2-alpha.2),
-   *  so this surface no longer carries version/capability data. */
   /** Bumped on start()/stop() so stale restart loops abort (see triggerRestart). */
   let epoch = 0
   /** Generation abort for the in-flight health probe: stop()/start() abort it
@@ -476,12 +478,17 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, log
       return
     }
     try {
-      await describeCapabilities(`http://127.0.0.1:${dshPort}`, {
-        force: true,
+      // The unified host-identity probe (probeHostIdentity): fixed-size
+      // session/canOpenWorkspacePath boolean, legacy session/list fallback on
+      // an identity-method 404 (a pre-0.1.2-rc.1 runtime tree). The probe
+      // never re-reads session data, so its verdict stays decoupled from
+      // session-count growth. The current generation's abort: stop()/start()
+      // abort in-flight probes so a late verdict cannot outlive the
+      // transition (2026 H2).
+      await probeHostIdentity(`http://127.0.0.1:${dshPort}`, {
         timeoutMs: healthProbeTimeoutMs,
-        // The current generation's abort: stop()/start() abort in-flight
-        // probes so a late verdict cannot outlive the transition (2026 H2).
         generationSignal: healthGeneration.signal,
+        logger,
       })
       healthResultCache = { at: Date.now(), ok: true }
       onHealthSuccess()
@@ -826,14 +833,6 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, log
       return consecutiveFailures
     },
 
-    /**
-     * The latest session/list probe snapshot from the health probe; null
-     * before the first success. NOTE (dsh 0.1.2-alpha.1 migration, D2): the
-     * host.describe capability endpoint was deleted upstream and the probe is
-     * now session/list, so this value is a session list — no host
-     * version/cwd/capability facts are available from this surface anymore
-     * (the version-chip fact source moved to the runtime version, design 18).
-     */
     /**
      * Start (or restart) the connection: terminate a stale child, spawn a
      * fresh dsh web profile, and land on ready. Idempotent while already

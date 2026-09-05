@@ -41,6 +41,12 @@ import {
   GIT_WORKTREE_INSERT_ID,
   GIT_WORKTREE_PACKAGE_NAME,
 } from './plugin-sync.ts'
+// The shared dsh-runtime activation-probe set (the desktop shims re-export
+// the package main → dist; this import therefore pins the COMMITTED bundle).
+import { REQUIRED_ACTIVATION_PROBES } from '@dsh-chamber/dsh-runtime'
+// The control-plane single-source host-identity constants (consumed through
+// the same facade the desktop probes use).
+import { HOST_IDENTITY_METHOD, LEGACY_HOST_PROBE_METHOD } from './control-plane-module.ts'
 
 const CLIENT_GRAPH = { id: CLIENT_GRAPH_INSERT_ID, name: CLIENT_GRAPH_PACKAGE_NAME }
 const GIT_WORKTREE = { id: GIT_WORKTREE_INSERT_ID, name: GIT_WORKTREE_PACKAGE_NAME }
@@ -107,4 +113,20 @@ test('the desktop-consumed client-request envelope is byte-identical to control-
     JSON.stringify(desktop),
     '{"type":"client-request","rpcId":"test-rpc-id","method":"session/list","payload":{"args":{}}}',
   )
+})
+
+test('the dsh-runtime activation set and the control-plane identity method stay in lockstep (A2)', () => {
+  // dsh-runtime (pure Node) mirrors the host-identity wire by design and its
+  // desktop/gateway consumers import the package main (the committed dist):
+  // this assertion pins the runtime's CLOSED activation set to the
+  // control-plane single-source method constants. A drift on either side —
+  // an identity-method rename, a session/list or data.sessions row sneaking
+  // back into the activation set, or a stale committed dist — fails here.
+  const probeSet = REQUIRED_ACTIVATION_PROBES as readonly string[]
+  assert.equal(probeSet.includes(HOST_IDENTITY_METHOD), true,
+    'the activation set no longer probes the identity method (or dist is stale)')
+  assert.equal(probeSet.includes(LEGACY_HOST_PROBE_METHOD), false,
+    'session/list must not re-enter the activation probe set')
+  assert.equal(probeSet.includes('data.sessions'), false,
+    'data.sessions must not re-enter the activation probe set')
 })

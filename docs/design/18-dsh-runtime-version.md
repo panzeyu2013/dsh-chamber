@@ -165,17 +165,34 @@ reaper（回收孤儿实例）→ 快照 DSH_HOME（§3.7，断言无存活写�
 ### 3.4 激活门控与回退（自由选择模型的唯一安全网，R3-1 P2-4/P2-8/P2-12）
 
 换树后、宣布生效前跑探针列表（全部复用现有设施，**全部只读、无副作用**；
-与上游 0.1.2 wire 对齐，`REQUIRED_ACTIVATION_PROBES`，slash 端点）：
+与钉住上游 0.1.2-rc.1 wire 对齐，`REQUIRED_ACTIVATION_PROBES` 六项，slash
+端点；探针响应与**会话数据量彻底解耦**——2026-12 定稿选项 A：会话面探针换为
+固定小体积身份方法）：
 
 - `commands/execute` 以固定不存在 session 调用并精确期待 `session/not-found`，
-  只验证 wire 解码且不进入 CommandRuntime；`session/list` **只读 list**（绝不
-  create）；graph 通道 `clientGraph/graph`；host settings 只读 RPC
-  `settings/describe`；`gitWorktree/previewCreate` 以空输入精确期待
-  `invalid-input`，在 Git 进程/仓库扫描前停止；`data.settings`/`data.sessions`
+  只验证 wire 解码且不进入 CommandRuntime；**身份探针
+  `session/canOpenWorkspacePath`**（SessionController `session` namespace 零参
+  boolean Remote——纯同步平台检测，不读会话数据、不激活 Agent、无 IO，响应为
+  固定小体积 boolean，value true/false 均健康；老 runtime 树（dsh <
+  0.1.2-rc.1）对其答 HTTP 404 → 探针层自动回退 legacy `session/list`（1 MiB
+  上限，行为与旧版逐位一致，老树激活/回退照常通过），回退经可选 `warn` sink
+  发 warning（两个生产 owner 未注入即静默——该层可见性由并行
+  control-plane `probeHostIdentity` 的 logger 兜底，见 STATUS 挂账③）；graph
+  通道 `clientGraph/graph`；host settings 只读 RPC `settings/describe`
+  （**B1：per-call 响应上限放宽至 16 MiB**，与 `SETTINGS_FILE_MAX_BYTES`
+  对齐——合法大配置永不误伤；cap 经 seam `RuntimeProbeRpcOptions.maxResponseBytes`
+  透传——desktop 直传 control-plane `call` 自动生效，gateway runtime-manager 两处
+  call seam 同样转发，两端行为一致）；
+  `gitWorktree/previewCreate` 以空输入精确期待
+  `invalid-input`，在 Git 进程/仓库扫描前停止；`data.settings`
   **带既有 `$DSH_HOME` profile 数据 boot + 数据可读性探测**（settings.yaml 可
-  解析、会话列表可读）。`host.describe` 与 `workspace.list` 已随上游删除，不在
+  解析）。**`data.sessions` 随选项 A 移除**（2026-12 定稿）：探针不再读会话
+  数据，会话存储健康不在激活契约内——`session/list` 与 `data.sessions` 双双
+  退出探针集。`host.describe` 与 `workspace.list` 已随上游删除，不在
   探针集内；`clientGraph/graph` 与 `gitWorktree/previewCreate` 两域在
-  `hostDomains=false` 形态（2026-12，见下）跳过。
+  `hostDomains=false` 形态（2026-12，见下）跳过（该形态期望集 =
+  `PROBE_NAMES_WITHOUT_HOST_DOMAINS` 四项：commands/execute ·
+  session/canOpenWorkspacePath · settings/describe · data.settings）。
 - **探针形态化（2026-12，design 17 §10）**：`clientGraph/graph` 与
   `gitWorktree/previewCreate` 两个 chamber 宿主域只在「种子缓存就绪」时验证——
   gateway 的宿主包由连接的桌面经 `/chamber/plugins` 同步（Phase 3），缓存缺包时
@@ -515,8 +532,9 @@ round（plan 24）再修订——D6-A 用户拍板）**：
   做**静止拷贝**（断言无存活写者）到 tmp → 原子发布到
   `snapshots/<源版本>-<时间戳>/`（**源版本 = 切换前活跃版**）。**不变量：无快照
   不切指针**——快照失败（ENOSPC/权限）→ 中止 + 快照失败标记（§3.6）；
-- **数据可读性探测**（§3.4）：新版本启动后校验 settings.yaml 可解析、会话列表
-  可读；
+- **数据可读性探测**（§3.4）：新版本启动后校验 settings.yaml 可解析（`data.settings`
+  行）；会话数据可读性不在契约内（2026-12 选项 A——探针不读会话数据，`data.sessions`
+  已移除）；
 - **失败回退 = 切回旧指针 + 恢复快照**。**恢复协议（两阶段 + 幂等补完）**：
   写 `restore-in-progress` 标记 → `DSH_HOME → DSH_HOME.old` → `snapshot →
   DSH_HOME` → 删标记。**补完只按持久 phase 与精确路径状态推进（R3-1 P2-9）**，

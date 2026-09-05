@@ -21,7 +21,7 @@ import { RunPhaseFixture, type RunPhaseEvent } from './run-phase-fixture.ts'
 
 const pass = (): ProbeResult[] => REQUIRED_ACTIVATION_PROBES.map(name => ({ name, ok: true }))
 const fail = (): ProbeResult[] =>
-  pass().map(probe => probe.name === 'session/list' ? { ...probe, ok: false } : probe)
+  pass().map(probe => probe.name === 'session/canOpenWorkspacePath' ? { ...probe, ok: false } : probe)
 
 type ProbeScriptEntry = ProbeResult[] | 'pass' | 'fail'
 

@@ -1,11 +1,13 @@
 /**
  * dsh wire protocol layer. The desktop control-plane uses only the unary
- * client and generation-scoped capability cache. The separately invoked
- * authenticated gateway proxies the same unary/stream wires; the legacy
- * respond/openEventStream exports below are deprecated and have no
- * production callers (dsh-v0.1.2-alpha.1 deleted the client-response and
- * events.mux wires; the gateway's 0.1.2 remote-stream mux client was removed
- * with the 2026-12 orchestration strip).
+ * client, the unified host-identity probe (probeHostIdentity — the
+ * session/canOpenWorkspacePath identity contract with its legacy session/list
+ * fallback, single-sourced in rpc-envelope.ts) and the generation-scoped
+ * abort semantics. The separately invoked authenticated gateway proxies the
+ * same unary/stream wires; the legacy respond/openEventStream exports below
+ * are deprecated and have no production callers (dsh-v0.1.2-alpha.1 deleted
+ * the client-response and events.mux wires; the gateway's 0.1.2 remote-stream
+ * mux client was removed with the 2026-12 orchestration strip).
  *
  * Invariants:
  * - rpcId is minted by the initiator (this client) on every unary call and
@@ -27,9 +29,18 @@
  * - every client-request converges on the rpcId pending table (settle-once):
  *   the `settled` flag + first-writer-wins make response arrival vs timeout
  *   vs caller abort settle each entry exactly once.
- * - capability snapshots (the session/list probe) are generation-scoped: the
- *   cache entry dies with its generation's signal; invalidation emits no
- *   events.
+ * - every unary response body is read under a per-call byte cap
+ *   (UnaryOptions.maxResponseBytes; default MAX_UNARY_RESPONSE_BYTES) so a
+ *   damaged/growing host can never grow this process's memory without bound.
+ * - probe semantics are decoupled from session-data growth (2026 final
+ *   probe-contract plan): the unified identity probe speaks the fixed-size
+ *   `session/canOpenWorkspacePath` boolean (HOST_PROBE_MAX_RESPONSE_BYTES)
+ *   and only falls back to the session-data-bearing legacy `session/list`
+ *   probe (1 MiB default cap) on an HTTP 404 — a runtime tree that predates
+ *   the identity method. The old generation-scoped session/list capability
+ *   snapshot cache (describeCapabilities) is gone: no production consumer
+ *   needed the snapshot, and the periodic health probe now verifies the
+ *   fixed-size identity contract instead of re-reading the session list.
  */
 
 // The wire envelope is single-sourced in rpc-envelope.ts (A2 cross-package
@@ -37,10 +48,26 @@
 // validation are shared with the desktop probes (ssh-provider.ts) — only the
 // fetch-carrier orchestration (pending table / settle-once / signal
 // composition) stays here.
-import { buildClientRequest, mintRpcId, parseServerResponse } from './rpc-envelope.ts'
+import {
+  buildClientRequest,
+  buildHostIdentityProbePayload,
+  buildLegacyHostProbePayload,
+  HOST_IDENTITY_METHOD,
+  HOST_PROBE_MAX_RESPONSE_BYTES,
+  LEGACY_HOST_PROBE_METHOD,
+  mintRpcId,
+  parseServerResponse,
+} from './rpc-envelope.ts'
 import { authCookieFor } from './browser-auth-cookie.ts'
 import type { RawData } from 'ws'
 
+export {
+  HOST_IDENTITY_METHOD,
+  HOST_PROBE_MAX_RESPONSE_BYTES,
+  LEGACY_HOST_PROBE_METHOD,
+  buildHostIdentityProbePayload,
+  buildLegacyHostProbePayload,
+} from './rpc-envelope.ts'
 export { mintRpcId } from './rpc-envelope.ts'
 
 /**
@@ -65,6 +92,11 @@ export interface UnaryOptions {
   timeoutMs?: number | null
   /** The connection generation's AbortSignal — its death settles with connection_offline. */
   generationSignal?: AbortSignal
+  /** Per-call response-body cap in bytes (default MAX_UNARY_RESPONSE_BYTES).
+   *  The unified identity probe passes HOST_PROBE_MAX_RESPONSE_BYTES (64 KiB)
+   *  so an oversized answer can never be mistaken for the fixed-size boolean
+   *  identity response. */
+  maxResponseBytes?: number
 }
 
 /** Options for one respond call. */
@@ -111,11 +143,12 @@ class BoundedResponseError extends Error {
 
 /** Read one fetch response without allowing a damaged host to grow memory
  * without bound. Content-Length is only a fast rejection; the streamed byte
- * count remains authoritative when the header is absent or dishonest. */
-async function readBoundedJson(response: Response): Promise<unknown> {
+ * count remains authoritative when the header is absent or dishonest. The
+ * cap is per-call (the caller's UnaryOptions.maxResponseBytes), defaulting
+ * to MAX_UNARY_RESPONSE_BYTES. */
+async function readBoundedJson(response: Response, maxBytes: number): Promise<unknown> {
   const declared = response.headers.get('content-length')
-  if (declared !== null && /^\d+$/.test(declared)
-    && Number(declared) > MAX_UNARY_RESPONSE_BYTES) {
+  if (declared !== null && /^\d+$/.test(declared) && Number(declared) > maxBytes) {
     try { await response.body?.cancel() } catch { /* best-effort carrier cleanup */ }
     throw new BoundedResponseError('too-large')
   }
@@ -129,7 +162,7 @@ async function readBoundedJson(response: Response): Promise<unknown> {
       const { done, value } = await reader.read()
       if (done) break
       total += value.byteLength
-      if (total > MAX_UNARY_RESPONSE_BYTES) {
+      if (total > maxBytes) {
         try { await reader.cancel() } catch { /* best-effort carrier cleanup */ }
         throw new BoundedResponseError('too-large')
       }
@@ -370,14 +403,15 @@ function composeSignals({ signal, generationSignal, timeoutMs, controller }: Com
  * One unary call: register on the pending table, POST the client-request
  * envelope, validate the echo, and settle the entry.
  * @param baseUrl - origin of the dsh host, e.g. http://127.0.0.1:17510.
- * @param method - the wire path segment, e.g. 'session/list' (POST
- *   /api/<method>). dsh 0.1.2-alpha.1 requires slash-separated endpoints
+ * @param method - the wire path segment, e.g. 'session/canOpenWorkspacePath'
+ *   (POST /api/<method>). dsh 0.1.2-alpha.1 requires slash-separated endpoints
  *   (the old dot paths 404).
  * @param payload - the business payload (schema-validated host-side).
  * @param options - {signal?} caller cancellation; {timeoutMs?} override the
  *   default 30s policy (null = caller-signal-only, no timer);
  *   {generationSignal?} the connection generation's AbortSignal — its death
- *   settles this call with connection_offline.
+ *   settles this call with connection_offline; {maxResponseBytes?} per-call
+ *   response-body cap (default MAX_UNARY_RESPONSE_BYTES).
  * @returns {rpcId, result} — the narrow response form; throws RpcBusinessError
  *   when result.ok is false and RpcTransportError for carrier failures.
  */
@@ -385,8 +419,12 @@ export async function call(
   baseUrl: string,
   method: string,
   payload: unknown,
-  { signal, timeoutMs, generationSignal }: UnaryOptions = {},
+  { signal, timeoutMs, generationSignal, maxResponseBytes }: UnaryOptions = {},
 ): Promise<UnaryResponse> {
+  const maxBytes = maxResponseBytes === undefined ? MAX_UNARY_RESPONSE_BYTES : maxResponseBytes
+  if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) {
+    throw new RpcTransportError(`dsh unary ${method}: maxResponseBytes must be a positive safe integer`, 0, 'protocol_violation')
+  }
   const rpcId = mintRpcId()
   const timeout = normalizeTimeout(timeoutMs)
   if (signal?.aborted) {
@@ -437,7 +475,7 @@ export async function call(
   }
   let envelope: any
   try {
-    envelope = await readBoundedJson(response)
+    envelope = await readBoundedJson(response, maxBytes)
   } catch (error) {
     const cancellation = composed.fired()
     if (cancellation !== null) {
@@ -445,7 +483,7 @@ export async function call(
     }
     if (error instanceof BoundedResponseError && error.kind === 'too-large') {
       throw fail(
-        `dsh unary ${method}: response body exceeds ${MAX_UNARY_RESPONSE_BYTES} bytes`,
+        `dsh unary ${method}: response body exceeds ${maxBytes} bytes`,
         response.status,
         'response_too_large',
       )
@@ -537,7 +575,7 @@ export async function respond(
     }
     let receipt: any
     try {
-      receipt = await readBoundedJson(response)
+      receipt = await readBoundedJson(response, MAX_UNARY_RESPONSE_BYTES)
     } catch (error) {
       const cancellation = composed.fired()
       if (cancellation !== null) {
@@ -769,89 +807,143 @@ export async function *openEventStream(
   }
 }
 
-/** One generation-scoped cache entry. */
-interface CapabilityEntry {
-  value: Record<string, unknown>
-  cachedAt: number
+/** Options for probeHostIdentity. */
+export interface ProbeHostIdentityOptions {
+  signal?: AbortSignal
   generationSignal?: AbortSignal
-  _unlisten: (() => void) | null
-}
-
-/**
- * Generation-scoped session/list probe snapshot cache (the host.describe
- * capability endpoint was deleted upstream in dsh 0.1.2-alpha.1, so the
- * connection-generation probe is now the session/list unary). An entry is
- * valid only while the generation that fetched it is alive: its AbortSignal's
- * abort removes the entry, so a snapshot never outlives its generation (a
- * fresh generation always refetches). `force: true` bypasses the cache;
- * transport failures are never cached. Emits no events — the coordinator
- * wires onReady publication and generation invalidation upstream. Cache
- * entries are keyed by baseUrl (one client per host).
- */
-const capabilityCache = new Map<string, CapabilityEntry>()
-
-/** Options for describeCapabilities. */
-export interface DescribeCapabilitiesOptions {
-  generationSignal?: AbortSignal
-  /** Bypass the cache and refetch. */
-  force?: boolean
+  /** Per-call unary timeout (default 30s policy). */
   timeoutMs?: number | null
+  /** Warning sink for the legacy fallback (required — the fallback must
+   *  never be silent; every control-plane caller owns a Logger). */
+  logger: { warn(line: string): void }
 }
 
-/** The served session/list probe snapshot (treat the value as immutable). */
-export interface CapabilitySnapshot {
-  value: Record<string, unknown>
-  cachedAt: number
+/** Narrow the transport-error surface to the 404 signal that selects the
+ *  legacy fallback. Only an HTTP 404 from the host (the runtime tree does
+ *  not register the identity method) falls back; every other failure — 401
+ *  auth gate, 5xx, timeout, malformed body — fails loud, never silently
+ *  downgrades to the session-data probe. */
+function isHostIdentityNotFound(error: unknown): boolean {
+  return error instanceof RpcTransportError && error.status === 404
 }
+
+/** Per-baseUrl throttle for the legacy-fallback warning: the diagnostic is a
+ *  property of the HOST (its runtime tree predates the identity method), so
+ *  re-announcing it on every 500ms readiness retry or every 30s health cycle
+ *  would only spam the log without new information. The marker is added when
+ *  a legacy fallback succeeds and REMOVED when the identity method later
+ *  answers — the throttle therefore means "once per consecutive legacy
+ *  episode per baseUrl": a host that switches runtimes back and forth
+ *  (restartLocal / stop→start with a version switch on the same port)
+ *  re-announces the warning for each new legacy episode, while a persistent
+ *  legacy host stays silent after its first warning. */
+const legacyFallbackWarnedBaseUrls = new Set<string>()
 
 /**
- * Fetch the session/list probe snapshot once per connection generation and
- * serve subsequent callers from the cache.
+ * The unified host-identity probe (single-sourced contract in rpc-envelope.ts:
+ * HOST_IDENTITY_METHOD / LEGACY_HOST_PROBE_METHOD / HOST_PROBE_MAX_RESPONSE_BYTES):
+ * verify that the host answers the dsh identity wire without ever reading
+ * session data.
+ *
+ *  1. POST the `session/canOpenWorkspacePath` identity Remote (zero-arg →
+ *     boolean; response bounded at HOST_PROBE_MAX_RESPONSE_BYTES). The probe
+ *     passes when the server-response echoes the rpcId with result.ok ===
+ *     true and a BOOLEAN value — value true and value false are equally
+ *     healthy: the probe verifies that the method exists, the protocol is
+ *     correct and the SessionController is assembled, not the platform
+ *     answer itself.
+ *  2. HTTP 404 (the runtime tree does not register the identity method) falls
+ *     back to the legacy `session/list` probe (default 1 MiB cap). The
+ *     caller is warned ONLY when the legacy fallback SUCCEEDS — a successful
+ *     legacy answer is the real signal of a pre-identity runtime tree, while
+ *     a transient modern-tree 404 (routes still mounting) or a both-404
+ *     failure stays quiet. The warning is emitted at most once per
+ *     CONSECUTIVE legacy episode per baseUrl (added on fallback success,
+ *     cleared on the next identity-method success), so the 30s health cycle
+ *     never spams while a host that downgrades again re-announces its state
+ *     — upstream identity-method drift stays visible without log spam.
+ *  3. Anything else — 401 browser-auth gate, 5xx, timeout, malformed or
+ *     non-boolean envelope — fails loud. Failures are never cached.
+ *
  * @param baseUrl - origin of the dsh host, e.g. http://127.0.0.1:17510.
- * @param options - {generationSignal?} the connection generation's
- *   AbortSignal: the cache hit is only valid for the same generation object,
- *   and its abort clears the entry; {force?} bypass the cache and refetch.
- * @returns {value, cachedAt} — the session/list value object (treat as
- *   immutable) and the fetch timestamp in ms.
+ * @param options - {logger} warning sink (required; the fallback must never
+ *   be silent), {signal?} caller cancellation, {generationSignal?} the
+ *   connection generation's AbortSignal (its death settles with
+ *   connection_offline), {timeoutMs?} unary timeout override.
+ * @returns true when the host answered the identity handshake (either the
+ *   identity method or the legacy fallback) — resolution IS the health
+ *   verdict; the host's boolean answer is deliberately not surfaced so no
+ *   caller can mistake value false for a probe failure.
  * @throws RpcBusinessError for the result.error branch; RpcTransportError
- *   (connection_offline when the generation is already dead, protocol_violation
- *   for a malformed value slot, plus the unary carrier errors).
+ *   (connection_offline / aborted / request_timeout / response_too_large /
+ *   protocol_violation / transport_http_<status>).
  */
-export async function describeCapabilities(
+export async function probeHostIdentity(
   baseUrl: string,
-  { generationSignal, force = false, timeoutMs }: DescribeCapabilitiesOptions = {},
-): Promise<CapabilitySnapshot> {
-  if (generationSignal?.aborted) {
-    const stale = capabilityCache.get(baseUrl)
-    if (stale?.generationSignal === generationSignal) {
-      stale._unlisten?.()
-      capabilityCache.delete(baseUrl)
+  { signal, generationSignal, timeoutMs, logger }: ProbeHostIdentityOptions,
+): Promise<boolean> {
+  try {
+    const { result } = await call(
+      baseUrl,
+      HOST_IDENTITY_METHOD,
+      buildHostIdentityProbePayload(),
+      {
+        signal,
+        generationSignal,
+        timeoutMs,
+        maxResponseBytes: HOST_PROBE_MAX_RESPONSE_BYTES,
+      },
+    )
+    if (typeof result.value !== 'boolean') {
+      throw new RpcTransportError(
+        `dsh ${HOST_IDENTITY_METHOD}: malformed value slot (expected boolean)`,
+        0,
+        'protocol_violation',
+      )
     }
-    throw new RpcTransportError('dsh session/list: connection is offline', 0, 'connection_offline')
-  }
-  const cached = capabilityCache.get(baseUrl)
-  if (!force && cached !== undefined && cached.generationSignal === generationSignal) {
-    return { value: cached.value, cachedAt: cached.cachedAt }
-  }
-  const { result } = await call(baseUrl, 'session/list', { args: { _request: {} } }, { generationSignal, timeoutMs })
-  const value = result.value
-  if (typeof value !== 'object' || value === null) {
-    throw new RpcTransportError('dsh session/list: malformed value slot', 0, 'protocol_violation')
-  }
-  cached?._unlisten?.()
-  const entry: CapabilityEntry = {
-    value: value as Record<string, unknown>,
-    cachedAt: Date.now(),
-    generationSignal,
-    _unlisten: null,
-  }
-  if (generationSignal !== undefined) {
-    const onAbort = () => {
-      if (capabilityCache.get(baseUrl) === entry) capabilityCache.delete(baseUrl)
+    // Both boolean answers are healthy: only the method presence / protocol
+    // correctness / controller assembly is under test. The identity method
+    // answering also closes the current legacy episode — a later downgrade
+    // re-arms the fallback warning (see legacyFallbackWarnedBaseUrls).
+    legacyFallbackWarnedBaseUrls.delete(baseUrl)
+    return true
+  } catch (error) {
+    if (isHostIdentityNotFound(error)) {
+      // Legacy trees keep answering session/list exactly as before; a 404 on
+      // BOTH methods (or any non-404 failure of the fallback) fails loud.
+      try {
+        await call(
+          baseUrl,
+          LEGACY_HOST_PROBE_METHOD,
+          buildLegacyHostProbePayload(),
+          { signal, generationSignal, timeoutMs },
+        )
+      } catch (legacyError) {
+        if (isHostIdentityNotFound(legacyError)) {
+          throw new RpcTransportError(
+            `dsh host identity probe: neither ${HOST_IDENTITY_METHOD} nor legacy ${LEGACY_HOST_PROBE_METHOD} is registered (HTTP 404)`,
+            404,
+            'protocol_violation',
+          )
+        }
+        throw legacyError
+      }
+      // Warn only after the fallback SUCCEEDED: a successful legacy answer
+      // proves the host predates the identity method (or that the method is
+      // unavailable while session/list still lives). Transient modern-tree
+      // 404s and both-404 failures never reach this line, so the premise of
+      // the warning is always the observed fact.
+      if (!legacyFallbackWarnedBaseUrls.has(baseUrl)) {
+        legacyFallbackWarnedBaseUrls.add(baseUrl)
+        logger.warn(
+          `dsh host identity probe: ${HOST_IDENTITY_METHOD} answered HTTP 404 while the legacy ${LEGACY_HOST_PROBE_METHOD} probe succeeded — `
+          + 'the host runtime tree predates the identity method (dsh < 0.1.2-rc.1) or does not register it; '
+          + 'the legacy probe response grows with session data (1 MiB cap). '
+          + '(reported once per legacy episode — re-armed when the identity method answers again)',
+        )
+      }
+      return true
     }
-    entry._unlisten = () => generationSignal.removeEventListener('abort', onAbort)
-    generationSignal.addEventListener('abort', onAbort, { once: true })
+    throw error
   }
-  capabilityCache.set(baseUrl, entry)
-  return { value: entry.value, cachedAt: entry.cachedAt }
 }

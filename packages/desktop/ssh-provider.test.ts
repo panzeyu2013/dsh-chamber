@@ -1272,25 +1272,28 @@ test('run: private material in stderr is redacted from the failure detail', asyn
 
 // ---------------------------------------------------------------------------
 // probeDshSignature: the dsh-signature classification over a REAL loopback
-// HTTP server (valid session/list envelope / wrong envelope / 404 / timeout /
-// refused).
+// HTTP server (valid identity boolean envelope / ok:false envelope / non-
+// boolean value / wrong content type / 404 → legacy session/list re-answer /
+// timeout / refused).
 // ---------------------------------------------------------------------------
 
-test('probeDshSignature classifies the dsh session/list signature', async () => {
+test('probeDshSignature classifies the dsh identity signature (boolean value)', async () => {
   const behaviors: Array<(req: any, res: any) => void> = [
-    // A valid server-response envelope echoing the session/list request →
-    // positive dsh signature (the only remaining dsh wire evidence on
-    // upstream 0.1.2-alpha.1 — the events.mux arms are gone).
+    // A valid server-response envelope echoing the identity request with a
+    // BOOLEAN value → positive dsh signature (the fixed-size identity wire
+    // evidence, dsh ≥ 0.1.2-rc.1 — the events.mux arms are gone).
     (req, res) => {
       let body = ''
       req.on('data', (chunk: Buffer) => { body += String(chunk) })
       req.on('end', () => {
         const envelope = JSON.parse(body) as { rpcId?: unknown }
         res.writeHead(200, { 'content-type': 'application/json' })
-        res.end(JSON.stringify({ type: 'server-response', rpcId: envelope.rpcId, result: { ok: true, value: {} } }))
+        res.end(JSON.stringify({ type: 'server-response', rpcId: envelope.rpcId, result: { ok: true, value: true } }))
       })
     },
-    // A server-response envelope with result.ok !== true: NOT a dsh signature.
+    // A server-response envelope with result.ok !== true: NOT a dsh signature
+    // (the identity method ANSWERED — no legacy re-answer against a host
+    // that answered).
     (req, res) => {
       let body = ''
       req.on('data', (chunk: Buffer) => { body += String(chunk) })
@@ -1300,9 +1303,21 @@ test('probeDshSignature classifies the dsh session/list signature', async () => 
         res.end(JSON.stringify({ type: 'server-response', rpcId: envelope.rpcId, result: { ok: false, error: { code: 'forbidden' } } }))
       })
     },
+    // An ok:true envelope whose value is NOT a boolean contradicts the
+    // identity method contract: NOT a dsh signature.
+    (req, res) => {
+      let body = ''
+      req.on('data', (chunk: Buffer) => { body += String(chunk) })
+      req.on('end', () => {
+        const envelope = JSON.parse(body) as { rpcId?: unknown }
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ type: 'server-response', rpcId: envelope.rpcId, result: { ok: true, value: { items: [] } } }))
+      })
+    },
     // 200 with another content type: NOT a dsh signature.
     (_req, res) => { res.writeHead(200, { 'content-type': 'text/html' }); res.end('<html></html>') },
-    // 404: no signature.
+    // 404: no signature (the legacy re-answer hits the exhausted behavior
+    // table → 500 → still no signature).
     (_req, res) => { res.writeHead(404); res.end('nope') },
   ]
   let call = 0
@@ -1318,6 +1333,69 @@ test('probeDshSignature classifies the dsh session/list signature', async () => 
     assert.equal(await probeDshSignature({ host: '127.0.0.1', port }), 'none')
     assert.equal(await probeDshSignature({ host: '127.0.0.1', port }), 'none')
     assert.equal(await probeDshSignature({ host: '127.0.0.1', port }), 'none')
+    // The final 404 re-answers the legacy session/list probe (behavior
+    // table exhausted → 500) — still no signature.
+    assert.equal(await probeDshSignature({ host: '127.0.0.1', port }), 'none')
+  } finally {
+    await new Promise<void>(resolve => server.close(() => resolve()))
+  }
+})
+
+test('probeDshSignature: an identity 404 re-answers the legacy session/list probe (old runtime tree)', async () => {
+  let sessionListCalls = 0
+  const server = createServer((req, res) => {
+    let body = ''
+    req.on('data', (chunk: Buffer) => { body += String(chunk) })
+    req.on('end', () => {
+      if (req.url === '/api/session/canOpenWorkspacePath') {
+        // The runtime tree predates the identity method (dsh < 0.1.2-rc.1).
+        res.writeHead(404)
+        res.end('nope')
+        return
+      }
+      if (req.url === '/api/session/list') {
+        sessionListCalls += 1
+        const envelope = JSON.parse(body) as { rpcId?: unknown }
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ type: 'server-response', rpcId: envelope.rpcId, result: { ok: true, value: { items: [] } } }))
+        return
+      }
+      res.writeHead(404)
+      res.end()
+    })
+  })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const port = (server.address() as AddressInfo).port
+  try {
+    assert.equal(await probeDshSignature({ host: '127.0.0.1', port }), 'dsh')
+    assert.equal(sessionListCalls, 1, 'the legacy session/list arm is re-answered exactly once')
+  } finally {
+    await new Promise<void>(resolve => server.close(() => resolve()))
+  }
+})
+
+test('probeDshSignature: a non-404 identity failure never re-answers the legacy probe', async () => {
+  let sessionListCalls = 0
+  const server = createServer((req, res) => {
+    if (req.url === '/api/session/canOpenWorkspacePath') {
+      res.writeHead(503)
+      res.end('down')
+      return
+    }
+    if (req.url === '/api/session/list') {
+      sessionListCalls += 1
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end('{}')
+      return
+    }
+    res.writeHead(404)
+    res.end()
+  })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const port = (server.address() as AddressInfo).port
+  try {
+    assert.equal(await probeDshSignature({ host: '127.0.0.1', port }), 'none')
+    assert.equal(sessionListCalls, 0, '5xx on the identity method is not a legacy-fallback trigger')
   } finally {
     await new Promise<void>(resolve => server.close(() => resolve()))
   }
@@ -1327,8 +1405,9 @@ test('verifyDshEndpoint: a 401 answer is the 0.1.2 browser-auth gate — termina
   // review-round3c P0: a 0.1.2 web-profile host answers 401 without the
   // signed cookie; the launch token is unrecoverable over the tunnel, so the
   // probe must fail loud with the auth-required reason (never "not a dsh").
-  // The session/list probe AND the signature probe both hit the 401 gate; a
-  // bare 401 from a NON-dsh server keeps the neutral message (round4 P2).
+  // The identity probe (session/canOpenWorkspacePath) AND the signature probe
+  // both hit the 401 gate; a bare 401 from a NON-dsh server keeps the neutral
+  // message (round4 P2).
   const server = createServer((_req, res) => { res.writeHead(401); res.end('unauthorized') })
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
   const port = (server.address() as AddressInfo).port
@@ -1343,6 +1422,78 @@ test('verifyDshEndpoint: a 401 answer is the 0.1.2 browser-auth gate — termina
   }
 })
 
+
+test('probeDshSignature: an oversized identity answer is no signature (default 64 KiB cap) and never re-answers legacy', async () => {
+  let sessionListCalls = 0
+  const server = createServer((req, res) => {
+    if (req.url === '/api/session/canOpenWorkspacePath') {
+      // ~64 KiB + framing — just over the default HOST_PROBE_MAX_RESPONSE_BYTES
+      // cap of the identity arm; no content-length needed, postClientRequest
+      // counts streamed bytes.
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ padding: 'x'.repeat(64 * 1024) }))
+      return
+    }
+    if (req.url === '/api/session/list') {
+      sessionListCalls += 1
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end('{}')
+      return
+    }
+    res.writeHead(404)
+    res.end()
+  })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const port = (server.address() as AddressInfo).port
+  try {
+    assert.equal(await probeDshSignature({ host: '127.0.0.1', port }), 'none')
+    assert.equal(sessionListCalls, 0, 'an answered identity arm never re-answers the legacy probe')
+  } finally {
+    await new Promise<void>(resolve => server.close(() => resolve()))
+  }
+})
+
+test('probeDshSignature: the identity arm cap is the 64 KiB default (a >64 KiB padded envelope is no signature)', async () => {
+  // Discriminating pin for the signature arm's cap VALUE: the answer is a
+  // VALID identity envelope (ok:true + boolean) padded past 64 KiB but far
+  // under 1 MiB. Under the true 64 KiB arm cap it is oversized → 'none';
+  // if the arm cap were ever raised to the legacy 1 MiB value, the envelope
+  // would parse and classify 'dsh' — this test would go red.
+  let sessionListCalls = 0
+  const server = createServer((req, res) => {
+    let body = ''
+    req.on('data', (chunk: Buffer) => { body += String(chunk) })
+    req.on('end', () => {
+      if (req.url === '/api/session/canOpenWorkspacePath') {
+        const envelope = JSON.parse(body) as { rpcId?: unknown }
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({
+          type: 'server-response',
+          rpcId: envelope.rpcId,
+          result: { ok: true, value: true },
+          padding: 'x'.repeat(70 * 1024),
+        }))
+        return
+      }
+      if (req.url === '/api/session/list') {
+        sessionListCalls += 1
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end('{}')
+        return
+      }
+      res.writeHead(404)
+      res.end()
+    })
+  })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const port = (server.address() as AddressInfo).port
+  try {
+    assert.equal(await probeDshSignature({ host: '127.0.0.1', port }), 'none')
+    assert.equal(sessionListCalls, 0, 'an answered identity arm never re-answers the legacy probe')
+  } finally {
+    await new Promise<void>(resolve => server.close(() => resolve()))
+  }
+})
 
 test('probeDshSignature answers none on connection failure and timeout', async () => {
   // A refused port (server closed): the probe must resolve 'none', never
@@ -1467,8 +1618,10 @@ test('ssh provider verifyUp: a dsh target NEVER carries an auth header, even whe
       seenAuth = req.headers.authorization ?? null
       let rpcId: string | null = null
       try { rpcId = (JSON.parse(body) as { rpcId?: unknown }).rpcId as string | null } catch { /* ignore */ }
+      // A real dsh host answers the identity method (session/canOpenWorkspacePath)
+      // with a BOOLEAN value — ok:true alone is no longer a positive identity.
       res.writeHead(200, { 'content-type': 'application/json' })
-      res.end(JSON.stringify({ type: 'server-response', rpcId, result: { ok: true } }))
+      res.end(JSON.stringify({ type: 'server-response', rpcId, result: { ok: true, value: true } }))
     })
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
     const port = (server.address() as AddressInfo).port

@@ -9,6 +9,18 @@
  * the host answers with a server-response `{type:'server-response', rpcId,
  * result}` whose `result.ok` boolean selects the value/error branch.
  *
+ * This module also owns the shared HOST-IDENTITY probe contract: every
+ * chamber identity/health/readiness probe — control-plane readiness
+ * (spawn-dsh), the local-connection health probe, and the desktop SSH
+ * endpoint probes — converges on the `session/canOpenWorkspacePath` identity
+ * method (a zero-arg Typert Remote → boolean in the `session` namespace of
+ * the upstream SessionController, present since dsh 0.1.2-rc.1). The method
+ * answers with a fixed-size boolean and never touches session data, so probe
+ * response bodies are decoupled from session-count growth. Runtime trees that
+ * predate the identity method answer HTTP 404 and are served by the legacy
+ * `session/list` probe through each consumer's fallback path (the legacy
+ * response grows with session data — the one bounded-1 MiB exception).
+ *
  * Three implementations previously re-derived this shape:
  *   - control-plane dsh-client.ts `call()` (fetch carrier);
  *   - desktop ssh-provider.ts `verifyDshEndpoint` (node:http carrier,
@@ -83,6 +95,59 @@ export function buildClientRequest(
   payload: unknown,
 ): ClientRequestEnvelope {
   return { type: 'client-request', rpcId, method, payload }
+}
+
+// ---------------------------------------------------------------------------
+// Shared host-identity probe contract (single source)
+// ---------------------------------------------------------------------------
+// Every chamber identity/health/readiness probe that shares this package
+// boundary — control-plane local readiness + health (dsh-client.ts
+// probeHostIdentity) and the desktop SSH endpoint probes (ssh-provider.ts
+// verifyDshEndpoint / probeDshSignature, consumed through the
+// control-plane-module facade) — speaks the SAME identity method, and the
+// method name / payload shapes / 64 KiB cap never drift between the fetch
+// carrier and the node:http carrier consumers. The dsh-runtime activation
+// session probe (packages/dsh-runtime, a pure Node package that must not
+// depend on control-plane) mirrors the same wire by design: its constants
+// live beside its own probe layer (runtime-probes.ts) and are pinned by its
+// hermetic contract tests instead of importing this module.
+
+/**
+ * The unified host-identity probe method: `session/canOpenWorkspacePath`, a
+ * zero-arg Typert Remote → boolean on the upstream SessionController
+ * (`namespace: 'session'`, dsh ≥ 0.1.2-rc.1; the pinned upstream tree
+ * registers it beside `session/list`). Pure synchronous platform detection:
+ * it never reads session data, never activates an Agent, and performs no IO,
+ * so its server-response is a fixed-size boolean regardless of session
+ * count. 404 (HTTP) = the runtime tree predates the method — the consumers
+ * fall back to LEGACY_HOST_PROBE_METHOD.
+ */
+export const HOST_IDENTITY_METHOD = 'session/canOpenWorkspacePath'
+
+/**
+ * The legacy host probe method (`session/list`, the same slash-path wire the
+ * pre-identity runtimes answer). Its response GROWS with the session list —
+ * consumers keep it bounded at 1 MiB and only reach it on an identity-method
+ * 404 (a runtime tree that predates dsh 0.1.2-rc.1).
+ */
+export const LEGACY_HOST_PROBE_METHOD = 'session/list'
+
+/**
+ * Response cap for the identity probe (64 KiB per call). The boolean answer
+ * is tiny; the cap bounds memory on a misbehaving endpoint while leaving an
+ * enormous margin over any legitimate identity response.
+ */
+export const HOST_PROBE_MAX_RESPONSE_BYTES = 64 * 1024
+
+/** Client-request payload of the zero-arg identity Remote (no typed args). */
+export function buildHostIdentityProbePayload(): { args: Record<string, never> } {
+  return { args: {} }
+}
+
+/** Client-request payload of the legacy session/list probe (the empty typed
+ *  request is carried by the wire `_request` marker). */
+export function buildLegacyHostProbePayload(): { args: { _request: Record<string, never> } } {
+  return { args: { _request: {} } }
 }
 
 /**

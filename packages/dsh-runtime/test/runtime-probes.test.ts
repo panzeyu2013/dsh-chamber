@@ -34,7 +34,7 @@ function fixture(): Fixture {
 }
 
 function successfulValue(method: string): unknown {
-  if (method === 'session/list') return { items: [{ sessionId: 's1' }] }
+  if (method === 'session/canOpenWorkspacePath') return true
   if (method === 'clientGraph/graph') return { rev: 1, entries: [] }
   if (method === 'settings/describe') return { writable: true, namespaces: [] }
   if (method === 'gitWorktree/previewCreate') {
@@ -77,7 +77,7 @@ test('real probe runner executes the closed read-only set with bounded RPCs', as
         images: [],
       },
     })
-    assert.deepEqual(fx.calls.find(entry => entry.method === 'session/list')?.payload, { args: { _request: {} } })
+    assert.deepEqual(fx.calls.find(entry => entry.method === 'session/canOpenWorkspacePath')?.payload, { args: {} })
     assert.deepEqual(fx.calls.find(entry => entry.method === 'settings/describe')?.payload, { args: {} })
     assert.deepEqual(fx.calls.find(entry => entry.method === 'clientGraph/graph')?.payload, { args: {} })
     assert.deepEqual(fx.calls.find(entry => entry.method === 'gitWorktree/previewCreate')?.payload, { args: { input: {} } })
@@ -85,6 +85,193 @@ test('real probe runner executes the closed read-only set with bounded RPCs', as
     rmSync(fx.root, { recursive: true, force: true })
   }
 })
+test('the identity probe accepts value false; the closed set never reads session data', async () => {
+  // 2026 probe-contract: value true AND value false are both healthy — only
+  // method presence / protocol / controller assembly are under test, and no
+  // probe may re-read the session list (its response grows with session data).
+  const fx = fixture()
+  try {
+    const call: RuntimeProbeCall = async (_base, method) => {
+      fx.calls.push({ method, payload: {} })
+      if (method === 'commands/execute') {
+        const error = new Error('missing probe session') as Error & { code: string }
+        error.code = 'session/not-found'
+        throw error
+      }
+      if (method === 'session/canOpenWorkspacePath') return { result: { value: false } }
+      return { result: { value: successfulValue(method) } }
+    }
+    const results = await runRuntimeActivationProbes({ baseUrl: 'http://127.0.0.1:17510', dshHome: fx.dshHome, call })
+    assert.ok(results.every(result => result.ok))
+    // The session list must never be read by the probe layer.
+    assert.equal(fx.calls.some(entry => entry.method === 'session/list'), false)
+  } finally {
+    rmSync(fx.root, { recursive: true, force: true })
+  }
+})
+
+test('settings/describe rides a per-call 16 MiB response cap (aligned with SETTINGS_FILE_MAX_BYTES)', async () => {
+  const fx = fixture()
+  try {
+    const seenCaps = new Map<string, number>()
+    const call: RuntimeProbeCall = async (_base, method, _payload, options) => {
+      seenCaps.set(method, options?.maxResponseBytes ?? 0)
+      if (method === 'commands/execute') {
+        const error = new Error('missing probe session') as Error & { code: string }
+        error.code = 'session/not-found'
+        throw error
+      }
+      return { result: { value: successfulValue(method) } }
+    }
+    const results = await runRuntimeActivationProbes({ baseUrl: 'http://127.0.0.1:17510', dshHome: fx.dshHome, call })
+    assert.ok(results.every(result => result.ok))
+    // Only settings/describe gets the widened cap; every other probe keeps
+    // the carrier's default (0 = no per-call cap passed).
+    assert.equal(seenCaps.get('settings/describe'), SETTINGS_FILE_MAX_BYTES)
+    assert.equal(seenCaps.get('session/canOpenWorkspacePath'), 0)
+    assert.equal(seenCaps.get('clientGraph/graph'), 0)
+  } finally {
+    rmSync(fx.root, { recursive: true, force: true })
+  }
+})
+
+test('identity 404 falls back to the legacy session/list probe and fires the warn sink', async () => {
+  const fx = fixture()
+  const warnings: string[] = []
+  try {
+    const call: RuntimeProbeCall = async (_base, method, _payload, _options) => {
+      fx.calls.push({ method, payload: {} })
+      if (method === 'commands/execute') {
+        const error = new Error('missing probe session') as Error & { code: string }
+        error.code = 'session/not-found'
+        throw error
+      }
+      if (method === 'session/canOpenWorkspacePath') {
+        // A carrier 404 = the runtime tree does not register the identity
+        // method (the control-plane unary client attaches status to its
+        // transport errors).
+        const error = new Error('not found') as Error & { status?: number }
+        error.status = 404
+        throw error
+      }
+      if (method === 'session/list') return { result: { value: { items: [{ sessionId: 's1' }] } } }
+      return { result: { value: successfulValue(method) } }
+    }
+    const results = await runRuntimeActivationProbes({
+      baseUrl: 'http://127.0.0.1:17510',
+      dshHome: fx.dshHome,
+      call,
+      warn: line => warnings.push(line),
+    })
+    // The probe row keeps the identity-method name and passes via the legacy
+    // fallback — old-tree activation/rollback stays exactly as before.
+    const session = results.find(result => result.name === 'session/canOpenWorkspacePath')
+    assert.equal(session?.ok, true)
+    assert.equal(fx.calls.some(entry => entry.method === 'session/list'), true, 'legacy fallback ran')
+    assert.equal(warnings.length, 1, 'the legacy fallback is never silent')
+    assert.match(warnings[0], /404/)
+    assert.match(warnings[0], /session\/list/)
+  } finally {
+    rmSync(fx.root, { recursive: true, force: true })
+  }
+})
+
+test('identity 404 with a failing legacy fallback fails the probe row (no silent downgrade)', async () => {
+  const fx = fixture()
+  const warnings: string[] = []
+  try {
+    const call: RuntimeProbeCall = async (_base, method) => {
+      if (method === 'commands/execute') {
+        const error = new Error('missing probe session') as Error & { code: string }
+        error.code = 'session/not-found'
+        throw error
+      }
+      if (method === 'session/canOpenWorkspacePath' || method === 'session/list') {
+        const error = new Error('not found') as Error & { status?: number }
+        error.status = 404
+        throw error
+      }
+      return { result: { value: successfulValue(method) } }
+    }
+    const results = await runRuntimeActivationProbes({
+      baseUrl: 'http://127.0.0.1:17510',
+      dshHome: fx.dshHome,
+      call,
+      warn: line => warnings.push(line),
+    })
+    const session = results.find(result => result.name === 'session/canOpenWorkspacePath')
+    assert.equal(session?.ok, false)
+    // The double-404 row carries the explicit combined message (no raw
+    // carrier text, no paths — closed constant wording).
+    assert.match(session?.error ?? '', /neither session\/canOpenWorkspacePath nor the legacy session\/list method is registered \(HTTP 404\)/)
+    assert.equal(warnings.length, 0, 'a fallback that did not succeed never warns')
+  } finally {
+    rmSync(fx.root, { recursive: true, force: true })
+  }
+})
+
+test('identity 404 with a legacy 503 failure propagates the carrier error (no warn)', async () => {
+  const fx = fixture()
+  const warnings: string[] = []
+  try {
+    const call: RuntimeProbeCall = async (_base, method) => {
+      if (method === 'commands/execute') {
+        const error = new Error('missing probe session') as Error & { code: string }
+        error.code = 'session/not-found'
+        throw error
+      }
+      if (method === 'session/canOpenWorkspacePath') {
+        const error = new Error('not found') as Error & { status?: number }
+        error.status = 404
+        throw error
+      }
+      if (method === 'session/list') {
+        const error = new Error('service down') as Error & { status?: number }
+        error.status = 503
+        throw error
+      }
+      return { result: { value: successfulValue(method) } }
+    }
+    const results = await runRuntimeActivationProbes({
+      baseUrl: 'http://127.0.0.1:17510',
+      dshHome: fx.dshHome,
+      call,
+      warn: line => warnings.push(line),
+    })
+    const session = results.find(result => result.name === 'session/canOpenWorkspacePath')
+    assert.equal(session?.ok, false)
+    assert.match(session?.error ?? '', /service down/)
+    assert.equal(warnings.length, 0, 'only a SUCCESSFUL legacy fallback warns')
+  } finally {
+    rmSync(fx.root, { recursive: true, force: true })
+  }
+})
+
+test('a non-404 identity failure never downgrades to the legacy session-data probe', async () => {
+  const fx = fixture()
+  try {
+    const call: RuntimeProbeCall = async (_base, method) => {
+      fx.calls.push({ method, payload: {} })
+      if (method === 'commands/execute') {
+        const error = new Error('missing probe session') as Error & { code: string }
+        error.code = 'session/not-found'
+        throw error
+      }
+      if (method === 'session/canOpenWorkspacePath') {
+        const error = new Error('gated') as Error & { status?: number }
+        error.status = 401
+        throw error
+      }
+      return { result: { value: successfulValue(method) } }
+    }
+    const results = await runRuntimeActivationProbes({ baseUrl: 'http://127.0.0.1:17510', dshHome: fx.dshHome, call })
+    assert.equal(results.find(result => result.name === 'session/canOpenWorkspacePath')?.ok, false)
+    assert.equal(fx.calls.some(entry => entry.method === 'session/list'), false, '401 never falls back')
+  } finally {
+    rmSync(fx.root, { recursive: true, force: true })
+  }
+})
+
 
 test('hostDomains=false returns the reduced set and never invokes the chamber host domains (2026-12 shape)', async () => {
   const fx = fixture()
@@ -104,14 +291,14 @@ test('hostDomains=false returns the reduced set and never invokes the chamber ho
     assert.equal(fx.calls.some(entry => entry.method === 'clientGraph/graph'), false)
     assert.equal(fx.calls.some(entry => entry.method === 'gitWorktree/previewCreate'), false)
     // The rest of the closed set still runs.
-    assert.ok(fx.calls.some(entry => entry.method === 'session/list'))
+    assert.ok(fx.calls.some(entry => entry.method === 'session/canOpenWorkspacePath'))
     assert.ok(fx.calls.some(entry => entry.method === 'settings/describe'))
   } finally {
     rmSync(fx.root, { recursive: true, force: true })
   }
 })
 
-test('malformed lists and unreadable settings fail explicit data probes', async () => {
+test('a malformed identity value and unreadable settings fail explicit probes', async () => {
   const fx = fixture()
   try {
     writeFileSync(fx.settingsPath, Buffer.from([0xff]))
@@ -121,14 +308,13 @@ test('malformed lists and unreadable settings fail explicit data probes', async 
         error.code = 'session/not-found'
         throw error
       }
-      if (method === 'session/list') return { result: { value: {} } }
+      if (method === 'session/canOpenWorkspacePath') return { result: { value: {} } }
       return { result: { value: successfulValue(method) } }
     }
     const results = await runRuntimeActivationProbes({ baseUrl: 'http://127.0.0.1:1', dshHome: fx.dshHome, call })
     const failed = new Set(results.filter(result => !result.ok).map(result => result.name))
-    assert.ok(failed.has('session/list'))
+    assert.ok(failed.has('session/canOpenWorkspacePath'))
     assert.ok(failed.has('data.settings'))
-    assert.ok(failed.has('data.sessions'))
     assert.equal(results.find(result => result.name === 'commands/execute')?.ok, true)
   } finally {
     rmSync(fx.root, { recursive: true, force: true })
@@ -222,7 +408,7 @@ test('probe layer enforces per-RPC and whole-window timeouts when call ignores i
     })
     assert.ok(Date.now() - startedAt < 500, 'ignored AbortSignal must not hang the runner')
     for (const name of [
-      'commands/execute', 'session/list',
+      'commands/execute', 'session/canOpenWorkspacePath',
       'clientGraph/graph', 'settings/describe', 'gitWorktree/previewCreate',
     ]) {
       assert.equal(results.find(result => result.name === name)?.ok, false, name)
@@ -259,7 +445,7 @@ test('settings errors are path-redacted and projected error text is bounded', as
   try {
     rmSync(fx.settingsPath)
     const call: RuntimeProbeCall = async (_base, method) => {
-      if (method === 'session/list') {
+      if (method === 'session/canOpenWorkspacePath') {
         throw new Error(`failed at '${fx.root}/Secret Folder/${'x'.repeat(4_000)}'`)
       }
       return { result: { value: successfulValue(method) } }
@@ -267,7 +453,7 @@ test('settings errors are path-redacted and projected error text is bounded', as
     const results = await runRuntimeActivationProbes({
       baseUrl: 'http://127.0.0.1:1', dshHome: fx.dshHome, call,
     })
-    const hostError = results.find(result => result.name === 'session/list')?.error ?? ''
+    const hostError = results.find(result => result.name === 'session/canOpenWorkspacePath')?.error ?? ''
     const settingsError = results.find(result => result.name === 'data.settings')?.error ?? ''
     assert.ok(hostError.length <= 2_000)
     assert.equal(hostError.includes(fx.root), false)

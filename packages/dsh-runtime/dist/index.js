@@ -121,12 +121,11 @@ var init_prune_runtime = __esm({
 // src/activation-gate.ts
 var REQUIRED_ACTIVATION_PROBES = [
   "commands/execute",
-  "session/list",
+  "session/canOpenWorkspacePath",
   "clientGraph/graph",
   "settings/describe",
   "gitWorktree/previewCreate",
-  "data.settings",
-  "data.sessions"
+  "data.settings"
 ];
 var HOST_DOMAIN_PROBE_NAMES = [
   "clientGraph/graph",
@@ -6565,12 +6564,6 @@ async function readBoundedRegularUtf8File(filePath, signal) {
     });
   }
 }
-function sessionItems(value) {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
-  const items = value.items;
-  if (!Array.isArray(items) || !items.every((item) => item !== null && typeof item === "object" && !Array.isArray(item))) return null;
-  return items;
-}
 function objectValue(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -6586,6 +6579,10 @@ function expectedGitValidationMiss(value) {
   if (result.ok !== false || !objectValue(result.error)) return false;
   return result.error.code === "invalid-input";
 }
+function identityMethodNotFound(error) {
+  if (typeof error !== "object" || error === null) return false;
+  return error.status === 404;
+}
 async function runRuntimeActivationProbes(opts) {
   const windowMs = opts.windowMs ?? 6e4;
   const rpcTimeoutMs = opts.rpcTimeoutMs ?? 7500;
@@ -6598,7 +6595,7 @@ async function runRuntimeActivationProbes(opts) {
   const windowSignal = AbortSignal.timeout(windowMs);
   const signal = opts.signal === void 0 ? windowSignal : AbortSignal.any([opts.signal, windowSignal]);
   const perCallTimeoutMs = Math.min(windowMs, rpcTimeoutMs);
-  const call = (method, payload) => {
+  const call = (method, payload, maxResponseBytes) => {
     if (signal.aborted) return Promise.reject(abortReason(signal));
     const rpcDeadline = new AbortController();
     const timer = setTimeout(
@@ -6608,15 +6605,15 @@ async function runRuntimeActivationProbes(opts) {
     const rpcSignal = AbortSignal.any([signal, rpcDeadline.signal]);
     const operation = Promise.resolve().then(() => opts.call(opts.baseUrl, method, payload, {
       signal: rpcSignal,
-      timeoutMs: perCallTimeoutMs
+      timeoutMs: perCallTimeoutMs,
+      ...maxResponseBytes === void 0 ? {} : { maxResponseBytes }
     }));
     return raceWithSignal(operation, rpcSignal).finally(() => clearTimeout(timer));
   };
-  let sessionsValue;
   let settingsRpcOk = false;
-  const probe = async (name, method, payload, accept) => {
+  const probe = async (name, method, payload, accept, maxResponseBytes) => {
     try {
-      const response = await call(method, payload);
+      const response = await call(method, payload, maxResponseBytes);
       const value = response.result?.value;
       if (accept !== void 0 && !accept(value)) {
         return { name, ok: false, error: "malformed probe response" };
@@ -6628,21 +6625,39 @@ async function runRuntimeActivationProbes(opts) {
   };
   const hostDomains = opts.hostDomains !== false;
   const [sessions, graph, settings, git] = await Promise.all([
-    // host.describe was deleted upstream (dsh-v0.1.2-alpha.1); the surviving
-    // session/list read-only unary doubles as the host-capability probe
-    // proving the installed dsh answers the business wire.
+    // The fixed-size host-identity probe: session/canOpenWorkspacePath is a
+    // zero-arg boolean Remote of the upstream SessionController (`session`
+    // namespace, dsh ≥ 0.1.2-rc.1). Value true AND value false are both
+    // healthy — only method presence / protocol correctness / controller
+    // assembly is under test. A runtime tree that predates the identity
+    // method answers HTTP 404 and is served by the legacy session/list probe
+    // (the same call this layer made before), which keeps old-tree
+    // activation/rollback behavior identical; the fallback fires the warn
+    // sink so upstream method drift never goes silent.
     (async () => {
+      const name = "session/canOpenWorkspacePath";
       try {
-        const response = await call("session/list", { args: { _request: {} } });
-        sessionsValue = response.result?.value;
-        return sessionItems(sessionsValue) === null ? { name: "session/list", ok: false, error: "malformed session list" } : { name: "session/list", ok: true };
+        const response = await call(name, { args: {} });
+        return typeof response.result?.value === "boolean" ? { name, ok: true } : { name, ok: false, error: "malformed probe response" };
       } catch (error) {
-        return { name: "session/list", ok: false, error: resultError(error) };
+        if (identityMethodNotFound(error)) {
+          try {
+            await call("session/list", { args: { _request: {} } });
+            opts.warn?.(`runtime activation session probe: ${name} answered HTTP 404 while the legacy session/list probe succeeded \u2014 the runtime tree predates the identity method (dsh < 0.1.2-rc.1); the legacy probe response grows with session data`);
+            return { name, ok: true };
+          } catch (legacyError) {
+            if (identityMethodNotFound(legacyError)) {
+              return { name, ok: false, error: `neither ${name} nor the legacy session/list method is registered (HTTP 404)` };
+            }
+            return { name, ok: false, error: resultError(legacyError) };
+          }
+        }
+        return { name, ok: false, error: resultError(error) };
       }
     })(),
     hostDomains ? probe("clientGraph/graph", "clientGraph/graph", { args: {} }, graphValue) : Promise.resolve(null),
     (async () => {
-      const outcome = await probe("settings/describe", "settings/describe", { args: {} }, settingsValue);
+      const outcome = await probe("settings/describe", "settings/describe", { args: {} }, settingsValue, SETTINGS_FILE_MAX_BYTES);
       settingsRpcOk = outcome.ok;
       return outcome;
     })(),
@@ -6678,7 +6693,6 @@ async function runRuntimeActivationProbes(opts) {
   } catch (error) {
     dataSettings = { name: "data.settings", ok: false, error: resultError(error) };
   }
-  const dataSessions = sessionItems(sessionsValue) !== null ? { name: "data.sessions", ok: true } : { name: "data.sessions", ok: false, error: "session data is unreadable" };
   const byName = /* @__PURE__ */ new Map();
   byName.set(commands.name, commands);
   byName.set(sessions.name, sessions);
@@ -6689,7 +6703,6 @@ async function runRuntimeActivationProbes(opts) {
   }
   byName.set(settings.name, settings);
   byName.set(dataSettings.name, dataSettings);
-  byName.set(dataSessions.name, dataSessions);
   const expected = hostDomains ? REQUIRED_ACTIVATION_PROBES : PROBE_NAMES_WITHOUT_HOST_DOMAINS;
   return expected.map((name) => byName.get(name) ?? { name, ok: false, error: "probe not wired" });
 }

@@ -11,6 +11,8 @@ import { chmodSync, existsSync, linkSync, lstatSync, mkdtempSync, mkdirSync, rea
 import { tmpdir } from 'node:os'
 import { dirname, basename, join } from 'node:path'
 import { EventEmitter } from 'node:events'
+import { createServer } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { createRequire } from 'node:module'
 import type { ApiRequest, ApiResponse, Logger, PlaneHandle } from '@dsh-chamber/control-plane'
 import type { GatewayConfig } from '../src/config.ts'
@@ -1563,14 +1565,106 @@ test('applyNow runs the version-switch activation transaction in stop → transa
   }
 })
 
+test('real manager: the B1 16 MiB settings/describe cap reaches the wire carrier (seam forwarding)', async () => {
+  // No probeCandidate injection: the REAL runRuntimeActivationProbes runs
+  // through the manager's call seam against a fake dsh host answering the
+  // reduced activation set (no seed cache → hostDomains=false, 4 rows). The
+  // settings/describe answer carries ~1.3 MiB of namespaces payload — over
+  // the default 1 MiB unary cap, under the B1 16 MiB per-call cap. The
+  // activation only passes when the seam forwards
+  // RuntimeProbeRpcOptions.maxResponseBytes to the control-plane carrier.
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-b1-cap-'))
+  const oldEnv = process.env.DSH_GATEWAY_DSH_PATH
+  let settingsDescribeAnswered = false
+  const padding = 'x'.repeat(1300 * 1024)
+  const server = createServer((req, res) => {
+    let body = ''
+    req.on('data', (chunk: Buffer) => { body += String(chunk) })
+    req.on('end', () => {
+      let envelope: { type?: unknown; rpcId?: unknown; method?: unknown } | null = null
+      try { envelope = JSON.parse(body) } catch { envelope = null }
+      const rpcId = typeof envelope?.rpcId === 'string' ? envelope.rpcId : 'unknown'
+      const method = typeof envelope?.method === 'string' ? envelope.method : ''
+      const answer = (result: unknown) => {
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ type: 'server-response', rpcId, result }))
+      }
+      if (method === 'commands/execute') {
+        // The exact business miss the probe layer expects (read-only).
+        answer({ ok: false, error: { code: 'session/not-found', message: 'missing probe session' } })
+        return
+      }
+      if (method === 'session/canOpenWorkspacePath') {
+        answer({ ok: true, value: true })
+        return
+      }
+      if (method === 'settings/describe') {
+        settingsDescribeAnswered = true
+        // A legitimately large settings answer: > 1 MiB (the default unary
+        // cap) but well under the 16 MiB B1 cap.
+        answer({ ok: true, value: { writable: true, namespaces: [{ name: 'probe', padding }] } })
+        return
+      }
+      res.writeHead(404)
+      res.end()
+    })
+  })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const port = (server.address() as AddressInfo).port
+  let manager: ReturnType<typeof createGatewayRuntimeManager> | null = null
+  try {
+    delete process.env.DSH_GATEWAY_DSH_PATH
+    makeValidTree(stateDir, '1.0.0')
+    const home = join(stateDir, 'dsh-home')
+    mkdirSync(home, { recursive: true })
+    // The data.settings probe reads settings.yaml (never settings.json).
+    writeFileSync(join(home, 'settings.yaml'), 'locale:\n  preference: zh\n')
+    writeActivationIntent(stateDir, {
+      targetVersion: '1.0.0', targetIsBuiltin: false, manualRollback: false, intentKind: 'version-switch',
+    })
+    writeOverride(stateDir, {
+      shellVersion: gatewayPackageVersion, chosenVersion: '1.0.0', resolvedVersion: '1.0.0',
+      pending: '1.0.0', swapAttempted: false, selectedOnly: false,
+    })
+    const plane = fakePlane({
+      getLocalDshPort: () => port,
+      localDshPort: port,
+    })
+    plane._state.connectionState = 'ready'
+    manager = createGatewayRuntimeManager({
+      config: config(stateDir),
+      plane,
+      logger: silentLogger,
+      waitBeforeRetry: async () => {},
+    })
+    await manager.applyNow()
+    await waitForSettle(manager)
+    assert.equal(manager.applyNowInFlight(), false)
+    assert.equal(settingsDescribeAnswered, true, 'the settings/describe probe reached the fake host')
+    assert.equal(readCurrentPointer(stateDir), '1.0.0',
+      'activation passed — the 16 MiB per-call cap reached the carrier through the manager seam')
+    const status = await manager.status()
+    assert.equal(status.operationError, null, 'a clean apply-now clears the operationError projection')
+    await manager.dispose()
+    manager = null
+  } finally {
+    if (oldEnv === undefined) delete process.env.DSH_GATEWAY_DSH_PATH
+    else process.env.DSH_GATEWAY_DSH_PATH = oldEnv
+    await manager?.dispose().catch(() => {})
+    await new Promise<void>(resolve => server.close(() => resolve()))
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
 test('2026-12 shape gate: a synced seed cache flips the activation to the FULL probe set — and drift fails closed', async () => {
   const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-shape-'))
   try {
     // Seed BOTH host packages into the gateway seed cache, exactly as a
     // connecting desktop would (PUT /chamber/plugins → chamber-plugins cache).
     // The probe shape gate (hasSyncedHostSeed) must now expect the full
-    // 7-name set — this is the flow that makes a fresh gateway pick the
-    // chamber host layer up after the first desktop sync.
+    // 6-name set (REQUIRED_ACTIVATION_PROBES) — this is the flow that makes
+    // a fresh gateway pick the chamber host layer up after the first desktop
+    // sync.
     const plugins = createChamberPlugins(stateDir, silentLogger)
     for (const name of ['@dsh-chamber/dsh-host-client-graph', '@dsh-chamber/dsh-host-git-worktree']) {
       await plugins.put(name, {

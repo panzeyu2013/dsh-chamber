@@ -15,6 +15,82 @@
 > install-gateway.sh 锚，`bin.js --version` 冒烟 = 0.1.2-rc.1）。a5→rc.1 无任何改动
 > → DOM 锚点审计基线（a4 双 pin，alpha.5 复核）与 wire 契约结论直接继承；回归测试套件见 rc.1 分支提交说明。
 
+**探针与随会话数据量增长的响应体彻底解耦（2026-12 定稿并实施；方案见
+design 18 §3.4 探针集、design 02 §3.2/§3.5 就绪/健康探测）**：chamber 全部
+身份/健康/激活探针统一到固定小体积契约——`session/canOpenWorkspacePath`
+（SessionController `session` namespace 零参 boolean Typert Remote，钉住上游
+0.1.2-rc.1 实证存在）：纯同步平台检测、不读会话数据、不激活 Agent、无 IO；
+value true/false 均健康（只验方法存在/协议正确/控制器装配）。响应上限 64 KiB
+（探针专用 per-call cap；control-plane probeHostIdentity 与 desktop node:http
+身份探针均按调用设置；dsh-runtime 激活身份行无独立 cap、走载体默认 1 MiB 上限——
+响应仍受内存界约束，见挂账⑥）。HTTP 404（部分 0.1.2-alpha.x 早期树 /
+dsh < 0.1.2-rc.1 无此方法；是否真为 legacy 由回退结果判定）→ 自动回退 legacy
+`session/list`（默认 1 MiB 上限，与今日语义逐位一致，老版本不劣化），**回退
+成功**必须写 warning（失败路径已各自 loud：双 404/非 404 透传——时机与节流见
+挂账⑦）；404 之外（401/5xx/超时/畸形）如实失败不回退。方法名
+与 payload 构造单源在 `control-plane/src/rpc-envelope.ts`（cross-package，desktop
+SSH 探针经 control-plane-module 引用同一常量）。**选项 A 已执行**：`data.sessions`
+探针移除（探针不再读会话数据，会话存储健康不在激活契约内）、`session/list` 退出
+激活 6 项探针集（`REQUIRED_ACTIVATION_PROBES` = commands/execute ·
+session/canOpenWorkspacePath · clientGraph/graph · settings/describe ·
+gitWorktree/previewCreate · data.settings，hostDomains=false 形状派生 4 项）。
+`describeCapabilities`/`capabilityCache`/`CapabilitySnapshot` 删除（生产无消费者；
+health/readiness 走 `probeHostIdentity`）。B1：settings/describe 探针 per-call 上限
+放宽至 16 MiB（与 `SETTINGS_FILE_MAX_BYTES` 对齐，合法大配置永不误伤；
+`RuntimeProbeRpcOptions.maxResponseBytes` 透传；desktop runtime 激活直连
+control-plane `call` 自动生效；gateway runtime-manager 两处 call seam 亦转发——
+两端一致生效，见挂账⑧）。**挂账**：① 上游 `session.list` 的分页/裁剪/删除能力（归档
+瘦身的事实源头）仍待上游，chamber 不落地实现；② 归档「不能瘦身」事实维持——
+归档仅影响列表体积，探针不再读列表后不影响探针健康语义；③ dsh-runtime
+runtime-probes 的 legacy 回退 warn 为可选注入 `warn` sink——桌面 main.ts 与
+gateway runtime-manager 按定稿不加逻辑改动，未注入即静默（control-plane
+probeHostIdentity 两生产调用点均已注入真实 logger，回退必 warn）；
+④ desktop SSH 远端身份探针对新方法 404 的旧版 dsh 保持「check or upgrade」判定
+（signature 探针先答新方法、404 时再答 legacy session/list——远端不自动收编
+legacy 树）；⑤ 探针契约要求上游方法不再漂移——未来上游若再删/改名该方法：
+本地/健康层（probeHostIdentity，两生产点均注入 logger）在回退成功时 warn 可见；
+激活层（runRuntimeActivationProbes）owner 未注入 warn sink（挂账③），若上游仅删
+身份方法而 session/list 仍在，激活行将静默通过、双 404 时 fail-loud——漂移的
+激活层可见性以失败路径为准（design 05 §7.6 文案同步）。
+⑥ 64 KiB cap 的覆盖面：control-plane probeHostIdentity（spawn 就绪 + 健康）与
+desktop node:http 身份探针按调用设置 64 KiB；dsh-runtime 激活 session 身份行未透传
+per-call cap，受注入载体默认 1 MiB 上限约束（accept boolean 语义不受影响）。
+⑦ legacy 回退 warn 的触发时机 = **回退成功后**（成功即真 legacy 信号；现代树
+transient 404/双 404 保持安静）——避免每次 500ms 重试/每 30s 健康周期的重复
+warn 与错误前提文案（2026-12 独立审查 A-P1 采纳：原实现 warn 先于回退结果、
+逐次重试重复且前提可假——已修复）。作用域：control-plane `probeHostIdentity`
+（spawn 就绪 + 健康）按 baseUrl 节流（每连续 legacy 期至多一条：identity 成功
+应答时清除标记——审查 R2-P2-1）；dsh-runtime 激活行同一「成功后」时机、无节流
+（按激活事务触发，每事务至多一次；owner 未注入 sink 即静默，见挂账③）。
+⑧ gateway runtime-manager 两处 call seam 现转发 `maxResponseBytes`
+（定稿「无代码改动」按审查 B-P1 有意修订：不转发则 B1 的 16 MiB
+settings/describe cap 只在 desktop 生效，服务器端合法大配置仍会
+response_too_large → 激活回退——seam 各加一行转发，行为无其他变化；
+gateway 端到端钉测已补：runtime-routes.test.ts「real manager: the B1 16 MiB
+settings/describe cap reaches the wire carrier」用 fake dsh host 应答 >1 MiB
+settings/describe，实测摘除转发即红）。
+⑨ 提交态 `packages/dsh-runtime/dist/index.js` 已重建（审查 R2-P1-a：提交态
+bundle 仍是迁移前旧 7 项探针语义，而 desktop/gateway 经包 main→dist 消费——
+src/dist 语义分裂可两套测试同时全绿）；护栏升级：dist-sync.test.ts 增加
+常量值级 deepEqual（探针集/settings cap）+ 行为标记（dist 不得含
+session/list/data.sessions），desktop cross-package-contract.test.ts 增加
+dsh-runtime 激活集 ↔ control-plane 身份常量跨包锁步断言（防 dist 再陈旧或
+方法漂移）；desktop/README.md 身份握手文案同步。
+⑩ 第二轮审查决定与登记（2026-12，全 5 路 P0/P1=0）：warn 文案「per legacy
+episode」与 dsh-client 标记复位语义一致；VERIFY_UP_MAX_BODY_BYTES 注释修正为
+「verifyUp 非身份主臂的 200-body 默认 cap」（legacy session/list 臂 + gateway
+/status 臂共用）；design 02 §3.2/§3.5 与 STATUS 头部补「回退成功」限定词。
+**P2-1 设计取舍登记（不改语义）**：远端瞬时重启/路由挂载窗口内（HTTP 已
+listen、session 路由未挂）identity+legacy 双 404 → 通用 terminal "not dsh"、
+terminal 不自动重探——该粘滞窗口**先于本次改动存在**（旧 session/list 主探针
+404 同样 terminal）且与「已答即确定性」分类原则一致（ECONNREFUSED 才瞬态）；
+ready 心跳期对「404+legacy 负面」降级为瞬态的改法会引入无关服务接管端口的
+60s 慢重探 churn，取舍留给未来设计。**P2-2 契约**：transport-provider.ts
+verifyUp JSDoc 已写明「必须在自有限期内 settle」（transport 层裸 await，无外层
+超时）。可选覆盖登记：签名臂 64 KiB cap 数值的判别性用例已补（>64 KiB 合法
+envelope padding——cap 抬至 1 MiB 即变 'dsh'，必红）；ready 心跳真探针端到端、
+204/206/3xx 身份臂状态表为可选后续。
+
 **0.1.2 线已知降级（仍有效）**：
 - **远端/直连 0.1.2 dsh 附加被硬阻断**（launch token 为远端进程内存随机数、隧道不可恢复；verify 探针 401 诚实分类；上游提供 token 检索机制前保持阻断）。**2026-09：dsh×http 组合已在连接表单与主进程校验禁用**（http 只服务 gateway；ssh 为 dsh 唯一传输——设计 17 §3 记有恢复点）。
 - **版本芯片**：本地实例已接线（desktop 桥运行时版本），远端实例隐藏（D2 兜底）。

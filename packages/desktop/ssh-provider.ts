@@ -30,11 +30,17 @@
  *   ssh exec failure (explicit error, never "inactive"), anything else =
  *   inactive — a failed exec must never masquerade as a stopped service.
  * - Endpoint identity verification (verifyUp): a `dsh` target must answer the
- *   session/list unary handshake (slash-path wire, upstream 0.1.2-alpha.1 —
- *   host.describe is deleted there); a `gateway` target must answer its
- *   authenticated, gateway-owned `/chamber/runtime/status` identity, which
- *   deliberately stays available while managed dsh is blocked/down. An
- *   unrelated service never presents as a fake connection.
+ *   unified host-identity handshake — the fixed-size `session/canOpenWorkspacePath`
+ *   boolean Remote (slash-path wire, upstream dsh ≥ 0.1.2-rc.1; host.describe is
+ *   deleted and the old session/list answer grows with session data, so the
+ *   identity probe never re-reads the session list); a `gateway` target must
+ *   answer its authenticated, gateway-owned `/chamber/runtime/status`
+ *   identity, which deliberately stays available while managed dsh is
+ *   blocked/down. An unrelated service never presents as a fake connection.
+ *   A runtime tree that predates the identity method answers HTTP 404; the
+ *   signature probe then re-answers the legacy session/list probe so an
+ *   old-version dsh is still identified as "check or upgrade" instead of
+ *   "not dsh".
  * - Security discipline (design 05 §8): no credential material is ever
  *   placed on the command line (default ssh key/agent auth); stderr lines
  *   with key/passphrase material are redacted before they enter the ring
@@ -67,8 +73,19 @@ import { dirname, join } from 'node:path'
 // (rpc-envelope.ts, A2 cross-package protocol single-sourcing) — consumed
 // through control-plane-module.ts (the desktop dual-path facade: packaged →
 // compiled dist/control-plane, dev → workspace source). The envelope shape
-// can never drift from the control-plane unary client's.
-import { buildClientRequest, mintRpcId, parseServerResponse, postClientRequest } from './control-plane-module.ts'
+// AND the unified host-identity probe contract (method names, payloads,
+// 64 KiB cap) can never drift from the control-plane unary client's.
+import {
+  buildClientRequest,
+  buildHostIdentityProbePayload,
+  buildLegacyHostProbePayload,
+  HOST_IDENTITY_METHOD,
+  HOST_PROBE_MAX_RESPONSE_BYTES,
+  LEGACY_HOST_PROBE_METHOD,
+  mintRpcId,
+  parseServerResponse,
+  postClientRequest,
+} from './control-plane-module.ts'
 // The plugin spec/name whitelist family + reserved-name deny predicate
 // (control-plane plugin-spec.ts, design 21 §6.2/§6.7 — the single source
 // shared with the gateway; re-exported below for this provider's consumers).
@@ -232,8 +249,15 @@ export const SERVER_ALIVE_COUNT_MAX = 3
 /** Timeout of the one-shot dsh identity probe (verifyUp). */
 export const VERIFY_UP_TIMEOUT_MS = 5_000
 
-/** Response-body cap of the dsh identity probe (an oversized answer is not
- * a session/list reply; bounded memory on a misbehaving endpoint). */
+/**
+ * Default 200-body cap of the verifyUp NON-identity arms — the legacy
+ * session/list re-answer of the dsh-signature probe (its answer grows with
+ * session data; bounded memory on a misbehaving endpoint) AND the gateway
+ * target's /chamber/runtime/status identity body (verifyGatewayEndpointViaTunnel).
+ * The PRIMARY dsh identity probe (session/canOpenWorkspacePath) is capped at
+ * HOST_PROBE_MAX_RESPONSE_BYTES (64 KiB, single-sourced in rpc-envelope.ts):
+ * its fixed-size boolean answer can never legitimately approach 1 MiB.
+ */
 export const VERIFY_UP_MAX_BODY_BYTES = 1024 * 1024
 
 /** Timeout of the one-shot client-graph liveness probe (probeClientGraphLive). */
@@ -243,54 +267,91 @@ export const CLIENT_GRAPH_PROBE_TIMEOUT_MS = 5_000
  *  is not a graph RPC envelope; bounded memory on a misbehaving endpoint). */
 export const CLIENT_GRAPH_PROBE_MAX_BODY_BYTES = 1024 * 1024
 
-/** Timeout of the secondary dsh-signature probe (POST /api/session/list). */
+/** Timeout of the secondary dsh-signature probe (the whole identity + legacy
+ *  re-answer cycle when the identity method answers 404). */
 export const VERIFY_UP_SIGNATURE_TIMEOUT_MS = 2_000
 
 /**
- * Secondary dsh-signature probe: re-answer the session/list unary handshake
- * (POST /api/session/list with the standard client-request envelope — the
- * same slash-path identity wire as verifyDshEndpoint; upstream 0.1.2-alpha.1
- * deleted host.describe and the events.mux/events.host arms, so a valid
- * session/list answer is the only remaining positive dsh wire evidence) and
- * classify by the answer. A matching server-response envelope with
- * result.ok === true is positive dsh evidence: a destination that failed the
- * primary identity probe but answers the re-probe IS a dsh instance that
- * answered the handshake inconsistently — the caller can then tell the user
- * the destination is dsh instead of claiming "not dsh". Anything else (404,
- * garbage, wrong envelope, no answer) is no signature. An old-version dsh is
- * no longer distinguishable from a non-dsh web server by design: that
- * required the deleted legacy wire paths, so the generic message is honest.
+ * Secondary dsh-signature probe: re-answer the unified host-identity
+ * handshake and classify by the answer. The primary arm POSTs
+ * /api/session/canOpenWorkspacePath (the fixed-size zero-arg boolean Remote
+ * of the upstream session namespace, dsh ≥ 0.1.2-rc.1 — the same identity
+ * wire as verifyDshEndpoint; upstream deleted host.describe and the
+ * events.mux/events.host arms, so a positive identity answer is the only
+ * remaining positive dsh wire evidence that never grows with session data).
+ * A positive signature requires a matching server-response envelope with
+ * result.ok === true AND a boolean value (value false is equally positive —
+ * only method presence / protocol / controller assembly are under test). A
+ * 404 answer means the runtime tree predates the identity method; the probe
+ * then re-answers the legacy session/list probe (1 MiB cap), so an
+ * old-version dsh keeps the positive dsh signature exactly as before.
+ * Anything else (401, 5xx, garbage, wrong envelope, no answer, oversized) is
+ * no signature. A destination that failed the primary identity probe but
+ * answers the re-probe IS a dsh instance that answered the handshake
+ * inconsistently — the caller can then tell the user the destination is dsh
+ * instead of claiming "not dsh".
  */
 export function probeDshSignature(
   endpoint: { host: string; port: number },
   timeoutMs = VERIFY_UP_SIGNATURE_TIMEOUT_MS,
 ): Promise<'dsh' | 'none'> {
-  const url = `http://${endpoint.host}:${endpoint.port}/api/session/list`
-  const rpcId = mintRpcId()
+  const deadline = Date.now() + timeoutMs
+  const remaining = () => Math.max(1, deadline - Date.now())
+  const identityUrl = `http://${endpoint.host}:${endpoint.port}/api/${HOST_IDENTITY_METHOD}`
+  const identityRpcId = mintRpcId()
   return postClientRequest({
-    url,
-    // The session/list unary is a Typert Remote on the 0.1.2 wire: the
-    // payload is the `{args}` form ({_request:{}} = no typed args), the same
-    // probe payload the control-plane readiness uses (spawn-dsh).
-    envelope: buildClientRequest(rpcId, 'session/list', { args: { _request: {} } }),
-    timeoutMs,
-    maxBodyBytes: VERIFY_UP_MAX_BODY_BYTES,
-  }).then(outcome => {
-    if (outcome.timeout || outcome.status === null || outcome.status !== 200 || outcome.oversized) return 'none'
-    const parsed = parseServerResponse(outcome.body, rpcId)
-    return parsed.kind === 'ok' && parsed.envelope.result.ok === true ? 'dsh' : 'none'
+    url: identityUrl,
+    // The identity unary is a zero-arg Typert Remote on the 0.1.2 wire: the
+    // payload is the empty `{args}` form, the same probe payload the
+    // control-plane readiness uses (probeHostIdentity).
+    envelope: buildClientRequest(identityRpcId, HOST_IDENTITY_METHOD, buildHostIdentityProbePayload()),
+    timeoutMs: remaining(),
+    maxBodyBytes: HOST_PROBE_MAX_RESPONSE_BYTES,
+  }).then(async outcome => {
+    if (outcome.timeout || outcome.status === null) return 'none'
+    if (outcome.status === 200) {
+      if (outcome.oversized) return 'none'
+      const parsed = parseServerResponse(outcome.body, identityRpcId)
+      if (parsed.kind === 'ok' && parsed.envelope.result.ok === true
+        && typeof parsed.envelope.result.value === 'boolean') {
+        return 'dsh'
+      }
+      // Any other 200 answer is a deterministic non-signature — never retry
+      // the legacy arm against a host that ANSWERED the identity method.
+      return 'none'
+    }
+    // HTTP 404 on the identity method = a runtime tree that predates it
+    // (dsh < 0.1.2-rc.1): re-answer the legacy session/list probe — its
+    // positive answer is the old-version dsh signature.
+    if (outcome.status !== 404) return 'none'
+    const legacyUrl = `http://${endpoint.host}:${endpoint.port}/api/${LEGACY_HOST_PROBE_METHOD}`
+    const legacyRpcId = mintRpcId()
+    const legacyOutcome = await postClientRequest({
+      url: legacyUrl,
+      envelope: buildClientRequest(legacyRpcId, LEGACY_HOST_PROBE_METHOD, buildLegacyHostProbePayload()),
+      timeoutMs: remaining(),
+      maxBodyBytes: VERIFY_UP_MAX_BODY_BYTES,
+    })
+    if (legacyOutcome.timeout || legacyOutcome.status === null
+      || legacyOutcome.status !== 200 || legacyOutcome.oversized) return 'none'
+    const legacyParsed = parseServerResponse(legacyOutcome.body, legacyRpcId)
+    return legacyParsed.kind === 'ok' && legacyParsed.envelope.result.ok === true ? 'dsh' : 'none'
   })
 }
 
 /**
  * One-shot dsh identity probe (design 03 §2.2 / 05 §7.6): POST
- * /api/session/list with the standard client-request envelope and require
- * a valid server-response echo with result.ok === true — the same wire
- * handshake the control plane's local readiness uses (02 §3.2: "TCP 通但
- * describe 失败 = 端口被无关服务占用") and dsh's own connection client
- * performs on attach. The method is the slash-path session/list of the
- * upstream 0.1.2-alpha.1 wire (host.describe is deleted there). The envelope
- * is built
+ * /api/session/canOpenWorkspacePath with the standard client-request envelope
+ * and require a valid server-response echo with result.ok === true AND a
+ * boolean value (both true and false are healthy — the probe verifies the
+ * identity method exists, the protocol is correct and the SessionController
+ * is assembled, never the platform answer itself). The method is the
+ * fixed-size identity Remote of the upstream session namespace (dsh ≥
+ * 0.1.2-rc.1; host.describe is deleted there), so the identity response never
+ * grows with session data (capped at HOST_PROBE_MAX_RESPONSE_BYTES) — the
+ * same wire handshake the control plane's local readiness uses (02 §3.2: "TCP
+ * 通但 describe 失败 = 端口被无关服务占用") and the same contract the
+ * renderer's attach path relies on. The envelope is built
  * and validated by the shared rpc-envelope module (single-sourced in
  * control-plane, consumed through control-plane-module.ts — the packaged
  * app loads the compiled control-plane bundle, dev runs the workspace
@@ -300,13 +361,12 @@ export function probeDshSignature(
  *
  * Failure classification (honest, never guessed): when the handshake fails
  * at the HTTP level, a secondary dsh-signature probe (probeDshSignature)
- * re-answers session/list to decide between "the destination IS dsh but
- * answered the identity probe inconsistently — tell the user to check or
- * upgrade" (positive signature: a valid session/list server-response) and
- * the generic "not a dsh instance". The legacy 426/SSE events.mux signature
- * arms are gone from the wire, so an old-version dsh that fails the
- * slash-path handshake is indistinguishable from a non-dsh web server by
- * design — the generic message stays.
+ * re-answers the identity handshake — and on its 404 the legacy session/list
+ * handshake — to decide between "the destination IS dsh but answered the
+ * identity probe inconsistently — tell the user to check or upgrade"
+ * (positive signature, incl. old-version dsh trees that only answer
+ * session/list) and the generic "not a dsh instance". The legacy 426/SSE
+ * events.mux signature arms are gone from the wire.
  *
  * Retry classification: a destination that ANSWERED the probe (any HTTP
  * answer, wrong-shaped body) carries `terminal: true` — retrying cannot
@@ -321,19 +381,19 @@ export function probeDshSignature(
 export async function verifyDshEndpoint(
   endpoint: { host: string; port: number },
   timeoutMs = VERIFY_UP_TIMEOUT_MS,
-  maxBodyBytes = VERIFY_UP_MAX_BODY_BYTES,
+  maxBodyBytes = HOST_PROBE_MAX_RESPONSE_BYTES,
 ): Promise<TransportVerifyResult> {
   // Bracketed IPv6 literals already carry their brackets in the URL.
-  const url = `http://${endpoint.host}:${endpoint.port}/api/session/list`
+  const url = `http://${endpoint.host}:${endpoint.port}/api/${HOST_IDENTITY_METHOD}`
   const deadline = Date.now() + timeoutMs
   const remaining = () => Math.max(1, deadline - Date.now())
   const rpcId = mintRpcId()
   const outcome = await postClientRequest({
     url,
-    // The session/list unary is a Typert Remote on the 0.1.2 wire: the
-    // payload is the `{args}` form ({_request:{}} = no typed args), the same
-    // probe payload the control-plane readiness uses (spawn-dsh).
-    envelope: buildClientRequest(rpcId, 'session/list', { args: { _request: {} } }),
+    // The identity unary is a zero-arg Typert Remote on the 0.1.2 wire: the
+    // payload is the empty `{args}` form, the same probe payload the
+    // control-plane readiness uses (probeHostIdentity).
+    envelope: buildClientRequest(rpcId, HOST_IDENTITY_METHOD, buildHostIdentityProbePayload()),
     timeoutMs,
     maxBodyBytes,
   })
@@ -344,8 +404,9 @@ export async function verifyDshEndpoint(
     return { ok: false, detail: 'the destination did not answer the dsh identity probe' }
   }
   // A non-200 answer (404 from a non-dsh web server or from an older dsh
-  // that does not register the slash-path session/list method, 403, 5xx, …):
-  // classify with the dsh-signature probe before choosing the message.
+  // that does not register the session/canOpenWorkspacePath method, 403,
+  // 5xx, …): classify with the dsh-signature probe before choosing the
+  // message.
   if (outcome.status !== 200) {
     // 0.1.2 browser-auth gate (review-round3c P0): the web-profile host
     // answers 401 without the signed cookie; the launch token is
@@ -364,12 +425,19 @@ export async function verifyDshEndpoint(
     return { ok: false, detail: `the destination answered HTTP ${outcome.status ?? '?'} to the dsh identity probe — it does not appear to be a dsh instance`, terminal: true }
   }
   if (outcome.oversized) {
+    // Only the legacy fallback arm (session/list, VERIFY_UP_MAX_BODY_BYTES)
+    // can carry a legitimately large answer; the primary identity arm's
+    // fixed-size boolean can never approach its 64 KiB cap — an oversized
+    // body is deterministic non-dsh evidence either way.
     return { ok: false, detail: 'the destination answered an oversized dsh identity probe response — it does not appear to be a dsh instance', terminal: true }
   }
   const parsed = parseServerResponse(outcome.body, rpcId)
-  if (parsed.kind !== 'ok' || parsed.envelope.result.ok !== true) {
+  if (parsed.kind !== 'ok' || parsed.envelope.result.ok !== true
+    || typeof parsed.envelope.result.value !== 'boolean') {
     return { ok: false, detail: 'the destination answered an unexpected dsh identity probe response — it does not appear to be a dsh instance', terminal: true }
   }
+  // value true and value false are equally healthy: only method presence /
+  // protocol correctness / controller assembly are under test.
   return { ok: true }
 }
 

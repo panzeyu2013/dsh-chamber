@@ -15,9 +15,10 @@
  *   a child process and local loopback port) or direct-endpoint mode;
  *   readiness = the
  *   local port accepts a TCP connection AND the provider's endpoint identity
- *   verification passes — verifyUp, e.g. the ssh provider's session/list
- *   handshake, so a non-dsh service on the destination port never presents
- *   as ready).
+ *   verification passes — verifyUp, e.g. the ssh provider's unified
+ *   host-identity handshake (session/canOpenWorkspacePath boolean, legacy
+ *   session/list fallback on 404), so a non-dsh service on the destination
+ *   port never presents as ready).
  * - Phase machine: idle → connecting → ready ⇄ degraded → error, with
  *   TWO-TIER retry: a fast burst of bounded jittered exponential backoff
  *   (retryBaseMs * 2^n, half-open jitter, capped) followed — when the burst

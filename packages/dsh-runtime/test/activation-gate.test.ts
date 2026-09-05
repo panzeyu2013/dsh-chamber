@@ -44,7 +44,7 @@ test('decideVerdict: 窗口内首次失败 → observe（超时不立即判失�
 });
 
 test('decideVerdict: 窗口外首次失败 → observe（§3.4 超时不立即判失败，慢迁移二次确认）', () => {
-  const probes = withFailure('session/list');
+  const probes = withFailure('session/canOpenWorkspacePath');
   assert.equal(decideVerdict(probes, { elapsedMs: DEFAULT_PROBE_WINDOW_MS + 1 }), 'observe');
   assert.equal(decideVerdict(probes, { elapsedMs: 120_000 }), 'observe');
 });

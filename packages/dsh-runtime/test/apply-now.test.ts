@@ -49,7 +49,7 @@ import {
 
 const passProbes = (): ProbeResult[] => REQUIRED_ACTIVATION_PROBES.map(name => ({ name, ok: true }))
 const failProbes = (): ProbeResult[] =>
-  passProbes().map(p => p.name === 'session/list' ? { ...p, ok: false } : p)
+  passProbes().map(p => p.name === 'session/canOpenWorkspacePath' ? { ...p, ok: false } : p)
 
 const switchVersions = (fixture: RunPhaseFixture): Array<string | null> =>
   fixture.events

@@ -439,11 +439,18 @@ export interface TransportProvider {
   redactOutput?(text: string): string
   /**
    * Optional one-shot endpoint identity verification (dsh: the destination
-   * answers the session/list wire handshake). The runtime calls it once
+   * answers the unified host-identity handshake — the fixed-size
+   * session/canOpenWorkspacePath boolean; the legacy session/list arm only
+   * re-answers a pre-identity runtime tree on 404). The runtime calls it once
    * after the transport probe reports the endpoint up and BEFORE the phase
    * may become ready: a port that merely accepts TCP is not proof of a dsh
    * instance, and a non-dsh service on the destination port must never
    * present as ready. Absent = the transport probe is trusted alone.
+   * CONTRACT: verifyUp MUST settle within its own bounded deadline — the
+   * transport layer awaits it bare (no outer timeout), and every shipped
+   * provider self-limits (the dsh/gateway probes carry internal total
+   * deadlines); a future provider that can hang would permanently occupy the
+   * connect/reverify single-flight.
    */
   verifyUp?(spec: TransportInstanceSpec, endpoint: TransportProbeEndpoint): Promise<TransportVerifyResult>
   /** Optional remote-service exec channel. Absent = exec returns an explicit error. */

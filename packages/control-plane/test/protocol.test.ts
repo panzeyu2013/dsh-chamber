@@ -506,26 +506,28 @@ function mockSpawn(): Promise<SpawnedDsh> {
   })
 }
 
-/** A describe mock: healthy by default; `state.healthy` toggles failures. */
-function mockDescribe() {
+/** A host-identity probe mock: healthy by default; `state.healthy` toggles
+ *  failures. The health path speaks the identity seam (probeHostIdentity) —
+ *  it must never re-read session data. */
+function mockIdentityProbe() {
   const state = { healthy: true }
   return {
     state,
-    describeCapabilities: async () => {
-      if (!state.healthy) throw new Error('mock describe failure')
-      return { value: { attachedSessions: 0 }, cachedAt: Date.now() }
+    probeHostIdentity: async () => {
+      if (!state.healthy) throw new Error('mock identity probe failure')
+      return true
     },
   }
 }
 
 test('start spawns and lands on ready; stop terminates and lands on stopped', async () => {
-  const describe = mockDescribe()
+  const probe = mockIdentityProbe()
   const connection = createLocalConnection({
     stateDir: '/tmp/none',
     dshHome: '/tmp/none',
     dshWorkspacePath: '/tmp/none',
     logger: quietLogger,
-    deps: { spawnDsh: mockSpawn, describeCapabilities: describe.describeCapabilities },
+    deps: { spawnDsh: mockSpawn, probeHostIdentity: probe.probeHostIdentity },
   })
   assert.equal(connection.getState(), 'stopped')
   await connection.start()
@@ -547,7 +549,7 @@ test('a spawn failure is fail-loud: state lands on error and start() rejects', a
     logger: quietLogger,
     deps: {
       spawnDsh: async () => { throw new Error('port occupied after 5 attempts') },
-      describeCapabilities: mockDescribe().describeCapabilities,
+      probeHostIdentity: mockIdentityProbe().probeHostIdentity,
     },
   })
   await assert.rejects(connection.start(), /port occupied/)
@@ -578,7 +580,7 @@ test('a runtime gate closed after queueing is re-read before seed and spawn', as
         await checkpointRelease
       },
       spawnDsh: async () => { spawns += 1; return mockSpawn() },
-      describeCapabilities: mockDescribe().describeCapabilities,
+      probeHostIdentity: mockIdentityProbe().probeHostIdentity,
     },
   })
   try {
@@ -598,25 +600,25 @@ test('a runtime gate closed after queueing is re-read before seed and spawn', as
 
 
 test('health failures count into degraded; success resets; threshold triggers a restart', async () => {
-  const describe = mockDescribe()
+  const probe = mockIdentityProbe()
   const connection = createLocalConnection({
     stateDir: '/tmp/none',
     dshHome: '/tmp/none',
     dshWorkspacePath: '/tmp/none',
     logger: quietLogger,
     options: { healthIntervalMs: 30, healthProbeTimeoutMs: 1000, restartFailureThreshold: 3, failureThrottleMs: 0 },
-    deps: { spawnDsh: mockSpawn, describeCapabilities: describe.describeCapabilities },
+    deps: { spawnDsh: mockSpawn, probeHostIdentity: probe.probeHostIdentity },
   })
   await connection.start()
   assert.equal(connection.getState(), 'ready')
 
   // First failure → degraded, counter 1.
-  describe.state.healthy = false
+  probe.state.healthy = false
   await waitFor(() => connection.getState() === 'degraded', 3000, 'degraded state')
   assert.equal(connection.getConsecutiveFailures(), 1)
 
   // Success clears the counter and returns to ready.
-  describe.state.healthy = true
+  probe.state.healthy = true
   await waitFor(() => connection.getState() === 'ready', 3000, 'recovery to ready')
   assert.equal(connection.getConsecutiveFailures(), 0)
 
@@ -624,7 +626,7 @@ test('health failures count into degraded; success resets; threshold triggers a 
   // a fresh spawn lands the machine back on ready. The restart itself is
   // fast (no backoff on the first attempt), so observe the spawn side effect
   // rather than the transient 'restarting' state.
-  describe.state.healthy = false
+  probe.state.healthy = false
   const before = spawnCounter
   await waitFor(() => spawnCounter > before, 5000, 'restart spawn')
   await connection.stop()
@@ -632,7 +634,7 @@ test('health failures count into degraded; success resets; threshold triggers a 
 })
 
 test('a dead child skips counting and restarts immediately', async () => {
-  const describe = mockDescribe()
+  const probe = mockIdentityProbe()
   // A single "process" whose exit listener is captured and fired by the test.
   const hooks: { exit?: (code: number | null, sig: string | null) => void } = {}
   const child: SpawnedDsh = {
@@ -653,7 +655,7 @@ test('a dead child skips counting and restarts immediately', async () => {
     dshWorkspacePath: '/tmp/none',
     logger: quietLogger,
     options: { healthIntervalMs: 0, restartWindowMs: 5000 },
-    deps: { spawnDsh: spawns, describeCapabilities: describe.describeCapabilities },
+    deps: { spawnDsh: spawns, probeHostIdentity: probe.probeHostIdentity },
   })
   await connection.start()
   // Simulate process death: fire the exit listener (the local-connection
@@ -699,7 +701,7 @@ test('stop waits for and reclaims an inside-spawn automatic restart', async () =
         announceRestartSpawn()
         return restartSpawnRelease
       },
-      describeCapabilities: mockDescribe().describeCapabilities,
+      probeHostIdentity: mockIdentityProbe().probeHostIdentity,
     },
   })
   try {
@@ -902,8 +904,8 @@ test('unproven attempt termination aborts port retries and preserves the pid led
 })
 
 test('restart window exhaustion lands on restart-exhausted (manual start required)', async () => {
-  const describe = mockDescribe()
-  describe.state.healthy = false
+  const probe = mockIdentityProbe()
+  probe.state.healthy = false
   const spawns = async (): Promise<SpawnedDsh> => {
     spawnCounter += 1
     // Every respawn fails the health probe → the restart loop counts up.
@@ -928,7 +930,7 @@ test('restart window exhaustion lands on restart-exhausted (manual start require
       restartWindowMs: 60_000,
       maxRestartsInWindow: 3,
     },
-    deps: { spawnDsh: spawns, describeCapabilities: describe.describeCapabilities },
+    deps: { spawnDsh: spawns, probeHostIdentity: probe.probeHostIdentity },
   })
   await connection.start()
   await waitFor(() => connection.getState() === 'restart-exhausted', 8000, 'restart-exhausted')

@@ -177,8 +177,10 @@
 - **liveness 纪律**（AGENTS.md 正确性不变量）：隧道 / 服务事实只来自
   "隧道相位 + systemd is-active"的实时判定，从不持久化"已连接"状态。
 - **就绪 = 隧道 TCP + dsh 身份握手**：TCP accept 只证明目标端口上有服务
-  在听，不证明是 dsh。置 ready 前经 provider `verifyUp`（`host.describe`
-  信封探测，与本地实例就绪判据同源，02 §3.2；**按 `spec.kind` 决定是否带
+  在听，不证明是 dsh。置 ready 前经 provider `verifyUp`（统一身份握手
+  `session/canOpenWorkspacePath`——固定小体积 boolean Remote，老 runtime
+  树 404 时 signature 路径回退 legacy `session/list` 识别（"check or
+  upgrade"）；与本地实例就绪判据同源，02 §3.2；**按 `spec.kind` 决定是否带
   认证头**——dsh 目标无认证头、gateway 目标可选认证头，探针认证矩阵见
   17 §9.2）验证远端真是目标——目标端口上跑非 dsh 服务时显式报错/降级，
   **绝不呈现已连接**（假连接修复）。**确定性失败免重试**：目标**应答了**

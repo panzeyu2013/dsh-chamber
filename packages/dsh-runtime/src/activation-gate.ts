@@ -1,9 +1,11 @@
 /**
  * dsh 运行时激活门控裁决（design 18 §3.4）——纯逻辑、无 electron、无副作用
- * （M3）。探针列表本身（commands/execute 冒烟 / session 只读 list（兼作 host
- * 能力探测；host.describe 已在上游 dsh-v0.1.2-alpha.1 删除）/ graph 通道 /
- * settings RPC / git-worktree 只读 / 数据可读性探测）由 host 侧执行并汇成
- * `ProbeResult[]`；本模块只做裁决，不 spawn、不 fetch、不读盘：
+ * （M3）。探针列表本身（commands/execute 冒烟 / 固定小体积身份方法
+ * `session/canOpenWorkspacePath`（零参 boolean Remote，绝不读会话数据；老
+ * runtime 树（dsh < 0.1.2-rc.1）对其答 404 时由 host 侧回退 legacy
+ * session/list 探测，行为与旧版一致）/ graph 通道 / settings RPC /
+ * git-worktree 只读 / 数据可读性探测）由 host 侧执行并汇成 `ProbeResult[]`；
+ * 本模块只做裁决，不 spawn、不 fetch、不读盘：
  *
  *   1. `decideVerdict`    —— 探针裁决（pass / observe / fail），含「有界窗口 +
  *                           延迟裁决」语义（§3.4 探测窗口与裁决）；
@@ -23,20 +25,30 @@
  * list must never become a vacuous success when a caller forgets to wire one
  * of the Design 18 compatibility checks.
  *
- * Upstream dsh-v0.1.2-alpha.1 wire (audit W1/W2/W11/W12): all unary methods
- * moved to slash endpoints, `host.describe` was deleted and `workspace.list`
- * became the `workspace/follow` stream, so the probe set keeps only surviving
- * read-only unaries — `session/list` doubles as the host-capability probe.
- * Probe names mirror the wire endpoints (slash form).
+ * Wire baseline: the pinned upstream dsh tree (0.1.2-rc.1, session-controller).
+ * All unary methods live on slash endpoints (`session.list` → `session/list`,
+ * `settings.describe` → `settings/describe`), `host.describe` was deleted and
+ * `workspace.list` became the `workspace/follow` stream, so the probe set
+ * keeps only surviving read-only unaries. The host-capability/identity role
+ * is served by the fixed-size `session/canOpenWorkspacePath` boolean Remote
+ * (zero-arg, same `session` namespace as session/list; pure platform
+ * detection — no session data, no Agent activation, no IO), so probe
+ * responses never grow with session count; runtimes predating the identity
+ * method (dsh < 0.1.2-rc.1) are served by the probe layer's legacy
+ * session/list fallback (404), keeping old-tree activation/rollback exactly
+ * as before. `data.sessions` was removed with the session-data coupling (the
+ * identity probe deliberately does not read session data, so a session-list
+ * readability row no longer exists — session storage health is not part of
+ * the activation contract). Probe names mirror the wire endpoints (slash
+ * form).
  */
 export const REQUIRED_ACTIVATION_PROBES = [
   'commands/execute',
-  'session/list',
+  'session/canOpenWorkspacePath',
   'clientGraph/graph',
   'settings/describe',
   'gitWorktree/previewCreate',
   'data.settings',
-  'data.sessions',
 ] as const;
 
 /** The chamber host domains (clientGraph/graph + gitWorktree/previewCreate).
@@ -62,7 +74,7 @@ export const PROBE_NAMES_WITHOUT_HOST_DOMAINS: readonly Exclude<RequiredProbeNam
 
 /** 单条探针结果（host 侧执行汇总；name 用于完整性校验、日志与定位）。 */
 export interface ProbeResult {
-  /** 探针名（如 'commands/execute' / 'session/list' / 'data.sessions' …）。 */
+  /** 探针名（如 'commands/execute' / 'session/canOpenWorkspacePath' / 'data.settings' …）。 */
   name: string;
   /** 探针是否通过；false 时建议附 error 说明失败原因（脱敏，design 18 §6）。 */
   ok: boolean;

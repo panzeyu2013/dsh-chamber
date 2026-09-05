@@ -42,8 +42,8 @@ function fakeWire() {
       stop: async () => {},
     }
   }
-  const describeCapabilities = async () => ({ value: { attachedSessions: 0 }, cachedAt: Date.now() })
-  return { spawnDsh, describeCapabilities, get spawns() { return spawns } }
+  const probeHostIdentity = async () => true
+  return { spawnDsh, probeHostIdentity, get spawns() { return spawns } }
 }
 
 interface Fixture {
@@ -89,7 +89,7 @@ async function makeStaticPlane(): Promise<StaticHolder> {
     stateDir,
     webDistDir: fixture.dir,
     logger: silentLogger,
-    localConnectionDeps: { spawnDsh: wire.spawnDsh, describeCapabilities: wire.describeCapabilities },
+    localConnectionDeps: { spawnDsh: wire.spawnDsh, probeHostIdentity: wire.probeHostIdentity },
   })
   try {
     await plane.start()

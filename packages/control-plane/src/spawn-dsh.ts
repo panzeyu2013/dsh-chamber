@@ -22,7 +22,7 @@
  *
  * Port strategy: fixed base DEFAULT_DSH_START_PORT (17510), one attempt per
  * port; a failed attempt (process exit, or no TCP listener within 90s, or a
- * failed session/list probe) advances port+1 and respawns, at most 5 attempts.
+ * failed host-identity probe) advances port+1 and respawns, at most 5 attempts.
  * Spawn uses detached=true (own process group, design 02 §3.5.5: the host
  * survives a control-plane crash and the orphan reaper reclaims it, §3.4.2);
  * stdout/stderr are forwarded to the control-plane log and the per-port
@@ -56,7 +56,7 @@ import { accessSync, constants, existsSync, readFileSync, readdirSync, statSync 
 import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
 import { createConnection } from 'node:net'
-import { call, RpcBusinessError, RpcTransportError } from './dsh-client.ts'
+import { call, probeHostIdentity, RpcBusinessError, RpcTransportError } from './dsh-client.ts'
 import {
   clearAuthCookie,
   exchangeLaunchToken,
@@ -326,8 +326,11 @@ function resolveDshEntry(dshWorkspacePath: string, port: number, patchPath?: str
 
 /**
  * One spawn attempt: launch the child with the web-profile flags for `port`
- * and wait for readiness (TCP listener, then a successful session/list
- * probe — host.describe was deleted upstream in dsh 0.1.2-alpha.1). The
+ * and wait for readiness (TCP listener, then a successful unified
+ * host-identity probe — probeHostIdentity speaks the fixed-size
+ * session/canOpenWorkspacePath boolean with a legacy session/list fallback
+ * for runtime trees that predate the identity method; host.describe was
+ * deleted upstream in dsh 0.1.2-alpha.1). The
  * child is the dsh process itself — spawned directly, never via a pnpm
  * wrapper, so there is no grandchild to orphan when we terminate.
  */
@@ -827,9 +830,13 @@ async function spawnAttempt({
   })()
   // The TCP listener comes up before the connection plugin's /api routes are
   // mounted; a unary probe can 404 briefly. Retry until it succeeds or the
-  // listen window expires. host.describe was deleted upstream (dsh
-  // 0.1.2-alpha.1), so readiness is probed with the session/list unary
-  // (POST /api/session/list, Remote payload {args:{_request:{}}}).
+  // listen window expires. Readiness speaks the unified host-identity probe
+  // (probeHostIdentity, rpc-envelope.ts single source): POST
+  // /api/session/canOpenWorkspacePath (zero-arg boolean Remote, 64 KiB cap);
+  // an HTTP 404 answer falls back to the legacy session/list probe inside
+  // probeHostIdentity (1 MiB cap, warn), so pre-0.1.2-rc.1 runtime trees
+  // keep passing readiness exactly as before — the fixed-size identity
+  // answer never grows with session data.
   const controller = new AbortController()
   const onGenerationAbort = () => controller.abort()
   if (signal?.aborted) controller.abort()
@@ -843,7 +850,7 @@ async function spawnAttempt({
         throw lastProbeError ?? new Error('probe window expired')
       }
       try {
-        await call(baseUrl, 'session/list', { args: { _request: {} } }, { signal: controller.signal })
+        await probeHostIdentity(baseUrl, { signal: controller.signal, logger })
         break
       } catch (probeError) {
         if (child.exitCode !== null || child.signalCode !== null) {
@@ -853,7 +860,7 @@ async function spawnAttempt({
         if (probeError instanceof RpcTransportError && probeError.status === 401) {
           const authOutcome = await authBootstrapPromise
           if (authOutcome !== 'minted') {
-            logger.warn(`[dsh:${port}] browser-auth bootstrap failed (${authOutcome}); the session/list probe will 401 on the 0.1.2 wire`)
+            logger.warn(`[dsh:${port}] browser-auth bootstrap failed (${authOutcome}); the host-identity probe will 401 on the 0.1.2 wire`)
             throw new Error(`dsh spawn attempt on port ${port} failed: instance requires the 0.1.2 browser-auth cookie, but the bootstrap failed (${authOutcome})`)
           }
           // Cookie minted — fall through and retry the probe with it.
@@ -864,10 +871,10 @@ async function spawnAttempt({
     }
   } catch (error) {
     clearAuthCookie(baseUrl)
-    await terminateAndProveQuiet(child, terminateChildFn, `spawn attempt on port ${port} failed during session/list probe`)
+    await terminateAndProveQuiet(child, terminateChildFn, `spawn attempt on port ${port} failed during the host-identity probe`)
     // Preserve the ledger when termination cannot prove group quiescence.
     removePidRecord(stateDir, pid)
-    throw new Error(`dsh spawn attempt on port ${port} failed: session/list: ${String(error)}`)
+    throw new Error(`dsh spawn attempt on port ${port} failed: host identity probe: ${String(error)}`)
   } finally {
     clearTimeout(probeTimer)
     signal?.removeEventListener('abort', onGenerationAbort)
@@ -974,7 +981,7 @@ async function waitForManagedGroupExit(child: ChildProcess, timeoutMs: number): 
  * Abandon a FAILED spawn attempt: process-group SIGKILL → wait for the exit →
  * remove the pid record. Every spawnAttempt failure path converges here so a
  * broken attempt can never leave an untracked detached process behind (2026
- * audit H3 — writePidRecord failures and the TCP/describe failure paths used
+ * audit H3 — writePidRecord failures and the TCP/identity-probe failure paths used
  * to kill only the pid and remove the record before exit). Mirror of
  * terminateChild's group discipline; the record is removed only after the
  * process is confirmed dead (design 02 §3.3: 注销只在确认进程已退出后) — a

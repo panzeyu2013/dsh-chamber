@@ -32,7 +32,7 @@ const record = (pending: string | null): OverrideRecord => ({
   pending, swapAttempted: false,
 })
 const pass = (): ProbeResult[] => REQUIRED_ACTIVATION_PROBES.map(name => ({ name, ok: true }))
-const fail = (): ProbeResult[] => pass().map(item => item.name === 'session/list' ? { ...item, ok: false } : item)
+const fail = (): ProbeResult[] => pass().map(item => item.name === 'session/canOpenWorkspacePath' ? { ...item, ok: false } : item)
 
 function journal(
   phase: ActivationJournal['phase'],

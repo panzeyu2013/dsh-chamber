@@ -33,8 +33,8 @@ function fakeWire() {
       stop: async () => {},
     }
   }
-  const describeCapabilities = async () => ({ value: { attachedSessions: 0 }, cachedAt: Date.now() })
-  return { spawnDsh, describeCapabilities, get spawns() { return spawns } }
+  const probeHostIdentity = async () => true
+  return { spawnDsh, probeHostIdentity, get spawns() { return spawns } }
 }
 
 async function makePlane(stateDirOverride?: string, corsOrigins: string[] = []) {
@@ -45,7 +45,7 @@ async function makePlane(stateDirOverride?: string, corsOrigins: string[] = []) 
     stateDir,
     logger: silentLogger,
     corsOrigins,
-    localConnectionDeps: { spawnDsh: wire.spawnDsh, describeCapabilities: wire.describeCapabilities },
+    localConnectionDeps: { spawnDsh: wire.spawnDsh, probeHostIdentity: wire.probeHostIdentity },
   })
   try {
     await plane.start()
@@ -176,7 +176,7 @@ test('candidate quarantine hides ready/port until the activation verdict opens e
     stateDir,
     logger: silentLogger,
     canExposeLocal: () => exposed,
-    localConnectionDeps: { spawnDsh: wire.spawnDsh, describeCapabilities: wire.describeCapabilities },
+    localConnectionDeps: { spawnDsh: wire.spawnDsh, probeHostIdentity: wire.probeHostIdentity },
   })
   try {
     await plane.start()
@@ -257,7 +257,7 @@ test('candidate quarantine also hides internal error state, port, and detail bef
           stop: async () => { child.exitCode = 1 },
         }
       },
-      describeCapabilities: async () => ({ value: { attachedSessions: 0 }, cachedAt: Date.now() }),
+      probeHostIdentity: async () => true,
     },
   })
   try {
@@ -308,7 +308,7 @@ test('runtime start gate blocks every spawn entry and workspace resolver is read
         spawnedFrom.push(options.dshWorkspacePath)
         return { child: { on: () => {}, exitCode: null }, port: 17510, stop: async () => {} }
       },
-      describeCapabilities: async () => ({ value: { attachedSessions: 0 }, cachedAt: Date.now() }),
+      probeHostIdentity: async () => true,
     },
   })
   try {
@@ -366,7 +366,7 @@ test('runtime gate plus stop invalidates a queued start before every DSH_HOME se
         spawns += 1
         return { child: { on: () => {}, exitCode: null }, port: 17510, stop: async () => {} }
       },
-      describeCapabilities: async () => ({ value: { attachedSessions: 0 }, cachedAt: Date.now() }),
+      probeHostIdentity: async () => true,
     },
   })
   try {
@@ -422,7 +422,7 @@ test('stopLocal waits for and reclaims an inside-spawn start before reporting wr
         announceSpawn()
         return spawnRelease
       },
-      describeCapabilities: async () => ({ value: { attachedSessions: 0 }, cachedAt: Date.now() }),
+      probeHostIdentity: async () => true,
     },
   })
   try {
@@ -473,7 +473,7 @@ test('unknown residual writer permanently closes the plane start latch until res
         failure.code = DSH_WRITER_QUIESCENCE_UNKNOWN_CODE
         throw failure
       },
-      describeCapabilities: async () => ({ value: { attachedSessions: 0 }, cachedAt: Date.now() }),
+      probeHostIdentity: async () => true,
     },
   })
   try {
@@ -921,13 +921,13 @@ test('DELETE during an in-flight start does not resurrect the connection (2026-0
         stop: async () => { teardownCount += 1 },
       }
     },
-    describeCapabilities: async () => ({ value: { attachedSessions: 0 }, cachedAt: Date.now() }),
+    probeHostIdentity: async () => true,
   }
   const plane = createControlPlane({
     port: 0,
     stateDir,
     logger: silentLogger,
-    localConnectionDeps: { spawnDsh: wire.spawnDsh, describeCapabilities: wire.describeCapabilities },
+    localConnectionDeps: { spawnDsh: wire.spawnDsh, probeHostIdentity: wire.probeHostIdentity },
   })
   try {
     await plane.start()
