@@ -455,10 +455,17 @@ export function clearSourceBookkeeping(
  * subscriber must not starve the others. The cache stores the SANITIZED
  * output — the mutator never gets to alias the live cached object into the
  * store, and an in-place-mutating mutator cannot corrupt the persisted shape.
+ *
+ * perf T4（2026-09，M4 置顶写回防抖配套）：**无变化写入不通知**。写入先按
+ * 规范化（递归键序稳定）比较当前缓存与重算结果——完全相同则跳过持久化与
+ * 通知。置顶写回防抖的终刷可能与另一 shell 已落盘的账户合并结果完全一致，
+ * 该等值写入若照常通知会驱动一轮多余的全壳重渲染。
  */
 export function updateViewPrefs(mutator: (prev: ChamberSidebarViewPrefs) => ChamberSidebarViewPrefs): void {
-  const next = prunePrefs(mutator(getViewPrefs()))
-  cache = sanitizePrefs(next)
+  const prev = getViewPrefs()
+  const next = sanitizePrefs(prunePrefs(mutator(prev)))
+  if (canonicalEquals(prev, next)) return
+  cache = next
   saveViewPrefs(cache)
   for (const listener of [...listeners]) {
     try {
@@ -469,15 +476,130 @@ export function updateViewPrefs(mutator: (prev: ChamberSidebarViewPrefs) => Cham
   }
 }
 
+/** 规范化：递归输出键序稳定的对象图（数组保序）。值限 JSON 纯数据。 */
+function canonicalize(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalize)
+  if (isPlainObject(value)) {
+    const out: Record<string, unknown> = {}
+    for (const key of Object.keys(value).sort()) out[key] = canonicalize(value[key])
+    return out
+  }
+  return value
+}
+
+function canonicalEquals(a: ChamberSidebarViewPrefs, b: ChamberSidebarViewPrefs): boolean {
+  try {
+    return JSON.stringify(canonicalize(a)) === JSON.stringify(canonicalize(b))
+  } catch {
+    return false
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 置顶写回防抖（perf T4，2026-09，M4）— updated 模式的 promotion 簿记写回
+// 是「观察会话 updatedAt 推进 → 置顶」的副作用：会话流式更新期间每个投影
+// tick 都会推进 updatedAt，若每个 tick 各自 updateViewPrefs，写盘（整份
+// prefs JSON.stringify）+ 全壳通知会随更新频率放大（跨 shell 共享 store，
+// 任何来源的流式会话都会驱动全部侧栏重渲染）。防抖把同一固定窗（首 arm
+// 起 VIEW_PREFS_ACTIVITY_DEBOUNCE_MS，非逐次重置的 true trailing——持续流
+// 下每 ~250ms 一刷而非每 tick，2026-09 review F7）内的多次派生合并为一次
+// 写回：
+//   - 每账户键保留**最新**派生意图：末 tick 自窗基态重派生、结果自洽，且
+//     恰好等于 flush 时刻单个官方 tick 的输出；与逐 tick 落盘在交错突发/
+//     首观察窗存在**排序级**差异（无数据丢失；2026-09 review F3 反例：
+//     首观察窗内 tick1 全量 recency、tick2 promotion，合并只保留后者形态
+//     ——见 SidebarRoot 派生 effect 与 derive.ts nextUpdatedOrder）；
+//   - 固定窗结束（首 arm + 250ms）统一经 updateViewPrefs 合并落盘一次；
+//   - 页面隐藏/卸载时立即终刷（pagehide），防抖窗内未落盘的 promotion
+//     簿记不丢（丢了会退化为官方首次观察的全量 recency 排序）。
+// 离散写（拖拽提交/排序切换，SidebarRoot）在写前先 flushScheduledActivity
+// Writes()——窗末终刷不得用旧派生覆盖更新的用户手势（review F1/F2）。
+// ---------------------------------------------------------------------------
+
+/** 置顶写回防抖窗（固定窗：首 arm 起 250ms）。突发流式 tick 收敛为 ≤1 次
+ *  写回/窗。 */
+export const VIEW_PREFS_ACTIVITY_DEBOUNCE_MS = 250
+
+interface PendingActivity {
+  order: string[]
+  timestamps: Record<string, number>
+}
+
+let activityPending = new Map<string, PendingActivity>()
+let activityTimer: ReturnType<typeof setTimeout> | null = null
+
+/** 置顶写回（updated-mode promotion 簿记）按账户并入防抖窗。 */
+export function scheduleUpdatedOrderWrite(
+  accountKey: string,
+  order: string[],
+  timestamps: Record<string, number>,
+): void {
+  // 每账户最新意图胜出（末 tick 自窗基态重派生，结果自洽——见上 F3 限定）。
+  activityPending.set(accountKey, { order, timestamps })
+  if (activityTimer === null) {
+    activityTimer = setTimeout(() => flushScheduledActivityWrites(), VIEW_PREFS_ACTIVITY_DEBOUNCE_MS)
+  }
+}
+
+/** 立即落盘所有防抖窗内 pending 的置顶写回（幂等；无 pending 为 no-op）。
+ *  2026-09 review（F4）陈旧守卫：合并前逐账户检查——若**缓存**中同一账户
+ *  存在某会话的 TS 严格大于 pending 对应 TS（另一 shell 已落盘更新观测），
+ *  说明本 pending 派生自更旧的投影，整条跳过（不覆盖新 promotion/簿记；
+ *  该账户由持有新投影的 shell 的下一次派生重新武装，≤1 轮自愈）。 */
+export function flushScheduledActivityWrites(): void {
+  if (activityTimer !== null) {
+    clearTimeout(activityTimer)
+    activityTimer = null
+  }
+  const pending = activityPending
+  activityPending = new Map()
+  if (pending.size === 0) return
+  const orderMerge: Record<string, string[]> = {}
+  const timestampsMerge: Record<string, Record<string, number>> = {}
+  const cached = getViewPrefs().sessionUpdatedAtByAccount ?? {}
+  for (const [key, activity] of pending) {
+    const cachedTimestamps = cached[key]
+    let stale = false
+    if (cachedTimestamps !== undefined) {
+      for (const [sessionId, timestamp] of Object.entries(activity.timestamps)) {
+        const cachedTs = cachedTimestamps[sessionId]
+        if (cachedTs !== undefined && cachedTs > timestamp) {
+          stale = true
+          break
+        }
+      }
+    }
+    if (stale) continue
+    orderMerge[key] = activity.order
+    timestampsMerge[key] = activity.timestamps
+  }
+  if (Object.keys(orderMerge).length === 0) return
+  updateViewPrefs(prev => ({
+    ...prev,
+    updatedOrder: { ...prev.updatedOrder, ...orderMerge },
+    sessionUpdatedAtByAccount: { ...prev.sessionUpdatedAtByAccount, ...timestampsMerge },
+  }))
+}
+
+if (typeof globalThis.addEventListener === 'function') {
+  globalThis.addEventListener('pagehide', () => flushScheduledActivityWrites())
+}
+
 /**
  * Test-only: reset the shared store (cache + subscribers) AND the projection
- * (prunePrefs' input — chamberBridge.getServers()) for isolation. Without the
- * projection reset, a test's "first write sees an empty projection" assumption
- * would depend on declaration order (any earlier publish would make it a
- * non-empty-projection write and the assertions fail loudly — not a false
- * green, but not a self-contained isolation contract).
+ * (prunePrefs' input — chamberBridge.getServers()) for isolation, and drop
+ * any pending debounced activity writes. Without the projection reset, a
+ * test's "first write sees an empty projection" assumption would depend on
+ * declaration order (any earlier publish would make it a non-empty-projection
+ * write and the assertions fail loudly — not a false green, but not a
+ * self-contained isolation contract).
  */
 export function __resetViewPrefsForTests(): void {
+  if (activityTimer !== null) {
+    clearTimeout(activityTimer)
+    activityTimer = null
+  }
+  activityPending = new Map()
   cache = null
   listeners.clear()
   chamberBridge.publish([])
