@@ -66,16 +66,16 @@ import css from './SettingsShell.module.css'
 /** The shell's bound translate (params supported). */
 type GeneralTranslate = (key: SettingsBridgeKey, params?: Record<string, unknown>) => string
 
-/** One checkbox toggle in a card (grid): title + hint left, native checkbox
- *  right; the WHOLE card is the label so the hit target is the card. Saves
- *  are optimistic (settings-store): the checkbox reflects the click in the
- *  same frame — no disabled/dimmed flash while the IPC round-trip is in
- *  flight. */
+/** One checkbox toggle in a card (grid): title + optional hint left, native
+ *  checkbox right; the WHOLE card is the label so the hit target is the card.
+ *  Saves are optimistic (settings-store): the checkbox reflects the click in
+ *  the same frame — no disabled/dimmed flash while the IPC round-trip is in
+ *  flight. A card without a hint renders title-only. */
 function ToggleCard({
   label, hint, checked, disabled, onChange,
 }: {
   label: string
-  hint: string
+  hint?: string
   checked: boolean
   disabled?: boolean
   onChange: (next: boolean) => void
@@ -85,7 +85,9 @@ function ToggleCard({
       <div className={css.generalCardHead}>
         <div className={css.generalCardText}>
           <span className={css.generalFieldLabel}>{label}</span>
-          <p className={css.generalHint}>{hint}</p>
+          {hint !== undefined && (
+            <p className={css.generalHint}>{hint}</p>
+          )}
         </div>
         <input
           type="checkbox"
@@ -284,10 +286,10 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
               （dsh-chamber://open-vscode）共用同一管线：从会话头部打开目录时在
               VS Code 新窗口打开（URL 追加 ?windowId=_blank，VS Code 运行中也
               先聚焦已打开的相同文件夹，不重复开）；关闭则交还 VS Code 自身
-              默认策略（运行中可能复用并替换最近活动窗口）。 */}
+              默认策略（运行中可能复用并替换最近活动窗口）。说明文字已移除，
+              开关本身即语义（默认开 = 新窗口打开）。 */}
           <ToggleCard
             label={t('generalVscodeNewWindow')}
-            hint={t('generalVscodeNewWindowDesc')}
             checked={settings?.vscodeOpenInNewWindow !== false}
             disabled={!hydrated}
             onChange={(next) => save({ vscodeOpenInNewWindow: next })}
