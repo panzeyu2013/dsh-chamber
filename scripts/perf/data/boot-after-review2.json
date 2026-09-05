@@ -1,0 +1,110 @@
+{
+  "at": "2026-09-05T09:54:21.545Z",
+  "env": {
+    "node": "v24.20.0"
+  },
+  "results": [
+    {
+      "phase": "boot-run-1",
+      "ltCount": 2,
+      "maxLongtaskMs": 112,
+      "topLongtasksMs": [
+        112,
+        92
+      ],
+      "cls": 0,
+      "fcpMs": null,
+      "domContentLoadedMs": 14,
+      "loadEndMs": 15,
+      "wallMs": 1140,
+      "skeletonWindowMs": null,
+      "skeletonSeen": true,
+      "pollTrail": [
+        {
+          "done": false,
+          "skeleton": false,
+          "hasInstanceList": false,
+          "hasSource": false,
+          "quietMs": 43403,
+          "at": 43656
+        },
+        {
+          "done": false,
+          "skeleton": false,
+          "hasInstanceList": true,
+          "hasSource": true,
+          "quietMs": 393,
+          "at": 621
+        }
+      ]
+    },
+    {
+      "phase": "boot-run-2",
+      "ltCount": 2,
+      "maxLongtaskMs": 142,
+      "topLongtasksMs": [
+        142,
+        125
+      ],
+      "cls": 0,
+      "fcpMs": null,
+      "domContentLoadedMs": 14,
+      "loadEndMs": 15,
+      "wallMs": 1184,
+      "skeletonWindowMs": null,
+      "skeletonSeen": true,
+      "pollTrail": [
+        {
+          "done": false,
+          "skeleton": false,
+          "hasInstanceList": false,
+          "hasSource": false,
+          "quietMs": 2413,
+          "at": 2641
+        },
+        {
+          "done": false,
+          "skeleton": false,
+          "hasInstanceList": true,
+          "hasSource": true,
+          "quietMs": 376,
+          "at": 666
+        }
+      ]
+    },
+    {
+      "phase": "boot-run-3",
+      "ltCount": 2,
+      "maxLongtaskMs": 142,
+      "topLongtasksMs": [
+        142,
+        89
+      ],
+      "cls": 0,
+      "fcpMs": null,
+      "domContentLoadedMs": 16,
+      "loadEndMs": 17,
+      "wallMs": 1187,
+      "skeletonWindowMs": null,
+      "skeletonSeen": true,
+      "pollTrail": [
+        {
+          "done": false,
+          "skeleton": false,
+          "hasInstanceList": false,
+          "hasSource": false,
+          "quietMs": 2409,
+          "at": 2699
+        },
+        {
+          "done": false,
+          "skeleton": false,
+          "hasInstanceList": true,
+          "hasSource": true,
+          "quietMs": 396,
+          "at": 652
+        }
+      ]
+    }
+  ]
+}

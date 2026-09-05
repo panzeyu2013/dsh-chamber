@@ -1,0 +1,73 @@
+{
+  "at": "2026-09-04T18:38:54.813Z",
+  "env": {
+    "node": "v24.20.0"
+  },
+  "results": [
+    {
+      "phase": "boot-run-1",
+      "ltCount": 2,
+      "maxLongtaskMs": 54,
+      "topLongtasksMs": [
+        54,
+        51
+      ],
+      "cls": 0.001,
+      "fcpMs": 36,
+      "domContentLoadedMs": 16,
+      "loadEndMs": 16,
+      "wallMs": 1032,
+      "skeletonWindowMs": null,
+      "skeletonSeen": true,
+      "pollTrail": [
+        {
+          "done": false,
+          "skeleton": false,
+          "hasInstanceList": false,
+          "hasSource": false,
+          "quietMs": 192885,
+          "at": 193056
+        },
+        {
+          "done": false,
+          "skeleton": false,
+          "hasInstanceList": true,
+          "hasSource": true,
+          "quietMs": 510,
+          "at": 639
+        }
+      ]
+    },
+    {
+      "phase": "boot-run-2",
+      "ltCount": 0,
+      "maxLongtaskMs": 0,
+      "topLongtasksMs": [],
+      "cls": 0.001,
+      "fcpMs": 28,
+      "domContentLoadedMs": 11,
+      "loadEndMs": 12,
+      "wallMs": 895,
+      "skeletonWindowMs": null,
+      "skeletonSeen": false,
+      "pollTrail": [
+        {
+          "done": false,
+          "skeleton": false,
+          "hasInstanceList": false,
+          "hasSource": false,
+          "quietMs": 2412,
+          "at": 2542
+        },
+        {
+          "done": false,
+          "skeleton": false,
+          "hasInstanceList": true,
+          "hasSource": true,
+          "quietMs": 619,
+          "at": 619
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,410 @@
+{
+  "at": "2026-09-04T17:21:30.079Z",
+  "env": {
+    "node": "v24.20.0"
+  },
+  "results": [
+    {
+      "phase": "eval-run-1",
+      "wallSettleMs": 944,
+      "ok": true,
+      "longtasks": [
+        {
+          "start": 19,
+          "dur": 72,
+          "attribution": []
+        },
+        {
+          "start": 100,
+          "dur": 62,
+          "attribution": []
+        }
+      ],
+      "jsLoaded": [
+        {
+          "name": "MessageText-B_fT0SA-.js",
+          "size": 0,
+          "dur": 3.3
+        },
+        {
+          "name": "plain-text-9sb9-I0P.js",
+          "size": 0,
+          "dur": 3.2
+        },
+        {
+          "name": "WebBlock-7jM2x7uH.js",
+          "size": 0,
+          "dur": 3.2
+        },
+        {
+          "name": "main-CpMc0OMd.js",
+          "size": 0,
+          "dur": 2.7
+        },
+        {
+          "name": "chamber-covered-Dz3R7-rX.js",
+          "size": 0,
+          "dur": 5
+        },
+        {
+          "name": "vendor-U6nbg5_U.js",
+          "size": 0,
+          "dur": 5.5
+        },
+        {
+          "name": "chamber-zqG-OyfW.js",
+          "size": 0,
+          "dur": 8.1
+        },
+        {
+          "name": "index-BzMmTb67.js",
+          "size": 0,
+          "dur": 2.9
+        },
+        {
+          "name": "index-BJq8HBfz.js",
+          "size": 0,
+          "dur": 4.1
+        },
+        {
+          "name": "index-DlFX1Rvf.js",
+          "size": 0,
+          "dur": 4.1
+        },
+        {
+          "name": "index-nOTBnZYK.js",
+          "size": 0,
+          "dur": 4
+        },
+        {
+          "name": "index-BDM52lZ2.js",
+          "size": 0,
+          "dur": 5.5
+        },
+        {
+          "name": "index-jIptxsWF.js",
+          "size": 0,
+          "dur": 4.2
+        },
+        {
+          "name": "index-rK588kob.js",
+          "size": 0,
+          "dur": 4.2
+        },
+        {
+          "name": "index-Dzxd7VFz.js",
+          "size": 0,
+          "dur": 4.2
+        },
+        {
+          "name": "index-D5_mSGgK.js",
+          "size": 0,
+          "dur": 4.2
+        },
+        {
+          "name": "index-CSGg9vaT.js",
+          "size": 0,
+          "dur": 4.2
+        },
+        {
+          "name": "index-BXHSAFJp.js",
+          "size": 0,
+          "dur": 4.5
+        },
+        {
+          "name": "index-Bbvu3ATq.js",
+          "size": 0,
+          "dur": 4.6
+        },
+        {
+          "name": "index-fk4QyErG.js",
+          "size": 0,
+          "dur": 4.7
+        },
+        {
+          "name": "index-DNpp3GZU.js",
+          "size": 0,
+          "dur": 4.8
+        },
+        {
+          "name": "index-Dq0m9WGL.js",
+          "size": 0,
+          "dur": 5.2
+        },
+        {
+          "name": "index-B5g6V6-2.js",
+          "size": 0,
+          "dur": 5.4
+        }
+      ]
+    },
+    {
+      "phase": "eval-run-2",
+      "wallSettleMs": 954,
+      "ok": true,
+      "longtasks": [
+        {
+          "start": 13,
+          "dur": 96,
+          "attribution": []
+        },
+        {
+          "start": 120,
+          "dur": 59,
+          "attribution": []
+        }
+      ],
+      "jsLoaded": [
+        {
+          "name": "main-CpMc0OMd.js",
+          "size": 0,
+          "dur": 0
+        },
+        {
+          "name": "vendor-U6nbg5_U.js",
+          "size": 0,
+          "dur": 0
+        },
+        {
+          "name": "chamber-covered-Dz3R7-rX.js",
+          "size": 0,
+          "dur": 0
+        },
+        {
+          "name": "WebBlock-7jM2x7uH.js",
+          "size": 0,
+          "dur": 0
+        },
+        {
+          "name": "plain-text-9sb9-I0P.js",
+          "size": 0,
+          "dur": 0
+        },
+        {
+          "name": "MessageText-B_fT0SA-.js",
+          "size": 0,
+          "dur": 0
+        },
+        {
+          "name": "chamber-zqG-OyfW.js",
+          "size": 0,
+          "dur": 0
+        },
+        {
+          "name": "index-BzMmTb67.js",
+          "size": 0,
+          "dur": 2.6
+        },
+        {
+          "name": "index-BJq8HBfz.js",
+          "size": 0,
+          "dur": 2.7
+        },
+        {
+          "name": "index-DlFX1Rvf.js",
+          "size": 0,
+          "dur": 4.3
+        },
+        {
+          "name": "index-nOTBnZYK.js",
+          "size": 0,
+          "dur": 4.3
+        },
+        {
+          "name": "index-BDM52lZ2.js",
+          "size": 0,
+          "dur": 5.5
+        },
+        {
+          "name": "index-jIptxsWF.js",
+          "size": 0,
+          "dur": 4.3
+        },
+        {
+          "name": "index-rK588kob.js",
+          "size": 0,
+          "dur": 4.4
+        },
+        {
+          "name": "index-Dzxd7VFz.js",
+          "size": 0,
+          "dur": 4.4
+        },
+        {
+          "name": "index-D5_mSGgK.js",
+          "size": 0,
+          "dur": 4.3
+        },
+        {
+          "name": "index-CSGg9vaT.js",
+          "size": 0,
+          "dur": 4.4
+        },
+        {
+          "name": "index-BXHSAFJp.js",
+          "size": 0,
+          "dur": 4.3
+        },
+        {
+          "name": "index-Bbvu3ATq.js",
+          "size": 0,
+          "dur": 4.6
+        },
+        {
+          "name": "index-fk4QyErG.js",
+          "size": 0,
+          "dur": 4.7
+        },
+        {
+          "name": "index-DNpp3GZU.js",
+          "size": 0,
+          "dur": 4.6
+        },
+        {
+          "name": "index-Dq0m9WGL.js",
+          "size": 0,
+          "dur": 4.6
+        },
+        {
+          "name": "index-B5g6V6-2.js",
+          "size": 0,
+          "dur": 4.8
+        }
+      ]
+    },
+    {
+      "phase": "eval-run-3",
+      "wallSettleMs": 961,
+      "ok": true,
+      "longtasks": [
+        {
+          "start": 21,
+          "dur": 92,
+          "attribution": []
+        },
+        {
+          "start": 120,
+          "dur": 57,
+          "attribution": []
+        }
+      ],
+      "jsLoaded": [
+        {
+          "name": "MessageText-B_fT0SA-.js",
+          "size": 0,
+          "dur": 3
+        },
+        {
+          "name": "plain-text-9sb9-I0P.js",
+          "size": 0,
+          "dur": 3
+        },
+        {
+          "name": "WebBlock-7jM2x7uH.js",
+          "size": 0,
+          "dur": 2.9
+        },
+        {
+          "name": "main-CpMc0OMd.js",
+          "size": 0,
+          "dur": 2.8
+        },
+        {
+          "name": "chamber-covered-Dz3R7-rX.js",
+          "size": 0,
+          "dur": 5.1
+        },
+        {
+          "name": "vendor-U6nbg5_U.js",
+          "size": 0,
+          "dur": 5.8
+        },
+        {
+          "name": "chamber-zqG-OyfW.js",
+          "size": 0,
+          "dur": 7.9
+        },
+        {
+          "name": "index-BzMmTb67.js",
+          "size": 0,
+          "dur": 2.6
+        },
+        {
+          "name": "index-BJq8HBfz.js",
+          "size": 0,
+          "dur": 4.1
+        },
+        {
+          "name": "index-DlFX1Rvf.js",
+          "size": 0,
+          "dur": 4.1
+        },
+        {
+          "name": "index-nOTBnZYK.js",
+          "size": 0,
+          "dur": 4.1
+        },
+        {
+          "name": "index-jIptxsWF.js",
+          "size": 0,
+          "dur": 4.3
+        },
+        {
+          "name": "index-BDM52lZ2.js",
+          "size": 0,
+          "dur": 5.3
+        },
+        {
+          "name": "index-rK588kob.js",
+          "size": 0,
+          "dur": 4.3
+        },
+        {
+          "name": "index-Dzxd7VFz.js",
+          "size": 0,
+          "dur": 4.5
+        },
+        {
+          "name": "index-D5_mSGgK.js",
+          "size": 0,
+          "dur": 4.4
+        },
+        {
+          "name": "index-CSGg9vaT.js",
+          "size": 0,
+          "dur": 4.5
+        },
+        {
+          "name": "index-BXHSAFJp.js",
+          "size": 0,
+          "dur": 4.6
+        },
+        {
+          "name": "index-fk4QyErG.js",
+          "size": 0,
+          "dur": 4.6
+        },
+        {
+          "name": "index-Bbvu3ATq.js",
+          "size": 0,
+          "dur": 4.6
+        },
+        {
+          "name": "index-DNpp3GZU.js",
+          "size": 0,
+          "dur": 5
+        },
+        {
+          "name": "index-Dq0m9WGL.js",
+          "size": 0,
+          "dur": 5
+        },
+        {
+          "name": "index-B5g6V6-2.js",
+          "size": 0,
+          "dur": 5.1
+        }
+      ]
+    }
+  ]
+}
