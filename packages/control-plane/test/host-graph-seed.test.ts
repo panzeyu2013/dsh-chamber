@@ -418,7 +418,7 @@ function mockSpawned(): SpawnedDsh {
 
 const healthyLocalConnectionDeps = {
   spawnDsh: async () => mockSpawned(),
-  describeCapabilities: async () => ({ value: { attachedSessions: 0 }, cachedAt: Date.now() }),
+  probeHostIdentity: async () => true,
 }
 
 test('createLocalConnection passes the resolved patchPath to the spawn fn', async t => {
@@ -435,7 +435,7 @@ test('createLocalConnection passes the resolved patchPath to the spawn fn', asyn
         spawnOptions.push(options)
         return mockSpawned()
       },
-      describeCapabilities: async () => ({ value: { attachedSessions: 0 }, cachedAt: Date.now() }),
+      probeHostIdentity: async () => true,
     },
   })
   try {
@@ -493,7 +493,7 @@ test('createLocalConnection re-resolves the patchPath thunk on the restart path'
         spawnedList.push(spawned)
         return spawned
       },
-      describeCapabilities: async () => ({ value: { attachedSessions: 0 }, cachedAt: Date.now() }),
+      probeHostIdentity: async () => true,
     },
   })
   try {

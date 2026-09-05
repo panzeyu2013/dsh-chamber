@@ -2,13 +2,26 @@
  * Design 18 activation probes. This module owns the real, read-only probe
  * list while keeping the control-plane wire injectable for hermetic tests.
  *
- * Wire baseline: upstream dsh-v0.1.2-alpha.1. All unary endpoints moved from
- * dot to slash (`session.list` → `session/list`, `settings.describe` →
- * `settings/describe`) and typert remotes require `payload.args`; `host.describe`
- * was deleted (its host-capability role is served by the `session/list` probe)
- * and `workspace.list` became the `workspace/follow` stream (unary incompatible,
- * so the workspace-shape probe was removed; `data.sessions` validates the
- * session list only). `commands/execute` keeps the `{agentId, line, images}`
+ * Wire baseline: the pinned upstream dsh tree (0.1.2-rc.1). All unary
+ * endpoints moved from dot to slash (`session.list` → `session/list`,
+ * `settings.describe` → `settings/describe`) and typert remotes require
+ * `payload.args`; `host.describe` was deleted (its host-capability role is
+ * served by the fixed-size identity probe `session/canOpenWorkspacePath` —
+ * the zero-arg boolean Remote of the upstream SessionController's `session`
+ * namespace, which never reads session data, never activates an Agent and
+ * performs no IO, so the probe response is a constant-size boolean no matter
+ * how many sessions exist) and `workspace.list` became the `workspace/follow`
+ * stream (unary incompatible, so the workspace-shape probe was removed).
+ * Runtime trees that predate the identity method (dsh < 0.1.2-rc.1) answer
+ * HTTP 404; the probe layer then falls back to the legacy `session/list`
+ * probe (the exact call today's probe layer made), keeping old-tree
+ * activation/rollback behavior identical. `data.sessions` was removed with
+ * the session-data coupling: the identity probe deliberately never reads the
+ * session list, so a session-readability row no longer exists. A legacy
+ * fallback fires the optional `warn` sink when the caller wired one (the
+ * desktop control-plane's own identity probes warn on the same condition via
+ * their logger — see control-plane dsh-client probeHostIdentity).
+ * `commands/execute` keeps the `{agentId, line, images}`
  * wire and its `session/not-found` lookup miss (audit W11).
  */
 import { constants } from 'node:fs'
@@ -21,7 +34,21 @@ import { sanitizeErrorText } from './sanitize-error.ts'
 export interface RuntimeProbeRpcOptions {
   signal?: AbortSignal
   timeoutMs?: number
+  /**
+   * Per-call response-body cap forwarded to the injected carrier (the
+   * control-plane unary client enforces it in readBoundedJson). The
+   * settings/describe probe passes SETTINGS_FILE_MAX_BYTES so a legitimately
+   * large settings response can never be mistaken for a misbehaving host.
+   */
+  maxResponseBytes?: number
 }
+
+/** Optional warning sink for the legacy identity-method fallback. Fired only
+ *  AFTER the legacy session/list fallback succeeded (same timing as the
+ *  control-plane probeHostIdentity): a successful legacy answer proves the
+ *  runtime tree predates session/canOpenWorkspacePath, while a both-404 or a
+ *  failing fallback stays quiet — the failure itself is already loud. */
+export type RuntimeProbeWarn = (line: string) => void
 
 export type RuntimeProbeCall = (
   baseUrl: string,
@@ -39,6 +66,10 @@ export interface RuntimeProbeOptions {
   windowMs?: number
   /** Per-RPC cap so one endpoint cannot consume the entire window. */
   rpcTimeoutMs?: number
+  /** Warning sink fired when the session probe's legacy session/list
+   *  fallback SUCCEEDS after an identity-method 404 (upstream method drift
+   *  must stay visible, never silent; a failing fallback is already loud). */
+  warn?: RuntimeProbeWarn
   /**
    * 2026-12 shape-awareness: whether the spawned dsh is expected to carry the
    * chamber host packages (clientGraph/graph + gitWorktree/previewCreate
@@ -165,15 +196,6 @@ async function readBoundedRegularUtf8File(filePath: string, signal: AbortSignal)
   }
 }
 
-function sessionItems(value: unknown): Array<Record<string, unknown>> | null {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) return null
-  const items = (value as Record<string, unknown>).items
-  if (!Array.isArray(items) || !items.every(item => (
-    item !== null && typeof item === 'object' && !Array.isArray(item)
-  ))) return null
-  return items as Array<Record<string, unknown>>
-}
-
 function objectValue(value: unknown): boolean {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
@@ -193,6 +215,19 @@ function expectedGitValidationMiss(value: unknown): boolean {
   return (result.error as Record<string, unknown>).code === 'invalid-input'
 }
 
+/**
+ * The legacy-fallback signal: an injected carrier error carrying transport
+ * status 404 (the control-plane unary client's RpcTransportError.status) —
+ * the HTTP bridge answers 404 exactly when the runtime tree does not
+ * register the identity method. Any other carrier failure (401 auth gate,
+ * 5xx, timeout, malformed body) or business error fails loud and never
+ * downgrades to the session-data probe.
+ */
+function identityMethodNotFound(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false
+  return (error as { status?: unknown }).status === 404
+}
+
 /** Execute the exact closed probe set required by activation-gate.ts. */
 export async function runRuntimeActivationProbes(opts: RuntimeProbeOptions): Promise<ProbeResult[]> {
   const windowMs = opts.windowMs ?? 60_000
@@ -207,7 +242,7 @@ export async function runRuntimeActivationProbes(opts: RuntimeProbeOptions): Pro
   const windowSignal = AbortSignal.timeout(windowMs)
   const signal = opts.signal === undefined ? windowSignal : AbortSignal.any([opts.signal, windowSignal])
   const perCallTimeoutMs = Math.min(windowMs, rpcTimeoutMs)
-  const call = (method: string, payload: unknown) => {
+  const call = (method: string, payload: unknown, maxResponseBytes?: number) => {
     if (signal.aborted) return Promise.reject(abortReason(signal))
     // AbortSignal.timeout is unref'd in Node. The explicit timer keeps a
     // short-lived probe process alive until an injected forever-pending call
@@ -221,11 +256,11 @@ export async function runRuntimeActivationProbes(opts: RuntimeProbeOptions): Pro
     const operation = Promise.resolve().then(() => opts.call(opts.baseUrl, method, payload, {
       signal: rpcSignal,
       timeoutMs: perCallTimeoutMs,
+      ...(maxResponseBytes === undefined ? {} : { maxResponseBytes }),
     }))
     return raceWithSignal(operation, rpcSignal).finally(() => clearTimeout(timer))
   }
 
-  let sessionsValue: unknown
   let settingsRpcOk = false
 
   const probe = async (
@@ -233,9 +268,10 @@ export async function runRuntimeActivationProbes(opts: RuntimeProbeOptions): Pro
     method: string,
     payload: unknown,
     accept?: (value: unknown) => boolean,
+    maxResponseBytes?: number,
   ): Promise<ProbeResult> => {
     try {
-      const response = await call(method, payload)
+      const response = await call(method, payload, maxResponseBytes)
       const value = response.result?.value
       if (accept !== undefined && !accept(value)) {
         return { name, ok: false, error: 'malformed probe response' }
@@ -252,25 +288,50 @@ export async function runRuntimeActivationProbes(opts: RuntimeProbeOptions): Pro
   // entries are absent from the returned set and from the byName map below.
   const hostDomains = opts.hostDomains !== false
   const [sessions, graph, settings, git] = await Promise.all([
-    // host.describe was deleted upstream (dsh-v0.1.2-alpha.1); the surviving
-    // session/list read-only unary doubles as the host-capability probe
-    // proving the installed dsh answers the business wire.
-    (async () => {
+    // The fixed-size host-identity probe: session/canOpenWorkspacePath is a
+    // zero-arg boolean Remote of the upstream SessionController (`session`
+    // namespace, dsh ≥ 0.1.2-rc.1). Value true AND value false are both
+    // healthy — only method presence / protocol correctness / controller
+    // assembly is under test. A runtime tree that predates the identity
+    // method answers HTTP 404 and is served by the legacy session/list probe
+    // (the same call this layer made before), which keeps old-tree
+    // activation/rollback behavior identical; the fallback fires the warn
+    // sink so upstream method drift never goes silent.
+    (async (): Promise<ProbeResult> => {
+      const name = 'session/canOpenWorkspacePath'
       try {
-        const response = await call('session/list', { args: { _request: {} } })
-        sessionsValue = response.result?.value
-        return sessionItems(sessionsValue) === null
-          ? { name: 'session/list', ok: false, error: 'malformed session list' }
-          : { name: 'session/list', ok: true }
+        const response = await call(name, { args: {} })
+        return typeof response.result?.value === 'boolean'
+          ? { name, ok: true }
+          : { name, ok: false, error: 'malformed probe response' }
       } catch (error) {
-        return { name: 'session/list', ok: false, error: resultError(error) }
+        if (identityMethodNotFound(error)) {
+          try {
+            await call('session/list', { args: { _request: {} } })
+            // Warn only after the fallback SUCCEEDED — same timing as the
+            // control-plane probeHostIdentity; a both-404 or failing legacy
+            // fallback is already loud on its own.
+            opts.warn?.(`runtime activation session probe: ${name} answered HTTP 404 while the legacy session/list probe succeeded — the runtime tree predates the identity method (dsh < 0.1.2-rc.1); the legacy probe response grows with session data`)
+            return { name, ok: true }
+          } catch (legacyError) {
+            if (identityMethodNotFound(legacyError)) {
+              return { name, ok: false, error: `neither ${name} nor the legacy session/list method is registered (HTTP 404)` }
+            }
+            return { name, ok: false, error: resultError(legacyError) }
+          }
+        }
+        return { name, ok: false, error: resultError(error) }
       }
     })(),
     hostDomains
       ? probe('clientGraph/graph', 'clientGraph/graph', { args: {} }, graphValue)
       : Promise.resolve(null),
     (async () => {
-      const outcome = await probe('settings/describe', 'settings/describe', { args: {} }, settingsValue)
+      // B1: per-call response cap aligned with SETTINGS_FILE_MAX_BYTES — a
+      // legitimately large settings response (a 16 MiB settings.yaml renders
+      // an equally large describe payload) must never be misread as a
+      // misbehaving host by the default 1 MiB unary cap.
+      const outcome = await probe('settings/describe', 'settings/describe', { args: {} }, settingsValue, SETTINGS_FILE_MAX_BYTES)
       settingsRpcOk = outcome.ok
       return outcome
     })(),
@@ -324,10 +385,6 @@ export async function runRuntimeActivationProbes(opts: RuntimeProbeOptions): Pro
     dataSettings = { name: 'data.settings', ok: false, error: resultError(error) }
   }
 
-  const dataSessions: ProbeResult = sessionItems(sessionsValue) !== null
-    ? { name: 'data.sessions', ok: true }
-    : { name: 'data.sessions', ok: false, error: 'session data is unreadable' }
-
   const byName = new Map<string, ProbeResult>()
   byName.set(commands.name, commands)
   byName.set(sessions.name, sessions)
@@ -338,7 +395,6 @@ export async function runRuntimeActivationProbes(opts: RuntimeProbeOptions): Pro
   }
   byName.set(settings.name, settings)
   byName.set(dataSettings.name, dataSettings)
-  byName.set(dataSessions.name, dataSessions)
   // Return in the contract order, making exact-set drift visible in tests.
   // hostDomains=false (gateway shape without a synced seed cache) returns the
   // reduced set — the caller's probeExpectedNames must match (see

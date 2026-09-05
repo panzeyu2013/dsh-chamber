@@ -204,17 +204,19 @@ test('spawnDsh: a pid-record write failure still cleans the spawned child up (no
   }
 })
 
-test('spawnDsh: abort during the post-TCP session/list wait kills the detached attempt promptly', async () => {
+test('spawnDsh: abort during the post-TCP host-identity probe wait kills the detached attempt promptly', async () => {
   const stateDir = tempDir()
   const dshWorkspacePath = join(stateDir, 'ws')
   const listeningMarker = join(stateDir, 'listening')
-  const describeMarker = join(stateDir, 'probe-requested')
+  const identityMarker = join(stateDir, 'identity-probe-requested')
   const entryPath = writeFakeDshEntry(dshWorkspacePath, [
     "const { writeFileSync } = require('node:fs')",
     "const { createServer } = require('node:http')",
     "const args = process.argv.slice(2)",
     "const port = Number(args[args.indexOf('--port') + 1])",
-    "createServer((req) => { if (req.url === '/api/session/list') writeFileSync(" + JSON.stringify(describeMarker) + ", 'yes') }).listen(port, '127.0.0.1', () => writeFileSync(" + JSON.stringify(listeningMarker) + ", 'yes'))",
+    // The identity probe arrives and never answers (the host boots): the
+    // abort must cut the wait short instead of grinding to the 90s window.
+    "createServer((req) => { if (req.url === '/api/session/canOpenWorkspacePath') writeFileSync(" + JSON.stringify(identityMarker) + ", 'yes') }).listen(port, '127.0.0.1', () => writeFileSync(" + JSON.stringify(listeningMarker) + ", 'yes'))",
     '',
   ].join('\n'))
   const controller = new AbortController()
@@ -228,9 +230,16 @@ test('spawnDsh: abort during the post-TCP session/list wait kills the detached a
       signal: controller.signal,
     })
     await waitUntil(() => existsSync(listeningMarker), 3000)
-    await waitUntil(() => existsSync(describeMarker), 3000)
+    await waitUntil(() => existsSync(identityMarker), 3000)
     controller.abort()
-    await assert.rejects(() => spawning, /spawn aborted/)
+    // The rejection must surface the abort promptly. Depending on which
+    // attempt slot the spawn landed on (occupied base ports are skipped), the
+    // abort can arrive as the loop's clean 'spawn aborted' or wrapped around
+    // the in-flight probe's AbortError — both are honest, prompt aborts.
+    await assert.rejects(() => spawning, error => {
+      const message = error instanceof Error ? error.message : String(error)
+      return message.toLowerCase().includes('abort')
+    })
     assert.ok(Date.now() - startedAt < 5000, 'abort must not wait for the 90s readiness window')
     const recordsDir = join(stateDir, 'managed-dsh')
     const leftovers = existsSync(recordsDir) ? readdirSync(recordsDir).filter(file => file.endsWith('.json')) : []
@@ -242,10 +251,11 @@ test('spawnDsh: abort during the post-TCP session/list wait kills the detached a
   }
 })
 
-test('spawnDsh: the 0.1.2 browser-auth bootstrap mints the cookie and the probe passes with it', async () => {
+test('spawnDsh: the 0.1.2 browser-auth bootstrap mints the cookie and the host-identity probe passes with it', async () => {
   // review-round3c P0: the web profile prints `dsh web: <url>?token=<t>` at
   // readiness; the spawn performs the token exchange and injects the cookie
-  // into the session/list probe (the fake host 401s without it).
+  // into the host-identity probe — session/canOpenWorkspacePath (the fake
+  // host 401s the whole /api surface without it, 0.1.2 browser-auth gate).
   const stateDir = tempDir()
   const dshWorkspacePath = join(stateDir, 'ws')
   writeFakeDshEntry(dshWorkspacePath, [
@@ -258,14 +268,14 @@ test('spawnDsh: the 0.1.2 browser-auth bootstrap mints the cookie and the probe 
     "    res.writeHead(303, { location: '/', 'set-cookie': 'browser-auth=sess; Max-Age=3600; Path=/; HttpOnly; SameSite=Strict' })",
     "    res.end(); return",
     "  }",
-    "  if (req.url === '/api/session/list') {",
+    "  if (req.url === '/api/session/canOpenWorkspacePath') {",
     "    if ((req.headers.cookie || '').includes('browser-auth=sess')) {",
     "      let body = ''",
     "      req.on('data', c => { body += c })",
     "      req.on('end', () => {",
     "        const rpcId = JSON.parse(body).rpcId",
     "        res.writeHead(200, { 'content-type': 'application/json' })",
-    "        res.end(JSON.stringify({ type: 'server-response', rpcId: rpcId, result: { ok: true, value: { items: [] } } }))",
+    "        res.end(JSON.stringify({ type: 'server-response', rpcId: rpcId, result: { ok: true, value: true } }))",
     "      })",
     "      return",
     "    }",
@@ -308,7 +318,7 @@ test('spawnDsh: a gated host with no launch token fails loud with the browser-au
     "const { createServer } = require('node:http')",
     "const args = process.argv.slice(2)",
     "const port = Number(args[args.indexOf('--port') + 1])",
-    "createServer((req, res) => { if (req.url === '/api/session/list') { res.writeHead(401); res.end('unauthorized'); return } res.writeHead(404); res.end() }).listen(port, '127.0.0.1')",
+    "createServer((req, res) => { if (req.url === '/api/session/canOpenWorkspacePath') { res.writeHead(401); res.end('unauthorized'); return } res.writeHead(404); res.end() }).listen(port, '127.0.0.1')",
     '',
   ].join('\n'))
   const controller = new AbortController()
@@ -339,9 +349,9 @@ test('spawnDsh: a readiness line split across chunks is still fully redacted and
     "process.stdout.write('ken=launch-secret (LAN: http://10.0.0.5:' + port + '/?token=launch-secret)\\n')",
     "createServer((req, res) => {",
     "  if (req.url === '/?token=launch-secret') { res.writeHead(303, { location: '/', 'set-cookie': 'browser-auth=sess; Max-Age=3600; Path=/; HttpOnly; SameSite=Strict' }); res.end(); return }",
-    "  if (req.url === '/api/session/list') {",
+    "  if (req.url === '/api/session/canOpenWorkspacePath') {",
     "    let body = ''; req.on('data', c => { body += c }); req.on('end', () => {",
-    "      res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ type: 'server-response', rpcId: JSON.parse(body).rpcId, result: { ok: true, value: { items: [] } } })) })",
+    "      res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ type: 'server-response', rpcId: JSON.parse(body).rpcId, result: { ok: true, value: true } })) })",
     "    return",
     "  }",
     "  res.writeHead(404); res.end()",
@@ -386,9 +396,9 @@ test('spawnDsh: the launch token never reaches the control-plane log or host-log
     "console.log('dsh web: http://127.0.0.1:' + port + '/?token=launch-secret (LAN: http://10.0.0.5:' + port + '/?token=launch-secret)')",
     "createServer((req, res) => {",
     "  if (req.url === '/?token=launch-secret') { res.writeHead(303, { location: '/', 'set-cookie': 'browser-auth=sess; Max-Age=3600; Path=/; HttpOnly; SameSite=Strict' }); res.end(); return }",
-    "  if (req.url === '/api/session/list') {",
+    "  if (req.url === '/api/session/canOpenWorkspacePath') {",
     "    let body = ''; req.on('data', c => { body += c }); req.on('end', () => {",
-    "      res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ type: 'server-response', rpcId: JSON.parse(body).rpcId, result: { ok: true, value: { items: [] } } })) })",
+    "      res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ type: 'server-response', rpcId: JSON.parse(body).rpcId, result: { ok: true, value: true } })) })",
     "    return",
     "  }",
     "  res.writeHead(404); res.end()",
@@ -435,7 +445,7 @@ test('spawnDsh: a token line with a failed exchange fails loud with the browser-
     "console.log('dsh web: http://127.0.0.1:' + port + '/?token=launch-1')",
     "createServer((req, res) => {",
     "  if (req.url === '/?token=launch-1') { res.writeHead(401); res.end('unauthorized'); return }",
-    "  if (req.url === '/api/session/list') { res.writeHead(401); res.end('unauthorized'); return }",
+    "  if (req.url === '/api/session/canOpenWorkspacePath') { res.writeHead(401); res.end('unauthorized'); return }",
     "  res.writeHead(404); res.end()",
     "}).listen(port, '127.0.0.1')",
     '',
@@ -452,10 +462,13 @@ test('spawnDsh: a token line with a failed exchange fails loud with the browser-
   }
 })
 
-test('spawnDsh: an old host printing a URL without a token spawns without a cookie', async () => {
-  // review-round5a: rc.2 hosts print the URL line without a token and answer
-  // the probe without auth — the bootstrap yields no cookie and the spawn
-  // proceeds unchanged.
+test('spawnDsh: an old runtime tree (only session/list, no launch token) spawns via the legacy fallback without a cookie', async () => {
+  // review-round5a + 404-split: rc.2-era hosts print the URL line without a
+  // token AND predate the session/canOpenWorkspacePath identity method (dsh <
+  // 0.1.2-rc.1): the identity probe answers HTTP 404, probeHostIdentity falls
+  // back to the legacy session/list probe, and the spawn proceeds unchanged
+  // without a cookie — old-tree readiness behavior is preserved. The fake
+  // host answers ONLY session/list, proving the 404-split readiness path.
   const stateDir = tempDir()
   const dshWorkspacePath = join(stateDir, 'ws')
   writeFakeDshEntry(dshWorkspacePath, [

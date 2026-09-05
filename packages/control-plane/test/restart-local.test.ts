@@ -1,7 +1,7 @@
 /**
  * restartLocal() transactional-restart tests (design 18 §9.3): the
  * user-triggered "restart dsh" primitive on the local connection adapter and
- * on PlaneHandle. No real dsh and no fixed ports — the spawn/describe wire is
+ * on PlaneHandle. No real dsh and no fixed ports — the spawn/identity-probe wire is
  * mocked exactly like protocol.ts. Coverage:
  *
  * - user restart + automatic (health) restart share one single-flight spawn;
@@ -31,14 +31,16 @@ import { createControlPlane } from '../src/index.ts'
 
 const quietLogger = { log: () => {}, warn: () => {}, error: () => {} }
 
-/** A describe mock: healthy by default; `state.healthy` toggles failures. */
-function mockDescribe() {
+/** A host-identity probe mock: healthy by default; `state.healthy` toggles
+ *  failures. The health path speaks the identity seam (probeHostIdentity) —
+ *  it never re-reads session data. */
+function mockIdentityProbe() {
   const state = { healthy: true }
   return {
     state,
-    describeCapabilities: async () => {
-      if (!state.healthy) throw new Error('mock describe failure')
-      return { value: { attachedSessions: 0 }, cachedAt: Date.now() }
+    probeHostIdentity: async () => {
+      if (!state.healthy) throw new Error('mock identity probe failure')
+      return true
     },
   }
 }
@@ -96,7 +98,7 @@ test('restartLocal merges into an in-flight automatic restart (single spawn, no 
           await restartRelease
         }
       },
-      describeCapabilities: mockDescribe().describeCapabilities,
+      probeHostIdentity: mockIdentityProbe().probeHostIdentity,
     },
   })
 
@@ -147,7 +149,7 @@ test('an automatic restart trigger suspends while a user restart is in flight (s
           await restartRelease
         }
       },
-      describeCapabilities: mockDescribe().describeCapabilities,
+      probeHostIdentity: mockIdentityProbe().probeHostIdentity,
     },
   })
 
@@ -170,7 +172,7 @@ test('an automatic restart trigger suspends while a user restart is in flight (s
 })
 
 test('a successful user restart clears the failure counter (degraded → ready)', async () => {
-  const describe = mockDescribe()
+  const probe = mockIdentityProbe()
   let spawnCalls = 0
   const connection = createLocalConnection({
     stateDir: '/tmp/none',
@@ -183,7 +185,7 @@ test('a successful user restart clears the failure counter (degraded → ready)'
         spawnCalls += 1
         return { child: { on: () => {}, exitCode: null }, port: 18200 + spawnCalls, stop: async () => {} }
       },
-      describeCapabilities: describe.describeCapabilities,
+      probeHostIdentity: probe.probeHostIdentity,
     },
   })
 
@@ -192,12 +194,12 @@ test('a successful user restart clears the failure counter (degraded → ready)'
     assert.equal(connection.getState(), 'ready')
 
     // Drive one probe failure → degraded with a non-zero shared counter.
-    describe.state.healthy = false
+    probe.state.healthy = false
     await waitFor(() => connection.getState() === 'degraded', 3000, 'degraded state')
     assert.ok(connection.getConsecutiveFailures() >= 1, 'failure counter advanced')
 
     // A user restart clears the counter and returns to ready.
-    describe.state.healthy = true
+    probe.state.healthy = true
     const before = spawnCalls
     await connection.restartLocal()
     assert.equal(connection.getState(), 'ready')
@@ -231,7 +233,7 @@ test('a second restartLocal during an in-flight restart shares the same promise'
           await restartRelease
         }
       },
-      describeCapabilities: mockDescribe().describeCapabilities,
+      probeHostIdentity: mockIdentityProbe().probeHostIdentity,
     },
   })
 
@@ -272,7 +274,7 @@ test('a failed user restart counts into the shared restart-exhausted window', as
         if (spawnCalls === 1) return { child: { on: () => {}, exitCode: null }, port: 18400, stop: async () => {} }
         throw new Error('injected restart spawn failure')
       },
-      describeCapabilities: mockDescribe().describeCapabilities,
+      probeHostIdentity: mockIdentityProbe().probeHostIdentity,
     },
   })
 
@@ -299,7 +301,7 @@ test('restartLocal rejects under a closed spawn gate without spawning', async ()
         spawns += 1
         return { child: { on: () => {}, exitCode: null }, port: 18500, stop: async () => {} }
       },
-      describeCapabilities: mockDescribe().describeCapabilities,
+      probeHostIdentity: mockIdentityProbe().probeHostIdentity,
     },
   })
 
@@ -327,7 +329,7 @@ test('restartLocal rejects during an in-progress stop; final state stays stopped
     logger: quietLogger,
     deps: {
       spawnDsh: async () => child,
-      describeCapabilities: mockDescribe().describeCapabilities,
+      probeHostIdentity: mockIdentityProbe().probeHostIdentity,
     },
   })
 
@@ -370,7 +372,7 @@ test('stop() reclaims an in-flight user restart without leaking a process', asyn
         announceRestart()
         return restartSpawnRelease
       },
-      describeCapabilities: mockDescribe().describeCapabilities,
+      probeHostIdentity: mockIdentityProbe().probeHostIdentity,
     },
   })
 
@@ -409,13 +411,13 @@ test('createControlPlane.restartLocal rejects under a closed canStartLocal witho
     spawns += 1
     return { child: { on: () => {}, exitCode: null }, port: 17510, stop: async () => {} }
   }
-  const describeCapabilities = async () => ({ value: { attachedSessions: 0 }, cachedAt: Date.now() })
+  const probeHostIdentity = async () => true
   const plane = createControlPlane({
     port: 0,
     stateDir,
     logger: quietLogger,
     canStartLocal: () => ({ ok: false, reason: 'applying dsh vY' }),
-    localConnectionDeps: { spawnDsh, describeCapabilities },
+    localConnectionDeps: { spawnDsh, probeHostIdentity },
   })
   try {
     await plane.start()
@@ -453,7 +455,7 @@ test('restartLocal rejects while a start is in flight (no spawn, no backoff-wind
           await startGate
         }
       },
-      describeCapabilities: mockDescribe().describeCapabilities,
+      probeHostIdentity: mockIdentityProbe().probeHostIdentity,
     },
   })
   try {
@@ -483,7 +485,7 @@ test('restartLocal rejects from error state (spawn failure) with the honest not-
     options: { healthIntervalMs: 0 },
     deps: {
       spawnDsh: async () => { throw new Error('mock spawn failure') },
-      describeCapabilities: mockDescribe().describeCapabilities,
+      probeHostIdentity: mockIdentityProbe().probeHostIdentity,
     },
   })
   await assert.rejects(connection.start(), /mock spawn failure/)
@@ -505,7 +507,7 @@ test('restartLocal rejects again once the shared window is exhausted (honest rec
         spawnCalls += 1
         return { child: { on: () => {}, exitCode: null }, port: 18040 + spawnCalls, stop: async () => {} }
       },
-      describeCapabilities: mockDescribe().describeCapabilities,
+      probeHostIdentity: mockIdentityProbe().probeHostIdentity,
     },
   })
   await connection.start()
@@ -533,7 +535,7 @@ test('restart resolves the workspace thunk afresh (restart uses the current acti
         seen.push(opts.dshWorkspacePath)
         return { child: { on: () => {}, exitCode: null }, port: 18050 + seen.length, stop: async () => {} }
       },
-      describeCapabilities: mockDescribe().describeCapabilities,
+      probeHostIdentity: mockIdentityProbe().probeHostIdentity,
     },
   })
   await connection.start()
@@ -557,7 +559,7 @@ test('restartLocal rejects from stopped (never started) without spawning a ghost
         spawnCalls += 1
         return { child: { on: () => {}, exitCode: null }, port: 18020, stop: async () => {} }
       },
-      describeCapabilities: mockDescribe().describeCapabilities,
+      probeHostIdentity: mockIdentityProbe().probeHostIdentity,
     },
   })
   await assert.rejects(connection.restartLocal(), /not running/)
@@ -571,12 +573,12 @@ test('createControlPlane.restartLocal restarts the local host end-to-end', async
     spawns += 1
     return { child: { on: () => {}, exitCode: null }, port: 17510 + spawns, stop: async () => {} }
   }
-  const describeCapabilities = async () => ({ value: { attachedSessions: 0 }, cachedAt: Date.now() })
+  const probeHostIdentity = async () => true
   const plane = createControlPlane({
     port: 0,
     stateDir,
     logger: quietLogger,
-    localConnectionDeps: { spawnDsh, describeCapabilities },
+    localConnectionDeps: { spawnDsh, probeHostIdentity },
   })
   try {
     await plane.start()
@@ -620,7 +622,7 @@ test('R3: a process-death exit during the stop() window is inert (no restart res
           stop: async () => { await stopGate },
         }
       },
-      describeCapabilities: mockDescribe().describeCapabilities,
+      probeHostIdentity: mockIdentityProbe().probeHostIdentity,
     },
   })
   try {
@@ -663,7 +665,7 @@ test('a closed canSpawn gate (applying window) rejects start() and restartLocal 
         spawns += 1
         return { child: { on: () => {}, exitCode: null }, port: 18900, stop: async () => {} }
       },
-      describeCapabilities: mockDescribe().describeCapabilities,
+      probeHostIdentity: mockIdentityProbe().probeHostIdentity,
     },
   })
   await assert.rejects(connection.start(), (error: unknown) =>
@@ -686,13 +688,13 @@ test('createControlPlane.startLocal rejects connection_busy under a closed canSt
     spawns += 1
     return { child: { on: () => {}, exitCode: null }, port: 17510, stop: async () => {} }
   }
-  const describeCapabilities = async () => ({ value: { attachedSessions: 0 }, cachedAt: Date.now() })
+  const probeHostIdentity = async () => true
   const plane = createControlPlane({
     port: 0,
     stateDir,
     logger: quietLogger,
     canStartLocal: () => ({ ok: false, reason: 'applying dsh vY' }),
-    localConnectionDeps: { spawnDsh, describeCapabilities },
+    localConnectionDeps: { spawnDsh, probeHostIdentity },
   })
   try {
     await plane.start()
@@ -733,7 +735,7 @@ test('D2: the restart window counts only triggerRestart (start()/stop() never pu
         hooks.push(hook)
         return controllableChild(19000 + spawnCalls, hook)
       },
-      describeCapabilities: mockDescribe().describeCapabilities,
+      probeHostIdentity: mockIdentityProbe().probeHostIdentity,
     },
   })
   try {
@@ -803,7 +805,7 @@ test('D2: restart counts do not survive a stop()/start() cycle (stop clears the 
         hooks.push(hook)
         return controllableChild(19100 + spawnCalls, hook)
       },
-      describeCapabilities: mockDescribe().describeCapabilities,
+      probeHostIdentity: mockIdentityProbe().probeHostIdentity,
     },
   })
   try {

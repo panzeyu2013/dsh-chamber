@@ -12,8 +12,8 @@
  * serviceActive projection, auth-failure semantics), line-buffered stderr
  * redaction, per-child guards, provider environment injection, and endpoint
  * identity verification (a port that merely accepts TCP is never
- * ready; a real dsh session/list handshake is required — covered against
- * real loopback HTTP servers).
+ * ready; a real dsh identity handshake (session/canOpenWorkspacePath) is
+ * required — covered against real loopback HTTP servers).
  */
 
 import { test } from 'node:test'
@@ -1079,29 +1079,34 @@ test('a throwing identity verification is contained: warn, never ready, bounded 
   assert.equal(manager.readyUrl('s1'), null)
 })
 
-test('a real dsh wire handshake through the tunnel destination is required for ready', async t => {
+test('a real dsh identity handshake through the tunnel destination is required for ready', async t => {
   const dir = tempDir(t)
-  // A server that answers /api/session/list like a real dsh host: the
-  // client-request envelope is echoed as a valid server-response.
+  // A server that answers /api/session/canOpenWorkspacePath like a real dsh
+  // host: the client-request envelope is echoed as a valid server-response
+  // with the fixed-size BOOLEAN identity value.
+  let sessionListCalls = 0
   const server = createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/api/session/list') {
+      sessionListCalls += 1
+    }
+    if (req.method === 'POST' && req.url === '/api/session/canOpenWorkspacePath') {
       let body = ''
       req.on('data', chunk => { body += String(chunk) })
       req.on('end', () => {
         let envelope: { type?: unknown; rpcId?: unknown; method?: unknown } | null = null
         try { envelope = JSON.parse(body) } catch { envelope = null }
-        if (envelope?.type === 'client-request' && envelope.method === 'session/list' && typeof envelope.rpcId === 'string') {
+        if (envelope?.type === 'client-request' && envelope.method === 'session/canOpenWorkspacePath' && typeof envelope.rpcId === 'string') {
           res.writeHead(200, { 'content-type': 'application/json' })
-          res.end(JSON.stringify({ type: 'server-response', rpcId: envelope.rpcId, result: { ok: true, value: {} } }))
+          res.end(JSON.stringify({ type: 'server-response', rpcId: envelope.rpcId, result: { ok: true, value: true } }))
         } else {
           res.writeHead(400)
           res.end()
         }
       })
-    } else {
-      res.writeHead(404)
-      res.end()
+      return
     }
+    res.writeHead(404)
+    res.end()
   })
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
   const port = (server.address() as AddressInfo).port
@@ -1119,9 +1124,62 @@ test('a real dsh wire handshake through the tunnel destination is required for r
   })
   manager.saveInstances([{ id: 's1', label: 'home', host: 'h.example.com', remotePort: 2222 }])
   manager.connect('s1')
-  await waitFor(() => manager.status('s1')!.phase === 'ready', 3000, 'ready after the dsh handshake')
+  await waitFor(() => manager.status('s1')!.phase === 'ready', 3000, 'ready after the dsh identity handshake')
   assert.equal(manager.readyUrl('s1'), `http://127.0.0.1:${port}`)
   assert.ok(manager.logs('s1').some(entry => entry.message.includes('transport ready')), 'the handshake-gated ready is logged')
+  assert.equal(sessionListCalls, 0, 'the attach probe never re-reads the session list')
+  manager.dispose()
+})
+
+test('a session-list-heavy dsh destination attaches via the fixed-size identity probe', async t => {
+  // 2026 probe-contract regression: the endpoint's session/list answer grows
+  // with session data (here a 1 MiB+ list that would overflow the legacy
+  // probe cap). The identity probe never reads it, so attach stays healthy.
+  const dir = tempDir(t)
+  let sessionListCalls = 0
+  const padding = 'x'.repeat(1024 * 1024 + 64)
+  const server = createServer((req, res) => {
+    if (req.method === 'POST' && req.url === '/api/session/list') {
+      sessionListCalls += 1
+      let body = ''
+      req.on('data', chunk => { body += String(chunk) })
+      req.on('end', () => {
+        const envelope = JSON.parse(body) as { rpcId?: unknown }
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ type: 'server-response', rpcId: envelope.rpcId, result: { ok: true, value: { items: [{ sessionId: 's1', padding }] } } }))
+      })
+      return
+    }
+    if (req.method === 'POST' && req.url === '/api/session/canOpenWorkspacePath') {
+      let body = ''
+      req.on('data', chunk => { body += String(chunk) })
+      req.on('end', () => {
+        const envelope = JSON.parse(body) as { rpcId?: unknown }
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ type: 'server-response', rpcId: envelope.rpcId, result: { ok: true, value: true } }))
+      })
+      return
+    }
+    res.writeHead(404)
+    res.end()
+  })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const port = (server.address() as AddressInfo).port
+  t.after(() => { server.close() })
+  const manager = createTransportManager({
+    provider: sshProvider,
+    spawnFn: () => new FakeChild(),
+    instancesFile: join(dir, 'ssh-instances.json'),
+    logger: silentLogger,
+    portProbe: async () => true,
+    allocatePort: async () => port,
+    options: { readyTimeoutMs: 100, probeIntervalMs: 5, retryBaseMs: 10, retryMaxMs: 40, maxRetryAttempts: 3 },
+  })
+  manager.saveInstances([{ id: 's1', label: 'home', host: 'h.example.com', remotePort: 2222 }])
+  manager.connect('s1')
+  await waitFor(() => manager.status('s1')!.phase === 'ready', 3000, 'ready via the fixed-size identity probe')
+  assert.equal(manager.readyUrl('s1'), `http://127.0.0.1:${port}`)
+  assert.equal(sessionListCalls, 0, 'the session-data-bearing probe is never invoked')
   manager.dispose()
 })
 
@@ -1180,7 +1238,10 @@ test('verifyDshEndpoint rejects a wrong-shaped 200 answer and times out on a sil
   await new Promise<void>(resolve => bloat.listen(0, '127.0.0.1', resolve))
   const bloatPort = (bloat.address() as AddressInfo).port
   t.after(() => { bloat.close() })
-  const oversized = await verifyDshEndpoint({ host: '127.0.0.1', port: bloatPort }, 5000, 1024)
+  // No explicit cap argument: the DEFAULT identity-arm cap (64 KiB,
+  // HOST_PROBE_MAX_RESPONSE_BYTES) is what this leg pins end-to-end. The
+  // body is ~64 KiB + JSON framing — just over the default cap.
+  const oversized = await verifyDshEndpoint({ host: '127.0.0.1', port: bloatPort }, 5000)
   assert.equal(oversized.ok, false, 'an oversized answer is rejected instead of buffered unbounded')
   if (!oversized.ok) {
     assert.match(oversized.detail ?? '', /oversized/)
@@ -1188,13 +1249,60 @@ test('verifyDshEndpoint rejects a wrong-shaped 200 answer and times out on a sil
   }
 })
 
-test('verifyDshEndpoint flags an inconsistent dsh destination (positive session/list signature)', async t => {
-  // The first session/list call (the identity probe) answers 404, but the
-  // re-probe (the dsh-signature check) answers a valid server-response
-  // envelope: positive dsh evidence, so the detail tells the user the
-  // destination IS dsh instead of claiming "not dsh". The legacy 426/SSE
-  // events.mux signature arms are gone from the 0.1.2-alpha.1 wire, so the
-  // signature is the current handshake itself, re-answered.
+test('verifyDshEndpoint: a value:false identity answer is still a healthy dsh handshake', async t => {
+  // The identity method reports the platform answer (can this deployment hand
+  // a Session workspace path to a native desktop?). Headless remote dsh
+  // deployments legitimately answer false — only method presence / protocol /
+  // controller assembly are under test, so false is ready too.
+  const server = createServer((req, res) => {
+    let body = ''
+    req.on('data', (chunk: Buffer) => { body += String(chunk) })
+    req.on('end', () => {
+      const envelope = JSON.parse(body) as { rpcId?: unknown; method?: unknown }
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ type: 'server-response', rpcId: envelope.rpcId, result: { ok: true, value: false } }))
+    })
+  })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const port = (server.address() as AddressInfo).port
+  t.after(() => { server.close() })
+  const result = await verifyDshEndpoint({ host: '127.0.0.1', port })
+  assert.deepEqual(result, { ok: true }, 'value false is equally healthy')
+})
+
+test('verifyDshEndpoint: an ok:true envelope with a non-boolean value is terminal non-dsh', async t => {
+  // A host answering the identity method with ok:true but a non-boolean value
+  // contradicts the identity contract — deterministic non-dsh evidence, same
+  // terminal surface as any wrong-shaped 200 answer.
+  const server = createServer((req, res) => {
+    let body = ''
+    req.on('data', (chunk: Buffer) => { body += String(chunk) })
+    req.on('end', () => {
+      const envelope = JSON.parse(body) as { rpcId?: unknown }
+      // A matching envelope echo with ok:true and a NON-boolean value: the
+      // method contract is violated → deterministic non-dsh evidence.
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ type: 'server-response', rpcId: envelope.rpcId, result: { ok: true, value: { items: [] } } }))
+    })
+  })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const port = (server.address() as AddressInfo).port
+  t.after(() => { server.close() })
+  const result = await verifyDshEndpoint({ host: '127.0.0.1', port })
+  assert.equal(result.ok, false)
+  if (!result.ok) {
+    assert.match(result.detail ?? '', /does not appear to be a dsh/)
+    assert.equal(result.terminal, true)
+  }
+})
+
+test('verifyDshEndpoint flags an old-version dsh destination (positive legacy signature)', async t => {
+  // The identity method call (session/canOpenWorkspacePath) answers 404 —
+  // the destination is an old-version dsh (dsh < 0.1.2-rc.1) — but the
+  // signature re-probe's LEGACY session/list arm answers a valid
+  // server-response envelope: positive dsh evidence, so the detail tells the
+  // user the destination IS dsh ("check or upgrade") instead of claiming
+  // "not dsh".
   let calls = 0
   const inconsistentDsh = createServer((req, res) => {
     calls++
@@ -1223,9 +1331,10 @@ test('verifyDshEndpoint flags an inconsistent dsh destination (positive session/
 })
 
 test('verifyDshEndpoint keeps the generic message when no dsh signature exists', async t => {
-  // 404 on session/list (the identity probe) AND 404 on the signature
-  // re-probe: indistinguishable from a plain web server — honesty over
-  // guessing, the dsh claim must not be made without positive evidence.
+  // 404 on the identity method (the primary probe) AND 404 on both signature
+  // arms (identity + legacy session/list re-answer): indistinguishable from
+  // a plain web server — honesty over guessing, the dsh claim must not be
+  // made without positive evidence.
   const plain = createServer((_req, res) => { res.writeHead(404); res.end() })
   await new Promise<void>(resolve => plain.listen(0, '127.0.0.1', resolve))
   const plainPort = (plain.address() as AddressInfo).port

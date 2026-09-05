@@ -10,7 +10,7 @@
 >   把 chamber 自带的两个 host 包挂入官方 web profile，不接管宿主组装权威（§2.6）。
 > - **保留沿用**：spawn 生命周期、端口占用重试、pid 记录
 >   （ownerPid/ownerInstanceId/port/binary/profile/source/startedAt）、
->   instance-id 仲裁、readiness（TCP + `host.describe`）、健康七态状态机、
+>   instance-id 仲裁、readiness（TCP + 统一身份探针）、健康七态状态机、
 >   reaper、host-logs 滚动日志、systemd 单元（部署形态，远程实例参考）、优雅停止。
 > - **删除**：slim profile 生成与维护、glue 插件、旧业务补丁层 HMR 分类与
 >   `POST /api/config/reload`、external 接管 / claim、部署五形态（收为
@@ -44,8 +44,8 @@
   pid 记录、host-logs 滚动日志、systemd 单元、优雅停止；chamber 自带 host
   包的确定性分发与 loader overlay（§2.6）。
 - **out**：会话/目标/终端等宿主能力（宿主原生，前端经每实例反代消费，
-  03 §3）；dsh 连接协议（wire 以 vendor dsh-host-apiproxy 为权威，控制面仅用
-  describe/健康探活面）；认证/审计
+  03 §3）；dsh 连接协议（wire 以 vendor 源码为权威，控制面仅用统一身份握手/
+  健康探活面，见 §3.2/§3.5）；认证/审计
   （匿名 loopback 控制面随 v1 收敛整体移除；gateway 部署的认证/凭据/审计
   见 17 §7/§13.4）；远程实例的隧道与 systemd 编排（03 §2.2：桌面
   主进程 transport-manager（ssh provider）+ 注册表）。
@@ -88,8 +88,8 @@ web profile 的 `--port` 是**固定端口**（非 0 随机）。控制面选定
 
 ```
 尝试端口 P：
-  spawn 后就绪探测（TCP + host.describe，§3.2）成功 → 使用 P
-  TCP 通但 host.describe 失败 → 端口被无关服务占用（协议不匹配）→ 杀子进程，
+  spawn 后就绪探测（TCP + 统一身份探针，§3.2）成功 → 使用 P
+  TCP 通但身份探针失败 → 端口被无关服务占用（协议不匹配）→ 杀子进程，
     按 P+1 重试（至多 N 次，如 5 次——MAX_SPAWN_ATTEMPTS）→ 全部失败 → 显式报错（含启动输出）
   spawn 立即退出 / 启动超时 → 启动失败（fail-loud，附诊断）
 每次重试必须同时更新 --port 与 --trusted-host（两者恒一致：127.0.0.1:<P>）
@@ -100,7 +100,7 @@ web profile 的 `--port` 是**固定端口**（非 0 随机）。控制面选定
   投影；不写 catalog），便于防火墙/隧道诊断。
 - **TOCTOU 说明**：spawn 前不做 `net.listen(0)` 预占（释放到绑定之间仍有
   竞态）；冲突一律以"就绪探测失败 → P+1"的后验方式处理，语义确定。
-- 就绪判定里"TCP 通但 describe 失败"正是端口被占的判据（§3.2）。
+- 就绪判定里“TCP 通但身份探针失败”正是端口被占的判据（§3.2）。
 
 ### 2.3 孤儿回收直接移植参考实现安全模型
 
@@ -128,7 +128,8 @@ web profile 的 `--port` 是**固定端口**（非 0 随机）。控制面选定
 
 **不保留**"忙会话宽限"——控制面不再消费会话帧（协议细节以
 dsh 自身 wire / vendor 源码为权威），
-探活载荷只有 `host.describe`，健康判定与宿主业务负载解耦；宿主因模型调用
+探活载荷只有统一身份方法 `session/canOpenWorkspacePath`（固定小体积 boolean，
+见 §3.2），健康判定与宿主业务负载及**会话数据量**双向解耦；宿主因模型调用
 繁忙导致的慢响应由请求侧超时面处理，控制面只判定进程级健康。
 
 ### 2.5 instance-id 仲裁（多控制面实例并存）
@@ -231,14 +232,14 @@ dsh --profile web [--patch <stateDir>/dsh-chamber-graph.patch.yml] \
   cwd、env 键数、PATH 项数——设计文档曾称 `lastSpawnDiagnostics` 结构，
   spawn-dsh 现以注册表字段形式承载，非独立结构化对象）。
 
-### 3.2 就绪探测与端口占用判定（TCP + host.describe）
+### 3.2 就绪探测与端口占用判定（TCP + 统一身份探针）
 
 ```
 starting ──① TCP connect 127.0.0.1:P（250ms 间隔轮询，总窗口 90s = LISTEN_WAIT_MS）
               └─ 失败/超时 → 若子进程已退出：启动失败；否则继续轮询
-          ──② host.describe unary（每轮 500ms 超时，90s 窗口内无限重试）→ 成功 = ready
+          ──② 统一身份探针（90s 窗口内无限重试，重试间隔 500ms）→ 成功 = ready
               └─ 失败（非 JSON / 非 200 / 契约不匹配）→ 重试
-                 —— TCP 通但 describe 失败 = 端口被无关服务占用（协议不匹配），
+                 —— TCP 通但身份探针失败 = 端口被无关服务占用（协议不匹配），
                     杀子进程 → 按 §2.2 以 P+1 重试
 ready
 ```
@@ -247,10 +248,23 @@ ready
   （status `ready`，03 §2.1）；不把运行态写回共享 catalog。
 - 就绪失败（超时 / 进程退出 / 重试耗尽）：显式启动失败，附完整启动输出与
   `--dump-config` 建议（`dsh --profile web --dump-config` 检查组合树）。
-- `host.describe` 响应（version / cwd / attachedSessions …）仅用于就绪与
-  健康探活，不作任何会话级消费（协议细节以 dsh wire / vendor 源码为权威）；
-  控制面 unary fetch carrier 对单个 JSON 响应实施 1 MiB 流式字节上限，声明
-  长度与实际流均受约束，异常宿主不能借探活把响应无界缓冲进控制面。
+- **探针 = 统一身份契约（rpc-envelope.ts 单源；`probeHostIdentity`）**：POST
+  `/api/session/canOpenWorkspacePath`（SessionController `session` namespace
+  零参 boolean Remote，钉住上游 dsh ≥ 0.1.2-rc.1；纯同步平台检测，不读会话
+  数据、不激活 Agent、无 IO），200 + rpcId 回显 + `result.ok === true` +
+  boolean value（**true/false 均健康**）即通过；响应上限 64 KiB（探针专用
+  per-call cap）。HTTP 404 = 部分 0.1.2-alpha.x 早期树 / dsh < 0.1.2-rc.1
+  （无此方法）→ 自动
+  回退 legacy `session/list`（默认 1 MiB 上限，与旧版语义逐位一致，老树不
+  劣化）；**回退成功后**写 warning（双 404/transient 安静；每连续 legacy 期
+  至多一条——STATUS 挂账⑦）——上游未来再发生方法漂移时可见、不静默；
+  404 之外
+  （401 认证门、5xx、超时、畸形）一律如实失败、不回退。
+- 身份探针响应为固定小体积 boolean，只用于就绪与健康探活，不作任何会话级
+  消费（协议细节以 dsh wire / vendor 源码为权威）——探针响应体积与宿主会话
+  数量彻底解耦；控制面 unary fetch carrier 对单个 JSON 响应实施流式字节
+  上限（身份探针 64 KiB / legacy 回退 1 MiB），声明长度与实际流均受约束，
+  异常宿主不能借探活把响应无界缓冲进控制面。
 
 ### 3.3 进程记录文件（managed-dsh/<pid>.json）
 
@@ -318,7 +332,7 @@ stopped ──spawn──► starting ──ready(§3.2)──► ready ──fa
    │                                            │  └──fail(N)┐
    │                                            └─────restarting──────┐
    └──── graceful stop ────────────────────────────────────────────────┘
-                                  └─ kill → 端口释放 → respawn → ready（spawnDsh 内建 TCP+describe 就绪探测）
+                                  └─ kill → 端口释放 → respawn → ready（spawnDsh 内建 TCP+统一身份探针就绪探测，§3.2）
    spawn 失败 ──► error（fail-loud）──start() 重试──► starting
 ```
 
@@ -336,7 +350,7 @@ stopped ──spawn──► starting ──ready(§3.2)──► ready ──fa
 
 | 通道 | 触发 | 实现 |
 |---|---|---|
-| 周期 | 定时器（缺省 30s，可配） | `host.describe` unary，5s 超时 |
+| 周期 | 定时器（缺省 30s，可配） | 统一身份探针 `session/canOpenWorkspacePath`（`probeHostIdentity`，§3.2），5s 超时；老树 404 → legacy `session/list` 回退，回退成功才 warn（每连续 legacy 期至多一条，§3.2/STATUS ⑦） |
 | 传输触发 | （设计预留；反代侧连接异常触发健康检查**未实现**——`InstanceProxyDeps` 无健康回调，当前仅周期通道驱动） | — |
 
 - 单飞行探测：并发触发共享一个 in-flight promise；结果带 750ms 缓存；
@@ -345,6 +359,7 @@ stopped ──spawn──► starting ──ready(§3.2)──► ready ──fa
 - 阈值：N=20（连续计数，可经构造参数覆写）；
 - 检出预算：30s 周期 × N=20 ≈ 10min 才累计到挂起判定；child-exit（进程死亡
   分支立即重启）与传输触发（设计预留）提供兜底，探测周期拉长不放大挂起风险；
+  身份探针固定小体积、不读会话列表——健康判定与宿主会话量增长彻底解耦；
 - 成功 → 清零计数 + 状态回 ready。
 
 ### 3.6 重启序列与背压
@@ -371,7 +386,7 @@ stopped ──spawn──► starting ──ready(§3.2)──► ready ──fa
 8. **手工启动代次（2026-08 merge review）**：候选端口预检和 TCP 就绪轮询的
    每次 loopback connect 均有 1s 上限；预检超时按“端口归属不明/忙”保守跳过，
    不在未知端口上拉 detached host。stop() abort 当前 spawn 代次（端口预检、
-   TCP 等待、`host.describe` 就绪等待及最后 browse 能力探测均消费同一取消
+   TCP 等待、身份探针就绪等待及最后 browse 能力探测均消费同一取消
    信号、销毁在途 socket 并清理 detached 尝试），等待旧代收尾后释放该代的
    single-flight 槽；迟到结果以
    epoch 判旧，若已产出子进程则
@@ -525,9 +540,9 @@ gateway 目标即其入口本身（自带认证边界，17 §5.1/§6）。该形
 |---|---|---|
 | web profile 装配（webserver + `/api` 桥 + 前端 + 信任栅栏） | dsh `apps/cli`（`--profile web`、`--host/--port/--trusted-host`） | 拼命令行 + spawn；`--trusted-host 127.0.0.1:<port>` |
 | `/api` 浏览器信任栅栏 | dsh connection（loopback / trustedHosts） | 反代源 127.0.0.1 loopback 直连（03 §3） |
-| `host.describe` 协议握手 | dsh apiproxy 契约（zod schema 可 import） | 就绪探测第二段 + 健康探活（§3.2/§3.5） |
+| 统一身份握手（`session/canOpenWorkspacePath` boolean） | dsh SessionController `session` namespace（rpc-envelope.ts 单源契约；legacy `session/list` 404 回退） | 就绪探测第二段 + 健康探活（§3.2/§3.5） |
 | 孤儿回收安全模型 | 参考实现 `managed-process-registry.js`（记录在案 → 重验 → owner 死才杀） | 移植 + 改造：命令串含 `--profile web`、lsof 端口归属校验（§3.4） |
-| 健康监控 / 重启 / 背压 | 参考实现 `lifecycle.js`（共享失败计数、节流、单飞行重启、端口释放） | 探活载荷换 `host.describe`；删"忙会话宽限"（§2.4/§3.5） |
+| 健康监控 / 重启 / 背压 | 参考实现 `lifecycle.js`（共享失败计数、节流、单飞行重启、端口释放） | 探活载荷换统一身份方法；删"忙会话宽限"（§2.4/§3.5） |
 | 优雅退出 | dsh profile-boot（SIGTERM dispose） | SIGTERM 进程组 → SIGKILL 兜底（§3.7） |
 | chamber host 包附着 | `@dsh-chamber/dsh-host-client-graph` + `@dsh-chamber/dsh-host-git-worktree` | 按构建产物 seed + 单一 loader overlay；只分发，不消费 graph/Git 业务（§2.6） |
 

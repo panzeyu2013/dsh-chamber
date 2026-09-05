@@ -596,8 +596,10 @@ instanceId}` +
   endpoint 模式**：无子进程，运行时探测 `probeTarget()` 并暴露
   `endpointUrl()`，如 tailnet 直连宿主）、`classifyStderr`（整行分类：
   脱敏 + 终态认证判定）、可选 `verifyUp`（端点身份验证：TCP 探测通过后、
-  置 ready 前验证目标身份——dsh 使用 `host.describe` 信封探测，与本地 02 §3.2
-  同判据；gateway 使用认证后 `/chamber/runtime/status` 固定 identity，使 managed
+  置 ready 前验证目标身份——dsh 使用统一身份握手
+  `session/canOpenWorkspacePath`（固定小体积 boolean；老 runtime 树 404 →
+  signature 路径回退 legacy `session/list` 识别为 "check or upgrade"），与本地
+  02 §3.2 同判据；gateway 使用认证后 `/chamber/runtime/status` 固定 identity，使 managed
   dsh blocked/down 时恢复面仍可达；非目标服务端口绝不呈现已连接）、可选 `exec`
   （远程服务通道）。
 - `transport-manager.ts` 是通用运行时：phase 机 / **两段式重连**（快速有界

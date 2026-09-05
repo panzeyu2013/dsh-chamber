@@ -858,7 +858,15 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
             // healthy activation.
             hostDomains,
             call: async (url, method, payload, opts) => {
-              const response = await dshCall(url, method, payload, { signal: opts?.signal, timeoutMs: opts?.timeoutMs })
+              // Forward the per-call response cap (runtime-probes widens
+              // settings/describe to SETTINGS_FILE_MAX_BYTES=16 MiB so a
+              // legitimately large settings response never fails activation;
+              // the cap is executed by the control-plane carrier here).
+              const response = await dshCall(url, method, payload, {
+                signal: opts?.signal,
+                timeoutMs: opts?.timeoutMs,
+                ...(opts?.maxResponseBytes === undefined ? {} : { maxResponseBytes: opts.maxResponseBytes }),
+              })
               return { result: response.result }
             },
           })
@@ -911,7 +919,13 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
             signal,
             hostDomains: hasSyncedHostSeed(config.plane.stateDir),
             call: async (url, method, payload, opts) => {
-              const response = await dshCall(url, method, payload, { signal: opts?.signal, timeoutMs: opts?.timeoutMs })
+              // Per-call response-cap forwarding — same contract as the
+              // managed-tree seam above (settings/describe 16 MiB).
+              const response = await dshCall(url, method, payload, {
+                signal: opts?.signal,
+                timeoutMs: opts?.timeoutMs,
+                ...(opts?.maxResponseBytes === undefined ? {} : { maxResponseBytes: opts.maxResponseBytes }),
+              })
               return { result: response.result }
             },
           })

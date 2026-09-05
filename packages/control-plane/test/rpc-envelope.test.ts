@@ -17,10 +17,42 @@ import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import {
   buildClientRequest,
+  buildHostIdentityProbePayload,
+  buildLegacyHostProbePayload,
+  HOST_IDENTITY_METHOD,
+  HOST_PROBE_MAX_RESPONSE_BYTES,
+  LEGACY_HOST_PROBE_METHOD,
   mintRpcId,
   parseServerResponse,
   postClientRequest,
 } from '../src/rpc-envelope.ts'
+
+test('the unified host-identity probe contract is single-sourced here', () => {
+  // Every chamber identity/health probe speaks the SAME identity method —
+  // control-plane probeHostIdentity, the desktop SSH endpoint probes and the
+  // dsh-runtime activation session probe all consume these constants.
+  assert.equal(HOST_IDENTITY_METHOD, 'session/canOpenWorkspacePath')
+  assert.equal(LEGACY_HOST_PROBE_METHOD, 'session/list')
+  assert.equal(HOST_PROBE_MAX_RESPONSE_BYTES, 64 * 1024)
+  // The zero-arg identity Remote carries the empty `{args}` form.
+  assert.deepEqual(buildHostIdentityProbePayload(), { args: {} })
+  // The legacy session/list Remote carries the wire `_request` typed-args
+  // marker (the exact payload today's probes send).
+  assert.deepEqual(buildLegacyHostProbePayload(), { args: { _request: {} } })
+  // Building a client-request envelope from the constants yields the wire
+  // shape the fetch and node:http carriers share.
+  const envelope = buildClientRequest('rpc-id', HOST_IDENTITY_METHOD, buildHostIdentityProbePayload())
+  assert.deepEqual(envelope, {
+    type: 'client-request',
+    rpcId: 'rpc-id',
+    method: 'session/canOpenWorkspacePath',
+    payload: { args: {} },
+  })
+  assert.equal(
+    JSON.stringify(envelope),
+    '{"type":"client-request","rpcId":"rpc-id","method":"session/canOpenWorkspacePath","payload":{"args":{}}}',
+  )
+})
 
 test('mintRpcId returns distinct UUIDs (the initiator mints every rpcId)', () => {
   const a = mintRpcId()

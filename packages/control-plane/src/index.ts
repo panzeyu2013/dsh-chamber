@@ -176,7 +176,7 @@ export interface ControlPlaneOptions {
    * presence is also the opt-in that permits a non-loopback bind; the normal
    * anonymous control plane never supplies it and remains loopback-only. */
   corsEvaluator?: ApiCorsEvaluator
-  /** Injectable local-connection wire deps (test seams: fake spawn/describe). */
+  /** Injectable local-connection wire deps (test seams: fake spawn/probe). */
   localConnectionDeps?: LocalConnectionDeps
   /** Injectable orphan reaper (test seam for lifecycle interleavings). */
   reaper?: typeof runReaper
@@ -468,8 +468,10 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
   }
 
   // The managed local connection adapter (design 02): spawn/health/reaper
-  // owner; readiness = TCP + session/list probe inside spawn-dsh (0.1.2
-  // wire; host.describe was deleted upstream). Runtime state is process-local
+  // owner; readiness = TCP + unified host-identity probe inside spawn-dsh
+  // (0.1.2 wire; probeHostIdentity speaks session/canOpenWorkspacePath with
+  // a legacy session/list fallback — host.describe was deleted upstream in
+  // dsh 0.1.2-alpha.1). Runtime state is process-local
   // and is merged with durable catalog metadata only at the management/wire
   // projection below (design 03 §2.1).
   const local = createLocalConnection({
@@ -1006,14 +1008,22 @@ export { resolveNodeExecutable, sanitizeManagedDshEnv, spawnDsh } from './spawn-
 // Unary RPC remains the ordinary control-plane client. Design 17's separately
 // invoked gateway also composes the bounded server-response and event-stream
 // helpers; exporting those helpers does not add a desktop session consumer.
-export { call, respond, openEventStream, RpcBusinessError, RpcTransportError } from './dsh-client.ts'
-export type { ServerRequest } from './dsh-client.ts'
+export { call, probeHostIdentity, respond, openEventStream, RpcBusinessError, RpcTransportError } from './dsh-client.ts'
+export type { ProbeHostIdentityOptions, ServerRequest } from './dsh-client.ts'
 // The dsh RPC wire envelope single source (A2 cross-package protocol
 // single-sourcing): envelope construction, server-response parse/validation
 // and the raw node:http unary carrier shared with the desktop probes
 // (ssh-provider.ts consumes them through desktop/control-plane-module.ts).
+// The unified host-identity probe contract constants/payload constructors
+// live here too (HOST_IDENTITY_METHOD / LEGACY_HOST_PROBE_METHOD /
+// HOST_PROBE_MAX_RESPONSE_BYTES) — every chamber probe speaks the same wire.
 export {
   buildClientRequest,
+  buildHostIdentityProbePayload,
+  buildLegacyHostProbePayload,
+  HOST_IDENTITY_METHOD,
+  HOST_PROBE_MAX_RESPONSE_BYTES,
+  LEGACY_HOST_PROBE_METHOD,
   mintRpcId,
   parseServerResponse,
   postClientRequest,

@@ -2,7 +2,7 @@
  * Local-connection lifecycle race tests (2026 audit H2): a health-probe
  * verdict landing during/after stop() must never resurrect the connection,
  * and a spawn failure landing after stop() must never flip stopped → error.
- * Pure-Node: injectable spawnDsh/describeCapabilities, no real dsh.
+ * Pure-Node: injectable spawnDsh/probeHostIdentity, no real dsh.
  */
 
 import { test } from 'node:test'
@@ -14,7 +14,7 @@ import { createLocalConnection } from '../src/local-connection.ts'
 import { CATALOG_FILE, createCatalog } from '../src/catalog.ts'
 import { DEFAULT_DSH_START_PORT } from '../src/spawn-dsh.ts'
 import { logPathFor } from '../src/host-logs.ts'
-import type { DescribeCapabilitiesFn, SpawnedDsh } from '../src/local-connection.ts'
+import type { ProbeIdentityFn, SpawnedDsh } from '../src/local-connection.ts'
 
 const silentLogger = { log() {}, warn() {}, error() {} }
 
@@ -32,7 +32,7 @@ async function waitUntil(condition: () => boolean, timeoutMs = 3000): Promise<vo
 
 const tick = (ms = 0): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
 
-const healthyDescribe: DescribeCapabilitiesFn = async () => ({ value: { attachedSessions: 0 }, cachedAt: Date.now() })
+const healthyProbe: ProbeIdentityFn = async () => true
 
 test('local connection carries one captured control-plane UUID into the spawn owner', async () => {
   const stateDir = tempDir()
@@ -53,7 +53,7 @@ test('local connection carries one captured control-plane UUID into the spawn ow
           stop: async () => {},
         }
       },
-      describeCapabilities: healthyDescribe,
+      probeHostIdentity: healthyProbe,
     },
   })
   try {
@@ -75,7 +75,7 @@ test('H2: a health-probe failure landing during stop() never resurrects the conn
     spawns += 1
     return { child: { on: () => {}, exitCode: null }, port: DEFAULT_DSH_START_PORT, stop: async () => {} }
   }
-  const describeCapabilities: DescribeCapabilitiesFn = async (_baseUrl, options) => {
+  const probeHostIdentity: ProbeIdentityFn = async (_baseUrl, options) => {
     // Honor the generation abort at entry; an already-in-flight probe stays
     // gated so the test controls exactly when the late verdict lands.
     if (options?.generationSignal?.aborted) throw new Error('probe aborted by generation')
@@ -89,7 +89,7 @@ test('H2: a health-probe failure landing during stop() never resurrects the conn
     dshWorkspacePath: join(stateDir, 'ws'),
     logger: silentLogger,
     options: { healthIntervalMs: 25, healthProbeTimeoutMs: 500, healthResultCacheMs: 0 },
-    deps: { spawnDsh, describeCapabilities },
+    deps: { spawnDsh, probeHostIdentity },
   })
   try {
     await local.start()
@@ -125,7 +125,7 @@ test('H2: stop waits for a late spawn failure and must not publish error', async
     dshHome: join(stateDir, 'home'),
     dshWorkspacePath: join(stateDir, 'ws'),
     logger: silentLogger,
-    deps: { spawnDsh, describeCapabilities: healthyDescribe },
+    deps: { spawnDsh, probeHostIdentity: healthyProbe },
   })
   try {
     const startPromise = local.start()
@@ -167,7 +167,7 @@ test('start → stop → start releases the cancelled first spawn and launches a
     dshHome: join(stateDir, 'home'),
     dshWorkspacePath: join(stateDir, 'ws'),
     logger: silentLogger,
-    deps: { spawnDsh, describeCapabilities: healthyDescribe },
+    deps: { spawnDsh, probeHostIdentity: healthyProbe },
   })
   try {
     const firstStart = local.start()
@@ -211,7 +211,7 @@ test('stop waits for a non-cooperative old spawn to resolve and clean up its own
     dshHome: join(stateDir, 'home'),
     dshWorkspacePath: join(stateDir, 'ws'),
     logger: silentLogger,
-    deps: { spawnDsh, describeCapabilities: healthyDescribe },
+    deps: { spawnDsh, probeHostIdentity: healthyProbe },
   })
   try {
     const staleStart = local.start()
@@ -256,7 +256,7 @@ test('stop writes exactly one stopped lifecycle line to the managed-host log', a
     dshHome: join(stateDir, 'home'),
     dshWorkspacePath: join(stateDir, 'ws'),
     logger: { log: line => { logged.push(String(line)) }, warn() {}, error() {} },
-    deps: { spawnDsh, describeCapabilities: healthyDescribe },
+    deps: { spawnDsh, probeHostIdentity: healthyProbe },
   })
   try {
     await local.start()
@@ -302,7 +302,7 @@ test('two local PlaneHandles keep independent runtime state without revising sha
         port: DEFAULT_DSH_START_PORT,
         stop: async () => {},
       }),
-      describeCapabilities: healthyDescribe,
+      probeHostIdentity: healthyProbe,
     },
   })
   const localB = createLocalConnection({
@@ -317,7 +317,7 @@ test('two local PlaneHandles keep independent runtime state without revising sha
         port: DEFAULT_DSH_START_PORT + 1,
         stop: async () => {},
       }),
-      describeCapabilities: healthyDescribe,
+      probeHostIdentity: healthyProbe,
     },
   })
   try {

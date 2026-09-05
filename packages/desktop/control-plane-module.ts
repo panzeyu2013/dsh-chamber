@@ -83,6 +83,16 @@ export const parseServerResponse = controlPlaneModule.parseServerResponse
 export const postClientRequest = controlPlaneModule.postClientRequest
 export const mintRpcId = controlPlaneModule.mintRpcId
 
+// Unified host-identity probe contract (rpc-envelope.ts single source) —
+// consumed by ssh-provider's endpoint probes (verifyDshEndpoint /
+// probeDshSignature). Same method names/payloads/64 KiB cap as the
+// control-plane probeHostIdentity.
+export const HOST_IDENTITY_METHOD = controlPlaneModule.HOST_IDENTITY_METHOD
+export const LEGACY_HOST_PROBE_METHOD = controlPlaneModule.LEGACY_HOST_PROBE_METHOD
+export const HOST_PROBE_MAX_RESPONSE_BYTES = controlPlaneModule.HOST_PROBE_MAX_RESPONSE_BYTES
+export const buildHostIdentityProbePayload = controlPlaneModule.buildHostIdentityProbePayload
+export const buildLegacyHostProbePayload = controlPlaneModule.buildLegacyHostProbePayload
+
 // Cordis loader insert primitives (cordis-inserts.ts) — consumed by
 // plugin-sync.
 export const renderCordisInserts = controlPlaneModule.renderCordisInserts

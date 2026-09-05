@@ -533,7 +533,7 @@ Gateway proxy 与 per-instance proxy 共用 `proxy-forward.ts`，从而保持相
 
 ```
 ssh-tunnel.ts       共享：隧道 argv、askpass、systemd exec、stderr 分类/脱敏
-endpoint-verify.ts  dsh：session/list（host.describe 已随上游 0.1.2 删除）；gateway：认证后 runtime status identity
+endpoint-verify.ts  dsh：session/canOpenWorkspacePath 统一身份（零参 boolean Remote；老树 404 → legacy session/list 签名回退）；gateway：认证后 runtime status identity
 providers: { ssh: sshTransport, http: httpTransport }    // 按 transport 注册
 ```
 
@@ -541,14 +541,15 @@ providers: { ssh: sshTransport, http: httpTransport }    // 按 transport 注册
 
 | kind | transport | verifyUp |
 |---|---|---|
-| dsh | ssh | 隧道端点 session/list RPC，无认证头 |
-| dsh | http | 直连端点 session/list RPC，无认证头（用户自建穿透） |
+| dsh | ssh | 隧道端点 session/canOpenWorkspacePath（固定小体积 boolean，64 KiB cap；404 → signature 回退 legacy session/list，识别为 "check or upgrade"），无认证头 |
+| dsh | http | 直连端点 session/canOpenWorkspacePath，无认证头（用户自建穿透；dsh×http 组合已禁用 2026-09，表行保留为契约记录） |
 | gateway | ssh | `GET /chamber/runtime/status` + 精确 `kind:'dsh-chamber-gateway-runtime'`，可选 0..2 认证头 |
 | gateway | http | 同上（直连 http(s)）；托管 dsh blocked/down 时 gateway 仍可 serviceable |
 
-Gateway 身份判据刻意不再依赖 managed dsh 的 `session/list`：runtime controller 不随
+Gateway 身份判据刻意不再依赖 managed dsh 的会话面：runtime controller 不随
 dsh ready detach，因此 blocked/applying/restart 窗口仍可注册反代、打开恢复动作；
-dsh 目标仍严格使用 `session/list` RPC，两层健康不得混为一个 ready 位。
+dsh 目标仍严格使用统一身份握手（`session/canOpenWorkspacePath`，与本地就绪同
+契约），两层健康不得混为一个 ready 位。
 
 **gateway 密码会话 ownership**：`gateway-session.ts` 的 key 由三部分共同构成：网络
 origin、HTTP `Host` authority、稳定的 connection-target scope。scope = connection id +
