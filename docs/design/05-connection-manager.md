@@ -225,7 +225,7 @@ export const chamberBridge: {
 - 订阅 `onInstanceSnapshot` → 以内容签名 identity-preserving 合并，并使旧 pull
   失效；订阅 `onPluginDiagnostic` → 合并到来源标题异常标记与插件设置页详情。
 
-## 4. N-ctx 与切换（沿用，机制不变）
+## 4. N-ctx 与切换（沿用，机制按 perf T2 修订——见下并发语义注）
 
 - N 个 AppWebEntry（共享一份静态模块表，v1 允许各自创建）；每来源一个 shell，
   hide/show 切换，会话保活。**视图生命周期 = 注册表来源代生命周期**：来源删除，
@@ -264,11 +264,24 @@ export const chamberBridge: {
   同步提交 React 状态）：旧视图先拍**静态快照**，新视图渲染就绪（reveal
   重排长任务完成）后短 crossfade（~250ms 浏览器默认）——隐藏期间仍在流式
   更新的 shell（活跃会话的 DOM 变更使缓存失效）的增量重排被旧快照遮盖，
-  任何时刻无黑帧；`prefers-reduced-motion`、transition 在途或不支持时降级
-  即时切换。未就绪视图（首次打开/仍在 boot）进入**骨架屏**
-  （`.instance-loading`：rail + sidebar + 主区占位块 + 转圈与服务器名文案，
-  `--dsw-alias-*` 主题 token 底色，z-index 盖住 shell 内 dsh 启动页——不再
-  需要 opacity 隐藏技巧），settle 后第二次 View Transition 换入真实内容
+  任何时刻无黑帧。**2026-09 perf T2（键控单槽合并）修订并发语义**：
+  `runViewTransition(update, key)` 按意图键（视图切换 'view' / settle 揭幕
+  'settle'）各保留一个最新意图——同键突发连点只替换意图、被取代意图不进
+  快照不起过渡节（实际过渡 ≤ 在途 1 节 + 补发 1 节），跨键按首达序 FIFO
+  补发（settle 与视图切换互不吞并，骨架 veil 绝不因合并而永驻）；降级路径
+  （prefers-reduced-motion / 不支持）也走同一单槽队列即时执行——偏好恰在
+  过渡在途期间翻转时，不会出现"直通落地后被在途节的旧意图覆盖"。
+  未就绪视图（首次打开/仍在 boot）进入**骨架屏**
+  （`.instance-loading`：全屏同底色 veil + 居中转圈/服务器名文案，
+   `--dsw-alias-*` 主题 token 底色，z-index 盖住 shell 内 dsh 启动页——不再
+   需要 opacity 隐藏技巧。**2026-09 perf T1（D1=A）修订**：早期版本以固定
+   rail 56 + sidebar 224 = 280px 占位块模仿 dsh 布局几何；真实侧栏宽度由
+   layout store 持久化、用户可拖到任意值，曾拖宽的实例每次 settle 揭幕都
+   与假几何失配——默认观感路径被 View Transition 快照遮盖，reduced-motion/
+   降级路径则产生主区左缘位移、可入 CLS 数值分。卸几何后骨架零布局主张、
+   只承诺同底色占位，settle 后第二次 View Transition（键 'settle'）换入真实
+   内容——可见视图经 `runViewTransition(..., 'settle')`、后台 boot 直落
+   （无过渡，点击切入时的过渡由 App 层覆盖）
   （失败则 chamber 覆盖层呈现 + 重试 + 服务器切换，见下；`bootInstanceShell` 的 settle 态经 `.then(setShell)`
   落地）。**失败呈现修订（2026-08）**：
    失败不再由各 InstanceView 自绘（旧 `.instance-fatal`，仅有重试、无导航），

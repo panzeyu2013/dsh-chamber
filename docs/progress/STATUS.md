@@ -28,6 +28,48 @@
 - **兜底 cwd 派生分组的已知限制**：符号链接拼写（如 macOS /tmp vs /private/tmp）可能不匹配 canonical-cwd 索引，会话落未分组桶（诚实兜底）；未挂载（兜底）来源的新建**空工作区**不可见（无会话即无组，fail-closed 语义）。
 - **git 工作树删除时 runtime 通道缺席 fail-closed**（'runtime-unknown'）。
 
+**性能整改（2026-09，P0–P2 执行完毕；已批准方案全文缺失、按仓库痕迹重建执行，
+计划/决策台账与测量数据见 `docs/progress/performance-baseline.md` §0/§1；进度只
+记状态，数据与方法不在此复述）**：
+- **P0 ✅**：T1（H1 卸几何 veil，D1=A——骨架不再模仿 dsh 布局几何，改全屏同底色
+  veil；T13 并入 T1）+ T2（view-transition 键控单槽合并：同键最新意图胜出、跨键
+  FIFO、startViewTransition 异常防御）——门禁 build:renderer / test:renderer-shell /
+  typecheck 全绿；场景①同环境 A/B wall ≈880–1162ms（PRE run1 1162 / 中位 890↔888）、
+  长任务形态 0–2×80–105ms/启（PRE run1 105ms 为上限，AFTER 4/6 run 为 0）、
+  CLS<0.002；design 05 §4 已同步修订注记。
+- **2026-09 review 处置**（5 面独立审查，修复未提交）：sidebar 拖拽-防抖竞态
+  （F1，写前 flush）、文档 3 处 P1（boot-after-final 交代/PRE 长任务数字/T7–T12
+  去向对账，见 performance-baseline.md §9）、渲染层 P2 硬化（catch try/finally、
+  直通路径统一入队）、maxReruns 文档与代码对齐 + 边界测试、gateway 测试 race
+  兜底、嵌套 ENOENT 竞态注释精确化、yieldEvery 钳制、多处注释/README 措辞；
+  次轮补齐（2026-09 review 收口）：F4 flush 陈旧守卫（缓存 TS 超越 pending 的
+  账户整条跳过）、coalescer 单次请求 `{rerunOnJoin:false}` 静默 join（gateway
+  非 force 冷缓存路径接线，消除长遍历期轮询补跑长尾）与配套测试（F8 缺口 ×3、
+  F4、maxReruns=1 边界）。
+- **P1 ✅**：T3（D8：`runtimeDiskSummaryAsync` 异步分批单遍遍历 + `createCoalescedRefresher`
+  节流/单飞/终态一次，接线 desktop main、gateway runtime-manager；桌面控制器 DI
+  `store.runtimeDiskSummary` 契约改 Promise——安装闸口等待同墙钟但进程不冻结）——
+  test:runtime/typecheck:runtime/test:desktop/typecheck:gateway/build:gateway 全绿，
+  合成曲线 425k 项 51.0s→42.2s、中小规模 ±4–18%、全程不冻结；T4（M4 置顶写回防抖：
+  updated-mode promotion 簿记 250ms 防抖窗 + `updateViewPrefs` 等值写不落盘不通知）——
+  test:sidebar/typecheck:sidebar 绿；T5（M1 事务证据刷新调度收口，**D7**：progress
+  相位 downloading/installing/applying 跳过全树磁盘遍历、复用最近投影；终态/content
+  相位永远现场重走）typecheck 绿；T6（**D3**：H3 主 bundle 求值长任务实验——eval 归因
+  探针 `scripts/perf/eval-measure.mjs` 落地；归因结果：每启两段结构任务（13–21ms 起
+  72–96ms 主图求值、100–120ms 起 57–62ms 实例启动图）；安全懒加载边界审计结论：
+  首屏急切图与实例启动图内无 chamber 自建可动边界 → 负面结论，真实机复查清单见
+  基线文档 §7）。
+- **P2 ✅**：perf 工具卫生（scripts/perf/README.md、CDP 超时守卫、H3 探针）；全量
+  门禁重扫（含 T5 后的 test:desktop、verify:i18n、test:release-workflow）；dev 实例
+  烟测（新 main 代码冷启 + 本地实例 ready + 运行时设置页磁盘证据面）；本文档条目 +
+  基线文档完成态（`docs/progress/performance-baseline.md`）。
+- **范围契约变更（随 T3）**：dsh-runtime 新增异步磁盘统计 API 与共享节流原语；
+  `ControllerDeps.store.runtimeDiskSummary` 由同步改 Promise——desktop 是唯一接线方
+  （gateway runtime-manager 为独立实现、不消费该 DI）。同步 `runtimeDiskSummary`
+  保留为兼容面，两实现逐字段对等（测试钉死）。
+- 遗留真实机清单（②⑤ 宽侧栏冷 settle CLS、⑥ 版本事务主进程阻塞采样、H3 真机懒
+  加载验证）：步骤见基线文档 §7——需打包版或带会话的 dev 实例复测。
+
 - **已归档会话管理（设计 12）**：方案 A（前端已归档浏览区先行）+ C（上游
   wire 根治）；实现未排期。设计见 `docs/progress/todo/12-todo-archived-sessions.md`。
 - **gateway 连接插件能力对齐（A/B/C，2026-12 用户提出；Phase 1-5 已实现 + 质量审核修复轮已落地，见 design 21/本段）**：
