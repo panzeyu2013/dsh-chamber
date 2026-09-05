@@ -113,6 +113,24 @@ export const PLUGIN_SPEC_PATTERN = controlPlaneModule.PLUGIN_SPEC_PATTERN
 export const RUN_STDOUT_MAX_BYTES = controlPlaneModule.RUN_STDOUT_MAX_BYTES
 export const WRITE_FILE_MAX_BYTES = controlPlaneModule.WRITE_FILE_MAX_BYTES
 
+// Owner-private file primitives (private-file.ts, P2-2a) — consumed by the
+// desktop main's credential mirrors (ssh-provider / gateway-provider /
+// owner-only-secret-file), the chamber-settings store, the ssh plugin undo
+// journal (ssh-plugin-journal) and the local-plugin-writer ledger
+// (plugin-sync). Single-sourcing the 0600 atomic-replace / no-follow read
+// mechanism here retires the per-module handwritten copies.
+export const ensurePrivateDirectoryNoFollow = controlPlaneModule.ensurePrivateDirectoryNoFollow
+export const atomicWritePrivateFileNoFollow = controlPlaneModule.atomicWritePrivateFileNoFollow
+export const readPrivateFileNoFollow = controlPlaneModule.readPrivateFileNoFollow
+
+// Owner-only audit-trail core (audit-trail.ts, P2-2c) — the shared
+// serializer + hardened append/rotate implementation behind BOTH the
+// desktop audit log (audit-log.ts) and the gateway server audit
+// (gateway/src/audit.ts imports the control plane directly).
+export const appendAuditTrailLine = controlPlaneModule.appendAuditTrailLine
+export const serializeAuditEvent = controlPlaneModule.serializeAuditEvent
+export const AUDIT_TRAIL_MAX_BYTES = controlPlaneModule.AUDIT_TRAIL_MAX_BYTES
+
 // Gateway wire-protocol credential/session facts + SPKI pin helpers — the
 // cross-shape single source (control-plane gateway-session-protocol.ts /
 // spki-pin.ts, design 17 §7.1/§9.3/§13.4.2/S23): the gateway server imports
@@ -136,6 +154,7 @@ export const attachSpkiPinVerifier = controlPlaneModule.attachSpkiPinVerifier
 // Types ride the same single source; type-only exports are erased at build
 // time, so re-exporting from the workspace package costs nothing at runtime.
 export type {
+  AuditTrailEvent,
   ClientRequestEnvelope,
   CordisInsert,
   InsertConflictKind,

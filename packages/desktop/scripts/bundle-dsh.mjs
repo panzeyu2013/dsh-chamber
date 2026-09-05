@@ -3,9 +3,8 @@ import { copyFileSync, existsSync, rmSync, mkdirSync, writeFileSync, readFileSyn
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { pruneRuntimeArtifacts } from '../prune-runtime.mjs';
 import { commitBundleSwap, recoverBundleSwap } from './bundle-swap.mjs';
-import { ALLOW_BUILDS } from '../allow-builds.mjs';
+import { ALLOW_BUILDS, pruneRuntimeArtifacts } from '@dsh-chamber/dsh-runtime';
 
 /**
  * 将 dsh 官方发布包 @deepseek-ai/dsh 安装为本地运行时（方案 B）。
@@ -89,7 +88,8 @@ if (!EXACT_SEMVER.test(VERSION)) {
 }
 
 /** 允许执行安装脚本的依赖（原生模块/编译步骤）——单一来源常量，见
- *  ../allow-builds.mjs（design 18 §4：与运行期安装器编译产物同源）。 */
+ *  @dsh-chamber/dsh-runtime（design 18 §4：与运行期安装器编译产物同源；原
+ *  ../allow-builds.mjs 垫片已删除,dedupe audit N8）。 */
 
 const installed = path.join(dest, 'node_modules', '@deepseek-ai', 'dsh');
 // 平台感知的幂等跳过：node_modules 内含平台原生二进制（node-pty/sharp/ripgrep），
@@ -172,7 +172,8 @@ function run(args, what) {
  *   92,070 个条目 / ~1.1GB（实测）；hoisted 布局只有 ~3.3 万真实文件、
  *   无重复展开，解压负担降为约 1/3（dsh 官方发行即 npm 全局安装，扁平布局
  *   是 dsh 已验证的运行形态；控制面冒烟对 hoisted 树实测通过）。
- * 裁剪实现见 ../prune-runtime.mjs（独立模块，可对任意目录直接验证）；
+ * 裁剪实现见 @dsh-chamber/dsh-runtime prune-runtime（独立模块,可对任意目录
+ * 直接验证；原 ../prune-runtime.mjs 垫片已删除,dedupe audit N8）；
  * 安装后 `node bin.js --version` 冒烟检查兜底裁剪正确性。
  */
 const sourceLockfile = path.join(dest, 'pnpm-lock.yaml');

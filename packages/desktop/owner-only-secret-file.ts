@@ -5,39 +5,19 @@
  * Both ssh-passwords.json and gateway-secrets.json use this boundary. Keeping
  * it shared prevents one credential store from silently losing the 0600 /
  * regular-file / inode-race discipline (design 05 §8, design 17 S22).
+ *
+ * The mechanism is single-sourced in control-plane (private-file.ts, P2-2a,
+ * reached through the desktop dual-path facade): the delegated read pins the
+ * real parent directory, refuses a symlink / multi-link / non-regular leaf,
+ * and `tightenMode` fchmods the already-pinned inode to 0600 before any bytes
+ * enter memory (the legacy migration semantics: a looser pre-existing file is
+ * tightened, then read — never read loose). A missing file surfaces as the
+ * native ENOENT so callers can distinguish absence from unsafe evidence;
+ * anything unsafe throws a plain Error.
  */
 
-import {
-  closeSync,
-  constants as fsConstants,
-  fchmodSync,
-  fstatSync,
-  lstatSync,
-  openSync,
-  readFileSync,
-} from 'node:fs'
+import { readPrivateFileNoFollow } from './control-plane-module.ts'
 
 export function readOwnerOnlySecretFile(file: string): string {
-  const pathStat = lstatSync(file)
-  if (!pathStat.isFile() || pathStat.isSymbolicLink()) {
-    throw new Error(`credential path must be a regular file (symlinks are refused): ${file}`)
-  }
-
-  // O_NOFOLLOW closes the lstat/open symlink race on platforms that expose
-  // it. The opened inode comparison remains mandatory on every platform and
-  // rejects a regular-file replacement between lstat and open.
-  const noFollow = typeof fsConstants.O_NOFOLLOW === 'number' ? fsConstants.O_NOFOLLOW : 0
-  const fd = openSync(file, fsConstants.O_RDONLY | noFollow)
-  try {
-    const openedStat = fstatSync(fd)
-    if (!openedStat.isFile()
-      || openedStat.dev !== pathStat.dev
-      || openedStat.ino !== pathStat.ino) {
-      throw new Error(`credential path changed while opening: ${file}`)
-    }
-    fchmodSync(fd, 0o600)
-    return readFileSync(fd, 'utf8')
-  } finally {
-    closeSync(fd)
-  }
+  return readPrivateFileNoFollow(file, { tightenMode: 0o600 }).value
 }

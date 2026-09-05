@@ -41,15 +41,9 @@
 import { request as httpsRequest } from 'node:https'
 import { request as httpRequest } from 'node:http'
 import {
-  closeSync,
   existsSync,
-  fchmodSync,
-  fsyncSync,
-  mkdirSync,
-  openSync,
   renameSync,
   rmSync,
-  writeSync,
 } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { INSTANCE_ID_PATTERN, MAX_INSTANCE_LABEL_CHARS } from './transport-provider.ts'
@@ -66,7 +60,9 @@ import type { GatewayRegistrationAuthProof, GatewaySessionOrigin, GatewaySession
 import { readOwnerOnlySecretFile } from './owner-only-secret-file.ts'
 import { parseSpecArg } from './gateway-ipc-shared.ts'
 import {
+  atomicWritePrivateFileNoFollow,
   attachSpkiPinVerifier,
+  ensurePrivateDirectoryNoFollow,
   GATEWAY_PASSWORD_MAX_CHARS,
   GATEWAY_PASSWORD_MIN_CHARS,
   GATEWAY_TOKEN_MAX_CHARS,
@@ -335,6 +331,16 @@ export function configureGatewaySecretStore(
   tokenBindings.clear()
   passwordBindings.clear()
   if (file === null) return null
+  // One-time crash-residue sweep (2a follow-up): the pre-2a persist wrote a
+  // FIXED `${file}.tmp` (open 'w' + rename), and a hard crash between the two
+  // left that exact-name 0600 residue. The atomic replace since 2a uses a
+  // random O_EXCL temp and never reuses or removes that legacy name — sweep
+  // it once at configure (this covers BOTH store entry points: the secret
+  // store proper and configureGatewayTokenStore, which delegates here).
+  // Best-effort only: `force` already swallows ENOENT, and any other failure
+  // (permissions…) must not break store configuration, so the remainder is
+  // swallowed too.
+  try { rmSync(`${file}.tmp`, { force: true }) } catch { /* best-effort hygiene only */ }
   let text: string
   try {
     text = readOwnerOnlySecretFile(file)
@@ -649,10 +655,13 @@ function commitGatewaySecrets(
 }
 
 /** Mirror the in-memory credential maps to the durable file (schemaVersion 3,
- * 0600, atomic: tmp → fsync → rename — the repo's atomic-write convention;
- * rename keeps the tmp's 0600). The file-level storage discriminator is
- * written in the same atomic payload as the values, so a later startup never
- * has to infer whether a string is ciphertext. */
+ * 0600, atomic — the control-plane replace primitive via the desktop facade:
+ * random O_EXCL tmp with explicit mode 0600 → fsync → rename →
+ * parent-directory fsync; a planted symlink / multi-link leaf is refused
+ * fail-closed). The parent directory is ensured owner-only (0700) first. The
+ * file-level storage discriminator is written in the same atomic payload as
+ * the values, so a later startup never has to infer whether a string is
+ * ciphertext. */
 function persistGatewaySecrets(
   nextTokens: ReadonlyMap<string, string>,
   nextPasswords: ReadonlyMap<string, string>,
@@ -670,23 +679,9 @@ function persistGatewaySecrets(
     tokenBindings: Object.fromEntries(nextTokenBindings),
     passwordBindings: Object.fromEntries(nextPasswordBindings),
   }, undefined, 2)}\n`
-  const tmpPath = `${secretFile}.tmp`
-  mkdirSync(dirname(secretFile), { recursive: true })
-  try {
-    const fd = openSync(tmpPath, 'w', 0o600)
-    try {
-      fchmodSync(fd, 0o600)
-      writeSync(fd, payload)
-      fsyncSync(fd)
-    } finally {
-      closeSync(fd)
-    }
-    renameSync(tmpPath, secretFile)
-    durableSecretStorage = storage
-  } catch (error) {
-    try { rmSync(tmpPath, { force: true }) } catch { /* best effort */ }
-    throw error
-  }
+  ensurePrivateDirectoryNoFollow(dirname(secretFile), 0o700)
+  atomicWritePrivateFileNoFollow(secretFile, payload, { mode: 0o600 })
+  durableSecretStorage = storage
 }
 
 // ---------------------------------------------------------------------------
@@ -812,16 +807,42 @@ export function isGatewayRuntimeStatus(value: unknown): value is { kind: typeof 
  * impossible (validateSpec refuses it) but the `insecure` guard keeps this
  * function safe regardless.
  */
-function verifyGatewayEndpoint(
-  host: string,
-  port: number,
-  token: string | null,
-  insecure: boolean,
-  timeoutMs = GATEWAY_VERIFY_TIMEOUT_MS,
-  maxBodyBytes = GATEWAY_VERIFY_MAX_BODY_BYTES,
-  cookie: string | null = null,
-  spkiPin: string | null = null,
+export interface GatewayIdentityProbeOptions {
+  host: string
+  port: number
+  token: string | null
+  /** http(s) scheme selection (design 17 §9.1 `insecureHttp` origin). */
+  insecure: boolean
+  timeoutMs: number
+  maxBodyBytes: number
+  cookie: string | null
+  /** Tunnel Host-header override (design 17 §9.3 隧道 Host 覆盖): the probe
+   * CONNECTS to the loopback tunnel endpoint but presents the REMOTE gateway
+   * authority — the gateway's request policy requires the authority port to
+   * equal its listen port, which the tunnel's local port can never satisfy. */
+  authority?: string
+  /** SPKI trust anchor (S23) — https only; http + pin is impossible
+   * (validateSpec refuses it) but the `insecure` guard keeps the core safe. */
+  spkiPin?: string | null
+  /** Carry `statusCode` on 403/non-200 results (ssh tunnel legacy shape).
+   * 401 ALWAYS carries it: the verifyUp session flow keys on the raw 401. */
+  carryStatusCodes?: boolean
+}
+
+/** The single gateway runtime-identity probe core shared by the direct-http
+ * gateway provider (verifyGatewayEndpoint wrapper) and the ssh tunnel branch
+ * (ssh-provider verifyGatewayEndpointViaTunnel wrapper) — dedupe audit N7,
+ * 2026-09. Both transports probe the SAME /chamber/runtime/status identity
+ * contract; this core keeps the two classification paths byte-identical so a
+ * fix on one side can never drift from the other. */
+export function verifyGatewayRuntimeIdentity(
+  options: GatewayIdentityProbeOptions,
 ): Promise<TransportVerifyResult & { statusCode?: number }> {
+  const {
+    host, port, token, insecure, timeoutMs, maxBodyBytes, cookie,
+    authority, spkiPin, carryStatusCodes = false,
+  } = options
+  const pin = spkiPin ?? null
   return new Promise(resolve => {
     const request = insecure ? httpRequest : httpsRequest
     const url = `${insecure ? 'http' : 'https'}://${host}:${port}/chamber/runtime/status`
@@ -832,10 +853,10 @@ function verifyGatewayEndpoint(
       settled = true
       if (timer !== null) { clearTimeout(timer); timer = null }
       req.destroy()
-      // P2-5: a SUCCESS is the pure {ok:true} shape (the ssh provider's
-      // contract) — `statusCode` rides the result only when a real answer
-      // produced it, so the ok form never carries a stray
-      // statusCode:undefined key that deep-compare callers would trip on.
+      // A SUCCESS is the pure {ok:true} shape (the ssh provider's contract) —
+      // `statusCode` rides the result only when a real answer produced it, so
+      // the ok form never carries a stray statusCode:undefined key that
+      // deep-compare callers would trip on.
       const result: TransportVerifyResult & { statusCode?: number } = ok
         ? { ok: true }
         : { ok: false, detail, terminal }
@@ -843,6 +864,7 @@ function verifyGatewayEndpoint(
       resolve(result)
     }
     const headers: Record<string, string> = {}
+    if (authority !== undefined) headers.host = authority
     // No credentials → NO Authorization header on the probe (design 17
     // §2.3): the gateway itself is the authority on whether auth is needed.
     if (token !== null) headers.authorization = `Bearer ${token}`
@@ -854,7 +876,7 @@ function verifyGatewayEndpoint(
       // with the pin as its trust anchor (rejectUnauthorized: false — the
       // internal-CA case); request dispatch stays gated until that socket's
       // peer key matches, so even credential headers are never queued early.
-      ...(insecure || spkiPin === null ? {} : { rejectUnauthorized: false, agent: false }),
+      ...(insecure || pin === null ? {} : { rejectUnauthorized: false, agent: false }),
     }, res => {
       res.on('error', () => {})
       // 401 = auth required / rejected; 403 = an origin/Host policy
@@ -876,7 +898,7 @@ function verifyGatewayEndpoint(
       }
       if (res.statusCode === 403) {
         res.resume()
-        done(false, 'the gateway refused the request origin/Host policy (403) — check the gateway deployment origin settings', true)
+        done(false, 'the gateway refused the request origin/Host policy (403) — check the gateway deployment origin settings', true, carryStatusCodes ? 403 : undefined)
         return
       }
       if (res.statusCode !== 200) {
@@ -888,7 +910,7 @@ function verifyGatewayEndpoint(
         // remains transient so the manager's bounded/slow retry machinery can
         // recover without a manual reconnect.
         const terminal = gatewayHttpFailureIsTerminal(statusCode)
-        done(false, `the gateway answered HTTP ${res.statusCode ?? '?'} to the runtime identity probe`, terminal)
+        done(false, `the gateway answered HTTP ${res.statusCode ?? '?'} to the runtime identity probe`, terminal, carryStatusCodes ? statusCode : undefined)
         return
       }
       const chunks: Buffer[] = []
@@ -913,9 +935,10 @@ function verifyGatewayEndpoint(
       })
     })
     const dispatch = (): void => { req.end() }
-    // S23: the secureConnect pre-write pin gate (see the mechanism note above). A pinned
-    // request is deliberately NOT ended until the peer key matches.
-    if (!insecure && spkiPin !== null) attachSpkiPinVerifier(req, spkiPin, dispatch)
+    // S23: the secureConnect pre-write pin gate (see the mechanism note in
+    // the options doc). A pinned request is deliberately NOT ended until the
+    // peer key matches.
+    if (!insecure && pin !== null) attachSpkiPinVerifier(req, pin, dispatch)
     timer = setTimeout(() => done(false, `the gateway did not answer the runtime identity probe within ${timeoutMs}ms`), timeoutMs)
     timer.unref?.()
     req.on('error', (error: NodeJS.ErrnoException) => {
@@ -925,8 +948,24 @@ function verifyGatewayEndpoint(
       }
       done(false, 'the gateway did not answer the runtime identity probe')
     })
-    if (insecure || spkiPin === null) dispatch()
+    if (insecure || pin === null) dispatch()
   })
+}
+
+/** Direct-endpoint wrapper (design 17 §2): https by default, http when
+ * `insecure`; optional SPKI pin. Result carries `statusCode` on the raw 401
+ * only (the verifyUp session flow invalidates the rejected cookie). */
+function verifyGatewayEndpoint(
+  host: string,
+  port: number,
+  token: string | null,
+  insecure: boolean,
+  timeoutMs = GATEWAY_VERIFY_TIMEOUT_MS,
+  maxBodyBytes = GATEWAY_VERIFY_MAX_BODY_BYTES,
+  cookie: string | null = null,
+  spkiPin: string | null = null,
+): Promise<TransportVerifyResult & { statusCode?: number }> {
+  return verifyGatewayRuntimeIdentity({ host, port, token, insecure, timeoutMs, maxBodyBytes, cookie, spkiPin })
 }
 
 /**

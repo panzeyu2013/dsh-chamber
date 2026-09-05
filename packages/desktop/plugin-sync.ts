@@ -30,20 +30,16 @@
  * path is derived from `remoteDshHome` (a whitelisted, shell-safe value).
  */
 
-import { createHash, randomBytes } from 'node:crypto'
+import { createHash } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
 import {
-  chmodSync,
   existsSync,
-  mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
   realpathSync,
-  renameSync,
   rmSync,
   statSync,
-  writeFileSync,
 } from 'node:fs'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { homedir, tmpdir } from 'node:os'
@@ -63,6 +59,10 @@ import type { CordisInsert, InsertConflictKind } from './control-plane-module.ts
 // 二次校验, the exec-side argv whitelist (ssh-provider.ts re-exports the same
 // names) and the gateway executor share one source and can never drift.
 import { isDeniedPluginName, MAX_PLUGIN_SPEC_CHARS, PLUGIN_NAME_PATTERN, PLUGIN_SPEC_PATTERN } from './control-plane-module.ts'
+// Owner-private file primitives (control-plane private-file.ts, P2-2a) —
+// consumed through the same dual-path facade for the local-plugin-writer
+// ledger (owner-only 0600 atomic replace, owner-only parent).
+import { atomicWritePrivateFileNoFollow, ensurePrivateDirectoryNoFollow, readPrivateFileNoFollow } from './control-plane-module.ts'
 // ssh unified increments (design 21 §6.4, plan Phase 5): the reserved-name
 // deny + row assembly helpers (parseSpecName / buildSshApplyRows /
 // describeReservedNameRefusal — ssh-apply-rows.ts). Pure module, imports no
@@ -81,7 +81,7 @@ import type { TransportExecAction, TransportRunPayload } from './transport-provi
 import {
   RuntimeInstallerSupervisor,
   isRuntimeInstallerWriterSafetyError,
-} from './runtime-installer.ts'
+} from '@dsh-chamber/dsh-runtime'
 
 export { PLUGIN_SPEC_PATTERN, PLUGIN_NAME_PATTERN }
 
@@ -1608,8 +1608,6 @@ const MATERIALIZED_TARBALL_MAX_BYTES = 50 * 1024 * 1024
 const CHILD_OUTPUT_MAX_CHARS = 64 * 1024
 const localPluginChildSupervisor = new RuntimeInstallerSupervisor(CHILD_OUTPUT_MAX_CHARS, 1_000)
 const LOCAL_PLUGIN_WRITER_SCHEMA = 1
-const PRIVATE_DIR_MODE = 0o700
-const PRIVATE_FILE_MODE = 0o600
 
 export interface LocalPluginWriterRecord {
   schemaVersion: 1
@@ -1676,9 +1674,25 @@ const defaultWriterReaperDeps: LocalPluginWriterReaperDeps = {
 
 function readLocalPluginWriterRecord(localDshHome: string): LocalPluginWriterRecord | null | 'corrupt' {
   const ledger = localPluginWriterLedgerPath(localDshHome)
-  if (!existsSync(ledger)) return null
+  let text: string
   try {
-    const parsed = JSON.parse(readFileSync(ledger, 'utf8')) as Partial<LocalPluginWriterRecord>
+    // The same no-follow / single-link / inode read discipline as the
+    // credential mirrors (control-plane private-file via the desktop
+    // facade): the ledger is not a secret, but it lives under the same
+    // owner-only directory discipline and gates DSH_HOME mutation, so a
+    // planted symlink or hard-linked leaf is unsafe evidence — 'corrupt',
+    // and the reaper fails closed — never silently followed (2a follow-up;
+    // the ledger write side already uses the same primitive, 0600).
+    // tightenMode converges a legacy loose leaf to 0600 on first read.
+    // A missing ledger (no writer ever ran) surfaces as the native ENOENT →
+    // null, exactly like the former existsSync probe.
+    text = readPrivateFileNoFollow(ledger, { tightenMode: 0o600 }).value
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+    return 'corrupt'
+  }
+  try {
+    const parsed = JSON.parse(text) as Partial<LocalPluginWriterRecord>
     if (parsed.schemaVersion !== LOCAL_PLUGIN_WRITER_SCHEMA
       || !Number.isInteger(parsed.pid) || (parsed.pid ?? 0) <= 0
       || !Number.isInteger(parsed.ownerPid) || (parsed.ownerPid ?? 0) <= 0
@@ -1699,9 +1713,13 @@ function writeLocalPluginWriterRecord(localDshHome: string, pid: number): void {
     throw new Error('cannot establish local plugin writer identity')
   }
   const ledger = localPluginWriterLedgerPath(localDshHome)
-  const parent = dirname(ledger)
-  mkdirSync(parent, { recursive: true, mode: PRIVATE_DIR_MODE })
-  chmodSync(parent, PRIVATE_DIR_MODE)
+  // Owner-only parent (0700), then one atomic 0600 replace — the
+  // control-plane private-file primitive (random O_EXCL tmp + fsync +
+  // rename + parent-directory fsync; a planted symlink / multi-link leaf is
+  // refused fail-closed). Failures throw (no best-effort degradation): the
+  // caller's writer fence must never observe a normal result while the
+  // durable ledger is absent or stale.
+  ensurePrivateDirectoryNoFollow(dirname(ledger), 0o700)
   const record: LocalPluginWriterRecord = {
     schemaVersion: LOCAL_PLUGIN_WRITER_SCHEMA,
     pid,
@@ -1711,16 +1729,7 @@ function writeLocalPluginWriterRecord(localDshHome: string, pid: number): void {
     childCommandHash: childIdentity?.commandHash ?? null,
     createdAt: new Date().toISOString(),
   }
-  const tmp = `${ledger}.tmp-${randomBytes(4).toString('hex')}`
-  try {
-    writeFileSync(tmp, `${JSON.stringify(record, null, 2)}\n`, { encoding: 'utf8', mode: PRIVATE_FILE_MODE })
-    chmodSync(tmp, PRIVATE_FILE_MODE)
-    renameSync(tmp, ledger)
-    chmodSync(ledger, PRIVATE_FILE_MODE)
-  } catch (error) {
-    try { rmSync(tmp, { force: true }) } catch { /* best effort */ }
-    throw error
-  }
+  atomicWritePrivateFileNoFollow(ledger, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 })
 }
 
 /** Reap a plugin writer left by a hard-crashed Electron owner. Identity is

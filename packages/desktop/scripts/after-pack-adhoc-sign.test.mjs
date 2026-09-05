@@ -123,8 +123,8 @@ test('packaged runtime support verification rejects missing pnpm or runtime modu
     rmSync(path.join(resourcesDir, 'pnpm', 'dist', 'pnpm.mjs'));
     assert.throws(() => verifyPackagedRuntimeSupport(resourcesDir), /incomplete packaged pnpm/);
     writeFileSync(path.join(resourcesDir, 'pnpm', 'dist', 'pnpm.mjs'), '');
-    rmSync(path.join(resourcesDir, 'app.asar.unpacked', 'runtime-installer.ts'));
-    assert.throws(() => verifyPackagedRuntimeSupport(resourcesDir), /runtime-installer\.ts/);
+    rmSync(path.join(resourcesDir, 'app.asar.unpacked', 'dsh-runtime-controller.ts'));
+    assert.throws(() => verifyPackagedRuntimeSupport(resourcesDir), /dsh-runtime-controller\.ts/);
   } finally {
     rmSync(resourcesDir, { recursive: true, force: true });
   }

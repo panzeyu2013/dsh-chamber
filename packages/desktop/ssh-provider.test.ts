@@ -15,7 +15,6 @@ import { createHash } from 'node:crypto'
 import { EventEmitter } from 'node:events'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
-import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import {
@@ -40,38 +39,14 @@ import {
   RUN_STDOUT_MAX_BYTES,
   WRITE_FILE_MAX_BYTES,
 } from './ssh-provider.ts'
-import { configureGatewaySessionProvider, GATEWAY_RUNTIME_IDENTITY, setGatewayPassword, setGatewayToken } from './gateway-provider.ts'
+import { configureGatewaySessionProvider, setGatewayPassword, setGatewayToken } from './gateway-provider.ts'
 import type { GatewaySessionProviderHooks } from './gateway-provider.ts'
-import type { GatewayRegistrationAuthProof, GatewaySessionOrigin } from './gateway-session.ts'
+import type { GatewaySessionOrigin } from './gateway-session.ts'
+import { completeGatewaySessionHooks as completeTestGatewaySessionHooks, GATEWAY_RUNTIME_STATUS } from './gateway-session-test-hooks.ts'
+import { closeLoopbackServer, listenEphemeral } from './loopback-http-test-server.ts'
 import type { TransportExecDeps, TransportInstanceSpec, TransportStatusProjection, SpawnedProcess } from './transport-provider.ts'
 import { CHILD_LINE_MAX_CHARS } from './bounded-lines.ts'
 import { sshCredentialBinding } from './credential-binding.ts'
-
-const GATEWAY_RUNTIME_STATUS = { kind: GATEWAY_RUNTIME_IDENTITY, connectionState: 'stopped' }
-
-function completeTestGatewaySessionHooks(partial: GatewaySessionProviderHooks): GatewaySessionProviderHooks {
-  if (partial.ensureSession === undefined) throw new TypeError('test session hooks require ensureSession')
-  let generation = 0
-  let proof: GatewayRegistrationAuthProof | null = null
-  let cached: string | null = null
-  return {
-    ensureSession: async (origin, password) => {
-      const result = await partial.ensureSession!(origin, password)
-      if (result.ok) cached = result.cookie
-      return result
-    },
-    generation: partial.generation ?? (() => generation),
-    registrationAuthProof: partial.registrationAuthProof ?? (() => proof),
-    setRegistrationAuthProof: partial.setRegistrationAuthProof ?? ((_origin, next) => { proof = next }),
-    cachedCookie: origin => partial.cachedCookie?.(origin) ?? cached,
-    invalidate: origin => {
-      generation += 1
-      proof = null
-      cached = null
-      partial.invalidate?.(origin)
-    },
-  }
-}
 
 /** A minimal valid ssh spec for provider-surface tests (v2: kind = target
  *  type 'dsh', transport = mechanism 'ssh' — design 17 §2). */
@@ -1326,8 +1301,7 @@ test('probeDshSignature classifies the dsh identity signature (boolean value)', 
     if (behavior === undefined) { res.writeHead(500); res.end() }
     else behavior(req, res)
   })
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
-  const port = (server.address() as AddressInfo).port
+  const port = await listenEphemeral(server)
   try {
     assert.equal(await probeDshSignature({ host: '127.0.0.1', port }), 'dsh')
     assert.equal(await probeDshSignature({ host: '127.0.0.1', port }), 'none')
@@ -1337,7 +1311,7 @@ test('probeDshSignature classifies the dsh identity signature (boolean value)', 
     // table exhausted → 500) — still no signature.
     assert.equal(await probeDshSignature({ host: '127.0.0.1', port }), 'none')
   } finally {
-    await new Promise<void>(resolve => server.close(() => resolve()))
+    await closeLoopbackServer(server)
   }
 })
 
@@ -1364,13 +1338,12 @@ test('probeDshSignature: an identity 404 re-answers the legacy session/list prob
       res.end()
     })
   })
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
-  const port = (server.address() as AddressInfo).port
+  const port = await listenEphemeral(server)
   try {
     assert.equal(await probeDshSignature({ host: '127.0.0.1', port }), 'dsh')
     assert.equal(sessionListCalls, 1, 'the legacy session/list arm is re-answered exactly once')
   } finally {
-    await new Promise<void>(resolve => server.close(() => resolve()))
+    await closeLoopbackServer(server)
   }
 })
 
@@ -1391,13 +1364,12 @@ test('probeDshSignature: a non-404 identity failure never re-answers the legacy 
     res.writeHead(404)
     res.end()
   })
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
-  const port = (server.address() as AddressInfo).port
+  const port = await listenEphemeral(server)
   try {
     assert.equal(await probeDshSignature({ host: '127.0.0.1', port }), 'none')
     assert.equal(sessionListCalls, 0, '5xx on the identity method is not a legacy-fallback trigger')
   } finally {
-    await new Promise<void>(resolve => server.close(() => resolve()))
+    await closeLoopbackServer(server)
   }
 })
 
@@ -1409,8 +1381,7 @@ test('verifyDshEndpoint: a 401 answer is the 0.1.2 browser-auth gate — termina
   // both hit the 401 gate; a bare 401 from a NON-dsh server keeps the neutral
   // message (round4 P2).
   const server = createServer((_req, res) => { res.writeHead(401); res.end('unauthorized') })
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
-  const port = (server.address() as AddressInfo).port
+  const port = await listenEphemeral(server)
   try {
     const result = await verifyDshEndpoint({ host: '127.0.0.1', port })
     assert.equal(result.ok, false)
@@ -1418,7 +1389,7 @@ test('verifyDshEndpoint: a 401 answer is the 0.1.2 browser-auth gate — termina
     // The signature probe is gated the same way → the hedged 401 message.
     assert.match(result.detail ?? '', /answered HTTP 401/)
   } finally {
-    await new Promise<void>(resolve => server.close(() => resolve()))
+    await closeLoopbackServer(server)
   }
 })
 
@@ -1443,13 +1414,12 @@ test('probeDshSignature: an oversized identity answer is no signature (default 6
     res.writeHead(404)
     res.end()
   })
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
-  const port = (server.address() as AddressInfo).port
+  const port = await listenEphemeral(server)
   try {
     assert.equal(await probeDshSignature({ host: '127.0.0.1', port }), 'none')
     assert.equal(sessionListCalls, 0, 'an answered identity arm never re-answers the legacy probe')
   } finally {
-    await new Promise<void>(resolve => server.close(() => resolve()))
+    await closeLoopbackServer(server)
   }
 })
 
@@ -1485,13 +1455,12 @@ test('probeDshSignature: the identity arm cap is the 64 KiB default (a >64 KiB p
       res.end()
     })
   })
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
-  const port = (server.address() as AddressInfo).port
+  const port = await listenEphemeral(server)
   try {
     assert.equal(await probeDshSignature({ host: '127.0.0.1', port }), 'none')
     assert.equal(sessionListCalls, 0, 'an answered identity arm never re-answers the legacy probe')
   } finally {
-    await new Promise<void>(resolve => server.close(() => resolve()))
+    await closeLoopbackServer(server)
   }
 })
 
@@ -1499,19 +1468,17 @@ test('probeDshSignature answers none on connection failure and timeout', async (
   // A refused port (server closed): the probe must resolve 'none', never
   // reject or hang.
   const server = createServer(() => {})
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
-  const port = (server.address() as AddressInfo).port
-  await new Promise<void>(resolve => server.close(() => resolve()))
+  const port = await listenEphemeral(server)
+  await closeLoopbackServer(server)
   assert.equal(await probeDshSignature({ host: '127.0.0.1', port }), 'none', 'ECONNREFUSED → none')
 
   // A silent server: the request timeout resolves 'none'.
   const silent = createServer(() => { /* never answers */ })
-  await new Promise<void>(resolve => silent.listen(0, '127.0.0.1', resolve))
-  const silentPort = (silent.address() as AddressInfo).port
+  const silentPort = await listenEphemeral(silent)
   try {
     assert.equal(await probeDshSignature({ host: '127.0.0.1', port: silentPort }, 120), 'none', 'timeout → none')
   } finally {
-    await new Promise<void>(resolve => silent.close(() => resolve()))
+    await closeLoopbackServer(silent)
   }
 })
 
@@ -1548,14 +1515,13 @@ test('ssh provider verifyUp: a gateway target with a stored token probes WITH an
       res.writeHead(200, { 'content-type': 'application/json' })
       res.end(JSON.stringify(GATEWAY_RUNTIME_STATUS))
     })
-    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
-    const port = (server.address() as AddressInfo).port
+    const port = await listenEphemeral(server)
     try {
       const result = await sshProvider.verifyUp!(gatewaySshSpec('gw-auth'), { host: '127.0.0.1', port })
       assert.deepEqual(result, { ok: true })
       assert.equal(seenAuth, `Bearer ${TOKEN}`, 'the stored token rides the tunnel probe as Authorization')
     } finally {
-      await new Promise<void>(resolve => server.close(() => resolve()))
+      await closeLoopbackServer(server)
     }
   } finally {
     setGatewayToken('gw-auth', null)
@@ -1570,8 +1536,7 @@ test('ssh provider verifyUp: a gateway target WITHOUT a token probes with NO hea
     res.writeHead(401)
     res.end('unauthorized')
   })
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
-  const port = (server.address() as AddressInfo).port
+  const port = await listenEphemeral(server)
   try {
     const result = await sshProvider.verifyUp!(gatewaySshSpec('gw-noauth'), { host: '127.0.0.1', port })
     assert.equal(result.ok, false)
@@ -1581,7 +1546,7 @@ test('ssh provider verifyUp: a gateway target WITHOUT a token probes with NO hea
     }
     assert.equal(seenAuth, null, 'no credentials → the probe carries NO Authorization header (no pre-flight refusal)')
   } finally {
-    await new Promise<void>(resolve => server.close(() => resolve()))
+    await closeLoopbackServer(server)
   }
 })
 
@@ -1592,8 +1557,7 @@ test('ssh provider verifyUp: a rejected token answers 401 terminal with the toke
       res.writeHead(401)
       res.end('unauthorized')
     })
-    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
-    const port = (server.address() as AddressInfo).port
+    const port = await listenEphemeral(server)
     try {
       const result = await sshProvider.verifyUp!(gatewaySshSpec('gw-bad'), { host: '127.0.0.1', port })
       assert.equal(result.ok, false)
@@ -1602,7 +1566,7 @@ test('ssh provider verifyUp: a rejected token answers 401 terminal with the toke
         assert.match(result.detail ?? '', /rejected the token \(401\) — check the shared token/)
       }
     } finally {
-      await new Promise<void>(resolve => server.close(() => resolve()))
+      await closeLoopbackServer(server)
     }
   } finally {
     setGatewayToken('gw-bad', null)
@@ -1623,8 +1587,7 @@ test('ssh provider verifyUp: a dsh target NEVER carries an auth header, even whe
       res.writeHead(200, { 'content-type': 'application/json' })
       res.end(JSON.stringify({ type: 'server-response', rpcId, result: { ok: true, value: true } }))
     })
-    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
-    const port = (server.address() as AddressInfo).port
+    const port = await listenEphemeral(server)
     try {
       // A dsh-kind spec whose id happens to have a stored token: dsh target
       // semantics forbid auth injection (design 17 §2.1) — the header must
@@ -1634,7 +1597,7 @@ test('ssh provider verifyUp: a dsh target NEVER carries an auth header, even whe
       assert.deepEqual(result, { ok: true })
       assert.equal(seenAuth, null, 'dsh targets never inject auth headers')
     } finally {
-      await new Promise<void>(resolve => server.close(() => resolve()))
+      await closeLoopbackServer(server)
     }
   } finally {
     setGatewayToken('dsh-with-token', null)
@@ -1646,17 +1609,39 @@ test('verifyGatewayEndpointViaTunnel classifies a 403 origin/Host policy rejecti
     res.writeHead(403)
     res.end('forbidden')
   })
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
-  const port = (server.address() as AddressInfo).port
+  const port = await listenEphemeral(server)
   try {
     const result = await verifyGatewayEndpointViaTunnel({ host: '127.0.0.1', port }, null)
     assert.equal(result.ok, false)
     if (!result.ok) {
       assert.equal(result.terminal, true, '403 origin/Host policy rejection = terminal')
       assert.match(result.detail ?? '', /origin\/Host policy \(403\)/)
+      // The ssh tunnel probe's legacy shape carries statusCode on 403/non-200
+      // answers (the direct-endpoint probe does not) — pinned so the shared
+      // probe core's carryStatusCodes wiring cannot silently flip.
+      assert.equal(result.statusCode, 403, 'tunnel probe carries statusCode on a 403')
     }
   } finally {
-    await new Promise<void>(resolve => server.close(() => resolve()))
+    await closeLoopbackServer(server)
+  }
+})
+
+test('verifyGatewayEndpointViaTunnel keeps 5xx transient and carries its statusCode (legacy shape)', async () => {
+  const server = describeServer((_req, res) => {
+    res.writeHead(503)
+    res.end('busy')
+  })
+  const port = await listenEphemeral(server)
+  try {
+    const result = await verifyGatewayEndpointViaTunnel({ host: '127.0.0.1', port }, null)
+    assert.equal(result.ok, false)
+    if (!result.ok) {
+      assert.equal(result.terminal, false, '503 = transient (the bounded retry recovers)')
+      assert.match(result.detail ?? '', /HTTP 503/)
+      assert.equal(result.statusCode, 503, 'tunnel probe carries statusCode on a non-200 answer')
+    }
+  } finally {
+    await closeLoopbackServer(server)
   }
 })
 
@@ -1697,8 +1682,7 @@ test('ssh provider verifyUp: a password-configured gateway-over-ssh target (no t
     res.writeHead(200, { 'content-type': 'application/json' })
     res.end(JSON.stringify(GATEWAY_RUNTIME_STATUS))
   })
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
-  const port = (server.address() as AddressInfo).port
+  const port = await listenEphemeral(server)
   try {
     setGatewayPassword('gw-tunnel-pw-1', GATEWAY_PASSWORD)
     const spec = gatewaySshSpec('gw-tunnel-pw-1')
@@ -1726,7 +1710,7 @@ test('ssh provider verifyUp: a password-configured gateway-over-ssh target (no t
   } finally {
     setGatewayPassword('gw-tunnel-pw-1', null)
     configureGatewaySessionProvider({})
-    await new Promise<void>(resolve => server.close(() => resolve()))
+    await closeLoopbackServer(server)
   }
 })
 
@@ -1746,8 +1730,7 @@ test('ssh provider verifyUp: a tunnel-probe 401 with the session cookie invalida
     invalidate: origin => { invalidated.push(origin) },
   }
   configureGatewaySessionProvider(completeTestGatewaySessionHooks(hooks))
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
-  const port = (server.address() as AddressInfo).port
+  const port = await listenEphemeral(server)
   try {
     setGatewayPassword('gw-tunnel-401-1', GATEWAY_PASSWORD)
     const result = await sshProvider.verifyUp!(gatewaySshSpec('gw-tunnel-401-1'), { host: '127.0.0.1', port })
@@ -1762,7 +1745,7 @@ test('ssh provider verifyUp: a tunnel-probe 401 with the session cookie invalida
   } finally {
     setGatewayPassword('gw-tunnel-401-1', null)
     configureGatewaySessionProvider({})
-    await new Promise<void>(resolve => server.close(() => resolve()))
+    await closeLoopbackServer(server)
   }
 })
 
@@ -1789,8 +1772,7 @@ test('ssh provider verifyUp: a tunnel-probe 401 self-heals through the one autom
     invalidate: origin => { invalidated.push(origin) },
   }
   configureGatewaySessionProvider(completeTestGatewaySessionHooks(hooks))
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
-  const port = (server.address() as AddressInfo).port
+  const port = await listenEphemeral(server)
   try {
     setGatewayPassword('gw-tunnel-relogin-1', GATEWAY_PASSWORD)
     const result = await sshProvider.verifyUp!(gatewaySshSpec('gw-tunnel-relogin-1'), { host: '127.0.0.1', port })
@@ -1801,7 +1783,7 @@ test('ssh provider verifyUp: a tunnel-probe 401 self-heals through the one autom
   } finally {
     setGatewayPassword('gw-tunnel-relogin-1', null)
     configureGatewaySessionProvider({})
-    await new Promise<void>(resolve => server.close(() => resolve()))
+    await closeLoopbackServer(server)
   }
 })
 
@@ -1823,8 +1805,7 @@ test('ssh provider verifyUp: token and password coexist — the tunnel probe car
     res.writeHead(200, { 'content-type': 'application/json' })
     res.end(JSON.stringify(GATEWAY_RUNTIME_STATUS))
   })
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
-  const port = (server.address() as AddressInfo).port
+  const port = await listenEphemeral(server)
   try {
     setGatewayPassword('gw-tunnel-both-1', GATEWAY_PASSWORD)
     const result = await sshProvider.verifyUp!(gatewaySshSpec('gw-tunnel-both-1'), { host: '127.0.0.1', port })
@@ -1836,7 +1817,7 @@ test('ssh provider verifyUp: token and password coexist — the tunnel probe car
     setGatewayToken('gw-tunnel-both-1', null)
     setGatewayPassword('gw-tunnel-both-1', null)
     configureGatewaySessionProvider({})
-    await new Promise<void>(resolve => server.close(() => resolve()))
+    await closeLoopbackServer(server)
   }
 })
 
@@ -1854,8 +1835,7 @@ test('ssh provider verifyUp: a refused password login falls back to a valid tunn
     res.writeHead(200, { 'content-type': 'application/json' })
     res.end(JSON.stringify(GATEWAY_RUNTIME_STATUS))
   })
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
-  const port = (server.address() as AddressInfo).port
+  const port = await listenEphemeral(server)
   try {
     setGatewayToken('gw-tunnel-fallback', TOKEN)
     setGatewayPassword('gw-tunnel-fallback', GATEWAY_PASSWORD)
@@ -1865,7 +1845,7 @@ test('ssh provider verifyUp: a refused password login falls back to a valid tunn
     setGatewayToken('gw-tunnel-fallback', null)
     setGatewayPassword('gw-tunnel-fallback', null)
     configureGatewaySessionProvider({})
-    await new Promise<void>(resolve => server.close(() => resolve()))
+    await closeLoopbackServer(server)
   }
 })
 
@@ -1878,8 +1858,7 @@ test('ssh provider verifyUp: without session hooks a password-configured gateway
     res.end('unauthorized')
   })
   configureGatewaySessionProvider({})
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
-  const port = (server.address() as AddressInfo).port
+  const port = await listenEphemeral(server)
   try {
     setGatewayPassword('gw-tunnel-inert-1', GATEWAY_PASSWORD)
     const result = await sshProvider.verifyUp!(gatewaySshSpec('gw-tunnel-inert-1'), { host: '127.0.0.1', port })
@@ -1890,7 +1869,7 @@ test('ssh provider verifyUp: without session hooks a password-configured gateway
   } finally {
     setGatewayPassword('gw-tunnel-inert-1', null)
     configureGatewaySessionProvider({})
-    await new Promise<void>(resolve => server.close(() => resolve()))
+    await closeLoopbackServer(server)
   }
 })
 
@@ -1899,8 +1878,7 @@ test('verifyGatewayEndpointViaTunnel: a 401 with a session Cookie is classified 
     res.writeHead(401)
     res.end('unauthorized')
   })
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
-  const port = (server.address() as AddressInfo).port
+  const port = await listenEphemeral(server)
   try {
     // Cookie-carrying probe: password-refused message (design 17 §7.3 密码被拒).
     const withCookie = await verifyGatewayEndpointViaTunnel({ host: '127.0.0.1', port }, null, undefined, undefined, SESSION_COOKIE)
@@ -1917,7 +1895,7 @@ test('verifyGatewayEndpointViaTunnel: a 401 with a session Cookie is classified 
     assert.equal(withToken.ok, false)
     assert.match(withToken.detail ?? '', /rejected the token \(401\) — check the shared token/)
   } finally {
-    await new Promise<void>(resolve => server.close(() => resolve()))
+    await closeLoopbackServer(server)
   }
 })
 
@@ -1929,13 +1907,12 @@ test('ssh provider verifyUp: a gateway-over-ssh probe presents the remote loopba
     res.writeHead(200, { 'content-type': 'application/json' })
     res.end(JSON.stringify(GATEWAY_RUNTIME_STATUS))
   })
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
-  const port = (server.address() as AddressInfo).port
+  const port = await listenEphemeral(server)
   try {
     const result = await sshProvider.verifyUp!(gatewaySshSpec('gw-host'), { host: '127.0.0.1', port })
     assert.deepEqual(result, { ok: true })
     assert.equal(seenHost, '127.0.0.1:30801', 'the forward terminates at remote loopback; an SSH alias is not an HTTP authority')
   } finally {
-    await new Promise<void>(resolve => server.close(() => resolve()))
+    await closeLoopbackServer(server)
   }
 })

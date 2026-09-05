@@ -11,8 +11,9 @@
  * electron side effects (powerSaveBlocker / setLoginItemSettings / XDG
  * autostart / window lifecycle) live in main.ts.
  */
-import { chmodSync, closeSync, fchmodSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeSync } from 'node:fs';
+import { renameSync, rmSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { atomicWritePrivateFileNoFollow, ensurePrivateDirectoryNoFollow, readPrivateFileNoFollow } from './control-plane-module.ts';
 
 /** Close-window behavior (design 14 D1): hide to tray (dsh keeps running) or quit. */
 export type WindowCloseBehavior = 'hide-to-tray' | 'quit';
@@ -263,9 +264,26 @@ function isValidSettingsFile(input: unknown): input is Record<string, unknown> {
  * defaults with a loud `notice` for the caller to log.
  */
 export function readSettingsFile(filePath: string): { settings: ChamberSettings; notice: string | null } {
+  // One-time crash-residue sweep (2a follow-up): the pre-2a write path used a
+  // FIXED `${filePath}.tmp` (open 'w' + rename), and a hard crash between the
+  // two left that exact-name residue. The atomic replace since 2a uses a
+  // random O_EXCL temp and never reuses or removes that legacy name — sweep
+  // it at the startup load. Best-effort only: `force` already swallows
+  // ENOENT, and any other failure must not break the settings load, so the
+  // remainder is swallowed too.
+  try { rmSync(`${filePath}.tmp`, { force: true }) } catch { /* best-effort hygiene only */ }
   let raw: string;
   try {
-    raw = readFileSync(filePath, 'utf8');
+    // The same no-follow / single-link / inode read discipline as the
+    // credential mirrors (control-plane private-file via the desktop
+    // facade): the settings file is non-secret, but it carries the registry
+    // trust anchor and is written 0600, so its read rides the shared read
+    // primitive. tightenMode converges a historical loose (0644) file to the
+    // write side's 0600 on first read; a missing file surfaces as the native
+    // ENOENT (defaults below); anything unsafe (a planted symlink / multi-
+    // link leaf) is treated like an unreadable file — loud notice + preserved
+    // as `*.corrupt`, never read through.
+    raw = readPrivateFileNoFollow(filePath, { tightenMode: 0o600 }).value;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
       return { settings: { ...DEFAULT_CHAMBER_SETTINGS }, notice: null };
@@ -285,28 +303,15 @@ export function readSettingsFile(filePath: string): { settings: ChamberSettings;
   }
 }
 
-/** Atomic write (tmp + fsync + rename), 0600 — mirrors the ssh-passwords
- *  store pattern (open/fchmod/write/fsync/close; the fchmod forces owner-only
- *  permissions on a pre-existing wider tmp file — hard-crash residue — before
- *  any bytes are written since the registry origin is a trust anchor, and
- *  the fsync plus the explicit post-close chmod ensure a crash never leaves
- *  a partial or wider-permission settings file). */
+/** Atomic write, 0600 — the control-plane replace primitive via the desktop
+ *  facade (random O_EXCL tmp with explicit mode 0600 → fsync → rename →
+ *  parent-directory fsync; a planted symlink / multi-link leaf is refused
+ *  fail-closed). The parent directory is ensured owner-only (0700) first.
+ *  The explicit mode keeps the settings file owner-only on every replace
+ *  (the registry origin is a trust anchor). */
 export function writeSettingsFile(filePath: string, settings: ChamberSettings): void {
-  const tmpPath = `${filePath}.tmp`;
-  mkdirSync(dirname(filePath), { recursive: true });
-  const fd = openSync(tmpPath, 'w', 0o600);
-  try {
-    // open(..., mode) only applies the mode on creation; a pre-existing
-    // tmp file (hard-crash residue) may be wider, so force owner-only
-    // permissions before writing (the registry origin is a trust anchor).
-    fchmodSync(fd, 0o600);
-    writeSync(fd, `${JSON.stringify(settings, null, 2)}\n`);
-    fsyncSync(fd);
-  } finally {
-    closeSync(fd);
-  }
-  chmodSync(tmpPath, 0o600);
-  renameSync(tmpPath, filePath);
+  ensurePrivateDirectoryNoFollow(dirname(filePath), 0o700);
+  atomicWritePrivateFileNoFollow(filePath, `${JSON.stringify(settings, null, 2)}\n`, { mode: 0o600 });
 }
 
 function preserveCorrupt(filePath: string): void {

@@ -8,11 +8,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { DshRuntimeController } from './dsh-runtime-controller.ts';
 import type { ControllerDeps, RuntimeState } from './dsh-runtime-controller.ts';
-import type { RegistryMetadata } from './registry-metadata.ts';
-import type { OverrideRecord } from './dsh-runtime-store.ts';
-import type { ActivationIntentInput } from './dsh-runtime-store.ts';
-import type { RuntimeDiskSummary } from './dsh-runtime-store.ts';
-import type { InstallResult } from './runtime-installer.ts';
+import type { RegistryMetadata } from '@dsh-chamber/dsh-runtime';
+import type { OverrideRecord } from '@dsh-chamber/dsh-runtime';
+import type { ActivationIntentInput } from '@dsh-chamber/dsh-runtime';
+import type { RuntimeDiskSummary } from '@dsh-chamber/dsh-runtime';
+import type { InstallResult } from '@dsh-chamber/dsh-runtime';
 
 function meta(latest: string | null, versions: string[]): RegistryMetadata {
   const byVersion = new Map<string, { version: string; tarball: string; integrity: string | null }>();

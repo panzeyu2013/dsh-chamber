@@ -65,8 +65,7 @@
 
 import type { SpawnOptions } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
-import { request as httpRequest } from 'node:http'
-import { chmodSync, closeSync, constants as fsConstants, existsSync, fchmodSync, fsyncSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, renameSync, rmSync, writeSync } from 'node:fs'
+import { chmodSync, closeSync, constants as fsConstants, existsSync, fchmodSync, fsyncSync, lstatSync, mkdtempSync, openSync, readdirSync, renameSync, rmSync, writeSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 // The dsh RPC wire envelope is single-sourced in control-plane
@@ -76,9 +75,11 @@ import { dirname, join } from 'node:path'
 // AND the unified host-identity probe contract (method names, payloads,
 // 64 KiB cap) can never drift from the control-plane unary client's.
 import {
+  atomicWritePrivateFileNoFollow,
   buildClientRequest,
   buildHostIdentityProbePayload,
   buildLegacyHostProbePayload,
+  ensurePrivateDirectoryNoFollow,
   HOST_IDENTITY_METHOD,
   HOST_PROBE_MAX_RESPONSE_BYTES,
   LEGACY_HOST_PROBE_METHOD,
@@ -99,8 +100,8 @@ import {
   WRITE_FILE_MAX_BYTES,
 } from './control-plane-module.ts'
 import { CHILD_LINE_MAX_CHARS, createBoundedLineProcessor } from './bounded-lines.ts'
-import { gatewayHttpFailureIsTerminal, getGatewayPassword, getGatewaySessionHooks, getGatewayToken, isGatewayRuntimeStatus, verifyGatewayPasswordSession } from './gateway-provider.ts'
-import { INSTANCE_ID_PATTERN, MAX_INSTANCE_LABEL_CHARS } from './transport-provider.ts'
+import { getGatewayPassword, getGatewaySessionHooks, getGatewayToken, verifyGatewayPasswordSession, verifyGatewayRuntimeIdentity } from './gateway-provider.ts'
+import { INSTANCE_ID_PATTERN, MAX_INSTANCE_LABEL_CHARS, signalChild } from './transport-provider.ts'
 import { isCredentialBinding, sshCredentialBinding, sshCredentialBindingForEndpoint } from './credential-binding.ts'
 import type {
   SpawnedProcess,
@@ -477,101 +478,19 @@ export function verifyGatewayEndpointViaTunnel(
   cookie: string | null = null,
   authority: string | undefined = undefined,
 ): Promise<TransportVerifyResult & { statusCode?: number }> {
-  return new Promise(resolve => {
-    const url = `http://${endpoint.host}:${endpoint.port}/chamber/runtime/status`
-    let settled = false
-    let timer: ReturnType<typeof setTimeout> | null = null
-    const done = (ok: boolean, detail?: string, terminal?: boolean, statusCode?: number) => {
-      if (settled) return
-      settled = true
-      if (timer !== null) {
-        clearTimeout(timer)
-        timer = null
-      }
-      req.destroy()
-      // statusCode rides the result only when a real answer produced it — an
-      // undefined key must never change the probe's wire shape for callers
-      // that deep-compare the plain {ok:true} success form.
-      const result: TransportVerifyResult & { statusCode?: number } = ok
-        ? { ok: true }
-        : { ok: false, detail, terminal }
-      if (statusCode !== undefined) result.statusCode = statusCode
-      resolve(result)
-    }
-    const headers: Record<string, string> = {}
-    // Tunnel Host override (design 17 §9.3 隧道 Host 覆盖): the probe
-    // CONNECTS to the loopback tunnel endpoint but presents the REMOTE
-    // gateway authority in the Host header — the gateway's request policy
-    // requires the authority port to equal its listen port, which the
-    // tunnel's local port can never satisfy.
-    if (authority !== undefined) headers.host = authority
-    // No credentials → NO Authorization header on the probe (design 17 §2.3):
-    // the gateway itself is the authority on whether auth is needed. A
-    // password-session Cookie rides alongside (never a credential VALUE in
-    // logs — the cookie is main-process memory only, design 17 §9.4).
-    if (token !== null) headers.authorization = `Bearer ${token}`
-    if (cookie !== null) headers.cookie = cookie
-    const req = httpRequest(url, {
-      method: 'GET',
-      headers,
-    }, res => {
-      // A premature close after our destroy must never escape as an
-      // uncaught error (main-process safety discipline).
-      res.on('error', () => {})
-      if (res.statusCode === 401) {
-        res.resume()
-        done(false, cookie !== null
-          ? 'the gateway rejected the password authentication (401) — re-enter the password'
-          : token === null
-            ? 'the gateway requires authentication (401) — configure the shared token or password'
-            : 'the gateway rejected the token (401) — check the shared token', true, 401)
-        return
-      }
-      if (res.statusCode === 403) {
-        res.resume()
-        done(false, 'the gateway refused the request origin/Host policy (403) — check the gateway deployment origin settings', true, 403)
-        return
-      }
-      if (res.statusCode !== 200) {
-        const statusCode = res.statusCode ?? 0
-        res.resume()
-        // Deterministic client/protocol mistakes require user action; every
-        // 5xx is a time-dependent condition the bounded retry can recover.
-        const terminal = gatewayHttpFailureIsTerminal(statusCode)
-        done(false, `the gateway answered HTTP ${res.statusCode ?? '?'} to the runtime identity probe`, terminal, statusCode)
-        return
-      }
-      const chunks: Buffer[] = []
-      let size = 0
-      res.on('data', chunk => {
-        if (settled) return
-        size += chunk.length
-        if (size > maxBodyBytes) {
-          done(false, 'the gateway answered an oversized runtime identity response', true)
-          return
-        }
-        chunks.push(chunk)
-      })
-      res.on('end', () => {
-        let status: unknown = null
-        try {
-          status = JSON.parse(Buffer.concat(chunks).toString('utf8'))
-        } catch {
-          status = null
-        }
-        if (!isGatewayRuntimeStatus(status)) {
-          done(false, 'the gateway answered an unexpected runtime identity response — it does not appear to be a compatible dsh-chamber gateway', true)
-          return
-        }
-        done(true)
-      })
-    })
-    // TOTAL deadline, not the socket-idle timeout: an endpoint that answers
-    // slowly must never hang the verification.
-    timer = setTimeout(() => done(false, `the gateway did not answer the runtime identity probe within ${timeoutMs}ms`), timeoutMs)
-    timer.unref?.()
-    req.on('error', () => done(false, 'the gateway did not answer the runtime identity probe'))
-    req.end()
+  // The shared gateway runtime-identity probe core (gateway-provider.ts,
+  // dedupe audit N7 2026-09): http + the tunnel Host-header override, with
+  // the legacy ssh shape that carries `statusCode` on 403/non-200 answers.
+  return verifyGatewayRuntimeIdentity({
+    host: endpoint.host,
+    port: endpoint.port,
+    token,
+    insecure: true,
+    timeoutMs,
+    maxBodyBytes,
+    cookie,
+    authority,
+    carryStatusCodes: true,
   })
 }
 
@@ -882,6 +801,14 @@ export function configureSshPasswordStore(
   passwords.clear()
   passwordBindings.clear()
   if (file === null) return null
+  // One-time crash-residue sweep (2a follow-up): the pre-2a persist wrote a
+  // FIXED `${file}.tmp` (open 'w' + rename), and a hard crash between the two
+  // left that exact-name 0600 residue. The atomic replace since 2a uses a
+  // random O_EXCL temp and never reuses or removes that legacy name — sweep
+  // it once at configure. Best-effort only: `force` already swallows ENOENT,
+  // and any other failure (permissions…) must not break store configuration,
+  // so the remainder is swallowed too.
+  try { rmSync(`${file}.tmp`, { force: true }) } catch { /* best-effort hygiene only */ }
   let text: string
   try {
     text = readOwnerOnlySecretFile(file)
@@ -1013,10 +940,13 @@ export function getSshPassword(idOrSpec: string | TransportInstanceSpec): string
 }
 
 /**
- * Mirror the in-memory map to the plaintext file (design 05 §8): write
- * `.tmp` with mode 0600 → fsync → rename (the repo's atomic-write
- * convention — the rename keeps the tmp file's 0600 mode). Empty maps still
- * write an empty file; the file is only created on the first set/clear.
+ * Mirror the in-memory map to the plaintext file (design 05 §8): the
+ * control-plane atomic-replace primitive (private-file.ts via the desktop
+ * facade) — random O_EXCL tmp with explicit mode 0600 → fsync → rename →
+ * parent-directory fsync, refusing to follow or replace a planted symlink /
+ * multi-link leaf (fail-closed). The parent directory is ensured owner-only
+ * (0700) first. Empty maps still write an empty file; the file is only
+ * created on the first set/clear.
  */
 function persistSshPasswords(next: ReadonlyMap<string, string>, nextBindings: ReadonlyMap<string, string>): void {
   if (passwordFile === null) return
@@ -1025,26 +955,8 @@ function persistSshPasswords(next: ReadonlyMap<string, string>, nextBindings: Re
     passwords: Object.fromEntries(next),
     bindings: Object.fromEntries(nextBindings),
   }, undefined, 2)}\n`
-  const tmpPath = `${passwordFile}.tmp`
-  mkdirSync(dirname(passwordFile), { recursive: true })
-  try {
-    const fd = openSync(tmpPath, 'w', 0o600)
-    try {
-      // open(..., mode) only applies the mode when the file is created. A
-      // pre-existing tmp file (for example after a hard crash) may be wider,
-      // so force owner-only permissions before writing any secret bytes.
-      fchmodSync(fd, 0o600)
-      writeSync(fd, payload)
-      fsyncSync(fd)
-    } finally {
-      closeSync(fd)
-    }
-    renameSync(tmpPath, passwordFile)
-  } catch (error) {
-    // A failed atomic replace must not strand an extra plaintext secret.
-    try { rmSync(tmpPath, { force: true }) } catch { /* best effort */ }
-    throw error
-  }
+  ensurePrivateDirectoryNoFollow(dirname(passwordFile), 0o700)
+  atomicWritePrivateFileNoFollow(passwordFile, payload, { mode: 0o600 })
 }
 
 /**
@@ -1976,12 +1888,4 @@ async function runRemoteExec(
     return { ok: true, status: readBack.status }
   }
   return Promise.resolve({ ok: false, error: 'unknown run payload op' })
-}
-
-/** Best-effort kill (no-op when the process is already gone). */
-function signalChild(child: SpawnedProcess | null, signal: NodeJS.Signals) {
-  if (child === null) return
-  try {
-    child.kill(signal)
-  } catch { /* already gone */ }
 }

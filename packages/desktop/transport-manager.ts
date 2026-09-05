@@ -62,7 +62,7 @@ import type { SpawnOptions } from 'node:child_process'
 import net from 'node:net'
 import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { canonicalizeTransportInstanceInput, MAX_TRANSPORT_INSTANCES } from './transport-provider.ts'
+import { canonicalizeTransportInstanceInput, MAX_TRANSPORT_INSTANCES, signalChild } from './transport-provider.ts'
 import { CHILD_LINE_MAX_CHARS, createBoundedLineProcessor } from './bounded-lines.ts'
 import type {
   SpawnedProcess,
@@ -689,14 +689,6 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
       state.readyLoop.abort()
       state.readyLoop = null
     }
-  }
-
-  /** Best-effort SIGTERM (or SIGKILL for the disconnect grace escalation). */
-  function signalChild(child: SpawnedProcess | null, signal: NodeJS.Signals) {
-    if (child === null) return
-    try {
-      child.kill(signal)
-    } catch { /* already gone */ }
   }
 
   /**
