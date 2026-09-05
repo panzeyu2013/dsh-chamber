@@ -696,6 +696,12 @@
 .selectArrow {
   appearance: none;
   -webkit-appearance: none;
+  /* 铺满列宽：select 是 .selectWrap 内唯一的流内 flex item，缺省只取
+     内容宽 —— 框身短于列宽，而 chevron 的 right:12px 锚在整行 wrap 上，
+     箭头就会悬在框外（2026-12 回归修复）。flex:1 + min-width:0 让框身
+     与同列文本输入等宽，箭头右缘回到框内 12px 处。 */
+  flex: 1;
+  min-width: 0;
   /* 右内距 32px：chevron 占 [12, 26)px，文字↔箭头净间隙 6px（2026-12
      复审，与运行时 select 的 8px 同节奏）。 */
   padding-right: 32px;
@@ -710,6 +716,12 @@
   pointer-events: none;
   display: inline-flex;
   color: var(--dsw-alias-label-tertiary);
+}
+
+/* disabled 时与 select 本体同步淡化（.input:disabled 的 opacity 只管
+   select；同 runtime 段的 .runtimeSelect:disabled + 姊妹规则）。 */
+.selectArrow:disabled + .selectChevron {
+  opacity: 0.5;
 }
 
 /* ---- ~/.ssh/config discovery picker (add-host form) ---- */
