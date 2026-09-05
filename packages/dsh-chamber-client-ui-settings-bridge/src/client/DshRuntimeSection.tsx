@@ -422,8 +422,12 @@ function GatewayRuntimeSection({
   //   env-probe-failed 等无相位受阻）、只读平台；
   //   可用 = idle/applied/失败带操作错误（local failed/error 相位保留 check）。
   // restart 窗口两侧一致禁用（local 侧把 restarting 计入本地按钮禁用）。
+  // 2026-12 review P2-2 落实：restarting prop（父层 POST /restart 202 →
+  // pollGatewayReady settle 的全窗口）一并计入——仅依赖服务端 restart
+  // 轮询相位会留下「点击后首个轮询前 ≤~3s」与「相位离开 running 但
+  // ready 轮询未完成」两个解禁窗口。
   // 按钮常驻显示、相位禁用而非隐藏，与 local 分支本次统一后的策略一致。
-  const checkMachineBusy = remoteStatus !== null && (
+  const checkMachineBusy = restarting || (remoteStatus !== null && (
     remoteStatus.phase === 'installing'
     || remoteStatus.phase === 'applying'
     || remoteStatus.phase === 'pending'
@@ -433,13 +437,18 @@ function GatewayRuntimeSection({
     || remoteStatus.restart === 'running'
     || (remoteStatus.startupBlockedReason !== null && remoteStatus.startupBlockedReason !== '')
     || remoteStatus.mutationsAllowed === false
-  )
+  ))
 
   const runRemoteAction = useCallback(async (task: (signal: AbortSignal) => Promise<unknown>): Promise<void> => {
     // React state is not a synchronous mutex: two clicks in the same render
     // can both observe actionBusy=false. Fence before the first await and keep
     // one abort owner for instance switches/unmount.
-    if (actionInFlight.current) return
+    // 同帧检查围栏（2026-12 review P2-1 落实）：checkIntent 在用户点击
+    // 「检查更新」当帧置位、要到版本列表真正 settle 才清——mutation 入口
+    // 必须与 checkingVersions 的渲染级冻结同语义，否则「检查在途冻结变更
+    // 控件与重启」要到下一渲染才生效、同帧可双放行。ref 围栏是唯一的
+    // 同步防线（React state 非同步互斥）。
+    if (actionInFlight.current || checkIntent.current) return
     actionInFlight.current = true
     const controller = new AbortController()
     actionController.current = controller
@@ -593,7 +602,9 @@ function GatewayRuntimeSection({
   }, [registryMode, registryOrigin])
 
   const onApplyRegistry = useCallback(async (origin: string): Promise<void> => {
-    if (registryInFlight.current) return
+    // checkIntent 同帧围栏：registry PUT 属「检查在途冻结」的变更面（同
+    // runRemoteAction 纪律，2026-12 review P2-1 落实）。
+    if (registryInFlight.current || checkIntent.current) return
     registryInFlight.current = true
     const controller = new AbortController()
     registryController.current = controller
@@ -635,6 +646,10 @@ function GatewayRuntimeSection({
     if (checkIntent.current) return
     checkIntent.current = true
     setCheckingVersions(true)
+    // 新检查起始即清上次失败行（2026-12 review P2-3 落实）：否则旧超时/
+    // 错误文案与「正在检查更新…」在整个新检查期间并存，直到新 fetch
+    // settle（local 侧 onTestRegistry 点击即清 registryError 的同语义）。
+    setVersionsError(null)
     setVersionsEpoch((epoch) => epoch + 1)
   }, [])
 
