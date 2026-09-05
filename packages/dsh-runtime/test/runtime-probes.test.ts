@@ -210,6 +210,43 @@ test('identity 404 with a failing legacy fallback fails the probe row (no silent
   }
 })
 
+test('identity 404 with a legacy answer lacking the {items} list fails the row (old shape check restored)', async () => {
+  // The pre-migration session/list activation row rejected a value without
+  // the {items} session list ('malformed session list'); the legacy fallback
+  // restores that check — an ok:true envelope without the list is a damaged
+  // host, not a healthy old tree, and the fallback warn never fires.
+  const fx = fixture()
+  const warnings: string[] = []
+  try {
+    const call: RuntimeProbeCall = async (_base, method) => {
+      if (method === 'commands/execute') {
+        const error = new Error('missing probe session') as Error & { code: string }
+        error.code = 'session/not-found'
+        throw error
+      }
+      if (method === 'session/canOpenWorkspacePath') {
+        const error = new Error('not found') as Error & { status?: number }
+        error.status = 404
+        throw error
+      }
+      if (method === 'session/list') return { result: { value: { ok: true } } }
+      return { result: { value: successfulValue(method) } }
+    }
+    const results = await runRuntimeActivationProbes({
+      baseUrl: 'http://127.0.0.1:17510',
+      dshHome: fx.dshHome,
+      call,
+      warn: line => warnings.push(line),
+    })
+    const session = results.find(result => result.name === 'session/canOpenWorkspacePath')
+    assert.equal(session?.ok, false, 'a legacy answer without items must fail the row')
+    assert.match(session?.error ?? '', /malformed session list/)
+    assert.equal(warnings.length, 0, 'a fallback that did not succeed never warns')
+  } finally {
+    rmSync(fx.root, { recursive: true, force: true })
+  }
+})
+
 test('identity 404 with a legacy 503 failure propagates the carrier error (no warn)', async () => {
   const fx = fixture()
   const warnings: string[] = []

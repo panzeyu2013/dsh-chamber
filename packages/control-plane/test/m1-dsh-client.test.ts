@@ -19,6 +19,7 @@ import {
   probeHostIdentity,
   call,
   RpcTransportError,
+  RpcBusinessError,
 } from '../src/dsh-client.ts'
 import { HOST_IDENTITY_METHOD, LEGACY_HOST_PROBE_METHOD } from '../src/rpc-envelope.ts'
 import { DEFAULT_DSH_START_PORT } from '../src/spawn-dsh.ts'
@@ -26,9 +27,11 @@ import { clearAuthCookie, registerAuthCookie } from '../src/browser-auth-cookie.
 
 const HOST = `http://127.0.0.1:${DEFAULT_DSH_START_PORT}`
 
-/** Unique baseUrl per test — nothing module-global remains keyed by baseUrl
- *  (the old capability cache is gone with describeCapabilities), but unique
- *  hosts keep the auth-cookie bookkeeping per test isolated. */
+/** Unique baseUrl per test — the legacy-fallback warning throttle
+ *  (legacyFallbackWarnedBaseUrls in dsh-client.ts) is module-global and
+ *  keyed by baseUrl, so a shared HOST across tests would suppress a later
+ *  test's expected warning; unique hosts also keep the auth-cookie
+ *  bookkeeping per test isolated. */
 let portCounter = 0
 function uniqueHost(): string {
   portCounter += 1
@@ -254,6 +257,85 @@ test('probeHostIdentity: 404 on BOTH methods fails loud WITHOUT a fallback warni
     assert.equal(recorder.calls.length, 2, 'identity 404 + legacy 404')
     assert.deepEqual(warn.warnings, [], 'no successful fallback → no warning')
   })
+})
+
+test('probeHostIdentity: a malformed legacy value slot fails loud WITHOUT a warning', async () => {
+  // The legacy fallback restores the pre-degrade session/list probe's value
+  // check (describeCapabilities validated the slot): an ok:true envelope
+  // carrying a non-object value is a protocol violation — a damaged legacy
+  // host must never pass the health probe, and the fallback warn (reserved
+  // for SUCCESSFUL legacy answers) must not fire.
+  for (const value of [null, 'yes', 42]) {
+    const host = uniqueHost()
+    const warn = warnRecorder()
+    await withFetchHandler(routeHost({
+      [HOST_IDENTITY_METHOD]: identityAnswer(null, true),
+      [LEGACY_HOST_PROBE_METHOD]: echoResult({ ok: true, value }),
+    }), async recorder => {
+      await assert.rejects(probeHostIdentity(host, { logger: warn.logger }),
+        error => error instanceof RpcTransportError && error.code === 'protocol_violation'
+          && /malformed value slot/.test(error.message))
+      assert.equal(recorder.calls.length, 2, 'identity 404 + one legacy call')
+      assert.deepEqual(warn.warnings, [], 'no successful legacy answer → no warning')
+    })
+  }
+})
+
+test('probeHostIdentity: an identity business error (200 + ok:false) fails loud WITHOUT a fallback', async () => {
+  // result.ok === false is the server-response ERROR branch (RpcBusinessError),
+  // not an HTTP 404: the identity method EXISTS and answered — never fall
+  // back to the legacy session-data probe, never warn.
+  const host = uniqueHost()
+  const warn = warnRecorder()
+  let legacyCalls = 0
+  await withFetchHandler(routeHost({
+    [HOST_IDENTITY_METHOD]: echoResult({ ok: false, error: { code: 'internal_error', message: 'identity boom' } }),
+    [LEGACY_HOST_PROBE_METHOD]: async () => { legacyCalls += 1; return new Response('unexpected', { status: 404 }) },
+  }), async recorder => {
+    await assert.rejects(probeHostIdentity(host, { logger: warn.logger }),
+      error => error instanceof RpcBusinessError && /identity boom/.test(error.message))
+    assert.equal(recorder.calls.length, 1, 'a business error is not a 404 → no legacy fallback')
+    assert.equal(legacyCalls, 0)
+    assert.deepEqual(warn.warnings, [], 'no fallback happened → no warning')
+  })
+})
+
+test('probeHostIdentity re-arms the warning after the identity method answers again', async () => {
+  // The throttle means "once per CONSECUTIVE legacy episode per baseUrl",
+  // not "once ever": legacy warn #1 → the identity method answers (marker
+  // cleared) → the host downgrades back to legacy → warn #2 fires again.
+  const host = uniqueHost()
+  const warn = warnRecorder()
+  const recorder = fetchRecorder(async () => new Response('not found', { status: 404 }))
+  try {
+    const legacyOnly = (): void => {
+      recorder.setHandler(routeHost({
+        [HOST_IDENTITY_METHOD]: identityAnswer(null, true),
+        [LEGACY_HOST_PROBE_METHOD]: async entry => jsonResponse({
+          type: 'server-response', rpcId: entry.body.rpcId, result: { ok: true, value: { items: [] } },
+        }),
+      }))
+    }
+    legacyOnly()
+    assert.equal(await probeHostIdentity(host, { logger: warn.logger }), true)
+    assert.equal(warn.warnings.length, 1, 'the first legacy episode warns')
+    // The runtime tree upgrades: the identity method answers → the marker is
+    // cleared (a later downgrade must re-announce).
+    recorder.setHandler(routeHost({
+      [HOST_IDENTITY_METHOD]: identityAnswer(true),
+      [LEGACY_HOST_PROBE_METHOD]: async entry => jsonResponse({
+        type: 'server-response', rpcId: entry.body.rpcId, result: { ok: true, value: { items: [] } },
+      }),
+    }))
+    assert.equal(await probeHostIdentity(host, { logger: warn.logger }), true)
+    assert.equal(warn.warnings.length, 1, 'an identity success never warns')
+    // Downgrade again → a fresh legacy episode warns anew.
+    legacyOnly()
+    assert.equal(await probeHostIdentity(host, { logger: warn.logger }), true)
+    assert.equal(warn.warnings.length, 2, 're-armed after an identity success')
+  } finally {
+    recorder.restore()
+  }
 })
 
 test('probeHostIdentity: a legacy fallback that throws non-404 propagates that failure without a warning', async () => {

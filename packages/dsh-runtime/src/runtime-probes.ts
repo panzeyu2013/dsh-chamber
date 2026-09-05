@@ -307,7 +307,17 @@ export async function runRuntimeActivationProbes(opts: RuntimeProbeOptions): Pro
       } catch (error) {
         if (identityMethodNotFound(error)) {
           try {
-            await call('session/list', { args: { _request: {} } })
+            const legacy = await call('session/list', { args: { _request: {} } })
+            // Restore the pre-migration session/list row's shape check (the
+            // old activation row failed a value without the {items} session
+            // list as 'malformed session list'): an ok:true legacy envelope
+            // carrying no list is a damaged host, not a healthy old tree —
+            // "old-tree activation identical" includes this check.
+            const legacyValue = legacy.result?.value
+            if (typeof legacyValue !== 'object' || legacyValue === null
+              || !Array.isArray((legacyValue as { items?: unknown }).items)) {
+              return { name, ok: false, error: 'malformed session list' }
+            }
             // Warn only after the fallback SUCCEEDED — same timing as the
             // control-plane probeHostIdentity; a both-404 or failing legacy
             // fallback is already loud on its own.

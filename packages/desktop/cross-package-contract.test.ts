@@ -103,15 +103,26 @@ test('computeCordisPatchUpdate embeds the shared render bytes verbatim (the fold
 
 test('the desktop-consumed client-request envelope is byte-identical to control-plane (A2)', () => {
   const rpcId = 'test-rpc-id'
-  const method = 'session/list'
-  const payload = { args: {} }
-  const desktop = desktopBuildClientRequest(rpcId, method, payload)
-  const plane = planeBuildClientRequest(rpcId, method, payload)
-  assert.deepEqual(desktop, plane, 'the desktop-consumed envelope drifted from the control-plane envelope')
-  // Pin the wire bytes (JSON.stringify key order is the wire order).
+  // The two REAL current wire calls: the fixed-size identity probe
+  // (payload {args:{}}) and the legacy session/list fallback
+  // (payload {args:{_request:{}}}). Golden bytes pin the key order.
+  const identity = { method: HOST_IDENTITY_METHOD, payload: { args: {} } }
+  const desktopIdentity = desktopBuildClientRequest(rpcId, identity.method, identity.payload)
+  const planeIdentity = planeBuildClientRequest(rpcId, identity.method, identity.payload)
+  assert.deepEqual(desktopIdentity, planeIdentity, 'the desktop-consumed identity envelope drifted from the control-plane envelope')
   assert.equal(
-    JSON.stringify(desktop),
-    '{"type":"client-request","rpcId":"test-rpc-id","method":"session/list","payload":{"args":{}}}',
+    JSON.stringify(desktopIdentity),
+    '{"type":"client-request","rpcId":"test-rpc-id","method":"session/canOpenWorkspacePath","payload":{"args":{}}}',
+    'identity wire bytes drifted',
+  )
+  const legacy = { method: LEGACY_HOST_PROBE_METHOD, payload: { args: { _request: {} } } }
+  const desktopLegacy = desktopBuildClientRequest(rpcId, legacy.method, legacy.payload)
+  const planeLegacy = planeBuildClientRequest(rpcId, legacy.method, legacy.payload)
+  assert.deepEqual(desktopLegacy, planeLegacy, 'the desktop-consumed legacy envelope drifted from the control-plane envelope')
+  assert.equal(
+    JSON.stringify(desktopLegacy),
+    '{"type":"client-request","rpcId":"test-rpc-id","method":"session/list","payload":{"args":{"_request":{}}}}',
+    'legacy wire bytes drifted',
   )
 })
 

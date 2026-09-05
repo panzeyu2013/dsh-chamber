@@ -912,12 +912,24 @@ export async function probeHostIdentity(
       // Legacy trees keep answering session/list exactly as before; a 404 on
       // BOTH methods (or any non-404 failure of the fallback) fails loud.
       try {
-        await call(
+        const { result } = await call(
           baseUrl,
           LEGACY_HOST_PROBE_METHOD,
           buildLegacyHostProbePayload(),
           { signal, generationSignal, timeoutMs },
         )
+        // Legacy-answer shape check: the pre-degrade session/list probe
+        // (describeCapabilities) validated the value slot — ok:true with a
+        // non-object value was a protocol_violation, never a healthy host.
+        // "Bit-identical legacy semantics" includes that check: a damaged
+        // legacy host must fail loud, not pass the health probe.
+        if (typeof result.value !== 'object' || result.value === null) {
+          throw new RpcTransportError(
+            `dsh ${LEGACY_HOST_PROBE_METHOD}: malformed value slot`,
+            0,
+            'protocol_violation',
+          )
+        }
       } catch (legacyError) {
         if (isHostIdentityNotFound(legacyError)) {
           throw new RpcTransportError(

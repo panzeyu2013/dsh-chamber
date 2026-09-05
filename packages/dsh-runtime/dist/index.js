@@ -6642,7 +6642,11 @@ async function runRuntimeActivationProbes(opts) {
       } catch (error) {
         if (identityMethodNotFound(error)) {
           try {
-            await call("session/list", { args: { _request: {} } });
+            const legacy = await call("session/list", { args: { _request: {} } });
+            const legacyValue = legacy.result?.value;
+            if (typeof legacyValue !== "object" || legacyValue === null || !Array.isArray(legacyValue.items)) {
+              return { name, ok: false, error: "malformed session list" };
+            }
             opts.warn?.(`runtime activation session probe: ${name} answered HTTP 404 while the legacy session/list probe succeeded \u2014 the runtime tree predates the identity method (dsh < 0.1.2-rc.1); the legacy probe response grows with session data`);
             return { name, ok: true };
           } catch (legacyError) {

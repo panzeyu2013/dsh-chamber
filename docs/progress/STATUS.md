@@ -16,8 +16,9 @@
 > → DOM 锚点审计基线（a4 双 pin，alpha.5 复核）与 wire 契约结论直接继承；回归测试套件见 rc.1 分支提交说明。
 
 **探针与随会话数据量增长的响应体彻底解耦（2026-12 定稿并实施；方案见
-design 18 §3.4 探针集、design 02 §3.2/§3.5 就绪/健康探测）**：chamber 全部
-身份/健康/激活探针统一到固定小体积契约——`session/canOpenWorkspacePath`
+design 18 §3.4 探针集、design 02 §3.2/§3.5 就绪/健康探测）**：chamber 身份/健康
+探针统一到固定小体积契约（激活探针集与会话数据解耦；settings/describe 与
+data.settings 两行按文件上限放宽，见下 B1）——`session/canOpenWorkspacePath`
 （SessionController `session` namespace 零参 boolean Typert Remote，钉住上游
 0.1.2-rc.1 实证存在）：纯同步平台检测、不读会话数据、不激活 Agent、无 IO；
 value true/false 均健康（只验方法存在/协议正确/控制器装配）。响应上限 64 KiB
@@ -45,9 +46,13 @@ control-plane `call` 自动生效；gateway runtime-manager 两处 call seam 亦
 runtime-probes 的 legacy 回退 warn 为可选注入 `warn` sink——桌面 main.ts 与
 gateway runtime-manager 按定稿不加逻辑改动，未注入即静默（control-plane
 probeHostIdentity 两生产调用点均已注入真实 logger，回退必 warn）；
-④ desktop SSH 远端身份探针对新方法 404 的旧版 dsh 保持「check or upgrade」判定
-（signature 探针先答新方法、404 时再答 legacy session/list——远端不自动收编
-legacy 树）；⑤ 探针契约要求上游方法不再漂移——未来上游若再删/改名该方法：
+④ desktop SSH attach 底线随探针迁移**上移至 ≥ 0.1.2-rc.1**（2026-12 审查修订口径：
+非「保持」——旧 session/list 主探针时代凡 200 ok:true 即 attach-ready，含
+[alpha.1, rc.1) 老树）：新方法 404 的旧版 dsh 由 signature 路径给出确定性
+terminal「check or upgrade」（先答新方法、404 时再答 legacy session/list 识别——
+远端不自动收编 legacy 树，旧版需手动升级）；legacy 识别臂预算为剩余预算的角落
+（超大会话列表序列化 >2s 的老树落 generic「not a dsh instance」，同为 terminal、
+信息更差，接受）；⑤ 探针契约要求上游方法不再漂移——未来上游若再删/改名该方法：
 本地/健康层（probeHostIdentity，两生产点均注入 logger）在回退成功时 warn 可见；
 激活层（runRuntimeActivationProbes）owner 未注入 warn sink（挂账③），若上游仅删
 身份方法而 session/list 仍在，激活行将静默通过、双 404 时 fail-loud——漂移的
@@ -72,8 +77,10 @@ settings/describe，实测摘除转发即红）。
 ⑨ 提交态 `packages/dsh-runtime/dist/index.js` 已重建（审查 R2-P1-a：提交态
 bundle 仍是迁移前旧 7 项探针语义，而 desktop/gateway 经包 main→dist 消费——
 src/dist 语义分裂可两套测试同时全绿）；护栏升级：dist-sync.test.ts 增加
-常量值级 deepEqual（探针集/settings cap）+ 行为标记（dist 不得含
-session/list/data.sessions），desktop cross-package-contract.test.ts 增加
+常量值级 deepEqual（探针集/settings cap）+ 行为标记（**激活探针集导出值**
+不得含 session/list/data.sessions——dist 为 legacy 回退保留 session/list
+字符串是正常的，护栏按导出值断言，勿当字符串约束误读），desktop
+cross-package-contract.test.ts 增加
 dsh-runtime 激活集 ↔ control-plane 身份常量跨包锁步断言（防 dist 再陈旧或
 方法漂移）；desktop/README.md 身份握手文案同步。
 ⑩ 第二轮审查决定与登记（2026-12，全 5 路 P0/P1=0）：warn 文案「per legacy

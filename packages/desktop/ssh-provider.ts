@@ -349,10 +349,9 @@ export function probeDshSignature(
  * fixed-size identity Remote of the upstream session namespace (dsh ≥
  * 0.1.2-rc.1; host.describe is deleted there), so the identity response never
  * grows with session data (capped at HOST_PROBE_MAX_RESPONSE_BYTES) — the
- * same wire handshake the control plane's local readiness uses (02 §3.2: "TCP
- * 通但 describe 失败 = 端口被无关服务占用") and the same contract the
- * renderer's attach path relies on. The envelope is built
- * and validated by the shared rpc-envelope module (single-sourced in
+ * same wire handshake the control plane's local readiness probe uses
+ * (02 §3.2: TCP 通但身份探针失败 = 端口被无关服务占用). The envelope is
+ * built and validated by the shared rpc-envelope module (single-sourced in
  * control-plane, consumed through control-plane-module.ts — the packaged
  * app loads the compiled control-plane bundle, dev runs the workspace
  * source). A port that merely accepts TCP — a non-dsh service on the remote
