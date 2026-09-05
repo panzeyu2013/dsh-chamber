@@ -213,6 +213,19 @@ function GatewayRuntimeSection({
   const [registryBusy, setRegistryBusy] = useState(false)
   const registryInFlight = useRef(false)
   const registryController = useRef<AbortController | null>(null)
+  /** 用户点击「检查更新」忙碌态（与 local 分支 testingRegistry 同语义）：
+   *  仅在用户点击后置位，并保持到该次检查真正 settle；后台拉取（entry
+   *  首拉、安装/应用结束后的自动重拉）不点亮——与 local 分支一致，避免
+   *  打开本段或自动刷新时按钮无谓地显示「正在检查更新…」。 */
+  const [checkingVersions, setCheckingVersions] = useState(false)
+  /** 一次用户检查意图（true = 点击在途，等待下一次版本拉取 settle 清除）。 */
+  const checkIntent = useRef(false)
+  /** 当前版本拉取请求的 identity 所有者（与 action/registry 同一围栏模式）。 */
+  const versionsController = useRef<AbortController | null>(null)
+  /** 最新绑定 t（versions effect 的超时/失败文案使用）：effect 依赖刻意不含
+   *  t，避免语言切换触发版本重拉；用 ref 承接保证超时文案按当前语言渲染。 */
+  const tRef = useRef(t)
+  tRef.current = t
 
   useEffect(() => {
     const idle = resetRemoteRuntimeActivityOwners({
@@ -273,10 +286,24 @@ function GatewayRuntimeSection({
   }, [chamberInstanceId])
 
   // Version list: pulled once on entry and re-pulled after a status change
-  // (versionsEpoch bumps on an install/apply→settled transition or after select).
+  // (versionsEpoch bumps on an install/apply→settled transition or after
+  // select/cleanup/apply-now completions) or an explicit「检查更新」
+  // (checkIntent). BACKGROUND pulls stay silent — exactly like the local
+  // branch, where only the user-initiated check owns the
+  //「正在检查更新…」state. A user click stays busy until the list ACTUALLY
+  // settles (even when a background bump superseded the exact request). A
+  // bounded transport timeout (the gateway's own metadata fetch is capped at
+  // 15s server-side; the local equivalent lives in the main process) converts
+  // a wedged hop into an honest error row instead of a stuck busy button.
   useEffect(() => {
     let cancelled = false
+    let timedOut = false
     const controller = new AbortController()
+    versionsController.current = controller
+    const timeout = setTimeout(() => {
+      timedOut = true
+      controller.abort()
+    }, 30_000)
     fetchRemoteRuntimeVersions(chamberInstanceId, { signal: controller.signal })
       .then((versions) => {
         if (!cancelled) {
@@ -285,9 +312,31 @@ function GatewayRuntimeSection({
         }
       })
       .catch((error) => {
-        if (!cancelled && !controller.signal.aborted) setVersionsError(errorMessage(error))
+        if (cancelled) return
+        if (controller.signal.aborted && timedOut) {
+          setVersionsError(tRef.current('dshRuntimeVersionsRefreshTimeout'))
+        } else if (!controller.signal.aborted) {
+          setVersionsError(errorMessage(error))
+        }
       })
-    return () => { cancelled = true; controller.abort() }
+      .finally(() => {
+        // Identity fence: only the CURRENT request settles visible state; a
+        // superseded (aborted) request never clears the successor's.
+        if (versionsController.current === controller && !cancelled) {
+          versionsController.current = null
+          // A user check stays busy until the list actually settles — even
+          // when a background bump superseded this exact request.
+          if (checkIntent.current) {
+            checkIntent.current = false
+            setCheckingVersions(false)
+          }
+        }
+      })
+    return () => {
+      cancelled = true
+      clearTimeout(timeout)
+      controller.abort()
+    }
   }, [chamberInstanceId, versionsEpoch])
 
   // Descending semver order (newest first); entries that do not parse as
@@ -345,7 +394,18 @@ function GatewayRuntimeSection({
   // Pure mirror of the server fences: pending permits only restore-builtin;
   // install/apply/restart-in-flight permit no action. Registry editing is a
   // version mutation; restart stays source-independent (including env).
-  const remoteGates = remoteRuntimeActionGates(remoteStatus, actionBusy || registryBusy || restarting)
+  // checkingVersions freezes the mutation controls during a USER check — the
+  // local branch does the same (its main-process check pushes the checking
+  // phase with an empty action set): both sources disable select/edit/
+  // primary/restart/registry while a check is in flight. Row VISIBILITY is
+  // matched too: the local action set emptying unmounts the cleanup row and
+  // the restore-builtin secondary row, so the gateway hides the same rows
+  // while checkingVersions (see restoreBuiltinVisible / the cleanup row
+  // condition). The check button itself shows the busy copy and is disabled.
+  const remoteGates = remoteRuntimeActionGates(
+    remoteStatus,
+    actionBusy || registryBusy || restarting || checkingVersions,
+  )
   const mutationDisabled = remoteGates.mutationDisabled
   const restoreBuiltinDisabled = remoteGates.restoreBuiltinDisabled
   const retryApplyDisabled = remoteGates.retryApplyDisabled
@@ -354,6 +414,26 @@ function GatewayRuntimeSection({
   // its enablement must come from the dedicated gate (never mutationDisabled,
   // which is true in exactly the states this row exists for; R4 F2).
   const recoverMetadataDisabled = remoteGates.recoverMetadataDisabled
+  // 「检查更新」机器相位可用性 —— 显式镜像 local 分支动作矩阵（renderer
+  // runtimeAllowedActions/BASE_ACTIONS）中含 check 的状态集，不借用
+  // mutationDisabled（env 会误伤：local 的 env 分支保留 check）：
+  //   禁用 = 忙碌相位（installing/applying/重启窗口）、pending、恢复相位
+  //   （snapshot-failed/swap-attempted/restore-blocked）、启动受阻（含
+  //   env-probe-failed 等无相位受阻）、只读平台；
+  //   可用 = idle/applied/失败带操作错误（local failed/error 相位保留 check）。
+  // restart 窗口两侧一致禁用（local 侧把 restarting 计入本地按钮禁用）。
+  // 按钮常驻显示、相位禁用而非隐藏，与 local 分支本次统一后的策略一致。
+  const checkMachineBusy = remoteStatus !== null && (
+    remoteStatus.phase === 'installing'
+    || remoteStatus.phase === 'applying'
+    || remoteStatus.phase === 'pending'
+    || remoteStatus.phase === 'snapshot-failed'
+    || remoteStatus.phase === 'swap-attempted'
+    || remoteStatus.phase === 'restore-blocked'
+    || remoteStatus.restart === 'running'
+    || (remoteStatus.startupBlockedReason !== null && remoteStatus.startupBlockedReason !== '')
+    || remoteStatus.mutationsAllowed === false
+  )
 
   const runRemoteAction = useCallback(async (task: (signal: AbortSignal) => Promise<unknown>): Promise<void> => {
     // React state is not a synchronous mutex: two clicks in the same render
@@ -520,8 +600,22 @@ function GatewayRuntimeSection({
     setRegistryBusy(true)
     setRegistryError(null)
     try {
-      await remoteRuntimeSetRegistry(chamberInstanceId, origin, { signal: controller.signal })
-      if (!controller.signal.aborted && componentActive.current) setRegistryEditing(false)
+      const result = await remoteRuntimeSetRegistry(chamberInstanceId, origin, { signal: controller.signal })
+      if (!controller.signal.aborted && componentActive.current) {
+        setRegistryEditing(false)
+        // The server's own echo (the canonical origin) is authoritative:
+        // reflect it IMMEDIATELY instead of waiting for the next ~3s status
+        // poll tick — same instant feedback the local branch gets from its
+        // optimistic settings overlay. The poll keeps asserting the truth.
+        // Known benign race (accepted): a poll GET that snapshot the OLD
+        // origin before the PUT may land AFTER this echo and revert the row
+        // for at most one poll interval (~3s); the next tick re-asserts the
+        // applied origin. Same self-healing class as the local optimistic
+        // overlay racing a main push.
+        setRemoteStatus((current) => current === null
+          ? current
+          : { ...current, registry: result.origin, registryError: null })
+      }
     } catch (error) {
       if (!controller.signal.aborted && componentActive.current) setRegistryError(errorMessage(error))
     } finally {
@@ -534,8 +628,13 @@ function GatewayRuntimeSection({
   }, [chamberInstanceId])
 
   // 「检查更新」(2026-12 统一)：gateway 侧 = 从 registry 重拉版本列表（与
-  // local 的主进程 registry 检查同观感；服务端无周期出网）。
+  // local 的主进程 registry 检查同观感；服务端无周期出网）。同步 ref 围栏
+  // 防同帧双击（React state 非同步互斥，与 runRemoteAction 同纪律）；忙碌
+  // 态「正在检查更新…」保持到列表真正 settle（见 versions effect）。
   const onRefreshVersions = useCallback((): void => {
+    if (checkIntent.current) return
+    checkIntent.current = true
+    setCheckingVersions(true)
     setVersionsEpoch((epoch) => epoch + 1)
   }, [])
 
@@ -580,6 +679,7 @@ function GatewayRuntimeSection({
     && remoteStatus.hasOverride
     && !remoteRecoveryPhase
     && !remoteStartupBlocked
+    && !checkingVersions
     && (remoteResetEscapeHatch
       || remoteStatus.activeVersion === null
       || remoteStatus.builtinVersion === null
@@ -601,8 +701,17 @@ function GatewayRuntimeSection({
   const view = remoteStatus === null ? null : remoteRuntimeStatusView(remoteStatus)
   // Unified status badge (2026-12): same pill vocabulary as the local branch.
   // The projection suppresses the ok badge for blocked/failed states, so no
-  // extra view-kind guard is needed here.
-  const badge = projectRemoteRuntimeBadge(remoteStatus)
+  // extra view-kind guard is needed here. While a USER check is in flight the
+  // badge shows the checking pill AND the status line is suppressed (see the
+  // render condition below) — exactly the presentation the local branch shows
+  // while its main-process check runs (phase 'checking' → checking badge,
+  // status copy null). Display-only overlay tied to the in-flight pull; the
+  // server-side machine state itself stays idle. It cannot mask blocked/
+  // failed states: the check button is machine-phase disabled there
+  // (checkMachineBusy), so a check cannot start from those states.
+  const badge: RuntimeBadgeView | null = checkingVersions
+    ? { label: 'checking', tone: 'busy' }
+    : projectRemoteRuntimeBadge(remoteStatus)
   const statusText = useMemo(() => {
     if (view === null) return null
     const title = t(view.titleKey, view.params)
@@ -612,8 +721,12 @@ function GatewayRuntimeSection({
   }, [view, t])
   // Idle has no claim line (已是最新/可用 verdicts removed, 2026-12): the
   // healthy state is carried by the badge alone. Pending keeps its detail
-  // line ("将于下次启动切换到 vX") like the local branch.
+  // line ("将于下次启动切换到 vX") like the local branch. While a USER check
+  // is in flight the status line is suppressed together with the checking
+  // badge — mirroring the local branch's checking-phase presentation (its
+  // status copy is null while the main-process check runs).
   const statusTextVisible = view !== null
+    && !checkingVersions
     && (view.kind !== 'idle' || remoteStatus?.phase === 'pending')
 
   const remoteProgress = remoteStatus?.progress ?? null
@@ -866,6 +979,12 @@ function GatewayRuntimeSection({
         <p className={css.generalHint}>{t('dshRuntimeApplyNextLaunchHint')}</p>
       )}
 
+      {/* 登记偏差（审查 F1）：gateway 的「检查更新」是只读拉取，失败不进入
+          机器 error 相位——错误只在此行呈现、徽标仍反映服务端真实状态；而
+          local 的检查是主进程状态机事务，失败会推入 error 相位（红徽标 +
+          状态行 + 版本源错误行，主进程原文）。此为数据路径语义差异：gateway
+          的 /chamber/runtime 无 checking/error 相位机，故意保持机器状态不
+          变（读取失败不改变运行状态），UI 以本行诚实呈现失败。 */}
       {versionsError !== null && (
         <p className={css.generalError} role="alert">
           {t('dshRuntimeRemoteVersionsUnavailable', { error: versionsError })}
@@ -945,8 +1064,10 @@ function GatewayRuntimeSection({
       </div>
 
       {/* 常驻「清理已安装版本」入口（2026-12 统一，与 local 分支同构）：
-          候选 = 服务端 removableVersions；旧服务器不投影该字段 → 行隐藏。 */}
-      {(remoteVersions?.removableVersions ?? []).length > 0 && (
+          候选 = 服务端 removableVersions；旧服务器不投影该字段 → 行隐藏。
+          用户检查期间隐藏（local 分支的该行随动作集清空卸载——两侧同口径，
+          见 remoteGates 注释）。 */}
+      {(remoteVersions?.removableVersions ?? []).length > 0 && !checkingVersions && (
         <div className={css.updateStatusLine}>
           <span className={css.generalHint}>{t('dshRuntimeCleanupCandidatesLabel')}</span>
           {(remoteVersions?.removableVersions ?? []).map((version) => (
@@ -1055,10 +1176,10 @@ function GatewayRuntimeSection({
             <button
               type="button"
               className={css.updateButton}
-              disabled={remoteStatus === null || registryBusy}
+              disabled={registryBusy || checkingVersions || checkMachineBusy}
               onClick={onRefreshVersions}
             >
-              {t('dshRuntimeRegistryCheck')}
+              {checkingVersions ? t('dshRuntimeRegistryChecking') : t('dshRuntimeRegistryCheck')}
             </button>
             <button
               type="button"
@@ -1151,6 +1272,7 @@ export function DshRuntimeSection({
   const [registryError, setRegistryError] = useState<string | null>(null)
   const [originError, setOriginError] = useState<string | null>(null)
   const [testingRegistry, setTestingRegistry] = useState(false)
+  const testInFlight = useRef(false)
   const [applyingRegistry, setApplyingRegistry] = useState(false)
 
   const runtime = currentRuntimeSurface()
@@ -1407,6 +1529,10 @@ export function DshRuntimeSection({
 
   const onTestRegistry = useCallback(async (): Promise<void> => {
     if (runtime === null || !actions.has('check')) return
+    // 同步 ref 围栏防同帧双击（与 gateway 分支 checkIntent 同一纪律；React
+    // state 非同步互斥）。
+    if (testInFlight.current) return
+    testInFlight.current = true
     setTestingRegistry(true)
     setRegistryError(null)
     try {
@@ -1419,6 +1545,7 @@ export function DshRuntimeSection({
     } catch (error) {
       setRegistryError(errorMessage(error))
     } finally {
+      testInFlight.current = false
       setTestingRegistry(false)
     }
   }, [runtime, actions, t])
@@ -1945,16 +2072,18 @@ export function DshRuntimeSection({
             <span className={css.generalHint}>
               {t('dshRuntimeRegistryCurrent', { origin: registryOrigin !== '' ? registryOrigin : '—' })}
             </span>
-            {canCheck && (
-              <button
-                type="button"
-                className={css.updateButton}
-                disabled={testingRegistry || busy}
-                onClick={() => { void onTestRegistry() }}
-              >
-                {testingRegistry ? t('dshRuntimeRegistryChecking') : t('dshRuntimeRegistryCheck')}
-              </button>
-            )}
+            {/* 「检查更新」常驻显示、相位禁用而非隐藏（2026-12 忙碌窗口政策；
+                与 gateway 分支同一可见策略——gateway 以 checkMachineBusy 镜像
+                本处 canCheck 缺失的机器相位；restarting 计入禁用与 gateway
+                重启窗口同口径）。 */}
+            <button
+              type="button"
+              className={css.updateButton}
+              disabled={!canCheck || busy || testingRegistry || restarting}
+              onClick={() => { void onTestRegistry() }}
+            >
+              {testingRegistry ? t('dshRuntimeRegistryChecking') : t('dshRuntimeRegistryCheck')}
+            </button>
             <button
               type="button"
               className={css.updateButton}
