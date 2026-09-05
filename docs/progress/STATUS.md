@@ -15,6 +15,41 @@
 > install-gateway.sh 锚，`bin.js --version` 冒烟 = 0.1.2-rc.1）。a5→rc.1 无任何改动
 > → DOM 锚点审计基线（a4 双 pin，alpha.5 复核）与 wire 契约结论直接继承；回归测试套件见 rc.1 分支提交说明。
 
+**0.2.2 发布前审查跟进项（2026-09-05 三合并 review round；三路 P0/P1 = 0，
+放行 0.2.2。以下 P2/P3 不阻断，排入下一修复 round；design 08 §11.1 的 chip
+契约 stale 已在收口时以注记修正）**：
+- sidebar-folder 面（合并 dca181c）：① 拖拽 after 锚扫描基于 registry 序
+  （SidebarRoot.tsx commitWorkspaceDrag）而非 override 感知的渲染序——仅
+  乐观提交→聚合确认瞬态窗口内可能差一行（存量错位，未扩大）；修向：扫描改
+  在 renderedOrder 上求下一可见 id 或抽共享 helper。② 会话行动作仍 hover-only
+  揭示（sidebar-chamber.module.css `.sessionRow:hover`），键盘/触屏无揭示路径
+  （存量；workspace 头已 pointer-safe）。③ 仓库组折叠 × 会话待办条带
+  （SessionTodoArea 纯投影无 fold 输入）：主行折叠后派生行会话的注意力条目
+  仍钉条带顶部，与 docstring「不声称行指示器未显示的注意力」张力——确认产品
+  意图后过滤或文档化。④ 折叠过滤/拖拽扫描无组件级测试（谓词单测充分）。
+- settings-plugin 面（合并 16f7f27）：① 添加区互斥矩阵单向（PluginDialog
+  安装/导入/搜索只查 installing/folderBusy；ssh undo/seed/apply、gateway
+  restarting/syncing 在跑时仍可并发提交，且 undo/seed 与 apply 不共享主进程
+  单飞 key——plugin-sync.ts 只拦 apply×apply）；主进程 loud 拒绝兜底，无数据
+  损坏路径。② close() 未门控非模态 busy（操作中可关框，结果无处呈现）。
+  ③ chamber 表 en 最坏徽标组合 ≈516px 静态估算超容器临界（CSS minmax 144px
+  版本轨），窄窗可能横向撑破——实机目检后定（版本轨放宽/徽标换行）。
+  ④ P3 族：en n=1 单数文案（locales `There are 1 differences`）、行移除
+  aria-label 覆盖可见文本、行无 <label>、ssh done 态 stale 行按钮可用、无
+  PluginDialog DOM 测试、对账空态双提示。
+- settings-dshruntime 面（合并 acc8ece）：① gateway 同帧冻结洞——点击
+  「检查更新」后同一帧内变更/重启仍可放行（checkIntent 只围栏检查自身，
+  runRemoteAction 等在重渲染前不 consult）；修向：mutation 入口统一查
+  checkIntent.current。② gateway 重启窗口检查按钮禁用依赖服务端轮询而非
+  restarting prop（点击 POST /restart 202 后 ≤~3s 窗口 + pollGatewayReady
+  等待期检查可用）；修向：disabled 谓词并入 restarting。③ 新检查不清旧
+  versionsError（超时行与新检查并存）；④ PUT registry 成功不 bump
+  versionsEpoch（旧源数据直到下次自然刷新）；⑤ 30s 超时文案对后台拉取也
+  生效且与「不可用」外层文案双重措辞；⑥ swap-attempted 相位检查可用性与
+  desktop runtimeBlocked 投影对照复核（注释自述逐相位镜像的准确性）；
+  ⑦ 围栏/超时逻辑内联组件 effect，未入 node-harness 可测纯层（可测性债务）。
+  窗口级残余均服务端读侧无害、≤3s 自愈。
+
 **探针与随会话数据量增长的响应体彻底解耦（2026-12 定稿并实施；方案见
 design 18 §3.4 探针集、design 02 §3.2/§3.5 就绪/健康探测）**：chamber 身份/健康
 探针统一到固定小体积契约（激活探针集与会话数据解耦；settings/describe 与
