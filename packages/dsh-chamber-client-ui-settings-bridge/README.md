@@ -33,9 +33,12 @@ the ledger and its `settings.*` children declarations remain valid.
   classification, restart-readiness poll) moved OUT of this package into the
   sidebar shared face (`@dsh-chamber/dsh-client-ui-sidebar/shared`, exported from
   `src/shared/gateway-runtime*.ts`); this package imports it back for its
-  gateway dsh-runtime section and typechecks it against its own handwritten
-  ambient mirror (`src/ambient/chamber-bridge.d.ts`, MIRROR WARNING header —
-  locked to the real modules by the sidebar `gateway-runtime-mirror.test.ts`).
+  gateway dsh-runtime section and typechecks it against the REAL sidebar shared
+  source (P4-4: the handwritten ambient mirror
+  `src/ambient/chamber-bridge.d.ts` was deleted — this package keeps its own
+  tsconfig `paths` for the connections-section mapping, so its sidebar/shared
+  specifier resolves via the node_modules workspace link + the sidebar
+  package exports to the REAL `src/shared/index.ts`).
 - Only the settings-bridge-local view mapping stays here:
   `remoteRuntimeStatusView` / `RemoteRuntimeStatusView` (SettingsBridgeKey
   coupling) in `src/client/gateway-runtime-api.ts`.

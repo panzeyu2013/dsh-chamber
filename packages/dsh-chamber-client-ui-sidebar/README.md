@@ -162,11 +162,14 @@ place of the official ui-sidebar (which stays untouched in
   120 s cap, abort-aware), exported through `@dsh-chamber/dsh-client-ui-sidebar/shared`
   (`./shared` → `./src/shared/index.ts`, no build step; vite consumers bundle the
   real source).
-- Consumer packages (settings-bridge, connections, …) typecheck against their
-  OWN handwritten ambient mirrors (`src/ambient/*.d.ts`, MIRROR WARNING headers)
-  — never against this package's sources; `test/gateway-runtime-mirror.test.ts`
-  keeps the mirrors' export sets locked to the real modules (runtime + type-only
-  names; shape drift stays a manual-compare discipline, see the test header).
+- Consumer packages (settings-bridge, connections, git, layout, renderer)
+  typecheck the REAL shared sources: P4-4 (2026-09) deleted the handwritten
+  ambient mirrors (`src/ambient/*.d.ts`) and their tsconfigs now resolve the
+  specifier to this package's source (root tsconfig paths, or the node_modules
+  workspace link + package exports where a package keeps its own `paths`). The
+  former mirror-lockstep test (`test/gateway-runtime-mirror.test.ts`) was
+  removed with the mirrors — drift is impossible by construction now that the
+  consumers compile this source directly.
 - The settings-bridge `remoteRuntimeStatusView` view mapping and its
   SettingsBridgeKey coupling stay in settings-bridge; nothing in this face
   imports settings-bridge.

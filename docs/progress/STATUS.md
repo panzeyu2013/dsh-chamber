@@ -925,6 +925,68 @@ P5 防漂移锁步与升级纪律（E-10/N9/N10 落地）→ P6 架构裁定（E
     与 2a 行为清单"读侧 nlink≠1 拒绝"同族。
   - 门禁:desktop 全套 852/852 + root typecheck 0 error 全绿。
 
+**P4 执行状态（2026-09,进行中;N6 客户端插件 wire 收敛）**
+- P4-1 ✅:sidebar shared 新增 wire-common.ts(isRecord/mintRpcId 单源,零依赖
+  浏览器可达),instance-api/plugin-graph-recheck 内部改引;逐字节核实结论:
+  envelope 解析各端不同体不收;503/文案仅 C≡D 逐字(锚点留 P4-2);E git 版
+  rpcId 前缀不同不收;审计计数纠偏(sleep×4 与现状不符,实际仅 F 有一处)。
+  typecheck:sidebar + test:sidebar 绿。注意:跨包引 wire-common 需同步
+  settings-bridge/connections/renderer 的 ambient mirror 声明(P4-2 义务)。
+- P4-2 ✅:wire-common.ts 内核扩为 postUnary(basePath,method,args,{rpcId?,
+  fetchImpl?,origin?})→{status,ok,body,jsonError}(零分类;URL/信封/30s/503
+  与 2xx 收集语义=四载体共有字节)+ classifyGraphChannelFailure(B≡F 分类正则
+  单源);C bridge-api/D plugin-inventory-api/B plugin-graph-recheck/F
+  host-graph 四载体只换 fetch 头+envelope 行,503 分支/错误折行/信封解析/
+  缓存/重试/diagnostic 回调全留本地;A 未动(留 P4-3),E 禁改未动;ambient
+  声明同步(chamber-bridge.d.ts/sidebar-shared.d.ts 各 +44 行 mirror),F 经
+  相对真实源导入 renderer wire-common(论证已入注释);typecheck×3+root、
+  test:sidebar/settings-bridge/connections、test:renderer-shell 全绿。
+  build:renderer 原被环境阻塞(工具链 node 无法 dlopen rollup 原生插件;
+  vendor ui-conversation 的 lexical 依赖因早期 vendor 空树 install 未链接),
+  补 frozen install 链接 vendor 成员依赖(@lexical/* 入 .pnpm)后
+  build:renderer 绿(exit 0,含 boot-manifest 生成)——基线问题,非 diff。
+- P4-3 ✅(2026-09,裁定不合并):C bridge-api 传输层落回 A instance-api 的
+  等价性分析——wire 请求/响应信封同形、真机宿主恒回声,但 7 维可观测差异
+  (回声容忍:A 相等校验 vs C 仅 string;503:A 私有类 InstanceUnavailableError
+  +包装层折行默认 'the instance is not ready' vs C plain Error client 内折行
+  默认 '实例尚未就绪';非 2xx 文案嵌端点名与否;2xx 解析失败 C 原样 rethrow
+  vs A 折 '实例不可达：';信封严格度 C TypeError 'bridge: invalid…' vs A
+  'internal/实例返回未知错误' 兜底链+details C 丢 A 透传;超时 C 无外部
+  signal 且折行 vs A AbortSignal.any+TimeoutError 直通;rpcId 表达式 C 裸
+  crypto.randomUUID(自身 try 内)vs A mintRpcId 回退;origin 回退 dsh.internal
+  vs 相对 URL)。按 N6 纪律不合并,C 独立 client+Map/503/折行维持(传输字节已
+  同源 postUnary);合并前置清单 7 项登记于 wire-common.ts P4-3 段;门禁
+  typecheck:sidebar/settings-bridge + test:sidebar/settings-bridge 全绿,
+  零语义改动(wire-common.ts 注释登记 +64 行;renderer shell.ts 注释修正引用
+  共享 30s 预算)。
+- P4-4 ✅(ambient 镜像改指真实源,2026-09):
+  - renderer 轨:root tsconfig paths '@dsh-chamber/dsh-client-ui-sidebar/shared'
+    → 真实 src/shared/index.ts;vendor-modules.d.ts 的 shared overlay 删除
+    (~11.1KB/约 300 行);唯一严格化修正 App.tsx(deriveServerWorkspaces
+    ungroupedTitle 补 ?? '';derive.ts 签名维持 string);root typecheck +
+    build:renderer + test:renderer-shell 全绿。
+  - 插件包轨:layout/git/connections/settings-bridge 删本地 paths 条目(回落
+    root paths 真实源)+ 各 tsconfig 补 rootDir '../..'(TS6059);整文件删除
+    chamber-view-prefs.d.ts/sidebar-shared.d.ts×2/chamber-bridge.d.ts 共
+    -715 行;settings-bridge 保留 connections-section 映射;包内源码调用点
+    零修正(mirror 系受锁步的同步面,与真实面完全对齐;RemoteRuntime*/
+    GatewayPollDeps 等核查全部为真实 shared 导出);8 门
+    (typecheck+test×4)全绿。
+  - 锁步测试消亡:sidebar test/gateway-runtime-mirror.test.ts(锁步对象=已删
+    ambient)删除并同步 package.json 显式测试清单;test:sidebar +
+    typecheck:sidebar 全绿。
+  - 文档跟进(登记):docs/design/21 与 21-gateway-plugin-parity-plan 中
+    "ambient 镜像"机制描述已被本步取代,文档更新列入 P4-5 后续。
+- P4-5 ✅(收尾):shared-face 镜像面清零核实(其余 window.dshChamber/官方
+  vendor/@dsh-chamber/*/client 松散声明与 N6 无关,保留;README/tsconfig 对
+  已删镜像的引用均为说明性注释);N6 指标收口——P4 合计:终态净 -740 行(含 wire-common +286)/累计删除 1271 行,其中
+  镜像删除 715(含 P4-2 期间 +88 临时增补,终态 627);B/C/D/F 四载体传输字节同源 postUnary(A 未动、E 禁改),shared-face
+  镜像漂移面归零;docs/design/21 与 todo 计划中 ambient 机制描述更新列为
+  follow-up(登记);门禁:root typecheck + build:renderer +
+  test:renderer-shell + 四插件包 typecheck×4/test×4 + test:sidebar/
+  typecheck:sidebar 全绿。
+- P1-R1 打包冒烟:暂时跳过(用户决定),与 P5-6 归口。
+
 **P3 执行状态（2026-09）**
 - N1 ✅（gateway 包内 HTTP 脚手架单源化）:新增 gateway/src/http-utils.ts
   （jsonResponse×3 合一;readBoundedBody 内核 + dispatch 16KiB/runtime-routes
@@ -956,5 +1018,5 @@ P5 防漂移锁步与升级纪律（E-10/N9/N10 落地）→ P6 架构裁定（E
   gateway /restart)语义已由 R7/2026-12 对齐(env/platform 均不拒),输入形态
   不同,仅登记等价不合并。此结论与 N1-4/N2"保留有意差异"先例一致。
 
-- P1-R1（打包冒烟）仍未做（需打包环境）;2 项 runtime 弱写清单外内容
+- P1-R1（打包冒烟）**暂时跳过**（用户决定 2026-09;待具备打包环境/升级窗口时执行,与 P5-6 归口）（需打包环境）;2 项 runtime 弱写清单外内容
   （transport-manager ssh-instances.json 写等）不在 2a 范围,维持原状。

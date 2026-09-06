@@ -24,9 +24,11 @@ chamber 自研**设置壳**插件（2026-08 设计讨论）：以低于官方 Se
 
 - gateway dsh-runtime 纯核心（status parse/fetch、动作门、错误分类、重启就绪轮询）
   已迁出本包进入 sidebar 共享面（`@dsh-chamber/dsh-client-ui-sidebar/shared`）；
-  本包在其 gateway dsh-runtime 段回引该共享面，并对其手写 ambient 镜像
-  （`src/ambient/chamber-bridge.d.ts`，MIRROR WARNING 头——sidebar
-  `gateway-runtime-mirror.test.ts` 锁步到真实模块）做 typecheck。
+  本包在其 gateway dsh-runtime 段回引该共享面，并对真实 sidebar shared 源做
+  typecheck（P4-4：手写 ambient 镜像 `src/ambient/chamber-bridge.d.ts` 已删除——
+  本包保留自身 tsconfig `paths`（connections-section 映射），故其
+  sidebar/shared specifier 经 node_modules workspace 链接 + sidebar 包
+  exports 解析到真实 `src/shared/index.ts`）。
 - 本包只保留本地视图映射：`remoteRuntimeStatusView` /
   `RemoteRuntimeStatusView`（SettingsBridgeKey 耦合）驻
   `src/client/gateway-runtime-api.ts`。
