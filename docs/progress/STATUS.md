@@ -1,1342 +1,233 @@
 # 模块完成状态总览（STATUS）
 
-> 本文档只追踪**未完成 / 部分完成**项与范围契约。已实现基线以 git 历史、
-> `CHANGELOG.md` 与 `docs/design/`（设计契约与样式定稿）为权威，不在此复述
-> 实现过程、历史用例数或每日验证日志。本文档是 dsh-chamber 进度追踪的唯一记录。
+> 本文档只追踪**未完成 / 部分完成**项（含剩余实机门禁）、**设计未决**与**必要取舍**
+> （范围决策 / 已知偏差 / 已知降级）。已实现基线以 git 历史、`CHANGELOG.md` 与
+> `docs/design/`（设计契约与样式定稿）为权威，不在此复述实现过程、历史轮次、验证
+> 计数或执行台账（历次轮次记录已随收口从工作文档移除，留存 git 历史）。本文档是
+> dsh-chamber 进度追踪的唯一记录。
 
-## 未完成 / 待执行
+## 未完成 / 部分完成（剩余验收）
 
-> **2026-09 修复轮（v0.2.2 之后三合并 review 遗留全量闭合，临时驻留；发布
-> 收口时并入 CHANGELOG 后移除）**：design 24 / design 08 §11.8 / design 11
-> 三路评审遗留的代码与文档修复已全部落地（未提交态，随修复轮 commit 合入；
-> 处置登记见 design 24 §16、design 11 §9「2026-09 修复轮第二波」、design 08
-> §11.8 配套注）：
-> - **archive-cleanup（design 24）**：purge 树中成员失败中止语义——首例树内
->   失败（删除瞬间 running/storage/事件发射）即中止本树剩余删除，根与祖先
->   保持 archived 供重跑收敛（原先继续删祖先会把根当孤儿清出、幸存成员永久
->   泄漏）；死代码 per-member 预检移除；binding header 字段级 loud 校验
->   （防 vendor 字段漂移静默清空级联）；archive-set/容量/预览计数注释对齐；
->   >1000 错误截断测试。验证：core 17→20、binding 10→15、typecheck 绿、
->   提交态 dist 已重建。
-> - **git-worktree（design 08 §11.8）**：「缺失行不得被文件系统探针触碰」
->   强制化——未注册删除在锁内按 missing 行即时降级残留记录清理（原为下次
->   重试才收敛）；注册重放/提交前复查对 missing 行免 dirty/submodule 探针
->   （fake 现建模真实 spawn-ENOENT，新增 3 例且修复前必红）。验证：
->   test:host-git 95→98。
-> - **desktop updater（design 11 2026-12）**：「重启并安装」失败显式化——
->   真实 electron-updater 6.8.9 同步失败形态（dispatchError+return false，
->   非 throw）建模；arm 后异步失败/无事件 stall 看门狗（60s 可注入）均保持
->   phase downloaded 并经一次性 `restartFailureText` 携带，UI 复位 busy、
->   原位重试、不再误标「下载失败」；busy 在途行与失败行 zh/en 文案；缓存
->   清理文档化整目录删除安全性（feed 永不发布 blockmap → update.zip 无差分
->   基准作用，含潜在耦合注记）；resolve 结果非绝对路径拒绝、命名契约注记。
->   验证：updater.test 55→61、ipc-surface-mirror 23、desktop/settings-bridge
->   全绿（红绿互锁证明 restartFailureText 形状镜像完整）。
-> - **接线/客户端（design 24）**：客户端畸形嵌套域载体 fail-loud（不再静默
->   折 0/空结果，与宿主探针/git 客户端一致）；404 判别体有界读取（4 KiB）；
->   SidebarRoot 卸载守卫 + 断连双确认窗口注记（design 24 §8 已补接受句）；
->   gateway `syncedHostDomainProbeNames` 未知包 fail-loud + 4 直测（空/1-of-3/
->   2-of-3/全量/幽灵缓存）；死代码 `hasSyncedHostSeed` 删除；host-graph-seed/
->   activation-gate 注释与 JSDoc 对齐（unknown throw 语义、探针枚举）；
->   plugin-inventory-text 第三包归类断言；desktop 三包 seed/sync 夹具与打包
->   行集测试（plugin-sync 97、gateway-provider 66、build-host-graph-package
->   1/1 新脚本）。验证：gateway 全套 ×2、control-plane、desktop、sidebar
->   （instance-api 9→11）、connections、runtime 全绿；根 typecheck、
->   typecheck:sidebar/runtime/host-archive-cleanup、verify:i18n、
->   build:preload、build:renderer 全绿。
-> - **台账/文档收口**：todo README 行 5、24 号执行台账前文（M0–M3 已完成
->   并合入、M4 待验；§0/§2/§3–§5/§8 状态单元格与核对表按执行态收口）、
->   激活探针旧名 `archiveCleanup/preview` 勘误为 `probe`、design 05 §6 标题
->   宿主包 2→3、design 24 §7 A/§12/§6 step-4/§3 注记勘误、§16 处置登记。
-> - **M4 实机 E2E：本地形态已实跑（2026-09 修订轮，见下条）；gateway/远程
->   形态、打包态 quitAndInstall 端到端与打包态缓存清理仍待验**（需打包版/
->   真机，见 design 24 §17/§16 与 design 11 §9 剩余验证项）。
-> - **M4 本地形态实跑 + 归档管理器 revision（2026-09 修订轮，临时驻留）**：
->   真实 dsh 实例全链验证产出两项处置（详见 design 24 §17）——① **删除失效
->   根因修复**：binding 对官方 `sessionPersistence.locate` 的**脱绑调用**
->   （解构方法后裸调）使官方 jsonl locate 丢失 `this`，每次删除均以
->   `Cannot read properties of undefined (reading 'root')` 失败（18/18 项
->   storage 错；实机 + 隔离复刻实例复现；改为保持方法接收者调用 + this 敏感
->   fake 回归单测）；② **wire 修订 + 归档管理器 UI**：purge 新增可选
->   `sessionIds` 子集过滤（与权威 archived 集合取交集，越界删除结构性不可
->   能），server 行行动作打开归档管理器对话框（列出已归档会话标题/目录：
->   逐条删除 + 多选删除 + 删除全部，替代 v1 preview→confirm 单按钮流）；
->   归档列表数据 = bridge 新投影字段 `archivedSessions`（快照既有归档行元
->   数据，零新读取面）。验证：host core/binding 51、sidebar 全套 284、
->   根 typecheck + typecheck:sidebar/host-archive-cleanup、verify:i18n 全绿；
->   提交态 host dist 已重建；复刻实例 E2E（全量 purge、子集 purge、陈旧 id
->   幂等跳过）通过。**评审修复轮（4 个只读 subagent 分面评审，处置登记
->   design 24 §17.6）**：归档集权威三态 `archiveSetKnown`（unary 兜底不再
->   误报「无已归档」且保留删除全部）、core 过滤校验先于读取 + 空选集短路 +
->   clearIds 去重、旧宿主子集请求实证为 gateway 严格拒绝（绝无静默全量
->   删除）并映射 zh 重启提示、UI 关闭策略统一 + 焦点圈闭/还原 + 拉取错误
->   呈现、死代码/注释清理、签名参与等回归测试补强。剩余：gateway/远程 dsh
->   形态实机、打包版 UI 目检。
-> **2026-09 修复轮第二波（回扫评审闭合，临时驻留；发布收口时并入
-> CHANGELOG 后移除）**：三路只读回扫（desktop updater 复原性 / 宿主包 /
-> wiring-文档一致性）+ 修复，零新 Blocker/Major；处置登记见 design 11 §9
-> 「2026-09 修复轮第二波」与 design 24 §16 补记：
-> - **updater（design 11）**：迟到 'error' 事件（flight 已释放后——mac 原生
->   staging error 永久重发、或 watchdog 已触发后）在 phase downloaded 一律
->   走 restart 失败通道（不再把 phase 打回 error 误标「下载失败」、不抹掉
->   失败文本）；win32 watchdog stall 后拒绝进程内重试（真实 6.8.9
->   BaseUpdater latch 在无 dispatch 下返回 false——旧 arming proof 会把
->   latch 拒绝误读为 armed 且二次重试会重复拉起 NSIS 安装器），改以诚实
->   提示请用户退出应用完成安装；`probeMacSignature` 测试 seam（打包 darwin
->   路径首次可测）；UpdateSection busy 动作判别（busyKind，下载 busy 帧不再
->   误显「正在重启并安装」）；ipc-surface-mirror 签名守卫锁可选标记
->   （23→24）；update-store 恢复规则直测 +4（此前零测试）。验证：
->   updater.test 61→66、settings-bridge 12 文件全绿、desktop 全套绿、根
->   typecheck 绿。
-> - **注释/文案勘误（回扫 R3 A1–A7 等）**：gateway index.ts/plugins.ts
->   头注「两包 + hostDomains 二元」→ 三包 + 按域派生；host-graph-seed
->   probeDomains 注记修正（域值位于两处 seed 注册调用点，非 INSERT 常量）；
->   打包行 label 注记（非 loader insert id）；design 21 §2.3/§2.4 三包勘误
->   + §2.4 悬空 `hasSyncedHostSeed` 机制句改写；design 24 §7 C M2 已落地
->   标记；design 08 §11.8 修复轮配套注（缺失行探针门 + git 2.50 基线）；
->   修复轮日期标签统一 2026-09；git-worktree 两处 reclassify 锁竞态注释；
->   archive-cleanup emit 契约注（实现必须包 ArchiveCleanupError + 双重呈现
->   语义）；ui-git missing 行确认文案补「目录已恢复 → 普通删除」分支（zh/en）。
-> - **验证（2026-09 回扫后实跑）**：desktop/settings-bridge/sidebar/
->   connections/gateway/control-plane/runtime/host-git（98）/archive-cleanup
->   （core 20 + binding 15）/git 客户端全绿；根 typecheck、verify:i18n、
->   build:preload、build:renderer 全绿；host 包 dist 注释级改动重建零 diff。
-> - **M4 实机 E2E**：本地形态已由 2026-09 修订轮实跑（见上）；gateway/远程
->   形态与打包版/真机项仍待验。
+- **dsh 运行时版本管理（design 18 §3.6/§9，M5–M7 已落地）**：剩余——macOS 打包态
+  `.app` 内共享 dsh-runtime/内嵌 pnpm/koffi 与完整激活-故障回退-恢复链的实机；Linux
+  server 同款端到端；Gateway 重启窗口的前端重连与 connections 的 SSH
+  `restart_service` systemd IPC 端到端；`restartLocal()` 在真实 1s SIGTERM→SIGKILL
+  grace 与健康计时器交错的覆盖；settings-bridge 的 gateway React 组件级交互仍以纯
+  函数/API 客户端测试代证；ZFS 下全新 pnpm store 克隆偶发 `ERR_PNPM_EAGAIN`
+  （失败投影诚实可重试，系统化并发缓解未排期）。
+- **apply-now 立即应用（design 18 addendum §9.2 实机门禁）**：macOS 打包态 `.app`
+  运行中全链；Linux server gateway 生产 TLS 下 POST apply-now → 202 → 停机窗口轮询
+  → 探针 → 故障注入回退；`restartLocal()` 真实 grace × 健康计时器交错；Gateway
+  restart 窗口前端重连；Windows 只读投影。
+- **桌面端更新（design 11 §9）**：用真实 Apple 凭据跑通一次发布 CI（Developer ID
+  签名/公证/stapling/Gatekeeper）+ 双平台检查清单（确认前不下载、下载后退出安装、
+  mac quitAndInstall 原生 quit 语义断言）+ 打包态 quitAndInstall 端到端与缓存清理
+  （Linux AppImage 更新端到端另见 design 22 清单）。正式 macOS 发布缺凭据会在 Release
+  mutation 前阻断；仅 `dry_run` 允许 ad-hoc mac 构建。
+- **认证服务端 Gateway（design 17）**：剩余发布前实机门禁——生产 TLS 反代
+  Host/Origin/XFF/Secure-cookie 与 SPKI pin 正/负例、真实 dsh `/api/remote.mux`
+  断线恢复；打包 Desktop 三种代表形态（HTTPS+凭据 / HTTP+凭据 / 显式可信网络
+  `--no-auth`）重启后 safeStorage/密码重登与凭据变更撤销 live stream；`/chamber/runtime`
+  在生产 TLS 下全链；Linux system/user service 安装升级与回退；`--bind 0.0.0.0`/
+  隧道/tailscale 全链负例。凭据管理剩余：desktop settings-bridge 便捷重置（推迟项）
+  + 真实 TLS 下改密/轮换/停机态 CLI 恢复。
+- **S0/S2 http 直连链路（design 17 §10.5）**：S0 HTML 注入与 S2 非 loopback TCP
+  keepalive + staleness 自愈已实现；**S2-c（放宽 dsh mux 心跳，可选增强）未实现**
+  ——可行性已确认（cordis.patch.yml 机制可 id-targeted override），需先扩展 gateway
+  patch 写入器，单列。剩余验收：打包态实机（浏览器直连 gateway 的 Models/插件设置
+  可写；杀托管 dsh/断网后 sidebar 60–120s 自动恢复；升级 dsh 版本复验钩子存在性）。
+- **设计 21 网关插件能力对齐（已实现；含 .tgz 本地导入 archive-pick 与 executor
+  pnpm-store 修正，台账见 design 21 §10 ⑧⑨）**：剩余——§9 实机 E2E 矩阵（真实
+  gateway×desktop 双通道手动/脚本化门禁、registry 实装传递依赖与 lifecycle scripts、
+  故障注入、journal 中断对账；发布前执行）；UI 余留照实：who/when 归因 tooltip 未
+  渲染、gateway 拒绝码→本地化文案映射未做（409 逐字英文）、pollGatewayReady 英文
+  错误串未本地化；archive-pick 的 file+folder 双模式对话框为 **macOS-v1**（非 macOS
+  保持文件夹对话框，随 design 22/23）。
+- **归档清理与归档管理器（design 24，已实现；本地形态已实跑）**：剩余——实机
+  **gateway/远程 dsh 形态**与打包版 UI 目检（本地形态已跑通：删除失效根因修复 +
+  `purge(sessionIds?)` 可选子集过滤 + 归档管理器对话框）；事件发射为文档化 no-op
+  直至上游 wire，域随上游 `sessions.delete` wire 落地后退休。可选增强（未排期）：
+  PluginDialog 三态行、rowError 本地化、已归档浏览区（todo 12 A）。
+- **移动端 Web 访问面（design 17 §18）**：P1/P1.5/适配轮已实现。剩余——实机门禁
+  （§18.6：真机触控目标比例/抽屉开合/键盘遮挡/安全区/汉堡不重叠/crumbs 换行/
+  Session 日志图标化/iOS 单击切换/设置手机档走查/刘海横屏/深层谱系高度等）；DOM
+  锚点审计剩余（details 打标缺口修复的**接线仅实机可验**、`[class$=_…]` 后缀命名
+  契约测试固定、composer 锚点 fixture 化、Android 键盘盲区真机门禁）；P2（PWA 安装
+  + SW 壳离线，per-instance scope，尊重官方「不完整离线」立场）；P3（公网认证流转
+  正式化 + Web Push；先行形态 = 内网/可信网络 `--no-auth`/tailscale）。
+- **Windows 首版（design 23）**：代码项（M0 CI 腿、M1 生命周期、M2a env 门控后台
+  能力、M3/M4 代码解锁）已就绪，POSIX 单测绿。剩余全为**外部门禁**：真实 Windows
+  runner 首跑绿（含 submodule 物化 + junction 建链）、M0.5 上游 dsh win32/NSIS
+  protocols/Defender/原生依赖实证、M2a 事务矩阵与 **M2b UI 翻转（纪律：能力先于
+  开关）**、M3/M4 实机矩阵（清单见 `docs/progress/todo/windows-v1.md`，已剪为剩余
+  项台账）。
+- **Linux 桌面（design 22，已落地 + 无头验证绿）**：剩余实机门禁（真实桌面矩阵
+  GNOME X11+Wayland/KDE 抽验，清单见 design 22 §8）：XDG 自启、深链冷/热启动与
+  CHROME_DESKTOP/xdg-mime 路由、AppImage 升级后重注册、托盘/通知点击、safeStorage
+  keyring、SSH 密码全链、运行时打包态全链、自动更新端到端、AppImage 沙箱与 Wayland
+  焦点、before-quit 确认框无头挂住行为；release.yml dry_run 全链（需 GitHub 可达）；
+  deb/arm64 后续。已知未动项（design 22 §5/§8 登记）：裸 CLI 默认 stateDir 与
+  control-plane standalone 同目录的运维提示、XDG_DATA_HOME 偏移 pnpm home 边角、
+  dsh-runtime private-fs 严格目录 fsync（审计结论，未并入容错）等。
+- **桌面通知 / 未读徽标（design 19）**：通知剩余 macOS 权限/拒绝行为、点击打开、
+  关窗/托盘/后台三形态与打包态实机；徽标剩余 macOS Dock 打包态三态（武装/解除/退役
+  + 重载与退出清零）实机；Linux 仅 Unity launcher 家族可见（文档化平台限制）；Windows
+  任务栏 overlay v1 门控未接线（design 23 实机矩阵排期）。
+- **会话待办区（design 06 §8，已实现）**：剩余实机门禁——通用页开关即时生效、
+  同源/跨来源/未常驻跳转与权威移除、折叠来源中目标、断连→重连重现、rail 不渲染、
+  「还有 N 项」展开/收起与自动收起、展开内滚动（8 行上限）、拖拽尾随点击不误开、
+  同会话内联重命名不打断、打包态。
+- **VS Code 深链 + open-in（designs 16/20；窗口策略已核查修复）**：剩余 macOS 实机
+  验收——深链冷/热启动、打包态、托盘/退出在途、N-ctx、VS Code 缺失、`sshPort != 22`、
+  Finder 下拉在 vendor 会话头部的定位/层叠、远程来源仅 VS Code（新窗口/复用两态在
+  打包态真机确认）。
+- **Git Worktree 插件（design 08）**：剩余真实远程 Linux + Git 仓库端到端（首次
+  ready-time seed 后重启生效、并发 session 删除竞态、Git LFS/filter 与恢复边界）。
+- **远程实例插件管理（design 13）**：本地 `dsh plugin`/`pnpm pack` 依赖
+  `resolvePnpmBinDir` 对 PATH/nvm/volta/homebrew 的 best-effort 探测——需打包态实机。
+- **会话创建/fork 侧边栏收敛延迟修复**：剩余本地 + 远程 SSH 实例实机验收（行出现
+  延迟、状态图标延迟、位置跳动）。
+- **chamber shell 内官方 bundle 的实例相对绝对路径（已知缺陷，2026-08 缓办决策）**：
+  官方 bundle 若绕过 patched carrier 以实例 origin 相对路径直请求会打到控制面自身；
+  已知实例 `dsh-session-log-export`（「导出会话日志」在 chamber 视图不可用）。用户
+  决策：不逐个临时 fork，待出现第二个同类特性时一次性建立 patched-copy 基础设施。
+- **发布/CI 基础设施**：test job 抽 reusable workflow 供 release.yml 复用（长期目标，
+  现靠策略测试与人工同步，有漂移风险）；vendor submodule 剩余验收（Windows runner
+  物化 + junction 建链、CI 真跑、release.yml 改动后 workflow_dispatch dry_run）；
+  Gateway npm 分发未决策（现仅 GitHub Release `.tgz` 分发）；打包闭包自检（CI 增加
+  「主进程传递模块闭包 vs build.files 清单」机械检查，长期建议）。
+- **性能遗留真实机清单**：宽侧栏冷 settle CLS、版本事务主进程阻塞采样、H3 真机懒
+  加载验证——步骤见 `docs/progress/performance-baseline.md` §7（需打包版或带会话 dev
+  实例）。
+- **SSH 密码一键免密引导与系统钥匙串（05 §8）**：未实现（现行为 endpoint-bound 0600
+  明文镜像，见取舍）。
+- **模型额外参数 + 默认推理等级（design 07）**：wire 白名单无泛化透传、host 组合不
+  可注入、`agent-default-model` 未对客户端暴露——待上游解锁；`agent-default-model`
+  回显已解锁、实现另行排期。
 
-> **2026-09 dsh 基线对齐记录（0.1.2-rc.1，临时驻留；发布收口时并入 CHANGELOG 后移除）**：
-> 源码线 pin → dsh-v0.1.2-rc.1（a66e4702，`update-vendor.mjs` 原子升级，tag 与远程一致；
-> 锁文件重生成后 frozen 稳定、零 diff——本轮上游相对 alpha.5 **零代码改动**：全仓 252 个
-> package.json 仅版本行 bump（alpha.5 → rc.1，diff 复核），客户端/wire/存储/DOM 面无任何增量）。
-> fork 副本（connection/web/api-gateway）零源码重放（rc.1 与 a5 同码），版本标记
-> 同步 rc.1；运行时线常量同代（bundle 锁文件 / bundle-dsh 兜底 / release.yml env /
-> install-gateway.sh 锚，`bin.js --version` 冒烟 = 0.1.2-rc.1）。a5→rc.1 无任何改动
-> → DOM 锚点审计基线（a4 双 pin，alpha.5 复核）与 wire 契约结论直接继承；回归测试套件见 rc.1 分支提交说明。
+## 一致性债务与开放登记（低–中，未排期；均指回代码面注释/design 登记）
 
-> **2026-09-06 Git 缺失目录残留记录修复（临时驻留；发布收口时并入 CHANGELOG
-> 后移除）**：设计 08 §11.8——外部删除 worktree 目录（未 `git worktree remove`）
-> 留下的 admin 记录曾使该仓库全部 mutation 确定性 `path-unavailable`（topology
-> 对缺失行硬 realpath），且 missing 未注册行无应用内出口（只提示终端 prune）。
-> 修复：topology 宽容缺失行（保留 RAW 路径 + `missing` 标记）；未注册删除对
-> `path-unavailable` 降级为残留记录清理（注册 workspace 反查仓库 → 锁内复验
-> 身份/locked/main/ghost → 普通 `git worktree remove`，实测 git 2.50 对缺失目录
-> exit 0 仅清记录）；UI 对 missing 未注册行启用清理删除（adopt 仍禁用，注册侧
-> 已消失流程不变）。其它 mutation 立即恢复，无新 recovery 死锁类别；被外部
-> 删除的 rollback 目标同样收敛清记录。验证：test:host-git 88→95、test:git 58、
-> 双 typecheck、build:host-git + build:renderer 全绿。
+- 私有文件纪律三实现（cp `private-file.ts` 抛错式 vs dsh-runtime `private-fs.ts` kind
+  结果式，同名异签）——统一需依赖方向裁定（design 18 §9.1）。
+- wire 载体 A/E wholesale 合并（P4-3 前置清单 7 项，见 `wire-common.ts` 注）。
+- 有界输出族/状态字面量族跨侧统一与锁步排期（E-8 值表、E-12..E-16 状态字面量、
+  N9 preload↔renderer 镜像机器测试、N10 升级 rebase runbook）。
+- sanitize 语义矩阵（core/desktop/gateway/installer 四成员）与 win-probes↔
+  windows-process 孪生：互注无机械锁步。
+- dashboard（gateway 浏览器运维页）仍为独立第三份运行时 UI，不共享 sidebar 的
+  parse/poll 核心（D-2，共享核心迁移列后续）。
+- C-F7 undo 语义不对称：ssh「撤销=恢复」vs gateway v1 undoForLatest（仅最新 ok
+  install→remove）；服务端 preImage 备份无运行时恢复消费方（design 21 §6.8 r2–r4 二期）。
+- C-F8 `GET /chamber/plugins/installed` 裸读未入写栅栏（撕裂读仅 loud 500）。
+- C-F12 desktop 本地 plugin add 子进程 env 未 scrub（gateway executor 与共享 runtime
+  installer 已白名单化）。
+- C-F13 readManifest 三后端无共享联合（design 21 §3「单一定义」措辞未兑现）。
+- A-U3 desktop `SETTINGS_SET` 无 busy/pending/env 门（env 维度放行为有意；busy/pending
+  维度对称性待决策）；A-F16 `DSH_HOME` 布局默认偏 desktop（共享推导点防误读登记）。
+- E-4/E-2/E-10 audit serialize/WRITTEN_FIELDS/5MiB 逐字双份（登记维持）。
+- dual-host 语义下沉延后：activation-facts/startup-verdict 映射、restart 拒绝织、
+  apply-now 门（整门合并不做，见下取舍）、identity-probe 腿——4 个分歧位以 ruling
+  注释登记在代码面，统一需新 dsh-runtime 公开导出（dist 锁）或行为裁定。
+- 打包冒烟 P1-R1 与 1e 打包验证：用户决定跳过，待打包环境，与发布收口归并。
+- 0.2.2 审查跟进残留（低优 UX）：会话行动作仍 hover-only（键盘/触屏无揭示路径）；
+  仓库组折叠 × 会话待办条带张力（确认产品意图后过滤或文档化）；chamber 表最坏徽标
+  组合窄窗可能横向撑破（实机目检后定）；en 单数文案、行移除 aria-label 覆盖可见
+  文本、行无 `<label>`、ssh done 态 stale 行按钮可用、无 PluginDialog DOM 测试、
+  对账空态双提示；settings-dshruntime：PUT registry 成功不 bump versionsEpoch（旧源
+  数据至下次自然刷新）、30s 超时文案双层措辞、围栏/超时逻辑内联组件 effect（可测性
+  债务；窗口级残余服务端读侧无害 ≤3s 自愈）。
 
-> **2026-12 sidebar 拖拽整组不变式 + 结构重构（实施记录，收口时并入 CHANGELOG 后移除）**：
-> 设计 08 §11 的仓库组拖拽边界补齐为完整不变式，并落为**单一纯裁决器**
-> `packages/dsh-chamber-client-ui-sidebar/src/shared/workspace-drag-order.ts`
-> （`resolveWorkspaceDrop` → blocked/noop/move；marker、onDragOver 门、drop、
-> 提交四处同源）。修复三处不合理行为：外部 workspace 可插入仓库组内部
-> （此前只钳制被拖元素自身 flag）、main 拖拽可把自己拖离派生行（拆家）、
-> 整组无法搬迁（向下被弹回）；派生行"不得排到 main 之前"在家族已破损
-> （旧数据交错）时仍为绝对规则。main 拖拽 = 整组搬迁（逐成员
-> `workspace.insertBefore` 同一锚点 + 乐观序 + 失败刷新收敛）。会话拖拽
-> 数学复用既有 `nextServerOrder`（原重复实现删除）。单测新增
-> `test/workspace-drag-order.test.ts`（26 例）与 `test/derive.test.ts`
-> 的 `nextServerOrder`/`orderServersForDisplay` 覆盖（此前设计声称覆盖但
-> 无测试）。结构：SidebarRoot（3224 行单体）→ `client/sidebar-context.ts`
-> （壳内跨切状态 context + 拖拽/重命名类型 + 共享 helpers）+
-> `client/ServerSection.tsx`（每来源子树；搜索镜像/外部点击/排序菜单清理
-> 随迁）+ SidebarRoot 壳（1492 行，含并入的 design-24 F9 挂载守卫）；git
-> 插件 slot-contract 测试改为对
-> SidebarRoot/ServerSection 双源锚定。shared 侧与两大视图文件的考古注释
-> 清理完成（仅注释）。验证：typecheck:sidebar / typecheck:git、test:sidebar
-> 全量、test:git（slot-contract 含）全绿；verify:i18n 无漂移。
+## 设计未决
 
-**0.2.2 发布前审查跟进项（2026-09-05 三合并 review round；三路 P0/P1 = 0，
-放行 0.2.2。部分 P2 已在发布前落实：e10a2c7（settings-dshruntime ①②③）、
-9b2aeb8（settings-plugin close 门控），见各面标注；design 08 §11.1 的 chip
-契约 stale 已以注记修正（5a41ebe）。其余 P2/P3 排入下一修复 round）**：
-- sidebar-folder 面（合并 dca181c）：① **已落实（2026-12 拖拽裁决器重构）——
-  拖拽锚点统一到 override 感知的显示序**：commit/marker/onDragOver 门/顶部
-  指示线共用纯裁决器 `shared/workspace-drag-order.ts`（`resolveWorkspaceDrop`，
-  折叠隐藏行走位与渲染过滤同谓词），旧的 commit 侧 registry-序扫描与 render
-  侧 dropBlockedByMain 双实现删除。② 会话行动作仍 hover-only
-  揭示（sidebar-chamber.module.css `.sessionRow:hover`），键盘/触屏无揭示路径
-  （存量；workspace 头已 pointer-safe）。③ 仓库组折叠 × 会话待办条带
-  （SessionTodoArea 纯投影无 fold 输入）：主行折叠后派生行会话的注意力条目
-  仍钉条带顶部，与 docstring「不声称行指示器未显示的注意力」张力——确认产品
-  意图后过滤或文档化。④ **部分落实（2026-12）——拖拽规则已有组件级单测**
-  （`workspace-drag-order.test.ts`，26 用例覆盖家族连续/破损/折叠场景）；
-  折叠过滤本身仍为渲染级（谓词单测充分，维持原状）。
-- settings-plugin 面（合并 16f7f27）：① **已落实（9b2aeb8）——close()
-  busy 门控（2026-12 review P2-2）**：installing/folderBusy/
-  undoBusy/seedBusy/restartBusy/syncing 在跑时禁止关框（restarting 受管
-  重启有 unmount abort 属例外）。② 添加区互斥矩阵单向（PluginDialog
-  安装/导入/搜索只查 installing/folderBusy；ssh undo/seed/apply、gateway
-  restarting/syncing 在跑时仍可并发提交，且 undo/seed 与 apply 不共享主进程
-  单飞 key——plugin-sync.ts 只拦 apply×apply）；主进程 loud 拒绝兜底，无数据
-  损坏路径。③ chamber 表 en 最坏徽标组合 ≈516px 静态估算超容器临界（CSS
-  minmax 144px 版本轨），窄窗可能横向撑破——实机目检后定（版本轨放宽/徽标
-  换行）。④ P3 族：en n=1 单数文案（locales `There are 1 differences`）、
-  行移除 aria-label 覆盖可见文本、行无 <label>、ssh done 态 stale 行按钮可用、
-  无 PluginDialog DOM 测试、对账空态双提示。
-- settings-dshruntime 面（合并 acc8ece）：①②③ **已落实（e10a2c7）**——
-  同帧冻结洞（runRemoteAction/onApplyRegistry 围栏并入 checkIntent）、
-  gateway 重启窗口检查禁用并入 restarting prop、新检查起始清旧 versionsError。
-  ④ PUT registry 成功不 bump versionsEpoch（旧源数据直到下次自然刷新）；
-  ⑤ 30s 超时文案对后台拉取也生效且与「不可用」外层文案双重措辞；
-  ⑥ swap-attempted 相位检查可用性与 desktop runtimeBlocked 投影对照复核
-  （注释自述逐相位镜像的准确性）；⑦ 围栏/超时逻辑内联组件 effect，未入
-  node-harness 可测纯层（可测性债务）。窗口级残余均服务端读侧无害、≤3s 自愈。
+- **起始端口偏移**：本地默认 17510、控制面默认 17500；当前固定起始端口 + P+1 重试 +
+  记录仲裁，是否开放配置仍未决。
+- **trusted-host 自定义 Host**：当前反代 Host 与实例自身 `127.0.0.1:<port>` 一致；
+  未来引入自定义 Host 时须同步扩 trusted-host 集。
+- **多控制面 `$DSH_HOME` 冲突**：同 stateDir 共享 home 时会话 JSONL 可追加，settings
+  由 dsh 的 `settings-conflict` 仲裁；是否进一步隔离未决。
+- **多控制面 catalog metadata 无跨进程 CAS**：label/accentColor 并发修改是
+  last-writer-wins；可靠多 writer 需 kernel-backed 跨平台 lock + 锁内 reload + 字段
+  intent，否则应正式改为「并发 plane 必须不同 stateDir」。普通 pidfile/mkdir stale
+  lock 存在三方 takeover 双持，不能作为修复。
+- **响应头白名单双处同步**：权威在 04 §4.3，仍建议把代码/文档表述进一步单源化。
+- **`__DSH_BOOT__` 随 dsh 版本漂移**：manifest 形状继续以 vendor `parseBootManifest`
+  为准维护。
 
-**探针与随会话数据量增长的响应体彻底解耦（2026-12 定稿并实施；方案见
-design 18 §3.4 探针集、design 02 §3.2/§3.5 就绪/健康探测）**：chamber 身份/健康
-探针统一到固定小体积契约（激活探针集与会话数据解耦；settings/describe 与
-data.settings 两行按文件上限放宽，见下 B1）——`session/canOpenWorkspacePath`
-（SessionController `session` namespace 零参 boolean Typert Remote，钉住上游
-0.1.2-rc.1 实证存在）：纯同步平台检测、不读会话数据、不激活 Agent、无 IO；
-value true/false 均健康（只验方法存在/协议正确/控制器装配）。响应上限 64 KiB
-（探针专用 per-call cap；control-plane probeHostIdentity 与 desktop node:http
-身份探针均按调用设置；dsh-runtime 激活身份行无独立 cap、走载体默认 1 MiB 上限——
-响应仍受内存界约束，见挂账⑥）。HTTP 404（部分 0.1.2-alpha.x 早期树 /
-dsh < 0.1.2-rc.1 无此方法；是否真为 legacy 由回退结果判定）→ 自动回退 legacy
-`session/list`（默认 1 MiB 上限，与今日语义逐位一致，老版本不劣化），**回退
-成功**必须写 warning（失败路径已各自 loud：双 404/非 404 透传——时机与节流见
-挂账⑦）；404 之外（401/5xx/超时/畸形）如实失败不回退。方法名
-与 payload 构造单源在 `control-plane/src/rpc-envelope.ts`（cross-package，desktop
-SSH 探针经 control-plane-module 引用同一常量）。**选项 A 已执行**：`data.sessions`
-探针移除（探针不再读会话数据，会话存储健康不在激活契约内）、`session/list` 退出
-激活 6 项探针集（`REQUIRED_ACTIVATION_PROBES` = commands/execute ·
-session/canOpenWorkspacePath · clientGraph/graph · settings/describe ·
-gitWorktree/previewCreate · data.settings，hostDomains=false 形状派生 4 项）。
-**2026-12（design 24 执行，M1/M2）**：激活集新增第三 chamber 域
-`archiveCleanup/probe`（7 项；`HOST_DOMAIN_PROBE_NAMES` 三域，typed
-subtraction 守卫；accept = 形态良好的 domain carrier，业务失败 fail-closed，
-无 legacy 回退）；M2 起期望集**按实际 seed 域派生**（`activationProbeNamesForDomains`
-+ gateway `syncedHostDomainProbeNames`——空缓存=基础 4 项、部分同步=base+已挂载
-域，替代二元 hostDomains 布尔）。
-`describeCapabilities`/`capabilityCache`/`CapabilitySnapshot` 删除（生产无消费者；
-health/readiness 走 `probeHostIdentity`）。B1：settings/describe 探针 per-call 上限
-放宽至 16 MiB（与 `SETTINGS_FILE_MAX_BYTES` 对齐，合法大配置永不误伤；
-`RuntimeProbeRpcOptions.maxResponseBytes` 透传；desktop runtime 激活直连
-control-plane `call` 自动生效；gateway runtime-manager 两处 call seam 亦转发——
-两端一致生效，见挂账⑧）。**挂账**：① 上游 `session.list` 的分页/裁剪/删除能力（归档
-瘦身的事实源头）仍待上游，chamber 不落地实现（design 24 的受界宿主域例外
-属单独动议，不属本挂账范围；其激活探针期望集派生契约修订随 design 24 M2
-落 design 18 §3.4 与本节头部探针段）；② 归档「不能瘦身」事实维持——
-归档仅影响列表体积，探针不再读列表后不影响探针健康语义；③ dsh-runtime
-runtime-probes 的 legacy 回退 warn 为可选注入 `warn` sink——桌面 main.ts 与
-gateway runtime-manager 按定稿不加逻辑改动，未注入即静默（control-plane
-probeHostIdentity 两生产调用点均已注入真实 logger，回退必 warn）；
-④ desktop SSH attach 底线随探针迁移**上移至 ≥ 0.1.2-rc.1**（2026-12 审查修订口径：
-非「保持」——旧 session/list 主探针时代凡 200 ok:true 即 attach-ready，含
-[alpha.1, rc.1) 老树）：新方法 404 的旧版 dsh 由 signature 路径给出确定性
-terminal「check or upgrade」（先答新方法、404 时再答 legacy session/list 识别——
-远端不自动收编 legacy 树，旧版需手动升级）；legacy 识别臂预算为剩余预算的角落
-（超大会话列表序列化 >2s 的老树落 generic「not a dsh instance」，同为 terminal、
-信息更差，接受）；⑤ 探针契约要求上游方法不再漂移——未来上游若再删/改名该方法：
-本地/健康层（probeHostIdentity，两生产点均注入 logger）在回退成功时 warn 可见；
-激活层（runRuntimeActivationProbes）owner 未注入 warn sink（挂账③），若上游仅删
-身份方法而 session/list 仍在，激活行将静默通过、双 404 时 fail-loud——漂移的
-激活层可见性以失败路径为准（design 05 §7.6 文案同步）。
-⑥ 64 KiB cap 的覆盖面：control-plane probeHostIdentity（spawn 就绪 + 健康）与
-desktop node:http 身份探针按调用设置 64 KiB；dsh-runtime 激活 session 身份行未透传
-per-call cap，受注入载体默认 1 MiB 上限约束（accept boolean 语义不受影响）。
-⑦ legacy 回退 warn 的触发时机 = **回退成功后**（成功即真 legacy 信号；现代树
-transient 404/双 404 保持安静）——避免每次 500ms 重试/每 30s 健康周期的重复
-warn 与错误前提文案（2026-12 独立审查 A-P1 采纳：原实现 warn 先于回退结果、
-逐次重试重复且前提可假——已修复）。作用域：control-plane `probeHostIdentity`
-（spawn 就绪 + 健康）按 baseUrl 节流（每连续 legacy 期至多一条：identity 成功
-应答时清除标记——审查 R2-P2-1）；dsh-runtime 激活行同一「成功后」时机、无节流
-（按激活事务触发，每事务至多一次；owner 未注入 sink 即静默，见挂账③）。
-⑧ gateway runtime-manager 两处 call seam 现转发 `maxResponseBytes`
-（定稿「无代码改动」按审查 B-P1 有意修订：不转发则 B1 的 16 MiB
-settings/describe cap 只在 desktop 生效，服务器端合法大配置仍会
-response_too_large → 激活回退——seam 各加一行转发，行为无其他变化；
-gateway 端到端钉测已补：runtime-routes.test.ts「real manager: the B1 16 MiB
-settings/describe cap reaches the wire carrier」用 fake dsh host 应答 >1 MiB
-settings/describe，实测摘除转发即红）。
-⑨ 提交态 `packages/dsh-runtime/dist/index.js` 已重建（审查 R2-P1-a：提交态
-bundle 仍是迁移前旧 7 项探针语义，而 desktop/gateway 经包 main→dist 消费——
-src/dist 语义分裂可两套测试同时全绿）；护栏升级：dist-sync.test.ts 增加
-常量值级 deepEqual（探针集/settings cap）+ 行为标记（**激活探针集导出值**
-不得含 session/list/data.sessions——dist 为 legacy 回退保留 session/list
-字符串是正常的，护栏按导出值断言，勿当字符串约束误读），desktop
-cross-package-contract.test.ts 增加
-dsh-runtime 激活集 ↔ control-plane 身份常量跨包锁步断言（防 dist 再陈旧或
-方法漂移）；desktop/README.md 身份握手文案同步。
-⑩ 第二轮审查决定与登记（2026-12，全 5 路 P0/P1=0）：warn 文案「per legacy
-episode」与 dsh-client 标记复位语义一致；VERIFY_UP_MAX_BODY_BYTES 注释修正为
-「verifyUp 非身份主臂的 200-body 默认 cap」（legacy session/list 臂 + gateway
-/status 臂共用）；design 02 §3.2/§3.5 与 STATUS 头部补「回退成功」限定词。
-**P2-1 设计取舍登记（不改语义）**：远端瞬时重启/路由挂载窗口内（HTTP 已
-listen、session 路由未挂）identity+legacy 双 404 → 通用 terminal "not dsh"、
-terminal 不自动重探——该粘滞窗口**先于本次改动存在**（旧 session/list 主探针
-404 同样 terminal）且与「已答即确定性」分类原则一致（ECONNREFUSED 才瞬态）；
-ready 心跳期对「404+legacy 负面」降级为瞬态的改法会引入无关服务接管端口的
-60s 慢重探 churn，取舍留给未来设计。**P2-2 契约**：transport-provider.ts
-verifyUp JSDoc 已写明「必须在自有限期内 settle」（transport 层裸 await，无外层
-超时）。可选覆盖登记：签名臂 64 KiB cap 数值的判别性用例已补（>64 KiB 合法
-envelope padding——cap 抬至 1 MiB 即变 'dsh'，必红）；ready 心跳真探针端到端、
-204/206/3xx 身份臂状态表为可选后续。
+## 范围决策与必要取舍（不做 / 推迟 / 移出 / 偏差）
 
-**0.1.2 线已知降级（仍有效）**：
-- **远端/直连 0.1.2 dsh 附加被硬阻断**（launch token 为远端进程内存随机数、隧道不可恢复；verify 探针 401 诚实分类；上游提供 token 检索机制前保持阻断）。**2026-09：dsh×http 组合已在连接表单与主进程校验禁用**（http 只服务 gateway；ssh 为 dsh 唯一传输——设计 17 §3 记有恢复点）。
-- **版本芯片**：本地实例已接线（desktop 桥运行时版本），远端实例隐藏（D2 兜底）。
-- **cookie Max-Age=30 天无会话中重换**：过期后约 10 分钟健康失败窗口触发重启换新（自愈，后续排期「cookie 过期即重交换」）。
-- **remote-stream 接收面帧校验宽松于上游 exactKeys**（接受未知键，前向兼容容差）。
-- **settings-bridge agentPresets/select 以合成 `{agentId:'',agentPreset}` 发出**（typert wire 将 Agent 参数投影为 agentId 键）：一旦被调必响亮失败（当前无调用点，潜伏面）。
-- **端口碰撞理论面**：本地实例同端口 cookie 覆盖（实际不可达，登记不修）。
-- **设计 07 §3 #3（agent-default-model 回显）已解锁**、实现另行排期。
-- **unary 兜底归档过滤无 wire 源**（0.1.2 删 workspace.list；归档集仅存在于 follow baseline）——仅影响未挂载来源与首次 baseline 前窗口（KNOWN DEGRADATION，见 `instance-api.ts` fetchInstanceSnapshot）。
-- **推送通道死亡期间侧边栏成员关系/归档集冻结在最后推送**（sessions 仍刷新、恢复推送自愈；冻结窗口内新归档/取消归档不可见；mounted 源在 store 未 withdraw 的断连→重连窗口同样落入全量兜底视图直至下一次真实推送——见 `aggregate-refresh.ts` commitAggregatePull 注释）。
-- **兜底 cwd 派生分组的已知限制**：符号链接拼写（如 macOS /tmp vs /private/tmp）可能不匹配 canonical-cwd 索引，会话落未分组桶（诚实兜底）；未挂载（兜底）来源的新建**空工作区**不可见（无会话即无组，fail-closed 语义）。
-- **git 工作树删除时 runtime 通道缺席 fail-closed**（'runtime-unknown'）。
-
-**性能整改（2026-09，P0–P2 执行完毕；已批准方案全文缺失、按仓库痕迹重建执行，
-计划/决策台账与测量数据见 `docs/progress/performance-baseline.md` §0/§1；进度只
-记状态，数据与方法不在此复述）**：
-- **P0 ✅**：T1（H1 卸几何 veil，D1=A——骨架不再模仿 dsh 布局几何，改全屏同底色
-  veil；T13 并入 T1）+ T2（view-transition 键控单槽合并：同键最新意图胜出、跨键
-  FIFO、startViewTransition 异常防御）——门禁 build:renderer / test:renderer-shell /
-  typecheck 全绿；场景①同环境 A/B wall ≈880–1162ms（PRE run1 1162 / 中位 890↔888）、
-  长任务形态 0–2×80–105ms/启（PRE run1 105ms 为上限，AFTER 4/6 run 为 0）、
-  CLS<0.002；design 05 §4 已同步修订注记。
-- **2026-09 review 处置**（5 面独立审查，修复已并入分支提交）：sidebar 拖拽-防抖竞态
-  （F1，写前 flush）、文档 3 处 P1（boot-after-final 交代/PRE 长任务数字/T7–T12
-  去向对账，见 performance-baseline.md §9）、渲染层 P2 硬化（catch try/finally、
-  直通路径统一入队）、maxReruns 文档与代码对齐 + 边界测试、gateway 测试 race
-  兜底、嵌套 ENOENT 竞态注释精确化、yieldEvery 钳制、多处注释/README 措辞；
-  次轮补齐（2026-09 review 收口）：F4 flush 陈旧守卫（缓存 TS 超越 pending 的
-  账户整条跳过）、coalescer 单次请求 `{rerunOnJoin:false}` 静默 join（gateway
-  非 force 冷缓存路径接线，消除长遍历期轮询补跑长尾）与配套测试（F8 缺口 ×3、
-  F4、maxReruns=1 边界）。
-- **P1 ✅**：T3（D8：`runtimeDiskSummaryAsync` 异步分批单遍遍历 + `createCoalescedRefresher`
-  节流/单飞/终态一次，接线 desktop main、gateway runtime-manager；桌面控制器 DI
-  `store.runtimeDiskSummary` 契约改 Promise——安装闸口等待同墙钟但进程不冻结）——
-  test:runtime/typecheck:runtime/test:desktop/typecheck:gateway/build:gateway 全绿，
-  合成曲线 425k 项 51.0s→42.2s、中小规模 ±4–18%、全程不冻结；T4（M4 置顶写回防抖：
-  updated-mode promotion 簿记 250ms 防抖窗 + `updateViewPrefs` 等值写不落盘不通知）——
-  test:sidebar/typecheck:sidebar 绿；T5（M1 事务证据刷新调度收口，**D7**：progress
-  相位 downloading/installing/applying 跳过全树磁盘遍历、复用最近投影；终态/content
-  相位永远现场重走）typecheck 绿；T6（**D3**：H3 主 bundle 求值长任务实验——eval 归因
-  探针 `scripts/perf/eval-measure.mjs` 落地；归因结果：每启两段结构任务（13–21ms 起
-  72–96ms 主图求值、100–120ms 起 57–62ms 实例启动图）；安全懒加载边界审计结论：
-  首屏急切图与实例启动图内无 chamber 自建可动边界 → 负面结论，真实机复查清单见
-  基线文档 §7）。
-- **P2 ✅**：perf 工具卫生（scripts/perf/README.md、CDP 超时守卫、H3 探针）；全量
-  门禁重扫（含 T5 后的 test:desktop、verify:i18n、test:release-workflow）；dev 实例
-  烟测（新 main 代码冷启 + 本地实例 ready + 运行时设置页磁盘证据面）；本文档条目 +
-  基线文档完成态（`docs/progress/performance-baseline.md`）。
-- **范围契约变更（随 T3）**：dsh-runtime 新增异步磁盘统计 API 与共享节流原语；
-  `ControllerDeps.store.runtimeDiskSummary` 由同步改 Promise——desktop 是唯一接线方
-  （gateway runtime-manager 为独立实现、不消费该 DI）。同步 `runtimeDiskSummary`
-  保留为兼容面，两实现逐字段对等（测试钉死）。
-- 遗留真实机清单（②⑤ 宽侧栏冷 settle CLS、⑥ 版本事务主进程阻塞采样、H3 真机懒
-  加载验证）：步骤见基线文档 §7——需打包版或带会话的 dev 实例复测。
-
-- **已归档会话清理（design 24，2026-12 定稿 v3；todo 12 承接）**：删除已归档
-  内容（含 subagent 级联）动议定稿 = **第三个 chamber 宿主域插件**
-  （`@dsh-chamber/dsh-host-archive-cleanup`，域 `archiveCleanup/{preview,purge}`，
-  实例进程内经宿主权威状态执行，本地 / 远程 dsh / gateway-managed 全形态）
-  + 侧边栏 **server 行 hover 动作**。2026-12 三路独立 subagent 评审 + 自审
-  + v2 合规复核（闭合矩阵 12 项核实）：零 Blocker，全部 Major 与高优 Minor
-  修订已并入 v3（purge 超时预算 seam 与诚实超时文案 /
-  部分失败带警告呈现 / 激活探针期望集按实际 seed 域派生（design 18 §3.4
-  契约修订，替代二元 hostDomains）/ children-first 删除序与崩溃收敛 / 404
-  专用错误类与 header 下错误槽位 / 文档同步时点分摊；PluginDialog 内建表
-  v1 决策不加行，同构三态行列为 M4+ 可选增强）。属 AGENTS/05 §2.2 红线的
-  有界例外动议（AGENTS 例外清单与 design 01 地图已随 M0 批准更新：2026-12
-  用户拍板跳过人工评审、D1–D7 按推荐值生效；05 §2.2/§6、02/09/13/16/17、
-  18 §3.4 等按 design 24 §12 时点表随 M1–M3 改）；**已合入 main（2026-12
-  合入修订轮：独立评审 0 Blocker，残留闭合——M1 定案（archived 集合成员随
-  purge 移除，§14 残余草稿废弃）、M2–M5 处置（probe 面结构检查 / 运行窗口 /
-  容量登记 / 注释）、N1–N5（covered 后代同批清除 / 迭代后序 / rm ENOENT
-  幂等 / 注释 / AGENTS 事件措辞）、design 24 §15 债务①③闭合、台账轮次 10；
-  合并 989534a = 启用批次 3a5bbcf + 修复轮 8429fee）**；实跑门禁：
-  根 typecheck + runtime/desktop/gateway/control-plane/sidebar/connections/
-  host 全绿（详见执行台账 §10 与本轮复跑）；**M4 实机 E2E**：本地形态已由
-  2026-09 修订轮实跑并产出修复/修订（design 24 §17；此前「仍待验」表述
-  以该轮为准），gateway/远程 dsh 形态、ghost 行窗口与打包版 UI 目检仍待验；
-  桌面「恒全量探针 vs seed 产物门」取舍、结构 seam 随上游 wire 退役机制化
-  均已在 design 24 §15 挂账，不随本合入闭合。
-  todo 12 的 B（特权层直删）继续冻结；A（已归档浏览区）仍为可选前置/后续。
-  设计见 `docs/design/24-archived-session-cleanup.md`；调研记录见
-  `docs/progress/todo/12-todo-archived-sessions.md`；执行台账（M0 评审包/
-  决策点 D1–D7、vendor 核对记录表、M1–M4、合入修订轮次 10）见
-  `docs/progress/todo/24-archived-session-cleanup-plan.md`（§10 起为物化后
-  执行状态；多轮评审处置登记见 design 24 §15）。
-- **gateway 连接插件能力对齐（A/B/C，2026-12 用户提出；Phase 1-5 已实现 + 质量审核修复轮已落地，见 design 21/本段）**：
-  gateway 连接缺 ssh+dsh 的第三方插件「添加/同步」（design 17 §3/§10 收窄的
-  副作用）、connections 页缺 gateway 受控重启入口、日志/主机日志按钮不可区分。
-  B（连接日志/网关主机日志改名 + 图标去重）与 C（gateway 卡 + 插件面板「重启
-  dsh」，经实例代理 `/chamber/runtime/restart` + 202/status 轮询；gateway-runtime
-  parse/poll 纯核心迁 sidebar/shared）已定稿；A v1 已拍板：**单一插件管理模型、
-  仅最终执行阶段分叉**（gateway 宿主 spawn vs ssh exec，非双通道同权）；registry
-  spec 直装 + 文件夹直推双通道（出网允许、registry 来源不限定、lifecycle scripts
-  默认允许），第三方同步仅手动、批量一次确认，runtime 单写者栅栏 + ready 边沿
-  deferred 排空；含远端「已安装」列表显式移除（模型统一、ssh/gateway 同权）、
-  `POST /chamber/runtime/start` 停机恢复原语、journal/备份撤销最近操作、故障域
-  恢复（评审 P1 修正已并入 v2）。契约见
-  `docs/design/21-gateway-plugin-parity.md`（原 todo 评审稿已并入该 design）；执行计划见
-  `docs/progress/todo/21-gateway-plugin-parity-plan.md`（Phase 0-6，逐阶段门禁）。
-  **实现进度（2026-12，执行级门禁零 P0/P1）**：Phase 1 B ✅、Phase 2（C + gateway-runtime parse/poll 迁
-  sidebar/shared + ambient 镜像 + 卡片/面板「重启 dsh」）✅、Phase 3 A0（gateway installed 读路由 +
-  desktop `gateway_plugin_sync` IPC + 视图 chamber 同步/漂移）✅、Phase 4 A1 写面 ✅、Phase 5 UI 全闭环
-  ✅（详情见下三段）；
-  其中 Phase 4.3 的白名单族前置已先行落地：spec/name/materialize 白名单 + MAX 字符 +
-  WRITE_FILE/RUN_STDOUT 上限迁 `control-plane/src/plugin-spec.ts`（design 21 §6.2 单一来源；desktop
-  经 control-plane-module.ts 双路径 facade 与原 ssh-provider 再导出消费、gateway 经包导出直引），新增
-  `isDeniedPluginName` 保留名谓词（@deepseek-ai/* + @dsh-chamber/*，decision 19），渲染端 ADD_SPEC 镜像
-  锁步测试落地（gateway/test/plugin-spec-lockstep.test.ts；ssh 侧 applyPlugins 保留名拒绝接线随统一增量）；
-  运行级验证（typecheck/test/实机）待可运行工作区执行（登记残余风险，不虚报）。
-  **运行级验证状态更新（2026-12 后期）**：本工作树已可用 `~/.nvm/versions/node/v24.20.0` + pnpm 装入
-  node_modules（vendor/harness-checkout 子模块仍缺失，仅影响需 vendor 源码的构建如 build:renderer/打包）——
-  已落地内容在可运行子集上**已执行验证**：test:gateway 全绿、test:connections 10/10、test:sidebar（含镜像
-  锁步 5/5）、test:settings-bridge、desktop 受触套件（gateway-sync-registry/plugin-sync/ssh-provider/
-  transport-manager/ipc-surface-mirror/renderer-trust/cross-package-contract/gateway-provider）全绿；
-  typecheck:gateway/:connections/:sidebar/:settings-bridge 0 错误；Phase 4 起门禁以执行级为准（子代理默认 shell
-  无 nvm PATH——命令需显式 export 或在父代理侧运行）。
-  **Phase 4 进度（2026-12，执行级验证）**：4A 白名单共享迁移、journal+串行执行器（含 XDG_CONFIG_HOME pin/
-  前后双检/onTerminal）、写栅栏 beginProfileWrite（双向互斥）+ start 原语 + beforeSpawnCheckpoint 生产接线、
-  plugins-tasks 编排器（lease/deferred.json/单飞 drain）与 install/remove/materialize(流式 32MiB+tgz 上限)/
-  tasks 四条写路由均已实现——gateway 全套 481 测试（478 通过 0 失败 3 平台跳过）+ typecheck 0 错误；
-  Phase 4 已勾销（2026-12，执行级门禁零 P0/P1：汇总门禁 FAIL 1 P1 → I4 修复 → P1 关闭复核 CLOSED；
-  gateway 487/484/0fail/3 平台跳过、desktop 全链 724/724 26 文件、root typecheck 0）：4G apply/materialize
-  IPC、F7×租约串行化（waitForProfileWriteIdle 先于 restore）、executor canRun 窗口复核（等待-再-阻断）、
-  code 族统一（reserved）、remove-before-add（decision 5）、256MiB 解包上限对齐均落地。Phase 6 归口登记：
-  remove not_installed/no_manifest 409-vs-400 定夺、dispatch/routes 陈旧注释清扫、journal 保留窗口、
-  'too_large' 双档、任务面措辞回写。
-  **Phase 5 进度②③（2026-12，执行级）**：② ssh 模态新增远程「已安装」list tab（逐行移除确认 + 撤销
-  undo IPC、fail-loud verified/ready 标记照实呈现；等价表逐键保持、local 模式零改动）；③ gateway 统一视图
-  增量（PluginInventoryView：已安装行/移除/撤销/变更记录 tasks 投影（deferred 意图+busy+recovery 提示）/
-  profile_absent-corrupt 横幅/停机 chamber 区降级标签；修复 Phase-3 遗留 seed-cache 双前缀真 bug）+ 卡片
-  「启动实例」start 动作（runtime 探测门控 stopped/error/restart-exhausted、202+poll）；A 键表 34+1 键
-  （296/296）。connections 全链 112/0、typecheck 0。Phase 6 归口（2026-12 settings 两页微调 round 已收口，见下段；
-  统一单组件合体完成、变更记录区移除、恢复化撤销、add 双通道、缺陷①修复；
-  余留 who/when 归因与拒绝码本地化（照实）。
-  **Phase 5 进度①（2026-12，执行级）**：纯模型层 plugin-model.ts（deny 镜像/orderApplyOps/
-  ApplyOutcome 分类（含 ssh fail-loud verified/ready/readyNote 诚实携带）/projectTasks/undoForLatest/
-  分派表/BATCH_FAILURE_POLICY 单一取舍；35 测试 + 控制面 lockstep）✅ 门禁修复后零 P0/P1；ssh 统一增量
-  （readManifest 掩码统一挂接 SSH_PLUGIN_LIST、保留名整批拒绝（decision 19 同集）、ssh-plugin-journal +
-  SSH_PLUGIN_UNDO IPC（撤销=恢复语义、file-backed/out-of-model 不投影）、undo 诚实面）✅ 门禁 PASS +
-  两条 P2 修复（upgrade-restore 对称恢复、executed-but-not-effective 投影）。
-  **质量审核修复轮（2026-12，审核后执行；全量验证绿）**：4×P1 已修复——executor
-  租约泄漏（journal 终态写失败/记录丢失仍触发终态钩子，plugins-exec complete()）、
-  executor env 白名单化（INSTALL_ENV_WHITELIST 共享常量，同 dsh-runtime 源）、
-  deferred 排空后自动受控 restart 一次（全部排空 op 终态后请求——首 op 终态请求会撞后续
-  op 租约门，第二轮扫描修正为末 op 终态点；index.ts restartManaged 门控镜像 /restart 同步
-  拒绝族）、ssh undo journal 操作目标指纹绑定（latestOkForTarget + 删除/编辑
-  转换路径 clear 接线）；8×P2 已修复——错误脱敏升级（sanitizeInstallerOutput 族 +
-  2000B 有界）、tasks/deferred 投影 file: 掩码、崩溃孤儿子进程 pid journal + 启动
-  对账击杀、手动 chamber 同步失败显式化 ok:false（both-false 遗留 P2 勾销）、
-  gateway_plugin_apply 确认后重检、deferred drain 波浪续排（>8 积压自清）、staged
-  tgz 三处 GC、persistence_failed 500 错误码族；均带失败注入/行为测试。文档归位
-  本次补全：design 17（§3 表 F4 勘误 + §10 写面 + §4.1 barrier 语言）、design 18
-  （§6 出网登记 + §9.3 start 行/互斥矩阵/兜底链更正）、design 05 §5（F4 勘误 +
-  design 21 增补）、design 13（收敛表述）、sidebar/settings-bridge README 双语文档
-  与哈希重录——修复明细见 design 21 §10「质量审核修复补录」。
-  第二轮扫描修正（复核修复轮自身，⑭–⑰）：drain 自动重启请求点改为本轮全部排空 op 终态后
-  （原首 op 终态会撞在途租约门）、materialize 路由 500 分支补 staged GC、tasks 投影删除
-  childPid（活进程 pid 不出网）、波浪测试强化（200ms 慢关 + 租约授予时序证明，5 次连跑稳定）。
-   **settings 两页微调 round（plan 24，2026-12；`docs/progress/todo/24-settings-ui-polish.md` 已实施）**：
-   Phase 6 归口收口——统一单组件合体**已完成**（`PluginDialog.tsx` 单对话框取代 PluginSyncModal/
-   PluginInventoryView 功能等价双面，分叉收敛至数据源与动作分发；chamber 内建表三行 badge 化
-   （client-graph/git-worktree/mobile 移动端行，仅 gateway 源显示）、诊断横幅去重（状态名 +
-   message，pluginId 仅无 message 时兜底）、「重新同步 chamber 组件」按钮语义、http 直连只读不变）；
-   「变更记录」tasks 区已移除（后端 journal/备份保留，journal 仅供 undoForLatest 派生）；撤销
-   **恢复化仅 gateway**（runtimeDown 恢复横幅入口；ssh list tab 撤销按钮保留原样——范围偏差登记）；
-   gateway 添加双通道已接线（registry spec → gateway_plugin_apply、文件夹 → gateway_plugin_materialize）；
-   缺陷① `desktop_local_plugin_add_file` 已修复（allowFileSpec 补传 + plugin-sync 门测试）。余留照实：
-   who/when 归因 tooltip 未渲染、gateway 拒绝码→本地化文案映射未做（409 逐字英文）；实机 E2E 矩阵仍
-   不可在本树执行（design 21 §10 勘误⑦ 未勾销）。验证与偏差见 plan 24 实施偏差登记。
-   **plugin-from-file 分支落库（archive-pick + executor store 一致性；台账见 design 21 §10 ⑧⑨）**：
-   materialize 本地导入选择器（local/ssh/gateway 三通道）扩为插件**源码文件夹或现成 .tgz 插件包**
-   （npm-pack 布局）：纯结构分类 `classifyPluginPick`（.tgz 后缀 + 32 MiB 档案上限 + 有界 manifest
-   读取），归档上传原样（免本地 pnpm pack）；macOS NSOpenPanel 单对话框 file+folder 双模式，
-   Windows/Linux 保持文件夹对话框（archive-pick 为 macOS-v1，余腿随 design 22/23 排期）；名称/保留域
-   白名单在 ssh/gateway 流内复核不变（本地 dsh CLI 为权威）；按钮文案「从文件夹导入」→「从本地导入」
-   （zh/en + 提示同步，键名不变）。**executor pnpm store 一致性修正（实机 E2E 发现）**：安装子进程
-   不再钉 HOME——钉 HOME 会把 pnpm 默认 store 移离 managed profile 物化所用 store，pnpm 11 store
-   不一致硬拒全部变更；HOME 缺席回落 passwd home = 与 profile 物化同 store。XDG 缓存/config 私密钉
-   保留，`NPM_CONFIG_USERCONFIG`/`npm_config_userconfig` 双 casing 同指一个空 0600 文件（pnpm 11
-   config reader 对两 casing 均精确读取）。合并后验证：test:desktop（含 plugin-sync/plugin-tarball
-   新增门测试）/ test:gateway / test:connections / typecheck:connections / verify:i18n / root
-   typecheck 全绿；design 21 §9 实机 E2E 矩阵（§10 ⑦）仍未勾销，随发行在可运行环境复跑。
-- **模型额外参数 + 默认推理等级（设计 07）**：实现推迟——wire 白名单无泛化
-  透传、host 组合不可注入、`agent-default-model` 未对客户端暴露，待上游
-  解锁（07 §3/§4）。设计见 `docs/design/07-models-params.md`。
-- **SSH 密码认证可选增强（05 §8 例外主体已落地）**：一键免密引导与系统
-  钥匙串尚未实现；现行 SSH 密码镜像仍是 endpoint-bound 0600 明文文件。
-- **Windows 首版支持推进中（design 23；台账 `docs/progress/todo/windows-v1.md`，
-  基线 `docs/progress/windows-baseline.md`）**：M0（ci.yml `test-windows` 契约腿）
-  与 M1 生命周期契约（`win-probes.ts`：PowerShell CIM 身份 / netstat 端口 /
-  taskkill 树终止；reaper 与 spawn-dsh 平台自适应接线；win32-only 集成测试）已
-  代码就绪，POSIX 单测绿；M2a 运行时管理后台能力（env 门控
-  `DSH_CHAMBER_WINDOWS_RUNTIME_MUTATIONS=1`、supervisor 树终止、icacls/rename 续作、
-  C16 safeStorage-only）与 M3 代码项（AUMID、托盘候选路径、preload loud 失败）、
-  M4 代码解锁（登录自启 win32、深链打包态注册、open-in 本地盘符路径、NSIS 卸载
-  清理 include、SSH 密码门引导）均已落地（本地纯模块测试全绿）。**外部门禁**：
-  真实 Windows runner 首跑（含 submodule 物化 + junction 建链）、M0.5 上游/NSIS/
-  Defender 实证、M2a 事务矩阵与 M2b UI 翻转（纪律：能力先于开关）、M3/M4 实机
-  矩阵。仍保留的语义事实：detached/进程组/SIGTERM dispose 在 Windows 不可等价
-  （硬终止 + 事务恢复，妥协 F1）；dsh-runtime mutation 与 SSH askpass 密码认证
-  保持只读/禁用门控直至 M2a 验证完成。Gateway owner-private 目录在 Windows 只
-  验证 real-dir/no-follow/identity 并继承 OS ACL（icacls 显式收紧已接线）：
-  Node 的 mode/chmod 无法诚实证明 POSIX 0700，不能把该让步写成已有等价权限保障。
-- **Linux 桌面首版支持（设计 22，2026-12 落地）**：AppImage（x64）发行 + 形态门
-  自动更新 + 桌面集成修复已入库（打包配置；updater 形态门——探针按
-  AppImageUpdater 真实替换语义校验启动形态/绝对常规文件/父目录可写，2026-12
-  review 加固；XDG（仅绝对路径）/APPIMAGE 自启与协议 .desktop 每启重写 +
-  CHROME_DESKTOP 指回；node 兜底平台分表 + X_OK；目录 fsync EINVAL/ENOTSUP
-  平台无关容错；resolvePnpmBinDir Linux 根；release.yml build-linux 腿与策略
-  测试 4 腿）。**无头验证（Ubuntu 22.04 测试机）**：Linux 原生 CI 对齐全量套件
-  全绿（node 24.20、非 root runner 形态）；`dist:desktop:linux` 产物与 feed
-  （url/size/sha512）、AppImage 内 .desktop 身份、afterPack 断言全部通过；
-  双形态无头冒烟（AppImage 提取运行 / 解包目录）验证协议 .desktop 指向、
-  形态门开关与本地 dsh 实例全链。细节入 CHANGELOG/发布笔记。
-  **剩余实机门禁**（真实桌面矩阵 GNOME X11+Wayland、KDE 抽验，清单见设计 22
-  §8）：XDG 定制自启、深链冷/热启动与 **CHROME_DESKTOP/xdg-mime 路由**及
-  AppImage 升级后重注册、托盘可见性、通知点击、safeStorage 有无 keyring、
-  SSH 密码全链、运行时安装/切换/apply-now/restartLocal 打包态全链、
-  **自动更新端到端（已下载→退出→$APPIMAGE 原位替换→重启；stable+beta；
-  二次更新）**、AppImage 沙箱与 Wayland 焦点、before-quit 确认框的无头挂住行为
-  确认；另有 release.yml dry_run 全链验证（需 GitHub 可达，见下方 submodule
-  剩余验收同纪律）与 deb/arm64 后续排期。
-- **Linux 桌面已知未动项（登记）**：托盘图标候选两死路径见既有「desktop 打包
-  闭包已知 P2」条目（同事实）；gateway 裸 CLI 默认 stateDir ~/.dsh-chamber 与
-  control-plane standalone 同目录（裸跑形态运维提示待加；安装器形态
-  DSH_GATEWAY_STATE 无此问题）；不做独立 verify-linux-appimage 脚本（取舍见
-  设计 22 §5，以 afterPack + workflow 内联 + 无头冒烟覆盖）；XDG_DATA_HOME 偏移
-  的 pnpm home 与 macOS ~/Library/pnpm 未纳入 resolvePnpmBinDir（低优）；
-  dsh-runtime private-fs.ts syncPinnedDirectory 保持严格目录 fsync（设计 22 §6
-  审计结论，未并入容错）；userData 实测 ~/.config/@dsh-chamber/desktop（可选
-  优化 app.setName，未做）；electron-builder desktopName/syncDesktopName 提示
-  （WM_CLASS 关联，低优）。
-- **chamber shell 内官方 bundle 的实例相对绝对路径（已知缺陷类，2026-08）**：
-  官方客户端 bundle 若绕过 patched connection carrier、以实例 origin 相对
-  路径直接请求（读 `location.origin` 或硬编码 `/…`），在 chamber 页面（控制面
-  origin）会打到控制面自己。已知实例：`@deepseek-ai/dsh-session-log-export`——
-  `HEAD /api/session.export` 打到控制面 404 JSON，chamber 视图「导出会话日志」
-  不可用（实例官方 UI 正常）；**记录缓办**：用户决策不逐个临时 fork（版本漂移 +
-  UI 重复 + AGENTS.md 可改源码边界扩张），待出现第二个同类特性时一次性建立
-  patched-copy 基础设施（共享 base-path helper）再统一处理。（`dsh-client-hmr`
-  同类问题已断链修复。）
-- **dsh 运行时版本管理（设计 18，M5–M7 已落地）**：剩余验证与实现缺口：
-  - macOS 打包态实机：真实 `.app` 内共享 `packages/dsh-runtime`、内嵌 pnpm、
-    koffi/dsh CLI 与完整激活/故障回退/数据恢复链；Linux server 同款端到端记录；
-  - Gateway restart 窗口的前端重连，以及 connections 的 SSH `restart_service`
-    systemd IPC 端到端回归（settings 的 dsh-runtime 段已移除 ssh 分支）；
-  - `restartLocal()` 在真实 1s SIGTERM→SIGKILL grace 窗口与健康计时器交错的覆盖；
-  - settings-bridge 的 gateway React 组件级交互（切换取消、失败链）仍主要由
-    纯函数/API 客户端测试代证；
-  - 该机 ZFS 下全新 pnpm store 克隆偶发 `ERR_PNPM_EAGAIN`；当前失败投影诚实且
-    可重试，系统化并发缓解未排期。
-  契约见 `docs/design/18-dsh-runtime-version.md` §3.6/§9。
-- **apply-now 立即应用（18 增补）**：pending 相位新增用户触发的「立即应用」
-  （复用既有激活事务与 restartLocal 停机窗口，零新终态、零新崩溃窗口）。契约
-  见 `docs/design/18-addendum-apply-now.md`。**剩余验收（§9.2 实机门禁）**：
-  macOS 打包态 `.app` 运行中「立即应用」全链；Linux server gateway 生产 TLS 下
-  POST apply-now → 202 → 停机窗口轮询 → 探针 → 故障注入回退；`restartLocal()`
-  真实 1s grace × 健康计时器交错；Gateway restart 窗口前端重连；Windows 只读投影。
-- **发布基础设施长期目标态**：把 `ci.yml` 的 test job 抽为 reusable workflow，
-  由 `release.yml` validation 直接复用。当前两份 YAML 已覆盖 gateway/runtime、
-  control-plane、desktop、renderer、插件、CLI 与 policy 关键门，但仍靠策略测试和
-  人工同步，新增 CI 门禁存在漂移风险。
-- **Gateway npm 分发延后**：现行正式分发只有 GitHub Release 中的 gateway `.tgz`
-  与同名 `.tgz.sha256`；workflow 会 pack、安装到干净前缀并执行 `gateway --help`，
-  **不会**执行 npm publish 或维护 dist-tag。是否开放 npm 正式发布需另行决策与门禁。
-- **desktop 打包闭包 P2（2026 修复轮已全闭环）**：托盘图标候选路径已收敛（只留
-  extraResources 真实资源）；打包态缺 `dist/preload.cjs` 已改 loud 失败（对话框 +
-  exit(1)，不再静默回退 `preload.cts`）；`dist/**/*.map` 已排除出包；`build:renderer`
-  输出已隔离到 `dist/web`（vite emptyOutDir 只清 web/，不再触碰共享 dist/ 下的
-  preload/control-plane/host 包产物）。2026-09-03 修订：`gen-boot-manifest.mjs`
-  随迁 `dist/web`（manifest/预载/CSS 全部读写 web/，与 webDistDir 服务根一致；
-  此前读根 `.vite` 只在残留旧产物下假绿，干净构建会失败）。打包验证以 CI
-  build:renderer + Desktop build sub-steps 及 release 产物为准。
-- **打包闭包自检（长期建议）**：CI 增加"desktop 主进程传递模块闭包 vs
-  `build.files` 清单"机械检查，替代纯手工核对。
-
-## 部分完成（剩余验收）
-
-- **vendor 源码树 submodule 化（2026-09）**：已迁移为固定 commit 的 git
-  submodule（`ensure-harness-vendor.mjs` 硬校验 submodule HEAD == `harness.commit`
-  并断言链接集合 == 锁文件 vendor importer 集合；升级唯一入口
-  `scripts/dev/update-vendor.mjs <tag>`）。**剩余验收**：Windows runner 上
-  submodule 物化 + `ensure-harness-vendor.mjs` junction 建链（ci.yml `test-windows`
-  腿即该验收；release `build-windows` 腿同步覆盖）、CI 真跑（push 后 ci.yml 全绿）、release.yml 改动后的 `workflow_dispatch` dry_run 全链验证
-  （release-checklist §7b 纪律）。
-- **桌面通知（设计 19）**：自动化主链已完成；**2026-09 实机修复**——macOS 横幅
-  进入通知中心后不触发 Electron close（通常仅用户手动清除才触发），16 条未清除
-  的存量横幅曾占满 `activeNotifications` 16 条硬上限，导致后续通知（含设置页
-  「发送测试通知」，UI 报「测试通知发送失败」且 OS 侧无任何请求记录）被永久
-  拒发；已改为 `BoundedActiveNotifications` 满员按插入序 loud 淘汰最旧一条并
-  close 退役、新通知照常登记显示（硬上界不变，仅最旧条目 click 失效）。
-  剩余 macOS 系统通知权限/拒绝行为、点击打开、关窗/托盘/后台三形态与打包态实机验收。
-- **未读徽标（设计 19 §3.7，2026-12 M1–M2 已落地）**：Dock/任务栏应用图标红气泡
-  ——renderer `projectBadgeCount`（完成未读蓝点集跨来源计数，`badge-count.ts`）→
-  `dsh-chamber:badge-count` trustedIpc → 主进程白名单（有限非负整数 ≤9999）+
-  `badgeEnabled` 裁决（关闭强制清零、重开 reconcile 恢复）+ 平台门
-  `app.setBadgeCount`；设置新增 `notifications.badgeEnabled`（默认 true，通用页
-  「通知」组独立开关行，zh/en i18n）。**子代理压制修复**：父回合结束但后台
-  子代理仍存活（`runningSubagents > 0`，06 §4.5 后台模式）的武装蓝点不再计入
-  徽标——`projectBadgeCount` 增加运行时事实压制参数（App badge effect 同时依赖
-  `runtimeFacts`，子代理计数归零即重推），与窗口内运行环压制/complete 通知抑制
-  同规，修复「主分支闲置等待子代理期间 Dock 误亮红气泡」误报；子代理全部结束后
-  蓝点正常浮现计入。已知呈现边界（设计 19 §3.7 计数语义，文档化取舍）：徽标只计
-  App 账本武装的完成——vendor completed 兜底行仅窗口内呈现（首观察/撤回窗口）；
-  断连窗口徽标按保留账本计数、子代理压制数据随来源事实清空而短暂缺失（重连后
-  事实行带回 runningSubagents 自动归零，自愈）。自动化覆盖：`badge.test.ts`
-  （desktop）、`badge-count.test.ts`
-  （renderer，含子代理压制用例）、chamber-settings 与 notifications-settings
-  新键用例。**剩余实机门禁**：macOS Dock 红气泡打包态实机（武装/阅读解除/来源
-  退役三态 + 重载清零 + 退出清零）；Linux 仅 Unity launcher 家族可见（GNOME 的
-  Dash to Dock 消费同一 DBus API 可见；默认 GNOME/KDE 无效果，文档化平台限制）；
-  Windows 任务栏 overlay（`setOverlayIcon` 数字角标图）v1 门控未接线——设计 23
-  实机矩阵排期。
-- **open-in 的 VS Code 窗口策略（2026-12 核查 + 修复）**：核查确认 dsh-chamber
-  以 `vscode://` URL 拉起会话目录时，若 VS Code 已在运行，其默认策略是**复用
-  最近活动窗口并替换其内容**（`window.openFoldersInNewWindow` 默认 `default`，
-  外部协议 URL 无 new-window 指令 → 主进程 `handleProtocolUrl` 走 reuse 分支；
-  已在本机 VS Code 1.135 主进程 bundle 源码逐级核实；CLI `code <path>` 因
-  preferNewWindow 默认新开，故按钮与 CLI 体感不同）。修复：新增 chamber 设置
-  `vscodeOpenInNewWindow`（默认开；chamber-settings.json + 通用页「运行」组
-  开关，zh/en）——开 → 本地 `vscode://file/` 与远程 `vscode://vscode-remote/`
-  两种目标统一追加 `?windowId=_blank`（VS Code 在复用决策前强制新窗口分支；
-  目标文件夹已开在某窗口时仍聚焦旧窗口不重复开）；关 → 保持裸 URL 交还 VS
-  Code 自身策略。按钮与 OS 深链同管线（wiredCtx 每次拉起惰性读取）。
-  自动化覆盖（2026-12 实测）：desktop chamber-settings / deep-link / open-in /
-  ipc-surface-mirror 套件 + desktop tsc（含 main.ts 接线）+ build:preload +
-  typecheck:settings-bridge（GeneralView/类型镜像）；build:renderer 与三列布局
-  的整窗视觉待 vendor 树就绪后补跑。**剩余实机门禁**：见『VS Code 深链 +
-  open-in（design 16/20）』条目的 macOS 实机验收（新窗口/复用两态在打包态
-  VS Code 的真机确认仍属外部门）。
-- **会话待办区（sidebar todo area，2026-12 已落地）**：侧边栏宽栏滚动区上方固定
-  待办块（仅在有内容时出现、零占用；最多 3 条 +「还有 N 项」展开——展开侧有界：
-  行区内部滚动，「收起」常驻，条目回落即自动收起）——对 chamberBridge 投影的
-  **纯派生**（`shared/todo-attention.ts`：完成未读 ∪ 待交互 approval/plan-review/
-  question，与行尾指示同一优先级纪律 pending > 子代理 > completed > 运行环
-  （completed 优先于环，通道错位窗口不漏报）；断连不臆造、重连随真实状态重现；
-  正在查看的会话排除，同高亮 currentId 单选纪律）。点击 = 权威 open 路径（跨来源
-  切 shell + 打开会话；经 SidebarRoot 守卫回调——拖拽尾随 click 抑制 + 同会话内联
-  重命名保护）；**移除 = 已读/pending 解除的投影驱动结果，从不乐观、与列表可见性
-  解耦**——点击即跳转，不做自动展开/滚动（不触碰共享折叠偏好）。设置新增 chamber
-  全局 `sessionTodo` 嵌套块（主开关 + 完成/提问/审批三类事件开关，**默认全开**——
-  被动呈现非打扰，与通知默认关不同）；通用页新组「会话待办区」
-  （`session-todo-settings.ts` 镜像助手 + `settings-store.ts` 乐观 overlay 嵌套合并
-  扩展 + zh/en i18n）；desktop store/preload/renderer 三处类型镜像（preload↔renderer
-  由 ipc-surface-mirror 守护；desktop store 手工镜像，同 notifications 纪律）+ main
-  applySettingsPatch 嵌套 deep-merge；sidebar `shared/todo-prefs.ts` 只读订阅（未水合
-  回落默认）+ `todo.*` zh/en 文案。自动化覆盖：desktop chamber-settings 用例、
-  settings-bridge session-todo-settings/settings-store 用例、sidebar
-  todo-attention/todo-prefs 用例。
-  **剩余实机门禁**：运行级验收——通用页开关即时生效、同源/跨来源/未常驻跳转与权威
-  移除、折叠来源中目标会话、断连→重连条目重现、rail 不渲染、「还有 N 项」展开/收起
-  与自动收起、展开后内部滚动（8 行上限）、拖拽尾随点击不误开、同会话内联重命名期间
-  点击不打断、打包态。
-- **VS Code 深链 + open-in（设计 16/20）**：剩余 macOS 深链冷/热启动、打包态、
-  托盘/退出在途、N-ctx、VS Code 缺失、`sshPort != 22`、Finder 下拉在 vendor
-  会话头部的定位/层叠，以及远程来源仅 VS Code 的实机验收。
-- **Git Worktree 插件（设计 08）**：M4 尚余真实远程 Linux + Git 仓库端到端
-  验收（首次 ready-time seed 后重启生效、并发 session 删除竞态、Git LFS/filter
-  提示与恢复边界）。
-- **远程实例插件管理（设计 13）**：本地 `dsh plugin` / `pnpm pack` 仍依赖
-  `resolvePnpmBinDir` 对 PATH、nvm、volta、homebrew 的 best-effort 探测；需打包态
-  实机验证。
-- **桌面端更新（设计 11）**：feed 隔离与 beta 版本自锁已实现（stable 仅
-  `latest*.yml`，beta 仅 `beta*.yml`；仅 canonical `X.Y.Z-beta.N` 自锁 beta，
-  `alpha`/`rc`/其他 prerelease fail closed；发现失败不调用 updater 或回退 stable）。
-  **2026-12 增补已入库**：「重启并安装」受控重启按钮（mac/win；
-  `dsh-chamber:update-restart` → quitAndInstall；Linux 因 AppImage 单实例
-  竞态不提供）与启动清理已装更新缓存（~300MB/轮）；语义/门控/测试见 design 11
-  §3.1/§9 M4-M5。剩余：用真实 Apple 凭据跑通一次发布 CI、Developer ID
-  签名/公证/stapling/Gatekeeper 验证，以及双平台检查、确认前不下载、下载后
-  退出安装、mac quitAndInstall 原生 quit 语义断言清单（design 11 §9）。正式
-  macOS 发布缺凭据会在 Release mutation 前阻断；凭据或签名/公证无效会阻断
-  draft 公开 finalize。只有 `dry_run` 允许 ad-hoc mac 构建（无条件清空签名/
-  公证环境与 `GH_TOKEN`，不创建/修改 Release、不上传产物）。
-- **会话创建/fork 侧边栏收敛延迟修复**：剩余本地 + 远程 SSH 实例实机验收
-  （行出现延迟、状态图标延迟、位置跳动三类症状）。
-- **移动端 Web 访问面（design 17 §18，2026-09 提出 / 2026-12 随编排面剥离修订）**：
-  **P1 实现已落地（2026-12）**：`packages/dsh-chamber-client-ui-mobile`（移动适配
-  插件本体——触屏档抽屉化布局/44px 触控/safe-area/设置全屏/弹层限宽/输入行单行、
-  回车换行与 editability 恢复行为层、layoutFacts 双源驱动的抽屉滚动锁（gateway 官方 ui-layout 回退属性观察，§18.4 项 3 部署例外）、shell.overlay
-  汉堡+backdrop；零代码复制、按 v0.1.2-alpha.3 基线重写；typecheck/29 测试/
-  构建全绿）+ `dsh-chamber-client-ui-layout` fork 订阅面（`ctx.layoutFacts`：
-  getLayoutSnapshot/subscribeLayout，回归全绿）+ gateway 接线（build.mjs
-  host-packages 拷贝、seedFiles 含 lib/client.js、UA 分流开关默认关闭——
-  `--mobile-ua-redirect`/`--mobile-entry`，13 个 UA 用例 + 4 个 config 用例全绿，
-  test:gateway 全绿（fail 0，含 13 UA + 4 config + build 产物断言））
-  **P1.5 已完成（2026-12）**：IME 恢复完整五层（程序化 focus 丢弃循环/
-  editability 翻转/pointerup 手势 refocus/visualViewport 键盘判定/键盘钉住）、
-  composer 30s busy 自愈、共享 layout source（滚动锁/Esc 单实例）、
-  职责区分显式化（§18.2 管理面 vs 适配面矩阵——认证/凭据/会话边界/UA 分流/
-  登录流转为 gateway 独占，插件零认证引用已 grep 验证）。
-  **移动适配轮（2026，mobile-adaption 工作树，实机门禁 §18.6 项 2）**：
-  会话头三轴适配已落地——汉堡 gutter（`conversation.session.header` 出口
-  直接子结构 `> header` padding-left，覆盖 titleRow 与 tab 行）、crumbs
-  换行不裁切（官方 nowrap+overflow hidden 静默截断标题链/「N 个子代理」
-  谱系 chip）、「Session 日志」导出胶囊手机档 44px 图标化（markup.ts 按
-  官方双语文案+下载图标打标 `data-mobile-dismiss="session-log-export"`，
-  幂等且剪枝搜索不遍历聊天滚动体）；抽屉导航两条行为补丁——iOS 合成
-  click 抑制自愈（`drawer-taps.ts`：稳定 tap 的 pointerup 后 120ms 宽限内真实
-  click 未达则重发非受信 click，单击即切换；平移/表单/抽屉外不触发）+
-  导航后不弹键盘（IME layer-1 gesture 判定改为导航区语义：仅抽屉/会话头导航手势丢弃回焦，
-  seat 内手势、发送键、鼠标/硬键盘与 portal 选择器流程保留输入意图）。
-  设置页手机档整页适配同轮落地：官方壳（800px flex-row、188px 竖排 nav
-  rail）改全屏堆叠——panel `flex-direction: column`、nav rail 变顶部横条
-  （标题+横向滚动分区 chips）、Close 固定（P1"整列滚动"会让 Close 滚出屏，
-  已收回到 options 区滚动并补底部安全区）、Models 行 4 列 grid→2×2 与
-  Plugins inventory 两列卡片→单列（官方内部格子无稳定属性，两处启用
-  `[class*="_<local>_"]` 哈希不敏感局部名匹配——命名翻转 fail-soft，
-  属记录在案的例外锚点族，与 `[class$=_…]` 后缀契约同待实机固定）、
-  其他 aria-modal 弹层限宽 100vw-24px、弹窗内可编辑字段套用 composer
-  16px 聚焦缩放底线。
-  **Review 轮加固（2026，四路独立 review 后执行，typecheck/test/build 全绿）**：
-  抽屉自愈防双激活（愈合后 150ms 内同坐标受信 click 抑制；起点按 pointerId
-  跟踪并响应 pointercancel；contenteditable 任意非 false 态均排除）；会话头
-  胶囊打标补晚挂载路径（`isStructuralTarget` 有界 4 跳祖先走查——frame > col
-  > conversation outlet > .root > 会话头出口可达，聊天滚动体 ≥6 跳仍过滤）；
-  拖拽把手死规则替换为官方属性锚点（`[data-width-handle]` /
-  `[data-side]:not([role="tooltip"])`），清理已证伪的 `[class$="_titleRow"]`
-  死规则并刷新样式表头部旧锚点声明。
-  **五合并复审加固（2026-12，合并后 multi-agent 审查轮，typecheck/test 全绿）**：
-  抽屉自愈单击清除改**双向判定**——真实 click 落在 pointerup 目标或其子树上
-  清除 pending，落在其**祖先**上同样清除（iOS 把迟到的合成 click 重定向到
-  down/up 目标的最近共同祖先，hover-reveal 位移后祖先点击已冒泡激活行，不再
-  由 heal 双激活；`shouldClearPendingHeal` 纯谓词化 + 边界单测）；heal 起点
-  防漏——pointerdown 起点也须在抽屉内（backdrop 边缘 12px 内起手滑入的 tap
-  不得叠在 backdrop 关闭动作上 heal）；晚到受信 click 抑制窗判定抽为
-  `isSuppressedLateClick` 纯函数并补边界用例（负时间/超窗/超 slop）；
-  IME layer-1 输入意图收紧为**仅 composer seat 内 pointerdown**（导航后 500ms
-  窗口内消息区滚动/点按既不再被当作输入意图、也不再取消进行中的导航回焦
-  丢弃——「切会 + 快速滚动」子场景不再弹键盘；seat 内手势/发送键/鼠标与
-  硬键盘输入意图保留，picker 流在键盘开启态不受影响）；breakpoints 测试
-  锚点收紧为 `selector {` 定位（前缀假阳），常量钉改名并标注 device-gated；
-  anchor/产物注释刷新（rc.1 复核注与 `[data-side]` 审计注）。
-  **剩余**：实机门禁（§18.6：真机抽检——触控目标比例/抽屉开合/弹层不出屏/
-  键盘遮挡/安全区；本轮新增：汉堡不重叠、crumbs 换行、Session 日志图标化
-  可点、iOS 单击切换生效、切换不弹键盘且输入意图焦点不回归、设置各分区
-  手机档走查——顶部 chips 可达/Close 固定/无横向溢出/输入聚焦不缩放、
-   刘海横屏左右安全区、深层谱系标题高度、composer 工具栏遗留死规则
-   （`.row/.trigger` 后缀）、composer 覆盖层自愈增强（周期扫掠/遮罩中和，
-   Yui 模式）、layer-3 聚焦态+键盘关同击分支、769-1023 粗指针弹窗带、
-   设置 chips 尾项可窥/换行、抽屉行点击不自动关闭的 UX 复核（社区
-   one-tap-close 预期）、自动聚焦弹层搜索框）；
-  P2（PWA
-  安装 + SW 壳离线，per-instance scope，尊重官方
-  "不完整离线"立场）；**0.1.2-alpha.4 DOM 锚点重审计**（布局壳部分已执行：
-   双 pin（a3=dd6322d6 / a4=4e84901e）的 ui-layout **AppFrame 组件源码逐字节一致**
-   （组件级 git diff 空；ui-layout 包内另有 AppFrame.module.css 纯视觉边框微调，不影响锚点）；审计发现 **details 打标缺口**——官方 details 列壳自首帧常驻、其
-  `[data-slot=details]` 出口按会话门控后挂，观察器原谓词漏"出口挂入常驻列壳"
-  （frame 孙级挂载）→ **已修（2026-09）**：(a) 谓词补孙级分支（markup.ts
-  `isStructuralTarget`）+ (b) frame 属性观察双保险（`data-sidebar-collapsed`/
-  `data-details-collapsed` 变更→重打标，独立通路；**其接线仅实机可验**——单测无 DOM 观察器基建，只覆盖纯函数谓词/批决策）；谓词/批决策纯函数化，
-  markup.test.ts 补 boot 空壳 + 晚挂载回归用例；代码注释与 README 出处已刷新为
-  a4。缺口定性：潜伏（官方当前无可达的 details 打开路径——`panels.details`
-  默认 0、`openDetails` 注入面为死代码、官方 ui-layout spec 仅证 details 为 session scope 且无 UI 消费方；
-  手机 <996px 让步链上开不了；恒关时打标/不打标视觉等价），非 a4 回归（自插件
-  首提交即携带）。**剩余**：`[class$=_…]` 后缀选择器命名契约的测试固定、
-  composer 锚点 fixture 化、Android 键盘盲区真机门禁（`interactive-widget=
-  resizes-content` 下 visualViewport 键盘判定恒 false——IME 层 1 可能关掉发送后
-  刚开着的键盘，iOS 不受影响，§18.6 项））；P3（公网认证流转正式化、Web Push）。先行形态 =
-  内网/可信网络（`--no-auth` 显式可信网络或 tailscale）。契约：§3 装配矩阵 +
-  §10 项 2 的移动例外——`dsh-chamber-client-ui-mobile` 是唯一随 gateway
-  发行物打包 seed 的 chamber 客户端插件（链路无桌面，不参与 `/chamber/plugins`
-  桌面同步）。
-- **认证服务端 Gateway（设计 17）**：自动化与打包面已完成，剩余发布前实机门禁：
-  - 生产 TLS 反代的 Host/Origin/XFF/Secure-cookie、HTTP/WS 一致策略与 SPKI pin
-    正/负例；真实 dsh 的 `/api/remote.mux` 断线恢复和插件 bundle；
-  - 打包 Desktop 的三种代表形态（HTTPS+凭据、HTTP+凭据、显式可信网络
-    `--no-auth`），重启后 safeStorage 解密/密码重登、凭据变更撤销 live stream、
-    N-ctx 与完整 gateway runtime 管理面；
-  - `/chamber/runtime` 在生产 TLS 下的 SSE/poll/auth，以及真实版本安装→探针→
-    故障回退→DSH_HOME 恢复；
-  - Linux 真实 system/user service 与 foreground 安装升级：目标版本/新 boot identity
-    健康证明、restart 失败回滚、local/global artifact 回退及凭据/env anchor 保留；
-  - `--bind 0.0.0.0` 带凭据/显式 `--no-auth`、SSH 隧道回环、tailscale 等可信
-    网络形态的全链路及 401/421/403 负例。
-  - **运行时凭据管理（design 17 §7.4）**：自动化面已完成（v2 凭据信封、
-    `/auth/change-password` `/auth/change-token` `/auth/credentials`、stateDir
-    独占锁、`gateway auth` 停机态 CLI、`/chamber/` 凭据面板与 S25 不变量，2026-09
-    全量修复轮已完成）。**剩余**：desktop settings-bridge 便捷重置（Phase 4
-    推迟项）、真实 TLS 反代下改密/轮换/停机态 CLI 恢复的实机门禁。
-  - **http 连接链路修复（S0/S2，2026-09，本地单测全绿，待实机部署验证）**：
-    - S0：gateway 代理出口对托管 dsh 的 HTML 注入 `__DSH_TRANSPORT__.ownsHost`
-      （上游文档化钩子契约），解除官方设置页在非 loopback 页面上的
-      memory 持久化门控（"settings are unavailable in this browser"）——网页直连
-      settings/models/插件可用；**2026 audit 勘误：design 17 §10.5 已含 S0 全文
-      （≤64KiB/identity/fail-soft/钩子契约），本行「文档待同步」已过期**；属
-      "能登录即受信"的信任边界决策（auth 门在先，非鉴权绕过）。
-    - S2：control-plane 对**非 loopback 上游腿**（direct-http(s)，含 gateway 与
-      dsh 两种 kind；判别轴为解析后目标的 host 而非来源 id——ssh 隧道恒为
-      loopback 本地腿）启用 OS 级 TCP keepalive（30s，对齐 ssh
-      `ServerAliveInterval` 语义）；renderer staleness 看门狗对
-      **transport=http 来源**（registry spec 判别）的静默 mounted 推送触发轻量
-      `connection.reconnect()` 自愈（staleness 120s / 退避 60s；mounted=本代曾
-      推送；不作用于 local/ssh 隧道来源）。稳态代价如实记录：健康空闲
-      direct-http 来源约每 2 分钟一次轻量连接重连（依赖撤稿→重发链刷新
-      新鲜度；链不浮现则退化为退避门 ~60s），真死 channel 自 stale 后每
-      ~60s 重试一次——均为治愈冻结局的固有取舍（App 层无法区分冻结与
-      空闲；活跃来源不受影响）。
-    - S2-c：调宽 dsh 2s/2miss mux 心跳为可选增强，**未实现**。可行性已确认：
-      补丁层格式本就支持 id-targeted config override（既有
-      cordis.patch.yml 机制，desktop plugin-sync 保留用户行；形如
-      `{id: typert-gateway, config: {websocketHeartbeatIntervalMs}}`，
-      匹配不到 warn+skip）——但 chamber 代码零引用 typert-gateway id，
-      需先扩展 gateway 的 patch 写入器，故单列。
-    - **剩余验收**：打包态实机——浏览器直连 gateway 的 Models/插件设置可写；
-      杀托管 dsh / 断网注入后 sidebar 60–120s 自动恢复；升级 dsh 版本复验
-      （`__DSH_TRANSPORT__` 钩子与 typert-gateway id 跨版本存在性）。
-
-## 设计未决（02 §5 / 04 §7）
-
-- **起始端口偏移**：本地默认 17510、控制面默认 17500；当前固定起始端口 +
-  P+1 重试 + 记录仲裁，是否开放配置仍未决。
-- **trusted-host 自定义 Host**：当前反代 Host 与实例自身
-  `127.0.0.1:<port>` 一致；未来引入自定义 Host 时须同步扩 trusted-host 集。
-- **多控制面 `$DSH_HOME` 冲突**：同 stateDir 共享 home 时会话 JSONL 可追加，
-  settings 由 dsh 的 `settings-conflict` 仲裁；是否进一步隔离未决。
-- **多控制面 catalog metadata 无跨进程 CAS**：runtime status/dshPort/error 已完全移出
-  catalog，消除了高频 stale lifecycle 写回覆盖；但两个进程同 stateDir 并发修改
-  label/accentColor 仍是 last-writer-wins。可靠保持多 writer 需要 kernel-backed、
-  跨平台 lifetime/document lock + 锁内 reload + 字段 intent；若不引入该能力，则需正式
-  改 design 02 为"并发 plane 必须不同 stateDir"。普通 pidfile/mkdir stale lock 存在
-  三方 takeover 双持，不能作为修复。
-- **响应头白名单双处同步**：权威在 04 §4.3，仍建议把代码/文档表述进一步
-  单源化。
-- **`__DSH_BOOT__` 随 dsh 版本漂移**：manifest 形状继续以 vendor
-  `parseBootManifest` 为准维护。
-
-## 范围决策与剩余偏差（不做 / 推迟 / 移出）
-
-- **`--no-auth` 是醒目的可信网络有界例外**：Gateway 外部部署默认必须认证；
-  只有服务器显式传 `--no-auth` 才可覆盖，启动器二次确认并打印安全告警。它不是
-  静默 fallback，也不授权普通匿名 control-plane 绑定公网。
-- **Gateway state 根目录自动收紧（2026-09 用户决策）**：`createGatewayStore`
-  对既有 `stateDir` 由 fail-closed `require 0700`（启动崩溃循环）改为经 pinned
-  no-follow 描述符自动收紧到 `0700`，并新增属主 uid 校验（异主 fail-closed）；
-  broad root 拒绝与 Windows 继承 ACL 让步不变（17 §12 目录边界、§17 S15）。安装器同步以
-  0700 创建 `~/.dsh-chamber` 全部自有目录。
-- **safeStorage 的诚实回退**：Gateway token/密码优先 safeStorage；OS 加密不可用
-  时按用户决策回退 target-bound 0600 明文文件并在非秘密投影/UI 中如实显示，
-  不把 plaintext 冒充密文。SSH 密码仍采用 endpoint-bound 0600 明文镜像。
-  **Windows 分支例外（design 23 C16）**：win32 上 DPAPI（safeStorage）不可用时
-  拒绝明文落盘——凭据仅本次会话内存驻留（file=null），每次连接需重录；S22
-  明文兜底仅适用于非 win32 平台（0600 语义在 Windows 不可诚实表达）。
-- **Windows 发布身份让步**：Windows x64 安装包当前未做 Authenticode 签名，
-  SmartScreen 提示是已知取舍；update feed 的 sha512 只证明下载完整性，不等价于
-  发行者签名。
-- **N-ctx 单文档信任域**：连接一个远端实例会让其前端代码与同一 renderer 文档内
-  其他实例及高权限 preload bridge 共域。现有 main-frame/origin/proof/主进程确认
-  只能缓解，真正横向隔离推迟到每实例独立 WebContents 架构。
-- **移出项**（P3 硬纪律）：匿名 control-plane 的认证/审计、薄壳聊天/会话列表/
-  审批弹窗、控制面会话 runtime/统一索引、连接 broker/绑定、walkthrough、通知中心/
-  历史、MCP、文件夹/笔记、web 预览、目标/终端等不得回流。设计 17 的独立
-  Gateway 认证/派生编排、设计 18 的共享 dsh 运行时核心、设计 19 的 Electron 原生
-  边沿通知、设计 08 的实例内 Git 插件和设计 20 的可信 open-in 边缘能力是边界明确的
-  例外，不得泄入匿名 control-plane、引入 session 消费者/通知历史，或变成第二套执行面。
-- **不做（v1）**：跨来源移动会话、单 store 真融合、控制面会话实时同步、远程
-  实例管理 UI 外壳。
-- **推迟**：flat 单列表模式（与"仅按来源分类"呈现原则有张力）。
-- **设置壳偏差**：未连接实例不装配子 ctx；stub remote 无 WS 失效流；壳不渲染
-  官方 SettingsRoot、子 ctx 懒装配；服务器选择器使用 body portal + viewport
-  翻转/钳位与内部滚动；离线远端仍可选并显示不可达占位与连接管理动作；chrome
-  跟随宿主 locale，子 ctx 跟随目标实例 locale。
-- **默认排序 `manual`（06 §3.1）**：按 wire 顺序，与官方默认 `updated` 不同，
-  是有意产品取舍。
-- **窗口标题冻结**：桌面原生标题固定为 `dsh-chamber`，会话名只在应用内呈现。
-- **Electron 二进制惰性安装（每机器共享 dist）**：根 postinstall 默认跳过，仅
-  `DSH_CHAMBER_ELECTRON=1` 或 `dev:desktop` 首启按需物化到平台缓存共享 dist
-  （macOS `~/Library/Caches/dsh-chamber/electron/v<版本>-<平台>-<架构>/` 等，逻辑见
-  `packages/desktop/scripts/electron-shared.mjs`）；worktree 并行开发共用同一份，
-  不再每个 worktree 下载/解压 ~300MB。Gateway/control-plane/CLI 不携带 Electron。
-- **dev 实例隔离**：dev 使用独立 `packages/desktop/.dev-user-data`；控制面端口从
-  17520 起自动退避到首个空闲端口（`DSH_CHAMBER_CP_PORT` 可固定覆盖，退避区间
-  全占时回退系统临时端口），多个 dev worktree 可与打包版的 userData/17500 共存。
-
-- **dsh 运行时设置面统一（2026-12 实施，登记契约变更与残余偏差）**：两分支同构
-  UI——彩色状态徽标（正常/检查中/下载中/安装中/待应用/应用中/回退中/重启中/切换失败/
-  快照失败/恢复受阻/启动受阻/操作失败/错误/元数据异常，四色）取代「已是最新/可用更新」
-  claim 文案；快照+磁盘占用移至「版本源」块下方段尾事实块（plan 24 D6-A）；registry 只读行+编辑态统一；常驻
-  「清理已安装版本」入口；gateway「部署锚」口径。desktop env/只读平台放行「重启 dsh」
-  （design 18 §3.6 落地）。gateway 新增 `cleanup-version` / `restore-pre-rollback` /
-  `recover-metadata` 路由、FATAL blocked-alive（不再进程级拒启，status 可轮询 +
-  救援路由）、status 的 metadata 健康投影（metadataHealth/metadataComponents/
-  canRecoverMetadata）、store-prune 标记消费（消除 10GiB 软上限死锁）。
-   plan 24 round（2026-12）：磁盘行改「运行时占用」+ D1-A 真实字节口径（`runtimeDiskSummary` 整树一次
-   walk、`(dev, ino)` 去重消除硬链接双计 + `unclassifiedBytes` 未分类残留桶，total = Σ分类含未分类；
-   APFS reflink 近似边界登记）；「当前状态」h4 与 `dshRuntimeGroupStatus` 键、「选择版本」字段 label
-   移除（select 走 aria-label，键保留）；快照说明句删除、数值 12px/600 加粗、行距收紧；失败现场
-   清除入口仅本地（`dsh-chamber:runtime-clear-failure` trustedIpc + 共享核心 `clearRuntimeFailure`；
-   gateway 无对应清除路由，偏差登记）。
-  残余登记（有意保留）：desktop SETTINGS_SET 在 env 下允许更换 registry（设计文字
-  禁，代码行为有意更宽）；~~restore-builtin × restore-half 逃生集 desktop 更保守
-  （先 retry-restore）而 gateway 沿用设计允许集~~（**2026 audit R2 修订**：gateway 恢复期
-  已与桌面对齐收窄——swap-attempted/snapshot-failed/restore-blocked/FATAL 只开放各自
-  retry 与 recover-metadata，restore-builtin 仅限 pending/健康选择；原因：共享核心对
-  armed reset 在持久恢复标记下必然复阻，旧矩阵格不可执行且失败会残留 armed reset
-  intent 劫持后续 retry 语义）；registry 白名单形状 desktop
-  https-only、gateway 允许 http-loopback（共享 canonical 更宽，桌面层收紧）；
-  desktop 15s+6h 周期检查不移植 gateway（避免周期出网；进页拉取 + 手动检查）；
-  gateway 组件级交互仍以纯函数/API 客户端测试代证（原实机门禁项维持）。
-
-- **「内建版本」行引导（2026-12 用户决策，方案 2，登记桌面本地分支）**：下拉
-  选中与随应用内建同版本的行且该版本尚未装成受管树（无 cached 树）、存在用户
-  选择（hasOverride）时，主按钮从「更新/切换到 vX」改为引导「恢复内建」（清除
-  用户指针回到随应用副本，零下载；树/快照保留）；「仍下载并安装为受管版本」
-  保留为显式次要动作。避免把随应用已含字节重复下载成第二棵受管树的同时，不
-  剥夺受管树语义（回滚/快照/清理台账、独立于应用更新）。已缓存（曾装树）时
-  保持普通切换不变。gateway 分支（部署锚）已按同款条件镜像（2026-12 全面
-  统一：选中与内建锚同版本行且未装受管树 + hasOverride → 主按钮「恢复内建」
-  = restore-builtin 事务，仍下载并安装为受管版本为显式次要动作；恢复行按钮
-  在引导态隐藏避免重复）。
-
-- **2026-12 review 轮次修复与登记（设计 18 §9.3 配套）**：① FATAL 启动块下所有普通
-  mutation 拒绝（路由 recovery-gate 增 startupBlockedReason 门，仅放行各自恢复面）；
-  ② FATAL×stale-pending 相位投影为 idle+startupBlockedReason（恢复面不被 pending
-  门锁死——**2026 audit R3 勘误**：原登记「canRecoverMetadata 与路由可达一致」不成立——
-  路由 gate 在 blockedReason 分支放行后落穿 pending 门，recover-metadata 曾被 409
-  runtime_pending 拒、restore-builtin 又被 block 分支拒 → 恢复面全锁死；R3 修复为
-  block 分支 allowed 即早退 return null（block outranks pending，pending 分支仅
-  blockedReason===null 时生效），fake 与 real manager 两层测试补钉）；③ boot 前 `metadataRecoveryPending()`
-  预检——引擎归档元数据后 gateway 重启不再绕过探针门直接以内建服务 DSH_HOME；
-  ④ recover 成功后 resume-start 失败转入 `metadata-start-failed` 哨兵（可重试）；
-  ⑤ store-prune 标记在 boot 边界消费（desktop 同款语义）；⑥ 徽标/registry 编辑复位/
-  versions 内嵌 error/恢复行 window.confirm/blocked 原因行等 review 项已修。
-  登记（有意保留）：desktop main.ts 的 RUNTIME_RESTART 等 handler 内联无单测
-  （renderer 镜像 + lockstep 代证；**2026 audit 勘误**：非「抽取纯函数排期」——apply-now
-  门已抽为 apply-now-gate.ts 且有测试，其余 handler 内联仍无单测）；env×FATAL（dormant
-  corrupt selection）预路由 `shouldProbeEnvWithDormantCorruptSelection` 为 desktop 独有
-  （gateway env pin 经共享核心 env-override 分支等效处理；**A-U2 已补**：gateway env-override
-  启动现跑激活探针门，失败 → `env-probe-failed` 停机阻塞，见下段 audit 块）；
-  `status()` 的 metadata health 检测无缓存（小文件读；**磁盘投影已有 30s TTL 缓存**——
-  DISK_CACHE_TTL_MS，原「TTL 排期」措辞仅指 metadata health，范围限定）；metadata
-  恢复期 pnpm prune 子进程不可 abort（退出延迟登记）。
-
-- **settings/connection 插件管理面 UX 重构已落地（2026-12；原「插件管理面 UX 重构」todo 已落地并移出目录）**：P0 文案/空态修正（方向词、空态范围注、未配置服务常驻提示、重启未配置事前警告、版本冲突横幅指引）；P1 ssh 默认视图与 gateway/local 同构、legacy diff 折叠为对账次级入口（design 21 §10 已登记偏离：纯层与后端行为不变，仅默认呈现改变）；P2a 插件入口自绘语义图标；P3 术语收敛（入口=管理插件、chamber 受管组件）。范围：仅 settings-connections 渲染层（PluginDialog/ConnectionsSection）与 locales 文案键值，纯层/IPC/域 deny 零改动。门禁：typecheck:connections、test:connections 已本地通过；build:renderer 由 CI/发布链路执行。
-
-## 2026 分域一致性审计（desktop vs gateway，5 域 60+ 项）验证与修复轮
-
-> 对审计清单逐条只读复核（A/C/B/E/D 五域独立核验 + 主代理抽验），18/19 项 A-F、
-> 14/15 项 C-F、13/13 项 B、9/9 项 D-1..D-7、10 项 E-1..E-17（E-5/E-7/E-17 由主代理
-> 复核）与清单相符（PARTIAL 6：A-F4/C-F2/D-6 措辞/E-2/E-8/E-13 精确化）。本块登记
-> 「修复了什么、确认属实但按现有登记收口、新登记开放项」。验证与测试计数见各条目。
-
-**已修复（本工作树，测试绿；详见 CHANGELOG 待并入）**
-- E-7（P1，高）：desktop plugin-tarball.ts 核算改为与 gateway tgz-scan 完全同式
-  （512 头 + padded 数据 + 1024 端标记预占），消除「desktop 放行、网关 400 too_large」
-  ~254–256MiB 窗口；新增 2 回归测试（含真实调用 gateway scanTgzMetadata 的跨形状
-  一致性断言）。desktop plugin-tarball 15/15。
-- A-U1（P1，中）：共享核心新增 `pruneRuntimeSnapshots` 组合（cleanupSnapshotArtifacts
-  → retention → pruneSnapshots，blocked-marker/retention-corrupt fail-closed 语义内聚）；
-  desktop main 收敛为栅栏 + 组合调用（行为不变）；**gateway runtime-manager 每次启动
-  事务尾部（boot/apply-now/restore-builtin/F7 全经 executeStartupTransaction）执行同一
-  组合**——gateway 从此有快照保留裁剪（keepRecent 3），不再无上限累积。snapshot-store
-  32/32（新增组合测试）、runtime-routes 103/103。
-- A-U2（P1，中低）：gateway env-override（DSH_GATEWAY_DSH_PATH）启动不再直接归一
-  健康——现于 executeStartupTransaction 内对 env 运行时执行激活探针门（hostDomains
-  shape gate 与受管树探针同款），失败 → `env-probe-failed` 停机阻塞 + 状态投影 +
-  index.ts 组合边界处理（无恢复路由：修 env 目标后重启 gateway）；2 新测试。
-- E-5/E-17（P1，高）：会话信任链常量收敛到 control-plane 新单源
-  `gateway-session-protocol.ts`（cookie 名/TTL 12h/cookie 值 4096/Bearer 32–4096
-  visible-ASCII/密码 12–1024）+ `spki-pin.ts`（SPKI 探针/转发双消费方单源，desktop
-  双份副本删除、经 dual-path facade 引用）；gateway auth/config 与 instance-proxy 门
-  全部改引共享常量（本地名保持别名）。跨侧漂移由导入关系机械消除。
-- A-U4（P3，低）：gateway restore-builtin 补 hasOverride 前置
-  （`runtime_no_override` 409，无 override 不再制造无谓停机+快照）+ 路由 recovery-gate
-  （FATAL 阻塞时 restore-builtin 回到 recover-metadata 面，与桌面 blocked 面一致）。
-  **R2 扩展（2026 audit 第二轮复审）**：恢复期矩阵进一步与桌面收窄——swap-attempted/
-  snapshot-failed/restore-blocked 相位及对应 phase-less blockedReason 只开放各自 retry
-  （route gate + manager 直调双重收口：manager.restoreBuiltin 前置守卫覆盖 durable swap/
-  snapshot 标记、restore marker、journal/pointer/override corrupt 与内存块，任何 stop 或
-  intent 写入之前拒绝）；manager restorePreRollback 'complete' 分支仅当 resume 判决干净
-  才清块（restore-pre-rollback/retry-restore 的 env-probe-failed 或 FATAL resume 判决不再
-  被吞）；env-probe-failed 路由拒绝文案给出显式无恢复路由指引；新增 3 回归测试
-  （durable guards / env-probe-failed resume / gate 矩阵）+ runtime-routes 106/106。
-- B-6c：control-plane /health 现接受 HEAD（监控探针 200，与 auth 门豁免注释一致）；
-  新增 manager-api 与 public-http 全链断言。
-- B-6e：新增 control-plane html-inject-lockstep 测试（64KiB 双常量文本锁步）。
-- B-6a/6d/6f：dispatch/middleware 失效「§11 S14」引用改自述；gateway config.ts 删除
-  死字段 channels{direct,ssh}（类型+赋值，零消费者零断言）；/api/i/local 双路同达 +
-  远端 id 恒 503 结构事实补注释（含两路 CSP/注入文档面不等价注明）。
-- C-F4：desktop_local_plugin_add_file 现传 allowFileSpec:true——本地文件夹直装可用
-  （设计 21 §10 缺陷①闭环；渲染层提交通道仍拒 file:，安全边界不变）。
-- C-F5：删除 `{ok:true,cancelled:true}` 死成员（PluginApplyResult2/SshApplyShape/
-  SshSeedHostGraphResult 及对应死分支与测试断言；ssh undo/local add-remove/materialize
-  pick/gateway apply 的真实 cancelled 保留）；ipc-surface-mirror 增补
-  SshSeedHostGraphResult 漂移护栏。
-- D-2 部分：gateway 浏览器运维页补「Start dsh」按钮（RUNTIME_PATHS.start；门控镜像
-  服务端 /start 路由 stopped/error/restart-exhausted + 非 blocked），消除停机态
-  Restart 409 死胡同文案；dashboard 仍为独立第三份运行时 UI（不共享 sidebar 核心）
-  ——共享核心迁移登记为开放项（下）。
-- D-3：ambient RemoteRuntimeStatus 注释 30→33 字段；settings-bridge 的
-  ChamberServerAggregate workspaces 镜像补齐 `synthetic?: boolean`（2026 audit 复核：
-  renderer vendor-modules.d.ts 与 git ambient sidebar-shared.d.ts **早已含**该字段——
-  commit 874df40；settings-bridge ambient 是最后补齐者，无遗留待补镜像）。
-- D-4/D-5：settings-connections 'connections'(order 30) 宿主 ctx 死注册分析落注释
-  （固定 '__connections' 直渲，未来宿主 ledger 渲染路径出现即双份，届时删注册）；
-  DshRuntimeSection 多用户中断文案归口注释（CS 卡 Modal 为准）。
-- A-F1/A-F13：4 元 FATAL 阻塞集收敛 dsh-runtime `FATAL_STARTUP_BLOCK_REASONS`
-  （desktop main / gateway index FATAL_RUNTIME_BLOCKS / manager RECOVERABLE_METADATA_BLOCKS
-  同源）；10GiB 磁盘软限收敛 dsh-runtime `RUNTIME_LOGICAL_DISK_LIMIT_BYTES`（两 owner
-  常量名保持为别名导出）。
-- 文档纠偏：design 21 §1 决策 18 与 §2.3 陈旧段（ssh 已掩码、PIV 非只读、gateway add
-  入口缺失为开放项）、§6.9/plan 4.2 的 blocked 上限 5min → 120s（CAN_RUN_WAIT_MAX_MS）；
-  STATUS S0「文档待同步」与 RUNTIME handler「抽取纯函数排期」过期措辞修订。
-
-**新登记开放项（核实属实、未做行为修复或归口后续）**
-- **R3 遗留登记**：~~运行中静默损坏（无内存块/boot 判决）时 status() 将 resolveWorkspace
-  自由文本投影为 startupBlockedReason——gate 视其为未知 sentinel 全路由 409（含
-  recover-metadata），重启 gateway 可恢复~~（**2026 audit R4 修订**：路由 gate 现按
-  status 的权威 canRecoverMetadata 归类——漂移态 recover-metadata 可达（200，探针 +
-  108 测试钉死：real-manager 中运行 current 损坏 + route recover 200 并治愈），其余
-  mutation 409 且文案指向「only recover-metadata is allowed」；无恢复面提示的未知文本
-  保持 fail-closed 并加「restart the gateway if this persists」指引）；并发 retry 撞在途
-  事务时 runtime_pending 文案误导（拒绝对、文案属罕见竞态，登记）；三 UI 面与 R4 门对齐
-  （见 R4 登记块）。
-- **R4 复审修复与登记（第四轮全量复审，两代理零 MAJOR 复证、一代理 2+1 已修复）**：
-  F1——恢复相位线上与 startupBlockedReason 共投影，sidebar 镜像/dashboard 曾把共投影
-  reason 再折入 retry 禁用（匹配 retry 死钮）：retry 门改用 phase 为权威选择器（仅
-  busy/env/read-only 禁用），测试补共投影夹具（swap/restore/snapshot 相位 retry 开启）；
-  F2——FATAL 元数据块的 recover-metadata 行曾被 mutationDisabled 恒禁：新增共享门成员
-  recoverMetadataDisabled（canRecoverMetadata 时开启），settings 行改用该成员，dashboard
-  无 recover 控件（登记表面缺口）；M1——plugin-diff UI 分类器补 x-wildcard 拒绝（与主
-  进程 plugin-sync 同语义 + 钉值测试）；UI 矩阵逐格复核对齐（pending 逃生、FATAL+pending
-  全禁仅 recover 开、env-probe-failed 全禁）。登记项：connections 卡 Start/Restart 仅看
-  隧道+connectionState、恢复相位/blocked 下点亮收服务端诚实 409（既有 over-offer，登记）；
-  202 路由跨客户端竞态下同步前缀拒绝不投影 operationError（单客户端 UI 单飞不自触发）；
-  codeToStatus 无 runtime_disposed 兜底 500（窄竞态）；pending 拒绝文案未提 apply-now 同
-  为逃生口（复制级 MINOR）；dashboard 无 recover/cleanup/pre-rollback 控件（表面缺口）；
-  ipc-surface-mirror 仅锁 preload↔renderer（main 侧无静态绑定）；Windows file: 反斜杠
-  直装路径无 e2e（响亮 ok:false，无安全影响）。
-- C-F6（中）：gateway 第三方「添加」桌面 UI 无入口——PIV 恒 add:[]、materialize IPC
-  渲染层零调用；与 design 21 决策 2 冲突（§10 ⑥已有「双面未合体」登记，add 入口
-  缺失本块补点名；UI 闭环列二期）。
-- C-F7（中）：undo 语义不对称——ssh「撤销=恢复」（remove/upgrade 可恢复、指纹绑定）
-  vs gateway v1 undoForLatest 仅最新 ok install→remove；服务端 preImage 备份无运行时
-  恢复消费方（§6.8 r2-r4 列二期）。
-- C-F8（低中）：GET /chamber/plugins/installed 裸读未入写栅栏（plugins-installed.ts
-  自注释承诺随 A1 executor 落地实现；现撕裂读仅 loud 500——修复列入写面后续）。
-- C-F9/C-F11：批量容量三档（ssh ≤64 行 vs gateway IPC 20+20/200 字符 vs 服务端队列
-  ≤8）与双份常量族（journal 50 双份/50MiB 本地重声明/SEED_FILES 注释名过期/2000B vs
-  2048 字符）——逐项核实，无行为修复（登记）。
-- C-F12（低）：desktop 本地 plugin add 子进程 env 未 scrub（gateway executor 与共享
-  runtime installer 已白名单化）——desktop 侧接线列后续。
-- C-F13：readManifest 三后端形状无共享联合（design 21 §3「单一定义」措辞未兑现，
-  已核实的模型层挂接路径）；C-F1（掩码常量双份+单向文本锁步）、C-F3（ssh 确认链
-  缺口开放项维持）、C-F10 文档已纠。
-- E-3（高，P2 排期）：私有文件纪律三实现——cp private-file.ts（抛错式）/ dsh-runtime
-  private-fs.ts（kind 结果式）同名 readPrivateFileNoFollow 异签 + desktop 三处弱化
-  原子写（固定 .tmp 无 O_EXCL/父 fsync/.bak）；统一路线（cp 版协议下沉共享或 desktop
-  收编）未排期，登记防静默迁移混淆。
-- E-8（高）：有界输出族值表（journal 64KiB vs 256KiB 系不同工件、同包 deferred 64KiB
-  自洽；2000B vs 2048 字符；exec 512KiB vs 安装 64KiB）逐值核实登记，跨侧统一未排期。
-- E-4/E-2/E-10（中）：audit serialize/WRITTEN_FIELDS/5MiB 逐字双份（appendAuditEvent
-  签名异）；sanitize 四成员语义矩阵（core 删路径段 → desktop 保 URL / gateway 再删
-  query、route 注释「not exported」过期已随本块修订；installer 缩到 origin+[redacted]）；
-  win-probes/windows-process 孪生互注 sibling-parity、无机械锁步——对拍/锁步测试排期。
-- E-12/E-13/E-14/E-16（低中）：状态字面量族零 pin（SshPhase 5 值/NotificationKind
-  'test'/12-phase 静态表/metadataHealth 6 值跨 6 包；runtime kind 常量 5 源值同名异、
-  routes.ts 模板内内联逃逸常量体系；sidebar instance-api 信封第 4 份无字节 pin；轮询
-  数值靠注释互许）——plugin-spec-lockstep 式文本锁步复用排期。
-- D-1（高）：PSM 1252 行（wc -l）vs PIV 854 行 9 类重复未合体（§10⑥/本 STATUS「统一单组件
-  双后端合体未做」登记维持；PIV sourceId 前缀推导与 runtime-source 原则不同构，
-  本块补点名）。
-- D-2 剩余：dashboard 不共享 sidebar parse/poll 核心、错误文案双映射——共享核心
-  迁移列后续（start 入口本块已补）。
-- A-U3（低）：registry 变更门不对称——desktop SETTINGS_SET 无 busy/pending/env 门
-  （env 维度有意放行为既有登记，busy/pending 维度未上锁；gateway PUT /registry 全拒
-  env + assertNoPending + assertMutationIdle）——desktop 侧门对称列后续决策。
-- A-F16（低）：DSH_HOME 布局默认值偏 desktop（userData/state/dsh-home vs gateway
-  stateDir/dsh-home）——共享默认注释已言明，新登记防未来共享代码推导点忘传参会错读。
-- A-F14/A-F10/F7 等 wire 形状/周期/哨兵差异：均为设计内形态差异，按上列既有登记
-  收口（snapshot-failed 两侧同款非阻塞存活补证）。
-
-## 2026-09 重复代码/可共享代码审计登记（N1–N11）
-
-> 全仓只读审计（485 TS 文件 ~167k 行 + 整文件级重复 0;跨包窗口扫描 + 五域子代理
-> 行号级复核）。既有登记 E-3/E-4/E-8/E-10/E-12..E-16 经复核相符（E-5/E-7/E-17 已
-> 修复项一并确认）；下为新增登记与执行计划。审计口径与行号明细以审计报告为准；
-> 计划执行状态随各 N 项就地更新。
-
-- N1（高,gateway 包内脚手架）：json() 写入器 ×3 逐字 + api.ts 第 4 变体；有界
-  body reader ×4 共 208 行（16KiB/64KiB/8MiB/32MiB,现值保留、对照 E-8 值表）；
-  code→HTTP 状态映射 ×5 站 ~60 行；headerValue ×3 且数组语义互异（auth.ts 失败
-  关闭 vs dispatch 取首个——安全漂移）→ 收敛为共享助手,fail-closed 语义优先。
-- N2（高,gateway 包内）：runtime-routes ↔ runtime-manager 双门 409 拒绝矩阵 ~350
-  行同策略同文案两套 → 文案/矩阵表/判定公式单源,routes 只做映射；两层执行与
-  R3/R4 门行为（block 早退、pending 仅 blockedReason===null）保留,先对拍测试后
-  重构。
-- N3（高,跨包字面量）：chamber host 包身份/seed 元数据 4 份（gateway
-  plugins.ts/index.ts、cp host-graph-seed.ts、desktop plugin-sync.ts;desktop 侧已
-  有 cross-package-contract 钉）→ gateway 改引 cp HOST_*_INSERT 导出,零新耦合。
-- N4（= E-3 展开,桌面半场）：桌面 6 处手写弱化原子写（ssh-provider 1021-1048 /
-  gateway-provider 656-690 / chamber-settings 294-310 / ssh-plugin-journal
-  297-315 / plugin-sync 1701-1719 / audit-log 111-118;固定 .tmp、无
-  O_EXCL/O_NOFOLLOW、无父 fsync）+ journal 读二次实现（173-211,~40 行）→ 经
-  control-plane-module facade 收编 cp private-file 原语；行为差异清单
-  （fail-closed symlink、{value,identity} 读、显式 0600）先落测试,保留各 store
-  绑定/信封差异。
-- N5（高,runtime 包内）：snapshot-store（1230 行）自带同构私有原语 ~160-180 行,
-  atomicWriteMarker（225-239）无 file/parent fsync、无 O_NOFOLLOW（权威恢复元
-  数据弱写）→ marker 读写迁移 private-fs,净删 ~100-130 行。
-- N6（中,客户端插件族）：六 wire 载体（instance-api/plugin-graph-recheck/
-  bridge-api/plugin-inventory-api/git-api/host-graph）同类机件 ~636 行
-  （21.6%/54.5%/48.1%/45.2%/22.3%/14.0%）,bridge-api↔plugin-inventory-api 近
-  同文、plugin-graph-recheck↔renderer host-graph 注释自认镜像；sidebar shared
-  面手写 ambient 镜像 ~1030 行（settings-bridge 483/connections 115/git
-  84/layout 48/renderer 303;同名同签名声明 ~120-150 行）→ 第一步抽 sidebar
-  shared 纯 wire-common（isRecord/信封断言/503 分类/文案/delay/rpcId/basename,
-  宿主必须为浏览器可达面）;策略与载荷整形留本地;git-api 不可换;镜像改指真实
-  源按包独立切换。
-- N7（低,测试脚手架逐字重复）：control-plane 8 文件 helper（fakeWire/
-  mockIdentityProbe/pongFrame/fetchJson/jsonResponse/tempDir/waitFor）→ 建
-  control-plane/test/utils.ts;gateway plugins-exec.test 44-119 与
-  plugins-tasks-fixtures 28-99 假 spawn 族 76 行逐字 → 改 import;desktop
-  ssh/gateway-provider.test hooks completer 2×23 行 + GATEWAY_RUNTIME_STATUS +
-  listen 样板（ssh 侧 21 处）→ 共享测试助手。
-- N8（低,desktop）：20 个 dsh-runtime 垫片（18×.ts + allow-builds/prune-runtime
-  .mjs,共 40 行纯转发）→ 30-32 条 import 迁移（5 文件）+ bundle-dsh.mjs/
-  after-pack/package.json 清单清理后删除。
-- N9（低）：renderer/global.d.ts（717 行）镜像 preload 暴露面,无机器固定测试
-  （renderer-trust 为 allowlist 性质）→ 补 mirror 测试,唯一镜像敞口。
-- N10（升级纪律）：dsh-client-web 6/9 文件、85% 行 rc.8 boot re-base 补丁面
-  （升级成本最高）;dsh-client-connection 6/17 文件 18%、dsh-api-gateway 2/8 文件
-  41%;纯拷贝 20 文件 6810 行可直接随上游 → 补丁集中 + rebase runbook（先挂
-  vendor 树做字节级对照校准密度）。注:2026-09 审计时 vendor 树未物化,密度为
-  标注文件代理口径。
-- N11（= E-4 子项,文档漂移）：gateway audit.ts 头注称"两侧同纪律 no-follow/
-  identity 检查",desktop audit-log 实现并无（裸 O_APPEND+rotate）→ 注释纠偏或
-  桌面升级硬化（随 N4/2c 收编）。
-
-执行计划（每阶段独立提交、先登记后动手、行为变更先落测试钉）:P1 零风险机械
-收敛（N7/N3-gateway/N8,现有测试全覆盖）→ P2 安全语义统一（N4/N5/audit 2c）→
-P3 gateway 内部收敛（N1/N2/门公式上移 dsh-runtime）→ P4 客户端 wire 收敛（N6）→
-P5 防漂移锁步与升级纪律（E-10/N9/N10 落地）→ P6 架构裁定（E-3 后半:cp↔runtime
-私有文件原语归并,依赖方向裁定前零动作）。
-
-**执行状态（2026-09,P1 已实施,见工作树改动）**
-- 1a ✅：新建 control-plane/test/utils.ts（fakeWire/mockIdentityProbe/fetchJson/
-  jsonResponse/pongFrame/sleep/waitFor(pollMs)/tempDir(t?)）并迁移 13 个套件；
-  test:control-plane 绿（两轮:electron-node 与 real-node 均 0 fail）。
-- 1b ✅：gateway plugins-exec.test.ts 删除 76 行逐字孪生,改 import
-  plugins-tasks-fixtures.ts；test:gateway 绿（首轮 plugins-tasks waitFor
-  偶发超时一次,复跑通过——环境抖动,非本次改动）。
-- 1c ✅：signalChild 双份移入 desktop/transport-provider.ts（transport-
-  manager.ts + ssh-provider.ts 改引）;两 provider 测试的 hooks completer +
-  GATEWAY_RUNTIME_STATUS 抽 gateway-session-test-hooks.ts（新 bare 文件）。
-- 1d ✅：cp index.ts 增导出 HOST_GRAPH_INSERT/HOST_GIT_WORKTREE_INSERT +
-  HostPackageInsert 类型;gateway plugins.ts SYNCABLE_HOST_PACKAGES 与
-  index.ts extraSeedEntries 两 host 条目改引 cp 常量（mobile 打包条目不动）。
-- 1e ✅（代码面）:删除 desktop 20 个 dsh-runtime 垫片（18 ts + allow-builds/
-  prune-runtime mjs）;import 迁移:main.ts(15 处)/plugin-sync.ts(1)/
-  dsh-runtime-controller.ts(7 条/5 模块)/runtime-lockstep.test(2)/dsh-runtime-controller
-  .test(5)/scripts/bundle-dsh.mjs/scripts/runtime-fake-registry-acceptance.mjs;
-  package.json asarUnpack 与 after-pack PACKAGED_RUNTIME_MODULES 收窄为
-  sanitize-error.ts + dsh-runtime-controller.ts,after-pack-adhoc-sign.test
-  同步;root typecheck 绿;test:desktop 全绿。
-- **1e 剩余验证（未做,需打包环境）**:build:desktop/dist:desktop 打包冒烟与
-  after-pack 真机断言（本环境无 Electron 全链;electron-builder
-  asar/asar.unpacked 行为以 packaging 门禁复验）;runtime-fake-registry
-  acceptance 脚本改引包后未执行。
-
-**P2 执行状态（2026-09,进行中）**
-- 2b ✅:dsh-runtime snapshot-store.ts 的 restore-marker 读/写迁入包内
-  private-fs 原语（readPrivateFileNoFollow tightenMode:false 保持读零副作用
-  语义;atomicWriteRuntimeFileNoFollow 补 file+parent fsync/O_NOFOLLOW/身份
-  复验）;读侧双读快照与 fchmod 局部实现、写侧手写 tmp 实现删除（毛删
-  119/净 -87,登记纠偏;审查后补:win32 无 O_NOFOLLOW 平台差异注释与
-  dist-sync 行为哨兵——松散 marker 读后不得被收紧,旧 dist 一测即破）;
-  typecheck:runtime 绿 + test:runtime 全绿;dist 已重建与 src 同步。
-- 2c ✅（gateway + desktop 双面）:control-plane 新增共享 audit-trail.ts
-  （AUDIT_TRAIL_MAX_BYTES/AuditTrailEvent/序列化白名单/硬化 append+rotate
-  核心,取自原 gateway audit.ts 语义）,cp index 导出;gateway src/audit.ts 与
-  desktop audit-log.ts 均收窄为薄包装（各自公开面/DI seam/错误文案不变）;
-  gateway audit.test 13/13、desktop audit-log.test 7/7 全绿。N11 注释漂移
-  随双面同核心自然消解。审查后补:mode 收紧/复验按 win32 跳过
-  （Windows chmod 只表达只读位,否则每次 append 必失败）;核心对行契约
-  加 endsWith('\n') 防御断言（历史双换行 bug 同类）。
-- 2a ✅:facade（control-plane-module.ts）新增 ensurePrivateDirectoryNoFollow/
-  atomicWritePrivateFileNoFollow/readPrivateFileNoFollow 转发;owner-only-
-  secret-file.ts 读原语与 ssh-plugin-journal 读侧委托 cp read（tightenMode
-  0600,maxBytes 界保持）;5 写点（ssh-passwords v2/gateway-secrets v3/
-  chamber-settings/journal persistOps/plugin-sync ledger）全部换为
-  ensure 0700 + atomicWrite {mode:0o600};store 信封/绑定/加密判别零改动。
-  行为差异清单（fail-closed symlink、父 fsync、固定 .tmp 残留不再复用）已
-  逐点分析,无测试依赖旧语义;定点 6 文件 + 全套 desktop 绿,零测试改动。
-- 2d ✅:verifyGatewayEndpoint(ViaTunnel) 孪生探针合并为 gateway-provider.ts
-  单一 verifyGatewayRuntimeIdentity 核心（options:authority 隧道 Host 覆盖/
-  spkiPin S23 门/carryStatusCodes 保留 ssh 403+非200 statusCode 旧形状）;
-  gateway 私用包装与 ssh 导出包装各自保持签名/默认值。ssh-provider.test
-  74/74、gateway-provider.test 全绿,孤儿 import 已清。
-- 2e ✅:desktop package.json files 排除 gateway-session-test-hooks.ts。
-**2026-09 review 轮(5 子代理分域只读审查 P1+P2)结论与采纳**
-- 判定:audit 单源化/0600 写族/runtime marker 迁移/探针合并/P1 全量五域均
-  正确性 PASS(无 P0/P1 语义缺陷;声明行为差异清单全部属实)。
-- 审查发现并已修复:A-P1 win32 audit mode 复验必失败→按平台跳过;C-P1
-  dist/index.js 与 src 不同步→重建并补 dist-sync 行为哨兵(读后不得收紧
-  松散 marker);D-P2 carryStatusCodes 两侧形状无断言→补 403/503/非200
-  statusCode 形状钉(gw 侧补"无 statusCode"断言,ssh 侧补 403+503 断言)。
-- P3 采纳:核心行契约 endsWith 防御、desktop audit-log import 合并、cp
-  utils sleep 去导出(仅 waitFor 内部用)、after-pack freeze 后空行清理、
-  helper 打包排除惯例注释、snapshot-store win32/硬链窗口注释。登记纠偏:
-  2b 净删 -87(毛 119)、1e controller import 7 条/5 模块。
-- P3 延后(登记,2026-09 已清理,见下):protocol waitFor 50→25ms 轮询粒度
-  差已声明可接受;win32 audit 修复需 Windows 实机复验(P1-R1 类)。
-- **2026-09 残留清理轮(A 类 4 项,子代理实施 + 门禁复验)**:
-  - T1 ✅ listen/close 样板收敛:新增 desktop loopback-http-test-server.ts
-    (listenEphemeral/closeLoopbackServer 裸 helper,package.json files 已排除),
-    ssh-provider.test 22 listen+22 close 点改引;gateway-provider.test 的
-    startHttp(S)ProbeServer 形态不同构,保留(登记理由)。
-  - T2 ✅ cp smoke.test 异形 waitFor 修型:删本地 sleep+waitFor(类型误导
-    Promise<boolean> 永不 false),改引共享 waitFor 并显式 pollMs=250
-    (历史粒度保留)。
-  - T3 ✅ 旧固定 .tmp 崩溃残留清扫:4 个装载点(ssh/gateway-secrets/
-    chamber-settings/journal configure 处)best-effort rmSync;plugin-sync
-    ledger 旧 tmp 为随机名,核实后跳过(无固定残留)。
-  - T4 ✅ ledger/settings 读侧对齐 cp 读:readLocalPluginWriterRecord 与
-    readSettingsFile 委托 readPrivateFileNoFollow({tightenMode:0o600}),
-    missing/解析语义逐点保持;unsafe 由"读穿 symlink"改为 fail-closed
-    (settings→notice+*.corrupt 保留;ledger→'corrupt' 阻断,reaper 兜底),
-    与 2a 行为清单"读侧 nlink≠1 拒绝"同族。
-  - 门禁:desktop 全套 852/852 + root typecheck 0 error 全绿。
-
-**P4 执行状态（2026-09,进行中;N6 客户端插件 wire 收敛）**
-- P4-1 ✅:sidebar shared 新增 wire-common.ts(isRecord/mintRpcId 单源,零依赖
-  浏览器可达),instance-api/plugin-graph-recheck 内部改引;逐字节核实结论:
-  envelope 解析各端不同体不收;503/文案仅 C≡D 逐字(锚点留 P4-2);E git 版
-  rpcId 前缀不同不收;审计计数纠偏(sleep×4 与现状不符,实际仅 F 有一处)。
-  typecheck:sidebar + test:sidebar 绿。注意:跨包引 wire-common 需同步
-  settings-bridge/connections/renderer 的 ambient mirror 声明(P4-2 义务)。
-- P4-2 ✅:wire-common.ts 内核扩为 postUnary(basePath,method,args,{rpcId?,
-  fetchImpl?,origin?})→{status,ok,body,jsonError}(零分类;URL/信封/30s/503
-  与 2xx 收集语义=四载体共有字节)+ classifyGraphChannelFailure(B≡F 分类正则
-  单源);C bridge-api/D plugin-inventory-api/B plugin-graph-recheck/F
-  host-graph 四载体只换 fetch 头+envelope 行,503 分支/错误折行/信封解析/
-  缓存/重试/diagnostic 回调全留本地;A 未动(留 P4-3),E 禁改未动;ambient
-  声明同步(chamber-bridge.d.ts/sidebar-shared.d.ts 各 +44 行 mirror),F 经
-  相对真实源导入 renderer wire-common(论证已入注释);typecheck×3+root、
-  test:sidebar/settings-bridge/connections、test:renderer-shell 全绿。
-  build:renderer 原被环境阻塞(工具链 node 无法 dlopen rollup 原生插件;
-  vendor ui-conversation 的 lexical 依赖因早期 vendor 空树 install 未链接),
-  补 frozen install 链接 vendor 成员依赖(@lexical/* 入 .pnpm)后
-  build:renderer 绿(exit 0,含 boot-manifest 生成)——基线问题,非 diff。
-- P4-3 ✅(2026-09,裁定不合并):C bridge-api 传输层落回 A instance-api 的
-  等价性分析——wire 请求/响应信封同形、真机宿主恒回声,但 7 维可观测差异
-  (回声容忍:A 相等校验 vs C 仅 string;503:A 私有类 InstanceUnavailableError
-  +包装层折行默认 'the instance is not ready' vs C plain Error client 内折行
-  默认 '实例尚未就绪';非 2xx 文案嵌端点名与否;2xx 解析失败 C 原样 rethrow
-  vs A 折 '实例不可达：';信封严格度 C TypeError 'bridge: invalid…' vs A
-  'internal/实例返回未知错误' 兜底链+details C 丢 A 透传;超时 C 无外部
-  signal 且折行 vs A AbortSignal.any+TimeoutError 直通;rpcId 表达式 C 裸
-  crypto.randomUUID(自身 try 内)vs A mintRpcId 回退;origin 回退 dsh.internal
-  vs 相对 URL)。按 N6 纪律不合并,C 独立 client+Map/503/折行维持(传输字节已
-  同源 postUnary);合并前置清单 7 项登记于 wire-common.ts P4-3 段;门禁
-  typecheck:sidebar/settings-bridge + test:sidebar/settings-bridge 全绿,
-  零语义改动(wire-common.ts 注释登记 +64 行;renderer shell.ts 注释修正引用
-  共享 30s 预算)。
-- P4-4 ✅(ambient 镜像改指真实源,2026-09):
-  - renderer 轨:root tsconfig paths '@dsh-chamber/dsh-client-ui-sidebar/shared'
-    → 真实 src/shared/index.ts;vendor-modules.d.ts 的 shared overlay 删除
-    (~11.1KB/约 300 行);唯一严格化修正 App.tsx(deriveServerWorkspaces
-    ungroupedTitle 补 ?? '';derive.ts 签名维持 string);root typecheck +
-    build:renderer + test:renderer-shell 全绿。
-  - 插件包轨:layout/git/connections/settings-bridge 删本地 paths 条目(回落
-    root paths 真实源)+ 各 tsconfig 补 rootDir '../..'(TS6059);整文件删除
-    chamber-view-prefs.d.ts/sidebar-shared.d.ts×2/chamber-bridge.d.ts 共
-    -715 行;settings-bridge 保留 connections-section 映射;包内源码调用点
-    零修正(mirror 系受锁步的同步面,与真实面完全对齐;RemoteRuntime*/
-    GatewayPollDeps 等核查全部为真实 shared 导出);8 门
-    (typecheck+test×4)全绿。
-  - 锁步测试消亡:sidebar test/gateway-runtime-mirror.test.ts(锁步对象=已删
-    ambient)删除并同步 package.json 显式测试清单;test:sidebar +
-    typecheck:sidebar 全绿。
-  - 文档跟进(合并后收口 2026-12):docs/design/21 与 21-gateway-plugin-parity-plan
-    中 "ambient 镜像"机制描述已更新为真实源解析(勘误/废止标注)。
-- P4-5 ✅(收尾):shared-face 镜像面清零核实(其余 window.dshChamber/官方
-  vendor/@dsh-chamber/*/client 松散声明与 N6 无关,保留;README/tsconfig 对
-  已删镜像的引用均为说明性注释);N6 指标收口——P4 合计:终态净 -740 行(含 wire-common +286)/累计删除 1271 行,其中
-  镜像删除 715(含 P4-2 期间 +88 临时增补,终态 627);B/C/D/F 四载体传输字节同源 postUnary(A 未动、E 禁改),shared-face
-  镜像漂移面归零;docs/design/21 与 todo 计划中 ambient 机制描述更新已收口
-  (合并后勘误标注);门禁:root typecheck + build:renderer +
-  test:renderer-shell + 四插件包 typecheck×4/test×4 + test:sidebar/
-  typecheck:sidebar 全绿。
-- P1-R1 打包冒烟:暂时跳过(用户决定),与 P5-6 归口。
-
-**P3 执行状态（2026-09）**
-- N1 ✅（gateway 包内 HTTP 脚手架单源化）:新增 gateway/src/http-utils.ts
-  （jsonResponse×3 合一;readBoundedBody 内核 + dispatch 16KiB/runtime-routes
-  64KiB/routes 8MiB+32MiB 四薄包装,caps/错误文案/413-先写后毁序保留;
-  headerValue 三变体——精确取首值 dispatch+routes、大小写不敏感 middleware、
-  fail-closed auth——语义各异被测试锁定,移入单源模块分名导出;code→状态
-  映射各站语义分歧,按"不强统"原则零抽取并留分析）。网关全套 + root
-  typecheck 绿。净行约持平,~195 行拷贝→~135 单源+4 薄包装。已知并集差:
-  runtime-routes 读体 abort 由"悬挂"变为 request_aborted 立即 settle(无测试
-  锁定、对齐 dispatch,已注释)。
-- N2 ✅（双门 409 拒绝矩阵单源化）:新增 gateway/src/runtime-refusals.ts
-  （RuntimeRefusalCode/builder×8/reason 集/startupBlockReasonOutranksPending
-  谓词）,runtime-routes 与 runtime-manager 双层执行消费同一构造/判定;
-  R2/R3/R4 门行为（block 早退、pending 仅 blockedReason===null、recover-
-  metadata 放行、restore-builtin 收窄）逐格保持,有意差异（platform 403
-  文案、blocked 路由文案、ordinaryPending 不含 FATAL）保留并注释钉死;审计
-  抓到 env 动词语数模板 bug 已修;gateway 全套 555 测试 0 fail
-  （runtime-routes 113/113）,root typecheck 绿,测试文件零改动。
-- 3c ✅（窄幅提升 + 对拍矩阵交付）:dsh-runtime 新增 isVersionDowngrade
-  （降级判定单源:manualRollback 公式原内联于 desktop controller install /
-  gateway apply() / gateway apply-now F2 arm 三处,现同引共享;compare 返回
-  null 时恒 false,不崩溃）,dsh-runtime-updater.test 补 5 钉,dist 已重建。
-  对拍结论(交付于本登记):两 owner 的 apply-now"门"形态不同——desktop
-  evaluateApplyNowGate 是纯投影门(8 原因,输入为 controller 投影),gateway
-  applyNowPreflight 是含副作用 preflight(platform/assertMutationIdle/journal
-  corrupt/startupBlock/connection/no_selection/invalid/noop/F2 arm),输入与
-  副作用各异,整门合一将推翻 R2-R5 逐轮对齐的语义 → 不做整门合并,保留两
-  owner 各自投影/执行层;restart 白名单(desktop RUNTIME_RESTART busy 集 vs
-  gateway /restart)语义已由 R7/2026-12 对齐(env/platform 均不拒),输入形态
-  不同,仅登记等价不合并。此结论与 N1-4/N2"保留有意差异"先例一致。
-
-- P1-R1（打包冒烟）**暂时跳过**（用户决定 2026-09;待具备打包环境/升级窗口时执行,与 P5-6 归口）（需打包环境）;2 项 runtime 弱写清单外内容
-  （transport-manager ssh-instances.json 写等）不在 2a 范围,维持原状。
-
-**stage-1/2（梯队一）+ trim 落库（refactor 分支 0699aa9/c8f6cf6/da01fa3,2026 dedupe-audit
-follow-up「verified residual clusters」;合并后收口）**——除一处已声明 drift fix 外行为保持,
-每簇经独立复核对照 HEAD:
-- **stage-1**：dsh-runtime 回滚续接阶段集与回滚目标推导单源（rollback-facts.ts:
-  ROLLBACK_CONTINUATION_PHASES + delayedRollbackTarget,收编 apply-phase/
-  restart-exhausted-rollback/runtime-startup/runtime-metadata-recovery 四处内联;
-  runtime-startup 另抽 activationFactsFromJournal）、CRITICAL_RUNTIME_FILES + digest
-  校验（runtime-critical-files.ts,读/写两端同源,错误面与逐字消息保持）+ 树可写遍历
-  （tree-writable.ts,加 existsSync 早退与内部兜底 try——原为调用方职责,best-effort
-  语义不变）;restore-marker 基线名单源（restore-marker.ts）。私有模块,index 面逐字节
-  不变,committed dist 未重建（dist-sync 哨兵绿;发布打包链重建）。desktop 内联失效判定
-  改引 core shouldInvalidate/effectivePending,并修 **pendingBefore drift**
-  （RUNTIME_RESTART 前置投影原只查 invalidatedAt,漏 shellVersion 合取——旧壳写的
-  pending 可能被解析为目标;现与 core 启动重放同判）。plugin-sync host 包常量改引 cp
-  HOST_GRAPH/GIT_WORKTREE/ARCHIVE_CLEANUP_INSERT（经 control-plane-module facade,
-  补 cross-package-contract 至 3/3 host 行）;spec-name 提取单源 control-plane
-  plugin-spec.extractSpecName（desktop facade + gateway plugins-tasks + ssh-apply-rows
-  守卫变体共同消费）;凭据/设置/journal 四装载点的 preserve/corrupt、unbound-legacy 与
-  固定 `.tmp` 清扫合并 store-file-hygiene.ts（文案逐字模板化保持,ssh/gateway 双 store
-  核对逐句等价）;free-port 单探针内核（bind+close 事件序）+ findFreeEphemeralPort
-  （transport-manager 原 allocateLocalPort 等价迁移）;cp loopback.ts 分类叶——api.ts
-  CORS/Host 栅与 instance-proxy 传输门（精确成员集不变）与 keepalive 判定（127/8 与
-  IPv4-mapped 语义归叶）三处合一;gateway resolveDshCliEntry 单源（dsh-path.ts,
-  isDshWorkspace/plugins-tasks 共引）、**html-inject 64KiB 双常量消亡**——gateway
-  改引 cp MAX_HTML_INJECTION_BYTES,原 B-6e 文本锁步测试改写为共享值钉;wire C≡D 的
-  503/fold 分类器收编 sidebar shared wire-error.ts（A/B/F 策略层留本地,P4-3 纪律）;
-  settings/update-store 孪生 hydration 骨架抽 bridge-hydration.ts（config 参数化
-  onPush/onQuery/slowReProbe,零模块级可变态;settings 慢链/乐观覆盖与 update
-  单飞规则逐点保持）。
-- **stage-2**：gateway HOST_PACKAGE_PROBE_DOMAINS 加载期钉 dsh-runtime
-  HOST_DOMAIN_PROBE_NAMES（集合相等 fail-fast,design 24 §7 C——typo/单边域加载即
-  失败,替代「文档登记而非代码围堵」）;cross-package-contract chamber 金样覆盖 3 host
-  行;instance-id grammar 三镜像位（transport-provider/transport-source/open-in
-  capabilities）互注;dual-host 语义下沉（activation facts/startup-verdict 映射/
-  restart 矩阵/apply-now preflight/identity-probe 腿）均需新 dsh-runtime 公开导出
-  （dist 锁）或行为裁定 → **延后**,4 个分歧位以 ruling 注释登记在代码面
-  （main.ts readActivationFacts / main.ts RUNTIME_RESTART 拒绝织 vs core allowedActions
-  / runtime-probes identity 腿 vs dsh-client 探针;apply-now 整门合并不做结论已见 P3-3c）。
-- **trim（da01fa3）**：净 -52 行/11 文件——HTML_INJECT_MAX_BYTES 与
-  isLoopbackUpstreamBaseUrl 兼容再导出删除（测试直引单源）、import 合并、ruling 注释
-  压缩为事实+延后理由。
-- 保留（经核实,需裁定/登记）:private-fs vs private-file 孪生（design 18 §9.1）、
-  carrier A/E wholesale 合并（P4-3 前置清单）、dead-but-documented leftovers。
-- 验证（合并后本树全量执行）:root typecheck 0;typecheck:runtime/gateway/connections/
-  sidebar/settings-bridge/open-in 0;test:runtime（27 文件）/test:desktop（35 文件,
-  852+）/test:gateway/test:control-plane/test:sidebar/test:settings-bridge/
-  test:connections/test:open-in 全绿;verify:i18n consistent。与 plugin-from-file
-  （54fc9b7）同基底合并无冲突（main.ts/plugin-sync.ts 自动合并区逐段复核）。
+- **移出项（P3 硬纪律）**：匿名 control-plane 的认证/审计、薄壳聊天/会话列表/审批
+  弹窗、控制面会话 runtime/统一索引、连接 broker/绑定、walkthrough、通知中心/历史、
+  MCP、文件夹/笔记、web 预览、目标/终端等不得回流。设计 17 的独立 Gateway 认证/
+  派生编排、设计 18 的共享 dsh 运行时核心、设计 19 的 Electron 原生边沿通知、设计 08
+  的实例内 Git 插件、设计 20 的可信 open-in 边缘能力与设计 24 的实例内归档清理宿主
+  域是边界明确的例外，不得泄入匿名 control-plane、引入 session 消费者/通知历史，或
+  变成第二套执行面（design 24 例外随上游 delete wire 落地退休，不作他域先例）。
+- **`--no-auth` 是醒目的可信网络有界例外**：Gateway 外部部署默认必须认证；只有显式
+  传 `--no-auth` 才可覆盖，启动器二次确认并打印安全告警。不是静默 fallback，也不
+  授权普通匿名 control-plane 绑定公网。
+- **Gateway state 根目录自动收紧**：既有 stateDir 经 pinned no-follow 描述符自动收紧
+  0700 + 属主 uid 校验（异主 fail-closed）；broad root 拒绝与 Windows 继承 ACL 让步
+  不变（design 17 §12）。
+- **safeStorage 的诚实回退**：Gateway 凭据优先 safeStorage；OS 加密不可用时按用户
+  决策回退 target-bound 0600 明文并如实显示，不把 plaintext 冒充密文。SSH 密码为
+  endpoint-bound 0600 明文镜像。**Windows 例外（C16）**：DPAPI 不可用时拒绝明文落盘，
+  凭据仅内存驻留（每次连接重录）——S22 明文兜底仅限非 win32。
+- **Windows 发布身份让步**：x64 安装包未做 Authenticode 签名，SmartScreen 提示是
+  已知取舍；feed sha512 只证明下载完整性，不等价于发行者签名。
+- **N-ctx 单文档信任域**：连接远端实例让其前端与同一 renderer 文档内其他实例及高
+  权限 preload bridge 共域；现有 main-frame/origin/proof/主进程确认只能缓解，真正
+  横向隔离推迟到每实例独立 WebContents 架构。
+- **不做（v1）**：跨来源移动会话、单 store 真融合、控制面会话实时同步、远程实例
+  管理 UI 外壳。**推迟**：flat 单列表模式（与「仅按来源分类」呈现原则有张力）。
+- **设置壳偏差**：未连接实例不装配子 ctx；stub remote 无 WS 失效流；壳不渲染官方
+  SettingsRoot、子 ctx 懒装配；服务器选择器 body portal + viewport 翻转/钳位与内部
+  滚动；离线远端仍可选并显示不可达占位与连接管理动作；chrome 跟随宿主 locale，子
+  ctx 跟随目标实例 locale。
+- **默认排序 `manual`（06 §3.1）**：按 wire 顺序，与官方默认 `updated` 不同，是
+  有意产品取舍。**窗口标题冻结**：桌面原生标题固定 `dsh-chamber`。
+- **Electron 二进制惰性安装**（每机器共享 dist，worktree 并行共用）；**dev 实例隔离**
+  （独立 user-data、控制面端口 17520 起自动退避）。
+- **内建版本行引导（2026-12 决策，方案 2）**：选中与内建同版本行且未装受管树、
+  存在用户选择时主按钮引导「恢复内建」（零下载；树/快照保留），「仍下载并安装为
+  受管版本」为显式次要动作；gateway 部署锚分支同款镜像。
+- **dsh 运行时设置面（2026-12 统一）残余偏差（有意保留）**：desktop `SETTINGS_SET`
+  在 env 下允许更换 registry（设计文字禁、代码有意更宽）；恢复期矩阵两侧已收窄对齐
+  ——swap-attempted/snapshot-failed/restore-blocked/FATAL 只开放各自 retry 与
+  recover-metadata，restore-builtin 仅限 pending/健康选择（armed reset 在持久恢复
+  标记下必然复阻，旧矩阵格不可执行）；registry 白名单形状 desktop https-only vs
+  gateway http-loopback（共享 canonical 更宽，桌面层收紧）；desktop 15s+6h 周期检查
+  不移植 gateway（避免周期出网）；失败现场清除入口仅本地（gateway 无对应路由）；
+  `status()` metadata health 检测无缓存；metadata 恢复期 pnpm prune 子进程不可 abort
+  （退出延迟）；desktop main.ts 的 RUNTIME_RESTART 等 handler 内联无单测（renderer
+  镜像 + lockstep 代证）；env×FATAL（dormant corrupt selection）预路由为 desktop 独有
+  （gateway env override 经共享核心等效处理 + 激活探针门）。
+- **apply-now 门形态取舍**：desktop `evaluateApplyNowGate` 是纯投影门、gateway
+  `applyNowPreflight` 是含副作用 preflight——输入与副作用各异，整门合一将推翻逐轮
+  对齐语义，**不做整门合并**（两 owner 保留各自投影/执行层）。
+- **探针契约残余（design 18 §3.4 定稿后）**：上游 `session.list` 分页/裁剪/删除能力
+  仍待上游（chamber 不落地实现；设计 24 退休条件同源）；归档「不能瘦身」事实维持
+  （探针不再读列表，归档仅影响列表体积）；legacy 回退 warn 为可选注入 sink（desktop
+  与 gateway 未注入即静默；control-plane 两生产点已注入）；激活层对上游再漂移的
+  可见性以失败路径为准（fail-loud）；desktop SSH attach 底线 ≥ 0.1.2-rc.1（旧树由
+  signature 路径给出确定性 terminal「check or upgrade」）；远端瞬时重启/路由挂载窗
+  口双 404 → 通用 terminal（粘滞窗口先于探针改动存在，与「已答即确定性」分类一致；
+  ready 心跳降级为瞬态的改法引入 60s 慢重探 churn，取舍留给未来设计）；
+  `verifyUp` 必须在自有限期内 settle（transport 层裸 await，无外层超时）。
+- **0.1.2 线已知降级（仍有效）**：
+  - 远端/直连 0.1.2 dsh 附加被硬阻断（launch token 为远端进程内存随机数、隧道不可
+    恢复；上游提供 token 检索机制前保持）。dsh×http 组合已在表单与主进程校验禁用
+    （http 只服务 gateway；ssh 为 dsh 唯一传输——design 17 §3 记有恢复点）。
+  - 版本芯片：本地已接线，远端隐藏（D2 兜底）。
+  - cookie Max-Age=30 天无会话中重换：过期后约 10 分钟健康失败窗口触发重启换新
+    （自愈；「cookie 过期即重交换」另行排期）。
+  - remote-stream 接收面帧校验宽松于上游 exactKeys（接受未知键，前向兼容容差）。
+  - settings-bridge agentPresets/select 以合成 `{agentId:'',agentPreset}` 发出：
+    一旦被调必响亮失败（当前无调用点，潜伏面）。
+  - 端口碰撞理论面：本地实例同端口 cookie 覆盖（实际不可达，登记不修）。
+  - unary 兜底归档过滤无 wire 源（归档集仅存在于 follow baseline）——仅影响未挂载
+    来源与首次 baseline 前窗口（KNOWN DEGRADATION，`archiveSetKnown:false` 诚实三态）。
+  - 推送通道死亡期间侧边栏成员关系/归档集冻结在最后推送（sessions 仍刷新、恢复推送
+    自愈；冻结窗口内新归档/取消归档不可见）。
+  - 兜底 cwd 派生分组限制：符号链接拼写（macOS /tmp vs /private/tmp）可能不匹配
+    canonical-cwd 索引；未挂载来源的新建空工作区不可见（fail-closed 语义）。
+  - git 工作树删除时 runtime 通道缺席 fail-closed（'runtime-unknown'）。
