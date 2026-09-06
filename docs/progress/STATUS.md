@@ -48,9 +48,30 @@
 >   并合入、M4 待验；§0/§2/§3–§5/§8 状态单元格与核对表按执行态收口）、
 >   激活探针旧名 `archiveCleanup/preview` 勘误为 `probe`、design 05 §6 标题
 >   宿主包 2→3、design 24 §7 A/§12/§6 step-4/§3 注记勘误、§16 处置登记。
-> - **M4 实机 E2E 仍待验**（真实 dsh 实例 preview/purge 全链、gateway/远程
->   形态、打包态 quitAndInstall 端到端与打包态缓存清理——均需打包版/真机，
->   见 design 24 §16 / design 11 §9 剩余验证项）。
+> - **M4 实机 E2E：本地形态已实跑（2026-09 修订轮，见下条）；gateway/远程
+>   形态、打包态 quitAndInstall 端到端与打包态缓存清理仍待验**（需打包版/
+>   真机，见 design 24 §17/§16 与 design 11 §9 剩余验证项）。
+> - **M4 本地形态实跑 + 归档管理器 revision（2026-09 修订轮，临时驻留）**：
+>   真实 dsh 实例全链验证产出两项处置（详见 design 24 §17）——① **删除失效
+>   根因修复**：binding 对官方 `sessionPersistence.locate` 的**脱绑调用**
+>   （解构方法后裸调）使官方 jsonl locate 丢失 `this`，每次删除均以
+>   `Cannot read properties of undefined (reading 'root')` 失败（18/18 项
+>   storage 错；实机 + 隔离复刻实例复现；改为保持方法接收者调用 + this 敏感
+>   fake 回归单测）；② **wire 修订 + 归档管理器 UI**：purge 新增可选
+>   `sessionIds` 子集过滤（与权威 archived 集合取交集，越界删除结构性不可
+>   能），server 行行动作打开归档管理器对话框（列出已归档会话标题/目录：
+>   逐条删除 + 多选删除 + 删除全部，替代 v1 preview→confirm 单按钮流）；
+>   归档列表数据 = bridge 新投影字段 `archivedSessions`（快照既有归档行元
+>   数据，零新读取面）。验证：host core/binding 51、sidebar 全套 284、
+>   根 typecheck + typecheck:sidebar/host-archive-cleanup、verify:i18n 全绿；
+>   提交态 host dist 已重建；复刻实例 E2E（全量 purge、子集 purge、陈旧 id
+>   幂等跳过）通过。**评审修复轮（4 个只读 subagent 分面评审，处置登记
+>   design 24 §17.6）**：归档集权威三态 `archiveSetKnown`（unary 兜底不再
+>   误报「无已归档」且保留删除全部）、core 过滤校验先于读取 + 空选集短路 +
+>   clearIds 去重、旧宿主子集请求实证为 gateway 严格拒绝（绝无静默全量
+>   删除）并映射 zh 重启提示、UI 关闭策略统一 + 焦点圈闭/还原 + 拉取错误
+>   呈现、死代码/注释清理、签名参与等回归测试补强。剩余：gateway/远程 dsh
+>   形态实机、打包版 UI 目检。
 > **2026-09 修复轮第二波（回扫评审闭合，临时驻留；发布收口时并入
 > CHANGELOG 后移除）**：三路只读回扫（desktop updater 复原性 / 宿主包 /
 > wiring-文档一致性）+ 修复，零新 Blocker/Major；处置登记见 design 11 §9
@@ -80,7 +101,8 @@
 >   connections/gateway/control-plane/runtime/host-git（98）/archive-cleanup
 >   （core 20 + binding 15）/git 客户端全绿；根 typecheck、verify:i18n、
 >   build:preload、build:renderer 全绿；host 包 dist 注释级改动重建零 diff。
-> - **M4 实机 E2E 仍待验**（不变）。
+> - **M4 实机 E2E**：本地形态已由 2026-09 修订轮实跑（见上）；gateway/远程
+>   形态与打包版/真机项仍待验。
 
 > **2026-09 dsh 基线对齐记录（0.1.2-rc.1，临时驻留；发布收口时并入 CHANGELOG 后移除）**：
 > 源码线 pin → dsh-v0.1.2-rc.1（a66e4702，`update-vendor.mjs` 原子升级，tag 与远程一致；
@@ -327,10 +349,11 @@ envelope padding——cap 抬至 1 MiB 即变 'dsh'，必红）；ready 心跳�
   幂等 / 注释 / AGENTS 事件措辞）、design 24 §15 债务①③闭合、台账轮次 10；
   合并 989534a = 启用批次 3a5bbcf + 修复轮 8429fee）**；实跑门禁：
   根 typecheck + runtime/desktop/gateway/control-plane/sidebar/connections/
-  host 全绿（详见执行台账 §10 与本轮复跑）；**M4 实机 E2E 仍待验**（真实
-  dsh 实例 preview/purge 全链、gateway/远程 dsh 形态、ghost 行窗口与 UI
-  目检；桌面「恒全量探针 vs seed 产物门」取舍、结构 seam 随上游 wire 退役
-  机制化均已在 design 24 §15 挂账，不随本合入闭合）。
+  host 全绿（详见执行台账 §10 与本轮复跑）；**M4 实机 E2E**：本地形态已由
+  2026-09 修订轮实跑并产出修复/修订（design 24 §17；此前「仍待验」表述
+  以该轮为准），gateway/远程 dsh 形态、ghost 行窗口与打包版 UI 目检仍待验；
+  桌面「恒全量探针 vs seed 产物门」取舍、结构 seam 随上游 wire 退役机制化
+  均已在 design 24 §15 挂账，不随本合入闭合。
   todo 12 的 B（特权层直删）继续冻结；A（已归档浏览区）仍为可选前置/后续。
   设计见 `docs/design/24-archived-session-cleanup.md`；调研记录见
   `docs/progress/todo/12-todo-archived-sessions.md`；执行台账（M0 评审包/
