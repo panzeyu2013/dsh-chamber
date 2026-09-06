@@ -35,6 +35,8 @@ import {
   renderCordisInserts as planeRenderCordisInserts,
 } from '@dsh-chamber/control-plane'
 import {
+  ARCHIVE_CLEANUP_INSERT_ID,
+  ARCHIVE_CLEANUP_PACKAGE_NAME,
   CLIENT_GRAPH_INSERT_ID,
   CLIENT_GRAPH_PACKAGE_NAME,
   computeCordisPatchUpdate,
@@ -50,6 +52,7 @@ import { HOST_IDENTITY_METHOD, LEGACY_HOST_PROBE_METHOD } from './control-plane-
 
 const CLIENT_GRAPH = { id: CLIENT_GRAPH_INSERT_ID, name: CLIENT_GRAPH_PACKAGE_NAME }
 const GIT_WORKTREE = { id: GIT_WORKTREE_INSERT_ID, name: GIT_WORKTREE_PACKAGE_NAME }
+const ARCHIVE_CLEANUP = { id: ARCHIVE_CLEANUP_INSERT_ID, name: ARCHIVE_CLEANUP_PACKAGE_NAME }
 
 test('the control-plane facade selects packaged artifacts without importing Electron in pure Node', () => {
   assert.equal(isPackagedElectronRuntime({}), false, 'pure Node must use the workspace package')
@@ -79,11 +82,13 @@ const GOLDEN_OVERLAY = `- insert:
       name: '@dsh-chamber/dsh-host-client-graph'
     - id: git-worktree
       name: '@dsh-chamber/dsh-host-git-worktree'
+    - id: archive-cleanup
+      name: '@dsh-chamber/dsh-host-archive-cleanup'
 `
 
 test('the desktop-consumed insert render is byte-identical to control-plane for the same input (A2)', () => {
-  const desktop = desktopRenderCordisInserts([CLIENT_GRAPH, GIT_WORKTREE])
-  const plane = planeRenderCordisInserts([CLIENT_GRAPH, GIT_WORKTREE])
+  const desktop = desktopRenderCordisInserts([CLIENT_GRAPH, GIT_WORKTREE, ARCHIVE_CLEANUP])
+  const plane = planeRenderCordisInserts([CLIENT_GRAPH, GIT_WORKTREE, ARCHIVE_CLEANUP])
   assert.equal(desktop, GOLDEN_OVERLAY, 'the desktop-consumed render drifted from the golden overlay bytes')
   assert.equal(plane, GOLDEN_OVERLAY, 'the control-plane render drifted from the golden overlay bytes')
   assert.equal(desktop, plane, 'the desktop and control-plane renders must be byte-identical for the same input')
@@ -93,6 +98,7 @@ test('computeCordisPatchUpdate embeds the shared render bytes verbatim (the fold
   const update = computeCordisPatchUpdate('# header\n[]\n', [
     { insertId: CLIENT_GRAPH_INSERT_ID, packageName: CLIENT_GRAPH_PACKAGE_NAME },
     { insertId: GIT_WORKTREE_INSERT_ID, packageName: GIT_WORKTREE_PACKAGE_NAME },
+    { insertId: ARCHIVE_CLEANUP_INSERT_ID, packageName: ARCHIVE_CLEANUP_PACKAGE_NAME },
   ])
   assert.equal('error' in update, false)
   if ('error' in update || !update.write) return

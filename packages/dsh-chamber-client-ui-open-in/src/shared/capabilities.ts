@@ -32,6 +32,10 @@ export interface OpenInLaunchRequest {
 }
 
 const CAPABILITY_TOKEN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
+// Mirrors desktop transport-provider.ts INSTANCE_ID_PATTERN and renderer
+// transport-source.ts RAW_INSTANCE_ID_PATTERN (same grammar, design 17
+// §2.1). Browser packages cannot import the desktop/cp authorities; keep the
+// bytes equal — see the cross-package contract notes in transport-provider.
 const INSTANCE_ID = /^(?!local$)[A-Za-z0-9_-]{1,64}$/
 
 function isRecord(value: unknown): value is Record<string, unknown> {

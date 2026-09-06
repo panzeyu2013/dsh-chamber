@@ -37,6 +37,7 @@ import {
   readPrivateFileNoFollow,
 } from '@dsh-chamber/control-plane'
 import type { Logger } from '@dsh-chamber/control-plane'
+import { HOST_DOMAIN_PROBE_NAMES } from '@dsh-chamber/dsh-runtime'
 
 /** Cache root under the gateway stateDir. */
 export const SYNCED_PLUGIN_DIR = 'chamber-plugins'
@@ -57,6 +58,22 @@ const HOST_PACKAGE_PROBE_DOMAINS: Readonly<Record<string, string>> = {
   '@dsh-chamber/dsh-host-client-graph': 'clientGraph/graph',
   '@dsh-chamber/dsh-host-git-worktree': 'gitWorktree/previewCreate',
   '@dsh-chamber/dsh-host-archive-cleanup': 'archiveCleanup/probe',
+}
+
+// Fail-fast drift pin (design 24 §7 C): the map's domain VALUES must be
+// EXACTLY the dsh-runtime authoritative activation-probe set
+// (HOST_DOMAIN_PROBE_NAMES, exported from the committed package main). A
+// typo'd/renamed domain — or a domain added to only one side — aborts the
+// gateway at load instead of silently passing a mounted chamber domain
+// unprobed (the same drift class the per-package map-miss throw below and
+// dsh-runtime's activationProbeNamesForDomains unknown-name throw guard).
+const mappedProbeDomains = new Set<string>(Object.values(HOST_PACKAGE_PROBE_DOMAINS))
+if (mappedProbeDomains.size !== HOST_DOMAIN_PROBE_NAMES.length
+  || HOST_DOMAIN_PROBE_NAMES.some(domain => !mappedProbeDomains.has(domain))) {
+  throw new Error(
+    'HOST_PACKAGE_PROBE_DOMAINS drifted from dsh-runtime HOST_DOMAIN_PROBE_NAMES '
+      + '(add/remove the domain on BOTH sides: the gateway seed map and the shared activation-probe set)',
+  )
 }
 
 export const SYNCED_PACKAGE_MAX_BYTES = 64 * 1024
