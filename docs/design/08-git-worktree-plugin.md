@@ -609,3 +609,16 @@ repoId/worktreeId 守卫、目录重现确定性拒绝且零 mutation、detached
 `typecheck:host-git`/`typecheck:git`、build:host-git（dist 重建，双跑字节
 一致）全绿。
 
+**2026-09 修复轮配套注（评审遗留闭合；STATUS/design 24 §16 同轮）**：
+「缺失行不得被任何文件系统探测触碰」承诺在删除/重放路径强制执行——未注册
+删除在锁内遇到 topology 解析为 missing 的行即按 `path-unavailable` 当次
+降级残留记录清理（原为同 id 下次重试才收敛）；注册重放与提交前复查对
+missing 行免 dirty/submodule 探针（fake git 现建模真实 spawn-ENOENT，新增
+3 例：锁内 preflight 后消失、最终 topology 读时消失、注册重放目标消失，
+均断言零/无新增 status 探针且首次尝试收敛）。`commitMissingRecordRemove`
+的 registry/ghost 复查移至最终 topology 读之前，收窄目录重现判定与 git
+remove 间的窗口。行为基线注：`git worktree remove` 对缺失目录 exit 0 仅清
+记录为 git 2.50 实测；更老 git 拒绝时走确定性 `retryable: false` 重分类
+（原始 git 文本透出），不产生重试环。验证：`test:host-git` 95→98、dist
+已重建。
+

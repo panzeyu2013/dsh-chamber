@@ -1440,6 +1440,9 @@ var GitWorktreeCore = class {
           if (target.locked) fail("worktree-locked", "locked worktrees cannot be removed");
           if (target.branch !== input.expected.branch) fail("expected-mismatch", "worktree branch changed");
           if (target.head !== input.expected.head) fail("expected-mismatch", "worktree HEAD changed");
+          if (target.missing === true) {
+            fail("path-unavailable", `cannot resolve '${target.path}': the worktree directory is gone`);
+          }
           if (await this.isDirty(target.path) && input.discardChanges !== true) {
             fail("worktree-dirty", "dirty worktrees cannot be removed");
           }
@@ -1662,7 +1665,7 @@ var GitWorktreeCore = class {
       operation.intent = intent;
       return await this.commitBoundRemove(input.operationId, operation, intent, replayed);
     }
-    if (await this.isDirty(target.path) && intent.discardChanges !== true) {
+    if (target.missing !== true && await this.isDirty(target.path) && intent.discardChanges !== true) {
       fail("worktree-dirty", "dirty worktrees cannot be removed");
     }
     const state = await this.readSource();
@@ -1691,13 +1694,13 @@ var GitWorktreeCore = class {
    *  (removeMissingUnregistered) and the uncertain-outcome replay
    *  (reconcileBoundRemove). */
   async commitMissingRecordRemove(operationIdValue, operation, intent, replayed) {
-    const finalTopology = await this.topology(intent.mainPath);
-    if (finalTopology.commonDir !== intent.commonDir || finalTopology.mainPath !== intent.mainPath) {
-      fail("operation-conflict", "removal repository changed immediately before mutation");
-    }
     const state = await this.readSource();
     if (state.workspaces.some((candidate) => resolve(candidate.path) === intent.path)) {
       fail("workspace-registered", "the missing worktree path is still registered as a workspace");
+    }
+    const finalTopology = await this.topology(intent.mainPath);
+    if (finalTopology.commonDir !== intent.commonDir || finalTopology.mainPath !== intent.mainPath) {
+      fail("operation-conflict", "removal repository changed immediately before mutation");
     }
     const finalTarget = finalTopology.worktrees.find((worktree) => worktree.path === intent.path);
     if (finalTarget === void 0) {
@@ -1743,10 +1746,10 @@ var GitWorktreeCore = class {
     if (finalTarget === finalTopology.worktrees[0] || finalTarget.locked || opaqueId("worktree", finalTopology.commonDir, finalTarget.path) !== intent.worktreeId || finalTarget.branch !== intent.branch || finalTarget.head !== intent.head) {
       fail("operation-conflict", "removal target changed immediately before mutation");
     }
-    if (await this.isDirty(finalTarget.path) && intent.discardChanges !== true) {
+    if (finalTarget.missing !== true && await this.isDirty(finalTarget.path) && intent.discardChanges !== true) {
       fail("worktree-dirty", "worktree became dirty immediately before removal");
     }
-    if (intent.discardChanges !== true && await this.worktreeHasSubmodules(finalTarget.path)) {
+    if (intent.discardChanges !== true && finalTarget.missing !== true && await this.worktreeHasSubmodules(finalTarget.path)) {
       throw new GitWorktreeError("worktree-submodules", SUBMODULE_REFUSAL_MESSAGE, { retryable: false });
     }
     operation.attemptedRemove = true;

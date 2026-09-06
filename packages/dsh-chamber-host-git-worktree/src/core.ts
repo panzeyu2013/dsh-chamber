@@ -2119,6 +2119,18 @@ export class GitWorktreeCore {
           if (target.locked) fail('worktree-locked', 'locked worktrees cannot be removed')
           if (target.branch !== input.expected.branch) fail('expected-mismatch', 'worktree branch changed')
           if (target.head !== input.expected.head) fail('expected-mismatch', 'worktree HEAD changed')
+          if (target.missing === true) {
+            // The row was resolved MISSING (its directory vanished between the
+            // in-lock preflight and this topology read). No filesystem probe
+            // may touch a missing row — a git status spawn on the gone cwd
+            // fails with a spawn error the outer catch cannot route. Degrade
+            // ON THIS ATTEMPT: fail path-unavailable inside the mutex so the
+            // catch below (which runs removeMissingUnregistered after the lock
+            // is released — it re-acquires the common-dir mutex itself) routes
+            // to the leftover-record cleanup, re-verifying every guard from
+            // scratch.
+            fail('path-unavailable', `cannot resolve '${target.path}': the worktree directory is gone`)
+          }
           if (await this.isDirty(target.path) && input.discardChanges !== true) {
             fail('worktree-dirty', 'dirty worktrees cannot be removed')
           }
@@ -2396,10 +2408,16 @@ export class GitWorktreeCore {
       return await this.commitBoundRemove(input.operationId, operation, intent, replayed)
     }
 
-    // Registered replay: no filesystem probe may run against a MISSING path —
-    // a vanished registered worktree goes through the workspace's orphan
-    // (registration-only) flows instead, exactly as on the first attempt.
-    if (await this.isDirty(target.path) && intent.discardChanges !== true) {
+    // Registered replay: a target whose row is resolved MISSING (directory
+    // externally gone since the pre-mutation attempt) has no working-tree
+    // content to protect — and no filesystem probe may touch it: a git status
+    // spawn on the vanished cwd fails with a spawn error instead of the
+    // path-unavailable the client can route. Skipping the probe lets this
+    // replay converge exactly like the first attempt's preflight: the
+    // workspace path can no longer be re-resolved, so the replay fails
+    // path-unavailable below and the workspace's orphan (registration-only)
+    // flows take over.
+    if (target.missing !== true && await this.isDirty(target.path) && intent.discardChanges !== true) {
       fail('worktree-dirty', 'dirty worktrees cannot be removed')
     }
 
@@ -2435,6 +2453,16 @@ export class GitWorktreeCore {
     intent: RemoveIntent,
     replayed: boolean,
   ): Promise<RemoveResult> {
+    // Registry/ghost-workspace re-check FIRST (review follow-up F3): reading
+    // the source registry between the final topology read and the git call
+    // would let the guards evaluate an older listing. Reordering narrows the
+    // reappearance window to the final topology read itself (still disclosed
+    // in design 08 §11.8); the mutation below is the record-only cleanup of a
+    // row verified missing at that read.
+    const state = await this.readSource()
+    if (state.workspaces.some(candidate => resolve(candidate.path) === intent.path)) {
+      fail('workspace-registered', 'the missing worktree path is still registered as a workspace')
+    }
     const finalTopology = await this.topology(intent.mainPath)
     if (finalTopology.commonDir !== intent.commonDir || finalTopology.mainPath !== intent.mainPath) {
       fail('operation-conflict', 'removal repository changed immediately before mutation')
@@ -2442,10 +2470,6 @@ export class GitWorktreeCore {
     // A ghost workspace at the RAW path owns the record (its registration
     // must be deleted registration-first through the workspace flows — never
     // silently behind it). Containment checks are moot: the directory is gone.
-    const state = await this.readSource()
-    if (state.workspaces.some(candidate => resolve(candidate.path) === intent.path)) {
-      fail('workspace-registered', 'the missing worktree path is still registered as a workspace')
-    }
     const finalTarget = finalTopology.worktrees.find(worktree => worktree.path === intent.path)
     if (finalTarget === undefined) {
       // An external `git worktree prune`/remove converged the leftover record
@@ -2489,6 +2513,11 @@ export class GitWorktreeCore {
         && target.head === intent.head
         && target.missing === true
       if (!unchangedAndStillMissing) throw error
+      // Deterministic terminal (2026-09 lock note): a lock that raced in
+      // between the final guards and this git call also refuses PRE-mutation
+      // — nothing was deleted, so a terminal error (dismiss + fresh removal
+      // after unlock) beats an uncertain-retry wedge, exactly as in
+      // commitBoundRemove's reconcile above.
       throw new GitWorktreeError(error.code, error.message, { retryable: false })
     }
     const after = await this.topology(finalTopology.mainPath)
@@ -2530,7 +2559,14 @@ export class GitWorktreeCore {
       || finalTarget.head !== intent.head) {
       fail('operation-conflict', 'removal target changed immediately before mutation')
     }
-    if (await this.isDirty(finalTarget.path) && intent.discardChanges !== true) {
+    // The final pre-mutation re-read may resolve the target row MISSING (its
+    // directory vanished after the caller's last probe). A missing row has no
+    // working-tree content to protect or probe — the plain `git worktree
+    // remove` below then only clears the leftover admin record (git 2.50,
+    // same record cleanup the missing-record path uses under these in-lock
+    // guards); a git status spawn on the gone cwd would instead fail with a
+    // spawn error no caller can route. Never probe a missing row.
+    if (finalTarget.missing !== true && await this.isDirty(finalTarget.path) && intent.discardChanges !== true) {
       fail('worktree-dirty', 'worktree became dirty immediately before removal')
     }
     // Git refuses a plain `git worktree remove` on a worktree containing
@@ -2543,8 +2579,11 @@ export class GitWorktreeCore {
     // of a linked worktree live under its admin git dir (`<gitdir>/modules`),
     // the same criterion git checks first. Best-effort: an unreadable `.git`
     // pointer reads as "no submodules", and git's own refusal is then
-    // reclassified deterministically by the catch below instead.
-    if (intent.discardChanges !== true && await this.worktreeHasSubmodules(finalTarget.path)) {
+    // reclassified deterministically by the catch below instead. A MISSING
+    // row cannot host submodule checkouts — skip the probe entirely.
+    if (intent.discardChanges !== true
+      && finalTarget.missing !== true
+      && await this.worktreeHasSubmodules(finalTarget.path)) {
       throw new GitWorktreeError('worktree-submodules', SUBMODULE_REFUSAL_MESSAGE, { retryable: false })
     }
     operation.attemptedRemove = true
@@ -2593,6 +2632,14 @@ export class GitWorktreeCore {
       // The git runner pins LC_ALL=C (see below), so the message is stable
       // English; a false positive would only route the user to --force,
       // which git itself allows and which converges.
+      // A lock that raced in between the final topology read and the git
+      // call is covered by the same deterministic reclassification: git's
+      // lock refusal is PRE-mutation (nothing was deleted), so replaying the
+      // same operation can never converge — the terminal error lets the
+      // client dismiss and start a FRESH removal after the user unlocks
+      // (deliberately NOT made retryable; retryability would wedge the
+      // source in the uncertain-outcome recovery for a refusal git proves
+      // was inert).
       if (/submodule/i.test(error.message)) {
         throw new GitWorktreeError('worktree-submodules', SUBMODULE_REFUSAL_MESSAGE, { retryable: false })
       }

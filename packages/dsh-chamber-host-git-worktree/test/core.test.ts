@@ -150,6 +150,13 @@ class FakeRepository {
     }
     if (args[0] === 'status') {
       this.onStatus?.()
+      // Reality model: spawning `git status` inside a cwd that no longer
+      // exists fails like a spawn-ENOENT — a retryable runner rejection, NOT
+      // the path-unavailable GitWorktreeError the removal degrade catches
+      // route. A missing-row removal path must never issue this probe.
+      if (!this.existing.has(request.cwd)) {
+        throw new GitWorktreeError('git-spawn-failed', `spawn git ENOENT for '${request.cwd}'`)
+      }
       const worktree = this.worktrees.find(candidate => candidate.path === request.cwd)
       if (worktree?.statusFailure) return this.result(2, '', worktree.statusStderr ?? 'status unavailable')
       if (args.includes('--branch')) {
@@ -2600,4 +2607,129 @@ test('missing leftover record removal refuses when the directory reappears befor
     error => error instanceof GitWorktreeError && error.code === 'worktree-invalid',
   )
   assert.equal(mutationCalls(repo, 'remove').length, 0)
+})
+
+// ---------------------------------------------------------------------------
+// Mid-flight directory vanish on the REMOVAL paths (invariant: no filesystem
+// probe may touch a missing row). A row whose directory is externally deleted
+// between the in-lock preflight and the mutation is resolved MISSING by the
+// topology read; a dirty probe against it would spawn `git status` inside the
+// gone cwd and fail with a spawn-ENOENT the degrade catches (path-unavailable
+// only) cannot route — stalling convergence. Each removal site must skip the
+// probe and converge through its existing missing-row handling instead. The
+// fake models the spawn failure as a runner rejection above, so a leaked
+// probe fails the removal outright.
+// ---------------------------------------------------------------------------
+
+const VANISH = '/repos/vanish-target'
+
+function addVanishTarget(repo: FakeRepository): void {
+  repo.addLinked({ path: VANISH, branch: 'vanish', head: FEATURE_HEAD })
+}
+
+function statusProbes(repo: FakeRepository, cwd: string): GitCommandRequest[] {
+  // Only the removal dirty probes (isDirty, no --branch); the snapshot's own
+  // `--branch` status reads are not removal probes.
+  return repo.calls.filter(call => call.args[0] === 'status' && !call.args.includes('--branch') && call.cwd === cwd)
+}
+
+test('unregistered removal whose target vanishes between the in-lock preflight and the mutation degrades to record cleanup on the first attempt', async () => {
+  const { core, repo } = setup({ linked: true })
+  addVanishTarget(repo)
+  const snapshot = await core.snapshot()
+  const repository = snapshot.repos[0]!
+  const target = repository.worktrees.find(row => row.path === VANISH)!
+  const expected = { repoId: repository.repoId, worktreeId: target.worktreeId, branch: target.branch!, head: target.head }
+  // The directory vanishes when the removal's FIRST topology listing runs: the
+  // row's path probe right after it resolves the target as MISSING. The dirty
+  // probe that follows would spawn git inside the gone cwd.
+  let lists = 0
+  repo.onWorktreeList = () => {
+    lists += 1
+    if (lists === 1) repo.existing.delete(VANISH)
+  }
+  const removed = await core.remove({ operationId: 'op-vanish-midflight', expected, path: VANISH })
+  assert.equal(removed.removed, true)
+  // Degraded ON THIS ATTEMPT (no same-id retry needed): the outer catch routed
+  // the in-lock path-unavailable to the leftover-record cleanup, whose guards
+  // were re-verified from scratch and whose mutation is a plain remove.
+  assert.equal(removed.replayed, false)
+  assert.equal(removed.next, 'none')
+  const removeCalls = mutationCalls(repo, 'remove')
+  assert.equal(removeCalls.length, 1)
+  assert.deepEqual(removeCalls[0]!.args, ['worktree', 'remove', '--', VANISH])
+  // The dirty probe never ran against the vanished cwd (it would have failed
+  // the removal with the simulated spawn-ENOENT).
+  assert.equal(statusProbes(repo, VANISH).length, 0)
+  const after = await core.snapshot()
+  assert.equal(after.repos[0]!.worktrees.some(row => row.path === VANISH), false)
+})
+
+test('no dirty probe is issued after a vanished-cwd row resolves at the in-lock commit', async () => {
+  const { core, repo } = setup({ linked: true })
+  addVanishTarget(repo)
+  const snapshot = await core.snapshot()
+  const repository = snapshot.repos[0]!
+  const target = repository.worktrees.find(row => row.path === VANISH)!
+  const expected = { repoId: repository.repoId, worktreeId: target.worktreeId, branch: target.branch!, head: target.head }
+  // The directory survives the first topology read (the dirty probe still runs
+  // against a LIVE cwd) but vanishes before the commit's in-lock re-read: the
+  // row is MISSING at commitBoundRemove's final topology. The commit must not
+  // re-probe it — the plain `git worktree remove` below clears the leftover
+  // record under the re-verified in-lock identity guards.
+  const listCount = (): number => repo.calls.filter(call => call.args[0] === 'worktree' && call.args[1] === 'list').length
+  const listsBeforeRemove = listCount()
+  let lists = 0
+  repo.onWorktreeList = () => {
+    lists += 1
+    if (lists === 2) repo.existing.delete(VANISH)
+  }
+  const removed = await core.remove({ operationId: 'op-vanish-commit', expected, path: VANISH })
+  assert.equal(removed.removed, true)
+  assert.equal(removed.replayed, false)
+  assert.equal(removed.next, 'none')
+  const removeCalls = mutationCalls(repo, 'remove')
+  assert.equal(removeCalls.length, 1)
+  assert.deepEqual(removeCalls[0]!.args, ['worktree', 'remove', '--', VANISH])
+  // Exactly ONE dirty probe was recorded — the pre-vanish one after the first
+  // topology read — and none after the second listing of the removal (which
+  // resolved the row missing; any later probe would have rejected with the
+  // simulated spawn-ENOENT and failed the removal).
+  const probes = statusProbes(repo, VANISH)
+  assert.equal(probes.length, 1)
+  const removeLists = repo.calls.filter(call => call.args[0] === 'worktree' && call.args[1] === 'list')
+  const vanishList = removeLists[listsBeforeRemove + 1]!
+  assert.ok(
+    repo.calls.indexOf(probes[0]!) < repo.calls.indexOf(vanishList),
+    'the only dirty probe ran before the row was resolved missing',
+  )
+})
+
+test('registered removal replay with a vanished target converges without a dirty probe', async () => {
+  const { core, repo } = setup({ linked: true })
+  const snapshot = await core.snapshot()
+  const repository = snapshot.repos[0]!
+  const row = repository.worktrees.find(worktree => worktree.path === LINKED)!
+  const expected = { repoId: repository.repoId, worktreeId: row.worktreeId, branch: row.branch!, head: row.head }
+  // First attempt: the mutation-stage spawn fails retryably with the target
+  // still present — the operation is left with a bound intent to reconcile.
+  repo.throwBeforeRemove = new GitWorktreeError('git-spawn-failed', 'simulated ENOENT')
+  await assert.rejects(
+    core.remove({ operationId: 'op-reg-vanish', workspaceId: 'ws-feature', expected }),
+    error => error instanceof GitWorktreeError && error.code === 'git-spawn-failed',
+  )
+  // The registered workspace's directory is now externally gone. The same-id
+  // replay's registered branch must NOT dirty-probe the missing row (the spawn
+  // would fail with the simulated spawn-ENOENT): it fails the deterministic
+  // path-unavailable exactly like the first attempt's preflight, which routes
+  // the workspace to its orphan (registration-only) flows.
+  const probesBeforeReplay = statusProbes(repo, LINKED).length
+  repo.existing.delete(LINKED)
+  await assert.rejects(
+    core.remove({ operationId: 'op-reg-vanish', workspaceId: 'ws-feature', expected }),
+    error => error instanceof GitWorktreeError && error.code === 'path-unavailable',
+  )
+  assert.equal(statusProbes(repo, LINKED).length, probesBeforeReplay)
+  // The replay never re-attempted the git mutation.
+  assert.equal(mutationCalls(repo, 'remove').length, 1)
 })
