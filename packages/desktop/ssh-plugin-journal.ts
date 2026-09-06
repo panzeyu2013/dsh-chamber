@@ -47,13 +47,14 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import { renameSync, rmSync } from 'node:fs'
+import { renameSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 // The owner-private file primitives are single-sourced in control-plane
 // (private-file.ts, P2-2a) and reached through the desktop dual-path facade
 // (packaged → compiled dist/control-plane, dev/tests → workspace source) —
 // the same mechanism the credential mirrors use.
 import { atomicWritePrivateFileNoFollow, ensurePrivateDirectoryNoFollow, readPrivateFileNoFollow } from './control-plane-module.ts'
+import { removeLegacyTmpResidue } from './store-file-hygiene.ts'
 
 /** Journal file name (under the directory createSshPluginJournal receives —
  *  the desktop passes `app.getPath('userData')`). */
@@ -225,14 +226,10 @@ function sanitizeOps(parsed: unknown): SshJournalOp[] | null {
 
 export function createSshPluginJournal(dir: string, logger: SshJournalLogger): SshPluginJournal {
   const file = sshPluginJournalFile(dir)
-  // One-time crash-residue sweep (2a follow-up): the pre-2a persistOps wrote
-  // a FIXED `${file}.tmp` (open 'w' + rename), and a hard crash between the
-  // two left that exact-name residue. The atomic write since 2a uses a
-  // random O_EXCL temp and never reuses or removes that legacy name — sweep
-  // it at store creation. Best-effort only: `force` already swallows ENOENT,
-  // and any other failure must not break journal loading, so the remainder
-  // is swallowed too.
-  try { rmSync(`${file}.tmp`, { force: true }) } catch { /* best-effort hygiene only */ }
+  // One-time crash-residue sweep (2a follow-up): the pre-2a persistOps'
+  // FIXED `${file}.tmp` residue (see removeLegacyTmpResidue), swept at store
+  // creation.
+  removeLegacyTmpResidue(file)
 
   function loadOps(): SshJournalOp[] {
     let text: string | null

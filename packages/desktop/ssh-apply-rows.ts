@@ -16,6 +16,7 @@
  */
 
 import {
+  extractSpecName,
   isDeniedPluginName,
   PLUGIN_NAME_PATTERN,
   PLUGIN_SPEC_PATTERN,
@@ -33,8 +34,10 @@ import type { SshJournalOp } from './ssh-plugin-journal.ts'
 export function parseSpecName(spec: unknown): string | null {
   if (typeof spec !== 'string' || spec === '') return null
   if (!PLUGIN_NAME_PATTERN.test(spec) && !PLUGIN_SPEC_PATTERN.test(spec)) return null
-  const at = spec.lastIndexOf('@')
-  const name = at > 0 ? spec.slice(0, at) : spec
+  // The extraction is the control-plane extractSpecName core (the same
+  // lastIndexOf('@') rule as gateway-ipc-shared's pluginSpecName); the
+  // reserved-name deny + final name re-validation below stay local.
+  const name = extractSpecName(spec)
   return PLUGIN_NAME_PATTERN.test(name) ? name : null
 }
 

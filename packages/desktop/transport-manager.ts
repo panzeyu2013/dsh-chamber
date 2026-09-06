@@ -64,6 +64,7 @@ import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, wr
 import { dirname } from 'node:path'
 import { canonicalizeTransportInstanceInput, MAX_TRANSPORT_INSTANCES, signalChild } from './transport-provider.ts'
 import { CHILD_LINE_MAX_CHARS, createBoundedLineProcessor } from './bounded-lines.ts'
+import { findFreeEphemeralPort } from './free-port.ts'
 import type {
   SpawnedProcess,
   TransportExecAction,
@@ -488,19 +489,6 @@ function writeFileAtomic(filePath: string, text: string) {
   renameSync(tmpPath, filePath)
 }
 
-/** Allocate a free local port via net listen(0). */
-function allocateLocalPort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = net.createServer()
-    server.unref()
-    server.once('error', reject)
-    server.listen(0, '127.0.0.1', () => {
-      const port = (server.address() as net.AddressInfo).port
-      server.close(() => resolve(port))
-    })
-  })
-}
-
 /** Default readiness probe: one bounded TCP connect to host:port (loopback default). */
 function defaultPortProbe(port: number, { timeoutMs = PROBE_ATTEMPT_TIMEOUT_MS, host = '127.0.0.1' }: { timeoutMs?: number; host?: string } = {}): Promise<boolean> {
   return new Promise(resolve => {
@@ -568,7 +556,9 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
     // A provider without verifyUp has no destination-identity check: pass.
     return verify === undefined ? Promise.resolve({ ok: true }) : verify(spec, endpoint)
   })
-  const doAllocate = allocatePort ?? allocateLocalPort
+  // Default allocator: one OS-assigned loopback port (free-port.ts
+  // findFreeEphemeralPort — bind(0) semantics).
+  const doAllocate = allocatePort ?? findFreeEphemeralPort
   const doRandom = random ?? Math.random
   const loggerLog = logger?.log
   const log = typeof loggerLog === 'function' ? (message: string) => loggerLog(message) : () => {}

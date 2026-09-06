@@ -49,6 +49,16 @@ import {
   type OverrideState,
 } from './dsh-runtime-store.ts'
 import { sanitizeErrorText } from './sanitize-error.ts'
+/**
+ * The snapshot restore marker (`dsh-runtime/restore-in-progress`) is
+ * independently authoritative for DSH_HOME transactions. When a restore is
+ * permanently stuck ('incomplete' — the journaled snapshot is missing or
+ * untrustworthy), the metadata-recovery transaction archives the marker as
+ * opaque evidence so the escape can complete; a retryable 'half' restore
+ * still blocks metadata recovery before anything is archived.
+ */
+import { RESTORE_MARKER_BASENAME as RESTORE_MARKER_EVIDENCE } from './restore-marker.ts'
+import { ROLLBACK_CONTINUATION_PHASES } from './rollback-facts.ts'
 import { snapshotPaths } from './snapshot-store.ts'
 import { assertSafeVersion, isSafeVersion } from './version-safety.ts'
 
@@ -59,15 +69,6 @@ const RECOVERY_MARKER = 'metadata-recovery.json'
 const RECOVERY_DATA_DIR = 'metadata-recovery-data'
 const RECOVERY_RESCUE_DATA_DIR = 'metadata-recovery-rescue-data'
 const PRIOR_RECOVERY_MARKER_EVIDENCE = 'metadata-recovery.json.prior-corrupt'
-/**
- * The snapshot restore marker (`dsh-runtime/restore-in-progress`) is
- * independently authoritative for DSH_HOME transactions. When a restore is
- * permanently stuck ('incomplete' — the journaled snapshot is missing or
- * untrustworthy), the metadata-recovery transaction archives the marker as
- * opaque evidence so the escape can complete; a retryable 'half' restore
- * still blocks metadata recovery before anything is archived.
- */
-const RESTORE_MARKER_EVIDENCE = 'restore-in-progress'
 const MAX_RECOVERY_MARKER_PARSE_BYTES = 1024 * 1024
 const STASH_TMP_DIR = '.dsh-home.stash.tmp'
 const STASH_DIR = 'dsh-home.stash'
@@ -966,9 +967,6 @@ export function detectRuntimeMetadataHealth(baseDir: string, shellVersion?: stri
   else status = 'healthy'
   return { status, current, override, activationJournal, corruptEvidence, recovery }
 }
-
-/** The startup's `journalIsRollbackContinuation` set (runtime-startup.ts:351). */
-const ROLLBACK_CONTINUATION_PHASES = new Set(['rollback-needed', 'restoring', 'restore-complete', 'fallback-builtin'])
 
 /** Phases that actively restore a snapshot on resume (apply-phase.ts). */
 const ACTIVE_RESTORE_PHASES = new Set(['rollback-needed', 'restoring', 'manual-restoring'])

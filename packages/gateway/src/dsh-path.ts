@@ -2,10 +2,25 @@ import { existsSync, realpathSync } from 'node:fs'
 import { delimiter, dirname, join, parse, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+/**
+ * Resolve the CLI entry of a dsh workspace — the single home of the two
+ * workspace markers (installed npm artifact preferred, dev source via tsx
+ * otherwise — the same markers and priority order control-plane's
+ * resolveDshEntry() uses for the managed instance's own spawn).
+ * isDshWorkspace() and the plugins-tasks executor launch derive from this
+ * resolver.
+ */
+export function resolveDshCliEntry(workspace: string): { entry: string; viaTsx: boolean } | null {
+  const installed = join(workspace, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js')
+  if (existsSync(installed)) return { entry: installed, viaTsx: false }
+  const source = join(workspace, 'apps', 'cli', 'src', 'bin.ts')
+  if (existsSync(source)) return { entry: source, viaTsx: true }
+  return null
+}
+
 /** A directory shape accepted by control-plane's resolveDshEntry(). */
 export function isDshWorkspace(path: string): boolean {
-  return existsSync(join(path, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js'))
-    || existsSync(join(path, 'apps', 'cli', 'src', 'bin.ts'))
+  return resolveDshCliEntry(path) !== null
 }
 
 /**

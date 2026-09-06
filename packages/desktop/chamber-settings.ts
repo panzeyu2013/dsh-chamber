@@ -11,9 +11,10 @@
  * electron side effects (powerSaveBlocker / setLoginItemSettings / XDG
  * autostart / window lifecycle) live in main.ts.
  */
-import { renameSync, rmSync } from 'node:fs';
+import { renameSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { atomicWritePrivateFileNoFollow, ensurePrivateDirectoryNoFollow, readPrivateFileNoFollow } from './control-plane-module.ts';
+import { removeLegacyTmpResidue } from './store-file-hygiene.ts';
 
 /** Close-window behavior (design 14 D1): hide to tray (dsh keeps running) or quit. */
 export type WindowCloseBehavior = 'hide-to-tray' | 'quit';
@@ -264,14 +265,10 @@ function isValidSettingsFile(input: unknown): input is Record<string, unknown> {
  * defaults with a loud `notice` for the caller to log.
  */
 export function readSettingsFile(filePath: string): { settings: ChamberSettings; notice: string | null } {
-  // One-time crash-residue sweep (2a follow-up): the pre-2a write path used a
-  // FIXED `${filePath}.tmp` (open 'w' + rename), and a hard crash between the
-  // two left that exact-name residue. The atomic replace since 2a uses a
-  // random O_EXCL temp and never reuses or removes that legacy name — sweep
-  // it at the startup load. Best-effort only: `force` already swallows
-  // ENOENT, and any other failure must not break the settings load, so the
-  // remainder is swallowed too.
-  try { rmSync(`${filePath}.tmp`, { force: true }) } catch { /* best-effort hygiene only */ }
+  // One-time crash-residue sweep (2a follow-up): the pre-2a write path's
+  // FIXED `${filePath}.tmp` residue (see removeLegacyTmpResidue), swept at
+  // the startup load.
+  removeLegacyTmpResidue(filePath);
   let raw: string;
   try {
     // The same no-follow / single-link / inode read discipline as the

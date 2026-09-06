@@ -1110,6 +1110,7 @@ export type { AuditTrailEvent } from './audit-trail.ts'
 // hand-written and are pinned by the gateway lockstep test
 // (plugin-spec-lockstep.test.ts).
 export {
+  extractSpecName,
   isDeniedPluginName,
   MATERIALIZE_FILE_SPEC_PATTERN,
   MAX_PLUGIN_SPEC_CHARS,

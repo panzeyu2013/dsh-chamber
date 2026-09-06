@@ -17,6 +17,9 @@
  *   收窄签名不同——B: `Record<string, unknown>`,C/D: `Record<PropertyKey,
  *   unknown>`,E: `Record<string, any>`;本文件取 B 的签名(本包内唯一消费
  *   方的原签名)。A 与 F 无本地 isRecord(F 用内联 typeof 检查)。
+ *   (改引后注:C/D 的本地同体副本已撤销,改为经 shared 面消费本副本——两处
+ *   调用点只做字符串键读取,`Record<PropertyKey, unknown>` 与 `Record<string,
+ *   unknown>` 收窄在该面上无行为差异;E 属禁改包,仍留本地。)
  *
  * - mintRpcId:正文逐字来自 A(instance-api.ts mintRpcId)——crypto.randomUUID
  *   主路径与 B/C/D/F 各处的裸 `crypto.randomUUID()` 等价(B: plugin-graph-
@@ -33,9 +36,14 @@
  *   ok 值整形(D 做快照行类型解析)不同——均非纯同体。
  * - 503 instance_unavailable 分类与「实例未就绪/不可达」文案:P4-2 判定留在各
  *   载体本地(理由见下方 P4-2 段)——C≡D 的 503 分支与 wrapWireError 虽逐字
- *   同体,同体字节的动作在 B/F/A 各不相同,收编等于把本地策略配置化;A 的回退
- *   文案('the instance is not ready')/InstanceUnavailableError 类身份/中止
- *   透传均不同;B/F 把 instance_unavailable 当「不可判定」静默路径(无文案)。
+ *   同体(token 级;缩进随嵌套深度不同),同体字节的动作在 B/F/A 各不相同,收编
+ *   等于把本地策略配置化;A 的回退文案('the instance is not ready')/
+ *   InstanceUnavailableError 类身份/中止透传均不同;B/F 把 instance_unavailable
+ *   当「不可判定」静默路径(无文案)。
+ *   【改引后注】C≡D 的 wrapWireError 折叠与 503 instance_unavailable throw 已
+ *   按 P4-2 选项规则收编进共享面 wire-error.ts(无选项构造器 + throw 守卫,零
+ *   语义变化)——本条"留在本地"指未收的 A/B/F 策略层与分类动作;详见 wire-error.ts
+ *   头注释与下方 P4-2 段后注。
  * - sleep/delay:六载体中仅 F(host-graph.ts retry.sleep)有 setTimeout-
  *   promise,sidebar 载体(A/B)无对应实现。
  * - 路径 basename:A 的 basenameOf 处理 `\\` 与根路径回退;E coordinator.ts
@@ -106,6 +114,13 @@ export function mintRpcId(): string {
  * - envelope/server-response 解析(前缀、ok 整形、rpcId 回显):各端不同体。
  * - payload 之外的任何方法面、缓存 Map、重试/诊断回调:页面语义,留本地。
  * - A(instance-api)未收(P4-3 裁定不合并,见文末 P4-3 段);E(git-api)禁改。
+ *
+ * 改引后注(无新编号——对上述登记的事实增补):C/D 各自手写的本地 wrapWireError
+ * 折行与 503 instance_unavailable 分支经逐字核对同体;其纯件部分——无选项错误
+ * 构造器 + 503 谓词/守卫——已收进同包 shared/wire-error.ts(经 shared 面导出),
+ * C/D 改为消费该共享件。这符合 P4-2 选项规则:签名无新选项、任何载体的动作与
+ * 文案零变化。动作差异仍按本段与文末 P4-3 裁定留在载体本地:A 的类身份折行/
+ * 中止直通、B/F 的「不可判定」与 resolve-null 路径均未收编。
  * ------------------------------------------------------------------------ */
 
 /** Bounded-unary budget of every postUnary call — the byte-identical

@@ -21,6 +21,7 @@ import {
   versionExists,
 } from '@dsh-chamber/dsh-runtime'
 import { RUNTIME_LOGICAL_DISK_LIMIT_BYTES } from '@dsh-chamber/dsh-runtime'
+import { effectivePending, shouldInvalidate } from '@dsh-chamber/dsh-runtime'
 import type { ActivationIntentInput, OverrideRecord, RuntimeDiskSummary } from '@dsh-chamber/dsh-runtime'
 import type { InstallOptions, InstallResult, RuntimeInstallProgress } from '@dsh-chamber/dsh-runtime'
 import { sanitizeErrorText } from './sanitize-error.ts'
@@ -277,10 +278,9 @@ export class DshRuntimeController {
   private activeVersion(): string | null {
     if (this.envOverrideActive) return this.envVersion;
     const override = this.deps.store.readOverride(this.baseDir)
-    const invalidated = override !== null && (
-      override.shellVersion !== this.deps.shellVersion
-      || (override as OverrideRecord & { invalidatedAt?: string | null }).invalidatedAt != null
-    )
+    // User-override validity is the shared core invalidation predicate; the
+    // env branch above stays outside it (env bypasses the override entirely).
+    const invalidated = override !== null && shouldInvalidate(override, this.deps.shellVersion)
     const pointer = invalidated || override === null ? null : this.deps.store.readCurrentPointer(this.baseDir)
     if (pointer !== null && this.isUsableTree(pointer)) return pointer
     return this.bundledVersion
@@ -337,8 +337,7 @@ export class DshRuntimeController {
     const pointer = this.deps.store.readCurrentPointer(this.baseDir)
     const effectiveUserPointer = !this.envOverrideActive
       && override !== null
-      && override.shellVersion === this.deps.shellVersion
-      && (override as OverrideRecord & { invalidatedAt?: string | null }).invalidatedAt == null
+      && !shouldInvalidate(override, this.deps.shellVersion)
       && pointer !== null
       && this.isUsableTree(pointer)
     const source: RuntimeState['source'] = this.envOverrideActive
@@ -370,10 +369,10 @@ export class DshRuntimeController {
       source,
       latest: this.lastMeta?.latest ?? null,
       versions,
-      pending: !this.envOverrideActive && override !== null
-        && override.shellVersion === this.deps.shellVersion
-        && override.invalidatedAt == null
-        ? override.pending
+      // effectivePending projects "pending is in effect" (override valid AND
+      // not invalidated by shell-version change) — the shared core predicate.
+      pending: !this.envOverrideActive
+        ? effectivePending(override, this.deps.shellVersion)
         : null,
       phase: this.phase,
       error: this.error,

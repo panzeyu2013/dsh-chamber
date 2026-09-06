@@ -137,6 +137,7 @@ import {
   resetCandidateHealthWindow,
 } from '@dsh-chamber/dsh-runtime';
 import { invalidate } from '@dsh-chamber/dsh-runtime';
+import { effectivePending, shouldInvalidate } from '@dsh-chamber/dsh-runtime';
 import {
   FATAL_STARTUP_BLOCK_REASONS,
   runDelayedRollback,
@@ -363,10 +364,12 @@ function resolveActiveRuntime(baseDir: string): ActiveRuntimeResolution {
   }
   const override = overrideState.kind === 'valid' ? overrideState.record : null;
   const pointer = pointerState.kind === 'valid' ? pointerState.version : null;
+  // Override validity (invalidatedAt / shell-version mismatch) is decided by
+  // the shared dsh-runtime core predicate (shouldInvalidate — the same replay
+  // gate the runtime startup and the gateway shape consume).
   if (
     override !== null
-    && override.shellVersion === version
-    && override.invalidatedAt == null
+    && !shouldInvalidate(override, version)
   ) {
     if (pointer !== null) {
       const tree = validateVersionTree(baseDir, pointer);
@@ -2408,9 +2411,9 @@ if (!gotTheLock) {
         ? path.join(pkgDir, 'dist', 'host-archive-cleanup-package')
         : path.join(repoRoot, 'packages', 'dsh-host-archive-cleanup');
       return [
-        { name: '@dsh-chamber/dsh-host-client-graph', packageJsonPath: path.join(graphDir, 'package.json'), distIndexPath: path.join(graphDir, 'dist', 'index.js') },
-        { name: '@dsh-chamber/dsh-host-git-worktree', packageJsonPath: path.join(gitDir, 'package.json'), distIndexPath: path.join(gitDir, 'dist', 'index.js') },
-        { name: '@dsh-chamber/dsh-host-archive-cleanup', packageJsonPath: path.join(archiveCleanupDir, 'package.json'), distIndexPath: path.join(archiveCleanupDir, 'dist', 'index.js') },
+        { name: CLIENT_GRAPH_PACKAGE_NAME, packageJsonPath: path.join(graphDir, 'package.json'), distIndexPath: path.join(graphDir, 'dist', 'index.js') },
+        { name: GIT_WORKTREE_PACKAGE_NAME, packageJsonPath: path.join(gitDir, 'package.json'), distIndexPath: path.join(gitDir, 'dist', 'index.js') },
+        { name: ARCHIVE_CLEANUP_PACKAGE_NAME, packageJsonPath: path.join(archiveCleanupDir, 'package.json'), distIndexPath: path.join(archiveCleanupDir, 'dist', 'index.js') },
       ];
     };
     // Resolves the awaited sync outcome for the caller (the manual
@@ -4745,8 +4748,13 @@ if (!gotTheLock) {
         const journalBefore = readActivationJournalState(runtimeBaseDir);
         const intentBefore = selectedJournalIntent(journalBefore);
         const overrideBefore = readOverrideState(runtimeBaseDir);
-        const pendingBefore = overrideBefore.kind === 'valid' && overrideBefore.record.invalidatedAt == null
-          ? overrideBefore.record.pending
+        // Pending replay projection before the startup transaction: use the
+        // shared core effectivePending so a pending whose override is
+        // invalidated OR written by an older shell version never resolves a
+        // target here (matches the core startup replay decision — previously
+        // only invalidatedAt was consulted here).
+        const pendingBefore = overrideBefore.kind === 'valid'
+          ? effectivePending(overrideBefore.record, version)
           : null;
         // Env is authoritative over dormant chamber selection metadata. The
         // startup module must first complete any restore and then return its
@@ -5400,11 +5408,8 @@ if (!gotTheLock) {
       // Same predicate as state.pending's projection (dsh-runtime-controller):
       // an invalidated or old-shell override's raw pending must not resolve a
       // durable target for apply-now.
-      const overridePending = overrideState.kind === 'valid'
-        && !envOverrideActive
-        && overrideState.record.shellVersion === version
-        && overrideState.record.invalidatedAt == null
-        ? overrideState.record.pending
+      const overridePending = overrideState.kind === 'valid' && !envOverrideActive
+        ? effectivePending(overrideState.record, version)
         : null;
       const target = state.pending ?? journalTarget ?? overridePending;
       const override = readOverride(runtimeBaseDir);

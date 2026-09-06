@@ -82,3 +82,25 @@ export const RUN_STDOUT_MAX_BYTES = WRITE_FILE_MAX_BYTES
 export function isDeniedPluginName(name: string): boolean {
   return name.startsWith('@deepseek-ai/') || name.startsWith('@dsh-chamber/')
 }
+
+/**
+ * The registry package NAME a spec/name value refers to — the shared
+ * extraction core of the whitelist-validation-then-lastIndexOf('@') rule the
+ * three sibling copies re-implement today:
+ * - desktop gateway-ipc-shared.ts `pluginSpecName` (extraction after the
+ *   caller's PLUGIN_SPEC_PATTERN check in parseSpecArg);
+ * - gateway plugins-tasks.ts `pluginSpecName` (verbatim copy, called after
+ *   validateSubmission's PLUGIN_SPEC_PATTERN check);
+ * - desktop ssh-apply-rows.ts `parseSpecName` (the guarded, null-returning
+ *   variant: its type/whitelist/PLUGIN_NAME_PATTERN guards wrap this core).
+ *
+ * Rule: the whitelist has already guaranteed the shape (registry name +
+ * optional scope, optional trailing @version) — then the name is everything
+ * before the LAST `@`; a bare `@scope/name` has its scope `@` at index 0 and
+ * is returned whole. Inputs that fail the whitelist are NOT this helper's
+ * contract (the guarded variant filters them first).
+ */
+export function extractSpecName(spec: string): string {
+  const at = spec.lastIndexOf('@')
+  return at > 0 ? spec.slice(0, at) : spec
+}

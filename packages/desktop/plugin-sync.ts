@@ -63,6 +63,11 @@ import { isDeniedPluginName, MAX_PLUGIN_SPEC_CHARS, PLUGIN_NAME_PATTERN, PLUGIN_
 // consumed through the same dual-path facade for the local-plugin-writer
 // ledger (owner-only 0600 atomic replace, owner-only parent).
 import { atomicWritePrivateFileNoFollow, ensurePrivateDirectoryNoFollow, readPrivateFileNoFollow } from './control-plane-module.ts'
+// Chamber host-package insert facts (host-graph-seed.ts single source, design
+// 09 module A / design 13 §4.6) — consumed through control-plane-module.ts
+// (the desktop dual-path facade) so the desktop-facing package-name/insert-id
+// constants below derive from control-plane's own seed and can never drift.
+import { HOST_ARCHIVE_CLEANUP_INSERT, HOST_GIT_WORKTREE_INSERT, HOST_GRAPH_INSERT } from './control-plane-module.ts'
 // ssh unified increments (design 21 §6.4, plan Phase 5): the reserved-name
 // deny + row assembly helpers (parseSpecName / buildSshApplyRows /
 // describeReservedNameRefusal — ssh-apply-rows.ts). Pure module, imports no
@@ -236,12 +241,18 @@ export function scopeExecToOwnership(
 
 export const DEFAULT_REMOTE_DSH_HOME = '~/.dsh'
 export const WEB_PROFILE = 'web'
-export const CLIENT_GRAPH_PACKAGE_NAME = '@dsh-chamber/dsh-host-client-graph'
-export const CLIENT_GRAPH_INSERT_ID = 'client-graph'
-export const GIT_WORKTREE_PACKAGE_NAME = '@dsh-chamber/dsh-host-git-worktree'
-export const GIT_WORKTREE_INSERT_ID = 'git-worktree'
-export const ARCHIVE_CLEANUP_PACKAGE_NAME = '@dsh-chamber/dsh-host-archive-cleanup'
-export const ARCHIVE_CLEANUP_INSERT_ID = 'archive-cleanup'
+// Chamber host-package seed facts: the id/name pairs are control-plane's own
+// (host-graph-seed.ts HOST_GRAPH_INSERT / HOST_GIT_WORKTREE_INSERT /
+// HOST_ARCHIVE_CLEANUP_INSERT, consumed through control-plane-module.ts) —
+// the desktop keeps its established names because main.ts and the
+// cross-package tests import them from here; values can never drift from the
+// local profile seed (design 09 module A / design 13 §4.6).
+export const CLIENT_GRAPH_PACKAGE_NAME = HOST_GRAPH_INSERT.name
+export const CLIENT_GRAPH_INSERT_ID = HOST_GRAPH_INSERT.id
+export const GIT_WORKTREE_PACKAGE_NAME = HOST_GIT_WORKTREE_INSERT.name
+export const GIT_WORKTREE_INSERT_ID = HOST_GIT_WORKTREE_INSERT.id
+export const ARCHIVE_CLEANUP_PACKAGE_NAME = HOST_ARCHIVE_CLEANUP_INSERT.name
+export const ARCHIVE_CLEANUP_INSERT_ID = HOST_ARCHIVE_CLEANUP_INSERT.id
 
 /**
  * The two module-A seed files (design 09 module A / design 13 §4.6): the

@@ -8,7 +8,7 @@
  * dependencies remain pinned to the same explicit registry and their own npm
  * integrity records.
  */
-import { createHash, randomBytes } from 'node:crypto'
+import { randomBytes } from 'node:crypto'
 import { spawn, type ChildProcess } from 'node:child_process'
 import {
   chmodSync,
@@ -22,14 +22,22 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { open } from 'node:fs/promises'
-import { isAbsolute, join, relative } from 'node:path'
+import { join } from 'node:path'
 import { ALLOW_BUILDS } from './allow-builds.mjs'
 import { validateVersionTree, readStorePruneRequest } from './dsh-runtime-store.ts'
 import type { RuntimeInstallResolution } from './dsh-runtime-updater.ts'
 import { createIntegrityVerifier, isSupportedIntegrity } from './registry-integrity.ts'
 import { fetchRegistryResponse } from './registry-metadata.ts'
+import {
+  CRITICAL_FILE_DIGEST_PATTERN,
+  CRITICAL_RUNTIME_FILES,
+  type CriticalRuntimeFile,
+  openCriticalRuntimeFile,
+  sha256FileDigest,
+} from './runtime-critical-files.ts'
 import { canonicalRegistryOrigin, isAllowedRegistryUrl, registryRedirectOrigins } from './registry-url.ts'
 import { sanitizeErrorText } from './sanitize-error.ts'
+import { makeOwnedTreeWritable } from './tree-writable.ts'
 import { assertSafeVersion } from './version-safety.ts'
 import { hasWindowsDescendants, killWindowsTreeWithResidual } from './windows-process.ts'
 import {
@@ -124,10 +132,6 @@ export interface InstallResult {
 
 type InstallFailureStage = 'prepare' | 'download' | 'install' | 'prune' | 'smoke' | 'manifest' | 'publish' | 'finalize'
 
-const CRITICAL_RUNTIME_FILES = [
-  'node_modules/@deepseek-ai/dsh/package.json',
-  'node_modules/@deepseek-ai/dsh/lib/bin.js',
-] as const
 const FAILED_ERROR_LIMIT = 2_000
 
 /** Only variables pnpm/network needs may cross the process boundary. Shared
@@ -175,23 +179,21 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
-function criticalFilePath(root: string, relativePath: typeof CRITICAL_RUNTIME_FILES[number]): string {
+function criticalFilePath(root: string, relativePath: CriticalRuntimeFile): string {
   const rootReal = realpathSync(root)
   const candidate = join(root, relativePath)
-  const info = lstatSync(candidate)
-  if (!info.isFile() || info.isSymbolicLink()) {
+  const opened = openCriticalRuntimeFile(rootReal, candidate)
+  if (opened.kind === 'not-regular-file') {
     throw new Error(`runtime critical file is not a regular file: ${relativePath}`)
   }
-  const fileReal = realpathSync(candidate)
-  const fromRoot = relative(rootReal, fileReal)
-  if (fromRoot === '' || fromRoot === '..' || fromRoot.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) || isAbsolute(fromRoot)) {
+  if (opened.kind === 'escapes-tree') {
     throw new Error(`runtime critical file escapes the version tree: ${relativePath}`)
   }
-  return candidate
+  return opened.path
 }
 
-function sha256File(root: string, relativePath: typeof CRITICAL_RUNTIME_FILES[number]): string {
-  return `sha256-${createHash('sha256').update(readFileSync(criticalFilePath(root, relativePath))).digest('base64')}`
+function sha256File(root: string, relativePath: CriticalRuntimeFile): string {
+  return sha256FileDigest(criticalFilePath(root, relativePath))
 }
 
 function assertRuntimePackageIdentity(root: string, version: string): void {
@@ -246,7 +248,7 @@ export function verifyRuntimeTreeCriticalFiles(root: string, version: string): v
   assertRuntimePackageIdentity(root, safeVersion)
   for (const relativePath of CRITICAL_RUNTIME_FILES) {
     const digest = expected[relativePath]
-    if (typeof digest !== 'string' || !/^sha256-[A-Za-z0-9+/]{43}=$/.test(digest)) {
+    if (typeof digest !== 'string' || !CRITICAL_FILE_DIGEST_PATTERN.test(digest)) {
       throw new Error(`published runtime has an invalid digest for ${relativePath}`)
     }
     if (sha256File(root, relativePath) !== digest) {
@@ -273,21 +275,6 @@ function makeRuntimeTreeReadOnly(root: string): void {
     chmodSync(entryPath, readOnlyMode)
   }
   visit(root)
-}
-
-function makeOwnedTreeWritable(root: string): void {
-  if (!existsSync(root)) return
-  const visit = (entryPath: string): void => {
-    const info = lstatSync(entryPath)
-    if (info.isSymbolicLink()) return
-    if (info.isDirectory()) {
-      chmodSync(entryPath, info.mode | 0o700)
-      for (const entry of readdirSync(entryPath)) visit(join(entryPath, entry))
-    } else if (info.isFile()) {
-      chmodSync(entryPath, info.mode | 0o600)
-    }
-  }
-  try { visit(root) } catch { /* rmSync below remains authoritative */ }
 }
 
 function removeOwnedTree(root: string): void {

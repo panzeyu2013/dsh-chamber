@@ -62,6 +62,7 @@ import {
   GATEWAY_TOKEN_MAX_CHARS,
   GATEWAY_TOKEN_MIN_CHARS,
 } from './gateway-session-protocol.ts'
+import { isLoopbackHostname, isLoopbackUpstreamBaseUrl } from './loopback.ts'
 import {
   CLIENT_BODY_IDLE_TIMEOUT_MS,
   MAX_BUFFERED_REQUEST_BYTES,
@@ -115,6 +116,11 @@ export {
   getProcessBufferedRequestBytes,
 }
 export type { ProxyRequest, ProxyResponse, ProxySocket }
+
+// Re-export the moved loopback leaf (loopback.ts) name that historically
+// lived here so the module surface stays compatible (the test suite reads
+// it from instance-proxy.ts).
+export { isLoopbackUpstreamBaseUrl } from './loopback.ts'
 
 /** A parsed /api/i/<id> path. */
 export interface InstancePath {
@@ -210,29 +216,6 @@ export function parseInstanceId(id: string): 'local' | 'dsh' | 'gateway' | null 
  * unrelated rationales (NAT/keepalive convention / ws README example / ssh
  * default); do not merge them. */
 const DIRECT_HTTP_TCP_KEEPALIVE_MS = 30_000
-
-/** True when an upstream base URL points at the loopback interface — the
- * local instance and every ssh-tunnel local leg. Such legs cannot die
- * half-open on their own (loopback), and tunnels are covered by ssh keepalive
- * (proxy-forward.ts WS_PING_* note), so they keep the documented no-heartbeat
- * design. Anything unparseable fails toward loopback (no keepalive). */
-export function isLoopbackUpstreamBaseUrl(baseUrl: string): boolean {
-  let hostname: string
-  try {
-    hostname = new URL(baseUrl).hostname
-  } catch {
-    return true
-  }
-  if (hostname === 'localhost' || hostname === '::1' || hostname === '[::1]') return true
-  // IPv4-mapped IPv6 loopback spellings are loopback too — without this a
-  // loopback-routed leg would get a pointless keepalive arm (harmless
-  // over-arm, but wrong). WHATWG serializes mapped addresses canonically:
-  // '[::ffff:127.0.0.1]' arrives as '[::ffff:7f00:1]' (hex), so match both
-  // canonical forms.
-  const bare = hostname.startsWith('[') && hostname.endsWith(']') ? hostname.slice(1, -1) : hostname
-  if (/^::ffff:(127\.|7f00)/.test(bare)) return true
-  return /^127\./.test(hostname)
-}
 
 /** The upstream-leg TCP keepalive cadence for one resolved upstream target, or
  * `undefined` to keep the documented no-heartbeat design (design 03 §3.4 —
@@ -609,7 +592,7 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
           throw new TypeError('registerInstanceTransport: ssh baseUrl must be an HTTP loopback origin')
         }
         if (transport !== 'http'
-          && !['127.0.0.1', 'localhost', '::1', '[::1]'].includes(target.hostname)) {
+          && !isLoopbackHostname(target.hostname)) {
           throw new TypeError('registerInstanceTransport: ssh baseUrl must be a loopback origin')
         }
         // dsh targets never carry credentials: no header injection, ever
@@ -627,7 +610,7 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
           throw new TypeError('registerInstanceTransport: an ssh-tunneled gateway baseUrl must be an HTTP loopback origin')
         }
         if (transport === 'ssh'
-          && !['127.0.0.1', 'localhost', '::1', '[::1]'].includes(target.hostname)) {
+          && !isLoopbackHostname(target.hostname)) {
           throw new TypeError('registerInstanceTransport: ssh baseUrl must be a loopback origin')
         }
         // 0..2 sanctioned headers, each bounded and whitelist-checked:

@@ -42,9 +42,9 @@
  * (`resolveWorkspace()`, env → override → builtin anchor — the same source
  * control-plane spawns the managed instance from): node executable
  * (resolveNodeExecutable, shared with control-plane spawn-dsh) + the
- * workspace's installed entry (`node_modules/@deepseek-ai/dsh/lib/bin.js`)
- * or the dev source entry (tsx). A runtime version switch between ops can
- * therefore never leave the queue spawning a stale entry.
+ * workspace CLI entry (resolveDshCliEntry in dsh-path.ts — the single home
+ * of the installed-entry/dev-source markers). A runtime version switch
+ * between ops can therefore never leave the queue spawning a stale entry.
  */
 
 import { existsSync, renameSync, rmSync } from 'node:fs'
@@ -53,6 +53,7 @@ import { randomUUID } from 'node:crypto'
 import {
   atomicWritePrivateFileNoFollow,
   ensurePrivateDirectoryNoFollow,
+  extractSpecName,
   isDeniedPluginName,
   MAX_PLUGIN_SPEC_CHARS,
   PLUGIN_NAME_PATTERN,
@@ -60,6 +61,7 @@ import {
   readPrivateFileNoFollow,
   resolveNodeExecutable,
 } from '@dsh-chamber/control-plane'
+import { resolveDshCliEntry } from './dsh-path.ts'
 import type { SpawnFn } from './plugins-exec.ts'
 import { createPluginsExec, PLUGIN_QUEUE_CAP, type PluginExec } from './plugins-exec.ts'
 import type { ProfileWriteLease } from './runtime-manager.ts'
@@ -202,13 +204,6 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
-/** Parse the package name a registry spec refers to (the trailing @version
- * segment, if any, is dropped; the whitelist guarantees the shape). */
-function pluginSpecName(spec: string): string {
-  const at = spec.lastIndexOf('@')
-  return at > 0 ? spec.slice(0, at) : spec
-}
-
 /** Name + spec whitelist validation shared by install/materialize/remove. */
 type ValidationOutcome =
   | { kind: 'refuse'; code: PluginTaskRefusalCode; error: string }
@@ -267,7 +262,7 @@ function validateSubmission(stateDir: string, input: PluginTaskSubmitInput, inst
         error: 'file: specs are not accepted on the registry install route; upload the archive via PUT /chamber/plugins/materialize',
       }
     }
-    if (pluginSpecName(spec) !== name) {
+    if (extractSpecName(spec) !== name) {
       return { kind: 'refuse', code: 'invalid_spec', error: 'spec must reference the submitted plugin name' }
     }
     // The managed profile does not exist yet (fresh gateway, dsh never
@@ -459,17 +454,6 @@ export function createChamberPluginTasks(deps: ChamberPluginTasksDeps): ChamberP
   // Executor lifecycle + lease bookkeeping
   // -----------------------------------------------------------------------
 
-  /** Resolve the ACTIVE runtime workspace's CLI entry (installed artifact
-   * preferred, dev source via tsx otherwise — the same resolution order
-   * control-plane spawn-dsh uses for the managed instance's own spawn). */
-  function resolveCliEntry(workspace: string): { entry: string; viaTsx: boolean } | null {
-    const installed = join(workspace, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js')
-    if (existsSync(installed)) return { entry: installed, viaTsx: false }
-    const source = join(workspace, 'apps', 'cli', 'src', 'bin.ts')
-    if (existsSync(source)) return { entry: source, viaTsx: true }
-    return null
-  }
-
   /** Lazy executor construction (see the module header). The spawn command
    * is the resolved NODE executable; the per-op argv prefix (node args +
    * workspace CLI entry) and cwd come from cliLaunch, resolved per spawn so
@@ -506,7 +490,7 @@ export function createChamberPluginTasks(deps: ChamberPluginTasksDeps): ChamberP
           throw new Error('gateway runtime manager is unavailable; cannot resolve the dsh CLI workspace')
         }
         const workspace = manager.resolveWorkspace()
-        const resolved = resolveCliEntry(workspace.path)
+        const resolved = resolveDshCliEntry(workspace.path)
         if (resolved === null) {
           throw new Error(`no dsh CLI entry found in ${workspace.path}`)
         }

@@ -40,14 +40,15 @@
 
 import { request as httpsRequest } from 'node:https'
 import { request as httpRequest } from 'node:http'
-import {
-  existsSync,
-  renameSync,
-  rmSync,
-} from 'node:fs'
+import { rmSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { INSTANCE_ID_PATTERN, MAX_INSTANCE_LABEL_CHARS } from './transport-provider.ts'
 import { gatewayCredentialBinding, isCredentialBinding } from './credential-binding.ts'
+// Shared corrupt/unbound preserve + legacy-`.tmp` sweep mechanics for the
+// owner-only store files (single source, formerly duplicated in the
+// providers/ssh-plugin-journal/chamber-settings).
+import { isPlainRecord, preserveInvalidCredentialFile, preserveUnboundCredentialFile, removeLegacyTmpResidue } from './store-file-hygiene.ts'
+import type { UnboundCredentialFileWording } from './store-file-hygiene.ts'
 import type {
   TransportInstanceSpec,
   TransportKind,
@@ -219,30 +220,16 @@ let secretSpecResolver: ((id: string) => TransportInstanceSpec | null) | null = 
  * auto-bound safely and therefore remain preserved + disabled. */
 const LEGACY_TOKEN_FILE_NAME = 'gateway-tokens.json'
 
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
-}
-
-function preserveInvalidSecretFile(file: string): string {
-  const corruptPath = `${file}.corrupt`
-  try {
-    renameSync(file, corruptPath)
-    return `invalid gateway secrets file preserved at ${corruptPath}`
-  } catch (error) {
-    return `invalid gateway secrets file at ${file}; preserve failed: ${String(error)}`
-  }
-}
-
-function preserveUnboundSecretFile(file: string): string {
-  const stem = `${file}.unbound-${Date.now()}-${process.pid}`
-  let unboundPath = stem
-  for (let index = 1; existsSync(unboundPath); index += 1) unboundPath = `${stem}-${index}`
-  try {
-    renameSync(file, unboundPath)
-    return `legacy gateway secrets have no target bindings and were preserved at ${unboundPath}; re-enter credentials to use them`
-  } catch (error) {
-    return `legacy gateway secrets at ${file} have no target bindings and are disabled; preserve failed: ${String(error)}`
-  }
+/** This store's unbound-preserve wording — the shared mechanics and message
+ *  shapes live in store-file-hygiene.ts; only these sentences are
+ *  store-specific. */
+const UNBOUND_SECRET_FILE_WORDING: UnboundCredentialFileWording = {
+  subject: 'legacy gateway secrets',
+  hasVerb: 'have',
+  disabledAuxiliary: 'are',
+  preservedAuxiliary: 'were',
+  bindingsNoun: 'target bindings',
+  reentryNoun: 'credentials',
 }
 
 type GatewaySecretFileStorage = 'safeStorage' | 'plaintext'
@@ -267,7 +254,7 @@ function isValidCredentialValue(value: string, minChars: number, maxChars: numbe
  * gate. `resolve` maps a stored value to the plaintext credential BEFORE the
  * value gate: discriminator-directed decrypt-or-raw for v2/v3, identity for
  * v1 (schemaVersion 1 values are always plaintext — never encrypted). A null
- * result drives the caller's preserveInvalidSecretFile — the WHOLE file is
+ * result drives the caller's preserveInvalidCredentialFile — the WHOLE file is
  * corrupt (loud, never silently empty). */
 function loadCredentialTable(
   table: Record<string, unknown>,
@@ -331,16 +318,11 @@ export function configureGatewaySecretStore(
   tokenBindings.clear()
   passwordBindings.clear()
   if (file === null) return null
-  // One-time crash-residue sweep (2a follow-up): the pre-2a persist wrote a
-  // FIXED `${file}.tmp` (open 'w' + rename), and a hard crash between the two
-  // left that exact-name 0600 residue. The atomic replace since 2a uses a
-  // random O_EXCL temp and never reuses or removes that legacy name — sweep
-  // it once at configure (this covers BOTH store entry points: the secret
-  // store proper and configureGatewayTokenStore, which delegates here).
-  // Best-effort only: `force` already swallows ENOENT, and any other failure
-  // (permissions…) must not break store configuration, so the remainder is
-  // swallowed too.
-  try { rmSync(`${file}.tmp`, { force: true }) } catch { /* best-effort hygiene only */ }
+  // One-time crash-residue sweep (2a follow-up): the pre-2a persist's FIXED
+  // `${file}.tmp` residue (see removeLegacyTmpResidue), swept once at
+  // configure — this covers BOTH store entry points: the secret store proper
+  // and configureGatewayTokenStore, which delegates here.
+  removeLegacyTmpResidue(file)
   let text: string
   try {
     text = readOwnerOnlySecretFile(file)
@@ -352,27 +334,27 @@ export function configureGatewaySecretStore(
   try {
     parsed = JSON.parse(text)
   } catch {
-    return preserveInvalidSecretFile(file)
+    return preserveInvalidCredentialFile(file, 'gateway secrets file')
   }
-  if (!isPlainRecord(parsed)) return preserveInvalidSecretFile(file)
+  if (!isPlainRecord(parsed)) return preserveInvalidCredentialFile(file, 'gateway secrets file')
   if (parsed.schemaVersion === 1) {
-    if (!isPlainRecord(parsed.tokens)) return preserveInvalidSecretFile(file)
+    if (!isPlainRecord(parsed.tokens)) return preserveInvalidCredentialFile(file, 'gateway secrets file')
     const v1Tokens = loadCredentialTable(parsed.tokens, MIN_GATEWAY_TOKEN_CHARS, MAX_GATEWAY_TOKEN_CHARS, blob => blob)
-    if (v1Tokens === null) return preserveInvalidSecretFile(file)
-    if (v1Tokens.size > 0) return preserveUnboundSecretFile(file)
+    if (v1Tokens === null) return preserveInvalidCredentialFile(file, 'gateway secrets file')
+    if (v1Tokens.size > 0) return preserveUnboundCredentialFile(file, UNBOUND_SECRET_FILE_WORDING)
     persistGatewaySecrets(new Map(), new Map(), new Map(), new Map())
     return null
   }
   if ((parsed.schemaVersion !== 2 && parsed.schemaVersion !== 3)
     || !isPlainRecord(parsed.tokens) || !isPlainRecord(parsed.passwords)) {
-    return preserveInvalidSecretFile(file)
+    return preserveInvalidCredentialFile(file, 'gateway secrets file')
   }
   const storage = parsed.storage
   const emptyLegacyV2 = parsed.schemaVersion === 2 && storage === undefined
     && Object.keys(parsed.tokens).length === 0
     && Object.keys(parsed.passwords).length === 0
   if (storage !== 'safeStorage' && storage !== 'plaintext' && !emptyLegacyV2) {
-    return preserveInvalidSecretFile(file)
+    return preserveInvalidCredentialFile(file, 'gateway secrets file')
   }
   const effectiveStorage: GatewaySecretFileStorage = storage === 'safeStorage' ? 'safeStorage' : 'plaintext'
   durableSecretStorage = effectiveStorage
@@ -389,17 +371,17 @@ export function configureGatewaySecretStore(
     blob => resolveStoredValue(blob, effectiveStorage),
     false,
   )
-  if (loadedTokens === null || loadedPasswords === null) return preserveInvalidSecretFile(file)
+  if (loadedTokens === null || loadedPasswords === null) return preserveInvalidCredentialFile(file, 'gateway secrets file')
   if (parsed.schemaVersion === 2) {
     // No safe automatic adoption exists: this file may be the new-target
     // credential half left by a crash before the registry commit. Empty is
     // harmless; non-empty is preserved for explicit user recovery/re-entry.
-    if (loadedTokens.size > 0 || loadedPasswords.size > 0) return preserveUnboundSecretFile(file)
+    if (loadedTokens.size > 0 || loadedPasswords.size > 0) return preserveUnboundCredentialFile(file, UNBOUND_SECRET_FILE_WORDING)
     persistGatewaySecrets(new Map(), new Map(), new Map(), new Map())
     return null
   }
   if (!isPlainRecord(parsed.tokenBindings) || !isPlainRecord(parsed.passwordBindings)) {
-    return preserveInvalidSecretFile(file)
+    return preserveInvalidCredentialFile(file, 'gateway secrets file')
   }
   const loadedTokenBindings = new Map<string, string>()
   const loadedPasswordBindings = new Map<string, string>()
@@ -418,7 +400,7 @@ export function configureGatewaySecretStore(
   }
   if (!loadBindings(loadedTokens, parsed.tokenBindings, loadedTokenBindings)
     || !loadBindings(loadedPasswords, parsed.passwordBindings, loadedPasswordBindings)) {
-    return preserveInvalidSecretFile(file)
+    return preserveInvalidCredentialFile(file, 'gateway secrets file')
   }
   // Upgrade a documented plaintext fallback immediately when a keychain is
   // now available. Claim safeStorage only after the atomic rewrite succeeds;
