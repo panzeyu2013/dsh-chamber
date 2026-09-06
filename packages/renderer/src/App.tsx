@@ -236,7 +236,14 @@ function deriveServers(
       // 来源投影（06 §4.3 全局单选纪律）——否则每个已挂载来源都会冒出它的
       // 空"新建会话"行。其他来源 blank 行照旧不进入导航列表。
       const current = id === activeViewId ? runtimeFacts[id]?.current : undefined
-      workspaces = deriveServerWorkspaces(aggregate, '', current)
+      // Positional contract of deriveServerWorkspaces (derive.ts): (snapshot,
+      // serverId, ungroupedTitle, currentSessionId?, now?). P4-4 review (2026-
+      // 09) surfaced a pre-existing mis-binding masked by the old 3-param
+      // vendor overlay — `current` must ride the currentSessionId slot so the
+      // blank-row currentness branch (and the sidebar ghost-key arming on the
+      // REAL source id) actually fires; the ungrouped bucket title is
+      // display-only (''), overridden by the sidebar's own t('list.ungrouped').
+      workspaces = deriveServerWorkspaces(aggregate, id, '', current)
     }
     const entry: ChamberServerAggregate = {
       id,
