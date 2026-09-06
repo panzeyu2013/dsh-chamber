@@ -78,12 +78,10 @@ import type { OpenInLaunchContext, OpenInRequest } from './open-in.ts';
 import { createUpdateController, openReleasePage } from './updater.ts';
 import { DEFAULT_RUNTIME_LOGICAL_DISK_LIMIT_BYTES, DshRuntimeController } from './dsh-runtime-controller.ts';
 import type { RuntimeMetadataComponent, RuntimeMetadataHealthProjection } from './dsh-runtime-controller.ts';
-import { fetchRegistryMetadata } from '@dsh-chamber/dsh-runtime';
-import { isAllowedRegistryUrl } from '@dsh-chamber/dsh-runtime';
+import { disposeRuntimeInstaller, fetchRegistryMetadata, installRuntimeVersion, isAllowedRegistryUrl, pruneRuntimeStore } from '@dsh-chamber/dsh-runtime';
 import { sanitizeErrorText } from './sanitize-error.ts';
 import { evaluateApplyNowGate, type ApplyNowGateInput } from './apply-now-gate.ts';
 import { shouldSkipDiskRefresh } from './disk-evidence-gate.ts';
-import { disposeRuntimeInstaller, installRuntimeVersion, pruneRuntimeStore } from '@dsh-chamber/dsh-runtime';
 import {
   cleanupStaleInstalls,
   cleanupExplicitRuntimeVersion,
@@ -136,8 +134,7 @@ import {
   removeKnownGoodCandidate,
   resetCandidateHealthWindow,
 } from '@dsh-chamber/dsh-runtime';
-import { invalidate } from '@dsh-chamber/dsh-runtime';
-import { effectivePending, shouldInvalidate } from '@dsh-chamber/dsh-runtime';
+import { effectivePending, invalidate, shouldInvalidate } from '@dsh-chamber/dsh-runtime';
 import {
   FATAL_STARTUP_BLOCK_REASONS,
   runDelayedRollback,
@@ -4256,14 +4253,13 @@ if (!gotTheLock) {
     };
 
     const readActivationFacts = () => {
-      // ACTIVATION-FACTS DIVERGENCE (stage2 ruling material, 2026): the
-      // gateway twin (runtime-manager.ts activationFacts) excludes the
-      // current POINTER from latestKnownGood, while this desktop builder
-      // excludes the journal intent target ?? override.pending; the gateway
-      // also short-circuits win32 to builtin facts (knownGoodVersion null)
-      // and skips the tree-validation this side performs. Unifying needs a
-      // core helper with one exclusion rule — deferred until dsh-runtime
-      // dist can be rebuilt (new public export) or a ruling picks a rule.
+      // ACTIVATION-FACTS DIVERGENCE (stage2 ruling, 2026): the gateway twin
+      // (runtime-manager.ts activationFacts) excludes the current POINTER
+      // from latestKnownGood and short-circuits win32 (knownGoodVersion
+      // null); this side excludes journalIntent.targetVersion ??
+      // override.pending and validates the tree. Unification needs one core
+      // helper + one exclusion rule (deferred: requires a new dsh-runtime
+      // public export, dist locked).
       const pointer = readCurrentPointerState(runtimeBaseDir);
       if (pointer.kind === 'corrupt') throw new Error('current pointer metadata 损坏');
       const overrideState = readOverrideState(runtimeBaseDir);
@@ -5076,21 +5072,14 @@ if (!gotTheLock) {
     // serialized with health restarts, and respects canStartLocal.
     ipcMain.handle(IPC_CHANNELS.RUNTIME_RESTART, trustedIpc(async () => {
       const state = runtimeInstance.getState();
-      // RESTART-GATE RULING MATERIAL (stage2, 2026): this refusal is the
-      // desktop side of the restart-dsh matrix. The core allowedActions()
-      // (runtime-state-machine.ts) offers restart-dsh in idle/available/
-      // applied/rollback/failed/error and not in checking/downloading/
-      // installing/pending/applying/snapshot-failed. The busy set below
-      // covers the five no-restart phases; snapshot-failed and runtimeBlocked
-      // are refused explicitly after it; the single-flight gates
-      // (runtimeOperation / runtimeWriterFence) are runtime-level, outside
-      // the phase matrix. NOTE the weave differs from a pure
-      // allowedActions-based gate at failed/error: allowedActions offers
-      // restart-dsh there while this handler additionally refuses when
-      // state.runtimeBlocked is true — do not mechanically replace one
-      // expression with the other before that semantic is ruled. The gateway
-      // route gate (runtime-routes.ts) checks only applying/installing for
-      // its own REST restart surface.
+      // RESTART-GATE RULING (stage2, 2026): core allowedActions offers
+      // restart-dsh in idle/available/applied/rollback/failed/error only;
+      // this refusal = busy set (the five no-restart phases) + explicit
+      // snapshot-failed/runtimeBlocked + single-flight gates. NOT a pure
+      // allowedActions gate: failed/error allow restart-dsh there yet are
+      // refused here while runtimeBlocked — do not substitute one expression
+      // for the other before ruling. Gateway route gate checks only
+      // applying/installing for its REST restart surface.
       const busyPhase = state.phase === 'checking' || state.phase === 'downloading'
         || state.phase === 'installing' || state.phase === 'applying' || state.phase === 'pending';
       if (runtimeOperation !== null || runtimeWriterFence.busy || busyPhase

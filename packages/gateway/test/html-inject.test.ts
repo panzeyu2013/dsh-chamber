@@ -7,8 +7,8 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { MAX_HTML_INJECTION_BYTES } from '@dsh-chamber/control-plane'
 import {
-  HTML_INJECT_MAX_BYTES,
   TRUST_DECLARATION_SCRIPT,
   injectTrustDeclaration,
 } from '../src/html-inject.ts'
@@ -50,17 +50,17 @@ test('is idempotent: a document already carrying __DSH_TRANSPORT__ is returned u
 })
 
 test('documents over the 64KiB cap are returned untouched', () => {
-  const large = '<html><head></head><body>' + 'x'.repeat(HTML_INJECT_MAX_BYTES) + '</body></html>'
-  assert.ok(large.length > HTML_INJECT_MAX_BYTES)
+  const large = '<html><head></head><body>' + 'x'.repeat(MAX_HTML_INJECTION_BYTES) + '</body></html>'
+  assert.ok(large.length > MAX_HTML_INJECTION_BYTES)
   const result = injectTrustDeclaration(large)
   assert.equal(result.injected, false)
   assert.equal(result.html, large)
 })
 
 test('a document exactly at the 64KiB cap is still injectable', () => {
-  const padding = 'x'.repeat(HTML_INJECT_MAX_BYTES - '<html><head></head><body></body></html>'.length)
+  const padding = 'x'.repeat(MAX_HTML_INJECTION_BYTES - '<html><head></head><body></body></html>'.length)
   const boundary = '<html><head></head><body>' + padding + '</body></html>'
-  assert.equal(boundary.length, HTML_INJECT_MAX_BYTES)
+  assert.equal(boundary.length, MAX_HTML_INJECTION_BYTES)
   const result = injectTrustDeclaration(boundary)
   assert.equal(result.injected, true)
   assert.equal(result.html.length, boundary.length + TRUST_DECLARATION_SCRIPT.length)

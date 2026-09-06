@@ -117,11 +117,6 @@ export {
 }
 export type { ProxyRequest, ProxyResponse, ProxySocket }
 
-// Re-export the moved loopback leaf (loopback.ts) name that historically
-// lived here so the module surface stays compatible (the test suite reads
-// it from instance-proxy.ts).
-export { isLoopbackUpstreamBaseUrl } from './loopback.ts'
-
 /** A parsed /api/i/<id> path. */
 export interface InstancePath {
   id: string

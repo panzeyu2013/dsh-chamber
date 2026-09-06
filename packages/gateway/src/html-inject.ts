@@ -30,14 +30,6 @@ import { MAX_HTML_INJECTION_BYTES } from '@dsh-chamber/control-plane'
  * the proxy's content-length rewrite is an exact byte delta of this script. */
 export const TRUST_DECLARATION_SCRIPT = '<script>window.__DSH_TRANSPORT__={ownsHost:true}</script>'
 
-/** Documents larger than this are never rewritten (the proxy streams them
- * instead of buffering). This IS the control-plane budget — proxy-forward.ts
- * MAX_HTML_INJECTION_BYTES, consumed directly through the gateway's
- * @dsh-chamber/control-plane dependency (no twin constant exists anymore);
- * the historical gateway name is re-exported because gateway tests import
- * it. */
-export { MAX_HTML_INJECTION_BYTES as HTML_INJECT_MAX_BYTES }
-
 export interface HtmlInjectResult {
   /** The document to serve: the injected document when `injected`, the
    * untouched original otherwise. */

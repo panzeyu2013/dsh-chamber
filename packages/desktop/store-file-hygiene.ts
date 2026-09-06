@@ -4,20 +4,10 @@
  * the gateway secrets mirror (`<userData>/gateway-secrets.json`, design 17
  * §12), the chamber settings file (design 14 D7) and the ssh plugin journal
  * (design 21 §6.8). Pure Node — no Electron import. The mechanics were
- * previously duplicated verbatim inside each store module; this is their
- * single source:
- *
- * - preserveInvalidCredentialFile — a corrupt/unreadable store is never
- *   silently treated as empty: renamed aside to `<file>.corrupt` (reversible
- *   evidence) and reported through a loud notice string (the registry's
- *   corrupt-file discipline);
- * - preserveUnboundCredentialFile — a non-empty LEGACY file that predates
- *   per-credential endpoint bindings cannot be adopted safely (it may be the
- *   credential half of a pre-registry crash; never guess): preserved under a
- *   unique `.unbound-<ts>-<pid>` recovery name and disabled until explicit
- *   re-entry;
- * - removeLegacyTmpResidue — one-time sweep of the legacy FIXED `${file}.tmp`
- *   crash residue left by the pre-2a open('w') + rename writers.
+ * previously duplicated verbatim inside each store module; each helper below
+ * documents its own contract (corrupt-aside preserve, unbound-legacy
+ * preserve with unique `.unbound-<ts>-<pid>` recovery naming, and the legacy
+ * FIXED-`.tmp` crash-residue sweep).
  */
 
 import { existsSync, renameSync, rmSync } from 'node:fs'

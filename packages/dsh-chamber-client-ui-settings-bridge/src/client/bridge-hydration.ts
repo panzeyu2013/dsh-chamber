@@ -2,24 +2,11 @@
  * Shared singleton + hydration + subscription skeleton for the settings
  * bridge's app-global stores — the settings-store.ts (design 14 D7) /
  * update-store.ts (design 11) twin skeleton (settings-store.ts:17 says the
- * same: "Same design notes as update-store.ts"). Both stores implement the
- * same module-level singleton over window.dshChamber.<surface>:
- *
- * - module-level singleton (the settings shell mounts per-ctx, but the state
- *   is app-global — one desktop main process), one stable snapshot for
- *   useSyncExternalStore, ONE permanent bridge subscription across all shell
- *   instances (zero listeners while idle — a push only wakes subscribers;
- *   assumes one module instance per page/shared chunk),
- * - hydration from the preload bridge (query + push): the bridge is exposed
- *   asynchronously (≤~500ms), so a bounded 100ms×20 fast re-probe chain
- *   retries briefly and the next subscriber re-arms a fresh chain,
- * - the push wins over a stale query snapshot (a push arriving between the
- *   query invoke and its resolution is never overwritten by the older query
- *   result),
- * - snapshot() is PURE (no side effects) — it must stay that way:
- *   useSyncExternalStore's getSnapshot runs during the render phase. All
- *   hydration is triggered from subscribe() (commit phase) and the
- *   module-load kick, never from getSnapshot.
+ * same: "Same design notes as update-store.ts"). Shared contract: one stable
+ * useSyncExternalStore snapshot per module, ONE permanent bridge
+ * subscription, hydration via a bounded 100ms×20 fast re-probe chain with
+ * subscriber re-arm, push-wins-over-stale-query, and a PURE snapshot() (all
+ * hydration from subscribe/commit or module load, never getSnapshot).
  *
  * Parameterization covers only what the twin files genuinely share; where
  * the stores diverge the difference is a config member with per-store

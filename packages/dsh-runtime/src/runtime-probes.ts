@@ -338,13 +338,10 @@ export async function runRuntimeActivationProbes(opts: RuntimeProbeOptions): Pro
         if (identityMethodNotFound(error)) {
           try {
             const legacy = await call('session/list', { args: { _request: {} } })
-            // IDENTITY-LEG DIVERGENCE (stage2 ruling material, 2026): the
-            // control-plane twin (dsh-client.ts probeHostIdentity, same
-            // session/list fallback) only requires an object here, while this
-            // core leg demands Array.isArray(items) — the stricter pre-
-            // migration check restored below. dsh-runtime cannot import
-            // control-plane; aligning means injecting the shape predicate
-            // through the probe seam or accepting the divergence — do not
+            // IDENTITY-LEG DIVERGENCE (stage2 ruling, 2026): the cp twin
+            // (dsh-client.ts probeHostIdentity) only requires an object; this
+            // core leg demands Array.isArray(items) — align only via a probe-
+            // seam shape injection (dsh-runtime cannot import cp); do not
             // relax this check without a ruling.
             // Restore the pre-migration session/list row's shape check (the
             // old activation row failed a value without the {items} session
