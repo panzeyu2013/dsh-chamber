@@ -15,6 +15,18 @@
 > install-gateway.sh 锚，`bin.js --version` 冒烟 = 0.1.2-rc.1）。a5→rc.1 无任何改动
 > → DOM 锚点审计基线（a4 双 pin，alpha.5 复核）与 wire 契约结论直接继承；回归测试套件见 rc.1 分支提交说明。
 
+> **2026-09-06 Git 缺失目录残留记录修复（临时驻留；发布收口时并入 CHANGELOG
+> 后移除）**：设计 08 §11.8——外部删除 worktree 目录（未 `git worktree remove`）
+> 留下的 admin 记录曾使该仓库全部 mutation 确定性 `path-unavailable`（topology
+> 对缺失行硬 realpath），且 missing 未注册行无应用内出口（只提示终端 prune）。
+> 修复：topology 宽容缺失行（保留 RAW 路径 + `missing` 标记）；未注册删除对
+> `path-unavailable` 降级为残留记录清理（注册 workspace 反查仓库 → 锁内复验
+> 身份/locked/main/ghost → 普通 `git worktree remove`，实测 git 2.50 对缺失目录
+> exit 0 仅清记录）；UI 对 missing 未注册行启用清理删除（adopt 仍禁用，注册侧
+> 已消失流程不变）。其它 mutation 立即恢复，无新 recovery 死锁类别；被外部
+> 删除的 rollback 目标同样收敛清记录。验证：test:host-git 88→95、test:git 58、
+> 双 typecheck、build:host-git + build:renderer 全绿。
+
 **0.2.2 发布前审查跟进项（2026-09-05 三合并 review round；三路 P0/P1 = 0，
 放行 0.2.2。部分 P2 已在发布前落实：e10a2c7（settings-dshruntime ①②③）、
 9b2aeb8（settings-plugin close 门控），见各面标注；design 08 §11.1 的 chip
@@ -456,11 +468,15 @@ envelope padding——cap 抬至 1 MiB 即变 'dsh'，必红）；ready 心跳�
 - **桌面端更新（设计 11）**：feed 隔离与 beta 版本自锁已实现（stable 仅
   `latest*.yml`，beta 仅 `beta*.yml`；仅 canonical `X.Y.Z-beta.N` 自锁 beta，
   `alpha`/`rc`/其他 prerelease fail closed；发现失败不调用 updater 或回退 stable）。
-  剩余：用真实 Apple 凭据跑通一次发布 CI、Developer ID 签名/公证/stapling/
-  Gatekeeper 验证，以及双平台检查、确认前不下载、下载后退出安装。正式 macOS
-  发布缺凭据会在 Release mutation 前阻断；凭据或签名/公证无效会阻断 draft 公开
-  finalize。只有 `dry_run` 允许 ad-hoc mac 构建（无条件清空签名/公证环境与
-  `GH_TOKEN`，不创建/修改 Release、不上传产物）。
+  **2026-12 增补已入库**：「重启并安装」受控重启按钮（mac/win；
+  `dsh-chamber:update-restart` → quitAndInstall；Linux 因 AppImage 单实例
+  竞态不提供）与启动清理已装更新缓存（~300MB/轮）；语义/门控/测试见 design 11
+  §3.1/§9 M4-M5。剩余：用真实 Apple 凭据跑通一次发布 CI、Developer ID
+  签名/公证/stapling/Gatekeeper 验证，以及双平台检查、确认前不下载、下载后
+  退出安装、mac quitAndInstall 原生 quit 语义断言清单（design 11 §9）。正式
+  macOS 发布缺凭据会在 Release mutation 前阻断；凭据或签名/公证无效会阻断
+  draft 公开 finalize。只有 `dry_run` 允许 ad-hoc mac 构建（无条件清空签名/
+  公证环境与 `GH_TOKEN`，不创建/修改 Release、不上传产物）。
 - **会话创建/fork 侧边栏收敛延迟修复**：剩余本地 + 远程 SSH 实例实机验收
   （行出现延迟、状态图标延迟、位置跳动三类症状）。
 - **移动端 Web 访问面（design 17 §18，2026-09 提出 / 2026-12 随编排面剥离修订）**：

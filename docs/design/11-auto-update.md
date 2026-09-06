@@ -16,10 +16,18 @@
 > 侧车——Windows `nsis.differentialPackage: false`（不生成 exe.blockmap，差分退化
 > 为全量下载，feed 不引用 blockmap 故功能无损），mac zip 的硬编码 `.zip.blockmap`
 > 在 finalize 翻转 draft 前经 GitHub API 删除。
+> **2026-12 修订（用户拍板）**：「已下载，退出时安装」状态行新增**「重启并安装」**
+> 按钮（`dsh-chamber:update-restart` → `updater.restartAndInstall()` →
+> electron-updater `quitAndInstall`：退出 + 安装 + 自动重启，仍走正常
+> before-quit/will-quit 清理路径）——退出腿本身不是可控安装流程（普通退出不一定
+> 触发安装/重启，平台与运行形态各异），用户改在界面内直接控制重启时机；详见
+> §3.1/§3.2/§5。同轮补充**启动时自动清理已安装版本的更新缓存**（electron-updater
+> 装完不删下载产物，见 §9 M5）。
 >
 > 需求来源：升级目标是 **dsh-chamber 自身**（Electron 桌面应用），**不是**远端 dsh
 > 实例。本设计为其引入「后台**静默**检查 → settings 低调提示 → **用户明确确认后**
-> 后台下载 → 退出时安装」，并以**通道模型（beta → stable）**实现滚动/灰度发布。
+> 后台下载 → 用户控制安装时机（2026-12 起：界面内「重启并安装」按钮；不点击则
+> 保持退出时安装）」，并以**通道模型（beta → stable）**实现滚动/灰度发布。
 >
 > **Linux 增补（2026-12，见设计 22）**：Linux 自动更新按**运行形态**门控——打包且
 > 从可写 `$APPIMAGE` 启动（AppImage 发行形态）才启用；dev/解包/deb 形态保持历史
@@ -93,6 +101,21 @@
   `downloadUpdate()` 后台下载（无进度弹窗，进度只经 IPC 反映为 settings 状态行）。
 - **安装**：下载完成置 `downloaded`，`autoInstallOnAppQuit: true`——**退出时自动
   安装**（连接管理器场景不打断活跃会话；无任何安装弹窗）。
+  **2026-12 修订（用户拍板）**：「退出腿」不是可控安装流程（普通退出是否触发
+  安装/重启因平台与运行形态而异——mac 的 Squirrel 安装发生在受控 relaunch、
+  退出腿在清理超时走 `app.exit(1)` 时会跳过 onQuit 安装等），因此 `downloaded`
+  状态行新增**「重启并安装」**主按钮（IPC `dsh-chamber:update-restart` →
+  `updater.restartAndInstall()` → electron-updater `quitAndInstall()`）。平台
+  范围：**macOS + Windows**；**Linux 一律不提供**（2026-12 review H1：
+  AppImageUpdater 在点击瞬间原位替换文件并同步拉起新实例、早于本进程退出，
+  新实例在单实例锁下必被仍存活的老实例吸收——自动重启结构性落空；Linux 保留
+  退出腿）。门：`downloaded` + 安装未被阻塞（mac 签名），主进程在 IPC 边界再
+  强制一次（与 `download()` 同纪律）；成功即 fire-and-forget（单飞闸不复位），
+  同步失败不回退 phase（保持 `downloaded` 行原位重试重启，不误标为下载失败），
+  `error` 事件（含 arm 后异步失败）释放单飞闸。**退出腿与重启腿对
+  `app.exit(1)` 的语义不同**：超时强制退出只跳过退出腿的 onQuit 安装；重启腿
+  NSIS 安装器已 detached 先行、AppImage 已原位替换，安装照常完成。用户不点击
+  则行为与旧版一致（退出时安装仍开启）。
 - **macOS 签名前置（非 UX 分支）**：Squirrel.Mac（electron-updater mac 安装器）
   **要求有效 Developer ID 代码签名**。正式发布工作流强制签名、公证、stapler 与
   spctl，并在失败时阻断公开；`updater.ts` 启动时仍以 `codesign -dv` 探测一次签名
@@ -126,6 +149,11 @@
     相位门，与主进程 `runCheck()` 门一致）；检查结果经状态行呈现；
   - 有新版时一行状态：「新版本 vY（stable/beta）」+ **「更新」按钮**（点击 →
     后台下载；状态行随之变为 下载中… → 已下载，退出时安装）；不点击 → 永不下载；
+  - 已下载（安装可用）时：「已下载，退出时安装」+ **「重启并安装」按钮
+    （2026-12 新增，用户拍板；仅 macOS/Windows——Linux 任何形态不提供，
+    review H1 AppImage 单实例竞态）**：点击 → `dsh-chamber:update-restart` →
+    `quitAndInstall`（退出 + 安装 + 自动重启，走正常清理路径）；安装被阻塞
+    （mac 签名）时不提供该按钮——只给手动安装提示 + 下载页链接；
   - 无新版时：「已是最新版本」；检查失败时：「无法检查更新」（静默，绝不假成功）；
   - mac 签名未配置时：「已下载（…），请手动安装」+「前往下载页」链接（经主进程
     `shell.openExternal`，仅允许本仓库 GitHub 页——窗口禁 popup/navigation）。
@@ -158,7 +186,11 @@
   ├─ 有新版 → settings「通用」段更新组一行状态「新版本 vY」+ [更新] 按钮
   │     ├─ 用户点击 → 后台自动下载（进度经 IPC → 状态行 下载中…）
   │     └─ 不点击 → 永不下载（仅状态行）
-  │  下载完成 → 「已下载，退出时安装」→ quit 时自动安装（双平台一致）
+  │  下载完成 → 「已下载，退出时安装」+ [重启并安装]（2026-12 用户拍板；
+  │    仅 macOS/Windows——Linux 保留退出腿，见 §3.1）
+  │     ├─ 用户点击 [重启并安装] → quitAndInstall：退出（正常清理）→
+  │     │   安装 → 自动重启到新版本（确定性受控流程）
+  │     └─ 不点击 → 退出时安装（autoInstallOnAppQuit，平台决定行为）
   ├─ 无新版 → 「已是最新版本」
   └─ 失败 → 「无法检查更新」（静默写主进程日志，绝不假成功）
 用户主动点击 [检查更新]（2026-08）→ 同一条检查路径（update-check IPC，仍不下载）
@@ -315,12 +347,76 @@
   修订为 `false`（见 §6）；release.yml 双 leg 使用 `--publish=always` + GH_TOKEN，
   版本一致性守卫、仅 stable/canonical beta 发布门、prerelease 标志由已校验版本推导、
   feed 互斥断言 + blockmap 清理。
+- **M4（重启并安装，2026-12 用户拍板）**：`updater.ts` 控制器新增
+  `restartAndInstall()`（门：phase=`downloaded` 且 `installBlockedReason===null`
+  且**非 linux**——2026-12 review H1：AppImage quitAndInstall 在点击瞬间原位
+  换文件并同步拉起新实例、早于本进程退出，单实例锁使自动重启结构性落空，故
+  Linux 只保留退出腿；IPC 边界强制 + 成功单飞不复位 + **'error' 事件复位单飞
+  （arm 后异步失败路径）** + 同步失败不回退 phase（保持 downloaded 行原位
+  重试，不误标为下载失败））→ `AutoUpdaterLike`
+  增加 `quitAndInstall`；IPC `dsh-chamber:update-restart`
+  （`ipc-events.ts` + main.ts trusted handler）；preload `UpdateSurface` 与
+  renderer 权威 `global.d.ts` 同步新增 `restartAndInstall`（L3 golden + 签名级
+  锁步更新）；settings-bridge `UpdateSection` 的 downloaded 行新增「重启并安装」
+  主按钮（Linux 不渲染；安装被阻塞 → 手动提示）+
+  `update-store.requestUpdateRestart`（成功不回位模块闸，与主进程语义对齐）+
+  `update-gate.updateRestartAvailable`（含 platform 参数）纯门 + zh/en 文案
+  （`verify:i18n`）。
+- **M5（启动清理已装更新缓存，2026-12）**：electron-updater 6.x **安装成功后
+  从不删除**下载产物（`DownloadedUpdateHelper.clear()` 只在失败重下路径调用）——
+  mac 实机验证：0.2.2 经 ShipIt 安装成功并重启后，`~/Library/Caches/
+  @dsh-chamberdesktop-updater`（update.zip + pending，共 ~308MB/轮）原样残留。
+  修复：控制器启动即做**保守清理**——`resolveUpdaterCacheDir` 按 electron-updater
+  同款推导缓存目录（平台缓存根 darwin `~/Library/Caches` / win32 `%LOCALAPPDATA%`
+  / linux `$XDG_CACHE_HOME`/`~/.cache` + 打包态 app-update.yml 烘焙的
+  `updaterCacheDirName`，dev 形态不解析、目录名拒绝分隔符/`.`/`..` 逃逸），
+  读 `pending/update-info.json` 的 fileName 解析规范版本
+  （`cachedUpdateVersion`，数字粘连按贪婪分组解析），与运行版本比较
+  （`compareChamberVersions`：`X.Y.Z`/`X.Y.Z-beta.N`，stable > 同基 beta）；
+  **仅当缓存版本 ≤ 运行版本**（已安装/已被超越）才整目录删除；
+  更新的未装版本、缺元数据、版本不可解析、形状不合（JSON null/数组/标量/
+  无 fileName）一律保留（失败保守，绝不误删合法待装下载；2026-12 review：
+  JSON 形状守卫防 TypeError）。fire-and-forget + 永不 throw；DI：
+  `UpdateControllerDeps.staleCache`（测试注入；`{cacheDir:null}` 关闭）。
+  **有界残留（review L2，如实记录）**：元数据缺失/损坏时整目录保留——崩溃于
+  文件落盘后、写 info 前的窗口或 info 被外部删除时，单次 ~300MB 孤儿残留
+  直到下一下载周期覆盖；属保守取舍，无误删风险。
 
 **验证（2026-08）**：根 `typecheck`（desktop main/preload/updater + renderer）✓；
 `typecheck:settings-bridge` ✓；`build:preload`（preload.cts → dist/preload.cjs）✓；
 `test:desktop`（5 文件合计 170 用例）✓；`test:settings-bridge`（5 文件合计 31 用例）✓；
 `build:renderer` ✓；`verify:i18n` ✓（无 DRIFTED）。`pnpm install --frozen-lockfile` 通过
 （electron-updater 加入后锁文件完整，vendor 记录未剪除）。
+
+**验证补（2026-12「重启并安装」）**：根 `typecheck` ✓；`typecheck:settings-bridge` ✓；
+`build:preload` ✓；`test:desktop` 的 `updater.test.ts`（42 用例，新增 3 例：未
+下载拒绝 / blocked 下 downloaded 拒绝 / 下载完成单飞 arming）与
+`ipc-surface-mirror.test.ts`（22 用例，golden `UpdateSurface` 含
+`restartAndInstall`）✓；`test:settings-bridge` 的 `update-gate.test.ts`（新增
+`updateRestartAvailable` 3 例）✓；`verify:i18n` ✓。**未验证**：真实打包态
+quitAndInstall 端到端（仍在剩余验证项：mac/win/Linux AppImage 实机重启安装）。
+
+**验证补（2026-12「启动缓存清理」）**：根 `typecheck` ✓；`updater.test.ts` 51 用例
+全绿（自提交基线 39 新增 9 例 + 控制器注入 1 例另计：yml 标量解析含逃逸拒绝 /
+平台缓存根三平台分支 / `resolveUpdaterCacheDir`（packaged+yml、dev 不解析、
+缺 yml、逃逸名拒绝）/ `cachedUpdateVersion` / `compareChamberVersions` /
+`cleanupStaleUpdateCache`（等于与更旧 → 删除、更新 → 保留、无元数据/坏 JSON/
+无版本名 → 保留、beta 语义两向）+ 控制器注入路径（删除与 null 关闭，真实
+临时目录断言））。
+**未验证**：打包态实机一次「升级 → 重启 → 缓存被自动清空」（依赖下次打包
+验证；本地已手工验证目录推导与 electron-updater 6.8.9 源码逐字一致——mac
+实机缓存目录 `~/Library/Caches/@dsh-chamberdesktop-updater` = 平台根 +
+app-update.yml 烘焙名）。
+
+**验证补（2026-12 review 轮修复）**：四路 subagent 只读审查（主进程核心 /
+IPC 镜像 / settings UI / 测试合规）后修复——updater.test.ts 55 用例、
+ipc-surface-mirror.test.ts 23 用例、update-gate.test.ts 8 用例全绿：H1 Linux
+排除（控制器 + UI 双门 + 测试）；M2 'error' 事件复位单飞（arm 后异步失败
+不再死锁，新测试覆盖）；P3-1 同步失败不回退 phase（原位重试，新测试覆盖）；
+acf-L1 update-info JSON 形状守卫（null/数组/标量/{} / rm 失败用例）；
+ipc-surface-mirror 增方法签名级锁步 + `UpdateState`/`UpdatePhase`
+updater.ts↔renderer 守卫（L3 加固）；main.ts will-quit 清理完成日志（供
+mac 实机断言）。**仍待实机**：见剩余验证项 mac 断言清单。
 
 **剩余验证项**：
 
@@ -330,7 +426,16 @@
 - release.yml 的 `electron-builder --publish=always` → draft release 上传路径需一次
   真实 CI 运行验证，覆盖 stable/beta 独立配置、feed 互斥资产与 beta exact-tag 消费。
 - 双平台实机：检查（stable/beta/无网/坏网络）、确认前不下载、下载 → 退出时安装、
-  托盘/窗口行为无回归。
+  「重启并安装」（2026-12）的 quitAndInstall 端到端（下载完成 → 点击 → 正常清理 →
+  新版本自动重启）、托盘/窗口行为无回归。
+- **mac「重启并安装」原生 quit 语义断言清单（2026-12 review M1）**：
+  electron-updater mac 腿直接调 Electron 原生 Squirrel quitAndInstall（不经
+  electron-updater 的 app.quit()），原生终止是否走 Electron before-quit/
+  will-quit 事件序列无法静态确证。真实打包态（Developer ID 签名）点击后必须
+  观察到：(a) 主进程日志出现「will-quit 清理完成，进程退出」（该行先于新版本
+  启动）；(b) 本地 dsh 与传输层先回收（无孤儿 dsh/ssh 子进程）；(c) 进程退出码 0；
+  (d) 新版本自动启动。若确证原生终止跳过事件序列 → 控制器改为监听 native
+  staging 完成事件后自行 app.quit()。
 
 **开放项（未排期）**：
 

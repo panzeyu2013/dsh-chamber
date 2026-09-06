@@ -329,13 +329,18 @@ export type GatewayPluginMaterializeIpcResult =
  * returns an unsubscribe; check() is the user-initiated「检查更新」action
  * (same silent check path as the startup/6h checks — never downloads);
  * download() is the user-confirmed download action (the「更新」button) —
- * checking itself never downloads (autoDownload=false).
+ * checking itself never downloads (autoDownload=false); restartAndInstall()
+ * is the user-triggered「重启并安装」action once the download completed —
+ * the main process runs electron-updater quitAndInstall (quit + install +
+ * relaunch through the normal quit path; 2026-12 user decision).
  */
 export interface UpdateSurface {
   state(): Promise<UpdateState>
   /** User-initiated check (the「检查更新」button). */
   check(): Promise<{ ok: true } | { ok: false; error: string }>
   download(): Promise<{ ok: true } | { ok: false; error: string }>
+  /** Restart into the downloaded update (the「重启并安装」button). */
+  restartAndInstall(): Promise<{ ok: true } | { ok: false; error: string }>
   onChanged(callback: (state: UpdateState) => void): () => void
   /** Open a release page in the system browser (main-process allowlisted). */
   openReleasePage(url: string): Promise<{ ok: true } | { ok: false; error: string }>
@@ -637,13 +642,15 @@ function desktopSshApi(): DesktopSshSurface {
 /**
  * The dsh-chamber:update-* IPC surface (design 11) — non-secret only.
  * onStateChanged subscribes to the main-process push and returns an
- * unsubscribe; download() is the user-confirmed download action.
+ * unsubscribe; download() is the user-confirmed download action;
+ * restartAndInstall() is the「重启并安装」action (quitAndInstall).
  */
 function updateApi(): UpdateSurface {
   return {
     state: () => ipcRenderer.invoke('dsh-chamber:update-state'),
     check: () => ipcRenderer.invoke('dsh-chamber:update-check'),
     download: () => ipcRenderer.invoke('dsh-chamber:update-download'),
+    restartAndInstall: () => ipcRenderer.invoke('dsh-chamber:update-restart'),
     openReleasePage: url => ipcRenderer.invoke('dsh-chamber:open-release', { url }),
     onChanged: callback => {
       if (typeof callback !== 'function') return () => {};

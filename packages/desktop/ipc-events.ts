@@ -33,6 +33,10 @@ export const IPC_CHANNELS = {
   UPDATE_STATE: 'dsh-chamber:update-state',
   UPDATE_CHECK: 'dsh-chamber:update-check',
   UPDATE_DOWNLOAD: 'dsh-chamber:update-download',
+  /** User-triggered restart into the downloaded update (design 11 — the
+   *  settings「重启并安装」button; main-process updater.restartAndInstall →
+   *  electron-updater quitAndInstall: quit + install + relaunch). */
+  UPDATE_RESTART: 'dsh-chamber:update-restart',
   UPDATE_STATE_CHANGED: 'dsh-chamber:update-state-changed',
   OPEN_RELEASE: 'dsh-chamber:open-release',
 

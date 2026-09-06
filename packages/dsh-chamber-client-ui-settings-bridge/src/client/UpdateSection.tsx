@@ -4,20 +4,22 @@
  * row group in the OpenChamber settings vocabulary — group heading, a version
  * line with the「检查更新」action on the right, and phase status line(s)
  * below. When a newer version exists a quiet notice plus a「更新」
- * button appear. No dialogs, no badges, no banners: the user only ever sees
- * this by opening Settings, and the download starts only after the explicit
- * click (autoDownload stays off in the main process). All state is the
- * non-secret projection pushed by the desktop main process over the update
- * bridge (update-store.ts).
+ * button appear; once the download completed, the row offers the explicit
+ *「重启并安装」action (2026-12 user decision — the user restarts into the
+ * update right from the UI instead of relying on quit alone). No dialogs, no
+ * badges, no banners: the user only ever sees this by opening Settings, and
+ * the download starts only after the explicit click (autoDownload stays off
+ * in the main process). All state is the non-secret projection pushed by the
+ * desktop main process over the update bridge (update-store.ts).
  */
 import { useCallback, useState, useSyncExternalStore } from 'react'
 import type { MouseEvent as ReactMouseEvent } from 'react'
 import type { SettingsBridgeKey } from '../locales.ts'
 import type { UpdateState } from '../ambient/update-bridge.d.ts'
 import {
-  getUpdateState, subscribeUpdateState, requestUpdateCheck, requestUpdateDownload, requestOpenReleasePage,
+  getUpdateState, subscribeUpdateState, requestUpdateCheck, requestUpdateDownload, requestUpdateRestart, requestOpenReleasePage,
 } from './update-store.ts'
-import { updateCheckDisabled, updateCheckPlatformBlocked } from './update-gate.ts'
+import { updateCheckDisabled, updateCheckPlatformBlocked, updateRestartAvailable } from './update-gate.ts'
 import css from './SettingsShell.module.css'
 
 /** The shell's bound translate (params supported: {version} {percent} {reason}). */
@@ -47,14 +49,19 @@ function checkImpossible(update: UpdateState): boolean {
 
 /** One phase-specific status line (plain text, actions aligned right). */
 function StatusRow({
-  update, busy, onUpdate, t,
+  update, busy, onUpdate, onRestart, t,
 }: {
   update: UpdateState
   busy: boolean
   onUpdate: () => void
+  onRestart: () => void
   t: UpdateTranslate
 }) {
   const { phase, latestVersion, downloadPercent, installBlockedReason, releaseUrl } = update
+  // window.dshChamber.platform ('darwin'|'win32'|'linux'|…): Linux never
+  // offers the「重启并安装」action (update-gate — AppImage single-instance
+  // race, 2026-12 review H1; the quit-install leg stays).
+  const bridgePlatform = typeof window !== 'undefined' ? (window.dshChamber?.platform ?? null) : null
   // Real href + preventDefault: the accessible URL hint stays meaningful, but
   // the actual open goes through the allowlisted main-process bridge (the
   // Electron frame pins navigation to the control-plane origin).
@@ -111,7 +118,30 @@ function StatusRow({
         )
       case 'downloading':
         return <p className={css.updateStatusText}>{t('updateDownloading', { percent: Math.round(downloadPercent ?? 0) })}</p>
-      case 'downloaded':
+      case 'downloaded': {
+        // 2026-12 user decision: the「已下载，退出时安装」row gains the
+        // user-triggered「重启并安装」primary action (main-process
+        // quitAndInstall — quit + install + relaunch through the normal quit
+        // path) whenever the restart can actually hold. Quitting alone is not
+        // a controllable install flow on every platform/shape; the explicit
+        // restart is. The gate mirrors updater.restartAndInstall() exactly
+        // (phase downloaded + no install block + NOT linux — the AppImage
+        // single-instance race, review H1), which the main process also
+        // enforces at the IPC boundary (never just UI hiding). Three outcomes
+        // inside this case: restart offered (mac/win, installable) / install
+        // blocked → manual hint / Linux AppImage (or any downloaded-but-
+        // uninstallable shape) → plain quit-leg text.
+        if (updateRestartAvailable(update.phase, installBlockedReason, bridgePlatform)) {
+          return (
+            <div className={css.updateStatusLine}>
+              <span className={css.updateStatusText}>{t('updateDownloaded')}</span>
+              <button type="button" className={css.updatePrimaryButton} onClick={onRestart} disabled={busy}>
+                {t('updateRestartAction')}
+              </button>
+              {releaseLink}
+            </div>
+          )
+        }
         return installBlockedReason !== null ? (
           <div className={css.updateStatusLine}>
             <span className={css.updateStatusText}>{blockedCopy(update, t)}</span>
@@ -120,10 +150,11 @@ function StatusRow({
         ) : (
           <p className={css.updateStatusText}>{t('updateDownloaded')}</p>
         )
+      }
       case 'error':
         // latestVersion null → a CHECK failure (「无法检查更新」); set → a
-        // DOWNLOAD failure (「更新下载失败」+ retry, never without a fresh
-        // check — updater.ts clears latestVersion on check errors).
+        // DOWNLOAD/RESTART failure (「更新下载失败」+ retry, never without a
+        // fresh check — updater.ts clears latestVersion on check errors).
         return latestVersion !== null ? (
           <div className={css.updateStatusLine}>
             <span className={css.updateStatusText}>{t('updateDownloadFailed')}</span>
@@ -159,6 +190,18 @@ export function UpdateSection({ t }: { t: UpdateTranslate }) {
     void requestUpdateDownload().finally(() => setBusy(false))
   }, [])
 
+  const onRestart = useCallback(() => {
+    setBusy(true)
+    // ok → quitAndInstall armed: the app is on its way out (cleanup takes a
+    // few seconds) — keep the button disabled so the quit window cannot see a
+    // "dead" second click (the main-process single-flight would refuse it
+    // anyway). Only a refused/failed call re-enables the row for an in-place
+    // retry — the update-state push stays authoritative for every outcome.
+    void requestUpdateRestart().then((result) => {
+      if (!result.ok) setBusy(false)
+    })
+  }, [])
+
   const onCheck = useCallback(() => {
     setChecking(true)
     void requestUpdateCheck().finally(() => setChecking(false))
@@ -183,7 +226,9 @@ export function UpdateSection({ t }: { t: UpdateTranslate }) {
           {t('updateCheckAction')}
         </button>
       </div>
-      {update !== null && <StatusRow update={update} busy={busy} onUpdate={onUpdate} t={t} />}
+      {update !== null && (
+        <StatusRow update={update} busy={busy} onUpdate={onUpdate} onRestart={onRestart} t={t} />
+      )}
     </div>
   )
 }

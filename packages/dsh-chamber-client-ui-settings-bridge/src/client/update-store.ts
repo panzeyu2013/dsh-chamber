@@ -125,6 +125,47 @@ export async function requestUpdateDownload(): Promise<{ ok: true } | { ok: fals
   }
 }
 
+/** Module-wide restart in-flight guard (N-ctx shells share one restart).
+ *
+ * Two-layer single-flight contract (2026-12 review): this module gate covers
+ * the IPC round-trip only — it is deliberately NOT reset when the main
+ * process ACCEPTED the restart, because acceptance means quitAndInstall was
+ * armed and the app is on its way out (cleanup takes seconds); a re-click in
+ * that window must not fire a second invoke. The MAIN-process gate
+ * (updater.restartAndInstall, also never reset on success) is the backstop
+ * that covers the whole quit window regardless of what any page believes, so
+ * this gate only needs to prevent pointless duplicate invokes from multiple
+ * shells of the same page. Failure/refusal paths reset here so the user can
+ * retry in place. */
+let restartInFlight = false
+
+/**
+ * The「重启并安装」button action (2026-12 user decision): once the download
+ * completed, restart the app into the update (main-process quitAndInstall —
+ * quit + install + relaunch through the normal quit path; transports and the
+ * local dsh instance are disposed during that quit). {ok:true} means the
+ * restart was armed — the process is on its way out and the caller should
+ * treat the action as terminal (keep busy/disabled); only a refused or
+ * failed call releases the gate for an in-place retry.
+ */
+export async function requestUpdateRestart(): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (restartInFlight) return { ok: false, error: 'restart already in progress' }
+  restartInFlight = true
+  try {
+    const api = bridgeUpdate()
+    if (api === null) {
+      restartInFlight = false
+      return { ok: false, error: 'update bridge unavailable' }
+    }
+    const result = await api.restartAndInstall()
+    if (!result.ok) restartInFlight = false
+    return result
+  } catch (error) {
+    restartInFlight = false
+    return { ok: false, error: String(error) }
+  }
+}
+
 /** The「前往下载页」link action (main-process allowlisted). */
 export async function requestOpenReleasePage(url: string): Promise<void> {
   const api = bridgeUpdate()

@@ -483,12 +483,16 @@ export interface UpdateState {
   error: string | null
 }
 
-/** window.dshChamber.update — query / subscribe / user-initiated check / user-confirmed download. */
+/** window.dshChamber.update — query / subscribe / user-initiated check /
+ *  user-confirmed download / user-triggered restart into the downloaded
+ *  update (the settings「重启并安装」action, 2026-12 user decision). */
 export interface UpdateSurface {
   state(): Promise<UpdateState>
   /** User-initiated check (the「检查更新」button) — never downloads. */
   check(): Promise<{ ok: true } | { ok: false; error: string }>
   download(): Promise<{ ok: true } | { ok: false; error: string }>
+  /** Restart into the downloaded update (the「重启并安装」button). */
+  restartAndInstall(): Promise<{ ok: true } | { ok: false; error: string }>
   onChanged(callback: (state: UpdateState) => void): () => void
   /** Open a release page in the system browser (main-process allowlisted). */
   openReleasePage(url: string): Promise<{ ok: true } | { ok: false; error: string }>

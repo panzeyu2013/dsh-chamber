@@ -12,6 +12,32 @@ export function updateCheckDisabled(phase: UpdatePhase | undefined): boolean {
 }
 
 /**
+ * Whether the「重启并安装」button (2026-12 user decision — restart into the
+ * downloaded update, quitAndInstall) may be offered: only a COMPLETED
+ * download on a shape where automatic installation is possible AND the
+ * restart semantics can hold. Mirrors the controller-side gates of
+ * updater.restartAndInstall() exactly (phase `downloaded` +
+ * installBlockedReason null + NOT linux) — the main process enforces the
+ * same conditions, not just this UI gate.
+ *
+ * Linux is excluded regardless of shape (2026-12 review H1): electron-
+ * updater's AppImageUpdater swaps the running file and spawns the new
+ * instance BEFORE the old process quits, and the fresh instance collides
+ * with the still-alive old one under Electron's single-instance lock — the
+ * promised auto-restart structurally cannot happen on AppImage. Linux keeps
+ * the quit-install leg (「已下载，退出时安装」row, no restart button).
+ * `platform` is the window.dshChamber.platform projection ('darwin' |
+ * 'win32' | 'linux' | …).
+ */
+export function updateRestartAvailable(
+  phase: UpdatePhase | undefined,
+  installBlockedReason: string | null | undefined,
+  platform?: string | null,
+): boolean {
+  return platform !== 'linux' && phase === 'downloaded' && installBlockedReason === null
+}
+
+/**
  * Whether a manual check is pointless on this platform: the main process
  * refuses checkNow() on Linux NON-AppImage shapes (dev / unpacked dir / deb —
  * no installer feed; the AppImage shape schedules and checks like mac/win,

@@ -1601,9 +1601,12 @@ if (!gotTheLock) {
     // 仍在」的半退出态。
     const cleanupTimer = setTimeout(() => {
       // 超时强制退出走 app.exit()：quit 事件不会触发，electron-updater 的
-      // autoInstallOnAppQuit 也不执行——即使「已下载」豁免放行了退出，更新
-      // 安装也会被跳过（接受的取舍，如实记录）。
-      console.error('[dsh-chamber] 退出清理超时，强制退出（可能有子进程残留，已下载更新不会安装）');
+      // autoInstallOnAppQuit（退出腿）不执行——退出腿下「已下载」更新会被
+      // 跳过。注意（2026-12 review L1）：「重启并安装」腿（restartAndInstall
+      // 已点击）不受此影响——NSIS 安装器在 quit 前已 detached 先行、
+      // AppImage 点击时已原位替换，即使 app.exit(1) 安装也照常完成；
+      // mac 原生腿未实机确证（见 design 11 §9 断言清单）。
+      console.error('[dsh-chamber] 退出清理超时，强制退出（可能有子进程残留；退出腿的已下载更新不会安装）');
       app.exit(1);
     }, QUIT_CLEANUP_TIMEOUT_MS);
     const cp = controlPlane;
@@ -1627,6 +1630,12 @@ if (!gotTheLock) {
       clearTimeout(cleanupTimer);
       quitCleanupInProgress = false;
       willQuitCleanupComplete = true;
+      // Will-quit cleanup completion marker (2026-12 review M1): the mac
+      //「重启并安装」real-machine gate asserts this line appears BEFORE the
+      // new version launches — it proves the native Squirrel termination
+      // actually ran through the Electron will-quit cleanup (transports +
+      // local dsh disposed) instead of a raw Cocoa terminate.
+      console.log('[dsh-chamber] will-quit 清理完成，进程退出');
       app.quit();
     });
   });
@@ -3857,10 +3866,15 @@ if (!gotTheLock) {
     // (dsh-chamber:update-download). The user can also check manually from
     // that section (dsh-chamber:update-check — the same silent check path,
     // still no download). Install is deferred to quit
-    // (autoInstallOnAppQuit): no dialog, no mid-session interruption. The
-    // state projection is non-secret only (versions / channel / release URL /
-    // short error text) and every failure is silent (main-process log), never
-    // blocking startup — the settings section renders the honest state.
+    // (autoInstallOnAppQuit): no dialog, no mid-session interruption — and
+    // once the download completed the settings section offers the explicit
+    // user-triggered restart (dsh-chamber:update-restart →
+    // updater.restartAndInstall → electron-updater quitAndInstall: quit +
+    // install + relaunch through the normal before-quit/will-quit cleanup
+    // path; 2026-12 user decision, controllable flow). The state projection
+    // is non-secret only (versions / channel / release URL / short error
+    // text) and every failure is silent (main-process log), never blocking
+    // startup — the settings section renders the honest state.
     const updater = createUpdateController({
       version,
       logger: {
@@ -3887,6 +3901,14 @@ if (!gotTheLock) {
     ipcMain.handle(IPC_CHANNELS.UPDATE_STATE, trustedIpc(() => updater.state()));
     ipcMain.handle(IPC_CHANNELS.UPDATE_CHECK, trustedIpc(() => updater.checkNow()));
     ipcMain.handle(IPC_CHANNELS.UPDATE_DOWNLOAD, trustedIpc(() => updater.download()));
+    // The settings update section's「重启并安装」button (2026-12 user
+    // decision): a completed download restarts the app into the install
+    // (quitAndInstall) — the user controls when the update applies instead of
+    // relying on the quit-install leg alone. Controller-side gates mirror the
+    // rendered state (phase downloaded + no install block) — not just UI
+    // hiding; quitAndInstall then quits through before-quit (the
+    // update-downloaded exemption) and will-quit (cleanup first).
+    ipcMain.handle(IPC_CHANNELS.UPDATE_RESTART, trustedIpc(() => updater.restartAndInstall()));
     // The settings update section's「前往下载页」link: popups are denied and
     // navigation is pinned to the control-plane origin, so opening a release
     // page must go through the main process. Strict allowlist — parsed, not

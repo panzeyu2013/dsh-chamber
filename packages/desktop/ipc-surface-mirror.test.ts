@@ -97,6 +97,42 @@ function interfaceFieldSignatures(source: string, typeName: string): string[] {
   return signatures.sort()
 }
 
+/** Extract normalized single-line METHOD signatures (`name(params): Return`)
+ *  of an interface. Type-sensitive (L3): a return-type or parameter drift
+ *  fails where method-NAME-only comparisons cannot see it. Multi-line method
+ *  declarations would silently escape the scan, so any non-empty line that is
+ *  not a single-line method is surfaced LOUDLY (interfaces in this codebase
+ *  keep methods single-line by discipline). */
+function interfaceMethodSignatures(source: string, typeName: string): string[] {
+  const signatures: string[] = []
+  for (const raw of stripComments(interfaceBlock(source, typeName)).split('\n')) {
+    const trimmed = raw.trim()
+    if (trimmed === '') continue
+    const match = /^([a-zA-Z_][a-zA-Z0-9_]*)\((.*)\)\s*:\s*(.+)$/.exec(trimmed)
+    if (match === null) {
+      throw new Error(
+        `${typeName} has a non-single-line member the signature guard cannot see: "${trimmed}"`,
+      )
+    }
+    const params = match[2].replace(/\s+/g, ' ').trim()
+    const result = match[3].replace(/[,;]\s*$/, '').replace(/\s+/g, ' ').trim()
+    signatures.push(`${match[1]}(${params}):${result}`)
+  }
+  return signatures.sort()
+}
+
+/** Normalized body text of a single-line `type X = …` alias (union literals
+ *  such as UpdatePhase), for exact cross-file comparisons. */
+function typeAliasBody(source: string, typeName: string): string {
+  const start = source.search(new RegExp(`\\btype ${typeName}\\b`))
+  assert.notEqual(start, -1, `type ${typeName} not found`)
+  const lineEnd = source.indexOf('\n', start)
+  const line = source.slice(start, lineEnd === -1 ? source.length : lineEnd)
+  const eq = line.indexOf('=')
+  assert.notEqual(eq, -1, `type ${typeName} has no '=' on its line`)
+  return line.slice(eq + 1).replace(/\s+/g, ' ').trim()
+}
+
 const preload = readFileSync(join(ROOT, 'packages/desktop/preload.cts'), 'utf8')
 const renderer = readFileSync(join(ROOT, 'packages/renderer/src/global.d.ts'), 'utf8')
 const settings = readFileSync(join(ROOT, 'packages/dsh-chamber-client-ui-settings-connections/src/global.d.ts'), 'utf8')
@@ -156,7 +192,8 @@ test('DesktopSshSurface stays in lockstep across preload / renderer mirrors (L3)
 })
 
 test('UpdateSurface and SettingsSurface match their GOLDEN baselines (L3 golden guard)', () => {
-  assert.deepEqual(interfaceMethodNames(preload, 'UpdateSurface'), ['check', 'download', 'onChanged', 'openReleasePage', 'state'].sort())
+  assert.deepEqual(interfaceMethodNames(preload, 'UpdateSurface'),
+    ['check', 'download', 'onChanged', 'openReleasePage', 'restartAndInstall', 'state'].sort())
   assert.deepEqual(interfaceMethodNames(preload, 'SettingsSurface'), ['get', 'onChanged', 'set'].sort())
 })
 
@@ -246,7 +283,35 @@ test('UpdateSurface and SettingsSurface stay in lockstep across preload and rend
       interfaceMethodNames(preload, surface),
       `${surface} renderer mirror drifted`,
     )
+    // Method NAMES alone cannot see a return-type/parameter drift — compare
+    // full normalized signatures too (2026-12 review L1). preload.cts is the
+    // surface contract; renderer global.d.ts must mirror it byte-for-byte in
+    // shape. Both are also checked against their golden baselines above.
+    assert.deepEqual(
+      interfaceMethodSignatures(renderer, surface),
+      interfaceMethodSignatures(preload, surface),
+      `${surface} renderer mirror method signatures drifted`,
+    )
   }
+})
+
+test('UpdateState and UpdatePhase stay locked between updater.ts and the renderer mirror (L3)', () => {
+  // preload.cts imports UpdateState/UpdatePhase from updater.ts (type-only,
+  // erased at build), so the DESKTOP side cannot drift; the renderer
+  // global.d.ts hand-mirrors them for the settings plugins and nothing used
+  // to guard the pair (2026-12 review L2). Field signatures are type-
+  // sensitive; the phase union is compared as normalized alias text.
+  const updater = readFileSync(join(ROOT, 'packages/desktop/updater.ts'), 'utf8')
+  assert.deepEqual(
+    interfaceFieldSignatures(renderer, 'UpdateState'),
+    interfaceFieldSignatures(updater, 'UpdateState'),
+    'renderer UpdateState mirror drifted from updater.ts',
+  )
+  assert.equal(
+    typeAliasBody(renderer, 'UpdatePhase'),
+    typeAliasBody(updater, 'UpdatePhase'),
+    'renderer UpdatePhase union drifted from updater.ts',
+  )
 })
 
 test('the plugin-manifest projections carry identical FIELD SETS across all three mirrors (L3 — shape drift guard)', () => {
