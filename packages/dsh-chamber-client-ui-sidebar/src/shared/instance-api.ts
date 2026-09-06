@@ -216,7 +216,7 @@ class InstanceApiClient {
       }
     }
     // Design 24 §5: with the opt-in flag, a 404 that is NOT the control
-    // plane's own unknown-instance answer is a chamber host domain that the
+    // plane's own unknown-instance answer is a chamber host domain the
     // runtime tree does not mount (missing/old host package) — a distinct
     // error class so the UI can project the honest recovery message.
     if (response.status === 404 && options.notFoundAsDomainMissing === true) {
@@ -256,13 +256,12 @@ class InstanceApiClient {
   /**
    * session-controller unary Remotes (v0.1.2-alpha.1 `@Remote` names). Every
    * call wraps the request object in the wire `{args:{...}}` envelope — the
-   * host gateway rejects any other payload shape.
+   * host gateway rejects any other payload shape. The args keys must be the
+   * @Remote METHOD PARAMETER names — session-controller's `list(_request)`
+   * and every other unary `request` — so the caller's request object is
+   * nested under that exact name; a bare `{args: payload}` is rejected with
+   * arguments-invalid.
    */
-  // NOTE (review round 1): the 0.1.2 TypertGatewayService requires the args
-  // keys to be the @Remote METHOD PARAMETER names — session-controller's
-  // `list(_request)` and every other unary `request` — so the caller's request
-  // object is nested under that exact name; a bare `{args: payload}` is
-  // rejected with arguments-invalid.
   readonly session = {
     list: (payload: unknown, signal?: AbortSignal): Promise<UnaryResult<any>> =>
       this.call('session/list', { args: { _request: payload } }, signal),
@@ -278,7 +277,7 @@ class InstanceApiClient {
 
   /**
    * workspace-controller unary Remotes. NOTE: `workspace/list` was deleted
-   * upstream (W11 — the new workspace face is the `workspace/follow` stream).
+   * upstream — the new workspace face is the `workspace/follow` stream.
    */
   readonly workspace = {
     create: (payload: unknown, signal?: AbortSignal): Promise<UnaryResult<any>> =>
@@ -295,7 +294,7 @@ class InstanceApiClient {
       this.call('workspace/archiveSession', { args: { request: payload } }, signal),
   }
 
-  /** directoryPicker unary Remotes — POSITIONAL-argument face (`{args:{...}}` envelope, P1-5). */
+  /** directoryPicker unary Remotes — POSITIONAL-argument face. */
   readonly directoryPicker = {
     list: (path: string | undefined, signal?: AbortSignal): Promise<UnaryResult<any>> =>
       this.call('directoryPicker/list', { args: path === undefined ? {} : { path } }, signal),
@@ -305,11 +304,10 @@ class InstanceApiClient {
 
   /**
    * archiveCleanup unary Remotes (design 24 chamber host domain). Zero-arg
-   * methods — the payload envelope is `{args:{}}` (gitWorktree/snapshot and
-   * clientGraph/graph precedents). Both carry the domain-missing 404 opt-in;
-   * purge rides the long call budget (host keeps running past a client
-   * timeout — rerun is idempotent). See previewArchiveCleanup /
-   * purgeArchivedSessions wrappers.
+   * methods — the payload envelope is `{args:{}}`. Both carry the
+   * domain-missing 404 opt-in; purge rides the long call budget (the host
+   * keeps running past a client timeout — rerun is idempotent). See
+   * previewArchiveCleanup / purgeArchivedSessions wrappers.
    */
   readonly archiveCleanup = {
     preview: (_payload: unknown, signal?: AbortSignal): Promise<UnaryResult<any>> =>
@@ -442,9 +440,9 @@ export async function createHostDirectory(client: InstanceApiClient, path: strin
   if (result.ok !== true) throw new DirectoryBrowseError(result.error)
   const created = String(result.value ?? '')
   if (created === '') {
-    // Chamber-local synthetic code (display-level; no upstream wire code
-    // exists for "host returned no created path"). Not part of the 0.1.2
-    // namespace vocabulary — consumers match it only via DirectoryBrowseError.
+    // Chamber-local synthetic code (no upstream wire code exists for "host
+    // returned no created path"); consumers match it only via
+    // DirectoryBrowseError.
     throw new DirectoryBrowseError({
       code: 'directory-create-failed',
       message: '宿主未返回新建目录路径',
@@ -461,23 +459,22 @@ function titleOf(summary: any): string | undefined {
 
 /**
  * session/list unary pull (the bounded fallback for unmounted sources).
- * v0.1.2-alpha.1: the unary `workspace.list` was DELETED upstream (W11 — the
- * new workspace face is the `workspace/follow` stream, which a unary HTTP
- * client cannot open), so the fallback derives workspace groups from each
- * session's `cwd` fact instead (STATUS.md D-item, 2026-09): one synthetic
- * workspace row per canonical cwd, titled by basename — the same
- * cwd-derived grouping semantics the official ui-workspace search leg uses
- * (tree.ts workspaceLabel), and a strict subset of what the authoritative
- * mounted-ctx store path (projectInstanceSnapshot in client/index.ts)
- * carries.
+ * v0.1.2-alpha.1 deleted the unary `workspace.list` upstream (the new
+ * workspace face is the `workspace/follow` stream, which a unary HTTP client
+ * cannot open), so the fallback derives workspace groups from each session's
+ * `cwd` fact instead: one synthetic workspace row per canonical cwd, titled
+ * by basename — the same cwd-derived grouping semantics the official
+ * ui-workspace search leg uses (tree.ts workspaceLabel), and a strict subset
+ * of what the authoritative mounted-ctx store path (projectInstanceSnapshot
+ * in client/index.ts) carries.
  *
  * KNOWN DEGRADATION (documented): `archivedSessionIds` has NO unary wire
  * source — the archive set exists only on the workspace follow baseline —
  * so the fallback returns an empty archive set and archived sessions
- * resurface in the list. This is acceptable only while the fallback serves
- * genuinely unmounted sources or the pre-baseline window; the mounted path
- * (which carries the archive set) must never be replaced by this fallback
- * once it has pushed (renderer App withdrawal rule, 2026-09 fix).
+ * resurface in the list. Acceptable only while the fallback serves genuinely
+ * unmounted sources or the pre-baseline window; the mounted path (which
+ * carries the archive set) must never be replaced by this fallback once it
+ * has pushed (renderer App withdrawal rule).
  */
 export async function fetchInstanceSnapshot(client: InstanceApiClient): Promise<InstanceSnapshot> {
   let sessionResult: UnaryResult<{ items?: readonly unknown[] }>
@@ -504,14 +501,13 @@ export async function fetchInstanceSnapshot(client: InstanceApiClient): Promise<
     if (typeof summary.parentSessionId === 'string') row.parentSessionId = summary.parentSessionId
     return [row]
   })
-  // cwd-derived workspace groups (2026-09, STATUS.md D-item): group visible
-  // sessions by canonical cwd; groups are ordered by their newest session
-  // (the official bootstrap ordering), titles are cwd basenames. The
-  // synthetic id is namespaced (`__cwd__:` — never collides with the
-  // UNGROUPED_WORKSPACE_ID bucket or real registered ids) and every row is
-  // marked `synthetic: true` — DISPLAY-ONLY: the host does not know these
-  // ids, so the sidebar must disable all workspace-scoped mutations on them
-  // (new session / rename / delete / drag, 2026-11 fix).
+  // cwd-derived workspace groups: group visible sessions by canonical cwd;
+  // groups ordered by their newest session (official bootstrap ordering),
+  // titles are cwd basenames. The synthetic id is namespaced (`__cwd__:` —
+  // never collides with UNGROUPED_WORKSPACE_ID or real registered ids), and
+  // every row is marked `synthetic: true` — DISPLAY-ONLY: the host does not
+  // know these ids, so the sidebar must disable all workspace-scoped
+  // mutations on them (new session / rename / delete / drag).
   const byCwd = new Map<string, { workspaceId: string; sessions: SessionRow[]; newestAt: number }>()
   for (const session of sessions) {
     if (session.origin === 'subagent' || session.cwd === undefined) continue
@@ -640,12 +636,12 @@ export async function createSession(
 }
 
 /**
- * session/fork，返回子会话 id（atSeq 省略 = 源最后完成的回合为 cut，与官方
- * ui-workspace forkSession 的 cut 规则一致）。wire payload 仅收
+ * session/fork，返回子会话 id（atSeq 省略 = 以源最后完成的回合为 cut，与
+ * 官方 ui-workspace forkSession 的 cut 规则一致）。wire payload 仅收
  * `{ sessionId, atSeq? }`——官方客户端面的 increaseTitle 便捷标志（fork
- * 成功后对子会话做标题递增 rename）不是 wire 字段，宿主 schema 剥离未知键；
- * chamber 在 SidebarRoot.onForkSession 里自行实现该递增（shared/derive.ts
- * increasedForkTitle，逐字移植官方 service，P1-4）。
+ * 成功后对子会话做标题递增 rename）不是 wire 字段，宿主 schema 剥离未知
+ * 键；chamber 在 SidebarRoot.onForkSession 里自行实现该递增
+ * （shared/derive.ts increasedForkTitle，逐字移植官方 service）。
  */
 export async function forkSession(client: InstanceApiClient, sessionId: string): Promise<string> {
   const result = await callAndThrow(client, () => client.session.fork({ sessionId }))
@@ -705,29 +701,22 @@ function looksNoResponse(error: unknown): boolean {
   if (isNoResponseError(error)) return true
   if (error instanceof Error && error.message.startsWith('实例不可达：')) {
     // A proxy/gateway 504 upstream_timeout means the host MAY still be
-    // running the purge (perf review Major-3) — same honest wording as a
-    // client-side timeout, never a deterministic failure.
+    // running the purge — same honest wording as a client-side timeout,
+    // never a deterministic failure.
     return /fetch failed|network request failed|networkerror|HTTP 504/i.test(error.message)
   }
   return false
 }
 
 /**
- * archiveCleanup/preview wrapper (design 24 §5): read-only point-in-time
- * counts for the confirm copy. Domain-missing 404s surface as
- * isInstanceDomainMissing errors; not-ready 503s keep the existing wording;
- * no-response outcomes (timeout/abort/network) map to an honest retry
- * message — never a bare browser timeout string.
- */
-/**
- * Decode the TWO-level archiveCleanup wire (security review Major-1): the
- * generic RPC layer answers ok at the transport level, and the host domain
- * carrier rides NESTED inside `result.value` (`{ok:true,value}|{ok:false,
- * error}`). A nested ok:false is a DETERMINISTIC business failure (busy /
- * registry-unreadable / purge-capacity / storage…) and must surface — never
- * silently decode into empty counts (git-api parity). The thrown message
- * keeps the `${code}: ${message}` shape so UI classifiers (busy prefix…)
- * and existing callers behave identically to RPC-level failures.
+ * Decode the TWO-level archiveCleanup wire: the generic RPC layer answers ok
+ * at the transport level, and the host domain carrier rides NESTED inside
+ * `result.value` (`{ok:true,value}|{ok:false,error}`). A nested ok:false is
+ * a DETERMINISTIC business failure (busy / registry-unreadable /
+ * purge-capacity / storage…) and must surface — never silently decode into
+ * empty counts (git-api parity). The thrown message keeps the `${code}:
+ * ${message}` shape so UI classifiers (busy prefix…) and existing callers
+ * behave identically to RPC-level failures.
  */
 function decodeDomainResult<T>(result: UnaryResult<any>): { ok: true; value: T } {
   // callAndThrow already refused ok:false answers — but its static type keeps
@@ -743,6 +732,13 @@ function decodeDomainResult<T>(result: UnaryResult<any>): { ok: true; value: T }
   return { ok: true, value: (carrier?.value ?? undefined) as T }
 }
 
+/**
+ * archiveCleanup/preview wrapper (design 24 §5): read-only point-in-time
+ * counts for the confirm copy. Domain-missing 404s surface as
+ * isInstanceDomainMissing errors; not-ready 503s keep the existing wording;
+ * no-response outcomes (timeout/abort/network) map to an honest retry
+ * message — never a bare browser timeout string.
+ */
 export async function previewArchiveCleanup(client: InstanceApiClient): Promise<ArchiveCleanupPreview> {
   let result: UnaryResult<any>
   try {

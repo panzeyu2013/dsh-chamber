@@ -1,22 +1,17 @@
 /**
- * Global double-click-rename pending slot (design 05 deviation P2-11, 2026-08
- * revision — now aligned with OpenChamber's immediate-open + double-click
- * rename model).
+ * Global double-click-rename pending slot (design 05 deviation) — aligned
+ * with OpenChamber's immediate-open + double-click rename model.
  *
- * OpenChamber (the external project this N-ctx design drew from,
- * `packages/ui/src/components/session/sidebar/SessionNodeItem.tsx`) opens a
- * session on the row's SINGLE click with ZERO delay and enters inline rename
- * on the second click of a double click. This shell previously paid
- * DOUBLE_CLICK_WINDOW_MS of latency on EVERY single click (a setTimeout
- * disambiguated single vs double click before opening). The row single click
- * now opens IMMEDIATELY; the pending below only records "a row click happened
- * just now" so a SECOND click on the SAME session within the window enters
- * inline rename instead of re-opening. openSession is idempotent
- * (chamberBridge.requestOpenSession → the App layer's selectView skip +
- * runtime sessions.open no-op on the already-open session), so a misjudged
- * slow double click only causes an idempotent re-open and can NEVER
- * accidentally rename — strictly safer than the old timer model, where a
- * misjudged double click cancelled the pending open and renamed.
+ * A session row opens on its SINGLE click with ZERO delay and enters inline
+ * rename on the second click of a double click; the pending below only
+ * records "a row click happened just now" so a SECOND click on the SAME
+ * session within the window enters inline rename instead of re-opening.
+ * openSession is idempotent (chamberBridge.requestOpenSession → the App
+ * layer's selectView skip + runtime sessions.open no-op on the already-open
+ * session), so a misjudged slow double click only causes an idempotent
+ * re-open and can NEVER accidentally rename — strictly safer than a timer
+ * model where a misjudged double click would cancel the pending open and
+ * rename.
  *
  * The pending MUST be global across N-ctx shells: every server boot mounts its
  * own SidebarRoot React tree (each with its own component state), and a
@@ -33,14 +28,14 @@
  * reference — the pending row may live in a different shell's DOM by the time
  * an outside click arrives, and DOM identity is meaningless across trees.
  *
- * INVARIANT (2026-08 review fix): any control that STOPS the click's
- * propagation MUST clear the pending itself (clearPendingClick). React's
- * stopPropagation also stops the native event, so the document-level listener
- * never sees those clicks — a surviving pending would make a later click on
- * the same session within the window spuriously enter rename. This applies to
- * every row-internal button (fold / new-session / kebabs / archive) AND the
- * source-header action buttons (sort / add-workspace / search /
- * archive-cleanup purge — design 24 §6).
+ * INVARIANT: any control that STOPS the click's propagation MUST clear the
+ * pending itself (clearPendingClick). React's stopPropagation also stops the
+ * native event, so the document-level listener never sees those clicks — a
+ * surviving pending would make a later click on the same session within the
+ * window spuriously enter rename. This applies to every row-internal button
+ * (fold / new-session / kebabs / archive) AND the source-header action
+ * buttons (sort / add-workspace / search / archive-cleanup purge — design
+ * 24 §6).
  */
 import { assertSingletonModule } from './singleton.ts'
 
@@ -53,7 +48,7 @@ assertSingletonModule('pending-click')
  * This is a LATENCY-FREE RENAME GAP, not the OS double-click interval: the
  * row opens on the FIRST click with zero delay, and only a second click
  * within this window enters inline rename. macOS's default double-click
- * interval is ~500ms — a deliberate slower double click (>350ms) falls back
+ * interval is ~500ms — a deliberately slower double click (>350ms) falls back
  * to an idempotent re-open instead of renaming, and the kebab menu's rename
  * stays as the a11y fallback. 350ms also stays under the 450ms blank-row
  * ghost grace (derive.ts), so a second click that IS within the window can
@@ -83,9 +78,9 @@ let pending: PendingClick | null = null
  * - second click on the same (source, session) within DOUBLE_CLICK_WINDOW_MS:
  *   consumes the pending and returns TRUE — the caller enters inline rename.
  *
- * Keyed by (sourceId, sessionId) — 2026 audit L2: cloned instances can carry
- * the SAME session UUID, and a bare sessionId key would let click1 on source
- * A's clone row match click2 on source B's clone row (spurious rename).
+ * Keyed by (sourceId, sessionId): cloned instances can carry the SAME
+ * session UUID, and a bare sessionId key would let click1 on source A's
+ * clone row match click2 on source B's clone row (spurious rename).
  *
  * The window is intentionally one-sided (a slow/misjudged second click just
  * re-opens idempotently, never renames) — see the header comment.
@@ -111,8 +106,8 @@ export function clearPendingClick(): void {
  * attributes via closest(), so it works across shells (the pending row may
  * have been rendered by a different SidebarRoot tree than the one whose
  * document listener runs — DOM ancestry still resolves) and never holds a
- * stale row reference. A click on another source's row is "outside" (L2:
- * source-scoped pending).
+ * stale row reference. A click on another source's row is "outside"
+ * (source-scoped pending).
  */
 export function isClickInsidePendingRow(target: unknown): boolean {
   if (pending === null) return false

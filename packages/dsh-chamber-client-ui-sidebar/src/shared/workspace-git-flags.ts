@@ -1,8 +1,8 @@
 /**
  * Neutral per-workspace Git flags (design 08 §11, OpenChamber sidebar
- * alignment, 2026-08): a tiny shared registry the chamber Git plugin
- * publishes and the sidebar reads — the sidebar stays free of Git types,
- * it only consumes booleans. Drives:
+ * alignment): a tiny shared registry the chamber Git plugin publishes and
+ * the sidebar reads — the sidebar stays free of Git types, it only consumes
+ * booleans. Drives:
  *  - the workspace fold button: a worktree (derived) workspace shows the
  *    git-branch glyph at rest and the collapse chevron on hover
  *    (OpenChamber SessionGroupSection group-header swap);
@@ -25,7 +25,7 @@ export interface WorkspaceGitFlag {
   orphaned?: boolean
   /** The repository's opaque identity (repoId) this workspace belongs to —
    *  published directly so the sidebar can attribute even when the MAIN
-   *  checkout itself is unregistered (review P2-4). */
+   *  checkout itself is unregistered. */
   repoKey?: string
 }
 
@@ -52,7 +52,7 @@ export interface RepoGitLayout {
 }
 
 /**
- * chamber (08 §11.7): the repo-group-collapse predicate — whether a derived
+ * (08 §11.7): the repo-group-collapse predicate — whether a derived
  * workspace row is hidden by its git MAIN workspace's fold. Pure, so the
  * sidebar's render filter and drag-anchor math share one verdict and cannot
  * drift. `mainPresent` guards the stale window after the main's workspace
@@ -72,16 +72,16 @@ export function hiddenByMainWorkspaceFold(
 
 const flags = new Map<string, WorkspaceGitFlag>()
 const repoLayouts = new Map<string, RepoGitLayout[]>()
-/** Sources whose FIRST git snapshot has been published (2026-10 review,
- *  design 06 §2.4): a source's git identity is UNKNOWN until then — the
- *  sidebar gates the workspace accent on this so a git workspace never
- *  first renders an independent hue that later flips to its family hue
- *  (the one-time startup flash). Cleared on disconnect like the flags. */
+/** Sources whose FIRST git snapshot has been published (design 06 §2.4): a
+ * source's git identity is UNKNOWN until then — the sidebar gates the
+ * workspace accent on this so a git workspace never first renders an
+ * independent hue that later flips to its family hue (the one-time startup
+ * flash). Cleared on disconnect like the flags. */
 const loadedSources = new Set<string>()
 const listeners = new Set<() => void>()
 /** Monotonic version — the sidebar subscribes via getSnapshot on THIS so a
- *  store change actually re-renders (review P1: a constant snapshot never
- *  triggers React). */
+ *  store change actually re-renders (a constant snapshot never triggers
+ *  React). */
 let version = 0
 
 function bump(): void {
@@ -156,7 +156,7 @@ export function isSourceGitFlagsLoaded(sourceId: string): boolean {
  *  refresh publishes fresh flags first, then prunes the stale ones — so a
  *  workspace that vanished from the worktree list (externally deleted
  *  worktree) keeps its PREVIOUS identity flag until the orphan merge runs
- *  on top of it (review: a full clear first would destroy it). */
+ *  on top of it (a full clear first would destroy it). */
 export function retainSourceWorkspaceFlags(sourceId: string, keep: ReadonlySet<string>): void {
   let changed = false
   for (const key of flags.keys()) {
