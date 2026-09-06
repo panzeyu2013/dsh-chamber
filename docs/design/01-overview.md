@@ -93,7 +93,7 @@ presets 页操作（copy/read/remove 经反代写远端文件）；部署内置�
 | 19 | [19-notifications.md](19-notifications.md) | M1–M2 已实现；竞态自动化已完成，M3 macOS 权限/打包态实机待验（2026-09） | 桌面通知：session complete/ask/request 推送原生通知（设置可选项）。检测 = renderer 复用 06 §4 事实通道边沿检测（零控制面改动）；呈现 = 主进程 Electron Notification + 点击打开会话；设置 = chamber-settings.json 新增 `notifications` + **并入通用页「通知」控制组（无新设置入口，2026-09 用户拍板）**；OpenChamber 通知功能调研见文内 §2 |
 | 20 | [20-open-in-registry.md](20-open-in-registry.md) | 现行（已实现（M0–M3），2026-08） | open-in 打开注册表（design 16 演进）：本地来源 Finder + 本地/远程 VS Code 的统一打开面；主进程 OpenInApp provider 注册表 + 六步 loud 执行管线 + 能力协商 IPC；插件重命名 `dsh-client-ui-open-in`，旧 vscode IPC 收敛删除（2026-08 合并 main 时重编号 17→20，避开 design 17 gateway） |
 | 22 | [22-linux-desktop.md](22-linux-desktop.md) | 现行（2026-12 落地；实机门禁见 STATUS） | Linux 桌面支持：AppImage（x64）发行形态 + 自动更新形态门（可写 $APPIMAGE）、XDG/$APPIMAGE 桌面集成纪律（自启 + 每启重写的协议 .desktop）、node 兜底平台分表与目录 fsync 平台无关容错、release.yml build-linux 腿 |
-| 24 | [24-archived-session-cleanup.md](24-archived-session-cleanup.md) | 现行（定稿 v3，2026-12 用户批准跳过人工评审直接执行；执行台账见 todo 24 计划） | 已归档会话内容清理：第三个 chamber 宿主域 `archiveCleanup/{preview,purge}`（有界例外动议，AGENTS 已登记）+ 侧边栏 server 行 hover 动作；探针期望集派生契约随 M2 修订 design 18 §3.4 |
+| 24 | [24-archived-session-cleanup.md](24-archived-session-cleanup.md) | 现行（已合入 main，2026-12；含合入修订轮残留闭合，台账轮次 10；M4 实机待验见 STATUS） | 已归档会话内容清理：第三个 chamber 宿主域 `archiveCleanup/{preview,purge}`（有界例外动议，AGENTS 已登记）+ 侧边栏 server 行 hover 动作；探针期望集派生契约随 M2 修订 design 18 §3.4 |
 
 ---
 

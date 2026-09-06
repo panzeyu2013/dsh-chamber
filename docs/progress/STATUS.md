@@ -220,20 +220,23 @@ envelope padding——cap 抬至 1 MiB 即变 'dsh'，必红）；ready 心跳�
   v1 决策不加行，同构三态行列为 M4+ 可选增强）。属 AGENTS/05 §2.2 红线的
   有界例外动议（AGENTS 例外清单与 design 01 地图已随 M0 批准更新：2026-12
   用户拍板跳过人工评审、D1–D7 按推荐值生效；05 §2.2/§6、02/09/13/16/17、
-  18 §3.4 等按 design 24 §12 时点表随 M1–M3 改）；**执行中（M1–M3 代码与
-  文档全部落地；M2 探针派生 + 分发面 + fixture 批次全绿；§10 vendor 核对
-  完成、host binding 分支 b 落地；提交态 dist 已重建）**；实跑门禁：
+  18 §3.4 等按 design 24 §12 时点表随 M1–M3 改）；**已合入 main（2026-12
+  合入修订轮：独立评审 0 Blocker，残留闭合——M1 定案（archived 集合成员随
+  purge 移除，§14 残余草稿废弃）、M2–M5 处置（probe 面结构检查 / 运行窗口 /
+  容量登记 / 注释）、N1–N5（covered 后代同批清除 / 迭代后序 / rm ENOENT
+  幂等 / 注释 / AGENTS 事件措辞）、design 24 §15 债务①③闭合、台账轮次 10；
+  合并 989534a = 启用批次 3a5bbcf + 修复轮 8429fee）**；实跑门禁：
   根 typecheck + runtime/desktop/gateway/control-plane/sidebar/connections/
-  host 全绿（详见执行台账 §10）；M4 实机 E2E 与启用批次提交待 owner
-  （design 24 §14 残余登记：archived 占位 id 保留至上游 wire）。
+  host 全绿（详见执行台账 §10 与本轮复跑）；**M4 实机 E2E 仍待验**（真实
+  dsh 实例 preview/purge 全链、gateway/远程 dsh 形态、ghost 行窗口与 UI
+  目检；桌面「恒全量探针 vs seed 产物门」取舍、结构 seam 随上游 wire 退役
+  机制化均已在 design 24 §15 挂账，不随本合入闭合）。
   todo 12 的 B（特权层直删）继续冻结；A（已归档浏览区）仍为可选前置/后续。
   设计见 `docs/design/24-archived-session-cleanup.md`；调研记录见
   `docs/progress/todo/12-todo-archived-sessions.md`；执行台账（M0 评审包/
-  决策点 D1–D7、vendor 核对记录表、M1–M4）见
+  决策点 D1–D7、vendor 核对记录表、M1–M4、合入修订轮次 10）见
   `docs/progress/todo/24-archived-session-cleanup-plan.md`（§10 起为物化后
-  执行状态；多轮评审处置登记见 design 24 §15；启用批次 git 提交与 M4 实机
-  待 owner——评审遗留的桌面「恒全量探针 vs seed 产物门」取舍、结构 seam 随
-  上游 wire 退役机制化均已在 design 24 §15 挂账）。
+  执行状态；多轮评审处置登记见 design 24 §15）。
 - **gateway 连接插件能力对齐（A/B/C，2026-12 用户提出；Phase 1-5 已实现 + 质量审核修复轮已落地，见 design 21/本段）**：
   gateway 连接缺 ssh+dsh 的第三方插件「添加/同步」（design 17 §3/§10 收窄的
   副作用）、connections 页缺 gateway 受控重启入口、日志/主机日志按钮不可区分。
