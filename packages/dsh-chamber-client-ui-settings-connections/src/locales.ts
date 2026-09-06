@@ -242,9 +242,11 @@ export const zh = {
   pluginsAddInstalling: '安装中…',
   pluginsAddSearch: '搜索',
   pluginsAddSearchPlaceholder: '搜索 npm registry…',
-  pluginsAddFolder: '从文件夹导入',
-  // 文件夹导入 busy 短文案（与 pluginsAddInstalling 同族）：导入中按钮显示
+  pluginsAddFolder: '从本地导入',
+  // 本地导入 busy 短文案（与 pluginsAddInstalling 同族）：导入中按钮显示
   // 「导入中…」，避免「安装」按钮误显「安装中…」（2026-12 UX 修订）。
+  // 2026-09 archive-pick：导入源 = 插件源码文件夹或现成 .tgz 插件包（macOS
+  // 选择器可两者任选；按钮语义随之从「文件夹」放宽为「本地」）。
   pluginsImporting: '导入中…',
   pluginsRemoveRow: '移除',
   // 行级移除确认键（2026-12 UI 修订）：与共享键 deleteConfirm（「删除」，
@@ -292,14 +294,14 @@ export const zh = {
   installedFromMask: '本地副本',
   installedTab: '已安装',
   installedEmpty: '尚未安装第三方插件',
-  installedAddHint: '在下方添加区按包名搜索安装，或从文件夹导入。',
+  installedAddHint: '在下方添加区按包名搜索安装，或从本地文件夹 / .tgz 插件包导入。',
   removeRowConfirmTitle: '移除插件？',
   removeRowConfirmDescription: '将移除 {name} 并在需要时重启实例生效。',
   removeRowConfirmUnconfiguredDescription: '将移除 {name}；该实例未配置 systemd 服务，不会自动重启——需手动重启远端后变更才生效。',
   undoAvailable: '撤销最近变更',
   recoveryUninstallRestart: '卸载最近安装的插件并重启',
   undoUnavailableNone: '没有可撤销的最近成功变更',
-  undoUnavailableFileBacked: '该变更由本地文件夹推送，v1 不支持回退',
+  undoUnavailableFileBacked: '该变更由本地导入（文件夹或 .tgz 包）推送，v1 不支持回退',
   undoDone: '已撤销最近变更',
   undoNotEffective: '已执行但实例未恢复就绪——见状态行',
   startManagedDsh: '启动实例',
@@ -561,9 +563,12 @@ export const en: Record<SettingsConnectionsKey, string> = {
   pluginsAddInstalling: 'Installing…',
   pluginsAddSearch: 'Search',
   pluginsAddSearchPlaceholder: 'Search npm registry…',
-  pluginsAddFolder: 'Import from folder',
-  // Folder-import busy copy (same family as pluginsAddInstalling): the import
-  // button shows "Importing…" while busy (2026-12 UX revision).
+  pluginsAddFolder: 'Import from local',
+  // Local-import busy copy (same family as pluginsAddInstalling): the import
+  // button shows "Importing…" while busy (2026-12 UX revision). 2026-09
+  // archive-pick: the import source is a plugin source folder OR a ready
+  // .tgz plugin archive (macOS picker offers both; the label broadened from
+  // "folder" to "local" accordingly).
   pluginsImporting: 'Importing…',
   pluginsRemoveRow: 'Remove',
   // Row-remove confirm keys (2026-12 UI revision): distinct from the shared
@@ -612,14 +617,14 @@ export const en: Record<SettingsConnectionsKey, string> = {
   installedFromMask: 'Local copy',
   installedTab: 'Installed',
   installedEmpty: 'No third-party plugins installed yet',
-  installedAddHint: 'Install by package name in the add area below, or import from a folder.',
+  installedAddHint: 'Install by package name in the add area below, or import a local source folder / .tgz plugin archive.',
   removeRowConfirmTitle: 'Remove this plugin?',
   removeRowConfirmDescription: 'Removing {name}; a restart applies the change when required.',
   removeRowConfirmUnconfiguredDescription: 'Removing {name}; no systemd service is configured on this instance, so nothing restarts automatically \u2014 restart the remote manually for the change to take effect.',
   undoAvailable: 'Undo latest change',
   recoveryUninstallRestart: 'Uninstall the most recently installed plugin and restart',
   undoUnavailableNone: 'No recent successful change to undo',
-  undoUnavailableFileBacked: 'This change came from a local folder push; undo is unavailable in v1.',
+  undoUnavailableFileBacked: 'This change came from a local import (folder or .tgz archive); undo is unavailable in v1.',
   undoDone: 'Undo complete',
   undoNotEffective: 'Executed, but the instance did not recover \u2014 see status',
   startManagedDsh: 'Start instance',

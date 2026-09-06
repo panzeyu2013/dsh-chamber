@@ -16,13 +16,14 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { randomBytes } from 'node:crypto'
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { closeSync, ftruncateSync, mkdtempSync, mkdirSync, openSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { gunzipSync } from 'node:zlib'
 import { scanTgzMetadata } from '../gateway/src/tgz-scan.ts'
 import {
   buildPluginTarball,
+  classifyPluginPick,
   GATEWAY_PLUGIN_VERSION_PATTERN,
   listTgzManifest,
   PLUGIN_MANIFEST_MAX_BYTES,
@@ -344,6 +345,87 @@ test('pluginNameFromFolder: an oversized package.json is refused, a plain-name r
     assert.equal(pluginNameFromFolder(fixture.path), null, 'the 64 KiB read bound must hold')
     writeFileSync(path, JSON.stringify({ name: 'plain-name', version: '0.0.1' }))
     assert.equal(pluginNameFromFolder(fixture.path), 'plain-name')
+  } finally {
+    fixture.cleanup()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// classifyPluginPick (design 21 §10 archive-pick): a picked path becomes a
+// source folder, or a ready .tgz archive with its bounded manifest — every
+// refusal is a loud structural error naming only the basename.
+// ---------------------------------------------------------------------------
+
+test('classifyPluginPick: a directory is a dir source; a ready tgz archive is read with its manifest', async () => {
+  const fixture = makeFolder()
+  try {
+    // Directory → dir source, no read.
+    const dirPick = classifyPluginPick(fixture.path)
+    assert.deepEqual(dirPick, { ok: true, source: { kind: 'dir', path: fixture.path } })
+
+    // A real plugin source folder packed by the builder → written out as a
+    // .tgz → classified as a verbatim archive whose bytes roundtrip.
+    write(fixture.path, 'package.json', JSON.stringify({ name: 'pick-ok-pkg', version: '0.0.1' }))
+    write(fixture.path, 'index.js', 'x')
+    const built = await buildPluginTarball(fixture.path)
+    assert.equal(built.manifest.ok, true)
+    const archivePath = join(fixture.path, '..', 'pick-ok-pkg-0.0.1.tgz')
+    writeFileSync(archivePath, built.buffer)
+    const pick = classifyPluginPick(archivePath)
+    assert.equal(pick.ok, true)
+    if (pick.ok) {
+      assert.equal(pick.source.kind, 'tgz')
+      if (pick.source.kind === 'tgz') {
+        assert.equal(pick.source.path, archivePath)
+        assert.equal(pick.source.name, 'pick-ok-pkg')
+        assert.equal(pick.source.version, '0.0.1')
+        assert.ok(pick.source.bytes.equals(built.buffer), 'the archive bytes are preserved verbatim')
+        assert.deepEqual(listTgzManifest(pick.source.bytes), { name: 'pick-ok-pkg', version: '0.0.1' })
+      }
+    }
+  } finally {
+    fixture.cleanup()
+  }
+})
+
+test('classifyPluginPick: refusals — missing path, non-tgz file, garbage tgz, empty pick', () => {
+  const fixture = makeFolder()
+  try {
+    assert.equal(classifyPluginPick('').ok, false)
+    const missing = classifyPluginPick(join(fixture.path, 'nope.tgz'))
+    assert.equal(missing.ok, false)
+    if (!missing.ok) assert.match(missing.error, /no longer exists/)
+
+    const plain = join(fixture.path, 'notes.txt')
+    writeFileSync(plain, 'not an archive')
+    const notTgz = classifyPluginPick(plain)
+    assert.equal(notTgz.ok, false)
+    if (!notTgz.ok) assert.match(notTgz.error, /source folder or a \.tgz plugin archive/)
+
+    const garbage = join(fixture.path, 'garbage.tgz')
+    writeFileSync(garbage, randomBytes(256))
+    const bad = classifyPluginPick(garbage)
+    assert.equal(bad.ok, false)
+    if (!bad.ok) assert.match(bad.error, /not a valid plugin archive/)
+  } finally {
+    fixture.cleanup()
+  }
+})
+
+test('classifyPluginPick: an archive beyond TARBALL_MAX_ARCHIVE_BYTES is refused before any read', () => {
+  const fixture = makeFolder()
+  try {
+    const oversized = join(fixture.path, 'huge.tgz')
+    const fd = openSync(oversized, 'w')
+    try {
+      // Truncate to cap+1 — no 33 MiB allocation needed; stat is the gate.
+      ftruncateSync(fd, TARBALL_MAX_ARCHIVE_BYTES + 1)
+    } finally {
+      closeSync(fd)
+    }
+    const pick = classifyPluginPick(oversized)
+    assert.equal(pick.ok, false)
+    if (!pick.ok) assert.match(pick.error, new RegExp(`beyond the ${TARBALL_MAX_ARCHIVE_BYTES}-byte plugin archive cap`))
   } finally {
     fixture.cleanup()
   }

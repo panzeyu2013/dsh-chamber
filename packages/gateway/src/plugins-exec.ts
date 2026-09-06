@@ -28,13 +28,17 @@
  *       INSTALL_ENV_WHITELIST) — every other ambient variable (DSH_GATEWAY_*
  *       control vars, npm_config_* / NPM_* token carriers AND any other secret
  *       carrier such as NODE_AUTH_TOKEN that lifecycle scripts or pnpm could
- *       read) is DROPPED, and DSH_HOME/HOME/XDG_CACHE_HOME/XDG_CONFIG_HOME/
- *       NPM_CONFIG_USERCONFIG are pinned into private stateDir directories
- *       (HOME/XDG_CACHE_HOME/XDG_CONFIG_HOME 0700 — XDG_CONFIG_HOME is the
- *       executor's addition over the runtime-installer precedent, and
- *       NPM_CONFIG_USERCONFIG is an empty 0600 file) — the profile's .npmrc
- *       is never trusted input; lifecycle scripts are allowed (design 21
- *       decision 13 — no ignore-scripts);
+ *       read) is DROPPED. DSH_HOME and the private XDG_CACHE_HOME /
+ *       XDG_CONFIG_HOME dirs (0700) are pinned under stateDir, and both
+ *       NPM_CONFIG_USERCONFIG casings (upper + lower) point at one empty
+ *       0600 file — the operator's real ~/.npmrc and global pnpm config are
+ *       never consulted by install children (profile .npmrc stays untrusted
+ *       input; lifecycle scripts are allowed, design 21 decision 13 — no
+ *       ignore-scripts). HOME is deliberately NOT pinned: pnpm derives its
+ *       DEFAULT store from the effective home, and the managed profile was
+ *       provisioned under the same effective home (see ensurePrivateRunEnv /
+ *       §10 ⑨) — a pinned HOME silently moves the store and pnpm 11 refuses
+ *       every mutation against the provisioned profile;
  *   (4) spawn with bounded stdout/stderr capture (512 KiB tail default),
  *       process-group kill on timeout (SIGTERM → SIGKILL after 1 s),
  *       sanitized errors (URL userinfo/query capability tokens and named
@@ -598,13 +602,22 @@ export function createPluginsExec(deps: PluginExecDeps): PluginExec {
     }
   }
 
-  /** Private pnpm home/cache/xdg dirs (0700) + empty NPM_CONFIG_USERCONFIG
-   * file (0600); (re)created before every run — the child's HOME and XDG dirs
-   * are never the operator's. */
+  /** Private pnpm cache/xdg dirs (0700) + empty NPM_CONFIG_USERCONFIG file
+   * (0600); (re)created before every run. HOME is deliberately NOT pinned
+   * (and is dropped by the scrub whitelist): pnpm derives its DEFAULT store
+   * from the effective home, and the managed profile's node_modules was
+   * provisioned under the SAME effective home (the gateway spawns the dsh
+   * child without HOME; pnpm falls back to the passwd home). A pinned HOME
+   * silently moves pnpm's default store elsewhere, and pnpm 11 then refuses
+   * every mutation against the provisioned profile ("pnpm now wants to use
+   * the store at …") — real-machine E2E (design 21 §9/§10 ⑦) caught this on
+   * the first third-party install. Caches/config stay private via the XDG +
+   * userconfig pins; the store itself remains the operator-home store the
+   * profile was linked against. */
   function ensurePrivateRunEnv(): void {
     const thirdParty = thirdPartyRoot(stateDir)
     ensurePrivateDirectoryNoFollow(thirdParty, 0o700)
-    for (const name of ['.pnpm-home', '.pnpm-cache', '.pnpm-xdg']) {
+    for (const name of ['.pnpm-cache', '.pnpm-xdg']) {
       ensurePrivateDirectoryNoFollow(join(thirdParty, name), 0o700)
     }
     const npmrc = join(thirdParty, '.npmrc-empty')
@@ -668,16 +681,24 @@ export function createPluginsExec(deps: PluginExecDeps): PluginExec {
       return
     }
     // (3) Strict env discipline + fixed argv (decision 13: scripts allowed).
+    // HOME is NOT pinned (see ensurePrivateRunEnv): pnpm's default store must
+    // stay the store the managed profile was provisioned against, or pnpm 11
+    // refuses every mutation with a store-mismatch error.
     let env: Record<string, string>
     try {
       ensurePrivateRunEnv()
       const thirdParty = thirdPartyRoot(stateDir)
       env = scrubInstallEnv(process.env, {
         DSH_HOME: join(stateDir, MANAGED_DSH_HOME_DIR),
-        HOME: join(thirdParty, '.pnpm-home'),
         XDG_CACHE_HOME: join(thirdParty, '.pnpm-cache'),
         XDG_CONFIG_HOME: join(thirdParty, '.pnpm-xdg'),
+        // Both casings pin one empty userconfig file: pnpm 11's config reader
+        // reads `npm_config_userconfig` OR `NPM_CONFIG_USERCONFIG` (exact-case
+        // property reads, no case folding), so the empty-file displacement of
+        // the operator's real ~/.npmrc must not depend on which casing a pnpm
+        // minor honors.
         NPM_CONFIG_USERCONFIG: join(thirdParty, '.npmrc-empty'),
+        npm_config_userconfig: join(thirdParty, '.npmrc-empty'),
       })
     } catch (error) {
       complete(item, { status: 'failed', error: sanitize(`failed to prepare the private pnpm environment: ${messageOf(error)}`) })

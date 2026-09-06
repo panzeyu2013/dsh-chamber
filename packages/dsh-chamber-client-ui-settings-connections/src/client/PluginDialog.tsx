@@ -12,7 +12,9 @@
  *     the badge projections localChamberBadge/remoteChamberBadge; version
  *     drift chips and the「重新同步 chamber 组件」action live in this zone;
  *   ③ third-party plugin zone (installed list + per-row remove + add: spec
- *     input + npm search + folder import);
+ *     input + npm search + local import — a plugin source folder OR a ready
+ *     .tgz archive, design 21 §10 archive-pick; the macOS picker offers
+ *     both, Windows/Linux keep the folder dialog);
  *   ④ recovery/action row (gateway only: runtimeDown + undoForLatest →
  *     recovery banner + recoveryUninstallRestart through the remove confirm
  *     and applyRemove origin:'undo' pipeline).
@@ -32,7 +34,7 @@
  *            gatewayPluginMaterialize / gatewayPluginSync + the controlled
  *            managed-dsh restart (POST + pollGatewayReady). Add capability:
  *            spec → gatewayPluginApply(id, {add:[value], remove:[],
- *            deferRestart:false}); folder → gatewayPluginMaterialize(id);
+ *            deferRestart:false}); folder/.tgz → gatewayPluginMaterialize(id);
  *            outcomes classified via classifyGatewayApplyResult.
  *   http   → read-only Loader manifest (pluginInventory list) — no /chamber
  *            surface, no add surface.
@@ -365,8 +367,9 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
   const [draft, setDraft] = useState('')
   const [draftError, setDraftError] = useState<string | null>(null)
   const [installing, setInstalling] = useState(false)
-  /** 文件夹导入专用 busy（与 installing 并存）：导入中时安装按钮不显示
-   *  「安装中…」，避免语义错位（2026-12 UX 修订）。 */
+  /** 本地导入（文件夹/.tgz）专用 busy（与 installing 并存）：导入中时安装按钮
+   *  不显示「安装中…」，避免语义错位（2026-12 UX 修订；2026-09 archive-pick
+   *  后同一 busy 覆盖 .tgz 导入）。 */
   const [folderBusy, setFolderBusy] = useState(false)
   const [addResult, setAddResult] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
@@ -967,8 +970,13 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
         else if ('cancelled' in res) { /* silent no-op (picker dismissed) */ }
         else {
           // deferred = the gateway cached the install intent for the next
-          // ready edge (it may run after this desktop disconnects); false =
-          // accepted onto the executor (auto restart-to-apply).
+          // ready edge (it may run after this desktop disconnects; the drain
+          // then applies AND restarts once). false = accepted onto the
+          // executor while the instance is ready: the profile mutation lands
+          // but the plugin mounts at the instance's NEXT restart (a direct
+          // submit on a ready instance never triggers the gateway's
+          // drain-only restart — verified on real gateway E2E, design 21
+          // §10 ⑨); "已应用/Applied" means installed, not live.
           setAddResult(res.deferred === true ? t('deferredOfflineNote') : t('pluginsApplied'))
           reloadAfterAdd()
         }
@@ -1368,8 +1376,9 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
   )
 
   // ---- ③ third-party zone ----
-  /** The add section (spec + npm search + folder import) for the three
-   *  writable backends; http-direct renders no add surface (design 21 §3). */
+  /** The add section (spec + npm search + local import — a source folder or
+   *  a ready .tgz archive, design 21 §10 archive-pick) for the three writable
+   *  backends; http-direct renders no add surface (design 21 §3). */
   const addSection = isHttp
     ? null
     : (

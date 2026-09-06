@@ -128,12 +128,14 @@ export interface DesktopSshSurface {
   /** Pack a named local-manifest dependency and install it remotely. Main
    *  resolves the directory; renderer paths are never accepted. */
   plugin_materialize_add(id: string, name: string): Promise<SshMaterializeResult>
-  /** Pack a user-PICKED local plugin dir and install it remotely (pick-only; the
-   *  main process opens the folder picker, no renderer-supplied path, design 13 §5.8). */
+  /** Install a user-PICKED local plugin source (folder or .tgz archive) and
+   *  materialize it remotely (pick-only; the main process opens the picker,
+   *  no renderer-supplied path, design 13 §5.8 / design 21 §10 ⑧). */
   plugin_materialize_add_pick(id: string): Promise<SshMaterializeResult>
   /** Install a spec into the LOCAL dsh profile (design 13 §5.1). */
   local_plugin_add(spec: string): Promise<SshLocalPluginExecIpcResult>
-  /** Pick a local folder and install it into the LOCAL dsh profile (pick-only). */
+  /** Pick a local plugin source (folder or .tgz archive) and install it into
+   *  the LOCAL dsh profile (pick-only, design 13 §5.8 / design 21 §10 ⑧). */
   local_plugin_add_file(): Promise<SshLocalPluginExecIpcResult>
   /** Remove a plugin from the LOCAL dsh profile (design 13 §5.1). */
   local_plugin_remove(name: string): Promise<SshLocalPluginExecIpcResult>
@@ -265,14 +267,14 @@ export type SshSeedHostGraphResult =
   | { ok: false; error: string }
 
 /** Materialize-and-add outcome (design 13 §4.6). `cancelled` = the user dismissed
- *  the folder picker (a silent no-op, not an error). */
+ *  the local-source picker (a silent no-op, not an error). */
 export type SshMaterializeResult =
   | { ok: true; spec: string; remotePath: string }
   | { ok: true; cancelled: true }
   | { ok: false; error: string }
 
 /** Local `dsh plugin` exec outcome (design 13 §5.1). `cancelled` = the user
- *  dismissed the folder picker on the `local_plugin_add_file` path. */
+ *  dismissed the local-source picker on the `local_plugin_add_file` path. */
 export type SshLocalPluginExecIpcResult =
   | { ok: true }
   | { ok: true; cancelled: true }
@@ -313,10 +315,10 @@ export type GatewayPluginApplyIpcResult =
   | { ok: true; installed: string[]; removed: string[]; restarted: boolean; deferred?: boolean }
   | { ok: false; error: string; partial?: GatewayPluginApplyPartial }
 
-/** Folder materialize outcome (design 21 §6.5): cancelled = the user
- *  dismissed the picker; ok:true deferred = the gateway cached the install
- *  intent for the next ready edge (false = accepted onto the executor
- *  queue); ok:false is loud. */
+/** Local plugin materialize outcome (design 21 §6.5/§10 ⑧): cancelled = the
+ *  user dismissed the picker; ok:true deferred = the gateway cached the
+ *  install intent for the next ready edge (false = accepted onto the
+ *  executor queue); ok:false is loud. */
 export type GatewayPluginMaterializeIpcResult =
   | { ok: true; cancelled: true }
   | { ok: true; deferred: boolean }

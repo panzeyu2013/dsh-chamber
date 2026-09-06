@@ -224,11 +224,21 @@ restartApplyInPanel 重启生效 / restartGatewayService 重启网关服务（ga
 `install_failed/remove_failed/start_failed`（任务面 code）、`persistence_failed` 500。per-route 验收标准挂在
 §6.9 实现序与 §9 矩阵的 §6.2 路由行上（随执行计划逐阶段落地）。
 
-### 6.3 gateway 后端执行器与互斥（已实现；评审 P1 修正版）
+### 6.3 gateway 后端执行器与互斥（已实现；评审 P1 修正版；2026-09 §10 ⑨ 修订）
 - 执行：spawn active runtime dsh CLI（resolveWorkspace）+ env `DSH_HOME=<stateDir>/dsh-home`；
   **安装子进程 env 纪律（升级）**：白名单 env（PATH+代理族），剥离全部 `DSH_GATEWAY_*` **及所有 npm_config_*/NPM_***
-  环境变量，HOME/XDG_CACHE_HOME/XDG_CONFIG_HOME 钉 stateDir 内私有目录（注：runtime-installer 既有先例仅钉
-  HOME/XDG_CACHE_HOME，XDG_CONFIG_HOME 为 executor 新增项），空 `NPM_CONFIG_USERCONFIG`，
+  环境变量（含凭据载体 NODE_AUTH_TOKEN 等），XDG_CACHE_HOME/XDG_CONFIG_HOME 钉 stateDir 内私有目录
+  （0700）+ 空 `NPM_CONFIG_USERCONFIG`/`npm_config_userconfig`（双大小写同指 0600 空文件——pnpm 11
+  config reader 对两 casing 均做精确读取，任一 pnpm minor 都不应放行操作者真实 ~/.npmrc；
+  注：runtime-installer 先例仅钉 HOME/XDG_CACHE_HOME + 显式 `--store-dir` argv，XDG_CONFIG_HOME 与
+  双 casing userconfig 钉为 executor 新增项，且其语境是**版本树安装**、无 profile 跨 store 问题）；
+  **HOME 不钉**（2026-09 实机修正，§10 ⑨：钉 HOME 会把 pnpm 默认 store 移离 managed profile
+  物化时所用 store，pnpm 11 以 store 不一致拒绝全部变更——profile 由 dsh 子进程引导安装，pnpm 回落
+  passwd home；executor 同样回落即天然同 store）。**部署形态约束（由此隐式成立）**：服务环境 HOME
+  须缺席或等于服务用户 passwd home；不得设置 `PNPM_HOME`/`XDG_DATA_HOME`（pnpm getDataDir 优先读
+  之，物化子进程继承而变更子进程被白名单剥离 → 分叉）；操作者全局 `~/.config/pnpm/config.yaml`
+  storeDir 不被变更子进程读取（XDG_CONFIG_HOME 已钉私有）而物化时可能被读 → 部署勿配全局
+  storeDir。以上均为操作者配置边角形态，文档登记而非代码围堵；
   **profile 内 .npmrc 视为不可信环境配置**（不向其注入令牌；脚本默认允许的裁定下，此项为凭据最小化而非脚本禁行）；
   stderr 脱敏（复用 runtime-installer sanitizeInstallerOutput 族）；stdout 有界；超时/取消 kill 进程组；
   变更前磁盘空闲预检（镜像 runtime disk soft-limit）；
@@ -462,6 +472,34 @@ chamber 移动端参与第三方管理；安装期脚本默认禁行与 OS 用�
   待归口文案接线或删除；gateway 拒绝码→本地化文案映射未做（409 逐字英文，登记接受）。
   ⑦ 计划要求的实机 E2E 矩阵（ssh+gateway 双通道手动/脚本化门禁）不可在本工作树执行（无真实
   gateway/desktop），**未勾销**——发布前在可运行环境按 §9 矩阵执行。
+  ⑧ **archive-pick（2026-09，plugin-from-file）**：materialize 三通道（local/ssh/gateway）的
+  本地导入选择器接受**现成 `.tgz` 插件包**（npm-pack 布局）与插件源码文件夹（macOS NSOpenPanel
+  单对话框 file+folder 双模式；Windows FOS_PICKFOLDERS / GTK 无法混用 → 非 macOS 保持文件夹
+  对话框，archive-pick 为 macOS-v1，Windows/Linux 腿随 design 22/23 排期）。分类器
+  `classifyPluginPick`（plugin-tarball.ts，纯结构校验：`.tgz` 后缀 + 32 MiB 档案上限 + 有界
+  manifest 读取）；local = `file:<归档绝对路径>`（allowFileSpec 通道不变），ssh =
+  `materializeArchiveAndAdd`（免本地 pnpm pack，复用 write-file → 远端 `$HOME` → `add file:` 尾
+  巴），gateway = 原样 PUT（headers 取归档自身 manifest；gatewayChamberMaterialize 二次白名
+  单）。按钮文案「从文件夹导入」→「从本地导入」（zh/en + 提示文案同步；UI 键名不变）；
+  `desktop_local_plugin_add_file` 缺陷① 修复保持原样。
+  ⑨ **executor pnpm store 一致性修正（2026-09，plugin-from-file 实机 E2E 发现）**：archive-pick
+  首轮实机上传（192.168.110.172 test-http gateway 0.2.1）经 PUT /chamber/plugins/materialize
+  → 202 入队，但 install 全部失败（journal error `dsh: pnpm failed in profile directory`）——
+  逐层复现定位：profile node_modules `.modules.yaml` storeDir=/root/.local/share/pnpm/store/v11
+  （managed dsh 子进程无 HOME 引导安装 → pnpm 回落 passwd home），而 executor 把
+  HOME 钉到 `chamber-plugins/third-party/.pnpm-home` → pnpm 11 store 不一致硬拒（
+  "pnpm now wants to use the store at …"）。**修复**：executor env 不再钉 HOME（白名单本已剥离
+  HOME，令其缺席回落 passwd home = 与 profile 物化同 store；XDG 缓存/空 userconfig 私密钉保留，
+  见 §6.3 修订与 plugins-exec.ts 注释）；测试同步（scrub/env-discipline 断言 HOME 缺席 +
+   双 casing userconfig 钉 + `.pnpm-home` 不再创建）。
+  实机验证（192.168.110.172 test-http，0.2.1 运行实例）：0.2.1 无此修复，验证以等价手段补丁
+  运行态 `current/dist/cli.js`（移除 HOME pin，同 HEAD 语义）+ 重启 gateway 服务后跑通
+  remove→materialize→install（executor op 全 ok；pre-image 备份佐证 profile 变更、随后复原基线）。
+  **直接提交（实例 ready）成功不触发受控重启**——重启仅发生在 deferred 排空路径；插件在托管实例
+  下次重启时挂载（PluginDialog 注释已按实机行为修订）。注意两点：① 0.2.1 发行树 `dist/index.js`
+  仍为旧 pin，重装/重打包即复发——正式修复须随 HEAD 版本树部署后按 §9 矩阵复跑；② pnpm 11 中
+  `store-dir` 对任何 .npmrc（含 userconfig）均为死键，不要再用 .npmrc 覆盖 store（E2E 探针已证）。
+  chamber 组件此前全为直写 seed/发行物注入，从未触发 pnpm 路径——正对应 §10 ⑦ 实机矩阵缺口。
 - **质量审核修复补录（2026-12，审核后执行，全部带失败注入/行为测试并全量验证绿）**：
   ① **租约泄漏修复**（审核 P1-A1）：executor `complete()` 在 journal 终态写失败（markTerminal
   抛错）或记录丢失（markTerminal null，journal 被 aside）时仍触发 per-op 终态钩子（合成最小

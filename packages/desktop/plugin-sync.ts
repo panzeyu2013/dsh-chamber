@@ -1874,6 +1874,51 @@ async function packDirectory(localDir: string): Promise<{ bytes: Buffer } | null
 }
 
 /**
+ * Shared materialize tail (design 13 §4.6): write-file the given tarball to
+ * `~/.dsh-chamber/plugins/<name>-<hash>.tgz` (kept, never cleaned — pnpm
+ * persists `file:` deps against it) → resolve the tarball's ABSOLUTE remote
+ * path from the remote `$HOME` (never the local home) → `dsh plugin add
+ * file:<absolute path>`. The tarball filename is normalized for scoped names
+ * (`@scope/name` → `scope-name`) so it passes the write-target filename
+ * whitelist. Fails loud on any step — including an unresolvable/unsafe
+ * remote `$HOME` — never reports success for a chain that did not complete.
+ * `name` is the caller-validated plugin name (dir: read from the folder
+ * package.json; archive: read from the tgz manifest).
+ */
+async function installRemoteTarball(
+  exec: ExecFn,
+  spec: RemoteSpec,
+  name: string,
+  bytes: Buffer,
+): Promise<MaterializeResult> {
+  const id = spec.id
+  if (bytes.length > MATERIALIZED_TARBALL_MAX_BYTES) {
+    return { ok: false, error: `materialize: the plugin archive is ${bytes.length} bytes, beyond the ${MATERIALIZED_TARBALL_MAX_BYTES}-byte remote write cap` }
+  }
+  const hash = sha256hex(bytes).slice(0, 16)
+  // Scoped names (`@scope/name`) contain `/` — normalize for the tarball
+  // FILENAME whitelist (`[a-zA-Z0-9._-]+`, ssh-provider resolveWriteTarget).
+  const tarballName = `${name.replace(/^@/, '').replace(/\//g, '-')}-${hash}.tgz`
+  const remotePath = `${materializePluginsDir(spec.remoteDshHome)}/${tarballName}`
+  const writeRes = await exec(id, 'run', {
+    op: 'write-file',
+    path: remotePath,
+    contentBase64: bytes.toString('base64'),
+    sha256: sha256hex(bytes),
+  })
+  if (!writeRes.ok) return { ok: false, error: `materialize: write-file failed: ${writeRes.error}` }
+  const absolute = await materializeAbsolutePath(exec, spec, remotePath)
+  if (!absolute.ok) return absolute
+  const addRes = await exec(id, 'run', {
+    op: 'exec',
+    command: 'dsh',
+    argv: ['plugin', '--profile', 'web', 'add', `file:${absolute.path}`],
+  })
+  if (!addRes.ok) return { ok: false, error: `materialize: add failed: ${addRes.error}` }
+  return { ok: true, spec: `file:${absolute.path}`, remotePath }
+}
+
+/**
  * Materialize a local-path plugin and install it remotely (design 13 §4.6):
  * `pnpm pack` → write-file the tarball to `~/.dsh-chamber/plugins/<name>-<hash>.tgz`
  * (kept, never cleaned — pnpm persists `file:` deps against it) → resolve the
@@ -1893,11 +1938,14 @@ export async function materializeAndAdd(
   localDir: string,
   pack?: (dir: string) => { bytes: Buffer } | null | Promise<{ bytes: Buffer } | null>,
 ): Promise<MaterializeResult> {
-  const id = spec.id
   let name: string
   try {
     const pkg = JSON.parse(readFileSync(join(localDir, 'package.json'), 'utf8')) as Record<string, unknown>
-    if (typeof pkg.name !== 'string' || !PLUGIN_NAME_PATTERN.test(pkg.name)) {
+    // Name-length bound: the whitelist regex has no {max}; a ≤64 KiB manifest
+    // could otherwise declare a name that inflates the remote write path and
+    // the `file:` argv (charset-safe, but bounded for hygiene — the same
+    // MAX_PLUGIN_SPEC_CHARS ceiling the remove-side validation uses).
+    if (typeof pkg.name !== 'string' || pkg.name.length > MAX_PLUGIN_SPEC_CHARS || !PLUGIN_NAME_PATTERN.test(pkg.name)) {
       return { ok: false, error: 'materialize: invalid package name' }
     }
     name = pkg.name
@@ -1914,27 +1962,34 @@ export async function materializeAndAdd(
   }
   const packed = await (pack ?? packDirectory)(localDir)
   if (packed === null) return { ok: false, error: 'materialize: pnpm pack failed' }
-  const hash = sha256hex(packed.bytes).slice(0, 16)
-  // Scoped names (`@scope/name`) contain `/` — normalize for the tarball
-  // FILENAME whitelist (`[a-zA-Z0-9._-]+`, ssh-provider resolveWriteTarget).
-  const tarballName = `${name.replace(/^@/, '').replace(/\//g, '-')}-${hash}.tgz`
-  const remotePath = `${materializePluginsDir(spec.remoteDshHome)}/${tarballName}`
-  const writeRes = await exec(id, 'run', {
-    op: 'write-file',
-    path: remotePath,
-    contentBase64: packed.bytes.toString('base64'),
-    sha256: sha256hex(packed.bytes),
-  })
-  if (!writeRes.ok) return { ok: false, error: `materialize: write-file failed: ${writeRes.error}` }
-  const absolute = await materializeAbsolutePath(exec, spec, remotePath)
-  if (!absolute.ok) return absolute
-  const addRes = await exec(id, 'run', {
-    op: 'exec',
-    command: 'dsh',
-    argv: ['plugin', '--profile', 'web', 'add', `file:${absolute.path}`],
-  })
-  if (!addRes.ok) return { ok: false, error: `materialize: add failed: ${addRes.error}` }
-  return { ok: true, spec: `file:${absolute.path}`, remotePath }
+  return installRemoteTarball(exec, spec, name, packed.bytes)
+}
+
+/**
+ * Materialize a READY `.tgz` plugin archive (design 21 §10 archive-pick) and
+ * install it remotely: the archive was picked by the main process and its
+ * manifest already read (classifyPluginPick); the remote install tail is the
+ * same as the folder flow's (write-file → remote `$HOME` → `add file:`), but
+ * no local `pnpm pack` runs and no local package.json is consulted. The
+ * declared name is re-validated here (PLUGIN_NAME_PATTERN + reserved-domain
+ * deny) — the same single enforcement point the folder flow uses — and the
+ * archive bytes are capped at the remote write ceiling before any transfer.
+ */
+export async function materializeArchiveAndAdd(
+  exec: ExecFn,
+  spec: RemoteSpec,
+  archive: { name: string; bytes: Buffer },
+): Promise<MaterializeResult> {
+  if (typeof archive?.name !== 'string' || archive.name.length > MAX_PLUGIN_SPEC_CHARS || !PLUGIN_NAME_PATTERN.test(archive.name)) {
+    return { ok: false, error: 'materialize: invalid package name' }
+  }
+  if (!Buffer.isBuffer(archive?.bytes) || archive.bytes.length === 0) {
+    return { ok: false, error: 'materialize: the picked plugin archive is empty' }
+  }
+  if (isDeniedPluginName(archive.name)) {
+    return { ok: false, error: describeReservedNameRefusal([archive.name]) }
+  }
+  return installRemoteTarball(exec, spec, archive.name, archive.bytes)
 }
 
 // ============================================================================

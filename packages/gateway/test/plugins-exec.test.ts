@@ -133,10 +133,10 @@ test('scrubInstallEnv is a WHITELIST: only PATH/proxies survive; every ambient v
   }
   const pins = {
     DSH_HOME: '/state/dsh-home',
-    HOME: '/state/chamber-plugins/third-party/.pnpm-home',
     XDG_CACHE_HOME: '/state/chamber-plugins/third-party/.pnpm-cache',
     XDG_CONFIG_HOME: '/state/chamber-plugins/third-party/.pnpm-xdg',
     NPM_CONFIG_USERCONFIG: '/state/chamber-plugins/third-party/.npmrc-empty',
+    npm_config_userconfig: '/state/chamber-plugins/third-party/.npmrc-empty',
   }
   const result = scrubInstallEnv(source, pins)
 
@@ -152,11 +152,15 @@ test('scrubInstallEnv is a WHITELIST: only PATH/proxies survive; every ambient v
     'KEEP_ME']) {
     assert.equal(Object.hasOwn(result, key), false, `${key} must be dropped by the whitelist`)
   }
-  assert.equal(result.HOME, '/state/chamber-plugins/third-party/.pnpm-home', 'pin overrides/restores a dropped name')
+  // HOME is dropped and NOT restored: pinning HOME would move pnpm's default
+  // store away from the store the managed profile was provisioned against
+  // (pnpm 11 refuses every mutation on that mismatch — design 21 §10 ⑨).
+  assert.equal(Object.hasOwn(result, 'HOME'), false, 'HOME must stay absent so pnpm falls back to the passwd home store')
   assert.equal(result.DSH_HOME, '/state/dsh-home')
   assert.equal(result.XDG_CACHE_HOME, '/state/chamber-plugins/third-party/.pnpm-cache')
   assert.equal(result.XDG_CONFIG_HOME, '/state/chamber-plugins/third-party/.pnpm-xdg')
-  assert.equal(result.NPM_CONFIG_USERCONFIG, '/state/chamber-plugins/third-party/.npmrc-empty', 'pin restores the pinned name')
+  assert.equal(result.NPM_CONFIG_USERCONFIG, '/state/chamber-plugins/third-party/.npmrc-empty', 'upper-case pin restores the pinned name')
+  assert.equal(result.npm_config_userconfig, '/state/chamber-plugins/third-party/.npmrc-empty', 'lower-case pin restores the pinned name (pnpm 11 reads either casing)')
   assert.equal(result.UNSET_VAR, undefined)
 })
 
@@ -364,18 +368,21 @@ test('env discipline reaches the spawn: pins applied, DSH_GATEWAY_*/npm_* stripp
   const thirdParty = thirdPartyRoot(h.stateDir)
 
   assert.equal(captured.DSH_HOME, join(h.stateDir, 'dsh-home'))
-  assert.equal(captured.HOME, join(thirdParty, '.pnpm-home'))
+  // HOME stays absent (store alignment with the provisioned profile — the
+  // pnpm default store must never move, design 21 §10 ⑨).
+  assert.equal(Object.hasOwn(captured, 'HOME'), false, 'HOME is never pinned into the mutation env')
   assert.equal(captured.XDG_CACHE_HOME, join(thirdParty, '.pnpm-cache'))
   assert.equal(captured.XDG_CONFIG_HOME, join(thirdParty, '.pnpm-xdg'))
   assert.equal(captured.NPM_CONFIG_USERCONFIG, join(thirdParty, '.npmrc-empty'))
+  assert.equal(captured.npm_config_userconfig, join(thirdParty, '.npmrc-empty'), 'lower-case casing pinned too')
   for (const key of keys) {
     assert.equal(Object.hasOwn(captured, key), false, `${key} must be stripped from the child env`)
   }
   if (posix) {
-    assert.equal(mode(join(thirdParty, '.pnpm-home')), 0o700)
     assert.equal(mode(join(thirdParty, '.pnpm-cache')), 0o700)
     assert.equal(mode(join(thirdParty, '.pnpm-xdg')), 0o700)
     assert.equal(mode(join(thirdParty, '.npmrc-empty')), 0o600)
+    assert.equal(existsSync(join(thirdParty, '.pnpm-home')), false, '.pnpm-home is no longer created (store alignment, §10 ⑨)')
   }
   assert.equal(readFileSync(join(thirdParty, '.npmrc-empty'), 'utf8'), '', 'NPM_CONFIG_USERCONFIG points at an empty file')
 

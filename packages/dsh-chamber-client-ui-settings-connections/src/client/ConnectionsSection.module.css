@@ -1165,8 +1165,9 @@
 }
 
 /* ---- plugin add view (design 21 §6.6 add zone) ----
-   2026-12 UI 修订：spec 输入缩短并与安装同排；「从文件夹导入」outline 化并
-   上移同排（无分隔线）；添加区输入与 sm 按钮统一定高（--chamber-ctl-h）。 */
+   2026-12 UI 修订：spec 输入缩短并与安装同排；「从本地导入」（插件源码
+   文件夹或 .tgz 包，2026-09 archive-pick）outline 化并上移同排（无分隔
+   线）；添加区输入与 sm 按钮统一定高（--chamber-ctl-h）。 */
 
 .pluginAdd {
   display: flex;
@@ -1181,7 +1182,7 @@
   gap: 6px;
 }
 
-/* 安装排（spec 输入 + 安装 + 从文件夹导入）与搜索排共用的行容器。 */
+/* 安装排（spec 输入 + 安装 + 从本地导入）与搜索排共用的行容器。 */
 .pluginAddRow,
 .pluginSearchRow {
   display: flex;

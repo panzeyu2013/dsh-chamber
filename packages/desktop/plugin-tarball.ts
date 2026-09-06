@@ -1,7 +1,8 @@
 /**
- * Desktop plugin-source tarball builder + bounded tgz manifest reader
- * (design 21 §6.5, plan Phase 4.6 — `gateway_plugin_materialize`, folder
- * pick → tarball upload).
+ * Desktop plugin-source tarball builder + bounded tgz manifest reader +
+ * picked-source classifier (design 21 §6.5/§10 archive-pick, plan Phase 4.6 —
+ * `gateway_plugin_materialize`; folder pick → tarball upload, or a ready
+ * `.tgz` plugin archive uploads verbatim).
  *
  * The gateway's `PUT /chamber/plugins/materialize` route accepts a raw gzip
  * tarball (≤ 32 MiB body, ≤ 4096 entries, ≤ 256 MiB unpacked — the caps this
@@ -434,10 +435,10 @@ function buildSync(
 }
 
 // ---------------------------------------------------------------------------
-// Bounded tgz manifest reader (roundtrip verification + future archive-pick
-// flows): gunzip + locate `package/package.json` (or a root `package.json`)
-// and read ≤ 64 KiB of its text. Null on any structural failure — never a
-// guessed manifest.
+// Bounded tgz manifest reader (roundtrip verification + archive-pick
+// classification, see below): gunzip + locate `package/package.json` (or a
+// root `package.json`) and read ≤ 64 KiB of its text. Null on any structural
+// failure — never a guessed manifest.
 // ---------------------------------------------------------------------------
 
 const TGZ_MANIFEST_CANDIDATES = ['package/package.json', 'package.json']
@@ -504,4 +505,87 @@ function parseTgzManifestText(text: string): TgzPackageManifest | null {
   const name = typeof record?.name === 'string' && record.name !== '' ? record.name : null
   const version = typeof record?.version === 'string' && record.version !== '' ? record.version : null
   return name === null || version === null ? null : { name, version }
+}
+
+// ---------------------------------------------------------------------------
+// Picked-source classification (design 21 archive-pick flows): the materialize
+// pickers (local / ssh / gateway) accept a plugin SOURCE FOLDER (the existing
+// folder import) or a ready `.tgz` plugin ARCHIVE in npm-pack layout (e.g. a
+// `npm pack` / registry download of an already-built plugin — the exact
+// archive shape this module's builder emits and the gateway upload route
+// stages). Structural checks only: extension, archive cap, and a parseable
+// package manifest. Name/version whitelist + reserved-domain enforcement stay
+// in each flow (ssh/gateway validate before the remote install; the LOCAL dsh
+// CLI is the local authority) — the same split the folder flows already use.
+// ---------------------------------------------------------------------------
+
+/** Archive filename suffix a pick must carry to be treated as a plugin
+ *  package: npm-pack archives are always `<name>-<version>.tgz`. */
+export const PLUGIN_PICK_ARCHIVE_SUFFIX = '.tgz'
+
+/** A main-process-picked local plugin source (design 21 archive-pick):
+ *  `dir` = plugin source folder (packed by the flow), `tgz` = ready plugin
+ *  archive with its bounded manifest projection and capped bytes. */
+export type PickedPluginSource =
+  | { kind: 'dir'; path: string }
+  | { kind: 'tgz'; path: string; name: string; version: string; bytes: Buffer }
+
+export type PluginPickClassification =
+  | { ok: true; source: PickedPluginSource }
+  | { ok: false; error: string }
+
+/**
+ * Classify a main-process-picked path for the plugin materialize flows.
+ * A directory becomes `{ kind: 'dir' }` (existing semantics). A file must
+ * carry the `.tgz` suffix and be ≤ TARBALL_MAX_ARCHIVE_BYTES; its bytes are
+ * read and its package manifest located with the bounded reader — a file
+ * that is not a gzip/tar stream or has no parseable `package.json` entry is
+ * an honest error, never a guessed name/version. Errors are loud and carry
+ * the picked file's basename only (main never echoes the full local path of
+ * a refused pick back into the renderer).
+ */
+export function classifyPluginPick(pickedPath: string): PluginPickClassification {
+  if (typeof pickedPath !== 'string' || pickedPath === '') {
+    return { ok: false, error: 'no plugin source was picked' }
+  }
+  let stat: ReturnType<typeof statSync>
+  try {
+    stat = statSync(pickedPath)
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    return {
+      ok: false,
+      error: code === 'ENOENT'
+        ? 'the picked path no longer exists — re-run the import pick'
+        : 'the picked path cannot be read — re-run the import pick',
+    }
+  }
+  if (stat.isDirectory()) return { ok: true, source: { kind: 'dir', path: pickedPath } }
+  if (!stat.isFile()) {
+    return { ok: false, error: 'the picked path is not a regular file or directory' }
+  }
+  if (!pickedPath.toLowerCase().endsWith(PLUGIN_PICK_ARCHIVE_SUFFIX)) {
+    return { ok: false, error: 'pick a plugin source folder or a .tgz plugin archive' }
+  }
+  const basename = pickedPath.split(/[\\/]/u).pop() ?? pickedPath
+  if (stat.size > TARBALL_MAX_ARCHIVE_BYTES) {
+    return { ok: false, error: `${basename} is ${stat.size} bytes — beyond the ${TARBALL_MAX_ARCHIVE_BYTES}-byte plugin archive cap` }
+  }
+  let bytes: Buffer
+  try {
+    bytes = readFileSync(pickedPath)
+  } catch {
+    return { ok: false, error: `cannot read ${basename}` }
+  }
+  // Post-read re-check (the stat above is a pre-read gate): a locally racing
+  // replacement that grows the file between stat and read must never slip an
+  // oversized archive past the cap into the upload/install chain.
+  if (bytes.length > TARBALL_MAX_ARCHIVE_BYTES) {
+    return { ok: false, error: `${basename} is ${bytes.length} bytes after reading — beyond the ${TARBALL_MAX_ARCHIVE_BYTES}-byte plugin archive cap` }
+  }
+  const manifest = listTgzManifest(bytes)
+  if (manifest === null) {
+    return { ok: false, error: `${basename} is not a valid plugin archive — no parseable package.json manifest (npm-pack layout)` }
+  }
+  return { ok: true, source: { kind: 'tgz', path: pickedPath, name: manifest.name, version: manifest.version, bytes } }
 }

@@ -45,7 +45,7 @@ import { applyWindowsAclTightening } from './win-acl.ts';
 import { configureGatewaySecretStore, configureGatewaySessionProvider, gatewayChamberApplyBatch, gatewayChamberMaterialize, gatewayPasswordValidationError, gatewayProvider, gatewaySecretStorageMode, gatewayTokenValidationError, getGatewayPassword, getGatewayToken, setGatewayPassword, setGatewayToken, setInstanceSecrets, syncGatewayChamberPlugins } from './gateway-provider.ts';
 import type { LocalChamberHostPackage } from './gateway-provider.ts';
 import { getGatewaySyncRegistration, setGatewaySyncRegistration } from './gateway-sync-registry.ts';
-import { buildPluginTarball } from './plugin-tarball.ts';
+import { buildPluginTarball, classifyPluginPick } from './plugin-tarball.ts';
 import { buildApplyConfirmMessage, validateApplyPayload } from './gateway-ipc-shared.ts';
 import { createGatewaySessionManager, gatewayRegistrationAuthHeaders, gatewaySessionScopeForConnection } from './gateway-session.ts';
 import { createGatewaySessionRefresh, gatewaySessionOriginForUrl, gatewayTunnelAuthority } from './gateway-session-refresh.ts';
@@ -170,6 +170,7 @@ import {
   GIT_WORKTREE_PACKAGE_NAME,
   localPluginList,
   materializeAndAdd,
+  materializeArchiveAndAdd,
   redactRemotePluginManifest,
   remoteHome,
   remotePluginList,
@@ -313,6 +314,38 @@ function proxyTransport(transport: TransportInstanceSpec['transport']): 'ssh' | 
   if (transport === 'ssh') return 'ssh';
   if (transport === 'http') return 'http';
   throw new TypeError(`unsupported proxy transport: ${transport}`);
+}
+
+/** Outcome of the plugin-source picker (design 21 §10 archive-pick). */
+type PluginSourcePick =
+  | { status: 'cancelled' }
+  | { status: 'picked'; path: string };
+
+/**
+ * The shared plugin-source picker for the materialize flows (local / ssh /
+ * gateway): a plugin SOURCE FOLDER or a ready `.tgz` plugin archive. The
+ * dialog runs in the main process (pick-only discipline — the renderer can
+ * never name a local path, design 13 §5.8 hardening); the picked path is
+ * classified by classifyPluginPick in the caller. macOS NSOpenPanel can
+ * offer files AND folders in one dialog (openFile + openDirectory);
+ * Windows (FOS_PICKFOLDERS) and GTK file choosers cannot mix both modes, so
+ * non-macOS keeps the folder-only dialog and the archive pick is macOS-v1
+ * (a macOS-first platform limitation; Windows/Linux legs would need a
+ * mode-switching dialog — see design 21 §10 ⑧, tracked with design 22/23).
+ */
+async function pickPluginSource(mainWindow: BrowserWindow): Promise<PluginSourcePick> {
+  const combined = process.platform === 'darwin';
+  const picked = await dialog.showOpenDialog(mainWindow, {
+    properties: combined ? ['openFile', 'openDirectory'] : ['openDirectory'],
+    // The extension filter only governs FILE selection (folders stay
+    // selectable) — on macOS it is what makes a non-.tgz file clearly
+    // unpickable in the same dialog.
+    filters: combined ? [{ name: 'dsh plugin archives', extensions: ['tgz'] }] : undefined,
+    buttonLabel: 'Import',
+    title: 'Import a dsh plugin — source folder or .tgz archive',
+  });
+  if (picked.canceled || picked.filePaths.length === 0) return { status: 'cancelled' };
+  return { status: 'picked', path: picked.filePaths[0] };
 }
 
 function resolveBuiltinDshWorkspace(): string | null {
@@ -3519,15 +3552,16 @@ if (!gotTheLock) {
         return { ok: false as const, error: `gateway plugin apply failed: ${sanitizeErrorText(describeUnknownError(error))}` };
       }
     }));
-    // Gateway folder materialize (design 21 §6.5, plan Phase 4.6): PICK-ONLY —
-    // the folder picker runs here in the main process, so a compromised
-    // renderer can never drive the pack/upload surface to an arbitrary local
-    // directory (the same hardening as the ssh materialize_add_pick path).
-    // No separate confirmation dialog is needed: choosing the folder IS the
-    // user intent (design 21 §6.5, pick-only per design). The picked folder
-    // is packed into a plugin tgz in the main process (bounded caps), its
-    // package.json name/version become the x-plugin-name/x-plugin-version
-    // headers, and the upload rides the REGISTERED transport origin.
+    // Gateway local materialize (design 21 §6.5/§10 ⑧ archive-pick): PICK-ONLY —
+    // the picker runs here in the main process, so a compromised renderer can
+    // never drive the pack/upload surface to an arbitrary local path (the same
+    // hardening as the ssh materialize_add_pick path). No separate confirmation
+    // dialog is needed: choosing the local source IS the user intent (design 21
+    // §6.5, pick-only per design). A picked SOURCE FOLDER is packed into a
+    // plugin tgz in the main process (bounded caps); a picked .tgz archive
+    // uploads verbatim. Either way the plugin package.json name/version become
+    // the x-plugin-name/x-plugin-version headers, and the upload rides the
+    // REGISTERED transport origin.
     ipcMain.handle(IPC_CHANNELS.GATEWAY_PLUGIN_MATERIALIZE, trustedIpc(async ({ id }) => {
       if (typeof id !== 'string' || !INSTANCE_ID_PATTERN.test(id)) {
         return { ok: false as const, error: 'invalid or unknown instance id' };
@@ -3542,28 +3576,52 @@ if (!gotTheLock) {
       if (instance === undefined || instance.kind !== 'gateway') {
         return { ok: false as const, error: 'gateway instance not found' };
       }
-      const picked = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] });
-      if (picked.canceled || picked.filePaths.length === 0) return { ok: true as const, cancelled: true };
+      // Pick-only (design 21 §6.5): the picker runs here in the main process,
+      // so a compromised renderer can never drive the upload surface to an
+      // arbitrary local path. The pick may be a plugin SOURCE FOLDER or a
+      // ready .tgz plugin archive (design 21 §10 archive-pick).
+      const picked = await pickPluginSource(mainWindow);
+      if (picked.status === 'cancelled') return { ok: true as const, cancelled: true };
       // Post-pick re-check: the user browsed for a while — the registration
       // and ready phase must still hold before any upload (the same
       // discipline as the ssh picker's ownsRemoteTarget re-check).
       const liveReg = getGatewaySyncRegistration(id);
       if (liveReg === undefined || sm.status(id)?.phase !== 'ready') {
-        return { ok: false as const, error: 'gateway connection changed while the folder picker was open' };
+        return { ok: false as const, error: 'gateway connection changed while the plugin picker was open' };
       }
       try {
-        const built = await buildPluginTarball(picked.filePaths[0]);
-        if (!built.manifest.ok) {
-          return { ok: false as const, error: sanitizeErrorText(built.manifest.error) };
+        const classified = classifyPluginPick(picked.path);
+        if (!classified.ok) {
+          return { ok: false as const, error: sanitizeErrorText(classified.error) };
+        }
+        let tarball: Buffer;
+        let name: string;
+        let version: string;
+        if (classified.source.kind === 'dir') {
+          const built = await buildPluginTarball(classified.source.path);
+          if (!built.manifest.ok) {
+            return { ok: false as const, error: sanitizeErrorText(built.manifest.error) };
+          }
+          tarball = built.buffer;
+          name = built.manifest.name;
+          version = built.manifest.version;
+        } else {
+          // A ready npm-pack archive uploads verbatim — no rebuild. Its
+          // name/version come from the archive's own manifest (read by the
+          // bounded reader in classifyPluginPick) and are re-validated by
+          // gatewayChamberMaterialize before any byte is sent.
+          tarball = classified.source.bytes;
+          name = classified.source.name;
+          version = classified.source.version;
         }
         const result = await gatewayChamberMaterialize({
           id,
           url: liveReg.url,
           headers: liveReg.headers,
           spkiPin: liveReg.spkiPin,
-          tarball: built.buffer,
-          name: built.manifest.name,
-          version: built.manifest.version,
+          tarball,
+          name,
+          version,
           authority: instance.transport === 'ssh' ? gatewayTunnelAuthority(instance.remotePort) : undefined,
         });
         return result.ok
@@ -3645,12 +3703,12 @@ if (!gotTheLock) {
 
     // Host-graph seed + materialize + local plugin exec (design 13 M4): the M2
     // orchestration functions that were implemented but not yet wired. Seed
-    // installs module A onto the remote (09 遗留 1); materialize packs a local
-    // plugin dir and installs it remotely — the ADD view goes through
-    // materialize_add_pick (folder picker in MAIN, pick-only), the sync view
-    // through materialize_add (dir resolved from the local manifest, validated
-    // here as absolute + directory); local add/remove run `dsh plugin` against
-    // the LOCAL dsh home (05 §5.1).
+    // installs module A onto the remote (09 遗留 1); materialize installs a
+    // local plugin source (folder or .tgz archive) remotely — the ADD view
+    // goes through materialize_add_pick (picker in MAIN, pick-only), the sync
+    // view through materialize_add (dir resolved from the local manifest,
+    // validated here as absolute + directory); local add/remove run `dsh
+    // plugin` against the LOCAL dsh home (05 §5.1).
     ipcMain.handle(IPC_CHANNELS.SSH_SEED_HOST_GRAPH, trustedIpc(async ({ id }) => {
       const target = findRemoteTarget(id);
       if (target === null) return { ok: false, error: 'ssh instance not found' };
@@ -3702,49 +3760,76 @@ if (!gotTheLock) {
         () => materializeAndAdd(scopedExecForTarget(target), target.spec, resolved.path),
       );
     }));
-    // materialize_add_pick (add view): PICK-ONLY — the folder picker runs here in
-    // the main process, so a compromised renderer can never drive the pack surface
-    // to an arbitrary local directory (design 13 §5.8 hardening).
+    // materialize_add_pick (add view): PICK-ONLY — the picker runs here in
+    // the main process, so a compromised renderer can never drive the pack
+    // surface to an arbitrary local directory (design 13 §5.8 hardening).
+    // The pick may be a plugin SOURCE FOLDER or a ready .tgz plugin archive
+    // (design 21 §10 archive-pick): a folder is packed locally and uploaded;
+    // an archive uploads verbatim (no local pnpm pack runs).
     ipcMain.handle(IPC_CHANNELS.SSH_PLUGIN_MATERIALIZE_ADD_PICK, trustedIpc(async ({ id }) => {
       const target = findRemoteTarget(id);
       if (target === null) return { ok: false, error: 'ssh instance not found' };
       if (mainWindow === null || mainWindow.isDestroyed()) return { ok: false, error: 'no main window' };
-      const picked = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] });
-      if (picked.canceled || picked.filePaths.length === 0) return { ok: true, cancelled: true };
-      if (!ownsRemoteTarget(target)) return { ok: false, error: 'ssh instance changed while folder selection was open' };
+      const picked = await pickPluginSource(mainWindow);
+      if (picked.status === 'cancelled') return { ok: true, cancelled: true };
+      if (!ownsRemoteTarget(target)) return { ok: false, error: 'ssh instance changed while the plugin picker was open' };
+      const classified = classifyPluginPick(picked.path);
+      if (!classified.ok) return { ok: false, error: sanitizeErrorText(classified.error) };
+      // Narrow the source BEFORE the ownership closures — TypeScript resets
+      // property narrowing at closure boundaries, and the closure bodies must
+      // not re-check the kind.
+      const source = classified.source;
+      if (source.kind === 'dir') {
+        return runWithFinalOwnership(
+          () => ownsRemoteTarget(target),
+          () => materializeAndAdd(scopedExecForTarget(target), target.spec, source.path),
+        );
+      }
+      const archiveName = source.name;
+      const archiveBytes = source.bytes;
       return runWithFinalOwnership(
         () => ownsRemoteTarget(target),
-        () => materializeAndAdd(scopedExecForTarget(target), target.spec, picked.filePaths[0]),
+        () => materializeArchiveAndAdd(scopedExecForTarget(target), target.spec, {
+          name: archiveName,
+          bytes: archiveBytes,
+        }),
       );
     }));
     ipcMain.handle(IPC_CHANNELS.LOCAL_PLUGIN_ADD_FILE, trustedIpc(async () => {
       if (mainWindow === null || mainWindow.isDestroyed()) return { ok: false, error: 'no main window' };
-      const picked = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] });
-      if (picked.canceled || picked.filePaths.length === 0) return { ok: true, cancelled: true };
-      // Local same-machine folder install (design 13 §5.8 pick-only, design 21
-      // §10 defect ① fix): the folder was chosen through the MAIN-process
-      // picker, so the `file:` spec is main-chosen — pass allowFileSpec so
+      // Local same-machine install (design 13 §5.8 pick-only, design 21
+      // §10 defect ① fix + archive-pick): the path was chosen through the
+      // MAIN-process picker — a plugin SOURCE FOLDER or a ready .tgz plugin
+      // archive — so the `file:` spec is main-chosen; pass allowFileSpec so
       // runLocalDshPlugin admits it through isAllowedLocalFileSpec (absolute
       // POSIX/Windows-drive/UNC path, no control characters, ≤ 4096 chars —
       // nothing beyond the existing whitelist is relaxed). Every
       // renderer-submitted spec channel (LOCAL_PLUGIN_ADD below) still
       // refuses `file:` outright; no filesystem privilege boundary widens.
+      const picked = await pickPluginSource(mainWindow);
+      if (picked.status === 'cancelled') return { ok: true, cancelled: true };
+      // Structural pre-check (extension + archive cap + parseable manifest);
+      // the local dsh CLI remains the authority for name/version semantics,
+      // exactly as with folder picks.
+      const classified = classifyPluginPick(picked.path);
+      if (!classified.ok) return { ok: false, error: sanitizeErrorText(classified.error) };
       return runLocalPluginMutation('plugin:add-file', async (dshWorkspace) => {
-        // design 21 §10 缺陷① fix (plan 24 小项④): the main-process folder
-        // picker IS the sanctioned file: source — pass the capability flag so
+        // design 21 §10 缺陷① fix (plan 24 小项④): the main-process picker
+        // IS the sanctioned file: source — pass the capability flag so
         // the picked absolute path passes runLocalDshPlugin's gate (without it
         // every file: pick was refused as an invalid add spec).
-        const result = await runLocalDshPlugin(dshWorkspace, localDshHome, 'add', `file:${picked.filePaths[0]}`, { allowFileSpec: true });
+        const result = await runLocalDshPlugin(dshWorkspace, localDshHome, 'add', `file:${picked.path}`, { allowFileSpec: true });
         return result.ok ? { ok: true } : { ok: false, error: result.error ?? 'local add failed' };
       });
     }));
     ipcMain.handle(IPC_CHANNELS.LOCAL_PLUGIN_ADD, trustedIpc(async ({ spec: specArg }) => {
-      // `file:` imports must go through the main-process folder picker
-      // (desktop_local_plugin_add_file); this spec channel only accepts registry
-      // specs so a compromised renderer can never drive the local pack surface
-      // to an arbitrary directory (design 13 §5.8 hardening).
+      // `file:` imports must go through the main-process local import picker
+      // (desktop_local_plugin_add_file — a folder or a .tgz archive, design 21
+      // §10 ⑧); this spec channel only accepts registry specs so a compromised
+      // renderer can never drive the local install surface to an arbitrary
+      // path (design 13 §5.8 hardening).
       if (typeof specArg === 'string' && specArg.startsWith('file:')) {
-        return { ok: false, error: 'local file imports must use the folder picker' };
+        return { ok: false, error: 'local file imports must use the local import picker' };
       }
       // User confirmation (design 09 §4 v1 mitigation): installing a registry
       // package into the LOCAL profile creates a persistent execution surface

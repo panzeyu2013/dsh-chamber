@@ -174,7 +174,8 @@ export function pluginMaterializeAdd(id: string, name: string): Promise<SshMater
   return desktopSsh().plugin_materialize_add(id, name)
 }
 
-/** Pack a user-picked local plugin dir and install it remotely (pick-only). */
+/** Pack/upload a user-picked local plugin source (dir or .tgz archive,
+ *  design 21 §10 archive-pick) and install it remotely (pick-only). */
 export function pluginMaterializeAddPick(id: string): Promise<SshMaterializeResult> {
   return desktopSsh().plugin_materialize_add_pick(id)
 }
@@ -184,7 +185,8 @@ export function localPluginAdd(spec: string): Promise<SshLocalPluginExecIpcResul
   return desktopSsh().local_plugin_add(spec)
 }
 
-/** Pick a local folder and install it into the LOCAL dsh profile (pick-only). */
+/** Pick a local plugin source (folder or .tgz archive) and install it into
+ *  the LOCAL dsh profile (pick-only). */
 export function localPluginAddFile(): Promise<SshLocalPluginExecIpcResult> {
   return desktopSsh().local_plugin_add_file()
 }
@@ -265,10 +267,10 @@ export function gatewayPluginApply(id: string, input: GatewayPluginApplyInput): 
   return desktopSsh().gateway_plugin_apply(id, input)
 }
 
-/** Pick a local plugin-source folder in MAIN and upload it to a gateway
- *  instance (pick-only, design 21 §6.5): cancelled = the picker was
- *  dismissed; ok:true deferred = the gateway cached the install intent for
- *  the next ready edge (false = accepted onto the executor queue). */
+/** Pick a local plugin source (folder or .tgz archive) in MAIN and upload it
+ *  to a gateway instance (pick-only, design 21 §6.5/§10 ⑧): cancelled = the
+ *  picker was dismissed; ok:true deferred = the gateway cached the install
+ *  intent for the next ready edge (false = accepted onto the executor queue). */
 export function gatewayPluginMaterialize(id: string): Promise<GatewayPluginMaterializeIpcResult> {
   return desktopSsh().gateway_plugin_materialize(id)
 }

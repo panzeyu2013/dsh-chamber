@@ -40,6 +40,7 @@ import {
   MATERIALIZED_VALUE_MASK,
   materializeAbsolutePath,
   materializeAndAdd,
+  materializeArchiveAndAdd,
   materializePluginsDir,
   packageNameFromSpec,
   redactLocalPluginManifest,
@@ -1881,6 +1882,48 @@ test('materializeAndAdd: a write-file failure fails loud before the add', async 
   const result = await materializeAndAdd(exec, SEED_SPEC, pkgDir, () => ({ bytes: Buffer.from('x') }))
   assert.equal(result.ok, false)
   if (!result.ok) assert.match(result.error, /write-file failed/)
+})
+
+// materializeArchiveAndAdd (design 21 §10 archive-pick): a READY .tgz uploads
+// verbatim — no local package.json read, no pnpm pack — through the same
+// write-file → remote $HOME → add file: tail.
+test('materializeArchiveAndAdd: archive bytes → write-file → remote $HOME → add file:<absolute>', async () => {
+  const tarball = Buffer.from([0x1f, 0x8b, 0x08, 0x00, 0xff, 0xfe, 0x00, 0x01])
+  const remote = makeMaterializeExec()
+  const result = await materializeArchiveAndAdd(remote.exec, SEED_SPEC, { name: 'pkg', bytes: tarball })
+  assert.equal(result.ok, true)
+  if (!result.ok) return
+  assert.equal(remote.written.length, 1)
+  const writePath = remote.written[0].path
+  assert.ok(writePath.startsWith('~/.dsh-chamber/plugins/pkg-'), `name-derived filename, got ${writePath}`)
+  assert.ok(writePath.endsWith('.tgz'))
+  assert.ok(remote.written[0].bytes.equals(tarball), 'the archive bytes are preserved verbatim (no repack)')
+  const addCall = remote.calls.find(entry => entry.op === 'exec' && entry.argv?.[0] === 'plugin')
+  assert.ok(addCall !== undefined)
+  const addSpec = addCall.argv?.[4] ?? ''
+  assert.match(addSpec, /^file:\/home\/u\/\.dsh-chamber\/plugins\/pkg-[0-9a-f]{16}\.tgz$/)
+  assert.equal(result.remotePath, writePath)
+  assert.equal(result.spec, addSpec)
+})
+
+test('materializeArchiveAndAdd: reserved names are refused before any exec; no pnpm pack ever runs', async () => {
+  const exec: ExecFn = async () => err('unexpected exec — a refused archive must not touch the remote')
+  const bytes = Buffer.from([0x1f, 0x8b, 0x08])
+  for (const name of ['@dsh-chamber/taken', '@deepseek-ai/taken', 'bad name!', '']) {
+    const result = await materializeArchiveAndAdd(exec, SEED_SPEC, { name, bytes })
+    assert.equal(result.ok, false, name)
+    if (!result.ok) assert.match(result.error, /invalid package name|reserved/)
+  }
+})
+
+test('materializeArchiveAndAdd: an oversized or empty archive is refused before any exec', async () => {
+  const exec: ExecFn = async () => err('unexpected exec')
+  const empty = await materializeArchiveAndAdd(exec, SEED_SPEC, { name: 'pkg', bytes: Buffer.alloc(0) })
+  assert.equal(empty.ok, false)
+  if (!empty.ok) assert.match(empty.error, /empty/)
+  const oversized = await materializeArchiveAndAdd(exec, SEED_SPEC, { name: 'pkg', bytes: Buffer.alloc(50 * 1024 * 1024 + 1) })
+  assert.equal(oversized.ok, false)
+  if (!oversized.ok) assert.match(oversized.error, /remote write cap/)
 })
 test('local plugin writer reaper fail-closes on PID identity reuse', async () => {
   const root = tempDir()
