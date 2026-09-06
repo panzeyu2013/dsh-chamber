@@ -169,6 +169,52 @@ function mintRpcId(): string {
     : `rpc-${Date.now()}-${Math.random().toString(36).slice(2)}`
 }
 
+/** 404-body read cap (review follow-up F10): the domain-missing
+ *  discrimination only needs the tiny `instance_not_found` code JSON. */
+const NOT_FOUND_BODY_CAP_BYTES = 4 * 1024
+
+/**
+ * Bounded 404-body probe for the design 24 §5 discrimination (review
+ * follow-up F10): read at most NOT_FOUND_BODY_CAP_BYTES and parse it as JSON.
+ * Oversized or unparseable bodies resolve null — the caller keeps the
+ * current conservative outcome (domain-missing throw) instead of trusting a
+ * body it never needed in full. (The pre-existing 503 and 2xx envelope reads
+ * stay unbounded — out of scope for this fix.)
+ */
+async function readNotFoundBody(response: Response): Promise<{ code?: string } | null> {
+  try {
+    const body = response.body
+    if (body === null) return null
+    const reader = body.getReader()
+    const chunks: Uint8Array[] = []
+    let received = 0
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      received += value.byteLength
+      if (received > NOT_FOUND_BODY_CAP_BYTES) {
+        // Give up past the cap: cancel the rest of the stream and keep the
+        // conservative null outcome.
+        void reader.cancel().catch(() => {})
+        return null
+      }
+      chunks.push(value)
+    }
+    const bytes = new Uint8Array(received)
+    let offset = 0
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset)
+      offset += chunk.byteLength
+    }
+    const parsed: unknown = JSON.parse(new TextDecoder().decode(bytes))
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+    const code = (parsed as { code?: unknown }).code
+    return { code: typeof code === 'string' ? code : undefined }
+  } catch {
+    return null
+  }
+}
+
 /**
  * HTTP carrier with the per-instance proxy prefix injected before every api
  * path. One unary `call(endpoint, payload, signal)` posts the new wire
@@ -218,14 +264,13 @@ class InstanceApiClient {
     // Design 24 §5: with the opt-in flag, a 404 that is NOT the control
     // plane's own unknown-instance answer is a chamber host domain that the
     // runtime tree does not mount (missing/old host package) — a distinct
-    // error class so the UI can project the honest recovery message.
+    // error class so the UI can project the honest recovery message. The
+    // body is read BOUNDED (review follow-up F10): the discrimination only
+    // needs the tiny `instance_not_found` code JSON, so an oversized or
+    // unparseable body resolves null and keeps this conservative outcome
+    // (domain-missing throw).
     if (response.status === 404 && options.notFoundAsDomainMissing === true) {
-      let payload404: { code?: string } | null = null
-      try {
-        payload404 = await response.json()
-      } catch {
-        payload404 = null
-      }
+      const payload404 = await readNotFoundBody(response)
       if (payload404?.code !== 'instance_not_found') {
         throw new InstanceDomainMissingError(
           '该实例未挂载 chamber 归档清理域：宿主包同步/seed 后需重启 dsh 生效',
@@ -728,19 +773,38 @@ function looksNoResponse(error: unknown): boolean {
  * silently decode into empty counts (git-api parity). The thrown message
  * keeps the `${code}: ${message}` shape so UI classifiers (busy prefix…)
  * and existing callers behave identically to RPC-level failures.
+ *
+ * FAIL-CLOSED SHAPE CONTRACT (review follow-up F1): the nested carrier must
+ * be an object carrying a boolean `ok`, and a nested `ok:true` must carry an
+ * OBJECT `value` (for these two endpoints the domain value is always an
+ * object). Every other nested shape — carrier absent or not an object,
+ * `ok` not a boolean, `ok:true` without an object value — is a malformed
+ * domain answer and THROWS loud (zh, hardcoded inline like the file's other
+ * strings), never silently decoding into zero counts / empty purge results
+ * (host-probe accept-semantics and git-api fail-closed parity).
  */
 function decodeDomainResult<T>(result: UnaryResult<any>): { ok: true; value: T } {
   // callAndThrow already refused ok:false answers — but its static type keeps
   // the union, so read the value through the ok:true branch explicitly.
   const rpcValue = (result as { ok: true; value?: unknown }).value
   const carrier = (rpcValue ?? null) as Record<string, unknown> | null
-  if (carrier !== null && typeof carrier === 'object' && carrier.ok === false) {
+  if (carrier === null || typeof carrier !== 'object' || Array.isArray(carrier)) {
+    throw new Error('归档清理域返回了畸形结果：域结果载体缺失或不是对象')
+  }
+  if (typeof carrier.ok !== 'boolean') {
+    throw new Error('归档清理域返回了畸形结果：ok 不是布尔值')
+  }
+  if (carrier.ok === false) {
     const error = (carrier.error ?? null) as Record<string, unknown> | null
     const code = typeof error?.code === 'string' ? error.code : 'unknown'
     const message = typeof error?.message === 'string' ? error.message : '未知错误'
     throw new Error(`${code}: ${message}`)
   }
-  return { ok: true, value: (carrier?.value ?? undefined) as T }
+  const domainValue = carrier.value
+  if (domainValue === null || typeof domainValue !== 'object' || Array.isArray(domainValue)) {
+    throw new Error('归档清理域返回了畸形结果：ok:true 但 value 不是对象')
+  }
+  return { ok: true, value: domainValue as T }
 }
 
 export async function previewArchiveCleanup(client: InstanceApiClient): Promise<ArchiveCleanupPreview> {

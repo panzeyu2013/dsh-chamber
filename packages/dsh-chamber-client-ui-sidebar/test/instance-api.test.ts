@@ -183,6 +183,43 @@ test('archiveCleanup business failures decode the NESTED domain carrier (securit
   })
 })
 
+test('malformed nested domain carriers FAIL LOUD — never decode into empty counts (review follow-up F1)', async () => {
+  // decodeDomainResult's fail-closed shape contract: the nested carrier must
+  // be an object carrying a boolean ok, and ok:true must carry an OBJECT
+  // value (preview/purge domain values are always objects). Every other
+  // shape — value 42 / null / missing, an array or absent carrier, non-
+  // boolean ok — throws the loud zh malformed-domain error on BOTH wrappers,
+  // never a silent zero-count preview or an empty purge result.
+  const resolveAs = (payload: unknown) => ({ ok: true as const, value: payload })
+  const shapes: Array<{ name: string; via: 'preview' | 'purge'; shape: unknown }> = [
+    { name: 'preview ok:true value is a number (42)', via: 'preview', shape: resolveAs({ ok: true as const, value: 42 }) },
+    { name: 'preview ok:true value is null', via: 'preview', shape: resolveAs({ ok: true as const, value: null }) },
+    { name: 'preview ok:true value is undefined', via: 'preview', shape: resolveAs({ ok: true as const, value: undefined }) },
+    { name: 'preview carrier is an array', via: 'preview', shape: resolveAs([{ ok: true, value: {} }]) },
+    { name: 'preview carrier absent (no value slot)', via: 'preview', shape: { ok: true as const } },
+    { name: 'preview ok is not boolean (string)', via: 'preview', shape: resolveAs({ ok: 'yes', value: {} }) },
+    { name: 'preview ok is not boolean (number)', via: 'preview', shape: resolveAs({ ok: 1, value: {} }) },
+    { name: 'purge ok:true value is a number (7)', via: 'purge', shape: resolveAs({ ok: true as const, value: 7 }) },
+    { name: 'purge carrier is an array', via: 'purge', shape: resolveAs([{ ok: true, value: {} }]) },
+    { name: 'purge carrier absent (no value slot)', via: 'purge', shape: { ok: true as const } },
+    { name: 'purge ok is not boolean', via: 'purge', shape: resolveAs({ ok: 'yes', value: {} }) },
+  ]
+  for (const c of shapes) {
+    const client = {
+      archiveCleanup: {
+        preview: async () => c.shape,
+        purge: async () => c.shape,
+      },
+    }
+    const run = c.via === 'preview'
+      ? () => previewArchiveCleanup(client as never)
+      : () => purgeArchivedSessions(client as never)
+    await assert.rejects(run, (error: unknown) => {
+      return error instanceof Error && error.message.startsWith('归档清理域返回了畸形结果')
+    }, c.name)
+  }
+})
+
 test('404 discrimination: instance_not_found stays a generic transport failure; other 404s map to domain missing', async () => {
   const originalFetch = globalThis.fetch
   const calls: Array<{ url: string; init?: RequestInit }> = []
@@ -223,6 +260,40 @@ test('404 discrimination: instance_not_found stays a generic transport failure; 
     const body = JSON.parse(String(calls[0]?.init?.body)) as { method?: string; payload?: unknown }
     assert.equal(body.method, 'archiveCleanup/preview')
     assert.deepEqual(body.payload, { args: {} })
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('404 discrimination: oversized 404 bodies stay safe under the bounded read (review follow-up F10)', async () => {
+  const originalFetch = globalThis.fetch
+  try {
+    // A body far beyond the 4 KiB cap is never fully consumed: the bounded
+    // probe resolves null and the branch keeps its conservative domain-
+    // missing throw — no crash, no misread of a huge page.
+    const oversized = 'x'.repeat(64 * 1024)
+    const responses = [
+      // Even an oversized body that WOULD carry instance_not_found past the
+      // cap is not trusted — the discrimination only reads a tiny code JSON.
+      new Response(JSON.stringify({ code: 'instance_not_found', error: oversized }), {
+        status: 404,
+        headers: { 'content-type': 'application/json' },
+      }),
+      new Response(oversized, { status: 404 }),
+    ]
+    globalThis.fetch = (async () => responses.shift() as Response) as typeof fetch
+    const client = getInstanceClient('local')
+    // Both oversized shapes fall to the conservative domain-missing outcome
+    // (payload404 null → domain-missing throw) instead of crashing or
+    // resolving an empty success.
+    await assert.rejects(
+      () => client.archiveCleanup.preview({}),
+      (error: unknown) => isInstanceDomainMissing(error),
+    )
+    await assert.rejects(
+      () => client.archiveCleanup.preview({}),
+      (error: unknown) => isInstanceDomainMissing(error),
+    )
   } finally {
     globalThis.fetch = originalFetch
   }

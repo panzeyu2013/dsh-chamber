@@ -955,6 +955,21 @@ export function SidebarRoot({
   const [purgeInFlight, setPurgeInFlight] = useState<Record<string, 'preview' | 'purge'>>({})
   const [cleanupNotes, setCleanupNotes] = useState<Record<string, string>>({})
 
+  // Design 24 (review follow-up F9): mounted guard for the purge flow's async
+  // continuations. A preview/purge can outlive this tree (ctx close / runtime
+  // restart while the wire call is in flight), and the continuations must not
+  // run the three purge state setters after unmount — benign under React 18
+  // today, but undocumented. The unmount cleanup flips the ref; every
+  // post-await write below checks it. chamberBridge.requestRefresh is NOT
+  // gated here: its App-side consumers are global/generation-fenced (the App
+  // layer owns refresh fan-out per instance, not this tree's state), and the
+  // host purge may still have completed — a live App generation should pull.
+  const disposedRef = useRef(false)
+  useEffect(() => {
+    disposedRef.current = false
+    return () => { disposedRef.current = true }
+  }, [])
+
   const runAction = (key: string, action: () => Promise<void>): void => {
     setRowErrors((prev) => {
       const next = { ...prev }
@@ -1095,6 +1110,11 @@ export function SidebarRoot({
     void (async () => {
       try {
         const preview = await previewArchiveCleanup(getInstanceClient(server.id))
+        // F9 (review follow-up): the tree may have unmounted while the wire
+        // call was in flight (ctx close / runtime restart) — skip every state
+        // write AND the confirm on a dead tree. The liveness re-check below
+        // covers disconnects; this covers unmount.
+        if (disposedRef.current) return
         // Re-check liveness after the async preview (never confirm stale).
         // aggregateError no longer gates (E-m2): it only reflects the list
         // snapshot; a succeeded preview is itself wire-health proof — gating
@@ -1128,7 +1148,13 @@ export function SidebarRoot({
         if (!window.confirm(baseConfirm + skippedSuffix)) return
         setPurgeInFlight(prev => ({ ...prev, [server.id]: 'purge' }))
         const result = await purgeArchivedSessions(getInstanceClient(server.id))
+        // F9: the refresh is deliberately UNCONDITIONAL — even on a dead tree
+        // the host purge may have completed, and chamberBridge's App-side
+        // consumers are global/generation-fenced (a refresh is a global
+        // mutation-pull request for this instance, never this tree's state),
+        // so a late request is safe and possibly still wanted.
         chamberBridge.requestRefresh(server.id)
+        if (disposedRef.current) return
         // E-m3: write-time liveness check — nothing written after a
         // disconnect (the effect may have already run; stale messages must
         // not resurface on reconnect).
@@ -1156,6 +1182,7 @@ export function SidebarRoot({
         }
         if (lines.length > 0 && stillLive) setCleanupNotes(prev => ({ ...prev, [server.id]: lines.join(' ') }))
       } catch (error) {
+        if (disposedRef.current) return
         // E-m6: a second shell's busy refusal gets one friendly line.
         const message = error instanceof Error ? error.message : String(error)
         const friendly = message.startsWith('busy:')
@@ -1164,11 +1191,13 @@ export function SidebarRoot({
         const stillLive = serversRef.current.some(candidate => candidate.id === server.id && candidate.connected)
         if (stillLive) setRowErrors(prev => ({ ...prev, [key]: friendly }))
       } finally {
-        setPurgeInFlight(prev => {
-          const next = { ...prev }
-          delete next[server.id]
-          return next
-        })
+        if (!disposedRef.current) {
+          setPurgeInFlight(prev => {
+            const next = { ...prev }
+            delete next[server.id]
+            return next
+          })
+        }
       }
     })()
   }
@@ -1176,7 +1205,15 @@ export function SidebarRoot({
   // Design 24 §6: drop server-level cleanup errors/info when the source is
   // gone or disconnected (stale messages must not resurface after a
   // reconnect). The in-flight stage is also cleared — a reconnect starts a
-  // fresh flow and the host single-flight (busy) guards double purges.
+  // fresh flow. ACKNOWLEDGED WINDOW (review follow-up F9; design 24 §6 step-2
+  // / §8 accept it): a disconnect mid-flow clears the local in-flight marker
+  // while the HOST purge may still be running (client timeout ≠ host stop),
+  // so a reconnected shell can re-confirm and re-run a purge on top of that
+  // earlier run — the resulting reconnect double-confirm window is bounded by
+  // the host `busy` single-flight backstop (a concurrent second purge gets
+  // ok:false busy → the friendly E-m6 line) and by purge idempotency (an
+  // earlier run that already finished makes the rerun a safe no-op). No local
+  // serialization is attempted across reconnects by design.
   useEffect(() => {
     const liveIds = new Set(servers.filter(server => server.connected).map(server => server.id))
     setCleanupNotes(prev => {
@@ -2090,9 +2127,9 @@ export function SidebarRoot({
                       />
                     )}
                   </span>
-                  {/* chamber: header actions (sort menu + git + add-workspace
-                      `+` + archive-cleanup purge + per-source search) are
-                      hover-revealed like the session rows' actions: at rest the connection status occupies the
+                  {/* chamber: header actions (sort menu + add-workspace `+` +
+                      per-source search + archive-cleanup purge — design 24 §6)
+                      are hover-revealed like the session rows' actions: at rest the connection status occupies the
                       right side; hovering the header swaps in the icon cluster
                       (visibility swap, no reflow). While a search capsule is
                       open OR the sort menu is open the cluster stays visible
