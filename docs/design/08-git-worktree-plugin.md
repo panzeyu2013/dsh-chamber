@@ -371,12 +371,23 @@ subagent 复查的修复。除仓库特性外，前端形态与 OpenChamber 一�
   （worktree 组标签 muted 对等）——图标语言 + 墨色阶梯 + 会话行 26px 缩进
   构成三级视觉引导；组间距 2px→3px（组间分隔增强，行高 26px 防 flicker
   约束保持）。
-- **派生 workspace 的排序边界与项目分隔（用户决策 2026-08）**：flags 携带
-  `mainWorkspaceId`——派生 workspace **拖拽不能排到其主 checkout 之前**
-  （乐观序 clamp + 拖拽指示器在越界位置抑制，wire anchor 按 clamp 后顺序
-  推导）；**项目（repo 组）起始 workspace 的上间距加大**（3px→10px：
-  非 git workspace、主 checkout、或上一个 workspace 属于其它仓库的派生
-  workspace 视为项目起始），同仓库的派生组保持紧凑间距。
+- **仓库组拖拽边界（用户决策 2026-08；2026-12 补齐整组不变式）**：主
+  checkout 与同仓库派生 workspace 构成**连续家族**（main 居首、派生随
+  后；注册表顺序持久）。拖拽规则由**单一纯裁决器**
+  `shared/workspace-drag-order.ts` 实现——marker 渲染 / onDragOver 门 /
+  onDrop / 提交四处同源，单元测试见 `workspace-drag-order.test.ts`：
+  - 外部 workspace **不得落入连续家族的内部空隙**（after main / 两派生
+    之间等全部 blocked）；
+  - 派生 workspace 只能在**自己家族内**重排，且**绝对不得排到主 checkout
+    之前**——家族因旧数据已破损时该条仍生效（禁止加深破损；只有 main
+    的拖拽能把整组拉回合拢）；
+  - 拖动 **main = 整组搬迁**：乐观序直接采用裁决结果，wire 对每个成员
+    依次 `workspace.insertBefore` 同一锚点（成员序 = 块序，失败丢乐观
+    序并刷新收敛部分移动）；
+  - 列表**顶部落点**以显示序首行（override 感知、折叠感知）为界；
+  - 家族内外不存在按仓库分隔的 CSS 间距（各组一律
+    `.workspaceGroup` 4px 组距）——分组完全由顺序不变式表达，上述裁决器
+    即唯一防线。
 - **对话框调整（用户决策 2026-08）**：删除对话框移除长说明文字（会话/
   分支语义由勾选项与确认按钮承载），工作树路径颜色提为主色（原继承的
   透明墨色近不可见）；创建/删除对话框宽度 480px→560px；创建对话框移除
@@ -520,10 +531,11 @@ typecheck（含根）、verify:i18n、build:host-git（dist 重建且与 src 字
   有折叠钮可点，派生行不得被锁在隐藏态（git 快照随后重发布会去掉
   mainWorkspaceId 关联，窗口有界且自愈）。隐藏行不携带破坏性在途状态：
   git saga 进度/错误经 coordinator 源级条带浮现、sidebar 行错误展开后
-  原样恢复。派生行不得排到主 checkout 之前的拖拽钳制不变；**折叠态拖放锚
-  点**：派生行隐藏期间，任意可见行的 after 半区落点会跳过其后被隐藏的派
-  生行、锚到下一可见行（与标记/视觉一致，纯谓词复用保证视图与提交不漂
-  移）——想插到主行与派生行之间需先展开该组。未注册 worktree 块（Plan A）
+  原样恢复。拖拽边界见 §11.1 的整组裁决器（2026-12 起不再是一组 commit
+  侧 clamp）；**折叠态拖放锚点**：派生行隐藏期间，任意可见行的 after 半区
+  落点会跳过其后被隐藏的派生行、锚到下一可见行——裁决器 `hidden()` 走位
+  与渲染过滤共用 `hiddenByMainWorkspaceFold` 谓词，视图与提交不漂移；
+  想插到主行与派生行之间需先展开该组。未注册 worktree 块（Plan A）
   与主未注册（无主行可折叠）的派生行不受影响。
 - **行内动作揭示 pointer-safe（消除折叠行常驻动作图标）**：git occupant
   （主行「分支+」创建 / worktree 行删除）、计数徽标与**折叠字形交换**
