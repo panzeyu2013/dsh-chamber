@@ -13,10 +13,19 @@
  * existing generic proxy (AGENTS.md: host-native capabilities stay the host's
  * job; the control plane only attaches).
  *
+ * P4-2 (N6): the transport byte (URL join + client-request envelope + POST +
+ * body collection, bounded unary 30s) rides the shared kernel postUnary
+ * (`@dsh-chamber/dsh-client-ui-sidebar/shared`, wire-common.ts) — the SAME
+ * source copy the renderer bundles; the envelope/server-response
+ * classification ('plugin-inventory:' validation + snapshot ok-value shaping)
+ * and the 503 instance_unavailable / wrapWireError copies below stay local
+ * (the shared kernel deliberately performs no classification).
  * Self-contained on purpose (the package's loose-ambient typecheck pattern):
  * the wire types below are structural mirrors of the vendored
  * `@deepseek-ai/dsh-host-plugin-inventory` types; no dsh package import.
  */
+
+import { postUnary, type UnaryPostOutcome } from '@dsh-chamber/dsh-client-ui-sidebar/shared'
 
 /** Lifecycle state of an entry's root Fiber, or null when it has no live root Fiber. */
 export type PluginFiberPhase = 'pending' | 'loading' | 'active' | 'failed' | 'unloading' | null
@@ -184,43 +193,32 @@ function wrapWireError(error: unknown): Error {
  * @param sourceId - the proxy source id (`dsh-<id>` / `gateway-<id>`).
  */
 export async function loadPluginInventory(sourceId: string): Promise<PluginInventorySnapshot> {
-  // Bounded unary (official DEFAULT_TIMEOUT_MS): the control-plane proxy
-  // forwards without an upstream timeout, so a silently hung host would
-  // otherwise leave the view loading forever — fail loud instead.
-  const origin = typeof location !== 'undefined' ? location.origin : undefined
-  const base = origin !== undefined && origin !== 'null' ? origin : ''
-  const url = `${base}/api/i/${sourceId}/api/pluginInventory/list`
-  let response: Response
+  // Shared transport byte (P4-2, postUnary in wire-common.ts): bounded unary
+  // on the official 30s budget — the control-plane proxy forwards without an
+  // upstream timeout, so a silently hung host would otherwise leave the view
+  // loading forever — fail loud instead. The pre-migration bare
+  // crypto.randomUUID() rpcId stays explicit so its evaluation remains inside
+  // this try (a no-randomUUID environment folds the throw into the local wire
+  // error below, exactly as before). Transport rejections propagate raw.
+  let outcome: UnaryPostOutcome
   try {
-    response = await fetch(url, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        type: 'client-request',
-        rpcId: crypto.randomUUID(),
-        method: 'pluginInventory/list',
-        payload: { args: {} },
-      }),
-      signal: AbortSignal.timeout(30000),
+    outcome = await postUnary(`/api/i/${sourceId}`, 'pluginInventory/list', {}, {
+      rpcId: crypto.randomUUID(),
     })
   } catch (error) {
     throw wrapWireError(error)
   }
-  if (response.status === 503) {
-    let body: { code?: string; error?: string } | null = null
-    try {
-      body = await response.json()
-    } catch {
-      body = null
-    }
+  if (outcome.status === 503) {
+    const body = outcome.body as { code?: string; error?: string } | null
     if (body?.code === 'instance_unavailable') {
       throw new Error(`实例未就绪：${body.error ?? '实例尚未就绪'}`)
     }
   }
-  if (!response.ok) {
-    throw wrapWireError(new Error(`HTTP ${response.status}`))
+  if (!outcome.ok) {
+    throw wrapWireError(new Error(`HTTP ${outcome.status}`))
   }
-  const result = parseRemoteResult(await response.json())
+  if (outcome.jsonError !== undefined) throw outcome.jsonError
+  const result = parseRemoteResult(outcome.body)
   if (!result.ok) {
     throw new Error(`pluginInventory/list failed: ${result.error.code}: ${result.error.message}`)
   }

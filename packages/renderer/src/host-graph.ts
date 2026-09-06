@@ -28,10 +28,28 @@
  * `WebBootGraph` are the authoritative shapes). The plugin-graph diagnostic
  * types are the chamber shared face (sidebar shared/aggregate-store.ts, A4
  * single source) — imported below and re-exported, never re-declared.
+ *
+ * P4-2 (N6): the shared transport byte of fetchHostGraph — URL join +
+ * client-request envelope + POST + body collection, bounded unary 30s — rides
+ * the shared kernel postUnary (sidebar shared/wire-common.ts), imported HERE
+ * by real-source relative path rather than the
+ * '@dsh-chamber/dsh-client-ui-sidebar/shared' specifier: the renderer has no
+ * install-tree copy of the sidebar package, and its plain-node tests
+ * (host-graph.test.ts, no module loader) must resolve the real module without
+ * a bundler. Specifier imports from other renderer files resolve to the same
+ * real source through the root tsconfig paths added in P4-4 (the former
+ * vendor-modules.d.ts ambient overlay was deleted in the same step — no
+ * ambient table is involved any more). Every status/envelope classification
+ * below stays local — the envelope contract source remains
+ * packages/control-plane/src/rpc-envelope.ts (the browser cannot import that
+ * Node module; the client-request half is now built by the shared kernel).
  */
 
 import { CHAMBER_COVERED_IDS } from './chamber-covered.ts'
 import type { PluginGraphDiagnostic, PluginGraphDiagnosticState } from '@dsh-chamber/dsh-client-ui-sidebar/shared'
+import {
+  classifyGraphChannelFailure, postUnary, type UnaryPostOutcome,
+} from '../../dsh-chamber-client-ui-sidebar/src/shared/wire-common.ts'
 
 /** Re-exported for existing consumers (the type lives in the chamber shared face). */
 export type { PluginGraphDiagnostic, PluginGraphDiagnosticState }
@@ -87,14 +105,12 @@ interface HostGraphEnvelope {
 // The client-request / server-response envelope shape is AUTHORITATIVE in
 // the control-plane Node package (packages/control-plane/src/rpc-envelope.ts,
 // A2 cross-package protocol single-sourcing) — this renderer (browser-side)
-// cannot import a Node package, so the envelope is hand-built here to the
-// same wire shape; any change to the shared contract must land in
-// rpc-envelope.ts first and be mirrored here (the desktop main-process
-// probes consume the shared module directly through
-// packages/desktop/control-plane-module.ts).
-
-/** Bounded unary (mirror of bridge-api's 30s): a silently hung host must not wedge a boot. */
-const GRAPH_TIMEOUT_MS = 30000
+// cannot import a Node package (the desktop main-process probes consume the
+// shared module directly through packages/desktop/control-plane-module.ts),
+// so the client-request half is built by the shared browser kernel
+// (wire-common.ts postUnary, P4-2) and the server-response classification
+// below stays local; any change to the shared contract must land in
+// rpc-envelope.ts first and be mirrored there.
 
 /** One transport failure, folded with an honest prefix (proxy honesty, design 03 §3.3). */
 function wrapGraphError(error: unknown): Error {
@@ -124,53 +140,39 @@ class HostGraphChannelError extends Error {
  * hazard, not a candidate for guesswork).
  */
 export async function fetchHostGraph(basePath: string): Promise<HostGraphRow[] | null> {
-  const origin = typeof location !== 'undefined' ? location.origin : undefined
-  const base = origin !== undefined && origin !== 'null' ? origin : ''
-  const url = `${base}${basePath}/api/clientGraph/graph`
-  let response: Response
+  // Shared transport byte (P4-2): URL join + client-request envelope + POST +
+  // body collection with the bounded-unary 30s budget, postUnary in
+  // wire-common.ts; the pre-migration bare crypto.randomUUID() rpcId is kept
+  // explicit so its evaluation stays inside this try (a no-randomUUID
+  // environment folds the throw into the local wire error below, exactly as
+  // the hand-built fetch did). Transport rejections propagate raw.
+  let outcome: UnaryPostOutcome
   try {
-    response = await fetch(url, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        type: 'client-request',
-        rpcId: crypto.randomUUID(),
-        method: 'clientGraph/graph',
-        payload: { args: {} },
-      }),
-      signal: AbortSignal.timeout(GRAPH_TIMEOUT_MS),
+    outcome = await postUnary(basePath, 'clientGraph/graph', {}, {
+      rpcId: crypto.randomUUID(),
     })
   } catch (error) {
     throw wrapGraphError(error)
   }
-  if (response.status === 503) {
-    let body: { code?: string } | null = null
-    try {
-      body = await response.json()
-    } catch {
-      body = null
-    }
+  if (outcome.status === 503) {
+    const body = outcome.body as { code?: string } | null
     if (body?.code === 'instance_unavailable') return null
   }
-  if (!response.ok) {
-    const state = response.status === 404 ? 'not-injected' : 'graph-unreachable'
-    throw new HostGraphChannelError(state, `宿主启动图不可达：HTTP ${response.status}`)
+  if (!outcome.ok) {
+    const state = outcome.status === 404 ? 'not-injected' : 'graph-unreachable'
+    throw new HostGraphChannelError(state, `宿主启动图不可达：HTTP ${outcome.status}`)
   }
-  let envelope: HostGraphEnvelope
-  try {
-    envelope = await response.json()
-  } catch (error) {
+  if (outcome.jsonError !== undefined) {
+    const error = outcome.jsonError
     throw new Error(`宿主启动图：envelope 不是合法 JSON：${error instanceof Error ? error.message : String(error)}`)
   }
+  const envelope = outcome.body as HostGraphEnvelope
   if (typeof envelope !== 'object' || envelope === null || typeof envelope.result !== 'object' || envelope.result === null) {
     throw new Error('宿主启动图：envelope 缺少 result')
   }
   if (envelope.result.ok !== true) {
     const hostError = envelope.result.error?.message ?? envelope.result.error?.code ?? 'unknown'
-    const classification = `${envelope.result.error?.code ?? ''} ${envelope.result.error?.message ?? ''}`
-    const state = /not.?found|unknown.?method|method.+(?:missing|unknown|unsupported)/i.test(classification)
-      ? 'not-injected'
-      : 'graph-unreachable'
+    const state = classifyGraphChannelFailure(`${envelope.result.error?.code ?? ''} ${envelope.result.error?.message ?? ''}`)
     throw new HostGraphChannelError(state, `宿主启动图：graph 调用失败：${hostError}`)
   }
   const value = envelope.result.value

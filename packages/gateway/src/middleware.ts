@@ -19,6 +19,7 @@
 import { isIP } from 'node:net'
 import type { ApiCorsEvaluator, ApiRequest } from '@dsh-chamber/control-plane'
 import type { GatewayConfig } from './config.ts'
+import { headerValueAnyCase } from './http-utils.ts'
 
 /** Non-secret facts about WHY a request failed the public boundary. Only the
  * request's own values (Host/Origin) are ever echoed — never configuration
@@ -49,14 +50,6 @@ export interface GatewayRequestDecision {
 export interface GatewayRequestPolicy {
   evaluate(req: ApiRequest): GatewayRequestDecision
   corsEvaluator: ApiCorsEvaluator
-}
-
-function headerValue(headers: ApiRequest['headers'], name: string): string | undefined {
-  for (const [key, value] of Object.entries(headers)) {
-    if (key.toLowerCase() !== name) continue
-    return typeof value === 'string' ? value : Array.isArray(value) ? value[0] : undefined
-  }
-  return undefined
 }
 
 function hasDuplicateRawHeader(req: ApiRequest, name: string): boolean {
@@ -165,9 +158,9 @@ export function createGatewayRequestPolicy(config: GatewayConfig): GatewayReques
         || hasDuplicateRawHeader(req, 'x-forwarded-for')))) {
       return { allowed: false, status: 421, code: 'misdirected_request', headers: {}, clientAddress: '', secure: false, reason: { kind: 'host_rejected' } }
     }
-    const forwardedHost = trustedProxy ? headerValue(req.headers, 'x-forwarded-host') : undefined
-    const forwardedProto = trustedProxy ? headerValue(req.headers, 'x-forwarded-proto') : undefined
-    const forwardedFor = trustedProxy ? headerValue(req.headers, 'x-forwarded-for') : undefined
+    const forwardedHost = trustedProxy ? headerValueAnyCase(req.headers, 'x-forwarded-host') : undefined
+    const forwardedProto = trustedProxy ? headerValueAnyCase(req.headers, 'x-forwarded-proto') : undefined
+    const forwardedFor = trustedProxy ? headerValueAnyCase(req.headers, 'x-forwarded-for') : undefined
     if ((forwardedHost !== undefined && forwardedHost.includes(','))
       || (forwardedProto !== undefined && forwardedProto.includes(','))
       || (forwardedFor !== undefined && (forwardedFor.includes(',') || normalizeIp(forwardedFor) === ''))) {
@@ -179,7 +172,7 @@ export function createGatewayRequestPolicy(config: GatewayConfig): GatewayReques
     if (forwardedProto !== undefined && forwardedProto !== 'http' && forwardedProto !== 'https') {
       return { allowed: false, status: 421, code: 'misdirected_request', headers: {}, clientAddress: '', secure: false, reason: { kind: 'host_rejected' } }
     }
-    const rawHost = forwardedHost ?? headerValue(req.headers, 'host')
+    const rawHost = forwardedHost ?? headerValueAnyCase(req.headers, 'host')
     const authority = parseAuthority(protocol, rawHost)
     const forwardedClient = normalizeIp(forwardedFor)
     // Once a peer is declared a reverse proxy, its socket address is never a
@@ -216,7 +209,7 @@ export function createGatewayRequestPolicy(config: GatewayConfig): GatewayReques
       return { allowed: false, status: 421, code: 'misdirected_request', headers: {}, clientAddress, secure: protocol === 'https:', reason: { kind: 'host_rejected', host: authority.host } }
     }
 
-    const originHeader = headerValue(req.headers, 'origin')
+    const originHeader = headerValueAnyCase(req.headers, 'origin')
     const origin = canonicalOrigin(originHeader)
     if (originHeader !== undefined && (origin === null || (origin !== requestOrigin && !allowedOrigins.has(origin)))) {
       return {
@@ -229,7 +222,7 @@ export function createGatewayRequestPolicy(config: GatewayConfig): GatewayReques
     // A cross-site browser request without an Origin must not use a navigation
     // or media load to bypass the Origin check. Explicitly allowlisted CORS
     // calls carry Origin and were handled above.
-    if (originHeader === undefined && headerValue(req.headers, 'sec-fetch-site') === 'cross-site') {
+    if (originHeader === undefined && headerValueAnyCase(req.headers, 'sec-fetch-site') === 'cross-site') {
       return { allowed: false, status: 403, code: 'origin_forbidden', headers: {}, clientAddress, secure: protocol === 'https:', reason: { kind: 'cross_site_no_origin' } }
     }
     const headers: Record<string, string> = origin === null ? {} : {

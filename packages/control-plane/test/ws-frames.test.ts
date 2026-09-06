@@ -8,22 +8,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import { encodePingFrame, PongScanner, WS_CONTROL_PAYLOAD_MAX } from '../src/ws-frames.ts'
-
-/** Build a complete pong frame (opcode 0xA) for scanner fixtures. */
-function pongFrame(payload: Buffer, masked: boolean): Buffer {
-  const header = Buffer.allocUnsafe(masked ? 6 : 2)
-  header[0] = 0x80 | 0xa
-  if (!masked) {
-    header[1] = payload.length
-    return Buffer.concat([header, payload])
-  }
-  header[1] = 0x80 | payload.length
-  const key = Buffer.from([1, 2, 3, 4])
-  key.copy(header, 2)
-  const maskedPayload = Buffer.allocUnsafe(payload.length)
-  for (let i = 0; i < payload.length; i++) maskedPayload[i] = payload[i] ^ key[i % 4]
-  return Buffer.concat([header, maskedPayload])
-}
+import { pongFrame } from './utils.ts'
 
 /** Build a complete text data frame (opcode 0x1) for scanner fixtures. */
 function dataFrame(payload: Buffer, masked: boolean): Buffer {

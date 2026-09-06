@@ -1,11 +1,22 @@
 {
   "extends": "../../tsconfig.json",
   "compilerOptions": {
+    // P4-4: the `@dsh-chamber/dsh-client-ui-sidebar/shared` local paths mirror
+    // was deleted and the ambient mirror file src/ambient/chamber-bridge.d.ts
+    // is gone. NOTE: this package keeps its OWN `paths` (connections-section
+    // below), and a child tsconfig `paths` REPLACES the inherited root paths —
+    // so the sidebar/shared specifier here resolves through the node_modules
+    // workspace link (peer dependency) + the sidebar package.json
+    // exports["./shared"] to the REAL src/shared/index.ts (traceResolution
+    // verified), not through the root paths used by git/layout/connections.
+    // The shared sources are compiled into this program as import
+    // dependencies, so the compile root spans the repo root
+    // (layout/git/connections precedent); tsc only type-checks here (root
+    // noEmit + tsdown bundles); outDir is a mirror. The connections-section
+    // ambient mapping is UNRELATED and stays.
+    "rootDir": "../..",
     "outDir": "lib/types",
     "paths": {
-      "@dsh-chamber/dsh-client-ui-sidebar/shared": [
-        "./src/ambient/chamber-bridge.d.ts"
-      ],
       "@dsh-chamber/dsh-client-ui-settings-connections/section": [
         "./src/ambient/connections-section.d.ts"
       ]

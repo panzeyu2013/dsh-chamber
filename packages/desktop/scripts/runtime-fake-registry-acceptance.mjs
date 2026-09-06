@@ -28,12 +28,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
-import { fetchRegistryMetadata } from '../registry-metadata.ts'
-import { bindRuntimeInstallResolution } from '../dsh-runtime-updater.ts'
-import {
-  installRuntimeVersion,
-  verifyRuntimeTreeCriticalFiles,
-} from '../runtime-installer.ts'
+import { fetchRegistryMetadata, bindRuntimeInstallResolution, installRuntimeVersion, verifyRuntimeTreeCriticalFiles } from '@dsh-chamber/dsh-runtime'
 
 const VERSION = '9.8.7'
 const OLDER_VERSION = '9.8.6'

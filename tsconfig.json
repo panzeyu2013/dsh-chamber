@@ -15,7 +15,12 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "noUnusedLocals": true,
-    "noUnusedParameters": true
+    "noUnusedParameters": true,
+    "paths": {
+      "@dsh-chamber/dsh-client-ui-sidebar/shared": [
+        "./packages/dsh-chamber-client-ui-sidebar/src/shared/index.ts"
+      ]
+    }
   },
   "include": [
     "packages/control-plane/src/**/*.ts",

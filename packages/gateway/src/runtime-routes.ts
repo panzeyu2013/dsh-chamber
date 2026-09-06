@@ -8,51 +8,41 @@
 import type { ApiRequest, ApiResponse, Logger } from '@dsh-chamber/control-plane'
 import { sanitizeRouteError } from './sanitize-route-error.ts'
 export { sanitizeRouteError }
-import { RECOVERABLE_METADATA_BLOCKS, type GatewayRuntimeManager } from './runtime-manager.ts'
+import type { GatewayRuntimeManager } from './runtime-manager.ts'
+import {
+  applyNowNotRunningRefusal,
+  envPinnedRefusal,
+  mutationBusyRefusal,
+  pendingOnlyRefusal,
+  profileWriteBusyRefusal,
+  RECOVERABLE_METADATA_BLOCKS,
+  RETRY_APPLY_REASONS,
+  RETRY_RESTORE_REASONS,
+  startAlreadyInFlightRefusal,
+  startNotApplicableRefusal,
+} from './runtime-refusals.ts'
+import { codedError, jsonResponse, readBoundedBody } from './http-utils.ts'
 
-function json(res: ApiResponse, status: number, body: unknown): true {
-  res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' })
-  res.end(JSON.stringify(body))
-  return true
-}
-
-function readJsonBody(req: ApiRequest): Promise<unknown> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = []
-    let size = 0
-    let finished = false
-    const fail = (error: unknown): void => {
-      if (finished) return
-      finished = true
-      // Release retained input immediately and make every later stream event
-      // a no-op. The caller writes the 413 before destroying the socket.
-      chunks.length = 0
-      reject(error)
-    }
-    req.on('data', (chunk: Buffer) => {
-      if (finished) return
-      size += chunk.length
-      if (size > 64 * 1024) {
-        // No destroy here: the caller must WRITE the 413 first, then destroy
-        // the socket (dispatch.ts does the same) — destroying first drops the
-        // response on a real socket (review fix).
-        fail(Object.assign(new Error('request body too large'), { code: 'body_too_large' }))
-        return
-      }
-      chunks.push(chunk)
-    })
-    req.on('end', () => {
-      if (finished) return
-      finished = true
-      if (chunks.length === 0) { resolve(undefined); return }
-      try {
-        resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')))
-      } catch {
-        reject(Object.assign(new Error('invalid JSON body'), { code: 'bad_request' }))
-      }
-    })
-    req.on('error', fail)
-  })
+/** Read a bounded JSON body (64 KiB cap). A completely empty body is a JSON
+ * `undefined` (no body — the route's required-field checks answer 400); any
+ * other parse failure is a 400. The oversized body is answered 413 by the
+ * caller (fail() → codeToStatus) which destroys the socket only AFTER the
+ * response is written (response-first review fix; see the handle() catch). */
+async function readJsonBody(req: ApiRequest): Promise<unknown> {
+  const outcome = await readBoundedBody(req, 64 * 1024)
+  if (outcome.kind === 'oversize') throw codedError('body_too_large', 'request body too large')
+  // The kernel settles aborted/closed connections too (dispatch-parity); the
+  // stream error is forwarded unchanged like the historical reader did.
+  if (outcome.kind === 'aborted' || outcome.kind === 'closed') {
+    throw codedError('request_aborted', 'request body aborted')
+  }
+  if (outcome.kind === 'stream-error') throw outcome.error
+  if (outcome.buffer.length === 0) return undefined
+  try {
+    return JSON.parse(outcome.buffer.toString('utf8'))
+  } catch {
+    throw codedError('bad_request', 'invalid JSON body')
+  }
 }
 
 function codeToStatus(code: string | undefined): number {
@@ -95,7 +85,11 @@ type RuntimeMutationAction =
   | 'start'
   | 'registry'
 
-const APPLY_RECOVERY_PHASES = new Set(['snapshot-failed', 'swap-attempted'])
+// Canonical recovery-name classification (audit N2 single source): the same
+// tokens classify the projected phase and the startupBlockReason text; the
+// manager's pending-suppression/status formulas consume the same sets from
+// runtime-refusals.ts (RETRY_APPLY_REASONS / RETRY_RESTORE_REASONS /
+// RECOVERABLE_METADATA_BLOCKS).
 
 /**
  * Durable recovery state is an authoritative terminal gate, not merely UI
@@ -129,7 +123,7 @@ function recoveryGateRefusal(
   action: RuntimeMutationAction,
 ): { error: string; code: 'runtime_pending' | 'runtime_recovery_required' } | null {
   const phase = typeof status.phase === 'string' ? status.phase : 'unknown'
-  const retryAction = APPLY_RECOVERY_PHASES.has(phase)
+  const retryAction = RETRY_APPLY_REASONS.has(phase)
     ? 'retry-apply'
     : phase === 'restore-blocked'
       ? 'retry-restore'
@@ -156,8 +150,11 @@ function recoveryGateRefusal(
   // reason above (R4 mid-run drift classification).
   const canRecoverMetadata = status.canRecoverMetadata === true
   if (blockedReason !== null) {
-    const swapLike = blockedReason === 'swap-attempted' || blockedReason === 'snapshot-failed'
-    const restoreLike = blockedReason === 'restore-half' || blockedReason === 'restore-incomplete'
+    // Recovery-name classification single source (audit N2): the reason-token
+    // sets are the same constants the manager's pending suppression and
+    // status() block-outranks-pending projection classify with.
+    const swapLike = RETRY_APPLY_REASONS.has(blockedReason)
+    const restoreLike = RETRY_RESTORE_REASONS.has(blockedReason)
     const fatalLike = RECOVERABLE_METADATA_BLOCKS.has(blockedReason)
     // An UNRECOGNIZED blockedReason (free-text resolution error from
     // mid-run metadata drift) must not lock out the very recovery route the
@@ -218,10 +215,9 @@ function recoveryGateRefusal(
     const version = typeof status.pending === 'string' && status.pending !== ''
       ? status.pending
       : 'unknown'
-    return {
-      error: `runtime version ${version} is pending; only restore-builtin is allowed until the next startup`,
-      code: 'runtime_pending',
-    }
+    // Same code/message the manager's assertNoPending/assertNoOrdinaryPending
+    // and profileWriteRefusal emit (audit N2 single source: pendingOnlyRefusal).
+    return pendingOnlyRefusal(version)
   }
 
   return null
@@ -234,7 +230,7 @@ function rejectRecoveryGate(
 ): boolean {
   const refusal = recoveryGateRefusal(status, action)
   if (refusal === null) return false
-  json(res, 409, refusal)
+  jsonResponse(res, 409, refusal)
   return true
 }
 
@@ -248,7 +244,7 @@ export function createRuntimeRoutes(manager: () => GatewayRuntimeManager, logger
     const code = (error as Error & { code?: string }).code
     const status = codeToStatus(code)
     logger.warn(`/chamber/runtime request failed (${status}): ${message}`)
-    json(res, status, { error: message, code: code ?? 'internal_error' })
+    jsonResponse(res, status, { error: message, code: code ?? 'internal_error' })
   }
 
   async function handle(req: ApiRequest, res: ApiResponse, pathname: string): Promise<boolean> {
@@ -259,15 +255,15 @@ export function createRuntimeRoutes(manager: () => GatewayRuntimeManager, logger
     const suffix = pathname.slice('/chamber/runtime'.length) || '/'
     try {
       if (suffix === '/status' && req.method === 'GET') {
-        return json(res, 200, await m.status())
+        return jsonResponse(res, 200, await m.status())
       }
       if (suffix === '/versions' && req.method === 'GET') {
-        return json(res, 200, await m.listVersions())
+        return jsonResponse(res, 200, await m.listVersions())
       }
       if (suffix === '/select' && req.method === 'POST') {
         const body = (await readJsonBody(req)) as { version?: unknown } | undefined
         if (body === undefined || typeof body.version !== 'string' || body.version === '') {
-          return json(res, 400, { error: 'version is required', code: 'bad_request' })
+          return jsonResponse(res, 400, { error: 'version is required', code: 'bad_request' })
         }
         const status = await m.status()
         if (rejectRecoveryGate(res, status, 'select')) return true
@@ -277,26 +273,28 @@ export function createRuntimeRoutes(manager: () => GatewayRuntimeManager, logger
         // install window is refused here so select's 202 never precedes the
         // manager fence throw.
         if (m.profileWriteInFlight?.()) {
-          return json(res, 409, { error: 'managed profile write in flight (plugin mutation); runtime mutations are refused', code: 'runtime_busy' })
+          // Same code/message as the manager's assertMutationIdle lease branch
+          // (audit N2: profileWriteBusyRefusal).
+          return jsonResponse(res, 409, profileWriteBusyRefusal('runtime mutations'))
         }
         if (m.mutationInProgress()) {
-          return json(res, 409, { error: 'another runtime mutation is in flight', code: 'runtime_busy' })
+          return jsonResponse(res, 409, mutationBusyRefusal())
         }
         if (status.source === 'env') {
-          return json(res, 409, { error: 'runtime is pinned by DSH_GATEWAY_DSH_PATH (env always wins); version mutations are disabled', code: 'env_override_active' })
+          return jsonResponse(res, 409, envPinnedRefusal('version mutations'))
         }
         if (status.mutationsAllowed === false) {
-          return json(res, 403, { error: 'runtime mutations are read-only on this platform', code: 'platform_read_only' })
+          return jsonResponse(res, 403, { error: 'runtime mutations are read-only on this platform', code: 'platform_read_only' })
         }
         // Async install job: 202 immediately; progress/failure surfaces via
         // /status (operationError).
         void m.select(body.version).catch(error => logger.error(`runtime select failed: ${sanitizeRouteError(error instanceof Error ? error.message : String(error))}`))
-        return json(res, 202, { accepted: true, version: body.version })
+        return jsonResponse(res, 202, { accepted: true, version: body.version })
       }
       if (suffix === '/apply' && req.method === 'POST') {
         const status = await m.status()
         if (rejectRecoveryGate(res, status, 'apply')) return true
-        return json(res, 200, await m.apply())
+        return jsonResponse(res, 200, await m.apply())
       }
       if (suffix === '/apply-now' && req.method === 'POST') {
         // 202: apply-now accepts immediately (mirrors /restart) — the
@@ -313,35 +311,37 @@ export function createRuntimeRoutes(manager: () => GatewayRuntimeManager, logger
         const status = await m.status()
         if (rejectRecoveryGate(res, status, 'apply-now')) return true
         if (m.mutationInProgress()) {
-          return json(res, 409, { error: 'another runtime mutation is in flight', code: 'runtime_busy' })
+          return jsonResponse(res, 409, mutationBusyRefusal())
         }
         if (status.source === 'env') {
-          return json(res, 409, { error: 'runtime is pinned by DSH_GATEWAY_DSH_PATH (env always wins); version mutations are disabled', code: 'env_override_active' })
+          return jsonResponse(res, 409, envPinnedRefusal('version mutations'))
         }
         if (status.mutationsAllowed === false) {
-          return json(res, 403, { error: 'runtime mutations are read-only on this platform', code: 'platform_read_only' })
+          return jsonResponse(res, 403, { error: 'runtime mutations are read-only on this platform', code: 'platform_read_only' })
         }
         if (status.connectionState !== 'ready' && status.connectionState !== 'degraded') {
           // Mirror /restart: a dsh that never reached ready cannot be switched
           // in-session; recovery is restore-builtin / retry-apply / retry-restore.
           // restart-exhausted is NOT a dedicated refusal (D2) — this gate covers it.
-          return json(res, 409, { error: `managed dsh is not running (${status.connectionState}); restore the builtin or retry the interrupted apply/restore before applying now`, code: 'runtime_busy' })
+          // Same code/message as the manager's applyNowPreflight direct-call
+          // parity (audit N2: applyNowNotRunningRefusal).
+          return jsonResponse(res, 409, applyNowNotRunningRefusal(status.connectionState))
         }
         if (m.applyNowInFlight()) {
-          return json(res, 409, { error: 'a runtime apply-now is already in flight', code: 'runtime_busy' })
+          return jsonResponse(res, 409, { error: 'a runtime apply-now is already in flight', code: 'runtime_busy' })
         }
         const target = m.applyNowPreflight()
         void m.applyNow().catch(error => logger.error(`runtime apply-now failed: ${sanitizeRouteError(error instanceof Error ? error.message : String(error))}`))
-        return json(res, 202, { accepted: true, version: target })
+        return jsonResponse(res, 202, { accepted: true, version: target })
       }
       if (suffix === '/rollback' && req.method === 'POST') {
         const body = (await readJsonBody(req)) as { version?: unknown } | undefined
         if (body === undefined || typeof body.version !== 'string' || body.version === '') {
-          return json(res, 400, { error: 'version is required', code: 'bad_request' })
+          return jsonResponse(res, 400, { error: 'version is required', code: 'bad_request' })
         }
         const status = await m.status()
         if (rejectRecoveryGate(res, status, 'rollback')) return true
-        return json(res, 200, await m.rollback(body.version))
+        return jsonResponse(res, 200, await m.rollback(body.version))
       }
       if (suffix === '/cleanup-version' && req.method === 'POST') {
         // Desktop-parity cleanup (2026-12): ledger-gated deletion of one
@@ -350,28 +350,28 @@ export function createRuntimeRoutes(manager: () => GatewayRuntimeManager, logger
         // answer their mapped status synchronously through the manager throw.
         const body = (await readJsonBody(req)) as { version?: unknown } | undefined
         if (body === undefined || typeof body.version !== 'string' || body.version === '') {
-          return json(res, 400, { error: 'version is required', code: 'bad_request' })
+          return jsonResponse(res, 400, { error: 'version is required', code: 'bad_request' })
         }
         const status = await m.status()
         if (rejectRecoveryGate(res, status, 'cleanup-version')) return true
         if (m.mutationInProgress()) {
-          return json(res, 409, { error: 'another runtime mutation is in flight', code: 'runtime_busy' })
+          return jsonResponse(res, 409, mutationBusyRefusal())
         }
-        return json(res, 200, await m.cleanupVersion(body.version))
+        return jsonResponse(res, 200, await m.cleanupVersion(body.version))
       }
       if (suffix === '/restore-pre-rollback' && req.method === 'POST') {
         // Desktop-parity pre-rollback data restore (2026-12): stash-name
         // whitelist + re-listing live in the manager; env stays allowed.
         const body = (await readJsonBody(req)) as { stashName?: unknown } | undefined
         if (body === undefined || typeof body.stashName !== 'string' || body.stashName === '') {
-          return json(res, 400, { error: 'stashName is required', code: 'bad_request' })
+          return jsonResponse(res, 400, { error: 'stashName is required', code: 'bad_request' })
         }
         const status = await m.status()
         if (rejectRecoveryGate(res, status, 'restore-pre-rollback')) return true
         if (m.mutationInProgress()) {
-          return json(res, 409, { error: 'another runtime mutation is in flight', code: 'runtime_busy' })
+          return jsonResponse(res, 409, mutationBusyRefusal())
         }
-        return json(res, 200, await m.restorePreRollback(body.stashName))
+        return jsonResponse(res, 200, await m.restorePreRollback(body.stashName))
       }
       if (suffix === '/recover-metadata' && req.method === 'POST') {
         // Metadata FATAL rescue (2026-12 desktop parity): archives corrupt
@@ -381,9 +381,9 @@ export function createRuntimeRoutes(manager: () => GatewayRuntimeManager, logger
         const status = await m.status()
         if (rejectRecoveryGate(res, status, 'recover-metadata')) return true
         if (m.mutationInProgress()) {
-          return json(res, 409, { error: 'another runtime mutation is in flight', code: 'runtime_busy' })
+          return jsonResponse(res, 409, mutationBusyRefusal())
         }
-        return json(res, 200, await m.recoverMetadata())
+        return jsonResponse(res, 200, await m.recoverMetadata())
       }
       if (suffix === '/retry-apply' && req.method === 'POST') {
         // Resume an interrupted pointer switch (swap-attempted): the startup
@@ -391,14 +391,14 @@ export function createRuntimeRoutes(manager: () => GatewayRuntimeManager, logger
         // up; a still-blocked retry reports the blockedReason honestly.
         const status = await m.status()
         if (rejectRecoveryGate(res, status, 'retry-apply')) return true
-        return json(res, 200, await m.retryApply())
+        return jsonResponse(res, 200, await m.retryApply())
       }
       if (suffix === '/retry-restore' && req.method === 'POST') {
         // Resume an interrupted snapshot restore (restore-half / restore-
         // incomplete) from the durable journal.
         const status = await m.status()
         if (rejectRecoveryGate(res, status, 'retry-restore')) return true
-        return json(res, 200, await m.retryRestore())
+        return jsonResponse(res, 200, await m.retryRestore())
       }
       if (suffix === '/restore-builtin' && req.method === 'POST') {
         // Route-level gate (desktop parity, A-U4 + R2): restore-builtin is
@@ -414,7 +414,7 @@ export function createRuntimeRoutes(manager: () => GatewayRuntimeManager, logger
         // (runtime_no_override) and the durable-marker guard.
         const status = await m.status()
         if (rejectRecoveryGate(res, status, 'restore-builtin')) return true
-        return json(res, 200, await m.restoreBuiltin())
+        return jsonResponse(res, 200, await m.restoreBuiltin())
       }
       if (suffix === '/restart' && req.method === 'POST') {
         // 202: restart acceptance never blocks on readiness (design 18 §9.3);
@@ -426,26 +426,26 @@ export function createRuntimeRoutes(manager: () => GatewayRuntimeManager, logger
         const status = await m.status()
         if (rejectRecoveryGate(res, status, 'restart')) return true
         if (status.phase === 'applying' || status.phase === 'installing') {
-          return json(res, 409, { error: 'runtime mutation in progress; restart refused', code: 'runtime_busy' })
+          return jsonResponse(res, 409, { error: 'runtime mutation in progress; restart refused', code: 'runtime_busy' })
         }
         if (status.connectionState !== 'ready' && status.connectionState !== 'degraded') {
           // Round-4 wording updated for decision 12: restartLocal rejects every
           // non-ready state — the r1 recovery surface is POST
           // /chamber/runtime/start (stopped/error/restart-exhausted), while
           // interrupted apply/restore windows keep their retry/restore routes.
-          return json(res, 409, { error: `managed dsh is not running (${status.connectionState}); start the managed dsh (start applies to stopped/error/restart-exhausted) or retry the interrupted apply/restore`, code: 'runtime_busy' })
+          return jsonResponse(res, 409, { error: `managed dsh is not running (${status.connectionState}); start the managed dsh (start applies to stopped/error/restart-exhausted) or retry the interrupted apply/restore`, code: 'runtime_busy' })
         }
         if (m.profileWriteInFlight?.()) {
           // design 21 §6.3 (decision 6/17): a restart respawns the managed dsh
           // and its seed thunk writes DSH_HOME — never while a plugin pnpm
           // child holds the profile-write lease.
-          return json(res, 409, { error: 'managed profile write in flight (plugin mutation); restart refused', code: 'runtime_busy' })
+          return jsonResponse(res, 409, profileWriteBusyRefusal('restart'))
         }
         if (m.restartInFlight()) {
-          return json(res, 409, { error: 'a restart is already in flight', code: 'runtime_busy' })
+          return jsonResponse(res, 409, { error: 'a restart is already in flight', code: 'runtime_busy' })
         }
         void m.restart().catch(error => logger.error(`runtime restart failed: ${sanitizeRouteError(error instanceof Error ? error.message : String(error))}`))
-        return json(res, 202, { accepted: true })
+        return jsonResponse(res, 202, { accepted: true })
       }
       if (suffix === '/start' && req.method === 'POST') {
         // Decision-12 start primitive (design 21 §6.3 r1): bring the managed
@@ -463,37 +463,41 @@ export function createRuntimeRoutes(manager: () => GatewayRuntimeManager, logger
         const status = await m.status()
         if (rejectRecoveryGate(res, status, 'start')) return true
         if (status.phase === 'applying' || status.phase === 'installing') {
-          return json(res, 409, { error: 'runtime mutation in progress; start refused', code: 'runtime_busy' })
+          return jsonResponse(res, 409, { error: 'runtime mutation in progress; start refused', code: 'runtime_busy' })
         }
         if (m.profileWriteInFlight?.()) {
-          return json(res, 409, { error: 'managed profile write in flight (plugin mutation); start refused', code: 'runtime_busy' })
+          return jsonResponse(res, 409, profileWriteBusyRefusal('start'))
         }
         if (m.startInFlight?.()) {
-          return json(res, 409, { error: 'a start is already in flight', code: 'runtime_busy' })
+          // Same code/message as the manager start() head single-flight check
+          // (audit N2: startAlreadyInFlightRefusal).
+          return jsonResponse(res, 409, startAlreadyInFlightRefusal())
         }
         if (status.connectionState !== 'stopped' && status.connectionState !== 'error'
           && status.connectionState !== 'restart-exhausted') {
-          return json(res, 409, { error: `managed dsh is running (${status.connectionState}); start applies to stopped/error/restart-exhausted`, code: 'runtime_busy' })
+          // Same code/message as the manager start() connection gate (audit
+          // N2: startNotApplicableRefusal).
+          return jsonResponse(res, 409, startNotApplicableRefusal(status.connectionState))
         }
         void m.start().catch(error => logger.error(`runtime start failed: ${sanitizeRouteError(error instanceof Error ? error.message : String(error))}`))
-        return json(res, 202, { accepted: true })
+        return jsonResponse(res, 202, { accepted: true })
       }
       if (suffix === '/registry' && req.method === 'GET') {
-        return json(res, 200, m.getRegistry())
+        return jsonResponse(res, 200, m.getRegistry())
       }
       if (suffix === '/registry' && req.method === 'PUT') {
         const body = (await readJsonBody(req)) as { origin?: unknown } | undefined
         if (body === undefined || typeof body.origin !== 'string' || body.origin === '') {
-          return json(res, 400, { error: 'origin is required', code: 'bad_request' })
+          return jsonResponse(res, 400, { error: 'origin is required', code: 'bad_request' })
         }
         const status = await m.status()
         if (rejectRecoveryGate(res, status, 'registry')) return true
-        return json(res, 200, await m.setRegistry(body.origin))
+        return jsonResponse(res, 200, await m.setRegistry(body.origin))
       }
       if (suffix === '/' || suffix === '') {
-        return json(res, 200, { routes: ['status', 'versions', 'select', 'apply', 'apply-now', 'rollback', 'cleanup-version', 'restore-pre-rollback', 'recover-metadata', 'restore-builtin', 'restart', 'start', 'retry-apply', 'retry-restore', 'registry'] })
+        return jsonResponse(res, 200, { routes: ['status', 'versions', 'select', 'apply', 'apply-now', 'rollback', 'cleanup-version', 'restore-pre-rollback', 'recover-metadata', 'restore-builtin', 'restart', 'start', 'retry-apply', 'retry-restore', 'registry'] })
       }
-      return json(res, 404, { error: 'unknown /chamber/runtime route', code: 'not_found' })
+      return jsonResponse(res, 404, { error: 'unknown /chamber/runtime route', code: 'not_found' })
     } catch (error) {
       fail(res, error)
       if ((error as Error & { code?: string }).code === 'body_too_large') {

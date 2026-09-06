@@ -130,9 +130,11 @@ chamber 自研侧边栏插件（设计 05 §2）：拷贝官方 ui-sidebar 外�
   轮询 `pollGatewayReady`：1s/120s、abort 感知），经
   `@dsh-chamber/dsh-client-ui-sidebar/shared` 导出（`./shared` →
   `./src/shared/index.ts`，免构建；vite 消费者打真实源码单实例）。
-- 消费包（settings-bridge/connections 等）对**各自手写 ambient 镜像**
-  （`src/ambient/*.d.ts`，MIRROR WARNING 头）做 typecheck，不对本包源码做
-  typecheck——`test/gateway-runtime-mirror.test.ts` 把镜像导出集锁步到真实模块
-  （runtime 与 type-only 名；形状漂移仍为人工比对纪律，见测试头注释）。
+- 消费包（settings-bridge/connections/git/layout/renderer）对**真实 shared 源码**
+  做 typecheck：P4-4（2026-09）删除手写 ambient 镜像（`src/ambient/*.d.ts`），
+  各包 tsconfig 现把 specifier 解析到本包源码（继承 root tsconfig paths；保留
+  自身 paths 的包经 node_modules workspace 链接 + package exports）。原镜像
+  锁步测试（`test/gateway-runtime-mirror.test.ts`）随镜像一并删除——消费方直接
+  编译本源码后漂移在构造上不可能。
 - settings-bridge 的 `remoteRuntimeStatusView` 视图映射与其 SettingsBridgeKey
   耦合留在 settings-bridge；本面不 import settings-bridge。

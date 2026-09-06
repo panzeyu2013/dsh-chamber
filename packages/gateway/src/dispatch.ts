@@ -35,6 +35,7 @@ import type { RuntimeRoutes } from './runtime-routes.ts'
 import type { GatewayRejectionReason, GatewayRequestDecision, GatewayRequestPolicy } from './middleware.ts'
 import { appendAuditEvent } from './audit.ts'
 import { LOGIN_PAGE_CSP, detectLoginLang, renderBoundaryErrorPage, renderLoginPage, renderTokenOnlyPage, wantsHtmlLoginResponse } from './login-page.ts'
+import { codedError, headerValue, jsonResponse, readBoundedBody } from './http-utils.ts'
 
 function isPublicRequest(method: string | undefined, pathname: string): boolean {
   // HEAD is the no-body twin of GET; a monitoring HEAD /health must not be
@@ -77,16 +78,6 @@ function shouldRedirectToLogin(req: ApiRequest, pathname: string, auth: AuthProv
  * nonce CSP. Every other directive stays identical.
  */
 const GATEWAY_PROXY_CSP = "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'none'; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:"
-
-function json(res: ApiResponse, status: number, body: unknown): void {
-  res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' })
-  res.end(JSON.stringify(body))
-}
-
-function headerValue(headers: Record<string, string | string[] | undefined>, name: string): string | undefined {
-  const v = headers[name]
-  return typeof v === 'string' ? v : Array.isArray(v) ? v[0] : undefined
-}
 
 /** A browser *document* rejection (GET/HEAD/POST advertising HTML) is
  * answered with the rendered boundary error page instead of a bare JSON body
@@ -143,7 +134,7 @@ function sendBoundaryRejection(res: ApiResponse, req: ApiRequest, decision: Gate
     }))
     return
   }
-  json(res, decision.status, {
+  jsonResponse(res, decision.status, {
     error: message,
     code: decision.code,
     ...(reason === undefined ? {} : { detail: rejectionDetail(reason) }),
@@ -186,69 +177,37 @@ const LOGIN_HTML_HEADERS = {
   'x-content-type-options': 'nosniff',
 } as const
 
-function codedError(code: string, message: string): Error & { code: string } {
-  return Object.assign(new Error(message), { code })
-}
-
 /** Read a bounded login body. The static HTML uses form-urlencoded; JSON is
  * retained for API clients and tests. Unsupported/malformed media is a 400,
  * never silently treated as an empty credential. */
-function readBody(req: ApiRequest): Promise<unknown> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = []
-    let size = 0
-    let finished = false
-    // A configured password is capped at 1024 characters. 16 KiB leaves ample
-    // room for UTF-8/JSON or form encoding without letting anonymous slow
-    // clients reserve a megabyte on every accepted connection.
-    const MAX = 16 * 1024
-    const fail = (error: unknown): void => {
-      if (finished) return
-      finished = true
-      // The request may continue to drain until Node's request timeout. Drop
-      // every retained byte immediately and make all later events no-ops so an
-      // unauthenticated slow upload cannot pin one body per connection.
-      chunks.length = 0
-      reject(error)
+async function readBody(req: ApiRequest): Promise<unknown> {
+  // A configured password is capped at 1024 characters. 16 KiB leaves ample
+  // room for UTF-8/JSON or form encoding without letting anonymous slow
+  // clients reserve a megabyte on every accepted connection.
+  const MAX = 16 * 1024
+  const outcome = await readBoundedBody(req, MAX)
+  if (outcome.kind === 'oversize') throw codedError('body_too_large', 'login body too large')
+  if (outcome.kind === 'aborted') throw codedError('request_aborted', 'request body aborted')
+  if (outcome.kind === 'closed') throw codedError('request_aborted', 'request body closed before completion')
+  if (outcome.kind === 'stream-error') throw outcome.error
+  const text = outcome.buffer.toString('utf8')
+  const contentType = (headerValue(req.headers, 'content-type') ?? '').split(';', 1)[0].trim().toLowerCase()
+  if (contentType === 'application/x-www-form-urlencoded' || contentType === 'application/json') {
+    try {
+      if (contentType === 'application/x-www-form-urlencoded') {
+        const form = new URLSearchParams(text)
+        return { password: form.get('password') ?? undefined }
+      }
+      return text === '' ? {} : JSON.parse(text)
+    } catch {
+      // The kernel's oversize/abort rejections above are thrown OUTSIDE this
+      // try: a parse failure is a malformed body, never a size/transport one.
+      throw codedError('bad_request', 'malformed login body')
     }
-    req.on('data', (chunk: Buffer) => {
-      if (finished) return
-      size += chunk.length
-      if (size > MAX) {
-        fail(codedError('body_too_large', 'login body too large'))
-        return
-      }
-      chunks.push(chunk)
-    })
-    req.on('end', () => {
-      if (finished) return
-      finished = true
-      const text = Buffer.concat(chunks).toString('utf8')
-      chunks.length = 0
-      const contentType = (headerValue(req.headers, 'content-type') ?? '').split(';', 1)[0].trim().toLowerCase()
-      try {
-        if (contentType === 'application/x-www-form-urlencoded') {
-          const form = new URLSearchParams(text)
-          resolve({ password: form.get('password') ?? undefined })
-          return
-        }
-        if (contentType === 'application/json') {
-          resolve(text === '' ? {} : JSON.parse(text))
-          return
-        }
-        reject(codedError('bad_request', 'unsupported login content type'))
-      } catch {
-        reject(codedError('bad_request', 'malformed login body'))
-      }
-    })
-    req.on('error', fail)
-    req.on('aborted', () => fail(codedError('request_aborted', 'request body aborted')))
-    req.on('close', () => {
-      if (!finished && (req as ApiRequest & { complete?: boolean }).complete !== true) {
-        fail(codedError('request_aborted', 'request body closed before completion'))
-      }
-    })
-  })
+  }
+  // Unsupported media type — deliberately outside the try so it cannot be
+  // relabeled as a malformed body (400 either way, different message).
+  throw codedError('bad_request', 'unsupported login content type')
 }
 
 export interface GatewayDispatch {
@@ -363,7 +322,7 @@ export function createGatewayDispatch(
     if (principal === null || principalIsCurrent(principal)) return false
     const state = res as ApiResponse & { destroyed?: boolean; writableEnded?: boolean }
     if (state.destroyed !== true && state.writableEnded !== true) {
-      json(res, 401, { error: 'unauthorized', code: 'unauthorized' })
+      jsonResponse(res, 401, { error: 'unauthorized', code: 'unauthorized' })
     }
     return true
   }
@@ -419,7 +378,7 @@ export function createGatewayDispatch(
         // Regression locked by auth.test.ts.
         const code = (error as Error & { code?: string }).code
         if (code === 'auth_busy') {
-          json(res, 503, { error: 'authentication service is busy', code: 'auth_busy' })
+          jsonResponse(res, 503, { error: 'authentication service is busy', code: 'auth_busy' })
           return true
         }
         throw error
@@ -438,14 +397,14 @@ export function createGatewayDispatch(
           res.end()
           return true
         }
-        json(res, 401, { error: 'unauthorized', code: 'unauthorized' })
+        jsonResponse(res, 401, { error: 'unauthorized', code: 'unauthorized' })
         return true
       }
       // verify() can resolve in a later microtask than a credential mutation.
       // Reject that stale verdict and register the downstream synchronously
       // before any route-specific await creates another rotation window.
       if (!principalIsCurrent(principal)) {
-        json(res, 401, { error: 'unauthorized', code: 'unauthorized' })
+        jsonResponse(res, 401, { error: 'unauthorized', code: 'unauthorized' })
         return true
       }
       authenticatedPrincipal = principal
@@ -484,7 +443,7 @@ export function createGatewayDispatch(
           res.writeHead(404, LOGIN_HTML_HEADERS)
           res.end(req.method === 'HEAD' ? undefined : renderTokenOnlyPage(lang, auth.kind === 'none' ? 'none' : 'token'))
         } else {
-          json(res, 404, { error: 'not_found', code: 'not_found' })
+          jsonResponse(res, 404, { error: 'not_found', code: 'not_found' })
         }
         return true
       }
@@ -527,7 +486,7 @@ export function createGatewayDispatch(
           // between the kind check above and the login call (a concurrent
           // credential removal). The route no longer exists — 404.
           if (code === 'no_password') {
-            json(res, 404, { error: 'not_found', code: 'not_found' })
+            jsonResponse(res, 404, { error: 'not_found', code: 'not_found' })
           }
           else if (code === 'rate_limited') {
             const retryAfterSec = Math.max(1, Math.ceil((retryAfterMs ?? 0) / 1000))
@@ -535,10 +494,10 @@ export function createGatewayDispatch(
               res.writeHead(429, { ...LOGIN_HTML_HEADERS, 'retry-after': String(retryAfterSec) })
               res.end(renderLoginPage({ lang, secure: decision.secure, error: 'rate_limited', retryAfterSec, desktop: loginDesktop }))
             } else {
-              // json() would overwrite retry-after via writeHead; set it first
+              // jsonResponse() would overwrite retry-after via writeHead; set it first
               // (setHeader values are merged by writeHead in the real server).
               res.setHeader('retry-after', String(retryAfterSec))
-              json(res, 429, { error: 'too many login attempts', code: 'rate_limited' })
+              jsonResponse(res, 429, { error: 'too many login attempts', code: 'rate_limited' })
             }
           }
           else if (code === 'auth_busy') {
@@ -546,22 +505,22 @@ export function createGatewayDispatch(
               res.writeHead(503, LOGIN_HTML_HEADERS)
               res.end(renderLoginPage({ lang, secure: decision.secure, error: 'busy', desktop: loginDesktop }))
             } else {
-              json(res, 503, { error: 'authentication service is busy', code: 'auth_busy' })
+              jsonResponse(res, 503, { error: 'authentication service is busy', code: 'auth_busy' })
             }
           }
           else if (code === 'body_too_large') {
-            json(res, 413, { error: 'request body too large', code })
+            jsonResponse(res, 413, { error: 'request body too large', code })
             // The 413 is written; the oversized body may still be streaming.
             // Destroy the request socket instead of draining it, so a slow
             // anonymous upload cannot pin the connection.
             req.destroy?.()
-          } else if (code === 'bad_request') json(res, 400, { error: 'bad request', code })
+          } else if (code === 'bad_request') jsonResponse(res, 400, { error: 'bad request', code })
           else {
             if (html) {
               res.writeHead(401, LOGIN_HTML_HEADERS)
               res.end(renderLoginPage({ lang, secure: decision.secure, error: 'invalid', desktop: loginDesktop }))
             } else {
-              json(res, 401, { error: 'invalid credentials', code: 'invalid_credentials' })
+              jsonResponse(res, 401, { error: 'invalid credentials', code: 'invalid_credentials' })
             }
           }
         }
@@ -586,7 +545,7 @@ export function createGatewayDispatch(
       }
       const finishCredentialMutation = beginCredentialMutation()
       if (finishCredentialMutation === null) {
-        json(res, 503, { error: 'gateway is stopping', code: 'gateway_stopping' })
+        jsonResponse(res, 503, { error: 'gateway is stopping', code: 'gateway_stopping' })
         return true
       }
       const changeReq = authRequest(req, decision)
@@ -615,7 +574,7 @@ export function createGatewayDispatch(
         // mutation's own response so its one-time token/200 can never be
         // truncated (including online-published/durability-unknown results).
         closeAuthenticatedTraffic(res)
-        json(res, 200, result)
+        jsonResponse(res, 200, result)
         if (auditFile !== undefined && auditFile !== null) {
           appendAuditEvent(auditFile, {
             ts: new Date().toISOString(),
@@ -646,19 +605,19 @@ export function createGatewayDispatch(
           // fencing admission. The lifecycle barrier still waits for this
           // finally, but there is no response or rejected-mutation audit to
           // publish for a body that never reached the credential facade.
-        } else if (code === 'bad_request') json(res, 400, { error: 'bad request', code })
-        else if (code === 'invalid_credentials') json(res, 401, { error: 'invalid credentials', code })
-        else if (code === 'ambient_principal_rejected') json(res, 403, { error: 'an ambient session must supply the current password to change gateway credentials', code })
-        else if (code === 'last_credential') json(res, 409, { error: 'refusing to remove the last gateway credential; configure a replacement first', code })
-        else if (code === 'rate_limited') json(res, 429, { error: 'too many attempts; retry later', code })
-        else if (code === 'auth_busy') json(res, 503, { error: 'authentication service is busy', code })
+        } else if (code === 'bad_request') jsonResponse(res, 400, { error: 'bad request', code })
+        else if (code === 'invalid_credentials') jsonResponse(res, 401, { error: 'invalid credentials', code })
+        else if (code === 'ambient_principal_rejected') jsonResponse(res, 403, { error: 'an ambient session must supply the current password to change gateway credentials', code })
+        else if (code === 'last_credential') jsonResponse(res, 409, { error: 'refusing to remove the last gateway credential; configure a replacement first', code })
+        else if (code === 'rate_limited') jsonResponse(res, 429, { error: 'too many attempts; retry later', code })
+        else if (code === 'auth_busy') jsonResponse(res, 503, { error: 'authentication service is busy', code })
         else if (code === 'body_too_large') {
-          json(res, 413, { error: 'request body too large', code })
+          jsonResponse(res, 413, { error: 'request body too large', code })
           // Same 413 discipline as login: the oversized body may still be
           // streaming, so destroy the request socket instead of draining it.
           req.destroy?.()
         } else {
-          json(res, 500, { error: 'internal error', code: 'internal_error' })
+          jsonResponse(res, 500, { error: 'internal error', code: 'internal_error' })
         }
       } finally {
         finishCredentialMutation()
@@ -681,7 +640,7 @@ export function createGatewayDispatch(
         res.end()
         return true
       }
-      json(res, 200, {
+      jsonResponse(res, 200, {
         password: projection.password === null ? null
           : { set: true, source: projection.password.source, updatedAt: projection.password.updatedAt },
         token: projection.token === null ? null
@@ -782,7 +741,7 @@ export function createGatewayDispatch(
       await getProxy().handleHttp(req, res)
     } catch (error) {
       logger.warn(`gateway dispatch: proxy failure: ${String(error)}`)
-      if (!res.headersSent) json(res, 502, { error: 'upstream_failed', code: 'upstream_failed' })
+      if (!res.headersSent) jsonResponse(res, 502, { error: 'upstream_failed', code: 'upstream_failed' })
       else res.destroy()
     }
     return true

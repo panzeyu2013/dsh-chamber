@@ -11,7 +11,7 @@
  *
  * Pure node built-ins, baseDir/dshHome injected — no electron, no IPC.
  */
-import { cp, lstat, mkdir, readdir, rename, rm, writeFile } from 'node:fs/promises'
+import { cp, lstat, mkdir, readdir, rm } from 'node:fs/promises'
 import {
   closeSync,
   constants,
@@ -20,16 +20,18 @@ import {
   fstatSync,
   lstatSync,
   openSync,
-  readSync,
 } from 'node:fs'
 import { basename, dirname, join, resolve, sep } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { renameWithWindowsRetry } from './rename-retry.ts'
 import { runtimeSnapshotRetentionState } from './dsh-runtime-store.ts'
 import { assertSafeVersion, isSafeVersion } from './version-safety.ts'
+import {
+  atomicWriteRuntimeFileNoFollow,
+  readPrivateFileNoFollow,
+} from './private-fs.ts'
 
 const PRIVATE_DIR_MODE = 0o700
-const PRIVATE_FILE_MODE = 0o600
 const MAX_RESTORE_MARKER_BYTES = 128 * 1024
 
 interface FileIdentity {
@@ -48,101 +50,33 @@ function sameIdentity(left: FileIdentity, right: FileIdentity): boolean {
   return left.dev === right.dev && left.ino === right.ino
 }
 
-function sameFileSnapshot(
-  left: ReturnType<typeof fstatSync>,
-  right: ReturnType<typeof fstatSync>,
-): boolean {
-  return sameIdentity(left, right)
-    && left.isFile()
-    && right.isFile()
-    && left.nlink === 1
-    && right.nlink === 1
-    && left.size === right.size
-    && left.mtimeMs === right.mtimeMs
-    && left.ctimeMs === right.ctimeMs
-}
-
-/** Read the restore authority without following either its leaf or runtime dir. */
+/** Read the restore authority without following either its leaf or runtime dir.
+ *  Delegates to the shared private-fs bounded no-follow reader (dedupe audit
+ *  N5, 2026-09); `tightenMode: false` keeps the read free of chmod side
+ *  effects — the marker is always written 0600 by the shared atomic writer.
+ *
+ *  Shared-reader notes (2026-09 review): the reader is STRICTER than the
+ *  replaced inline implementation in two adversarial corners (a symlinked
+ *  baseDir and a parent stripped of owner-read are now 'unsafe' instead of
+ *  readable — the write path already refused both) and adds a bigint
+ *  ns-precision double snapshot plus single-link checks on both ends. One
+ *  narrow benign window: a hard link added between the post-read snapshot and
+ *  the final leaf lstat now reads 'valid' where the old code said 'unsafe' —
+ *  the content is already double-snapshotted stable and any later marker
+ *  write is still refused by the atomic writer's single-link check, so the
+ *  transaction stays fail-closed. Platform note: on win32 (no O_NOFOLLOW)
+ *  private-fs readers/writers hard-fail closed by design (windows-v1.md) —
+ *  a marker present on Windows reads 'unsafe' and cannot be written, so
+ *  restore recovery on win32 requires the documented manual removal path. */
 function readRestoreMarkerAuthority(baseDir: string): RestoreMarkerAuthorityRead {
-  const markerPath = snapshotPaths(baseDir).restoreMarker
-  const parent = dirname(markerPath)
-  let parentBefore: ReturnType<typeof lstatSync>
-  try {
-    parentBefore = lstatSync(parent)
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'ENOENT'
-      ? { kind: 'missing' }
-      : { kind: 'unsafe' }
-  }
-  if (parentBefore.isSymbolicLink() || !parentBefore.isDirectory()) return { kind: 'unsafe' }
-
-  let leafBefore: ReturnType<typeof lstatSync>
-  try {
-    leafBefore = lstatSync(markerPath)
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return { kind: 'unsafe' }
-    try {
-      const parentAfter = lstatSync(parent)
-      return parentAfter.isDirectory()
-        && !parentAfter.isSymbolicLink()
-        && sameIdentity(parentBefore, parentAfter)
-        ? { kind: 'missing' }
-        : { kind: 'unsafe' }
-    } catch {
-      return { kind: 'unsafe' }
-    }
-  }
-  if (leafBefore.isSymbolicLink()
-    || !leafBefore.isFile()
-    || leafBefore.nlink !== 1
-    || leafBefore.size < 0
-    || leafBefore.size > MAX_RESTORE_MARKER_BYTES) return { kind: 'unsafe' }
-
-  let fd: number | null = null
-  try {
-    fd = openSync(markerPath, constants.O_RDONLY | constants.O_NOFOLLOW)
-    const opened = fstatSync(fd)
-    const parentOpened = lstatSync(parent)
-    if (!opened.isFile()
-      || opened.nlink !== 1
-      || !sameIdentity(leafBefore, opened)
-      || parentOpened.isSymbolicLink()
-      || !parentOpened.isDirectory()
-      || !sameIdentity(parentBefore, parentOpened)) return { kind: 'unsafe' }
-
-    fchmodSync(fd, PRIVATE_FILE_MODE)
-    const beforeRead = fstatSync(fd)
-    if (!beforeRead.isFile() || beforeRead.nlink !== 1 || beforeRead.size > MAX_RESTORE_MARKER_BYTES) {
-      return { kind: 'unsafe' }
-    }
-    const buffer = Buffer.allocUnsafe(MAX_RESTORE_MARKER_BYTES + 1)
-    let offset = 0
-    while (offset <= MAX_RESTORE_MARKER_BYTES) {
-      const count = readSync(fd, buffer, offset, MAX_RESTORE_MARKER_BYTES + 1 - offset, null)
-      if (count === 0) break
-      offset += count
-    }
-    if (offset > MAX_RESTORE_MARKER_BYTES || offset !== beforeRead.size) return { kind: 'unsafe' }
-
-    const afterRead = fstatSync(fd)
-    const leafAfter = lstatSync(markerPath)
-    const parentAfter = lstatSync(parent)
-    if (!sameFileSnapshot(beforeRead, afterRead)
-      || leafAfter.isSymbolicLink()
-      || !leafAfter.isFile()
-      || leafAfter.nlink !== 1
-      || !sameIdentity(afterRead, leafAfter)
-      || parentAfter.isSymbolicLink()
-      || !parentAfter.isDirectory()
-      || !sameIdentity(parentBefore, parentAfter)) return { kind: 'unsafe' }
-    return { kind: 'valid', raw: buffer.subarray(0, offset).toString('utf8') }
-  } catch {
-    return { kind: 'unsafe' }
-  } finally {
-    if (fd !== null) {
-      try { closeSync(fd) } catch { /* best effort */ }
-    }
-  }
+  const state = readPrivateFileNoFollow(
+    snapshotPaths(baseDir).restoreMarker,
+    MAX_RESTORE_MARKER_BYTES,
+    { tightenMode: false },
+  )
+  return state.kind === 'valid'
+    ? { kind: 'valid', raw: state.raw }
+    : { kind: state.kind }
 }
 
 export function restoreMarkerAuthorityStatus(baseDir: string): RestoreMarkerAuthorityStatus {
@@ -222,20 +156,13 @@ async function ensureRuntimeSubdir(baseDir: string, dir: string): Promise<void> 
   await ensurePrivateDir(dir)
 }
 
-async function atomicWriteMarker(filePath: string, marker: RestoreMarker): Promise<void> {
-  await ensurePrivateDir(dirname(filePath))
-  const tmp = `${filePath}.tmp-${randomBytes(4).toString('hex')}`
-  try {
-    await writeFile(tmp, `${JSON.stringify(marker, null, 2)}\n`, {
-      encoding: 'utf8',
-      mode: PRIVATE_FILE_MODE,
-      flag: 'wx',
-    })
-    await rename(tmp, filePath)
-  } catch (error) {
-    await rm(tmp, { force: true }).catch(() => {})
-    throw error
-  }
+/** Durable marker write via the shared private-fs atomic writer: O_NOFOLLOW
+ *  tmp + file fsync + rename + parent-directory fsync + identity re-verifies
+ *  (the former local copy had none of the fsync/identity steps — dedupe audit
+ *  N5, 2026-09). The marker is authoritative recovery metadata; durability
+ *  here is a correctness property, not an optimization. */
+async function atomicWriteMarker(baseDir: string, filePath: string, marker: RestoreMarker): Promise<void> {
+  atomicWriteRuntimeFileNoFollow(baseDir, filePath, `${JSON.stringify(marker, null, 2)}\n`)
 }
 
 async function pathIsDirectoryNoFollow(path: string): Promise<boolean> {
@@ -621,10 +548,10 @@ function parseMarker(raw: string, baseDir: string, dshHome: string): RestoreMark
   }
 }
 
-async function persistPhase(markerPath: string, marker: RestoreMarker, phase: RestorePhase, hooks: RestoreHooks): Promise<void> {
+async function persistPhase(baseDir: string, markerPath: string, marker: RestoreMarker, phase: RestorePhase, hooks: RestoreHooks): Promise<void> {
   marker.phase = phase
   marker.updatedAt = Date.now()
-  await atomicWriteMarker(markerPath, marker)
+  await atomicWriteMarker(baseDir, markerPath, marker)
   await hooks.afterPhase?.(phase, marker)
 }
 
@@ -656,7 +583,7 @@ async function beginRestore(
     startedAt: now,
     updatedAt: now,
   }
-  await atomicWriteMarker(restoreMarker, marker)
+  await atomicWriteMarker(baseDir, restoreMarker, marker)
   await hooks.afterPhase?.('copying', marker)
   return marker
 }
@@ -688,18 +615,18 @@ async function runRestoreTransaction(
         return 'incomplete'
       }
       if (!tightenOwnedDirectory(marker.stagingPath)) return 'incomplete'
-      await persistPhase(markerPath, marker, 'staged', hooks)
+      await persistPhase(baseDir, markerPath, marker, 'staged', hooks)
     }
 
     if (marker.phase === 'staged') {
       const stagingState = ownedDirectoryState(marker.stagingPath)
       if (stagingState === 'unsafe') return 'incomplete'
       if (stagingState === 'missing') {
-        await persistPhase(markerPath, marker, 'copying', hooks)
+        await persistPhase(baseDir, markerPath, marker, 'copying', hooks)
         return runRestoreTransaction(baseDir, dshHome, marker, copyFn, hooks)
       }
       if (!tightenOwnedDirectory(marker.stagingPath)) return 'incomplete'
-      await persistPhase(markerPath, marker, 'backing-up', hooks)
+      await persistPhase(baseDir, markerPath, marker, 'backing-up', hooks)
     }
 
     if (marker.phase === 'backing-up') {
@@ -721,7 +648,7 @@ async function runRestoreTransaction(
         // An external path appeared after the transaction began; preserve it.
         return 'half'
       }
-      await persistPhase(markerPath, marker, 'publishing', hooks)
+      await persistPhase(baseDir, markerPath, marker, 'publishing', hooks)
     }
 
     if (marker.phase === 'publishing') {
@@ -738,7 +665,7 @@ async function runRestoreTransaction(
         if (stagingState !== 'missing' || homeState !== 'directory') return 'incomplete'
       }
       if (!tightenOwnedDirectory(dshHome)) return 'incomplete'
-      await persistPhase(markerPath, marker, 'published', hooks)
+      await persistPhase(baseDir, markerPath, marker, 'published', hooks)
     }
 
     if (marker.phase === 'published') {

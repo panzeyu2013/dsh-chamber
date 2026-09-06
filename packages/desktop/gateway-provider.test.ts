@@ -62,6 +62,7 @@ import {
   syncGatewayChamberPlugins,
 } from './gateway-provider.ts'
 import { parseSpecArg } from './gateway-ipc-shared.ts'
+import { completeGatewaySessionHooks as completeTestSessionHooks, GATEWAY_RUNTIME_STATUS } from './gateway-session-test-hooks.ts'
 import type { LocalChamberHostPackage } from './gateway-provider.ts'
 import type { SecretCryptoAdapter, GatewaySessionProviderHooks } from './gateway-provider.ts'
 import type { GatewaySessionOrigin, GatewaySessionResult } from './gateway-session.ts'
@@ -72,32 +73,6 @@ import type { TransportInstanceSpec } from './transport-provider.ts'
 const TOKEN = '0123456789abcdef0123456789abcdef'
 const PASSWORD = 'gateway-login-password-123'
 const UNICODE_PASSWORD = '正确的网关密码-安全🔐-2026'
-const GATEWAY_RUNTIME_STATUS = { kind: GATEWAY_RUNTIME_IDENTITY, connectionState: 'stopped' }
-
-function completeTestSessionHooks(partial: GatewaySessionProviderHooks): GatewaySessionProviderHooks {
-  if (partial.ensureSession === undefined) throw new TypeError('test session hooks require ensureSession')
-  let generation = 0
-  let proof: import('./gateway-session.ts').GatewayRegistrationAuthProof | null = null
-  let cached: string | null = null
-  return {
-    ensureSession: async (origin, password) => {
-      const result = await partial.ensureSession!(origin, password)
-      if (result.ok) cached = result.cookie
-      return result
-    },
-    generation: partial.generation ?? (() => generation),
-    registrationAuthProof: partial.registrationAuthProof ?? (() => proof),
-    setRegistrationAuthProof: partial.setRegistrationAuthProof ?? ((_origin, next) => { proof = next }),
-    cachedCookie: origin => partial.cachedCookie?.(origin) ?? cached,
-    invalidate: origin => {
-      generation += 1
-      proof = null
-      cached = null
-      partial.invalidate?.(origin)
-    },
-  }
-}
-
 function storedGatewaySpec(id: string): TransportInstanceSpec {
   return {
     id, label: id, kind: 'gateway', transport: 'http', host: 'gw.example.com',
@@ -861,6 +836,10 @@ test('verifyUp: 403/421 stay terminal and 5xx stays transient (design 17 §7.3 s
       if (!result.ok) {
         assert.equal(result.terminal, terminal, `HTTP ${status} classified ${terminal ? 'terminal' : 'transient'}`)
         assert.match(result.detail ?? '', detailRe)
+        // The direct-endpoint probe carries statusCode only on the raw 401
+        // (the verifyUp re-login flow keys on it) — 403/421/5xx stay without
+        // one. Pinned so the shared probe core cannot silently flip the shape.
+        assert.equal('statusCode' in result, false, `direct probe has no statusCode on HTTP ${status}`)
       }
     }
   } finally {

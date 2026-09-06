@@ -7,20 +7,16 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { createLocalConnection } from '../src/local-connection.ts'
 import { CATALOG_FILE, createCatalog } from '../src/catalog.ts'
 import { DEFAULT_DSH_START_PORT } from '../src/spawn-dsh.ts'
 import { logPathFor } from '../src/host-logs.ts'
 import type { ProbeIdentityFn, SpawnedDsh } from '../src/local-connection.ts'
+import { tempDir } from './utils.ts'
 
 const silentLogger = { log() {}, warn() {}, error() {} }
-
-function tempDir(): string {
-  return mkdtempSync(join(tmpdir(), 'dsh-local-conn-'))
-}
 
 async function waitUntil(condition: () => boolean, timeoutMs = 3000): Promise<void> {
   const start = Date.now()

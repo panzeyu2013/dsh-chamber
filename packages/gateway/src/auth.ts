@@ -58,6 +58,7 @@ import {
   MIN_GATEWAY_TOKEN_CHARS,
 } from './config.ts'
 import { GATEWAY_SESSION_COOKIE_NAME, GATEWAY_SESSION_TTL_SECONDS, GATEWAY_TOKEN_VISIBLE_ASCII_PATTERN } from '@dsh-chamber/control-plane'
+import { headerValueSingle } from './http-utils.ts'
 
 export interface AuthPrincipal {
   kind: 'password' | 'token' | 'passkey' | 'none'
@@ -224,14 +225,6 @@ function verifyJwt(token: string, secret: string): Record<string, unknown> | nul
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function headerValue(headers: Record<string, string | string[] | undefined>, name: string): string | undefined {
-  const v = headers[name]
-  // Never choose a first value from an ambiguous credential field. The real
-  // raw-header duplicate check lives in the shared HTTP/WS request policy;
-  // this guard also keeps direct AuthProvider callers fail-closed.
-  return typeof v === 'string' ? v : undefined
-}
 
 function parseCookie(header: string | undefined): Record<string, string> {
   const out: Record<string, string> = {}
@@ -446,7 +439,7 @@ function createTokenProvider(
   return {
     kind: 'token',
     async verify(req: AuthRequest): Promise<AuthPrincipal | null> {
-      const value = headerValue(req.headers, 'authorization')
+      const value = headerValueSingle(req.headers, 'authorization')
       if (value === undefined) return null
       // Bound and validate the wire credential before reading the persisted
       // verifier or entering the scrypt work gate. One literal SP separates
@@ -486,7 +479,7 @@ function createPasswordProvider(
   return {
     async verify(req: AuthRequest): Promise<AuthPrincipal | null> {
       const admittedGeneration = generation()
-      const cookie = parseCookie(headerValue(req.headers, 'cookie'))
+      const cookie = parseCookie(headerValueSingle(req.headers, 'cookie'))
       const session = cookie[SESSION_COOKIE]
       if (session === undefined) return null
       const payload = verifyJwt(session, store.getJwtSecret())

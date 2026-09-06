@@ -77,27 +77,7 @@ export function verifySignedMacEntitlements(appPath, spawn = spawnSync) {
 
 export const PACKAGED_RUNTIME_MODULES = Object.freeze([
   'sanitize-error.ts',
-  'registry-url.ts',
-  'registry-integrity.ts',
-  'registry-metadata.ts',
-  'version-safety.ts',
-  'dsh-runtime-updater.ts',
-  'runtime-installer.ts',
   'dsh-runtime-controller.ts',
-  'dsh-runtime-store.ts',
-  'runtime-startup.ts',
-  'runtime-probes.ts',
-  'restart-exhausted-rollback.ts',
-  'runtime-operation-fence.ts',
-  'runtime-metadata-recovery.ts',
-  'activation-gate.ts',
-  'override-lifecycle.ts',
-  'snapshot-store.ts',
-  'apply-phase.ts',
-  'runtime-state-machine.ts',
-  'known-good-monitor.ts',
-  'allow-builds.mjs',
-  'prune-runtime.mjs',
 ]);
 
 /**

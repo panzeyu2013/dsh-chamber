@@ -1,8 +1,9 @@
 /**
- * Shared orchestrator-test fixtures (plugins-tasks.test.ts): tmp dirs, the
- * profile-manifest writer, and the injectable fake spawn (child/stream
- * twins of the plugins-exec.test.ts harness — kept here so both suites stay
- * independent). Bare helper file — not a test.
+ * Shared orchestrator-test fixtures (plugins-tasks.test.ts +
+ * plugins-exec.test.ts): tmp dirs, the profile-manifest writer, and the
+ * injectable fake spawn (child/stream twins). The former duplicate copy in
+ * plugins-exec.test.ts was deleted 2026-09 (dedupe audit N7) — both suites
+ * import from here. Bare helper file — not a test.
  */
 import { EventEmitter } from 'node:events'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'

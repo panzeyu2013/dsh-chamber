@@ -180,6 +180,20 @@ export function compareRuntimeVersions(a: string, b: string): -1 | 0 | 1 | null 
   return compared === 0 ? 0 : compared < 0 ? -1 : 1;
 }
 
+/** Downgrade predicate for activation-intent arming — the single source of
+ *  the `manualRollback: active !== null && compareRuntimeVersions(target,
+ *  active) === -1` formula formerly inlined at the desktop controller install
+ *  (dsh-runtime-controller.ts), the gateway apply() and the gateway
+ *  apply-now F2 arm (dedupe audit P3-3c, 2026-09). `active` is the EFFECTIVE
+ *  active version (pointer ?? builtin anchor on both owners): a builtin-
+ *  active downgrade is still a real data rollback (manualRollback arms the
+ *  pre-rollback stash + target-data restore, design 18 §3.7), not a plain
+ *  switch. Returns false when `active` is absent or the versions are not
+ *  comparable (compareRuntimeVersions === null). */
+export function isVersionDowngrade(target: string, active: string | null): boolean {
+  return active !== null && compareRuntimeVersions(target, active) === -1;
+}
+
 /** 降序比较：升序结果取反（semverCompareAsc(b, a)）。 */
 function semverCompareDesc(a: string, b: string): number {
   return semverCompareAsc(b, a);

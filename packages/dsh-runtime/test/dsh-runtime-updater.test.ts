@@ -13,6 +13,7 @@ import {
   buildVersionList,
   compareRuntimeVersions,
   isNoopSelection,
+  isVersionDowngrade,
   versionExists,
 } from '../src/dsh-runtime-updater.ts';
 
@@ -318,4 +319,12 @@ test('compareRuntimeVersions: supports arbitrarily large numeric identifiers wit
   assert.equal(compareRuntimeVersions('1.0.0-999999999999999999999', '1.0.0-2'), 1);
   assert.equal(compareRuntimeVersions('1.0.0+one', '1.0.0+two'), 0);
   assert.equal(compareRuntimeVersions('01.0.0', '1.0.0'), null);
+});
+
+test('isVersionDowngrade: shared downgrade predicate for activation-intent arming (P3-3c)', () => {
+  assert.equal(isVersionDowngrade('1.0.0', '2.0.0'), true, 'target below the effective active version');
+  assert.equal(isVersionDowngrade('2.0.0', '2.0.0'), false, 'same version is not a downgrade');
+  assert.equal(isVersionDowngrade('3.0.0', '2.0.0'), false, 'upgrade is not a downgrade');
+  assert.equal(isVersionDowngrade('1.0.0', null), false, 'no effective active version (builtin-less boot) → no rollback arming');
+  assert.equal(isVersionDowngrade('01.0.0', '2.0.0'), false, 'incomparable (non-canonical semver) → false, never a crash');
 });

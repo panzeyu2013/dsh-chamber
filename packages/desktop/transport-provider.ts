@@ -173,6 +173,16 @@ export function canonicalizeTransportInstanceInput(entry: unknown): unknown {
   return { ...record, kind: nextKind, transport: nextTransport }
 }
 
+/** Best-effort signal to a spawned child (shared by the transport manager's
+ *  kill/escalation paths and the ssh provider's teardown; the two former
+ *  byte-identical local copies were unified here — dedupe audit N7). */
+export function signalChild(child: SpawnedProcess | null, signal: NodeJS.Signals) {
+  if (child === null) return
+  try {
+    child.kill(signal)
+  } catch { /* already gone */ }
+}
+
 /**
  * The non-secret status projection (design 05 §8): phase, local ports,
  * retryAttempt, requiresUserAction, serviceActive, logSummary. Never a

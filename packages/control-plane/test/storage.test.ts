@@ -11,23 +11,17 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn as spawnChild } from 'node:child_process'
-import fs, { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import fs, { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { syncBuiltinESMExports } from 'node:module'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createJsonStore, JsonStorePersistError, JsonStoreRevisionConflictError } from '../src/json-store.ts'
 import { createCatalog, CATALOG_BACKUP_FILE, CATALOG_FILE } from '../src/catalog.ts'
 import type { CatalogConnectionRow } from '../src/catalog.ts'
 import { ensureInstanceId } from '../src/instance-id.ts'
 import { ensurePrivateDirectoryNoFollow, readPrivateFileNoFollow } from '../src/private-file.ts'
+import { tempDir } from './utils.ts'
 
 const silentLogger = { log() {}, warn() {}, error() {} }
-
-function tempDir(t: any) {
-  const dir = mkdtempSync(join(tmpdir(), 'dsh-storage-'))
-  t.after(() => rmSync(dir, { recursive: true, force: true }))
-  return dir
-}
 
 function readJson(path: string) {
   return JSON.parse(readFileSync(path, 'utf8'))

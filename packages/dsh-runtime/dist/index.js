@@ -2873,6 +2873,9 @@ function compareRuntimeVersions(a, b) {
   const compared = semverCompareAsc(a, b);
   return compared === 0 ? 0 : compared < 0 ? -1 : 1;
 }
+function isVersionDowngrade(target, active) {
+  return active !== null && compareRuntimeVersions(target, active) === -1;
+}
 function semverCompareDesc(a, b) {
   return semverCompareAsc(b, a);
 }
@@ -4529,7 +4532,7 @@ import {
   openSync as openSync3,
   readFileSync as readFileSync3,
   readlinkSync,
-  readSync as readSync3,
+  readSync as readSync2,
   readdirSync as readdirSync4,
   realpathSync as realpathSync3,
   renameSync as renameSync3,
@@ -4542,7 +4545,7 @@ import { createHash as createHash4, randomBytes as randomBytes5 } from "node:cry
 import { basename as basename6, dirname as dirname4, isAbsolute as isAbsolute3, join as join7, relative as relative4, resolve as resolve2, sep as sep3 } from "node:path";
 
 // src/snapshot-store.ts
-import { cp, lstat, mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { cp, lstat, mkdir, readdir, rm } from "node:fs/promises";
 import {
   closeSync as closeSync2,
   constants as constants2,
@@ -4550,8 +4553,7 @@ import {
   fchmodSync as fchmodSync2,
   fstatSync as fstatSync2,
   lstatSync as lstatSync4,
-  openSync as openSync2,
-  readSync as readSync2
+  openSync as openSync2
 } from "node:fs";
 import { basename as basename5, dirname as dirname3, join as join6, resolve, sep as sep2 } from "node:path";
 import { randomBytes as randomBytes4 } from "node:crypto";
@@ -4569,17 +4571,17 @@ function delay2(ms) {
   });
 }
 async function renameWithWindowsRetry(from, to, deps = {}) {
-  const rename2 = deps.renameFn ?? renameFile;
+  const rename = deps.renameFn ?? renameFile;
   const isWindows = deps.isWindows ?? process.platform === "win32";
   if (!isWindows) {
-    await rename2(from, to);
+    await rename(from, to);
     return;
   }
   const sleep = deps.sleep ?? delay2;
   let lastError;
   for (let attempt = 0; attempt <= WINDOWS_RENAME_RETRY_DELAYS_MS.length; attempt++) {
     try {
-      await rename2(from, to);
+      await rename(from, to);
       return;
     } catch (error) {
       lastError = error;
@@ -4594,71 +4596,17 @@ async function renameWithWindowsRetry(from, to, deps = {}) {
 
 // src/snapshot-store.ts
 var PRIVATE_DIR_MODE = 448;
-var PRIVATE_FILE_MODE = 384;
 var MAX_RESTORE_MARKER_BYTES = 128 * 1024;
 function sameIdentity3(left, right) {
   return left.dev === right.dev && left.ino === right.ino;
 }
-function sameFileSnapshot2(left, right) {
-  return sameIdentity3(left, right) && left.isFile() && right.isFile() && left.nlink === 1 && right.nlink === 1 && left.size === right.size && left.mtimeMs === right.mtimeMs && left.ctimeMs === right.ctimeMs;
-}
 function readRestoreMarkerAuthority(baseDir) {
-  const markerPath = snapshotPaths(baseDir).restoreMarker;
-  const parent = dirname3(markerPath);
-  let parentBefore;
-  try {
-    parentBefore = lstatSync4(parent);
-  } catch (error) {
-    return error.code === "ENOENT" ? { kind: "missing" } : { kind: "unsafe" };
-  }
-  if (parentBefore.isSymbolicLink() || !parentBefore.isDirectory()) return { kind: "unsafe" };
-  let leafBefore;
-  try {
-    leafBefore = lstatSync4(markerPath);
-  } catch (error) {
-    if (error.code !== "ENOENT") return { kind: "unsafe" };
-    try {
-      const parentAfter = lstatSync4(parent);
-      return parentAfter.isDirectory() && !parentAfter.isSymbolicLink() && sameIdentity3(parentBefore, parentAfter) ? { kind: "missing" } : { kind: "unsafe" };
-    } catch {
-      return { kind: "unsafe" };
-    }
-  }
-  if (leafBefore.isSymbolicLink() || !leafBefore.isFile() || leafBefore.nlink !== 1 || leafBefore.size < 0 || leafBefore.size > MAX_RESTORE_MARKER_BYTES) return { kind: "unsafe" };
-  let fd = null;
-  try {
-    fd = openSync2(markerPath, constants2.O_RDONLY | constants2.O_NOFOLLOW);
-    const opened = fstatSync2(fd);
-    const parentOpened = lstatSync4(parent);
-    if (!opened.isFile() || opened.nlink !== 1 || !sameIdentity3(leafBefore, opened) || parentOpened.isSymbolicLink() || !parentOpened.isDirectory() || !sameIdentity3(parentBefore, parentOpened)) return { kind: "unsafe" };
-    fchmodSync2(fd, PRIVATE_FILE_MODE);
-    const beforeRead = fstatSync2(fd);
-    if (!beforeRead.isFile() || beforeRead.nlink !== 1 || beforeRead.size > MAX_RESTORE_MARKER_BYTES) {
-      return { kind: "unsafe" };
-    }
-    const buffer = Buffer.allocUnsafe(MAX_RESTORE_MARKER_BYTES + 1);
-    let offset = 0;
-    while (offset <= MAX_RESTORE_MARKER_BYTES) {
-      const count = readSync2(fd, buffer, offset, MAX_RESTORE_MARKER_BYTES + 1 - offset, null);
-      if (count === 0) break;
-      offset += count;
-    }
-    if (offset > MAX_RESTORE_MARKER_BYTES || offset !== beforeRead.size) return { kind: "unsafe" };
-    const afterRead = fstatSync2(fd);
-    const leafAfter = lstatSync4(markerPath);
-    const parentAfter = lstatSync4(parent);
-    if (!sameFileSnapshot2(beforeRead, afterRead) || leafAfter.isSymbolicLink() || !leafAfter.isFile() || leafAfter.nlink !== 1 || !sameIdentity3(afterRead, leafAfter) || parentAfter.isSymbolicLink() || !parentAfter.isDirectory() || !sameIdentity3(parentBefore, parentAfter)) return { kind: "unsafe" };
-    return { kind: "valid", raw: buffer.subarray(0, offset).toString("utf8") };
-  } catch {
-    return { kind: "unsafe" };
-  } finally {
-    if (fd !== null) {
-      try {
-        closeSync2(fd);
-      } catch {
-      }
-    }
-  }
+  const state = readPrivateFileNoFollow(
+    snapshotPaths(baseDir).restoreMarker,
+    MAX_RESTORE_MARKER_BYTES,
+    { tightenMode: false }
+  );
+  return state.kind === "valid" ? { kind: "valid", raw: state.raw } : { kind: state.kind };
 }
 function restoreMarkerAuthorityStatus(baseDir) {
   const state = readRestoreMarkerAuthority(baseDir);
@@ -4689,22 +4637,9 @@ async function ensureRuntimeSubdir(baseDir, dir) {
   await ensurePrivateDir(runtimeDir);
   await ensurePrivateDir(dir);
 }
-async function atomicWriteMarker(filePath, marker) {
-  await ensurePrivateDir(dirname3(filePath));
-  const tmp = `${filePath}.tmp-${randomBytes4(4).toString("hex")}`;
-  try {
-    await writeFile(tmp, `${JSON.stringify(marker, null, 2)}
-`, {
-      encoding: "utf8",
-      mode: PRIVATE_FILE_MODE,
-      flag: "wx"
-    });
-    await rename(tmp, filePath);
-  } catch (error) {
-    await rm(tmp, { force: true }).catch(() => {
-    });
-    throw error;
-  }
+async function atomicWriteMarker(baseDir, filePath, marker) {
+  atomicWriteRuntimeFileNoFollow(baseDir, filePath, `${JSON.stringify(marker, null, 2)}
+`);
 }
 async function pathIsDirectoryNoFollow(path) {
   try {
@@ -4995,10 +4930,10 @@ function parseMarker(raw, baseDir, dshHome) {
     updatedAt: record.updatedAt
   };
 }
-async function persistPhase(markerPath, marker, phase, hooks) {
+async function persistPhase(baseDir, markerPath, marker, phase, hooks) {
   marker.phase = phase;
   marker.updatedAt = Date.now();
-  await atomicWriteMarker(markerPath, marker);
+  await atomicWriteMarker(baseDir, markerPath, marker);
   await hooks.afterPhase?.(phase, marker);
 }
 async function beginRestore(baseDir, dshHome, snapshotPath, hooks) {
@@ -5024,7 +4959,7 @@ async function beginRestore(baseDir, dshHome, snapshotPath, hooks) {
     startedAt: now,
     updatedAt: now
   };
-  await atomicWriteMarker(restoreMarker, marker);
+  await atomicWriteMarker(baseDir, restoreMarker, marker);
   await hooks.afterPhase?.("copying", marker);
   return marker;
 }
@@ -5047,17 +4982,17 @@ async function runRestoreTransaction(baseDir, dshHome, marker, copyFn, hooks) {
         return "incomplete";
       }
       if (!tightenOwnedDirectory(marker.stagingPath)) return "incomplete";
-      await persistPhase(markerPath, marker, "staged", hooks);
+      await persistPhase(baseDir, markerPath, marker, "staged", hooks);
     }
     if (marker.phase === "staged") {
       const stagingState = ownedDirectoryState(marker.stagingPath);
       if (stagingState === "unsafe") return "incomplete";
       if (stagingState === "missing") {
-        await persistPhase(markerPath, marker, "copying", hooks);
+        await persistPhase(baseDir, markerPath, marker, "copying", hooks);
         return runRestoreTransaction(baseDir, dshHome, marker, copyFn, hooks);
       }
       if (!tightenOwnedDirectory(marker.stagingPath)) return "incomplete";
-      await persistPhase(markerPath, marker, "backing-up", hooks);
+      await persistPhase(baseDir, markerPath, marker, "backing-up", hooks);
     }
     if (marker.phase === "backing-up") {
       let homeState = ownedDirectoryState(dshHome);
@@ -5077,7 +5012,7 @@ async function runRestoreTransaction(baseDir, dshHome, marker, copyFn, hooks) {
       } else if (homeState !== "missing" || backupState !== "missing") {
         return "half";
       }
-      await persistPhase(markerPath, marker, "publishing", hooks);
+      await persistPhase(baseDir, markerPath, marker, "publishing", hooks);
     }
     if (marker.phase === "publishing") {
       let stagingState = ownedDirectoryState(marker.stagingPath);
@@ -5093,7 +5028,7 @@ async function runRestoreTransaction(baseDir, dshHome, marker, copyFn, hooks) {
         if (stagingState !== "missing" || homeState !== "directory") return "incomplete";
       }
       if (!tightenOwnedDirectory(dshHome)) return "incomplete";
-      await persistPhase(markerPath, marker, "published", hooks);
+      await persistPhase(baseDir, markerPath, marker, "published", hooks);
     }
     if (marker.phase === "published") {
       if (ownedDirectoryState(dshHome) !== "directory" || !tightenOwnedDirectory(dshHome)) return "incomplete";
@@ -5400,7 +5335,7 @@ async function completeInterruptedRestore(baseDir, dshHome, copyFn = defaultCopy
 
 // src/runtime-metadata-recovery.ts
 var PRIVATE_DIR_MODE2 = 448;
-var PRIVATE_FILE_MODE2 = 384;
+var PRIVATE_FILE_MODE = 384;
 var RECOVERY_SCHEMA_VERSION = 1;
 var RECOVERY_MARKER = "metadata-recovery.json";
 var RECOVERY_DATA_DIR = "metadata-recovery-data";
@@ -5650,7 +5585,7 @@ function fingerprintRegularFile(filePath, retainContent, requireNoFollow = true)
     const buffer = Buffer.allocUnsafe(Math.min(1024 * 1024, Math.max(1, before.size)));
     let offset = 0;
     while (offset < before.size) {
-      const count = readSync3(
+      const count = readSync2(
         descriptor,
         buffer,
         0,
@@ -5724,12 +5659,12 @@ function defaultCopyFile(source, destination, constraint) {
     destinationFd = openSync3(
       destination,
       constants3.O_WRONLY | constants3.O_CREAT | constants3.O_EXCL | noFollow,
-      PRIVATE_FILE_MODE2
+      PRIVATE_FILE_MODE
     );
     const buffer = Buffer.allocUnsafe(1024 * 1024);
     let offset = 0;
     while (true) {
-      const count = readSync3(sourceFd, buffer, 0, buffer.length, offset);
+      const count = readSync2(sourceFd, buffer, 0, buffer.length, offset);
       if (count === 0) break;
       let written = 0;
       while (written < count) {
@@ -5779,17 +5714,17 @@ function writePrivateJson(filePath, payload, runtimeRoot, ops, kind) {
     writeFileSync3(tmp, `${JSON.stringify(payload, null, 2)}
 `, {
       encoding: "utf8",
-      mode: PRIVATE_FILE_MODE2,
+      mode: PRIVATE_FILE_MODE,
       flag: "wx"
     });
-    chmodSync3(tmp, PRIVATE_FILE_MODE2);
+    chmodSync3(tmp, PRIVATE_FILE_MODE);
     fsyncRegularFileNoFollow(tmp, "metadata recovery JSON temporary file");
     ops.renamePath(tmp, filePath, kind);
     const published = lstatSync5(filePath);
     if (published.isSymbolicLink() || !published.isFile() || published.nlink !== 1) {
       throw new Error("metadata recovery JSON did not publish as a uniquely linked real file");
     }
-    chmodSync3(filePath, PRIVATE_FILE_MODE2);
+    chmodSync3(filePath, PRIVATE_FILE_MODE);
     fsyncRegularFileNoFollow(filePath, "published metadata recovery JSON");
     fsyncRealDirectory(parent, "metadata recovery JSON parent");
   } catch (error) {
@@ -6050,7 +5985,7 @@ function copySourceTree(source, destination, destinationRoot, sourceRoot, source
     if (copied.isSymbolicLink() || !copied.isFile() || copied.nlink !== 1) {
       throw new Error("stash copy did not create a uniquely linked real file");
     }
-    chmodSync3(destination, PRIVATE_FILE_MODE2);
+    chmodSync3(destination, PRIVATE_FILE_MODE);
     fsyncRegularFileNoFollow(destination, "DSH_HOME stash file");
     return;
   }
@@ -6097,7 +6032,7 @@ function parseStashReady(path, record) {
   try {
     const info = lstatSync5(path);
     if (info.isSymbolicLink() || !info.isFile() || info.nlink !== 1) return false;
-    chmodSync3(path, PRIVATE_FILE_MODE2);
+    chmodSync3(path, PRIVATE_FILE_MODE);
     const value = JSON.parse(readFileSync3(path, "utf8"));
     if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
     const ready = value;
@@ -6242,7 +6177,7 @@ function archiveEvidenceFile(paths, name, ops) {
     if (info.isSymbolicLink() || !info.isFile() || info.nlink !== 1) {
       throw new Error(`metadata evidence is unsafe: ${name}`);
     }
-    chmodSync3(source, PRIVATE_FILE_MODE2);
+    chmodSync3(source, PRIVATE_FILE_MODE);
     ops.renamePath(source, destination, "evidence");
     fsyncRealDirectory(paths.evidence, "metadata recovery evidence directory");
     fsyncRealDirectory(paths.runtimeDir, "runtime metadata directory");
@@ -6251,7 +6186,7 @@ function archiveEvidenceFile(paths, name, ops) {
   if (archived.isSymbolicLink() || !archived.isFile() || archived.nlink !== 1) {
     throw new Error(`archived metadata evidence is unsafe: ${name}`);
   }
-  chmodSync3(destination, PRIVATE_FILE_MODE2);
+  chmodSync3(destination, PRIVATE_FILE_MODE);
 }
 function assertNoUnplannedEvidence(paths, record) {
   const remaining = readdirSync4(paths.runtimeDir, { withFileTypes: true }).map((entry) => entry.name).filter(isEvidenceBasename);
@@ -6340,7 +6275,7 @@ function bootstrapCorruptMetadataRecoveryMarker(options) {
     if (copiedInfo.isSymbolicLink() || !copiedInfo.isFile() || copiedInfo.nlink !== 1) {
       throw new Error("opaque recovery-marker copy is not a uniquely linked real file");
     }
-    chmodSync3(opaqueTmp, PRIVATE_FILE_MODE2);
+    chmodSync3(opaqueTmp, PRIVATE_FILE_MODE);
     fsyncRegularFileNoFollow(opaqueTmp, "opaque recovery-marker temporary evidence");
     const copied = fingerprintRegularFile(opaqueTmp, false).fingerprint;
     if (!sameOpaqueBytes(copied, original)) {
@@ -7663,6 +7598,7 @@ export {
   isSafeVersion,
   isSupportedIntegrity,
   isTerminal,
+  isVersionDowngrade,
   knownGoodCandidatesPath,
   latestKnownGood,
   listExplicitlyInstalledVersions,

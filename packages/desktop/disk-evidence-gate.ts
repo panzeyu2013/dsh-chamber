@@ -16,7 +16,7 @@
  * that the skip set ⊆ RuntimePhase: adding a non-phase literal to the set
  * below fails the root typecheck.
  */
-import type { RuntimePhase } from './runtime-state-machine.ts'
+import type { RuntimePhase } from '@dsh-chamber/dsh-runtime'
 
 /** D7（2026-09，M1 调度收口）：纯进度相位不打全树遍历。download/install/
  *  apply 进行中 patch 的磁盘面复用最近一次完整投影；其余（终态、内容相位、

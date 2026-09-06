@@ -1,6 +1,7 @@
 /** chamber sidebar package shared faces: the instance unary client, the chamberBridge singleton, the control-plane REST client, and the gateway dsh-runtime core (design 21 §5.2). */
 
 export * from './instance-api.ts'
+export * from './wire-common.ts'
 export * from './control-plane-client.ts'
 export * from './aggregate-store.ts'
 export * from './plugin-graph-recheck.ts'

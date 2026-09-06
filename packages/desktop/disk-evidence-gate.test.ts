@@ -18,7 +18,7 @@ import {
   DISK_SKIP_PROGRESS_PHASES,
   shouldSkipDiskRefresh,
 } from './disk-evidence-gate.ts'
-import type { RuntimePhase } from './runtime-state-machine.ts'
+import type { RuntimePhase } from '@dsh-chamber/dsh-runtime'
 
 /** Full legal phase set of the runtime state machine (typed against the
  *  RuntimePhase union — a typo/rename here fails the typecheck). */

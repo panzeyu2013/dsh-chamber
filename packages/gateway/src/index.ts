@@ -13,6 +13,8 @@ import { fileURLToPath } from 'node:url'
 import { FATAL_STARTUP_BLOCK_REASONS } from '@dsh-chamber/dsh-runtime'
 import {
   DEFAULT_STATE_DIR,
+  HOST_GIT_WORKTREE_INSERT,
+  HOST_GRAPH_INSERT,
   createControlPlane,
   defaultDshWorkspacePath,
   type Logger,
@@ -318,14 +320,14 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
       dshWorkspacePath: options.config.plane.dshWorkspacePath,
       extraSeedEntries: [
         {
-          insert: { id: 'client-graph', name: '@dsh-chamber/dsh-host-client-graph' },
+          insert: HOST_GRAPH_INSERT,
           kind: 'host',
           source: 'desktop-synced',
           sourceDir: syncedSourceDir(options.config.plane.stateDir, '@dsh-chamber/dsh-host-client-graph'),
           probeDomains: ['clientGraph/graph'],
         },
         {
-          insert: { id: 'git-worktree', name: '@dsh-chamber/dsh-host-git-worktree' },
+          insert: HOST_GIT_WORKTREE_INSERT,
           kind: 'host',
           source: 'desktop-synced',
           sourceDir: syncedSourceDir(options.config.plane.stateDir, '@dsh-chamber/dsh-host-git-worktree'),

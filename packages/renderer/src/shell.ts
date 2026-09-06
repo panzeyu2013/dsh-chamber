@@ -98,7 +98,9 @@ function loadModuleBundle(url: string): Promise<void> {
     }
     // A hung bundle (server stalls, never fires load/error) must not keep this
     // instance's boot pending forever — fail loud at the same order of
-    // magnitude as the graph fetch (host-graph.ts GRAPH_TIMEOUT_MS); the
+    // magnitude as the graph fetch (host-graph.ts, whose bounded-unary 30s
+    // budget rides the shared postUnary kernel of sidebar shared
+    // wire-common.ts); the
     // rejection runs through the same fail-loud boot path as a load error.
     // Removing a module element does not reliably cancel its fetch, so leave
     // it attached after timeout. host-graph keeps a temporary tombstone and
@@ -124,7 +126,7 @@ function loadModuleBundle(url: string): Promise<void> {
   })
 }
 
-/** How long one extra-bundle script load may take before it fails loud (parallel to GRAPH_TIMEOUT_MS). */
+/** How long one extra-bundle script load may take before it fails loud (parallel to the graph fetch's 30s budget). */
 const BUNDLE_LOAD_TIMEOUT_MS = 30_000
 
 /** Per-instance shell lifecycle. */

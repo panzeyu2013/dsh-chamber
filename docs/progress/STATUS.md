@@ -986,3 +986,248 @@ envelope padding——cap 抬至 1 MiB 即变 'dsh'，必红）；ready 心跳�
   stateDir/dsh-home）——共享默认注释已言明，新登记防未来共享代码推导点忘传参会错读。
 - A-F14/A-F10/F7 等 wire 形状/周期/哨兵差异：均为设计内形态差异，按上列既有登记
   收口（snapshot-failed 两侧同款非阻塞存活补证）。
+
+## 2026-09 重复代码/可共享代码审计登记（N1–N11）
+
+> 全仓只读审计（485 TS 文件 ~167k 行 + 整文件级重复 0;跨包窗口扫描 + 五域子代理
+> 行号级复核）。既有登记 E-3/E-4/E-8/E-10/E-12..E-16 经复核相符（E-5/E-7/E-17 已
+> 修复项一并确认）；下为新增登记与执行计划。审计口径与行号明细以审计报告为准；
+> 计划执行状态随各 N 项就地更新。
+
+- N1（高,gateway 包内脚手架）：json() 写入器 ×3 逐字 + api.ts 第 4 变体；有界
+  body reader ×4 共 208 行（16KiB/64KiB/8MiB/32MiB,现值保留、对照 E-8 值表）；
+  code→HTTP 状态映射 ×5 站 ~60 行；headerValue ×3 且数组语义互异（auth.ts 失败
+  关闭 vs dispatch 取首个——安全漂移）→ 收敛为共享助手,fail-closed 语义优先。
+- N2（高,gateway 包内）：runtime-routes ↔ runtime-manager 双门 409 拒绝矩阵 ~350
+  行同策略同文案两套 → 文案/矩阵表/判定公式单源,routes 只做映射；两层执行与
+  R3/R4 门行为（block 早退、pending 仅 blockedReason===null）保留,先对拍测试后
+  重构。
+- N3（高,跨包字面量）：chamber host 包身份/seed 元数据 4 份（gateway
+  plugins.ts/index.ts、cp host-graph-seed.ts、desktop plugin-sync.ts;desktop 侧已
+  有 cross-package-contract 钉）→ gateway 改引 cp HOST_*_INSERT 导出,零新耦合。
+- N4（= E-3 展开,桌面半场）：桌面 6 处手写弱化原子写（ssh-provider 1021-1048 /
+  gateway-provider 656-690 / chamber-settings 294-310 / ssh-plugin-journal
+  297-315 / plugin-sync 1701-1719 / audit-log 111-118;固定 .tmp、无
+  O_EXCL/O_NOFOLLOW、无父 fsync）+ journal 读二次实现（173-211,~40 行）→ 经
+  control-plane-module facade 收编 cp private-file 原语；行为差异清单
+  （fail-closed symlink、{value,identity} 读、显式 0600）先落测试,保留各 store
+  绑定/信封差异。
+- N5（高,runtime 包内）：snapshot-store（1230 行）自带同构私有原语 ~160-180 行,
+  atomicWriteMarker（225-239）无 file/parent fsync、无 O_NOFOLLOW（权威恢复元
+  数据弱写）→ marker 读写迁移 private-fs,净删 ~100-130 行。
+- N6（中,客户端插件族）：六 wire 载体（instance-api/plugin-graph-recheck/
+  bridge-api/plugin-inventory-api/git-api/host-graph）同类机件 ~636 行
+  （21.6%/54.5%/48.1%/45.2%/22.3%/14.0%）,bridge-api↔plugin-inventory-api 近
+  同文、plugin-graph-recheck↔renderer host-graph 注释自认镜像；sidebar shared
+  面手写 ambient 镜像 ~1030 行（settings-bridge 483/connections 115/git
+  84/layout 48/renderer 303;同名同签名声明 ~120-150 行）→ 第一步抽 sidebar
+  shared 纯 wire-common（isRecord/信封断言/503 分类/文案/delay/rpcId/basename,
+  宿主必须为浏览器可达面）;策略与载荷整形留本地;git-api 不可换;镜像改指真实
+  源按包独立切换。
+- N7（低,测试脚手架逐字重复）：control-plane 8 文件 helper（fakeWire/
+  mockIdentityProbe/pongFrame/fetchJson/jsonResponse/tempDir/waitFor）→ 建
+  control-plane/test/utils.ts;gateway plugins-exec.test 44-119 与
+  plugins-tasks-fixtures 28-99 假 spawn 族 76 行逐字 → 改 import;desktop
+  ssh/gateway-provider.test hooks completer 2×23 行 + GATEWAY_RUNTIME_STATUS +
+  listen 样板（ssh 侧 21 处）→ 共享测试助手。
+- N8（低,desktop）：20 个 dsh-runtime 垫片（18×.ts + allow-builds/prune-runtime
+  .mjs,共 40 行纯转发）→ 30-32 条 import 迁移（5 文件）+ bundle-dsh.mjs/
+  after-pack/package.json 清单清理后删除。
+- N9（低）：renderer/global.d.ts（717 行）镜像 preload 暴露面,无机器固定测试
+  （renderer-trust 为 allowlist 性质）→ 补 mirror 测试,唯一镜像敞口。
+- N10（升级纪律）：dsh-client-web 6/9 文件、85% 行 rc.8 boot re-base 补丁面
+  （升级成本最高）;dsh-client-connection 6/17 文件 18%、dsh-api-gateway 2/8 文件
+  41%;纯拷贝 20 文件 6810 行可直接随上游 → 补丁集中 + rebase runbook（先挂
+  vendor 树做字节级对照校准密度）。注:2026-09 审计时 vendor 树未物化,密度为
+  标注文件代理口径。
+- N11（= E-4 子项,文档漂移）：gateway audit.ts 头注称"两侧同纪律 no-follow/
+  identity 检查",desktop audit-log 实现并无（裸 O_APPEND+rotate）→ 注释纠偏或
+  桌面升级硬化（随 N4/2c 收编）。
+
+执行计划（每阶段独立提交、先登记后动手、行为变更先落测试钉）:P1 零风险机械
+收敛（N7/N3-gateway/N8,现有测试全覆盖）→ P2 安全语义统一（N4/N5/audit 2c）→
+P3 gateway 内部收敛（N1/N2/门公式上移 dsh-runtime）→ P4 客户端 wire 收敛（N6）→
+P5 防漂移锁步与升级纪律（E-10/N9/N10 落地）→ P6 架构裁定（E-3 后半:cp↔runtime
+私有文件原语归并,依赖方向裁定前零动作）。
+
+**执行状态（2026-09,P1 已实施,见工作树改动）**
+- 1a ✅：新建 control-plane/test/utils.ts（fakeWire/mockIdentityProbe/fetchJson/
+  jsonResponse/pongFrame/sleep/waitFor(pollMs)/tempDir(t?)）并迁移 13 个套件；
+  test:control-plane 绿（两轮:electron-node 与 real-node 均 0 fail）。
+- 1b ✅：gateway plugins-exec.test.ts 删除 76 行逐字孪生,改 import
+  plugins-tasks-fixtures.ts；test:gateway 绿（首轮 plugins-tasks waitFor
+  偶发超时一次,复跑通过——环境抖动,非本次改动）。
+- 1c ✅：signalChild 双份移入 desktop/transport-provider.ts（transport-
+  manager.ts + ssh-provider.ts 改引）;两 provider 测试的 hooks completer +
+  GATEWAY_RUNTIME_STATUS 抽 gateway-session-test-hooks.ts（新 bare 文件）。
+- 1d ✅：cp index.ts 增导出 HOST_GRAPH_INSERT/HOST_GIT_WORKTREE_INSERT +
+  HostPackageInsert 类型;gateway plugins.ts SYNCABLE_HOST_PACKAGES 与
+  index.ts extraSeedEntries 两 host 条目改引 cp 常量（mobile 打包条目不动）。
+- 1e ✅（代码面）:删除 desktop 20 个 dsh-runtime 垫片（18 ts + allow-builds/
+  prune-runtime mjs）;import 迁移:main.ts(15 处)/plugin-sync.ts(1)/
+  dsh-runtime-controller.ts(7 条/5 模块)/runtime-lockstep.test(2)/dsh-runtime-controller
+  .test(5)/scripts/bundle-dsh.mjs/scripts/runtime-fake-registry-acceptance.mjs;
+  package.json asarUnpack 与 after-pack PACKAGED_RUNTIME_MODULES 收窄为
+  sanitize-error.ts + dsh-runtime-controller.ts,after-pack-adhoc-sign.test
+  同步;root typecheck 绿;test:desktop 全绿。
+- **1e 剩余验证（未做,需打包环境）**:build:desktop/dist:desktop 打包冒烟与
+  after-pack 真机断言（本环境无 Electron 全链;electron-builder
+  asar/asar.unpacked 行为以 packaging 门禁复验）;runtime-fake-registry
+  acceptance 脚本改引包后未执行。
+
+**P2 执行状态（2026-09,进行中）**
+- 2b ✅:dsh-runtime snapshot-store.ts 的 restore-marker 读/写迁入包内
+  private-fs 原语（readPrivateFileNoFollow tightenMode:false 保持读零副作用
+  语义;atomicWriteRuntimeFileNoFollow 补 file+parent fsync/O_NOFOLLOW/身份
+  复验）;读侧双读快照与 fchmod 局部实现、写侧手写 tmp 实现删除（毛删
+  119/净 -87,登记纠偏;审查后补:win32 无 O_NOFOLLOW 平台差异注释与
+  dist-sync 行为哨兵——松散 marker 读后不得被收紧,旧 dist 一测即破）;
+  typecheck:runtime 绿 + test:runtime 全绿;dist 已重建与 src 同步。
+- 2c ✅（gateway + desktop 双面）:control-plane 新增共享 audit-trail.ts
+  （AUDIT_TRAIL_MAX_BYTES/AuditTrailEvent/序列化白名单/硬化 append+rotate
+  核心,取自原 gateway audit.ts 语义）,cp index 导出;gateway src/audit.ts 与
+  desktop audit-log.ts 均收窄为薄包装（各自公开面/DI seam/错误文案不变）;
+  gateway audit.test 13/13、desktop audit-log.test 7/7 全绿。N11 注释漂移
+  随双面同核心自然消解。审查后补:mode 收紧/复验按 win32 跳过
+  （Windows chmod 只表达只读位,否则每次 append 必失败）;核心对行契约
+  加 endsWith('\n') 防御断言（历史双换行 bug 同类）。
+- 2a ✅:facade（control-plane-module.ts）新增 ensurePrivateDirectoryNoFollow/
+  atomicWritePrivateFileNoFollow/readPrivateFileNoFollow 转发;owner-only-
+  secret-file.ts 读原语与 ssh-plugin-journal 读侧委托 cp read（tightenMode
+  0600,maxBytes 界保持）;5 写点（ssh-passwords v2/gateway-secrets v3/
+  chamber-settings/journal persistOps/plugin-sync ledger）全部换为
+  ensure 0700 + atomicWrite {mode:0o600};store 信封/绑定/加密判别零改动。
+  行为差异清单（fail-closed symlink、父 fsync、固定 .tmp 残留不再复用）已
+  逐点分析,无测试依赖旧语义;定点 6 文件 + 全套 desktop 绿,零测试改动。
+- 2d ✅:verifyGatewayEndpoint(ViaTunnel) 孪生探针合并为 gateway-provider.ts
+  单一 verifyGatewayRuntimeIdentity 核心（options:authority 隧道 Host 覆盖/
+  spkiPin S23 门/carryStatusCodes 保留 ssh 403+非200 statusCode 旧形状）;
+  gateway 私用包装与 ssh 导出包装各自保持签名/默认值。ssh-provider.test
+  74/74、gateway-provider.test 全绿,孤儿 import 已清。
+- 2e ✅:desktop package.json files 排除 gateway-session-test-hooks.ts。
+**2026-09 review 轮(5 子代理分域只读审查 P1+P2)结论与采纳**
+- 判定:audit 单源化/0600 写族/runtime marker 迁移/探针合并/P1 全量五域均
+  正确性 PASS(无 P0/P1 语义缺陷;声明行为差异清单全部属实)。
+- 审查发现并已修复:A-P1 win32 audit mode 复验必失败→按平台跳过;C-P1
+  dist/index.js 与 src 不同步→重建并补 dist-sync 行为哨兵(读后不得收紧
+  松散 marker);D-P2 carryStatusCodes 两侧形状无断言→补 403/503/非200
+  statusCode 形状钉(gw 侧补"无 statusCode"断言,ssh 侧补 403+503 断言)。
+- P3 采纳:核心行契约 endsWith 防御、desktop audit-log import 合并、cp
+  utils sleep 去导出(仅 waitFor 内部用)、after-pack freeze 后空行清理、
+  helper 打包排除惯例注释、snapshot-store win32/硬链窗口注释。登记纠偏:
+  2b 净删 -87(毛 119)、1e controller import 7 条/5 模块。
+- P3 延后(登记,2026-09 已清理,见下):protocol waitFor 50→25ms 轮询粒度
+  差已声明可接受;win32 audit 修复需 Windows 实机复验(P1-R1 类)。
+- **2026-09 残留清理轮(A 类 4 项,子代理实施 + 门禁复验)**:
+  - T1 ✅ listen/close 样板收敛:新增 desktop loopback-http-test-server.ts
+    (listenEphemeral/closeLoopbackServer 裸 helper,package.json files 已排除),
+    ssh-provider.test 22 listen+22 close 点改引;gateway-provider.test 的
+    startHttp(S)ProbeServer 形态不同构,保留(登记理由)。
+  - T2 ✅ cp smoke.test 异形 waitFor 修型:删本地 sleep+waitFor(类型误导
+    Promise<boolean> 永不 false),改引共享 waitFor 并显式 pollMs=250
+    (历史粒度保留)。
+  - T3 ✅ 旧固定 .tmp 崩溃残留清扫:4 个装载点(ssh/gateway-secrets/
+    chamber-settings/journal configure 处)best-effort rmSync;plugin-sync
+    ledger 旧 tmp 为随机名,核实后跳过(无固定残留)。
+  - T4 ✅ ledger/settings 读侧对齐 cp 读:readLocalPluginWriterRecord 与
+    readSettingsFile 委托 readPrivateFileNoFollow({tightenMode:0o600}),
+    missing/解析语义逐点保持;unsafe 由"读穿 symlink"改为 fail-closed
+    (settings→notice+*.corrupt 保留;ledger→'corrupt' 阻断,reaper 兜底),
+    与 2a 行为清单"读侧 nlink≠1 拒绝"同族。
+  - 门禁:desktop 全套 852/852 + root typecheck 0 error 全绿。
+
+**P4 执行状态（2026-09,进行中;N6 客户端插件 wire 收敛）**
+- P4-1 ✅:sidebar shared 新增 wire-common.ts(isRecord/mintRpcId 单源,零依赖
+  浏览器可达),instance-api/plugin-graph-recheck 内部改引;逐字节核实结论:
+  envelope 解析各端不同体不收;503/文案仅 C≡D 逐字(锚点留 P4-2);E git 版
+  rpcId 前缀不同不收;审计计数纠偏(sleep×4 与现状不符,实际仅 F 有一处)。
+  typecheck:sidebar + test:sidebar 绿。注意:跨包引 wire-common 需同步
+  settings-bridge/connections/renderer 的 ambient mirror 声明(P4-2 义务)。
+- P4-2 ✅:wire-common.ts 内核扩为 postUnary(basePath,method,args,{rpcId?,
+  fetchImpl?,origin?})→{status,ok,body,jsonError}(零分类;URL/信封/30s/503
+  与 2xx 收集语义=四载体共有字节)+ classifyGraphChannelFailure(B≡F 分类正则
+  单源);C bridge-api/D plugin-inventory-api/B plugin-graph-recheck/F
+  host-graph 四载体只换 fetch 头+envelope 行,503 分支/错误折行/信封解析/
+  缓存/重试/diagnostic 回调全留本地;A 未动(留 P4-3),E 禁改未动;ambient
+  声明同步(chamber-bridge.d.ts/sidebar-shared.d.ts 各 +44 行 mirror),F 经
+  相对真实源导入 renderer wire-common(论证已入注释);typecheck×3+root、
+  test:sidebar/settings-bridge/connections、test:renderer-shell 全绿。
+  build:renderer 原被环境阻塞(工具链 node 无法 dlopen rollup 原生插件;
+  vendor ui-conversation 的 lexical 依赖因早期 vendor 空树 install 未链接),
+  补 frozen install 链接 vendor 成员依赖(@lexical/* 入 .pnpm)后
+  build:renderer 绿(exit 0,含 boot-manifest 生成)——基线问题,非 diff。
+- P4-3 ✅(2026-09,裁定不合并):C bridge-api 传输层落回 A instance-api 的
+  等价性分析——wire 请求/响应信封同形、真机宿主恒回声,但 7 维可观测差异
+  (回声容忍:A 相等校验 vs C 仅 string;503:A 私有类 InstanceUnavailableError
+  +包装层折行默认 'the instance is not ready' vs C plain Error client 内折行
+  默认 '实例尚未就绪';非 2xx 文案嵌端点名与否;2xx 解析失败 C 原样 rethrow
+  vs A 折 '实例不可达：';信封严格度 C TypeError 'bridge: invalid…' vs A
+  'internal/实例返回未知错误' 兜底链+details C 丢 A 透传;超时 C 无外部
+  signal 且折行 vs A AbortSignal.any+TimeoutError 直通;rpcId 表达式 C 裸
+  crypto.randomUUID(自身 try 内)vs A mintRpcId 回退;origin 回退 dsh.internal
+  vs 相对 URL)。按 N6 纪律不合并,C 独立 client+Map/503/折行维持(传输字节已
+  同源 postUnary);合并前置清单 7 项登记于 wire-common.ts P4-3 段;门禁
+  typecheck:sidebar/settings-bridge + test:sidebar/settings-bridge 全绿,
+  零语义改动(wire-common.ts 注释登记 +64 行;renderer shell.ts 注释修正引用
+  共享 30s 预算)。
+- P4-4 ✅(ambient 镜像改指真实源,2026-09):
+  - renderer 轨:root tsconfig paths '@dsh-chamber/dsh-client-ui-sidebar/shared'
+    → 真实 src/shared/index.ts;vendor-modules.d.ts 的 shared overlay 删除
+    (~11.1KB/约 300 行);唯一严格化修正 App.tsx(deriveServerWorkspaces
+    ungroupedTitle 补 ?? '';derive.ts 签名维持 string);root typecheck +
+    build:renderer + test:renderer-shell 全绿。
+  - 插件包轨:layout/git/connections/settings-bridge 删本地 paths 条目(回落
+    root paths 真实源)+ 各 tsconfig 补 rootDir '../..'(TS6059);整文件删除
+    chamber-view-prefs.d.ts/sidebar-shared.d.ts×2/chamber-bridge.d.ts 共
+    -715 行;settings-bridge 保留 connections-section 映射;包内源码调用点
+    零修正(mirror 系受锁步的同步面,与真实面完全对齐;RemoteRuntime*/
+    GatewayPollDeps 等核查全部为真实 shared 导出);8 门
+    (typecheck+test×4)全绿。
+  - 锁步测试消亡:sidebar test/gateway-runtime-mirror.test.ts(锁步对象=已删
+    ambient)删除并同步 package.json 显式测试清单;test:sidebar +
+    typecheck:sidebar 全绿。
+  - 文档跟进(登记):docs/design/21 与 21-gateway-plugin-parity-plan 中
+    "ambient 镜像"机制描述已被本步取代,文档更新列入 P4-5 后续。
+- P4-5 ✅(收尾):shared-face 镜像面清零核实(其余 window.dshChamber/官方
+  vendor/@dsh-chamber/*/client 松散声明与 N6 无关,保留;README/tsconfig 对
+  已删镜像的引用均为说明性注释);N6 指标收口——P4 合计:终态净 -740 行(含 wire-common +286)/累计删除 1271 行,其中
+  镜像删除 715(含 P4-2 期间 +88 临时增补,终态 627);B/C/D/F 四载体传输字节同源 postUnary(A 未动、E 禁改),shared-face
+  镜像漂移面归零;docs/design/21 与 todo 计划中 ambient 机制描述更新列为
+  follow-up(登记);门禁:root typecheck + build:renderer +
+  test:renderer-shell + 四插件包 typecheck×4/test×4 + test:sidebar/
+  typecheck:sidebar 全绿。
+- P1-R1 打包冒烟:暂时跳过(用户决定),与 P5-6 归口。
+
+**P3 执行状态（2026-09）**
+- N1 ✅（gateway 包内 HTTP 脚手架单源化）:新增 gateway/src/http-utils.ts
+  （jsonResponse×3 合一;readBoundedBody 内核 + dispatch 16KiB/runtime-routes
+  64KiB/routes 8MiB+32MiB 四薄包装,caps/错误文案/413-先写后毁序保留;
+  headerValue 三变体——精确取首值 dispatch+routes、大小写不敏感 middleware、
+  fail-closed auth——语义各异被测试锁定,移入单源模块分名导出;code→状态
+  映射各站语义分歧,按"不强统"原则零抽取并留分析）。网关全套 + root
+  typecheck 绿。净行约持平,~195 行拷贝→~135 单源+4 薄包装。已知并集差:
+  runtime-routes 读体 abort 由"悬挂"变为 request_aborted 立即 settle(无测试
+  锁定、对齐 dispatch,已注释)。
+- N2 ✅（双门 409 拒绝矩阵单源化）:新增 gateway/src/runtime-refusals.ts
+  （RuntimeRefusalCode/builder×8/reason 集/startupBlockReasonOutranksPending
+  谓词）,runtime-routes 与 runtime-manager 双层执行消费同一构造/判定;
+  R2/R3/R4 门行为（block 早退、pending 仅 blockedReason===null、recover-
+  metadata 放行、restore-builtin 收窄）逐格保持,有意差异（platform 403
+  文案、blocked 路由文案、ordinaryPending 不含 FATAL）保留并注释钉死;审计
+  抓到 env 动词语数模板 bug 已修;gateway 全套 555 测试 0 fail
+  （runtime-routes 113/113）,root typecheck 绿,测试文件零改动。
+- 3c ✅（窄幅提升 + 对拍矩阵交付）:dsh-runtime 新增 isVersionDowngrade
+  （降级判定单源:manualRollback 公式原内联于 desktop controller install /
+  gateway apply() / gateway apply-now F2 arm 三处,现同引共享;compare 返回
+  null 时恒 false,不崩溃）,dsh-runtime-updater.test 补 5 钉,dist 已重建。
+  对拍结论(交付于本登记):两 owner 的 apply-now"门"形态不同——desktop
+  evaluateApplyNowGate 是纯投影门(8 原因,输入为 controller 投影),gateway
+  applyNowPreflight 是含副作用 preflight(platform/assertMutationIdle/journal
+  corrupt/startupBlock/connection/no_selection/invalid/noop/F2 arm),输入与
+  副作用各异,整门合一将推翻 R2-R5 逐轮对齐的语义 → 不做整门合并,保留两
+  owner 各自投影/执行层;restart 白名单(desktop RUNTIME_RESTART busy 集 vs
+  gateway /restart)语义已由 R7/2026-12 对齐(env/platform 均不拒),输入形态
+  不同,仅登记等价不合并。此结论与 N1-4/N2"保留有意差异"先例一致。
+
+- P1-R1（打包冒烟）**暂时跳过**（用户决定 2026-09;待具备打包环境/升级窗口时执行,与 P5-6 归口）（需打包环境）;2 项 runtime 弱写清单外内容
+  （transport-manager ssh-instances.json 写等）不在 2a 范围,维持原状。

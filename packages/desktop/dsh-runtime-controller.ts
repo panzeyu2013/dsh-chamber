@@ -8,22 +8,23 @@
  * orchestration: fetchMetadata / install / store are injected so tests mock
  * every side effect. State changes are broadcast synchronously via onChanged.
  */
-import type { RegistryMetadata } from './registry-metadata.ts'
-import type { VersionListEntry } from './dsh-runtime-updater.ts'
+import type { RegistryMetadata } from '@dsh-chamber/dsh-runtime'
+import type { VersionListEntry } from '@dsh-chamber/dsh-runtime'
 import {
   SingleFlight,
   bindRuntimeInstallResolution,
   compareRuntimeVersions,
   isNoopSelection,
+  isVersionDowngrade,
   buildVersionList,
   buildCachedVersionList,
   versionExists,
-} from './dsh-runtime-updater.ts'
-import { RUNTIME_LOGICAL_DISK_LIMIT_BYTES } from './dsh-runtime-store.ts'
-import type { ActivationIntentInput, OverrideRecord, RuntimeDiskSummary } from './dsh-runtime-store.ts'
-import type { InstallOptions, InstallResult, RuntimeInstallProgress } from './runtime-installer.ts'
+} from '@dsh-chamber/dsh-runtime'
+import { RUNTIME_LOGICAL_DISK_LIMIT_BYTES } from '@dsh-chamber/dsh-runtime'
+import type { ActivationIntentInput, OverrideRecord, RuntimeDiskSummary } from '@dsh-chamber/dsh-runtime'
+import type { InstallOptions, InstallResult, RuntimeInstallProgress } from '@dsh-chamber/dsh-runtime'
 import { sanitizeErrorText } from './sanitize-error.ts'
-import { allowedActions, transition, transitionLifecycleProjection, type RuntimePhase } from './runtime-state-machine.ts'
+import { allowedActions, transition, transitionLifecycleProjection, type RuntimePhase } from '@dsh-chamber/dsh-runtime'
 
 export type RuntimeRestoreOutcome = 'none' | 'complete' | 'half' | 'incomplete'
 
@@ -578,7 +579,7 @@ export class DshRuntimeController {
       this.deps.store.recordExplicitInstall?.(this.baseDir, resolvedVersion)
       this.deps.store.writeActivationIntent(this.baseDir, {
         targetVersion: resolvedVersion,
-        manualRollback: active !== null && compareRuntimeVersions(resolvedVersion, active) === -1,
+        manualRollback: isVersionDowngrade(resolvedVersion, active),
         intentKind: 'version-switch',
       })
       this.deps.store.writeOverride(this.baseDir, record)

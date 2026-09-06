@@ -47,22 +47,13 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import {
-  chmodSync,
-  closeSync,
-  constants as fsConstants,
-  fchmodSync,
-  fstatSync,
-  fsyncSync,
-  lstatSync,
-  mkdirSync,
-  openSync,
-  readSync,
-  renameSync,
-  writeSync,
-  type Stats,
-} from 'node:fs'
+import { renameSync, rmSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+// The owner-private file primitives are single-sourced in control-plane
+// (private-file.ts, P2-2a) and reached through the desktop dual-path facade
+// (packaged → compiled dist/control-plane, dev/tests → workspace source) —
+// the same mechanism the credential mirrors use.
+import { atomicWritePrivateFileNoFollow, ensurePrivateDirectoryNoFollow, readPrivateFileNoFollow } from './control-plane-module.ts'
 
 /** Journal file name (under the directory createSshPluginJournal receives —
  *  the desktop passes `app.getPath('userData')`). */
@@ -165,48 +156,22 @@ function isErrno(error: unknown, code: string): boolean {
 }
 
 /**
- * Bounded no-follow read of the journal (regular file only, opened-inode
- * compared, 0600-tightened before bytes enter memory, ≤ MAX_BYTES). Returns
- * null when the file does not exist (an empty journal); throws on any other
- * failure (the caller treats it as corrupt evidence).
+ * Bounded no-follow read of the journal (the control-plane read primitive:
+ * pinned real parent directory, regular single-link leaf only, opened-inode
+ * compared, 0600-tightened before bytes enter memory, bounded to ≤
+ * SSH_PLUGIN_JOURNAL_MAX_BYTES). Returns null when the file does not exist
+ * (an empty journal — the native ENOENT of the missing leaf); throws on any
+ * other failure (the caller treats it as corrupt evidence).
  */
 function readJournalText(file: string): string | null {
-  let pathStat: Stats
   try {
-    pathStat = lstatSync(file)
+    return readPrivateFileNoFollow(file, {
+      maxBytes: SSH_PLUGIN_JOURNAL_MAX_BYTES,
+      tightenMode: 0o600,
+    }).value
   } catch (error) {
     if (isErrno(error, 'ENOENT')) return null
     throw error
-  }
-  if (!pathStat.isFile() || pathStat.isSymbolicLink()) {
-    throw new Error(`journal path must be a regular file (symlinks are refused): ${file}`)
-  }
-  if (pathStat.size > SSH_PLUGIN_JOURNAL_MAX_BYTES) {
-    throw new Error(`journal exceeds the ${SSH_PLUGIN_JOURNAL_MAX_BYTES}-byte read bound`)
-  }
-  const noFollow = typeof fsConstants.O_NOFOLLOW === 'number' ? fsConstants.O_NOFOLLOW : 0
-  const fd = openSync(file, fsConstants.O_RDONLY | noFollow)
-  try {
-    const openedStat = fstatSync(fd)
-    if (!openedStat.isFile()
-      || openedStat.dev !== pathStat.dev
-      || openedStat.ino !== pathStat.ino) {
-      throw new Error(`journal path changed while opening: ${file}`)
-    }
-    fchmodSync(fd, 0o600)
-    if (openedStat.size > SSH_PLUGIN_JOURNAL_MAX_BYTES) {
-      throw new Error(`journal exceeds the ${SSH_PLUGIN_JOURNAL_MAX_BYTES}-byte read bound`)
-    }
-    const bytes = Buffer.alloc(openedStat.size)
-    let offset = 0
-    while (offset < bytes.length) {
-      const read = readSync(fd, bytes, offset, bytes.length - offset, null)
-      if (read <= 0) break
-      offset += read
-    }
-    return bytes.toString('utf8')
-  } finally {
-    closeSync(fd)
   }
 }
 
@@ -260,6 +225,14 @@ function sanitizeOps(parsed: unknown): SshJournalOp[] | null {
 
 export function createSshPluginJournal(dir: string, logger: SshJournalLogger): SshPluginJournal {
   const file = sshPluginJournalFile(dir)
+  // One-time crash-residue sweep (2a follow-up): the pre-2a persistOps wrote
+  // a FIXED `${file}.tmp` (open 'w' + rename), and a hard crash between the
+  // two left that exact-name residue. The atomic write since 2a uses a
+  // random O_EXCL temp and never reuses or removes that legacy name — sweep
+  // it at store creation. Best-effort only: `force` already swallows ENOENT,
+  // and any other failure must not break journal loading, so the remainder
+  // is swallowed too.
+  try { rmSync(`${file}.tmp`, { force: true }) } catch { /* best-effort hygiene only */ }
 
   function loadOps(): SshJournalOp[] {
     let text: string | null
@@ -295,23 +268,13 @@ export function createSshPluginJournal(dir: string, logger: SshJournalLogger): S
   }
 
   function persistOps(ops: SshJournalOp[]): void {
-    // Atomic write (tmp + fsync + rename), 0600 — the same pattern the
-    // desktop credential mirrors use (open/fchmod/write/fsync/close; the
-    // fchmod forces owner-only permissions on a pre-existing wider tmp file
-    // — hard-crash residue — before any bytes are written, and the rename
-    // replaces a planted symlink rather than following it).
-    mkdirSync(dirname(file), { recursive: true })
-    const tmp = `${file}.tmp`
-    const fd = openSync(tmp, 'w', 0o600)
-    try {
-      fchmodSync(fd, 0o600)
-      writeSync(fd, `${JSON.stringify({ version: 1, ops }, undefined, 2)}\n`)
-      fsyncSync(fd)
-    } finally {
-      closeSync(fd)
-    }
-    chmodSync(tmp, 0o600)
-    renameSync(tmp, file)
+    // Atomic replace, 0600 — the control-plane private-file primitive
+    // (random O_EXCL tmp + fsync + rename + parent-directory fsync, explicit
+    // { mode: 0o600 }), the same mechanism the desktop credential mirrors
+    // use. The replace refuses a planted symlink / multi-link leaf fail-
+    // closed (record() never throws: the caller warns and drops).
+    ensurePrivateDirectoryNoFollow(dirname(file), 0o700)
+    atomicWritePrivateFileNoFollow(file, `${JSON.stringify({ version: 1, ops }, undefined, 2)}\n`, { mode: 0o600 })
   }
 
   /** Newest-first; ties (same-ms appends) break toward later insertion. */

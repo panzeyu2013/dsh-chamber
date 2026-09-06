@@ -29,6 +29,9 @@
 import { existsSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import {
+  HOST_ARCHIVE_CLEANUP_INSERT,
+  HOST_GIT_WORKTREE_INSERT,
+  HOST_GRAPH_INSERT,
   atomicWritePrivateFileNoFollow,
   ensurePrivateDirectoryNoFollow,
   readPrivateFileNoFollow,
@@ -39,11 +42,12 @@ import type { Logger } from '@dsh-chamber/control-plane'
 export const SYNCED_PLUGIN_DIR = 'chamber-plugins'
 
 /** The syncable chamber host packages (desktop-provided since 2026-12;
- *  dsh-host-archive-cleanup added 2026-12, design 24). */
+ *  insert id/name single-sourced from the control-plane seed registry
+ *  (dedupe audit N3); dsh-host-archive-cleanup added 2026-12, design 24). */
 export const SYNCABLE_HOST_PACKAGES = [
-  { id: 'client-graph', name: '@dsh-chamber/dsh-host-client-graph' },
-  { id: 'git-worktree', name: '@dsh-chamber/dsh-host-git-worktree' },
-  { id: 'archive-cleanup', name: '@dsh-chamber/dsh-host-archive-cleanup' },
+  HOST_GRAPH_INSERT,
+  HOST_GIT_WORKTREE_INSERT,
+  HOST_ARCHIVE_CLEANUP_INSERT,
 ] as const
 
 /** The activation-probe domain each syncable host package backs (design 24

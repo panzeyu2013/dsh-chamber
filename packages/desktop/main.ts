@@ -78,12 +78,12 @@ import type { OpenInLaunchContext, OpenInRequest } from './open-in.ts';
 import { createUpdateController, openReleasePage } from './updater.ts';
 import { DEFAULT_RUNTIME_LOGICAL_DISK_LIMIT_BYTES, DshRuntimeController } from './dsh-runtime-controller.ts';
 import type { RuntimeMetadataComponent, RuntimeMetadataHealthProjection } from './dsh-runtime-controller.ts';
-import { fetchRegistryMetadata } from './registry-metadata.ts';
-import { isAllowedRegistryUrl } from './registry-url.ts';
+import { fetchRegistryMetadata } from '@dsh-chamber/dsh-runtime';
+import { isAllowedRegistryUrl } from '@dsh-chamber/dsh-runtime';
 import { sanitizeErrorText } from './sanitize-error.ts';
 import { evaluateApplyNowGate, type ApplyNowGateInput } from './apply-now-gate.ts';
 import { shouldSkipDiskRefresh } from './disk-evidence-gate.ts';
-import { disposeRuntimeInstaller, installRuntimeVersion, pruneRuntimeStore } from './runtime-installer.ts';
+import { disposeRuntimeInstaller, installRuntimeVersion, pruneRuntimeStore } from '@dsh-chamber/dsh-runtime';
 import {
   cleanupStaleInstalls,
   cleanupExplicitRuntimeVersion,
@@ -115,8 +115,8 @@ import {
   writeActivationJournal,
   writeCurrentPointer,
   writeOverride,
-} from './dsh-runtime-store.ts';
-import type { ActivationJournalState } from './dsh-runtime-store.ts';
+} from '@dsh-chamber/dsh-runtime';
+import type { ActivationJournalState } from '@dsh-chamber/dsh-runtime';
 import {
   completeInterruptedRestore,
   listPreRollbackStashes,
@@ -128,15 +128,15 @@ import {
   restoreSnapshot,
   snapshotDshHome,
   snapshotSummary,
-} from './snapshot-store.ts';
+} from '@dsh-chamber/dsh-runtime';
 import {
   noteBoot,
   promoteDueCandidates,
   recordProbePass,
   removeKnownGoodCandidate,
   resetCandidateHealthWindow,
-} from './known-good-monitor.ts';
-import { invalidate } from './override-lifecycle.ts';
+} from '@dsh-chamber/dsh-runtime';
+import { invalidate } from '@dsh-chamber/dsh-runtime';
 import {
   FATAL_STARTUP_BLOCK_REASONS,
   runDelayedRollback,
@@ -144,19 +144,19 @@ import {
   shouldProbeEnvWithDormantCorruptSelection,
   type StartupDeps,
   type StartupResult,
-} from './runtime-startup.ts';
-import { planRestartExhaustedRollback } from './restart-exhausted-rollback.ts';
-import { RuntimeOperationFence, type OperationLease } from './runtime-operation-fence.ts';
-import { runRuntimeActivationProbes } from './runtime-probes.ts';
+} from '@dsh-chamber/dsh-runtime';
+import { planRestartExhaustedRollback } from '@dsh-chamber/dsh-runtime';
+import { RuntimeOperationFence, type OperationLease } from '@dsh-chamber/dsh-runtime';
+import { runRuntimeActivationProbes } from '@dsh-chamber/dsh-runtime';
 import {
   detectRuntimeMetadataHealth,
   inspectCorruptMetadataRecoveryMarker,
   recoverRuntimeMetadata,
   rescueCorruptMetadataRecoveryMarker,
   type RuntimeMetadataHealth,
-} from './runtime-metadata-recovery.ts';
-import { allowedActions } from './runtime-state-machine.ts';
-import { isSafeVersion } from './version-safety.ts';
+} from '@dsh-chamber/dsh-runtime';
+import { allowedActions } from '@dsh-chamber/dsh-runtime';
+import { isSafeVersion } from '@dsh-chamber/dsh-runtime';
 import {
   applyPlugins,
   ARCHIVE_CLEANUP_INSERT_ID,

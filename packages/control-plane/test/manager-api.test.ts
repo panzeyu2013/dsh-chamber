@@ -19,23 +19,9 @@ import { CATALOG_FILE } from '../src/catalog.ts'
 import { DEFAULT_DSH_START_PORT } from '../src/spawn-dsh.ts'
 import type { SpawnedDsh } from '../src/local-connection.ts'
 import { DSH_WRITER_QUIESCENCE_UNKNOWN_CODE } from '../src/spawn-dsh.ts'
+import { fakeWire, fetchJson } from './utils.ts'
 
 const silentLogger = { log() {}, warn() {}, error() {} }
-
-/** A fake spawn: immediate ready on a fixed port; counts spawn attempts. */
-function fakeWire() {
-  let spawns = 0
-  const spawnDsh = async (): Promise<SpawnedDsh> => {
-    spawns += 1
-    return {
-      child: { on: () => {}, exitCode: null },
-      port: DEFAULT_DSH_START_PORT,
-      stop: async () => {},
-    }
-  }
-  const probeHostIdentity = async () => true
-  return { spawnDsh, probeHostIdentity, get spawns() { return spawns } }
-}
 
 async function makePlane(stateDirOverride?: string, corsOrigins: string[] = []) {
   const stateDir = stateDirOverride ?? mkdtempSync(join(tmpdir(), 'dsh-chamber-manager-'))
@@ -54,18 +40,6 @@ async function makePlane(stateDirOverride?: string, corsOrigins: string[] = []) 
     rmSync(stateDir, { recursive: true, force: true })
     throw error
   }
-}
-
-async function fetchJson(base: string, path: string, init?: RequestInit): Promise<{ status: number; body: any }> {
-  const response = await fetch(`${base}${path}`, init)
-  const text = await response.text()
-  let body: any = null
-  try {
-    body = text === '' ? null : JSON.parse(text)
-  } catch {
-    body = null
-  }
-  return { status: response.status, body }
 }
 
 const postJson = (body: unknown): RequestInit => ({

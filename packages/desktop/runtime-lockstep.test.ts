@@ -7,7 +7,8 @@
  * REJECT. This test enumerates every phase × capability combination and
  * asserts renderer ⊆ main for the non-blocked, management-supported path
  * (main's authoritative non-blocked gate is `allowedActions` in
- * packages/desktop/runtime-state-machine.ts).
+ * @dsh-chamber/dsh-runtime — the desktop runtime-state-machine.ts shim was
+ * deleted 2026-09, dedupe audit N8).
  *
  * The reverse direction (main accepts an action the UI hides) is currently
  * masked by the publishing invariant "canRecoverMetadata=true ⟹
@@ -17,14 +18,14 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { allowedActions } from './runtime-state-machine.ts'
+import { allowedActions } from '@dsh-chamber/dsh-runtime'
 import {
   runtimeAllowedActions,
   type RuntimeAction,
   type RuntimePhase,
   type RuntimeState,
 } from '../renderer/src/runtime-management.ts'
-import type { RuntimeInstallProgress as MainRuntimeInstallProgress } from './runtime-installer.ts'
+import type { RuntimeInstallProgress as MainRuntimeInstallProgress } from '@dsh-chamber/dsh-runtime'
 import type { RuntimeInstallProgress as RendererRuntimeInstallProgress } from '../renderer/src/runtime-management.ts'
 
 const PHASES: readonly RuntimePhase[] = [
@@ -180,7 +181,7 @@ test('renderer blocked branch matches the main blocked gate', () => {
 
 test('the renderer RuntimeInstallProgress flat mirror projects from the main-process union without drift', () => {
   // The main process emits a DISCRIMINATED UNION
-  // (runtime-installer.ts: `{stage:'download'; received; total}` | stage-only
+  // (@dsh-chamber/dsh-runtime runtime-installer: `{stage:'download'; received; total}` | stage-only
   // milestones) while the renderer's mirror (runtime-management.ts) is a FLAT
   // interface with optional received/total. The invariant that matters: every
   // union member must project losslessly into the flat mirror — the line
