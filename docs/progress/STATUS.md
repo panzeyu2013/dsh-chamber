@@ -421,6 +421,19 @@ envelope padding——cap 抬至 1 MiB 即变 'dsh'，必红）；ready 心跳�
    缺陷① `desktop_local_plugin_add_file` 已修复（allowFileSpec 补传 + plugin-sync 门测试）。余留照实：
    who/when 归因 tooltip 未渲染、gateway 拒绝码→本地化文案映射未做（409 逐字英文）；实机 E2E 矩阵仍
    不可在本树执行（design 21 §10 勘误⑦ 未勾销）。验证与偏差见 plan 24 实施偏差登记。
+   **plugin-from-file 分支落库（archive-pick + executor store 一致性；台账见 design 21 §10 ⑧⑨）**：
+   materialize 本地导入选择器（local/ssh/gateway 三通道）扩为插件**源码文件夹或现成 .tgz 插件包**
+   （npm-pack 布局）：纯结构分类 `classifyPluginPick`（.tgz 后缀 + 32 MiB 档案上限 + 有界 manifest
+   读取），归档上传原样（免本地 pnpm pack）；macOS NSOpenPanel 单对话框 file+folder 双模式，
+   Windows/Linux 保持文件夹对话框（archive-pick 为 macOS-v1，余腿随 design 22/23 排期）；名称/保留域
+   白名单在 ssh/gateway 流内复核不变（本地 dsh CLI 为权威）；按钮文案「从文件夹导入」→「从本地导入」
+   （zh/en + 提示同步，键名不变）。**executor pnpm store 一致性修正（实机 E2E 发现）**：安装子进程
+   不再钉 HOME——钉 HOME 会把 pnpm 默认 store 移离 managed profile 物化所用 store，pnpm 11 store
+   不一致硬拒全部变更；HOME 缺席回落 passwd home = 与 profile 物化同 store。XDG 缓存/config 私密钉
+   保留，`NPM_CONFIG_USERCONFIG`/`npm_config_userconfig` 双 casing 同指一个空 0600 文件（pnpm 11
+   config reader 对两 casing 均精确读取）。合并后验证：test:desktop（含 plugin-sync/plugin-tarball
+   新增门测试）/ test:gateway / test:connections / typecheck:connections / verify:i18n / root
+   typecheck 全绿；design 21 §9 实机 E2E 矩阵（§10 ⑦）仍未勾销，随发行在可运行环境复跑。
 - **模型额外参数 + 默认推理等级（设计 07）**：实现推迟——wire 白名单无泛化
   透传、host 组合不可注入、`agent-default-model` 未对客户端暴露，待上游
   解锁（07 §3/§4）。设计见 `docs/design/07-models-params.md`。
