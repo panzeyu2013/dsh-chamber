@@ -33,33 +33,32 @@ export interface ChamberSidebarViewPrefs {
    */
   orderBy?: Record<string, SessionOrderBy>
   /**
-   * Updated-mode session order accounts (design 06 §3.1, 2026-08 alignment
-   * with the official ui-workspace sessionOrderByAccount): key =
-   * `${sourceId}/${workspaceId}` — real workspaces AND the synthetic
-   * ungrouped bucket (its id is UNGROUPED_WORKSPACE_ID). Each account holds
-   * the updated-mode display baseline: seeded from the wire order on the
-   * first observation, mutated by in-mode drags (persisted locally, no wire
-   * commit — official「updated 下拖拽只落 account」) and by the activity
-   * promotion (`nextUpdatedOrder`). manual mode ignores it (wire/stored
-   * orders take over). OPTIONAL — absent for sources that never entered
-   * updated mode; pruned by the same safe source-vanished rule as
-   * orderBy/ungroupedOrder.
+   * Updated-mode session order accounts (design 06 §3.1; mirrors the official
+   * ui-workspace sessionOrderByAccount): key = `${sourceId}/${workspaceId}` —
+   * real workspaces AND the synthetic ungrouped bucket (its id is
+   * UNGROUPED_WORKSPACE_ID). Each account holds the updated-mode display
+   * baseline: seeded from the wire order on the first observation, mutated by
+   * in-mode drags (persisted locally, no wire commit — official「updated 下
+   * 拖拽只落 account」) and by the activity promotion (`nextUpdatedOrder`).
+   * manual mode ignores it (wire/stored orders take over). OPTIONAL — absent
+   * for sources that never entered updated mode; pruned by the same safe
+   * source-vanished rule as orderBy/ungroupedOrder.
    */
   updatedOrder?: Record<string, string[]>
   /**
-   * Updated-mode activity bookkeeping (2026-08 alignment, official
-   * sessionUpdatedAtByAccount): key = the same `${sourceId}/${workspaceId}`
-   * account key, value = sessionId → last observed updatedAt. The promotion
-   * derives from it ("updated since the last observation → pinned to top");
-   * the sidebar's setOrderBy clears a source's entries when entering
-   * updated, which makes the next derivation do ONE full recency sort
-   * (official switchedToUpdated). Written together with updatedOrder by the
-   * derivation effect. OPTIONAL; pruned with the account keys.
+   * Updated-mode activity bookkeeping (official sessionUpdatedAtByAccount
+   * mirror): key = the same `${sourceId}/${workspaceId}` account key, value =
+   * sessionId → last observed updatedAt. The promotion derives from it
+   * ("updated since the last observation → pinned to top"); the sidebar's
+   * setOrderBy clears a source's entries when entering updated, which makes
+   * the next derivation do ONE full recency sort (official
+   * switchedToUpdated). Written together with updatedOrder by the derivation
+   * effect. OPTIONAL; pruned with the account keys.
    */
   sessionUpdatedAtByAccount?: Record<string, Record<string, number>>
   /**
-   * Source-level fold (2026-09, 06 §2.4): key = sourceId, value =
-   * the source's workspace LIST is collapsed (every workspace group hidden).
+   * Source-level fold (06 §2.4): key = sourceId, value = the source's
+   * workspace LIST is collapsed (every workspace group hidden).
    * Deliberately SEPARATE from `folded` — collapsing a server must NOT touch
    * each workspace's own conversation fold state (explicit user rule), so
    * expanding the server restores every workspace with its conversations
@@ -68,23 +67,22 @@ export interface ChamberSidebarViewPrefs {
    */
   sourceFolded?: Record<string, boolean>
   /**
-   * Source display order (2026-09, 06 §2.4 — option 1):
-   * sourceIds in the user's sidebar order. DISPLAY-ONLY view preference —
-   * the App's N-ctx residency/prewarm order and the instance registry are
-   * untouched (navigation is id-keyed, never order-keyed). OPTIONAL —
-   * absent = projection order (local first, then registry order); ids
-   * unknown to the projection are skipped by the renderer, and unlisted ids
-   * trail in projection order (a newly added source appears at the bottom
-   * until dragged). Kept so old persisted payloads stay valid without a
-   * version bump (v stays 1).
+   * Source display order (06 §2.4): sourceIds in the user's sidebar order.
+   * DISPLAY-ONLY view preference — the App's N-ctx residency/prewarm order
+   * and the instance registry are untouched (navigation is id-keyed, never
+   * order-keyed). OPTIONAL — absent = projection order (local first, then
+   * registry order); ids unknown to the projection are skipped by the
+   * renderer, and unlisted ids trail in projection order (a newly added
+   * source appears at the bottom until dragged). Kept so old persisted
+   * payloads stay valid without a version bump (v stays 1).
    */
   serverOrder?: string[]
   /**
    * Page-wide sidebar width preference in px (design 06, chamber ui-layout
-   * fork — 2026-08): the chamber layout store persists every drag (clamped
-   * into the vendor [SIDEBAR_MIN, SIDEBAR_MAX] drag range, columns.ts) here,
-   * and EVERY boot's layout store seeds from it — so dragging the resizer in
-   * one shell is reflected in every other shell live, and the width survives
+   * fork): the chamber layout store persists every drag (clamped into the
+   * vendor [SIDEBAR_MIN, SIDEBAR_MAX] drag range, columns.ts) here, and
+   * EVERY boot's layout store seeds from it — so dragging the resizer in one
+   * shell is reflected in every other shell live, and the width survives
    * restarts (the vendor store is a per-boot unpersisted preference). The
    * sidebar (the only 'sidebar' slot occupant) is closed when its store
    * value is 0; the width PREFERENCE only ever records an OPEN drag — every
@@ -123,7 +121,7 @@ export const VIEW_PREFS_KEY = 'dsh-chamber.sidebar.v1'
  * Fresh default prefs — every fallback gets its OWN nested objects. A shared
  * module-level default object would let one caller's in-place mutation of a
  * returned prefs value permanently pollute every later default load and every
- * post-reset cache (2026-08 audit nit).
+ * post-reset cache.
  */
 function defaults(): ChamberSidebarViewPrefs {
   return { v: 1, folded: {}, ungroupedOrder: {}, orderBy: {}, updatedOrder: {}, sessionUpdatedAtByAccount: {}, seenSources: [] }
@@ -148,8 +146,8 @@ function sanitizePrefs(raw: unknown): ChamberSidebarViewPrefs {
       if (Array.isArray(value)) ungroupedOrder[key] = value.filter((entry): entry is string => typeof entry === 'string')
     }
   }
-  // orderBy：缺失或含非法值（不是 'manual'/'updated'）的条目一律丢弃；
-  // 旧数据（无该字段）回退空对象——v 保持 1，不因新增字段重播种。
+  // orderBy：丢弃非法值（非 'manual'/'updated'）条目；缺失字段（旧数据）
+  // 回退空对象——v 保持 1，不因新增字段重播种。
   const orderBy: Record<string, SessionOrderBy> = {}
   if (isPlainObject(raw.orderBy)) {
     for (const [key, value] of Object.entries(raw.orderBy)) {
@@ -157,15 +155,15 @@ function sanitizePrefs(raw: unknown): ChamberSidebarViewPrefs {
     }
   }
   // updatedOrder：account 键（`${sourceId}/${workspaceId}`）→ string[]；
-  // 非法条目（非数组/含非字符串）丢弃，与 ungroupedOrder 同规则。
+  // 非数组/含非字符串条目丢弃，与 ungroupedOrder 同规则。
   const updatedOrder: Record<string, string[]> = {}
   if (isPlainObject(raw.updatedOrder)) {
     for (const [key, value] of Object.entries(raw.updatedOrder)) {
       if (Array.isArray(value)) updatedOrder[key] = value.filter((entry): entry is string => typeof entry === 'string')
     }
   }
-  // sessionUpdatedAtByAccount：account 键 → sessionId → 有限数值时间戳；
-  // 嵌套层逐级校验，非法条目丢弃。
+  // sessionUpdatedAtByAccount：account 键 → sessionId → 有限数值时间戳，
+  // 嵌套逐层校验。
   const sessionUpdatedAtByAccount: Record<string, Record<string, number>> = {}
   if (isPlainObject(raw.sessionUpdatedAtByAccount)) {
     for (const [key, value] of Object.entries(raw.sessionUpdatedAtByAccount)) {
@@ -177,8 +175,8 @@ function sanitizePrefs(raw: unknown): ChamberSidebarViewPrefs {
       sessionUpdatedAtByAccount[key] = timestamps
     }
   }
-  // sourceFolded：键为 sourceId，布尔值过滤规则同 folded。字段缺失（旧数据）
-  // 时不产出该键（v 保持 1，不重播种）；写入路径带空对象也会被保留。
+  // sourceFolded：键为 sourceId，布尔值过滤同 folded；缺失（旧数据）时不
+  // 产出该键（v 保持 1），写入路径带空对象则保留。
   let hasSourceFolded = false
   const sourceFolded: Record<string, boolean> = {}
   if (isPlainObject(raw.sourceFolded)) {
@@ -187,8 +185,8 @@ function sanitizePrefs(raw: unknown): ChamberSidebarViewPrefs {
       if (typeof value === 'boolean') sourceFolded[key] = value
     }
   }
-  // serverOrder：sourceId 有序数组——仅保留字符串条目并去重（首个出现位置
-  // 胜出，防御损坏载荷）；非数组（含缺失）不产出该键（v 保持 1）。
+  // serverOrder：sourceId 有序数组——仅保留字符串条目并去重（首个位置胜出，
+  // 防御损坏载荷）；非数组（含缺失）不产出该键（v 保持 1）。
   let serverOrder: string[] | undefined
   if (Array.isArray(raw.serverOrder)) {
     const seen = new Set<string>()
@@ -198,19 +196,19 @@ function sanitizePrefs(raw: unknown): ChamberSidebarViewPrefs {
       return true
     })
   }
-  // sidebarWidth：仅接受有限数值，钳到厂商侧边栏拖动范围 [264, 420]（即
-  // @deepseek-ai/dsh-client-ui-layout columns.ts 的 SIDEBAR_MIN/SIDEBAR_MAX
-  // 契约固定点，含与 vendor clampWidth 一致的取整）；非数值/非有限值
-  // （NaN、Infinity、字符串等）一律丢弃，回退 SIDEBAR_DEFAULT。越界数值不
-  // 丢弃而是钳制（与 vendor clampWidth 一致：0 也钳到下限 264——宽度偏好只
-  // 记录「打开的拖动宽度」，「折叠」是 store 自己的 0 状态，不会持久化）。
+  // sidebarWidth：仅接受有限数值，钳制到厂商侧边栏拖动范围 [264, 420]
+  // （@deepseek-ai/dsh-client-ui-layout columns.ts 的 SIDEBAR_MIN/SIDEBAR_MAX
+  // 契约固定点，取整与 vendor clampWidth 一致）；非数值/非有限值（NaN、
+  // Infinity、字符串等）一律丢弃，回退 SIDEBAR_DEFAULT。越界数值不丢弃而
+  // 是钳制（与 vendor clampWidth 一致：0 也钳到下限 264——宽度偏好只记录
+  // 「打开的拖动宽度」，「折叠」是 store 自己的 0 状态，不会持久化）。
   // v 保持 1：旧数据无该字段，不因新增字段重播种。
   let sidebarWidth: number | undefined
   if (typeof raw.sidebarWidth === 'number' && Number.isFinite(raw.sidebarWidth)) {
     sidebarWidth = Math.min(420, Math.max(264, Math.round(raw.sidebarWidth)))
   }
   // seenSources 保留 raw 里的数组值（写入路径经 sanitize 时须携带会话内
-  // 簿记）；「绝不从存储恢复」由 loadViewPrefs 在载入后归零保证（见下）。
+  // 簿记）；「绝不从存储恢复」由 loadViewPrefs 载入后归零保证（见下）。
   const seenSources = Array.isArray(raw.seenSources)
     ? raw.seenSources.filter((entry): entry is string => typeof entry === 'string')
     : []
@@ -254,11 +252,10 @@ export function loadViewPrefs(storage?: StorageLike): ChamberSidebarViewPrefs {
     return defaults()
   }
   const prefs = sanitizePrefs(raw)
-  // seenSources 是**会话内内存簿记**——载入时一律从空集开始（持久化的
-  // seenSources 来自上一会话；恢复它会让重启后首个写周期在 roster 未到、
-  // 投影仅 local 的启动窗口把远程来源误判为「已删除」而永久抹掉其偏好，
-  // 2026-08 复查修复）。首个写周期因此不裁剪任何键（安全）；源真正删除
-  // 后、本会话内再有写入时才被裁。
+  // seenSources 是**会话内内存簿记**——载入时一律从空集开始：恢复上一会话
+  // 持久化的 roster 会让重启后首个写周期在投影仅 local 的启动窗口把远程
+  // 来源误判为「已删除」而永久抹掉其偏好。首个写周期因此不裁剪任何键
+  // （安全）；源真正删除后、本会话内再有写入时才被裁。
   prefs.seenSources = []
   return prefs
 }
@@ -275,18 +272,16 @@ export function saveViewPrefs(prefs: ChamberSidebarViewPrefs, storage?: StorageL
 }
 
 // ---------------------------------------------------------------------------
-// Shared live store (design 06 §3, 2026-08 — cross-ctx live sync).
+// Shared live store (design 06 §3 — cross-ctx live sync).
 //
-// Every instance ctx's sidebar previously kept its OWN in-memory copy, read
-// once at mount and written back with a merge — a fold toggle in source A's
-// sidebar was invisible in source B's sidebar until a refresh, and B's next
-// write could resurrect A's stale fold value (the merge assumed the local copy
-// was newer than the persisted value, which is false after another ctx wrote).
-// The store below is the SINGLE source of truth shared by every ctx's sidebar
-// (this module rides the vite shared chunk, same instance across all boots):
-// reads/writes go through one cache, writes persist and notify every
-// subscriber, so toggles propagate live to all sources. localStorage stays the
-// durable backing (reloads pick the latest state); the sanitized load and
+// One module-level cache is the SINGLE source of truth for every ctx's
+// sidebar (this module rides the vite shared chunk, same instance across all
+// boots): reads/writes go through it, writes persist and notify every
+// subscriber, so a fold toggle in one source propagates live to all of them.
+// A per-ctx in-memory copy read at mount would leave toggles invisible across
+// sources until a refresh, and a later write could resurrect a stale value
+// over the newer one another ctx persisted. localStorage stays the durable
+// backing (reloads pick the latest state); the sanitized load and
 // non-throwing storage fallbacks are unchanged.
 // ---------------------------------------------------------------------------
 
@@ -315,13 +310,12 @@ export function subscribeViewPrefs(listener: ViewPrefsListener): () => void {
  *   projection;
  * - keys are pruned only when their source was SEEN in an earlier projection
  *   of THIS session (seenSources — session-only memory, never restored from
- *   storage) and is absent from the current one — distinguishing "source
+ *   storage) and is absent from the current one, distinguishing "source
  *   deleted" from "projection not fully loaded yet". This matters because
  *   deriveServers always pushes `local` (servers.length is never 0 in the
  *   app), and the roster arrives AFTER the local-only projection: pruning on
  *   mere absence — or on a previous session's roster — would wipe every ssh
- *   source's prefs during the startup window (2026-08 复查修复：seenSources
- *   不得持久化);
+ *   source's prefs during the startup window;
  * - a disconnected source keeps its folds and ungrouped order (they return on
  *   reconnect; the renderer's reconciledSessionOrder already skips unknown
  *   ids).
@@ -331,8 +325,8 @@ function prunePrefs(prefs: ChamberSidebarViewPrefs): ChamberSidebarViewPrefs {
   if (servers.length === 0) return prefs
   const projectionIds = servers.map(server => server.id)
   const inProjection = new Set(projectionIds)
-  // 本次投影见过的来源记入 seenSources（部分投影窗口内也照记——它们真正
-  // 消失后才可能被裁，绝不会在「尚未加载」的窗口被误裁）。
+  // 本次投影见过的来源记入 seenSources——只可能在它们真正消失后被裁，
+  // 绝不会在「尚未加载」的窗口被误裁。
   const seenSources = new Set(prefs.seenSources)
   for (const id of projectionIds) seenSources.add(id)
   const seen = [...seenSources]
@@ -362,17 +356,17 @@ function prunePrefs(prefs: ChamberSidebarViewPrefs): ChamberSidebarViewPrefs {
       changed = true
     }
   }
-  // orderBy 与 ungroupedOrder 同为 sourceId 键：本会话见过、现已消失的来源
-  // 其排序偏好一并裁剪；断连来源的偏好保留（重连后仍按原偏好渲染）。
+  // orderBy 同 ungroupedOrder（sourceId 键）：裁掉「本会话见过、现已消失」
+  // 来源的条目；断连来源保留（重连后仍按原偏好渲染）。
   for (const sourceId of Object.keys(orderBy)) {
     if (knownGone(sourceId)) {
       delete orderBy[sourceId]
       changed = true
     }
   }
-  // updatedOrder / sessionUpdatedAtByAccount 与 folded 同为
-  // `${sourceId}/${workspaceId}` 键：同样只裁「本会话见过、现已消失」的来源；
-  // 断连来源的更新模式序/簿记保留（重连后 promotion 继续，不重播种）。
+  // updatedOrder / sessionUpdatedAtByAccount 同 folded（`${sourceId}/
+  // ${workspaceId}` 键）：只裁「本会话见过、现已消失」的来源；断连来源的
+  // 更新模式序/簿记保留（重连后 promotion 继续，不重播种）。
   for (const key of Object.keys(updatedOrder)) {
     const slash = key.indexOf('/')
     const sourceId = slash === -1 ? undefined : key.slice(0, slash)
@@ -389,8 +383,8 @@ function prunePrefs(prefs: ChamberSidebarViewPrefs): ChamberSidebarViewPrefs {
       changed = true
     }
   }
-  // sourceFolded 为 sourceId 键：与 orderBy 同规则（本会话见过、现已消失的
-  // 来源其折叠偏好一并裁剪；断连来源保留）。
+  // sourceFolded 同 orderBy（sourceId 键）：只裁「本会话见过、现已消失」的
+  // 来源；断连来源保留。
   if (sourceFolded !== undefined) {
     for (const sourceId of Object.keys(sourceFolded)) {
       if (knownGone(sourceId)) {
@@ -399,8 +393,8 @@ function prunePrefs(prefs: ChamberSidebarViewPrefs): ChamberSidebarViewPrefs {
       }
     }
   }
-  // serverOrder 为 sourceId 有序数组：裁掉「见过、已消失」的 id，其余保持
-  // 相对顺序（渲染侧跳过未知 id，裁剪只是防止死键堆积）。
+  // serverOrder（sourceId 有序数组）：裁掉「见过、已消失」的 id，其余保持
+  // 相对顺序（渲染侧跳过未知 id，裁剪只是防死键堆积）。
   if (serverOrder !== undefined) {
     const kept = serverOrder.filter(id => !knownGone(id))
     if (kept.length !== serverOrder.length) {
@@ -456,10 +450,12 @@ export function clearSourceBookkeeping(
  * output — the mutator never gets to alias the live cached object into the
  * store, and an in-place-mutating mutator cannot corrupt the persisted shape.
  *
- * perf T4（2026-09，M4 置顶写回防抖配套）：**无变化写入不通知**。写入先按
- * 规范化（递归键序稳定）比较当前缓存与重算结果——完全相同则跳过持久化与
- * 通知。置顶写回防抖的终刷可能与另一 shell 已落盘的账户合并结果完全一致，
- * 该等值写入若照常通知会驱动一轮多余的全壳重渲染。
+ * Equal writes do NOT notify: the recomputed result is compared to the cache
+ * under a canonical encoding (recursively sorted key order, arrays in order)
+ * first — identical values skip persistence and notification. The debounced
+ * activity flush's final write can be exactly what another shell already
+ * persisted; notifying on such an equal write would drive a needless
+ * full-shell re-render.
  */
 export function updateViewPrefs(mutator: (prev: ChamberSidebarViewPrefs) => ChamberSidebarViewPrefs): void {
   const prev = getViewPrefs()
@@ -496,28 +492,25 @@ function canonicalEquals(a: ChamberSidebarViewPrefs, b: ChamberSidebarViewPrefs)
 }
 
 // ---------------------------------------------------------------------------
-// 置顶写回防抖（perf T4，2026-09，M4）— updated 模式的 promotion 簿记写回
-// 是「观察会话 updatedAt 推进 → 置顶」的副作用：会话流式更新期间每个投影
-// tick 都会推进 updatedAt，若每个 tick 各自 updateViewPrefs，写盘（整份
-// prefs JSON.stringify）+ 全壳通知会随更新频率放大（跨 shell 共享 store，
-// 任何来源的流式会话都会驱动全部侧栏重渲染）。防抖把同一固定窗（首 arm
-// 起 VIEW_PREFS_ACTIVITY_DEBOUNCE_MS，非逐次重置的 true trailing——持续流
-// 下每 ~250ms 一刷而非每 tick，2026-09 review F7）内的多次派生合并为一次
-// 写回：
+// 置顶写回防抖 — updated 模式的 promotion 簿记写回是「观察会话 updatedAt
+// 推进 → 置顶」的副作用：会话流式更新期间每个投影 tick 都会推进 updatedAt，
+// 若每个 tick 各自 updateViewPrefs，写盘（整份 prefs JSON.stringify）+ 全壳
+// 通知会随更新频率放大（跨 shell 共享 store，任何来源的流式会话都会驱动
+// 全部侧栏重渲染）。防抖把同一固定窗内的多次派生合并为一次写回（首 arm 起
+// VIEW_PREFS_ACTIVITY_DEBOUNCE_MS，非逐次重置的 true trailing——持续流下
+// 每 ~250ms 一刷而非每 tick）：
 //   - 每账户键保留**最新**派生意图：末 tick 自窗基态重派生、结果自洽，且
 //     恰好等于 flush 时刻单个官方 tick 的输出；与逐 tick 落盘在交错突发/
-//     首观察窗存在**排序级**差异（无数据丢失；2026-09 review F3 反例：
-//     首观察窗内 tick1 全量 recency、tick2 promotion，合并只保留后者形态
-//     ——见 SidebarRoot 派生 effect 与 derive.ts nextUpdatedOrder）；
-//   - 固定窗结束（首 arm + 250ms）统一经 updateViewPrefs 合并落盘一次；
+//     首观察窗存在**排序级**差异（无数据丢失）；
+//   - 固定窗结束统一经 updateViewPrefs 合并落盘一次；
 //   - 页面隐藏/卸载时立即终刷（pagehide），防抖窗内未落盘的 promotion
 //     簿记不丢（丢了会退化为官方首次观察的全量 recency 排序）。
 // 离散写（拖拽提交/排序切换，SidebarRoot）在写前先 flushScheduledActivity
-// Writes()——窗末终刷不得用旧派生覆盖更新的用户手势（review F1/F2）。
-// 可视侧（2026-09 perf review m1）：T4 防抖后，置顶/固定顺序的可视更新
-// 最多滞后一个防抖窗（250ms）——显示延迟而非数据丢失；渲染路径直接读
-// 持久账户（updatedOrder/sessionUpdatedAtByAccount），无 render-time
-// promotion 之类的中间派生面。
+// Writes()——窗末终刷不得用旧派生覆盖更新的用户手势。
+// 可视侧：防抖后置顶/固定顺序的可视更新最多滞后一个防抖窗（250ms）——
+// 显示延迟而非数据丢失；渲染路径直接读持久账户
+// （updatedOrder/sessionUpdatedAtByAccount），无 render-time promotion 之类
+// 的中间派生面。
 // ---------------------------------------------------------------------------
 
 /** 置顶写回防抖窗（固定窗：首 arm 起 250ms）。突发流式 tick 收敛为 ≤1 次
@@ -538,7 +531,7 @@ export function scheduleUpdatedOrderWrite(
   order: string[],
   timestamps: Record<string, number>,
 ): void {
-  // 每账户最新意图胜出（末 tick 自窗基态重派生，结果自洽——见上 F3 限定）。
+  // 每账户最新意图胜出（末 tick 自窗基态重派生，结果自洽）。
   activityPending.set(accountKey, { order, timestamps })
   if (activityTimer === null) {
     activityTimer = setTimeout(() => flushScheduledActivityWrites(), VIEW_PREFS_ACTIVITY_DEBOUNCE_MS)
@@ -546,15 +539,13 @@ export function scheduleUpdatedOrderWrite(
 }
 
 /** 立即落盘所有防抖窗内 pending 的置顶写回（幂等；无 pending 为 no-op）。
- *  2026-09 review（F4）陈旧守卫：合并前逐账户检查——若**缓存**中同一账户
- *  存在某会话的 TS 严格大于 pending 对应 TS（另一 shell 已落盘更新观测），
- *  说明本 pending 派生自更旧的投影，整条跳过（不覆盖新 promotion/簿记；
- *  该账户由持有新投影的 shell 的下一次派生重新武装，≤1 轮自愈）。
- *  m2（2026-09 perf review）守卫精度：比较按 pending 内**已知会话**逐条做
- *  （见下方循环）——若陈旧派生整体缺失某会话（其投影过期、从未含该会话），
- *  该账户不会因缺条而判 stale，整条覆盖会短暂抹掉该会话的簿记；由持有新
- *  投影的 shell 下一次派生重新武装（≤1 轮自愈）。可选加固方向 = 账户级
- *  会话集合比对（把"缺会话"也判为陈旧信号）。 */
+ *  陈旧守卫：合并前逐账户检查——若**缓存**中同一账户存在某会话的 TS 严格
+ *  大于 pending 对应 TS（另一 shell 已落盘更新观测），说明本 pending 派生
+ *  自更旧的投影，整条跳过（不覆盖新 promotion/簿记；该账户由持有新投影的
+ *  shell 的下一次派生重新武装，≤1 轮自愈）。比较按 pending 内**已知会话**
+ *  逐条做（见下方循环）：若陈旧派生整体缺失某会话（其投影过期、从未含该
+ *  会话），该账户不会因缺条而判 stale——整条覆盖会短暂抹掉该会话的簿记；
+ *  同样由持有新投影的 shell 下一次派生重新武装。 */
 export function flushScheduledActivityWrites(): void {
   if (activityTimer !== null) {
     clearTimeout(activityTimer)

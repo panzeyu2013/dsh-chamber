@@ -103,19 +103,43 @@
 > 删除的 rollback 目标同样收敛清记录。验证：test:host-git 88→95、test:git 58、
 > 双 typecheck、build:host-git + build:renderer 全绿。
 
+> **2026-12 sidebar 拖拽整组不变式 + 结构重构（实施记录，收口时并入 CHANGELOG 后移除）**：
+> 设计 08 §11 的仓库组拖拽边界补齐为完整不变式，并落为**单一纯裁决器**
+> `packages/dsh-chamber-client-ui-sidebar/src/shared/workspace-drag-order.ts`
+> （`resolveWorkspaceDrop` → blocked/noop/move；marker、onDragOver 门、drop、
+> 提交四处同源）。修复三处不合理行为：外部 workspace 可插入仓库组内部
+> （此前只钳制被拖元素自身 flag）、main 拖拽可把自己拖离派生行（拆家）、
+> 整组无法搬迁（向下被弹回）；派生行"不得排到 main 之前"在家族已破损
+> （旧数据交错）时仍为绝对规则。main 拖拽 = 整组搬迁（逐成员
+> `workspace.insertBefore` 同一锚点 + 乐观序 + 失败刷新收敛）。会话拖拽
+> 数学复用既有 `nextServerOrder`（原重复实现删除）。单测新增
+> `test/workspace-drag-order.test.ts`（26 例）与 `test/derive.test.ts`
+> 的 `nextServerOrder`/`orderServersForDisplay` 覆盖（此前设计声称覆盖但
+> 无测试）。结构：SidebarRoot（3224 行单体）→ `client/sidebar-context.ts`
+> （壳内跨切状态 context + 拖拽/重命名类型 + 共享 helpers）+
+> `client/ServerSection.tsx`（每来源子树；搜索镜像/外部点击/排序菜单清理
+> 随迁）+ SidebarRoot 壳（1492 行，含并入的 design-24 F9 挂载守卫）；git
+> 插件 slot-contract 测试改为对
+> SidebarRoot/ServerSection 双源锚定。shared 侧与两大视图文件的考古注释
+> 清理完成（仅注释）。验证：typecheck:sidebar / typecheck:git、test:sidebar
+> 全量、test:git（slot-contract 含）全绿；verify:i18n 无漂移。
+
 **0.2.2 发布前审查跟进项（2026-09-05 三合并 review round；三路 P0/P1 = 0，
 放行 0.2.2。部分 P2 已在发布前落实：e10a2c7（settings-dshruntime ①②③）、
 9b2aeb8（settings-plugin close 门控），见各面标注；design 08 §11.1 的 chip
 契约 stale 已以注记修正（5a41ebe）。其余 P2/P3 排入下一修复 round）**：
-- sidebar-folder 面（合并 dca181c）：① 拖拽 after 锚扫描基于 registry 序
-  （SidebarRoot.tsx commitWorkspaceDrag）而非 override 感知的渲染序——仅
-  乐观提交→聚合确认瞬态窗口内可能差一行（存量错位，未扩大）；修向：扫描改
-  在 renderedOrder 上求下一可见 id 或抽共享 helper。② 会话行动作仍 hover-only
+- sidebar-folder 面（合并 dca181c）：① **已落实（2026-12 拖拽裁决器重构）——
+  拖拽锚点统一到 override 感知的显示序**：commit/marker/onDragOver 门/顶部
+  指示线共用纯裁决器 `shared/workspace-drag-order.ts`（`resolveWorkspaceDrop`，
+  折叠隐藏行走位与渲染过滤同谓词），旧的 commit 侧 registry-序扫描与 render
+  侧 dropBlockedByMain 双实现删除。② 会话行动作仍 hover-only
   揭示（sidebar-chamber.module.css `.sessionRow:hover`），键盘/触屏无揭示路径
   （存量；workspace 头已 pointer-safe）。③ 仓库组折叠 × 会话待办条带
   （SessionTodoArea 纯投影无 fold 输入）：主行折叠后派生行会话的注意力条目
   仍钉条带顶部，与 docstring「不声称行指示器未显示的注意力」张力——确认产品
-  意图后过滤或文档化。④ 折叠过滤/拖拽扫描无组件级测试（谓词单测充分）。
+  意图后过滤或文档化。④ **部分落实（2026-12）——拖拽规则已有组件级单测**
+  （`workspace-drag-order.test.ts`，26 用例覆盖家族连续/破损/折叠场景）；
+  折叠过滤本身仍为渲染级（谓词单测充分，维持原状）。
 - settings-plugin 面（合并 16f7f27）：① **已落实（9b2aeb8）——close()
   busy 门控（2026-12 review P2-2）**：installing/folderBusy/
   undoBusy/seedBusy/restartBusy/syncing 在跑时禁止关框（restarting 受管

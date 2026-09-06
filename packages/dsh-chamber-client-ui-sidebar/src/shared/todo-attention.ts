@@ -70,8 +70,8 @@ export function deriveTodoAttention(
   const waiting: TodoAttentionEntry[] = []
   const completed: TodoAttentionEntry[] = []
   for (const server of servers) {
-    // 断连来源无实时状态（App 只在 connected 时附加 runtime；此处显式再
-    // 查一次作防御纵深）——未知 ≠ 待办，不臆造条目（重连后随真实状态重现）。
+    // 断连来源无实时状态（App 只在 connected 时附加 runtime；此处为防御
+    // 纵深再查一次）——未知 ≠ 待办，不臆造条目（重连后随真实状态重现）。
     if (!server.connected) continue
     const runtime = server.runtime
     if (runtime === undefined) continue
@@ -97,11 +97,11 @@ export function deriveTodoAttention(
           waiting.push(entry)
           continue
         }
-        // completed 与行尾蓝点同一显示条件与优先级：pending 无、子代理不存活、
-        // 合并 completed 为真即出条目——completed 优先于运行环（行指示的
-        // sessionStateDot 顺序：pending > 子代理 > completed > 运行环；wire
-        // running 只在无 completed 时渲染环），vendor-completed 与 wire
-        // running 的通道错位窗口内不得漏报（06 §4.3 同序纪律）。
+        // completed 与行尾蓝点同一显示条件与优先级：pending 无、子代理不
+        // 存活、合并 completed 为真即出条目——completed 优先于运行环（行
+        // 指示的 sessionStateDot 顺序：pending > 子代理 > completed > 运行
+        // 环；wire running 只在无 completed 时渲染环），vendor-completed 与
+        // wire running 的通道错位窗口内不得漏报（06 §4.3 同序纪律）。
         const runningSubagents = facts.runningSubagents ?? 0
         if (runningSubagents > 0) continue
         if (facts.completed !== true || !opts.filters.completed) continue
@@ -118,6 +118,6 @@ export function deriveTodoAttention(
     }
   }
   // 等待类（阻塞 agent）在前、完成未读在后；组内保持列表扫描序（确定、
-  // 跨 ctx 一致）。稳定分区：两次 push 已保序，这里顺序拼接即可。
+  // 跨 ctx 一致）。两次 push 已保序，这里顺序拼接即可。
   return [...waiting, ...completed]
 }

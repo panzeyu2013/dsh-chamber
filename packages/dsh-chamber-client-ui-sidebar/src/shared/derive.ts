@@ -8,21 +8,17 @@
  * membership order, and sessions outside every workspace trail in one
  * synthetic ungrouped bucket.
  *
- * ONE deliberate mutable exception (2026-08 review fix, design 06 §2.2): the
- * module-level blank-row GHOST grace map. It is written only by
- * `armBlankGhost` (called by the sidebar synchronously when a click moves the
- * current away from a blank row) and read only by `sessionVisible`, which
- * also lazily SWEEPS expired entries on read (third-wave, R2-1#3) so the map
- * cannot accumulate across armings without a derive in between. Two more
+ * ONE deliberate mutable exception (design 06 §2.2): the module-level
+ * blank-row GHOST grace map — written only by `armBlankGhost` (the sidebar,
+ * when a click moves current away from a blank row), read only by
+ * `sessionVisible`, which lazily sweeps expired entries on read. Two more
  * mutable exceptions of the same shape are the CREATE membership-grace map
- * and the bounded, first-observation FORK membership-grace map. Both are read
- * only by `deriveServerWorkspaces`; the former is armed explicitly by the
- * create action, while the latter is armed by the first unaccounted snapshot
- * and retained only while that exact candidate remains unaccounted.
- * All maps only ever suppress a row placement; the derive functions stay
- * deterministic for a given (snapshot, current, now) triple plus the three
- * grace maps, and tests inject `now` so the grace behavior is fully
- * unit-tested.
+ * (armed explicitly by the create action) and the bounded first-observation
+ * FORK membership-grace map (armed by the first unaccounted snapshot,
+ * retained only while that candidate remains unaccounted); both are read
+ * only by `deriveServerWorkspaces`. All maps only ever suppress a row
+ * placement; the derives stay deterministic for a given (snapshot, current,
+ * now) triple plus the grace maps — tests inject `now`.
  *
  * No React, no DOM — plain-node unit-testable (see test/derive.test.ts).
  */
@@ -30,13 +26,12 @@ import type { InstanceSnapshot, SearchRow } from './instance-api.ts'
 import type { ChamberServerAggregate, ChamberServerWorkspace, InstanceRuntimeReport } from './aggregate-store.ts'
 import { assertSingletonModule } from './singleton.ts'
 
-// chamber (third-wave review, R2-1#2): `blankGhostUntil` below is
-// CROSS-BOUNDARY shared state — armed by the sidebar bundle (armBlankGhost,
-// at the transition click) and read by the App's derive (sessionVisible) —
-// and relies on the vite shared chunk for single-instance. Register the
-// module in the singleton registry (mirrors pending-click.ts) so a bundling
-// drift that duplicates the module surfaces as a console diagnostic instead
-// of silently splitting the ghost-slot state per shell.
+// `blankGhostUntil` below is CROSS-BOUNDARY shared state — armed by the
+// sidebar bundle (armBlankGhost, at the transition click) and read by the
+// App's derive (sessionVisible) — relying on the vite shared chunk for
+// single-instance. Register in the singleton registry so a bundling drift
+// that duplicates the module surfaces as a console diagnostic instead of
+// silently splitting the state per shell.
 assertSingletonModule('derive')
 
 /** Synthetic id of the trailing group that collects sessions outside every workspace. */
@@ -45,10 +40,9 @@ export const UNGROUPED_WORKSPACE_ID = '__ungrouped__'
 /**
  * One-shot diagnostic flag for the cwd-membership wire-degradation fallback
  * (projectInstanceSnapshot): the degenerate cross-section repeats on every
- * store notification while the host canonical-cwd index stays incomplete, so
- * the console warning fires once per page lifetime. Module-level mutable, in
- * the same sanctioned class as the grace maps below (assertSingletonModule
- * guarantees one instance across bundles).
+ * store notification while the host index stays incomplete, so the console
+ * warning fires once per page lifetime (module-level mutable;
+ * assertSingletonModule guarantees one instance across bundles).
  */
 let warnedCwdMembershipFallback = false
 
@@ -56,29 +50,24 @@ let warnedCwdMembershipFallback = false
 export const SEARCH_QUERY_MAX_CODE_UNITS = 500
 
 /**
- * Stable per-workspace icon accent (chamber 2026-09): a deterministic color
- * from the workspace identity — no user customization, no persistence, no
- * selection state. The hue is a golden-angle spread of the
- * (serverId, family seed) hash, so distinct seeds land far apart on the hue
- * wheel; a SECOND hash jitters the rest lightness per workspace (56/61/66%)
- * so even near-hue pairs stay eye-distinguishable.
- *
- * Soft palette (user feedback 2026-10): the original 62%/45% saturation at
- * 44–54% lightness read as harsh jewel tones on the sidebar; the accent now
- * sits at 34% (21% for derived worktrees) saturation and a lifted
- * 56/61/66% lightness — clearly distinguishable hues, pastel-calm in both
- * light and dark themes.
+ * Stable per-workspace icon accent: a deterministic color from the workspace
+ * identity — no user customization, no persistence, no selection state. The
+ * hue is a golden-angle spread of the (serverId, family seed) hash, so
+ * distinct seeds land far apart on the hue wheel; a SECOND hash jitters the
+ * lightness per workspace (56/61/66%) so even near-hue pairs stay
+ * eye-distinguishable. Saturation is soft — 34%, or 21% for derived
+ * worktrees — pastel-calm in both light and dark themes.
  *
  * Derived (worktree) workspaces inherit their repository's family hue — the
  * family seed is the repoKey, shared by the MAIN checkout and every derived
  * worktree alike (stable even when the main is unregistered or later
  * renamed); `mainWorkspaceId` is only the fallback for a repoKey-less flag.
- * Family members share one hue, while the derived members demote to a muted
- * saturation and the MAIN checkout keeps the full one, mirroring the
- * folder/branch glyph + title-ink hierarchy. The synthetic ungrouped bucket
- * gets NO accent (undefined) — CSS falls back to the default caption ink.
- * Selection is deliberately NOT encoded here: the current-session row
- * carries its own official selected tint.
+ * Derived members demote to the muted saturation while the MAIN checkout
+ * keeps the full one, mirroring the folder/branch glyph + title-ink
+ * hierarchy. The synthetic ungrouped bucket gets NO accent (undefined) — CSS
+ * falls back to the default caption ink. Selection is deliberately NOT
+ * encoded here: the current-session row carries its own official selected
+ * tint.
  *
  * `WorkspaceAccentSeed` is a structural subset of the git plugin's
  * `WorkspaceGitFlag` (shared/workspace-git-flags.ts) — this module stays
@@ -96,12 +85,11 @@ export interface WorkspaceAccentSeed {
 }
 
 /**
- * Golden-angle hue step (design 2026-09): hue = (hash × 137.508) mod 360.
- * 137.508 = 34377/250, and 90000/gcd(34377, 90000) = 30000, so two hashes
- * land on the exact same hue only when they differ by a multiple of 30000 —
- * negligible for real ids, and even then the per-workspace lightness jitter
- * (below) usually breaks the visual tie. All other pairs are spread ~137°
- * apart on the wheel.
+ * Golden-angle hue step: hue = (hash × 137.508) mod 360. 137.508 =
+ * 34377/250, and 90000/gcd(34377, 90000) = 30000, so two hashes land on the
+ * exact same hue only when they differ by a multiple of 30000 — negligible
+ * for real ids, and the lightness jitter breaks the visual tie anyway. All
+ * other pairs spread ~137° apart on the wheel.
  */
 const WORKSPACE_HUE_STEP = 137.508
 
@@ -113,12 +101,11 @@ export function hashString(input: string): number {
 }
 
 /**
- * Deterministic per-source accent color (05 §2; 2026-10 soft palette: 34%/
- * 61% saturation/lightness): remote sources carry a hue hash of their source
- * id, the LOCAL source omits the accent and falls back to the default ink
- * (undefined). The single palette definition for every surface (source
- * header dot / rail dots / active insets, the session-todo source dot) — the
- * 2026-10 palette churn must not be re-implemented in per-surface copies.
+ * Deterministic per-source accent color (05 §2): remote sources carry a hue
+ * hash of their source id, the LOCAL source omits the accent and falls back
+ * to the default ink (undefined). The single palette definition for every
+ * surface (source header dot / rail dots / active insets, the session-todo
+ * source dot) — never re-implemented in per-surface copies.
  */
 export function sourceAccentColor(sourceId: string): string | undefined {
   return sourceId === 'local' ? undefined : `hsl(${hashString(sourceId) % 360} 34% 61%)`
@@ -142,9 +129,9 @@ export function workspaceAccentStyle(
   // One-decimal hue normalized into [0, 360): 359.96 rounds to 360.0, which
   // would escape the format contract — map it back to 0.
   const hue = (Math.round(rawHue * 10) % 3600) / 10
-  // Soft palette (user feedback 2026-10): saturation 34% (21% for derived
-  // worktrees) + lifted lightness 56/61/66% — pastel-calm while keeping the
-  // family/main-vs-derived hierarchy and the near-hue jitter tie-break.
+  // Soft palette: saturation 34% (21% for derived worktrees) + lightness
+  // 56/61/66% — pastel-calm while keeping the family/main-vs-derived
+  // hierarchy and the near-hue jitter tie-break.
   const saturation = seed?.isWorktree === true ? 21 : 34
   const lightness = 56 + (hashString(workspaceId) % 3) * 5
   return { '--dsh-workspace-accent': `hsl(${hue} ${saturation}% ${lightness}%)` }
@@ -171,17 +158,16 @@ export function sanitizeSearchQuery(query: string): string {
 }
 
 /**
- * How long a just-created session stays out of the synthetic ungrouped bucket
- * while its workspace membership has not landed yet (design 06 §2.2 sibling,
- * 2026-10 fix). The host commits session creation and workspace attach as TWO
- * ordered frames (`host/session-added` fires during `session.create`,
- * `host/workspace-changed` only after the attach commit), and the chamber
- * projection mirrors the mounted ctx store — a snapshot pushed between the
- * two frames would surface the new session in the trailing ungrouped bucket
- * ("未分类") for one frame, then yank it into its workspace on the next push
- * ("位置乱跳"). The sidebar arms this grace synchronously right after the
- * CREATE mutation resolves (before requesting the App-layer refresh/open),
- * and `deriveServerWorkspaces` skips the session's STRAY placement while the
+ * How long a just-created session stays out of the synthetic ungrouped
+ * bucket while its workspace membership has not landed yet (design 06 §2.2).
+ * The host commits creation and workspace attach as TWO ordered frames
+ * (`host/session-added` fires during `session.create`,
+ * `host/workspace-changed` only after the attach commit), so a snapshot
+ * pushed between them would flash the new session in the trailing ungrouped
+ * bucket for one frame, then yank it into its workspace on the next push.
+ * The sidebar arms this grace synchronously right after the CREATE mutation
+ * resolves (before requesting the App-layer refresh/open), and
+ * `deriveServerWorkspaces` skips the session's stray placement while the
  * grace holds: the row appears once membership lands — always in the right
  * workspace, never via the ungrouped bucket.
  *
@@ -189,29 +175,27 @@ export function sanitizeSearchQuery(query: string): string {
  * explicit workspaceId), so it can never hide a genuinely ungrouped session.
  * The FORK path uses a separate first-observation grace (see
  * deriveServerWorkspaces): the child id is host-minted and its session-added
- * frame may precede the mutation response, so it cannot be armed by the UI.
- * That grace is bounded by the same duration; if workspace attach fails after
- * the child was published, the child becomes visible under ungrouped instead
- * of remaining hidden forever. The create grace must cover the
- * mutation-triggered aggregate pull's round trip (the App's refresh is
- * guaranteed post-mutation — see renderer aggregate-refresh); 3s covers even
- * a slow SSH-tunneled pull.
+ * frame may precede the mutation response, so the UI cannot arm it. That
+ * grace is bounded by the same duration; if workspace attach fails after the
+ * child was published, the child surfaces under ungrouped instead of
+ * remaining hidden forever. 3s covers the mutation-triggered aggregate
+ * pull's round trip (the App's refresh is guaranteed post-mutation), even
+ * over a slow SSH tunnel.
  */
 export const MEMBERSHIP_GRACE_MS = 3_000
 
 /**
  * Module-level membership-grace map: `${serverId}:${sessionId}` -> expiry
- * epoch-ms. Source-scoped (2026-10 multi-agent review): host session ids are
- * per-process counters on some minting paths (`session-<n>` in dsh-session's
- * SessionStore), so a sessionId-only key could suppress another source's
- * same-id stray for the grace duration. Written only by `armMembershipGrace`
- * (the sidebar, synchronously after a successful create) and read only by
- * `deriveServerWorkspaces`'s stray filter for the SAME source; rides the same
- * vite shared chunk as the blank-ghost grace (see assertSingletonModule
- * above), so the arming shell and the App's derive share ONE map. Lazy
- * sweeps on write AND read bound the map: entries die after
- * MEMBERSHIP_GRACE_MS, and the write-side sweep clears every expired entry on
- * each arm (the read-side sweep only drops the queried id).
+ * epoch-ms. Source-scoped: host session ids are per-process counters on some
+ * minting paths (`session-<n>` in dsh-session's SessionStore), so a
+ * sessionId-only key could suppress another source's same-id stray for the
+ * grace duration. Written only by `armMembershipGrace` (the sidebar,
+ * synchronously after a successful create) and read only by the SAME
+ * source's stray filter in `deriveServerWorkspaces`; the arming shell and
+ * the App's derive share one map (same vite shared chunk as the blank-ghost
+ * grace — see assertSingletonModule above). Lazy sweeps on write AND read
+ * bound the map: the write-side sweep clears every expired entry per arm,
+ * the read-side sweep only drops the queried id.
  */
 const membershipGraceUntil = new Map<string, number>()
 
@@ -219,20 +203,19 @@ const membershipGraceUntil = new Map<string, number>()
  * Source-scoped fork grace, armed on the first snapshot where a fork child is
  * unaccounted while its parent is workspace-accounted. An expired entry is
  * deliberately retained while the candidate remains present, so repeated
- * derives cannot re-arm it forever; it is removed as soon as the child is
- * accounted, disappears, or stops being a qualifying candidate. The map is
- * therefore bounded by the current snapshot's candidate set.
+ * derives cannot re-arm it forever; it is removed once the child is
+ * accounted, disappears, or stops being a qualifying candidate — the map is
+ * bounded by the current snapshot's candidate set.
  */
 const forkMembershipGraceByServer = new Map<string, Map<string, number>>()
 
 /**
  * Arm (or refresh) the membership grace for a session the sidebar just
- * created under `serverId`. The sidebar calls this synchronously after the
- * create mutation resolves and BEFORE requesting the App-layer refresh — the
- * App's next derive (a moment later, when the refresh pull lands) then
- * consults the grace and skips the session's ungrouped placement until the
- * workspace membership arrives. Refreshing overwrites the expiry, so a later
- * re-arm always wins over an earlier stale arm.
+ * created under `serverId`. Called synchronously after the create mutation
+ * resolves and BEFORE requesting the App-layer refresh — the App's next
+ * derive (when the refresh pull lands) then consults the grace and skips the
+ * session's ungrouped placement until its workspace membership arrives.
+ * Refreshing overwrites the expiry, so a later re-arm always wins.
  * @param now - epoch-ms; injected in tests, Date.now() in the app.
  */
 export function armMembershipGrace(serverId: string, sessionId: string, now = Date.now()): void {
@@ -244,11 +227,10 @@ export function armMembershipGrace(serverId: string, sessionId: string, now = Da
 
 /**
  * Whether the session's ungrouped placement is suppressed by an active
- * membership grace armed for the same source. Expired entries are lazily
- * swept on read (third-wave R2-1#3 discipline, mirrors the blank-ghost
- * sweep). The grace ONLY affects the stray/ungrouped placement — a session
- * already listed in a workspace's sessionIds renders normally in that
- * workspace regardless of the map.
+ * membership grace for the same source (expired entries lazily swept on
+ * read, mirroring the blank-ghost sweep). The grace ONLY affects the
+ * stray/ungrouped placement — a session already listed in a workspace's
+ * sessionIds renders normally in that workspace regardless of the map.
  */
 function membershipGraceActive(serverId: string, sessionId: string, now: number): boolean {
   const key = `${serverId}:${sessionId}`
@@ -282,8 +264,8 @@ function retainForkMembershipCandidates(serverId: string, candidates: ReadonlySe
   if (source.size === 0) forkMembershipGraceByServer.delete(serverId)
 }
 
-/** Converge grace state with the live server registry. A removed source will
- * never derive another snapshot, so candidate-based pruning alone cannot
+/** Converge grace state with the live server registry: a removed source
+ * never derives another snapshot, so candidate-based pruning alone cannot
  * reclaim it; same-id re-adds must start with a fresh generation. */
 export function retainMembershipGraceSources(liveServerIds: ReadonlySet<string>): void {
   for (const key of membershipGraceUntil.keys()) {
@@ -326,14 +308,14 @@ export function reconciledSessionOrder(stored: readonly string[], wireIds: reado
 }
 
 /**
- * Source display order (2026-09, 06 §2.4 — option 1):
- * the sidebar's server groups render in the user's stored order when one
- * exists — ids known to the projection come in stored order first, then the
- * remaining projection ids in projection order (a newly added source appears
- * at the bottom until dragged). Unknown stored ids are skipped, so a source
- * deleted from the registry cannot leave a ghost group. `undefined` (no
- * preference yet) returns the projection order unchanged — the same
- * reference, so callers can skip re-renders on absent prefs.
+ * Source display order (06 §2.4): the sidebar's server groups render in the
+ * user's stored order when one exists — ids known to the projection come in
+ * stored order first, then the remaining projection ids in projection order
+ * (a newly added source appears at the bottom until dragged). Unknown stored
+ * ids are skipped, so a source deleted from the registry cannot leave a
+ * ghost group. `undefined` (no preference yet) returns the projection order
+ * unchanged — the same reference, so callers can skip re-renders on absent
+ * prefs.
  */
 export function orderServersForDisplay(
   servers: readonly ChamberServerAggregate[],
@@ -358,15 +340,14 @@ export function orderServersForDisplay(
 }
 
 /**
- * Server-group drop order math (2026-09, 06 §2.4 —
- * option 1): the display order that results from inserting
- * `draggedSourceId` at `over`'s boundary of the CURRENT rendered order.
- * `null` = NO-OP — the drop leaves the order unchanged and the caller skips
- * the write: the target or the dragged source vanished from the rendered
- * order, the dragged source IS the anchor, or the position did not actually
- * move (inserting right after itself / already in place / already last).
- * The anchor math mirrors the workspace commit (anchor = half === 'before'
- * ? over.id : next id, undefined = append at the end).
+ * Server-group drop order math (06 §2.4): the display order that results
+ * from inserting `draggedSourceId` at `over`'s boundary of the CURRENT
+ * rendered order. `null` = NO-OP — the drop leaves the order unchanged and
+ * the caller skips the write: the target or the dragged source vanished from
+ * the rendered order, the dragged source IS the anchor, or the position did
+ * not actually move (inserting right after itself / already in place /
+ * already last). The anchor math mirrors the workspace commit (anchor =
+ * half === 'before' ? over.id : next id, undefined = append at the end).
  */
 export function nextServerOrder(
   renderedOrder: readonly string[],
@@ -460,25 +441,23 @@ export function reconcileCompletedFacts(params: {
  * running→idle edges itself — it owns the active view and every open request,
  * so it is the single place that knows what "being read" means), while
  * `completed`/`pending` ride the vendor runtime's armed state as sparse
- * extras. `subagentRunning` (the vendor lineage index's RUNNING descendant
- * count per parent, 06 §4.5) is INJECTED by the plugin — this module stays a
- * pure controller with no unbuilt vendor package in its import graph (the
- * renderer shell bundle rides this module through the shared chunk), and the
+ * extras.
+ *
+ * `subagentRunning` (the vendor lineage index's RUNNING descendant count per
+ * parent, 06 §4.5) is INJECTED by the plugin — this module stays a pure
+ * controller with no unbuilt vendor package in its import graph — and the
  * plugin reuses the vendor's `indexSubagentDescendants` verbatim so the
- * aggregation semantics never drift. The loose snapshot param avoids
- * importing runtime store types.
+ * aggregation semantics never drift.
  *
  * `pendingInteractions` (the per-session pending map of the official
  * ui-session registry — the same authoritative source the official
  * ui-workspace tree consumes via `useSessionPendingInteraction`) is injected
- * by the plugin as a LOOSE ReadonlyMap: dsh-v0.1.2-alpha.1 removed
- * `SessionSummary.pendingInteraction` upstream (the new pending face is the
- * ui-session registry fed by the `approval/request` / `user-questions/request`
- * remote-event waterfalls), so the chamber sidebar's pending dots and the
- * design-19 ask/request notification edges lost their source (2026-09 beta
- * regression, review-round1 P1-3) until the plugin wired this registry.
+ * by the plugin as a LOOSE ReadonlyMap: the chamber sidebar's pending dots
+ * and the design-19 ask/request notification edges read the registry fed by
+ * the `approval/request` / `user-questions/request` remote-event waterfalls.
  * The kind mapping mirrors the official `visiblePendingKind` verbatim so the
- * sidebar presentation can never drift from the official tree.
+ * presentation can never drift from the official tree. The loose param
+ * avoids importing runtime store types.
  */
 export function projectRuntimeFacts(
   snapshot: {
@@ -534,14 +513,13 @@ function pendingKindOf(kind: string | undefined): 'approval' | 'plan-review' | '
 }
 
 /**
- * Project the two already-live ctx stores into the same chamber snapshot shape
- * as the unary fallback. `undefined` means either reconnect baseline is
- * incomplete; callers must invalidate the push snapshot and let the bounded
- * fallback pull take over (the renderer App keeps the last pushed view
- * through the withdrawal window — 2026-09 fix — so the sessions-only
- * fallback never replaces a mounted source's groups/archive/state). Subagent
- * rows are deliberately excluded because chamber navigation never renders
- * them.
+ * Project the two already-live ctx stores into the same chamber snapshot
+ * shape as the unary fallback. `undefined` means either reconnect baseline
+ * is incomplete; callers must invalidate the push snapshot and let the
+ * bounded fallback pull take over (the renderer App keeps the last pushed
+ * view through the withdrawal window, so the sessions-only fallback never
+ * replaces a mounted source's groups/archive/state). Subagent rows are
+ * deliberately excluded because chamber navigation never renders them.
  */
 export function projectInstanceSnapshot(
   workspaces: {
@@ -573,37 +551,34 @@ export function projectInstanceSnapshot(
     phase?: string
   },
 ): InstanceSnapshot | undefined {
-  // Both arrival phases are sticky after their first success in the upstream
-  // runtime (dsh-v0.1.2-alpha.1 `WorkspaceSnapshot` / `SessionListState`).
-  // The workspace store also projects its pull-activity `state`
-  // (loading/error during a reconnect, while `phase` stays ready), so a
-  // loading/error workspace withdraws here — clearing the producer's content
-  // signature so an identical recovered baseline is emitted again instead of
-  // being suppressed forever (2026-09 review: the withdrawal is REQUIRED —
-  // dropping it would let the signature gate suppress the post-reconnect
-  // rebaseline, leaving the renderer on the not-connected/unary view the
-  // ready-edge refresh installed; the renderer App keeps the last pushed
-  // view through the withdrawal window instead of falling back). The session
-  // store projects only `phase` (the arrival lifecycle): `SessionListState`
-  // has no `state` axis, and its baseline refreshes together with the
-  // workspace baseline on reconnect, so the workspace `state` check is the
-  // single completeness authority there.
-  // The upstream `baselinesReady` field was removed in v0.1.2-alpha.1 — the
-  // arrival check is `state === 'idle'` + both phases `ready` only.
+  // Both arrival phases are sticky after their first success. The workspace
+  // store also projects its pull-activity `state` (loading/error during a
+  // reconnect, while `phase` stays ready), so a loading/error workspace
+  // withdraws here — clearing the producer's content signature so an
+  // identical recovered baseline is emitted again instead of being
+  // suppressed forever (dropping the withdrawal would let the signature gate
+  // suppress the post-reconnect rebaseline and leave the renderer on the
+  // not-connected/unary view the ready-edge refresh installed; the App keeps
+  // the last pushed view through the withdrawal window instead). The session
+  // store projects only `phase` (the arrival lifecycle): its baseline
+  // refreshes together with the workspace baseline on reconnect, so the
+  // workspace `state` check is the single completeness authority there. The
+  // arrival check is `state === 'idle'` + both phases `ready` only (the
+  // upstream `baselinesReady` field no longer exists).
   if (workspaces.state !== 'idle'
     || workspaces.phase !== 'ready' || sessions.phase !== 'ready') return undefined
   const byId = sessions.byId ?? {}
-  // Wire-degradation defense (2026-09, M1): the host projects
-  // `WorkspaceView.sessionIds` through a canonical-cwd header index built at
-  // registry init (dsh-workspace entity getter + index); when that index is
-  // incomplete (legacy headers without cwd, cwd not resolving), the baseline
-  // carries workspace rows with EMPTY sessionIds while sessions exist — the
-  // sidebar would sink every session into the ungrouped bucket. Detect the
-  // degenerate cross-section (ready + non-empty items + non-empty sessions +
-  // zero accounted members + at least one session whose cwd matches a
-  // workspace path) and synthesize membership from the session cwd facts,
-  // keeping the store's workspace identity/order/title. The cwd-match guard
-  // keeps genuinely-empty workspaces untouched (no false positives).
+  // Wire-degradation defense: the host projects `WorkspaceView.sessionIds`
+  // through a canonical-cwd header index built at registry init (dsh-workspace
+  // entity getter + index); when that index is incomplete (legacy headers
+  // without cwd, cwd not resolving), the baseline carries workspace rows with
+  // EMPTY sessionIds while sessions exist — the sidebar would sink every
+  // session into the ungrouped bucket. Detect the degenerate cross-section
+  // (ready + non-empty items + non-empty sessions + zero accounted members +
+  // at least one session whose cwd matches a workspace path) and synthesize
+  // membership from the session cwd facts, keeping the store's workspace
+  // identity/order/title. The cwd-match guard keeps genuinely-empty
+  // workspaces untouched (no false positives).
   const items = (workspaces.items ?? []).map(item => ({
     workspaceId: String(item.workspaceId),
     path: item.path,
@@ -627,10 +602,9 @@ export function projectInstanceSnapshot(
   const pathKey = (value: string): string => value.replace(/[\\/]+$/, '')
   if (zeroAccounted && (sessions.ids ?? []).length > 0 && cwdRows.length > 0
     && items.some(item => cwdRows.some(row => pathKey(row.cwd) === pathKey(item.path)))) {
-    // ONE diagnostic warning per page lifetime (module-level flag, same
-    // pattern as the grace maps below): the degenerate cross-section repeats
-    // on every store notification while the host index stays incomplete, and
-    // the console must not flood.
+    // ONE diagnostic warning per page lifetime (module-level flag): the
+    // degenerate cross-section repeats on every store notification while the
+    // host index stays incomplete — the console must not flood.
     if (!warnedCwdMembershipFallback) {
       warnedCwdMembershipFallback = true
       console.warn(
@@ -698,12 +672,12 @@ export function mergeRuntimeFacts(
 /**
  * Content signature of one instance snapshot (workspaces + sessions +
  * archived ids). Used by the App layer to keep aggregate state
- * identity-preserving: an update whose rows are byte-identical must NOT mint a
- * new state object — that would re-derive servers, re-publish the chamber
- * bridge and re-render every shell's sidebar on every fallback tick (design 05 §3
- * perf pass, 2026-08). Key order is fixed (the wire row constructors in
- * instance-api.ts build fields in a stable order), so JSON.stringify is
- * deterministic across updates.
+ * identity-preserving: an update whose rows are byte-identical must NOT mint
+ * a new state object — that would re-derive servers, re-publish the chamber
+ * bridge and re-render every shell's sidebar on every fallback tick (design
+ * 05 §3). Key order is fixed (the wire row constructors in instance-api.ts
+ * build fields in a stable order), so JSON.stringify is deterministic across
+ * updates.
  */
 export function instanceSnapshotSignature(
   snapshot: Pick<InstanceSnapshot, 'workspaces' | 'sessions' | 'archivedSessionIds'>,
@@ -740,9 +714,9 @@ export function instanceSnapshotSignature(
  * reintroduce channel participation without the regression test failing).
  *
  * Runtime facts and the structural snapshot are deliberately not OR/precedence
- * merged: one rendered field has one authority. Mounted sources update the
- * snapshot from their ctx store on the same host-frame event; unmounted or
- * reconnecting sources use the bounded unary fallback.
+ * merged: one rendered field has one authority (mounted sources update the
+ * snapshot from their ctx store; unmounted or reconnecting sources use the
+ * bounded unary fallback).
  */
 export function runningRingVisible(_channelRunning: boolean | undefined, polledRunning: boolean | undefined): boolean {
   return polledRunning === true
@@ -756,21 +730,20 @@ export function runningRingVisible(_channelRunning: boolean | undefined, polledR
  *
  * `onlyIds` optionally restricts the signature to a subset of session ids:
  * the projection signature (serversProjectionSignature) passes the set of
- * sessions actually rendered by the sidebar, so a hidden session (subagent-
- * origin / archived / blank-non-current) flipping its running/completed bits
- * does NOT re-render the list. The App's runtimeFacts identity check (B3)
- * calls without it — the state must track the full report, while the
- * completed-dot reconciliation runs on every report regardless.
+ * sessions actually rendered by the sidebar, so a hidden session
+ * (subagent-origin / archived / blank-non-current) flipping its
+ * running/completed bits does NOT re-render the list. The App's runtimeFacts
+ * identity check calls without it — the state must track the full report,
+ * while the completed-dot reconciliation runs on every report regardless.
  *
- * `includeRunning` separates the two consumers (2026-08, sidebar running-ring
- * fix): the App's runtimeFacts identity + completed-dot state machine read
- * the report's running bits and must keep them in the signature (default
- * true); the PROJECTION signature (serversProjectionSignature) passes false —
- * the sidebar renders the running ring from the polled wire bit
- * (06 §4.3「running 点保留（wire 权威）」, runningRingVisible), so a
- * channel-only running flip must NOT re-publish/re-render the sidebar (its
- * rendered content — ring, dots, pending badges, current highlight — is
- * unchanged).
+ * `includeRunning` separates the two consumers: the App's runtimeFacts
+ * identity + completed-dot state machine read the report's running bits and
+ * must keep them in the signature (default true); the PROJECTION signature
+ * (serversProjectionSignature) passes false — the sidebar renders the
+ * running ring from the polled wire bit (06 §4.3「running 点保留（wire
+ * 权威）」, runningRingVisible), so a channel-only running flip must NOT
+ * re-publish/re-render the sidebar (its rendered content — ring, dots,
+ * pending badges, current highlight — is unchanged).
  */
 export function runtimeReportSignature(
   report: InstanceRuntimeReport | undefined,
@@ -792,30 +765,29 @@ export function runtimeReportSignature(
 }
 
 /**
- * Render-relevant projection signature of the merged multi-source projection.
- * Covers everything the sidebar (and the settings bridge) renders or uses
- * as a lifecycle boundary — and nothing else:
+ * Render-relevant projection signature of the merged multi-source
+ * projection. Covers everything the sidebar (and the settings bridge)
+ * renders or uses as a lifecycle boundary — and nothing else:
  * - sourceFingerprint is not visible UI, but a same-id replacement must
  *   publish so source-owned child contexts can be retired synchronously.
- * - session rows carry id/title/running/blank/updatedAt. `updatedAt` IS part
- *   of it since the 2026-08 updated-mode alignment (updated = manual order +
- *   activity promotion, design 06 §3.1): a session's last-activity tick
- *   re-publishes the projection, and the sidebar's per-account derivation
- *   promotes the session — a pure recency re-sort is NOT materialized into
- *   the row order anymore, so the old exclusion rationale no longer holds.
+ * - `updatedAt` IS part of the session row since the updated-mode alignment
+ *   (updated = manual order + activity promotion, design 06 §3.1): a
+ *   session's last-activity tick re-publishes the projection and the
+ *   sidebar's per-account derivation promotes the session — a pure recency
+ *   re-sort is NOT materialized into the row order anymore, so the old
+ *   exclusion rationale no longer holds.
  * - the runtime portion is restricted to sessions visible in the projection
  *   (hidden sessions' facts never re-render the list).
  * The App layer gates chamberBridge.publish on this signature — a poll tick
  * whose rendered content did not change must not re-render every shell's
- * sidebar; the sidebar subscription re-checks it as defense in depth
- * (mirrors the settings bridge's subscribeServers dedupe).
+ * sidebar; the sidebar subscription re-checks it as defense in depth.
  */
 export function serversProjectionSignature(servers: readonly ChamberServerAggregate[]): string {
   // JSON encoding (not delimiter concatenation): titles/labels are
   // user-controlled text (sidebar renameSession) and may contain any
   // separator — a joined string would let two different projections produce
   // the same signature, and the publish gate would silently skip a real
-  // change. Same rationale as instanceSnapshotSignature.
+  // change.
   return JSON.stringify(servers.map(server => {
     const visibleSessionIds = new Set<string>()
     for (const workspace of server.workspaces) {
@@ -826,9 +798,9 @@ export function serversProjectionSignature(servers: readonly ChamberServerAggreg
     // embedding it as a JSON string value is unambiguous. A report whose
     // rows were all filtered out (no visible session, no current) is
     // normalized to null — indistinguishable from "no runtime attached".
-    // includeRunning=false (2026-08): the sidebar renders the running ring
-    // from the POLLED wire bit (runningRingVisible), never from the channel,
-    // so a channel-only running flip must not re-publish the projection.
+    // includeRunning=false: the sidebar renders the running ring from the
+    // POLLED wire bit (runningRingVisible), never from the channel, so a
+    // channel-only running flip must not re-publish the projection.
     const runtime = server.runtime === undefined ? '' : runtimeReportSignature(server.runtime, visibleSessionIds, false)
     return {
       id: server.id,
@@ -842,12 +814,11 @@ export function serversProjectionSignature(servers: readonly ChamberServerAggreg
       dshVersion: server.dshVersion ?? null,
       aggregateError: server.aggregateError ?? null,
       // pluginDiagnostic STAYS in the publish gate even though the sidebar no
-      // longer renders it (badge removed 2026-09, user decision): the
-      // settings-bridge consumes the SAME chamberBridge publish channel and
-      // derives the connections page's pluginDiagnostics from it
-      // (SettingsShell → ConnectionsSection), so a diagnostic-only flip must
-      // still re-publish or the connections surface goes stale. Removing this
-      // block would regress that surface.
+      // longer renders it: the settings-bridge consumes the SAME chamberBridge
+      // publish channel and derives the connections page's pluginDiagnostics
+      // from it (SettingsShell → ConnectionsSection), so a diagnostic-only
+      // flip must still re-publish or that surface goes stale. Removing this
+      // block would regress it.
       pluginDiagnostic: server.pluginDiagnostic === undefined ? null : {
         state: server.pluginDiagnostic.state,
         message: server.pluginDiagnostic.message ?? null,
@@ -858,16 +829,14 @@ export function serversProjectionSignature(servers: readonly ChamberServerAggreg
         id: w.id,
         title: w.title,
         ungrouped: w.ungrouped === true,
-        // Render-relevant since 2026-11: synthetic rows disable their
-        // mutation affordances in the sidebar.
+        // Synthetic rows disable their mutation affordances in the sidebar.
         synthetic: w.synthetic === true,
         sessions: w.sessions.map(x => ({
           id: x.id,
           title: x.title,
           running: x.running === true,
           blank: x.blank === true,
-          // 2026-08: render-relevant since updated = manual + activity
-          // promotion (the ordering derives from it in the sidebar).
+          // Render-relevant: updated-mode ordering derives from it.
           updatedAt: x.updatedAt ?? null,
         })),
       })),
@@ -877,30 +846,30 @@ export function serversProjectionSignature(servers: readonly ChamberServerAggreg
 
 /**
  * How long a departed blank "new session" row keeps its layout slot as a
- * non-interactive GHOST (design 06 §2.2, 2026-08 review fix). Without it, a
- * double click on a real session below the blank row mis-targets: click1
- * opens the session, the blank row stops being current and disappears, every
- * row below shifts up ~30px, and click2 (within DOUBLE_CLICK_WINDOW_MS) hits
- * the row that was BELOW the target — opening a DIFFERENT session instead of
- * renaming. The grace must exceed the 350ms double-click window; 450ms covers
- * it plus the App's re-derive latency.
+ * non-interactive GHOST (design 06 §2.2). Without it, a double click on a
+ * real session below the blank row mis-targets: click1 opens the session,
+ * the blank row stops being current and disappears, every row below shifts
+ * up ~30px, and click2 (within DOUBLE_CLICK_WINDOW_MS) hits the row that was
+ * BELOW the target — opening a DIFFERENT session instead of renaming. The
+ * grace must exceed the 350ms double-click window; 450ms covers it plus the
+ * App's re-derive latency.
  */
 export const BLANK_GHOST_GRACE_MS = 450
 
 /**
  * Module-level ghost grace map: departed blank `sourceId:sessionId` -> expiry
- * epoch-ms. Source-scoped (2026 audit L2): cloned instances can carry the
- * SAME session UUID, and a bare sessionId key would let one source's ghost
- * grace suppress another source's blank row (or leak it). Written by
- * `armBlankGhost` (the sidebar, at the transition click) and read by
- * `sessionVisible` during the App's derive — the blank row keeps its slot
- * in the projection (and therefore in the sidebar's list) until the grace
- * expires, so the list never shifts inside the double-click window. The App
- * drops the row on its next derive after expiry; the sidebar additionally
- * stops RENDERING the ghost at the same expiry (its own clock), so the
- * invisible placeholder cannot linger until the next poll cycle. Expired
- * entries are lazily swept on WRITE (armBlankGhost) and on READ
- * (sessionVisible, third-wave R2-1#3) — the map is bounded either way.
+ * epoch-ms. Source-scoped: cloned instances can carry the SAME session UUID,
+ * and a bare sessionId key would let one source's ghost grace suppress
+ * another source's blank row (or leak it). Written by `armBlankGhost` (the
+ * sidebar, at the transition click) and read by `sessionVisible` during the
+ * App's derive — the blank row keeps its slot in the projection (and
+ * therefore in the sidebar's list) until the grace expires, so the list
+ * never shifts inside the double-click window. The App drops the row on its
+ * next derive after expiry; the sidebar additionally stops RENDERING the
+ * ghost at the same expiry (its own clock), so the invisible placeholder
+ * cannot linger until the next poll cycle. Expired entries are lazily swept
+ * on write (armBlankGhost) and on read (sessionVisible) — the map is bounded
+ * either way.
  */
 const blankGhostUntil = new Map<string, number>()
 
@@ -909,11 +878,11 @@ const blankGhostUntil = new Map<string, number>()
  * being the source's current session. The sidebar calls this SYNCHRONOUSLY in
  * a session-row onClick, BEFORE requesting the open that transitions current
  * away from the blank row — the App's re-derive (a moment later, on the
- * runtime-facts report) then consults the grace via `sessionVisible` and keeps
- * the row. Refreshing overwrites the expiry, so a later real transition always
- * wins over an earlier stale arm (e.g. an earlier click on the blank row
- * itself). Lazy sweep drops expired entries (bounded: at most one blank row
- * per source). Source-scoped key (L2): `sourceId:sessionId`.
+ * runtime-facts report) then consults the grace via `sessionVisible` and
+ * keeps the row. Refreshing overwrites the expiry, so a later real transition
+ * always wins over an earlier stale arm (e.g. an earlier click on the blank
+ * row itself). Lazy sweep drops expired entries (bounded: at most one blank
+ * row per source). Source-scoped key: `sourceId:sessionId`.
  * @param now - epoch-ms; injected in tests, Date.now() in the app.
  */
 export function armBlankGhost(sourceId: string, sessionId: string, now = Date.now()): void {
@@ -949,13 +918,13 @@ function sessionVisible(
   archived: ReadonlySet<string>,
   now: number,
 ): boolean {
-  // chamber (third-wave, R2-1#3): lazy SWEEP on read — an expired ghost entry
-  // is dropped the first time a derive consults it (armBlankGhost also sweeps
-  // on write). Deleting an expired entry cannot change any derive result (the
-  // expiry predicate would have failed anyway), and the currentness branch
-  // below keeps a CURRENT blank row visible regardless of the map. At most one
-  // blank row per source can be ghosted, so this stays O(1). Source-scoped
-  // key (L2): cloned UUIDs across sources must not share ghost grace.
+  // Lazy SWEEP on read: an expired ghost entry is dropped the first time a
+  // derive consults it (armBlankGhost also sweeps on write). Deleting an
+  // expired entry cannot change any derive result (the expiry predicate would
+  // have failed anyway), and the currentness branch below keeps a CURRENT
+  // blank row visible regardless of the map. At most one blank row per source
+  // can be ghosted, so this stays O(1). Source-scoped key: cloned UUIDs
+  // across sources must not share ghost grace.
   const ghostKey = `${serverId}:${session.sessionId}`
   const ghostExpiry = blankGhostUntil.get(ghostKey)
   if (ghostExpiry !== undefined && ghostExpiry <= now) blankGhostUntil.delete(ghostKey)
@@ -1029,18 +998,18 @@ function sortIdsByRecency<T extends { id: string; updatedAt?: number }>(
 
 /**
  * One session order account's next updated-mode derivation — the official
- * ui-workspace `nextSessionOrderAccount` port (design 06 §3.1, 2026-08 C档
- * alignment: updated = manual order + activity promotion, no longer a pure
- * recency re-sort). For a given wire membership the account keeps a stored
- * order (`updatedOrder[accountKey]`) plus last-observed timestamps
- * (`sessionUpdatedAtByAccount[accountKey]`), both written back together:
+ * ui-workspace `nextSessionOrderAccount` port (design 06 §3.1: updated =
+ * manual order + activity promotion, no longer a pure recency re-sort). The
+ * account keeps a stored order (`updatedOrder[accountKey]`) plus
+ * last-observed timestamps (`sessionUpdatedAtByAccount[accountKey]`), both
+ * written back together:
  *
  * - baseline = stored order reconciled with the current membership (stored
  *   ids first, new wire ids appended in wire order), or the wire order when
  *   the account has never been observed;
  * - NO bookkeeping yet (first observation, or the user just switched into
- *   updated — the menu action clears the source's bookkeeping, the official
- *   `switchedToUpdated` trigger): ONE full recency sort;
+ *   updated — the menu action clears the source's bookkeeping): ONE full
+ *   recency sort;
  * - otherwise PROMOTE the sessions whose updatedAt increased since the last
  *   observation (or was never observed) to the top, recency-sorted among
  *   themselves, keeping every other session in baseline order — a promoted
@@ -1097,10 +1066,10 @@ export function nextUpdatedOrder<T extends { id: string; updatedAt?: number }>({
 }
 
 /**
- * Ungrouped-bucket order resolution (P2-9 extracted, PURE, MANUAL mode only —
- * updated mode goes through the unified account path, `nextUpdatedOrder`):
- * stored ids first via reconciledSessionOrder, unknown ids appended in wire
- * order; the wire order copy when no stored order exists.
+ * Ungrouped-bucket order resolution (PURE, MANUAL mode only — updated mode
+ * goes through the unified account path, `nextUpdatedOrder`): stored ids
+ * first via reconciledSessionOrder, unknown ids appended in wire order; the
+ * wire order copy when no stored order exists.
  */
 export function orderUngroupedSessions<T extends { id: string; updatedAt?: number }>(
   wire: readonly T[],
@@ -1157,19 +1126,17 @@ export function deriveLocalSearchMatches(snapshot: InstanceSnapshot, query: stri
  * matched remotely carries the remote snippet. hasMore = remote hasMore OR
  * the merged result exceeds the limit.
  *
- * P1-2 (visible-set filter): the remote leg is filtered against the caller's
- * visible-session set before merging — the local leg already only matches
- * projected rows (subagent / archived / blank-non-current never enter the
- * projection), so without the same filter on the remote leg, content-search
- * hits for hidden sessions would sneak into the results. The official
- * deriveSearchResults applies sessionVisible() to every content item (tree.ts
- * L370-373); the projection IS the chamber's visibility authority, so "in
- * the projection" == "visible". 2026 audit M7: `projectionReady`
- * distinguishes "projection genuinely empty" from "projection not yet
- * loaded" — when READY the visible set is authoritative and an empty set
- * filters ALL remote hits (hidden sessions must never resurface in clickable
- * results); only a NOT-ready projection keeps the no-filter degrade (never
- * wipe out remote hits because the snapshot is temporarily absent).
+ * The remote leg is filtered against the caller's visible-session set before
+ * merging: the local leg already only matches projected rows (subagent /
+ * archived / blank-non-current never enter the projection), so without the
+ * same filter, content-search hits for hidden sessions would sneak into the
+ * results (the official deriveSearchResults applies sessionVisible() to
+ * every content item; the projection IS the chamber's visibility authority).
+ * When the projection is READY the visible set is authoritative and an empty
+ * set filters ALL remote hits (hidden sessions must never resurface in
+ * clickable results); only a NOT-ready projection keeps the no-filter
+ * degrade (never wipe out remote hits because the snapshot is temporarily
+ * absent).
  * @param local - deriveLocalSearchMatches output (recency-ordered).
  * @param remote - the wire searchSessions page.
  * @param limit - protocol-owned maximum merged row count.
@@ -1214,9 +1181,9 @@ export function mergeSearchResults(
 }
 
 /**
- * Fork-child title increment (P1-4). VERBATIM port of the official dsh client
+ * Fork-child title increment — VERBATIM port of the official dsh client
  * runtime's `increasedForkTitle` (upstream
- * dsh-api-session-controller/src/client/sessions/service.ts): the wire
+ * dsh-api-session-controller/src/client/sessions/service.ts). The wire
  * `session/fork` accepts only `{ sessionId, atSeq? }` — the official
  * `increaseTitle` flag is a client-side convenience (fork succeeds, then the
  * child is renamed) — so the chamber implements the same increment itself:
@@ -1249,18 +1216,16 @@ export function increasedForkTitle(title: string): string {
  * @param currentSessionId - the source's current session id (from the
  *   per-ctx runtime-facts channel), or undefined for non-active sources.
  *   Blank rows surface only when they carry this id (see sessionVisible).
- * @param now - epoch-ms of this derive (injected for tests; the App passes
- *   nothing and Date.now() applies). The ghost-slot grace is measured against
- *   this clock, so a derive with an injected `now` is fully deterministic.
- *   The membership grace (armMembershipGrace) is measured against the same
- *   clock: a just-created session whose workspace membership has not landed
- *   yet is skipped from the ungrouped bucket (see above). Fork children of
- *   workspace-accounted parents receive a first-observation bounded grace;
- *   if membership still has not landed at expiry (including the host's
- *   documented publish-then-attach-failure path), they surface ungrouped.
- * @returns real workspaces in wire order (visible members in sessionIds order),
- *   plus one synthetic trailing ungrouped group when visible stray sessions
- *   exist; [] for an empty snapshot.
+ * @param now - epoch-ms of this derive (injected for tests; Date.now()
+ *   otherwise). The ghost-slot grace and the membership grace are both
+ *   measured against this clock, so an injected `now` makes the derive fully
+ *   deterministic. Fork children of workspace-accounted parents receive a
+ *   first-observation bounded grace; if membership still has not landed at
+ *   expiry (including the host's documented publish-then-attach-failure
+ *   path), they surface ungrouped.
+ * @returns real workspaces in wire order (visible members in sessionIds
+ *   order), plus one synthetic trailing ungrouped group when visible stray
+ *   sessions exist; [] for an empty snapshot.
  */
 export function deriveServerWorkspaces(
   snapshot: InstanceSnapshot,

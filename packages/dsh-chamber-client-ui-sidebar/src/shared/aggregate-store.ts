@@ -31,7 +31,7 @@ export interface ChamberServerWorkspace {
    * True only for the fallback's cwd-derived groups (`__cwd__:` ids,
    * fetchInstanceSnapshot). Display-only: the host does not know these ids,
    * so the sidebar must disable every workspace-scoped mutation on them
-   * (ungrouped-bucket parity, 2026-11 fix).
+   * (ungrouped-bucket parity).
    */
   synthetic?: boolean
   sessions: { id: string; title: string; running?: boolean; updatedAt?: number; blank?: boolean }[]
@@ -55,23 +55,21 @@ export interface ChamberServerAggregate {
   phase: string
   workspaces: ChamberServerWorkspace[]
   /** True when the per-instance aggregate snapshot has actually landed
-   *  (sessions; 0.1.2: workspace.list was deleted upstream and workspace
-   *  groups derive from session cwd facts) — git-derived rows must not
-   *  render before the aggregate itself (2026-08 user report). Absent on
-   *  older producers = not ready. */
+   *  (sessions; workspace groups derive from session cwd facts since
+   *  workspace.list was deleted upstream) — git-derived rows must not render
+   *  before the aggregate itself. Absent on older producers = not ready. */
   aggregateReady?: boolean
   /** Snapshot-fetch error text from the last per-instance pull; absent = ok/not-connected. */
   aggregateError?: string
   /** Runtime facts from the source's own ctx (design 06 §4); attached, never polled. */
   runtime?: InstanceRuntimeReport
   /**
-   * dsh version fact. D2-PENDING (0.1.2-alpha.1): the old producer source —
-   * the connection handshake's host.describe — was deleted upstream, so the
-   * in-ctx host-producer channel was removed entirely (2026-09 cleanup). The
-   * LOCAL instance's version now flows straight from the desktop bridge
+   * dsh version fact. The old in-ctx host-producer channel was removed
+   * (upstream deleted the connection handshake's host.describe), so the
+   * LOCAL instance's version flows straight from the desktop bridge
    * (`window.dshChamber.dshVersion` → App hostFacts); remote instances stay
-   * unknown until the D2 wiring lands (control-plane `dsh --version` facts
-   * projected through the chamber bridge, plan-review P1-7).
+   * unknown until the control-plane `dsh --version` facts are projected
+   * through the chamber bridge.
    */
   dshVersion?: string
   /** Renderer-local client-plugin boot health for this source. */

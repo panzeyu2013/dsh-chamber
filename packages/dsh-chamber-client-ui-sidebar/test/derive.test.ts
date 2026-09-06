@@ -18,7 +18,9 @@ import {
   MEMBERSHIP_GRACE_MS,
   mergeRuntimeFacts,
   mergeSearchResults,
+  nextServerOrder,
   nextUpdatedOrder,
+  orderServersForDisplay,
   orderUngroupedSessions,
   projectRuntimeFacts,
   projectInstanceSnapshot,
@@ -895,6 +897,16 @@ test('reconciledSessionOrder skips stored ids unknown to the wire', () => {
   assert.deepEqual(reconciledSessionOrder(['z'], ['a']), ['a'])
 })
 
+test('reconciledSessionOrder edge pairs: empty stored + empty wire stays empty; a stored non-prefix appends the wire remainder in wire order', () => {
+  // Nothing on either side — an empty result, no reconciliation work.
+  assert.deepEqual(reconciledSessionOrder([], []), [])
+  // 'b' is NOT a wire-order prefix (the wire leads with 'a'): the stored-known
+  // block still comes first, and the ENTIRE remaining wire (a, c, d) appends
+  // in wire order — reconciliation of a scrambled stored order, not a
+  // prefix-preserving splice.
+  assert.deepEqual(reconciledSessionOrder(['b'], ['a', 'b', 'c', 'd']), ['b', 'a', 'c', 'd'])
+})
+
 test('projectRuntimeFacts passes current through and emits every session with its live running bit', () => {
   const report = projectRuntimeFacts({
     current: 's1',
@@ -1449,6 +1461,95 @@ test('serversProjectionSignature JSON-encodes titles: user-controlled separators
       }],
     })]),
   )
+})
+
+// ---- orderServersForDisplay / nextServerOrder (design 06 §2.4: stored source display order + the shared drop math) ----
+
+test('orderServersForDisplay with no stored preference returns the projection array unchanged (same reference)', () => {
+  const servers = [server('local'), server('ssh-r1'), server('ssh-r2')]
+  assert.equal(orderServersForDisplay(servers, undefined), servers)
+  assert.equal(orderServersForDisplay(servers, []), servers)
+})
+
+test('orderServersForDisplay leads with stored-known ids in stored order and places each id once', () => {
+  const servers = [server('local'), server('ssh-r1'), server('ssh-r2')]
+  const ordered = orderServersForDisplay(servers, ['ssh-r2', 'local', 'ssh-r2', 'ssh-r1'])
+  // The duplicated 'ssh-r2' stored entry is skipped: every server appears once.
+  assert.deepEqual(ordered.map(server => server.id), ['ssh-r2', 'local', 'ssh-r1'])
+})
+
+test('orderServersForDisplay keeps projection ids not listed in stored after the stored block, in projection order', () => {
+  const servers = [server('local'), server('ssh-r1'), server('ssh-r2')]
+  // ssh-r1 was never listed: it keeps its projection position at the bottom
+  // (a newly added source appears there until the user drags it).
+  assert.deepEqual(
+    orderServersForDisplay(servers, ['ssh-r2', 'local']).map(server => server.id),
+    ['ssh-r2', 'local', 'ssh-r1'],
+  )
+  assert.deepEqual(
+    orderServersForDisplay(servers, ['ssh-r1']).map(server => server.id),
+    ['ssh-r1', 'local', 'ssh-r2'],
+  )
+})
+
+test('orderServersForDisplay skips stored ids unknown to the projection (no ghost groups)', () => {
+  const servers = [server('local'), server('ssh-r1')]
+  const ordered = orderServersForDisplay(servers, ['ghost-a', 'ssh-r1', 'ghost-b', 'local', 'ghost-c'])
+  assert.deepEqual(ordered.map(server => server.id), ['ssh-r1', 'local'])
+})
+
+test('nextServerOrder returns null when the target or the dragged source is not in the rendered order', () => {
+  const rendered = ['a', 'b', 'c']
+  // The target (over.id) is absent from the rendered order.
+  assert.equal(nextServerOrder(rendered, 'a', { id: 'ghost', half: 'before' }), null)
+  assert.equal(nextServerOrder(rendered, 'a', { id: 'ghost', half: 'after' }), null)
+  // The dragged source is absent from the rendered order.
+  assert.equal(nextServerOrder(rendered, 'ghost', { id: 'b', half: 'before' }), null)
+  assert.equal(nextServerOrder(rendered, 'ghost', { id: 'b', half: 'after' }), null)
+  // Both absent: the missing-target check fires first.
+  assert.equal(nextServerOrder(rendered, 'ghost', { id: 'ghost-2', half: 'before' }), null)
+})
+
+test("nextServerOrder half='before' inserts the dragged source directly before the target row", () => {
+  assert.deepEqual(nextServerOrder(['a', 'b', 'c', 'd'], 'd', { id: 'b', half: 'before' }), ['a', 'd', 'b', 'c'])
+  assert.deepEqual(nextServerOrder(['a', 'b', 'c'], 'a', { id: 'c', half: 'before' }), ['b', 'a', 'c'])
+})
+
+test("nextServerOrder half='after' inserts the dragged source directly after the target (before the next row; appends on the last row)", () => {
+  // Dragged below the target: a lands between b and the next row c.
+  assert.deepEqual(nextServerOrder(['a', 'b', 'c', 'd'], 'a', { id: 'b', half: 'after' }), ['b', 'a', 'c', 'd'])
+  // Dragged upward: c lands directly after a (before b).
+  assert.deepEqual(nextServerOrder(['a', 'b', 'c'], 'c', { id: 'a', half: 'after' }), ['a', 'c', 'b'])
+  // The target is the last row: nothing follows it, so the source appends at the end.
+  assert.deepEqual(nextServerOrder(['a', 'b', 'c'], 'a', { id: 'c', half: 'after' }), ['b', 'c', 'a'])
+})
+
+test('nextServerOrder returns null when the drop leaves the rendered order unchanged', () => {
+  const rendered = ['a', 'b', 'c']
+  // Dropping the dragged row onto itself (both halves).
+  assert.equal(nextServerOrder(rendered, 'b', { id: 'b', half: 'before' }), null)
+  assert.equal(nextServerOrder(rendered, 'b', { id: 'b', half: 'after' }), null)
+  // Dropping onto its own current position: b already sits directly after a,
+  // so "b after a" (inserting right after itself) would not move it.
+  assert.equal(nextServerOrder(rendered, 'b', { id: 'a', half: 'after' }), null)
+  // a already sits directly before b.
+  assert.equal(nextServerOrder(rendered, 'a', { id: 'b', half: 'before' }), null)
+  // c is already directly after b.
+  assert.equal(nextServerOrder(rendered, 'c', { id: 'b', half: 'after' }), null)
+  // Appending a row that is already last: half='after' over the last row.
+  assert.equal(nextServerOrder(rendered, 'c', { id: 'c', half: 'after' }), null)
+})
+
+test('nextServerOrder preserves membership, returns a NEW array, and never mutates the rendered input', () => {
+  const rendered = ['a', 'b', 'c', 'd']
+  const moved = nextServerOrder(rendered, 'd', { id: 'b', half: 'after' })
+  assert.ok(moved)
+  assert.deepEqual(moved, ['a', 'b', 'd', 'c'])
+  // Exactly the same id set as the input (membership preserved).
+  assert.deepEqual([...moved].sort(), [...rendered].sort())
+  // A real move mints a new array and leaves the input untouched.
+  assert.notEqual(moved, rendered)
+  assert.deepEqual(rendered, ['a', 'b', 'c', 'd'])
 })
 
 // ---- nextUpdatedOrder (design 06 §3.1, 2026-08: updated = manual + activity promotion) ----

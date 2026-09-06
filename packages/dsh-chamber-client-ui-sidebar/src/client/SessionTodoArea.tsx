@@ -1,5 +1,5 @@
 /**
- * 会话待办区（sidebar todo area, 2026-12）— the pinned attention block
+ * 会话待办区（sidebar todo area）— the pinned attention block
  * between the New Session control and the scroll region (wide only; absent on
  * the rail and while empty). Renders the pure derivation
  * deriveTodoAttention over the SAME chamberBridge projection the list rows
@@ -54,7 +54,7 @@ import { getTodoPrefs, subscribeTodoPrefs } from '../shared/todo-prefs.ts'
 import type { SidebarKey } from './locales.ts'
 import cc from './sidebar-chamber.module.css'
 
-/** Visible rows before the「还有 N 项」toggle (user decision 2026-12). */
+/** Visible rows before the「还有 N 项」toggle. */
 const TODO_CAP = 3
 
 /** Translate bound to this plugin's `sidebar` namespace (PropsLocale shape). */
@@ -193,22 +193,22 @@ function TodoRow({
   // title + meta hover card.
   const hoverLabel = `${title} · ${context}`
 
-  // Row anatomy (2026-12 style fix, user feedback): identity LEADING, state
-  // TRAILING — the same order a session row reads in the list (its source
-  // group/identity at the left, its state slot at the row end). The trailing
-  // slot reuses the session rows' own .sessionStateSlot geometry (10px slot,
-  // 14px while a pending interaction shows; the completed dot paints in the
-  // same band as the list's completed dots), so strip and list state marks
-  // line up in one column. The leading 16px source-dot slot occupies the
-  // source-header glyph column (and stays reserved without multiple sources,
-  // so the title column never shifts). Both slots are decorative (aria-hidden)
-  // — the button's aria-label carries state + title + source, so nothing is
-  // announced twice (the hover card itself is not announced: the vendor
-  // tooltip has no aria-describedby). Accepted (documented) a11y gap: unlike
-  // the list rows' conditional role="status", the strip adds no live
-  // announcements when entries appear/disappear (the strip is a pinned
-  // projection; live chatter on every projection change was judged worse —
-  // the unread state is still announced when a strip row is focused).
+  // Row anatomy: identity LEADING, state TRAILING — the same order a session
+  // row reads in the list (its source group/identity at the left, its state
+  // slot at the row end). The trailing slot reuses the session rows' own
+  // .sessionStateSlot geometry (10px slot, 14px while a pending interaction
+  // shows; the completed dot paints in the same band as the list's completed
+  // dots), so strip and list state marks line up in one column. The leading
+  // 16px source-dot slot occupies the source-header glyph column (and stays
+  // reserved without multiple sources, so the title column never shifts).
+  // Both slots are decorative (aria-hidden) — the button's aria-label carries
+  // state + title + source, so nothing is announced twice (the hover card
+  // itself is not announced: the vendor tooltip has no aria-describedby).
+  // Accepted (documented) a11y gap: unlike the list rows' conditional
+  // role="status", the strip adds no live announcements when entries
+  // appear/disappear (the strip is a pinned projection; live chatter on every
+  // projection change was judged worse — the unread state is still announced
+  // when a strip row is focused).
   return (
     <Tooltip label={hoverLabel} delayMs={400}>
       <button
