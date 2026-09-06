@@ -4,7 +4,9 @@
  * `session/canOpenWorkspacePath`（零参 boolean Remote，绝不读会话数据；老
  * runtime 树（dsh < 0.1.2-rc.1）对其答 404 时由 host 侧回退 legacy
  * session/list 探测，行为与旧版一致）/ graph 通道 / settings RPC /
- * git-worktree 只读 / 数据可读性探测）由 host 侧执行并汇成 `ProbeResult[]`；
+ * git-worktree 只读 / archive-cleanup 只读探测（design 24：
+ * archiveCleanup/probe）/ 数据可读性探测）由 host 侧执行并汇成
+ * `ProbeResult[]`；
  * 本模块只做裁决，不 spawn、不 fetch、不读盘：
  *
  *   1. `decideVerdict`    —— 探针裁决（pass / observe / fail），含「有界窗口 +
@@ -80,8 +82,13 @@ export const PROBE_NAMES_WITHOUT_HOST_DOMAINS: readonly Exclude<RequiredProbeNam
 /**
  * Expected activation set for a shape carrying EXACTLY the given chamber
  * host domains (design 24 §7 C / design 18 §3.4, M2 derivation): the closed
- * base set plus every listed domain, in REQUIRED order. Unknown names are
- * ignored (never fabricate a probe row); the full list equals
+ * base set plus every listed domain, in REQUIRED order. Unknown names FAIL
+ * LOUD — the function throws instead of ignoring them (never fabricate a
+ * probe row): silently dropping a listed domain would shrink its probe row
+ * out of the expected set AND the run legs, and a dead/unmounted chamber
+ * domain could then pass activation until the sidebar 404s (fail-open; the
+ * listed names come from our own seed/probe metadata, so an unknown name is
+ * cross-package drift and must surface). The full list equals
  * REQUIRED_ACTIVATION_PROBES and an empty list equals
  * PROBE_NAMES_WITHOUT_HOST_DOMAINS — partial syncs (2-of-3) now have a
  * well-defined expectation instead of the binary all-or-none gate.

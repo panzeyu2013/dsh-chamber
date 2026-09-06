@@ -126,12 +126,21 @@ export interface SeedEntry {
   /** Seed file set; defaults to the host base (package.json + dist/index.js).
    *  Client plugins may extend (css/assets) when their package lands. */
   seedFiles?: readonly string[]
-  /** Activation-probe domains this entry backs (kind 'host' only). Documented
-   *  metadata: the dsh-runtime probe seam does NOT consume this registry —
-   *  it re-derives presence from the seed cache filesystem
-   *  (`hasSyncedHostSeed` in packages/gateway/src/plugins.ts, hardcoding the
-   *  same two syncable packages), so this list must stay in sync with the
-   *  probe set (`HOST_DOMAIN_PROBE_NAMES` in packages/dsh-runtime). */
+  /** Activation-probe domains this entry backs (kind 'host' only). Pure
+   *  metadata with NO code consumer today: the activation expected set is
+   *  derived per spawn from the ACTUALLY SEEDED host entries instead, never
+   *  from this registry — the gateway derives `syncedHostDomainProbeNames`
+   *  (packages/gateway/src/plugins.ts) over its per-package domain map
+   *  `HOST_PACKAGE_PROBE_DOMAINS` (cache presence per package), and
+   *  dsh-runtime folds that derived list into the expected set through
+   *  `activationProbeNamesForDomains`. The hand-synced places that must stay
+   *  in lockstep — named explicitly: the per-package probeDomains attached
+   *  to the HOST_*_INSERT rows at the two seed-registry call sites
+   *  (control-plane/src/index.ts and gateway/src/index.ts — the values do
+   *  NOT live on the INSERT constants themselves), the gateway's
+   *  SYNCABLE_HOST_PACKAGES and HOST_PACKAGE_PROBE_DOMAINS, and
+   *  `HOST_DOMAIN_PROBE_NAMES` in
+   *  packages/dsh-runtime/src/activation-gate.ts (same three domains). */
   probeDomains?: readonly string[]
 }
 

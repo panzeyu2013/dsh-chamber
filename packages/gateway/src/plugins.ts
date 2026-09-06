@@ -1,7 +1,8 @@
 /**
  * Gateway seed-cache for desktop-synced chamber host packages (design 17
- * §9.3, 2026-12 Phase 3): the two chamber host packages
- * (dsh-host-client-graph, dsh-host-git-worktree) are no longer shipped inside
+ * §9.3, 2026-12 Phase 3): the three chamber host packages
+ * (dsh-host-client-graph, dsh-host-git-worktree, dsh-host-archive-cleanup —
+ * the last added 2026-12, design 24) are no longer shipped inside
  * the gateway package — a connecting desktop uploads its own copies through
  * the authenticated `PUT /chamber/plugins` surface, and the gateway caches
  * them under `<stateDir>/chamber-plugins/<name>/` for the control-plane seed
@@ -10,11 +11,14 @@
  *
  * Version semantics: the cache holds the LAST-SYNCED desktop's copies. A
  * fresh gateway (no cache) hosts a plain dsh whose activation probe skips the
- * chamber host domains (runtime-probes hostDomains=false) until the first
- * desktop sync; the syncing desktop then restarts dsh so the seeded profile
- * picks the packages up.
+ * chamber host domains until the first desktop sync — the expected probe set
+ * is derived from the ACTUAL cache contents (syncedHostDomainProbeNames →
+ * activationProbeNamesForDomains; an empty cache yields the reduced base
+ * set, not the binary hostDomains flag of the older runtime seam); the
+ * syncing desktop then restarts dsh so the seeded profile picks the
+ * packages up.
  *
- * Security: package names are whitelisted (the two host packages only); every
+ * Security: package names are whitelisted (the three host packages only); every
  * cache write is an atomic 0600 no-follow write under the 0700 stateDir
  * discipline; file sizes are bounded; package.json must parse and its `name`
  * must match the requested entry. The mobile client-plugin slot is NOT
@@ -168,27 +172,35 @@ export function createChamberPlugins(stateDir: string, logger: Logger): ChamberP
   }
 }
 
-/** Standalone seed-cache presence check for the runtime probe shape gate. */
-export function hasSyncedHostSeed(stateDir: string): boolean {
-  const cacheRoot = join(stateDir, SYNCED_PLUGIN_DIR)
-  return SYNCABLE_HOST_PACKAGES.every(entry => {
-    const dir = join(cacheRoot, entry.name.slice('@dsh-chamber/'.length))
-    return existsSync(join(dir, 'dist', 'index.js'))
-  })
-}
-
 /** Chamber host domains whose synced package is actually present in the seed
  *  cache (design 24 §7 C, M2 derivation): replaces the binary all-or-none
  *  gate for partial syncs (old desktop ↔ new gateway, interrupted syncs).
  *  An empty list = a plain dsh (reduced probe set); the full list = all
- *  chamber domains. Must stay in sync with HOST_DOMAIN_PROBE_NAMES in
- *  packages/dsh-runtime (same three domains). */
-export function syncedHostDomainProbeNames(stateDir: string): readonly string[] {
+ *  chamber domains. Fail-loud drift check: a syncable host package with no
+ *  domain in HOST_PACKAGE_PROBE_DOMAINS throws instead of being silently
+ *  skipped — dropping its probe row would let a mounted chamber domain pass
+ *  activation unprobed (the same drift class the dsh-runtime
+ *  activationProbeNamesForDomains unknown-name throw guards; the map miss is
+ *  source-level metadata drift). Must stay in sync with
+ *  HOST_DOMAIN_PROBE_NAMES in packages/dsh-runtime (same three domains).
+ *  @param stateDir - gateway state root; presence is checked per package at
+ *    <stateDir>/chamber-plugins/<scope-stripped name>/dist/index.js.
+ *  @param packages - the syncable host package list to derive over (the
+ *    module SYNCABLE_HOST_PACKAGES constant by default; injectable so tests
+ *    can drive the fail-loud drift path — production callers never pass it). */
+export function syncedHostDomainProbeNames(
+  stateDir: string,
+  packages: readonly { id: string; name: string }[] = SYNCABLE_HOST_PACKAGES,
+): readonly string[] {
   const cacheRoot = join(stateDir, SYNCED_PLUGIN_DIR)
   const names: string[] = []
-  for (const entry of SYNCABLE_HOST_PACKAGES) {
+  for (const entry of packages) {
     const domain = HOST_PACKAGE_PROBE_DOMAINS[entry.name]
-    if (domain === undefined) continue
+    if (domain === undefined) {
+      throw new Error(
+        `syncable host package ${JSON.stringify(entry.name)} has no activation probe domain (HOST_PACKAGE_PROBE_DOMAINS drift — add its domain or remove the package)`,
+      )
+    }
     const dir = join(cacheRoot, entry.name.slice('@dsh-chamber/'.length))
     if (existsSync(join(dir, 'dist', 'index.js'))) names.push(domain)
   }

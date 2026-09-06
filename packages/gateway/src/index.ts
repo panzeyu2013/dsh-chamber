@@ -290,13 +290,15 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
       options.config.mobileUaRedirect === true,
       options.config.mobileEntryPath ?? DEFAULT_MOBILE_ENTRY_PATH,
     )
-    // Chamber seed registry (2026-12): the two host packages are DESKTOP-
+    // Chamber seed registry (2026-12): the THREE host packages are DESKTOP-
     // SYNCED — the control-plane seeds them into the managed dsh profile from
     // the chamber-plugins cache, which a connecting desktop populates through
     // PUT /chamber/plugins (Phase 3). Until the first sync the cache is
-    // empty, the seed skips both entries, and the activation probe runs
-    // without the chamber host domains (runtime-manager hostDomains). The
-    // mobile slot (@dsh-chamber/dsh-client-ui-mobile, kind 'client') stays
+    // empty, the seed skips every entry, and the activation probe runs
+    // without the chamber host domains — the expected set is derived per
+    // spawn from the actually synced packages (syncedHostDomainProbeNames /
+    // activationProbeNamesForDomains; empty cache = the reduced base set).
+    // The mobile slot (@dsh-chamber/dsh-client-ui-mobile, kind 'client') stays
     // PACKAGED: mobile access is bound to the gateway (no desktop in the
     // chain), so its seed MUST ship inside this package (design 17 §18) — the
     // gateway build copies package.json + dist/index.js + lib/client.js(+.map)

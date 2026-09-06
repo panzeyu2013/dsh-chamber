@@ -17,10 +17,11 @@ import { createRequire } from 'node:module'
 import type { ApiRequest, ApiResponse, Logger, PlaneHandle } from '@dsh-chamber/control-plane'
 import type { GatewayConfig } from '../src/config.ts'
 import { createGatewayRuntimeManager, readBuiltinVersion } from '../src/runtime-manager.ts'
-import { createChamberPlugins, hasSyncedHostSeed } from '../src/plugins.ts'
+import { createChamberPlugins, SYNCED_PLUGIN_DIR, SYNCABLE_HOST_PACKAGES, syncedHostDomainProbeNames } from '../src/plugins.ts'
 import {
   PROBE_NAMES_WITHOUT_HOST_DOMAINS,
   REQUIRED_ACTIVATION_PROBES,
+  activationProbeNamesForDomains,
   clearActivationJournal,
   listKnownGoodVersions,
   readActivationJournalState,
@@ -125,11 +126,15 @@ async function waitForMutationSettle(manager: { mutationInProgress(): boolean })
   assert.equal(manager.mutationInProgress(), false, 'runtime mutation did not settle before the test deadline')
 }
 
-/** 2026-12 Phase 3 shape gate: the manager expects the full probe set only
- * when the seed cache holds synced chamber host packages; test stateDirs have
- * no cache, so the reduced set matches. */
+/** 2026-12 Phase 3 shape gate (design 24 §7 C, M2): the manager derives the
+ * expected probe set per spawn from the seed cache's ACTUALLY PRESENT
+ * chamber host packages (syncedHostDomainProbeNames — the per-package
+ * derivation that replaced the binary hasSyncedHostSeed gate). The fake
+ * host answers exactly the derived set the real dsh would serve: test
+ * stateDirs start with no cache (reduced base set); the full-flip fixture
+ * seeds all three packages (full 7-name closed set). */
 function probeResultsFor(stateDir: string): readonly string[] {
-  return hasSyncedHostSeed(stateDir) ? REQUIRED_ACTIVATION_PROBES : PROBE_NAMES_WITHOUT_HOST_DOMAINS
+  return activationProbeNamesForDomains(syncedHostDomainProbeNames(stateDir))
 }
 
 test('status is pollable while dsh is stopped (not ready-gated) and reports applying phase', async () => {
@@ -1661,12 +1666,13 @@ test('2026-12 shape gate: a synced seed cache flips the activation to the FULL p
   try {
     // Seed ALL THREE host packages into the gateway seed cache, exactly as a
     // connecting desktop would (PUT /chamber/plugins → chamber-plugins cache).
-    // The probe shape gate (hasSyncedHostSeed) must now expect the full
-    // 7-name set (REQUIRED_ACTIVATION_PROBES) — this is the flow that makes
-    // a fresh gateway pick the chamber host layer up after the first desktop
-    // sync. Partial syncs (2-of-3) derive the exact expected set instead
-    // (design 24 §7 C, M2) — covered by the hostDomainNames tests in
-    // dsh-runtime.
+    // The probe shape gate — the per-package derivation
+    // syncedHostDomainProbeNames over the actually-present packages — must
+    // now derive the full 7-name set (REQUIRED_ACTIVATION_PROBES); this is
+    // the flow that makes a fresh gateway pick the chamber host layer up
+    // after the first desktop sync. Partial syncs (2-of-3) derive the exact
+    // expected set instead (design 24 §7 C, M2) — covered directly by the
+    // syncedHostDomainProbeNames matrix tests below.
     const plugins = createChamberPlugins(stateDir, silentLogger)
     for (const name of [
       '@dsh-chamber/dsh-host-client-graph',
@@ -1678,7 +1684,9 @@ test('2026-12 shape gate: a synced seed cache flips the activation to the FULL p
         'dist/index.js': 'export const ok = 1\n',
       })
     }
-    assert.equal(hasSyncedHostSeed(stateDir), true, 'the populated cache must flip the shape gate')
+    assert.deepEqual(syncedHostDomainProbeNames(stateDir),
+      ['clientGraph/graph', 'gitWorktree/previewCreate', 'archiveCleanup/probe'],
+      'the populated cache must derive the full three-domain probe list')
     assert.deepEqual(probeResultsFor(stateDir), [...REQUIRED_ACTIVATION_PROBES],
       'the synced shape expects the FULL probe set, chamber host domains included')
 
@@ -1738,6 +1746,90 @@ test('2026-12 shape gate: a synced seed cache flips the activation to the FULL p
     assert.equal(readCurrentPointer(stateDir), null, 'the drift-failed activation clears the pointer (builtin fallback)')
     assert.notEqual((await drifting.status()).operationError, null, 'the drift failure projects into the operationError')
     await drifting.dispose()
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+// ---------------------------------------------------------------------------
+// M2 derivation matrix: syncedHostDomainProbeNames (design 24 §7 C) — the
+// per-package derivation that replaced the binary hasSyncedHostSeed gate.
+// ---------------------------------------------------------------------------
+
+const THREE_HOST_PACKAGES = [
+  '@dsh-chamber/dsh-host-client-graph',
+  '@dsh-chamber/dsh-host-git-worktree',
+  '@dsh-chamber/dsh-host-archive-cleanup',
+] as const
+
+const THREE_HOST_DOMAINS = ['clientGraph/graph', 'gitWorktree/previewCreate', 'archiveCleanup/probe'] as const
+
+/** Seed the given host packages into a real cache under the test stateDir,
+ *  exactly as a connecting desktop would (PUT /chamber/plugins). */
+async function syncPackagesInto(stateDir: string, names: readonly string[]): Promise<void> {
+  const plugins = createChamberPlugins(stateDir, silentLogger)
+  for (const name of names) {
+    await plugins.put(name, {
+      'package.json': JSON.stringify({ name, version: '1.0.0' }),
+      'dist/index.js': 'export const ok = 1\n',
+    })
+  }
+}
+
+test('syncedHostDomainProbeNames: an empty cache derives an empty list (plain dsh shape)', () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-derive-empty-'))
+  try {
+    assert.deepEqual(syncedHostDomainProbeNames(stateDir), [])
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('syncedHostDomainProbeNames: 1-of-3 and 2-of-3 caches derive exactly the mounted domains in canonical order', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-derive-partial-'))
+  try {
+    await syncPackagesInto(stateDir, [THREE_HOST_PACKAGES[0]])
+    assert.deepEqual(syncedHostDomainProbeNames(stateDir), [THREE_HOST_DOMAINS[0]])
+    await syncPackagesInto(stateDir, [THREE_HOST_PACKAGES[1]])
+    assert.deepEqual(syncedHostDomainProbeNames(stateDir), [THREE_HOST_DOMAINS[0], THREE_HOST_DOMAINS[1]])
+    // An interrupted third sync leaves the 2-of-3 derivation stable (the set
+    // never shrinks from a later probe run).
+    assert.deepEqual(syncedHostDomainProbeNames(stateDir), [THREE_HOST_DOMAINS[0], THREE_HOST_DOMAINS[1]])
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('syncedHostDomainProbeNames: a full cache derives all three domains; a stray non-syncable cache dir stays inert', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-derive-full-'))
+  try {
+    await syncPackagesInto(stateDir, THREE_HOST_PACKAGES)
+    assert.deepEqual(syncedHostDomainProbeNames(stateDir), [...THREE_HOST_DOMAINS])
+    // A pre-upgrade leftover dir for a package that is no longer syncable is
+    // inert: stray cache content can neither add nor remove a derived domain.
+    mkdirSync(join(stateDir, SYNCED_PLUGIN_DIR, 'stale-package', 'dist'), { recursive: true })
+    writeFileSync(join(stateDir, SYNCED_PLUGIN_DIR, 'stale-package', 'dist', 'index.js'), 'export const stale = 1\n')
+    assert.deepEqual(syncedHostDomainProbeNames(stateDir), [...THREE_HOST_DOMAINS])
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('syncedHostDomainProbeNames: a cache entry whose package has no domain mapping fails loud (never a silent skip)', () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-derive-drift-'))
+  try {
+    // A syncable host package the HOST_PACKAGE_PROBE_DOMAINS map does not
+    // know would silently drop its probe row from the expected set (fail-open
+    // for a mounted domain). The module constants cannot drift at runtime, so
+    // the derivation's injectable package-list seam drives the branch — the
+    // same drift class activationProbeNamesForDomains throws on.
+    const ghost = { id: 'ghost', name: '@dsh-chamber/dsh-host-ghost' }
+    mkdirSync(join(stateDir, SYNCED_PLUGIN_DIR, 'dsh-host-ghost', 'dist'), { recursive: true })
+    writeFileSync(join(stateDir, SYNCED_PLUGIN_DIR, 'dsh-host-ghost', 'dist', 'index.js'), 'export const ghost = 1\n')
+    assert.throws(
+      () => syncedHostDomainProbeNames(stateDir, [...SYNCABLE_HOST_PACKAGES, ghost]),
+      /"@dsh-chamber\/dsh-host-ghost" has no activation probe domain/,
+    )
   } finally {
     rmSync(stateDir, { recursive: true, force: true })
   }
