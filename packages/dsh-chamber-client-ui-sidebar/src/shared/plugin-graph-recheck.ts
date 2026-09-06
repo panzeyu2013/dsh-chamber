@@ -31,13 +31,21 @@
  * Wire mirror: the fetch/classification below mirrors the renderer's
  * boot-time fetch (`packages/renderer/src/host-graph.ts` fetchHostGraph —
  * same envelope, same status classification, same message literals), so a
- * recheck verdict is word-for-word what the next boot would report. The
- * envelope is hand-built to the same wire shape as bridge-api.ts (bounded
- * unary; the renderer cannot import the shared Node envelope module).
+ * recheck verdict is word-for-word what the next boot would report. Since
+ * P4-2 the shared transport byte (URL join + client-request envelope +
+ * POST + body collection, 30s bounded-unary budget) rides the shared kernel
+ * postUnary (wire-common.ts) — the envelope is the SAME wire shape the
+ * renderer imports it through (the renderer cannot import the shared Node
+ * envelope module of packages/control-plane, which stays the authoritative
+ * contract source); every status/envelope/message classification below stays
+ * local so the recheck verdict keeps mirroring the boot fetch exactly.
  */
 
 import { chamberBridge } from './aggregate-store.ts'
 import type { PluginGraphDiagnostic, PluginGraphDiagnosticState } from './aggregate-store.ts'
+import {
+  classifyGraphChannelFailure, isRecord, postUnary, type UnaryPostOutcome,
+} from './wire-common.ts'
 
 /** Channel facts a recheck may heal; boot facts never. */
 const CHANNEL_CLASS_STATES: ReadonlySet<PluginGraphDiagnosticState> = new Set(['not-injected', 'graph-unreachable'])
@@ -47,10 +55,6 @@ const CHANNEL_CLASS_STATES: ReadonlySet<PluginGraphDiagnosticState> = new Set(['
 export function isChannelClassDiagnostic(state: PluginGraphDiagnosticState | undefined): boolean {
   return state !== undefined && CHANNEL_CLASS_STATES.has(state)
 }
-
-/** Bounded unary (mirror of the boot fetch's 30s): a silently hung host must
- *  not pin the connections page's recheck pass. */
-const GRAPH_RECHECK_TIMEOUT_MS = 30000
 
 export type PluginGraphRecheckOutcome =
   /** The channel answers a valid graph → reported `ok` (heal). */
@@ -81,10 +85,6 @@ function wrapRecheckError(error: unknown): string {
   return `宿主启动图不可达：${message}`
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
 /**
  * Re-check one source's host boot-graph channel and write the verdict back
  * through chamberBridge WHEN it differs from the recorded diagnostic.
@@ -108,12 +108,7 @@ export async function recheckPluginGraphDiagnostic(
   const current = chamberBridge.getPluginDiagnostics()[sourceId]
   if (current === undefined || !isChannelClassDiagnostic(current.state)) return 'skipped'
 
-  const fetchImpl = deps.fetchImpl ?? fetch
   const now = deps.now ?? (() => Date.now())
-  const origin = deps.origin !== undefined
-    ? deps.origin
-    : typeof location !== 'undefined' && location.origin !== 'null' ? location.origin : ''
-  const url = `${origin}/api/i/${sourceId}/api/clientGraph/graph`
 
   // Verdict write-back. Recency gate: the store is re-read at WRITE time (no
   // await between re-read and write) — a record changed while the fetch was
@@ -140,47 +135,43 @@ export async function recheckPluginGraphDiagnostic(
         : 'reported-graph-unreachable'
   }
 
-  let response: Response
+  // Shared transport byte (P4-2): URL join + client-request envelope + POST +
+  // body collection with the 30s bounded-unary budget, postUnary in
+  // wire-common.ts. The fetch/origin seams below are this module's test deps;
+  // transport rejections propagate raw and are classified right here — the
+  // boot fetch's status/message mirror contract.
+  // N6/P4-1 disclosure: the pre-kernel implementation called crypto.randomUUID()
+  // bare (a no-randomUUID environment threw → graph-unreachable report); the
+  // kernel default mintRpcId() instead falls back to an 'rpc-' id and the
+  // request proceeds. Unreachable in product (loopback secure context) — the
+  // main UUIDv4 path is identical.
+  let outcome: UnaryPostOutcome
   try {
-    response = await fetchImpl(url, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        type: 'client-request',
-        rpcId: crypto.randomUUID(),
-        method: 'clientGraph/graph',
-        payload: { args: {} },
-      }),
-      signal: AbortSignal.timeout(GRAPH_RECHECK_TIMEOUT_MS),
+    outcome = await postUnary(`/api/i/${sourceId}`, 'clientGraph/graph', {}, {
+      fetchImpl: deps.fetchImpl,
+      origin: deps.origin,
     })
   } catch (error) {
     return report('graph-unreachable', wrapRecheckError(error))
   }
 
-  if (response.status === 503) {
-    let body: { code?: unknown } | null = null
-    try {
-      body = (await response.json()) as { code?: unknown }
-    } catch {
-      body = null
-    }
+  if (outcome.status === 503) {
+    const body = outcome.body as { code?: unknown } | null
     // Pre-ready instance / missing transport: cannot judge — never write.
     if (body?.code === 'instance_unavailable') return 'unchanged'
-    return report('graph-unreachable', `宿主启动图不可达：HTTP ${response.status}`)
+    return report('graph-unreachable', `宿主启动图不可达：HTTP ${outcome.status}`)
   }
-  if (response.status === 404) {
-    return report('not-injected', `宿主启动图不可达：HTTP ${response.status}`)
+  if (outcome.status === 404) {
+    return report('not-injected', `宿主启动图不可达：HTTP ${outcome.status}`)
   }
-  if (!response.ok) {
-    return report('graph-unreachable', `宿主启动图不可达：HTTP ${response.status}`)
+  if (!outcome.ok) {
+    return report('graph-unreachable', `宿主启动图不可达：HTTP ${outcome.status}`)
   }
-
-  let envelope: unknown
-  try {
-    envelope = await response.json()
-  } catch (error) {
+  if (outcome.jsonError !== undefined) {
+    const error = outcome.jsonError
     return report('graph-unreachable', `宿主启动图：envelope 不是合法 JSON：${error instanceof Error ? error.message : String(error)}`)
   }
+  const envelope = outcome.body
   const envelopeRecord = isRecord(envelope) ? envelope : null
   // Mirror the boot's result gate exactly (typeof-object lets ARRAYS through —
   // an array result then falls into the ok !== true branch below).
@@ -200,9 +191,7 @@ export async function recheckPluginGraphDiagnostic(
       : {}
     const hostError = error.message ?? error.code ?? 'unknown'
     const classification = `${error.code ?? ''} ${error.message ?? ''}`
-    const state = /not.?found|unknown.?method|method.+(?:missing|unknown|unsupported)/i.test(classification)
-      ? 'not-injected'
-      : 'graph-unreachable'
+    const state = classifyGraphChannelFailure(classification)
     return report(state, `宿主启动图：graph 调用失败：${hostError}`)
   }
   const value = resultRecord.value

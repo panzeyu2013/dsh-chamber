@@ -25,6 +25,7 @@ import {
   decodeSessionCreateValue, decodeWorkspaceCreateValue, decodeWorkspaceDeleteValue,
 } from './instance-mutation-values.ts'
 import { InstanceRpcError } from './instance-rpc-error.ts'
+import { mintRpcId } from './wire-common.ts'
 export { InstanceRpcError } from './instance-rpc-error.ts'
 
 /** One workspace row (WorkspaceView wire shape). */
@@ -119,13 +120,6 @@ const DEFAULT_TIMEOUT_MS = 30_000
 function resolveOrigin(): string {
   const location = (globalThis as { location?: { origin?: string } }).location
   return location?.origin !== undefined && location.origin !== 'null' ? location.origin : 'http://dsh.internal'
-}
-
-/** Correlation id minted per request and echoed by the server-response envelope. */
-function mintRpcId(): string {
-  return typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-    ? crypto.randomUUID()
-    : `rpc-${Date.now()}-${Math.random().toString(36).slice(2)}`
 }
 
 /**
