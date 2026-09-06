@@ -61,7 +61,7 @@ export function classifyInventoryEntry(moduleName: string): InventoryEntryKind {
 
 /**
  * Third-party projection: the instance's loaded entries that classify as
- * neither official (`@deepseek-ai/*`) nor any chamber row — the two host
+ * neither official (`@deepseek-ai/*`) nor any chamber row — the three host
  * packages AND the packaged mobile entry (design 21 §6.2; the mobile row
  * used to leak in via its raw patch-syntax report) — the gateway view's
  * analogue of the SSH dialog's "third-party plugins" diff.

@@ -12,6 +12,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import type { PluginInventorySnapshot } from '../src/client/plugin-inventory-api.ts'
 import {
+  ARCHIVE_CLEANUP_PACKAGE,
   GIT_WORKTREE_PACKAGE,
   HOST_GRAPH_PACKAGE,
   MOBILE_PACKAGE,
@@ -24,6 +25,7 @@ import {
 test('classifyInventoryEntry: plain module names map to their package class', () => {
   assert.equal(classifyInventoryEntry(HOST_GRAPH_PACKAGE), 'chamber-host-graph')
   assert.equal(classifyInventoryEntry(GIT_WORKTREE_PACKAGE), 'chamber-git-worktree')
+  assert.equal(classifyInventoryEntry(ARCHIVE_CLEANUP_PACKAGE), 'chamber-archive-cleanup')
   assert.equal(classifyInventoryEntry(MOBILE_PACKAGE), 'chamber-mobile')
   assert.equal(classifyInventoryEntry('@deepseek-ai/dsh-demo'), 'official')
   assert.equal(classifyInventoryEntry('@dsh-chamber/user-tool'), 'third-party')
@@ -34,6 +36,7 @@ test('classifyInventoryEntry: the raw cordis patch-insert prefix is stripped bef
   assert.equal(classifyInventoryEntry(`cordis:include ${MOBILE_PACKAGE}`), 'chamber-mobile')
   assert.equal(classifyInventoryEntry(`cordis:include ${HOST_GRAPH_PACKAGE}`), 'chamber-host-graph')
   assert.equal(classifyInventoryEntry(`cordis:include ${GIT_WORKTREE_PACKAGE}`), 'chamber-git-worktree')
+  assert.equal(classifyInventoryEntry(`cordis:include ${ARCHIVE_CLEANUP_PACKAGE}`), 'chamber-archive-cleanup')
   assert.equal(classifyInventoryEntry('cordis:include @deepseek-ai/dsh-demo'), 'official')
   assert.equal(classifyInventoryEntry('cordis:include my-third-party-plugin'), 'third-party')
   // The root include entry's own name carries no payload — without the
@@ -42,7 +45,7 @@ test('classifyInventoryEntry: the raw cordis patch-insert prefix is stripped bef
   assert.equal(classifyInventoryEntry('cordis:include'), 'third-party')
 })
 
-test('thirdPartyEntries: the mobile entry is excluded in both its raw patch-syntax and plain forms', () => {
+test('thirdPartyEntries: the three chamber host packages and the mobile entry are excluded in both their raw patch-syntax and plain forms', () => {
   const snapshot: PluginInventorySnapshot = {
     entries: [
       { entryId: 'p1', moduleName: HOST_GRAPH_PACKAGE, enabled: true, fiberPhase: 'active' },
@@ -52,6 +55,10 @@ test('thirdPartyEntries: the mobile entry is excluded in both its raw patch-synt
       { entryId: 'p5', moduleName: 'cordis:include @deepseek-ai/dsh-demo', enabled: true, fiberPhase: 'active' },
       { entryId: 'p6', moduleName: '@dsh-chamber/user-tool', enabled: true, fiberPhase: 'loading' },
       { entryId: 'p7', moduleName: 'my-third-party-plugin', enabled: false, fiberPhase: 'failed' },
+      // The third chamber host package (design 24) is a chamber row in both
+      // report forms, never third-party.
+      { entryId: 'p8', moduleName: ARCHIVE_CLEANUP_PACKAGE, enabled: true, fiberPhase: 'active' },
+      { entryId: 'p9', moduleName: `cordis:include ${ARCHIVE_CLEANUP_PACKAGE}`, enabled: true, fiberPhase: 'active' },
     ],
   }
   const rows = thirdPartyEntries(snapshot)
