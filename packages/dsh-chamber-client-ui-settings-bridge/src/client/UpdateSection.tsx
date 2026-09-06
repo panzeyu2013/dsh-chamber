@@ -12,7 +12,7 @@
  * in the main process). All state is the non-secret projection pushed by the
  * desktop main process over the update bridge (update-store.ts).
  */
-import { useCallback, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
 import type { MouseEvent as ReactMouseEvent } from 'react'
 import type { SettingsBridgeKey } from '../locales.ts'
 import type { UpdateState } from '../ambient/update-bridge.d.ts'
@@ -49,14 +49,19 @@ function checkImpossible(update: UpdateState): boolean {
 
 /** One phase-specific status line (plain text, actions aligned right). */
 function StatusRow({
-  update, busy, onUpdate, onRestart, t,
+  update, busyKind, onUpdate, onRestart, t,
 }: {
   update: UpdateState
-  busy: boolean
+  /** Which action owns the in-flight busy state — null = idle. The「正在重启
+   *  并安装…」line is drawn ONLY for a RESTART-owned busy (round-2 review A4):
+   *  a DOWNLOAD click's busy can survive one render past the update-downloaded
+   *  push and must never briefly mislabel the downloaded row as restarting. */
+  busyKind: 'restart' | 'download' | null
   onUpdate: () => void
   onRestart: () => void
   t: UpdateTranslate
 }) {
+  const busy = busyKind !== null
   const { phase, latestVersion, downloadPercent, installBlockedReason, releaseUrl } = update
   // window.dshChamber.platform ('darwin'|'win32'|'linux'|…): Linux never
   // offers the「重启并安装」action (update-gate — AppImage single-instance
@@ -132,6 +137,47 @@ function StatusRow({
         // blocked → manual hint / Linux AppImage (or any downloaded-but-
         // uninstallable shape) → plain quit-leg text.
         if (updateRestartAvailable(update.phase, installBlockedReason, bridgePlatform)) {
+          // Restart-failure carry (2026-12 review round F2): the restart was
+          // attempted and FAILED (main keeps the phase `downloaded` for
+          // restart-only failures — an 'error' phase would mislabel this as a
+          // download failure). Show the restart-specific failure line with the
+          // row's「重启并安装」button as the retry affordance (re-enabled by the
+          // recovery rule below — never the generic download-failure row).
+          if (update.restartFailureText !== undefined) {
+            return (
+              <div className={css.updateStatusLine}>
+                <span className={css.updateStatusText}>{t('updateRestartFailed', { error: update.restartFailureText })}</span>
+                <button type="button" className={css.updatePrimaryButton} onClick={onRestart} disabled={busy}>
+                  {t('updateRestartAction')}
+                </button>
+                {releaseLink}
+              </div>
+            )
+          }
+          // Restart busy-in-flight (2026-12 review round F9): the click armed
+          // quitAndInstall (ok) or is mid-invoke — show the honest in-progress
+          // line instead of the plain downloaded line while the quit window
+          // runs (busy stays until the quit — the designed single-flight).
+          // Only a RESTART-owned busy draws this line (round-2 review A4): a
+          // DOWNLOAD-owned busy frame at phase `downloaded` (the click's busy
+          // can survive one render past the update-downloaded push) falls
+          // through to the plain downloaded row below, with the button still
+          // disabled by `busy` until the download settles.
+          if (busyKind === 'restart') {
+            return (
+              <div className={css.updateStatusLine}>
+                <span className={css.updateStatusText}>{t('updateRestarting')}</span>
+                <button type="button" className={css.updatePrimaryButton} onClick={onRestart} disabled>
+                  {t('updateRestartAction')}
+                </button>
+                {releaseLink}
+              </div>
+            )
+          }
+          // Plain「已下载，退出时安装」row: restart offered (enabled unless
+          // busy). A DOWNLOAD-owned busy frame at this phase (round-2 review
+          // A4) lands here too — the row is correctly labeled, the restart
+          // button just stays disabled until the download's finally settles.
           return (
             <div className={css.updateStatusLine}>
               <span className={css.updateStatusText}>{t('updateDownloaded')}</span>
@@ -153,8 +199,11 @@ function StatusRow({
       }
       case 'error':
         // latestVersion null → a CHECK failure (「无法检查更新」); set → a
-        // DOWNLOAD/RESTART failure (「更新下载失败」+ retry, never without a
-        // fresh check — updater.ts clears latestVersion on check errors).
+        // DOWNLOAD failure (「更新下载失败」+ retry, never without a fresh
+        // check — updater.ts clears latestVersion on check errors). A RESTART
+        // failure never reaches this case since 2026-12 review round F2: the
+        // main process keeps phase `downloaded` there and rides
+        // restartFailureText (rendered by the downloaded row above).
         return latestVersion !== null ? (
           <div className={css.updateStatusLine}>
             <span className={css.updateStatusText}>{t('updateDownloadFailed')}</span>
@@ -182,23 +231,30 @@ function StatusRow({
 /** The update group content (rendered inside the「通用」settings column). */
 export function UpdateSection({ t }: { t: UpdateTranslate }) {
   const update = useSyncExternalStore(subscribeUpdateState, getUpdateState)
-  const [busy, setBusy] = useState(false)
+  // Busy is tracked by its SOURCE (round-2 review A4): 'restart' only ever
+  // comes from the「重启并安装」action, 'download' from the「更新」action. The
+  // downloaded row's「正在重启并安装…」line must show ONLY for a restart-owned
+  // busy — a download click's busy can survive one render past the
+  // update-downloaded push (the download's finally settles after the phase
+  // push) and must not briefly mislabel the downloaded row as restarting.
+  const [busyKind, setBusyKind] = useState<'restart' | 'download' | null>(null)
+  const busy = busyKind !== null
   const [checking, setChecking] = useState(false)
 
   const onUpdate = useCallback(() => {
-    setBusy(true)
-    void requestUpdateDownload().finally(() => setBusy(false))
+    setBusyKind('download')
+    void requestUpdateDownload().finally(() => setBusyKind(null))
   }, [])
 
   const onRestart = useCallback(() => {
-    setBusy(true)
+    setBusyKind('restart')
     // ok → quitAndInstall armed: the app is on its way out (cleanup takes a
     // few seconds) — keep the button disabled so the quit window cannot see a
     // "dead" second click (the main-process single-flight would refuse it
     // anyway). Only a refused/failed call re-enables the row for an in-place
     // retry — the update-state push stays authoritative for every outcome.
     void requestUpdateRestart().then((result) => {
-      if (!result.ok) setBusy(false)
+      if (!result.ok) setBusyKind(null)
     })
   }, [])
 
@@ -206,6 +262,24 @@ export function UpdateSection({ t }: { t: UpdateTranslate }) {
     setChecking(true)
     void requestUpdateCheck().finally(() => setChecking(false))
   }, [])
+
+  // Busy recovery (2026-12 review round F2/F5): after an armed restart the
+  // local busy state deliberately stays set (the quit window — the store's
+  // module single-flight mirrors main and is NOT reset on ok). But when a
+  // PUSHED state proves the restart actually failed — it carries
+  // restartFailureText (main keeps phase `downloaded` there), or the phase
+  // left {downloaded, downloading} toward 'error'/'up-to-date' — busy must
+  // clear so every button (including the restart button) re-enables WITHOUT
+  // an app reload. A plain downloaded push without a failure keeps busy (the
+  // designed armed-forever-quit), and an in-flight download (phase
+  // downloading) is untouched — its own finally resets busy.
+  useEffect(() => {
+    if (update === null) return
+    if (update.restartFailureText !== undefined
+      || update.phase === 'error' || update.phase === 'up-to-date') {
+      setBusyKind(null)
+    }
+  }, [update])
 
   const bridgeVersion = typeof window !== 'undefined' ? (window.dshChamber?.version ?? null) : null
   const currentVersion = update?.currentVersion ?? bridgeVersion
@@ -227,7 +301,7 @@ export function UpdateSection({ t }: { t: UpdateTranslate }) {
         </button>
       </div>
       {update !== null && (
-        <StatusRow update={update} busy={busy} onUpdate={onUpdate} onRestart={onRestart} t={t} />
+        <StatusRow update={update} busyKind={busyKind} onUpdate={onUpdate} onRestart={onRestart} t={t} />
       )}
     </div>
   )

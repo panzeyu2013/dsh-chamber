@@ -81,18 +81,22 @@ function interfaceFieldNames(source: string, typeName: string): string[] {
 
 /** Extract `name: type` signatures of one FLAT interface (one field per line).
  *  Type-sensitive (M2): a `version: string` → `string | null` drift fails.
+ *  The OPTIONALITY marker is part of the compared signature (round-2 review
+ *  A3): a required↔optional drift of e.g. `restartFailureText` between
+ *  updater.ts and the renderer mirror must fail, so the pushed signature is
+ *  `name?:type` for an optional field and `name:type` for a required one.
  *  Union-shaped types must use interfaceFieldNames (member shapes are
  *  single-line here, but the type text is not comparable across formats). */
 function interfaceFieldSignatures(source: string, typeName: string): string[] {
   const signatures: string[] = []
   for (const raw of stripComments(interfaceBlock(source, typeName)).split('\n')) {
-    const match = /^([a-zA-Z_][a-zA-Z0-9_]*)\??:\s*(.+)$/.exec(raw.trim())
+    const match = /^([a-zA-Z_][a-zA-Z0-9_]*)(\??):\s*(.+)$/.exec(raw.trim())
     if (match === null) continue
-    let type = match[2].replace(/[,;]\s*$/, '').replace(/\s+/g, ' ').trim()
+    let type = match[3].replace(/[,;]\s*$/, '').replace(/\s+/g, ' ').trim()
     // preload names PluginApplyFailure inline; the client mirrors name it —
     // structurally equivalent, normalize for the text comparison.
     type = type.replace(/\bPluginApplyFailure\[\]/g, '{ spec: string; error: string }[]')
-    signatures.push(`${match[1]}:${type}`)
+    signatures.push(`${match[1]}${match[2]}:${type}`)
   }
   return signatures.sort()
 }
@@ -311,6 +315,30 @@ test('UpdateState and UpdatePhase stay locked between updater.ts and the rendere
     typeAliasBody(renderer, 'UpdatePhase'),
     typeAliasBody(updater, 'UpdatePhase'),
     'renderer UpdatePhase union drifted from updater.ts',
+  )
+})
+
+test('interfaceFieldSignatures compares the OPTIONALITY marker — a required↔optional drift fails (A3)', () => {
+  // The signature helper itself must be self-honest: before round-2 review A3
+  // the `\??` was matched but DROPPED, so a `restartFailureText: string` vs
+  // `restartFailureText?: string` drift between updater.ts and the renderer
+  // mirror passed silently. Pin the property directly on the helper.
+  const required = 'interface X {\n  restartFailureText: string\n}'
+  const optional = 'interface X {\n  restartFailureText?: string\n}'
+  assert.notDeepEqual(
+    interfaceFieldSignatures(required, 'X'),
+    interfaceFieldSignatures(optional, 'X'),
+    'a required↔optional drift must fail the signature comparison',
+  )
+  assert.deepEqual(
+    interfaceFieldSignatures(optional, 'X'),
+    ['restartFailureText?:string'],
+    'the optionality marker is part of the compared signature',
+  )
+  assert.deepEqual(
+    interfaceFieldSignatures(required, 'X'),
+    ['restartFailureText:string'],
+    'a required field keeps the unmarked signature',
   )
 })
 

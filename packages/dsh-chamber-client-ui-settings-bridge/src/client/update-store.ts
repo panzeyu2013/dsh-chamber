@@ -45,6 +45,20 @@ function attachBridge(api: UpdateSurface): void {
   if (bridgeSubscribed) return
   bridgeSubscribed = true
   api.onChanged((state) => {
+    // Restart recovery rule (2026-12 review round F2/F5): the module
+    // restart single-flight mirrors main and is deliberately NOT reset on an
+    // armed ok:true — but a push proving the restart FAILED must release it,
+    // or every later click would be silently refused ('restart already in
+    // progress') until an app reload. Failure proof = the pushed state
+    // carries restartFailureText (main keeps phase `downloaded` there), or
+    // the phase left {downloaded, downloading} toward 'error'/'up-to-date'
+    // (belt — normally unreachable while armed, harmless when not armed).
+    // A plain downloaded push without failure keeps the armed-forever-quit
+    // semantics (the single-flight stays held until the quit — by design).
+    if (state.restartFailureText !== undefined
+      || state.phase === 'error' || state.phase === 'up-to-date') {
+      restartInFlight = false
+    }
     current = state
     notify()
   })

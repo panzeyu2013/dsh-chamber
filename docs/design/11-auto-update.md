@@ -369,15 +369,28 @@
   修复：控制器启动即做**保守清理**——`resolveUpdaterCacheDir` 按 electron-updater
   同款推导缓存目录（平台缓存根 darwin `~/Library/Caches` / win32 `%LOCALAPPDATA%`
   / linux `$XDG_CACHE_HOME`/`~/.cache` + 打包态 app-update.yml 烘焙的
-  `updaterCacheDirName`，dev 形态不解析、目录名拒绝分隔符/`.`/`..` 逃逸），
+  `updaterCacheDirName`，dev 形态不解析、目录名拒绝分隔符/`.`/`..` 逃逸，
+  且解析结果必须是目标平台判定下的绝对路径——相对 env 根（伪造/损坏的
+  XDG_CACHE_HOME / LOCALAPPDATA）直接不解析，2026-12 review 轮 F7），
   读 `pending/update-info.json` 的 fileName 解析规范版本
-  （`cachedUpdateVersion`，数字粘连按贪婪分组解析），与运行版本比较
+  （`cachedUpdateVersion`，数字粘连按贪婪分组解析——该解析只在本仓库工件命名
+  契约下安全：规范版本只有 `X.Y.Z` / `X.Y.Z-beta.N`，无第四段、无其他
+  prerelease 拼写；命名一变必须重访解析器与比较器，review 轮 F8），与运行版本比较
   （`compareChamberVersions`：`X.Y.Z`/`X.Y.Z-beta.N`，stable > 同基 beta）；
   **仅当缓存版本 ≤ 运行版本**（已安装/已被超越）才整目录删除；
   更新的未装版本、缺元数据、版本不可解析、形状不合（JSON null/数组/标量/
   无 fileName）一律保留（失败保守，绝不误删合法待装下载；2026-12 review：
   JSON 形状守卫防 TypeError）。fire-and-forget + 永不 throw；DI：
   `UpdateControllerDeps.staleCache`（测试注入；`{cacheDir:null}` 关闭）。
+  **整目录删除（含 update.zip）为何安全（review 轮 F1，如实写明）**：
+  update.zip 唯一可能的"复用价值"是作为差分下载的基线，而 chamber feed
+  **从不发布 blockmap**——release.yml 在 finalize 前删除 mac `.zip.blockmap`
+  （electron-builder 硬编码生成、无配置开关）并断言输出无 `.blockmap`，
+  Windows 侧 `nsis.differentialPackage=false`——electron-updater 因此永不运行
+  差分路径，update.zip 永不作差分基线；整目录删除正确且每轮回收 ~300MB。
+  **潜在耦合（LATENT COUPLING）**：若未来发布形态重新发布 blockmap，
+  update.zip 将重新成为差分基线，`cleanupStaleUpdateCache` 的整目录删除调用
+  （stale-cache 删除点）必须改为保留 update.zip——任何此类发布改动前必须重访。
   **有界残留（review L2，如实记录）**：元数据缺失/损坏时整目录保留——崩溃于
   文件落盘后、写 info 前的窗口或 info 被外部删除时，单次 ~300MB 孤儿残留
   直到下一下载周期覆盖；属保守取舍，无误删风险。
@@ -417,6 +430,37 @@ acf-L1 update-info JSON 形状守卫（null/数组/标量/{} / rm 失败用例�
 ipc-surface-mirror 增方法签名级锁步 + `UpdateState`/`UpdatePhase`
 updater.ts↔renderer 守卫（L3 加固）；main.ts will-quit 清理完成日志（供
 mac 实机断言）。**仍待实机**：见剩余验证项 mac 断言清单。
+
+**验证补（2026-09 修复轮第二波 F1–F9，桌面更新器复原性）**：desktop
+`updater.test.ts` 61 用例 + `ipc-surface-mirror.test.ts` 23 用例 +
+settings-bridge `update-gate.test.ts` 8 用例全绿；`typecheck:settings-bridge` ✓；
+`verify:i18n` ✓。修复内容：**F1（机制文档化）**：缓存整目录删除安全性的
+真实依据（feed 从不发布 blockmap——mac `.zip.blockmap` finalize 前删除、
+Windows `differentialPackage=false`，差分路径永不运行、update.zip 永不作
+差分基线）+ LATENT COUPLING 提示（未来发布 blockmap 则删除点必须保留
+update.zip），代码注释与 §9 M5 双处写明，行为不变。**F2/F3/F5（重启失败
+复原性）**：`UpdateState` 新增一次性 carry `restartFailureText?: string`
+（脱敏；清除规则：后续每次 push 重置、除非该 push 本身就是失败 push）——
+重启单飞 armed 期间的 'error' 事件、quitAndInstall 同步失败（真实 6.8.9
+形态：install() dispatchError + 返回 false、不抛异常——接口返回值放宽为
+unknown 以识别显式 false）与同步 throw 一律**保持 phase `downloaded`**
+（不再误标为下载失败）、释放单飞并走 restartFailureText 通道；arm 成功
+视为「调用返回后单飞仍持有且返回值非 false」，并清除旧 carry；设置面
+`update-store` 模块闸与 `UpdateSection` busy 均按失败 push 复原（不刷新即可
+重试），downloaded 行渲染重启专用失败行 + 原位重试按钮。**F4（no-event
+停滞 watchdog）**：`UpdateControllerDeps.restartWatchdogMs`（0/缺省 = 60s），
+arm 后进程宽限期未退出即释放单飞 + 如实文案；每次释放/重武装清理，防过期
+截止误杀后续尝试。**F6**：注入 staleCache 分支补守卫 catch（与真实分支一致）。
+**F7**：`resolveUpdaterCacheDir` 拒绝非绝对解析结果（平台判定；相对 env 根
+→ null，测试覆盖 linux XDG/win32 LOCALAPPDATA/home 相对值）。**F8**：
+`cachedUpdateVersion` 注释钉死命名契约（仅 `X.Y.Z`/`X.Y.Z-beta.N`，贪婪解析
+仅在该契约下安全，命名变更须重访解析器+比较器）。**F9**：重启在途行
+（「正在重启并安装…」）替代朴素 downloaded 行。渲染复原链路主进程测试
+证据：falsy 返回（静默与 dispatch+false 两态）、arm 后 'error' 事件
+（phase 保持 downloaded + carry + 原位重试）、非重启错误仍进 phase error、
+watchdog 短宽限释放与长宽限不干扰、成功重武装清除旧 carry。**未验证**：
+quitAndInstall 真实同步失败路径（依赖真实打包态；6.8.9 源码路径已逐字核对：
+BaseUpdater.install → dispatchError → 返回 false）。
 
 **剩余验证项**：
 

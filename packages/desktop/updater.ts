@@ -39,6 +39,16 @@
  *   baked into app-update.yml) and removes it when the pending update's
  *   version is NOT newer than the running version (already installed /
  *   obsolete); a genuinely newer pending update is never touched.
+ *   Whole-directory deletion (update.zip + pending/) is SAFE because the
+ *   chamber feeds never publish blockmaps (2026-12 review round F1): the
+ *   release workflow deletes the mac .zip.blockmap from the draft before
+ *   finalize and Windows builds with differentialPackage=false, so
+ *   electron-updater never runs its differential path and update.zip is never
+ *   a differential base — deleting it reclaims ~300MB/round with no
+ *   functional cost. LATENT COUPLING: if a future release ever publishes
+ *   blockmaps, update.zip becomes a differential base again and this cleanup
+ *   must preserve it (see the stale-cache delete call, cleanupStaleUpdateCache
+ *   + the startup site below) — re-read this before any such publishing change.
  *   Best-effort only: any resolution/read failure skips silently — cache
  *   hygiene never blocks startup and never fabricates success.
  * - The state projection is non-secret only: versions, channel, a release
@@ -56,7 +66,7 @@ import { execFile } from 'node:child_process'
 import { accessSync, constants, statSync } from 'node:fs'
 import { readFile, rm } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { basename, dirname, isAbsolute, join } from 'node:path'
+import { basename, dirname, isAbsolute, join, posix as posixPath, win32 as win32Path } from 'node:path'
 import { createRequire } from 'node:module'
 import type { UpdateInfo } from 'electron-updater'
 import { sanitizeErrorText } from './sanitize-error.ts'
@@ -116,6 +126,14 @@ export interface UpdateState {
   installBlockedReason: string | null
   /** Non-secret error text (check/download failure); null = none. */
   error: string | null
+  /** ONE-SHOT carry (2026-12 review round F2/F3): a RESTART (「重启并安装」)
+   *  failure surfaced while the phase stayed `downloaded` — arming refused
+   *  (sync throw / falsy quitAndInstall return), an electron-updater 'error'
+   *  event after an armed restart, or the no-event stall watchdog. Sanitized
+   *  like `error`; absent (undefined) = no restart failure. Clearing rule:
+   *  every subsequent state push resets it UNLESS that push itself carries
+   *  the field (the failure push, or an explicit undefined clear). */
+  restartFailureText?: string
 }
 
 /** The subset of electron's `App` the controller reads (test-injectable). */
@@ -203,6 +221,24 @@ export function probeLinuxAppImage(deps: LinuxAppImageProbeDeps = {}): LinuxAppI
  * an unresolvable dir name, missing metadata or an unparsable version keeps
  * the cache untouched.
  *
+ * WHY whole-directory deletion is safe (2026-12 review round F1): update.zip
+ * is not "waste that might as well be kept" — it is the electron-updater
+ * FULL download, and its only OTHER role would be as the BASE of a
+ * differential download. That role never happens on chamber feeds: the
+ * release workflow deletes the mac .zip.blockmap from the draft release
+ * before finalize and asserts no .blockmap among the outputs, and Windows
+ * builds with `differentialPackage: false` (electron-builder config) — so the
+ * feeds never reference blockmaps, electron-updater never runs the
+ * differential path, and update.zip can never be reused as a differential
+ * base. Deleting the whole dir (zip + pending/) after the update is installed
+ * is therefore CORRECT and reclaims ~300MB per cycle.
+ * LATENT COUPLING: the safety of whole-dir deletion rests entirely on the
+ * feeds never publishing blockmaps. If a future release shape ever publishes
+ * them (mac .zip.blockmap kept, or Windows differentialPackage back on),
+ * update.zip becomes a differential base again and the stale-cache delete
+ * call (cleanupStaleUpdateCache's removeTree(cacheDir)) must PRESERVE it —
+ * re-verify this comment and that site before any such publishing change.
+ *
  * Cache dir derivation mirrors electron-updater exactly (verified against
  * 6.8.9): cacheDir = join(<platform cache root>, updaterCacheDirName), where
  * the root is `~/Library/Caches` (darwin), `%LOCALAPPDATA%` (win32) or
@@ -266,10 +302,17 @@ export interface ResolveUpdaterCacheDirDeps {
 }
 
 /** Resolve electron-updater's cache dir for the CURRENT app, or null when it
- *  cannot be derived safely (dev/unpacked shape, missing yml, refused name).
+ *  cannot be derived safely (dev/unpacked shape, missing yml, refused name, or
+ *  a resolved path that is not ABSOLUTE on the target platform — a relative
+ *  XDG_CACHE_HOME / LOCALAPPDATA / home would make the derived dir relative
+ *  too, and no deletion may ever run against a relative path; 2026-12 review
+ *  round F7, conservative like the dev/unresolvable cases). The absoluteness
+ *  verdict uses the TARGET platform's path rules (win32 roots vs POSIX roots)
+ *  so injected-platform tests see what the real runner would see.
  *  Never throws — cleanup is best-effort hygiene. */
 export async function resolveUpdaterCacheDir(deps: ResolveUpdaterCacheDirDeps = {}): Promise<string | null> {
   const isPackaged = deps.isPackaged ?? true
+  const platform = deps.platform ?? process.platform
   const resourcesPath = deps.resourcesPath ?? (typeof process !== 'undefined' ? process.resourcesPath : undefined)
   if (!isPackaged || typeof resourcesPath !== 'string' || resourcesPath === '') return null
   const readFileUtf8 = deps.readFile ?? realReadFileUtf8
@@ -277,7 +320,9 @@ export async function resolveUpdaterCacheDir(deps: ResolveUpdaterCacheDirDeps = 
     const yml = await readFileUtf8(join(resourcesPath, 'app-update.yml'))
     const dirName = updaterCacheDirNameFromYaml(yml)
     if (dirName === null) return null
-    return join(updaterCacheRoot(deps.platform, deps.env, deps.home), dirName)
+    const cacheDir = join(updaterCacheRoot(platform, deps.env, deps.home), dirName)
+    if (!(platform === 'win32' ? win32Path : posixPath).isAbsolute(cacheDir)) return null
+    return cacheDir
   } catch {
     return null
   }
@@ -289,7 +334,17 @@ export async function resolveUpdaterCacheDir(deps: ResolveUpdaterCacheDirDeps = 
  *  run parses as one (possibly longer) canonical version; the digit-
  *  adjacency guard only rejects a fragment that would START right after a
  *  digit the engine could not extend (not our artifact naming — treated as
- *  absent, conservatively). */
+ *  absent, conservatively).
+ *
+ *  NAMING CONTRACT this parser is pinned to (2026-12 review round F8): chamber
+ *  release artifacts are canonically `X.Y.Z` or `X.Y.Z-beta.N` — no fourth
+ *  segment (0.2.2.1 does not exist), no other prerelease spellings (-rc,
+ *  -alpha, -beta.1 without the dot, …). The greedy digit-adjacency parse is
+ *  only safe under that contract (e.g. `dsh-chamber-0.2.2-beta.1-…` yields
+ *  exactly `0.2.2-beta.1`, and a hypothetical `0.2.2.1` cannot silently read
+ *  as the four-part version `0.2.2` + extra tail). ANY future naming change
+ *  (fourth segment, new prerelease suffix, leading-v, …) must revisit this
+ *  parser and compareChamberVersions together. */
 export function cachedUpdateVersion(fileName: unknown): string | null {
   if (typeof fileName !== 'string') return null
   const match = /(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-beta\.(0|[1-9]\d*))?/.exec(fileName)
@@ -334,7 +389,14 @@ export interface CleanupStaleUpdateCacheDeps {
  *  the dir/meta is absent or unreadable, the file name carries no canonical
  *  version, the version cannot be compared, or the pending update is still
  *  NEWER than the running version (a legit installable download must never be
- *  deleted). Never throws (best-effort hygiene). */
+ *  deleted). Never throws (best-effort hygiene).
+ *  Whole-dir removal incl. update.zip is safe because the chamber feeds never
+ *  publish blockmaps (2026-12 review round F1 — release workflow drops the
+ *  mac .zip.blockmap before finalize; Windows differentialPackage=false), so
+ *  update.zip is never a differential base. LATENT COUPLING: the delete call
+ *  below is the stale-cache site that MUST change if a future release ever
+ *  publishes blockmaps — update.zip would then be a live differential base
+ *  and must be preserved (only the pending/ metadata would be stale-cleanable). */
 export async function cleanupStaleUpdateCache(
   cacheDir: string,
   currentVersion: string,
@@ -431,8 +493,21 @@ export interface AutoUpdaterLike {
   /** electron-updater's restart-into-the-downloaded-update (quitAndInstall):
    *  quits the app (through before-quit/will-quit) and installs + relaunches.
    *  Fire-and-forget from the controller's perspective — the process is on
-   *  its way out when it succeeds. */
-  quitAndInstall(isSilent?: boolean, isForceRunAfter?: boolean): void
+   *  its way out when it succeeds.
+   *
+   *  REAL 6.8.9 SHAPE (2026-12 review round F3 — the historic comment assumed
+   *  "throws or arms"): quitAndInstall is declared `void` and does NOT throw
+   *  on a sync failure — BaseUpdater.install() DISPATCHES an 'error' event
+   *  and returns false (missing update file, doInstall throw), after which
+   *  quitAndInstall returns without arming the quit; MacUpdater only registers
+   *  a native staging listener and can return with nothing armed yet (ok
+   *  means "armed", quit comes later). A synchronous throw remains possible
+   *  only from OUR own seams around the call. The declared return type is
+   *  therefore `unknown`: the real updater yields undefined (an armed quit),
+   *  while an injected fake may signal a refused arming with an explicit
+   *  `false` — the controller must treat `false` as "nothing was armed"
+   *  without mistaking the real undefined for a failure. */
+  quitAndInstall(isSilent?: boolean, isForceRunAfter?: boolean): unknown
 }
 
 /** Test-injection seam (design 11 §3.2 testability): each member falls back
@@ -461,6 +536,18 @@ export interface UpdateControllerDeps {
    *  inject `{ cacheDir: null }` to disable or a temp dir to assert the
    *  behavior through the controller. */
   staleCache?: { cacheDir: string | null }
+  /** Restart stall watchdog grace (2026-12 review round F4): after an armed
+   *  quitAndInstall returns ok, the single-flight is released again when the
+   *  process is still alive after this many ms (a no-event mac stall — the
+   *  native staging handoff neither quits nor errors). 0 / undefined = the
+   *  default 60s; tests inject a tiny ms and use real timers. */
+  restartWatchdogMs?: number
+  /** macOS Developer ID signature probe (default: the real codesign probe).
+   *  Tests inject a deterministic verdict: the real probe reads the RUNNING
+   *  process.execPath, which under plain node is never a Developer ID-signed
+   *  app binary — without the seam a packaged-darwin restart arm (and with
+   *  it the darwin stall-retry path, round-2 review A2) is untestable. */
+  probeMacSignature?: () => Promise<boolean>
 }
 
 /** Controller surface wired into main.ts (IPC handlers) and started at boot. */
@@ -493,6 +580,24 @@ export const GITHUB_REPO = 'dsh-chamber'
 const CHECK_DELAY_MS = 15_000
 /** Periodic silent re-check. */
 const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000
+/** Default restart stall-watchdog grace (F4): the armed quit (win: setImmediate
+ *  app.quit; mac: native Squirrel staging handoff) is normally imminent; if
+ *  the process is still alive after this window with no error either, the
+ *  restart is stalled and the single-flight must not stay armed forever. */
+const RESTART_WATCHDOG_DEFAULT_MS = 60_000
+/** Honest surface text for the watchdog stall (F4) / a silent falsy-return
+ *  arming refusal with no dispatched error text (F3). Constant, sanitized. */
+const RESTART_NOT_ARMED_TEXT = 'the app restart did not proceed (quitAndInstall returned without arming); the restart button is re-enabled — try again'
+/** Watchdog-stall text: an armed restart produced no quit AND no error event
+ *  within the grace window. */
+const RESTART_STALL_TEXT = 'the app restart stalled (no quit and no error within the grace period); the restart button is re-enabled — try again'
+/** Round-2 review A2 — win32 post-stall refusal text: the previous armed
+ *  attempt's quit never completed, so re-entering quitAndInstall cannot arm
+ *  anything (real 6.8.9's internal quit latch is still set — BaseUpdater.js)
+ *  and could eventually re-spawn a duplicate installer. Constant, sanitized;
+ *  the per-boot restartStalled latch keeps this refusal in place until a real
+ *  quit/install. */
+const RESTART_STALLED_REFUSAL_TEXT = 'the app quit from the previous restart did not complete; close the app to finish the install, then retry'
 
 function isBetaVersion(version: string): boolean {
   return /^\d+\.\d+\.\d+-beta\.(0|[1-9]\d*)$/.test(version)
@@ -647,6 +752,7 @@ export function createUpdateController(options: UpdateControllerOptions, deps?: 
   const linuxAppImage = deps?.linuxAppImage !== undefined ? deps.linuxAppImage : probeLinuxAppImage()
   const channel = resolveChannel(version)
   const resolveBetaFeed = deps?.resolveBetaFeed ?? resolveRuntimeBetaFeed
+  const probeMacSignature = deps?.probeMacSignature ?? probeMacDeveloperIdSignature
 
   let state: UpdateState = {
     phase: 'idle',
@@ -660,13 +766,21 @@ export function createUpdateController(options: UpdateControllerOptions, deps?: 
   }
   const listeners = new Set<(state: UpdateState) => void>()
   const setState = (patch: Partial<UpdateState>): void => {
-    state = { ...state, ...patch }
+    // Clearing rule for the one-shot restartFailureText carry (2026-12 review
+    // round F2): EVERY push resets it UNLESS that push itself carries the
+    // field — the restart-failure push (and an explicit undefined clear)
+    // keeps it, every other push (a fresh check/download/phase transition)
+    // drops it. A stale restart failure can therefore never leak into a
+    // later phase's projection.
+    const next = { ...state, ...patch }
+    if (!('restartFailureText' in patch)) next.restartFailureText = undefined
+    state = next
     for (const listener of listeners) listener(state)
   }
   // macOS packaged: probe asynchronously without blocking startup, but keep
   // download fail-closed until a valid Developer ID verdict clears the gate.
   if (platform === 'darwin' && app.isPackaged) {
-    void probeMacDeveloperIdSignature().then((hasDeveloperId) => {
+    void probeMacSignature().then((hasDeveloperId) => {
       setState({ installBlockedReason: hasDeveloperId ? null : 'missing Developer ID signature' })
     })
   }
@@ -696,6 +810,63 @@ export function createUpdateController(options: UpdateControllerOptions, deps?: 
   // AFTER any channel assignment.
   autoUpdater.allowDowngrade = false
 
+  // The「重启并安装」action is fire-and-forget: a successful quitAndInstall
+  // means the process is quitting — the flag is deliberately NOT reset on
+  // success (a second restart click after the first one armed the quit would
+  // otherwise re-enter electron-updater while the app is already on its way
+  // out). Only a FAILURE path resets it so the user can retry in place.
+  let restartInFlight = false
+  // Round-2 review A2 — win32 stall latch: set when the no-event stall
+  // watchdog fires, i.e. an ARMED quit never completed. electron-updater's
+  // OWN quit latch (BaseUpdater.quitAndInstallCalled) is still set while this
+  // process is alive, so a win32 re-entry of quitAndInstall cannot arm
+  // anything (install() returns false WITHOUT dispatching — BaseUpdater.js),
+  // and a retry must not even be attempted: restartAndInstall refuses it on
+  // win32 before the call. NEVER cleared in-process — only a real
+  // quit/install (an app restart) can reset it, and the controller is
+  // per-boot. mac/linux never consult it (a mac retry re-registers the
+  // staging listener harmlessly — see restartAndInstall; linux has no
+  // restart action at all).
+  let restartStalled = false
+  // No-event stall watchdog (2026-12 review round F4): armed on every
+  // successful restart arming; fires once if the process is still alive after
+  // the grace — a mac staging handoff that neither quits NOR errors must not
+  // leave the single-flight armed forever. Dies with the process on a real
+  // quit (timer is unref'd); cleared on every release / re-arm so a stale
+  // deadline can never kill a LATER attempt (the fire checks the flag again).
+  let restartWatchdog: ReturnType<typeof setTimeout> | null = null
+  const restartWatchdogMs = deps?.restartWatchdogMs !== undefined && deps.restartWatchdogMs > 0
+    ? deps.restartWatchdogMs
+    : RESTART_WATCHDOG_DEFAULT_MS
+  function clearRestartWatchdog(): void {
+    if (restartWatchdog !== null) {
+      clearTimeout(restartWatchdog)
+      restartWatchdog = null
+    }
+  }
+  function releaseRestartFlight(): void {
+    restartInFlight = false
+    clearRestartWatchdog()
+  }
+  function armRestartWatchdog(): void {
+    clearRestartWatchdog()
+    restartWatchdog = setTimeout(() => {
+      restartWatchdog = null
+      // Only act when THIS attempt is still the one in flight — a release /
+      // re-arm in between (another failure path, a retry) invalidates the
+      // stale deadline.
+      if (!restartInFlight) return
+      // A2: record the stall BEFORE releasing — from here on a win32 retry is
+      // refused at restartAndInstall's gate (electron-updater 6.8.9's own
+      // quit latch is still set after the stalled arm; see restartStalled).
+      restartStalled = true
+      releaseRestartFlight()
+      logger.warn('[updater] 重启停滞：宽限期内既未退出也未报错，已释放重启单飞（可重试）')
+      setState({ restartFailureText: RESTART_STALL_TEXT })
+    }, restartWatchdogMs)
+    restartWatchdog.unref?.()
+  }
+
   autoUpdater.on('checking-for-update', () => setState({ phase: 'checking', error: null }))
   autoUpdater.on('update-available', (info: UpdateInfo) => {
     setState({
@@ -723,20 +894,46 @@ export function createUpdateController(options: UpdateControllerOptions, deps?: 
   // Single error path for check AND download failures. latestVersion is kept:
   // a check error leaves it null (settings:「无法检查更新」), a download error
   // keeps it (settings:「更新下载失败」+ retry).
-  // 2026-12 review (M2): this event ALSO releases the「重启并安装」single-
-  // flight. A restart can fail on an ASYNC path that never reaches
-  // restartAndInstall's synchronous catch — mac staging-window click (the
-  // native Squirrel fetch errors later) or BaseUpdater.install() returning
-  // false internally (missing installer file → dispatchError). Without the
-  // reset the flag would stay armed forever and every later click would be
-  // silently refused ('restart already in progress') until the app restarts.
-  // Safe to reset here unconditionally: an 'error' event means the current
-  // quit/install did NOT proceed, and a SUCCESSFULLY armed restart quits the
-  // process (no further events can matter).
+  // 2026-12 review round F2: an error while the「重启并安装」single-flight is
+  // ARMED is a RESTART failure, not a download/check failure — the phase must
+  // stay `downloaded` (never regress to 'error', which the settings section
+  // would misread as a DOWNLOAD failure and offer the wrong retry) and the
+  // sanitized failure rides the one-shot restartFailureText carry instead.
+  // This covers the async paths that never reach restartAndInstall's
+  // synchronous call: the mac staging-window click (the native Squirrel fetch
+  // errors later) and BaseUpdater.install() dispatching 'error' + returning
+  // false INSIDE quitAndInstall (real 6.8.9 does not throw there — the
+  // listener then runs synchronously mid-call and the caller observes the
+  // released single-flight below). Releasing here also unblocks an in-place
+  // retry: without the reset the flag would stay armed forever and every
+  // later click would be silently refused ('restart already in progress').
+  // Round-2 review A1: the branch keys on the PHASE as well as the flight —
+  // an 'error' arriving while phase is `downloaded` but nothing is armed must
+  // ride the SAME restart-failure channel. Nothing else can error at phase
+  // `downloaded`: runCheck() and download() both gate on earlier phases, so
+  // no check/download can be in flight there — an error in that state is
+  // quit/staging-related by construction. Two late shapes land on the
+  // not-armed half of the branch today: MacUpdater's constructor-registered
+  // native-error bridge re-emits native staging failures long after the
+  // flight was released (verified in the installed 6.8.9 sources), and an
+  // error can arrive after the 60s stall watchdog already released an armed
+  // attempt. Without the phase test those would hit the phase-'error' branch,
+  // regressing `downloaded` and WIPING the very restart-failure text the
+  // round-1 fix established. Routing them through the restart channel (the
+  // release below is a no-op when the flight is already released) keeps the
+  // phase `downloaded`, keeps `error` null, and REPLACES the stale
+  // stall/not-armed text with the real sanitized error.
+  // Errors at any other phase (a check/download while nothing is armed — the
+  // flight can only ever be armed at phase `downloaded`) keep the historic
+  // phase-'error' behavior exactly.
   autoUpdater.on('error', (error) => {
     const message = error instanceof Error ? error.message : String(error)
     logger.warn('[updater]', message)
-    restartInFlight = false
+    if (restartInFlight || state.phase === 'downloaded') {
+      releaseRestartFlight()
+      setState({ restartFailureText: sanitizeErrorText(message) })
+      return
+    }
     setState({ phase: 'error', downloadPercent: null, error: sanitizeErrorText(message) })
   })
 
@@ -750,6 +947,13 @@ export function createUpdateController(options: UpdateControllerOptions, deps?: 
     if (cacheDir !== null) {
       void cleanupStaleUpdateCache(cacheDir, version).then((removed) => {
         if (removed) logger.log('[updater] 已清理已安装版本的更新缓存：', cacheDir)
+        // Guarded catch mirroring the real-branch hygiene below (2026-12
+        // review round F6): cleanup never throws by contract, but an injected
+        // seam or logger must not turn best-effort hygiene into an unhandled
+        // rejection either.
+      }).catch((error) => {
+        const message = error instanceof Error ? error.message : String(error)
+        logger.warn('[updater] 更新缓存清理失败（已忽略）：', message)
       })
     }
   } else {
@@ -779,12 +983,6 @@ export function createUpdateController(options: UpdateControllerOptions, deps?: 
   // exemption while electron-updater still installs on quit). The flag makes
   // the download exclusion explicit and covers the whole in-flight window.
   let downloadInFlight = false
-  // The「重启并安装」action is fire-and-forget: a successful quitAndInstall
-  // means the process is quitting — the flag is deliberately NOT reset on
-  // success (a second restart click after the first one armed the quit would
-  // otherwise re-enter electron-updater while the app is already on its way
-  // out). Only a FAILURE path resets it so the user can retry.
-  let restartInFlight = false
   // The single check path shared by the silent periodic checks (start / 6h
   // interval) and the user-initiated「检查更新」action (checkNow()). The phase
   // gates make it idempotent: an in-flight check/download or a completed
@@ -930,6 +1128,24 @@ export function createUpdateController(options: UpdateControllerOptions, deps?: 
       if (restartInFlight) {
         return { ok: false, error: 'restart already in progress' }
       }
+      // Round-2 review A2: a win32 retry after a STALLED armed attempt must
+      // not re-enter quitAndInstall. Real 6.8.9 BaseUpdater.install() returns
+      // false WITHOUT dispatching while its internal quitAndInstallCalled
+      // latch is still set (BaseUpdater.js — the quit scheduled by the first
+      // armed attempt never completed, so the updater never cleared its own
+      // latch), and quitAndInstall then yields undefined: the arming proof
+      // below would misreport ok:true while nothing new arms — and that very
+      // refusal clears the updater latch, so a SECOND retry would re-spawn a
+      // duplicate NSIS installer. Refuse BEFORE the call with an honest text;
+      // the per-boot stall latch is never cleared in-process (only a real
+      // quit/install resets the world). mac retry stays allowed — re-entering
+      // MacUpdater.quitAndInstall only re-registers the native staging
+      // listener, harmlessly; linux has no restart action at all (above).
+      if (restartStalled && platform === 'win32') {
+        releaseRestartFlight()
+        setState({ restartFailureText: RESTART_STALLED_REFUSAL_TEXT })
+        return { ok: false, error: RESTART_STALLED_REFUSAL_TEXT }
+      }
       restartInFlight = true
       try {
         // electron-updater quitAndInstall: Windows NSIS spawns the silent
@@ -950,19 +1166,65 @@ export function createUpdateController(options: UpdateControllerOptions, deps?: 
         // only registers a listener and returns — the quit happens later when
         // the native download completes (ok:true then means "armed", with a
         // seconds-long window until the actual quit).
-        // A synchronous throw here means nothing was armed — reset the flag
-        // for an in-place retry. The phase is deliberately NOT regressed to
-        // 'error': the downloaded row keeps its「重启并安装」button so the user
-        // retries the RESTART (an 'error' state would be misread by the
-        // settings section as a DOWNLOAD failure and offer the wrong retry —
-        // unless electron-updater already emitted its own 'error' event, which
-        // moves the phase on the event channel; we must not clobber that).
-        autoUpdater.quitAndInstall(true, true)
-        return { ok: true }
+        // REAL 6.8.9 SYNC-FAILURE SHAPE (2026-12 review round F3 — the older
+        // comment assumed "a synchronous throw means nothing was armed"): a
+        // sync quit/install failure does NOT throw — BaseUpdater.install()
+        // DISPATCHES an 'error' event and returns false (missing update file,
+        // doInstall throw), after which quitAndInstall returns without arming
+        // the quit. Our 'error' listener above therefore runs SYNCHRONOUSLY
+        // inside this call for such a failure: it releases the single-flight
+        // and pushes restartFailureText while `phase` stays `downloaded` (no
+        // 'error'-phase regression — the downloaded row keeps its「重启并安装」
+        // button so the user retries the RESTART, never mislabeled as a
+        // download failure). A genuine synchronous throw remains possible only
+        // from our own seams around the call, and an injected fake may return
+        // an explicit `false` instead of dispatching. The proof of arming is
+        // therefore: the single-flight still held AND no explicit false
+        // return. THE ONE REAL 6.8.9 undefined-without-arming exception is the
+        // LATCH refusal above (round-2 review A2): a stalled win32 attempt
+        // leaves BaseUpdater's quitAndInstallCalled set, so a re-entry's
+        // install() returns false WITHOUT dispatching and quitAndInstall
+        // yields undefined — indistinguishable from an armed quit by return
+        // value alone. The win32 restartStalled gate refuses that retry
+        // BEFORE this call, so this proof can never read the latch refusal as
+        // an arm; mac re-entry never hits the latch (no install() there).
+        const armed = autoUpdater.quitAndInstall(true, true)
+        if (restartInFlight && armed !== false) {
+          // Armed — the quit is on its way (win: setImmediate app.quit; mac:
+          // native Squirrel staging may still take a while). Deliberately NOT
+          // released (fire-and-forget single-flight, see above). Clear a stale
+          // failure carry from an earlier failed attempt so the row can show
+          // the honest in-progress line while the quit window runs.
+          if (state.restartFailureText !== undefined) {
+            setState({ restartFailureText: undefined })
+          }
+          // No-event stall watchdog (F4): if neither the quit nor an 'error'
+          // event happens within the grace, release the flight + surface the
+          // stall so the restart button recovers without an app reload.
+          armRestartWatchdog()
+          return { ok: true }
+        }
+        // NOT armed. When the mid-call 'error' dispatch already ran, the
+        // listener pushed the sanitized failure text; a silent falsy return
+        // (fake seam — the real 6.8.9 non-dispatching falsy path is ONLY the
+        // latch refusal above, which the win32 restartStalled gate stops
+        // before it ever reaches this proof) synthesizes the same surface.
+        // Either way the flight is released and the phase stays `downloaded`
+        // — the user retries the restart in place.
+        releaseRestartFlight()
+        if (state.restartFailureText === undefined) {
+          setState({ restartFailureText: RESTART_NOT_ARMED_TEXT })
+        }
+        return { ok: false, error: state.restartFailureText ?? RESTART_NOT_ARMED_TEXT }
       } catch (error) {
+        // A synchronous throw means nothing was armed — release for an
+        // in-place retry and surface the sanitized failure on the same
+        // restartFailureText channel (phase deliberately stays `downloaded`;
+        // `error` stays null — a restart failure is never a download failure).
         const message = error instanceof Error ? error.message : String(error)
         logger.warn('[updater] restart failed (nothing armed):', message)
-        restartInFlight = false
+        releaseRestartFlight()
+        setState({ restartFailureText: sanitizeErrorText(message) })
         return { ok: false, error: sanitizeErrorText(message) }
       }
     },

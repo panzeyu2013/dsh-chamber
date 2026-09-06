@@ -481,6 +481,11 @@ export interface UpdateState {
   releaseUrl: string | null
   installBlockedReason: string | null
   error: string | null
+  /** ONE-SHOT carry (2026-12 review round F2/F3): a RESTART (「重启并安装」)
+   *  failure surfaced while the phase stayed `downloaded`. Absent (undefined)
+   *  = no restart failure. Clearing rule: every subsequent push resets it
+   *  unless that push itself carries the field. */
+  restartFailureText?: string
 }
 
 /** window.dshChamber.update — query / subscribe / user-initiated check /

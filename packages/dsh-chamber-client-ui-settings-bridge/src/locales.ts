@@ -68,6 +68,10 @@ export const zh = {
   updateDownloading: '正在下载更新… {percent}%',
   updateDownloaded: '已下载，退出时安装',
   updateRestartAction: '重启并安装',
+  // 重启失败行（F2：phase 保持 downloaded，仅经 restartFailureText 携带失败）。
+  updateRestartFailed: '重启并安装失败：{error}',
+  // 重启在途行（F9：已点击重启并安装、退出窗口尚未完成时的诚实进展文案）。
+  updateRestarting: '正在重启并安装…',
   updateDownloadBlocked: '已下载（{reason}），请手动安装',
   updateInstallBlockedMacSigning: '已下载（未配置自动安装签名），请手动安装',
   updateDownloadFailed: '更新下载失败',
@@ -296,6 +300,10 @@ export const en: Record<keyof typeof zh, string> = {
   updateDownloading: 'Downloading update… {percent}%',
   updateDownloaded: 'Downloaded — will install on quit',
   updateRestartAction: 'Restart & Install',
+  // Restart-failure line (F2: phase stays downloaded; the failure rides restartFailureText).
+  updateRestartFailed: 'Restart & install failed: {error}',
+  // Restart in-progress line (F9: honest progress copy while the quit window runs).
+  updateRestarting: 'Restarting to install…',
   updateDownloadBlocked: 'Downloaded ({reason}) — install manually',
   updateInstallBlockedMacSigning: 'Downloaded (automatic install unavailable) — install manually',
   updateDownloadFailed: 'Update download failed',
