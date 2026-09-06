@@ -10,6 +10,7 @@ import {
   resolveDeletableTree,
   subtreeRunning,
   MAX_PURGE_SESSIONS,
+  MAX_PURGE_ERROR_RECORDS,
   type ArchivedSessionState,
   type ArchiveCleanupHost,
 } from '../src/core.ts'
@@ -272,6 +273,79 @@ test('purge: delete-time running refusal surfaces as a per-item error and keeps 
   assert.equal(again.deletedSessions, 1)
   assert.equal(again.errors.length, 0)
   assert.deepEqual(host.archived, new Set(['s3']))
+})
+
+test('purge: a mid-tree running refusal aborts the tree — the refused member, its ancestors and the root survive; a rerun converges (review F1)', async () => {
+  const host = buildHost()
+  // a1 (NON-root member of s1's tree [a1a, a1, s1]) refuses at delete time
+  // with `running` — the binding-guard shape for a mid-window live flip.
+  host.failDeletes.set('a1', { code: 'running', remaining: 1 })
+  const core = new ArchiveCleanupCore(host)
+  const result = await core.purge()
+  // a1a (deleted before the failure) stays deleted — prefix deletions are
+  // not rolled back; a1 and its ancestors/root content are NOT touched.
+  assert.deepEqual(host.deleteLog, ['a1a', 's2'])
+  assert.equal(host.states.has('a1'), true, 'the refused member survives')
+  assert.equal(host.states.has('s1'), true, 'the root survives (record intact)')
+  assert.equal(result.deletedSessions, 1) // s2 only — s1's root content NOT deleted
+  assert.equal(result.deletedSubagents, 1) // a1a only
+  assert.equal(result.skippedRunning, 1) // s3 (running child)
+  assert.equal(result.errors.length, 1)
+  assert.equal(result.errors[0]?.sessionId, 'a1')
+  assert.equal(result.errors[0]?.code, 'running')
+  // The root stays archived → the next purge re-enumerates the tree.
+  assert.deepEqual(host.archived, new Set(['s1', 's3']))
+  // Rerun with the member no longer running: a1a is gone ('missing'-safe),
+  // a1 + root delete and the set member clears.
+  const again = await core.purge()
+  assert.equal(again.deletedSessions, 1)
+  assert.equal(again.deletedSubagents, 1)
+  assert.equal(again.errors.length, 0)
+  assert.deepEqual(host.deleteLog, ['a1a', 's2', 'a1', 's1'])
+  assert.deepEqual(host.archived, new Set(['s3']))
+})
+
+test('purge: a mid-tree storage failure aborts the tree — the refused member, its ancestors and the root survive; a rerun converges (review F1)', async () => {
+  const host = buildHost()
+  host.failDeletes.set('a1', { code: 'storage', remaining: 1 })
+  const core = new ArchiveCleanupCore(host)
+  const result = await core.purge()
+  assert.deepEqual(host.deleteLog, ['a1a', 's2'])
+  assert.equal(host.states.has('a1'), true, 'the refused member survives')
+  assert.equal(host.states.has('s1'), true, 'the root survives (record intact)')
+  assert.equal(result.deletedSessions, 1)
+  assert.equal(result.deletedSubagents, 1)
+  assert.equal(result.errors.length, 1)
+  assert.equal(result.errors[0]?.sessionId, 'a1')
+  assert.equal(result.errors[0]?.code, 'storage')
+  assert.deepEqual(host.archived, new Set(['s1', 's3']))
+  const again = await core.purge()
+  assert.equal(again.deletedSessions, 1)
+  assert.equal(again.deletedSubagents, 1)
+  assert.equal(again.errors.length, 0)
+  assert.deepEqual(host.archived, new Set(['s3']))
+})
+
+test('purge: >1000 failing members truncate the error list at the shared cap with truncated=true (review F4)', async () => {
+  const host = new FakeHost()
+  for (let i = 0; i < MAX_PURGE_ERROR_RECORDS + 1; i += 1) {
+    const id = `fail-${i}`
+    host.archived.add(id)
+    host.states.set(id, state(id))
+    host.failDeletes.set(id, { code: 'storage', remaining: 1 })
+  }
+  const core = new ArchiveCleanupCore(host)
+  const result = await core.purge()
+  assert.equal(result.errors.length, MAX_PURGE_ERROR_RECORDS)
+  assert.equal(result.truncated, true)
+  assert.equal(result.deletedSessions, 0)
+  assert.equal(result.deletedSubagents, 0)
+  assert.equal(result.skippedRunning, 0)
+  assert.equal(host.deleteLog.length, 0, 'every delete failed')
+  assert.equal(host.removalCalls.length, 0, 'no tree completed → no batched set removal')
+  // Truncation is surface-honest: the set members stay archived and a rerun
+  // converges once the failures clear.
+  assert.equal(host.archived.size, MAX_PURGE_ERROR_RECORDS + 1)
 })
 
 test('purge: an archived descendant covered by a completed tree is cleared in the SAME run (merge-round Nit N1)', async () => {

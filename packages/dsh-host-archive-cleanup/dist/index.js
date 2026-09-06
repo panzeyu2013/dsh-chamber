@@ -216,13 +216,21 @@ var ArchiveCleanupCore = class {
    * member removed last — ONE batched set removal at the end).
    *
    * Performance contract (design 24 perf review): the authoritative snapshot
-   * (archived set + session states + lineage) is read ONCE; per tree only the
-   * cheap in-memory live set is re-read (the real running guard). Per-member
-   * deletion uses the snapshot's cwd so the binding never re-enumerates the
-   * corpus. Completed roots (and any archived descendants their completed
-   * trees covered) plus orphans are removed from the archived set in a
-   * single official write after the whole run. Per-session failures land
-   * in `errors` (truncated at MAX_PURGE_ERROR_RECORDS with `truncated`).
+   * (archived set + session states + lineage) is read ONCE; per deletable
+   * tree only the cheap in-memory live set is re-read and checked at the
+   * TREE level (the real running guard — no per-member pre-check, review F2:
+   * a mid-tree live flip surfaces through the binding's delete-time
+   * `running` refusal). Per-member deletion uses the snapshot's cwd so the
+   * binding never re-enumerates the corpus. Completed roots (and any
+   * archived descendants their completed trees covered) plus orphans are
+   * removed from the archived set in a single official write after the whole
+   * run. Per-session failures land in `errors` (truncated at
+   * MAX_PURGE_ERROR_RECORDS with `truncated`). The FIRST in-tree failure
+   * aborts the REMAINING members of that tree (review F1): ancestors and the
+   * root stay untouched and archived so a rerun re-enumerates and converges,
+   * while members deleted before the failure stay deleted (prefix deletions
+   * are not rolled back). Per-session isolation across INDEPENDENT trees is
+   * unchanged: the run continues with the next tree.
    */
   async purge() {
     const { archivedIds, statesBySession, childrenOf, liveAgentIds } = await this.readAuthoritativeState();
@@ -256,13 +264,8 @@ var ArchiveCleanupCore = class {
         plan.skippedRunning += 1;
         continue;
       }
-      let subtreeHadError = false;
+      let treeAborted = false;
       for (const sessionId of tree.order) {
-        if (nowLive.has(sessionId)) {
-          subtreeHadError = true;
-          recordError(sessionId, "running", `\u4F1A\u8BDD\u5728\u5220\u9664\u524D\u8F6C\u4E3A\u8FD0\u884C\uFF0C\u5DF2\u8DF3\u8FC7\uFF08\u5F52\u6863\u6839\u4FDD\u6301\uFF0C\u53EF\u7A0D\u540E\u91CD\u8BD5\uFF09`);
-          continue;
-        }
         const state = statesBySession.get(sessionId);
         try {
           const outcome = await this.host.deleteSessionContent(sessionId, state?.cwd);
@@ -275,16 +278,18 @@ var ArchiveCleanupCore = class {
             await this.host.emitSessionRemoved(sessionId);
           } catch (error) {
             if (!(error instanceof ArchiveCleanupError)) throw error;
-            subtreeHadError = true;
+            treeAborted = true;
             recordError(sessionId, error.code, error.message);
+            break;
           }
         } catch (error) {
           if (!(error instanceof ArchiveCleanupError)) throw error;
-          subtreeHadError = true;
+          treeAborted = true;
           recordError(sessionId, error.code, error.message);
+          break;
         }
       }
-      if (subtreeHadError) {
+      if (treeAborted) {
         continue;
       }
       completedRoots.push(tree.rootSessionId);
@@ -323,9 +328,32 @@ var ArchiveCleanupCore = class {
 import { rm, rmdir, lstat } from "node:fs/promises";
 import { basename, dirname } from "node:path";
 var BUSY_MESSAGE = "archiveCleanup is already running on this instance \u2014 retry after it settles";
+function assertHeaderShape(header) {
+  if (header === null || typeof header !== "object") {
+    throw new ArchiveCleanupError(
+      "registry-unreadable",
+      "archiveCleanup: a session header is not an object \u2014 refusing the read (pinned-vendor header drift)"
+    );
+  }
+  const h = header;
+  const who = typeof h.id === "string" && h.id !== "" ? `session ${h.id}` : "an unnamed session header";
+  const malformed = (field, expected) => {
+    throw new ArchiveCleanupError(
+      "registry-unreadable",
+      `archiveCleanup: ${who}: header.${field} must be ${expected} \u2014 refusing the read (pinned-vendor header drift would silently empty the cleanup cascade)`
+    );
+  };
+  if (typeof h.id !== "string") malformed("id", "a string");
+  if (h.cwd !== void 0 && typeof h.cwd !== "string") malformed("cwd", "a string when present");
+  if (h.parentSession !== void 0 && typeof h.parentSession !== "string") {
+    malformed("parentSession", "a string when present");
+  }
+  if (h.origin !== void 0 && h.origin !== "subagent") malformed("origin", "exactly 'subagent' when present");
+}
 function headerToState(header) {
+  assertHeaderShape(header);
   return {
-    sessionId: String(header.id),
+    sessionId: header.id,
     ...header.origin === "subagent" ? { origin: "subagent" } : {},
     ...typeof header.parentSession === "string" && header.parentSession !== "" ? { parentSessionId: header.parentSession } : {},
     ...typeof header.cwd === "string" ? { cwd: header.cwd } : {},
@@ -380,11 +408,17 @@ function makeHostBinding(ctx) {
   const listHeaders = async () => {
     if (query?.listSessions !== void 0) {
       const records = await query.listSessions();
-      if (Array.isArray(records)) return records.map((record) => record.header);
+      if (Array.isArray(records)) {
+        for (const record of records) assertHeaderShape(record?.header);
+        return records.map((record) => record.header);
+      }
     }
     if (persistence?.list !== void 0) {
       const headers = await persistence.list();
-      if (Array.isArray(headers)) return headers;
+      if (Array.isArray(headers)) {
+        for (const header of headers) assertHeaderShape(header);
+        return headers;
+      }
     }
     throw new ArchiveCleanupError(
       "registry-unreadable",
@@ -400,7 +434,6 @@ function makeHostBinding(ctx) {
       const headers = await listHeaders();
       const byId = /* @__PURE__ */ new Map();
       for (const header of headers) {
-        if (typeof header?.id !== "string") continue;
         byId.set(header.id, headerToState(header));
       }
       return [...byId.values()];
@@ -423,6 +456,7 @@ function makeHostBinding(ctx) {
         let header;
         if (typeof cwd === "string") {
           header = { id: sessionId, cwd };
+          assertHeaderShape(header);
         } else {
           const headers = await listHeaders();
           header = headers.find((candidate) => candidate.id === sessionId);

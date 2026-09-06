@@ -80,13 +80,46 @@ export interface HostCtxServices {
   }
 }
 
+/** One official session header runtime shape check (review follow-up F3):
+ *  every binding cascade keys on these fields through STRUCTURAL types — a
+ *  vendor rename/retype (cwd/parentSession/origin) must fail the read LOUDLY
+ *  with `registry-unreadable` (naming the session and field), never silently
+ *  empty the lineage/deletion cascade. Absent OPTIONAL fields stay allowed
+ *  (older records legitimately lack them). */
+function assertHeaderShape(header: unknown): void {
+  if (header === null || typeof header !== 'object') {
+    throw new ArchiveCleanupError(
+      'registry-unreadable',
+      'archiveCleanup: a session header is not an object — refusing the read (pinned-vendor header drift)',
+    )
+  }
+  const h = header as { id?: unknown; cwd?: unknown; parentSession?: unknown; origin?: unknown }
+  const who = typeof h.id === 'string' && h.id !== '' ? `session ${h.id}` : 'an unnamed session header'
+  const malformed = (field: string, expected: string): never => {
+    throw new ArchiveCleanupError(
+      'registry-unreadable',
+      `archiveCleanup: ${who}: header.${field} must be ${expected} — refusing the read (pinned-vendor header drift would silently empty the cleanup cascade)`,
+    )
+  }
+  if (typeof h.id !== 'string') malformed('id', 'a string')
+  if (h.cwd !== undefined && typeof h.cwd !== 'string') malformed('cwd', 'a string when present')
+  if (h.parentSession !== undefined && typeof h.parentSession !== 'string') {
+    malformed('parentSession', 'a string when present')
+  }
+  if (h.origin !== undefined && h.origin !== 'subagent') malformed('origin', "exactly 'subagent' when present")
+}
+
 /* ------------------------------------------------------------------ */
 /* Binding implementation (design 24 §10/§14: branch b, verified).     */
 /* ------------------------------------------------------------------ */
 
 export function headerToState(header: SessionHeaderLike): ArchivedSessionState {
+  // F3: standalone-entry shape guard — a drifted header must throw here too
+  // (listHeaders validates the raw intake; this keeps headerToState itself a
+  // loud boundary for any direct consumer).
+  assertHeaderShape(header)
   return {
-    sessionId: String(header.id),
+    sessionId: header.id,
     ...(header.origin === 'subagent' ? { origin: 'subagent' as const } : {}),
     ...(typeof header.parentSession === 'string' && header.parentSession !== ''
       ? { parentSessionId: header.parentSession }
@@ -173,11 +206,20 @@ export function makeHostBinding(ctx: HostCtxServices): ArchiveCleanupHost {
     // tests (implementation-review Minor-2 intent note).
     if (query?.listSessions !== undefined) {
       const records = await query.listSessions()
-      if (Array.isArray(records)) return records.map(record => record.header)
+      if (Array.isArray(records)) {
+        // F3: raw official intake — every record header must pass the loud
+        // shape check BEFORE any cascade keys on it (a single drifted record
+        // refuses the whole enumeration, never a silent per-item skip).
+        for (const record of records) assertHeaderShape(record?.header)
+        return records.map(record => record.header)
+      }
     }
     if (persistence?.list !== undefined) {
       const headers = await persistence.list()
-      if (Array.isArray(headers)) return headers
+      if (Array.isArray(headers)) {
+        for (const header of headers) assertHeaderShape(header)
+        return headers
+      }
     }
     throw new ArchiveCleanupError(
       'registry-unreadable',
@@ -195,7 +237,9 @@ export function makeHostBinding(ctx: HostCtxServices): ArchiveCleanupHost {
       const headers = await listHeaders()
       const byId = new Map<string, ArchivedSessionState>()
       for (const header of headers) {
-        if (typeof header?.id !== 'string') continue
+        // F3: intake already validated every header loudly — no silent skip
+        // of a drifted record (a vendor field rename must never empty the
+        // lineage/deletion cascade one record at a time).
         byId.set(header.id, headerToState(header))
       }
       return [...byId.values()]
@@ -208,7 +252,10 @@ export function makeHostBinding(ctx: HostCtxServices): ArchiveCleanupHost {
     async deleteSessionContent(sessionId: string, cwd?: string) {
       try {
         // Live guard at deletion time (interface contract): never delete a
-        // session that is open/running — the core also pre-checks per member.
+        // session that is open/running. This is the caller's per-member live
+        // gate — the core keeps only the per-tree recheck (review F2), so a
+        // mid-tree running flip is refused HERE as an item `running` error
+        // that aborts the remaining members of that tree (review F1).
         if (liveSessionIds(ctx).has(sessionId)) {
           throw new ArchiveCleanupError('running', `archiveCleanup: ${sessionId} is running`)
         }
@@ -224,6 +271,10 @@ export function makeHostBinding(ctx: HostCtxServices): ArchiveCleanupHost {
           // Snapshot path (perf review): the official jsonl locate needs
           // only id + cwd (format.ts logPath) — no corpus re-enumeration.
           header = { id: sessionId, cwd }
+          // F3: this header is consumed by the OFFICIAL locate — shape-check
+          // it loudly too (guards a drifted sessionId/cwd instead of
+          // silently resolving nothing).
+          assertHeaderShape(header)
         } else {
           const headers = await listHeaders()
           header = headers.find(candidate => candidate.id === sessionId)

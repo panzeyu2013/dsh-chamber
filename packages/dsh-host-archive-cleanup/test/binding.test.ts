@@ -17,7 +17,7 @@ import {
   headerToState,
   type HostCtxServices,
 } from '../src/binding.ts'
-import { ArchiveCleanupError } from '../src/core.ts'
+import { ArchiveCleanupCore, ArchiveCleanupError } from '../src/core.ts'
 
 function header(id: string, extra: Partial<{ cwd: string; parentSession: string; origin: 'subagent' }> = {}) {
   return { id, ...extra }
@@ -173,6 +173,76 @@ test('binding: headerToState carries cwd + lineage into snapshot states', () => 
   assert.equal(sub.origin, 'subagent')
   assert.equal(sub.parentSessionId, 'top')
   assert.equal(sub.running, false)
+})
+
+// Malformed official header shapes (review F3): the binding keys its whole
+// cascade on these fields structurally — a vendor rename/retype must refuse
+// LOUDLY with registry-unreadable (naming the session and field), never
+// silently empty the lineage/deletion cascade.
+const MALFORMED_HEADERS: Array<{ name: string; header: unknown; field: string }> = [
+  { name: 'non-string id', header: { id: 42 }, field: 'header.id' },
+  { name: 'numeric cwd', header: { id: 'h1', cwd: 42 }, field: 'header.cwd' },
+  { name: 'origin other than subagent', header: { id: 'h1', origin: 'other' }, field: 'header.origin' },
+  { name: 'non-string parentSession', header: { id: 'h1', parentSession: 7 }, field: 'header.parentSession' },
+]
+
+function isRegistryUnreadableNaming(error: unknown, field: string): boolean {
+  return error instanceof ArchiveCleanupError && error.code === 'registry-unreadable' && error.message.includes(field)
+}
+
+test('binding F3: listSessionStates refuses every malformed header shape loudly with registry-unreadable', async () => {
+  for (const { name, header: badHeader, field } of MALFORMED_HEADERS) {
+    const host = makeHostBinding({
+      sessionQuery: { listSessions: async () => [{ header: badHeader }] },
+    } as never)
+    await assert.rejects(() => host.listSessionStates(), (error: unknown) => isRegistryUnreadableNaming(error, field), name)
+  }
+})
+
+test('binding F3: headerToState refuses every malformed header shape loudly with registry-unreadable', () => {
+  for (const { name, header: badHeader, field } of MALFORMED_HEADERS) {
+    assert.throws(() => headerToState(badHeader as never), (error: unknown) => isRegistryUnreadableNaming(error, field), name)
+  }
+})
+
+test('binding F3: absent optional header fields still pass and keep the cascade intact', async () => {
+  // No cwd/parentSession/origin — an older legitimate record must pass.
+  const bare = headerToState(header('plain'))
+  assert.deepEqual(bare, { sessionId: 'plain', running: false })
+  const host = makeHostBinding({
+    sessionQuery: {
+      listSessions: async () => [{ header: header('plain') }, { header: header('sub', { origin: 'subagent', parentSession: 'plain' }) }],
+    },
+  })
+  const states = await host.listSessionStates()
+  assert.equal(states.length, 2)
+  assert.equal(states.find(s => s.sessionId === 'sub')?.parentSessionId, 'plain')
+})
+
+test('binding F3: a malformed header refuses a full purge before ANY mutation', async () => {
+  const registry: RegistryFake = {
+    archived: ['h1'], workspaces: [{ id: 'w1' }], setStateCalls: [], chainCalls: 0,
+  }
+  const host = makeHostBinding(makeCtx({
+    sessionQuery: { listSessions: async () => [{ header: { id: 'h1', cwd: 42 } }] },
+  } as never, registry))
+  const core = new ArchiveCleanupCore(host)
+  await assert.rejects(() => core.purge(), (error: unknown) => isRegistryUnreadableNaming(error, 'header.cwd'))
+  assert.equal(registry.setStateCalls.length, 0, 'no archived-set write')
+  assert.equal(registry.chainCalls, 0, 'no registry mutation')
+})
+
+test('binding F3: the snapshot-path header is shape-checked before the official locate', async () => {
+  // sessionId/cwd arrive from the (validated) snapshot states in production;
+  // the guard must still refuse a drifted value loudly instead of silently
+  // resolving nothing — a non-string sessionId refuses before locate runs.
+  const host = makeHostBinding({
+    sessionPersistence: { locate: () => undefined },
+  } as never)
+  await assert.rejects(
+    () => host.deleteSessionContent(42 as never, '/work'),
+    (error: unknown) => isRegistryUnreadableNaming(error, 'header.id'),
+  )
 })
 
 test('RunGate: busy refusal is retryable; sequential runs pass (design 24 §3)', async () => {

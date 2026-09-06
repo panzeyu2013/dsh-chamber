@@ -24,7 +24,10 @@
  *    gone, is a no-op ("missing"), so repeated purges converge to empty.
  */
 
-/** Hard upper bound on sessions touched by one purge (defensive capacity). */
+/** Hard upper bound on ARCHIVED-SET MEMBERS accounted by one purge
+ *  (defensive capacity): the cap bounds the archived-set members counted for
+ *  one purge — content descendants of those members are not separately
+ *  counted against the cap (review F5). */
 export const MAX_PURGE_SESSIONS = 65_536
 /** Upper bound on per-item error records returned by one purge. */
 export const MAX_PURGE_ERROR_RECORDS = 1_000
@@ -63,7 +66,10 @@ export interface ArchiveCleanupHost {
    * `cwd` is the snapshot header cwd (when available) so the binding resolves
    * the official artifact without a per-delete corpus re-enumeration.
    * Implementations refuse a session that is live at deletion time with code
-   * `running` (the caller also pre-checks its in-memory live set per member).
+   * `running` — the caller's mid-window live gate: there is no per-member
+   * core pre-check (review F2), so a member that flips live AFTER the
+   * per-tree recheck is caught here and, as the first in-tree failure,
+   * aborts the remaining members of that tree (review F1, see purge).
    * @returns 'deleted' when content was removed, 'missing' when nothing was
    *   there (idempotent no-op — the caller still completes accounting).
    */
@@ -72,18 +78,28 @@ export interface ArchiveCleanupHost {
    *  (purge collects every completed root/orphan and commits at the end —
    *  design 24 perf: N per-tree atomic writes → 1). */
   removeArchivedSessionIds(ids: readonly string[]): Promise<void>
-  /** Emit the official session-removed event for one deleted session. */
+  /** Emit the official session-removed event for one deleted session.
+   *  Implementations MUST wrap their failures in `ArchiveCleanupError` (the
+   *  caller treats the first in-tree emit failure as a tree abort; a raw
+   *  non-ArchiveCleanupError throw would kill the whole purge without item
+   *  records — 2026-09 round-2 note). */
   emitSessionRemoved(sessionId: string): Promise<void>
   /** Emit the official archived-set-changed event after set mutations. */
   emitArchivedSessionsChanged(): Promise<void>
 }
 
 export interface PreviewResult {
-  /** Total archived top-level ids in the authoritative set. */
+  /** Total archived-set members in the authoritative registry-global set
+   *  (archived subagent-origin rows included — the set is not strictly
+   *  top-level ids). */
   readonly archived: number
-  /** Archived top-level sessions this run would delete. */
+  /** Archived-set members this run would delete as deletable tree roots
+   *  (one per tree; a root may itself be an archived subagent-origin row
+   *  that no deletable ancestor covers — counting unchanged). */
   readonly deletableSessions: number
-  /** Subagent-origin descendants this run would delete. */
+  /** Non-root members this run would delete — subagent-origin descendants
+   *  of the deletable trees (a subagent-origin row that IS a deletable tree
+   *  root counts in deletableSessions, not here). */
   readonly deletableSubagents: number
   /** Whole subtrees skipped because a member is running. */
   readonly skippedRunning: number
@@ -353,13 +369,21 @@ export class ArchiveCleanupCore {
    * member removed last — ONE batched set removal at the end).
    *
    * Performance contract (design 24 perf review): the authoritative snapshot
-   * (archived set + session states + lineage) is read ONCE; per tree only the
-   * cheap in-memory live set is re-read (the real running guard). Per-member
-   * deletion uses the snapshot's cwd so the binding never re-enumerates the
-   * corpus. Completed roots (and any archived descendants their completed
-   * trees covered) plus orphans are removed from the archived set in a
-   * single official write after the whole run. Per-session failures land
-   * in `errors` (truncated at MAX_PURGE_ERROR_RECORDS with `truncated`).
+   * (archived set + session states + lineage) is read ONCE; per deletable
+   * tree only the cheap in-memory live set is re-read and checked at the
+   * TREE level (the real running guard — no per-member pre-check, review F2:
+   * a mid-tree live flip surfaces through the binding's delete-time
+   * `running` refusal). Per-member deletion uses the snapshot's cwd so the
+   * binding never re-enumerates the corpus. Completed roots (and any
+   * archived descendants their completed trees covered) plus orphans are
+   * removed from the archived set in a single official write after the whole
+   * run. Per-session failures land in `errors` (truncated at
+   * MAX_PURGE_ERROR_RECORDS with `truncated`). The FIRST in-tree failure
+   * aborts the REMAINING members of that tree (review F1): ancestors and the
+   * root stay untouched and archived so a rerun re-enumerates and converges,
+   * while members deleted before the failure stay deleted (prefix deletions
+   * are not rolled back). Per-session isolation across INDEPENDENT trees is
+   * unchanged: the run continues with the next tree.
    */
   async purge(): Promise<PurgeResult> {
     const { archivedIds, statesBySession, childrenOf, liveAgentIds } = await this.readAuthoritativeState()
@@ -389,8 +413,11 @@ export class ArchiveCleanupCore {
     for (const tree of plan.trees) {
       // Cheap in-memory live refresh only (design 24 perf): the durable
       // snapshot stays fixed for the run — single-flight rules out in-process
-      // concurrency, deletion is idempotent, and every member is additionally
-      // pre-checked against this live set below.
+      // concurrency and deletion is idempotent. The refresh feeds the
+      // TREE-level running recheck ONLY (no per-member pre-check, review F2):
+      // a member that flips live after this recheck is refused by the
+      // binding's delete-time live guard, which then aborts this tree as the
+      // first in-tree failure (semantics below).
       let nowLive: ReadonlySet<string>
       try {
         nowLive = new Set(await this.host.listLiveAgentIds())
@@ -402,22 +429,33 @@ export class ArchiveCleanupCore {
         plan.skippedRunning += 1
         continue
       }
-      // Member-window note (merge-round Minor-4): the whole-subtree skip
-      // guarantee holds up to each member's deletion instant. A member that
-      // turns running BETWEEN the per-tree recheck and its own turn is
-      // refused by the O(1) pre-check below (or the binding's delete-time
-      // live guard) — members already deleted before that flip stay deleted
-      // (they were legitimately deletable when removed), the flipped member
-      // survives, and the root stays archived so a rerun re-enumerates and
-      // converges. No partial deletion of a subtree that was running.
-      let subtreeHadError = false
+      // Member-window note (merge-round Minor-4 + review follow-up F1/F2):
+      // the whole-subtree skip guarantee holds up to each member's deletion
+      // instant, and the binding's delete-time live guard is the ONLY
+      // mid-window gate (the dead per-member O(1) pre-check was removed —
+      // the tree-level recheck above already proved the subtree non-running
+      // against the same fresh set, so it could never fire; a genuine
+      // mid-tree live flip now surfaces as the binding's
+      // ArchiveCleanupError('running') and triggers the abort below).
+      //
+      // ABORT SEMANTICS: the FIRST in-tree failure (any ArchiveCleanupError
+      // from a member deletion — delete-time `running`/`storage` — or from
+      // emitSessionRemoved) stops processing the REMAINING members of this
+      // tree: ancestors and the root stay untouched and archived, so a later
+      // purge re-enumerates the intact remainder and converges (design 24
+      // §4 step-4/Minor-4). Members already deleted BEFORE the failure stay
+      // deleted — prefix deletions are not rolled back (they were
+      // legitimately deletable at their deletion instant). Never delete
+      // ancestors past a failed member: the root's session record lives
+      // inside its own content directory (vendor-verified:
+      // session-persistence-jsonl list() walks session dirs), so deleting
+      // the root over a surviving member would make the NEXT purge treat the
+      // root id as an orphan and clear it from the archived set WITHOUT
+      // re-enumerating the survivor — a permanent silent content leak. The
+      // outer loop continues with the NEXT independent tree (per-session
+      // isolation across trees unchanged).
+      let treeAborted = false
       for (const sessionId of tree.order) {
-        // O(1) member-level running pre-check against the live set.
-        if (nowLive.has(sessionId)) {
-          subtreeHadError = true
-          recordError(sessionId, 'running', `会话在删除前转为运行，已跳过（归档根保持，可稍后重试）`)
-          continue
-        }
         const state = statesBySession.get(sessionId)
         try {
           // Every member except the root is a subagent-origin descendant.
@@ -431,21 +469,33 @@ export class ArchiveCleanupCore {
             await this.host.emitSessionRemoved(sessionId)
           } catch (error) {
             if (!(error instanceof ArchiveCleanupError)) throw error
-            subtreeHadError = true
+            // First in-tree failure — abort the remaining members of this
+            // tree (the deleted member itself stays deleted). Note: when the
+            // deletion above already succeeded, the member was counted
+            // `deleted` AND is listed as an error for the same sessionId
+            // (double presentation) — accepted: the deletion is durable and
+            // a rerun converges via 'missing', while the error honestly tells
+            // the client the projection side (event) failed. The binding is a
+            // documented no-op today, so this branch is future-proofing.
+            treeAborted = true
             recordError(sessionId, error.code, error.message)
+            break
           }
         } catch (error) {
           if (!(error instanceof ArchiveCleanupError)) throw error
-          // The item stays in the archived set (root) or remains orphaned
-          // under an archived root (descendant) — a later purge re-runs it.
-          subtreeHadError = true
+          // First in-tree failure — abort the remaining members of this
+          // tree: the refused member survives under an archived root (or IS
+          // the root, which stays archived) and a later purge re-runs it.
+          treeAborted = true
           recordError(sessionId, error.code, error.message)
+          break
         }
       }
-      if (subtreeHadError) {
-        // Crash/partial-failure consistency (design 24 §4 step 4): the root
-        // id stays archived until the WHOLE subtree is provably gone, so a
-        // re-run can re-enumerate and converge.
+      if (treeAborted) {
+        // Crash/partial-failure consistency (design 24 §4 step 4 + F1): the
+        // root id stays archived until the WHOLE subtree is provably gone;
+        // the abort guarantees nothing past the failed member was touched,
+        // so a rerun re-enumerates the remainder and converges.
         continue
       }
       completedRoots.push(tree.rootSessionId)
@@ -472,7 +522,11 @@ export class ArchiveCleanupCore {
       } catch (error) {
         if (!(error instanceof ArchiveCleanupError)) throw error
         // Every listed id stays archived; the next purge re-runs them
-        // (content already gone → orphan convergence).
+        // (content already gone → orphan convergence). Run-level note
+        // (review F4): this archive-set record SHARES the item cap — a full
+        // MAX_PURGE_ERROR_RECORDS-length list keeps `truncated: true`, which
+        // is the honest surface: the set members stay archived, so a rerun
+        // still converges despite the truncation flag.
         recordError('', 'archive-set', error.message)
       }
       try {
@@ -481,6 +535,7 @@ export class ArchiveCleanupCore {
         if (!(error instanceof ArchiveCleanupError)) throw error
         // The changed event is a projection signal only — a failure must not
         // roll back completed deletions; it is recorded per design 24 §11.
+        // Same shared-cap semantics as the removal record above (F4).
         recordError('', 'archive-set', error.message)
       }
     }
