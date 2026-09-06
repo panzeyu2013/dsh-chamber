@@ -23,15 +23,12 @@
  * returns to its restricted state — nothing else breaks.
  */
 
+import { MAX_HTML_INJECTION_BYTES } from '@dsh-chamber/control-plane'
+
 /** The injected declaration: marks the page host-owned for the official dsh
  * frontend (ownsHost:true → isLoopback → 'host' persistence). Pure ASCII —
  * the proxy's content-length rewrite is an exact byte delta of this script. */
 export const TRUST_DECLARATION_SCRIPT = '<script>window.__DSH_TRANSPORT__={ownsHost:true}</script>'
-
-/** Documents larger than this are never rewritten (proxy-forward.ts
- * MAX_HTML_INJECTION_BYTES must stay equal — control-plane cannot import the
- * gateway package). */
-export const HTML_INJECT_MAX_BYTES = 64 * 1024
 
 export interface HtmlInjectResult {
   /** The document to serve: the injected document when `injected`, the
@@ -46,7 +43,7 @@ export interface HtmlInjectResult {
  * case-insensitively). Fail-soft by design — every non-injectable input
  * returns the input untouched and never throws:
  *
- *  a. documents over HTML_INJECT_MAX_BYTES are skipped (the proxy streams
+ *  a. documents over MAX_HTML_INJECTION_BYTES are skipped (the proxy streams
  *     them instead of buffering);
  *  b. documents that already carry `__DSH_TRANSPORT__` are skipped
  *     (idempotent — a re-injected page must not double-declare);
@@ -54,7 +51,7 @@ export interface HtmlInjectResult {
  *  d. otherwise the declaration is inserted right before `</head>`.
  */
 export function injectTrustDeclaration(html: string): HtmlInjectResult {
-  if (html.length > HTML_INJECT_MAX_BYTES) return { html, injected: false }
+  if (html.length > MAX_HTML_INJECTION_BYTES) return { html, injected: false }
   if (html.includes('__DSH_TRANSPORT__')) return { html, injected: false }
   const headClose = /<\/head>/i.exec(html)
   if (headClose === null) return { html, injected: false }

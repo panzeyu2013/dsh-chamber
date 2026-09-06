@@ -13,6 +13,7 @@
  */
 
 import {
+  extractSpecName,
   isDeniedPluginName,
   MAX_PLUGIN_SPEC_CHARS,
   PLUGIN_NAME_PATTERN,
@@ -55,11 +56,9 @@ export function parseSpecArg(spec: string): { name: string } | null {
 
 /** Package name a registry spec refers to: everything before the LAST `@`
  *  (the whitelist has already guaranteed the shape). Bare `@scope/name` has
- *  its `@` at index 0 and is returned whole. */
-export function pluginSpecName(spec: string): string {
-  const at = spec.lastIndexOf('@')
-  return at > 0 ? spec.slice(0, at) : spec
-}
+ *  its `@` at index 0 and is returned whole. Single-sourced: control-plane
+ *  plugin-spec.ts's extractSpecName through the control-plane-module facade. */
+export const pluginSpecName = extractSpecName
 
 /**
  * Validate the renderer-supplied apply payload (design 21 §6.5): add/remove

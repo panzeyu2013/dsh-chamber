@@ -338,6 +338,11 @@ export async function runRuntimeActivationProbes(opts: RuntimeProbeOptions): Pro
         if (identityMethodNotFound(error)) {
           try {
             const legacy = await call('session/list', { args: { _request: {} } })
+            // IDENTITY-LEG DIVERGENCE (stage2 ruling, 2026): the cp twin
+            // (dsh-client.ts probeHostIdentity) only requires an object; this
+            // core leg demands Array.isArray(items) — align only via a probe-
+            // seam shape injection (dsh-runtime cannot import cp); do not
+            // relax this check without a ruling.
             // Restore the pre-migration session/list row's shape check (the
             // old activation row failed a value without the {items} session
             // list as 'malformed session list'): an ok:true legacy envelope

@@ -65,7 +65,7 @@
 
 import type { SpawnOptions } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
-import { chmodSync, closeSync, constants as fsConstants, existsSync, fchmodSync, fsyncSync, lstatSync, mkdtempSync, openSync, readdirSync, renameSync, rmSync, writeSync } from 'node:fs'
+import { chmodSync, closeSync, constants as fsConstants, fchmodSync, fsyncSync, lstatSync, mkdtempSync, openSync, readdirSync, rmSync, writeSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 // The dsh RPC wire envelope is single-sourced in control-plane
@@ -103,6 +103,11 @@ import { CHILD_LINE_MAX_CHARS, createBoundedLineProcessor } from './bounded-line
 import { getGatewayPassword, getGatewaySessionHooks, getGatewayToken, verifyGatewayPasswordSession, verifyGatewayRuntimeIdentity } from './gateway-provider.ts'
 import { INSTANCE_ID_PATTERN, MAX_INSTANCE_LABEL_CHARS, signalChild } from './transport-provider.ts'
 import { isCredentialBinding, sshCredentialBinding, sshCredentialBindingForEndpoint } from './credential-binding.ts'
+// Shared corrupt/unbound preserve + legacy-`.tmp` sweep mechanics for the
+// owner-only store files (single source, formerly duplicated in the
+// providers/ssh-plugin-journal/chamber-settings).
+import { isPlainRecord, preserveInvalidCredentialFile, preserveUnboundCredentialFile, removeLegacyTmpResidue } from './store-file-hygiene.ts'
+import type { UnboundCredentialFileWording } from './store-file-hygiene.ts'
 import type {
   SpawnedProcess,
   TransportExecAction,
@@ -737,30 +742,16 @@ interface AskpassGeneration {
  */
 const askpassHelpers = new Map<string, Set<AskpassGeneration>>()
 
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
-}
-
-function preserveInvalidPasswordFile(file: string): string {
-  const corruptPath = `${file}.corrupt`
-  try {
-    renameSync(file, corruptPath)
-    return `invalid password file preserved at ${corruptPath}`
-  } catch (error) {
-    return `invalid password file at ${file}; preserve failed: ${String(error)}`
-  }
-}
-
-function preserveUnboundPasswordFile(file: string): string {
-  const stem = `${file}.unbound-${Date.now()}-${process.pid}`
-  let unboundPath = stem
-  for (let index = 1; existsSync(unboundPath); index += 1) unboundPath = `${stem}-${index}`
-  try {
-    renameSync(file, unboundPath)
-    return `legacy SSH password file has no endpoint bindings and was preserved at ${unboundPath}; re-enter passwords to use them`
-  } catch (error) {
-    return `legacy SSH password file at ${file} has no endpoint bindings and is disabled; preserve failed: ${String(error)}`
-  }
+/** This store's unbound-preserve wording — the shared mechanics and message
+ *  shapes live in store-file-hygiene.ts; only these sentences are
+ *  store-specific. */
+const UNBOUND_PASSWORD_FILE_WORDING: UnboundCredentialFileWording = {
+  subject: 'legacy SSH password file',
+  hasVerb: 'has',
+  disabledAuxiliary: 'is',
+  preservedAuxiliary: 'was',
+  bindingsNoun: 'endpoint bindings',
+  reentryNoun: 'passwords',
 }
 
 function isLegacyOwnedPasswordEntry(id: string, value: unknown): value is {
@@ -800,14 +791,9 @@ export function configureSshPasswordStore(
   passwords.clear()
   passwordBindings.clear()
   if (file === null) return null
-  // One-time crash-residue sweep (2a follow-up): the pre-2a persist wrote a
-  // FIXED `${file}.tmp` (open 'w' + rename), and a hard crash between the two
-  // left that exact-name 0600 residue. The atomic replace since 2a uses a
-  // random O_EXCL temp and never reuses or removes that legacy name — sweep
-  // it once at configure. Best-effort only: `force` already swallows ENOENT,
-  // and any other failure (permissions…) must not break store configuration,
-  // so the remainder is swallowed too.
-  try { rmSync(`${file}.tmp`, { force: true }) } catch { /* best-effort hygiene only */ }
+  // One-time crash-residue sweep (2a follow-up): the pre-2a persist's FIXED
+  // `${file}.tmp` residue (see removeLegacyTmpResidue), swept once at configure.
+  removeLegacyTmpResidue(file)
   let text: string
   try {
     text = readOwnerOnlySecretFile(file)
@@ -821,17 +807,17 @@ export function configureSshPasswordStore(
   try {
     parsed = JSON.parse(text)
   } catch {
-    return preserveInvalidPasswordFile(file)
+    return preserveInvalidCredentialFile(file, 'password file')
   }
   if (!isPlainRecord(parsed) || !isPlainRecord(parsed.passwords)) {
-    return preserveInvalidPasswordFile(file)
+    return preserveInvalidCredentialFile(file, 'password file')
   }
   const entries = Object.entries(parsed.passwords)
   if (parsed.schemaVersion === 1) {
     // A non-empty legacy file cannot be bound safely from the current
     // registry: it may be the new-target half of a pre-registry crash. Never
     // guess. Preserve it for manual recovery and require explicit re-entry.
-    if (entries.length > 0) return preserveUnboundPasswordFile(file)
+    if (entries.length > 0) return preserveUnboundCredentialFile(file, UNBOUND_PASSWORD_FILE_WORDING)
     persistSshPasswords(new Map(), new Map())
     return null
   }
@@ -854,19 +840,19 @@ export function configureSshPasswordStore(
     return null
   }
   if (parsed.schemaVersion !== 2 || !isPlainRecord(parsed.bindings)) {
-    return preserveInvalidPasswordFile(file)
+    return preserveInvalidCredentialFile(file, 'password file')
   }
   if (entries.some(([id, value]) => id === 'local'
     || !INSTANCE_ID_PATTERN.test(id)
     || typeof value !== 'string'
     || value === ''
     || value.length > MAX_SSH_PASSWORD_CHARS)) {
-    return preserveInvalidPasswordFile(file)
+    return preserveInvalidCredentialFile(file, 'password file')
   }
   const bindingEntries = Object.entries(parsed.bindings)
   if (bindingEntries.length !== entries.length
     || bindingEntries.some(([id, binding]) => !Object.hasOwn(parsed.passwords as Record<string, unknown>, id) || !isCredentialBinding(binding))) {
-    return preserveInvalidPasswordFile(file)
+    return preserveInvalidCredentialFile(file, 'password file')
   }
   for (const [id, value] of entries) passwords.set(id, value as string)
   for (const [id, binding] of bindingEntries) passwordBindings.set(id, binding as string)

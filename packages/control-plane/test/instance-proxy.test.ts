@@ -19,10 +19,10 @@ import {
   parseInstanceId,
   parseInstancePath,
   tcpKeepAliveMsForUpstream,
-  isLoopbackUpstreamBaseUrl,
   MAX_REQUEST_BODY_BYTES,
   getProcessBufferedRequestBytes,
 } from '../src/instance-proxy.ts'
+import { isLoopbackUpstreamBaseUrl } from '../src/loopback.ts'
 import { startWsHeartbeat } from '../src/ws-heartbeat.ts'
 import { clearAuthCookie, registerAuthCookie } from '../src/browser-auth-cookie.ts'
 import { DEFAULT_DSH_START_PORT } from '../src/spawn-dsh.ts'

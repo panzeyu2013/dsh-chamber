@@ -7,12 +7,18 @@
  * window.dshChamber.settings (query + push), keeps ONE subscription across all
  * shell instances, and exposes a stable snapshot for useSyncExternalStore.
  *
- * Same design notes as update-store.ts (design 11): getStatus() is PURE (no
- * side effects — useSyncExternalStore's getSnapshot runs during render);
- * the push wins over a stale query snapshot; the bridge exposes
- * asynchronously (≤~500ms) so hydration retries briefly and re-arms on the
- * next subscriber; the bridge subscription is a PERMANENT ipcRenderer
- * listener for the page's lifetime (assumes one module instance per page).
+ * The singleton + hydration + subscription skeleton (bridge latch, the
+ * 100ms×20 fast re-probe chain, push-wins query handling, module-load kick,
+ * subscriber re-arm, and the settings-only slow re-probe chain that keeps
+ * probing while subscribers wait) is the shared bridge-hydration.ts
+ * machinery — the same skeleton update-store.ts runs with its own
+ * surface/policies; see that module's file header for the shared design
+ * notes. getSettingsStatus() is PURE (no side effects —
+ * useSyncExternalStore's getSnapshot runs during render); the push wins over
+ * a stale query snapshot; the bridge exposes asynchronously (≤~500ms) so
+ * hydration retries briefly and re-arms on the next subscriber; the bridge
+ * subscription is a PERMANENT ipcRenderer listener for the page's lifetime
+ * (assumes one module instance per page).
  *
  * OPTIMISTIC SAVE (闪烁修复, 2026-12): applySettingsPatch overlays its patch
  * on the snapshot IMMEDIATELY (the control reflects the click in the same
@@ -25,19 +31,7 @@
  * successive toggles never flicker).
  */
 import type { ChamberSettings, ChamberSettingsStatus, SettingsSurface } from '../ambient/settings-bridge.d.ts'
-
-let current: ChamberSettingsStatus | null = null
-const listeners = new Set<() => void>()
-/** True once the bridge onChanged/state subscription is attached (module-wide, once). */
-let bridgeSubscribed = false
-/** Unsubscribe handle of the attached onChanged listener, or null. */
-let bridgeUnsubscribe: (() => void) | null = null
-/** The active hydration retry timer, or null when no chain is running. */
-let retryTimer: ReturnType<typeof setTimeout> | null = null
-/** Backoff for bridge re-probing: fast 100ms while the bridge is expected
- * imminently, capped at 2s so a late bridge or a one-shot query failure can
- * never strand the section permanently disabled. */
-let retryDelayMs = 100
+import { createBridgeHydration } from './bridge-hydration.ts'
 
 // ---- optimistic save overlay ----
 /** In-flight patches, merged IN ORDER over the authoritative snapshot. A
@@ -70,8 +64,12 @@ function mergeSettings(base: ChamberSettings, patch: Partial<ChamberSettings>): 
   }
 }
 
-/** Rebuild the cached optimistic snapshot (no-op when no overlay is active). */
+/** Rebuild the cached optimistic snapshot (no-op when no overlay is active).
+ *  The authoritative `current` lives in the hydration singleton — the
+ *  skeleton assigns it before invoking this through its onPush/onQuery
+ *  acceptance hooks, so the fresh snapshot is always visible here. */
 function recomputeOptimistic(): void {
+  const current = hydration.snapshot()
   if (optimisticPatches.length === 0 || current === null) {
     optimisticStatus = null
     return
@@ -85,106 +83,39 @@ function recomputeOptimistic(): void {
 function dropOptimistic(seq: number): void {
   optimisticPatches = optimisticPatches.filter(entry => entry.seq !== seq)
   recomputeOptimistic()
-  notify()
+  hydration.notify()
 }
 
-function notify(): void {
-  for (const listener of listeners) listener()
-}
-
-function bridgeSettings(): SettingsSurface | null {
-  return typeof window !== 'undefined' ? window.dshChamber?.settings ?? null : null
-}
-
-/** Re-arm the bridge probe chain (once at a time): the bridge absent, or a
- * one-shot get() failure, both recover by re-attaching. While no subscriber
- * is present the slow chain stays quiet. */
-function retryLater(): void {
-  if (retryTimer !== null) return
-  retryTimer = setTimeout(() => {
-    retryTimer = null
-    const api = bridgeSettings()
-    if (api === null) {
-      if (current === null && listeners.size > 0) retryLater()
-      return
-    }
-    retryDelayMs = 100
-    attachBridge(api)
-  }, retryDelayMs)
-  retryDelayMs = Math.min(retryDelayMs * 2, 2_000)
-}
-
-function attachBridge(api: SettingsSurface): void {
-  if (bridgeSubscribed) return
-  bridgeSubscribed = true
-  bridgeUnsubscribe = api.onChanged((status) => {
-    current = status
-    // The authoritative value may arrive while an optimistic overlay is
-    // still in flight (the main process pushes BEFORE the invoke reply) —
-    // rebuild the merged snapshot so the overlay stays visible.
-    recomputeOptimistic()
-    notify()
-  })
-  void api.get()
-    .then((status) => {
-      // Push wins over a stale query snapshot: only apply the query result
-      // when no push has landed yet.
-      if (current === null) {
-        current = status
-        recomputeOptimistic()
-        notify()
-      }
-    })
-    .catch(() => {
-      // A one-shot query failure must not leave the store unhydrated forever
-      // (GeneralView/DshRuntimeSection would stay permanently disabled with
-      // no error): release the latch, drop the listener, and re-arm the
-      // retry chain.
-      bridgeUnsubscribe?.()
-      bridgeUnsubscribe = null
-      bridgeSubscribed = false
-      retryLater()
-    })
-}
-
-function hydrate(): void {
-  if (bridgeSubscribed || retryTimer !== null) return
-  const tryAttach = (attempt: number): void => {
-    const api = bridgeSettings()
-    if (api === null) {
-      if (attempt < 20) {
-        retryTimer = setTimeout(() => tryAttach(attempt + 1), 100)
-      } else {
-        retryTimer = null
-        // The fast chain is exhausted: keep probing slowly so a late bridge
-        // (or a bridge that appeared between the fast attempts) still
-        // hydrates while subscribers are waiting.
-        if (listeners.size > 0) retryLater()
-      }
-      return
-    }
-    retryTimer = null
-    attachBridge(api)
-  }
-  tryAttach(0)
-}
+const hydration = createBridgeHydration<ChamberSettingsStatus, SettingsSurface>({
+  surface: () => (typeof window !== 'undefined' ? window.dshChamber?.settings ?? null : null),
+  onChanged: (api, listener) => api.onChanged(listener),
+  query: (api) => api.get(),
+  // The authoritative value may arrive while an optimistic overlay is still
+  // in flight (the main process pushes BEFORE the invoke reply) — rebuild
+  // the merged snapshot so the overlay stays visible; runs on pushes AND on
+  // the pre-push query result (an in-flight patch overlays the fresh
+  // authoritative base), exactly like the twin file's two acceptance paths.
+  onPush: () => recomputeOptimistic(),
+  onQuery: () => recomputeOptimistic(),
+  // Slow re-probe chain (bridge absent or a one-shot get() failure): while
+  // subscribers wait, keep probing with a capped backoff instead of stranding
+  // the section permanently disabled.
+  slowReProbe: true,
+})
 
 // Start hydration as soon as the module loads (the bundle loads before the
 // preload bridge resolves; the retry chain covers the gap).
-hydrate()
+hydration.hydrate()
 
 /** Stable snapshot (null = bridge absent / not hydrated yet). PURE — no side effects. */
 export function getSettingsStatus(): ChamberSettingsStatus | null {
+  const current = hydration.snapshot()
   if (current === null) return null
   return optimisticPatches.length > 0 && optimisticStatus !== null ? optimisticStatus : current
 }
 
 export function subscribeSettings(listener: () => void): () => void {
-  listeners.add(listener)
-  if (current === null) hydrate()
-  return () => {
-    listeners.delete(listener)
-  }
+  return hydration.subscribe(listener)
 }
 
 /**
@@ -204,8 +135,8 @@ export async function applySettingsPatch(
   const seq = ++saveSeq
   optimisticPatches = [...optimisticPatches, { seq, patch }]
   recomputeOptimistic()
-  notify()
-  const api = bridgeSettings()
+  hydration.notify()
+  const api = hydration.surface()
   if (api === null) {
     dropOptimistic(seq)
     return { ok: false, error: 'settings bridge unavailable' }
@@ -224,11 +155,10 @@ export async function applySettingsPatch(
     optimisticPatches = []
     recomputeOptimistic()
     if ('error' in result) {
-      notify()
+      hydration.notify()
       return { ok: false, error: result.error, code: result.code }
     }
-    current = result
-    notify()
+    hydration.replace(result)
     return { ok: true, status: result }
   } catch (error) {
     dropOptimistic(seq)

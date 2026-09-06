@@ -17,6 +17,7 @@ import type {
   OverrideRecord,
   OverrideState,
 } from './dsh-runtime-store.ts'
+import { ROLLBACK_CONTINUATION_PHASES } from './rollback-facts.ts'
 import { effectivePending as readEffectivePending } from './override-lifecycle.ts'
 import type { ProbeResult } from './activation-gate.ts'
 
@@ -195,6 +196,17 @@ function safeClearJournal(deps: StartupDeps): void {
 
 function pointerVersion(state: CurrentPointerState): string | null {
   return state.kind === 'valid' ? state.version : null
+}
+
+/** Immutable pre-swap facts a non-intent journal contributes to an activation
+ *  (shared by the startup replay and the F7 delayed-rollback entries). */
+function activationFactsFromJournal(journal: ActivationJournal): StartupActivationFacts {
+  return {
+    sourceVersion: journal.sourceVersion,
+    sourceIsBuiltin: journal.sourceIsBuiltin === true,
+    sourceWasKnownGood: journal.sourceWasKnownGood === true,
+    knownGoodVersion: journal.knownGoodVersion,
+  }
 }
 
 function corruptMetadataReason(
@@ -384,10 +396,7 @@ export async function runStartupPhase(deps: StartupDeps, signal?: AbortSignal): 
 
   const overrideInvalidated = override !== null
     && (override.invalidatedAt != null || override.shellVersion !== deps.shellVersion)
-  const journalIsRollbackContinuation = journal?.phase === 'rollback-needed'
-    || journal?.phase === 'restoring'
-    || journal?.phase === 'restore-complete'
-    || journal?.phase === 'fallback-builtin'
+  const journalIsRollbackContinuation = journal !== null && ROLLBACK_CONTINUATION_PHASES.has(journal.phase)
   if (overrideInvalidated
     && journal?.intentKind === 'version-switch'
     && !journalIsRollbackContinuation) {
@@ -442,12 +451,7 @@ export async function runStartupPhase(deps: StartupDeps, signal?: AbortSignal): 
   }
 
   const facts: StartupActivationFacts = journal !== null && journal.phase !== 'intent'
-    ? {
-        sourceVersion: journal.sourceVersion,
-        sourceIsBuiltin: journal.sourceIsBuiltin === true,
-        sourceWasKnownGood: journal.sourceWasKnownGood === true,
-        knownGoodVersion: journal.knownGoodVersion,
-      }
+    ? activationFactsFromJournal(journal)
     : deps.activationFacts()
 
   const applyOutcome = await applyPendingVersion({
@@ -657,15 +661,13 @@ export async function runDelayedRollback(
   // concurrently queued selection remains attached through rollback.
   const journal = beginDelayedRollback(durableState.journal, deps.writeActivationJournal)
   const targetVersion = journal.targetVersion
+  const facts = activationFactsFromJournal(journal)
   const applyOutcome = await applyPendingVersion({
     pendingVersion: targetVersion,
     builtinVersion: deps.builtinVersion,
     targetIsBuiltin: journal.targetIsBuiltin,
     intentKind: journal.intentKind,
-    sourceVersion: journal.sourceVersion,
-    sourceIsBuiltin: journal.sourceIsBuiltin === true,
-    sourceWasKnownGood: journal.sourceWasKnownGood === true,
-    knownGoodVersion: journal.knownGoodVersion,
+    ...facts,
     journal,
     signal,
     deps: {

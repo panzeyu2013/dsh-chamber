@@ -46,6 +46,7 @@
  */
 
 import type { InstanceProxy } from './instance-proxy.ts'
+import { isLoopbackHostname } from './loopback.ts'
 import type { Logger } from './types.ts'
 
 /** Body read cap for POST payloads (10 MiB; the instance proxy has its own 300MiB cap). */
@@ -55,9 +56,6 @@ const BODY_IDLE_TIMEOUT_MS = 10_000
 const MAX_HEALTH_EVENT_STREAMS = 32
 /** Per-client frames retained while its SSE socket is backpressured. */
 const MAX_HEALTH_EVENT_PENDING_FRAMES = 32
-
-/** Hostnames treated as loopback for CORS (any port). */
-const LOOPBACK_HOSTNAMES = new Set(['127.0.0.1', 'localhost', '::1', '[::1]'])
 
 /**
  * The minimal request surface the HTTP layer reads. Structural on purpose:
@@ -201,7 +199,7 @@ function corsFor(req: ApiRequest, allowlist: string[]) {
   let requestOrigin: string
   try {
     const authority = new URL(`http://${host}`)
-    if (!LOOPBACK_HOSTNAMES.has(authority.hostname)) return { allowed: false }
+    if (!isLoopbackHostname(authority.hostname)) return { allowed: false }
     if (authority.username !== '' || authority.password !== '' || authority.pathname !== '/'
       || authority.search !== '' || authority.hash !== '' || authority.host !== host.toLowerCase()) return { allowed: false }
     requestOrigin = authority.origin

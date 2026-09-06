@@ -18,13 +18,19 @@
  * the shared kernel postUnary (`@dsh-chamber/dsh-client-ui-sidebar/shared`,
  * wire-common.ts) — the SAME source copy the renderer bundles; the
  * envelope/server-response classification ('bridge:' validation, ok-value
- * shaping) and the 503 instance_unavailable / wrapWireError copies below
- * stay local (the shared kernel deliberately performs no classification).
+ * shaping) stays local, while the C≡D wrapWireError fold + 503
+ * instance_unavailable classifier come from the shared wire-error module of
+ * the same face (a policy-free constructor + predicate — the shared kernel
+ * itself still performs no classification, and A/B/F keep their own
+ * actions/copies per the wire-common audit).
  * Self-contained on purpose (no dsh package types): the bridge package keeps
  * the loose-ambient typecheck pattern of the connections package.
  */
 
-import { postUnary, type UnaryPostOutcome } from '@dsh-chamber/dsh-client-ui-sidebar/shared'
+import {
+  isRecord, postUnary, throwIfInstanceUnavailable, wrapWireError,
+  type UnaryPostOutcome,
+} from '@dsh-chamber/dsh-client-ui-sidebar/shared'
 
 export interface BridgeRpcFailure {
   code: string
@@ -36,12 +42,6 @@ export interface BridgeRpcFailure {
 export type BridgeRpcResult<T = unknown> =
   | { ok: true; value: T }
   | { ok: false; error: BridgeRpcFailure }
-
-/** One transport failure, folded with an honest prefix (proxy honesty, design 03 §3.3). */
-function wrapWireError(error: unknown): Error {
-  const message = error instanceof Error ? error.message : String(error)
-  return new Error(`实例不可达：${message}`)
-}
 
 export class BridgeApiClient {
   private readonly basePath: string
@@ -58,8 +58,9 @@ export class BridgeApiClient {
     // leave the settings page loading forever — fail loud instead. The
     // pre-migration bare crypto.randomUUID() rpcId stays explicit so its
     // evaluation remains inside this try (a no-randomUUID environment folds
-    // the throw into the local wire error below, exactly as before).
-    // Transport rejections propagate raw and are folded locally.
+    // the throw into the shared wrapWireError below, exactly as before).
+    // Transport rejections propagate raw and are folded via the shared
+    // wire-error module (the C≡D copy).
     let outcome: UnaryPostOutcome
     try {
       outcome = await postUnary(this.basePath, method, args, {
@@ -68,12 +69,9 @@ export class BridgeApiClient {
     } catch (error) {
       throw wrapWireError(error)
     }
-    if (outcome.status === 503) {
-      const body = outcome.body as { code?: string; error?: string } | null
-      if (body?.code === 'instance_unavailable') {
-        throw new Error(`实例未就绪：${body.error ?? '实例尚未就绪'}`)
-      }
-    }
+    // 503 instance_unavailable (not-ready instance — proxy honesty, design 03
+    // §3.3): the shared C≡D classifier throws the byte-identical error.
+    throwIfInstanceUnavailable(outcome)
     if (!outcome.ok) {
       throw wrapWireError(new Error(`HTTP ${outcome.status}`))
     }
@@ -192,10 +190,6 @@ function parseRemoteResult(value: unknown): BridgeRpcResult {
       ...(isRecord(error.details) ? { details: error.details } : {}),
     },
   }
-}
-
-function isRecord(value: unknown): value is Record<PropertyKey, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 const clients = new Map<string, BridgeApiClient>()

@@ -5,9 +5,15 @@
  * snapshot.
  */
 import { basename } from 'node:path'
-import { decideVerdict, rollbackTarget } from './activation-gate.ts'
+import { decideVerdict } from './activation-gate.ts'
 import type { ProbeResult } from './activation-gate.ts'
-import type { ActivationIntentKind, ActivationJournal, ActivationJournalState, CurrentPointerState } from './dsh-runtime-store.ts'
+import type {
+  ActivationIntentKind,
+  ActivationJournal,
+  ActivationJournalState,
+  CurrentPointerState,
+} from './dsh-runtime-store.ts'
+import { ROLLBACK_CONTINUATION_PHASES, delayedRollbackTarget } from './rollback-facts.ts'
 import { sanitizeErrorText } from './sanitize-error.ts'
 
 export interface ManualRollbackPreparation {
@@ -190,12 +196,7 @@ export function beginDelayedRollback(
   now = new Date(),
 ): ActivationJournal {
   if (journal.phase !== 'applied-monitoring') throw new Error('F7 rollback requires applied-monitoring journal')
-  const target = rollbackTarget({
-    previousVersion: journal.sourceIsBuiltin ? null : journal.sourceVersion,
-    previousWasKnownGood: journal.sourceWasKnownGood === true
-      || journal.sourceVersion === journal.knownGoodVersion,
-    knownGoodVersion: journal.knownGoodVersion,
-  })
+  const target = delayedRollbackTarget(journal)
   const next: ActivationJournal = {
     ...journal,
     phase: 'rollback-needed',
@@ -542,10 +543,7 @@ async function runApplyTransaction(opts: ApplyOptions): Promise<ApplyOutcome> {
     })
   }
 
-  if (journal.phase === 'rollback-needed'
-    || journal.phase === 'restoring'
-    || journal.phase === 'restore-complete'
-    || journal.phase === 'fallback-builtin') {
+  if (ROLLBACK_CONTINUATION_PHASES.has(journal.phase)) {
     return continueRollback(opts, journal)
   }
 
@@ -663,12 +661,7 @@ async function runApplyTransaction(opts: ApplyOptions): Promise<ApplyOutcome> {
     return makeOutcome({ status: 'applied', snapshotPath: preSwapPath, swapAttempted: true })
   }
 
-  const target = rollbackTarget({
-    previousVersion: journal.sourceIsBuiltin ? null : journal.sourceVersion,
-    previousWasKnownGood: journal.sourceWasKnownGood === true
-      || journal.sourceVersion === journal.knownGoodVersion,
-    knownGoodVersion: journal.knownGoodVersion,
-  })
+  const target = delayedRollbackTarget(journal)
   try {
     journal = advance(journal, 'rollback-needed', deps, { rollbackTarget: target })
   } catch (error) {

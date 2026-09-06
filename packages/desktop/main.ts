@@ -78,12 +78,10 @@ import type { OpenInLaunchContext, OpenInRequest } from './open-in.ts';
 import { createUpdateController, openReleasePage } from './updater.ts';
 import { DEFAULT_RUNTIME_LOGICAL_DISK_LIMIT_BYTES, DshRuntimeController } from './dsh-runtime-controller.ts';
 import type { RuntimeMetadataComponent, RuntimeMetadataHealthProjection } from './dsh-runtime-controller.ts';
-import { fetchRegistryMetadata } from '@dsh-chamber/dsh-runtime';
-import { isAllowedRegistryUrl } from '@dsh-chamber/dsh-runtime';
+import { disposeRuntimeInstaller, fetchRegistryMetadata, installRuntimeVersion, isAllowedRegistryUrl, pruneRuntimeStore } from '@dsh-chamber/dsh-runtime';
 import { sanitizeErrorText } from './sanitize-error.ts';
 import { evaluateApplyNowGate, type ApplyNowGateInput } from './apply-now-gate.ts';
 import { shouldSkipDiskRefresh } from './disk-evidence-gate.ts';
-import { disposeRuntimeInstaller, installRuntimeVersion, pruneRuntimeStore } from '@dsh-chamber/dsh-runtime';
 import {
   cleanupStaleInstalls,
   cleanupExplicitRuntimeVersion,
@@ -136,7 +134,7 @@ import {
   removeKnownGoodCandidate,
   resetCandidateHealthWindow,
 } from '@dsh-chamber/dsh-runtime';
-import { invalidate } from '@dsh-chamber/dsh-runtime';
+import { effectivePending, invalidate, shouldInvalidate } from '@dsh-chamber/dsh-runtime';
 import {
   FATAL_STARTUP_BLOCK_REASONS,
   runDelayedRollback,
@@ -396,10 +394,12 @@ function resolveActiveRuntime(baseDir: string): ActiveRuntimeResolution {
   }
   const override = overrideState.kind === 'valid' ? overrideState.record : null;
   const pointer = pointerState.kind === 'valid' ? pointerState.version : null;
+  // Override validity (invalidatedAt / shell-version mismatch) is decided by
+  // the shared dsh-runtime core predicate (shouldInvalidate — the same replay
+  // gate the runtime startup and the gateway shape consume).
   if (
     override !== null
-    && override.shellVersion === version
-    && override.invalidatedAt == null
+    && !shouldInvalidate(override, version)
   ) {
     if (pointer !== null) {
       const tree = validateVersionTree(baseDir, pointer);
@@ -2441,9 +2441,9 @@ if (!gotTheLock) {
         ? path.join(pkgDir, 'dist', 'host-archive-cleanup-package')
         : path.join(repoRoot, 'packages', 'dsh-host-archive-cleanup');
       return [
-        { name: '@dsh-chamber/dsh-host-client-graph', packageJsonPath: path.join(graphDir, 'package.json'), distIndexPath: path.join(graphDir, 'dist', 'index.js') },
-        { name: '@dsh-chamber/dsh-host-git-worktree', packageJsonPath: path.join(gitDir, 'package.json'), distIndexPath: path.join(gitDir, 'dist', 'index.js') },
-        { name: '@dsh-chamber/dsh-host-archive-cleanup', packageJsonPath: path.join(archiveCleanupDir, 'package.json'), distIndexPath: path.join(archiveCleanupDir, 'dist', 'index.js') },
+        { name: CLIENT_GRAPH_PACKAGE_NAME, packageJsonPath: path.join(graphDir, 'package.json'), distIndexPath: path.join(graphDir, 'dist', 'index.js') },
+        { name: GIT_WORKTREE_PACKAGE_NAME, packageJsonPath: path.join(gitDir, 'package.json'), distIndexPath: path.join(gitDir, 'dist', 'index.js') },
+        { name: ARCHIVE_CLEANUP_PACKAGE_NAME, packageJsonPath: path.join(archiveCleanupDir, 'package.json'), distIndexPath: path.join(archiveCleanupDir, 'dist', 'index.js') },
       ];
     };
     // Resolves the awaited sync outcome for the caller (the manual
@@ -4338,6 +4338,13 @@ if (!gotTheLock) {
     };
 
     const readActivationFacts = () => {
+      // ACTIVATION-FACTS DIVERGENCE (stage2 ruling, 2026): the gateway twin
+      // (runtime-manager.ts activationFacts) excludes the current POINTER
+      // from latestKnownGood and short-circuits win32 (knownGoodVersion
+      // null); this side excludes journalIntent.targetVersion ??
+      // override.pending and validates the tree. Unification needs one core
+      // helper + one exclusion rule (deferred: requires a new dsh-runtime
+      // public export, dist locked).
       const pointer = readCurrentPointerState(runtimeBaseDir);
       if (pointer.kind === 'corrupt') throw new Error('current pointer metadata 损坏');
       const overrideState = readOverrideState(runtimeBaseDir);
@@ -4830,8 +4837,13 @@ if (!gotTheLock) {
         const journalBefore = readActivationJournalState(runtimeBaseDir);
         const intentBefore = selectedJournalIntent(journalBefore);
         const overrideBefore = readOverrideState(runtimeBaseDir);
-        const pendingBefore = overrideBefore.kind === 'valid' && overrideBefore.record.invalidatedAt == null
-          ? overrideBefore.record.pending
+        // Pending replay projection before the startup transaction: use the
+        // shared core effectivePending so a pending whose override is
+        // invalidated OR written by an older shell version never resolves a
+        // target here (matches the core startup replay decision — previously
+        // only invalidatedAt was consulted here).
+        const pendingBefore = overrideBefore.kind === 'valid'
+          ? effectivePending(overrideBefore.record, version)
           : null;
         // Env is authoritative over dormant chamber selection metadata. The
         // startup module must first complete any restore and then return its
@@ -5145,6 +5157,14 @@ if (!gotTheLock) {
     // serialized with health restarts, and respects canStartLocal.
     ipcMain.handle(IPC_CHANNELS.RUNTIME_RESTART, trustedIpc(async () => {
       const state = runtimeInstance.getState();
+      // RESTART-GATE RULING (stage2, 2026): core allowedActions offers
+      // restart-dsh in idle/available/applied/rollback/failed/error only;
+      // this refusal = busy set (the five no-restart phases) + explicit
+      // snapshot-failed/runtimeBlocked + single-flight gates. NOT a pure
+      // allowedActions gate: failed/error allow restart-dsh there yet are
+      // refused here while runtimeBlocked — do not substitute one expression
+      // for the other before ruling. Gateway route gate checks only
+      // applying/installing for its REST restart surface.
       const busyPhase = state.phase === 'checking' || state.phase === 'downloading'
         || state.phase === 'installing' || state.phase === 'applying' || state.phase === 'pending';
       if (runtimeOperation !== null || runtimeWriterFence.busy || busyPhase
@@ -5485,11 +5505,8 @@ if (!gotTheLock) {
       // Same predicate as state.pending's projection (dsh-runtime-controller):
       // an invalidated or old-shell override's raw pending must not resolve a
       // durable target for apply-now.
-      const overridePending = overrideState.kind === 'valid'
-        && !envOverrideActive
-        && overrideState.record.shellVersion === version
-        && overrideState.record.invalidatedAt == null
-        ? overrideState.record.pending
+      const overridePending = overrideState.kind === 'valid' && !envOverrideActive
+        ? effectivePending(overrideState.record, version)
         : null;
       const target = state.pending ?? journalTarget ?? overridePending;
       const override = readOverride(runtimeBaseDir);

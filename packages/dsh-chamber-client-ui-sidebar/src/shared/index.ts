@@ -2,6 +2,7 @@
 
 export * from './instance-api.ts'
 export * from './wire-common.ts'
+export * from './wire-error.ts'
 export * from './control-plane-client.ts'
 export * from './aggregate-store.ts'
 export * from './plugin-graph-recheck.ts'

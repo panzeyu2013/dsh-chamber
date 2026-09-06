@@ -12,7 +12,6 @@
  *   process runner can close the physical-disk loop.
  */
 import {
-  chmodSync,
   existsSync,
   lstatSync,
   readFileSync,
@@ -22,10 +21,17 @@ import {
   statSync,
 } from 'node:fs'
 import { lstat as lstatP, readdir as readdirP } from 'node:fs/promises'
-import { basename, dirname, isAbsolute, join, relative } from 'node:path'
-import { createHash, randomBytes } from 'node:crypto'
+import { basename, dirname, join } from 'node:path'
+import { randomBytes } from 'node:crypto'
 import { EXACT_SEMVER, assertSafeVersion, isSafeVersion } from './version-safety.ts'
 import { sanitizeErrorText } from './sanitize-error.ts'
+import {
+  CRITICAL_FILE_DIGEST_PATTERN,
+  CRITICAL_RUNTIME_FILES,
+  openCriticalRuntimeFile,
+  sha256FileDigest,
+} from './runtime-critical-files.ts'
+import { makeOwnedTreeWritable } from './tree-writable.ts'
 import {
   atomicWriteRuntimeFileNoFollow,
   ensureRuntimeRootNoFollow,
@@ -157,17 +163,19 @@ export interface ExplicitRuntimeCleanupResult {
  * the immutable pre-swap facts and snapshot basename captured before the
  * current pointer is touched.
  */
-export type ActivationJournalPhase =
-  | 'intent'
-  | 'prepared'
-  | 'switched'
-  | 'manual-restoring'
-  | 'manual-restored'
-  | 'rollback-needed'
-  | 'restoring'
-  | 'restore-complete'
-  | 'fallback-builtin'
-  | 'applied-monitoring'
+const ACTIVATION_JOURNAL_PHASES = [
+  'intent',
+  'prepared',
+  'switched',
+  'manual-restoring',
+  'manual-restored',
+  'rollback-needed',
+  'restoring',
+  'restore-complete',
+  'fallback-builtin',
+  'applied-monitoring',
+] as const
+export type ActivationJournalPhase = (typeof ACTIVATION_JOURNAL_PHASES)[number]
 
 export type ActivationIntentKind = 'version-switch' | 'reset-builtin' | 'shell-invalidation'
 
@@ -497,16 +505,7 @@ export function activationJournalPath(baseDir: string): string {
 }
 
 function isActivationJournalPhase(value: unknown): value is ActivationJournalPhase {
-  return value === 'intent'
-    || value === 'prepared'
-    || value === 'switched'
-    || value === 'manual-restoring'
-    || value === 'manual-restored'
-    || value === 'rollback-needed'
-    || value === 'restoring'
-    || value === 'restore-complete'
-    || value === 'fallback-builtin'
-    || value === 'applied-monitoring'
+  return (ACTIVATION_JOURNAL_PHASES as readonly unknown[]).includes(value)
 }
 
 function isIsoTimestamp(value: unknown): value is string {
@@ -814,11 +813,6 @@ export function listVersionTrees(baseDir: string): string[] {
 
 export type VersionTreeValidation = { ok: true; path: string } | { ok: false; error: string }
 
-const CRITICAL_RUNTIME_FILES = [
-  'node_modules/@deepseek-ai/dsh/package.json',
-  'node_modules/@deepseek-ai/dsh/lib/bin.js',
-] as const
-
 function validateCriticalRuntimeFiles(
   treePath: string,
   version: string,
@@ -832,20 +826,15 @@ function validateCriticalRuntimeFiles(
   try { rootReal = realpathSync(treePath) } catch { return '版本树真实路径不可解析' }
   for (const relativePath of CRITICAL_RUNTIME_FILES) {
     const expected = (critical as Record<string, unknown>)[relativePath]
-    if (typeof expected !== 'string' || !/^sha256-[A-Za-z0-9+/]{43}=$/.test(expected)) {
+    if (typeof expected !== 'string' || !CRITICAL_FILE_DIGEST_PATTERN.test(expected)) {
       return `版本树关键文件摘要无效：${relativePath}`
     }
     const candidate = join(treePath, relativePath)
     try {
-      const info = lstatSync(candidate)
-      if (!info.isFile() || info.isSymbolicLink()) return `版本树关键文件不是实体文件：${relativePath}`
-      const candidateReal = realpathSync(candidate)
-      const fromRoot = relative(rootReal, candidateReal)
-      if (fromRoot === '' || fromRoot === '..' || fromRoot.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) || isAbsolute(fromRoot)) {
-        return `版本树关键文件逃逸目录：${relativePath}`
-      }
-      const actual = `sha256-${createHash('sha256').update(readFileSync(candidate)).digest('base64')}`
-      if (actual !== expected) return `版本树关键文件摘要不匹配：${relativePath}`
+      const opened = openCriticalRuntimeFile(rootReal, candidate)
+      if (opened.kind === 'not-regular-file') return `版本树关键文件不是实体文件：${relativePath}`
+      if (opened.kind === 'escapes-tree') return `版本树关键文件逃逸目录：${relativePath}`
+      if (sha256FileDigest(opened.path) !== expected) return `版本树关键文件摘要不匹配：${relativePath}`
     } catch {
       return `版本树关键文件缺失或不可读：${relativePath}`
     }
@@ -1353,22 +1342,6 @@ function versionTreeMtimeMs(baseDir: string, version: string): number {
 }
 
 /** Evict only unprotected automatic cache trees, oldest first. */
-function makeOwnedTreeWritable(treePath: string): void {
-  const visit = (entryPath: string): void => {
-    const info = lstatSync(entryPath)
-    if (info.isSymbolicLink()) return
-    if (info.isDirectory()) {
-      chmodSync(entryPath, info.mode | 0o700)
-      for (const entry of readdirSync(entryPath, { withFileTypes: true })) {
-        visit(join(entryPath, entry.name))
-      }
-      return
-    }
-    if (info.isFile()) chmodSync(entryPath, info.mode | 0o600)
-  }
-  visit(treePath)
-}
-
 export function evictVersions(baseDir: string, keep = 3): string[] {
   ensureRuntimeRootNoFollow(baseDir)
   if (!Number.isInteger(keep) || keep < 0) throw new Error('keep 必须是非负整数')

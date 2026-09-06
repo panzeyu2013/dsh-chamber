@@ -13,12 +13,13 @@
  * rollback transaction even though override.pending has already been cleared.
  */
 import { basename } from 'node:path'
-import { rollbackTarget, shouldAutoRollback } from './activation-gate.ts'
+import { shouldAutoRollback } from './activation-gate.ts'
 import type {
   ActivationJournal,
   ActivationJournalIntent,
   ActivationJournalState,
 } from './dsh-runtime-store.ts'
+import { ROLLBACK_CONTINUATION_PHASES, delayedRollbackTarget } from './rollback-facts.ts'
 import { isSafeVersion } from './version-safety.ts'
 
 export interface RestartExhaustedRollbackPlanOptions {
@@ -67,13 +68,6 @@ export type RestartExhaustedRollbackPlan =
       deferredIntent: ActivationJournalIntent | null
     }
 
-const RECOVERY_PHASES = new Set<ActivationJournal['phase']>([
-  'rollback-needed',
-  'restoring',
-  'restore-complete',
-  'fallback-builtin',
-])
-
 function isSafeStoredBasename(value: string | null): value is string {
   return value !== null
     && value.length > 0
@@ -98,12 +92,7 @@ function targetForDelayedRollback(journal: ActivationJournal, failedVersion: str
   // target, represented by clearing `current`, not by writing its semver.
   if (journal.sourceIsBuiltin === true) return null
 
-  const selected = rollbackTarget({
-    previousVersion: journal.sourceVersion,
-    previousWasKnownGood: journal.sourceWasKnownGood === true
-      || journal.sourceVersion === journal.knownGoodVersion,
-    knownGoodVersion: journal.knownGoodVersion,
-  })
+  const selected = delayedRollbackTarget(journal)
 
   // Corrupt/stale facts must never bounce back to the version which has just
   // exhausted restarts. Prefer a distinct known-good tree, otherwise builtin.
@@ -144,7 +133,7 @@ export function planRestartExhaustedRollback(
     return { status: 'not-triggered', reason: 'journal-target-mismatch' }
   }
 
-  if (RECOVERY_PHASES.has(journal.phase)) {
+  if (ROLLBACK_CONTINUATION_PHASES.has(journal.phase)) {
     return {
       status: 'already-in-recovery',
       journal,

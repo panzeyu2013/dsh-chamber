@@ -17,8 +17,11 @@
  *     spec/name whitelist family (plugin-spec.ts) to its own consumers;
  *   - plugin-sync.ts consumes the cordis insert primitives
  *     (renderCordisInserts / parseLoaderRows / hasExactInsert / fieldCount /
- *     insertConflict) for the remote cordis.patch.yml seed merge, and the
- *     plugin-spec whitelist constants for its add/remove re-validation.
+ *     insertConflict) for the remote cordis.patch.yml seed merge, the
+ *     plugin-spec whitelist constants for its add/remove re-validation, and
+ *     the host-package insert facts (HOST_GRAPH_INSERT / HOST_GIT_WORKTREE_INSERT
+ *     / HOST_ARCHIVE_CLEANUP_INSERT from host-graph-seed.ts) its
+ *     package-name/insert-id constants derive from.
  *
  * The packaged-runtime gate deliberately uses process metadata rather than
  * importing `electron`: this facade is also consumed by pure-node modules
@@ -101,11 +104,21 @@ export const hasExactInsert = controlPlaneModule.hasExactInsert
 export const fieldCount = controlPlaneModule.fieldCount
 export const insertConflict = controlPlaneModule.insertConflict
 
+// Chamber host-package insert facts (host-graph-seed.ts, design 09 module A /
+// design 13 §4.6 — re-exported by the control-plane package index) — consumed
+// by plugin-sync, whose desktop-facing package-name/insert-id constants
+// derive from these so the local seed, the remote seed writer and
+// control-plane's own seed can never drift.
+export const HOST_GRAPH_INSERT = controlPlaneModule.HOST_GRAPH_INSERT
+export const HOST_GIT_WORKTREE_INSERT = controlPlaneModule.HOST_GIT_WORKTREE_INSERT
+export const HOST_ARCHIVE_CLEANUP_INSERT = controlPlaneModule.HOST_ARCHIVE_CLEANUP_INSERT
+
 // Plugin spec/name whitelist family + reserved-name deny predicate
 // (plugin-spec.ts, design 21 §6.2/§6.7 — the shared source for the desktop
 // main (ssh-provider re-export / plugin-sync) and the gateway executor) —
 // consumed by ssh-provider.ts and plugin-sync.ts.
 export const isDeniedPluginName = controlPlaneModule.isDeniedPluginName
+export const extractSpecName = controlPlaneModule.extractSpecName
 export const MATERIALIZE_FILE_SPEC_PATTERN = controlPlaneModule.MATERIALIZE_FILE_SPEC_PATTERN
 export const MAX_PLUGIN_SPEC_CHARS = controlPlaneModule.MAX_PLUGIN_SPEC_CHARS
 export const PLUGIN_NAME_PATTERN = controlPlaneModule.PLUGIN_NAME_PATTERN

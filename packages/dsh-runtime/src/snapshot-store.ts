@@ -25,6 +25,7 @@ import { basename, dirname, join, resolve, sep } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { renameWithWindowsRetry } from './rename-retry.ts'
 import { runtimeSnapshotRetentionState } from './dsh-runtime-store.ts'
+import { RESTORE_MARKER_BASENAME } from './restore-marker.ts'
 import { assertSafeVersion, isSafeVersion } from './version-safety.ts'
 import {
   atomicWriteRuntimeFileNoFollow,
@@ -110,7 +111,7 @@ export function snapshotPaths(baseDir: string): SnapshotPaths {
   return {
     snapshotsDir: join(runtime, 'snapshots'),
     preRollbackDir: join(runtime, 'pre-rollback'),
-    restoreMarker: join(runtime, 'restore-in-progress'),
+    restoreMarker: join(runtime, RESTORE_MARKER_BASENAME),
   }
 }
 

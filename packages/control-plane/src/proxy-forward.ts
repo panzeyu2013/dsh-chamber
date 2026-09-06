@@ -51,8 +51,8 @@ export const MAX_RESPONSE_BODY_BYTES = 300 * 1024 * 1024
 
 /** HTML-document injection budget (S0): an upstream text/html response is
  * buffered for the owner's injector only when it is at most this large
- * (declared or actual). The gateway's html-inject.ts HTML_INJECT_MAX_BYTES
- * must stay equal — control-plane cannot import the gateway package. */
+ * (declared or actual). Single source of the 64 KiB budget: the gateway's
+ * html-inject.ts consumes this export directly (no twin constant). */
 export const MAX_HTML_INJECTION_BYTES = 64 * 1024
 
 /** Shared memory budget plus per-proxy concurrency defaults. The byte budget

@@ -28,6 +28,10 @@ const TARGET_KINDS = ['dsh', 'gateway'] as const
 type LegacyTransportKind = 'ssh'
 type KindedInstance = { id: string; kind: TransportKind | LegacyTransportKind }
 
+// Raw source-id grammar (dsh-<id>/gateway-<id>/ssh-<id>): the wire authority
+// is desktop transport-provider.ts INSTANCE_ID_PATTERN (single source of
+// truth per design 17 §2.1 — every provider validates through it);
+// open-in capabilities.ts INSTANCE_ID mirrors the same bytes. Do not drift.
 const RAW_INSTANCE_ID_PATTERN = /^(?!local$)[a-zA-Z0-9_-]{1,64}$/
 
 export function sourceIdForTransport(kind: TransportKind | LegacyTransportKind, rawId: string): string {

@@ -962,6 +962,12 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
   }
 
   function activationFacts(): { sourceVersion: string | null; sourceIsBuiltin: boolean; sourceWasKnownGood: boolean; knownGoodVersion: string | null } {
+    // ACTIVATION-FACTS DIVERGENCE (stage2 ruling, 2026): desktop twin
+    // (main.ts readActivationFacts) excludes journalIntent.targetVersion ??
+    // override.pending and validates the tree; this side excludes the POINTER
+    // and the win32 shortcut below returns knownGoodVersion null. Unification
+    // needs one core helper + one exclusion rule (deferred: new dsh-runtime
+    // public export, dist locked).
     if (platform === 'win32') {
       return {
         sourceVersion: builtinVersion,
