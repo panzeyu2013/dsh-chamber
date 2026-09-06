@@ -2,13 +2,15 @@
  * Archived-session content cleanup core (design 24 §4).
  *
  * TRUST BOUNDARY: callers arrive over the instance's host wire and are
- * untrusted JSON. They never supply a session id, a path, or a command: the
- * domain operates only on the authoritative archived set of THIS instance
- * (registry-global, todo 12 §1) and never touches non-archived content. The
- * orchestration below is pure and fixture-testable; every host capability it
- * needs arrives through the `ArchiveCleanupHost` seam, which the Remote
- * facade (`index.ts`) binds to §10-verified official primitives (see
- * `host-binding-pending` below and design 24 §10 — the bindings MUST be
+ * untrusted JSON. They never supply a path or a command, and their only
+ * session-id input is purge's OPTIONAL subset filter — which can never
+ * extend the deletion set: candidates are always the intersection with the
+ * authoritative archived set of THIS instance read at run start
+ * (registry-global, todo 12 §1). The domain never touches non-archived
+ * content. The orchestration below is pure and fixture-testable; every host
+ * capability it needs arrives through the `ArchiveCleanupHost` seam, which
+ * the Remote facade (`index.ts`) binds to §10-verified official primitives
+ * (see `host-binding-pending` below and design 24 §10 — the bindings MUST be
  * resolved against the pinned vendor before this domain is enabled; nothing
  * here guesses a storage layout).
  *
@@ -140,7 +142,10 @@ export type ArchiveCleanupDomainResult<T> =
  *  - `host-binding-pending`: the binding for a host capability is not yet
  *    wired (design 24 §10 vendor gate) — the domain is not enabled;
  *  - `purge-capacity`: the candidate set exceeded MAX_PURGE_SESSIONS —
- *    nothing was mutated.
+ *    nothing was mutated;
+ *  - `invalid-request`: a purge subset filter was malformed (non-string/
+ *    empty ids) or oversized (> MAX_PURGE_SESSIONS entries) — nothing was
+ *    mutated (2026-09 revision: purge gained an optional subset filter).
  *  Per-item failures are NOT thrown: they land in `PurgeResult.errors`
  *  (item codes: `missing`, `running`, `storage`). */
 export class ArchiveCleanupError extends Error {
@@ -308,13 +313,14 @@ export class ArchiveCleanupCore {
     }
   }
 
-  /** Resolve the run plan: archived roots not already covered by another
+  /** Resolve the run plan: candidate roots not already covered by another
    *  deletable root's subtree, each mapped to its deletable tree (or skipped
-   *  when running). A root that is itself a subagent descendant of an
-   *  earlier deletable root is covered by that root's tree and skipped here
-   *  (no double deletion). */
+   *  when running). Candidates are the full archived set (purge without a
+   *  filter) or the requested subset ∩ archived set (filtered purge); a root
+   *  that is itself a subagent descendant of an earlier deletable root is
+   *  covered by that root's tree and skipped here (no double deletion). */
   private resolvePlan(
-    archivedIds: readonly string[],
+    candidateIds: readonly string[],
     statesBySession: ReadonlyMap<string, ArchivedSessionState>,
     childrenOf: ReadonlyMap<string, readonly string[]>,
     liveAgentIds: ReadonlySet<string>,
@@ -323,7 +329,7 @@ export class ArchiveCleanupCore {
     let skippedRunning = 0
     const orphanRoots: string[] = []
     const covered = new Set<string>()
-    for (const id of archivedIds) {
+    for (const id of candidateIds) {
       // Covered check FIRST (design 24 perf): an ancestor tree that is
       // deletable implies every member is non-running, so a covered archived
       // descendant needs no BFS — O(A) instead of O(A²) for nested chains.
@@ -368,6 +374,24 @@ export class ArchiveCleanupCore {
    * Delete the content of every archived session (children-first, archived
    * member removed last — ONE batched set removal at the end).
    *
+   * Optional `sessionIds` subset filter (2026-09 revision, design 24 wire
+   * amendment): when provided, ONLY the listed archived-set members are
+   * candidate roots (each with its own deletable subtree). The filter can
+   * never extend the deletion set — candidates are ALWAYS the intersection
+   * with the authoritative archived set read at run start — and a listed id
+   * that already left the set (concurrent purge in another shell) is simply
+   * no candidate: idempotent, never an error. `undefined` = the full set
+   * (unchanged semantics); a provided EMPTY array = delete nothing.
+   *
+   * BUCKET SEMANTICS NOTE (review round 2026-09): counts are per TREE ROOT,
+   * not per row origin — when the archived set itself contains a
+   * subagent-origin row and it is selected WITHOUT any deletable ancestor
+   * (reachable over the wire), it is its own tree root and counts in
+   * `deletedSessions`; when the same row is covered by a selected ancestor's
+   * completed tree it counts in `deletedSubagents`. The buckets can
+   * therefore flip with candidate order for one selection — the UI never
+   * selects hidden subagent rows, so presentation is unaffected.
+   *
    * Performance contract (design 24 perf review): the authoritative snapshot
    * (archived set + session states + lineage) is read ONCE; per deletable
    * tree only the cheap in-memory live set is re-read and checked at the
@@ -385,17 +409,51 @@ export class ArchiveCleanupCore {
    * are not rolled back). Per-session isolation across INDEPENDENT trees is
    * unchanged: the run continues with the next tree.
    */
-  async purge(): Promise<PurgeResult> {
+  async purge(sessionIds?: readonly string[]): Promise<PurgeResult> {
+    // Filter validation runs BEFORE the authoritative read (review round
+    // 2026-09): shape/length checks depend on nothing from the corpus, so a
+    // malformed/oversized request must not pay a full registry + corpus scan
+    // just to be refused. A provided EMPTY array is a deliberate
+    // delete-nothing subset — short-circuit without any read (never the
+    // full-set interpretation).
+    if (sessionIds !== undefined) {
+      if (!Array.isArray(sessionIds)
+        || sessionIds.some(id => typeof id !== 'string' || id === '')) {
+        throw new ArchiveCleanupError(
+          'invalid-request',
+          'archiveCleanup: purge subset filter must be an array of non-empty session id strings',
+        )
+      }
+      if (sessionIds.length > MAX_PURGE_SESSIONS) {
+        throw new ArchiveCleanupError(
+          'invalid-request',
+          `archiveCleanup: purge subset filter exceeds ${MAX_PURGE_SESSIONS} entries`,
+        )
+      }
+      if (sessionIds.length === 0) {
+        return { deletedSessions: 0, deletedSubagents: 0, skippedRunning: 0, errors: [] }
+      }
+    }
     const { archivedIds, statesBySession, childrenOf, liveAgentIds } = await this.readAuthoritativeState()
-    if (archivedIds.length > MAX_PURGE_SESSIONS) {
-      throw new ArchiveCleanupError('purge-capacity', `archived set exceeds the ${MAX_PURGE_SESSIONS}-session purge capacity`)
+    let candidates: readonly string[]
+    if (sessionIds === undefined) {
+      if (archivedIds.length > MAX_PURGE_SESSIONS) {
+        throw new ArchiveCleanupError('purge-capacity', `archived set exceeds the ${MAX_PURGE_SESSIONS}-session purge capacity`)
+      }
+      candidates = archivedIds
+    } else {
+      const selected = new Set(sessionIds)
+      // Intersection with the authoritative archived set, in set order:
+      // listed-but-gone ids are no candidates (concurrent purge / stale
+      // client list — idempotent skip, never an error).
+      candidates = archivedIds.filter(id => selected.has(id))
     }
     // Snapshot membership of the archived set (merge-round Nit N1): lets the
     // end-of-run batched removal also clear archived descendants covered by a
     // completed tree IN THE SAME RUN instead of lagging to a later orphan
     // pass. Only ids that were members at snapshot time are ever cleared.
     const archivedAtStart = new Set<string>(archivedIds)
-    const plan = this.resolvePlan(archivedIds, statesBySession, childrenOf, liveAgentIds)
+    const plan = this.resolvePlan(candidates, statesBySession, childrenOf, liveAgentIds)
     let deletedSessions = 0
     let deletedSubagents = 0
     let truncated = false
@@ -514,8 +572,13 @@ export class ArchiveCleanupCore {
     // gone; a crash before this point leaves a re-enumerable remainder).
     // Covered archived descendants of a completed tree ride the same write.
     // Orphan set members (no session record) carry no content — removing
-    // them is the whole operation and is safe at any point.
-    const clearIds = [...completedRoots, ...coveredArchivedMembers, ...plan.orphanRoots]
+    // them is the whole operation and is safe at any point. DEDUPE (review
+    // round 2026-09): when an archived subagent-origin row precedes its
+    // ancestor in archived-set order both may be tree roots, and the same id
+    // can land in completedRoots AND later in coveredArchivedMembers under
+    // the ancestor's completed tree — duplicates are harmless for the
+    // binding (its Set filter dedupes) but the wire record must stay clean.
+    const clearIds = [...new Set([...completedRoots, ...coveredArchivedMembers, ...plan.orphanRoots])]
     if (clearIds.length > 0) {
       try {
         await this.host.removeArchivedSessionIds(clearIds)

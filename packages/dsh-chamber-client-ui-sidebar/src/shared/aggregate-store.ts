@@ -11,6 +11,7 @@
  * shared UNGROUPED_WORKSPACE_ID as its id.
  */
 import type { InstanceSnapshot } from './instance-api.ts'
+import type { ArchivedSessionMetaRow } from './derive.ts'
 import { assertSingletonModule } from './singleton.ts'
 
 assertSingletonModule('aggregate-store')
@@ -63,6 +64,22 @@ export interface ChamberServerAggregate {
   aggregateError?: string
   /** Runtime facts from the source's own ctx (design 06 §4); attached, never polled. */
   runtime?: InstanceRuntimeReport
+  /**
+   * Archived-session metadata rows of this source (design 24 revision
+   * 2026-09 — the archive manager lists what is archived). Present when the
+   * per-instance aggregate snapshot has landed. `archiveSetKnown` says
+   * whether an EMPTY rows list is a true "nothing archived" fact:
+   * - known (true): the mounted workspace baseline projected the registry
+   *   archive set — [] means genuinely nothing archived;
+   * - absent/undefined: rows derive from a source whose snapshot has not
+   *   landed (aggregate not ok) or carries no archive-set metadata;
+   * - known (false): the unary-fallback view — its archive set is unknown
+   *   (documented KNOWN DEGRADATION) — [] must NEVER be read as "no archived
+   *   sessions"; the archive manager shows an honest degraded branch and
+   *   keeps whole-set purge available.
+   */
+  archivedSessions?: ArchivedSessionMetaRow[]
+  archiveSetKnown?: boolean
   /**
    * dsh version fact. The old in-ctx host-producer channel was removed
    * (upstream deleted the connection handshake's host.describe), so the

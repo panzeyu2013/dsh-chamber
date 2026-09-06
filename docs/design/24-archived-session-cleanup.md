@@ -12,6 +12,12 @@
 > 客户端载体 fail-loud/注释对齐/死代码移除，代码与测试已落地于工作树未提交
 > 态——处置登记见 §16）。
 >
+> **2026-09 修订轮（§17，用户驱动）**：M4 本地形态实跑完成——修复删除
+> 失效根因（binding 脱绑调用官方 locate → `this` 丢失，实机每项删除报
+> `reading 'root'`）；wire 修订 `purge(sessionIds?)` 子集过滤；交互升级为
+> 归档管理器对话框（列示已归档会话 + 逐条/多选/清空全部）。§3/§5/§6 的
+> 零参与确认按钮流表述以 §17 为准。
+>
 > v2/v3 修订：2026-12 由三个只读 subagent 分面评审（客户端 UI/wire、宿主
 > 域与分发接线、契约治理）+ 作者自审 + 一轮 v2 合规复核（闭合矩阵 12 项
 > 全部核实），结论零 Blocker；全部 [Major] 与高优 [Minor] 已并入本版
@@ -139,15 +145,19 @@ archiveCleanup/purge({})          → domain { ok, value: {
                                        skippedRunning: number
                                        errors: { sessionId, code, message }[]
                                      } }
+// purge 亦可带可选子集过滤（2026-09 修订，§17）：
+archiveCleanup/purge({sessionIds}) → 同上（sessionIds 仅收窄候选集）
 ```
 
-- 两个方法均**无入参**：零参 Remote 先例已核实——宿主侧
-  `gitWorktree/snapshot`（零参 @Remote）、客户端侧同形 envelope
-  `payload: { args: {} }`（`clientGraph/graph` 调用，renderer/host-graph.ts；
-  git-api.ts 带参方法才用 `{args:{input}}`）。§5 客户端照此发 `{args:{}}`。
-- `preview` 是**执行时快照**：只用于确认文案与空态提示；`purge` 开头重新
-  读取权威状态，**不信任** preview 结果，两者之间状态可变化（§6 文案避免
-  「恰好 N 个」暗示）。
+- 入参（2026-09 修订，§17）：`preview` 与 `probe` 仍**零参**（envelope
+  `payload: { args: {} }`——`gitWorktree/snapshot`/`clientGraph/graph` 零参
+  先例）；`purge` 现带**可选** `sessionIds` JSON 参数（SRC 描述符对缺失
+  JSON 字段放行 → `undefined` = 全量，老客户端 `{args:{}}` 零改动）。
+  客户端照 §5 发 `{args:{}}` 或 `{args:{sessionIds:[…]}}`。可选参仅限
+  唯一标识符（无解构/默认值/rest——gateway SRC 签名约束）。
+- `preview` 是**执行时快照**：只回计数（归档管理器列表来自会话快照投影，
+  不调用 preview）；`purge` 开头重新读取权威状态，**不信任** preview 结果，
+  两者之间状态可变化（UI 文案避免「恰好 N 个」暗示）。
 - 返回值走 `domainResult` `{ok,value}|{ok:false,error}` 载体（generic
   gateway 不保留 thrown business 字段，同 git-worktree 理由）。
   `ok:false` 的 code 枚举（最小集）：`busy`（本域另一 purge/preview
@@ -155,7 +165,9 @@ archiveCleanup/purge({})          → domain { ok, value: {
   （整体前提失败；2026-12 合入修订轮起 probe 的 `assertHostSurface` 结构
   检查亦覆盖会话枚举/存储面（Minor-3））、`purge-capacity`（archived
   集合超过单次上限 65,536——**不可重试**（`retryable: false`），无逃生口
-  直至上游 wire 收敛，2026-12 合入修订轮登记，Minor-5）。逐项失败收进
+  直至上游 wire 收敛，2026-12 合入修订轮登记，Minor-5）、`invalid-request`
+  （子集过滤畸形/超限——2026-09 修订新增，非重试，过滤校验先于任何权威
+  读取）。逐项失败收进
   `value.errors`（item code 枚举：`missing` 内容已不在 / `running` 删除
   瞬间转入运行（竞态） / `storage` 宿主存储失败；收尾批量写失败记
   `archive-set`），不中断、不 throw；`errors` 超过 1,000 条截断并置
@@ -246,8 +258,11 @@ vendor 源码）+ 薄 Remote 门面（`index.ts`），编排逻辑：
 - 新专用错误类 `InstanceDomainMissingError` + `isInstanceDomainMissing()`
   （镜像 `InstanceUnavailableError` L103–108 模式，放其旁），404 + 开关开启
   时抛它；wrapper 层据此输出 §6 文案；
-- wrapper：`previewArchiveCleanup(client)`（默认 30s）/ `purgeArchivedSessions(client)`
-  （长预算，常量如 `PURGE_CALL_TIMEOUT_MS = 5 * 60_000`，常量放 instance-api.ts）；
+- wrapper：`previewArchiveCleanup(client)`（默认 30s；2026-09 修订起 UI 不再
+  调用——归档管理器列表来自会话快照投影——保留为宿主 preview 端点的已测
+  客户端半面）/ `purgeArchivedSessions(client, sessionIds?)`（长预算，常量
+  `PURGE_CALL_TIMEOUT_MS = 5 * 60_000`，放 instance-api.ts；`sessionIds`
+  可选子集过滤，见 §17）；
 - **超时文案**（诚实，zh 硬编码先例）：「清理超时——可能仍在进行，请稍后
   重新预览/重试（重复执行是安全的）」；预览超时给「预览超时，请重试」；
 - 503 `instance_unavailable` 沿用 `wrapWireError` 既有文案与 `isInstanceUnavailable`
@@ -257,11 +272,20 @@ vendor 源码）+ 薄 Remote 门面（`index.ts`），编排逻辑：
   将是首个本地化 rowError，需在组件作用域 catch→t() 翻译，v1 不做）——
   按钮 aria/title 与确认对话框文案走 locale 键（§6），行内错误/信息行走
   zh 硬编码 + 与既有错误同构；如需本地化列为后续增强。
-- **桥契约（05 §3 `ChamberServerAggregate`）零改动**：计数由宿主 preview
-  实时提供，不把 archived 行重新投进聚合（归档行仍被投影丢弃——本动作
-  不要求「看到」归档会话）。
+- **桥契约（05 §3 `ChamberServerAggregate`）——2026-09 修订（§17）**：
+  新增**归档管理器投影字段** `archivedSessions`（+ 归档集权威性标记
+  `archiveSetKnown`）：已归档行的**元数据**（id/title/cwd/updatedAt）随
+  实例快照投递（官方会话投影本就携带归档行，此前 chamber 只在可见性层
+  丢弃），管理器 UI 由此列示已归档会话而**零新增宿主读取面**；unary 兜底
+  视图归档集未知（KNOWN DEGRADATION），`archiveSetKnown:false` 标记防
+  「无已归档会话」误报。
 
 ## 6. 侧边栏 UI（server 行 hover 动作）
+
+> **2026-09 修订（§17）**：本节的 v1 交互流（preview → window.confirm →
+> purge 全部 + header 下错误槽位）已被**归档管理器对话框**取代——§6 正文
+> 保留为 v1 历史契约与 UI 位置基线（trash 按钮仍在同簇同门控位置，点击改
+> 为打开管理器）。交互细节以 §17 为准。
 
 位置与行为（`packages/dsh-chamber-client-ui-sidebar/src/client/SidebarRoot.tsx`）：
 
@@ -701,7 +725,8 @@ archive-cleanup；host 包提交态 dist 随代码重建（esbuild 0.25 确定�
 客户端 404 判别有界读取（F10，见条目 3）。）
 
 **编号说明**：§13 空号（历史修订留空）；§14/§15 为合入前实现与评审登记，
-§16（2026-09 合入后修复轮）接于其后。
+§16（2026-09 合入后修复轮）接于其后；§17（2026-09 修订轮：M4 本地实跑 +
+归档管理器 revision）为最新修订，wire/UI 表述以其为准。
 
 **§16 补记（2026-09 第二波回扫）**：三路只读回扫零新 Blocker/Major；本域
 复核结论——`assertHeaderShape` 谓词严格弱于 pinned vendor 写入期校验
@@ -711,3 +736,88 @@ rerun 收敛互操作经代码追踪成立；dist 已镜像。补强落点：`em
 实现契约注（必须包 `ArchiveCleanupError`；删除成功后事件失败的「双重呈现」
 为接受语义，rerun 经 'missing' 收敛）。桌面复原性补强与文档/文案勘误登记
 见 STATUS「2026-09 修复轮第二波」与 design 11 §9 / design 08 §11.8 配套注。
+
+## 17. 2026-09 修订轮：M4 本地实跑处置 + 归档管理器 revision（wire 修订）
+
+用户驱动 revision：M4 实机验证在真实本地 dsh 实例执行（此前 M4 待验），
+同时按用户要求把交互从「v1 server 行 hover 确认按钮流（preview →
+window.confirm → purge 全部）」升级为**归档管理器对话框**（列出具体已归档
+会话，支持逐条 / 多选 / 清空全部），并据此修订宿主 wire。处置登记：
+
+1. **删除失效根因（M4 实跑发现并修复）**：`binding.ts` `deleteSessionContent`
+   先解构 `const locate = persistence?.locate` 再脱绑调用——官方
+   `SessionPersistence` 实现是实例状态类（jsonl `locate` 读 `this.root` /
+   `this.compression`），脱绑调用使 `this === undefined`，**每次删除**都以
+   `Cannot read properties of undefined (reading 'root')` 失败（真实实例
+   18/18 项 storage 错；隔离复刻实例同样复现）。修复 = 保持方法接收者调用
+   （`persistence.locate(header)`）；回归单测用 this 敏感 fake（读
+   `this.root` 的 locate 方法）钉死——修复前必红。旧单测全部用箭头函数
+   fake（this 无关），是漏网的直接原因（§16-2 同族教训）。
+2. **wire 修订：purge 可选 `sessionIds` 子集过滤**（§3 契约修订）：
+   `archiveCleanup/purge(sessionIds?)`——`undefined` = 全量（旧形状
+   `{args:{}}`，向后兼容，老客户端零改动）；数组 = 只把列出的 archived
+   集合成员当作候选根（各自整棵可删子树）。**越界结构性不可能**：候选
+   恒 = 权威 archived 集合 ∩ 请求（core.ts，读时取交集），已离开集合的
+   陈旧 id（并发 purge/陈旧列表）静默跳过（幂等），非 archived 会话不可
+   达；过滤校验失败（非串/空串/超 `MAX_PURGE_SESSIONS`）→ 新业务码
+   `invalid-request`（全量路径容量码 `purge-capacity` 语义不变；超容量
+   集合仍可做有界子集 purge）。客户端 wrapper
+   `purgeArchivedSessions(client, sessionIds?)` 相应传参（无过滤仍发
+   `{args:{}}`）。子集模式下 set 收敛语义不变（completed 根 + covered
+   archived 后代 + orphan 同一收尾批量写移除）。
+3. **归档管理器 UI（替代 §6 v1 流程）**：server 行 trash 按钮 → 打开
+   对话框：列出该源已归档会话（标题 + 目录标签），逐行 checkbox 多选 +
+   全选，逐行删除、删除选中、删除全部；销毁动作保持 confirm 门（不可恢复
+   文案，逐条/选中/全部三形态）；运行结果内联呈现（role=status/alert）：
+   完成摘要、运行跳过、部分失败（明细前 3 条）、busy、域缺失 404、超时/
+   网络中断诚实文案——错误绝不静默。v1 的 header 下错误槽位、
+   purgeInFlight/cleanupNotes 状态与 preview→confirm 流整体移除。
+   数据源：**对话框不发任何新读取**——行元数据（id/title/cwd/updatedAt）
+   走 bridge 新投影字段 `ChamberServerAggregate.archivedSessions`
+   （`deriveArchivedSessions`：快照 sessions ∩ archivedSessionIds，仅元
+   数据、不读会话内容；服务器端官方行本就携带归档行，chamber 只是此前在
+   可见性层丢弃）。**归档集权威性三态**（2026-09 评审修复轮）：
+   `archiveSetKnown:true`（挂载基线）的空列表 = 真「无已归档」；unary 兜底
+   快照（KNOWN DEGRADATION，无 wire 源）标记 `archiveSetKnown:false` →
+   对话框走**降级分支**：不声称空态、不列行，仍保留「删除全部」
+   （`purge(undefined)` 与列表无关，确认文案不含计数）；快照未落地的
+   `pending` 分支显示加载/拉取错误并同样放行「删除全部」（错误态）。
+   `serversProjectionSignature` 纳入 archivedSessions 与 archiveSetKnown
+   保证 purge 后 bridge 重发布、对话框列表随刷新收敛（选中集按幸存行
+   修剪；签名内容只取 id+updatedAt——归档行标题/目录无任何 UI 变更面）。
+   范围：v1 不做搜索/目录过滤/恢复（无 unarchive wire）；rail/窄栏不做。
+4. **§2 边界口径更新**：purge 的 caller-supplied id 输入只可能收窄删除集
+   （读时交集），「域无读取面/不返回标题」维持——对话框行元数据来自官方
+   会话投影（客户端既有快照），不新增宿主读取端点。AGENTS/§3 的「零参」
+   表述由本修订取代（§3 wire 块与 §5 客户端接入段随本修订更新）。
+5. **验证**：host core/binding 51 例（35 core + 16 binding；含子集过滤
+   15 例与 locate-this 回归）、sidebar 全套 284 例（含 deriveArchivedSessions、
+   purge 过滤转发、签名参与、降级标记）、根 typecheck + typecheck:sidebar/
+   host-archive-cleanup + verify:i18n + build:renderer 绿；提交态 host dist
+   重建；隔离复刻实例 E2E（全量 purge 修复前红/后绿、子集 purge、陈旧 id
+   幂等）。剩余实机腿：gateway/远程 dsh 形态、打包版 UI 目检（登记 STATUS）。
+6. **评审修复轮（2026-09，4 个只读 subagent 分面评审 + 作者裁决）**：
+   - **降级视图诚实性**：归档集权威三态（`archiveSetKnown`）落地（§17.3），
+     消除 unary 兜底下的「没有可删除的已归档会话」误报与删除全部能力回归
+     （v1 全量 purge 在未挂载来源本可用）；
+   - **core 收口**：子集过滤校验先于权威读取（畸形请求不付全库扫描）、
+     空选集短路（零读取）、clearIds 去重、桶语义注记（archived subagent 行
+     单独成根计 deletedSessions；被覆盖时计 deletedSubagents——UI 不列
+     subagent 行，仅 wire 可达）；
+   - **版本错配实证**：generic gateway `assertExactArguments` 对描述符外
+     键**严格拒绝**（复刻实例实测 `unexpected "sessionIds"`）——新客户端子集
+     请求到旧宿主绝无「静默全量删除」分支；该 `gateway/arguments-invalid`
+     在 purge wrapper 重映射为 zh 重启提示（删除全部仍可用）；
+   - **UI 收口**：关闭策略统一（Esc/X/遮罩任意时刻可关——关闭不取消宿主
+     purge、requestRefresh 仍无条件发出）、Tab 焦点圈闭 + 关闭焦点还原、
+     snapshot 拉取错误呈现（替代永恒 loading）、删除全部确认文案去计数
+     （宿主删除集可大于列表：subagent 成员从不入列）、空列表（权威）时
+     disabled 与 v1 一致；
+   - **死代码/注释清理**：旧 `confirm.purgeArchived*` locale 键、
+     `.cleanupNote`/`.archiveManagerActions` CSS、过时注释、未用
+     data 属性；`previewArchiveCleanup` 保留并注明为宿主 preview 端点已测
+     客户端半面；
+   - **测试补强**：covered 祖先同选（N1 语义子集化）、archived subagent 行
+     独选（祖先不删）、子集 F1 树中止、重复过滤 id、畸形/空过滤零读取、
+     `[]` 载荷形状端到端、旧宿主拒绝 zh 文案、serversProjectionSignature
+     参与 archivedSessions/archiveSetKnown 的回归测试。

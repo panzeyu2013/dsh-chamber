@@ -153,10 +153,10 @@ export interface SidebarSectionContextValue {
   setRenaming: Dispatch<SetStateAction<RenameTarget | null>>
   /** Commit the active inline rename (wire call via the shell's runAction). */
   commitRename: () => void
-  /** Server-level archived-content cleanup flow (design 24 §6). */
-  purgeInFlight: Readonly<Record<string, 'preview' | 'purge'>>
-  cleanupNotes: Readonly<Record<string, string>>
-  onPurgeArchived: (server: ChamberServerAggregate) => void
+  /** Server-row archive-cleanup entry: opens the archive manager dialog
+   *  (design 24 §6 revision 2026-09 — the manager lists what is archived and
+   *  offers single / multi-select / delete-all purges). */
+  onOpenArchiveCleanup: (server: ChamberServerAggregate) => void
   /** Source-header add-workspace entry (opens the directory browser). */
   setAddingWorkspace: Dispatch<SetStateAction<string | null>>
 

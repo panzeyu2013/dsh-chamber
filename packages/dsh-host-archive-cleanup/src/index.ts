@@ -2,19 +2,27 @@
  * Per-instance archived-session content cleanup host gateway (design 24).
  *
  * TRUST MODEL — this service runs inside each dsh host process. The browser
- * submits no session id, path or command: `preview` answers counts and
- * `purge` deletes every member of the instance's authoritative archived set
+ * submits no path or command: `preview` answers counts and `purge` deletes
+ * every member of the instance's authoritative archived set
  * (registry-global) plus its subagent-origin descendants, children-first,
- * skipping running subtrees whole. The domain never reads session content
- * and never touches non-archived sessions (design 24 §2 boundaries).
+ * skipping running subtrees whole. The only caller-supplied session ids are
+ * purge's OPTIONAL subset filter (`purge(sessionIds?)` — 2026-09 wire
+ * amendment for per-selection deletion): the domain intersects the filter
+ * with the authoritative archived set at run start, so the filter can never
+ * name a non-archived session (fail-closed invariant, enforced in core). The
+ * domain never reads session content and never touches non-archived sessions
+ * (design 24 §2 boundaries).
  *
  * Fixed wire namespace: `archiveCleanup/{preview,purge,probe}` — preview and
- * purge are zero-arg; `probe` is the ZERO-COST activation-probe method
- * (presence + protocol only, no session data, no IO — design 18 §3.4 probe
- * contract, perf review 2026-12). Every method returns an explicit
- * `{ok,value}|{ok:false,error}` domain carrier because the generic dsh
- * gateway does not preserve thrown business-error fields; only unexpected
- * internal failures escape as throws.
+ * probe are zero-arg; purge takes an OPTIONAL `sessionIds` JSON parameter
+ * (absent = delete the whole archived set, unchanged semantics; the SRC
+ * descriptor treats a missing JSON field as `undefined`, so old zero-arg
+ * clients keep working against new hosts). `probe` is the ZERO-COST
+ * activation-probe method (presence + protocol only, no session data, no IO
+ * — design 18 §3.4 probe contract, perf review 2026-12). Every method
+ * returns an explicit `{ok,value}|{ok:false,error}` domain carrier because
+ * the generic dsh gateway does not preserve thrown business-error fields;
+ * only unexpected internal failures escape as throws.
  *
  * HOST BINDING (design 24 §10/§14, verified against the pinned vendor
  * dsh-v0.1.2-rc.1 a66e4702, 2026-12): implemented in ./binding.ts —
@@ -90,11 +98,17 @@ export class ArchiveCleanupGateway extends TypertRemoteService {
     }))
   }
 
+  /** Delete the WHOLE archived set by default; with the optional `sessionIds`
+   *  filter only the listed archived-set members (each as a deletable tree
+   *  root). Zero-arg calls keep working — a missing JSON field reaches the
+   *  method as undefined. */
   @Remote('purge')
-  purge(): Promise<ArchiveCleanupDomainResult<PurgeResult>> {
+  purge(sessionIds?: readonly string[]): Promise<ArchiveCleanupDomainResult<PurgeResult>> {
     return domainResult(() => this.gate.run(async () => {
-      this.logger?.info?.('[archiveCleanup] purge started')
-      const value = await this.core.purge()
+      this.logger?.info?.('[archiveCleanup] purge started', {
+        ...(sessionIds === undefined ? {} : { filterCount: sessionIds.length }),
+      })
+      const value = await this.core.purge(sessionIds)
       this.logger?.info?.('[archiveCleanup] purge finished', {
         deletedSessions: value.deletedSessions,
         deletedSubagents: value.deletedSubagents,

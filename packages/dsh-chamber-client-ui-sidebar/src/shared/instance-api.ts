@@ -71,6 +71,16 @@ export interface InstanceSnapshot {
   workspaces: WorkspaceRow[]
   sessions: SessionRow[]
   archivedSessionIds: string[]
+  /**
+   * Whether this snapshot's archivedSessionIds is AUTHORITATIVE (true = the
+   * mounted workspace-follow baseline projected the registry archive set —
+   * even an empty set is a true "nothing archived" fact). The unary-fallback
+   * snapshot has NO archive-set wire source (KNOWN DEGRADATION below), so it
+   * must mark itself archiveSetKnown: false — consumers (archive manager)
+   * then never claim "no archived sessions" from an unknown set. Absent on
+   * pre-revision producers = unknown.
+   */
+  archiveSetKnown?: boolean
 }
 
 export type InstanceAggregateState = 'ok' | 'error' | 'not-connected'
@@ -82,7 +92,7 @@ export interface InstanceAggregate extends InstanceSnapshot {
 }
 
 export function emptyAggregate(state: InstanceAggregateState, error: string | null = null): InstanceAggregate {
-  return { state, workspaces: [], sessions: [], archivedSessionIds: [], error }
+  return { state, workspaces: [], sessions: [], archivedSessionIds: [], archiveSetKnown: false, error }
 }
 
 /**
@@ -343,20 +353,29 @@ class InstanceApiClient {
   }
 
   /**
-   * archiveCleanup unary Remotes (design 24 chamber host domain). Zero-arg
-   * methods — the payload envelope is `{args:{}}`. Both carry the
-   * domain-missing 404 opt-in; purge rides the long call budget (the host
-   * keeps running past a client timeout — rerun is idempotent). See
-   * previewArchiveCleanup / purgeArchivedSessions wrappers.
+   * archiveCleanup unary Remotes (design 24 chamber host domain). preview is
+   * zero-arg — the payload envelope is `{args:{}}`. purge takes an OPTIONAL
+   * `sessionIds` subset filter (2026-09 wire amendment): absent = delete the
+   * whole archived set (legacy zero-arg shape, `{args:{}}` — old hosts keep
+   * working); present = delete only the listed archived members (a provided
+   * EMPTY array is a deliberate delete-nothing subset, never the full set).
+   * Both carry the domain-missing 404 opt-in; purge rides the long call
+   * budget (the host keeps running past a client timeout — rerun is
+   * idempotent). See previewArchiveCleanup / purgeArchivedSessions wrappers.
    */
   readonly archiveCleanup = {
     preview: (_payload: unknown, signal?: AbortSignal): Promise<UnaryResult<any>> =>
       this.call('archiveCleanup/preview', { args: {} }, signal, { notFoundAsDomainMissing: true }),
-    purge: (_payload: unknown): Promise<UnaryResult<any>> =>
-      this.call('archiveCleanup/purge', { args: {} }, undefined, {
-        timeoutMs: PURGE_CALL_TIMEOUT_MS,
-        notFoundAsDomainMissing: true,
-      }),
+    purge: (sessionIds?: readonly string[]): Promise<UnaryResult<any>> =>
+      this.call(
+        'archiveCleanup/purge',
+        sessionIds === undefined ? { args: {} } : { args: { sessionIds } },
+        undefined,
+        {
+          timeoutMs: PURGE_CALL_TIMEOUT_MS,
+          notFoundAsDomainMissing: true,
+        },
+      ),
   }
 }
 
@@ -510,11 +529,14 @@ function titleOf(summary: any): string | undefined {
  *
  * KNOWN DEGRADATION (documented): `archivedSessionIds` has NO unary wire
  * source — the archive set exists only on the workspace follow baseline —
- * so the fallback returns an empty archive set and archived sessions
- * resurface in the list. Acceptable only while the fallback serves genuinely
- * unmounted sources or the pre-baseline window; the mounted path (which
- * carries the archive set) must never be replaced by this fallback once it
- * has pushed (renderer App withdrawal rule).
+ * so the fallback returns an empty archive set (marked `archiveSetKnown:
+ * false`) and archived sessions resurface in the list. Consumers must never
+ * read the empty set as "nothing archived": the archive manager shows an
+ * honest degraded branch (and keeps whole-set purge available) on snapshots
+ * that are not archive-set-authoritative. Acceptable only while the fallback
+ * serves genuinely unmounted sources or the pre-baseline window; the mounted
+ * path (which carries the archive set) must never be replaced by this
+ * fallback once it has pushed (renderer App withdrawal rule).
  */
 export async function fetchInstanceSnapshot(client: InstanceApiClient): Promise<InstanceSnapshot> {
   let sessionResult: UnaryResult<{ items?: readonly unknown[] }>
@@ -574,7 +596,7 @@ export async function fetchInstanceSnapshot(client: InstanceApiClient): Promise<
       updatedAt: '',
       synthetic: true,
     }))
-  return { workspaces, sessions, archivedSessionIds: [] }
+  return { workspaces, sessions, archivedSessionIds: [], archiveSetKnown: false }
 }
 
 /** Trailing path segment ('' for root); the cwd-derived group title. */
@@ -793,10 +815,16 @@ function decodeDomainResult<T>(result: UnaryResult<any>): { ok: true; value: T }
 
 /**
  * archiveCleanup/preview wrapper (design 24 §5): read-only point-in-time
- * counts for the confirm copy. Domain-missing 404s surface as
- * isInstanceDomainMissing errors; not-ready 503s keep the existing wording;
- * no-response outcomes (timeout/abort/network) map to an honest retry
- * message — never a bare browser timeout string.
+ * counts. Domain-missing 404s surface as isInstanceDomainMissing errors;
+ * not-ready 503s keep the existing wording; no-response outcomes
+ * (timeout/abort/network) map to an honest retry message — never a bare
+ * browser timeout string.
+ *
+ * KEPT DELIBERATELY (review round 2026-09): the archive manager derives its
+ * list from the snapshot (no preview call), so this wrapper currently has no
+ * UI caller — it stays as the tested client half of the still-live host
+ * preview endpoint (informational counts; a natural consumer for future
+ * authoritative-count confirmations) and pins the nested-carrier decode.
  */
 export async function previewArchiveCleanup(client: InstanceApiClient): Promise<ArchiveCleanupPreview> {
   let result: UnaryResult<any>
@@ -817,17 +845,36 @@ export async function previewArchiveCleanup(client: InstanceApiClient): Promise<
 
 /**
  * archiveCleanup/purge wrapper (design 24 §5): long-budget destructive run.
- * A client timeout/network loss does NOT cancel the host run — the honest
- * wording is "may still be running; re-preview/retry later" (idempotent per
- * session). Only a resolved ok:false is a deterministic failure.
+ * `sessionIds` is the OPTIONAL subset filter (2026-09): undefined = delete
+ * the whole archived set (legacy behavior); an array = delete exactly those
+ * archived sessions' trees. A client timeout/network loss does NOT cancel
+ * the host run — the honest wording is "may still be running; re-preview/
+ * retry later" (idempotent per session). Only a resolved ok:false is a
+ * deterministic failure.
+ *
+ * VERSION-SKEW LEG (review round 2026-09): a NEW client sending a subset
+ * filter to an OLD seeded host (zero-param purge, running instance that has
+ * not restarted since the update) is REFUSED by the host gateway's exact
+ * args validation (`gateway/arguments-invalid` — empirically verified: the
+ * generic gateway rejects any key the method descriptor does not declare,
+ * so the old host NEVER runs its legacy full purge on a subset request).
+ * The refusal is remapped here to an honest restart hint; delete-all
+ * (no filter) keeps working on old hosts.
  */
-export async function purgeArchivedSessions(client: InstanceApiClient): Promise<ArchiveCleanupPurgeResult> {
+export async function purgeArchivedSessions(
+  client: InstanceApiClient,
+  sessionIds?: readonly string[],
+): Promise<ArchiveCleanupPurgeResult> {
   let result: UnaryResult<any>
   try {
-    result = await callAndThrow(client, () => client.archiveCleanup.purge({}))
+    result = await callAndThrow(client, () => client.archiveCleanup.purge(sessionIds))
   } catch (error) {
     if (looksNoResponse(error)) {
       throw new Error('清理超时或网络中断——清理可能仍在进行，请稍后重新预览或重试（重复执行是安全的）。')
+    }
+    if (sessionIds !== undefined && error instanceof InstanceRpcError && error.code === 'gateway/arguments-invalid') {
+      // Old host domain (zero-param purge) refusing the subset filter shape.
+      throw new Error('该实例的归档清理域版本过旧，不支持按条删除——请重启该实例的 dsh 后再试（删除全部仍可用）。')
     }
     throw error
   }

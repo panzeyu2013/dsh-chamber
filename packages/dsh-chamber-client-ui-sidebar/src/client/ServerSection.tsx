@@ -3,7 +3,7 @@
  * ONE server's subtree of the multi-source session list — the source header
  * (connection dot/spinner + hover status, server fold, sort menu, git alert,
  * add-workspace, per-source search capsule with results, design-24
- * archive-cleanup), the workspace groups and the session rows with their
+ * archive-cleanup manager), the workspace groups and the session rows with their
  * in-source drag ordering and ghost rows. Extracted from the SidebarRoot
  * shell; cross-cutting state/actions are consumed through useSidebarSection()
  * (sidebar-context.ts — the shell owns every store/effect/commit below and
@@ -162,9 +162,7 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
     renaming,
     setRenaming,
     commitRename,
-    purgeInFlight,
-    cleanupNotes,
-    onPurgeArchived,
+    onOpenArchiveCleanup,
     setAddingWorkspace,
     openSession,
     onNewSession,
@@ -565,7 +563,7 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                   onDragStart={(event) => {
                     // A gesture that STARTED on a header
                     // button (fold / sort / add-workspace / search /
-                    // archive-cleanup) aborts the
+                    // archive-cleanup manager) aborts the
                     // drag initiation — buttons are click affordances, a >4px
                     // micro-drag on the fold toggle must not swallow its click
                     // (the click then fires normally on release). Dragging
@@ -680,7 +678,7 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                     )}
                   </span>
                   {/* chamber: header actions (sort menu + add-workspace `+` +
-                      per-source search + archive-cleanup purge — design 24 §6)
+                      per-source search + archive-cleanup manager — design 24 §6)
                       are hover-revealed like the session rows' actions: at rest the connection status occupies the
                       right side; hovering the header swaps in the icon cluster
                       (visibility swap, no reflow). While a search capsule is
@@ -793,55 +791,29 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                       <IconSearchOutline16 size={14} />
                     </button>
                     )}
-                    {/* chamber (design 24 §6): server-row "delete archived
-                        content" — same hover-reveal discipline and gating as
-                        the sibling actions; disabled while a preview/purge is
-                        in flight (per-server single-flight); errors and info
-                        render in the header-under slot below. */}
+                    {/* chamber (design 24 §6, revision 2026-09): server-row
+                        "archive manager" — same hover-reveal discipline and
+                        gating as the sibling actions; opens the manager
+                        dialog (list + single/multi-select/delete-all). All
+                        cleanup state lives INSIDE the dialog. */}
                     {server.connected && (server.aggregateError === undefined || search?.expanded === true) && (
                       <button
                         type="button"
                         className={cc.actionIcon}
                         aria-label={t('action.purgeArchived')}
                         title={t('action.purgeArchived')}
-                        disabled={purgeInFlight[server.id] !== undefined}
-                        aria-busy={purgeInFlight[server.id] !== undefined}
                         onClick={(event) => {
                           event.stopPropagation()
                           if (suppressClickRef.current) return
                           clearPendingClick()
-                          onPurgeArchived(server)
+                          onOpenArchiveCleanup(server)
                         }}
                       >
-                        {purgeInFlight[server.id] !== undefined
-                          ? <IconLoadingOutline16 className={cc.statusSpinner} size={14} />
-                          : <IconTrashOutline16 size={14} />}
+                        <IconTrashOutline16 size={14} />
                       </button>
                     )}
                   </span>
                 </header>
-                {/* chamber (design 24 §6): server-level cleanup error/info
-                    slot — DIRECTLY under the header and OUTSIDE the fold gate
-                    and the search-state branches (the add-workspace precedent
-                    sits inside `query === '' && !sourceFolded`, which would
-                    swallow failures while folded or searching). Errors:
-                    role=alert; informational results: role=status. */}
-                {(rowErrors[`${server.id}/archive-cleanup`] !== undefined
-                  || cleanupNotes[server.id] !== undefined
-                  || purgeInFlight[server.id] !== undefined) && (
-                  <div
-                    className={rowErrors[`${server.id}/archive-cleanup`] !== undefined ? cc.rowError : cc.cleanupNote}
-                    role={rowErrors[`${server.id}/archive-cleanup`] !== undefined ? 'alert' : 'status'}
-                  >
-                    {rowErrors[`${server.id}/archive-cleanup`] !== undefined
-                      ? rowErrors[`${server.id}/archive-cleanup`]
-                      : purgeInFlight[server.id] !== undefined && cleanupNotes[server.id] === undefined
-                        ? purgeInFlight[server.id] === 'preview'
-                          ? '正在获取已归档会话计数…'
-                          : '正在清理已归档内容…'
-                        : cleanupNotes[server.id]}
-                  </div>
-                )}
                 {/* chamber (06 §2.4): the
                     server-level fold hides EVERYTHING below the header —
                     search capsule, source-scope git alert and the workspace

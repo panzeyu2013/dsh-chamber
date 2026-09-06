@@ -12,6 +12,7 @@ import {
   armBlankGhost,
   armMembershipGrace,
   BLANK_GHOST_GRACE_MS,
+  deriveArchivedSessions,
   deriveLocalSearchMatches,
   deriveServerWorkspaces,
   instanceSnapshotSignature,
@@ -43,7 +44,7 @@ import type { ChamberServerAggregate, InstanceRuntimeReport } from '../src/share
 function session(
   id: string,
   updatedAt = 0,
-  extra: Partial<Pick<SessionRow, 'blank' | 'origin' | 'title' | 'running' | 'parentSessionId'>> = {},
+  extra: Partial<Pick<SessionRow, 'blank' | 'origin' | 'title' | 'running' | 'parentSessionId' | 'cwd'>> = {},
 ): SessionRow {
   return { sessionId: id, updatedAt, running: false, blank: false, ...extra }
 }
@@ -82,6 +83,8 @@ test('projectInstanceSnapshot requires complete reconnect baselines and maps ctx
     workspaces: [workspace('w1', 'Work', ['s1', 'sub'])],
     sessions: [{ sessionId: 's1', updatedAt: 42, running: true, blank: false, cwd: '/w1', title: 'One' }],
     archivedSessionIds: ['old'],
+    // Mounted baseline = authoritative archive set (2026-09 review round).
+    archiveSetKnown: true,
   })
   // v0.1.2-alpha.1: the upstream `baselinesReady` field was removed — the
   // workspace completeness check is `state === 'idle'` + `phase === 'ready'`.
@@ -107,6 +110,8 @@ test('projectInstanceSnapshot requires complete reconnect baselines and maps ctx
     workspaces: [workspace('w1', 'Work', ['s1', 'sub'])],
     sessions: [{ sessionId: 's1', updatedAt: 42, running: true, blank: false, cwd: '/w1', title: 'One' }],
     archivedSessionIds: ['old'],
+    // Mounted baseline = authoritative archive set (2026-09 review round).
+    archiveSetKnown: true,
   })
 })
 
@@ -2052,4 +2057,98 @@ test('mergeSearchResults: a NOT-ready projection keeps remote hits (degrade — 
     { sessionId: 'x', snippet: 'kept' },
     { sessionId: 'y', snippet: 'also kept' },
   ])
+})
+
+// deriveArchivedSessions (design 24 revision 2026-09): the archive-manager
+// metadata projection — rows of the snapshot that belong to the archived set.
+test('deriveArchivedSessions lists archived rows only, newest first, with title/cwd metadata', () => {
+  const snapshot: InstanceSnapshot = {
+    workspaces: [],
+    archivedSessionIds: ['a1', 'a2'],
+    sessions: [
+      session('v1', 300, { title: 'visible', cwd: '/work/a' }),
+      session('a1', 500, { title: 'old archived', cwd: '/work/a' }),
+      session('a2', 900, { title: 'recent archived' }),
+    ],
+  }
+  const rows = deriveArchivedSessions(snapshot)
+  assert.deepEqual(rows.map(row => row.sessionId), ['a2', 'a1'])
+  assert.equal(rows[0]?.title, 'recent archived')
+  assert.equal(rows[1]?.title, 'old archived')
+  assert.equal(rows[1]?.cwd, '/work/a')
+  // A visible (non-archived) row never classifies as archived.
+  assert.equal(rows.some(row => row.sessionId === 'v1'), false)
+})
+
+test('deriveArchivedSessions omits optional metadata and yields [] for an empty archive set', () => {
+  const bare: InstanceSnapshot = {
+    workspaces: [],
+    archivedSessionIds: ['x1'],
+    sessions: [{ sessionId: 'x1', running: false, blank: false }],
+  }
+  assert.deepEqual(deriveArchivedSessions(bare), [{ sessionId: 'x1' }])
+  // Unary-fallback snapshot: empty archive set (KNOWN DEGRADATION) → no rows,
+  // never a mislabel of visible sessions as archived.
+  const fallback: InstanceSnapshot = {
+    workspaces: [],
+    archivedSessionIds: [],
+    sessions: [session('x1', 1, { title: 'resurfaced' })],
+  }
+  assert.deepEqual(deriveArchivedSessions(fallback), [])
+})
+
+// Archive-set provenance + projection-signature participation (2026-09
+// review round): the purge → requestRefresh → republish chain that updates
+// an OPEN archive-manager dialog depends on archivedSessions/archiveSetKnown
+// moving serversProjectionSignature — a dropped contribution would silently
+// stop dialog-list refresh after a purge.
+test('projectInstanceSnapshot marks the mounted archive set as known', () => {
+  const workspaces = {
+    items: [workspace('w1', 'w1')],
+    archivedSessionIds: [] as string[],
+    state: 'idle',
+    phase: 'ready',
+  }
+  const sessions = { ids: [], byId: {}, phase: 'ready' }
+  const projected = projectInstanceSnapshot(workspaces, sessions)
+  assert.ok(projected !== undefined)
+  // Even an EMPTY mounted archive set is authoritative (true "nothing
+  // archived" fact) — the flag is what separates it from the fallback.
+  assert.equal(projected.archiveSetKnown, true)
+})
+
+test('instanceSnapshotSignature changes when archiveSetKnown changes', () => {
+  const base = snapshot([], [])
+  const known = { ...base, archiveSetKnown: true }
+  const unknown = { ...base, archiveSetKnown: false }
+  assert.notEqual(instanceSnapshotSignature(known), instanceSnapshotSignature(unknown))
+  assert.equal(instanceSnapshotSignature({ ...base, archiveSetKnown: true }),
+    instanceSnapshotSignature({ ...base, archiveSetKnown: true }))
+})
+
+test('serversProjectionSignature: archivedSessions and archiveSetKnown participate in the publish gate', () => {
+  const makeServer = (overrides: Record<string, unknown> = {}) => ({
+    id: 'local',
+    sourceFingerprint: 'fp',
+    kind: 'local' as const,
+    transport: 'local' as const,
+    label: 'local',
+    connected: true,
+    phase: 'ready',
+    workspaces: [],
+    updatedAt: 1,
+    ...overrides,
+  })
+  const plain = makeServer()
+  const withRows = makeServer({ archivedSessions: [{ sessionId: 's1', updatedAt: 5 }] })
+  const withoutRows = makeServer({ archivedSessions: [] })
+  const degraded = makeServer({ archivedSessions: [], archiveSetKnown: false })
+  const authoritative = makeServer({ archivedSessions: [], archiveSetKnown: true })
+  // Rows presence/absence and provenance all move the signature…
+  assert.notEqual(serversProjectionSignature([plain] as never), serversProjectionSignature([withRows] as never))
+  assert.notEqual(serversProjectionSignature([withoutRows] as never), serversProjectionSignature([withRows] as never))
+  assert.notEqual(serversProjectionSignature([degraded] as never), serversProjectionSignature([authoritative] as never))
+  // …and identical inputs stay identical (null normalization).
+  assert.equal(serversProjectionSignature([plain] as never), serversProjectionSignature([makeServer()] as never))
+  assert.equal(serversProjectionSignature([degraded] as never), serversProjectionSignature([makeServer({ archivedSessions: [], archiveSetKnown: false })] as never))
 })

@@ -41,8 +41,11 @@ test('fetchInstanceSnapshot derives workspace groups from session cwd facts', as
   assert.ok(snapshot.workspaces.every(workspace => workspace.synthetic === true))
   // Subagent rows never surface.
   assert.deepEqual(snapshot.sessions.map(row => row.sessionId), ['s1', 's2', 's3', 's4'])
-  // Archive set has no unary wire source — documented degradation.
+  // Archive set has no unary wire source — documented degradation. The
+  // snapshot must mark its archive set NOT known so consumers never read the
+  // empty set as "no archived sessions" (2026-09 review round).
   assert.deepEqual(snapshot.archivedSessionIds, [])
+  assert.equal(snapshot.archiveSetKnown, false)
 })
 
 test('fetchInstanceSnapshot surfaces no-cwd sessions ungrouped and keeps wire rows', async () => {
@@ -350,6 +353,112 @@ test('503 classification: not-ready answers surface as InstanceUnavailableError 
       () => client.archiveCleanup.preview({}),
       (error: unknown) => error instanceof InstanceUnavailableError, // prefix added by the wrapper-level wrapWireError
     )
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('purgeArchivedSessions forwards the optional subset filter; no filter keeps the zero-arg shape (2026-09 wire amendment)', async () => {
+  const originalFetch = globalThis.fetch
+  const bodies: string[] = []
+  try {
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const raw = String(init?.body ?? '')
+      bodies.push(raw)
+      const envelope = JSON.parse(raw) as { rpcId?: string }
+      return new Response(JSON.stringify({
+        type: 'server-response',
+        rpcId: envelope.rpcId,
+        result: {
+          ok: true,
+          value: { ok: true, value: { deletedSessions: 1, deletedSubagents: 0, skippedRunning: 0, errors: [] } },
+        },
+      }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    }) as typeof fetch
+
+    const client = getInstanceClient('local')
+    const withFilter = await purgeArchivedSessions(client, ['s1', 's2'])
+    assert.equal(withFilter.deletedSessions, 1)
+    const all = await purgeArchivedSessions(client)
+    assert.equal(all.deletedSessions, 1)
+    assert.equal(bodies.length, 2)
+    const argsOf = (raw: string): unknown => (JSON.parse(raw) as { payload?: unknown }).payload
+    assert.deepEqual(argsOf(bodies[0] as string), { args: { sessionIds: ['s1', 's2'] } })
+    assert.deepEqual(argsOf(bodies[1] as string), { args: {} })
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('purgeArchivedSessions: an explicit EMPTY selection sends the subset shape (never the zero-arg all)', async () => {
+  const originalFetch = globalThis.fetch
+  const bodies: string[] = []
+  try {
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const raw = String(init?.body ?? '')
+      bodies.push(raw)
+      const envelope = JSON.parse(raw) as { rpcId?: string }
+      return new Response(JSON.stringify({
+        type: 'server-response',
+        rpcId: envelope.rpcId,
+        result: {
+          ok: true,
+          value: { ok: true, value: { deletedSessions: 0, deletedSubagents: 0, skippedRunning: 0, errors: [] } },
+        },
+      }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    }) as typeof fetch
+
+    const client = getInstanceClient('local')
+    const result = await purgeArchivedSessions(client, [])
+    assert.equal(result.deletedSessions, 0)
+    assert.equal(bodies.length, 1)
+    const payload = (JSON.parse(bodies[0] as string) as { payload?: unknown }).payload
+    // [] is the client/host delimiter for "delete nothing" — it MUST NOT be
+    // normalized to the undefined (delete ALL) shape.
+    assert.deepEqual(payload, { args: { sessionIds: [] } })
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('purgeArchivedSessions: an OLD zero-param host refuses the subset filter with an honest restart hint (2026-09 review round)', async () => {
+  const originalFetch = globalThis.fetch
+  const seenArgs: unknown[] = []
+  try {
+    // Host answers the RPC-level business refusal the generic gateway
+    // produces for an unknown args key on a zero-param method.
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const envelope = JSON.parse(String(init?.body ?? '{}')) as { payload?: { args?: unknown }; rpcId?: string }
+      seenArgs.push(envelope.payload?.args)
+      return new Response(JSON.stringify({
+        type: 'server-response',
+        rpcId: envelope.rpcId,
+        result: {
+          ok: false,
+          error: {
+            code: 'gateway/arguments-invalid',
+            message: 'typert gateway: archiveCleanup/purge: args fields do not match the descriptor: unexpected "sessionIds"',
+            details: {},
+          },
+        },
+      }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    }) as typeof fetch
+
+    const client = getInstanceClient('local')
+    await assert.rejects(
+      () => purgeArchivedSessions(client, ['s1']),
+      (error: unknown) => error instanceof Error && error.message.includes('版本过旧'),
+    )
+    assert.deepEqual(seenArgs, [{ sessionIds: ['s1'] }])
   } finally {
     globalThis.fetch = originalFetch
   }
