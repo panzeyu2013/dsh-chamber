@@ -18,6 +18,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   applyPlugins,
+  ARCHIVE_CLEANUP_INSERT_ID,
+  ARCHIVE_CLEANUP_PACKAGE_NAME,
   classifyDependencyValue,
   classifyLocalDependency,
   classifySpec,
@@ -1559,6 +1561,47 @@ function dualHostSeeds(root: string): ChamberHostPackageSeed[] {
     },
   ]
 }
+
+function tripleHostSeeds(root: string): ChamberHostPackageSeed[] {
+  return [
+    ...dualHostSeeds(root),
+    {
+      insertId: ARCHIVE_CLEANUP_INSERT_ID,
+      packageName: ARCHIVE_CLEANUP_PACKAGE_NAME,
+      sourceDir: writeHostSeedPackage(root, 'archive', ARCHIVE_CLEANUP_PACKAGE_NAME, 'export const archive = 1\n'),
+      label: 'archive-cleanup',
+    },
+  ]
+}
+
+test('seedRemoteChamberHostPackages: seeds three packages before one merged patch write', async () => {
+  const remote = makeSeedExec({ patchContent: TEMPLATE })
+  const result = await seedRemoteChamberHostPackages(remote.exec, SEED_SPEC, tripleHostSeeds(tempDir()))
+  assert.equal(result.ok, true)
+  if (!result.ok) return
+  assert.deepEqual(result.packages.map(entry => entry.insertId),
+    [CLIENT_GRAPH_INSERT_ID, GIT_WORKTREE_INSERT_ID, ARCHIVE_CLEANUP_INSERT_ID],
+    'all three loader rows report their write state')
+  assert.equal(result.packages.length, 3)
+  assert.equal(result.wrote, true)
+  assert.equal(result.patched, true)
+  assert.equal(remote.written.length, 7, 'six package files (three pairs) + one merged patch')
+  // Every chamber host package lands its seed-file pair on the remote.
+  for (const packageName of [CLIENT_GRAPH_PACKAGE_NAME, GIT_WORKTREE_PACKAGE_NAME, ARCHIVE_CLEANUP_PACKAGE_NAME]) {
+    const slug = packageName.slice('@dsh-chamber/'.length)
+    assert.ok(remote.written.some(entry => entry.path === `~/.dsh/profiles/node_modules/@dsh-chamber/${slug}/package.json`),
+      `${packageName} package.json must be seeded`)
+    assert.ok(remote.written.some(entry => entry.path === `~/.dsh/profiles/node_modules/@dsh-chamber/${slug}/dist/index.js`),
+      `${packageName} dist/index.js must be seeded`)
+  }
+  const patchWrites = remote.written.filter(entry => entry.path === '~/.dsh/profiles/web/cordis.patch.yml')
+  assert.equal(patchWrites.length, 1)
+  const patch = patchWrites[0].bytes.toString('utf8')
+  assert.ok(patch.includes('id: client-graph'))
+  assert.ok(patch.includes('id: git-worktree'))
+  assert.ok(patch.includes('id: archive-cleanup'))
+  assert.equal(remote.calls.at(-1), 'write:~/.dsh/profiles/web/cordis.patch.yml', 'patch is committed after every package file')
+})
 
 test('seedRemoteChamberHostPackages: seeds two packages before one merged patch write', async () => {
   const remote = makeSeedExec({ patchContent: TEMPLATE })

@@ -1472,6 +1472,13 @@ const GIT_PACKAGE: LocalChamberHostPackage = {
   packageJson: JSON.stringify({ name: '@dsh-chamber/dsh-host-git-worktree', version: '2.0.0' }),
   distIndex: 'export const git = 1\n',
 }
+// The third chamber host package (design 24): the desktop uploads all three
+// rows into the gateway seed cache (main.ts localChamberHostPackageSources).
+const ARCHIVE_PACKAGE: LocalChamberHostPackage = {
+  name: '@dsh-chamber/dsh-host-archive-cleanup',
+  packageJson: JSON.stringify({ name: '@dsh-chamber/dsh-host-archive-cleanup', version: '3.0.0' }),
+  distIndex: 'export const archive = 1\n',
+}
 
 function syncLog(): { warns: string[]; logs: string[]; logger: { warn(m: string): void; log(m: string): void } } {
   const warns: string[] = []
@@ -1512,6 +1519,7 @@ test('syncGatewayChamberPlugins: happy path uploads only the changed package and
           items: [
             { name: '@dsh-chamber/dsh-host-client-graph', version: '1.0.0' },
             { name: '@dsh-chamber/dsh-host-git-worktree', version: '2.0.0' },
+            { name: '@dsh-chamber/dsh-host-archive-cleanup', version: '3.0.0' },
           ],
         }))
         return
@@ -1536,7 +1544,10 @@ test('syncGatewayChamberPlugins: happy path uploads only the changed package and
       origin: `http://127.0.0.1:${server.port}`,
       headers: { authorization: 'Bearer test-token' },
       spkiPin: null,
-      packages: [GRAPH_PACKAGE, GIT_PACKAGE],
+      // All three chamber host packages ride the sync; only the
+      // version-mismatched graph package uploads (git/archive already match
+      // the cache projection).
+      packages: [GRAPH_PACKAGE, GIT_PACKAGE, ARCHIVE_PACKAGE],
       logger,
     })
     assert.equal(result.uploaded, true)
@@ -1546,6 +1557,8 @@ test('syncGatewayChamberPlugins: happy path uploads only the changed package and
       'PUT /chamber/plugins',
       'POST /chamber/runtime/restart',
     ])
+    assert.equal(seen.filter(entry => entry.method === 'PUT').length, 1,
+      'the two version-matching packages must not upload')
     // Only the version-mismatched package is uploaded, with the exact body.
     const put = seen.find(entry => entry.method === 'PUT')
     assert.ok(put !== undefined)
@@ -1570,6 +1583,7 @@ test('syncGatewayChamberPlugins: version-identical packages skip the upload (ide
       items: [
         { name: '@dsh-chamber/dsh-host-client-graph', version: '1.2.3' },
         { name: '@dsh-chamber/dsh-host-git-worktree', version: '2.0.0' },
+        { name: '@dsh-chamber/dsh-host-archive-cleanup', version: '3.0.0' },
       ],
     }))
   })
@@ -1578,7 +1592,9 @@ test('syncGatewayChamberPlugins: version-identical packages skip the upload (ide
       origin: `http://127.0.0.1:${server.port}`,
       headers: { authorization: 'Bearer test-token' },
       spkiPin: null,
-      packages: [GRAPH_PACKAGE, GIT_PACKAGE],
+      // The full three-package upload list stays quiet when every local
+      // version matches the gateway projection (archive-cleanup included).
+      packages: [GRAPH_PACKAGE, GIT_PACKAGE, ARCHIVE_PACKAGE],
       logger: syncLog().logger,
     })
     assert.equal(result.uploaded, false)
