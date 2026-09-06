@@ -9,11 +9,13 @@
 import type { SettingsConnectionsKey } from '../locales.ts'
 import type { PluginFiberPhase, PluginInventorySnapshot } from './plugin-inventory-api.ts'
 
-/** The chamber-injected host package names (design 09 module A + design 08):
- *  the same fixed rows the SSH plugin dialog surfaces; the single source of
- *  truth for the names is plugin-sync.ts CLIENT_GRAPH_PACKAGE_NAME. */
+/** The chamber-injected host package names (design 09 module A + design 08 +
+ *  design 24): the same fixed rows the SSH plugin dialog surfaces; the single
+ *  source of truth for the names is plugin-sync.ts CLIENT_GRAPH_PACKAGE_NAME. */
 export const HOST_GRAPH_PACKAGE = '@dsh-chamber/dsh-host-client-graph'
 export const GIT_WORKTREE_PACKAGE = '@dsh-chamber/dsh-host-git-worktree'
+/** Archived-session cleanup host domain (design 24, 2026-12). */
+export const ARCHIVE_CLEANUP_PACKAGE = '@dsh-chamber/dsh-host-archive-cleanup'
 
 /** The gateway-packaged mobile client entry (design 21 §6.2: the single
  *  packaged exception — mobile access is bound to the gateway and has no
@@ -30,10 +32,11 @@ const OFFICIAL_SCOPE = '@deepseek-ai/'
 const CORDIS_INCLUDE_PREFIX = 'cordis:include '
 
 /** One inventory entry's package class (design 05 §5 chamber rows + the
- *  design 21 §6.2 mobile packaged exception). */
+ *  design 21 §6.2 mobile packaged exception + design 24 archive-cleanup). */
 export type InventoryEntryKind =
   | 'chamber-host-graph'
   | 'chamber-git-worktree'
+  | 'chamber-archive-cleanup'
   | 'chamber-mobile'
   | 'official'
   | 'third-party'
@@ -41,7 +44,7 @@ export type InventoryEntryKind =
 /**
  * Classify one inventory entry's module specifier. The raw patch-insert
  * prefix ('cordis:include <name>') is stripped first, then the plain name
- * decides: the two chamber host packages, the packaged mobile entry, the
+ * decides: the three chamber host packages, the packaged mobile entry, the
  * official `@deepseek-ai/*` scope, and everything else as third-party.
  */
 export function classifyInventoryEntry(moduleName: string): InventoryEntryKind {
@@ -50,6 +53,7 @@ export function classifyInventoryEntry(moduleName: string): InventoryEntryKind {
     : moduleName
   if (name === HOST_GRAPH_PACKAGE) return 'chamber-host-graph'
   if (name === GIT_WORKTREE_PACKAGE) return 'chamber-git-worktree'
+  if (name === ARCHIVE_CLEANUP_PACKAGE) return 'chamber-archive-cleanup'
   if (name === MOBILE_PACKAGE) return 'chamber-mobile'
   if (name.startsWith(OFFICIAL_SCOPE)) return 'official'
   return 'third-party'
@@ -79,6 +83,7 @@ export function thirdPartyEntries(snapshot: Pick<PluginInventorySnapshot, 'entri
 function chamberKindOf(packageName: string): InventoryEntryKind {
   if (packageName === HOST_GRAPH_PACKAGE) return 'chamber-host-graph'
   if (packageName === GIT_WORKTREE_PACKAGE) return 'chamber-git-worktree'
+  if (packageName === ARCHIVE_CLEANUP_PACKAGE) return 'chamber-archive-cleanup'
   if (packageName === MOBILE_PACKAGE) return 'chamber-mobile'
   return 'third-party'
 }

@@ -159,6 +159,8 @@ import { allowedActions } from './runtime-state-machine.ts';
 import { isSafeVersion } from './version-safety.ts';
 import {
   applyPlugins,
+  ARCHIVE_CLEANUP_INSERT_ID,
+  ARCHIVE_CLEANUP_PACKAGE_NAME,
   CLIENT_GRAPH_INSERT_ID,
   CLIENT_GRAPH_PACKAGE_NAME,
   ExactOwnershipRegistry,
@@ -1787,6 +1789,9 @@ if (!gotTheLock) {
         hostGitWorktreePackageSourceDir: app.isPackaged
           ? path.join(pkgDir, 'dist', 'host-git-worktree-package')
           : path.join(repoRoot, 'packages', 'dsh-chamber-host-git-worktree'),
+        hostArchiveCleanupPackageSourceDir: app.isPackaged
+          ? path.join(pkgDir, 'dist', 'host-archive-cleanup-package')
+          : path.join(repoRoot, 'packages', 'dsh-host-archive-cleanup'),
       });
       await controlPlane.start();
     } catch (err) {
@@ -2286,6 +2291,9 @@ if (!gotTheLock) {
     const gitWorktreeHostSourceDir = app.isPackaged
       ? path.join(pkgDir, 'dist', 'host-git-worktree-package')
       : path.join(repoRoot, 'packages', 'dsh-chamber-host-git-worktree');
+    const archiveCleanupHostSourceDir = app.isPackaged
+      ? path.join(pkgDir, 'dist', 'host-archive-cleanup-package')
+      : path.join(repoRoot, 'packages', 'dsh-host-archive-cleanup');
     const chamberHostPackageSeeds: ChamberHostPackageSeed[] = [
       {
         insertId: CLIENT_GRAPH_INSERT_ID,
@@ -2298,6 +2306,12 @@ if (!gotTheLock) {
         packageName: GIT_WORKTREE_PACKAGE_NAME,
         sourceDir: gitWorktreeHostSourceDir,
         label: 'git-worktree',
+      },
+      {
+        insertId: ARCHIVE_CLEANUP_INSERT_ID,
+        packageName: ARCHIVE_CLEANUP_PACKAGE_NAME,
+        sourceDir: archiveCleanupHostSourceDir,
+        label: 'archive-cleanup',
       },
     ];
     type RemoteTarget = {
@@ -2390,9 +2404,13 @@ if (!gotTheLock) {
       const gitDir = app.isPackaged
         ? path.join(pkgDir, 'dist', 'host-git-worktree-package')
         : path.join(repoRoot, 'packages', 'dsh-chamber-host-git-worktree');
+      const archiveCleanupDir = app.isPackaged
+        ? path.join(pkgDir, 'dist', 'host-archive-cleanup-package')
+        : path.join(repoRoot, 'packages', 'dsh-host-archive-cleanup');
       return [
         { name: '@dsh-chamber/dsh-host-client-graph', packageJsonPath: path.join(graphDir, 'package.json'), distIndexPath: path.join(graphDir, 'dist', 'index.js') },
         { name: '@dsh-chamber/dsh-host-git-worktree', packageJsonPath: path.join(gitDir, 'package.json'), distIndexPath: path.join(gitDir, 'dist', 'index.js') },
+        { name: '@dsh-chamber/dsh-host-archive-cleanup', packageJsonPath: path.join(archiveCleanupDir, 'package.json'), distIndexPath: path.join(archiveCleanupDir, 'dist', 'index.js') },
       ];
     };
     // Resolves the awaited sync outcome for the caller (the manual

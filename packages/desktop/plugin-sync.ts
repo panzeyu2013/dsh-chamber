@@ -240,6 +240,8 @@ export const CLIENT_GRAPH_PACKAGE_NAME = '@dsh-chamber/dsh-host-client-graph'
 export const CLIENT_GRAPH_INSERT_ID = 'client-graph'
 export const GIT_WORKTREE_PACKAGE_NAME = '@dsh-chamber/dsh-host-git-worktree'
 export const GIT_WORKTREE_INSERT_ID = 'git-worktree'
+export const ARCHIVE_CLEANUP_PACKAGE_NAME = '@dsh-chamber/dsh-host-archive-cleanup'
+export const ARCHIVE_CLEANUP_INSERT_ID = 'archive-cleanup'
 
 /**
  * The two module-A seed files (design 09 module A / design 13 §4.6): the

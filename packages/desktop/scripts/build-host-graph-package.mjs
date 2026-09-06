@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /**
- * build-host-graph-package.mjs — 把 chamber 自带的两个 host 包的可分发
+ * build-host-graph-package.mjs — 把 chamber 自带的 host 包（2026-12 起三个：
+ * client-graph / git-worktree / archive-cleanup（design 24））的可分发
  * 形态（package.json + 已构建 dist/）拷贝进 desktop/dist/，供打包态
  * 控制面/SSH seed 使用。脚本名保留，避免破坏现有 build 调用方。
  *
@@ -26,6 +27,11 @@ const packages = [
     label: 'git-worktree',
     sourceDir: join(repoRoot, 'packages', 'dsh-chamber-host-git-worktree'),
     outDir: join(desktopDir, 'dist', 'host-git-worktree-package'),
+  },
+  {
+    label: 'archive-cleanup',
+    sourceDir: join(repoRoot, 'packages', 'dsh-host-archive-cleanup'),
+    outDir: join(desktopDir, 'dist', 'host-archive-cleanup-package'),
   },
 ]
 

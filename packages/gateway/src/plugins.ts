@@ -34,11 +34,22 @@ import type { Logger } from '@dsh-chamber/control-plane'
 /** Cache root under the gateway stateDir. */
 export const SYNCED_PLUGIN_DIR = 'chamber-plugins'
 
-/** The syncable chamber host packages (desktop-provided since 2026-12). */
+/** The syncable chamber host packages (desktop-provided since 2026-12;
+ *  dsh-host-archive-cleanup added 2026-12, design 24). */
 export const SYNCABLE_HOST_PACKAGES = [
   { id: 'client-graph', name: '@dsh-chamber/dsh-host-client-graph' },
   { id: 'git-worktree', name: '@dsh-chamber/dsh-host-git-worktree' },
+  { id: 'archive-cleanup', name: '@dsh-chamber/dsh-host-archive-cleanup' },
 ] as const
+
+/** The activation-probe domain each syncable host package backs (design 24
+ *  §7 C: the probe expectation derives from the actually seeded packages —
+ *  this map is the sync-cache side of HOST_DOMAIN_PROBE_NAMES). */
+const HOST_PACKAGE_PROBE_DOMAINS: Readonly<Record<string, string>> = {
+  '@dsh-chamber/dsh-host-client-graph': 'clientGraph/graph',
+  '@dsh-chamber/dsh-host-git-worktree': 'gitWorktree/previewCreate',
+  '@dsh-chamber/dsh-host-archive-cleanup': 'archiveCleanup/probe',
+}
 
 export const SYNCED_PACKAGE_MAX_BYTES = 64 * 1024
 export const SYNCED_ARTIFACT_MAX_BYTES = 4 * 1024 * 1024
@@ -164,6 +175,24 @@ export function hasSyncedHostSeed(stateDir: string): boolean {
     const dir = join(cacheRoot, entry.name.slice('@dsh-chamber/'.length))
     return existsSync(join(dir, 'dist', 'index.js'))
   })
+}
+
+/** Chamber host domains whose synced package is actually present in the seed
+ *  cache (design 24 §7 C, M2 derivation): replaces the binary all-or-none
+ *  gate for partial syncs (old desktop ↔ new gateway, interrupted syncs).
+ *  An empty list = a plain dsh (reduced probe set); the full list = all
+ *  chamber domains. Must stay in sync with HOST_DOMAIN_PROBE_NAMES in
+ *  packages/dsh-runtime (same three domains). */
+export function syncedHostDomainProbeNames(stateDir: string): readonly string[] {
+  const cacheRoot = join(stateDir, SYNCED_PLUGIN_DIR)
+  const names: string[] = []
+  for (const entry of SYNCABLE_HOST_PACKAGES) {
+    const domain = HOST_PACKAGE_PROBE_DOMAINS[entry.name]
+    if (domain === undefined) continue
+    const dir = join(cacheRoot, entry.name.slice('@dsh-chamber/'.length))
+    if (existsSync(join(dir, 'dist', 'index.js'))) names.push(domain)
+  }
+  return names
 }
 
 /** Source dir for a synced host package (may not exist yet). */

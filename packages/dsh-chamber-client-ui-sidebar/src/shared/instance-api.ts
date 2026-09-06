@@ -100,7 +100,7 @@ export type UnaryResult<T = unknown> =
  * carries the proxy's message so callers can surface "not ready" instead of
  * the generic transport-failure text.
  */
-class InstanceUnavailableError extends Error {
+export class InstanceUnavailableError extends Error {
   constructor(message: string) {
     super(message)
     this.name = 'InstanceUnavailableError'
@@ -112,8 +112,49 @@ export function isInstanceUnavailable(err: unknown): boolean {
   return err instanceof InstanceUnavailableError
 }
 
+/**
+ * The host answered HTTP 404 for a method that should exist once the chamber
+ * host domain is mounted (design 24 §5): the domain is absent or the runtime
+ * tree predates it. NOT raised for the control plane's own unknown-instance
+ * 404 (`instance_not_found` body code — that is an instance-layer fact, not
+ * a domain fact). Mirrors the InstanceUnavailableError pattern so the UI can
+ * project the honest "seed/sync then restart dsh" message instead of a
+ * generic transport failure.
+ */
+class InstanceDomainMissingError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'InstanceDomainMissingError'
+  }
+}
+
+/** True when a wire failure is the chamber-domain-absent 404 (design 24 §5). */
+export function isInstanceDomainMissing(err: unknown): boolean {
+  return err instanceof InstanceDomainMissingError
+}
+
 /** Default timeout for bounded unary calls (mirrors the retired apiproxy 30s default). */
 const DEFAULT_TIMEOUT_MS = 30_000
+
+/**
+ * Purge call budget (design 24 §5): deleting many archived subtrees can far
+ * exceed the 30s unary default. The host keeps running when the client gives
+ * up (timeout ≠ failure), so a timed-out purge is re-verified by a later
+ * preview/purge — repeated execution is safe (idempotent per session).
+ */
+export const PURGE_CALL_TIMEOUT_MS = 5 * 60_000
+
+/** Per-call overrides for `call` (design 24 §5); all optional and
+ *  backward-compatible — existing callers keep the 30s default and the
+ *  generic non-2xx mapping. */
+export interface CallOptions {
+  /** Bounded budget for this call (defaults to DEFAULT_TIMEOUT_MS). */
+  timeoutMs?: number
+  /** Map a 404 whose body is NOT `instance_not_found` to a domain-missing
+   *  error (design 24 §5). Only the archiveCleanup accessors pass it — the
+   *  control plane answers unknown instance ids with the same status. */
+  notFoundAsDomainMissing?: boolean
+}
 
 /** Browser origin with the same Node fallback the retired connection client used. */
 function resolveOrigin(): string {
@@ -147,12 +188,16 @@ class InstanceApiClient {
     endpoint: string,
     payload: unknown,
     signal?: AbortSignal,
+    options: CallOptions = {},
   ): Promise<UnaryResult<T>> {
     const url = new URL(`${this.basePath}/api/${endpoint}`, resolveOrigin())
     const rpcId = mintRpcId()
+    const timeoutMs = Number.isFinite(options.timeoutMs) && (options.timeoutMs ?? 0) > 0
+      ? options.timeoutMs as number
+      : DEFAULT_TIMEOUT_MS
     const requestSignal = signal === undefined
-      ? AbortSignal.timeout(DEFAULT_TIMEOUT_MS)
-      : AbortSignal.any([AbortSignal.timeout(DEFAULT_TIMEOUT_MS), signal])
+      ? AbortSignal.timeout(timeoutMs)
+      : AbortSignal.any([AbortSignal.timeout(timeoutMs), signal])
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -168,6 +213,23 @@ class InstanceApiClient {
       }
       if (payload503?.code === 'instance_unavailable') {
         throw new InstanceUnavailableError(payload503.error ?? 'the instance is not ready')
+      }
+    }
+    // Design 24 §5: with the opt-in flag, a 404 that is NOT the control
+    // plane's own unknown-instance answer is a chamber host domain that the
+    // runtime tree does not mount (missing/old host package) — a distinct
+    // error class so the UI can project the honest recovery message.
+    if (response.status === 404 && options.notFoundAsDomainMissing === true) {
+      let payload404: { code?: string } | null = null
+      try {
+        payload404 = await response.json()
+      } catch {
+        payload404 = null
+      }
+      if (payload404?.code !== 'instance_not_found') {
+        throw new InstanceDomainMissingError(
+          '该实例未挂载 chamber 归档清理域：宿主包同步/seed 后需重启 dsh 生效',
+        )
       }
     }
     if (!response.ok) throw new Error(`transport failure for ${endpoint}: HTTP ${response.status}`)
@@ -240,6 +302,24 @@ class InstanceApiClient {
     createDirectory: (path: string, name: string): Promise<UnaryResult<any>> =>
       this.call('directoryPicker/createDirectory', { args: { path, name } }),
   }
+
+  /**
+   * archiveCleanup unary Remotes (design 24 chamber host domain). Zero-arg
+   * methods — the payload envelope is `{args:{}}` (gitWorktree/snapshot and
+   * clientGraph/graph precedents). Both carry the domain-missing 404 opt-in;
+   * purge rides the long call budget (host keeps running past a client
+   * timeout — rerun is idempotent). See previewArchiveCleanup /
+   * purgeArchivedSessions wrappers.
+   */
+  readonly archiveCleanup = {
+    preview: (_payload: unknown, signal?: AbortSignal): Promise<UnaryResult<any>> =>
+      this.call('archiveCleanup/preview', { args: {} }, signal, { notFoundAsDomainMissing: true }),
+    purge: (_payload: unknown): Promise<UnaryResult<any>> =>
+      this.call('archiveCleanup/purge', { args: {} }, undefined, {
+        timeoutMs: PURGE_CALL_TIMEOUT_MS,
+        notFoundAsDomainMissing: true,
+      }),
+  }
 }
 
 const clients = new Map<string, InstanceApiClient>()
@@ -285,10 +365,27 @@ function wrapWireError(err: unknown): Error {
     // honest not-ready prefix.
     return new InstanceUnavailableError(`实例未就绪：${err.message}`)
   }
+  if (err instanceof InstanceDomainMissingError) {
+    // Keep the class identity (isInstanceDomainMissing, design 24 §5): the
+    // message already carries the honest recovery text.
+    return err
+  }
   if (err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError')) {
     return err
   }
   return new Error(`实例不可达：${err instanceof Error ? err.message : String(err)}`)
+}
+
+/**
+ * A no-response transport outcome (timeout / abort / undici fetch failure):
+ * the host may have completed the work anyway, so the caller must never
+ * treat it as a deterministic failure (design 24 §5 — purge keeps running
+ * past a client timeout).
+ */
+export function isNoResponseError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false
+  if (error.name === 'TimeoutError' || error.name === 'AbortError') return true
+  return error.name === 'TypeError' && /fetch failed|network request failed|networkerror/i.test(error.message)
 }
 
 /** One directory row of a listing (DirectoryEntry shape, dsh-host-directory-picker/types). */
@@ -565,6 +662,141 @@ export async function renameSession(client: InstanceApiClient, sessionId: string
 
 export async function archiveSession(client: InstanceApiClient, sessionId: string): Promise<void> {
   await callAndThrow(client, () => client.workspace.archiveSession({ sessionId }))
+}
+
+/** archiveCleanup/preview result counts (design 24 §3). */
+export interface ArchiveCleanupPreview {
+  readonly archived: number
+  readonly deletableSessions: number
+  readonly deletableSubagents: number
+  readonly skippedRunning: number
+}
+
+/** One per-item failure of an archiveCleanup/purge run (design 24 §3). */
+export interface ArchiveCleanupPurgeItemError {
+  readonly sessionId: string
+  readonly code: string
+  readonly message: string
+}
+
+/** archiveCleanup/purge result (design 24 §3; ok:true with errors[] = partial
+ *  failure — the UI must surface it, never treat it as a clean success). */
+export interface ArchiveCleanupPurgeResult {
+  readonly deletedSessions: number
+  readonly deletedSubagents: number
+  readonly skippedRunning: number
+  readonly errors: readonly ArchiveCleanupPurgeItemError[]
+  /** True when item errors were truncated at the host cap (1000). */
+  readonly truncated: boolean
+}
+
+function countField(value: unknown, key: string): number {
+  const field = (value as Record<string, unknown> | null | undefined)?.[key]
+  return typeof field === 'number' && Number.isFinite(field) && field >= 0 ? field : 0
+}
+
+/**
+ * No-response classification after callAndThrow: raw TimeoutError/AbortError/
+ * fetch TypeErrors pass through wrapWireError, while OTHER network failures
+ * arrive wrapped as `实例不可达：<fetch message>` — both are no-response
+ * outcomes the caller must not treat as deterministic failures.
+ */
+function looksNoResponse(error: unknown): boolean {
+  if (isNoResponseError(error)) return true
+  if (error instanceof Error && error.message.startsWith('实例不可达：')) {
+    // A proxy/gateway 504 upstream_timeout means the host MAY still be
+    // running the purge (perf review Major-3) — same honest wording as a
+    // client-side timeout, never a deterministic failure.
+    return /fetch failed|network request failed|networkerror|HTTP 504/i.test(error.message)
+  }
+  return false
+}
+
+/**
+ * archiveCleanup/preview wrapper (design 24 §5): read-only point-in-time
+ * counts for the confirm copy. Domain-missing 404s surface as
+ * isInstanceDomainMissing errors; not-ready 503s keep the existing wording;
+ * no-response outcomes (timeout/abort/network) map to an honest retry
+ * message — never a bare browser timeout string.
+ */
+/**
+ * Decode the TWO-level archiveCleanup wire (security review Major-1): the
+ * generic RPC layer answers ok at the transport level, and the host domain
+ * carrier rides NESTED inside `result.value` (`{ok:true,value}|{ok:false,
+ * error}`). A nested ok:false is a DETERMINISTIC business failure (busy /
+ * registry-unreadable / purge-capacity / storage…) and must surface — never
+ * silently decode into empty counts (git-api parity). The thrown message
+ * keeps the `${code}: ${message}` shape so UI classifiers (busy prefix…)
+ * and existing callers behave identically to RPC-level failures.
+ */
+function decodeDomainResult<T>(result: UnaryResult<any>): { ok: true; value: T } {
+  // callAndThrow already refused ok:false answers — but its static type keeps
+  // the union, so read the value through the ok:true branch explicitly.
+  const rpcValue = (result as { ok: true; value?: unknown }).value
+  const carrier = (rpcValue ?? null) as Record<string, unknown> | null
+  if (carrier !== null && typeof carrier === 'object' && carrier.ok === false) {
+    const error = (carrier.error ?? null) as Record<string, unknown> | null
+    const code = typeof error?.code === 'string' ? error.code : 'unknown'
+    const message = typeof error?.message === 'string' ? error.message : '未知错误'
+    throw new Error(`${code}: ${message}`)
+  }
+  return { ok: true, value: (carrier?.value ?? undefined) as T }
+}
+
+export async function previewArchiveCleanup(client: InstanceApiClient): Promise<ArchiveCleanupPreview> {
+  let result: UnaryResult<any>
+  try {
+    result = await callAndThrow(client, () => client.archiveCleanup.preview({}))
+  } catch (error) {
+    if (looksNoResponse(error)) throw new Error('预览超时或网络中断，请重试。')
+    throw error
+  }
+  const { value } = decodeDomainResult<ArchiveCleanupPreview>(result)
+  return {
+    archived: countField(value, 'archived'),
+    deletableSessions: countField(value, 'deletableSessions'),
+    deletableSubagents: countField(value, 'deletableSubagents'),
+    skippedRunning: countField(value, 'skippedRunning'),
+  }
+}
+
+/**
+ * archiveCleanup/purge wrapper (design 24 §5): long-budget destructive run.
+ * A client timeout/network loss does NOT cancel the host run — the honest
+ * wording is "may still be running; re-preview/retry later" (idempotent per
+ * session). Only a resolved ok:false is a deterministic failure.
+ */
+export async function purgeArchivedSessions(client: InstanceApiClient): Promise<ArchiveCleanupPurgeResult> {
+  let result: UnaryResult<any>
+  try {
+    result = await callAndThrow(client, () => client.archiveCleanup.purge({}))
+  } catch (error) {
+    if (looksNoResponse(error)) {
+      throw new Error('清理超时或网络中断——清理可能仍在进行，请稍后重新预览或重试（重复执行是安全的）。')
+    }
+    throw error
+  }
+  const { value } = decodeDomainResult<Record<string, unknown> | undefined>(result)
+  const rawErrors = (value as Record<string, unknown> | null | undefined)?.errors
+  const errors: ArchiveCleanupPurgeItemError[] = Array.isArray(rawErrors)
+    ? rawErrors.flatMap((item: unknown) => {
+      const record = item as Record<string, unknown> | null
+      if (record === null || typeof record !== 'object') return []
+      const sessionId = typeof record.sessionId === 'string' ? record.sessionId : ''
+      const code = typeof record.code === 'string' ? record.code : ''
+      // A missing code is a host contract violation — never fabricate one.
+      if (code === '') return []
+      const message = typeof record.message === 'string' ? record.message : '未知错误'
+      return [{ sessionId, code, message }]
+    })
+    : []
+  return {
+    deletedSessions: countField(value, 'deletedSessions'),
+    deletedSubagents: countField(value, 'deletedSubagents'),
+    skippedRunning: countField(value, 'skippedRunning'),
+    truncated: (value as Record<string, unknown> | null | undefined)?.truncated === true,
+    errors,
+  }
 }
 
 export interface CreateWorkspaceResult {

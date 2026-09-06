@@ -53,6 +53,7 @@ import {
   buildPatchOverlay,
   ensureSeedPackage,
   missingHostPackageInserts,
+  HOST_ARCHIVE_CLEANUP_INSERT,
   HOST_GIT_WORKTREE_INSERT,
   HOST_GRAPH_INSERT,
   type SeedEntry,
@@ -106,6 +107,10 @@ export const DEFAULT_HOST_GRAPH_PACKAGE_SOURCE_DIR = join(REPO_ROOT, 'packages',
 
 /** Default source for the chamber in-host Git worktree service package. */
 export const DEFAULT_HOST_GIT_WORKTREE_PACKAGE_SOURCE_DIR = join(REPO_ROOT, 'packages', 'dsh-chamber-host-git-worktree')
+
+/** Default source for the chamber in-host archived-session cleanup domain
+ *  package (design 24; packaged runtimes pass the bundled location). */
+export const DEFAULT_HOST_ARCHIVE_CLEANUP_PACKAGE_SOURCE_DIR = join(REPO_ROOT, 'packages', 'dsh-host-archive-cleanup')
 
 /**
  * Default dsh workspace: <repo root>/ref-dsh when present, otherwise the
@@ -195,8 +200,15 @@ export interface ControlPlaneOptions {
    */
   hostGitWorktreePackageSourceDir?: string
   /**
+   * Chamber in-host archived-session cleanup domain package source (design
+   * 24). Same built-artifact gate and profile seed lifecycle as the other
+   * two host packages; absent source (or no committed dist) = skipped.
+   */
+  hostArchiveCleanupPackageSourceDir?: string
+  /**
    * Seed registry (2026-12 interface): additional chamber seed entries beyond
-   * the two host packages — the seam for browser-side chamber client plugins
+   * the three base host packages (client-graph / git-worktree /
+   * archive-cleanup) — the seam for browser-side chamber client plugins
    * in hosted frontends (e.g. the gateway mobile slot). Every entry rides the
    * same built-artifact gate, profile seed lifecycle and `--patch` overlay as
    * the host packages; kind 'client' entries carry no probe coupling. A null/
@@ -341,13 +353,17 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
   const hostGraphPackageSourceDir = options.hostGraphPackageSourceDir ?? DEFAULT_HOST_GRAPH_PACKAGE_SOURCE_DIR
   const hostGitWorktreePackageSourceDir = options.hostGitWorktreePackageSourceDir
     ?? DEFAULT_HOST_GIT_WORKTREE_PACKAGE_SOURCE_DIR
-  // Seed registry (2026-12): the two legacy host packages plus any extra
-  // entries (client-plugin slots like the gateway mobile stub). An extra
-  // entry that re-declares a base package's id WINS over the base entry
-  // (last-writer-wins by loader id): the gateway passes the two host packages
-  // as desktop-synced extra entries, so once its seed cache is populated the
-  // synced copies replace the packaged defaults — the base rows exist only to
-  // preserve the legacy desktop shape (no extraSeedEntries → no shadowing).
+  const hostArchiveCleanupPackageSourceDir = options.hostArchiveCleanupPackageSourceDir
+    ?? DEFAULT_HOST_ARCHIVE_CLEANUP_PACKAGE_SOURCE_DIR
+  // Seed registry (2026-12): the three base chamber host packages
+  // (client-graph / git-worktree / archive-cleanup) plus any extra entries
+  // (client-plugin slots like the gateway mobile stub). An extra entry that
+  // re-declares a base package's id WINS over the base entry
+  // (last-writer-wins by loader id): the gateway passes the three host
+  // packages as desktop-synced extra entries, so once its seed cache is
+  // populated the synced copies replace the packaged defaults — the base
+  // rows exist only to preserve the legacy desktop shape (no
+  // extraSeedEntries → no shadowing).
   const seedEntries = (): SeedEntry[] => {
     const byId = new Map<string, SeedEntry>()
     for (const entry of [
@@ -364,6 +380,13 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
         source: 'packaged' as const,
         sourceDir: hostGitWorktreePackageSourceDir,
         probeDomains: ['gitWorktree/previewCreate'],
+      },
+      {
+        insert: HOST_ARCHIVE_CLEANUP_INSERT,
+        kind: 'host' as const,
+        source: 'packaged' as const,
+        sourceDir: hostArchiveCleanupPackageSourceDir,
+        probeDomains: ['archiveCleanup/probe'],
       },
       ...(options.extraSeedEntries ?? []),
     ]) {
@@ -423,8 +446,9 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
     // wording distinguishes a true stub (packaged entry whose package has not
     // shipped yet, e.g. the gateway mobile slot) from a desktop-synced entry
     // merely awaiting its first sync (an expected pre-sync state, logged once
-    // per spawn as informational). The two legacy dirs keep their documented
-    // silent-skip behavior.
+    // per spawn as informational). The three base packaged dirs (client-graph
+    // / git-worktree / archive-cleanup) keep their documented silent-skip
+    // behavior (absent source or dist = no row, no overlay).
     for (const entry of options.extraSeedEntries ?? []) {
       if (entry.sourceDir === null || !existsSync(entry.sourceDir)) {
         const message = `seed entry '${entry.insert.id}' (${entry.insert.name}): source absent; skipped`

@@ -395,6 +395,7 @@ function printFullBatteryNotice() {
   pnpm run test:control-plane
   pnpm run test:runtime && pnpm run test:gateway && pnpm run test:desktop
   pnpm run test:renderer-shell && pnpm run test:git && pnpm run test:host-git
+  pnpm run test:host-archive-cleanup
   pnpm run test:sidebar && pnpm run test:layout
   pnpm run test:settings-bridge && pnpm run test:connections
   pnpm run test:client-web && pnpm run test:connection
@@ -405,7 +406,8 @@ function printFullBatteryNotice() {
   pnpm run typecheck:git && pnpm run typecheck:open-in && pnpm run typecheck:mobile
   pnpm run typecheck:client-web && pnpm run typecheck:connection
   pnpm run typecheck:api-gateway && pnpm run typecheck:host-graph
-  pnpm run typecheck:host-git && pnpm run typecheck:gateway
+  pnpm run typecheck:host-git && pnpm run typecheck:host-archive-cleanup
+  pnpm run typecheck:gateway
 ────────────────────────────────────────────────────────────────`)
 }
 

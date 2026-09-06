@@ -67,7 +67,10 @@ dsh 官方 web 的客户端插件链路是完整的（已核 vendor 源码）：
   侧，非 vendor），注册一个 Remote 暴露 `clientModules.graph()`（宿主 ctx 上
   `clientModules` 服务现成）。控制面在本地 profile seed 该行（`--patch` overlay，
   模块 B）——先例：`seedDshHomeDefaults` 已 seed `settings.yaml`；远程实例由部署侧
-  同样 seed（**遗留**：部署说明未写，见 §6）。**包分发开放点（已定）**：seed 时
+  同样 seed（**遗留**：部署说明未写，见 §6）。**2026-12 注**：本文描述的是模块 A
+  单包；同 seed 机制的 chamber 宿主包现为三个（+git-worktree（设计 08）、
+  +archive-cleanup（设计 24）），机制同构、清单以 05 §6/02 §2.6 为权威。**包分发
+  开放点（已定）**：seed 时
   控制面把模块 A 包（package.json + dist/index.js）裸包拷贝进
   `profiles/web/node_modules/@dsh-chamber/dsh-host-client-graph/`（免 pnpm 的裸包
   拷贝，行内注释记录），`--patch` 行经 profile node_modules 锚点解析。

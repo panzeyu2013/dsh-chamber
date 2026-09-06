@@ -99,7 +99,12 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
 - 会话行悬停操作（v1 最小集，走该来源自己的 API）：重命名/归档（kebab
   菜单 + 独立归档按钮）；workspace 行：新建会话（`+` 按钮，在该
   workspace 下创建并打开）、重命名、删除（kebab 菜单）。wire 缺失的
-  方法不做（如删除会话），不发明协议。
+  方法不做（如删除会话），不发明协议——**design 24 受界例外**（2026-12
+  用户批准，AGENTS 已登记）：来源头 hover 簇新增「删除已归档内容」动作，
+  走 chamber 自有宿主域 `archiveCleanup/{preview,purge}`（第三个宿主包，
+  实例进程内权威清除归档集内容含 subagent 级联；只删不读、运行中整棵
+  跳过、幂等；域缺失 404 给诚实文案；host binding 依 design 24 §10 vendor
+  核对后启用）。详见 design 24 与 05 §6 宿主包清单。
 - 已连接来源提供"新建工作区"（来源头部 `+` 按钮）：打开该来源的应用内
   目录浏览对话框（§4
   同一 browse 表面，不做手敲路径表单），确认的路径走该来源的
@@ -129,7 +134,12 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
 - 只有未挂载或 reconnect baseline 不完整的 ready 来源使用 30s unary 兜底；所有
   ready 来源都有完整生产者时不创建聚合定时器。连接/生产者状态变化立即重估，
   用户动作的 `requestRefresh` 只对无完整生产者来源单次拉取；已挂载完整生产者由同一
-  host-store 变更直接推送，避免动作成功后再补 RPC。每个来源的 not-ready → ready
+  host-store 变更直接推送，避免动作成功后再补 RPC。**2026-12 勘误（与
+  App.tsx 不符，design 24 评审发现）**：App 层 onRefresh 对每个 live 来源
+  无条件执行一次 mutation-pull（合并会话行、保留分组/归档集）——`requestRefresh`
+  不是 mounted 来源的 no-op；本段与 05 §3 同源旧句已过时，实际语义 =
+  mounted 来源以 host-store 事件推送为主 + requestRefresh 即时 unary pull
+  双通道。每个来源的 not-ready → ready
   连接代边沿固定执行一次 unary：生产者会对同内容快照去重，而 App 在断线时已清空
   聚合，该单次权威拉取保证“内容未变”的重连也恢复列表；稳定 ready 代仍为零轮询。
   若该拉取瞬时失败，生产者的 loading 撤回 + idle baseline 重发负责恢复，不会永久停在
@@ -213,8 +223,9 @@ export const chamberBridge: {
   使“同 id、其余投影不变”的 replacement 仍会通知来源所有者。
 - 订阅 `onOpenSession` → 激活对应来源视图 + `openInstanceSession`（§4）。
 - 订阅 `onActivateSource` → 仅切换活动来源视图（不打开会话）。
-- 订阅 `onRefresh` → 仅无完整生产者的来源立即重拉；已挂载完整生产者由同一
-  host-store 变更直接推送，避免操作后重复 RPC。
+- 订阅 `onRefresh` → 每个 live 来源无条件执行一次即时 mutation-pull（与
+  §2.3 2026-12 勘误一致：mounted 来源 host-store 推送为主、requestRefresh
+  双通道并行，不是 mounted no-op）。
 - 订阅 `onRuntimeReport` → 把各来源的运行时事实合并进 `server.runtime`
   （仅附加、不覆盖轮询字段；来源断连即清，06 §4）。runtime 与 snapshot 两条
   producer 均以注册时单调 token + 主进程下发的 opaque `sourceFingerprint` 认领
@@ -455,6 +466,11 @@ export const chamberBridge: {
   - `packages/dsh-chamber-host-git-worktree/`——设计 08 的领域限定 Git Remote，
     与该实例 `workspaceRegistry`/live agents 同用户、同文件系统做权威守卫；
     Desktop 与控制面均不执行 Git。
+  - `packages/dsh-host-archive-cleanup/`——设计 24 的已归档会话内容清理域
+    （`archiveCleanup/{preview,purge}`，AGENTS 已登记的有界例外）：实例进程内
+    经宿主权威状态 children-first 级联清除归档集内容（含 subagent 起源后代、
+    官方事件发射），只删不读、绝不触碰运行中/未归档内容；上游 delete wire
+    落地后退役。
 - 前端入口复用 `packages/renderer/`：vite 构建时把 workspace 包 alias 到源码；
   `chamber-entry.ts` 复合 entry 挂整棵 dsh 客户端树（connection→typert→
   gateway→remotes→runtime→locale→theme→**layout（chamber ui-layout fork 替换
@@ -473,11 +489,12 @@ export const chamberBridge: {
     + 页面自有 id）去重，预加载剩余 bundle
     （`/api/i/<id>/plugins/<pkg>/client.js?rev=…`），经 boot.ts `extraRows` seam
     合并进 boot rows（详见设计 09）。
-  - **双 host 包与 seed（设计 08/09）**：`packages/dsh-host-client-graph` 与
-    `packages/dsh-chamber-host-git-worktree` 都提交 esbuild `dist/index.js`
+  - **三 host 包与 seed（设计 08/09/24）**：`packages/dsh-host-client-graph`、
+    `packages/dsh-chamber-host-git-worktree` 与 `packages/dsh-host-archive-cleanup`
+    都提交 esbuild `dist/index.js`
     （`@deepseek-ai/*` external）；控制面 `host-graph-seed.ts` 幂等 seed 所有
     已构建包进 `$DSH_HOME/profiles/web/node_modules/@dsh-chamber/*/`，并把
-    `client-graph` / `git-worktree` insert 合并到单一
+    `client-graph` / `git-worktree` / `archive-cleanup` insert 合并到单一
     `<stateDir>/dsh-chamber-graph.patch.yml`。每次 spawn 注入同一 `--patch`
     （`webProfileArgs(port, patchPath?)`）；任一产物缺失只跳过对应行，不产生
     悬空 insert。远程 ready-time seed 同样一次探测/一次 overlay 合并写，见设计 13。

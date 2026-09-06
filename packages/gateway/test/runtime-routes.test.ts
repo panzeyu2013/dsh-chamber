@@ -1659,14 +1659,20 @@ test('real manager: the B1 16 MiB settings/describe cap reaches the wire carrier
 test('2026-12 shape gate: a synced seed cache flips the activation to the FULL probe set — and drift fails closed', async () => {
   const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-shape-'))
   try {
-    // Seed BOTH host packages into the gateway seed cache, exactly as a
+    // Seed ALL THREE host packages into the gateway seed cache, exactly as a
     // connecting desktop would (PUT /chamber/plugins → chamber-plugins cache).
     // The probe shape gate (hasSyncedHostSeed) must now expect the full
-    // 6-name set (REQUIRED_ACTIVATION_PROBES) — this is the flow that makes
+    // 7-name set (REQUIRED_ACTIVATION_PROBES) — this is the flow that makes
     // a fresh gateway pick the chamber host layer up after the first desktop
-    // sync.
+    // sync. Partial syncs (2-of-3) derive the exact expected set instead
+    // (design 24 §7 C, M2) — covered by the hostDomainNames tests in
+    // dsh-runtime.
     const plugins = createChamberPlugins(stateDir, silentLogger)
-    for (const name of ['@dsh-chamber/dsh-host-client-graph', '@dsh-chamber/dsh-host-git-worktree']) {
+    for (const name of [
+      '@dsh-chamber/dsh-host-client-graph',
+      '@dsh-chamber/dsh-host-git-worktree',
+      '@dsh-chamber/dsh-host-archive-cleanup',
+    ]) {
       await plugins.put(name, {
         'package.json': JSON.stringify({ name, version: '1.0.0' }),
         'dist/index.js': 'export const ok = 1\n',

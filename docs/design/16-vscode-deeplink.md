@@ -344,7 +344,7 @@ detectVscodeAvailability(platform): { available: boolean }
 - main.ts 接线（§4.2/§4.3）；
 - electron-builder `protocols` 键；
 - release.yml 版本断言：**无需并入**（断言集只含 host 包：root/desktop/
-  control-plane/renderer/cli/dsh-host-client-graph/dsh-host-git-worktree；git client
+  control-plane/renderer/cli/dsh-host-client-graph/dsh-host-git-worktree/dsh-host-archive-cleanup；git client
   插件亦不在集内）——新包独立 version 字段即可。
 
 ## 8. 安全不变量

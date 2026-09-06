@@ -48,16 +48,21 @@ export const REQUIRED_ACTIVATION_PROBES = [
   'clientGraph/graph',
   'settings/describe',
   'gitWorktree/previewCreate',
+  'archiveCleanup/probe',
   'data.settings',
 ] as const;
 
-/** The chamber host domains (clientGraph/graph + gitWorktree/previewCreate).
- * 2026-12 shape-awareness: the gateway shape only verifies them once a
- * connecting desktop has synced its host packages into the seed cache — a
- * fresh gateway hosts a plain dsh whose activation must pass without them. */
+/** The chamber host domains (clientGraph/graph + gitWorktree/previewCreate +
+ *  archiveCleanup/probe). 2026-12 shape-awareness: the gateway shape only
+ *  verifies them once a connecting desktop has synced its host packages into
+ *  the seed cache — a fresh gateway hosts a plain dsh whose activation must
+ *  pass without them. Design 24 §7 C: M2 replaces the binary hostDomains
+ *  switch with a per-spawn derivation from the actually seeded entries; the
+ *  typed subtraction below keeps the reduced set in lockstep meanwhile. */
 export const HOST_DOMAIN_PROBE_NAMES = [
   'clientGraph/graph',
   'gitWorktree/previewCreate',
+  'archiveCleanup/probe',
 ] as const;
 
 // Typed subtraction: the filter keeps the literal-typed tuple elements, so a
@@ -71,6 +76,32 @@ const HOST_DOMAIN_PROBE_NAME_SET = new Set<string>(HOST_DOMAIN_PROBE_NAMES)
  * domains (gateway without a synced seed cache). */
 export const PROBE_NAMES_WITHOUT_HOST_DOMAINS: readonly Exclude<RequiredProbeName, HostDomainProbeName>[] =
   REQUIRED_ACTIVATION_PROBES.filter(name => !HOST_DOMAIN_PROBE_NAME_SET.has(name)) as readonly Exclude<RequiredProbeName, HostDomainProbeName>[];
+
+/**
+ * Expected activation set for a shape carrying EXACTLY the given chamber
+ * host domains (design 24 §7 C / design 18 §3.4, M2 derivation): the closed
+ * base set plus every listed domain, in REQUIRED order. Unknown names are
+ * ignored (never fabricate a probe row); the full list equals
+ * REQUIRED_ACTIVATION_PROBES and an empty list equals
+ * PROBE_NAMES_WITHOUT_HOST_DOMAINS — partial syncs (2-of-3) now have a
+ * well-defined expectation instead of the binary all-or-none gate.
+ */
+export function activationProbeNamesForDomains(domains: readonly string[]): readonly string[] {
+  // Fail LOUD on an unrecognized domain (implementation-review Major-2):
+  // silently ignoring a listed domain would drop its probe row from the
+  // expected set AND the run legs — a dead/unmounted chamber domain could
+  // then pass activation until the sidebar 404s (fail-open). The listed
+  // names come from our own seed/probe metadata, so an unknown name is a
+  // cross-package drift bug and must surface, never degrade to skip.
+  const unknown = domains.filter(name => !HOST_DOMAIN_PROBE_NAME_SET.has(name))
+  if (unknown.length > 0) {
+    throw new Error(`unknown chamber host probe domain(s): ${[...new Set(unknown)].join(', ')}`)
+  }
+  const wanted = new Set<string>(domains)
+  return REQUIRED_ACTIVATION_PROBES.filter(
+    name => !HOST_DOMAIN_PROBE_NAME_SET.has(name) || wanted.has(name),
+  )
+}
 
 /** 单条探针结果（host 侧执行汇总；name 用于完整性校验、日志与定位）。 */
 export interface ProbeResult {

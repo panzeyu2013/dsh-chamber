@@ -58,9 +58,14 @@ export const HOST_GRAPH_PACKAGE_NAME = '@dsh-chamber/dsh-host-client-graph'
 /** Chamber-owned host package that executes Git worktree operations in-host. */
 export const HOST_GIT_WORKTREE_PACKAGE_NAME = '@dsh-chamber/dsh-host-git-worktree'
 
-/** Loader ids for the two chamber-owned host packages. */
+/** Chamber-owned host package that purges archived session content in-host
+ *  (design 24: `archiveCleanup/{preview,purge}`). */
+export const HOST_ARCHIVE_CLEANUP_PACKAGE_NAME = '@dsh-chamber/dsh-host-archive-cleanup'
+
+/** Loader ids for the three chamber-owned host packages. */
 export const HOST_GRAPH_INSERT_ID = 'client-graph'
 export const HOST_GIT_WORKTREE_INSERT_ID = 'git-worktree'
+export const HOST_ARCHIVE_CLEANUP_INSERT_ID = 'archive-cleanup'
 
 /** A host package row that can be rendered into the shared loader overlay. */
 export interface HostPackageInsert {
@@ -78,6 +83,11 @@ export const HOST_GIT_WORKTREE_INSERT: HostPackageInsert = {
   name: HOST_GIT_WORKTREE_PACKAGE_NAME,
 }
 
+export const HOST_ARCHIVE_CLEANUP_INSERT: HostPackageInsert = {
+  id: HOST_ARCHIVE_CLEANUP_INSERT_ID,
+  name: HOST_ARCHIVE_CLEANUP_PACKAGE_NAME,
+}
+
 /**
  * Seed registry (2026-12 interface): one seedable chamber package/plugin
  * entry. The loader overlay row itself is identical for every entry (cordis
@@ -85,12 +95,13 @@ export const HOST_GIT_WORKTREE_INSERT: HostPackageInsert = {
  * that drive the seed file set and the future source resolution only.
  *
  * Consumers:
- * - desktop control plane: the two host packages (base entries, legacy
- *   `hostGraphPackageSourceDir` / `hostGitWorktreePackageSourceDir` options);
- * - gateway: the same two host packages plus `extraSeedEntries` — the mobile
- *   slot (`@dsh-chamber/dsh-client-ui-mobile`, kind 'client') is a stub whose
- *   packaged source dir ships on the mobile branch; until then an absent
- *   sourceDir is a warned skip, never an error.
+ * - desktop control plane: the three host packages as base entries
+ *   (`hostGraphPackageSourceDir` / `hostGitWorktreePackageSourceDir` /
+ *   `hostArchiveCleanupPackageSourceDir` options — design 24);
+ * - gateway: the same three host packages as desktop-synced entries plus
+ *   `extraSeedEntries` — the mobile slot (`@dsh-chamber/dsh-client-ui-mobile`,
+ *   kind 'client') is a stub whose packaged source dir ships on the mobile
+ *   branch; until then an absent sourceDir is a warned skip, never an error.
  */
 export type SeedEntryKind = 'host' | 'client'
 

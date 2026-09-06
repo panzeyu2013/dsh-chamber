@@ -636,8 +636,9 @@ connection-target scope 所有的目标；
 
 **1. `/chamber/channels`**：通道注册表只读投影（§7；MVP 空实现）。
 
-**2. `/chamber/plugins`（桌面同步的宿主包种子缓存，Phase 3）**：两个 chamber
-宿主包（`dsh-host-client-graph`、`dsh-host-git-worktree`）不再随 gateway 发行物
+**2. `/chamber/plugins`（桌面同步的宿主包种子缓存，Phase 3）**：三个 chamber
+宿主包（`dsh-host-client-graph`、`dsh-host-git-worktree`、`dsh-host-archive-cleanup`
+（design 24，2026-12 起））不再随 gateway 发行物
 分发——连接的桌面经 `PUT /chamber/plugins` 上传自己的副本（包名白名单 + 文件
 大小上限 + `package.json` 名称/版本校验，原子 0600 写入 `<stateDir>/
 chamber-plugins/<scope 剥离 slug>/`（如 `chamber-plugins/dsh-host-client-graph`，

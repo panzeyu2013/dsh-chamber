@@ -28,6 +28,7 @@ import {
   ensureSeedPackage,
   missingHostPackageInserts,
   HOST_GIT_WORKTREE_INSERT,
+  HOST_ARCHIVE_CLEANUP_PACKAGE_NAME,
   HOST_GIT_WORKTREE_PACKAGE_NAME,
   HOST_GRAPH_INSERT,
   HOST_GRAPH_PACKAGE_NAME,
@@ -528,6 +529,7 @@ test('createControlPlane.startLocal() seeds the host package and materializes th
     dshWorkspacePath: join(dir, 'dsh'),
     hostGraphPackageSourceDir: source,
     hostGitWorktreePackageSourceDir: join(dir, 'no-git-package'),
+    hostArchiveCleanupPackageSourceDir: join(dir, 'no-archive-cleanup-package'),
     logger: silentLogger,
     localConnectionDeps: healthyLocalConnectionDeps,
   })
@@ -560,6 +562,7 @@ test('createControlPlane.startLocal() seeds both host packages behind one merged
     dshWorkspacePath: join(dir, 'dsh'),
     hostGraphPackageSourceDir: graphSource,
     hostGitWorktreePackageSourceDir: gitSource,
+    hostArchiveCleanupPackageSourceDir: join(dir, 'no-archive-cleanup-package'),
     logger: silentLogger,
     localConnectionDeps: healthyLocalConnectionDeps,
   })
@@ -570,6 +573,49 @@ test('createControlPlane.startLocal() seeds both host packages behind one merged
     assert.equal(
       readFileSync(join(dir, 'dsh-home', 'profiles', 'web', 'node_modules', HOST_GIT_WORKTREE_PACKAGE_NAME, 'dist', 'index.js'), 'utf8'),
       'export const git = 1\n',
+    )
+  } finally {
+    await plane.stop()
+  }
+})
+
+test('createControlPlane.startLocal() seeds ALL THREE host packages behind one merged overlay (design 24 M3 lockstep leg)', async t => {
+  const dir = tempDir(t)
+  const graphSource = stageSource(t, 'export const graph = 1\n')
+  const gitSource = tempDir(t)
+  mkdirSync(join(gitSource, 'dist'), { recursive: true })
+  writeFileSync(join(gitSource, 'package.json'), JSON.stringify({ name: HOST_GIT_WORKTREE_PACKAGE_NAME }))
+  writeFileSync(join(gitSource, 'dist', 'index.js'), 'export const git = 1\n')
+  const archiveSource = tempDir(t)
+  mkdirSync(join(archiveSource, 'dist'), { recursive: true })
+  writeFileSync(join(archiveSource, 'package.json'), JSON.stringify({ name: HOST_ARCHIVE_CLEANUP_PACKAGE_NAME }))
+  writeFileSync(join(archiveSource, 'dist', 'index.js'), 'export const archiveCleanup = 1\n')
+  const plane = createControlPlane({
+    stateDir: dir,
+    port: 0,
+    dshWorkspacePath: join(dir, 'dsh'),
+    hostGraphPackageSourceDir: graphSource,
+    hostGitWorktreePackageSourceDir: gitSource,
+    hostArchiveCleanupPackageSourceDir: archiveSource,
+    logger: silentLogger,
+    localConnectionDeps: healthyLocalConnectionDeps,
+  })
+  try {
+    await plane.start()
+    await plane.startLocal()
+    const overlay = readFileSync(join(dir, HOST_GRAPH_PATCH_FILENAME), 'utf8')
+    assert.ok(overlay.includes(`- id: archive-cleanup`), 'third insert row present')
+    assert.ok(overlay.includes(`name: '${HOST_ARCHIVE_CLEANUP_PACKAGE_NAME}'`), 'third package named')
+    // probeDomains is documented pure metadata (never serialized into the
+    // overlay) — the activation-contract lockstep (architecture-review M3:
+    // catches archiveCleanup/preview↔probe drift) is asserted at the seed
+    // SOURCE: the third row must name the zero-cost probe endpoint.
+    const seedSource = readFileSync(join(process.cwd(), 'src', 'index.ts'), 'utf8')
+    assert.ok(seedSource.includes(`probeDomains: ['archiveCleanup/probe']`), 'seed row names the probe endpoint')
+    assert.ok(!seedSource.includes(`probeDomains: ['archiveCleanup/preview']`), 'no stale preview probe domain in the seed')
+    assert.equal(
+      readFileSync(join(dir, 'dsh-home', 'profiles', 'web', 'node_modules', HOST_ARCHIVE_CLEANUP_PACKAGE_NAME, 'dist', 'index.js'), 'utf8'),
+      'export const archiveCleanup = 1\n',
     )
   } finally {
     await plane.stop()
@@ -588,6 +634,7 @@ test('createControlPlane.startLocal() reuses an exact user profile row without a
     dshWorkspacePath: join(dir, 'dsh'),
     hostGraphPackageSourceDir: source,
     hostGitWorktreePackageSourceDir: join(dir, 'no-git-package'),
+    hostArchiveCleanupPackageSourceDir: join(dir, 'no-archive-cleanup-package'),
     logger: silentLogger,
     localConnectionDeps: healthyLocalConnectionDeps,
   })
@@ -616,6 +663,7 @@ test('createControlPlane.startLocal() rejects a profile loader collision before 
     dshWorkspacePath: join(dir, 'dsh'),
     hostGraphPackageSourceDir: source,
     hostGitWorktreePackageSourceDir: join(dir, 'no-git-package'),
+    hostArchiveCleanupPackageSourceDir: join(dir, 'no-archive-cleanup-package'),
     logger: silentLogger,
     localConnectionDeps: healthyLocalConnectionDeps,
   })
@@ -641,6 +689,7 @@ test('createControlPlane.startLocal() keeps the v4 baseline when dist/index.js i
     dshWorkspacePath: join(dir, 'dsh'),
     hostGraphPackageSourceDir: source,
     hostGitWorktreePackageSourceDir: join(dir, 'no-git-package'),
+    hostArchiveCleanupPackageSourceDir: join(dir, 'no-archive-cleanup-package'),
     logger: silentLogger,
     localConnectionDeps: healthyLocalConnectionDeps,
   })
@@ -671,6 +720,7 @@ test('createControlPlane.startLocal() merges extra seed entries (client plugin) 
     dshWorkspacePath: join(dir, 'dsh'),
     hostGraphPackageSourceDir: graphSource,
     hostGitWorktreePackageSourceDir: join(dir, 'no-git-package'),
+    hostArchiveCleanupPackageSourceDir: join(dir, 'no-archive-cleanup-package'),
     extraSeedEntries: [{
       insert: { id: 'mobile', name: '@dsh-chamber/dsh-client-ui-mobile' },
       kind: 'client',
@@ -708,6 +758,7 @@ test('createControlPlane.startLocal() skips an absent extra seed entry (stub) wi
     dshWorkspacePath: join(dir, 'dsh'),
     hostGraphPackageSourceDir: source,
     hostGitWorktreePackageSourceDir: join(dir, 'no-git-package'),
+    hostArchiveCleanupPackageSourceDir: join(dir, 'no-archive-cleanup-package'),
     extraSeedEntries: [{
       insert: { id: 'mobile', name: '@dsh-chamber/dsh-client-ui-mobile' },
       kind: 'client',
@@ -821,6 +872,7 @@ test('createControlPlane.startLocal() lets an extra seed entry shadow the base h
     dshWorkspacePath: join(dir, 'dsh'),
     hostGraphPackageSourceDir: baseSource,
     hostGitWorktreePackageSourceDir: join(dir, 'no-git-package'),
+    hostArchiveCleanupPackageSourceDir: join(dir, 'no-archive-cleanup-package'),
     extraSeedEntries: [{
       insert: HOST_GRAPH_INSERT,
       kind: 'host',

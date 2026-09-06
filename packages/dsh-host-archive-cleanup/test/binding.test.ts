@@ -1,0 +1,249 @@
+/** Real-binding tests (design 24 §10/§14 + security/perf review 2026-12):
+ *  `src/binding.ts` is decorator-free, so the ACTUAL factory and gate run
+ *  under node:test against in-memory service fakes + a real temp filesystem
+ *  for the locate/remove content leg. The gateway class (index.ts) keeps TS
+ *  decorators and is exercised by typecheck + M4 gateway-boot E2E. */
+
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { existsSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import {
+  assertHostSurface,
+  makeHostBinding,
+  RunGate,
+  BUSY_MESSAGE,
+  headerToState,
+  type HostCtxServices,
+} from '../src/binding.ts'
+import { ArchiveCleanupError } from '../src/core.ts'
+
+function header(id: string, extra: Partial<{ cwd: string; parentSession: string; origin: 'subagent' }> = {}) {
+  return { id, ...extra }
+}
+
+interface RegistryFake {
+  archived: string[]
+  workspaces: { id: string }[]
+  setStateCalls: { state: unknown; chained: boolean }[]
+  chainCalls: number
+  failNextSetState?: boolean
+}
+
+function makeCtx(overrides: Partial<HostCtxServices> = {}, registry?: RegistryFake): HostCtxServices {
+  return {
+    sessionQuery: {
+      listSessions: async () => [],
+    },
+    sessionPersistence: {
+      list: async () => [],
+      locate: () => undefined,
+    },
+    ...(registry === undefined ? {} : {
+      workspaceRegistry: {
+        get archivedSessionIds() { return registry.archived },
+        list: () => registry.workspaces,
+        setState: async (state: unknown) => {
+          if (registry.failNextSetState === true) {
+            registry.failNextSetState = false
+            throw new Error('fake: setState failed')
+          }
+          registry.setStateCalls.push({ state, chained: false })
+          const s = state as { workspaceIds: string[]; archivedSessionIds: string[] }
+          registry.archived = [...s.archivedSessionIds]
+        },
+        enqueueOperation: async <T>(operation: () => Promise<T>): Promise<T> => {
+          // Serialized like the official chain (await-tail semantics are the
+          // registry's job — the fake records chain usage and runs the op).
+          registry.chainCalls += 1
+          return await operation()
+        },
+      } as never,
+    }),
+    ...overrides,
+  }
+}
+
+test('binding: batched archived-set removal runs one chained single-state write', async () => {
+  const registry: RegistryFake = {
+    archived: ['a', 'b', 'c'], workspaces: [{ id: 'w1' }], setStateCalls: [], chainCalls: 0,
+  }
+  const host = makeHostBinding(makeCtx({}, registry))
+  await host.removeArchivedSessionIds(['a', 'c'])
+  assert.equal(registry.setStateCalls.length, 1)
+  const state = registry.setStateCalls[0]!.state as { initialized: boolean; workspaceIds: string[]; archivedSessionIds: string[] }
+  assert.equal(state.initialized, true)
+  assert.deepEqual(state.workspaceIds, ['w1'])
+  assert.deepEqual(state.archivedSessionIds, ['b'])
+  assert.deepEqual(registry.archived, ['b'])
+  // Idempotent no-op when nothing to remove → no write.
+  await host.removeArchivedSessionIds(['a'])
+  assert.equal(registry.setStateCalls.length, 1)
+})
+
+test('binding: official setState failures map to item code storage', async () => {
+  const registry: RegistryFake = {
+    archived: ['a'], workspaces: [{ id: 'w1' }], setStateCalls: [], chainCalls: 0, failNextSetState: true,
+  }
+  const host = makeHostBinding(makeCtx({}, registry))
+  await assert.rejects(() => host.removeArchivedSessionIds(['a']), (error: unknown) => {
+    return error instanceof ArchiveCleanupError && error.code === 'storage'
+  })
+})
+
+test('binding: deleteSessionContent live guard refuses running; missing stays missing', async () => {
+  const ctx: HostCtxServices = {
+    agents: { list: () => [{ id: 'live-1' }] },
+    sessionPersistence: { locate: h => ({ kind: 'jsonl', path: join(tmpdir(), 'x', h.id) }) },
+  }
+  const host = makeHostBinding(ctx)
+  await assert.rejects(() => host.deleteSessionContent('live-1', '/work'), (error: unknown) => {
+    return error instanceof ArchiveCleanupError && error.code === 'running'
+  })
+  // No header/artifact → idempotent missing (no list service mounted → the
+  // cwd-less fallback must fail registry-unreadable instead of guessing).
+  await assert.rejects(() => host.deleteSessionContent('unknown-1'), (error: unknown) => {
+    return error instanceof ArchiveCleanupError && error.code === 'registry-unreadable'
+  })
+})
+
+test('binding: content removal removes the official artifact and reclaims an empty dir; FS errors map to storage', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'archive-cleanup-binding-'))
+  try {
+    const sessionDir = join(dir, 'proj', 's1')
+    mkdirSync(sessionDir, { recursive: true })
+    const artifact = join(sessionDir, 'session.jsonl.zstd')
+    writeFileSync(artifact, '{}')
+    const locate = (h: { id: string; cwd?: string }) => {
+      assert.equal(h.id, 's1')
+      return { kind: 'jsonl', path: join(h.cwd ?? '', 's1', 'session.jsonl.zstd') }
+    }
+    const host = makeHostBinding({ sessionPersistence: { locate } })
+    const outcome = await host.deleteSessionContent('s1', join(dir, 'proj'))
+    assert.equal(outcome, 'deleted')
+    assert.equal(existsSync(artifact), false)
+    assert.equal(existsSync(sessionDir), false, 'empty session dir reclaimed')
+    assert.equal(existsSync(join(dir, 'proj')), true, 'project dir survives')
+
+    // Symlinked session dir fails closed with code storage.
+    const real = join(dir, 'real-target')
+    mkdirSync(real, { recursive: true })
+    const linkDir = join(dir, 'link', 's2')
+    mkdirSync(join(dir, 'link'), { recursive: true })
+    symlinkSync(real, linkDir)
+    const linkHost = makeHostBinding({
+      sessionPersistence: { locate: () => ({ kind: 'jsonl', path: join(linkDir, 'session.jsonl.zstd') }) },
+    })
+    await assert.rejects(() => linkHost.deleteSessionContent('s2', join(dir, 'link')), (error: unknown) => {
+      return error instanceof ArchiveCleanupError && error.code === 'storage'
+    })
+    assert.equal(existsSync(real), true, 'symlink target untouched')
+
+    // Leftover session-local files keep the dir (rmdir ENOTEMPTY fail-closed)
+    // while the artifact itself is gone.
+    const stubborn = join(dir, 'proj2', 's3')
+    mkdirSync(stubborn, { recursive: true })
+    writeFileSync(join(stubborn, 'session.jsonl.zstd'), '{}')
+    writeFileSync(join(stubborn, 'metadata.json'), '{}')
+    const stubHost = makeHostBinding({
+      sessionPersistence: { locate: h => ({ kind: 'jsonl', path: join(dir, 'proj2', h.id, 'session.jsonl.zstd') }) },
+    })
+    const stubOutcome = await stubHost.deleteSessionContent('s3', join(dir, 'proj2'))
+    assert.equal(stubOutcome, 'deleted')
+    assert.equal(existsSync(stubborn), true, 'non-empty leftover dir kept (fail closed)')
+    assert.equal(existsSync(join(stubborn, 'session.jsonl.zstd')), false)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('binding: registry surface guard refuses a missing setState surface', async () => {
+  const host = makeHostBinding({})
+  await assert.rejects(() => host.listArchivedSessionIds(), (error: unknown) => {
+    return error instanceof ArchiveCleanupError && error.code === 'registry-unreadable'
+  })
+})
+
+test('binding: headerToState carries cwd + lineage into snapshot states', () => {
+  const top = headerToState(header('top', { cwd: '/work/a' }))
+  const sub = headerToState(header('sub', { cwd: '/work/a', origin: 'subagent', parentSession: 'top' }))
+  assert.equal(top.cwd, '/work/a')
+  assert.equal(top.origin, undefined)
+  assert.equal(sub.origin, 'subagent')
+  assert.equal(sub.parentSessionId, 'top')
+  assert.equal(sub.running, false)
+})
+
+test('RunGate: busy refusal is retryable; sequential runs pass (design 24 §3)', async () => {
+  const gate = new RunGate()
+  let release!: () => void
+  const first = gate.run(async () => { await new Promise<void>(resolve => { release = resolve }); return 1 })
+  await assert.rejects(() => gate.run(async () => 2), (error: unknown) => {
+    return error instanceof ArchiveCleanupError && error.code === 'busy' && error.retryable === true
+  })
+  await assert.rejects(() => gate.run(async () => 2), (error: unknown) => error instanceof Error && error.message.includes(BUSY_MESSAGE.slice(0, 24)))
+  release()
+  assert.equal(await first, 1)
+  assert.equal(await gate.run(async () => 2), 2, 'gate frees after the in-flight run settles')
+})
+
+test('binding states mapping: listSessionStates enumerates through sessionQuery records', async () => {
+  const host = makeHostBinding({
+    sessionQuery: {
+      listSessions: async () => [
+        { header: header('h1', { cwd: '/w/h1' }) },
+        { header: header('h2', { origin: 'subagent', parentSession: 'h1', cwd: '/w/h1' }) },
+      ],
+    },
+  })
+  const states = await host.listSessionStates()
+  assert.equal(states.length, 2)
+  assert.equal(states.find(s => s.sessionId === 'h2')?.parentSessionId, 'h1')
+})
+
+test('binding: an absent official mutation chain refuses loudly (no out-of-chain fallback)', async () => {
+  let setStateCalls = 0
+  const ctx = {
+    workspaceRegistry: {
+      archivedSessionIds: ['a'],
+      list: () => [{ id: 'w1' }],
+      setState: async () => { setStateCalls += 1 },
+      // No enqueueOperation — an out-of-chain write must NOT happen.
+    },
+  }
+  const host = makeHostBinding(ctx as never)
+  await assert.rejects(() => host.removeArchivedSessionIds(['a']), (error: unknown) => {
+    return error instanceof ArchiveCleanupError && error.code === 'registry-unreadable'
+  })
+  assert.equal(setStateCalls, 0)
+})
+
+test('binding: assertHostSurface passes on the full surface and refuses otherwise (probe leg)', () => {
+  // Full surface (merge-round Minor-3 hardened the probe to the complete
+  // domain surface): registry + session enumeration + storage locate.
+  assertHostSurface({
+    workspaceRegistry: { archivedSessionIds: [], list: () => [], setState: async () => {} },
+    sessionQuery: { listSessions: async () => [] },
+    sessionPersistence: { list: async () => [], locate: () => undefined },
+  } as never)
+  assert.throws(() => assertHostSurface({} as never), (error: unknown) => {
+    return error instanceof ArchiveCleanupError && error.code === 'registry-unreadable'
+  })
+  // A registry-only host (no enumeration/locate surface) must fail the probe
+  // loudly — presence without surface health would only registry-unreadable
+  // on the first preview/purge.
+  assert.throws(() => assertHostSurface({
+    workspaceRegistry: { archivedSessionIds: [], list: () => [], setState: async () => {} },
+  } as never), (error: unknown) => {
+    return error instanceof ArchiveCleanupError && error.code === 'registry-unreadable'
+  })
+  // Enumerating without the storage locate leg also refuses (content removal
+  // would be impossible).
+  assert.throws(() => assertHostSurface({
+    workspaceRegistry: { archivedSessionIds: [], list: () => [], setState: async () => {} },
+    sessionQuery: { listSessions: async () => [] },
+  } as never), (error: unknown) => {
+    return error instanceof ArchiveCleanupError && error.code === 'registry-unreadable'
+  })
+})

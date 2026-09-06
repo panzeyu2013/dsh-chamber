@@ -95,3 +95,191 @@ test('fetchInstanceSnapshot cwd grouping titles handle Windows separators, trail
   ])
   assert.deepEqual(snapshot.workspaces.map(w => w.sessionIds), [['s1'], ['s2'], ['s3']])
 })
+
+// ---------------------------------------------------------------------------
+// archiveCleanup (design 24): wrapper decode, error classes and the 404
+// discrimination rule. HTTP legs stub globalThis.fetch (node has fetch).
+// ---------------------------------------------------------------------------
+
+import {
+  getInstanceClient,
+  InstanceUnavailableError,
+  isInstanceDomainMissing,
+  previewArchiveCleanup,
+  purgeArchivedSessions,
+  type ArchiveCleanupPurgeResult,
+} from '../src/shared/instance-api.ts'
+
+const PREVIEW_VALUE = {
+  archived: 4,
+  deletableSessions: 2,
+  deletableSubagents: 2,
+  skippedRunning: 1,
+}
+
+function cleanupClient(overrides: Record<string, unknown> = {}) {
+  const nested = (payload: unknown) => ({ ok: true as const, value: { ok: true as const, value: payload } })
+  return {
+    archiveCleanup: {
+      preview: async () => nested({ ...PREVIEW_VALUE, ...overrides }),
+      purge: async () => nested({
+        deletedSessions: 2,
+        deletedSubagents: 2,
+        skippedRunning: 1,
+        errors: [],
+        ...overrides,
+      }),
+    },
+  }
+}
+
+test('previewArchiveCleanup decodes the domain counts', async () => {
+  const preview = await previewArchiveCleanup(cleanupClient() as never)
+  assert.deepEqual(preview, PREVIEW_VALUE)
+})
+
+test('purgeArchivedSessions decodes counts and per-item errors (partial failure is visible)', async () => {
+  const client = cleanupClient({
+    deletedSessions: 1,
+    errors: [
+      { sessionId: 's2', code: 'storage', message: 'fake failure' },
+      { sessionId: 'bad' }, // malformed record dropped
+      'not-an-object',
+    ],
+  })
+  const result: ArchiveCleanupPurgeResult = await purgeArchivedSessions(client as never)
+  assert.equal(result.deletedSessions, 1)
+  assert.equal(result.deletedSubagents, 2)
+  assert.equal(result.skippedRunning, 1)
+  assert.deepEqual(result.errors, [{ sessionId: 's2', code: 'storage', message: 'fake failure' }])
+})
+
+test('archiveCleanup business failures decode the NESTED domain carrier (security review Major-1)', async () => {
+  // Realistic two-level wire: the generic RPC layer answers ok:true and the
+  // host domain carrier rides nested in `value` ({ok:false,error}). A busy
+  // or registry-unreadable answer must surface as a thrown `${code}: …`
+  // message — NEVER decode into empty counts (a second shell would otherwise
+  // show "没有可删除的已归档会话" while another purge is running).
+  const client = {
+    archiveCleanup: {
+      preview: async () => ({ ok: true as const, value: { ok: false as const, error: { code: 'busy', message: 'busy message', details: {} } } }),
+      purge: async () => ({ ok: true as const, value: { ok: false as const, error: { code: 'registry-unreadable', message: 'unreadable', details: {} } } }),
+    },
+  }
+  await assert.rejects(() => previewArchiveCleanup(client as never), (error: unknown) => {
+    return error instanceof Error && error.message.startsWith('busy:')
+  })
+  await assert.rejects(() => purgeArchivedSessions(client as never), (error: unknown) => {
+    return error instanceof Error && error.message.startsWith('registry-unreadable:')
+  })
+  // RPC-level ok:false (transport refusal) keeps the same shape.
+  const refusedTransport = {
+    archiveCleanup: {
+      purge: async () => ({ ok: false as const, error: { code: 'unclaimed', message: 'x', details: {} } }),
+    },
+  }
+  await assert.rejects(() => purgeArchivedSessions(refusedTransport as never), (error: unknown) => {
+    return error instanceof Error && error.message.startsWith('unclaimed:')
+  })
+})
+
+test('404 discrimination: instance_not_found stays a generic transport failure; other 404s map to domain missing', async () => {
+  const originalFetch = globalThis.fetch
+  const calls: Array<{ url: string; init?: RequestInit }> = []
+  try {
+    // First call: control-plane unknown-instance 404 (body code present).
+    // Second call: host answered 404 with no instance_not_found code (a
+    // chamber host domain the runtime tree does not mount).
+    const responses = [
+      new Response(JSON.stringify({ code: 'instance_not_found', error: 'unknown instance path' }), {
+        status: 404,
+        headers: { 'content-type': 'application/json' },
+      }),
+      new Response(JSON.stringify({ error: 'method not registered' }), {
+        status: 404,
+        headers: { 'content-type': 'application/json' },
+      }),
+    ]
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), init })
+      return responses.shift() as Response
+    }) as typeof fetch
+
+    const client = getInstanceClient('local')
+    await assert.rejects(
+      () => client.archiveCleanup.preview({}),
+      (error: unknown) => {
+        return error instanceof Error
+          && error.message.includes('HTTP 404')
+          && !isInstanceDomainMissing(error)
+      },
+    )
+    await assert.rejects(
+      () => client.archiveCleanup.preview({}),
+      (error: unknown) => isInstanceDomainMissing(error),
+    )
+    assert.equal(calls.length, 2)
+    assert.ok(calls.every(call => call.url.includes('/api/i/local/api/archiveCleanup/preview')))
+    const body = JSON.parse(String(calls[0]?.init?.body)) as { method?: string; payload?: unknown }
+    assert.equal(body.method, 'archiveCleanup/preview')
+    assert.deepEqual(body.payload, { args: {} })
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('purge/preview wrappers map no-response outcomes to honest retry copy (design 24 §5)', async () => {
+  const timeout = new Error('signal timed out')
+  timeout.name = 'TimeoutError'
+  const network = new TypeError('fetch failed')
+  const timeoutClient = {
+    archiveCleanup: {
+      preview: async () => { throw timeout },
+      purge: async () => { throw timeout },
+    },
+  }
+  const networkClient = {
+    archiveCleanup: {
+      preview: async () => { throw network },
+      purge: async () => { throw network },
+    },
+  }
+  await assert.rejects(() => previewArchiveCleanup(timeoutClient as never), /预览超时或网络中断，请重试/)
+  await assert.rejects(() => purgeArchivedSessions(timeoutClient as never), /可能仍在进行.*重复执行是安全的/)
+  await assert.rejects(() => previewArchiveCleanup(networkClient as never), /预览超时或网络中断，请重试/)
+  await assert.rejects(() => purgeArchivedSessions(networkClient as never), /可能仍在进行.*重复执行是安全的/)
+  // A deterministic business failure still surfaces verbatim (never remapped).
+  const refused = {
+    archiveCleanup: {
+      purge: async () => ({ ok: true as const, value: { ok: false as const, error: { code: 'registry-unreadable', message: 'unreadable', details: {} } } }),
+    },
+  }
+  await assert.rejects(() => purgeArchivedSessions(refused as never), (error: unknown) => {
+    return error instanceof Error && error.message.startsWith('registry-unreadable:')
+  })
+  // A proxy 504 upstream_timeout is an uncertain outcome (the host may still
+  // be purging) — the honest "may still be running" copy, never "不可达".
+  const proxiedTimeout = {
+    archiveCleanup: {
+      purge: async () => { throw new Error('实例不可达：transport failure for endpoint: HTTP 504 upstream_timeout') },
+    },
+  }
+  await assert.rejects(() => purgeArchivedSessions(proxiedTimeout as never), /可能仍在进行.*重复执行是安全的/)
+})
+
+test('503 classification: not-ready answers surface as InstanceUnavailableError (not-ready prefix)', async () => {
+  const originalFetch = globalThis.fetch
+  try {
+    globalThis.fetch = (async () => new Response(
+      JSON.stringify({ code: 'instance_unavailable', error: 'instance is still starting' }),
+      { status: 503, headers: { 'content-type': 'application/json' } },
+    )) as typeof fetch
+    const client = getInstanceClient('local')
+    await assert.rejects(
+      () => client.archiveCleanup.preview({}),
+      (error: unknown) => error instanceof InstanceUnavailableError, // prefix added by the wrapper-level wrapWireError
+    )
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
