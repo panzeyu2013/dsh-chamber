@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url'
 import { FATAL_STARTUP_BLOCK_REASONS } from '@dsh-chamber/dsh-runtime'
 import {
   DEFAULT_STATE_DIR,
+  HOST_ARCHIVE_CLEANUP_INSERT,
   HOST_GIT_WORKTREE_INSERT,
   HOST_GRAPH_INSERT,
   createControlPlane,
@@ -334,7 +335,7 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
           probeDomains: ['gitWorktree/previewCreate'],
         },
         {
-          insert: { id: 'archive-cleanup', name: '@dsh-chamber/dsh-host-archive-cleanup' },
+          insert: HOST_ARCHIVE_CLEANUP_INSERT,
           kind: 'host',
           source: 'desktop-synced',
           sourceDir: syncedSourceDir(options.config.plane.stateDir, '@dsh-chamber/dsh-host-archive-cleanup'),

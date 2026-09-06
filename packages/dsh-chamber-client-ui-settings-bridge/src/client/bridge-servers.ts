@@ -3,8 +3,10 @@
  * projection (design 05 §3) — the same non-secret source the sidebar and
  * the App layer consume (id / authoritative sourceFingerprint / kind / label /
  * connected / phase). No tunnel URLs, no SSH material ever cross this
- * module. The chamberBridge face is ambient (vendor-modules.d.ts) — this
- * package bundles independently of the sidebar package's own sources.
+ * module. The chamberBridge face resolves the real sidebar `shared` source
+ * (this package's `@dsh-chamber/dsh-client-ui-sidebar` workspace link +
+ * the sidebar package `exports["./shared"]`); the handwritten ambient
+ * mirror (vendor-modules.d.ts) was retired in the P4-4 dedupe (2026-09).
  */
 import { chamberBridge, type ChamberServerAggregate } from '@dsh-chamber/dsh-client-ui-sidebar/shared'
 import { serverProjectionSignature } from './server-selector.ts'

@@ -4,7 +4,7 @@
 > 并经四视角评审（架构/安全/可执行/产品）修订至 v2。
 > 范围 = **已实现的 chamber 插件管理基线**（本地/ssh 远端/chamber 宿主包同步/runtime 受控重启）
 > + A/B/C。实现进度（2026-12，逐阶段静态/执行级 P0/P1 门禁通过，总验收 ACCEPT 零 P0/P1）：B（§4）
-> 已实现；C（§5，含 gateway-runtime parse/poll 迁 sidebar/shared 与两处 ambient 镜像）已实现；A0 读面
+> 已实现；C（§5，含 gateway-runtime parse/poll 迁 sidebar/shared；其 ambient 镜像后经 2026-09 去重审计 P4-4 移除、改真实源解析，见 §5.2）已实现；A0 读面
 > （GET /chamber/plugins/installed 路由 + desktop gateway_plugin_sync IPC + 视图 chamber 区同步/漂移）已实现；
 > A1 写面（install/remove/materialize/start/tasks/journal/fence/队列 + desktop apply/materialize IPC +
 > ssh undo/journal/掩码/保留名拒绝）已实现（§6.2-6.5）；Phase 5 UI（纯模型层 + ssh 模态 list/undo +
@@ -42,7 +42,7 @@
 | 12 | A r1 闭环 ★ | 新增 `POST /chamber/runtime/start` 原语（仅 stopped/error/restart-exhausted；202+poll；受守卫：canStartLocal/恢复门/单飞）——停机移除后回到可启动的 UI 入口 |
 | 13 | A 安装期脚本 ★ | **默认允许**（与 ssh/桌面一致，不限制——避免用户困扰）；风险登记（安装代码=gateway 用户级）；二期提供 ignore-scripts/逐包放行配置与 OS 用户隔离（硬化） |
 | 14 | A 服务端 admission ★ | **不加**——主进程确认是桌面通道纪律而非服务端门；服务端信任 = 全权 auth 直连（与既有 /chamber/runtime 动作面同级暴露，如实登记） |
-| 15 | C 共享模块 | gateway-runtime 纯核心（parse + poll）迁 `@dsh-chamber/dsh-client-ui-sidebar/shared`（split 边界 + ambient 镜像同步清单，见 §5.2）★ |
+| 15 | C 共享模块 | gateway-runtime 纯核心（parse + poll）迁 `@dsh-chamber/dsh-client-ui-sidebar/shared`（split 边界；ambient 镜像同步清单见 §5.2，后经 2026-09 P4-4 移除改真实源解析）★ |
 | 16 | B 命名/图标 | 「连接日志」「网关主机日志」+ 图标去重；本地卡折叠区不改名 |
 | 17 | A 生命周期 writer barrier ★ | gateway 后端 executor 挂入 runtime-manager tracked-writers（activeOperations/单飞门），dispose()/dispatch.quiesce() 排空、stop 杀安装子进程、锁释放前 writer 证明——17 §4.1/§12、18 §9.3 表述随 §8 更新 |
 | 18 | 掩码语义 ★ | gateway readManifest 的远端 file: 值**一律掩码**（`MATERIALIZED_VALUE_MASK` 同常量：保留 file: 前缀供 name 基 diff、gateway 本地路径不进 renderer，§6.2）。**现状勘误（2026-12 audit 修订）**：ssh 清单已挂接掩码（`redactRemotePluginManifest`，plugin-sync.ts）；本地 LOCAL_PLUGIN_LIST 仍**原样透传**（main.ts:3456-3462，本地 file: 绝对路径可进 renderer）——按 §10 ③ 与 design 13 §7.0 勘误登记为已知分歧（本地侧 `redactLocalPluginManifest` 仍零生产调用点）；模型层 readManifest 挂接时统一收敛。旧文本“ssh/local 均未掩码、掩码常量无生产调用点”已过时 |
@@ -169,13 +169,15 @@ split 而非 move：`gateway-runtime-api.ts`（778 行）中仅 parse/action/gat
 `remoteRuntimeStatusView` + `RemoteRuntimeStatusView` 引用 SettingsBridgeKey（L22/546-551）**留在 settings-bridge**
 （与 REMOTE_PHASES/BLOCKED_PHASES 共享部分以 shared 导出形式回引）。纯核心 + `gateway-runtime-poll.ts` 迁
 `@dsh-chamber/dsh-client-ui-sidebar/shared`（exports "./shared" → src，免构建；renderer/settings-bridge/
-connections/layout/git 均为既有消费者；vite 共享单实例）。**ambient 镜像同步清单**：消费者并非对真源做
-typecheck——四个插件经各自 tsconfig paths 引用手写 ambient 声明（connections `src/ambient/sidebar-shared.d.ts`；
-settings-bridge `src/ambient/chamber-bridge.d.ts`（含 MIRROR WARNING）；git `src/ambient/sidebar-shared.d.ts`；
-layout `src/ambient/chamber-view-prefs.d.ts`），renderer 无 tsconfig paths、经 `vendor-modules.d.ts` `declare
-module`（:208-510）——git/layout 不走 vendor-modules.d.ts；迁移须
-同步扩展这些镜像（RemoteRuntimeStatus 现 **33 字段（30 必填+3 可选，2026 audit 复核）**/parse/gates/Error/poll 符号），并在 sidebar 增加“镜像导出
-集锁步”测试；
+connections/layout/git 均为既有消费者；vite 共享单实例）。**〔勘误 2026-09 P4-4〕** 本段原「ambient 镜像同步
+清单」已废止：去重审计 P4-4 删除了全部手写 ambient 镜像（connections/git `src/ambient/sidebar-shared.d.ts`、
+settings-bridge `src/ambient/chamber-bridge.d.ts`、layout `src/ambient/chamber-view-prefs.d.ts`、renderer
+`vendor-modules.d.ts` 的 shared overlay）及其镜像锁步测试（sidebar `gateway-runtime-mirror.test.ts`）。消费者
+现对**真源**做 typecheck：root tsconfig `paths`（`@dsh-chamber/dsh-client-ui-sidebar/shared` → 真实
+`src/shared/index.ts`）供 git/layout/connections/renderer 继承（各 tsconfig 补 `rootDir: "../.."` 避免
+TS6059）；settings-bridge 保留自身 connections-section paths、经 workspace 链接 + sidebar
+`exports["./shared"]` 解析。`RemoteRuntimeStatus`（33 字段，30 必填+3 可选，2026 audit 复核）/parse/gates/
+Error/poll 符号随 shared 真源直接可见，无需镜像同步。
 poll 的英文错误串随迁（connections 会显示未本地化文案，登记接受）。**测试迁移**：pollGatewayReady 用例现驻
 settings-bridge/test/runtime-management.test.ts:124-217（import 迁移而非补建）；gateway-runtime-api.test.ts
 （~700 行）按 split 拆：view 部分留 settings-bridge，核心随迁；settings-bridge/sidebar 两个 test 清单同步；
@@ -346,7 +348,7 @@ chamberProvision=seed_host_graph、restartToApply/startFromStopped=restart_servi
   （「已移除 X，实例已重新就绪」），不把 Loader 行当面向用户的判据。
 
 ### 6.9 分期、工程默认与实现序
-- 实现序（依赖序）：**① §5.2 共享迁移（parse+poll split + ambient 镜像 + 测试搬迁）→ ② C（含 start 原语路由）→
+- 实现序（依赖序）：**① §5.2 共享迁移（parse+poll split + ambient 镜像〔后经 2026-09 P4-4 移除〕 + 测试搬迁）→ ② C（含 start 原语路由）→
   ③ A0 读面（installed/tasks 读路由 + gateway_plugin_sync + 视图 gateway 读面——无需写栅栏）→
   ④ A1 写面单元**：runtime-manager fence API（runExclusiveProfileWrite + beforeSpawnCheckpoint 接线 +
   activeOperations drain）→ journal/备份 → 串行队列执行器（**纯 node 单测单元：journal 状态机/门矩阵/队列模型/

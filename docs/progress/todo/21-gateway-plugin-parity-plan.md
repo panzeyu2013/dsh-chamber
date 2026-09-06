@@ -35,7 +35,7 @@
   IconFolderOpenOutline16、连接日志入口 IconSearchOutline16、网关主机日志 IconDataOutline16、service 行
   Checklist14（Monitor16/Cordis 等候选不在 primitives，design 21 §4 已回记；可运行环境核对后可再换）。
 
-## 2. Phase 2 — C 重启 dsh + 共享迁移【代码】【测试】【门禁】（对应 design 21 §5.1–5.3）✅ 已实现并通过静态门禁（2026-12，零 P0/P1；2.1 共享迁移含 sidebar shared 模块 + settings-bridge 收敛 + 双 ambient 镜像 + 测试随迁/镜像锁步；2.2 卡片/面板「重启 dsh」含每卡单飞 per-id 与启用态 tooltip；P2 修复已合入）
+## 2. Phase 2 — C 重启 dsh + 共享迁移【代码】【测试】【门禁】（对应 design 21 §5.1–5.3）✅ 已实现并通过静态门禁（2026-12，零 P0/P1；2.1 共享迁移含 sidebar shared 模块 + settings-bridge 收敛 + 双 ambient 镜像 + 测试随迁/镜像锁步〔镜像机制后经 2026-09 P4-4 移除、改真实源解析〕；2.2 卡片/面板「重启 dsh」含每卡单飞 per-id 与启用态 tooltip；P2 修复已合入）
 
 ### 2.1 共享迁移（先行、零行为变化；design 21 §5.2）
 - `packages/dsh-chamber-client-ui-sidebar/src/shared/` 新增 `gateway-runtime.ts`（自
@@ -43,14 +43,16 @@
   `remoteRuntimeStatusView` 及 SettingsBridgeKey 耦合**留在 settings-bridge** 改从 shared 导入）与
   `gateway-runtime-poll.ts`；`shared/index.ts` 导出。
 - settings-bridge：`src/client/gateway-runtime-api.ts` 收窄为 view 映射 + 装配；import 改 shared。
-- **ambient 镜像同步**：settings-bridge `src/ambient/chamber-bridge.d.ts`、connections
-  `src/ambient/sidebar-shared.d.ts`（+ renderer `src/vendor-modules.d.ts` 若引用）镜像新导出符号集
-  （RemoteRuntimeStatus 等，MIRROR WARNING 头）——git/layout 不消费迁移符号 → 其 ambient 不动。
+- **ambient 镜像同步（已废止，2026-09 P4-4）**：原计划同步 settings-bridge `src/ambient/chamber-bridge.d.ts`、
+  connections `src/ambient/sidebar-shared.d.ts`（+ renderer `src/vendor-modules.d.ts` 若引用）镜像新导出符号集
+  （RemoteRuntimeStatus 等，MIRROR WARNING 头）——git/layout 不消费迁移符号 → 其 ambient 不动。P4-4 已删除全部
+  手写 ambient 镜像，消费者改对真实 shared 源 typecheck（root tsconfig paths / sidebar package exports），本步
+  无需执行。
 - 测试：`settings-bridge/test/gateway-runtime-api.test.ts` 按 split 拆（view 用例留 settings-bridge、核心用例
   随迁至 sidebar 测试文件）；`settings-bridge/test/runtime-management.test.ts` 中 pollGatewayReady 用例
   （L124-217）仅把 import 改为 shared 路径（用例留在原地）；settings-bridge `src/client/gateway-runtime-poll.ts`
-  随迁删除（import 改 shared 路径）；sidebar 测试文件承载迁移的 parse/gates/error 用例 + “镜像导出集锁步”
-  测试；两包 package.json test 清单同步。
+  随迁删除（import 改 shared 路径）；sidebar 测试文件承载迁移的 parse/gates/error 用例（原“镜像导出集锁步”
+  测试随 P4-4 镜像删除一并移除）；两包 package.json test 清单同步。
 - 门禁：typecheck:sidebar/:settings-bridge/:connections；test:sidebar/test:settings-bridge；
   settings dsh-runtime 段手动回归（local + gateway 分支）。
 

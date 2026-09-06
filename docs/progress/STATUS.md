@@ -1186,14 +1186,14 @@ P5 防漂移锁步与升级纪律（E-10/N9/N10 落地）→ P6 架构裁定（E
   - 锁步测试消亡:sidebar test/gateway-runtime-mirror.test.ts(锁步对象=已删
     ambient)删除并同步 package.json 显式测试清单;test:sidebar +
     typecheck:sidebar 全绿。
-  - 文档跟进(登记):docs/design/21 与 21-gateway-plugin-parity-plan 中
-    "ambient 镜像"机制描述已被本步取代,文档更新列入 P4-5 后续。
+  - 文档跟进(合并后收口 2026-12):docs/design/21 与 21-gateway-plugin-parity-plan
+    中 "ambient 镜像"机制描述已更新为真实源解析(勘误/废止标注)。
 - P4-5 ✅(收尾):shared-face 镜像面清零核实(其余 window.dshChamber/官方
   vendor/@dsh-chamber/*/client 松散声明与 N6 无关,保留;README/tsconfig 对
   已删镜像的引用均为说明性注释);N6 指标收口——P4 合计:终态净 -740 行(含 wire-common +286)/累计删除 1271 行,其中
   镜像删除 715(含 P4-2 期间 +88 临时增补,终态 627);B/C/D/F 四载体传输字节同源 postUnary(A 未动、E 禁改),shared-face
-  镜像漂移面归零;docs/design/21 与 todo 计划中 ambient 机制描述更新列为
-  follow-up(登记);门禁:root typecheck + build:renderer +
+  镜像漂移面归零;docs/design/21 与 todo 计划中 ambient 机制描述更新已收口
+  (合并后勘误标注);门禁:root typecheck + build:renderer +
   test:renderer-shell + 四插件包 typecheck×4/test×4 + test:sidebar/
   typecheck:sidebar 全绿。
 - P1-R1 打包冒烟:暂时跳过(用户决定),与 P5-6 归口。

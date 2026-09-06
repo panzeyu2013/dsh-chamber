@@ -15,10 +15,11 @@
  * entry) and the sidebar plugin consume one copy (vite shared chunk, design
  * 05 §3); the renderer consumes it through `@dsh-chamber/dsh-client-ui-sidebar/shared`.
  *
- * Types are intentionally local rows (chamber code consumes dsh packages
- * through the loose ambient module table, see renderer vendor-modules.d.ts);
- * the wire shapes mirror the v0.1.2-alpha.1 api-session-controller /
- * api-workspace-controller `@Remote` faces (types.ts).
+ * Types are intentionally local rows mirroring the v0.1.2-alpha.1
+ * api-session-controller / api-workspace-controller `@Remote` faces
+ * (types.ts). Consumers resolve this shared face from the real source (root
+ * tsconfig paths / the sidebar package exports), not the retired renderer
+ * vendor-modules.d.ts ambient overlay (P4-4, 2026-09).
  */
 import { DirectoryBrowseError } from './directory-browse-error.ts'
 import {
