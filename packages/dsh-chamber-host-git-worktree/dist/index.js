@@ -494,7 +494,8 @@ function parseWorktreePorcelain(output, delimiter = "\0") {
         branch: null,
         locked: false,
         prunable: false,
-        bare: false
+        bare: false,
+        missing: false
       };
       continue;
     }
@@ -1353,7 +1354,7 @@ var GitWorktreeCore = class {
       if (target.locked) fail("worktree-locked", "locked worktrees cannot be rolled back");
       if (target.branch !== facts.branch) fail("worktree-changed", "the operation-created worktree changed branch");
       if (target.head !== facts.head) fail("worktree-changed", "the operation-created worktree changed HEAD");
-      if (await this.isDirty(target.path)) fail("worktree-dirty", "dirty worktrees cannot be rolled back");
+      if (target.missing !== true && await this.isDirty(target.path)) fail("worktree-dirty", "dirty worktrees cannot be rolled back");
       const latest = await this.readSource();
       if (await this.anyWorkspaceOwnsPath(latest, facts.path)) {
         fail("rollback-has-workspace", "workspace registration appeared during rollback");
@@ -1381,7 +1382,7 @@ var GitWorktreeCore = class {
       if (finalTarget === finalTopology.worktrees[0] || finalTarget.locked || finalTarget.branch !== facts.branch || finalTarget.head !== facts.head) {
         fail("worktree-changed", "operation-created worktree identity changed immediately before rollback");
       }
-      if (await this.isDirty(finalTarget.path)) {
+      if (finalTarget.missing !== true && await this.isDirty(finalTarget.path)) {
         fail("worktree-dirty", "worktree became dirty immediately before rollback");
       }
       operation.attemptedRollback = true;
@@ -1413,48 +1414,54 @@ var GitWorktreeCore = class {
     if (input.workspaceId === void 0) {
       const unregisteredPath = input.path;
       if (unregisteredPath === void 0) fail("invalid-input", "input.path is required for an unregistered removal");
-      const discovered2 = await this.discover(unregisteredPath);
-      return await this.mutex.run(discovered2.commonDir, async () => {
-        const state = await this.readSource();
+      try {
         const canonicalPath = await this.existingPath(unregisteredPath);
-        await this.assertNoRunningAtPath(canonicalPath, state);
-        for (const candidate of state.workspaces) {
-          const candidatePath = await this.existingPath(candidate.path).catch(() => null);
-          if (candidatePath === null) continue;
-          if (candidatePath === canonicalPath || candidatePath.startsWith(`${canonicalPath}${sep}`)) {
-            fail("workspace-registered", "the target worktree is already registered as a workspace");
+        const discovered2 = await this.discover(canonicalPath);
+        return await this.mutex.run(discovered2.commonDir, async () => {
+          const state = await this.readSource();
+          const currentPath = await this.existingPath(unregisteredPath);
+          await this.assertNoRunningAtPath(currentPath, state);
+          for (const candidate of state.workspaces) {
+            const candidatePath = await this.existingPath(candidate.path).catch(() => null);
+            if (candidatePath === null) continue;
+            if (candidatePath === currentPath || candidatePath.startsWith(`${currentPath}${sep}`)) {
+              fail("workspace-registered", "the target worktree is already registered as a workspace");
+            }
           }
-        }
-        const topology = await this.topology(canonicalPath);
-        if (topology.commonDir !== discovered2.commonDir) fail("expected-mismatch", "worktree changed repositories");
-        const repoId = opaqueId("repo", topology.commonDir);
-        if (repoId !== input.expected.repoId) fail("expected-mismatch", "repository identity changed");
-        const target = topology.worktrees.find((worktree) => worktree.path === canonicalPath);
-        if (target === void 0) fail("worktree-not-found", "path is not an exact worktree root");
-        const worktreeId = opaqueId("worktree", topology.commonDir, target.path);
-        if (worktreeId !== input.expected.worktreeId) fail("expected-mismatch", "worktree identity changed");
-        if (target === topology.worktrees[0]) fail("main-worktree", "the main checkout cannot be removed");
-        if (target.locked) fail("worktree-locked", "locked worktrees cannot be removed");
-        if (target.branch !== input.expected.branch) fail("expected-mismatch", "worktree branch changed");
-        if (target.head !== input.expected.head) fail("expected-mismatch", "worktree HEAD changed");
-        if (await this.isDirty(target.path) && input.discardChanges !== true) {
-          fail("worktree-dirty", "dirty worktrees cannot be removed");
-        }
-        const intent = {
-          repoId,
-          worktreeId,
-          commonDir: topology.commonDir,
-          mainPath: topology.mainPath,
-          path: target.path,
-          branch: target.branch,
-          head: target.head,
-          sessionIds: [],
-          deleteBranch: input.deleteBranch,
-          discardChanges: input.discardChanges
-        };
-        operation.intent = intent;
-        return await this.commitBoundRemove(input.operationId, operation, intent, replayed);
-      });
+          const topology = await this.topology(currentPath);
+          if (topology.commonDir !== discovered2.commonDir) fail("expected-mismatch", "worktree changed repositories");
+          const repoId = opaqueId("repo", topology.commonDir);
+          if (repoId !== input.expected.repoId) fail("expected-mismatch", "repository identity changed");
+          const target = topology.worktrees.find((worktree) => worktree.path === currentPath);
+          if (target === void 0) fail("worktree-not-found", "path is not an exact worktree root");
+          const worktreeId = opaqueId("worktree", topology.commonDir, target.path);
+          if (worktreeId !== input.expected.worktreeId) fail("expected-mismatch", "worktree identity changed");
+          if (target === topology.worktrees[0]) fail("main-worktree", "the main checkout cannot be removed");
+          if (target.locked) fail("worktree-locked", "locked worktrees cannot be removed");
+          if (target.branch !== input.expected.branch) fail("expected-mismatch", "worktree branch changed");
+          if (target.head !== input.expected.head) fail("expected-mismatch", "worktree HEAD changed");
+          if (await this.isDirty(target.path) && input.discardChanges !== true) {
+            fail("worktree-dirty", "dirty worktrees cannot be removed");
+          }
+          const intent = {
+            repoId,
+            worktreeId,
+            commonDir: topology.commonDir,
+            mainPath: topology.mainPath,
+            path: target.path,
+            branch: target.branch,
+            head: target.head,
+            sessionIds: [],
+            deleteBranch: input.deleteBranch,
+            discardChanges: input.discardChanges
+          };
+          operation.intent = intent;
+          return await this.commitBoundRemove(input.operationId, operation, intent, replayed);
+        });
+      } catch (error) {
+        if (!(error instanceof GitWorktreeError) || error.code !== "path-unavailable") throw error;
+        return await this.removeMissingUnregistered(input, operation, replayed);
+      }
     }
     const registeredWorkspaceId = input.workspaceId;
     const initialState = await this.readSource();
@@ -1509,6 +1516,100 @@ var GitWorktreeCore = class {
       return await this.commitBoundRemove(input.operationId, operation, intent, replayed);
     });
   }
+  /** UNREGISTERED removal of a leftover record whose directory is GONE
+   *  (externally deleted without `git worktree remove`; `git worktree list`
+   *  keeps the admin record and the sidebar shows the row as missing). There
+   *  is no filesystem content left to protect or probe — the removal clears
+   *  the surviving admin record with a plain `git worktree remove` (verified
+   *  to succeed on a missing directory against git 2.50). The owning
+   *  repository cannot be discovered from the (absent) path, so it is
+   *  located from the source's registered workspaces instead, and every
+   *  surviving guard (record identity, main/locked, ghost workspace) still
+   *  applies before anything is mutated. */
+  async removeMissingUnregistered(input, operation, replayed) {
+    const targetPath = input.path;
+    const located = await this.locateMissingRecord(input.expected.repoId, targetPath);
+    const worktreeId = opaqueId("worktree", located.commonDir, located.row.path);
+    if (worktreeId !== input.expected.worktreeId) fail("expected-mismatch", "worktree identity changed");
+    if (located.isMain) fail("main-worktree", "the main checkout cannot be removed");
+    if (located.row.locked) fail("worktree-locked", "locked worktrees cannot be removed");
+    if (located.row.branch !== input.expected.branch) fail("expected-mismatch", "worktree branch changed");
+    if (located.row.head !== input.expected.head) fail("expected-mismatch", "worktree HEAD changed");
+    const intent = {
+      repoId: located.repoId,
+      worktreeId,
+      commonDir: located.commonDir,
+      mainPath: located.mainPath,
+      path: targetPath,
+      branch: located.row.branch,
+      head: located.row.head,
+      sessionIds: [],
+      deleteBranch: input.deleteBranch,
+      discardChanges: input.discardChanges
+    };
+    operation.intent = intent;
+    return await this.mutex.run(located.commonDir, async () => {
+      return await this.commitMissingRecordRemove(input.operationId, operation, intent, replayed);
+    });
+  }
+  /** Locate the repository whose `git worktree list` still carries the stale
+   *  record for `targetPath`. The path itself is gone, so discovery walks the
+   *  source's registered workspaces (the same discovery the snapshot uses) —
+   *  a vanished workspace is skipped (its repository still surfaces through
+   *  its surviving workspaces; one failed entity must not block unrelated
+   *  ones). Fails `expected-mismatch` when the record was found but belongs
+   *  to a different repository than the caller claims, and
+   *  `worktree-not-found` when no repository lists the path at all. */
+  async locateMissingRecord(expectedRepoId, targetPath) {
+    const state = await this.readSource();
+    const walked = /* @__PURE__ */ new Set();
+    let sawPathOnWrongRepository = false;
+    for (const workspace of state.workspaces) {
+      let canonicalPath;
+      try {
+        canonicalPath = await this.existingPath(workspace.path);
+      } catch (error) {
+        if (!(error instanceof GitWorktreeError) || error.code !== "path-unavailable") throw error;
+        continue;
+      }
+      let discovered;
+      const cached = this.workspaceDiscoverCache.get(canonicalPath);
+      if (cached !== void 0 && this.now() - cached.at < DISCOVERY_TTL_MS) {
+        discovered = { commonDir: cached.commonDir, topLevel: cached.topLevel };
+      } else {
+        try {
+          discovered = await this.discover(canonicalPath);
+          this.workspaceDiscoverCache.set(canonicalPath, { ...discovered, at: this.now() });
+        } catch (error) {
+          if (error instanceof GitWorktreeError) continue;
+          throw error;
+        }
+      }
+      if (walked.has(discovered.commonDir)) continue;
+      walked.add(discovered.commonDir);
+      const rows = await this.listWorktreesWith(async (args) => this.gitCommand(discovered.topLevel, args, false));
+      if (rows.length === 0) continue;
+      const row = rows.find((candidate) => resolve(candidate.path) === targetPath);
+      if (row === void 0) continue;
+      const repoId = opaqueId("repo", discovered.commonDir);
+      if (repoId !== expectedRepoId) {
+        sawPathOnWrongRepository = true;
+        continue;
+      }
+      const mainPath = await this.existingPath(resolve(rows[0].path));
+      return {
+        commonDir: discovered.commonDir,
+        mainPath,
+        repoId,
+        row: { ...row, path: resolve(row.path) },
+        isMain: resolve(rows[0].path) === resolve(row.path)
+      };
+    }
+    if (sawPathOnWrongRepository) {
+      fail("expected-mismatch", "repository identity changed");
+    }
+    fail("worktree-not-found", `no repository in the source lists a missing worktree at '${targetPath}'`);
+  }
   /** Best-effort optional branch deletion after a removal, once per
    *  operation (design 08 §11 user decision). Called from every terminal
    *  removal path — including the target-absent replay paths — so a removal
@@ -1545,15 +1646,24 @@ var GitWorktreeCore = class {
     }
     if (target === topology.worktrees[0]) fail("operation-conflict", "bound linked worktree became the main checkout");
     if (target.locked) fail("worktree-locked", "locked worktrees cannot be removed");
-    if (await this.isDirty(target.path) && intent.discardChanges !== true) {
-      fail("worktree-dirty", "dirty worktrees cannot be removed");
-    }
     if (input.workspaceId === void 0) {
       const state2 = await this.readSource();
-      const canonicalPath = await this.existingPath(intent.path);
+      let canonicalPath = null;
+      try {
+        canonicalPath = await this.existingPath(intent.path);
+      } catch (error) {
+        if (!(error instanceof GitWorktreeError) || error.code !== "path-unavailable") throw error;
+      }
+      if (canonicalPath === null) {
+        operation.intent = intent;
+        return await this.commitMissingRecordRemove(input.operationId, operation, intent, replayed);
+      }
       await this.assertNoRunningAtPath(canonicalPath, state2);
       operation.intent = intent;
       return await this.commitBoundRemove(input.operationId, operation, intent, replayed);
+    }
+    if (await this.isDirty(target.path) && intent.discardChanges !== true) {
+      fail("worktree-dirty", "dirty worktrees cannot be removed");
     }
     const state = await this.readSource();
     const workspace = this.workspace(state, input.workspaceId);
@@ -1569,6 +1679,54 @@ var GitWorktreeCore = class {
     };
     operation.intent = refreshed;
     return await this.commitBoundRemove(input.operationId, operation, refreshed, replayed);
+  }
+  /** Commit the record-only cleanup of a directory-less worktree (2026-09:
+   *  externally deleted worktrees leave a stale admin record in `git worktree
+   *  list`; the sidebar shows the row as missing). Every guard is re-verified
+   *  inside the held common-dir mutex: record identity, main/locked, and the
+   *  ghost-workspace raw-path check. No dirty/submodule/running probe is
+   *  possible or needed — the working directory does not exist, so a plain
+   *  `git worktree remove` only clears the admin record (verified against
+   *  git 2.50; no --force is ever used here). Shared by the first attempt
+   *  (removeMissingUnregistered) and the uncertain-outcome replay
+   *  (reconcileBoundRemove). */
+  async commitMissingRecordRemove(operationIdValue, operation, intent, replayed) {
+    const finalTopology = await this.topology(intent.mainPath);
+    if (finalTopology.commonDir !== intent.commonDir || finalTopology.mainPath !== intent.mainPath) {
+      fail("operation-conflict", "removal repository changed immediately before mutation");
+    }
+    const state = await this.readSource();
+    if (state.workspaces.some((candidate) => resolve(candidate.path) === intent.path)) {
+      fail("workspace-registered", "the missing worktree path is still registered as a workspace");
+    }
+    const finalTarget = finalTopology.worktrees.find((worktree) => worktree.path === intent.path);
+    if (finalTarget === void 0) {
+      await this.attemptBranchDelete(operation, intent, finalTopology.mainPath);
+      return this.removeResult(operationIdValue, intent, replayed);
+    }
+    if (finalTarget === finalTopology.worktrees[0] || finalTarget.locked || finalTarget.missing !== true || opaqueId("worktree", finalTopology.commonDir, finalTarget.path) !== intent.worktreeId || finalTarget.branch !== intent.branch || finalTarget.head !== intent.head) {
+      if (finalTarget.missing !== true) {
+        fail("worktree-invalid", "the missing worktree directory reappeared; refresh and retry");
+      }
+      fail("operation-conflict", "missing worktree record changed immediately before removal");
+    }
+    operation.attemptedRemove = true;
+    try {
+      await this.gitChecked(finalTopology.mainPath, ["worktree", "remove", "--", intent.path], true);
+    } catch (error) {
+      if (!(error instanceof GitWorktreeError) || error.code !== "git-command-failed") throw error;
+      const reconciled = await this.topology(finalTopology.mainPath).catch(() => void 0);
+      const target = reconciled?.worktrees.find((candidate) => candidate.path === intent.path);
+      const unchangedAndStillMissing = reconciled !== void 0 && reconciled.commonDir === intent.commonDir && reconciled.mainPath === intent.mainPath && target !== void 0 && target.branch === intent.branch && target.head === intent.head && target.missing === true;
+      if (!unchangedAndStillMissing) throw error;
+      throw new GitWorktreeError(error.code, error.message, { retryable: false });
+    }
+    const after = await this.topology(finalTopology.mainPath);
+    if (after.commonDir !== intent.commonDir || after.worktrees.some((worktree) => worktree.path === intent.path)) {
+      fail("postcondition-failed", "Git still reports the removed worktree or repository identity changed");
+    }
+    await this.attemptBranchDelete(operation, intent, finalTopology.mainPath);
+    return this.removeResult(operationIdValue, intent, replayed);
   }
   async commitBoundRemove(operationIdValue, operation, intent, replayed) {
     const finalTopology = await this.topology(intent.mainPath);
@@ -1897,10 +2055,19 @@ var GitWorktreeCore = class {
     const worktrees = [];
     const paths = /* @__PURE__ */ new Set();
     for (const entry of parsed) {
-      const path = await this.existingPath(entry.path);
+      let path;
+      let missing;
+      try {
+        path = await this.existingPath(entry.path);
+        missing = false;
+      } catch (error) {
+        if (!(error instanceof GitWorktreeError) || error.code !== "path-unavailable") throw error;
+        path = resolve(entry.path);
+        missing = true;
+      }
       if (paths.has(path)) fail("git-protocol-error", `Git returned duplicate worktree path '${path}'`);
       paths.add(path);
-      worktrees.push({ ...entry, path });
+      worktrees.push({ ...entry, path, missing });
     }
     if (worktrees[0].bare) fail("bare-repository", "bare repositories cannot own this lifecycle");
     if (!paths.has(discovered.topLevel)) fail("git-protocol-error", "Git omitted the current worktree from its topology");

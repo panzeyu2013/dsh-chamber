@@ -143,17 +143,25 @@ export function SidebarWorkspaceGitLine({
           // the REGISTERED occupant offers the discard-changes dialog for
           // dirty worktrees, but this unregistered row's window.confirm flow
           // cannot collect that authorization, so dirty stays hard-blocked.
-          // The reason is kept for the tooltip so a blocked row tells the
-          // user WHAT to do instead of just "cannot remove".
+          // A MISSING path is the deliberate exception (2026-09 live report):
+          // its directory is already gone, so removal is a leftover-record
+          // cleanup with NOTHING to discard or protect — the host clears the
+          // surviving git admin record (`git worktree remove` succeeds on the
+          // absent directory; equivalent to pruning that one record).
+          const status = worktree.status
+          const missing = status === 'missing'
           const blockedReason: ReturnType<typeof removeBlockReason> = worktree.isMain
             ? 'main'
             : worktree.locked
               ? 'locked'
-              : worktree.status !== 'ready'
-                ? 'unhealthy'
-                : worktree.dirty === true
-                  ? 'dirty'
-                  : undefined
+              : missing
+                ? undefined
+                : status !== 'ready'
+                  ? 'unhealthy'
+                  : worktree.dirty === true
+                    ? 'dirty'
+                    : undefined
+          const rowName = pathName(worktree.path)
           return (
             <div className={css.unregisteredRow} key={worktree.worktreeId} role="group">
               <IconBranchOutline16 size={14} className={css.unregisteredIcon} />
@@ -183,16 +191,18 @@ export function SidebarWorkspaceGitLine({
                 type="button"
                 className={`${css.unregisteredAction} ${css.unregisteredActionDanger}`}
                 disabled={busy || source.recovery !== undefined || blockedReason !== undefined}
-                title={blockedReason === undefined ? t('remove') : (
-                  // Unregistered rows have no workspace/「已消失」badge exit —
-                  // their missing-path guidance is terminal cleanup instead.
-                  blockedReason === 'unhealthy' && worktree.status === 'missing'
-                    ? t('unregisteredMissingBlocked')
-                    : (blockLabel(blockedReason, worktree.status, t) ?? t('remove'))
-                )}
+                title={blockedReason === undefined
+                  // A missing row's removal IS the cleanup the blocked copy
+                  // used to point at the terminal for (2026-09): the host now
+                  // clears the leftover record itself.
+                  ? (missing ? t('unregisteredMissingRemoveTitle') : t('remove'))
+                  : (blockLabel(blockedReason, status, t) ?? t('remove'))}
                 aria-label={t('remove')}
                 onClick={() => {
-                  if (!window.confirm(t('unregisteredRemoveConfirm').replace('{name}', pathName(worktree.path)))) return
+                  const confirmText = (missing
+                    ? t('unregisteredMissingRemoveConfirm')
+                    : t('unregisteredRemoveConfirm')).replace('{name}', rowName)
+                  if (!window.confirm(confirmText)) return
                   void removeUnregisteredWorktree(context.sourceId, {
                     repoId: repo.repoId,
                     worktreeId: worktree.worktreeId,

@@ -543,3 +543,69 @@ typecheck（含根）、verify:i18n、build:host-git（dist 重建且与 src 字
   浮动（1 位数字距徽标右缘约 10px、2/3 位约 5-6px），右对齐后不同位数
   （1/2/3 位）的数字右缘共享同一 x，消除各行计数距右侧间距不齐；hover
   原位换出规则不变。
+
+### 11.8 缺失目录残留记录（2026-09-06 实机报告修复：missing 行不再锁死仓库 mutation）
+
+**实机场景**：某演练会话在仓库外手工 `git worktree add` 一个分支（如
+`/private/tmp/dsh-archive-review`），随后删除目录（`rm -rf` 而非
+`git worktree remove`）。git 的管理记录存活于主 checkout 的
+`.git/worktrees/<name>/`（`git worktree list --porcelain` 持续列出该行，
+并打上 `prunable gitdir file points to non-existent location` 标记）。
+取证细节：真实记录的 `HEAD` 文件是**裸 commit id**（detached HEAD）——
+git 只在分支仍被某 worktree 检出时才拒绝 `branch -D`，detached 记录不阻止
+分支删除；因此「目录被直接删除而未走 `git worktree remove`/`prune`」才是
+残留的本质，与分支是否可删无关。副作用两层：
+
+1. **mutation 全锁（根因）**：`topology()` 对每个列出 worktree 硬性
+   `realpath`——任何一条目录已删的记录使**该仓库所有 mutation**
+   （preview/create/rollback/registered+unregistered remove）确定性失败
+   `path-unavailable`（快照路径有自己的宽容循环，所以行能正常显示为
+   missing，而所有变更动作全部报「操作失败：path-unavailable…」）。
+2. **无应用内出口**：missing 行此前删除按钮硬禁用，文案指向仓库终端
+   `git worktree prune`——残留行只能外部清理。
+
+**修复语义（host 权威，三层）**：
+
+- **`topology()` 宽容缺失行**：目录已删的行保留 RAW 归一化记录路径并标记
+  `missing`，不再使整个 topology 抛错。缺失行不得被任何文件系统探测触碰
+  （dirty/attention/running），身份/重复路径/main/locked 判定照旧——其它
+  mutation 立即恢复（该仓库仍可 preview/create/删除其它 worktree）。
+- **未注册删除降级为「残留记录清理」**：unregistered remove 预检对
+  `path-unavailable` 路由到 `removeMissingUnregistered`——目录不存在则
+  从注册 workspace 反查所属仓库（`locateMissingRecord`：逐一 discover +
+  `worktree list`，按 RAW 路径与 expected repoId 匹配；孤儿 workspace 跳过
+  不阻塞），随后在 common-dir mutex 内复验（`commitMissingRecordRemove`：
+  记录身份/locked/main/ghost-workspace raw 相等守卫全保留；无目录则
+  dirty/submodule/running 探测天然免检）后执行普通
+  `git worktree remove -- <记录路径>`——**实测（git 2.50）对缺失目录 exit 0，
+  仅清除 admin 记录，不用 --force**。幂等/重放语义沿用既有对账链
+  （`verifyRemovedReplay`/`reconcileBoundRemove` 同路径收敛）；rollback 对被
+  外部删目录的操作创建目标同型收敛（身份/main/locked 守卫保留、dirty 探测
+  免检、普通 `git worktree remove` 清记录）。目录在
+  预检与提交之间**重现**（外部恢复/移回）时确定性拒绝
+  `worktree-invalid`（证明未变更，绝不清除已恢复的树）；git 意外拒绝且记录
+  原样仍在仍缺失时按 `retryable: false` 确定性改判（同 §7 有界例外）。
+  「目录重现」判定发生在锁内 topology 读时刻；紧贴探测与 git remove 之间
+  的外部恢复窗口与既有 registered git-first 删除的 TOCTOU 剖面相同（§7
+  已声明的外部 Git 剩余边界，不扩大）。
+- **UI 启用 in-app 清理**：未注册块的 missing 行删除按钮不再硬禁用——
+  行文案明示这是「残留记录清理」（等效该记录的 `git worktree prune`，
+  不涉及任何文件或分支），确认文案单独措辞；adopt（新建会话）对 missing
+  行保持禁用。注册侧不变：注册 missing 工作树仍走「已消失」徽标
+  仅注销注册流程（先删注册 → 行转为未注册 missing → 应用内清理记录，
+  或外部 prune）。
+
+**其余不变式**：主 checkout 不会缺失（其缺失即仓库不可达 → not-found）；
+ghost workspace（raw 路径等于缺失路径）拥有该记录，一律拒绝未注册清理
+（registration-first）；错误码全部落在客户端既有确定性拒绝集合内
+（`expected-mismatch`/`worktree-locked`/`main-worktree`/
+`workspace-registered`/`worktree-invalid`/`worktree-not-found`），
+不产生新的 recovery 死锁类别。
+
+验证（2026-09-06）：`test:host-git` 88→95（新增：缺失行不阻塞 preview/删除
+其它行回归、记录清理成功 + git argv 断言、响应丢失重放幂等、locked/ghost/
+repoId/worktreeId 守卫、目录重现确定性拒绝且零 mutation、detached 无分支记录
+匹配、被外部删除的 rollback 目标收敛清记录）、`test:git` 58、
+`typecheck:host-git`/`typecheck:git`、build:host-git（dist 重建，双跑字节
+一致）全绿。
+
