@@ -167,17 +167,18 @@ var ArchiveCleanupCore = class {
       liveAgentIds: new Set(live.map(String))
     };
   }
-  /** Resolve the run plan: archived roots not already covered by another
+  /** Resolve the run plan: candidate roots not already covered by another
    *  deletable root's subtree, each mapped to its deletable tree (or skipped
-   *  when running). A root that is itself a subagent descendant of an
-   *  earlier deletable root is covered by that root's tree and skipped here
-   *  (no double deletion). */
-  resolvePlan(archivedIds, statesBySession, childrenOf, liveAgentIds) {
+   *  when running). Candidates are the full archived set (purge without a
+   *  filter) or the requested subset ∩ archived set (filtered purge); a root
+   *  that is itself a subagent descendant of an earlier deletable root is
+   *  covered by that root's tree and skipped here (no double deletion). */
+  resolvePlan(candidateIds, statesBySession, childrenOf, liveAgentIds) {
     const trees = [];
     let skippedRunning = 0;
     const orphanRoots = [];
     const covered = /* @__PURE__ */ new Set();
-    for (const id of archivedIds) {
+    for (const id of candidateIds) {
       if (covered.has(id)) continue;
       if (!statesBySession.has(id)) {
         orphanRoots.push(id);
@@ -215,6 +216,24 @@ var ArchiveCleanupCore = class {
    * Delete the content of every archived session (children-first, archived
    * member removed last — ONE batched set removal at the end).
    *
+   * Optional `sessionIds` subset filter (2026-09 revision, design 24 wire
+   * amendment): when provided, ONLY the listed archived-set members are
+   * candidate roots (each with its own deletable subtree). The filter can
+   * never extend the deletion set — candidates are ALWAYS the intersection
+   * with the authoritative archived set read at run start — and a listed id
+   * that already left the set (concurrent purge in another shell) is simply
+   * no candidate: idempotent, never an error. `undefined` = the full set
+   * (unchanged semantics); a provided EMPTY array = delete nothing.
+   *
+   * BUCKET SEMANTICS NOTE (review round 2026-09): counts are per TREE ROOT,
+   * not per row origin — when the archived set itself contains a
+   * subagent-origin row and it is selected WITHOUT any deletable ancestor
+   * (reachable over the wire), it is its own tree root and counts in
+   * `deletedSessions`; when the same row is covered by a selected ancestor's
+   * completed tree it counts in `deletedSubagents`. The buckets can
+   * therefore flip with candidate order for one selection — the UI never
+   * selects hidden subagent rows, so presentation is unaffected.
+   *
    * Performance contract (design 24 perf review): the authoritative snapshot
    * (archived set + session states + lineage) is read ONCE; per deletable
    * tree only the cheap in-memory live set is re-read and checked at the
@@ -232,13 +251,37 @@ var ArchiveCleanupCore = class {
    * are not rolled back). Per-session isolation across INDEPENDENT trees is
    * unchanged: the run continues with the next tree.
    */
-  async purge() {
+  async purge(sessionIds) {
+    if (sessionIds !== void 0) {
+      if (!Array.isArray(sessionIds) || sessionIds.some((id) => typeof id !== "string" || id === "")) {
+        throw new ArchiveCleanupError(
+          "invalid-request",
+          "archiveCleanup: purge subset filter must be an array of non-empty session id strings"
+        );
+      }
+      if (sessionIds.length > MAX_PURGE_SESSIONS) {
+        throw new ArchiveCleanupError(
+          "invalid-request",
+          `archiveCleanup: purge subset filter exceeds ${MAX_PURGE_SESSIONS} entries`
+        );
+      }
+      if (sessionIds.length === 0) {
+        return { deletedSessions: 0, deletedSubagents: 0, skippedRunning: 0, errors: [] };
+      }
+    }
     const { archivedIds, statesBySession, childrenOf, liveAgentIds } = await this.readAuthoritativeState();
-    if (archivedIds.length > MAX_PURGE_SESSIONS) {
-      throw new ArchiveCleanupError("purge-capacity", `archived set exceeds the ${MAX_PURGE_SESSIONS}-session purge capacity`);
+    let candidates;
+    if (sessionIds === void 0) {
+      if (archivedIds.length > MAX_PURGE_SESSIONS) {
+        throw new ArchiveCleanupError("purge-capacity", `archived set exceeds the ${MAX_PURGE_SESSIONS}-session purge capacity`);
+      }
+      candidates = archivedIds;
+    } else {
+      const selected = new Set(sessionIds);
+      candidates = archivedIds.filter((id) => selected.has(id));
     }
     const archivedAtStart = new Set(archivedIds);
-    const plan = this.resolvePlan(archivedIds, statesBySession, childrenOf, liveAgentIds);
+    const plan = this.resolvePlan(candidates, statesBySession, childrenOf, liveAgentIds);
     let deletedSessions = 0;
     let deletedSubagents = 0;
     let truncated = false;
@@ -299,7 +342,7 @@ var ArchiveCleanupCore = class {
         }
       }
     }
-    const clearIds = [...completedRoots, ...coveredArchivedMembers, ...plan.orphanRoots];
+    const clearIds = [.../* @__PURE__ */ new Set([...completedRoots, ...coveredArchivedMembers, ...plan.orphanRoots])];
     if (clearIds.length > 0) {
       try {
         await this.host.removeArchivedSessionIds(clearIds);
@@ -446,8 +489,7 @@ function makeHostBinding(ctx) {
         if (liveSessionIds(ctx).has(sessionId)) {
           throw new ArchiveCleanupError("running", `archiveCleanup: ${sessionId} is running`);
         }
-        const locate = persistence?.locate;
-        if (typeof locate !== "function") {
+        if (persistence === void 0 || typeof persistence.locate !== "function") {
           throw new ArchiveCleanupError(
             "storage",
             `archiveCleanup: sessionPersistence.locate is not mounted \u2014 cannot resolve content of ${sessionId}`
@@ -462,7 +504,7 @@ function makeHostBinding(ctx) {
           header = headers.find((candidate) => candidate.id === sessionId);
         }
         if (header === void 0) return "missing";
-        const location = locate(header);
+        const location = persistence.locate(header);
         const artifactPath = location?.path;
         if (typeof artifactPath !== "string" || artifactPath === "") {
           return "missing";
@@ -573,10 +615,12 @@ var ArchiveCleanupGateway = class extends (_a = TypertRemoteService, _preview_de
       return value;
     }));
   }
-  purge() {
+  purge(sessionIds) {
     return domainResult(() => this.gate.run(async () => {
-      this.logger?.info?.("[archiveCleanup] purge started");
-      const value = await this.core.purge();
+      this.logger?.info?.("[archiveCleanup] purge started", {
+        ...sessionIds === void 0 ? {} : { filterCount: sessionIds.length }
+      });
+      const value = await this.core.purge(sessionIds);
       this.logger?.info?.("[archiveCleanup] purge finished", {
         deletedSessions: value.deletedSessions,
         deletedSubagents: value.deletedSubagents,

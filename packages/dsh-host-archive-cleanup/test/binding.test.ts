@@ -158,6 +158,40 @@ test('binding: content removal removes the official artifact and reclaims an emp
   }
 })
 
+test('binding regression: locate runs AS a method on the persistence service (this-sensitive official locate)', async () => {
+  // Real-machine E2E find (2026-09): the previous destructured
+  // `const locate = persistence.locate` + detached invocation made the
+  // OFFICIAL jsonl locate crash on every deletion with "Cannot read
+  // properties of undefined (reading 'root')" — the official
+  // SessionPersistence implementations are instance-state classes (locate
+  // reads this.root / this.compression). The fake below mirrors that shape
+  // (a this-sensitive method, like the official class); the old binding code
+  // fails it, the fixed binding passes.
+  const dir = mkdtempSync(join(tmpdir(), 'archive-cleanup-locate-this-'))
+  try {
+    const sessionDir = join(dir, 's9')
+    mkdirSync(sessionDir, { recursive: true })
+    const artifact = join(sessionDir, 'session.jsonl')
+    writeFileSync(artifact, '{}')
+    const persistence = {
+      root: dir,
+      list: async () => [],
+      locate(meta: { id: string }) {
+        // The official jsonl locate resolves against INSTANCE state
+        // (this.root); a detached call sees `this === undefined`.
+        return { kind: 'jsonl', path: join(this.root, meta.id, 'session.jsonl') }
+      },
+    }
+    const host = makeHostBinding({ sessionPersistence: persistence } as never)
+    const outcome = await host.deleteSessionContent('s9', dir)
+    assert.equal(outcome, 'deleted')
+    assert.equal(existsSync(artifact), false)
+    assert.equal(existsSync(sessionDir), false, 'empty session dir reclaimed')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('binding: registry surface guard refuses a missing setState surface', async () => {
   const host = makeHostBinding({})
   await assert.rejects(() => host.listArchivedSessionIds(), (error: unknown) => {

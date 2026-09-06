@@ -634,6 +634,10 @@ export function projectInstanceSnapshot(
       }]
     }),
     archivedSessionIds: (workspaces.archivedSessionIds ?? []).map(String),
+    // The mounted ctx store's workspace baseline IS the authoritative
+    // archive-set source (registry-global archivedSessionIds) — even an
+    // empty set is a true "nothing archived" fact (archiveSetKnown).
+    archiveSetKnown: true,
   }
 }
 
@@ -680,7 +684,7 @@ export function mergeRuntimeFacts(
  * updates.
  */
 export function instanceSnapshotSignature(
-  snapshot: Pick<InstanceSnapshot, 'workspaces' | 'sessions' | 'archivedSessionIds'>,
+  snapshot: Pick<InstanceSnapshot, 'workspaces' | 'sessions' | 'archivedSessionIds' | 'archiveSetKnown'>,
 ): string {
   return JSON.stringify({
     w: snapshot.workspaces.map(w => ({
@@ -703,6 +707,7 @@ export function instanceSnapshotSignature(
       p: row.parentSessionId,
     })),
     a: snapshot.archivedSessionIds,
+    k: snapshot.archiveSetKnown === true,
   })
 }
 
@@ -840,6 +845,21 @@ export function serversProjectionSignature(servers: readonly ChamberServerAggreg
           updatedAt: x.updatedAt ?? null,
         })),
       })),
+      // Archive-manager metadata rides the publish gate too: a purge while
+      // the manager dialog is open must re-publish (the dialog list derives
+      // from these rows) or it would go stale. Change detection only needs
+      // identity + recency per row (review round 2026-09): title/cwd of an
+      // archived row cannot change through any UI surface (archived rows are
+      // invisible to rename), so full metadata is omitted from the signature
+      // — at a 65k archived-set scale this keeps each compare cheap. The
+      // archive-set PROVENANCE flag rides along: a mounted↔fallback view
+      // transition must also re-publish (the dialog's degraded branch and
+      // delete-all availability depend on it).
+      archivedSessions: server.archivedSessions === undefined ? null : server.archivedSessions.map(row => ({
+        sessionId: row.sessionId,
+        updatedAt: row.updatedAt ?? null,
+      })),
+      archiveSetKnown: server.archiveSetKnown === undefined ? null : server.archiveSetKnown,
     }
   }))
 }
@@ -1202,6 +1222,49 @@ export function increasedForkTitle(title: string): string {
     return `${fullWidth[1]}（${BigInt(fullWidth[2]) + 1n}）`
   }
   return `${title} (1)`
+}
+
+/** Archived-session metadata row carried to archive-manager surfaces
+ *  (design 24 revision 2026-09: the manager lists WHAT is archived). */
+export interface ArchivedSessionMetaRow {
+  sessionId: string
+  /** Title projection when the session has one (untitled sessions omit it). */
+  title?: string
+  /** Canonical working directory (project label source). */
+  cwd?: string
+  /** Epoch ms of last activity; absent on the wire when unknown. */
+  updatedAt?: number
+}
+
+/**
+ * Archived-session metadata for the archive manager (design 24 revision
+ * 2026-09). The archived SET is the authoritative membership gate: a session
+ * row only classifies as archived when its id is in
+ * snapshot.archivedSessionIds. Subagent-origin rows never enter
+ * InstanceSnapshot.sessions (the projection drops them), so the manager
+ * lists top-level archived sessions only — their subagent descendants are
+ * deleted together with the tree (host purge semantics). Rows sort by
+ * recency (updatedAt desc; stable for ties). The unary-fallback snapshot
+ * carries an EMPTY archive set (documented KNOWN DEGRADATION — no unary wire
+ * source), so a fallback view yields no rows.
+ */
+export function deriveArchivedSessions(snapshot: InstanceSnapshot): ArchivedSessionMetaRow[] {
+  const archived = new Set(snapshot.archivedSessionIds)
+  // Both snapshot producers keep session ids unique (commitAggregatePull
+  // replaces, never appends), so the filter cannot yield duplicates today;
+  // row order = snapshot order, then stable recency sort below.
+  const rows = snapshot.sessions.filter(session => archived.has(session.sessionId))
+  rows.sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0))
+  return rows.map(session => ({
+    sessionId: session.sessionId,
+    ...(session.title !== undefined ? { title: session.title } : {}),
+    ...(session.cwd !== undefined ? { cwd: session.cwd } : {}),
+    ...(session.updatedAt !== undefined ? { updatedAt: session.updatedAt } : {}),
+    // NOTE: the running bit is deliberately NOT carried — the host purge is
+    // the running authority (it skips running subtrees whole and reports
+    // skippedRunning); per-row delete of a running archived session is a
+    // safe post-hoc skip, surfaced by the result note.
+  }))
 }
 
 /**

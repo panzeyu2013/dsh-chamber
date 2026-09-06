@@ -259,8 +259,7 @@ export function makeHostBinding(ctx: HostCtxServices): ArchiveCleanupHost {
         if (liveSessionIds(ctx).has(sessionId)) {
           throw new ArchiveCleanupError('running', `archiveCleanup: ${sessionId} is running`)
         }
-        const locate = persistence?.locate
-        if (typeof locate !== 'function') {
+        if (persistence === undefined || typeof persistence.locate !== 'function') {
           throw new ArchiveCleanupError(
             'storage',
             `archiveCleanup: sessionPersistence.locate is not mounted — cannot resolve content of ${sessionId}`,
@@ -280,7 +279,15 @@ export function makeHostBinding(ctx: HostCtxServices): ArchiveCleanupHost {
           header = headers.find(candidate => candidate.id === sessionId)
         }
         if (header === undefined) return 'missing'
-        const location = locate(header)
+        // CRITICAL: call locate AS A METHOD on the service object. The
+        // official SessionPersistence implementations are instance-state
+        // classes (`locate` reads this.root / this.compression, format.ts
+        // logPath) — a destructured `const locate = persistence.locate` and
+        // detached invocation would lose `this` and crash every deletion
+        // with "Cannot read properties of undefined (reading 'root')"
+        // (2026-09 real-machine E2E find; regression test in binding.test.ts
+        // pins this with a this-sensitive locate fake).
+        const location = persistence.locate(header)
         const artifactPath = location?.path
         if (typeof artifactPath !== 'string' || artifactPath === '') {
           // A backend with no per-session artifact owns nothing removable.
@@ -401,8 +408,10 @@ export function makeHostBinding(ctx: HostCtxServices): ArchiveCleanupHost {
 }
 
 /* ------------------------------------------------------------------ */
-/* Single-flight gate (domain-level; the wire keeps zero-arg methods, so  */
-/* concurrency control is the host's job — design 24 §3).               */
+/* Single-flight gate (domain-level; the wire methods stay arg-free or   */
+/* optional-arg — preview is zero-arg, purge takes an OPTIONAL sessionIds */
+/* filter — so concurrency control is the host's job — design 24 §3,     */
+/* 2026-09 revision).                                                    */
 /* ------------------------------------------------------------------ */
 
 export class RunGate {

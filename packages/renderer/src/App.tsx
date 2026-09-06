@@ -24,6 +24,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import api, { type ConnectionSummary, type HealthResponse } from './api.ts'
 import {
   chamberBridge,
+  deriveArchivedSessions,
   deriveServerWorkspaces,
   emptyAggregate,
   fetchInstanceSnapshot,
@@ -231,6 +232,8 @@ function deriveServers(
       remoteStatus,
       statusKey,
     )
+    let archivedSessions: ChamberServerAggregate['archivedSessions']
+    let archiveSetKnown: ChamberServerAggregate['archiveSetKnown']
     if (connected && aggregate !== undefined && aggregate.state === 'ok') {
       // 当前会话事实只给活动来源：blank（新建未首发的）会话行只在正在查看的
       // 来源投影（06 §4.3 全局单选纪律）——否则每个已挂载来源都会冒出它的
@@ -244,6 +247,14 @@ function deriveServers(
       // REAL source id) actually fires; the ungrouped bucket title is
       // display-only (''), overridden by the sidebar's own t('list.ungrouped').
       workspaces = deriveServerWorkspaces(aggregate, id, '', current)
+      // Archive-manager metadata (design 24 revision 2026-09): archived rows
+      // of this source's snapshot ride the same aggregate; the manager UI
+      // never issues its own session read. archiveSetKnown is the provenance
+      // tri-state: the mounted baseline reports an authoritative set (even
+      // when empty); the unary-fallback view reports NOT known — consumers
+      // must never read its empty rows as "no archived sessions".
+      archivedSessions = deriveArchivedSessions(aggregate)
+      archiveSetKnown = aggregate.archiveSetKnown === true
     }
     const entry: ChamberServerAggregate = {
       id,
@@ -255,6 +266,7 @@ function deriveServers(
       connected,
       phase,
       workspaces,
+      ...(archivedSessions === undefined ? {} : { archivedSessions, archiveSetKnown }),
       aggregateReady: aggregate !== undefined && aggregate.state === 'ok',
       updatedAt: now,
     }

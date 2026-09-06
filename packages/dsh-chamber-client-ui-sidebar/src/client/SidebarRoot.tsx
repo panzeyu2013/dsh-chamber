@@ -132,9 +132,10 @@ import {
 import {
   archiveSession, createHostDirectory, createSession, createWorkspace, deleteWorkspace,
   forkSession, getInstanceClient, insertSessionBefore, insertWorkspaceBefore, listHostDirectory,
-  previewArchiveCleanup, purgeArchivedSessions, renameSession, renameWorkspace, searchSessions,
+  renameSession, renameWorkspace, searchSessions,
 } from '../shared/instance-api.ts'
 import { DirectoryBrowser } from '@deepseek-ai/dsh-client-ui-directory-picker-browse/client/DirectoryBrowser.tsx'
+import { ArchiveManagerDialog } from './ArchiveManagerDialog.tsx'
 import { setSearchFetcher, getSearchStates, subscribeSearch } from '../shared/search-state.ts'
 import { SessionTodoArea } from './SessionTodoArea.tsx'
 import {
@@ -680,7 +681,7 @@ export function SidebarRoot({
   // suppressClickRef (drag-end trailing click) is honored on the way in;
   // row-internal buttons (fold toggle / new-session / kebabs / archive) AND
   // the source-header action buttons (sort / add-workspace / search /
-  // archive-cleanup purge — design 24 §6) clear the pending in their own
+  // archive-cleanup manager — design 24 revision) clear the pending in their own
   // handlers (stopPropagation + clearPendingClick) —
   // React's stopPropagation also stops the native event, so the document
   // listener never sees those clicks and a surviving pending would make a
@@ -754,27 +755,42 @@ export function SidebarRoot({
   }, [servers, renaming])
   const [addingWorkspace, setAddingWorkspace] = useState<string | null>(null)
   const [addingWorkspaceBusy, setAddingWorkspaceBusy] = useState(false)
-  // Design 24 §6: per-server archive-cleanup in-flight stage ('preview' |
-  // 'purge') and the server-level info line (empty state / skipped / partial
-  // results). Errors ride the generic rowErrors map under the
-  // `<serverId>/archive-cleanup` key.
-  const [purgeInFlight, setPurgeInFlight] = useState<Record<string, 'preview' | 'purge'>>({})
-  const [cleanupNotes, setCleanupNotes] = useState<Record<string, string>>({})
-
-  // Design 24 (review follow-up F9): mounted guard for the purge flow's async
-  // continuations. A preview/purge can outlive this tree (ctx close / runtime
-  // restart while the wire call is in flight), and the continuations must not
-  // run the three purge state setters after unmount — benign under React 18
-  // today, but undocumented. The unmount cleanup flips the ref; every
-  // post-await write below checks it. chamberBridge.requestRefresh is NOT
-  // gated here: its App-side consumers are global/generation-fenced (the App
-  // layer owns refresh fan-out per instance, not this tree's state), and the
-  // host purge may still have completed — a live App generation should pull.
-  const disposedRef = useRef(false)
+  // chamber (design 24 revision 2026-09): the ARCHIVE MANAGER dialog — one
+  // per source. The manager lists the source's archived sessions (metadata
+  // rides ChamberServerAggregate.archivedSessions; the dialog issues NO
+  // session read of its own) and offers single-row / multi-select /
+  // delete-all purges through the optional sessionIds purge filter.
+  // Supersedes the v1 server-row preview → window.confirm → purge-everything
+  // flow (design 24 §6 as merged); destructive calls stay confirm-gated
+  // INSIDE the dialog.
+  const [archiveCleanupServerId, setArchiveCleanupServerId] = useState<string | null>(null)
+  // Focus restore (review round 2026-09): the manager's opener trash button
+  // regains focus when the dialog closes — keyboard users otherwise land on
+  // <body> after the dialog unmounts.
+  const archiveCleanupOpenerRef = useRef<HTMLElement | null>(null)
+  const onOpenArchiveCleanup = (server: ChamberServerAggregate): void => {
+    archiveCleanupOpenerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    setArchiveCleanupServerId(server.id)
+  }
+  const closeArchiveCleanup = (): void => {
+    setArchiveCleanupServerId(null)
+    // Focus after the close render commits (the opener may have unmounted —
+    // a collapsed rail or source removal — focus() is a safe no-op then).
+    requestAnimationFrame(() => {
+      archiveCleanupOpenerRef.current?.focus()
+      archiveCleanupOpenerRef.current = null
+    })
+  }
+  // The manager may only stay open over a live source: a source that
+  // vanishes or disconnects mid-session closes it (a confirm against a dead
+  // instance would fail into the void). Mirrors the sort-menu cleanup.
   useEffect(() => {
-    disposedRef.current = false
-    return () => { disposedRef.current = true }
-  }, [])
+    if (archiveCleanupServerId === null) return
+    const server = servers.find(candidate => candidate.id === archiveCleanupServerId)
+    if (server === undefined || !server.connected) {
+      setArchiveCleanupServerId(null)
+    }
+  }, [servers, archiveCleanupServerId])
 
   /** Run one keyed action; the returned promise resolves AFTER the action
    *  settled (a rejection already wrote its message into rowErrors) — callers
@@ -886,161 +902,6 @@ export function SidebarRoot({
       chamberBridge.requestRefresh(server.id)
     })
   }
-
-  /** Design 24 §6: server-row "delete archived content" action. Full-flow
-   *  per-server single-flight (preview → confirm → purge); preview is a
-   *  point-in-time snapshot for the confirm copy only — the purge re-reads
-   *  authoritative state. Liveness is re-checked before the confirm (a
-   *  stale preview after a mid-flight disconnect never confirms). Errors
-   *  land in rowErrors; empty/skipped/partial results land in cleanupNotes
-   *  (both rendered in the header-under slot, fold- and search-independent). */
-  const onPurgeArchived = (server: ChamberServerAggregate): void => {
-    const key = `${server.id}/archive-cleanup`
-    if (purgeInFlight[server.id] !== undefined) return
-    setPurgeInFlight(prev => ({ ...prev, [server.id]: 'preview' }))
-    setCleanupNotes(prev => {
-      if (!(server.id in prev)) return prev
-      const next = { ...prev }
-      delete next[server.id]
-      return next
-    })
-    setRowErrors(prev => {
-      if (!(key in prev)) return prev
-      const next = { ...prev }
-      delete next[key]
-      return next
-    })
-    void (async () => {
-      try {
-        const preview = await previewArchiveCleanup(getInstanceClient(server.id))
-        // F9 (review follow-up): the tree may have unmounted while the wire
-        // call was in flight (ctx close / runtime restart) — skip every state
-        // write AND the confirm on a dead tree. The liveness re-check below
-        // covers disconnects; this covers unmount.
-        if (disposedRef.current) return
-        // Re-check liveness after the async preview (never confirm stale).
-        // aggregateError no longer gates (E-m2): it only reflects the list
-        // snapshot — a succeeded preview is itself wire-health proof.
-        const latest = serversRef.current.find(candidate => candidate.id === server.id)
-        if (latest === undefined || !latest.connected) {
-          // Source vanished/disconnected mid-preview: drop silently — the
-          // disconnect effect clears leftovers and nothing stale may
-          // resurface after a reconnect (E-m3 write-time discipline).
-          return
-        }
-        if (preview.deletableSessions === 0 && preview.deletableSubagents === 0) {
-          setCleanupNotes(prev => ({
-            ...prev,
-            [server.id]: preview.skippedRunning > 0
-              ? `没有可删除的已归档会话（${preview.skippedRunning} 项因运行中被跳过）。`
-              : '没有可删除的已归档会话。',
-          }))
-          return
-        }
-        const baseConfirm = t('confirm.purgeArchived', {
-          sessions: preview.deletableSessions,
-          subagents: preview.deletableSubagents,
-        })
-        const skippedSuffix = preview.skippedRunning > 0
-          ? t(preview.skippedRunning === 1
-            ? 'confirm.purgeArchivedSkipped.one'
-            : 'confirm.purgeArchivedSkipped.other', { skipped: preview.skippedRunning })
-          : ''
-        if (!window.confirm(baseConfirm + skippedSuffix)) return
-        setPurgeInFlight(prev => ({ ...prev, [server.id]: 'purge' }))
-        const result = await purgeArchivedSessions(getInstanceClient(server.id))
-        // F9: the refresh is deliberately UNCONDITIONAL — even on a dead tree
-        // the host purge may have completed, and chamberBridge's App-side
-        // consumers are global/generation-fenced (a refresh is a global
-        // mutation-pull request for this instance, never this tree's state),
-        // so a late request is safe and possibly still wanted.
-        chamberBridge.requestRefresh(server.id)
-        if (disposedRef.current) return
-        // E-m3: write-time liveness check — nothing written after a
-        // disconnect (the effect may have already run; stale messages must
-        // not resurface on reconnect).
-        const stillLive = serversRef.current.some(candidate => candidate.id === server.id && candidate.connected)
-        const lines: string[] = []
-        if (result.deletedSessions > 0 || result.deletedSubagents > 0) {
-          lines.push(`清理完成：删除 ${result.deletedSessions} 个会话 / ${result.deletedSubagents} 个子代理内容。`)
-        }
-        if (result.skippedRunning > 0) {
-          lines.push(`已跳过 ${result.skippedRunning} 项运行中的会话（未删除）。`)
-        }
-        if (result.truncated === true && result.errors.length >= 1000) {
-          lines.push('失败明细过多，仅显示前 1000 项。')
-        }
-        if (result.errors.length > 0) {
-          // Partial failure is never silent: warnings ride the error slot.
-          lines.push(`${result.errors.length} 项失败，可重试（重复执行安全）。`)
-          if (stillLive) setRowErrors(prev => ({ ...prev, [key]: lines.join(' ') }))
-          return
-        }
-        if (lines.length === 0 && stillLive) {
-          // E-n2: another shell may have purged between preview and this run
-          // — an empty outcome must never be silent.
-          lines.push('没有可删除的已归档会话。')
-        }
-        if (lines.length > 0 && stillLive) setCleanupNotes(prev => ({ ...prev, [server.id]: lines.join(' ') }))
-      } catch (error) {
-        if (disposedRef.current) return
-        // E-m6: a second shell's busy refusal gets one friendly line.
-        const message = error instanceof Error ? error.message : String(error)
-        const friendly = message.startsWith('busy:')
-          ? '该实例正在执行另一处清理，请稍后重试。'
-          : message
-        const stillLive = serversRef.current.some(candidate => candidate.id === server.id && candidate.connected)
-        if (stillLive) setRowErrors(prev => ({ ...prev, [key]: friendly }))
-      } finally {
-        if (!disposedRef.current) {
-          setPurgeInFlight(prev => {
-            const next = { ...prev }
-            delete next[server.id]
-            return next
-          })
-        }
-      }
-    })()
-  }
-
-  // Design 24 §6: drop server-level cleanup errors/info when the source is
-  // gone or disconnected (stale messages must not resurface after a
-  // reconnect). The in-flight stage is also cleared — a reconnect starts a
-  // fresh flow. ACKNOWLEDGED WINDOW (review follow-up F9; design 24 §6 step-2
-  // / §8 accept it): a disconnect mid-flow clears the local in-flight marker
-  // while the HOST purge may still be running (client timeout ≠ host stop),
-  // so a reconnected shell can re-confirm and re-run a purge on top of that
-  // earlier run — the resulting reconnect double-confirm window is bounded by
-  // the host `busy` single-flight backstop (a concurrent second purge gets
-  // ok:false busy → the friendly E-m6 line) and by purge idempotency (an
-  // earlier run that already finished makes the rerun a safe no-op). No local
-  // serialization is attempted across reconnects by design.
-  useEffect(() => {
-    const liveIds = new Set(servers.filter(server => server.connected).map(server => server.id))
-    setCleanupNotes(prev => {
-      const stale = Object.keys(prev).filter(id => !liveIds.has(id))
-      if (stale.length === 0) return prev
-      const next = { ...prev }
-      for (const id of stale) delete next[id]
-      return next
-    })
-    setRowErrors(prev => {
-      const suffix = '/archive-cleanup'
-      const stale = Object.keys(prev).filter(key =>
-        key.endsWith(suffix) && !liveIds.has(key.slice(0, -suffix.length)))
-      if (stale.length === 0) return prev
-      const next = { ...prev }
-      for (const key of stale) delete next[key]
-      return next
-    })
-    setPurgeInFlight(prev => {
-      const stale = Object.keys(prev).filter(id => !liveIds.has(id))
-      if (stale.length === 0) return prev
-      const next = { ...prev }
-      for (const id of stale) delete next[id]
-      return next
-    })
-  }, [servers])
 
   const onDeleteWorkspace = (server: ChamberServerAggregate, workspaceId: string, title: string): void => {
     // An ORPHANED workspace (path gone) needs an explicit confirm —
@@ -1342,9 +1203,7 @@ export function SidebarRoot({
     renaming,
     setRenaming,
     commitRename,
-    purgeInFlight,
-    cleanupNotes,
-    onPurgeArchived,
+    onOpenArchiveCleanup,
     setAddingWorkspace,
     openSession,
     onNewSession,
@@ -1485,6 +1344,16 @@ export function SidebarRoot({
           t={directoryBrowserT}
           onOpen={browsePick}
           onClose={browseClose}
+        />
+      )}
+      {/* chamber (design 24 revision 2026-09): the per-source archive
+          manager — lists what is archived and deletes single / selected /
+          all. Mounted only while a target source is chosen. */}
+      {archiveCleanupServerId !== null && (
+        <ArchiveManagerDialog
+          server={servers.find(candidate => candidate.id === archiveCleanupServerId) ?? null}
+          t={t}
+          onClose={closeArchiveCleanup}
         />
       )}
     </div>
