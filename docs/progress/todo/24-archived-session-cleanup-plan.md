@@ -346,3 +346,39 @@ binding 10 测 + runtime 探测测试 fail-loud 断言。待实证（照实登�
 ① 官方 UI 能否直接归档 subagent 起源会话（covered-first 顺序依赖的
 reachability）；② purge 后 registry 内存 header 索引重建前的 ghost 行窗口
 （chamber 行源为 fs-fresh sessionQuery，推断无影响，需实机一次）。
+
+**轮次 10（2026-12，合入修订轮——合入前独立评审的残留闭合）**：独立
+评审（三路：文档侧事实底座 / host 包深度评审 / 主评审实跑）结论 0 Blocker，
+残留按定案处置，全部落地于本 commit：
+
+- **M1 定案（文档↔代码冲突）**：§14 旧「archived 占位 id 保留至上游 wire」
+  草稿与 §4/实现/测试冲突 → **维持代码（随 purge 移除）**，design 24 §14
+  残余段落改写为定案；AGENTS「no unarchive」读法随之登记（只清自身已删
+  内容成员、无任何反向/浏览操作）；台账 §10 残余/待办③所指登记随之更新
+  （以 §14 定案为准）；
+- **M2**：binding `listHeaders` 回退意图注释（cordis inject 全量语义下守卫
+  「已挂载但方法不全」漂移 + 单测直用面）；
+- **M3**：`assertHostSurface` 增加会话枚举/存储面结构检查（probe 真
+  fail-closed），binding 测试补通过/全缺/缺存储三态；
+- **M4**：运行窗口登记入 design 24 §4 step 7（逐删守卫窗口、前序已删成员
+  不回滚、重跑收敛）；
+- **M5**：purge-capacity 不可重试 + 无逃生口登记入 §3（并闭合 §15 债务③
+  的错误码枚举文本）；
+- **N1**：完成树覆盖的已归档后代同批清除（core `purge()` + 新单测，单次
+  purge 收敛，无跨轮 marker 滞后）；
+- **N2**：`resolveDeletableTree` 显式栈迭代后序（消除递归深度=链深风险）；
+- **N3**：binding 产物删除 rm ENOENT 竞态 → 幂等 `missing`；
+- **N4**：无 cwd 成员逐删全库重列 = 稀有路径（快照 cwd 缺失才触发），代码
+  注释登记；
+- **N5**：AGENTS.md 事件表述改为「文档化 no-op」（与 §14 决策 5 一致）；
+- 注释/文档杂项：pending-click.ts 守卫清单补 archive-cleanup；control-plane
+  seed 注释「two host packages」→ 三包表述（index.ts/host-graph-seed.ts）；
+  design 24 头部状态行更新（实现门已过）；§6 正文按实现对齐（成功摘要行 +
+  部分失败 role=alert + step3 E-m2 理由），§15 债务①③标记闭合；
+- 验证：host 包 core 17 + binding 10 全绿、tsc exit 0；dist/index.js 以
+  esbuild 0.25 重建并二次构建字节比对（确定性）；涉及文档无代码面改动其余
+  包不受影响（评审轮已全链绿）。
+
+**启用批次提交（本 commit 即启用批次）**：seed+探针+dist 与全部修订同
+commit 落地于 delete-archived 分支（3a5bbcf 之后的合入修订 commit），
+合并入 main 后 STATUS 相应收口；M4 实机矩阵仍为唯一剩余外部项。

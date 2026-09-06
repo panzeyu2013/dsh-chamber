@@ -39,7 +39,8 @@
  * never sees those clicks — a surviving pending would make a later click on
  * the same session within the window spuriously enter rename. This applies to
  * every row-internal button (fold / new-session / kebabs / archive) AND the
- * source-header action buttons (sort / add-workspace / search).
+ * source-header action buttons (sort / add-workspace / search /
+ * archive-cleanup purge — design 24 §6).
  */
 import { assertSingletonModule } from './singleton.ts'
 

@@ -95,12 +95,13 @@ export const HOST_ARCHIVE_CLEANUP_INSERT: HostPackageInsert = {
  * that drive the seed file set and the future source resolution only.
  *
  * Consumers:
- * - desktop control plane: the two host packages (base entries, legacy
- *   `hostGraphPackageSourceDir` / `hostGitWorktreePackageSourceDir` options);
- * - gateway: the same two host packages plus `extraSeedEntries` — the mobile
- *   slot (`@dsh-chamber/dsh-client-ui-mobile`, kind 'client') is a stub whose
- *   packaged source dir ships on the mobile branch; until then an absent
- *   sourceDir is a warned skip, never an error.
+ * - desktop control plane: the three host packages as base entries
+ *   (`hostGraphPackageSourceDir` / `hostGitWorktreePackageSourceDir` /
+ *   `hostArchiveCleanupPackageSourceDir` options — design 24);
+ * - gateway: the same three host packages as desktop-synced entries plus
+ *   `extraSeedEntries` — the mobile slot (`@dsh-chamber/dsh-client-ui-mobile`,
+ *   kind 'client') is a stub whose packaged source dir ships on the mobile
+ *   branch; until then an absent sourceDir is a warned skip, never an error.
  */
 export type SeedEntryKind = 'host' | 'client'
 

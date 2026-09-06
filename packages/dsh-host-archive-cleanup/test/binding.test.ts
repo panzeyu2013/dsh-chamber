@@ -220,10 +220,30 @@ test('binding: an absent official mutation chain refuses loudly (no out-of-chain
 })
 
 test('binding: assertHostSurface passes on the full surface and refuses otherwise (probe leg)', () => {
+  // Full surface (merge-round Minor-3 hardened the probe to the complete
+  // domain surface): registry + session enumeration + storage locate.
   assertHostSurface({
     workspaceRegistry: { archivedSessionIds: [], list: () => [], setState: async () => {} },
+    sessionQuery: { listSessions: async () => [] },
+    sessionPersistence: { list: async () => [], locate: () => undefined },
   } as never)
   assert.throws(() => assertHostSurface({} as never), (error: unknown) => {
+    return error instanceof ArchiveCleanupError && error.code === 'registry-unreadable'
+  })
+  // A registry-only host (no enumeration/locate surface) must fail the probe
+  // loudly — presence without surface health would only registry-unreadable
+  // on the first preview/purge.
+  assert.throws(() => assertHostSurface({
+    workspaceRegistry: { archivedSessionIds: [], list: () => [], setState: async () => {} },
+  } as never), (error: unknown) => {
+    return error instanceof ArchiveCleanupError && error.code === 'registry-unreadable'
+  })
+  // Enumerating without the storage locate leg also refuses (content removal
+  // would be impossible).
+  assert.throws(() => assertHostSurface({
+    workspaceRegistry: { archivedSessionIds: [], list: () => [], setState: async () => {} },
+    sessionQuery: { listSessions: async () => [] },
+  } as never), (error: unknown) => {
     return error instanceof ArchiveCleanupError && error.code === 'registry-unreadable'
   })
 })

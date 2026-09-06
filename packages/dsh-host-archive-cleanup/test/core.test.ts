@@ -274,6 +274,36 @@ test('purge: delete-time running refusal surfaces as a per-item error and keeps 
   assert.deepEqual(host.archived, new Set(['s3']))
 })
 
+test('purge: an archived descendant covered by a completed tree is cleared in the SAME run (merge-round Nit N1)', async () => {
+  const host = new FakeHost()
+  // s1 archived with an archived subagent-origin descendant a1 (itself a set
+  // member) plus a deeper descendant a1a; s2 archived leaf; s3 running-skipped.
+  host.archived.add('s1')
+  host.states.set('s1', state('s1'))
+  host.archived.add('a1')
+  host.states.set('a1', subagent('a1', 's1'))
+  host.states.set('a1a', subagent('a1a', 'a1'))
+  host.archived.add('s2')
+  host.states.set('s2', state('s2'))
+  host.archived.add('s3')
+  host.states.set('s3', state('s3'))
+  host.states.set('b1', subagent('b1', 's3', true))
+  const core = new ArchiveCleanupCore(host)
+  const result = await core.purge()
+  assert.equal(result.deletedSessions, 2)
+  assert.equal(result.deletedSubagents, 2)
+  assert.deepEqual(result.errors, [])
+  // a1's archived marker rides the SAME end-of-run batched write — no lag to
+  // a later orphan pass.
+  assert.deepEqual(host.removalCalls, [['s1', 's2', 'a1']])
+  assert.deepEqual(host.archived, new Set(['s3']))
+  // Converged after ONE run: a rerun has nothing left to clear or delete.
+  const again = await core.purge()
+  assert.equal(again.deletedSessions, 0)
+  assert.equal(again.deletedSubagents, 0)
+  assert.equal(host.changedEvents, 1)
+})
+
 test('purge: crash mid-subtree leaves the root archived and a rerun converges', async () => {
   const host = buildHost()
   host.crashAfterDeleteCount = 1

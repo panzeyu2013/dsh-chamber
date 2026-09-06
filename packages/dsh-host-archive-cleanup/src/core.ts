@@ -215,13 +215,29 @@ export function resolveDeletableTree(
 
   const order: string[] = []
   const visited = new Set<string>()
-  const visit = (sessionId: string): void => {
-    if (visited.has(sessionId)) return
+  // Iterative post-order (merge-round Nit N2): recursion depth equalled the
+  // subagent chain depth; an explicit stack keeps arbitrarily deep lineage
+  // chains safe. Produces the exact children-first order of the recursive
+  // post-order (each node's subtree completes before the node itself), with
+  // the same cycle guard (a cycle edge back to a visited ancestor is
+  // skipped — the node was already queued by its first path).
+  const stack: Array<{ sessionId: string; expanded: boolean }> = [
+    { sessionId: rootSessionId, expanded: false },
+  ]
+  while (stack.length > 0) {
+    const { sessionId, expanded } = stack.pop() as { sessionId: string; expanded: boolean }
+    if (expanded) {
+      order.push(sessionId)
+      continue
+    }
+    if (visited.has(sessionId)) continue
     visited.add(sessionId)
-    for (const child of childrenOf.get(sessionId) ?? []) visit(child)
-    order.push(sessionId)
+    stack.push({ sessionId, expanded: true })
+    const children = childrenOf.get(sessionId) ?? []
+    for (let i = children.length - 1; i >= 0; i -= 1) {
+      stack.push({ sessionId: children[i] as string, expanded: false })
+    }
   }
-  visit(rootSessionId)
   // order[0] is the deepest-visited leaf; the root is last. subagentCount
   // excludes the root itself.
   return {
@@ -340,8 +356,9 @@ export class ArchiveCleanupCore {
    * (archived set + session states + lineage) is read ONCE; per tree only the
    * cheap in-memory live set is re-read (the real running guard). Per-member
    * deletion uses the snapshot's cwd so the binding never re-enumerates the
-   * corpus. Completed roots and orphans are removed from the archived set in
-   * a single official write after the whole run. Per-session failures land
+   * corpus. Completed roots (and any archived descendants their completed
+   * trees covered) plus orphans are removed from the archived set in a
+   * single official write after the whole run. Per-session failures land
    * in `errors` (truncated at MAX_PURGE_ERROR_RECORDS with `truncated`).
    */
   async purge(): Promise<PurgeResult> {
@@ -349,6 +366,11 @@ export class ArchiveCleanupCore {
     if (archivedIds.length > MAX_PURGE_SESSIONS) {
       throw new ArchiveCleanupError('purge-capacity', `archived set exceeds the ${MAX_PURGE_SESSIONS}-session purge capacity`)
     }
+    // Snapshot membership of the archived set (merge-round Nit N1): lets the
+    // end-of-run batched removal also clear archived descendants covered by a
+    // completed tree IN THE SAME RUN instead of lagging to a later orphan
+    // pass. Only ids that were members at snapshot time are ever cleared.
+    const archivedAtStart = new Set<string>(archivedIds)
     const plan = this.resolvePlan(archivedIds, statesBySession, childrenOf, liveAgentIds)
     let deletedSessions = 0
     let deletedSubagents = 0
@@ -363,6 +385,7 @@ export class ArchiveCleanupCore {
     }
 
     const completedRoots: string[] = []
+    const coveredArchivedMembers: string[] = []
     for (const tree of plan.trees) {
       // Cheap in-memory live refresh only (design 24 perf): the durable
       // snapshot stays fixed for the run — single-flight rules out in-process
@@ -379,6 +402,14 @@ export class ArchiveCleanupCore {
         plan.skippedRunning += 1
         continue
       }
+      // Member-window note (merge-round Minor-4): the whole-subtree skip
+      // guarantee holds up to each member's deletion instant. A member that
+      // turns running BETWEEN the per-tree recheck and its own turn is
+      // refused by the O(1) pre-check below (or the binding's delete-time
+      // live guard) — members already deleted before that flip stay deleted
+      // (they were legitimately deletable when removed), the flipped member
+      // survives, and the root stays archived so a rerun re-enumerates and
+      // converges. No partial deletion of a subtree that was running.
       let subtreeHadError = false
       for (const sessionId of tree.order) {
         // O(1) member-level running pre-check against the live set.
@@ -418,13 +449,23 @@ export class ArchiveCleanupCore {
         continue
       }
       completedRoots.push(tree.rootSessionId)
+      for (const member of tree.order) {
+        // Merge-round Nit N1: an archived descendant covered by this
+        // completed tree (a subagent-origin id that is itself in the
+        // archived set) is cleared in the SAME run — no marker lag to a
+        // later orphan pass.
+        if (member !== tree.rootSessionId && archivedAtStart.has(member)) {
+          coveredArchivedMembers.push(member)
+        }
+      }
     }
     // The archived-set members of every completed tree are removed LAST in
     // ONE official write (root ids stay archived until their whole subtree is
     // gone; a crash before this point leaves a re-enumerable remainder).
+    // Covered archived descendants of a completed tree ride the same write.
     // Orphan set members (no session record) carry no content — removing
     // them is the whole operation and is safe at any point.
-    const clearIds = [...completedRoots, ...plan.orphanRoots]
+    const clearIds = [...completedRoots, ...coveredArchivedMembers, ...plan.orphanRoots]
     if (clearIds.length > 0) {
       try {
         await this.host.removeArchivedSessionIds(clearIds)

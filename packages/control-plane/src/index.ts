@@ -207,7 +207,8 @@ export interface ControlPlaneOptions {
   hostArchiveCleanupPackageSourceDir?: string
   /**
    * Seed registry (2026-12 interface): additional chamber seed entries beyond
-   * the two host packages — the seam for browser-side chamber client plugins
+   * the three base host packages (client-graph / git-worktree /
+   * archive-cleanup) — the seam for browser-side chamber client plugins
    * in hosted frontends (e.g. the gateway mobile slot). Every entry rides the
    * same built-artifact gate, profile seed lifecycle and `--patch` overlay as
    * the host packages; kind 'client' entries carry no probe coupling. A null/
@@ -354,13 +355,15 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
     ?? DEFAULT_HOST_GIT_WORKTREE_PACKAGE_SOURCE_DIR
   const hostArchiveCleanupPackageSourceDir = options.hostArchiveCleanupPackageSourceDir
     ?? DEFAULT_HOST_ARCHIVE_CLEANUP_PACKAGE_SOURCE_DIR
-  // Seed registry (2026-12): the two legacy host packages plus any extra
-  // entries (client-plugin slots like the gateway mobile stub). An extra
-  // entry that re-declares a base package's id WINS over the base entry
-  // (last-writer-wins by loader id): the gateway passes the two host packages
-  // as desktop-synced extra entries, so once its seed cache is populated the
-  // synced copies replace the packaged defaults — the base rows exist only to
-  // preserve the legacy desktop shape (no extraSeedEntries → no shadowing).
+  // Seed registry (2026-12): the three base chamber host packages
+  // (client-graph / git-worktree / archive-cleanup) plus any extra entries
+  // (client-plugin slots like the gateway mobile stub). An extra entry that
+  // re-declares a base package's id WINS over the base entry
+  // (last-writer-wins by loader id): the gateway passes the three host
+  // packages as desktop-synced extra entries, so once its seed cache is
+  // populated the synced copies replace the packaged defaults — the base
+  // rows exist only to preserve the legacy desktop shape (no
+  // extraSeedEntries → no shadowing).
   const seedEntries = (): SeedEntry[] => {
     const byId = new Map<string, SeedEntry>()
     for (const entry of [
@@ -443,8 +446,9 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
     // wording distinguishes a true stub (packaged entry whose package has not
     // shipped yet, e.g. the gateway mobile slot) from a desktop-synced entry
     // merely awaiting its first sync (an expected pre-sync state, logged once
-    // per spawn as informational). The two legacy dirs keep their documented
-    // silent-skip behavior.
+    // per spawn as informational). The three base packaged dirs (client-graph
+    // / git-worktree / archive-cleanup) keep their documented silent-skip
+    // behavior (absent source or dist = no row, no overlay).
     for (const entry of options.extraSeedEntries ?? []) {
       if (entry.sourceDir === null || !existsSync(entry.sourceDir)) {
         const message = `seed entry '${entry.insert.id}' (${entry.insert.name}): source absent; skipped`

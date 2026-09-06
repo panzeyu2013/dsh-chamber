@@ -1,10 +1,12 @@
 # 24 · 已归档会话内容清理（server 行 hover 动作 · 第三个 chamber 宿主域）
 
-> 状态：**设计定稿 v3（2026-12：三路独立评审 + v2 合规复核，零 Blocker/
-> 零 Major；Minor 修订并入 v3）**，待两件事后方可排期实现：① 宿主包例外
-> 评审（本文档是「第三个 chamber 宿主包 / 会话删除域」的例外动议，见 §2；
-> 评审通过即同步 AGENTS.md 例外清单，§12）；② vendor 源码前置核对（§10，
-> vendor 子模块缺失时无法完成）。
+> 状态：**已实现（delete-archived 分支落地，2026-12）**；定稿 v3 后的两道
+> 实现门均已通过：① 宿主包例外评审——2026-12 用户拍板**跳过人工评审直接
+> 执行**（§2 动议，AGENTS.md 例外清单与 design 01 地图随 M0 即改，台账
+> D1–D7 按推荐值生效）；② vendor 源码前置核对——§10 已按 pinned vendor
+> （dsh-v0.1.2-rc.1 a66e4702）执行完毕、host binding 分支 b 落地。2026-12
+> 合入修订轮闭合评审残留（§14 残余定案 M1 / M2–M5 处置 / N1–N5，见 §15），
+> 代码、测试与提交态 dist 同步；M4 实机 E2E 待验（见 STATUS）。
 >
 > v2/v3 修订：2026-12 由三个只读 subagent 分面评审（客户端 UI/wire、宿主
 > 域与分发接线、契约治理）+ 作者自审 + 一轮 v2 合规复核（闭合矩阵 12 项
@@ -146,9 +148,14 @@ archiveCleanup/purge({})          → domain { ok, value: {
   gateway 不保留 thrown business 字段，同 git-worktree 理由）。
   `ok:false` 的 code 枚举（最小集）：`busy`（本域另一 purge/preview
   在途——**宿主侧单飞**，跨 N-ctx 的并发 purge 靠它收敛）、`registry-unreadable`
-  （整体前提失败）。逐项失败收进 `value.errors`（item code 枚举：
-  `missing` 内容已不在 / `running` 删除瞬间转入运行（竞态） / `storage` 宿主
-  存储失败），不中断、不 throw。
+  （整体前提失败；2026-12 合入修订轮起 probe 的 `assertHostSurface` 结构
+  检查亦覆盖会话枚举/存储面（Minor-3））、`purge-capacity`（archived
+  集合超过单次上限 65,536——**不可重试**（`retryable: false`），无逃生口
+  直至上游 wire 收敛，2026-12 合入修订轮登记，Minor-5）。逐项失败收进
+  `value.errors`（item code 枚举：`missing` 内容已不在 / `running` 删除
+  瞬间转入运行（竞态） / `storage` 宿主存储失败；收尾批量写失败记
+  `archive-set`），不中断、不 throw；`errors` 超过 1,000 条截断并置
+  `truncated: true`（core.ts 常量 MAX_PURGE_SESSIONS / MAX_PURGE_ERROR_RECORDS）。
 - 域**没有**任何读取方法；`preview` 是唯一的辅助面且只回计数。
 - **404 语义**：宿主对未认领方法答 404（vendored gateway unclaimed-route
   行为，ssh-provider/gateway 均有注记）= 域未挂载或方法不存在，与「宿主包
@@ -174,6 +181,8 @@ vendor 源码）+ 薄 Remote 门面（`index.ts`），编排逻辑：
 4. **删除顺序（崩溃一致性）**：**children-first**——先删 subagent 起源后代、
    再删顶层会话目录；**archived 集合成员最后移除**（顶层 id 在整棵删完前
    保持 archived，崩溃后续跑才能重新枚举到残留后代，不会产生清不掉的孤儿）；
+   完成树所覆盖的**已归档后代成员**（本身在 archived 集合中的 subagent 行）
+   随同一次收尾批量写清除，无跨轮 marker 滞后（2026-12 合入修订轮，Nit N1）；
    崩溃乱序场景入单测（§9）；
 5. **执行**（§10 核对后二选一）：
    - a) 官方宿主进程内存在可复用的删除例程（未来 delete wire / dispose
@@ -182,14 +191,20 @@ vendor 源码）+ 薄 Remote 门面（`index.ts`），编排逻辑：
      等，todo 12 §5.2）做有界删除：内容目录删除 + workspace `sessionIds`
      账目自愈 + archived 集合清理；**一切状态写经宿主自身 setState/持久化
      原语**，文件写遵守宿主原子写纪律；
-6. **事件发射（硬约束）**：删除经官方事件总线发射 **`host/session-removed`**
-   与 **`host/archived-sessions-changed`**（精确名，todo 12 §5.2；chamber
-   代码当前无引用，vendor 核对时确认发射面）——mounted ctx 的 workspace
-   follow/基线推送、git 域等宿主内消费者据此自愈；不可绕过事件直接改投影；
+6. **事件发射**：删除经官方事件总线发射 **`host/session-removed`**
+   与 **`host/archived-sessions-changed`**（精确名，todo 12 §5.2）——
+   mounted ctx 的 workspace follow/基线推送、git 域等宿主内消费者据此
+   自愈；不可绕过事件直接改投影。§10 核对（#4/#5）结论：pinned 树无
+   宿主域可用的公开事件面 → 实现为**文档化 no-op**（binding.ts emit 空
+   实现，投影刷新 = 客户端 mutation-pull + 官方启动 header 索引重建；
+   2026-12 合入修订轮把本步骤措辞与 §14 决策 5 / AGENTS.md 登记对齐）；
 7. **逐会话隔离与复检**：单会话失败记入 `errors` 继续；每会话删除前复检
    （仍在 archived 集合 / 非 running / 非 blank / 非 current）；幂等（已删/
    已不在集合 = 跳过）；崩溃窗口收敛 = 遗留会话仍属 archived，下次 purge
-   续跑清掉。
+   续跑清掉。**运行窗口**（2026-12 合入修订轮登记，Minor-4）：整棵跳过
+   保证截至每成员的删除瞬间——成员在树内删除间隙转 running 时，由逐成员
+   O(1) 预检 / binding 删除时 live 守卫拒删该成员并保持根 archived，其前序
+   已删成员不回滚（删除瞬间本就可删），下次 purge 收敛。
 
 **上游草案逐条镜像映射表**（todo 12 §5.2 → 本域承诺 → §10 核对锚点）：
 
@@ -259,9 +274,11 @@ vendor 源码）+ 薄 Remote 门面（`index.ts`），编排逻辑：
      同组件无「异步→window.confirm」先例（archive/delete-workspace 均为同步
      confirm），v1 自建该流并单飞化——防双击 → 双 preview → 双 confirm →
      并发双 purge；跨 N-ctx 的并发由**宿主侧单飞**（`busy` code，§3）兜底；
-  3. preview（单飞内）→ resolve 后**复查** `server.connected &&
-     server.aggregateError === undefined` 再弹确认（preview 在途断连不弹
-     陈旧计数）；
+  3. preview（单飞内）→ resolve 后**复查 liveness**（`serversRef` 中该
+     server 仍 `connected`）再弹确认（preview 在途断连不弹陈旧计数）。
+     2026-12 合入修订轮定稿：复查**不再门控** `server.aggregateError`
+     （E-m2）——aggregateError 只反映列表快照拉取，preview 成功本身就是
+     wire 健康证明，门控它只会让每次点击变成 30s 浪费后误标「已断连」；
   4. `window.confirm(t('confirm.purgeArchived'))`：**文案不承诺「恰好 N 个」**
      （preview 是快照），以区间/约量措辞 + 不可恢复明示；
      `deletableSessions === 0` 时**不进确认**，改在信息槽位（步骤 6）呈现
@@ -272,26 +289,32 @@ vendor 源码）+ 薄 Remote 门面（`index.ts`），编排逻辑：
      host-store 事件推送双通道（注：requestRefresh 对 live 来源是即时
      mutation-pull——App.tsx 对每个 live 来源无条件拉取并合并会话行，不是
      no-op；两者都不改变可见列表——归档/子代理行本就不可见——属惯例性
-     调用，与 archive 动作一致）；purge 成功且 `skippedRunning > 0`（无论
-     有无 errors）都在信息槽位补一行「已跳过 N 项运行中的会话（未删除）」
-     ——skipped 非错误，但用户应能得知留存项；
+     调用，与 archive 动作一致）；成功且 `deletedSessions+deletedSubagents
+     > 0` 时在信息槽位补完成摘要行「清理完成：删除 X 个会话 / Y 个子代理
+     内容。」，成功且 `skippedRunning > 0`（无论有无 errors）都补一行
+     「已跳过 N 项运行中的会话（未删除）」——skipped 非错误，但用户应能
+     得知留存项（行内文案 zh 硬编码，2026-12 合入修订轮定稿）；
   6. 错误呈现（**新槽位**，评审必修）：在 `<header>` **正下方**新增一个
      server 级错误/信息渲染点，**位于 fold 门（`!sourceFolded`）之外、与
      搜索态无关**（唯一既有 server 级先例 add-workspace 错误位于
      `query === ''` 且 fold 门内，照抄会在折叠/搜索态静默吞错）；
      `cc.rowError` 复用（margin 微调）；该槽位统一服务：preview 失败 /
      purge 失败 / 超时（`role="alert"` 错误行，zh 硬编码）、空态提示 /
-     purge **部分失败警告**（`role="status"` 信息行，zh 硬编码；
-     `deleted>0 && errors>0`：「清理完成：删除 X 个会话 / Y 个子代理；
-     N 项失败，可重试（重复执行安全）」）；purge 全失败（`deleted===0`）
-     按错误呈现；
+     完成摘要 / 跳过提示（`role="status"` 信息行，zh 硬编码）、purge
+     **部分失败**（`deleted>0 && errors>0`：错误行含完成摘要 + 「N 项失败，
+     可重试（重复执行安全）」——2026-12 合入修订轮定稿：部分失败走
+     `role="alert"` 错误行，部分失败是失败而非纯信息，见 §15 债务①闭合）；
+     purge 全失败（`deleted===0`）按错误呈现；
   7. 错误生命周期：`rowErrors` 无自动清理（断连后陈旧错误会在重连时冒现，
      add-workspace 已有同类 pre-existing 行为）——为 `${server.id}/archive-cleanup`
      key 增加可见性清理（同 sortMenu/rename target 的 cleanup effect 先例）
      或在文档接受；v1 选择加清理（与目标行消失清理同款）。
 - 键盘可达：真实 `<button>` + **title 属性 + aria-label**（簇内按钮全部用
   title 属性，无 Tooltip 组件——Tooltip 仅用于 rail/New Session 区域）；
-- 成功无横幅（与「归档」动作一致——动作对象不可见；错误/警告才呈现）；
+- 成功反馈：**无系统级横幅**（与「归档」动作一致——动作对象不可见）；
+  完成摘要/跳过/空态行落在信息槽位（`role="status"` cleanupNote，zh
+  硬编码）——2026-12 合入修订轮把「成功无横幅」细化为「无横幅、有槽位
+  摘要」，与实现一致（§15 已修复轮：成功/空态中性 cleanupNote 样式）；
 - rail/窄栏与移动端不做（范围声明见头部）。
 
 新增 locale 键（en/zh；对称由 `locales.ts` 的 `SidebarKey = keyof typeof zh`
@@ -553,9 +576,16 @@ todo 12 C（§2 已记），不得在核对前凭 §4 的实现猜测落地。
 7. cordis 三 insert 行共存无冲突（cordis-inserts 断言先红后绿批次已绿）；
 8. 布局知识零复制（依赖 locate/format 官方导出）；dist 提交态已构建。
 
-残余登记：archived 占位 id 在内容删除后保留于 workspace.json 直至上游
-unarchive/delete wire 落地（届时本域退役并按官方语义收敛）；A-区（todo12
-方案 A）实现前需先处理该残余（或上游 wire 先行）。
+**残余定案（2026-12 合入修订轮，评审 M1；取代旧「占位 id 保留至上游
+wire」草稿）**：archived 集合成员按 §4 step 4 语义随 purge 收尾**移除**
+——完成树根、完成树覆盖的已归档后代、孤儿在同一批官方 setState 写中
+清除（core.ts `purge()` + binding `removeArchivedSessionIds`，测试固化）。
+**无「内容删除后保留 marker」策略**：早期草案的保留措辞与 §4/实现/测试
+冲突，以 §4 为准废弃。红线段「no unarchive」的读法 = chamber 域只在其
+内容删除完成后清除**该已删内容自身**的集合成员，不提供任何恢复/浏览/
+反向操作；A-区（todo12 方案 A，已归档浏览）若实现，其数据面即当前
+archived 集合（仅含未清理与运行中留存项）。上游 unarchive/delete wire
+落地后本域退役并按官方语义收敛（§11）。
 
 ## 15. 多轮评审处置与文档债务登记（2026-12，附加于 §14）
 
@@ -572,15 +602,30 @@ aria-busy、confirm 零值/单复数拆键、truncated 端到端、写时 livene
 真 binding/RunGate 单测（binding.ts 无装饰器直测）；503 分类测试；错误码
 清单下移（见下）。
 
-**文档债务（登记，非本次闭合）**：① §6 文本的「部分失败 role=status」与
-实现 role=alert 的微差、step3 复查仅 connected 的偏离——代码注释已述，
-正文随 M4 前修订轮对齐；② 占位/幽灵窗口措辞：vendor `sessionIds` 为内存
+**文档债务（登记；①③ 已于 2026-12 合入修订轮闭合）**：① §6 正文已按
+实现对齐（部分失败走 `role="alert"` 错误行 + step3 复查仅 connected 的
+E-m2 理由入文）；② 占位/幽灵窗口措辞：vendor `sessionIds` 为内存
 header 索引派生，内容删除后至重启/下次实体写前，官方 workspaceView 仍含
-占位 id（chamber 可见行不受影响；A-区/上游 wire 前置登记）；③ 错误码
-枚举文本（§3）待随 v4 修订轮并入 `purge-capacity`/`archive-set`/`truncated`
-（core.ts 自注释已全）；④ desktop 激活恒全量 vs seed 产物门为设计内取舍
+占位 id（chamber 可见行不受影响；A-区/上游 wire 前置登记——§14 残余
+定案后该窗口仅指 UI 幽灵行，与 archived 集合无关）；③ §3 错误码枚举
+已并入 `purge-capacity`/`archive-set`/`truncated`（含 65,536 上限与
+不可重试登记，Minor-5）；④ desktop 激活恒全量 vs seed 产物门为设计内取舍
 （构建期 preflight 兜底），登记不修；⑤ seam 退役机制化：上游 unarchive/
 delete wire 落地即退役 enqueueOperation/setState seam + probe 端点 + seed
 行，且结构 seam 核对列入每次 harness pin 升级清单（STATUS 跟踪项）。
+
+**合入修订轮处置（2026-12，合入前闭合）**：M1（§14 残余定案，见上）；
+M2（binding `listHeaders` 回退意图注释：cordis inject 全量服务语义下，
+persistence.list 回退守卫的是「已挂载但方法不全」的表面漂移并服务单测
+直用，非缺失服务路径）；M3（probe 面扩展：`assertHostSurface` 增加会话
+枚举/存储面结构检查，binding 测试补通过/全缺/缺存储三态）；M4（§4 step7
+运行窗口登记，上）；M5（purge-capacity 不可重试 + 无逃生口登记入 §3）；
+N1（完成树覆盖的已归档后代同批清除 + core 单测）；N2
+（`resolveDeletableTree` 改显式栈迭代后序，消除递归深度=链深风险）；
+N3（binding 删除产物 rm 的 ENOENT 竞态 → 幂等 `missing`）；N4（无 cwd
+成员的逐删全库重列确认为稀有路径，代码注释登记）；N5（AGENTS.md 事件
+表述改为「文档化 no-op」）；pending-click.ts 守卫清单注释补齐
+archive-cleanup；host 包提交态 dist 随代码重建（esbuild 0.25 确定性比对
+通过）。
 
 **编号说明**：§13 空号（历史修订留空），后续章节接 §14/§15。

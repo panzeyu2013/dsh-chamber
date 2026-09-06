@@ -97,11 +97,12 @@ export function headerToState(header: SessionHeaderLike): ArchivedSessionState {
 }
 
 /**
- * Zero-IO structural surface check (impl-review Minor-6): the activation
- * probe uses this so a mounted-but-corrupt/missing registry surface fails
- * the activation loudly instead of passing presence while the first preview
- * later 404s/registry-unreadables. Mirrors requireRegistry's checks; throws
- * ArchiveCleanupError('registry-unreadable', …) when the surface is wrong.
+ * Zero-IO structural surface check (impl-review Minor-6 + merge-round
+ * Minor-3): the activation probe uses this so a mounted-but-corrupt/missing
+ * registry OR enumeration/storage surface fails the activation loudly
+ * instead of passing presence while the first preview/purge later
+ * registry-unreadables/storages. Mirrors requireRegistry's checks; throws
+ * ArchiveCleanupError('registry-unreadable', …) when a surface is wrong.
  */
 export function assertHostSurface(ctx: HostCtxServices): void {
   const registry = ctx.workspaceRegistry
@@ -110,6 +111,20 @@ export function assertHostSurface(ctx: HostCtxServices): void {
     throw new ArchiveCleanupError(
       'registry-unreadable',
       'archiveCleanup: the workspaceRegistry service is not mounted with the expected surface',
+    )
+  }
+  // Merge-round Minor-3: surface health of the enumeration + storage legs
+  // too — a host whose registry is intact but whose session enumeration or
+  // locate surface is missing must not pass the probe. Zero-IO structural
+  // checks only (no list call).
+  const query = ctx.sessionQuery
+  const persistence = ctx.sessionPersistence
+  const canEnumerate = (query !== undefined && typeof query.listSessions === 'function')
+    || (persistence !== undefined && typeof persistence.list === 'function')
+  if (!canEnumerate || persistence === undefined || typeof persistence.locate !== 'function') {
+    throw new ArchiveCleanupError(
+      'registry-unreadable',
+      'archiveCleanup: the session enumeration/storage surface is not mounted with the expected shape',
     )
   }
 }
@@ -149,8 +164,13 @@ export function makeHostBinding(ctx: HostCtxServices): ArchiveCleanupHost {
   }
 
   const listHeaders = async (): Promise<readonly SessionHeaderLike[]> => {
-    // Live-preferred official corpus first; fall back to the persistence
-    // listing when sessionQuery is not mounted (fresh host shape).
+    // Live-preferred official corpus first. The gateway's static inject
+    // declares sessionQuery/sessionPersistence/... as required services
+    // (cordis mounts the plugin only when every listed service resolves), so
+    // the persistence.list fallback below guards a MOUNTED-but-method-
+    // incomplete surface (shape drift), not an absent service — and it keeps
+    // makeHostBinding directly usable under the partial fakes of the unit
+    // tests (implementation-review Minor-2 intent note).
     if (query?.listSessions !== undefined) {
       const records = await query.listSessions()
       if (Array.isArray(records)) return records.map(record => record.header)
@@ -243,7 +263,16 @@ export function makeHostBinding(ctx: HostCtxServices): ArchiveCleanupHost {
         // the enumeration key, so its removal makes the session disappear
         // from every official list; leftover session-local files never cause
         // a project-root removal and a later purge re-runs as 'missing'.
-        await rm(artifactPath, { force: false })
+        try {
+          await rm(artifactPath, { force: false })
+        } catch (error) {
+          // Merge-round Nit N3: the artifact vanished between the lstat above
+          // and this rm (TOCTOU race with a concurrent purge in another ctx
+          // shell, or an external deletion) — the idempotent 'missing'
+          // outcome, never a per-item storage noise error.
+          if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 'missing'
+          throw error
+        }
         if (basename(dir) !== '' && basename(dir) !== '.' && basename(dir) !== '..') {
           try {
             // rmdir removes ONLY an empty directory: leftover session-local

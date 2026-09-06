@@ -107,13 +107,23 @@ function resolveDeletableTree(rootSessionId, statesBySession, childrenOf, liveAg
   if (subtreeRunning(rootSessionId, statesBySession, childrenOf, liveAgentIds)) return null;
   const order = [];
   const visited = /* @__PURE__ */ new Set();
-  const visit = (sessionId) => {
-    if (visited.has(sessionId)) return;
+  const stack = [
+    { sessionId: rootSessionId, expanded: false }
+  ];
+  while (stack.length > 0) {
+    const { sessionId, expanded } = stack.pop();
+    if (expanded) {
+      order.push(sessionId);
+      continue;
+    }
+    if (visited.has(sessionId)) continue;
     visited.add(sessionId);
-    for (const child of childrenOf.get(sessionId) ?? []) visit(child);
-    order.push(sessionId);
-  };
-  visit(rootSessionId);
+    stack.push({ sessionId, expanded: true });
+    const children = childrenOf.get(sessionId) ?? [];
+    for (let i = children.length - 1; i >= 0; i -= 1) {
+      stack.push({ sessionId: children[i], expanded: false });
+    }
+  }
   return {
     rootSessionId,
     order,
@@ -209,8 +219,9 @@ var ArchiveCleanupCore = class {
    * (archived set + session states + lineage) is read ONCE; per tree only the
    * cheap in-memory live set is re-read (the real running guard). Per-member
    * deletion uses the snapshot's cwd so the binding never re-enumerates the
-   * corpus. Completed roots and orphans are removed from the archived set in
-   * a single official write after the whole run. Per-session failures land
+   * corpus. Completed roots (and any archived descendants their completed
+   * trees covered) plus orphans are removed from the archived set in a
+   * single official write after the whole run. Per-session failures land
    * in `errors` (truncated at MAX_PURGE_ERROR_RECORDS with `truncated`).
    */
   async purge() {
@@ -218,6 +229,7 @@ var ArchiveCleanupCore = class {
     if (archivedIds.length > MAX_PURGE_SESSIONS) {
       throw new ArchiveCleanupError("purge-capacity", `archived set exceeds the ${MAX_PURGE_SESSIONS}-session purge capacity`);
     }
+    const archivedAtStart = new Set(archivedIds);
     const plan = this.resolvePlan(archivedIds, statesBySession, childrenOf, liveAgentIds);
     let deletedSessions = 0;
     let deletedSubagents = 0;
@@ -231,6 +243,7 @@ var ArchiveCleanupCore = class {
       errors.push({ sessionId, code, message });
     };
     const completedRoots = [];
+    const coveredArchivedMembers = [];
     for (const tree of plan.trees) {
       let nowLive;
       try {
@@ -275,8 +288,13 @@ var ArchiveCleanupCore = class {
         continue;
       }
       completedRoots.push(tree.rootSessionId);
+      for (const member of tree.order) {
+        if (member !== tree.rootSessionId && archivedAtStart.has(member)) {
+          coveredArchivedMembers.push(member);
+        }
+      }
     }
-    const clearIds = [...completedRoots, ...plan.orphanRoots];
+    const clearIds = [...completedRoots, ...coveredArchivedMembers, ...plan.orphanRoots];
     if (clearIds.length > 0) {
       try {
         await this.host.removeArchivedSessionIds(clearIds);
@@ -320,6 +338,15 @@ function assertHostSurface(ctx) {
     throw new ArchiveCleanupError(
       "registry-unreadable",
       "archiveCleanup: the workspaceRegistry service is not mounted with the expected surface"
+    );
+  }
+  const query = ctx.sessionQuery;
+  const persistence = ctx.sessionPersistence;
+  const canEnumerate = query !== void 0 && typeof query.listSessions === "function" || persistence !== void 0 && typeof persistence.list === "function";
+  if (!canEnumerate || persistence === void 0 || typeof persistence.locate !== "function") {
+    throw new ArchiveCleanupError(
+      "registry-unreadable",
+      "archiveCleanup: the session enumeration/storage surface is not mounted with the expected shape"
     );
   }
 }
@@ -420,7 +447,12 @@ function makeHostBinding(ctx) {
         if (artifactStat.isSymbolicLink() || artifactStat.isDirectory()) {
           throw new ArchiveCleanupError("storage", `archiveCleanup: refusing a symlinked/non-file artifact for ${sessionId}`);
         }
-        await rm(artifactPath, { force: false });
+        try {
+          await rm(artifactPath, { force: false });
+        } catch (error) {
+          if (error.code === "ENOENT") return "missing";
+          throw error;
+        }
         if (basename(dir) !== "" && basename(dir) !== "." && basename(dir) !== "..") {
           try {
             await rmdir(dir);
