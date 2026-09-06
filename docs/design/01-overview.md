@@ -83,7 +83,7 @@ presets 页操作（copy/read/remove 经反代写远端文件）；部署内置�
 | 09 | [09-client-plugin-runtime-loading.md](09-client-plugin-runtime-loading.md) | 现行（已实现，2026-08 方案 A；自 todo 记录移入） | dsh 客户端插件运行时加载：断点定位（官方机制完整、chamber 前端断链）+ 每实例合并宿主 boot 图（chamber host 包 `clientGraph/graph` + 控制面 `--patch` seed + 去重预加载 + boot.ts extraRows seam）+ 信任边界/分期 |
 | 10 | —（契约并入 [05](05-connection-manager.md) §2.3/§3） | 已实现（2026-08） | 侧边栏聚合改事件驱动：各来源 ctx 推投影取代 10s REST 轮询（30s 兜底仅覆盖无完整生产者来源）+ 05 §3 契约修订；不改上游 dsh |
 | 11 | [11-auto-update.md](11-auto-update.md) | 现行（已实现，2026-08；自 todo 记录移入） | 桌面端更新提示（dsh-chamber 自身，无弹窗、低打扰）：settings chamber 全局「更新」部分 + 静默检查、用户确认后下载、退出时安装（win/mac 一致，mac 安装腿需 Developer ID）、beta → stable 通道 |
-| 12 | [../progress/todo/12-todo-archived-sessions.md](../progress/todo/12-todo-archived-sessions.md) | todo（设计待评审，实现未排期；2026-08） | 已归档会话管理（归档单向且不可见；A 前端浏览区先行 + C 上游 wire 根治，B 特权层冻结） |
+| 12 | [../progress/todo/12-todo-archived-sessions.md](../progress/todo/12-todo-archived-sessions.md) | todo（调研记录；已由 design 24 承接定稿并批准执行，2026-12） | 已归档会话管理（归档单向且不可见；删除动议已由 design 24 承接：chamber 宿主域 + server 行 hover 动作；B 特权层冻结结论保留） |
 | 13 | [13-remote-plugin-management.md](13-remote-plugin-management.md) | 现行（已实现，2026-08；M1–M4 落地） | 远程实例插件管理：一键应用本地插件清单 + 可视化添加（provider exec 通道 + spec 白名单 + remoteDshHome 远端路径基准） |
 | 14 | [14-sleep-background.md](14-sleep-background.md) | 现行（已实现（v1 范围），2026-08；自 todo 记录移入） | 睡眠/后台常驻：关窗行为（托盘/退出）、登录自启、唤醒即时重连、防休眠、退出保护 |
 | 15 | [15-chamber-settings-page.md](15-chamber-settings-page.md) | 现行（已实现（v1 范围），2026-08；自 todo 记录移入） | Chamber 设置页：settings 壳固定入口（连接/通用/更新），chamber 全局设置与实例配置平面分离 |
@@ -93,6 +93,7 @@ presets 页操作（copy/read/remove 经反代写远端文件）；部署内置�
 | 19 | [19-notifications.md](19-notifications.md) | M1–M2 已实现；竞态自动化已完成，M3 macOS 权限/打包态实机待验（2026-09） | 桌面通知：session complete/ask/request 推送原生通知（设置可选项）。检测 = renderer 复用 06 §4 事实通道边沿检测（零控制面改动）；呈现 = 主进程 Electron Notification + 点击打开会话；设置 = chamber-settings.json 新增 `notifications` + **并入通用页「通知」控制组（无新设置入口，2026-09 用户拍板）**；OpenChamber 通知功能调研见文内 §2 |
 | 20 | [20-open-in-registry.md](20-open-in-registry.md) | 现行（已实现（M0–M3），2026-08） | open-in 打开注册表（design 16 演进）：本地来源 Finder + 本地/远程 VS Code 的统一打开面；主进程 OpenInApp provider 注册表 + 六步 loud 执行管线 + 能力协商 IPC；插件重命名 `dsh-client-ui-open-in`，旧 vscode IPC 收敛删除（2026-08 合并 main 时重编号 17→20，避开 design 17 gateway） |
 | 22 | [22-linux-desktop.md](22-linux-desktop.md) | 现行（2026-12 落地；实机门禁见 STATUS） | Linux 桌面支持：AppImage（x64）发行形态 + 自动更新形态门（可写 $APPIMAGE）、XDG/$APPIMAGE 桌面集成纪律（自启 + 每启重写的协议 .desktop）、node 兜底平台分表与目录 fsync 平台无关容错、release.yml build-linux 腿 |
+| 24 | [24-archived-session-cleanup.md](24-archived-session-cleanup.md) | 现行（定稿 v3，2026-12 用户批准跳过人工评审直接执行；执行台账见 todo 24 计划） | 已归档会话内容清理：第三个 chamber 宿主域 `archiveCleanup/{preview,purge}`（有界例外动议，AGENTS 已登记）+ 侧边栏 server 行 hover 动作；探针期望集派生契约随 M2 修订 design 18 §3.4 |
 
 ---
 

@@ -10,7 +10,7 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { PROBE_NAMES_WITHOUT_HOST_DOMAINS, REQUIRED_ACTIVATION_PROBES } from '../src/activation-gate.ts'
+import { PROBE_NAMES_WITHOUT_HOST_DOMAINS, REQUIRED_ACTIVATION_PROBES, activationProbeNamesForDomains } from '../src/activation-gate.ts'
 import {
   SETTINGS_FILE_MAX_BYTES,
   runRuntimeActivationProbes,
@@ -39,6 +39,10 @@ function successfulValue(method: string): unknown {
   if (method === 'settings/describe') return { writable: true, namespaces: [] }
   if (method === 'gitWorktree/previewCreate') {
     return { ok: false, error: { code: 'invalid-input', message: 'input.sourceWorkspaceId is required' } }
+  }
+  if (method === 'archiveCleanup/probe') {
+    // Design 24 §7 C accept: a well-formed domain carrier with an object value.
+    return { ok: true, value: { archived: 0, deletableSessions: 0, deletableSubagents: 0, skippedRunning: 0 } }
   }
   return {}
 }
@@ -327,6 +331,7 @@ test('hostDomains=false returns the reduced set and never invokes the chamber ho
     // The chamber host domains must never be invoked in this shape.
     assert.equal(fx.calls.some(entry => entry.method === 'clientGraph/graph'), false)
     assert.equal(fx.calls.some(entry => entry.method === 'gitWorktree/previewCreate'), false)
+    assert.equal(fx.calls.some(entry => entry.method === 'archiveCleanup/probe'), false)
     // The rest of the closed set still runs.
     assert.ok(fx.calls.some(entry => entry.method === 'session/canOpenWorkspacePath'))
     assert.ok(fx.calls.some(entry => entry.method === 'settings/describe'))
@@ -393,6 +398,53 @@ test('commands and git probes accept only their statically side-effect-free miss
   }
 })
 
+test('archiveCleanup/probe accepts only a well-formed domain carrier (design 24 §7 C)', async () => {
+  const fx = fixture()
+  try {
+    // A well-formed business failure means the domain IS mounted but abnormal
+    // (binding-pending / registry-unreadable / busy) → fail-closed with the
+    // domain answer surfaced, never a protocol success.
+    const businessCall: RuntimeProbeCall = async (_base, method) => {
+      if (method === 'commands/execute') {
+        const error = new Error('missing') as Error & { code: string }
+        error.code = 'session/not-found'
+        throw error
+      }
+      if (method === 'archiveCleanup/probe') {
+        return { result: { value: { ok: false, error: { code: 'binding-pending', message: 'not wired' } } } }
+      }
+      return { result: { value: successfulValue(method) } }
+    }
+    const businessResults = await runRuntimeActivationProbes({ baseUrl: 'http://127.0.0.1:1', dshHome: fx.dshHome, call: businessCall })
+    assert.equal(businessResults.find(result => result.name === 'archiveCleanup/probe')?.ok, false)
+    assert.match(
+      businessResults.find(result => result.name === 'archiveCleanup/probe')?.error ?? '',
+      /business failure/,
+    )
+
+    // A malformed shape (success without an object value) is malformed.
+    const malformedCall: RuntimeProbeCall = async (_base, method) => {
+      if (method === 'commands/execute') {
+        const error = new Error('missing') as Error & { code: string }
+        error.code = 'session/not-found'
+        throw error
+      }
+      if (method === 'archiveCleanup/probe') {
+        return { result: { value: { ok: true, value: 42 } } }
+      }
+      return { result: { value: successfulValue(method) } }
+    }
+    const malformedResults = await runRuntimeActivationProbes({ baseUrl: 'http://127.0.0.1:1', dshHome: fx.dshHome, call: malformedCall })
+    assert.equal(malformedResults.find(result => result.name === 'archiveCleanup/probe')?.ok, false)
+    assert.match(
+      malformedResults.find(result => result.name === 'archiveCleanup/probe')?.error ?? '',
+      /malformed probe response/,
+    )
+  } finally {
+    rmSync(fx.root, { recursive: true, force: true })
+  }
+})
+
 test('settings.yaml size is rejected from fstat before any unbounded read', async () => {
   const fx = fixture()
   try {
@@ -447,6 +499,7 @@ test('probe layer enforces per-RPC and whole-window timeouts when call ignores i
     for (const name of [
       'commands/execute', 'session/canOpenWorkspacePath',
       'clientGraph/graph', 'settings/describe', 'gitWorktree/previewCreate',
+      'archiveCleanup/probe',
     ]) {
       assert.equal(results.find(result => result.name === name)?.ok, false, name)
     }
@@ -514,4 +567,59 @@ test('timeout options reject fractional and timer-overflow values', async () => 
   } finally {
     rmSync(fx.root, { recursive: true, force: true })
   }
+})
+
+test('hostDomainNames derives the exact probe set for partial syncs (design 24 §7 C)', async () => {
+  const fx = fixture()
+  try {
+    // A 2-of-3 gateway sync: only the git-worktree package is seeded.
+    const results = await runRuntimeActivationProbes({
+      baseUrl: 'http://127.0.0.1:17510',
+      dshHome: fx.dshHome,
+      call: successfulCall(fx),
+      windowMs: 1_000,
+      rpcTimeoutMs: 100,
+      hostDomainNames: ['gitWorktree/previewCreate'],
+    })
+    assert.deepEqual(
+      results.map(result => result.name),
+      [...activationProbeNamesForDomains(['gitWorktree/previewCreate'])],
+    )
+    assert.ok(results.every(result => result.ok))
+    assert.equal(fx.calls.some(entry => entry.method === 'clientGraph/graph'), false)
+    assert.equal(fx.calls.some(entry => entry.method === 'archiveCleanup/probe'), false)
+    assert.equal(fx.calls.some(entry => entry.method === 'gitWorktree/previewCreate'), true)
+  } finally {
+    rmSync(fx.root, { recursive: true, force: true })
+  }
+})
+
+test('hostDomainNames: an empty list equals the reduced set (no chamber domains)', async () => {
+  const fx = fixture()
+  try {
+    const results = await runRuntimeActivationProbes({
+      baseUrl: 'http://127.0.0.1:17510',
+      dshHome: fx.dshHome,
+      call: successfulCall(fx),
+      hostDomainNames: [],
+    })
+    assert.deepEqual(results.map(result => result.name), [...PROBE_NAMES_WITHOUT_HOST_DOMAINS])
+    assert.ok(results.every(result => result.ok))
+    assert.equal(fx.calls.some(entry => entry.method === 'archiveCleanup/probe'), false)
+  } finally {
+    rmSync(fx.root, { recursive: true, force: true })
+  }
+})
+
+test('activationProbeNamesForDomains: full list equals REQUIRED; unknown names throw (implementation-review Major-2 fail-loud)', () => {
+  assert.deepEqual([...activationProbeNamesForDomains([...REQUIRED_ACTIVATION_PROBES.filter(name => name.includes('/'))].filter(name => ['clientGraph/graph', 'gitWorktree/previewCreate', 'archiveCleanup/probe'].includes(name)))], [...REQUIRED_ACTIVATION_PROBES])
+  assert.deepEqual(
+    [...activationProbeNamesForDomains([])],
+    [...PROBE_NAMES_WITHOUT_HOST_DOMAINS],
+  )
+  // A drift name (e.g. the pre-2026-12 'archiveCleanup/preview') must FAIL
+  // LOUD — silently dropping it would remove the domain from the expected
+  // set AND its run legs, letting a dead domain pass activation (fail-open).
+  assert.throws(() => activationProbeNamesForDomains(['not-a-domain']), /unknown chamber host probe domain/)
+  assert.throws(() => activationProbeNamesForDomains(['archiveCleanup/preview']), /unknown chamber host probe domain/)
 })

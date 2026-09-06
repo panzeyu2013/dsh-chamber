@@ -139,7 +139,8 @@ import {
 import {
   archiveSession, createHostDirectory, createSession, createWorkspace, deleteWorkspace,
   forkSession, getInstanceClient, insertSessionBefore, insertWorkspaceBefore, listHostDirectory,
-  renameSession, renameWorkspace, searchSessions, type InstanceSnapshot, type SearchRow,
+  previewArchiveCleanup, purgeArchivedSessions, renameSession, renameWorkspace, searchSessions,
+  type InstanceSnapshot, type SearchRow,
 } from '../shared/instance-api.ts'
 import { DirectoryBrowser } from '@deepseek-ai/dsh-client-ui-directory-picker-browse/client/DirectoryBrowser.tsx'
 import {
@@ -877,8 +878,9 @@ export function SidebarRoot({
   // consumes/replaces the pending itself, so only outside clicks reach here.
   // suppressClickRef (drag-end trailing click) is honored on the way in;
   // row-internal buttons (fold toggle / new-session / kebabs / archive) AND
-  // the source-header action buttons (sort / add-workspace / search) clear
-  // the pending in their own handlers (stopPropagation + clearPendingClick) —
+  // the source-header action buttons (sort / add-workspace / search /
+  // archive-cleanup purge — design 24 §6) clear the pending in their own
+  // handlers (stopPropagation + clearPendingClick) —
   // React's stopPropagation also stops the native event, so the document
   // listener never sees those clicks and a surviving pending would make a
   // later click on the same session spuriously enter rename.
@@ -946,6 +948,12 @@ export function SidebarRoot({
   }, [servers, renaming])
   const [addingWorkspace, setAddingWorkspace] = useState<string | null>(null)
   const [addingWorkspaceBusy, setAddingWorkspaceBusy] = useState(false)
+  // Design 24 §6: per-server archive-cleanup in-flight stage ('preview' |
+  // 'purge') and the server-level info line (empty state / skipped / partial
+  // results). Errors ride the generic rowErrors map under the
+  // `<serverId>/archive-cleanup` key.
+  const [purgeInFlight, setPurgeInFlight] = useState<Record<string, 'preview' | 'purge'>>({})
+  const [cleanupNotes, setCleanupNotes] = useState<Record<string, string>>({})
 
   const runAction = (key: string, action: () => Promise<void>): void => {
     setRowErrors((prev) => {
@@ -1060,6 +1068,141 @@ export function SidebarRoot({
       chamberBridge.requestRefresh(server.id)
     })
   }
+
+  /** Design 24 §6: server-row "delete archived content" action. Full-flow
+   *  per-server single-flight (preview → confirm → purge); preview is a
+   *  point-in-time snapshot for the confirm copy only — the purge re-reads
+   *  authoritative state. Liveness is re-checked before the confirm (a
+   *  stale preview after a mid-flight disconnect never confirms). Errors
+   *  land in rowErrors; empty/skipped/partial results land in cleanupNotes
+   *  (both rendered in the header-under slot, fold- and search-independent). */
+  const onPurgeArchived = (server: ChamberServerAggregate): void => {
+    const key = `${server.id}/archive-cleanup`
+    if (purgeInFlight[server.id] !== undefined) return
+    setPurgeInFlight(prev => ({ ...prev, [server.id]: 'preview' }))
+    setCleanupNotes(prev => {
+      if (!(server.id in prev)) return prev
+      const next = { ...prev }
+      delete next[server.id]
+      return next
+    })
+    setRowErrors(prev => {
+      if (!(key in prev)) return prev
+      const next = { ...prev }
+      delete next[key]
+      return next
+    })
+    void (async () => {
+      try {
+        const preview = await previewArchiveCleanup(getInstanceClient(server.id))
+        // Re-check liveness after the async preview (never confirm stale).
+        // aggregateError no longer gates (E-m2): it only reflects the list
+        // snapshot; a succeeded preview is itself wire-health proof — gating
+        // on it made every such click a 30s wasted run mislabelled as
+        // "disconnected".
+        const latest = serversRef.current.find(candidate => candidate.id === server.id)
+        if (latest === undefined || !latest.connected) {
+          // Source vanished/disconnected mid-preview: drop silently — the
+          // disconnect effect clears leftovers and nothing stale may
+          // resurface after a reconnect (E-m3 write-time discipline).
+          return
+        }
+        if (preview.deletableSessions === 0 && preview.deletableSubagents === 0) {
+          setCleanupNotes(prev => ({
+            ...prev,
+            [server.id]: preview.skippedRunning > 0
+              ? `没有可删除的已归档会话（${preview.skippedRunning} 项因运行中被跳过）。`
+              : '没有可删除的已归档会话。',
+          }))
+          return
+        }
+        const baseConfirm = t('confirm.purgeArchived', {
+          sessions: preview.deletableSessions,
+          subagents: preview.deletableSubagents,
+        })
+        const skippedSuffix = preview.skippedRunning > 0
+          ? t(preview.skippedRunning === 1
+            ? 'confirm.purgeArchivedSkipped.one'
+            : 'confirm.purgeArchivedSkipped.other', { skipped: preview.skippedRunning })
+          : ''
+        if (!window.confirm(baseConfirm + skippedSuffix)) return
+        setPurgeInFlight(prev => ({ ...prev, [server.id]: 'purge' }))
+        const result = await purgeArchivedSessions(getInstanceClient(server.id))
+        chamberBridge.requestRefresh(server.id)
+        // E-m3: write-time liveness check — nothing written after a
+        // disconnect (the effect may have already run; stale messages must
+        // not resurface on reconnect).
+        const stillLive = serversRef.current.some(candidate => candidate.id === server.id && candidate.connected)
+        const lines: string[] = []
+        if (result.deletedSessions > 0 || result.deletedSubagents > 0) {
+          lines.push(`清理完成：删除 ${result.deletedSessions} 个会话 / ${result.deletedSubagents} 个子代理内容。`)
+        }
+        if (result.skippedRunning > 0) {
+          lines.push(`已跳过 ${result.skippedRunning} 项运行中的会话（未删除）。`)
+        }
+        if (result.truncated === true && result.errors.length >= 1000) {
+          lines.push('失败明细过多，仅显示前 1000 项。')
+        }
+        if (result.errors.length > 0) {
+          // Partial failure is never silent: warnings ride the error slot.
+          lines.push(`${result.errors.length} 项失败，可重试（重复执行安全）。`)
+          if (stillLive) setRowErrors(prev => ({ ...prev, [key]: lines.join(' ') }))
+          return
+        }
+        if (lines.length === 0 && stillLive) {
+          // E-n2: another shell may have purged between preview and this run
+          // — an empty outcome must never be silent.
+          lines.push('没有可删除的已归档会话。')
+        }
+        if (lines.length > 0 && stillLive) setCleanupNotes(prev => ({ ...prev, [server.id]: lines.join(' ') }))
+      } catch (error) {
+        // E-m6: a second shell's busy refusal gets one friendly line.
+        const message = error instanceof Error ? error.message : String(error)
+        const friendly = message.startsWith('busy:')
+          ? '该实例正在执行另一处清理，请稍后重试。'
+          : message
+        const stillLive = serversRef.current.some(candidate => candidate.id === server.id && candidate.connected)
+        if (stillLive) setRowErrors(prev => ({ ...prev, [key]: friendly }))
+      } finally {
+        setPurgeInFlight(prev => {
+          const next = { ...prev }
+          delete next[server.id]
+          return next
+        })
+      }
+    })()
+  }
+
+  // Design 24 §6: drop server-level cleanup errors/info when the source is
+  // gone or disconnected (stale messages must not resurface after a
+  // reconnect). The in-flight stage is also cleared — a reconnect starts a
+  // fresh flow and the host single-flight (busy) guards double purges.
+  useEffect(() => {
+    const liveIds = new Set(servers.filter(server => server.connected).map(server => server.id))
+    setCleanupNotes(prev => {
+      const stale = Object.keys(prev).filter(id => !liveIds.has(id))
+      if (stale.length === 0) return prev
+      const next = { ...prev }
+      for (const id of stale) delete next[id]
+      return next
+    })
+    setRowErrors(prev => {
+      const suffix = '/archive-cleanup'
+      const stale = Object.keys(prev).filter(key =>
+        key.endsWith(suffix) && !liveIds.has(key.slice(0, -suffix.length)))
+      if (stale.length === 0) return prev
+      const next = { ...prev }
+      for (const key of stale) delete next[key]
+      return next
+    })
+    setPurgeInFlight(prev => {
+      const stale = Object.keys(prev).filter(id => !liveIds.has(id))
+      if (stale.length === 0) return prev
+      const next = { ...prev }
+      for (const id of stale) delete next[id]
+      return next
+    })
+  }, [servers])
 
   const onDeleteWorkspace = (server: ChamberServerAggregate, workspaceId: string, title: string): void => {
     // Plan A: an ORPHANED workspace (path gone) needs an explicit confirm —
@@ -1829,7 +1972,8 @@ export function SidebarRoot({
                   }}
                   onDragStart={(event) => {
                     // F3 (review 2026-10): a gesture that STARTED on a header
-                    // button (fold / sort / add-workspace / search) aborts the
+                    // button (fold / sort / add-workspace / search /
+                    // archive-cleanup) aborts the
                     // drag initiation — buttons are click affordances, a >4px
                     // micro-drag on the fold toggle must not swallow its click
                     // (the click then fires normally on release). Dragging
@@ -1946,9 +2090,9 @@ export function SidebarRoot({
                       />
                     )}
                   </span>
-                  {/* chamber: header actions (sort menu + add-workspace `+` +
-                      per-source search) are hover-revealed like the session
-                      rows' actions: at rest the connection status occupies the
+                  {/* chamber: header actions (sort menu + git + add-workspace
+                      `+` + archive-cleanup purge + per-source search) are
+                      hover-revealed like the session rows' actions: at rest the connection status occupies the
                       right side; hovering the header swaps in the icon cluster
                       (visibility swap, no reflow). While a search capsule is
                       open OR the sort menu is open the cluster stays visible
@@ -2060,8 +2204,55 @@ export function SidebarRoot({
                       <IconSearchOutline16 size={14} />
                     </button>
                     )}
+                    {/* chamber (design 24 §6): server-row "delete archived
+                        content" — same hover-reveal discipline and gating as
+                        the sibling actions; disabled while a preview/purge is
+                        in flight (per-server single-flight); errors and info
+                        render in the header-under slot below. */}
+                    {server.connected && (server.aggregateError === undefined || search?.expanded === true) && (
+                      <button
+                        type="button"
+                        className={cc.actionIcon}
+                        aria-label={t('action.purgeArchived')}
+                        title={t('action.purgeArchived')}
+                        disabled={purgeInFlight[server.id] !== undefined}
+                        aria-busy={purgeInFlight[server.id] !== undefined}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          if (suppressClickRef.current) return
+                          clearPendingClick()
+                          onPurgeArchived(server)
+                        }}
+                      >
+                        {purgeInFlight[server.id] !== undefined
+                          ? <IconLoadingOutline16 className={cc.statusSpinner} size={14} />
+                          : <IconTrashOutline16 size={14} />}
+                      </button>
+                    )}
                   </span>
                 </header>
+                {/* chamber (design 24 §6): server-level cleanup error/info
+                    slot — DIRECTLY under the header and OUTSIDE the fold gate
+                    and the search-state branches (the add-workspace precedent
+                    sits inside `query === '' && !sourceFolded`, which would
+                    swallow failures while folded or searching). Errors:
+                    role=alert; informational results: role=status. */}
+                {(rowErrors[`${server.id}/archive-cleanup`] !== undefined
+                  || cleanupNotes[server.id] !== undefined
+                  || purgeInFlight[server.id] !== undefined) && (
+                  <div
+                    className={rowErrors[`${server.id}/archive-cleanup`] !== undefined ? cc.rowError : cc.cleanupNote}
+                    role={rowErrors[`${server.id}/archive-cleanup`] !== undefined ? 'alert' : 'status'}
+                  >
+                    {rowErrors[`${server.id}/archive-cleanup`] !== undefined
+                      ? rowErrors[`${server.id}/archive-cleanup`]
+                      : purgeInFlight[server.id] !== undefined && cleanupNotes[server.id] === undefined
+                        ? purgeInFlight[server.id] === 'preview'
+                          ? '正在获取已归档会话计数…'
+                          : '正在清理已归档内容…'
+                        : cleanupNotes[server.id]}
+                  </div>
+                )}
                 {/* chamber (2026-09, 06 §2.4): the
                     server-level fold hides EVERYTHING below the header —
                     search capsule, source-scope git alert and the workspace

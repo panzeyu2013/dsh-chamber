@@ -1,13 +1,15 @@
-# 12 · 已归档会话管理（todo：设计待评审，实现未排期）
+# 12 · 已归档会话管理（todo：已并入 design 24 决策；本文保留为调研记录）
 
-> **状态：todo**——2026-08 用户报告「归档会话无法清除、前端也看不到」后记录。
-> 代码核实（dsh 上游 + chamber 双端）确认：**归档在 dsh 是单向且不可见的**——
-> 唯一的 wire 方法 `workspace.archiveSession` 只把 id 追加进 registry-global
-> 集合；所有表面（官方 ui-workspace 与 chamber 侧边栏）都过滤归档行；上游没有
-> unarchive / 删除会话 / 归档可见查询，且注释自述 unarchive 是 "a future" 能力。
-> 本文记录调研结论（OpenCode/OpenChamber 成熟范式）、方案决策（A 前端浏览区先行、
-> C 上游 wire 根治、B 特权层冻结）与契约影响。**实现未排期**——A 落地改动 05 §3
-> 桥契约（增量字段），需评审确认。
+> **状态：已承接（2026-12）**——「删除已归档内容」动议已由
+> `docs/design/24-archived-session-cleanup.md` 承接并定稿（chamber 宿主域
+> 插件方案 + 侧边栏 server 行 hover 动作，待宿主包例外评审 + vendor 前置
+> 核对）；方案 A（已归档浏览区）仍为该设计的可选前置/后续，未单独排期。
+> 本文保留 2026-08 起的调研事实与决策记录（**归档单向且不可见**——唯一
+> wire 方法 `workspace.archiveSession` 只把 id 追加进 registry-global 集合；
+> 所有表面过滤归档行；上游无 unarchive / 删除会话 / 归档可见查询，注释自述
+> unarchive 是 "a future" 能力；OpenCode/OpenChamber 范式对照；B 特权层冻结
+> 结论在 design 24 §2 以「实例进程内宿主域」例外动议形式被修订——不是 B 的
+> 翻版）。
 
 ## 1. 背景与根因（代码核实）
 

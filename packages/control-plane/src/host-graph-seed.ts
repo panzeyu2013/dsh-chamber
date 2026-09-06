@@ -58,9 +58,14 @@ export const HOST_GRAPH_PACKAGE_NAME = '@dsh-chamber/dsh-host-client-graph'
 /** Chamber-owned host package that executes Git worktree operations in-host. */
 export const HOST_GIT_WORKTREE_PACKAGE_NAME = '@dsh-chamber/dsh-host-git-worktree'
 
-/** Loader ids for the two chamber-owned host packages. */
+/** Chamber-owned host package that purges archived session content in-host
+ *  (design 24: `archiveCleanup/{preview,purge}`). */
+export const HOST_ARCHIVE_CLEANUP_PACKAGE_NAME = '@dsh-chamber/dsh-host-archive-cleanup'
+
+/** Loader ids for the three chamber-owned host packages. */
 export const HOST_GRAPH_INSERT_ID = 'client-graph'
 export const HOST_GIT_WORKTREE_INSERT_ID = 'git-worktree'
+export const HOST_ARCHIVE_CLEANUP_INSERT_ID = 'archive-cleanup'
 
 /** A host package row that can be rendered into the shared loader overlay. */
 export interface HostPackageInsert {
@@ -76,6 +81,11 @@ export const HOST_GRAPH_INSERT: HostPackageInsert = {
 export const HOST_GIT_WORKTREE_INSERT: HostPackageInsert = {
   id: HOST_GIT_WORKTREE_INSERT_ID,
   name: HOST_GIT_WORKTREE_PACKAGE_NAME,
+}
+
+export const HOST_ARCHIVE_CLEANUP_INSERT: HostPackageInsert = {
+  id: HOST_ARCHIVE_CLEANUP_INSERT_ID,
+  name: HOST_ARCHIVE_CLEANUP_PACKAGE_NAME,
 }
 
 /**

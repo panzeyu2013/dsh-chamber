@@ -343,6 +343,7 @@ test('route: GET /chamber/plugins (seed-cache projection) still works; unknown s
     items: [
       { name: '@dsh-chamber/dsh-host-client-graph', version: null },
       { name: '@dsh-chamber/dsh-host-git-worktree', version: null },
+      { name: '@dsh-chamber/dsh-host-archive-cleanup', version: null },
     ],
   })
   const deep = await handle(host, 'GET', '/chamber/plugins/installed/extra')

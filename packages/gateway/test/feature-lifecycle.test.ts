@@ -172,6 +172,7 @@ test('chamber plugins sync caches desktop-provided host packages (2026-12 Phase 
     items: [
       { name: '@dsh-chamber/dsh-host-client-graph', version: null },
       { name: '@dsh-chamber/dsh-host-git-worktree', version: null },
+      { name: '@dsh-chamber/dsh-host-archive-cleanup', version: null },
     ],
   })
 
@@ -186,6 +187,7 @@ test('chamber plugins sync caches desktop-provided host packages (2026-12 Phase 
     items: [
       { name: '@dsh-chamber/dsh-host-client-graph', version: '1.2.3' },
       { name: '@dsh-chamber/dsh-host-git-worktree', version: null },
+      { name: '@dsh-chamber/dsh-host-archive-cleanup', version: null },
     ],
   })
 
@@ -233,6 +235,7 @@ test('chamber plugins upload enforces the body and per-file size bounds', async 
     items: [
       { name: '@dsh-chamber/dsh-host-client-graph', version: null },
       { name: '@dsh-chamber/dsh-host-git-worktree', version: null },
+      { name: '@dsh-chamber/dsh-host-archive-cleanup', version: null },
     ],
   })
 

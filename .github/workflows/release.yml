@@ -298,6 +298,7 @@ jobs:
           pnpm run typecheck
           pnpm run typecheck:host-graph
           pnpm run typecheck:host-git
+          pnpm run typecheck:host-archive-cleanup
           pnpm run typecheck:gateway
           pnpm run typecheck:runtime
       - name: i18n pair consistency
@@ -328,6 +329,7 @@ jobs:
           pnpm run test:layout
           pnpm run test:git
           pnpm run test:host-git
+          pnpm run test:host-archive-cleanup
           pnpm run test:settings-bridge
           pnpm run test:connections
           pnpm run test:client-web

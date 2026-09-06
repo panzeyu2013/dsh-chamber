@@ -461,6 +461,21 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3
 
+  packages/dsh-host-archive-cleanup:
+    dependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:^
+        version: link:../../vendor/harness-packages/@deepseek-ai/cordis
+      '@deepseek-ai/dsh-agent':
+        specifier: workspace:^
+        version: link:../../vendor/harness-packages/@deepseek-ai/dsh-agent
+      '@deepseek-ai/dsh-typert-protocol':
+        specifier: workspace:^
+        version: link:../../vendor/harness-packages/@deepseek-ai/dsh-typert-protocol
+      '@deepseek-ai/dsh-workspace':
+        specifier: workspace:^
+        version: link:../../vendor/harness-packages/@deepseek-ai/dsh-workspace
+
   packages/dsh-host-client-graph:
     dependencies:
       '@deepseek-ai/cordis':

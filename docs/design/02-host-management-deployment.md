@@ -7,7 +7,8 @@
 >   --port <port> --trusted-host 127.0.0.1:<port>`——不再生成/维护自建 profile
 >   目录、业务 patch stack 或 glue 插件，端口不再随机分配，改为固定端口 +
 >   占用重试（port+1）。唯一例外是设计 08/09 的**宿主包 loader overlay**：它只
->   把 chamber 自带的两个 host 包挂入官方 web profile，不接管宿主组装权威（§2.6）。
+>   把 chamber 自带的 host 包挂入官方 web profile（2026-12 起三个：client-graph /
+   git-worktree / archive-cleanup，见 §2.6），不接管宿主组装权威（§2.6）。
 > - **保留沿用**：spawn 生命周期、端口占用重试、pid 记录
 >   （ownerPid/ownerInstanceId/port/binary/profile/source/startedAt）、
 >   instance-id 仲裁、readiness（TCP + 统一身份探针）、健康七态状态机、
@@ -148,25 +149,27 @@ dsh 自身 wire / vendor 源码为权威），
   `dshPort` 已属于另一活着的托管记录 → 按 P+1 继续重试或报告冲突，**不杀
   进程**（先注册先托管）。
 
-### 2.6 两个 chamber host 包的 seed 与单一 loader overlay（设计 08/09）
+### 2.6 chamber host 包的 seed 与单一 loader overlay（设计 08/09；2026-12 起三个 host 包）
 
-官方 web profile 仍是宿主组装权威；chamber 只追加两个自身拥有、边界明确的
-host package：
+官方 web profile 仍是宿主组装权威；chamber 只追加自身拥有、边界明确的
+host package（2026-12 起为三个，第三个见 design 24）：
 
 | loader id | package | 实例内职责 |
 |---|---|---|
 | `client-graph` | `@dsh-chamber/dsh-host-client-graph` | 只读暴露该实例的 client module boot graph |
 | `git-worktree` | `@dsh-chamber/dsh-host-git-worktree` | 在该实例进程/用户/文件系统内执行受限 Git worktree 领域操作（设计 08） |
+| `archive-cleanup` | `@dsh-chamber/dsh-host-archive-cleanup` | 已归档会话内容清理域 `archiveCleanup/{preview,purge}`：实例进程内权威清除归档集（含 subagent 级联），只删不读（设计 24） |
 
 本地托管实例的接线如下：
 
-1. `createControlPlane` 分别接收 `hostGraphPackageSourceDir` 与
-   `hostGitWorktreePackageSourceDir`；只有该源的 `dist/index.js` 实际存在时，
+1. `createControlPlane` 分别接收 `hostGraphPackageSourceDir`、
+   `hostGitWorktreePackageSourceDir` 与 `hostArchiveCleanupPackageSourceDir`；
+   只有该源的 `dist/index.js` 实际存在时，
    才把 `package.json + dist/index.js` 以内容 hash 幂等复制到
    `<DSH_HOME>/profiles/web/node_modules/@dsh-chamber/<package>/`。
 2. 控制面只生成**一个** `<stateDir>/dsh-chamber-graph.patch.yml`。其 `insert`
-   列表只含本次确有构建产物的 package row：两包俱全则两行，只构建一包则
-   只有对应一行；两包都缺时不传 `--patch`，保持原生 web profile 基线。
+   列表只含本次确有构建产物的 package row：三包俱全则三行，只构建部分包则
+   只有对应行；全部缺失时不传 `--patch`，保持原生 web profile 基线。
 3. 复制在 overlay 写入之前完成；已声明构建产物却缺少另一必需文件属于打包
    损坏，启动 fail-loud。文件与 overlay 都原子写入并保持 0600。
 4. seed thunk 在**每次 spawn（含自动重启）之前**重新求值。`dsh plugin`
@@ -176,8 +179,9 @@ host package：
    overlay 重建语义一致，插件挂载在每次 dsh 进程 boot 时重新确定——不是
    Electron 会话级事实，重启 dsh 即刷新，无需重启壳。
 
-这不是旧 slim profile/业务 patch stack 的回归：控制面不知道 `clientGraph`
-或 `gitWorktree` 的领域结果，只做受控文件分发与 loader 挂载。
+这不是旧 slim profile/业务 patch stack 的回归：控制面不知道 `clientGraph`、
+`gitWorktree` 或 `archiveCleanup` 的领域结果，只做受控文件分发与 loader
+挂载。
 
 ---
 
@@ -511,7 +515,7 @@ WantedBy=multi-user.target
   公网请求策略，17 §5.1/§6）。
 - **远端 chamber host 包**：SSH transport 进入 `ready` 后，桌面主进程调用
   `seedRemoteChamberHostPackages`，把本次实际已构建的 host-graph + Git worktree
-  两包写到 `<remoteDshHome>/profiles/node_modules/@dsh-chamber/<package>/`，并对
+  + archive-cleanup 三包写到 `<remoteDshHome>/profiles/node_modules/@dsh-chamber/<package>/`，并对
   `<remoteDshHome>/profiles/web/cordis.patch.yml` 做一次合并写。它复用受限
   `cat/write-file` 通道，仅做分发，**不经 SSH 执行 Git**；已运行的远端 dsh
   需重启后才加载新 row，完整原子顺序、去重与失败语义见设计 13 §3。
@@ -544,7 +548,7 @@ gateway 目标即其入口本身（自带认证边界，17 §5.1/§6）。该形
 | 孤儿回收安全模型 | 参考实现 `managed-process-registry.js`（记录在案 → 重验 → owner 死才杀） | 移植 + 改造：命令串含 `--profile web`、lsof 端口归属校验（§3.4） |
 | 健康监控 / 重启 / 背压 | 参考实现 `lifecycle.js`（共享失败计数、节流、单飞行重启、端口释放） | 探活载荷换统一身份方法；删"忙会话宽限"（§2.4/§3.5） |
 | 优雅退出 | dsh profile-boot（SIGTERM dispose） | SIGTERM 进程组 → SIGKILL 兜底（§3.7） |
-| chamber host 包附着 | `@dsh-chamber/dsh-host-client-graph` + `@dsh-chamber/dsh-host-git-worktree` | 按构建产物 seed + 单一 loader overlay；只分发，不消费 graph/Git 业务（§2.6） |
+| chamber host 包附着 | `@dsh-chamber/dsh-host-client-graph` + `@dsh-chamber/dsh-host-git-worktree` + `@dsh-chamber/dsh-host-archive-cleanup`（design 24） | 按构建产物 seed + 单一 loader overlay；只分发，不消费 graph/Git/归档清理业务（§2.6） |
 
 ---
 

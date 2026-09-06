@@ -125,14 +125,26 @@ var REQUIRED_ACTIVATION_PROBES = [
   "clientGraph/graph",
   "settings/describe",
   "gitWorktree/previewCreate",
+  "archiveCleanup/probe",
   "data.settings"
 ];
 var HOST_DOMAIN_PROBE_NAMES = [
   "clientGraph/graph",
-  "gitWorktree/previewCreate"
+  "gitWorktree/previewCreate",
+  "archiveCleanup/probe"
 ];
 var HOST_DOMAIN_PROBE_NAME_SET = new Set(HOST_DOMAIN_PROBE_NAMES);
 var PROBE_NAMES_WITHOUT_HOST_DOMAINS = REQUIRED_ACTIVATION_PROBES.filter((name) => !HOST_DOMAIN_PROBE_NAME_SET.has(name));
+function activationProbeNamesForDomains(domains) {
+  const unknown = domains.filter((name) => !HOST_DOMAIN_PROBE_NAME_SET.has(name));
+  if (unknown.length > 0) {
+    throw new Error(`unknown chamber host probe domain(s): ${[...new Set(unknown)].join(", ")}`);
+  }
+  const wanted = new Set(domains);
+  return REQUIRED_ACTIVATION_PROBES.filter(
+    (name) => !HOST_DOMAIN_PROBE_NAME_SET.has(name) || wanted.has(name)
+  );
+}
 var DEFAULT_PROBE_WINDOW_MS = 6e4;
 function decideVerdict(probes, opts) {
   const expected = opts.expectedNames ?? REQUIRED_ACTIVATION_PROBES;
@@ -6770,6 +6782,13 @@ function expectedGitValidationMiss(value) {
   if (result.ok !== false || !objectValue(result.error)) return false;
   return result.error.code === "invalid-input";
 }
+function archiveCleanupProbeShape(value) {
+  if (!objectValue(value)) return "malformed";
+  const domain = value;
+  if (domain.ok === true) return objectValue(domain.value) ? "ok" : "malformed";
+  if (domain.ok === false) return objectValue(domain.error) ? "business-failure" : "malformed";
+  return "malformed";
+}
 function identityMethodNotFound(error) {
   if (typeof error !== "object" || error === null) return false;
   return error.status === 404;
@@ -6814,8 +6833,9 @@ async function runRuntimeActivationProbes(opts) {
       return { name, ok: false, error: resultError(error) };
     }
   };
-  const hostDomains = opts.hostDomains !== false;
-  const [sessions, graph, settings, git] = await Promise.all([
+  const hostDomainNames = opts.hostDomainNames ?? (opts.hostDomains === false ? [] : [...HOST_DOMAIN_PROBE_NAMES]);
+  const wantsDomain = (domain) => hostDomainNames.includes(domain);
+  const [sessions, graph, settings, git, archiveCleanup] = await Promise.all([
     // The fixed-size host-identity probe: session/canOpenWorkspacePath is a
     // zero-arg boolean Remote of the upstream SessionController (`session`
     // namespace, dsh ≥ 0.1.2-rc.1). Value true AND value false are both
@@ -6850,7 +6870,7 @@ async function runRuntimeActivationProbes(opts) {
         return { name, ok: false, error: resultError(error) };
       }
     })(),
-    hostDomains ? probe("clientGraph/graph", "clientGraph/graph", { args: {} }, graphValue) : Promise.resolve(null),
+    wantsDomain("clientGraph/graph") ? probe("clientGraph/graph", "clientGraph/graph", { args: {} }, graphValue) : Promise.resolve(null),
     (async () => {
       const outcome = await probe("settings/describe", "settings/describe", { args: {} }, settingsValue, SETTINGS_FILE_MAX_BYTES);
       settingsRpcOk = outcome.ok;
@@ -6859,12 +6879,32 @@ async function runRuntimeActivationProbes(opts) {
     // Empty input is rejected by domain validation before any git process or
     // repository scan. Require that exact business miss; a success value would
     // no longer prove the request stayed on the side-effect-free path.
-    hostDomains ? probe(
+    wantsDomain("gitWorktree/previewCreate") ? probe(
       "gitWorktree/previewCreate",
       "gitWorktree/previewCreate",
       { args: { input: {} } },
       expectedGitValidationMiss
-    ) : Promise.resolve(null)
+    ) : Promise.resolve(null),
+    // archiveCleanup/probe (design 24, M1 execution leg): zero-arg, no
+    // side effects. Presence = a well-formed domain carrier answer; a
+    // well-formed business failure means the domain IS mounted but abnormal
+    // (binding-pending / registry-unreadable / busy) → fail-closed. A
+    // success without an object value is malformed. No legacy fallback —
+    // chamber host domains never downgrade (gitWorktree parity).
+    wantsDomain("archiveCleanup/probe") ? (async () => {
+      const name = "archiveCleanup/probe";
+      try {
+        const response = await call(name, { args: {} });
+        const shape = archiveCleanupProbeShape(response.result?.value);
+        if (shape === "ok") return { name, ok: true };
+        if (shape === "business-failure") {
+          return { name, ok: false, error: "archiveCleanup domain answered a business failure on empty input" };
+        }
+        return { name, ok: false, error: "malformed probe response" };
+      } catch (error) {
+        return { name, ok: false, error: resultError(error) };
+      }
+    })() : Promise.resolve(null)
   ]);
   let commands;
   try {
@@ -6891,14 +6931,21 @@ async function runRuntimeActivationProbes(opts) {
   const byName = /* @__PURE__ */ new Map();
   byName.set(commands.name, commands);
   byName.set(sessions.name, sessions);
-  if (hostDomains) {
-    if (graph === null || git === null) throw new Error("internal: chamber host-domain probes did not run");
+  if (wantsDomain("clientGraph/graph")) {
+    if (graph === null) throw new Error("internal: chamber host-domain probes did not run");
     byName.set(graph.name, graph);
+  }
+  if (wantsDomain("gitWorktree/previewCreate")) {
+    if (git === null) throw new Error("internal: chamber host-domain probes did not run");
     byName.set(git.name, git);
+  }
+  if (wantsDomain("archiveCleanup/probe")) {
+    if (archiveCleanup === null) throw new Error("internal: chamber host-domain probes did not run");
+    byName.set(archiveCleanup.name, archiveCleanup);
   }
   byName.set(settings.name, settings);
   byName.set(dataSettings.name, dataSettings);
-  const expected = hostDomains ? REQUIRED_ACTIVATION_PROBES : PROBE_NAMES_WITHOUT_HOST_DOMAINS;
+  const expected = activationProbeNamesForDomains(hostDomainNames);
   return expected.map((name) => byName.get(name) ?? { name, ok: false, error: "probe not wired" });
 }
 
@@ -7563,6 +7610,7 @@ export {
   SETTINGS_FILE_MAX_BYTES,
   SingleFlight,
   activationJournalPath,
+  activationProbeNamesForDomains,
   allowedActions,
   applyPendingVersion,
   assertRuntimeRootNoFollow,

@@ -330,6 +330,13 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
           probeDomains: ['gitWorktree/previewCreate'],
         },
         {
+          insert: { id: 'archive-cleanup', name: '@dsh-chamber/dsh-host-archive-cleanup' },
+          kind: 'host',
+          source: 'desktop-synced',
+          sourceDir: syncedSourceDir(options.config.plane.stateDir, '@dsh-chamber/dsh-host-archive-cleanup'),
+          probeDomains: ['archiveCleanup/probe'],
+        },
+        {
           insert: { id: 'mobile', name: '@dsh-chamber/dsh-client-ui-mobile' },
           kind: 'client',
           source: 'packaged',

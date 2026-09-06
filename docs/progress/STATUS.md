@@ -69,13 +69,21 @@ SSH 探针经 control-plane-module 引用同一常量）。**选项 A 已执行*
 激活 6 项探针集（`REQUIRED_ACTIVATION_PROBES` = commands/execute ·
 session/canOpenWorkspacePath · clientGraph/graph · settings/describe ·
 gitWorktree/previewCreate · data.settings，hostDomains=false 形状派生 4 项）。
+**2026-12（design 24 执行，M1/M2）**：激活集新增第三 chamber 域
+`archiveCleanup/probe`（7 项；`HOST_DOMAIN_PROBE_NAMES` 三域，typed
+subtraction 守卫；accept = 形态良好的 domain carrier，业务失败 fail-closed，
+无 legacy 回退）；M2 起期望集**按实际 seed 域派生**（`activationProbeNamesForDomains`
++ gateway `syncedHostDomainProbeNames`——空缓存=基础 4 项、部分同步=base+已挂载
+域，替代二元 hostDomains 布尔）。
 `describeCapabilities`/`capabilityCache`/`CapabilitySnapshot` 删除（生产无消费者；
 health/readiness 走 `probeHostIdentity`）。B1：settings/describe 探针 per-call 上限
 放宽至 16 MiB（与 `SETTINGS_FILE_MAX_BYTES` 对齐，合法大配置永不误伤；
 `RuntimeProbeRpcOptions.maxResponseBytes` 透传；desktop runtime 激活直连
 control-plane `call` 自动生效；gateway runtime-manager 两处 call seam 亦转发——
 两端一致生效，见挂账⑧）。**挂账**：① 上游 `session.list` 的分页/裁剪/删除能力（归档
-瘦身的事实源头）仍待上游，chamber 不落地实现；② 归档「不能瘦身」事实维持——
+瘦身的事实源头）仍待上游，chamber 不落地实现（design 24 的受界宿主域例外
+属单独动议，不属本挂账范围；其激活探针期望集派生契约修订随 design 24 M2
+落 design 18 §3.4 与本节头部探针段）；② 归档「不能瘦身」事实维持——
 归档仅影响列表体积，探针不再读列表后不影响探针健康语义；③ dsh-runtime
 runtime-probes 的 legacy 回退 warn 为可选注入 `warn` sink——桌面 main.ts 与
 gateway runtime-manager 按定稿不加逻辑改动，未注入即静默（control-plane
@@ -187,8 +195,33 @@ envelope padding——cap 抬至 1 MiB 即变 'dsh'，必红）；ready 心跳�
 - 遗留真实机清单（②⑤ 宽侧栏冷 settle CLS、⑥ 版本事务主进程阻塞采样、H3 真机懒
   加载验证）：步骤见基线文档 §7——需打包版或带会话的 dev 实例复测。
 
-- **已归档会话管理（设计 12）**：方案 A（前端已归档浏览区先行）+ C（上游
-  wire 根治）；实现未排期。设计见 `docs/progress/todo/12-todo-archived-sessions.md`。
+- **已归档会话清理（design 24，2026-12 定稿 v3；todo 12 承接）**：删除已归档
+  内容（含 subagent 级联）动议定稿 = **第三个 chamber 宿主域插件**
+  （`@dsh-chamber/dsh-host-archive-cleanup`，域 `archiveCleanup/{preview,purge}`，
+  实例进程内经宿主权威状态执行，本地 / 远程 dsh / gateway-managed 全形态）
+  + 侧边栏 **server 行 hover 动作**。2026-12 三路独立 subagent 评审 + 自审
+  + v2 合规复核（闭合矩阵 12 项核实）：零 Blocker，全部 Major 与高优 Minor
+  修订已并入 v3（purge 超时预算 seam 与诚实超时文案 /
+  部分失败带警告呈现 / 激活探针期望集按实际 seed 域派生（design 18 §3.4
+  契约修订，替代二元 hostDomains）/ children-first 删除序与崩溃收敛 / 404
+  专用错误类与 header 下错误槽位 / 文档同步时点分摊；PluginDialog 内建表
+  v1 决策不加行，同构三态行列为 M4+ 可选增强）。属 AGENTS/05 §2.2 红线的
+  有界例外动议（AGENTS 例外清单与 design 01 地图已随 M0 批准更新：2026-12
+  用户拍板跳过人工评审、D1–D7 按推荐值生效；05 §2.2/§6、02/09/13/16/17、
+  18 §3.4 等按 design 24 §12 时点表随 M1–M3 改）；**执行中（M1–M3 代码与
+  文档全部落地；M2 探针派生 + 分发面 + fixture 批次全绿；§10 vendor 核对
+  完成、host binding 分支 b 落地；提交态 dist 已重建）**；实跑门禁：
+  根 typecheck + runtime/desktop/gateway/control-plane/sidebar/connections/
+  host 全绿（详见执行台账 §10）；M4 实机 E2E 与启用批次提交待 owner
+  （design 24 §14 残余登记：archived 占位 id 保留至上游 wire）。
+  todo 12 的 B（特权层直删）继续冻结；A（已归档浏览区）仍为可选前置/后续。
+  设计见 `docs/design/24-archived-session-cleanup.md`；调研记录见
+  `docs/progress/todo/12-todo-archived-sessions.md`；执行台账（M0 评审包/
+  决策点 D1–D7、vendor 核对记录表、M1–M4）见
+  `docs/progress/todo/24-archived-session-cleanup-plan.md`（§10 起为物化后
+  执行状态；多轮评审处置登记见 design 24 §15；启用批次 git 提交与 M4 实机
+  待 owner——评审遗留的桌面「恒全量探针 vs seed 产物门」取舍、结构 seam 随
+  上游 wire 退役机制化均已在 design 24 §15 挂账）。
 - **gateway 连接插件能力对齐（A/B/C，2026-12 用户提出；Phase 1-5 已实现 + 质量审核修复轮已落地，见 design 21/本段）**：
   gateway 连接缺 ssh+dsh 的第三方插件「添加/同步」（design 17 §3/§10 收窄的
   副作用）、connections 页缺 gateway 受控重启入口、日志/主机日志按钮不可区分。

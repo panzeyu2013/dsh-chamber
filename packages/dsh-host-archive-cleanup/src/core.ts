@@ -1,0 +1,454 @@
+/**
+ * Archived-session content cleanup core (design 24 §4).
+ *
+ * TRUST BOUNDARY: callers arrive over the instance's host wire and are
+ * untrusted JSON. They never supply a session id, a path, or a command: the
+ * domain operates only on the authoritative archived set of THIS instance
+ * (registry-global, todo 12 §1) and never touches non-archived content. The
+ * orchestration below is pure and fixture-testable; every host capability it
+ * needs arrives through the `ArchiveCleanupHost` seam, which the Remote
+ * facade (`index.ts`) binds to §10-verified official primitives (see
+ * `host-binding-pending` below and design 24 §10 — the bindings MUST be
+ * resolved against the pinned vendor before this domain is enabled; nothing
+ * here guesses a storage layout).
+ *
+ * Guarantees (design 24 §4):
+ *  - children-first deletion with the archived-set member removed LAST, so a
+ *    crash mid-purge leaves the top-level id archived and a later run can
+ *    re-enumerate and converge (no uncollectable orphans);
+ *  - running subtrees are skipped whole (fail-closed), never partially cut;
+ *  - per-session isolation: one failure lands in `errors` and never blocks
+ *    the remaining sessions (AGENTS: one failed entity must not erase or
+ *    block unrelated complete entities);
+ *  - idempotent per session: an id no longer in the set, or content already
+ *    gone, is a no-op ("missing"), so repeated purges converge to empty.
+ */
+
+/** Hard upper bound on sessions touched by one purge (defensive capacity). */
+export const MAX_PURGE_SESSIONS = 65_536
+/** Upper bound on per-item error records returned by one purge. */
+export const MAX_PURGE_ERROR_RECORDS = 1_000
+
+export interface ArchivedSessionState {
+  readonly sessionId: string
+  /** Coarse durable origin (wire: absent or 'subagent'). */
+  readonly origin?: 'subagent'
+  /** Link to the parent session (subagent-origin rows only). */
+  readonly parentSessionId?: string
+  /** Durable running bit from the authoritative session record. */
+  readonly running: boolean
+  /** Canonical working directory (header cwd) — lets the binding resolve the
+   *  official artifact WITHOUT re-enumerating the whole corpus per delete
+   *  (design 24 perf: purge uses one snapshot). */
+  readonly cwd?: string
+}
+
+/**
+ * The host capability seam. Implementations MUST be built on official
+ * in-process primitives verified against the pinned vendor (design 24 §10);
+ * an unverified capability must refuse loudly with `ArchiveCleanupError`
+ * code `host-binding-pending` rather than guess a storage layout.
+ */
+export interface ArchiveCleanupHost {
+  /** The authoritative archived id set (registry-global). */
+  listArchivedSessionIds(): Promise<readonly string[]>
+  /** Session records needed to walk the subagent lineage and the durable
+   *  running bit (authoritative storage, never a client projection). */
+  listSessionStates(): Promise<readonly ArchivedSessionState[]>
+  /** Live agent ids at this moment (running guard). */
+  listLiveAgentIds(): Promise<readonly string[]>
+  /**
+   * Delete one session's content through the official primitive. Children of
+   * the session were already deleted by the caller (children-first order).
+   * `cwd` is the snapshot header cwd (when available) so the binding resolves
+   * the official artifact without a per-delete corpus re-enumeration.
+   * Implementations refuse a session that is live at deletion time with code
+   * `running` (the caller also pre-checks its in-memory live set per member).
+   * @returns 'deleted' when content was removed, 'missing' when nothing was
+   *   there (idempotent no-op — the caller still completes accounting).
+   */
+  deleteSessionContent(sessionId: string, cwd?: string): Promise<'deleted' | 'missing'>
+  /** Remove ids from the archived set in ONE official persistence write
+   *  (purge collects every completed root/orphan and commits at the end —
+   *  design 24 perf: N per-tree atomic writes → 1). */
+  removeArchivedSessionIds(ids: readonly string[]): Promise<void>
+  /** Emit the official session-removed event for one deleted session. */
+  emitSessionRemoved(sessionId: string): Promise<void>
+  /** Emit the official archived-set-changed event after set mutations. */
+  emitArchivedSessionsChanged(): Promise<void>
+}
+
+export interface PreviewResult {
+  /** Total archived top-level ids in the authoritative set. */
+  readonly archived: number
+  /** Archived top-level sessions this run would delete. */
+  readonly deletableSessions: number
+  /** Subagent-origin descendants this run would delete. */
+  readonly deletableSubagents: number
+  /** Whole subtrees skipped because a member is running. */
+  readonly skippedRunning: number
+}
+
+export interface PurgeItemError {
+  readonly sessionId: string
+  readonly code: string
+  readonly message: string
+}
+
+export interface PurgeResult {
+  readonly deletedSessions: number
+  readonly deletedSubagents: number
+  readonly skippedRunning: number
+  readonly errors: readonly PurgeItemError[]
+  /** True when item errors were truncated at MAX_PURGE_ERROR_RECORDS. */
+  readonly truncated?: boolean
+}
+
+export interface ArchiveCleanupDomainError {
+  readonly code: string
+  readonly message: string
+  readonly retryable?: boolean
+}
+
+/** Explicit business carrier: the generic dsh gateway does not preserve
+ *  thrown error fields (git-worktree parity). */
+export type ArchiveCleanupDomainResult<T> =
+  | { readonly ok: true; readonly value: T }
+  | { readonly ok: false; readonly error: ArchiveCleanupDomainError }
+
+/** Stable action error code (serialized over the wire). Codes:
+ *  - `busy`: another purge/preview is in flight on this domain (host single-
+ *    flight, design 24 §3) — retry after the in-flight run settles;
+ *  - `registry-unreadable`: an overall precondition failed (authoritative
+ *    state could not be read) — nothing was mutated;
+ *  - `host-binding-pending`: the binding for a host capability is not yet
+ *    wired (design 24 §10 vendor gate) — the domain is not enabled;
+ *  - `purge-capacity`: the candidate set exceeded MAX_PURGE_SESSIONS —
+ *    nothing was mutated.
+ *  Per-item failures are NOT thrown: they land in `PurgeResult.errors`
+ *  (item codes: `missing`, `running`, `storage`). */
+export class ArchiveCleanupError extends Error {
+  readonly code: string
+  readonly retryable?: boolean
+
+  constructor(code: string, message: string, retryable = false) {
+    super(message)
+    this.name = 'ArchiveCleanupError'
+    this.code = code
+    this.retryable = retryable
+  }
+}
+
+/** Convert only known domain failures; unexpected programming failures remain internal throws. */
+export async function domainResult<T>(operation: () => Promise<T>): Promise<ArchiveCleanupDomainResult<T>> {
+  try {
+    return { ok: true, value: await operation() }
+  } catch (error) {
+    if (!(error instanceof ArchiveCleanupError)) throw error
+    return {
+      ok: false,
+      error: {
+        code: error.code,
+        message: error.message,
+        ...(error.retryable === true ? { retryable: true } : {}),
+      },
+    }
+  }
+}
+
+/** True when the session (or any of its uninterrupted subagent descendants)
+ *  is running — the subtree skip predicate (fail-closed). */
+export function subtreeRunning(
+  sessionId: string,
+  statesBySession: ReadonlyMap<string, ArchivedSessionState>,
+  childrenOf: ReadonlyMap<string, readonly string[]>,
+  liveAgentIds: ReadonlySet<string>,
+): boolean {
+  const visited = new Set<string>()
+  const queue = [sessionId]
+  while (queue.length > 0) {
+    const current = queue.shift() as string
+    if (visited.has(current)) continue
+    visited.add(current)
+    const state = statesBySession.get(current)
+    if (liveAgentIds.has(current) || state?.running === true) return true
+    for (const child of childrenOf.get(current) ?? []) queue.push(child)
+  }
+  return false
+}
+
+export interface DeletableTree {
+  readonly rootSessionId: string
+  /** Children-first deletion order (descendants before the root). */
+  readonly order: readonly string[]
+  readonly subagentCount: number
+}
+
+/** Index uninterrupted subagent-origin children under every session. */
+export function indexChildren(
+  states: readonly ArchivedSessionState[],
+): ReadonlyMap<string, readonly string[]> {
+  const childrenOf = new Map<string, string[]>()
+  for (const state of states) {
+    if (state.origin !== 'subagent') continue
+    if (state.parentSessionId === undefined) continue
+    const list = childrenOf.get(state.parentSessionId)
+    if (list === undefined) childrenOf.set(state.parentSessionId, [state.sessionId])
+    else list.push(state.sessionId)
+  }
+  return childrenOf
+}
+
+/** Resolve the deletable subtree under one archived top-level id, or null
+ *  when the whole subtree is skipped because a member is running. Returns
+ *  null for an unknown root (orphan/archived id with no session record —
+ *  treated as already gone, see purge). Children-first order is produced by
+ *  post-order walk (cycle-guarded). */
+export function resolveDeletableTree(
+  rootSessionId: string,
+  statesBySession: ReadonlyMap<string, ArchivedSessionState>,
+  childrenOf: ReadonlyMap<string, readonly string[]>,
+  liveAgentIds: ReadonlySet<string>,
+): DeletableTree | null {
+  if (!statesBySession.has(rootSessionId)) return null
+  if (subtreeRunning(rootSessionId, statesBySession, childrenOf, liveAgentIds)) return null
+
+  const order: string[] = []
+  const visited = new Set<string>()
+  const visit = (sessionId: string): void => {
+    if (visited.has(sessionId)) return
+    visited.add(sessionId)
+    for (const child of childrenOf.get(sessionId) ?? []) visit(child)
+    order.push(sessionId)
+  }
+  visit(rootSessionId)
+  // order[0] is the deepest-visited leaf; the root is last. subagentCount
+  // excludes the root itself.
+  return {
+    rootSessionId,
+    order,
+    subagentCount: order.length - 1,
+  }
+}
+
+/** The pure orchestration core (design 24 §4 steps 1–7). */
+export class ArchiveCleanupCore {
+  private readonly host: ArchiveCleanupHost
+
+  constructor(host: ArchiveCleanupHost) {
+    this.host = host
+  }
+
+  /** Step 1–3 read pass shared by preview and purge. */
+  private async readAuthoritativeState(): Promise<{
+    archivedIds: string[]
+    statesBySession: Map<string, ArchivedSessionState>
+    childrenOf: Map<string, readonly string[]>
+    liveAgentIds: Set<string>
+  }> {
+    let archivedIds: readonly string[]
+    let states: readonly ArchivedSessionState[]
+    let live: readonly string[]
+    try {
+      ;[archivedIds, states, live] = await Promise.all([
+        this.host.listArchivedSessionIds(),
+        this.host.listSessionStates(),
+        this.host.listLiveAgentIds(),
+      ])
+    } catch (error) {
+      if (error instanceof ArchiveCleanupError) throw error
+      throw new ArchiveCleanupError('registry-unreadable', `归档状态不可读：${error instanceof Error ? error.message : String(error)}`)
+    }
+    const statesBySession = new Map<string, ArchivedSessionState>()
+    for (const state of states) {
+      const existing = statesBySession.get(state.sessionId)
+      if (existing === undefined) statesBySession.set(state.sessionId, state)
+    }
+    const childrenOf = new Map<string, readonly string[]>()
+    for (const [parent, children] of indexChildren(states)) {
+      childrenOf.set(parent, children)
+    }
+    return {
+      archivedIds: [...new Set(archivedIds.map(String))],
+      statesBySession,
+      childrenOf,
+      liveAgentIds: new Set(live.map(String)),
+    }
+  }
+
+  /** Resolve the run plan: archived roots not already covered by another
+   *  deletable root's subtree, each mapped to its deletable tree (or skipped
+   *  when running). A root that is itself a subagent descendant of an
+   *  earlier deletable root is covered by that root's tree and skipped here
+   *  (no double deletion). */
+  private resolvePlan(
+    archivedIds: readonly string[],
+    statesBySession: ReadonlyMap<string, ArchivedSessionState>,
+    childrenOf: ReadonlyMap<string, readonly string[]>,
+    liveAgentIds: ReadonlySet<string>,
+  ): { trees: DeletableTree[]; skippedRunning: number; orphanRoots: string[] } {
+    const trees: DeletableTree[] = []
+    let skippedRunning = 0
+    const orphanRoots: string[] = []
+    const covered = new Set<string>()
+    for (const id of archivedIds) {
+      // Covered check FIRST (design 24 perf): an ancestor tree that is
+      // deletable implies every member is non-running, so a covered archived
+      // descendant needs no BFS — O(A) instead of O(A²) for nested chains.
+      if (covered.has(id)) continue
+      if (!statesBySession.has(id)) {
+        // Orphan/archived id without a session record — nothing to delete,
+        // but the purge still removes the set member (set converges).
+        orphanRoots.push(id)
+        continue
+      }
+      const tree = resolveDeletableTree(id, statesBySession, childrenOf, liveAgentIds)
+      if (tree === null) {
+        skippedRunning += 1
+        continue
+      }
+      for (const member of tree.order) covered.add(member)
+      trees.push(tree)
+    }
+    return { trees, skippedRunning, orphanRoots }
+  }
+
+  /** Read-only preview (design 24 §3): a point-in-time snapshot for confirm
+   *  copy — never authoritative for the purge itself. */
+  async preview(): Promise<PreviewResult> {
+    const { archivedIds, statesBySession, childrenOf, liveAgentIds } = await this.readAuthoritativeState()
+    const plan = this.resolvePlan(archivedIds, statesBySession, childrenOf, liveAgentIds)
+    let deletableSessions = 0
+    let deletableSubagents = 0
+    for (const tree of plan.trees) {
+      deletableSessions += 1
+      deletableSubagents += tree.subagentCount
+    }
+    return {
+      archived: archivedIds.length,
+      deletableSessions,
+      deletableSubagents,
+      skippedRunning: plan.skippedRunning,
+    }
+  }
+
+  /**
+   * Delete the content of every archived session (children-first, archived
+   * member removed last — ONE batched set removal at the end).
+   *
+   * Performance contract (design 24 perf review): the authoritative snapshot
+   * (archived set + session states + lineage) is read ONCE; per tree only the
+   * cheap in-memory live set is re-read (the real running guard). Per-member
+   * deletion uses the snapshot's cwd so the binding never re-enumerates the
+   * corpus. Completed roots and orphans are removed from the archived set in
+   * a single official write after the whole run. Per-session failures land
+   * in `errors` (truncated at MAX_PURGE_ERROR_RECORDS with `truncated`).
+   */
+  async purge(): Promise<PurgeResult> {
+    const { archivedIds, statesBySession, childrenOf, liveAgentIds } = await this.readAuthoritativeState()
+    if (archivedIds.length > MAX_PURGE_SESSIONS) {
+      throw new ArchiveCleanupError('purge-capacity', `archived set exceeds the ${MAX_PURGE_SESSIONS}-session purge capacity`)
+    }
+    const plan = this.resolvePlan(archivedIds, statesBySession, childrenOf, liveAgentIds)
+    let deletedSessions = 0
+    let deletedSubagents = 0
+    let truncated = false
+    const errors: PurgeItemError[] = []
+    const recordError = (sessionId: string, code: string, message: string): void => {
+      if (errors.length >= MAX_PURGE_ERROR_RECORDS) {
+        truncated = true
+        return
+      }
+      errors.push({ sessionId, code, message })
+    }
+
+    const completedRoots: string[] = []
+    for (const tree of plan.trees) {
+      // Cheap in-memory live refresh only (design 24 perf): the durable
+      // snapshot stays fixed for the run — single-flight rules out in-process
+      // concurrency, deletion is idempotent, and every member is additionally
+      // pre-checked against this live set below.
+      let nowLive: ReadonlySet<string>
+      try {
+        nowLive = new Set(await this.host.listLiveAgentIds())
+      } catch (error) {
+        if (error instanceof ArchiveCleanupError) throw error
+        throw new ArchiveCleanupError('registry-unreadable', `live agent 状态不可读：${error instanceof Error ? error.message : String(error)}`)
+      }
+      if (subtreeRunning(tree.rootSessionId, statesBySession, childrenOf, nowLive)) {
+        plan.skippedRunning += 1
+        continue
+      }
+      let subtreeHadError = false
+      for (const sessionId of tree.order) {
+        // O(1) member-level running pre-check against the live set.
+        if (nowLive.has(sessionId)) {
+          subtreeHadError = true
+          recordError(sessionId, 'running', `会话在删除前转为运行，已跳过（归档根保持，可稍后重试）`)
+          continue
+        }
+        const state = statesBySession.get(sessionId)
+        try {
+          // Every member except the root is a subagent-origin descendant.
+          const outcome = await this.host.deleteSessionContent(sessionId, state?.cwd)
+          if (sessionId === tree.rootSessionId) {
+            if (outcome === 'deleted') deletedSessions += 1
+          } else if (outcome === 'deleted') {
+            deletedSubagents += 1
+          }
+          try {
+            await this.host.emitSessionRemoved(sessionId)
+          } catch (error) {
+            if (!(error instanceof ArchiveCleanupError)) throw error
+            subtreeHadError = true
+            recordError(sessionId, error.code, error.message)
+          }
+        } catch (error) {
+          if (!(error instanceof ArchiveCleanupError)) throw error
+          // The item stays in the archived set (root) or remains orphaned
+          // under an archived root (descendant) — a later purge re-runs it.
+          subtreeHadError = true
+          recordError(sessionId, error.code, error.message)
+        }
+      }
+      if (subtreeHadError) {
+        // Crash/partial-failure consistency (design 24 §4 step 4): the root
+        // id stays archived until the WHOLE subtree is provably gone, so a
+        // re-run can re-enumerate and converge.
+        continue
+      }
+      completedRoots.push(tree.rootSessionId)
+    }
+    // The archived-set members of every completed tree are removed LAST in
+    // ONE official write (root ids stay archived until their whole subtree is
+    // gone; a crash before this point leaves a re-enumerable remainder).
+    // Orphan set members (no session record) carry no content — removing
+    // them is the whole operation and is safe at any point.
+    const clearIds = [...completedRoots, ...plan.orphanRoots]
+    if (clearIds.length > 0) {
+      try {
+        await this.host.removeArchivedSessionIds(clearIds)
+      } catch (error) {
+        if (!(error instanceof ArchiveCleanupError)) throw error
+        // Every listed id stays archived; the next purge re-runs them
+        // (content already gone → orphan convergence).
+        recordError('', 'archive-set', error.message)
+      }
+      try {
+        await this.host.emitArchivedSessionsChanged()
+      } catch (error) {
+        if (!(error instanceof ArchiveCleanupError)) throw error
+        // The changed event is a projection signal only — a failure must not
+        // roll back completed deletions; it is recorded per design 24 §11.
+        recordError('', 'archive-set', error.message)
+      }
+    }
+    return {
+      deletedSessions,
+      deletedSubagents,
+      skippedRunning: plan.skippedRunning,
+      errors,
+      ...(truncated ? { truncated: true } : {}),
+    }
+  }
+}

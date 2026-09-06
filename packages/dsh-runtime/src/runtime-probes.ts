@@ -28,7 +28,11 @@ import { constants } from 'node:fs'
 import { open } from 'node:fs/promises'
 import { join } from 'node:path'
 import { TextDecoder } from 'node:util'
-import { REQUIRED_ACTIVATION_PROBES, PROBE_NAMES_WITHOUT_HOST_DOMAINS, type ProbeResult } from './activation-gate.ts'
+import {
+  HOST_DOMAIN_PROBE_NAMES,
+  activationProbeNamesForDomains,
+  type ProbeResult,
+} from './activation-gate.ts'
 import { sanitizeErrorText } from './sanitize-error.ts'
 
 export interface RuntimeProbeRpcOptions {
@@ -72,13 +76,24 @@ export interface RuntimeProbeOptions {
   warn?: RuntimeProbeWarn
   /**
    * 2026-12 shape-awareness: whether the spawned dsh is expected to carry the
-   * chamber host packages (clientGraph/graph + gitWorktree/previewCreate
-   * domains). The desktop shape always verifies them; the gateway shape only
-   * when a desktop has synced its host packages into the seed cache — a fresh
-   * gateway with no synced cache hosts a plain dsh whose activation must pass
-   * without the chamber domains. Default true.
+   * chamber host packages (clientGraph/graph + gitWorktree/previewCreate +
+   * archiveCleanup/probe domains). The desktop shape always verifies them;
+   * the gateway shape only when a desktop has synced its host packages into
+   * the seed cache — a fresh gateway with no synced cache hosts a plain dsh
+   * whose activation must pass without the chamber domains. Default true.
    */
   hostDomains?: boolean
+  /**
+   * Design 24 §7 C (M2 derivation): the EXACT chamber host domains this
+   * spawn actually carries, derived from the seeded host entries
+   * (gateway: syncedHostDomainProbeNames). Takes precedence over
+   * `hostDomains`; an empty list runs no chamber-domain probe (the reduced
+   * set), a partial list runs exactly those domains (2-of-3 partial syncs
+   * get a well-defined expectation instead of a binary all-or-none gate),
+   * and the full list equals the all-domains shape. The returned probe set
+   * and the verdict expectation are both derived from this list.
+   */
+  hostDomainNames?: readonly string[]
 }
 
 export const SETTINGS_FILE_MAX_BYTES = 16 * 1024 * 1024
@@ -215,6 +230,20 @@ function expectedGitValidationMiss(value: unknown): boolean {
   return (result.error as Record<string, unknown>).code === 'invalid-input'
 }
 
+/** archiveCleanup/probe accept predicate (design 24 §7 C): the method must
+ *  answer a well-formed domain carrier — ok:true with an object value is
+ *  healthy; a well-formed ok:false (binding-pending / registry-unreadable /
+ *  busy) is present-but-abnormal and fails closed with a distinct message in
+ *  the probe leg itself (a business answer on empty input is never a
+ *  protocol success). */
+function archiveCleanupProbeShape(value: unknown): 'ok' | 'business-failure' | 'malformed' {
+  if (!objectValue(value)) return 'malformed'
+  const domain = value as Record<string, unknown>
+  if (domain.ok === true) return objectValue(domain.value) ? 'ok' : 'malformed'
+  if (domain.ok === false) return objectValue(domain.error) ? 'business-failure' : 'malformed'
+  return 'malformed'
+}
+
 /**
  * The legacy-fallback signal: an injected carrier error carrying transport
  * status 404 (the control-plane unary client's RpcTransportError.status) —
@@ -282,12 +311,13 @@ export async function runRuntimeActivationProbes(opts: RuntimeProbeOptions): Pro
     }
   }
 
-  // 2026-12 shape-awareness: the gateway shape skips the chamber host domains
-  // when no desktop has synced its host packages into the seed cache yet.
-  // hostDomains=false runs NO chamber-domain probe (no synthetic rows): the
-  // entries are absent from the returned set and from the byName map below.
-  const hostDomains = opts.hostDomains !== false
-  const [sessions, graph, settings, git] = await Promise.all([
+  // Design 24 §7 C (M2 derivation): the chamber domains actually expected are
+  // `hostDomainNames` when the caller derived them from the seeded host
+  // entries (gateway partial syncs), else the legacy binary shape
+  // (hostDomains=false runs NO chamber-domain probe; default = all domains).
+  const hostDomainNames = opts.hostDomainNames ?? (opts.hostDomains === false ? [] : [...HOST_DOMAIN_PROBE_NAMES])
+  const wantsDomain = (domain: string): boolean => hostDomainNames.includes(domain)
+  const [sessions, graph, settings, git, archiveCleanup] = await Promise.all([
     // The fixed-size host-identity probe: session/canOpenWorkspacePath is a
     // zero-arg boolean Remote of the upstream SessionController (`session`
     // namespace, dsh ≥ 0.1.2-rc.1). Value true AND value false are both
@@ -333,7 +363,7 @@ export async function runRuntimeActivationProbes(opts: RuntimeProbeOptions): Pro
         return { name, ok: false, error: resultError(error) }
       }
     })(),
-    hostDomains
+    wantsDomain('clientGraph/graph')
       ? probe('clientGraph/graph', 'clientGraph/graph', { args: {} }, graphValue)
       : Promise.resolve(null),
     (async () => {
@@ -348,13 +378,35 @@ export async function runRuntimeActivationProbes(opts: RuntimeProbeOptions): Pro
     // Empty input is rejected by domain validation before any git process or
     // repository scan. Require that exact business miss; a success value would
     // no longer prove the request stayed on the side-effect-free path.
-    hostDomains
+    wantsDomain('gitWorktree/previewCreate')
       ? probe(
         'gitWorktree/previewCreate',
         'gitWorktree/previewCreate',
         { args: { input: {} } },
         expectedGitValidationMiss,
       )
+      : Promise.resolve(null),
+    // archiveCleanup/probe (design 24, M1 execution leg): zero-arg, no
+    // side effects. Presence = a well-formed domain carrier answer; a
+    // well-formed business failure means the domain IS mounted but abnormal
+    // (binding-pending / registry-unreadable / busy) → fail-closed. A
+    // success without an object value is malformed. No legacy fallback —
+    // chamber host domains never downgrade (gitWorktree parity).
+    wantsDomain('archiveCleanup/probe')
+      ? (async (): Promise<ProbeResult> => {
+        const name = 'archiveCleanup/probe'
+        try {
+          const response = await call(name, { args: {} })
+          const shape = archiveCleanupProbeShape(response.result?.value)
+          if (shape === 'ok') return { name, ok: true }
+          if (shape === 'business-failure') {
+            return { name, ok: false, error: 'archiveCleanup domain answered a business failure on empty input' }
+          }
+          return { name, ok: false, error: 'malformed probe response' }
+        } catch (error) {
+          return { name, ok: false, error: resultError(error) }
+        }
+      })()
       : Promise.resolve(null),
   ])
 
@@ -398,19 +450,25 @@ export async function runRuntimeActivationProbes(opts: RuntimeProbeOptions): Pro
   const byName = new Map<string, ProbeResult>()
   byName.set(commands.name, commands)
   byName.set(sessions.name, sessions)
-  if (hostDomains) {
-    if (graph === null || git === null) throw new Error('internal: chamber host-domain probes did not run')
+  if (wantsDomain('clientGraph/graph')) {
+    if (graph === null) throw new Error('internal: chamber host-domain probes did not run')
     byName.set(graph.name, graph)
+  }
+  if (wantsDomain('gitWorktree/previewCreate')) {
+    if (git === null) throw new Error('internal: chamber host-domain probes did not run')
     byName.set(git.name, git)
+  }
+  if (wantsDomain('archiveCleanup/probe')) {
+    if (archiveCleanup === null) throw new Error('internal: chamber host-domain probes did not run')
+    byName.set(archiveCleanup.name, archiveCleanup)
   }
   byName.set(settings.name, settings)
   byName.set(dataSettings.name, dataSettings)
   // Return in the contract order, making exact-set drift visible in tests.
-  // hostDomains=false (gateway shape without a synced seed cache) returns the
-  // reduced set — the caller's probeExpectedNames must match (see
-  // activation-gate PROBE_NAMES_WITHOUT_HOST_DOMAINS).
-  const expected = hostDomains
-    ? REQUIRED_ACTIVATION_PROBES
-    : PROBE_NAMES_WITHOUT_HOST_DOMAINS
+  // The expected set is derived from the ACTUALLY expected chamber domains
+  // (empty list = the reduced set; partial lists = base + listed domains),
+  // so a caller's probeExpectedNames must match activationProbeNamesForDomains
+  // of the same list (partial 2-of-3 syncs no longer trip an exact-set miss).
+  const expected = activationProbeNamesForDomains(hostDomainNames)
   return expected.map(name => byName.get(name) ?? ({ name, ok: false, error: 'probe not wired' }))
 }

@@ -184,20 +184,29 @@ reaper（回收孤儿实例）→ 快照 DSH_HOME（§3.7，断言无存活写�
   透传——desktop 直传 control-plane `call` 自动生效，gateway runtime-manager 两处
   call seam 同样转发，两端行为一致）；
   `gitWorktree/previewCreate` 以空输入精确期待
-  `invalid-input`，在 Git 进程/仓库扫描前停止；`data.settings`
+  `invalid-input`，在 Git 进程/仓库扫描前停止；
+  `archiveCleanup/probe`（design 24 第三 chamber 域，2026-12）零参执行，
+  accept = 形态良好的 domain carrier（`ok:true` + 对象 value 健康；形态良好
+  的 `ok:false` = 在位但异常 → fail-closed；无 legacy 回退）；
+  `data.settings`
   **带既有 `$DSH_HOME` profile 数据 boot + 数据可读性探测**（settings.yaml 可
   解析）。**`data.sessions` 随选项 A 移除**（2026-12 定稿）：探针不再读会话
   数据，会话存储健康不在激活契约内——`session/list` 与 `data.sessions` 双双
   退出探针集。`host.describe` 与 `workspace.list` 已随上游删除，不在
-  探针集内；`clientGraph/graph` 与 `gitWorktree/previewCreate` 两域在
+  探针集内；`clientGraph/graph`、`gitWorktree/previewCreate` 与
+  `archiveCleanup/probe` 三个 chamber 域在
   `hostDomains=false` 形态（2026-12，见下）跳过（该形态期望集 =
   `PROBE_NAMES_WITHOUT_HOST_DOMAINS` 四项：commands/execute ·
   session/canOpenWorkspacePath · settings/describe · data.settings）。
-- **探针形态化（2026-12，design 17 §10）**：`clientGraph/graph` 与
-  `gitWorktree/previewCreate` 两个 chamber 宿主域只在「种子缓存就绪」时验证——
-  gateway 的宿主包由连接的桌面经 `/chamber/plugins` 同步（Phase 3），缓存缺包时
-  托管 dsh 是纯 dsh，探针以 `hostDomains=false` 运行并返回缩减结果集，激活裁决的
-  期望集同步切换为 `PROBE_NAMES_WITHOUT_HOST_DOMAINS`（`probeExpectedNames`）；
+- **探针形态化（2026-12，design 17 §10；design 24 M2 修订为按域派生）**：
+  `clientGraph/graph`、`gitWorktree/previewCreate` 与 `archiveCleanup/probe`
+  三个 chamber 宿主域只在「种子缓存就绪」时验证——gateway 的宿主包由连接的
+  桌面经 `/chamber/plugins` 同步（Phase 3），缓存缺包时托管 dsh 是纯 dsh。
+  **期望集按本次 spawn 实际 seed 的宿主域派生**（`activationProbeNamesForDomains`
+  于 dsh-runtime、`syncedHostDomainProbeNames` 于 gateway：空缓存 = 缩减
+  `PROBE_NAMES_WITHOUT_HOST_DOMAINS` 四项；部分同步（2-of-3，老桌面↔新
+  gateway） = 基础四项 + 已挂载域；全量 = 7 项），替代二元 `hostDomains`
+  布尔；激活裁决的期望集（`probeExpectedNames`）与探针结果集同源同快照。
   桌面形态恒为全域验证。desktop-synced 源缺失 ≠ 版本不可用——激活照常通过，
   宿主层在下次桌面同步 + 受控重启后补上。
 - **探测窗口与裁决**：默认 ≤60s 超时；超时**不立即判失败**——进入「继续观察 +

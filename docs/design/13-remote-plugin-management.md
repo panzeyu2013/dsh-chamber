@@ -60,9 +60,11 @@
   白名单校验（`applyPlugins` + `buildRemoteExecArgv`）——renderer 提供
   **绝不信任**。
 - `seed`（设计 08/09 接线）：`seedRemoteChamberHostPackages` 经现有受限
-  `cat/write-file` 原语，把本次**实际有 `dist/index.js` 构建产物**的两个包
-  `@dsh-chamber/dsh-host-client-graph`（loader id `client-graph`）与
-  `@dsh-chamber/dsh-host-git-worktree`（loader id `git-worktree`）落到远端
+  `cat/write-file` 原语，把本次**实际有 `dist/index.js` 构建产物**的 chamber
+  宿主包 `@dsh-chamber/dsh-host-client-graph`（loader id `client-graph`）、
+  `@dsh-chamber/dsh-host-git-worktree`（loader id `git-worktree`）与
+  `@dsh-chamber/dsh-host-archive-cleanup`（loader id `archive-cleanup`，design
+  24，2026-12 起）落到远端
   install-level fallback `profiles/node_modules`，再合并 web profile 的
   `cordis.patch.yml`。`seedRemoteHostGraph` 保留为旧手动 IPC 的单包兼容 wrapper。
 - `materialize`：本地路径包物化（pack → ssh 传输 → 远端 `add file:`）；

@@ -484,7 +484,8 @@
   to { transform: rotate(360deg); }
 }
 
-/* Source-header right cluster (sort menu + search + add-workspace `+`): NOT
+/* Source-header right cluster (sort menu + search + add-workspace `+` +
+   git worktrees + archive-cleanup purge — design 24 §6): NOT
    rendered at rest (display:none — zero layout space, so the connection
    status really sits at the header's right end). Hovering the header swaps
    the cluster IN and the status OUT — a true replacement. While a search
@@ -943,8 +944,16 @@
   display: block;
 }
 
-.actionIcon:hover {
+.actionIcon:hover:not(:disabled) {
   color: var(--dsw-alias-label-primary);
+}
+
+/* Design 24 §6: the archive-cleanup action is the cluster's first long async
+   operation (preview ≤30s / purge ≤5min) — a disabled button must look and
+   behave disabled (opacity .42 matches the git placeholder affordance). */
+.actionIcon:disabled {
+  opacity: 0.42;
+  cursor: default;
 }
 
 /* P2-5: 排序按钮的 updated（按更新时间）态——品牌色 + 浅底，视觉可辨
@@ -1016,6 +1025,17 @@
   font-size: 12px;
   line-height: 16px;
   color: var(--dsw-alias-state-error-primary);
+  white-space: normal;
+  word-break: break-word;
+}
+
+/* Design 24 §6 header-under slot, informational variant: empty state,
+   completion summary, in-flight progress — neutral, never error-red. */
+.cleanupNote {
+  margin: 2px 4px 4px 20px;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-secondary);
   white-space: normal;
   word-break: break-word;
 }

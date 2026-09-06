@@ -33,7 +33,7 @@ import { createRequire as nodeCreateRequire } from 'node:module'
 import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { call as dshCall, type Logger, type PlaneHandle } from '@dsh-chamber/control-plane'
-import { hasSyncedHostSeed } from './plugins.ts'
+import { syncedHostDomainProbeNames } from './plugins.ts'
 import {
   bindRuntimeInstallResolution,
   assertRuntimeRootNoFollow,
@@ -86,6 +86,7 @@ import {
   recoverRuntimeMetadata,
   rescueCorruptMetadataRecoveryMarker,
   PROBE_NAMES_WITHOUT_HOST_DOMAINS,
+  activationProbeNamesForDomains,
   recordProbePass,
   recordRuntimeFailure,
   removeKnownGoodCandidate,
@@ -850,7 +851,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     return { path: anchor, version: builtinVersion, source: 'builtin' }
   }
 
-  async function spawnAndProbeCandidate(version: string, isBuiltin: boolean, hostDomains: boolean, signal?: AbortSignal): Promise<ProbeResult[]> {
+  async function spawnAndProbeCandidate(version: string, isBuiltin: boolean, hostDomainNames: readonly string[], signal?: AbortSignal): Promise<ProbeResult[]> {
     const target = isBuiltin ? anchor : join(stateRoot, version)
     transactionWorkspace = target
     internalSpawn = true
@@ -865,14 +866,13 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
             baseUrl,
             dshHome,
             signal,
-            // 2026-12 Phase 3 shape gate: a gateway whose seed cache holds no
-            // synced chamber host packages hosts a plain dsh — the activation
-            // probe skips the chamber host domains until a desktop syncs.
-            // The shape is snapshot ONCE per startup transaction (see
-            // buildStartupDeps): probe set and verdict-expected set must
-            // always agree, or an exact-set drift would spuriously fail a
-            // healthy activation.
-            hostDomains,
+            // 2026-12 Phase 3 shape gate (design 24 §7 C, M2): the expected
+            // chamber host domains are derived from the seed cache packages
+            // actually present (partial syncs included), snapshot ONCE per
+            // startup transaction (see buildStartupDeps): probe set and
+            // verdict-expected set must always agree, or an exact-set drift
+            // would spuriously fail a healthy activation.
+            hostDomainNames,
             call: async (url, method, payload, opts) => {
               // Forward the per-call response cap (runtime-probes widens
               // settings/describe to SETTINGS_FILE_MAX_BYTES=16 MiB so a
@@ -900,8 +900,9 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
    *  not throw; only an injected `probeCandidate` seam may throw, and its
    *  callers treat that as a surfaced error (it is a test-only injection).
    *  The probe shape applies the same
-   *  hostDomains gate as managed-tree probes (chamber host domains are only
-   *  expected once a desktop sync exists), snapshot ONCE per env boot. */
+   *  derived chamber-domain gate as managed-tree probes (domains expected
+   *  only once their packages are synced into the seed cache), snapshot ONCE
+   *  per env boot. */
   async function probeEnvOverrideRuntime(signal?: AbortSignal): Promise<string | null> {
     // Env resolution happens through resolveWorkspace(), so the
     // transactionWorkspace override must stay unset for this spawn.
@@ -933,7 +934,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
             baseUrl,
             dshHome,
             signal,
-            hostDomains: hasSyncedHostSeed(config.plane.stateDir),
+            hostDomainNames: syncedHostDomainProbeNames(config.plane.stateDir),
             call: async (url, method, payload, opts) => {
               // Per-call response-cap forwarding — same contract as the
               // managed-tree seam above (settings/describe 16 MiB).
@@ -979,14 +980,16 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
   }
 
   function buildStartupDeps(): StartupDeps {
-    // 2026-12 Phase 3 shape gate: the probe shape is snapshot ONCE per
-    // startup transaction. A desktop sync landing mid-transaction must not
-    // flip one side (hostDomains) while the verdict expects the other set
-    // (probeExpectedNames) — exact-set drift would spuriously fail/roll back
-    // a healthy activation. The next transaction re-evaluates the cache, so
-    // a mid-transaction sync applies on the following activation (bounded,
-    // fail-closed false negative).
-    const hostSeedSynced = hasSyncedHostSeed(config.plane.stateDir)
+    // 2026-12 Phase 3 shape gate (design 24 §7 C, M2): the probe shape is
+    // snapshot ONCE per startup transaction, DERIVED from the synced seed
+    // cache (the exact chamber domains present — partial syncs included). A
+    // desktop sync landing mid-transaction must not flip the derived list
+    // while the verdict expects the other set (probeExpectedNames) —
+    // exact-set drift would spuriously fail/roll back a healthy activation.
+    // The next transaction re-evaluates the cache, so a mid-transaction sync
+    // applies on the following activation (bounded, fail-closed false
+    // negative).
+    const hostSeedDomains = syncedHostDomainProbeNames(config.plane.stateDir)
     return {
       cleanupStaleInstalls: () => cleanupStaleInstalls(baseDir),
       evict: () => evictVersions(baseDir),
@@ -1022,8 +1025,10 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
           writeCurrentPointer(baseDir, version)
         }
       },
-      spawnAndProbe: (version, isBuiltin, signal) => spawnAndProbeCandidate(version, isBuiltin, hostSeedSynced, signal),
-      probeExpectedNames: hostSeedSynced ? undefined : PROBE_NAMES_WITHOUT_HOST_DOMAINS,
+      spawnAndProbe: (version, isBuiltin, signal) => spawnAndProbeCandidate(version, isBuiltin, hostSeedDomains, signal),
+      probeExpectedNames: hostSeedDomains.length === 0
+        ? PROBE_NAMES_WITHOUT_HOST_DOMAINS
+        : activationProbeNamesForDomains(hostSeedDomains),
       stopHost: async () => { await plane.stopLocal() },
       restore: (snapshotPath) => restoreSnapshot(baseDir, dshHome, snapshotPath),
       recordProbePass: (version) => recordProbePass(baseDir, version),
@@ -2371,7 +2376,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     if (!needsRecovery) {
       throw Object.assign(new Error('no corrupt metadata to recover'), { code: 'no_retry_target' })
     }
-    const hostDomains = hasSyncedHostSeed(baseDir)
+    const hostDomainNames = syncedHostDomainProbeNames(baseDir)
     const engineOptions = {
       baseDir,
       dshHome,
@@ -2380,7 +2385,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
       stopHost: () => plane.stopLocal(),
       completeRestore: () => completeInterruptedRestore(baseDir, dshHome),
       probeBuiltin: async () => {
-        const probes = await spawnAndProbeCandidate(builtin, true, hostDomains, lifecycleAbort.signal)
+        const probes = await spawnAndProbeCandidate(builtin, true, hostDomainNames, lifecycleAbort.signal)
         const passed = probes.length > 0 && probes.every(probe => probe.ok)
         if (passed) return { ok: true as const }
         const failures = probes.filter(probe => !probe.ok).map(probe => probe.name ?? 'unknown probe').join(', ')
