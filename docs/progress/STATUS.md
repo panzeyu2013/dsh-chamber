@@ -1268,3 +1268,52 @@ P5 防漂移锁步与升级纪律（E-10/N9/N10 落地）→ P6 架构裁定（E
 
 - P1-R1（打包冒烟）**暂时跳过**（用户决定 2026-09;待具备打包环境/升级窗口时执行,与 P5-6 归口）（需打包环境）;2 项 runtime 弱写清单外内容
   （transport-manager ssh-instances.json 写等）不在 2a 范围,维持原状。
+
+**stage-1/2（梯队一）+ trim 落库（refactor 分支 0699aa9/c8f6cf6/da01fa3,2026 dedupe-audit
+follow-up「verified residual clusters」;合并后收口）**——除一处已声明 drift fix 外行为保持,
+每簇经独立复核对照 HEAD:
+- **stage-1**：dsh-runtime 回滚续接阶段集与回滚目标推导单源（rollback-facts.ts:
+  ROLLBACK_CONTINUATION_PHASES + delayedRollbackTarget,收编 apply-phase/
+  restart-exhausted-rollback/runtime-startup/runtime-metadata-recovery 四处内联;
+  runtime-startup 另抽 activationFactsFromJournal）、CRITICAL_RUNTIME_FILES + digest
+  校验（runtime-critical-files.ts,读/写两端同源,错误面与逐字消息保持）+ 树可写遍历
+  （tree-writable.ts,加 existsSync 早退与内部兜底 try——原为调用方职责,best-effort
+  语义不变）;restore-marker 基线名单源（restore-marker.ts）。私有模块,index 面逐字节
+  不变,committed dist 未重建（dist-sync 哨兵绿;发布打包链重建）。desktop 内联失效判定
+  改引 core shouldInvalidate/effectivePending,并修 **pendingBefore drift**
+  （RUNTIME_RESTART 前置投影原只查 invalidatedAt,漏 shellVersion 合取——旧壳写的
+  pending 可能被解析为目标;现与 core 启动重放同判）。plugin-sync host 包常量改引 cp
+  HOST_GRAPH/GIT_WORKTREE/ARCHIVE_CLEANUP_INSERT（经 control-plane-module facade,
+  补 cross-package-contract 至 3/3 host 行）;spec-name 提取单源 control-plane
+  plugin-spec.extractSpecName（desktop facade + gateway plugins-tasks + ssh-apply-rows
+  守卫变体共同消费）;凭据/设置/journal 四装载点的 preserve/corrupt、unbound-legacy 与
+  固定 `.tmp` 清扫合并 store-file-hygiene.ts（文案逐字模板化保持,ssh/gateway 双 store
+  核对逐句等价）;free-port 单探针内核（bind+close 事件序）+ findFreeEphemeralPort
+  （transport-manager 原 allocateLocalPort 等价迁移）;cp loopback.ts 分类叶——api.ts
+  CORS/Host 栅与 instance-proxy 传输门（精确成员集不变）与 keepalive 判定（127/8 与
+  IPv4-mapped 语义归叶）三处合一;gateway resolveDshCliEntry 单源（dsh-path.ts,
+  isDshWorkspace/plugins-tasks 共引）、**html-inject 64KiB 双常量消亡**——gateway
+  改引 cp MAX_HTML_INJECTION_BYTES,原 B-6e 文本锁步测试改写为共享值钉;wire C≡D 的
+  503/fold 分类器收编 sidebar shared wire-error.ts（A/B/F 策略层留本地,P4-3 纪律）;
+  settings/update-store 孪生 hydration 骨架抽 bridge-hydration.ts（config 参数化
+  onPush/onQuery/slowReProbe,零模块级可变态;settings 慢链/乐观覆盖与 update
+  单飞规则逐点保持）。
+- **stage-2**：gateway HOST_PACKAGE_PROBE_DOMAINS 加载期钉 dsh-runtime
+  HOST_DOMAIN_PROBE_NAMES（集合相等 fail-fast,design 24 §7 C——typo/单边域加载即
+  失败,替代「文档登记而非代码围堵」）;cross-package-contract chamber 金样覆盖 3 host
+  行;instance-id grammar 三镜像位（transport-provider/transport-source/open-in
+  capabilities）互注;dual-host 语义下沉（activation facts/startup-verdict 映射/
+  restart 矩阵/apply-now preflight/identity-probe 腿）均需新 dsh-runtime 公开导出
+  （dist 锁）或行为裁定 → **延后**,4 个分歧位以 ruling 注释登记在代码面
+  （main.ts readActivationFacts / main.ts RUNTIME_RESTART 拒绝织 vs core allowedActions
+  / runtime-probes identity 腿 vs dsh-client 探针;apply-now 整门合并不做结论已见 P3-3c）。
+- **trim（da01fa3）**：净 -52 行/11 文件——HTML_INJECT_MAX_BYTES 与
+  isLoopbackUpstreamBaseUrl 兼容再导出删除（测试直引单源）、import 合并、ruling 注释
+  压缩为事实+延后理由。
+- 保留（经核实,需裁定/登记）:private-fs vs private-file 孪生（design 18 §9.1）、
+  carrier A/E wholesale 合并（P4-3 前置清单）、dead-but-documented leftovers。
+- 验证（合并后本树全量执行）:root typecheck 0;typecheck:runtime/gateway/connections/
+  sidebar/settings-bridge/open-in 0;test:runtime（27 文件）/test:desktop（35 文件,
+  852+）/test:gateway/test:control-plane/test:sidebar/test:settings-bridge/
+  test:connections/test:open-in 全绿;verify:i18n consistent。与 plugin-from-file
+  （54fc9b7）同基底合并无冲突（main.ts/plugin-sync.ts 自动合并区逐段复核）。
