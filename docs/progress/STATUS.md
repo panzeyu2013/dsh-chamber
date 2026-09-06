@@ -6,6 +6,82 @@
 
 ## 未完成 / 待执行
 
+> **2026-09 修复轮（v0.2.2 之后三合并 review 遗留全量闭合，临时驻留；发布
+> 收口时并入 CHANGELOG 后移除）**：design 24 / design 08 §11.8 / design 11
+> 三路评审遗留的代码与文档修复已全部落地（未提交态，随修复轮 commit 合入；
+> 处置登记见 design 24 §16、design 11 §9「2026-09 修复轮第二波」、design 08
+> §11.8 配套注）：
+> - **archive-cleanup（design 24）**：purge 树中成员失败中止语义——首例树内
+>   失败（删除瞬间 running/storage/事件发射）即中止本树剩余删除，根与祖先
+>   保持 archived 供重跑收敛（原先继续删祖先会把根当孤儿清出、幸存成员永久
+>   泄漏）；死代码 per-member 预检移除；binding header 字段级 loud 校验
+>   （防 vendor 字段漂移静默清空级联）；archive-set/容量/预览计数注释对齐；
+>   >1000 错误截断测试。验证：core 17→20、binding 10→15、typecheck 绿、
+>   提交态 dist 已重建。
+> - **git-worktree（design 08 §11.8）**：「缺失行不得被文件系统探针触碰」
+>   强制化——未注册删除在锁内按 missing 行即时降级残留记录清理（原为下次
+>   重试才收敛）；注册重放/提交前复查对 missing 行免 dirty/submodule 探针
+>   （fake 现建模真实 spawn-ENOENT，新增 3 例且修复前必红）。验证：
+>   test:host-git 95→98。
+> - **desktop updater（design 11 2026-12）**：「重启并安装」失败显式化——
+>   真实 electron-updater 6.8.9 同步失败形态（dispatchError+return false，
+>   非 throw）建模；arm 后异步失败/无事件 stall 看门狗（60s 可注入）均保持
+>   phase downloaded 并经一次性 `restartFailureText` 携带，UI 复位 busy、
+>   原位重试、不再误标「下载失败」；busy 在途行与失败行 zh/en 文案；缓存
+>   清理文档化整目录删除安全性（feed 永不发布 blockmap → update.zip 无差分
+>   基准作用，含潜在耦合注记）；resolve 结果非绝对路径拒绝、命名契约注记。
+>   验证：updater.test 55→61、ipc-surface-mirror 23、desktop/settings-bridge
+>   全绿（红绿互锁证明 restartFailureText 形状镜像完整）。
+> - **接线/客户端（design 24）**：客户端畸形嵌套域载体 fail-loud（不再静默
+>   折 0/空结果，与宿主探针/git 客户端一致）；404 判别体有界读取（4 KiB）；
+>   SidebarRoot 卸载守卫 + 断连双确认窗口注记（design 24 §8 已补接受句）；
+>   gateway `syncedHostDomainProbeNames` 未知包 fail-loud + 4 直测（空/1-of-3/
+>   2-of-3/全量/幽灵缓存）；死代码 `hasSyncedHostSeed` 删除；host-graph-seed/
+>   activation-gate 注释与 JSDoc 对齐（unknown throw 语义、探针枚举）；
+>   plugin-inventory-text 第三包归类断言；desktop 三包 seed/sync 夹具与打包
+>   行集测试（plugin-sync 97、gateway-provider 66、build-host-graph-package
+>   1/1 新脚本）。验证：gateway 全套 ×2、control-plane、desktop、sidebar
+>   （instance-api 9→11）、connections、runtime 全绿；根 typecheck、
+>   typecheck:sidebar/runtime/host-archive-cleanup、verify:i18n、
+>   build:preload、build:renderer 全绿。
+> - **台账/文档收口**：todo README 行 5、24 号执行台账前文（M0–M3 已完成
+>   并合入、M4 待验；§0/§2/§3–§5/§8 状态单元格与核对表按执行态收口）、
+>   激活探针旧名 `archiveCleanup/preview` 勘误为 `probe`、design 05 §6 标题
+>   宿主包 2→3、design 24 §7 A/§12/§6 step-4/§3 注记勘误、§16 处置登记。
+> - **M4 实机 E2E 仍待验**（真实 dsh 实例 preview/purge 全链、gateway/远程
+>   形态、打包态 quitAndInstall 端到端与打包态缓存清理——均需打包版/真机，
+>   见 design 24 §16 / design 11 §9 剩余验证项）。
+> **2026-09 修复轮第二波（回扫评审闭合，临时驻留；发布收口时并入
+> CHANGELOG 后移除）**：三路只读回扫（desktop updater 复原性 / 宿主包 /
+> wiring-文档一致性）+ 修复，零新 Blocker/Major；处置登记见 design 11 §9
+> 「2026-09 修复轮第二波」与 design 24 §16 补记：
+> - **updater（design 11）**：迟到 'error' 事件（flight 已释放后——mac 原生
+>   staging error 永久重发、或 watchdog 已触发后）在 phase downloaded 一律
+>   走 restart 失败通道（不再把 phase 打回 error 误标「下载失败」、不抹掉
+>   失败文本）；win32 watchdog stall 后拒绝进程内重试（真实 6.8.9
+>   BaseUpdater latch 在无 dispatch 下返回 false——旧 arming proof 会把
+>   latch 拒绝误读为 armed 且二次重试会重复拉起 NSIS 安装器），改以诚实
+>   提示请用户退出应用完成安装；`probeMacSignature` 测试 seam（打包 darwin
+>   路径首次可测）；UpdateSection busy 动作判别（busyKind，下载 busy 帧不再
+>   误显「正在重启并安装」）；ipc-surface-mirror 签名守卫锁可选标记
+>   （23→24）；update-store 恢复规则直测 +4（此前零测试）。验证：
+>   updater.test 61→66、settings-bridge 12 文件全绿、desktop 全套绿、根
+>   typecheck 绿。
+> - **注释/文案勘误（回扫 R3 A1–A7 等）**：gateway index.ts/plugins.ts
+>   头注「两包 + hostDomains 二元」→ 三包 + 按域派生；host-graph-seed
+>   probeDomains 注记修正（域值位于两处 seed 注册调用点，非 INSERT 常量）；
+>   打包行 label 注记（非 loader insert id）；design 21 §2.3/§2.4 三包勘误
+>   + §2.4 悬空 `hasSyncedHostSeed` 机制句改写；design 24 §7 C M2 已落地
+>   标记；design 08 §11.8 修复轮配套注（缺失行探针门 + git 2.50 基线）；
+>   修复轮日期标签统一 2026-09；git-worktree 两处 reclassify 锁竞态注释；
+>   archive-cleanup emit 契约注（实现必须包 ArchiveCleanupError + 双重呈现
+>   语义）；ui-git missing 行确认文案补「目录已恢复 → 普通删除」分支（zh/en）。
+> - **验证（2026-09 回扫后实跑）**：desktop/settings-bridge/sidebar/
+>   connections/gateway/control-plane/runtime/host-git（98）/archive-cleanup
+>   （core 20 + binding 15）/git 客户端全绿；根 typecheck、verify:i18n、
+>   build:preload、build:renderer 全绿；host 包 dist 注释级改动重建零 diff。
+> - **M4 实机 E2E 仍待验**（不变）。
+
 > **2026-09 dsh 基线对齐记录（0.1.2-rc.1，临时驻留；发布收口时并入 CHANGELOG 后移除）**：
 > 源码线 pin → dsh-v0.1.2-rc.1（a66e4702，`update-vendor.mjs` 原子升级，tag 与远程一致；
 > 锁文件重生成后 frozen 稳定、零 diff——本轮上游相对 alpha.5 **零代码改动**：全仓 252 个

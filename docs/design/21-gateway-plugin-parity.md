@@ -72,15 +72,21 @@ remove 先于 add、可 defer 重启；write-file 上限 50 MiB；spec/name 白�
 （spec=null，list/add）；gateway/http 直连 → PluginInventoryView（**2026-12 audit 勘误：非只读**——已含已安装
 行/移除/撤销/restart 面板/tasks 投影/sync 状态）。PluginSyncModal/PluginAddView、plugin-diff.ts 纯函数族
 （missing/update/extra/materialize/unsyncable/consistent——**无 scope 逻辑**）、plugin-inventory-text/plugin-diagnostic
-纯投影（thirdPartyEntries 过滤 @deepseek-ai/* + chamber 两包，仅用于 Loader 已加载事实层）。测试 = connections 纯模块文件，**无组件级测试**。
+纯投影（thirdPartyEntries 过滤 @deepseek-ai/* + chamber 三包——2026-12 design 24 起含 archive-cleanup，仅用于 Loader 已加载事实层）。测试 = connections 纯模块文件，**无组件级测试**。
 （历史基线；已由 PluginDialog 收敛——见 §6.6 落地状态，2026-12）
 
 ### 2.4 chamber 宿主包同步与 seed【已实现】
+> 2026-09 勘误（design 24 第三宿主包 + 修复轮后）：本段机制描述已按现状更新
+> （白名单三包、探针期望按域派生）；下文其余「两包」表述为当时基线历史行，
+> 保留不改。
 桌面 ready 自动 `syncGatewayChamberPlugins`（gateway-provider.ts:1408+；main.ts:2152-2182 装配）；
-gateway `PUT/GET /chamber/plugins` 白名单两包缓存（plugins.ts:38-41 白名单 + :43-45 大小上限；0700/0600/原子
+gateway `PUT/GET /chamber/plugins` 白名单三包缓存（2026-12 design 24 加入
+`dsh-host-archive-cleanup`；plugins.ts:38-41 白名单 + :43-45 大小上限；0700/0600/原子
 no-follow；上传读体 8 MiB 上限在 routes.ts readUploadJsonBody:57-109/:62，非 plugins.ts）；
 seed = extraneous + patch overlay（不进 package.json，control-plane/index.ts:393-398），每次 spawn（含健康自动重启，
-local-connection.ts:599-613）前 seed thunk 重求值自愈（02 §2.6）；激活探针 shape gate（hasSyncedHostSeed）；
+local-connection.ts:599-613）前 seed thunk 重求值自愈（02 §2.6）；激活探针期望集按实际同步包
+逐包派生（`syncedHostDomainProbeNames` → `activationProbeNamesForDomains`；2026-09 修复轮
+已删除二元 `hasSyncedHostSeed` gate——空缓存 = 基础缩减集，部分同步 = 已挂载域）；
 移动端 `dsh-chamber-client-ui-mobile` = 唯一随 gateway 发行物打包 seed 的 chamber 客户端插件（17 §3/§10）。
 注：17 §3:119 的 dsh(http 直连)“远程 seed（同左）”行与代码不符（seed 门控 `kind==='dsh' && transport==='ssh'`，
 main.ts:2064/2364/2445）——既有文档瑕疵，§8 列入勘误。

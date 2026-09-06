@@ -418,7 +418,7 @@ export const chamberBridge: {
   ui-primitives（Button/Modal/Tooltip/Input/Pill/图标）。
 - 实例默认仍按注册表自动连接、本地自动启动；本页提供显式管理与诊断入口。
 
-## 6. 源码复用与构建链（拷贝补丁包 2 个 + 自研客户端插件 6 个 + 宿主包 2 个）
+## 6. 源码复用与构建链（拷贝补丁包 2 个 + 自研客户端插件 6 个 + 宿主包 3 个）
 
 - pnpm + `vendor/harness-packages` 符号链接（外部 dsh 源码，**永不修改**）；
   要修改的包必须拷入本仓 `packages/`。

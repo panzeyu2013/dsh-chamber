@@ -7,22 +7,22 @@
 > `docs/progress/todo/12-todo-archived-sessions.md`。
 >
 > 状态：**M0 已收口（2026-12 用户拍板：跳过人工评审，直接进入执行；
-> 决策点 D1–D7 全部按推荐值生效）**；M1 执行中。vendor 前置核对
-> **阻塞中**：本 worktree 的 vendor/harness-packages 子模块未物化（缺失），
-> 核对需先由仓库 owner 物化 submodule（`git submodule` + 网络；仓库纪律：
-> 不自行执行 git/网络命令）。执行环境限制：本 worktree 无 node_modules/
-> vendor（pnpm 安装与依赖 vendor 的构建/类型检查不可运行；纯 Node 逻辑可用
-> node v24 类型剥离补充验证）。
+> 决策点 D1–D7 全部按推荐值生效）→ M1/M2/M3 已完成并合入 main**：合并
+> 989534a = 启用批次 3a5bbcf + 修复轮 8429fee（合入修订轮 0 Blocker——
+> 执行证据见 §10–§11 与 design 24 §15）。**M4（实机 E2E / CHANGELOG /
+> 收口）待验**；2026-09 修复轮闭合评审遗留（见 design 24 §16 与 STATUS）。
+> 物化/安装前的执行环境限制与阻塞登记保留于 §8（历史记录），已随 §10
+> 解除。
 
 ## 0. 阶段总览
 
 | 阶段 | 内容 | 准出门禁 | 状态 |
 |---|---|---|---|
-| M0 | 例外动议评审 + vendor 前置核对 | 评审记录落 STATUS；AGENTS/01 随批准即改；核对表 8 项填完并决定 §4 a/b | **已收口**（用户跳过人工评审，D1–D7 生效；AGENTS/01 已改；vendor 核对阻塞） |
-| M1 | 新宿主包 + control-plane seed/probe 接线 + runtime-probes 第三域执行腿（本地形态） | test:host-archive-cleanup / test:control-plane / test:runtime / dist 锁步绿；design 05 §6/02/18 §3.4/09/13/16/17 同步 | **代码落地**；验证与收尾受环境阻塞（§8） |
-| M2 | 探针期望集派生改造 + 分发面（desktop/gateway/门禁） | test:desktop / test:gateway / ci-release 腿绿；18 §3.4 + STATUS 头部探针段同步 | 未开始 |
-| M3 | 客户端 instance-api 增量 + 侧边栏 UI | test:sidebar / typecheck:sidebar / build:renderer 绿；05 §2.2/§3 同步 | 未开始 |
-| M4 | 实机 E2E + 收口（CHANGELOG/todo12/可选增强登记） | §9 实机矩阵；文档收口 | 未开始 |
+| M0 | 例外动议评审 + vendor 前置核对 | 评审记录落 STATUS；AGENTS/01 随批准即改；核对表 8 项填完并决定 §4 a/b | **已收口**（用户跳过人工评审，D1–D7 生效；AGENTS/01 已改；vendor 核对已完成：物化 a66e4702 = dsh-v0.1.2-rc.1，§2 表 8 项填完、§4 a/b 决定 = 分支 b——证据见 §10 与 design 24 §14） |
+| M1 | 新宿主包 + control-plane seed/probe 接线 + runtime-probes 第三域执行腿（本地形态） | test:host-archive-cleanup / test:control-plane / test:runtime / dist 锁步绿；design 05 §6/02/18 §3.4/09/13/16/17 同步 | **已完成**（代码 + toolchain 门禁绿 + 提交态 dist 重建：§10–§11；M1 文档同步见 §9 轮次 2；§8 所列收尾阻塞已随 §10 解除） |
+| M2 | 探针期望集派生改造 + 分发面（desktop/gateway/门禁） | test:desktop / test:gateway / ci-release 腿绿；18 §3.4 + STATUS 头部探针段同步 | **已完成**（§10 门禁实跑：desktop 833/833、gateway 555、runtime 全链；分发面与探针派生见 §9 轮次 3/4；§9.3 未单独改动——其探针文字经 design 18 §3.4 生效，见 design 24 §12） |
+| M3 | 客户端 instance-api 增量 + 侧边栏 UI | test:sidebar / typecheck:sidebar / build:renderer 绿；05 §2.2/§3 同步 | **已完成**（§10/§11：sidebar 240 ✅、instance-api 9 测；§9 轮次 9 build:renderer 成功——M3 文档同步 05 §2.2/§2.3/§3 见 §9 轮次 5） |
+| M4 | 实机 E2E + 收口（CHANGELOG/todo12/可选增强登记） | §9 实机矩阵；文档收口 | **待验**（实机 E2E 矩阵需打包态/真机环境，本环境不可跑——§10/§11；CHANGELOG/todo12/本台账结项未执行，见 §6 与 design 24 头部） |
 
 ## 1. M0 评审包
 
@@ -56,25 +56,28 @@
 - [x] AGENTS.md：宿主包清单加入新包 + 有界例外句修订（4 处，先于任何实现
       commit）；
 - [x] design 01 §3 地图行 12 改为指 design 24 + 新增行 24；
-- [ ] vendor/harness-packages 物化（仓库 owner 执行）→ §2 核对表 8 项填完、
-      §4 a/b 决定落地为 design 24 实现注记（**阻塞中**，见头部状态）。
+- [x] vendor/harness-packages 物化（仓库 owner 执行，a66e4702 = dsh-v0.1.2-rc.1）
+      → §2 核对表 8 项填完、§4 a/b 决定落地为 design 24 §14 实现注记
+      （分支 b；证据见 §10–§11，原“**阻塞中**”状态已解除）。
 
 ## 2. vendor 前置核对记录表（design 24 §10 八项）
 
-> 就绪列：子模块缺失时标「阻塞」；chamber 侧可离线预核的旁证已先行填入
-> （file:line 出处于 design 24 v2 与评审记录）。子模块就绪后逐项填
-> 证据（vendor file:line）→ 结论 → 对 §4 的影响。
+> 就绪列：子模块缺失时标「阻塞」（物化前如实）；chamber 侧可离线预核的旁证
+> 已先行填入（file:line 出处于 design 24 v2 与评审记录）。2026-12 子模块物化
+> （a66e4702 = dsh-v0.1.2-rc.1，§10）后 8 项已逐项核对完成：vendor 证据列
+> 全部「已核对」、逐项结论见 design 24 §14（项 1–8）与本表结论列；对 §4 的
+> 决定 = 分支 b（§10）。
 
 | # | 核对项 | 离线旁证（chamber 侧） | vendor 证据 | 结论/决定 |
 |---|---|---|---|---|
-| 1 | workspaceRegistry ctx 服务面（list/archived 集合读写/sessionIds 账目/持久化 setState/archiveSession） | git 宿主包 structural 注入 `['workspaceRegistry','agents']`（dsh-chamber-host-git-worktree/src/index.ts L44–59/L63） | 阻塞 | |
-| 2 | 归档顶层行可枚举性（含 parentSessionId 链/header 索引可见性） | chamber 侧仅 follow baseline 带 archivedSessionIds、无 unary 读面（sidebar shared/instance-api.ts L377–384 注记）；todo12 §1 | 阻塞 | |
-| 3 | 官方进程内可复用删除例程（含 workspace.delete 对成员会话/目录的处置） | todo12 §5.2「header 索引重建即剔除已删 id」；git remove saga 以 workspace.delete 收尾 | 阻塞 | 决定 §4 a/b |
-| 4 | 事件精确名与发射面：host/session-removed、host/archived-sessions-changed | chamber 代码零引用（仅 docs）；todo12 §5.2 命名 | 阻塞 | |
-| 5 | agents 覆盖面（subagent 起源行？）+ 归档行 running 位事实来源 | git 宿主包注释：agents 守卫 cwd 覆盖 ungrouped/subagents（src/index.ts L79–84）——不足以定论 | 阻塞 | |
-| 6 | 零参 Remote envelope 要求；unary 断连后宿主侧执行是否继续 | 零参先例：clientGraph/graph 客户端 `{args:{}}`（renderer src/host-graph.ts）；git-api snapshot；宿主侧参数名约束只影响带参方法 | 阻塞（断连语义项） | |
-| 7 | cordis patch insert 三行共存无冲突 | cordis-inserts.ts 冲突规则 + control-plane/cordis-inserts.test.ts | 阻塞 | |
-| 8 | 会话存储布局（format.ts/sessions-root/header 索引）与原子写/持久化原语 | todo12 §5.2 `<sessions-root>/<project>/<id>/` | 阻塞 | 仅 b 分支需要 |
+| 1 | workspaceRegistry ctx 服务面（list/archived 集合读写/sessionIds 账目/持久化 setState/archiveSession） | git 宿主包 structural 注入 `['workspaceRegistry','agents']`（dsh-chamber-host-git-worktree/src/index.ts L44–59/L63） | 已核对（a66e4702） | 结论：`list()`/`archivedSessionIds`/`archiveSession`（仅增向）可用；成员 `sessionIds` 为 header 索引派生 getter（内容删后账目自愈）；归档集成员移除 = `enqueueOperation` 链内 `setState` 单写 seam（design 24 §14-1/-4） |
+| 2 | 归档顶层行可枚举性（含 parentSessionId 链/header 索引可见性） | chamber 侧仅 follow baseline 带 archivedSessionIds、无 unary 读面（sidebar shared/instance-api.ts L377–384 注记）；todo12 §1 | 已核对（a66e4702） | 结论：`sessionQuery.listSessions()`（live 优先 + 持久化合并，含 header.origin/parentSession/cwd）与官方 session/list 投影同源——归档行（含链）可枚举，§4 step 2 形态成立（design 24 §14-2） |
+| 3 | 官方进程内可复用删除例程（含 workspace.delete 对成员会话/目录的处置） | todo12 §5.2「header 索引重建即剔除已删 id」；git remove saga 以 workspace.delete 收尾 | 已核对（a66e4702） | 决定：**分支 b**——官方无会话内容删除例程（persistence 抽象无 remove）；`sessionPersistence.locate(header)` 给官方绝对产物路径 + 产物删除、空目录 rmdir（余留 fail-closed）；运行保护 = agents ∪ live sessions（design 24 §14-3） |
+| 4 | 事件精确名与发射面：host/session-removed、host/archived-sessions-changed | chamber 代码零引用（仅 docs）；todo12 §5.2 命名 | 已核对（a66e4702） | 结论：pinned 树无宿主域可用的公开事件面 → 两事件发射 = **文档化 no-op**（§4 step 6 / AGENTS「no-op」表述已对齐；design 24 §14-5） |
+| 5 | agents 覆盖面（subagent 起源行？）+ 归档行 running 位事实来源 | git 宿主包注释：agents 守卫 cwd 覆盖 ungrouped/subagents（src/index.ts L79–84）——不足以定论 | 已核对（a66e4702） | 结论：运行保护 = `agents.list()` ∪ live `sessions.list()`（binding `liveSessionIds`，覆盖 subagent 起源行）；durable running 位经 `headerToState` 恒 false、不构成独立事实源——§4 step 3 以 live 守卫实现（design 24 §14-3） |
+| 6 | 零参 Remote envelope 要求；unary 断连后宿主侧执行是否继续 | 零参先例：clientGraph/graph 客户端 `{args:{}}`（renderer src/host-graph.ts）；git-api snapshot；宿主侧参数名约束只影响带参方法 | 已核对（a66e4702，含断连语义项） | 结论：零参 `{args:{}}` envelope 与 404/域缺失语义沿用 §3/§5（host-graph/git-api 实证，design 24 §14-6）；客户端 404 判别与超时语义测试见 §11（instance-api 9 测） |
+| 7 | cordis patch insert 三行共存无冲突 | cordis-inserts.ts 冲突规则 + control-plane/cordis-inserts.test.ts | 已核对（a66e4702） | 结论：三 insert 行共存无冲突——cordis-inserts 断言批次已绿（§10 门禁；design 24 §14-7） |
+| 8 | 会话存储布局（format.ts/sessions-root/header 索引）与原子写/持久化原语 | todo12 §5.2 `<sessions-root>/<project>/<id>/` | 已核对（a66e4702） | 仅 b 分支需要（b 已落地）：布局知识零复制——locate/format 官方导出（design 24 §14-8） |
 
 **决策门**（design 24 §10）：#3 决定 a/b；若 a/b 均不可行 → 方案冻结回退
 todo12 C，台账标记冻结并回报。
@@ -82,25 +85,38 @@ todo12 C，台账标记冻结并回报。
 ## 3. M1 宿主域（本地形态全链）
 
 任务：
-- [ ] 新包 `packages/dsh-host-archive-cleanup/`：src/index.ts（TypertRemoteService、
+- [x] 新包 `packages/dsh-host-archive-cleanup/`：src/index.ts（TypertRemoteService、
       `static inject=['workspaceRegistry','agents']`、零参 @Remote×2、domainResult）、
       src/core.ts（纯核心：候选集/级联/运行保护/children-first/复检/账目/事件——
       design 24 §4）、scripts/build.mjs（external @deepseek-ai/*）、test/core.test.ts
-      （纯 fixture）、提交态 dist；
-- [ ] control-plane：host-graph-seed.ts 常量 + index.ts seedEntries 第三行 +
+      （纯 fixture）、提交态 dist——**已执行**：src/index+binding+core、
+      scripts/build.mjs、test/core+binding、提交态 dist（§10 产物；core 17 +
+      binding 10 测全绿，§11/轮次 10）；
+- [x] control-plane：host-graph-seed.ts 常量 + index.ts seedEntries 第三行 +
       probeDomains + DEFAULT source dir + ControlPlaneOptions
       `hostArchiveCleanupPackageSourceDir`；host-graph-seed.test.ts /
-      cordis-inserts.test.ts 数组先红后绿；
-- [ ] 探针接线（与 seed 同 commit）：activation-gate.ts 常量（REQUIRED +
+      cordis-inserts.test.ts 数组先红后绿——**已执行**：control-plane
+      348/0/1 ✅、host-graph-seed 集成腿 ×8（§10/§11，seed 行 + 三处
+      probeDomains 元数据同步）；
+- [x] 探针接线（与 seed 同 commit）：activation-gate.ts 常量（REQUIRED +
       HOST_DOMAIN_PROBE_NAMES）+ **dsh-runtime 提交态 dist 重建** +
       dist-sync / cross-package-contract 锁步 + **runtime-probes 第三域执行
       腿与 accept 语义**（full-set 布尔形状下 7 条全跑——只加常量不加执行
       腿会 7 期望 vs 6 执行 → 'probe not wired' 回退）+ runtime-probes.test.ts
-      7 端点 fixture（布尔全量形状；按域派生 fixture 归 M2）；
-- [ ] 根 .gitignore 为 `packages/dsh-host-archive-cleanup/dist/` 加否定；
-- [ ] 文档：design 05 §6（宿主包 2→3）、design 02（loader id 表 / 宿主包
+      7 端点 fixture（布尔全量形状；按域派生 fixture 归 M2）——**已执行**：
+      activation-gate REQUIRED 七项 + `HOST_DOMAIN_PROBE_NAMES` 三域 +
+      runtime-probes 执行腿/accept + dsh-runtime 提交态 dist 重建（§10 全链
+      含 dist-sync；accept 与 fail-loud 断言 §11 C 轮；激活探针域名为
+      `archiveCleanup/probe`）；
+- [x] 根 .gitignore 为 `packages/dsh-host-archive-cleanup/dist/` 加否定——
+      **已执行**（3a5bbcf：根 .gitignore 新增第三包两行否定，现覆盖三 host
+      包 dist；见 design 24 §7 A）；
+- [x] 文档：design 05 §6（宿主包 2→3）、design 02（loader id 表 / 宿主包
       附着表）、**design 18 §3.4 域枚举文字（随常量同 commit；M2 仅补派生
-      契约段）**、09/13/16/17 枚举宿主包表述、STATUS.md。
+      契约段）**、09/13/16/17 枚举宿主包表述、STATUS.md——**已执行**：
+      05 §6（三 host 包 bullet + seed 段）、02、09/13/16/17、18 §3.4 域枚举
+      文字、STATUS 均随合入批次落地（§9 轮次 2/4；design 05 §6 现文见其
+      「宿主包 3 个」标题——2026-09 标题勘误）。
 
 门禁：`test:host-archive-cleanup`（新）`test:control-plane` `test:runtime`
 全绿、根 typecheck（新 typecheck:host-archive-cleanup）、`verify:i18n`
@@ -110,44 +126,63 @@ todo12 C，台账标记冻结并回报。
 ## 4. M2 探针契约 + 分发面
 
 任务：
-- [ ] 探针期望集派生改造（替代二元 hostDomains；seed 清单逐条 probeDomains
+- [x] 探针期望集派生改造（替代二元 hostDomains；seed 清单逐条 probeDomains
       为源；空缓存=空域集兼容现状）——activation-gate.ts / runtime-probes.ts /
       gateway runtime-manager（L936/1026/2374 语义）/ desktop 激活路径共用；
-      probe accept 语义（archiveCleanup/preview：ok:true 形态良好 = 在位；
-      ok:false = fail-closed）；
-- [ ] runtime-probes.test.ts 派生 fixture（2-of-3 / 空缓存 / 全量）先红后绿；
-- [ ] desktop：plugin-sync.ts 常量 + seedRemoteChamberHostPackages + main.ts
+      probe accept 语义（`archiveCleanup/preview`（2026-12 改名批次后为
+      `archiveCleanup/probe`）：ok:true 形态良好 = 在位；ok:false =
+      fail-closed）——**已执行**：§9 轮次 3（35/35：2-of-3 派生、空列表=
+      缩减集、未知域 fail-loud）与 §10 门禁；
+- [x] runtime-probes.test.ts 派生 fixture（2-of-3 / 空缓存 / 全量）先红后绿——
+      **已执行**：35/35（§9 轮次 3/§10，含未知域 fail-loud throw 断言 §11 C 轮）；
+- [x] desktop：plugin-sync.ts 常量 + seedRemoteChamberHostPackages + main.ts
       chamberHostPackageSeeds / localChamberHostPackageSources / 打包路径 +
-      build-host-graph-package.mjs 数组 + dist 内嵌；
-- [ ] 门禁面：根 package.json（build:host-packages 并入、typecheck/test 新别名）、
-      ci.yml / release.yml 逐包腿、release-preflight.mjs；
-- [ ] gateway：plugins.ts SYNCABLE_HOST_PACKAGES + index.ts extraSeedEntries 第三行
+      build-host-graph-package.mjs 数组 + dist 内嵌——**已执行**：§9 轮次 3
+      （plugin-sync ARCHIVE_CLEANUP 常量 + main.ts 三处 +
+      build-host-graph-package.mjs 第三包 dist/host-archive-cleanup-package）；
+      desktop 833/833 ✅（§10）；
+- [x] 门禁面：根 package.json（build:host-packages 并入、typecheck/test 新别名）、
+      ci.yml / release.yml 逐包腿、release-preflight.mjs——**已执行**：
+      §9 轮次 4（ci.yml ×3 / release.yml ×2 / release-preflight.mjs ×2 补
+      typecheck/test:host-archive-cleanup）+ §10 门禁实跑；
+- [x] gateway：plugins.ts SYNCABLE_HOST_PACKAGES + index.ts extraSeedEntries 第三行
       + 测试数组（feature-lifecycle / chamber-installed / runtime-routes 真探针
-      fixture 答第 7 端点 / plugin-spec-lockstep 自动覆盖）；
-- [ ] settings `plugin-inventory-text.ts`：classifyInventoryEntry/chamberKindOf
+      fixture 答第 7 端点 / plugin-spec-lockstep 自动覆盖）——**已执行**：
+      §9 轮次 3（SYNCABLE 第三行 + HOST_PACKAGE_PROBE_DOMAINS 映射 +
+      extraSeedEntries）+ §10（gateway 555 ✅；fixture 批次绿）；
+- [x] settings `plugin-inventory-text.ts`：classifyInventoryEntry/chamberKindOf
       归类常量第三包（§7 F——gateway Loader inventory 驱动的清单防 third-party
-      误标；常量级，非三态行）；
-- [ ] 文档：design 18 §3.4 派生契约修订段 + §9.3、STATUS 头部探针段（含挂账①
-      口径，M0 已先行补半句区分）。
+      误标；常量级，非三态行）——**已执行**：§9 轮次 3（kind
+      `chamber-archive-cleanup`）；connections 118 ✅（§10）；
+- [x] 文档：design 18 §3.4 派生契约修订段（§9.3 未单独改动——其文字经 §3.4
+      生效，见 design 24 §12 勘误）、STATUS 头部探针段（含挂账①口径，M0 已
+      先行补半句区分）——**已执行**：§9 轮次 4（design 18 §3.4 派生契约段 +
+      STATUS 头部探针段 7 项三域）。
 
 门禁：`test:desktop` / `test:gateway` / `test:runtime` 全绿 + 类型检查全绿。
 
 ## 5. M3 客户端 + UI
 
 任务：
-- [ ] instance-api.ts：call() 可选 `timeoutMs` + `notFoundAsDomainMissing` 开关 +
+- [x] instance-api.ts：call() 可选 `timeoutMs` + `notFoundAsDomainMissing` 开关 +
       `InstanceDomainMissingError`/`isInstanceDomainMissing` + 访问器
       archiveCleanup.preview/purge + wrapper（preview 默认 30s；purge
       `PURGE_CALL_TIMEOUT_MS = 5*60_000`）+ 超时/404 zh 硬编码文案；
-      传输层分类测试（global fetch stub 或可注入 seam，二选一）；
-- [ ] SidebarRoot.tsx：簇尾第 4 按钮（title+aria，三件套点击纪律）+ per-server
+      传输层分类测试（global fetch stub 或可注入 seam，二选一）——**已执行**：
+      §9 轮次 2 + §11（instance-api 9 测：404/503/双层域载体/504/超时诚实
+      文案/部分失败解码）；
+- [x] SidebarRoot.tsx：簇尾第 4 按钮（title+aria，三件套点击纪律）+ per-server
       单飞（purgeBusy）+ confirm 前复查 + header 下新错误/信息槽位（fold 门
-      之外、与搜索态无关；role=alert/status）+ key 可见性清理；注释清单维护；
-- [ ] locales：action.purgeArchived / confirm.purgeArchived（含跳过子句、约量
-      措辞）en/zh；
-- [ ] 文档：design 05 §2.2（交互表 + 例外注）、05 §3 与 **§2.3** 的两处同源
+      之外、与搜索态无关；role=alert/status）+ key 可见性清理；注释清单维护——
+      **已执行**：§9 轮次 2/10（实现见 SidebarRoot.tsx；pending-click 守卫
+      清单补 archive-cleanup）；build:renderer 成功（§9 轮次 9）；
+- [x] locales：action.purgeArchived / confirm.purgeArchived（含跳过子句、约量
+      措辞）en/zh——**已执行**：§9 轮次 2（zh/en 双语文案；typecheck:sidebar
+      satisfies 门禁绿）；
+- [x] 文档：design 05 §2.2（交互表 + 例外注）、05 §3 与 **§2.3** 的两处同源
       陈旧注记（requestRefresh/mounted 推送语义与 App.tsx 不符——§2.3
-      L131–133 与 §3 L216–217 同句重复，一并修正）。
+      L131–133 与 §3 L216–217 同句重复，一并修正）——**已执行**：§9 轮次 5
+      （05 §2.2 交互表 + 例外注；§2.3/§3 双通道语义勘误）。
 
 门禁：`test:sidebar` / `typecheck:sidebar` / `build:renderer` 绿；手动冒烟
 （hover 簇 4 图标宽度目检、Menu portal × confirm 叠放目检）登记 M4。
@@ -170,6 +205,10 @@ todo12 C，台账标记冻结并回报。
 
 ## 8. 环境限制与阻塞登记（如实）
 
+> 本节为 2026-12 物化/安装前（外部前置未解除）的如实登记；所列环境限制与
+> M1 收尾阻塞已随 §10（物化 a66e4702 + pnpm toolchain + dist 重建）与启用
+> 批次（§11 轮次 10）解除，保留作历史记录。
+
 **执行环境（本 worktree，2026-12）**：`node_modules` 未安装、
 `vendor/harness-checkout` 子模块空（`vendor/harness-packages` 不存在）→
 pnpm install / 依赖 vendor 的 typecheck / esbuild 构建（build:host-* 经
@@ -181,8 +220,9 @@ git/网络命令，物化与安装需仓库 owner。
   续跑、运行子树整棵跳过（含中途翻转）、逐项错误隔离、孤儿/幂等、容量
   门、domainResult 载体）；
 - dsh-runtime `test/runtime-probes.test.ts` + `activation-gate.test.ts`：
-  **32/32 通过**（含新增 archiveCleanup/preview accept 语义与
-  hostDomains=false 不调用新域断言）。仓库正式套件待 pnpm 环境。
+  **32/32 通过**（含新增 `archiveCleanup/probe` accept 语义与
+  hostDomains=false 不调用新域断言——激活探针域名为 2026-12 改名批次后的
+  `probe`，见 design 24 §7 C/§15）。仓库正式套件待 pnpm 环境。
 
 **M1 收尾阻塞项（按序）**：
 1. **host binding 依 §10 vendor 核对**：`src/index.ts` 的
@@ -256,8 +296,9 @@ AGENTS 验证清单 + 测试更新。补充验证：核心 15/15、runtime 探�
 **2026-12 · 轮次 4（M2 收尾生产面 + 文档同步 + 静态审查）**：
 - 根门禁腿：ci.yml ×3（typecheck ×2/test ×1）、release.yml ×2、
   release-preflight.mjs ×2 补 `typecheck/test:host-archive-cleanup`；
-- M2 文档同步：design 18 §3.4（探针枚举加 `archiveCleanup/preview` + accept
-  语义；形态化 bullet 改三域按 seed 派生（M2 修订）；缩减集表述改三域跳过）、
+- M2 文档同步：design 18 §3.4（探针枚举加 `archiveCleanup/probe` + accept
+  语义（改名批次前的 preview 名以 design 24 §15 记录为准）；形态化 bullet 改
+  三域按 seed 派生（M2 修订）；缩减集表述改三域跳过）、
   STATUS 头部探针段（7 项 + HOST_DOMAIN_PROBE_NAMES 三域 + 派生契约）；
 - 待 toolchain 批次的「先红后绿」fixture 文件清单（已枚举，不盲改）：
   gateway test ×4（chamber-installed/feature-lifecycle/plugin-spec-lockstep/
