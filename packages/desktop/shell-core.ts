@@ -75,14 +75,24 @@
  *    生命周期投影）/ audit / gatewaySessions / publishRegistryTransition（后
  *    三者宿主定义仍留 main 装配侧——publishRegistryTransition 的插件
  *    seed/journal 生命周期体与其 SSH_INSTANCES_CHANGED push 文本留 main）。
+ *  Responsibilities relocated from main.ts (W-10 S4 ssh-connection-state batch):
+ *  - D 组 7 个注册体：SSH_CONFIG_LIST / SSH_CONNECT / SSH_DISCONNECT /
+ *    SSH_STATUS / SSH_REVERIFY / SSH_LOGS / SSH_LOGS_CLEAR——按原 main.ts 顺序
+ *    追加在 C 组之后（installIpcHandlers ② 段）；CONFIG_LIST 经纯模块
+ *    ssh-config.ts 的 discoverSshConfigHosts（非秘密投影纪律注释随迁），其余
+ *    6 个注册体全走 ctx 注入的 transportManager 句柄（Pick 面 S4 扩
+ *    reverify / logs / clearLogs——connect/disconnect/status 为 C 组已有成员）。
+ *    status/logs 的非秘密投影形状不变（localPort/phase 等元数据；URL/密钥绝不
+ *    出主进程、绝不进载荷/日志——main.ts 原注释语义保留）。
  *
  * 中文说明：自 main.ts 机械搬运的 Electron-free 业务核心（零缝阶段，行为零
  * 变化）；W-10 S1 起 IPC 注册点与 A 组 info+settings 处理器迁入本文件
  * （installIpcHandlers 单点注册，Electron 围栏由 main 注入包装）；S2 追加 B 组
  * notify/badge/ready 6 注册体与渲染器投递状态机（send 叶统一
  * edges.rendererPush）；S3 追加 C 组 registry+凭据 7 注册体与读时投影链（凭据
- * write-only/绝不回读纪律随迁，代码注释保留）；HostEdges 其余边沿叶与双
- * flavor 属后续批。
+ * write-only/绝不回读纪律随迁，代码注释保留）；S4 追加 D 组 ssh 连接状态 7
+ * 注册体（CONFIG_LIST 经纯模块 ssh-config.ts；其余经 ctx transportManager
+ * ——非秘密投影纪律随迁）。HostEdges 其余边沿叶与双 flavor 属后续批。
  */
 
 import { readFileSync } from 'node:fs';
@@ -110,6 +120,7 @@ import {
   type TransportInstanceInput,
   type TransportInstanceSpec,
 } from './transport-provider.ts';
+import { discoverSshConfigHosts } from './ssh-config.ts';
 import { MAX_SSH_PASSWORD_CHARS, getSshPassword, setSshPassword, sshPasswordSupported, sshProvider } from './ssh-provider.ts';
 import {
   gatewayPasswordValidationError,
@@ -944,7 +955,8 @@ export function clearBadgeIntentForQuit(applyNativeClear: () => void): void {
 
 // ---------------------------------------------------------------------------
 // Shell IPC registration (design 25 §4.1 seam; W-10 S1 info+settings +
-// S2 notify/badge/ready + S3 registry/credentials batch).
+// S2 notify/badge/ready + S3 registry/credentials + S4 ssh-connection-state
+// batch).
 //
 // installIpcHandlers is the single shell-core IPC registration point: the
 // Electron main only assembles it (main.ts — trustedIpc fence injected at the
@@ -969,7 +981,11 @@ export function clearBadgeIntentForQuit(applyNativeClear: () => void): void {
 //     之后；全零 Electron：事务/canonicalize/凭据写入口为纯模块直接 import，
 //     装配依赖经 ctx——transportManager/audit/gatewaySessions/
 //     publishRegistryTransition，见 ShellAssemblyCtx 与「W-10 S3 registry
-//     投影链」段注释）；
+//     投影链」段注释）+ D 组 7 个注册体（S4 批：SSH_CONFIG_LIST / SSH_CONNECT /
+//     SSH_DISCONNECT / SSH_STATUS / SSH_REVERIFY / SSH_LOGS / SSH_LOGS_CLEAR
+//     ——按原 main.ts 顺序追加在 C 组之后；CONFIG_LIST 经纯模块 ssh-config.ts
+//     import，其余 6 个经 ctx transportManager——Pick 扩 reverify/logs/
+//     clearLogs，见 ShellAssemblyCtx）；
 //   ③ 自举（占位——控制面 ready 后的启动/恢复 push 与余下 drain 挂点在 W-10
 //      后续批迁入，见 macos-swift-v1.md §四批 2）。
 // ---------------------------------------------------------------------------
@@ -986,7 +1002,9 @@ export interface IpcRegistrar {
  *  reconcileBadgeCount——意图 holder 与裁决随 BADGE_COUNT 批迁入 core 后
  *  SETTINGS_SET 直接调 core 内 reconcile，见 installIpcHandlers ②）；S3
  *  （registry+凭据批）增 transportManager / audit / gatewaySessions /
- *  publishRegistryTransition 四字段（宿主生命周期权威仍留 main，见字段注释）。
+ *  publishRegistryTransition 四字段（宿主生命周期权威仍留 main，见字段注释）；
+ *  S4（ssh 连接状态批）无新字段——D 组注册体复用 transportManager（Pick 扩
+ *  reverify/logs/clearLogs）与纯模块 import，见字段注释。
  *  chamber
  *  settings 的内存 holder 仍归装配侧（main.ts 尚余 20+ 处直读点，随各自批迁入时
  *  holder 一并搬家）；core 侧一律经 settingsIO 读写，权威单一、行为与搬迁前一
@@ -1046,14 +1064,25 @@ export interface ShellAssemblyCtx {
   // 读写/投影句柄（transportManager）为现实例注入；audit / gatewaySessions /
   // publishRegistryTransition 为宿主叶或宿主生命周期对象（定义仍留 main
   // 装配侧——publishRegistryTransition 的插件 seed/journal 撤销与
-  // SSH_INSTANCES_CHANGED push 文本归装配侧，随后续批再迁）。
-  /** registry 读写 + transport 状态/生命周期投影句柄（C 组注册体直接读写面；
-   *  装配侧注入 transport-manager 现实例——纯模块按引用共享，语义与搬迁前
-   *  main.ts 的 sm 局部常量一致；Pick 收窄到本批实际调用的方法面，体内以
-   *  sm 名解构以保持注册体文本逐字）。 */
+  // SSH_INSTANCES_CHANGED push 文本归装配侧，随后续批再迁）。W-10 S4（ssh
+  // 连接状态批）不新增字段：D 组 7 注册体复用 transportManager（Pick 扩
+  // reverify/logs/clearLogs，见字段注释）+ 纯模块 ssh-config.ts import。
+  /** registry 读写 + transport 状态/生命周期投影句柄（C/D 组注册体直接读写
+   *  面；装配侧注入 transport-manager 现实例——纯模块按引用共享，语义与搬迁
+   *  前 main.ts 的 sm 局部常量一致；Pick 收窄到已迁批实际调用的方法面
+   *  （W-10 S4 扩 reverify/logs/clearLogs——D 组状态/日志/重验证通道），体内
+   *  以 sm 名解构以保持注册体文本逐字）。 */
   transportManager: Pick<
     TransportManager,
-    'listInstances' | 'saveInstances' | 'status' | 'readyUrl' | 'disconnect' | 'connect'
+    | 'listInstances'
+    | 'saveInstances'
+    | 'status'
+    | 'readyUrl'
+    | 'disconnect'
+    | 'connect'
+    | 'reverify'
+    | 'logs'
+    | 'clearLogs'
   >
   /** S24 非秘密审计叶（原 main.ts 的 audit = appendAuditEvent({ file:
    *  auditLogPath })——装配侧绑定 <userData> 路径注入；JSONL append 只记非
@@ -1077,9 +1106,10 @@ export interface ShellAssemblyCtx {
   ): ProjectedRegistryInstance[]
 }
 
-/** 装配 shell IPC 面（W-10 S1 A 组 + S2 B 组 + S3 C 组注册体与随迁辅助；各组
- *  注册顺序 = 原 main.ts 顺序）。edges 参数以 Pick 收窄到本批实际调用的成员
- *  （createElectronEdges 返回同形超集）；后续批实现新成员时同步扩宽两侧。
+/** 装配 shell IPC 面（W-10 S1 A 组 + S2 B 组 + S3 C 组 + S4 D 组注册体与随迁
+ *  辅助；各组注册顺序 = 原 main.ts 顺序）。edges 参数以 Pick 收窄到本批实际
+ *  调用的成员（createElectronEdges 返回同形超集）；后续批实现新成员时同步
+ *  扩宽两侧。
  *  调用点纪律：whenReady 内、createMainWindow 之前（窗口加载前注册完毕）——
  *  本函数同时完成渲染器投递状态机的 edges/quit 快照（单装配不变式，见上段）。 */
 export function installIpcHandlers(deps: {
@@ -1117,8 +1147,10 @@ export function installIpcHandlers(deps: {
     setLoginItem,
     confirmRegistryOriginSwitch,
     // W-10 S3（registry+凭据批）：transportManager → sm（与搬迁前 main.ts 的
-    // sm 局部常量同名，C 组注册体文本逐字保留）；audit / gatewaySessions /
-    // publishRegistryTransition 为装配侧宿主叶（定义在 main，经 ctx 注入）。
+    // sm 局部常量同名，C 组注册体文本逐字保留）；W-10 S4 的 D 组（ssh 连接
+    // 状态 7 注册体）同用该句柄（Pick 扩 reverify/logs/clearLogs）。audit /
+    // gatewaySessions / publishRegistryTransition 为装配侧宿主叶（定义在 main，
+    // 经 ctx 注入）。
     transportManager: sm,
     audit,
     gatewaySessions,
@@ -1819,6 +1851,54 @@ export function installIpcHandlers(deps: {
     } catch (error) {
       return { error: describeUnknownError(error) };
     }
+  });
+
+  // —— D 组（S4 批；W-10 S4 施工图第 1 项）——
+  // ssh 连接状态 7 注册体（按原 main.ts 顺序紧接 C 组追加；注册体自 main.ts
+  // 逐字迁入，全零 Electron）。trustedIpc 围栏由装配侧在 registrar 注入点
+  // 包装。CONFIG_LIST：~/.ssh/config 非秘密投影（alias/hostName/user/port——
+  // keys/proxies/credentials 绝不离开主进程），经纯模块 ssh-config.ts 的
+  // discoverSshConfigHosts 直接 import（原注释随迁）；CONNECT / DISCONNECT /
+  // STATUS / REVERIFY / LOGS / LOGS_CLEAR 全走 ctx 注入的 transportManager
+  // 句柄（sm；Pick 面扩 reverify/logs/clearLogs，见 ShellAssemblyCtx）。
+  // status/logs 的非秘密投影纪律保持（localPort/phase 等元数据可读；URL/密钥
+  // 绝不进投影/载荷/日志——main.ts 原注释语义随迁保留）。
+  // ~/.ssh/config discovery (design 05 §5): non-secret host projections only
+  // (alias/hostName/user/port) — keys/proxies/credentials never leave the
+  // main process.
+  deps.ipc.handle(IPC_CHANNELS.SSH_CONFIG_LIST, () => discoverSshConfigHosts());
+  deps.ipc.handle(IPC_CHANNELS.SSH_CONNECT, (payload: unknown) => {
+    const { id } = payload as { id: string };
+    return sm.connect(id);
+  });
+  deps.ipc.handle(IPC_CHANNELS.SSH_DISCONNECT, (payload: unknown) => {
+    const { id } = payload as { id: string };
+    sm.disconnect(id);
+    return sm.status(id);
+  });
+  deps.ipc.handle(IPC_CHANNELS.SSH_STATUS, (payload: unknown) => {
+    const { id } = payload as { id: string };
+    return sm.status(id);
+  });
+  // On-demand ready-state re-verification (user activation of a source/
+  // session): one immediate identity probe for a READY transport — a dead
+  // gateway session or remote endpoint flips the phase within one probe
+  // round-trip instead of waiting for the periodic heartbeat (transport-
+  // manager reverify; see READY_VERIFY_INTERVAL_MS).
+  deps.ipc.handle(IPC_CHANNELS.SSH_REVERIFY, (payload: unknown) => {
+    const { id } = payload as { id: string };
+    return sm.reverify(id);
+  });
+  // 环形日志读/清（transport-manager ring buffer）：LOGS 返回有界环形日志
+  // （非秘密——logSummary 等元数据；URL/密钥纪律同 status 投影），LOGS_CLEAR
+  // 清空该实例环形日志。
+  deps.ipc.handle(IPC_CHANNELS.SSH_LOGS, (payload: unknown) => {
+    const { id } = payload as { id: string };
+    return sm.logs(id);
+  });
+  deps.ipc.handle(IPC_CHANNELS.SSH_LOGS_CLEAR, (payload: unknown) => {
+    const { id } = payload as { id: string };
+    return sm.clearLogs(id);
   });
 
   // ③ 自举（W-10 后续批占位：控制面 ready 后的启动/恢复 push、余下 drain 挂点

@@ -50,7 +50,6 @@ import { createGatewaySessionRefresh, gatewaySessionOriginForUrl, gatewayTunnelA
 import type { GatewaySessionRefresh } from './gateway-session-refresh.ts';
 import { appendAuditEvent, configureAuditLog, type AuditEvent } from './audit-log.ts';
 import type { GatewayRegistrationAuthProof, GatewaySessionManager } from './gateway-session.ts';
-import { discoverSshConfigHosts } from './ssh-config.ts';
 import { createTrustedIpc, isExternalLinkUrl, isTrustedIpcSender, isTrustedRendererUrl } from './renderer-trust.ts';
 import { call, createControlPlane } from './control-plane-module.ts';
 import {
@@ -2271,24 +2270,15 @@ if (!gotTheLock) {
     // （readySeedEdges/hostPackageSeeding/sshPluginJournal/… 与
     // SSH_INSTANCES_CHANGED push 文本）留本文件——renderer-trust 锚定。
 
-    // ~/.ssh/config discovery (design 05 §5): non-secret host projections
-    // only (alias/hostName/user/port) — keys/proxies/credentials never leave
-    // the main process.
-    ipcMain.handle(IPC_CHANNELS.SSH_CONFIG_LIST, trustedIpc(() => discoverSshConfigHosts()));
-    ipcMain.handle(IPC_CHANNELS.SSH_CONNECT, trustedIpc(({ id }) => sm.connect(id)));
-    ipcMain.handle(IPC_CHANNELS.SSH_DISCONNECT, trustedIpc(({ id }) => {
-      sm.disconnect(id);
-      return sm.status(id);
-    }));
-    ipcMain.handle(IPC_CHANNELS.SSH_STATUS, trustedIpc(({ id }) => sm.status(id)));
-    // On-demand ready-state re-verification (user activation of a source/
-    // session): one immediate identity probe for a READY transport — a dead
-    // gateway session or remote endpoint flips the phase within one probe
-    // round-trip instead of waiting for the periodic heartbeat (transport-
-    // manager reverify; see READY_VERIFY_INTERVAL_MS).
-    ipcMain.handle(IPC_CHANNELS.SSH_REVERIFY, trustedIpc(({ id }) => sm.reverify(id)));
-    ipcMain.handle(IPC_CHANNELS.SSH_LOGS, trustedIpc(({ id }) => sm.logs(id)));
-    ipcMain.handle(IPC_CHANNELS.SSH_LOGS_CLEAR, trustedIpc(({ id }) => sm.clearLogs(id)));
+    // —— W-10 S4：ssh 连接状态 D 组 7 注册体（SSH_CONFIG_LIST / SSH_CONNECT /
+    // SSH_DISCONNECT / SSH_STATUS / SSH_REVERIFY / SSH_LOGS / SSH_LOGS_CLEAR）
+    // 自 main.ts 迁入 shell-core installIpcHandlers ② D 组段（注册体逐字随迁，
+    // 按 C 组之后原序追加；CONFIG_LIST 的非秘密投影纪律注释随迁）。装配依赖
+    // 经 ctx：transportManager（Pick 扩 reverify/logs/clearLogs，见
+    // ShellAssemblyCtx）；ssh-config 发现经纯模块 ssh-config.ts import（main
+    // 侧 import 随迁移除）。exec/systemd（SSH_START/STOP/IS_ACTIVE/
+    // RESTART_SERVICE）与插件管理等其余 handler 留本文件。
+
     // Provider exec channel (design 05 §7.4, ssh: remote systemd): the fresh
     // status projection on success (serviceActive included), {error} on
     // failure — loud, never a silent empty success, never an unhandled
@@ -4787,6 +4777,8 @@ if (!gotTheLock) {
       // publishRegistryTransition = registry 变更生命周期 sidecar（宿主对象
       // readySeedEdges/hostPackageSeeding/sshPluginJournal/… 与
       // SSH_INSTANCES_CHANGED push 文本留本文件，经 ctx 供 core 调用）。
+      // W-10 S4（ssh 连接状态批）：D 组 7 注册体同经 transportManager——core 侧
+      // Pick 扩 reverify/logs/clearLogs（本装配注入完整现实例，无新增字段）。
       transportManager: sm,
       audit,
       gatewaySessions,
