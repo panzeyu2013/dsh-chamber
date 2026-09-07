@@ -163,7 +163,40 @@ test('system-resume channel name stays in lockstep across all three sites (H2)',
 
 const transportProvider = readFileSync(join(ROOT, 'packages/desktop/transport-provider.ts'), 'utf8')
 const connectionSave = readFileSync(join(ROOT, 'packages/desktop/connection-save.ts'), 'utf8')
-const desktopMain = readFileSync(join(ROOT, 'packages/desktop/main.ts'), 'utf8')
+
+/** The IPC *registration* owner split across the W-10 seam: main.ts keeps the
+ * not-yet-migrated ipcMain.handle(...) registrations, and
+ * shell-core.installIpcHandlers (S1: INFO / SETTINGS_GET / SETTINGS_SET; S2:
+ * NOTIFY / NOTIFICATIONS_READY / NOTIFICATION_OPEN_ACK / BADGE_COUNT /
+ * DEEP_LINK_READY / DEEP_LINK_ACK; S3: SSH_INSTANCES_GET / SSH_SAVE_CONNECTION
+ * / SSH_DELETE_CONNECTION / SSH_INSTANCES_SET / SSH_SET_PASSWORD /
+ * GATEWAY_SET_TOKEN / GATEWAY_SET_PASSWORD) registers through the injected
+ * registrar — the executable owner of each channel stays single (a second,
+ * unimported handler cannot drift beside the registered one because the
+ * surface equality below counts every spelling).
+ * shell-core.ts and electron-edges.ts join the scan because W-10 (design
+ * 25 §4.1) moves main-side TEXT between the three files: the send-side channel
+ * references can now sit in any of them (S0: the four committed pushes leave
+ * through the electron-edges rendererPush leaf whose IPC_CHANNELS.X call sites
+ * still live in main.ts; S1: the SETTINGS_CHANGED send source moved into
+ * shell-core; S2: the DEEP_LINK_INTENT / NOTIFICATION_OPEN drain sends moved
+ * into shell-core's renderer delivery drains). Scanning the union preserves
+ * the lockstep strength: the three-file handle/send sets must still equal the
+ * preload invoke/on sets.
+ * W-10 S3: the per-test TEXT anchors below scan the SAME union (desktopMain
+ * below) — the C 组 registry/credentials handler bodies (incl. the
+ * credential-existence projection text, the save/delete transactions and the
+ * clear-only legacy setters) now live in shell-core.ts, so a main.ts-only read
+ * would silently un-anchor them. Assertion intent is unchanged: the text must
+ * exist on the desktop main side (main.ts ∪ shell-core.ts ∪ electron-edges.ts);
+ * handle-registration spelling assertions accept BOTH main-side spellings
+ * (see MAIN_HANDLE_CALLS below — trustedIpc is applied by the assembly-side
+ * wrapper in main.ts, so no trustedIpc text appears beside the core
+ * registrations). */
+const MAIN_SIDE_FILES = ['main.ts', 'shell-core.ts', 'electron-edges.ts']
+const desktopMain = MAIN_SIDE_FILES
+  .map(file => readFileSync(join(ROOT, 'packages/desktop', file), 'utf8'))
+  .join('\n')
 
 test('renderer connection target/input/spec mirrors desktop v2 fields including S23', () => {
   assert.match(renderer, /export type TransportKind = 'dsh' \| 'gateway'/, 'renderer target kind must be the normalized v2 union')
@@ -242,7 +275,7 @@ test('main-owned connection transaction is wired through the preload without ret
   assert.deepEqual(interfaceFieldNames(renderer, 'SaveConnectionResult'), interfaceFieldNames(preload, 'SaveConnectionResult'),
     'save_connection result drifted across preload/renderer')
   assert.match(preload, /save_connection:\s*\(previousId, input, credentials\)\s*=>\s*ipcRenderer\.invoke\('desktop_ssh_save_connection',\s*\{ previousId, input, credentials \}\)/)
-  assert.match(desktopMain, /ipcMain\.handle\(IPC_CHANNELS\.SSH_SAVE_CONNECTION/)
+  assert.match(desktopMain, /(?:ipcMain|deps\.ipc)\.handle\(IPC_CHANNELS\.SSH_SAVE_CONNECTION/)
   assert.match(desktopMain, /canonicalizeTransportInstanceInput\(candidate\)/,
     'the save IPC must honor the typed optional transport through canonical v1/v2 normalization')
   assert.match(
@@ -267,7 +300,7 @@ test('legacy credential setters are clear-only, deletion is exact-id, and instan
   assert.match(desktopMain, /desktop_gateway_set_token is clear-only/)
   assert.match(desktopMain, /desktop_gateway_set_password is clear-only/)
   assert.match(preload, /delete_connection:\s*id\s*=>\s*ipcRenderer\.invoke\('desktop_ssh_delete_connection',\s*\{ id \}\)/)
-  assert.match(desktopMain, /ipcMain\.handle\(IPC_CHANNELS\.SSH_DELETE_CONNECTION/)
+  assert.match(desktopMain, /(?:ipcMain|deps\.ipc)\.handle\(IPC_CHANNELS\.SSH_DELETE_CONNECTION/)
   assert.match(desktopMain, /deleteConnectionTransaction\(/)
   assert.match(desktopMain, /desktop_ssh_instances_set: only an exact unchanged no-op roster is allowed/)
 })
@@ -521,25 +554,6 @@ test('ChamberInjectionState / ChamberHostGraphState / ChamberSettings stay in lo
 // ---------------------------------------------------------------------------
 
 const { IPC_CHANNELS } = await import('./ipc-events.ts')
-
-/** The IPC *registration* owner split across the W-10 seam: main.ts keeps the
- * not-yet-migrated ipcMain.handle(...) registrations, and
- * shell-core.installIpcHandlers (S1: INFO / SETTINGS_GET / SETTINGS_SET; S2:
- * NOTIFY / NOTIFICATIONS_READY / NOTIFICATION_OPEN_ACK / BADGE_COUNT /
- * DEEP_LINK_READY / DEEP_LINK_ACK) registers through the injected registrar —
- * the executable owner of each channel stays single (a second, unimported
- * handler cannot drift beside the registered one because the surface equality
- * below counts every spelling).
- * shell-core.ts and electron-edges.ts join the scan because W-10 (design
- * 25 §4.1) moves main-side TEXT between the three files: the send-side channel
- * references can now sit in any of them (S0: the four committed pushes leave
- * through the electron-edges rendererPush leaf whose IPC_CHANNELS.X call sites
- * still live in main.ts; S1: the SETTINGS_CHANGED send source moved into
- * shell-core; S2: the DEEP_LINK_INTENT / NOTIFICATION_OPEN drain sends moved
- * into shell-core's renderer delivery drains). Scanning the union preserves
- * the lockstep strength: the three-file handle/send sets must still equal the
- * preload invoke/on sets. */
-const MAIN_SIDE_FILES = ['main.ts', 'shell-core.ts', 'electron-edges.ts']
 
 /** Handle-side registration spellings across the W-10 seam split (S1): main.ts
  *  still owns the not-yet-migrated ipcMain.handle(...) registrations, while

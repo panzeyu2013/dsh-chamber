@@ -2186,10 +2186,15 @@ test('desktop package includes the gateway provider required by main.ts', () => 
   assert.match(preload, /set_gateway_token:\s*\(id, token\)\s*=>\s*ipcRenderer\.invoke\('desktop_gateway_set_token'/)
   assert.doesNotMatch(preload, /get_gateway_token|gateway_token_get/, 'renderer receives no token getter')
   const main = readFileSync(new URL('./main.ts', import.meta.url), 'utf8')
+  // W-10 S3: SSH_SET_PASSWORD / GATEWAY_SET_TOKEN / GATEWAY_SET_PASSWORD 三个
+  // clear-only 注册体（commitTransportCredentialUpdate 实时重建 + clear-only
+  // 拒写文案）随 C 组迁入 shell-core installIpcHandlers——三条文本锚的读取源
+  // 指向 shell-core.ts，断言意图与正则原样保留。
+  const core = readFileSync(new URL('./shell-core.ts', import.meta.url), 'utf8')
   assert.match(main, /providers:\s*\{\s*ssh: sshProvider,\s*http: gatewayProvider/, 'main.ts registers providers BY TRANSPORT (design 17 §2.2)')
-  assert.match(main, /commitTransportCredentialUpdate\(sm, id, status => status\.transport === 'ssh'/, 'SSH password updates rebuild a live SSH transport')
-  assert.match(main, /commitTransportCredentialUpdate\(sm, id, status => status\.kind === 'gateway'/, 'gateway token updates use the same live replacement transaction')
-  assert.match(main, /desktop_ssh_set_password is clear-only/, 'legacy SSH credential IPC cannot bypass the main-owned save transaction')
+  assert.match(core, /commitTransportCredentialUpdate\(sm, id, status => status\.transport === 'ssh'/, 'SSH password updates rebuild a live SSH transport')
+  assert.match(core, /commitTransportCredentialUpdate\(sm, id, status => status\.kind === 'gateway'/, 'gateway token updates use the same live replacement transaction')
+  assert.match(core, /desktop_ssh_set_password is clear-only/, 'legacy SSH credential IPC cannot bypass the main-owned save transaction')
   assert.match(main, /status\.kind === 'dsh' && status\.transport === 'ssh'/, 'the chamber host seed gate keys on dsh+ssh (v2)')
 })
 

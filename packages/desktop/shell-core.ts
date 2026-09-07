@@ -62,12 +62,27 @@
  *   matchesNotificationSource / projectNotificationSourceInstances /
  *   syncNotificationSourceRegistry / clearBadgeIntentForQuit）——逐条迁移决策
  *   见「Renderer delivery state machines」段注释。
+ *  Responsibilities relocated from main.ts (W-10 S3 registry+credentials batch):
+ *  - C 组 7 个注册体：SSH_INSTANCES_GET / SSH_SAVE_CONNECTION /
+ *    SSH_DELETE_CONNECTION / SSH_INSTANCES_SET / SSH_SET_PASSWORD /
+ *    GATEWAY_SET_TOKEN / GATEWAY_SET_PASSWORD——按原 main.ts 顺序追加在 B 组
+ *    之后（installIpcHandlers ② 段）；随迁注册体侧纯辅助（gatewayOriginFor /
+ *    normalizeConnectionInput）与 registry 非秘密投影链（projectInstances /
+ *    projectInstanceSecrets——模块级导出，main.ts 的 publishRegistryTransition
+ *    沿用：S2 同款 core→main 单向依赖）。事务（connection-save）、canonicalize
+ *    （transport-provider）与凭据写入口（ssh/gateway-provider）等纯模块直接
+ *    import；装配依赖经 ctx：transportManager 句柄（registry 读写 + 状态/
+ *    生命周期投影）/ audit / gatewaySessions / publishRegistryTransition（后
+ *    三者宿主定义仍留 main 装配侧——publishRegistryTransition 的插件
+ *    seed/journal 生命周期体与其 SSH_INSTANCES_CHANGED push 文本留 main）。
  *
  * 中文说明：自 main.ts 机械搬运的 Electron-free 业务核心（零缝阶段，行为零
  * 变化）；W-10 S1 起 IPC 注册点与 A 组 info+settings 处理器迁入本文件
  * （installIpcHandlers 单点注册，Electron 围栏由 main 注入包装）；S2 追加 B 组
  * notify/badge/ready 6 注册体与渲染器投递状态机（send 叶统一
- * edges.rendererPush）；HostEdges 其余边沿叶与双 flavor 属后续批。
+ * edges.rendererPush）；S3 追加 C 组 registry+凭据 7 注册体与读时投影链（凭据
+ * write-only/绝不回读纪律随迁，代码注释保留）；HostEdges 其余边沿叶与双
+ * flavor 属后续批。
  */
 
 import { readFileSync } from 'node:fs';
@@ -76,10 +91,44 @@ import { findFreePort } from './free-port.ts';
 import { computeSupported, validatePatch } from './chamber-settings.ts';
 import type { ChamberSettings, ChamberSettingsStatus } from './chamber-settings.ts';
 import { DEFAULT_CHAMBER_SETTINGS } from './chamber-settings.ts';
-import { attemptCommittedRegistryPush } from './transport-manager.ts';
+import {
+  INSTANCE_ID_PATTERN,
+  attemptCommittedRegistryPush,
+  commitTransportCredentialUpdate,
+  type TransportManager,
+} from './transport-manager.ts';
+import {
+  deleteConnectionTransaction,
+  saveConnectionTransaction,
+  validateDeleteOnlyReplacement,
+  type ConnectionCredentialMutations,
+} from './connection-save.ts';
 import { IPC_CHANNELS } from './ipc-events.ts';
 import type { NotificationOpenIntent, NotificationSourceToken } from './notifications.ts';
-import type { TransportInstanceSpec } from './transport-provider.ts';
+import {
+  canonicalizeTransportInstanceInput,
+  type TransportInstanceInput,
+  type TransportInstanceSpec,
+} from './transport-provider.ts';
+import { MAX_SSH_PASSWORD_CHARS, getSshPassword, setSshPassword, sshPasswordSupported, sshProvider } from './ssh-provider.ts';
+import {
+  gatewayPasswordValidationError,
+  gatewayProvider,
+  gatewaySecretStorageMode,
+  gatewayTokenValidationError,
+  getGatewayPassword,
+  getGatewayToken,
+  setGatewayPassword,
+  setGatewayToken,
+  setInstanceSecrets,
+} from './gateway-provider.ts';
+import {
+  gatewaySessionScopeForConnection,
+  type GatewaySessionManager,
+  type GatewaySessionOrigin,
+} from './gateway-session.ts';
+import { gatewaySessionOriginForUrl, gatewayTunnelAuthority } from './gateway-session-refresh.ts';
+import type { AuditEvent } from './audit-log.ts';
 import { adjudicateBadgeCount, badgePlatformGate, validateBadgeRequest } from './badge.ts';
 import {
   BoundedAckDeliveryQueue,
@@ -825,6 +874,42 @@ export function projectNotificationSourceInstances(
   return notificationSourceProofs.replaceRemoteInstances(instances);
 }
 
+// ---------------------------------------------------------------------------
+// W-10 S3（registry+凭据批）：registry 读时非秘密投影链迁入（自 main.ts 的
+// projectInstanceSecrets / projectInstances 局部闭包逐字搬迁，行为零变）。
+// sshPasswordSet/tokenSet/passwordSet 为凭据**存在性**布尔标记（读侧只判
+// null——写入口经 ssh/gateway-provider 模块直调，值绝不回读进载荷或日志）；
+// secretStorage 是凭据镜像的存储模式投影（'safeStorage' | 'plaintext'）。
+// main.ts 的 publishRegistryTransition（registry 生命周期 sidecar，S3 留
+// main 装配侧经 ctx 注入）沿用本模块导出——S2 同款 core→main 单向依赖：
+// 注册表投影先经 projectNotificationSourceInstances 挂来源证明，再经
+// projectInstanceSecrets 挂凭据存在性标记。
+// ---------------------------------------------------------------------------
+export type ProjectedRegistryInstance = TransportInstanceSpec & {
+  sshPasswordSet: boolean
+  tokenSet: boolean
+  passwordSet: boolean
+  secretStorage: ReturnType<typeof gatewaySecretStorageMode>
+}
+
+/** 单行凭据存在性投影（设计 17 §2.3/§9.1/§13.4.1：registry 保持无凭据元数据；
+ *  标记只在行当前使用的凭据维度上为 true——sshPasswordSet 仅对 SSH 传输行）。 */
+export function projectInstanceSecrets(instance: TransportInstanceSpec): ProjectedRegistryInstance {
+  return {
+    ...instance,
+    sshPasswordSet: instance.transport === 'ssh' && getSshPassword(instance.id) !== null,
+    tokenSet: instance.kind === 'gateway' && getGatewayToken(instance.id) !== null,
+    passwordSet: instance.kind === 'gateway' && getGatewayPassword(instance.id) !== null,
+    secretStorage: gatewaySecretStorageMode(),
+  };
+}
+
+/** 注册表整表读时投影（instances_get / save / delete 的返回路径——W-10 S3
+ *  随迁；语义与 main.ts 原 projectInstances 完全一致）。 */
+export function projectInstances(instances: readonly TransportInstanceSpec[]): ProjectedRegistryInstance[] {
+  return projectNotificationSourceInstances(instances).map(projectInstanceSecrets);
+}
+
 /** 来源 registry 同步（退役权威 + 队列清理，W-10 S2）：replaceRemoteSources 后
  *  把退役 sourceId 的在途/待发事件从两条队列全部丢弃（同 id 替换绝不继承旧代际
  *  的 held 工作）；返回退役 id 集合——装配侧注册表退役路径再经
@@ -859,7 +944,7 @@ export function clearBadgeIntentForQuit(applyNativeClear: () => void): void {
 
 // ---------------------------------------------------------------------------
 // Shell IPC registration (design 25 §4.1 seam; W-10 S1 info+settings +
-// S2 notify/badge/ready batch).
+// S2 notify/badge/ready + S3 registry/credentials batch).
 //
 // installIpcHandlers is the single shell-core IPC registration point: the
 // Electron main only assembles it (main.ts — trustedIpc fence injected at the
@@ -877,7 +962,14 @@ export function clearBadgeIntentForQuit(applyNativeClear: () => void): void {
 //     在此注册——held-resume 补发语义随迁 core，见上段状态机）；
 //   ② A 组 3 个注册体（S1 批）+ B 组 6 个注册体（S2 批：NOTIFY /
 //     NOTIFICATIONS_READY / NOTIFICATION_OPEN_ACK / BADGE_COUNT /
-//     DEEP_LINK_READY / DEEP_LINK_ACK——按原 main.ts 顺序追加）；
+//     DEEP_LINK_READY / DEEP_LINK_ACK——按原 main.ts 顺序追加）+ C 组 7 个
+//     注册体（S3 批：SSH_INSTANCES_GET / SSH_SAVE_CONNECTION /
+//     SSH_DELETE_CONNECTION / SSH_INSTANCES_SET / SSH_SET_PASSWORD /
+//     GATEWAY_SET_TOKEN / GATEWAY_SET_PASSWORD——按原 main.ts 顺序追加在 B 组
+//     之后；全零 Electron：事务/canonicalize/凭据写入口为纯模块直接 import，
+//     装配依赖经 ctx——transportManager/audit/gatewaySessions/
+//     publishRegistryTransition，见 ShellAssemblyCtx 与「W-10 S3 registry
+//     投影链」段注释）；
 //   ③ 自举（占位——控制面 ready 后的启动/恢复 push 与余下 drain 挂点在 W-10
 //      后续批迁入，见 macos-swift-v1.md §四批 2）。
 // ---------------------------------------------------------------------------
@@ -892,7 +984,10 @@ export interface IpcRegistrar {
 /** ShellAssemblyCtx — installIpcHandlers 装配上下文。最小集原则：只放已迁注册
  *  体与其随迁辅助实际引用的字段，后续批按需扩展（S1 → S2：增 isQuitting、移除
  *  reconcileBadgeCount——意图 holder 与裁决随 BADGE_COUNT 批迁入 core 后
- *  SETTINGS_SET 直接调 core 内 reconcile，见 installIpcHandlers ②）。chamber
+ *  SETTINGS_SET 直接调 core 内 reconcile，见 installIpcHandlers ②）；S3
+ *  （registry+凭据批）增 transportManager / audit / gatewaySessions /
+ *  publishRegistryTransition 四字段（宿主生命周期权威仍留 main，见字段注释）。
+ *  chamber
  *  settings 的内存 holder 仍归装配侧（main.ts 尚余 20+ 处直读点，随各自批迁入时
  *  holder 一并搬家）；core 侧一律经 settingsIO 读写，权威单一、行为与搬迁前一
  *  致。各副作用叶与其 HostEdges 成员（setKeepAwake / setLoginItem /
@@ -947,10 +1042,43 @@ export interface ShellAssemblyCtx {
     currentOrigin: string,
     nextOrigin: string,
   ): Promise<'confirmed' | 'cancelled' | 'unavailable'>
+  // —— W-10 S3（registry+凭据批）新增字段：C 组 7 注册体的装配依赖。registry
+  // 读写/投影句柄（transportManager）为现实例注入；audit / gatewaySessions /
+  // publishRegistryTransition 为宿主叶或宿主生命周期对象（定义仍留 main
+  // 装配侧——publishRegistryTransition 的插件 seed/journal 撤销与
+  // SSH_INSTANCES_CHANGED push 文本归装配侧，随后续批再迁）。
+  /** registry 读写 + transport 状态/生命周期投影句柄（C 组注册体直接读写面；
+   *  装配侧注入 transport-manager 现实例——纯模块按引用共享，语义与搬迁前
+   *  main.ts 的 sm 局部常量一致；Pick 收窄到本批实际调用的方法面，体内以
+   *  sm 名解构以保持注册体文本逐字）。 */
+  transportManager: Pick<
+    TransportManager,
+    'listInstances' | 'saveInstances' | 'status' | 'readyUrl' | 'disconnect' | 'connect'
+  >
+  /** S24 非秘密审计叶（原 main.ts 的 audit = appendAuditEvent({ file:
+   *  auditLogPath })——装配侧绑定 <userData> 路径注入；JSONL append 只记非
+   *  秘密事实，凭据值绝不入日志）。 */
+  audit(event: AuditEvent): void
+  /** gateway 密码会话管理器（design 17 §7.1/§9.3——主进程内存持有；C 组注册体
+   *  invalidation 的直接面）。装配侧传模块级 `gatewaySessions` 的**装配期取
+   *  值**：该 let 仅在 will-quit 清理置 null（届时窗口已关、IPC 处理器不可
+   *  达），处理器可达期恒非空——null 分支判据与搬迁前逐字一致（有界收敛注记：
+   *  同一 will-quit 竞态下原直读闭包可见 null 而装配捕获不可见的路径不可达）。 */
+  gatewaySessions: GatewaySessionManager | null
+  /** registry 变更生命周期权威 sidecar（main-branch source-lifecycle
+   *  authority：来源证明/代际同步 + 插件 seed/journal 撤销 + 活跃通知退役驱逐
+   *  + SSH_INSTANCES_CHANGED committed push 编排）——S3 留 main 装配侧经本叶
+   *  注入（其宿主对象 readySeedEdges/hostPackageSeeding/sshPluginJournal/
+   *  setGatewaySyncRegistration/startAutomaticHostSeed 归装配侧，push 文本被
+   *  renderer-trust 锚定），C 组 save/delete 注册体经它发布 committed 结果。 */
+  publishRegistryTransition(
+    before: readonly TransportInstanceSpec[],
+    after: readonly TransportInstanceSpec[],
+  ): ProjectedRegistryInstance[]
 }
 
-/** 装配 shell IPC 面（W-10 S1 A 组 + S2 B 组注册体与随迁辅助；B 组注册顺序 =
- *  原 main.ts 顺序）。edges 参数以 Pick 收窄到本批实际调用的成员
+/** 装配 shell IPC 面（W-10 S1 A 组 + S2 B 组 + S3 C 组注册体与随迁辅助；各组
+ *  注册顺序 = 原 main.ts 顺序）。edges 参数以 Pick 收窄到本批实际调用的成员
  *  （createElectronEdges 返回同形超集）；后续批实现新成员时同步扩宽两侧。
  *  调用点纪律：whenReady 内、createMainWindow 之前（窗口加载前注册完毕）——
  *  本函数同时完成渲染器投递状态机的 edges/quit 快照（单装配不变式，见上段）。 */
@@ -988,6 +1116,13 @@ export function installIpcHandlers(deps: {
     setKeepAwake,
     setLoginItem,
     confirmRegistryOriginSwitch,
+    // W-10 S3（registry+凭据批）：transportManager → sm（与搬迁前 main.ts 的
+    // sm 局部常量同名，C 组注册体文本逐字保留）；audit / gatewaySessions /
+    // publishRegistryTransition 为装配侧宿主叶（定义在 main，经 ctx 注入）。
+    transportManager: sm,
+    audit,
+    gatewaySessions,
+    publishRegistryTransition,
   } = deps.ctx
 
   // ① edges 回灌订阅段（S2 转实）：OS 唤醒与主窗口 'show' 的事件源语义自 main.ts
@@ -1303,6 +1438,387 @@ export function installIpcHandlers(deps: {
     if (payload === null || typeof payload !== 'object') return false;
     const { deliveryId, attempt } = payload as { deliveryId?: unknown; attempt?: unknown };
     return pendingRendererIntents.acknowledge(deliveryId as number, attempt as number);
+  });
+
+  // —— C 组（S3 批；W-10 S3 施工图第 1 项）——
+  // registry + 凭据 7 注册体（按原 main.ts 顺序紧接 B 组追加；注册体与下述纯
+  // 辅助自 main.ts 逐字迁入，全零 Electron）。trustedIpc 围栏由装配侧在
+  // registrar 注入点包装；事务（connection-save）/ canonicalize
+  // （transport-provider）/ 凭据写入口（ssh/gateway-provider）与 session origin
+  // 纯函数（gateway-session*）为 electron-free 纯模块直接 import。凭据
+  // write-only 语义与「绝不回读」纪律保持：读侧只判存在性（!== null），值绝不
+  // 进入载荷/日志。装配依赖经 ctx：sm = transportManager 句柄（registry 读写
+  // + 状态/生命周期投影）、audit（S24 审计叶）、gatewaySessions（会话
+  // invalidation 宿主面）、publishRegistryTransition（registry 变更生命周期
+  // sidecar——宿主对象与 SSH_INSTANCES_CHANGED push 文本留 main，本组注册体
+  // 经 ctx 调用）。
+  /** The gateway-session origin for a registered instance (design 17 §9.3
+   * per-origin session key): scheme from `insecureHttp`, explicit port —
+   * URL.origin normalizes default-port elision, so the cache key matches
+   * the registration baseUrl and the provider's probe origin. */
+  function gatewayOriginFor(spec: TransportInstanceSpec): GatewaySessionOrigin {
+    return {
+      baseUrl: `${spec.insecureHttp ? 'http' : 'https'}://${spec.host}:${spec.remotePort}`,
+      insecureHttp: spec.insecureHttp,
+      scope: gatewaySessionScopeForConnection(spec),
+    };
+  }
+
+  const normalizeConnectionInput = (candidate: TransportInstanceInput): TransportInstanceSpec | null => {
+    if (candidate === null || typeof candidate !== 'object') return null;
+    const canonical = canonicalizeTransportInstanceInput(candidate) as TransportInstanceInput;
+    if (canonical.transport === 'ssh') return sshProvider.validateSpec(canonical);
+    if (canonical.transport === 'http') return gatewayProvider.validateSpec(canonical);
+    return null;
+  };
+
+  deps.ipc.handle(IPC_CHANNELS.SSH_INSTANCES_GET, () =>
+    projectInstances(sm.listInstances())
+  );
+  /**
+   * Main-owned ADD/EDIT transaction for registry metadata plus every
+   * applicable write-only credential dimension. The renderer sends only
+   * NEW values; old values are snapshotted and compensated here, where
+   * they can never cross IPC. connection-save.ts stops the old live
+   * transport, writes binding-guarded secrets, writes metadata last, and
+   * restores every store plus metadata on any ordinary failure. Exact-id
+   * deletion has its own transaction/channel; legacy instances_set below
+   * accepts only an unchanged no-op roster.
+   */
+  deps.ipc.handle(IPC_CHANNELS.SSH_SAVE_CONNECTION, (payload: unknown) => {
+    const before = sm.listInstances();
+    const currentProjected = () => projectInstances(sm.listInstances());
+    const refuse = (error: string) => ({
+      ok: false as const,
+      instances: currentProjected(),
+      error,
+      metadataCommitted: false,
+    });
+    if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) {
+      return refuse('invalid connection save payload');
+    }
+    const record = payload as Record<string, unknown>;
+    const previousId = record.previousId;
+    if (previousId !== null && (typeof previousId !== 'string' || !INSTANCE_ID_PATTERN.test(previousId))) {
+      return refuse('invalid or unknown connection id');
+    }
+    if (record.input === null || typeof record.input !== 'object' || Array.isArray(record.input)) {
+      return refuse('invalid connection metadata');
+    }
+    if (record.credentials === null || typeof record.credentials !== 'object' || Array.isArray(record.credentials)) {
+      return refuse('invalid connection credentials payload');
+    }
+    const credentialRecord = record.credentials as Record<string, unknown>;
+    const allowedCredentialKeys = new Set(['sshPassword', 'gatewayToken', 'gatewayPassword']);
+    if (Object.keys(credentialRecord).some(key => !allowedCredentialKeys.has(key))) {
+      return refuse('invalid connection credentials payload');
+    }
+    for (const key of allowedCredentialKeys) {
+      const value = credentialRecord[key];
+      if (value !== undefined && typeof value !== 'string') {
+        return refuse('invalid connection credentials payload');
+      }
+    }
+    const credentials = credentialRecord as ConnectionCredentialMutations;
+    const input = record.input as TransportInstanceInput;
+    const normalized = normalizeConnectionInput(input);
+    if (normalized === null) return refuse('invalid connection metadata');
+    const sshPassword = credentials.sshPassword === '' ? undefined : credentials.sshPassword;
+    const gatewayToken = credentials.gatewayToken === '' ? undefined : credentials.gatewayToken;
+    const gatewayPassword = credentials.gatewayPassword === '' ? undefined : credentials.gatewayPassword;
+    if (sshPassword !== undefined) {
+      if (sshPassword.length > MAX_SSH_PASSWORD_CHARS) {
+        return refuse(`SSH password is limited to ${MAX_SSH_PASSWORD_CHARS} characters`);
+      }
+      if (!sshPasswordSupported()) {
+        // design 21 C15: Windows 密码认证不可用(askpass 需 PE 可执行)——门控
+        // 拒绝并给出主路径引导(密钥 / ssh-agent / Pageant)。
+        return refuse('SSH password auth is not supported on Windows yet — use a key or ssh-agent (Pageant) instead');
+      }
+    }
+    const tokenError = gatewayTokenValidationError(gatewayToken ?? null);
+    if (tokenError !== null) return refuse(tokenError);
+    const passwordError = gatewayPasswordValidationError(gatewayPassword ?? null);
+    if (passwordError !== null) return refuse(passwordError);
+
+    const previous = typeof previousId === 'string'
+      ? sm.listInstances().find(instance => instance.id === previousId) ?? null
+      : null;
+    const previousReadyUrl = typeof previousId === 'string' ? sm.readyUrl(previousId) : null;
+    const invalidateGatewaySessionsFor = (spec: TransportInstanceSpec | null, readyUrl: string | null): void => {
+      if (spec === null || spec.kind !== 'gateway') return;
+      if (gatewaySessions === null) throw new Error('gateway session manager is unavailable');
+      if (spec.transport === 'http') gatewaySessions.invalidate(gatewayOriginFor(spec));
+      if (spec.transport === 'ssh') gatewaySessions.invalidateScope(gatewaySessionScopeForConnection(spec));
+      if (readyUrl !== null) {
+        const liveOrigin = gatewaySessionOriginForUrl(
+          readyUrl,
+          spec.spkiPin ?? undefined,
+          spec.transport === 'ssh' ? gatewayTunnelAuthority(spec.remotePort) : undefined,
+          gatewaySessionScopeForConnection(spec),
+        );
+        if (liveOrigin === null) throw new Error('invalid ready gateway session origin');
+        gatewaySessions.invalidate(liveOrigin);
+      }
+    };
+    const invalidateOldAndCurrentSessions = (): void => {
+      invalidateGatewaySessionsFor(previous, previousReadyUrl);
+      const current = sm.listInstances().find(instance => instance.id === normalized.id) ?? null;
+      invalidateGatewaySessionsFor(current, sm.readyUrl(normalized.id));
+    };
+
+    const result = saveConnectionTransaction({
+      listInstances: () => sm.listInstances(),
+      normalize: normalizeConnectionInput,
+      saveInstances: instances => sm.saveInstances(instances),
+      getSshPassword,
+      getGatewayToken,
+      getGatewayPassword,
+      setSshPassword: (id, value, bindingSpec) => setSshPassword(id, value, bindingSpec),
+      setGatewaySecrets: (id, token, password, bindingSpec) => setInstanceSecrets(id, token, password, bindingSpec),
+      invalidateGatewaySessions: (oldSpec, nextSpec) => {
+        invalidateGatewaySessionsFor(oldSpec, previousReadyUrl);
+        if (nextSpec !== null) invalidateGatewaySessionsFor(nextSpec, null);
+      },
+      isActive: id => {
+        const status = sm.status(id);
+        return status !== null && status.phase !== 'idle';
+      },
+      disconnect: id => { sm.disconnect(id); },
+      connect: id => {
+        // Password/session state must be invalidated before the replacement
+        // live gateway verifies; otherwise a credential edit could briefly
+        // reuse the old cached Cookie.
+        invalidateOldAndCurrentSessions();
+        sm.connect(id);
+      },
+    }, {
+      previousId: previousId as string | null,
+      input,
+      credentials: { sshPassword, gatewayToken, gatewayPassword },
+    });
+    if (!result.ok) {
+      const instances = result.metadataCommitted
+        ? publishRegistryTransition(before, result.instances)
+        : projectInstances(result.instances);
+      return { ...result, instances };
+    }
+
+    if (result.changes.gatewayPassword) invalidateOldAndCurrentSessions();
+    const credentialAudits: Array<[boolean, string, boolean]> = [
+      [result.changes.sshPassword, 'ssh_password', getSshPassword(normalized.id) !== null],
+      [result.changes.gatewayToken, 'token', getGatewayToken(normalized.id) !== null],
+      [result.changes.gatewayPassword, 'password', getGatewayPassword(normalized.id) !== null],
+    ];
+    for (const [changed, detail, isSet] of credentialAudits) {
+      if (!changed) continue;
+      audit({
+        ts: new Date().toISOString(),
+        event: isSet ? 'credential_set' : 'credential_cleared',
+        sourceId: normalized.id,
+        kind: normalized.kind,
+        transport: normalized.transport,
+        detail,
+      });
+    }
+    return { ok: true as const, instances: publishRegistryTransition(before, result.instances) };
+  });
+  deps.ipc.handle(IPC_CHANNELS.SSH_DELETE_CONNECTION, (payload: unknown) => {
+    const { id } = payload as { id?: unknown };
+    const before = sm.listInstances();
+    if (typeof id !== 'string' || !INSTANCE_ID_PATTERN.test(id)) {
+      console.warn('[dsh-chamber] desktop_ssh_delete_connection: invalid id refused');
+      return projectInstances(before);
+    }
+    const result = deleteConnectionTransaction({
+      listInstances: () => sm.listInstances(),
+      saveInstances: next => sm.saveInstances(next),
+      getSshPassword,
+      getGatewayToken,
+      getGatewayPassword,
+      setSshPassword: (id, value, bindingSpec) => setSshPassword(id, value, bindingSpec),
+      setGatewaySecrets: (id, token, password, bindingSpec) => setInstanceSecrets(id, token, password, bindingSpec),
+      invalidateGatewaySessions: spec => {
+        if (gatewaySessions === null) throw new Error('gateway session manager is unavailable');
+        if (spec.transport === 'http') gatewaySessions.invalidate(gatewayOriginFor(spec));
+        if (spec.transport === 'ssh') gatewaySessions.invalidateScope(gatewaySessionScopeForConnection(spec));
+        const readyUrl = sm.readyUrl(spec.id);
+        if (readyUrl !== null) {
+          const liveOrigin = gatewaySessionOriginForUrl(
+            readyUrl,
+            spec.spkiPin ?? undefined,
+            spec.transport === 'ssh' ? gatewayTunnelAuthority(spec.remotePort) : undefined,
+            gatewaySessionScopeForConnection(spec),
+          );
+          if (liveOrigin === null) throw new Error('invalid ready gateway session origin');
+          gatewaySessions.invalidate(liveOrigin);
+        }
+      },
+      isActive: id => {
+        const status = sm.status(id);
+        return status !== null && status.phase !== 'idle';
+      },
+      disconnect: id => { sm.disconnect(id); },
+      connect: id => { sm.connect(id); },
+    }, id);
+    if (!result.ok) {
+      console.error(`[dsh-chamber] desktop_ssh_delete_connection transaction failed: ${result.error}`);
+      return result.metadataCommitted
+        ? publishRegistryTransition(before, result.instances)
+        : projectInstances(result.instances);
+    }
+    return publishRegistryTransition(before, result.instances);
+  });
+  deps.ipc.handle(IPC_CHANNELS.SSH_INSTANCES_SET, (payload: unknown) => {
+    const instances = payload;
+    if (!Array.isArray(instances)) {
+      console.warn('[dsh-chamber] desktop_ssh_instances_set: non-array input refused');
+      return projectInstances(sm.listInstances());
+    }
+    const before = sm.listInstances();
+    // Compatibility channel is exact no-op only. Full-roster deletion is a
+    // stale read-modify-write primitive (delete A + concurrent add C could
+    // accidentally delete C); production deletion is id-addressed through
+    // desktop_ssh_delete_connection, while add/edit use save_connection.
+    const normalized = validateDeleteOnlyReplacement(before, instances, normalizeConnectionInput);
+    if (normalized === null) {
+      console.warn('[dsh-chamber] desktop_ssh_instances_set: only an exact unchanged no-op roster is allowed');
+    }
+    return projectInstances(before);
+  });
+  // Legacy explicit SSH-password CLEAR action. Non-empty writes are owned
+  // exclusively by desktop_ssh_save_connection so metadata + all credential
+  // domains share one compensated transaction.
+  deps.ipc.handle(IPC_CHANNELS.SSH_SET_PASSWORD, (payload: unknown) => {
+    const { id, password } = payload as { id?: unknown; password?: unknown };
+    const spec = typeof id === 'string'
+      ? sm.listInstances().find(instance => instance.id === id)
+      : undefined;
+    const clearing = password === null || password === '';
+    if (typeof id !== 'string' || !INSTANCE_ID_PATTERN.test(id) || spec === undefined
+      || (password !== null && typeof password !== 'string')) {
+      return { error: 'invalid or unknown instance id' };
+    }
+    if (!clearing) return { error: 'desktop_ssh_set_password is clear-only; use desktop_ssh_save_connection to set credentials' };
+    // Clearing remains available on platforms where accepting a new SSH
+    // password is unsupported; non-empty writes never reach this handler.
+    try {
+      // Rebuild only a live SSH transport so it stops using the cleared
+      // transport credential. Gateway/http transports are unaffected.
+      // S24 audit records only the credential kind, never its value.
+      const hadPassword = getSshPassword(id) !== null;
+      commitTransportCredentialUpdate(sm, id, status => status.transport === 'ssh', () => {
+        setSshPassword(id, null, null);
+      });
+      if (hadPassword) {
+        audit({
+          ts: new Date().toISOString(),
+          event: 'credential_cleared',
+          sourceId: id,
+          kind: spec.kind,
+          transport: spec.transport,
+          detail: 'ssh_password',
+        });
+      }
+      return { ok: true };
+    } catch (error) {
+      return { error: error instanceof Error ? error.message : String(error) };
+    }
+  });
+  // Legacy explicit gateway-token CLEAR action. Non-empty writes use the
+  // authoritative save_connection transaction above.
+  deps.ipc.handle(IPC_CHANNELS.GATEWAY_SET_TOKEN, (payload: unknown) => {
+    const { id, token } = payload as { id?: unknown; token?: unknown };
+    const spec = typeof id === 'string'
+      ? sm.listInstances().find(instance => instance.id === id)
+      : undefined;
+    const clearing = token === null || token === '';
+    if (typeof id !== 'string' || !INSTANCE_ID_PATTERN.test(id) || spec === undefined
+      || (token !== null && typeof token !== 'string')) {
+      return { error: 'invalid or unknown instance id' };
+    }
+    if (!clearing) return { error: 'desktop_gateway_set_token is clear-only; use desktop_ssh_save_connection to set credentials' };
+    try {
+      // Revoke the currently registered Authorization header BEFORE
+      // clearing the token. disconnect() synchronously emits the old
+      // gateway idle projection, so the control plane unregisters
+      // gateway:<id> before a replacement transport can register.
+      // S24 audit names the credential kind, never its value.
+      const hadToken = getGatewayToken(id) !== null;
+      commitTransportCredentialUpdate(sm, id, status => status.kind === 'gateway', () => {
+        setGatewayToken(id, null, null);
+      });
+      if (hadToken) {
+        audit({
+          ts: new Date().toISOString(),
+          event: 'credential_cleared',
+          sourceId: id,
+          kind: spec.kind,
+          transport: spec.transport,
+          detail: 'token',
+        });
+      }
+      return { ok: true };
+    } catch (error) {
+      return { error: error instanceof Error ? error.message : String(error) };
+    }
+  });
+  // Legacy explicit gateway-password CLEAR action. It also invalidates the
+  // corresponding cached sessions; non-empty writes use save_connection.
+  deps.ipc.handle(IPC_CHANNELS.GATEWAY_SET_PASSWORD, (payload: unknown) => {
+    const { id, password } = payload as { id?: unknown; password?: unknown };
+    const spec = typeof id === 'string'
+      ? sm.listInstances().find(instance => instance.id === id)
+      : undefined;
+    const clearing = password === null || password === '';
+    // Same id whitelist + registry-existence gate as the token clear.
+    if (typeof id !== 'string' || !INSTANCE_ID_PATTERN.test(id) || spec === undefined
+      || (password !== null && typeof password !== 'string')) {
+      return { error: 'invalid or unknown instance id' };
+    }
+    if (!clearing) return { error: 'desktop_gateway_set_password is clear-only; use desktop_ssh_save_connection to set credentials' };
+    try {
+      // Clearing a password invalidates every cached login session before
+      // the target can reconnect. Both direct and SSH origins are owned by
+      // the exact connection/target scope across historical local ports.
+      if (gatewaySessions === null) throw new Error('gateway session manager is unavailable');
+      if (spec.transport === 'http') gatewaySessions.invalidate(gatewayOriginFor(spec));
+      if (spec.transport === 'ssh') gatewaySessions.invalidateScope(gatewaySessionScopeForConnection(spec));
+      const liveReadyUrl = sm.readyUrl(id);
+      if (liveReadyUrl !== null) {
+        const tunnelAuthority = spec.transport === 'ssh'
+          ? gatewayTunnelAuthority(spec.remotePort)
+          : undefined;
+        const liveOrigin = gatewaySessionOriginForUrl(
+          liveReadyUrl,
+          spec.spkiPin ?? undefined,
+          tunnelAuthority,
+          gatewaySessionScopeForConnection(spec),
+        );
+        if (liveOrigin === null) throw new Error('invalid ready gateway session origin');
+        gatewaySessions.invalidate(liveOrigin);
+      }
+      // Same disconnect-before-clear discipline as the token handler: a
+      // live gateway target is rebuilt without the removed credential.
+      // S24 audit never records the password value.
+      const hadPassword = getGatewayPassword(id) !== null;
+      commitTransportCredentialUpdate(sm, id, status => status.kind === 'gateway', () => {
+        setGatewayPassword(id, null, null);
+      });
+      if (hadPassword) {
+        audit({
+          ts: new Date().toISOString(),
+          event: 'credential_cleared',
+          sourceId: id,
+          kind: spec.kind,
+          transport: spec.transport,
+          detail: 'password',
+        });
+      }
+      return { ok: true };
+    } catch (error) {
+      return { error: describeUnknownError(error) };
+    }
   });
 
   // ③ 自举（W-10 后续批占位：控制面 ready 后的启动/恢复 push、余下 drain 挂点
