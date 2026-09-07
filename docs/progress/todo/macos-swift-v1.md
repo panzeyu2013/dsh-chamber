@@ -276,6 +276,19 @@ electron-free-gate 面 A/B/C 全绿；每批门禁 test:desktop 全绿（收官 
 **下一大块（暂停待命点）**：W-11/12/13——sidecar-entry/node-edges/B 桥服务端/
 stdio 冒烟（installIpcHandlers 现可被 node-edges 复用；electron-edges 为唯一
 Electron 面）→ M3 Swift edges。
+**W-11/12/13 已交付（同日提交 a669124）**：node-edges.ts（HostEdges Swift-flavor：
+edge 往返 + 同步门缓存/hostFacts 刷新 + clickRoute 回灌表 + __host.* 路由）；
+sidecar-entry.ts（B 桥 NDJSON 服务端 + console→stderr D2 + 目录锁复验 + 无头 ctx
+【settingsIO/audit/hostFacts 真实；transportManager/runtime/update/plugin/gateway
+宿主字段为**递归 loud stub（sidecar-ctx-unavailable:*，绝不静默）**——真实化计划：
+transportManager 装配 W-13 续、宿主线 M3】+ cp 装配 + ready 帧 {port,shellVersion}
+D8 + 信号优雅）；sidecar-stdio.test.ts 6/6（ready/info/settings-set→rendererPush
+推送采样/代表通道 loud/未知通道/SIGTERM exit 0）接入 desktop 链。门禁：typecheck
+0、electron-free-gate 3/3（coreFamily 含新文件）、test:desktop 全链绿（36 文件）。
+**登记为后续（不省略）**：① 60 通道全量冒烟需 Swift 侧应答 edges（属 M3 harness
+范围，stdio 侧对 NOTIFY 类 edge-await 通道无 Swift 必挂起——已注释）；② dev 起
+sidecar 的便捷命令未加（机器相关 node 路径，命令见 §0.2 ③ 语义可手拼）；③ 无头
+ctx 真实化逐项列于 sidecar-entry.ts 注释。
 **环境事故登记（同日 18:23–18:30）**：`/Applications/dsh-chamber.app/Contents/MacOS/
 dsh-chamber` 可执行文件被误替换为「exec nvm node」跳转 shim（推测为某 subagent 建
 PATH shim 时写错目标路径；真二进制无备份、stub 与框架配对校验失败）。处置：从主检出
