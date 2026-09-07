@@ -285,11 +285,15 @@
   var openIn = {}
   rejectMethods(openIn, ['apps', 'open'])
 
-  /** deepLink — intent subscription kept; ready/ack loud-reject. */
+  /** deepLink — intent subscription kept; ready/ack 接真实通道（sidecar
+   *  60/60 实现，W-18 manifest 单源通道名）。 */
   var deepLink = {
-    onIntent: function (callback) { return subscribe(PUSH_EVENTS.DEEP_LINK_INTENT, callback) }
+    onIntent: function (callback) { return subscribe(PUSH_EVENTS.DEEP_LINK_INTENT, callback) },
+    ready: function () { return invoke('dsh-chamber:deep-link-ready', null) },
+    ack: function (intentId) {
+      return invoke('dsh-chamber:deep-link-ack', { intentId: intentId ?? null })
+    }
   }
-  rejectMethods(deepLink, ['ready', 'ack'])
 
   /** runtime — state push subscription kept; all actions loud-reject.
    *  onStateChanged is the reserved spelling, onChanged the preload alias. */
@@ -303,16 +307,26 @@
     'restorePreRollback', 'restart'
   ])
 
-  /** notifications — onOpen subscription kept (click loopback in the POC);
-   *  notify/ready/ack loud-reject. */
+  /** notifications — onOpen subscription kept（click loopback in the POC）；
+   *  ready/ack 接真实通道（sidecar 60/60；ack 载荷带 id——core
+   *  NOTIFICATION_OPEN_ACK 契约）。notify 保持 loud（通知显示走 Swift 宿主
+   *  腿是 M3 集成点）。 */
   var notifications = {
-    onOpen: function (callback) { return subscribe(PUSH_EVENTS.NOTIFICATION_OPEN, callback) }
+    onOpen: function (callback) { return subscribe(PUSH_EVENTS.NOTIFICATION_OPEN, callback) },
+    ready: function () { return invoke('dsh-chamber:notifications-ready', null) },
+    ack: function (openIntentId) {
+      return invoke('dsh-chamber:notification-open-ack', { id: openIntentId ?? null })
+    },
+    notify: pocUnimplemented
   }
-  rejectMethods(notifications, ['notify', 'ready', 'ack'])
 
-  /** badge — single setter, loud-reject. */
-  var badge = {}
-  rejectMethods(badge, ['set'])
+  /** badge — setter 接真实通道（core BADGE_COUNT → node-edges setBadge →
+   *  Swift dock 腿；窗口守卫在 legs）。 */
+  var badge = {
+    set: function (count) {
+      return invoke('dsh-chamber:badge-count', { count: typeof count === 'number' ? count : 0 })
+    }
+  }
 
   var dshChamberApi = {
     controlPlaneUrl: null,
