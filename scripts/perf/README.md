@@ -47,8 +47,12 @@ node scripts/perf/measure-ui.mjs --profile         --out scripts/perf/data/measu
 
 ## measure-ui 口径（2026 性能整改基线尺子）
 
-- 不改被测页面（不 reload、不导航）；注入与 cdp-lib 同款长任务观察者 + 一个
-  rAF 帧间隔采样器（仅记录，不驱动渲染）。
+- 不 reload 页面、不改被测数据/存储（2026 评审警告）：`--clicks` 的合成输入臂
+  会向活动视图**首个可交互元素**派发真实鼠标事件序列（mousedown/up/click），
+  可能命中并触发真实动作（打开会话/设置/新建等导航副作用）——**不要在有未保存
+  数据的实例上跑 --clicks**；每击解析到的目标记录在 JSON `input.clicks[].target`
+  （aria-label/文本前 40 字符/标签名），A/B 前 reload 页面、对比时核对 target。
+  注入与 cdp-lib 同款长任务观察者 + 一个 rAF 帧间隔采样器（仅记录，不驱动渲染）。
 - 字段语义：`dom.totalNodes` = 全文档元素数（验收表"全视图 DOM 节点"）；
   `dom.perInstanceNodes[]` 按 `data-instance` 分壳；`idle` 窗长任务过滤自
   `__dshPerfIdleMark`（注入时刻）之后，**不含**注入前残留；`input.clicks[].worstFrameMs`

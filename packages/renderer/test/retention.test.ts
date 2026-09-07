@@ -135,6 +135,23 @@ test('恰好等于安全窗边界即可回收（≥ 语义，2026 评审修正�
   assert.deepEqual(result, ['dsh-b', 'dsh-a'], '最久者先回收，恰好等于边界者随超限量回收')
 })
 
+test('同窗候选自动预热来源先于用户来源回收（2026 评审：straddle 保护）', () => {
+  // 判别构造：A = 用户切走的温壳（更早 hiddenSince），B = 自动预热壳（晚
+  // 于 A 但已过窗）；隐藏 2 超限 1。纯 hiddenSince 排序会收 A（用户的温
+  // 壳）；prewarmOriginIds 偏好应让从未被用户点开的预热壳 B 先走。
+  const result = decide({
+    mountedViews: [LOCAL, 'dsh-a', 'dsh-b'],
+    activeViewId: LOCAL,
+    hiddenSince: {
+      'dsh-a': NOW - VIEW_RECLAIM_GRACE_MS - 30_000, // 更久，用户壳
+      'dsh-b': NOW - VIEW_RECLAIM_GRACE_MS, // 恰过窗，自动预热壳
+    },
+    settled: settledSet(['dsh-a', 'dsh-b']),
+    prewarmOriginIds: new Set(['dsh-b']),
+  })
+  assert.deepEqual(result, ['dsh-b'], '预热壳先回收，用户温壳保槽')
+})
+
 // ---- 保留上限 ----
 
 test('隐藏 1 个超窗不回收（未超限）', () => {

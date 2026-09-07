@@ -51,6 +51,11 @@ export interface ReclaimDecisionInput {
   prewarmInflightId: string | null
   /** 永不回收的本地实例 id。 */
   localId: string
+  /** 自动预热来源的已 settle 视图 id 集合（App 层 autoPrewarmedRef 快照；
+   *  缺省 = 无）。回收优先级：用户曾主动打开的壳优先保留——同窗候选里先
+   *  收自动预热壳（2026 评审：预热壳 settle 的 hiddenSince 恒晚于用户切走
+   *  时间，纯 hiddenSince 排序会把用户的温壳先收掉）。 */
+  prewarmOriginIds?: ReadonlySet<string>
   now: number
 }
 
@@ -59,9 +64,13 @@ export interface ReclaimDecisionInput {
  * 1. 候选 = 挂载中、非 local/active/pending/prewarm-inflight、已 settle、
  *    且 hiddenSince 存在并 ≥ VIEW_RECLAIM_GRACE_MS（恰好等于边界即可回收
  *    ——docs 与 STATUS 一律记「≥60s」，2026 评审对齐措辞，边界有单测钉住）；
- * 2. 隐藏非 local 壳数超过 RETAINED_HIDDEN_VIEWS 才回收，按 hiddenSince
- *    升序（最久者先），一次只收到上限（尽力而为：不可回收的占位壳——如
- *    仍在 boot——不计入本次回收量，但其 settle 后会自行进入候选窗）。
+ * 2. 隐藏非 local 壳数超过 RETAINED_HIDDEN_VIEWS 才回收，一次只收到上限
+ *    （尽力而为：不可回收的占位壳——如仍在 boot——不计入本次回收量，但其
+ *    settle 后会自行进入候选窗）；
+ * 3. 同窗候选的排序 = **自动预热来源优先于用户来源**，其内按 hiddenSince
+ *    升序（最久者先）——预热壳从没被用户请求，占槽时先走（2026 评审：
+ *    否则"预热启动早于用户切走"的 straddle 形态会在 60s 后把用户温壳收
+ *    掉、把从未点开的预热壳留在槽里）。
  */
 export function decideReclaimCandidates(input: ReclaimDecisionInput): string[] {
   const {
@@ -72,6 +81,7 @@ export function decideReclaimCandidates(input: ReclaimDecisionInput): string[] {
     pendingViewId,
     prewarmInflightId,
     localId,
+    prewarmOriginIds,
     now,
   } = input
   const hiddenNonLocalCount = mountedViews.filter(
@@ -87,7 +97,14 @@ export function decideReclaimCandidates(input: ReclaimDecisionInput): string[] {
     return since !== undefined && now - since >= VIEW_RECLAIM_GRACE_MS
   })
   if (reclaimable.length === 0) return []
-  reclaimable.sort((a, b) => (hiddenSince[a] ?? 0) - (hiddenSince[b] ?? 0))
+  reclaimable.sort((a, b) => {
+    // 自动预热来源先收（其内最久者先）；无 origin 信息时退化为纯
+    // hiddenSince 排序（测试夹具与旧行为一致）。
+    const aPrewarm = prewarmOriginIds !== undefined && prewarmOriginIds.has(a) ? 0 : 1
+    const bPrewarm = prewarmOriginIds !== undefined && prewarmOriginIds.has(b) ? 0 : 1
+    if (aPrewarm !== bPrewarm) return aPrewarm - bPrewarm
+    return (hiddenSince[a] ?? 0) - (hiddenSince[b] ?? 0)
+  })
   return reclaimable.slice(0, Math.min(excess, reclaimable.length))
 }
 

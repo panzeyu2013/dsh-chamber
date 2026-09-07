@@ -63,8 +63,10 @@ export function shouldRetainPushedAggregate(
  * clears the producer's content signature, so the identical recovered
  * baseline is re-published and replaces the fallback view (with its archive
  * set) — the heal for aggregates that degraded before this retention fix (or
- * through any residual full-commit path). A no-op reconnect (no connection
- * owner) still consumes the backoff window, mirroring the S2 recording rule.
+ * through any residual full-commit path). Recording discipline（2026 评审校
+ * 正，与 S2 臂一致 = M4）：仅在 reconnectInstanceConnection() 实际调用成功
+ * （返回 true）时记录 lastReconnectAt——no-op 重连（无连接持有者，如已回收
+ * 来源）不消耗退避窗，每可见 tick 的重试是廉价 no-op。
  */
 export function shouldRebaselineFallbackView(opts: {
   mounted: boolean

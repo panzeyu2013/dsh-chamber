@@ -1276,7 +1276,11 @@ export default function App() {
     // watchdog callback, so the 2026 性能整改 visibility gating applies:
     // hidden windows skip it, the hidden→visible compensation tick converges
     // it once on restore.
+    // LOCAL 刻意排除（与 S2 臂同纪律）：本地聚合由权威数据直供、不经推送
+    // 通道，不存在「卡在降级合成视图」的推送类成因——重连本地 ctx 无此
+    // 自愈目标。
     for (const id of ready) {
+      if (id === LOCAL_INSTANCE_ID) continue
       if (!shouldRebaselineFallbackView({
         mounted: snapshotSourcesRef.current[id] === true,
         fallbackView: isFallbackDerivedView(watchdogAggregatesRef.current[id]),
@@ -1852,8 +1856,10 @@ export default function App() {
     // hiddenSince 排序会把用户的温壳先回收、从未请求的预热壳占据槽位，且
     // 被回收源进入预热抑制（reclaimView）——双倍保冷，违背 retention.ts
     // 头注「最近访问的 1 个」契约（触发形态：睡眠唤醒/实例增删等 idle 边
-    // 缘 + 3+ 源，见 design 24/05 记录与 optimality review）。用户主动点开
-    // 时 selectView 同步摘除 autoPrewarmed 标记，此门随之为该壳让位。
+    // 缘 + 3+ 源；登记见 design 05 §1 注记与 STATUS 性能第二阶段条）。
+    // 用户主动点开时 selectView 同步摘除 autoPrewarmed 标记，此门随之为
+    // 该壳让位；同窗候选内的回收偏好（预热壳先走）见 decideReclaimCandidates
+    // 的 prewarmOriginIds 排序。
     const retentionSlotOccupied = mountedViews.some(id =>
       id !== LOCAL_INSTANCE_ID
       && id !== activeView
@@ -1974,6 +1980,10 @@ export default function App() {
       pendingViewId: pendingViewRef.current,
       prewarmInflightId: prewarmInflightRef.current,
       localId: LOCAL_INSTANCE_ID,
+      // 快照（decide 即读）：自动预热来源在候选排序中先于用户来源被回收
+      // （retention.ts 规则 3——预热壳从未被用户请求，straddle 形态下不
+      // 允许它挤掉用户温壳）。
+      prewarmOriginIds: new Set(autoPrewarmedRef.current),
       now: Date.now(),
     })
     for (const id of candidates) reclaimView(id)
@@ -2028,7 +2038,11 @@ export default function App() {
       if (!queue.includes(id)) queue.push(id)
     }
     drainPrewarm()
-  }, [remoteInstances, remoteStatus, mountedViews, drainPrewarm])
+    // activeView 依赖（2026 评审 Minor 修复）：保留槽可经「纯激活」释放——
+    // 用户点开一个已挂载的隐藏温壳（mountedViews 不变、无 settle/roster/
+    // 可见性事件）——eligible 随 activeView 变化增长，但队列补种与 drain 都
+    // 在此 effect；缺该依赖会静默饿死下一次投机预热直到无关事件到来。
+  }, [remoteInstances, remoteStatus, mountedViews, activeView, drainPrewarm])
 
   /** 打开某来源的会话：切到该来源 shell（未挂载先挂载）并分发到运行时。 */
   const openSession = useCallback(async (instanceId: string, sessionId: string) => {

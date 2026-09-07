@@ -59,7 +59,8 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
 > 原语），实例进程/隧道/后台任务不受影响，重开走冷 boot + entry 重放；被
 > 回收源的侧栏聚合落到 30s unary 兜底（§2.3 语义）。取舍：被回收壳内运行
 > 中任务的完成蓝点/通知边沿暂停至该源重开。预热/可见性门控等细节与偏差
-> 登记见 STATUS.md、performance-baseline.md §10 与本文件 §4 原义注。
+> 登记见 STATUS.md、performance-baseline.md §10 与本文件 §4 的原始语义
+> （§1 拓扑图为收窄后形态；偏差对照以本注与 STATUS 为准）。
 
 ## 2. 侧边栏契约（核心：多来源会话统一导航）
 
@@ -150,8 +151,13 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
   不是 mounted 来源的 no-op；本段与 05 §3 同源旧句已过时，实际语义 =
   mounted 来源以 host-store 事件推送为主 + requestRefresh 即时 unary pull
   双通道。每个来源的 not-ready → ready
-  连接代边沿固定执行一次 unary：生产者会对同内容快照去重，而 App 在断线时已清空
-  聚合，该单次权威拉取保证“内容未变”的重连也恢复列表；稳定 ready 代仍为零轮询。
+  连接代边沿固定执行一次 unary：生产者会对同内容快照去重。**2026 勘误
+  （sidebar-hidden 合并后语义修订；修订记录在 STATUS 与 aggregate-refresh.ts）**：
+  App 断线分支不再清空已推送来源的聚合（`shouldRetainPushedAggregate`——行渲染
+  以 connected 为门，断连不显示；ready-edge 拉取为 sessions-only merge，归档集/
+  工作区不丢失）；稳定 ready 代亦非零轮询——30s unary 兜底 watchdog 对 stale
+  来源照常拉取，卡在降级视图（合成行）的来源由限流自愈臂重连并重放 workspace
+  follow，使 producer 重发带归档集的真实基线（`shouldRebaselineFallbackView`）。
   若该拉取瞬时失败，生产者的 loading 撤回 + idle baseline 重发负责恢复，不会永久停在
   error。推快照按来源序号使较旧在途 pull 失效。
 
