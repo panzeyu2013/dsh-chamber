@@ -360,9 +360,9 @@ poc-unimplemented、零 handshake 报错）。全程隔离现网实例。
 （e1ca9eb：DSH_SIDECAR_LEGACY_START=1 离线 pre-spawn——全新 profile 离线探针
 阻塞为 Electron 同语义，legacy 门仅供 dev）。
 **parity 边界登记（有意保留+责任方）**：updateController 有意 loud（electron-
-updater 需 Electron app 上下文；Swift W-22 Sparkle 线）；keep-awake/login-item
-异步 leg 失败的 settings-set 级回滚需 core applySettingsPatch async 化（下批
-seam）；全新离线 profile 本地实例需运行时安装（网络）——与 Electron 一致；
+updater 需 Electron app 上下文；Swift W-22 Sparkle 线）；keep-awake/login-item 异步 leg 失败的 settings-set 级回滚已收口（S-E
+8b988eb：applySettingsPatch async + sendEdge 异步面 + 失败回滚不持久化，与
+Electron 同步 throw 同路径）；全新离线 profile 本地实例需运行时安装（网络）——与 Electron 一致；
 实机门禁：SMAppService 真调用/launchApp 拉起/notify GUI 闭环。
 - **showMessage 真实模态腿**（95275cc）：NSAlert 主线程 runModal 一次、
   按钮序 raw-1000 夹取回传、style 映射、无 buttons→['OK']；无窗诚实降级。
