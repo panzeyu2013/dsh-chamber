@@ -24,11 +24,19 @@ export class AppWebEntry {
   }
 }
 
-export function ensureWebModuleSystem(): void
+/** C3 gate face (mirror of vendor-modules.d.ts ensureWebModuleSystem return slice). */
+export function ensureWebModuleSystem(): {
+  manifest: { plugins: Array<{ id: string; immediately?: boolean }> }
+  prefetch(id: string): Promise<void>
+}
 
 export function __testSetBootError(value: string | undefined): void
 export function __testSetRunError(value: unknown | undefined): void
 export function __testSetModuleSystemError(value: unknown | undefined): void
+/** Make the C3 chamber prefetch reject (the shell gate swallows it). */
+export function __testSetChamberPrefetchError(value: unknown | undefined): void
+/** Gate the next chamber prefetch; release() lets the "eval" settle. */
+export function __testQueueChamberPrefetchGate(): { started: Promise<void>; release(): void }
 export function __testDisposedCount(): number
 export function __testResetDisposed(): void
 export function __testConfiguredContexts(): Array<Record<string, unknown>>

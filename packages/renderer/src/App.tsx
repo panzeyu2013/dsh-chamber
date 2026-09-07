@@ -100,6 +100,7 @@ import {
   VIEW_RECLAIM_TICK_MS,
 } from './retention.ts'
 import InstanceView from './components/InstanceView.tsx'
+import { PERF_MARKS, perfMark } from './perf-marks.ts'
 
 /**
  * Staleness watchdog cadence for aggregate snapshots. Also the staleness
@@ -1331,6 +1332,23 @@ export default function App() {
     for (const timer of aggregateRetryTimersRef.current.values()) clearTimeout(timer)
     aggregateRetryTimersRef.current.clear()
   }, [])
+
+  // C2 perf 埋点（User Timing；标记注册表见 perf-marks.ts）：页面壳挂载与
+  // 本地实例 ready 首达。settle/boot-failed 由 shell.ts 在 settle 返回点
+  // 统一打点，本组件不再重复。
+  const appMountMarkedRef = useRef(false)
+  useEffect(() => {
+    if (appMountMarkedRef.current) return
+    appMountMarkedRef.current = true
+    perfMark(PERF_MARKS.appMount)
+  }, [])
+  const firstLocalReadyMarkedRef = useRef(false)
+  useEffect(() => {
+    if (health?.dsh?.status !== 'ready' || firstLocalReadyMarkedRef.current) return
+    firstLocalReadyMarkedRef.current = true
+    perfMark(PERF_MARKS.appLocalReady)
+  }, [health])
+
   useEffect(() => {
     let cancelled = false
 
@@ -1911,6 +1929,8 @@ export default function App() {
 
   /** Shell 终态上报（InstanceView onStateChange）：失败覆盖层读取活动视图的 error。 */
   const handleShellState = useCallback((instanceId: string, state: ShellState) => {
+    // 注：settle/boot-failed 的 perf 标记由 shell.ts 在 settle 返回点统一打点
+    // （本回调只消费状态，避免同名双标记污染 trace）。
     setShellStates(prev => (prev[instanceId] === state ? prev : { ...prev, [instanceId]: state }))
   }, [])
 

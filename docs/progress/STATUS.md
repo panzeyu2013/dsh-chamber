@@ -116,9 +116,8 @@
 
 - 私有文件纪律三实现（cp `private-file.ts` 抛错式 vs dsh-runtime `private-fs.ts` kind
   结果式，同名异签）——统一需依赖方向裁定（design 18 §9.1）。
-- wire 载体 A/E wholesale 合并（P4-3 前置清单 7 项，见 `wire-common.ts` 注）。
-- 有界输出族/状态字面量族跨侧统一与锁步排期（E-8 值表、E-12..E-16 状态字面量、
-  N9 preload↔renderer 镜像机器测试、N10 升级 rebase runbook）。
+- wire 载体（A–F）登记维持：P4-3 A↔C 传输层合并**裁定不合并**（前置 ①–⑦，任一项
+  未决前不动 A/C 传输面）；E（git-api）禁改（见 `wire-common.ts` 注，P4-1/2/3/N6）。
 - sanitize 语义矩阵（core/desktop/gateway/installer 四成员）与 win-probes↔
   windows-process 孪生：互注无机械锁步。
 - dashboard（gateway 浏览器运维页）仍为独立第三份运行时 UI，不共享 sidebar 的
@@ -131,7 +130,6 @@
 - C-F13 readManifest 三后端无共享联合（design 21 §3「单一定义」措辞未兑现）。
 - A-U3 desktop `SETTINGS_SET` 无 busy/pending/env 门（env 维度放行为有意；busy/pending
   维度对称性待决策）；A-F16 `DSH_HOME` 布局默认偏 desktop（共享推导点防误读登记）。
-- E-4/E-2/E-10 audit serialize/WRITTEN_FIELDS/5MiB 逐字双份（登记维持）。
 - dual-host 语义下沉延后：activation-facts/startup-verdict 映射、restart 拒绝织、
   apply-now 门（整门合并不做，见下取舍）、identity-probe 腿——4 个分歧位以 ruling
   注释登记在代码面，统一需新 dsh-runtime 公开导出（dist 锁）或行为裁定。
@@ -257,3 +255,29 @@
     激活/身份探针（runtime-probes 以伪 session 直连宿主期待同步
     `session/not-found` 信封）须平行迁移（探针走直连端口不经代理、与豁免窗口
     无交集）。
+- **平台词偏差 C3（2026-09 性能审计，已登记 dsh-client-web platform.ts /
+  seed.ts / renderer chamber-entry.ts / shell.ts 注释）**：上游 `PLATFORM_MODULES`
+  仍列 `@deepseek-ai/dsh-client-ui-primitives`，chamber 自建平台集不再 seed 该词
+  （其整包命名空间导入把 markdown/高亮栈拖进 App 挂载前的 main-graph 求值）；
+  改由 composite covered factory 回答 extra 行的同步 require 边，前置保证 =
+  chamber 入口先于任何 extra bundle 装载（shell.ts C3 门 + host-graph.ts
+  `awaitBeforeLoad`）。依赖面：本地/远端 profile 的 extra 行与用户插件 client
+  bundle 的 primitives require 由该工厂回答；残余窄竞态 = shell 侧 chamber
+  prefetch 失败后 create 期并发 materialize（extra loud 降级、重试自愈，
+  见 chamber-entry 头注）——非静默。实测（build 产物快照 2026-09，终版 dist
+  见 perf-sizes.json 与 performance-baseline.md 字节快照节）：主图
+  1,403,568 → 1,185,439 raw（−218KB / −77KB gzip），chamber 入口净 +217KB
+  → C4 后再 −176KB（分步再着色）；vendor 栈仍经内核 onboarding 静态链留在
+  主图（部分收益，剩余面待内核懒化）。
+- **settings 簇 deferred C4（2026-09 性能审计，已登记 chamber-entry.ts /
+  chamber-covered.ts 注释）**：官方 ui-settings **保留首屏**（locale/ui-theme
+  首屏 root-inject 其 `settingsScope`，defer 会瘫痪壳）；其后移的是 4 个官方
+  settings section + chamber settings shell/connections（chamber-entry
+  registerDeferred，+6 import 站点）。语义：可观测瞬态仅「设置入口缺席
+  ≈1 chunk 往返」（页面首个实例首冷启一次性，其后模块缓存同 tick 解析；
+  六家同 tick 注册，无中间「官方 SettingsRoot 空壳」帧）；每服设置面板
+  内容经 child ctx（bridge-context mountBridgeSession）独立装载，不受
+  boot-ctx 时序影响。失败面（登记）：任一 import 失败 → 整个簇本 boot 缺失
+  （含 connections CRUD、dsh-runtime 管理与更新），console loud 无重试、
+  靠 shell 重 boot——与既有 deferred 家族同模式；按家族 allSettled 独立
+  注册为候选改进（bridge 失败可落官方降级面）。

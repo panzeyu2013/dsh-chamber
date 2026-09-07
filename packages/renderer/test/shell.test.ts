@@ -27,7 +27,7 @@ import {
   __testResetLifecycle, __testSetSessionsAvailable, __testSetSessionsListed,
   __testSetSessionsOpenError, __testSetSessionsReadError,
   __testSetSessionsSnapshotError,
-  __testSetBootError, __testSetModuleSystemError, __testSetRunError,
+  __testSetBootError, __testSetChamberPrefetchError, __testSetModuleSystemError, __testSetRunError,
 } from '../test-fixtures/dsh-client-web.mjs'
 
 const shellModule = await import('../src/shell.ts')
@@ -283,12 +283,15 @@ test('bootInstanceShell: installs the module system BEFORE any host-graph fetch 
     const state = await bootInstanceShell('ssh-test-order-5', '/api/i/ssh-test-order-5', {} as HTMLElement, () => {})
     assert.equal(state.booted, true)
     // The fixture's ensureWebModuleSystem records 'ensure' synchronously at
-    // bootInstanceShell entry; the fetch is collectExtraRows's first step.
+    // bootInstanceShell entry; the C3 gate's chamber prefetch fires right
+    // after (its event is pushed synchronously); the fetch is
+    // collectExtraRows's first step.
     // collectExtraRows now retries the pre-ready 503 on a bounded budget, so
     // the event log carries repeated 'fetch' entries — the invariant under
-    // test is the ORDER (module system installed before the FIRST fetch).
+    // test is the ORDER (module system installed before the FIRST fetch, and
+    // the chamber prefetch between the two — C3 gate, 2026-09).
     const events = __testEventLog()
-    assert.deepEqual(events.slice(0, 2), ['ensure', 'fetch'])
+    assert.deepEqual(events.slice(0, 3), ['ensure', 'prefetch:@dsh-chamber/app', 'fetch'])
   } finally {
     __testResetEventLog()
     restoreFetch()
@@ -1158,5 +1161,54 @@ test('openInstanceSession: a service that arrives after the first attempt but ne
     console.error = originalConsoleError
     restoreFetch()
     restoreWindow()
+  }
+})
+
+// ── C3 gate (2026-09 性能审计): the chamber prefetch must fire before the
+// extra-row channel is consulted, and its failure is swallowed by the shell
+// gate (the loud path is run()'s create-side import; a boot with no extra
+// rows never even reaches the gate's await). The fixture now returns the
+// module-system face (manifest + prefetch) so these paths are exercised for
+// real instead of degrading through a swallowed TypeError.
+test('C3 gate: chamber prefetch fires after the module system install and before the boot settles', async () => {
+  const instanceId = 'local'
+  const restoreFetch = stubReadyGraph()
+  __testResetEventLog()
+  __testResetLifecycle()
+  try {
+    const state = await bootInstanceShell(instanceId, '/api/i/local', {} as HTMLElement, () => {})
+    assert.equal(state.booted, true)
+    const log = __testEventLog()
+    assert.ok(log.includes('ensure'), `module system installed first (log: ${log.join(',')})`)
+    const prefetchAt = log.indexOf('prefetch:@dsh-chamber/app')
+    assert.ok(prefetchAt !== -1, `chamber prefetch fired (log: ${log.join(',')})`)
+    assert.ok(prefetchAt > log.indexOf('ensure'), 'prefetch strictly after the module-system install')
+  } finally {
+    disposeInstanceShell(instanceId)
+    __testResetLifecycle()
+    __testResetEventLog()
+    restoreFetch()
+  }
+})
+
+test('C3 gate: a chamber prefetch rejection is swallowed — the boot still settles (loud owned by create-side import)', async () => {
+  const instanceId = 'local'
+  const restoreFetch = stubReadyGraph()
+  const originalConsoleError = console.error
+  console.error = () => {}
+  __testResetEventLog()
+  __testResetLifecycle()
+  try {
+    __testSetChamberPrefetchError(new Error('chamber bundle load failed'))
+    const state = await bootInstanceShell(instanceId, '/api/i/local', {} as HTMLElement, () => {})
+    assert.equal(state.booted, true)
+    assert.ok(__testEventLog().includes('prefetch:@dsh-chamber/app'))
+  } finally {
+    disposeInstanceShell(instanceId)
+    __testSetChamberPrefetchError(undefined)
+    __testResetLifecycle()
+    __testResetEventLog()
+    console.error = originalConsoleError
+    restoreFetch()
   }
 })

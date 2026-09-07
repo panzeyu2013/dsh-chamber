@@ -17,6 +17,19 @@
  * v0.1.2-alpha.1 alignment: the platform set gains the store engine word
  * `@deepseek-ai/dsh-client-store` (see platform.ts); the static import below
  * keeps the satisfies pin's two sides in lockstep.
+ *
+ * C3 (2026-09 性能审计, 偏差登记): `@deepseek-ai/dsh-client-ui-primitives` is
+ * deliberately NOT seeded (platform.ts) — its wholesale namespace import
+ * pulled the whole primitives package (markdown/highlight/block renderers and
+ * their vendor stack) into the main-graph eval that precedes the App mount.
+ * The word is answered by the composite's covered factory instead
+ * (chamber-entry.ts COVERED_FACTORIES); the shell gates every extra-bundle
+ * load behind the chamber entry evaluation (shell.ts "C3 gate"). Residual
+ * edge: if the shell-side chamber prefetch fails, the create-side import
+ * retry can run concurrently with extra loads — an extra requiring the word
+ * in that window fails loud and degrades (retry self-heals), never silent.
+ * Keeping the word here would defeat the whole change — do not restore it
+ * without removing the factory path too.
  */
 import * as React from 'react'
 import * as ReactJsxRuntime from 'react/jsx-runtime'
@@ -25,7 +38,6 @@ import * as ReactDomClient from 'react-dom/client'
 import * as Cordis from '@deepseek-ai/cordis'
 import * as ClientStore from '@deepseek-ai/dsh-client-store'
 import * as UiSlots from '@deepseek-ai/dsh-client-ui-slots'
-import * as UiPrimitives from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PlatformModule } from './platform.ts'
 
 /**
@@ -44,6 +56,5 @@ export function getStaticModules(): Record<string, unknown> {
     '@deepseek-ai/cordis': Cordis,
     '@deepseek-ai/dsh-client-store': ClientStore,
     '@deepseek-ai/dsh-client-ui-slots': UiSlots,
-    '@deepseek-ai/dsh-client-ui-primitives': UiPrimitives,
   } satisfies Record<PlatformModule, unknown>
 }

@@ -50,8 +50,11 @@
  * service at its apply root (verified against the vendor inject lists): the
  * deferred set (jobs, goal, skill, tool, trajectory, workflow-run,
  * deliverables, subagent, message-feedback, plan, user-questions,
- * agent-preset, permission-presets, and the rc.8 alignment trio attachment,
- * brand-official, reference) all inject first-screen services
+ * agent-preset, permission-presets, the rc.8 alignment trio attachment,
+ * brand-official, reference, and the C4 settings cluster (2026-09: the
+ * official settings sections + the chamber settings shell/connections —
+ * ui-settings itself stays first-screen, see its import comment) all inject
+ * first-screen services
  * (connection/sessions/slots/locale/remote/…). Two families that WOULD have
  * violated the invariant are kept FIRST-SCREEN by construction (2026-08
  * review fix — the vendor `inject` list is the authority, and it carries the
@@ -146,6 +149,15 @@ import * as ApiRemotes from '@deepseek-ai/dsh-api-remotes/client'
 // graph-inject the controllers (dsh.client.inject), so deferring them would
 // defer the whole shell.
 import * as Store from '@deepseek-ai/dsh-client-store'
+// C3 (2026-09 性能审计): ui-primitives joins the store as a platform word the
+// composite answers with a covered factory — the seed no longer carries it
+// (dsh-client-web seed.ts/platform.ts deviation notes), so the whole-package
+// namespace import leaves the main-graph (App-mount-before) eval. Static
+// import here, never ctx.plugin'd: it is not a cordis plugin. The shell's C3
+// gate (shell.ts) guarantees THIS bundle evaluates before any extra-row
+// bundle loads, so this factory answers their `require(...ui-primitives)`
+// edges; run()'s own prefetch of this entry is then a module-cache hit.
+import * as UiPrimitives from '@deepseek-ai/dsh-client-ui-primitives'
 import * as ApiSessionController from '@deepseek-ai/dsh-api-session-controller/client'
 import * as ApiWorkspaceController from '@deepseek-ai/dsh-api-workspace-controller/client'
 import * as Locale from '@deepseek-ai/dsh-client-locale/client'
@@ -159,11 +171,16 @@ import * as UiLayout from '@dsh-chamber/dsh-client-ui-layout/client'
 import * as UiSidebar from '@dsh-chamber/dsh-client-ui-sidebar/client'
 import * as UiGit from '@dsh-chamber/dsh-client-ui-git/client'
 import * as UiOpenIn from '@dsh-chamber/dsh-client-ui-open-in/client'
+// The official ui-settings (settingsScope / settingsSchema provider, official
+// SettingsRoot occupant) stays FIRST-SCREEN: locale and ui-theme — both
+// first-screen — ROOT-inject `settingsScope` (vendor client inject lists;
+// same invariant the deferred-split rules below check), so deferring it would
+// strand their fibers and with them the whole shell. The settings SECTION
+// families and the chamber settings shell are deferred instead (C4,
+// 2026-09 性能审计 — see registerDeferred): nothing first-screen injects
+// their services or occupants, and the settings surface is only reachable
+// after the first screen.
 import * as UiSettings from '@deepseek-ai/dsh-client-ui-settings/client'
-import * as UiSettingsGeneral from '@deepseek-ai/dsh-client-ui-settings-general/client'
-import * as UiSettingsModels from '@deepseek-ai/dsh-client-ui-settings-models/client'
-import * as UiSettingsPlugins from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
-import * as UiSettingsPluginInventory from '@deepseek-ai/dsh-client-ui-settings-plugin-inventory/client'
 import * as UiConversation from '@deepseek-ai/dsh-client-ui-conversation/client'
 // dsh-v0.1.2-alpha.1 conversation families (decision D6: into the composite,
 // FIRST-SCREEN): ui-session installs the sessions root source + scope adapter
@@ -204,8 +221,6 @@ import * as UiModelSelection from '@deepseek-ai/dsh-client-ui-model-selection/cl
 // the sidebar's add-workspace dialog share the same in-app directory browser
 // (design 05 §4; the OS chooser is never surfaced to chamber users).
 import * as UiDirectoryPickerBrowse from '@deepseek-ai/dsh-client-ui-directory-picker-browse/client'
-import * as UiSettingsConnections from '@dsh-chamber/dsh-client-ui-settings-connections/client'
-import * as UiSettingsBridge from '@dsh-chamber/dsh-client-ui-settings-bridge/client'
 
 // ── Deferred families (see module header): dynamic-import chunks, fetched
 // ── and registered after the boot settles. Each `import()` resolves to the
@@ -237,6 +252,37 @@ async function registerDeferred(ctx: Context): Promise<void> {
     attachment,
     brandOfficial,
     reference,
+    // C4 settings cluster (2026-09 性能审计): official ui-settings stays
+    // FIRST-SCREEN (locale/theme root-inject its settingsScope), but its
+    // SECTION families and the chamber settings shell/connections are only
+    // reachable once the user opens settings — deferred like the rc.8
+    // families. Inject audit: every member injects first-screen services only
+    // (slots/locale/remote.*/settingsScope/settingsSchema — all first-screen
+    // providers); no first-screen family root-injects anything this cluster
+    // provides (bridge injects only slots+locale and provides the shadowing
+    // sidebar.settings occupant — the official SettingsRoot occupant is
+    // registered by ui-settings-general, which moves here with it). Visible
+    // transients: the settings ENTRY is absent for ~one chunk roundtrip —
+    // one-time only (first instance, first cold boot; later boots resolve
+    // from the module cache, possibly before settle); there is no
+    // intermediate "official root without sections" frame (all six register
+    // in one synchronous continuation after the single Promise.all). The
+    // per-server panel content loads through each selected server's child ctx
+    // (bridge-context mountBridgeSession) and is unaffected by this boot-ctx
+    // timing. Failure semantics (registered): one failed import drops the
+    // WHOLE cluster for this boot (incl. the chamber-global connections
+    // surface, per-server dsh-runtime management and updates) — console loud,
+    // no retry (recovery = shell re-boot), same pattern as the other
+    // registerDeferred families; per-family allSettled independent
+    // registration is a possible future improvement (a bridge failure would
+    // then degrade to the official fallback shell instead of the whole
+    // cluster disappearing).
+    settingsGeneral,
+    settingsModels,
+    settingsPlugins,
+    settingsPluginInventory,
+    settingsConnections,
+    settingsBridge,
   ] = await Promise.all([
     import('@deepseek-ai/dsh-client-ui-jobs/client'),
     import('@deepseek-ai/dsh-client-ui-goal/client'),
@@ -262,6 +308,14 @@ async function registerDeferred(ctx: Context): Promise<void> {
     import('@deepseek-ai/dsh-client-ui-attachment/client'),
     import('@deepseek-ai/dsh-client-ui-brand-official/client'),
     import('@deepseek-ai/dsh-client-ui-reference/client'),
+    // C4 settings cluster (see the destructure comment): official section
+    // families + the chamber settings shell & connections section.
+    import('@deepseek-ai/dsh-client-ui-settings-general/client'),
+    import('@deepseek-ai/dsh-client-ui-settings-models/client'),
+    import('@deepseek-ai/dsh-client-ui-settings-plugins/client'),
+    import('@deepseek-ai/dsh-client-ui-settings-plugin-inventory/client'),
+    import('@dsh-chamber/dsh-client-ui-settings-connections/client'),
+    import('@dsh-chamber/dsh-client-ui-settings-bridge/client'),
   ])
   ctx.plugin(jobs)
   ctx.plugin(goal)
@@ -279,6 +333,12 @@ async function registerDeferred(ctx: Context): Promise<void> {
   ctx.plugin(attachment)
   ctx.plugin(brandOfficial)
   ctx.plugin(reference)
+  ctx.plugin(settingsGeneral)
+  ctx.plugin(settingsModels)
+  ctx.plugin(settingsPlugins)
+  ctx.plugin(settingsPluginInventory)
+  ctx.plugin(settingsConnections)
+  ctx.plugin(settingsBridge)
 }
 
 /**
@@ -309,7 +369,8 @@ export const inject: string[] = []
  * cordis's apply-error log). A top-level check would be muffled: a composite
  * top-level throw is swallowed by prefetchImmediateTier's catch and the drift
  * would surface as a misleading extra-bundle "import failed" instead. Runs on
- * every boot (apply runs per ctx); O(n) over ~20 ids, negligible.
+ * every boot (apply runs per ctx); O(n) over the ~24 covered-factory ids,
+ * negligible.
  *
  * The CI lockstep test (host-graph.test.ts) covers the declared↔covered
  * direction; this covers the map↔declared direction (chamber-entry cannot be
@@ -407,10 +468,6 @@ export function apply(ctx: Context): void {
   ctx.plugin(UiGit)
   ctx.plugin(UiOpenIn)
   ctx.plugin(UiSettings)
-  ctx.plugin(UiSettingsGeneral)
-  ctx.plugin(UiSettingsModels)
-  ctx.plugin(UiSettingsPlugins)
-  ctx.plugin(UiSettingsPluginInventory)
   ctx.plugin(UiConversation)
   // First-screen (2026-08 review fix): ui-model-selection's root inject
   // requires `commandUi` (commands) and commands requires `inputTriggers`
@@ -428,8 +485,6 @@ export function apply(ctx: Context): void {
   // import comment above) — the host pins the browse capability per spawn, so
   // the client surface and the host capability never disagree.
   ctx.plugin(UiDirectoryPickerBrowse)
-  ctx.plugin(UiSettingsConnections)
-  ctx.plugin(UiSettingsBridge)
   // Deferred families: fetch their chunks in the background and register them
   // once loaded — never awaited (the entry must settle with only the
   // first-screen families evaluated; see module header).
@@ -463,7 +518,9 @@ const coveredFactory = (exports: unknown): ClientPluginHandoff['factory'] => () 
  *
  * Deliberately NOT included:
  * - the deferred families (jobs, goal, …, attachment, brand-official,
- *   reference): their chunks load after the boot settles; the official graph
+ *   reference, and the C4 settings cluster — the official settings sections,
+ *   the chamber settings shell + connections): their chunks load after the
+ *   boot settles; the official graph
  *   only guarantees the immediately tier for synchronous requires, and the
  *   client-bundle purity gate (upstream tsdown.client.ts) forbids value
  *   imports of ui-* packages anyway;
@@ -503,6 +560,11 @@ const COVERED_FACTORIES: ReadonlyArray<readonly [id: string, factory: ClientPlug
   // is inert-but-harmless). The controllers + conversation families are
   // first-screen plugins, factories mirror their namespaces like the rest.
   ['@deepseek-ai/dsh-client-store', coveredFactory(Store)],
+  // C3 (2026-09 性能审计): the primitives platform word — the seed no longer
+  // answers it (see the import comment); the shell's C3 gate orders this
+  // bundle's evaluation before any extra-row load, so require edges land
+  // here. Same shape as the store word: factory only, never ctx.plugin'd.
+  ['@deepseek-ai/dsh-client-ui-primitives', coveredFactory(UiPrimitives)],
   ['@deepseek-ai/dsh-api-session-controller', coveredFactory(ApiSessionController)],
   ['@deepseek-ai/dsh-api-workspace-controller', coveredFactory(ApiWorkspaceController)],
   ['@deepseek-ai/dsh-client-locale', coveredFactory(Locale)],
@@ -512,10 +574,6 @@ const COVERED_FACTORIES: ReadonlyArray<readonly [id: string, factory: ClientPlug
   ['@dsh-chamber/dsh-client-ui-git', coveredFactory(UiGit)],
   ['@dsh-chamber/dsh-client-ui-open-in', coveredFactory(UiOpenIn)],
   ['@deepseek-ai/dsh-client-ui-settings', coveredFactory(UiSettings)],
-  ['@deepseek-ai/dsh-client-ui-settings-general', coveredFactory(UiSettingsGeneral)],
-  ['@deepseek-ai/dsh-client-ui-settings-models', coveredFactory(UiSettingsModels)],
-  ['@deepseek-ai/dsh-client-ui-settings-plugins', coveredFactory(UiSettingsPlugins)],
-  ['@deepseek-ai/dsh-client-ui-settings-plugin-inventory', coveredFactory(UiSettingsPluginInventory)],
   ['@deepseek-ai/dsh-client-ui-conversation', coveredFactory(UiConversation)],
   ['@deepseek-ai/dsh-client-ui-commands', coveredFactory(UiCommands)],
   ['@deepseek-ai/dsh-client-ui-input-trigger', coveredFactory(UiInputTrigger)],
@@ -525,8 +583,6 @@ const COVERED_FACTORIES: ReadonlyArray<readonly [id: string, factory: ClientPlug
   ['@deepseek-ai/dsh-client-ui-chat', coveredFactory(UiChat)],
   ['@deepseek-ai/dsh-client-ui-approval', coveredFactory(UiApproval)],
   ['@deepseek-ai/dsh-client-ui-directory-picker-browse', coveredFactory(UiDirectoryPickerBrowse)],
-  ['@dsh-chamber/dsh-client-ui-settings-connections', coveredFactory(UiSettingsConnections)],
-  ['@dsh-chamber/dsh-client-ui-settings-bridge', coveredFactory(UiSettingsBridge)],
 ]
 
 /** Factory-form self-registration: body runs once, at materialization. */

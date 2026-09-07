@@ -4,12 +4,15 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>dsh-chamber</title>
-    <!-- 启动骨架屏关键 CSS（LCP 优化，2026-08）：首帧在 HTML 解析时即可绘制，
-         不依赖 227KB 的 chamber CSS 与 1.8MB 的 JS eval。骨架用独立的 dsh-boot-*
-         命名空间：chamber CSS 无同名规则，全量样式加载后不会覆盖大字号品牌块
-         （否则 .instance-loading-title 的 14px 会压掉 40px 品牌字）。React
-         createRoot 首次 render 会清空 #root 的既有子节点，mount 时骨架被
-         InstanceView 的同视觉语言骨架无缝替换——不会出现双骨架/FOUC。 -->
+    <!-- 启动骨架屏关键 CSS（首帧观感优化，2026-08）：首帧在 HTML 解析时即可
+         绘制，不依赖全量 chamber CSS 与首屏 JS 的加载/求值（体积会随上游 dsh
+         版本漂移，勿在此写死数字；实测分账见 docs/progress/performance-baseline.md）。
+         骨架用独立的 dsh-boot-* 命名空间：chamber CSS 无同名规则，全量样式加载后
+         不会覆盖大字号品牌块（否则 .instance-loading-title 的 14px 会压掉 40px
+         品牌字）。React createRoot 首次 render 会清空 #root 的既有子节点，mount
+         时骨架被 InstanceView 的同视觉语言骨架无缝替换——不会出现双骨架/FOUC。
+         注意：骨架只改善 FCP/观感，不构成最终 LCP（被移除的候选会被过滤，且
+         真实 UI 的元素更大），LCP 仍由真实首帧决定。 -->
     <style>
       html, body, #root { height: 100%; margin: 0; }
       body {
@@ -62,8 +65,8 @@
   </head>
   <body>
     <div id="root">
-      <!-- 静态首帧骨架（LCP 元素 = 40px 品牌字块）：HTML 解析即绘制，React
-           mount 时被替换清除。 -->
+      <!-- 静态首帧骨架（观感/首帧画布）：HTML 解析即绘制，React mount 时被
+           替换清除。真实 UI 帧（settle 后）才是 LCP 的最终候选。 -->
       <div class="dsh-boot" aria-busy="true">
         <div class="dsh-boot-inner">
           <div class="dsh-boot-spinner" aria-hidden="true"></div>
