@@ -16,6 +16,7 @@ paint/resource，buffered），boot/eval 每个 run 还执行 `Page.reload`（sw
 | `switch-measure.mjs` | 场景② 跨来源切换 / 场景③ 连点 ×N（热切换面；见 performance-baseline.md §3） |
 | `eval-measure.mjs` | T6/H3 归因探针：每 run 新建 CDP 连接（导航竞态下旧 ws 会挂起）→ reload → 长任务 + JS 资源清单 |
 | `disk-walk-baseline.mjs` | T3 磁盘统计曲线：合成 .pnpm-store 形态 fixture（深层嵌套/符号链接/硬链接去重面）上同步 vs 异步实现描点（`--async` 切换测量目标） |
+| `measure-ui.mjs` | **稳态基线尺子**（2026 性能整改验收）：附加运行中实例，采 DOM 节点/挂载视图数/JS 堆基数 + 空闲 N 秒长任务 + 合成输入帧间隔 + 可选 5s CPU profile，输出固定 schema 基线 JSON 供 A/B 对照 |
 | `data/*.json` | 各轮测量落盘（基线/中间态/after），`gitignore` 白名单入库供前后对照 |
 
 ## 前置条件
@@ -37,10 +38,25 @@ node scripts/perf/switch-measure.mjs 1 --rapid 10 --out scripts/perf/data/rapid-
 node scripts/perf/eval-measure.mjs 3 --out scripts/perf/data/eval-xxx.json          # H3 归因
 node scripts/perf/disk-walk-baseline.mjs            --out scripts/perf/data/disk-walk-before.json  # 同步（改造前）
 node scripts/perf/disk-walk-baseline.mjs --async    --out scripts/perf/data/disk-walk-after.json   # 异步（改造后）
+node scripts/perf/measure-ui.mjs --idle 15 --clicks 5 --out scripts/perf/data/measure-ui-before.json  # 稳态基线（整改前）
+node scripts/perf/measure-ui.mjs --profile         --out scripts/perf/data/measure-ui-profile.json    # 附 5s CPU profile
 ```
 
 > --out 一律写 `scripts/perf/data/`（.gitignore 白名单例外入库供前后对照）；写到
 > 仓库根 `data/` 会被忽略且不随整改台账保存。
+
+## measure-ui 口径（2026 性能整改基线尺子）
+
+- 不改被测页面（不 reload、不导航）；注入与 cdp-lib 同款长任务观察者 + 一个
+  rAF 帧间隔采样器（仅记录，不驱动渲染）。
+- 字段语义：`dom.totalNodes` = 全文档元素数（验收表"全视图 DOM 节点"）；
+  `dom.perInstanceNodes[]` 按 `data-instance` 分壳；`idle` 窗长任务过滤自
+  `__dshPerfIdleMark`（注入时刻）之后，**不含**注入前残留；`input.clicks[].worstFrameMs`
+  为每击后 1s 窗最坏帧间隔（验收表"合成输入无 >500ms 帧间隔"）；`frames` 为
+  全程采样窗 p95/最坏。单步失败降级为字段缺失并记 `errors[]`，仅连接/参数
+  错误非零退出——脚本可挂在整改前后各跑一次做同环境 A/B。
+- 注意：视图保留回收整改后"挂载视图数/每壳节点"应下降、堆应无净增长；空闲
+  长任务与帧间隔对后台周期拉取门控敏感（对比时保持同一实例同批视图）。
 
 ## 指标口径（settle 语义的下界，2026-09 review minor2）
 
