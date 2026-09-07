@@ -6,8 +6,8 @@
 //  结构说明：
 //  - 单 executableTarget「DSHChamberPoc」（Sources/DSHChamberPoc）承载 P0 全部
 //    Swift 代码：本窗口壳（main/AppDelegate/MainWindowController，W-03）与
-//    W-04 的 A 桥文件（BridgeShimInjector/MessageHandler/FrameCodec/
-//    BridgeProto，其他作者创建）同 target，模块内直接互引共享契约。
+//    W-04 的 A/B 桥文件（BridgeShimInjector/MessageHandler/AnyCodable/
+//    FrameCodec/BridgeClient，其他作者创建）同 target，模块内直接互引共享契约。
 //  - resources .process("Resources")：bridge-shim.poc.js（W-04 作者放入
 //    Sources/DSHChamberPoc/Resources/）经 Bundle.module 读取；此处先声明。
 //  - testTarget「DSHChamberPocTests」（Tests/DSHChamberPocTests，测试文件由

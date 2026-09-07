@@ -108,7 +108,7 @@
       var post = nativePostMessage()
       if (post === null) {
         warnNoBridgeOnce()
-        reject({ error: 'no-native-bridge' })
+        reject(new Error('no-native-bridge'))
         return
       }
       var id = nextRequestId
@@ -186,7 +186,7 @@
 
   /** Placeholder for every POC-unimplemented method: loud, never silent. */
   function pocUnimplemented() {
-    return Promise.reject({ error: 'poc-unimplemented' })
+    return Promise.reject(new Error('poc-unimplemented'))
   }
 
   function rejectMethods(namespace, names) {

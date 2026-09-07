@@ -446,7 +446,8 @@ public final class BridgeClient {
     /// 帧超限 FrameCodecError）对应抛出。可跨线程并发调用（内部锁保证 id
     /// 唯一、写串行、pending 安全）。
     public func invoke(method: String, payload: AnyCodable? = nil) async throws -> AnyCodable {
-        // 先编码后占 id：本地编码错误（超限等）不消耗 id、不登记。
+        // 先占 id 后编码：编码失败（超限等）仅烧号、不登记、不悬挂——id
+        // 单调语义不受影响（静态审查 #3 注释修正）。
         let id = allocateID()
         let data = try FrameCodec.encode(.request(id: id, method: method, payload: payload))
         return try await withCheckedThrowingContinuation { continuation in

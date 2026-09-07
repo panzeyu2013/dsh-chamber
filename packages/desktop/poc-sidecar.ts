@@ -174,19 +174,17 @@ function infoHandler(): Json {
 }
 
 function instancesGetHandler(): Json {
+  // Honest-error contract (todo §0.2-⑥): missing/unreadable/corrupt registry
+  // answers {error:'poc-no-registry'} on the wire — never a silent empty
+  // success (AGENTS proxy-honesty invariant; the renderer must tell "no
+  // instances" apart from "read failed"). Valid arrays pass through untouched
+  // (registry transactions belong to M2's real processors).
   const instancesPath = INSTANCES_PATH
-  if (instancesPath === null) {
-    console.error('[poc-sidecar] desktop_ssh_instances_get: no --instances <path> argument — returning []')
-    return []
-  }
+  if (instancesPath === null) throw new HandlerError('poc-no-registry')
   const rawText = readInstancesFile(instancesPath)
-  if (rawText === null) return []
+  if (rawText === null) throw new HandlerError('poc-no-registry')
   const roster = parseInstancesJson(instancesPath, rawText)
-  if (roster === null) return []
-  // Missing/unreadable/foreign file never crashes and never errors loudly on
-  // the wire: the roster reads as [] and the reason lands on stderr above.
-  // The array content passes through untouched (registry transactions belong
-  // to M2's real processors).
+  if (roster === null) throw new HandlerError('poc-no-registry')
   return roster
 }
 
@@ -194,7 +192,7 @@ function readInstancesFile(instancesPath: string): string | null {
   try {
     return readFileSync(instancesPath, 'utf8')
   } catch (err) {
-    console.error('[poc-sidecar] desktop_ssh_instances_get: cannot read ' + instancesPath + ' (' + describeError(err) + ') — returning []')
+    console.error('[poc-sidecar] desktop_ssh_instances_get: cannot read ' + instancesPath + ' (' + describeError(err) + ') — answering poc-no-registry')
     return null
   }
 }
@@ -203,12 +201,12 @@ function parseInstancesJson(instancesPath: string, rawText: string): Json | null
   try {
     const parsed: unknown = JSON.parse(rawText)
     if (!Array.isArray(parsed)) {
-      console.error('[poc-sidecar] desktop_ssh_instances_get: content of ' + instancesPath + ' is not a JSON array — returning []')
+      console.error('[poc-sidecar] desktop_ssh_instances_get: content of ' + instancesPath + ' is not a JSON array — answering poc-no-registry')
       return null
     }
     return parsed as Json
   } catch (err) {
-    console.error('[poc-sidecar] desktop_ssh_instances_get: not valid JSON in ' + instancesPath + ' (' + describeError(err) + ') — returning []')
+    console.error('[poc-sidecar] desktop_ssh_instances_get: not valid JSON in ' + instancesPath + ' (' + describeError(err) + ') — answering poc-no-registry')
     return null
   }
 }

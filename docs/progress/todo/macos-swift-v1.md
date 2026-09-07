@@ -232,8 +232,8 @@ W-03 起骨架文件落地即可在沙箱执行验证；窗口目测/剪贴板/�
 | | W-02 | | | |
 | 2026-09-07 | W-03 | macos/ SwiftPM 骨架 + 窗口壳；`swift build` 0 警告 0 错误；scratch 运行时冒烟（ATS 未拦 loopback、资源注入成功） | 代码过 | 窗口视觉/外链/退出语义待 [用户机 GUI] |
 | 2026-09-07 | W-04 | TrustGuard/BridgeShimInjector/MessageHandler + bridge-shim.poc.js；46 项行为断言（/tmp/dsh-verify）+ 框架单测并入 | 代码过 | 真页 hydration 对拍（shim 挂出时机）待 GUI |
-| 2026-09-07 | W-05 | AnyCodable/FrameCodec/BridgeClient + poc-sidecar.ts；`swift test` 19/19；sidecar NDJSON 驱动 33/33；**真链冒烟：真实 chamber UI → shim → Swift 护栏 → B 桥 → sidecar `desktop_ssh_instances_get` 回包** | 代码过；invoke 拓扑真链通 | push/edge 拓扑与通知点击需 GUI 手测；`info` 未在真链日志观测（待查 shim 触发时机） |
-| | W-06 | | | |
+| 2026-09-07 | W-05 | AnyCodable/FrameCodec/BridgeClient + poc-sidecar.ts；`swift test` 19/19；sidecar NDJSON 驱动 33/33；**真链冒烟：真实 chamber UI → shim → Swift 护栏 → B 桥 → sidecar `desktop_ssh_instances_get` 回包** | 代码过；invoke 拓扑真链通 | push/edge 拓扑补集成测试中（B 桥 XCTest 直驱，无 GUI）；`info` 未在真链日志观测（待查 shim 触发时机） |
+| 2026-09-07 | W-06/G1 | [用户实机目测] 本地实例正常显示、主界面可用（用户确认，非沙箱取证） | **G1 过（用户确认）** | G3 侧栏插件走查与其余 G 门按用户指示暂缓（登记：G2/G4/G5/C1/C2 待补实机矩阵） |
 | | W-07 | | | |
 | | W-08 | | | |
 
@@ -244,6 +244,18 @@ W-03 起骨架文件落地即可在沙箱执行验证；窗口目测/剪贴板/�
 为**代码交付级**完成；**所有门禁判定（G1–G5/C1/C2）仍属未过**：截图取证被系统
 录屏权限拒绝，UI 目测项全部待 [用户机 GUI]。D1–D7 未签核（§0.1 表）——M0 未启动，
 本表行不等同于门通过。
+**同日补（静态审查 + 集成测试轮）**：P0 静态审查结论 0 Blocker / 1 Major /
+约 20 Minor-Info——Major #1（instances_get 缺 registry 伪装空成功，抵触
+AGENTS proxy-honesty）已修：sidecar 现答 `{error:'poc-no-registry'}` 诚实错误帧，
+集成测试改判抛错；Minor 已修：#2 注释/命名漂移（3 通道→7 通道、BridgeProto→
+BridgeClient）、#3 注释次序、#4 JSON 预扫描加深度上限 512、#11 导航/消息护栏统一
+走 TrustGuard、#12 AppDelegate 补 Dock reopen 恢复、#16 jsStringLiteral 补
+U+2028/29 转义、#17 shim 桩 reject 统一 Error 形态；其余 #5–#10/#13–#15/#18–#24
+登记级（fail-closed 无安全影响；P1/M2 语义前移处代码注释已声明）。**B 桥集成测试
+5 例入库**（BridgeClientIntegrationTests.swift；全量 swift test 24/24）——
+push 拓扑（事件先于响应）已无 GUI 闭环，edge 反向通道留 M2/P1。三方通道差集：
+Swift 白名单 7 == shim 7 == sidecar 7（+edge:notification-clicked 不可达死桩）；
+shim PUSH_EVENTS 8 与 ipc-events.ts 字面量逐字一致。
 
 **开工前风险提示（8 条）**：
 1. **node/pnpm 缺位**（沙箱实测 MISSING）——W-01 首步用户机装 node ≥24 + pnpm@11.21.0；

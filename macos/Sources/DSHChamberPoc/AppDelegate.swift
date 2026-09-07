@@ -3,7 +3,7 @@
 //  todo companion macos-swift-v1 §0.2④）；B 桥接入点对应 W-04 契约
 //
 //  职责：解析环境（node / sidecar / 控制面 URL）→ 组装 BridgeClient
-//  （BridgeProto.swift，W-04 作者实现，见共享契约）→ 启动 sidecar →
+//  （BridgeClient.swift，W-04 作者实现，见共享契约）→ 启动 sidecar →
 //  创建主窗口。关键步骤逐行打印 "[poc] ..." 到 stdout，便于无 GUI 验证。
 import AppKit
 
@@ -85,6 +85,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// 关闭最后一个窗口不退出（隐藏到 Dock 语义；G5 退出/隐藏走查在 W-07）
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false
+    }
+
+    /// Dock 点击/重开恢复主窗口（静态审查 #12：关窗后无窗常驻的恢复入口）
+    func applicationShouldHandleReopen(_ sender: NSApplication,
+                                       hasVisibleWindows flag: Bool) -> Bool {
+        if !flag {
+            mainWindowController?.showWindow(nil)
+            mainWindowController?.window?.makeKeyAndOrderFront(nil)
+        }
+        return true
     }
 
     func applicationWillTerminate(_ notification: Notification) {

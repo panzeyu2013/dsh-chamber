@@ -66,16 +66,20 @@ final class ChamberMessageHandler: NSObject, WKScriptMessageHandler {
 
     // MARK: - 构造参数（共享契约，MainWindowController 按此构造，勿改名）
 
-    /// 方法白名单：POC 手写 3 通道（info / desktop_ssh_instances_get /
-    /// desktop_ssh_status_changed 订阅面），其余通道一律 method_not_allowed；
-    /// M2 manifest 化后以 BridgeManifest 生成为准（design 25 §4.4.3）。
+    /// 方法白名单：POC 手写 7 个 invoke 通道（dsh-chamber:info /
+    /// desktop_ssh_instances_get / desktop_ssh_connect / desktop_ssh_disconnect /
+    /// desktop_ssh_status / dsh-chamber:settings-get / dsh-chamber:settings-set，
+    /// 与 MainWindowController 实传集合一致），其余通道一律
+    /// method_not_allowed；M2 manifest 化后以 BridgeManifest 生成为准
+    /// （design 25 §4.4.3）。事件订阅面（desktop_ssh_status_changed 等）属
+    /// shim 侧 PUSH_EVENTS，不经本白名单。
     private let whitelist: Set<String>
 
-    /// 期望控制面 origin 的取回闭包：controller 在收到 sidecar ready 帧
-    /// （origin 门开放）前返回 nil → origin 护栏对全部消息回
-    /// ipc_sender_forbidden，渲染端按既有「10×50ms 有界重试」自愈
-    /// （design 25 §4.4.1 第 2 条「port 只在 ready 帧后放开」+ §0.1-B3
-    /// 「就绪握手『返回 false → 渲染端有界重试』语义保留」）。
+    /// 期望控制面 origin 的取回闭包。POC 无 ready 握手帧（BridgeClient 协议
+    /// 无握手，见其文件头注释），controller 恒返回 cpOrigin → 就绪门语义
+    /// 属 M2 sidecar-entry 的 ready 帧（design 25 §4.4.1 第 2 条「port 只在
+    /// ready 帧后放开」届时实现：ready 前返回 nil，护栏对全部消息回
+    /// ipc_sender_forbidden，渲染端按「10×50ms 有界重试」自愈）。
     private let expectedOrigin: () -> String?
 
     /// invoke 上行回调（护栏全过后调用）：controller 在此转
@@ -296,12 +300,17 @@ final class ChamberMessageHandler: NSObject, WKScriptMessageHandler {
         return String(text.dropFirst().dropLast())
     }
 
+    /// JSON 嵌套深度上限：防受信页面构造 <4MiB 的极深嵌套信封在预扫描阶段
+    /// 击穿 Swift 栈（静态审查 #4；超限按 malformed_envelope 拒绝）。
+    private static let maxJSONDepth = 512
+
     /// 递归确认值可被 JSONSerialization 无异常序列化。桥接/原生值只可能是
     /// NSNull/String/NSNumber/NSArray/[String:Any] 或其 Swift 原生等价物；
     /// 其余类型一律 false（fail closed）。NSNumber 需额外检查有限性——
     /// JSONSerialization 对 NaN/±Infinity 抛 NSException（非 NSError），
     /// 任何 try? 序列化之前必须先过此扫描（见 didReceive ④ 注释）。
-    private static func isJSONSerializableValue(_ value: Any) -> Bool {
+    private static func isJSONSerializableValue(_ value: Any, depth: Int = 0) -> Bool {
+        if depth > maxJSONDepth { return false }
         if value is NSNull || value is String { return true }
         if let number = value as? NSNumber {
             // JS 布尔桥接为 CFBoolean，属合法 JSON；非有限浮点拒绝。
@@ -309,10 +318,10 @@ final class ChamberMessageHandler: NSObject, WKScriptMessageHandler {
             return number.doubleValue.isFinite
         }
         if let array = value as? [Any] {
-            return array.allSatisfy { isJSONSerializableValue($0) }
+            return array.allSatisfy { isJSONSerializableValue($0, depth: depth + 1) }
         }
         if let dictionary = value as? [String: Any] {
-            return dictionary.values.allSatisfy { isJSONSerializableValue($0) }
+            return dictionary.values.allSatisfy { isJSONSerializableValue($0, depth: depth + 1) }
         }
         return false
     }
@@ -330,7 +339,7 @@ final class ChamberMessageHandler: NSObject, WKScriptMessageHandler {
             case 0x0A: literal += "\\n"
             case 0x0C: literal += "\\f"
             case 0x0D: literal += "\\r"
-            case 0x00...0x1F:
+            case 0x00...0x1F, 0x2028, 0x2029:
                 literal += String(format: "\\u%04X", scalar.value)
             default:
                 literal.unicodeScalars.append(scalar)

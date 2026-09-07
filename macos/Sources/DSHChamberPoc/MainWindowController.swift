@@ -47,7 +47,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
 
     /// - Parameters:
     ///   - cpURL: 控制面 URL（AppDelegate 解析自 POC_CP_URL，缺省 127.0.0.1:17520）
-    ///   - bridge: B 桥客户端（BridgeProto.swift，W-04 契约）
+    ///   - bridge: B 桥客户端（BridgeClient.swift，W-04 契约）
     init(cpURL: URL, bridge: BridgeClient) {
         self.cpURL = cpURL
         self.bridge = bridge
@@ -226,8 +226,9 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         }
         let scheme = (url.scheme ?? "").lowercased()
         if scheme == "http" || scheme == "https" {
-            // 目标是 cp origin 的 http(s)：放行
-            if let origin = Self.origin(of: url), origin == cpOrigin {
+            // 目标是 cp origin 的 http(s)：放行（与 TrustGuard 同款大小写
+            // 折叠判定——静态审查 #11：导航/消息两门行为统一）
+            if TrustGuard.isTrustedOrigin(url.absoluteString, expectedOrigin: cpOrigin) {
                 print("[poc] 放行导航 \(url.absoluteString)")
                 decisionHandler(.allow)
                 return
