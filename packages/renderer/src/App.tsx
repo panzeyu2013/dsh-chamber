@@ -21,8 +21,9 @@
  *   供侧边栏插件消费；onOpenSession 通道驱动会话打开。
  *
  * 会话打开请求来自侧边栏插件（经 chamberBridge，05 §3）：onOpenSession
- * 通道驱动 openSession 切 shell 并分发（插件 requestOpenSession 为单向
- * 通道，失败无处回传，App 侧 console.error 即可见）。
+ * 通道驱动 openSession 切 shell 并分发；打开终态（成功或预算耗尽失败）经
+ * reportOpenSessionOutcome 回报每个侧边栏 shell——失败落在被点击的会话
+ * 行内呈现，不再是单向通道的 console-only 盲区（2026-09 修订）。
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import api, { type ConnectionSummary, type HealthResponse } from './api.ts'
@@ -2134,12 +2135,19 @@ export default function App() {
     reportNotificationAckFailure,
   ])
 
-  /** 侧边栏插件打开请求（05 §3）：mount 订阅、卸载取消；单向通道，失败仅 console.error。 */
+  /** 侧边栏插件打开请求（05 §3）：mount 订阅、卸载取消。请求通道单向
+   *  （插件→App）；打开终态经 outcome 回报（App→每个 sidebar shell，
+   *   行内错误呈现），失败同时 console.error。 */
   useEffect(() => {
     const unsubscribe = chamberBridge.onOpenSession(({ sourceId, sessionId }) => {
-      void openSession(sourceId, sessionId).catch((err) => {
-        console.error(`[renderer] openSession failed (${sourceId}/${sessionId}):`, err)
-      })
+      void openSession(sourceId, sessionId).then(
+        () => { chamberBridge.reportOpenSessionOutcome({ sourceId, sessionId }) },
+        (err) => {
+          const message = errorMessage(err)
+          console.error(`[renderer] openSession failed (${sourceId}/${sessionId}):`, err)
+          chamberBridge.reportOpenSessionOutcome({ sourceId, sessionId, message })
+        },
+      )
     })
     return unsubscribe
   }, [openSession])

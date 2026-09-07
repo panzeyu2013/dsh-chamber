@@ -538,10 +538,12 @@ function withBootTimeout(promise: Promise<ShellState>): Promise<void> {
 /**
  * Request opening one session on an instance: dispatch immediately when the
  * shell already booted, else queue for the boot-settle flush. Resolves once
- * the runtime accepted the open (the session id must be visible in the
- * instance's own session list — the sidebar fetch and the runtime list can
- * race right after boot, so direct dispatch polls up to 8s; a pre-boot request
- * keeps its original 68s total deadline across the eventual flush).
+ * the runtime accepted the open (the runtime sessions service may still be
+ * activating right after settle — see dispatchOpen — and the session id must
+ * be visible in the instance's own session list; the sidebar fetch and the
+ * runtime list can race right after boot, so dispatch polls up to 8s; a
+ * pre-boot request keeps its original 68s total deadline across the eventual
+ * flush).
  */
 export function openInstanceSession(instanceId: string, sessionId: string): Promise<void> {
   const holder = entries.get(instanceId)
@@ -568,10 +570,14 @@ function rejectPendingOpens(instanceId: string, message: string): void {
  * Dispatch one open through one EXACT settled holder/runtime context
  * (ctx.sessions — the ISessions face of @deepseek-ai/dsh-api-session-controller/client,
  * the dsh-v0.1.2-alpha.1 home of the sessions service; see boot.ts runtimeCtx).
- * The runtime validates the id against its own list, so wait
- * until the session surfaces there before calling open. Every retry and the
- * final sessions.open gate re-check holder identity; teardown/replacement
- * cancels the holder-owned poller immediately and clears its timer.
+ * The boot settle only waits on entry ROOT fibers, so the sessions service (a
+ * composite child fiber behind async api-remotes mounts) can register AFTER the
+ * holder exists; the poll therefore covers both service readiness and session
+ * visibility in the runtime list within the same deadline budget, and only
+ * fails when the deadline expires (distinct reports for the two causes). Every
+ * retry and the final sessions.open gate re-check holder identity;
+ * teardown/replacement cancels the holder-owned poller immediately and clears
+ * its timer.
  */
 function dispatchOpen(
   instanceId: string,
@@ -609,8 +615,39 @@ function dispatchOpen(
     const cancel: DispatchCancel = error => fail(error)
     holder.activeDispatchCancels.add(cancel)
 
+    // Whether the runtime sessions service was EVER observed: the terminal
+    // report must distinguish a boot that never reached the service (child
+    // fiber never activated) from a listed wait that simply expired.
+    let serviceSeen = false
+
     const timeout = (): void => {
-      fail(new Error(`会话 ${sessionId} 未出现在实例会话列表中（等待超时）`))
+      // One last guarded read before choosing the report: the service may
+      // have registered inside the final <OPEN_RETRY_MS window after the last
+      // attempt that saw it absent — never blame boot readiness for a service
+      // that is present by the deadline. Message selection is best-effort; a
+      // hostile read must not throw here.
+      if (!serviceSeen) {
+        try {
+          serviceSeen = holder.entry.runtimeCtx?.sessions !== undefined
+        } catch {
+          // Swallow: the deadline report stands on the observed attempts.
+        }
+      }
+      fail(new Error(serviceSeen
+        ? `会话 ${sessionId} 未出现在实例会话列表中（等待超时）`
+        : `实例会话服务不可用（boot 未完全就绪）：会话 ${sessionId} 未打开`))
+    }
+
+    /** Schedule the next poll inside the remaining budget; at the deadline
+     *  the terminal report fires instead of a further timer. */
+    const scheduleRetry = (): void => {
+      if (settled) return
+      const remaining = deadline - Date.now()
+      if (remaining <= 0) {
+        timeout()
+        return
+      }
+      timer = setTimeout(attempt, Math.min(OPEN_RETRY_MS, remaining))
     }
 
     const attempt = (): void => {
@@ -635,9 +672,20 @@ function dispatchOpen(
         return
       }
       if (sessions === undefined) {
-        fail(new Error('实例会话服务不可用（boot 未完全就绪）'))
+        // TRANSIENT, not terminal: the boot settle (loader.await +
+        // assertEntriesActive, boot.ts) only waits on entry ROOT fibers, while
+        // ctx.sessions arrives with the session-controller CHILD fiber, which
+        // activates only after the async api-remotes namespace mounts
+        // (chamber-entry). A queued-open flush — or a click that lands inside
+        // that window — used to fail instantly even though the session was
+        // moments from opening; each such cold-shell click was a one-shot, and
+        // the view had already switched, so the user landed on the target
+        // server's UI without the session selected. Poll service readiness on
+        // the same retry cadence and budget as the session-list wait.
+        scheduleRetry()
         return
       }
+      serviceSeen = true
       let listed = false
       try {
         listed = sessions.list?.getSnapshot()?.byId?.[sessionId] !== undefined
@@ -664,12 +712,7 @@ function dispatchOpen(
         }
         return
       }
-      const remaining = deadline - Date.now()
-      if (remaining <= 0) {
-        timeout()
-        return
-      }
-      timer = setTimeout(attempt, Math.min(OPEN_RETRY_MS, remaining))
+      scheduleRetry()
     }
     attempt()
   })

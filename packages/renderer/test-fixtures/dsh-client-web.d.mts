@@ -13,8 +13,11 @@ export class AppWebEntry {
   run(): Promise<void>
   dispose(): Promise<void>
   readonly bootError: string | undefined
+  // sessions is absent while the fixture models the pre-activation window
+  // (runtimeCtx present, child-fiber service not yet registered) — shell.ts
+  // treats that as a transient poll state.
   readonly runtimeCtx: undefined | {
-    sessions: {
+    sessions?: {
       list: { getSnapshot(): { byId: Record<string, unknown> } }
       open(sessionId: string): void
     }
@@ -35,6 +38,8 @@ export function __testQueueDisposeGate(): { started: Promise<string>; release():
 export function __testEntryStates(): Array<{ label: string; disposed: boolean }>
 export function __testOpenedSessions(): Array<{ label: string; sessionId: string }>
 export function __testSetSessionsListed(value: boolean): void
+export function __testSetSessionsAvailable(value: boolean): void
+export function __testSetSessionsReadError(value: unknown | undefined): void
 export function __testSetSessionsSnapshotError(value: unknown | undefined): void
 export function __testSetSessionsOpenError(value: unknown | undefined): void
 export function __testResetLifecycle(): void

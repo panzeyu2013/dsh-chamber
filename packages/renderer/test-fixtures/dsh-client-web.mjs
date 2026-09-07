@@ -23,6 +23,14 @@ const entryStates = []
 const openedSessions = []
 let entrySequence = 0
 let sessionsListed = true
+// Models the window between boot settle (root fibers active) and the runtime
+// sessions service activation (a composite CHILD fiber): while false, the
+// entry's runtimeCtx carries no sessions face yet. Module-global: every entry
+// runtimeCtx read reflects the CURRENT value (like the real per-boot state).
+let sessionsAvailable = true
+// Thrown by the runtimeCtx getter itself (distinct from sessionsSnapshotError,
+// which throws from list.getSnapshot): pins the shell's hostile-read arm.
+let sessionsReadError = undefined
 let sessionsSnapshotError = undefined
 let sessionsOpenError = undefined
 
@@ -83,6 +91,8 @@ export class AppWebEntry {
 
   get runtimeCtx() {
     if (this.disposed) return undefined
+    if (sessionsReadError !== undefined) throw sessionsReadError
+    if (!sessionsAvailable) return { sessions: undefined }
     const label = this.label
     return {
       sessions: {
@@ -192,6 +202,16 @@ export function __testSetSessionsListed(value) {
   sessionsListed = value
 }
 
+/** Simulate the runtime sessions service being (un)available at read time. */
+export function __testSetSessionsAvailable(value) {
+  sessionsAvailable = value
+}
+
+/** Make the runtimeCtx read itself throw (hostile-boundary arm). */
+export function __testSetSessionsReadError(value) {
+  sessionsReadError = value
+}
+
 export function __testSetSessionsSnapshotError(value) {
   sessionsSnapshotError = value
 }
@@ -211,6 +231,8 @@ export function __testResetLifecycle() {
   openedSessions.length = 0
   entrySequence = 0
   sessionsListed = true
+  sessionsAvailable = true
+  sessionsReadError = undefined
   sessionsSnapshotError = undefined
   sessionsOpenError = undefined
 }

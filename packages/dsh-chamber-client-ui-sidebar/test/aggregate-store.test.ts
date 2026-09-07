@@ -110,3 +110,25 @@ test('event-side retirement rejects old reports before a replacement producer re
   unsubscribeRuntime()
   unsubscribeSnapshot()
 })
+
+test('open-session outcomes fan out to subscribers and unsubscribing stops delivery', () => {
+  const events: string[] = []
+  const unsubscribe = chamberBridge.onOpenSessionOutcome((outcome) => {
+    events.push(`${outcome.sourceId}/${outcome.sessionId}/${outcome.message ?? 'ok'}`)
+  })
+  chamberBridge.reportOpenSessionOutcome({ sourceId: 'ssh-a', sessionId: 's1' })
+  chamberBridge.reportOpenSessionOutcome({ sourceId: 'ssh-a', sessionId: 's1', message: '打开会话失败：boom' })
+  chamberBridge.reportOpenSessionOutcome({ sourceId: 'local', sessionId: 's2', message: '等待超时' })
+  assert.deepEqual(events, [
+    'ssh-a/s1/ok',
+    'ssh-a/s1/打开会话失败：boom',
+    'local/s2/等待超时',
+  ])
+  unsubscribe()
+  chamberBridge.reportOpenSessionOutcome({ sourceId: 'ssh-a', sessionId: 's1' })
+  assert.deepEqual(events, [
+    'ssh-a/s1/ok',
+    'ssh-a/s1/打开会话失败：boom',
+    'local/s2/等待超时',
+  ])
+})

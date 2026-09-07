@@ -122,6 +122,17 @@ export interface OpenSessionRequest {
 }
 
 /**
+ * Terminal outcome of one App-layer open attempt, published back to every
+ * sidebar shell (design 05 §3's request channel is one-way — the App layer
+ * owns the dispatch budget and the failure; the sidebar owns the row).
+ * Success carries no message; failure carries the dispatch's loud report.
+ */
+export interface OpenSessionOutcome extends OpenSessionRequest {
+  /** Present only on failure: the terminal error report (App-wrapped text). */
+  message?: string
+}
+
+/**
  * Per-instance runtime facts projected by the sidebar plugin of the source's
  * own ctx (design 06 §4): current session id plus per-session live rows. The
  * plugin is a STATELESS projection of the source's session-list snapshot —
@@ -153,6 +164,7 @@ export interface InstanceRuntimeReport {
 
 type Listener = () => void
 type OpenListener = (request: OpenSessionRequest) => void
+type OpenOutcomeListener = (outcome: OpenSessionOutcome) => void
 type RefreshListener = (sourceId: string) => void
 type SourceListener = (sourceId: string) => void
 type RuntimeReportListener = (
@@ -169,6 +181,7 @@ type PluginDiagnosticListener = (sourceId: string, diagnostic: PluginGraphDiagno
 
 const listeners = new Set<Listener>()
 const openListeners = new Set<OpenListener>()
+const openOutcomeListeners = new Set<OpenOutcomeListener>()
 const refreshListeners = new Set<RefreshListener>()
 const activateSourceListeners = new Set<SourceListener>()
 const runtimeReportListeners = new Set<RuntimeReportListener>()
@@ -229,6 +242,21 @@ export const chamberBridge = {
     openListeners.add(listener)
     return () => {
       openListeners.delete(listener)
+    }
+  },
+
+  /** App-layer report that one requested open settled (failure carries the
+   *  loud terminal message). Every sidebar shell receives the report and
+   *  surfaces failures on the session row; success clears a stale failure. */
+  reportOpenSessionOutcome(outcome: OpenSessionOutcome): void {
+    for (const listener of [...openOutcomeListeners]) listener(outcome)
+  },
+
+  /** Sidebar subscription to open-outcome reports; returns the unsubscribe. */
+  onOpenSessionOutcome(listener: OpenOutcomeListener): () => void {
+    openOutcomeListeners.add(listener)
+    return () => {
+      openOutcomeListeners.delete(listener)
     }
   },
 
