@@ -14,6 +14,21 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 ### Fixed
 
+- **Disconnect keeps pushed aggregates + rate-limited degraded-view
+  self-heal (design 05 §2.3 semantics revision, aggregate-refresh.ts)** —
+  root-cause fix for archived sessions resurfacing in the sidebar after a
+  remote disconnect/reconnect (clicks dead-ending in the official empty-
+  session view): the disconnect branch retains a mounted source's pushed ok
+  aggregate (rows render gated on connected, nothing shows while
+  disconnected) and the ready-edge pull becomes a sessions-only merge so the
+  archive set / workspaces are never lost (`shouldRetainPushedAggregate`);
+  the staleness watchdog gained a rate-limited self-heal arm — a mounted
+  source stuck on the degraded (synthetic-row) view gets a bounded ctx
+  reconnect that replays the workspace follow so the producer re-publishes
+  its real baseline WITH the archive set (`shouldRebaselineFallbackView` /
+  `isFallbackDerivedView`, 60s backoff; merged into the watchdog callback it
+  inherits the 2026 visibility gating and restore compensation). Pure
+  functions extracted into aggregate-refresh.ts; +7 unit tests.
 - **Long-RPC proxy exemption: the 45s window no longer kills slow unary host
   business (design 03 §3.4)** — unary POST requests without an upstream
   duration cap (manual `/compact` = an LLM summary replaying the whole

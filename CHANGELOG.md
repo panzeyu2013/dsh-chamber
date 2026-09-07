@@ -14,6 +14,16 @@
 
 ### 修复
 
+- **断连保留已推送聚合 + 降级视图限流自愈（design 05 §2.3 语义修订，
+  aggregate-refresh.ts）** —— 远程断连后重连时 sidebar 不再出现已归档会话
+  回流（点击落入官方空会话页）的根因修复：断连分支对已推送过的挂载来源
+  保留其 ok 聚合（行渲染以 connected 为门，断连不显示），ready-edge 拉取
+  走 sessions-only merge，归档集/工作区不丢失（`shouldRetainPushedAggregate`）；
+  兜底看门狗新增限流自愈臂——卡在降级视图（合成行）的挂载来源触发 ctx
+  连接重连、重放 follow baseline 使 producer 重发带归档集的真实基线
+  （`shouldRebaselineFallbackView`/`isFallbackDerivedView`，沿用 60s
+  backoff；合并入 watchdog 回调后自动继承 2026 性能整改的可见性门控与
+  恢复补偿）。纯函数抽入 aggregate-refresh.ts，单测 +7。
 - **长 RPC 代理豁免：45s 空闲窗不再误杀慢 unary 宿主业务（design 03 §3.4）**
   —— 手动 `/compact`（LLM 摘要重放全部可压缩历史）与 design 24 的
   `archiveCleanup/purge` 等无上游时长上限的 POST 请求改走 30 分钟保险丝窗
