@@ -339,8 +339,11 @@ ctx 真实化逐项列于 sidecar-entry.ts 注释。
   ② 模块收集器需 npm → PATH 加 nvm bin；
   ③ distribution 签名 --timestamp 需网络 → CSC_IDENTITY_AUTO_DISCOVERY
   =false 走 after-pack adhoc（脚本已自验证）；DMG 目标子步离线挂起被终止
-  （登记为受阻：需联网或后续重试 dmgbuild）。产物不自动替换 /Applications
-  （等用户确认，吸取事故纪律）。
+  （登记为受阻：需联网或后续重试 dmgbuild）。**离线 DMG 已用 hdiutil 补齐**
+  （release/dsh-chamber-0.2.2-arm64.dmg 199MB，UDZO；无 /Applications
+  快捷方式版式——标准 dmgbuild 版式待联网重跑）。asar 抽查：main.ts/
+  shell-core.ts/node-edges.ts/sidecar-entry.ts 均在包内。产物不自动替换
+  /Applications（等用户确认，吸取事故纪律）。
 - **showMessage 真实模态腿**（95275cc）：NSAlert 主线程 runModal 一次、
   按钮序 raw-1000 夹取回传、style 映射、无 buttons→['OK']；无窗诚实降级。
   **M3 代码级宿主腿至此全部完成**（focus/open/openPath/reveal/badge/keep-
