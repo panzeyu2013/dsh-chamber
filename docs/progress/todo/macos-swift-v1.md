@@ -307,6 +307,8 @@ ctx 真实化逐项列于 sidecar-entry.ts 注释。
   Resources/chamber-bridge.stub.js（GENERATED manifest 常量单源桥 + assert
   助手，与手写 bridge-shim.poc.js 并存）；bridge-shim.test.ts 6/6 接入链。
 - **W-13 缺口闭合**：60 通道全量冒烟经 Swift harness 应答 edges 已无 GUI 闭环。
+- **E2 flavor 字段前哨**（645a654）：hostFacts.flavor 'electron'|'swift' →
+  INFO 载荷透传（main/sidecar 双装配），renderer 更新/通知宿主机制分派依据。
 **剩余路线**（不省略登记）：W-18 后半 B（manifest 运行时白名单消费决策：POC
 白名单 7 收窄暂维持，全量放行待 shim 全量生成时评审）→ W-19…W-21
 （窗口/菜单/生命周期/通知/角标/深链/对话框/外链/登录项/崩溃恢复——Swift 宿主腿
