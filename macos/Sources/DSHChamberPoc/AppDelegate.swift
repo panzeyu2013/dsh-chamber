@@ -70,6 +70,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 主窗口并激活
         let controller = MainWindowController(cpURL: cpURL, bridge: bridge)
         mainWindowController = controller
+        // W-19/20 宿主腿接线：legs 以主窗为 UI 上下文（canShowUI = 应用激活态
+        // 的窗口存在性）；BridgeClient 默认表在 legs 报 unimplemented/
+        // ui-unavailable 前缀时回落（POC 无宿主实现不挂起）。实机 GUI 验收
+        // 属 M3 集成硬门禁（SwiftEdgeHostLegs 各腿 TODO 注释）。
+        let legs = SwiftEdgeHostLegs(config: .init(canShowUI: { [weak controller] in
+            controller?.window?.isVisible == true
+        }))
+        legs.mainWindowProvider = { [weak controller] in controller?.window }
+        bridge.edgeHostLegs = legs
         controller.window?.makeKeyAndOrderFront(nil)
         if #available(macOS 14.0, *) {
             NSApp.activate()
