@@ -233,7 +233,11 @@
     一旦被调必响亮失败（当前无调用点，潜伏面）。
   - 端口碰撞理论面：本地实例同端口 cookie 覆盖（实际不可达，登记不修）。
   - unary 兜底归档过滤无 wire 源（归档集仅存在于 follow baseline）——仅影响未挂载
-    来源与首次 baseline 前窗口（KNOWN DEGRADATION，`archiveSetKnown:false` 诚实三态）。
+    来源与首次 baseline 前窗口（KNOWN DEGRADATION，`archiveSetKnown:false` 诚实三态；
+    2026-09 归档回流修复后：已推送过的挂载来源断连期间保留其推送视图
+    ——`shouldRetainPushedAggregate`——重连 ready-edge 不再整提交兜底降级视图；
+    残留/历史降级视图由兜底看门狗限流触发 ctx 连接重连（`shouldRebaselineFallbackView`）
+    重放 follow baseline 自愈）。
   - 推送通道死亡期间侧边栏成员关系/归档集冻结在最后推送（sessions 仍刷新、恢复推送
     自愈；冻结窗口内新归档/取消归档不可见）。
   - 兜底 cwd 派生分组限制：符号链接拼写（macOS /tmp vs /private/tmp）可能不匹配
