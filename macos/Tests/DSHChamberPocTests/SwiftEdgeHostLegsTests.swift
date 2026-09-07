@@ -32,9 +32,8 @@ final class SwiftEdgeHostLegsTests: XCTestCase {
     func testNotYetImplementedLegsReportUnimplemented() {
         let legs = SwiftEdgeHostLegs(config: .init(canShowUI: { true }))
         for method in [
-            "pickPluginSource", "showItemInFolder",
-            "setBadge", "setKeepAwake", "setLoginItem", "showError",
-            "launchApp", "retireNotifications",
+            "pickPluginSource", "setLoginItem", "showError", "launchApp",
+            "retireNotifications",
         ] {
             let outcome = legs.respond(method: method, payload: nil)
             XCTAssertEqual(outcome.error, "swift-edge-unimplemented:\(method)")
@@ -46,6 +45,20 @@ final class SwiftEdgeHostLegsTests: XCTestCase {
             asyncOnly.error,
             "swift-edge-unimplemented:showNativeNotification:use-async-leg"
         )
+    }
+
+    func testWindowGuardedLegsRequireMainWindow() {
+        // canShowUI=true 但未接主窗：窗口守卫腿一律 no-window 诚实降级
+        // （headless 测试绝不触发 NSWorkspace/NSApp/ProcessInfo 副作用）。
+        let legs = SwiftEdgeHostLegs(config: .init(canShowUI: { true }))
+        for method in ["setBadge", "setKeepAwake", "showItemInFolder"] {
+            let outcome = legs.respond(method: method, payload: nil)
+            XCTAssertTrue(
+                outcome.error?.hasPrefix(SwiftEdgeHostLegs.uiUnavailablePrefix) ?? false,
+                "\(method) 应报 ui-unavailable（实际 \(outcome.error ?? "nil")）"
+            )
+            XCTAssertTrue(outcome.error?.contains("no-window") ?? false, method)
+        }
     }
 
     func testNotificationSyncPathDegradesWhenUIUnavailable() {

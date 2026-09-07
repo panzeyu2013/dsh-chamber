@@ -98,6 +98,27 @@ public final class SwiftEdgeHostLegs {
     /// 主窗提供者（POC 接线点：MainWindowController 注册后置非 nil）。
     public var mainWindowProvider: (() -> NSWindow?)?
 
+    /// keep-awake activity token（ProcessInfo 防休眠；nil = 未激活）。
+    private var keepAwakeActivity: NSObjectProtocol?
+
+    private func updateKeepAwake(enabled: Bool) {
+        if enabled, keepAwakeActivity == nil {
+            keepAwakeActivity = ProcessInfo.processInfo.beginActivity(
+                options: [.idleDisplaySleepDisabled, .idleSystemSleepDisabled],
+                reason: "dsh-chamber keep-awake (edge setKeepAwake)"
+            )
+        } else if !enabled, let token = keepAwakeActivity {
+            ProcessInfo.processInfo.endActivity(token)
+            keepAwakeActivity = nil
+        }
+    }
+
+    deinit {
+        if let token = keepAwakeActivity {
+            ProcessInfo.processInfo.endActivity(token)
+        }
+    }
+
     /// showMessage 异步消费队列（M3 主窗 delegate 接线后使用）。
     public let pendingAlerts = PendingAlertQueue()
 
@@ -197,6 +218,42 @@ public final class SwiftEdgeHostLegs {
                 return (nil, Self.uiUnavailablePrefix + method)
             }
             return (nil, Self.unimplementedPrefix + method + ":use-async-leg")
+        case "setBadge":
+            // E5 dock 角标叶：payload {count: number}；UI 上下文守卫（headless
+            // 绝不触碰 NSApp 状态）。badgePlatformGate 裁决在 core（sidecar），
+            // 本腿只执行 dockTile 写。
+            return performUI(method: method) {
+                guard mainWindowProvider?() != nil else {
+                    return (nil, Self.uiUnavailablePrefix + method + ":no-window")
+                }
+                let count = dict.flatMap { EdgePayload.int($0["count"]) } ?? 0
+                NSApp.dockTile.badgeLabel = count > 0 ? "\(count)" : nil
+                return (nil, nil)
+            }
+        case "setKeepAwake":
+            // E5 keep-awake 叶：payload {on: bool}；ProcessInfo activity 防休眠
+            // （blocker id 语义注释同 electron-edges）。窗口上下文守卫防
+            // headless 测试副作用（真实用途恒有主窗）。
+            return performUI(method: method) {
+                guard mainWindowProvider?() != nil else {
+                    return (nil, Self.uiUnavailablePrefix + method + ":no-window")
+                }
+                let on = dict.flatMap { EdgePayload.bool($0["on"]) } ?? false
+                updateKeepAwake(enabled: on)
+                return (nil, nil)
+            }
+        case "showItemInFolder":
+            // Finder 揭示叶：payload {path: string}；窗口上下文守卫。
+            return performUI(method: method) {
+                guard mainWindowProvider?() != nil else {
+                    return (nil, Self.uiUnavailablePrefix + method + ":no-window")
+                }
+                guard let raw = dict.flatMap({ EdgePayload.string($0["path"]) }) else {
+                    return (nil, Self.unimplementedPrefix + method + ":path-missing")
+                }
+                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: raw)])
+                return (nil, nil)
+            }
         case "showMessage":
             // 形状（HostMessageOptions，electron-edges/global.d.ts 为准）：
             // {type,title,message,detail,buttons[],defaultId,cancelId,noLink?}
