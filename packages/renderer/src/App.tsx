@@ -75,11 +75,13 @@ import {
   isFallbackDerivedView,
   isSnapshotStale,
   planAggregateRefreshes,
+  planSessionListRefresh,
   refreshPullStillCurrent,
   remoteRetiredSourceIds,
   retireSelectedSource,
   shouldRebaselineFallbackView,
   shouldReconnectStaleMounted,
+  shouldRequestSessionListRefresh,
   shouldRetainPushedAggregate,
   withoutRemovedSourceIds,
   withoutRemovedSourceKeys,
@@ -119,6 +121,17 @@ const AGGREGATE_RECONNECT_BACKOFF_MS = 60_000
  * freeze within that bound (review M2: honest idle cadence, halved vs the
  * original 60s). The unary pull keeps its own 30s cadence untouched. */
 const AGGREGATE_RECONNECT_STALE_MS = 120_000
+/** Re-request floor for session-list refresh dispatch (design 24 §20): a
+ *  refresh re-runs the OFFICIAL session.list of the mounted ctx; while ghost
+ *  rows of purged sessions stay pending, requests are floored to one per
+ *  coalescing window per source (the official refreshList single-flight bounds
+ *  concurrency; this bounds sequential churn when the refresh keeps failing on
+ *  a busy source). Suppressed dispatches never lose the ids — they stay in the
+ *  per-source pending set and re-evaluate on the next push. The archive-manager
+ *  dialog additionally requests one on every purge settle (immediate path,
+ *  not stamped here — deliberate cross-package decoupling, §20 notes the
+ *  overlap). */
+const SESSION_LIST_REFRESH_COALESCE_MS = 5_000
 /** Bounded wave over whatever edge-triggered refresh set a poll produces. */
 const AGGREGATE_POLL_CONCURRENCY = 4
 /** First-screen retry: a transient aggregate snapshot failure (0.1.2 wire:
@@ -477,6 +490,20 @@ export default function App() {
   // mounted source (AGGREGATE_RECONNECT_BACKOFF_MS). Reaped with the source
   // like snapshotAtRef (a same-id re-add must start a fresh backoff window).
   const lastReconnectAtRef = useRef<Record<string, number>>({})
+  // Last session-list refresh request timestamp per source (design 24 §20,
+  // ms epoch; absent = never requested). Floors the re-request cadence of the
+  // ghost-row convergence machine below (SESSION_LIST_REFRESH_COALESCE_MS): a
+  // refresh re-runs the OFFICIAL session.list of the mounted ctx, and a
+  // failing refresh on a busy source must not stack RPCs per push. Reaped with
+  // the source like lastReconnectAtRef (same-id re-add starts a fresh window).
+  const sessionListRefreshAtRef = useRef<Record<string, number>>({})
+  // Un-converged ghost-row ids per source (design 24 §20): archived ids removed
+  // by a purge whose rows are STILL listed in the latest mounted push of this
+  // source (rows linger in the official client summaries until a session-list
+  // refresh drops them). Maintained by planSessionListRefresh on every push;
+  // empty/absent = converged (rows gone or never listed). Reaped with the
+  // source like the stamp map above (same-id re-add starts clean).
+  const sessionListRefreshPendingRef = useRef<Record<string, string[]>>({})
   // Synchronous connection-generation edge memory. A mounted producer may
   // suppress an identical post-reconnect snapshot, while the App has already
   // replaced its aggregate with not-connected; one authoritative pull on each
@@ -663,6 +690,19 @@ export default function App() {
     for (const id of Object.keys(lastReconnectAtRef.current)) {
       if (!servers.some(server => server.id === id)) {
         delete lastReconnectAtRef.current[id]
+      }
+    }
+    // Same lockstep for the session-list-refresh coalescing stamps and the
+    // ghost-row convergence state (design 24 §20): a same-id re-add must start
+    // a fresh request window and a fresh pending set.
+    for (const id of Object.keys(sessionListRefreshAtRef.current)) {
+      if (!servers.some(server => server.id === id)) {
+        delete sessionListRefreshAtRef.current[id]
+      }
+    }
+    for (const id of Object.keys(sessionListRefreshPendingRef.current)) {
+      if (!servers.some(server => server.id === id)) {
+        delete sessionListRefreshPendingRef.current[id]
       }
     }
     setPluginDiagnostics(prev => {
@@ -2351,6 +2391,43 @@ export default function App() {
       // that notification overwrite the authoritative not-connected row;
       // the next ready edge performs one unary refresh.
       if (!readyAggregateSourcesRef.current.has(sourceId)) return
+      // design 24 §20 (archive-cleanup convergence): an archived-set SHRINK
+      // in a mounted push is the client-observable "a purge completed" signal
+      // (no unarchive wire — only the cleanup purge removes set members). The
+      // purged sessions' rows may still linger in the official client session
+      // summaries of this mounted ctx (refreshed only on connection
+      // generations; host purge events are documented no-ops), so once the set
+      // stops covering them they would render as ordinary rows and open with
+      // session/not-found. Convergence state machine (planSessionListRefresh),
+      // evaluated on EVERY ready push: removed ids still listed as rows become
+      // pending ghosts; the source's ctx is asked to re-run its OFFICIAL
+      // session-list refresh (sidebar-plugin subscriber — reconciles the
+      // summaries against the server corpus and drops the deleted rows); the
+      // resulting producer push then clears the pending set. A refresh that
+      // fails transiently is re-requested on a later push (cadence floored by
+      // SESSION_LIST_REFRESH_COALESCE_MS so a failing refresh on a busy source
+      // cannot stack RPCs); a suppressed dispatch never loses the ids — they
+      // stay pending and re-evaluate on the next push. Quiet sources with no
+      // further push self-hide within one watchdog cycle (the 30s merge pull
+      // replaces the aggregate's session rows with the clean unary list).
+      const decision = planSessionListRefresh(
+        watchdogAggregatesRef.current[sourceId],
+        snapshot,
+        sessionListRefreshPendingRef.current[sourceId],
+      )
+      if (decision.pending.length > 0) sessionListRefreshPendingRef.current[sourceId] = decision.pending
+      else delete sessionListRefreshPendingRef.current[sourceId]
+      if (decision.request) {
+        const now = Date.now()
+        if (shouldRequestSessionListRefresh(
+          sessionListRefreshAtRef.current[sourceId],
+          now,
+          SESSION_LIST_REFRESH_COALESCE_MS,
+        )) {
+          sessionListRefreshAtRef.current[sourceId] = now
+          chamberBridge.requestSessionListRefresh(sourceId)
+        }
+      }
       setAggregates(prev => {
         const current = prev[sourceId]
         if (current !== undefined && current.state === 'ok'
