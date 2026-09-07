@@ -21,16 +21,13 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     private static let consoleMessageName = "pocConsole"
     /// A 桥 shim 资源文件名（Resources/ 下，W-04 作者创建，本文件只读取）
     private static let shimResourceName = "bridge-shim.poc.js"
-    /// 可 invoke 的 method 白名单（W-04：A 桥护栏雏形的最小桌面通道集）
-    private static let invokeWhitelist: Set<String> = [
-        "dsh-chamber:info",
-        "desktop_ssh_instances_get",
-        "desktop_ssh_connect",
-        "desktop_ssh_disconnect",
-        "desktop_ssh_status",
-        "dsh-chamber:settings-get",
-        "dsh-chamber:settings-set",
-    ]
+    /// 可 invoke 的 method 白名单：W-04 是最小 7 通道集；W-18 manifest 化后
+    /// 扩为 BridgeManifest.invokeChannels 全集（60/60 真实现都在 sidecar 侧，
+    /// 语义权威与护栏仍在 sidecar/TrustGuard——readiness/badge 等通道不再
+    /// 被 POC 层误拒成 poc-unimplemented）。与桥 shim 暴露面一致性问题：shim
+    /// 只暴露其脚本内实现的方法，未暴露方法在页面层即 stub——两处均以
+    /// manifest 为准的演进是 M3 全量 shim（chamber-bridge.stub.js）的活。
+    private static let invokeWhitelist: Set<String> = BridgeManifest.invokeChannels
     /// 窗口默认内容尺寸
     private static let windowSize = NSSize(width: 1280, height: 800)
 
