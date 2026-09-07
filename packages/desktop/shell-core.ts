@@ -1,12 +1,11 @@
 /**
- * dsh-chamber desktop shell core (design 25 §4.1; W-09 batch 1).
+ * dsh-chamber desktop shell core (design 25 §4.1; W-09 batch 1 + W-10 S1/S2).
  *
- * Electron-free business logic mechanically relocated from main.ts — the
- * zero-seam phase of the P1 split (companion 四批 1): pure moves plus the
- * single documented parameterization, no semantic rewrites, no state-machine
- * reordering. The Electron main process imports these functions and constants
- * by their original names; a later seam batch (W-10) and the Swift-native
- * flavor reuse the same core.
+ * Electron-free business logic mechanically relocated from main.ts — pure
+ * moves plus documented parameterizations/seam-leaf replacements, no semantic
+ * rewrites, no state-machine reordering. The Electron main process imports
+ * these functions and constants by their original names; the Swift-native
+ * flavor reuses the same core.
  *
  * Hard invariants:
  * - Electron-free by construction: never import the electron package (W-14
@@ -19,8 +18,12 @@
  * - Host state is parameterized: userData-scoped paths and the runtime base
  *   dir arrive as arguments (resolveActiveRuntime / the path templates), argv
  *   arrives as an argument (scanDeepLinkUrls); nothing reads Electron host
- *   state implicitly. Post-W-09 state is parameterized per function (the
- *   installIpcHandlers ctx seam), never read from module scope.
+ *   state implicitly. W-09 state is parameterized per function (the
+ *   installIpcHandlers ctx seam). W-10 S2 修订：渲染器投递状态机（队列/ready
+ *   位/drain/来源代际/held resume/badge holder）是 core 业务状态，以模块作用域
+ *   单例承载（装配侧 glue/IPC 与 core 共享同一实例——单装配不变式：
+ *   installIpcHandlers 每进程恰一次、先于任何窗口/渲染器事件，装配时快照
+ *   edges 子集与 quit 门）；宿主状态仍绝无模块作用域隐式读取。
  *
  * Responsibilities relocated from main.ts (W-09 batch 1):
  * - Control-plane port resolution (design 05 §3.3): resolveControlPlanePort
@@ -44,10 +47,27 @@
  *   chamberSettingsStatus / applySettingsPatch / pushSettingsChanged
  *   (verbatim relocations — see the S1 section below).
  *
+ * Responsibilities relocated from main.ts (W-10 S2 notify/badge/ready batch):
+ * - B 组 6 个注册体（NOTIFY / NOTIFICATIONS_READY / NOTIFICATION_OPEN_ACK /
+ *   BADGE_COUNT / DEEP_LINK_READY / DEEP_LINK_ACK）——见 installIpcHandlers ②；
+ *   NOTIFY 主链路（maybeShowNativeNotification）与其 claim/限速编排随迁。
+ * - 渲染器投递状态机（design 16 §4.2 / design 19 §3.3）：renderer 深链与通知
+ *   打开的有界 ACK 队列 + ready 位 + drain（send 叶 = edges.rendererPush，
+ *   requeue/rollback/acknowledge 语义原样）、来源代际/证明实例
+ *   （NotificationSourceIncarnations / NotificationSourceProofs）、held
+ *   lastResume 补发（handleSystemResume / handleMainWindowShown +
+ *   pushHeldSystemResume）、badge 意图 holder 与平台门裁决。装配侧经导出入口
+ *   访问（onRendererLifecycle / enqueueRendererDeepLinkIntent /
+ *   captureNotificationSource / ownsNotificationSource /
+ *   matchesNotificationSource / projectNotificationSourceInstances /
+ *   syncNotificationSourceRegistry / clearBadgeIntentForQuit）——逐条迁移决策
+ *   见「Renderer delivery state machines」段注释。
+ *
  * 中文说明：自 main.ts 机械搬运的 Electron-free 业务核心（零缝阶段，行为零
  * 变化）；W-10 S1 起 IPC 注册点与 A 组 info+settings 处理器迁入本文件
- * （installIpcHandlers 单点注册，Electron 围栏由 main 注入包装）；HostEdges
- * 其余边沿叶与双 flavor 属后续批。
+ * （installIpcHandlers 单点注册，Electron 围栏由 main 注入包装）；S2 追加 B 组
+ * notify/badge/ready 6 注册体与渲染器投递状态机（send 叶统一
+ * edges.rendererPush）；HostEdges 其余边沿叶与双 flavor 属后续批。
  */
 
 import { readFileSync } from 'node:fs';
@@ -55,10 +75,30 @@ import path from 'node:path';
 import { findFreePort } from './free-port.ts';
 import { computeSupported, validatePatch } from './chamber-settings.ts';
 import type { ChamberSettings, ChamberSettingsStatus } from './chamber-settings.ts';
+import { DEFAULT_CHAMBER_SETTINGS } from './chamber-settings.ts';
 import { attemptCommittedRegistryPush } from './transport-manager.ts';
 import { IPC_CHANNELS } from './ipc-events.ts';
-import type { NotificationOpenIntent } from './notifications.ts';
+import type { NotificationOpenIntent, NotificationSourceToken } from './notifications.ts';
 import type { TransportInstanceSpec } from './transport-provider.ts';
+import { adjudicateBadgeCount, badgePlatformGate, validateBadgeRequest } from './badge.ts';
+import {
+  BoundedAckDeliveryQueue,
+  BoundedVscodeIntentQueue,
+  canDeliverRendererDeepLink,
+  describeUnknownError,
+} from './deep-link.ts';
+import type { VscodeLaunchRequest } from './deep-link.ts';
+import {
+  BoundedRateLimiter,
+  MAX_PENDING_NOTIFICATION_OPENS,
+  NotificationSourceIncarnations,
+  NotificationSourceProofs,
+  claimNotificationDetailed,
+  decideNotification,
+  releaseNotificationClaim,
+  validateNotificationRequest,
+} from './notifications.ts';
+import type { NotificationSettingsLike } from './notifications.ts';
 import {
   readCurrentPointerState,
   readOverrideState,
@@ -281,9 +321,9 @@ export function localDshHomeDir(userData: string): string {
 // field set per design 25 §0.1 rows A10/B1/B3/B4/B9/B11/D3).
 // ---------------------------------------------------------------------------
 
-/** 原生通知 open intent（design 19 §3.3）——re-export 自纯逻辑模块
- *  notifications.ts（electron-free，结构类型可直接跨 core/edges 使用）。 */
-export type { NotificationOpenIntent };
+/** 原生通知 open intent / 来源代际 token（design 19 §3.3）——re-export 自纯逻辑
+ *  模块 notifications.ts（electron-free，结构类型可直接跨 core/edges 使用）。 */
+export type { NotificationOpenIntent, NotificationSourceToken };
 
 /** 原生通知构造规格（§4.1 NativeNotificationSpec 的最小结构形态：通知叶
  *  new Notification({title, body, silent, sound…}) 所需字段；平台分支
@@ -328,24 +368,42 @@ export type HostSetBadgeResult =
 export type HostResourceKind = 'builtin-dsh' | 'pnpm' | 'dist-web' | 'host-package' | 'icon';
 
 /** HostEdges — core 侧唯一可见的宿主边沿契约（design 25 §4.1 v2 字段集）。
- *  W-10 S0 批仅实现 rendererPush（electron-edges.ts）；其余成员标注其后续批
- *  来源，未实现前 core/main.ts 不得调用（Pick 收窄在编译期保证）。 */
+ *  S0 批实现 rendererPush、S2 批实现渲染器投递/通知/徽标批成员
+ *  （electron-edges.ts 头注释按批列出已实现集合）；其余成员标注其后续批来源，
+ *  未实现前 core/main.ts 不得调用（Pick 收窄在编译期保证）。 */
 export interface HostEdges {
   /** 主窗口渲染器 push 叶（W-10 S0 seam 成员，草案新增）：channel 为 opaque
    *  通道名（Electron 侧恒为 IPC_CHANNELS 常量值），payload 为纯非秘密投影；
    *  返回 false = 当前无存活主窗（单窗身份），调用侧自行折算失败语义。 */
   rendererPush(channel: string, payload: unknown): boolean
   // —— 原生显示/系统集成 ——
-  /** 构造并显示原生通知（B4：宿主对象登记/淘汰留在实现侧），返回 click 回执
-   *  注销函数（core 只持有界 ACK 队列/去重/限速）。 */
-  showNativeNotification(spec: NativeNotificationSpec): () => void
+  /** 构造并显示原生通知（B4：宿主对象登记/淘汰/evict 全留实现侧私有）。S2 形状
+   *  （对 §4.1 草案的批内修订）：clickRoute 携带 click 回灌路由——null = 'test'
+   *  通知（无会话上下文，原生 click 只恢复窗口）；否则宿主 click 腿在宿主内先
+   *  activate/restore/focus 主窗口（无窗则重建，showMainWindow 语义），成功后才
+   *  回调 onActivated（core 的 owns+入队闭包——来源代际校验在 core）。honest-show
+   *  结算（showNativeNotificationHonestly 语义）在实现侧内部执行；返回句柄的
+   *  shown 暴露结算结果（NOTIFY IPC 返回值与 claim 释放依赖它），dispose 注销
+   *  click 回执（注销后该通知的后续 click 只恢复窗口）。实现侧不 throw——构造/
+   *  登记/监听失败一律结算为 shown:false 且登记清理内部完成。 */
+  showNativeNotification(
+    spec: NativeNotificationSpec,
+    clickRoute: { token: NotificationSourceToken; onActivated(): void } | null,
+  ): { dispose(): void; shown: Promise<{ shown: true } | { shown: false; error: string }> }
   /** Notification.isSupported 平台探测（异常安全由实现侧保证）。 */
   notificationSupported(): boolean
-  /** 通知 click → open-intent 回灌（click 激活窗口腿为 focusMainWindow）。 */
+  /** 通知 click → open-intent 回灌（design 25 §4.5 E4：宿主激活窗口腿成功后把
+   *  click 送回 core 队列）。S2 的 Electron click 回灌经 showNativeNotification
+   *  的 clickRoute 参数实现；本成员供后续批（Swift B flavor 的
+   *  edge:notification-clicked 对应面）使用，未实现前不可经 Pick 触碰。 */
   notifyClicked(openIntent: NotificationOpenIntent): void
-  /** macOS 平台门 + app.setBadgeCount（design 19 §3.7；与草案 boolean 偏差见
-   *  HostSetBadgeResult）。 */
+  /** 未读徽标 apply 叶（design 19 §3.7；E5——平台门与 badgeEnabled 裁决留 core
+   *  badge.ts：core 以 badgePlatformGate(platform, badgeCountApiAvailable())
+   *  先裁决、supported 后才调用本叶）：异常安全，绝不 throw。 */
   setBadge(count: number): HostSetBadgeResult
+  /** app.setBadgeCount API 可用性事实（badgePlatformGate 第二参；win32 的平台
+   *  原因由 core 侧平台门区分）。 */
+  badgeCountApiAvailable(): boolean
   /** 托盘可用性（design 14 D1 恢复入口判定）。 */
   trayAvailable(): boolean
   /** keep-awake（design 14 D5）：powerSaveBlocker prevent-app-suspension
@@ -359,10 +417,19 @@ export interface HostEdges {
   isFocused(): boolean
   /** 通知 click 激活腿（D3）：restore+focus，无窗则重建，完成后 resolve。 */
   focusMainWindow(): Promise<void>
-  /** 渲染器可用性门（B3）：webContents 是否仍在加载。 */
+  /** 渲染器可用性门（B3）：webContents 是否仍在加载。实现侧窗口守卫：无主窗/
+   *  已销毁视同加载中（投递门恒不通过）。 */
   webViewLoading(): boolean
   /** 渲染器可用性门（B3）：webContents 是否存活（非 crashed/destroyed）。 */
   webViewContentAlive(): boolean
+  /** 主窗口存在性门（W-10 S2 批内补充，B3 族）：win!=null 且未销毁——隐藏到
+   *  托盘/后台的窗口仍为 true（与 loading/alive 区分：窗口在但不一定可用）。
+   *  rendererPush 返回 false 与 mainWindowAlive() 为 false 语义等价。 */
+  mainWindowAlive(): boolean
+  /** 来源退役驱逐（W-10 S2 批内补充，B4 registry 私有）：注册表退役路径把
+   *  sourceId ∈ retiredSourceIds 的活跃原生通知关闭并注销（click 回执随对象
+   *  消亡），返回驱逐数。 */
+  retireNotificationsForSources(retiredSourceIds: ReadonlySet<string>): number
   // —— 打开/拉起 ——
   /** shell.openExternal 叶（B11：URL 白名单判定/预算/冷却/规范化留 core）。 */
   openExternal(url: string): Promise<void>
@@ -390,25 +457,429 @@ export interface HostEdges {
 }
 
 // ---------------------------------------------------------------------------
-// Shell IPC registration (design 25 §4.1 seam; W-10 S1 info+settings batch).
+// Renderer delivery state machines (W-10 S2 notify/badge/ready batch).
+//
+// 迁自 main.ts 的渲染器侧队列状态机（design 16 §4.2 / design 19 §3.3 /
+// design 14 D4）：pendingRendererIntents + deepLinkRendererReady + drain、
+// pendingNotificationOpens + notificationOpenDrainReady + drain、来源代际/
+// 证明实例（notificationSourceIncarnations / NotificationSourceProofs）、held
+// lastResume 补发、badge 意图 holder。本段是 core 业务状态（非宿主状态）——
+// 对 W-09「状态一律参数化、绝不模块作用域读」头部注记的批内修订：装配侧窗口
+// glue / open-in IPC / 深链消费循环与 installIpcHandlers 必须共享同一实例。
+// 单装配不变式：installIpcHandlers 每进程恰一次、先于任何窗口/渲染器事件（S1
+// 调用点纪律：whenReady 内、createMainWindow 之前），装配时把 HostEdges 投递
+// 子集（deliveryEdges）与 quit 门（quittingLeaf）快照进本段——此后所有导出
+// 入口可用。Electron-free 不变式不变：本文件零 electron import，投递 send 叶
+// 一律 edges.rendererPush、窗口事实一律 edges 门。
+//
+// 迁移决策（逐条注记，施工图 S2）：
+// - drainPendingRendererDeepLinkIntents / drainPendingNotificationOpens 随队列
+//   迁入（send 叶改 edges.rendererPush(IPC_CHANNELS.DEEP_LINK_INTENT /
+//   NOTIFICATION_OPEN,…)，requeue/rollback/ACK/ready 位语义原样保留；窗口身份
+//   复查（原 mainWindow === win）折算为「投递门只对当前主窗求值」——所有 drain
+//   触发点（glue 的 mainWindow===win 守卫 / trusted IPC = 当前主窗 / 入队调用）
+//   都锚定当前主窗，mid-drain 的 Electron 同步拆除竞态由每项 edges 门复检兜住；
+//   ready 位只在投递失败时复位（= 原「仅发送失败的窗口失去握手」语义——单窗下
+//   该窗即当前主窗，且 ready 位只由当前主窗的 trusted IPC 置位，无条件复位安全）。
+// - enqueueRendererDeepLinkIntent：迁入并导出（main.ts 的 open-in IPC 与深链
+//   消费循环（S9 前留 main）继续调用；签名与语义不变）。
+// - enqueueNotificationOpen：迁入（其唯一调用方 = NOTIFY 流构造的 click 回灌
+//   闭包，见 installIpcHandlers；不导出）。
+// - captureVscodeSource：**留在 main.ts**（依赖 transportManager registry 查
+//   找 = 装配侧所有物；代际捕获改经导出的 captureNotificationSource 代理）。
+// - notificationSourceIncarnations / NotificationSourceProofs 实例迁入（NOTIFY
+//   流、入队 owns 校验与 registry 退役共用；main.ts 侧经导出的 capture / owns /
+//   matches / project / sync 入口访问）。
+// - held lastResume 补发迁入（handleSystemResume / handleMainWindowShown +
+//   pushHeldSystemResume 经 edges.rendererPush 推送 SYSTEM_RESUME——committed
+//   push 包装与搬迁前同款）；订阅点 = installIpcHandlers ① 段注册
+//   edges.onSystemResume / onMainWindowShown。传输层唤醒重探
+//   （reconnectStaleTransports）留在 main 装配侧另挂 powerMonitor 监听。
+// - badge 意图 holder 迁入（BADGE_COUNT 注册体随迁；平台门 = badgePlatformGate
+//   (platform, edges.badgeCountApiAvailable()) 留 core——E5「门控逻辑留
+//   core」）；quit 兜底清除经 clearBadgeIntentForQuit 导出（main will-quit
+//   调用，原生清除叶由调用侧注入）。
+// - ready 位挂钩收敛为 onRendererLifecycle(event) 单一入口：did-start-loading /
+//   did-finish-load / crashed / closed 由 main 窗口 glue 调用（每处先做
+//   mainWindow===win 身份守卫）；'show'（held-resume 补发点）经
+//   edges.onMainWindowShown → handleMainWindowShown，不占本入口。
+// ---------------------------------------------------------------------------
+
+/** 投递状态机实际使用的 HostEdges 子集（装配时自 installIpcHandlers 的
+ *  deps.edges 快照——见上「单装配不变式」）。 */
+type DeliveryEdgeSet = Pick<
+  HostEdges,
+  'rendererPush' | 'mainWindowAlive' | 'webViewLoading' | 'webViewContentAlive'
+>;
+
+let deliveryEdges: DeliveryEdgeSet | null = null;
+/** quit 在途门（装配侧 ctx.isQuitting——入队/通知投递循环的 ignore 语义）。 */
+let quittingLeaf: () => boolean = () => false;
+
+// 来源生命周期权威（design 19 §3.3）：移除或传输身份编辑推进代际，原生通知
+// click 闭包与 held opens 无法跨进同 id 替换。
+const notificationSourceIncarnations = new NotificationSourceIncarnations();
+// 来源证明 sidecar（非秘密投影；presentation/service/home 编辑后存活，退役轮换）。
+const notificationSourceProofs = new NotificationSourceProofs();
+
+// 桌面通知（design 19 §3.3）：pendingNotificationOpens 照搬 pendingIntents 的
+// 队列 + drain 模式——点击通知时窗口可能正在重建/加载，事件不能丢。
+const pendingNotificationOpens = new BoundedAckDeliveryQueue<NotificationOpenIntent>(MAX_PENDING_NOTIFICATION_OPENS);
+let notificationOpenDrainReady = false;
+let drainingNotificationOpens = false;
+
+// 成功启动 VS Code 与 renderer 来源激活是两条独立链：前者不等待 UI，后者必须
+// 等 App 安装 onIntent 后通过 deep-link-ready 握手才能发送。窗口加载/崩溃会复位
+// ready；成功 intent 在有界队列中 hold/replay，绝不发给 about:blank 或尚未订阅
+// 的 renderer。
+type RendererVscodeIntent = VscodeLaunchRequest & {
+  sourceId: string
+  sourceFingerprint: string
+  sourceGeneration: number
+}
+const pendingRendererIntents = new BoundedAckDeliveryQueue<RendererVscodeIntent>(
+  64,
+  intent => BoundedVscodeIntentQueue.key(intent),
+);
+let deepLinkRendererReady = false;
+let drainingRendererDeepLinkIntents = false;
+
+// 最近一次 OS 唤醒时间戳（design 14 D4）：无窗口常驻（托盘态）期间 held，窗口
+// show 时一次性补发（push 成功后清空，避免 hide→show 补发过期事件）。
+let lastResume: number | null = null;
+
+// 未读徽标（design 19 §3.7）：renderer 推真实未读计数，core 持「最近一次意图」
+// 并按当前设置裁决呈现（badgeEnabled 关闭 → 强制 0 清除；重新开启 →
+// reconcileBadgeCount 恢复）。quit 在途兜底清除（clearBadgeIntentForQuit）。
+// badgeUnsupportedLogged / badgeApplyErrorLogged 把平台不支持（win32 / API 缺
+// 失）与持续抛错的 loud 日志压成一次——防重复推送刷屏。
+let pendingBadgeCount: number | null = null;
+let badgeUnsupportedLogged = false;
+let badgeApplyErrorLogged = false;
+
+/** 全局原生通知发送限速（含 kind:'test'，与 claim 同款有界滑动窗口）。 */
+const nativeNotificationRateLimiter = new BoundedRateLimiter();
+
+/** SYSTEM_RESUME 推送叶包装：单窗身份 send（edges.rendererPush 返回 false =
+ *  无存活主窗）折算为 push 失败并 loud——与搬迁前「mainWindow 变更即 throw」
+ *  语义等价；无窗口常驻期间由 show 补发兜底。 */
+function pushHeldSystemResume(timestamp: number): boolean {
+  const edges = deliveryEdges;
+  if (edges === null) return false;
+  const pushed = attemptCommittedRegistryPush(() => {
+    if (!edges.rendererPush(IPC_CHANNELS.SYSTEM_RESUME, { timestamp })) {
+      throw new Error('system-resume renderer push failed');
+    }
+  });
+  if (!pushed.sent) {
+    try { console.warn(`[dsh-chamber] system-resume push 失败，保留待重试：${pushed.error}`); } catch { /* best effort */ }
+  }
+  return pushed.sent;
+}
+
+/** OS 唤醒（design 14 D4，core 侧）：held 最近一次唤醒时间戳；窗口存活（含隐
+ *  藏）已即时收到则立即推送并清空 held，避免 hide→show 补发过期事件。 */
+function handleSystemResume(timestamp: number): void {
+  lastResume = timestamp;
+  const heldResume = lastResume;
+  const edges = deliveryEdges;
+  if (heldResume !== null && edges !== null && edges.mainWindowAlive() && pushHeldSystemResume(heldResume)) {
+    if (lastResume === heldResume) lastResume = null;
+  }
+}
+
+/** 主窗口 'show' 补发点（B9）：无窗口常驻（托盘态）期间的唤醒事件 held
+ *  （lastResume），窗口恢复可见时一次性补发。 */
+function handleMainWindowShown(): void {
+  const heldResume = lastResume;
+  if (heldResume !== null && pushHeldSystemResume(heldResume)) {
+    if (lastResume === heldResume) lastResume = null;
+  }
+}
+
+/** 通知点击入队（design 19 §3.3）：quit 在途 ignore；来源代际校验（捕获 token
+ *  必须仍为当前代际——同 sourceId 重加后旧 click 不回灌新 shell）；入队后立即
+ *  drain（窗口已加载则直接推送，重建/加载中由 did-finish-load 补发——窗口关闭
+ *  期间点击通知不丢事件，照搬 pendingIntents 模式）。有界队列（64 条上限，与
+ *  renderer 深链队列同款防御）：窗口长期无法加载时超限丢弃最旧，绝不无限增长。 */
+function enqueueNotificationOpen(sourceToken: NotificationSourceToken, sessionId: string): void {
+  if (quittingLeaf()) return;
+  if (!notificationSourceIncarnations.owns(sourceToken)) return;
+  const { sourceId, fingerprint: sourceFingerprint, generation: sourceGeneration } = sourceToken;
+  const queued = pendingNotificationOpens.enqueue({ sourceId, sourceFingerprint, sessionId, sourceGeneration });
+  if (!queued.accepted) {
+    console.warn(`[dsh-chamber] 通知打开队列容量全部被未确认事件占用，拒绝新事件：${sourceId}/${sessionId}`);
+    return;
+  }
+  if (queued.dropped !== null) {
+    console.warn(`[dsh-chamber] 通知打开队列已满，丢弃最旧待发事件：${queued.dropped.sourceId}/${queued.dropped.sessionId}`);
+  }
+  drainPendingNotificationOpens();
+}
+
+/** 通知打开事件统一 drain（design 19 §3.3，retain-until-ACK）：窗口存在、已完
+ *  成加载且 renderer 已就绪（onOpen 监听注册后经 dsh-chamber:notifications-ready
+ *  置位）→ 直接推送；任一条件不满足 → 重新 hold，did-finish-load / ready IPC
+ *  后再补发。send 叶 = edges.rendererPush（W-10 S2 迁入后改法；返回 false 折算
+ *  为该次 send 失败）；send 只转 in-flight，renderer 精确 ACK deliveryId+attempt
+ *  后才消费；reload/crash 会重发所有未 ACK 项。 */
+function drainPendingNotificationOpens(): boolean {
+  const edges = deliveryEdges;
+  if (edges === null) return true;
+  if (drainingNotificationOpens) return true;
+  if (
+    !notificationOpenDrainReady
+    || !edges.mainWindowAlive()
+    || edges.webViewLoading()
+    || !edges.webViewContentAlive()
+  ) return true;
+  drainingNotificationOpens = true;
+  try {
+    for (;;) {
+      if (quittingLeaf()) return true;
+      const delivery = pendingNotificationOpens.shift();
+      if (delivery === null) return true;
+      try {
+        // Re-check every item: Electron can synchronously tear down/replace a
+        // window while send() crosses the native boundary（窗口身份折算见段注释）。
+        if (
+          !edges.mainWindowAlive()
+          || edges.webViewLoading()
+          || !edges.webViewContentAlive()
+        ) throw new Error('notification renderer changed while draining');
+        if (!edges.rendererPush(IPC_CHANNELS.NOTIFICATION_OPEN, {
+          sourceId: delivery.payload.sourceId,
+          sourceFingerprint: delivery.payload.sourceFingerprint,
+          sessionId: delivery.payload.sessionId,
+          deliveryId: delivery.deliveryId,
+          attempt: delivery.attempt,
+        })) {
+          throw new Error('notification renderer push failed');
+        }
+        // Deliberately retain in-flight ownership until renderer ACK.
+      } catch (error) {
+        const restored = pendingNotificationOpens.rollback(delivery);
+        if (!restored) {
+          console.error(`[dsh-chamber] 通知打开事件回滚失败：delivery=${delivery.deliveryId}`);
+        }
+        // Only the window whose send failed may lose its handshake——单窗接缝下
+        // 「当前主窗」即该窗（ready 位只由当前主窗的 trusted IPC 置位），复位
+        // 安全：renderer 的有界就绪重试建立下一次握手（NOTIFICATIONS_READY 的
+        // 「返回 false → 重试」语义原样保留）。
+        notificationOpenDrainReady = false;
+        console.error('[dsh-chamber] 通知打开推送失败，等待 renderer 重试：', describeUnknownError(error));
+        return false;
+      }
+    }
+  } finally {
+    drainingNotificationOpens = false;
+  }
+}
+
+/** 深链 renderer 队列 drain（design 16 hold/replay）：窗口存活、完成加载、非崩
+ *  溃且 ready 位已置（App 安装 onIntent 后经 deep-link-ready 握手）→ 顺序推送；
+ *  任一条件不满足 → hold。send 叶 = edges.rendererPush（W-10 S2 迁入后改法）；
+ *  mid-drain 变更/失败 → rollback 保留 + ready 复位 + 返回 false（renderer 有界
+ *  重试重建握手）。 */
+function drainPendingRendererDeepLinkIntents(): boolean {
+  const edges = deliveryEdges;
+  if (edges === null) return true;
+  if (drainingRendererDeepLinkIntents) return true;
+  // 原门（main.ts）以 canDeliverRendererDeepLink + mainWindow===win 求值；窗口
+  // 身份折算见段注释（currentWindow 恒 true——触发点全部锚定当前主窗），
+  // destroyed/loading/crashed 折算为 edges 三门的取反。
+  if (
+    !canDeliverRendererDeepLink({
+      ready: deepLinkRendererReady,
+      currentWindow: true,
+      destroyed: !edges.mainWindowAlive(),
+      loading: edges.webViewLoading(),
+      crashed: !edges.webViewContentAlive(),
+    })
+  ) return true;
+
+  drainingRendererDeepLinkIntents = true;
+  try {
+    for (;;) {
+      const delivery = pendingRendererIntents.shift();
+      if (delivery === null) return true;
+      const intent = delivery.payload;
+      try {
+        // Re-check every item（同通知 drain：Electron 可在 send 跨界时同步拆除/
+        // 替换窗口）。
+        if (
+          !edges.mainWindowAlive()
+          || edges.webViewLoading()
+          || !edges.webViewContentAlive()
+        ) {
+          throw new Error('deep-link renderer changed while draining');
+        }
+        if (!edges.rendererPush(IPC_CHANNELS.DEEP_LINK_INTENT, {
+          instanceId: intent.instanceId,
+          path: intent.path,
+          sourceFingerprint: intent.sourceFingerprint,
+          deliveryId: delivery.deliveryId,
+          attempt: delivery.attempt,
+        })) {
+          throw new Error('deep-link renderer push failed');
+        }
+      } catch (error) {
+        // Preserve the failed item for the next renderer handshake instead of
+        // converting a transient send race into a lost/reordered activation.
+        if (!pendingRendererIntents.rollback(delivery)) {
+          console.error(`[dsh-chamber] renderer 深链 intent 回滚失败：${intent.instanceId}`);
+        }
+        deepLinkRendererReady = false;
+        console.error('[dsh-chamber] 深链 intent 推送失败，等待 renderer 重试：', describeUnknownError(error));
+        return false;
+      }
+    }
+  } finally {
+    drainingRendererDeepLinkIntents = false;
+  }
+}
+
+/** 深链 renderer 入队（hold/replay 队列；main.ts 的 open-in IPC 与深链消费循环
+ *  调用——随队列迁 core，签名与语义不变）。 */
+export function enqueueRendererDeepLinkIntent(intent: VscodeLaunchRequest, sourceToken: NotificationSourceToken): void {
+  if (!notificationSourceIncarnations.owns(sourceToken)) return;
+  const queued = pendingRendererIntents.enqueue({
+    ...intent,
+    sourceId: sourceToken.sourceId,
+    sourceFingerprint: sourceToken.fingerprint,
+    sourceGeneration: sourceToken.generation,
+  });
+  if (!queued.accepted) {
+    if (queued.reason === 'saturated') {
+      console.warn(`[dsh-chamber] renderer 深链队列容量全部被在途 intent 占用，拒绝新 intent：${intent.instanceId}`);
+    }
+    return;
+  }
+  if (queued.dropped !== null) {
+    console.warn(`[dsh-chamber] renderer 深链队列已满，丢弃最旧 intent：${queued.dropped.instanceId}`);
+  }
+  drainPendingRendererDeepLinkIntents();
+}
+
+/** 渲染器生命周期事件（main 窗口 glue 调用——did-start-loading / closed 在
+ *  createMainWindow，did-finish-load / crashed 在 installRendererRecovery；
+ *  'show' 不占本入口，走 edges.onMainWindowShown；每处 glue 先做
+ *  mainWindow===win 身份守卫，仅当前主窗的事件到达本入口）。 */
+export type RendererLifecycleEvent = 'did-start-loading' | 'did-finish-load' | 'crashed' | 'closed';
+
+/** ready 位挂钩收敛入口（W-10 S2）：窗口事件 → 队列状态机复位/重放，语义逐字
+ *  迁自 main.ts 窗口 glue。did-start-loading 必先于页面脚本执行（ready IPC 恒在
+ *  其后），顺序保证成立——复位点选在 start-loading 而非 finish-load 的原因：
+ *  did-finish-load 可能被 >500ms 的慢子资源拖迟到 ready() invoke 之后，在 finish
+ *  时重置会把已置位的标志 clobber 成永久 false。 */
+export function onRendererLifecycle(event: RendererLifecycleEvent): void {
+  if (event === 'did-start-loading') {
+    notificationOpenDrainReady = false;
+    deepLinkRendererReady = false;
+    pendingNotificationOpens.requeueInFlight();
+    pendingRendererIntents.requeueInFlight();
+    drainPendingNotificationOpens();
+    return;
+  }
+  if (event === 'did-finish-load') {
+    // ready() can run while late subresources still keep isLoading() true. The
+    // first drain then correctly holds; finish is the deterministic replay edge.
+    drainPendingRendererDeepLinkIntents();
+    drainPendingNotificationOpens();
+    return;
+  }
+  // crashed / closed：通知就绪标志立即失效（崩溃到 reload 之间没有导航事件，
+  // 不重置则向死 frame 推送丢事件）+ in-flight 全部重排回待发（reload 后按
+  // 原 FIFO 重发，attempt 自增使旧 document 的迟到 ACK 失效）。
+  notificationOpenDrainReady = false;
+  deepLinkRendererReady = false;
+  pendingNotificationOpens.requeueInFlight();
+  pendingRendererIntents.requeueInFlight();
+}
+
+/** 来源代际捕获代理（main.ts 的 captureVscodeSource / 插件播种所有权沿用——
+ *  NotificationSourceIncarnations 实例随迁 W-10 S2）。 */
+export function captureNotificationSource(sourceId: string): NotificationSourceToken | null {
+  return notificationSourceIncarnations.capture(sourceId);
+}
+
+/** 来源代际持有校验代理（open-in / 深链消费循环的所有权复查沿用）。 */
+export function ownsNotificationSource(token: NotificationSourceToken): boolean {
+  return notificationSourceIncarnations.owns(token);
+}
+
+/** 来源 fingerprint 匹配代理（open-in IPC 的入场校验沿用）。 */
+export function matchesNotificationSource(sourceId: string, fingerprint: string): boolean {
+  return notificationSourceIncarnations.matches(sourceId, fingerprint);
+}
+
+/** 注册表投影类型：TransportInstanceSpec + 非秘密来源证明（design 19 §3.3）。 */
+export type ProjectedTransportInstanceSpec = TransportInstanceSpec & { sourceFingerprint: string }
+
+/** 来源证明投影（NotificationSourceProofs 实例随迁 W-10 S2；main.ts 的 registry
+ *  查询/投影沿用——证明在 presentation/service/home 编辑后仍存活，renderer 生命
+ *  周期退役（删除/传输身份编辑）时轮换）。 */
+export function projectNotificationSourceInstances(
+  instances: readonly TransportInstanceSpec[],
+): ProjectedTransportInstanceSpec[] {
+  return notificationSourceProofs.replaceRemoteInstances(instances);
+}
+
+/** 来源 registry 同步（退役权威 + 队列清理，W-10 S2）：replaceRemoteSources 后
+ *  把退役 sourceId 的在途/待发事件从两条队列全部丢弃（同 id 替换绝不继承旧代际
+ *  的 held 工作）；返回退役 id 集合——装配侧注册表退役路径再经
+ *  edges.retireNotificationsForSources 驱逐活跃原生通知。 */
+export function syncNotificationSourceRegistry(
+  projected: readonly ProjectedTransportInstanceSpec[],
+): string[] {
+  const retired = notificationSourceIncarnations.replaceRemoteSources(
+    projected.map(instance => ({
+      sourceId: `${instance.kind}-${instance.id}`,
+      fingerprint: instance.sourceFingerprint,
+    })),
+  );
+  if (retired.length > 0) {
+    const retiredIds = new Set(retired);
+    pendingNotificationOpens.discardWhere(intent => retiredIds.has(intent.sourceId));
+    pendingRendererIntents.discardWhere(intent => retiredIds.has(intent.sourceId));
+  }
+  return retired;
+}
+
+/** will-quit 兜底清除（design 19 §3.7）：退出在途不留 Dock 残留；曾有意图才触
+ *  碰（避免无谓日志）。清空意图并调用注入的原生清除叶（main 装配侧以
+ *  typeof 守卫的 app.setBadgeCount(0) 实现）。 */
+export function clearBadgeIntentForQuit(applyNativeClear: () => void): void {
+  // 兜底清除（退出在途不留 Dock 残留；曾有意图才触碰，避免无谓日志）。
+  if (pendingBadgeCount !== null) {
+    try { applyNativeClear(); } catch { /* best-effort on the way out */ }
+    pendingBadgeCount = null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Shell IPC registration (design 25 §4.1 seam; W-10 S1 info+settings +
+// S2 notify/badge/ready batch).
 //
 // installIpcHandlers is the single shell-core IPC registration point: the
 // Electron main only assembles it (main.ts — trustedIpc fence injected at the
-// registrar wrapper, core stays electron-free by construction). This batch
-// relocates group A — the INFO / SETTINGS_GET / SETTINGS_SET registrations and
-// their settings helpers (chamberSettingsStatus / applySettingsPatch /
-// pushSettingsChanged) — VERBATIM from main.ts: only the Electron leaves were
-// replaced by injected seams (settingsIO / setKeepAwake / setLoginItem /
-// reconcileBadgeCount / confirmRegistryOriginSwitch via ctx, and the
-// SETTINGS_CHANGED send leaf via edges.rendererPush — the S0 seam member), so
-// behavior is unchanged. Registration order inside this function = the
-// original main.ts order; the surrounding steps of the wider W-10 plan are
-// annotated in place:
-//   ① edges 回灌订阅首段（占位——onSystemResume / onMainWindowShown /
-//      onNotifyClick 的 core 回调在 W-10 后续批迁入，订阅点在此注册）；
-//   ② A 组 3 个注册体（本批）；
-//   ③ 自举（占位——控制面 ready 后的启动/恢复 push 与 drain 挂点在 W-10
-//      后续批迁入）。
+// registrar wrapper, core stays electron-free by construction). Relocated
+// groups, VERBATIM from main.ts with only the Electron leaves replaced by
+// injected seams — behavior unchanged:
+//   S1 group A — INFO / SETTINGS_GET / SETTINGS_SET registrations and their
+//   settings helpers (chamberSettingsStatus / applySettingsPatch /
+//   pushSettingsChanged): leaves via settingsIO / setKeepAwake / setLoginItem /
+//   confirmRegistryOriginSwitch (ctx) + SETTINGS_CHANGED send via
+//   edges.rendererPush. Registration order inside this function = the original
+//   main.ts order; the surrounding steps of the wider W-10 plan are annotated
+//   in place:
+//   ① edges 回灌订阅段（S2 转实：onSystemResume / onMainWindowShown 的 core 回调
+//     在此注册——held-resume 补发语义随迁 core，见上段状态机）；
+//   ② A 组 3 个注册体（S1 批）+ B 组 6 个注册体（S2 批：NOTIFY /
+//     NOTIFICATIONS_READY / NOTIFICATION_OPEN_ACK / BADGE_COUNT /
+//     DEEP_LINK_READY / DEEP_LINK_ACK——按原 main.ts 顺序追加）；
+//   ③ 自举（占位——控制面 ready 后的启动/恢复 push 与余下 drain 挂点在 W-10
+//      后续批迁入，见 macos-swift-v1.md §四批 2）。
 // ---------------------------------------------------------------------------
 
 /** IPC 注册面：core 经它注册处理器（channel 为 opaque 通道名；Electron 侧
@@ -418,18 +889,21 @@ export interface IpcRegistrar {
   handle(channel: string, handler: (payload: unknown) => Promise<unknown> | unknown): void
 }
 
-/** ShellAssemblyCtx — installIpcHandlers 装配上下文。最小集原则：只放本批 3
- *  个注册体与其随迁辅助实际引用的字段，后续批按需扩展。chamber settings 的
- *  内存 holder 本批仍归装配侧（main.ts 尚余 20+ 处直读点，随各自批迁入时
- *  holder 一并搬家）；core 侧一律经 settingsIO 读写，权威单一、行为与搬迁前
- *  一致。各副作用叶与其 HostEdges 成员（setKeepAwake / setLoginItem /
- *  setBadge…）同名同语义——后续批把宿主腿迁入 electron-edges 时 core 无需改。 */
+/** ShellAssemblyCtx — installIpcHandlers 装配上下文。最小集原则：只放已迁注册
+ *  体与其随迁辅助实际引用的字段，后续批按需扩展（S1 → S2：增 isQuitting、移除
+ *  reconcileBadgeCount——意图 holder 与裁决随 BADGE_COUNT 批迁入 core 后
+ *  SETTINGS_SET 直接调 core 内 reconcile，见 installIpcHandlers ②）。chamber
+ *  settings 的内存 holder 仍归装配侧（main.ts 尚余 20+ 处直读点，随各自批迁入时
+ *  holder 一并搬家）；core 侧一律经 settingsIO 读写，权威单一、行为与搬迁前一
+ *  致。各副作用叶与其 HostEdges 成员（setKeepAwake / setLoginItem /
+ *  setBadge…）同名同语义——宿主腿迁入 electron-edges 时 core 无需改。 */
 export interface ShellAssemblyCtx {
   /** INFO 载荷与 settings 平台投影的宿主事实。 */
   hostFacts: {
     /** 控制面 URL（原 main.ts INFO 载荷的 `http://127.0.0.1:${cp.port}`）。 */
     controlPlaneUrl: string
-    /** 运行平台（原 process.platform）。 */
+    /** 运行平台（原 process.platform——BADGE_COUNT 平台门 badgePlatformGate
+     *  第一参同源）。 */
     platform: NodeJS.Platform
     /** 托盘恢复面存在性（SETTINGS 投影 closeToTray 门）——invoke 时求值：
      *  托盘在装配后才创建（main.ts maybeCreateTray），不得装配期定格。 */
@@ -453,6 +927,10 @@ export interface ShellAssemblyCtx {
      *  由 applySettingsPatch 触发已应用副作用的回滚。 */
     persist(next: ChamberSettings): void
   }
+  /** quit 在途门（design 14 D2——原 main.ts 模块级 quitRequested）：通知/深链
+   *  入队的 ignore 语义与通知投递循环的退出检查经它求值（装配侧注入
+   *  `() => quitRequested`；S2 起随入队/队列迁入 core 的依赖）。 */
+  isQuitting(): boolean
   /** keep-awake 副作用叶（装配侧注入现 setKeepAwakeActive——HostEdges
    *  setKeepAwake 的 main.ts 宿主腿；失败 throw，由 applySettingsPatch 的
    *  catch 做 best-effort 回滚，与搬迁前语义一致）。 */
@@ -460,9 +938,6 @@ export interface ShellAssemblyCtx {
   /** 登录自启副作用叶（装配侧注入现 applyLaunchAtLogin——HostEdges
    *  setLoginItem 的 main.ts 宿主腿；失败 {error} 返回，绝不 throw）。 */
   setLoginItem(enabled: boolean): { ok: true } | { ok: false; error: string }
-  /** badge 意图即时收敛叶（装配侧注入现 reconcileBadgeCount——badge 批迁入
-   *  前由 main 注入同函数引用，语义零变）。 */
-  reconcileBadgeCount(): void
   /** registryOrigin 切换确认对话框叶（SETTINGS_SET 现 dialog.showMessageBox
    *  腿；文案与无窗判定留在实现侧）：
    *  'confirmed' 放行；
@@ -474,27 +949,56 @@ export interface ShellAssemblyCtx {
   ): Promise<'confirmed' | 'cancelled' | 'unavailable'>
 }
 
-/** 装配 shell IPC 面（W-10 S1：A 组 INFO / SETTINGS_GET / SETTINGS_SET + 随迁
- *  settings 辅助）。edges 参数以 Pick 收窄到本批实际调用的成员
- *  （createElectronEdges 返回同形 Pick）；后续批实现新成员时同步扩宽两侧。
- *  调用点纪律：whenReady 内、createMainWindow 之前（窗口加载前注册完毕）。 */
+/** 装配 shell IPC 面（W-10 S1 A 组 + S2 B 组注册体与随迁辅助；B 组注册顺序 =
+ *  原 main.ts 顺序）。edges 参数以 Pick 收窄到本批实际调用的成员
+ *  （createElectronEdges 返回同形超集）；后续批实现新成员时同步扩宽两侧。
+ *  调用点纪律：whenReady 内、createMainWindow 之前（窗口加载前注册完毕）——
+ *  本函数同时完成渲染器投递状态机的 edges/quit 快照（单装配不变式，见上段）。 */
 export function installIpcHandlers(deps: {
   ipc: IpcRegistrar
-  edges: Pick<HostEdges, 'rendererPush'>
+  edges: Pick<
+    HostEdges,
+    | 'rendererPush'
+    | 'showNativeNotification'
+    | 'notificationSupported'
+    | 'setBadge'
+    | 'badgeCountApiAvailable'
+    | 'isFocused'
+    | 'onSystemResume'
+    | 'onMainWindowShown'
+    | 'mainWindowAlive'
+    | 'webViewLoading'
+    | 'webViewContentAlive'
+  >
   ctx: ShellAssemblyCtx
 }): void {
+  // 单装配不变式（渲染器投递状态机段注释）：快照投递 edges 子集与 quit 门——
+  // 本函数先于任何窗口/渲染器事件执行（调用点纪律见上），此后 onRendererLifecycle /
+  // enqueueRendererDeepLinkIntent / handleSystemResume 等导出入口可用。
+  deliveryEdges = {
+    rendererPush: deps.edges.rendererPush,
+    mainWindowAlive: deps.edges.mainWindowAlive,
+    webViewLoading: deps.edges.webViewLoading,
+    webViewContentAlive: deps.edges.webViewContentAlive,
+  };
+  quittingLeaf = deps.ctx.isQuitting;
   const {
     hostFacts,
     settingsIO,
     setKeepAwake,
     setLoginItem,
-    reconcileBadgeCount,
     confirmRegistryOriginSwitch,
   } = deps.ctx
 
-  // ① edges 回灌订阅首段（W-10 后续批占位：core 回调在此挂
-  //    edges.onSystemResume / onMainWindowShown / notifyClicked——事件源语义
-  //    自 main.ts 逐字迁入，订阅点统一走本函数单点）。
+  // ① edges 回灌订阅段（S2 转实）：OS 唤醒与主窗口 'show' 的事件源语义自 main.ts
+  //    逐字迁入，订阅点统一走本函数单点——held lastResume 补发在 core（上段状态
+  //    机）。notifyClicked（Swift B flavor 对应面）留后续批。
+  deps.edges.onSystemResume((timestamp) => {
+    handleSystemResume(timestamp);
+  });
+  deps.edges.onMainWindowShown(() => {
+    handleMainWindowShown();
+  });
 
   /** 非秘密 chamber 设置投影（design 14 D7）：当前值 + 平台能力门控。 */
   function chamberSettingsStatus(): ChamberSettingsStatus {
@@ -578,8 +1082,137 @@ export function installIpcHandlers(deps: {
     return { ok: true };
   }
 
-  // ② A 组 3 个注册体（迁自 main.ts；trustedIpc 围栏由装配侧在 ipc 注入点
-  //    包装，本文件零 electron）。
+  /** 平台门 + 宿主 apply 的 core 侧编排（E5——「平台门与裁决留 core（badge.ts）」）：
+   *  badgePlatformGate(platform, edges.badgeCountApiAvailable()) 先裁决
+   *  （win32 的专属平台原因在此区分），supported 后才经 edges.setBadge apply。
+   *  unsupported 与 apply 失败各压成一次 loud（badgeUnsupportedLogged /
+   *  badgeApplyErrorLogged——防重复推送刷屏）。 */
+  function applyBadgePresentation(count: number): boolean {
+    const gate = badgePlatformGate(hostFacts.platform, deps.edges.badgeCountApiAvailable());
+    if (!gate.supported) {
+      if (!badgeUnsupportedLogged) {
+        badgeUnsupportedLogged = true;
+        console.warn(`[dsh-chamber] 应用图标未读徽标不可用：${gate.reason}`);
+      }
+      return false;
+    }
+    const applied = deps.edges.setBadge(count);
+    if (!applied.applied) {
+      if (!badgeApplyErrorLogged) {
+        badgeApplyErrorLogged = true;
+        console.warn(`[dsh-chamber] 应用图标未读徽标设置失败：${applied.reason}`);
+      }
+      return false;
+    }
+    return true;
+  }
+
+  /** 按当前设置重新裁决最近一次 renderer 计数意图（设置切换后的即时收敛——
+   *  SETTINGS_SET 的 badgeEnabled 翻转收敛点；S2 起 holder/裁决随 BADGE_COUNT
+   *  迁入本函数，S1 的 ctx.reconcileBadgeCount 注入叶移除）。 */
+  function reconcileBadgeCount(): void {
+    if (pendingBadgeCount === null) return;
+    const count = adjudicateBadgeCount(
+      { badgeEnabled: settingsIO.current().notifications.badgeEnabled },
+      pendingBadgeCount,
+    );
+    applyBadgePresentation(count);
+  }
+
+  /** 桌面原生通知主链路（design 19 §3.3；W-10 S2 迁入——宿主腿全在
+   *  electron-edges：构造/登记/淘汰/click 腿/honest-show 结算 = showNativeNotification、
+   *  能力探测 = notificationSupported、焦点事实 = isFocused）：payload 白名单 →
+   *  平台支持 → 设置裁决 → 有界 claim / 全局速率 → 显示。返回是否收到原生
+   *  `show` 事件（异步 failed/close/timeout 均为 false）。'test' 绕过 claim 与
+   *  设置门禁，但仍受全局宿主预算约束；通知失败降级且 loud，不误报成功，会话业
+   *  务/侧边栏蓝点不受影响。 */
+  async function maybeShowNativeNotification(payload: unknown): Promise<boolean> {
+    const validated = validateNotificationRequest(payload);
+    if (!validated.ok) {
+      console.warn(`[dsh-chamber] 拒绝非法通知 payload：${validated.error}`);
+      return false;
+    }
+    const request = validated.request;
+    // 设置权威在装配侧内存 holder（settingsIO.current——settings-set 即时更新）；
+    // 旧文件缺字段时用 DEFAULT 兜底（normalizeSettings 已归一，此处仅防御）。
+    const settings: NotificationSettingsLike = {
+      ...DEFAULT_CHAMBER_SETTINGS.notifications,
+      ...(settingsIO.current().notifications ?? {}),
+    };
+    // 搬迁差异注记：原 readNotificationHostBoolean 区分「探测异常（拒发）」与
+    // 「未聚焦」；接缝下 isFocused 由实现侧保证异常安全恒 boolean（单窗守卫内
+    // isVisible/isFocused 探测不可达异常），两态同值——有意收敛，注释于
+    // electron-edges isFocused。
+    const anyWindowFocused = deps.edges.isFocused();
+    const decision = decideNotification({
+      request,
+      settings,
+      anyWindowFocused,
+    });
+    if (decision.action === 'skip') return false;
+    if (!notificationSourceIncarnations.matches(request.sourceId, request.sourceFingerprint)) {
+      console.warn(`[dsh-chamber] 通知来源 fingerprint 已过期：${request.sourceId}`);
+      return false;
+    }
+    const sourceToken = request.kind === 'test' ? null : notificationSourceIncarnations.capture(request.sourceId);
+    if (request.kind !== 'test' && sourceToken === null) {
+      console.warn(`[dsh-chamber] 通知来源已不在当前 registry：${request.sourceId}`);
+      return false;
+    }
+    // A disabled/kind/focus decision is terminal before consulting the host.
+    // Unsupported-platform logging should describe an actual show attempt, not
+    // every deliberately suppressed renderer edge（notificationSupported 探测失败
+    // 与不支持同值——实现侧异常安全；与搬迁前区分「探测失败」消息的有意收敛）。
+    if (!deps.edges.notificationSupported()) {
+      console.warn('[dsh-chamber] 通知裁决跳过：平台不支持原生通知');
+      return false;
+    }
+    // 去重 claim（5s TTL）：防同一事件双路径/重放双发；'test' 不走 claim。
+    // 顺序在裁决之后：被设置/焦点跳过的请求不消费去重槽（design 19 §3.3）。
+    const claim = claimNotificationDetailed(request);
+    if (!claim.accepted) {
+      if (claim.reason === 'saturated') {
+        console.warn('[dsh-chamber] 通知去重窗口已达硬上限，拒绝新通知');
+      }
+      return false;
+    }
+    if (!nativeNotificationRateLimiter.tryAcquire()) {
+      releaseNotificationClaim(claim.token);
+      console.warn('[dsh-chamber] 原生通知发送速率达到硬上限，拒绝新通知');
+      return false;
+    }
+    // 宿主腿（构造 + 有界登记/淘汰 + click 腿 + honest-show 结算全在实现侧，
+    // B4——见 HostEdges.showNativeNotification 注释）：实现侧不 throw，shown 结
+    // 算后 core 释放 claim 并如实返回 IPC 结果。
+    const clickRoute = sourceToken === null
+      ? null
+      : {
+        token: sourceToken,
+        // click 回灌（宿主先 activate/restore/focus 成功才回调本闭包）：代际复
+        // 查（旧来源代际的 click 不回灌同 id 替换后的新 shell）后入队打开意图。
+        onActivated: () => {
+          if (!notificationSourceIncarnations.owns(sourceToken)) {
+            console.warn(`[dsh-chamber] 忽略旧来源代际的通知点击：${request.sourceId}`);
+            return;
+          }
+          enqueueNotificationOpen(sourceToken, request.sessionId);
+        },
+      };
+    const handle = deps.edges.showNativeNotification(
+      { title: request.title, body: request.body },
+      clickRoute,
+    );
+    const outcome = await handle.shown;
+    if (!outcome.shown) {
+      releaseNotificationClaim(claim.token);
+      console.warn(`[dsh-chamber] 原生通知显示失败：${outcome.error}`);
+      return false;
+    }
+    return true;
+  }
+
+  // ② A 组 3 个注册体（S1 迁自 main.ts；trustedIpc 围栏由装配侧在 ipc 注入点
+  //    包装，本文件零 electron）+ B 组 6 个注册体（S2 批，按原 main.ts 顺序追加）。
   // 桌面身份/版本信息（dsh-chamber:info）：控制面 URL + 平台为宿主事实，
   // shell 版本为模块自读（与 main.ts 同源 package.json），dshVersion 即时
   // 解析（ctx.runtimeFacts）。
@@ -620,6 +1253,58 @@ export function installIpcHandlers(deps: {
     return chamberSettingsStatus();
   });
 
-  // ③ 自举（W-10 后续批占位：控制面 ready 后的启动/恢复 push、drain 挂点
+  // —— B 组（S2 批；W-10 S2 施工图第 1 项）——
+  // 桌面通知（design 19 §3.3）：渲染端检测会话边沿并组装 payload → notify
+  // （invoke，返回是否实际显示）→ 主进程白名单/去重/裁决 + 原生通知。
+  // 载荷形状 = 原 main.ts 的 trustedIpc(({ payload }) => …)——invoke 实参对象
+  // 解构在处理器内完成（registrar 处理器只收单参 unknown）。
+  deps.ipc.handle(IPC_CHANNELS.NOTIFY, (payload: unknown) =>
+    maybeShowNativeNotification((payload as { payload?: unknown }).payload));
+  // Renderer 通知就绪信号（design 19 §3.3）：onOpen 监听注册后调用——通知点击
+  // 的推送只在就绪后放行（did-finish-load 早于监听注册，见 drain 条件）。
+  // 返回 true 与 preload 的 Promise<boolean> 声明一致（成功置位信号）。
+  deps.ipc.handle(IPC_CHANNELS.NOTIFICATIONS_READY, () => {
+    notificationOpenDrainReady = true;
+    const drainAccepted = drainPendingNotificationOpens();
+    // A send race revokes ready inside the drain. Returning false makes the
+    // renderer's bounded readiness retry establish the next handshake.
+    return drainAccepted && notificationOpenDrainReady;
+  });
+  deps.ipc.handle(IPC_CHANNELS.NOTIFICATION_OPEN_ACK, (payload: unknown) => {
+    if (payload === null || typeof payload !== 'object') return false;
+    const { deliveryId, attempt } = payload as { deliveryId?: unknown; attempt?: unknown };
+    return pendingNotificationOpens.acknowledge(deliveryId as number, attempt as number);
+  });
+  // 未读徽标计数（design 19 §3.7）：renderer 推真实计数（0 = 清除）→ 白名单
+  // 校验 → 记录意图 → 设置裁决（badgeEnabled）→ 平台门 + edges.setBadge。
+  // 返回是否实际应用；渲染端静默容忍 false（主进程已 loud 记平台/失败原因）。
+  deps.ipc.handle(IPC_CHANNELS.BADGE_COUNT, (payload: unknown) => {
+    const validated = validateBadgeRequest(payload);
+    if (!validated.ok) {
+      console.error(`[dsh-chamber] 徽标计数请求校验失败：${validated.error}`);
+      return false;
+    }
+    pendingBadgeCount = validated.count;
+    const count = adjudicateBadgeCount(
+      { badgeEnabled: settingsIO.current().notifications.badgeEnabled },
+      validated.count,
+    );
+    return applyBadgePresentation(count);
+  });
+  // Deep-link renderer readiness (design 16 hold/replay): App invokes this
+  // only after installing deepLink.onIntent. Successful cold-start launches
+  // held before that point are replayed now; navigation/crash resets the bit.
+  deps.ipc.handle(IPC_CHANNELS.DEEP_LINK_READY, () => {
+    deepLinkRendererReady = true;
+    const drainAccepted = drainPendingRendererDeepLinkIntents();
+    return drainAccepted && deepLinkRendererReady;
+  });
+  deps.ipc.handle(IPC_CHANNELS.DEEP_LINK_ACK, (payload: unknown) => {
+    if (payload === null || typeof payload !== 'object') return false;
+    const { deliveryId, attempt } = payload as { deliveryId?: unknown; attempt?: unknown };
+    return pendingRendererIntents.acknowledge(deliveryId as number, attempt as number);
+  });
+
+  // ③ 自举（W-10 后续批占位：控制面 ready 后的启动/恢复 push、余下 drain 挂点
   //    迁入点——见 macos-swift-v1.md §四批 2）。
 }

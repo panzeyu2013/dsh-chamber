@@ -26,7 +26,7 @@
  * - Tray (packaged only, defensive), single-instance lock.
  */
 
-import { app, BrowserWindow, crashReporter, dialog, ipcMain, Menu, Notification, Tray, nativeImage, powerMonitor, powerSaveBlocker, safeStorage, session, shell } from 'electron';
+import { app, BrowserWindow, crashReporter, dialog, ipcMain, Menu, Tray, nativeImage, powerMonitor, powerSaveBlocker, safeStorage, session, shell } from 'electron';
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync, promises as fsp } from 'node:fs';
 import { createHash } from 'node:crypto';
 import os from 'node:os';
@@ -57,9 +57,7 @@ import { createTrustedIpc, isExternalLinkUrl, isTrustedIpcSender, isTrustedRende
 import { call, createControlPlane } from './control-plane-module.ts';
 import {
   attemptDeepLinkProtocolRegistration,
-  BoundedAckDeliveryQueue,
   BoundedVscodeIntentQueue,
-  canDeliverRendererDeepLink,
   canRestoreMainWindow,
   decideDeepLinkProtocolRegistration,
   describeUnknownError,
@@ -71,7 +69,7 @@ import {
   resolveLinuxLaunchExecutable,
   runVscodeLaunch,
 } from './deep-link.ts';
-import type { VscodeLaunchContext, VscodeLaunchRequest } from './deep-link.ts';
+import type { VscodeLaunchContext } from './deep-link.ts';
 import { classifyLocalPath, invokeOpenPath, listOpenInApps, runOpenInLaunch } from './open-in.ts';
 import type { OpenInLaunchContext, OpenInRequest } from './open-in.ts';
 import { createUpdateController, openReleasePage } from './updater.ts';
@@ -190,23 +188,10 @@ import {
 } from './chamber-settings.ts';
 import type { ChamberSettings } from './chamber-settings.ts';
 import {
-  BoundedActiveNotifications,
-  BoundedRateLimiter,
-  claimNotificationDetailed,
-  decideNotification,
-  MAX_ACTIVE_NATIVE_NOTIFICATIONS,
-  MAX_PENDING_NOTIFICATION_OPENS,
-  NotificationSourceIncarnations,
-  NotificationSourceProofs,
   isValidNotificationSourceFingerprint,
-  readNotificationHostBoolean,
-  releaseNotificationClaim,
   shouldFocusApplicationBeforeShowing,
-  showNativeNotificationHonestly,
-  validateNotificationRequest,
 } from './notifications.ts';
-import type { NotificationOpenIntent, NotificationSettingsLike, NotificationSourceToken } from './notifications.ts';
-import { adjudicateBadgeCount, badgePlatformGate, validateBadgeRequest } from './badge.ts';
+import type { NotificationSourceToken } from './notifications.ts';
 import { IPC_CHANNELS } from './ipc-events.ts';
 import {
   buildSshApplyRows,
@@ -232,6 +217,14 @@ import {
   sshPasswordsFilePath,
   stateRootDir,
   installIpcHandlers,
+  captureNotificationSource,
+  clearBadgeIntentForQuit,
+  enqueueRendererDeepLinkIntent,
+  matchesNotificationSource,
+  onRendererLifecycle,
+  ownsNotificationSource,
+  projectNotificationSourceInstances,
+  syncNotificationSourceRegistry,
 } from './shell-core.ts';
 import type { ShellAssemblyCtx } from './shell-core.ts';
 import { createElectronEdges } from './electron-edges.ts';
@@ -365,14 +358,17 @@ let tray: Tray | null = null;
 // 重建（macOS activate 路径）——没有它，窗口一旦关闭应用就永久无窗。
 let mainWindowUrl: string | null = null;
 
+// W-10 S2：主窗口 'show' 事件订阅面（HostEdges.onMainWindowShown 的装配侧注册
+// 点——createMainWindow glue 对每窗挂接，mainWindow===win 身份守卫在 glue；core
+// 的 held-resume 补发经 createElectronEdges 的 onMainWindowShown 订阅）。
+const mainWindowShownSubscribers = new Set<() => void>();
+
 // Chamber settings (design 14 D7, v1 scope): loaded at startup from
 // <userData>/chamber-settings.json, mutated via dsh-chamber:settings-set. The
 // side effects (keep-awake / login autostart / close behavior) are applied
 // here in the main process — never in any instance's dsh home (01 §2 P2).
 let chamberSettings: ChamberSettings = { ...DEFAULT_CHAMBER_SETTINGS };
 let keepAwakeBlockerId: number | null = null;
-// 最近一次 OS 唤醒时间戳：无窗口常驻（托盘态）期间 held，窗口 show 时补发。
-let lastResume: number | null = null;
 // Quit state machine (design 14 D2): quitRequested 置位后关窗不再 hide（真正
 // 退出在途）；quitConfirmed 表示退出已获确认/豁免；confirmingQuit 是确认
 // 对话框单飞闸（防连点/双路径重复弹窗）。
@@ -387,80 +383,21 @@ let quitCleanupInProgress = false;
 // URL 拼写仍会合并；complete 后允许用户稍后主动再次打开同一目标。
 // drainPendingIntents 在 whenReady 内赋值（依赖 wiredCtx/transportManager），
 // 冷启动到达的深链只入队、drain 就绪后消费。
+// W-10 S2 决策：本队列（VS Code 启动消费循环）与 enqueueDeepLink 留在 main 至
+// S9——renderer 侧 hold/replay 队列（pendingRendererIntents + drain）与来源代际
+// 实例已迁 shell-core（W-10 S2 段），OS 三入口（open-url / second-instance /
+// 冷启动 argv）继续经本地 enqueueDeepLink 入队。
 const pendingIntents = new BoundedVscodeIntentQueue(64);
 let drainPendingIntents: (() => void) | null = null;
 let drainingPendingIntents = false;
 
-// 成功启动 VS Code 与 renderer 来源激活是两条独立链：前者不等待 UI，后者
-// 必须等 App 安装 onIntent 后通过 deep-link-ready 握手才能发送。窗口加载/崩溃
-// 会复位 ready；成功 intent 在有界队列中 hold/replay，绝不发给 about:blank 或
-// 尚未订阅的 renderer。
-type RendererVscodeIntent = VscodeLaunchRequest & {
-  sourceId: string
-  sourceFingerprint: string
-  sourceGeneration: number
-}
-const pendingRendererIntents = new BoundedAckDeliveryQueue<RendererVscodeIntent>(
-  64,
-  intent => BoundedVscodeIntentQueue.key(intent),
-);
-let deepLinkRendererReady = false;
-let drainingRendererDeepLinkIntents = false;
-
-// 桌面通知（design 19 §3.3）：pendingNotificationOpens 照搬 pendingIntents 的
-// 队列 + drain 模式——点击通知时窗口可能正在重建/加载，事件不能丢；active
-// Notifications Set 持有存活引用防 GC 吞 click（macOS 已知坑，OpenChamber 同款）。
-const pendingNotificationOpens = new BoundedAckDeliveryQueue<NotificationOpenIntent>(MAX_PENDING_NOTIFICATION_OPENS);
-const notificationSourceIncarnations = new NotificationSourceIncarnations();
-let drainPendingNotificationOpens: (() => boolean) | null = null;
-let drainingNotificationOpens = false;
-/** Renderer 就绪标志（design 19 §3.3）：renderer 注册 onOpen 监听后 invoke
- *  dsh-chamber:notifications-ready 置位——did-finish-load 早于监听注册，推送
- *  必须在就绪后才放行，否则窗口重建路径的点击事件会被 IPC 丢弃。 */
-let notificationOpenDrainReady = false;
-const activeNotifications = new BoundedActiveNotifications<Notification>();
-const nativeNotificationRateLimiter = new BoundedRateLimiter();
-
-// 未读徽标（design 19 §3.7）：renderer 推真实未读计数，主进程持「最近一次
-// 意图」并按当前设置裁决呈现（badgeEnabled 关闭 → 强制 0 清除；重新开启 →
-// reconcileBadgeCount 恢复）。quit 在途兜底清除。badgeUnsupportedLogged 把
-// 平台不支持（win32 / API 缺失）的 loud 日志压成一次，badgeApplyErrorLogged
-// 把持续抛错的 setBadgeCount 同样压成一次——防重复推送刷屏。
-let pendingBadgeCount: number | null = null;
-let badgeUnsupportedLogged = false;
-let badgeApplyErrorLogged = false;
-
-/** 平台门 + app.setBadgeCount 副作用（try/catch 防御，绝不 throw 出 IPC）。 */
-function applyNativeBadgeCount(count: number): boolean {
-  const gate = badgePlatformGate(process.platform, typeof app.setBadgeCount === 'function');
-  if (!gate.supported) {
-    if (!badgeUnsupportedLogged) {
-      badgeUnsupportedLogged = true;
-      console.warn(`[dsh-chamber] 应用图标未读徽标不可用：${gate.reason}`);
-    }
-    return false;
-  }
-  try {
-    app.setBadgeCount(count);
-    return true;
-  } catch (error) {
-    if (!badgeApplyErrorLogged) {
-      badgeApplyErrorLogged = true;
-      console.warn('[dsh-chamber] 应用图标未读徽标设置失败：', describeUnknownError(error));
-    }
-    return false;
-  }
-}
-
-/** 按当前设置重新裁决最近一次 renderer 计数意图（设置切换后的即时收敛）。 */
-function reconcileBadgeCount(): void {
-  if (pendingBadgeCount === null) return;
-  const count = adjudicateBadgeCount(
-    { badgeEnabled: chamberSettings.notifications.badgeEnabled },
-    pendingBadgeCount,
-  );
-  applyNativeBadgeCount(count);
-}
+// —— W-10 S2：原模块级渲染器投递状态在此删去（已迁 shell-core.ts「Renderer
+// delivery state machines」段：pendingRendererIntents / pendingNotificationOpens
+// 及 ready 位/drain/来源代际实例/held lastResume/badge 意图 holder；main.ts 经
+// 导出入口访问——onRendererLifecycle / enqueueRendererDeepLinkIntent /
+// captureNotificationSource / ownsNotificationSource / matchesNotificationSource
+// / projectNotificationSourceInstances / syncNotificationSourceRegistry /
+// clearBadgeIntentForQuit）——
 
 /** 深链入队：quit 在途 ignore（不启动 VS Code）；归一化目标 single-flight；解析失败 loud。 */
 function enqueueDeepLink(rawUrl: string): void {
@@ -484,102 +421,17 @@ function enqueueDeepLink(rawUrl: string): void {
 }
 
 /** Hold a successful launch intent until the current renderer explicitly says
- * its onIntent listener is installed. Used by both OS deep links and open-in. */
+ * its onIntent listener is installed. Used by both OS deep links and open-in.
+ * W-10 S2 决策：本函数留在 main——唯一依赖 transportManager registry 查找
+ * （装配侧所有物）；来源代际捕获改经 core 的 captureNotificationSource 代理
+ * （NotificationSourceIncarnations 实例已迁 shell-core）。S9 消费循环迁 core 时
+ * 随迁或参数化。 */
 function captureVscodeSource(instanceId: string): NotificationSourceToken | null {
-  if (instanceId === 'local') return notificationSourceIncarnations.capture('local');
+  if (instanceId === 'local') return captureNotificationSource('local');
   const instance = transportManager?.listInstances().find(candidate => candidate.id === instanceId);
   return instance === undefined
     ? null
-    : notificationSourceIncarnations.capture(`${instance.kind}-${instance.id}`);
-}
-
-function enqueueRendererDeepLinkIntent(intent: VscodeLaunchRequest, sourceToken: NotificationSourceToken): void {
-  if (!notificationSourceIncarnations.owns(sourceToken)) return;
-  const queued = pendingRendererIntents.enqueue({
-    ...intent,
-    sourceId: sourceToken.sourceId,
-    sourceFingerprint: sourceToken.fingerprint,
-    sourceGeneration: sourceToken.generation,
-  });
-  if (!queued.accepted) {
-    if (queued.reason === 'saturated') {
-      console.warn(`[dsh-chamber] renderer 深链队列容量全部被在途 intent 占用，拒绝新 intent：${intent.instanceId}`);
-    }
-    return;
-  }
-  if (queued.dropped !== null) {
-    console.warn(`[dsh-chamber] renderer 深链队列已满，丢弃最旧 intent：${queued.dropped.instanceId}`);
-  }
-  drainPendingRendererDeepLinkIntents();
-}
-
-function drainPendingRendererDeepLinkIntents(): boolean {
-  if (drainingRendererDeepLinkIntents) return true;
-  const win = mainWindow;
-  const destroyed = win === null || win.isDestroyed();
-  if (win === null || !canDeliverRendererDeepLink({
-    ready: deepLinkRendererReady,
-    currentWindow: mainWindow === win,
-    destroyed,
-    loading: destroyed ? true : win.webContents.isLoading(),
-    crashed: destroyed ? true : win.webContents.isCrashed(),
-  })) return true;
-
-  drainingRendererDeepLinkIntents = true;
-  try {
-    for (;;) {
-      const delivery = pendingRendererIntents.shift();
-      if (delivery === null) return true;
-      const intent = delivery.payload;
-      try {
-        if (
-          mainWindow !== win
-          || win.isDestroyed()
-          || win.webContents.isLoading()
-          || win.webContents.isCrashed()
-        ) {
-          throw new Error('deep-link renderer changed while draining');
-        }
-        win.webContents.send(IPC_CHANNELS.DEEP_LINK_INTENT, {
-          instanceId: intent.instanceId,
-          path: intent.path,
-          sourceFingerprint: intent.sourceFingerprint,
-          deliveryId: delivery.deliveryId,
-          attempt: delivery.attempt,
-        });
-      } catch (error) {
-        // Preserve the failed item for the next renderer handshake instead of
-        // converting a transient send race into a lost/reordered activation.
-        if (!pendingRendererIntents.rollback(delivery)) {
-          console.error(`[dsh-chamber] renderer 深链 intent 回滚失败：${intent.instanceId}`);
-        }
-        if (mainWindow === win) deepLinkRendererReady = false;
-        console.error('[dsh-chamber] 深链 intent 推送失败，等待 renderer 重试：', describeUnknownError(error));
-        return false;
-      }
-    }
-  } finally {
-    drainingRendererDeepLinkIntents = false;
-  }
-}
-
-/** 通知点击入队（design 19 §3.3）：quit 在途 ignore；入队后立即 drain（窗口
- *  已加载则直接推送，重建/加载中由 did-finish-load 补发——窗口关闭期间点击
- *  通知不丢事件，照搬 pendingIntents 模式）。有界队列（64 条上限，与
- *  renderer 深链队列同款防御）：窗口长期无法加载时超限丢弃最旧，绝不无限增长。 */
-function enqueueNotificationOpen(sourceToken: NotificationSourceToken, sessionId: string): void {
-  if (quitRequested) return;
-  if (!notificationSourceIncarnations.owns(sourceToken)) return;
-  const { sourceId, fingerprint: sourceFingerprint, generation: sourceGeneration } = sourceToken;
-  const queued = pendingNotificationOpens.enqueue({ sourceId, sourceFingerprint, sessionId, sourceGeneration });
-  if (!queued.accepted) {
-    console.warn(`[dsh-chamber] 通知打开队列容量全部被未确认事件占用，拒绝新事件：${sourceId}/${sessionId}`);
-    return;
-  }
-  if (queued.dropped !== null) {
-    console.warn(`[dsh-chamber] 通知打开队列已满，丢弃最旧待发事件：${queued.dropped.sourceId}/${queued.dropped.sessionId}`);
-  }
-  drainPendingNotificationOpens?.();
+    : captureNotificationSource(`${instance.kind}-${instance.id}`);
 }
 
 // Update controller ref (created in whenReady): the quit-confirmation exemption
@@ -725,148 +577,11 @@ function showMainWindow(): boolean {
   return false;
 }
 
-/** 单窗口聚焦判定（通知裁决的权威复查，design 19 §3.3）：渲染端 document.hasFocus
- *  与主进程复查等价（单窗口），主进程再查一次作为权威。窗口必须存在、可见且聚焦
- *  ——隐藏到托盘/后台的窗口不算聚焦。 */
-function isAnyWindowFocused(): boolean {
-  return mainWindow !== null && !mainWindow.isDestroyed() && mainWindow.isVisible() && mainWindow.isFocused();
-}
-
-function pushHeldSystemResume(win: BrowserWindow, timestamp: number): boolean {
-  const pushed = attemptCommittedRegistryPush(() => {
-    if (mainWindow !== win || win.isDestroyed()) throw new Error('system-resume renderer changed before push');
-    win.webContents.send(IPC_CHANNELS.SYSTEM_RESUME, { timestamp });
-  });
-  if (!pushed.sent) {
-    try { console.warn(`[dsh-chamber] system-resume push 失败，保留待重试：${pushed.error}`); } catch { /* best effort */ }
-  }
-  return pushed.sent;
-}
-
-/**
- * 桌面原生通知主链路（design 19 §3.3）：payload 白名单 → 平台支持 → 设置裁决
- * → 有界 claim / 全局速率 / active cap → 显示。返回是否收到原生 `show` 事件
- * （异步 failed/close/timeout 均为 false）。'test' 绕过 claim 与设置门禁，但仍受
- * 全局宿主预算约束；通知失败降级且 loud，不误报成功，会话业务/侧边栏蓝点不受影响。
- */
-async function maybeShowNativeNotification(payload: unknown): Promise<boolean> {
-  const validated = validateNotificationRequest(payload);
-  if (!validated.ok) {
-    console.warn(`[dsh-chamber] 拒绝非法通知 payload：${validated.error}`);
-    return false;
-  }
-  const request = validated.request;
-  // 设置权威在主进程内存（chamberSettings.notifications，settings-set 即时更新）；
-  // 旧文件缺字段时用 DEFAULT 兜底（normalizeSettings 已归一，此处仅防御）。
-  const settings: NotificationSettingsLike = {
-    ...DEFAULT_CHAMBER_SETTINGS.notifications,
-    ...(chamberSettings.notifications ?? {}),
-  };
-  const focused = readNotificationHostBoolean(() => isAnyWindowFocused());
-  if (!focused.ok) {
-    console.warn(`[dsh-chamber] 通知窗口焦点探测失败：${focused.error}`);
-    return false;
-  }
-  const decision = decideNotification({
-    request,
-    settings,
-    anyWindowFocused: focused.value,
-  });
-  if (decision.action === 'skip') return false;
-  if (!notificationSourceIncarnations.matches(request.sourceId, request.sourceFingerprint)) {
-    console.warn(`[dsh-chamber] 通知来源 fingerprint 已过期：${request.sourceId}`);
-    return false;
-  }
-  const sourceToken = request.kind === 'test' ? null : notificationSourceIncarnations.capture(request.sourceId);
-  if (request.kind !== 'test' && sourceToken === null) {
-    console.warn(`[dsh-chamber] 通知来源已不在当前 registry：${request.sourceId}`);
-    return false;
-  }
-  // A disabled/kind/focus decision is terminal before consulting the host.
-  // Unsupported-platform logging should describe an actual show attempt, not
-  // every deliberately suppressed renderer edge.
-  const supported = readNotificationHostBoolean(() => Notification.isSupported());
-  if (!supported.ok) {
-    console.warn(`[dsh-chamber] 原生通知能力探测失败：${supported.error}`);
-    return false;
-  }
-  if (!supported.value) {
-    console.warn('[dsh-chamber] 通知裁决跳过：平台不支持原生通知');
-    return false;
-  }
-  // 去重 claim（5s TTL）：防同一事件双路径/重放双发；'test' 不走 claim。
-  // 顺序在裁决之后：被设置/焦点跳过的请求不消费去重槽（design 19 §3.3）。
-  const claim = claimNotificationDetailed(request);
-  if (!claim.accepted) {
-    if (claim.reason === 'saturated') {
-      console.warn('[dsh-chamber] 通知去重窗口已达硬上限，拒绝新通知');
-    }
-    return false;
-  }
-  if (!nativeNotificationRateLimiter.tryAcquire()) {
-    releaseNotificationClaim(claim.token);
-    console.warn('[dsh-chamber] 原生通知发送速率达到硬上限，拒绝新通知');
-    return false;
-  }
-  let notification: Notification | null = null;
-  try {
-    const created = new Notification({
-      title: request.title,
-      body: request.body,
-      silent: false,
-      // macOS 系统提示音（OpenChamber 同款）；其余平台交给系统默认。
-      ...(process.platform === 'darwin' ? { sound: 'Glass' } : {}),
-    });
-    notification = created;
-    // 有界登记持有存活引用防 GC 吞 click（macOS 已知坑）。满员不拒发：macOS
-    // 横幅进入通知中心后不触发 close，拒发会让未清除的存量横幅永久卡死通知流
-    // （2026-09 实测 16 条后测试/事件通知全部失败且 OS 无记录）——登记按插入序
-    // 淘汰最旧一条，由调用方 close 退役后新通知照常显示。
-    const evicted = activeNotifications.add(created, sourceToken);
-    if (evicted !== null) {
-      console.warn(`[dsh-chamber] 活跃原生通知已达上限 ${MAX_ACTIVE_NATIVE_NOTIFICATIONS} 条，淘汰最旧一条以继续显示`);
-      try { evicted.close(); } catch { /* best-effort host cleanup */ }
-    }
-    created.on('click', () => {
-      try {
-        // The native object can outlive registry removal + same-id re-add. Its
-        // captured generation must still own the source before either focusing
-        // the replacement shell or enqueueing a session-open intent.
-        if (sourceToken !== null && !notificationSourceIncarnations.owns(sourceToken)) {
-          console.warn(`[dsh-chamber] 忽略旧来源代际的通知点击：${request.sourceId}`);
-          return;
-        }
-        // 聚焦/显示窗口（存在则 restore+focus，无窗则重建）+ 打开对应会话：先把
-        // 打开意图入队并 drain，窗口未就绪时由 did-finish-load 补发。'test'
-        // 通知（设置页测试按钮）没有会话上下文，click 只聚焦不打开。
-        if (!showMainWindow()) return;
-        if (sourceToken !== null) enqueueNotificationOpen(sourceToken, request.sessionId);
-      } catch (error) {
-        try { console.warn(`[dsh-chamber] 原生通知点击处理失败：${describeUnknownError(error)}`); } catch { /* event boundary must never throw */ }
-      }
-    });
-    created.on('close', () => {
-      activeNotifications.delete(created);
-    });
-    const outcome = await showNativeNotificationHonestly(created);
-    if (!outcome.shown) {
-      activeNotifications.delete(created);
-      releaseNotificationClaim(claim.token);
-      console.warn(`[dsh-chamber] 原生通知显示失败：${outcome.error}`);
-      return false;
-    }
-    return true;
-  } catch (error) {
-    if (notification !== null) {
-      activeNotifications.delete(notification);
-      try { notification.close(); } catch { /* best-effort host cleanup */ }
-    }
-    releaseNotificationClaim(claim.token);
-    try { console.warn('[dsh-chamber] 创建/监听原生通知失败：', describeUnknownError(error)); } catch { /* IPC must still settle false */ }
-    return false;
-  }
-}
-
+// —— W-10 S2：isAnyWindowFocused（→ edges.isFocused，electron-edges）、
+// pushHeldSystemResume + held lastResume（→ shell-core 投递状态机，SYSTEM_RESUME
+// 经 edges.rendererPush 推送）与 maybeShowNativeNotification（NOTIFY 主链路 →
+// installIpcHandlers；宿主腿 = electron-edges showNativeNotification /
+// notificationSupported）随 B 组批迁出，定义见 shell-core.ts 同段——
 /** keep-awake（design 14 D5）：powerSaveBlocker prevent-app-suspension。 */
 function setKeepAwakeActive(enabled: boolean): void {
   const current = keepAwakeBlockerId;
@@ -1004,10 +719,10 @@ function installRendererRecovery(win: BrowserWindow): void {
     // ready() can run while late subresources still keep isLoading() true.
     // The first drain then correctly holds; finish is the deterministic replay
     // edge. Guard window identity so an old window cannot drain/reset a newer
-    // main window's queues.
+    // main window's queues (W-10 S2: drains + ready bits live in shell-core —
+    // this glue only forwards the lifecycle event of the current main window).
     if (mainWindow === win) {
-      drainPendingRendererDeepLinkIntents();
-      drainPendingNotificationOpens?.();
+      onRendererLifecycle('did-finish-load');
     }
   });
   win.webContents.on('render-process-gone', (_event, details) => {
@@ -1016,11 +731,9 @@ function installRendererRecovery(win: BrowserWindow): void {
     if (details.reason === 'clean-exit' || quitRequested) return; // 用户关窗/退出等正常路径
     // 通知就绪标志立即失效（design 19 §3.3）：崩溃到 500ms 后 reload 之间没有
     // 导航事件（did-start-loading 不会触发），不重置则向死 frame 推送丢事件。
+    // （W-10 S2：ready 位复位 + in-flight 重排在 shell-core onRendererLifecycle。）
     if (mainWindow === win) {
-      notificationOpenDrainReady = false;
-      deepLinkRendererReady = false;
-      pendingNotificationOpens.requeueInFlight();
-      pendingRendererIntents.requeueInFlight();
+      onRendererLifecycle('crashed');
     }
     console.error(
       `[dsh-chamber] 渲染进程退出：reason=${details.reason} exitCode=${details.exitCode}`,
@@ -1186,21 +899,16 @@ function createMainWindow(rendererOrigin: string, fatalOnLoadFailure: boolean): 
   // → sshBridgeReady effect），而 did-finish-load 可能被 >500ms 的慢子资源拖迟
   // 到 ready() invoke 之后——若在 finish 时重置会把已置位的标志 clobber 成永久
   // false。start-loading 必先于页面脚本执行（invoke 恒在其后），顺序保证成立。
+  // （W-10 S2：ready 位复位/requeue/drain 在 shell-core onRendererLifecycle——
+  // 本 glue 只转发当前主窗的生命周期事件，语义逐字保留。）
   win.webContents.on('did-start-loading', () => {
     if (mainWindow === win) {
-      notificationOpenDrainReady = false;
-      deepLinkRendererReady = false;
-      pendingNotificationOpens.requeueInFlight();
-      pendingRendererIntents.requeueInFlight();
-      drainPendingNotificationOpens?.();
+      onRendererLifecycle('did-start-loading');
     }
   });
   win.on('closed', () => {
     if (mainWindow === win) {
-      notificationOpenDrainReady = false;
-      deepLinkRendererReady = false;
-      pendingNotificationOpens.requeueInFlight();
-      pendingRendererIntents.requeueInFlight();
+      onRendererLifecycle('closed');
       mainWindow = null;
     }
   });
@@ -1215,12 +923,16 @@ function createMainWindow(rendererOrigin: string, fatalOnLoadFailure: boolean): 
       win.hide();
     }
   });
-  // 无窗口常驻（托盘态）期间的唤醒事件由主进程 held（lastResume），窗口
-  // 恢复可见时一次性补发（design 14 D4）。
+  // 无窗口常驻（托盘态）期间的唤醒事件由 core held（lastResume），窗口恢复可见
+  // 时一次性补发（design 14 D4；W-10 S2——补发逻辑在 shell-core
+  // handleMainWindowShown，本 glue 经 mainWindowShownSubscribers 通知订阅面；
+  // 身份守卫：'show' 只可能是当前主窗，防御性保留 mainWindow===win 检查）。
   win.on('show', () => {
-    const heldResume = lastResume;
-    if (heldResume !== null && pushHeldSystemResume(win, heldResume)) {
-      if (lastResume === heldResume) lastResume = null;
+    if (mainWindow !== win) return;
+    for (const subscriber of mainWindowShownSubscribers) {
+      try { subscriber(); } catch (error) {
+        try { console.warn(`[dsh-chamber] 主窗口 show 订阅回调失败：${describeUnknownError(error)}`); } catch { /* subscriber boundary must never throw */ }
+      }
     }
   });
   void win.loadURL(url).catch((loadError) => {
@@ -1390,12 +1102,12 @@ if (!gotTheLock) {
     quitRequested = true;
     setKeepAwakeActive(false);
     // 兜底清除未读徽标（退出在途不留 Dock 残留；曾有意图才触碰，避免无谓日志）。
-    if (pendingBadgeCount !== null) {
-      try {
-        if (typeof app.setBadgeCount === 'function') app.setBadgeCount(0);
-      } catch { /* best-effort on the way out */ }
-      pendingBadgeCount = null;
-    }
+    // W-10 S2：意图 holder（pendingBadgeCount）随 BADGE_COUNT 迁 core——
+    // clearBadgeIntentForQuit 内部做「曾有意图」守卫与意图清空，原生清除叶在此
+    // 注入（typeof 守卫照旧，语义与搬迁前一致）。
+    clearBadgeIntentForQuit(() => {
+      if (typeof app.setBadgeCount === 'function') app.setBadgeCount(0);
+    });
     // 立即移除托盘：退出在途不需要恢复入口，残留托盘图标是「退不干净」观感。
     if (tray !== null) {
       try {
@@ -1469,13 +1181,18 @@ if (!gotTheLock) {
     // 冷启动深链 argv（design 16 §4.2）：macOS argv 含 -psn_ 噪声，防御式扫描
     // （非深链 argv 零副作用、绝不 throw 打断启动）；与 open-url 双触发由去重兜底。
     for (const url of scanDeepLinkUrls(process.argv)) enqueueDeepLink(url);
-    // W-10 S0（design 25 §4.1 seam）：HostEdges 的 Electron 实现。本批只接
-    // rendererPush 叶——下方四个 committed 状态 push 源改经它外发；drain
-    // 类 send（深链 intent / notification-open）与其余 Electron 副作用叶
-    // （通知/badge/keep-awake/dialog/open-in/登录项/resume/托盘/焦点）留待
-    // W-10 后续批逐批迁入 electron-edges.ts。
+    // W-10 S0（design 25 §4.1 seam）：HostEdges 的 Electron 实现。S2 批起宿主
+    // 背参扩展：showMainWindow = 通知 click 激活腿（本函数模块级语义——
+    // restore/show/focus、无窗则重建）；onMainWindowShown = 主窗口 'show' 事件
+    // 订阅面（createMainWindow glue 每窗挂接）。S2 已实现的成员见 electron-edges
+    // 头注释；通知/徽标宿主腿、渲染器投递窗口事实与 resume/show 订阅随本批迁入。
     const edges = createElectronEdges({
       mainWindow: () => mainWindow,
+      showMainWindow: () => showMainWindow(),
+      onMainWindowShown: subscriber => {
+        mainWindowShownSubscribers.add(subscriber);
+        return () => { mainWindowShownSubscribers.delete(subscriber); };
+      },
     });
     const runtimeBaseDir = app.getPath('userData');
     const localDshHome = localDshHomeDir(runtimeBaseDir);
@@ -1701,65 +1418,16 @@ if (!gotTheLock) {
       }
     }
 
-    // 桌面通知（design 19 §3.3）：渲染端检测会话边沿并组装 payload → notify
-    // （invoke，返回是否实际显示）→ 主进程白名单/去重/裁决 + 原生通知。click →
-    // notification-open 推送 → 渲染端 openSession（既有路径）。
-    ipcMain.handle(IPC_CHANNELS.NOTIFY, trustedIpc(({ payload }) => maybeShowNativeNotification(payload)));
-    // Renderer 通知就绪信号（design 19 §3.3）：onOpen 监听注册后调用——通知点击
-    // 的推送只在就绪后放行（did-finish-load 早于监听注册，见 drain 条件）。
-    // 返回 true 与 preload 的 Promise<boolean> 声明一致（成功置位信号）。
-    ipcMain.handle(IPC_CHANNELS.NOTIFICATIONS_READY, trustedIpc(() => {
-      notificationOpenDrainReady = true;
-      const drainAccepted = drainPendingNotificationOpens?.() ?? true;
-      // A send race revokes ready inside the drain. Returning false makes the
-      // renderer's bounded readiness retry establish the next handshake.
-      return drainAccepted && notificationOpenDrainReady;
-    }));
-    ipcMain.handle(IPC_CHANNELS.NOTIFICATION_OPEN_ACK, trustedIpc((payload: unknown) => {
-      if (payload === null || typeof payload !== 'object') return false;
-      const { deliveryId, attempt } = payload as { deliveryId?: unknown; attempt?: unknown };
-      return pendingNotificationOpens.acknowledge(deliveryId as number, attempt as number);
-    }));
-    // 未读徽标计数（design 19 §3.7）：renderer 推真实计数（0 = 清除）→ 白名单
-    // 校验 → 记录意图 → 设置裁决（badgeEnabled）→ 平台门 + app.setBadgeCount。
-    // 返回是否实际应用；渲染端静默容忍 false（主进程已 loud 记平台/失败原因）。
-    ipcMain.handle(IPC_CHANNELS.BADGE_COUNT, trustedIpc((payload: unknown) => {
-      const validated = validateBadgeRequest(payload);
-      if (!validated.ok) {
-        console.error(`[dsh-chamber] 徽标计数请求校验失败：${validated.error}`);
-        return false;
-      }
-      pendingBadgeCount = validated.count;
-      const count = adjudicateBadgeCount(
-        { badgeEnabled: chamberSettings.notifications.badgeEnabled },
-        validated.count,
-      );
-      return applyNativeBadgeCount(count);
-    }));
-    // Deep-link renderer readiness (design 16 hold/replay): App invokes this
-    // only after installing deepLink.onIntent. Successful cold-start launches
-    // held before that point are replayed now; navigation/crash resets the bit.
-    ipcMain.handle(IPC_CHANNELS.DEEP_LINK_READY, trustedIpc(() => {
-      deepLinkRendererReady = true;
-      const drainAccepted = drainPendingRendererDeepLinkIntents();
-      return drainAccepted && deepLinkRendererReady;
-    }));
-    ipcMain.handle(IPC_CHANNELS.DEEP_LINK_ACK, trustedIpc((payload: unknown) => {
-      if (payload === null || typeof payload !== 'object') return false;
-      const { deliveryId, attempt } = payload as { deliveryId?: unknown; attempt?: unknown };
-      return pendingRendererIntents.acknowledge(deliveryId as number, attempt as number);
-    }));
+    // —— W-10 S2：NOTIFY / NOTIFICATIONS_READY / NOTIFICATION_OPEN_ACK /
+    // BADGE_COUNT / DEEP_LINK_READY / DEEP_LINK_ACK 六个注册体与其状态机随
+    // B 组批迁出（shell-core installIpcHandlers ② 段，trustedIpc 围栏由下方
+    // 装配的注入 registrar 统一包装）——
 
-    // OS 唤醒即时重探 + 推送（design 14 D4）：主进程对 error/degraded 实例
-    // 立即重探（绝不触碰 idle），并向渲染端 push（dsh 前端连接立即重连）。
+    // OS 唤醒即时重探（design 14 D4，传输层腿）：主进程对 error/degraded 实例
+    // 立即重探（绝不触碰 idle）。held lastResume 补发 + SYSTEM_RESUME 推送已迁
+    // shell-core（electron-edges 的 onSystemResume 订阅 = 装配于 installIpcHandlers
+    // ① 段；另挂一条独立监听专做重探——双监听语义与搬迁前单 handler 等价）。
     powerMonitor.on('resume', () => {
-      lastResume = Date.now();
-      const win = mainWindow;
-      const heldResume = lastResume;
-      if (win !== null && heldResume !== null && pushHeldSystemResume(win, heldResume)) {
-        // 窗口存活（含隐藏）已即时收到：清空 held 值，避免 hide→show 补发过期事件。
-        if (lastResume === heldResume) lastResume = null;
-      }
       reconnectStaleTransports();
     });
 
@@ -1918,19 +1586,15 @@ if (!gotTheLock) {
       instance.serviceName,
       instance.remoteDshHome,
     ]);
-    type ProjectedTransportInstanceSpec = TransportInstanceSpec & { sourceFingerprint: string }
-    const notificationSourceProofs = new NotificationSourceProofs();
-    const projectRemoteInstances = (instances: readonly TransportInstanceSpec[]): ProjectedTransportInstanceSpec[] =>
-      notificationSourceProofs.replaceRemoteInstances(instances);
-    const syncNotificationSources = (instances: readonly ProjectedTransportInstanceSpec[]): string[] =>
-      notificationSourceIncarnations.replaceRemoteSources(instances.map(instance => ({
-        sourceId: `${instance.kind}-${instance.id}`,
-        fingerprint: instance.sourceFingerprint,
-      })));
+    // —— W-10 S2：来源证明/代际实例（NotificationSourceProofs /
+    // NotificationSourceIncarnations）与其投影/同步闭包已迁 shell-core（导出
+    // projectNotificationSourceInstances / syncNotificationSourceRegistry /
+    // captureNotificationSource / ownsNotificationSource /
+    // matchesNotificationSource）——
     // Native notifications can be requested only for sources in the loaded
     // authoritative registry. This also establishes the initial incarnation
     // before the notify IPC handler can run.
-    syncNotificationSources(projectRemoteInstances(sm.listInstances()));
+    syncNotificationSourceRegistry(projectNotificationSourceInstances(sm.listInstances()));
     // Live-proxy session self-healing (design 17 §9.3): for every REGISTERED
     // password-authenticated gateway target (ssh tunnel AND http direct), arm
     // a pre-expiry re-login ~60s before the session's expiry instant and
@@ -2103,7 +1767,7 @@ if (!gotTheLock) {
     const findRemoteTarget = (id: string): RemoteTarget | null => {
       const instance = sm.listInstances().find((entry) => entry.id === id);
       if (instance === undefined || instance.kind !== 'dsh' || instance.transport !== 'ssh') return null;
-      const sourceToken = notificationSourceIncarnations.capture(`${instance.kind}-${instance.id}`);
+      const sourceToken = captureNotificationSource(`${instance.kind}-${instance.id}`);
       if (sourceToken === null) return null;
       return {
         spec: { id: instance.id, remoteDshHome: instance.remoteDshHome ?? null },
@@ -2112,7 +1776,7 @@ if (!gotTheLock) {
       };
     };
     const ownsRemoteTarget = (target: RemoteTarget): boolean =>
-      notificationSourceIncarnations.owns(target.sourceToken)
+      ownsNotificationSource(target.sourceToken)
       && findRemoteTarget(target.spec.id)?.fingerprint === target.fingerprint;
     const scopedExecForTarget = (target: RemoteTarget, extraOwner: () => boolean = () => true): ExecFn =>
       scopeExecToOwnership(execTransport, target.spec.id, () => extraOwner() && ownsRemoteTarget(target));
@@ -2558,19 +2222,23 @@ if (!gotTheLock) {
     });
 
     const projectInstances = (instances: readonly TransportInstanceSpec[]) =>
-      projectRemoteInstances(instances).map(projectInstanceSecrets);
+      projectNotificationSourceInstances(instances).map(projectInstanceSecrets);
 
     /**
      * Finish every committed registry transition through the main-branch
      * source-lifecycle authority. Metadata/secret persistence is owned by the
      * transaction; this sidecar rotates renderer/native-notification proofs,
      * revokes exact plugin-seed owners, and publishes the committed roster.
+     * W-10 S2：证明投影/代际同步/队列退役清理在 shell-core
+     * （projectNotificationSourceInstances / syncNotificationSourceRegistry），
+     * 活跃原生通知的退役驱逐经 edges.retireNotificationsForSources（B4 登记在
+     * electron-edges 私有）。
      */
     const publishRegistryTransition = (
       before: readonly TransportInstanceSpec[],
       after: readonly TransportInstanceSpec[],
     ) => {
-      const projected = projectRemoteInstances(after);
+      const projected = projectNotificationSourceInstances(after);
       if (JSON.stringify(before) === JSON.stringify(after)) {
         return projected.map(projectInstanceSecrets);
       }
@@ -2601,15 +2269,12 @@ if (!gotTheLock) {
         }
       }
 
-      const retiredNotificationSources = new Set(syncNotificationSources(projected));
+      // W-10 S2：代际同步 + 两条队列的退役丢弃 = shell-core
+      // syncNotificationSourceRegistry（返回退役 id）；活跃原生通知驱逐 =
+      // edges.retireNotificationsForSources（原 activeNotifications 迭代）。
+      const retiredNotificationSources = new Set(syncNotificationSourceRegistry(projected));
       if (retiredNotificationSources.size > 0) {
-        pendingNotificationOpens.discardWhere(intent => retiredNotificationSources.has(intent.sourceId));
-        pendingRendererIntents.discardWhere(intent => retiredNotificationSources.has(intent.sourceId));
-        for (const [notification, token] of activeNotifications.entries()) {
-          if (token === null || !retiredNotificationSources.has(token.sourceId)) continue;
-          activeNotifications.delete(notification);
-          try { notification.close(); } catch { /* best-effort stale banner retirement */ }
-        }
+        edges.retireNotificationsForSources(retiredNotificationSources);
       }
 
       // A service/home edit may complete while the transport is already
@@ -3689,12 +3354,12 @@ if (!gotTheLock) {
       if (!isValidNotificationSourceFingerprint(sourceId, req.sourceFingerprint)) {
         return { ok: false, error: 'invalid source fingerprint' };
       }
-      if (!notificationSourceIncarnations.matches(sourceId, req.sourceFingerprint)) {
+      if (!matchesNotificationSource(sourceId, req.sourceFingerprint)) {
         return { ok: false, error: 'source changed before open-in request was accepted' };
       }
       const sourceToken = captureVscodeSource(req.instanceId);
       if (sourceToken === null) return { ok: false, error: 'source not found' };
-      const ownsSource = () => notificationSourceIncarnations.owns(sourceToken);
+      const ownsSource = () => ownsNotificationSource(sourceToken);
       const scopedOpenInCtx: OpenInLaunchContext = {
         ...openInCtx,
         lookupInstance: id => ownsSource() ? openInCtx.lookupInstance(id) : null,
@@ -3707,7 +3372,8 @@ if (!gotTheLock) {
       const result = await runOpenInLaunch({ appId: req.appId, instanceId: req.instanceId, path: req.path }, scopedOpenInCtx)
       if (!ownsSource()) return { ok: false, error: 'source changed while open-in was in progress' };
       // vscode 启动成功后将 intent 放入 renderer hold/replay 队列（与 OS
-      // 深链路径对齐）；finder 无对应激活语义。窗口未就绪也不丢，renderer
+      // 深链路径对齐；W-10 S2——队列/入队在 shell-core，enqueueRendererDeepLinkIntent
+      // 为 core 导出）；finder 无对应激活语义。窗口未就绪也不丢，renderer
       // 安装监听并 ready 后再推送；该 UI 联动从不阻塞 vscode 启动。
       if (result.ok && req.appId === 'vscode') {
         enqueueRendererDeepLinkIntent({ instanceId: req.instanceId, path: req.path }, sourceToken);
@@ -5448,17 +5114,23 @@ if (!gotTheLock) {
       callback(permission === 'clipboard-sanitized-write'));
     session.defaultSession.setPermissionCheckHandler((_wc, permission) => permission === 'clipboard-sanitized-write');
 
-    // W-10 S1（design 25 §4.1 seam）：shell IPC 注册点迁入 shell-core 的
-    // installIpcHandlers——INFO / SETTINGS_GET / SETTINGS_SET 注册体与其随迁
-    // settings 辅助（chamberSettingsStatus / applySettingsPatch /
-    // pushSettingsChanged）在 core 侧，本文件只做装配与注入：
+    // W-10 S1+S2（design 25 §4.1 seam）：shell IPC 注册点迁入 shell-core 的
+    // installIpcHandlers——S1 迁 INFO / SETTINGS_GET / SETTINGS_SET 注册体与其
+    // 随迁 settings 辅助（chamberSettingsStatus / applySettingsPatch /
+    // pushSettingsChanged）；S2 追加 B 组 6 注册体（NOTIFY / NOTIFICATIONS_READY
+    // / NOTIFICATION_OPEN_ACK / BADGE_COUNT / DEEP_LINK_READY / DEEP_LINK_ACK）
+    // 与其渲染器投递状态机（队列/ready 位/drain/来源代际/held resume/badge
+    // holder）。本文件只做装配与注入：
     //  - ipc：trustedIpc 围栏在此包一层（core 零 electron，语义与搬迁前
     //    `ipcMain.handle(ch, trustedIpc(handler))` 完全一致）；
-    //  - edges：既有 createElectronEdges 返回值（S0 seam，rendererPush 叶）；
-    //  - ctx：宿主事实 + settings 内存 holder / 副作用叶活引用（holder 仍在本
-    //    文件——其余 20+ 处直读点随各自批迁入，届时 holder 一并搬家）。
-    // 调用点纪律（施工图 S1）：whenReady 内、createMainWindow 之前——窗口加载
-    // 前注册完毕，renderer 最早 invoke 也晚于全部启动代码。
+    //  - edges：createElectronEdges 返回值（S0 rendererPush + S2 渲染器投递/
+    //    通知/徽标批成员；host 背参含 click 激活腿与 'show' 订阅面）；
+    //  - ctx：宿主事实 + settings 内存 holder / 副作用叶活引用 + S2 quit 门
+    //    （holder 仍在本文件——其余 20+ 处直读点随各自批迁入，届时 holder
+    //    一并搬家）。
+    // 调用点纪律（施工图 S1/S2）：whenReady 内、createMainWindow 之前——窗口
+    // 加载前注册完毕（renderer 最早 invoke 也晚于全部启动代码），并完成投递
+    // 状态机的 edges/quit 快照（shell-core 单装配不变式）。
     const shellCtx: ShellAssemblyCtx = {
       hostFacts: {
         controlPlaneUrl: rendererOrigin,
@@ -5477,7 +5149,9 @@ if (!gotTheLock) {
       },
       setKeepAwake: enabled => setKeepAwakeActive(enabled),
       setLoginItem: enabled => applyLaunchAtLogin(enabled),
-      reconcileBadgeCount,
+      // W-10 S2：quit 在途门（通知/深链入队与通知投递循环的 ignore 语义——
+      // 原 main.ts 模块级 quitRequested 经它注入 core）。
+      isQuitting: () => quitRequested,
       confirmRegistryOriginSwitch: async (currentOrigin, nextOrigin) => {
         const win = mainWindow;
         if (win === null || win.isDestroyed()) return 'unavailable';
@@ -5513,8 +5187,10 @@ if (!gotTheLock) {
 
     // 深链统一 drain（design 16 §4.2）：startup 完成（transportManager 装载）
     // 后顺序消费有界队列。VS Code 启动不等待 renderer；成功 intent 进入独立的
-    // renderer hold/replay 队列，直到 onIntent + ready 握手完成。失败 loud
-    // （对话框 + 日志）。quit 在途的新深链已在 enqueueDeepLink 被 ignore。
+    // renderer hold/replay 队列（W-10 S2——该队列/入队/drain 已迁 shell-core，
+    // 此处经 core 导出 enqueueRendererDeepLinkIntent + ownsNotificationSource
+    // 接入），直到 onIntent + ready 握手完成。失败 loud（对话框 + 日志）。quit
+    // 在途的新深链已在 enqueueDeepLink 被 ignore。本消费循环整体留 main 至 S9。
     drainPendingIntents = () => {
       if (drainingPendingIntents || quitRequested) return;
       drainingPendingIntents = true;
@@ -5526,7 +5202,7 @@ if (!gotTheLock) {
           try {
             const sourceToken = captureVscodeSource(intent.instanceId);
             const result = await runVscodeLaunch(intent, wiredCtx);
-            if (result.ok && sourceToken !== null && notificationSourceIncarnations.owns(sourceToken)) {
+            if (result.ok && sourceToken !== null && ownsNotificationSource(sourceToken)) {
               enqueueRendererDeepLinkIntent(intent, sourceToken);
             } else {
               const error = result.ok ? 'instance changed while VS Code launch was in progress' : result.error;
@@ -5547,64 +5223,8 @@ if (!gotTheLock) {
       });
     };
     drainPendingIntents();
-
-    // 通知打开事件统一 drain（design 19 §3.3，retain-until-ACK）：窗口
-    // 存在、已完成加载且 renderer 已就绪（onOpen 监听注册后经
-    // dsh-chamber:notifications-ready 置位）→ 直接推送；任一条件不满足 → 重新
-    // hold，did-finish-load / ready IPC 后再补发。send 返回只转为 in-flight，renderer
-    // 精确 ACK deliveryId+attempt 后才消费；reload/crash 会重发所有未 ACK 项。
-    drainPendingNotificationOpens = () => {
-      if (drainingNotificationOpens) return true;
-      const win = mainWindow;
-      const destroyed = win === null || win.isDestroyed();
-      if (
-        !notificationOpenDrainReady
-        || win === null
-        || mainWindow !== win
-        || destroyed
-        || win.webContents.isLoading()
-        || win.webContents.isCrashed()
-      ) return true;
-      drainingNotificationOpens = true;
-      try {
-        for (;;) {
-          if (quitRequested) return true;
-          const delivery = pendingNotificationOpens.shift();
-          if (delivery === null) return true;
-          try {
-            // Re-check every item: Electron can synchronously tear down/replace
-            // a window while send() crosses the native boundary.
-            if (
-              mainWindow !== win
-              || win.isDestroyed()
-              || win.webContents.isLoading()
-              || win.webContents.isCrashed()
-            ) throw new Error('notification renderer changed while draining');
-            win.webContents.send(IPC_CHANNELS.NOTIFICATION_OPEN, {
-              sourceId: delivery.payload.sourceId,
-              sourceFingerprint: delivery.payload.sourceFingerprint,
-              sessionId: delivery.payload.sessionId,
-              deliveryId: delivery.deliveryId,
-              attempt: delivery.attempt,
-            });
-            // Deliberately retain in-flight ownership until renderer ACK.
-          } catch (error) {
-            const restored = pendingNotificationOpens.rollback(delivery);
-            if (!restored && mainWindow === win) {
-              console.error(`[dsh-chamber] 通知打开事件回滚失败：delivery=${delivery.deliveryId}`);
-            }
-            // Only the window whose send failed may lose its handshake. A stale
-            // callback must not clobber readiness already established by a newer
-            // BrowserWindow.
-            if (mainWindow === win) notificationOpenDrainReady = false;
-            console.error('[dsh-chamber] 通知打开推送失败，等待 renderer 重试：', describeUnknownError(error));
-            return false;
-          }
-        }
-      } finally {
-        drainingNotificationOpens = false;
-      }
-    };
-    drainPendingNotificationOpens();
+    // —— W-10 S2：通知打开 drain（drainPendingNotificationOpens 赋值与末次调用）
+    // 已迁 shell-core 投递状态机（send 叶 = edges.rendererPush；NOTIFICATION_OPEN
+    // 推送源随迁）——
   });
 }

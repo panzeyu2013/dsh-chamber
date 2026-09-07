@@ -524,17 +524,21 @@ const { IPC_CHANNELS } = await import('./ipc-events.ts')
 
 /** The IPC *registration* owner split across the W-10 seam: main.ts keeps the
  * not-yet-migrated ipcMain.handle(...) registrations, and
- * shell-core.installIpcHandlers (S1: INFO / SETTINGS_GET / SETTINGS_SET)
- * registers through the injected registrar — the executable owner of each
- * channel stays single (a second, unimported handler cannot drift beside the
- * registered one because the surface equality below counts every spelling).
+ * shell-core.installIpcHandlers (S1: INFO / SETTINGS_GET / SETTINGS_SET; S2:
+ * NOTIFY / NOTIFICATIONS_READY / NOTIFICATION_OPEN_ACK / BADGE_COUNT /
+ * DEEP_LINK_READY / DEEP_LINK_ACK) registers through the injected registrar —
+ * the executable owner of each channel stays single (a second, unimported
+ * handler cannot drift beside the registered one because the surface equality
+ * below counts every spelling).
  * shell-core.ts and electron-edges.ts join the scan because W-10 (design
  * 25 §4.1) moves main-side TEXT between the three files: the send-side channel
  * references can now sit in any of them (S0: the four committed pushes leave
  * through the electron-edges rendererPush leaf whose IPC_CHANNELS.X call sites
  * still live in main.ts; S1: the SETTINGS_CHANGED send source moved into
- * shell-core). Scanning the union preserves the lockstep strength: the
- * three-file handle/send sets must still equal the preload invoke/on sets. */
+ * shell-core; S2: the DEEP_LINK_INTENT / NOTIFICATION_OPEN drain sends moved
+ * into shell-core's renderer delivery drains). Scanning the union preserves
+ * the lockstep strength: the three-file handle/send sets must still equal the
+ * preload invoke/on sets. */
 const MAIN_SIDE_FILES = ['main.ts', 'shell-core.ts', 'electron-edges.ts']
 
 /** Handle-side registration spellings across the W-10 seam split (S1): main.ts
@@ -628,14 +632,20 @@ test('every preload channel literal is a known IPC_CHANNELS value (B8 — consta
 
 // ---------------------------------------------------------------------------
 // design 19 §3.7: badge wiring pin. The badge IPC handler has no direct unit
-// seam (registration + toggle reconcile + quit clear live in main.ts glue),
-// so the three load-bearing call shapes are pinned as source assertions — a
+// seam, so the load-bearing call shapes are pinned as source assertions — a
 // rename, a dropped call, or an un-gated reconcile fails loudly here.
+// W-10 S2: BADGE_COUNT 注册体 + 意图 holder（pendingBadgeCount）迁入
+// shell-core.installIpcHandlers（注册拼写 = deps.ipc.handle；平台门
+// badgePlatformGate + applyBadgePresentation/reconcileBadgeCount 在 core 侧，
+// setBadge/badgeCountApiAvailable 宿主叶在 electron-edges.ts）；quit 兜底清除
+// 仍由 main.ts will-quit 驱动，但其「曾有意图」守卫迁 core
+// （clearBadgeIntentForQuit 内的 if (pendingBadgeCount !== null)），原生清除叶
+// （app.setBadgeCount(0)）仍在 main.ts 注入——union 文本断言随之更新。
 // ---------------------------------------------------------------------------
 
 test('badge wiring is pinned: handler registration + toggle-gated reconcile + quit clear (design 19 §3.7)', () => {
   const mainSource = mainSideSource()
-  assert.match(mainSource, /ipcMain\.handle\(IPC_CHANNELS\.BADGE_COUNT, trustedIpc/, 'BADGE_COUNT handler must stay registered')
+  assert.match(mainSource, /deps\.ipc\.handle\(IPC_CHANNELS\.BADGE_COUNT, \(payload: unknown\) => \{/, 'BADGE_COUNT handler must stay registered through the shell-core registrar (trustedIpc is applied by the assembly-side wrapper)')
   // 设置切换收敛仅在实际携带 badgeEnabled 键时执行（无关设置变更不重发）。
   assert.match(mainSource, /validated\.patch\.notifications\?\.badgeEnabled !== undefined/, 'reconcile must stay gated on badgeEnabled flips only')
   assert.match(mainSource, /reconcileBadgeCount\(\)/, 'toggle reconcile call must stay wired')
