@@ -87,16 +87,6 @@ final class SwiftEdgeHostLegsTests: XCTestCase {
         XCTAssertTrue(legs.respond(method: "openExternal", payload: .object([:])).error != nil)
     }
 
-    func testPendingAlertQueuePureLogic() {
-        let queue = PendingAlertQueue()
-        let token = queue.expect()
-        XCTAssertNil(queue.takeResult(token: token), "未完成前取结果应为 nil")
-        queue.complete(token: token, buttonIndex: 1)
-        XCTAssertEqual(queue.takeResult(token: token), 1)
-        XCTAssertNil(queue.takeResult(token: token), "取出后应为 nil")
-        queue.complete(token: token, buttonIndex: 2)  // 幂等 no-op
-        XCTAssertNil(queue.takeResult(token: token))
-    }
 
     func testShowMessageRequiresMainWindow() {
         // canShowUI=true 但未接主窗：模态 alert 腿诚实降级（绝不无窗弹窗）。

@@ -206,6 +206,34 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
                            name: NSWindow.didResignKeyNotification, object: window)
         center.addObserver(self, selector: #selector(hostFactsWindowWillClose(_:)),
                            name: NSWindow.willCloseNotification, object: window)
+        // A-1/A-2（审计收口）：macOS 唤醒与窗口/应用显示的事件发送方——
+        // 对偶 electron-edges onSystemResume(powerMonitor)/onMainWindowShown
+        // （design 25 §5 E6）。didWake → __host.systemResume {timestamp}；
+        // didBecomeActive → __host.mainWindowShown（held lastResume 补发点）。
+        // 幂等：core 无 held/无待办时均为 no-op。
+        center.addObserver(self, selector: #selector(hostWakeUp(_:)),
+                           name: NSWorkspace.didWakeNotification, object: nil)
+        center.addObserver(self, selector: #selector(appDidBecomeActive(_:)),
+                           name: NSApplication.didBecomeActiveNotification, object: nil)
+    }
+
+    // MARK: - A-1/A-2 入站事件发送（唤醒/窗口显示）
+
+    @objc private func hostWakeUp(_ note: Notification) {
+        print("[poc] 系统唤醒——发送 __host.systemResume")
+        Task { @MainActor in
+            try? await bridge.invoke(
+                method: "__host.systemResume",
+                payload: .object(["timestamp": .number(Date().timeIntervalSince1970 * 1000)])
+            )
+        }
+    }
+
+    @objc private func appDidBecomeActive(_ note: Notification) {
+        print("[poc] 应用激活——发送 __host.mainWindowShown")
+        Task { @MainActor in
+            _ = try? await bridge.invoke(method: "__host.mainWindowShown", payload: nil)
+        }
     }
 
     override func windowDidLoad() {

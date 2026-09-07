@@ -99,23 +99,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             print("[poc] 注入 ELECTRON_RUN_AS_NODE=1（Electron 二进制当 Node 用）")
         }
 
-        // ④ 控制面 URL：POC_CP_URL，缺省 http://127.0.0.1:17520/
-        guard let cpURL = URL(string: env["POC_CP_URL"] ?? Self.defaultControlPlaneURL) ?? URL(string: Self.defaultControlPlaneURL) else {
+        // ④ 控制面 URL：POC_CP_URL 显式覆盖；缺省派生自 POC_PORT（sidecar-entry
+        //    默认端口同源 17520）——消除 POC_PORT/POC_CP_URL 双 env 错位陷阱
+        //    （A-3 审计收口；sidecar ready 帧 port 本侧记录于 onReady）。
+        let defaultCPPort = env["POC_PORT"] ?? "17520"
+        guard let cpURL = URL(string: env["POC_CP_URL"] ?? "http://127.0.0.1:\(defaultCPPort)/") else {
             fatalStartup("POC_CP_URL 无法解析为 URL")
         }
         print("[poc] control plane = \(cpURL.absoluteString)")
 
-        // 组装 B 桥并启动 sidecar；失败 = 打印 stderr + alert 后退出
+        // 组装 B 桥：**接线先于 start**（A-3：onReady/onEvent/onNotify 在
+        // start 前就位——ready 帧不再被 loud 丢弃；控制器 setupWindow 亦先于
+        // start 完成事件接线，消灭起动期事件早丢窗口）。
         let bridge = BridgeClient(nodePath: nodePath, arguments: sidecarArguments, environment: childEnv)
-        do {
-            try bridge.start()
-        } catch {
-            fatalStartup("BridgeClient 启动失败：\(error.localizedDescription)")
+        bridge.onReady = { port, shellVersion in
+            print("[poc] sidecar ready（port=\(port) shellVersion=\(shellVersion)）")
         }
-        self.bridge = bridge
-        print("[poc] bridge 已启动")
-
-        // 主窗口并激活
         let controller = MainWindowController(cpURL: cpURL, bridge: bridge)
         mainWindowController = controller
         // W-19/20 宿主腿接线：legs 以主窗为 UI 上下文（canShowUI = 应用激活态
@@ -127,6 +126,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }))
         legs.mainWindowProvider = { [weak controller] in controller?.window }
         bridge.edgeHostLegs = legs
+        do {
+            try bridge.start()
+        } catch {
+            fatalStartup("BridgeClient 启动失败：\(error.localizedDescription)")
+        }
+        self.bridge = bridge
+        print("[poc] bridge 已启动")
+
+        // 显示主窗口并激活（页面首载若早于控制面就绪由导航退避重试兜底）
         controller.window?.makeKeyAndOrderFront(nil)
         if #available(macOS 14.0, *) {
             NSApp.activate()

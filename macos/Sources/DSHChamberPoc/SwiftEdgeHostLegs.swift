@@ -56,44 +56,7 @@ enum EdgePayload {
     }
 }
 
-/// showMessage 的异步消费队列（纯逻辑，可无头单测）：宿主在 canShowUI
-/// 上下文把 NSAlert 跑在主线程，完成后调用 completePendingAlert；重复
-/// complete 幂等；无 pending 时 complete 是 no-op。
-public final class PendingAlertQueue {
-    private var pending: [Int: Int] = [:]  // token → buttonIndex
-    private var nextToken = 1
-    private let lock = NSLock()
 
-    /// 登记一次期待（返回 token，供宿主回填按钮序）。
-    public func expect() -> Int {
-        lock.lock()
-        defer { lock.unlock() }
-        let token = nextToken
-        nextToken += 1
-        pending[token] = -1
-        return token
-    }
-
-    /// 宿主完成 alert 后回填按钮序；幂等（重复调用 no-op）。
-    public func complete(token: Int, buttonIndex: Int) {
-        lock.lock()
-        defer { lock.unlock() }
-        if pending[token] != nil {
-            pending[token] = buttonIndex
-        }
-    }
-
-    /// 取出已完成的按钮序（未完成 → nil；已取出 → 移出）。
-    public func takeResult(token: Int) -> Int? {
-        lock.lock()
-        defer { lock.unlock() }
-        guard let value = pending[token], value >= 0 else { return nil }
-        pending.removeValue(forKey: token)
-        return value
-    }
-}
-
-/// Swift 宿主 edge 腿（design 25 §4.4.2/§5；W-19/20）。
 public final class SwiftEdgeHostLegs {
     /// UI/系统能力门（headless/测试 → false：全部 UI 腿诚实降级）。
     public struct Config {
@@ -136,9 +99,6 @@ public final class SwiftEdgeHostLegs {
             ProcessInfo.processInfo.endActivity(token)
         }
     }
-
-    /// showMessage 异步消费队列（M3 主窗 delegate 接线后使用）。
-    public let pendingAlerts = PendingAlertQueue()
 
     public init(config: Config = Config()) {
         self.config = config
