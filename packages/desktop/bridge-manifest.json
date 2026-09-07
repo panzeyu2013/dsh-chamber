@@ -1,0 +1,283 @@
+{
+  "invoke": [
+    {
+      "channel": "dsh-chamber:info",
+      "key": "INFO"
+    },
+    {
+      "channel": "dsh-chamber:settings-get",
+      "key": "SETTINGS_GET"
+    },
+    {
+      "channel": "dsh-chamber:settings-set",
+      "key": "SETTINGS_SET"
+    },
+    {
+      "channel": "dsh-chamber:notify",
+      "key": "NOTIFY"
+    },
+    {
+      "channel": "dsh-chamber:notifications-ready",
+      "key": "NOTIFICATIONS_READY"
+    },
+    {
+      "channel": "dsh-chamber:notification-open-ack",
+      "key": "NOTIFICATION_OPEN_ACK"
+    },
+    {
+      "channel": "dsh-chamber:badge-count",
+      "key": "BADGE_COUNT"
+    },
+    {
+      "channel": "dsh-chamber:update-state",
+      "key": "UPDATE_STATE"
+    },
+    {
+      "channel": "dsh-chamber:update-check",
+      "key": "UPDATE_CHECK"
+    },
+    {
+      "channel": "dsh-chamber:update-download",
+      "key": "UPDATE_DOWNLOAD"
+    },
+    {
+      "channel": "dsh-chamber:update-restart",
+      "key": "UPDATE_RESTART"
+    },
+    {
+      "channel": "dsh-chamber:open-release",
+      "key": "OPEN_RELEASE"
+    },
+    {
+      "channel": "dsh-chamber:open-in-apps",
+      "key": "OPEN_IN_APPS"
+    },
+    {
+      "channel": "dsh-chamber:open-in",
+      "key": "OPEN_IN"
+    },
+    {
+      "channel": "dsh-chamber:deep-link-ready",
+      "key": "DEEP_LINK_READY"
+    },
+    {
+      "channel": "dsh-chamber:deep-link-ack",
+      "key": "DEEP_LINK_ACK"
+    },
+    {
+      "channel": "desktop_ssh_instances_get",
+      "key": "SSH_INSTANCES_GET"
+    },
+    {
+      "channel": "desktop_ssh_instances_set",
+      "key": "SSH_INSTANCES_SET"
+    },
+    {
+      "channel": "desktop_ssh_save_connection",
+      "key": "SSH_SAVE_CONNECTION"
+    },
+    {
+      "channel": "desktop_ssh_delete_connection",
+      "key": "SSH_DELETE_CONNECTION"
+    },
+    {
+      "channel": "desktop_ssh_set_password",
+      "key": "SSH_SET_PASSWORD"
+    },
+    {
+      "channel": "desktop_gateway_set_token",
+      "key": "GATEWAY_SET_TOKEN"
+    },
+    {
+      "channel": "desktop_gateway_set_password",
+      "key": "GATEWAY_SET_PASSWORD"
+    },
+    {
+      "channel": "desktop_gateway_plugin_sync",
+      "key": "GATEWAY_PLUGIN_SYNC"
+    },
+    {
+      "channel": "desktop_gateway_plugin_apply",
+      "key": "GATEWAY_PLUGIN_APPLY"
+    },
+    {
+      "channel": "desktop_gateway_plugin_materialize",
+      "key": "GATEWAY_PLUGIN_MATERIALIZE"
+    },
+    {
+      "channel": "desktop_ssh_config_list",
+      "key": "SSH_CONFIG_LIST"
+    },
+    {
+      "channel": "desktop_ssh_connect",
+      "key": "SSH_CONNECT"
+    },
+    {
+      "channel": "desktop_ssh_disconnect",
+      "key": "SSH_DISCONNECT"
+    },
+    {
+      "channel": "desktop_ssh_status",
+      "key": "SSH_STATUS"
+    },
+    {
+      "channel": "desktop_ssh_reverify",
+      "key": "SSH_REVERIFY"
+    },
+    {
+      "channel": "desktop_ssh_logs",
+      "key": "SSH_LOGS"
+    },
+    {
+      "channel": "desktop_ssh_logs_clear",
+      "key": "SSH_LOGS_CLEAR"
+    },
+    {
+      "channel": "desktop_ssh_start_service",
+      "key": "SSH_START_SERVICE"
+    },
+    {
+      "channel": "desktop_ssh_stop_service",
+      "key": "SSH_STOP_SERVICE"
+    },
+    {
+      "channel": "desktop_ssh_is_active",
+      "key": "SSH_IS_ACTIVE"
+    },
+    {
+      "channel": "desktop_ssh_restart_service",
+      "key": "SSH_RESTART_SERVICE"
+    },
+    {
+      "channel": "desktop_ssh_plugin_list",
+      "key": "SSH_PLUGIN_LIST"
+    },
+    {
+      "channel": "desktop_ssh_plugin_apply",
+      "key": "SSH_PLUGIN_APPLY"
+    },
+    {
+      "channel": "desktop_ssh_plugin_undo",
+      "key": "SSH_PLUGIN_UNDO"
+    },
+    {
+      "channel": "desktop_local_plugin_list",
+      "key": "LOCAL_PLUGIN_LIST"
+    },
+    {
+      "channel": "desktop_npm_search",
+      "key": "NPM_SEARCH"
+    },
+    {
+      "channel": "desktop_ssh_seed_host_graph",
+      "key": "SSH_SEED_HOST_GRAPH"
+    },
+    {
+      "channel": "desktop_ssh_plugin_materialize_add",
+      "key": "SSH_PLUGIN_MATERIALIZE_ADD"
+    },
+    {
+      "channel": "desktop_ssh_plugin_materialize_add_pick",
+      "key": "SSH_PLUGIN_MATERIALIZE_ADD_PICK"
+    },
+    {
+      "channel": "desktop_local_plugin_add_file",
+      "key": "LOCAL_PLUGIN_ADD_FILE"
+    },
+    {
+      "channel": "desktop_local_plugin_add",
+      "key": "LOCAL_PLUGIN_ADD"
+    },
+    {
+      "channel": "desktop_local_plugin_remove",
+      "key": "LOCAL_PLUGIN_REMOVE"
+    },
+    {
+      "channel": "dsh-chamber:runtime-state",
+      "key": "RUNTIME_STATE"
+    },
+    {
+      "channel": "dsh-chamber:runtime-check",
+      "key": "RUNTIME_CHECK"
+    },
+    {
+      "channel": "dsh-chamber:runtime-install",
+      "key": "RUNTIME_INSTALL"
+    },
+    {
+      "channel": "dsh-chamber:runtime-cleanup-version",
+      "key": "RUNTIME_CLEANUP_VERSION"
+    },
+    {
+      "channel": "dsh-chamber:runtime-clear-failure",
+      "key": "RUNTIME_CLEAR_FAILURE"
+    },
+    {
+      "channel": "dsh-chamber:runtime-recover-metadata",
+      "key": "RUNTIME_RECOVER_METADATA"
+    },
+    {
+      "channel": "dsh-chamber:runtime-reset-builtin",
+      "key": "RUNTIME_RESET_BUILTIN"
+    },
+    {
+      "channel": "dsh-chamber:runtime-restart",
+      "key": "RUNTIME_RESTART"
+    },
+    {
+      "channel": "dsh-chamber:runtime-apply-now",
+      "key": "RUNTIME_APPLY_NOW"
+    },
+    {
+      "channel": "dsh-chamber:runtime-retry-apply",
+      "key": "RUNTIME_RETRY_APPLY"
+    },
+    {
+      "channel": "dsh-chamber:runtime-retry-restore",
+      "key": "RUNTIME_RETRY_RESTORE"
+    },
+    {
+      "channel": "dsh-chamber:runtime-restore-pre-rollback",
+      "key": "RUNTIME_RESTORE_PRE_ROLLBACK"
+    }
+  ],
+  "push": [
+    {
+      "channel": "dsh-chamber:settings-changed",
+      "key": "SETTINGS_CHANGED"
+    },
+    {
+      "channel": "dsh-chamber:notification-open",
+      "key": "NOTIFICATION_OPEN"
+    },
+    {
+      "channel": "dsh-chamber:update-state-changed",
+      "key": "UPDATE_STATE_CHANGED"
+    },
+    {
+      "channel": "dsh-chamber:deep-link-intent",
+      "key": "DEEP_LINK_INTENT"
+    },
+    {
+      "channel": "dsh-chamber:system-resume",
+      "key": "SYSTEM_RESUME"
+    },
+    {
+      "channel": "desktop_ssh_status_changed",
+      "key": "SSH_STATUS_CHANGED"
+    },
+    {
+      "channel": "desktop_ssh_instances_changed",
+      "key": "SSH_INSTANCES_CHANGED"
+    },
+    {
+      "channel": "dsh-chamber:runtime-state-changed",
+      "key": "RUNTIME_STATE_CHANGED"
+    }
+  ],
+  "counts": {
+    "invoke": 60,
+    "push": 8,
+    "total": 68
+  }
+}
