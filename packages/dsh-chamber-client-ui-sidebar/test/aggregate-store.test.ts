@@ -132,3 +132,19 @@ test('open-session outcomes fan out to subscribers and unsubscribing stops deliv
     'local/s2/等待超时',
   ])
 })
+
+test('session-list refresh requests broadcast to every subscriber with the source id', () => {
+  const received: string[] = []
+  const first = chamberBridge.onRequestSessionListRefresh(sourceId => { received.push(`a:${sourceId}`) })
+  const second = chamberBridge.onRequestSessionListRefresh(sourceId => { received.push(`b:${sourceId}`) })
+  chamberBridge.requestSessionListRefresh('local')
+  chamberBridge.requestSessionListRefresh('ssh-dev')
+  assert.deepEqual(received, ['a:local', 'b:local', 'a:ssh-dev', 'b:ssh-dev'])
+  first()
+  chamberBridge.requestSessionListRefresh('local')
+  assert.deepEqual(received, ['a:local', 'b:local', 'a:ssh-dev', 'b:ssh-dev', 'b:local'])
+  // Unsubscribing the last subscriber must not throw and the request is a no-op.
+  second()
+  chamberBridge.requestSessionListRefresh('gateway-west')
+  assert.deepEqual(received, ['a:local', 'b:local', 'a:ssh-dev', 'b:ssh-dev', 'b:local'])
+})

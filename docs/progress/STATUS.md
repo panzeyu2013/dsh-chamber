@@ -43,10 +43,24 @@
   gateway 拒绝码→本地化文案映射未做（409 逐字英文）、pollGatewayReady 英文错误串
   未本地化；archive-pick file+folder 双模式对话框为 **macOS-v1**（非 macOS 保持
   文件夹对话框，随 design 22/23）。
-- **归档清理与归档管理器（design 24，已实现）**：剩余——实机 **gateway/远程 dsh
-  形态**与打包版 UI 目检（§19-9 偏差/待目检并入该腿）；事件发射为文档化 no-op
-  直至上游 wire，域随上游 `sessions.delete` wire 落地后退休（上游未落地）。可选
-  增强（未排期）：PluginDialog 三态行、rowError 本地化、已归档浏览区（todo 12 A）。
+- **归档清理与归档管理器（design 24，已实现）**：**2026 purge 幽灵行收敛
+  轮（§20）已实现并经三方只读 review 修订**——purge 后已删会话浮出侧边栏/
+  点击 `session/not-found` 的缺陷修复（官方 ctx 会话行 summaries 仅连接代数
+  刷新 + purge 事件 no-op → 归档集合移除后行失去过滤；收敛 = chamberBridge
+  `requestSessionListRefresh` + App **收敛状态机**（每次 ready 推送评估
+  `planSessionListRefresh`：收缩移除 ∪ pending 中仍列行者 = 幽灵 → 按 5s
+  冷却重发请求，行消失自终止——闭合「相邻 purge 收缩被合并窗口吞掉」与
+  「刷新失败无重试」两 review 发现）+ 对话框每次 purge settle 即时请求，
+  插件按实例调官方 `ctx.sessions.refresh()`（缺失/失败均 warn）；
+  design 05 §3 桥契约已同步）。剩余——实机 **gateway/远程 dsh 形态**、§20 收敛
+  执行腿（插件/App/对话框接线）与打包版 UI 目检（§19-9 偏差/待目检并入该腿，
+  含幽灵行不再浮现、刷新后无干扰）；事件发射为文档化 no-op
+  直至上游 wire，域随上游 `sessions.delete` wire 落地后退休（上游未落地）。
+  可选增强（未排期）：PluginDialog 三态行、rowError 本地化、已归档浏览区
+  （todo 12 A）；归档集合**历史无目录成员 + 收尾集合移除写失败（`archive-set`）
+  残留**收敛（「删除全部」退役后无 UI 路径可达，见 design 24 §20 残余登记
+  ①，建议收尾孤儿全集合清扫）；「归档当前活动会话→整源降级、
+  已归档行浮出」复现确认（§20 残余登记②，dev-QA 原登记于 commit 1b19712）。
 - **移动端 Web 访问面（design 17 §18）**：P1/P1.5/适配轮已实现。剩余——实机门禁
   （§18.6：真机触控目标比例/抽屉开合/键盘遮挡/安全区/汉堡不重叠/crumbs 换行/
   Session 日志图标化/iOS 单击切换/设置手机档走查/刘海横屏/深层谱系高度等）；DOM

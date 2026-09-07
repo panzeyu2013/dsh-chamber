@@ -123,6 +123,44 @@ export function apply(ctx: ClientContext): void {
     const workspacesList = (ctx.workspaces as unknown as { list: ObservableSnapshot<WorkspaceSnapshot> }).list
     const runtimeProducer = chamberBridge.registerInstanceRuntimeProducer(chamberInstanceId, chamberSourceFingerprint)
     const snapshotProducer = chamberBridge.registerInstanceSnapshotProducer(chamberInstanceId, chamberSourceFingerprint)
+    // design 24 §20 (archive-cleanup convergence): this ctx's OFFICIAL
+    // session client (`ctx.sessions` — ClientSessions) is requested to re-run
+    // its session-list refresh. The purge of archived content is invisible to
+    // the official runtime (host events are documented no-ops), so rows of
+    // purged sessions linger in the official client summaries (refreshed only
+    // on connection generations) and would keep resurfacing in the chamber
+    // sidebar after the host removes their ids from the archived set — opening
+    // one then fails with session/not-found. `refresh()` reconciles the
+    // summaries against the server corpus (a per-call disk walk) and drops the
+    // deleted rows; the notify then flows through queueSnapshot below and the
+    // producer pushes a clean snapshot. Loose face + runtime guard: only act
+    // for THIS ctx's own instance; a missing method is WARNED (an inert seam
+    // must never be silent), and the invocation is try/catch-wrapped — the
+    // official refreshList has no synchronous throw path in the pinned vendor,
+    // but a bridge-listener throw would abort the rest of the App's push
+    // handling for this notification.
+    const unsubscribeSessionListRefresh = chamberBridge.onRequestSessionListRefresh((sourceId) => {
+      if (sourceId !== chamberInstanceId) return
+      const refresh = (ctx.sessions as unknown as { refresh?: () => Promise<unknown> }).refresh
+      if (typeof refresh !== 'function') {
+        console.warn(`[chamber] session list refresh requested for ${chamberInstanceId} but the official ` +
+          'session client exposes no refresh() method — ghost-row convergence is unavailable')
+        return
+      }
+      try {
+        void refresh().catch((error: unknown) => {
+          console.warn(`[chamber] session list refresh failed for ${chamberInstanceId}:`,
+            error instanceof Error ? error.message : String(error))
+          // Transient-failure residual (design 24 §20): the App-side
+          // convergence machine keeps the purged ids pending and re-requests
+          // on a later push, so this catch only records — no local retry
+          // state is needed here.
+        })
+      } catch (error) {
+        console.warn(`[chamber] session list refresh for ${chamberInstanceId} threw synchronously:`,
+          error instanceof Error ? error.message : String(error))
+      }
+    })
     // 2026-09 beta 回归修复：pending（审批/提问/plan-review）的权威 0.1.2 源是
     // 官方 ui-session 的 pending-interaction 注册表（官方 ui-workspace 侧边栏
     // 同一来源，经 useSessionPendingInteraction 消费；上游在 0.1.2 移除了
@@ -193,6 +231,7 @@ export function apply(ctx: ClientContext): void {
       unsubscribeSessions()
       unsubscribeWorkspaces()
       unsubscribePending()
+      unsubscribeSessionListRefresh()
       snapshotProducer.clear()
       runtimeProducer.clear()
     }

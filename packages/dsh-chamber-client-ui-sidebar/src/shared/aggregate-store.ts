@@ -166,6 +166,24 @@ type Listener = () => void
 type OpenListener = (request: OpenSessionRequest) => void
 type OpenOutcomeListener = (outcome: OpenSessionOutcome) => void
 type RefreshListener = (sourceId: string) => void
+/**
+ * Per-source session-list refresh request (archive-cleanup convergence, design
+ * 24 §20): a source's MOUNTED ctx session summaries are the official client's
+ * in-memory rows, refreshed only on connection generations — content purged by
+ * the chamber host domain never triggers an official event (documented no-op),
+ * so the deleted rows linger in the summaries and resurface in the sidebar
+ * once the host removes their ids from the archived set (no filter covers them
+ * anymore; opening one fails with the official session/not-found). The mounted
+ * ctx of that source must re-run its OFFICIAL session-list refresh
+ * (`ctx.sessions.refresh()`), which reconciles the summaries against the
+ * server corpus (a per-call disk walk) and drops the deleted rows. Subscribers
+ * are the sidebar plugins of every mounted ctx; each plugin acts only when its
+ * own chamberInstanceId matches the requested source. Fired by the App's
+ * ghost-row convergence machine (planSessionListRefresh — every ready mounted
+ * push whose removed-archived rows are still listed) and by the archive
+ * manager after every purge settle — see design 24 §20 / App.tsx.
+ */
+type SessionListRefreshListener = (sourceId: string) => void
 type SourceListener = (sourceId: string) => void
 type RuntimeReportListener = (
   sourceId: string,
@@ -183,6 +201,7 @@ const listeners = new Set<Listener>()
 const openListeners = new Set<OpenListener>()
 const openOutcomeListeners = new Set<OpenOutcomeListener>()
 const refreshListeners = new Set<RefreshListener>()
+const sessionListRefreshListeners = new Set<SessionListRefreshListener>()
 const activateSourceListeners = new Set<SourceListener>()
 const runtimeReportListeners = new Set<RuntimeReportListener>()
 const snapshotReportListeners = new Set<SnapshotReportListener>()
@@ -270,6 +289,26 @@ export const chamberBridge = {
     refreshListeners.add(listener)
     return () => {
       refreshListeners.delete(listener)
+    }
+  },
+
+  /**
+   * Ask the MOUNTED ctx of `sourceId` to refresh its official session list
+   * (sidebar-plugin subscriber: only the plugin whose chamberInstanceId equals
+   * `sourceId` acts). See the SessionListRefreshListener note — the convergence
+   * net for rows of purged sessions lingering in the official client summaries.
+   * Unmounted sources have no subscriber and need none (their rows ride the
+   * unary list, which is authoritative per call).
+   */
+  requestSessionListRefresh(sourceId: string): void {
+    for (const listener of [...sessionListRefreshListeners]) listener(sourceId)
+  },
+
+  /** Sidebar-plugin subscription to session-list refresh requests; returns the unsubscribe. */
+  onRequestSessionListRefresh(listener: SessionListRefreshListener): () => void {
+    sessionListRefreshListeners.add(listener)
+    return () => {
+      sessionListRefreshListeners.delete(listener)
     }
   },
 
