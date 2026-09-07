@@ -61,11 +61,21 @@ export function commitAggregatePull(
     && current.workspaces.length > 0
     && current.workspaces.some(workspace => workspace.synthetic === true)
   if (mounted && current !== undefined && current.state === 'ok' && !currentIsFallbackDerived) {
+    // The merge keeps every authoritative pushed field (workspaces +
+    // archivedSessionIds + archive-set PROVENANCE) and contributes only the
+    // unary's live session rows. archiveSetKnown must ride along: it is the
+    // manager's tri-state input ("[] = genuinely nothing archived"), and the
+    // unary fallback carries no archive wire source — dropping the flag here
+    // would flip an authoritative source into the degraded manager branch on
+    // the first mutation pull (2026 dev-QA finding: after archiving a
+    // session the requestRefresh pull landed before the producer push and
+    // the archive manager showed the degraded tri-state until a reload).
     return {
       state: 'ok',
       workspaces: current.workspaces,
       sessions: fallback.sessions,
       archivedSessionIds: current.archivedSessionIds,
+      archiveSetKnown: current.archiveSetKnown === true,
       error: null,
     }
   }

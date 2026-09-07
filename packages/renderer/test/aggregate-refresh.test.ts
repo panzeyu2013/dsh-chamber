@@ -57,6 +57,43 @@ test('commitAggregatePull: a mounted pushed source keeps groups/archive/state; o
   assert.deepEqual(committed.sessions, fallbackSnapshot.sessions)
 })
 
+test('commitAggregatePull: the mounted merge preserves archive-set provenance (archiveSetKnown) — a mutation pull must never flip the archive manager into the degraded branch', () => {
+  // Regression (2026 dev-QA): the manager's tri-state reads archiveSetKnown;
+  // the unary fallback carries no archive wire source (fetchInstanceSnapshot
+  // marks the set unknown). The merge used to drop the flag, so the first
+  // requestRefresh pull after an archive action landed the source in the
+  // degraded manager view ("无法列出已归档会话") until a reload.
+  const authoritative: InstanceAggregate = {
+    ...mountedAggregate,
+    archiveSetKnown: true,
+  }
+  const merged = commitAggregatePull(authoritative, fallbackSnapshot, true)
+  assert.equal(merged.archiveSetKnown, true, 'mounted merge keeps the authoritative provenance')
+  assert.deepEqual(merged.archivedSessionIds, authoritative.archivedSessionIds)
+  // An authoritative-but-EMPTY archive set must also stay "known" — [] is the
+  // true "nothing archived" fact, never the degraded unknown state.
+  const authoritativeEmpty: InstanceAggregate = {
+    state: 'ok',
+    workspaces: mountedAggregate.workspaces,
+    sessions: [{ sessionId: 's1', running: true, blank: false }],
+    archivedSessionIds: [],
+    archiveSetKnown: true,
+    error: null,
+  }
+  const mergedEmpty = commitAggregatePull(authoritativeEmpty, { ...fallbackSnapshot, archivedSessionIds: [] }, true)
+  assert.equal(mergedEmpty.archiveSetKnown, true)
+  assert.deepEqual(mergedEmpty.archivedSessionIds, [])
+  // A legacy current WITHOUT the flag (pre-flag producers / not authoritative)
+  // stays unknown after the merge — no provenance is invented.
+  const mergedLegacy = commitAggregatePull(mountedAggregate, fallbackSnapshot, true)
+  assert.equal(mergedLegacy.archiveSetKnown, false)
+})
+
+test('commitAggregatePull: the full fallback commit carries the unary\'s unknown archive-set provenance', () => {
+  const committed = commitAggregatePull(undefined, { ...fallbackSnapshot, archiveSetKnown: false }, false)
+  assert.equal(committed.archiveSetKnown, false)
+})
+
 test('commitAggregatePull: never-pushed / unmounted sources keep the full degraded fallback commit', () => {
   const committed = commitAggregatePull(undefined, fallbackSnapshot, false)
   assert.deepEqual(committed, { state: 'ok', ...fallbackSnapshot, error: null })
@@ -141,6 +178,7 @@ test('commitAggregatePull: identical sessions keep the aggregate identity stable
     workspaces: mountedAggregate.workspaces,
     sessions: [{ sessionId: 's1', running: true, blank: false }],
     archivedSessionIds: mountedAggregate.archivedSessionIds,
+    archiveSetKnown: true,
     error: null,
   }
   const fallbackWithSameSessions: InstanceSnapshot = {

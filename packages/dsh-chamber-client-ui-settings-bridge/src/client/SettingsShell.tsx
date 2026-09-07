@@ -344,7 +344,16 @@ function SettingsPanel({
   // reaching here.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') onClose()
+      if (event.key !== 'Escape') return
+      // A child modal/dialog (aria-modal — official dsh Modal overlays incl.
+      // the connections plugin dialogs) owns Escape while it is open: closing
+      // the whole panel underneath a modal's first Esc would swallow the
+      // modal's own close intent (2026 dev-QA observation). The panel itself
+      // is not aria-modal, so the query cannot self-match; when a modal is
+      // open its own Escape handling runs (registered later on the document)
+      // and closes just that layer.
+      if (document.querySelector('[aria-modal="true"]') !== null) return
+      onClose()
     }
     document.addEventListener('keydown', onKeyDown)
     return () => document.removeEventListener('keydown', onKeyDown)
