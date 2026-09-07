@@ -15,6 +15,7 @@ import {
   deriveArchivedSessions,
   deriveLocalSearchMatches,
   deriveServerWorkspaces,
+  groupArchivedRows,
   instanceSnapshotSignature,
   MEMBERSHIP_GRACE_MS,
   mergeRuntimeFacts,
@@ -2095,6 +2096,91 @@ test('deriveArchivedSessions omits optional metadata and yields [] for an empty 
     sessions: [session('x1', 1, { title: 'resurfaced' })],
   }
   assert.deepEqual(deriveArchivedSessions(fallback), [])
+})
+
+// deriveArchivedSessions workspace attribution (2026 grouping revision): the
+// archive manager groups its listing by workspace — the row carries the
+// host workspace whose membership accounts for it, with a canonical
+// cwd==path fallback, else nothing (the manager's ungrouped bucket).
+test('deriveArchivedSessions attributes rows via registry membership', () => {
+  const archivedSnapshot: InstanceSnapshot = {
+    workspaces: [
+      workspace('w1', 'Alpha Project', ['a1', 'conflict', 'v1']),
+      workspace('w2', 'Beta', ['a2']),
+    ],
+    archivedSessionIds: ['a1', 'a2', 'conflict', 'orphan'],
+    sessions: [
+      session('a1', 300, { title: 'in w1', cwd: '/w1' }),
+      session('a2', 100, { title: 'in w2', cwd: '/w2' }),
+      // Conflict fixture (2026 review): membership (w1) and cwd (/w2 — the
+      // path of ANOTHER live workspace) point at different workspaces — a
+      // membership/cwd precedence inversion would attribute this row to w2.
+      session('conflict', 250, { title: 'member of w1 but cwd of w2', cwd: '/w2' }),
+      session('orphan', 200, { title: 'no workspace', cwd: '/gone' }),
+      session('v1', 50, { title: 'visible member' }),
+    ],
+  }
+  const rows = deriveArchivedSessions(archivedSnapshot)
+  const byId = new Map(rows.map(row => [row.sessionId, row]))
+  // Membership is authoritative: a cwd matching another live workspace path
+  // never overrides the registry membership.
+  assert.deepEqual(byId.get('a1')?.workspace, { id: 'w1', title: 'Alpha Project' })
+  assert.deepEqual(byId.get('conflict')?.workspace, { id: 'w1', title: 'Alpha Project' })
+  assert.deepEqual(byId.get('a2')?.workspace, { id: 'w2', title: 'Beta' })
+  assert.equal(byId.get('orphan')?.workspace, undefined)
+  assert.equal(byId.get('v1'), undefined)
+})
+
+test('deriveArchivedSessions falls back to canonical cwd==path attribution when membership never landed', () => {
+  const snap: InstanceSnapshot = {
+    // w1 carries EMPTY membership (the documented degenerate host index) —
+    // attribution must resolve through the session cwd facts instead. w2 has
+    // real membership for a2.
+    workspaces: [workspace('w1', 'Alpha', []), workspace('w2', 'Beta', ['a2'])],
+    archivedSessionIds: ['a1', 'a2', 'a3'],
+    sessions: [
+      session('a1', 1, { cwd: '/w1' }),
+      session('a2', 2, { cwd: '/elsewhere' }),
+      session('a3', 3, { cwd: '/w1/' }), // trailing separators normalize
+    ],
+  }
+  const rows = deriveArchivedSessions(snap)
+  const byId = new Map(rows.map(row => [row.sessionId, row]))
+  assert.deepEqual(byId.get('a1')?.workspace, { id: 'w1', title: 'Alpha' })
+  // Membership wins over cwd when both exist (a2's cwd does not match /w2,
+  // but its membership row does — the fallback is never consulted).
+  assert.deepEqual(byId.get('a2')?.workspace, { id: 'w2', title: 'Beta' })
+  assert.deepEqual(byId.get('a3')?.workspace, { id: 'w1', title: 'Alpha' })
+})
+
+// groupArchivedRows (2026 grouping revision): the manager's collapsible
+// listing — ordered groups (newest member first), recency inside a group,
+// and the no-attribution bucket trailing LAST (nav trailing-bucket parity).
+test('groupArchivedRows orders workspace groups newest-first and trails the ungrouped bucket last', () => {
+  const groups = groupArchivedRows([
+    { sessionId: 'o1', updatedAt: 999 },
+    { sessionId: 'a2', updatedAt: 100, workspace: { id: 'w2', title: 'Beta' } },
+    { sessionId: 'a1b', updatedAt: 200, workspace: { id: 'w1', title: 'Alpha' } },
+    { sessionId: 'a1', updatedAt: 300, workspace: { id: 'w1', title: 'Alpha' } },
+  ])
+  assert.deepEqual(groups.map(group => group.key), ['w1', 'w2', UNGROUPED_WORKSPACE_ID])
+  assert.equal(groups[0]?.title, 'Alpha')
+  assert.deepEqual(groups[0]?.rows.map(row => row.sessionId), ['a1', 'a1b'])
+  assert.deepEqual(groups[1]?.rows.map(row => row.sessionId), ['a2'])
+  assert.deepEqual(groups[2]?.title, '')
+  assert.equal(groups[2]?.workspace, undefined)
+  assert.deepEqual(groups[2]?.rows.map(row => row.sessionId), ['o1'])
+})
+
+test('groupArchivedRows yields [] for no rows and is self-contained (unordered input)', () => {
+  assert.deepEqual(groupArchivedRows([]), [])
+  const groups = groupArchivedRows([
+    { sessionId: 'late', workspace: { id: 'w1', title: 'Alpha' } },
+    { sessionId: 'early', updatedAt: 5, workspace: { id: 'w1', title: 'Alpha' } },
+  ])
+  assert.equal(groups.length, 1)
+  // updatedAt-missing rows sort last inside their group (0 anchor), stable.
+  assert.deepEqual(groups[0]?.rows.map(row => row.sessionId), ['early', 'late'])
 })
 
 // Archive-set provenance + projection-signature participation (2026-09

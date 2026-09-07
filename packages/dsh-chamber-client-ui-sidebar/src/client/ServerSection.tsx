@@ -794,8 +794,10 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                     {/* chamber (design 24 §6, revision 2026-09): server-row
                         "archive manager" — same hover-reveal discipline and
                         gating as the sibling actions; opens the manager
-                        dialog (list + single/multi-select/delete-all). All
-                        cleanup state lives INSIDE the dialog. */}
+                        dialog (list + per-row / multi-select delete; whole-set
+                        deletion only via explicit select-all — no standalone
+                        delete-all). All cleanup state lives INSIDE the
+                        dialog. */}
                     {server.connected && (server.aggregateError === undefined || search?.expanded === true) && (
                       <button
                         type="button"
