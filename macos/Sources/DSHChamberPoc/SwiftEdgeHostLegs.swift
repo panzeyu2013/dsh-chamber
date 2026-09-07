@@ -292,6 +292,58 @@ public final class SwiftEdgeHostLegs {
                 }
                 return (nil, Self.uiUnavailablePrefix + method + ":no-selection")
             }
+        case "showError":
+            // dialog.showErrorBox 对应腿：payload {title, detail}；主线程模态
+            // alert（无窗守卫——深链消费等错误路径须有 UI 上下文才弹）。
+            return performUI(method: method) {
+                guard mainWindowProvider?() != nil else {
+                    return (nil, Self.uiUnavailablePrefix + method + ":no-window")
+                }
+                let title = dict.flatMap { EdgePayload.string($0["title"]) } ?? "dsh-chamber"
+                let detail = dict.flatMap { EdgePayload.string($0["detail"]) } ?? ""
+                let run: () -> Void = {
+                    let alert = NSAlert()
+                    alert.alertStyle = .critical
+                    alert.messageText = title
+                    alert.informativeText = detail
+                    alert.runModal()
+                }
+                if Thread.isMainThread {
+                    run()
+                } else {
+                    DispatchQueue.main.sync(execute: run)
+                }
+                return (nil, nil)
+            }
+        case "launchApp":
+            // E12 open-in 原生拉起腿：payload {appId, path}。v1 语义：path 指向
+            // .app 时经 NSWorkspace.openApplication 拉起；否则尝试以 path 作为
+            // 文件用默认应用打开；appId→应用映射（Finder/VS Code 协商）属 M3
+            // 集成（open-in-apps 协商数据在 core，Swift 侧只执行叶）。
+            return performUI(method: method) {
+                guard mainWindowProvider?() != nil else {
+                    return (nil, Self.uiUnavailablePrefix + method + ":no-window")
+                }
+                guard let rawPath = dict.flatMap({ EdgePayload.string($0["path"]) }),
+                      !rawPath.isEmpty else {
+                    return (nil, Self.unimplementedPrefix + method + ":path-missing")
+                }
+                let url = URL(fileURLWithPath: rawPath)
+                if url.pathExtension.lowercased() == "app" {
+                    // 同步 openApplication（SDK 非 throwing）；启动结果经
+                    // NSWorkspace 运行会话异步上报——v1 以「已提交拉起」为成功，
+                    // 应用启动失败由系统/用户可见处理。
+                    NSWorkspace.shared.openApplication(
+                        at: url,
+                        configuration: NSWorkspace.OpenConfiguration()
+                    )
+                    return (.bool(true), nil)
+                }
+                if NSWorkspace.shared.open(url) {
+                    return (.bool(true), nil)
+                }
+                return (nil, Self.uiUnavailablePrefix + method + ":open-failed")
+            }
         case "showMessage":
             // 形状（HostMessageOptions，electron-edges/global.d.ts 为准）：
             // {type,title,message,detail,buttons[],defaultId,cancelId,noLink?}
