@@ -309,6 +309,13 @@ ctx 真实化逐项列于 sidecar-entry.ts 注释。
 - **W-13 缺口闭合**：60 通道全量冒烟经 Swift harness 应答 edges 已无 GUI 闭环。
 - **E2 flavor 字段前哨**（645a654）：hostFacts.flavor 'electron'|'swift' →
   INFO 载荷透传（main/sidecar 双装配），renderer 更新/通知宿主机制分派依据。
+- **W-19/20 宿主腿骨架**（4ec76ce/9f19d0e）：SwiftEdgeHostLegs（统一 respond
+  分派；canShowUI false → swift-edge-ui-unavailable；未实现 →
+  swift-edge-unimplemented 回落默认表；focusMainWindow/showMessage
+  pendingAlerts 队列/openExternal|openPath 窗口守卫）+ PendingAlertQueue 纯
+  逻辑 + BridgeClient.edgeHostLegs 注入点 + AppDelegate 主窗上下文接线；
+  swift test 38/38、build 0 警告。GUI 腿实机验收（UNUserNotificationCenter
+  click 回灌/NSAlert 消费等）= M3 集成硬门禁。
 **剩余路线**（不省略登记）：W-18 后半 B（manifest 运行时白名单消费决策：POC
 白名单 7 收窄暂维持，全量放行待 shim 全量生成时评审）→ W-19…W-21
 （窗口/菜单/生命周期/通知/角标/深链/对话框/外链/登录项/崩溃恢复——Swift 宿主腿
