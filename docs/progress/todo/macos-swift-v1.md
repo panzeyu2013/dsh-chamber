@@ -314,7 +314,11 @@ ctx 真实化逐项列于 sidecar-entry.ts 注释。
   swift-edge-unimplemented 回落默认表；focusMainWindow/showMessage
   pendingAlerts 队列/openExternal|openPath 窗口守卫）+ PendingAlertQueue 纯
   逻辑 + BridgeClient.edgeHostLegs 注入点 + AppDelegate 主窗上下文接线；
-  swift test 38/38、build 0 警告。GUI 腿实机验收（UNUserNotificationCenter
+  swift test 38/38、build 0 警告。
+- **W-21 前置**（b7bcacd）：BridgeClient 异步 edge 应答通道（canHandleAsync →
+  respondAsync；legs 回落仅限 unimplemented 前缀，ui-unavailable 诚实传播）
+  + 真实 UNUserNotificationCenter 通知调度腿（失败 loud）；swift test 39/39。
+  click 回灌 delegate/前台展示 = M3 集成硬门禁（待实机）。GUI 腿实机验收（UNUserNotificationCenter
   click 回灌/NSAlert 消费等）= M3 集成硬门禁。
 **剩余路线**（不省略登记）：W-18 后半 B（manifest 运行时白名单消费决策：POC
 白名单 7 收窄暂维持，全量放行待 shim 全量生成时评审）→ W-19…W-21
