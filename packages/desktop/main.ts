@@ -55,7 +55,6 @@ import type { GatewayRegistrationAuthProof, GatewaySessionManager, GatewaySessio
 import { discoverSshConfigHosts } from './ssh-config.ts';
 import { createTrustedIpc, isExternalLinkUrl, isTrustedIpcSender, isTrustedRendererUrl } from './renderer-trust.ts';
 import { call, createControlPlane } from './control-plane-module.ts';
-import { findFreePort } from './free-port.ts';
 import {
   attemptDeepLinkProtocolRegistration,
   BoundedAckDeliveryQueue,
@@ -134,7 +133,7 @@ import {
   removeKnownGoodCandidate,
   resetCandidateHealthWindow,
 } from '@dsh-chamber/dsh-runtime';
-import { effectivePending, invalidate, shouldInvalidate } from '@dsh-chamber/dsh-runtime';
+import { effectivePending, invalidate } from '@dsh-chamber/dsh-runtime';
 import {
   FATAL_STARTUP_BLOCK_REASONS,
   runDelayedRollback,
@@ -218,6 +217,23 @@ import {
   describeSshUndoConfirmation,
 } from './ssh-apply-rows.ts';
 import { createSshPluginJournal } from './ssh-plugin-journal.ts';
+import {
+  auditLogFilePath,
+  chamberSettingsFilePath,
+  gatewaySecretsFilePath,
+  instancesFilePath,
+  LOCAL_RUNNING_STATES,
+  localDshHomeDir,
+  NPM_SEARCH_MAX_BODY_BYTES,
+  proxyTransport,
+  QUIT_CLEANUP_TIMEOUT_MS,
+  readDshVersion,
+  resolveActiveRuntime,
+  resolveControlPlanePort,
+  scanDeepLinkUrls,
+  sshPasswordsFilePath,
+  stateRootDir,
+} from './shell-core.ts';
 
 // Last-resort crash boundary. Expected socket/stream failures are handled at
 // their owners; an unknown uncaught exception means the privileged main
@@ -250,36 +266,6 @@ process.on('unhandledRejection', (reason) => {
   fatalMainError(reason);
 });
 
-// Control-plane port (design 05 §3.3): the packaged app keeps the documented
-// default 17500; the dev launcher (electron-dev.mjs) runs with an isolated
-// user-data dir, so its control plane must also avoid the packaged app's port.
-// Dev starts at 17520 and auto-backs off to the first free port (parallel
-// worktrees each land on their own port); DSH_CHAMBER_CP_PORT pins a fixed
-// port. The renderer origin is derived from the actually bound port at
-// runtime (controlPlane.port), so nothing else hardcodes the address. Port 0
-// lets the OS pick an ephemeral port — the last resort when the whole dev
-// backoff range is exhausted.
-const DEV_CONTROL_PLANE_PORT_BASE = 17520;
-const DEV_CONTROL_PLANE_PORT_ATTEMPTS = 200;
-async function resolveControlPlanePort(): Promise<number> {
-  const fromEnv = process.env.DSH_CHAMBER_CP_PORT;
-  if (fromEnv !== undefined && fromEnv !== '') {
-    const parsed = Number(fromEnv);
-    if (Number.isInteger(parsed) && parsed >= 1 && parsed <= 65535) return parsed;
-    const fallback = process.env.DSH_CHAMBER_ELECTRON_DEV === '1' ? 'dev 自动退避端口' : '默认端口 17500';
-    console.error(`[dsh-chamber] 忽略非法 DSH_CHAMBER_CP_PORT="${fromEnv}"（须为 1–65535 整数），使用${fallback}`);
-  }
-  if (process.env.DSH_CHAMBER_ELECTRON_DEV !== '1') return 17500;
-  try {
-    return await findFreePort(DEV_CONTROL_PLANE_PORT_BASE, { attempts: DEV_CONTROL_PLANE_PORT_ATTEMPTS });
-  } catch {
-    console.warn(
-      `[dsh-chamber] dev 端口 ${DEV_CONTROL_PLANE_PORT_BASE}..${DEV_CONTROL_PLANE_PORT_BASE + DEV_CONTROL_PLANE_PORT_ATTEMPTS - 1} 均被占用，回退到系统临时端口（0）`,
-    );
-    return 0;
-  }
-}
-
 // 本地崩溃记录（不上传）：主/渲染/GPU 等进程崩溃时由 Crashpad 落盘到
 // <userData>/Crashpad——崩溃是静默的，没有本地记录就只能靠系统
 // DiagnosticReports 事后考古"前端消失/白屏"类问题。uploadToServer=false
@@ -303,16 +289,6 @@ app.on('child-process-gone', (_event, details) => {
 const pkgDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(pkgDir, '..', '..');
 const { version } = JSON.parse(readFileSync(path.join(pkgDir, 'package.json'), 'utf8'));
-
-/** The control-plane proxy currently ships the same two transport adapters as
- * the desktop registry. Keep the open-ended provider type at its boundary,
- * then fail loudly if a future adapter reaches registration before the proxy
- * has learned its trust/origin rules. */
-function proxyTransport(transport: TransportInstanceSpec['transport']): 'ssh' | 'http' {
-  if (transport === 'ssh') return 'ssh';
-  if (transport === 'http') return 'http';
-  throw new TypeError(`unsupported proxy transport: ${transport}`);
-}
 
 /** Outcome of the plugin-source picker (design 21 §10 archive-pick). */
 type PluginSourcePick =
@@ -367,90 +343,6 @@ if (builtinDshWorkspace === null) {
   );
 }
 
-type ActiveRuntimeSource = 'env' | 'user' | 'bundled';
-interface ActiveRuntimeResolution {
-  path: string | null
-  version: string | null
-  source: ActiveRuntimeSource
-  blockedReason: string | null
-}
-
-/**
- * Synchronous spawn-time resolver: env > valid override/current > builtin.
- * Selection metadata corruption and pointer/override disagreement fail closed;
- * they never alias the absence of a user runtime.
- */
-function resolveActiveRuntime(baseDir: string): ActiveRuntimeResolution {
-  const envPath = process.env.DSH_CHAMBER_DSH_PATH;
-  if (envPath) return { path: envPath, version: readDshVersion(envPath), source: 'env', blockedReason: null };
-
-  const overrideState = readOverrideState(baseDir);
-  const pointerState = readCurrentPointerState(baseDir);
-  if (overrideState.kind === 'corrupt') {
-    return { path: null, version: null, source: 'bundled', blockedReason: 'dsh runtime override metadata is corrupt' };
-  }
-  if (pointerState.kind === 'corrupt') {
-    return { path: null, version: null, source: 'bundled', blockedReason: 'dsh runtime current pointer is corrupt' };
-  }
-  const override = overrideState.kind === 'valid' ? overrideState.record : null;
-  const pointer = pointerState.kind === 'valid' ? pointerState.version : null;
-  // Override validity (invalidatedAt / shell-version mismatch) is decided by
-  // the shared dsh-runtime core predicate (shouldInvalidate — the same replay
-  // gate the runtime startup and the gateway shape consume).
-  if (
-    override !== null
-    && !shouldInvalidate(override, version)
-  ) {
-    if (pointer !== null) {
-      const tree = validateVersionTree(baseDir, pointer);
-      if (tree.ok) return { path: tree.path, version: pointer, source: 'user', blockedReason: null };
-      return {
-        path: null,
-        version: pointer,
-        source: 'user',
-        blockedReason: `dsh runtime pointer tree is invalid: ${tree.error}`,
-      };
-    }
-    const builtinIsAuthoritative = override.pending !== null
-      || override.chosenVersion === null
-      || override.resolvedVersion === null
-      || override.lastOutcome === 'rolled-back'
-      || override.lastOutcome === 'failed';
-    if (!builtinIsAuthoritative) {
-      return {
-        path: null,
-        version: override.resolvedVersion,
-        source: 'user',
-        blockedReason: 'active user override is missing its authoritative current pointer',
-      };
-    }
-  }
-  if (pointer !== null) {
-    return {
-      path: null,
-      version: pointer,
-      source: 'user',
-      blockedReason: 'dsh runtime pointer has no matching active override',
-    };
-  }
-  return {
-    path: builtinDshWorkspace,
-    version: readDshVersion(builtinDshWorkspace),
-    source: 'bundled',
-    blockedReason: builtinDshWorkspace === null ? 'bundled dsh workspace not found' : null,
-  };
-}
-
-function readDshVersion(workspace: string | null): string | null {
-  if (workspace === null) return null;
-  try {
-    const manifest = JSON.parse(readFileSync(path.join(workspace, 'package.json'), 'utf8'));
-    return manifest.dependencies?.['@deepseek-ai/dsh'] ?? null;
-  } catch {
-    return null;
-  }
-}
-
 let mainWindow: BrowserWindow | null = null;
 let controlPlane: PlaneHandle | null = null;
 let transportManager: TransportManager | null = null;
@@ -487,17 +379,6 @@ let quitRequested = false;
 let quitConfirmed = false;
 let confirmingQuit = false;
 let quitCleanupInProgress = false;
-// 本地实例「运行中/在途」状态（design 14 D2，2026-08 修订）：进程存活
-// （ready/degraded）或 spawn/重启在途（starting/restarting）——退出会中断
-// 它们，需确认。stopped / error / restart-exhausted 无进程可中断，不触发
-// 确认。**2026-08 二次修订**：状态字符串不是存活事实——restart 序列里
-// `restarting` 期间新进程可能尚未 spawn（backoff 1s→60s），死亡进程在下次
-// 探活前也可能滞留在 ready/degraded；退出确认必须同时要求**实际有存活进程**
-// （localProcessAlive），否则"本地明明没有实例在运行"也会误弹确认。注意
-// `starting` 全程 child 尚未赋值（spawn 解析后才挂到连接上），hasLiveProcess()
-// 恒为 false，配合 AND 门实际不参与确认——spawn 在途由控制面的 epoch/stopping
-// 守卫在 stop() 时终止（绝不孤儿化），故「无进程则不确认」是安全的。
-const LOCAL_RUNNING_STATES: ReadonlySet<string> = new Set(['starting', 'ready', 'degraded', 'restarting']);
 
 // VS Code 深链（design 16 §4.2）：OS 级深链（macOS open-url / Win+Linux
 // second-instance argv / 冷启动 argv）统一入有界、归一化 single-flight 队列，
@@ -578,15 +459,6 @@ function reconcileBadgeCount(): void {
     pendingBadgeCount,
   );
   applyNativeBadgeCount(count);
-}
-
-/** 扫描 argv 中的 dsh-chamber:// 深链（防御式：非深链 argv 零副作用、绝不 throw）。 */
-function scanDeepLinkUrls(argv: readonly string[]): string[] {
-  const urls: string[] = [];
-  for (const arg of argv) {
-    if (typeof arg === 'string' && arg.startsWith('dsh-chamber://')) urls.push(arg);
-  }
-  return urls;
 }
 
 /** 深链入队：quit 在途 ignore（不启动 VS Code）；归一化目标 single-flight；解析失败 loud。 */
@@ -709,15 +581,6 @@ function enqueueNotificationOpen(sourceToken: NotificationSourceToken, sessionId
   drainPendingNotificationOpens?.();
 }
 
-/** 退出清理（will-quit：transport dispose + 控制面 stop）的最长等待；超时强制
- *  退出，防「窗口已关、主进程永久滞留」的半退出态。子进程回收用短窗口
- *  （transport 1s / 本地 dsh 1s → SIGKILL）+ 传输层与控制面并行化，正常
- *  ~1-2s 完成；5s 硬顶仅为异常路径（如残留连接使 server.close 不回调）兜底
- *  （2026-08 排查；2026-08 提速，15s → 5s）。 */
-const QUIT_CLEANUP_TIMEOUT_MS = 5_000;
-/** Cap on the npm search JSON body (registry search responses are ~KB-scale;
- * 256 KiB bounds a hostile or misbehaving registry). */
-const NPM_SEARCH_MAX_BODY_BYTES = 256 * 1024;
 // Update controller ref (created in whenReady): the quit-confirmation exemption
 // (design 14 D2) reads its state at will-quit time.
 let updateController: { state(): { phase: string; installBlockedReason: string | null } } | null = null;
@@ -743,8 +606,6 @@ let runtimeTransactionWorkspace: string | null = null;
 let runtimeOperation: Promise<StartupResult | null> | null = null;
 let runtimeOperationAbort: AbortController | null = null;
 let willQuitCleanupComplete = false;
-/** Chamber 设置文件路径（design 14 D7）：<userData>/chamber-settings.json。 */
-const chamberSettingsFile = (): string => path.join(app.getPath('userData'), 'chamber-settings.json');
 
 /**
  * Minimal tray（桌面一体形态的最小托盘：状态 tooltip + 显示/退出菜单）: status
@@ -1129,7 +990,7 @@ function applySettingsPatch(patch: Partial<ChamberSettings>): { ok: true } | { o
     return { ok: false, error: 'settings apply failed' };
   }
   try {
-    writeSettingsFile(chamberSettingsFile(), next);
+    writeSettingsFile(chamberSettingsFilePath(app.getPath('userData')), next);
   } catch (error) {
     console.error('[dsh-chamber] 写入 chamber 设置失败：', error);
     // 持久化失败：回滚已应用的副作用，holder 保持旧值——内存/磁盘/实际行为一致。
@@ -1686,7 +1547,7 @@ if (!gotTheLock) {
     // （非深链 argv 零副作用、绝不 throw 打断启动）；与 open-url 双触发由去重兜底。
     for (const url of scanDeepLinkUrls(process.argv)) enqueueDeepLink(url);
     const runtimeBaseDir = app.getPath('userData');
-    const localDshHome = path.join(runtimeBaseDir, 'state', 'dsh-home');
+    const localDshHome = localDshHomeDir(runtimeBaseDir);
     const runtimeWriterFence = new RuntimeOperationFence();
     const envOverrideActive = Boolean(process.env.DSH_CHAMBER_DSH_PATH);
     // Windows runtime mutations stay read-only until the M2a ability gate is
@@ -1787,10 +1648,10 @@ if (!gotTheLock) {
       console.log(`[dsh-chamber] 控制面端口：${controlPlanePort}（${portSourceLabel}${controlPlanePort === 0 ? '；0 = 系统临时分配' : ''}）`);
       controlPlane = createControlPlane({
         port: controlPlanePort,
-        stateDir: path.join(app.getPath('userData'), 'state'),
+        stateDir: stateRootDir(app.getPath('userData')),
         getDshWorkspacePath: () => {
           if (runtimeTransactionWorkspace !== null) return runtimeTransactionWorkspace;
-          const resolved = resolveActiveRuntime(runtimeBaseDir);
+          const resolved = resolveActiveRuntime(runtimeBaseDir, builtinDshWorkspace);
           if (resolved.path === null) throw new Error(resolved.blockedReason ?? 'dsh workspace not found');
           return resolved.path;
         },
@@ -1857,7 +1718,7 @@ if (!gotTheLock) {
         if (runtimeStartBlocked) return { ok: false, error: runtimeStartBlockedReason };
         // Resolve only after acquiring the writer fence. A queued IPC or open
         // picker must never retain a workspace across a runtime swap.
-        const resolved = resolveActiveRuntime(runtimeBaseDir);
+        const resolved = resolveActiveRuntime(runtimeBaseDir, builtinDshWorkspace);
         if (resolved.path === null) return { ok: false, error: resolved.blockedReason ?? 'dsh workspace not found' };
         return await mutate(resolved.path);
       } finally {
@@ -1897,14 +1758,14 @@ if (!gotTheLock) {
     });
     ipcMain.handle(IPC_CHANNELS.INFO, trustedIpc(() => ({
       controlPlaneUrl: `http://127.0.0.1:${cp.port}`,
-      dshVersion: resolveActiveRuntime(runtimeBaseDir).version,
+      dshVersion: resolveActiveRuntime(runtimeBaseDir, builtinDshWorkspace).version,
       version,
       platform: process.platform,
     })));
 
     // Chamber settings（design 14 D7）：启动加载 + 应用副作用（keep-awake /
     // 登录自启 reconcile）；损坏 loud（*.corrupt 保留），绝不静默假默认。
-    const settingsLoad = readSettingsFile(chamberSettingsFile());
+    const settingsLoad = readSettingsFile(chamberSettingsFilePath(app.getPath('userData')));
     if (settingsLoad.notice !== null) console.error(`[dsh-chamber] ${settingsLoad.notice}`);
     chamberSettings = settingsLoad.settings;
     setKeepAwakeActive(chamberSettings.keepAwake);
@@ -2036,7 +1897,7 @@ if (!gotTheLock) {
     const resolveCredentialSpec = (id: string): TransportInstanceSpec | null =>
       transportManager?.listInstances().find(instance => instance.id === id) ?? null;
     const passwordNotice = configureSshPasswordStore(
-      path.join(app.getPath('userData'), 'ssh-passwords.json'),
+      sshPasswordsFilePath(app.getPath('userData')),
       resolveCredentialSpec,
     );
     if (passwordNotice !== null) console.error(`[dsh-chamber] ssh password store: ${passwordNotice}`);
@@ -2077,7 +1938,7 @@ if (!gotTheLock) {
       }
     }
     const gatewaySecretNotice = configureGatewaySecretStore(
-      windowsRefusePlaintext ? null : path.join(app.getPath('userData'), 'gateway-secrets.json'),
+      windowsRefusePlaintext ? null : gatewaySecretsFilePath(app.getPath('userData')),
       gatewaySecretsCrypto,
       resolveCredentialSpec,
     );
@@ -2090,11 +1951,11 @@ if (!gotTheLock) {
     if (process.platform === 'win32') {
       const aclErrors = applyWindowsAclTightening([
         { path: runtimeBaseDir, kind: 'directory' },
-        { path: path.join(runtimeBaseDir, 'state'), kind: 'directory' },
-        { path: path.join(runtimeBaseDir, 'ssh-passwords.json'), kind: 'file' },
-        { path: path.join(runtimeBaseDir, 'gateway-secrets.json'), kind: 'file' },
-        { path: chamberSettingsFile(), kind: 'file' },
-        { path: path.join(runtimeBaseDir, 'audit-log.jsonl'), kind: 'file' },
+        { path: stateRootDir(runtimeBaseDir), kind: 'directory' },
+        { path: sshPasswordsFilePath(runtimeBaseDir), kind: 'file' },
+        { path: gatewaySecretsFilePath(runtimeBaseDir), kind: 'file' },
+        { path: chamberSettingsFilePath(runtimeBaseDir), kind: 'file' },
+        { path: auditLogFilePath(runtimeBaseDir), kind: 'file' },
       ]);
       for (const aclError of aclErrors) console.error(`[dsh-chamber] windows ACL tightening failed: ${aclError}`);
     }
@@ -2120,7 +1981,7 @@ if (!gotTheLock) {
     // session bodies NEVER enter: the audit-log serializer is a fixed field
     // whitelist, and the callers below pass existence markers (token|password|
     // none) and phases, never values (S24).
-    const auditLogPath = path.join(app.getPath('userData'), 'audit-log.jsonl');
+    const auditLogPath = auditLogFilePath(app.getPath('userData'));
     const auditLogNotice = configureAuditLog(auditLogPath);
     if (auditLogNotice !== null) console.error(`[dsh-chamber] audit log: ${auditLogNotice}`);
     const audit = (event: AuditEvent) => appendAuditEvent({ file: auditLogPath }, event);
@@ -2132,7 +1993,7 @@ if (!gotTheLock) {
       // default `provider` stays the ssh provider so legacy kind-keyed
       // entries and unknown transports resolve there.
       providers: { ssh: sshProvider, http: gatewayProvider },
-      instancesFile: path.join(app.getPath('userData'), 'ssh-instances.json'),
+      instancesFile: instancesFilePath(app.getPath('userData')),
       logger: {
         log: (...args) => console.log('[transport-manager]', ...args),
         warn: (...args) => console.warn('[transport-manager]', ...args),
@@ -2146,7 +2007,7 @@ if (!gotTheLock) {
       // *.corrupt, reversible) before starting empty; the next authoritative
       // save_connection rebuilds the registry (never silently faked as empty).
       console.error('[dsh-chamber] 加载 SSH 实例失败：', loadError);
-      const file = path.join(app.getPath('userData'), 'ssh-instances.json');
+      const file = instancesFilePath(app.getPath('userData'));
       try {
         renameSync(file, `${file}.corrupt`);
         console.warn(`[dsh-chamber] 已保留损坏的实例文件为 ${file}.corrupt`);
@@ -4321,7 +4182,7 @@ if (!gotTheLock) {
       startAndProbeWorkspace(resolveExactRuntimeWorkspace(runtimeVersion, isBuiltin), signal);
 
     const startAndProbeCurrent = async (signal?: AbortSignal) => {
-      const active = resolveActiveRuntime(runtimeBaseDir);
+      const active = resolveActiveRuntime(runtimeBaseDir, builtinDshWorkspace);
       if (active.path === null) throw new Error(active.blockedReason ?? 'dsh workspace not found');
       return {
         active,

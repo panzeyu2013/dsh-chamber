@@ -256,6 +256,14 @@ U+2028/29 转义、#17 shim 桩 reject 统一 Error 形态；其余 #5–#10/#13
 push 拓扑（事件先于响应）已无 GUI 闭环，edge 反向通道留 M2/P1。三方通道差集：
 Swift 白名单 7 == shim 7 == sidecar 7（+edge:notification-clicked 不可达死桩）；
 shim PUSH_EVENTS 8 与 ipc-events.ts 字面量逐字一致。
+**同日补（W-09 批 1 执行，M2/P1 首搬）**：`shell-core.ts` 新建（247 行，Electron-free
+零 seam），main.ts 5802→5663 行：K1 端口决议/K2 runtime 决议（resolveActiveRuntime
++ readDshVersion）/K3 proxyTransport/K4 三常量/K5 scanDeepLinkUrls/K6 七路径模板 +
+14 调用点改写；门禁全绿：ipc-surface-mirror 24/24、renderer-trust 10/10、
+transport-manager 126/126、typecheck 0 诊断、**test:desktop 892/892**。已注记偏差：
+K2 原实现引用 main 模块级 `version`（shouldInvalidate 实参），shell-core 改为模块级
+读兄弟 package.json 同值自足（dev/打包同目录布局，值恒等）；若后续改第三参注入代价小。
+W-10 seam 化批（HostEdges/60 handle 迁入/mirror MAIN_SIDE_FILES 扩展）为下一大块。
 
 **开工前风险提示（8 条）**：
 1. **node/pnpm 缺位**（沙箱实测 MISSING）——W-01 首步用户机装 node ≥24 + pnpm@11.21.0；
