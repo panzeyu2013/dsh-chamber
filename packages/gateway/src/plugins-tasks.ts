@@ -47,7 +47,7 @@
  * between ops can therefore never leave the queue spawning a stale entry.
  */
 
-import { existsSync, renameSync, rmSync } from 'node:fs'
+import { existsSync, readdirSync, renameSync, rmSync } from 'node:fs'
 import { isAbsolute, join, relative } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import {
@@ -67,8 +67,13 @@ import { createPluginsExec, PLUGIN_QUEUE_CAP, type PluginExec } from './plugins-
 import type { ProfileWriteLease } from './runtime-manager.ts'
 import { createPluginsJournal, thirdPartyRoot } from './plugins-journal.ts'
 import type { JournalLogger, JournalOp, JournalPending } from './plugins-journal.ts'
-import { isFileValue, MATERIALIZED_VALUE_MASK } from './plugins-installed.ts'
-import type { ChamberInstalled } from './plugins-installed.ts'
+import {
+  INSTALLED_PROFILE_DIR,
+  isFileValue,
+  MANAGED_DSH_HOME_DIR,
+  MATERIALIZED_VALUE_MASK,
+  type ChamberInstalled,
+} from './plugins-installed.ts'
 
 /** Deferred-intent store: file name under the third-party root. */
 export const DEFERRED_INTENTS_FILE = 'deferred.json'
@@ -170,6 +175,16 @@ export interface ChamberPluginTasks {
    * failed (preImage retained). Called once by the wiring layer at
    * construction. */
   reconcileJournal(): void
+  /** Boot-time staged-archive orphan sweep — called once by the wiring
+   * layer right AFTER reconcileJournal, when the executor is idle and no
+   * route can be staging concurrently. Executed materialize ops RETAIN
+   * their staged archive (the profile manifest keeps its file: spec), so
+   * re-materialize/remove cycles would otherwise leave archives nothing
+   * references; this reclaims *.tgz files under the third-party root that
+   * neither the managed profile manifest, a deferred intent, nor a live
+   * (non-terminal) journal op references. Growth stays bounded by manifest
+   * references + in-flight work; referenced files are never touched. */
+  sweepOrphanedStagedArchives(): void
   /** Validate → lease → enqueue (or defer), per the module header. Throws
    * ONLY on deferred-store persistence failure (the route maps that to 500
    * persistence_failed, mirroring the sync-upload convention); every input/
@@ -413,11 +428,19 @@ export function createChamberPluginTasks(deps: ChamberPluginTasksDeps): ChamberP
     return isFileValue(spec) ? MATERIALIZED_VALUE_MASK : spec
   }
 
-  /** Remove a materialize op's staged archive once it can never be consumed
-   * again (design 21 P2 review — staged-archive GC): after the op went
-   * terminal, or when a deferred intent is cleared. Best effort, guarded to
-   * the gateway staging root; the op itself is unaffected by a failed
-   * unlink. */
+  /** Remove a materialize op's staged archive ONLY when nothing can ever
+   * consume it again: a cleared deferred intent never ran, so no manifest
+   * references its staged file (the dsh CLI writes the manifest only while
+   * executing). Terminal EXECUTED ops deliberately RETAIN their staged
+   * archive — the dsh CLI permanently records `file:<staged>` in the
+   * profile manifest + pnpm lockfile, and any later re-resolution (a
+   * profile reinstall after a runtime version switch, pnpm deciding the
+   * lockfile is stale, node_modules pruning) fetches that exact path again;
+   * deleting it at the terminal would leave the manifest pointing at a
+   * missing tarball (the same reason the desktop ssh flow keeps every
+   * uploaded archive under ~/.dsh-chamber/plugins — "kept, never cleaned").
+   * Best effort, guarded to the gateway staging root; the op itself is
+   * unaffected by a failed unlink. */
   function unlinkStagedArchive(spec: string | undefined): void {
     if (spec === undefined || !isFileValue(spec)) return
     const stagedPath = spec.slice('file:'.length)
@@ -516,17 +539,16 @@ export function createChamberPluginTasks(deps: ChamberPluginTasksDeps): ChamberP
     // inside enqueue (pre-mutation backup failure, CLI resolution failure)
     // releases the lease exactly once; the queue's serial worker keeps
     // DSH_HOME writes one at a time under the count-based manager fence.
-    // A materialize op's staged archive is removed once the op is terminal
-    // (it can never be consumed again); the drain path passes an extra
-    // terminal callback (design 21 §6.3 auto-restart once after drained
-    // installs).
+    // Executed materialize ops RETAIN their staged archive (the profile
+    // manifest keeps its file: spec — see unlinkStagedArchive); the drain
+    // path passes an extra terminal callback (design 21 §6.3 auto-restart
+    // once after drained installs).
     const result = await getExecutor().enqueue(input, (_op, status) => {
       try {
         release()
       } catch (error) {
         warn(`plugins-tasks: profile-write lease release failed: ${messageOf(error)}`)
       }
-      if (input.kind === 'materialize') unlinkStagedArchive(input.spec)
       log(`plugins-tasks: op terminal (${status}); profile-write lease released`)
       onTerminal?.(status)
     })
@@ -611,6 +633,74 @@ export function createChamberPluginTasks(deps: ChamberPluginTasksDeps): ChamberP
       }
     },
 
+    sweepOrphanedStagedArchives() {
+      // Boot-only: after journal reconciliation the executor is idle and no
+      // route can stage concurrently, so the referenced-set below is stable.
+      // Collect every path something can still consume:
+      //  1. the managed profile manifest's file: dependency targets;
+      //  2. deferred intents' staged specs (they drain at the next ready
+      //     edge — their archives must survive);
+      //  3. live (non-terminal) journal ops' staged specs.
+      const referenced = new Set<string>()
+      const manifestPath = join(stateDir, MANAGED_DSH_HOME_DIR, INSTALLED_PROFILE_DIR, 'package.json')
+      try {
+        const raw = readPrivateFileNoFollow(manifestPath, { tightenMode: 0o600, requiredMode: 0o600, maxBytes: 1024 * 1024 }).value
+        const manifest = JSON.parse(raw) as { dependencies?: Record<string, unknown> }
+        for (const spec of Object.values(manifest.dependencies ?? {})) {
+          if (typeof spec === 'string' && isFileValue(spec)) referenced.add(spec.slice('file:'.length))
+        }
+      } catch {
+        // Unreadable/absent profile (ENOENT on a fresh gateway before the
+        // first materialize): nothing can reference staged archives through
+        // the manifest — intents/ops below still protect their own.
+      }
+      for (const intent of loadIntents()) {
+        if (intent.spec !== undefined && isFileValue(intent.spec)) referenced.add(intent.spec.slice('file:'.length))
+      }
+      for (const op of journal.recent()) {
+        if (op.status === 'pending' && op.spec !== undefined && isFileValue(op.spec)) {
+          referenced.add(op.spec.slice('file:'.length))
+        }
+      }
+      // Walk the staging root: *.tgz directly under each first-level dir
+      // (slug dirs from the materialize route; backups/ and deferred.json
+      // carry no archives and are left untouched by the .tgz filter). A
+      // fresh gateway has no staging root yet — that is a silent no-op, not
+      // a warning (boot hygiene: this runs on every boot).
+      const root = thirdPartyRoot(stateDir)
+      if (!existsSync(root)) return
+      let removed = 0
+      try {
+        for (const dirName of readdirSync(root, { withFileTypes: true })) {
+          if (!dirName.isDirectory() || dirName.name === 'backups') continue
+          const dirPath = join(root, dirName.name)
+          let entries: string[]
+          try {
+            entries = readdirSync(dirPath)
+          } catch {
+            continue
+          }
+          for (const file of entries) {
+            if (!file.endsWith('.tgz')) continue
+            const stagedPath = join(dirPath, file)
+            if (referenced.has(stagedPath)) continue
+            try {
+              rmSync(stagedPath, { force: true })
+              removed += 1
+            } catch (error) {
+              warn(`plugins-tasks: could not remove orphaned staged archive ${stagedPath}: ${messageOf(error)}`)
+            }
+          }
+        }
+      } catch (error) {
+        warn(`plugins-tasks: staged-archive orphan sweep could not read ${root}: ${messageOf(error)}`)
+        return
+      }
+      if (removed > 0) {
+        log(`plugins-tasks: staged-archive sweep removed ${removed} orphaned archive(s) under ${root}`)
+      }
+    },
+
     async submit(input, opts) {
       return submitImpl(input, opts?.defer !== false)
     },
@@ -641,9 +731,11 @@ export function createChamberPluginTasks(deps: ChamberPluginTasksDeps): ChamberP
     },
 
     clearIntent(intentId) {
-      // The dropped intent's staged archive can never be consumed — remove
-      // it (design 21 staged-archive GC); a persistence failure still answers
-      // false and leaves the archive for a later sweep.
+      // A cleared intent NEVER executed, so its staged archive is the one
+      // case nothing can consume (no manifest references it — executed ops
+      // retain their archive, see unlinkStagedArchive); a persistence
+      // failure still answers false and leaves the archive for a later
+      // sweep.
       const dropped = loadIntents().find(intent => intent.id === intentId)
       try {
         if (!dropDeferredIntent(intentId)) return false

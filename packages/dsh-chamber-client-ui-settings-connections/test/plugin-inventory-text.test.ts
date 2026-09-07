@@ -3,9 +3,12 @@
  * dsh, no React): the entry classification (plan 24 D7-A — the gateway's
  * cordis.patch.yml insert rows are reported by the host inventory under
  * the raw 'cordis:include <name>' patch syntax; the mobile packaged entry
- * is a chamber row, never third-party) and the chamber row badge mappings
+ * is a chamber row, never third-party), the chamber row badge mappings
  * (plan 24 B1.5 — local manifest truth + remote live-Loader state badge-
- * ized into {labelKey, tone}).
+ * ized into {labelKey, tone}) and the third-party row live-state chips
+ * (Loader-snapshot derived 生效状态 for the local/gateway/http installed
+ * lists — liveness only from an enabled + active fiber, a missing entry
+ * claims a restart, and an unreadable snapshot stays neutral).
  */
 
 import { test } from 'node:test'
@@ -20,6 +23,7 @@ import {
   localChamberBadge,
   remoteChamberBadge,
   thirdPartyEntries,
+  thirdPartyLiveState,
 } from '../src/client/plugin-inventory-text.ts'
 
 test('classifyInventoryEntry: plain module names map to their package class', () => {
@@ -102,4 +106,56 @@ test('remoteChamberBadge: the raw cordis patch-insert report of a chamber row st
   ]
   assert.deepEqual(remoteChamberBadge(entries, MOBILE_PACKAGE), { labelKey: 'chamberBadgeLive', tone: 'ok' })
   assert.deepEqual(remoteChamberBadge(entries, GIT_WORKTREE_PACKAGE), { labelKey: 'chamberBadgeFailed', tone: 'danger' })
+})
+
+test('thirdPartyLiveState: only an enabled + active Loader entry claims live, never an unreadable snapshot', () => {
+  const snapshot: PluginInventorySnapshot = {
+    entries: [
+      { entryId: 'e1', moduleName: 'dsh-mcp-scope', enabled: true, fiberPhase: 'active' },
+      { entryId: 'e2', moduleName: 'dsh-mcp-scope-lazy', enabled: true, fiberPhase: null },
+      { entryId: 'e3', moduleName: 'dsh-mcp-scope-booting', enabled: true, fiberPhase: 'pending' },
+      { entryId: 'e4', moduleName: 'dsh-mcp-scope-loading', enabled: true, fiberPhase: 'loading' },
+      { entryId: 'e5', moduleName: 'dsh-mcp-scope-failed', enabled: true, fiberPhase: 'failed' },
+      { entryId: 'e6', moduleName: 'dsh-mcp-scope-off', enabled: false, fiberPhase: 'active' },
+      { entryId: 'e7', moduleName: 'dsh-mcp-scope-off-loading', enabled: false, fiberPhase: 'loading' },
+    ],
+  }
+  // Matched-entry states are independent of the loader-entry expectation (a
+  // matched entry IS a loader entry): expectations true/false agree here.
+  // enabled + active = the only live claim.
+  assert.deepEqual(thirdPartyLiveState(snapshot, 'dsh-mcp-scope', true), { labelKey: 'thirdPartyLiveActive', tone: 'ok' })
+  // enabled, not yet active (null fiber / pending / loading) → starting, never live.
+  assert.deepEqual(thirdPartyLiveState(snapshot, 'dsh-mcp-scope-lazy', true), { labelKey: 'thirdPartyLiveStarting', tone: 'muted' })
+  assert.deepEqual(thirdPartyLiveState(snapshot, 'dsh-mcp-scope-booting', true), { labelKey: 'thirdPartyLiveStarting', tone: 'muted' })
+  assert.deepEqual(thirdPartyLiveState(snapshot, 'dsh-mcp-scope-loading', true), { labelKey: 'thirdPartyLiveStarting', tone: 'muted' })
+  // enabled + failed → load failure (the shared failed-to-load label).
+  assert.deepEqual(thirdPartyLiveState(snapshot, 'dsh-mcp-scope-failed', false), { labelKey: 'chamberBadgeFailed', tone: 'danger' })
+  // Disabled is dominant, whatever the fiber reports (an unloading fiber may
+  // still be active while the disable lands).
+  assert.deepEqual(thirdPartyLiveState(snapshot, 'dsh-mcp-scope-off', true), { labelKey: 'pluginDisabled', tone: 'muted' })
+  assert.deepEqual(thirdPartyLiveState(snapshot, 'dsh-mcp-scope-off-loading', false), { labelKey: 'pluginDisabled', tone: 'muted' })
+})
+
+test('thirdPartyLiveState: a bundle-layer row without a matching entry claims a restart; a non-layer row stays neutral', () => {
+  const snapshot: PluginInventorySnapshot = {
+    entries: [
+      { entryId: 'e1', moduleName: 'dsh-mcp-scope', enabled: true, fiberPhase: 'active' },
+    ],
+  }
+  // Installed in the profile manifest AS A BUNDLE LAYER but the RUNNING
+  // instance has not mounted it (the Loader reports no such module) →
+  // activates on restart (never a live claim).
+  assert.deepEqual(thirdPartyLiveState(snapshot, 'just-installed-plugin', true), { labelKey: 'thirdPartyLiveRestart', tone: 'warn' })
+  // Exact-name match only: a near name is not the row's entry.
+  assert.deepEqual(thirdPartyLiveState(snapshot, 'dsh-mcp-scope@1.0.0', true), { labelKey: 'thirdPartyLiveRestart', tone: 'warn' })
+  // NOT a bundle layer (plain / client-only dependency — `dsh plugin add`
+  // only promotes dsh.bundle-declaring packages into the layer stack): no
+  // loader entry can ever appear, so a restart promise would be a false
+  // promise — the cell stays neutral.
+  assert.equal(thirdPartyLiveState(snapshot, 'plain-lib-dep', false), null)
+})
+
+test('thirdPartyLiveState: a null snapshot (instance not running / read failed) stays neutral — never a claim', () => {
+  assert.equal(thirdPartyLiveState(null, 'any-plugin', true), null)
+  assert.equal(thirdPartyLiveState(null, 'plain-lib-dep', false), null)
 })

@@ -77,7 +77,7 @@ test('public Host health/preflight pass while an unknown authority is rejected',
     kind: 'token',
     async verify(req) { return req.headers.authorization === 'Bearer secret' ? { kind: 'token', id: 'test', issuedAt: 0 } : null },
   }
-  const proxy = { async handleHttp() {}, async handleUpgrade() {}, getDiagnostics() { return { requests: 0, failures: 0, activeStreams: 0, activeHttpRequests: 0, pendingUpgrades: 0, bufferedRequestBytes: 0 } }, closeAllStreams() {} }
+  const proxy = { async handleHttp() {}, async handleUpgrade() {}, getDiagnostics() { return { requests: 0, failures: 0, activeStreams: 0, activeHttpRequests: 0, pendingUpgrades: 0, bufferedRequestBytes: 0, longRpcRequests: 0, longRpcTimeouts: 0 } }, closeAllStreams() {} }
   const features = { async handle() { return true }, start() {}, stop() {}, async quiesce() {} }
   const dispatch = createGatewayDispatch(auth, () => proxy, () => features, () => ({ async handle() { return false } }), silentLogger, policy)
   const plane = createControlPlane({

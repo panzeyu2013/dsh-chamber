@@ -286,7 +286,9 @@ chamberProvision=seed_host_graph、restartToApply/startFromStopped=restart_servi
   {ok:true, cancelled:true}）**已实现（2026-12，Phase 4.6/5B）**——全部主进程执行 + showMessageBox 确认
   （apply 默认取消）+ 经注册 origin（SPKI/隧道 Host 纪律同 syncGatewayChamberPlugins）；apply = remove 先于
   add（decision 5）+ settle-then-restart + partial 诚实（GatewayPluginApplyIpcResult）；materialize =
-  pick-only 文件夹→tarball（plugin-tarball.ts，容量与 gateway 路由锁步）→ 202/deferred；ssh 后端沿用既有
+  pick-only 文件夹→tarball（plugin-tarball.ts，容量与 gateway 路由锁步）→ 202/deferred；**2026-09 复核修正：
+  直连 202（opId）后在桌面侧等 op 终态（tasks 轮询）+ 请求受控重启并轮询 status——与 apply 同一 settle
+  纪律，返回 {ok:true,outcome:{executed,restarted}}；deferred 意图仍即时返回（网关就绪边沿排空并自动重启一次）**；ssh 后端沿用既有
   IPC 方法名（surface 命名属后端实现细节，不强制重命名），并新增 ssh undo journal/IPC（ssh_plugin_undo，
   撤销=恢复语义）与 SSH_PLUGIN_LIST 掩码挂接（§6.4 统一增量）；
 - **镜像面修正（评审 P1）**：新增写方法的真实编辑集 = preload.cts（方法+invoke 字面量）+ ipc-events.ts
@@ -536,6 +538,10 @@ chamber 移动端参与第三方管理；安装期脚本默认禁行与 OS 用�
   ready/实例（materialize 同款模式），漂移即 ok:false「连接在确认期间变化」，绝不按确认前快照执行。
   ⑩ **staged tgz GC**（审核 P2-A4）：materialize 暂存归档在 op 终态（submitWithLease 终态钩子）、
   submit 拒绝（route 侧）与 deferred 意图清除（clearIntent）三处删除——stateDir 不再无界增长。
+  【2026-09 实机复核修订：**op 终态不再删除**——dsh CLI 会把 `file:<staged>` 永久写进 profile
+  manifest + pnpm lockfile，终态删除令清单悬挂（后续任何重解析/重装会取回缺失 tarball）；保留语义与
+  ssh 通道 `~/.dsh-chamber/plugins/`「kept, never cleaned」一致。submit 拒绝与 clearIntent（从未执行、
+  无任何引用）仍删。】
   ⑪ **persistence_failed 500 码落地**（审核 P2-A5）：deferred 持久化失败经路由包转 500
   `persistence_failed`；executor journal append 失败由 queue_busy 改判 `persistence_failed`，
   submitRefusalStatus 增 500 映射。
@@ -565,4 +571,31 @@ chamber 移动端参与第三方管理；安装期脚本默认禁行与 OS 用�
   200ms 慢关 + 租约授予时序证明：wave1 全 10 意图尝试（8 持租约 + 2 queue_full 释放）、
   第 11 次授予须等首波终态腾槽（gap ≥100ms 断言），5 次连跑稳定。
 - 代码行号以 2026-12 评审期核对为准，实现以实际文件为准。
+- **实机复核记录（2026-09，.172 测试机 gateway 0.2.1 × 桌面 0.2.2 走查；代码与单测已收口，实机 E2E 矩阵仍按 §9 排期）**：
+  ⑱ **sync 400 原因透传**：PUT /chamber/plugins 校验拒绝（invalid_input）改回显具体原因（sanitizeRouteError，
+  例「unsyncable package … this gateway release cannot cache it」），plugins.ts 拒绝文案补充升级指引；桌面
+  syncGatewayChamberPlugins 把网关 body.error（脱敏、≤300B）并入失败串——旧网关（如 0.2.1 不含
+  archive-cleanup）场景不再只报裸 HTTP 400。
+  ⑲ **materialize 桌面 settle 对账（关闭 202-race 陈旧清单）**：gateway_plugin_materialize IPC 在直连 202 后
+  于主进程等 op 终态（GET /chamber/plugins/tasks，1s×120s 预算，复用 apply 的 waitForOpsToSettle）→
+  POST /chamber/runtime/restart → pollRestartSettled；结果联合扩展
+  {ok:true,deferred:true} | {ok:true,outcome:{executed,restarted}} | {ok:false,error,outcome?}（outcome 仅在
+  「已执行但重启失败」类部分失败携带）；preload.cts / renderer global.d.ts / ipc-surface-mirror golden 同步。
+  关键实现注意：settle/status JSON 请求必须用纯 auth 头——误带 materialize 上传的 content-length 会让网关
+  等待不存在的 body（单测锁定）。
+  ⑳ **第三方行生效状态列 + 文案诚实**：local/gateway/http 已安装列表新增「生效状态」chips（Loader
+  pluginInventory 快照按 moduleName===包名匹配：生效中/加载中/加载失败/已停用/重启后生效；本地实例经
+  /api/i/local 读快照，读失败静默置中性 —— 清单文件永远不作 live 断言）；gateway 导入成功文案按 outcome
+  区分（materializeLive / restartNeededHint / deferredOfflineNote）；local add/import 成功不再谎报「已应用」
+  （dsh plugin add 只改本地 profile，重启后挂载）；ssh doApply 成功后自动重载已安装列表（原停留陈旧至手动刷新）。
+  ㉑ **暂存归档引导期孤儿清扫（audit 跟进）**：⑲ 的「op 终态保留」消除了 manifest 悬挂，但
+  重传/卸载周期会留下无引用归档——boot 时机（journal 对账后、executor 空闲、路由尚未可并发
+  stage）按「profile manifest file: 引用 ∪ deferred 意图 ∪ live(pending) op」保留集清扫
+  third-party 根下无引用 *.tgz（backups/ 与 deferred.json 不受影响；根缺失静默）。有界增长 =
+  引用集 + 在途工作。
+  ㉒ **第三方行生效状态类别诚实（audit 跟进）**：thirdPartyLiveState 增 expectsLoaderEntry——
+  快照无条目时仅 bundle-layer 行（localList.bundles / installed.bundles）显示「重启后生效」；
+  plain/client-only 依赖（dsh plugin add 只把 dsh.bundle 声明包提升为 layer）永远不会有
+  Loader 条目，状态格中性（防「重启也不会生效」的假承诺）。
+
 - **UX 重构登记（2026-12，插件管理面 UX 重构 P1 形态同构落地）**：ssh 分支不再默认呈现整盘 diff 表（原 sync 三标签首屏），改为与 gateway/local 同骨架的主视图（已安装列表 + 添加区 + 范围注），legacy diff 折叠为「与本地插件组合存在 {n} 处差异 — 展开对账」次级入口；展开后 rows/filter/apply/undo 语义与按钮逐字保留，应用动作仅在展开态出现在 footer。§6.6/§10 中「ssh 视图逐字保留 / 纯测试守护」承诺相应修订为：**纯模型层与后端行为不变，仅默认呈现与入口层级改变**（原 sync/add/list 标签条移除、添加区并入主视图「已安装」列表下方；改动全在 settings-connections 渲染层（PluginDialog 与 ConnectionsSection）与 locales 文案键值（新增 6 键 × zh/en，其余值级）；门禁：typecheck:connections / test:connections / build:renderer）。动因：ssh 与 gateway 观感一致性（用户走查 P1：同模型两种长相）。

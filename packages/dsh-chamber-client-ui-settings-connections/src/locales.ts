@@ -222,6 +222,9 @@ export const zh = {
   pluginsColName: '包名',
   pluginsColCategory: '类别',
   pluginsColStatus: '状态',
+  // 第三方已安装行的「生效状态」列头（Loader 快照派生；与 diff 表的
+  // pluginsColStatus 行类别列区分——本地/远端列表专用列头）。
+  pluginsColLiveState: '生效状态',
   pluginsColAction: '操作',
   pluginsFilterAll: '全部',
   pluginsFilterDiff: '仅差异',
@@ -260,8 +263,15 @@ export const zh = {
   inventoryError: '无法读取插件清单',
   inventoryNoThirdParty: '没有第三方插件',
   chamberRemoteFailed: '远端：已注入（加载失败）',
-  pluginPhaseFailed: '加载失败',
   pluginDisabled: '已停用',
+  // 第三方行生效状态 chips（Loader 快照派生，local/gateway/http 行内状态）：
+  // 生效中（ok）/ 加载中（muted）/ 重启后生效（warn）；已停用复用
+  // pluginDisabled，加载失败复用 chamberBadgeFailed。
+  thirdPartyLiveActive: '生效中',
+  thirdPartyLiveStarting: '加载中',
+  thirdPartyLiveRestart: '重启后生效',
+  // gateway 本地导入（文件夹/.tgz）成功且受控重启已生效：插件已挂载在运行实例上。
+  materializeLive: '已安装并已重启生效',
   chamberSyncNow: '重新同步 chamber 组件',
   chamberSyncBusy: '同步中…',
   chamberSyncUploaded: '已同步并已触发重启',
@@ -543,6 +553,10 @@ export const en: Record<SettingsConnectionsKey, string> = {
   pluginsColName: 'Name',
   pluginsColCategory: 'Category',
   pluginsColStatus: 'Status',
+  // Live-state column header for the third-party installed lists (Loader
+  // snapshot derived; distinct from the diff table's pluginsColStatus
+  // row-kind column — this header is for the local/remote list grids).
+  pluginsColLiveState: 'Live state',
   pluginsColAction: 'Actions',
   pluginsFilterAll: 'All',
   pluginsFilterDiff: 'Differences',
@@ -582,8 +596,17 @@ export const en: Record<SettingsConnectionsKey, string> = {
   inventoryError: 'Could not read the plugin list',
   inventoryNoThirdParty: 'No third-party plugins',
   chamberRemoteFailed: 'Remote: injected (failed to load)',
-  pluginPhaseFailed: 'Failed',
   pluginDisabled: 'Disabled',
+  // Third-party row live-state chips (Loader-snapshot derived, in-row state
+  // for the local / gateway / http zones): Active (ok) / Starting (muted) /
+  // Activates on restart (warn); Disabled reuses pluginDisabled, failed to
+  // load reuses chamberBadgeFailed.
+  thirdPartyLiveActive: 'Active',
+  thirdPartyLiveStarting: 'Starting',
+  thirdPartyLiveRestart: 'Activates on restart',
+  // Gateway local import (folder / .tgz) success with the controlled restart
+  // settled: the plugin is mounted on the running instance.
+  materializeLive: 'Installed and live (restarted)',
   chamberSyncNow: 'Re-sync chamber components',
   chamberSyncBusy: 'Syncing…',
   chamberSyncUploaded: 'Synced; restart triggered',
