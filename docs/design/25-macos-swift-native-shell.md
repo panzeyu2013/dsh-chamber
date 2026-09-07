@@ -44,10 +44,9 @@
   `IPC_CHANNELS`（68 键、当前全部恰用一次），由 `ipc-surface-mirror.test.ts`
   锁步（锁步范围 = 通道名字符串集合 + 类型/字段镜像，不含方向/命名空间归属
   ——manifest 生成器需补该维度，见 §4.4.3）。
-- **工作量（熟练工程师人-周，单人 ×2.5；详见 todo companion）**：M0 立项门
-  1–2 → M1 P0 证伪门 5–10 → M2 P1 core 拆分 10–15 → M3 P2 Swift 壳 v1 15–20
-  → M4 P3 边沿完整 + 打包/公证/CI 10–15 → M5 P4 实机门禁 5–10；合计
-  **46–72 人-日（9–14 人周）**。Electron 版全程并行保留（P1 的前提），
+- **工作量（熟练工程师人-日；日历折算与三档排期见 todo companion §九）**：M0
+  1–2 → M1 5–10 → M2 10–15 → M3 15–20 → M4 10–15 → M5 5–10（单位均为人-日）；
+  合计 **46–72 人-日（9–14 人周）**。Electron 版全程并行保留（P1 的前提），
   Win/Linux 不受影响。
 - **不做什么**：不重写 UI（对照 luochenw/deepseek-harness-macos 的全原生
   路线，那是 3–6 人月起步并伴随永久 parity 维护）；不在 Swift 里重写宿主
@@ -60,6 +59,10 @@
   §9 R1）。
 
 ### 0.1 v1 → v2 打磨轮闭合清单（评审 Major/Minor 处置摘要）
+
+> 编号说明：本表「来源」沿用评审报告五维分类（A 事实 / B 完整性 / C WebKit /
+> D 语义 / E 一致性），其中 E1/E2/E7/E8 与 §5 原生边沿表 E1–E20 **分属不同
+> 编号域**；正文引用写作「§0.1-E1」等以示区分。
 
 | 来源 | 发现 | 处置 |
 |---|---|---|
@@ -93,7 +96,7 @@
 | D3 | 通知 click 需先激活窗口 | click 顺序 = NSApp.activate + orderFront（含无窗重建）→ 回 B 桥 → core 队列；HostEdges 补 focusMainWindow() |
 | D4/D6 | 退出链三分支 + 5s 硬顶 + LOCAL_RUNNING_STATES 判据 | §3.3/§5 E9 补 |
 | D8 | ready 帧与 INFO 双源漂移 | ready 帧最小化（port + shellVersion），其余全走既有 dsh-chamber:info |
-| E1 | §7 v1 降级用 idle|error 会让 UI 永不出现入口且显示失败态 | 改用现成 **blocked-available 形态**：真实 check（对比 GitHub Releases，复用 updater.ts 纯函数）→ phase='available' + releaseUrl + installBlockedReason='原生壳不支持自动安装'；update-restart 显式错误 |
+| E1 | §7 v1 降级用 idle\|error 会让 UI 永不出现入口且显示失败态 | 改用现成 **blocked-available 形态**：真实 check（对比 GitHub Releases，复用 updater.ts 纯函数）→ phase='available' + releaseUrl + installBlockedReason='原生壳不支持自动安装'；update-restart 显式错误 |
 | E2 | 共享 renderer 缺 shell-flavor 判别字段（platform 同为 darwin） | `dsh-chamber:info` 载荷增 **flavor: 'electron'\|'swift'**；同步 preload/global.d.ts/镜像测试；UI 门（更新文案等）加 flavor 条件 |
 | E7 | W6 应注明无 backgroundThrottling 等价物 | §8.5 W6 注（同 C1） |
 | E8 | shim 是第三处通道面，手写会漂移 | manifest 同时产出 Swift 枚举 + chamber-bridge.js 存根；测试断言两者 == 提交物 |
@@ -300,7 +303,7 @@ interface HostEdges {
   openExternal(url: string): Promise<void>                    // 预算/冷却/规范化在 core（B11）
   openPath(p: string): Promise<void>
   showItemInFolder(p: string): void
-  launchApp(appId: string, path: string): Promise<boolean>    // open-in 原生拉起（§5.5）
+  launchApp(appId: string, path: string): Promise<boolean>    // open-in 原生拉起（§5 E12）
   // 对话框（E8：仅插件源 folder|.tgz 一体化 picker，design 21 §10 ⑧/13 §5.8）
   pickPluginSource(): Promise<{kind:'folder'|'tgz'; path:string} | null>
   showError(title: string, detail: string): void
@@ -404,7 +407,7 @@ interface HostEdges {
 - 新增 `scripts/emit-bridge-manifest.mjs`：解析两侧 → 产出
   `bridge-manifest.json`（通道名 + **方向 invoke|push + 归属命名空间**）→
   Swift 构建期生成 `BridgeManifest.swift` **和 chamber-bridge.js 存根**
-  （E8：shim 是第三处通道面，方法/事件面自动产出，防手写漂移）→ 新增
+  （§0.1-E8：shim 是第三处通道面，方法/事件面自动产出，防手写漂移）→ 新增
   `bridge-manifest.test.ts`：生成物 == 提交物 + **通道数守恒（68 = 60+8）+
   无死键断言**（每个 IPC_CHANNELS 常量至少被 main 侧使用一次，B12/E8）——
   三侧（main/preload/Swift+shim）永不漂移。
@@ -504,7 +507,7 @@ interface HostEdges {
     互斥（flock 按 open file description 计）——sidecar 复验 = 读锁文件记录
     校验父 pid，**绝不二次 flock**；
   - 锁文件与秘密文件同纪律（0600、no-follow、原子创建）；新增 .lock 需随
-    立项登记进 AGENTS/STATUS 秘密文件纪律清单（D7）。
+    立项登记进 AGENTS/STATUS 秘密文件纪律清单（随 D1 立项登记）。
 - 与既有机制关系：RuntimeOperationFence/RuntimeWriterFence（进程内单飞，
   dsh-runtime/runtime-operation-fence.ts）与跨进程 flock **正交互补**。
 
@@ -522,7 +525,7 @@ interface HostEdges {
 ## 7. 更新（design 11 的 Swift 侧形态）
 
 - Electron 版维持 electron-updater（GitHub provider、zip target）不动。
-- **Swift 版 v1 = 诚实 blocked-available 形态（E1 修订，不用 idle|error）**：
+- **Swift 版 v1 = 诚实 blocked-available 形态（§0.1-E1 修订，不用 idle|error）**：
   UpdateState.phase 七值与接口方法/字段集（6 通道）**全部不变**（消费面
   settings-bridge UpdateSection.tsx/update-store/update-gate 零契约改动），
   只换控制器实现：真实 check（对比 GitHub Releases，可复用 updater.ts 纯
@@ -532,7 +535,7 @@ interface HostEdges {
   update-restart 返回显式错误；updateDownloadReady 豁免恒 false（before-quit
   腿自然豁免，文档明示该差异）。**禁止**把检查合并为"打开发布页"——那会让
   UI 永不出现入口且每次检查显示失败态。
-- **shell-flavor 判别字段（E2）**：共享 renderer 无法用 platform 区分两 flavor
+- **shell-flavor 判别字段（§0.1-E2）**：共享 renderer 无法用 platform 区分两 flavor
   （同为 'darwin'）→ `dsh-chamber:info` 载荷增 `flavor: 'electron'|'swift'`
   （或能力位 updateAutoInstall/notificationPermission），同步
   preload.cts/global.d.ts/L3 镜像测试；UI 能力门（更新文案/重启安装按钮等）
@@ -554,7 +557,7 @@ interface HostEdges {
    `pnpm run dev:desktop`，vite 直写 dist/web 由控制面伺服；P1 起可给
    standalone 加 --web-dist 或走 dev:sidecar）。
 2. 手写 shim 接通 3 个通道：`info`、`desktop_ssh_instances_get`、
-   `desktop_ssh_connect/status` 推送；通知 click 回 core 语义打桩。shim 挂出
+   `desktop_ssh_status_changed` 推送；通知 click 回 core 语义打桩。shim 挂出
    时机二选一对拍（§4.4.1 D1）。
 3. 验收门（**G1–G5 + C1/C2，全过才继续**）：
    - G1 主界面（多实例/会话/设置页）在 WebKit 渲染无功能缺口；
@@ -569,7 +572,9 @@ interface HostEdges {
      会话 cookie/登录态表现实测并定共存语义；
    - P0 预检：双端同机跑 boot 参考点（方法见 companion §七「双端性能与产物体积
      验收协议」），只为尽早暴露引擎级数量级异常，**不作定标**。
-   任何一项失败 → 回到本文档重审路线（§10 决策 1）。
+   G1–G5 任一实质失败 → 回到本文档重审路线（§10 决策 1）；**C1/C2 除外**——
+   按 §0.1 闭合清单处置（C1 失败 = 登记已知降级或走 keep-alive/唤醒补发方案；
+   C2 = 定共存语义记录后继续），不触发路线重审。
 
 ### 8.2 P1 core 拆分（2–3 人周，Electron 不回归）
 

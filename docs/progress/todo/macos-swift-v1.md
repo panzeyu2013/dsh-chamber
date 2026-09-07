@@ -4,7 +4,7 @@
 > WKWebView + Node sidecar 全复用，方案草案 **未立项**）。本文件是其 companion 实施
 > 计划（windows-v1.md 先例）：把 design 25 的 P0–P4 细化为 **M0–M5 六道门** + WBS
 > 任务表 + runbook + 施工单 + 门禁清单 + 中止条件，随里程碑推进同步更新 STATUS。
-> 命令/脚本/测试名以 swift 分支现状（HEAD c4a2c2d）核实为准；**需新增**均标注（新增）。
+> 命令/脚本/测试名以 swift 分支当前 HEAD 为准（代码面自 258d6ab 起未变）；**需新增**均标注（新增）。
 > 本文档本身不实现任何功能——执行须先过 M0 决策包与 M1 P0 证伪门（design 25 §8.1
 > G1–G5），任一实质失败即回 design 25 §10 决策 1 重审，不硬着头皮继续（中止点见 §七）。
 
@@ -13,7 +13,7 @@
 ≈0.7 折算；③ P0 验证门过才续投；④ 总估时 **46–72 人-日（9–14 人周）**，对齐
 design 25。
 
-## 已核实关键事实（本计划锚点；行号以 swift @ c4a2c2d 为准）
+## 已核实关键事实（本计划锚点；行号以 swift 分支当前 HEAD 为准，代码面自 258d6ab 起未变）
 
 - 桥面：`packages/desktop/ipc-events.ts` IPC_CHANNELS 共 **68 条 = 60 个
   `ipcMain.handle`（main.ts，全包 trustedIpc）+ 8 条 `webContents.send` 推送**
@@ -41,7 +41,7 @@ design 25。
   （webDistDir=<pkg>/dist/web:1813、stateDir=<userData>/state:1790）；handle 区散布
   :1898–5568；updateController 注入 ≈:3990–4000（已有抽象控制器 seam）；resume:
   2007–2016、held lastResume:894–905/1434–1440；端口裁决 resolveControlPlanePort:
-  254–276。
+  264–281。
 - 端口语义（修正）：控制面 listen 单次绑定、EADDRINUSE 即失败**不重试**（control-plane
   index.ts:895–918）；**打包态固定 17500**（main.ts:270–272）；dev 态从 17520 起
   findFreePort 探测 200 个（free-port.ts:65–90），或 `DSH_CHAMBER_CP_PORT` 钉死。
@@ -86,9 +86,178 @@ design 25。
   downloading|downloaded|error；UpdateState :111–134；消费面 settings-bridge
   UpdateSection.tsx + update-store/update-gate；**通道 6 个与接口方法/字段集在 v1 降级下
   全部不变，仅控制器语义收窄** → §7 契约面零改动。**v1 形态 = blocked-available
-  （真实 check + installBlockedReason，E1 修订，禁用 idle|error 假降级）；info 载荷增
-  flavor: 'electron'|'swift'（E2）；before-quit 的 updateDownloadReady 豁免恒 false
+  （真实 check + installBlockedReason，§0.1-E1 修订，禁用 idle|error 假降级）；info 载荷增
+  flavor: 'electron'|'swift'（§0.1-E2）；before-quit 的 updateDownloadReady 豁免恒 false
   属预期（D4）**。
+
+## 0. M0 决策包与执行入口（签核即开工）
+
+### 0.1 D1–D7 决策签核表
+
+| 决策 | 一句话含义 | 推荐默认值（引用 §八） | 最迟拍板门 | 签核 |
+|---|---|---|---|---|
+| D1 路线确认 + P0 先行 | 是否按路线 A（WKWebView + Node sidecar 全复用）启动 1–2 周 POC | 启动 P0；G1–G5 + C1/C2 全过才续投（§八 D1；design 25 §8.1） | M0 出口（启动）；**M1 出口复核（继续门）** | ☐ |
+| D2 双壳共存 + bundle id | Swift 与 Electron 长期共存还是 mac 替换；授权/打包身份是否区分 | **共存**；bundle id `com.dshchamber.native`（§八 D2；后改 = 通知授权重来 R4 + 打包身份返工） | M0（立项即定） | ☐ |
+| D3 更新路线 | Swift 壳更新走哪种形态 | v1 **blocked-available** 诚实形态（真实 check → phase='available'+releaseUrl+installBlockedReason）→ v2 Sparkle（§八 D3；design 25 §7「§0.1-E1」） | M2 出口（W-14 同批） | ☐ |
+| D4 仓库落位 | Swift 代码放哪 | `macos/`（SwiftPM，§八 D4；design 25 §3.2 同布局） | **M1 前**——POC 建目录即定（W-03 起生效） | ☐ |
+| D5 原生 UI 渐进（路线 B/C） | 是否排期 Swift 原生 UI | 不做；HostEdges 边界即未来接缝（§八 D5） | M2 出口（登记范围外即可） | ☐ |
+| D6 Node 版本/架构/来源 | sidecar 捆绑 node 的版本、架构与获取方式 | 大版本对齐 desktop Electron 43.4.0 内置 Node（确切 minor 以安装态 `process.versions.node` 核实）；**v1 arm64-only**（x64 登记后续）；来源见表下实证 | M3 入口（W-23 sidecar 捆绑落地前） | ☐ |
+| D7 静态凭据加密 | v1 是否做 Keychain 协助加密 | 不做：诚实 0600 明文 + 旧 safeStorage「保留禁用待重录」（判别单测 S1；§八 D7） | M4 出口复查 | ☐ |
+
+补充决策输入（§八 没有的两条）：
+
+- **D6 Node 来源两派实证**（市面参考仓库实况，design 25 §2 [待核-外部]，2026 源码级核实）：
+  summer-521/deepseek-harness-swift 派 = **构建期 fetch 官方固定版本 + SHA-256 校验**后落
+  `.app/Contents/Resources/node/bin/node`（`scripts/fetch-node.sh` +
+  `NodeRuntime.swift` 解析链；产物可复现、确定性，与本仓固定 pin/ensure 惯例同向）——
+  **推荐前者**；luochenw/deepseek-harness-macos 派 = 取构建机 node + `lipo` 验架构
+  （`scripts/build-macos-app.sh`；省一次下载，但构建机漂移不可复现）。
+- **D4 落位推荐 `macos/`**：与 design 25 §3.2、§八 D4、W-03 三者一致；后移 = 全部
+  路径/CI/脚本返工。
+
+**签核方式：在 companion 此表打勾并提交，即 M0 启动**（M0 出口必须：D1=启动 P0、
+D2=共存 + `com.dshchamber.native`、D4=`macos/`，D6 至少初定；D3/D5/D6/D7 到门复核）。
+
+> 表关系：§0.1 = **签核视图**（本执行入口），§八 = **契约视图**（最迟拍板门与错过
+> 后果）——两表同源，改动必须两处同步。
+
+### 0.2 M0 → M1 执行入口 Checklist（W-01…W-08）
+
+> 标记约定：**[用户机]** = 需 node/pnpm 或 GUI 交互，执行沙箱不可跑；**[沙箱可跑]** =
+> 工具链实测支持（swift 6.3.3 / xcodebuild / `xcode-select -p` 正常，零依赖 `swift build`
+> 已 dry-run 通过）。命令逐一核实自 root/desktop/renderer package.json scripts 或 SwiftPM
+> 内建；M0/M1 需新增脚本 = 0 条（root 新命令 `dev:sidecar` 属 M2，届时标 🆕）。
+
+**① 环境验证（W-01 G0 部分）**
+- [用户机] 定位/安装 **node ≥24 与 pnpm**（M0 环境门第一条；沙箱实测 node/npm/pnpm 全
+  MISSING；root engines `node>=24.0.0`、packageManager `pnpm@11.21.0`）：装 node ≥24 后
+  `corepack enable`（或 `npm i -g pnpm@11.21.0`），验 `node --version`（≥v24）、
+  `pnpm --version`（=11.21.0）。
+- [沙箱可跑] `swift --version`（=6.3.3）；`xcode-select -p`。
+- [用户机] `node scripts/dev/ensure-harness-vendor.mjs` —— **必须在 pnpm install 之前显式
+  跑**（脚本头注释明示 preinstall 快照捕获过早；沙箱 vendor/harness-packages 链接树未
+  物化，仅 submodule 检出）。
+- [用户机] `pnpm install --frozen-lockfile`（preinstall 幂等复跑 ensure + postinstall
+  ensure-electron 拉 Electron 43.4.0）。
+- [用户机] `pnpm run typecheck`；[用户机] `pnpm run build:renderer`（vite 直写 → 预期产物
+  `packages/desktop/dist/web/index.html` + `packages/desktop/dist/web/manifest.json`）。
+- **门禁判据**：六条全 0 退出且产物文件存在；node/pnpm 缺失是前置安装问题，不在沙箱误跑。
+
+**② W-01 决策表签核 + U1 实根核验（0.5–1 人-日）**
+- 0.1 决策表打勾提交（D1/D2/D4 + D6 初定）＝ M0 退出条件之一。
+- [用户机] U1：`ls "$HOME/Library/Application Support/"`；`ls "$HOME/Library/Application
+  Support/dsh-chamber"` —— 实测实根不存在（仅 `@dsh-chamber`）→ 登记「无打包版历史
+  userData，C2 对比需先有 Electron 打包/隔离会话」；若存在则核对 `state/dsh-home`、
+  `dsh-runtime/`、`chamber-settings.json` 布局。锚点：desktop package.json
+  `build.productName='dsh-chamber'` / `appId='com.dshchamber.desktop'`（已核实）。
+- **门禁判据**：签核 commit 存在 + U1 记录入库 → M0 出口达成。
+
+**③ W-02 文档动作（0.5 人-日）**
+- 改 3 文件：本文件（§0 合入 + 头部锚点更新 + 状态行注明「M0 已签核」）；
+  `docs/progress/STATUS.md`「设计未决」macos Swift 词条补一句「D1–D7 已签核（日期）、M0
+  过、执行中（M1）」；`docs/progress/todo/README.md` 目录表第 4 行状态列 →「M0 已签核；
+  执行中（M1）」。
+- 本清单自检：复核 0.1/0.2 全部命令与文件路径（需新增命令 = 0 条）。
+- **门禁判据**：三文件 diff 合入、零产品代码改动。
+
+**④ W-03 SwiftPM 骨架 + 最小窗口（1.5–2.5 人-日）**
+- 新建：`macos/Package.swift`（executableTarget `DSHChamberPoc`、platforms macOS 13+、零
+  第三方依赖）+ `macos/Sources/DSHChamberPoc/{main.swift, AppDelegate.swift,
+  MainWindowController.swift}` 三件套（最小窗口 + WKWebView 载 `http://127.0.0.1:17520/`）。
+- [沙箱可跑] `cd macos && swift build` → 产物 `macos/.build/debug/DSHChamberPoc`。
+- [用户机 GUI] 前置起共享 dev 后端：`DSH_CHAMBER_CP_PORT=17520 pnpm run dev:desktop`
+  （背景进程；首启懒构建 renderer；`.dev-user-data` 隔离）；再跑
+  `.build/debug/DSHChamberPoc`（或 `swift run DSHChamberPoc`）目测。
+- ATS：[待核] 字面 IP 通常入 NSAllowsLocalNetworking 豁免；被拦 → `-Xlinker -sectcreate
+  __TEXT __info_plist <临时 plist>` 或改 `http://localhost:17520/`。
+- **门禁判据**：swift build 0 退出（沙箱可验）；窗口渲染 dsh 主界面（veil → 侧栏）。
+
+**⑤ W-04 A 桥雏形（1–1.5 人-日）**
+- 新建：`macos/Sources/DSHChamberPoc/{BridgeShimInjector.swift, MessageHandler.swift}` +
+  注入脚本 `bridge-shim.poc.js`（WKUserScript、.page world、documentStart；4 标量 + 9 面
+  形状，只实现 desktopSsh/settings 最小集，其余统一 loud `{error:'poc-unimplemented'}`
+  绝不静默；info 10×50ms 重试照搬 preload）；主 frame + origin（port 仅 ready 后放开）
+  护栏雏形。
+- 对拍（不设门，登记结论）：shim 挂出时机二选一——Swift ready 后注入 vs documentStart
+  预定义统一 reject（design 25 §4.4.1 D1）。
+- **门禁判据**：页面 console 见 info 返回 + `window.dshChamber.controlPlaneUrl === cp
+  origin`（[用户机 GUI]）；swift build 仍绿。
+
+**⑥ W-05 垂直切片（1.5–2.5 人-日）**
+- 新建：`packages/desktop/poc-sidecar.ts`（NDJSON 原型 B 桥服务端；P1 由 sidecar-entry.ts
+  替换）+ Swift 侧 B 桥客户端原型（`BridgeProto.swift`：spawn `node packages/desktop/
+  poc-sidecar.ts`，信封 `{id,method,payload}/{id,ok,result|error}/{event,payload}`）。
+- 语义：instances_get 直读 `.dev-user-data` registry（预期文件
+  `packages/desktop/.dev-user-data/ssh-instances.json`，由 dev 会话写入；无 →
+  `{error:'poc-no-registry'}`）；状态推送优先真实 transport-manager，最小伪造须 loud
+  标注；通知 edge 打桩：点击 → notification-clicked → sidecar 日志 → push
+  notification-open 回 web。
+- **门禁判据**：三拓扑全通——invoke 拿结果 / 订阅收 push 且 UI 有反应 / 通知点击有 click
+  日志（[用户机 GUI]；沙箱只跑 swift build 静态验证）。
+
+**⑦ W-06/W-07 G 门走查（2 人-日，S6/S7 清单）**
+- W-06（G1/G3）：多实例/会话/设置页逐页目测；git 侧栏、open-in、settings-bridge chamber
+  全局页可用。
+- W-07（G2/G5 + C1/C2）：富文本复制粘贴保格式（外部富文本 app 验证）、文件拖 composer、
+  外链 → 系统浏览器、**非 http(s) scheme 外链导航（mailto:/vscode://，design 25 G2/C6）**、
+  Cmd+Q/红点关窗/唤醒即时重连；**C1** hide ≥30s 后 SSE/WS 心跳不断、
+  唤醒即时（backgroundThrottling:false 无 WKWebView 等价物）；**C2** 双 flavor 交替同一
+  userData/dsh 实例时 WebKit 独立存储 jar 会话 cookie/登录态实测并定共存语义。
+- **门禁判据**：G1/G3 无实质缺口（minor 样式可归类）；剪贴板/拖拽不过 → 归因 1–2 天，
+  仍不过 = A2 → 回 D1 重审；C1/C2 结论显式登记（不过按 W6 判定表 = 已知降级登记）。
+
+**⑧ W-08 G4 + P0 报告 + D1 门复核（0.5–1 人-日）**
+- G4：深链冷启动——dev 无 bundle，模拟三候选 [待核]（① 临时 Info.plist + 最小打包；
+  ② NSAppleEventManager 注入；③ 直调 deep-link intent 队列打桩，三选一）；通知点击激活
+  会话。
+- 报告：0.3 登记表填 W-01…W-08 全部行 + 证据文件；STATUS/todo README 同步；**D1 门评审**：
+  G1–G5 全过 → 续投 M2（W-09 起）；任一实质失败 → 中止 A1/A2 → 回 design 25 §10 决策 1
+  重审，不硬续。
+- **门禁判据**：G1–G5 证据齐全、登记表结论入库、评审记录可查。
+
+**沙箱内可做/不可做分界**：凡 `node …`/`pnpm …` 前缀与 JS 侧动作（install/typecheck/
+build:renderer、`dev:desktop`、poc-sidecar 起动）全部 **[用户机]**（沙箱无 node/pnpm）；
+Swift 侧 `swift build`/`swift test`/`swift run` 为 SwiftPM 内建且工具链沙箱实证可用 →
+W-03 起骨架文件落地即可在沙箱执行验证；窗口目测/剪贴板/拖拽/通知/深链/心跳走查 =
+**[用户机 GUI]**。
+
+### 0.3 首轮执行登记模板 + 开工前风险提示
+
+**门禁登记模板**（自 W-01 起逐门补行；结论用 STATUS 惯用「过 / 不过 / 全勾或显式
+残余」，禁止空白门禁；证据文件写精确路径或 [GUI 目测 + 记录于本行]）：
+
+| 日期 | 门（W-xx） | 证据文件 | 结论 | 残余与后续 |
+|---|---|---|---|---|
+| （示例）2026-XX-XX | W-01 | 0.1 表签核 commit <sha>；U1 记录；G0 命令日志 | 过 | D3/D5 待 M2 出口、D6 minor 待安装态核实 |
+| | W-02 | | | |
+| | W-03 | | | |
+| | W-04 | | | |
+| | W-05 | | | |
+| | W-06 | | | |
+| | W-07 | | | |
+| | W-08 | | | |
+
+**开工前风险提示（8 条）**：
+1. **node/pnpm 缺位**（沙箱实测 MISSING）——W-01 首步用户机装 node ≥24 + pnpm@11.21.0；
+   带 [用户机] 标记的命令一律不在沙箱跑，缺 node 不误判为仓库故障。
+2. **vendor/harness-packages 未物化**（沙箱仅 submodule 检出，链接树缺失）——
+   `pnpm install` 前显式 `node scripts/dev/ensure-harness-vendor.mjs`（脚本头明示 preinstall
+   快照过早）；失败先查 submodule HEAD vs `harness.commit`。
+3. **`.dev-user-data` 脏目录**（旧 registry/端口/单实例残留）——`rm -rf
+   packages/desktop/.dev-user-data` 后重启 dev（runbook S2 排查同款）；P0 全程单目录顺序
+   使用，不并发。
+4. **dev 端口 17520 冲突 / 双后端竞态（R10）**——`DSH_CHAMBER_CP_PORT` 钉死并同步 Swift
+   常量；被占改 17521；Electron dev 与 POC sidecar 分时启动。
+5. **electron-dev.mjs:11/53 陈旧 `dist/index.html` 探测**（实产 `dist/web/index.html`）——
+   每次 dev 全量重建 renderer：正常但慢，runbook 已登记，勿当死循环故障排查。
+6. **A1/A2 中止门含义**——P0 G1 实质缺口 = 承载面证伪；G2 剪贴板/拖拽硬伤给 1–2 天
+   归因修复、仍不过即中止；两者都回 design 25 §10 决策 1 重审，绝不硬续；沉没上限 ≈ 2–3
+   人-日（W-05 切片论证）。
+7. **Apple 凭据缺位只影响 M4/M5 发布门**——M0–M3 零阻塞；发布门按 A6 语义 dry-run 全链
+   绿即推进代码、登记外部阻断，不声称完成。
+8. **未决实证项别提前锁死**——C1/C2 是 G 门实测项（P0 前不投打包/纵深）；D6 确切 minor
+   在用户机依赖装好后以 `ELECTRON_RUN_AS_NODE=1` 跑 Electron 读 `process.versions.node`
+   钉入决策记录，M3 入口前闭合即可。
 
 ## 一、里程碑 M0–M5 与 WBS
 
@@ -97,8 +266,8 @@ M4(P3 边沿 + 打包/CI) → M5(P4 实机门禁 + 发布)。
 
 ### M0 立项核验与决策包（1–2 人-日）
 
-- 目标：D1–D7 收敛为决策记录（§八）；核验 design 25 §6.1 验证项 E2（userData 实根）；
-  P0 runbook 定稿。
+- 目标：D1–D7 收敛为决策记录（§八 / §0.1 签核表）；核验 design 25 §6.1 验证项 U1
+  （userData 实根）；P0 runbook 定稿。
 - 做：决策登记表 + G0 环境清单（swift 工具链、`pnpm install --frozen-lockfile`、
   `pnpm run build:renderer` 验证 dev 资产）+ 本机既有 dsh-chamber 目录/bundle id 实况归档。
 - 不做：不写产品代码、不改 design 25 正文。
@@ -167,11 +336,14 @@ M4(P3 边沿 + 打包/CI) → M5(P4 实机门禁 + 发布)。
 
 ### M4 P3 边沿完整 + 发布管线（10–15 人-日；双人 ≈8–11 日历日）
 
-- 目标：更新 v1 诚实形态（打开发布页，D3 默认）；sidecar Node 捆绑与装配；
+- 目标：更新 v1 **blocked-available 诚实形态**（真实 check + installBlockedReason，D3
+  默认）或 v2 Sparkle（按决策）；sidecar Node 捆绑与装配；
   build-swift-app.mjs（swift release + 资源 + 签名 + dmg/zip）；CI 新增 macOS 腿
   （push 门禁）与 release Swift 产物腿；双端同 tag 发布演练。
-- 做：更新 seam Swift adapter（state→idle|error、check/download→打开发布页、restart→
-  明确错误、UI 文案诚实）；Node fetch（arm64、SHA-256）→ .app/Contents/Resources/
+- 做：更新 seam Swift adapter（**blocked-available：真实 check → phase='available' +
+  installBlockedReason='原生壳不支持自动安装'、update-restart 明确错误**、UI 文案诚实，
+  禁用 idle|error 假降级与「检查=打开发布页」合并——design 25 §7 E1 语义）；Node fetch
+  （arm64、SHA-256）→ .app/Contents/Resources/
   sidecar/node（**必须命名 node**）；签名/公证照抄 release.yml mac 腿既有做法；ci.yml
   新增 test-macos job；release.yml 新增 Swift 产物腿；test:release-workflow 同步。
 - 不做：不做 x64（v1 arm64-only）；不做 Keychain 加密 edge（D7 默认推迟）；不做 Sparkle
@@ -190,7 +362,7 @@ M4(P3 边沿 + 打包/CI) → M5(P4 实机门禁 + 发布)。
 - 目标：design 25 §8.5 打包态全链矩阵 + W1–W6 parity 判定 + 性能基线对照（§七双端
   性能/产物体积验收协议）；双端同 tag 正式发布；STATUS/todo 收口。
 - 做：按 STATUS 既有清单风格登记残余；性能对照 docs/progress/performance-baseline.md
-  方法（启动/内存/会话切换）；W1–W6 判定（§七标准）；CHANGELOG。
+  方法（启动/切换；内存与体积见 §七双端协议）；W1–W6 判定（§七标准）；CHANGELOG。
 - 不做：新功能；非阻断残余只登记。
 - 退出标准：门禁矩阵全勾或残余显式登记；双端产物同 tag 发布且冒烟过。
 
@@ -205,13 +377,13 @@ M2 出口（Swift 开工前置：B 桥协议定稿 + sidecar 可起 + HostEdges 
 
 | ID | 里程碑 | 依赖 | 动作要点 | 验收 | 估时(人-日) |
 |---|---|---|---|---|---|
-| W-01 | M0 | design25 评审 | 核验 E2 实根 + G0 环境清单 + 决策包（D1/D2/D4/D6 初定） | 决策表签核；G0 命令全绿 | 1–1.5 |
+| W-01 | M0 | design25 评审 | 核验 U1 实根 + G0 环境清单 + 决策包（D1/D2/D4/D6 初定）+ **登记 .lock 秘密文件纪律项（design 25 §6.3，随 D1 立项）** | 决策表签核；G0 命令全绿 | 1–1.5 |
 | W-02 | M0 | W-01 | 本文件建立 + STATUS 词条更新 | 文档合入 | 0.5 |
 | W-03 | M1 | W-01/02 | SwiftPM 骨架 + 最小窗口 WKWebView loadURL dev 控制面 + ATS；swift build 绿 | 窗口渲染 dsh UI | 1.5–2.5 |
 | W-04 | M1 | W-03 | 手写 A 桥 shim 雏形（info/instances_get + status 订阅），mainFrame/origin 护栏雏形 | 页面 console 见 info 返回 | 1–1.5 |
 | W-05 | M1 | W-04 | 最小垂直切片（论证见下） | 三拓扑全通 | 1.5–2.5 |
 | W-06 | M1 | W-03 | G1 主界面 + G3 侧栏插件走查登记 | G1/G3 过或无实质缺口 | 1 |
-| W-07 | M1 | W-03 | G2（剪贴板/拖拽/外链）+ G5（退出/隐藏/唤醒）= W1/W3 预检 | G2/G5 过 | 1 |
+| W-07 | M1 | W-03 | G2（剪贴板/拖拽/外链/非 http(s) scheme）+ G5（退出/隐藏/唤醒）= W1/W3 预检 | G2/G5 过 | 1 |
 | W-08 | M1 | W-05/06/07 | G4 深链冷启动 + 通知点击（打桩）；POC 报告 + D1 门评审 | G1–G5 全过；否则中止流程 | 0.5–1 |
 | W-09 | M2 | M1 出口 | B1 纯搬运：shell-core.ts 骨架；main.ts 无 Electron 依赖的纯逻辑整段机械迁入（语义零变） | test:desktop 绿 + typecheck | 2–3 |
 | W-10 | M2 | W-09 | B2 seam 化 + 处理器迁入：HostEdges 定稿（v2 字段集含 resolveResource/isPackaged/webViewLoading/webViewContentAlive/onMainWindowShown/focusMainWindow，E8 的 picker=插件源 folder\|.tgz，无 pickDirectory）；Electron 副作用点注入化；60 handle + 8 事件源迁入 shell-core；同批改 ipc-surface-mirror MAIN_SIDE_FILES；electron-edges.ts 实现 | test:desktop（含扩展 mirror）绿 + dev 双跑手测清单 | 3–4 |
@@ -226,10 +398,10 @@ M2 出口（Swift 开工前置：B 桥协议定稿 + sidecar 可起 + HostEdges 
 | W-19 | M3 | W-15 | 窗口/菜单/生命周期 E1/E2/E3/E20：orderOut、Dock 恢复、单窗重建、NSMenu+Edit、applicationShouldTerminate 复刻 before/will-quit + 本地实例在跑 NSAlert | Cmd+C/V/A、关窗隐藏、退出确认手测 + 单测 | 2–3 |
 | W-20 | M3 | W-16/18 | 通知/角标/深链 E4/E5/E13 + click 回环（click→B 桥→core 队列） | 通知点击激活、深链冷热不丢 | 2 |
 | W-21 | M3 | W-18/20（可拆∥） | 唤醒/keep-awake/对话框/外链/open-in/登录项/崩溃恢复 E6–E12/E14/E18/E19 + E15 判别路径（保留禁用 + 单测） | 每 edge 手测 + 单测 | 2.5–3.5 |
-| W-22 | M4 | W-10+D3 | 更新 v1 **blocked-available 形态**（E1）：Swift 控制器真实 check（复用 updater.ts 纯函数 + isAllowedReleaseUrl）→ phase='available'+releaseUrl+installBlockedReason='原生壳不支持自动安装'；update-restart 显式错误；**info 载荷增 flavor（E2）**同步 preload/global.d.ts/镜像测试；UpdateSection blockedCopy 本地化（zh 源 key） | 设置页 blocked 行 + releaseLink 诚实呈现（非失败态）；verify:i18n 绿 | 1.5–2.5 |
-| W-23 | M4 | W-13+D6 | sidecar 打包：tsconfig.sidecar.build.json + build-sidecar.mjs（编译 shell-core 全家 + 复用 build-control-plane 产物）+ Node fetch（SHA-256、**命名 node**）+ vendor-dsh/pnpm 装配 | 打包态 node sidecar.js --user-data-dir … 出 ready 帧 | 2–3 |
+| W-22 | M4 | W-10+D3 | 更新 v1 **blocked-available 形态**（§0.1-E1）：Swift 控制器真实 check（复用 updater.ts 纯函数 + isAllowedReleaseUrl）→ phase='available'+releaseUrl+installBlockedReason='原生壳不支持自动安装'；update-restart 显式错误；**info 载荷增 flavor（§0.1-E2）**同步 preload/global.d.ts/镜像测试；UpdateSection blockedCopy 本地化（zh 源 key） | 设置页 blocked 行 + releaseLink 诚实呈现（非失败态）；verify:i18n 绿 | 1.5–2.5 |
+| W-23 | M4 | W-13+D6 | sidecar 打包：tsconfig.sidecar.build.json + build-sidecar.mjs（编译 shell-core 全家 + 复用 build-control-plane 产物）+ Node fetch（SHA-256、**命名 node**）+ vendor-dsh/pnpm 装配 + **spawn-dsh 基名解析断言测试（design 25 §4.3 A5：纯 Node 直用 execPath 的前提 = basename ∈ {node,node.exe}）** | 打包态 node sidecar.js --user-data-dir … 出 ready 帧 | 2–3 |
 | W-24 | M4 | W-23 | build-swift-app.mjs：swift release + Info.plist/entitlements/资源（icon.icns、bridge-shim、sidecar 拷入）+ codesign + dmg/zip | 本机出可双击运行的签名 app | 2–3 |
-| W-25 | M4 | D3 | Sparkle v2（D3=默认「v1 页→v2」则登记后续 + appcast 预研） | 按决策登记或 appcast 样例 | 0.5–2 |
+| W-25 | M4 | D3 | Sparkle v2（D3=默认「blocked-available → v2」则登记后续 + appcast 预研） | 按决策登记或 appcast 样例 | 0.5–2 |
 | W-26 | M4 | W-24 | CI：ci.yml 新增 test-macos（swift build + test + manifest 门禁）；release.yml 新增 Swift 产物腿；test:release-workflow/action-pins 同步 | dry-run 全链绿 | 2–3 |
 | W-27 | M4 | W-26 | 双端同 tag 发布演练（产物命名 -native 防碰撞/无冲突/appcast/回归顺序） | 演练记录 + 产物清单 | 1 |
 | W-28 | M5 | M4 | 打包态全链矩阵（cp 起动/预启动/连接/网关凭据重录/运行时管理与回退/插件同步/归档对话框/通知点击/深链/隐藏恢复/唤醒/退出确认） | STATUS 风格登记全勾或显式残余 | 2–3 |
@@ -303,7 +475,8 @@ dist/web/index.html），每次 dev 会全量重建 renderer——正常但慢�
   settings-bridge chamber 全局页（settings 面 get/set 走真实 chamber-settings.json
   直读写最简，语义打桩）。
 - **S7 G2/G5（W-07）**：富文本复制（代码块）→ 外部富文本 app 粘贴保格式；文件拖
-  composer；外链 → 系统浏览器；Cmd+Q/红点关窗/睡眠唤醒后 UI 即时重连；**C1：hide
+  composer；外链 → 系统浏览器；**非 http(s) scheme（mailto:/vscode://）导航**；
+  Cmd+Q/红点关窗/睡眠唤醒后 UI 即时重连；**C1：hide
   ≥30s 后 SSE/WS 心跳不断、唤醒即时重连（backgroundThrottling:false 无 WKWebView
   等价物，design 25 §8.1）；C2：双 flavor 交替使用同一 userData/dsh 实例时 WebKit
   独立存储 jar 的会话 cookie/登录态表现实测**。
@@ -419,17 +592,17 @@ Electron mac 腿（现 build-macos：dmg/zip/latest-mac.yml）与 Swift mac 腿
 
 ## 七、风险与中止条件
 
-**design 25 §9 R1–R9 补充登记**：
-- R10（新增）开发期双后端竞态：Electron dev（17520+）与 sidecar dev 共享 cp 起始端口
+**风险登记（design 25 §9 R1–R13 同源；companion 侧展开，措辞以 design 25 §9 为准）**：
+- R10 开发期双后端竞态：Electron dev（17520+）与 sidecar dev 共享 cp 起始端口
   族 → 各自退避 + `DSH_CHAMBER_CP_PORT` 钉死 + .dev-user-data 双目录（或先后启动）；
   目录锁在 M3 前以单进程假锁演练。
-- R11（新增）Swift 侧人手单点：壳 + 桥 + 护栏 ≈25–35 个 Swift 文件的长期维护面；
+- R11 Swift 侧人手单点：壳 + 桥 + 护栏 ≈25–35 个 Swift 文件的长期维护面；
   缓解 = 护栏规则集中于 DSHChamberBridge 单 target、XCTest 覆盖率门、Generated 产物
   减少手写面。
-- R12（新增）manifest 生成脚本解析脆弱性：若用正则扫 preload 字面量（mirror 同款
+- R12 manifest 生成脚本解析脆弱性：若用正则扫 preload 字面量（mirror 同款
   手法），新写法（模板串/别名）会漏检 → 生成脚本复用 mirror 解析函数并加「通道数守恒」
   断言（68=60+8），防静默漏一条。
-- R13（新增）WKWebView devtools：debug 构建才开 developerExtrasEnabled，发布态由
+- R13 WKWebView devtools：debug 构建才开 developerExtrasEnabled，发布态由
   build 脚本保证关闭（inspector 属信任边界）。
 
 **WKWebView 实测项 W1–W6 判定标准（过/不过）**：
@@ -472,7 +645,8 @@ schema 双端共用一份，差异只在注入通道（CDP ↔ WKUserScript）�
 
 **中止/回退触发点（任一失败即回 design 25 §10 决策 1 重审，不硬着头皮继续）**：
 - A1：P0 G1 主界面实质功能缺口（不能归类 minor 样式）——WKWebView 承载面证伪。
-- A2：P0 G2/G3 剪贴板或拖拽硬伤（W1/W3 不过）——先试 1–2 天归因修复，仍不过即重审。
+- A2：P0 G2 剪贴板/拖拽硬伤（W1/W3 不过，G3=侧栏插件不受影响）——先试 1–2 天归因修复，
+  仍不过即重审。
 - A3：B 桥护栏负例可击穿（伪造 frame/超大帧/非协议流/伪造事件名任一穿透）——信任模型
   fail-closed 无法保证 → 立即停止，P2 出口前必须闭合。
 - A4：P1 拆分后 test:desktop 连续 2 个批次无法收敛绿——拆分粒度/顺序错 → 回退上一绿
@@ -491,7 +665,7 @@ schema 双端共用一份，差异只在注入通道（CDP ↔ WKUserScript）�
 |---|---|---|---|
 | D1 路线确认 + P0 先行 | M0 出口（启动）；M1 出口复核（继续门） | 按路线 A 启动 P0，G1–G5 全过才继续 | 无 P0 门即投 P1/P2，沉没成本上限 1–2 周 → 4–6 周 |
 | D2 双壳共存 + bundle id | M0（立项即定） | 共存；com.dshchamber.native | 后改 = 通知授权重来（R4）+ 打包身份返工 + 重复授权 |
-| D3 更新路线 | M2 出口（core 更新 seam 形态） | v1「打开发布页」诚实降级 → v2 Sparkle | P2 的 update 通道/UI 文案按 Electron 语义误做，P3 返工 |
+| D3 更新路线 | M2 出口（core 更新 seam 形态） | v1 **blocked-available**（真实 check → phase='available'+releaseUrl+installBlockedReason）→ v2 Sparkle | P2 的 update 通道/UI 文案按 Electron 语义误做，P3 返工 |
 | D4 仓库落位 | M1 前（POC 建目录即定） | macos/（SwiftPM） | 后移目录 = 全部路径/CI/脚本返工 |
 | D5 原生 UI 渐进（路线 B/C） | M2 出口（登记范围外即可） | 不做；HostEdges 边界即未来 B/C 接缝 | 不登记 = 边沿越界无据可依 |
 | D6 Node 版本/架构 | M3 入口（sidecar 捆绑落地前） | Node = 与 desktop Electron 43.4.0 内置 Node 大版本对齐 [待核：确切 minor 以安装态 process.versions 为准，候选 = 该大版本最新 patch]；架构 v1 arm64-only（对照 release mac 腿现状）；x64 登记后续 | 捆绑脚本/装配返工；架构后改影响 CI 与产物名 |
