@@ -80,6 +80,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 "--web-dist-dir", webDir,
                 "--port", port,
             ]
+            // 可选：POC_DSH_PATH = 可离线运行的 dsh workspace（如
+            // <repo>/packages/desktop/vendor/dsh 或打包 Resources/vendor/dsh），
+            // 提供后 dev 控制面 pre-spawn 本地 dsh 实例（界面出现本地实例）。
+            if let dshPath = env["POC_DSH_PATH"], !dshPath.isEmpty {
+                sidecarArguments += ["--dsh-path", dshPath]
+                print("[poc] sidecar-entry 附加 --dsh-path \(dshPath)")
+            }
             print("[poc] sidecar-entry 默认参数：user-data=\(stateDir) web=\(webDir) port=\(port)")
         }
 
