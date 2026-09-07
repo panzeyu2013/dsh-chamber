@@ -32,13 +32,30 @@ final class SwiftEdgeHostLegsTests: XCTestCase {
     func testNotYetImplementedLegsReportUnimplemented() {
         let legs = SwiftEdgeHostLegs(config: .init(canShowUI: { true }))
         for method in [
-            "showNativeNotification", "pickPluginSource", "showItemInFolder",
+            "pickPluginSource", "showItemInFolder",
             "setBadge", "setKeepAwake", "setLoginItem", "showError",
             "launchApp", "retireNotifications",
         ] {
             let outcome = legs.respond(method: method, payload: nil)
             XCTAssertEqual(outcome.error, "swift-edge-unimplemented:\(method)")
         }
+        // showNativeNotification 的同步路径只服务 UI 不可用降级；UI 可用时真实
+        // 调度走 respondAsync（canHandleAsync）——同步面显式指引。
+        let asyncOnly = legs.respond(method: "showNativeNotification", payload: nil)
+        XCTAssertEqual(
+            asyncOnly.error,
+            "swift-edge-unimplemented:showNativeNotification:use-async-leg"
+        )
+    }
+
+    func testNotificationSyncPathDegradesWhenUIUnavailable() {
+        let legs = SwiftEdgeHostLegs(config: .init(canShowUI: { false }))
+        let outcome = legs.respond(method: "showNativeNotification", payload: nil)
+        XCTAssertTrue(
+            outcome.error?.hasPrefix(SwiftEdgeHostLegs.uiUnavailablePrefix) ?? false,
+            "UI 不可用时通知腿必须诚实降级（实际 \(outcome.error ?? "nil")）"
+        )
+        XCTAssertFalse(legs.canHandleAsync(method: "showNativeNotification"))
     }
 
     func testOpenExternalExtractsURLAndFailsWithoutPayload() throws {

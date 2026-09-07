@@ -272,12 +272,11 @@ public final class BridgeClient {
         if let legs = edgeHostLegs {
             let outcome = legs.respond(method: method, payload: payload)
             let error = outcome.error ?? ""
-            let fallback = error.hasPrefix(SwiftEdgeHostLegs.unimplementedPrefix)
-                || error.hasPrefix(SwiftEdgeHostLegs.uiUnavailablePrefix)
-            if !fallback {
+            // unimplemented（legs 未实现）→ 回落 v1 默认表（POC 无宿主不挂起）；
+            // ui-unavailable（真实腿的诚实降级）→ 直接传播，绝不回落成乐观成功。
+            if !error.hasPrefix(SwiftEdgeHostLegs.unimplementedPrefix) {
                 return outcome
             }
-            // legs 未接管 → 回落 v1 默认表（不挂起语义）。
         }
         switch method {
         case "trayAvailable", "notificationSupported", "badgeCountApiAvailable",
@@ -298,6 +297,14 @@ public final class BridgeClient {
     public func setDefaultEdgeResponder() {
         onEdgeRequest = { [weak self] method, payload, reply in
             guard let self else { return }
+            if let legs = self.edgeHostLegs, legs.canHandleAsync(method: method) {
+                // W-21：异步宿主腿（通知调度等）——reply 恰一次由 sendEdgeReply
+                // 守卫；legs 内部错误一律 loud，绝不挂起。
+                legs.respondAsync(method: method, payload: payload, completion: { result, error in
+                    reply(result, error)
+                })
+                return
+            }
             let outcome = self.defaultEdgeResponse(method: method, payload: payload)
             reply(outcome.result, outcome.error)
         }

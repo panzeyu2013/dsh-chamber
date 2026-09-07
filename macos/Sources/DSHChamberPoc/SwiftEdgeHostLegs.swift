@@ -21,6 +21,7 @@
 
 import Foundation
 import AppKit
+import UserNotifications
 
 /// AnyCodable 载荷提取助手（AnyCodable.jsonObject 的字典/标量投影）。
 enum EdgePayload {
@@ -108,6 +109,72 @@ public final class SwiftEdgeHostLegs {
     public static let unimplementedPrefix = "swift-edge-unimplemented:"
     public static let uiUnavailablePrefix = "swift-edge-ui-unavailable:"
 
+    /// 异步宿主腿入口（W-21 前置）：非 nil 时 BridgeClient 默认应答器改经
+    /// 它应答（reply 可延迟调用，恰一次契约由 sendEdgeReply 守卫）；本入口
+    /// 内部先走同步 respond——命中实现腿（非 unimplemented/ui-unavailable）
+    /// 立即 reply；未实现/UI 不可用则回落 v1 默认表（由 BridgeClient 判定
+    /// 前缀后自行处理）。AppKit 宿主接线（MainWindowController/AppDelegate）
+    /// 可在子类/扩展中把通知/对话框腿接到本异步入口。
+    public func respondAsync(
+        method: String,
+        payload: AnyCodable?,
+        completion: @escaping (AnyCodable?, String?) -> Void
+    ) {
+        if method == "showNativeNotification" {
+            scheduleNotification(payload: payload, completion: completion)
+            return
+        }
+        let outcome = respond(method: method, payload: payload)
+        completion(outcome.result, outcome.error)
+    }
+
+    /// 异步腿面（当前：showNativeNotification——canShowUI 为真时由本类真实
+    /// 调度，无需宿主接线）；其余方法走同步 respond。
+    public func canHandleAsync(method: String) -> Bool {
+        switch method {
+        case "showNativeNotification":
+            return config.canShowUI()
+        default:
+            return false
+        }
+    }
+
+    /// 真实通知调度（W-21 切片；design 25 §5 E4）：node-edges 载荷形状
+    /// {notificationId: Int, spec: {title?, body?, …}}。canShowUI 为假 →
+    /// ui-unavailable 诚实降级；调度失败（未授权/系统拒绝）→ loud error。
+    /// click 回灌（__host.notifyClicked {notificationId}）与前台展示 delegate
+    /// 属 M3 集成（需 UNUserNotificationCenterDelegate 宿主接线 + 实机门禁）。
+    private func scheduleNotification(
+        payload: AnyCodable?,
+        completion: @escaping (AnyCodable?, String?) -> Void
+    ) {
+        guard config.canShowUI() else {
+            completion(nil, Self.uiUnavailablePrefix + "showNativeNotification")
+            return
+        }
+        guard let dict = EdgePayload.dictionary(payload) else {
+            completion(nil, Self.unimplementedPrefix + "showNativeNotification:payload")
+            return
+        }
+        let content = UNMutableNotificationContent()
+        if let spec = EdgePayload.dictionary(dict["spec"]) {
+            content.title = EdgePayload.string(spec["title"]) ?? ""
+            content.body = EdgePayload.string(spec["body"]) ?? EdgePayload.string(spec["message"]) ?? ""
+        }
+        let request = UNNotificationRequest(
+            identifier: "chamber-edge-" + String(EdgePayload.int(dict["notificationId"]) ?? -1),
+            content: content,
+            trigger: nil  // 立即投递（前台展示语义需 delegate，M3 集成）
+        )
+        UNUserNotificationCenter.current().add(request) { error in
+            if let error {
+                completion(nil, "swift-edge-notification-schedule-failed:\(error.localizedDescription)")
+            } else {
+                completion(nil, nil)
+            }
+        }
+    }
+
     /// 统一分派：未知/未实现 → unimplemented；UI 腿在 canShowUI()==false →
     /// ui-unavailable；其余按腿执行。
     public func respond(method: String, payload: AnyCodable?)
@@ -123,6 +190,13 @@ public final class SwiftEdgeHostLegs {
                 NSApp.activate(ignoringOtherApps: true)
                 return (nil, nil)
             }
+        case "showNativeNotification":
+            // 同步路径仅覆盖 UI 不可用（真实调度走 respondAsync/canHandleAsync）；
+            // 谎报 shown 绝不允许。
+            guard config.canShowUI() else {
+                return (nil, Self.uiUnavailablePrefix + method)
+            }
+            return (nil, Self.unimplementedPrefix + method + ":use-async-leg")
         case "showMessage":
             // 形状（HostMessageOptions，electron-edges/global.d.ts 为准）：
             // {type,title,message,detail,buttons[],defaultId,cancelId,noLink?}
