@@ -14,10 +14,7 @@
   `restart_service` systemd IPC 端到端；`restartLocal()` 在真实 1s SIGTERM→SIGKILL
   grace 与健康计时器交错的覆盖；settings-bridge 的 gateway React 组件级交互仍以纯
   函数/API 客户端测试代证；ZFS 下全新 pnpm store 克隆偶发 `ERR_PNPM_EAGAIN`
-  （失败投影诚实可重试，系统化并发缓解未排期）。2026-09 实机复核收口（代码+回归
-  测试，记录见 design 18 §3.5）：gateway F4 启动门补齐 fresh shell-mismatch 武装
-  （稳态 applied-monitoring journal 升级不再崩溃回滚；0.2.2 发布版缺口，desktop 端
-  行为为参照）。
+  （失败投影诚实可重试，系统化并发缓解未排期）。
 - **apply-now 立即应用（design 18 addendum §9.2 实机门禁）**：macOS 打包态 `.app`
   运行中全链；Linux server gateway 生产 TLS 下 POST apply-now → 202 → 停机窗口轮询
   → 探针 → 故障注入回退；`restartLocal()` 真实 grace × 健康计时器交错；Gateway
@@ -34,28 +31,22 @@
   在生产 TLS 下全链；Linux system/user service 安装升级与回退；`--bind 0.0.0.0`/
   隧道/tailscale 全链负例。凭据管理剩余：desktop settings-bridge 便捷重置（推迟项）
   + 真实 TLS 下改密/轮换/停机态 CLI 恢复。
-- **S0/S2 http 直连链路（design 17 §10.5）**：S0 HTML 注入与 S2 非 loopback TCP
-  keepalive + staleness 自愈已实现；**S2-c（放宽 dsh mux 心跳，可选增强）未实现**
-  ——可行性已确认（cordis.patch.yml 机制可 id-targeted override），需先扩展 gateway
-  patch 写入器，单列。剩余验收：打包态实机（浏览器直连 gateway 的 Models/插件设置
-  可写；杀托管 dsh/断网后 sidebar 60–120s 自动恢复；升级 dsh 版本复验钩子存在性）。
-- **设计 21 网关插件能力对齐（已实现；含 .tgz 本地导入 archive-pick 与 executor
-  pnpm-store 修正，台账见 design 21 §10 ⑧⑨）**：剩余——§9 实机 E2E 矩阵（真实
+- **S0/S2 http 直连链路（design 17 §10.5）**：S0 注入与 S2 非 loopback TCP
+  keepalive + staleness 自愈已实现（见 §10.5/代码注释与 git 历史，不在此复述）；
+  **S2-c（放宽 dsh mux 心跳，可选增强）未实现**——前置 = 扩展 gateway patch
+  写入器，单列。剩余验收：打包态实机（浏览器直连 gateway 的 Models/插件设置可
+  写；杀托管 dsh/断网后 sidebar 60–120s 自动恢复；升级 dsh 版本复验钩子存在性）。
+- **设计 21 网关插件能力对齐（已实现）**：剩余——§9 实机 E2E 矩阵（真实
   gateway×desktop 双通道手动/脚本化门禁、registry 实装传递依赖与 lifecycle scripts、
-  故障注入、journal 中断对账；发布前执行）；UI 余留照实：who/when 归因 tooltip 未
-  渲染、gateway 拒绝码→本地化文案映射未做（409 逐字英文）、pollGatewayReady 英文
-  错误串未本地化；archive-pick 的 file+folder 双模式对话框为 **macOS-v1**（非 macOS
-  保持文件夹对话框，随 design 22/23）。2026-09 实机走查复核已收口（代码+单测，
-  记录见 design 21 §10 ⑱–㉒）：sync 400 原因透传、materialize 桌面 settle+受控重启
-  对账（IPC outcome 联合）、暂存归档 op 终态保留 + 引导期孤儿清扫（逆 ⑩ 补有界，
-  防 manifest 悬挂）、第三方行生效状态列 + 类别诚实（bundle-layer 才示「重启后
-  生效」）+ 文案诚实——**§9 实机矩阵仍开放**（.172 测试机 gateway 侧
-  升级因凭据轮换暂停，待用户侧恢复后按 §9 重跑）。
-- **归档清理与归档管理器（design 24，已实现；本地形态已实跑）**：剩余——实机
-  **gateway/远程 dsh 形态**与打包版 UI 目检（本地形态已跑通：删除失效根因修复 +
-  `purge(sessionIds?)` 可选子集过滤 + 归档管理器对话框）；事件发射为文档化 no-op
-  直至上游 wire，域随上游 `sessions.delete` wire 落地后退休。可选增强（未排期）：
-  PluginDialog 三态行、rowError 本地化、已归档浏览区（todo 12 A）。
+  故障注入、journal 中断对账；发布前执行；.172 测试机 gateway 侧升级因凭据轮换
+  暂停，待用户侧恢复后按 §9 重跑）；UI 余留照实：who/when 归因 tooltip 未渲染、
+  gateway 拒绝码→本地化文案映射未做（409 逐字英文）、pollGatewayReady 英文错误串
+  未本地化；archive-pick file+folder 双模式对话框为 **macOS-v1**（非 macOS 保持
+  文件夹对话框，随 design 22/23）。
+- **归档清理与归档管理器（design 24，已实现）**：剩余——实机 **gateway/远程 dsh
+  形态**与打包版 UI 目检（§19-9 偏差/待目检并入该腿）；事件发射为文档化 no-op
+  直至上游 wire，域随上游 `sessions.delete` wire 落地后退休（上游未落地）。可选
+  增强（未排期）：PluginDialog 三态行、rowError 本地化、已归档浏览区（todo 12 A）。
 - **移动端 Web 访问面（design 17 §18）**：P1/P1.5/适配轮已实现。剩余——实机门禁
   （§18.6：真机触控目标比例/抽屉开合/键盘遮挡/安全区/汉堡不重叠/crumbs 换行/
   Session 日志图标化/iOS 单击切换/设置手机档走查/刘海横屏/深层谱系高度等）；DOM
@@ -63,20 +54,20 @@
   契约测试固定、composer 锚点 fixture 化、Android 键盘盲区真机门禁）；P2（PWA 安装
   + SW 壳离线，per-instance scope，尊重官方「不完整离线」立场）；P3（公网认证流转
   正式化 + Web Push；先行形态 = 内网/可信网络 `--no-auth`/tailscale）。
-- **Windows 首版（design 23）**：代码项（M0 CI 腿、M1 生命周期、M2a env 门控后台
-  能力、M3/M4 代码解锁）已就绪，POSIX 单测绿。剩余全为**外部门禁**：真实 Windows
-  runner 首跑绿（含 submodule 物化 + junction 建链）、M0.5 上游 dsh win32/NSIS
-  protocols/Defender/原生依赖实证、M2a 事务矩阵与 **M2b UI 翻转（纪律：能力先于
-  开关）**、M3/M4 实机矩阵（清单见 `docs/progress/todo/windows-v1.md`，已剪为剩余
-  项台账）。
-- **Linux 桌面（design 22，已落地 + 无头验证绿）**：剩余实机门禁（真实桌面矩阵
-  GNOME X11+Wayland/KDE 抽验，清单见 design 22 §8）：XDG 自启、深链冷/热启动与
-  CHROME_DESKTOP/xdg-mime 路由、AppImage 升级后重注册、托盘/通知点击、safeStorage
-  keyring、SSH 密码全链、运行时打包态全链、自动更新端到端、AppImage 沙箱与 Wayland
-  焦点、before-quit 确认框无头挂住行为；release.yml dry_run 全链（需 GitHub 可达）；
-  deb/arm64 后续。已知未动项（design 22 §5/§8 登记）：裸 CLI 默认 stateDir 与
-  control-plane standalone 同目录的运维提示、XDG_DATA_HOME 偏移 pnpm home 边角、
-  dsh-runtime private-fs 严格目录 fsync（审计结论，未并入容错）等。
+- **Windows 首版（design 23）**：M0–M4 代码项已就绪、POSIX 单测绿（design 23 §2 /
+  todo 头注）。剩余全为**外部门禁**，台账见 `docs/progress/todo/windows-v1.md`
+  （已剪为剩余项清单；windows-baseline.md 首跑数据待填）：真实 Windows runner
+  首跑绿（test-windows 腿，含 submodule 物化 + junction 建链）；M0.5 上游 dsh
+  win32/NSIS protocols/Defender/原生依赖实证；M2a runner 事务矩阵；**M2b UI 翻转
+  （纪律：M2a 真实 win32 全绿前不做）**；M3/M4 实机矩阵与打包验证。M5/M6 发布面
+  决策/演练待发布前（另见桌面端更新、发布/CI 条）。
+- **Linux 桌面（design 22，已落地 + 无头验证绿）**：剩余实机门禁按 design 22 §8
+  清单（GNOME X11+Wayland/KDE 抽验：XDG 自启、深链冷/热与 CHROME_DESKTOP/xdg-mime
+  路由及升级后重注册、托盘/通知点击、safeStorage keyring、SSH 密码全链、运行时
+  打包态全链、自动更新端到端、AppImage 沙箱与 Wayland 焦点；另复核 before-quit
+  无头挂住行为）；release.yml dry_run 全链（需 GitHub 可达）；deb/arm64 后续。
+  已知未动项登记于 design 22 **§6**（裸 CLI stateDir 提示、pnpm home 边角、
+  private-fs 严格 fsync 审计结论等）。
 - **桌面通知 / 未读徽标（design 19）**：通知剩余 macOS 权限/拒绝行为、点击打开、
   关窗/托盘/后台三形态与打包态实机；徽标剩余 macOS Dock 打包态三态（武装/解除/退役
   + 重载与退出清零）实机；Linux 仅 Unity launcher 家族可见（文档化平台限制）；Windows
@@ -104,18 +95,17 @@
   物化 + junction 建链、CI 真跑、release.yml 改动后 workflow_dispatch dry_run）；
   Gateway npm 分发未决策（现仅 GitHub Release `.tgz` 分发）；打包闭包自检（CI 增加
   「主进程传递模块闭包 vs build.files 清单」机械检查，长期建议）。
-- **性能遗留真实机清单**：宽侧栏冷 settle CLS、版本事务主进程阻塞采样、H3 真机懒
-  加载验证——步骤见 `docs/progress/performance-baseline.md` §7（需打包版或带会话 dev
-  实例）。
+- **性能遗留真实机清单（P0–P2 轮）**：`docs/progress/performance-baseline.md`
+  §7 五条实机复测全开放（宽侧栏冷 settle CLS、连点冷挂载切换、版本事务主进程阻塞
+  采样、更新模式侧栏写频、H3 懒加载验证——需打包版或带会话 dev 实例）。
 - **性能整改第二阶段（视图保留/后台门控/行窗口，2026 A/B/C/D）剩余实机验收**：
-  代码面已落地——renderer 保留策略（`src/retention.ts` + App.tsx 回收/预热 3→1/
-  可见性门控，含恢复补偿）、sidebar 会话行窗口（`shared/session-row-window.ts` +
-  ServerSection 展开条）、`scripts/perf/measure-ui.mjs` 基线尺子；语义偏差与验收
-  表见 design 05 §1 注记与 performance-baseline.md §10。剩余——打包版/带会话 dev
-  实例同环境 A/B 对照（measure-ui：DOM 节点/堆/空闲长任务/合成输入帧间隔/预热壳
-  数）与「打开→切走→重开 ×3 堆无净增长」回归项。已知取舍（登记）：被回收壳内
-  运行中任务的完成蓝点/通知边沿随 runtime-facts 通道撤回而暂停，直至该源重开
-  （冷 boot 首报重新播种）；侧栏聚合降级为既有 30s unary 兜底（05 §2.3）。
+  代码面已落地（0.2.3；retention/session-row-window/measure-ui，2026 三方评审修复
+  随行——预热保留槽门控、回收诊断收敛、边界语义对齐，commit 1c494a6）。剩余——
+  打包版/带会话 dev 实例同环境 A/B（measure-ui：DOM 节点分壳/堆/空闲长任务/合成
+  输入帧/预热壳数）+「打开→切走→重开 ×3 堆无净增长」（×3 需多次快照序列）；
+  验收表与语义偏差见 performance-baseline.md §10 与 design 05 §1 注记。已知取舍
+  （登记）：被回收壳内运行中任务完成蓝点/通知边沿暂停至源重开（冷 boot 首报重
+  播种）；侧栏聚合落 30s unary 兜底（05 §2.3）。
 - **SSH 密码一键免密引导与系统钥匙串（05 §8）**：未实现（现行为 endpoint-bound 0600
   明文镜像，见取舍）。
 - **模型额外参数 + 默认推理等级（design 07）**：wire 白名单无泛化透传、host 组合不
@@ -145,7 +135,6 @@
 - dual-host 语义下沉延后：activation-facts/startup-verdict 映射、restart 拒绝织、
   apply-now 门（整门合并不做，见下取舍）、identity-probe 腿——4 个分歧位以 ruling
   注释登记在代码面，统一需新 dsh-runtime 公开导出（dist 锁）或行为裁定。
-- 打包冒烟 P1-R1 与 1e 打包验证：用户决定跳过，待打包环境，与发布收口归并。
 - 0.2.2 审查跟进残留（低优 UX）：会话行动作仍 hover-only（键盘/触屏无揭示路径）；
   仓库组折叠 × 会话待办条带张力（确认产品意图后过滤或文档化）；chamber 表最坏徽标
   组合窄窗可能横向撑破（实机目检后定）；en 单数文案、行移除 aria-label 覆盖可见
@@ -258,20 +247,13 @@
   - 兜底 cwd 派生分组限制：符号链接拼写（macOS /tmp vs /private/tmp）可能不匹配
     canonical-cwd 索引；未挂载来源的新建空工作区不可见（fail-closed 语义）。
   - git 工作树删除时 runtime 通道缺席 fail-closed（'runtime-unknown'）。
-  - unary 长命令的业务时长偏差（2026-09 修复的边界，design 03 §3.4 修订）：
-    `POST` 且精确命中 `LONG_RPC_PATHS`（`/api/commands/execute`——手动
-    `/compact` 为 LLM 摘要重放全部可压缩历史，实测 ~62.7 万 token 会话被 45s
-    空闲窗在 45 001 ms 切断并取消宿主工作、会话无变化；`/api/archiveCleanup/purge`
-    ——design 24 归档清理，宿主无时长上限、自身客户端预算 5 分钟）改用
-    `LONG_RPC_UPSTREAM_TIMEOUT_MS`（30 分钟**保险丝而非 SLA**），其余路径 45s
-    不变；名单刻意狭窄（POST + 精确路径，扩展须符合同一契约；git 域宿主有
-    30s 硬上限明确不入列）。豁免命中与保险丝触发有独立计数器
-    （`longRpcRequests`/`longRpcTimeouts`，兼作名单活性探针）。残余：超保险丝
-    的极端业务被**显式截断（504 + abort）、操作未完成、会话一致性无损**
-    （若保险丝计数在发布中非零即复访取值）；治本——上游把 `commands.execute`
-    改为受理即回、结果经会话事件流交付（验收标准：受理回执形状、终态错误
-    分类、对等待 unary 语义的官方客户端影响；退役条件：上游落地并经 chamber
-    验证后名单与保险丝一并退役）——宿主非 chamber 可写范围，登记为上游
-    跟踪项；**上游若异步化，dsh-runtime 激活/身份探针（runtime-probes 以伪
-    session 直连宿主期待 commands/execute 同步 `session/not-found` 信封）须
-    平行迁移**，探针走直连端口不经代理、与豁免窗口无交集。
+  - unary 长命令豁免残余与治本（design 03 §3.4；豁免本体已随 0.2.3 落地，见
+    CHANGELOG [0.2.2]/[0.2.3]，不在此复述）：超 30 分钟保险丝的极端业务仍被
+    **显式截断（504 + abort）、操作未完成、会话一致性无损**（保险丝计数发布
+    中非零即复访取值）；治本——上游把 `commands.execute` 改为受理即回、结果
+    经会话事件流交付（验收：受理回执形状、终态错误分类、对等待 unary 语义的
+    官方客户端影响；退役：上游落地并经 chamber 验证后名单与保险丝一并退役）
+    ——宿主非 chamber 可写范围，登记上游跟踪项；上游若异步化，dsh-runtime
+    激活/身份探针（runtime-probes 以伪 session 直连宿主期待同步
+    `session/not-found` 信封）须平行迁移（探针走直连端口不经代理、与豁免窗口
+    无交集）。
