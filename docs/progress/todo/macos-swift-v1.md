@@ -328,11 +328,18 @@ ctx 真实化逐项列于 sidecar-entry.ts 注释。
   真实腿——全带窗口守卫（headless 诚实降级）；swift build 0 警告、swift
   test 40/40。**剩余腿**：setLoginItem（SMAppService 需签名）、
   appId→应用映射（M3 集成）——GUI/签名硬门禁。
-- **P3 打包重跑（进行中，当前 HEAD 全量产物基底）**：dist:desktop:mac
-  （build:desktop 全链 + electron-builder --mac）输出到 worktree
-  packages/desktop/release/mac-arm64 —— 供实机验收刷新 /Applications 的
-  （磁盘 app 仍为 8-27 事故恢复构建）。产物验证：mtime/大小/Info.plist
-  版本 + ELECTRON_RUN_AS_NODE node 模式自检；不自动替换 /Applications
+- **P3 打包重跑完成（当前 HEAD 全量产物基底）**：产物
+  packages/desktop/release/{dsh-chamber-0.2.2-arm64-mac.zip (155MB),
+  .blockmap, mac-arm64/dsh-chamber.app (418MB, adhoc 签名)}。验证：
+  ELECTRON_RUN_AS_NODE node 模式 24.18.1/43.4.0、Identifier
+  com.dshchamber.desktop、version 0.2.2。构建过程踩坑记录：
+  ① 沙箱无外网 → electron-builder 下载 Electron zip 挂起 → 用缓存
+  ~/Library/Caches/electron/<hash>/electron-v43.4.0-darwin-arm64.zip 解压
+  为 /tmp/pristine-electron 并以 -c.electronDist 注入；
+  ② 模块收集器需 npm → PATH 加 nvm bin；
+  ③ distribution 签名 --timestamp 需网络 → CSC_IDENTITY_AUTO_DISCOVERY
+  =false 走 after-pack adhoc（脚本已自验证）；DMG 目标子步离线挂起被终止
+  （登记为受阻：需联网或后续重试 dmgbuild）。产物不自动替换 /Applications
   （等用户确认，吸取事故纪律）。
 - **showMessage 真实模态腿**（95275cc）：NSAlert 主线程 runModal 一次、
   按钮序 raw-1000 夹取回传、style 映射、无 buttons→['OK']；无窗诚实降级。
