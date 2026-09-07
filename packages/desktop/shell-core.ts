@@ -1432,6 +1432,10 @@ type RecoverableMetadataStatus = 'selection-corrupt' | 'recovery-in-progress' | 
 export interface ShellAssemblyCtx {
   /** INFO 载荷与 settings 平台投影的宿主事实。 */
   hostFacts: {
+    /** 壳 flavor（E2/W-22）：'electron'（Electron 壳装配）| 'swift'
+     *  （Swift 原生壳 sidecar 装配）——INFO 载荷透传，renderer 侧据此分派
+     *  更新/通知等宿主机制语义。 */
+    flavor: 'electron' | 'swift'
     /** 控制面 URL（原 main.ts INFO 载荷的 `http://127.0.0.1:${cp.port}`）。 */
     controlPlaneUrl: string
     /** 运行平台（原 process.platform——BADGE_COUNT 平台门 badgePlatformGate
@@ -2096,6 +2100,7 @@ export function installIpcHandlers(deps: {
     dshVersion: deps.ctx.runtimeFacts?.dshVersion() ?? null,
     version,
     platform: hostFacts.platform,
+    flavor: hostFacts.flavor,
   }));
 
   // Chamber settings 查询：非秘密投影（当前值 + 平台能力门控）。

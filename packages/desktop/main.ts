@@ -3604,6 +3604,7 @@ if (!gotTheLock) {
     // 状态机的 edges/quit 快照（shell-core 单装配不变式）。
     const shellCtx: ShellAssemblyCtx = {
       hostFacts: {
+        flavor: 'electron',
         controlPlaneUrl: rendererOrigin,
         platform: process.platform,
         trayPresent: () => tray !== null,

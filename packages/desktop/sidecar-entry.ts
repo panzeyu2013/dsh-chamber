@@ -171,6 +171,7 @@ function buildHeadlessCtx(userDataDir: string): ShellAssemblyCtx {
     }
   })()
   const hostFacts = {
+    flavor: 'swift' as const,
     controlPlaneUrl: '',
     platform: process.platform,
     trayPresent: () => true,
