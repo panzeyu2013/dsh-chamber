@@ -32,6 +32,13 @@
 > 失败（unchanged main worktree 复现），与本次升级无关。实机探针验证（attachments
 > wire key）待 npm 发布、运行时线跟随后执行。
 
+**分支任务登记（v0.1.3-alpha1 规划，2026-09；**方案已定稿，用户批准**；执行待按批次触发——全量方案见 `docs/progress/todo/branch-plan-v0.1.3-alpha1.md`，绿门见其 §8）**：
+- **T1 追踪上游 alpha.2**：上游已发布 dsh-v0.1.3-alpha.2（82a5fd61a7，npm 0.1.3-alpha.2 已发布）；源码线升级 + fork 重放（connection recovery-config 重构等）+ 双线收口（运行时四锚 rc.1→alpha.2）+ 实机探针验证。前置调研已完成（四份审计，见会话记录）；待评审后按 dsh-upgrade-checklist 执行。
+- **T2 目录/包命名统一**：chamber 自建插件统一 `dsh-chamber-*` 前缀、种子包用 `dsh-chamber-seed-*`、基建豁免；fork 副本与 vendor 命名混淆一并澄清（包名=身份，目录名随包）。受面调研进行中（全仓引用面/seed 键/文档），方案评审后定执行批次（建议与 alpha.2 拆批）。
+- **T3 openin 插件统一**：吸收官方 `ui-open-in-app` client 按钮 + 补远程打开能力（远程仅 deeplink 等方式、其余抑制）+ API 通道复用（避免重复造轮子）；含官方 client/host 深挖与 chamber 集成方案（代理通道/门控/红线）调研中；决策点：covered 屏蔽 vs 吸收、host 行处置、双按钮策略。
+- **T4 上游接触面跟踪清单（待建文档）**：单独文档登记"可能收到上游/从上游 fork/魔改"的全部文件（fork 副本逐文件纯度、深引 vendor 内部、契约镜像、covered/assembly 行、生成物），形成升级 checklist 与新鲜度扫描机制。
+- **方案定稿（2026-09，用户批准 5 决策点）**：T1–T4 全量方案已持久化于 `docs/progress/todo/branch-plan-v0.1.3-alpha1.md`；批次 Batch 0（T1）→ 0.5（T4）→ 1（T2）→ 2（fork 重锚）→ 3（T3），执行另触发。
+
 - **dsh 运行时版本管理（design 18 §3.6/§9，M5–M7 已落地）**：剩余——macOS 打包态
   `.app` 内共享 dsh-runtime/内嵌 pnpm/koffi 与完整激活-故障回退-恢复链的实机；Linux
   server 同款端到端；Gateway 重启窗口的前端重连与 connections 的 SSH
