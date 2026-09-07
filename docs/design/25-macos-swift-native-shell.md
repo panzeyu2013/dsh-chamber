@@ -206,7 +206,7 @@ macos/                          # SwiftPM 可执行包（或 xcodeproj）
   Sources/DSHChamberApp/…        # AppKit 壳（AppDelegate、窗口、WKWebView）
   Sources/DSHChamberBridge/…     # A 桥 shim 注入与消息处理、B 桥客户端、manifest
   Sources/DSHChamberEdges/…      # 通知/角标/托盘/深链/open-in/对话框/更新/登录项
-  Sources/Generated/BridgeManifest.swift   # 构建脚本生成（随提交，防漂移）
+  Sources/DSHChamberPoc/Generated/BridgeManifest.swift   # 构建脚本生成（随提交，防漂移）
   Tests/…                        # XCTest（信封解析、护栏、监督、协议）
   Resources/                     # 运行时占位（sidecar 由构建脚本拷入）
 scripts/build-swift-app.mjs      # 调 pnpm 产物 + swift build + 资源装配

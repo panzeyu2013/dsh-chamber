@@ -388,7 +388,7 @@ M4(P3 边沿 + 打包/CI) → M5(P4 实机门禁 + 发布)。
   （路线 B/C，D5 范围外）。
 - 前置：M2（shell-core/HostEdges/stdio-driver 定稿）；**D6 此入口拍板**。
 - 产出：`macos/Sources/DSHChamberApp|DSHChamberBridge|DSHChamberEdges` +
-  `Sources/Generated/BridgeManifest.swift`（生成物、提交）+ XCTest + `packages/desktop/
+  `Sources/DSHChamberPoc/Generated/BridgeManifest.swift`（生成物、提交）+ XCTest + `packages/desktop/
   scripts/emit-bridge-manifest.mjs` + `bridge-manifest.json`（提交物）+
   `bridge-manifest.test.ts` + `bridge-shim.ts` + build-bridge-shim.mjs +
   bridge-shim.test.ts + swift-harness-driver.test.ts（node 拉起 Swift harness）。
@@ -629,7 +629,7 @@ shell-core 语义或新增 IPC 通道而不走 mirror/manifest 双锁步（§六
 | 门禁 | 文件（除注明均新增） | 触发点 | 断言什么 | 挂载 |
 |---|---|---|---|---|
 | IPC 面镜像锁步 | 改 ipc-surface-mirror.test.ts（MAIN_SIDE_FILES 增 shell-core.ts） | 每次 push（desktop test 链） | main handle/send 集合 == preload invoke/on 集合；无裸字面量；字面量 ∈ IPC_CHANNELS；preload/renderer global.d.ts/settings-connections 结构镜像 | desktop test 链 |
-| bridge-manifest 一致 | bridge-manifest.test.ts + scripts/emit-bridge-manifest.mjs + 提交物 packages/desktop/bridge-manifest.json + 生成物 macos/Sources/Generated/BridgeManifest.swift（提交） | 每次 push | 重新生成的 JSON/Swift == 提交物（通道增删改必须同 PR 提交新 manifest）；通道数守恒 68=60+8 | desktop test 链；macOS CI 另跑 swift test 断言 Swift 白名单 == JSON |
+| bridge-manifest 一致 | bridge-manifest.test.ts + scripts/emit-bridge-manifest.mjs + 提交物 packages/desktop/bridge-manifest.json + 生成物 macos/Sources/DSHChamberPoc/Generated/BridgeManifest.swift（提交） | 每次 push | 重新生成的 JSON/Swift == 提交物（通道增删改必须同 PR 提交新 manifest）；通道数守恒 68=60+8 | desktop test 链；macOS CI 另跑 swift test 断言 Swift 白名单 == JSON |
 | core 禁 electron | electron-free-gate.test.ts | 每次 push | 面 A core 家族无 electron import；面 B 白名单文件有 | desktop test 链（ci.yml 免改） |
 | A 桥 shim 一致 | bridge-shim.test.ts | 每次 push | shim method→channel 映射 == manifest invoke 集；on 通道 == push 集；info 重试常量与信封 {id,method,payload} 钉死 | desktop test 链 |
 | sidecar 全通道冒烟 | sidecar-stdio.test.ts | 每次 push | 假 Swift 驱动 60 invoke 回包 + 8 push 采样（真处理器） | desktop test 链 |
