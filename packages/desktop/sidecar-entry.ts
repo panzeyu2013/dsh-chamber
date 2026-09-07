@@ -8,28 +8,29 @@
  *   存量 console.* 重定向到 stderr）。
  * - 业务 = shell-core.installIpcHandlers（60/60 注册体，语义与 Electron 版
  *   同一实现）；宿主边沿 = node-edges.ts（HostEdges → edge/notify → Swift）。
+ * - 无头 ctx = sidecar-ctx.ts buildHeadlessCtx（W-13 拆分落位；S-C-1 起
+ *   C/D/E 组注册体依赖真实化——providers/transportManager/audit/
+ *   publishRegistryTransition/confirmRegistryOriginSwitch 与 main.ts 同源
+ *   同参装配，见 sidecar-ctx.ts 头注释；其余字段仍 loud stub，S-C-2 范围
+ *   清单在该文件尾部）。
  * - control-plane 装配与 main.ts 同参（stateDir/webDistDir/host 包源），
  *   就绪后输出 ready 帧最小化 {port, shellVersion}（D8；其余身份字段走既有
  *   dsh-chamber:info）。
- * - 生命周期：SIGTERM/SIGINT/stdin EOF → 优雅回收（cp.stop）→ exit 0；
+ * - 生命周期：SIGTERM/SIGINT/stdin EOF → 优雅回收（cp.stop + ctx 侧
+ *   transport/gateway 会话回收（dispose——SSH 子进程不孤儿化））→ exit 0；
  *   uncaught → stderr + exit 1（B7 fatal 分级）。
  *
  * Electron-free 不变式：本文件零 electron import（electron-free-gate 面 A）。
  */
 import process from 'node:process'
 import { createInterface } from 'node:readline'
-import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createControlPlane } from '@dsh-chamber/control-plane'
 import { installIpcHandlers, type IpcRegistrar, type ShellAssemblyCtx } from './shell-core.ts'
 import { createNodeEdges, HOST_INBOUND } from './node-edges.ts'
-import {
-  DEFAULT_CHAMBER_SETTINGS,
-  readSettingsFile,
-  writeSettingsFile,
-  type ChamberSettings,
-} from './chamber-settings.ts'
+import { buildHeadlessCtx } from './sidecar-ctx.ts'
 
 // ---------------------------------------------------------------------------
 // 0. console 重定向（D2）：stdout 只允许协议写——console.log/info/debug 全部
@@ -155,120 +156,13 @@ const nodeEdges = createNodeEdges({
   },
 })
 
-const ctx: ShellAssemblyCtx = buildHeadlessCtx(args.userDataDir)
-
-function buildHeadlessCtx(userDataDir: string): ShellAssemblyCtx {
-  const stateDir = path.join(userDataDir, 'state')
-  mkdirSync(stateDir, { recursive: true })
-  const settingsPath = path.join(userDataDir, 'chamber-settings.json')
-  const auditPath = path.join(userDataDir, 'audit-log.jsonl')
-  let settings: ChamberSettings = (() => {
-    try {
-      const loaded = readSettingsFile(settingsPath)
-      return loaded.settings
-    } catch {
-      return DEFAULT_CHAMBER_SETTINGS
-    }
-  })()
-  const hostFacts = {
-    flavor: 'swift' as const,
-    controlPlaneUrl: '',
-    platform: process.platform,
-    trayPresent: () => true,
-  }
-  const real: Record<string, unknown> = {
-    hostFacts,
-    runtimeBaseDir: userDataDir,
-    localDshHome: path.join(stateDir, 'dsh-home'),
-    // transportManager：listInstances 最小真实化在 methodStub 定义后赋值
-    // （见 real.transportManager = …；此处不占位，Proxy 兜底到方法级 stub）。
-    settingsIO: {
-      current: () => settings,
-      commit: (next: ChamberSettings) => {
-        settings = next
-      },
-      persist: (next: ChamberSettings) => {
-        writeSettingsFile(settingsPath, next)
-      },
-    },
-    isQuitting: () => false,
-    runtimeFacts: {
-      dshVersion: () => {
-        // Swift flavor：dsh 版本事实由 Swift 壳/运行时管理层提供（M3 真实
-        // 化）；v1 返回 null = INFO 载荷 dshVersion:null（与可选语义一致）。
-        return null
-      },
-    },
-    audit: (event: unknown) => {
-      try {
-        appendFileSync(auditPath, safeStringify({ ts: Date.now(), ...((event ?? {}) as object) }) + '\n')
-      } catch (err) {
-        console.error('[sidecar] audit 追加失败：' + String(err))
-      }
-    },
-  }
-  // ctx 完成形态：真实字段 + Proxy 兜底（未实现字段 = loud 抛
-  // 'sidecar-ctx-unavailable:<field>'——绝不静默。占位字段的真实化计划：
-  // W-13（transportManager 装配）/ M3（runtime 控制器、plugin seed、gateway
-  // 会话、updateController 等 Swift flavor 宿主线）。
-  /** 递归 stub：可调用（调用即抛）+ 任意成员访问返回同款 stub（供
-   *  installIpcHandlers 顶部解构对象字段/方法后、在 handler 运行时才调用
-   *  的形态）；个别装配期必须可调用的成员在 real 中显式提供（见
-   *  updateController.subscribe）。 */
-  const methodStub = (prefix: string): ((..._args: never[]) => never) =>
-    new Proxy(
-      function stub(): never {
-        throw new Error('sidecar-ctx-unavailable:' + prefix)
-      },
-      {
-        get(target, key) {
-          const own = Reflect.get(target, key)
-          if (own !== undefined) return own
-          if (key === 'apply' || key === 'bind' || key === 'call') {
-            return Function.prototype[key as 'apply' | 'bind' | 'call']
-          }
-          if (typeof key === 'string') return methodStub(prefix + '.' + key)
-          return undefined
-        },
-      },
-    ) as ((..._args: never[]) => never)
-  real.updateController = Object.assign(methodStub('updateController'), {
-    subscribe: () => {
-      /* Swift flavor 更新状态经 hostFacts/update 事件面，M3/W-22 接真实推送 */
-    },
-  })
-  // transportManager：listInstances 最小真实化（registry 文件读——
-  // <userData>/ssh-instances.json；缺省文件 = 空列表；损坏 loud 且保留
-  // .corrupt，语义与 main loadInstances 同向）。其余方法（status/connect/
-  // disconnect/reverify/logs/exec/appendLog/saveInstances…）仍为 loud
-  // stub——SSH 隧道/凭据等 Swift flavor 宿主线留 M3 后续真实化清单。
-  // 零行时 instances_get 返回空列表，不再报 sidecar-ctx-unavailable。
-  real.transportManager = Object.assign(methodStub('transportManager'), {
-    listInstances: () => {
-      const file = path.join(userDataDir, 'ssh-instances.json')
-      if (!existsSync(file)) return []
-      let parsed: unknown
-      try {
-        parsed = JSON.parse(readFileSync(file, 'utf8'))
-      } catch (err) {
-        renameSync(file, file + '.corrupt')
-        throw new Error('sidecar-registry-corrupt:' + String(err instanceof Error ? err.message : err))
-      }
-      if (!Array.isArray(parsed)) {
-        renameSync(file, file + '.corrupt')
-        throw new Error('sidecar-registry-corrupt:not-array')
-      }
-      return parsed
-    },
-  })
-  return new Proxy(real as object, {
-    get(target: Record<string, unknown>, key: string | symbol) {
-      if (typeof key === 'symbol') return undefined
-      if (key in target) return target[key]
-      return methodStub(String(key))
-    },
-  }) as unknown as ShellAssemblyCtx
-}
+// S-C-1：无头 ctx 装配拆分至 sidecar-ctx.ts（buildHeadlessCtx——C/D/E 组注册体
+// 依赖真实化：providers/transportManager/audit/publishRegistryTransition/
+// confirmRegistryOriginSwitch，与 main.ts 同源同参；其余字段 loud stub，S-C-2
+// 范围清单见该文件头注释）。edges = 上方 nodeEdges 同一实例（单装配不变式——
+// publish push/确认对话框宿主腿与 installIpcHandlers 投递状态机同对象）。
+const headless = buildHeadlessCtx(args.userDataDir, nodeEdges)
+const ctx: ShellAssemblyCtx = headless.ctx
 
 /** 入站分派：edge 应答 → host 保留 method → 60 通道注册表。 */
 async function handleInboundLine(line: string): Promise<void> {
@@ -390,6 +284,13 @@ async function main(): Promise<void> {
     if (shuttingDown) return
     shuttingDown = true
     console.log('[sidecar] 优雅退出中…')
+    // S-C-1：C/D/E 组真实化后，回收腿同时关停传输层（SSH 隧道/在途 exec——
+    // disposeAsync 等待 SIGKILL 升级，子进程不孤儿化）与 gateway 会话内存。
+    try {
+      await headless.dispose()
+    } catch (err) {
+      console.error('[sidecar] ctx 回收失败：' + String(err))
+    }
     try {
       await controlPlane.stop()
     } catch (err) {
