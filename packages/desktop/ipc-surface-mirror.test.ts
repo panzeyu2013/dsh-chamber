@@ -57,6 +57,58 @@ function stripComments(text: string): string {
     .join('\n')
 }
 
+/** Robust whole-file comment stripper (B12/E8 dead-channel scan): block
+ *  comments, line comments and string literals are consumed in ONE state
+ *  pass. The regex `stripComments` above is only safe for short balanced
+ *  interface blocks — over a concatenated whole-file union, a slash-star
+ *  sequence inside a line comment (main.ts 注记含 /api/i/<id>/星) would pair
+ *  with a far-away close sequence and swallow real code. Strings are skipped
+ *  entirely here: IPC_CHANNELS constant references never live inside string
+ *  literals. */
+function stripCommentsRobust(text: string): string {
+  let out = ''
+  let inBlock = false
+  let inString: string | null = null
+  let i = 0
+  while (i < text.length) {
+    const ch = text[i]
+    const next = text[i + 1]
+    if (inString !== null) {
+      out += ch
+      if (ch === '\\' && next !== undefined) {
+        out += next
+        i += 2
+        continue
+      }
+      if (ch === inString) inString = null
+      i += 1
+      continue
+    }
+    if (inBlock) {
+      if (ch === '*' && next === '/') {
+        inBlock = false
+        i += 2
+        continue
+      }
+      i += 1
+      continue
+    }
+    if (ch === '/' && next === '/') {
+      while (i < text.length && text[i] !== '\n') i += 1
+      continue
+    }
+    if (ch === '/' && next === '*') {
+      inBlock = true
+      i += 2
+      continue
+    }
+    if (ch === '"' || ch === "'" || ch === '`') inString = ch
+    out += ch
+    i += 1
+  }
+  return out
+}
+
 /** Extract the sorted method names of one interface block. */
 function interfaceMethodNames(source: string, interfaceName: string): string[] {
   const names: string[] = []
@@ -642,6 +694,30 @@ test('every preload channel literal is a known IPC_CHANNELS value (B8 — consta
   for (const channel of [...preloadInvokeChannels, ...preloadOnChannels]) {
     assert.ok(known.has(channel), `preload references a channel that is not in IPC_CHANNELS: ${channel}`)
   }
+})
+
+test('no IPC_CHANNELS constant is dead or duplicated across the main-side files (B12/E8 — 68/68 恰用一次由事实变断言)', () => {
+  // W-10 S11 收口：installIpcHandlers 全 60 handler 注册点与 send 叶
+  // （edges.rendererPush）迁入后，把「68 个 channel 常量在 MAIN_SIDE_FILES
+  // （main.ts ∪ shell-core.ts ∪ electron-edges.ts）的**代码引用**中每个至少使用
+  // 一次（当前恰为各一次）」由事实变断言。计数只认 `IPC_CHANNELS.<KEY>` 常量
+  // 引用拼写（词边界）：任一常量 0 次 = 死 channel（注册/发送随某批迁出丢失，
+  // preload invoke/on 集合相等仍会过，但主侧事实与常量表漂移）；>1 次 = 意外
+  // 双引用（镜像 set 相等同样看不见，语义重复须显式登记）。若未来合法双引用
+  // （如一个 channel 有两个显式 send 源），此断言须随用途注记同步更新。
+  // 注释剥离用下方逐字扫描器（string/block/line 单趟状态机）——上面的
+  // stripComments 正则助手只适用于短 interface 块，整文件 union 里行注释中的
+  // `/*` 序列会让它吞掉真实代码（main.ts 注记含 /api/i/<id>/* 即触发）。
+  const code = stripCommentsRobust(mainSideSource())
+  const dead: string[] = []
+  const duplicated: string[] = []
+  for (const key of Object.keys(IPC_CHANNELS) as Array<keyof typeof IPC_CHANNELS>) {
+    const occurrences = [...code.matchAll(new RegExp(`\\bIPC_CHANNELS\\.${key}\\b`, 'g'))].length
+    if (occurrences < 1) dead.push(key)
+    else if (occurrences > 1) duplicated.push(key)
+  }
+  assert.deepEqual(dead, [], 'every IPC_CHANNELS constant must be referenced at least once by a main-side file')
+  assert.deepEqual(duplicated, [], 'every IPC_CHANNELS constant must be referenced exactly once on the main side')
 })
 
 // ---------------------------------------------------------------------------

@@ -170,6 +170,24 @@
  *    文案逐字一致；无窗 → false = 'native confirmation unavailable' 不确认语
  *    义）；runRuntimeCheck 随迁（周期/首检计时器仍归 main 装配侧，经导出入口
  *    runRuntimeCheckCycle 调用同一实现）。
+ *  Responsibilities relocated from main.ts (W-10 S11 runtime B + W-10 收口批):
+ *  - K 组 6 个注册体：RUNTIME_RECOVER_METADATA / RUNTIME_RESET_BUILTIN /
+ *    RUNTIME_RETRY_APPLY / RUNTIME_APPLY_NOW / RUNTIME_RETRY_RESTORE /
+ *    RUNTIME_RESTORE_PRE_ROLLBACK——按原 main.ts 顺序追加在 J 组之后
+ *    （installIpcHandlers ② 段）。注册体逐字随迁；「运行时启动事务宿主」
+ *    （runRuntimeStartup 与共享闭包族——executeMetadataRecovery 等恢复事务腿、
+ *    publishBlockedStartup/setRuntimeGate 宿主门、authoritativeMetadataRecoveryStatus /
+ *    runUserMetadataRecovery 元数据恢复资格投影与事务宿主、readApplyNowGateInput
+ *    APPLY_NOW 门输入构造、selectedJournalIntent、stopLocalDsh（cp.stopLocal 叶）、
+ *    runtimeOperationSlot 事务槽 begin/end/inFlight、bundledVersion 值）按施工图
+ *    留 main 装配侧、经 ctx 注入——K 组注册体与启动/证据路径共用同一实现/同一
+ *    运行时事务槽，语义不分叉（S11 收口：main 侧同名 confirmRuntimeMutation 闭包
+ *    随本批迁完删除，S10 遗留过渡双份消除）。dsh-runtime 纯逻辑直接 import
+ *    （queueActivationIntent / writeActivationIntent / restoreMarkerAuthorityStatus /
+ *    readActivationJournalState / writeOverride / listPreRollbackStashes /
+ *    restorePreRollback——electron-free 共享核）；evaluateApplyNowGate 直 import
+ *    apply-now-gate.ts（纯模块）。W-10 60 个 handler 至此全部迁入本文件
+ *    installIpcHandlers（main.ts 零 ipcMain.handle/webContents.send 注册面）。
  *
  * 中文说明：自 main.ts 机械搬运的 Electron-free 业务核心（零缝阶段，行为零
  * 变化）；W-10 S1 起 IPC 注册点与 A 组 info+settings 处理器迁入本文件
@@ -200,7 +218,19 @@
  * RUNTIME_CLEAR_FAILURE——控制器实例/fence/门/宿主叶经 ctx，dsh-runtime 纯
  * 逻辑直 import，确认对话框 = S6 edges 版助手同款宿主腿；runRuntimeCheck 随迁、
  * 周期检查经导出入口 runRuntimeCheckCycle）。
- * HostEdges 其余边沿叶与双 flavor 属后续批。
+ * S11 追加 K 组 runtime B 6 注册体（RUNTIME_RECOVER_METADATA / RUNTIME_RESET_BUILTIN /
+ * RUNTIME_RETRY_APPLY / RUNTIME_APPLY_NOW / RUNTIME_RETRY_RESTORE /
+ * RUNTIME_RESTORE_PRE_ROLLBACK——注册体逐字随迁：启动事务宿主/共享闭包族经 ctx
+ * 宿主叶（runRuntimeStartup / publishBlockedStartup / setRuntimeGate /
+ * authoritativeMetadataRecoveryStatus / runUserMetadataRecovery / readApplyNowGateInput /
+ * selectedJournalIntent / stopLocalDsh / runtimeOperationSlot / bundledVersion），
+ * evaluateApplyNowGate 直 import apply-now-gate.ts，dsh-runtime 纯逻辑直 import；
+ * `runtimeOperation !== null` 与 `quitRequested`、`cp.stopLocal()` 等宿主引用
+ * 逐处机械替换并注记；main 侧同名 confirmRuntimeMutation 闭包随本批删除）。
+ * **W-10 收口**：60 handler 全部迁入 installIpcHandlers（main.ts 零 ipcMain.handle /
+ * webContents.send 注册面——收口验证见 main.ts 顶部注释与 electron-free-gate
+ * 面 C 断言）。
+ * HostEdges 其余边沿叶与双 flavor 属后续批（W-10 之外）。
  */
 
 import { existsSync, promises as fsp, readFileSync } from 'node:fs';
@@ -301,6 +331,27 @@ import {
   listRuntimeFailures,
 } from '@dsh-chamber/dsh-runtime';
 import type { RuntimeAction, RuntimeOperationFence } from '@dsh-chamber/dsh-runtime';
+// W-10 S11（runtime B 批）：K 组 6 注册体直 import 的 @dsh-chamber/dsh-runtime
+// 纯逻辑（electron-free 共享核——activation intent/journal/override 的持久化写与
+// pre-rollback stash 的只读/恢复、restore marker 权威读；与 main.ts 同款 import
+// 面）；StartupResult / ActivationJournalState 为类型面（ctx 宿主叶签名与 K 组
+// 段内联事务注解用）。启动事务宿主（runRuntimeStartup 等）与共享闭包仍经 ctx
+// 注入——实例态与装配期单写者留 main。
+import {
+  listPreRollbackStashes,
+  queueActivationIntent,
+  readActivationJournalState,
+  restoreMarkerAuthorityStatus,
+  restorePreRollback,
+  writeActivationIntent,
+  writeOverride,
+} from '@dsh-chamber/dsh-runtime';
+import type { ActivationJournalState, StartupResult } from '@dsh-chamber/dsh-runtime';
+// W-10 S11: apply-now-gate.ts 为 electron-free 纯模块（主进程侧 RUNTIME_APPLY_NOW
+// 注册体的纯门矩阵——evaluateApplyNowGate 直 import；其输入构造 readApplyNowGateInput
+// 读 controlPlane/env/事务槽等装配侧状态，经 ctx 注入，见 ShellAssemblyCtx）。
+import { evaluateApplyNowGate } from './apply-now-gate.ts';
+import type { ApplyNowGateInput } from './apply-now-gate.ts';
 // W-10 S10: dsh-runtime-controller.ts 为 electron-free 纯编排模块（只 import
 // @dsh-chamber/dsh-runtime + sanitize-error，零 electron）——core 只做**类型**
 // import（DshRuntimeController / RuntimeLifecycleProjection 为结构纯类型面；
@@ -1314,9 +1365,21 @@ export function runRuntimeCheckCycle(): void {
 //     注册体与启动/证据路径共用同一实例，语义不分叉），dsh-runtime 纯逻辑直接
 //     import，确认对话框 = J 组段 S6 版 confirmRuntimeMutation 助手 +
 //     edges.showMessage，runRuntimeCheck 随迁并经导出入口 runRuntimeCheckCycle
-//     供 main 侧计时器调用同一实现，见 ShellAssemblyCtx）；
-//   ③ 自举（占位——控制面 ready 后的启动/恢复 push 与余下 drain 挂点在 W-10
-//      后续批迁入，见 macos-swift-v1.md §四批 2）。
+//     供 main 侧计时器调用同一实现，见 ShellAssemblyCtx）+ K 组 6 个注册体
+//     （S11 批 runtime B + W-10 收口：RUNTIME_RECOVER_METADATA / RUNTIME_RESET_BUILTIN /
+//     RUNTIME_RETRY_APPLY / RUNTIME_APPLY_NOW / RUNTIME_RETRY_RESTORE /
+//     RUNTIME_RESTORE_PRE_ROLLBACK——按原 main.ts 顺序追加在 J 组之后；启动事务
+//     宿主与共享闭包族经 ctx 宿主叶（runRuntimeStartup / publishBlockedStartup /
+//     setRuntimeGate / authoritativeMetadataRecoveryStatus / runUserMetadataRecovery /
+//     readApplyNowGateInput / selectedJournalIntent / stopLocalDsh /
+//     runtimeOperationSlot / bundledRuntimeVersion，见 ShellAssemblyCtx），
+//     dsh-runtime 纯逻辑与 evaluateApplyNowGate 直接 import，确认对话框复用 J 组段
+//     confirmRuntimeMutation——main 侧同名闭包随本批删除；W-10 60 handler 全迁完）；
+//   ③ W-10 收口注记（60 handler 已全部经 installIpcHandlers 注册：main.ts 仅剩
+//      装配/窗口 glue/生命周期/启动事务宿主——控制面 ready 后的启动/恢复 push 与
+//      OS 三入口 glue 本就是装配侧宿主职责，见 main.ts 顶部职责清单；Swift
+//      sidecar flavor 装配点与 HostEdges 余下边沿叶属 W-10 之外后续批，
+//      见 macos-swift-v1.md §四批 2）。
 // ---------------------------------------------------------------------------
 
 /** IPC 注册面：core 经它注册处理器（channel 为 opaque 通道名；Electron 侧
@@ -1337,6 +1400,10 @@ export interface SshPluginTarget {
   sourceToken: NotificationSourceToken
 }
 
+/** 元数据恢复可恢复状态联合（W-10 S11 ctx 签名用）——与 main.ts whenReady 内
+ *  同名局部类型逐字同构（结构等价，宿主叶赋值兼容；core 不持有额外形状）。 */
+type RecoverableMetadataStatus = 'selection-corrupt' | 'recovery-in-progress' | 'recovery-marker-corrupt'
+
 /** ShellAssemblyCtx — installIpcHandlers 装配上下文。最小集原则：只放已迁注册
  *  体与其随迁辅助实际引用的字段，后续批按需扩展（S1 → S2：增 isQuitting、移除
  *  reconcileBadgeCount——意图 holder 与裁决随 BADGE_COUNT 批迁入 core 后
@@ -1352,7 +1419,11 @@ export interface SshPluginTarget {
  *  （见字段注释）；S7（gateway 插件批）增 syncGatewayChamberPluginsFor 一字段
  *  （G 组手动 sync 的执行闭包——main 装配侧 ready 自动 sync 共用同一执行路径，
  *  见字段注释）；S8（本地插件批）增 runLocalPluginMutation 一字段（H 组本地插件
- *  注册体的宿主执行叶——main 装配侧 runtime writer fence/启动门编排，见字段注释）。
+ *  注册体的宿主执行叶——main 装配侧 runtime writer fence/启动门编排，见字段注释）；
+ *  S11（runtime B + 收口批）增 K 组 10 字段（runRuntimeStartup / publishBlockedStartup /
+ *  setRuntimeGate / authoritativeMetadataRecoveryStatus / runUserMetadataRecovery /
+ *  readApplyNowGateInput / selectedJournalIntent / stopLocalDsh / runtimeOperationSlot /
+ *  bundledRuntimeVersion——启动事务宿主与共享闭包族留装配侧，见字段注释）。
  *  chamber
  *  settings 的内存 holder 仍归装配侧（main.ts 尚余 20+ 处直读点，随各自批迁入时
  *  holder 一并搬家）；core 侧一律经 settingsIO 读写，权威单一、行为与搬迁前一
@@ -1546,18 +1617,20 @@ export interface ShellAssemblyCtx {
   // RUNTIME_CLEAR_FAILURE）的装配依赖。控制器现实例、fence 现实例、动作门与
   // 宿主叶全部由 main 装配侧定义并经 ctx 注入——main 侧 K 组注册体（RUNTIME_
   // RECOVER_METADATA / RESET_BUILTIN / RETRY_APPLY / APPLY_NOW / RETRY_RESTORE /
-  // RESTORE_PRE_ROLLBACK，后续批迁入）与启动/证据路径共用同一实例/闭包：状态
-  // 权威单一、单飞/串行化语义不分叉。注册体文本经上方解构以原名逐字保留（除
-  // `runtimeOperation !== null` → `runtimeOperationBusy()` 与
-  // `chamberSettings.registryOrigin` → `settingsIO.current().registryOrigin`
-  // 两处机械替换——见 J 组段注释）。
+  // RESTORE_PRE_ROLLBACK，W-10 S11 批迁入——新增字段见本接口尾部）与启动/证据
+  // 路径共用同一实例/闭包：状态权威单一、单飞/串行化语义不分叉。注册体文本经
+  // 上方解构以原名逐字保留（除 `runtimeOperation !== null` →
+  // `runtimeOperationBusy()` 与 `chamberSettings.registryOrigin` →
+  // `settingsIO.current().registryOrigin` 两处机械替换——见 J 组段注释）。
   /** DshRuntimeController 现实例（main 装配侧 whenReady 构造——类型 import 自
    *  dsh-runtime-controller.ts（electron-free 纯编排模块），core 只做类型面；
    *  K 组注册体与启动/证据路径共用同一实例，状态权威单一）。 */
   runtimeController: DshRuntimeController
   /** runtime 事务槽在飞读门（原 main.ts 模块级 `runtimeOperation !== null`——
-   *  槽位单写者仍归 main：启动事务/回滚/K 组注册体赋值，core 只经本叶读）。
-   *  J 组注册体文本中 `runtimeOperation !== null` 逐处机械替换为
+   *  槽位本体与单写者仍归 main：启动事务/自动回滚直接读写，K 组在飞事务的
+   *  登记/清槽/在飞值经 runtimeOperationSlot 叶（S11，见本接口尾部），core
+   *  只经本叶做 busy 布尔读）。
+   *  J/K 组注册体文本中 `runtimeOperation !== null` 逐处机械替换为
    *  runtimeOperationBusy()。 */
   runtimeOperationBusy(): boolean
   /** runtime writer fence 现实例（原 whenReady runtimeWriterFence——启动事务
@@ -1588,6 +1661,76 @@ export interface ShellAssemblyCtx {
    *  restartLocal() 从 restart-exhausted/error 等终态 resolve 时由 core 注册体
    *  按返回的 connectionState 白名单诚实拒绝。 */
   restartLocalDsh(): Promise<string>
+  // —— W-10 S11（runtime B + 收口批）新增字段：K 组 6 个 runtime 注册体
+  // （RUNTIME_RECOVER_METADATA / RUNTIME_RESET_BUILTIN / RUNTIME_RETRY_APPLY /
+  // RUNTIME_APPLY_NOW / RUNTIME_RETRY_RESTORE / RUNTIME_RESTORE_PRE_ROLLBACK）的
+  // 装配依赖。按施工图「运行时启动事务宿主经 ctx 宿主叶」：启动事务本体与其
+  // 共享闭包族全部由 main 装配侧定义并经 ctx 注入——K 组注册体与启动/证据路径
+  // 共用同一实现、同一运行时事务槽（模块级 runtimeOperation）与同一 gate/fence，
+  // 语义不分叉（executeMetadataRecovery 等恢复事务腿、runtimeOperationAbort /
+  // runtimeStartBlocked / runtimeInternalStart / runtimeTransactionWorkspace 等
+  // 装配侧事务状态绝不进 core）。dsh-runtime 纯逻辑（queueActivationIntent /
+  // writeActivationIntent / restoreMarkerAuthorityStatus / readActivationJournalState /
+  // writeOverride / listPreRollbackStashes / restorePreRollback）与 apply-now-gate.ts
+  // 的 evaluateApplyNowGate 为纯模块直接 import（见文件头 S11 段）。注册体文本的
+  // 机械替换（`runtimeOperation !== null` → runtimeOperationBusy()、`quitRequested`
+  // → quittingLeaf()、`cp.stopLocal()` → stopLocalDsh()、槽登记/清槽/在飞值 →
+  // runtimeOperationSlot.*）逐处注记于 K 组段注释。
+  /** 运行时启动事务宿主叶（原 whenReady runRuntimeStartup——装配侧事务本体；
+   *  K 组注册体与启动尾部（装配侧 refreshRuntimeEvidence().then(runRuntimeStartup)）
+   *  共用同一实现：内部 gate/fence/事务槽/abort 管理归装配侧，core 经本叶调用，
+   *  行为与搬迁前逐字一致（槽忙 → 返回在飞事务同原守卫）。 */
+  runRuntimeStartup(): Promise<StartupResult | null>
+  /** 启动阻塞发布叶（原 whenReady publishBlockedStartup——setRuntimeGate(true) +
+   *  refreshRuntimeEvidence 的组合宿主叶；reason 经 sanitizeErrorText 归一，patch
+   *  追加到 failed 投影之上；K 组注册体与启动路径共用同一实现）。 */
+  publishBlockedStartup(reason: string, patch?: RuntimeLifecycleProjection): Promise<void>
+  /** 宿主启动门写叶（原 whenReady setRuntimeGate——模块级 runtimeStartBlocked /
+   *  runtimeStartBlockedReason 槽与 cp.refreshLocalExposure 宿主刷新归装配侧；
+   *  K 组 RESET_BUILTIN 等注册体与启动事务共用同一门）。 */
+  setRuntimeGate(blocked: boolean, reason?: string | null): void
+  /** 元数据恢复资格投影叶（原 whenReady authoritativeMetadataRecoveryStatus——
+   *  quit/写进程安全/本地 writers quiescent/bundled 版本等宿主事实归装配侧；K 组
+   *  RECOVER_METADATA 注册体与 runUserMetadataRecovery 共用同一实现，语义不分叉）。
+   *  'incomplete' 为永久恢复终态（journaled 快照缺失/不可信），'half' 为瞬时可重试
+   *  ——门语义随原闭包逐字保留。 */
+  authoritativeMetadataRecoveryStatus(): RecoverableMetadataStatus | null
+  /** 用户触发元数据恢复事务宿主叶（原 whenReady runUserMetadataRecovery——恢复事务
+   *  在飞登记（事务槽/abort/workspace 写）与 executeMetadataRecovery 腿在装配侧；
+   *  K 组 RECOVER_METADATA 注册体经本叶启动同一事务，行为与搬迁前一致）。
+   *  返回 null = 资格不符/已在飞（注册体原样返回当前 state）。 */
+  runUserMetadataRecovery(
+    expectedStatus: RecoverableMetadataStatus,
+  ): Promise<StartupResult | null> | null
+  /** APPLY_NOW 门输入构造叶（原 whenReady readApplyNowGateInput——controlPlane
+   *  connectionState / envOverrideActive / 事务槽等装配侧宿主读在叶内；
+   *  evaluateApplyNowGate 纯门在 core 直接 import，同一输入形状（pending ??
+   *  journalTarget ?? overridePending 三源解析与目标树 preflight 逐字保留）。 */
+  readApplyNowGateInput(): ApplyNowGateInput
+  /** activation journal intent 选择（原 whenReady selectedJournalIntent——main 启动
+   *  路径 readActivationFacts 与 K 组 RETRY_APPLY 注册体共用同一实现；core 侧只消费
+   *  targetVersion 投影，完整记录仍在装配侧闭包内使用）。 */
+  selectedJournalIntent(state: ActivationJournalState): { targetVersion: string | null } | null
+  /** 本机 dsh 宿主停止叶（PlaneHandle 在 main——原 `cp.stopLocal()`；K 组
+   *  RESTORE_PRE_ROLLBACK 事务的 stop 腿经本叶，与 runRuntimeStartup 内部的
+   *  同源 stop 语义一致；异常按原调用点的 .catch 折算）。 */
+  stopLocalDsh(): Promise<void>
+  /** runtime 事务槽（原 main.ts 模块级 runtimeOperation——槽本体与单写者仍归装配
+   *  侧：启动事务/自动回滚/quit 路径直接读写同一槽）；core 的 busy 读经
+   *  runtimeOperationBusy()（S10），K 组注册体的在飞值读与登记/清槽经本对象：
+   *  - begin：登记一个在飞事务（原 `runtimeOperation = operation`——RESET_BUILTIN
+   *    的 queue-behind-applying 与 RESTORE_PRE_ROLLBACK 事务登记）；
+   *  - end：清槽（原 finally `runtimeOperation = null`）；
+   *  - inFlight：在飞事务 promise 值读（原 `const inFlight = runtimeOperation`——
+   *    RESET_BUILTIN 需 await 在飞 applying 事务本体后再启动）。 */
+  runtimeOperationSlot: {
+    begin(operation: Promise<StartupResult | null>): void
+    end(): void
+    inFlight(): Promise<StartupResult | null> | null
+  }
+  /** 内建 dsh 版本（whenReady 装配期解析值快照——原 main.ts bundledVersion 常量；
+   *  K 组 RESET_BUILTIN 注册体与启动路径同一事实；core 不自行解析内置 workspace）。 */
+  bundledRuntimeVersion: string | null
 }
 
 /** 装配 shell IPC 面（W-10 S1 A 组 + S2 B 组 + S3 C 组 + S4 D 组 + S5 E 组 +
@@ -1696,6 +1839,30 @@ export function installIpcHandlers(deps: {
     refreshRuntimeEvidence,
     runStorePruneIfNeeded,
     restartLocalDsh,
+    // W-10 S11 另增 K 组字段（runtime B 批）：运行时启动事务宿主叶与共享闭包族
+    // ——runRuntimeStartup（启动事务本体）/ publishBlockedStartup / setRuntimeGate
+    // （宿主启动门与阻塞发布）/ authoritativeMetadataRecoveryStatus /
+    // runUserMetadataRecovery（元数据恢复资格投影与事务宿主）/ readApplyNowGateInput
+    // （APPLY_NOW 门输入构造——controlPlane/env 宿主读在装配侧）/ selectedJournalIntent
+    // （启动路径 readActivationFacts 共用同一实现）/ stopLocalDsh（cp.stopLocal 叶）/
+    // runtimeOperationSlot（事务槽 begin/end/inFlight——槽本体仍为模块级
+    // runtimeOperation，单写者归装配侧）/ bundledRuntimeVersion（装配期值，解构改名
+    // bundledVersion——K 组注册体文本以原名逐字保留）。evaluateApplyNowGate 与
+    // dsh-runtime 纯逻辑直接 import（见文件头 S11 段）。K 组注册体与启动/证据路径
+    // 共用同一实现/同一槽，语义不分叉（registering bodies 逐字随迁的机械替换
+    // `runtimeOperation !== null` → runtimeOperationBusy()、`quitRequested` →
+    // quittingLeaf()、`cp.stopLocal()` → stopLocalDsh()、槽登记/清槽/在飞值 →
+    // runtimeOperationSlot.* 见 K 组段注释）。
+    runRuntimeStartup,
+    publishBlockedStartup,
+    setRuntimeGate,
+    authoritativeMetadataRecoveryStatus,
+    runUserMetadataRecovery,
+    readApplyNowGateInput,
+    selectedJournalIntent,
+    stopLocalDsh,
+    runtimeOperationSlot,
+    bundledRuntimeVersion: bundledVersion,
   } = deps.ctx
 
   // ① edges 回灌订阅段（S2 转实）：OS 唤醒与主窗口 'show' 的事件源语义自 main.ts
@@ -3470,7 +3637,8 @@ export function installIpcHandlers(deps: {
   //    语义，调用方静默返回当前 state，与搬迁前 win==null||isDestroyed→false
   //    同向；预检与调用间窗口销毁竞态 → showMessage 叶抛 'native confirmation
   //    unavailable' → 注册体 reject，与搬迁前 showMessageBox(win) 抛出同形）。
-  //    main 侧同名闭包因 K 组注册体仍在使用而保留（后续批迁完即删）。
+  //    main 侧同名闭包原为 K 组注册体保留，已随 W-10 S11 K 组批迁完删除
+  //    （S10 遗留过渡双份消除——K 组注册体同用本助手，见 K 组段注释）。
   //  - runRuntimeCheck 随迁（quit 门 = quittingLeaf——S2 装配的 ctx.isQuitting
   //    快照；原模块级 quitRequested 直读同值）；main 装配侧的首检/周期计时器
   //    经模块级导出入口 runRuntimeCheckCycle 调用本段同一实现（apply/restore
@@ -3687,6 +3855,284 @@ export function installIpcHandlers(deps: {
     void runRuntimeCheck();
   };
 
-  // ③ 自举（W-10 后续批占位：控制面 ready 后的启动/恢复 push、余下 drain 挂点
-  //    迁入点——见 macos-swift-v1.md §四批 2）。
+  // —— K 组（S11 批；W-10 runtime B + W-10 收口批）——
+  // runtime 6 注册体（RUNTIME_RECOVER_METADATA / RUNTIME_RESET_BUILTIN /
+  // RUNTIME_RETRY_APPLY / RUNTIME_APPLY_NOW / RUNTIME_RETRY_RESTORE /
+  // RUNTIME_RESTORE_PRE_ROLLBACK——按原 main.ts 顺序紧接 J 组追加）。注册体自
+  // main.ts 逐字迁入（trustedIpc 围栏由装配侧注入 registrar 包装），本段为 W-10
+  // 收口批：60 handler 全部注册点落位本函数，main.ts 零 ipcMain.handle。随迁内容：
+  //  - 确认对话框 = 上方 J 组段 S10 版 confirmRuntimeMutation 助手（按钮序/取消
+  //    默认/文案与 main 侧原闭包逐字一致；无窗 → false = 'native confirmation
+  //    unavailable' 不确认语义同向）。S11 收口：main 侧同名闭包已随本批迁完删除
+  //    （S10 遗留过渡双份消除，见 main.ts 原定义处注记）。
+  //  - 运行时启动事务宿主 = ctx 宿主叶 runRuntimeStartup（装配侧事务本体——内部
+  //    gate/fence/事务槽/abort 管理与 executeMetadataRecovery 等恢复事务腿归装配
+  //    侧；槽忙守卫「返回在飞事务」随原实现逐字保留）；宿主启动门与阻塞发布叶 =
+  //    ctx.setRuntimeGate / ctx.publishBlockedStartup（RESET_BUILTIN / RETRY_APPLY /
+  //    RESTORE_PRE_ROLLBACK 的 blocked 发布与 gate 写与启动路径同一实现）。
+  //  - 元数据恢复资格投影/事务宿主 = ctx 宿主叶 authoritativeMetadataRecoveryStatus /
+  //    runUserMetadataRecovery（RECOVER_METADATA 注册体与恢复事务启动共用同一实现，
+  //    语义不分叉——executeMetadataRecovery 与槽/abort 写留装配侧）。
+  //  - APPLY_NOW 门：evaluateApplyNowGate = apply-now-gate.ts 纯逻辑直接 import
+  //    （纯门矩阵，无宿主依赖）；门输入构造 readApplyNowGateInput 经 ctx 注入
+  //    （装配侧构造——controlPlane.connectionState / envOverrideActive / 事务槽等
+  //    宿主读在叶内；pending ?? journalTarget ?? overridePending 三源解析与目标树
+  //    preflight 逐字保留）。quit 在途门 = quittingLeaf()（S2 装配的 ctx.isQuitting
+  //    快照——原注册体 `if (quitRequested)` 逐处机械替换，同 J 组段 runRuntimeCheck
+  //    「quit 门 = quittingLeaf」先例；main 侧模块级 quitRequested 直读同值）。
+  //  - runtime 事务槽：`runtimeOperation !== null` 逐处机械替换为
+  //    runtimeOperationBusy()（S10 读门——live 读装配侧模块级槽，同一事实源）；
+  //    RESET_BUILTIN 的 queue-behind-applying 需 await 在飞事务本体（原
+  //    `const inFlight = runtimeOperation` → runtimeOperationSlot.inFlight()）；
+  //    RESTORE_PRE_ROLLBACK 的在飞事务登记/清槽（原 `runtimeOperation = operation`
+  //    与 finally `runtimeOperation = null` → runtimeOperationSlot.begin/end）——
+  //    槽本体（模块级 runtimeOperation）单写者仍归装配侧（启动事务/自动回滚/K 组
+  //    经同一槽串行化，语义不分叉）。
+  //  - dsh-runtime 纯逻辑直接 import（queueActivationIntent / writeActivationIntent /
+  //    restoreMarkerAuthorityStatus / readActivationJournalState / writeOverride /
+  //    listPreRollbackStashes / restorePreRollback——electron-free 共享核，与
+  //    main.ts 同款 import 面）；selectedJournalIntent 经 ctx（装配侧启动路径
+  //    readActivationFacts 共用同一实现）；bundledVersion = ctx.bundledRuntimeVersion
+  //    装配期值（解构改名，注册体文本以原名逐字保留）；本机宿主停止腿 =
+  //    ctx.stopLocalDsh（原 `cp.stopLocal()` 机械替换——PlaneHandle 宿主不进入
+  //    core，同 restartLocalDsh 先例）。
+  deps.ipc.handle(IPC_CHANNELS.RUNTIME_RECOVER_METADATA, async () => {
+    const before = runtimeInstance.getState();
+    const expectedStatus = authoritativeMetadataRecoveryStatus();
+    // First authority read occurs before showing a destructive native
+    // confirmation. A forged renderer action cannot manufacture eligibility.
+    if (runtimeOperationBusy()
+      || !runtimeActionAllowed('recover-metadata')
+      || expectedStatus === null) return before;
+    if (!await confirmRuntimeMutation(
+      '保留数据并恢复内建 dsh？',
+      expectedStatus === 'recovery-marker-corrupt'
+        ? '将停止本地实例，另存一份完整 DSH_HOME，把损坏的恢复标记按原始字节归档且不修改既有恢复数据，再用内建 dsh 执行完整只读探针。只有探针全部通过才会恢复本地访问。'
+        : '将停止本地实例，先保留 DSH_HOME 完整数据副本和原始选择元数据证据，再用内建 dsh 执行完整只读探针。只有探针全部通过才会恢复本地访问。',
+      '保留数据并恢复内建',
+    )) return runtimeInstance.getState();
+    // Re-read after the modal. A restore marker, env override, platform
+    // change, writer, or another recovery transaction always wins the race.
+    if (runtimeOperationBusy()
+      || !runtimeActionAllowed('recover-metadata')
+      || authoritativeMetadataRecoveryStatus() !== expectedStatus) return runtimeInstance.getState();
+    const operation = runUserMetadataRecovery(expectedStatus);
+    if (operation === null) return runtimeInstance.getState();
+    await operation;
+    return runtimeInstance.getState();
+  });
+  deps.ipc.handle(IPC_CHANNELS.RUNTIME_RESET_BUILTIN, async () => {
+    const before = runtimeInstance.getState();
+    const queueBehindApplying = runtimeOperationBusy() && before.phase === 'applying';
+    if ((!queueBehindApplying && runtimeOperationBusy()) || before.source === 'env' || before.hasOverride !== true
+      || !runtimeActionAllowed('reset-builtin')) return before;
+    if (!queueBehindApplying && restoreMarkerAuthorityStatus(runtimeBaseDir) !== 'missing') {
+      setRuntimeGate(true, '数据恢复未完成；恢复内建前须先重试恢复');
+      return refreshRuntimeEvidence({
+        phase: 'failed', canRetryRestore: true, restoreOutcome: 'incomplete',
+        error: '数据恢复未完成；恢复内建前须先重试恢复',
+        runtimeBlocked: true,
+        runtimeBlockedReason: '数据恢复未完成；恢复内建前须先重试恢复',
+      }).then(() => runtimeInstance.getState());
+    }
+    if (!await confirmRuntimeMutation('恢复内建 dsh 运行时？', '将停止本地实例并清除用户运行时指针；版本树与快照仍保留。', '恢复内建')) return runtimeInstance.getState();
+    const current = runtimeInstance.getState();
+    const inFlight = runtimeOperationSlot.inFlight();
+    const stillQueueing = inFlight !== null && current.phase === 'applying';
+    if ((!stillQueueing && runtimeOperationBusy()) || current.source === 'env' || current.hasOverride !== true
+      || !runtimeActionAllowed('reset-builtin')) return current;
+    if (stillQueueing) {
+      try {
+        if (bundledVersion === null || !isSafeVersion(bundledVersion)) throw new Error('无法确认内建 dsh 运行时版本');
+        queueActivationIntent(runtimeBaseDir, {
+          targetVersion: bundledVersion,
+          targetIsBuiltin: true,
+          manualRollback: false,
+          intentKind: 'reset-builtin',
+        });
+      } catch (error) {
+        runtimeInstance.setLifecycle({
+          error: sanitizeErrorText(`无法排队恢复内建事务：${error instanceof Error ? error.message : String(error)}`),
+        });
+        return runtimeInstance.getState();
+      }
+      await inFlight.catch(() => null);
+      await runRuntimeStartup();
+      return runtimeInstance.getState();
+    }
+    if (restoreMarkerAuthorityStatus(runtimeBaseDir) !== 'missing') {
+      setRuntimeGate(true, '数据恢复未完成；恢复内建前须先重试恢复');
+      return refreshRuntimeEvidence({
+        phase: 'failed', canRetryRestore: true, restoreOutcome: 'incomplete',
+        error: '数据恢复未完成；恢复内建前须先重试恢复',
+        runtimeBlocked: true,
+        runtimeBlockedReason: '数据恢复未完成；恢复内建前须先重试恢复',
+      }).then(() => runtimeInstance.getState());
+    }
+    try {
+      if (bundledVersion === null || !isSafeVersion(bundledVersion)) {
+        throw new Error('无法确认内建 dsh 运行时版本');
+      }
+      writeActivationIntent(runtimeBaseDir, {
+        targetVersion: bundledVersion,
+        targetIsBuiltin: true,
+        manualRollback: false,
+        intentKind: 'reset-builtin',
+      });
+    } catch (error) {
+      await publishBlockedStartup(`无法持久化恢复内建事务：${error instanceof Error ? error.message : String(error)}`);
+      return runtimeInstance.getState();
+    }
+    await runRuntimeStartup();
+    return runtimeInstance.getState();
+  });
+  deps.ipc.handle(IPC_CHANNELS.RUNTIME_RETRY_APPLY, async () => {
+    const before = runtimeInstance.getState();
+    if (runtimeOperationBusy() || before.source === 'env'
+      || !runtimeActionAllowed('retry-apply')) return before;
+    const overrideState = readOverrideState(runtimeBaseDir);
+    const journalState = readActivationJournalState(runtimeBaseDir);
+    const retryTarget = selectedJournalIntent(journalState)?.targetVersion
+      ?? (overrideState.kind === 'valid' ? overrideState.record.pending : null);
+    if (retryTarget === null) return runtimeInstance.getState();
+    if (!await confirmRuntimeMutation(`重试应用 dsh ${retryTarget}？`, '将停止本地实例并从持久化事务安全续作。', '重试应用')) return runtimeInstance.getState();
+    const current = runtimeInstance.getState();
+    if (runtimeOperationBusy() || current.source === 'env'
+      || !runtimeActionAllowed('retry-apply')) return current;
+    const latestOverride = readOverrideState(runtimeBaseDir);
+    if (latestOverride.kind === 'valid') {
+      writeOverride(runtimeBaseDir, {
+        ...latestOverride.record,
+        swapAttempted: false,
+        lastOutcome: null,
+        lastError: null,
+      });
+    }
+    await runRuntimeStartup();
+    return runtimeInstance.getState();
+  });
+  // Apply-now 入口语义（原 main.ts readApplyNowGateInput 上方注释——本文件只挂
+  // 注册体；完整注记随 readApplyNowGateInput 留 main 装配侧，见 K 组段头注释）。
+  deps.ipc.handle(IPC_CHANNELS.RUNTIME_APPLY_NOW, async () => {
+    const before = runtimeInstance.getState();
+    // Quit is in flight: never start a transaction that the quit path will
+    // immediately abort (same gate as runRuntimeCheck——W-10 S10：runRuntimeCheck
+    // 已随 RUNTIME_CHECK 注册体迁入 shell-core J 组段，同门语义不变）。
+    if (quittingLeaf()) return before;
+    const gate = evaluateApplyNowGate(readApplyNowGateInput());
+    // F5: without a durable pending transaction a startup would only stop
+    // and respawn the instance pointlessly. A snapshot-failed override must
+    // be retried through the dedicated retry-apply path instead; a corrupt
+    // target tree is rejected before any stopLocal is attempted.
+    if (!gate.ok) return before;
+    if (!await confirmRuntimeMutation(
+      `立即切换到 dsh ${gate.target}？`,
+      'dsh 将立即重启并切换到该版本（约 30–90 秒）。进行中的会话会中断，你的数据不受影响；若切换失败，dsh 会自动回滚并保留现场。',
+      '立即应用并重启',
+    )) return runtimeInstance.getState();
+    // TOCTOU: re-read the full gate after the modal, exactly like retry-apply.
+    // The input builder is identical to the first gate, so the second gate
+    // covers the override.pending fallback and tree preflight too.
+    const current = runtimeInstance.getState();
+    const secondGate = evaluateApplyNowGate(readApplyNowGateInput());
+    // The confirm dialog named gate.target: a re-read that resolves a
+    // different target must not start a transaction for a version the user
+    // never confirmed.
+    if (!secondGate.ok || secondGate.target !== gate.target) return current;
+    await runRuntimeStartup();
+    return runtimeInstance.getState();
+  });
+  deps.ipc.handle(IPC_CHANNELS.RUNTIME_RETRY_RESTORE, async () => {
+    const before = runtimeInstance.getState();
+    if (runtimeOperationBusy()
+      || !runtimeActionAllowed('retry-restore')) return before;
+    if (!await confirmRuntimeMutation('重试恢复 dsh 数据？', '将停止本地实例并从已记录的快照事务继续恢复。', '重试恢复')) return runtimeInstance.getState();
+    const current = runtimeInstance.getState();
+    if (runtimeOperationBusy()
+      || !runtimeActionAllowed('retry-restore')) return current;
+    await runRuntimeStartup();
+    return runtimeInstance.getState();
+  });
+  deps.ipc.handle(IPC_CHANNELS.RUNTIME_RESTORE_PRE_ROLLBACK, async (args) => {
+    // Only a stash-shaped basename is accepted; the main process re-validates
+    // it against its own private pre-rollback listing before any mutation.
+    const stashName = args !== null && typeof args === 'object'
+      ? (args as Record<string, unknown>).stashName
+      : undefined;
+    if (typeof stashName !== 'string' || !/^\d{13}-[0-9a-f]{8}$/.test(stashName)) {
+      return runtimeInstance.getState();
+    }
+    const before = runtimeInstance.getState();
+    if (runtimeOperationBusy()
+      || !runtimeActionAllowed('restore-pre-rollback')) return before;
+    if (!await confirmRuntimeMutation(
+      '恢复回滚前数据？',
+      '将停止本地实例，把当前 DSH_HOME 保留为 dsh-home.old，再用最近一次手动回滚前保存的数据覆盖恢复。恢复事务崩溃安全，可在下次启动续作。',
+      '恢复回滚前数据',
+    )) return runtimeInstance.getState();
+    const current = runtimeInstance.getState();
+    if (runtimeOperationBusy()
+      || !runtimeActionAllowed('restore-pre-rollback')) return current;
+
+    const restoreResult: {
+      outcome: 'complete' | 'half' | 'incomplete' | 'blocked'
+      error: string | null
+    } = { outcome: 'blocked', error: null };
+    const operation = (async (): Promise<StartupResult | null> => {
+      const lease = runtimeWriterFence.tryAcquire('runtime:restore-pre-rollback');
+      if (lease === null) return null;
+      try {
+        const stashes = await listPreRollbackStashes(runtimeBaseDir);
+        if (!stashes.includes(stashName)) {
+          throw new Error('回滚前数据暂存已不存在或不可信');
+        }
+        await stopLocalDsh();
+        restoreResult.outcome = await restorePreRollback(runtimeBaseDir, localDshHome, stashName);
+      } finally {
+        lease.release();
+      }
+      return null;
+    })().catch(async (error) => {
+      await stopLocalDsh().catch(() => undefined);
+      // Recorded, not hard-blocked: the startup transaction below restarts
+      // the instance (a thrown transaction leaves a resumeable marker).
+      restoreResult.error = sanitizeErrorText(error instanceof Error ? error.message : String(error));
+      return null;
+    }).finally(() => {
+      runtimeOperationSlot.end();
+    });
+    runtimeOperationSlot.begin(operation);
+    await operation;
+    if (restoreResult.outcome === 'blocked') return runtimeInstance.getState();
+    // A 'half' restore leaves the durable marker for retry-restore to resume
+    // (the standard restore-half convention).
+    if (restoreResult.outcome === 'half') {
+      await publishBlockedStartup('恢复回滚前数据未完成（现场已保留），请重试恢复', {
+        restoreOutcome: 'half',
+        canRetryRestore: true,
+      });
+      return runtimeInstance.getState();
+    }
+    if (restoreResult.outcome === 'incomplete') {
+      // The stash was missing/untrustworthy, so DSH_HOME was never touched.
+      // Restart the instance (never a hard block), then THROW so the
+      // renderer surfaces the failure in its persistent action-error slot —
+      // a silent restart would hide the rejection from the user.
+      await runRuntimeStartup();
+      throw new Error('回滚前数据暂存缺失或不可信；拒绝恢复');
+    }
+    if (restoreResult.error !== null) {
+      await runRuntimeStartup();
+      throw new Error(`恢复回滚前数据失败：${restoreResult.error}`);
+    }
+    // 'complete': restart the local instance against the restored data.
+    await runRuntimeStartup();
+    return runtimeInstance.getState();
+  });
+
+  // ③ W-10 收口注记（60 handler 已全部经 installIpcHandlers 注册：main.ts 仅剩
+  //    装配/窗口 glue/生命周期/启动事务宿主——控制面 ready 后的启动/恢复 push 与
+  //    OS 三入口 glue 本就是装配侧宿主职责，见 main.ts 顶部职责清单；Swift
+  //    sidecar flavor 装配点与 HostEdges 余下边沿叶属 W-10 之外后续批，
+  //    见 macos-swift-v1.md §四批 2）。
 }
