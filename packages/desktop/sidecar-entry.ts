@@ -3,22 +3,27 @@
  * §3.1/§3.3/§4.4.2/D2/D8）
  *
  * 进程模型（design 25 §3.1）：Swift 壳 spawn 本进程（node sidecar-entry.ts
- * --user-data-dir <dir> [--dsh-path …] [--web-dist-dir …] [--port N]）。
+ * --user-data-dir <dir> [--dsh-path …] [--web-dist-dir …] [--port N]
+ * [--host-graph-dir …] [--host-git-dir …] [--host-archive-dir …]）。
  * - stdout = B 桥协议流（NDJSON，唯一协议写面）；stderr = 日志（D2：入口把
  *   存量 console.* 重定向到 stderr）。
  * - 业务 = shell-core.installIpcHandlers（60/60 注册体，语义与 Electron 版
  *   同一实现）；宿主边沿 = node-edges.ts（HostEdges → edge/notify → Swift）。
  * - 无头 ctx = sidecar-ctx.ts buildHeadlessCtx（W-13 拆分落位；S-C-1 起
- *   C/D/E 组注册体依赖真实化——providers/transportManager/audit/
- *   publishRegistryTransition/confirmRegistryOriginSwitch 与 main.ts 同源
- *   同参装配，见 sidecar-ctx.ts 头注释；其余字段仍 loud stub，S-C-2 范围
- *   清单在该文件尾部）。
- * - control-plane 装配与 main.ts 同参（stateDir/webDistDir/host 包源），
- *   就绪后输出 ready 帧最小化 {port, shellVersion}（D8；其余身份字段走既有
- *   dsh-chamber:info）。
- * - 生命周期：SIGTERM/SIGINT/stdin EOF → 优雅回收（cp.stop + ctx 侧
- *   transport/gateway 会话回收（dispose——SSH 子进程不孤儿化））→ exit 0；
- *   uncaught → stderr + exit 1（B7 fatal 分级）。
+ *   C/D/E 组注册体依赖真实化；S-C-2 起 F/G/H/J/K 组注册体依赖 + runtime
+ *   控制器族全部真实化——见 sidecar-ctx.ts 头注释。本文件（装配接线）：
+ *   buildHeadlessCtx 增 inputs（--dsh-path → builtinDshWorkspace、host 包源
+ *   三目录）；本地 dsh spawn 门（localSpawnGates）原样接入 createControlPlane
+ *   （main 1203-1220 三闭包语义）；controlPlane.start() 后 bindPlane(cp)（plane
+ *   晚绑定：代理注册/会话 refresh/restart 宿主腿/connectionState 投影）→
+ *   ready 帧 → runStartupTail()（main 3785-3789 同形——refreshRuntimeEvidence
+ *   .then(runRuntimeStartup)：本地实例启动/激活由启动事务权威决定，取代
+ *   S-C-2 前的无条件 pre-spawn startLocal（Electron main 语义同源——渲染器
+ *   自动启动 POST 幂等同路径，canStartLocal/canExposeLocal 门控制）。）
+ * - 生命周期：SIGTERM/SIGINT/stdin EOF → 优雅回收（quitting 门 + 在飞运行时
+ *   事务 abort + cp.stop + ctx 侧 transport/gateway 会话/插件子进程/安装器
+ *   回收（dispose——SSH 子进程不孤儿化））→ exit 0；uncaught → stderr + exit 1
+ *   （B7 fatal 分级）。
  *
  * Electron-free 不变式：本文件零 electron import（electron-free-gate 面 A）。
  */
@@ -30,7 +35,7 @@ import { fileURLToPath } from 'node:url'
 import { createControlPlane } from '@dsh-chamber/control-plane'
 import { installIpcHandlers, type IpcRegistrar, type ShellAssemblyCtx } from './shell-core.ts'
 import { createNodeEdges, HOST_INBOUND } from './node-edges.ts'
-import { buildHeadlessCtx } from './sidecar-ctx.ts'
+import { buildHeadlessCtx, type HeadlessCtxAssembly } from './sidecar-ctx.ts'
 
 // ---------------------------------------------------------------------------
 // 0. console 重定向（D2）：stdout 只允许协议写——console.log/info/debug 全部
@@ -156,14 +161,6 @@ const nodeEdges = createNodeEdges({
   },
 })
 
-// S-C-1：无头 ctx 装配拆分至 sidecar-ctx.ts（buildHeadlessCtx——C/D/E 组注册体
-// 依赖真实化：providers/transportManager/audit/publishRegistryTransition/
-// confirmRegistryOriginSwitch，与 main.ts 同源同参；其余字段 loud stub，S-C-2
-// 范围清单见该文件头注释）。edges = 上方 nodeEdges 同一实例（单装配不变式——
-// publish push/确认对话框宿主腿与 installIpcHandlers 投递状态机同对象）。
-const headless = buildHeadlessCtx(args.userDataDir, nodeEdges)
-const ctx: ShellAssemblyCtx = headless.ctx
-
 /** 入站分派：edge 应答 → host 保留 method → 60 通道注册表。 */
 async function handleInboundLine(line: string): Promise<void> {
   let frame: Record<string, unknown>
@@ -208,13 +205,10 @@ async function handleInboundLine(line: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// 4. shell-core 装配（60/60 注册体；installIpcHandlers 恰一次、先于 ready）
-// ---------------------------------------------------------------------------
-installIpcHandlers({ ipc: ipcRegistrar, edges: nodeEdges, ctx })
-console.log('[sidecar] installIpcHandlers 完成：' + registry.size + ' 通道注册')
-
-// ---------------------------------------------------------------------------
-// 5. control-plane 装配与 ready 帧
+// 4. 装配启动（async bootstrap）：无头 ctx（S-C-1/S-C-2 真实化装配）→
+//    shell-core 60/60 注册体（installIpcHandlers 恰一次、先于 ready）→
+//    control-plane 装配（本地 spawn 门 = headless.localSpawnGates——main
+//    1203-1220 同语义）→ bindPlane（plane 晚绑定）→ ready 帧 → 启动尾部。
 // ---------------------------------------------------------------------------
 const moduleDir = path.dirname(fileURLToPath(import.meta.url))
 const shellVersion = ((): string => {
@@ -226,7 +220,30 @@ const shellVersion = ((): string => {
   }
 })()
 
-async function main(): Promise<void> {
+let headless: HeadlessCtxAssembly | null = null
+let ctx: ShellAssemblyCtx | null = null
+let controlPlaneInstance: Awaited<ReturnType<typeof createControlPlane>> | null = null
+let shuttingDown = false
+
+async function boot(): Promise<void> {
+  // S-C-1/S-C-2 无头 ctx（async：启动前导 reaps 本地插件写进程账目；edges =
+  // 上方 nodeEdges 同一实例——单装配不变式，publish push/确认对话框/设置
+  // 副作用宿主腿与 installIpcHandlers 投递状态机同对象）。
+  headless = await buildHeadlessCtx(args.userDataDir, nodeEdges, {
+    builtinDshWorkspace: args.dshPath,
+    hostPackageDirs: {
+      graph: args.hostGraphDir,
+      git: args.hostGitDir,
+      archive: args.hostArchiveDir,
+    },
+  })
+  ctx = headless.ctx
+
+  // shell-core 装配（60/60 注册体；installIpcHandlers 恰一次、先于 ready——
+  // invoke 只能在 ready 帧之后到达，注册先于任何入站业务调用）。
+  installIpcHandlers({ ipc: ipcRegistrar, edges: nodeEdges, ctx: headless.ctx })
+  console.log('[sidecar] installIpcHandlers 完成：' + registry.size + ' 通道注册')
+
   let webDistDir = args.webDistDir
   if (webDistDir === null) {
     // 兜底：临时最小静态目录（仅保证 cp 起动；真实 UI dist 由打包/参数提供）
@@ -238,7 +255,11 @@ async function main(): Promise<void> {
     console.error('[sidecar] 警告：未提供 --web-dist-dir，控制面静态伺服使用临时 stub（非真实 UI）')
   }
 
-  const dshPath = args.dshPath
+  // control-plane 装配与 main.ts 同参（stateDir/webDistDir/host 包源）；本地
+  // dsh spawn 门（getDshWorkspacePath/canStartLocal/canExposeLocal）=
+  // headless.localSpawnGates（S-C-2：runtime 启动门/事务 workspace 权威在装配
+  // 侧——main 1203-1220 三闭包同语义；S-C-2 前本文件直读 --dsh-path 的旧门
+  // 删除）。
   const controlPlane = createControlPlane({
     port: args.port ?? 17500,
     stateDir: path.join(args.userDataDir, 'state'),
@@ -246,13 +267,9 @@ async function main(): Promise<void> {
     ...(args.hostGraphDir !== null ? { hostGraphPackageSourceDir: args.hostGraphDir } : {}),
     ...(args.hostGitDir !== null ? { hostGitWorktreePackageSourceDir: args.hostGitDir } : {}),
     ...(args.hostArchiveDir !== null ? { hostArchiveCleanupPackageSourceDir: args.hostArchiveDir } : {}),
-    getDshWorkspacePath: () => {
-      if (dshPath !== null) return dshPath
-      throw new Error('dsh workspace not resolved (--dsh-path 未提供)')
-    },
-    canStartLocal: () =>
-      dshPath !== null ? { ok: true } : { ok: false, reason: '--dsh-path 未提供' },
-    canExposeLocal: () => true,
+    getDshWorkspacePath: () => headless!.localSpawnGates.getDshWorkspacePath(),
+    canStartLocal: () => headless!.localSpawnGates.canStartLocal(),
+    canExposeLocal: () => headless!.localSpawnGates.canExposeLocal(),
   })
 
   try {
@@ -262,15 +279,12 @@ async function main(): Promise<void> {
     process.exit(1)
   }
   console.log('[sidecar] control plane listening on http://127.0.0.1:' + controlPlane.port)
+  controlPlaneInstance = controlPlane
 
-  // 预启动本地实例（05 §7.5）：缺 --dsh-path 则跳过（非致命，stderr 记录）
-  if (dshPath !== null) {
-    try {
-      await controlPlane.startLocal()
-    } catch (err) {
-      console.error('[sidecar] pre-spawn 本地实例失败（非致命）：' + String(err))
-    }
-  }
+  // S-C-2：plane 晚绑定（代理注册/会话 refresh/restart 宿主腿/connectionState
+  // 投影/onLocalStateChange 订阅）→ 启动尾部（refreshRuntimeEvidence + 运行时
+  // 启动事务——本地实例起动由事务权威决定（main 同源），取代旧无条件 pre-spawn）。
+  headless.bindPlane(controlPlane)
 
   const ctxWithUrl = ctx as ShellAssemblyCtx & { hostFacts: { controlPlaneUrl: string } }
   ctxWithUrl.hostFacts.controlPlaneUrl = `http://127.0.0.1:${controlPlane.port}`
@@ -278,32 +292,35 @@ async function main(): Promise<void> {
   // ready 帧最小化（D8：port + shellVersion；其余身份字段走 dsh-chamber:info）
   writeProtocolLine({ notify: 'ready', payload: { port: controlPlane.port, shellVersion } })
 
-  // 信号/EOF → 优雅退出
-  let shuttingDown = false
-  const shutdown = async (code: number): Promise<void> => {
-    if (shuttingDown) return
-    shuttingDown = true
-    console.log('[sidecar] 优雅退出中…')
-    // S-C-1：C/D/E 组真实化后，回收腿同时关停传输层（SSH 隧道/在途 exec——
-    // disposeAsync 等待 SIGKILL 升级，子进程不孤儿化）与 gateway 会话内存。
-    try {
-      await headless.dispose()
-    } catch (err) {
-      console.error('[sidecar] ctx 回收失败：' + String(err))
-    }
-    try {
-      await controlPlane.stop()
-    } catch (err) {
-      console.error('[sidecar] cp.stop 失败：' + String(err))
-    }
-    process.exit(code)
-  }
-  for (const signal of ['SIGTERM', 'SIGINT'] as const) {
-    process.on(signal, () => {
-      void shutdown(0)
-    })
-  }
+  // 启动尾部（main 3785-3789 同形——内部已含 catch 折叠与门/投影处理，绝不
+  // 使 ready 帧延迟：尾部在 ready 之后异步执行）。
+  void headless.runStartupTail()
 }
+
+/** 优雅退出（信号/EOF 共用）：quitting 门 → ctx 侧回收（transport/插件子进程/
+ *  安装器/runtime 事务 abort/gateway 会话/session refresh——dispose 内序与
+ *  main will-quit 同源）→ cp.stop（本地 dsh 子进程不孤儿化）→ exit code。 */
+async function shutdown(code: number): Promise<void> {
+  if (shuttingDown) return
+  shuttingDown = true
+  console.log('[sidecar] 优雅退出中…')
+  try {
+    await headless?.dispose()
+  } catch (err) {
+    console.error('[sidecar] ctx 回收失败：' + String(err))
+  }
+  try {
+    await controlPlaneInstance?.stop()
+  } catch (err) {
+    console.error('[sidecar] cp.stop 失败：' + String(err))
+  }
+  process.exit(code)
+}
+
+void boot().catch((err) => {
+  console.error('[sidecar] boot 失败（fatal exit 1）：' + String(err))
+  process.exit(1)
+})
 
 const rl = createInterface({ input: process.stdin, crlfDelay: Infinity })
 rl.on('line', (line) => {
@@ -314,8 +331,14 @@ rl.on('line', (line) => {
 })
 rl.on('close', () => {
   console.log('[sidecar] stdin EOF——退出')
-  process.exit(0)
+  void shutdown(0)
 })
+
+for (const signal of ['SIGTERM', 'SIGINT'] as const) {
+  process.on(signal, () => {
+    void shutdown(0)
+  })
+}
 
 process.on('uncaughtException', (err) => {
   console.error('[sidecar] uncaughtException（fatal exit 1）：' + String(err))
@@ -323,10 +346,5 @@ process.on('uncaughtException', (err) => {
 })
 process.on('unhandledRejection', (reason) => {
   console.error('[sidecar] unhandledRejection（fatal exit 1）：' + String(reason))
-  process.exit(1)
-})
-
-void main().catch((err) => {
-  console.error('[sidecar] main 启动失败：' + String(err))
   process.exit(1)
 })
