@@ -24,12 +24,33 @@
  * cover collapsed groups unchanged. Group headers reuse the nav workspace
  * chrome (folder/chevron fold button + workspace accent, same classes/tokens
  * from this package's css module) plus a tri-state group checkbox
- * (indeterminate = part of the group selected).
+ * (indeterminate = part of the group selected). Session rows nest one tree
+ * level UNDER their group header (2026 indent revision): the rows of each
+ * group render inside a dedicated nesting container (.archiveManagerGroupRows
+ * — ancestor padding, so every row class stays level-agnostic), the row
+ * title column lands exactly under the workspace title, the checkbox rail
+ * steps 8px → 32px — the group header (and the select-all row) keep the
+ * outer column, so the parent → child reading matches the nav tree.
  *
- * all through the host purge's optional `sessionIds` subset filter (the
- * host intersects the filter with the authoritative archived set, so the
- * dialog can never delete a non-archived session). Every destructive action
- * is confirm-gated (window.confirm, irreversible copy). Running subtrees
+ * All deletion runs through the host purge's optional `sessionIds` subset
+ * filter (the host intersects the filter with the authoritative archived
+ * set, so the dialog can never delete a non-archived session). Every
+ * destructive action is confirm-gated by an IN-DIALOG two-stage confirm
+ * (2026 refactor, THIS module's scope — sibling surfaces (nav delete flows)
+ * still ride window.confirm per their own records): no native window.confirm
+ * here (an OS-styled dialog cannot ride the alias tokens and reads as an
+ * alien chrome layer over this app), and no second Modal layer
+ * (the official Modal registers one document-level BUBBLE Escape listener
+ * per open instance, so stacking a confirm modal over this dialog would
+ * close BOTH layers on a single Escape — no official nested precedent,
+ * design 24 §19-7). A destructive control therefore ARMS a confirm mode
+ * INSIDE this dialog: the rows freeze (checkboxes/trash disabled) and a
+ * risk bar renders the counted irreversible copy with 取消 / 确认删除;
+ * 取消 or Escape disarm it (Escape never closes the dialog while armed —
+ * capture-phase stop, see below), 确认删除 runs the purge. The footer
+ * 删除选中 button is hidden while a confirm is armed, and closing the
+ * dialog while armed (Esc-when-not-armed / X / mask) simply drops the
+ * armed confirm — nothing is ever deleted without 确认删除. Running subtrees
  * are skipped by the host and reported here; errors are never silent —
  * per-run status lines (role=status/alert) show completion / skips /
  * partial failures / domain-missing / busy / timeouts.
@@ -54,14 +75,16 @@
  *              loading line; no destructive action (same rationale — there
  *              is no trustworthy list to select from).
  *
- * Single-flight per dialog (one run at a time; controls disabled while a
- * run is in flight). Closing is allowed at ANY time (Esc / X / mask) — an
- * in-flight purge keeps running host-side (client timeout ≠ host stop) and
- * the UNCONDITIONAL requestRefresh still fires, so a closed dialog never
- * loses the deletion itself, only its outcome note. The rows list re-derives
- * from the server prop on every chamberBridge publish: after a successful
- * purge the App-side refresh drops the deleted rows from the aggregate and
- * this dialog's selection is pruned to surviving rows.
+ * Single-flight per dialog (one run at a time; all input controls except
+ * the view-state group fold toggles are disabled while a run is in flight
+ * or a confirm is armed). Closing is allowed at ANY time (Esc / X / mask) —
+ * an in-flight purge keeps running host-side (client timeout ≠ host stop)
+ * and the UNCONDITIONAL requestRefresh still fires, so a closed dialog never
+ * loses the deletion itself, only its outcome note; an ARMED (not yet
+ * confirmed) delete is dropped by closing — nothing was deleted. The rows
+ * list re-derives from the server prop on every chamberBridge publish:
+ * after a successful purge the App-side refresh drops the deleted rows from
+ * the aggregate and this dialog's selection is pruned to surviving rows.
  *
  * CHROME (2026 style pass): the dialog is the OFFICIAL primitives Modal
  * (mask + r24 card + header close — the same shell RemoveWorktreeDialog /
@@ -79,10 +102,17 @@
  * rowError precedent — design 24 §5 decision); buttons and confirms ride
  * the locale dictionaries.
  */
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { MouseEvent as ReactMouseEvent } from 'react'
 import clsx from 'clsx'
 import {
-  Button, IconChevronRightOutline14, IconFolderOpenOutline16, IconLoadingOutline16, IconTrashOutline16, Modal,
+  Button,
+  IconChevronRightOutline14,
+  IconFolderOpenOutline16,
+  IconLoadingOutline16,
+  IconTrashOutline16,
+  IconWarningOutline16,
+  Modal,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import cc from './sidebar-chamber.module.css'
 import type { ChamberServerAggregate } from '../shared/aggregate-store.ts'
@@ -194,14 +224,89 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
   }, [groupKeySet])
 
   // Focus-loss guard (2026 a11y review): a purge publish can unmount the row
-  // that held focus (per-row delete → refresh → the row disappears) and the
-  // browser then drops focus to <body>. While the dialog stays mounted, land
-  // focus back on the panel — a loss guard only, not a focus trap.
+  // that held focus (per-row delete → refresh → the row disappears), and the
+  // two-stage confirm's accept path unmounts the confirm bar that held focus;
+  // the browser drops focus to <body> in both cases. While the dialog stays
+  // mounted, land focus back on the panel — a loss guard only, not a trap.
+  // Deps [rows, busy] cover the refresh-prune path and the accept path (busy
+  // flips true as the armed bar unmounts); the guard deliberately does NOT
+  // early-return on rows === undefined (an accept over a vanished list view
+  // still needs the panel landing). Cancel/Esc need no guard: disarmConfirm
+  // defers its own refocus past the commit.
   useEffect(() => {
-    if (rows === undefined) return
     if (document.activeElement !== document.body) return
     panelRef.current?.focus()
-  }, [rows])
+  }, [rows, busy])
+
+  // ---- In-dialog two-stage confirm (2026 refactor; module doc) ----
+  // The confirm is a MODE of this dialog, never a second layer: rows freeze
+  // (inputLocked) and a risk bar shows the counted copy with 取消/确认删除.
+  // `title` non-null = a single-row message subject (per-row trash); null =
+  // the counted selected-set message (footer 删除选中). The id list is
+  // frozen at arming — later selection changes cannot alter what the counted
+  // copy promised. INVARIANT (2026 review): title !== null ⇔ ids.length === 1
+  // — the two arming sites (deleteSingle/deleteSelected) construct it so; a
+  // future third caller must keep the subject/count pair in sync.
+  const [confirming, setConfirming] = useState<{ ids: readonly string[]; title: string | null } | null>(null)
+  // The control that armed the confirm (row trash / footer button): 取消/Esc
+  // returns focus to it (deferred — the opener stays `disabled` until the
+  // disarm commit lands); accept drops it (the rows refresh after the purge,
+  // the busy/focus-loss guards take over).
+  const confirmOpenerRef = useRef<HTMLElement | null>(null)
+  const confirmBarRef = useRef<HTMLDivElement | null>(null)
+
+  /** Disarm the confirm stage. Esc/取消 never close the dialog — they only
+   *  disarm, with `refocus` returning focus to the arming control (fallback:
+   *  the panel); accept disarms with `refocus: false` (the busy flip + the
+   *  focus-loss guard take over). The refocus is DEFERRED past the disarm
+   *  commit (requestAnimationFrame): while armed the opener carries
+   *  `disabled` (inputLocked) and `.focus()` on a disabled control is a spec
+   *  no-op — by the rAF the commit has re-enabled it. Re-checked inside the
+   *  frame so a dialog closed in the window falls back to the panel (itself
+   *  a no-op once unmounted). */
+  const disarmConfirm = useCallback((refocus: boolean): void => {
+    const opener = confirmOpenerRef.current
+    confirmOpenerRef.current = null
+    setConfirming(null)
+    if (refocus) {
+      requestAnimationFrame(() => {
+        if (opener !== null && opener.isConnected) opener.focus()
+        else panelRef.current?.focus()
+      })
+    }
+  }, [])
+
+  // Escape while a confirm is armed must disarm it — NOT close the dialog.
+  // The official Modal listens for Escape in the BUBBLE phase on document;
+  // this CAPTURE-phase listener runs first and stops propagation, so the
+  // modal's own bubble listener never fires while the stage is up. Once
+  // disarmed, Escape closes the dialog as usual (no capture listener).
+  useEffect(() => {
+    if (confirming === null) return
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key !== 'Escape') return
+      event.stopPropagation()
+      event.preventDefault()
+      disarmConfirm(true)
+    }
+    document.addEventListener('keydown', onKeyDown, true)
+    return () => { document.removeEventListener('keydown', onKeyDown, true) }
+  }, [confirming, disarmConfirm])
+
+  // Keyboard lands on the SAFE default: 取消 is the bar's first button. The
+  // risk message itself is announced via its own role="alert" span on arming.
+  useEffect(() => {
+    if (confirming === null) return
+    confirmBarRef.current?.querySelector<HTMLButtonElement>('button')?.focus()
+  }, [confirming])
+
+  // The shell can pass `server: null` while this dialog stays mounted (its
+  // source aggregate disappeared but the dialog is not yet unmounted): an
+  // armed confirm must not survive invisibly and resurface over a NEW list
+  // with the OLD frozen ids. Disarm without refocus — the caller is closing.
+  useEffect(() => {
+    if (server === null && confirming !== null) disarmConfirm(false)
+  }, [server, confirming, disarmConfirm])
 
   if (server === null) return null
 
@@ -211,7 +316,7 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
   const archiveSetKnown = server.archiveSetKnown === true
 
   const toggle = (id: string): void => {
-    if (busy) return
+    if (busy || confirming !== null) return
     setSelected(prev => {
       const next = new Set(prev)
       if (next.has(id)) next.delete(id)
@@ -221,7 +326,7 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
   }
 
   const toggleAll = (): void => {
-    if (busy) return
+    if (busy || confirming !== null) return
     setSelected(prev => prev.size === rowIds.length && rowIds.length > 0 ? new Set() : new Set(rowIds))
   }
 
@@ -229,7 +334,7 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
    *  checkbox; a collapsed group keeps its membership — selection is list
    *  state, not view state). */
   const toggleGroup = (key: string): void => {
-    if (busy) return
+    if (busy || confirming !== null) return
     const group = groupById.get(key)
     if (group === undefined) return
     const ids = group.rows.map(row => row.sessionId)
@@ -314,19 +419,35 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
     })()
   }
 
-  const deleteSingle = (sessionId: string, title: string): void => {
-    if (busy) return
-    const confirmTitle = title === '' ? t('archive.manager.rowUntitled') : title
-    if (!window.confirm(t('archive.manager.confirmSingle', { title: confirmTitle }))) return
-    runPurge([sessionId])
+  /** Arm the two-stage confirm for exactly the given rows (`title` = the
+   *  single-row message subject; null = the counted selected-set message).
+   *  The arming control is remembered so 取消/Esc can return focus to it. */
+  const requestDelete = (opener: HTMLElement | null, ids: readonly string[], title: string | null): void => {
+    if (busy || confirming !== null || ids.length === 0) return
+    confirmOpenerRef.current = opener
+    setConfirming({ ids, title })
   }
 
-  const deleteSelected = (): void => {
-    if (busy || selected.size === 0) return
-    const count = selected.size
-    const plural = count === 1 ? 'one' : 'other'
-    if (!window.confirm(t(`archive.manager.confirmSelected.${plural}` as SidebarKey, { count }))) return
-    runPurge([...selected])
+  /** Per-row trash: arm the confirm for one session (its resolved title as
+   *  the message subject; the untitled fallback rides the dictionary). */
+  const deleteSingle = (opener: HTMLElement | null, sessionId: string, title: string): void => {
+    requestDelete(opener, [sessionId], title === '' ? t('archive.manager.rowUntitled') : title)
+  }
+
+  /** Footer 删除选中: arm the confirm over the current selection — never a
+   *  whole-set `undefined` purge (design 24 §18). */
+  const deleteSelected = (opener: HTMLElement | null): void => {
+    if (selected.size === 0) return
+    requestDelete(opener, [...selected], null)
+  }
+
+  /** Accept the armed confirm: disarm (no refocus — the purge's busy flip +
+   *  the focus-loss guard take over), then purge the frozen id list. */
+  const acceptConfirm = (): void => {
+    const pending = confirming
+    if (pending === null || busy) return
+    disarmConfirm(false)
+    runPurge(pending.ids)
   }
 
   const titleText = (title: string | undefined): string => {
@@ -350,6 +471,16 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
   const pullError = !landed && server.aggregateError !== undefined
   const listVisible = landed && !degraded && rows.length > 0
 
+  // Two-stage confirm derived state: while a confirm is ARMED the whole list
+  // input freezes (inputLocked = busy OR armed) so the counted copy can never
+  // go stale — the selection/checkboxes cannot move under the armed promise.
+  const inputLocked = busy || confirming !== null
+  // The armed confirm's message: single-row subject copy (title) or the
+  // counted selected-set copy (title null). Rendered only while armed.
+  const armedCountKey: SidebarKey = (confirming?.ids.length ?? 0) === 1
+    ? 'archive.manager.confirmSelected.one'
+    : 'archive.manager.confirmSelected.other'
+
   return (
     <Modal
       open
@@ -367,12 +498,12 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
               </>
             )}
           </span>
-          {listVisible && (
+          {listVisible && confirming === null && (
             <Button
               variant="outline"
               className={cc.archiveManagerDanger}
-              disabled={busy || selected.size === 0}
-              onClick={deleteSelected}
+              disabled={inputLocked || selected.size === 0}
+              onClick={(event: ReactMouseEvent<HTMLButtonElement>) => { deleteSelected(event.currentTarget) }}
             >
               {t(selectedCountKey, { count: selected.size })}
             </Button>
@@ -381,6 +512,33 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
       )}
     >
       <div ref={panelRef} tabIndex={-1} className={cc.archiveManagerPanel}>
+        {confirming !== null && (
+          <div ref={confirmBarRef} className={cc.archiveManagerConfirmBar}>
+            <IconWarningOutline16 size={16} className={cc.archiveManagerConfirmIcon} />
+            {/* role="alert" lives on the TEXT span, not the bar container
+                (2026 a11y review): the bar's first button takes focus in the
+                same commit — an alert on the container races the focus move
+                and a screen reader may hear only 取消 or only the risk copy.
+                Text-only alert content announces the risk message itself;
+                the buttons are reached by Tab as usual. */}
+            <span role="alert" className={cc.archiveManagerConfirmText}>
+              {confirming.title !== null
+                ? t('archive.manager.confirmSingle', { title: confirming.title })
+                : t(armedCountKey, { count: confirming.ids.length })}
+            </span>
+            <Button variant="outline" size="sm" onClick={() => { disarmConfirm(true) }}>
+              {t('action.cancel')}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className={cc.archiveManagerDanger}
+              onClick={acceptConfirm}
+            >
+              {t('archive.manager.confirmDelete')}
+            </Button>
+          </div>
+        )}
         {!landed && pullError ? (
           <div className={cc.archiveManagerNoteRow} role="alert">
             {t('archive.manager.listUnavailable')}
@@ -400,10 +558,14 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
                 className={cc.archiveManagerCheck}
                 checked={selected.size === rows.length}
                 aria-label={t('archive.manager.selectAllAria')}
-                disabled={busy}
+                disabled={inputLocked}
                 // Partial selection renders the master checkbox as
                 // indeterminate (group-header tri-state parity, 2026 review);
-                // it still selects everything on the next toggle.
+                // it still selects everything on the next toggle. Explicit
+                // aria-checked="mixed" while partial (2026 a11y review —
+                // group-header parity: HTML-AAM does not guarantee that
+                // native indeterminate maps to aria-checked="mixed").
+                {...(selected.size > 0 && selected.size < rows.length ? { 'aria-checked': 'mixed' as const } : {})}
                 ref={(element) => {
                   if (element !== null) {
                     element.indeterminate = selected.size > 0 && selected.size < rows.length
@@ -448,7 +610,7 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
                       // aloud. Only rendered while partial so the native
                       // checkedness stays the aria authority otherwise.
                       {...(groupPartial ? { 'aria-checked': 'mixed' as const } : {})}
-                      disabled={busy}
+                      disabled={inputLocked}
                       // Half-checked group = some (not all) members selected;
                       // a native checkbox cannot express tri-state without
                       // imperative indeterminate (ref callback — no effect).
@@ -476,42 +638,46 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
                     </span>
                     <span className={cc.archiveManagerRowPath}>{t(groupCountKey, { count: group.rows.length })}</span>
                   </div>
-                  {!isGroupCollapsed && group.rows.map(row => (
-                    <div key={row.sessionId} className={cc.archiveManagerRow}>
-                      <input
-                        type="checkbox"
-                        className={cc.archiveManagerCheck}
-                        checked={selected.has(row.sessionId)}
-                        aria-label={titleText(row.title)}
-                        disabled={busy}
-                        onChange={() => { toggle(row.sessionId) }}
-                      />
-                      <span
-                        className={cc.archiveManagerRowTitle}
-                        title={titleText(row.title)}
-                      >
-                        {titleText(row.title)}
-                      </span>
-                      {projectLabelOf(row.cwd) !== '' && (
-                        <span className={cc.archiveManagerRowPath} title={row.cwd}>
-                          {projectLabelOf(row.cwd)}
-                        </span>
-                      )}
-                      <button
-                        type="button"
-                        className={cc.archiveManagerRowDelete}
-                        aria-label={t('archive.manager.rowDeleteAria', { title: titleText(row.title) })}
-                        title={t('archive.manager.rowDeleteAria', { title: titleText(row.title) })}
-                        disabled={busy}
-                        onClick={(event) => {
-                          event.stopPropagation()
-                          deleteSingle(row.sessionId, row.title ?? '')
-                        }}
-                      >
-                        <IconTrashOutline16 size={13} />
-                      </button>
+                  {!isGroupCollapsed && (
+                    <div className={cc.archiveManagerGroupRows}>
+                      {group.rows.map(row => (
+                        <div key={row.sessionId} className={cc.archiveManagerRow}>
+                          <input
+                            type="checkbox"
+                            className={cc.archiveManagerCheck}
+                            checked={selected.has(row.sessionId)}
+                            aria-label={titleText(row.title)}
+                            disabled={inputLocked}
+                            onChange={() => { toggle(row.sessionId) }}
+                          />
+                          <span
+                            className={cc.archiveManagerRowTitle}
+                            title={titleText(row.title)}
+                          >
+                            {titleText(row.title)}
+                          </span>
+                          {projectLabelOf(row.cwd) !== '' && (
+                            <span className={cc.archiveManagerRowPath} title={row.cwd}>
+                              {projectLabelOf(row.cwd)}
+                            </span>
+                          )}
+                          <button
+                            type="button"
+                            className={clsx(cc.actionIcon, cc.actionIconDanger)}
+                            aria-label={t('archive.manager.rowDeleteAria', { title: titleText(row.title) })}
+                            title={t('archive.manager.rowDeleteAria', { title: titleText(row.title) })}
+                            disabled={inputLocked}
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              deleteSingle(event.currentTarget, row.sessionId, titleText(row.title))
+                            }}
+                          >
+                            <IconTrashOutline16 size={14} />
+                          </button>
+                        </div>
+                      ))}
                     </div>
-                  ))}
+                  )}
                 </div>
               )
             })}

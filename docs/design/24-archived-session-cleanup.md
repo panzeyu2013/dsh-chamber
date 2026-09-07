@@ -22,7 +22,9 @@
 > 「删除全部」按钮——整集清理必须先显式全选再确认带计数的「删除选中」，
 > purge 永远携带明确 id 列表；降级/pending 视图不再提供任何删除动作；
 > 列表按工作区分组、可折叠（§19）。§17.3/§17.6 中「删除全部仍可用/放行/
-> 去计数」的表述以 §18/§19 为准。
+> 去计数」的表述以 §18/§19 为准。§19 条目 6–9（缩进容器化、整体匹配轮、
+> 全面重构轮、四方分面评审处置轮）为合入后继续修订——wire/UI 表述以
+> §19 最新条目为准。
 >
 > v2/v3 修订：2026-12 由三个只读 subagent 分面评审（客户端 UI/wire、宿主
 > 域与分发接线、契约治理）+ 作者自审 + 一轮 v2 合规复核（闭合矩阵 12 项
@@ -295,7 +297,8 @@ vendor 源码）+ 薄 Remote 门面（`index.ts`），编排逻辑：
 > purge 全部 + header 下错误槽位）已被**归档管理器对话框**取代——§6 正文
 > 保留为 v1 历史契约与 UI 位置基线（trash 按钮仍在同簇同门控位置，点击改
 > 为打开管理器）。交互细节以 §17 为准（§17 又经 §18/§19 修订：无独立
-> 「删除全部」、列表按工作区分组折叠——交互细节以 §18/§19 为准）。
+> 「删除全部」、列表按工作区分组折叠——交互细节以 §18/§19 为准；§19
+> 条目 6–9 续修订：缩进、匹配轮、两段式确认重构与分面评审处置）。
 
 位置与行为（`packages/dsh-chamber-client-ui-sidebar/src/client/SidebarRoot.tsx`）：
 
@@ -738,7 +741,9 @@ archive-cleanup；host 包提交态 dist 随代码重建（esbuild 0.25 确定�
 §16（2026-09 合入后修复轮）接于其后；§17（2026-09 修订轮：M4 本地实跑 +
 归档管理器 revision）为 wire/UI 表述基线；§18（2026 用户修订轮：移除
 独立「删除全部」按钮）与 §19（2026 分组实施轮：工作区分组折叠）为最新
-修订——§17.3/§17.6 的「删除全部」相关表述以 §18/§19 为准。
+修订——§17.3/§17.6 的「删除全部」相关表述以 §18/§19 为准；§19 条目
+6–9（合入后修订：缩进容器化、整体匹配轮、全面重构轮、四方分面评审处置
+轮）续接——交互/样式表述以 §19 最新条目为准。
 
 **§16 补记（2026-09 第二波回扫）**：三路只读回扫零新 Blocker/Major；本域
 复核结论——`assertHeaderShape` 谓词严格弱于 pinned vendor 写入期校验
@@ -960,3 +965,137 @@ ui-workspace 用，弃用）、
      2026 原位标注；§6 引言与 §17 导语补第三跳标注；design 01 地图行同步。
      修复后验证：`typecheck:sidebar` 绿、`test:sidebar` 全绿（冲突 fixture
      并入既有成员归属用例，用例总数不变）。
+
+6. **session/workspace 缩进关系修正（2026 用户提出，delete-archived 合入
+   main 后；实现经 §19-7 匹配轮复核改为容器式）**：分组列表的 session 行
+   相对组头**嵌套一级**：每个展开组把行渲染进专用嵌套容器
+   `.archiveManagerGroupRows`（`padding-left: 24px`，祖先侧缩进——见
+   §19-7 对结构选择器/子级 margin 方案的取舍记录）。
+   几何：组头标题 x = 8 pad + w + 8 gap + 16 折叠钮 + 8 gap = **40 + w**；
+   嵌套行标题 x = 24 step + 8 pad + w + 8 gap = **40 + w**——原生 checkbox
+   宽度 w 在两边抵消，任何平台下**行标题列与所属组标题精确同列**，层级由
+   checkbox rail 台阶（8 → 32）+ 折叠钮表达。全选行与组头保留外列；未分组
+   桶行同规（其合成组头下同样嵌套）。修正前组头标题因 checkbox+折叠钮反而
+   比下方 session 标题靠右 ~24px（父子缩进倒置读法）；本规则同时修正该倒置，
+   session 不再比自己的 workspace 标题更靠左。
+
+7. **dsh/仓库整体匹配轮（2026，用户发起：选择器设计 + 样式/交互/界面风格
+   对照审阅；代码落地 + 维持项登记）**：
+   - **缩进选择器方案（答复用户问题）**：`.archiveManagerGroup >
+     .archiveManagerRow { margin-left }`（结构子选择器 + 子级 margin）**不是
+     行业最优做法**——行类 `.archiveManagerRow` 同时被顶部全选行复用，层级
+     语义由 DOM 位置推导：今后任何包裹/虚拟化插入都会静默破坏规则（双向）；
+     margin 式缩进把「层级」摊到每个子行上。最优静态树做法 = **祖先容器
+     padding 缩进**（一次声明、行类与层级无关、包裹/虚拟化天然兼容；官方/
+     仓库惯例里树形容器与行级专用类并存，但复用行类场景下容器是唯一不
+     依赖位置的方案）。已按此落地（item 6 重述）。
+   - **危险确认门**：对照官方原语 `RiskConfirmation`（Modal 家族、勾选
+     acknowledge 才可确认；settings-bridge PermissionRow 已采用——官方设置
+     面先例）。本对话框**维持 window.confirm**：官方 Modal 每次 open 都挂
+     document 级 Escape 监听且互不知晓 → 确认弹层叠在管理器 Modal 之上时
+     **一次 Esc 会同时关闭两层**；双 mask 叠影；仓库内无嵌套 Modal 先例
+     （PermissionRow 的确认不在任何 Modal 内）。若上游 Modal 获得层级
+     （stack/优先级/Escape 仲裁），再迁 RiskConfirmation——登记不排期。
+     **〔原位注：本条已由 §19-8 取代——全面重构轮在本模块范围落地
+     对话框内两段式确认（非 OS 弹窗、非第二层 Modal），维持结论中的
+     嵌套 Modal 风险分析仍然成立；以 §19-8/§19-9 为准。〕**
+   - **键盘焦点环常数对齐**：行删除钮/组折叠钮 focus-visible 由
+     `outline-offset: -1px`（内嵌环）改为模块 `.actionIcon` 标准 +1px 外扩
+     （原注释声称跟随 actionIcon 但常数并不一致——修正注释与实现；§19-8
+     重构后行删除钮直接并入 .actionIcon 基类，专属环表删除）。
+   - **复核维持项（理由登记；§19-8 已落地其中可执行者）**：danger 动作 =
+     官方 Button outline + error ink（仓库无 danger variant 先例，ui-git
+     remove-confirm 惯例）；原生 checkbox + accent-color（官方无 Checkbox
+     组件，§19-2 记录）；footer Button/icon/字体均走 alias token；组头
+     chrome 复用导航 fold 类已并入共享选择器表；zh 内联文案 §5 纪律；
+     spinner 13px（导航 12px）随所在行高，维持。
+   - **验证**：`typecheck:sidebar`、`test:sidebar`、`build:renderer` 绿
+     （本轮代码改动）；视觉确认仍待打包版目检（STATUS 登记的打包版 UI
+     目检腿，design 24 §16/§17 先例）。
+   - **武装态行为补记（§19-9 评审追认，实现早已如此）**：武装期关闭对话框
+     （X/mask/非武装态 Esc）只丢弃武装、绝不删除任何内容（与关闭期运行中
+     purge 照常继续的语义区分开）；武装期 footer「删除选中」隐藏（防双
+     入口）；bridge publish 把列表收成空/降级视图时风险条仍在（渲染在
+     VIEW MODES 条件外）——accept 仍按冻结 id 执行，宿主交集语义保证安全
+     方向，空结果走「没有可删除…」兜底。
+
+8. **全面重构轮（2026 用户发起：按最优方案重构，随后复核）**——落地
+   item 7 中可执行项 + 交互重构：
+   - **两段式确认门替换 window.confirm（本模块范围）**：破坏性动作不再走
+     OS 原生弹窗，也不叠第二层 Modal（官方 Modal 每开一次注册一个
+     document 级 BUBBLE Escape 监听、互不知晓——叠层时一次 Esc 双关，且
+     无官方嵌套先例，见 item 7）。改为**对话框内武装态**：`confirming`
+     状态（id 列表在武装瞬间冻结 + 单行标题或计数文案）→ 行输入全冻结
+     （`inputLocked`：checkbox/行删除钮/全选禁用；折叠钮保持可用——
+     视图态）+ 面板顶部**风险条**（官方 Warning 图标 error 墨 +
+     color-mix error 9% 底 + 陈述式不可恢复文案 + 官方 Button sm 对：
+     取消/确认删除）。取消或 **Esc 解除武装**（Esc 经 document CAPTURE
+     相位 stopPropagation，官方 Modal 的 bubble 监听不触发——武装期 Esc
+     绝不关对话框；解除后 Esc 恢复默认关闭语义）；确认删除 → 解除武装 →
+     `runPurge(冻结 ids)`。焦点：武装落**取消**（条内首个 button，安全
+     默认）；取消/Esc 焦点回**武装源控件**（行删除钮/footer 钮，`isConnected`
+     兜底 panel）；确认后条卸载致焦点落 body → busy/rows 双依赖的既有
+     焦点兜底效应接管。文案改为陈述式（原「…继续？」为对话框问句残余），
+     新增 `archive.manager.confirmDelete` zh/en 对；`role="alert"` 播报
+     风险条。单选与多选共用同一条，只换主体文案。
+   - **行删除钮并入模块 `.actionIcon` 家族**：删除 24px 专属样式四段
+     （基类/hover bg+error/disabled .5/焦点环）→ `<button class="actionIcon
+     actionIconDanger">`：20px 命中 + 纯色 hover 是模块图标按钮语言（行
+     pill 已承 hover 底）；`actionIconDanger` 修饰 hover 转 error ink；
+     disabled .42 与焦点环随基类（无第二张表可漂移）。
+   - **hover 重复规则并入导航共享表**（消除同体两表，item 7 曾登记维持）：
+     `.workspaceHeader:hover` + `.archiveManagerGroupHeader:hover` 合一；
+     `.sessionRow:hover` + `.archiveManagerRow:hover` 合一（含全选行）——
+     值与 token 相同，沿 §19-5「folder↔chevron 共享规则表」先例。
+   - **风险登记（如实）**：两段式交互（武装/解除/焦点/Esc 语义）与
+     actionIcon 视觉收窄（24→20、hover 去底）仅经 typecheck/单测/构建
+     验证——对话框渲染面无组件测试基建（§19-4 已登记同况），视觉与键盘
+     实感待打包版目检（STATUS 登记的打包版 UI 目检腿）；若 Esc 捕获与
+     其他 surface 的 capture 监听冲突，回退点为武装期仅阻止对话框关闭
+     （去掉 stopPropagation 全局语义，改由 disarmConfirm 显式拦截）。
+
+9. **四方分面评审处置轮（2026，用户发起「subagent 从正确性/完整性/最优性
+   等角度彻底检查」；4 个只读 subagent：逻辑正确性 / 完整性 / 代码质量与
+   最优性 / a11y 与交互——结论：正确性 1 Major + 2 Minor、完整性零
+   Blocker/Major（doc 层若干 Minor/Nit）、最优性 2 Minor + nits、a11y
+   1 Major + 6 Minor）**：
+   - **Major（三方互证）——取消/Esc 焦点回退在行删除路径静默失效**：
+     `disarmConfirm(true)` 原同步调用 `opener.focus()`，但武装期 opener
+     仍带 `disabled`（inputLocked，解除提交前不落）→ 对禁用控件的 focus()
+     是规范 no-op → 焦点落 body 且 `[rows,busy]` 守卫不触发。修复：解除
+     后经 `requestAnimationFrame` 延迟回焦（提交后 opener 已重新可用），
+     frame 内重查 `isConnected`，失联则落 panel（关闭窗口期自身卸载时
+     no-op）；footer 路径经 isConnected 兜底本就安全。accept 无需显式回焦
+     （busy 翻转 + 守卫接管，a11y 分面确认）。回归验证 = 打包版键盘腿
+     （行删除武装 → Esc/取消 → 焦点在行删除钮；accept → panel）。
+   - **Minor 修复（本轮落地）**：`toggle/toggleAll/toggleGroup` 补
+     `confirming` 守卫（武装冻结不再只靠 disabled 属性）；焦点丢失守卫
+     去掉 `rows === undefined` 早退（列表视图消失后的 accept 也能落
+     panel）；`server === null` 时自动解除武装（旧冻结 id 不得随新列表
+     复现）；`role="alert"` 从风险条容器移到**纯文本消息 span**（容器首钮
+     同 commit 抢焦点 → SR 播报竞态，APG 文本性 alert 惯例）；全选主
+     checkbox 补显式 `aria-checked="mixed"`（组头三态 parity，HTML-AAM
+     无规范保证）；焦点环常数合并为 `.actionIcon:focus-visible,
+     .archiveManagerGroupHeader .foldToggle:focus-visible` 单一规则表；
+     对话框小字号族（NoteRow/Error/ConfirmText）合并共享字体规则；
+     `disarmConfirm` 收敛 accept/取消/Esc 三处解除路径（消除重复与死
+     参数）。
+   - **登记为偏差/待目检（理由登记）**：行删除钮 20px 命中 < WCAG 2.2
+     2.5.8 的 24px（模块图标按钮语言全局标准，§19-8 收窄为语言合并的
+     结果——登记为模块级偏差，视觉腿复核）；武装期行 dim 0.6 × trash
+     .42 ≈ 0.25 复合（评审计算 token 对比度仍 ≥ AA——冻结核的意图
+     反馈）；9% wash 强度与深浅主题可读性、风险条 SR 播报顺序（NVDA/
+     VO）、窄卡换行与矮视口裁剪（<~480-540px）、行 aria 标签在重复/未
+     命名标题下的非唯一性（并入 §19-5 已登记的 SR 语境目检项，追加
+     project label 或容器 group 语义待 SR 腿验证后定）、两处「取消」标签
+     同现（条内取消 vs 头 X=action.cancel；Shift+Tab 会先触 X——X 语义为
+     关整个对话框，保持）、held-Escape 连发无害（解除→关闭良性链）、
+     dark 主题 danger ink ~4.25:1 为 token 级共享惯例。
+   - **模块 doc/§19-6/7 原位对账（完整性分面）**：§19-7「维持
+     window.confirm」条已加原位注（被 §19-8 取代）；头部/§6/编号说明
+     跳转补至条目 9；模块 doc 补武装态关闭与 footer 隐藏语义、修正
+     window.confirm 动因表述（本模块范围——同包 SidebarRoot 导航流仍走
+     window.confirm）、修正孤儿句与「controls disabled」概括；§19-8 增
+     验证 bullet 与武装态行为补记。
+   - **验证**：修复后 `typecheck:sidebar`、`test:sidebar`、`build:renderer`
+     重跑绿（见 §19-8 同款命令）；键盘/视觉项打包版目检腿。
