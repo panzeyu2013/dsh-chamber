@@ -364,6 +364,13 @@ updater 需 Electron app 上下文；Swift W-22 Sparkle 线）；keep-awake/logi
 8b988eb：applySettingsPatch async + sendEdge 异步面 + 失败回滚不持久化，与
 Electron 同步 throw 同路径）；全新离线 profile 本地实例需运行时安装（网络）——与 Electron 一致；
 实机门禁：SMAppService 真调用/launchApp 拉起/notify GUI 闭环。
+**跨层残留审计收口（52e919e）**：只读审计（A×3/B×12/C×4）——A-1/A-2 唤醒
+（didWake→__host.systemResume）与窗口显示（didBecomeActive→__host.
+mainWindowShown）发送方落地（E6 对偶）；A-3 接线先于 start + onReady 消费 +
+cpURL 派生自 POC_PORT；B-5 PendingAlertQueue 死代码删除；swift 65/65、build 0
+警告。B 类登记：resolveResource 零消费（预留）、retireNotifications no-op 改接
+点注释、updateController 有意 loud（W-22）、深链整链归 POC/打包（G4）、崩溃
+自动重载归 M3；C 类：通知闭环/Sparkle/SMAppService/实机走查（打包+凭据）。
 - **showMessage 真实模态腿**（95275cc）：NSAlert 主线程 runModal 一次、
   按钮序 raw-1000 夹取回传、style 映射、无 buttons→['OK']；无窗诚实降级。
   **M3 代码级宿主腿至此全部完成**（focus/open/openPath/reveal/badge/keep-
