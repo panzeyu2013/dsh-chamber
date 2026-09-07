@@ -38,6 +38,7 @@ import {
 import { clearPendingClick, noteSessionRowClick } from '../shared/pending-click.ts'
 import { getSourceRepoLayouts, getWorkspaceGitFlag, hiddenByMainWorkspaceFold, isSourceGitFlagsLoaded } from '../shared/workspace-git-flags.ts'
 import { resolveWorkspaceDrop } from '../shared/workspace-drag-order.ts'
+import { sessionRowWindow, SESSION_ROWS_VISIBLE_FIRST } from '../shared/session-row-window.ts'
 import { sourceAccentStyle, useSidebarSection, workspaceDropEnv } from './sidebar-context.ts'
 import cc from './sidebar-chamber.module.css'
 
@@ -183,6 +184,11 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
   const searchRoot = useRef<HTMLDivElement | null>(null)
   const searchInput = useRef<HTMLInputElement | null>(null)
   const searchButton = useRef<HTMLButtonElement | null>(null)
+
+  // chamber (2026 性能整改 B2)：会话行渲染窗口的"已展开"标记——每工作区一
+  // 个本地浏览态布尔（不持久化、不跨 ctx 同步；窗口只在渲染层，见
+  // shared/session-row-window.ts）。
+  const [sessionRowsExpanded, setSessionRowsExpanded] = useState<Record<string, boolean>>({})
 
   // Outside-click closes an expanded capsule only while its query is empty
   // (official semantics): a non-empty query must not silently drop the
@@ -1044,6 +1050,24 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                             (count, session) => count + (isGhostSession(session) ? 0 : 1),
                             0,
                           )
+                          // chamber (2026 性能整改 B2)：会话行渲染窗口——行
+                          // DOM 不随会话数无界膨胀。组头徽标（上方
+                          // visibleSessionCount）与一切数据面操作仍用全量
+                          // sessions；这里只决定渲染行数与展开条文案。当前
+                          // 会话行不被藏匿（窗口自动覆盖之，见
+                          // shared/session-row-window.ts）。
+                          const currentSessionIndex = currentId === undefined
+                            ? -1
+                            : sessions.findIndex(row => row.id === currentId)
+                          const sessionWindow = sessionRowWindow({
+                            total: sessions.length,
+                            currentIndex: currentSessionIndex,
+                            expanded: sessionRowsExpanded[workspaceKey] === true,
+                            visibleFirst: SESSION_ROWS_VISIBLE_FIRST,
+                          })
+                          const visibleSessions = sessionWindow.hiddenCount === 0
+                            ? sessions
+                            : sessions.slice(0, sessionWindow.renderCount)
                           const marker = workspaceDragMarker(workspace)
                           const activeSessionDrag = sessionDrag !== null
                             && sessionDrag.sourceId === server.id
@@ -1402,7 +1426,7 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                             )}
                             {!folded && (
                             <>
-                              {sessions.map((session) => {
+                              {visibleSessions.map((session) => {
                                 const sessionKey = `${server.id}/session/${session.id}`
                                 const sessionDragError = rowErrors[`${server.id}/session-drag/${session.id}`]
                                 const sessionActionError = rowErrors[`${server.id}/session/${session.id}/rename`]
@@ -1683,6 +1707,17 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                                 </Fragment>
                                 )
                               })}
+                              {sessionWindow.hiddenCount > 0 && (
+                                <button
+                                  type="button"
+                                  className={cc.sessionRowsMore}
+                                  onClick={() => {
+                                    setSessionRowsExpanded(prev => ({ ...prev, [workspaceKey]: true }))
+                                  }}
+                                >
+                                  {t('sessionRows.showMore', { n: sessionWindow.hiddenCount })}
+                                </button>
+                              )}
                             </>
                             )}
                           </div>

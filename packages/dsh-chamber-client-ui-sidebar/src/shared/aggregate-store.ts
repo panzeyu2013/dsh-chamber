@@ -199,8 +199,19 @@ export const chamberBridge = {
     }
   },
 
-  /** App-layer write: replace the projection and notify subscribers. */
+  /**
+   * App-layer write: replace the projection and notify subscribers.
+   *
+   * 2026 性能核查（登记）：调用面已有多重收口，本层无需再做微任务单槽合并
+   * ——App 发布前有 serversProjectionSignature 签名闸（等值不 publish），
+   * 订阅侧（SidebarRoot）在 setState 前再比一次签名，refreshAggregate 等
+   * 写路径 identity-preserving（同内容不换对象）。React 19 批处理已把同一
+   * macrotask 内的多次 publish 合并为一次渲染，异步合并反而会引入
+   * getServers() 读到中间态的竞态窗口。本入口只保留引用相等防御：publish
+   * 语义是"换快照 + 通知"，同引用重发无任何增量（快照本身不可变）。
+   */
   publish(next: ChamberServerAggregate[]): void {
+    if (next === servers) return
     servers = next
     for (const listener of [...listeners]) listener()
   },
