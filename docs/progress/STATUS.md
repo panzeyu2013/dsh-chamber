@@ -173,6 +173,12 @@
    hdiutil）就绪于 packages/desktop/release/（adhoc 签名、0.2.2）；沙箱无
    外网 → distribution 签名/notarization/dmgbuild 标准版式受阻（登记）；
    asar 抽查含当前分支核心文件；/Applications 刷新待用户确认（事故纪律）。
+   **Swift 路径全量占位实现（同日 S-A…S-C-2/parity）**：hostFacts 推送、shim
+   全表面 67 方法、sidecar ctx 全真化（连接/凭据/审计/确认框/插件/runtime 控
+   制器族）、notify 消费路由+legs 补全；POC dev 全栈可用（DSH_SIDECAR_LEGACY_
+   START=1 离线快捷门）；swift 66/66、desktop 914/914。parity 边界：update
+   （Swift W-22 Sparkle 线）、settings 叶 async 化（进行中 S-E）、全新离线
+   profile 阻塞（与 Electron 同语义）、实机门禁（SMAppService/拉起/通知闭环）。
 - **起始端口偏移**：本地默认 17510、控制面默认 17500；当前固定起始端口 + P+1 重试 +
   记录仲裁，是否开放配置仍未决。
 - **trusted-host 自定义 Host**：当前反代 Host 与实例自身 `127.0.0.1:<port>` 一致；
