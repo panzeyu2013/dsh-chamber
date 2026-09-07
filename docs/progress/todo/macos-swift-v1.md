@@ -264,6 +264,15 @@ transport-manager 126/126、typecheck 0 诊断、**test:desktop 892/892**。已�
 K2 原实现引用 main 模块级 `version`（shouldInvalidate 实参），shell-core 改为模块级
 读兄弟 package.json 同值自足（dev/打包同目录布局，值恒等）；若后续改第三参注入代价小。
 W-10 seam 化批（HostEdges/60 handle 迁入/mirror MAIN_SIDE_FILES 扩展）为下一大块。
+**环境事故登记（同日 18:23–18:30）**：`/Applications/dsh-chamber.app/Contents/MacOS/
+dsh-chamber` 可执行文件被误替换为「exec nvm node」跳转 shim（推测为某 subagent 建
+PATH shim 时写错目标路径；真二进制无备份、stub 与框架配对校验失败）。处置：从主检出
+`packages/desktop/release/mac-arm64/dsh-chamber.app` **整包恢复**到 /Applications
+（ad-hoc 签名、Electron 43.4.0 验证 24.18.1 通过；运行中 GUI 进程为内存旧版不受
+影响，但磁盘上 app 代码回到 8-27 构建，后续需用新构建重装刷新）。**纪律追加**：
+所有 subagent 提示词明令「禁止写仓库根之外的任何路径（含 /Applications、/usr、
+/tmp 系统区之外的自建工具链只允许 /tmp 专属目录）」；门禁工具链统一 nvm node
+（~/.nvm/versions/node/v24.20.0，真 node 24.20.0）或恢复后的 /Applications 二进制。
 
 **开工前风险提示（8 条）**：
 1. **node/pnpm 缺位**（沙箱实测 MISSING）——W-01 首步用户机装 node ≥24 + pnpm@11.21.0；
