@@ -262,7 +262,10 @@ vendor 源码）+ 薄 Remote 门面（`index.ts`），编排逻辑：
   调用——归档管理器列表来自会话快照投影——保留为宿主 preview 端点的已测
   客户端半面）/ `purgeArchivedSessions(client, sessionIds?)`（长预算，常量
   `PURGE_CALL_TIMEOUT_MS = 5 * 60_000`，放 instance-api.ts；`sessionIds`
-  可选子集过滤，见 §17）；
+  可选子集过滤，见 §17）。**wire 上游空闲窗（2026-09 修订）**：代理豁免名单
+  `LONG_RPC_PATHS` 已含 `/api/archiveCleanup/purge`（03 §3.4），purge 的
+  上游静止容忍由 30 分钟保险丝覆盖——5 分钟客户端预算成为唯一先到截止，
+  其诚实超时文案（下条）不再被代理 45s 窗的误导性 504 抢先；
 - **超时文案**（诚实，zh 硬编码先例）：「清理超时——可能仍在进行，请稍后
   重新预览/重试（重复执行是安全的）」；预览超时给「预览超时，请重试」；
 - 503 `instance_unavailable` 沿用 `wrapWireError` 既有文案与 `isInstanceUnavailable`

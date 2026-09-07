@@ -23,6 +23,7 @@ import {
   getProcessBufferedRequestBytes,
 } from '../src/instance-proxy.ts'
 import { isLoopbackUpstreamBaseUrl } from '../src/loopback.ts'
+import { matchesLongRpcPath } from '../src/proxy-forward.ts'
 import { startWsHeartbeat } from '../src/ws-heartbeat.ts'
 import { clearAuthCookie, registerAuthCookie } from '../src/browser-auth-cookie.ts'
 import { DEFAULT_DSH_START_PORT } from '../src/spawn-dsh.ts'
@@ -1106,7 +1107,7 @@ test('upgrade response forwards only WebSocket handshake headers', async () => {
 })
 
 // ---------------------------------------------------------------------------
-// Upstream timeout (design 03 §3.3: silence → explicit 504, never a hang)
+// Upstream timeout (design 03 §3.4: silence → explicit 504, never a hang)
 // ---------------------------------------------------------------------------
 
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
@@ -1354,6 +1355,249 @@ test('http: non-SSE timeout is idle-based and re-arms on every body chunk', asyn
   assert.equal(response.status, 200)
   assert.equal(response.body, 'xxxx')
   assert.equal(proxy.getDiagnostics().failures, 0)
+})
+
+// ---------------------------------------------------------------------------
+// Long-RPC window (design 03 §3.4, 2026-09): /api/commands/execute (the
+// single funnel for every upstream slash command — /compact LLM summarization,
+// dsh-command-compact → dsh-compaction-basic, measured: a ~627k-token manual
+// compaction was cut at exactly 45 001 ms with the session unchanged) and
+// /api/archiveCleanup/purge (chamber archived-session cleanup host domain,
+// design 24 — unbounded fs deletions, client budget 5 min) carry host business
+// with NO upstream cap and out-of-band progress, so the ordinary idle window
+// must not fabricate a client disconnect for them. Exempted requests are POST
+// on one of the EXACT upstream paths and get LONG_RPC_UPSTREAM_TIMEOUT_MS as
+// an insurance fuse (NOT an SLA); everything else keeps the ordinary window.
+// Timing discipline: assertions depend on single-process timer deadline ORDER
+// (a CI stall delays all timers equally and cannot flip the verdict), not on
+// absolute time — keep every gap >=50ms so scheduling noise cannot reorder.
+// ---------------------------------------------------------------------------
+
+test('long-RPC predicate: decision table (0 timers)', () => {
+  const paths = ['/api/commands/execute', '/api/archiveCleanup/purge']
+  assert.equal(matchesLongRpcPath('POST', '/api/commands/execute', paths), true)
+  assert.equal(matchesLongRpcPath('POST', '/api/archiveCleanup/purge', paths), true)
+  assert.equal(matchesLongRpcPath('post', '/api/commands/execute', paths), true) // method is case-insensitive
+  assert.equal(matchesLongRpcPath('GET', '/api/commands/execute', paths), false) // method-scoped
+  assert.equal(matchesLongRpcPath('PUT', '/api/commands/execute', paths), false)
+  assert.equal(matchesLongRpcPath('POST', '/api/session/list', paths), false) // path-scoped
+  assert.equal(matchesLongRpcPath('POST', '/api/commands/execute/', paths), false) // exact — no trailing slash
+  assert.equal(matchesLongRpcPath('POST', '/x/api/commands/execute', paths), false) // exact — no prefix nesting
+  assert.equal(matchesLongRpcPath('POST', '/api/commands/execute/child', paths), false) // no nested sub-resource
+  assert.equal(matchesLongRpcPath('POST', '/api/ARCHIVECLEANUP/purge', paths), false) // case-sensitive
+  assert.equal(matchesLongRpcPath('POST', '/api/commands/execute', []), false) // empty list disables the exemption
+})
+
+/** A fake upstream that answers only after `delayMs`, wiring abort like the
+ * real transport (an aborted request emits 'error' and never answers). */
+function delayedHttpRequest(delayMs: number, body = '{"ok":true}') {
+  const calls: Array<{ url: URL; options: Record<string, unknown> }> = []
+  const fn: any = (url: URL, options: Record<string, unknown>) => {
+    calls.push({ url, options })
+    const request = new EventEmitter() as any
+    request.write = () => true
+    let timer: ReturnType<typeof setTimeout> | null = null
+    request.end = () => {
+      request.emit('finish')
+      timer = setTimeout(() => {
+        const upstreamRes = new EventEmitter() as any
+        upstreamRes.statusCode = 200
+        upstreamRes.headers = { 'content-type': 'application/json' }
+        upstreamRes.destroy = () => upstreamRes.emit('close')
+        upstreamRes.pause = () => {}
+        upstreamRes.resume = () => {}
+        request.emit('response', upstreamRes)
+        upstreamRes.emit('data', Buffer.from(body))
+        upstreamRes.emit('end')
+      }, delayMs)
+    }
+    const signal = options?.signal as AbortSignal | undefined
+    if (signal !== undefined) {
+      if (signal.aborted) process.nextTick(() => request.emit('error', new Error('Aborted')))
+      else signal.addEventListener('abort', () => {
+        if (timer !== null) clearTimeout(timer)
+        request.emit('error', new Error('Aborted'))
+      }, { once: true })
+    }
+    return request
+  }
+  return { fn, calls }
+}
+
+test('long-RPC window: commands/execute answers after the ordinary idle window', async () => {
+  const upstream = delayedHttpRequest(150)
+  const proxy = createInstanceProxy({
+    logger: quietLogger,
+    getLocalState: () => 'ready',
+    getLocalDshPort: () => DEFAULT_DSH_START_PORT,
+    httpRequest: upstream.fn,
+    upstreamTimeoutMs: 40,
+    longRpcUpstreamTimeoutMs: 400,
+  })
+  const res = fakeResponse()
+  await proxy.handleHttp(fakeRequest('/api/i/local/api/commands/execute', 'POST'), res)
+  assert.equal(res.status, null)
+  await sleep(60) // already past the ordinary 40ms window — the old code would have cut here
+  assert.equal(res.status, null)
+  assert.equal((upstream.calls[0].options.signal as AbortSignal).aborted, false)
+  await sleep(180) // total 240 >= the 150ms answer
+  assert.equal(res.status, 200)
+  assert.equal(res.body, '{"ok":true}')
+  // The proxy never invented a client disconnect for the slow business.
+  assert.equal((upstream.calls[0].options.signal as AbortSignal).aborted, false)
+  assert.equal(proxy.getDiagnostics().failures, 0)
+  assert.equal(proxy.getDiagnostics().longRpcRequests, 1)
+  assert.equal(proxy.getDiagnostics().longRpcTimeouts, 0)
+})
+
+test('long-RPC window is path-scoped: POST on an ordinary endpoint keeps the ordinary idle window', async () => {
+  const upstream = delayedHttpRequest(150)
+  const proxy = createInstanceProxy({
+    logger: quietLogger,
+    getLocalState: () => 'ready',
+    getLocalDshPort: () => DEFAULT_DSH_START_PORT,
+    httpRequest: upstream.fn,
+    upstreamTimeoutMs: 40,
+    longRpcUpstreamTimeoutMs: 400,
+  })
+  const res = fakeResponse()
+  await proxy.handleHttp(fakeRequest('/api/i/local/api/session/list', 'POST'), res)
+  assert.equal(res.status, null)
+  await sleep(240) // the 150ms answer arrives after the 40ms cut
+  assert.equal(res.status, 504)
+  assert.ok(res.body.includes('upstream_timeout'))
+  assert.equal(proxy.getDiagnostics().failures, 1)
+  assert.equal(proxy.getDiagnostics().longRpcRequests, 0)
+})
+
+test('long-RPC window is method-scoped: GET on commands/execute keeps the ordinary idle window', async () => {
+  const upstream = delayedHttpRequest(150)
+  const proxy = createInstanceProxy({
+    logger: quietLogger,
+    getLocalState: () => 'ready',
+    getLocalDshPort: () => DEFAULT_DSH_START_PORT,
+    httpRequest: upstream.fn,
+    upstreamTimeoutMs: 40,
+    longRpcUpstreamTimeoutMs: 400,
+  })
+  const res = fakeResponse()
+  await proxy.handleHttp(fakeRequest('/api/i/local/api/commands/execute', 'GET'), res)
+  assert.equal(res.status, null)
+  await sleep(240)
+  assert.equal(res.status, 504)
+  assert.ok(res.body.includes('upstream_timeout'))
+  assert.equal(proxy.getDiagnostics().failures, 1)
+  assert.equal(proxy.getDiagnostics().longRpcRequests, 0)
+})
+
+test('long-RPC window keeps a fuse: total silence → explicit 504 upstream_timeout', async () => {
+  const upstream = fakeHttpRequest(() => undefined) // hang: no response, no error
+  const proxy = createInstanceProxy({
+    logger: quietLogger,
+    getLocalState: () => 'ready',
+    getLocalDshPort: () => DEFAULT_DSH_START_PORT,
+    httpRequest: upstream.fn,
+    upstreamTimeoutMs: 40,
+    longRpcUpstreamTimeoutMs: 80,
+  })
+  const res = fakeResponse()
+  try {
+    await proxy.handleHttp(fakeRequest('/api/i/local/api/commands/execute', 'POST'), res)
+    assert.equal(res.status, null) // not answered synchronously — the fuse decides
+    await sleep(220)
+    assert.equal(res.status, 504)
+    assert.ok(res.body.includes('upstream_timeout'))
+    // The hung upstream was aborted at the long-RPC fuse, not earlier.
+    assert.equal((upstream.calls[0].options.signal as AbortSignal).aborted, true)
+    assert.equal(proxy.getDiagnostics().failures, 1)
+    assert.equal(proxy.getDiagnostics().longRpcRequests, 1)
+    assert.equal(proxy.getDiagnostics().longRpcTimeouts, 1)
+  } finally {
+    // Watchdog: if the long-window injection is ever ignored (the 30-minute
+    // default fuse), the failing assertions above must not leave a pending
+    // fuse timer that hangs the whole test process — client-side teardown
+    // clears it.
+    res.destroy()
+  }
+})
+
+test('long-RPC window: an explicit empty path list disables the exemption', async () => {
+  const upstream = fakeHttpRequest(() => undefined) // hang
+  const proxy = createInstanceProxy({
+    logger: quietLogger,
+    getLocalState: () => 'ready',
+    getLocalDshPort: () => DEFAULT_DSH_START_PORT,
+    httpRequest: upstream.fn,
+    upstreamTimeoutMs: 40,
+    longRpcUpstreamTimeoutMs: 400,
+    longRpcPaths: [],
+  })
+  const res = fakeResponse()
+  await proxy.handleHttp(fakeRequest('/api/i/local/api/commands/execute', 'POST'), res)
+  assert.equal(res.status, null)
+  await sleep(120) // ordinary 40ms window decides despite the long-window injection
+  assert.equal(res.status, 504)
+  assert.ok(res.body.includes('upstream_timeout'))
+  assert.equal(proxy.getDiagnostics().longRpcRequests, 0)
+})
+
+test('long-RPC window: archiveCleanup/purge (chamber host domain) is exempted too', async () => {
+  const upstream = delayedHttpRequest(150)
+  const proxy = createInstanceProxy({
+    logger: quietLogger,
+    getLocalState: () => 'ready',
+    getLocalDshPort: () => DEFAULT_DSH_START_PORT,
+    httpRequest: upstream.fn,
+    upstreamTimeoutMs: 40,
+    longRpcUpstreamTimeoutMs: 400,
+  })
+  const res = fakeResponse()
+  await proxy.handleHttp(fakeRequest('/api/i/local/api/archiveCleanup/purge', 'POST'), res)
+  assert.equal(res.status, null)
+  await sleep(240)
+  assert.equal(res.status, 200)
+  assert.equal(proxy.getDiagnostics().longRpcRequests, 1)
+})
+
+test('long-RPC window: after headers, a sparse non-SSE body idles across ordinary windows', async () => {
+  const fn: any = () => {
+    const request = new EventEmitter() as any
+    request.write = () => true
+    request.end = () => {
+      const upstreamRes = new EventEmitter() as any
+      upstreamRes.statusCode = 200
+      upstreamRes.headers = { 'content-type': 'application/json' }
+      upstreamRes.destroy = () => upstreamRes.emit('close')
+      upstreamRes.pause = () => {}
+      upstreamRes.resume = () => {}
+      request.emit('response', upstreamRes)
+      // Header→first-chunk and chunk→chunk gaps both exceed the ordinary 40ms
+      // window: only the long-RPC re-arms (response + data handlers) keep this
+      // response alive.
+      setTimeout(() => upstreamRes.emit('data', Buffer.from('a')), 70)
+      setTimeout(() => upstreamRes.emit('data', Buffer.from('b')), 140)
+      setTimeout(() => upstreamRes.emit('end'), 150)
+    }
+    return request
+  }
+  const proxy = createInstanceProxy({
+    logger: quietLogger,
+    getLocalState: () => 'ready',
+    getLocalDshPort: () => DEFAULT_DSH_START_PORT,
+    httpRequest: fn,
+    upstreamTimeoutMs: 40,
+    longRpcUpstreamTimeoutMs: 400,
+  })
+  const res = fakeResponse()
+  await proxy.handleHttp(fakeRequest('/api/i/local/api/commands/execute', 'POST'), res)
+  await sleep(120) // past two ordinary windows; second chunk not yet sent
+  assert.equal(res.status, 200)
+  assert.equal((proxy.getDiagnostics().failures), 0)
+  await sleep(140) // total 260 >= end at 150ms
+  assert.equal(res.body, 'ab')
+  assert.equal(proxy.getDiagnostics().failures, 0)
+  assert.equal(proxy.getDiagnostics().longRpcRequests, 1)
+  assert.equal(proxy.getDiagnostics().longRpcTimeouts, 0)
 })
 
 test('upgrade: a WebSocket handshake that never completes → explicit 504 on the socket', async () => {

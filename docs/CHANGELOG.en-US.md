@@ -115,6 +115,18 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 ### Fixed
 
+- **Long-RPC proxy exemption: the 45s window no longer kills slow unary
+  host business (design 03 §3.4)** — the chamber reverse proxy used to cut
+  unary `POST /api/commands/execute` requests (manual `/compact` = an LLM
+  summary call replaying the whole compactable history; a measured
+  ~627k-token session was cut at exactly 45 001 ms, cancelling the host
+  compaction with the session unchanged) into a misleading `transport
+  failure for /api/commands/execute: HTTP 504` plus a fabricated client
+  disconnect; POST requests exactly matching `LONG_RPC_PATHS`
+  (commands/execute and design 24's archiveCleanup/purge) now get a
+  30-minute insurance fuse (not an SLA) while every other path keeps the
+  45s window; exemption/fuse-trip counters joined the diagnostics and a
+  decision table plus regression tests landed (instance-proxy.test.ts).
 - **Dock/taskbar unread badge subagent false positives (design 19
   §3.5/§3.7 increment)** — an armed dot whose parent turn ended while
   background subagents are still alive (runningSubagents > 0) no longer

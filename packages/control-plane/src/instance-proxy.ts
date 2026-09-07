@@ -65,6 +65,8 @@ import {
 import { isLoopbackHostname, isLoopbackUpstreamBaseUrl } from './loopback.ts'
 import {
   CLIENT_BODY_IDLE_TIMEOUT_MS,
+  LONG_RPC_PATHS,
+  LONG_RPC_UPSTREAM_TIMEOUT_MS,
   MAX_BUFFERED_REQUEST_BYTES,
   MAX_CONCURRENT_HTTP_REQUESTS,
   MAX_CONCURRENT_WS_STREAMS,
@@ -101,6 +103,8 @@ import type {
 // them from instance-proxy.ts).
 export {
   CLIENT_BODY_IDLE_TIMEOUT_MS,
+  LONG_RPC_PATHS,
+  LONG_RPC_UPSTREAM_TIMEOUT_MS,
   MAX_BUFFERED_REQUEST_BYTES,
   MAX_CONCURRENT_HTTP_REQUESTS,
   MAX_CONCURRENT_WS_STREAMS,
@@ -132,6 +136,10 @@ export interface InstanceProxyDiagnostics {
   activeHttpRequests: number
   pendingUpgrades: number
   bufferedRequestBytes: number
+  /** Requests that took the long-RPC window; hits of the insurance fuse
+   * (design 03 §3.4, LONG_RPC_PATHS). */
+  longRpcRequests: number
+  longRpcTimeouts: number
   transports: number
 }
 
@@ -149,6 +157,10 @@ export interface InstanceProxyDeps {
   httpRequest?: HttpRequestFactory
   /** Upstream timeout in ms (default UPSTREAM_TIMEOUT_MS; tests inject small values). */
   upstreamTimeoutMs?: number
+  /** Upstream idle window for long-RPC paths (design 03 §3.4; default LONG_RPC_UPSTREAM_TIMEOUT_MS). */
+  longRpcUpstreamTimeoutMs?: number
+  /** Long-RPC paths selecting the exemption (default LONG_RPC_PATHS; `[]` disables the exemption). */
+  longRpcPaths?: readonly string[]
   /** Client upload idle timeout in ms (tests inject small values). */
   clientBodyIdleTimeoutMs?: number
   /** WebSocket heartbeat ping cadence in ms (tests inject small values). */
@@ -305,7 +317,7 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
    * by proxy-forward to every outbound connection to the target. */
   interface TransportRecord { baseUrl: string; headers?: Record<string, string>; tls?: { spkiPin?: string }; authority?: string }
   const transports = new Map<string, TransportRecord>()
-  const counters: ProxyForwardCounters = { requests: 0, failures: 0, activeStreams: 0, bufferedRequestBytes: 0 }
+  const counters: ProxyForwardCounters = { requests: 0, failures: 0, activeStreams: 0, bufferedRequestBytes: 0, longRpcRequests: 0, longRpcTimeouts: 0 }
   let activeHttpRequests = 0
   const pendingUpgrades = createPendingUpgradeTracker()
   /** Live spliced WS streams (downstream browser leg + upstream host leg),
@@ -360,6 +372,8 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
     logPrefix: 'instance-proxy',
     httpRequest: deps.httpRequest,
     upstreamTimeoutMs,
+    ...(deps.longRpcUpstreamTimeoutMs === undefined ? {} : { longRpcUpstreamTimeoutMs: deps.longRpcUpstreamTimeoutMs }),
+    ...(deps.longRpcPaths === undefined ? {} : { longRpcPaths: deps.longRpcPaths }),
     clientBodyIdleTimeoutMs,
     wsPingIntervalMs,
     wsPingMissesBeforeTeardown,
@@ -716,6 +730,8 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
         activeHttpRequests,
         pendingUpgrades: pendingUpgrades.size,
         bufferedRequestBytes: counters.bufferedRequestBytes,
+        longRpcRequests: counters.longRpcRequests,
+        longRpcTimeouts: counters.longRpcTimeouts,
         transports: transports.size,
       }
     },

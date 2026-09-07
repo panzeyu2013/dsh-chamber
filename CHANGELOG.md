@@ -83,6 +83,15 @@
 
 ### 修复
 
+- **长 RPC 代理豁免修复 45s 误杀（design 03 §3.4）** —— chamber 反代的 45s
+  上游空闲窗会把经 unary `POST /api/commands/execute` 执行的上游长业务
+  （手动 `/compact` = LLM 摘要重放全部可压缩历史；实测 ~62.7 万 token 会话在
+  45 001 ms 被切断、宿主压缩被取消、会话无变化）误报为
+  `transport failure for /api/commands/execute: HTTP 504` 并伪造一次从未发生
+  的客户端断连；现对 POST 且精确命中 `LONG_RPC_PATHS` 的请求（
+  commands/execute 与设计 24 的 archiveCleanup/purge）改用 30 分钟保险丝窗
+  （非 SLA），其余路径 45s 语义不变；豁免命中/保险丝触发计数入诊断，决策表
+  与回归测试入列（instance-proxy.test.ts）。
 - **Dock/任务栏未读徽标子代理误报（design 19 §3.5/§3.7 增量）** ——
   父回合结束但后台子代理仍存活（runningSubagents > 0）的武装蓝点不再计入
   徽标（与窗口内运行环压制/通知抑制同规），子代理全部结束后蓝点自动浮现；

@@ -125,9 +125,11 @@ export function mintRpcId(): string {
 
 /** Bounded-unary budget of every postUnary call — the byte-identical
  *  `AbortSignal.timeout(30000)` all four carriers posted (official
- *  DEFAULT_TIMEOUT_MS): the control-plane proxy forwards without an upstream
- *  timeout, so a silently hung host must fail loud instead of pinning the
- *  settings page / inventory view / recheck pass / shell boot forever. */
+ *  DEFAULT_TIMEOUT_MS): the control-plane proxy's 45s upstream idle window
+ *  (design 03 §3.4; long-RPC paths exempted) outlasts this budget, so the
+ *  client-side cap is what must fail loud — a silently hung host would
+ *  otherwise pin the settings page / inventory view / recheck pass / shell
+ *  boot until the proxy window. */
 const UNARY_TIMEOUT_MS = 30000
 
 /** Options for one postUnary call. Every member defaults to the four

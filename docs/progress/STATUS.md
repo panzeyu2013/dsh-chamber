@@ -231,3 +231,20 @@
   - 兜底 cwd 派生分组限制：符号链接拼写（macOS /tmp vs /private/tmp）可能不匹配
     canonical-cwd 索引；未挂载来源的新建空工作区不可见（fail-closed 语义）。
   - git 工作树删除时 runtime 通道缺席 fail-closed（'runtime-unknown'）。
+  - unary 长命令的业务时长偏差（2026-09 修复的边界，design 03 §3.4 修订）：
+    `POST` 且精确命中 `LONG_RPC_PATHS`（`/api/commands/execute`——手动
+    `/compact` 为 LLM 摘要重放全部可压缩历史，实测 ~62.7 万 token 会话被 45s
+    空闲窗在 45 001 ms 切断并取消宿主工作、会话无变化；`/api/archiveCleanup/purge`
+    ——design 24 归档清理，宿主无时长上限、自身客户端预算 5 分钟）改用
+    `LONG_RPC_UPSTREAM_TIMEOUT_MS`（30 分钟**保险丝而非 SLA**），其余路径 45s
+    不变；名单刻意狭窄（POST + 精确路径，扩展须符合同一契约；git 域宿主有
+    30s 硬上限明确不入列）。豁免命中与保险丝触发有独立计数器
+    （`longRpcRequests`/`longRpcTimeouts`，兼作名单活性探针）。残余：超保险丝
+    的极端业务被**显式截断（504 + abort）、操作未完成、会话一致性无损**
+    （若保险丝计数在发布中非零即复访取值）；治本——上游把 `commands.execute`
+    改为受理即回、结果经会话事件流交付（验收标准：受理回执形状、终态错误
+    分类、对等待 unary 语义的官方客户端影响；退役条件：上游落地并经 chamber
+    验证后名单与保险丝一并退役）——宿主非 chamber 可写范围，登记为上游
+    跟踪项；**上游若异步化，dsh-runtime 激活/身份探针（runtime-probes 以伪
+    session 直连宿主期待 commands/execute 同步 `session/not-found` 信封）须
+    平行迁移**，探针走直连端口不经代理、与豁免窗口无交集。
