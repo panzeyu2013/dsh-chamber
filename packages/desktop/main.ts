@@ -2277,33 +2277,30 @@ if (!gotTheLock) {
     // 经 ctx：transportManager（Pick 扩 reverify/logs/clearLogs，见
     // ShellAssemblyCtx）；ssh-config 发现经纯模块 ssh-config.ts import（main
     // 侧 import 随迁移除）。exec/systemd（SSH_START/STOP/IS_ACTIVE/
-    // RESTART_SERVICE）与插件管理等其余 handler 留本文件。
+    // RESTART_SERVICE）4 注册体已随 W-10 S5 迁出（见下 E 组标记），插件管理
+    // 等其余 handler 留本文件。
 
-    // Provider exec channel (design 05 §7.4, ssh: remote systemd): the fresh
-    // status projection on success (serviceActive included), {error} on
-    // failure — loud, never a silent empty success, never an unhandled
-    // rejection.
-    ipcMain.handle(IPC_CHANNELS.SSH_START_SERVICE, trustedIpc(({ id }) =>
-      sm.exec(id, 'start').then(result => (result.ok ? result.status : { error: result.error })).catch(err => ({ error: `exec failed: ${describeUnknownError(err)}` })),
-    ));
-    ipcMain.handle(IPC_CHANNELS.SSH_STOP_SERVICE, trustedIpc(({ id }) =>
-      sm.exec(id, 'stop').then(result => (result.ok ? result.status : { error: result.error })).catch(err => ({ error: `exec failed: ${describeUnknownError(err)}` })),
-    ));
-    ipcMain.handle(IPC_CHANNELS.SSH_IS_ACTIVE, trustedIpc(({ id }) =>
-      sm.exec(id, 'is-active').then(result => (result.ok ? result.status : { error: result.error })).catch(err => ({ error: `exec failed: ${describeUnknownError(err)}` })),
-    ));
-    // Plugin management surface (design 13 M2+M3, contract B): restart the remote
-    // service, read the remote/local plugin manifests, apply a plugin-set change,
-    // and best-effort npm search (main-process fetch; the renderer stays on
+    // —— W-10 S5：exec/systemd E 组 4 注册体（SSH_START_SERVICE /
+    // SSH_STOP_SERVICE / SSH_IS_ACTIVE / SSH_RESTART_SERVICE）自 main.ts 迁入
+    // shell-core installIpcHandlers ② E 组段（D 组之后按原序；注册体逐字随迁，
+    // 「Provider exec channel」投影纪律注释随迁）。装配依赖经 ctx：
+    // transportManager（Pick 扩 exec，见 ShellAssemblyCtx——装配注入完整现实
+    // 例，无新字段）。systemctl argv 固定参数数组 `systemctl <action> -- <
+    // serviceName>` 与服务名白名单（SERVICE_NAME_PATTERN，design 02 §3.9——
+    // 拒绝发生在任何 spawn 前）及 generation 复验纪律（exec 结果/serviceActive
+    // 提交前 execIsCurrent 复验，防旧代污染）在 transport-manager/ssh-provider
+    // 纯模块内部，不随迁。restart 注册体原经本文件 execTransport（= sm.exec 的
+    // ExecFn 收窄别名）调同一执行面——该别名仍为下方插件管理面 scopedExec 所
+    // 用，留本文件。插件管理（SSH_PLUGIN_* / GATEWAY_PLUGIN_* /
+    // LOCAL_PLUGIN_* / NPM_SEARCH 等）其余 handler 留本文件。
+
+    // Plugin management surface (design 13 M2+M3, contract B): read the remote
+    // /local plugin manifests, apply a plugin-set change, and best-effort npm
+    // search (main-process fetch; the renderer stays on
     // 127.0.0.1). All handlers go through the trustedIpc fence and resolve loud
     // {error} / {ok:...} shapes — never a silent empty success, never an
     // unhandled rejection. renderer-supplied specs are re-validated inside
     // applyPlugins (defense in depth).
-    ipcMain.handle(IPC_CHANNELS.SSH_RESTART_SERVICE, trustedIpc(({ id }) =>
-      execTransport(id, 'restart').then(result =>
-        (result.ok ? (result.status ?? { error: 'restart completed but no status projection' }) : { error: result.error }),
-      ).catch(err => ({ error: `exec failed: ${describeUnknownError(err)}` })),
-    ));
     ipcMain.handle(IPC_CHANNELS.SSH_PLUGIN_LIST, trustedIpc(async ({ id }) => {
       const target = findRemoteTarget(id);
       if (target === null) return { ok: false, error: 'ssh instance not found' };
@@ -4779,6 +4776,9 @@ if (!gotTheLock) {
       // SSH_INSTANCES_CHANGED push 文本留本文件，经 ctx 供 core 调用）。
       // W-10 S4（ssh 连接状态批）：D 组 7 注册体同经 transportManager——core 侧
       // Pick 扩 reverify/logs/clearLogs（本装配注入完整现实例，无新增字段）。
+      // W-10 S5（exec/systemd 批）：E 组 4 注册体（SSH_START/STOP/IS_ACTIVE/
+      // RESTART_SERVICE）同经 transportManager——core 侧 Pick 扩 exec（本装配
+      // 注入完整现实例，无新增字段）。
       transportManager: sm,
       audit,
       gatewaySessions,

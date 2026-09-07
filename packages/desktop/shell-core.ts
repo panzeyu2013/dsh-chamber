@@ -84,6 +84,17 @@
  *    reverify / logs / clearLogs——connect/disconnect/status 为 C 组已有成员）。
  *    status/logs 的非秘密投影形状不变（localPort/phase 等元数据；URL/密钥绝不
  *    出主进程、绝不进载荷/日志——main.ts 原注释语义保留）。
+ *  Responsibilities relocated from main.ts (W-10 S5 ssh exec/systemd batch):
+ *  - E 组 4 个注册体：SSH_START_SERVICE / SSH_STOP_SERVICE / SSH_IS_ACTIVE /
+ *    SSH_RESTART_SERVICE——按原 main.ts 顺序追加在 D 组之后（installIpcHandlers
+ *    ② 段）；全走 ctx 注入的 transportManager 句柄 exec 面（Pick S5 扩
+ *    exec——restart 注册体在 main.ts 原经 plugin-sync 的 ExecFn 别名
+ *    execTransport（= sm.exec 的 as unknown 收窄）调同一执行面，迁入后直用
+ *    sm.exec：运行时同一函数、行为零改，决策注记见 E 组段）。systemctl argv
+ *    固定参数数组与服务名白名单（SERVICE_NAME_PATTERN）及 generation 复验纪律
+ *    是 transport-manager/ssh-provider 纯模块内部逻辑（spawn 前白名单拒绝 /
+ *    execEpoch 复验），不随迁；注册体只做 {status} / {error} 结果投影（loud
+ *    纪律注释随迁）。
  *
  * 中文说明：自 main.ts 机械搬运的 Electron-free 业务核心（零缝阶段，行为零
  * 变化）；W-10 S1 起 IPC 注册点与 A 组 info+settings 处理器迁入本文件
@@ -92,7 +103,9 @@
  * edges.rendererPush）；S3 追加 C 组 registry+凭据 7 注册体与读时投影链（凭据
  * write-only/绝不回读纪律随迁，代码注释保留）；S4 追加 D 组 ssh 连接状态 7
  * 注册体（CONFIG_LIST 经纯模块 ssh-config.ts；其余经 ctx transportManager
- * ——非秘密投影纪律随迁）。HostEdges 其余边沿叶与双 flavor 属后续批。
+ * ——非秘密投影纪律随迁）；S5 追加 E 组 exec/systemd 4 注册体（SSH_START/
+ * STOP/IS_ACTIVE/RESTART_SERVICE——经 ctx transportManager 的 exec 面）。
+ * HostEdges 其余边沿叶与双 flavor 属后续批。
  */
 
 import { readFileSync } from 'node:fs';
@@ -985,7 +998,11 @@ export function clearBadgeIntentForQuit(applyNativeClear: () => void): void {
 //     SSH_DISCONNECT / SSH_STATUS / SSH_REVERIFY / SSH_LOGS / SSH_LOGS_CLEAR
 //     ——按原 main.ts 顺序追加在 C 组之后；CONFIG_LIST 经纯模块 ssh-config.ts
 //     import，其余 6 个经 ctx transportManager——Pick 扩 reverify/logs/
-//     clearLogs，见 ShellAssemblyCtx）；
+//     clearLogs，见 ShellAssemblyCtx）+ E 组 4 个注册体（S5 批：SSH_START_SERVICE /
+//     SSH_STOP_SERVICE / SSH_IS_ACTIVE / SSH_RESTART_SERVICE——按原 main.ts 顺序
+//     追加在 D 组之后；全走 ctx transportManager 的 exec 面——Pick 扩 exec，见
+//     ShellAssemblyCtx；systemctl argv 固定参数数组/服务名白名单与 generation
+//     复验纪律在 transport-manager/ssh-provider 纯模块内部，不随迁）；
 //   ③ 自举（占位——控制面 ready 后的启动/恢复 push 与余下 drain 挂点在 W-10
 //      后续批迁入，见 macos-swift-v1.md §四批 2）。
 // ---------------------------------------------------------------------------
@@ -1004,7 +1021,9 @@ export interface IpcRegistrar {
  *  （registry+凭据批）增 transportManager / audit / gatewaySessions /
  *  publishRegistryTransition 四字段（宿主生命周期权威仍留 main，见字段注释）；
  *  S4（ssh 连接状态批）无新字段——D 组注册体复用 transportManager（Pick 扩
- *  reverify/logs/clearLogs）与纯模块 import，见字段注释。
+ *  reverify/logs/clearLogs）与纯模块 import，见字段注释；S5（exec/systemd
+ *  批）亦无新字段——E 组注册体复用 transportManager（Pick 扩 exec），见字段
+ *  注释。
  *  chamber
  *  settings 的内存 holder 仍归装配侧（main.ts 尚余 20+ 处直读点，随各自批迁入时
  *  holder 一并搬家）；core 侧一律经 settingsIO 读写，权威单一、行为与搬迁前一
@@ -1067,11 +1086,14 @@ export interface ShellAssemblyCtx {
   // SSH_INSTANCES_CHANGED push 文本归装配侧，随后续批再迁）。W-10 S4（ssh
   // 连接状态批）不新增字段：D 组 7 注册体复用 transportManager（Pick 扩
   // reverify/logs/clearLogs，见字段注释）+ 纯模块 ssh-config.ts import。
-  /** registry 读写 + transport 状态/生命周期投影句柄（C/D 组注册体直接读写
+  // W-10 S5（exec/systemd 批）不新增字段：E 组 4 注册体复用 transportManager
+  // （Pick 扩 exec，见字段注释）。
+  /** registry 读写 + transport 状态/生命周期投影句柄（C/D/E 组注册体直接读写
    *  面；装配侧注入 transport-manager 现实例——纯模块按引用共享，语义与搬迁
    *  前 main.ts 的 sm 局部常量一致；Pick 收窄到已迁批实际调用的方法面
-   *  （W-10 S4 扩 reverify/logs/clearLogs——D 组状态/日志/重验证通道），体内
-   *  以 sm 名解构以保持注册体文本逐字）。 */
+   *  （W-10 S4 扩 reverify/logs/clearLogs——D 组状态/日志/重验证通道；W-10 S5
+   *  扩 exec——E 组 exec/systemd 执行通道），体内以 sm 名解构以保持注册体
+   *  文本逐字）。 */
   transportManager: Pick<
     TransportManager,
     | 'listInstances'
@@ -1083,6 +1105,7 @@ export interface ShellAssemblyCtx {
     | 'reverify'
     | 'logs'
     | 'clearLogs'
+    | 'exec'
   >
   /** S24 非秘密审计叶（原 main.ts 的 audit = appendAuditEvent({ file:
    *  auditLogPath })——装配侧绑定 <userData> 路径注入；JSONL append 只记非
@@ -1106,9 +1129,9 @@ export interface ShellAssemblyCtx {
   ): ProjectedRegistryInstance[]
 }
 
-/** 装配 shell IPC 面（W-10 S1 A 组 + S2 B 组 + S3 C 组 + S4 D 组注册体与随迁
- *  辅助；各组注册顺序 = 原 main.ts 顺序）。edges 参数以 Pick 收窄到本批实际
- *  调用的成员（createElectronEdges 返回同形超集）；后续批实现新成员时同步
+/** 装配 shell IPC 面（W-10 S1 A 组 + S2 B 组 + S3 C 组 + S4 D 组 + S5 E 组注册体
+ *  与随迁辅助；各组注册顺序 = 原 main.ts 顺序）。edges 参数以 Pick 收窄到本批
+ *  实际调用的成员（createElectronEdges 返回同形超集）；后续批实现新成员时同步
  *  扩宽两侧。
  *  调用点纪律：whenReady 内、createMainWindow 之前（窗口加载前注册完毕）——
  *  本函数同时完成渲染器投递状态机的 edges/quit 快照（单装配不变式，见上段）。 */
@@ -1148,7 +1171,8 @@ export function installIpcHandlers(deps: {
     confirmRegistryOriginSwitch,
     // W-10 S3（registry+凭据批）：transportManager → sm（与搬迁前 main.ts 的
     // sm 局部常量同名，C 组注册体文本逐字保留）；W-10 S4 的 D 组（ssh 连接
-    // 状态 7 注册体）同用该句柄（Pick 扩 reverify/logs/clearLogs）。audit /
+    // 状态 7 注册体）与 W-10 S5 的 E 组（exec/systemd 4 注册体）同用该句柄
+    // （Pick 扩 reverify/logs/clearLogs / exec）。audit /
     // gatewaySessions / publishRegistryTransition 为装配侧宿主叶（定义在 main，
     // 经 ctx 注入）。
     transportManager: sm,
@@ -1899,6 +1923,48 @@ export function installIpcHandlers(deps: {
   deps.ipc.handle(IPC_CHANNELS.SSH_LOGS_CLEAR, (payload: unknown) => {
     const { id } = payload as { id: string };
     return sm.clearLogs(id);
+  });
+
+  // —— E 组（S5 批；W-10 S5 施工图第 1 项）——
+  // exec/systemd 4 注册体（SSH_START_SERVICE / SSH_STOP_SERVICE / SSH_IS_ACTIVE
+  // / SSH_RESTART_SERVICE——按原 main.ts 顺序紧接 D 组追加；注册体自 main.ts
+  // 逐字迁入，全零 Electron）。装配依赖经 ctx：transportManager（sm）的 exec
+  // 面（Pick 扩 exec——装配侧注入完整现实例）。restart 注册体在 main.ts 原经
+  // plugin-sync 的 ExecFn 别名 execTransport（= sm.exec 的 as unknown 收窄，
+  // 为适配 plugin-sync 自身的执行契约）调同一执行面，迁入后直用 sm.exec：
+  // 运行时同一函数、行为零改（决策注记）。systemctl argv 固定参数数组
+  // `systemctl <action> -- <serviceName>` 与服务名白名单（`^[a-zA-Z0-9]
+  // [a-zA-Z0-9_.-]*$`、首字符字母数字；design 02 §3.9）是 ssh-provider
+  // provider exec 的纯逻辑（白名单拒绝发生在任何 spawn 前），generation 复验
+  // 纪律（exec 结果/status/serviceActive 提交前经 execIsCurrent 复验，防旧代
+  // 污染）在 transport-manager exec 实现内（execEpoch/execIdentityChanged）
+  // ——均在纯模块内部、不随迁；注册体只做结果投影（下方原注释随迁）：
+  // Provider exec channel (design 05 §7.4, ssh: remote systemd): the fresh
+  // status projection on success (serviceActive included), {error} on
+  // failure — loud, never a silent empty success, never an unhandled
+  // rejection.
+  deps.ipc.handle(IPC_CHANNELS.SSH_START_SERVICE, (payload: unknown) => {
+    const { id } = payload as { id: string };
+    return sm.exec(id, 'start').then(result => (result.ok ? result.status : { error: result.error })).catch(err => ({ error: `exec failed: ${describeUnknownError(err)}` }));
+  });
+  deps.ipc.handle(IPC_CHANNELS.SSH_STOP_SERVICE, (payload: unknown) => {
+    const { id } = payload as { id: string };
+    return sm.exec(id, 'stop').then(result => (result.ok ? result.status : { error: result.error })).catch(err => ({ error: `exec failed: ${describeUnknownError(err)}` }));
+  });
+  deps.ipc.handle(IPC_CHANNELS.SSH_IS_ACTIVE, (payload: unknown) => {
+    const { id } = payload as { id: string };
+    return sm.exec(id, 'is-active').then(result => (result.ok ? result.status : { error: result.error })).catch(err => ({ error: `exec failed: ${describeUnknownError(err)}` }));
+  });
+  // SSH_RESTART_SERVICE（design 13 M2+M3 contract B 的 ssh 服务重启腿）：
+  // 语义同 provider exec channel——成功时投影最新 status（服务重启的即时
+  // 状态；transport exec 的 ok 分支恒带 status，此处 ?? 兜底为 plugin-sync
+  // ExecResult 契约保留的防御分支，运行时不可达分支行为与搬迁前一致）；
+  // 失败 loud {error}。
+  deps.ipc.handle(IPC_CHANNELS.SSH_RESTART_SERVICE, (payload: unknown) => {
+    const { id } = payload as { id: string };
+    return sm.exec(id, 'restart').then(result =>
+      (result.ok ? (result.status ?? { error: 'restart completed but no status projection' }) : { error: result.error }),
+    ).catch(err => ({ error: `exec failed: ${describeUnknownError(err)}` }));
   });
 
   // ③ 自举（W-10 后续批占位：控制面 ready 后的启动/恢复 push、余下 drain 挂点
