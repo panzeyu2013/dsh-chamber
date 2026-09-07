@@ -344,6 +344,14 @@ ctx 真实化逐项列于 sidecar-entry.ts 注释。
   快捷方式版式——标准 dmgbuild 版式待联网重跑）。asar 抽查：main.ts/
   shell-core.ts/node-edges.ts/sidecar-entry.ts 均在包内。产物不自动替换
   /Applications（等用户确认，吸取事故纪律）。
+**POC dev 循环打通（方案 B，用户在场实机联调）**：swift run 壳 + 真
+sidecar-entry + 独立 userData/17520 + 本地 dsh 实例（POC_DSH_PATH →
+packages/desktop/vendor/dsh 离线 workspace，dsh ready 17511）。修复链：
+无 bundle id 通知崩溃守卫 → 首载竞态退避重试 → console/onerror 回传 +
+渲染快照诊断 → transportManager.listInstances 真实化（registry 文件读）→
+A 桥白名单扩 BridgeManifest 全集（60/60）→ shim readiness/badge 真实通道
+化（deep-link-ready/notifications-ready/badge-count 实调成功，零
+poc-unimplemented、零 handshake 报错）。全程隔离现网实例。
 - **showMessage 真实模态腿**（95275cc）：NSAlert 主线程 runModal 一次、
   按钮序 raw-1000 夹取回传、style 映射、无 buttons→['OK']；无窗诚实降级。
   **M3 代码级宿主腿至此全部完成**（focus/open/openPath/reveal/badge/keep-
