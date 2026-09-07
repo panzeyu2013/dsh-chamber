@@ -327,7 +327,12 @@ ctx 真实化逐项列于 sidecar-entry.ts 注释。
   （NSAlert critical）/launchApp（.app openApplication 或 NSWorkspace.open）
   真实腿——全带窗口守卫（headless 诚实降级）；swift build 0 警告、swift
   test 40/40。**剩余腿**：setLoginItem（SMAppService 需签名）、
-  appId→应用映射（M3 集成）、NSAlert 消费接线——GUI/签名硬门禁。
+  appId→应用映射（M3 集成）——GUI/签名硬门禁。
+- **showMessage 真实模态腿**（95275cc）：NSAlert 主线程 runModal 一次、
+  按钮序 raw-1000 夹取回传、style 映射、无 buttons→['OK']；无窗诚实降级。
+  **M3 代码级宿主腿至此全部完成**（focus/open/openPath/reveal/badge/keep-
+  awake/error/launch/picker/notification 调度+delegate 回灌/message）——
+  全部 0 警告 + 40/40；剩余均属实机/签名硬门禁。
 **剩余路线**（不省略登记）：W-18 后半 B（manifest 运行时白名单消费决策：POC
 白名单 7 收窄暂维持，全量放行待 shim 全量生成时评审）→ W-19…W-21
 （窗口/菜单/生命周期/通知/角标/深链/对话框/外链/登录项/崩溃恢复——Swift 宿主腿
