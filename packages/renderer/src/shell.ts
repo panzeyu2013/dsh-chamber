@@ -10,6 +10,12 @@
  * roots from ever targeting one container. Instance shells stay mounted once
  * booted (hide/show switching is pure CSS, sessions stay alive).
  *
+ * 保留策略例外（2026 性能整改，05 §1/§4 偏差）：上述"booted 后常驻"是 App
+ * 层默认编排；App 的保留策略（src/retention.ts）可在空闲期回收超限隐藏壳——
+ * 回收走与注册表删除相同的 disposeInstanceShell 原语（generation cancel +
+ * 异步 teardown barrier），本模块语义不变（视图代际/同 id 串行 barrier 同样
+ * 保证回收后的重 boot 不与异步 teardown 交错），实例进程/连接不受影响。
+ *
  * The module table and bundle registry are page-level singletons shared
  * across instances (boot.ts reuse seam — the module system refuses a second
  * `__ModuleLoader__` install); materialized exports are stateless plugin
@@ -702,7 +708,9 @@ function disposeHolder(instanceId: string, holder: ShellHolder, reason: string):
 
 /**
  * Tear down ONE instance's shell (design 05 §4: view lifetime = registry
- * entry lifetime — the source was REMOVED from the registry): dispose the
+ * entry lifetime — the source was REMOVED from the registry, or the chamber
+ * retention policy reaps an over-limit hidden view — App.tsx reclaimView,
+ * 2026 性能整改): dispose the
  * AppWebEntry, drop the entry and any pending/active opens (they can never
  * dispatch). Async ctx teardown is registered as an id-local barrier that a
  * re-added source must await. A boot queued or in flight for the instance is
