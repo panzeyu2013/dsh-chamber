@@ -5,11 +5,14 @@ import {
   commitAggregateFailure,
   commitAggregatePull,
   invalidateRemovedAggregateSources,
+  isFallbackDerivedView,
   isSnapshotStale,
   planAggregateRefreshes,
   refreshPullStillCurrent,
   remoteRetiredSourceIds,
   retireSelectedSource,
+  shouldRebaselineFallbackView,
+  shouldRetainPushedAggregate,
   withoutRemovedSourceIds,
   withoutRemovedSourceKeys,
 } from '../src/aggregate-refresh.ts'
@@ -307,6 +310,126 @@ test('chamber source-id validation accepts canonical and legacy prefixes but rej
     () => sourceIdForInstance({ id: 'east', kind: 'direct' as never }),
     /invalid transport kind/,
   )
+})
+
+// ---- disconnect retention + fallback-view heal (2026-09: reconnect
+// resurfaces archived conversations / clicks dead-end into the new-session
+// view) ----
+
+test('isFallbackDerivedView: only ok aggregates with synthetic rows are the degraded unary view', () => {
+  assert.equal(isFallbackDerivedView(undefined), false)
+  assert.equal(isFallbackDerivedView({ ...mountedAggregate }), false)
+  assert.equal(isFallbackDerivedView({
+    state: 'ok',
+    workspaces: [],
+    sessions: [],
+    archivedSessionIds: [],
+    error: null,
+  }), false, 'an EMPTY workspace set is a legitimate mounted state, never synthetic')
+  assert.equal(isFallbackDerivedView({
+    state: 'not-connected',
+    workspaces: [{ workspaceId: '__cwd__:/x', path: '/x', title: 'x', sessionIds: [], createdAt: '', updatedAt: '', synthetic: true }],
+    sessions: [],
+    archivedSessionIds: [],
+    error: null,
+  }), false, 'not-connected/error states are not an ok fallback VIEW')
+  assert.equal(isFallbackDerivedView({
+    state: 'ok',
+    workspaces: [{ workspaceId: '__cwd__:/x', path: '/x', title: 'x', sessionIds: [], createdAt: '', updatedAt: '', synthetic: true }],
+    sessions: [],
+    archivedSessionIds: [],
+    error: null,
+  }), true)
+})
+
+test('shouldRetainPushedAggregate: a previously-pushed mounted source keeps its ok aggregate through a transport outage', () => {
+  assert.equal(shouldRetainPushedAggregate(true, mountedAggregate), true)
+  assert.equal(shouldRetainPushedAggregate(true, { ...mountedAggregate, archiveSetKnown: true }), true)
+  // Legitimate empty workspaces (fresh mounted instance) stay retainable.
+  assert.equal(shouldRetainPushedAggregate(true, {
+    state: 'ok',
+    workspaces: [],
+    sessions: [],
+    archivedSessionIds: [],
+    error: null,
+  }), true)
+})
+
+test('shouldRetainPushedAggregate: never-pushed / unmounted / degraded / non-ok currents are NOT retainable', () => {
+  assert.equal(shouldRetainPushedAggregate(false, mountedAggregate), false, 'unmounted sources keep the fallback scope')
+  assert.equal(shouldRetainPushedAggregate(true, undefined), false)
+  assert.equal(shouldRetainPushedAggregate(true, { state: 'not-connected', workspaces: [], sessions: [], archivedSessionIds: [], error: null }), false)
+  assert.equal(shouldRetainPushedAggregate(true, { state: 'error', workspaces: [], sessions: [], archivedSessionIds: [], error: 'x' }), false)
+  // A current ALREADY degraded to the fallback view is not retainable — the
+  // retention fix prevents NEW degraded views, it must not freeze existing ones.
+  assert.equal(shouldRetainPushedAggregate(true, {
+    state: 'ok',
+    workspaces: [{ workspaceId: '__cwd__:/real', path: '/real', title: 'Real', sessionIds: ['s1'], createdAt: '', updatedAt: '', synthetic: true }],
+    sessions: [{ sessionId: 's1', running: false, blank: false }],
+    archivedSessionIds: [],
+    error: null,
+  }), false)
+})
+
+test('retention closes the ready-edge full-commit: a retained ok aggregate merges sessions-only (archive set survives the reconnect pull)', () => {
+  // End-to-end shape of the 2026-09 fix: the aggregate that survived the
+  // outage (state ok, real workspaces, archive set) meets the ready-edge
+  // unary pull — the commit is the MOUNTED MERGE, never the full fallback.
+  const committed = commitAggregatePull(mountedAggregate, fallbackSnapshot, true)
+  assert.deepEqual(committed.archivedSessionIds, mountedAggregate.archivedSessionIds)
+  assert.deepEqual(committed.workspaces, mountedAggregate.workspaces)
+  assert.deepEqual(committed.sessions, fallbackSnapshot.sessions)
+})
+
+// ---- shouldRebaselineFallbackView (2026-09: heal a mounted source whose
+// aggregate is stuck on the degraded fallback view via a bounded ctx
+// reconnect) ----
+
+const NOW2 = 2_000_000
+const BACKOFF2 = 60_000
+
+test('shouldRebaselineFallbackView: a mounted source stuck on the fallback view reconnects when the backoff has elapsed', () => {
+  assert.equal(shouldRebaselineFallbackView({
+    mounted: true,
+    fallbackView: true,
+    lastReconnectAt: undefined,
+    now: NOW2,
+    reconnectBackoffMs: BACKOFF2,
+  }), true)
+  assert.equal(shouldRebaselineFallbackView({
+    mounted: true,
+    fallbackView: true,
+    lastReconnectAt: NOW2 - BACKOFF2,
+    now: NOW2,
+    reconnectBackoffMs: BACKOFF2,
+  }), true)
+})
+
+test('shouldRebaselineFallbackView: a recent reconnect holds off the next attempt (backoff window)', () => {
+  assert.equal(shouldRebaselineFallbackView({
+    mounted: true,
+    fallbackView: true,
+    lastReconnectAt: NOW2 - 1,
+    now: NOW2,
+    reconnectBackoffMs: BACKOFF2,
+  }), false)
+})
+
+test('shouldRebaselineFallbackView: unmounted sources and healthy (non-fallback) views never arm', () => {
+  assert.equal(shouldRebaselineFallbackView({
+    mounted: false,
+    fallbackView: true,
+    lastReconnectAt: undefined,
+    now: NOW2,
+    reconnectBackoffMs: BACKOFF2,
+  }), false, 'unmounted sources have no ctx connection to reconnect — unary fallback is their scope')
+  assert.equal(shouldRebaselineFallbackView({
+    mounted: true,
+    fallbackView: false,
+    lastReconnectAt: undefined,
+    now: NOW2,
+    reconnectBackoffMs: BACKOFF2,
+  }), false, 'a real pushed view needs no rebaseline bounce')
 })
 
 // ---- refresh pull validity domains (2026-10: create/fork latency fix) ----

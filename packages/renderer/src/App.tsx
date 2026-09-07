@@ -72,12 +72,15 @@ import {
   commitAggregateFailure,
   commitAggregatePull,
   invalidateRemovedAggregateSources,
+  isFallbackDerivedView,
   isSnapshotStale,
   planAggregateRefreshes,
   refreshPullStillCurrent,
   remoteRetiredSourceIds,
   retireSelectedSource,
+  shouldRebaselineFallbackView,
   shouldReconnectStaleMounted,
+  shouldRetainPushedAggregate,
   withoutRemovedSourceIds,
   withoutRemovedSourceKeys,
 } from './aggregate-refresh.ts'
@@ -1087,7 +1090,8 @@ export default function App() {
     })()
   }, [refreshAggregate])
 
-  /** 刷新需要兜底/刚重连的就绪实例；未就绪实例落 not-connected（不显示陈旧数据）。 */
+  /** 刷新需要兜底/刚重连的就绪实例；未就绪实例落 not-connected——已推送过的
+   *  挂载来源除外（保留其最后推送视图，2026-09 归档回流修复，见下方注释）。 */
   const pollAggregates = useCallback(() => {
     const { ready, notReady } = collectReadySourceIds(health, remoteStatus, remoteInstances)
     const refreshPlan = planAggregateRefreshes(
@@ -1116,7 +1120,13 @@ export default function App() {
           if (current === undefined) {
             next[id] = emptyAggregate('not-connected')
             changed = true
-          } else if (current.state !== 'not-connected') {
+          } else if (current.state !== 'not-connected'
+            // 2026-09 归档回流修复：断连不清除「已推送过」的来源聚合——行渲染
+            // 本就以 connected 为门（断连不显示任何行），保留它让重连后的
+            // ready-edge 拉取走 sessions-only merge（工作区/归档集不丢失）。
+            // 未推送/未挂载来源照旧落 not-connected（unary 兜底 = 其文档化
+            // 范围）。shouldRetainPushedAggregate 单测覆盖（aggregate-refresh.test.ts）。
+            && !shouldRetainPushedAggregate(snapshotSourcesRef.current[id] === true, current)) {
             next[id] = emptyAggregate('not-connected')
             changed = true
           }
@@ -1172,6 +1182,12 @@ export default function App() {
   // sources are never pulled; the bounded wave keeps quiet-fleet cost at a
   // handful of loopback requests per minute and the signature dedup keeps
   // unchanged state churn-free.
+  // Render-phase mirror of the aggregates state for this interval (the timer
+  // must stay stable across aggregate commits — re-creating it on every push
+  // would stretch the cadence under activity; same ref-mirror discipline as
+  // remoteStatusRef above).
+  const watchdogAggregatesRef = useRef(aggregates)
+  watchdogAggregatesRef.current = aggregates
   // S2 (对齐 ssh 断链自动恢复): a stale MOUNTED direct-http source (registry
   // spec transport === 'http', whatever the target kind) additionally gets a
   // lightweight connection reconnect (bounded by lastReconnectAtRef) so the
@@ -1239,6 +1255,35 @@ export default function App() {
       // Bounded and intended (it is the healing probe); a long-dead target
       // eventually flips to not-connected via the main-process reverify
       // path, which removes it from this arm.
+      if (reconnectInstanceConnection(id)) {
+        lastReconnectAtRef.current[id] = now
+      }
+    }
+    // Fallback-view heal (sidebar-hidden merge, 2026-09 archived-resurfacing
+    // fix — see shouldRebaselineFallbackView): a MOUNTED source whose
+    // aggregate is stuck on the unary-fallback view (synthetic cwd groups +
+    // no archive set — archived sessions resurface as openable rows and
+    // clicks on them dead-end into the official no-session view) gets a
+    // bounded ctx reconnect so the workspace follow replays and the producer
+    // re-publishes its real baseline WITH the archive set (store withdrawal
+    // clears the producer's signature dedupe). Transport-agnostic: the stuck
+    // view most commonly follows a ready-edge full commit whose ctx stores
+    // stayed silent (retention — shouldRetainPushedAggregate — prevents NEW
+    // stuck views; this arm heals residual/pre-existing ones, e.g. aggregates
+    // degraded before that fix). The S2 direct-http arm above targets stale
+    // PUSH CHANNELS; this arm targets the degraded VIEW itself. Same backoff
+    // + record-on-invocation discipline as the S2 arm. Runs inside the same
+    // watchdog callback, so the 2026 性能整改 visibility gating applies:
+    // hidden windows skip it, the hidden→visible compensation tick converges
+    // it once on restore.
+    for (const id of ready) {
+      if (!shouldRebaselineFallbackView({
+        mounted: snapshotSourcesRef.current[id] === true,
+        fallbackView: isFallbackDerivedView(watchdogAggregatesRef.current[id]),
+        lastReconnectAt: lastReconnectAtRef.current[id],
+        now,
+        reconnectBackoffMs: AGGREGATE_RECONNECT_BACKOFF_MS,
+      })) continue
       if (reconnectInstanceConnection(id)) {
         lastReconnectAtRef.current[id] = now
       }
