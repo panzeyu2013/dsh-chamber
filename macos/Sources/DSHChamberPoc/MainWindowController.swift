@@ -45,6 +45,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     private var bridgeHandler: ChamberMessageHandler!
     private var consoleCatcher: POCConsoleCatcher?
     private var didSnapshot = false
+    private var navRetries = 0
     private var didStartLoading = false
 
     // MARK: - 初始化
@@ -330,6 +331,24 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     func webView(_ webView: WKWebView,
                  didFailProvisionalNavigation navigation: WKNavigation!,
                  withError error: Error) {
+        // POC dev 竞态兜底：控制面起动晚于首载（sidecar 就绪需 1~2s）——
+        // 初次连不上时按退避重试；上限 25 次后放弃（loud）。
+        let nsError = error as NSError
+        if nsError.domain == NSURLErrorDomain,
+           nsError.code == NSURLErrorCannotConnectToHost || nsError.code == NSURLErrorNotConnectedToInternet {
+            guard navRetries < 25 else {
+                print("[poc] 页面加载失败(初试) 重试耗尽：\(error.localizedDescription)")
+                return
+            }
+            let retryURL = webView.url ?? cpURL
+            navRetries += 1
+            print("[poc] 控制面未就绪，\(navRetries)/25 次重试 0.5s 后加载 \(retryURL.absoluteString)")
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                webView.load(URLRequest(url: retryURL))
+            }
+            return
+        }
         print("[poc] 页面加载失败(初试) \(error.localizedDescription)")
     }
 
