@@ -12,7 +12,11 @@
  *   切换经 View Transition 包装（view-transition.ts）：旧视图 visibility+
  *   `content-visibility:hidden` 即时隐去（跳过 style/layout/paint 并缓存
  *   渲染状态），切换与骨架→内容过渡由 `startViewTransition` 的静态旧视图
- *   快照遮盖 reveal 重排——无黑帧、无闪烁；见 styles.css `.instance-hidden`）；
+ *   快照遮盖 reveal 重排——无黑帧、无闪烁；见 styles.css `.instance-hidden`）。
+ *   **保留策略（2026 性能整改，05 §1/§4 偏差）**：隐藏壳不再无限常驻——
+ *   除 local 恒留外至多保留 RETAINED_HIDDEN_VIEWS 个，超限回收已 settle 且
+ *   连续隐藏 ≥60s 的最久者（retention.ts）；回收仅拆 UI 壳（dispose shell），
+ *   实例进程/连接/后台任务不受影响，重开走冷 boot；
  * - chamberBridge 投影发布（05 §3）：轮询状态合并为 ChamberServerAggregate[]
  *   供侧边栏插件消费；onOpenSession 通道驱动会话打开。
  *
@@ -86,6 +90,11 @@ import {
   sourceIdForRawInstance,
   sourceIdForTransport,
 } from './transport-source.ts'
+import {
+  decideReclaimCandidates,
+  shouldRunBackgroundPhase,
+  VIEW_RECLAIM_TICK_MS,
+} from './retention.ts'
 import InstanceView from './components/InstanceView.tsx'
 
 /**
@@ -115,7 +124,10 @@ const AGGREGATE_POLL_CONCURRENCY = 4
  * out the 30s staleness watchdog. */
 const AGGREGATE_RETRY_MS = 3_000
 const AGGREGATE_RETRY_LIMIT = 5
-const MAX_PREWARMED_REMOTE_VIEWS = 3
+/** 空闲预热的挂载并发上限（2026 性能整改：3→1）——同一时刻至多一个"用户
+ * 没看但已在后台 boot 全量 UI"的壳；配合保留策略（retention.ts）把稳态
+ * 壳数压到 local + 活动 + ≤1 隐藏 + ≤1 预热中，且仅前台推进。 */
+const MAX_PREWARMED_REMOTE_VIEWS = 1
 /** 连接行（label/dshPort）低频轮询：状态本身走推送，行字段极少变化。 */
 const CONNECTIONS_POLL_MS = 30_000
 /** Cold-start roster failures retry quickly before the 30s steady-state poll. */
@@ -412,13 +424,27 @@ export default function App() {
     console.error(`[notifications] open ACK exhausted retries (${delivery.deliveryId}/${delivery.attempt}):`, error)
   }, [])
   const [remoteStatus, setRemoteStatus] = useState<Record<string, SshStatusProjection>>({})
-  // 视图：'local' | '<kind>-<id>'；已挂载过的实例视图保留（N-ctx 常驻，会话保活）
+  // 视图：'local' | '<kind>-<id>'。N-ctx 常驻语义（05 §1/§4）自 2026 性能
+  // 整改起收窄为保留策略（retention.ts）：local 恒留；隐藏非 local 壳最多
+  // 保留 RETAINED_HIDDEN_VIEWS 个，超限回收"已 settle + 连续隐藏 ≥60s"的
+  // 最久者（回收 = dispose shell + 卸载壳；实例进程/连接/后台任务不受影响，
+  // 重开走冷 boot + entry 重放——见 reclaimView）。会话保活由实例侧承担，
+  // UI 壳不再无限常驻。
   const [activeView, setActiveView] = useState<string>(LOCAL_INSTANCE_ID)
   const [mountedViews, setMountedViews] = useState<string[]>([LOCAL_INSTANCE_ID])
   // Views mounted only by background prewarm. User selection removes the id
-  // from this set, freeing one of the three idle-prewarm slots while keeping
+  // from this set, freeing one of the idle-prewarm slots while keeping
   // the user-opened N-ctx shell resident.
   const autoPrewarmedRef = useRef<Set<string>>(new Set())
+  // 保留策略：被回收（闲置隐藏壳超限回收）的源禁止自动预热，直到用户主动
+  // 点开（selectView 清除）或来源从注册表删除（retireSources 清除）——否则
+  // prewarmEligible 会立刻把刚回收的源重新 boot，回收空转（见 reclaimView）。
+  const prewarmSuppressedRef = useRef<Set<string>>(new Set())
+  // 保留策略计时：每视图"连续隐藏"起点（ms epoch；活动视图无键）。settle
+  // 完成或切走时置 now，重新选中删除，随 mountedViews 收敛清理（回收 effect
+  // 内统一处理）。previousActiveViewRef 供 activeView 落地 effect 对比。
+  const hiddenSinceRef = useRef<Record<string, number>>({})
+  const previousActiveViewRef = useRef<string | null>(activeView)
   // chamber (2026-08 失败呈现修订, 05 §4)：每视图 shell 终态（InstanceView
   // 经 onStateChange 上报）——活动视图 boot 失败时由 App 渲染统一失败覆盖层
   // （失败报告 + 重试 + 服务器切换）。retryTokens 驱动 InstanceView 的重试
@@ -556,6 +582,8 @@ export default function App() {
     if (removed.length > 0) {
       for (const id of removed) {
         autoPrewarmedRef.current.delete(id)
+        // 保留策略：注册表删除 = 生命周期终结，抑制键随视图一起收敛。
+        prewarmSuppressedRef.current.delete(id)
         disposeInstanceShell(id)
         chamberBridge.clearPluginDiagnostic(id)
       }
@@ -790,6 +818,9 @@ export default function App() {
       clearAggregateRetry(sourceId)
       aggregateRefreshQueueRef.current.delete([sourceId])
       autoPrewarmedRef.current.delete(sourceId)
+      // 保留策略：注册表删除的源不再占用"回收后不自动预热"键（与其它
+      // ref 键空间同纪律随生命周期收敛）。
+      prewarmSuppressedRef.current.delete(sourceId)
       chamberBridge.retireInstanceProducers(sourceId)
       disposeInstanceShell(sourceId)
       releaseInstanceClient(sourceId)
@@ -945,6 +976,10 @@ export default function App() {
         if (aggregateRetryTimersRef.current.get(instanceId) === retryTimer) {
           aggregateRetryTimersRef.current.delete(instanceId)
         }
+        // 2026 性能整改：窗口隐藏期不维持 3s 失败重试链——恢复可见由
+        // visibilitychange 的 watchdog 补偿拉取覆盖（stale 源会被重拉，
+        // 失败计数随成功路径清除）。
+        if (!shouldRunBackgroundPhase(document.visibilityState)) return
         const mayRetry = mutationTag === undefined
           ? stillCurrent()
           : stillOwnsSource() && mutationRefreshSeqRef.current[instanceId] === mutationTag
@@ -1151,64 +1186,96 @@ export default function App() {
   // gate below). A TRULY dead channel gets no push after a reconnect, so once
   // stale it retries every AGGREGATE_RECONNECT_BACKOFF_MS — bounded churn
   // that keeps probing until the channel heals or the source leaves ready.
+  // 2026 性能整改：tick 主体抽成可即时调用的回调——周期 interval 与
+  // visibilitychange 恢复补偿（hidden→visible）共用，隐藏期跳过的 stale 拉取
+  // 在恢复后立即收敛（见下方 visibility effect）。
+  const runStalenessWatchdogNow = useCallback(() => {
+    const now = Date.now()
+    const ready = collectReadySourceIds(health, remoteStatus, remoteInstances).ready
+    const staleIds = ready
+      .filter(id => isSnapshotStale(snapshotAtRef.current[id], now, AGGREGATE_FALLBACK_POLL_MS))
+    if (staleIds.length > 0) runBoundedAggregateWave(staleIds)
+    // The reconnect arm is scoped to DIRECT-HTTP sources (registry spec
+    // transport === 'http' — gateway-kind AND dsh-kind alike); ssh-transport
+    // targets (any kind) are excluded: the tunnel's ssh keepalive and
+    // loopback stability already protect them, so churning their ctxs would
+    // be pure cost (M1 review fix: the axis is the transport, not the target
+    // kind). No host-loopback exclusion here — unlike S2-a (whose transport
+    // keepalive is pointless on a loopback leg that cannot half-open), this
+    // arm also heals ctx-level push-channel freezes that are NOT
+    // transport-caused (e.g. a dsh-restart rebaseline gap), so a
+    // loopback-host direct-http target (local gateway dev) stays covered; a
+    // healthy idle one there merely bounces every ~2min (bounded, dev form).
+    const directHttpSourceIds = new Set(
+      remoteInstances
+        .filter(instance => instance.transport === 'http')
+        .map(instance => sourceIdForInstance(instance)),
+    )
+    for (const id of ready) {
+      if (id === LOCAL_INSTANCE_ID || !directHttpSourceIds.has(id)) continue
+      // mounted here means "the ctx producer pushed at least one snapshot
+      // this generation" (snapshotSources) — the S2 target class is a
+      // channel that worked and then went silent; a channel dead from its
+      // first boot never pushes and stays on the unary fallback, which
+      // already covers it (KNOWN DEGRADATION scope, M3 review note).
+      if (!shouldReconnectStaleMounted({
+        mounted: snapshotSourcesRef.current[id] === true,
+        lastSnapshotAt: snapshotAtRef.current[id],
+        lastReconnectAt: lastReconnectAtRef.current[id],
+        now,
+        stalenessMs: AGGREGATE_RECONNECT_STALE_MS,
+        reconnectBackoffMs: AGGREGATE_RECONNECT_BACKOFF_MS,
+      })) continue
+      // Record the attempt synchronously with firing so overlapping
+      // ticks/effect re-arms cannot double-fire while a reconnect is in
+      // flight — but only when reconnect() was actually invoked: a no-op
+      // (shell not booted / ctx missing, e.g. a boot-failure retry window)
+      // must not consume the backoff window and delay the first effective
+      // reconnect (M4 review fix).
+      // NOTE (review P2-3): each reconnect resets the ctx connection's
+      // official exponential backoff to an immediate retry (MANUAL_RECONNECT
+      // semantics) — while a target stays ready-but-dead this yields a
+      // fixed ~60s probe cadence instead of the official backoff ceiling.
+      // Bounded and intended (it is the healing probe); a long-dead target
+      // eventually flips to not-connected via the main-process reverify
+      // path, which removes it from this arm.
+      if (reconnectInstanceConnection(id)) {
+        lastReconnectAtRef.current[id] = now
+      }
+    }
+  }, [health, remoteStatus, remoteInstances, runBoundedAggregateWave])
+  const runStalenessWatchdogRef = useRef<() => void>(() => undefined)
+  useEffect(() => {
+    runStalenessWatchdogRef.current = runStalenessWatchdogNow
+  })
+
+  // Staleness watchdog cadence + 文档可见性门控（2026 性能整改）：窗口隐藏
+  // （Electron 最小化/隐藏到托盘）期跳过周期 unary 拉取与 S2 reconnect 臂——
+  // 用户不可见期不维持 30s 轮询/重连链（含"已回收但仍 ready 的源"的兜底拉
+  // 取：隐藏期暂停、恢复可见立即补偿一轮，见 visibility effect；窗口可见时
+  // 该兜底照常维持 30s 周期——回收源的任务完成检测依赖它，05 §2.3 语义不
+  // 变）。恢复补偿由下方 visibility effect 调 runStalenessWatchdogRef。
   useEffect(() => {
     const timer = setInterval(() => {
-      const now = Date.now()
-      const ready = collectReadySourceIds(health, remoteStatus, remoteInstances).ready
-      const staleIds = ready
-        .filter(id => isSnapshotStale(snapshotAtRef.current[id], now, AGGREGATE_FALLBACK_POLL_MS))
-      if (staleIds.length > 0) runBoundedAggregateWave(staleIds)
-      // The reconnect arm is scoped to DIRECT-HTTP sources (registry spec
-      // transport === 'http' — gateway-kind AND dsh-kind alike); ssh-transport
-      // targets (any kind) are excluded: the tunnel's ssh keepalive and
-      // loopback stability already protect them, so churning their ctxs would
-      // be pure cost (M1 review fix: the axis is the transport, not the target
-      // kind). No host-loopback exclusion here — unlike S2-a (whose transport
-      // keepalive is pointless on a loopback leg that cannot half-open), this
-      // arm also heals ctx-level push-channel freezes that are NOT
-      // transport-caused (e.g. a dsh-restart rebaseline gap), so a
-      // loopback-host direct-http target (local gateway dev) stays covered; a
-      // healthy idle one there merely bounces every ~2min (bounded, dev form).
-      const directHttpSourceIds = new Set(
-        remoteInstances
-          .filter(instance => instance.transport === 'http')
-          .map(instance => sourceIdForInstance(instance)),
-      )
-      for (const id of ready) {
-        if (id === LOCAL_INSTANCE_ID || !directHttpSourceIds.has(id)) continue
-        // mounted here means "the ctx producer pushed at least one snapshot
-        // this generation" (snapshotSources) — the S2 target class is a
-        // channel that worked and then went silent; a channel dead from its
-        // first boot never pushes and stays on the unary fallback, which
-        // already covers it (KNOWN DEGRADATION scope, M3 review note).
-        if (!shouldReconnectStaleMounted({
-          mounted: snapshotSourcesRef.current[id] === true,
-          lastSnapshotAt: snapshotAtRef.current[id],
-          lastReconnectAt: lastReconnectAtRef.current[id],
-          now,
-          stalenessMs: AGGREGATE_RECONNECT_STALE_MS,
-          reconnectBackoffMs: AGGREGATE_RECONNECT_BACKOFF_MS,
-        })) continue
-        // Record the attempt synchronously with firing so overlapping
-        // ticks/effect re-arms cannot double-fire while a reconnect is in
-        // flight — but only when reconnect() was actually invoked: a no-op
-        // (shell not booted / ctx missing, e.g. a boot-failure retry window)
-        // must not consume the backoff window and delay the first effective
-        // reconnect (M4 review fix).
-        // NOTE (review P2-3): each reconnect resets the ctx connection's
-        // official exponential backoff to an immediate retry (MANUAL_RECONNECT
-        // semantics) — while a target stays ready-but-dead this yields a
-        // fixed ~60s probe cadence instead of the official backoff ceiling.
-        // Bounded and intended (it is the healing probe); a long-dead target
-        // eventually flips to not-connected via the main-process reverify
-        // path, which removes it from this arm.
-        if (reconnectInstanceConnection(id)) {
-          lastReconnectAtRef.current[id] = now
-        }
-      }
+      if (!shouldRunBackgroundPhase(document.visibilityState)) return
+      runStalenessWatchdogRef.current()
     }, AGGREGATE_FALLBACK_POLL_MS)
     return () => { clearInterval(timer) }
-  }, [health, remoteStatus, remoteInstances, runBoundedAggregateWave])
+  }, [])
+
+  // 前台恢复补偿（2026 性能整改）：hidden → visible 立即推进一轮聚合
+  // watchdog（隐藏期暂停的 30s 兜底/stale 拉取在此收敛，含已回收源）、
+  // 空闲预热队列与保留回收检查。三个目标都是 ref 镜像的最新闭包。
+  useEffect(() => {
+    const onVisibilityChange = (): void => {
+      if (document.visibilityState !== 'visible') return
+      runStalenessWatchdogRef.current()
+      drainPrewarmRef.current()
+      reclaimHiddenViewsRef.current()
+    }
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    return () => document.removeEventListener('visibilitychange', onVisibilityChange)
+  }, [])
 
   useEffect(() => () => {
     for (const timer of aggregateRetryTimersRef.current.values()) clearTimeout(timer)
@@ -1582,6 +1649,9 @@ export default function App() {
     ensureRemoteConnected(viewId)
     if (viewId !== LOCAL_INSTANCE_ID && !liveServerIdsRef.current.has(viewId)) return
     autoPrewarmedRef.current.delete(viewId)
+    // 用户主动点开 = 意图使用：解除"回收后不自动预热"抑制（此后闲置仍会被
+    // 再次回收并再次抑制）。
+    prewarmSuppressedRef.current.delete(viewId)
     // 镜像查重（非闭包）：在途/顺延中的同一意图直接跳过；已落地视图只有在
     // 无在途意图时才跳过——过渡在途时 UI 仍显示旧视图，点击旧视图 = 撤销
     // 意图（最后一次意图胜出，view-transition.ts），不能按当前态误丢。
@@ -1620,6 +1690,9 @@ export default function App() {
       // 占用槽位，其 apply 时再清。
       if (pendingViewRef.current === viewId) pendingViewRef.current = null
       setActiveView(viewId)
+      // 保留策略：被回收（不在 mountedViews）的 live 来源在此重新挂载——
+      // 冷 boot + entry 重放（shell.ts 同 id 串行 barrier 保证与回收的异步
+      // teardown 不交错）；本视图的 hiddenSince 由 activeView 落地 effect 清除。
       setMountedViews(prev => (prev.includes(viewId) ? prev : [...prev, viewId]))
       if (scrollAnchor !== null) restoreSidebarScroll(viewId, scrollAnchor)
     }, 'view')
@@ -1732,6 +1805,10 @@ export default function App() {
       .filter(instance => remoteStatus[instance.id]?.phase === 'ready')
       .map(sourceIdForInstance)
       .filter(id => !mountedViews.includes(id))
+      // 保留策略：被回收过的源不再自动预热——否则回收(拆壳)会立即被
+      // drainPrewarm 重新 boot(白回收循环)。抑制持续到用户主动点开
+      // （selectView 清除）或来源从注册表删除（retireSources 清除）。
+      .filter(id => !prewarmSuppressedRef.current.has(id))
       .slice(0, remaining)
     return new Set(eligible)
   }, [remoteInstances, remoteStatus, mountedViews])
@@ -1740,6 +1817,9 @@ export default function App() {
   const drainPrewarm = useCallback(() => {
     if (prewarmInflightRef.current !== null) return
     if (!localSettledRef.current) return
+    // 2026 性能整改：仅前台推进预热——窗口隐藏期不为"用户没看"的源继续
+    // boot 全量 UI（恢复可见由 visibilitychange 补偿一轮 drain）。
+    if (!shouldRunBackgroundPhase(document.visibilityState)) return
     let next: string | undefined
     do {
       next = prewarmQueueRef.current.shift()
@@ -1753,6 +1833,10 @@ export default function App() {
   const handleInstanceSettled = useCallback((instanceId: string) => {
     if (instanceId === LOCAL_INSTANCE_ID) localSettledRef.current = true
     if (prewarmInflightRef.current === instanceId) prewarmInflightRef.current = null
+    // 保留策略：settle 完成才起 60s 回收窗——隐藏视图（预热完成/切走后
+    // settle）从此刻计"可回收时长"，boot 耗时不被白付；活动视图保持无键。
+    if (instanceId === activeViewRef.current) delete hiddenSinceRef.current[instanceId]
+    else hiddenSinceRef.current[instanceId] = Date.now()
     // 无条件 drain：任何 settle 都可能是"在途预热完成"或"本地首次 settle"
     // 的触发器（后者在状态先于本地就绪时不会因依赖变化而触发队列推进）。
     drainPrewarm()
@@ -1761,6 +1845,108 @@ export default function App() {
   /** Shell 终态上报（InstanceView onStateChange）：失败覆盖层读取活动视图的 error。 */
   const handleShellState = useCallback((instanceId: string, state: ShellState) => {
     setShellStates(prev => (prev[instanceId] === state ? prev : { ...prev, [instanceId]: state }))
+  }, [])
+
+  // ---- N-ctx 保留策略（2026 性能整改，纯函数与语义见 src/retention.ts）----
+  // 已 settle（booted 或 error）视图集合：booting/未上报 = 未 settle，不回收
+  // （避免取消在途 boot 白付成本）。
+  const settledViewIds = useMemo(() => {
+    const settled = new Set<string>()
+    for (const [id, state] of Object.entries(shellStates)) {
+      if (state.booted || state.error !== null) settled.add(id)
+    }
+    return settled
+  }, [shellStates])
+
+  /**
+   * 回收一个超限隐藏壳（幂等）。与注册表删除分支（retireSources）的区别：
+   * 来源仍在注册表与 liveServerIdsRef 中，因此这里不碰数据面键空间
+   * （aggregates/runtimeFacts/通知记忆随 producer 通道撤回自行收敛）、不回退
+   * active/pending 意图、不清 deep-link/通知在途交付。dispose 先于 React 卸载
+   * （同一提交内），实例进程/隧道/后台任务不受影响；重开 = selectView 重新
+   * 挂载 → 冷 boot + entry 重放（shell.ts 同 id 串行 barrier 既有）。
+   * 数据面降级按既有语义自然发生：ctx 卸载触发快照 producer clear，App 的
+   * onInstanceSnapshot withdrawal 分支对已推送源保留 mounted marker（最后权威
+   * 分组/归档集留在侧栏），30s unary watchdog 以 mounted 合并持续刷新其会话行
+   * 与 running 位（05 §2.3）。已知取舍：壳内运行中任务的完成蓝点/通知边沿随
+   * runtime-facts 通道撤回而暂停，直至该源重开（冷 boot 首报重新播种）——
+   * 60s 安全窗 + RETAINED_HIDDEN_VIEWS=1 限制损失面，登记于 STATUS.md。
+   */
+  const reclaimView = useCallback((id: string) => {
+    if (id === LOCAL_INSTANCE_ID || !mountedViews.includes(id)) return
+    if (id === activeViewRef.current || id === pendingViewRef.current) return
+    if (id === prewarmInflightRef.current) return
+    autoPrewarmedRef.current.delete(id)
+    // 保留策略：回收后禁止自动预热（否则 drainPrewarm 立刻重新 boot 它，
+    // 回收空转）；用户主动点开（selectView）或注册表删除（retireSources）时清除。
+    prewarmSuppressedRef.current.add(id)
+    prewarmQueueRef.current = withoutRemovedSourceIds(prewarmQueueRef.current, new Set([id]))
+    if (prewarmEligibleRef.current.has(id)) {
+      const next = new Set(prewarmEligibleRef.current)
+      next.delete(id)
+      prewarmEligibleRef.current = next
+    }
+    disposeInstanceShell(id)
+    delete hiddenSinceRef.current[id]
+    setMountedViews(prev => withoutRemovedSourceIds(prev, new Set([id])))
+    setShellStates(prev => withoutRemovedSourceKeys(prev, new Set([id])))
+    setRetryTokens(prev => withoutRemovedSourceKeys(prev, new Set([id])))
+  }, [mountedViews])
+
+  /** 保留策略检查：仅前台执行（窗口隐藏期不拆壳；恢复可见由
+   * visibilitychange 补偿一轮）。守卫与上限见 decideReclaimCandidates。 */
+  const reclaimHiddenViews = useCallback(() => {
+    if (!shouldRunBackgroundPhase(document.visibilityState)) return
+    const candidates = decideReclaimCandidates({
+      mountedViews,
+      activeViewId: activeViewRef.current,
+      hiddenSince: hiddenSinceRef.current,
+      settled: settledViewIds,
+      pendingViewId: pendingViewRef.current,
+      prewarmInflightId: prewarmInflightRef.current,
+      localId: LOCAL_INSTANCE_ID,
+      now: Date.now(),
+    })
+    for (const id of candidates) reclaimView(id)
+  }, [mountedViews, reclaimView, settledViewIds])
+
+  // 定时器/事件驱动的检查需要最新闭包：ref 镜像（同 pollAggregatesRef 纪律）。
+  const reclaimHiddenViewsRef = useRef<() => void>(() => undefined)
+  const drainPrewarmRef = useRef<() => void>(() => undefined)
+  useEffect(() => {
+    reclaimHiddenViewsRef.current = reclaimHiddenViews
+    drainPrewarmRef.current = drainPrewarm
+  })
+
+  // 活动视图落地即重计隐藏窗：离开活动的旧视图开始计时，新活动视图清计时。
+  // 覆盖 selectView 过渡 apply、注册表删除回落（fallback 到 local）等一切路径；
+  // 过渡在途时 activeViewRef 仍是旧视图，展示中的壳不会因本 effect 被计时。
+  useEffect(() => {
+    if (previousActiveViewRef.current === activeView) return
+    const previous = previousActiveViewRef.current
+    previousActiveViewRef.current = activeView
+    delete hiddenSinceRef.current[activeView]
+    if (previous !== null) hiddenSinceRef.current[previous] = Date.now()
+  }, [activeView])
+
+  // hiddenSince 键随挂载收敛（覆盖注册表删除分支与回收两条移除路径）+
+  // 挂载/回收/激活变化后尽快补查一轮回收（60s 安全窗外的兜底由周期 tick 承担）。
+  useEffect(() => {
+    const live = new Set(mountedViews)
+    for (const id of Object.keys(hiddenSinceRef.current)) {
+      if (!live.has(id)) delete hiddenSinceRef.current[id]
+    }
+    reclaimHiddenViews()
+  }, [mountedViews, reclaimHiddenViews])
+
+  // 周期回收检查（settle/切换以外的主要驱动）；visibilitychange 恢复补偿的
+  // 回收臂在下方 aggregate 段 visibility effect 中统一处理（与预热/聚合补偿
+  // 同源，避免重复监听）。
+  useEffect(() => {
+    const timer = setInterval(() => {
+      reclaimHiddenViewsRef.current()
+    }, VIEW_RECLAIM_TICK_MS)
+    return () => { clearInterval(timer) }
   }, [])
 
   useEffect(() => {

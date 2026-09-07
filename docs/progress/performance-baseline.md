@@ -28,7 +28,7 @@ T2（键控单槽合并）、T4（置顶写回防抖）语义由代码注释/设
 | 实测载体 | dev Electron v43.4.0-darwin-arm64（共享平台缓存 dist；`--user-data-dir=packages/desktop/.dev-user-data`；`--remote-debugging-port=9333`）；渲染目标 = dev 控制面 17520/"DSH 本地构建" |
 | 实机 dsh | 内建 vendor runtime `@deepseek-ai/dsh@0.1.2-rc.1`（本地实例自动就绪；host 插件已播种） |
 | 采集手段 | CDP `Runtime.evaluate` + `PerformanceObserver('longtask'/'layout-shift'/'paint'/'resource')` 早期注入（buffered）；UI 驱动 = 合成 MouseEvent；磁盘 = 合成 fixture（`disk-walk-baseline.mjs`） |
-| 脚本 | `scripts/perf/{cdp-lib,boot-measure,switch-measure,eval-measure,disk-walk-baseline}.mjs`（README 见同目录）；数据落 `scripts/perf/data/*.json` |
+| 脚本 | `scripts/perf/{cdp-lib,boot-measure,switch-measure,eval-measure,disk-walk-baseline,measure-ui}.mjs`（README 见同目录）；数据落 `scripts/perf/data/*.json` |
 | 复测命令 | boot：`node scripts/perf/boot-measure.mjs 3 --out ...`；切换：`switch-measure.mjs`（cycles / `--rapid N`）；归因：`eval-measure.mjs`；磁盘：`disk-walk-baseline.mjs [--async]` |
 
 **环境差异警告（2026-09 实测钉死）**：长任务绝对值随启动环境漂移——同一构建在
@@ -184,3 +184,35 @@ disk-walk-after-t3}.json（14 个，全部入库于 scripts/perf/data/，.gitign
   （boot-after-final 交代/PRE 数字/T7–T12 去向）、渲染层 P2 硬化×2、
   注释措辞批量、maxReruns 边界测试、gateway 测试 race 兜底等——修复已并入
   分支提交（明细见 STATUS.md 对应条目）。
+
+## 10. 视图保留/后台门控整改（2026 性能清单 A/B/C/D，测量面登记）
+
+本段是后续性能整改（chamber 层，与 P0–P2 同源的第二阶段）的测量锚点。代码面
+落点与语义偏差登记见 STATUS.md 与 design 05 §1 注记；这里只记方法、定案与
+待实机 A/B 面。清单条目以字母编号（A/B/C/D），不沿用 T 编号（防伪造原案粒度，
+同 §9 纪律）。
+
+| 条目 | 代码面 | 测量面 |
+|---|---|---|
+| A 视图保留/回收（LRU 1 隐藏 + 60s 安全窗 + 预热 3→1/仅前台） | packages/renderer/src/retention.ts（纯函数）+ App.tsx 接线 | 稳态挂载壳数/DOM 节点/堆（`measure-ui.mjs`：`dom.*`、`heap.*`）——每回收一壳应降 4–5k 节点 |
+| C 后台拉取可见性门控（hidden 期停 30s watchdog/S2 reconnect/3s 重试/预热，恢复补偿） | App.tsx（runStalenessWatchdogNow + visibility effect） | 空闲 15s 长任务/帧间隔（`measure-ui.mjs --idle 15`）——隐藏窗不应再产生周期拉取链 |
+| B 发布收口（核查结论：App 签名闸+订阅侧去重已收口，publish 入口补引用相等防御）与会话行窗口（每工作区首屏 200 行 + 展开条） | sidebar aggregate-store.ts / ServerSection.tsx / shared/session-row-window.ts | 大列表源的行 DOM（`dom.perInstanceNodes` 分壳）+ 展开交互目检 |
+| D 测量脚本 | scripts/perf/measure-ui.mjs（schema measure-ui/v1） | 本表全部 |
+
+**验收 A/B 表**（用户机/带会话 dev 实例，同环境前后对照，前置同 §7；
+目标行即初稿验收标准，实际达标以对照结果为准）：
+
+| 指标 | 目标 | measure-ui 对应 |
+|---|---|---|
+| 全视图 DOM 节点（两远程视图形态） | ≤13,000（回收生效后稳态壳数 = local + 活动 + ≤1 隐藏） | `dom.totalNodes`；**形态依赖**：回收只改变"隐藏远程壳数 >1"的形态，若对照基线本身为 2 壳（local+活动）则壳数不变——以 `dom.perInstanceNodes[]` 分壳对照为准 |
+| JS 堆 used | 回收后无净增长、随视图数线性下降 | `heap.usedJSHeapSize` |
+| 打开→切走→重开 ×3 | 堆无净增长（回归项） | 需在切换操作序列中多次运行 measure-ui 对比堆采样（schema 为单次快照，非序列脚本） |
+| 空闲 15s 主线程停顿 | 无 >100ms 长任务 | `idle.over100msCount` |
+| 合成输入帧间隔 | 无 >500ms（官方侧残余另计） | `input.clicks[].worstFrameMs` |
+| 预热并发 | 1 壳、仅前台 | `dom.perInstanceNodes[].pending` 计数（预热中壳）；前台性由代码门控 + 空闲长任务间接佐证 |
+
+**已知取舍（登记）**：被回收壳内运行中任务的完成蓝点/通知边沿随 runtime-facts
+通道撤回而暂停，直至该源重开（冷 boot 首报重新播种）；60s 安全窗 +
+RETAINED_HIDDEN_VIEWS=1 限制损失面。被回收源侧栏聚合降级到既有 30s unary
+兜底（05 §2.3），任务完成检测依赖其 running 位维持可见窗内刷新。
+

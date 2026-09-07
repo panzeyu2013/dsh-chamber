@@ -6,6 +6,12 @@
  * instance facts into each entry Context; once booted the shell stays mounted
  * and switching is pure CSS hide/show.
  *
+ * 保留策略（2026 性能整改，05 §1/§4 偏差）：App 层不再让隐藏壳无限常驻——
+ * 超限的隐藏壳由 App 先 disposeInstanceShell 再从 mountedViews 移除，本组件
+ * 随之卸载（回收语义与注册表删除一致，aliveRef 的卸载丢弃逻辑同时覆盖两种
+ * 回收路径）；重开 = 重新挂载 + 冷 boot + entry 重放。本组件自身从不
+ * dispose shell——卸载只发生在 App 已处置之后。
+ *
  * Switching is driven by the App layer wrapping the active-view change in a
  * View Transition (view-transition.ts): the previous view is captured as a
  * static snapshot that stays on screen until the incoming view is actually
