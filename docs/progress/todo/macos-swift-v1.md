@@ -352,6 +352,18 @@ packages/desktop/vendor/dsh 离线 workspace，dsh ready 17511）。修复链：
 A 桥白名单扩 BridgeManifest 全集（60/60）→ shim readiness/badge 真实通道
 化（deep-link-ready/notifications-ready/badge-count 实调成功，零
 poc-unimplemented、零 handshake 报错）。全程隔离现网实例。
+**全量占位实现批（parity，同日多线）**：S-A hostFacts 推送（9ece802，46/66 系
+列）；S-B shim 全表面 67 方法（48eaa49，零 stub）；S-C-1 ctx 真化第一片
+（8e6c2d9：registry/凭据/审计/确认框 56 断言）；S-D notify 路由+legs 补全
+（5414f1f，66/66；rendererPush 解包补上页面 push 断链）；S-C-2 ctx 收口
+（c9c2133：F/G/H/J/K 全组 + runtime 控制器族 + 门族，914/914）；dev 快捷门
+（e1ca9eb：DSH_SIDECAR_LEGACY_START=1 离线 pre-spawn——全新 profile 离线探针
+阻塞为 Electron 同语义，legacy 门仅供 dev）。
+**parity 边界登记（有意保留+责任方）**：updateController 有意 loud（electron-
+updater 需 Electron app 上下文；Swift W-22 Sparkle 线）；keep-awake/login-item
+异步 leg 失败的 settings-set 级回滚需 core applySettingsPatch async 化（下批
+seam）；全新离线 profile 本地实例需运行时安装（网络）——与 Electron 一致；
+实机门禁：SMAppService 真调用/launchApp 拉起/notify GUI 闭环。
 - **showMessage 真实模态腿**（95275cc）：NSAlert 主线程 runModal 一次、
   按钮序 raw-1000 夹取回传、style 映射、无 buttons→['OK']；无窗诚实降级。
   **M3 代码级宿主腿至此全部完成**（focus/open/openPath/reveal/badge/keep-
