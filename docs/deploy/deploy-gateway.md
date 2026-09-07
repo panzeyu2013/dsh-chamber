@@ -183,7 +183,7 @@ gateway.example.com {
 | `install-gateway.sh status` | 版本/端口/服务状态/健康 |
 | `install-gateway.sh logs` | journalctl / 前台日志 tail -f |
 | `install-gateway.sh restart` | 重启 gateway（systemd 重启单元 / 前台按 pid 记录重启） |
-| `install-gateway.sh update [--version X] [--channel beta] [--no-dsh-upgrade]` | 升级：下载+校验→热切换→健康检查→失败自动回滚（旧版保留）。**默认把 dsh 内建锚同步升级**到新 gateway 发行线配套的 dsh 基线（staging + 原子交换，失败随 update 一并回滚；`--no-dsh-upgrade` 拒绝以保持升级前的 dsh 版本） |
+| `install-gateway.sh update [--version X] [--channel beta] [--no-dsh-upgrade]` | 升级：下载+校验→热切换→健康检查→失败自动回滚（旧版保留）。**默认把 dsh 内建锚同步升级**到新 gateway 发行线配套的 dsh 基线（staging + 原子交换，失败随 update 一并回滚；`--no-dsh-upgrade` 拒绝以保持升级前的 dsh 版本）。`gateway/current` 版本树与配置 VERSION 不一致（上次事务中断/回滚残留）时**自动把配置对齐到实际版本树后继续**，不再拒绝执行 |
 | `install-gateway.sh uninstall [--purge]` | 卸载：停服务→删单元→npm 卸载；默认保留数据，`--purge` 全清 |
 
 已有安装时直接运行脚本会重走完整向导（预览页会提示"检测到已有安装，将原地复用数据并覆盖配置"）；日常管理用子命令（status/logs/restart/update/uninstall）。
@@ -196,6 +196,15 @@ gateway.example.com {
 > 升级前版本（pin）。升级前你在运行时面板自选的 dsh 版本树仍保留在磁盘，
 > 可经 `/chamber/runtime` 重新选用。旧 gateway 资产（无 `dshAnchorVersion`
 > 字段）回退到运行脚本的内置 dsh 常量。
+
+> **版本树与配置一致性（update 自愈）**：`update` 前置校验 `gateway/current`
+> 指针树与 gateway.conf 的 `VERSION` 一致。两者不一致（升级事务在 conf 提交点
+> 之后被中断/失败的残留——conf 已写新版本而指针仍指旧树，反之亦然）时，
+> `update` 以实际版本树为部署事实，把配置自动对齐到该树版本后继续：plain
+> `update` 即按常规事务重放目标升级（既有目标树复用），显式 `--version` 走
+> 常规升级/降级确认。失败回滚与 INT/TERM 中断现在都会把配置一并写回旧版本，
+> 事务不再留下此类残局。仅当指针不是符号链接、指向的树缺失或无法验证身份
+> 时才拒绝并要求人工修复。
 
 ## 7. 非交互 / CI
 

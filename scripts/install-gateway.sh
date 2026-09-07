@@ -3110,16 +3110,44 @@ cmd_update() {
 
   # ---- 旧版本身份校验前置（F6："已是最新"短路前先证明指针/树与配置一致）----
   local old_local_target="" new_local_target="" old_tree_version="" staged_fresh=0 offline_prev=""
+  local identity_healed=0 conf_behind=0
   if [[ "$INSTALL_METHOD" == "local" ]]; then
     [[ -L "$GATEWAY_DIR/current" ]] || die "local 安装的 gateway/current 必须是符号链接，拒绝不确定升级"
     old_local_target=$(readlink "$GATEWAY_DIR/current")
     [[ -d "$old_local_target" ]] || die "gateway/current 指向不存在的旧版本：$old_local_target"
     old_tree_version=$(gateway_tree_version "$old_local_target" || true)
-    [[ -n "$old_tree_version" && ( "$old_version" == "local" || "$old_tree_version" == "$old_version" ) ]] \
-      || die "gateway/current 旧版本身份与配置不匹配：期望 ${old_version}，得到 ${old_tree_version:-未知}"
+    [[ -n "$old_tree_version" ]] \
+      || die "gateway/current 指向的版本树无法验证身份（缺 package.json/dist/cli.js 或清单非法）：${old_local_target}（可先 install 覆盖或修复指针后重试）"
+    if [[ "$old_version" != "local" && "$old_tree_version" != "$old_version" ]]; then
+      # F6 自愈：current 版本树是部署事实（服务重启即从该树启动），conf 的
+      # VERSION 只是管理元数据。若上次升级事务在「conf 提交点（成功收尾最后
+      # 一步）之后、收尾完成/trap 解除之前」失败或被中断，指针/树会被回滚
+      # 还原、conf 却已写入新版本——该残局会让后续 update/restart 永久卡死
+      # （旧报错"旧版本身份与配置不匹配"）且只能手工改 conf。这里把配置对齐
+      # 到实际版本树再继续：plain update 即按常规事务重放目标升级（既有目标
+      # 树按 F4 复用），显式 --version 走常规升级/降级确认，任何方向都不再死锁。
+      validate_gateway_version "$old_tree_version"    # 防篡改树把任意字符串写进 conf
+      if version_lt "$old_version" "$old_tree_version"; then conf_behind=1; fi
+      warn "版本树与配置不一致：配置 VERSION=${old_version}，current 树为 v${old_tree_version}——按部署事实把配置对齐到 v${old_tree_version} 后继续（若确需配置所记版本，可 --version ${old_version} 显式指定）"
+      VERSION="$old_tree_version"
+      if write_config; then
+        old_version="$old_tree_version"
+        identity_healed=1
+        log "安装配置已对齐到实际版本树：VERSION=${old_tree_version}"
+      else
+        die "版本树与配置不一致且配置自动对齐失败（${CONF_FILE} 不可写？）：请修复配置或指针后重试"
+      fi
+    fi
   fi
+  # F6 自愈曾把 VERSION 临时改为树版本以写 conf；恢复目标版本供后续
+  # download_verify（按 $VERSION 拼资产名）/staging/提交使用（old_version 已
+  # 更新为树版本，回滚基线不受影响）。
+  VERSION="$target_version"
   if [[ "$target_version" == "$old_version" && "$offline_replace" == "0" ]]; then
     log "已是最新版本 ${target_version}（指针/树身份校验通过）"
+    if [[ "$identity_healed" == "1" && "$conf_behind" == "1" ]]; then
+      log "提示：若 gateway 服务仍运行更旧版本（上次指针切换在服务重启前被中断），请 install-gateway.sh restart 完成切换"
+    fi
     # dsh 锚收敛提示：网关版本未变时不做锚同步，但若锚落后于当前 gateway
     # 资产基线（例如上次升级用了 --no-dsh-upgrade / 交互拒绝），给出显式
     # 提示——下次 gateway 版本更新会默认自动同步。基线取当前资产自带值：
@@ -3335,7 +3363,11 @@ cmd_update() {
       # 离线替换指针未动（同路径）：中断时把退避旧树 mv 回，不留 .local.prev
       trap 'restore_anchor_on_interrupt; if [[ -n "$offline_prev" && -e "$offline_prev" ]]; then mv_T "$offline_prev" "$new_local_target" >/dev/null 2>&1 || true; fi; die "升级被中断，gateway 版本树与 dsh 锚已尽力复原"' INT TERM
     else
-      trap 'restore_anchor_on_interrupt; switch_local_current "$old_local_target" >/dev/null 2>&1 || true; die "升级被中断，gateway/current 与 dsh 锚已尽力复原"' INT TERM
+      # F6：中断可能落在 conf 提交点（成功分支写 VERSION=target）之后、trap
+      # 解除之前——指针复原后 conf 仍记新版本，会把后续 update/restart 永久
+      # 卡在身份校验。trap 内把配置一并写回旧版本（内容未变时幂等重写；
+      # 失败仅告警，不覆盖主复原动作）。
+      trap 'restore_anchor_on_interrupt; switch_local_current "$old_local_target" >/dev/null 2>&1 || true; VERSION="$old_version"; write_config >/dev/null 2>&1 || warn "升级被中断：安装配置写回旧版本失败，请人工核对 ${CONF_FILE} 的 VERSION"; die "升级被中断，gateway/current、安装配置与 dsh 锚已尽力复原"' INT TERM
     fi
   elif [[ -n "$dsh_upgrade_target" ]]; then
     # global 形态没有指针可复原，但锚交换仍应尽力复原（旧锚与新 gateway
@@ -3427,6 +3459,11 @@ cmd_update() {
       fi
     fi
     VERSION="$old_version"
+    # conf 提交点在成功收尾（重启+健康检查通过之后）、trap 解除之前——若失败
+    # 落在提交之后，指针/树已还原但 conf 仍记新版本，不写回会让后续
+    # update/restart 永久卡在 F6 身份校验。回滚必须把配置一并还原
+    # （内容未变时幂等重写）。
+    write_config >/dev/null 2>&1 || rollback_ok=0
     if [[ "$SERVICE_MODE" == "foreground" ]]; then
       start_foreground "$rollback_expected_version" "$rollback_previous" || rollback_ok=0
     else

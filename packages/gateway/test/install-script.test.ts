@@ -1157,6 +1157,160 @@ test('--no-dsh-upgrade skips anchor work entirely and the update still succeeds'
   }
 })
 
+test('update heals a conf-ahead version mismatch (rollback leftover) and completes the interrupted upgrade', () => {
+  const base = mkdtempSync(join(tmpdir(), 'gateway-installer-f6-heal-upgrade-'))
+  const gatewayDir = join(base, 'gateway')
+  const versionsDir = join(gatewayDir, 'versions')
+  const oldTree = join(versionsDir, '1.0.0')
+  const current = join(gatewayDir, 'current')
+  try {
+    writeGatewayTree(oldTree, '1.0.0')
+    const result = runLibraryResult(`
+mkdir -p "$GATEWAY_DIR"
+ln -s "$VERSIONS_DIR/1.0.0" "$GATEWAY_DIR/current"
+VERSION=2.0.0
+INSTALL_METHOD=local
+GATEWAY_PORT=30801
+DSH_PORT=30800
+BIND_HOST=127.0.0.1
+PUBLIC_ORIGIN=""
+TRUSTED_PROXY=""
+SERVICE_MODE=user
+DSH_WS=/tmp/dsh
+NO_AUTH=1
+ENV_ANCHOR=0
+UI_PASSWORD=""
+API_TOKEN=""
+write_config
+
+# Rollback leftover: conf was committed to 2.0.0 by an aborted transaction
+# while gateway/current still points at the 1.0.0 tree. Simulate the parsed
+# CLI flag (latest is also 2.0.0) before cmd_update reloads gateway.conf.
+VERSION=2.0.0
+NONINTERACTIVE=1
+resolve_version() { :; }
+DOWNLOAD_V=""
+download_verify() { DOWNLOAD_V="$VERSION"; mkdir -p "$1"; : > "$1/dsh-chamber-gateway-\${VERSION}.tgz"; }
+stage_local_version() { mkdir -p "$VERSIONS_DIR/$2"; }
+systemctl_for_mode() { [[ "$1" == "is-active" ]] && return 1; return 0; }
+launch_identity() { printf old-boot; }
+write_unit() { return 0; }
+restart_service() { return 0; }
+health_wait() { return 0; }
+cmd_update
+printf 'download-version=<%s>\\n' "$DOWNLOAD_V"
+`, { DSH_CHAMBER_BASE_DIR: base })
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`)
+    assert.match(result.stdout, /版本树与配置不一致：配置 VERSION=2\.0\.0，current 树为 v1\.0\.0/, 'the heal must be announced before proceeding')
+    assert.match(result.stdout, /安装配置已对齐到实际版本树：VERSION=1\.0\.0/)
+    assert.match(result.stdout, /download-version=<2\.0\.0>/, 'the target download must use the requested version, not the healed tree version')
+    assert.match(result.stdout, /已升级到 2\.0\.0/, 'a plain update replays the interrupted upgrade instead of dying')
+    assert.equal(readlinkSync(current), join(versionsDir, '2.0.0'), 'the pointer must land on the requested target')
+    assert.match(readFileSync(join(gatewayDir, 'gateway.conf'), 'utf8'), /^VERSION=2\.0\.0$/m, 'the final config records the completed upgrade')
+  } finally {
+    rmSync(base, { recursive: true, force: true })
+  }
+})
+
+test('update heals a conf-ahead version mismatch and no-ops at the actual tree version', () => {
+  const base = mkdtempSync(join(tmpdir(), 'gateway-installer-f6-heal-only-'))
+  const gatewayDir = join(base, 'gateway')
+  const versionsDir = join(gatewayDir, 'versions')
+  const oldTree = join(versionsDir, '1.0.0')
+  const current = join(gatewayDir, 'current')
+  try {
+    writeGatewayTree(oldTree, '1.0.0')
+    const result = runLibraryResult(`
+mkdir -p "$GATEWAY_DIR"
+ln -s "$VERSIONS_DIR/1.0.0" "$GATEWAY_DIR/current"
+VERSION=2.0.0
+INSTALL_METHOD=local
+GATEWAY_PORT=30801
+DSH_PORT=30800
+BIND_HOST=127.0.0.1
+PUBLIC_ORIGIN=""
+TRUSTED_PROXY=""
+SERVICE_MODE=user
+DSH_WS=/tmp/dsh
+NO_AUTH=1
+ENV_ANCHOR=0
+UI_PASSWORD=""
+API_TOKEN=""
+write_config
+
+# The operator asks for exactly the version the tree already runs; the conf
+# only needs to be reconciled, nothing else may change.
+VERSION=1.0.0
+NONINTERACTIVE=1
+resolve_version() { :; }
+launch_identity() { printf old-boot; }
+cmd_update
+`, { DSH_CHAMBER_BASE_DIR: base })
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`)
+    assert.match(result.stdout, /版本树与配置不一致/)
+    assert.match(result.stdout, /已是最新版本 1\.0\.0（指针\/树身份校验通过）/)
+    assert.equal(readlinkSync(current), oldTree, 'the pointer must not move on the heal-only path')
+    assert.equal(existsSync(join(versionsDir, '2.0.0')), false, 'no target tree is staged on the heal-only path')
+    assert.match(readFileSync(join(gatewayDir, 'gateway.conf'), 'utf8'), /^VERSION=1\.0\.0$/m, 'the config is reconciled down to the actual tree version')
+  } finally {
+    rmSync(base, { recursive: true, force: true })
+  }
+})
+
+test('update rollback persists the OLD version in gateway.conf even when it fails after the config commit', () => {
+  const base = mkdtempSync(join(tmpdir(), 'gateway-installer-rollback-conf-'))
+  const gatewayDir = join(base, 'gateway')
+  const versionsDir = join(gatewayDir, 'versions')
+  const oldTree = join(versionsDir, '1.0.0')
+  const current = join(gatewayDir, 'current')
+  try {
+    writeGatewayTree(oldTree, '1.0.0')
+    const result = runLibraryResult(`
+mkdir -p "$GATEWAY_DIR"
+ln -s "$VERSIONS_DIR/1.0.0" "$GATEWAY_DIR/current"
+VERSION=1.0.0
+INSTALL_METHOD=local
+GATEWAY_PORT=30801
+DSH_PORT=30800
+BIND_HOST=127.0.0.1
+PUBLIC_ORIGIN=""
+TRUSTED_PROXY=""
+SERVICE_MODE=systemd
+DSH_WS=/tmp/dsh
+NO_AUTH=1
+ENV_ANCHOR=0
+UI_PASSWORD=""
+API_TOKEN=""
+write_config
+
+VERSION=2.0.0
+NONINTERACTIVE=1
+resolve_version() { :; }
+download_verify() { mkdir -p "$1"; : > "$1/dsh-chamber-gateway-\${VERSION}.tgz"; }
+stage_local_version() { mkdir -p "$VERSIONS_DIR/$2"; }
+systemctl_for_mode() { [[ "$1" == "is-active" ]] && return 1; return 0; }
+launch_identity() { printf old-boot; }
+write_unit() { return 0; }
+restart_service() { return 0; }
+health_wait() { return 0; }
+# Simulate the post-commit tail step failing (ownership handover): the first
+# call (pre-restart) succeeds, the second (after the conf commit) fails, and
+# the rollback's own ownership step keeps failing too.
+APPLY_CALLS=0
+apply_service_user_ownership() { APPLY_CALLS=$((APPLY_CALLS + 1)); [[ "$APPLY_CALLS" -eq 1 ]]; }
+cmd_update
+`, { DSH_CHAMBER_BASE_DIR: base })
+    assert.equal(result.status, 1, `${result.stdout}${result.stderr}`)
+    assert.match(`${result.stdout}${result.stderr}`, /升级失败且回滚未完全成功，请人工介入：数据目录属主移交失败/)
+    assert.equal(readlinkSync(current), oldTree, 'rollback restores the exact old current target')
+    assert.equal(existsSync(join(versionsDir, '2.0.0')), false, 'the failed target tree is removed after rollback')
+    assert.match(readFileSync(join(gatewayDir, 'gateway.conf'), 'utf8'), /^VERSION=1\.0\.0$/m,
+      'rollback must write the old version back into gateway.conf so the next update/restart is not bricked by an identity mismatch')
+  } finally {
+    rmSync(base, { recursive: true, force: true })
+  }
+})
+
 test('installer has no unbraced $VAR immediately followed by a multibyte char (bash 3.2 name-scan crash class)', () => {
   // bash 3.2 under a UTF-8 LC_CTYPE eats the first byte of a multibyte char
   // into the variable name: "$x）" → "x…: unbound variable" under set -u.
