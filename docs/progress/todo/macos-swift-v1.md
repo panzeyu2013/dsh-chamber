@@ -321,6 +321,12 @@ ctx 真实化逐项列于 sidecar-entry.ts 注释。
   click 回灌 delegate（954323d：授权/前台横幅/didReceive 聚焦+__host.
   notifyClicked 回灌）/前台展示 = M3 集成硬门禁（待实机）。GUI 腿实机验收（UNUserNotificationCenter
   click 回灌/NSAlert 消费等）= M3 集成硬门禁。
+- **W-21 续/picker**（0a939b6/0800db2）：setBadge（dockTile）/setKeepAwake
+  （ProcessInfo activity）/showItemInFolder/pickPluginSource（NSOpenPanel
+  folder|.tgz 一体模态主线程）真实腿——全带窗口守卫（headless 诚实降级）；
+  swift test 40/40。**剩余腿**：setLoginItem（SMAppService 需签名）、
+  launchApp（open-in appId→应用映射待定）、NSAlert 消费接线——GUI/签名
+  硬门禁。
 **剩余路线**（不省略登记）：W-18 后半 B（manifest 运行时白名单消费决策：POC
 白名单 7 收窄暂维持，全量放行待 shim 全量生成时评审）→ W-19…W-21
 （窗口/菜单/生命周期/通知/角标/深链/对话框/外链/登录项/崩溃恢复——Swift 宿主腿
