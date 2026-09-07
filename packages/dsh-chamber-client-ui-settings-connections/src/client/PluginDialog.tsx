@@ -34,8 +34,12 @@
  *            gatewayPluginMaterialize / gatewayPluginSync + the controlled
  *            managed-dsh restart (POST + pollGatewayReady). Add capability:
  *            spec → gatewayPluginApply(id, {add:[value], remove:[],
- *            deferRestart:false}); folder/.tgz → gatewayPluginMaterialize(id);
- *            outcomes classified via classifyGatewayApplyResult.
+ *            deferRestart:false}) classified via classifyGatewayApplyResult;
+ *            folder/.tgz → gatewayPluginMaterialize(id) — now terminal on
+ *            return (main settles the executor op + the controlled restart):
+ *            deferred = persisted for the next ready edge; outcome.restarted
+ *            = installed AND live on the running instance; outcome.executed
+ *            without restart = installed, mounts at the next restart.
  *   http   → read-only Loader manifest (pluginInventory list) — no /chamber
  *            surface, no add surface.
  *
@@ -100,9 +104,11 @@ import {
   localChamberBadge,
   remoteChamberBadge,
   thirdPartyEntries,
+  thirdPartyLiveState,
   type ChamberBadge,
   type ChamberBadgeTone,
   type ChamberSeedDriftState,
+  type ThirdPartyLiveState,
 } from './plugin-inventory-text.ts'
 import { bannerProjection, pluginDiagnosticTone, type PluginDiagnostic } from './plugin-diagnostic.ts'
 import css from './ConnectionsSection.module.css'
@@ -322,6 +328,10 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
   const [viewPhase, setViewPhase] = useState<ViewPhase>('loading')
   const [viewError, setViewError] = useState<string | null>(null)
   const [snapshot, setSnapshot] = useState<PluginInventorySnapshot | null>(null)
+  /** 本地实例 Loader 快照（local zone 第三方行生效状态用；源 = /api/i/local）。
+   *  读失败（实例未运行等）置 null 静默降级——状态列留空，绝不报错横幅
+   *  （本地实例重启入口在连接卡，对话框外）。 */
+  const [localSnapshot, setLocalSnapshot] = useState<PluginInventorySnapshot | null>(null)
   const [reloadNonce, setReloadNonce] = useState(0)
   /** 最近一次 Loader 快照镜像：reload 期间保留旧帧渲染、仅首载显示 loading，
    *  避免每次操作后的「loading→footer 闪没 + 瞬时谎报未注入」（UX 评审 S1）。 */
@@ -693,6 +703,26 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
     return () => { cancelled = true }
   }, [sourceId, reloadNonce])
 
+  // ---- local: Loader 快照（local zone 第三方行生效状态） ----
+  // Loads on open and re-runs on every zone reload (reloadNonce — the same
+  // channel the gateway/http snapshot uses); the RUNNING local instance only
+  // changes at a restart (the restart action lives on the local connection
+  // card, outside this dialog), so no per-action reload is needed here.
+  useEffect(() => {
+    if (!isLocal) return
+    let cancelled = false
+    loadPluginInventory('local').then(next => {
+      if (cancelled) return
+      setLocalSnapshot(next)
+    }).catch(() => {
+      if (cancelled) return
+      // 本地实例未运行/清单不可读 → 快照置 null：状态列中性显示，绝不因读
+      // 失败谎报状态（本地无对话框内重试/重启上下文，静默降级）。
+      setLocalSnapshot(null)
+    })
+    return () => { cancelled = true }
+  }, [isLocal, reloadNonce])
+
   useEffect(() => {
     if (sourceId === null) return
     let cancelled = false
@@ -944,7 +974,15 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
         const res = await localPluginAdd(value)
         if ('error' in res) setDraftError(res.error)
         else if ('cancelled' in res) { /* silent no-op (user dismissed the confirmation) */ }
-        else { setAddResult(t('pluginsApplied')); setDraft(''); reloadAfterAdd() }
+        else {
+          // LOCAL `dsh plugin add` writes the local profile only — the RUNNING
+          // local instance mounts the plugin at its next restart (the restart
+          // action lives on the local connection card, outside this dialog),
+          // so「已应用/Applied」would overclaim: the honest note is deferred.
+          setAddResult(t('pluginsDeferred'))
+          setDraft('')
+          reloadAfterAdd()
+        }
       }
     } catch (err) {
       setDraftError(errorMessage(err))
@@ -965,26 +1003,49 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
         else if ('cancelled' in res) { /* silent no-op (picker dismissed) */ }
         else { setAddResult(t('pluginsDeferred')); reloadAfterAdd() }
       } else if (isGateway && gatewayId !== null) {
+        // gateway_plugin_materialize is now TERMINAL on return: the main
+        // process settles the accepted executor op (task poll) and asks for
+        // the controlled managed-dsh restart, so outcome.restarted answers
+        // whether the plugin is LIVE on the running instance.
         const res = await gatewayPluginMaterialize(gatewayId)
-        if ('error' in res) setDraftError(res.error)
-        else if ('cancelled' in res) { /* silent no-op (picker dismissed) */ }
-        else {
-          // deferred = the gateway cached the install intent for the next
-          // ready edge (it may run after this desktop disconnects; the drain
-          // then applies AND restarts once). false = accepted onto the
-          // executor while the instance is ready: the profile mutation lands
-          // but the plugin mounts at the instance's NEXT restart (a direct
-          // submit on a ready instance never triggers the gateway's
-          // drain-only restart — verified on real gateway E2E, design 21
-          // §10 ⑨); "已应用/Applied" means installed, not live.
-          setAddResult(res.deferred === true ? t('deferredOfflineNote') : t('pluginsApplied'))
+        if ('error' in res) {
+          if (res.outcome?.executed === true) {
+            // Executed before the restart was refused/failed: installed now,
+            // mounts at the next natural restart (or the footer's 重启生效).
+            setAddResult(`${res.error} · ${t('restartNeededHint')}`)
+            reloadAfterAdd()
+          } else {
+            // Refused / failed / settle-timeout with nothing (or unknown)
+            // executed: a loud error, never a success claim.
+            setDraftError(res.error)
+          }
+        } else if ('cancelled' in res) { /* silent no-op (picker dismissed) */ }
+        else if ('deferred' in res) {
+          // The gateway persisted the install intent for the next ready edge
+          // (it drains + restarts there; may run after this desktop
+          // disconnects) — never an installed claim.
+          setAddResult(t('deferredOfflineNote'))
+          reloadAfterAdd()
+        } else {
+          // outcome: executed + restarted = installed AND the managed dsh
+          // restarted, so the plugin is LIVE now; executed without restart =
+          // the profile changed but the plugin mounts at the next restart —
+          // the same restartNeededHint arm the spec install uses (the import
+          // fact stays visible in the refreshed installed list below).
+          if (res.outcome.restarted) setAddResult(t('materializeLive'))
+          else if (res.outcome.executed) setAddResult(t('restartNeededHint'))
           reloadAfterAdd()
         }
       } else {
         const res = await localPluginAddFile()
         if ('error' in res) setDraftError(res.error)
         else if ('cancelled' in res) { /* silent no-op (picker dismissed) */ }
-        else { setAddResult(t('pluginsApplied')); reloadAfterAdd() }
+        else {
+          // Same restart-honesty as the local spec install: the local profile
+          // changed; the running local instance mounts it at its next restart.
+          setAddResult(t('pluginsDeferred'))
+          reloadAfterAdd()
+        }
       }
     } catch (err) {
       setDraftError(errorMessage(err))
@@ -1042,6 +1103,11 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
     setPhase('applying')
     setResult(null)
     setResultError(null)
+    /** Anything actually executed (materialize picks landed or the registry
+     *  batch ran — per-row failures included): the remote profile may have
+     *  changed, so the zone must reload once doApply settles (staleness fix;
+     *  refusals/cancellations set nothing and leave the manifests as-is). */
+    let executed = false
     try {
       // Materialize rows: pack-and-transfer via the desktop IPC — per-row
       // isolation (one failed entity must not block the rest).
@@ -1051,7 +1117,7 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
         const res = await pluginMaterializeAddPick(sshSpec.id)
         if ('error' in res) failed.push({ spec: row.name, error: res.error })
         else if ('cancelled' in res) { /* user dismissed the confirmation: skipped, never counted as applied */ }
-        else applied += 1
+        else { applied += 1; executed = true }
       }
 
       // Registry rows + removes ride the existing pluginApply orchestration
@@ -1064,6 +1130,7 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
           setResultError(res.error)
           setResult({ applied, failed, skipped: 0, restarted: false, deferred: true, verified: failed.length === 0, ready: null })
         } else {
+          executed = true
           setResult({
             applied: applied + res.result.applied,
             failed: [...failed, ...res.result.failed],
@@ -1083,8 +1150,13 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
       applyingRef.current = false
       setRestart(true)
       setPhase('done')
+      // doApply 自动重载：executed 后立即走与手动 刷新 相同的 loadSync，让已
+      // 安装/移除行在下方已安装列表即时可见（原只有收起对账时才重载——diff
+      // 停留 done 期间列表陈旧）。phase 随即离开 'done'，收起时的 done 重载
+      // 不再触发——不会双重运行；loadSync(true) 保留用户对剩余行的勾选。
+      if (executed) void loadSync(true)
     }
-  }, [isSsh, sshSpec, diff, checked, restart, seedBusy, restartBusy, remoteRemoveBusy, undoBusy, t])
+  }, [isSsh, sshSpec, diff, checked, restart, seedBusy, restartBusy, remoteRemoveBusy, undoBusy, loadSync, t])
 
   const onApplyClick = useCallback((): void => {
     if (applyingRef.current) return
@@ -1376,6 +1448,17 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
   )
 
   // ---- ③ third-party zone ----
+  /** One third-party row's live-state cell (plugin-inventory-text.ts
+   *  thirdPartyLiveState): a badge-family chip when the Loader snapshot
+   *  answers, or a neutral dash when it is unavailable (instance not
+   *  running / read failed) — never a state claim from an unreadable
+   *  snapshot. */
+  const liveStateCell = (state: ThirdPartyLiveState | null): ReactNode => (
+    state === null
+      ? <span className={css.dim}>—</span>
+      : <span className={chamberBadgeClass(state.tone)}>{t(state.labelKey)}</span>
+  )
+
   /** The add section (spec + npm search + local import — a source folder or
    *  a ready .tgz archive, design 21 §10 archive-pick) for the three writable
    *  backends; http-direct renders no add surface (design 21 §3). */
@@ -1500,11 +1583,12 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
               </>
             )
             : (
-              <div className={clsx(css.pluginRows, css.pluginRowsColsLocal)}>
+              <div className={clsx(css.pluginRows, css.pluginRowsColsLocalLive)}>
                 <div className={clsx(css.pluginRow, css.pluginRowHead)}>
                   <span className={css.pluginCellName}>{t('pluginsColName')}</span>
                   <span className={css.pluginCellCat}>{t('pluginsColCategory')}</span>
                   <span className={css.pluginCellSpec}>{t('pluginsLocalCol')}</span>
+                  <span className={css.pluginCellKind}>{t('pluginsColLiveState')}</span>
                   <span className={css.pluginCellAction}>{t('pluginsColAction')}</span>
                 </div>
                 <div className={css.pluginRowsBody} aria-busy={localRemoveBusy || applying}>
@@ -1527,6 +1611,13 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
                             ? <span className={clsx(css.pluginKindBadge, css.pluginKindPlain)} title={unsync?.reason}>{t('installedFromMask')}</span>
                             : <code className={css.pluginSpec} title={unsync?.reason}>{spec}</code>}
                           {unsync !== undefined && !spec.startsWith('file:') ? <span className={css.pluginKindUnsync}> · {t('pluginsRowUnsyncable')}</span> : null}
+                        </span>
+                        <span className={clsx(css.pluginCell, css.pluginCellKind)}>
+                          {/* Only bundle-layer rows can mount via the Loader: a
+                              plain/client-only dependency with no loader entry
+                              never activates on restart — keep the cell neutral
+                              instead of promising 重启后生效. */}
+                          {liveStateCell(thirdPartyLiveState(localSnapshot, name, rowCategory === 'bundle'))}
                         </span>
                         <Button
                           variant="outline"
@@ -1583,10 +1674,11 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
                         </>
                       )
                       : (
-                        <div className={clsx(css.pluginRows, css.pluginRowsColsRemote)}>
+                        <div className={clsx(css.pluginRows, css.pluginRowsColsRemoteLive)}>
                           <div className={clsx(css.pluginRow, css.pluginRowHead)}>
                             <span className={css.pluginCellName}>{t('pluginsColName')}</span>
                             <span className={css.pluginCellSpec}>{t('pluginsRemoteCol')}</span>
+                            <span className={css.pluginCellKind}>{t('pluginsColLiveState')}</span>
                             <span className={css.pluginCellAction}>{t('pluginsColAction')}</span>
                           </div>
                           <div className={css.pluginRowsBody} aria-busy={opsBlocked}>
@@ -1602,6 +1694,13 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
                                   {row.spec.startsWith('file:')
                                     ? <span className={clsx(css.pluginKindBadge, css.pluginKindPlain)} title={t('installedFromMask')}>{t('installedFromMask')}</span>
                                     : <code className={css.pluginSpec}>{row.spec}</code>}
+                                </span>
+                                <span className={clsx(css.pluginCell, css.pluginCellKind)}>
+                                  {/* Only dsh.profile.bundles layers mount via the
+                                      Loader (installed.bundles) — non-bundle deps
+                                      with no loader entry never activate on
+                                      restart: neutral cell, never a false 重启后生效. */}
+                                  {liveStateCell(thirdPartyLiveState(snapshot, row.name, installed.bundles.includes(row.name)))}
                                 </span>
                                 <Button
                                   variant="outline"
@@ -1637,7 +1736,10 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
   /** http-direct: read-only Loader third-party entries (no /chamber
    *  surface, no add surface — design 21 §3 backend matrix). The
    *  third-party projection is the shared pure function (mobile + official
-   *  + chamber rows excluded). */
+   *  + chamber rows excluded). Each row carries its live-state chip
+   *  (snapshot-derived — rows ARE Loader entries here, so the match is the
+   *  entry itself; the chip subsumes the former disabled/failed inline
+   *  markers with the active/starting states included). */
   const httpZone = isHttp
     ? ((): ReactNode => {
       if (viewPhase === 'loading') return <p className={css.dim}>{t('pluginsLoading')}</p>
@@ -1652,12 +1754,7 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
           {thirdParty.map(entry => (
             <div key={entry.entryId} className={css.pluginChamberRow}>
               <code className={css.pluginName}>{entry.moduleName}</code>
-              {!entry.enabled
-                ? <span className={css.dim}>{t('pluginDisabled')}</span>
-                : null}
-              {entry.fiberPhase === 'failed'
-                ? <span className={css.error}>{t('pluginPhaseFailed')}</span>
-                : null}
+              {liveStateCell(thirdPartyLiveState(snapshot, entry.moduleName, true))}
             </div>
           ))}
         </div>

@@ -3624,9 +3624,17 @@ if (!gotTheLock) {
           version,
           authority: instance.transport === 'ssh' ? gatewayTunnelAuthority(instance.remotePort) : undefined,
         });
-        return result.ok
-          ? { ok: true as const, deferred: result.deferred }
-          : { ok: false as const, error: sanitizeErrorText(result.error) };
+        if (result.ok && 'outcome' in result) {
+          return { ok: true as const, outcome: result.outcome };
+        }
+        if (result.ok) {
+          return { ok: true as const, deferred: true as const };
+        }
+        return {
+          ok: false as const,
+          error: sanitizeErrorText(result.error),
+          ...(result.outcome === undefined ? {} : { outcome: result.outcome }),
+        };
       } catch (error) {
         // Builder errors carry machine codes (path too long / cap exceeded /
         // folder changed while packing / unreadable) whose message text is

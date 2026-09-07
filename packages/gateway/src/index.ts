@@ -255,6 +255,13 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
       },
     })
     pluginTasks.reconcileJournal()
+    // Staged-archive orphan sweep (2026-09 audit follow-up): terminal
+    // materialize ops RETAIN their staged archive (the manifest keeps its
+    // file: spec), so re-materialize/remove cycles would otherwise leave
+    // unreferenced archives behind — reclaim them here, at the one moment
+    // the executor is provably idle (right after journal reconciliation,
+    // before any route can stage).
+    pluginTasks.sweepOrphanedStagedArchives()
     // The chamber surface (2026-12 strip): channels projection + browser
     // dashboard assets + plugin-sync cache + the managed-profile installed
     // projection (design 21 A0) + the A1 write routes (install/materialize/

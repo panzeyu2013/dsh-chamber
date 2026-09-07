@@ -795,8 +795,12 @@ test('the outward tasks projection masks file: specs while the journal keeps the
   const projected = h.tasks.tasks().tasks[0]!
   assert.equal(projected.name, 'slug')
   assert.equal(projected.spec, MATERIALIZED_VALUE_MASK, 'the projection masks the staging path')
-  // The staged archive is gone once the op is terminal (staged-archive GC).
-  await waitFor(() => existsSync(staged) === false, 'staged archive removed at the op terminal')
+  // An EXECUTED materialize op RETAINS its staged archive: the dsh CLI
+  // permanently records `file:<staged>` in the profile manifest + pnpm
+  // lockfile, and a later re-resolution fetches that exact path again —
+  // deleting it at the terminal would leave the manifest dangling (the same
+  // "kept, never cleaned" policy as the desktop ssh plugin dir).
+  assert.equal(existsSync(staged), true, 'the staged archive is retained after the op is terminal')
 })
 
 test('the tasks projection never exposes a pending op\'s live childPid; the journal keeps it internally', async t => {
@@ -816,4 +820,37 @@ test('the tasks projection never exposes a pending op\'s live childPid; the jour
   h.spawnCalls[0]!.child.close(0)
   await waitFor(() => journal.recent().find(op => op.name === 'pid-proj-pkg')?.status === 'ok', 'op ok')
   await waitFor(() => h.manager.held === 0, 'lease released')
+})
+
+test('the boot orphan sweep removes staged archives nothing references and keeps manifest-/intent-referenced ones', async t => {
+  const h = makeHarness(t)
+  const root = thirdPartyRoot(h.stateDir)
+  // Executed-op retention: the profile manifest dependency points at this
+  // staged archive — the sweep must never touch it.
+  const keptByManifest = join(root, 'slug-alpha', 'alpha-1.0.0-11111111.tgz')
+  // Deferred intent: drains at the next ready edge — its archive must
+  // survive the sweep.
+  const keptByIntent = join(root, 'slug-beta', 'beta-1.0.0-22222222.tgz')
+  // Nothing references this one: a remove/upgrade cycle left it behind.
+  const orphan = join(root, 'slug-gamma', 'gamma-0.0.1-33333333.tgz')
+  for (const staged of [keptByManifest, keptByIntent, orphan]) {
+    mkdirSync(join(root, staged.split('/').at(-2)!), { recursive: true, mode: 0o700 })
+    writeFileSync(staged, 'tgz-bytes', { mode: 0o600 })
+  }
+  writeManifestFixture(h.stateDir, { alpha: `file:${keptByManifest}` })
+  h.manager.refusal = { code: 'runtime_busy', error: 'busy' }
+  const deferred = await submitResult(h.tasks, { kind: 'materialize', name: 'beta', spec: `file:${keptByIntent}` })
+  assert.ok(deferred.ok)
+  assert.equal(deferred.deferred, true, 'the intent is persisted for the next ready edge')
+  h.manager.refusal = null
+
+  h.tasks.sweepOrphanedStagedArchives()
+  assert.equal(existsSync(keptByManifest), true, 'the manifest-referenced archive is retained')
+  assert.equal(existsSync(keptByIntent), true, 'the intent-referenced archive is retained')
+  assert.equal(existsSync(orphan), false, 'the unreferenced archive is reclaimed')
+
+  // Idempotent: a second sweep leaves every referenced archive alone.
+  h.tasks.sweepOrphanedStagedArchives()
+  assert.equal(existsSync(keptByManifest), true)
+  assert.equal(existsSync(keptByIntent), true)
 })

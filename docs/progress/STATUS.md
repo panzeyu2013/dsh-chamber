@@ -45,7 +45,12 @@
   故障注入、journal 中断对账；发布前执行）；UI 余留照实：who/when 归因 tooltip 未
   渲染、gateway 拒绝码→本地化文案映射未做（409 逐字英文）、pollGatewayReady 英文
   错误串未本地化；archive-pick 的 file+folder 双模式对话框为 **macOS-v1**（非 macOS
-  保持文件夹对话框，随 design 22/23）。
+  保持文件夹对话框，随 design 22/23）。2026-09 实机走查复核已收口（代码+单测，
+  记录见 design 21 §10 ⑱–㉒）：sync 400 原因透传、materialize 桌面 settle+受控重启
+  对账（IPC outcome 联合）、暂存归档 op 终态保留 + 引导期孤儿清扫（逆 ⑩ 补有界，
+  防 manifest 悬挂）、第三方行生效状态列 + 类别诚实（bundle-layer 才示「重启后
+  生效」）+ 文案诚实——**§9 实机矩阵仍开放**（.172 测试机 gateway 侧
+  升级因凭据轮换暂停，待用户侧恢复后按 §9 重跑）。
 - **归档清理与归档管理器（design 24，已实现；本地形态已实跑）**：剩余——实机
   **gateway/远程 dsh 形态**与打包版 UI 目检（本地形态已跑通：删除失效根因修复 +
   `purge(sessionIds?)` 可选子集过滤 + 归档管理器对话框）；事件发射为文档化 no-op
