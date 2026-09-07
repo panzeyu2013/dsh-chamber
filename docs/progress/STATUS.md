@@ -158,8 +158,17 @@
    W-10 S0–S11 十二批——60/60 ipcMain.handle 全迁 installIpcHandlers、HostEdges/
    electron-edges seam 落位、深链合龙、mirror 无死键断言（68/68）、main.ts 5663→
    3803（剩装配/窗口 glue/生命周期/启动事务宿主）；每批 test:desktop 全绿（收官
-   896/896）+ typecheck 0；**下一块（W-11/12/13 sidecar-entry/node-edges/stdio 冒烟
-   → M3）暂停待命，等用户指示恢复**。
+   896/896）+ typecheck 0。
+   **M2/P1 后续已交付（同日续，消息/目标驱动持续推进）**：W-11/12/13
+   sidecar-entry/node-edges/B 桥 stdio 冒烟 6/6（a669124）；W-14 门禁全绿；
+   M3：BridgeClient edge/notify/ready + 60 通道无 GUI 全量冒烟（c612382）、
+   W-17 manifest 管线（2c3cfc4）、W-18 前半接线+一致性 XCTest（3e082f6）、
+   W-18 后半 A shim 存根（9d06caa）、E2 flavor（645a654）、W-19/20
+   SwiftEdgeHostLegs 骨架+注入+装配接线（4ec76ce/9f19d0e）；swift test
+   38/38、desktop 全链 38 文件绿、typecheck 0。
+   **已登记硬门禁（未伪造，待实机/凭据）**：W-21 真实通知/角标腿需 BridgeClient
+   异步 edge 应答改造 + GUI 验收；M4 Sparkle/blocked-available 需 Apple 凭据
+   （A6）；G 门 walkthrough 与截屏此前被系统屏幕录制拒绝。
 - **起始端口偏移**：本地默认 17510、控制面默认 17500；当前固定起始端口 + P+1 重试 +
   记录仲裁，是否开放配置仍未决。
 - **trusted-host 自定义 Host**：当前反代 Host 与实例自身 `127.0.0.1:<port>` 一致；
