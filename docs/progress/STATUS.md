@@ -139,11 +139,15 @@
 
 ## 设计未决
 
-- **macOS Swift 原生壳（design 25，路线 A：WKWebView + Node sidecar 全复用）**：
-  方案草案已出（docs/design/25-macos-swift-native-shell.md），**未立项**。待用户
-  决策：P0 POC 先行、双壳共存/bundle id、更新路线（v1 发布页 → v2 Sparkle）、
-  仓库落位、Node 版本/架构、静态凭据加密（v1 建议诚实 0600 明文）。实施须先过
-  P0 验证门（WebKit parity + 桥护栏）；Electron 版（Win/Linux/mac）并行不回归。
+- **macOS Swift 原生壳（design 25 v2，路线 A：WKWebView + Node sidecar 全复用）**：
+  方案与实施计划均已出——docs/design/25-macos-swift-native-shell.md（v2，经三个
+  并行 subagent 打磨轮：逐条评审 / 承重核验 / 执行计划细化，Major 修正已闭合）+
+  docs/progress/todo/macos-swift-v1.md（M0–M5 六门 + WBS W-01…W-32 + runbook/
+  门禁/中止条件；估算 46–72 人-日）。**未立项**。待用户决策 D1–D7：P0 先行、
+  双壳共存/bundle id、更新路线（v1 blocked-available → v2 Sparkle）、仓库落位、
+  原生 UI 渐进范围、Node 版本/架构、静态凭据加密（v1 建议诚实 0600 明文）。实施
+  须先过 P0 验证门（G1–G5 + WebKit 后台节流/存储隔离 C1/C2 + 桥护栏）；Electron
+  版（Win/Linux/mac）并行不回归。
 - **起始端口偏移**：本地默认 17510、控制面默认 17500；当前固定起始端口 + P+1 重试 +
   记录仲裁，是否开放配置仍未决。
 - **trusted-host 自定义 Host**：当前反代 Host 与实例自身 `127.0.0.1:<port>` 一致；
