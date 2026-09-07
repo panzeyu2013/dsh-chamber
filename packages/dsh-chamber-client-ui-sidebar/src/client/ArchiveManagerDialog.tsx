@@ -43,13 +43,20 @@
  * purge the App-side refresh drops the deleted rows from the aggregate and
  * this dialog's selection is pruned to surviving rows.
  *
+ * CHROME (2026 style pass): the dialog is the OFFICIAL primitives Modal
+ * (mask + r24 card + header close — the same shell RemoveWorktreeDialog /
+ * PluginDialog render), so mask/Escape/close-button behaviour and the
+ * card/radius/colour tokens match every other dialog in the app. Footer
+ * actions are the official Button atom (outline + destructive ink, the
+ * ui-git remove-confirm convention); only the row list stays bespoke
+ * (native checkboxes + title/project rows + per-row delete).
+ *
  * Error/info text is zh-hardcoded inline (the sidebar's established inline
  * rowError precedent — design 24 §5 decision); buttons and confirms ride
  * the locale dictionaries.
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
-import clsx from 'clsx'
-import { IconCloseOutline16, IconLoadingOutline16, IconTrashOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button, IconLoadingOutline16, IconTrashOutline16, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
 import cc from './sidebar-chamber.module.css'
 import type { ChamberServerAggregate } from '../shared/aggregate-store.ts'
 import { chamberBridge } from '../shared/aggregate-store.ts'
@@ -77,40 +84,14 @@ function projectLabelOf(cwd: string | undefined): string {
   return parts.slice(-2).join('/')
 }
 
-/** Minimal keyboard-event shape both DOM (document listener) and React
- *  (panel onKeyDown) keydown events satisfy. */
-interface TabKeyEvent {
-  readonly shiftKey: boolean
-  preventDefault(): void
-}
-
-/** Tab-cycle the focus inside the panel (aria-modal without a real focus
- *  trap lets Tab reach the underlying sidebar rows, where keyboard
- *  activation could switch the N-ctx view behind the open dialog). */
-function cycleFocus(panel: HTMLElement, event: TabKeyEvent): void {
-  const focusables = [...panel.querySelectorAll<HTMLElement>(
-    'button:not(:disabled), input[type="checkbox"]:not(:disabled), [href], [tabindex]:not([tabindex="-1"])',
-  )]
-  if (focusables.length === 0) return
-  const first = focusables[0] as HTMLElement
-  const last = focusables[focusables.length - 1] as HTMLElement
-  const active = document.activeElement
-  if (event.shiftKey) {
-    if (active === first || !panel.contains(active)) {
-      event.preventDefault()
-      last.focus()
-    }
-  } else if (active === last || !panel.contains(active)) {
-    event.preventDefault()
-    first.focus()
-  }
-}
-
 export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialogProps) {
   const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set())
   const [busy, setBusy] = useState(false)
   const [note, setNote] = useState<{ kind: NoteKind; text: string } | null>(null)
   const mountedRef = useRef(true)
+  // The list panel receives initial focus (tabIndex -1) so the keyboard lands
+  // inside the dialog on open; the official Modal owns Esc/mask/close-button
+  // behaviour (no bespoke focus trap — the Modal family does not trap).
   const panelRef = useRef<HTMLDivElement | null>(null)
 
   // Mounted guard: wire continuations must never write state of a closed
@@ -120,11 +101,14 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
     return () => { mountedRef.current = false }
   }, [])
 
+  // The panel receives initial focus (tabIndex -1) so the keyboard lands
+  // inside the dialog on open.
+  useEffect(() => {
+    panelRef.current?.focus()
+  }, [])
+
+  // ---- all hooks above the null-server early return (stable hook order) ----
   const rows = server?.archivedSessions
-  /** True only when the snapshot's archive set is authoritative (mounted
-   *  baseline); degraded sources (unary fallback) and not-yet-landed
-   *  aggregates are unknown — see the module doc's VIEW MODES. */
-  const archiveSetKnown = server?.archiveSetKnown === true
   const rowIds = useMemo(() => {
     const ids: string[] = []
     if (rows !== undefined) for (const row of rows) ids.push(row.sessionId)
@@ -151,30 +135,12 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
     })
   }, [rowSet])
 
-  // The panel receives initial focus (tabIndex -1) so the keyboard lands
-  // inside the dialog on open.
-  useEffect(() => {
-    panelRef.current?.focus()
-  }, [])
-
-  // Escape closes at ANY time (busy included — see module doc: closing
-  // mid-run never cancels the host purge). Tab cycles inside the panel.
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') {
-        event.preventDefault()
-        onClose()
-        return
-      }
-      if (event.key === 'Tab' && panelRef.current !== null) {
-        cycleFocus(panelRef.current, event)
-      }
-    }
-    document.addEventListener('keydown', onKeyDown)
-    return () => { document.removeEventListener('keydown', onKeyDown) }
-  }, [onClose])
-
   if (server === null) return null
+
+  /** True only when the snapshot's archive set is authoritative (mounted
+   *  baseline); degraded sources (unary fallback) and not-yet-landed
+   *  aggregates are unknown — see the module doc's VIEW MODES. */
+  const archiveSetKnown = server.archiveSetKnown === true
 
   const toggle = (id: string): void => {
     if (busy) return
@@ -294,149 +260,117 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
     || (archiveSetKnown && rows !== undefined && rows.length === 0)
 
   return (
-    <div
-      className={cc.archiveManagerMask}
-      onClick={(event) => {
-        if (event.target === event.currentTarget) onClose()
-      }}
-    >
-      <div
-        ref={panelRef}
-        className={cc.archiveManager}
-        role="dialog"
-        aria-modal="true"
-        aria-label={t('archive.manager.title')}
-        tabIndex={-1}
-        onKeyDown={(event) => {
-          // Panel-local Tab handling for the (rare) case focus already
-          // escaped the document-level trap target chain.
-          if (event.key === 'Tab' && panelRef.current !== null) cycleFocus(panelRef.current, event)
-        }}
-      >
-        <div className={cc.archiveManagerHead}>
-          <span className={cc.archiveManagerTitle}>
-            {t('archive.manager.title')}
-            <span className={cc.archiveManagerSource}> · {server.label}</span>
+    <Modal
+      open
+      onClose={onClose}
+      title={`${t('archive.manager.title')} · ${server.label}`}
+      closeLabel={t('action.cancel')}
+      className={cc.archiveManagerDialog}
+      footer={(
+        <div className={cc.archiveManagerFootBar}>
+          <span className={cc.archiveManagerFootStatus} role={busy ? 'status' : undefined}>
+            {busy && (
+              <>
+                <IconLoadingOutline16 className={cc.statusSpinner} size={13} />
+                正在删除…
+              </>
+            )}
           </span>
-          <button
-            type="button"
-            className={cc.actionIcon}
-            aria-label={t('action.cancel')}
-            title={t('action.cancel')}
-            onClick={(event) => {
-              event.stopPropagation()
-              onClose()
-            }}
+          {listVisible && (
+            <Button
+              variant="outline"
+              className={cc.archiveManagerDanger}
+              disabled={busy || selected.size === 0}
+              onClick={deleteSelected}
+            >
+              {t(selectedCountKey, { count: selected.size })}
+            </Button>
+          )}
+          <Button
+            variant="outline"
+            className={cc.archiveManagerDanger}
+            disabled={deleteAllDisabled}
+            onClick={deleteAll}
           >
-            <IconCloseOutline16 size={14} />
-          </button>
+            {t('archive.manager.deleteAll')}
+          </Button>
         </div>
-        <div className={cc.archiveManagerBody}>
-          {!landed && pullError ? (
-            <div className={cc.archiveManagerNoteRow} role="alert">
-              {t('archive.manager.listUnavailable')}
-              {server.aggregateError !== '' ? ` ${server.aggregateError}` : ''}
+      )}
+    >
+      <div ref={panelRef} tabIndex={-1} className={cc.archiveManagerPanel}>
+        {!landed && pullError ? (
+          <div className={cc.archiveManagerNoteRow} role="alert">
+            {t('archive.manager.listUnavailable')}
+            {server.aggregateError !== '' ? ` ${server.aggregateError}` : ''}
+          </div>
+        ) : !landed ? (
+          <div className={cc.archiveManagerNoteRow} role="status">{t('archive.manager.loading')}</div>
+        ) : degraded ? (
+          <div className={cc.archiveManagerNoteRow} role="status">{t('archive.manager.degraded')}</div>
+        ) : rows.length === 0 ? (
+          <div className={cc.archiveManagerEmpty} role="status">{t('archive.manager.empty')}</div>
+        ) : (
+          <div className={cc.archiveManagerList}>
+            <div className={cc.archiveManagerRow}>
+              <input
+                type="checkbox"
+                className={cc.archiveManagerCheck}
+                checked={selected.size === rows.length}
+                aria-label={t('archive.manager.selectAllAria')}
+                disabled={busy}
+                onChange={toggleAll}
+              />
+              <span className={cc.archiveManagerRowTitleSelectAll}>{t('archive.manager.selectAllAria')}</span>
+              <span className={cc.archiveManagerRowPath}>{t(countKey, { count: rows.length })}</span>
             </div>
-          ) : !landed ? (
-            <div className={cc.archiveManagerNoteRow} role="status">{t('archive.manager.loading')}</div>
-          ) : degraded ? (
-            <div className={cc.archiveManagerNoteRow} role="status">{t('archive.manager.degraded')}</div>
-          ) : rows.length === 0 ? (
-            <div className={cc.archiveManagerEmpty} role="status">{t('archive.manager.empty')}</div>
-          ) : (
-            <>
-              <div className={cc.archiveManagerRow}>
+            {rows.map(row => (
+              <div key={row.sessionId} className={cc.archiveManagerRow}>
                 <input
                   type="checkbox"
                   className={cc.archiveManagerCheck}
-                  checked={selected.size === rows.length}
-                  aria-label={t('archive.manager.selectAllAria')}
+                  checked={selected.has(row.sessionId)}
+                  aria-label={titleText(row.title)}
                   disabled={busy}
-                  onChange={toggleAll}
+                  onChange={() => { toggle(row.sessionId) }}
                 />
-                <span className={cc.archiveManagerRowTitle}>{t('archive.manager.selectAllAria')}</span>
-                <span className={cc.archiveManagerRowPath}>{t(countKey, { count: rows.length })}</span>
-              </div>
-              {rows.map(row => (
-                <div key={row.sessionId} className={cc.archiveManagerRow}>
-                  <input
-                    type="checkbox"
-                    className={cc.archiveManagerCheck}
-                    checked={selected.has(row.sessionId)}
-                    aria-label={titleText(row.title)}
-                    disabled={busy}
-                    onChange={() => { toggle(row.sessionId) }}
-                  />
-                  <span
-                    className={cc.archiveManagerRowTitle}
-                    title={titleText(row.title)}
-                  >
-                    {titleText(row.title)}
+                <span
+                  className={cc.archiveManagerRowTitle}
+                  title={titleText(row.title)}
+                >
+                  {titleText(row.title)}
+                </span>
+                {projectLabelOf(row.cwd) !== '' && (
+                  <span className={cc.archiveManagerRowPath} title={row.cwd}>
+                    {projectLabelOf(row.cwd)}
                   </span>
-                  {projectLabelOf(row.cwd) !== '' && (
-                    <span className={cc.archiveManagerRowPath} title={row.cwd}>
-                      {projectLabelOf(row.cwd)}
-                    </span>
-                  )}
-                  <button
-                    type="button"
-                    className={clsx(cc.actionIcon, cc.archiveManagerRowDelete)}
-                    aria-label={t('archive.manager.rowDeleteAria', { title: titleText(row.title) })}
-                    title={t('archive.manager.rowDeleteAria', { title: titleText(row.title) })}
-                    disabled={busy}
-                    onClick={(event) => {
-                      event.stopPropagation()
-                      deleteSingle(row.sessionId, row.title ?? '')
-                    }}
-                  >
-                    <IconTrashOutline16 size={13} />
-                  </button>
-                </div>
-              ))}
-            </>
-          )}
-        </div>
-        <div className={cc.archiveManagerFoot}>
-          {note !== null && (
-            <span
-              className={note.kind === 'error' ? cc.archiveManagerError : cc.archiveManagerNoteRow}
-              role={note.kind === 'error' ? 'alert' : 'status'}
-              style={{ whiteSpace: 'pre-line' }}
-            >
-              {note.text}
-            </span>
-          )}
-          <div className={cc.archiveManagerFootBar}>
-            <span className={cc.archiveManagerCount}>
-              {landed && !degraded && rows.length > 0 ? t(countKey, { count: rows.length }) : ''}
-            </span>
-            {busy && (
-              <span className={cc.archiveManagerBusy} role="status">
-                <IconLoadingOutline16 className={cc.statusSpinner} size={12} />
-                正在删除…
-              </span>
-            )}
-            {listVisible && (
-              <button
-                type="button"
-                className={cc.archiveManagerBtn}
-                disabled={busy || selected.size === 0}
-                onClick={deleteSelected}
-              >
-                {t(selectedCountKey, { count: selected.size })}
-              </button>
-            )}
-            <button
-              type="button"
-              className={clsx(cc.archiveManagerBtn, cc.archiveManagerBtnDanger)}
-              disabled={deleteAllDisabled}
-              onClick={deleteAll}
-            >
-              {t('archive.manager.deleteAll')}
-            </button>
+                )}
+                <button
+                  type="button"
+                  className={cc.archiveManagerRowDelete}
+                  aria-label={t('archive.manager.rowDeleteAria', { title: titleText(row.title) })}
+                  title={t('archive.manager.rowDeleteAria', { title: titleText(row.title) })}
+                  disabled={busy}
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    deleteSingle(row.sessionId, row.title ?? '')
+                  }}
+                >
+                  <IconTrashOutline16 size={13} />
+                </button>
+              </div>
+            ))}
           </div>
-        </div>
+        )}
+        {note !== null && (
+          <span
+            className={note.kind === 'error' ? cc.archiveManagerError : cc.archiveManagerNoteRow}
+            role={note.kind === 'error' ? 'alert' : 'status'}
+            style={{ whiteSpace: 'pre-line' }}
+          >
+            {note.text}
+          </span>
+        )}
       </div>
-    </div>
+    </Modal>
   )
 }
