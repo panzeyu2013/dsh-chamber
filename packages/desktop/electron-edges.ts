@@ -14,7 +14,11 @@
  * member at compile time):
  *   - S0: rendererPush — the single-main-window send leaf. The four
  *     committed state pushes (SSH_STATUS_CHANGED / SSH_INSTANCES_CHANGED /
- *     UPDATE_STATE_CHANGED / RUNTIME_STATE_CHANGED) leave main.ts through it.
+ *     UPDATE_STATE_CHANGED / RUNTIME_STATE_CHANGED) leave through it; at S0
+ *     their call sites all sat in main.ts — W-10 S9 moved the
+ *     UPDATE_STATE_CHANGED caller (updater.subscribe push) into shell-core's
+ *     installIpcHandlers I 组段, the others remain assembly-side (S1/S2 send
+ *     sources already call the leaf from core).
  *   - S2 (notify/badge/ready + renderer delivery batch): the NOTIFY host leg
  *     (showNativeNotification with the private B4 notification-object
  *     registry/eviction, notificationSupported, retireNotificationsForSources
@@ -32,6 +36,14 @@
  *     host mainWindow back-ref is the parent, so Electron attaches the box/
  *     panel to the current window as a sheet on macOS). classifyPluginPick
  *     stays in core (plugin-tarball.ts).
+ *   - S9 (open-in + update batch): the open/open-in host leaves —
+ *     openExternal (shell.openExternal; URL whitelist/normalization/budget/
+ *     cooldown stay in core — B11), openPath / showItemInFolder (E11 —
+ *     shell.openPath's resolved error string and the win32/linux rejection
+ *     paths fold into a loud throw, core's invokeOpenPath adapter keeps the
+ *     original error text) and showError (dialog.showErrorBox wrapper — the
+ *     deep-link OS launch drain moved into core with this batch is its first
+ *     core consumer).
  *
  * TODO (W-10 later batches): the remaining HostEdges v2 members are declared
  * on the shell-core interface but not yet implemented here — each batch moves
@@ -39,19 +51,16 @@
  * widens its Pick:
  *   - keep-awake: powerSaveBlocker start/stop + blocker-id host state
  *     (main.ts setKeepAwakeActive ~:871).
- *   - dialogs: showError (dialog.showErrorBox wrapper) — the ssh-plugin
- *     handlers that migrated in S6 did not need it (their failures are loud
- *     {error} projections, never error boxes); it moves with its first core
- *     consumer.
  *   - tray/window: trayAvailable, focusMainWindow (D3 — the per-member
  *     activate/restore/focus leg; notification clicks already activate via
  *     host.showMainWindow), notifyClicked (design 25 §4.5 E4 Swift face).
- *   - open/open-in: shell.openExternal / openPath / showItemInFolder +
- *     launchApp (B11 — budget/cooldown/normalization stay in core).
+ *   - open/open-in: launchApp (E12 — the unified open-in native-launch leg;
+ *     the finder/vscode providers still go through openExternal /
+ *     openPath / showItemInFolder — launchApp moves with its first consumer).
  *   - system/resources: setLoginItem / trayAvailable / resolveResource /
  *     isPackaged (B1).
  */
-import { Notification, app, dialog, powerMonitor } from 'electron';
+import { Notification, app, dialog, powerMonitor, shell } from 'electron';
 import type { BrowserWindow } from 'electron';
 import type { HostEdges, HostMessageOptions } from './shell-core.ts';
 import { describeUnknownError } from './deep-link.ts';
@@ -93,6 +102,10 @@ export function createElectronEdges(host: ElectronEdgesHost): Pick<
   | 'webViewContentAlive'
   | 'mainWindowAlive'
   | 'retireNotificationsForSources'
+  | 'openExternal'
+  | 'openPath'
+  | 'showItemInFolder'
+  | 'showError'
   | 'showMessage'
   | 'pickPluginSource'
 > {
@@ -284,6 +297,35 @@ export function createElectronEdges(host: ElectronEdgesHost): Pick<
         try { notification.close(); } catch { /* best-effort stale banner retirement */ }
       }
       return retired;
+    },
+
+    // —— 打开/拉起（W-10 S9 open-in + update 批；B11/E10/E11）——
+    /** shell.openExternal 叶（B11/E10）：reject（OS 打开失败）原样透传——core
+     *  调用点（openVscodeUrl / openReleasePage / 外链预算器）各自折算 loud 结果，
+     *  本叶不做白名单/规范化/预算/冷却（留 core）。 */
+    openExternal(url: string): Promise<void> {
+      return shell.openExternal(url);
+    },
+
+    /** shell.openPath 叶（E11）：失败模式语义照搬——resolve 的错误串（非空 =
+     *  OS 打开失败）与 win32/linux 的 reject 路径统一 loud（throw），core 侧
+     *  invokeOpenPath 适配把原始错误文本原样归一（成功 '' → null；与搬迁前
+     *  main.ts openInCtx 直包 shell.openPath 的语义一致）。 */
+    async openPath(p: string): Promise<void> {
+      const error = await shell.openPath(p);
+      if (error !== '') throw new Error(error);
+    },
+
+    /** shell.showItemInFolder 叶（E11：Finder 揭示）。异常由调用侧兜底（与搬迁
+     *  前 openInCtx 直调同语义——runOpenInLaunch 的 loud {error} 投影）。 */
+    showItemInFolder(p: string): void {
+      shell.showItemInFolder(p);
+    },
+
+    /** dialog.showErrorBox 包装（W-10 S9——deep-link OS 启动消费循环随迁 core
+     *  后的 loud 错误框腿；其调用点外层 catch 兜底本叶异常，同搬迁前）。 */
+    showError(title: string, detail: string): void {
+      dialog.showErrorBox(title, detail);
     },
 
     /** 确认对话框叶（W-10 S6）：dialog.showMessageBox 包装——父窗 = 当前主窗

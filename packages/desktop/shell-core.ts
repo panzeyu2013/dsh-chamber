@@ -134,6 +134,25 @@
  *    助手（按钮序/取消默认/无窗文案逐字一致）、ADD_FILE 的无存活主窗预检 =
  *    edges.mainWindowAlive、插件源 pick = edges.pickPluginSource。main 侧原
  *    confirmPluginAction 闭包随本批删除（无剩余使用点）。
+ *  Responsibilities relocated from main.ts (W-10 S9 open-in + update batch):
+ *  - I 组 7 个注册体：OPEN_IN_APPS / OPEN_IN / UPDATE_STATE / UPDATE_CHECK /
+ *    UPDATE_DOWNLOAD / UPDATE_RESTART / OPEN_RELEASE——按原 main.ts 顺序追加在
+ *    H 组之后（installIpcHandlers ② 段）。open-in 面随迁 openInCtx/wiredCtx 共享
+ *    宿主依赖束（app 能力协商经纯模块 open-in.ts；来源指纹 owns/matches 复查与
+ *    来源代际捕获在 core；lookupInstance 经 ctx transportManager（sm 现实例）；
+ *    宿主打开/揭示叶 = HostEdges openExternal/openPath/showItemInFolder——均在
+ *    electron-edges.ts S9 实现）。update 面经 ctx 注入的 updateController 现实例
+ *    （main 装配侧构造的 electron-updater 包装；类型 import 自 updater.ts——纯
+ *    类型面，core 零 electron 运行时字样）与状态 push 订阅（committed-push 包装
+ *    + edges.rendererPush，主窗身份折算见 I 组段注释）。
+ *  - OS 深链启动队列与消费循环（design 16 §4.2）：pendingIntents（有界 64
+ *    single-flight 队列）+ drain 闭包装配 + enqueueDeepLink（OS 三入口 glue 经
+ *    导出入口调用）+ 启动尾部 drain 入口（drainDeepLinkLaunches）——W-10 S2
+ *    遗留项（队列/消费循环留 main 至 S9）在此闭合；装配点 = installIpcHandlers
+ *    ② I 组段（wiredCtx 依赖束就绪后），见「OS 深链启动队列 + 外链打开预算器」段。
+ *  - 外链打开统一入口（openExternally 迁入）：URL 规范化 + 10s/8 次预算 + 30s
+ *    冷却（原 main.ts 窗口 glue 的模块级函数整体迁入——glue 改经 core 导出 +
+ *    装配期快照的 edges.openExternal 宿主叶）。
  *
  * 中文说明：自 main.ts 机械搬运的 Electron-free 业务核心（零缝阶段，行为零
  * 变化）；W-10 S1 起 IPC 注册点与 A 组 info+settings 处理器迁入本文件
@@ -152,11 +171,17 @@
  * 搜索 5 注册体（LOCAL_PLUGIN_LIST / NPM_SEARCH / LOCAL_PLUGIN_ADD_FILE /
  * LOCAL_PLUGIN_ADD / LOCAL_PLUGIN_REMOVE——编排纯模块直接 import，本地安装
  * 执行叶 runLocalPluginMutation 经 ctx，确认/无窗预检/pick 经 S6 edges 宿主腿；
- * main 侧 confirmPluginAction 闭包随本批删除）。
+ * main 侧 confirmPluginAction 闭包随本批删除）；S9 追加 I 组 open-in + update
+ * 7 注册体（OPEN_IN_APPS / OPEN_IN / UPDATE_STATE / UPDATE_CHECK /
+ * UPDATE_DOWNLOAD / UPDATE_RESTART / OPEN_RELEASE——open-in 面随迁
+ * openInCtx/wiredCtx 宿主依赖束与消费循环装配，update 面经 ctx.updateController
+ * 现实例注入；宿主打开/揭示/错误框叶 openExternal/openPath/showItemInFolder/
+ * showError 在 electron-edges.ts S9 实现），并把深链 OS 启动队列 + 消费循环
+ * 与 openExternally 外链预算器收进本文件（S2 遗留闭合）。
  * HostEdges 其余边沿叶与双 flavor 属后续批。
  */
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, promises as fsp, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { findFreePort } from './free-port.ts';
 import { computeSupported, validatePatch } from './chamber-settings.ts';
@@ -209,8 +234,21 @@ import {
   BoundedVscodeIntentQueue,
   canDeliverRendererDeepLink,
   describeUnknownError,
+  detectVscodeAvailability,
+  parseOpenVscodeIntent,
+  runVscodeLaunch,
 } from './deep-link.ts';
-import type { VscodeLaunchRequest } from './deep-link.ts';
+import type { VscodeLaunchContext, VscodeLaunchRequest } from './deep-link.ts';
+// W-10 S9（open-in 批）：open-in.ts 为 electron-free 纯模块（openInCtx 宿主能力
+// 注入面——stat/openPath/showItemInFolder 等叶由本文件装配侧经 edges 提供）；
+// openReleasePage 自 updater.ts 运行时 import（updater.ts 模块加载零 electron——
+// electron/electron-updater 均经 createRequire 惰性解析，见其文件头注记；本文件
+// 只调用纯 URL 白名单 + 宿主叶路径）。update 面只做**类型** import（UpdateController
+// 结构纯类型，无 electron 依赖——实例本体仍在 main 装配侧构造、经 ctx 注入）。
+import { classifyLocalPath, invokeOpenPath, listOpenInApps, runOpenInLaunch } from './open-in.ts';
+import type { OpenInLaunchContext, OpenInRequest } from './open-in.ts';
+import { openReleasePage } from './updater.ts';
+import type { UpdateController } from './updater.ts';
 import {
   BoundedRateLimiter,
   MAX_PENDING_NOTIFICATION_OPENS,
@@ -218,6 +256,7 @@ import {
   NotificationSourceProofs,
   claimNotificationDetailed,
   decideNotification,
+  isValidNotificationSourceFingerprint,
   releaseNotificationClaim,
   validateNotificationRequest,
 } from './notifications.ts';
@@ -1050,6 +1089,107 @@ export function clearBadgeIntentForQuit(applyNativeClear: () => void): void {
 }
 
 // ---------------------------------------------------------------------------
+// OS 深链启动队列 + 外链打开预算器（W-10 S9 open-in + update 批）。
+//
+// 迁自 main.ts 的模块级业务状态（design 16 §4.2）：pendingIntents（有界 64
+// single-flight OS 启动队列）+ draining 位 + 消费循环装配槽 + enqueueDeepLink
+// （OS 三入口 glue：macOS open-url / Win+Linux second-instance argv / 冷启动
+// argv——装配侧经导出入口调用）与启动尾部 drain 入口（drainDeepLinkLaunches）。
+// W-10 S2 决策（本队列与消费循环留 main 至 S9——原 main.ts 段注释）在此闭合：
+// 消费循环本体（drainPendingIntents 闭包——依赖 wiredCtx/captureVscodeSource，
+// 见 installIpcHandlers ② I 组段）在装配时就绪；装配前到达的深链只入队、装配
+// 后按触发消费（与原 main.ts「drainPendingIntents 在 whenReady 尾部赋值、冷启动
+// 到达的深链只入队、drain 就绪后消费」同语义）。quit 在途门 = quittingLeaf
+// （S2 快照——与原模块级 quitRequested 逐字同语义）。
+//
+// 外链打开统一入口（openExternally，原 main.ts 模块级函数整体迁入）：URL 规范
+// 化 + 10s 窗口 8 次预算 + 超限 30s 冷却（log-and-drop）。宿主打开叶 = 装配期
+// 快照的 edges.openExternal（externalOpenLeaf——B11「URL 白名单判定/预算/冷却/
+// 规范化留 core，edge 只执行 open」）；main.ts 窗口 glue（setWindowOpenHandler /
+// will-navigate / will-redirect 的 handleUntrustedNavigation）与后续边沿共用本
+// 入口。
+// ---------------------------------------------------------------------------
+const pendingIntents = new BoundedVscodeIntentQueue(64);
+let drainingPendingIntents = false;
+/** 消费循环装配槽：installIpcHandlers ② I 组段在 wiredCtx 宿主依赖束就绪后
+ *  装配（enqueueDeepLink 触发 + drainDeepLinkLaunches 显式 drain）；null = 未
+ *  装配（只入队不消费——装配前无窗口/无消费循环，与搬迁前同）。 */
+let drainPendingIntents: (() => void) | null = null;
+
+/** 深链入队（design 16 §4.2；原 main.ts enqueueDeepLink 整体迁入——OS 三入口
+ *  glue 经本导出入口调用）：quit 在途 ignore（不启动 VS Code）；归一化目标
+ *  single-flight；解析失败 loud。 */
+export function enqueueDeepLink(rawUrl: string): void {
+  if (quittingLeaf()) return;
+  const parsed = parseOpenVscodeIntent(rawUrl);
+  if (!parsed.ok) {
+    console.error(`[dsh-chamber] 深链解析失败：${parsed.error}`);
+    return;
+  }
+  const queued = pendingIntents.enqueue(parsed.intent);
+  if (!queued.accepted) {
+    if (queued.reason === 'saturated') {
+      console.warn(`[dsh-chamber] 深链启动队列容量全部被在途 intent 占用，拒绝新 intent：${parsed.intent.instanceId}`);
+    }
+    return;
+  }
+  if (queued.dropped !== null) {
+    console.warn(`[dsh-chamber] 深链启动队列已满，丢弃最旧 intent：${queued.dropped.instanceId}`);
+  }
+  drainPendingIntents?.();
+}
+
+/** 启动尾部的深链 drain 入口（main.ts 原「drainPendingIntents()」调用点——startup
+ *  完成、装配就绪后顺序消费冷启动到达的 intent；装配前调用为 no-op）。 */
+export function drainDeepLinkLaunches(): void {
+  drainPendingIntents?.();
+}
+
+// 外链打开速率限制（防脚本 spam 反复弹浏览器标签；用户手动点击远低于该
+// 阈值）：10s 窗口内最多 8 次，超限进入 30s 冷却（log-and-drop）。常量与状态
+// 自 main.ts 原样随迁（预算器只此一份——窗口 glue 与后续已迁批共用同一语义）。
+const OPEN_EXTERNAL_BUDGET = 8;
+const OPEN_EXTERNAL_WINDOW_MS = 10_000;
+const OPEN_EXTERNAL_COOLDOWN_MS = 30_000;
+const externalOpenTimes: number[] = [];
+let externalOpenCooldownUntil = 0;
+/** 宿主打开叶（装配期快照 deps.edges.openExternal——installIpcHandlers 内赋值；
+ *  null = 未装配，openExternally 静默跳过——装配前无窗口 glue 调用点，与搬迁前
+ *  「shell 恒可用」的差异仅存在于不可达路径）。 */
+let externalOpenLeaf: ((url: string) => Promise<void>) | null = null;
+
+/**
+ * 打开外链的统一入口（原 main.ts openExternally 整体迁入——宿主叶改装配期快照
+ * 的 externalOpenLeaf；setWindowOpenHandler / handleUntrustedNavigation 共用）：
+ * 以解析后的规范化 href 交给宿主打开叶（避免 raw 字符串里 Chromium 已剥离而 OS
+ * 层未剥离的空白/换行差异），失败 loud 记录，绝不抛出；超速率预算时静默丢弃并
+ * 冷却。
+ */
+export function openExternally(url: string): void {
+  let normalized: string;
+  try {
+    normalized = new URL(url).href;
+  } catch {
+    return;
+  }
+  const now = Date.now();
+  if (now < externalOpenCooldownUntil) return;
+  const recent = externalOpenTimes.filter((t) => now - t < OPEN_EXTERNAL_WINDOW_MS);
+  if (recent.length >= OPEN_EXTERNAL_BUDGET) {
+    externalOpenCooldownUntil = now + OPEN_EXTERNAL_COOLDOWN_MS;
+    console.warn('[dsh-chamber] 外部链接打开过于频繁，30s 内暂停（疑似脚本 spam）');
+    return;
+  }
+  externalOpenTimes.length = 0;
+  externalOpenTimes.push(...recent, now);
+  const leaf = externalOpenLeaf;
+  if (leaf === null) return;
+  void leaf(normalized).catch((error) => {
+    console.error('[dsh-chamber] 打开外部链接失败：', describeUnknownError(error));
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Shell IPC registration (design 25 §4.1 seam; W-10 S1 info+settings +
 // S2 notify/badge/ready + S3 registry/credentials + S4 ssh-connection-state
 // batch).
@@ -1322,11 +1462,22 @@ export interface ShellAssemblyCtx {
     owner: string,
     mutate: (dshWorkspace: string) => Promise<T>,
   ): Promise<T | { ok: false; error: string }>
+  // —— W-10 S9（open-in + update 批）新增字段：I 组 7 注册体的装配依赖。open-in
+  // 面无新字段——wiredCtx/openInCtx 的宿主能力全部来自既有面（hostFacts.platform
+  // / settingsIO.current()（vscodeOpenInNewWindow 惰性读）/ transportManager
+  // （sm——lookupInstance 与来源捕获的实查）/ edges 打开叶）与纯模块 import
+  // （open-in.ts / deep-link.ts，见 I 组段注释）；update 面新增本字段——updater
+  // 现实例（main 装配侧构造的 createUpdateController 包装：electron-updater 与
+  // autoInstallOnAppQuit 生命周期、设计 11 的静默检查/下载/quitAndInstall 编排
+  // 与设计 14 D2 的退出豁免状态读取（main 模块级 updateController ref）均归装配
+  // 侧）。I 组 UPDATE_* 注册体与状态 push 订阅共用同一实例；装配侧在
+  // installIpcHandlers 之后调 updater.start()（保持「先订阅后 start」原序）。 */
+  updateController: UpdateController
 }
 
 /** 装配 shell IPC 面（W-10 S1 A 组 + S2 B 组 + S3 C 组 + S4 D 组 + S5 E 组 +
- *  S6 F 组 + S7 G 组 + S8 H 组注册体与随迁辅助；各组注册顺序 = 原 main.ts
- *  顺序）。edges
+ *  S6 F 组 + S7 G 组 + S8 H 组 + S9 I 组注册体与随迁辅助；各组注册顺序 = 原
+ *  main.ts 顺序）。edges
  *  参数以 Pick 收窄到本批实际调用的成员（createElectronEdges 返回同形超集）；
  *  后续批实现新成员时同步扩宽两侧。
  *  调用点纪律：whenReady 内、createMainWindow 之前（窗口加载前注册完毕）——
@@ -1348,6 +1499,10 @@ export function installIpcHandlers(deps: {
     | 'webViewContentAlive'
     | 'showMessage'
     | 'pickPluginSource'
+    | 'openExternal'
+    | 'openPath'
+    | 'showItemInFolder'
+    | 'showError'
   >
   ctx: ShellAssemblyCtx
 }): void {
@@ -1361,6 +1516,10 @@ export function installIpcHandlers(deps: {
     webViewContentAlive: deps.edges.webViewContentAlive,
   };
   quittingLeaf = deps.ctx.isQuitting;
+  // —— W-10 S9：外链打开宿主叶快照（openExternally 预算器经本快照调用——B11
+  // 「规范化/预算/冷却留 core，edge 只执行 open」；装配先于任何窗口 glue，快照
+  // 后导出入口 openExternally 可用，同 deliveryEdges 单装配不变式）。——
+  externalOpenLeaf = deps.edges.openExternal;
   const {
     hostFacts,
     settingsIO,
@@ -1401,6 +1560,11 @@ export function installIpcHandlers(deps: {
     // writer fence 租约/启动门/workspace 解析归装配侧；H 组本地插件注册体经 ctx
     // 调用同一执行路径，文本以原名逐字保留，语义不分叉）。
     runLocalPluginMutation,
+    // W-10 S9 另增 I 组字段：updateController → updater（与 ctx 字段名的映射同
+    // transportManager → sm 先例——update 注册体与状态 push 订阅文本以原名
+    // 逐字保留 updater.xxx 调用；实例本体在 main 装配侧构造，start() 由装配侧在
+    // installIpcHandlers 之后调用（保持「先订阅后 start」原序））。
+    updateController: updater,
   } = deps.ctx
 
   // ① edges 回灌订阅段（S2 转实）：OS 唤醒与主窗口 'show' 的事件源语义自 main.ts
@@ -2896,6 +3060,251 @@ export function installIpcHandlers(deps: {
       return result.ok ? { ok: true } : { ok: false, error: result.error ?? 'local remove failed' };
     });
   });
+
+  // —— I 组（S9 批；W-10 S9 施工图第 1 项）——
+  // open-in（OPEN_IN_APPS / OPEN_IN）与 update（UPDATE_STATE / UPDATE_CHECK /
+  // UPDATE_DOWNLOAD / UPDATE_RESTART / OPEN_RELEASE）7 注册体按原 main.ts 顺序
+  // 紧接 H 组追加（注册体自 main.ts 逐字迁入，trustedIpc 围栏由装配侧注入
+  // registrar 包装）。随迁内容：
+  //  - openInCtx/wiredCtx 共享宿主依赖束（open-in 注册表 + OS 深链 drain 共用）：
+  //    lookupInstance 经 ctx transportManager（sm——与搬迁前同一现实例）、
+  //    vscodeAvailable 经 detectVscodeAvailability(hostFacts.platform)（同一平台
+  //    事实）、vscodeOpenInNewWindow 经 settingsIO.current()（chamber settings
+  //    内存 holder 的 core 读面——搬迁前 chamberSettings 直读同源）、宿主打开/
+  //    揭示叶 = deps.edges 的 openExternal / openPath / showItemInFolder
+  //    （electron-edges.ts S9 实现——shell-core 零 electron）；stat 叶经 node:fs
+  //    fsp（与搬迁前同一 fsp.stat 现实例）。编排纯模块直接 import（open-in.ts：
+  //    listOpenInApps / runOpenInLaunch / classifyLocalPath / invokeOpenPath；
+  //    deep-link.ts：runVscodeLaunch）。来源指纹 owns/matches 复查与来源代际捕获
+  //    （captureVscodeSource）随迁 core（S2 遗留注记「S9 消费循环迁 core 时随迁
+  //    或参数化」闭合——经 ctx transportManager 参数化）。
+  //  - update 面：updater 现实例（main 装配侧构造的 createUpdateController
+  //    包装）经 ctx.updateController 注入——注册体文本以原名逐字保留
+  //    updater.xxx 调用；状态 push 订阅随迁（committed-push 包装 +
+  //    edges.rendererPush——主窗身份折算：原「const updateWindow = mainWindow /
+  //    updateWindow !== null」快照与「mainWindow !== updateWindow ||
+  //    updateWindow.isDestroyed()」复查折算为 mainWindowAlive 门 + rendererPush
+  //    对当前主窗求值（S2 同款单窗接缝折算：push 与 send 之间窗口被换 → 换窗推
+  //    送；新窗未装监听的事件丢失由 renderer 重拉兜底——与搬迁前「throw → 不
+  //    push」同向）；无存活主窗不 push 不 warn，与搬迁前 null → 静默跳过同语义）。
+  //    updater.start() 仍由装配侧调用（installIpcHandlers 之后——保持「先订阅
+  //    后 start」原序，见 main.ts 装配点）。
+  //  - OS 深链启动消费循环（drainPendingIntents 闭包）随迁装配（pendingIntents
+  //    队列在模块级 S9 段；本段在 wiredCtx 依赖束就绪后装配槽位——W-10 S2
+  //    遗留项闭合；失败 loud = edges.showError（dialog.showErrorBox 叶，
+  //    electron-edges.ts S9 实现）+ 日志，quit 门 = quittingLeaf）。
+  //  - OPEN_RELEASE 的宿主打开叶 = deps.edges.openExternal（updater.ts
+  //    openReleasePage 的 isAllowedReleaseUrl 白名单纪律在 updater.ts 纯模块内，
+  //    随原模块；leaf 只执行打开——行为与搬迁前直包 shell.openExternal 一致）。
+
+  /** Hold a successful launch intent until the current renderer explicitly says
+   *  its onIntent listener is installed. Used by both OS deep links and open-in.
+   *  W-10 S9：自 main.ts 随迁（S2 注记「S9 消费循环迁 core 时随迁或参数化」闭
+   *  合）——registry 查找经 ctx transportManager（sm，与搬迁前模块级
+   *  transportManager 同一现实例；装配后恒非 null，同 D 组注册体）；来源代际捕
+   *  获经 captureNotificationSource 代理。 */
+  function captureVscodeSource(instanceId: string): NotificationSourceToken | null {
+    if (instanceId === 'local') return captureNotificationSource('local');
+    const instance = sm.listInstances().find(candidate => candidate.id === instanceId);
+    return instance === undefined
+      ? null
+      : captureNotificationSource(`${instance.kind}-${instance.id}`);
+  }
+
+  // VS Code 深链（design 16 §4/§5）+ open-in 注册表（open-in.ts）的共享宿主
+  // 依赖束：wiredCtx 同时供 OS 深链 drain（runVscodeLaunch）与 open-in 执行
+  // 管线复用。lookupInstance 查 ctx transportManager 实查（与搬迁前 main.ts
+  // 装配注入同一 sm 现实例）；vscodeAvailable 每次实探（getter 惰性、无缓存
+  // 陈旧）；openVscodeUrl 白名单判定留 core、宿主打开叶 = deps.edges.openExternal
+  // （原 shell.openExternal——catch → loud error，返回 {error} 由调用方处理）。
+  const wiredCtx: VscodeLaunchContext = {
+    lookupInstance: (id) => {
+      const instance = sm.listInstances().find(entry => entry.id === id);
+      if (instance === undefined) return null;
+      // v2 (design 17 §2): the vscode-remote URL is an ssh-TRANSPORT
+      // feature — expose the transport, not the target kind.
+      return { id: instance.id, host: instance.host, user: instance.user, sshPort: instance.sshPort, transport: instance.transport };
+    },
+    vscodeAvailable: () => detectVscodeAvailability(hostFacts.platform).available,
+    // Chamber setting `vscodeOpenInNewWindow`（design 16 §3.3）：每次拉起惰性
+    // 读取（与 vscodeAvailable 同款 getter），设置变更即时作用于下一次拉起；
+    // 由 open-in 按钮与 OS 深链两条入口共享（同一 wiredCtx）。
+    vscodeOpenInNewWindow: () => settingsIO.current().vscodeOpenInNewWindow,
+    openVscodeUrl: async (url) => {
+      // Injection-point scheme re-verification (security-review P2-1, mirror
+      // of isAllowedReleaseUrl's discipline): only our constructed targets
+      // may ever reach the host open leaf — the ssh-remote URL for remote
+      // sources and the file URL for the local source (user decision
+      // 2026-08: local workspaces open as local folders).
+      if (typeof url !== 'string' || !(url.startsWith('vscode://vscode-remote/') || url.startsWith('vscode://file/'))) {
+        const message = 'refused to open a non-vscode URL';
+        console.error(`[dsh-chamber] ${message}:`, url);
+        return { ok: false, error: message };
+      }
+      try {
+        await deps.edges.openExternal(url);
+        return { ok: true };
+      } catch (error) {
+        const message = describeUnknownError(error);
+        console.error('[dsh-chamber] 打开 vscode URL 失败：', error);
+        return { ok: false, error: `open vscode url failed: ${message}` };
+      }
+    },
+  };
+
+  // open-in 注册表（open-in.ts）：apps() 能力协商 + 统一执行管线。wiredCtx
+  // 复用 registry/availability/openVscodeUrl 依赖，补宿主文件系统面
+  // （stat/openPath/showItemInFolder——stat 经 node:fs fsp、open/show 经
+  // deps.edges 宿主叶；均与搬迁前 main.ts 的主进程包装同一语义）。原 design 16
+  // 的两个 vscode IPC（vscode-availability / open-vscode）随旧插件删除而移除——
+  // 渲染层唯一入口收敛为 open-in 两个通道（复核 2026-08）。
+  const openInCtx: OpenInLaunchContext = {
+    platform: hostFacts.platform,
+    lookupInstance: wiredCtx.lookupInstance,
+    vscodeAvailable: wiredCtx.vscodeAvailable,
+    vscodeOpenInNewWindow: wiredCtx.vscodeOpenInNewWindow,
+    openVscodeUrl: wiredCtx.openVscodeUrl,
+    stat: p => classifyLocalPath(value => fsp.stat(value), p),
+    openPath: async (p) => {
+      // shell.openPath 部分失败模式（win32/linux）存在 reject 路径——与
+      // openVscodeUrl 封装同款纪律：reject 归一为错误串（loud），绝不落
+      // transport rejection。invokeOpenPath 只返回原始宿主错误，公共
+      // "open path failed" 前缀由 provider 添加一次。
+      return invokeOpenPath(value => deps.edges.openPath(value), p)
+    },
+    showItemInFolder: (p) => deps.edges.showItemInFolder(p),
+  }
+  deps.ipc.handle(IPC_CHANNELS.OPEN_IN_APPS, () => ({
+    apps: listOpenInApps(openInCtx, (appId, error) => {
+      console.error(`[dsh-chamber] open-in provider ${appId} 可用性探测失败：${error}`)
+    }),
+  }))
+  deps.ipc.handle(IPC_CHANNELS.OPEN_IN, async (payload: unknown) => {
+    // 载荷形状守卫（复核 P2）：不可信渲染载荷直接解构会以 TypeError 落到
+    // transport rejection——统一为 loud {error}，与其余失败面一致。
+    const req = payload as Partial<OpenInRequest> | null
+    if (req === null || typeof req !== 'object' || typeof req.appId !== 'string' || typeof req.instanceId !== 'string' || typeof req.path !== 'string' || typeof req.sourceFingerprint !== 'string') {
+      return { ok: false, error: 'invalid open-in payload' }
+    }
+    const sourceInstance = req.instanceId === 'local'
+      ? undefined
+      : sm.listInstances().find(candidate => candidate.id === req.instanceId);
+    const sourceId = req.instanceId === 'local'
+      ? 'local'
+      : sourceInstance === undefined ? '' : `${sourceInstance.kind}-${sourceInstance.id}`;
+    if (!isValidNotificationSourceFingerprint(sourceId, req.sourceFingerprint)) {
+      return { ok: false, error: 'invalid source fingerprint' };
+    }
+    if (!matchesNotificationSource(sourceId, req.sourceFingerprint)) {
+      return { ok: false, error: 'source changed before open-in request was accepted' };
+    }
+    const sourceToken = captureVscodeSource(req.instanceId);
+    if (sourceToken === null) return { ok: false, error: 'source not found' };
+    const ownsSource = () => ownsNotificationSource(sourceToken);
+    const scopedOpenInCtx: OpenInLaunchContext = {
+      ...openInCtx,
+      lookupInstance: id => ownsSource() ? openInCtx.lookupInstance(id) : null,
+      openVscodeUrl: async url => {
+        if (!ownsSource()) return { ok: false, error: 'source changed before VS Code launch' };
+        const opened = await openInCtx.openVscodeUrl(url);
+        return ownsSource() ? opened : { ok: false, error: 'source changed while VS Code launch was in progress' };
+      },
+    };
+    const result = await runOpenInLaunch({ appId: req.appId, instanceId: req.instanceId, path: req.path }, scopedOpenInCtx)
+    if (!ownsSource()) return { ok: false, error: 'source changed while open-in was in progress' };
+    // vscode 启动成功后将 intent 放入 renderer hold/replay 队列（与 OS
+    // 深链路径对齐；W-10 S2——队列/入队在 shell-core，enqueueRendererDeepLinkIntent
+    // 为 core 导出）；finder 无对应激活语义。窗口未就绪也不丢，renderer
+    // 安装监听并 ready 后再推送；该 UI 联动从不阻塞 vscode 启动。
+    if (result.ok && req.appId === 'vscode') {
+      enqueueRendererDeepLinkIntent({ instanceId: req.instanceId, path: req.path }, sourceToken);
+    }
+    return result;
+  })
+
+  // Update controller (design 11): the state projection is non-secret only
+  // (versions / channel / release URL / short error text) and every failure is
+  // silent (main-process log), never blocking startup — the settings section
+  // renders the honest state. W-10 S9：控制器现实例仍在 main 装配侧构造
+  // （createUpdateController——electron-updater 生命周期、autoDownload=false /
+  // autoInstallOnAppQuit 语义、quitAndInstall 的 quit 腿均归装配侧实例），经
+  // ctx.updateController 注入；本段注册状态 push 订阅与 4 个 UPDATE 注册体 +
+  // OPEN_RELEASE（按原 main.ts 顺序）。
+  updater.subscribe((updateState) => {
+    // 状态 push（UPDATE_STATE_CHANGED send 源；主窗身份折算见组注释——S2 同款
+    // committed-push 包装 + rendererPush 叶）：无存活主窗（原 updateWindow ===
+    // null）静默跳过；push 失败 loud（等待 renderer 重拉兜底）。
+    if (!deps.edges.mainWindowAlive()) return;
+    const pushed = attemptCommittedRegistryPush(() => {
+      if (!deps.edges.rendererPush(IPC_CHANNELS.UPDATE_STATE_CHANGED, updateState)) {
+        throw new Error('updater renderer push failed');
+      }
+    });
+    if (!pushed.sent) {
+      try { console.warn(`[dsh-chamber] updater 状态 push 失败（等待 renderer 重拉）：${pushed.error}`); } catch { /* callback boundary */ }
+    }
+  });
+  deps.ipc.handle(IPC_CHANNELS.UPDATE_STATE, () => updater.state());
+  deps.ipc.handle(IPC_CHANNELS.UPDATE_CHECK, () => updater.checkNow());
+  deps.ipc.handle(IPC_CHANNELS.UPDATE_DOWNLOAD, () => updater.download());
+  // The settings update section's「重启并安装」button (2026-12 user
+  // decision): a completed download restarts the app into the install
+  // (quitAndInstall) — the user controls when the update applies instead of
+  // relying on the quit-install leg alone. Controller-side gates mirror the
+  // rendered state (phase downloaded + no install block) — not just UI
+  // hiding; quitAndInstall then quits through before-quit (the
+  // update-downloaded exemption) and will-quit (cleanup first).
+  deps.ipc.handle(IPC_CHANNELS.UPDATE_RESTART, () => updater.restartAndInstall());
+  // The settings update section's「前往下载页」link: popups are denied and
+  // navigation is pinned to the control-plane origin, so opening a release
+  // page must go through the main process. Strict allowlist — parsed, not
+  // prefix-string matched: only this repo's GitHub pages can ever be opened
+  // (never an arbitrary URL, subdomain, userinfo or path-root trick).
+  // W-10 S9：宿主打开叶 = deps.edges.openExternal（原直包 shell.openExternal）。
+  deps.ipc.handle(IPC_CHANNELS.OPEN_RELEASE, (payload: unknown) => {
+    const { url } = payload as { url: unknown };
+    return openReleasePage(url, value => deps.edges.openExternal(value));
+  });
+
+  // OS 深链消费循环装配（design 16 §4.2；模块级 pendingIntents 队列见 S9 段）：
+  // startup 完成（装配就绪、transportManager 装载）后顺序消费有界队列。VS Code
+  // 启动不等待 renderer；成功 intent 进入独立的 renderer hold/replay 队列（S2
+  // 已迁 core——enqueueRendererDeepLinkIntent + ownsNotificationSource），直到
+  // onIntent + ready 握手完成。失败 loud（edges.showError 错误框 + 日志）。quit
+  // 在途的新深链已在 enqueueDeepLink 被 ignore（quittingLeaf）。装配槽 = 上方
+  // 模块级 drainPendingIntents——装配后 OS 入口（enqueueDeepLink）即触发，启动
+  // 尾部由装配侧经导出入口 drainDeepLinkLaunches 显式消费一次（冷启动入队）。
+  drainPendingIntents = () => {
+    if (drainingPendingIntents || quittingLeaf()) return;
+    drainingPendingIntents = true;
+    void (async () => {
+      for (;;) {
+        if (quittingLeaf()) return;
+        const intent = pendingIntents.shift();
+        if (intent === null) return;
+        try {
+          const sourceToken = captureVscodeSource(intent.instanceId);
+          const result = await runVscodeLaunch(intent, wiredCtx);
+          if (result.ok && sourceToken !== null && ownsNotificationSource(sourceToken)) {
+            enqueueRendererDeepLinkIntent(intent, sourceToken);
+          } else {
+            const error = result.ok ? 'instance changed while VS Code launch was in progress' : result.error;
+            console.error(`[dsh-chamber] 深链执行失败：${error}`);
+            deps.edges.showError('打开 VS Code 失败', error);
+          }
+        } catch (error) {
+          // runVscodeLaunch is exception-safe; retain a last-resort boundary
+          // for Electron dialog/send regressions without leaking the key.
+          console.error('[dsh-chamber] 深链执行异常：', describeUnknownError(error));
+        } finally {
+          pendingIntents.complete(intent);
+        }
+      }
+    })().finally(() => {
+      drainingPendingIntents = false;
+      if (!quittingLeaf() && pendingIntents.pendingCount > 0) drainPendingIntents?.();
+    });
+  };
 
   // ③ 自举（W-10 后续批占位：控制面 ready 后的启动/恢复 push、余下 drain 挂点
   //    迁入点——见 macos-swift-v1.md §四批 2）。

@@ -124,15 +124,19 @@ test('committed settings, registry and held-resume pushes use the non-throwing s
   // rendererPush，attemptCommittedRegistryPush 非-throw 包装随迁）。
   // W-10 S2: held-resume（pushHeldSystemResume + lastResume 补发）随渲染器投递
   // 状态机迁入 shell-core（SYSTEM_RESUME send 叶同改 rendererPush）——两锚的
-  // 读取源都指向 shell-core.ts，断言意图原样保留。其余推送锚（instances /
-  // status / update）仍在 main.ts。
+  // 读取源都指向 shell-core.ts，断言意图原样保留。
+  // W-10 S9: updater 状态 push（updater.subscribe + UPDATE_STATE_CHANGED send
+  // 源）随 I 组 update 注册体迁入 shell-core（committed-push 包装同款；原
+  // main.ts 的 updateWindow 主窗身份复查折算为主窗门 + rendererPush 求值，见
+  // installIpcHandlers I 组段注释）——该锚读取源随之指向 shell-core.ts。
+  // 其余推送锚（instances / status）仍在 main.ts。
   const core = readFileSync(new URL('./shell-core.ts', import.meta.url), 'utf8')
   const main = readFileSync(new URL('./main.ts', import.meta.url), 'utf8')
   assert.match(core, /function pushSettingsChanged\(\): void \{[\s\S]*?attemptCommittedRegistryPush\(\(\) => \{/)
   assert.match(core, /function pushHeldSystemResume[\s\S]*?attemptCommittedRegistryPush\(\(\) => \{/)
   assert.match(main, /IPC_CHANNELS\.SSH_INSTANCES_CHANGED[\s\S]*?return projectedSaved;/)
   assert.match(main, /const statusWindow = mainWindow;[\s\S]*?attemptCommittedRegistryPush\(\(\) => \{[\s\S]*?IPC_CHANNELS\.SSH_STATUS_CHANGED/)
-  assert.match(main, /const updateWindow = mainWindow;[\s\S]*?attemptCommittedRegistryPush\(\(\) => \{[\s\S]*?IPC_CHANNELS\.UPDATE_STATE_CHANGED/)
+  assert.match(core, /updater\.subscribe\(\(updateState\) => \{[\s\S]*?attemptCommittedRegistryPush\(\(\) => \{[\s\S]*?IPC_CHANNELS\.UPDATE_STATE_CHANGED/)
 })
 
 test('renderer ACK deliveries project and preload-validates the captured lifecycle proof', () => {
