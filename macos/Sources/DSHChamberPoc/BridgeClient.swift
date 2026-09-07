@@ -260,11 +260,25 @@ public final class BridgeClient {
     ///   - showMessage → ok:true result:0（= 消息框第 0 号按钮）；
     ///   - 其余一律 {ok:false, error:"swift-edge-unimplemented:<method>"}
     ///     （pickPluginSource 等——loud 拒绝，绝不静默假装成功，也不挂起）。
+    /// 宿主腿（W-19/20）：非 nil 时 defaultEdgeResponse 先问 legs；legs 报
+    /// unimplemented/ui-unavailable 前缀错误则回落本表（POC 无宿主不挂起）。
+    public var edgeHostLegs: SwiftEdgeHostLegs?
+
     /// 返回 (result, error)：error == nil → ok:true 应答，否则 ok:false。
     /// 自定义 onEdgeRequest 对未处理方法的回落入口：取本方法 outcome 后交给
     /// reply（应答职责仍在自定义侧；恰好一次由 sendEdgeReply 守卫）。
     public func defaultEdgeResponse(method: String, payload: AnyCodable?)
         -> (result: AnyCodable?, error: String?) {
+        if let legs = edgeHostLegs {
+            let outcome = legs.respond(method: method, payload: payload)
+            let error = outcome.error ?? ""
+            let fallback = error.hasPrefix(SwiftEdgeHostLegs.unimplementedPrefix)
+                || error.hasPrefix(SwiftEdgeHostLegs.uiUnavailablePrefix)
+            if !fallback {
+                return outcome
+            }
+            // legs 未接管 → 回落 v1 默认表（不挂起语义）。
+        }
         switch method {
         case "trayAvailable", "notificationSupported", "badgeCountApiAvailable",
              "mainWindowAlive", "webViewContentAlive":
