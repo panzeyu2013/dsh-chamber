@@ -13,6 +13,13 @@
 //  pushHostFacts 以 __host.hostFacts 推送 sidecar（node-edges.ts 同步门
 //  缓存 focused/mainWindowAlive/webViewLoading/webViewContentAlive 刷新，
 //  见本文件 hostFacts 段注释），使通知裁决等同步门与 Electron 侧行为一致。
+//  notify 消费路由（S-D）：sidecar 出站 notify 帧（node-edges sendNotify 族
+//  ——rendererPush/setBadge/showItemInFolder/retireNotifications）经
+//  BridgeClient.onNotify 到本控制器的 notify 路由：rendererPush 解包进页面
+//  emit（Electron webContents.send 同语义），setBadge/showItemInFolder 走
+//  SwiftEdgeHostLegs 原生腿（守卫同 edge 面、失败 loud），retireNotifications
+//  如实 no-op（无登记表），notifyClicked/未知事件 loud 不处理——路由决策表
+//  见文件底部 decodeNotify/NotifyRoute（纯逻辑，单测直测）。
 import AppKit
 import WebKit
 
@@ -158,6 +165,19 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         bridge.onEvent = { [weak self] event, payload in
             self?.handleEvent(event: event, payload: payload)
         }
+        // S-D：sidecar 出站 **notify 帧**（{"notify":event,"payload":…}——
+        // node-edges 的 sendNotify 族：rendererPush/setBadge/
+        // showItemInFolder/retireNotifications）→ 本控制器 notify 路由消费
+        // （与 onEvent 的 event 帧族是两条独立帧族，B 桥线协议两侧都发——
+        // 本文件「事件下行接线」注释的 onEvent 只覆盖 event 帧族；notify 帧
+        // 族在 BridgeClient.dispatchOutboundFrame 走 onNotify，此前无人接线
+        // → 全部 loud 丢弃，rendererPush 等从未进页面。S-D 在此接线：
+        // routeNotify 解码 → rendererPush 解包进页面 emit / 原生腿分流）。
+        // 线程契约与 onEvent 相同：管道读取线程回调，消费在 routeNotify 内
+        // 收敛主线程。
+        bridge.onNotify = { [weak self] event, payload in
+            self?.routeNotify(event: event, payload: payload)
+        }
 
         // WebView
         let webView = WKWebView(frame: NSRect(origin: .zero, size: Self.windowSize),
@@ -300,27 +320,90 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         }
     }
 
-    /// sidecar 事件 → 页面 __dshChamberEmit(eventJSON, payloadJSON)。
+    /// sidecar 事件（event 帧族）→ 页面 __dshChamberEmit。
     /// 事件源两条路径殊途同归：① 本控制器把 BridgeClient.onEvent 直接喂进来
     /// （W-04「乙」，主线）；② handler.emit 在 evaluateJavaScript 未赋入时的
-    /// 构造 onEvent 降级（POC 中 evaluateJavaScript 恒已赋入，实际不触发）。
+    /// 构造 onEvent 降级（POC 中 evaluateJavaScript 恒已赋入，实际不触发）；
+    /// ③（S-D）notify 路由的 rendererPush 解包后同样落 emitToPage——event 帧
+    /// 族与 notify 帧族两路殊途同归到同一页面 emit 面（双写纪律不变：同一
+    /// 事件只经一条路径发一次）。事件可能来自 B 桥后台队列：本方法经
+    /// Task { @MainActor } 收敛到主线程再 emit。
     private func handleEvent(event: String, payload: AnyCodable?) {
         print("[poc] 事件 \(event)")
         Task { @MainActor in
-            guard let eventJSON = Self.jsonLiteral(event) else { return }
-            let payloadJSON: String
-            if let payload = payload {
-                payloadJSON = Self.jsonLiteral(payload.jsonObject) ?? "null"
-            } else {
-                payloadJSON = "null"
-            }
-            evaluateJS("__dshChamberEmit(\(eventJSON), \(payloadJSON))")
+            emitToPage(event: event, payload: payload)
         }
+    }
+
+    /// 页面 emit 直写（调用方必须已在主线程）：__dshChamberEmit(eventJSON,
+    /// payloadJSON)。序列化失败 → loud 打印不注入（绝不注入残缺 JS）。
+    private func emitToPage(event: String, payload: AnyCodable?) {
+        guard let eventJSON = Self.jsonLiteral(event) else {
+            print("[poc] 页面 emit 序列化失败：event 不可 JSON 化（丢弃）")
+            return
+        }
+        let payloadJSON: String
+        if let payload = payload {
+            payloadJSON = Self.jsonLiteral(payload.jsonObject) ?? "null"
+        } else {
+            payloadJSON = "null"
+        }
+        evaluateJS("__dshChamberEmit(\(eventJSON), \(payloadJSON))")
     }
 
     /// 主线程执行 JS（所有调用点都已收敛到主线程）
     private func evaluateJS(_ script: String) {
         webView.evaluateJavaScript(script, completionHandler: nil)
+    }
+
+    // MARK: - notify 消费路由（S-D）
+
+    /// sidecar notify → 消费（路由表与解码见文件底部 decodeNotify/
+    /// NotifyRoute——纯逻辑，单测直测；本方法只做执行与 loud）。
+    /// 解码在到达线程（管道读取线程）就地完成（纯函数），消费按决策收敛
+    /// 主线程（Task { @MainActor }，与 handleEvent 同款纪律——宿主腿触碰
+    /// NSApp/NSWorkspace/dockTile 必须主线程）。
+    private func routeNotify(event: String, payload: AnyCodable?) {
+        switch Self.decodeNotify(event: event, payload: payload) {
+        case .emitToPage(let channel, let payload):
+            // rendererPush 解包：channel/payload 原样进页面（与 electron-edges
+            // rendererPush = webContents.send(channel, payload) 同语义）。
+            print("[poc] notify rendererPush → 页面 emit \(channel)")
+            Task { @MainActor in
+                emitToPage(event: channel, payload: payload)
+            }
+        case .hostLeg(let method, let payload):
+            Task { @MainActor in
+                guard let legs = bridge.edgeHostLegs else {
+                    print("[poc] notify \(method) 消费失败：edgeHostLegs 未接线（loud）")
+                    return
+                }
+                // 与 edge 面同一执行体（respond 内部 performUI + 窗口守卫）：
+                // canShowUI/窗口守卫语义一致，无窗/headless → 诚实降级。
+                let outcome = legs.respond(method: method, payload: payload)
+                if let error = outcome.error {
+                    // notify 无回执通道（sidecar fire-and-forget）——失败只能
+                    // 本侧 loud（Electron 侧同步 setBadge 失败同样不回执
+                    // renderer，见 SwiftEdgeHostLegs.setBadge 注释的 parity 结论）。
+                    print("[poc] notify \(method) 消费失败（loud）：\(error)")
+                }
+            }
+        case .retireNoop(let count):
+            // Electron 退役语义 = 关闭登记中的活跃原生通知；Swift 侧撤销已
+            // 展示通知 = UNUserNotificationCenter.removeDeliveredNotifications
+            // (identifiers)，需 sourceId→identifier 登记表——POC 未跟踪已展示
+            // 通知（edge 调度以 chamber-edge-<notificationId> 命名、无 sourceId
+            // 映射），如实 no-op 并 loud（未来登记表落地后在此改接 remove）。
+            print("[poc] notify retireNotifications：无 sourceId→identifier 登记表，no-op（\(count) 个 sourceId）")
+        case .unexpectedClick:
+            // notifyClicked 的正常路径是 __host.notifyClicked 入站请求
+            // （AppDelegate userNotificationCenter click 回灌），不应经 notify
+            // 到达——loud 打印不处理。
+            print("[poc] notify notifyClicked 不经 notify 到达（正常 = __host.notifyClicked 请求路径）——忽略（loud）")
+        case .malformed(let reason):
+            // 未知事件/形状非法：loud 丢弃，绝不伪造成功/猜测。
+            print("[poc] notify 拒绝消费（loud）：\(reason)")
+        }
     }
 
     // MARK: - 工具
@@ -499,6 +582,89 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
             NSWorkspace.shared.open(url, configuration: NSWorkspace.OpenConfiguration()) { _, _ in }
         } else {
             NSWorkspace.shared.open(url)
+        }
+    }
+}
+
+// MARK: - notify 路由解码（S-D：sidecar 出站 notify 的消费决策，纯值纯逻辑）
+
+/// 事件名与 node-edges.ts 的 sendNotify 出站拼写逐字对应（权威形状 =
+/// node-edges.ts / BridgeClientEdgeIntegrationTests 的 notify 载荷断言）：
+///   rendererPush {channel, payload} / setBadge {count} /
+///   showItemInFolder {path} / retireNotifications {sourceIds} /
+///   notifyClicked（正常应走 __host.notifyClicked 入站请求，不经 notify）。
+enum NotifyRoute: Equatable {
+    /// rendererPush 解包结果：页面 emit(channel, payload)（channel/payload
+    /// 原样透传，绝不改写——与 electron-edges rendererPush 到 preload 的
+    /// 推送语义一致）。
+    case emitToPage(channel: String, payload: AnyCodable?)
+    /// 原生宿主腿执行（method + 形状校验后的原载荷；执行经
+    /// SwiftEdgeHostLegs.respond——守卫语义与 edge 面一致）。
+    case hostLeg(method: String, payload: AnyCodable?)
+    /// retireNotifications：POC 无 sourceId→identifier 登记表 → 诚实 no-op
+    /// （sourceIdCount = 载荷中来源数，仅作 loud 上下文）。
+    case retireNoop(sourceIdCount: Int)
+    /// notifyClicked 经 notify 出现（不应发生；正常路径为入站请求）。
+    case unexpectedClick
+    /// 未知事件 / 载荷形状非法：loud 丢弃（含原因，绝不伪造/猜测）。
+    case malformed(reason: String)
+}
+
+extension MainWindowController {
+    /// notify 事件 → 消费决策（decodeOnly，不触 AppKit/UI 状态——路由消费在
+    /// routeNotify，主线程收敛）。值域过滤纪律：形状不符即 .malformed（loud
+    /// 丢弃），绝不部分消费、绝不默认猜测、绝不伪造成功。
+    static func decodeNotify(event: String, payload: AnyCodable?) -> NotifyRoute {
+        let dict: [String: AnyCodable]
+        if case .object(let entries)? = payload {
+            dict = entries
+        } else {
+            dict = [:]
+        }
+        switch event {
+        case "rendererPush":
+            guard let channel = EdgePayload.string(dict["channel"]), !channel.isEmpty else {
+                return .malformed(reason: "rendererPush 载荷缺 channel 或非字符串（丢弃）")
+            }
+            // payload 键缺省 → nil（emit null）；存在（含显式 null）→ 原样。
+            return .emitToPage(channel: channel, payload: dict["payload"])
+        case "setBadge":
+            guard let value = dict["count"] else {
+                return .malformed(reason: "setBadge 载荷缺 count（丢弃）")
+            }
+            // 值域：非负整数（core 裁决后 0…9999；小数/负值/非数值 = 协议
+            // 异常 → loud 丢弃；0 = 清除由腿执行）。
+            guard case .number(let number) = value,
+                  let count = Int(exactly: number),
+                  count >= 0 else {
+                return .malformed(reason: "setBadge count 非非负整数值（丢弃）")
+            }
+            return .hostLeg(method: "setBadge", payload: payload)
+        case "showItemInFolder":
+            guard let path = EdgePayload.string(dict["path"]), !path.isEmpty else {
+                return .malformed(reason: "showItemInFolder 载荷缺 path 或非字符串（丢弃）")
+            }
+            return .hostLeg(method: "showItemInFolder", payload: payload)
+        case "retireNotifications":
+            guard let list = dict["sourceIds"] else {
+                return .malformed(reason: "retireNotifications 载荷缺 sourceIds（丢弃）")
+            }
+            guard case .array(let items) = list else {
+                return .malformed(reason: "retireNotifications sourceIds 非数组（丢弃）")
+            }
+            var count = 0
+            for item in items {
+                if case .string = item {
+                    count += 1
+                } else {
+                    return .malformed(reason: "retireNotifications sourceIds 含非字符串元素（丢弃）")
+                }
+            }
+            return .retireNoop(sourceIdCount: count)
+        case "notifyClicked":
+            return .unexpectedClick
+        default:
+            return .malformed(reason: "未知 notify 事件「\(event)」（丢弃）")
         }
     }
 }

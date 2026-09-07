@@ -11,16 +11,24 @@
 //
 //  降级语义（headless/无窗/config.canShowUI()==false → 一律诚实错误
 //  "swift-edge-ui-unavailable:<method>"，绝不静默假装成功）：
-//  - focusMainWindow / pickPluginSource / showMessage（异步 NSAlert 消费）/
-//    showNativeNotification（UNUserNotificationCenter + click 回灌
-//    __host.notifyClicked）/ openExternal / openPath / showItemInFolder /
-//    setBadge（dockTile）/ setKeepAwake / setLoginItem / showError /
-//    launchApp / retireNotifications。
-//  GUI 分支实机验收属硬门禁（M3 集成点见各腿注释 TODO）。
+//  - 已实现腿（全部带守卫）：focusMainWindow / pickPluginSource /
+//    showMessage（异步 NSAlert 消费）/ showNativeNotification
+//    （UNUserNotificationCenter + click 回灌 __host.notifyClicked）/
+//    openExternal / openPath / showItemInFolder / setBadge（dockTile）/
+//    setKeepAwake / setLoginItem（E14：SMAppService.mainApp，S-D 补齐——
+//    swift run 无 bundle 时 guard 诚实报 no-bundle）/ showError /
+//    launchApp（E12：appId 最小映射 finder/vscode + 缺省 loud，S-D 补齐）。
+//  - 未实现边沿：edge 面 "retireNotifications"（node-edges 以 notify 发送
+//    退役，不经 edge——Swift 侧 notify 消费路由见 MainWindowController；
+//    POC 无 sourceId→identifier 登记表 → 诚实 no-op）。
+//  GUI 分支实机验收属硬门禁（M3 集成点见各腿注释 TODO；setLoginItem 的
+//  register/unregister 真机调用、launchApp 的 Finder/vscode 真实拉起均须
+//  实机/签名环境）。
 //
 
 import Foundation
 import AppKit
+import ServiceManagement
 import UserNotifications
 import UniformTypeIdentifiers
 
@@ -90,8 +98,17 @@ public final class SwiftEdgeHostLegs {
     /// UI/系统能力门（headless/测试 → false：全部 UI 腿诚实降级）。
     public struct Config {
         public var canShowUI: () -> Bool
-        public init(canShowUI: @escaping () -> Bool = { false }) {
+        /// app bundle 形态判定（setLoginItem 的 SMAppService.mainApp 前置
+        /// 守卫：swift run dev 态无 bundle/Info.plist 注册，register 必失败——
+        /// 诚实报错而非碰运气）。默认真实现 = Bundle.main.bundleIdentifier
+        /// 存在性；测试可注入固定值（headless 不触碰 ServiceManagement）。
+        public var isAppBundled: () -> Bool
+        public init(canShowUI: @escaping () -> Bool = { false },
+                    isAppBundled: @escaping () -> Bool = {
+                        Bundle.main.bundleIdentifier != nil
+                    }) {
             self.canShowUI = canShowUI
+            self.isAppBundled = isAppBundled
         }
     }
 
@@ -222,7 +239,18 @@ public final class SwiftEdgeHostLegs {
         case "setBadge":
             // E5 dock 角标叶：payload {count: number}；UI 上下文守卫（headless
             // 绝不触碰 NSApp 状态）。badgePlatformGate 裁决在 core（sidecar），
-            // 本腿只执行 dockTile 写。
+            // 本腿只执行 dockTile 写。notify 消费（S-D：sidecar setBadge
+            // notify → MainWindowController 路由）复用本腿——守卫语义与 edge
+            // 面一致（canShowUI/主窗），失败在消费侧 loud。
+            // 精度对照（S-D Electron 核实）：electron-edges setBadge =
+            // try app.setBadgeCount → catch 折算 {applied:false, reason}——
+            // core applyBadgePresentation 把失败压成一次 loud 日志，**不向
+            // renderer 回执**（renderer 保持自己的计数投影）。Swift flavor
+            // node-edges.setBadge 因同步契约无法跨进程往返而乐观
+            // {applied:true}（fire-and-forget notify）——dock 写失败只能在
+            // 本侧 loud（notify 消费打印 / edge 面 ok:false 上抛）。差异 =
+            // 通知瞬间的失败窗口（尽力面，注释登记）+ 失败日志落点；对
+            // renderer 的可见性两边一致（均无失败回执）→ parity 成立。
             return performUI(method: method) {
                 guard mainWindowProvider?() != nil else {
                     return (nil, Self.uiUnavailablePrefix + method + ":no-window")
@@ -316,33 +344,87 @@ public final class SwiftEdgeHostLegs {
                 return (nil, nil)
             }
         case "launchApp":
-            // E12 open-in 原生拉起腿：payload {appId, path}。v1 语义：path 指向
-            // .app 时经 NSWorkspace.openApplication 拉起；否则尝试以 path 作为
-            // 文件用默认应用打开；appId→应用映射（Finder/VS Code 协商）属 M3
-            // 集成（open-in-apps 协商数据在 core，Swift 侧只执行叶）。
+            // E12 open-in 原生拉起叶（S-D：appId 映射补齐）：payload
+            // {appId, path}（node-edges launchApp 出站形状）。Electron open-in
+            // 权威语义（open-in.ts 注册表）＝按 appId 白名单分派 provider
+            // （finder/vscode 固定两枚），未知 appId → 'unknown open-in app'
+            // loud——绝不猜测/回退成通用打开（通用 path 打开属 openPath edge
+            // 职责）。分类/校验（instanceId/来源指纹/路径纪律）在 core
+            // （open-in.test.ts 继续覆盖），本叶只执行：
+            //   - 'finder' → Finder 揭示 path（darwin 分支：文件与目录一律
+            //     activateFileViewerSelecting，同 finderApp.open 揭示语义；
+            //     目录 openPath 分支仅非 darwin，本壳不可达）；
+            //   - 'vscode' → vscode://file/<path> 本地文件夹深链（deep-link.ts
+            //     buildVscodeFileUrl 同构：绝对路径逐段 encodeURIComponent
+            //     编码；vscode:// scheme 交 NSWorkspace 系统深链打开）。
+            //     远程 ssh-remote 目标需实例 authority 上下文（host/user/
+            //     transport），本载荷无法表达——远程 vscode 由 core 在
+            //     OPEN_IN 通道构造 vscode:// URL 后经 openExternal edge
+            //     打开，不经本叶（注释声明）；
+            //   - 缺省（未知 appId）→ loud ui-unavailable（镜像 open-in.ts
+            //     unknown-open-in-app 的 loud，绝不按 path 默认打开）。
             return performUI(method: method) {
                 guard mainWindowProvider?() != nil else {
                     return (nil, Self.uiUnavailablePrefix + method + ":no-window")
+                }
+                guard let appId = dict.flatMap({ EdgePayload.string($0["appId"]) }),
+                      !appId.isEmpty else {
+                    return (nil, Self.unimplementedPrefix + method + ":app-id-missing")
                 }
                 guard let rawPath = dict.flatMap({ EdgePayload.string($0["path"]) }),
                       !rawPath.isEmpty else {
                     return (nil, Self.unimplementedPrefix + method + ":path-missing")
                 }
-                let url = URL(fileURLWithPath: rawPath)
-                if url.pathExtension.lowercased() == "app" {
-                    // 同步 openApplication（SDK 非 throwing）；启动结果经
-                    // NSWorkspace 运行会话异步上报——v1 以「已提交拉起」为成功，
-                    // 应用启动失败由系统/用户可见处理。
-                    NSWorkspace.shared.openApplication(
-                        at: url,
-                        configuration: NSWorkspace.OpenConfiguration()
+                switch appId {
+                case "finder":
+                    NSWorkspace.shared.activateFileViewerSelecting(
+                        [URL(fileURLWithPath: rawPath)]
                     )
                     return (.bool(true), nil)
+                case "vscode":
+                    guard let target = Self.vscodeFileURL(for: rawPath) else {
+                        return (nil, Self.unimplementedPrefix + method + ":path-not-absolute")
+                    }
+                    if NSWorkspace.shared.open(target) {
+                        return (.bool(true), nil)
+                    }
+                    return (nil, Self.uiUnavailablePrefix + method + ":open-failed")
+                default:
+                    // 镜像 open-in.ts：未知 appId → loud，绝不 fallback。
+                    return (nil, Self.uiUnavailablePrefix + method + ":unknown-app-id:" + appId)
                 }
-                if NSWorkspace.shared.open(url) {
-                    return (.bool(true), nil)
+            }
+        case "setLoginItem":
+            // E14 登录自启叶（S-D 补齐）：payload {enabled: bool}。Electron
+            // 语义 = app.setLoginItemSettings({openAtLogin: enabled})（main.ts
+            // applyLaunchAtLogin darwin 分支；失败 loud {error} 绝不静默假
+            // 成功——设置面语义 design 14 D6）。Swift = SMAppService.mainApp
+            // （macOS 13+；Package 平台下限 13 → <13 的 NSLoginItem/
+            // SMLoginItemSetEnabled 兜底分支不可达，design 25 §5 E14 注记）。
+            // 守卫：canShowUI（headless 绝不触碰 ServiceManagement）→ app
+            // bundle 注册形态（SMAppService.mainApp 需要 Info.plist——swift
+            // run dev 态无 bundle → ui-unavailable:setLoginItem:no-bundle 诚实
+            // 错误，绝不碰运气调 register）。打包态 register/unregister 真实
+            // 调用，失败 loud（status 预检幂等：目标态已达成 → ok，不重复
+            // 调用）。登录项本身无需窗口（Electron 侧无窗照常设置）→ 本腿
+            // 不做 no-window 守卫（canShowUI 已表达 POC 的 UI 上下文门）。
+            return performUI(method: method) {
+                guard config.isAppBundled() else {
+                    return (nil, Self.uiUnavailablePrefix + method + ":no-bundle")
                 }
-                return (nil, Self.uiUnavailablePrefix + method + ":open-failed")
+                let enabled = dict.flatMap { EdgePayload.bool($0["enabled"]) } ?? false
+                let service = SMAppService.mainApp
+                do {
+                    if enabled {
+                        if service.status != .enabled { try service.register() }
+                    } else {
+                        if service.status != .notRegistered { try service.unregister() }
+                    }
+                    return (nil, nil)
+                } catch {
+                    return (nil, Self.uiUnavailablePrefix + method
+                            + ":apply-failed:" + error.localizedDescription)
+                }
             }
         case "showMessage":
             // dialog.showMessageBox 对应腿：payload HostMessageOptions 形状
@@ -401,11 +483,12 @@ public final class SwiftEdgeHostLegs {
                 return (nil, Self.uiUnavailablePrefix + method + ":open-failed")
             }
         default:
-            // showNativeNotification（UNUserNotificationCenter + delegate →
-            // __host.notifyClicked 回灌）/ pickPluginSource / showItemInFolder /
-            // setBadge / setKeepAwake / setLoginItem / showError / launchApp /
-            // retireNotifications 等：宿主腿 M3 集成（AppKit 侧实现 + 实机
-            // 门禁）。无宿主接线前一律 loud 拒绝（回落默认表不挂起）。
+            // 仍未实现的宿主腿：edge 面 "retireNotifications"（node-edges 的
+            // 退役经 notify 发送，不经 edge——消费在 MainWindowController 的
+            // notify 路由，POC 无 sourceId→identifier 登记表 → 诚实 no-op）；
+            // showNativeNotification 同步面（UI 可用时的真实调度走
+            // respondAsync/canHandleAsync）。无宿主接线前一律 loud 拒绝
+            // （回落默认表不挂起）。
             return (nil, Self.unimplementedPrefix + method)
         }
     }
@@ -416,6 +499,39 @@ public final class SwiftEdgeHostLegs {
             return (nil, Self.uiUnavailablePrefix + method)
         }
         return body()
+    }
+
+    // MARK: - launchApp 的 vscode 深链 URL 构造（纯逻辑，单测直测）
+
+    /// vscode://file/<path> 深链 URL（镜像 deep-link.ts buildVscodeFileUrl /
+    /// encodeRemotePath：绝对路径逐段编码、分隔符保持字面；drive-colon 还原
+    /// 分支仅 win32 路径可达，本壳 mac-only 不可达）。path 非绝对（含空）→
+    /// nil——叶侧形状守卫（绝对性/控制字符/长度/存在性的深度校验在 core
+    /// open-in.ts runOpenInLaunch，本叶不重复实现）。
+    static func vscodeFileURL(for path: String) -> URL? {
+        guard path.hasPrefix("/") else { return nil }
+        let encoded = path.dropFirst()
+            .split(separator: "/", omittingEmptySubsequences: false)
+            .map { encodeURIComponentSegment(String($0)) }
+            .joined(separator: "/")
+        return URL(string: "vscode://file/" + encoded)
+    }
+
+    /// encodeURIComponent 语义的段转义（JS 同族）：仅
+    /// A–Z a–z 0–9 - _ . ! ~ * ' ( ) 保持字面，其余字符按 UTF-8 字节转
+    /// %XX（大写十六进制）——空格 → %20、CJK/emoji → 逐字节 %XX，与
+    /// deep-link.ts 的 encodeRemotePath 输出逐字一致（对照其单测锚点
+    /// 'vscode://file/home/user/%E6%88%91%E7%9A%84%20%E9%A1%B9%E7%9B%AE'）。
+    static func encodeURIComponentSegment(_ segment: String) -> String {
+        let allowed = CharacterSet(charactersIn:
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.!~*'()")
+        return segment.utf8.map { byte -> String in
+            let scalar = UnicodeScalar(byte)
+            if allowed.contains(scalar) {
+                return String(Character(scalar))
+            }
+            return String(format: "%%%02X", byte)
+        }.joined()
     }
 
     /// openExternal/openPath 的 URL 提取：openExternal 载荷 {url: string}；
