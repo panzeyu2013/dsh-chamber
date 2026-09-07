@@ -328,6 +328,12 @@ ctx 真实化逐项列于 sidecar-entry.ts 注释。
   真实腿——全带窗口守卫（headless 诚实降级）；swift build 0 警告、swift
   test 40/40。**剩余腿**：setLoginItem（SMAppService 需签名）、
   appId→应用映射（M3 集成）——GUI/签名硬门禁。
+- **P3 打包重跑（进行中，当前 HEAD 全量产物基底）**：dist:desktop:mac
+  （build:desktop 全链 + electron-builder --mac）输出到 worktree
+  packages/desktop/release/mac-arm64 —— 供实机验收刷新 /Applications 的
+  （磁盘 app 仍为 8-27 事故恢复构建）。产物验证：mtime/大小/Info.plist
+  版本 + ELECTRON_RUN_AS_NODE node 模式自检；不自动替换 /Applications
+  （等用户确认，吸取事故纪律）。
 - **showMessage 真实模态腿**（95275cc）：NSAlert 主线程 runModal 一次、
   按钮序 raw-1000 夹取回传、style 映射、无 buttons→['OK']；无窗诚实降级。
   **M3 代码级宿主腿至此全部完成**（focus/open/openPath/reveal/badge/keep-
