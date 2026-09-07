@@ -26,8 +26,9 @@
  * 本模块纯函数化（无 React/DOM 依赖），供 App.tsx 接线与 node 直跑单测。
  */
 
-/** 隐藏的非 local 壳保留上限（最近访问的 1 个）。 */
-export const RETAINED_HIDDEN_VIEWS = 1
+/** 隐藏的非 local 壳保留上限（最近访问的 1 个）。内部实现参数——对外无
+ * import 消费者（注释/文档以文字引用），不进入公共导出面。 */
+const RETAINED_HIDDEN_VIEWS = 1
 
 /** 回收候选的连续隐藏安全窗：切走/ settle 后至少停留这么久才可回收。 */
 export const VIEW_RECLAIM_GRACE_MS = 60_000
