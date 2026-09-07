@@ -345,18 +345,47 @@ public final class SwiftEdgeHostLegs {
                 return (nil, Self.uiUnavailablePrefix + method + ":open-failed")
             }
         case "showMessage":
-            // 形状（HostMessageOptions，electron-edges/global.d.ts 为准）：
-            // {type,title,message,detail,buttons[],defaultId,cancelId,noLink?}
-            guard config.canShowUI() else {
-                return (nil, Self.uiUnavailablePrefix + method)
+            // dialog.showMessageBox 对应腿：payload HostMessageOptions 形状
+            // {type,title,message,detail,buttons[],defaultId,cancelId,noLink?}。
+            // 主线程模态 NSAlert；应答 = 按钮序（0 基，electron-edges 同契约；
+            // 无 buttons → 默认 ["OK"]）。无窗/headless → 诚实降级。
+            return performUI(method: method) {
+                guard mainWindowProvider?() != nil else {
+                    return (nil, Self.uiUnavailablePrefix + method + ":no-window")
+                }
+                let dict0 = dict ?? [:]
+                let styleRaw = EdgePayload.string(dict0["type"]) ?? "warning"
+                let alert = NSAlert()
+                switch styleRaw {
+                case "error", "critical": alert.alertStyle = .critical
+                case "info", "information": alert.alertStyle = .informational
+                default: alert.alertStyle = .warning
+                }
+                alert.messageText = EdgePayload.string(dict0["title"]) ?? "dsh-chamber"
+                let message = EdgePayload.string(dict0["message"]) ?? ""
+                let detail = EdgePayload.string(dict0["detail"]) ?? ""
+                alert.informativeText = [message, detail].filter { !$0.isEmpty }.joined(separator: "\n")
+                var buttons: [String] = []
+                if case .array(let items)? = dict0["buttons"] {
+                    for item in items {
+                        if case .string(let s) = item { buttons.append(s) }
+                    }
+                }
+                if buttons.isEmpty { buttons = ["OK"] }
+                for title in buttons {
+                    alert.addButton(withTitle: title)
+                }
+                var modalResponse: NSApplication.ModalResponse = .alertFirstButtonReturn
+                let run: () -> Void = { modalResponse = alert.runModal() }
+                if Thread.isMainThread {
+                    run()
+                } else {
+                    DispatchQueue.main.sync(execute: run)
+                }
+                // NSAlert 按钮返回码：1000=第一个…；索引 = raw-1000（越界夹 0）。
+                let index = max(0, min(buttons.count - 1, Int(modalResponse.rawValue) - 1000))
+                return (.number(Double(index)), nil)
             }
-            // M3 集成：主线程 NSAlert + pendingAlerts.expect()/complete(token:)
-            // 消费；本切片登记 pending 并立即返回取消序（无宿主接线时为
-            // 诚实降级：0 号按钮 = 取消语义与 electron-edges cancelId 同向）。
-            let token = pendingAlerts.expect()
-            let cancelId = dict.flatMap { EdgePayload.int($0["cancelId"]) } ?? 0
-            pendingAlerts.complete(token: token, buttonIndex: cancelId)
-            return (.number(Double(cancelId)), nil)
         case "openExternal", "openPath":
             return performUI(method: method) {
                 guard let url = Self.extractURL(method: method, dict: dict) else {

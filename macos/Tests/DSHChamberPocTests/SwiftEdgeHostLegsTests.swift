@@ -50,7 +50,7 @@ final class SwiftEdgeHostLegsTests: XCTestCase {
         // canShowUI=true 但未接主窗：窗口守卫腿一律 no-window 诚实降级
         // （headless 测试绝不触发 NSWorkspace/NSApp/ProcessInfo 副作用）。
         let legs = SwiftEdgeHostLegs(config: .init(canShowUI: { true }))
-        for method in ["setBadge", "setKeepAwake", "showItemInFolder", "pickPluginSource", "showError", "launchApp"] {
+        for method in ["setBadge", "setKeepAwake", "showItemInFolder", "pickPluginSource", "showError", "launchApp", "showMessage"] {
             let outcome = legs.respond(method: method, payload: nil)
             XCTAssertTrue(
                 outcome.error?.hasPrefix(SwiftEdgeHostLegs.uiUnavailablePrefix) ?? false,
@@ -94,12 +94,13 @@ final class SwiftEdgeHostLegsTests: XCTestCase {
         XCTAssertNil(queue.takeResult(token: token))
     }
 
-    func testShowMessageHeadlessDegradesAndUIQueueCancelFallback() {
-        // canShowUI=true 但无宿主消费：立即以 cancelId（默认 0）结算并登记
-        // pending（M3 接线点注释语义）。
+    func testShowMessageRequiresMainWindow() {
+        // canShowUI=true 但未接主窗：模态 alert 腿诚实降级（绝不无窗弹窗）。
         let legs = SwiftEdgeHostLegs(config: .init(canShowUI: { true }))
         let outcome = legs.respond(method: "showMessage", payload: nil)
-        XCTAssertEqual(outcome.result, .number(0))
-        XCTAssertNil(outcome.error)
+        XCTAssertTrue(
+            outcome.error?.hasPrefix(SwiftEdgeHostLegs.uiUnavailablePrefix) ?? false,
+            "showMessage 无窗必须诚实降级（实际 \(outcome.error ?? "nil")）"
+        )
     }
 }
