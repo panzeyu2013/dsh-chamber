@@ -3,6 +3,15 @@
  * electron. Covers normalize / atomic file round-trip / corrupt preservation /
  * platform gates / close-window decision / quit-risk (update exemption) /
  * patch validation.
+ *
+ * settings-set → applySettingsPatch 行为族（S-E settings 副作用叶 async 化收口
+ * — parity 边界 #2 行为确认）：经 installIpcHandlers 装配注入 fake ctx/edges/
+ * registrar，以 fake 副作用叶断言——叶 reject（Swift 异步 leg 失败形态）与叶
+ * 同步 throw（Electron 宿主腿形态）同汇于 applySettingsPatch 的 catch 回滚
+ * （{error} + keepAwake 反悔 + 绝不持久化 + settings-get 回旧值 + 无 push）；
+ * 叶 {ok:false,error}（login-item leg 失败）→ error 原样 loud 返回 + keepAwake
+ * 反悔；成功路径 = await 叶后 persist/commit/push 全链。fake ctx 的未注入字段
+ * 为 loud stub——误触未装配路径即抛错，绝不静默假通过。
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -19,7 +28,254 @@ import {
   shouldHideToTray,
   validatePatch,
   writeSettingsFile,
+  type ChamberSettings,
 } from './chamber-settings.ts';
+import { installIpcHandlers, type ShellAssemblyCtx } from './shell-core.ts';
+import { IPC_CHANNELS } from './ipc-events.ts';
+
+// ---------------------------------------------------------------------------
+// S-E settings-set → applySettingsPatch 行为族（fake ctx/edges/registrar 装配；
+// 见文件头注记）。installIpcHandlers 全量注册但只 invoke settings 通道——ctx
+// 未注入字段为 loud stub（Proxy 缺失键返回调用即抛的 methodStub），误触即红。
+// ---------------------------------------------------------------------------
+
+type SettingsSetLeaves = Pick<ShellAssemblyCtx, 'setKeepAwake' | 'setLoginItem'>
+
+/** 注册体装配面（installIpcHandlers 参数类型——不 export 也可用 Parameters）。 */
+type SettingsInstallDeps = Parameters<typeof installIpcHandlers>[0]
+
+interface SettingsHarness {
+  invoke(channel: string, payload: unknown): Promise<unknown>
+  holder(): ChamberSettings
+  persistCalls: ChamberSettings[]
+  pushes: { channel: string; payload: unknown }[]
+  keepAwakeCalls: boolean[]
+  loginItemCalls: boolean[]
+}
+
+/** methodStub：调用即抛的 loud stub（sidecar-ctx 同款——fake ctx 缺键的兜底）。 */
+function settingsMethodStub(prefix: string): (..._args: never[]) => never {
+  return new Proxy(
+    function stub(): never {
+      throw new Error('fake-ctx-unavailable:' + prefix);
+    },
+    {
+      get(target, key) {
+        const own = Reflect.get(target, key);
+        if (own !== undefined) return own;
+        if (key === 'apply' || key === 'bind' || key === 'call') {
+          return Function.prototype[key as 'apply' | 'bind' | 'call'];
+        }
+        if (typeof key === 'string') return settingsMethodStub(prefix + '.' + key);
+        return undefined;
+      },
+    },
+  ) as (..._args: never[]) => never;
+}
+
+/**
+ * 装配 installIpcHandlers（fake registrar/edges + 可注入副作用叶的 fake ctx）
+ * 并返回 settings 通道驱动面。每次调用独立 registrar/记录数组——测试间零共享。
+ * persist 默认真实记录（spy）；commit 更新 holder。opts.persist 可覆写
+ * （persist 失败路径用例）；opts.initial 可指定起始 holder。
+ */
+function installSettingsHarness(
+  leaves: SettingsSetLeaves,
+  opts: { persist?: (next: ChamberSettings) => void; initial?: ChamberSettings } = {},
+): SettingsHarness {
+  const persistCalls: ChamberSettings[] = [];
+  const pushes: { channel: string; payload: unknown }[] = [];
+  const keepAwakeCalls: boolean[] = [];
+  const loginItemCalls: boolean[] = [];
+  let holder: ChamberSettings = { ...(opts.initial ?? DEFAULT_CHAMBER_SETTINGS) };
+  const registry = new Map<string, (payload: unknown) => Promise<unknown> | unknown>();
+  const persistImpl = opts.persist ?? ((next: ChamberSettings) => { persistCalls.push(next); });
+  const harness: SettingsHarness = {
+    invoke(channel, payload) {
+      const handler = registry.get(channel);
+      if (handler === undefined) throw new Error('fake-registrar: unknown channel ' + channel);
+      return Promise.resolve(handler(payload));
+    },
+    holder: () => holder,
+    persistCalls,
+    pushes,
+    keepAwakeCalls,
+    loginItemCalls,
+  };
+
+  const ctxReal: Record<string, unknown> = {
+    hostFacts: {
+      flavor: 'electron',
+      controlPlaneUrl: 'http://127.0.0.1:1',
+      platform: process.platform,
+      trayPresent: () => true,
+    },
+    runtimeFacts: { dshVersion: () => null },
+    settingsIO: {
+      current: () => holder,
+      commit: (next: ChamberSettings) => {
+        holder = next;
+      },
+      persist: persistImpl,
+    },
+    isQuitting: () => false,
+    setKeepAwake: leaves.setKeepAwake,
+    setLoginItem: leaves.setLoginItem,
+    // I 组段装配期订阅（installIpcHandlers 先订阅后 start 契约）：空实现即可
+    // （sidecar-ctx 同款装配期空 subscribe）。
+    updateController: { subscribe: () => {} },
+    // 嵌套解构字段必须存在（installIpcHandlers 顶部解构 sshPluginTargets 的子键）；
+    // 空对象 = 子键 undefined——settings 路径不触碰，误触即 loud stub 不可达。
+    sshPluginTargets: {},
+  };
+  const ctx = new Proxy(ctxReal as object, {
+    get(target: Record<string, unknown>, key: string | symbol) {
+      if (typeof key === 'symbol') return undefined;
+      if (key in target) return target[key];
+      return settingsMethodStub(String(key));
+    },
+  }) as unknown as SettingsInstallDeps['ctx'];
+
+  const edges = {
+    rendererPush(channel: string, payload: unknown) {
+      pushes.push({ channel, payload });
+      return true;
+    },
+    onSystemResume() {},
+    onMainWindowShown() {},
+  } as unknown as SettingsInstallDeps['edges'];
+
+  installIpcHandlers({ ipc: { handle: (channel, handler) => registry.set(channel, handler) }, edges, ctx });
+  return harness;
+}
+
+/** settings-get 结果里的 settings 部分（旧/新值断言用）。 */
+function settingsOf(result: unknown): ChamberSettings {
+  return (result as { settings: ChamberSettings }).settings;
+}
+
+test('S-E settings-set: keep-awake 叶 reject（Swift 异步 leg 失败）→ 回滚 + 绝不持久化 + settings-get 回旧值 + {error}', async () => {
+  const harness = installSettingsHarness({
+    // Swift flavor 形态：async 叶，leg 失败 = rejected promise（与 Electron
+    // 同步 throw 同一 applySettingsPatch catch 路径）。
+    setKeepAwake: async (enabled: boolean): Promise<void> => {
+      harness.keepAwakeCalls.push(enabled);
+      throw new Error('swift-edge-ui-unavailable:setKeepAwake:no-window');
+    },
+    setLoginItem: async (enabled: boolean) => {
+      harness.loginItemCalls.push(enabled);
+      return { ok: true as const };
+    },
+  });
+  const resp = await harness.invoke(IPC_CHANNELS.SETTINGS_SET, { patch: { keepAwake: true } });
+  assert.deepEqual(resp, { ok: false, error: 'settings apply failed' });
+  // 反悔叶被调用（新值应用 + 回滚到旧值）；login-item 未被触碰。
+  assert.deepEqual(harness.keepAwakeCalls, [true, false]);
+  assert.deepEqual(harness.loginItemCalls, []);
+  // 绝不持久化 + holder/查询回旧值 + 失败无 push。
+  assert.equal(harness.persistCalls.length, 0);
+  assert.equal(settingsOf(await harness.invoke(IPC_CHANNELS.SETTINGS_GET, null)).keepAwake, false);
+  assert.equal(harness.pushes.length, 0, '失败路径不得推送 settings-changed');
+});
+
+test('S-E settings-set: keep-awake 叶同步 throw（Electron 宿主腿形态）→ 同一回滚路径（await 吸收同步失败）', async () => {
+  const harness = installSettingsHarness({
+    setKeepAwake: (enabled: boolean): void => {
+      harness.keepAwakeCalls.push(enabled);
+      throw new Error('powerSaveBlocker start failed');
+    },
+    setLoginItem: async (enabled: boolean) => {
+      harness.loginItemCalls.push(enabled);
+      return { ok: true as const };
+    },
+  });
+  const resp = await harness.invoke(IPC_CHANNELS.SETTINGS_SET, { patch: { keepAwake: true } });
+  assert.deepEqual(resp, { ok: false, error: 'settings apply failed' });
+  assert.deepEqual(harness.keepAwakeCalls, [true, false]);
+  assert.equal(harness.persistCalls.length, 0);
+  assert.equal(settingsOf(await harness.invoke(IPC_CHANNELS.SETTINGS_GET, null)).keepAwake, false);
+});
+
+test('S-E settings-set: login-item 叶 {ok:false,error} → error 原样 loud 返回 + keepAwake 反悔 + 绝不持久化 + 旧值', async () => {
+  const harness = installSettingsHarness({
+    setKeepAwake: async (enabled: boolean): Promise<void> => {
+      harness.keepAwakeCalls.push(enabled);
+    },
+    setLoginItem: async (enabled: boolean) => {
+      harness.loginItemCalls.push(enabled);
+      // Swift legs 诚实错误（no-bundle/unavailable/apply-failed）原样进 {error}。
+      return { ok: false as const, error: 'swift-edge-ui-unavailable:setLoginItem:no-bundle' };
+    },
+  });
+  const resp = await harness.invoke(IPC_CHANNELS.SETTINGS_SET, {
+    patch: { keepAwake: true, launchAtLogin: true },
+  });
+  // renderer 看到与 Electron applyLaunchAtLogin 失败同形的 {error}（文案源属宿主）。
+  assert.deepEqual(resp, { ok: false, error: 'swift-edge-ui-unavailable:setLoginItem:no-bundle' });
+  // keepAwake 先应用后反悔；login-item 失败未应用故无反悔调用。
+  assert.deepEqual(harness.keepAwakeCalls, [true, false]);
+  assert.deepEqual(harness.loginItemCalls, [true]);
+  assert.equal(harness.persistCalls.length, 0, '失败绝不持久化');
+  const get = await harness.invoke(IPC_CHANNELS.SETTINGS_GET, null);
+  assert.equal(settingsOf(get).keepAwake, false);
+  assert.equal(settingsOf(get).launchAtLogin, false);
+  assert.equal(harness.pushes.length, 0);
+});
+
+test('S-E settings-set: 成功路径（async 叶）→ persist 深合并一次 + commit + push + settings-get 新值', async () => {
+  const harness = installSettingsHarness({
+    setKeepAwake: async (enabled: boolean): Promise<void> => {
+      harness.keepAwakeCalls.push(enabled);
+    },
+    setLoginItem: (enabled: boolean) => {
+      harness.loginItemCalls.push(enabled);
+      return { ok: true as const };
+    },
+  });
+  const resp = await harness.invoke(IPC_CHANNELS.SETTINGS_SET, {
+    patch: { keepAwake: true, launchAtLogin: true },
+  });
+  assert.equal('error' in (resp as object), false, '成功路径无 error');
+  assert.equal(settingsOf(resp).keepAwake, true);
+  assert.equal(settingsOf(resp).launchAtLogin, true);
+  assert.deepEqual(harness.keepAwakeCalls, [true]);
+  assert.deepEqual(harness.loginItemCalls, [true]);
+  // persist 恰好一次、载荷为深合并后的完整对象（嵌套默认保留）。
+  assert.equal(harness.persistCalls.length, 1);
+  assert.equal(harness.persistCalls[0]!.keepAwake, true);
+  assert.equal(harness.persistCalls[0]!.launchAtLogin, true);
+  assert.deepEqual(harness.persistCalls[0]!.notifications, DEFAULT_CHAMBER_SETTINGS.notifications);
+  // committed push（settings-changed）+ settings-get 回读新值。
+  assert.deepEqual(harness.pushes.map((p) => p.channel), [IPC_CHANNELS.SETTINGS_CHANGED]);
+  const get = await harness.invoke(IPC_CHANNELS.SETTINGS_GET, null);
+  assert.equal(settingsOf(get).keepAwake, true);
+});
+
+test('S-E settings-set: persist 失败 → 已应用副作用 await 反悔 + {error:settings persist failed} + holder 旧值', async () => {
+  const harness = installSettingsHarness(
+    {
+      setKeepAwake: async (enabled: boolean): Promise<void> => {
+        harness.keepAwakeCalls.push(enabled);
+      },
+      setLoginItem: async (enabled: boolean) => {
+        harness.loginItemCalls.push(enabled);
+        return { ok: true as const };
+      },
+    },
+    { persist: () => { throw new Error('disk full'); } },
+  );
+  const resp = await harness.invoke(IPC_CHANNELS.SETTINGS_SET, {
+    patch: { keepAwake: true, launchAtLogin: true },
+  });
+  assert.deepEqual(resp, { ok: false, error: 'settings persist failed' });
+  // 反悔 await 两叶（keepAwake 反悔 + login-item 反悔）；holder 未被 commit。
+  assert.deepEqual(harness.keepAwakeCalls, [true, false]);
+  assert.deepEqual(harness.loginItemCalls, [true, false]);
+  const get = await harness.invoke(IPC_CHANNELS.SETTINGS_GET, null);
+  assert.equal(settingsOf(get).keepAwake, false);
+  assert.equal(settingsOf(get).launchAtLogin, false);
+  assert.deepEqual(harness.holder(), DEFAULT_CHAMBER_SETTINGS);
+});
 
 test('normalizeSettings: defaults for null / non-object', () => {
   assert.deepEqual(normalizeSettings(null), DEFAULT_CHAMBER_SETTINGS);

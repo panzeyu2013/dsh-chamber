@@ -36,6 +36,14 @@
  *   __host.mainWindowShown {}
  *   __host.hostFacts       {focused?, mainWindowAlive?, webViewLoading?,
  *                           webViewContentAlive?, trayAvailable?, resources?}
+ *
+ * S-E（settings 副作用叶 async 化）：公开面新增 sendEdge 转发（NodeEdges
+ * 附加成员，不改 HostEdges 契约）——sidecar-ctx 的 A 组设置副作用叶
+ * （ShellAssemblyCtx.setKeepAwake/setLoginItem）改经它 await B 桥应答，leg
+ * 失败 = reject（与 Electron 同步失败同一回滚路径）；本文件内 HostEdges 的
+ * 同步 setKeepAwake/setLoginItem（fire-and-forget + catch loud）不再被 ctx
+ * 设置叶调用（避免双写/乐观假成功），保留供后续 HostEdges 面直接使用——
+ * 两叶职责分离注记见下方成员注释。
  */
 import type {
   HostEdges,
@@ -92,6 +100,13 @@ function jsonSafe(value: unknown): unknown {
 
 export type NodeEdges = HostEdges & {
   handleHostInbound(method: string, payload: unknown): { ok: boolean; error?: string }
+  /** 公开 edge 转发（S-E：NodeEdges 附加成员，不改 HostEdges 契约）——把 B 桥
+   *  edge 请求面暴露给装配方（sidecar-entry → buildHeadlessCtx 的
+   *  HeadlessCtxEdges），使 sidecar-ctx 的 A 组设置副作用叶能 await 应答：
+   *  resolve = Swift leg 应答 ok；reject = transport {ok:false} / leg 错误
+   *  （sidecar-entry 应答分派把 ok:false 折算为 reject）。edgeId 关联由
+   *  deps.sendEdge 实现侧（sidecar-entry pendingEdges 表）保证。 */
+  sendEdge(method: string, payload: unknown): Promise<unknown>
 }
 
 export function createNodeEdges(deps: NodeEdgesDeps): NodeEdges {
@@ -179,6 +194,11 @@ export function createNodeEdges(deps: NodeEdgesDeps): NodeEdges {
     },
 
     setKeepAwake(on: boolean) {
+      // HostEdges 同步面（fire-and-forget + 失败 loud；Swift 侧应答经
+      // sendEdge 回来）。S-E 职责分离：sidecar-ctx 的 A 组设置副作用叶（ctx
+      // 面）已改走公开 sendEdge await 应答——不经本成员（避免双写与乐观假
+      // 成功：settings-set 的失败回滚语义由 ctx 叶 await 决定）。本成员保留
+      // 供后续 HostEdges 面直接调用（core 不经 Pick 触碰前保持预留）。
       deps.sendEdge('setKeepAwake', { on }).catch((err: unknown) => {
         console.error('[node-edges] setKeepAwake edge 失败：' + String(err))
       })
@@ -260,6 +280,9 @@ export function createNodeEdges(deps: NodeEdgesDeps): NodeEdges {
     },
 
     setLoginItem(enabled: boolean) {
+      // HostEdges 同步面（fire-and-forget + 失败 loud）。S-E 职责分离同
+      // setKeepAwake：ctx 设置叶走公开 sendEdge await（应答失败 → {ok:false,
+      // error} 回滚），不经本成员——本成员保留供后续 HostEdges 面使用。
       deps.sendEdge('setLoginItem', { enabled }).catch((err: unknown) => {
         console.error('[node-edges] setLoginItem edge 失败：' + String(err))
       })
@@ -316,5 +339,11 @@ export function createNodeEdges(deps: NodeEdgesDeps): NodeEdges {
     }
   }
 
-  return Object.assign(edges, { handleHostInbound })
+  /** 公开 edge 转发（S-E：见 NodeEdges.sendEdge 注释）——body = deps.sendEdge
+   *  直通（edgeId 关联在实现侧）。 */
+  function sendEdge(method: string, payload: unknown): Promise<unknown> {
+    return deps.sendEdge(method, payload)
+  }
+
+  return Object.assign(edges, { handleHostInbound, sendEdge })
 }

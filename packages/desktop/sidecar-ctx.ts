@@ -85,18 +85,21 @@
  *   runtimeFacts.dshVersion 真化：resolveActiveRuntime(runtimeBaseDir,
  *     builtinDshWorkspace).version（main 3612-3614 同参，INFO 每次 invoke 即时
  *     解析——runtime 切换/重启后返回新版本，绝不装配期定格）。
- *   A 组设置副作用叶（S-D 衔接增补）：ctx.setKeepAwake/setLoginItem 由 loud
- *     stub 改为真实转发——经注入 edges 的 HostEdges 同名成员（node-edges →
- *     B 桥 edge：Swift 侧 legs 已真化（keep-awake ProcessInfo activity /
- *     setLoginItem SMAppService，no-bundle 诚实错误））。同步叶契约边界注记：
- *     ShellAssemblyCtx 的 setKeepAwake/setLoginItem 为同步叶（applySettingsPatch
- *     同步调用）而 B 桥应答异步——本叶与 Electron 宿主腿同形：Electron 侧
- *     keep-awake 腿（powerSaveBlocker）同步不失败、login-item 腿失败返回
- *     {ok:false}；sidecar 侧同步可判定的失败面 = 本机 dispatch 失败（throw /
- *     {ok:false,error}——触发 applySettingsPatch 回滚+不持久化，与 main 同步
- *     失败语义一致）；Swift leg 的异步失败由 node-edges catch loud 落 stderr
- *     （'[node-edges] setKeepAwake edge 失败'）并随 edge 应答回到 Swift（发起
- *     方自持结果），绝不静默。settings 只加载不应用注记随之更新为「宿主腿经
+ *   A 组设置副作用叶（S-D 衔接增补 + S-E async 化）：ctx.setKeepAwake/
+ *     setLoginItem 由 loud stub 改为真实转发——经注入 edges 的公开 sendEdge
+ *     （node-edges 转发 → B 桥 edge：Swift 侧 legs 已真化（keep-awake
+ *     ProcessInfo activity / setLoginItem SMAppService，no-bundle 诚实错误））。
+ *     **await 桥应答**（S-E，parity 边界 #2 收口）：Swift 宿主 leg 应答天然
+ *     异步——叶 await 应答：ok → resolve/{ok:true}；leg 失败（no-bundle/
+ *     unavailable/apply-failed 等诚实错误 = sendEdge reject，transport
+ *     ok:false 折算）→ setKeepAwake throw / setLoginItem {ok:false,error}
+ *     （leg 错误原样进 {error}——文案源差异（Electron = electron app 报错，
+ *     Swift = legs 文案）属宿主实现细节）——触发 applySettingsPatch 回滚 +
+ *     绝不持久化 + renderer 收 {error}，与 Electron 同步失败（throw /
+ *     {ok:false}）同一条路径（Electron 同步失败 = rejected promise；Swift
+ *     异步失败 = rejected promise）。HostEdges 同步 setKeepAwake/setLoginItem
+ *     （node-edges fire-and-forget）不再被 ctx 叶使用（避免双写/乐观假成功），
+ *     保留供后续 HostEdges 面。settings 只加载不应用注记随之更新为「宿主腿经
  *     settings-set 转发；启动 reconcile 归 Swift 宿主（M3/W-22）」。
  *
  * Electron-free 不变式：本文件零 electron import（electron-free-gate 面 A 对
@@ -267,19 +270,21 @@ import { runRuntimeCheckCycle } from './shell-core.ts'
 /** publish/confirm 等真实叶所需的宿主边沿子集（node-edges 实现——sidecar-entry
  *  把同一 edges 实例传给 buildHeadlessCtx 与 installIpcHandlers：单装配不变式，
  *  push/确认对话框宿主腿与 core 投递状态机同对象、同事实缓存）。S-C-2 S-D 增补
- *  setKeepAwake/setLoginItem（HostEdges 同名成员——A 组设置副作用叶的转发腿：
- *  node-edges → B 桥 edge 'setKeepAwake'/'setLoginItem'，Swift 侧 legs 真化）。 */
+ *  的 setKeepAwake/setLoginItem 同步转发腿已于 S-E 移除——A 组设置副作用叶改经
+ *  sendEdge（node-edges 公开转发 → B 桥 edge 'setKeepAwake'/'setLoginItem'，
+ *  Swift 侧 legs 真化）await 应答（见下方 sendEdge 注释与 real 字段两叶）。 */
 export interface HeadlessCtxEdges {
   rendererPush(channel: string, payload: unknown): boolean
   mainWindowAlive(): boolean
   retireNotificationsForSources(retiredSourceIds: ReadonlySet<string>): number
   showMessage(opts: HostMessageOptions): Promise<number>
-  /** keep-awake 宿主腿（design 14 D5）：B 桥 edge 转发（Swift ProcessInfo
-   *  activity）；node-edges 实现 fire-and-forget + 应答失败 loud。 */
-  setKeepAwake(on: boolean): void
-  /** 登录项宿主腿（design 14 D6）：B 桥 edge 转发（Swift SMAppService /
-   *  no-bundle 诚实错误）；同上 fire-and-forget + 失败 loud。 */
-  setLoginItem(enabled: boolean): void
+  /** B 桥异步 edge 请求面（S-E：node-edges 公开 sendEdge 转发——sidecar-entry
+   *  用同一实例注入；edgeId 关联在实现侧）：resolve = 宿主应答 ok
+   *  （frame.ok:true 的 result），reject = transport ok:false / leg 错误
+   *  （sidecar-entry 应答分派折算；Error.message = Swift legs 错误串）。A 组
+   *  设置副作用叶 await 本面应答——leg 失败不再 fire-and-forget，失败回滚
+   *  语义与 Electron 同步叶一致（见 real 字段两叶）。 */
+  sendEdge(method: string, payload: unknown): Promise<unknown>
 }
 
 /** Swift flavor 宿主输入（sidecar-entry 装配接线注入；S-C-2 新增）。 */
@@ -473,9 +478,10 @@ export async function buildHeadlessCtx(
   })()
   // main 1306-1313 的 keep-awake / 登录自启启动 reconcile 为 Electron 宿主腿
   // （setKeepAwakeActive/applyLaunchAtLogin，同步应用加载值）。Swift flavor：
-  // 宿主腿经 ctx.setKeepAwake/setLoginItem 真实转发（见下方 real 字段——B 桥
-  // edge → Swift）；启动期 reconcile 归 Swift 宿主（M3/W-22——Swift 起壳时按
-  // 自身设置面应用），settings 加载本身不 side-effect（与既有 sidecar 行为一致）。
+  // 宿主腿经 ctx.setKeepAwake/setLoginItem 真实转发（见下方 real 字段——S-E
+  // 起为 async 叶，await B 桥应答）；启动期 reconcile 归 Swift 宿主（M3/W-22——
+  // Swift 起壳时按自身设置面应用），settings 加载本身不 side-effect（与既有
+  // sidecar 行为一致）。
 
   // askpass 崩溃残留回收（main 1344-1345：cleanupStaleAskpassHelpers——启动期
   // 清理 crash 遗留的密码载体助手；纯 Node 叶，同模块同参）。
@@ -2410,33 +2416,56 @@ export async function buildHeadlessCtx(
     runtimeFacts: {
       dshVersion: () => resolveActiveRuntime(runtimeBaseDir, builtinDshWorkspace).version,
     },
-    // S-C-2 S-D 增补（A 组设置副作用叶真实化——main 3622-3623 的 shellCtx
-    // setKeepAwake: enabled => setKeepAwakeActive(enabled) / setLoginItem:
-    // enabled => applyLaunchAtLogin(enabled) 的 Swift flavor 同形）：
-    // 同步叶契约 + 异步 B 桥宿主腿的边界注记（见文件头 S-C-2 增补段）：同步
-    // 可判定失败面（dispatch 层）与 main 同步失败语义一致（throw →
-    // applySettingsPatch 回滚 + 不持久化；{ok:false,error} → loud 返回）；
-    // Swift leg 的应答失败（SMAppService no-bundle 等诚实错误）经 node-edges
-    // catch loud 落 stderr——绝不静默假成功。
-    setKeepAwake: (enabled: boolean): void => {
+    // S-C-2 S-D 增补 + S-E async 化（A 组设置副作用叶真实化——main 3622-3623
+    // 的 shellCtx setKeepAwake: enabled => setKeepAwakeActive(enabled) /
+    // setLoginItem: enabled => applyLaunchAtLogin(enabled) 的 Swift flavor
+    // 同形）：两叶 async，await 注入 edges.sendEdge 的 B 桥应答（见文件头
+    // S-C-2/S-E 增补段）。失败语义与 main 同步叶逐字一致——Electron
+    // setKeepAwakeActive 同步失败 throw（applySettingsPatch catch 回滚）与
+    // Swift leg 失败 reject 同一条路径；Electron applyLaunchAtLogin 失败
+    // {ok:false,error} 与 Swift leg 失败 {ok:false,error} 同形（leg 诚实错误
+    // 串原样进 {error} → loud 返回 + keepAwake 回滚 + 绝不持久化）。
+    setKeepAwake: async (enabled: boolean): Promise<void> => {
       try {
-        edges.setKeepAwake(enabled)
+        // 应答 ok（transport resolve）→ resolve；应答体携带 {ok:false,error}
+        // 或 transport 层失败（ok:false → sendEdge reject）→ throw（触发
+        // applySettingsPatch 的 catch 回滚路径，与 main 同步失败同形）。
+        const answer = await edges.sendEdge('setKeepAwake', { on: enabled })
+        if (answer !== null && typeof answer === 'object') {
+          const mapped = answer as { ok?: unknown; error?: unknown }
+          if (mapped.ok === false || typeof mapped.error === 'string') {
+            throw new Error(typeof mapped.error === 'string' ? mapped.error : 'setKeepAwake edge failed')
+          }
+        }
       } catch (error) {
-        // dispatch 层同步失败 → throw（applySettingsPatch 的 catch 回滚路径，
-        // 与 main setKeepAwakeActive 同步失败同形）。
-        console.error(`[sidecar] keep-awake host leg dispatch failed: ${String(error)}`)
+        const detail = error instanceof Error ? error.message : String(error)
+        console.error(`[sidecar] keep-awake host leg failed: ${detail}`)
         throw error
       }
     },
-    setLoginItem: (enabled: boolean): { ok: true } | { ok: false; error: string } => {
+    setLoginItem: async (
+      enabled: boolean,
+    ): Promise<{ ok: true } | { ok: false; error: string }> => {
+      // await B 桥应答后折算 {ok:true}|{ok:false,error}：transport 层失败
+      // （sendEdge reject——Swift legs no-bundle/unavailable/apply-failed 等
+      // 诚实错误串）与应答体 {ok:false,error} 一律映射 {ok:false,error}——
+      // applySettingsPatch 的 loud 返回路径（+ keepAwake 回滚 + 不持久化），
+      // 与 main applyLaunchAtLogin 失败 {error} 同形——绝不静默。文案源差异
+      // （Electron = electron app 报错；Swift = legs 文案）属宿主实现细节。
       try {
-        edges.setLoginItem(enabled)
+        const answer = await edges.sendEdge('setLoginItem', { enabled })
+        if (answer !== null && typeof answer === 'object') {
+          const mapped = answer as { ok?: unknown; error?: unknown }
+          if (mapped.ok === false || typeof mapped.error === 'string') {
+            const detail = typeof mapped.error === 'string' ? mapped.error : 'setLoginItem edge failed'
+            console.error(`[sidecar] login-item host leg failed: ${detail}`)
+            return { ok: false, error: detail }
+          }
+        }
         return { ok: true }
       } catch (error) {
-        // dispatch 层同步失败 → {ok:false,error}（applySettingsPatch 的 loud
-        // 返回路径，与 main applyLaunchAtLogin 失败 {error} 同形——绝不静默）。
         const detail = error instanceof Error ? error.message : String(error)
-        console.error(`[sidecar] login-item host leg dispatch failed: ${detail}`)
+        console.error(`[sidecar] login-item host leg failed: ${detail}`)
         return { ok: false, error: detail }
       }
     },
@@ -2565,8 +2594,9 @@ export async function buildHeadlessCtx(
       /* Swift flavor 更新状态经 Swift 侧 W-22 Sparkle 线推送；sidecar 仅状态代理 */
     },
   })
-  // - setKeepAwake / setLoginItem（A 组 SETTINGS_SET 副作用叶）已于 S-C-2 真化
-  //   （见上方 real 字段——经注入 edges（node-edges B 桥腿）转发 Swift 宿主）。
+  // - setKeepAwake / setLoginItem（A 组 SETTINGS_SET 副作用叶）已于 S-C-2 真化、
+  //   S-E async 化（见上方 real 字段——async 叶经注入 edges.sendEdge（node-edges
+  //   公开转发）await B 桥应答；不再走 node-edges 的 HostEdges 同步叶）。
   // - ctx 无其他残留 stub：A 组两叶真化后，注册体可达字段全部真实；updateController
   //   为有意 loud（I 组更新宿主 = Swift W-22 Sparkle 线，见上方注记）。
   const ctx = new Proxy(real as object, {

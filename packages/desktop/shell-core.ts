@@ -1469,11 +1469,24 @@ export interface ShellAssemblyCtx {
   isQuitting(): boolean
   /** keep-awake 副作用叶（装配侧注入现 setKeepAwakeActive——HostEdges
    *  setKeepAwake 的 main.ts 宿主腿；失败 throw，由 applySettingsPatch 的
-   *  catch 做 best-effort 回滚，与搬迁前语义一致）。 */
-  setKeepAwake(enabled: boolean): void
+   *  catch 做 best-effort 回滚，与搬迁前语义一致）。
+   *  返回 `void | Promise<void>`（S-E 双 flavor Promise 兼容）：Electron
+   *  宿主腿同步（成功 void / 失败 throw）；Swift flavor 宿主腿在 B 桥另一
+   *  侧——叶 await 桥应答后 resolve / leg 失败 reject——两条失败路径同汇于
+   *  applySettingsPatch 的 catch 回滚（同步 throw 与异步 reject = 同一路径；
+   *  await 吸收同步返回值，Electron 装配闭包无需 async 化）。 */
+  setKeepAwake(enabled: boolean): void | Promise<void>
   /** 登录自启副作用叶（装配侧注入现 applyLaunchAtLogin——HostEdges
-   *  setLoginItem 的 main.ts 宿主腿；失败 {error} 返回，绝不 throw）。 */
-  setLoginItem(enabled: boolean): { ok: true } | { ok: false; error: string }
+   *  setLoginItem 的 main.ts 宿主腿；失败 {error} 返回，绝不 throw）。
+   *  返回 `{ok:true}|{ok:false;error:string}` 或其 Promise（S-E 双 flavor
+   *  同前：Electron 同步；Swift await B 桥应答后映射同形判别联合——leg
+   *  错误原样进 {error}，applySettingsPatch 两 flavor 收到同一形状）。 */
+  setLoginItem(
+    enabled: boolean,
+  ):
+    | { ok: true }
+    | { ok: false; error: string }
+    | Promise<{ ok: true } | { ok: false; error: string }>
   /** registryOrigin 切换确认对话框叶（SETTINGS_SET 现 dialog.showMessageBox
    *  腿；文案与无窗判定留在实现侧）：
    *  'confirmed' 放行；
@@ -1908,8 +1921,15 @@ export function installIpcHandlers(deps: {
    *  {error} 并回滚已应用的副作用（绝不落半个设置、绝不内存与磁盘不一致）。
    *  windowCloseBehavior 无副作用（影响未来的 close 事件）。副作用叶与持久化
    *  均经 ctx 注入（main 宿主腿）；回滚路径读 current()——commit 只在全链
-   *  成功尾部发生，回滚时 current() 恒为旧值，与搬迁前 holder 语义一致。 */
-  function applySettingsPatch(patch: Partial<ChamberSettings>): { ok: true } | { ok: false; error: string } {
+   *  成功尾部发生，回滚时 current() 恒为旧值，与搬迁前 holder 语义一致。
+   *  async（S-E 双 flavor）：叶返回 Promise 兼容（见 ShellAssemblyCtx 两叶
+   *  注释——Electron 同步返回被 await 吸收、语义零变；Swift await B 桥应答，
+   *  leg 失败 = reject/{ok:false,error}，与 Electron 同步失败同一回滚/不持久化
+   *  路径：Electron 同步失败 = rejected promise，Swift 异步失败 = rejected
+   *  promise——SETTINGS_SET 返回 {error} 的形状两边一致）。 */
+  async function applySettingsPatch(
+    patch: Partial<ChamberSettings>,
+  ): Promise<{ ok: true } | { ok: false; error: string }> {
     // notifications / sessionTodo 是嵌套对象：patch 可能只带部分子键
     // （validatePatch 允许 partial），必须 deep-merge 到当前值，绝不整组
     // 替换丢开关。
@@ -1924,22 +1944,23 @@ export function installIpcHandlers(deps: {
         ? { ...current.sessionTodo, ...patch.sessionTodo }
         : current.sessionTodo,
     };
-    // 副作用应用包 try：keep-awake / 登录自启叶意外抛异常时 loud 失败并
-    // best-effort 回滚 keepAwake，绝不带病继续（绝不落半个设置）。
+    // 副作用应用包 try：keep-awake / 登录自启叶意外抛异常（或 Swift leg 应答
+    // reject）时 loud 失败并 best-effort 回滚 keepAwake，绝不带病继续（绝不落
+    // 半个设置）。
     try {
-      if (patch.keepAwake !== undefined) setKeepAwake(patch.keepAwake);
+      if (patch.keepAwake !== undefined) await setKeepAwake(patch.keepAwake);
       if (patch.launchAtLogin !== undefined) {
-        const result = setLoginItem(patch.launchAtLogin);
+        const result = await setLoginItem(patch.launchAtLogin);
         if (!result.ok) {
           // 副作用失败：回滚已应用的 keepAwake（保持原状），绝不持久化。
-          if (patch.keepAwake !== undefined) setKeepAwake(current.keepAwake);
+          if (patch.keepAwake !== undefined) await setKeepAwake(current.keepAwake);
           return result;
         }
       }
     } catch (error) {
       console.error('[dsh-chamber] 应用 chamber 设置副作用失败：', error);
       try {
-        if (patch.keepAwake !== undefined) setKeepAwake(current.keepAwake);
+        if (patch.keepAwake !== undefined) await setKeepAwake(current.keepAwake);
       } catch {
         // 回滚失败也 loud 已记日志，不再叠加异常。
       }
@@ -1950,9 +1971,9 @@ export function installIpcHandlers(deps: {
     } catch (error) {
       console.error('[dsh-chamber] 写入 chamber 设置失败：', error);
       // 持久化失败：回滚已应用的副作用，holder 保持旧值——内存/磁盘/实际行为一致。
-      if (patch.keepAwake !== undefined) setKeepAwake(current.keepAwake);
+      if (patch.keepAwake !== undefined) await setKeepAwake(current.keepAwake);
       if (patch.launchAtLogin !== undefined) {
-        const rollback = setLoginItem(current.launchAtLogin);
+        const rollback = await setLoginItem(current.launchAtLogin);
         if (!rollback.ok) console.error(`[dsh-chamber] 登录自启回滚失败：${rollback.error}`);
       }
       return { ok: false, error: 'settings persist failed' };
@@ -2121,7 +2142,9 @@ export function installIpcHandlers(deps: {
       if (verdict === 'unavailable') return { error: 'native confirmation unavailable' };
       if (verdict !== 'confirmed') return { error: 'cancelled', code: 'cancelled' };
     }
-    const applied = applySettingsPatch(validated.patch);
+    // applySettingsPatch 现为 async（S-E：叶 Promise 兼容——Electron 同步叶被
+    // await 吸收零变；Swift 叶 await B 桥应答）。失败 loud {error} 返回。
+    const applied = await applySettingsPatch(validated.patch);
     if (!applied.ok) return applied;
     // badgeEnabled 翻转的即时收敛：仅在本次 patch 实际携带该键时重新裁决
     // 最近一次 renderer 计数意图（关闭 → 立即清零；开启 → 恢复当前未读数），
