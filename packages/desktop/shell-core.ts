@@ -95,6 +95,19 @@
  *    是 transport-manager/ssh-provider 纯模块内部逻辑（spawn 前白名单拒绝 /
  *    execEpoch 复验），不随迁；注册体只做 {status} / {error} 结果投影（loud
  *    纪律注释随迁）。
+ *  Responsibilities relocated from main.ts (W-10 S6 ssh plugin batch):
+ *  - F 组 6 个注册体：SSH_PLUGIN_LIST / SSH_PLUGIN_APPLY / SSH_PLUGIN_UNDO /
+ *    SSH_SEED_HOST_GRAPH / SSH_PLUGIN_MATERIALIZE_ADD /
+ *    SSH_PLUGIN_MATERIALIZE_ADD_PICK——按原 main.ts 顺序追加在 E 组之后
+ *    （installIpcHandlers ② 段）。编排纯模块（plugin-sync / ssh-apply-rows /
+ *    plugin-tarball）直接 import；共享现实例与目标闭包束经 ctx 注入
+ *    （sshPluginJournal / hostPackageSeeding / chamberHostPackageSeeds /
+ *    sshPluginTargets——main 装配侧的自动 seed/ready 撤销路径与 F 组共用同一
+ *    实例/闭包族，语义不分叉；localDshHome 为装配期解析路径，core 不碰
+ *    Electron paths）。确认对话框宿主腿 = HostEdges.showMessage、插件源 picker
+ *    宿主腿 = HostEdges.pickPluginSource（electron-edges.ts S6 实现；
+ *    classifyPluginPick 留 core）；mainWindowAlive 预检 = edges 门（S2 已有）。
+ *    transportManager Pick 扩 appendLog（seed 结果入实例环形日志）。
  *
  * 中文说明：自 main.ts 机械搬运的 Electron-free 业务核心（零缝阶段，行为零
  * 变化）；W-10 S1 起 IPC 注册点与 A 组 info+settings 处理器迁入本文件
@@ -104,11 +117,14 @@
  * write-only/绝不回读纪律随迁，代码注释保留）；S4 追加 D 组 ssh 连接状态 7
  * 注册体（CONFIG_LIST 经纯模块 ssh-config.ts；其余经 ctx transportManager
  * ——非秘密投影纪律随迁）；S5 追加 E 组 exec/systemd 4 注册体（SSH_START/
- * STOP/IS_ACTIVE/RESTART_SERVICE——经 ctx transportManager 的 exec 面）。
+ * STOP/IS_ACTIVE/RESTART_SERVICE——经 ctx transportManager 的 exec 面）；S6
+ * 追加 F 组 ssh plugin 6 注册体（plugin list/apply/undo + host-graph seed +
+ * 材料化 add/pick——编排纯模块直接 import，共享实例/目标闭包经 ctx，确认与
+ * picker 经 edges 宿主腿，Pick 扩 appendLog）。
  * HostEdges 其余边沿叶与双 flavor 属后续批。
  */
 
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { findFreePort } from './free-port.ts';
 import { computeSupported, validatePatch } from './chamber-settings.ts';
@@ -178,6 +194,33 @@ import {
   shouldInvalidate,
   validateVersionTree,
 } from '@dsh-chamber/dsh-runtime';
+// W-10 S6（ssh plugin 批）：F 组编排纯模块直接 import——plugin-sync /
+// ssh-apply-rows / plugin-tarball 均为 electron-free 纯模块（main.ts 同款
+// import 面，无 electron、无 shell-core 反向依赖）。ssh-plugin-journal /
+// plugin-sync 的**现实例**（createSshPluginJournal / ExactOwnershipRegistry /
+// chamberHostPackageSeeds / 目标闭包束）经 ctx 注入——main 装配侧的自动
+// seed/撤销路径与 F 组注册体必须共享同一实例（单写者/单飞语义不分叉）。
+import {
+  applyPlugins,
+  localPluginList,
+  materializeAndAdd,
+  materializeArchiveAndAdd,
+  redactRemotePluginManifest,
+  remotePluginList,
+  resolveLocalMaterializeDirectory,
+  runWithFinalOwnership,
+  seedRemoteChamberHostPackages,
+} from './plugin-sync.ts';
+import type { ChamberHostPackageSeed, ExactOwnershipRegistry, ExactOwnershipToken, ExecFn, RemoteSpec, StatusFn } from './plugin-sync.ts';
+import {
+  buildSshApplyRows,
+  buildSshUndoDecision,
+  describeReservedNameRefusal,
+  describeSshUndoConfirmation,
+} from './ssh-apply-rows.ts';
+import type { SshPluginJournal } from './ssh-plugin-journal.ts';
+import { classifyPluginPick } from './plugin-tarball.ts';
+import { sanitizeErrorText } from './sanitize-error.ts';
 
 // Control-plane port (design 05 §3.3): the packaged app keeps the documented
 // default 17500; the dev launcher (electron-dev.mjs) runs with an isolated
@@ -1002,7 +1045,15 @@ export function clearBadgeIntentForQuit(applyNativeClear: () => void): void {
 //     SSH_STOP_SERVICE / SSH_IS_ACTIVE / SSH_RESTART_SERVICE——按原 main.ts 顺序
 //     追加在 D 组之后；全走 ctx transportManager 的 exec 面——Pick 扩 exec，见
 //     ShellAssemblyCtx；systemctl argv 固定参数数组/服务名白名单与 generation
-//     复验纪律在 transport-manager/ssh-provider 纯模块内部，不随迁）；
+//     复验纪律在 transport-manager/ssh-provider 纯模块内部，不随迁）+ F 组 6 个
+//     注册体（S6 批：SSH_PLUGIN_LIST / SSH_PLUGIN_APPLY / SSH_PLUGIN_UNDO /
+//     SSH_SEED_HOST_GRAPH / SSH_PLUGIN_MATERIALIZE_ADD /
+//     SSH_PLUGIN_MATERIALIZE_ADD_PICK——按原 main.ts 顺序追加在 E 组之后；编排
+//     纯模块 plugin-sync/ssh-apply-rows/plugin-tarball 直接 import，共享现实例/
+//     闭包束经 ctx——sshPluginJournal/hostPackageSeeding/chamberHostPackageSeeds/
+//     sshPluginTargets/localDshHome，Pick 扩 appendLog，见 ShellAssemblyCtx；
+//     确认对话框与插件源 picker = edges.showMessage/pickPluginSource 宿主腿，
+//     mainWindowAlive 预检 = edges 门）；
 //   ③ 自举（占位——控制面 ready 后的启动/恢复 push 与余下 drain 挂点在 W-10
 //      后续批迁入，见 macos-swift-v1.md §四批 2）。
 // ---------------------------------------------------------------------------
@@ -1014,6 +1065,17 @@ export interface IpcRegistrar {
   handle(channel: string, handler: (payload: unknown) => Promise<unknown> | unknown): void
 }
 
+/** ssh 插件管理目标（F 组注册体的解析结果形状；W-10 S6）：spec = plugin-sync
+ *  RemoteSpec（registry id + remoteDshHome），fingerprint = main 装配侧
+ *  operationalFingerprint（id 稳定编辑推进），sourceToken = 来源代际 token
+ *  （F 组 owns 复验与 C 组来源证明同一代际面）。main.ts 的私有 RemoteTarget
+ *  与此结构同形——ctx 闭包按结构赋值兼容。 */
+export interface SshPluginTarget {
+  spec: RemoteSpec
+  fingerprint: string
+  sourceToken: NotificationSourceToken
+}
+
 /** ShellAssemblyCtx — installIpcHandlers 装配上下文。最小集原则：只放已迁注册
  *  体与其随迁辅助实际引用的字段，后续批按需扩展（S1 → S2：增 isQuitting、移除
  *  reconcileBadgeCount——意图 holder 与裁决随 BADGE_COUNT 批迁入 core 后
@@ -1023,7 +1085,10 @@ export interface IpcRegistrar {
  *  S4（ssh 连接状态批）无新字段——D 组注册体复用 transportManager（Pick 扩
  *  reverify/logs/clearLogs）与纯模块 import，见字段注释；S5（exec/systemd
  *  批）亦无新字段——E 组注册体复用 transportManager（Pick 扩 exec），见字段
- *  注释。
+ *  注释；S6（ssh plugin 批）增 localDshHome / sshPluginJournal /
+ *  hostPackageSeeding / chamberHostPackageSeeds / sshPluginTargets 五字段
+ *  （F 组注册体的共享现实例/闭包束）+ transportManager Pick 扩 appendLog
+ *  （见字段注释）。
  *  chamber
  *  settings 的内存 holder 仍归装配侧（main.ts 尚余 20+ 处直读点，随各自批迁入时
  *  holder 一并搬家）；core 侧一律经 settingsIO 读写，权威单一、行为与搬迁前一
@@ -1087,12 +1152,18 @@ export interface ShellAssemblyCtx {
   // 连接状态批）不新增字段：D 组 7 注册体复用 transportManager（Pick 扩
   // reverify/logs/clearLogs，见字段注释）+ 纯模块 ssh-config.ts import。
   // W-10 S5（exec/systemd 批）不新增字段：E 组 4 注册体复用 transportManager
-  // （Pick 扩 exec，见字段注释）。
-  /** registry 读写 + transport 状态/生命周期投影句柄（C/D/E 组注册体直接读写
-   *  面；装配侧注入 transport-manager 现实例——纯模块按引用共享，语义与搬迁
-   *  前 main.ts 的 sm 局部常量一致；Pick 收窄到已迁批实际调用的方法面
+  // （Pick 扩 exec，见字段注释）。W-10 S6（ssh plugin 批）新增字段：F 组
+  // 6 注册体的装配依赖（编排纯模块直接 import）——localDshHome /
+  // sshPluginJournal / hostPackageSeeding / chamberHostPackageSeeds /
+  // sshPluginTargets（main 装配侧自动 seed/撤销路径与 F 组共用同一现实例/
+  // 闭包族：journal 单写者、seed 单飞、目标指纹同一实现，语义不分叉），
+  // transportManager Pick 扩 appendLog（seed 结果入实例环形日志）。
+  /** registry 读写 + transport 状态/生命周期投影句柄（C/D/E/F 组注册体直接
+   *  读写面；装配侧注入 transport-manager 现实例——纯模块按引用共享，语义与
+   *  搬迁前 main.ts 的 sm 局部常量一致；Pick 收窄到已迁批实际调用的方法面
    *  （W-10 S4 扩 reverify/logs/clearLogs——D 组状态/日志/重验证通道；W-10 S5
-   *  扩 exec——E 组 exec/systemd 执行通道），体内以 sm 名解构以保持注册体
+   *  扩 exec——E 组 exec/systemd 执行通道；W-10 S6 扩 appendLog——F 组
+   *  host-graph seed 结果投影入实例环形日志），体内以 sm 名解构以保持注册体
    *  文本逐字）。 */
   transportManager: Pick<
     TransportManager,
@@ -1106,6 +1177,7 @@ export interface ShellAssemblyCtx {
     | 'logs'
     | 'clearLogs'
     | 'exec'
+    | 'appendLog'
   >
   /** S24 非秘密审计叶（原 main.ts 的 audit = appendAuditEvent({ file:
    *  auditLogPath })——装配侧绑定 <userData> 路径注入；JSONL append 只记非
@@ -1127,12 +1199,45 @@ export interface ShellAssemblyCtx {
     before: readonly TransportInstanceSpec[],
     after: readonly TransportInstanceSpec[],
   ): ProjectedRegistryInstance[]
+  // —— W-10 S6（ssh plugin 批）新增字段：F 组 6 注册体的装配依赖。编排纯模块
+  // （plugin-sync / ssh-apply-rows / plugin-tarball）在 core 直接 import；下列
+  // 共享现实例与闭包为 main 装配侧所有物（自动 seed/ready 撤销路径与 F 组
+  // 注册体共用——journal 单写者、seed 单飞、目标指纹同一实现，语义不分叉）。
+  /** 权威本地 dsh home 路径（<userData>/state/dsh-home——装配期解析值注入，
+   *  core 不碰 Electron paths；localPluginList / resolveLocalMaterializeDirectory
+   *  读它，与 main 侧自动路径同一值）。 */
+  localDshHome: string
+  /** ssh 插件 undo journal 现实例（main 装配侧 createSshPluginJournal
+   *  (<userData>)——main 的 publishRegistryTransition 撤销清理（clear）与
+   *  F 组 undo/apply 注册体共享同一实例；类型定义在 ssh-plugin-journal.ts，
+   *  record 永不 throw）。 */
+  sshPluginJournal: SshPluginJournal
+  /** chamber host 包种子数组（main 装配侧构造——sourceDir 已按
+   *  app.isPackaged/pkgDir/repoRoot 解析；自动 seed 路径与手动 seed 注册体
+   *  共用同一数组）。 */
+  chamberHostPackageSeeds: readonly ChamberHostPackageSeed[]
+  /** host 包 seed 单飞注册表现实例（ExactOwnershipRegistry——main 自动 seed
+   *  路径与手动 seed 注册体共用同一注册表，跨路径并发单飞语义不变）。 */
+  hostPackageSeeding: ExactOwnershipRegistry
+  /** ssh 插件管理目标解析/所有权/执行/探针闭包束（main 装配侧定义——自动
+   *  seed 与 ready 边缘仍用同一族闭包；经 ctx 注入后 F 组注册体文本以原名
+   *  逐字保留 findRemoteTarget / ownsRemoteTarget / scoped* 等）。目标结构
+   *  = SshPluginTarget（spec + operational fingerprint + 来源代际 token）。 */
+  sshPluginTargets: {
+    findRemoteTarget(id: string): SshPluginTarget | null
+    ownsRemoteTarget(target: SshPluginTarget): boolean
+    scopedExecForTarget(target: SshPluginTarget, extraOwner?: () => boolean): ExecFn
+    scopedStatusForTarget(target: SshPluginTarget): StatusFn
+    scopedProbeForTarget(target: SshPluginTarget, probe: () => Promise<boolean | null>): () => Promise<boolean | null>
+    liveProbeFor(id: string): () => Promise<boolean | null>
+    gitWorktreeLiveProbeFor(id: string): () => Promise<boolean | null>
+  }
 }
 
-/** 装配 shell IPC 面（W-10 S1 A 组 + S2 B 组 + S3 C 组 + S4 D 组 + S5 E 组注册体
- *  与随迁辅助；各组注册顺序 = 原 main.ts 顺序）。edges 参数以 Pick 收窄到本批
- *  实际调用的成员（createElectronEdges 返回同形超集）；后续批实现新成员时同步
- *  扩宽两侧。
+/** 装配 shell IPC 面（W-10 S1 A 组 + S2 B 组 + S3 C 组 + S4 D 组 + S5 E 组 +
+ *  S6 F 组注册体与随迁辅助；各组注册顺序 = 原 main.ts 顺序）。edges 参数以
+ *  Pick 收窄到本批实际调用的成员（createElectronEdges 返回同形超集）；后续批
+ *  实现新成员时同步扩宽两侧。
  *  调用点纪律：whenReady 内、createMainWindow 之前（窗口加载前注册完毕）——
  *  本函数同时完成渲染器投递状态机的 edges/quit 快照（单装配不变式，见上段）。 */
 export function installIpcHandlers(deps: {
@@ -1150,6 +1255,8 @@ export function installIpcHandlers(deps: {
     | 'mainWindowAlive'
     | 'webViewLoading'
     | 'webViewContentAlive'
+    | 'showMessage'
+    | 'pickPluginSource'
   >
   ctx: ShellAssemblyCtx
 }): void {
@@ -1171,14 +1278,31 @@ export function installIpcHandlers(deps: {
     confirmRegistryOriginSwitch,
     // W-10 S3（registry+凭据批）：transportManager → sm（与搬迁前 main.ts 的
     // sm 局部常量同名，C 组注册体文本逐字保留）；W-10 S4 的 D 组（ssh 连接
-    // 状态 7 注册体）与 W-10 S5 的 E 组（exec/systemd 4 注册体）同用该句柄
-    // （Pick 扩 reverify/logs/clearLogs / exec）。audit /
-    // gatewaySessions / publishRegistryTransition 为装配侧宿主叶（定义在 main，
-    // 经 ctx 注入）。
+    // 状态 7 注册体）、W-10 S5 的 E 组（exec/systemd 4 注册体）与 W-10 S6 的
+    // F 组（ssh plugin 6 注册体）同用该句柄（Pick 扩 reverify/logs/clearLogs /
+    // exec / appendLog）。audit / gatewaySessions / publishRegistryTransition
+    // 为装配侧宿主叶（定义在 main，经 ctx 注入）。W-10 S6 另增 F 组字段：
+    // localDshHome / sshPluginJournal / hostPackageSeeding /
+    // chamberHostPackageSeeds 与 sshPluginTargets 目标闭包束（main 装配侧
+    // 现实例/闭包——自动 seed/撤销路径共用，语义不分叉；解构后 F 组注册体
+    // 文本以原名逐字保留）。
     transportManager: sm,
     audit,
     gatewaySessions,
     publishRegistryTransition,
+    localDshHome,
+    sshPluginJournal,
+    hostPackageSeeding,
+    chamberHostPackageSeeds,
+    sshPluginTargets: {
+      findRemoteTarget,
+      ownsRemoteTarget,
+      scopedExecForTarget,
+      scopedStatusForTarget,
+      scopedProbeForTarget,
+      liveProbeFor,
+      gitWorktreeLiveProbeFor,
+    },
   } = deps.ctx
 
   // ① edges 回灌订阅段（S2 转实）：OS 唤醒与主窗口 'show' 的事件源语义自 main.ts
@@ -1965,6 +2089,312 @@ export function installIpcHandlers(deps: {
     return sm.exec(id, 'restart').then(result =>
       (result.ok ? (result.status ?? { error: 'restart completed but no status projection' }) : { error: result.error }),
     ).catch(err => ({ error: `exec failed: ${describeUnknownError(err)}` }));
+  });
+
+  // —— F 组（S6 批；W-10 S6 施工图第 1 项）——
+  // ssh plugin 6 注册体（SSH_PLUGIN_LIST / SSH_PLUGIN_APPLY / SSH_PLUGIN_UNDO /
+  // SSH_SEED_HOST_GRAPH / SSH_PLUGIN_MATERIALIZE_ADD /
+  // SSH_PLUGIN_MATERIALIZE_ADD_PICK——按原 main.ts 顺序紧接 E 组追加；注册体自
+  // main.ts 逐字迁入，全零 Electron）。编排纯模块直接 import（plugin-sync /
+  // ssh-apply-rows / plugin-tarball——main.ts 同款 import 面）；共享现实例与
+  // 目标闭包束经 ctx（localDshHome / sshPluginJournal / hostPackageSeeding /
+  // chamberHostPackageSeeds / sshPluginTargets——main 装配侧的自动 seed 与
+  // registry 撤销路径与 F 组共用同一实例/闭包族：journal 单写者、seed 单飞、
+  // 目标指纹同一实现；findRemoteTarget / ownsRemoteTarget / scoped* /
+  // liveProbeFor 等原名经 sshPluginTargets 解构保留，注册体文本逐字）。
+  // 宿主对话框腿 = edges.showMessage / edges.pickPluginSource（electron-edges
+  // S6 实现：原 main.ts confirmPluginAction 闭包与模块级 pickPluginSource 的
+  // 函数体逐字复刻——按钮序/编号与 darwin 一体 folder|.tgz 双模式；当前主窗
+  // 为父窗 sheet）；无存活主窗预检 = edges.mainWindowAlive（S2 已有，与原
+  // mainWindow === null || isDestroyed 判据同值）。确认对话框助手（下方
+  // confirmPluginAction）语义与 main 闭包逐字一致：无窗 → 'native
+  // confirmation unavailable'；response===1（'继续'）→ ok；否则 cancelled；
+  // 异常 → loud 'native confirmation failed: …'。
+  const confirmPluginAction = async (
+    copy: { message: string; detail: string },
+  ): Promise<{ ok: true } | { ok: false; error: string } | { cancelled: true }> => {
+    if (!deps.edges.mainWindowAlive()) return { ok: false, error: 'native confirmation unavailable' };
+    try {
+      const response = await deps.edges.showMessage({
+        type: 'warning',
+        title: copy.message,
+        message: copy.message,
+        detail: copy.detail,
+        buttons: ['取消', '继续'],
+        defaultId: 0,
+        cancelId: 0,
+        noLink: true,
+      });
+      return response === 1 ? { ok: true } : { cancelled: true };
+    } catch (error) {
+      return { ok: false, error: `native confirmation failed: ${describeUnknownError(error)}` };
+    }
+  };
+
+  deps.ipc.handle(IPC_CHANNELS.SSH_PLUGIN_LIST, async (payload: unknown) => {
+    const { id } = payload as { id: string };
+    const target = findRemoteTarget(id);
+    if (target === null) return { ok: false, error: 'ssh instance not found' };
+    const result = await runWithFinalOwnership(
+      () => ownsRemoteTarget(target),
+      () => remotePluginList(scopedExecForTarget(target), target.spec, {
+        liveProbe: scopedProbeForTarget(target, liveProbeFor(id)),
+        gitWorktreeLiveProbe: scopedProbeForTarget(target, gitWorktreeLiveProbeFor(id)),
+      }),
+    );
+    // readManifest 投影统一掩码 (design 21 §6.2/§6.4, decision 18): the
+    // renderer projection masks remote-local `file:` dependency values
+    // (MATERIALIZED_VALUE_MASK, `file:` prefix preserved) exactly like the
+    // gateway installed route — remote paths never leave the main process
+    // through this RPC. The main-process-internal manifest (verifyApplied
+    // read-backs, the undo journal snapshot, materialize resolution) is
+    // never redacted — only this IPC response is.
+    if (!result.ok) return result;
+    return { ok: true, manifest: redactRemotePluginManifest(result.manifest) };
+  });
+  deps.ipc.handle(IPC_CHANNELS.SSH_PLUGIN_APPLY, async (payload: unknown) => {
+    const { id, add, remove, restart } = payload as { id: string; add: string[]; remove: string[]; restart?: boolean };
+    const target = findRemoteTarget(id);
+    if (target === null) return { ok: false, error: 'ssh instance not found' };
+    // A non-boolean `restart` (e.g. the string 'false') must never be
+    // treated as truthy and trigger an unwanted restart — refused here
+    // before any exec (applyPlugins re-checks too, defense in depth).
+    if (restart !== undefined && typeof restart !== 'boolean') {
+      return { ok: false, error: 'restart must be a boolean' };
+    }
+    // Reserved-name deny (design 21 §6.4/decision 19, same set as the
+    // gateway): whole-batch refusal listing the denied names BEFORE any
+    // transport work — @deepseek-ai/* and @dsh-chamber/* can never be
+    // installed or removed through the plugin model. applyPlugins re-checks
+    // (defense in depth) with the same copy.
+    const assembled = buildSshApplyRows(add, remove);
+    if (assembled.refused.length > 0) {
+      return { ok: false, error: describeReservedNameRefusal(assembled.refused) };
+    }
+    // Known bundle packages for the §4.5 ④ bundles assertion (design 13):
+    // the LOCAL manifest's bundle-declaring dependency names. When the
+    // local profile is unreadable there is no local source to sync from,
+    // so the bundles half of the assertion is skipped (dependencies
+    // membership is still asserted); never a silent wrong assertion.
+    let knownBundles: string[] | undefined;
+    try {
+      knownBundles = localPluginList(localDshHome).bundleLines;
+    } catch (localError) {
+      console.warn('[dsh-chamber] 本地清单不可读，bundle 激活层断言跳过：', localError);
+      knownBundles = undefined;
+    }
+    return runWithFinalOwnership(
+      () => ownsRemoteTarget(target),
+      () => applyPlugins(
+        scopedExecForTarget(target),
+        scopedStatusForTarget(target),
+        target.spec,
+        { add, remove, restart },
+        {
+          knownBundles,
+          ownershipKey: `${target.sourceToken.generation}:${target.fingerprint}`,
+          journal: sshPluginJournal,
+          targetFingerprint: target.fingerprint,
+        },
+      ),
+    );
+  });
+  // Undo the latest ok ssh plugin change (design 21 §6.4, plan Phase 5 ssh
+  // 统一增量): the undo journal (applyPlugins records every executed row
+  // with its pre-change remote spec) answers 「撤销最近变更」. v1 undo =
+  // the inverse row through the SAME ssh apply flow — undoing an ok add
+  // removes that name; undoing an ok remove re-adds the previous REGISTRY
+  // spec (a remove whose previous spec was a remote file: package cannot
+  // be re-added in v1 → {ok:false, unavailable:'file-backed'}). The undo
+  // is a user-initiated MAIN-process confirmation (default cancel, decision
+  // 14) and re-executes with restart-to-apply, journaled, so further undos
+  // chain. Never a silent script action.
+  deps.ipc.handle(IPC_CHANNELS.SSH_PLUGIN_UNDO, async (payload: unknown) => {
+    const { id } = payload as { id: unknown };
+    if (typeof id !== 'string' || !INSTANCE_ID_PATTERN.test(id)) {
+      return { ok: false as const, error: 'invalid or unknown instance id' };
+    }
+    const target = findRemoteTarget(id);
+    if (target === null) return { ok: false as const, error: 'ssh instance not found' };
+    // Target binding (design 21 §6.4 review P1): only ops recorded on the
+    // CURRENT operational target are undoable — a connection edit under
+    // the same id (new host/user/service/home) must never replay a change
+    // onto the wrong machine. Ops recorded before target binding existed
+    // (fingerprint null) are never undoable either (their target cannot be
+    // proven).
+    const op = sshPluginJournal.latestOkForTarget(id, target.fingerprint);
+    if (op === null) return { ok: false as const, error: 'no recent plugin change to undo on this target', unavailable: 'none' as const };
+    const decision = buildSshUndoDecision(op);
+    if (!decision.ok) {
+      return { ok: false as const, error: decision.error, unavailable: decision.info.unavailable };
+    }
+    // Main-process confirmation with the undo copy (default cancel — the
+    // undo re-executes a remote write + restart, never a silent action).
+    const instance = sm.listInstances().find(candidate => candidate.id === id);
+    const confirm = await confirmPluginAction(describeSshUndoConfirmation({
+      targetLabel: instance?.label ?? null,
+      targetId: id,
+      opKind: op.kind,
+      name: op.name,
+      spec: decision.action.kind === 'add' ? decision.action.spec : null,
+    }));
+    if ('cancelled' in confirm) return { ok: true as const, cancelled: true };
+    if (!confirm.ok) return { ok: false as const, error: confirm.error };
+    // Execute the inverse row through the same apply flow (journaled so
+    // further undos chain) with restart-to-apply.
+    const undoActions: { add: string[]; remove: string[]; restart: boolean } =
+      decision.action.kind === 'add'
+        ? { add: [decision.action.spec], remove: [], restart: true }
+        : { add: [], remove: [decision.action.name], restart: true };
+    return runWithFinalOwnership(
+      () => ownsRemoteTarget(target),
+      async () => {
+        const result = await applyPlugins(
+          scopedExecForTarget(target),
+          scopedStatusForTarget(target),
+          target.spec,
+          undoActions,
+          {
+            ownershipKey: `${target.sourceToken.generation}:${target.fingerprint}`,
+            journal: sshPluginJournal,
+            targetFingerprint: target.fingerprint,
+          },
+        );
+        if (!result.ok) return { ok: false as const, error: result.error };
+        if (result.result.applied === 0 && result.result.failed.length > 0) {
+          return { ok: false as const, error: `undo failed: ${result.result.failed[0].error}` };
+        }
+        // Honest undo outcome (P2-2): a change that EXECUTED but did not
+        // fully take effect must never project as a clean success. The
+        // undone arm carries the outcome fields ({restarted, ready,
+        // readyNote}) whenever the undo is not clean — a failed restart,
+        // a failed post-change verification, or a failed readiness
+        // re-check. A clean undo (rows executed + restart ok + verified +
+        // readiness ok or not-checked-with-note) omits the fields
+        // entirely, so the PRESENCE of undone.restarted is the renderer's
+        // "executed but not fully effective" signal (mirror shape,
+        // backward compatible with the clean {kind, name} arm).
+        const outcome = result.result;
+        const cleanUndo =
+          outcome.applied > 0
+          && outcome.restarted
+          && outcome.verified
+          && outcome.ready !== false;
+        if (cleanUndo) return { ok: true as const, undone: { kind: op.kind, name: op.name } };
+        return {
+          ok: true as const,
+          undone: {
+            kind: op.kind,
+            name: op.name,
+            restarted: outcome.restarted,
+            ready: outcome.ready,
+            ...(outcome.readyNote === undefined ? {} : { readyNote: outcome.readyNote }),
+          },
+        };
+      },
+    );
+  });
+
+  // Host-graph seed + remote materialize (design 13 M4): the M2 orchestration
+  // functions that were implemented but not yet wired. Seed installs the
+  // chamber host packages (module A host-graph + git-worktree +
+  // archive-cleanup) onto the remote (09 遗留 1; the manual resend covers
+  // BOTH chamber host packages — a remote connected before the git package
+  // existed only picks it up through this path or the next ready
+  // transition); materialize installs a local plugin source (folder or .tgz
+  // archive) remotely — the ADD view goes through materialize_add_pick
+  // (picker in the Electron main via edges.pickPluginSource, pick-only), the
+  // sync view through materialize_add (dir resolved from the authoritative
+  // local manifest, validated here as absolute + directory). LOCAL_PLUGIN_*
+  // 本地腿（runLocalDshPlugin 执行面）仍留 main.ts。
+  deps.ipc.handle(IPC_CHANNELS.SSH_SEED_HOST_GRAPH, async (payload: unknown) => {
+    const { id } = payload as { id: string };
+    const target = findRemoteTarget(id);
+    if (target === null) return { ok: false, error: 'ssh instance not found' };
+    // Not shipped is a loud error on the MANUAL path (the button must never
+    // look like it succeeded while writing nothing) — the auto path skips
+    // with an info log instead. The manual resend covers BOTH chamber host
+    // packages (host-graph + git-worktree): a remote connected before the
+    // git package existed only picks it up through this path or the next
+    // ready transition.
+    const missing = chamberHostPackageSeeds.filter(seed => !existsSync(path.join(seed.sourceDir, 'dist', 'index.js')));
+    if (missing.length > 0) {
+      return { ok: false, error: `chamber host 包未打包：${missing.map(seed => seed.label).join('、')} 的 dist/index.js 缺失——请先构建（pnpm run build:host-packages）` };
+    }
+    const begun = hostPackageSeeding.begin(id, target.fingerprint);
+    if (!begun.accepted) return { ok: false, error: 'chamber host seed in progress' };
+    const token: ExactOwnershipToken = begun.token;
+    const ownsSeed = () => hostPackageSeeding.owns(token) && ownsRemoteTarget(target);
+    try {
+      const result = await seedRemoteChamberHostPackages(
+        scopedExecForTarget(target, ownsSeed),
+        target.spec,
+        chamberHostPackageSeeds,
+      );
+      if (!ownsSeed()) return { ok: false, error: 'ssh instance changed while host seed was in progress' };
+      // Surface the outcome in the instance's ring-buffer log (the connections
+      // UI log panel) — the injection is never a silent modification.
+      if (result.ok) {
+        const summary = result.packages.map(entry => `${entry.insertId}${entry.wrote ? ' 已写入' : ' 已是最新'}`).join('、');
+        if (ownsSeed()) sm.appendLog(id, 'info', `chamber host 包注入完成：${summary}；boot 层${result.patched ? '已挂载' : '无需改动'}（重启后生效）`);
+      } else {
+        if (ownsSeed()) sm.appendLog(id, 'error', `chamber host 包注入失败：${result.error}`);
+      }
+      return result;
+    } finally {
+      hostPackageSeeding.finish(token);
+    }
+  });
+  // materialize_add (sync view): renderer supplies only the dependency NAME.
+  // Main re-reads the authoritative local manifest and resolves/canonicalizes
+  // its path; an IPC caller can never choose an arbitrary local directory.
+  deps.ipc.handle(IPC_CHANNELS.SSH_PLUGIN_MATERIALIZE_ADD, async (payload: unknown) => {
+    const { id, name } = payload as { id: string; name: unknown };
+    const target = findRemoteTarget(id);
+    if (target === null) return { ok: false, error: 'ssh instance not found' };
+    if (typeof name !== 'string') return { ok: false, error: 'invalid plugin name' };
+    const resolved = resolveLocalMaterializeDirectory(localDshHome, name);
+    if (!resolved.ok) return resolved;
+    return runWithFinalOwnership(
+      () => ownsRemoteTarget(target),
+      () => materializeAndAdd(scopedExecForTarget(target), target.spec, resolved.path),
+    );
+  });
+  // materialize_add_pick (add view): PICK-ONLY — the picker runs here in
+  // the main process, so a compromised renderer can never drive the pack
+  // surface to an arbitrary local directory (design 13 §5.8 hardening).
+  // The pick may be a plugin SOURCE FOLDER or a ready .tgz plugin archive
+  // (design 21 §10 archive-pick): a folder is packed locally and uploaded;
+  // an archive uploads verbatim (no local pnpm pack runs).
+  deps.ipc.handle(IPC_CHANNELS.SSH_PLUGIN_MATERIALIZE_ADD_PICK, async (payload: unknown) => {
+    const { id } = payload as { id: string };
+    const target = findRemoteTarget(id);
+    if (target === null) return { ok: false, error: 'ssh instance not found' };
+    if (!deps.edges.mainWindowAlive()) return { ok: false, error: 'no main window' };
+    const picked = await deps.edges.pickPluginSource();
+    if (picked.status === 'cancelled') return { ok: true, cancelled: true };
+    if (!ownsRemoteTarget(target)) return { ok: false, error: 'ssh instance changed while the plugin picker was open' };
+    const classified = classifyPluginPick(picked.path);
+    if (!classified.ok) return { ok: false, error: sanitizeErrorText(classified.error) };
+    // Narrow the source BEFORE the ownership closures — TypeScript resets
+    // property narrowing at closure boundaries, and the closure bodies must
+    // not re-check the kind.
+    const source = classified.source;
+    if (source.kind === 'dir') {
+      return runWithFinalOwnership(
+        () => ownsRemoteTarget(target),
+        () => materializeAndAdd(scopedExecForTarget(target), target.spec, source.path),
+      );
+    }
+    const archiveName = source.name;
+    const archiveBytes = source.bytes;
+    return runWithFinalOwnership(
+      () => ownsRemoteTarget(target),
+      () => materializeArchiveAndAdd(scopedExecForTarget(target), target.spec, {
+        name: archiveName,
+        bytes: archiveBytes,
+      }),
+    );
   });
 
   // ③ 自举（W-10 后续批占位：控制面 ready 后的启动/恢复 push、余下 drain 挂点

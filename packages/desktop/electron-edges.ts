@@ -25,6 +25,13 @@
  *     event subscriptions (onSystemResume / onMainWindowShown) whose core
  *     callbacks register in installIpcHandlers. The window 'show' glue and
  *     the click activation leg live behind the host back-refs added below.
+ *   - S6 (ssh plugin batch): the dialog legs — showMessage (dialog
+ *     .showMessageBox wrapper, main.ts confirmPluginAction's box shape) and
+ *     pickPluginSource (the module-level main.ts picker moved VERBATIM —
+ *     folder|.tgz dual mode with the darwin one-dialog semantics; the
+ *     host mainWindow back-ref is the parent, so Electron attaches the box/
+ *     panel to the current window as a sheet on macOS). classifyPluginPick
+ *     stays in core (plugin-tarball.ts).
  *
  * TODO (W-10 later batches): the remaining HostEdges v2 members are declared
  * on the shell-core interface but not yet implemented here — each batch moves
@@ -32,8 +39,10 @@
  * widens its Pick:
  *   - keep-awake: powerSaveBlocker start/stop + blocker-id host state
  *     (main.ts setKeepAwakeActive ~:871).
- *   - dialogs: dialog.showErrorBox / showMessageBox / showOpenDialog wrappers
- *     (main.ts pickPluginSource ~:311 + the showError/showMessage call sites).
+ *   - dialogs: showError (dialog.showErrorBox wrapper) — the ssh-plugin
+ *     handlers that migrated in S6 did not need it (their failures are loud
+ *     {error} projections, never error boxes); it moves with its first core
+ *     consumer.
  *   - tray/window: trayAvailable, focusMainWindow (D3 — the per-member
  *     activate/restore/focus leg; notification clicks already activate via
  *     host.showMainWindow), notifyClicked (design 25 §4.5 E4 Swift face).
@@ -42,9 +51,9 @@
  *   - system/resources: setLoginItem / trayAvailable / resolveResource /
  *     isPackaged (B1).
  */
-import { Notification, app, powerMonitor } from 'electron';
+import { Notification, app, dialog, powerMonitor } from 'electron';
 import type { BrowserWindow } from 'electron';
-import type { HostEdges } from './shell-core.ts';
+import type { HostEdges, HostMessageOptions } from './shell-core.ts';
 import { describeUnknownError } from './deep-link.ts';
 import {
   BoundedActiveNotifications,
@@ -84,6 +93,8 @@ export function createElectronEdges(host: ElectronEdgesHost): Pick<
   | 'webViewContentAlive'
   | 'mainWindowAlive'
   | 'retireNotificationsForSources'
+  | 'showMessage'
+  | 'pickPluginSource'
 > {
   // —— B4 私有宿主态（对象登记/淘汰/evict 全留本文件）——
   // 活跃原生通知登记：持有存活引用防 GC 吞 click（macOS 已知坑，OpenChamber
@@ -273,6 +284,42 @@ export function createElectronEdges(host: ElectronEdgesHost): Pick<
         try { notification.close(); } catch { /* best-effort stale banner retirement */ }
       }
       return retired;
+    },
+
+    /** 确认对话框叶（W-10 S6）：dialog.showMessageBox 包装——父窗 = 当前主窗
+     *  （host.mainWindow()，macOS 挂为窗 sheet），返回按钮序号 response（复刻
+     *  main.ts confirmPluginAction 的按钮序/编号约定由调用侧负责）。无存活主窗
+     *  抛错（'native confirmation unavailable'）——调用侧预检
+     *  edges.mainWindowAlive() 兜底（与搬迁前 confirmPluginAction 的
+     *  win==null||destroyed 预检同语义；窗口在预检与调用间销毁的竞态与搬迁前
+     *  showMessageBox(win) 抛出同形，由调用侧 catch 折算 loud error）。 */
+    async showMessage(opts: HostMessageOptions): Promise<number> {
+      const win = host.mainWindow();
+      if (win === null || win.isDestroyed()) throw new Error('native confirmation unavailable');
+      const { response } = await dialog.showMessageBox(win, opts);
+      return response;
+    },
+
+    /** 插件源一体化 picker 叶（W-10 S6）：main.ts pickPluginSource 函数体逐字
+     *  迁入（folder|.tgz 双模式：darwin NSOpenPanel 一体 openFile+openDirectory、
+     *  扩展过滤只约束文件选择；非 mac 仅目录）；父窗 = 当前主窗。调用侧预检
+     *  mainWindowAlive；预检与调用间窗口销毁的竞态抛出（与搬迁前同形），绝不
+     *  折算为取消。分类（classifyPluginPick）留 core（plugin-tarball.ts）。 */
+    async pickPluginSource(): Promise<{ status: 'cancelled' } | { status: 'picked'; path: string }> {
+      const win = host.mainWindow();
+      if (win === null || win.isDestroyed()) throw new Error('no main window');
+      const combined = process.platform === 'darwin';
+      const picked = await dialog.showOpenDialog(win, {
+        properties: combined ? ['openFile', 'openDirectory'] : ['openDirectory'],
+        // The extension filter only governs FILE selection (folders stay
+        // selectable) — on macOS it is what makes a non-.tgz file clearly
+        // unpickable in the same dialog.
+        filters: combined ? [{ name: 'dsh plugin archives', extensions: ['tgz'] }] : undefined,
+        buttonLabel: 'Import',
+        title: 'Import a dsh plugin — source folder or .tgz archive',
+      });
+      if (picked.canceled || picked.filePaths.length === 0) return { status: 'cancelled' };
+      return { status: 'picked', path: picked.filePaths[0] };
     },
   };
 }

@@ -150,7 +150,6 @@ import {
 import { allowedActions } from '@dsh-chamber/dsh-runtime';
 import { isSafeVersion } from '@dsh-chamber/dsh-runtime';
 import {
-  applyPlugins,
   ARCHIVE_CLEANUP_INSERT_ID,
   ARCHIVE_CLEANUP_PACKAGE_NAME,
   CLIENT_GRAPH_INSERT_ID,
@@ -161,21 +160,15 @@ import {
   GIT_WORKTREE_INSERT_ID,
   GIT_WORKTREE_PACKAGE_NAME,
   localPluginList,
-  materializeAndAdd,
-  materializeArchiveAndAdd,
-  redactRemotePluginManifest,
   remoteHome,
-  remotePluginList,
   ReadyPhaseEdges,
   reapStaleLocalPluginWriters,
-  resolveLocalMaterializeDirectory,
-  runLocalDshPlugin,
   seedRemoteChamberHostPackages,
   disposePluginSyncChildren,
   scopeExecToOwnership,
-  runWithFinalOwnership,
+  runLocalDshPlugin,
 } from './plugin-sync.ts';
-import type { ChamberHostPackageSeed, ExactOwnershipToken, ExecFn, StatusFn, RemoteSpec } from './plugin-sync.ts';
+import type { ChamberHostPackageSeed, ExecFn, StatusFn, RemoteSpec } from './plugin-sync.ts';
 import {
   DEFAULT_CHAMBER_SETTINGS,
   computeQuitRisk,
@@ -190,12 +183,9 @@ import {
 } from './notifications.ts';
 import type { NotificationSourceToken } from './notifications.ts';
 import { IPC_CHANNELS } from './ipc-events.ts';
-import {
-  buildSshApplyRows,
-  buildSshUndoDecision,
-  describeReservedNameRefusal,
-  describeSshUndoConfirmation,
-} from './ssh-apply-rows.ts';
+// —— W-10 S6：ssh-apply-rows（buildSshApplyRows / describeReservedNameRefusal /
+// buildSshUndoDecision / describeSshUndoConfirmation）全部调用点随 F 组注册体
+// 迁入 shell-core（core 直接 import），本文件 import 随迁移除——
 import { createSshPluginJournal } from './ssh-plugin-journal.ts';
 import {
   auditLogFilePath,
@@ -282,37 +272,11 @@ const pkgDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(pkgDir, '..', '..');
 const { version } = JSON.parse(readFileSync(path.join(pkgDir, 'package.json'), 'utf8'));
 
-/** Outcome of the plugin-source picker (design 21 §10 archive-pick). */
-type PluginSourcePick =
-  | { status: 'cancelled' }
-  | { status: 'picked'; path: string };
-
-/**
- * The shared plugin-source picker for the materialize flows (local / ssh /
- * gateway): a plugin SOURCE FOLDER or a ready `.tgz` plugin archive. The
- * dialog runs in the main process (pick-only discipline — the renderer can
- * never name a local path, design 13 §5.8 hardening); the picked path is
- * classified by classifyPluginPick in the caller. macOS NSOpenPanel can
- * offer files AND folders in one dialog (openFile + openDirectory);
- * Windows (FOS_PICKFOLDERS) and GTK file choosers cannot mix both modes, so
- * non-macOS keeps the folder-only dialog and the archive pick is macOS-v1
- * (a macOS-first platform limitation; Windows/Linux legs would need a
- * mode-switching dialog — see design 21 §10 ⑧, tracked with design 22/23).
- */
-async function pickPluginSource(mainWindow: BrowserWindow): Promise<PluginSourcePick> {
-  const combined = process.platform === 'darwin';
-  const picked = await dialog.showOpenDialog(mainWindow, {
-    properties: combined ? ['openFile', 'openDirectory'] : ['openDirectory'],
-    // The extension filter only governs FILE selection (folders stay
-    // selectable) — on macOS it is what makes a non-.tgz file clearly
-    // unpickable in the same dialog.
-    filters: combined ? [{ name: 'dsh plugin archives', extensions: ['tgz'] }] : undefined,
-    buttonLabel: 'Import',
-    title: 'Import a dsh plugin — source folder or .tgz archive',
-  });
-  if (picked.canceled || picked.filePaths.length === 0) return { status: 'cancelled' };
-  return { status: 'picked', path: picked.filePaths[0] };
-}
+// —— W-10 S6：插件源一体化 picker（PluginSourcePick + pickPluginSource——
+// folder|.tgz 双模式、darwin 一体语义）已迁 electron-edges.ts 的 HostEdges
+// pickPluginSource 宿主腿（原函数体逐字随迁；宿主 back-ref host.mainWindow()
+// = 原 mainWindow 实参）。core 侧 ssh 插件材料化 pick 注册体经 edges 调用；
+// 本文件余下的 gateway/local 调用点同改 edges.pickPluginSource()。——
 
 function resolveBuiltinDshWorkspace(): string | null {
   if (app.isPackaged) {
@@ -2291,7 +2255,21 @@ if (!gotTheLock) {
     // 提交前 execIsCurrent 复验，防旧代污染）在 transport-manager/ssh-provider
     // 纯模块内部，不随迁。restart 注册体原经本文件 execTransport（= sm.exec 的
     // ExecFn 收窄别名）调同一执行面——该别名仍为下方插件管理面 scopedExec 所
-    // 用，留本文件。插件管理（SSH_PLUGIN_* / GATEWAY_PLUGIN_* /
+    // 用，留本文件。
+
+    // —— W-10 S6：ssh plugin F 组 6 注册体（SSH_PLUGIN_LIST / SSH_PLUGIN_APPLY
+    // / SSH_PLUGIN_UNDO / SSH_SEED_HOST_GRAPH / SSH_PLUGIN_MATERIALIZE_ADD /
+    // SSH_PLUGIN_MATERIALIZE_ADD_PICK）自本文件迁入 shell-core installIpcHandlers
+    // ② F 组段（E 组之后按原序；注册体逐字随迁，trustedIpc 围栏由装配侧注入
+    // registrar 包装）。编排纯模块（plugin-sync / ssh-apply-rows /
+    // plugin-tarball）在 core 直接 import；共享现实例/闭包束经 ctx 注入
+    // （localDshHome / sshPluginJournal / hostPackageSeeding /
+    // chamberHostPackageSeeds / sshPluginTargets——自动 seed/ready 撤销路径与
+    // F 组共用同一实例/闭包族，本文件侧定义留用）。确认对话框（原
+    // confirmPluginAction 形状）与插件源 picker（原模块级 pickPluginSource——
+    // 已自本文件删除）宿主函数体迁 electron-edges.ts（HostEdges.showMessage /
+    // pickPluginSource）；本文件余下 gateway/local 调用点已改经 edges。
+    // transportManager Pick 扩 appendLog。插件管理（GATEWAY_PLUGIN_* /
     // LOCAL_PLUGIN_* / NPM_SEARCH 等）其余 handler 留本文件。
 
     // Plugin management surface (design 13 M2+M3, contract B): read the remote
@@ -2301,166 +2279,12 @@ if (!gotTheLock) {
     // {error} / {ok:...} shapes — never a silent empty success, never an
     // unhandled rejection. renderer-supplied specs are re-validated inside
     // applyPlugins (defense in depth).
-    ipcMain.handle(IPC_CHANNELS.SSH_PLUGIN_LIST, trustedIpc(async ({ id }) => {
-      const target = findRemoteTarget(id);
-      if (target === null) return { ok: false, error: 'ssh instance not found' };
-      const result = await runWithFinalOwnership(
-        () => ownsRemoteTarget(target),
-        () => remotePluginList(scopedExecForTarget(target), target.spec, {
-          liveProbe: scopedProbeForTarget(target, liveProbeFor(id)),
-          gitWorktreeLiveProbe: scopedProbeForTarget(target, gitWorktreeLiveProbeFor(id)),
-        }),
-      );
-      // readManifest 投影统一掩码 (design 21 §6.2/§6.4, decision 18): the
-      // renderer projection masks remote-local `file:` dependency values
-      // (MATERIALIZED_VALUE_MASK, `file:` prefix preserved) exactly like the
-      // gateway installed route — remote paths never leave the main process
-      // through this RPC. The main-process-internal manifest (verifyApplied
-      // read-backs, the undo journal snapshot, materialize resolution) is
-      // never redacted — only this IPC response is.
-      if (!result.ok) return result;
-      return { ok: true, manifest: redactRemotePluginManifest(result.manifest) };
-    }));
-    ipcMain.handle(IPC_CHANNELS.SSH_PLUGIN_APPLY, trustedIpc(async ({ id, add, remove, restart }) => {
-      const target = findRemoteTarget(id);
-      if (target === null) return { ok: false, error: 'ssh instance not found' };
-      // A non-boolean `restart` (e.g. the string 'false') must never be
-      // treated as truthy and trigger an unwanted restart — refused here
-      // before any exec (applyPlugins re-checks too, defense in depth).
-      if (restart !== undefined && typeof restart !== 'boolean') {
-        return { ok: false, error: 'restart must be a boolean' };
-      }
-      // Reserved-name deny (design 21 §6.4/decision 19, same set as the
-      // gateway): whole-batch refusal listing the denied names BEFORE any
-      // transport work — @deepseek-ai/* and @dsh-chamber/* can never be
-      // installed or removed through the plugin model. applyPlugins re-checks
-      // (defense in depth) with the same copy.
-      const assembled = buildSshApplyRows(add, remove);
-      if (assembled.refused.length > 0) {
-        return { ok: false, error: describeReservedNameRefusal(assembled.refused) };
-      }
-      // Known bundle packages for the §4.5 ④ bundles assertion (design 13):
-      // the LOCAL manifest's bundle-declaring dependency names. When the
-      // local profile is unreadable there is no local source to sync from,
-      // so the bundles half of the assertion is skipped (dependencies
-      // membership is still asserted); never a silent wrong assertion.
-      let knownBundles: string[] | undefined;
-      try {
-        knownBundles = localPluginList(localDshHome).bundleLines;
-      } catch (localError) {
-        console.warn('[dsh-chamber] 本地清单不可读，bundle 激活层断言跳过：', localError);
-        knownBundles = undefined;
-      }
-      return runWithFinalOwnership(
-        () => ownsRemoteTarget(target),
-        () => applyPlugins(
-          scopedExecForTarget(target),
-          scopedStatusForTarget(target),
-          target.spec,
-          { add, remove, restart },
-          {
-            knownBundles,
-            ownershipKey: `${target.sourceToken.generation}:${target.fingerprint}`,
-            journal: sshPluginJournal,
-            targetFingerprint: target.fingerprint,
-          },
-        ),
-      );
-    }));
-    // Undo the latest ok ssh plugin change (design 21 §6.4, plan Phase 5 ssh
-    // 统一增量): the undo journal (applyPlugins records every executed row
-    // with its pre-change remote spec) answers 「撤销最近变更」. v1 undo =
-    // the inverse row through the SAME ssh apply flow — undoing an ok add
-    // removes that name; undoing an ok remove re-adds the previous REGISTRY
-    // spec (a remove whose previous spec was a remote file: package cannot
-    // be re-added in v1 → {ok:false, unavailable:'file-backed'}). The undo
-    // is a user-initiated MAIN-process confirmation (default cancel, decision
-    // 14) and re-executes with restart-to-apply, journaled, so further undos
-    // chain. Never a silent script action.
-    ipcMain.handle(IPC_CHANNELS.SSH_PLUGIN_UNDO, trustedIpc(async ({ id }) => {
-      if (typeof id !== 'string' || !INSTANCE_ID_PATTERN.test(id)) {
-        return { ok: false as const, error: 'invalid or unknown instance id' };
-      }
-      const target = findRemoteTarget(id);
-      if (target === null) return { ok: false as const, error: 'ssh instance not found' };
-      // Target binding (design 21 §6.4 review P1): only ops recorded on the
-      // CURRENT operational target are undoable — a connection edit under
-      // the same id (new host/user/service/home) must never replay a change
-      // onto the wrong machine. Ops recorded before target binding existed
-      // (fingerprint null) are never undoable either (their target cannot be
-      // proven).
-      const op = sshPluginJournal.latestOkForTarget(id, target.fingerprint);
-      if (op === null) return { ok: false as const, error: 'no recent plugin change to undo on this target', unavailable: 'none' as const };
-      const decision = buildSshUndoDecision(op);
-      if (!decision.ok) {
-        return { ok: false as const, error: decision.error, unavailable: decision.info.unavailable };
-      }
-      // Main-process confirmation with the undo copy (default cancel — the
-      // undo re-executes a remote write + restart, never a silent action).
-      const instance = sm.listInstances().find(candidate => candidate.id === id);
-      const confirm = await confirmPluginAction(mainWindow, describeSshUndoConfirmation({
-        targetLabel: instance?.label ?? null,
-        targetId: id,
-        opKind: op.kind,
-        name: op.name,
-        spec: decision.action.kind === 'add' ? decision.action.spec : null,
-      }));
-      if ('cancelled' in confirm) return { ok: true as const, cancelled: true };
-      if (!confirm.ok) return { ok: false as const, error: confirm.error };
-      // Execute the inverse row through the same apply flow (journaled so
-      // further undos chain) with restart-to-apply.
-      const undoActions: { add: string[]; remove: string[]; restart: boolean } =
-        decision.action.kind === 'add'
-          ? { add: [decision.action.spec], remove: [], restart: true }
-          : { add: [], remove: [decision.action.name], restart: true };
-      return runWithFinalOwnership(
-        () => ownsRemoteTarget(target),
-        async () => {
-          const result = await applyPlugins(
-            scopedExecForTarget(target),
-            scopedStatusForTarget(target),
-            target.spec,
-            undoActions,
-            {
-              ownershipKey: `${target.sourceToken.generation}:${target.fingerprint}`,
-              journal: sshPluginJournal,
-              targetFingerprint: target.fingerprint,
-            },
-          );
-          if (!result.ok) return { ok: false as const, error: result.error };
-          if (result.result.applied === 0 && result.result.failed.length > 0) {
-            return { ok: false as const, error: `undo failed: ${result.result.failed[0].error}` };
-          }
-          // Honest undo outcome (P2-2): a change that EXECUTED but did not
-          // fully take effect must never project as a clean success. The
-          // undone arm carries the outcome fields ({restarted, ready,
-          // readyNote}) whenever the undo is not clean — a failed restart,
-          // a failed post-change verification, or a failed readiness
-          // re-check. A clean undo (rows executed + restart ok + verified +
-          // readiness ok or not-checked-with-note) omits the fields
-          // entirely, so the PRESENCE of undone.restarted is the renderer's
-          // "executed but not fully effective" signal (mirror shape,
-          // backward compatible with the clean {kind, name} arm).
-          const outcome = result.result;
-          const cleanUndo =
-            outcome.applied > 0
-            && outcome.restarted
-            && outcome.verified
-            && outcome.ready !== false;
-          if (cleanUndo) return { ok: true as const, undone: { kind: op.kind, name: op.name } };
-          return {
-            ok: true as const,
-            undone: {
-              kind: op.kind,
-              name: op.name,
-              restarted: outcome.restarted,
-              ready: outcome.ready,
-              ...(outcome.readyNote === undefined ? {} : { readyNote: outcome.readyNote }),
-            },
-          };
-        },
-      );
-    }));
+    // —— W-10 S6：SSH_PLUGIN_LIST / SSH_PLUGIN_APPLY / SSH_PLUGIN_UNDO 三个 ssh 插件
+    // 注册体已随 F 组迁出（shell-core installIpcHandlers ② F 组段，见上方 W-10 S6
+    // 总标记）。undo 的确认对话框经 edges.showMessage、plugin pick 经
+    // edges.pickPluginSource（宿主腿在 electron-edges.ts）——本文件余下
+    // GATEWAY_PLUGIN_* / LOCAL_PLUGIN_* 调用点同改经 edges。
+
     // Manual chamber-plugin sync onto a gateway instance (design 21 §6.5,
     // Phase 3b): re-run the seed-cache sync the ready registration performs
     // automatically, over the REGISTERED transport origin/headers/SPKI pin —
@@ -2611,7 +2435,7 @@ if (!gotTheLock) {
       // so a compromised renderer can never drive the upload surface to an
       // arbitrary local path. The pick may be a plugin SOURCE FOLDER or a
       // ready .tgz plugin archive (design 21 §10 archive-pick).
-      const picked = await pickPluginSource(mainWindow);
+      const picked = await edges.pickPluginSource();
       if (picked.status === 'cancelled') return { ok: true as const, cancelled: true };
       // Post-pick re-check: the user browsed for a while — the registration
       // and ready phase must still hold before any upload (the same
@@ -2732,100 +2556,14 @@ if (!gotTheLock) {
       }
     }));
 
-    // Host-graph seed + materialize + local plugin exec (design 13 M4): the M2
-    // orchestration functions that were implemented but not yet wired. Seed
-    // installs module A onto the remote (09 遗留 1); materialize installs a
-    // local plugin source (folder or .tgz archive) remotely — the ADD view
-    // goes through materialize_add_pick (picker in MAIN, pick-only), the sync
-    // view through materialize_add (dir resolved from the local manifest,
-    // validated here as absolute + directory); local add/remove run `dsh
-    // plugin` against the LOCAL dsh home (05 §5.1).
-    ipcMain.handle(IPC_CHANNELS.SSH_SEED_HOST_GRAPH, trustedIpc(async ({ id }) => {
-      const target = findRemoteTarget(id);
-      if (target === null) return { ok: false, error: 'ssh instance not found' };
-      // Not shipped is a loud error on the MANUAL path (the button must never
-      // look like it succeeded while writing nothing) — the auto path skips
-      // with an info log instead. The manual resend covers BOTH chamber host
-      // packages (host-graph + git-worktree): a remote connected before the
-      // git package existed only picks it up through this path or the next
-      // ready transition.
-      const missing = chamberHostPackageSeeds.filter(seed => !existsSync(path.join(seed.sourceDir, 'dist', 'index.js')));
-      if (missing.length > 0) {
-        return { ok: false, error: `chamber host 包未打包：${missing.map(seed => seed.label).join('、')} 的 dist/index.js 缺失——请先构建（pnpm run build:host-packages）` };
-      }
-      const begun = hostPackageSeeding.begin(id, target.fingerprint);
-      if (!begun.accepted) return { ok: false, error: 'chamber host seed in progress' };
-      const token: ExactOwnershipToken = begun.token;
-      const ownsSeed = () => hostPackageSeeding.owns(token) && ownsRemoteTarget(target);
-      try {
-        const result = await seedRemoteChamberHostPackages(
-          scopedExecForTarget(target, ownsSeed),
-          target.spec,
-          chamberHostPackageSeeds,
-        );
-        if (!ownsSeed()) return { ok: false, error: 'ssh instance changed while host seed was in progress' };
-        // Surface the outcome in the instance's ring-buffer log (the connections
-        // UI log panel) — the injection is never a silent modification.
-        if (result.ok) {
-          const summary = result.packages.map(entry => `${entry.insertId}${entry.wrote ? ' 已写入' : ' 已是最新'}`).join('、');
-          if (ownsSeed()) sm.appendLog(id, 'info', `chamber host 包注入完成：${summary}；boot 层${result.patched ? '已挂载' : '无需改动'}（重启后生效）`);
-        } else {
-          if (ownsSeed()) sm.appendLog(id, 'error', `chamber host 包注入失败：${result.error}`);
-        }
-        return result;
-      } finally {
-        hostPackageSeeding.finish(token);
-      }
-    }));
-    // materialize_add (sync view): renderer supplies only the dependency NAME.
-    // Main re-reads the authoritative local manifest and resolves/canonicalizes
-    // its path; an IPC caller can never choose an arbitrary local directory.
-    ipcMain.handle(IPC_CHANNELS.SSH_PLUGIN_MATERIALIZE_ADD, trustedIpc(async ({ id, name }) => {
-      const target = findRemoteTarget(id);
-      if (target === null) return { ok: false, error: 'ssh instance not found' };
-      if (typeof name !== 'string') return { ok: false, error: 'invalid plugin name' };
-      const resolved = resolveLocalMaterializeDirectory(localDshHome, name);
-      if (!resolved.ok) return resolved;
-      return runWithFinalOwnership(
-        () => ownsRemoteTarget(target),
-        () => materializeAndAdd(scopedExecForTarget(target), target.spec, resolved.path),
-      );
-    }));
-    // materialize_add_pick (add view): PICK-ONLY — the picker runs here in
-    // the main process, so a compromised renderer can never drive the pack
-    // surface to an arbitrary local directory (design 13 §5.8 hardening).
-    // The pick may be a plugin SOURCE FOLDER or a ready .tgz plugin archive
-    // (design 21 §10 archive-pick): a folder is packed locally and uploaded;
-    // an archive uploads verbatim (no local pnpm pack runs).
-    ipcMain.handle(IPC_CHANNELS.SSH_PLUGIN_MATERIALIZE_ADD_PICK, trustedIpc(async ({ id }) => {
-      const target = findRemoteTarget(id);
-      if (target === null) return { ok: false, error: 'ssh instance not found' };
-      if (mainWindow === null || mainWindow.isDestroyed()) return { ok: false, error: 'no main window' };
-      const picked = await pickPluginSource(mainWindow);
-      if (picked.status === 'cancelled') return { ok: true, cancelled: true };
-      if (!ownsRemoteTarget(target)) return { ok: false, error: 'ssh instance changed while the plugin picker was open' };
-      const classified = classifyPluginPick(picked.path);
-      if (!classified.ok) return { ok: false, error: sanitizeErrorText(classified.error) };
-      // Narrow the source BEFORE the ownership closures — TypeScript resets
-      // property narrowing at closure boundaries, and the closure bodies must
-      // not re-check the kind.
-      const source = classified.source;
-      if (source.kind === 'dir') {
-        return runWithFinalOwnership(
-          () => ownsRemoteTarget(target),
-          () => materializeAndAdd(scopedExecForTarget(target), target.spec, source.path),
-        );
-      }
-      const archiveName = source.name;
-      const archiveBytes = source.bytes;
-      return runWithFinalOwnership(
-        () => ownsRemoteTarget(target),
-        () => materializeArchiveAndAdd(scopedExecForTarget(target), target.spec, {
-          name: archiveName,
-          bytes: archiveBytes,
-        }),
-      );
-    }));
+    // —— W-10 S6：SSH_SEED_HOST_GRAPH / SSH_PLUGIN_MATERIALIZE_ADD /
+    // SSH_PLUGIN_MATERIALIZE_ADD_PICK 三个 ssh 插件注册体已随 F 组迁出
+    // （shell-core installIpcHandlers ② F 组段，见上方 W-10 S6 总标记）。seed
+    // 结果投影入实例环形日志（sm.appendLog）与 pick 的 edges 宿主腿同迁。本段
+    // 余下的 LOCAL_PLUGIN_* 注册体（design 13 M4 本地腿）继续经本文件
+    // runLocalPluginMutation / runLocalDshPlugin 执行面（本地 dsh home、runtime
+    // writer fence 归装配侧），插件源 picker 经 edges.pickPluginSource。
+
     ipcMain.handle(IPC_CHANNELS.LOCAL_PLUGIN_ADD_FILE, trustedIpc(async () => {
       if (mainWindow === null || mainWindow.isDestroyed()) return { ok: false, error: 'no main window' };
       // Local same-machine install (design 13 §5.8 pick-only, design 21
@@ -2837,7 +2575,7 @@ if (!gotTheLock) {
       // nothing beyond the existing whitelist is relaxed). Every
       // renderer-submitted spec channel (LOCAL_PLUGIN_ADD below) still
       // refuses `file:` outright; no filesystem privilege boundary widens.
-      const picked = await pickPluginSource(mainWindow);
+      const picked = await edges.pickPluginSource();
       if (picked.status === 'cancelled') return { ok: true, cancelled: true };
       // Structural pre-check (extension + archive cap + parseable manifest);
       // the local dsh CLI remains the authority for name/version semantics,
@@ -4738,7 +4476,8 @@ if (!gotTheLock) {
     //  - ipc：trustedIpc 围栏在此包一层（core 零 electron，语义与搬迁前
     //    `ipcMain.handle(ch, trustedIpc(handler))` 完全一致）；
     //  - edges：createElectronEdges 返回值（S0 rendererPush + S2 渲染器投递/
-    //    通知/徽标批成员；host 背参含 click 激活腿与 'show' 订阅面）；
+    //    通知/徽标批成员 + S6 showMessage/pickPluginSource 对话框腿；host 背参
+    //    含 click 激活腿与 'show' 订阅面）；
     //  - ctx：宿主事实 + settings 内存 holder / 副作用叶活引用 + S2 quit 门
     //    （holder 仍在本文件——其余 20+ 处直读点随各自批迁入，届时 holder
     //    一并搬家）。
@@ -4779,10 +4518,35 @@ if (!gotTheLock) {
       // W-10 S5（exec/systemd 批）：E 组 4 注册体（SSH_START/STOP/IS_ACTIVE/
       // RESTART_SERVICE）同经 transportManager——core 侧 Pick 扩 exec（本装配
       // 注入完整现实例，无新增字段）。
+      // W-10 S6（ssh plugin 批）：F 组 6 注册体（SSH_PLUGIN_LIST/APPLY/UNDO /
+      // SSH_SEED_HOST_GRAPH / SSH_PLUGIN_MATERIALIZE_ADD(_PICK)）迁入
+      // installIpcHandlers ② F 组段的装配依赖——core 侧 Pick 扩 appendLog；
+      // 共享现实例/闭包束经 ctx 注入：localDshHome（本作用域装配期解析值——
+      // core 不碰 Electron paths）、sshPluginJournal（本作用域现实例——main
+      // 的 publishRegistryTransition 撤销清理与 core undo/apply 共用同一 journal
+      // 写者）、hostPackageSeeding / chamberHostPackageSeeds（自动 seed 路径与
+      // core 手动 seed 共用同一注册表/数组）、sshPluginTargets（findRemoteTarget
+      // / ownsRemoteTarget / scoped* / liveProbeFor 闭包——自动 seed 与 ready
+      // 边缘同族，core 经 ctx 调用、文本以原名逐字保留）。确认对话框与插件源
+      // picker 宿主腿（confirmPluginAction 形状 / pickPluginSource 函数体）已迁
+      // electron-edges.ts（HostEdges.showMessage / pickPluginSource）。
       transportManager: sm,
       audit,
       gatewaySessions,
       publishRegistryTransition,
+      localDshHome,
+      sshPluginJournal,
+      hostPackageSeeding,
+      chamberHostPackageSeeds,
+      sshPluginTargets: {
+        findRemoteTarget,
+        ownsRemoteTarget,
+        scopedExecForTarget,
+        scopedStatusForTarget,
+        scopedProbeForTarget,
+        liveProbeFor,
+        gitWorktreeLiveProbeFor,
+      },
       confirmRegistryOriginSwitch: async (currentOrigin, nextOrigin) => {
         const win = mainWindow;
         if (win === null || win.isDestroyed()) return 'unavailable';
