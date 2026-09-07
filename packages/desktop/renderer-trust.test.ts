@@ -119,12 +119,18 @@ test('fatal main-process boundary claims ownership before every hostile host cal
 })
 
 test('committed settings, registry and held-resume pushes use the non-throwing send boundary', () => {
-  const source = readFileSync(new URL('./main.ts', import.meta.url), 'utf8')
-  assert.match(source, /function pushSettingsChanged\(\): void \{[\s\S]*?attemptCommittedRegistryPush\(\(\) => \{/)
-  assert.match(source, /function pushHeldSystemResume\([\s\S]*?attemptCommittedRegistryPush\(\(\) => \{/)
-  assert.match(source, /IPC_CHANNELS\.SSH_INSTANCES_CHANGED[\s\S]*?return projectedSaved;/)
-  assert.match(source, /const statusWindow = mainWindow;[\s\S]*?attemptCommittedRegistryPush\(\(\) => \{[\s\S]*?IPC_CHANNELS\.SSH_STATUS_CHANGED/)
-  assert.match(source, /const updateWindow = mainWindow;[\s\S]*?attemptCommittedRegistryPush\(\(\) => \{[\s\S]*?IPC_CHANNELS\.UPDATE_STATE_CHANGED/)
+  // W-10 S1: pushSettingsChanged（SETTINGS_CHANGED send 源）随 info+settings
+  // 批迁入 shell-core（installIpcHandlers 内；最内 send 叶改 HostEdges
+  // rendererPush，attemptCommittedRegistryPush 非-throw 包装随迁）——锚文本
+  // 读取源从 main.ts 指向 shell-core.ts，断言意图原样保留。其余推送锚
+  // （held-resume / instances / status / update）仍在 main.ts。
+  const core = readFileSync(new URL('./shell-core.ts', import.meta.url), 'utf8')
+  const main = readFileSync(new URL('./main.ts', import.meta.url), 'utf8')
+  assert.match(core, /function pushSettingsChanged\(\): void \{[\s\S]*?attemptCommittedRegistryPush\(\(\) => \{/)
+  assert.match(main, /function pushHeldSystemResume\([\s\S]*?attemptCommittedRegistryPush\(\(\) => \{/)
+  assert.match(main, /IPC_CHANNELS\.SSH_INSTANCES_CHANGED[\s\S]*?return projectedSaved;/)
+  assert.match(main, /const statusWindow = mainWindow;[\s\S]*?attemptCommittedRegistryPush\(\(\) => \{[\s\S]*?IPC_CHANNELS\.SSH_STATUS_CHANGED/)
+  assert.match(main, /const updateWindow = mainWindow;[\s\S]*?attemptCommittedRegistryPush\(\(\) => \{[\s\S]*?IPC_CHANNELS\.UPDATE_STATE_CHANGED/)
 })
 
 test('renderer ACK deliveries project and preload-validates the captured lifecycle proof', () => {

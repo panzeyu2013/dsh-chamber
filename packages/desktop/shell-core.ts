@@ -10,12 +10,17 @@
  *
  * Hard invariants:
  * - Electron-free by construction: never import the electron package (W-14
- *   face A gate); no IPC registration, no renderer push channels and no bare
- *   channel literals — IPC ownership stays in main.ts until the seam batch.
+ *   face A gate). The sole IPC registration point is installIpcHandlers
+ *   (W-10 seam batch): the registrar (deps.ipc) is injected by the assembly
+ *   side — Electron main wraps it with the trustedIpc fence, so this file
+ *   never spells ipcMain / webContents.send (W-14 face C gate). IPC_CHANNELS
+ *   constants (ipc-events.ts — a pure constants module) are legitimately
+ *   referenced here since S1.
  * - Host state is parameterized: userData-scoped paths and the runtime base
  *   dir arrive as arguments (resolveActiveRuntime / the path templates), argv
  *   arrives as an argument (scanDeepLinkUrls); nothing reads Electron host
- *   state implicitly.
+ *   state implicitly. Post-W-09 state is parameterized per function (the
+ *   installIpcHandlers ctx seam), never read from module scope.
  *
  * Responsibilities relocated from main.ts (W-09 batch 1):
  * - Control-plane port resolution (design 05 §3.3): resolveControlPlanePort
@@ -31,13 +36,27 @@
  *   sshPasswordsFilePath / gatewaySecretsFilePath / auditLogFilePath /
  *   instancesFilePath / stateRootDir / localDshHomeDir.
  *
+ * Responsibilities relocated from main.ts (W-10 S1 info+settings batch):
+ * - Shell IPC registration point: installIpcHandlers with the IpcRegistrar /
+ *   ShellAssemblyCtx seams (hostFacts / runtimeFacts / settingsIO and the
+ *   settings side-effect leaves injected by the Electron main assembly).
+ * - INFO / SETTINGS_GET / SETTINGS_SET handler bodies plus their helpers
+ *   chamberSettingsStatus / applySettingsPatch / pushSettingsChanged
+ *   (verbatim relocations — see the S1 section below).
+ *
  * 中文说明：自 main.ts 机械搬运的 Electron-free 业务核心（零缝阶段，行为零
- * 变化）；Electron 边沿与 IPC 注册仍留在 main.ts，seam 化与双 flavor 属后续批。
+ * 变化）；W-10 S1 起 IPC 注册点与 A 组 info+settings 处理器迁入本文件
+ * （installIpcHandlers 单点注册，Electron 围栏由 main 注入包装）；HostEdges
+ * 其余边沿叶与双 flavor 属后续批。
  */
 
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { findFreePort } from './free-port.ts';
+import { computeSupported, validatePatch } from './chamber-settings.ts';
+import type { ChamberSettings, ChamberSettingsStatus } from './chamber-settings.ts';
+import { attemptCommittedRegistryPush } from './transport-manager.ts';
+import { IPC_CHANNELS } from './ipc-events.ts';
 import type { NotificationOpenIntent } from './notifications.ts';
 import type { TransportInstanceSpec } from './transport-provider.ts';
 import {
@@ -368,4 +387,239 @@ export interface HostEdges {
   isPackaged: boolean
   /** 资源/打包路径解析（B1/B13：main.ts 直拼点参数化收口）。 */
   resolveResource(kind: HostResourceKind): string
+}
+
+// ---------------------------------------------------------------------------
+// Shell IPC registration (design 25 §4.1 seam; W-10 S1 info+settings batch).
+//
+// installIpcHandlers is the single shell-core IPC registration point: the
+// Electron main only assembles it (main.ts — trustedIpc fence injected at the
+// registrar wrapper, core stays electron-free by construction). This batch
+// relocates group A — the INFO / SETTINGS_GET / SETTINGS_SET registrations and
+// their settings helpers (chamberSettingsStatus / applySettingsPatch /
+// pushSettingsChanged) — VERBATIM from main.ts: only the Electron leaves were
+// replaced by injected seams (settingsIO / setKeepAwake / setLoginItem /
+// reconcileBadgeCount / confirmRegistryOriginSwitch via ctx, and the
+// SETTINGS_CHANGED send leaf via edges.rendererPush — the S0 seam member), so
+// behavior is unchanged. Registration order inside this function = the
+// original main.ts order; the surrounding steps of the wider W-10 plan are
+// annotated in place:
+//   ① edges 回灌订阅首段（占位——onSystemResume / onMainWindowShown /
+//      onNotifyClick 的 core 回调在 W-10 后续批迁入，订阅点在此注册）；
+//   ② A 组 3 个注册体（本批）；
+//   ③ 自举（占位——控制面 ready 后的启动/恢复 push 与 drain 挂点在 W-10
+//      后续批迁入）。
+// ---------------------------------------------------------------------------
+
+/** IPC 注册面：core 经它注册处理器（channel 为 opaque 通道名；Electron 侧
+ *  装配为 `(ch, h) => ipcMain.handle(ch, trustedIpc(h))`——trustedIpc 围栏在
+ *  注入点包装，Swift sidecar flavor 注入同形 B 桥注册）。 */
+export interface IpcRegistrar {
+  handle(channel: string, handler: (payload: unknown) => Promise<unknown> | unknown): void
+}
+
+/** ShellAssemblyCtx — installIpcHandlers 装配上下文。最小集原则：只放本批 3
+ *  个注册体与其随迁辅助实际引用的字段，后续批按需扩展。chamber settings 的
+ *  内存 holder 本批仍归装配侧（main.ts 尚余 20+ 处直读点，随各自批迁入时
+ *  holder 一并搬家）；core 侧一律经 settingsIO 读写，权威单一、行为与搬迁前
+ *  一致。各副作用叶与其 HostEdges 成员（setKeepAwake / setLoginItem /
+ *  setBadge…）同名同语义——后续批把宿主腿迁入 electron-edges 时 core 无需改。 */
+export interface ShellAssemblyCtx {
+  /** INFO 载荷与 settings 平台投影的宿主事实。 */
+  hostFacts: {
+    /** 控制面 URL（原 main.ts INFO 载荷的 `http://127.0.0.1:${cp.port}`）。 */
+    controlPlaneUrl: string
+    /** 运行平台（原 process.platform）。 */
+    platform: NodeJS.Platform
+    /** 托盘恢复面存在性（SETTINGS 投影 closeToTray 门）——invoke 时求值：
+     *  托盘在装配后才创建（main.ts maybeCreateTray），不得装配期定格。 */
+    trayPresent(): boolean
+  }
+  /** INFO.dshVersion 的 dsh 运行事实（可选：未提供时 INFO 返回 null）。 */
+  runtimeFacts?: {
+    /** 当前活动 dsh 运行时版本——invoke 时求值，保持现语义（原 INFO 每次
+     *  调用 resolveActiveRuntime(...).version：运行时重启/切换后返回新版本，
+     *  绝不返回装配期定格值）。 */
+    dshVersion(): string | null
+  }
+  /** chamber settings 状态与持久化 IO（装配侧注入现 chamber-settings 读写
+   *  函数，<userData> 路径已绑定）。 */
+  settingsIO: {
+    /** 当前内存 holder 值（设置权威 = 装配侧内存 holder）。 */
+    current(): ChamberSettings
+    /** 原子替换内存 holder（applySettingsPatch 全链成功尾部调用）。 */
+    commit(next: ChamberSettings): void
+    /** 持久化到 <userData>/chamber-settings.json（atomic 0600）；失败 throw，
+     *  由 applySettingsPatch 触发已应用副作用的回滚。 */
+    persist(next: ChamberSettings): void
+  }
+  /** keep-awake 副作用叶（装配侧注入现 setKeepAwakeActive——HostEdges
+   *  setKeepAwake 的 main.ts 宿主腿；失败 throw，由 applySettingsPatch 的
+   *  catch 做 best-effort 回滚，与搬迁前语义一致）。 */
+  setKeepAwake(enabled: boolean): void
+  /** 登录自启副作用叶（装配侧注入现 applyLaunchAtLogin——HostEdges
+   *  setLoginItem 的 main.ts 宿主腿；失败 {error} 返回，绝不 throw）。 */
+  setLoginItem(enabled: boolean): { ok: true } | { ok: false; error: string }
+  /** badge 意图即时收敛叶（装配侧注入现 reconcileBadgeCount——badge 批迁入
+   *  前由 main 注入同函数引用，语义零变）。 */
+  reconcileBadgeCount(): void
+  /** registryOrigin 切换确认对话框叶（SETTINGS_SET 现 dialog.showMessageBox
+   *  腿；文案与无窗判定留在实现侧）：
+   *  'confirmed' 放行；
+   *  'cancelled' = 用户取消（原返回 { error: 'cancelled', code: 'cancelled' }）；
+   *  'unavailable' = 无存活主窗（原返回 { error: 'native confirmation unavailable' }）。 */
+  confirmRegistryOriginSwitch(
+    currentOrigin: string,
+    nextOrigin: string,
+  ): Promise<'confirmed' | 'cancelled' | 'unavailable'>
+}
+
+/** 装配 shell IPC 面（W-10 S1：A 组 INFO / SETTINGS_GET / SETTINGS_SET + 随迁
+ *  settings 辅助）。edges 参数以 Pick 收窄到本批实际调用的成员
+ *  （createElectronEdges 返回同形 Pick）；后续批实现新成员时同步扩宽两侧。
+ *  调用点纪律：whenReady 内、createMainWindow 之前（窗口加载前注册完毕）。 */
+export function installIpcHandlers(deps: {
+  ipc: IpcRegistrar
+  edges: Pick<HostEdges, 'rendererPush'>
+  ctx: ShellAssemblyCtx
+}): void {
+  const {
+    hostFacts,
+    settingsIO,
+    setKeepAwake,
+    setLoginItem,
+    reconcileBadgeCount,
+    confirmRegistryOriginSwitch,
+  } = deps.ctx
+
+  // ① edges 回灌订阅首段（W-10 后续批占位：core 回调在此挂
+  //    edges.onSystemResume / onMainWindowShown / notifyClicked——事件源语义
+  //    自 main.ts 逐字迁入，订阅点统一走本函数单点）。
+
+  /** 非秘密 chamber 设置投影（design 14 D7）：当前值 + 平台能力门控。 */
+  function chamberSettingsStatus(): ChamberSettingsStatus {
+    return {
+      settings: settingsIO.current(),
+      supported: computeSupported(hostFacts.platform, hostFacts.trayPresent()),
+    };
+  }
+
+  /** 设置变更推送（SETTINGS_CHANGED send 源）：committed-push 包装 +
+   *  rendererPush 叶。叶返回 false = 无存活主窗（含窗口在 push 前已被关/换的
+   *  竞态），折算为 push 失败并 loud——与搬迁前「throw → {sent:false}」语义
+   *  等价（S0 四个 committed 状态 push 同款形状）；无窗口常驻期间由下次查询
+   *  兜底。 */
+  function pushSettingsChanged(): void {
+    const pushed = attemptCommittedRegistryPush(() => {
+      if (!deps.edges.rendererPush(IPC_CHANNELS.SETTINGS_CHANGED, chamberSettingsStatus())) {
+        throw new Error('settings renderer push failed');
+      }
+    });
+    if (!pushed.sent) {
+      try { console.warn(`[dsh-chamber] settings 已保存但变更 push 失败（等待 renderer 重拉）：${pushed.error}`); } catch { /* best effort */ }
+    }
+  }
+
+  /** 应用一个已校验的设置 patch（design 14 D7）：先应用副作用（keep-awake /
+   *  登录自启），**全部成功并持久化成功后才更新 holder**——任何失败 loud 返回
+   *  {error} 并回滚已应用的副作用（绝不落半个设置、绝不内存与磁盘不一致）。
+   *  windowCloseBehavior 无副作用（影响未来的 close 事件）。副作用叶与持久化
+   *  均经 ctx 注入（main 宿主腿）；回滚路径读 current()——commit 只在全链
+   *  成功尾部发生，回滚时 current() 恒为旧值，与搬迁前 holder 语义一致。 */
+  function applySettingsPatch(patch: Partial<ChamberSettings>): { ok: true } | { ok: false; error: string } {
+    // notifications / sessionTodo 是嵌套对象：patch 可能只带部分子键
+    // （validatePatch 允许 partial），必须 deep-merge 到当前值，绝不整组
+    // 替换丢开关。
+    const current = settingsIO.current();
+    const next: ChamberSettings = {
+      ...current,
+      ...patch,
+      notifications: patch.notifications !== undefined
+        ? { ...current.notifications, ...patch.notifications }
+        : current.notifications,
+      sessionTodo: patch.sessionTodo !== undefined
+        ? { ...current.sessionTodo, ...patch.sessionTodo }
+        : current.sessionTodo,
+    };
+    // 副作用应用包 try：keep-awake / 登录自启叶意外抛异常时 loud 失败并
+    // best-effort 回滚 keepAwake，绝不带病继续（绝不落半个设置）。
+    try {
+      if (patch.keepAwake !== undefined) setKeepAwake(patch.keepAwake);
+      if (patch.launchAtLogin !== undefined) {
+        const result = setLoginItem(patch.launchAtLogin);
+        if (!result.ok) {
+          // 副作用失败：回滚已应用的 keepAwake（保持原状），绝不持久化。
+          if (patch.keepAwake !== undefined) setKeepAwake(current.keepAwake);
+          return result;
+        }
+      }
+    } catch (error) {
+      console.error('[dsh-chamber] 应用 chamber 设置副作用失败：', error);
+      try {
+        if (patch.keepAwake !== undefined) setKeepAwake(current.keepAwake);
+      } catch {
+        // 回滚失败也 loud 已记日志，不再叠加异常。
+      }
+      return { ok: false, error: 'settings apply failed' };
+    }
+    try {
+      settingsIO.persist(next);
+    } catch (error) {
+      console.error('[dsh-chamber] 写入 chamber 设置失败：', error);
+      // 持久化失败：回滚已应用的副作用，holder 保持旧值——内存/磁盘/实际行为一致。
+      if (patch.keepAwake !== undefined) setKeepAwake(current.keepAwake);
+      if (patch.launchAtLogin !== undefined) {
+        const rollback = setLoginItem(current.launchAtLogin);
+        if (!rollback.ok) console.error(`[dsh-chamber] 登录自启回滚失败：${rollback.error}`);
+      }
+      return { ok: false, error: 'settings persist failed' };
+    }
+    settingsIO.commit(next);
+    return { ok: true };
+  }
+
+  // ② A 组 3 个注册体（迁自 main.ts；trustedIpc 围栏由装配侧在 ipc 注入点
+  //    包装，本文件零 electron）。
+  // 桌面身份/版本信息（dsh-chamber:info）：控制面 URL + 平台为宿主事实，
+  // shell 版本为模块自读（与 main.ts 同源 package.json），dshVersion 即时
+  // 解析（ctx.runtimeFacts）。
+  deps.ipc.handle(IPC_CHANNELS.INFO, () => ({
+    controlPlaneUrl: hostFacts.controlPlaneUrl,
+    dshVersion: deps.ctx.runtimeFacts?.dshVersion() ?? null,
+    version,
+    platform: hostFacts.platform,
+  }));
+
+  // Chamber settings 查询：非秘密投影（当前值 + 平台能力门控）。
+  deps.ipc.handle(IPC_CHANNELS.SETTINGS_GET, () => chamberSettingsStatus());
+
+  // Chamber settings 应用并持久化 + 变更推送。失败 loud {error}，绝不静默假成功。
+  deps.ipc.handle(IPC_CHANNELS.SETTINGS_SET, async (payload: unknown) => {
+    const { patch } = payload as { patch?: unknown };
+    const validated = validatePatch(patch);
+    if (!validated.ok) return { error: validated.error };
+    // Switching the dsh runtime version source moves the trust boundary of
+    // version checks/downloads/installs — require native user confirmation
+    // (design 18) before applying the patch.
+    const currentSettings = settingsIO.current();
+    const nextOrigin = validated.patch.registryOrigin;
+    if (nextOrigin !== undefined && nextOrigin !== currentSettings.registryOrigin) {
+      const verdict = await confirmRegistryOriginSwitch(currentSettings.registryOrigin, nextOrigin);
+      if (verdict === 'unavailable') return { error: 'native confirmation unavailable' };
+      if (verdict !== 'confirmed') return { error: 'cancelled', code: 'cancelled' };
+    }
+    const applied = applySettingsPatch(validated.patch);
+    if (!applied.ok) return applied;
+    // badgeEnabled 翻转的即时收敛：仅在本次 patch 实际携带该键时重新裁决
+    // 最近一次 renderer 计数意图（关闭 → 立即清零；开启 → 恢复当前未读数），
+    // 绝不等到下一次推送；无关设置变更不重发 setBadgeCount。
+    if (validated.patch.notifications?.badgeEnabled !== undefined) {
+      reconcileBadgeCount();
+    }
+    pushSettingsChanged();
+    return chamberSettingsStatus();
+  });
+
+  // ③ 自举（W-10 后续批占位：控制面 ready 后的启动/恢复 push、drain 挂点
+  //    迁入点——见 macos-swift-v1.md §四批 2）。
 }

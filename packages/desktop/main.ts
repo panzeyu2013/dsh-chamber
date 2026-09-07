@@ -184,13 +184,11 @@ import type { ChamberHostPackageSeed, ExactOwnershipToken, ExecFn, StatusFn, Rem
 import {
   DEFAULT_CHAMBER_SETTINGS,
   computeQuitRisk,
-  computeSupported,
   readSettingsFile,
   shouldHideToTray,
-  validatePatch,
   writeSettingsFile,
 } from './chamber-settings.ts';
-import type { ChamberSettings, ChamberSettingsStatus } from './chamber-settings.ts';
+import type { ChamberSettings } from './chamber-settings.ts';
 import {
   BoundedActiveNotifications,
   BoundedRateLimiter,
@@ -233,7 +231,9 @@ import {
   scanDeepLinkUrls,
   sshPasswordsFilePath,
   stateRootDir,
+  installIpcHandlers,
 } from './shell-core.ts';
+import type { ShellAssemblyCtx } from './shell-core.ts';
 import { createElectronEdges } from './electron-edges.ts';
 
 // Last-resort crash boundary. Expected socket/stream failures are handled at
@@ -732,27 +732,6 @@ function isAnyWindowFocused(): boolean {
   return mainWindow !== null && !mainWindow.isDestroyed() && mainWindow.isVisible() && mainWindow.isFocused();
 }
 
-/** 非秘密 chamber 设置投影（design 14 D7）：当前值 + 平台能力门控。 */
-function chamberSettingsStatus(): ChamberSettingsStatus {
-  return {
-    settings: chamberSettings,
-    supported: computeSupported(process.platform, tray !== null),
-  };
-}
-
-/** 设置变更推送（主窗口存活时；无窗口常驻期间由下次查询兜底）。 */
-function pushSettingsChanged(): void {
-  const win = mainWindow;
-  if (win === null) return;
-  const pushed = attemptCommittedRegistryPush(() => {
-    if (mainWindow !== win || win.isDestroyed()) throw new Error('settings renderer changed before push');
-    win.webContents.send(IPC_CHANNELS.SETTINGS_CHANGED, chamberSettingsStatus());
-  });
-  if (!pushed.sent) {
-    try { console.warn(`[dsh-chamber] settings 已保存但变更 push 失败（等待 renderer 重拉）：${pushed.error}`); } catch { /* best effort */ }
-  }
-}
-
 function pushHeldSystemResume(win: BrowserWindow, timestamp: number): boolean {
   const pushed = attemptCommittedRegistryPush(() => {
     if (mainWindow !== win || win.isDestroyed()) throw new Error('system-resume renderer changed before push');
@@ -947,63 +926,6 @@ function applyLaunchAtLogin(enabled: boolean): { ok: true } | { ok: false; error
   } catch (error) {
     return { ok: false, error: describeUnknownError(error) };
   }
-}
-
-/**
- * 应用一个已校验的设置 patch（design 14 D7）：先应用副作用（keep-awake /
- * 登录自启），**全部成功并持久化成功后才更新 holder**——任何失败 loud 返回
- * {error} 并回滚已应用的副作用（绝不落半个设置、绝不内存与磁盘不一致）。
- * windowCloseBehavior 无副作用（影响未来的 close 事件）。
- */
-function applySettingsPatch(patch: Partial<ChamberSettings>): { ok: true } | { ok: false; error: string } {
-  // notifications / sessionTodo 是嵌套对象：patch 可能只带部分子键
-  // （validatePatch 允许 partial），必须 deep-merge 到当前值，绝不整组
-  // 替换丢开关。
-  const next: ChamberSettings = {
-    ...chamberSettings,
-    ...patch,
-    notifications: patch.notifications !== undefined
-      ? { ...chamberSettings.notifications, ...patch.notifications }
-      : chamberSettings.notifications,
-    sessionTodo: patch.sessionTodo !== undefined
-      ? { ...chamberSettings.sessionTodo, ...patch.sessionTodo }
-      : chamberSettings.sessionTodo,
-  };
-  // 副作用应用包 try：powerSaveBlocker / 登录自启意外抛异常时 loud 失败并
-  // best-effort 回滚 keepAwake，绝不带病继续（绝不落半个设置）。
-  try {
-    if (patch.keepAwake !== undefined) setKeepAwakeActive(patch.keepAwake);
-    if (patch.launchAtLogin !== undefined) {
-      const result = applyLaunchAtLogin(patch.launchAtLogin);
-      if (!result.ok) {
-        // 副作用失败：回滚已应用的 keepAwake（保持原状），绝不持久化。
-        if (patch.keepAwake !== undefined) setKeepAwakeActive(chamberSettings.keepAwake);
-        return result;
-      }
-    }
-  } catch (error) {
-    console.error('[dsh-chamber] 应用 chamber 设置副作用失败：', error);
-    try {
-      if (patch.keepAwake !== undefined) setKeepAwakeActive(chamberSettings.keepAwake);
-    } catch {
-      // 回滚失败也 loud 已记日志，不再叠加异常。
-    }
-    return { ok: false, error: 'settings apply failed' };
-  }
-  try {
-    writeSettingsFile(chamberSettingsFilePath(app.getPath('userData')), next);
-  } catch (error) {
-    console.error('[dsh-chamber] 写入 chamber 设置失败：', error);
-    // 持久化失败：回滚已应用的副作用，holder 保持旧值——内存/磁盘/实际行为一致。
-    if (patch.keepAwake !== undefined) setKeepAwakeActive(chamberSettings.keepAwake);
-    if (patch.launchAtLogin !== undefined) {
-      const rollback = applyLaunchAtLogin(chamberSettings.launchAtLogin);
-      if (!rollback.ok) console.error(`[dsh-chamber] 登录自启回滚失败：${rollback.error}`);
-    }
-    return { ok: false, error: 'settings persist failed' };
-  }
-  chamberSettings = next;
-  return { ok: true };
 }
 
 /**
@@ -1765,13 +1687,6 @@ if (!gotTheLock) {
       log: (...args) => console.log('[dsh-chamber]', ...args),
       warn: (...args) => console.warn('[dsh-chamber]', ...args),
     });
-    ipcMain.handle(IPC_CHANNELS.INFO, trustedIpc(() => ({
-      controlPlaneUrl: `http://127.0.0.1:${cp.port}`,
-      dshVersion: resolveActiveRuntime(runtimeBaseDir, builtinDshWorkspace).version,
-      version,
-      platform: process.platform,
-    })));
-
     // Chamber settings（design 14 D7）：启动加载 + 应用副作用（keep-awake /
     // 登录自启 reconcile）；损坏 loud（*.corrupt 保留），绝不静默假默认。
     const settingsLoad = readSettingsFile(chamberSettingsFilePath(app.getPath('userData')));
@@ -1785,43 +1700,6 @@ if (!gotTheLock) {
         console.warn(`[dsh-chamber] 登录自启 reconcile 失败：${loginItemResult.error}`);
       }
     }
-
-    // Chamber settings IPC 面：get 查询 / set 应用并持久化 / 变更推送。全部走
-    // trustedIpc 围栏；失败 loud {error}，绝不静默假成功。
-    ipcMain.handle(IPC_CHANNELS.SETTINGS_GET, trustedIpc(() => chamberSettingsStatus()));
-    ipcMain.handle(IPC_CHANNELS.SETTINGS_SET, trustedIpc(async ({ patch }) => {
-      const validated = validatePatch(patch);
-      if (!validated.ok) return { error: validated.error };
-      // Switching the dsh runtime version source moves the trust boundary of
-      // version checks/downloads/installs — require native user confirmation
-      // (design 18) before applying the patch.
-      const nextOrigin = validated.patch.registryOrigin;
-      if (nextOrigin !== undefined && nextOrigin !== chamberSettings.registryOrigin) {
-        const win = mainWindow;
-        if (win === null || win.isDestroyed()) return { error: 'native confirmation unavailable' };
-        const { response } = await dialog.showMessageBox(win, {
-          type: 'warning',
-          title: '切换 dsh 运行时版本源？',
-          message: '切换 dsh 运行时版本源？',
-          detail: `版本检查、下载与安装的信任边界将从\n${chamberSettings.registryOrigin}\n切换到\n${nextOrigin}`,
-          buttons: ['取消', '切换版本源'],
-          defaultId: 0,
-          cancelId: 0,
-          noLink: true,
-        });
-        if (response !== 1) return { error: 'cancelled', code: 'cancelled' };
-      }
-      const applied = applySettingsPatch(validated.patch);
-      if (!applied.ok) return applied;
-      // badgeEnabled 翻转的即时收敛：仅在本次 patch 实际携带该键时重新裁决
-      // 最近一次 renderer 计数意图（关闭 → 立即清零；开启 → 恢复当前未读数），
-      // 绝不等到下一次推送；无关设置变更不重发 setBadgeCount。
-      if (validated.patch.notifications?.badgeEnabled !== undefined) {
-        reconcileBadgeCount();
-      }
-      pushSettingsChanged();
-      return chamberSettingsStatus();
-    }));
 
     // 桌面通知（design 19 §3.3）：渲染端检测会话边沿并组装 payload → notify
     // （invoke，返回是否实际显示）→ 主进程白名单/去重/裁决 + 原生通知。click →
@@ -5569,6 +5447,60 @@ if (!gotTheLock) {
     session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) =>
       callback(permission === 'clipboard-sanitized-write'));
     session.defaultSession.setPermissionCheckHandler((_wc, permission) => permission === 'clipboard-sanitized-write');
+
+    // W-10 S1（design 25 §4.1 seam）：shell IPC 注册点迁入 shell-core 的
+    // installIpcHandlers——INFO / SETTINGS_GET / SETTINGS_SET 注册体与其随迁
+    // settings 辅助（chamberSettingsStatus / applySettingsPatch /
+    // pushSettingsChanged）在 core 侧，本文件只做装配与注入：
+    //  - ipc：trustedIpc 围栏在此包一层（core 零 electron，语义与搬迁前
+    //    `ipcMain.handle(ch, trustedIpc(handler))` 完全一致）；
+    //  - edges：既有 createElectronEdges 返回值（S0 seam，rendererPush 叶）；
+    //  - ctx：宿主事实 + settings 内存 holder / 副作用叶活引用（holder 仍在本
+    //    文件——其余 20+ 处直读点随各自批迁入，届时 holder 一并搬家）。
+    // 调用点纪律（施工图 S1）：whenReady 内、createMainWindow 之前——窗口加载
+    // 前注册完毕，renderer 最早 invoke 也晚于全部启动代码。
+    const shellCtx: ShellAssemblyCtx = {
+      hostFacts: {
+        controlPlaneUrl: rendererOrigin,
+        platform: process.platform,
+        trayPresent: () => tray !== null,
+      },
+      runtimeFacts: {
+        dshVersion: () => resolveActiveRuntime(runtimeBaseDir, builtinDshWorkspace).version,
+      },
+      settingsIO: {
+        current: () => chamberSettings,
+        commit: next => {
+          chamberSettings = next;
+        },
+        persist: next => writeSettingsFile(chamberSettingsFilePath(runtimeBaseDir), next),
+      },
+      setKeepAwake: enabled => setKeepAwakeActive(enabled),
+      setLoginItem: enabled => applyLaunchAtLogin(enabled),
+      reconcileBadgeCount,
+      confirmRegistryOriginSwitch: async (currentOrigin, nextOrigin) => {
+        const win = mainWindow;
+        if (win === null || win.isDestroyed()) return 'unavailable';
+        const { response } = await dialog.showMessageBox(win, {
+          type: 'warning',
+          title: '切换 dsh 运行时版本源？',
+          message: '切换 dsh 运行时版本源？',
+          detail: `版本检查、下载与安装的信任边界将从\n${currentOrigin}\n切换到\n${nextOrigin}`,
+          buttons: ['取消', '切换版本源'],
+          defaultId: 0,
+          cancelId: 0,
+          noLink: true,
+        });
+        return response === 1 ? 'confirmed' : 'cancelled';
+      },
+    };
+    installIpcHandlers({
+      ipc: {
+        handle: (channel, handler) => ipcMain.handle(channel, trustedIpc(handler)),
+      },
+      edges,
+      ctx: shellCtx,
+    });
 
     // 启动期创建主窗口：加载失败 = 大声失败 + 退出（createMainWindow 内）；
     // activate/托盘/second-instance 恢复路径共用同一创建函数。

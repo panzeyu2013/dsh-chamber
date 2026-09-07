@@ -522,16 +522,30 @@ test('ChamberInjectionState / ChamberHostGraphState / ChamberSettings stay in lo
 
 const { IPC_CHANNELS } = await import('./ipc-events.ts')
 
-/** main.ts stays the sole IPC *registration* (ipcMain.handle) owner — keeping
- * one executable owner avoids a second, unimported handler implementation
- * drifting beside it. shell-core.ts and electron-edges.ts join the scan
- * because W-10 (design 25 §4.1) moves main-side TEXT between the three files:
- * the send-side channel references can now sit in any of them (S0: the four
- * committed pushes leave through the electron-edges rendererPush leaf whose
- * IPC_CHANNELS.X call sites still live in main.ts; later batches may move
- * send-side text itself). Scanning the union preserves the lockstep strength:
- * the three-file send set must still equal the preload on-set. */
+/** The IPC *registration* owner split across the W-10 seam: main.ts keeps the
+ * not-yet-migrated ipcMain.handle(...) registrations, and
+ * shell-core.installIpcHandlers (S1: INFO / SETTINGS_GET / SETTINGS_SET)
+ * registers through the injected registrar — the executable owner of each
+ * channel stays single (a second, unimported handler cannot drift beside the
+ * registered one because the surface equality below counts every spelling).
+ * shell-core.ts and electron-edges.ts join the scan because W-10 (design
+ * 25 §4.1) moves main-side TEXT between the three files: the send-side channel
+ * references can now sit in any of them (S0: the four committed pushes leave
+ * through the electron-edges rendererPush leaf whose IPC_CHANNELS.X call sites
+ * still live in main.ts; S1: the SETTINGS_CHANGED send source moved into
+ * shell-core). Scanning the union preserves the lockstep strength: the
+ * three-file handle/send sets must still equal the preload invoke/on sets. */
 const MAIN_SIDE_FILES = ['main.ts', 'shell-core.ts', 'electron-edges.ts']
+
+/** Handle-side registration spellings across the W-10 seam split (S1): main.ts
+ *  still owns the not-yet-migrated ipcMain.handle(...) registrations, while
+ *  shell-core.installIpcHandlers registers through the injected registrar
+ *  (deps.ipc.handle(...) — the S1 spelling; trustedIpc is applied by the
+ *  assembly-side wrapper, so no trustedIpc text appears beside it). The union
+ *  keeps the mirror equality strength across the split: every registration
+ *  counts once, and a handler re-spelled under the new registrar stays
+ *  covered. */
+const MAIN_HANDLE_CALLS = ['ipcMain.handle', 'deps.ipc.handle']
 
 function mainSideSource(): string {
   return MAIN_SIDE_FILES
@@ -543,13 +557,12 @@ function mainSideSource(): string {
  *  argument is either an IPC_CHANNELS constant reference (resolved against
  *  the imported constants) or a raw quoted literal (a regression the guard
  *  must also surface — the constant set is the source of truth). Since W-10
- *  the send side has two spellings: drains still call webContents.send(...)
- *  while the committed pushes go through the HostEdges
- *  edges.rendererPush(IPC_CHANNELS.X, ...) leaf — both count as send-side
- *  channel references (see collectMainSendChannels). */
-function collectMainChannels(source: string, call: 'ipcMain.handle' | 'webContents.send' | 'rendererPush'): string[] {
+ *  the handle/send sides have multiple spellings and `calls` is the union
+ *  (see MAIN_HANDLE_CALLS / collectMainSendChannels). */
+function collectMainChannels(source: string, calls: string | string[]): string[] {
+  const spellings = Array.isArray(calls) ? calls : [calls]
   const channels = new Set<string>()
-  const pattern = new RegExp(`${call}\\(\\s*(?:IPC_CHANNELS\\.([A-Z][A-Z0-9_]*)|'([^']*)'|"([^"]*)")`, 'g')
+  const pattern = new RegExp(`(?:${spellings.join('|')})\\(\\s*(?:IPC_CHANNELS\\.([A-Z][A-Z0-9_]*)|'([^']*)'|"([^"]*)")`, 'g')
   let match: RegExpExecArray | null
   while ((match = pattern.exec(source)) !== null) {
     if (match[1] !== undefined) {
@@ -587,15 +600,15 @@ function collectMainSendChannels(source: string): string[] {
   ])].sort()
 }
 
-const mainHandleChannels = collectMainChannels(mainSideSource(), 'ipcMain.handle')
+const mainHandleChannels = collectMainChannels(mainSideSource(), MAIN_HANDLE_CALLS)
 const mainSendChannels = collectMainSendChannels(mainSideSource())
 const preloadInvokeChannels = collectPreloadChannels(preload, 'invoke')
 const preloadOnChannels = collectPreloadChannels(preload, 'on')
 
-test('every ipcMain.handle channel is an IPC_CHANNELS constant (B8 — no raw main-side literals)', () => {
+test('every main-side ipcMain.handle / deps.ipc.handle channel is an IPC_CHANNELS constant (B8 — no raw main-side literals)', () => {
   const mainSource = mainSideSource()
-  const rawLiteral = /ipcMain\.handle\(\s*'([^']*)'|ipcMain\.handle\(\s*"([^"]*)"/.exec(mainSource)
-  assert.equal(rawLiteral, null, `main-side ipcMain.handle must use IPC_CHANNELS constants, found raw literal: ${rawLiteral?.[1] ?? rawLiteral?.[2]}`)
+  const rawLiteral = /(?:ipcMain\.handle|deps\.ipc\.handle)\(\s*'([^']*)'|(?:ipcMain\.handle|deps\.ipc\.handle)\(\s*"([^"]*)"/.exec(mainSource)
+  assert.equal(rawLiteral, null, `main-side handle registration must use IPC_CHANNELS constants, found raw literal: ${rawLiteral?.[1] ?? rawLiteral?.[2]}`)
 })
 
 test('the main-side handle channel set EQUALS the preload invoke channel set (B8)', () => {
