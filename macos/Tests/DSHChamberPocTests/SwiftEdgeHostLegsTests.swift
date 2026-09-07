@@ -32,8 +32,7 @@ final class SwiftEdgeHostLegsTests: XCTestCase {
     func testNotYetImplementedLegsReportUnimplemented() {
         let legs = SwiftEdgeHostLegs(config: .init(canShowUI: { true }))
         for method in [
-            "pickPluginSource", "setLoginItem", "showError", "launchApp",
-            "retireNotifications",
+            "setLoginItem", "showError", "launchApp", "retireNotifications",
         ] {
             let outcome = legs.respond(method: method, payload: nil)
             XCTAssertEqual(outcome.error, "swift-edge-unimplemented:\(method)")
@@ -51,7 +50,7 @@ final class SwiftEdgeHostLegsTests: XCTestCase {
         // canShowUI=true 但未接主窗：窗口守卫腿一律 no-window 诚实降级
         // （headless 测试绝不触发 NSWorkspace/NSApp/ProcessInfo 副作用）。
         let legs = SwiftEdgeHostLegs(config: .init(canShowUI: { true }))
-        for method in ["setBadge", "setKeepAwake", "showItemInFolder"] {
+        for method in ["setBadge", "setKeepAwake", "showItemInFolder", "pickPluginSource"] {
             let outcome = legs.respond(method: method, payload: nil)
             XCTAssertTrue(
                 outcome.error?.hasPrefix(SwiftEdgeHostLegs.uiUnavailablePrefix) ?? false,

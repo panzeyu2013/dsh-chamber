@@ -22,6 +22,7 @@
 import Foundation
 import AppKit
 import UserNotifications
+import UniformTypeIdentifiers
 
 /// AnyCodable 载荷提取助手（AnyCodable.jsonObject 的字典/标量投影）。
 enum EdgePayload {
@@ -253,6 +254,43 @@ public final class SwiftEdgeHostLegs {
                 }
                 NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: raw)])
                 return (nil, nil)
+            }
+        case "pickPluginSource":
+            // E8/A10 一体化 picker（folder|.tgz；design 21 §10 ⑧，electron-edges
+            // 语义：darwin openFile+openDirectory 一体）。模态主线程执行；
+            // 无窗/headless → 诚实降级。应答形状 {status:'cancelled'} 或
+            // {status:'picked', path}（node-edges pickPluginSource 折算）。
+            return performUI(method: method) {
+                guard mainWindowProvider?() != nil else {
+                    return (nil, Self.uiUnavailablePrefix + method + ":no-window")
+                }
+                var pickedPath: String?
+                var cancelled = false
+                let run: () -> Void = {
+                    let panel = NSOpenPanel()
+                    panel.title = "选择 chamber 插件源"
+                    panel.canChooseFiles = true
+                    panel.canChooseDirectories = true
+                    panel.allowsMultipleSelection = false
+                    panel.allowedContentTypes = [UTType.folder, UTType(filenameExtension: "tgz") ?? UTType.data]
+                    if panel.runModal() == .OK, let url = panel.urls.first {
+                        pickedPath = url.path
+                    } else {
+                        cancelled = true
+                    }
+                }
+                if Thread.isMainThread {
+                    run()
+                } else {
+                    DispatchQueue.main.sync(execute: run)
+                }
+                if cancelled {
+                    return (.object(["status": .string("cancelled")]), nil)
+                }
+                if let path = pickedPath {
+                    return (.object(["status": .string("picked"), "path": .string(path)]), nil)
+                }
+                return (nil, Self.uiUnavailablePrefix + method + ":no-selection")
             }
         case "showMessage":
             // 形状（HostMessageOptions，electron-edges/global.d.ts 为准）：
