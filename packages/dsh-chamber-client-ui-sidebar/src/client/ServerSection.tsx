@@ -1068,6 +1068,18 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                           const visibleSessions = sessionWindow.hiddenCount === 0
                             ? sessions
                             : sessions.slice(0, sessionWindow.renderCount)
+                          // 展开条文案按「可见（非 ghost）会话」计（2026 评审
+                          // 修复）：sessions 含短暂 blank-ghost 占位（≤
+                          // BLANK_GHOST_GRACE_MS，渲染期跳过），直接复用窗口
+                          // hiddenCount 会让「还有 N 个会话」在幽灵期内与组头
+                          // 徽标（visibleSessionCount 已去 ghost）漂移 ±幽灵数。
+                          // 窗口切片仍保留 ghost 行（占位防回流，见上），仅
+                          // 对外文案减去窗口内的 ghost 数。
+                          const visibleInSlice = visibleSessions.reduce(
+                            (count, session) => count + (isGhostSession(session) ? 0 : 1),
+                            0,
+                          )
+                          const hiddenVisibleCount = Math.max(0, visibleSessionCount - visibleInSlice)
                           const marker = workspaceDragMarker(workspace)
                           const activeSessionDrag = sessionDrag !== null
                             && sessionDrag.sourceId === server.id
@@ -1707,7 +1719,7 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                                 </Fragment>
                                 )
                               })}
-                              {sessionWindow.hiddenCount > 0 && (
+                              {hiddenVisibleCount > 0 && (
                                 <button
                                   type="button"
                                   className={cc.sessionRowsMore}
@@ -1715,7 +1727,7 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                                     setSessionRowsExpanded(prev => ({ ...prev, [workspaceKey]: true }))
                                   }}
                                 >
-                                  {t('sessionRows.showMore', { n: sessionWindow.hiddenCount })}
+                                  {t('sessionRows.showMore', { n: hiddenVisibleCount })}
                                 </button>
                               )}
                             </>

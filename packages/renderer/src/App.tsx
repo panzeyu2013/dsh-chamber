@@ -1845,7 +1845,22 @@ export default function App() {
     for (const id of autoPrewarmedRef.current) {
       if (!liveRemoteIds.has(id)) autoPrewarmedRef.current.delete(id)
     }
-    const remaining = Math.max(0, MAX_PREWARMED_REMOTE_VIEWS - autoPrewarmedRef.current.size)
+    // 保留槽位占用门（2026 评审 Major-1 修复）：保留槽（RETAINED_HIDDEN_VIEWS
+    // = 1）被「非自动预热」的隐藏非 local 壳占用（用户切走的温壳；含正在
+    // 打开、尚未 settle 的用户壳——保守视为占用）时，不再启动投机预热。
+    // 否则预热壳 settle 的 hiddenSince 恒晚于用户壳的切走时间，超限回收按
+    // hiddenSince 排序会把用户的温壳先回收、从未请求的预热壳占据槽位，且
+    // 被回收源进入预热抑制（reclaimView）——双倍保冷，违背 retention.ts
+    // 头注「最近访问的 1 个」契约（触发形态：睡眠唤醒/实例增删等 idle 边
+    // 缘 + 3+ 源，见 design 24/05 记录与 optimality review）。用户主动点开
+    // 时 selectView 同步摘除 autoPrewarmed 标记，此门随之为该壳让位。
+    const retentionSlotOccupied = mountedViews.some(id =>
+      id !== LOCAL_INSTANCE_ID
+      && id !== activeView
+      && !autoPrewarmedRef.current.has(id))
+    const remaining = retentionSlotOccupied
+      ? 0
+      : Math.max(0, MAX_PREWARMED_REMOTE_VIEWS - autoPrewarmedRef.current.size)
     const eligible = remoteInstances
       .filter(instance => remoteStatus[instance.id]?.phase === 'ready')
       .map(sourceIdForInstance)
@@ -1856,7 +1871,7 @@ export default function App() {
       .filter(id => !prewarmSuppressedRef.current.has(id))
       .slice(0, remaining)
     return new Set(eligible)
-  }, [remoteInstances, remoteStatus, mountedViews])
+  }, [remoteInstances, remoteStatus, mountedViews, activeView])
   prewarmEligibleRef.current = prewarmEligible
 
   const drainPrewarm = useCallback(() => {
@@ -1932,6 +1947,15 @@ export default function App() {
       prewarmEligibleRef.current = next
     }
     disposeInstanceShell(id)
+    // 诊断收敛（2026 评审 Minor-2 修复）：boot-graph 诊断通道没有 ctx 卸载
+    // 撤回——注册表删除路径之外的唯一清除点是显式 undefined 上报与退役。
+    // 回收是新的生命周期类别（ctx 拆除而来源仍注册），不清除会让被拆 ctx
+    // 的旧非 ok 诊断（bundle-load-failed / restart-required）挂在源上直到
+    // 注册表删除，健康重开反而无上报（shell.ts 只在 graph 失败时上报）。
+    // 与注册表删除镜像：clearPluginDiagnostic 改变签名 → 重发布，settings
+    // 的 connections 插件面随之更新。聚合/runtimeFacts/通知记忆仍按
+    // reclaimView 头注随 producer 通道撤回自行收敛。
+    chamberBridge.clearPluginDiagnostic(id)
     delete hiddenSinceRef.current[id]
     setMountedViews(prev => withoutRemovedSourceIds(prev, new Set([id])))
     setShellStates(prev => withoutRemovedSourceKeys(prev, new Set([id])))

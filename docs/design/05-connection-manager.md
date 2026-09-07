@@ -27,14 +27,6 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
    └─ N-ctx 多实例：每个来源一个 AppWebEntry（独立 cordis ctx、全量 ui-* 树），
         隐藏/显示切换；★ 连接客户端补丁（base 路径参数）：rpc 的 origin 解析 +
         WS 路径前缀，使每个 ctx 经 /api/i/<id>/* 访问自己的实例；会话状态零改动
-        （**2026 性能整改语义注记**：早期"booted 壳无限常驻（视图生命周期 =
-        注册表条目生命周期）"在 v0.2.3+ 收窄为 chamber 保留策略——除 local
-        恒留外，隐藏壳最多保留 RETAINED_HIDDEN_VIEWS=1 个（src/retention.ts），
-        超限回收"已 settle + 连续隐藏 ≥60s"的最久者；回收 = dispose shell +
-        卸载 UI 壳（App 层 reclaimView，与注册表删除同原语），实例进程/隧道/
-        后台任务不受影响，重开走冷 boot + entry 重放；被回收源的侧栏聚合落到
-        30s unary 兜底（05 §2.3 语义）。取舍：被回收壳内运行中任务的完成
-        蓝点/通知边沿暂停至该源重开。见 STATUS.md 与本文件 §4 原义的偏差登记）
         控制面（127.0.0.1:17500）
         ├─ 前端静态服务：dist/ + 启动图清单 __DSH_BOOT__
         ├─ 通用反代（每实例路径前缀，HTTP+WS+SSE 全量透传，无方法白名单）
@@ -58,6 +50,16 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
         └─ IPC（preload 白名单）
         远程目标：dsh（API 面 profile）或 gateway；按需使用 SSH+systemd 或 HTTP(S) 直连
 ```
+
+> **2026 性能整改语义注记（§1 形态图外部）**：早期"booted 壳无限常驻（视图
+> 生命周期 = 注册表条目生命周期）"在 v0.2.3+ 收窄为 chamber 保留策略——除
+> local 恒留外，隐藏壳最多保留 `RETAINED_HIDDEN_VIEWS=1` 个
+> （`src/retention.ts`），超限回收"已 settle + 连续隐藏 ≥60s"的最久者；
+> 回收 = dispose shell + 卸载 UI 壳（App 层 reclaimView，与注册表删除同
+> 原语），实例进程/隧道/后台任务不受影响，重开走冷 boot + entry 重放；被
+> 回收源的侧栏聚合落到 30s unary 兜底（§2.3 语义）。取舍：被回收壳内运行
+> 中任务的完成蓝点/通知边沿暂停至该源重开。预热/可见性门控等细节与偏差
+> 登记见 STATUS.md、performance-baseline.md §10 与本文件 §4 原义注。
 
 ## 2. 侧边栏契约（核心：多来源会话统一导航）
 

@@ -14,16 +14,20 @@
  *       [--profile] [--out scripts/perf/data/measure-ui-<ts>.json]
  *
  * 输出字段（schema: measure-ui/v1）：
- *   dom.totalNodes / dom.views.{mounted,hidden} / dom.perInstanceNodes
+ *   dom.totalNodes / dom.views.{mounted,hidden} / dom.perInstanceNodes[]
+ *     （每项 {id,hidden,pending,nodes}）
  *   heap.{usedJSHeapSize,totalJSHeapSize,jsSizeHeapLimit}
  *   idle.{durationMs,longtasks[],maxLongtaskMs,over100msCount}   —— 空闲 15s
- *   input.clicks[] + input.maxFrameGapMsAfterClick[]             —— 合成点击后 1s 窗
+ *   input.clicks[]（每击 {click,target,worstFrameMs,frames,longtasksMs}）
+ *     —— 合成点击后 1s 窗；target = 该击解析到的元素描述（aria-label /
+ *     文本前 40 字符 / 标签名）。点击会落在活动视图首个可交互元素上，
+ *     可能触发真实导航副作用——见 README 前置警告。
  *   frames.{p95Ms,worstMs,samples}                               —— 全程帧间隔
  *   profile.top20 (仅 --profile，5s CPU profile 自顶向下)
  *   各采集步失败降级为字段缺失并记入 errors[]；仅连接/参数错误非零退出。
  */
 import { mkdirSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { dirname, isAbsolute, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { findPageTarget, connect, installEarlyObservers, readPerf } from './cdp-lib.mjs'
 
@@ -100,7 +104,7 @@ const domSnapshot = await ev(`(() => {
   const total = document.getElementsByTagName('*').length
   const views = [...document.querySelectorAll('.instance-view')]
   const perInstance = views.map(v => ({ id: v.getAttribute('data-instance'), hidden: v.classList.contains('instance-hidden'), pending: v.classList.contains('instance-pending'), nodes: v.querySelectorAll('*').length }))
-  return { total, mounted: views.length, hidden: views.filter(v => v.classList.contains('instance-hidden')).length, perInstance }
+  return { totalNodes: total, views: { mounted: views.length, hidden: views.filter(v => v.classList.contains('instance-hidden')).length }, perInstanceNodes: perInstance }
 })()`)
 if (domSnapshot === undefined) errors.push('domSnapshot evaluate failed')
 else summary.dom = domSnapshot
@@ -139,10 +143,16 @@ for (let i = 0; i < clicks; i++) {
     const r = target.getBoundingClientRect()
     const x = r.x + Math.min(20, r.width / 2)
     const y = r.y + r.height / 2
+    // 记录解析到的目标（2026 评审：合成点击可能命中真实动作——new session/
+    // 设置等——逐击记录 aria-label/文本前 40 字符/标签名，A/B 对照时可在
+    // JSON 里核对每击实际点了什么；README 已加前置警告）。
+    const desc = target.getAttribute('aria-label')
+      || (target.textContent || '').trim().replace(/\\s+/g, ' ').slice(0, 40)
+      || target.tagName
     target.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: x, clientY: y }))
     target.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: x, clientY: y }))
     target.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: x, clientY: y }))
-    return 'OK'
+    return 'OK:' + desc
   })()`)
   await sleep(1000)
   // 点击后 1s 窗：帧间隔最坏值与长任务
@@ -194,12 +204,12 @@ if (wantProfile) {
 }
 
 summary.elapsedMs = Date.now() - startedAt
-const absoluteOut = join(repoRoot, outputPath)
+const absoluteOut = isAbsolute(outputPath) ? outputPath : join(repoRoot, outputPath)
 mkdirSync(dirname(absoluteOut), { recursive: true })
 writeFileSync(absoluteOut, JSON.stringify(summary, null, 2))
 
 // ---- stdout 人类可读摘要 ----
-console.log(`measure-ui: DOM=${summary.dom?.total ?? 'n/a'} nodes (${summary.dom?.mounted ?? '?'} views, ${summary.dom?.hidden ?? '?'} hidden)`)
+console.log(`measure-ui: DOM=${summary.dom?.totalNodes ?? 'n/a'} nodes (${summary.dom?.views?.mounted ?? '?'} views, ${summary.dom?.views?.hidden ?? '?'} hidden)`)
 console.log(`heap used=${summary.heap ? Math.round(summary.heap.usedJSHeapSize / 1024 / 1024) + ' MiB' : 'n/a'}`)
 console.log(`idle ${idleSec}s: longtasks=${summary.idle.longtasks.length} max=${summary.idle.maxLongtaskMs}ms over100ms=${summary.idle.over100msCount}`)
 if (summary.frames?.samples) console.log(`frames: samples=${summary.frames.samples} p95=${summary.frames.p95Ms}ms worst=${summary.frames.worstMs}ms`)

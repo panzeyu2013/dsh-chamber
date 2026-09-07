@@ -57,7 +57,8 @@ export interface ReclaimDecisionInput {
 /**
  * 决定本次应回收的视图 id（0..n，幂等、确定性）。规则：
  * 1. 候选 = 挂载中、非 local/active/pending/prewarm-inflight、已 settle、
- *    且 hiddenSince 存在并超 VIEW_RECLAIM_GRACE_MS；
+ *    且 hiddenSince 存在并 ≥ VIEW_RECLAIM_GRACE_MS（恰好等于边界即可回收
+ *    ——docs 与 STATUS 一律记「≥60s」，2026 评审对齐措辞，边界有单测钉住）；
  * 2. 隐藏非 local 壳数超过 RETAINED_HIDDEN_VIEWS 才回收，按 hiddenSince
  *    升序（最久者先），一次只收到上限（尽力而为：不可回收的占位壳——如
  *    仍在 boot——不计入本次回收量，但其 settle 后会自行进入候选窗）。

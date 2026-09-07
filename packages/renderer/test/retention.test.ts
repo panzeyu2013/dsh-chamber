@@ -116,14 +116,23 @@ test('超窗即进入候选', () => {
   assert.deepEqual(result, ['dsh-a'], '隐藏 2 超限 1，回收最久者')
 })
 
-test('恰好等于安全窗边界不回收（严格大于）', () => {
+test('恰好等于安全窗边界即可回收（≥ 语义，2026 评审修正）', () => {
+  // 判别构造：A 恰在边界（now - GRACE）、B 超窗更久、C 仍在窗内；隐藏 3
+  // 超限 2 → 候选须含 A。若实现是严格大于（>），A 被排除、只回收 B——
+  // 本测试钉住与 docs「≥60s」一致的语义（旧单视图构造经 excess==0 早退，
+  // 从未触达边界过滤，标题与实现矛盾）。
+  const atBoundary = NOW - VIEW_RECLAIM_GRACE_MS
   const result = decide({
-    mountedViews: [LOCAL, 'dsh-a'],
+    mountedViews: [LOCAL, 'dsh-a', 'dsh-b', 'dsh-c'],
     activeViewId: LOCAL,
-    hiddenSince: { 'dsh-a': NOW - VIEW_RECLAIM_GRACE_MS },
-    settled: settledSet(['dsh-a']),
+    hiddenSince: {
+      'dsh-a': atBoundary,
+      'dsh-b': atBoundary - 1,
+      'dsh-c': JUST_NOW,
+    },
+    settled: settledSet(['dsh-a', 'dsh-b', 'dsh-c']),
   })
-  assert.deepEqual(result, [])
+  assert.deepEqual(result, ['dsh-b', 'dsh-a'], '最久者先回收，恰好等于边界者随超限量回收')
 })
 
 // ---- 保留上限 ----

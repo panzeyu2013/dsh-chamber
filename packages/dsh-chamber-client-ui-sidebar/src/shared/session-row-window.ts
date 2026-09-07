@@ -17,7 +17,10 @@
  * - 纯函数、无 DOM 依赖，node 直跑单测。
  */
 
-/** 每工作区首屏渲染的会话行上限。 */
+/** 每工作区首屏渲染的会话行上限。取值理由（2026 评审补注）：200 行 ≈
+ *  6–8 屏（行高 ~32px），远超实际首屏（性能目标在此）又远小于大列表全量
+ *  （~32px/行 × 1400 行 ≈ 45k px DOM 的线性膨胀段），展开条给出完整入口；
+ *  值被单测/文档引用，调整须同步。 */
 export const SESSION_ROWS_VISIBLE_FIRST = 200
 
 export interface SessionRowWindowParams {

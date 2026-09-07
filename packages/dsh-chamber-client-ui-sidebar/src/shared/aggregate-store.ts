@@ -209,6 +209,9 @@ export const chamberBridge = {
    * macrotask 内的多次 publish 合并为一次渲染，异步合并反而会引入
    * getServers() 读到中间态的竞态窗口。本入口只保留引用相等防御：publish
    * 语义是"换快照 + 通知"，同引用重发无任何增量（快照本身不可变）。
+   * 不变式（2026 评审补注）：同引用重发布被静默丢弃——不可变快照下同引用
+   * ≡ 无内容变化；若未来引入原地突变 + 同引用重发布（今日被不可变性禁止），
+   * 此守卫会吞掉它——任何此类改动必须先改写本注释，而非绕过守卫。
    */
   publish(next: ChamberServerAggregate[]): void {
     if (next === servers) return
