@@ -107,6 +107,15 @@
 - **性能遗留真实机清单**：宽侧栏冷 settle CLS、版本事务主进程阻塞采样、H3 真机懒
   加载验证——步骤见 `docs/progress/performance-baseline.md` §7（需打包版或带会话 dev
   实例）。
+- **性能整改第二阶段（视图保留/后台门控/行窗口，2026 A/B/C/D）剩余实机验收**：
+  代码面已落地——renderer 保留策略（`src/retention.ts` + App.tsx 回收/预热 3→1/
+  可见性门控，含恢复补偿）、sidebar 会话行窗口（`shared/session-row-window.ts` +
+  ServerSection 展开条）、`scripts/perf/measure-ui.mjs` 基线尺子；语义偏差与验收
+  表见 design 05 §1 注记与 performance-baseline.md §10。剩余——打包版/带会话 dev
+  实例同环境 A/B 对照（measure-ui：DOM 节点/堆/空闲长任务/合成输入帧间隔/预热壳
+  数）与「打开→切走→重开 ×3 堆无净增长」回归项。已知取舍（登记）：被回收壳内
+  运行中任务的完成蓝点/通知边沿随 runtime-facts 通道撤回而暂停，直至该源重开
+  （冷 boot 首报重新播种）；侧栏聚合降级为既有 30s unary 兜底（05 §2.3）。
 - **SSH 密码一键免密引导与系统钥匙串（05 §8）**：未实现（现行为 endpoint-bound 0600
   明文镜像，见取舍）。
 - **模型额外参数 + 默认推理等级（design 07）**：wire 白名单无泛化透传、host 组合不
@@ -185,6 +194,12 @@
 - **N-ctx 单文档信任域**：连接远端实例让其前端与同一 renderer 文档内其他实例及高
   权限 preload bridge 共域；现有 main-frame/origin/proof/主进程确认只能缓解，真正
   横向隔离推迟到每实例独立 WebContents 架构。
+- **N-ctx 壳常驻语义收窄（2026 性能整改偏差，已登记代码注释与 design 05 §1）**：
+  05 §1/§4 的「booted 壳无限常驻 / 视图生命周期 = 注册表条目生命周期」收窄为
+  chamber 保留策略——local 恒留，隐藏壳最多保留 RETAINED_HIDDEN_VIEWS=1，超限
+  回收「已 settle + 连续隐藏 ≥60s」的最久者（回收 = dispose shell + 卸载壳，
+  实例进程/连接不受影响，重开冷 boot）；被回收源不再自动预热直到用户点开。
+  运行中任务的完成蓝点/通知边沿随壳回收暂停至重开（取舍登记，见上条目）。
 - **不做（v1）**：跨来源移动会话、单 store 真融合、控制面会话实时同步、远程实例
   管理 UI 外壳。**推迟**：flat 单列表模式（与「仅按来源分类」呈现原则有张力）。
 - **设置壳偏差**：未连接实例不装配子 ctx；stub remote 无 WS 失效流；壳不渲染官方
