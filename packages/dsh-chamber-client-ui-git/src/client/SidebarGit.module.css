@@ -148,7 +148,9 @@
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-  color: var(--dsw-alias-label-secondary);
+  /* Affected-session names are primary information in the remove dialog —
+     standard label-primary ink, not the muted secondary label tone. */
+  color: var(--dsw-alias-label-primary);
   font-size: 11px;
 }
 
