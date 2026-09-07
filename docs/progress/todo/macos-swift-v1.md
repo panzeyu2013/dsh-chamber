@@ -264,6 +264,18 @@ transport-manager 126/126、typecheck 0 诊断、**test:desktop 892/892**。已�
 K2 原实现引用 main 模块级 `version`（shouldInvalidate 实参），shell-core 改为模块级
 读兄弟 package.json 同值自足（dev/打包同目录布局，值恒等）；若后续改第三参注入代价小。
 W-10 seam 化批（HostEdges/60 handle 迁入/mirror MAIN_SIDE_FILES 扩展）为下一大块。
+**W-10 收口（同日 S0–S11 十二批全部提交）**：60/60 ipcMain.handle 全迁 shell-core
+installIpcHandlers（S0 装配/S1 info+settings/S2 notify+badge+ready+投递状态机/
+S3 registry+凭据/S4 ssh 连接状态/S5 ssh 服务/S6 ssh 插件/S7 gateway 插件/S8
+local+npm/S9 open-in+update+深链合龙/S10 runtime A/S11 runtime B）；HostEdges
+seam 落位（electron-edges.ts：rendererPush/通知/badge/keep-awake/showMessage/
+pickPluginSource/openExternal/openPath/showItemInFolder/showError/三可用性门）；
+main.ts 5663→3803（剩余=装配/窗口 glue/生命周期/启动事务宿主/publishRegistry
+Transition，W-10 边界内）；ipc-surface-mirror 增 B12/E8 无死键断言（68/68）；
+electron-free-gate 面 A/B/C 全绿；每批门禁 test:desktop 全绿（收官 896/896）。
+**下一大块（暂停待命点）**：W-11/12/13——sidecar-entry/node-edges/B 桥服务端/
+stdio 冒烟（installIpcHandlers 现可被 node-edges 复用；electron-edges 为唯一
+Electron 面）→ M3 Swift edges。
 **环境事故登记（同日 18:23–18:30）**：`/Applications/dsh-chamber.app/Contents/MacOS/
 dsh-chamber` 可执行文件被误替换为「exec nvm node」跳转 shim（推测为某 subagent 建
 PATH shim 时写错目标路径；真二进制无备份、stub 与框架配对校验失败）。处置：从主检出

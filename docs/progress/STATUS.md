@@ -154,6 +154,12 @@
   `desktop_ssh_instances_get` 回包）；静态审查 0 Blocker/1 Major 已修（instances_get
   诚实错误帧）+ 7 项 Minor 代码修正（深度上限/Dock reopen/护栏统一/转义等）；G1 用户
   实机目测确认（本地实例正常显示），其余 G 门按用户指示暂缓；D1–D7 未签核。
+   **M2/W-09+W-10 已交付（同日，逐批门禁全绿）**：shell-core.ts 落地（W-09 纯搬运）；
+   W-10 S0–S11 十二批——60/60 ipcMain.handle 全迁 installIpcHandlers、HostEdges/
+   electron-edges seam 落位、深链合龙、mirror 无死键断言（68/68）、main.ts 5663→
+   3803（剩装配/窗口 glue/生命周期/启动事务宿主）；每批 test:desktop 全绿（收官
+   896/896）+ typecheck 0；**下一块（W-11/12/13 sidecar-entry/node-edges/stdio 冒烟
+   → M3）暂停待命，等用户指示恢复**。
 - **起始端口偏移**：本地默认 17510、控制面默认 17500；当前固定起始端口 + P+1 重试 +
   记录仲裁，是否开放配置仍未决。
 - **trusted-host 自定义 Host**：当前反代 Host 与实例自身 `127.0.0.1:<port>` 一致；
