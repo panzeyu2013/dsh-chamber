@@ -169,6 +169,10 @@
    **已登记硬门禁（未伪造，待实机/凭据）**：W-21 真实通知/角标腿需 BridgeClient
    异步 edge 应答改造 + GUI 验收；M4 Sparkle/blocked-available 需 Apple 凭据
    （A6）；G 门 walkthrough 与截屏此前被系统屏幕录制拒绝。
+   **P3 打包闭环（同日）**：当前 HEAD 产物 zip/blockmap/app/DMG（离线
+   hdiutil）就绪于 packages/desktop/release/（adhoc 签名、0.2.2）；沙箱无
+   外网 → distribution 签名/notarization/dmgbuild 标准版式受阻（登记）；
+   asar 抽查含当前分支核心文件；/Applications 刷新待用户确认（事故纪律）。
 - **起始端口偏移**：本地默认 17510、控制面默认 17500；当前固定起始端口 + P+1 重试 +
   记录仲裁，是否开放配置仍未决。
 - **trusted-host 自定义 Host**：当前反代 Host 与实例自身 `127.0.0.1:<port>` 一致；
