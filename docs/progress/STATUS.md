@@ -139,6 +139,11 @@
 
 ## 设计未决
 
+- **macOS Swift 原生壳（design 25，路线 A：WKWebView + Node sidecar 全复用）**：
+  方案草案已出（docs/design/25-macos-swift-native-shell.md），**未立项**。待用户
+  决策：P0 POC 先行、双壳共存/bundle id、更新路线（v1 发布页 → v2 Sparkle）、
+  仓库落位、Node 版本/架构、静态凭据加密（v1 建议诚实 0600 明文）。实施须先过
+  P0 验证门（WebKit parity + 桥护栏）；Electron 版（Win/Linux/mac）并行不回归。
 - **起始端口偏移**：本地默认 17510、控制面默认 17500；当前固定起始端口 + P+1 重试 +
   记录仲裁，是否开放配置仍未决。
 - **trusted-host 自定义 Host**：当前反代 Host 与实例自身 `127.0.0.1:<port>` 一致；
