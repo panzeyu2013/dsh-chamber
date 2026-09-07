@@ -289,6 +289,26 @@ D8 + 信号优雅）；sidecar-stdio.test.ts 6/6（ready/info/settings-set→ren
 范围，stdio 侧对 NOTIFY 类 edge-await 通道无 Swift 必挂起——已注释）；② dev 起
 sidecar 的便捷命令未加（机器相关 node 路径，命令见 §0.2 ③ 语义可手拼）；③ 无头
 ctx 真实化逐项列于 sidecar-entry.ts 注释。
+**M3 已交付切片（同日）**：
+- **BridgeClient edge/notify/ready 扩展 + 60 通道无 GUI 全量冒烟**（c612382）：
+  outbound 帧分类、onEdgeRequest/onNotify/onReady、默认 edge 应答器（同步门
+  真值/showMessage 0/其余 swift-edge-unimplemented 绝不挂起）、edge 恰好一次
+  + 会话代际、stop 收尸竞态修复（有界轮询替代挂死 waitUntilExit）；
+  BridgeClientEdgeIntegrationTests 3 例（60/60 零超时 ok13/loud47、自定义应答
+  两路等价、settings-set→rendererPush + SIGTERM exit0）；swift test 27/27。
+- **W-17 manifest 管线**（2c3cfc4）：emit-bridge-manifest.mjs（IPC_CHANNELS +
+  三 main-side 文件注册点扫描，校验链死键/双引用/表外 loud）；提交物
+  bridge-manifest.json + BridgeManifest.swift；bridge-manifest.test 6/6 接入
+  desktop 链；两次生成字节一致。
+- **W-18 前半**（3e082f6/06165cd）：生成物迁入 macos/Sources/DSHChamberPoc/
+  Generated/（target 内编译接线，Package 零改动）；BridgeManifestConsistency
+  Tests 5 例（60/8/68/golden）；swift test 32/32；docs 路径引用同步。
+- **W-13 缺口闭合**：60 通道全量冒烟经 Swift harness 应答 edges 已无 GUI 闭环。
+**剩余路线**（不省略登记）：W-18 后半（E8 shim 存根产出、manifest 运行时白名单
+消费决策：POC 白名单 7 收窄暂维持，全量放行待 shim 全量生成时评审）→ W-19…W-21
+（窗口/菜单/生命周期/通知/角标/深链/对话框/外链/登录项/崩溃恢复——Swift 宿主腿
+替换默认应答分支，GUI 门禁待实机）→ W-22…（更新 v1 blocked-available + info
+flavor）→ M5 台账收口。
 **环境事故登记（同日 18:23–18:30）**：`/Applications/dsh-chamber.app/Contents/MacOS/
 dsh-chamber` 可执行文件被误替换为「exec nvm node」跳转 shim（推测为某 subagent 建
 PATH shim 时写错目标路径；真二进制无备份、stub 与框架配对校验失败）。处置：从主检出
