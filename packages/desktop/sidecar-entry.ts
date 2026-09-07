@@ -224,6 +224,8 @@ let headless: HeadlessCtxAssembly | null = null
 let ctx: ShellAssemblyCtx | null = null
 let controlPlaneInstance: Awaited<ReturnType<typeof createControlPlane>> | null = null
 let shuttingDown = false
+/** pre-spawn 回退幂等门（W-13 补；见 main() 内注释） */
+let startLocalAttempted = false
 
 async function boot(): Promise<void> {
   // S-C-1/S-C-2 无头 ctx（async：启动前导 reaps 本地插件写进程账目；edges =
@@ -295,6 +297,27 @@ async function boot(): Promise<void> {
   // 启动尾部（main 3785-3789 同形——内部已含 catch 折叠与门/投影处理，绝不
   // 使 ready 帧延迟：尾部在 ready 之后异步执行）。
   void headless.runStartupTail()
+
+  // W-13 补（dev 观察实证）：启动事务只做探针拉起、探针进程退出后未驻留本地
+  // 实例（connectionState 回到 stopped）——5s/12s 两拍回退为已验证的直接
+  // pre-spawn（幂等：已 attempt 或状态非 stopped 即跳过；与事务串行化由 cp
+  // startLocal 单飞语义兜住）。
+  if (dshPath !== null) {
+    const maybeStartLocal = async (): Promise<void> => {
+      if (startLocalAttempted) return
+      try {
+        if (controlPlane.connectionState !== 'ready' && controlPlane.connectionState !== 'starting') {
+          startLocalAttempted = true
+          console.log('[sidecar] 启动事务未驻留本地实例——直接 pre-spawn 回退')
+          await controlPlane.startLocal()
+        }
+      } catch (err) {
+        console.error('[sidecar] pre-spawn 回退失败：' + String(err))
+      }
+    }
+    setTimeout(() => void maybeStartLocal(), 5000).unref?.()
+    setTimeout(() => void maybeStartLocal(), 12000).unref?.()
+  }
 }
 
 /** 优雅退出（信号/EOF 共用）：quitting 门 → ctx 侧回收（transport/插件子进程/
