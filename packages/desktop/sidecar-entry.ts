@@ -302,7 +302,7 @@ async function boot(): Promise<void> {
   // 实例（connectionState 回到 stopped）——5s/12s 两拍回退为已验证的直接
   // pre-spawn（幂等：已 attempt 或状态非 stopped 即跳过；与事务串行化由 cp
   // startLocal 单飞语义兜住）。
-  if (dshPath !== null) {
+  if (args.dshPath !== null) {
     const maybeStartLocal = async (): Promise<void> => {
       if (startLocalAttempted) return
       try {
