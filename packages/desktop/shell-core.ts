@@ -153,6 +153,23 @@
  *  - 外链打开统一入口（openExternally 迁入）：URL 规范化 + 10s/8 次预算 + 30s
  *    冷却（原 main.ts 窗口 glue 的模块级函数整体迁入——glue 改经 core 导出 +
  *    装配期快照的 edges.openExternal 宿主叶）。
+ *  Responsibilities relocated from main.ts (W-10 S10 runtime A batch):
+ *  - J 组 6 个注册体：RUNTIME_STATE / RUNTIME_RESTART / RUNTIME_CHECK /
+ *    RUNTIME_INSTALL / RUNTIME_CLEANUP_VERSION / RUNTIME_CLEAR_FAILURE——按原
+ *    main.ts 顺序追加在 I 组之后（installIpcHandlers ② 段）。注册体逐字随迁
+ *    （trustedIpc 围栏由装配侧注入 registrar 包装）；dsh-runtime 控制器现实例
+ *    （DshRuntimeController——main 装配侧 whenReady 构造）与 fence/门/宿主叶经
+ *    ctx 注入（runtimeController / runtimeOperationBusy / runtimeWriterFence /
+ *    runtimeActionAllowed / runtimeBaseDir / refreshRuntimeEvidence /
+ *    runStorePruneIfNeeded / restartLocalDsh——main 侧 K 组注册体与启动/证据
+ *    路径共用同一实例/闭包，语义不分叉）；@dsh-chamber/dsh-runtime 纯逻辑
+ *    （isSafeVersion / cleanupExplicitRuntimeVersion /
+ *    listExplicitlyInstalledVersions / listRuntimeFailures / clearRuntimeFailure
+ *    ——electron-free 共享核）core 直接 import；确认对话框 = core 内 S6 版
+ *    confirmRuntimeMutation 助手（edges.showMessage 宿主腿——按钮序/取消默认/
+ *    文案逐字一致；无窗 → false = 'native confirmation unavailable' 不确认语
+ *    义）；runRuntimeCheck 随迁（周期/首检计时器仍归 main 装配侧，经导出入口
+ *    runRuntimeCheckCycle 调用同一实现）。
  *
  * 中文说明：自 main.ts 机械搬运的 Electron-free 业务核心（零缝阶段，行为零
  * 变化）；W-10 S1 起 IPC 注册点与 A 组 info+settings 处理器迁入本文件
@@ -178,6 +195,11 @@
  * 现实例注入；宿主打开/揭示/错误框叶 openExternal/openPath/showItemInFolder/
  * showError 在 electron-edges.ts S9 实现），并把深链 OS 启动队列 + 消费循环
  * 与 openExternally 外链预算器收进本文件（S2 遗留闭合）。
+ * S10 追加 J 组 runtime A 6 注册体（RUNTIME_STATE / RUNTIME_RESTART /
+ * RUNTIME_CHECK / RUNTIME_INSTALL / RUNTIME_CLEANUP_VERSION /
+ * RUNTIME_CLEAR_FAILURE——控制器实例/fence/门/宿主叶经 ctx，dsh-runtime 纯
+ * 逻辑直 import，确认对话框 = S6 edges 版助手同款宿主腿；runRuntimeCheck 随迁、
+ * 周期检查经导出入口 runRuntimeCheckCycle）。
  * HostEdges 其余边沿叶与双 flavor 属后续批。
  */
 
@@ -268,6 +290,23 @@ import {
   shouldInvalidate,
   validateVersionTree,
 } from '@dsh-chamber/dsh-runtime';
+// W-10 S10（runtime A 批）：J 组 6 注册体直 import 的 @dsh-chamber/dsh-runtime
+// 纯逻辑（electron-free 共享核——与 main.ts 同款 import 面）；控制器现实例与
+// fence/门/宿主叶仍经 ctx 注入（实例态与装配期单写者留 main）。
+import {
+  cleanupExplicitRuntimeVersion,
+  clearRuntimeFailure,
+  isSafeVersion,
+  listExplicitlyInstalledVersions,
+  listRuntimeFailures,
+} from '@dsh-chamber/dsh-runtime';
+import type { RuntimeAction, RuntimeOperationFence } from '@dsh-chamber/dsh-runtime';
+// W-10 S10: dsh-runtime-controller.ts 为 electron-free 纯编排模块（只 import
+// @dsh-chamber/dsh-runtime + sanitize-error，零 electron）——core 只做**类型**
+// import（DshRuntimeController / RuntimeLifecycleProjection 为结构纯类型面；
+// 注册体返回的 state 形状经控制器方法类型推断，无需另行具名）；
+// 控制器现实例在 main 装配侧构造、经 ctx.runtimeController 注入。
+import type { DshRuntimeController, RuntimeLifecycleProjection } from './dsh-runtime-controller.ts';
 // W-10 S6（ssh plugin 批）：F 组编排纯模块直接 import——plugin-sync /
 // ssh-apply-rows / plugin-tarball 均为 electron-free 纯模块（main.ts 同款
 // import 面，无 electron、无 shell-core 反向依赖）。ssh-plugin-journal /
@@ -1190,6 +1229,26 @@ export function openExternally(url: string): void {
 }
 
 // ---------------------------------------------------------------------------
+// Runtime check cycle slot (W-10 S10 runtime A batch).
+//
+// runRuntimeCheck（原 main.ts whenReady 局部 const）随 RUNTIME_CHECK 注册体迁
+// 入 installIpcHandlers ② J 组段——main 装配侧的首检/周期计时器（15s 首检 +
+// 6h 周期）经本导出入口调用与 IPC 注册体**同一**实现与门（quit/事务在飞/动作
+// 不允许时 no-op 返回当前 state——apply/restore 挂起检查、下个周期恢复的共享
+// 门不变）。装配槽 = 下方 installIpcHandlers ② J 组段赋值（单装配不变式：
+// installIpcHandlers 先于任何计时器 tick——计时器在装配后创建并 15s/6h 才首
+// 次触发，槽位必已就绪；未装配时导出入口静默 no-op，同 S2 导出入口先例）。
+// ---------------------------------------------------------------------------
+let runtimeCheckRunner: (() => void) | null = null;
+
+/** 触发一次 idle-gated dsh runtime 检查（main 装配侧启动/周期计时器入口——
+ *  RUNTIME_CHECK 注册体与周期路径共用同一实现，语义不分叉）。 */
+export function runRuntimeCheckCycle(): void {
+  const runner = runtimeCheckRunner;
+  if (runner !== null) runner();
+}
+
+// ---------------------------------------------------------------------------
 // Shell IPC registration (design 25 §4.1 seam; W-10 S1 info+settings +
 // S2 notify/badge/ready + S3 registry/credentials + S4 ssh-connection-state
 // batch).
@@ -1246,7 +1305,16 @@ export function openExternally(url: string): void {
 //     （npm 搜索 registry URL 白名单 = @dsh-chamber/dsh-runtime
 //     isAllowedRegistryUrl），本地安装执行叶 runLocalPluginMutation 经 ctx（main
 //     装配侧 runtime writer fence 编排），确认/无窗预检/pick 经 S6 edges 宿主腿，
-//     见 ShellAssemblyCtx）；
+//     见 ShellAssemblyCtx）+ J 组 6 个注册体（S10 批 runtime A：RUNTIME_STATE /
+//     RUNTIME_RESTART / RUNTIME_CHECK / RUNTIME_INSTALL / RUNTIME_CLEANUP_VERSION /
+//     RUNTIME_CLEAR_FAILURE——按原 main.ts 顺序追加在 I 组之后；控制器现实例/
+//     fence/动作门/宿主叶经 ctx（runtimeController / runtimeOperationBusy /
+//     runtimeWriterFence / runtimeActionAllowed / runtimeBaseDir /
+//     refreshRuntimeEvidence / runStorePruneIfNeeded / restartLocalDsh——K 组
+//     注册体与启动/证据路径共用同一实例，语义不分叉），dsh-runtime 纯逻辑直接
+//     import，确认对话框 = J 组段 S6 版 confirmRuntimeMutation 助手 +
+//     edges.showMessage，runRuntimeCheck 随迁并经导出入口 runRuntimeCheckCycle
+//     供 main 侧计时器调用同一实现，见 ShellAssemblyCtx）；
 //   ③ 自举（占位——控制面 ready 后的启动/恢复 push 与余下 drain 挂点在 W-10
 //      后续批迁入，见 macos-swift-v1.md §四批 2）。
 // ---------------------------------------------------------------------------
@@ -1473,10 +1541,57 @@ export interface ShellAssemblyCtx {
   // 侧）。I 组 UPDATE_* 注册体与状态 push 订阅共用同一实例；装配侧在
   // installIpcHandlers 之后调 updater.start()（保持「先订阅后 start」原序）。 */
   updateController: UpdateController
+  // —— W-10 S10（runtime A 批）新增字段：J 组 6 个 runtime 注册体（RUNTIME_STATE /
+  // RUNTIME_RESTART / RUNTIME_CHECK / RUNTIME_INSTALL / RUNTIME_CLEANUP_VERSION /
+  // RUNTIME_CLEAR_FAILURE）的装配依赖。控制器现实例、fence 现实例、动作门与
+  // 宿主叶全部由 main 装配侧定义并经 ctx 注入——main 侧 K 组注册体（RUNTIME_
+  // RECOVER_METADATA / RESET_BUILTIN / RETRY_APPLY / APPLY_NOW / RETRY_RESTORE /
+  // RESTORE_PRE_ROLLBACK，后续批迁入）与启动/证据路径共用同一实例/闭包：状态
+  // 权威单一、单飞/串行化语义不分叉。注册体文本经上方解构以原名逐字保留（除
+  // `runtimeOperation !== null` → `runtimeOperationBusy()` 与
+  // `chamberSettings.registryOrigin` → `settingsIO.current().registryOrigin`
+  // 两处机械替换——见 J 组段注释）。
+  /** DshRuntimeController 现实例（main 装配侧 whenReady 构造——类型 import 自
+   *  dsh-runtime-controller.ts（electron-free 纯编排模块），core 只做类型面；
+   *  K 组注册体与启动/证据路径共用同一实例，状态权威单一）。 */
+  runtimeController: DshRuntimeController
+  /** runtime 事务槽在飞读门（原 main.ts 模块级 `runtimeOperation !== null`——
+   *  槽位单写者仍归 main：启动事务/回滚/K 组注册体赋值，core 只经本叶读）。
+   *  J 组注册体文本中 `runtimeOperation !== null` 逐处机械替换为
+   *  runtimeOperationBusy()。 */
+  runtimeOperationBusy(): boolean
+  /** runtime writer fence 现实例（原 whenReady runtimeWriterFence——启动事务
+   *  （runtime:startup / runtime:restart-exhausted 等 acquire）与 K 组路径共用；
+   *  busy 读与 tryAcquire 与原调用点同一实例，跨 core/main 的 writer 串行化
+   *  语义不分叉；owner 名与搬迁前注册体逐字一致）。 */
+  runtimeWriterFence: Pick<RuntimeOperationFence, 'busy' | 'tryAcquire'>
+  /** runtime 动作终态门（原 main.ts whenReady runtimeActionAllowed 闭包——K 组
+   *  注册体同用；单一实现经 ctx 注入 core，行为不分叉）。action 参数 = 共享核
+   *  RuntimeAction 联合（allowedActions 的可见动作集）。 */
+  runtimeActionAllowed(action: RuntimeAction): boolean
+  /** 权威 runtime base dir（装配期解析 <userData> 路径注入——core 不碰 Electron
+   *  paths；@dsh-chamber/dsh-runtime 纯 store 函数（listExplicitlyInstalledVersions /
+   *  cleanupExplicitRuntimeVersion / listRuntimeFailures / clearRuntimeFailure）
+   *  经它与 main 侧同一 baseDir 调用，行为与搬迁前一致）。 */
+  runtimeBaseDir: string
+  /** 磁盘/快照/失败证据刷新叶（原 whenReady refreshRuntimeEvidence 闭包——
+   *  coalescer、lastDiskEvidence 与 projectMetadataHealth 宿主状态归装配侧；
+   *  K 组注册体与启动路径同用同一实现）。 */
+  refreshRuntimeEvidence(patch?: RuntimeLifecycleProjection): Promise<void>
+  /** pnpm store prune 叶（原 whenReady runStorePruneIfNeeded——storePruneOperation
+   *  单飞宿主状态归装配侧；清理路径与启动尾部共用同一实现）。 */
+  runStorePruneIfNeeded(): Promise<void>
+  /** 事务性 dsh 重启宿主叶（PlaneHandle 在 main——原 RUNTIME_RESTART 注册体的
+   *  `controlPlane === null` 门 + controlPlane.restartLocal() + resolve 后实时
+   *  connectionState 读封装在装配侧叶内）：controlPlane 未初始化 → throw
+   *  'control plane not initialized'（与原注册体同文案）；resolve ≠ success——
+   *  restartLocal() 从 restart-exhausted/error 等终态 resolve 时由 core 注册体
+   *  按返回的 connectionState 白名单诚实拒绝。 */
+  restartLocalDsh(): Promise<string>
 }
 
 /** 装配 shell IPC 面（W-10 S1 A 组 + S2 B 组 + S3 C 组 + S4 D 组 + S5 E 组 +
- *  S6 F 组 + S7 G 组 + S8 H 组 + S9 I 组注册体与随迁辅助；各组注册顺序 = 原
+ *  S6 F 组 + S7 G 组 + S8 H 组 + S9 I 组 + S10 J 组注册体与随迁辅助；各组注册顺序 = 原
  *  main.ts 顺序）。edges
  *  参数以 Pick 收窄到本批实际调用的成员（createElectronEdges 返回同形超集）；
  *  后续批实现新成员时同步扩宽两侧。
@@ -1565,6 +1680,22 @@ export function installIpcHandlers(deps: {
     // 逐字保留 updater.xxx 调用；实例本体在 main 装配侧构造，start() 由装配侧在
     // installIpcHandlers 之后调用（保持「先订阅后 start」原序））。
     updateController: updater,
+    // W-10 S10 另增 J 组字段：runtimeController → runtimeInstance（同 updater
+    // 映射先例——J 组注册体文本以原名逐字保留；控制器现实例在 main 装配侧构造，
+    // K 组注册体与启动/证据路径共用）、runtimeOperationBusy（模块级 runtimeOperation
+    // 事务槽在飞读门——`runtimeOperation !== null` 逐处机械替换）、
+    // runtimeWriterFence（同一 fence 现实例——owner 名与原注册体逐字一致）、
+    // runtimeActionAllowed（K 组同用同一门实现）、runtimeBaseDir（装配期解析值）、
+    // refreshRuntimeEvidence / runStorePruneIfNeeded（宿主叶——K 组与启动路径同用
+    // 同一实现）与 restartLocalDsh（PlaneHandle 宿主腿）。
+    runtimeController: runtimeInstance,
+    runtimeOperationBusy,
+    runtimeWriterFence,
+    runtimeActionAllowed,
+    runtimeBaseDir,
+    refreshRuntimeEvidence,
+    runStorePruneIfNeeded,
+    restartLocalDsh,
   } = deps.ctx
 
   // ① edges 回灌订阅段（S2 转实）：OS 唤醒与主窗口 'show' 的事件源语义自 main.ts
@@ -3304,6 +3435,256 @@ export function installIpcHandlers(deps: {
       drainingPendingIntents = false;
       if (!quittingLeaf() && pendingIntents.pendingCount > 0) drainPendingIntents?.();
     });
+  };
+
+  // —— J 组（S10 批；W-10 S10 runtime A 批）——
+  // runtime 6 注册体（RUNTIME_STATE / RUNTIME_RESTART / RUNTIME_CHECK /
+  // RUNTIME_INSTALL / RUNTIME_CLEANUP_VERSION / RUNTIME_CLEAR_FAILURE——按原
+  // main.ts 顺序紧接 I 组追加；注册体自 main.ts 逐字迁入，trustedIpc 围栏由
+  // 装配侧注入 registrar 包装）。随迁内容：
+  //  - 控制器现实例（DshRuntimeController——main 装配侧 whenReady 构造）经
+  //    ctx.runtimeController 注入（core 类型面 import 自 dsh-runtime-controller.ts
+  //    ——electron-free 纯编排模块；K 组注册体与启动/证据路径共用同一实例，状态
+  //    权威单一）；J 组注册体文本以原名 runtimeInstance 逐字保留（同 updater 先例）。
+  //  - runtime 事务槽在飞读门 = ctx.runtimeOperationBusy（原模块级
+  //    `runtimeOperation !== null`——单写者仍为 main 的启动事务/K 组注册体，
+  //    core 只读）；原文本逐处机械替换为 runtimeOperationBusy()。
+  //  - runtime writer fence 现实例 = ctx.runtimeWriterFence（同一 fence——启动
+  //    事务与 K 组路径共用，busy/tryAcquire/lease.release 语义与搬迁前一致；
+  //    owner 名 'runtime:restart' / 'runtime:check' / 'runtime:install' /
+  //    'runtime:cleanup-version' 逐字保留）。
+  //  - 动作终态门 = ctx.runtimeActionAllowed（原 main.ts whenReady 闭包——K 组
+  //    注册体同用单一实现）。
+  //  - dsh-runtime 纯逻辑直接 import（isSafeVersion / listExplicitlyInstalledVersions /
+  //    cleanupExplicitRuntimeVersion / listRuntimeFailures / clearRuntimeFailure——
+  //    electron-free 共享核，与 main.ts 同款 import 面）；runtimeBaseDir 为装配期
+  //    解析值经 ctx 注入（core 不碰 Electron paths）。
+  //  - 宿主叶 = ctx.refreshRuntimeEvidence / ctx.runStorePruneIfNeeded（K 组与
+  //    启动路径同用同一实现）；ctx.restartLocalDsh = PlaneHandle 宿主腿（原
+  //    controlPlane null 门 + restartLocal() + resolve 后实时 connectionState
+  //    读封装在装配侧叶——resolve ≠ success 的白名单判据仍在本段注册体）。
+  //  - 确认对话框 = 下方 S6 版 confirmRuntimeMutation 助手（原 main.ts 同名闭包
+  //    的 core 复刻：edges.mainWindowAlive 无窗预检 + edges.showMessage 宿主腿
+  //    ——按钮序 ['取消', confirmLabel] / defaultId 0 / cancelId 0 / noLink 与
+  //    文案逐字一致；无窗 → false = 'native confirmation unavailable' 不确认
+  //    语义，调用方静默返回当前 state，与搬迁前 win==null||isDestroyed→false
+  //    同向；预检与调用间窗口销毁竞态 → showMessage 叶抛 'native confirmation
+  //    unavailable' → 注册体 reject，与搬迁前 showMessageBox(win) 抛出同形）。
+  //    main 侧同名闭包因 K 组注册体仍在使用而保留（后续批迁完即删）。
+  //  - runRuntimeCheck 随迁（quit 门 = quittingLeaf——S2 装配的 ctx.isQuitting
+  //    快照；原模块级 quitRequested 直读同值）；main 装配侧的首检/周期计时器
+  //    经模块级导出入口 runRuntimeCheckCycle 调用本段同一实现（apply/restore
+  //    挂起检查、下个周期恢复的共享门不变）——装配槽在 J 组段尾部赋值。
+  const confirmRuntimeMutation = async (message: string, detail: string, confirmLabel: string): Promise<boolean> => {
+    if (!deps.edges.mainWindowAlive()) return false;
+    const response = await deps.edges.showMessage({
+      type: 'warning',
+      title: message,
+      message,
+      detail,
+      buttons: ['取消', confirmLabel],
+      defaultId: 0,
+      cancelId: 0,
+      noLink: true,
+    });
+    return response === 1;
+  };
+  deps.ipc.handle(IPC_CHANNELS.RUNTIME_STATE, () => runtimeInstance.getState());
+  // Transactional managed-dsh restart (design 18 §3.6 项 8): refreshes mounted
+  // plugins. Not a version mutation — the pointer/tree is untouched, so no
+  // snapshot/probe gate; the control-plane restartLocal() is single-flight,
+  // serialized with health restarts, and respects canStartLocal.
+  deps.ipc.handle(IPC_CHANNELS.RUNTIME_RESTART, async () => {
+    const state = runtimeInstance.getState();
+    // RESTART-GATE RULING (stage2, 2026): core allowedActions offers
+    // restart-dsh in idle/available/applied/rollback/failed/error only;
+    // this refusal = busy set (the five no-restart phases) + explicit
+    // snapshot-failed/runtimeBlocked + single-flight gates. NOT a pure
+    // allowedActions gate: failed/error allow restart-dsh there yet are
+    // refused here while runtimeBlocked — do not substitute one expression
+    // for the other before ruling. Gateway route gate checks only
+    // applying/installing for its REST restart surface.
+    const busyPhase = state.phase === 'checking' || state.phase === 'downloading'
+      || state.phase === 'installing' || state.phase === 'applying' || state.phase === 'pending';
+    if (runtimeOperationBusy() || runtimeWriterFence.busy || busyPhase
+      || state.runtimeBlocked === true
+      || state.phase === 'snapshot-failed') {
+      // Honest refusal (R7 review): a busy runtime must not resolve into a
+      // silent no-op "success" — the renderer shows the failure line.
+      // 2026-12：env 来源与只读平台（managementSupported=false）不再拒绝
+      // 重启——「重启 dsh」是来源/平台无关动作（design 18 §3.6 项 8，
+      // 与 gateway 行为一致）。
+      const reason = state.runtimeBlocked === true
+        ? state.runtimeBlockedReason ?? 'runtime blocked'
+        : 'dsh runtime is busy (another runtime operation is in progress)'
+      throw new Error(sanitizeErrorText(reason));
+    }
+    // Hold the shared writer fence for the transaction: other runtime
+    // actions (retry-apply / restore-pre-rollback / reset-builtin) acquire
+    // the same fence, so a restart cannot interleave with a stopLocal()
+    // from a concurrent mutation (V2 review M1).
+    const restartLease = runtimeWriterFence.tryAcquire('runtime:restart');
+    if (restartLease === null) {
+      throw new Error('dsh runtime is busy (another writer holds the fence)');
+    }
+    try {
+      // W-10 S10：PlaneHandle 宿主腿 = ctx.restartLocalDsh（原 controlPlane null
+      // 门 + restartLocal() + resolve 后实时 connectionState 读——封装在 main 装
+      // 配侧叶，同序同值）。
+      const connectionState = await restartLocalDsh();
+      // CONTRACT (design 18 §9.3): resolve ≠ success — a restart that
+      // exhausted the shared window settles into restart-exhausted (or
+      // error) and RESOLVES; project that honestly instead of a silent
+      // "healthy" runtime state.
+      // Whitelist (round-3 fix): restartLocal() also resolves from
+      // restart-exhausted / error / stopped and can bail on an epoch bump
+      // while 'restarting' is still live — only ready/degraded (process
+      // alive) is a success; resolve ≠ success, strictly.
+      if (connectionState !== 'ready' && connectionState !== 'degraded') {
+        throw new Error(`dsh restart did not reach ready (${connectionState})`);
+      }
+      return runtimeInstance.getState();
+    } catch (error) {
+      const message = sanitizeErrorText(error instanceof Error ? error.message : String(error));
+      console.warn('[dsh-chamber] restart dsh failed:', message);
+      // Honest failure (design 18 §3.6 项 8): reject so the renderer shows
+      // the failure line instead of silently resolving.
+      throw new Error(message);
+    } finally {
+      restartLease.release();
+    }
+  });
+  const runRuntimeCheck = async () => {
+    if (quittingLeaf() || runtimeOperationBusy() || !runtimeActionAllowed('check')) {
+      return runtimeInstance.getState();
+    }
+    const lease = runtimeWriterFence.tryAcquire('runtime:check');
+    if (lease === null) return runtimeInstance.getState();
+    try {
+      return await runtimeInstance.check();
+    } finally {
+      lease.release();
+    }
+  };
+  deps.ipc.handle(IPC_CHANNELS.RUNTIME_CHECK, runRuntimeCheck);
+  deps.ipc.handle(IPC_CHANNELS.RUNTIME_INSTALL, async (args) => {
+    const v = args !== null && typeof args === 'object' ? (args as Record<string, unknown>).version : undefined;
+    if (typeof v !== 'string' || v.length > 128 || !isSafeVersion(v)) return runtimeInstance.getState();
+    const requestedVersion = v.trim();
+    const before = runtimeInstance.getState();
+    if (runtimeOperationBusy() || before.source === 'env' || !runtimeActionAllowed('install')) {
+      return before;
+    }
+    if (!await confirmRuntimeMutation(
+      `安装 dsh 运行时 ${requestedVersion}？`,
+      // W-10 S10：registry origin 经 settingsIO.current() 读（与搬迁前
+      // chamberSettings.registryOrigin 同一 live holder 值——确认框展示当前源）。
+      `将从 ${settingsIO.current().registryOrigin} 下载并执行白名单依赖的安装脚本；切换将在下次启动应用。`,
+      '安装',
+    )) return runtimeInstance.getState();
+    const current = runtimeInstance.getState();
+    if (runtimeOperationBusy() || current.source === 'env' || !runtimeActionAllowed('install')) {
+      return current;
+    }
+    const lease = runtimeWriterFence.tryAcquire('runtime:install');
+    if (lease === null) return runtimeInstance.getState();
+    try {
+      await runtimeInstance.install(requestedVersion);
+      await refreshRuntimeEvidence();
+      return runtimeInstance.getState();
+    } finally {
+      lease.release();
+    }
+  });
+  deps.ipc.handle(IPC_CHANNELS.RUNTIME_CLEANUP_VERSION, async (args) => {
+    const rawVersion = args !== null && typeof args === 'object'
+      ? (args as Record<string, unknown>).version
+      : undefined;
+    if (typeof rawVersion !== 'string' || rawVersion.length > 128 || !isSafeVersion(rawVersion)) {
+      return runtimeInstance.getState();
+    }
+    const requestedVersion = rawVersion.trim();
+    const before = runtimeInstance.getState();
+    if (runtimeOperationBusy()
+      || before.source === 'env'
+      || before.active === requestedVersion
+      || !runtimeActionAllowed('cleanup-version')
+      || !listExplicitlyInstalledVersions(runtimeBaseDir).includes(requestedVersion)) {
+      return before;
+    }
+    if (!await confirmRuntimeMutation(
+      `清理 dsh 运行时 ${requestedVersion}？`,
+      '仅删除该不可变版本树并回收 pnpm store；当前、待应用、回退、known-good 与失败现场保护版本不会被删除。',
+      '清理版本',
+    )) return runtimeInstance.getState();
+
+    // Re-read eligibility after confirmation. cleanupExplicitRuntimeVersion
+    // re-reads the complete protection set again while the writer fence is
+    // held, so a new recovery/pending reference always wins the TOCTOU race.
+    const current = runtimeInstance.getState();
+    if (runtimeOperationBusy()
+      || current.source === 'env'
+      || current.active === requestedVersion
+      || !runtimeActionAllowed('cleanup-version')
+      || !listExplicitlyInstalledVersions(runtimeBaseDir).includes(requestedVersion)) {
+      return current;
+    }
+    const lease = runtimeWriterFence.tryAcquire('runtime:cleanup-version');
+    if (lease === null) return runtimeInstance.getState();
+    try {
+      const locked = runtimeInstance.getState();
+      if (locked.source === 'env'
+        || locked.active === requestedVersion
+        || !listExplicitlyInstalledVersions(runtimeBaseDir).includes(requestedVersion)) {
+        return locked;
+      }
+      const result = cleanupExplicitRuntimeVersion(runtimeBaseDir, requestedVersion);
+      if (result.stillProtected) {
+        throw new Error(`dsh ${requestedVersion} 仍被当前/回退/恢复/失败证据保护，拒绝清理`);
+      }
+      await runStorePruneIfNeeded();
+      await refreshRuntimeEvidence();
+      const refreshed = runtimeInstance.getState();
+      const clearedDiskGate = locked.phase === 'error'
+        && (locked.diskLimitExceeded === true || locked.diskError != null)
+        && refreshed.diskLimitExceeded === false
+        && refreshed.diskError === null;
+      if (clearedDiskGate) runtimeInstance.setLifecycle({ phase: 'idle', error: null });
+      return runtimeInstance.getState();
+    } finally {
+      lease.release();
+    }
+  });
+  // 失败现场清除（settings polish D3-A）：仅本地入口（gateway 无现成路由，
+  // 登记偏差）。版本必须真实存在于失败记录名集（主进程 re-read，绝不信任
+  // renderer），且不得有在飞运行时事务；只删除 failures/*.json 记录本身，
+  // 不动任何版本树/快照/回滚现场。清除后刷新磁盘与失败投影并返回最新 state。
+  deps.ipc.handle(IPC_CHANNELS.RUNTIME_CLEAR_FAILURE, async (args) => {
+    const rawVersion = args !== null && typeof args === 'object'
+      ? (args as Record<string, unknown>).version
+      : undefined;
+    if (typeof rawVersion !== 'string' || rawVersion.length > 128 || !isSafeVersion(rawVersion)) {
+      return runtimeInstance.getState();
+    }
+    const requestedVersion = rawVersion.trim();
+    if (runtimeOperationBusy()
+      || !listRuntimeFailures(runtimeBaseDir).some((failure) => failure.version === requestedVersion)) {
+      return runtimeInstance.getState();
+    }
+    try {
+      clearRuntimeFailure(runtimeBaseDir, requestedVersion);
+    } catch (error) {
+      const message = sanitizeErrorText(error instanceof Error ? error.message : String(error));
+      console.warn('[dsh-chamber] clear runtime failure scene failed:', message);
+      throw new Error(message);
+    }
+    await refreshRuntimeEvidence();
+    return runtimeInstance.getState();
+  });
+  // 周期检查装配槽（模块级导出入口 runRuntimeCheckCycle 经它调用——main 装配
+  // 侧计时器 15s 首检 + 6h 周期与 RUNTIME_CHECK 注册体共用同一实现与门）。
+  runtimeCheckRunner = () => {
+    void runRuntimeCheck();
   };
 
   // ③ 自举（W-10 后续批占位：控制面 ready 后的启动/恢复 push、余下 drain 挂点

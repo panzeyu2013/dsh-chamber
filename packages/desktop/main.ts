@@ -74,7 +74,6 @@ import { evaluateApplyNowGate, type ApplyNowGateInput } from './apply-now-gate.t
 import { shouldSkipDiskRefresh } from './disk-evidence-gate.ts';
 import {
   cleanupStaleInstalls,
-  cleanupExplicitRuntimeVersion,
   clearActivationJournal,
   clearCurrentPointer,
   clearRuntimeFailure,
@@ -85,7 +84,6 @@ import {
   latestKnownGood,
   listKnownGoodVersions,
   listExplicitlyInstalledVersions,
-  listRuntimeFailures,
   listValidVersionTrees,
   queueActivationIntent,
   readActivationJournalState,
@@ -203,6 +201,9 @@ import {
   ownsNotificationSource,
   projectInstanceSecrets,
   projectNotificationSourceInstances,
+  // W-10 S10：runtime 周期/首检检查触发入口（runRuntimeCheck 随 RUNTIME_CHECK
+  // 注册体迁入 shell-core J 组段——计时器经它调用同一实现与门）。
+  runRuntimeCheckCycle,
   syncNotificationSourceRegistry,
 } from './shell-core.ts';
 import type { ShellAssemblyCtx } from './shell-core.ts';
@@ -3390,70 +3391,22 @@ if (!gotTheLock) {
       return operation;
     };
 
-    ipcMain.handle(IPC_CHANNELS.RUNTIME_STATE, trustedIpc(() => runtimeInstance.getState()));
-    // Transactional managed-dsh restart (design 18 §3.6 项 8): refreshes mounted
-    // plugins. Not a version mutation — the pointer/tree is untouched, so no
-    // snapshot/probe gate; the control-plane restartLocal() is single-flight,
-    // serialized with health restarts, and respects canStartLocal.
-    ipcMain.handle(IPC_CHANNELS.RUNTIME_RESTART, trustedIpc(async () => {
-      const state = runtimeInstance.getState();
-      // RESTART-GATE RULING (stage2, 2026): core allowedActions offers
-      // restart-dsh in idle/available/applied/rollback/failed/error only;
-      // this refusal = busy set (the five no-restart phases) + explicit
-      // snapshot-failed/runtimeBlocked + single-flight gates. NOT a pure
-      // allowedActions gate: failed/error allow restart-dsh there yet are
-      // refused here while runtimeBlocked — do not substitute one expression
-      // for the other before ruling. Gateway route gate checks only
-      // applying/installing for its REST restart surface.
-      const busyPhase = state.phase === 'checking' || state.phase === 'downloading'
-        || state.phase === 'installing' || state.phase === 'applying' || state.phase === 'pending';
-      if (runtimeOperation !== null || runtimeWriterFence.busy || busyPhase
-        || state.runtimeBlocked === true
-        || state.phase === 'snapshot-failed') {
-        // Honest refusal (R7 review): a busy runtime must not resolve into a
-        // silent no-op "success" — the renderer shows the failure line.
-        // 2026-12：env 来源与只读平台（managementSupported=false）不再拒绝
-        // 重启——「重启 dsh」是来源/平台无关动作（design 18 §3.6 项 8，
-        // 与 gateway 行为一致）。
-        const reason = state.runtimeBlocked === true
-          ? state.runtimeBlockedReason ?? 'runtime blocked'
-          : 'dsh runtime is busy (another runtime operation is in progress)'
-        throw new Error(sanitizeErrorText(reason));
-      }
-      // Hold the shared writer fence for the transaction: other runtime
-      // actions (retry-apply / restore-pre-rollback / reset-builtin) acquire
-      // the same fence, so a restart cannot interleave with a stopLocal()
-      // from a concurrent mutation (V2 review M1).
-      const restartLease = runtimeWriterFence.tryAcquire('runtime:restart');
-      if (restartLease === null) {
-        throw new Error('dsh runtime is busy (another writer holds the fence)');
-      }
-      try {
-        if (controlPlane === null) throw new Error('control plane not initialized')
-        await controlPlane.restartLocal();
-        // CONTRACT (design 18 §9.3): resolve ≠ success — a restart that
-        // exhausted the shared window settles into restart-exhausted (or
-        // error) and RESOLVES; project that honestly instead of a silent
-        // "healthy" runtime state.
-        const connectionState = controlPlane.connectionState;
-        // Whitelist (round-3 fix): restartLocal() also resolves from
-        // restart-exhausted / error / stopped and can bail on an epoch bump
-        // while 'restarting' is still live — only ready/degraded (process
-        // alive) is a success; resolve ≠ success, strictly.
-        if (connectionState !== 'ready' && connectionState !== 'degraded') {
-          throw new Error(`dsh restart did not reach ready (${connectionState})`);
-        }
-        return runtimeInstance.getState();
-      } catch (error) {
-        const message = sanitizeErrorText(error instanceof Error ? error.message : String(error));
-        console.warn('[dsh-chamber] restart dsh failed:', message);
-        // Honest failure (design 18 §3.6 项 8): reject so the renderer shows
-        // the failure line instead of silently resolving.
-        throw new Error(message);
-      } finally {
-        restartLease.release();
-      }
-    }));
+    // —— W-10 S10（runtime A 批）：RUNTIME_STATE / RUNTIME_RESTART 注册体迁出 ——
+    // 注册体已随 J 组迁入 shell-core installIpcHandlers ② J 组段（RUNTIME_STATE /
+    // RUNTIME_RESTART / RUNTIME_CHECK / RUNTIME_INSTALL / RUNTIME_CLEANUP_VERSION /
+    // RUNTIME_CLEAR_FAILURE 六注册体按原序整体迁出，见下方 RUNTIME_CHECK 处标记）。
+    // 迁法（决策注记，与 shell-core J 组段注释逐条对应）：确认对话框 → core 内
+    // S6 版 confirmRuntimeMutation 助手（edges.showMessage 宿主腿——按钮序/取消
+    // 默认/文案逐字一致；无窗 → 'native confirmation unavailable' 不确认语义；
+    // main 侧同名闭包因 K 组注册体（RECOVER_METADATA 等）仍在使用而保留，K 组
+    // 迁完即删）；DshRuntimeController 控制器现实例经 ctx.runtimeController 注入
+    // （本作用域 runtimeInstance——实例态留本文件，core 只做类型面）；
+    // runtimeOperation 槽在飞读门 / runtimeWriterFence / runtimeActionAllowed /
+    // runtimeBaseDir / refreshRuntimeEvidence / runStorePruneIfNeeded 均经 ctx 注入
+    // 同一现实例/闭包（K 组与启动路径共用，语义不分叉）；restartLocal 类宿主叶 =
+    // ctx.restartLocalDsh（PlaneHandle 在 main，controlPlane null 门 + restartLocal()
+    // + resolve 后实时 connectionState 读封装在 shellCtx 装配叶内）。
+    // —— W-10 S10 迁出（1/2）：RUNTIME_STATE + RUNTIME_RESTART ——
     const runtimeActionAllowed = (action: Parameters<typeof allowedActions>[0] extends never ? never : ReturnType<typeof allowedActions>[number]) => {
       const state = runtimeInstance.getState();
       if (state.managementSupported === false && action !== 'retry-restore') return false;
@@ -3484,131 +3437,10 @@ if (!gotTheLock) {
         canRecoverMetadata: state.canRecoverMetadata,
       }).includes(action);
     };
-    const runRuntimeCheck = async () => {
-      if (quitRequested || runtimeOperation !== null || !runtimeActionAllowed('check')) {
-        return runtimeInstance.getState();
-      }
-      const lease = runtimeWriterFence.tryAcquire('runtime:check');
-      if (lease === null) return runtimeInstance.getState();
-      try {
-        return await runtimeInstance.check();
-      } finally {
-        lease.release();
-      }
-    };
-    ipcMain.handle(IPC_CHANNELS.RUNTIME_CHECK, trustedIpc(runRuntimeCheck));
-    ipcMain.handle(IPC_CHANNELS.RUNTIME_INSTALL, trustedIpc(async (args) => {
-      const v = args !== null && typeof args === 'object' ? (args as Record<string, unknown>).version : undefined;
-      if (typeof v !== 'string' || v.length > 128 || !isSafeVersion(v)) return runtimeInstance.getState();
-      const requestedVersion = v.trim();
-      const before = runtimeInstance.getState();
-      if (runtimeOperation !== null || before.source === 'env' || !runtimeActionAllowed('install')) {
-        return before;
-      }
-      if (!await confirmRuntimeMutation(
-        `安装 dsh 运行时 ${requestedVersion}？`,
-        `将从 ${chamberSettings.registryOrigin} 下载并执行白名单依赖的安装脚本；切换将在下次启动应用。`,
-        '安装',
-      )) return runtimeInstance.getState();
-      const current = runtimeInstance.getState();
-      if (runtimeOperation !== null || current.source === 'env' || !runtimeActionAllowed('install')) {
-        return current;
-      }
-      const lease = runtimeWriterFence.tryAcquire('runtime:install');
-      if (lease === null) return runtimeInstance.getState();
-      try {
-        await runtimeInstance.install(requestedVersion);
-        await refreshRuntimeEvidence();
-        return runtimeInstance.getState();
-      } finally {
-        lease.release();
-      }
-    }));
-    ipcMain.handle(IPC_CHANNELS.RUNTIME_CLEANUP_VERSION, trustedIpc(async (args) => {
-      const rawVersion = args !== null && typeof args === 'object'
-        ? (args as Record<string, unknown>).version
-        : undefined;
-      if (typeof rawVersion !== 'string' || rawVersion.length > 128 || !isSafeVersion(rawVersion)) {
-        return runtimeInstance.getState();
-      }
-      const requestedVersion = rawVersion.trim();
-      const before = runtimeInstance.getState();
-      if (runtimeOperation !== null
-        || before.source === 'env'
-        || before.active === requestedVersion
-        || !runtimeActionAllowed('cleanup-version')
-        || !listExplicitlyInstalledVersions(runtimeBaseDir).includes(requestedVersion)) {
-        return before;
-      }
-      if (!await confirmRuntimeMutation(
-        `清理 dsh 运行时 ${requestedVersion}？`,
-        '仅删除该不可变版本树并回收 pnpm store；当前、待应用、回退、known-good 与失败现场保护版本不会被删除。',
-        '清理版本',
-      )) return runtimeInstance.getState();
-
-      // Re-read eligibility after confirmation. cleanupExplicitRuntimeVersion
-      // re-reads the complete protection set again while the writer fence is
-      // held, so a new recovery/pending reference always wins the TOCTOU race.
-      const current = runtimeInstance.getState();
-      if (runtimeOperation !== null
-        || current.source === 'env'
-        || current.active === requestedVersion
-        || !runtimeActionAllowed('cleanup-version')
-        || !listExplicitlyInstalledVersions(runtimeBaseDir).includes(requestedVersion)) {
-        return current;
-      }
-      const lease = runtimeWriterFence.tryAcquire('runtime:cleanup-version');
-      if (lease === null) return runtimeInstance.getState();
-      try {
-        const locked = runtimeInstance.getState();
-        if (locked.source === 'env'
-          || locked.active === requestedVersion
-          || !listExplicitlyInstalledVersions(runtimeBaseDir).includes(requestedVersion)) {
-          return locked;
-        }
-        const result = cleanupExplicitRuntimeVersion(runtimeBaseDir, requestedVersion);
-        if (result.stillProtected) {
-          throw new Error(`dsh ${requestedVersion} 仍被当前/回退/恢复/失败证据保护，拒绝清理`);
-        }
-        await runStorePruneIfNeeded();
-        await refreshRuntimeEvidence();
-        const refreshed = runtimeInstance.getState();
-        const clearedDiskGate = locked.phase === 'error'
-          && (locked.diskLimitExceeded === true || locked.diskError != null)
-          && refreshed.diskLimitExceeded === false
-          && refreshed.diskError === null;
-        if (clearedDiskGate) runtimeInstance.setLifecycle({ phase: 'idle', error: null });
-        return runtimeInstance.getState();
-      } finally {
-        lease.release();
-      }
-    }));
-    // 失败现场清除（settings polish D3-A）：仅本地入口（gateway 无现成路由，
-    // 登记偏差）。版本必须真实存在于失败记录名集（主进程 re-read，绝不信任
-    // renderer），且不得有在飞运行时事务；只删除 failures/*.json 记录本身，
-    // 不动任何版本树/快照/回滚现场。清除后刷新磁盘与失败投影并返回最新 state。
-    ipcMain.handle(IPC_CHANNELS.RUNTIME_CLEAR_FAILURE, trustedIpc(async (args) => {
-      const rawVersion = args !== null && typeof args === 'object'
-        ? (args as Record<string, unknown>).version
-        : undefined;
-      if (typeof rawVersion !== 'string' || rawVersion.length > 128 || !isSafeVersion(rawVersion)) {
-        return runtimeInstance.getState();
-      }
-      const requestedVersion = rawVersion.trim();
-      if (runtimeOperation !== null
-        || !listRuntimeFailures(runtimeBaseDir).some((failure) => failure.version === requestedVersion)) {
-        return runtimeInstance.getState();
-      }
-      try {
-        clearRuntimeFailure(runtimeBaseDir, requestedVersion);
-      } catch (error) {
-        const message = sanitizeErrorText(error instanceof Error ? error.message : String(error));
-        console.warn('[dsh-chamber] clear runtime failure scene failed:', message);
-        throw new Error(message);
-      }
-      await refreshRuntimeEvidence();
-      return runtimeInstance.getState();
-    }));
+    // —— W-10 S10 迁出（2/2）：runRuntimeCheck + RUNTIME_CHECK / RUNTIME_INSTALL /
+    // RUNTIME_CLEANUP_VERSION / RUNTIME_CLEAR_FAILURE（runRuntimeCheck 随迁 core，
+    // 本文件周期计时器改经导出入口 runRuntimeCheckCycle 调用同一实现——见下方
+    // maybeCheckRuntime 计时器处标记）——
     ipcMain.handle(IPC_CHANNELS.RUNTIME_RECOVER_METADATA, trustedIpc(async () => {
       const before = runtimeInstance.getState();
       const expectedStatus = authoritativeMetadataRecoveryStatus();
@@ -3769,7 +3601,8 @@ if (!gotTheLock) {
     ipcMain.handle(IPC_CHANNELS.RUNTIME_APPLY_NOW, trustedIpc(async () => {
       const before = runtimeInstance.getState();
       // Quit is in flight: never start a transaction that the quit path will
-      // immediately abort (same gate as runRuntimeCheck).
+      // immediately abort (same gate as runRuntimeCheck——W-10 S10：runRuntimeCheck
+      // 已随 RUNTIME_CHECK 注册体迁入 shell-core J 组段，同门语义不变）。
       if (quitRequested) return before;
       const gate = evaluateApplyNowGate(readApplyNowGateInput());
       // F5: without a durable pending transaction a startup would only stop
@@ -3882,15 +3715,16 @@ if (!gotTheLock) {
       return runtimeInstance.getState();
     }));
 
-    const maybeCheckRuntime = () => {
-      if (quitRequested || runtimeOperation !== null || !runtimeActionAllowed('check')) return;
-      void runRuntimeCheck();
-    };
     // Startup refresh plus a real periodic cycle. Both share the same core
     // gate, so apply/restore suspends checks and the next cycle resumes them.
-    const startupRuntimeCheck = setTimeout(maybeCheckRuntime, 15_000);
+    // W-10 S10: maybeCheckRuntime/runRuntimeCheck 实现随 RUNTIME_CHECK 注册体迁入
+    // shell-core installIpcHandlers ② J 组段——计时器仍为本文件宿主调度（首检 15s
+    // + 周期 6h，unref 语义不变），每次 tick 经 core 导出入口 runRuntimeCheckCycle
+    // 走与 IPC 注册体同一实现与门（quit/事务在飞/动作不允许时 no-op——装配槽在
+    // installIpcHandlers J 组段尾部赋值，先于任何 tick）。
+    const startupRuntimeCheck = setTimeout(() => { runRuntimeCheckCycle(); }, 15_000);
     startupRuntimeCheck.unref();
-    const periodicRuntimeCheck = setInterval(maybeCheckRuntime, 6 * 60 * 60 * 1_000);
+    const periodicRuntimeCheck = setInterval(() => { runRuntimeCheckCycle(); }, 6 * 60 * 60 * 1_000);
     periodicRuntimeCheck.unref();
     // Promotion needs a real in-process health interval. The state listener
     // above closes the window on any unhealthy transition; this timer merely
@@ -4039,6 +3873,34 @@ if (!gotTheLock) {
       // 装配后调用（订阅已随 I 组注册——保持「先订阅后 start」原序）。模块级
       // updateController ref（will-quit 读退出豁免状态）仍在本文件。
       updateController: updater,
+      // W-10 S10（runtime A 批）：J 组 6 注册体（RUNTIME_STATE / RUNTIME_RESTART /
+      // RUNTIME_CHECK / RUNTIME_INSTALL / RUNTIME_CLEANUP_VERSION /
+      // RUNTIME_CLEAR_FAILURE）迁入 installIpcHandlers ② J 组段的装配依赖：
+      //  - runtimeController = 本作用域 runtimeInstance 现实例（K 组注册体与
+      //    启动/证据路径共用——状态权威单一，语义不分叉）；
+      //  - runtimeOperationBusy = 模块级 runtimeOperation 事务槽在飞读门（单写
+      //    者仍为本文件的启动事务/回滚/K 组注册体；core 只读）；
+      //  - runtimeWriterFence = 本作用域 fence 现实例（core J 组注册体与启动事
+      //    务/其余路径经同一 fence 串行化——owner 名逐字保留）；
+      //  - runtimeActionAllowed = 本作用域门闭包（K 组注册体同用——单一实现）；
+      //  - runtimeBaseDir = 本作用域 userData 解析值（core 不碰 Electron paths）；
+      //  - refreshRuntimeEvidence / runStorePruneIfNeeded = 本作用域宿主叶（K 组
+      //    与启动路径同用同一实现）；
+      //  - restartLocalDsh = PlaneHandle 宿主腿（controlPlane null 门 +
+      //    restartLocal() + resolve 后实时 connectionState——resolve ≠ success
+      //    白名单判据留 core 注册体）。
+      runtimeController: runtimeInstance,
+      runtimeOperationBusy: () => runtimeOperation !== null,
+      runtimeWriterFence,
+      runtimeActionAllowed,
+      runtimeBaseDir,
+      refreshRuntimeEvidence,
+      runStorePruneIfNeeded,
+      restartLocalDsh: async () => {
+        if (controlPlane === null) throw new Error('control plane not initialized')
+        await controlPlane.restartLocal();
+        return controlPlane.connectionState;
+      },
       confirmRegistryOriginSwitch: async (currentOrigin, nextOrigin) => {
         const win = mainWindow;
         if (win === null || win.isDestroyed()) return 'unavailable';
