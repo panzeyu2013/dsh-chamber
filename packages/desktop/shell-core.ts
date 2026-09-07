@@ -108,6 +108,17 @@
  *    宿主腿 = HostEdges.pickPluginSource（electron-edges.ts S6 实现；
  *    classifyPluginPick 留 core）；mainWindowAlive 预检 = edges 门（S2 已有）。
  *    transportManager Pick 扩 appendLog（seed 结果入实例环形日志）。
+ *  Responsibilities relocated from main.ts (W-10 S7 gateway plugin batch):
+ *  - G 组 3 个注册体：GATEWAY_PLUGIN_SYNC / GATEWAY_PLUGIN_APPLY /
+ *    GATEWAY_PLUGIN_MATERIALIZE——按原 main.ts 顺序追加在 F 组之后
+ *    （installIpcHandlers ② 段）。注册体逐字随迁；编排纯模块直接 import
+ *    （gateway-ipc-shared / gateway-sync-registry / gateway-provider /
+ *    plugin-tarball）。确认对话框复用 S6 edges 版 confirmPluginAction 助手
+ *    （core 内——宿主腿 = HostEdges.showMessage）、无存活主窗预检 =
+ *    edges.mainWindowAlive、插件源 pick = edges.pickPluginSource。手动 sync 的
+ *    上传执行闭包 syncGatewayChamberPluginsFor 经 ctx 注入（main 装配侧定义
+ *    ——ready 自动 sync 与手动 re-entry 共用同一执行路径与注册参数，语义
+ *    不分叉）。
  *
  * 中文说明：自 main.ts 机械搬运的 Electron-free 业务核心（零缝阶段，行为零
  * 变化）；W-10 S1 起 IPC 注册点与 A 组 info+settings 处理器迁入本文件
@@ -120,7 +131,9 @@
  * STOP/IS_ACTIVE/RESTART_SERVICE——经 ctx transportManager 的 exec 面）；S6
  * 追加 F 组 ssh plugin 6 注册体（plugin list/apply/undo + host-graph seed +
  * 材料化 add/pick——编排纯模块直接 import，共享实例/目标闭包经 ctx，确认与
- * picker 经 edges 宿主腿，Pick 扩 appendLog）。
+ * picker 经 edges 宿主腿，Pick 扩 appendLog）；S7 追加 G 组 gateway 插件 3
+ * 注册体（sync/apply/materialize——编排纯模块直接 import，手动 sync 执行闭包
+ * 经 ctx，确认/pick/窗口预检经 S6 edges 宿主腿）。
  * HostEdges 其余边沿叶与双 flavor 属后续批。
  */
 
@@ -152,6 +165,8 @@ import {
 import { discoverSshConfigHosts } from './ssh-config.ts';
 import { MAX_SSH_PASSWORD_CHARS, getSshPassword, setSshPassword, sshPasswordSupported, sshProvider } from './ssh-provider.ts';
 import {
+  gatewayChamberApplyBatch,
+  gatewayChamberMaterialize,
   gatewayPasswordValidationError,
   gatewayProvider,
   gatewaySecretStorageMode,
@@ -219,7 +234,9 @@ import {
   describeSshUndoConfirmation,
 } from './ssh-apply-rows.ts';
 import type { SshPluginJournal } from './ssh-plugin-journal.ts';
-import { classifyPluginPick } from './plugin-tarball.ts';
+import { buildPluginTarball, classifyPluginPick } from './plugin-tarball.ts';
+import { buildApplyConfirmMessage, validateApplyPayload } from './gateway-ipc-shared.ts';
+import { getGatewaySyncRegistration } from './gateway-sync-registry.ts';
 import { sanitizeErrorText } from './sanitize-error.ts';
 
 // Control-plane port (design 05 §3.3): the packaged app keeps the documented
@@ -1053,7 +1070,14 @@ export function clearBadgeIntentForQuit(applyNativeClear: () => void): void {
 //     闭包束经 ctx——sshPluginJournal/hostPackageSeeding/chamberHostPackageSeeds/
 //     sshPluginTargets/localDshHome，Pick 扩 appendLog，见 ShellAssemblyCtx；
 //     确认对话框与插件源 picker = edges.showMessage/pickPluginSource 宿主腿，
-//     mainWindowAlive 预检 = edges 门）；
+//     mainWindowAlive 预检 = edges 门）+ G 组 3 个注册体（S7 批：
+//     GATEWAY_PLUGIN_SYNC / GATEWAY_PLUGIN_APPLY / GATEWAY_PLUGIN_MATERIALIZE
+//     ——按原 main.ts 顺序追加在 F 组之后；编排纯模块 gateway-ipc-shared /
+//     gateway-sync-registry / gateway-provider / plugin-tarball 直接 import，
+//     手动 sync 上传执行闭包经 ctx.syncGatewayChamberPluginsFor（ready 自动
+//     sync 与手动 re-entry 共用同一执行路径，语义不分叉）；确认对话框复用 S6
+//     edges 版 confirmPluginAction 助手，pick 与窗口预检 = edges 宿主腿，见
+//     ShellAssemblyCtx）；
 //   ③ 自举（占位——控制面 ready 后的启动/恢复 push 与余下 drain 挂点在 W-10
 //      后续批迁入，见 macos-swift-v1.md §四批 2）。
 // ---------------------------------------------------------------------------
@@ -1088,7 +1112,9 @@ export interface SshPluginTarget {
  *  注释；S6（ssh plugin 批）增 localDshHome / sshPluginJournal /
  *  hostPackageSeeding / chamberHostPackageSeeds / sshPluginTargets 五字段
  *  （F 组注册体的共享现实例/闭包束）+ transportManager Pick 扩 appendLog
- *  （见字段注释）。
+ *  （见字段注释）；S7（gateway 插件批）增 syncGatewayChamberPluginsFor 一字段
+ *  （G 组手动 sync 的执行闭包——main 装配侧 ready 自动 sync 共用同一执行路径，
+ *  见字段注释）。
  *  chamber
  *  settings 的内存 holder 仍归装配侧（main.ts 尚余 20+ 处直读点，随各自批迁入时
  *  holder 一并搬家）；core 侧一律经 settingsIO 读写，权威单一、行为与搬迁前一
@@ -1232,12 +1258,30 @@ export interface ShellAssemblyCtx {
     liveProbeFor(id: string): () => Promise<boolean | null>
     gitWorktreeLiveProbeFor(id: string): () => Promise<boolean | null>
   }
+  // —— W-10 S7（gateway 插件批）新增字段：G 组 3 注册体的装配依赖。编排纯模块
+  // （gateway-ipc-shared / gateway-sync-registry / gateway-provider /
+  // plugin-tarball——classifyPluginPick/buildPluginTarball 为 S6 已 import）在
+  // core 直接 import；注册参数读取（getGatewaySyncRegistration）与 ready 位复验
+  // 在注册体侧。确认对话框复用上方 S6 edges 版 confirmPluginAction 助手（main
+  // 装配侧原 confirmPluginAction 闭包仍为 LOCAL_PLUGIN_ADD/REMOVE 保留）、
+  // 无存活主窗预检 = edges.mainWindowAlive、插件源 pick = edges.pickPluginSource。
+  /** 手动 gateway_plugin_sync 的上传执行闭包（main 装配侧定义——ready 注册自动
+   *  sync（sm.onStatusChanged ready 边缘）与手动 re-entry 注册体共用同一执行
+   *  路径与注册参数，语义不分叉）：把本地 chamber host 包种子缓存上传到注册
+   *  transport 来源；无实例/非 gateway → null。本地包源解析（app.isPackaged /
+   *  pkgDir/repoRoot）在闭包内，core 不碰 Electron paths。 */
+  syncGatewayChamberPluginsFor(
+    id: string,
+    url: string,
+    headers: Record<string, string>,
+    spkiPin: string | null,
+  ): Promise<{ uploaded: boolean; skipped: boolean; failed?: boolean; error?: string } | null>
 }
 
 /** 装配 shell IPC 面（W-10 S1 A 组 + S2 B 组 + S3 C 组 + S4 D 组 + S5 E 组 +
- *  S6 F 组注册体与随迁辅助；各组注册顺序 = 原 main.ts 顺序）。edges 参数以
- *  Pick 收窄到本批实际调用的成员（createElectronEdges 返回同形超集）；后续批
- *  实现新成员时同步扩宽两侧。
+ *  S6 F 组 + S7 G 组注册体与随迁辅助；各组注册顺序 = 原 main.ts 顺序）。edges
+ *  参数以 Pick 收窄到本批实际调用的成员（createElectronEdges 返回同形超集）；
+ *  后续批实现新成员时同步扩宽两侧。
  *  调用点纪律：whenReady 内、createMainWindow 之前（窗口加载前注册完毕）——
  *  本函数同时完成渲染器投递状态机的 edges/quit 快照（单装配不变式，见上段）。 */
 export function installIpcHandlers(deps: {
@@ -1285,7 +1329,9 @@ export function installIpcHandlers(deps: {
     // localDshHome / sshPluginJournal / hostPackageSeeding /
     // chamberHostPackageSeeds 与 sshPluginTargets 目标闭包束（main 装配侧
     // 现实例/闭包——自动 seed/撤销路径共用，语义不分叉；解构后 F 组注册体
-    // 文本以原名逐字保留）。
+    // 文本以原名逐字保留）。W-10 S7 另增 G 组字段：syncGatewayChamberPluginsFor
+    // （main 装配侧的 ready 自动 sync 上传执行闭包——手动 gateway_plugin_sync
+    // 注册体经 ctx 调用，同一执行路径、语义不分叉）。
     transportManager: sm,
     audit,
     gatewaySessions,
@@ -1303,6 +1349,7 @@ export function installIpcHandlers(deps: {
       liveProbeFor,
       gitWorktreeLiveProbeFor,
     },
+    syncGatewayChamberPluginsFor,
   } = deps.ctx
 
   // ① edges 回灌订阅段（S2 转实）：OS 唤醒与主窗口 'show' 的事件源语义自 main.ts
@@ -2395,6 +2442,239 @@ export function installIpcHandlers(deps: {
         bytes: archiveBytes,
       }),
     );
+  });
+
+  // —— G 组（S7 批；W-10 S7 施工图第 1 项）——
+  // gateway 插件 3 注册体（GATEWAY_PLUGIN_SYNC / GATEWAY_PLUGIN_APPLY /
+  // GATEWAY_PLUGIN_MATERIALIZE——按原 main.ts 顺序紧接 F 组追加；注册体自
+  // main.ts 逐字迁入，全零 Electron，trustedIpc 围栏由装配侧注入 registrar
+  // 包装）。编排纯模块直接 import（gateway-provider / gateway-sync-registry /
+  // gateway-ipc-shared / plugin-tarball——main.ts 同款 import 面）；注册参数
+  // 读取（getGatewaySyncRegistration 纯模块——main 装配侧的 ready 注册/离开
+  // ready/实例撤销路径（sm.onStatusChanged / publishRegistryTransition）经
+  // setGatewaySyncRegistration 写同一注册表，读写同表不分叉）与 ready 位复验
+  // 在注册体侧。手动 sync 的上传执行闭包经 ctx.syncGatewayChamberPluginsFor
+  // （main 装配侧定义——ready 自动 sync 与手动 re-entry 共用同一执行路径与
+  // 注册参数，语义不分叉）。确认对话框 = 上方 S6 edges 版 confirmPluginAction
+  // 助手（单参 copy；无存活主窗 → 'native confirmation unavailable'；response
+  // ===1（'继续'）→ ok；否则 cancelled；异常 → loud——语义与 main 闭包逐字一
+  // 致；main 侧原 confirmPluginAction 闭包仍为 LOCAL_PLUGIN_ADD/REMOVE 保留，
+  // 不随迁——本组 apply 注册体改经本助手为唯一文本差）；无存活主窗预检 =
+  // edges.mainWindowAlive、插件源 pick = edges.pickPluginSource（宿主腿均在
+  // electron-edges.ts S6 实现）。
+
+  // Manual chamber-plugin sync onto a gateway instance (design 21 §6.5,
+  // Phase 3b): re-run the seed-cache sync the ready registration performs
+  // automatically, over the REGISTERED transport origin/headers/SPKI pin —
+  // never a renderer-supplied URL or credential. No ready registration →
+  // loud {ok:false}; otherwise the awaited auto-sync path answers with the
+  // same {uploaded, skipped} projection (or null → instance vanished).
+  deps.ipc.handle(IPC_CHANNELS.GATEWAY_PLUGIN_SYNC, async (payload: unknown) => {
+    const { id } = payload as { id: unknown };
+    if (typeof id !== 'string' || !INSTANCE_ID_PATTERN.test(id)) {
+      return { ok: false as const, error: 'invalid or unknown instance id' };
+    }
+    const reg = getGatewaySyncRegistration(id);
+    if (reg === undefined) return { ok: false as const, error: 'no active gateway registration' };
+    // Live-state re-check (design 21 §6.5, honesty): the registry entry is
+    // cleared when the transport leaves ready, but a manual sync can still
+    // race a disconnect after the hit — a stale-ready dead transport must
+    // never be swallowed as a completed sync ({uploaded:false, skipped:false}
+    // would read as success). Same `sm.status(id)?.phase` access as the
+    // sibling seed/registration code paths.
+    if (sm.status(id)?.phase !== 'ready') {
+      return { ok: false as const, error: 'gateway is not ready' };
+    }
+    try {
+      const result = await syncGatewayChamberPluginsFor(id, reg.url, reg.headers, reg.spkiPin);
+      if (result === null) return { ok: false as const, error: 'gateway instance not found' };
+      // Honesty (design 21 review P2-B1): a sync that failed on the wire is
+      // {ok:false} — the both-false tuple must never masquerade as the
+      // "already up to date" answer.
+      if (result.failed === true) {
+        return { ok: false as const, error: result.error ?? 'gateway plugin sync failed' };
+      }
+      return { ok: true as const, uploaded: result.uploaded, skipped: result.skipped };
+    } catch (error) {
+      return { ok: false as const, error: `gateway plugin sync failed: ${sanitizeErrorText(describeUnknownError(error))}` };
+    }
+  });
+  // Gateway batch plugin apply (design 21 §6.5, plan Phase 4.6): registry
+  // add/remove over the REGISTERED transport origin/headers/SPKI pin —
+  // never a renderer-supplied URL or credential. Main-process confirmation
+  // (decision 14 桌面通道纪律): the batch modifies the gateway's managed
+  // dsh profile — a persistent, globally-visible (multi-desktop)
+  // execution-surface change, never a silent script action. Cancelled →
+  // {ok:true, cancelled:true}; partial failures (an op refused mid-batch
+  // or a restart refused after execution) carry the executed
+  // installed/removed lists honestly.
+  deps.ipc.handle(IPC_CHANNELS.GATEWAY_PLUGIN_APPLY, async (payload: unknown) => {
+    const { id, add, remove, deferRestart } = payload as { id: unknown; add: unknown; remove: unknown; deferRestart: unknown };
+    if (typeof id !== 'string' || !INSTANCE_ID_PATTERN.test(id)) {
+      return { ok: false as const, error: 'invalid or unknown instance id' };
+    }
+    const validated = validateApplyPayload({ add, remove, deferRestart });
+    if (!validated.ok) return { ok: false as const, error: validated.error };
+    const reg = getGatewaySyncRegistration(id);
+    if (reg === undefined) return { ok: false as const, error: 'no active gateway registration' };
+    // Live-state re-check (design 21 §6.5, honesty) — same
+    // `sm.status(id)?.phase` access as the sibling sync handler.
+    if (sm.status(id)?.phase !== 'ready') {
+      return { ok: false as const, error: 'gateway is not ready' };
+    }
+    const instance = sm.listInstances().find(candidate => candidate.id === id);
+    if (instance === undefined || instance.kind !== 'gateway') {
+      return { ok: false as const, error: 'gateway instance not found' };
+    }
+    // Batch confirmation with the restart/multi-desktop copy (default
+    // cancel — same convention as the local plugin actions). W-10 S7: 经上方
+    // S6 edges 版 confirmPluginAction 助手（原 main.ts 调用为
+    // confirmPluginAction(mainWindow, …) 双参闭包——宿主腿相同（showMessage +
+    // 当前主窗为父窗 sheet）、按钮序/取消默认一致，行为零改；main 侧闭包仍为
+    // LOCAL_PLUGIN_ADD/REMOVE 保留）。
+    const confirm = await confirmPluginAction(buildApplyConfirmMessage({
+      targetLabel: instance.label ?? null,
+      targetId: id,
+      add: validated.value.add,
+      remove: validated.value.remove,
+      deferRestart: validated.value.deferRestart,
+    }));
+    if ('cancelled' in confirm) return { ok: true as const, cancelled: true };
+    if (!confirm.ok) return { ok: false as const, error: confirm.error };
+    // Post-confirm re-check (design 21 review P2-B2, mirroring the
+    // materialize handler): the user may have kept the dialog open across
+    // a disconnect/reconnect — the batch must execute on the CURRENT
+    // registration/ready state, never on the pre-dialog snapshot.
+    const liveReg = getGatewaySyncRegistration(id);
+    if (liveReg === undefined || sm.status(id)?.phase !== 'ready') {
+      return { ok: false as const, error: 'gateway connection changed while the confirmation was open; nothing was applied' };
+    }
+    const liveInstance = sm.listInstances().find(candidate => candidate.id === id);
+    if (liveInstance === undefined || liveInstance.kind !== 'gateway') {
+      return { ok: false as const, error: 'gateway connection changed while the confirmation was open; nothing was applied' };
+    }
+    try {
+      const result = await gatewayChamberApplyBatch({
+        id,
+        url: liveReg.url,
+        headers: liveReg.headers,
+        spkiPin: liveReg.spkiPin,
+        // Tunnel Host override: the same discipline as
+        // syncGatewayChamberPluginsFor — an ssh transport presents the
+        // remote gateway authority, never the loopback tunnel endpoint.
+        authority: liveInstance.transport === 'ssh' ? gatewayTunnelAuthority(liveInstance.remotePort) : undefined,
+        options: {
+          add: validated.value.add,
+          remove: validated.value.remove,
+          deferRestart: validated.value.deferRestart,
+        },
+      });
+      if (!result.ok) {
+        const partial = result.outcome !== undefined && (result.outcome.installed.length > 0 || result.outcome.removed.length > 0)
+          ? { installed: result.outcome.installed, removed: result.outcome.removed }
+          : undefined;
+        return {
+          ok: false as const,
+          error: sanitizeErrorText(result.error),
+          ...(partial === undefined ? {} : { partial }),
+        };
+      }
+      const outcome = result.outcome;
+      return {
+        ok: true as const,
+        installed: outcome.installed,
+        removed: outcome.removed,
+        restarted: outcome.restarted,
+        ...(outcome.deferredOps.length > 0 ? { deferred: true } : {}),
+      };
+    } catch (error) {
+      return { ok: false as const, error: `gateway plugin apply failed: ${sanitizeErrorText(describeUnknownError(error))}` };
+    }
+  });
+  // Gateway local materialize (design 21 §6.5/§10 ⑧ archive-pick): PICK-ONLY —
+  // the picker runs here in the main process, so a compromised renderer can
+  // never drive the pack/upload surface to an arbitrary local path (the same
+  // hardening as the ssh materialize_add_pick path). No separate confirmation
+  // dialog is needed: choosing the local source IS the user intent (design 21
+  // §6.5, pick-only per design). A picked SOURCE FOLDER is packed into a
+  // plugin tgz in the main process (bounded caps); a picked .tgz archive
+  // uploads verbatim. Either way the plugin package.json name/version become
+  // the x-plugin-name/x-plugin-version headers, and the upload rides the
+  // REGISTERED transport origin.
+  deps.ipc.handle(IPC_CHANNELS.GATEWAY_PLUGIN_MATERIALIZE, async (payload: unknown) => {
+    const { id } = payload as { id: unknown };
+    if (typeof id !== 'string' || !INSTANCE_ID_PATTERN.test(id)) {
+      return { ok: false as const, error: 'invalid or unknown instance id' };
+    }
+    const reg = getGatewaySyncRegistration(id);
+    if (reg === undefined) return { ok: false as const, error: 'no active gateway registration' };
+    if (sm.status(id)?.phase !== 'ready') {
+      return { ok: false as const, error: 'gateway is not ready' };
+    }
+    // W-10 S7: 无存活主窗预检经 edges.mainWindowAlive（S2 已有——与原
+    // mainWindow === null || isDestroyed 判据同值，F 组同款改法）。
+    if (!deps.edges.mainWindowAlive()) return { ok: false as const, error: 'no main window' };
+    const instance = sm.listInstances().find(candidate => candidate.id === id);
+    if (instance === undefined || instance.kind !== 'gateway') {
+      return { ok: false as const, error: 'gateway instance not found' };
+    }
+    // Pick-only (design 21 §6.5): the picker runs here in the main process,
+    // so a compromised renderer can never drive the upload surface to an
+    // arbitrary local path. The pick may be a plugin SOURCE FOLDER or a
+    // ready .tgz plugin archive (design 21 §10 archive-pick).
+    const picked = await deps.edges.pickPluginSource();
+    if (picked.status === 'cancelled') return { ok: true as const, cancelled: true };
+    // Post-pick re-check: the user browsed for a while — the registration
+    // and ready phase must still hold before any upload (the same
+    // discipline as the ssh picker's ownsRemoteTarget re-check).
+    const liveReg = getGatewaySyncRegistration(id);
+    if (liveReg === undefined || sm.status(id)?.phase !== 'ready') {
+      return { ok: false as const, error: 'gateway connection changed while the plugin picker was open' };
+    }
+    try {
+      const classified = classifyPluginPick(picked.path);
+      if (!classified.ok) {
+        return { ok: false as const, error: sanitizeErrorText(classified.error) };
+      }
+      let tarball: Buffer;
+      let name: string;
+      let version: string;
+      if (classified.source.kind === 'dir') {
+        const built = await buildPluginTarball(classified.source.path);
+        if (!built.manifest.ok) {
+          return { ok: false as const, error: sanitizeErrorText(built.manifest.error) };
+        }
+        tarball = built.buffer;
+        name = built.manifest.name;
+        version = built.manifest.version;
+      } else {
+        // A ready npm-pack archive uploads verbatim — no rebuild. Its
+        // name/version come from the archive's own manifest (read by the
+        // bounded reader in classifyPluginPick) and are re-validated by
+        // gatewayChamberMaterialize before any byte is sent.
+        tarball = classified.source.bytes;
+        name = classified.source.name;
+        version = classified.source.version;
+      }
+      const result = await gatewayChamberMaterialize({
+        id,
+        url: liveReg.url,
+        headers: liveReg.headers,
+        spkiPin: liveReg.spkiPin,
+        tarball,
+        name,
+        version,
+        authority: instance.transport === 'ssh' ? gatewayTunnelAuthority(instance.remotePort) : undefined,
+      });
+      return result.ok
+        ? { ok: true as const, deferred: result.deferred }
+        : { ok: false as const, error: sanitizeErrorText(result.error) };
+    } catch (error) {
+      // Builder errors carry machine codes (path too long / cap exceeded /
+      // folder changed while packing / unreadable) whose message text is
+      // already specific — keep it loud and sanitized.
+      return { ok: false as const, error: `gateway plugin materialize failed: ${sanitizeErrorText(describeUnknownError(error))}` };
+    }
   });
 
   // ③ 自举（W-10 后续批占位：控制面 ready 后的启动/恢复 push、余下 drain 挂点

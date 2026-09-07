@@ -34,17 +34,15 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { PlaneHandle } from '@dsh-chamber/control-plane';
 import { attemptCommittedRegistryPush, computeRemovedInstanceIds, computeRetiredInstanceIds, createTransportManager } from './transport-manager.ts';
-import { INSTANCE_ID_PATTERN } from './transport-manager.ts';
 import type { TransportManager } from './transport-manager.ts';
 import type { TransportInstanceSpec } from './transport-provider.ts';
 import { sshProvider, probeClientGraphLive, probeGitWorktreeLive } from './ssh-provider.ts';
 import { cleanupStaleAskpassHelpers, configureSshPasswordStore } from './ssh-provider.ts';
 import { applyWindowsAclTightening } from './win-acl.ts';
-import { configureGatewaySecretStore, configureGatewaySessionProvider, gatewayChamberApplyBatch, gatewayChamberMaterialize, gatewayProvider, getGatewayPassword, getGatewayToken, syncGatewayChamberPlugins } from './gateway-provider.ts';
+import { configureGatewaySecretStore, configureGatewaySessionProvider, gatewayProvider, getGatewayPassword, getGatewayToken, syncGatewayChamberPlugins } from './gateway-provider.ts';
 import type { LocalChamberHostPackage } from './gateway-provider.ts';
-import { getGatewaySyncRegistration, setGatewaySyncRegistration } from './gateway-sync-registry.ts';
-import { buildPluginTarball, classifyPluginPick } from './plugin-tarball.ts';
-import { buildApplyConfirmMessage, validateApplyPayload } from './gateway-ipc-shared.ts';
+import { setGatewaySyncRegistration } from './gateway-sync-registry.ts';
+import { classifyPluginPick } from './plugin-tarball.ts';
 import { createGatewaySessionManager, gatewayRegistrationAuthHeaders, gatewaySessionScopeForConnection } from './gateway-session.ts';
 import { createGatewaySessionRefresh, gatewaySessionOriginForUrl, gatewayTunnelAuthority } from './gateway-session-refresh.ts';
 import type { GatewaySessionRefresh } from './gateway-session-refresh.ts';
@@ -2269,8 +2267,25 @@ if (!gotTheLock) {
     // confirmPluginAction 形状）与插件源 picker（原模块级 pickPluginSource——
     // 已自本文件删除）宿主函数体迁 electron-edges.ts（HostEdges.showMessage /
     // pickPluginSource）；本文件余下 gateway/local 调用点已改经 edges。
-    // transportManager Pick 扩 appendLog。插件管理（GATEWAY_PLUGIN_* /
-    // LOCAL_PLUGIN_* / NPM_SEARCH 等）其余 handler 留本文件。
+    // transportManager Pick 扩 appendLog。插件管理（GATEWAY_PLUGIN_* 3 注册体
+    // 已随 W-10 S7 G 组迁出——见下方 S7 总标记；LOCAL_PLUGIN_* / NPM_SEARCH 等）
+    // 其余 handler 留本文件。
+
+    // —— W-10 S7：gateway 插件 G 组 3 注册体（GATEWAY_PLUGIN_SYNC /
+    // GATEWAY_PLUGIN_APPLY / GATEWAY_PLUGIN_MATERIALIZE）自本文件迁入 shell-core
+    // installIpcHandlers ② G 组段（F 组之后按原序；注册体逐字随迁，trustedIpc
+    // 围栏由装配侧注入 registrar 包装）。编排纯模块（gateway-provider /
+    // gateway-sync-registry / gateway-ipc-shared / plugin-tarball）在 core 直接
+    // import（本文件 import 面已按迁出收窄：getGatewaySyncRegistration /
+    // buildPluginTarball / validateApplyPayload / buildApplyConfirmMessage /
+    // gatewayChamberApplyBatch / gatewayChamberMaterialize 随迁删除）。确认
+    // 对话框经 core 内 S6 edges 版 confirmPluginAction 助手（宿主腿 =
+    // HostEdges.showMessage；本文件 confirmPluginAction 闭包仍为
+    // LOCAL_PLUGIN_ADD/REMOVE 保留）、无存活主窗预检经 edges.mainWindowAlive、
+    // 插件源 pick 经 edges.pickPluginSource。手动 sync 的上传执行闭包
+    // syncGatewayChamberPluginsFor 经 ctx 注入 core（ready 自动 sync（本文件
+    // sm.onStatusChanged ready 边缘）与手动 re-entry 共用同一执行路径与注册
+    // 参数，语义不分叉——本文件侧定义留用）。
 
     // Plugin management surface (design 13 M2+M3, contract B): read the remote
     // /local plugin manifests, apply a plugin-set change, and best-effort npm
@@ -2283,212 +2298,11 @@ if (!gotTheLock) {
     // 注册体已随 F 组迁出（shell-core installIpcHandlers ② F 组段，见上方 W-10 S6
     // 总标记）。undo 的确认对话框经 edges.showMessage、plugin pick 经
     // edges.pickPluginSource（宿主腿在 electron-edges.ts）——本文件余下
-    // GATEWAY_PLUGIN_* / LOCAL_PLUGIN_* 调用点同改经 edges。
-
-    // Manual chamber-plugin sync onto a gateway instance (design 21 §6.5,
-    // Phase 3b): re-run the seed-cache sync the ready registration performs
-    // automatically, over the REGISTERED transport origin/headers/SPKI pin —
-    // never a renderer-supplied URL or credential. No ready registration →
-    // loud {ok:false}; otherwise the awaited auto-sync path answers with the
-    // same {uploaded, skipped} projection (or null → instance vanished).
-    ipcMain.handle(IPC_CHANNELS.GATEWAY_PLUGIN_SYNC, trustedIpc(async ({ id }) => {
-      if (typeof id !== 'string' || !INSTANCE_ID_PATTERN.test(id)) {
-        return { ok: false as const, error: 'invalid or unknown instance id' };
-      }
-      const reg = getGatewaySyncRegistration(id);
-      if (reg === undefined) return { ok: false as const, error: 'no active gateway registration' };
-      // Live-state re-check (design 21 §6.5, honesty): the registry entry is
-      // cleared when the transport leaves ready, but a manual sync can still
-      // race a disconnect after the hit — a stale-ready dead transport must
-      // never be swallowed as a completed sync ({uploaded:false, skipped:false}
-      // would read as success). Same `sm.status(id)?.phase` access as the
-      // sibling seed/registration code paths.
-      if (sm.status(id)?.phase !== 'ready') {
-        return { ok: false as const, error: 'gateway is not ready' };
-      }
-      try {
-        const result = await syncGatewayChamberPluginsFor(id, reg.url, reg.headers, reg.spkiPin);
-        if (result === null) return { ok: false as const, error: 'gateway instance not found' };
-        // Honesty (design 21 review P2-B1): a sync that failed on the wire is
-        // {ok:false} — the both-false tuple must never masquerade as the
-        // "already up to date" answer.
-        if (result.failed === true) {
-          return { ok: false as const, error: result.error ?? 'gateway plugin sync failed' };
-        }
-        return { ok: true as const, uploaded: result.uploaded, skipped: result.skipped };
-      } catch (error) {
-        return { ok: false as const, error: `gateway plugin sync failed: ${sanitizeErrorText(describeUnknownError(error))}` };
-      }
-    }));
-    // Gateway batch plugin apply (design 21 §6.5, plan Phase 4.6): registry
-    // add/remove over the REGISTERED transport origin/headers/SPKI pin —
-    // never a renderer-supplied URL or credential. Main-process confirmation
-    // (decision 14 桌面通道纪律): the batch modifies the gateway's managed
-    // dsh profile — a persistent, globally-visible (multi-desktop)
-    // execution-surface change, never a silent script action. Cancelled →
-    // {ok:true, cancelled:true}; partial failures (an op refused mid-batch
-    // or a restart refused after execution) carry the executed
-    // installed/removed lists honestly.
-    ipcMain.handle(IPC_CHANNELS.GATEWAY_PLUGIN_APPLY, trustedIpc(async ({ id, add, remove, deferRestart }) => {
-      if (typeof id !== 'string' || !INSTANCE_ID_PATTERN.test(id)) {
-        return { ok: false as const, error: 'invalid or unknown instance id' };
-      }
-      const validated = validateApplyPayload({ add, remove, deferRestart });
-      if (!validated.ok) return { ok: false as const, error: validated.error };
-      const reg = getGatewaySyncRegistration(id);
-      if (reg === undefined) return { ok: false as const, error: 'no active gateway registration' };
-      // Live-state re-check (design 21 §6.5, honesty) — same
-      // `sm.status(id)?.phase` access as the sibling sync handler.
-      if (sm.status(id)?.phase !== 'ready') {
-        return { ok: false as const, error: 'gateway is not ready' };
-      }
-      const instance = sm.listInstances().find(candidate => candidate.id === id);
-      if (instance === undefined || instance.kind !== 'gateway') {
-        return { ok: false as const, error: 'gateway instance not found' };
-      }
-      // Batch confirmation with the restart/multi-desktop copy (default
-      // cancel — same convention as the local plugin actions).
-      const confirm = await confirmPluginAction(mainWindow, buildApplyConfirmMessage({
-        targetLabel: instance.label ?? null,
-        targetId: id,
-        add: validated.value.add,
-        remove: validated.value.remove,
-        deferRestart: validated.value.deferRestart,
-      }));
-      if ('cancelled' in confirm) return { ok: true as const, cancelled: true };
-      if (!confirm.ok) return { ok: false as const, error: confirm.error };
-      // Post-confirm re-check (design 21 review P2-B2, mirroring the
-      // materialize handler): the user may have kept the dialog open across
-      // a disconnect/reconnect — the batch must execute on the CURRENT
-      // registration/ready state, never on the pre-dialog snapshot.
-      const liveReg = getGatewaySyncRegistration(id);
-      if (liveReg === undefined || sm.status(id)?.phase !== 'ready') {
-        return { ok: false as const, error: 'gateway connection changed while the confirmation was open; nothing was applied' };
-      }
-      const liveInstance = sm.listInstances().find(candidate => candidate.id === id);
-      if (liveInstance === undefined || liveInstance.kind !== 'gateway') {
-        return { ok: false as const, error: 'gateway connection changed while the confirmation was open; nothing was applied' };
-      }
-      try {
-        const result = await gatewayChamberApplyBatch({
-          id,
-          url: liveReg.url,
-          headers: liveReg.headers,
-          spkiPin: liveReg.spkiPin,
-          // Tunnel Host override: the same discipline as
-          // syncGatewayChamberPluginsFor — an ssh transport presents the
-          // remote gateway authority, never the loopback tunnel endpoint.
-          authority: liveInstance.transport === 'ssh' ? gatewayTunnelAuthority(liveInstance.remotePort) : undefined,
-          options: {
-            add: validated.value.add,
-            remove: validated.value.remove,
-            deferRestart: validated.value.deferRestart,
-          },
-        });
-        if (!result.ok) {
-          const partial = result.outcome !== undefined && (result.outcome.installed.length > 0 || result.outcome.removed.length > 0)
-            ? { installed: result.outcome.installed, removed: result.outcome.removed }
-            : undefined;
-          return {
-            ok: false as const,
-            error: sanitizeErrorText(result.error),
-            ...(partial === undefined ? {} : { partial }),
-          };
-        }
-        const outcome = result.outcome;
-        return {
-          ok: true as const,
-          installed: outcome.installed,
-          removed: outcome.removed,
-          restarted: outcome.restarted,
-          ...(outcome.deferredOps.length > 0 ? { deferred: true } : {}),
-        };
-      } catch (error) {
-        return { ok: false as const, error: `gateway plugin apply failed: ${sanitizeErrorText(describeUnknownError(error))}` };
-      }
-    }));
-    // Gateway local materialize (design 21 §6.5/§10 ⑧ archive-pick): PICK-ONLY —
-    // the picker runs here in the main process, so a compromised renderer can
-    // never drive the pack/upload surface to an arbitrary local path (the same
-    // hardening as the ssh materialize_add_pick path). No separate confirmation
-    // dialog is needed: choosing the local source IS the user intent (design 21
-    // §6.5, pick-only per design). A picked SOURCE FOLDER is packed into a
-    // plugin tgz in the main process (bounded caps); a picked .tgz archive
-    // uploads verbatim. Either way the plugin package.json name/version become
-    // the x-plugin-name/x-plugin-version headers, and the upload rides the
-    // REGISTERED transport origin.
-    ipcMain.handle(IPC_CHANNELS.GATEWAY_PLUGIN_MATERIALIZE, trustedIpc(async ({ id }) => {
-      if (typeof id !== 'string' || !INSTANCE_ID_PATTERN.test(id)) {
-        return { ok: false as const, error: 'invalid or unknown instance id' };
-      }
-      const reg = getGatewaySyncRegistration(id);
-      if (reg === undefined) return { ok: false as const, error: 'no active gateway registration' };
-      if (sm.status(id)?.phase !== 'ready') {
-        return { ok: false as const, error: 'gateway is not ready' };
-      }
-      if (mainWindow === null || mainWindow.isDestroyed()) return { ok: false as const, error: 'no main window' };
-      const instance = sm.listInstances().find(candidate => candidate.id === id);
-      if (instance === undefined || instance.kind !== 'gateway') {
-        return { ok: false as const, error: 'gateway instance not found' };
-      }
-      // Pick-only (design 21 §6.5): the picker runs here in the main process,
-      // so a compromised renderer can never drive the upload surface to an
-      // arbitrary local path. The pick may be a plugin SOURCE FOLDER or a
-      // ready .tgz plugin archive (design 21 §10 archive-pick).
-      const picked = await edges.pickPluginSource();
-      if (picked.status === 'cancelled') return { ok: true as const, cancelled: true };
-      // Post-pick re-check: the user browsed for a while — the registration
-      // and ready phase must still hold before any upload (the same
-      // discipline as the ssh picker's ownsRemoteTarget re-check).
-      const liveReg = getGatewaySyncRegistration(id);
-      if (liveReg === undefined || sm.status(id)?.phase !== 'ready') {
-        return { ok: false as const, error: 'gateway connection changed while the plugin picker was open' };
-      }
-      try {
-        const classified = classifyPluginPick(picked.path);
-        if (!classified.ok) {
-          return { ok: false as const, error: sanitizeErrorText(classified.error) };
-        }
-        let tarball: Buffer;
-        let name: string;
-        let version: string;
-        if (classified.source.kind === 'dir') {
-          const built = await buildPluginTarball(classified.source.path);
-          if (!built.manifest.ok) {
-            return { ok: false as const, error: sanitizeErrorText(built.manifest.error) };
-          }
-          tarball = built.buffer;
-          name = built.manifest.name;
-          version = built.manifest.version;
-        } else {
-          // A ready npm-pack archive uploads verbatim — no rebuild. Its
-          // name/version come from the archive's own manifest (read by the
-          // bounded reader in classifyPluginPick) and are re-validated by
-          // gatewayChamberMaterialize before any byte is sent.
-          tarball = classified.source.bytes;
-          name = classified.source.name;
-          version = classified.source.version;
-        }
-        const result = await gatewayChamberMaterialize({
-          id,
-          url: liveReg.url,
-          headers: liveReg.headers,
-          spkiPin: liveReg.spkiPin,
-          tarball,
-          name,
-          version,
-          authority: instance.transport === 'ssh' ? gatewayTunnelAuthority(instance.remotePort) : undefined,
-        });
-        return result.ok
-          ? { ok: true as const, deferred: result.deferred }
-          : { ok: false as const, error: sanitizeErrorText(result.error) };
-      } catch (error) {
-        // Builder errors carry machine codes (path too long / cap exceeded /
-        // folder changed while packing / unreadable) whose message text is
-        // already specific — keep it loud and sanitized.
-        return { ok: false as const, error: `gateway plugin materialize failed: ${sanitizeErrorText(describeUnknownError(error))}` };
-      }
-    }));
+    // LOCAL_PLUGIN_* 调用点同改经 edges。
+    // —— W-10 S7：GATEWAY_PLUGIN_SYNC / GATEWAY_PLUGIN_APPLY /
+    // GATEWAY_PLUGIN_MATERIALIZE 三注册体已随 G 组迁出（shell-core installIpcHandlers
+    // ② G 组段，见上方 W-10 S7 总标记）——三注册体原文本整体移走，本处原位留
+    // 标记；确认/窗口预检/pick 决策随迁。
     ipcMain.handle(IPC_CHANNELS.LOCAL_PLUGIN_LIST, trustedIpc(() => {
       try {
         return { ok: true, manifest: localPluginList(localDshHome) };
@@ -4547,6 +4361,14 @@ if (!gotTheLock) {
         liveProbeFor,
         gitWorktreeLiveProbeFor,
       },
+      // W-10 S7（gateway 插件批）：G 组 3 注册体（GATEWAY_PLUGIN_SYNC/APPLY/
+      // MATERIALIZE）迁入 installIpcHandlers ② G 组段的装配依赖——syncGateway
+      // ChamberPluginsFor（本作用域定义的上传执行闭包，ready 自动 sync 与手动
+      // gateway_plugin_sync 共用同一执行路径：注册 transport 来源/授权头/SPKI
+      // pin + 本地 chamber host 包源（app.isPackaged/pkgDir/repoRoot 解析在
+      // 闭包内））；core 侧确认对话框复用 S6 edges 助手、窗口预检与 pick 经
+      // edges——本装配不再新增宿主叶。
+      syncGatewayChamberPluginsFor,
       confirmRegistryOriginSwitch: async (currentOrigin, nextOrigin) => {
         const win = mainWindow;
         if (win === null || win.isDestroyed()) return 'unavailable';
