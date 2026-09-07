@@ -234,6 +234,7 @@ import {
   sshPasswordsFilePath,
   stateRootDir,
 } from './shell-core.ts';
+import { createElectronEdges } from './electron-edges.ts';
 
 // Last-resort crash boundary. Expected socket/stream failures are handled at
 // their owners; an unknown uncaught exception means the privileged main
@@ -1546,6 +1547,14 @@ if (!gotTheLock) {
     // 冷启动深链 argv（design 16 §4.2）：macOS argv 含 -psn_ 噪声，防御式扫描
     // （非深链 argv 零副作用、绝不 throw 打断启动）；与 open-url 双触发由去重兜底。
     for (const url of scanDeepLinkUrls(process.argv)) enqueueDeepLink(url);
+    // W-10 S0（design 25 §4.1 seam）：HostEdges 的 Electron 实现。本批只接
+    // rendererPush 叶——下方四个 committed 状态 push 源改经它外发；drain
+    // 类 send（深链 intent / notification-open）与其余 Electron 副作用叶
+    // （通知/badge/keep-awake/dialog/open-in/登录项/resume/托盘/焦点）留待
+    // W-10 后续批逐批迁入 electron-edges.ts。
+    const edges = createElectronEdges({
+      mainWindow: () => mainWindow,
+    });
     const runtimeBaseDir = app.getPath('userData');
     const localDshHome = localDshHomeDir(runtimeBaseDir);
     const runtimeWriterFence = new RuntimeOperationFence();
@@ -2584,7 +2593,9 @@ if (!gotTheLock) {
       if (statusWindow !== null) {
         const pushed = attemptCommittedRegistryPush(() => {
           if (mainWindow !== statusWindow || statusWindow.isDestroyed()) throw new Error('status renderer changed before push');
-          statusWindow.webContents.send(IPC_CHANNELS.SSH_STATUS_CHANGED, { id, status });
+          if (!edges.rendererPush(IPC_CHANNELS.SSH_STATUS_CHANGED, { id, status })) {
+            throw new Error('status renderer push failed');
+          }
         });
         if (!pushed.sent) {
           try { console.warn(`[dsh-chamber] transport 状态已更新但 renderer push 失败：${pushed.error}`); } catch { /* callback boundary */ }
@@ -2736,7 +2747,9 @@ if (!gotTheLock) {
           if (mainWindow !== registryWindow || registryWindow.isDestroyed()) {
             throw new Error('registry renderer changed before push');
           }
-          registryWindow.webContents.send(IPC_CHANNELS.SSH_INSTANCES_CHANGED, { removedIds, retiredIds });
+          if (!edges.rendererPush(IPC_CHANNELS.SSH_INSTANCES_CHANGED, { removedIds, retiredIds })) {
+            throw new Error('registry renderer push failed');
+          }
         });
         if (!pushed.sent) {
           console.warn(`[dsh-chamber] registry 已保存但 lifecycle push 失败（等待 renderer 重拉）：${pushed.error}`);
@@ -3855,7 +3868,9 @@ if (!gotTheLock) {
       if (updateWindow !== null) {
         const pushed = attemptCommittedRegistryPush(() => {
           if (mainWindow !== updateWindow || updateWindow.isDestroyed()) throw new Error('updater renderer changed before push');
-          updateWindow.webContents.send(IPC_CHANNELS.UPDATE_STATE_CHANGED, updateState);
+          if (!edges.rendererPush(IPC_CHANNELS.UPDATE_STATE_CHANGED, updateState)) {
+            throw new Error('updater renderer push failed');
+          }
         });
         if (!pushed.sent) {
           try { console.warn(`[dsh-chamber] updater 状态 push 失败（等待 renderer 重拉）：${pushed.error}`); } catch { /* callback boundary */ }
@@ -3977,7 +3992,7 @@ if (!gotTheLock) {
     runtimeController = runtimeInstance;
     runtimeInstance.onChanged((state) => {
       if (mainWindow !== null && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send(IPC_CHANNELS.RUNTIME_STATE_CHANGED, state);
+        edges.rendererPush(IPC_CHANNELS.RUNTIME_STATE_CHANGED, state);
       }
     });
     const projectMetadataHealth = (

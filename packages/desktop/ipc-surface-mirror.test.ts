@@ -522,9 +522,16 @@ test('ChamberInjectionState / ChamberHostGraphState / ChamberSettings stay in lo
 
 const { IPC_CHANNELS } = await import('./ipc-events.ts')
 
-/** main.ts is the sole IPC registration owner. Keeping one executable owner
- * avoids a second, unimported handler implementation drifting beside it. */
-const MAIN_SIDE_FILES = ['main.ts']
+/** main.ts stays the sole IPC *registration* (ipcMain.handle) owner — keeping
+ * one executable owner avoids a second, unimported handler implementation
+ * drifting beside it. shell-core.ts and electron-edges.ts join the scan
+ * because W-10 (design 25 §4.1) moves main-side TEXT between the three files:
+ * the send-side channel references can now sit in any of them (S0: the four
+ * committed pushes leave through the electron-edges rendererPush leaf whose
+ * IPC_CHANNELS.X call sites still live in main.ts; later batches may move
+ * send-side text itself). Scanning the union preserves the lockstep strength:
+ * the three-file send set must still equal the preload on-set. */
+const MAIN_SIDE_FILES = ['main.ts', 'shell-core.ts', 'electron-edges.ts']
 
 function mainSideSource(): string {
   return MAIN_SIDE_FILES
@@ -535,8 +542,12 @@ function mainSideSource(): string {
 /** Collect the channel names of one main-side registration/send call: the
  *  argument is either an IPC_CHANNELS constant reference (resolved against
  *  the imported constants) or a raw quoted literal (a regression the guard
- *  must also surface — the constant set is the source of truth). */
-function collectMainChannels(source: string, call: 'ipcMain.handle' | 'webContents.send'): string[] {
+ *  must also surface — the constant set is the source of truth). Since W-10
+ *  the send side has two spellings: drains still call webContents.send(...)
+ *  while the committed pushes go through the HostEdges
+ *  edges.rendererPush(IPC_CHANNELS.X, ...) leaf — both count as send-side
+ *  channel references (see collectMainSendChannels). */
+function collectMainChannels(source: string, call: 'ipcMain.handle' | 'webContents.send' | 'rendererPush'): string[] {
   const channels = new Set<string>()
   const pattern = new RegExp(`${call}\\(\\s*(?:IPC_CHANNELS\\.([A-Z][A-Z0-9_]*)|'([^']*)'|"([^"]*)")`, 'g')
   let match: RegExpExecArray | null
@@ -563,8 +574,21 @@ function collectPreloadChannels(source: string, call: 'invoke' | 'on'): string[]
   return [...channels].sort()
 }
 
+/** Send-side channels across the W-10 seam spelling split: webContents.send(
+ *  ...) text (drains and any not-yet-migrated sends) plus the HostEdges
+ *  rendererPush(IPC_CHANNELS.X, ...) leaf calls. The union is what must equal
+ *  the preload on-set — a push re-spelled under the new leaf stays covered,
+ *  and the electron-edges.ts implementation body contributes nothing here
+ *  (its webContents.send argument is a parameter, not a channel reference). */
+function collectMainSendChannels(source: string): string[] {
+  return [...new Set([
+    ...collectMainChannels(source, 'webContents.send'),
+    ...collectMainChannels(source, 'rendererPush'),
+  ])].sort()
+}
+
 const mainHandleChannels = collectMainChannels(mainSideSource(), 'ipcMain.handle')
-const mainSendChannels = collectMainChannels(mainSideSource(), 'webContents.send')
+const mainSendChannels = collectMainSendChannels(mainSideSource())
 const preloadInvokeChannels = collectPreloadChannels(preload, 'invoke')
 const preloadOnChannels = collectPreloadChannels(preload, 'on')
 
