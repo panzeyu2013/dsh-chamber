@@ -53,7 +53,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         } else {
             print("[poc] sidecar = (未找到：POC_SIDECAR 未设且向上查找 \(Self.sidecarRelativePath) 失败)")
         }
-        let sidecarArguments: [String] = sidecarPath.map { [$0] } ?? []
+        // sidecar-entry.ts（W-11 真业务 sidecar）需要参数：--user-data-dir /
+        // --web-dist-dir / --port。按脚本名识别并补默认参数（env 可覆盖：
+        // POC_USER_DATA / POC_WEB_DIST / POC_PORT）；poc-sidecar 桩保持旧
+        // 零参语义不变。
+        var sidecarArguments: [String] = sidecarPath.map { [$0] } ?? []
+        if let path = sidecarPath, (path as NSString).lastPathComponent.contains("sidecar-entry") {
+            let repoRoot = URL(fileURLWithPath: path)
+                .deletingLastPathComponent()  // packages/desktop
+                .deletingLastPathComponent()  // packages
+                .deletingLastPathComponent()  // 仓库根
+                .path
+            let stateDir = env["POC_USER_DATA"]
+                ?? NSHomeDirectory() + "/Library/Application Support/dsh-chamber-poc-dev"
+            let webDir = env["POC_WEB_DIST"] ?? repoRoot + "/packages/desktop/dist/web"
+            let port = env["POC_PORT"] ?? "17520"
+            sidecarArguments += [
+                "--user-data-dir", stateDir,
+                "--web-dist-dir", webDir,
+                "--port", port,
+            ]
+            print("[poc] sidecar-entry 默认参数：user-data=\(stateDir) web=\(webDir) port=\(port)")
+        }
 
         // ③ 子进程环境：node 路径 basename 含 "dsh-chamber"（即 Electron 二进制）
         //    时注入 ELECTRON_RUN_AS_NODE=1（写进传给子进程的 process environment）
