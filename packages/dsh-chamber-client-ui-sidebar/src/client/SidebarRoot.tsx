@@ -758,8 +758,11 @@ export function SidebarRoot({
   // chamber (design 24 revision 2026-09): the ARCHIVE MANAGER dialog — one
   // per source. The manager lists the source's archived sessions (metadata
   // rides ChamberServerAggregate.archivedSessions; the dialog issues NO
-  // session read of its own) and offers single-row / multi-select /
-  // delete-all purges through the optional sessionIds purge filter.
+  // session read of its own) and offers per-row and multi-select purges
+  // through the optional sessionIds purge filter. Whole-set deletion has NO
+  // standalone button (2026 user decision): "delete everything" means
+  // ticking the select-all checkbox and confirming the counted
+  // delete-selected, so a purge never covers rows the dialog could not list.
   // Supersedes the v1 server-row preview → window.confirm → purge-everything
   // flow (design 24 §6 as merged); destructive calls stay confirm-gated
   // INSIDE the dialog.
@@ -1347,8 +1350,10 @@ export function SidebarRoot({
         />
       )}
       {/* chamber (design 24 revision 2026-09): the per-source archive
-          manager — lists what is archived and deletes single / selected /
-          all. Mounted only while a target source is chosen. */}
+          manager — lists what is archived (grouped by workspace, §19) and
+          deletes per-row / selected rows (whole set only via the explicit
+          select-all checkbox — no standalone delete-all, §18). Mounted only
+          while a target source is chosen. */}
       {archiveCleanupServerId !== null && (
         <ArchiveManagerDialog
           server={servers.find(candidate => candidate.id === archiveCleanupServerId) ?? null}

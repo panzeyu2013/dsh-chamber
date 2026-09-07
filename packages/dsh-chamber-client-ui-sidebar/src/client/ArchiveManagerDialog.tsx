@@ -1,5 +1,6 @@
 /**
- * chamber archive manager dialog (design 24 §6, revision 2026-09).
+ * chamber archive manager dialog (design 24 §6, revision 2026-09; delete-all
+ * retirement 2026 — see the VIEW MODES note below).
  *
  * Replaces the v1 server-row preview → window.confirm → purge-everything
  * flow: the dialog LISTS what is archived (title + project label per row,
@@ -7,8 +8,23 @@
  * source's own snapshot, no session read of its own) and offers
  *
  *   - per-row delete (one archived session's tree),
- *   - multi-select delete (checkbox rows + select all),
- *   - delete all (whole archived set — the legacy purge),
+ *   - multi-select delete (checkbox rows + select all) — the ONLY whole-set
+ *     path: no standalone delete-all button (2026 user decision). Deleting
+ *     "everything" means explicitly ticking select-all first (and then
+ *     confirming the counted 删除选中), so a purge can never cover rows the
+ *     dialog could not list.
+ *
+ * Rows are GROUPED BY WORKSPACE (2026 grouping revision): each row carries
+ * its workspace attribution from the App-side derive (authoritative registry
+ * membership, cwd==path fallback, else the ungrouped bucket — see
+ * derive.ts), and this dialog renders one collapsible group section per
+ * workspace. Collapse is dialog-local view state only (default expanded,
+ * never persisted, never mirrored to the nav's fold prefs); it hides rows but
+ * never changes selection or counts — select-all and the counted 删除选中
+ * cover collapsed groups unchanged. Group headers reuse the nav workspace
+ * chrome (folder/chevron fold button + workspace accent, same classes/tokens
+ * from this package's css module) plus a tri-state group checkbox
+ * (indeterminate = part of the group selected).
  *
  * all through the host purge's optional `sessionIds` subset filter (the
  * host intersects the filter with the authoritative archived set, so the
@@ -18,7 +34,8 @@
  * per-run status lines (role=status/alert) show completion / skips /
  * partial failures / domain-missing / busy / timeouts.
  *
- * VIEW MODES (review round 2026-09 — archive-set provenance tri-state):
+ * VIEW MODES (review round 2026-09 — archive-set provenance tri-state;
+ * 2026 delete-all retirement — deletion surfaces ONLY from the listed view):
  *   - list     rows landed AND the snapshot's archive set is authoritative
  *              (ChamberServerAggregate.archiveSetKnown === true): normal
  *              listing; an empty list is a true "nothing archived" fact.
@@ -26,13 +43,16 @@
  *              (archiveSetKnown false/missing): the host MAY hold archived
  *              sessions the client cannot classify (documented KNOWN
  *              DEGRADATION — archived rows even resurface in the nav list).
- *              The dialog never claims "nothing archived"; delete-all stays
- *              available (purge(undefined) is rows-independent) with a
- *              count-free confirm.
+ *              The dialog never claims "nothing archived" and shows no list,
+ *              so it offers NO destructive action here — whole-set purge
+ *              (`purge(undefined)`) was retired with delete-all, and no
+ *              listed row exists to select. When the source's mounted
+ *              baseline lands, the bridge publish re-derives the dialog and
+ *              the list (self-healing — no reopen needed).
  *   - pending  rows have not landed (aggregate not ok): a snapshot-fetch
  *              error is shown when the aggregate carries one, otherwise a
- *              loading line; delete-all is only available in the error case
- *              (the host domain is independent of the list store).
+ *              loading line; no destructive action (same rationale — there
+ *              is no trustworthy list to select from).
  *
  * Single-flight per dialog (one run at a time; controls disabled while a
  * run is in flight). Closing is allowed at ANY time (Esc / X / mask) — an
@@ -48,19 +68,28 @@
  * PluginDialog render), so mask/Escape/close-button behaviour and the
  * card/radius/colour tokens match every other dialog in the app. Footer
  * actions are the official Button atom (outline + destructive ink, the
- * ui-git remove-confirm convention); only the row list stays bespoke
- * (native checkboxes + title/project rows + per-row delete).
+ * ui-git remove-confirm convention). The row list stays bespoke (native
+ * checkboxes + title/project rows + per-row delete), and the workspace group
+ * headers deliberately reuse the nav workspace chrome — the SAME module's
+ * fold-toggle classes (folder glyph + chevron swap, accent var) and the same
+ * workspaceAccentStyle helper — so a group stays visually bound to its
+ * workspace row in the session list.
  *
  * Error/info text is zh-hardcoded inline (the sidebar's established inline
  * rowError precedent — design 24 §5 decision); buttons and confirms ride
  * the locale dictionaries.
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Button, IconLoadingOutline16, IconTrashOutline16, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
+import clsx from 'clsx'
+import {
+  Button, IconChevronRightOutline14, IconFolderOpenOutline16, IconLoadingOutline16, IconTrashOutline16, Modal,
+} from '@deepseek-ai/dsh-client-ui-primitives'
 import cc from './sidebar-chamber.module.css'
 import type { ChamberServerAggregate } from '../shared/aggregate-store.ts'
 import { chamberBridge } from '../shared/aggregate-store.ts'
+import { groupArchivedRows, workspaceAccentStyle, type ArchivedSessionGroup } from '../shared/derive.ts'
 import { getInstanceClient, purgeArchivedSessions } from '../shared/instance-api.ts'
+import { getWorkspaceGitFlag, isSourceGitFlagsLoaded } from '../shared/workspace-git-flags.ts'
 import type { SidebarKey } from './locales.ts'
 
 /** The dialog's `t`: the shell's translate (sidebar namespace keys). */
@@ -77,6 +106,18 @@ export interface ArchiveManagerDialogProps {
 /** Per-run outcome note kinds (zh-hardcoded copy, §5 discipline). */
 type NoteKind = 'info' | 'error'
 
+/** Identity-preserving subset prune (2026 review cleanup): returns `prev`
+ *  unchanged when nothing dropped, so callers never re-render on no-ops. */
+function pruneSet<T>(prev: ReadonlySet<T>, keep: ReadonlySet<T>): ReadonlySet<T> {
+  let changed = false
+  const next = new Set<T>()
+  for (const value of prev) {
+    if (keep.has(value)) next.add(value)
+    else changed = true
+  }
+  return changed ? next : prev
+}
+
 /** Compact project label from a canonical cwd (last two path segments). */
 function projectLabelOf(cwd: string | undefined): string {
   if (cwd === undefined) return ''
@@ -86,6 +127,11 @@ function projectLabelOf(cwd: string | undefined): string {
 
 export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialogProps) {
   const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set())
+  // Collapsed workspace groups (2026 grouping revision): dialog-local view
+  // state only — never persisted, never mirrored to the nav's folded prefs.
+  // Collapse hides rows, it never changes selection/counts (a select-all over
+  // the list covers collapsed groups too).
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set())
   const [busy, setBusy] = useState(false)
   const [note, setNote] = useState<{ kind: NoteKind; text: string } | null>(null)
   const mountedRef = useRef(true)
@@ -115,6 +161,15 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
     return ids
   }, [rows])
 
+  // Grouped listing (2026 grouping revision): pure derive-side grouping
+  // (groupArchivedRows — order/attribution live in derive.ts, node-tested).
+  const groups = useMemo(() => (rows === undefined ? [] : groupArchivedRows(rows)), [rows])
+  const groupById = useMemo(() => {
+    const map = new Map<string, ArchivedSessionGroup>()
+    for (const group of groups) map.set(group.key, group)
+    return map
+  }, [groups])
+
   // Prune the selection to surviving rows whenever the (refreshed) list
   // lands — a purge removes rows through the bridge publish. Accepted race
   // (review round 2026-09): between a refresh publish and this passive prune
@@ -124,16 +179,29 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
   // reports actual counts).
   const rowSet = useMemo(() => new Set(rowIds), [rowIds])
   useEffect(() => {
-    setSelected(prev => {
-      let changed = false
-      const next = new Set<string>()
-      for (const id of prev) {
-        if (rowSet.has(id)) next.add(id)
-        else changed = true
-      }
-      return changed ? next : prev
-    })
+    setSelected(prev => pruneSet(prev, rowSet))
   }, [rowSet])
+
+  // Same passive prune for collapsed group keys: a group that vanished with
+  // its rows (purge publish) must not stay collapsed in the state.
+  const groupKeySet = useMemo(() => {
+    const keys = new Set<string>()
+    for (const group of groups) keys.add(group.key)
+    return keys
+  }, [groups])
+  useEffect(() => {
+    setCollapsed(prev => pruneSet(prev, groupKeySet))
+  }, [groupKeySet])
+
+  // Focus-loss guard (2026 a11y review): a purge publish can unmount the row
+  // that held focus (per-row delete → refresh → the row disappears) and the
+  // browser then drops focus to <body>. While the dialog stays mounted, land
+  // focus back on the panel — a loss guard only, not a focus trap.
+  useEffect(() => {
+    if (rows === undefined) return
+    if (document.activeElement !== document.body) return
+    panelRef.current?.focus()
+  }, [rows])
 
   if (server === null) return null
 
@@ -157,7 +225,41 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
     setSelected(prev => prev.size === rowIds.length && rowIds.length > 0 ? new Set() : new Set(rowIds))
   }
 
-  const runPurge = (sessionIds: readonly string[] | undefined): void => {
+  /** Select / deselect every row of one workspace group (the group header
+   *  checkbox; a collapsed group keeps its membership — selection is list
+   *  state, not view state). */
+  const toggleGroup = (key: string): void => {
+    if (busy) return
+    const group = groupById.get(key)
+    if (group === undefined) return
+    const ids = group.rows.map(row => row.sessionId)
+    if (ids.length === 0) return
+    setSelected(prev => {
+      const allSelected = ids.every(id => prev.has(id))
+      const next = new Set(prev)
+      if (allSelected) {
+        for (const id of ids) next.delete(id)
+      } else {
+        for (const id of ids) next.add(id)
+      }
+      return next
+    })
+  }
+
+  const toggleGroupFold = (key: string): void => {
+    setCollapsed(prev => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
+
+  /** Purge exactly the listed session ids (host intersects the filter with
+   *  the authoritative archived set — never a non-archived target). No
+   *  whole-set `undefined` path reaches this call: with delete-all retired,
+   *  a purge always stems from an explicit per-row / select-all selection. */
+  const runPurge = (sessionIds: readonly string[]): void => {
     if (busy) return
     const client = getInstanceClient(server.id)
     setBusy(true)
@@ -227,15 +329,6 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
     runPurge([...selected])
   }
 
-  const deleteAll = (): void => {
-    if (busy) return
-    // Count-free confirm: the host deletes the WHOLE authoritative archived
-    // set — which can exceed the current list (subagent-origin members are
-    // never listed; rows may be stale), so the copy never promises a count.
-    if (!window.confirm(t('archive.manager.confirmAll'))) return
-    runPurge(undefined)
-  }
-
   const titleText = (title: string | undefined): string => {
     if (title === undefined || title === '') return t('archive.manager.rowUntitled')
     return title
@@ -246,18 +339,16 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
     ? 'archive.manager.deleteSelected.one'
     : 'archive.manager.deleteSelected.other'
 
-  // View-mode derivation (module doc VIEW MODES).
+  // View-mode derivation (module doc VIEW MODES). With delete-all retired
+  // (2026 user decision) the destructive surface is EXACTLY the listed view:
+  // rows only render when the archive set is authoritative and non-empty, so
+  // a selection (and therefore a purge) can only ever cover listed rows.
+  // Degraded and pending/pull-error views carry no destructive action — an
+  // empty authoritative list is the true "nothing archived" fact.
   const landed = rows !== undefined
   const degraded = landed && !archiveSetKnown
   const pullError = !landed && server.aggregateError !== undefined
   const listVisible = landed && !degraded && rows.length > 0
-  // delete-all is available whenever the host is reachable and the purge is
-  // meaningful: on degraded/pull-error views the list cannot be trusted but
-  // purge(undefined) hits the authoritative set; on an authoritative empty
-  // list there is nothing to delete (v1 parity — no confirm on empty).
-  const deleteAllDisabled = busy
-    || (!landed && !pullError)
-    || (archiveSetKnown && rows !== undefined && rows.length === 0)
 
   return (
     <Modal
@@ -286,14 +377,6 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
               {t(selectedCountKey, { count: selected.size })}
             </Button>
           )}
-          <Button
-            variant="outline"
-            className={cc.archiveManagerDanger}
-            disabled={deleteAllDisabled}
-            onClick={deleteAll}
-          >
-            {t('archive.manager.deleteAll')}
-          </Button>
         </div>
       )}
     >
@@ -318,47 +401,120 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
                 checked={selected.size === rows.length}
                 aria-label={t('archive.manager.selectAllAria')}
                 disabled={busy}
+                // Partial selection renders the master checkbox as
+                // indeterminate (group-header tri-state parity, 2026 review);
+                // it still selects everything on the next toggle.
+                ref={(element) => {
+                  if (element !== null) {
+                    element.indeterminate = selected.size > 0 && selected.size < rows.length
+                  }
+                }}
                 onChange={toggleAll}
               />
               <span className={cc.archiveManagerRowTitleSelectAll}>{t('archive.manager.selectAllAria')}</span>
               <span className={cc.archiveManagerRowPath}>{t(countKey, { count: rows.length })}</span>
             </div>
-            {rows.map(row => (
-              <div key={row.sessionId} className={cc.archiveManagerRow}>
-                <input
-                  type="checkbox"
-                  className={cc.archiveManagerCheck}
-                  checked={selected.has(row.sessionId)}
-                  aria-label={titleText(row.title)}
-                  disabled={busy}
-                  onChange={() => { toggle(row.sessionId) }}
-                />
-                <span
-                  className={cc.archiveManagerRowTitle}
-                  title={titleText(row.title)}
-                >
-                  {titleText(row.title)}
-                </span>
-                {projectLabelOf(row.cwd) !== '' && (
-                  <span className={cc.archiveManagerRowPath} title={row.cwd}>
-                    {projectLabelOf(row.cwd)}
-                  </span>
-                )}
-                <button
-                  type="button"
-                  className={cc.archiveManagerRowDelete}
-                  aria-label={t('archive.manager.rowDeleteAria', { title: titleText(row.title) })}
-                  title={t('archive.manager.rowDeleteAria', { title: titleText(row.title) })}
-                  disabled={busy}
-                  onClick={(event) => {
-                    event.stopPropagation()
-                    deleteSingle(row.sessionId, row.title ?? '')
-                  }}
-                >
-                  <IconTrashOutline16 size={13} />
-                </button>
-              </div>
-            ))}
+            {groups.map(group => {
+              const isGroupCollapsed = collapsed.has(group.key)
+              const realWorkspace = group.workspace !== undefined
+              // Nav parity accent (same formula/seed the sidebar workspace
+              // rows use, incl. the "no accent before git flags load" gate —
+              // the group stays visually bound to its workspace row in the
+              // session list); undefined for the ungrouped bucket.
+              const accent = realWorkspace && isSourceGitFlagsLoaded(server.id)
+                ? workspaceAccentStyle(server.id, group.key, getWorkspaceGitFlag(server.id, group.key))
+                : undefined
+              const groupSelected = group.rows.length > 0 && group.rows.every(row => selected.has(row.sessionId))
+              const groupPartial = !groupSelected && group.rows.some(row => selected.has(row.sessionId))
+              const groupTitle = realWorkspace ? group.title : t('list.ungrouped')
+              const groupCountKey: SidebarKey = group.rows.length === 1
+                ? 'archive.manager.rowCount.one'
+                : 'archive.manager.rowCount.other'
+              return (
+                <div key={group.key} className={cc.archiveManagerGroup}>
+                  <div
+                    className={cc.archiveManagerGroupHeader}
+                    style={accent}
+                  >
+                    <input
+                      type="checkbox"
+                      className={cc.archiveManagerCheck}
+                      checked={groupSelected}
+                      aria-label={t('archive.manager.groupSelectAria', { title: groupTitle })}
+                      // Explicit mixed state: HTML-AAM does not guarantee that
+                      // native `indeterminate` maps to aria-checked="mixed"
+                      // (Blink/Gecko expose it; other engines may not), and
+                      // the tri-state is the group's key status — say it
+                      // aloud. Only rendered while partial so the native
+                      // checkedness stays the aria authority otherwise.
+                      {...(groupPartial ? { 'aria-checked': 'mixed' as const } : {})}
+                      disabled={busy}
+                      // Half-checked group = some (not all) members selected;
+                      // a native checkbox cannot express tri-state without
+                      // imperative indeterminate (ref callback — no effect).
+                      ref={(element) => {
+                        if (element !== null) element.indeterminate = groupPartial
+                      }}
+                      onChange={() => { toggleGroup(group.key) }}
+                    />
+                    <button
+                      type="button"
+                      className={clsx(
+                        cc.foldToggle,
+                        isGroupCollapsed && cc.foldToggleFolded,
+                        realWorkspace && cc.foldToggleFolder,
+                      )}
+                      aria-expanded={!isGroupCollapsed}
+                      aria-label={isGroupCollapsed ? t('workspace.expand') : t('workspace.collapse')}
+                      onClick={() => { toggleGroupFold(group.key) }}
+                    >
+                      <IconChevronRightOutline14 size={14} className={cc.foldChevron} />
+                      {realWorkspace && <IconFolderOpenOutline16 size={14} className={cc.foldFolder} />}
+                    </button>
+                    <span className={cc.archiveManagerGroupTitle} title={groupTitle}>
+                      {groupTitle}
+                    </span>
+                    <span className={cc.archiveManagerRowPath}>{t(groupCountKey, { count: group.rows.length })}</span>
+                  </div>
+                  {!isGroupCollapsed && group.rows.map(row => (
+                    <div key={row.sessionId} className={cc.archiveManagerRow}>
+                      <input
+                        type="checkbox"
+                        className={cc.archiveManagerCheck}
+                        checked={selected.has(row.sessionId)}
+                        aria-label={titleText(row.title)}
+                        disabled={busy}
+                        onChange={() => { toggle(row.sessionId) }}
+                      />
+                      <span
+                        className={cc.archiveManagerRowTitle}
+                        title={titleText(row.title)}
+                      >
+                        {titleText(row.title)}
+                      </span>
+                      {projectLabelOf(row.cwd) !== '' && (
+                        <span className={cc.archiveManagerRowPath} title={row.cwd}>
+                          {projectLabelOf(row.cwd)}
+                        </span>
+                      )}
+                      <button
+                        type="button"
+                        className={cc.archiveManagerRowDelete}
+                        aria-label={t('archive.manager.rowDeleteAria', { title: titleText(row.title) })}
+                        title={t('archive.manager.rowDeleteAria', { title: titleText(row.title) })}
+                        disabled={busy}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          deleteSingle(row.sessionId, row.title ?? '')
+                        }}
+                      >
+                        <IconTrashOutline16 size={13} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )
+            })}
           </div>
         )}
         {note !== null && (

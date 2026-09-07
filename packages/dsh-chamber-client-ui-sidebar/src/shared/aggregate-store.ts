@@ -66,7 +66,9 @@ export interface ChamberServerAggregate {
   runtime?: InstanceRuntimeReport
   /**
    * Archived-session metadata rows of this source (design 24 revision
-   * 2026-09 — the archive manager lists what is archived). Present when the
+   * 2026-09 — the archive manager lists what is archived; 2026 revision:
+   * rows additionally carry their workspace attribution for the manager's
+   * grouped listing — see ArchivedSessionMetaRow). Present when the
    * per-instance aggregate snapshot has landed. `archiveSetKnown` says
    * whether an EMPTY rows list is a true "nothing archived" fact:
    * - known (true): the mounted workspace baseline projected the registry
@@ -75,8 +77,9 @@ export interface ChamberServerAggregate {
    *   landed (aggregate not ok) or carries no archive-set metadata;
    * - known (false): the unary-fallback view — its archive set is unknown
    *   (documented KNOWN DEGRADATION) — [] must NEVER be read as "no archived
-   *   sessions"; the archive manager shows an honest degraded branch and
-   *   keeps whole-set purge available.
+   *   sessions"; the archive manager shows an honest degraded branch with no
+   *   destructive action (no list to select; whole-set purge was retired
+   *   with the standalone delete-all — 2026 user decision).
    */
   archivedSessions?: ArchivedSessionMetaRow[]
   archiveSetKnown?: boolean

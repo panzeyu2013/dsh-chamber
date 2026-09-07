@@ -532,7 +532,9 @@ function titleOf(summary: any): string | undefined {
  * so the fallback returns an empty archive set (marked `archiveSetKnown:
  * false`) and archived sessions resurface in the list. Consumers must never
  * read the empty set as "nothing archived": the archive manager shows an
- * honest degraded branch (and keeps whole-set purge available) on snapshots
+ * honest degraded branch with NO destructive action (no list to select;
+ * whole-set purge was retired with the standalone delete-all — 2026 user
+ * decision, design 24 §18/§19) on snapshots
  * that are not archive-set-authoritative. Acceptable only while the fallback
  * serves genuinely unmounted sources or the pre-baseline window; the mounted
  * path (which carries the archive set) must never be replaced by this
@@ -858,8 +860,12 @@ export async function previewArchiveCleanup(client: InstanceApiClient): Promise<
  * args validation (`gateway/arguments-invalid` — empirically verified: the
  * generic gateway rejects any key the method descriptor does not declare,
  * so the old host NEVER runs its legacy full purge on a subset request).
- * The refusal is remapped here to an honest restart hint; delete-all
- * (no filter) keeps working on old hosts.
+ * The refusal is remapped here to an honest restart hint. Since the manager
+ * retired its whole-set path (2026 user decision — no standalone delete-all,
+ * every purge carries an explicit id list), an old host now refuses EVERY
+ * manager delete until the instance restarts with the current seed; the
+ * `undefined` whole-set shape below remains only as the tested wire-level
+ * legacy contract (no UI caller).
  */
 export async function purgeArchivedSessions(
   client: InstanceApiClient,
@@ -870,11 +876,11 @@ export async function purgeArchivedSessions(
     result = await callAndThrow(client, () => client.archiveCleanup.purge(sessionIds))
   } catch (error) {
     if (looksNoResponse(error)) {
-      throw new Error('清理超时或网络中断——清理可能仍在进行，请稍后重新预览或重试（重复执行是安全的）。')
+      throw new Error('清理超时或网络中断——清理可能仍在进行，请稍后重试（重复执行是安全的）。')
     }
     if (sessionIds !== undefined && error instanceof InstanceRpcError && error.code === 'gateway/arguments-invalid') {
       // Old host domain (zero-param purge) refusing the subset filter shape.
-      throw new Error('该实例的归档清理域版本过旧，不支持按条删除——请重启该实例的 dsh 后再试（删除全部仍可用）。')
+      throw new Error('该实例的归档清理域版本过旧，不支持按条删除——请重启该实例的 dsh 后再试。')
     }
     throw error
   }

@@ -619,15 +619,23 @@
   display: inline-flex;
 }
 
+/* The archive-manager group headers (2026 grouping revision) reuse the SAME
+   folder↔chevron hover/focus swap: the manager header has no kebab/actions,
+   so the .rowActionsVisible variant below is a no-op for it — one shared
+   rule list, no duplicate table to keep in sync. */
 .workspaceHeader:hover .foldToggleFolder .foldChevron,
 .workspaceHeader:has(:focus-visible) .foldToggleFolder .foldChevron,
-.workspaceHeader:has(.rowActionsVisible) .foldToggleFolder .foldChevron {
+.workspaceHeader:has(.rowActionsVisible) .foldToggleFolder .foldChevron,
+.archiveManagerGroupHeader:hover .foldToggleFolder .foldChevron,
+.archiveManagerGroupHeader:has(:focus-visible) .foldToggleFolder .foldChevron {
   display: inline-flex;
 }
 
 .workspaceHeader:hover .foldToggleFolder .foldFolder,
 .workspaceHeader:has(:focus-visible) .foldToggleFolder .foldFolder,
-.workspaceHeader:has(.rowActionsVisible) .foldToggleFolder .foldFolder {
+.workspaceHeader:has(.rowActionsVisible) .foldToggleFolder .foldFolder,
+.archiveManagerGroupHeader:hover .foldToggleFolder .foldFolder,
+.archiveManagerGroupHeader:has(:focus-visible) .foldToggleFolder .foldFolder {
   display: none;
 }
 
@@ -1433,6 +1441,14 @@
   opacity: 0.6;
 }
 
+/* Busy dim for the group HEADER only dims its checkbox (2026 a11y review):
+   the fold toggle stays usable while a run is in flight (view state only),
+   so dimming the whole header would make it look disabled. The rows below
+   are individually dimmed by their own rule above. */
+.archiveManagerGroupHeader .archiveManagerCheck:disabled {
+  opacity: 0.6;
+}
+
 .archiveManagerRowTitleSelectAll {
   flex: 1;
   min-width: 0;
@@ -1493,6 +1509,61 @@
 .archiveManagerRowDelete:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+/* Keyboard focus rings (2026 a11y review): the dialog's destructive row
+   button and its group fold toggles follow the module's .actionIcon
+   :focus-visible convention (brand 1px inset ring) instead of the UA
+   default. */
+.archiveManagerRowDelete:focus-visible,
+.archiveManagerGroupHeader .foldToggle:focus-visible {
+  outline: 1px solid var(--dsw-alias-brand-primary);
+  outline-offset: -1px;
+}
+
+/* Workspace group sections of the archived list (2026 grouping revision):
+   one collapsible header per workspace with its rows underneath. The header
+   reuses the NAV workspace chrome — the SAME module's fold-toggle classes
+   (folder glyph at rest, chevron swap on hover/focus, folded rotation) and
+   the workspaceAccentStyle accent var — so a group stays visually bound to
+   its workspace row in the session list. It does NOT reuse .workspaceHeader
+   itself: that class hides its count on hover expecting the nav action
+   cluster this dialog does not have. The ungrouped bucket renders chevron
+   only (no folder, no accent) — nav parity. */
+.archiveManagerGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.archiveManagerGroup + .archiveManagerGroup {
+  margin-top: 4px;
+}
+
+.archiveManagerGroupHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 5px 8px;
+  border-radius: 10px;
+}
+
+.archiveManagerGroupHeader:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.archiveManagerGroupTitle {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  line-height: 19px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .archiveManagerEmpty {
