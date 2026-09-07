@@ -147,7 +147,11 @@
   双壳共存/bundle id、更新路线（v1 blocked-available → v2 Sparkle）、仓库落位、
   原生 UI 渐进范围、Node 版本/架构、静态凭据加密（v1 建议诚实 0600 明文）。实施
   须先过 P0 验证门（G1–G5 + WebKit 后台节流/存储隔离 C1/C2 + 桥护栏）；Electron
-  版（Win/Linux/mac）并行不回归。
+  版（Win/Linux/mac）并行不回归。**自主推进（2026-09-07）**：P0 代码交付级完成——
+  `macos/` SwiftPM 壳（窗口/A 桥护栏/B 桥/编解码）+ `packages/desktop/poc-sidecar.ts`
+  （W-03…W-05）：swift build 0 警告、swift test 19/19、sidecar 驱动 33/33、真链冒烟
+  （真实 chamber UI→shim→Swift→sidecar `desktop_ssh_instances_get` 回包）；D1–D7 未
+  签核、G 门（G1–G5/C1/C2）全部未过（截图取证被系统权限拒绝，UI 目测待 [用户机 GUI]）。
 - **起始端口偏移**：本地默认 17510、控制面默认 17500；当前固定起始端口 + P+1 重试 +
   记录仲裁，是否开放配置仍未决。
 - **trusted-host 自定义 Host**：当前反代 Host 与实例自身 `127.0.0.1:<port>` 一致；

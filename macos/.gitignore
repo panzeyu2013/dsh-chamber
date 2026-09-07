@@ -1,0 +1,5 @@
+# macOS Swift 壳（macos/，design 25 §3.2）——SwiftPM 构建产物与本地状态
+.build/
+.swiftpm/
+*.xcodeproj
+.DS_Store

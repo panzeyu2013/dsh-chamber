@@ -230,12 +230,20 @@ W-03 起骨架文件落地即可在沙箱执行验证；窗口目测/剪贴板/�
 |---|---|---|---|---|
 | （示例）2026-XX-XX | W-01 | 0.1 表签核 commit <sha>；U1 记录；G0 命令日志 | 过 | D3/D5 待 M2 出口、D6 minor 待安装态核实 |
 | | W-02 | | | |
-| | W-03 | | | |
-| | W-04 | | | |
-| | W-05 | | | |
+| 2026-09-07 | W-03 | macos/ SwiftPM 骨架 + 窗口壳；`swift build` 0 警告 0 错误；scratch 运行时冒烟（ATS 未拦 loopback、资源注入成功） | 代码过 | 窗口视觉/外链/退出语义待 [用户机 GUI] |
+| 2026-09-07 | W-04 | TrustGuard/BridgeShimInjector/MessageHandler + bridge-shim.poc.js；46 项行为断言（/tmp/dsh-verify）+ 框架单测并入 | 代码过 | 真页 hydration 对拍（shim 挂出时机）待 GUI |
+| 2026-09-07 | W-05 | AnyCodable/FrameCodec/BridgeClient + poc-sidecar.ts；`swift test` 19/19；sidecar NDJSON 驱动 33/33；**真链冒烟：真实 chamber UI → shim → Swift 护栏 → B 桥 → sidecar `desktop_ssh_instances_get` 回包** | 代码过；invoke 拓扑真链通 | push/edge 拓扑与通知点击需 GUI 手测；`info` 未在真链日志观测（待查 shim 触发时机） |
 | | W-06 | | | |
 | | W-07 | | | |
 | | W-08 | | | |
+
+**自主推进轮注记（2026-09-07）**：本环境经 Electron-RUN_AS_NODE（
+/Applications/dsh-chamber.app 内置 Node 24.18.1）+ 主检出 pnpm store 解锁 JS
+工具链；vendor 已物化（ensure-harness-vendor，submodule a66e4702）、`pnpm install
+--frozen-lockfile --ignore-scripts` 5.9s 完成（Electron 下载跳过）。上述 W-03…W-05
+为**代码交付级**完成；**所有门禁判定（G1–G5/C1/C2）仍属未过**：截图取证被系统
+录屏权限拒绝，UI 目测项全部待 [用户机 GUI]。D1–D7 未签核（§0.1 表）——M0 未启动，
+本表行不等同于门通过。
 
 **开工前风险提示（8 条）**：
 1. **node/pnpm 缺位**（沙箱实测 MISSING）——W-01 首步用户机装 node ≥24 + pnpm@11.21.0；
