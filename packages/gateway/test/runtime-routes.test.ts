@@ -4742,6 +4742,226 @@ test('a settled F4 invalidation (pointer cleared) is NOT re-armed on later boots
   }
 })
 
+test('a FRESH shell-version mismatch over an APPLIED override with a settled applied-monitoring journal arms F4 (upgrade no longer crashes resolveWorkspace)', async () => {
+  // The .172 regression fingerprint: the user upgraded the managed dsh under
+  // gateway 0.2.1 (override shellVersion 0.2.1, activation journal settled in
+  // applied-monitoring, pointer on the chosen tree). Booting gateway 0.2.2
+  // must arm the F4 shell-invalidation transaction (desktop parity) instead
+  // of crashing at the first resolveWorkspace with 'current pointer has no
+  // matching active override' — which previously forced the installer's
+  // health check into an automatic rollback.
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-fresh-f4-'))
+  try {
+    makeValidTree(stateDir, '1.0.0')
+    mkdirSync(join(stateDir, 'dsh-home'), { recursive: true })
+    writeFileSync(join(stateDir, 'dsh-home', 'settings.json'), '{"source":"v1"}')
+    writeCurrentPointer(stateDir, '1.0.0')
+    writeOverride(stateDir, {
+      shellVersion: '0.2.0-beta.8', // the pre-update gateway shell
+      chosenVersion: '1.0.0',
+      resolvedVersion: '1.0.0',
+      pending: null,
+      swapAttempted: false,
+      selectedOnly: false,
+      lastOutcome: 'applied',
+    })
+    // The settled post-commit journal of the applied override (F7 context).
+    const monitoring: ActivationJournal = {
+      schemaVersion: 1,
+      phase: 'applied-monitoring',
+      targetVersion: '1.0.0',
+      targetIsBuiltin: false,
+      manualRollback: false,
+      intentKind: 'version-switch',
+      sourceVersion: TEST_BUILTIN_VERSION,
+      sourceIsBuiltin: true,
+      sourceWasKnownGood: true,
+      knownGoodVersion: '1.0.0',
+      preSwapSnapshotName: `${TEST_BUILTIN_VERSION}-123`,
+      manualDataSnapshotName: null,
+      preRollbackStashName: null,
+      rollbackTarget: null,
+      nextIntent: null,
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }
+    writeActivationJournal(stateDir, monitoring)
+    assert.equal(readOverride(stateDir)?.invalidatedAt, undefined, 'the override is NOT yet invalidated (fresh mismatch)')
+
+    const manager = createGatewayRuntimeManager({
+      config: config(stateDir),
+      plane: fakePlane(),
+      logger: silentLogger,
+      probeCandidate: async () => probeResultsFor(stateDir).map(name => ({ name, ok: true })),
+    })
+    try {
+      const startup = await manager.startupTransaction()
+      assert.deepEqual(startup, { blockedReason: null }, 'the armed F4 transaction completes cleanly')
+      assert.deepEqual(manager.resolveWorkspace(), {
+        path: join(stateDir, 'builtin-anchor'),
+        version: TEST_BUILTIN_VERSION,
+        source: 'builtin',
+      }, 'the fresh mismatch resolved through the probe-gated builtin switch — no resolveWorkspace crash')
+      assert.equal(readCurrentPointer(stateDir), null, 'current pointer cleared by the builtin switch')
+      assert.equal(readActivationJournalState(stateDir).kind, 'missing', 'transaction journal consumed')
+      const preserved = readOverride(stateDir)
+      assert.equal(preserved?.chosenVersion, '1.0.0', 'the historical selection is preserved for re-selection')
+      assert.ok(preserved?.invalidatedAt !== undefined && preserved?.invalidatedAt !== null,
+        'the fresh mismatch invalidated the record (kept, one-click re-selectable)')
+    } finally {
+      await manager.dispose()
+    }
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('a FRESH shell mismatch with an intent-phase old-shell transaction replaces the intent with shell-invalidation (desktop parity)', async () => {
+  // The old shell died mid-apply (phase 'intent') when the update restarted
+  // the service. The new shell must NOT leave the stale version-switch
+  // intent to be cleared as an orphan (which would strand the pointer and
+  // crash resolveWorkspace); it replaces it with the F4 intent — the desktop
+  // controller's exact behavior.
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-fresh-f4-intent-'))
+  try {
+    makeValidTree(stateDir, '1.0.0')
+    mkdirSync(join(stateDir, 'dsh-home'), { recursive: true })
+    writeFileSync(join(stateDir, 'dsh-home', 'settings.json'), '{"source":"v1"}')
+    writeCurrentPointer(stateDir, '1.0.0')
+    writeOverride(stateDir, {
+      shellVersion: '0.2.0-beta.8',
+      chosenVersion: '1.0.0',
+      resolvedVersion: '1.0.0',
+      pending: '1.0.0',
+      swapAttempted: false,
+      selectedOnly: false,
+      lastOutcome: 'applied',
+    })
+    writeActivationIntent(stateDir, {
+      targetVersion: '1.0.0', targetIsBuiltin: false, manualRollback: false, intentKind: 'version-switch',
+    })
+    assert.equal(readOverride(stateDir)?.invalidatedAt, undefined, 'fresh mismatch')
+
+    const manager = createGatewayRuntimeManager({
+      config: config(stateDir),
+      plane: fakePlane(),
+      logger: silentLogger,
+      probeCandidate: async () => probeResultsFor(stateDir).map(name => ({ name, ok: true })),
+    })
+    try {
+      const startup = await manager.startupTransaction()
+      assert.deepEqual(startup, { blockedReason: null }, 'the replaced F4 transaction completes cleanly')
+      assert.deepEqual(manager.resolveWorkspace(), {
+        path: join(stateDir, 'builtin-anchor'),
+        version: TEST_BUILTIN_VERSION,
+        source: 'builtin',
+      }, 'the old-shell intent was superseded by the probe-gated builtin switch')
+      assert.equal(readCurrentPointer(stateDir), null, 'pointer cleared through the builtin switch')
+      const preserved = readOverride(stateDir)
+      assert.equal(preserved?.chosenVersion, '1.0.0', 'the historical selection is preserved')
+      assert.ok(preserved?.invalidatedAt != null, 'the record was invalidated by the fresh-mismatch F4 arm')
+    } finally {
+      await manager.dispose()
+    }
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('a FRESH shell mismatch with a LIVE old-shell transaction journal (prepared) is NOT armed — the shared-core journal-mismatch block keeps the old transaction intact (negative gate)', async () => {
+  // The negative half of the F4 arming gate (desktop parity): the old shell
+  // died mid-apply — its durable journal already advanced past 'intent' to
+  // 'prepared' (the pre-swap snapshot was written) — when the gateway update
+  // restarted the service. executeStartupTransaction must NOT re-arm this as a
+  // shell-invalidation intent: the live transaction keeps its shared-core
+  // semantics. runStartupPhase's overrideInvalidated gate (runtime-startup.ts)
+  // blocks a fresh-mismatch override carrying a version-switch journal whose
+  // phase is NOT a rollback continuation ('prepared'/'switched' are outside
+  // ROLLBACK_CONTINUATION_PHASES) with 'journal-mismatch', leaving the old
+  // transaction's evidence and the un-invalidated record untouched — never
+  // finishing the old shell's apply under the new shell contract. (An
+  // intent-phase transaction IS replaced, proven by the sibling positive
+  // tests; a restoring/rollback phase continues instead of blocking.)
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-fresh-f4-live-'))
+  try {
+    makeValidTree(stateDir, '1.0.0')
+    mkdirSync(join(stateDir, 'dsh-home'), { recursive: true })
+    writeFileSync(join(stateDir, 'dsh-home', 'settings.json'), '{"source":"v1"}')
+    // Builtin (0.9.0) is still the active source — the old shell died BEFORE
+    // the pointer switch, so no current pointer exists yet.
+    writeOverride(stateDir, {
+      shellVersion: '0.2.0-beta.8', // the pre-update gateway shell
+      chosenVersion: '1.0.0',
+      resolvedVersion: '1.0.0',
+      pending: '1.0.0',
+      swapAttempted: false,
+      selectedOnly: false,
+    })
+    // The old shell's durable pre-swap transaction: snapshot completed,
+    // pointer not yet switched. Exactly the journal apply-phase persists
+    // between the snapshot write and the pointer switch.
+    const prepared: ActivationJournal = {
+      schemaVersion: 1,
+      phase: 'prepared',
+      targetVersion: '1.0.0',
+      targetIsBuiltin: false,
+      manualRollback: false,
+      intentKind: 'version-switch',
+      sourceVersion: TEST_BUILTIN_VERSION,
+      sourceIsBuiltin: true,
+      sourceWasKnownGood: true,
+      knownGoodVersion: null,
+      preSwapSnapshotName: `${TEST_BUILTIN_VERSION}-123`,
+      manualDataSnapshotName: null,
+      preRollbackStashName: null,
+      rollbackTarget: null,
+      nextIntent: null,
+      startedAt: '2026-09-03T07:28:00.000Z',
+      updatedAt: '2026-09-03T07:28:00.000Z',
+    }
+    writeActivationJournal(stateDir, prepared)
+    assert.equal(readOverride(stateDir)?.invalidatedAt, undefined, 'the override is NOT yet invalidated (fresh mismatch)')
+
+    let probes = 0
+    const manager = createGatewayRuntimeManager({
+      config: config(stateDir),
+      plane: fakePlane(),
+      logger: silentLogger,
+      // Deterministic tripwire: if a re-arm regression ever fires on a live
+      // transaction, the transaction would spawn/probe — fail loudly instead
+      // of hitting the real 127.0.0.1:17510 or faking a pass.
+      probeCandidate: async () => { probes += 1; throw new Error('a live old-shell transaction must never be re-armed into a probe') },
+    })
+    try {
+      const startup = await manager.startupTransaction()
+      assert.deepEqual(startup, { blockedReason: 'journal-mismatch' },
+        'a fresh mismatch over a live old-shell transaction blocks (journal-mismatch), never arms F4')
+      // The durable journal is byte-identical — no shell-invalidation intent
+      // was written over the live transaction (writeActivationIntent would
+      // refuse anyway; the gate must not even try).
+      const journalState = readActivationJournalState(stateDir)
+      assert.equal(journalState.kind, 'valid', 'the live transaction journal is preserved')
+      if (journalState.kind === 'valid') {
+        assert.equal(journalState.journal.phase, 'prepared', 'the journal phase is untouched')
+        assert.equal(journalState.journal.intentKind, 'version-switch', 'no shell-invalidation intent replaced the old transaction')
+        assert.equal(journalState.journal.targetVersion, '1.0.0', 'the old transaction target is untouched')
+        assert.equal(journalState.journal.targetIsBuiltin, false)
+      }
+      // The record is NOT invalidated by the new shell (arming is the only
+      // writer of the fresh-mismatch invalidation).
+      const preserved = readOverride(stateDir)
+      assert.equal(preserved?.invalidatedAt, undefined, 'the live transaction record is not invalidated')
+      assert.equal(preserved?.pending, '1.0.0', 'the old transaction pending is preserved')
+      assert.equal(readCurrentPointer(stateDir), null, 'the pointer was never written (pre-swap crash window)')
+      assert.equal(probes, 0, 'no spawn/probe was attempted under the blocked verdict')
+    } finally {
+      await manager.dispose()
+    }
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
 test('a stranded F4 invalidation carrying stale failure markers still self-heals (markers superseded on re-arm)', async () => {
   // runStartupPhase blocks on override.lastOutcome === 'snapshot-failed' (or
   // swapAttempted) BEFORE consuming the re-armed intent; since snapshot-failed

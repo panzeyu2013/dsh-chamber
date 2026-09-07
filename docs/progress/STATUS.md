@@ -14,7 +14,10 @@
   `restart_service` systemd IPC 端到端；`restartLocal()` 在真实 1s SIGTERM→SIGKILL
   grace 与健康计时器交错的覆盖；settings-bridge 的 gateway React 组件级交互仍以纯
   函数/API 客户端测试代证；ZFS 下全新 pnpm store 克隆偶发 `ERR_PNPM_EAGAIN`
-  （失败投影诚实可重试，系统化并发缓解未排期）。
+  （失败投影诚实可重试，系统化并发缓解未排期）。2026-09 实机复核收口（代码+回归
+  测试，记录见 design 18 §3.5）：gateway F4 启动门补齐 fresh shell-mismatch 武装
+  （稳态 applied-monitoring journal 升级不再崩溃回滚；0.2.2 发布版缺口，desktop 端
+  行为为参照）。
 - **apply-now 立即应用（design 18 addendum §9.2 实机门禁）**：macOS 打包态 `.app`
   运行中全链；Linux server gateway 生产 TLS 下 POST apply-now → 202 → 停机窗口轮询
   → 探针 → 故障注入回退；`restartLocal()` 真实 grace × 健康计时器交错；Gateway

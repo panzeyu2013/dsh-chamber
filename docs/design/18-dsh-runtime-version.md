@@ -277,6 +277,18 @@ override（未失效时）→ 内建锚（`--dsh-path` ?? `findDshWorkspace`）�
     fresh-transaction-supersedes 清除；settled 状态不触发）。兄弟 fail-closed
     状态（override 缺失 + 指针在、旧壳 builtin journal）不在自愈范围，保持各自
     的阻塞/恢复面。
+  - **2026-09 实机复核修订（gateway F4 启动门缺口，0.2.2 发布版）**：桌面与
+    gateway 两 owner 的 F4 启动门曾不一致——desktop 对「记录未失效 + shellVersion
+    失配」（fresh mismatch）无条件武装（main.ts），gateway 侧却要求 journal 缺失，
+    于是「带已应用 override（稳态 applied-monitoring journal）的健康升级」永不武装，
+    首个 startLocal 以 'current pointer has no matching active override' 崩溃
+    （.172 实机：0.2.1 升 0.2.2，安装器健康检查失败自动回滚）。修复（runtime-
+    manager.ts，desktop 对齐）：fresh mismatch 在 journal 为 missing /
+    applied-monitoring / intent（旧壳事务被 F4 intent 替换，desktop 同款）时武装；
+    仅 live 事务 phase（prepared/switched/restoring…）不武装——旧壳在途事务保持
+    各自的 journal-mismatch 阻塞 / rollback-continuation 语义（writeActivationIntent
+    亦拒绝覆盖）。回归测试：runtime-routes.test.ts FRESH-shell 两例（稳态 journal
+    + intent 替换）。
 - **失效的用户可见记录（R3-3 UX-P1-F1）**：壳更新导致运行时选择失效时，settings
   记录一行「因应用更新，dsh 运行时已回落内建 vX（原选择 vY 保留，可重新选用）」——
   用户的运行时选择**绝不无声消失**。
