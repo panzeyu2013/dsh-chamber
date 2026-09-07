@@ -63,13 +63,22 @@ test('the committed dist artifact exists on disk (gitignore exception)', () => {
   assert.ok(files.includes('index.js'), 'dist/index.js missing')
 })
 
-test('dist restore-marker read is the 2b delegated reader (tightenMode: false — a loose marker stays loose)', async () => {
+test('dist restore-marker read is the 2b delegated reader (no chmod side effects; win32 fail-closed by design)', async () => {
   // Behavioural marker for the N5/2b snapshot-store migration (2026-09): the
   // committed dist must read the restore authority through the shared
   // private-fs reader WITHOUT chmod side effects. A stale pre-2b bundle still
   // carries the inline reader that unconditionally fchmods the marker to 0600
   // — this test would fail on it (the 0644 mode would come back 0600), so a
   // src↔dist split of the marker path can no longer slip past CI.
+  // win32 分支（2026 真实 runner 首跑修复，windows-v1.md/snapshot-store.ts
+  // 平台注记）：win32 无 O_NOFOLLOW，private-fs 读写器按设计 fail-closed——
+  // marker 存在即读作 'unsafe' 且不可写（恢复走文档化手工移除路径），故
+  // 期望值随平台：POSIX 'present'（loose 保持 loose），win32 'unsafe'。
+  // 判别力不因分支而失：stale inline 读取器在 win32 上 fchmod 无副作用、
+  // 仍能读到内容 → 会返回 'present'——断言 'unsafe' 依旧钉住 2b 委托。
+  // mode 位不收紧的断言是 POSIX mode-bit 语义（win32 stat 伪造 0666），
+  // 仅 POSIX 腿执行。
+  const win32 = process.platform === 'win32'
   const dist = await import('../dist/index.js' as string) as {
     restoreMarkerAuthorityStatus(baseDir: string): 'missing' | 'present' | 'unsafe'
   }
@@ -78,9 +87,11 @@ test('dist restore-marker read is the 2b delegated reader (tightenMode: false �
     mkdirSync(join(root, 'dsh-runtime'), { recursive: true, mode: 0o700 })
     const marker = join(root, 'dsh-runtime', 'restore-in-progress')
     writeFileSync(marker, '{"schemaVersion":1}\n', { mode: 0o644 })
-    assert.equal(dist.restoreMarkerAuthorityStatus(root), 'present')
-    assert.equal(statSync(marker).mode & 0o777, 0o644,
-      'a loose marker must not be tightened by the read (2b reader) — stale dist bundles fchmod it to 0600')
+    assert.equal(dist.restoreMarkerAuthorityStatus(root), win32 ? 'unsafe' : 'present')
+    if (!win32) {
+      assert.equal(statSync(marker).mode & 0o777, 0o644,
+        'a loose marker must not be tightened by the read (2b reader) — stale dist bundles fchmod it to 0600')
+    }
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

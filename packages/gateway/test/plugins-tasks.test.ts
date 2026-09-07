@@ -34,6 +34,9 @@ class FakeManager implements GatewayRuntimeManagerLike {
   granted = 0
   held = 0
   released = 0
+  /** 每次 beginProfileWrite 尝试（含 queue_full 拒绝）的事件内时间戳——
+   *  wave 排序断言的确定性锚（2026 flake 修复，见 wave 测试）。 */
+  grantedAt: number[] = []
   refusal: { code: ProfileWriteRefusalCode; error: string } | null = null
   /** Runtime mutation execution window (canRun wiring; false = window open). */
   mutationBusy = false
@@ -44,6 +47,7 @@ class FakeManager implements GatewayRuntimeManagerLike {
 
   beginProfileWrite() {
     this.granted += 1
+    this.grantedAt.push(Date.now())
     if (this.refusal !== null) {
       return { ok: false as const, code: this.refusal.code, error: this.refusal.error }
     }
@@ -583,15 +587,22 @@ test('lease release survives a synchronous terminal (CLI resolution failure on t
 function slowOkSpawn(
   base: ReturnType<typeof makeSpawnHarness>,
   delayMs = 200,
-): { spawn: ReturnType<typeof makeSpawnHarness>['spawn']; spawnedAt: number[] } {
+): { spawn: ReturnType<typeof makeSpawnHarness>['spawn']; spawnedAt: number[]; closeAt: number[] } {
   const spawnedAt: number[] = []
+  const closeAt: number[] = []
   return {
     spawnedAt,
+    closeAt,
     spawn: (command, args, options) => {
       const child = base.spawn(command, args, options)
       const record = base.calls[base.calls.length - 1]!
       spawnedAt.push(Date.now())
-      setTimeout(() => record.child.close(0), delayMs)
+      setTimeout(() => {
+        // 先记录 close 时刻再 close：executor 在 close 回调里同步推进（放
+        // 槽 → 下一波 grant），closeAt 必须先于随后 grant 的时间戳落盘。
+        closeAt.push(Date.now())
+        record.child.close(0)
+      }, delayMs)
       return child
     },
   }
@@ -644,13 +655,20 @@ test('drain WAVES past the queue cap: 10 deferred intents all clear on a healthy
   // while exactly 8 leases stay held until the first children terminate.
   await waitFor(() => manager.granted === grantedBaseline + 10, 'wave-1 round attempts all ten intents (8 accepted + 2 queue_full)', 2000)
   assert.equal(manager.held, 8, 'exactly the queue cap of leases is held after wave 1 (refused submissions released)')
-  const wave1DoneAt = Date.now()
   // Wave-2 proof: the 11th grant happens only after a first-wave child
   // terminated (~200 ms later) freed a slot — the drain's slot wait is real.
+  // 确定性断言（2026 flake 修复）：不用两次 waitFor 观察点之间的墙钟差
+  // （轮询滞后会把真实 ~200ms 间隔压缩成 27ms 导致误报），改用事件内时间
+  // 戳比较——首次波-2 grant 尝试（attempt 下标 grantedBaseline+10）不得
+  // 早于首个波-1 child 的 close 时刻。closeAt 在 close 前落盘、grantedAt 在
+  // grant 钩子内落盘，同进程单调时间，顺序即语义。
   await waitFor(() => manager.granted >= grantedBaseline + 11, 'wave 2 grants after a terminal frees a slot', 5000)
-  const wave2StartAt = Date.now()
-  assert.ok(wave2StartAt - wave1DoneAt >= 100,
-    `wave 2 must wait for a first-wave terminal before granting (gap ${wave2StartAt - wave1DoneAt} ms)`)
+  assert.ok(slow.closeAt.length > 0, 'wave-1 child terminals must exist before wave 2')
+  assert.ok(manager.grantedAt.length >= grantedBaseline + 11, 'grantedAt must cover the wave-2 grant')
+  const firstWave1CloseAt = slow.closeAt[0]!
+  const firstWave2GrantAt = manager.grantedAt[grantedBaseline + 10]!
+  assert.ok(firstWave2GrantAt >= firstWave1CloseAt,
+    `wave 2 grant (${firstWave2GrantAt}) must not precede the first wave-1 terminal (${firstWave1CloseAt})`)
   const cleared = await drainPromise
   assert.equal(cleared, 10, 'all ten intents clear across waves')
   await waitFor(() => manager.held === 0, 'every drained op released its lease')
