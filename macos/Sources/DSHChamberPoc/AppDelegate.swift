@@ -31,14 +31,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // W-21：通知授权与 delegate 接线（前台展示 + click 回灌；权限拒绝 →
         // 授权结果打印，调度侧以 UNUserNotificationCenter.add 错误 loud——
         // 绝不静默假装成功）。请求失败/拒绝均不阻断装配。
-        let center = UNUserNotificationCenter.current()
-        center.delegate = self
-        center.requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
-            if let error {
-                print("[poc] 通知授权请求错误：\(error.localizedDescription)")
-            } else {
-                print("[poc] 通知授权 = \(granted)")
+        // 注意：swift run（无 app bundle）下 UNUserNotificationCenter.current()
+        // 会崩（bundleProxyForCurrentProcess nil）——以 Bundle.main.bundleIdentifier
+        // 是否存在守卫；dev/无 bundle 态跳过通知接线（真机/打包态自动启用）。
+        if Bundle.main.bundleIdentifier != nil {
+            let center = UNUserNotificationCenter.current()
+            center.delegate = self
+            center.requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
+                if let error {
+                    print("[poc] 通知授权请求错误：\(error.localizedDescription)")
+                } else {
+                    print("[poc] 通知授权 = \(granted)")
+                }
             }
+        } else {
+            print("[poc] 无 bundle id（swift run dev 态）——跳过通知授权接线")
         }
         let env = ProcessInfo.processInfo.environment
 
