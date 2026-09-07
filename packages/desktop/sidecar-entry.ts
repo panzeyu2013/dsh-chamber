@@ -258,10 +258,23 @@ async function boot(): Promise<void> {
   }
 
   // control-plane 装配与 main.ts 同参（stateDir/webDistDir/host 包源）；本地
-  // dsh spawn 门（getDshWorkspacePath/canStartLocal/canExposeLocal）=
-  // headless.localSpawnGates（S-C-2：runtime 启动门/事务 workspace 权威在装配
-  // 侧——main 1203-1220 三闭包同语义；S-C-2 前本文件直读 --dsh-path 的旧门
-  // 删除）。
+  // dsh spawn 门（getDshWorkspacePath/canStartLocal/canExposeLocal）：
+  // 默认 headless.localSpawnGates（S-C-2：runtime 启动门/事务 workspace 权威，
+  // main 同语义——全新 profile 离线时探针失败而阻塞，与 Electron 一致）；
+  // DSH_SIDECAR_LEGACY_START=1 时用旧 dev 快捷门（直读 --dsh-path、无探针），
+  // 供离线 dev 循环（POC dev；不进入任何产品路径）。
+  const legacyStart = process.env.DSH_SIDECAR_LEGACY_START === '1'
+  const spawnGates = legacyStart
+    ? {
+        getDshWorkspacePath: () => {
+          if (args.dshPath !== null) return args.dshPath
+          throw new Error('dsh workspace not resolved (--dsh-path 未提供)')
+        },
+        canStartLocal: () =>
+          args.dshPath !== null ? { ok: true } : { ok: false, reason: '--dsh-path 未提供' },
+        canExposeLocal: () => true,
+      }
+    : headless!.localSpawnGates
   const controlPlane = createControlPlane({
     port: args.port ?? 17500,
     stateDir: path.join(args.userDataDir, 'state'),
@@ -269,9 +282,9 @@ async function boot(): Promise<void> {
     ...(args.hostGraphDir !== null ? { hostGraphPackageSourceDir: args.hostGraphDir } : {}),
     ...(args.hostGitDir !== null ? { hostGitWorktreePackageSourceDir: args.hostGitDir } : {}),
     ...(args.hostArchiveDir !== null ? { hostArchiveCleanupPackageSourceDir: args.hostArchiveDir } : {}),
-    getDshWorkspacePath: () => headless!.localSpawnGates.getDshWorkspacePath(),
-    canStartLocal: () => headless!.localSpawnGates.canStartLocal(),
-    canExposeLocal: () => headless!.localSpawnGates.canExposeLocal(),
+    getDshWorkspacePath: () => spawnGates.getDshWorkspacePath(),
+    canStartLocal: () => spawnGates.canStartLocal(),
+    canExposeLocal: () => spawnGates.canExposeLocal(),
   })
 
   try {
@@ -295,28 +308,39 @@ async function boot(): Promise<void> {
   writeProtocolLine({ notify: 'ready', payload: { port: controlPlane.port, shellVersion } })
 
   // 启动尾部（main 3785-3789 同形——内部已含 catch 折叠与门/投影处理，绝不
-  // 使 ready 帧延迟：尾部在 ready 之后异步执行）。
-  void headless.runStartupTail()
-
-  // W-13 补（dev 观察实证）：启动事务只做探针拉起、探针进程退出后未驻留本地
-  // 实例（connectionState 回到 stopped）——5s/12s 两拍回退为已验证的直接
-  // pre-spawn（幂等：已 attempt 或状态非 stopped 即跳过；与事务串行化由 cp
-  // startLocal 单飞语义兜住）。
-  if (args.dshPath !== null) {
-    const maybeStartLocal = async (): Promise<void> => {
-      if (startLocalAttempted) return
+  // 使 ready 帧延迟：尾部在 ready 之后异步执行）。legacy 快捷路径：直接
+  // pre-spawn（早前已验证的 dev 行为；无探针、离线可用）。
+  if (legacyStart) {
+    if (args.dshPath !== null) {
       try {
-        if (controlPlane.connectionState !== 'ready' && controlPlane.connectionState !== 'starting') {
-          startLocalAttempted = true
-          console.log('[sidecar] 启动事务未驻留本地实例——直接 pre-spawn 回退')
-          await controlPlane.startLocal()
-        }
+        await controlPlane.startLocal()
       } catch (err) {
-        console.error('[sidecar] pre-spawn 回退失败：' + String(err))
+        console.error('[sidecar] pre-spawn（legacy）失败：' + String(err))
       }
     }
-    setTimeout(() => void maybeStartLocal(), 5000).unref?.()
-    setTimeout(() => void maybeStartLocal(), 12000).unref?.()
+  } else {
+    void headless.runStartupTail()
+
+    // W-13 补（dev 观察实证）：启动事务只做探针拉起、探针进程退出后未驻留本地
+    // 实例（connectionState 回到 stopped）——5s/12s 两拍回退为直接 pre-spawn
+    // （幂等：已 attempt 或状态非 stopped 即跳过；与事务串行化由 cp startLocal
+    // 单飞语义兜住）。
+    if (args.dshPath !== null) {
+      const maybeStartLocal = async (): Promise<void> => {
+        if (startLocalAttempted) return
+        try {
+          if (controlPlane.connectionState !== 'ready' && controlPlane.connectionState !== 'starting') {
+            startLocalAttempted = true
+            console.log('[sidecar] 启动事务未驻留本地实例——直接 pre-spawn 回退')
+            await controlPlane.startLocal()
+          }
+        } catch (err) {
+          console.error('[sidecar] pre-spawn 回退失败：' + String(err))
+        }
+      }
+      setTimeout(() => void maybeStartLocal(), 5000).unref?.()
+      setTimeout(() => void maybeStartLocal(), 12000).unref?.()
+    }
   }
 }
 
