@@ -17,6 +17,8 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
 
     /// A 桥消息通道名（与 shim 侧约定一致）
     private static let bridgeMessageName = "dshChamber"
+    /// POC dev 控制台回传通道名（页面脚本约定；见 setupWindow 注入）
+    private static let consoleMessageName = "pocConsole"
     /// A 桥 shim 资源文件名（Resources/ 下，W-04 作者创建，本文件只读取）
     private static let shimResourceName = "bridge-shim.poc.js"
     /// 可 invoke 的 method 白名单（W-04：A 桥护栏雏形的最小桌面通道集）
@@ -41,6 +43,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
 
     private var webView: WKWebView!
     private var bridgeHandler: ChamberMessageHandler!
+    private var consoleCatcher: POCConsoleCatcher?
     private var didStartLoading = false
 
     // MARK: - 初始化
@@ -95,6 +98,37 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         }
         bridgeHandler = handler
         configuration.userContentController.add(handler, name: Self.bridgeMessageName)
+
+        // POC dev 调试（白屏诊断）：web 控制台/错误回传 → [poc-web] 打印。
+        // 页面 JS onerror/unhandledrejection/console.* 经 pocConsole 通道回传；
+        // 打包/发布不需要移除（仅额外打印，无副作用）。
+        let consoleCatcher = POCConsoleCatcher()
+        self.consoleCatcher = consoleCatcher
+        configuration.userContentController.add(consoleCatcher, name: Self.consoleMessageName)
+        let consoleSource = """
+        (function () {
+          function post(kind, args) {
+            try {
+              window.webkit.messageHandlers.pocConsole.postMessage({kind: kind, text: Array.prototype.map.call(args, String).join(' ')});
+            } catch (e) {}
+          }
+          window.addEventListener('error', function (e) {
+            post('error', [e.message, ' @ ' + (e.filename || '') + ':' + (e.lineno || '')]);
+          });
+          window.addEventListener('unhandledrejection', function (e) {
+            post('rejection', [String(e && e.reason)]);
+          });
+          ['log','info','warn','error','debug'].forEach(function (m) {
+            var orig = console[m];
+            console[m] = function () { post(m, arguments); orig.apply(console, arguments); };
+          });
+        })();
+        """
+        configuration.userContentController.addUserScript(WKUserScript(
+            source: consoleSource,
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: true
+        ))
 
         // 事件下行接线（W-04 MessageHandler 双写纪律「乙」）：sidecar 事件唯一
         // 入口 = BridgeClient.onEvent → 本控制器直写 __dshChamberEmit；本控制器
@@ -290,6 +324,24 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
             NSWorkspace.shared.open(url, configuration: NSWorkspace.OpenConfiguration()) { _, _ in }
         } else {
             NSWorkspace.shared.open(url)
+        }
+    }
+}
+
+
+/// POC dev 控制台回传（白屏诊断；setupWindow 注入页面脚本 → 本类打印）。
+final class POCConsoleCatcher: NSObject, WKScriptMessageHandler {
+    func userContentController(
+        _ userContentController: WKUserContentController,
+        didReceive message: WKScriptMessage
+    ) {
+        guard message.name == "pocConsole" else { return }
+        if let body = message.body as? [String: Any],
+           let kind = body["kind"] as? String,
+           let text = body["text"] as? String {
+            print("[poc-web] \(kind): \(text)")
+        } else {
+            print("[poc-web] raw: \(message.body)")
         }
     }
 }
