@@ -6,8 +6,9 @@
 //  （BridgeClient.swift，W-04 作者实现，见共享契约）→ 启动 sidecar →
 //  创建主窗口。关键步骤逐行打印 "[poc] ..." 到 stdout，便于无 GUI 验证。
 import AppKit
+import UserNotifications
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
 
     // MARK: - 常量（缺省值）
 
@@ -27,6 +28,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         print("[poc] applicationDidFinishLaunching：开始装配")
+        // W-21：通知授权与 delegate 接线（前台展示 + click 回灌；权限拒绝 →
+        // 授权结果打印，调度侧以 UNUserNotificationCenter.add 错误 loud——
+        // 绝不静默假装成功）。请求失败/拒绝均不阻断装配。
+        let center = UNUserNotificationCenter.current()
+        center.delegate = self
+        center.requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
+            if let error {
+                print("[poc] 通知授权请求错误：\(error.localizedDescription)")
+            } else {
+                print("[poc] 通知授权 = \(granted)")
+            }
+        }
         let env = ProcessInfo.processInfo.environment
 
         // ① Node 路径：POC_NODE_BIN，缺省回退打包态 Electron 二进制
@@ -162,5 +175,62 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         editMenuItem.submenu = editMenu
 
         NSApp.mainMenu = mainMenu
+    }
+
+    // MARK: - UNUserNotificationCenterDelegate（W-21）
+
+    /// 前台展示（应用激活时通知仍横幅展示——渲染器不持有原生通知历史）。
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        if #available(macOS 11.0, *) {
+            completionHandler([.banner, .sound])
+        } else {
+            completionHandler([.alert, .sound])
+        }
+    }
+
+    /// click 回灌（design 25 §5 E4；node-edges clickRoute 语义）：宿主先聚焦
+    /// 激活窗口（electron-edges 宿主 click 腿同序），再经保留入站 method
+    /// __host.notifyClicked {notificationId} 送回 sidecar——node-edges 命中
+    /// 通知 id 的 clickRoute.onActivated（core owns+入队）。identifier 形如
+    /// chamber-edge-<notificationId>（SwiftEdgeHostLegs 调度时命名）。
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping () -> Void
+    ) {
+        defer { completionHandler() }
+        mainWindowController?.window?.makeKeyAndOrderFront(nil)
+        if #available(macOS 14.0, *) {
+            NSApp.activate()
+        } else {
+            NSApp.activate(ignoringOtherApps: true)
+        }
+        let identifier = response.notification.request.identifier
+        guard identifier.hasPrefix("chamber-edge-"),
+              let rawID = identifier.dropFirst("chamber-edge-".count).split(separator: "-").first,
+              let notificationId = Int(rawID) else {
+            print("[poc] 通知 click：未知 identifier，跳过回灌（仅聚焦窗口）")
+            return
+        }
+        guard let bridge else {
+            print("[poc] 通知 click：bridge 未装配，跳过回灌")
+            return
+        }
+        print("[poc] 通知 click 回灌：notificationId=\(notificationId)")
+        Task {
+            do {
+                let outcome = try await bridge.invoke(
+                    method: "__host.notifyClicked",
+                    payload: .object(["notificationId": .number(Double(notificationId))])
+                )
+                print("[poc] 通知 click 回灌应答：\(String(describing: outcome))")
+            } catch {
+                print("[poc] 通知 click 回灌失败：\(error.localizedDescription)")
+            }
+        }
     }
 }
