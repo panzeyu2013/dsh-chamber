@@ -10,6 +10,55 @@
 
 > English: [docs/CHANGELOG.en-US.md](docs/CHANGELOG.en-US.md)
 
+## [0.2.3] - 2026-09-07
+
+### 修复
+
+- **长 RPC 代理豁免：45s 空闲窗不再误杀慢 unary 宿主业务（design 03 §3.4）**
+  —— 手动 `/compact`（LLM 摘要重放全部可压缩历史）与 design 24 的
+  `archiveCleanup/purge` 等无上游时长上限的 POST 请求改走 30 分钟保险丝窗
+  （非 SLA）：实测 ~62.7 万 token 会话在 45 001 ms 被切断并伪造客户端断连
+  的根因消除；其余路径 45s 语义不变；豁免命中/触发计数入双 owner 诊断
+  （list-liveness 探针），决策表与回归测试入列。
+- **gateway F4 启动门补齐 fresh shell-version mismatch 武装（design 18
+  §3.5；0.2.2 发布版缺口）** —— gateway 侧原只在 activation journal 缺失时
+  武装，带「已应用 override + 稳态 applied-monitoring journal」的健康升级
+  （0.2.1→0.2.2 实机复现）永不武装、首个 startLocal 崩溃 → 安装器自动回滚
+  旧网关；现与 desktop 对齐：fresh mismatch 在 journal 为 missing /
+  applied-monitoring / intent 时武装，仅 live 事务 phase（prepared/switched/
+  restoring…）不武装（旧壳在途事务保持 journal-mismatch 阻塞语义），回归
+  测试 ×3。
+- **plugin sync/install QA 收口（design 21 §10 ⑱–㉒）** —— 同步 400 原因
+  透传（旧网关不认识新宿主域不再裸 400，拒绝文案给升级指引；桌面把网关
+  原因并入失败串）；materialize 202 后桌面侧 settle/受控重启对账（op 终态
+  轮询 → POST 受控重启 → 就绪轮询，IPC outcome `{executed,restarted}`，
+  preload/global.d.ts/ipc-surface-mirror golden 三处镜像同步——上传后列表
+  即时更新、插件随流程生效；settle/status JSON 请求用纯 auth 头的坑位单测
+  锁定）；op 终态暂存归档**保留**（profile manifest 的 `file:` 引用不得
+  悬挂）+ boot 期孤儿清扫（保留集 = manifest 引用 ∪ deferred 意图 ∪ live
+  op，有界）；第三方行生效状态列（Loader 快照按 moduleName 匹配、类别
+  诚实——仅 bundle-layer 行示「重启后生效」）+ 安装结果文案诚实
+  （materializeLive/restartNeededHint/deferredOfflineNote，本地 add 不再
+  谎报「已应用」；ssh doApply 后自动重载已安装列表）。
+
+### 变更
+
+- **归档管理器按工作区分组、可折叠（design 24 §18/§19）** —— 移除独立
+  「删除全部」：整集清理必须先显式全选再确认带计数的「删除选中」，purge
+  永远携带明确 id 列表（降级/pending 视图无任何销毁动作）；列表按工作区
+  分组（权威成员关系 → canonical cwd 兜底 → 未分组桶），组头复用导航折叠
+  chrome + workspace accent + 三态组复选框，折叠为对话框本地视图态。
+- **归档管理器整体匹配轮（design 24 §19-6..9，dsh/仓库惯例对齐）** ——
+  危险确认改**对话框内两段式**（武装冻结列表输入 + 风险条：计数不可恢复
+  文案/取消/确认删除；Esc 只解除武装绝不关框——capture 相位仲裁官方 Modal
+  的 bubble Escape；取消/Esc 焦点回武装源控件）替代 OS window.confirm 与
+  嵌套 Modal 方案（官方 Modal 无层级，叠层一次 Esc 双关）；session 行
+  session/workspace 树形嵌套容器化（`.archiveManagerGroupRows`，标题列与组
+  标题精确同列）；行删除钮并入模块 `.actionIcon` 语言（20px 纯色 hover +
+  error ink 修饰）、hover/焦点环/小字号族共享规则表收口；四方只读分面评审
+  （正确性/完整性/最优性/a11y）修复落地（焦点 rAF 回退、aria-checked=mixed
+  全选行、role=alert 文本化等），偏差与待目检项登记 §19-9。
+
 ## [0.2.2] - 2026-09-05
 
 ### 新增

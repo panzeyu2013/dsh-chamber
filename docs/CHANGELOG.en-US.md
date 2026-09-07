@@ -10,6 +10,75 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 > 中文版: [CHANGELOG.md](../CHANGELOG.md)
 
+## [0.2.3] - 2026-09-07
+
+### Fixed
+
+- **Long-RPC proxy exemption: the 45s window no longer kills slow unary host
+  business (design 03 §3.4)** — unary POST requests without an upstream
+  duration cap (manual `/compact` = an LLM summary replaying the whole
+  compactable history; design 24's `archiveCleanup/purge`) now ride a
+  30-minute insurance fuse (not an SLA): the measured ~627k-token session
+  cut at exactly 45 001 ms with a fabricated client disconnect is fixed;
+  every other path keeps the 45s window; exemption/fuse-trip counters joined
+  both owners' diagnostics (list-liveness probe), with a decision table and
+  regression tests.
+- **Gateway F4 startup gate: fresh shell-version mismatch now arms (design
+  18 §3.5; 0.2.2 release gap)** — the gateway previously armed only when the
+  activation journal was missing, so a healthy upgrade over an applied
+  override with a settled applied-monitoring journal (reproduced on the
+  real 0.2.1→0.2.2 box) never armed and the first startLocal crashed into
+  the installer's automatic rollback; now desktop-aligned: a fresh mismatch
+  arms for missing / applied-monitoring / intent journals, and only
+  LIVE-transaction phases (prepared/switched/restoring…) stay unarmed (an
+  old shell's in-flight transaction keeps its journal-mismatch semantics);
+  3 regression tests.
+- **Plugin sync/install QA closure (design 21 §10 ⑱–㉒)** — sync 400 reasons
+  are passed through (an older gateway that does not know a host package
+  answers with a sanitized reason + upgrade hint instead of a bare 400; the
+  desktop merges the gateway reason into the failure string); after a
+  materialize 202 the desktop settles the executor op (task poll) → asks for
+  the controlled restart → polls readiness, with the IPC outcome
+  `{executed,restarted}` mirrored across preload/global.d.ts/ipc-surface-
+  mirror golden (the list refreshes immediately and plugins take effect in
+  flow; the pure-auth-header JSON-exchange pitfall is locked by a unit
+  test); terminal ops RETAIN their staged archive (a profile manifest
+  `file:` reference must never dangle) with a boot-time orphan sweep
+  (retention = manifest references ∪ deferred intents ∪ live ops, bounded);
+  third-party rows gained a live-state column (Loader-snapshot matched by
+  moduleName; category-honest — only bundle-layer rows show "activates on
+  restart") and honest install copy (materializeLive/restartNeededHint/
+  deferredOfflineNote; local add no longer claims "Applied"; ssh doApply
+  auto-reloads the installed list).
+
+### Changed
+
+- **Archive manager grouped by workspace and collapsible (design 24
+  §18/§19)** — the standalone "delete all" button is retired: clearing the
+  whole set requires explicitly ticking select-all and confirming the
+  counted delete-selected, so a purge always carries an explicit id list
+  (degraded/pending views offer no destructive action); the listing groups
+  by workspace (authoritative membership → canonical-cwd fallback →
+  ungrouped bucket), group headers reuse the nav fold chrome + workspace
+  accent with tri-state group checkboxes, and collapse is dialog-local view
+  state.
+- **Archive manager matching round (design 24 §19-6..9, dsh/repo
+  conventions)** — destructive confirms moved to an IN-DIALOG two-stage
+  flow (arming freezes list input and shows a risk bar: counted
+  irreversible copy / cancel / confirm-delete; Escape only disarms — a
+  capture-phase stop arbitrates the official Modal's bubble Escape; cancel/
+  Esc return focus to the arming control) replacing OS window.confirm and
+  the nested-Modal option (the official Modal has no layering — one Escape
+  would close both layers); session rows nest under their workspace group
+  through an indent container (`.archiveManagerGroupRows` — row titles
+  exactly align with their group title); the row trash joined the module's
+  `.actionIcon` language (20px color-only hover + error-ink modifier) with
+  hover/focus-ring/small-type shared rule tables consolidated; a four-facet
+  read-only review (correctness/completeness/optimality/a11y) fix round
+  landed (rAF focus return, explicit aria-checked=mixed select-all, text-
+  only role=alert, …) with deviations and pending 目检 items recorded in
+  §19-9.
+
 ## [0.2.2] - 2026-09-05
 
 ### Added
