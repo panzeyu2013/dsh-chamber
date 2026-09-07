@@ -44,6 +44,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     private var webView: WKWebView!
     private var bridgeHandler: ChamberMessageHandler!
     private var consoleCatcher: POCConsoleCatcher?
+    private var didSnapshot = false
     private var didStartLoading = false
 
     // MARK: - 初始化
@@ -290,6 +291,32 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         print("[poc] 页面加载完成 \(webView.url?.absoluteString ?? "(未知)")")
+        // POC dev 白屏诊断：延迟数秒后渲染快照落盘（takeSnapshot 不需要屏幕
+        // 录制权限；多帧取样便于观察首屏演进）。
+        guard !didSnapshot else { return }
+        didSnapshot = true
+        let snapshotURL = URL(fileURLWithPath: "/tmp/poc-ui-snapshot.png")
+        Task { @MainActor in
+            for delay in [4.0, 12.0] {
+                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                let config = WKSnapshotConfiguration()
+                config.rect = webView.bounds
+                let image = try? await webView.takeSnapshot(configuration: config)
+                guard let image,
+                      let tiff = image.tiffRepresentation,
+                      let rep = NSBitmapImageRep(data: tiff),
+                      let png = rep.representation(using: .png, properties: [:]) else {
+                    print("[poc] 快照失败（delay=\(delay)）")
+                    continue
+                }
+                do {
+                    try png.write(to: snapshotURL)
+                    print("[poc] 快照已写 \(snapshotURL.path)（delay=\(delay)s）")
+                } catch {
+                    print("[poc] 快照写盘失败：\(error.localizedDescription)")
+                }
+            }
+        }
     }
 
     func webView(_ webView: WKWebView,
