@@ -63,6 +63,16 @@ export const MAIN_SIDE_FILES = ['main.ts', 'shell-core.ts', 'electron-edges.ts']
  *  旧 macos/Sources/Generated/ 位置已废弃删除（生成器不再产出）。 */
 export const COMMITTED_MANIFEST = join(desktopDir, 'bridge-manifest.json')
 export const COMMITTED_SWIFT = join(repoRoot, 'macos', 'Sources', 'DSHChamberPoc', 'Generated', 'BridgeManifest.swift')
+/** E8 shim 存根提交物（W-18 后半 A）：manifest 驱动的通道常量单源桥，
+ *  与手写 bridge-shim.poc.js（POC 运行时面）并存——全量 shim 演进以此为准。 */
+export const COMMITTED_SHIM_STUB = join(
+  repoRoot,
+  'macos',
+  'Sources',
+  'DSHChamberPoc',
+  'Resources',
+  'chamber-bridge.stub.js',
+)
 
 /** IPC_CHANNELS 常量表整块（保守正则，见头部注释）：块内不允许出现 `}`，
  *  注释行由逐行解析跳过。当前 ipc-events.ts 块内确无 `}`（先 grep 实测再
@@ -334,18 +344,81 @@ export function renderSwiftManifest(manifest) {
   return `${lines.join('\n')}\n`
 }
 
-/** CLI：默认写两个提交物；两个位置参数覆盖输出路径（测试重生成到临时目录）。 */
+const jsStringLiteral = (value) =>
+  JSON.stringify(value)
+
+/** E8 shim 存根文本（W-18 后半 A）：manifest 驱动的通道常量单源桥。与手写
+ *  bridge-shim.poc.js（POC 运行时方法面）并存；全量 shim 演进以本存根为准。 */
+export function renderShimStub(manifest) {
+  const { counts } = manifest
+  const invoke = manifest.invoke.map(({ channel }) => channel)
+  const push = manifest.push.map(({ channel }) => channel)
+  /** 4+4 空格缩进的 JS 数组字面量（首元素行 8 空格与 invoke: 键对齐）。 */
+  const fmt = (arr) => '[\n' + arr.map((ch) => `        ${jsStringLiteral(ch)},`).join('\n') + '\n    ]'
+  const lines = [
+    '// chamber-bridge.stub.js — GENERATED, do not edit.',
+    '//',
+    `// E8 shim 存根（W-18 后半 A / design 25 §4.4.3）：manifest 通道常量单源桥`,
+    `// （${counts.total} 通道 = ${counts.invoke} invoke + ${counts.push} push）。`,
+    '// 与手写 bridge-shim.poc.js（POC 运行时面）并存——全量 shim 生成以此为准。',
+    '// 重新生成（工作目录 packages/desktop）：node scripts/emit-bridge-manifest.mjs',
+    "// 用法：在 WebKit 页面上下文执行本文件后，window.__DSH_CHAMBER_MANIFEST__",
+    '// 与 __dshChamberAssertMethod/__dshChamberAssertEvent 可用。',
+    "'use strict';",
+    '(function (global) {',
+    '  var manifest = {',
+    `    invoke: ${fmt(invoke)},`,
+    `    push: ${fmt(push)},`,
+    `    counts: { invoke: ${counts.invoke}, push: ${counts.push}, total: ${counts.total} }`,
+    '  };',
+    '  var invokeSet = {};',
+    '  manifest.invoke.forEach(function (ch) { invokeSet[ch] = true; });',
+    '  var pushSet = {};',
+    '  manifest.push.forEach(function (ch) { pushSet[ch] = true; });',
+    '  Object.defineProperty(global, "__DSH_CHAMBER_MANIFEST__", {',
+    '    value: manifest,',
+    '    enumerable: true,',
+    '    configurable: false,',
+    '    writable: false,',
+    '  });',
+    '  function assertMethod(method) {',
+    '    if (typeof method !== "string" || !invokeSet[method]) {',
+    '      throw new Error("chamber-bridge: unknown invoke method: " + method);',
+    '    }',
+    '  }',
+    '  function assertEvent(event) {',
+    '    if (typeof event !== "string" || !pushSet[event]) {',
+    '      throw new Error("chamber-bridge: unknown push event: " + event);',
+    '    }',
+    '  }',
+    '  global.__dshChamberAssertMethod = assertMethod;',
+    '  global.__dshChamberAssertEvent = assertEvent;',
+    '})(typeof window !== "undefined" ? window : globalThis);',
+    '',
+  ]
+  return lines.join('\n')
+}
+
+/** CLI：默认写三个提交物；位置参数覆盖输出路径（2 个 = json+swift 旧式，
+ *  3 个 = json+swift+stub——测试重生成到临时目录）。 */
 function main(argv) {
   const positional = argv.filter(arg => !arg.startsWith('-'))
   let jsonOut = COMMITTED_MANIFEST
   let swiftOut = COMMITTED_SWIFT
-  if (positional.length === 2) {
+  let stubOut = COMMITTED_SHIM_STUB
+  if (positional.length === 3) {
     jsonOut = resolve(positional[0])
     swiftOut = resolve(positional[1])
+    stubOut = resolve(positional[2])
+  } else if (positional.length === 2) {
+    jsonOut = resolve(positional[0])
+    swiftOut = resolve(positional[1])
+    stubOut = null
   } else if (positional.length !== 0) {
     console.error(
-      '[emit-bridge-manifest] 用法：node scripts/emit-bridge-manifest.mjs [jsonOut swiftOut]'
-      + '（不带参数写提交物默认位；两个参数覆盖输出路径）'
+      '[emit-bridge-manifest] 用法：node scripts/emit-bridge-manifest.mjs'
+      + ' [jsonOut swiftOut] | [jsonOut swiftOut stubOut]'
+      + '（不带参数写提交物默认位）'
     )
     process.exit(2)
   }
@@ -353,16 +426,21 @@ function main(argv) {
     const manifest = computeManifest()
     const jsonText = renderJsonManifest(manifest)
     const swiftText = renderSwiftManifest(manifest)
+    const stubText = renderShimStub(manifest)
     mkdirSync(dirname(jsonOut), { recursive: true })
     mkdirSync(dirname(swiftOut), { recursive: true })
     writeFileSync(jsonOut, jsonText)
     writeFileSync(swiftOut, swiftText)
     const { counts } = manifest
-    console.log(
-      `[emit-bridge-manifest] ${counts.total} 通道 = ${counts.invoke} invoke + ${counts.push} push`
+    let log = `[emit-bridge-manifest] ${counts.total} 通道 = ${counts.invoke} invoke + ${counts.push} push`
       + `\n  json  → ${jsonOut}`
       + `\n  swift → ${swiftOut}`
-    )
+    if (stubOut !== null) {
+      mkdirSync(dirname(stubOut), { recursive: true })
+      writeFileSync(stubOut, stubText)
+      log += `\n  stub  → ${stubOut}`
+    }
+    console.log(log)
   } catch (error) {
     console.error(`[emit-bridge-manifest] 生成失败：${error.message}`)
     process.exit(1)
