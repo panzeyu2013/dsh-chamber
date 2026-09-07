@@ -43,6 +43,23 @@
 
 ### 变更
 
+- **N-ctx 视图保留/回收 + 可见性门控（design 05 §1 注记/performance-baseline
+  §10；性能第二阶段代码面 A/C/D）** —— 早期「booted 壳无限常驻（视图生命周期
+  = 注册表条目生命周期）」收窄为 chamber 保留策略：local 恒留，隐藏壳最多
+  保留 1 个（`RETAINED_HIDDEN_VIEWS`），超限回收「已 settle + 连续隐藏
+  ≥60s」的最久者（`retention.ts` 纯函数 + App.tsx 回收原语，与注册表删除同
+  原语——dispose shell + 卸载 UI 壳；实例进程/隧道/后台任务不受影响，重开走
+  冷 boot + entry 重放）；预热 3→1/仅前台；hidden 期停 30s watchdog、S2
+  reconnect、3s 重试等后台拉取链（可见性门控 + 恢复补偿）。取舍登记：被回收
+  壳内运行中任务的完成蓝点/通知边沿暂停至该源重开（runtime-facts 通道撤回），
+  侧栏聚合落既有 30s unary 兜底（05 §2.3）。
+- **侧栏会话行窗口化 + publish 收口加固（design 05 §2.3；性能第二阶段 B）**
+  —— 每工作区首屏渲染上限 200 行 + 「还有 N 个会话」展开条
+  （`session-row-window.ts` 纯函数 + ServerSection 接线，locale zh/en 成对）；
+  aggregate publish 入口补引用相等防御（订阅侧去重之外的发布收口）。新增
+  `scripts/perf/measure-ui.mjs` 稳态基线尺子（schema `measure-ui/v1`：
+  DOM 节点分壳/堆/空闲长任务/合成输入帧间隔）。
+
 - **归档管理器按工作区分组、可折叠（design 24 §18/§19）** —— 移除独立
   「删除全部」：整集清理必须先显式全选再确认带计数的「删除选中」，purge
   永远携带明确 id 列表（降级/pending 视图无任何销毁动作）；列表按工作区

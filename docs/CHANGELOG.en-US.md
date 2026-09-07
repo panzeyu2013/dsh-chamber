@@ -53,6 +53,30 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 ### Changed
 
+- **N-ctx view retention/reclaim + visibility gating (design 05 §1 note /
+  performance-baseline §10; phase-2 perf items A/C/D code side)** — the early
+  "booted shells persist forever (view lifetime = registry-entry lifetime)"
+  semantics narrows to a chamber retention policy: local stays forever,
+  hidden shells keep at most 1 (`RETAINED_HIDDEN_VIEWS`), and the oldest
+  "settled + hidden ≥60s" shell is reclaimed past that cap (pure
+  `retention.ts` + App.tsx reclaim primitive — same primitive as registry
+  deletion: dispose shell + unmount the UI shell; the instance process,
+  tunnels and background tasks are unaffected; reopening does a cold boot +
+  entry replay); prewarm drops 3→1 / foreground-only; hidden windows stop
+  the 30s watchdog, S2 reconnect and 3s retry pull chains (visibility gate
+  with recovery compensation). Recorded trade-off: completion dots /
+  notification edges of tasks running inside a reclaimed shell pause until
+  that source reopens (runtime-facts channel withdraws); the sidebar
+  aggregate falls back to the existing 30s unary path (05 §2.3).
+- **Sidebar per-workspace session-row windowing + publish hardening
+  (design 05 §2.3; phase-2 perf item B)** — each workspace renders at most
+  200 rows on first paint with a "Show {n} more sessions" expansion bar
+  (`session-row-window.ts` pure functions + ServerSection wiring, zh/en
+  locale pair); the aggregate publish entry gained reference-equality
+  defense (publish closure on top of subscription-side dedupe). New
+  `scripts/perf/measure-ui.mjs` steady-state baseline probe (schema
+  `measure-ui/v1`: per-shell DOM nodes / heap / idle long tasks / synthetic
+  input frame intervals).
 - **Archive manager grouped by workspace and collapsible (design 24
   §18/§19)** — the standalone "delete all" button is retired: clearing the
   whole set requires explicitly ticking select-all and confirming the
