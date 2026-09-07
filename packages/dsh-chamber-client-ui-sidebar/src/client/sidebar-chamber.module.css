@@ -158,9 +158,12 @@
   white-space: nowrap;
   font-size: 12px;
   line-height: 18px;
-  color: var(--dsw-alias-label-primary);
+  color: var(--dsw-alias-label-secondary);
 }
 
+.searchResultRow:hover .searchResultTitle {
+  color: var(--dsw-alias-label-primary);
+}
 
 .searchResultWorkspace,
 .searchResultSnippet {
@@ -436,9 +439,6 @@
   font-size: 13px;
   font-weight: 500;
   line-height: 18px;
-  /* Source names are primary entity labels — explicit standard ink so the
-     label never inherits a muted body color. */
-  color: var(--dsw-alias-label-primary);
 }
 
 /* Connection status: a dot (or a spinner while connecting/starting/
@@ -823,9 +823,12 @@
      deliberate compromise — 13px keeps rows traceable in one shared list. */
   font-size: 13px;
   line-height: 18px;
-  color: var(--dsw-alias-label-primary);
+  color: var(--dsw-alias-label-secondary);
 }
 
+.sessionRow:hover .sessionTitle {
+  color: var(--dsw-alias-label-primary);
+}
 
 /* The current ctx's current session (05 §2.2): the official dsh
    selected-row treatment — `.sessionRow.selected` is the light
@@ -1213,7 +1216,7 @@
   font-size: 12px;
   line-height: 16px;
   font-weight: 600;
-  color: var(--dsw-alias-label-primary);
+  color: var(--dsw-alias-label-secondary);
 }
 
 .todoCount {
@@ -1276,17 +1279,15 @@
   border: 0;
   border-radius: 8px;
   background: transparent;
-  /* Session-name ink family: primary at rest (hover = background tint). */
-  color: var(--dsw-alias-label-primary);
+  color: var(--dsw-alias-label-secondary);
   font: inherit;
   text-align: left;
   cursor: pointer;
 }
 
-/* Hover affordance: background tint only (title ink is primary at rest —
-   session-name family). */
 .todoRow:hover {
   background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
 }
 
 .todoRow:focus-visible {
