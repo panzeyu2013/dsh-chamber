@@ -22,10 +22,15 @@
  *   A. packages/desktop/bridge-manifest.json（提交物）——
  *      { "invoke": [{channel,key}×60], "push": [{channel,key}×8],
  *        "counts": {invoke,push,total} }，两数组均按 IPC_CHANNELS 定义序。
- *   B. macos/Sources/Generated/BridgeManifest.swift（生成物、提交）——
- *      `enum BridgeManifest` 三份 Set<String>（invokeChannels / pushChannels
- *      / allChannels = 前两者并集推导，不重复字面量）。
- *   C. chamber-bridge.js（E8）shim 存根产出**不在本批**（W-18 范围）——W-18
+ *   B. macos/Sources/DSHChamberPoc/Generated/BridgeManifest.swift（生成物、
+ *      提交）——`enum BridgeManifest` 三份 Set<String>（invokeChannels /
+ *      pushChannels / allChannels = 前两者并集推导，不重复字面量）。
+ *      W-18 落位迁移：文件位于 DSHChamberPoc target 目录内（Sources/
+ *      DSHChamberPoc/Generated/——SwiftPM 递归收 Sources/<target>/ 子目录，
+ *      随 swift build 编译接线，Swift 白名单 XCTest 方可 @testable import
+ *      引用）；旧 macos/Sources/Generated/BridgeManifest.swift 已删除、生成器
+ *      不再产出该位置（docs 侧旧路径引用属文档同步范围，随 W-18 记录处理）。
+ *   C. chamber-bridge.js（E8）shim 存根产出**不在本批**（W-18 后半）——W-18
  *      直接 import 本模块的纯函数即可复用解析/方向/渲染，无需复制逻辑。
  *
  * 用法（工作目录 packages/desktop）：
@@ -52,9 +57,12 @@ const repoRoot = join(desktopDir, '..', '..')
  *  MAIN_SIDE_FILES 同集 —— 若 W-10 收口后注册点再迁移文件，两处须同步）。 */
 export const MAIN_SIDE_FILES = ['main.ts', 'shell-core.ts', 'electron-edges.ts']
 
-/** 提交物/生成物默认路径（CLI 无参时写入）。 */
+/** 提交物/生成物默认路径（CLI 无参时写入）。
+ *  Swift 生成物落位 DSHChamberPoc target 目录内（Sources/DSHChamberPoc/
+ *  Generated/，W-18 迁移）——SwiftPM 递归收 Sources 子目录，随编译接线；
+ *  旧 macos/Sources/Generated/ 位置已废弃删除（生成器不再产出）。 */
 export const COMMITTED_MANIFEST = join(desktopDir, 'bridge-manifest.json')
-export const COMMITTED_SWIFT = join(repoRoot, 'macos', 'Sources', 'Generated', 'BridgeManifest.swift')
+export const COMMITTED_SWIFT = join(repoRoot, 'macos', 'Sources', 'DSHChamberPoc', 'Generated', 'BridgeManifest.swift')
 
 /** IPC_CHANNELS 常量表整块（保守正则，见头部注释）：块内不允许出现 `}`，
  *  注释行由逐行解析跳过。当前 ipc-events.ts 块内确无 `}`（先 grep 实测再
@@ -289,6 +297,8 @@ export function renderSwiftManifest(manifest) {
     `// 通道 manifest（W-17 / design 25 §4.4.3）：Swift 侧 IPC 白名单单源`,
     `// （${counts.total} 通道 = ${counts.invoke} invoke + ${counts.push} push）。`,
     '// 重新生成（工作目录 packages/desktop）：node scripts/emit-bridge-manifest.mjs',
+    '// 落位：macos/Sources/DSHChamberPoc/Generated/ —— target 内随编译接线',
+    '// （W-18 自旧 Sources/Generated/ 迁入；bridge-manifest.test.ts 守重生成 == 提交物）。',
     '// 生成器 scripts/emit-bridge-manifest.mjs —— 输入 ipc-events.ts 的',
     '// IPC_CHANNELS 常量表 + main 侧（main.ts ∪ shell-core.ts ∪ electron-edges.ts）',
     '// handle/send 注册事实；与提交物 packages/desktop/bridge-manifest.json 同源。',

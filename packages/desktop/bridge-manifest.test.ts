@@ -18,7 +18,7 @@
  *
  * 断言面（W-17 退出标准：生成物 == 提交物绿 + 通道数守恒）：
  *   ① 重生成 JSON == 提交物 packages/desktop/bridge-manifest.json（文本级）；
- *   ② 重生成 Swift == 提交物 macos/Sources/Generated/BridgeManifest.swift；
+ *   ② 重生成 Swift == 提交物 macos/Sources/DSHChamberPoc/Generated/BridgeManifest.swift；
  *   ③ 通道数守恒：counts {invoke:60, push:8, total:68} 与两列表长度自洽；
  *   ④ 无死键：manifest 键集 == ipc-events.ts IPC_CHANNELS 表键集（68 全覆盖、
  *      键/通道无重复、invoke/push 无交集 —— 生成器内部同样校验并 loud
@@ -47,7 +47,7 @@ const DESKTOP = import.meta.dirname
 const REPO_ROOT = join(DESKTOP, '..', '..')
 const GENERATOR = join(DESKTOP, 'scripts', 'emit-bridge-manifest.mjs')
 const COMMITTED_JSON_PATH = join(DESKTOP, 'bridge-manifest.json')
-const COMMITTED_SWIFT_PATH = join(REPO_ROOT, 'macos', 'Sources', 'Generated', 'BridgeManifest.swift')
+const COMMITTED_SWIFT_PATH = join(REPO_ROOT, 'macos', 'Sources', 'DSHChamberPoc', 'Generated', 'BridgeManifest.swift')
 
 /** manifest JSON 的结构形状（与生成器产出 schema 一致）。 */
 interface ManifestEntry {

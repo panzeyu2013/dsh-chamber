@@ -3,6 +3,8 @@
 // 通道 manifest（W-17 / design 25 §4.4.3）：Swift 侧 IPC 白名单单源
 // （68 通道 = 60 invoke + 8 push）。
 // 重新生成（工作目录 packages/desktop）：node scripts/emit-bridge-manifest.mjs
+// 落位：macos/Sources/DSHChamberPoc/Generated/ —— target 内随编译接线
+// （W-18 自旧 Sources/Generated/ 迁入；bridge-manifest.test.ts 守重生成 == 提交物）。
 // 生成器 scripts/emit-bridge-manifest.mjs —— 输入 ipc-events.ts 的
 // IPC_CHANNELS 常量表 + main 侧（main.ts ∪ shell-core.ts ∪ electron-edges.ts）
 // handle/send 注册事实；与提交物 packages/desktop/bridge-manifest.json 同源。
