@@ -48,6 +48,17 @@
   `purge(sessionIds?)` 可选子集过滤 + 归档管理器对话框）；事件发射为文档化 no-op
   直至上游 wire，域随上游 `sessions.delete` wire 落地后退休。可选增强（未排期）：
   PluginDialog 三态行、rowError 本地化、已归档浏览区（todo 12 A）。
+  **2026 dev 实机 QA 登记（待修，复现稳定）**：对**当前活动会话**执行行尾「归档」
+  （或经管理器删除/清理后），本地来源即**永久落入 unary 降级视图**（归档管理器
+  显示降级三态、列表丢失工作区分组与归档集、已归档行重新浮出），直至整页重载
+  （重载后归档动作本身已生效）。复现：打开任意非 blank 会话 → 行尾归档 → 立即
+  降级（两次复现 + 清理路径同现）；伴随 dsh 壳 `InvalidStateError: Transition was
+  aborted`。机制假设：归档当前会话使官方壳清空当前会话并重建 ctx 代数，chamber
+  快照生产者（sidebar client index.ts，zustand subscribe 不在挂载时首报）在新代数
+  下无 store 变更即永不首报 → App 端 mounted 标记缺位 → 回退 unary（`fetchInstanceSnapshot`
+  无归档集/archiveSetKnown=false）。修复方向待定：生产者注册后立即首报一次，或
+  App 对曾推送来源保留 mounted 直至显式 withdraw。附注：Esc 在设置壳内子对话框
+  打开时按下会同时关闭两层（document 级 keydown 双监听）——低优 UX 观察项。
 - **移动端 Web 访问面（design 17 §18）**：P1/P1.5/适配轮已实现。剩余——实机门禁
   （§18.6：真机触控目标比例/抽屉开合/键盘遮挡/安全区/汉堡不重叠/crumbs 换行/
   Session 日志图标化/iOS 单击切换/设置手机档走查/刘海横屏/深层谱系高度等）；DOM
