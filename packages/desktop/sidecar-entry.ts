@@ -18,7 +18,7 @@
  */
 import process from 'node:process'
 import { createInterface } from 'node:readline'
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createControlPlane } from '@dsh-chamber/control-plane'
@@ -180,6 +180,8 @@ function buildHeadlessCtx(userDataDir: string): ShellAssemblyCtx {
     hostFacts,
     runtimeBaseDir: userDataDir,
     localDshHome: path.join(stateDir, 'dsh-home'),
+    // transportManager：listInstances 最小真实化在 methodStub 定义后赋值
+    // （见 real.transportManager = …；此处不占位，Proxy 兜底到方法级 stub）。
     settingsIO: {
       current: () => settings,
       commit: (next: ChamberSettings) => {
@@ -233,6 +235,30 @@ function buildHeadlessCtx(userDataDir: string): ShellAssemblyCtx {
   real.updateController = Object.assign(methodStub('updateController'), {
     subscribe: () => {
       /* Swift flavor 更新状态经 hostFacts/update 事件面，M3/W-22 接真实推送 */
+    },
+  })
+  // transportManager：listInstances 最小真实化（registry 文件读——
+  // <userData>/ssh-instances.json；缺省文件 = 空列表；损坏 loud 且保留
+  // .corrupt，语义与 main loadInstances 同向）。其余方法（status/connect/
+  // disconnect/reverify/logs/exec/appendLog/saveInstances…）仍为 loud
+  // stub——SSH 隧道/凭据等 Swift flavor 宿主线留 M3 后续真实化清单。
+  // 零行时 instances_get 返回空列表，不再报 sidecar-ctx-unavailable。
+  real.transportManager = Object.assign(methodStub('transportManager'), {
+    listInstances: () => {
+      const file = path.join(userDataDir, 'ssh-instances.json')
+      if (!existsSync(file)) return []
+      let parsed: unknown
+      try {
+        parsed = JSON.parse(readFileSync(file, 'utf8'))
+      } catch (err) {
+        renameSync(file, file + '.corrupt')
+        throw new Error('sidecar-registry-corrupt:' + String(err instanceof Error ? err.message : err))
+      }
+      if (!Array.isArray(parsed)) {
+        renameSync(file, file + '.corrupt')
+        throw new Error('sidecar-registry-corrupt:not-array')
+      }
+      return parsed
     },
   })
   return new Proxy(real as object, {
