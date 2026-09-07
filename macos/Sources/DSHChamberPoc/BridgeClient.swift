@@ -14,13 +14,22 @@
 //     协议行若仍泄漏到 stdout（重定向后 = 违约）→ fail-loud 打印 + 丢弃，
 //     绝不静默继续（design 25 §4.4.2 护栏条）。
 //   - 帧长上限 = FrameCodec.maxFrameBytes（4 MiB，与 TrustGuard 同源）。
-//   - **无握手帧**：start() 后不发 {"event":"hello"} 之类任何帧——协议没有
-//     握手语义（poc-sidecar.ts 只处理 request；真实 sidecar 的 ready 帧
-//     {port,shellVersion} 属 M2 且由 sidecar 主动输出，不是客户端握手；
-//     design 25 §3.3 启动序列由上层编排）。
-//   - POC 期 sidecar 只应答请求、推送事件，从不主动发请求（edge:* 反向
-//     通道属 M2）；万一收到请求帧，本客户端 loud 丢弃（无法配对的响应
-//     只会制造悬挂，见 handleIncomingLine 注释）。
+//   - **无握手帧**：start() 后不发任何帧——协议没有握手语义；真实 sidecar
+//     （sidecar-entry.ts）起动完成后主动输出 ready notify {port,shellVersion}
+//     （M3 W-15/16 起经 onReady 消费；design 25 §3.3 启动序列由上层编排）。
+//   - **出站面（sidecar → Swift；M3 W-15/16）**：sidecar 的宿主腿
+//     （node-edges.ts）会把 NOTIFY 类通道的宿主动作转成 B 桥线协议上的
+//     **edge 请求** {"edge":method,"payload":…,"edgeId":N}（期待应答
+//     {"edgeId":N,"ok":true,"result":…} | {"edgeId":N,"ok":false,"error":…}——
+//     sidecar 侧 pendingEdges 无超时，Swift 不应答 = 永久挂起）与 **notify
+//     单向帧** {"notify":event,"payload":…}（ready/rendererPush 等）。这两族
+//     帧既无 id 也无 event 键，FrameCodec.decodeLine 按容忍语义归 nil——
+//     M3 前的本文件会把它们当非协议行 loud 丢弃；现由本文件的
+//     decodeOutboundFrame 在 BridgeClient 层先行分类（不改 FrameCodec，
+//     注释见该函数），edge 经 v1 默认应答策略（defaultEdgeResponse /
+//     setDefaultEdgeResponder）或自定义 onEdgeRequest 必答、绝不挂起。
+//   - sidecar 仍从不发起带 id+method 的 request 帧（B 桥 id 所有权恒在
+//     Swift 侧）；万一收到仍 loud 丢弃（见 handleIncomingLine .request）。
 //
 // id 纪律与并发模型：
 //   - id 自 1 起单调递增（NSLock 保护）；sidecar 原样 echo，pending 字典
@@ -144,19 +153,29 @@ public final class BridgeClient {
     private let arguments: [String]
     private let environment: [String: String]
 
-    /// 构造（AppDelegate 按此签名调用，勿改名）。
+    /// 构造（AppDelegate 按此签名调用，勿改名——第四参数带默认值，既有三参
+    /// 调用不变）。
     /// - Parameters:
     ///   - nodePath: Node 可执行文件路径（POC：系统 node 或 Electron 二进制
     ///     + ELECTRON_RUN_AS_NODE=1，见 AppDelegate）。
     ///   - arguments: sidecar 脚本路径与参数（POC：poc-sidecar.ts 路径）。
     ///   - environment: 附加环境变量（合并进当前进程环境，同名覆盖）。
-    public init(nodePath: String, arguments: [String], environment: [String: String]) {
+    ///   - defaultEdgeResponder: true（默认）= init 时把 v1 默认 edge 应答器
+    ///     装进 onEdgeRequest（setDefaultEdgeResponder）；false = 留 nil——
+    ///     分发层对「无自定义应答器」仍以 defaultEdgeResponse 兜底应答
+    ///     （edge 必答不挂起是不变式，本参数只影响 onEdgeRequest 的初值形态，
+    ///     不改变兜底行为）。
+    public init(nodePath: String, arguments: [String], environment: [String: String],
+                defaultEdgeResponder: Bool = true) {
         self.nodePath = nodePath
         self.arguments = arguments
         self.environment = environment
+        if defaultEdgeResponder {
+            setDefaultEdgeResponder()
+        }
     }
 
-    // MARK: - 状态（除 onEvent 外全部经 lock 保护）
+    // MARK: - 状态（除出站面回调属性外全部经 lock 保护）
 
     private let lock = NSLock()
     private var process: Process?
@@ -168,17 +187,106 @@ public final class BridgeClient {
     private var nextID = 1
     private var pending: [Int: CheckedContinuation<AnyCodable, Error>] = [:]
     private var sigpipeIgnored = false
+    // —— M3 W-15/16 出站面状态 ——
+    /// 已应答 edgeId 集合（锁保护）：edge 应答恰好一次的守卫（与 pending 字典
+    /// 的 id 所有权纪律同构——edgeId 的所有权 = 本集合的插入成功）。
+    private var answeredEdgeIDs = Set<Int64>()
+    /// 会话代际（锁保护）：start() 每次递增。stop/重启后，旧会话 dispatch 的
+    /// edge 迟到应答按代际作废（防旧 edgeId 撞上新会话同号 edge）。
+    private var sessionGeneration = 0
+    /// 最近一次 sidecar 进程终止退出码（锁保护；nil = 尚未观测到终止）。
+    private var lastTerminationStatusStorage: Int32?
 
     /// sidecar 事件出口（事件帧到达时在管道读取线程回调；调用方负责切回
     /// 主线程再碰 UI/WKWebView——本属性在 start() 之前赋值、之后只读，
     /// 赋值方（controller）与读取线程不并发写）。
     public var onEvent: ((String, AnyCodable?) -> Void)?
 
+    // MARK: - 出站面（sidecar → Swift：edge 请求 / notify / ready；M3 W-15/16）
+
+    /// sidecar→Swift 的 edge 请求出口。NOTIFY 类通道的宿主腿在 sidecar 侧
+    /// await sendEdge 的应答（node-edges pendingEdges 无超时——不应答 =
+    /// 永久挂起，见文件头）。本回调（管道读取线程）**必须调用 reply 恰好
+    /// 一次**：
+    ///   - reply(result, nil)      → 写 {"edgeId":N,"ok":true,"result":…}
+    ///     （result 为 nil 时 result 键写 JSON null）；
+    ///   - reply(result, error文案) → 写 {"edgeId":N,"ok":false,"error":…}。
+    /// reply 可延后/跨线程调用（edgeId 恰好一次由 sendEdgeReply 的守卫保证；
+    /// stop/重启后迟到应答按代际 loud 丢弃）。对未处理的方法请回落
+    /// defaultEdgeResponse(method:payload:)（自定义不应答 = 挂起，注释声明）。
+    /// 未设置（nil）时由 v1 默认应答策略兜底（defaultEdgeResponse——
+    /// 构造参数 defaultEdgeResponder=true 会在 init 时把默认应答器装进本属性）。
+    /// 线程契约与 onEvent 相同：start() 之前赋值、之后只读。
+    public var onEdgeRequest: ((_ method: String, _ payload: AnyCodable?,
+                                _ reply: @escaping (_ result: AnyCodable?, _ error: String?) -> Void) -> Void)?
+
+    /// sidecar→Swift 的 notify 事件出口（单向帧，不期待应答；ready 之外的
+    /// rendererPush 等）。线程契约与 onEvent 相同。ready 帧不进本出口
+    /// （结构校验后走 onReady）。
+    public var onNotify: ((_ event: String, _ payload: AnyCodable?) -> Void)?
+
+    /// sidecar ready notify 专用出口：sidecar 起动完成、control plane 就绪后
+    /// 主动输出的 {"notify":"ready","payload":{port,shellVersion}}（先于任何
+    /// 业务帧）。线程契约与 onEvent 相同（管道读取线程回调）。
+    public var onReady: ((_ port: Int, _ shellVersion: String) -> Void)?
+
     /// 进程是否存活（含 start 前/stop 后 → false）。测试与未来 Supervisor 用。
     public var isRunning: Bool {
         lock.lock()
         defer { lock.unlock() }
         return process?.isRunning ?? false
+    }
+
+    /// 最近一次 sidecar 进程终止退出码（nil = 尚未观测到终止）。记录路径：
+    /// stop() 收尸完成（waitUntilExit 后）与自然退出（handleTermination）都会
+    /// 写。优雅退出（sidecar 处理 SIGTERM 后 exit(0)）→ 0；stop() 轮询超时后
+    /// SIGKILL 兜底时 Darwin 上报信号号（9）。测试与未来 Supervisor 用。
+    public var lastTerminationStatus: Int32? {
+        lock.lock()
+        defer { lock.unlock() }
+        return lastTerminationStatusStorage
+    }
+
+    // MARK: - 出站面默认 edge 应答策略（M3 W-15/16）
+
+    /// v1 默认 edge 应答策略——真实宿主腿落地前的 POC 应答表（W-15/16 语义：
+    /// Swift 必须应答、绝不挂起；sidecar 侧 sendEdge 无超时）：
+    ///   - 同步事实门 trayAvailable / notificationSupported /
+    ///     badgeCountApiAvailable / mainWindowAlive / webViewContentAlive →
+    ///     ok:true result:true（与 node-edges hostFacts 种子同族：mac Dock
+    ///     常驻、通知/徽标 API 可用、主窗与 web 内容存活）；
+    ///   - showNativeNotification → ok:true result:null（= 已显示；POC 无真实
+    ///     通知腿，M3 后由实际宿主实现接管）；
+    ///   - showMessage → ok:true result:0（= 消息框第 0 号按钮）；
+    ///   - 其余一律 {ok:false, error:"swift-edge-unimplemented:<method>"}
+    ///     （pickPluginSource 等——loud 拒绝，绝不静默假装成功，也不挂起）。
+    /// 返回 (result, error)：error == nil → ok:true 应答，否则 ok:false。
+    /// 自定义 onEdgeRequest 对未处理方法的回落入口：取本方法 outcome 后交给
+    /// reply（应答职责仍在自定义侧；恰好一次由 sendEdgeReply 守卫）。
+    public func defaultEdgeResponse(method: String, payload: AnyCodable?)
+        -> (result: AnyCodable?, error: String?) {
+        switch method {
+        case "trayAvailable", "notificationSupported", "badgeCountApiAvailable",
+             "mainWindowAlive", "webViewContentAlive":
+            return (.bool(true), nil)
+        case "showNativeNotification":
+            return (nil, nil)
+        case "showMessage":
+            return (.number(0), nil)
+        default:
+            return (nil, "swift-edge-unimplemented:\(method)")
+        }
+    }
+
+    /// 把 v1 默认 edge 应答器装回 onEdgeRequest（策略见 defaultEdgeResponse；
+    /// 自定义应答器想整体恢复默认时调用；构造参数 defaultEdgeResponder=true
+    /// 时 init 已调用过）。线程：start() 之前调用（与 onEvent 同赋值契约）。
+    public func setDefaultEdgeResponder() {
+        onEdgeRequest = { [weak self] method, payload, reply in
+            guard let self else { return }
+            let outcome = self.defaultEdgeResponse(method: method, payload: payload)
+            reply(outcome.result, outcome.error)
+        }
     }
 
     // MARK: - 生命周期
@@ -243,6 +351,12 @@ public final class BridgeClient {
         // 行缓冲复位（支持 stop 后再次 start 的干净重启）。
         self.outputReader = LineReader()
         self.stderrReader = LineReader()
+        // 出站面会话状态复位：edge 应答守卫清空（新 sidecar 的 edgeId 从 1
+        // 重新计数）、代际递增（旧会话迟到的 edge 应答在新会话按代际作废）、
+        // 上次终止退出码清空。
+        self.answeredEdgeIDs.removeAll()
+        self.sessionGeneration += 1
+        self.lastTerminationStatusStorage = nil
     }
 
     /// 停止 sidecar：SIGTERM → 等 ≤2s → SIGKILL（spec 原文语义）。同步阻塞
@@ -281,10 +395,30 @@ public final class BridgeClient {
         if takenProcess.isRunning {
             // SIGKILL：Process 无 kill API，用 kill(2)（Foundation 在 Darwin
             // 上再导出，无需 import Darwin）。ESRCH（恰在此时已退出）等失败
-            // 忽略：isRunning/waitUntilExit 已兜底状态。
+            // 忽略：后续有界轮询兜底状态。
             _ = kill(takenProcess.processIdentifier, SIGKILL)
         }
-        takenProcess.waitUntilExit()   // 收尸（防僵尸）；对已退出进程立即返回
+        // 收尸（防僵尸）：对已退出进程 waitUntilExit 本应立即返回，但子进程
+        // 自然退出恰与 stop() 并发时（terminationHandler 已先行触发、Foundation
+        // 已内部 waitpid 收尸，handleTermination 与 stop 竞争收尾——本文件注释
+        // 声明的并发路径）waitUntilExit 存在永不返回的竞态（集成测试实测偶发
+        // 挂死）。改为：SIGKILL 后再有界轮询 ≤2s 等进程消亡——isRunning 转
+        // false 即 Foundation 已收尸（无僵尸残留），此时**不再** waitUntilExit；
+        // 仍存活（SIGKILL 后理论不可达）才 waitUntilExit 兜底。stop() 因此
+        // 绝不无限阻塞调用线程，「同步收尸」契约不变（正常路径 <2s）。
+        let reapDeadline = Date().addingTimeInterval(2.0)
+        while takenProcess.isRunning && Date() < reapDeadline {
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+        if takenProcess.isRunning {
+            takenProcess.waitUntilExit()
+        }
+
+        // 记录本次终止退出码（测试/未来 Supervisor 用）：sidecar 处理 SIGTERM
+        // 优雅退出 → 0；轮询超时后 SIGKILL 兜底 → Darwin 上报信号号 9。
+        lock.lock()
+        lastTerminationStatusStorage = takenProcess.terminationStatus
+        lock.unlock()
 
         failAllPending(reason: "BridgeClient 已停止（stop()）")
     }
@@ -313,6 +447,9 @@ public final class BridgeClient {
         // 退出码分级文案 POC 版：只记日志；启动失败 vs 崩溃的 NSAlert 分流属
         // SidecarSupervisor（M2，design 25 §3.3(4)）。
         log("sidecar 进程退出：terminationStatus=\(status)（reason=\(reason.rawValue)）")
+        lock.lock()
+        lastTerminationStatusStorage = takenProcess?.terminationStatus
+        lock.unlock()
 
         // 管道此刻已 EOF：把 stdout 残尾按 EOF 收尾（可能含最后的完整帧），
         // 未决请求作废（作废先于残帧分发会丢“死前应答”——进程已亡，
@@ -403,9 +540,17 @@ public final class BridgeClient {
             return
         }
         guard let frame = FrameCodec.decodeLine(line) else {
+            // decodeLine 归 nil 的帧先试出站面分类（edge/notify 两族——它们
+            // 既无 id 也无 event 键，不在 decodeLine 的 request/response/event
+            // 三族内，见 decodeOutboundFrame 注释；M3 前这类帧在此被当非协议
+            // 行 loud 丢弃，sidecar 的 sendEdge 因此挂起——W-15/16 修复点）。
+            if let outbound = Self.decodeOutboundFrame(line) {
+                dispatchOutboundFrame(outbound)
+                return
+            }
             // 非协议帧：D2 重定向后仍泄漏说明有 console 直写 stdout，须修——
             // fail-loud 打印（内容截断预览），不向任何调用方投递。
-            log("收到非协议帧（非 JSON / 非法结构 / 缺 id），丢弃：\(Self.preview(line))")
+            log("收到非协议帧（非 JSON / 非法结构 / 缺 id / 未知键组合），丢弃：\(Self.preview(line))")
             return
         }
         switch frame {
@@ -420,10 +565,186 @@ public final class BridgeClient {
                 log("收到事件「\(event)」但 onEvent 未设置，丢弃")
             }
         case .request:
-            // POC 期 sidecar 从不发起请求（edge:* 反向通道属 M2 / P1
-            // sidecar-entry）；无法配对的响应只会制造悬挂，loud 丢弃并声明
-            // 不支持——P1 在此补“FrameCodec.encode(.response) 回写”路径。
-            log("收到 sidecar→Swift 请求帧（POC 不支持 edge:* 反向通道），丢弃：\(Self.preview(line))")
+            // sidecar 从不发起带 id+method 的 request 帧（B 桥 id 所有权恒在
+            // Swift 侧；edge:* 反向通道是**出站帧** edge/notify 两族，已由
+            // decodeOutboundFrame 单独分类，不落本 case）。无法配对的响应只
+            // 会制造悬挂，loud 丢弃并声明不支持。
+            log("收到 sidecar→Swift request 帧（协议违约，B 桥 id 所有权在 Swift 侧），丢弃：\(Self.preview(line))")
+        }
+    }
+
+    // MARK: - 出站帧（sidecar → Swift：edge/notify）解码与分发（M3 W-15/16）
+
+    /// 出站帧的原始行分类结果（B 桥线协议在 request/response/event 三族之外
+    /// 的两族，sidecar → Swift 方向）。
+    private enum OutboundFrame {
+        /// sidecar→Swift edge 请求：期待 {"edgeId":N,"ok":…} 应答（edgeId 原样
+        /// 回写）。payload 为 AnyCodable?（无 payload 键 → nil）。
+        case edgeRequest(method: String, payload: AnyCodable?, edgeId: Int64)
+        /// sidecar→Swift notify 单向帧（不期待应答；ready 也在此，分发特判）。
+        case notify(event: String, payload: AnyCodable?)
+    }
+
+    /// 原始行 → 出站帧分类。**在 BridgeClient 层做而不扩 FrameCodec/
+    /// BridgeFrame**：edge/notify 帧既无 id 也无 event 键，decodeLine 按容忍
+    /// 语义归 nil（M3 前 → 非协议行 loud 丢弃）；若给 BridgeFrame 增加 case，
+    /// 需同步 FrameCodec 的 encode/decode 与其既有单测断言族（FrameCodecTests
+    /// 的分类优先序/容忍断言），POC 取本层先行分类的最小侵入——注释声明：
+    /// W-17 协议族稳定后若收编回 FrameCodec，本函数与 dispatchOutboundFrame
+    /// 一并迁移，BridgeClient 公开出口不变。
+    /// 分类确定性（防歧义帧摇摆）：edge 键优先于 notify 键（两族协议互斥）；
+    /// 结构不合法（edge/notify 名非字符串、edgeId 非数值等）→ nil，调用方
+    /// loud（与 decodeLine 的 nil 语义同构）。
+    private static func decodeOutboundFrame(_ line: String) -> OutboundFrame? {
+        guard let data = line.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        if let edgeName = object["edge"] as? String {
+            // edgeId 必须为 JSON 数值：Bool 的 NSNumber 桥接同样过 as? NSNumber，
+            // 须 CFTypeID 判别（与 AnyCodable.fromJSONObject 同规）。域内整数
+            // JSONSerialization 给整值 NSNumber，int64Value 精确（sidecar 的
+            // edgeId 自 1 递增的小整数）。
+            guard let edgeID = object["edgeId"] as? NSNumber,
+                  CFGetTypeID(edgeID) == CFNumberGetTypeID() else {
+                return nil
+            }
+            return .edgeRequest(method: edgeName,
+                                payload: Self.outboundPayload(in: object),
+                                edgeId: edgeID.int64Value)
+        }
+        if let event = object["notify"] as? String {
+            return .notify(event: event, payload: Self.outboundPayload(in: object))
+        }
+        return nil
+    }
+
+    /// 出站帧 payload 键取值：键缺省 → nil；显式 null → .null；其它 JSON 值 →
+    /// AnyCodable（非 JSON 可表示值不产生——fromJSONObject 诚实失败）。
+    private static func outboundPayload(in object: [String: Any]) -> AnyCodable? {
+        guard object.keys.contains("payload") else { return nil }
+        return AnyCodable.fromJSONObject(object["payload"] as Any)
+    }
+
+    /// 出站帧分发（管道读取线程；回调线程契约同 onEvent）。
+    private func dispatchOutboundFrame(_ frame: OutboundFrame) {
+        switch frame {
+        case .edgeRequest(let method, let payload, let edgeId):
+            handleEdgeRequest(method: method, payload: payload, edgeId: edgeId)
+        case .notify(let event, let payload):
+            if event == "ready" {
+                deliverReady(payload)
+            } else if let handler = onNotify {
+                handler(event, payload)
+            } else {
+                log("收到 notify「\(event)」但 onNotify 未设置，丢弃")
+            }
+        }
+    }
+
+    /// 单个 edge 请求的应答编排。sidecar 侧 sendEdge 在等应答（node-edges
+    /// pendingEdges 无超时）——本方法保证必答（恰好一次）：
+    ///   - onEdgeRequest 已设置 → 交给自定义应答器（reply 可延后/跨线程；
+    ///     恰好一次由 sendEdgeReply 的 edgeId 守卫保证；未处理的方法请回落
+    ///     defaultEdgeResponse——自定义应答器不应答会造成挂起，注释声明）；
+    ///   - 未设置 → v1 默认策略立即应答（defaultEdgeResponse，绝不挂起）。
+    private func handleEdgeRequest(method: String, payload: AnyCodable?, edgeId: Int64) {
+        var generation = 0
+        lock.lock()
+        generation = sessionGeneration
+        lock.unlock()
+        let reply: (_ result: AnyCodable?, _ error: String?) -> Void = { [weak self] result, error in
+            self?.sendEdgeReply(edgeId: edgeId, generation: generation,
+                                result: result, error: error)
+        }
+        if let responder = onEdgeRequest {
+            responder(method, payload, reply)
+        } else {
+            let outcome = defaultEdgeResponse(method: method, payload: payload)
+            reply(outcome.result, outcome.error)
+        }
+    }
+
+    /// ready notify 分发：结构校验（{port:Int,shellVersion:非空字符串}）后回调
+    /// onReady；载荷非法或无订阅者 → loud（ready 是启动编排的关键帧，宁响勿哑）。
+    private func deliverReady(_ payload: AnyCodable?) {
+        guard case .object(let fields)? = payload,
+              case .number(let portNumber)? = fields["port"],
+              let port = Int(exactly: portNumber),
+              case .string(let shellVersion)? = fields["shellVersion"],
+              !shellVersion.isEmpty else {
+            log("ready notify 载荷结构非法，丢弃：\(Self.preview(String(describing: payload)))")
+            return
+        }
+        if let handler = onReady {
+            handler(port, shellVersion)
+        } else {
+            log("收到 ready notify（port=\(port)）但 onReady 未设置，丢弃")
+        }
+    }
+
+    /// edge 应答帧的线格式信封（与 sidecar 期待逐字段一致；本文件本地收编的
+    /// 第四族编码——见 decodeOutboundFrame 注释）：
+    ///   ok=true  → {"edgeId":N,"ok":true,"result":…}（result 恒写键，null
+    ///     载荷 → JSON null；error 键省略）；
+    ///   ok=false → {"edgeId":N,"ok":false,"error":"…"}（result 键省略）。
+    private struct EdgeReplyEnvelope: Codable {
+        var edgeId: Int64
+        var ok: Bool
+        var result: AnyCodable?
+        var error: String?
+    }
+
+    /// edge 应答写回 sidecar：edgeId 原样回；单行原子写经既有 inputPipe
+    /// （锁内取句柄、锁外写——与 invoke 同款；stop 竞态由句柄缺失分支兜底，
+    /// loud 丢弃而不是 crash）。
+    /// 恰好一次：已应答的 edgeId 重复应答 / 代际过期（stop 后重启的新会话）
+    /// → loud 丢弃（与 deliverResponse 的 pending 所有权纪律同构）。
+    private func sendEdgeReply(edgeId: Int64, generation: Int,
+                               result: AnyCodable?, error: String?) {
+        let envelope: EdgeReplyEnvelope
+        if let error {
+            envelope = EdgeReplyEnvelope(edgeId: edgeId, ok: false,
+                                         result: nil, error: error)
+        } else {
+            envelope = EdgeReplyEnvelope(edgeId: edgeId, ok: true,
+                                         result: result ?? .null, error: nil)
+        }
+        var data: Data
+        do {
+            data = try JSONEncoder().encode(envelope)
+        } catch {
+            log("edgeId=\(edgeId) 应答编码失败（丢弃）：\(error.localizedDescription)")
+            return
+        }
+        guard data.count <= FrameCodec.maxFrameBytes else {
+            log("edgeId=\(edgeId) 应答超限（丢弃）：\(data.count) 字节")
+            return
+        }
+        data.append(0x0A)
+
+        var input: FileHandle?
+        var refused: String?
+        lock.lock()
+        if answeredEdgeIDs.contains(edgeId) {
+            refused = "重复应答（edgeId=\(edgeId) 已应答过）"
+        } else if generation != sessionGeneration {
+            refused = "应答代际过期（edgeId=\(edgeId)，会话已重启）"
+        } else if let pipe = inputPipe, let process = process, process.isRunning {
+            answeredEdgeIDs.insert(edgeId)
+            input = pipe.fileHandleForWriting
+        } else {
+            refused = "客户端未运行（未 start / 已 stop / sidecar 已退出）"
+        }
+        lock.unlock()
+        if let refused {
+            log("edgeId=\(edgeId) 应答丢弃：\(refused)")
+            return
+        }
+        do {
+            try input?.write(contentsOf: data)
+        } catch {
+            log("edgeId=\(edgeId) 应答写失败：\(error.localizedDescription)")
         }
     }
 
