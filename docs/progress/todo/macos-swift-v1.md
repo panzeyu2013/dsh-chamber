@@ -4,7 +4,7 @@
 > WKWebView + Node sidecar 全复用，方案草案 **未立项**）。本文件是其 companion 实施
 > 计划（windows-v1.md 先例）：把 design 25 的 P0–P4 细化为 **M0–M5 六道门** + WBS
 > 任务表 + runbook + 施工单 + 门禁清单 + 中止条件，随里程碑推进同步更新 STATUS。
-> 命令/脚本/测试名以 swift 分支现状（HEAD acd81fd）核实为准；**需新增**均标注（新增）。
+> 命令/脚本/测试名以 swift 分支现状（HEAD c4a2c2d）核实为准；**需新增**均标注（新增）。
 > 本文档本身不实现任何功能——执行须先过 M0 决策包与 M1 P0 证伪门（design 25 §8.1
 > G1–G5），任一实质失败即回 design 25 §10 决策 1 重审，不硬着头皮继续（中止点见 §七）。
 
@@ -13,7 +13,7 @@
 ≈0.7 折算；③ P0 验证门过才续投；④ 总估时 **46–72 人-日（9–14 人周）**，对齐
 design 25。
 
-## 已核实关键事实（本计划锚点；行号以 swift @ acd81fd 为准）
+## 已核实关键事实（本计划锚点；行号以 swift @ c4a2c2d 为准）
 
 - 桥面：`packages/desktop/ipc-events.ts` IPC_CHANNELS 共 **68 条 = 60 个
   `ipcMain.handle`（main.ts，全包 trustedIpc）+ 8 条 `webContents.send` 推送**
@@ -187,8 +187,8 @@ M4(P3 边沿 + 打包/CI) → M5(P4 实机门禁 + 发布)。
 
 ### M5 P4 实机门禁 + 双端同 tag 发布（5–10 人-日）
 
-- 目标：design 25 §8.5 打包态全链矩阵 + W1–W6 parity 判定 + 性能基线对照；双端同 tag
-  正式发布；STATUS/todo 收口。
+- 目标：design 25 §8.5 打包态全链矩阵 + W1–W6 parity 判定 + 性能基线对照（§七双端
+  性能/产物体积验收协议）；双端同 tag 正式发布；STATUS/todo 收口。
 - 做：按 STATUS 既有清单风格登记残余；性能对照 docs/progress/performance-baseline.md
   方法（启动/内存/会话切换）；W1–W6 判定（§七标准）；CHANGELOG。
 - 不做：新功能；非阻断残余只登记。
@@ -234,7 +234,7 @@ M2 出口（Swift 开工前置：B 桥协议定稿 + sidecar 可起 + HostEdges 
 | W-27 | M4 | W-26 | 双端同 tag 发布演练（产物命名 -native 防碰撞/无冲突/appcast/回归顺序） | 演练记录 + 产物清单 | 1 |
 | W-28 | M5 | M4 | 打包态全链矩阵（cp 起动/预启动/连接/网关凭据重录/运行时管理与回退/插件同步/归档对话框/通知点击/深链/隐藏恢复/唤醒/退出确认） | STATUS 风格登记全勾或显式残余 | 2–3 |
 | W-29 | M5 | W-28 | W1–W6 parity 逐项判定（§七标准） | 判定记录 | 1.5–2.5 |
-| W-30 | M5 | W-28 | 性能基线对照（performance-baseline.md 方法） | 数据入库 | 1 |
+| W-30 | M5 | W-28 | 性能基线对照（performance-baseline.md 方法 + §七双端验收协议：注入式探针平移 boot/切换/rapid/eval 四场景）+ **双端产物体积对比登记**（.app/dmg/zip，同机同架构同 tag，目标 ≤ Electron × 0.75） | 数据与体积记录入库（scripts/perf/data/*.json 同族） | 1 |
 | W-31 | M5 | W-29/30 | 双端同 tag 正式发布 + CHANGELOG + STATUS/todo 收口 | 发布产物双端可用 | 1 |
 | W-32 | M5 | W-31 | R1–R13 实际化复盘 + D1–D7 复核 | 复盘记录 | 0.5 |
 
@@ -442,6 +442,33 @@ Electron mac 腿（现 build-macos：dmg/zip/latest-mac.yml）与 Swift mac 腿
 | W4 打印/查找 | Cmd+P 弹系统打印对话框且内容合理；Cmd+F 若 dsh UI 未实现查找则 N/A（登记不视为失败） | 打印无对话框/空白 | N/A 不阻断；真失败按渲染差异排查 |
 | W5 字体/滚动/IME | 中文输入无吞字/乱序；长会话滚动无感卡顿；无方块字 | IME 丢字；滚动明显劣于 Electron；字体破损 | 归因 WebKit 渲染差异 → 按 W1 预算 |
 | W6 后台节流对 SSE/WS | 隐藏/失焦后 SSE/WS 心跳不断、恢复即时（≤现 Electron 语义） | 后台 WS 掉线且无法自动重连或恢复 >30s | 归因 WebKit 节流 → 改 keep-alive/唤醒补发（core 已具备） |
+
+### 双端性能与产物体积验收协议（P0 预检 / M4–M5 定标）
+
+> 依据 performance-baseline.md 纪律——**"前后对照只在同环境 A/B 内可信，跨环境
+> 绝对值不可比"**：双端所有对比必须同机、同脚本顺序、同会话窗口执行，数据落
+> `scripts/perf/data/*.json` 同族（Swift 侧新增注入式采集，见下）。
+
+**方法学平移（不换尺）**：现有 `scripts/perf/{boot,switch,eval,cdp-lib}-measure.mjs`
+是 CDP 驱动（Electron 专属）。Swift 侧用 **WKUserScript 注入同一套
+PerformanceObserver('longtask'/'paint'/'layout-shift') 探针 + evaluateJavaScript
+驱动合成 MouseEvent**（与现脚本同源注入代码，引擎无关），四场景平移：boot（骨架 →
+内容 wall/长任务/CLS）、跨来源切换、rapid×10 连点、eval 归因。页面驱动脚本与数据
+schema 双端共用一份，差异只在注入通道（CDP ↔ WKUserScript）。
+
+**阈值三形态**（数值为建议初值，P0 双端首测后校准登记，不作跨环境承诺）：
+
+| 形态 | 指标 | 建议预算 |
+|---|---|---|
+| 相对门（同机 A/B） | boot wall / 切换 / rapid×10 | 原生 ≤ Electron × 1.3 / × 1.5（长任务与 CLS 结构只登记不设硬门） |
+| 绝对预算 | IPC invoke p95（60 通道抽测代表组） | ≤ 20ms |
+| 绝对预算 | 事件推送突发 | 100 事件/秒不丢序（core 有界队列语义） |
+| 能力门 | 后台隐藏 ≥30s SSE/WS 心跳 + 唤醒恢复（C1） | 心跳不断、恢复 ≤ 现 Electron 语义；不过 → keep-alive/唤醒补发，登记已知降级或修复 |
+| 能力门 | 内存峰值 / 空闲唤醒次数与进程数 | 内存 ≤ Electron × 0.7；进程数/唤醒登记对比 |
+| 能力门 | **产物体积（M5 定标；M0 起可 dry-run 先采 Electron 基线）** | .app 安装体积 / dmg / zip / 磁盘展开，目标 ≤ Electron × 0.75（口径 `du -sh` + 文件大小） |
+
+**数据纪律**：P0 只做"数量级异常预检"（引擎级灾难性回归早暴露，不定标）；正式
+定标在 M4/M5；任何跨会话/跨环境数字不得直接作差异结论。
 
 **中止/回退触发点（任一失败即回 design 25 §10 决策 1 重审，不硬着头皮继续）**：
 - A1：P0 G1 主界面实质功能缺口（不能归类 minor 样式）——WKWebView 承载面证伪。

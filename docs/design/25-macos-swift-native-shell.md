@@ -566,7 +566,9 @@ interface HostEdges {
      WS 心跳与唤醒即时重连实测（C1：backgroundThrottling:false 无 WKWebView
      等价物）**；
    - C2 双 flavor 交替使用同一 userData/dsh 实例时，WebKit 独立存储 jar 下
-     会话 cookie/登录态表现实测并定共存语义。
+     会话 cookie/登录态表现实测并定共存语义；
+   - P0 预检：双端同机跑 boot 参考点（方法见 companion §七「双端性能与产物体积
+     验收协议」），只为尽早暴露引擎级数量级异常，**不作定标**。
    任何一项失败 → 回到本文档重审路线（§10 决策 1）。
 
 ### 8.2 P1 core 拆分（2–3 人周，Electron 不回归）
@@ -605,7 +607,9 @@ E1–E20 按 §5 实现（E15 走 §6.4）；manifest 生成与护栏；Supervis
 对话框）/通知点击/深链/隐藏恢复/唤醒补发/退出确认）；WKWebView parity 清单
 （W1 剪贴板、W2 菜单快捷键、W3 富文本粘贴与拖拽、W4 打印/查找、W5 字体/
 滚动/IME、W6 后台节流对 SSE/WS——**无 backgroundThrottling 等价物（C1）**，
-判定标准见 todo companion §七）；性能基线对照 performance-baseline.md。
+判定标准见 todo companion §七）；性能基线对照 performance-baseline.md + **双端
+性能/产物体积验收协议**（companion §七：相对门/绝对预算/能力门三形态、注入式探针
+平移四场景、M5 双端同 tag 产物并排入库——.app/dmg/zip 体积目标 ≤ Electron × 0.75）。
 
 ### 8.6 测试策略汇总
 
