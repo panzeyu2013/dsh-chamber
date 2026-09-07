@@ -119,6 +119,21 @@
  *    上传执行闭包 syncGatewayChamberPluginsFor 经 ctx 注入（main 装配侧定义
  *    ——ready 自动 sync 与手动 re-entry 共用同一执行路径与注册参数，语义
  *    不分叉）。
+ *  Responsibilities relocated from main.ts (W-10 S8 local plugin + npm batch):
+ *  - H 组 5 个注册体：LOCAL_PLUGIN_LIST / NPM_SEARCH / LOCAL_PLUGIN_ADD_FILE /
+ *    LOCAL_PLUGIN_ADD / LOCAL_PLUGIN_REMOVE——按原 main.ts 顺序追加在 G 组之后
+ *    （installIpcHandlers ② 段）。注册体逐字随迁；编排纯模块直接 import
+ *    （plugin-sync：localPluginList / runLocalDshPlugin /
+ *    describeLocalPluginAddConfirmation / describeLocalPluginRemoveConfirmation；
+ *    @dsh-chamber/dsh-runtime isAllowedRegistryUrl——npm 搜索的 registry URL
+ *    白名单纪律注释随迁）。本地安装的宿主子进程编排（runtime writer fence 租约
+ *    + 启动门 + resolveActiveRuntime workspace 解析）经 ctx 注入叶
+ *    runLocalPluginMutation（main 装配侧定义——fence/启动门是装配侧运行时事务
+ *    状态；add 子进程 env 装配在 plugin-sync runLocalDshPlugin 纯模块内，W-14
+ *    关联 C-F12 纪律注释随原模块）。确认对话框复用 S6 edges 版 confirmPluginAction
+ *    助手（按钮序/取消默认/无窗文案逐字一致）、ADD_FILE 的无存活主窗预检 =
+ *    edges.mainWindowAlive、插件源 pick = edges.pickPluginSource。main 侧原
+ *    confirmPluginAction 闭包随本批删除（无剩余使用点）。
  *
  * 中文说明：自 main.ts 机械搬运的 Electron-free 业务核心（零缝阶段，行为零
  * 变化）；W-10 S1 起 IPC 注册点与 A 组 info+settings 处理器迁入本文件
@@ -133,7 +148,11 @@
  * 材料化 add/pick——编排纯模块直接 import，共享实例/目标闭包经 ctx，确认与
  * picker 经 edges 宿主腿，Pick 扩 appendLog）；S7 追加 G 组 gateway 插件 3
  * 注册体（sync/apply/materialize——编排纯模块直接 import，手动 sync 执行闭包
- * 经 ctx，确认/pick/窗口预检经 S6 edges 宿主腿）。
+ * 经 ctx，确认/pick/窗口预检经 S6 edges 宿主腿）；S8 追加 H 组本地插件 + npm
+ * 搜索 5 注册体（LOCAL_PLUGIN_LIST / NPM_SEARCH / LOCAL_PLUGIN_ADD_FILE /
+ * LOCAL_PLUGIN_ADD / LOCAL_PLUGIN_REMOVE——编排纯模块直接 import，本地安装
+ * 执行叶 runLocalPluginMutation 经 ctx，确认/无窗预检/pick 经 S6 edges 宿主腿；
+ * main 侧 confirmPluginAction 闭包随本批删除）。
  * HostEdges 其余边沿叶与双 flavor 属后续批。
  */
 
@@ -204,6 +223,7 @@ import {
 } from './notifications.ts';
 import type { NotificationSettingsLike } from './notifications.ts';
 import {
+  isAllowedRegistryUrl,
   readCurrentPointerState,
   readOverrideState,
   shouldInvalidate,
@@ -217,12 +237,15 @@ import {
 // seed/撤销路径与 F 组注册体必须共享同一实例（单写者/单飞语义不分叉）。
 import {
   applyPlugins,
+  describeLocalPluginAddConfirmation,
+  describeLocalPluginRemoveConfirmation,
   localPluginList,
   materializeAndAdd,
   materializeArchiveAndAdd,
   redactRemotePluginManifest,
   remotePluginList,
   resolveLocalMaterializeDirectory,
+  runLocalDshPlugin,
   runWithFinalOwnership,
   seedRemoteChamberHostPackages,
 } from './plugin-sync.ts';
@@ -1077,7 +1100,13 @@ export function clearBadgeIntentForQuit(applyNativeClear: () => void): void {
 //     手动 sync 上传执行闭包经 ctx.syncGatewayChamberPluginsFor（ready 自动
 //     sync 与手动 re-entry 共用同一执行路径，语义不分叉）；确认对话框复用 S6
 //     edges 版 confirmPluginAction 助手，pick 与窗口预检 = edges 宿主腿，见
-//     ShellAssemblyCtx）；
+//     ShellAssemblyCtx）+ H 组 5 个注册体（S8 批：LOCAL_PLUGIN_LIST /
+//     NPM_SEARCH / LOCAL_PLUGIN_ADD_FILE / LOCAL_PLUGIN_ADD / LOCAL_PLUGIN_REMOVE
+//     ——按原 main.ts 顺序追加在 G 组之后；编排纯模块 plugin-sync 直接 import
+//     （npm 搜索 registry URL 白名单 = @dsh-chamber/dsh-runtime
+//     isAllowedRegistryUrl），本地安装执行叶 runLocalPluginMutation 经 ctx（main
+//     装配侧 runtime writer fence 编排），确认/无窗预检/pick 经 S6 edges 宿主腿，
+//     见 ShellAssemblyCtx）；
 //   ③ 自举（占位——控制面 ready 后的启动/恢复 push 与余下 drain 挂点在 W-10
 //      后续批迁入，见 macos-swift-v1.md §四批 2）。
 // ---------------------------------------------------------------------------
@@ -1114,7 +1143,8 @@ export interface SshPluginTarget {
  *  （F 组注册体的共享现实例/闭包束）+ transportManager Pick 扩 appendLog
  *  （见字段注释）；S7（gateway 插件批）增 syncGatewayChamberPluginsFor 一字段
  *  （G 组手动 sync 的执行闭包——main 装配侧 ready 自动 sync 共用同一执行路径，
- *  见字段注释）。
+ *  见字段注释）；S8（本地插件批）增 runLocalPluginMutation 一字段（H 组本地插件
+ *  注册体的宿主执行叶——main 装配侧 runtime writer fence/启动门编排，见字段注释）。
  *  chamber
  *  settings 的内存 holder 仍归装配侧（main.ts 尚余 20+ 处直读点，随各自批迁入时
  *  holder 一并搬家）；core 侧一律经 settingsIO 读写，权威单一、行为与搬迁前一
@@ -1263,7 +1293,8 @@ export interface ShellAssemblyCtx {
   // plugin-tarball——classifyPluginPick/buildPluginTarball 为 S6 已 import）在
   // core 直接 import；注册参数读取（getGatewaySyncRegistration）与 ready 位复验
   // 在注册体侧。确认对话框复用上方 S6 edges 版 confirmPluginAction 助手（main
-  // 装配侧原 confirmPluginAction 闭包仍为 LOCAL_PLUGIN_ADD/REMOVE 保留）、
+  // 装配侧原 confirmPluginAction 闭包已随 W-10 S8 H 组删除——LOCAL_PLUGIN_ADD/
+  // REMOVE 迁出后无使用点）、
   // 无存活主窗预检 = edges.mainWindowAlive、插件源 pick = edges.pickPluginSource。
   /** 手动 gateway_plugin_sync 的上传执行闭包（main 装配侧定义——ready 注册自动
    *  sync（sm.onStatusChanged ready 边缘）与手动 re-entry 注册体共用同一执行
@@ -1276,10 +1307,26 @@ export interface ShellAssemblyCtx {
     headers: Record<string, string>,
     spkiPin: string | null,
   ): Promise<{ uploaded: boolean; skipped: boolean; failed?: boolean; error?: string } | null>
+  // —— W-10 S8（本地插件批）新增字段：H 组 3 个本地插件注册体（LOCAL_PLUGIN_ADD /
+  // LOCAL_PLUGIN_ADD_FILE / LOCAL_PLUGIN_REMOVE）的本地执行叶。编排纯模块
+  // （plugin-sync：runLocalDshPlugin 等）在 core 直接 import；本叶只承载宿主
+  // 编排——本体定义留 main 装配侧（runtime writer fence（RuntimeOperationFence）
+  // 租约 + runtimeStartBlocked/runtimeStartBlockedReason 启动门 +
+  // resolveActiveRuntime(runtimeBaseDir, builtinDshWorkspace) workspace 解析均归
+  // 装配侧：fence/启动门是装配侧运行时事务状态，不是 core 状态；workspace 只在
+  // fence 租约内解析，绝不跨运行时 swap 保留）。经 ctx 注入后注册体文本以原名
+  // 逐字保留 runLocalPluginMutation 调用（owner + mutate(dshWorkspace) 形状与
+  // 搬迁前一致）；mutate 内实际子进程执行 = plugin-sync runLocalDshPlugin（add
+  // 子进程 env 装配/白名单在纯模块内，W-14 关联 C-F12 纪律注释随原模块）。
+  runLocalPluginMutation<T>(
+    owner: string,
+    mutate: (dshWorkspace: string) => Promise<T>,
+  ): Promise<T | { ok: false; error: string }>
 }
 
 /** 装配 shell IPC 面（W-10 S1 A 组 + S2 B 组 + S3 C 组 + S4 D 组 + S5 E 组 +
- *  S6 F 组 + S7 G 组注册体与随迁辅助；各组注册顺序 = 原 main.ts 顺序）。edges
+ *  S6 F 组 + S7 G 组 + S8 H 组注册体与随迁辅助；各组注册顺序 = 原 main.ts
+ *  顺序）。edges
  *  参数以 Pick 收窄到本批实际调用的成员（createElectronEdges 返回同形超集）；
  *  后续批实现新成员时同步扩宽两侧。
  *  调用点纪律：whenReady 内、createMainWindow 之前（窗口加载前注册完毕）——
@@ -1350,6 +1397,10 @@ export function installIpcHandlers(deps: {
       gitWorktreeLiveProbeFor,
     },
     syncGatewayChamberPluginsFor,
+    // W-10 S8 另增 H 组字段：runLocalPluginMutation（main 装配侧执行叶——runtime
+    // writer fence 租约/启动门/workspace 解析归装配侧；H 组本地插件注册体经 ctx
+    // 调用同一执行路径，文本以原名逐字保留，语义不分叉）。
+    runLocalPluginMutation,
   } = deps.ctx
 
   // ① edges 回灌订阅段（S2 转实）：OS 唤醒与主窗口 'show' 的事件源语义自 main.ts
@@ -2458,8 +2509,8 @@ export function installIpcHandlers(deps: {
   // 注册参数，语义不分叉）。确认对话框 = 上方 S6 edges 版 confirmPluginAction
   // 助手（单参 copy；无存活主窗 → 'native confirmation unavailable'；response
   // ===1（'继续'）→ ok；否则 cancelled；异常 → loud——语义与 main 闭包逐字一
-  // 致；main 侧原 confirmPluginAction 闭包仍为 LOCAL_PLUGIN_ADD/REMOVE 保留，
-  // 不随迁——本组 apply 注册体改经本助手为唯一文本差）；无存活主窗预检 =
+  // 致；main 侧原 confirmPluginAction 闭包已随 W-10 S8 H 组删除（LOCAL_PLUGIN_ADD/
+  // REMOVE 迁出后无使用点）——本组与 H 组注册体同经本助手）；无存活主窗预检 =
   // edges.mainWindowAlive、插件源 pick = edges.pickPluginSource（宿主腿均在
   // electron-edges.ts S6 实现）。
 
@@ -2530,8 +2581,8 @@ export function installIpcHandlers(deps: {
     // cancel — same convention as the local plugin actions). W-10 S7: 经上方
     // S6 edges 版 confirmPluginAction 助手（原 main.ts 调用为
     // confirmPluginAction(mainWindow, …) 双参闭包——宿主腿相同（showMessage +
-    // 当前主窗为父窗 sheet）、按钮序/取消默认一致，行为零改；main 侧闭包仍为
-    // LOCAL_PLUGIN_ADD/REMOVE 保留）。
+    // 当前主窗为父窗 sheet）、按钮序/取消默认一致，行为零改；main 侧闭包已随
+    // W-10 S8 H 组删除（LOCAL_PLUGIN_ADD/REMOVE 迁出后无使用点）。
     const confirm = await confirmPluginAction(buildApplyConfirmMessage({
       targetLabel: instance.label ?? null,
       targetId: id,
@@ -2675,6 +2726,175 @@ export function installIpcHandlers(deps: {
       // already specific — keep it loud and sanitized.
       return { ok: false as const, error: `gateway plugin materialize failed: ${sanitizeErrorText(describeUnknownError(error))}` };
     }
+  });
+
+  // —— H 组（S8 批；W-10 S8 施工图第 1 项）——
+  // 本地插件 + npm 搜索 5 注册体（LOCAL_PLUGIN_LIST / NPM_SEARCH /
+  // LOCAL_PLUGIN_ADD_FILE / LOCAL_PLUGIN_ADD / LOCAL_PLUGIN_REMOVE——按原
+  // main.ts 顺序紧接 G 组追加；注册体自 main.ts 逐字迁入，全零 Electron，
+  // trustedIpc 围栏由装配侧注入 registrar 包装）。编排纯模块直接 import
+  // （plugin-sync：localPluginList / runLocalDshPlugin /
+  // describeLocalPluginAddConfirmation / describeLocalPluginRemoveConfirmation；
+  // plugin-tarball classifyPluginPick 为 S6 已 import；npm 搜索的 registry URL
+  // 白名单 = @dsh-chamber/dsh-runtime isAllowedRegistryUrl——§6 R3-5 P2-6
+  // 纪律注释随迁，见 NPM_SEARCH 注册体）。本地安装的宿主子进程编排
+  // （runLocalPluginMutation：runtime writer fence 租约 + 启动门 +
+  // resolveActiveRuntime workspace 解析）经 ctx 注入叶——本体留 main 装配侧
+  // （fence/启动门是装配侧运行时事务状态；add 子进程 env 装配在 plugin-sync
+  // runLocalDshPlugin 纯模块内，W-14 关联 C-F12 纪律注释随原模块），core 注册体
+  // 文本以原名逐字调用。确认对话框 = 上方 S6 edges 版 confirmPluginAction 助手
+  // （单参 copy；无存活主窗 → 'native confirmation unavailable'；response === 1
+  // （'继续'）→ ok；否则 cancelled——按钮序/取消默认/无窗文案与 main 闭包逐字
+  // 一致）；ADD_FILE 的无存活主窗预检 = edges.mainWindowAlive、插件源 pick =
+  // edges.pickPluginSource（宿主腿均在 electron-edges.ts S6 实现）。main 侧原
+  // confirmPluginAction 闭包随本批删除（LOCAL_PLUGIN_ADD/REMOVE 迁出后无使用点）。
+
+  // Local manifest read (design 13 M4 local leg): the authoritative local dsh
+  // home manifest (<localDshHome>/… package.json 依赖投影 + bundle 激活层) —
+  // localPluginList is a pure plugin-sync read of the same home the mutation
+  // leaf writes; loud {error} on any unreadable/corrupt manifest, never a
+  // silent empty success.
+  deps.ipc.handle(IPC_CHANNELS.LOCAL_PLUGIN_LIST, () => {
+    try {
+      return { ok: true, manifest: localPluginList(localDshHome) };
+    } catch (error) {
+      return { ok: false, error: describeUnknownError(error) };
+    }
+  });
+  // npm search (design 13 M2+M3 contract B): BEST-EFFORT npm registry search —
+  // a main-process fetch (the renderer stays on 127.0.0.1), bounded in time and
+  // body size, refusing any non-whitelisted URL/redirect loudly. Always a loud
+  // {ok:false} on refusal/transport/parse failure — never a silent empty
+  // success, never an unhandled rejection. Semantics comments carried verbatim
+  // from main.ts with the registration body.
+  deps.ipc.handle(IPC_CHANNELS.NPM_SEARCH, async (payload: unknown) => {
+    const { query } = payload as { query: unknown };
+    if (typeof query !== 'string' || query.trim() === '') return { ok: false, error: 'empty search query' };
+    const text = query.trim();
+    if (text.length > 256) return { ok: false, error: 'search query is too long' };
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5_000);
+    timer.unref?.();
+    try {
+      const searchUrl = new URL(`https://registry.npmjs.org/-/v1/search?text=${encodeURIComponent(text)}&size=20`);
+      // §6 R3-5 P2-6: the search endpoint shares the registry URL whitelist
+      // (origin + `/-/v1/search` path shape), never a raw hardcoded fetch.
+      if (!isAllowedRegistryUrl(searchUrl.toString())) {
+        return { ok: false, error: 'search URL is not whitelisted' };
+      }
+      // redirect: 'manual' — the same per-hop discipline as
+      // fetchRegistryResponse: a redirected search answer is NOT accepted
+      // from an arbitrary origin, so any 3xx is an explicit failure here.
+      const response = await fetch(searchUrl, {
+        signal: controller.signal,
+        redirect: 'manual',
+      });
+      if (!response.ok) return { ok: false, error: `npm search failed (HTTP ${response.status})` };
+      // Bounded read: an oversized or endless search response must never
+      // accumulate in main-process memory.
+      const reader = response.body?.getReader();
+      let raw = '';
+      if (reader !== undefined) {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          raw += Buffer.from(value).toString('utf8');
+          if (raw.length > NPM_SEARCH_MAX_BODY_BYTES) {
+            await reader.cancel().catch(() => undefined);
+            return { ok: false, error: 'npm search response is too large' };
+          }
+        }
+      }
+      let data: { objects?: Array<{ package?: { name?: unknown; version?: unknown; description?: unknown } }> };
+      try {
+        data = JSON.parse(raw) as { objects?: Array<{ package?: { name?: unknown; version?: unknown; description?: unknown } }> };
+      } catch {
+        return { ok: false, error: 'npm search returned malformed JSON' };
+      }
+      const objects = Array.isArray(data.objects) ? data.objects : [];
+      const packages = objects
+        .map(entry => entry.package)
+        .filter((pkg): pkg is { name: string; version: unknown; description: unknown } => pkg !== undefined && typeof pkg.name === 'string')
+        .map(pkg => ({
+          name: pkg.name,
+          version: typeof pkg.version === 'string' ? pkg.version : '',
+          ...(typeof pkg.description === 'string' ? { description: pkg.description } : {}),
+        }));
+      return { ok: true, packages };
+    } catch (error) {
+      return { ok: false, error: `npm search failed: ${describeUnknownError(error)}` };
+    } finally {
+      clearTimeout(timer);
+    }
+  });
+
+  deps.ipc.handle(IPC_CHANNELS.LOCAL_PLUGIN_ADD_FILE, async () => {
+    if (!deps.edges.mainWindowAlive()) return { ok: false, error: 'no main window' };
+    // Local same-machine install (design 13 §5.8 pick-only, design 21
+    // §10 defect ① fix + archive-pick): the path was chosen through the
+    // MAIN-process picker — a plugin SOURCE FOLDER or a ready .tgz plugin
+    // archive — so the `file:` spec is main-chosen; pass allowFileSpec so
+    // runLocalDshPlugin admits it through isAllowedLocalFileSpec (absolute
+    // POSIX/Windows-drive/UNC path, no control characters, ≤ 4096 chars —
+    // nothing beyond the existing whitelist is relaxed). Every
+    // renderer-submitted spec channel (LOCAL_PLUGIN_ADD below) still
+    // refuses `file:` outright; no filesystem privilege boundary widens.
+    const picked = await deps.edges.pickPluginSource();
+    if (picked.status === 'cancelled') return { ok: true, cancelled: true };
+    // Structural pre-check (extension + archive cap + parseable manifest);
+    // the local dsh CLI remains the authority for name/version semantics,
+    // exactly as with folder picks.
+    const classified = classifyPluginPick(picked.path);
+    if (!classified.ok) return { ok: false, error: sanitizeErrorText(classified.error) };
+    return runLocalPluginMutation('plugin:add-file', async (dshWorkspace) => {
+      // design 21 §10 缺陷① fix (plan 24 小项④): the main-process picker
+      // IS the sanctioned file: source — pass the capability flag so
+      // the picked absolute path passes runLocalDshPlugin's gate (without it
+      // every file: pick was refused as an invalid add spec).
+      const result = await runLocalDshPlugin(dshWorkspace, localDshHome, 'add', `file:${picked.path}`, { allowFileSpec: true });
+      return result.ok ? { ok: true } : { ok: false, error: result.error ?? 'local add failed' };
+    });
+  });
+  deps.ipc.handle(IPC_CHANNELS.LOCAL_PLUGIN_ADD, async (payload: unknown) => {
+    const { spec: specArg } = payload as { spec: string };
+    // `file:` imports must go through the main-process local import picker
+    // (desktop_local_plugin_add_file — a folder or a .tgz archive, design 21
+    // §10 ⑧); this spec channel only accepts registry specs so a compromised
+    // renderer can never drive the local install surface to an arbitrary
+    // path (design 13 §5.8 hardening).
+    if (typeof specArg === 'string' && specArg.startsWith('file:')) {
+      return { ok: false, error: 'local file imports must use the local import picker' };
+    }
+    // User confirmation (design 09 §4 v1 mitigation): installing a registry
+    // package into the LOCAL profile creates a persistent execution surface
+    // on the next local boot — never a silent script action.
+    // W-10 S8: 经上方 S6 edges 版 confirmPluginAction 助手（原 main.ts 调用为
+    // confirmPluginAction(mainWindow, …) 双参闭包——宿主腿相同（showMessage +
+    // 当前主窗为父窗 sheet）、按钮序/取消默认一致，行为零改；main 侧闭包已随
+    // 本批删除——无剩余使用点）。
+    const confirm = await confirmPluginAction(describeLocalPluginAddConfirmation(specArg));
+    if ('cancelled' in confirm) return { ok: true, cancelled: true };
+    if (!confirm.ok) return { ok: false, error: confirm.error };
+    return runLocalPluginMutation('plugin:add', async (dshWorkspace) => {
+      const result = await runLocalDshPlugin(dshWorkspace, localDshHome, 'add', specArg);
+      return result.ok ? { ok: true } : { ok: false, error: result.error ?? 'local add failed' };
+    });
+  });
+  deps.ipc.handle(IPC_CHANNELS.LOCAL_PLUGIN_REMOVE, async (payload: unknown) => {
+    const { name } = payload as { name: unknown };
+    if (typeof name !== 'string' || name === '') return { ok: false, error: 'invalid plugin name' };
+    // User confirmation (design 09 §4 v1 mitigation): removal is destructive
+    // — a page script must not be able to wipe the local profile silently.
+    // W-10 S8: 经上方 S6 edges 版 confirmPluginAction 助手（原 main.ts 调用为
+    // confirmPluginAction(mainWindow, …) 双参闭包——宿主腿相同、按钮序/取消默认
+    // 一致，行为零改）。
+    const confirm = await confirmPluginAction(describeLocalPluginRemoveConfirmation(name));
+    if ('cancelled' in confirm) return { ok: true, cancelled: true };
+    if (!confirm.ok) return { ok: false, error: confirm.error };
+    return runLocalPluginMutation('plugin:remove', async (dshWorkspace) => {
+      const result = await runLocalDshPlugin(dshWorkspace, localDshHome, 'remove', name);
+      return result.ok ? { ok: true } : { ok: false, error: result.error ?? 'local remove failed' };
+    });
   });
 
   // ③ 自举（W-10 后续批占位：控制面 ready 后的启动/恢复 push、余下 drain 挂点
