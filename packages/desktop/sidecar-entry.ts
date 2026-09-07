@@ -264,17 +264,24 @@ async function boot(): Promise<void> {
   // DSH_SIDECAR_LEGACY_START=1 时用旧 dev 快捷门（直读 --dsh-path、无探针），
   // 供离线 dev 循环（POC dev；不进入任何产品路径）。
   const legacyStart = process.env.DSH_SIDECAR_LEGACY_START === '1'
-  const spawnGates = legacyStart
+  type SpawnGateShape = {
+    getDshWorkspacePath(): string
+    canStartLocal(): { ok: true } | { ok: false; reason: string }
+    canExposeLocal(): boolean
+  }
+  const spawnGates: SpawnGateShape = legacyStart
     ? {
         getDshWorkspacePath: () => {
           if (args.dshPath !== null) return args.dshPath
           throw new Error('dsh workspace not resolved (--dsh-path 未提供)')
         },
         canStartLocal: () =>
-          args.dshPath !== null ? { ok: true } : { ok: false, reason: '--dsh-path 未提供' },
+          args.dshPath !== null
+            ? { ok: true }
+            : { ok: false, reason: '--dsh-path 未提供' },
         canExposeLocal: () => true,
       }
-    : headless!.localSpawnGates
+    : (headless!.localSpawnGates as unknown as SpawnGateShape)
   const controlPlane = createControlPlane({
     port: args.port ?? 17500,
     stateDir: path.join(args.userDataDir, 'state'),
