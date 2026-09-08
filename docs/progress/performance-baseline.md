@@ -215,4 +215,22 @@ disk-walk-after-t3}.json（14 个，全部入库于 scripts/perf/data/，.gitign
 通道撤回而暂停，直至该源重开（冷 boot 首报重新播种）；60s 安全窗 +
 RETAINED_HIDDEN_VIEWS=1 限制损失面。被回收源侧栏聚合降级到既有 30s unary
 兜底（05 §2.3），任务完成检测依赖其 running 位维持可见窗内刷新。
+## 11. renderer 资源字节快照（代码面，非时序实测）
 
+本文档的时序/长任务各节只记录运行指标；首屏关键路径的**构建字节**由
+`packages/renderer/scripts/check-chunk-budgets.mjs` 在每个 renderer build 尾
+度量（阈值见脚本头注），本次构建快照写入 `packages/desktop/dist/web/
+perf-sizes.json`（vite outDir，会被下次 build 覆写——本小节只存档代表点，
+raw bytes；gzip 以 perf-sizes.json 为准，node gzipSync level-6 自洽口径）。
+
+代表点（审计前 = C2 完成后、C3/C4 前 dist；终版 = C3/C4 落地后 dist）：
+
+| 指标（raw） | 审计前 | C3+C4 后 | Δ |
+|---|---|---|---|
+| 主图（App 挂载前求值，main 静态图合计） | 1,403,568 | 1,185,439 | −218,129 |
+| chamber 复合入口（boot 内 prefetch 求值） | 1,967,664 | 1,790,603 | −177,061 |
+| 关键路径 JS 合计（上两行） | 3,371,232 | 2,976,042 | −395,190 |
+| head render-blocking CSS | 298,998 | 227,654 | −71,344 |
+
+代码面语义（平台词偏差 C3 / settings 簇 deferred C4）见 STATUS.md 相应条目；
+vendor 栈仍经内核 onboarding 静态链留在主图（部分收益，剩余面待内核懒化）。

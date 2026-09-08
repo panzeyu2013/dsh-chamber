@@ -25,6 +25,19 @@
  * word `@deepseek-ai/dsh-client-store` (the shared observable/store engine the
  * client ui-* packages import), adopted here in the same position. The store
  * is a shell-shared singleton like cordis — never a host-graph row.
+ *
+ * C3 (2026-09 性能审计, 偏差登记): `@deepseek-ai/dsh-client-ui-primitives` is
+ * REMOVED from this list — upstream tsdown.client.ts still externalizes it as
+ * a platform word, but the chamber no longer seeds it: its wholesale
+ * namespace import (seed.ts) forced the whole primitives package (markdown /
+ * highlight / block renderers) into the main-graph eval that precedes the App
+ * mount. The word's synchronous require edges are now answered by the
+ * composite's covered factory (chamber-entry.ts COVERED_FACTORIES), with the
+ * ordering guarantee that the chamber entry evaluates BEFORE any extra bundle
+ * loads (renderer shell.ts "C3 gate", host-graph.ts `awaitBeforeLoad`); the
+ * residual prefetch-failure race degrades loud per the shell comments. Every
+ * other word below stays seed-answered as before. A future upstream
+ * PLATFORM_MODULES change must be mirrored here (and in seed.ts) consciously.
  */
 
 /** The module specifiers the shell shares into the frozen module table. */
@@ -32,7 +45,6 @@ export const PLATFORM_MODULES = [
   'react', 'react/jsx-runtime', 'react-dom', 'react-dom/client', '@deepseek-ai/cordis',
   '@deepseek-ai/dsh-client-store',
   '@deepseek-ai/dsh-client-ui-slots',
-  '@deepseek-ai/dsh-client-ui-primitives',
 ] as const
 
 /** Client-bundle specifiers whose factories the parser preloads before the shell starts. */

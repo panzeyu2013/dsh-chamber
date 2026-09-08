@@ -63,8 +63,21 @@ declare module '@deepseek-ai/dsh-client-web' {
    * registration sink). shell.ts calls this BEFORE preloading any host-graph
    * bundle so the extra bundles' scripts always evaluate against an installed
    * sink; idempotent, run() adopts the same instance.
+   *
+   * C3 (2026-09 性能审计): the return face mirrors the slice shell.ts now
+   * consumes — `manifest` (the parsed boot graph rows) and `prefetch(id)` (the
+   * kernel's immediately-tier preload path, module-cache deduped). Single
+   * source of truth for the shape: packages/dsh-client-web/src/boot.ts
+   * (ensureWebModuleSystem / prefetchImmediateTier). Drift watch: this ambient
+   * shadows the real package types, so a signature change on the real
+   * ClientModuleSystem is NOT caught by tsc — keep the mirror in lockstep
+   * with the copy's boot.ts and the test fixture
+   * (test-fixtures/dsh-client-web.mjs / .d.mts).
    */
-  export function ensureWebModuleSystem(seams?: BootSeams): unknown
+  export function ensureWebModuleSystem(seams?: BootSeams): {
+    manifest: { plugins: ReadonlyArray<{ id: string; immediately?: boolean }> }
+    prefetch(id: string): Promise<void>
+  }
   /** The web shell kernel consumed by shell.ts (boot.ts). */
   export class AppWebEntry {
     constructor(el: HTMLElement, options?: AppWebEntryOptions)
@@ -85,6 +98,10 @@ declare module '@deepseek-ai/dsh-client-connection/client'
 // the ui-session / ui-chat / ui-approval conversation families are first-screen
 // plugins (chamber-entry.ts import list + COVERED_FACTORIES).
 declare module '@deepseek-ai/dsh-client-store'
+// C3 (2026-09 性能审计): the ui-primitives platform word imported BARE by
+// chamber-entry.ts (covered factory, never ctx.plugin — see the seed.ts /
+// platform.ts deviation notes in dsh-client-web).
+declare module '@deepseek-ai/dsh-client-ui-primitives'
 declare module '@deepseek-ai/dsh-api-session-controller/client'
 declare module '@deepseek-ai/dsh-api-workspace-controller/client'
 declare module '@deepseek-ai/dsh-client-locale/client'

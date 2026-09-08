@@ -110,3 +110,41 @@ test('event-side retirement rejects old reports before a replacement producer re
   unsubscribeRuntime()
   unsubscribeSnapshot()
 })
+
+test('open-session outcomes fan out to subscribers and unsubscribing stops delivery', () => {
+  const events: string[] = []
+  const unsubscribe = chamberBridge.onOpenSessionOutcome((outcome) => {
+    events.push(`${outcome.sourceId}/${outcome.sessionId}/${outcome.message ?? 'ok'}`)
+  })
+  chamberBridge.reportOpenSessionOutcome({ sourceId: 'ssh-a', sessionId: 's1' })
+  chamberBridge.reportOpenSessionOutcome({ sourceId: 'ssh-a', sessionId: 's1', message: '打开会话失败：boom' })
+  chamberBridge.reportOpenSessionOutcome({ sourceId: 'local', sessionId: 's2', message: '等待超时' })
+  assert.deepEqual(events, [
+    'ssh-a/s1/ok',
+    'ssh-a/s1/打开会话失败：boom',
+    'local/s2/等待超时',
+  ])
+  unsubscribe()
+  chamberBridge.reportOpenSessionOutcome({ sourceId: 'ssh-a', sessionId: 's1' })
+  assert.deepEqual(events, [
+    'ssh-a/s1/ok',
+    'ssh-a/s1/打开会话失败：boom',
+    'local/s2/等待超时',
+  ])
+})
+
+test('session-list refresh requests broadcast to every subscriber with the source id', () => {
+  const received: string[] = []
+  const first = chamberBridge.onRequestSessionListRefresh(sourceId => { received.push(`a:${sourceId}`) })
+  const second = chamberBridge.onRequestSessionListRefresh(sourceId => { received.push(`b:${sourceId}`) })
+  chamberBridge.requestSessionListRefresh('local')
+  chamberBridge.requestSessionListRefresh('ssh-dev')
+  assert.deepEqual(received, ['a:local', 'b:local', 'a:ssh-dev', 'b:ssh-dev'])
+  first()
+  chamberBridge.requestSessionListRefresh('local')
+  assert.deepEqual(received, ['a:local', 'b:local', 'a:ssh-dev', 'b:ssh-dev', 'b:local'])
+  // Unsubscribing the last subscriber must not throw and the request is a no-op.
+  second()
+  chamberBridge.requestSessionListRefresh('gateway-west')
+  assert.deepEqual(received, ['a:local', 'b:local', 'a:ssh-dev', 'b:ssh-dev', 'b:local'])
+})

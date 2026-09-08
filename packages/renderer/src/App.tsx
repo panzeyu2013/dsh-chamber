@@ -21,8 +21,9 @@
  *   供侧边栏插件消费；onOpenSession 通道驱动会话打开。
  *
  * 会话打开请求来自侧边栏插件（经 chamberBridge，05 §3）：onOpenSession
- * 通道驱动 openSession 切 shell 并分发（插件 requestOpenSession 为单向
- * 通道，失败无处回传，App 侧 console.error 即可见）。
+ * 通道驱动 openSession 切 shell 并分发；打开终态（成功或预算耗尽失败）经
+ * reportOpenSessionOutcome 回报每个侧边栏 shell——失败落在被点击的会话
+ * 行内呈现，不再是单向通道的 console-only 盲区（2026-09 修订）。
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import api, { type ConnectionSummary, type HealthResponse } from './api.ts'
@@ -75,11 +76,13 @@ import {
   isFallbackDerivedView,
   isSnapshotStale,
   planAggregateRefreshes,
+  planSessionListRefresh,
   refreshPullStillCurrent,
   remoteRetiredSourceIds,
   retireSelectedSource,
   shouldRebaselineFallbackView,
   shouldReconnectStaleMounted,
+  shouldRequestSessionListRefresh,
   shouldRetainPushedAggregate,
   withoutRemovedSourceIds,
   withoutRemovedSourceKeys,
@@ -99,6 +102,7 @@ import {
   VIEW_RECLAIM_TICK_MS,
 } from './retention.ts'
 import InstanceView from './components/InstanceView.tsx'
+import { PERF_MARKS, perfMark } from './perf-marks.ts'
 
 /**
  * Staleness watchdog cadence for aggregate snapshots. Also the staleness
@@ -119,6 +123,17 @@ const AGGREGATE_RECONNECT_BACKOFF_MS = 60_000
  * freeze within that bound (review M2: honest idle cadence, halved vs the
  * original 60s). The unary pull keeps its own 30s cadence untouched. */
 const AGGREGATE_RECONNECT_STALE_MS = 120_000
+/** Re-request floor for session-list refresh dispatch (design 24 §20): a
+ *  refresh re-runs the OFFICIAL session.list of the mounted ctx; while ghost
+ *  rows of purged sessions stay pending, requests are floored to one per
+ *  coalescing window per source (the official refreshList single-flight bounds
+ *  concurrency; this bounds sequential churn when the refresh keeps failing on
+ *  a busy source). Suppressed dispatches never lose the ids — they stay in the
+ *  per-source pending set and re-evaluate on the next push. The archive-manager
+ *  dialog additionally requests one on every purge settle (immediate path,
+ *  not stamped here — deliberate cross-package decoupling, §20 notes the
+ *  overlap). */
+const SESSION_LIST_REFRESH_COALESCE_MS = 5_000
 /** Bounded wave over whatever edge-triggered refresh set a poll produces. */
 const AGGREGATE_POLL_CONCURRENCY = 4
 /** First-screen retry: a transient aggregate snapshot failure (0.1.2 wire:
@@ -477,6 +492,20 @@ export default function App() {
   // mounted source (AGGREGATE_RECONNECT_BACKOFF_MS). Reaped with the source
   // like snapshotAtRef (a same-id re-add must start a fresh backoff window).
   const lastReconnectAtRef = useRef<Record<string, number>>({})
+  // Last session-list refresh request timestamp per source (design 24 §20,
+  // ms epoch; absent = never requested). Floors the re-request cadence of the
+  // ghost-row convergence machine below (SESSION_LIST_REFRESH_COALESCE_MS): a
+  // refresh re-runs the OFFICIAL session.list of the mounted ctx, and a
+  // failing refresh on a busy source must not stack RPCs per push. Reaped with
+  // the source like lastReconnectAtRef (same-id re-add starts a fresh window).
+  const sessionListRefreshAtRef = useRef<Record<string, number>>({})
+  // Un-converged ghost-row ids per source (design 24 §20): archived ids removed
+  // by a purge whose rows are STILL listed in the latest mounted push of this
+  // source (rows linger in the official client summaries until a session-list
+  // refresh drops them). Maintained by planSessionListRefresh on every push;
+  // empty/absent = converged (rows gone or never listed). Reaped with the
+  // source like the stamp map above (same-id re-add starts clean).
+  const sessionListRefreshPendingRef = useRef<Record<string, string[]>>({})
   // Synchronous connection-generation edge memory. A mounted producer may
   // suppress an identical post-reconnect snapshot, while the App has already
   // replaced its aggregate with not-connected; one authoritative pull on each
@@ -663,6 +692,19 @@ export default function App() {
     for (const id of Object.keys(lastReconnectAtRef.current)) {
       if (!servers.some(server => server.id === id)) {
         delete lastReconnectAtRef.current[id]
+      }
+    }
+    // Same lockstep for the session-list-refresh coalescing stamps and the
+    // ghost-row convergence state (design 24 §20): a same-id re-add must start
+    // a fresh request window and a fresh pending set.
+    for (const id of Object.keys(sessionListRefreshAtRef.current)) {
+      if (!servers.some(server => server.id === id)) {
+        delete sessionListRefreshAtRef.current[id]
+      }
+    }
+    for (const id of Object.keys(sessionListRefreshPendingRef.current)) {
+      if (!servers.some(server => server.id === id)) {
+        delete sessionListRefreshPendingRef.current[id]
       }
     }
     setPluginDiagnostics(prev => {
@@ -1330,6 +1372,23 @@ export default function App() {
     for (const timer of aggregateRetryTimersRef.current.values()) clearTimeout(timer)
     aggregateRetryTimersRef.current.clear()
   }, [])
+
+  // C2 perf 埋点（User Timing；标记注册表见 perf-marks.ts）：页面壳挂载与
+  // 本地实例 ready 首达。settle/boot-failed 由 shell.ts 在 settle 返回点
+  // 统一打点，本组件不再重复。
+  const appMountMarkedRef = useRef(false)
+  useEffect(() => {
+    if (appMountMarkedRef.current) return
+    appMountMarkedRef.current = true
+    perfMark(PERF_MARKS.appMount)
+  }, [])
+  const firstLocalReadyMarkedRef = useRef(false)
+  useEffect(() => {
+    if (health?.dsh?.status !== 'ready' || firstLocalReadyMarkedRef.current) return
+    firstLocalReadyMarkedRef.current = true
+    perfMark(PERF_MARKS.appLocalReady)
+  }, [health])
+
   useEffect(() => {
     let cancelled = false
 
@@ -1910,6 +1969,8 @@ export default function App() {
 
   /** Shell 终态上报（InstanceView onStateChange）：失败覆盖层读取活动视图的 error。 */
   const handleShellState = useCallback((instanceId: string, state: ShellState) => {
+    // 注：settle/boot-failed 的 perf 标记由 shell.ts 在 settle 返回点统一打点
+    // （本回调只消费状态，避免同名双标记污染 trace）。
     setShellStates(prev => (prev[instanceId] === state ? prev : { ...prev, [instanceId]: state }))
   }, [])
 
@@ -2134,12 +2195,19 @@ export default function App() {
     reportNotificationAckFailure,
   ])
 
-  /** 侧边栏插件打开请求（05 §3）：mount 订阅、卸载取消；单向通道，失败仅 console.error。 */
+  /** 侧边栏插件打开请求（05 §3）：mount 订阅、卸载取消。请求通道单向
+   *  （插件→App）；打开终态经 outcome 回报（App→每个 sidebar shell，
+   *   行内错误呈现），失败同时 console.error。 */
   useEffect(() => {
     const unsubscribe = chamberBridge.onOpenSession(({ sourceId, sessionId }) => {
-      void openSession(sourceId, sessionId).catch((err) => {
-        console.error(`[renderer] openSession failed (${sourceId}/${sessionId}):`, err)
-      })
+      void openSession(sourceId, sessionId).then(
+        () => { chamberBridge.reportOpenSessionOutcome({ sourceId, sessionId }) },
+        (err) => {
+          const message = errorMessage(err)
+          console.error(`[renderer] openSession failed (${sourceId}/${sessionId}):`, err)
+          chamberBridge.reportOpenSessionOutcome({ sourceId, sessionId, message })
+        },
+      )
     })
     return unsubscribe
   }, [openSession])
@@ -2351,6 +2419,43 @@ export default function App() {
       // that notification overwrite the authoritative not-connected row;
       // the next ready edge performs one unary refresh.
       if (!readyAggregateSourcesRef.current.has(sourceId)) return
+      // design 24 §20 (archive-cleanup convergence): an archived-set SHRINK
+      // in a mounted push is the client-observable "a purge completed" signal
+      // (no unarchive wire — only the cleanup purge removes set members). The
+      // purged sessions' rows may still linger in the official client session
+      // summaries of this mounted ctx (refreshed only on connection
+      // generations; host purge events are documented no-ops), so once the set
+      // stops covering them they would render as ordinary rows and open with
+      // session/not-found. Convergence state machine (planSessionListRefresh),
+      // evaluated on EVERY ready push: removed ids still listed as rows become
+      // pending ghosts; the source's ctx is asked to re-run its OFFICIAL
+      // session-list refresh (sidebar-plugin subscriber — reconciles the
+      // summaries against the server corpus and drops the deleted rows); the
+      // resulting producer push then clears the pending set. A refresh that
+      // fails transiently is re-requested on a later push (cadence floored by
+      // SESSION_LIST_REFRESH_COALESCE_MS so a failing refresh on a busy source
+      // cannot stack RPCs); a suppressed dispatch never loses the ids — they
+      // stay pending and re-evaluate on the next push. Quiet sources with no
+      // further push self-hide within one watchdog cycle (the 30s merge pull
+      // replaces the aggregate's session rows with the clean unary list).
+      const decision = planSessionListRefresh(
+        watchdogAggregatesRef.current[sourceId],
+        snapshot,
+        sessionListRefreshPendingRef.current[sourceId],
+      )
+      if (decision.pending.length > 0) sessionListRefreshPendingRef.current[sourceId] = decision.pending
+      else delete sessionListRefreshPendingRef.current[sourceId]
+      if (decision.request) {
+        const now = Date.now()
+        if (shouldRequestSessionListRefresh(
+          sessionListRefreshAtRef.current[sourceId],
+          now,
+          SESSION_LIST_REFRESH_COALESCE_MS,
+        )) {
+          sessionListRefreshAtRef.current[sourceId] = now
+          chamberBridge.requestSessionListRefresh(sourceId)
+        }
+      }
       setAggregates(prev => {
         const current = prev[sourceId]
         if (current !== undefined && current.state === 'ok'

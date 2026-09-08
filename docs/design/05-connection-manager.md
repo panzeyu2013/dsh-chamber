@@ -102,6 +102,12 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
 
 - **点击会话行**（任意来源）→ `chamberBridge.requestOpenSession(sourceId,
   sessionId)` → 桥接层切到该来源的 shell（若未 boot 先入队）并打开会话。
+  打开尝试 settle 后（成功，或 dispatch 预算耗尽失败——§4 两种终态报告之
+  一），App 层经 `chamberBridge.reportOpenSessionOutcome` 回报每个侧边栏
+  shell：失败文案在目标会话行内呈现（复用 session action-error 槽，低优先
+  级；10s 自动消退；再次点击/后续成功即提前清除）。2026-09 修订——此前
+  requestOpenSession 是单向通道，失败仅 console.error，用户切换视图后看到
+  的是未选中会话的目标服务器且无任何可见错误。
 - **点击来源分组头**（非当前来源）= 切换活动来源视图：
   `chamberBridge.requestActivateSource(sourceId)` → App 层仅切换该来源
   shell（N-ctx），不打开会话。
@@ -202,8 +208,12 @@ export const chamberBridge: {
   publish(servers: ChamberServerAggregate[]): void        // App 层调用
   requestOpenSession(sourceId: string, sessionId: string): void
   onOpenSession(listener: (req: OpenSessionRequest) => void): () => void
+  reportOpenSessionOutcome(outcome: OpenSessionOutcome): void  // App 层调用：一次打开尝试的终态回报（失败带文案）
+  onOpenSessionOutcome(listener: (outcome: OpenSessionOutcome) => void): () => void  // 侧边栏订阅：失败行内呈现/成功清残留
   requestRefresh(sourceId: string): void                  // 侧边栏动作成功后调用
   onRefresh(listener: (sourceId: string) => void): () => void  // App 层订阅
+  requestSessionListRefresh(sourceId: string): void       // design 24 §20：请求该来源挂载 ctx 重跑官方 session.list（purge 幽灵行收敛）
+  onRequestSessionListRefresh(listener: (sourceId: string) => void): () => void // 各挂载 ctx 的 sidebar 插件订阅；仅 chamberInstanceId === sourceId 者动作
   requestActivateSource(sourceId: string): void           // 点击来源分组头调用
   onActivateSource(listener: (sourceId: string) => void): () => void  // App 层订阅
   registerInstanceRuntimeProducer(sourceId: string, sourceFingerprint: string): { // 每个已挂载 ctx 一代生产者
@@ -237,7 +247,9 @@ export const chamberBridge: {
   收敛生产者同内容去重后的聚合空窗。拉取失败的来源带 `aggregateError` 文本发布。
   每行同时携带当前权威 `sourceFingerprint`；共享发布签名必须纳入该字段，
   使“同 id、其余投影不变”的 replacement 仍会通知来源所有者。
-- 订阅 `onOpenSession` → 激活对应来源视图 + `openInstanceSession`（§4）。
+- 订阅 `onOpenSession` → 激活对应来源视图 + `openInstanceSession`（§4）；
+  每次尝试 settle 后经 `reportOpenSessionOutcome` 回报所有侧边栏 shell
+  （成功清残留失败文本；失败携带 §4 终态报告文案，行内呈现见 §2.2）。
 - 订阅 `onActivateSource` → 仅切换活动来源视图（不打开会话）。
 - 订阅 `onRefresh` → 每个 live 来源无条件执行一次即时 mutation-pull（与
   §2.3 2026-12 勘误一致：mounted 来源 host-store 推送为主、requestRefresh
@@ -341,7 +353,18 @@ export const chamberBridge: {
   清 timer 并 reject 全部 holder-owned 在途 dispatch。boot/dispose/总截止时间到达同样
   loud reject，旧 runtime 永不能在 teardown 后迟到执行 open；runtimeCtx/list/open 的
   getter/调用若抛任意 hostile value，也必须经同一 never-throw 描述器 reject 并清理
-  timer/cancel handle，不能把 timer-driven open 永久挂起。
+  timer/cancel handle，不能把 timer-driven open 永久挂起。**sessions 服务就绪与列表
+  可见性共用同一轮询预算（2026-09 修复登记）**：boot settle（loader.await +
+  assertEntriesActive）只等 entry **根** fiber，`ctx.sessions` 由 composite 的
+  **子** fiber 提供（child 在异步 api-remotes 命名空间 mount 后才激活）——queued
+  open 的 flush（entries.set 同刻）或就绪窗内的点击可能落在 holder 已注册而
+  sessions 服务尚未注册的窗口。该状态是**瞬态**：poller 按 400ms 节奏在 deadline 内
+  等待服务就绪与目标会话可见，绝不 fail-fast；deadline 到达才 loud reject，且区分
+  两种终态报告（服务从未就绪 → 「boot 未完全就绪」；服务就绪但会话始终未列出 →
+  「等待超时」）。终态失败文案经 `reportOpenSessionOutcome` 回报侧边栏并在
+  目标会话行内呈现（§2.2），不再是 console-only。修复前 fail-fast 使跨服务器
+  冷壳/回收重 boot 后的首次会话点击在视图已切换后瞬间失败，用户落在目标服务器
+  UI 而未选中会话（呈现为该 workspace 的新对话输入框）。
 - **每 entry Context 私有注入（2026-08-28 N-ctx 复核）**：`AppWebEntry`
   提供 `configureContext(ctx)` seam；shell.ts 创建 entry 时用闭包把该视图自己的
   `chamberInstanceId`、`chamberBasePath` 与主进程签发的

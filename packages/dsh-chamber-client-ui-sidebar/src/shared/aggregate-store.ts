@@ -122,6 +122,17 @@ export interface OpenSessionRequest {
 }
 
 /**
+ * Terminal outcome of one App-layer open attempt, published back to every
+ * sidebar shell (design 05 §3's request channel is one-way — the App layer
+ * owns the dispatch budget and the failure; the sidebar owns the row).
+ * Success carries no message; failure carries the dispatch's loud report.
+ */
+export interface OpenSessionOutcome extends OpenSessionRequest {
+  /** Present only on failure: the terminal error report (App-wrapped text). */
+  message?: string
+}
+
+/**
  * Per-instance runtime facts projected by the sidebar plugin of the source's
  * own ctx (design 06 §4): current session id plus per-session live rows. The
  * plugin is a STATELESS projection of the source's session-list snapshot —
@@ -153,7 +164,26 @@ export interface InstanceRuntimeReport {
 
 type Listener = () => void
 type OpenListener = (request: OpenSessionRequest) => void
+type OpenOutcomeListener = (outcome: OpenSessionOutcome) => void
 type RefreshListener = (sourceId: string) => void
+/**
+ * Per-source session-list refresh request (archive-cleanup convergence, design
+ * 24 §20): a source's MOUNTED ctx session summaries are the official client's
+ * in-memory rows, refreshed only on connection generations — content purged by
+ * the chamber host domain never triggers an official event (documented no-op),
+ * so the deleted rows linger in the summaries and resurface in the sidebar
+ * once the host removes their ids from the archived set (no filter covers them
+ * anymore; opening one fails with the official session/not-found). The mounted
+ * ctx of that source must re-run its OFFICIAL session-list refresh
+ * (`ctx.sessions.refresh()`), which reconciles the summaries against the
+ * server corpus (a per-call disk walk) and drops the deleted rows. Subscribers
+ * are the sidebar plugins of every mounted ctx; each plugin acts only when its
+ * own chamberInstanceId matches the requested source. Fired by the App's
+ * ghost-row convergence machine (planSessionListRefresh — every ready mounted
+ * push whose removed-archived rows are still listed) and by the archive
+ * manager after every purge settle — see design 24 §20 / App.tsx.
+ */
+type SessionListRefreshListener = (sourceId: string) => void
 type SourceListener = (sourceId: string) => void
 type RuntimeReportListener = (
   sourceId: string,
@@ -169,7 +199,9 @@ type PluginDiagnosticListener = (sourceId: string, diagnostic: PluginGraphDiagno
 
 const listeners = new Set<Listener>()
 const openListeners = new Set<OpenListener>()
+const openOutcomeListeners = new Set<OpenOutcomeListener>()
 const refreshListeners = new Set<RefreshListener>()
+const sessionListRefreshListeners = new Set<SessionListRefreshListener>()
 const activateSourceListeners = new Set<SourceListener>()
 const runtimeReportListeners = new Set<RuntimeReportListener>()
 const snapshotReportListeners = new Set<SnapshotReportListener>()
@@ -232,6 +264,21 @@ export const chamberBridge = {
     }
   },
 
+  /** App-layer report that one requested open settled (failure carries the
+   *  loud terminal message). Every sidebar shell receives the report and
+   *  surfaces failures on the session row; success clears a stale failure. */
+  reportOpenSessionOutcome(outcome: OpenSessionOutcome): void {
+    for (const listener of [...openOutcomeListeners]) listener(outcome)
+  },
+
+  /** Sidebar subscription to open-outcome reports; returns the unsubscribe. */
+  onOpenSessionOutcome(listener: OpenOutcomeListener): () => void {
+    openOutcomeListeners.add(listener)
+    return () => {
+      openOutcomeListeners.delete(listener)
+    }
+  },
+
   /** Sidebar call after an action: unmounted/incomplete sources ask App for one pull; mounted stores push. */
   requestRefresh(sourceId: string): void {
     for (const listener of [...refreshListeners]) listener(sourceId)
@@ -242,6 +289,26 @@ export const chamberBridge = {
     refreshListeners.add(listener)
     return () => {
       refreshListeners.delete(listener)
+    }
+  },
+
+  /**
+   * Ask the MOUNTED ctx of `sourceId` to refresh its official session list
+   * (sidebar-plugin subscriber: only the plugin whose chamberInstanceId equals
+   * `sourceId` acts). See the SessionListRefreshListener note — the convergence
+   * net for rows of purged sessions lingering in the official client summaries.
+   * Unmounted sources have no subscriber and need none (their rows ride the
+   * unary list, which is authoritative per call).
+   */
+  requestSessionListRefresh(sourceId: string): void {
+    for (const listener of [...sessionListRefreshListeners]) listener(sourceId)
+  },
+
+  /** Sidebar-plugin subscription to session-list refresh requests; returns the unsubscribe. */
+  onRequestSessionListRefresh(listener: SessionListRefreshListener): () => void {
+    sessionListRefreshListeners.add(listener)
+    return () => {
+      sessionListRefreshListeners.delete(listener)
     }
   },
 

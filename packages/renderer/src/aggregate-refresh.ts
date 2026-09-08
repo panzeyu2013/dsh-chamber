@@ -167,6 +167,93 @@ export function commitAggregateFailure(mounted: boolean, errorText: string): Ins
   if (mounted) return null
   return { state: 'error', workspaces: [], sessions: [], archivedSessionIds: [], error: errorText }
 }
+/**
+ * Detect an archived-set SHRINK between the last committed aggregate and an
+ * incoming snapshot (archive-cleanup convergence, design 24 §20). There is
+ * NO unarchive wire, so the only host-side mutation that removes members from
+ * the archived set is the cleanup purge's end-of-run removal — a strict shrink
+ * is therefore the client's observable "a purge completed and those ids left
+ * the set" signal. Returns the removed ids when BOTH sides are authoritative
+ * (`archiveSetKnown: true`) and the previous side is an ok aggregate; [] for
+ * every other combination (unknown provenance must never trigger — the unary
+ * fallback's empty set is a known-degraded artifact, not a shrink fact).
+ * Consumers (the App's mounted-push commit path) respond by requesting the
+ * source's official session-list refresh: rows of the purged sessions may
+ * still linger in the mounted ctx's official client summaries (they refresh
+ * only on connection generations; purge events are documented no-ops) and
+ * would otherwise resurface in the sidebar as ordinary rows once the archived
+ * set no longer covers them — opening one fails with session/not-found.
+ */
+export function archiveSetShrink(
+  previous: InstanceAggregate | undefined,
+  next: Pick<InstanceSnapshot, 'archivedSessionIds' | 'archiveSetKnown'>,
+): string[] {
+  if (previous === undefined || previous.state !== 'ok' || previous.archiveSetKnown !== true) return []
+  if (next.archiveSetKnown !== true) return []
+  const nextSet = new Set(next.archivedSessionIds)
+  return previous.archivedSessionIds.filter(id => !nextSet.has(id))
+}
+
+/**
+ * Decide whether a session-list refresh request may be DISPATCHED for a source
+ * (bounded re-request floor for {@link planSessionListRefresh} consumers): a
+ * request may go out when the source was never requested before (`undefined`
+ * = never requested — dispatch) or the last request stamp is older than the
+ * coalescing gap. NOTE: `0` is not "never requested" — it behaves as an
+ * ancient stamp and suppresses for one full gap (Date.now() stamps can never
+ * be 0, so this only matters for tests/typos; only `undefined` means never).
+ */
+export function shouldRequestSessionListRefresh(
+  lastRequestedAt: number | undefined,
+  now: number,
+  coalesceMs: number,
+): boolean {
+  return lastRequestedAt === undefined || now - lastRequestedAt >= coalesceMs
+}
+
+/**
+ * One plan step of the App-side ghost-row convergence state machine (design 24
+ * §20). Evaluated on EVERY ready mounted push of a source, BEFORE the aggregate
+ * commit (against the last-committed aggregate via the render mirror):
+ * - "removed" = the archived-set shrink of this push (archiveSetShrink — a
+ *   strict shrink is the client-observable "a purge completed" signal; no
+ *   unarchive wire exists);
+ * - ghost candidates = removed ∪ previously-pending ids that are STILL LISTED
+ *   as session rows of this push (rows already gone are converged — the id is
+ *   dropped and no request is made for it);
+ * - `request: true` means rows of purged sessions are still visible and the
+ *   source's official session-list refresh is outstanding. The caller
+ *   dispatches at most once per coalescing gap and re-evaluates on the next
+ *   push, so a transiently failed refresh converges as soon as the channel
+ *   heals or the rows vanish (the next push clears `pending`). A push whose
+ *   rows no longer carry any candidate returns `pending: []` — the state
+ *   machine is self-terminating. Push-only evaluation is COMPLETE: mounted
+ *   pull commits preserve the current archived set (commitAggregatePull
+ *   merge) and full-fallback commits are provenance-gated (archiveSetShrink),
+ *   so a pull can never first observe a shrink.
+ */
+export function planSessionListRefresh(
+  previous: InstanceAggregate | undefined,
+  next: Pick<InstanceSnapshot, 'archivedSessionIds' | 'archiveSetKnown' | 'sessions'>,
+  pending: readonly string[] | undefined,
+): { request: boolean; pending: string[] } {
+  const removed = archiveSetShrink(previous, next)
+  const rowIds = new Set<string>()
+  for (const session of next.sessions) rowIds.add(session.sessionId)
+  const kept: string[] = []
+  const seen = new Set<string>()
+  const consider = (id: string): void => {
+    if (seen.has(id) || !rowIds.has(id)) return
+    seen.add(id)
+    kept.push(id)
+  }
+  for (const id of removed) consider(id)
+  if (pending !== undefined) {
+    for (const id of pending) consider(id)
+  }
+  return { request: kept.length > 0, pending: kept }
+}
+
 export function planAggregateRefreshes(
   readySourceIds: readonly string[],
   previouslyReady: ReadonlySet<string>,

@@ -376,6 +376,12 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
         // unmounted, the host purge may have completed and chamberBridge's
         // App-side consumers are global/generation-fenced.
         chamberBridge.requestRefresh(server.id)
+        // design 24 §20: additionally ask this source's MOUNTED ctx to
+        // re-run its OFFICIAL session-list refresh — the host purge is
+        // invisible to the official client summaries (events are no-ops), so
+        // without it the deleted rows linger there and resurface in the
+        // sidebar once the host removes their ids from the archived set.
+        chamberBridge.requestSessionListRefresh(server.id)
         if (!mountedRef.current) return
         const lines: string[] = []
         if (result.deletedSessions > 0 || result.deletedSubagents > 0) {
@@ -407,6 +413,13 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
         // the selection effect drops ids that no longer exist.
         setSelected(new Set())
       } catch (error) {
+        // A settle of ANY kind may still mean host-side deletions happened
+        // (client timeout ≠ host stop; another shell's purge raced this one)
+        // — request the official session-list refresh too, so rows deleted by
+        // the host drop from the mounted ctx summaries instead of lingering.
+        // Fired before the mounted guard: a closed dialog must not lose the
+        // convergence request (the host may still have been deleting).
+        chamberBridge.requestSessionListRefresh(server.id)
         if (!mountedRef.current) return
         const message = error instanceof Error ? error.message : String(error)
         const friendly = message.startsWith('busy:')

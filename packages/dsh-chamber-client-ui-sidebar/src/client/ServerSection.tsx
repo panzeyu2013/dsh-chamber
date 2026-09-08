@@ -36,6 +36,7 @@ import {
   type SourceSearchState,
 } from '../shared/search-state.ts'
 import { clearPendingClick, noteSessionRowClick } from '../shared/pending-click.ts'
+import { openErrorKey } from '../shared/open-outcome.ts'
 import { getSourceRepoLayouts, getWorkspaceGitFlag, hiddenByMainWorkspaceFold, isSourceGitFlagsLoaded } from '../shared/workspace-git-flags.ts'
 import { resolveWorkspaceDrop } from '../shared/workspace-drag-order.ts'
 import { sessionRowWindow, SESSION_ROWS_VISIBLE_FIRST } from '../shared/session-row-window.ts'
@@ -373,6 +374,22 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
               // toggleSourceFold), so expanding restores every workspace with
               // its sessions as they were.
               const sourceFolded = viewPrefs.sourceFolded?.[server.id] === true
+              // chamber (打开失败可见性): this server's open-failure rows
+              // currently held by the outcome channel (SidebarRoot writes
+              // rowErrors under shared/open-outcome.ts keys). Both key ends
+              // are anchored literals (`${server.id}/session/` … '/open'), so
+              // the slice recovers any embedded session id verbatim; the
+              // rename/archive/fork family shares the prefix but ends in its
+              // own suffix, and no other key family ends in '/open'.
+              const serverOpenFailures: { sessionId: string; message: string }[] = []
+              const openErrorPrefix = `${server.id}/session/`
+              for (const [key, message] of Object.entries(rowErrors)) {
+                if (!key.startsWith(openErrorPrefix) || !key.endsWith('/open')) continue
+                serverOpenFailures.push({
+                  sessionId: key.slice(openErrorPrefix.length, key.length - '/open'.length),
+                  message,
+                })
+              }
               // chamber: the row-render ghost predicate is hoisted so the
               // workspace header count reuses the SAME rule — a ghost is a
               // blank "New Session" row that stopped being current (the
@@ -822,6 +839,13 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                     )}
                   </span>
                 </header>
+                {/* chamber (打开失败可见性): with the source folded no session
+                    row exists on screen (the fold gate hides the whole list),
+                    so open failures hoist under the header — the header is
+                    the one part that stays rendered. */}
+                {sourceFolded && serverOpenFailures.map(failure => (
+                  <div key={failure.sessionId} className={cc.rowError} role="alert">{failure.message}</div>
+                ))}
                 {/* chamber (06 §2.4): the
                     server-level fold hides EVERYTHING below the header —
                     search capsule, source-scope git alert and the workspace
@@ -882,6 +906,21 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                   {renderWorkspaceGit('sidebar.workspace.git', { wide }, {
                     hookContext: { sourceId: server.id, workspaceId: '' },
                   })}
+                  {/* chamber (打开失败可见性): open failures whose session has
+                      NO row in the current projection (e.g. a fork/commit/new-
+                      session child that never surfaced while the runtime was
+                      wedged) — the row slot cannot render them, so they
+                      surface above the list, outside the tree (same
+                      discipline as the git alert above). Known bound (F1
+                      review, 非回归): a failure whose session IS in the
+                      projection but whose only render anchor vanished — a
+                      worktree group hidden behind a folded git MAIN workspace,
+                      or an active search that no longer matches the session —
+                      stays invisible for the 10s window (pre-F1 the inline
+                      slot was suppressed identically). */}
+                  {serverOpenFailures.filter(failure => !visibleIds.has(failure.sessionId)).map(failure => (
+                    <div key={failure.sessionId} className={cc.rowError} role="alert">{failure.message}</div>
+                  ))}
                   <div
                     className={cc.workspaceList}
                     // The browse list is one tree (official .list role="tree");
@@ -911,39 +950,45 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                             const running = projectedRunning(item.sessionId)
                             const stateDot = sessionStateDot(server, { id: item.sessionId, running })
                             const stateLabel = sessionStateLabel(server, { id: item.sessionId, running })
+                            const openError = rowErrors[openErrorKey(server.id, item.sessionId)]
                             return (
-                              // 行是 <button role="treeitem">（官方
-                              // SearchResultItem 同款）——键盘可激活（Enter/
-                              // 空格）；状态槽恒渲染（空态占位，标题对齐，
-                              // 官方 slot 同款）。
-                              <button
-                                type="button"
-                                key={item.sessionId}
-                                className={cc.searchResultRow}
-                                role="treeitem"
-                                aria-selected={item.sessionId === currentId}
-                                onClick={() => openSession(server.id, item.sessionId)}
-                              >
-                                <span className={cc.searchResultHeading}>
-                                  <span
-                                    className={clsx(cc.sessionStateSlot, sessionStatePending(server, { id: item.sessionId }) !== undefined && cc.sessionStateSlotPending)}
-                                    title={stateLabel}
-                                    aria-label={stateLabel}
-                                    // 空态不注册 live region（官方仅在有
-                                    // 状态时放隐藏标签）——role 条件化避免 SR 噪音。
-                                    role={stateDot !== null ? 'status' : undefined}
-                                  >
-                                    {stateDot}
+                              // chamber (打开失败可见性): the search tree replaces
+                              // the workspace tree, so an open failure must also
+                              // surface under the result row — Fragment keeps the
+                              // button keyboard-activatable (official
+                              // SearchResultItem 同款).
+                              <Fragment key={item.sessionId}>
+                                <button
+                                  type="button"
+                                  className={cc.searchResultRow}
+                                  role="treeitem"
+                                  aria-selected={item.sessionId === currentId}
+                                  onClick={() => openSession(server.id, item.sessionId)}
+                                >
+                                  <span className={cc.searchResultHeading}>
+                                    <span
+                                      className={clsx(cc.sessionStateSlot, sessionStatePending(server, { id: item.sessionId }) !== undefined && cc.sessionStateSlotPending)}
+                                      title={stateLabel}
+                                      aria-label={stateLabel}
+                                      // 空态不注册 live region（官方仅在有
+                                      // 状态时放隐藏标签）——role 条件化避免 SR 噪音。
+                                      role={stateDot !== null ? 'status' : undefined}
+                                    >
+                                      {stateDot}
+                                    </span>
+                                    <span className={cc.searchResultTitle}>{resolved.title}</span>
                                   </span>
-                                  <span className={cc.searchResultTitle}>{resolved.title}</span>
-                                </span>
-                                {resolved.workspaceLabel !== undefined && (
-                                  <span className={cc.searchResultWorkspace}>{resolved.workspaceLabel}</span>
+                                  {resolved.workspaceLabel !== undefined && (
+                                    <span className={cc.searchResultWorkspace}>{resolved.workspaceLabel}</span>
+                                  )}
+                                  {item.snippet !== '' && (
+                                    <span className={cc.searchResultSnippet}>{item.snippet}</span>
+                                  )}
+                                </button>
+                                {openError !== undefined && (
+                                  <div className={clsx(cc.rowError, cc.sessionNested)} role="alert">{openError}</div>
                                 )}
-                                {item.snippet !== '' && (
-                                  <span className={cc.searchResultSnippet}>{item.snippet}</span>
-                                )}
-                              </button>
+                              </Fragment>
                             )
                           })}
                           {currentRemote.status === 'loading' && (
@@ -1436,6 +1481,21 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                             {rowErrors[`${server.id}/workspace-drag/${workspace.id}`] !== undefined && (
                               <div className={cc.rowError} role="alert">{rowErrors[`${server.id}/workspace-drag/${workspace.id}`]}</div>
                             )}
+                            {/* chamber (打开失败可见性): session open failures
+                                whose row this group's fold/window gate hides —
+                                hoisted like the workspace errors above, so a
+                                failure survives a mid-flight fold (or a row
+                                windowed out of the visible slice). Visible
+                                rows render the error inline below themselves
+                                instead. */}
+                            {sessions
+                              .filter(session => rowErrors[openErrorKey(server.id, session.id)] !== undefined
+                                && (folded || !visibleSessions.some(visible => visible.id === session.id)))
+                              .map(session => (
+                                <div key={session.id} className={clsx(cc.rowError, cc.sessionNested)} role="alert">
+                                  {rowErrors[openErrorKey(server.id, session.id)]}
+                                </div>
+                              ))}
                             {!folded && (
                             <>
                               {visibleSessions.map((session) => {
@@ -1444,6 +1504,13 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                                 const sessionActionError = rowErrors[`${server.id}/session/${session.id}/rename`]
                                   ?? rowErrors[`${server.id}/session/${session.id}/archive`]
                                   ?? rowErrors[`${server.id}/session/${session.id}/fork`]
+                                  // chamber (打开失败可见性): open failures land
+                                  // in the same slot (SidebarRoot reports the
+                                  // App-layer outcome; low precedence — a
+                                  // rename/archive/fork failure of the same row
+                                  // wins). Key template shared with the writer
+                                  // (shared/open-outcome.ts).
+                                  ?? rowErrors[openErrorKey(server.id, session.id)]
                                 // chamber (design 06 §2.2):
                                 // a blank row the projection still carries after
                                 // it stopped being current is a GHOST — the App

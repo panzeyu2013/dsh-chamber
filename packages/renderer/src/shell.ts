@@ -36,6 +36,7 @@ import { isChamberSourceId, rawInstanceIdFromSourceId } from './transport-source
 import { BundleLoadTimeoutError, collectExtraRows, type ExtraModuleRow } from './host-graph.ts'
 import { chamberBridge } from '@dsh-chamber/dsh-client-ui-sidebar/shared'
 import { PendingOpenQueue } from './pending-open-queue.ts'
+import { PERF_MARKS, perfMark } from './perf-marks.ts'
 
 const CHAMBER_BOOT = '@dsh-chamber/app'
 export type ChamberTransport = 'local' | 'ssh' | 'http'
@@ -277,6 +278,8 @@ export function bootInstanceShell(
   sourceFingerprint: string,
   transport: ChamberTransport = instanceId === 'local' ? 'local' : 'ssh',
 ): Promise<ShellState> {
+  // C2 perf 埋点：boot 入口（含全局队列排队；注册表见 perf-marks.ts）。
+  perfMark(PERF_MARKS.shellBootStart)
   // Validate the source/base-path pair before installing module globals or
   // starting the host-graph request. An invalid source must not be able to
   // steer even a same-origin probe through a crafted /api/i/... prefix.
@@ -308,10 +311,37 @@ export function bootInstanceShell(
   // 此处即抛——跳过额外预加载（无 sink 不执行任何 bundle），boot 照常在
   // run() 以同一错误响亮失败（失败覆盖层 + 重试）。
   let moduleSystemError: string | null = null
+  let modulesSystem: ReturnType<typeof ensureWebModuleSystem> | null = null
   try {
-    ensureWebModuleSystem({ loadBundle: loadModuleBundle })
+    modulesSystem = ensureWebModuleSystem({ loadBundle: loadModuleBundle })
   } catch (reason) {
     moduleSystemError = describeShellError(reason)
+  }
+  // Const capture: TS does not narrow a mutable captured variable inside the
+  // closure below.
+  const installedModulesSystem = modulesSystem
+  // C3 门（2026-09 性能审计；平台词偏差登记见 dsh-client-web platform.ts /
+  // seed.ts）：`@deepseek-ai/dsh-client-ui-primitives` 不再由主图 seed 回答，
+  // extra bundle 对该词的同步 require 由 chamber 入口顶层注册的 covered
+  // factory 回答——因此 chamber 入口必须在任何 extra bundle 执行前完成求值。
+  // prefetch 在此立即开火，与下方 host-graph 取图并行（实例 503 重试窗口内
+  // chamber 在主线程求值）；失败在此吞掉：boot 内核 run() 内的
+  // prefetchImmediateTier 同样静默（boot.ts），loud 面在 loader.create 的
+  // create-side import 重取（模块缓存按 URL 去重、失败不缓存，成功后不会
+  // 二次执行）。同 id 后继 boot 的
+  // extra 装载仍被 strict instance tail 串行化（startExtraRows 在该 tail
+  // 之后才跑），这里只负责"chamber 先于 extra"这一个顺序。
+  let chamberEval: Promise<void> | null = null
+  const fireChamberPrefetch = (): void => {
+    if (chamberEval !== null) return
+    chamberEval = (async () => {
+      try {
+        if (installedModulesSystem !== null) await installedModulesSystem.prefetch(CHAMBER_BOOT)
+      } catch {
+        // 吞掉：loud 面在 loader.create 的 create-side import 重取
+        //（boot.ts 头注：prefetch 失败 resolve silently、import 重取负责 loud）。
+      }
+    })()
   }
   // Host-graph/bundle preloading can overlap the global queue for a source
   // with no same-id predecessor. A same-id successor MUST defer even these
@@ -319,9 +349,13 @@ export function bootInstanceShell(
   // mutates the shared module registration table and is therefore part of the
   // lifecycle exclusion, not harmless network-only prefetch.
   const startExtraRows = (): Promise<ExtraModuleRow[]> => {
+    // C3：chamber prefetch 与 host-graph 取图并行开火；collectExtraRows 在
+    // 装载 extra bundle 前 await 本门（host-graph.ts awaitBeforeLoad）。
+    fireChamberPrefetch()
     const promise = moduleSystemError === null
       ? collectExtraRows(instanceId, basePath, {
         loadModuleBundle,
+        awaitBeforeLoad: () => chamberEval ?? Promise.resolve(),
         // A retry starts its graph request before the previous queued boot has
         // necessarily settled. Only the current, non-cancelled generation may
         // publish: otherwise an old slow failure can overwrite a newer ok.
@@ -402,6 +436,9 @@ export function bootInstanceShell(
       // Bind instance facts to THIS entry instead of page globals. configureContext
       // runs synchronously before loader/plugin materialization, so a boot that
       // overlaps a different id after the queue timeout cannot observe it.
+      // C2 perf 埋点：module system / host-graph / extra bundles 全部就绪，
+      // boot 内核即将接管。
+      perfMark(PERF_MARKS.shellEntryReady)
       const entry = new AppWebEntry(el, {
         loadBundle: loadModuleBundle,
         extraRows,
@@ -435,7 +472,11 @@ export function bootInstanceShell(
       const bootFailure = entry.bootError
       if (bootFailure !== undefined) {
         await teardownEntry(instanceId, entry, 'failed boot')
-        if (bootGenerations.get(instanceId) === gen) rejectPendingOpens(instanceId, bootFailure)
+        if (bootGenerations.get(instanceId) === gen) {
+          rejectPendingOpens(instanceId, bootFailure)
+          // 与 catch 分支同代际门控：teardown await 期间可能换代。
+          perfMark(PERF_MARKS.shellBootFailed, instanceId)
+        }
         return { instanceId, basePath, booted: false, booting: false, error: bootFailure } satisfies ShellState
       }
       // An older timed-out boot may have begun teardown while this entry ran.
@@ -466,6 +507,8 @@ export function bootInstanceShell(
       // 阈值这里只会扩大 Map，不再承担旧 ctx 隔离职责。
       cancelledBoots.delete(instanceId)
       flushPendingOpens(instanceId)
+      // C2 perf 埋点：该实例 shell 成功 settle（真实 UI 可用的最近似点）。
+      perfMark(PERF_MARKS.shellSettled, instanceId)
       return { instanceId, basePath, booted: true, booting: false, error: null } satisfies ShellState
     } catch (reason) {
       const message = describeShellError(reason)
@@ -482,8 +525,12 @@ export function bootInstanceShell(
         }
       }
       // 失败的旧代不能清掉新代排队的 opens；只有仍为 current 的失败 boot
-      // 才拥有该 instance-keyed 队列。失败 boot 从不消费取消阈值。
-      if (bootGenerations.get(instanceId) === gen) rejectPendingOpens(instanceId, message)
+      // 才拥有该 instance-keyed 队列。失败 boot 从不消费取消阈值。失败
+      // perf 标记同条件：被换代/取消的旧 boot 的 teardown 抛错不算失败态。
+      if (bootGenerations.get(instanceId) === gen) {
+        rejectPendingOpens(instanceId, message)
+        perfMark(PERF_MARKS.shellBootFailed, instanceId)
+      }
       return { instanceId, basePath, booted: false, booting: false, error: message } satisfies ShellState
     }
     })
@@ -538,10 +585,12 @@ function withBootTimeout(promise: Promise<ShellState>): Promise<void> {
 /**
  * Request opening one session on an instance: dispatch immediately when the
  * shell already booted, else queue for the boot-settle flush. Resolves once
- * the runtime accepted the open (the session id must be visible in the
- * instance's own session list — the sidebar fetch and the runtime list can
- * race right after boot, so direct dispatch polls up to 8s; a pre-boot request
- * keeps its original 68s total deadline across the eventual flush).
+ * the runtime accepted the open (the runtime sessions service may still be
+ * activating right after settle — see dispatchOpen — and the session id must
+ * be visible in the instance's own session list; the sidebar fetch and the
+ * runtime list can race right after boot, so dispatch polls up to 8s; a
+ * pre-boot request keeps its original 68s total deadline across the eventual
+ * flush).
  */
 export function openInstanceSession(instanceId: string, sessionId: string): Promise<void> {
   const holder = entries.get(instanceId)
@@ -568,10 +617,14 @@ function rejectPendingOpens(instanceId: string, message: string): void {
  * Dispatch one open through one EXACT settled holder/runtime context
  * (ctx.sessions — the ISessions face of @deepseek-ai/dsh-api-session-controller/client,
  * the dsh-v0.1.2-alpha.1 home of the sessions service; see boot.ts runtimeCtx).
- * The runtime validates the id against its own list, so wait
- * until the session surfaces there before calling open. Every retry and the
- * final sessions.open gate re-check holder identity; teardown/replacement
- * cancels the holder-owned poller immediately and clears its timer.
+ * The boot settle only waits on entry ROOT fibers, so the sessions service (a
+ * composite child fiber behind async api-remotes mounts) can register AFTER the
+ * holder exists; the poll therefore covers both service readiness and session
+ * visibility in the runtime list within the same deadline budget, and only
+ * fails when the deadline expires (distinct reports for the two causes). Every
+ * retry and the final sessions.open gate re-check holder identity;
+ * teardown/replacement cancels the holder-owned poller immediately and clears
+ * its timer.
  */
 function dispatchOpen(
   instanceId: string,
@@ -609,8 +662,39 @@ function dispatchOpen(
     const cancel: DispatchCancel = error => fail(error)
     holder.activeDispatchCancels.add(cancel)
 
+    // Whether the runtime sessions service was EVER observed: the terminal
+    // report must distinguish a boot that never reached the service (child
+    // fiber never activated) from a listed wait that simply expired.
+    let serviceSeen = false
+
     const timeout = (): void => {
-      fail(new Error(`会话 ${sessionId} 未出现在实例会话列表中（等待超时）`))
+      // One last guarded read before choosing the report: the service may
+      // have registered inside the final <OPEN_RETRY_MS window after the last
+      // attempt that saw it absent — never blame boot readiness for a service
+      // that is present by the deadline. Message selection is best-effort; a
+      // hostile read must not throw here.
+      if (!serviceSeen) {
+        try {
+          serviceSeen = holder.entry.runtimeCtx?.sessions !== undefined
+        } catch {
+          // Swallow: the deadline report stands on the observed attempts.
+        }
+      }
+      fail(new Error(serviceSeen
+        ? `会话 ${sessionId} 未出现在实例会话列表中（等待超时）`
+        : `实例会话服务不可用（boot 未完全就绪）：会话 ${sessionId} 未打开`))
+    }
+
+    /** Schedule the next poll inside the remaining budget; at the deadline
+     *  the terminal report fires instead of a further timer. */
+    const scheduleRetry = (): void => {
+      if (settled) return
+      const remaining = deadline - Date.now()
+      if (remaining <= 0) {
+        timeout()
+        return
+      }
+      timer = setTimeout(attempt, Math.min(OPEN_RETRY_MS, remaining))
     }
 
     const attempt = (): void => {
@@ -635,9 +719,20 @@ function dispatchOpen(
         return
       }
       if (sessions === undefined) {
-        fail(new Error('实例会话服务不可用（boot 未完全就绪）'))
+        // TRANSIENT, not terminal: the boot settle (loader.await +
+        // assertEntriesActive, boot.ts) only waits on entry ROOT fibers, while
+        // ctx.sessions arrives with the session-controller CHILD fiber, which
+        // activates only after the async api-remotes namespace mounts
+        // (chamber-entry). A queued-open flush — or a click that lands inside
+        // that window — used to fail instantly even though the session was
+        // moments from opening; each such cold-shell click was a one-shot, and
+        // the view had already switched, so the user landed on the target
+        // server's UI without the session selected. Poll service readiness on
+        // the same retry cadence and budget as the session-list wait.
+        scheduleRetry()
         return
       }
+      serviceSeen = true
       let listed = false
       try {
         listed = sessions.list?.getSnapshot()?.byId?.[sessionId] !== undefined
@@ -664,12 +759,7 @@ function dispatchOpen(
         }
         return
       }
-      const remaining = deadline - Date.now()
-      if (remaining <= 0) {
-        timeout()
-        return
-      }
-      timer = setTimeout(attempt, Math.min(OPEN_RETRY_MS, remaining))
+      scheduleRetry()
     }
     attempt()
   })

@@ -804,3 +804,80 @@ test('Git worktree client is a first-screen covered factory (static composite lo
   assert.ok(CHAMBER_COVERED_IDS.includes(id))
   assert.ok(CHAMBER_COVERED_FACTORY_IDS.includes(id))
 })
+
+// ── C3 gate (2026-09 性能审计): `awaitBeforeLoad` must settle before the
+// first extra-bundle load pass when rows exist, and be skipped entirely when
+// dedupe leaves nothing to load (an absent gate keeps the pre-C3 ordering).
+test('collectExtraRows: awaitBeforeLoad settles before the first bundle load pass (rows>0)', async () => {
+  const stub = stubFetch(200, envelope([row('@scope/c3-gate-a')]))
+  const order: string[] = []
+  let release = () => {}
+  const gate = new Promise<void>(resolve => { release = resolve })
+  try {
+    const loading = collectExtraRows('c3-gate-a', '/api/i/local', {
+      loadModuleBundle: async () => { order.push('load'); release() },
+      awaitBeforeLoad: async () => { order.push('gate-before'); await gate },
+    })
+    // Give the collector a few turns to reach the gate without releasing it:
+    // the load must NOT start while the gate is pending.
+    await new Promise(resolve => setTimeout(resolve, 10))
+    assert.deepEqual(order, ['gate-before'], 'the gate is awaited before any bundle load')
+    release()
+    const rows = await loading
+    assert.equal(rows.length, 1)
+    assert.deepEqual(order, ['gate-before', 'load'], 'the load pass runs only after the gate settles')
+  } finally {
+    release()
+    stub.restore()
+  }
+})
+
+test('collectExtraRows: awaitBeforeLoad is skipped when the graph has no kept rows', async () => {
+  const stub = stubFetch(200, envelope([]))
+  let gated = false
+  try {
+    const rows = await collectExtraRows('c3-gate-empty', '/api/i/local', {
+      loadModuleBundle: async () => { throw new Error('must not load with zero rows') },
+      awaitBeforeLoad: async () => { gated = true },
+    })
+    assert.deepEqual(rows, [])
+    assert.equal(gated, false)
+  } finally {
+    stub.restore()
+  }
+})
+
+test('collectExtraRows: awaitBeforeLoad is skipped when dedupe drops every row (covered-only graph)', async () => {
+  const stub = stubFetch(200, envelope([
+    row('@deepseek-ai/dsh-client-ui-sidebar'),
+    row('@deepseek-ai/dsh-client-ui-conversation'),
+  ]))
+  let gated = false
+  try {
+    const rows = await collectExtraRows('c3-gate-covered', '/api/i/local', {
+      loadModuleBundle: async () => { throw new Error('must not load covered rows') },
+      awaitBeforeLoad: async () => { gated = true },
+    })
+    assert.deepEqual(rows, [])
+    assert.equal(gated, false)
+  } finally {
+    stub.restore()
+  }
+})
+
+test('collectExtraRows: an awaitBeforeLoad rejection fails the boot loud without loading bundles', async () => {
+  const stub = stubFetch(200, envelope([row('@scope/c3-gate-c')]))
+  let loaded = false
+  try {
+    await assert.rejects(
+      collectExtraRows('c3-gate-c', '/api/i/local', {
+        loadModuleBundle: async () => { loaded = true },
+        awaitBeforeLoad: async () => { throw new Error('chamber eval gate failed') },
+      }),
+      /chamber eval gate failed/,
+    )
+    assert.equal(loaded, false)
+  } finally {
+    stub.restore()
+  }
+})

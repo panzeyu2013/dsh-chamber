@@ -74,10 +74,24 @@
   gateway 拒绝码→本地化文案映射未做（409 逐字英文）、pollGatewayReady 英文错误串
   未本地化；archive-pick file+folder 双模式对话框为 **macOS-v1**（非 macOS 保持
   文件夹对话框，随 design 22/23）。
-- **归档清理与归档管理器（design 24，已实现）**：剩余——实机 **gateway/远程 dsh
-  形态**与打包版 UI 目检（§19-9 偏差/待目检并入该腿）；事件发射为文档化 no-op
-  直至上游 wire，域随上游 `sessions.delete` wire 落地后退休（上游未落地）。可选
-  增强（未排期）：PluginDialog 三态行、rowError 本地化、已归档浏览区（todo 12 A）。
+- **归档清理与归档管理器（design 24，已实现）**：**2026 purge 幽灵行收敛
+  轮（§20）已实现并经三方只读 review 修订**——purge 后已删会话浮出侧边栏/
+  点击 `session/not-found` 的缺陷修复（官方 ctx 会话行 summaries 仅连接代数
+  刷新 + purge 事件 no-op → 归档集合移除后行失去过滤；收敛 = chamberBridge
+  `requestSessionListRefresh` + App **收敛状态机**（每次 ready 推送评估
+  `planSessionListRefresh`：收缩移除 ∪ pending 中仍列行者 = 幽灵 → 按 5s
+  冷却重发请求，行消失自终止——闭合「相邻 purge 收缩被合并窗口吞掉」与
+  「刷新失败无重试」两 review 发现）+ 对话框每次 purge settle 即时请求，
+  插件按实例调官方 `ctx.sessions.refresh()`（缺失/失败均 warn）；
+  design 05 §3 桥契约已同步）。剩余——实机 **gateway/远程 dsh 形态**、§20 收敛
+  执行腿（插件/App/对话框接线）与打包版 UI 目检（§19-9 偏差/待目检并入该腿，
+  含幽灵行不再浮现、刷新后无干扰）；事件发射为文档化 no-op
+  直至上游 wire，域随上游 `sessions.delete` wire 落地后退休（上游未落地）。
+  可选增强（未排期）：PluginDialog 三态行、rowError 本地化、已归档浏览区
+  （todo 12 A）；归档集合**历史无目录成员 + 收尾集合移除写失败（`archive-set`）
+  残留**收敛（「删除全部」退役后无 UI 路径可达，见 design 24 §20 残余登记
+  ①，建议收尾孤儿全集合清扫）；「归档当前活动会话→整源降级、
+  已归档行浮出」复现确认（§20 残余登记②，dev-QA 原登记于 commit 1b19712）。
 - **移动端 Web 访问面（design 17 §18）**：P1/P1.5/适配轮已实现。剩余——实机门禁
   （§18.6：真机触控目标比例/抽屉开合/键盘遮挡/安全区/汉堡不重叠/crumbs 换行/
   Session 日志图标化/iOS 单击切换/设置手机档走查/刘海横屏/深层谱系高度等）；DOM
@@ -147,9 +161,8 @@
 
 - 私有文件纪律三实现（cp `private-file.ts` 抛错式 vs dsh-runtime `private-fs.ts` kind
   结果式，同名异签）——统一需依赖方向裁定（design 18 §9.1）。
-- wire 载体 A/E wholesale 合并（P4-3 前置清单 7 项，见 `wire-common.ts` 注）。
-- 有界输出族/状态字面量族跨侧统一与锁步排期（E-8 值表、E-12..E-16 状态字面量、
-  N9 preload↔renderer 镜像机器测试、N10 升级 rebase runbook）。
+- wire 载体（A–F）登记维持：P4-3 A↔C 传输层合并**裁定不合并**（前置 ①–⑦，任一项
+  未决前不动 A/C 传输面）；E（git-api）禁改（见 `wire-common.ts` 注，P4-1/2/3/N6）。
 - sanitize 语义矩阵（core/desktop/gateway/installer 四成员）与 win-probes↔
   windows-process 孪生：互注无机械锁步。
 - dashboard（gateway 浏览器运维页）仍为独立第三份运行时 UI，不共享 sidebar 的
@@ -162,7 +175,6 @@
 - C-F13 readManifest 三后端无共享联合（design 21 §3「单一定义」措辞未兑现）。
 - A-U3 desktop `SETTINGS_SET` 无 busy/pending/env 门（env 维度放行为有意；busy/pending
   维度对称性待决策）；A-F16 `DSH_HOME` 布局默认偏 desktop（共享推导点防误读登记）。
-- E-4/E-2/E-10 audit serialize/WRITTEN_FIELDS/5MiB 逐字双份（登记维持）。
 - dual-host 语义下沉延后：activation-facts/startup-verdict 映射、restart 拒绝织、
   apply-now 门（整门合并不做，见下取舍）、identity-probe 腿——4 个分歧位以 ruling
   注释登记在代码面，统一需新 dsh-runtime 公开导出（dist 锁）或行为裁定。
@@ -288,3 +300,29 @@
     激活/身份探针（runtime-probes 以伪 session 直连宿主期待同步
     `session/not-found` 信封）须平行迁移（探针走直连端口不经代理、与豁免窗口
     无交集）。
+- **平台词偏差 C3（2026-09 性能审计，已登记 dsh-client-web platform.ts /
+  seed.ts / renderer chamber-entry.ts / shell.ts 注释）**：上游 `PLATFORM_MODULES`
+  仍列 `@deepseek-ai/dsh-client-ui-primitives`，chamber 自建平台集不再 seed 该词
+  （其整包命名空间导入把 markdown/高亮栈拖进 App 挂载前的 main-graph 求值）；
+  改由 composite covered factory 回答 extra 行的同步 require 边，前置保证 =
+  chamber 入口先于任何 extra bundle 装载（shell.ts C3 门 + host-graph.ts
+  `awaitBeforeLoad`）。依赖面：本地/远端 profile 的 extra 行与用户插件 client
+  bundle 的 primitives require 由该工厂回答；残余窄竞态 = shell 侧 chamber
+  prefetch 失败后 create 期并发 materialize（extra loud 降级、重试自愈，
+  见 chamber-entry 头注）——非静默。实测（build 产物快照 2026-09，终版 dist
+  见 perf-sizes.json 与 performance-baseline.md 字节快照节）：主图
+  1,403,568 → 1,185,439 raw（−218KB / −77KB gzip），chamber 入口净 +217KB
+  → C4 后再 −176KB（分步再着色）；vendor 栈仍经内核 onboarding 静态链留在
+  主图（部分收益，剩余面待内核懒化）。
+- **settings 簇 deferred C4（2026-09 性能审计，已登记 chamber-entry.ts /
+  chamber-covered.ts 注释）**：官方 ui-settings **保留首屏**（locale/ui-theme
+  首屏 root-inject 其 `settingsScope`，defer 会瘫痪壳）；其后移的是 4 个官方
+  settings section + chamber settings shell/connections（chamber-entry
+  registerDeferred，+6 import 站点）。语义：可观测瞬态仅「设置入口缺席
+  ≈1 chunk 往返」（页面首个实例首冷启一次性，其后模块缓存同 tick 解析；
+  六家同 tick 注册，无中间「官方 SettingsRoot 空壳」帧）；每服设置面板
+  内容经 child ctx（bridge-context mountBridgeSession）独立装载，不受
+  boot-ctx 时序影响。失败面（登记）：任一 import 失败 → 整个簇本 boot 缺失
+  （含 connections CRUD、dsh-runtime 管理与更新），console loud 无重试、
+  靠 shell 重 boot——与既有 deferred 家族同模式；按家族 allSettled 独立
+  注册为候选改进（bridge 失败可落官方降级面）。

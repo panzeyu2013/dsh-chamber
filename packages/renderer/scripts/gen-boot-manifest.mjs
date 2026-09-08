@@ -148,10 +148,13 @@ const cssAssets = (chamberRow.css ?? []).filter((css) => typeof css === 'string'
 let html = readFileSync(INDEX_HTML, 'utf8')
 
 // Preload the chamber bundle (LCP perf pass): a <link rel="modulepreload"> in
-// <head> starts the 933KB bundle fetch during HTML parse, overlapping the
-// ~1.8MB renderer-entry eval that precedes the boot chain. The href carries
-// the SAME absolute address as the manifest row url (`bundleUrl` above — the
-// two are built from one value and must stay identical): URL resolution of
+// <head> starts the chamber-bundle fetch during HTML parse, overlapping the
+// multi-megabyte renderer main-graph eval that precedes the boot chain. Raw
+// sizes drift per build — live totals: dist/web/perf-sizes.json
+// (check-chunk-budgets.mjs)；存档代表点与口径见
+// docs/progress/performance-baseline.md §11 与 STATUS.md C3 条目. The href
+// carries the SAME absolute address as the manifest row url (`bundleUrl` above —
+// the two are built from one value and must stay identical): URL resolution of
 // both against the document origin then yields the same resource, so the
 // boot graph's script fetch (loadModuleBundle) reuses the preloaded
 // resource — one network fetch, not two, under any mount point. The asset is

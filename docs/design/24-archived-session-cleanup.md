@@ -24,7 +24,16 @@
 > 列表按工作区分组、可折叠（§19）。§17.3/§17.6 中「删除全部仍可用/放行/
 > 去计数」的表述以 §18/§19 为准。§19 条目 6–9（缩进容器化、整体匹配轮、
 > 全面重构轮、四方分面评审处置轮）为合入后继续修订——wire/UI 表述以
-> §19 最新条目为准。
+> §19 最新条目为准；§20（purge 幽灵行收敛轮）为最新修订，交互表述以
+> §20 为准。
+>
+> **2026 purge 幽灵行收敛轮（§20，delete-archived 分支续）**：purge 后已删
+> 会话以普通行浮出侧边栏、点击报 `session/not-found` 的实机缺陷——根因为
+> 官方客户端 ctx 会话行 summaries 仅连接代数刷新、purge 事件为 no-op，
+> 归档集合移除后行失去过滤覆盖；§20 落地「官方会话列表刷新 seam」
+> （chamberBridge `requestSessionListRefresh` + App 归档集合收缩检测 +
+> 对话框 settle 即时请求），并修正 §15-② 的「chamber 可见行不受影响」
+> 断言（实机证伪）。
 >
 > v2/v3 修订：2026-12 由三个只读 subagent 分面评审（客户端 UI/wire、宿主
 > 域与分发接线、契约治理）+ 作者自审 + 一轮 v2 合规复核（闭合矩阵 12 项
@@ -666,10 +675,13 @@ aria-busy、confirm 零值/单复数拆键、truncated 端到端、写时 livene
 
 **文档债务（登记；①③ 已于 2026-12 合入修订轮闭合）**：① §6 正文已按
 实现对齐（部分失败走 `role="alert"` 错误行 + step3 复查仅 connected 的
-E-m2 理由入文）；② 占位/幽灵窗口措辞：vendor `sessionIds` 为内存
-header 索引派生，内容删除后至重启/下次实体写前，官方 workspaceView 仍含
-占位 id（chamber 可见行不受影响；A-区/上游 wire 前置登记——§14 残余
-定案后该窗口仅指 UI 幽灵行，与 archived 集合无关）；③ §3 错误码枚举
+E-m2 理由入文）；② **占位/幽灵窗口措辞（2026 实机证伪并修正，见 §20）**：
+vendor `sessionIds` 为内存 header 索引派生，内容删除后至重启/下次实体写
+前，官方 workspaceView 仍含占位 id——原断言「chamber 可见行不受影响」不
+成立：§14 残余定案后 purge 收尾把完成树根移出 archived 集合，官方客户端
+ctx 的会话行 summaries（仅连接代数刷新）在集合移除后不再被归档过滤覆盖，
+被删会话以普通行浮出、点击即 `session/not-found`；§20 的会话列表刷新
+seam 为该窗口的收敛机制；③ §3 错误码枚举
 已并入 `purge-capacity`/`archive-set`/`truncated`（含 65,536 上限与
 不可重试登记，Minor-5）；④ desktop 激活恒全量 vs seed 产物门为设计内取舍
 （构建期 preflight 兜底），登记不修；⑤ seam 退役机制化：上游 unarchive/
@@ -1099,3 +1111,98 @@ ui-workspace 用，弃用）、
      验证 bullet 与武装态行为补记。
    - **验证**：修复后 `typecheck:sidebar`、`test:sidebar`、`build:renderer`
      重跑绿（见 §19-8 同款命令）；键盘/视觉项打包版目检腿。
+
+## 20. 2026 purge 幽灵行收敛轮：官方会话列表刷新 seam（delete-archived 分支）
+
+实机现象（用户报告 + 本机数据实证）：归档管理器整集/多选删除后，**已删
+会话以普通会话行重新出现在侧边栏**，逐行点击触发官方对话区
+「历史加载失败：session "…" not found（session/not-found）」（官方
+`chat.loadError`，session-controller 对磁盘重扫无此会话的回答）。现场核
+对：purge 内容目录删除与归档集合成员移除均成功（workspace.json 归档集合
+已不含目标 id），但官方客户端 ctx 会话行与 workspace 成员账目仍列这些 id
+（本机实例 workspace.json 每工作区 13–18 个无目录成员占位）。
+
+**根因（三层，均经 pinned vendor 0.1.2-rc.1 运行时源码核实）**：
+
+1. 宿主删除对官方运行时不可见——`emitSessionRemoved` 等为文档化 no-op
+   （§10/§14）；
+2. 服务端冷读面**即时自愈**：`session-persistence-jsonl.list()` 每次调用
+   重扫磁盘、`session-query` 的 `SessionCorpus.listSessions()` = 持久化重扫
+   + live 合并——任何服务端/unary 列表都不会再含已删会话；
+3. **滞留点在官方客户端 ctx**：`dsh-api-session-controller` client 的
+   `SessionManager.summaries` 只在其 ctx 连接代数重建（`handleConnected` →
+   `refreshList`）或本地 mutation 帧时更新，**无事件即无全量重列**；chamber
+   的 mounted 快照生产者（sidebar client/index.ts）读的正是这份 store。
+   purge 把 id 移出归档集合后，chamber 可见性过滤（archived ∩ rows）不再
+   覆盖这些行 → **幽灵行以普通会话渲染**（mounted 推送整体替换聚合，
+   App.tsx 提交路径）；`refresh()` 的 `mergeOrderedBaseline` 会丢弃服务端
+   已不存在的行——即官方公开的收敛原语，但此前无人触发它。
+
+**修复 seam（本轮的收敛机制，客户端零宿主改动；经 2026 三方只读 review
+——正确性/完整性/最优性——修订为收敛状态机，见下）**：
+
+- **桥通道**：`chamberBridge.requestSessionListRefresh(sourceId)` 广播 +
+  `onRequestSessionListRefresh` 订阅（aggregate-store.ts，与 requestRefresh
+  同构）。挂载 ctx 的 sidebar 插件按 `chamberInstanceId === sourceId`
+  匹配后调用**官方公开面** `ctx.sessions.refresh()`（ClientSessions；
+  运行时守卫，方法缺失与调用失败均 console.warn——失效绝不静默；同步
+  throw 防御包裹——桥监听器异常不得中断 App 推送处理）；刷新完成后
+  summaries 丢弃已删行 → store notify → 生产者 queueSnapshot → 推送干净
+  快照 → App 全量提交替换聚合。未挂载来源无订阅者也不需要（其行走 unary，
+  服务端逐调重扫）。
+- **触发 1（App 收敛状态机，正确性主闸）**：mounted 推送提交前对**每一次**
+  ready 推送评估 `planSessionListRefresh`（aggregate-refresh.ts 纯函数）：
+  (a) 检测**归档集合收缩**（`archiveSetShrink`：无 unarchive wire ⇒ 收缩 =
+  宿主 purge 完成集合移除的唯一客户端可观测信号；仅两侧 `archiveSetKnown:
+  true` 才产生，降级空集永不误报）；(b) 收缩移除的 id ∪ 上一轮未收敛
+  （pending）id 中**仍以行存在于本推送**者 = 幽灵候选；(c) 幽灵候选非空即
+  请求会话列表刷新，并按来源以 5s 冷却封底重发节流（官方 refreshList 单飞
+  兜底并发；忙碌来源上失败的刷新不会逐推送堆叠 RPC）；(d) 行消失即收敛
+  ——pending 清空、状态机自终止。**覆盖超时续跑（宿主晚完成后的收缩推送）、
+  跨壳/他处 purge、未来任何删除入口**；刷新瞬时失败由后续推送在冷却后重发
+  收敛，被冷却压下的请求不丢 id（留在 pending 随下次推送重估）。行渲染的
+  最终兜底：安静来源（推送停止）由 30s staleness 看门狗的 unary merge 拉取
+  在 ≤1 个周期内把聚合 session 行换成服务端干净列表（行自隐），无需任何
+  触发。仅推送侧评估是完备的：mounted 的 pull 提交保留当前归档集合
+  （commitAggregatePull merge）、full-fallback 提交被 provenance 门挡住，
+  pull 不可能先于推送观察到收缩。
+- **触发 2（对话框即时路径）**：ArchiveManagerDialog 每次 purge settle
+  （成功路径与 catch——超时/网络/busy 亦可能已有宿主侧删除落地）均请求
+  一次，覆盖「收缩推送到达前」的窗口，且对话框关闭也不丢请求。注：对话框
+  请求不进 App 的冷却戳（跨包解耦），与触发 1 在单次 purge 上重叠
+  （≈2 次 session.list RPC，第二次通常空转）——purge 罕见、RPC 廉价，
+  属有意的双通道冗余，非缺陷。
+
+**修正**：§15-②「chamber 可见行不受影响」断言不成立（占位窗口内行可见），
+原文已改为登记并指回本节。设计 05 §3 桥契约随之新增一对通道（同 requestRefresh
+形态，非会话数据面，无权威性）——该清单已同步（见 05 §3 通道表）。
+
+**验证与门禁**：`archiveSetShrink`/`shouldRequestSessionListRefresh`/
+`planSessionListRefresh`（renderer aggregate-refresh.test.ts，含收敛/携带
+pending/未知来源/legacy provenance 用例）与桥通道广播/退订（sidebar
+aggregate-store.test.ts）单测绿。本 seam 执行腿（插件调官方 refresh、App
+状态机接线、对话框触发点）无单测基建，验证 = typecheck + 人工目检（登记
+STATUS 的打包版 UI 目检腿一并覆盖，含「幽灵行不再浮现」断言，§19-4 先例）；
+完整工具链门禁（test:sidebar / test:renderer-shell / typecheck:sidebar / 根
+typecheck）随合入 commit 收口。pinned vendor 前置事实（`refresh()` 存在且
+mergeOrderedBaseline 丢弃服务端缺失行）已在真实运行时源码核验；合入门/实机
+腿再验一次（插件 loose 守卫保证形状不符时只 warn 不破坏）。
+
+**残余登记（不随本轮修）**：① 归档集合中的**历史无目录成员**（旧版 purge
+保留的集合成员，本机实例 739 成员中 734 无目录）在「删除全部」退役后无 UI
+路径可收敛（管理器只列「有行 ∩ 集合」，孤儿清理只在候选集内发生）——建议
+后续把孤儿收敛改为每次 purge 收尾对全集合执行（与子集过滤正交、零新增删除
+语义），作为独立项排期。**该登记同时覆盖本 seam 放大的一类新形态**：purge
+内容删除成功但收尾集合移除写失败（item 码 `archive-set`）时，settle 刷新会
+把内容已删的行从 summaries 移除 → 管理器行（∩ 集合）消失 → 残留集合成员
+不可达（子集 purge 需有行可选、整集 purge 已退役）；修复前的陈旧 summaries
+反而让这些行可重选收敛。与历史成员同类的修复方向（收尾孤儿全集合清扫）一并
+覆盖。② 「归档当前活动会话 → 整源落入 unary 降级视图、已归档行（含运行中/
+正查看）浮出直至重载」为另一家族（dev-QA 登记于 commit 1b19712，机制 =
+官方壳 ctx 代数重建后 chamber 快照生产者首报缺位），本轮的会话列表刷新
+seam 不覆盖它（降级视图的问题是归档集知识丢失而非行滞留）；现有缓解（生产
+者挂载即首报 + 断连保留推送聚合 + rebaseline 重连自愈）之外是否仍有复现
+路径待实机确认后单独修。③ 会话列表刷新瞬时失败的重试由状态机在后续推送
+上收敛；「刷新持续失败 + 推送持续流动」的最坏情形下请求以 5s 冷却封底
+（≤12 RPC/分/来源）且行可见直至通道恢复——如实接受，不引入退避状态。
+④ 对话框与 App 触发重叠（上文注）：多出的一次 session.list 为接受代价。
