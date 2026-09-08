@@ -381,6 +381,32 @@ cpURL 派生自 POC_PORT；B-5 PendingAlertQueue 死代码删除；swift 65/65�
 （窗口/菜单/生命周期/通知/角标/深链/对话框/外链/登录项/崩溃恢复——Swift 宿主腿
 替换默认应答分支，GUI 门禁待实机）→ W-22…（更新 v1 blocked-available + info
 flavor）→ M5 台账收口。
+## 当前状态快照（2026-09-08 17:26，用户要求记录）
+- **分支/HEAD**：swift @ b1c19c8（工作树干净；vendor/harness-checkout 子模块
+  untracked 噪音不提交）。
+- **门禁基线**：swift test 65/65、build 0 警告；desktop test:desktop 914/914（38
+  文件）；typecheck 0；electron-free-gate 3/3、sidecar-stdio 6/6、
+  bridge-manifest 6/6、bridge-shim 6/6、chamber-settings 30/30。
+- **里程碑**：M2/P1 ✅（W-09…W-14）；M3 代码级 ✅（W-15…W-21 宿主腿全集 +
+  manifest + shim）；P3 打包 ✅（adhoc zip/app/DMG 于 packages/desktop/release/，
+  8-27 产物仍占 /Applications，未刷新——事故纪律）；parity 批 ✅（S-A…S-E：
+  hostFacts/shim 67 方法/ctx 全真化/notify 路由/settings async 化）；跨层审计
+  ✅（A×3 收口 52e919e、B×12 登记、C×4 门禁）。
+- **POC dev 验收环境**：macos/ swift run（或直跑 .build/arm64-apple-macosx/
+  debug/DSHChamberPoc）带环境：POC_SIDECAR=<repo>/packages/desktop/
+  sidecar-entry.ts、POC_NODE_BIN=/Applications/dsh-chamber.app/Contents/
+  MacOS/dsh-chamber、POC_DSH_PATH=<repo>/packages/desktop/vendor/dsh、
+  DSH_SIDECAR_LEGACY_START=1（离线快捷门）、NSUnbufferedIO=YES；独立
+  userData dsh-chamber-poc-dev、端口 17520/实例 17511——与现网实例全隔离。
+  最近一轮 POC 已被退出（POC_STOPPED），需验收时重拉。
+- **硬门禁（C 类，解锁条件已登记）**：①通知/更新/SMAppService 真实闭环 =
+  打包 .app + Apple 凭据（W-22 Sparkle/notarization，A6）；②全新离线 profile
+  本地实例需网络装运行时（与 Electron 同语义）；③G 门 walkthrough/截屏（系统
+  曾拒屏幕录制）；④/Applications 刷新等用户明确指令。
+- **验收清单（用户逐流对照用）**：设置页（keep-awake/登录项失败回滚）、runtime
+  管理（离线 loud 与 Electron 一致）、SSH CRUD、本地实例会话、设置变更即时
+  回显、开关窗口后 held resume/唤醒重连。
+
 **环境事故登记（同日 18:23–18:30）**：`/Applications/dsh-chamber.app/Contents/MacOS/
 dsh-chamber` 可执行文件被误替换为「exec nvm node」跳转 shim（推测为某 subagent 建
 PATH shim 时写错目标路径；真二进制无备份、stub 与框架配对校验失败）。处置：从主检出
