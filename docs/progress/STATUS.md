@@ -179,6 +179,12 @@
    START=1 离线快捷门）；swift 66/66、desktop 914/914。parity 边界：update
    （Swift W-22 Sparkle 线）、settings 叶 async 化（已收口 8b988eb）、全新离线
    profile 阻塞（与 Electron 同语义）、实机门禁（SMAppService/拉起/通知闭环）。
+   **状态快照（2026-09-08 17:26，用户要求记录）**：swift @ b1c19c8（树干净）；
+   swift test 65/65、desktop 914/914、typecheck 0；M2/P1+M3 代码级+P3(adhoc)+
+   parity 批(S-A…S-E)+跨层审计 A 类收口均已完成；POC dev 验收环境就绪（POC_*
+   env + DSH_SIDECAR_LEGACY_START=1，独立 userData/17520/17511，与现网隔离）；
+   硬门禁清单与解锁条件见 todo macos-swift-v1.md「当前状态快照」；最近 POC
+   已退出待重拉。
 - **起始端口偏移**：本地默认 17510、控制面默认 17500；当前固定起始端口 + P+1 重试 +
   记录仲裁，是否开放配置仍未决。
 - **trusted-host 自定义 Host**：当前反代 Host 与实例自身 `127.0.0.1:<port>` 一致；
