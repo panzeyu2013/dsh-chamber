@@ -1,11 +1,13 @@
 /**
  * Layout plugin, browser half: one register() call contributes AppFrame into
  * the runtime's built-in 'root' slot and, in the same breath, declares the
- * four child slots (declaration = exclusive render authority), seats the
- * layout store (panel geometry), and wires the panel-action service face.
- * ctx.layout is the cross-plugin panel-action contract; navigation state lives
- * with the runtime sessions service. A second effect seats the theme
- * presenter, which projects ctx.theme snapshots onto document.body.
+ * child slots (declaration = exclusive render authority), seats the layout
+ * store (panel geometry + main-panel selection), and wires the panel-action
+ * service face. ctx.layout is the cross-plugin panel-action contract
+ * (`selectPanel` / `toggleSidebar` / `openRightbar` / `closeRightbar`);
+ * Session selection lives with the runtime sessions service. A second effect
+ * seats the theme presenter, which projects ctx.theme snapshots onto
+ * document.body.
  *
  * CHAMBER FORK (design 06 — sidebar width sharing): verbatim copy of the
  * vendor `@deepseek-ai/dsh-client-ui-layout` client index with the frame
@@ -13,23 +15,26 @@
  * (`@deepseek-ai/dsh-client-ui-layout/src/client/…` — resolved to source by
  * the renderer's deepseekSource plugin) and the store to THIS fork's
  * `stores.ts` (shared + persisted sidebar width). Everything else mirrors the
- * upstream dsh-v0.1.2-alpha.1 client index — `inject: ['slots', 'theme',
- * 'locale']` and `register({ ..., locale: 'common' })` (the vendor AppFrame
- * consumes the locale service's PropsLocale<'common'>/DocumentTitle face),
- * the SlotMap merges, SidebarOwnerProps, LayoutController/ILayout,
- * registration order and priority — so the official bundle must never load
- * (a second 'root' registration at priority 0 would throw the one-declarer
- * rule; see chamber-covered.ts).
+ * upstream `dsh-v0.1.5-alpha.2` client index — `inject: ['slots', 'theme',
+ * 'locale']`, the eager root instance shared with the registration
+ * (`store: { ...handle, create: () => instance }`), the SlotMap merges
+ * (`sidebar` / keyed `main` / `rightbar` / `shell.overlay`),
+ * SidebarOwnerProps/RightbarOwnerProps, the `usePanelInfo` root hook
+ * projection, LayoutController construction, registration order and priority —
+ * so the official bundle must never load (a second 'root' registration at
+ * priority 0 would throw the one-declarer rule; see chamber-covered.ts).
  */
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-session/client'
 import type {} from '@deepseek-ai/dsh-client-ui-theme/client'
-import type { PanelActions } from '@deepseek-ai/dsh-client-ui-layout/src/client/service.ts'
+import type { HostObservable, SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
+import type { PanelInfo } from '@deepseek-ai/dsh-client-ui-layout/src/client/service.ts'
 import { AppFrame } from '@deepseek-ai/dsh-client-ui-layout/src/client/AppFrame.tsx'
-import { createLayoutStore, subscribeLayoutInstances } from './stores.ts'
-import type { LayoutInstance, LayoutState } from './store-core.ts'
+import { SIDEBAR_AUTO_COLLAPSE } from '@deepseek-ai/dsh-client-ui-layout/src/client/columns.ts'
+import { createLayoutStore, trackLayoutInstance } from './stores.ts'
+import type { LayoutState } from './store-core.ts'
 import { LayoutController } from '@deepseek-ai/dsh-client-ui-layout/src/client/service.ts'
 import { ThemePresenter } from '@deepseek-ai/dsh-client-ui-layout/src/client/theme-presenter.ts'
 import { chamberBridge } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
@@ -56,35 +61,36 @@ function applyDocumentTheme(snapshot: DocumentThemeSnapshot): void {
 // OwnerShare contracts below are the render-side halves registrants compose
 // against; the frame components and the store factory are package-internal.
 export { LayoutController } from '@deepseek-ai/dsh-client-ui-layout/src/client/service.ts'
-export type { ILayout } from '@deepseek-ai/dsh-client-ui-layout/src/client/service.ts'
+export type { ILayout, MainPanelId, PanelInfo } from '@deepseek-ai/dsh-client-ui-layout/src/client/service.ts'
 export type { LayoutState } from './store-core.ts'
+
+/** Selector hook over root-scoped panel selection (the `usePanelInfo` seat). */
+export type UsePanelInfo = SnapshotSelectorHook<PanelInfo>
 
 /**
  * CHAMBER FORK (design 17 §18 — mobile surface): the layout FACTS face —
- * snapshot + subscription for cross-plugin consumers (the mobile adaptation
- * plugin), provided per-ctx as `ctx.layoutFacts`. The store instance is
- * minted lazily by the framework (first AppFrame render), so the facts are
- * delivered through per-instance observers rather than a synchronous getter
- * in apply(); `subscribeLayout` fires once with the current snapshot on
- * subscribe (the engine notifies on change only), then on every snapshot
- * change. State is the store preference set; render geometry (concession
- * chain, session gating) is NOT included — consumers derive the collapsed
- * flag themselves: `collapsed = narrow ? !narrowExpanded : sidebar === 0`.
- *
- * SINGLE-INSTANCE SEMANTICS (read before consuming): the service tracks the
- * LATEST live store instance per environment, and the environment is shared
- * by every boot of an N-ctx shell — there is no per-boot instance scoping on
- * this face (design 17 §18.4 项 2 defers it to the consumer's own root).
- * With several live shells, getLayoutSnapshot() therefore reflects the most
- * recently minted instance, and a shell whose instance was released reads
- * the closed default until the next mint. Today's only consumer (the mobile
- * plugin) runs in the single-instance gateway deployment, where the face is
- * exact; a future multi-shell renderer mount must scope by its own instance
- * root before relying on these facts.
+ * snapshot + subscription + the frame's collapsed derivation for cross-plugin
+ * consumers (the mobile adaptation plugin), provided per-ctx as
+ * `ctx.layoutFacts`. The root instance is minted EAGERLY by this plugin's
+ * apply (the alpha.2 baseline), so the face binds to that one instance
+ * directly; per-ctx scoping is the ctx lifecycle's own. `getCollapsed()`
+ * mirrors AppFrame's derivation (`narrow = viewportWidth < SIDEBAR_AUTO_COLLAPSE`,
+ * then `narrow ? !narrowExpanded : sidebar === 0`), so consumers never restate
+ * the vendor breakpoint constant.
  */
 export interface LayoutFacts {
+  /** Current store snapshot (panel selection + frame/panel geometry). */
   getLayoutSnapshot(): LayoutState
+  /** AppFrame's derived sidebar-collapsed flag for the current snapshot. */
+  getCollapsed(): boolean
+  /** Subscribe to snapshot changes; fires once immediately on subscribe. */
   subscribeLayout(listener: () => void): () => void
+}
+
+/** AppFrame's collapsed derivation over one snapshot (single source of truth). */
+function collapsedOf(snapshot: LayoutState): boolean {
+  const { sidebar, viewportWidth, narrowExpanded } = snapshot.layoutInfo
+  return viewportWidth < SIDEBAR_AUTO_COLLAPSE ? !narrowExpanded : sidebar === 0
 }
 
 declare module '@deepseek-ai/cordis' {
@@ -101,6 +107,11 @@ declare module '@deepseek-ai/cordis' {
 }
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
+  interface GlobalStandardProps {
+    /** Subscribe to the selected main panel independently of parent renders. */
+    usePanelInfo: UsePanelInfo
+  }
+
   interface SlotMap {
     // The 'root' entry itself is the runtime's built-in slot (declared
     // there); these four are the frame's children, declared by the same
@@ -118,28 +129,24 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
      */
     'sidebar': { kind: 'single'; scope: 'root'; owner: SidebarOwnerProps }
     /**
-     * The whole center column, across both the no-session hero and a live
-     * conversation. OCCUPIED by ui-conversation's ConversationRoot, which
-     * declares the session body, composer, and input seats inside it —
-     * registering here replaces the entire conversation surface (and removes
-     * every seat it declares) rather than adding to it.
-     *
-     * Current-session-optional: the occupant owns both states without
-     * changing its React identity, so it keeps its own state across a session
-     * switch. It receives no owner props; session facts arrive through the
-     * framework hooks of the `session-maybe` scope.
+     * Central panel selected by sidebar entry id. The reserved `conversation`
+     * key hosts the Conversation; other keys receive no Session binding.
      */
-    'conversation': { kind: 'single'; scope: 'session-maybe'; owner: ConvOwnerProps }
+    'main': { kind: 'keyed'; scope: 'root' }
     /**
-     * The right details column, shown when the layout opens it. OCCUPIED by
-     * ui-conversation's DetailsPanel, which declares the tool-details seat
-     * inside it — registering here replaces the column and takes that seat
-     * with it. Absent an occupant the column renders nothing.
+     * The right column: a track the centre makes room for, or nothing.
+     * OCCUPIED by the right Sidebar, which uses the resolved column width in
+     * normal mode and covers the viewport in fullscreen, retaining the
+     * wide-screen column reservation underneath.
      *
-     * No owner props: the framework injects the session id and hooks for the
-     * `session` scope, and `ctx.layout` owns whether the column is open.
+     * Whether the panel is shown, and whether it takes a track, is the
+     * occupant's own recorded business — it reports the composition of its
+     * expanded and presentation state through `ctx.layout`, and the frame
+     * sizes the track and places the resize handle from that. The expand
+     * control is not this column's: it is a button in the conversation header.
+     * The root occupant decides when to render its Session-bound content.
      */
-    'details': { kind: 'single'; scope: 'session'; owner: DetailsOwnerProps }
+    'rightbar': { kind: 'single'; scope: 'root'; owner: RightbarOwnerProps }
     /**
      * Frame-wide floating layer, above every column and outside their scroll
      * containers. Deliberately generic and unowned by any feature: a badge, a
@@ -157,8 +164,7 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 // OwnerShare contracts — the render-side share the slot owner supplies at
 // renderSlot. Registrants IMPORT these and compose their full component props
 // through the four-share intersection (PropsRuntime & PropsRenderSlots &
-// PropsStore & I). Conversation business state and actions arrive through
-// framework-standard hooks and each registrant's inject face, not owner props.
+// PropsStore & I).
 
 /** Sidebar owner share: live column state from the frame's concession solve. */
 export interface SidebarOwnerProps {
@@ -168,100 +174,102 @@ export interface SidebarOwnerProps {
   width: number
 }
 
-/** Conversation owner share: business state and actions belong to the registrant. */
-export interface ConvOwnerProps {}
-
-/** Details owner share: empty — sessionId arrives as a framework-standard prop. */
-export interface DetailsOwnerProps {}
+/** Right column owner share: resolved normal geometry and opening eligibility. */
+export interface RightbarOwnerProps {
+  /** Resolved normal panel width in px, not the saved preference; zero if it cannot fit. */
+  width: number
+  /** Current frame width in px. */
+  viewportWidth: number
+  /**
+   * Whether a normal right panel can retain 300px beside a 400px center.
+   * Before a narrow opening, includes the space from collapsing the left sidebar.
+   */
+  canShow: boolean
+}
 
 /** Required services (cordis fiber inject — the loader passes all module exports as an object plugin). */
 export const inject = ['slots', 'theme', 'locale']
 
 /**
  * Client plugin body: provide ctx.layout, then one register() call — AppFrame
- * into 'root' with the four child-slot declarations, the layout store seat,
- * and the inject hook that hands the store's bound actions to the service.
+ * into 'root' with the child-slot declarations, the layout store seat, and the
+ * shared root instance supplying commands and the panel-info source.
  * @param ctx - client root context.
  */
 export function apply(ctx: ClientContext): void {
-  const layout = new LayoutController()
-  // CHAMBER FORK (design 17 §18 — mobile surface): the layoutFacts service.
-  // Tracks the LATEST live store instance via weak reference (instances are
-  // minted lazily by the framework on first AppFrame render) and fans out
-  // per-instance snapshot changes. Per-ctx: one service per boot, scoped by
-  // the ctx lifecycle — generation isolation is the ctx's own.
-  let currentLayoutRef: WeakRef<LayoutInstance> | null = null
-  const listeners = new Set<() => void>()
-  const currentLayoutSnapshot = (): LayoutState => {
-    const instance = currentLayoutRef?.deref()
-    return instance === undefined
-      ? { sidebar: 0, details: 0, narrow: false, narrowExpanded: false }
-      : instance.getSnapshot()
-  }
-  const notifyLayout = (): void => {
-    // Per-listener isolation, mirroring the store-core observer guard and
-    // the sidebar view-prefs precedent: one throwing consumer must not
-    // starve its siblings on every subsequent notification.
-    for (const listener of listeners) {
-      try {
-        listener()
-      } catch (error) {
-        console.error('[dsh-chamber] layoutFacts subscriber threw:', error)
+  ctx.effect(() => {
+    // The root instance is minted EAGERLY and shared with the registration
+    // (upstream baseline): AppFrame reads it through PropsStore, ctx.layout
+    // wraps its bound actions, and the usePanelInfo hook projects its
+    // panelInfo slice as a root-standard source.
+    const handle = createLayoutStore()
+    const instance = handle.create()
+    const store: typeof handle = { ...handle, create: () => instance }
+    // chamber fork (design 06): register the instance so the shared
+    // view-prefs subscription adopts cross-shell sidebar-width changes.
+    trackLayoutInstance(instance)
+    const layout = new LayoutController(instance.actions, id =>
+      ctx.slots.entries('main').some(entry => entry.options.key === id))
+    const retainMainPanels = (): void => {
+      instance.actions.retainMainPanels(ctx.slots.entries('main').flatMap(entry =>
+        entry.options.key === undefined ? [] : [entry.options.key]))
+    }
+    const panelInfo: HostObservable<PanelInfo> = {
+      getSnapshot: () => instance.getSnapshot().panelInfo,
+      subscribe: listener => instance.subscribe(listener),
+    }
+    const disposePanelInfo = ctx.slots.provideRoot({ hooks: { panelInfo } })
+    const disposeService = ctx.reflect.provide('layout', layout)
+    // CHAMBER FORK (design 17 §18 — mobile surface): layout facts bound to the
+    // one root instance this ctx minted. Subscribers get the current snapshot
+    // immediately, then every change; per-listener isolation mirrors the
+    // store-core adoption guard (one throwing consumer must not starve its
+    // siblings).
+    const listeners = new Set<() => void>()
+    const notifyLayout = (): void => {
+      for (const listener of listeners) {
+        try {
+          listener()
+        } catch (error) {
+          console.error('[dsh-chamber] layoutFacts subscriber threw:', error)
+        }
       }
     }
-  }
-  const layoutFacts: LayoutFacts = {
-    getLayoutSnapshot: () => currentLayoutSnapshot(),
-    subscribeLayout: listener => {
-      listeners.add(listener)
-      listener()
-      return () => { listeners.delete(listener) }
-    },
-  }
-  ctx.effect(() => {
-    const disposeService = ctx.reflect.provide('layout', layout)
+    const layoutFacts: LayoutFacts = {
+      getLayoutSnapshot: () => instance.getSnapshot(),
+      getCollapsed: () => collapsedOf(instance.getSnapshot()),
+      subscribeLayout: listener => {
+        listeners.add(listener)
+        listener()
+        return () => { listeners.delete(listener) }
+      },
+    }
     const disposeFacts = ctx.reflect.provide('layoutFacts', layoutFacts)
-    // Subscribe to every live store instance (production env): adopt the
-    // latest instance (weak ref) and fan out its snapshot changes. Released
-    // instances are weak-tracked; their per-instance subscriber entries die
-    // with the engine instances themselves.
-    const disposeInstances = subscribeLayoutInstances(instance => {
-      currentLayoutRef = new WeakRef(instance)
-      instance.subscribe(notifyLayout)
-      notifyLayout()
-    })
-    // ORDER CONTRACT (do not reorder): the layoutFacts provide() and this
-    // instance subscription must both run BEFORE slots.register — the
-    // framework instantiates the store only on the first AppFrame render,
-    // which happens after apply() completes, so a consumer subscribed here
-    // can never miss the first mint. The mobile plugin's tier-1 detection
-    // relies on the same ordering via its hard 'layout' inject.
+    const unsubscribeInstance = instance.subscribe(notifyLayout)
     const disposeRegistration = ctx.slots.register({
       name: 'root',
       locale: 'common',
       children: {
         'sidebar': { kind: 'single', scope: 'root' },
-        'conversation': { kind: 'single', scope: 'session-maybe' },
-        'details': { kind: 'single', scope: 'session' },
+        'main': { kind: 'keyed', scope: 'root' },
+        'rightbar': { kind: 'single', scope: 'root' },
         'shell.overlay': { kind: 'list', scope: 'root' },
       },
-      // Exclusive store: the factory itself — the framework instantiates per
-      // entry and delivers useStore/actions to AppFrame as standard props.
-      // Chamber fork: this fork's store (shared + persisted sidebar width).
-      store: createLayoutStore,
-      // The hook's only side effect connects the root store to ctx.layout;
-      // conversation business actions belong to their registrants.
-      inject: (actions: PanelActions) => {
-        layout.attachPanels(actions)
-        return {}
-      },
+      // Exclusive store: the shared root instance — the framework delivers
+      // useStore/actions to AppFrame as standard props.
+      store,
     }, AppFrame)
+    const disposePanels = ctx.slots.subscribe('main', retainMainPanels)
+    retainMainPanels()
     return () => {
+      layout.dispose()
+      disposePanels()
       disposeRegistration()
-      disposeInstances()
+      unsubscribeInstance()
       // provide()'s disposer settles asynchronously; teardown is synchronous fire-and-forget.
       void disposeService()
       void disposeFacts()
+      disposePanelInfo()
     }
   }, 'ui-layout: service + root registration')
 

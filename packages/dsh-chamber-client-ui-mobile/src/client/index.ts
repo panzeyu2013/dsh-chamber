@@ -38,7 +38,6 @@ import {
   ROOT_SLOT_SELECTOR,
   shouldRestamp,
   stampFrame,
-  stampSessionLogDismiss,
   type MutationLike,
 } from './markup.ts'
 import { createLayoutFactSource } from './layout-facts.ts'
@@ -154,20 +153,13 @@ export function apply(ctx: ClientContext): void {
     let frameAttributeObserver: MutationObserver | null = null
     const stamp = (): void => {
       const roots = document.querySelectorAll(ROOT_SLOT_SELECTOR)
-      for (const root of roots) {
-        const frame = stampFrame(root)
-        // Session-header chrome stamps (late-mounting, idempotent): the
-        // "Session 日志" export capsule gets the phone-tier compact mark.
-        // Runs on every structural/attribute re-stamp — it simply finds no
-        // header before a session mounts.
-        if (frame !== null) stampSessionLogDismiss(frame)
-      }
-      // (b) Frame state attributes (collapsed flags) drive the drawer/overlay
+      for (const root of roots) stampFrame(root)
+      // (b) Frame state attributes (collapsed flags) drive the drawer
       // geometry and can flip in the same commit as a session activation, or
       // on attribute-only paths the childList observer never sees. Re-attach
       // after every stamp so a remounted frame is observed; stampFrame never
       // writes these attributes, so there is no self-trigger loop. Frequency
-      // is user-action level (drawer open/close, details open) — zero
+      // is user-action level (drawer open/close, right surface open) — zero
       // streaming noise. NOTE: this observer channel is wiring-only and has
       // no unit test (no DOM/MutationObserver test base in this package) —
       // verified on device (§18.6); the pure batch decision below is the
@@ -184,7 +176,7 @@ export function apply(ctx: ClientContext): void {
       for (const frame of frames) {
         frameAttributeObserver.observe(frame, {
           attributes: true,
-          attributeFilter: ['data-sidebar-collapsed', 'data-details-collapsed'],
+          attributeFilter: ['data-sidebar-collapsed', 'data-rightbar-collapsed'],
         })
       }
     }

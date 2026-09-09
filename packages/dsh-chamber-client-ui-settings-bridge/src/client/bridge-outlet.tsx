@@ -52,6 +52,13 @@ const EMPTY_OBSERVABLE: HostObservable<unknown> = {
 }
 const emptyObservableHook = bridgeObservableHook(EMPTY_OBSERVABLE)
 
+/** alpha.2 panel-selection stub: the settings chain selects no main panel. */
+const EMPTY_PANEL_INFO: HostObservable<{ activePanelId: null }> = {
+  getSnapshot: () => ({ activePanelId: null }),
+  subscribe: () => () => {},
+}
+const panelInfoHook = bridgeObservableHook(EMPTY_PANEL_INFO)
+
 const noopSubscribe = (): (() => void) => () => {}
 
 /** Store-instance cache, root scope: one instance per registered handle. */
@@ -185,6 +192,10 @@ function renderEntry(
   const kit: InjectedProps = {
     useSessions: emptyObservableHook,
     useWorkspaces: emptyObservableHook,
+    // alpha.2 global standard seat: the settings chain declares no main-panel
+    // selection, so a component reading it sees "no panel selected" (null)
+    // instead of an undefined hook.
+    usePanelInfo: panelInfoHook,
   }
   if (entry.locale !== undefined) {
     if (locale === undefined) {

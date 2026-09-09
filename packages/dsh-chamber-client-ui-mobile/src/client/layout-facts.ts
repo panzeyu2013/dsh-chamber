@@ -4,7 +4,9 @@
  * runs the OFFICIAL ui-layout — the chamber fork's `ctx.layoutFacts` service
  * only exists in the desktop renderer (N-ctx shells). The mobile plugin
  * therefore uses a two-tier source:
- *   1. `ctx.layoutFacts` when present (chamber fork — store subscription);
+ *   1. `ctx.layoutFacts` when present (chamber fork — the store exposes the
+ *      AppFrame derivation directly, so the plugin never restates the
+ *      breakpoint constant);
  *   2. the official frame attribute `data-sidebar-collapsed` observed
  *      directly (gateway-hosted official ui-layout).
  * This keeps the `inject` list to official services only (['slots','locale','layout'])
@@ -12,7 +14,6 @@
  */
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import { TOUCH_TIER_QUERY } from './composer.ts'
-import { deriveCollapsed } from './markup.ts'
 
 export interface LayoutFactSource {
   /** The AppFrame-derived collapsed flag (drawer closed). */
@@ -47,7 +48,8 @@ export function createLayoutFactSource(ctx: ClientContext): LayoutFactSource {
   // safe (P2: the gateway-hosted official ui-layout is the plugin's PRIMARY
   // deployment target).
   interface LayoutFactsFace {
-    getLayoutSnapshot(): { narrow: boolean; narrowExpanded: boolean; sidebar: number }
+    /** AppFrame's derived sidebar-collapsed flag (the fork's own derivation). */
+    getCollapsed(): boolean
     subscribeLayout(fn: () => void): () => void
   }
   let facts: LayoutFactsFace | undefined
@@ -66,7 +68,7 @@ export function createLayoutFactSource(ctx: ClientContext): LayoutFactSource {
     const onTierChange = (): void => notify()
     tier.addEventListener('change', onTierChange)
     return {
-      getCollapsed: () => deriveCollapsed(facts.getLayoutSnapshot()),
+      getCollapsed: () => facts.getCollapsed(),
       getNarrow: () => tier.matches,
       subscribe: listener => {
         listeners.add(listener)
@@ -91,9 +93,9 @@ export function createLayoutFactSource(ctx: ClientContext): LayoutFactSource {
     if (frame !== null) frameObserver.disconnect()
     frame = next
     if (frame !== null) {
-      // data-details-collapsed is observed for forward use (the details
-      // overlay state); getCollapsed() today reads only the sidebar flag.
-      frameObserver.observe(frame, { attributes: true, attributeFilter: ['data-sidebar-collapsed', 'data-details-collapsed'] })
+      // data-rightbar-collapsed rides along for forward use; getCollapsed()
+      // reads only the sidebar flag.
+      frameObserver.observe(frame, { attributes: true, attributeFilter: ['data-sidebar-collapsed', 'data-rightbar-collapsed'] })
     }
     notify()
   }

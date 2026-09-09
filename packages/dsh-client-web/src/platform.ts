@@ -26,7 +26,12 @@
  * shell.ts "C3 gate", host-graph.ts `awaitBeforeLoad`); the residual
  * prefetch-failure race degrades loud. Every other word stays seed-answered.
  * A future upstream PLATFORM_MODULES change must be mirrored here (and in
- * seed.ts) consciously.
+ * seed.ts) consciously. The alpha.2 word `@deepseek-ai/dsh-client-ui-dockkit`
+ * is answered by the composite's covered factory instead of this seed, for the
+ * same chunk-budget reason as ui-primitives: seeding it pulls the docking kit
+ * into the main-graph eval that precedes the App mount. It is a pure library
+ * (no `dsh.client`), so the "a platform word must never be a host-graph row"
+ * invariant is unaffected; see chamber-entry.ts / chamber-covered.ts.
  */
 
 /** The module specifiers the shell shares into the frozen module table. */

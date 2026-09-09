@@ -122,7 +122,18 @@ import clsx from 'clsx'
 import {
   BrandWordmark, FishLogo, IconNewChatOutline16, IconPanelLeftOutline16, Tooltip,
 } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { SidebarRootComponentProps } from './contract/slots.ts'
+import type { SidebarPanelMetadata, SidebarRootComponentProps } from './contract/slots.ts'
+
+/** Root panel-selection snapshot (alpha.2 `ctx.layout` / `usePanelInfo`). */
+interface PanelInfoSnapshot {
+  readonly activePanelId: string | null
+}
+
+/** Selector hook over the panel selection (framework-bound prop). */
+type PanelSelectorHook = <Selected>(selector: (info: PanelInfoSnapshot) => Selected) => Selected
+
+/** Selector hook over the registered global panels (inject hooks compartment). */
+type PanelsHook = <Selected>(selector: (panels: readonly SidebarPanelMetadata[]) => Selected) => Selected
 import { chamberBridge, type ChamberServerAggregate } from '../shared/aggregate-store.ts'
 import { openErrorKey, withoutOpenError } from '../shared/open-outcome.ts'
 import {
@@ -244,16 +255,64 @@ function useNativeDragAcceptance(active: boolean): void {
   }, [active])
 }
 
+/**
+ * One global-panel row (alpha.2 `sidebar.panellist`): the sidebar owns the
+ * button and the row subscribes only to its own selection state, so a panel
+ * switch re-renders the affected rows instead of the whole column. The icon
+ * comes from the addressing list entry; the label is the shell's resolved
+ * metadata.
+ */
+function PanelRow({
+  id,
+  label,
+  wide,
+  usePanelInfo,
+  selectPanel,
+  renderSlot,
+}: {
+  id: SidebarPanelMetadata['id']
+  label: string
+  wide: boolean
+  usePanelInfo: PanelSelectorHook
+  selectPanel: (id: SidebarPanelMetadata['id']) => void
+  renderSlot: SidebarRootComponentProps['renderSlot']
+}) {
+  const active = usePanelInfo(info => info.activePanelId === id)
+  return (
+    <Tooltip label={label} delayMs={500} disabled={wide}>
+      <button
+        type="button"
+        className={clsx(css.panelRow, active && css.panelActive)}
+        aria-label={label}
+        aria-current={active ? 'page' : undefined}
+        onClick={() => { selectPanel(id) }}
+      >
+        <span className={css.panelGlyph} aria-hidden="true">
+          {renderSlot('sidebar.panellist', { size: wide ? 16 : 18, active }, { only: id })}
+        </span>
+        {wide && <span className={clsx(css.panelTitle, css.wide)}>{label}</span>}
+      </button>
+    </Tooltip>
+  )
+}
+
 export function SidebarRoot({
   collapsed,
   width,
   startSession,
   toggleSidebar,
+  selectPanel,
+  usePanels,
+  usePanelInfo,
   chamberInstanceId,
   directoryBrowserT,
   t,
   renderSlot,
 }: SidebarRootComponentProps) {
+  // alpha.2 global panel axis: the shell renders one row per registration
+  // (empty by default). The selector hook keeps a row's re-render scoped to
+  // its own selection state.
+  const panels = (usePanels as PanelsHook)(snapshot => snapshot)
   // The sidebar's own typecheck program resolves the slots render share
   // through the loose ambient seam (renderSlot is a 2-arg signature there),
   // so the contextual 3-arg occurrence is narrowed locally. The runtime
@@ -1304,7 +1363,17 @@ export function SidebarRoot({
             aria-label={t('session.new.label')}
             onClick={() => { startSession() }}
           >
-            <BrandWordmark />
+            {/* alpha.2 brand holes: the shell keeps the chamber wordmark as
+                the mark fallback and renders nothing for an unregistered
+                name occupant. */}
+            <span className={css.brandIdentity} aria-hidden="true">
+              <span className={css.brandMark}>
+                {renderSlot('sidebar.brand.mark', { size: 24 }, { fallback: <BrandWordmark /> })}
+              </span>
+              <span className={css.brandName}>
+                {renderSlot('sidebar.brand.name', {}, { fallback: null })}
+              </span>
+            </span>
           </button>
         )}
         {/* Rail resting state is the whale mark; hovering swaps in the panel
@@ -1316,7 +1385,11 @@ export function SidebarRoot({
             aria-label={collapsed ? t('toggle.open') : t('toggle.collapse')}
             onClick={() => { toggleSidebar() }}
           >
-            {!wide && <FishLogo className={css.railFish} size={24} />}
+            {!wide && (
+              <span className={css.railMark} aria-hidden="true">
+                {renderSlot('sidebar.brand.mark', { size: 24 }, { fallback: <FishLogo className={css.railFish} size={24} /> })}
+              </span>
+            )}
             {/* Rail icons render at 18 (figma rail spec); expanded keeps the glyph-native sizes. */}
             <IconPanelLeftOutline16 className={css.panelIcon} size={wide ? 16 : 18} />
           </button>
@@ -1335,6 +1408,24 @@ export function SidebarRoot({
           {wide && <span className={clsx(css.newSessionLabel, css.wide)}>{t('session.new')}</span>}
         </button>
       </Tooltip>
+
+      {/* alpha.2 global panel axis: rows appear only when some plugin
+          registers into `sidebar.panellist` (upstream ships none). */}
+      {panels.length > 0 && (
+        <nav className={css.panelList} aria-label={t('panels.label')}>
+          {panels.map(panel => (
+            <PanelRow
+              key={panel.id}
+              id={panel.id}
+              label={panel.label}
+              wide={wide}
+              usePanelInfo={usePanelInfo}
+              selectPanel={selectPanel}
+              renderSlot={renderSlot}
+            />
+          ))}
+        </nav>
+      )}
 
       {/* The browsing region fills the column between the controls and the
           foot in both states. chamber patch: the multi-source session list

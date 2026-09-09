@@ -83,7 +83,15 @@ test('motion uses official tokens with a reduced-motion branch', () => {
 test('backdrop dims the conversation behind the open drawer', () => {
   assert.ok(MOBILE_CSS.includes('.dsh-mobile-backdrop'))
   assert.ok(MOBILE_CSS.includes('var(--dsw-alias-bg-mask-1'))
-  assert.ok(MOBILE_CSS.includes('z-index: 39'))
+  assert.ok(MOBILE_CSS.includes('z-index: 74'))
+})
+
+test('mobile layering sits above the vendor right surface and dockkit chrome', () => {
+  // Backdrop 74 < drawer 75 < toggle 76 must stay above the official
+  // fullscreen right panel (40), its float layer (60) and dockkit (70).
+  assert.ok(MOBILE_CSS.includes('z-index: 74'))
+  assert.ok(MOBILE_CSS.includes('z-index: 75'))
+  assert.ok(MOBILE_CSS.includes('z-index: 76'))
 })
 
 test('settings full-screen rule targets the official settings dialog shape', () => {

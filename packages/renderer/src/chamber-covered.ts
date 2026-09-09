@@ -95,6 +95,12 @@ export const CHAMBER_COVERED_IDS: readonly string[] = [
   // absent from a host graph is never filtered, so listing it is harmless —
   // the union-table lockstep asserts demand it (factory id ∈ covered).
   '@deepseek-ai/dsh-client-ui-primitives',
+  // alpha.2: ui-dockkit is a PLATFORM_MODULES word answered by the composite's
+  // covered factory (the seed deliberately omits it — see chamber-entry.ts).
+  // It has no `dsh.client`, so it is never a host-graph row; listing it keeps
+  // the factory-id lockstep assert and the require edges of the right-sidebar
+  // rows satisfied.
+  '@deepseek-ai/dsh-client-ui-dockkit',
   '@deepseek-ai/dsh-api-session-controller',
   '@deepseek-ai/dsh-api-workspace-controller',
   '@deepseek-ai/dsh-client-locale',
@@ -224,6 +230,8 @@ export const CHAMBER_COVERED_FACTORY_IDS: readonly string[] = [
   // comment; factory only, never a ctx.plugin).
   '@deepseek-ai/dsh-client-store',
   '@deepseek-ai/dsh-client-ui-primitives',
+  // alpha.2: the docking-kit word answered by the composite factory.
+  '@deepseek-ai/dsh-client-ui-dockkit',
   '@deepseek-ai/dsh-api-session-controller',
   '@deepseek-ai/dsh-api-workspace-controller',
   '@deepseek-ai/dsh-client-locale',

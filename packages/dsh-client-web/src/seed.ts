@@ -23,6 +23,10 @@
  * concurrently with extra loads — an extra requiring the word in that window
  * fails loud and degrades (retry self-heals), never silent. Do not restore the
  * word here without removing the factory path too.
+ *
+ * alpha.2: upstream added `@deepseek-ai/dsh-client-ui-dockkit` to its platform
+ * table; the chamber seed deliberately does NOT (the composite's covered
+ * factory answers it — same chunk-budget reasoning as ui-primitives above).
  */
 import * as React from 'react'
 import * as ReactJsxRuntime from 'react/jsx-runtime'

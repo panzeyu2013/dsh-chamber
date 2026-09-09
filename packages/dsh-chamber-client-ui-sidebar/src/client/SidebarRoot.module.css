@@ -285,3 +285,96 @@
     animation: none;
   }
 }
+
+/* ---- alpha.2 extension holes (brand + global panel list) ---- */
+
+/* Brand identity group: the mark hole plus the optional name occupant. The
+   chamber wordmark stays the mark fallback, so the row looks unchanged when
+   no plugin registers into either hole. */
+.brandIdentity {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.brandMark {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+}
+
+.brandName {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.railMark {
+  display: inline-flex;
+  align-items: center;
+}
+
+/* Global panel list (`sidebar.panellist`): one row per registered main
+   panel; hidden while no plugin registers one (upstream default). */
+.panelList {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0 8px;
+  margin-bottom: 8px;
+}
+
+.panelRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 32px;
+  padding: 0 8px;
+  box-sizing: border-box;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 13px;
+  line-height: 20px;
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.panelRow:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+.panelActive {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+.panelGlyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+
+.panelTitle {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.collapsed .panelList {
+  padding: 0;
+  align-items: center;
+}
+
+.collapsed .panelRow {
+  width: 36px;
+  justify-content: center;
+  padding: 0;
+}

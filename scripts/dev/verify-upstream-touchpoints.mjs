@@ -319,11 +319,11 @@ for (const fork of FORKS) {
       join(ROOT, 'packages/renderer/scripts/typert-remote-contract.mjs')
     )
     const remotes = remotePackagesFromAssembly(readFileSync(assemblyEntry, 'utf8'))
-    if (remotes.length !== 13) {
+    if (remotes.length !== 15) {
       hardFails += 1
-      fail(`C4 remotePackagesFromAssembly = ${remotes.length}（期望 13）——上游装配面变更需重审 typert 契约`)
+      fail(`C4 remotePackagesFromAssembly = ${remotes.length}（期望 15）——上游装配面变更需重审 typert 契约`)
     } else {
-      console.log('✓ C4 remote assembly 契约 = 13')
+      console.log('✓ C4 remote assembly 契约 = 15')
     }
   }
 }

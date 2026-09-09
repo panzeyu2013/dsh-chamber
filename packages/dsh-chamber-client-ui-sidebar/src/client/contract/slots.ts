@@ -11,15 +11,35 @@
  * registrant's (ui-settings), followed by optional footer actions in
  * `sidebar.footer.action`.
  */
-import type { PropsLocale, PropsRenderSlots, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
+import type {
+  HostObservable, InjectFace, PropsLocale, PropsRenderSlots, PropsRuntime,
+} from '@deepseek-ai/dsh-client-ui-slots'
 // Type-only: pulls ui-layout's SlotMap merge (the 'sidebar' entry) into every
 // program that sees this contract, so PropsRuntime<'sidebar'> resolves.
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
+import type { MainPanelId } from '@deepseek-ai/dsh-client-ui-layout/client'
 import type { WorkspaceId } from '@deepseek-ai/dsh-api-workspace-controller/client'
 import type { Translate } from '@deepseek-ai/dsh-client-locale/client'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface SlotMap {
+    /**
+     * Brand mark rendered at the sidebar's top-left. Declared by this
+     * package's 'sidebar' entry; the shell supplies the chamber wordmark as
+     * the fallback (upstream baseline: the fish mark).
+     */
+    'sidebar.brand.mark': { kind: 'single'; scope: 'root'; owner: SidebarBrandMarkOwnerProps }
+    /**
+     * Brand name rendered beside the expanded mark. Declared by this
+     * package's 'sidebar' entry; the shell supplies a generic text fallback.
+     */
+    'sidebar.brand.name': { kind: 'single'; scope: 'root'; owner: SidebarBrandNameOwnerProps }
+    /**
+     * Global panel icons (alpha.2): each list id addresses the matching main
+     * panel key; the shell owns the button and resolves its label from list
+     * metadata, then asks `ctx.layout.selectPanel(id)`.
+     */
+    'sidebar.panellist': { kind: 'list'; scope: 'root'; owner: SidebarPanelIconOwnerProps }
     /**
      * The workspace/session browsing region. Declared by this package's
      * 'sidebar' entry (declaring is claiming); ui-workspace may register a
@@ -67,6 +87,36 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
      */
     'sidebar.footer.action': { kind: 'list'; scope: 'root'; owner: SidebarFooterActionOwnerProps }
   }
+}
+
+/** Geometry supplied to the sidebar brand-mark occupant. */
+export interface SidebarBrandMarkOwnerProps {
+  /** Requested square edge in pixels. */
+  size: number
+}
+
+/** Empty owner share for the sidebar brand-name occupant. */
+export interface SidebarBrandNameOwnerProps {
+  /** Marker field: the occupant owns its own content and width. */
+  children?: never
+}
+
+/** Icon presentation supplied by a global panel row. */
+export interface SidebarPanelIconOwnerProps {
+  /** Requested square edge in pixels. */
+  size: number
+  /** Whether this panel is selected in the main column. */
+  active: boolean
+}
+
+/** Serializable metadata for one active global panel list registration. */
+export interface SidebarPanelMetadata {
+  /** List id and matching main panel key. */
+  id: MainPanelId
+  /** Ascending row order; ties retain registration order. */
+  order: number
+  /** Row title and accessible name: resolved label, or the id when omitted. */
+  label: string
 }
 
 /**
@@ -120,6 +170,10 @@ export type SidebarRootInjected = {
   startSession: (workspaceId?: WorkspaceId) => void
   /** Toggle the sidebar column through the layout service. */
   toggleSidebar: () => void
+  /** Select the global panel addressed by a sidebar row (alpha.2). */
+  selectPanel: (id: MainPanelId) => void
+  /** Private reactive sources bound to framework selector hooks. */
+  hooks: { panels: HostObservable<readonly SidebarPanelMetadata[]> }
   /**
    * chamber: the immutable per-entry instance id this ctx's shell belongs to
    * (installed by AppWebEntry.configureContext before plugin materialization).
@@ -142,5 +196,13 @@ export type SidebarRootInjected = {
  */
 export type SidebarRootComponentProps =
   PropsRuntime<'sidebar'>
-  & PropsRenderSlots<'sidebar.workspaces' | 'sidebar.workspace.git' | 'sidebar.settings' | 'sidebar.footer.action'>
-  & SidebarRootInjected & PropsLocale<'sidebar'>
+  & PropsRenderSlots<
+    | 'sidebar.brand.mark'
+    | 'sidebar.brand.name'
+    | 'sidebar.panellist'
+    | 'sidebar.workspaces'
+    | 'sidebar.workspace.git'
+    | 'sidebar.settings'
+    | 'sidebar.footer.action'
+  >
+  & InjectFace<SidebarRootInjected> & PropsLocale<'sidebar'>

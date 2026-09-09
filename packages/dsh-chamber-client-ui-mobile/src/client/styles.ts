@@ -41,11 +41,15 @@
  * byte-for-byte untouched (the official layout must not be affected), and the
  * hamburger has an explicit `display: none` default outside the touch tier.
  *
- * Empirical anchor notes (dsh 0.1.2-alpha.4, CDP audit):
+ * Empirical anchor notes (dsh 0.1.5-alpha.2, CDP audit):
  *  - `data-sidebar-collapsed` on the frame: present "true" when collapsed,
  *    REMOVED when expanded — `:not([data-sidebar-collapsed])` is the open
  *    drawer condition.
- *  - `data-details-collapsed` same semantics.
+ *  - `data-rightbar-collapsed` is the alpha.2 rename of the details column
+ *    flag; the right column is now a docking surface with its own
+ *    `<768px` fullscreen presentation (upstream), so this stylesheet no
+ *    longer re-presents it — the third track stays locked at 0 and the
+ *    official surface owns the overlay.
  *  - ONBOARDING/directory dialogs portal to a body-level root
  *    (`div._root_15u5s_2`), but the SETTINGS dialog renders INSIDE the
  *    sidebar DOM (sidebar.settings slot, no body portal) — the drawer's
@@ -135,7 +139,7 @@ export const MOBILE_CSS = `
     top: 0 !important;
     bottom: 0 !important;
     left: 0 !important;
-    z-index: 40;
+    z-index: 75;
     width: min(86vw, 280px) !important;
     box-shadow: var(--dsw-shadow-lv3, 0 12px 32px rgba(0, 0, 0, 0.08));
     transform: translateX(-105%);
@@ -166,47 +170,12 @@ export const MOBILE_CSS = `
     display: block;
     position: fixed;
     inset: 0;
-    z-index: 39;
+    z-index: 74;
     background: var(--dsw-alias-bg-mask-1, rgba(0, 0, 0, 0.24));
     -webkit-backdrop-filter: var(--dsw-mask-blur, blur(2px));
     backdrop-filter: var(--dsw-mask-blur, blur(2px));
     border: none;
     padding: 0;
-  }
-
-  /* Details column → right-side overlay when opened (data-details-collapsed
-     removed): the official details/trajectory panel stays reachable on
-     touch. Design §18.4.3 offers two variants (bottom sheet / Status tab);
-     this implementation uses a THIRD form — a right-side overlay that
-     keeps the official DOM untouched (zero re-implementation). The grid's
-     third track stays 0 — the fixed column overlays the conversation.
-     transform: none while open (same containing-block rule as the
-     drawer). */
-  [data-mobile-role="details"] {
-    position: fixed !important;
-    top: 0 !important;
-    right: 0 !important;
-    bottom: 0 !important;
-    z-index: 38;
-    width: min(86vw, 320px) !important;
-    box-shadow: var(--dsw-shadow-lv3, 0 12px 32px rgba(0, 0, 0, 0.08));
-    transform: translateX(105%);
-    visibility: hidden;
-    transition:
-      transform var(--ds-transition-duration-slow, 0.3s) var(--ds-ease-in-out, cubic-bezier(0.4, 0, 0.2, 1)),
-      visibility 0s 0.3s;
-  }
-  [data-mobile-frame]:not([data-details-collapsed]) [data-mobile-role="details"] {
-    transform: none;
-    visibility: visible;
-    transition:
-      transform var(--ds-transition-duration-slow, 0.3s) var(--ds-ease-in-out, cubic-bezier(0.4, 0, 0.2, 1)),
-      visibility 0s;
-  }
-  @media (prefers-reduced-motion: reduce) {
-    [data-mobile-role="details"] {
-      transition: none;
-    }
   }
 
   /* Drag handles are desktop affordances (mouse resizing) — hidden on
@@ -226,6 +195,12 @@ export const MOBILE_CSS = `
   [data-mobile-frame] [data-side]:not([role="tooltip"]) {
     display: none !important;
   }
+  /* Dockkit split affordances: pointer-drag chrome with no touch equivalent
+     (the right surface is fullscreen on this tier). */
+  [data-mobile-frame] [data-dockkit-divider],
+  [data-mobile-frame] [data-dockkit-split-button] {
+    display: none !important;
+  }
 
   /* Floating drawer toggle: the official sidebar toggle lives inside the
      sidebar DOM, which the off-canvas transform hides — this shell.overlay
@@ -239,7 +214,7 @@ export const MOBILE_CSS = `
     position: fixed;
     top: max(10px, env(safe-area-inset-top, 0px));
     left: max(10px, env(safe-area-inset-left, 0px));
-    z-index: 41;
+    z-index: 76;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -388,10 +363,10 @@ export const MOBILE_CSS = `
 @media (max-width: 768px) and (pointer: coarse) {
   /* Composer toolbar: one line. The official row wraps; force nowrap (the
      official 12px gap is kept — no gap override). */
-  [data-slot="conversation.composer.bar"] [class$="_row"] {
+  [data-slot="conversation.composer.bar"] [class*="_row_"] {
     flex-wrap: nowrap !important;
   }
-  [data-slot="conversation.composer.bar"] [class$="_row"] [class$="_trigger"],
+  [data-slot="conversation.composer.bar"] [class*="_row_"] [class*="_trigger_"],
   [data-slot="conversation.input.model"] button {
     max-width: 112px !important;
     flex: 0 1 auto !important;
@@ -543,29 +518,6 @@ export const MOBILE_CSS = `
      preference (--dsh-content-font-size) when the user set it larger. */
   [data-composer-input] {
     font-size: max(16px, var(--dsh-content-font-size, 16px)) !important;
-  }
-
-  /* "Session 日志" export capsule (official session-log-export, header
-     utilities): a 111px+ min-width pill that eats the whole phone title
-     row. Mobile users rarely export session ZIPs — compact it to a round
-     44px icon target (the stamp data-mobile-dismiss="session-log-export"
-     is applied by markup.ts when the capsule copy matches). The label span
-     is zeroed (font-size, not display:none) so the accessible name stays in
-     the tree; the official download icon grows to the target center. */
-  [data-mobile-dismiss="session-log-export"] {
-    width: 44px !important;
-    height: 44px !important;
-    min-width: 44px !important;
-    gap: 0 !important;
-    padding: 0 !important;
-    border-radius: 50% !important;
-  }
-  [data-mobile-dismiss="session-log-export"] span {
-    font-size: 0;
-  }
-  [data-mobile-dismiss="session-log-export"] svg {
-    width: 18px;
-    height: 18px;
   }
 
   /* Scrolling body: contain the pull gesture. The composer seat is a FLOW

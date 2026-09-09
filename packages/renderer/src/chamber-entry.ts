@@ -158,6 +158,14 @@ import * as Store from '@deepseek-ai/dsh-client-store'
 // bundle loads, so this factory answers their `require(...ui-primitives)`
 // edges; run()'s own prefetch of this entry is then a module-cache hit.
 import * as UiPrimitives from '@deepseek-ai/dsh-client-ui-primitives'
+// alpha.2 (S2/S5 裁决): ui-dockkit is upstream's 8th PLATFORM_MODULES word and
+// is value-imported by ui-sidebar-right/-files/-documentpreview. The chamber
+// seed does NOT carry it (chunk-budget: seeding pulls the docking kit into the
+// main-graph eval, the same reason ui-primitives left the seed), so this
+// composite factory answers the require edges of the extra rows instead. It is
+// a pure library — no `dsh.client`, no `./client` — so it can never arrive as
+// a host-graph row and the "platform word must never be a row" invariant holds.
+import * as UiDockkit from '@deepseek-ai/dsh-client-ui-dockkit'
 import * as ApiSessionController from '@deepseek-ai/dsh-api-session-controller/client'
 import * as ApiWorkspaceController from '@deepseek-ai/dsh-api-workspace-controller/client'
 import * as Locale from '@deepseek-ai/dsh-client-locale/client'
@@ -566,6 +574,9 @@ const COVERED_FACTORIES: ReadonlyArray<readonly [id: string, factory: ClientPlug
   // bundle's evaluation before any extra-row load, so require edges land
   // here. Same shape as the store word: factory only, never ctx.plugin'd.
   ['@deepseek-ai/dsh-client-ui-primitives', coveredFactory(UiPrimitives)],
+  // alpha.2: the docking-kit word (see the import comment) — factory only,
+  // never ctx.plugin'd.
+  ['@deepseek-ai/dsh-client-ui-dockkit', coveredFactory(UiDockkit)],
   ['@deepseek-ai/dsh-api-session-controller', coveredFactory(ApiSessionController)],
   ['@deepseek-ai/dsh-api-workspace-controller', coveredFactory(ApiWorkspaceController)],
   ['@deepseek-ai/dsh-client-locale', coveredFactory(Locale)],
