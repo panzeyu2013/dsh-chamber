@@ -1,3 +1,15 @@
+/* dsh token 表（design 06 §4.x）：五份 ui-theme 样式表是 --dsw-* 的唯一来源。
+   2026-09 Batch 2 起由本入口 CSS 引入（此前挂在 dsh-client-web fork 的
+   base.css 上；该文件已恢复上游字节一致）。顺序固定：base → design-platform
+   → scrollbar（读 design-platform 的 token）→ gradient-shadow-text → shiki。
+   本文件随首屏 entry 一起进 <head>，且排在 chamber 插件 CSS 之前，因此 token
+   在任何插件样式落地前就已就绪。 */
+@import '@deepseek-ai/dsh-client-ui-theme/styles/base.css';
+@import '@deepseek-ai/dsh-client-ui-theme/styles/design-platform.css';
+@import '@deepseek-ai/dsh-client-ui-theme/styles/scrollbar.css';
+@import '@deepseek-ai/dsh-client-ui-theme/styles/gradient-shadow-text.css';
+@import '@deepseek-ai/dsh-client-ui-theme/styles/shiki.css';
+
 :root {
   /* 文档级 color-scheme 的兜底值（原生控件/滚动条）。这份文档的调色板权威是
      dsh 的 token 样式表：design-platform.css 的 `body` 块给出**浅色**默认值，

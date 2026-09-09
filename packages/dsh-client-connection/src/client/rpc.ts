@@ -2,21 +2,15 @@
  *
  * ## chamber patch (dsh-chamber connection manager, design 05 §3.6)
  *
- * The only dsh source modification next to api-path.ts / connection.ts /
- * client/index.ts: the URL is built as `<instanceBase><channel>/<endpoint>` so
- * every generic RPC call lands under the control-plane's per-instance proxy
- * prefix. The origin resolution stays same-origin (`location.origin`, with the
- * `dsh.internal` fallback for no-location environments). With the stock base
- * path `/api` the URL is byte-identical to upstream. Chamber supplies the
- * explicit option from each entry's private Context; `window.__DSH_BASE_PATH__`
- * remains only as a compatibility fallback for other embedders.
- *
- * merged with the upstream v0.1.2 rewrite: `createWebConnectionRpc(doFetch?,
- * openStream?)` carries the worker-local Gateway stream opener as a second
- * parameter. The chamber options-overload (`WebConnectionRpcOptions | RpcFetch`)
- * is retained as a thin compatibility layer — an options object carrying
- * `basePath`/`doFetch`/`openStream`, or a bare `RpcFetch` function — and the
- * positional upstream form is accepted alongside it.
+ * The URL is built as `<instanceBase><channel>/<endpoint>` so every generic RPC
+ * call lands under the control-plane's per-instance proxy prefix. The origin
+ * resolution stays same-origin (`location.origin`, with the `dsh.internal`
+ * fallback for no-location environments). With the stock base path `/api` the
+ * URL is byte-identical to upstream. Chamber supplies the option from each
+ * entry's private Context (`chamberBasePath`); `window.__DSH_BASE_PATH__`
+ * remains only as a compatibility fallback for other embedders. The upstream
+ * `doFetch`/`openStream` transport overrides are carried on the same options
+ * object (`WebConnectionRpcOptions`).
  */
 
 import {
@@ -54,22 +48,15 @@ export interface WebConnectionRpcOptions {
 
 /**
  * Create the browser-backed generic RPC caller.
- * @param options - chamber patch: optional per-instance base path override (or
- *   upstream transport override function); a bare `RpcFetch` is treated as
- *   `{ doFetch }` for backward compatibility.
- * @param openStream - upstream worker-local Gateway stream carrier (positional
- *   form, passed through verbatim).
+ * @param options - chamber patch: per-instance base path plus the upstream
+ *   transport overrides (fetch / worker-local stream carrier).
  * @returns caller that owns request correlation and response-envelope validation.
  */
-export function createWebConnectionRpc(
-  options: WebConnectionRpcOptions | RpcFetch = {},
-  openStream?: RpcStreamOpen,
-): ClientConnectionRpc {
-  const opts = typeof options === 'function' ? { doFetch: options } : options
+export function createWebConnectionRpc(options: WebConnectionRpcOptions = {}): ClientConnectionRpc {
   /** chamber patch: resolved prefix injected before the channel path ('' = stock). */
-  const basePath = resolveInstanceBasePath(opts.basePath)
-  const send: RpcFetch = opts.doFetch ?? ((input, init) => globalThis.fetch(input, init))
-  const stream = openStream ?? opts.openStream
+  const basePath = resolveInstanceBasePath(options.basePath)
+  const send: RpcFetch = options.doFetch ?? ((input, init) => globalThis.fetch(input, init))
+  const stream = options.openStream
   return {
     async call(channel, endpoint, payload, signal) {
       assertTarget(channel, endpoint)

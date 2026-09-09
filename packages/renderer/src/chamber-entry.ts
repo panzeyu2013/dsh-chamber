@@ -444,13 +444,14 @@ export function apply(ctx: Context): void {
     || (chamberInstanceId !== 'local' && chamberTransport !== 'ssh' && chamberTransport !== 'http')) {
     throw new Error('chamber-entry: invalid per-entry chamberTransport')
   }
-  ctx.plugin(ConnectionPlugin, { basePath: chamberBasePath })
+  // Both chamber base-path forks read the per-entry `chamberBasePath` from
+  // THIS context at apply time (connection: apply(ctx) → RPC carrier + handle;
+  // api-gateway: apply(ctx) → Remote stream mux route), so the prefix is bound
+  // per entry through configureContext, never through plugin config or a
+  // page-global knob (2026-09 Batch 2: the config-passing form was retired).
+  ctx.plugin(ConnectionPlugin)
   ctx.plugin(TypertRegistry)
-  // dsh-v0.1.2-alpha.1: the chamber api-gateway fork (packages/dsh-api-gateway)
-  // carries the same per-entry base-path parameterization as the connection
-  // fork — its remote stream / RPC carriers prefix the instance proxy path,
-  // so the config is bound here, never read from a page-global knob.
-  ctx.plugin(ApiGateway, { basePath: chamberBasePath })
+  ctx.plugin(ApiGateway)
   ctx.plugin(ApiRemotes)
   // Provider group (dsh-client-runtime dissolved): the store is a platform
   // word (covered factory only, no plugin); the api controllers provide

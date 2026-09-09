@@ -1,57 +1,16 @@
-/** Connection generation readiness, cancellation, and continuous recovery. */
+/** Connection generation readiness, cancellation, and continuous recovery.
+ *
+ * chamber patch (2026-09, Batch 2 re-anchor): verbatim upstream
+ * dsh-v0.1.3-alpha.2 except the `erasableSyntaxOnly` explicit-field rewrite in
+ * the constructor below. The pre-Batch-2 loopEpoch generation guard is retired
+ * — the chamber liveness triggers now drive the native
+ * `reconnect()`/`setNetworkAvailable()` recovery control instead of
+ * stop()+start(), so no second pump loop can be spawned and no epoch guard is
+ * needed.
+ */
 import { resolveConnectionConfig, type ConnectionRecoveryConfig } from '../recovery-config.ts'
 
 export type { ConnectionRecoveryConfig } from '../recovery-config.ts'
-
-/*
- * ## chamber patch (dsh-chamber connection manager, design 05 §3.6 / design 14 D4)
- *
- * Upstream moved the whole ConnectionConfig/backoff block into
- * `recovery-config.ts` (v0.1.3-alpha.2). The chamber deltas below are
- * re-applied on the upstream copy:
- *
- * - `basePath` (the former per-instance controller-config member) now lives
- *   only in the chamber apply config of `src/client/index.ts` — the
- *   controller never read it, so nothing controller-side is lost.
- * - `CONNECTION_BACKOFF_MAX_MS` stays exported: `liveness-triggers.ts`
- *   re-exports it as `DEFAULT_MIN_RESTART_INTERVAL_MS` and tests pin
- *   10_000 == the recovery-config schema default (backoffMaxMs).
- * - loopEpoch guards #1/#3 + the while condition + the stop() bump (design
- *   14 D4) are kept; guard #2 (the final-backoff-tier wait block) is dropped
- *   because upstream `isRetryInterrupted` + the `isRunning()` rechecks now
- *   supersede it.
- * - the readiness handshake gained upstream semantics: a 3 s warn
- *   (`generationReadyWarnMs`) then a 15 s hard deadline
- *   (`generationReadyTimeoutMs`) that aborts the generation.
- *
- * Rebased for upstream v0.1.2-alpha.2: the recovery policy is now
- * network-aware — `reconnect()` (immediate manual retry) and
- * `setNetworkAvailable()` (offline suspension / online restart, three-state
- * ConnectionState 'connected' | 'disconnected' | 'connecting') landed
- * upstream; the chamber tunables/guards below are re-applied on the new
- * class unchanged.
- *
- * Rebased for upstream v0.1.2-alpha.3 (tolerate stalled hosts): the
- * readiness-handshake timeout no longer cancels the generation — a slow
- * Host only logs a warning and the handshake keeps waiting (source
- * settlement / controller cancellation remain the abort paths); the chamber
- * loopEpoch guard below is unaffected. v0.1.2-alpha.4 baseline: upstream
- * changed only fixture.ts (SessionSeq branding) — no connection.ts changes.
- *
- * v0.1.2-alpha.5 baseline: upstream changed only package.json (version) —
- * no connection.ts changes.
- *
- * v0.1.2-rc.1 baseline: upstream changed only package.json (version) —
- * no connection.ts changes.
- *
- * v0.1.3-alpha.1 baseline: upstream added host-side streaming-body fetch
- * routes (http-bridge/rpc/rpc-host/index replayed as pure upstream copies)
- * and reworked fixture.ts (session format v2 + live assistant-stream frames,
- * chunk-rows dropped); src/client/index.ts upstream delta was doc-only and
- * is not re-synced (chamber prose kept). No connection.ts changes.
- *
- * v0.1.3-alpha.2 baseline: recovery-config extraction above.
- */
 
 /** Stable Host facts delivered by one established Remote event generation. */
 export interface ConnectionHostInfo {
@@ -66,13 +25,6 @@ export interface ConnectionGeneration {
   /** Host facts carried by this generation's opening frame. */
   readonly host: ConnectionHostInfo
 }
-
-/** Upper bound for the reconnect backoff cap in ms (chamber export: the
- *  liveness trigger debounce aligns to it — see liveness-triggers.ts, which
- *  re-exports this as DEFAULT_MIN_RESTART_INTERVAL_MS). The value matches the
- *  recovery-config schema default (backoffMaxMs = 10_000); the recovery
- *  defaults themselves live upstream in recovery-config.ts. */
-export const CONNECTION_BACKOFF_MAX_MS = 10_000
 
 const MANUAL_RECONNECT = new Error('connection: manual reconnect requested')
 const NETWORK_STATE_CHANGED = new Error('connection: browser network state changed')
@@ -141,13 +93,9 @@ export class ConnectionController {
   private networkAvailable = true
   private lastState: ConnectionState | undefined
   private readonly config: Required<ConnectionRecoveryConfig>
-  // chamber patch (design 14 D4): loop epoch. stop() bumps it so an in-flight
-  // loop invocation from a PREVIOUS start() can never survive a synchronous
-  // stop()+start() restart: the official `isRunning()` check alone is racy —
-  // start() re-sets `running` before the old loop reaches its post-`failed`
-  // check, which would spawn a second concurrent pump loop (double streams,
-  // duplicated onConnected resync, leaked generations).
-  private loopEpoch = 0
+  // chamber patch (erasableSyntaxOnly): upstream declares these two as
+  // parameter properties; the chamber copy assigns them explicitly so the file
+  // typechecks under the erasable-only config.
   private readonly source: ConnectionGenerationSource
   private readonly sinks: ConnectionSinks
 
@@ -156,9 +104,6 @@ export class ConnectionController {
     sinks: ConnectionSinks = {},
     config: ConnectionRecoveryConfig = {},
   ) {
-    // chamber patch (erasableSyntaxOnly): upstream parameter properties are
-    // explicit field assignments here so the copy typechecks under the
-    // chamber's erasable-only config.
     this.source = source
     this.sinks = sinks
     this.config = resolveConnectionConfig(config)
@@ -174,9 +119,6 @@ export class ConnectionController {
   /** Stop the loop and abort the current generation source. */
   stop(): void {
     this.running = false
-    // chamber patch (design 14 D4): invalidate any in-flight loop invocation
-    // (see loopEpoch) so a later start() can never be overtaken by it.
-    this.loopEpoch += 1
     this.current?.abort()
     this.current = null
     this.retryDelay?.abort()
@@ -236,19 +178,15 @@ export class ConnectionController {
   }
 
   private async loop(): Promise<void> {
-    // chamber patch (design 14 D4): this loop invocation is tied to the epoch
-    // captured at entry — a stop() (which bumps loopEpoch) retires it even if
-    // a subsequent start() re-set `running`.
-    const epoch = this.loopEpoch
     let retry = false
-    while (this.running && epoch === this.loopEpoch) {
+    while (this.running) {
       if (!this.networkAvailable && !this.immediateRetry) {
         const retryDelay = new AbortController()
         this.retryDelay = retryDelay
         this.emitState('disconnected')
         await waitForAbort(retryDelay.signal)
         if (this.retryDelay === retryDelay) this.retryDelay = null
-        if (!this.isRunning() || epoch !== this.loopEpoch) return
+        if (!this.isRunning()) return
         retry = true
         continue
       }
@@ -261,19 +199,19 @@ export class ConnectionController {
         manualAttempt = immediate
         const attempt = ++this.attempt
         this.emitState('connecting')
-        if (!this.isRunning() || epoch !== this.loopEpoch) return
+        if (!this.isRunning()) return
         if (this.isRetryInterrupted(immediate)) continue
         if (!immediate) {
           const retryDelay = new AbortController()
           this.retryDelay = retryDelay
           await sleep(this.backoffDelay(attempt), retryDelay.signal)
           if (this.retryDelay === retryDelay) this.retryDelay = null
-          if (!this.isRunning() || epoch !== this.loopEpoch) return
+          if (!this.isRunning()) return
           if (retryDelay.signal.aborted) continue
         }
         console.warn(`[connection] connection lost, retry #${String(attempt)}`)
         this.callSink(() => { this.sinks.onReconnectRequested?.() })
-        if (!this.isRunning() || epoch !== this.loopEpoch) return
+        if (!this.isRunning()) return
       }
 
       const gen = ++this.generation
@@ -339,9 +277,7 @@ export class ConnectionController {
       }
 
       await failed
-      // chamber patch (design 14 D4): epoch guard — a stop()+start() restart
-      // retires this loop here instead of falling through into a second pump.
-      if (!this.isRunning() || epoch !== this.loopEpoch) return
+      if (!this.isRunning()) return
       if (manualAttempt) this.attempt = 0
       retry = true
     }

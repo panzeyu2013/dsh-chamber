@@ -37,36 +37,39 @@
 
 ### 2.1 `packages/dsh-client-connection`（上游 `packages/client/connection`）
 
-pure **15**：`src/http-bridge.ts`、`src/rpc.ts`、`src/rpc-host.ts`、`src/rpc-schema.ts`、
-`src/loopback-hostname.ts`、`src/index.ts`、`src/recovery-config.ts`、`src/client/api.ts`、
-`src/client/fixture.ts`、`src/client/random-uuid.ts`、`README.md`、`README.zh.md`、
-`README.i18n.yaml`（+client 构面未列出的小项以脚本计数为准）。
+pure **16**：`src/http-bridge.ts`、`src/rpc.ts`、`src/rpc-host.ts`、`src/rpc-schema.ts`、
+`src/loopback-hostname.ts`、`src/index.ts`、`src/recovery-config.ts`、`src/browser-auth.ts`、
+`src/client/api.ts`、`src/client/fixture.ts`、`src/client/random-uuid.ts`、`README.md`、
+`README.zh.md`、`README.i18n.yaml`（+client 构面未列出的小项以脚本计数为准）。
+`src/browser-auth.ts` 于 Batch 2 恢复逐字节一致（303 重定向 no-referrer 的说明移入
+design 05 / STATUS）。
 
 | 文件 | 标记 | 原因/补丁说明 |
 |---|---|---|
 | `package.json` | [patch-add] | 仅追加 chamber test 脚本；其余与上游一致 |
-| `src/api-path.ts` | [patch-comment] | 头部 chamber 说明（basePath 语义，design 05 §3.6） |
-| `src/browser-auth.ts` | [patch-comment] | 303 重定向 no-referrer 无害性注释 ×2 |
-| `src/client/connection.ts` | [patch-mod] | loopEpoch 代际守卫（design 14 D4）+ erasableSyntaxOnly 显式字段 + `CONNECTION_BACKOFF_MAX_MS` 导出 + 顶部 chamber/rebase 注释；语义随上游（recovery-config 3s warn / 15s 硬期限）同步 |
-| `src/client/index.ts` | [patch-mod] | basePath 载波装配 + `ConnectionConfig` 别名（`ConnectionRecoveryConfig & {basePath}`）+ `SYSTEM_RESUME_EVENT`/liveness 触发（design 14）+ chamber 注释 |
-| `src/client/rpc.ts` | [patch-comment] | 头部 chamber 说明（实例 base 前缀拼装） |
+| `src/api-path.ts` | [patch-mod] | 追加 `resolveInstanceBasePath` + 头部 chamber 说明（basePath 语义，design 05 §3.6） |
+| `src/client/connection.ts` | [patch-mod] | **仅** erasableSyntaxOnly 显式字段改写（两个构造参数属性）+ 顶部 chamber 说明；其余逐字节上游（Batch 2 重锚：loopEpoch 代际守卫与 `CONNECTION_BACKOFF_MAX_MS` 导出退役，活性触发改用原生 `reconnect()`/`setNetworkAvailable()`） |
+| `src/client/index.ts` | [patch-mod] | `apply(ctx)` 读 `ctx.chamberBasePath` → 载波装配 + `SYSTEM_RESUME_EVENT`/liveness 触发（design 14 D4）+ 头部 chamber 说明 |
+| `src/client/rpc.ts` | [patch-mod] | basePath 前缀拼装 + `WebConnectionRpcOptions`（chamber 选项对象）+ 头部 chamber 说明 |
 | `tsconfig.client.json` / `tsconfig.host.json` | [own-divergent] | chamber 构面（extends/rootDir/vendor paths）；`files` 列表与上游增量同步维护 |
-| `src/client/carrier-assembly.ts`、`src/client/liveness-triggers.ts` | [own] | chamber 自有（载波装配策略 / sleep-wake 活性触发） |
+| `src/client/carrier-assembly.ts`、`src/client/liveness-triggers.ts` | [own] | chamber 自有（载波装配策略 / sleep-wake 活性触发：原生 reconnect + 离线门） |
 | `tsconfig.check-base/client/host.json` | [own] | chamber erasable-only 校验构面 |
-| `test/` | [own] | chamber 自有测试 + fixtures（含 schemastery 桩 loader） |
+| `test/` | [own] | chamber 自有测试 + fixtures（含 schemastery/fixture/recovery-config 桩 loader） |
 | `tsdown.config.ts`、上游 `tests/` | [dropped] | chamber 无 tsdown/镜像上游测试 |
 
 ### 2.2 `packages/dsh-client-web`（上游 `packages/client/web`）
+
+pure **5**：`src/base.css`（Batch 2 恢复逐字节一致——chamber token 表改由 renderer 入口
+CSS `packages/renderer/src/styles.css` 引入）+ client 构面未列出的小项（以脚本计数为准）。
 
 | 文件 | 标记 | 原因/补丁说明 |
 |---|---|---|
 | `package.json` | [patch-add] | 描述/测试脚本差异；版本行随上游 |
 | `README.md` / `README.zh.md` / `README.i18n.yaml` | [own-divergent] | chamber 说明（N-ctx boot kernel），非上游镜像 |
-| `src/base.css` | [own-divergent] | chamber token 表；**Batch 2 计划移出 fork**（上游字节恢复，token 表改由 renderer 入口 CSS 引入） |
 | `src/boot.ts` | [patch-mod] | rc.8 N-ctx boot kernel（extraRows / `__ModuleLoader__` / configureContext / 异步 dispose） |
 | `src/index.ts` | [patch-mod] | 入口差异（module-system 宿主接线） |
-| `src/platform.ts` | [patch-mod] | PLATFORM_MODULES / 静态表 chamber 接线 |
-| `src/seed.ts` | [patch-mod] | seed 行 chamber 接线（extraRows / `__ModuleLoader__`） |
+| `src/platform.ts` | [patch-mod] | PLATFORM_MODULES / 静态表 chamber 接线（C3 偏差：ui-primitives 不 seed） |
+| `src/seed.ts` | [patch-mod] | seed 行 chamber 接线（extraRows / `__ModuleLoader__`；C3 偏差同步） |
 | `tsconfig.json` | [own-divergent] | chamber 构面 |
 | `src/boot-rows.ts`、`src/boot-tolerance.ts` | [own] | chamber 自有（每实例 boot-rows / boot 容忍恢复） |
 | `test/` | [own] | chamber 自有测试 + fixtures |
@@ -74,11 +77,13 @@ pure **15**：`src/http-bridge.ts`、`src/rpc.ts`、`src/rpc-host.ts`、`src/rpc
 
 ### 2.3 `packages/dsh-api-gateway`（上游 `packages/api/gateway`，client 半）
 
+pure **6**（以脚本计数为准）。
+
 | 文件 | 标记 | 原因/补丁说明 |
 |---|---|---|
 | `package.json` | [patch-mod] | description/peer 集裁剪（host 依赖 dropped）；版本行随上游 |
-| `src/client/index.ts` | [patch-mod] | per-entry basePath（`/api/remote.mux` 落实例前缀） |
-| `src/client/stream-client.ts` | [patch-mod] | per-entry basePath（流载波） |
+| `src/client/index.ts` | [patch-mod] | `apply(ctx)` 读 `ctx.chamberBasePath` → `/api/remote.mux` 落到实例前缀（design 05 §3.6） |
+| `src/client/stream-client.ts` | [patch-mod] | per-entry basePath（流载波 URL 拼装） |
 | `tsconfig.json` / `tsconfig.client.json` | [own-divergent] | chamber 构面 |
 | `tsconfig.check-base/client.json` | [own] | chamber erasable-only 校验构面 |
 | `test/` | [own] | chamber 自有测试（若有） |
@@ -110,7 +115,7 @@ host 插件入口/半、上游 `tests/`、`tsdown.config.ts`、上游 README（a
 |---|---|---|
 | dsh-api-remotes（client） | typert remote 装配（13）/ message-feedback、session-reference、subagent 等 wire 面 | gen-typert-remotes + C4 |
 | dsh-api-session-controller | api-gateway fork journal-stream 帧（无游标 notification） | fork 重放 + 升级复验 |
-| client/connection（recovery） | recovery-config 共享 schema（默认值 == `CONNECTION_BACKOFF_MAX_MS` 10_000） | liveness-triggers 钉值 + C1 |
+| client/connection（recovery） | recovery-config 共享 schema（`DEFAULT_MIN_RESTART_INTERVAL_MS` 10_000 == schema 默认 backoffMaxMs） | liveness-triggers 钉值 + C1 |
 | dsh-runtime（激活探针域） | `HOST_DOMAIN_PROBE_NAMES` ↔ gateway `HOST_PACKAGE_PROBE_DOMAINS` | C7 + gateway 运行时 fail-loud |
 | dsh-host-webserver（index-inject） | `__DSH_CONNECTION_RECOVERY__` 全局注入（connection host 半） | fork C1（src/index.ts pure） |
 

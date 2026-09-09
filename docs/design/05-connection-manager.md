@@ -423,11 +423,13 @@ export const chamberBridge: {
   目标会话行内呈现（§2.2），不再是 console-only。修复前 fail-fast 使跨服务器
   冷壳/回收重 boot 后的首次会话点击在视图已切换后瞬间失败，用户落在目标服务器
   UI 而未选中会话（呈现为该 workspace 的新对话输入框）。
-- **每 entry Context 私有注入（2026-08-28 N-ctx 复核）**：`AppWebEntry`
-  提供 `configureContext(ctx)` seam；shell.ts 创建 entry 时用闭包把该视图自己的
-  `chamberInstanceId`、`chamberBasePath` 与主进程签发的
-  `chamberSourceFingerprint` 写入其 cordis Context，chamber-entry
-  再从该 Context 读取 basePath 并显式配置 `ConnectionPlugin`。不同 entry 不再通过
+- **每 entry Context 私有注入（2026-08-28 N-ctx 复核；2026-09 Batch 2 收敛）**：
+  `AppWebEntry` 提供 `configureContext(ctx)` seam；shell.ts 创建 entry 时用闭包把该
+  视图自己的 `chamberInstanceId`、`chamberBasePath` 与主进程签发的
+  `chamberSourceFingerprint` 写入其 cordis Context，chamber-entry 只做事实校验；
+  **两个 base-path fork 的 `apply(ctx)` 各自从该 Context 读 `chamberBasePath`**
+  （connection：RPC 载波 + `handle.basePath`；api-gateway：`/api/remote.mux` 路由），
+  不再经插件 config 传参。不同 entry 不再通过
   `window.__DSH_BASE_PATH__` 或页面级 `chamber-knob.ts` 交换 boot 参数，因此并行/
   交错 boot 不会串用来源或代理前缀；shell 在任何 graph/module 副作用之前仅接受
   精确 `local`、规范 `dsh-<raw-id>` / `gateway-<raw-id>` 或兼容迁移的 legacy
@@ -520,15 +522,14 @@ export const chamberBridge: {
 - pnpm + `vendor/harness-packages` 符号链接（外部 dsh 源码，**永不修改**）；
   要修改的包必须拷入本仓 `packages/`。
 - 拷贝补丁包（保持官方包名 `@deepseek-ai/*`，遮蔽 vendor workspace 条目）：
-  - `packages/dsh-client-connection/`——base 路径参数化补丁；chamber N-ctx 由
-    chamber-entry 从每个 `AppWebEntry` 私有 Context 的 `chamberBasePath` 显式配置
-    `ConnectionPlugin`，构造时一次解析不可变 prefix，并同时传给 HTTP unary、两条
-    WebSocket downlink 与 generic RPC/Typert carrier；页面 transport 覆盖 HTTP/WS 时，
-    generic RPC 仍收到同一 prefix 与该 transport 的 fetch。未配置时保留官方 web
-    兼容顺序（legacy `window.__DSH_BASE_PATH__`，再回落空 prefix 直连 `/api`），但
-    chamber 运行链不再写该全局。该接缝由
-    `test:connection` 的 carrier-assembly 行为门与独立 `typecheck:connection` 源码门
-    固定，不能只靠字符串/AST 检查；
+  - `packages/dsh-client-connection/`——base 路径参数化补丁；`apply(ctx)` 从每个
+    `AppWebEntry` 私有 Context 的 `chamberBasePath` 一次解析不可变 prefix，并同时传给
+    HTTP unary、两条 WebSocket downlink 与 generic RPC/Typert carrier；页面 transport
+    覆盖 HTTP/WS 时，generic RPC 仍收到同一 prefix 与该 transport 的 fetch。未配置时
+    保留官方 web 兼容顺序（legacy `window.__DSH_BASE_PATH__`，再回落空 prefix 直连
+    `/api`），但 chamber 运行链不再写该全局。该接缝由
+    `test:connection` 的 client-apply / carrier-assembly 行为门与独立
+    `typecheck:connection` 源码门固定，不能只靠字符串/AST 检查；
   - `packages/dsh-client-web/`——`boot.ts` N-ctx 模块表共享 seam + 公开
     `runtimeCtx` getter（实例 shell 打开会话的 seam）+ `configureContext` 同步注入
     seam + 可等待的异步 `dispose()`。真实 `AppWebEntry.run()` 的 Context 注入顺序由

@@ -9,7 +9,12 @@
 > `dsh-chamber-seed-<loader-id>`、mobile/fork/基建不动）+ 两处种子登记处 fail-loud 命名断言 +
 > 远端 `cordis.patch.yml` 旧名行一次性 fold + 锁文件重生成（记录：STATUS T2 行 / CHANGELOG
 > [Unreleased]）。
-> Batch 2（fork 重锚）→ 3（T3）待推进（每批完成即回写本文件与 STATUS）。
+> **Batch 2（fork 重锚 + 补丁最小化）✅ 已完成（2026-09）**——connection `connection.ts`/
+> `browser-auth.ts` 恢复逐字节上游（loopEpoch 守卫退役 → 原生 reconnect/setNetworkAvailable、
+> 离线门）、basePath 收敛 `apply(ctx)` 读 `ctx.chamberBasePath`；client-web `base.css` 恢复
+> 上游字节（token 表移 renderer 入口 CSS）；api-gateway `apply(ctx)` 直读 ctx；触点登记同步
+> （pure 16/5/6）。实机回归（sleep/wake、隐藏恢复、版本歪斜、gateway 形态）待实机执行。
+> Batch 3（T3）待推进（每批完成即回写本文件与 STATUS）。
 > 关联：任务登记在 `docs/progress/STATUS.md`「分支任务登记」块；升级操作手册见
 > `docs/checklists/dsh-upgrade-checklist.md`；上游接触面保鲜见 T4 拟建
 > `docs/checklists/upstream-touchpoints.md`。
@@ -164,6 +169,15 @@
   seam 重审）。
 
 ### 4.2 逐 fork 动作
+> **✅ Batch 2 已落地（2026-09）**：下述动作全部完成——connection 的 loopEpoch 与
+> stop+start 路径删除、`CONNECTION_BACKOFF_MAX_MS` 导出删除（改 liveness 内部
+> `DEFAULT_MIN_RESTART_INTERVAL_MS` + 离线门）、basePath 收敛 `apply(ctx)` 读
+> `ctx.chamberBasePath`、browser-auth 恢复逐字节上游、connection.ts 仅留
+> erasableSyntaxOnly 改写；client-web base.css 恢复上游字节（token 表移
+> `packages/renderer/src/styles.css`）；api-gateway `apply(ctx)` 直读 ctx。
+> 差异：`createWebConnectionRpc` 额外去掉了兼容重载（无消费方）；实机回归未执行
+> （无实机实例环境）。
+
 - **connection**（主要工作）：按 a2 全量重抄（http-bridge/rpc/rpc-host/index/fixture 已等于 a2，
   实际 = connection.ts/client-index.ts/index.ts 的 a2 内容 + recovery-config.ts）；
   loopEpoch 守卫与 stop+start 触发路径**删除**、改由原生 `reconnect()/setNetworkAvailable()`

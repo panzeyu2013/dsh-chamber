@@ -50,7 +50,8 @@
 ## 3. fork 副本 rebase（chamber 侧适配）
 
 - [ ] `packages/dsh-client-connection`：上游改动与 basePath 补丁同文件时手工合并
-      （如 `createWebConnectionRpc` 签名联合参数）；干净采纳项照抄（如 300MiB）；
+      （如 `createWebConnectionRpc` 的 chamber 选项对象、`apply(ctx)` 的
+      `ctx.chamberBasePath` 读取）；干净采纳项照抄（如 300MiB）；
       上游新增钩子（`__DSH_TRANSPORT__`）按 chamber 场景决定采纳/跳过。
 - [ ] `packages/dsh-client-web`：boot 内核与上游 boot.ts 的差异（如 loadBundle 接线）。
 - [ ] 其余 chamber 适配面：控制面代理限额（如 50/100 → 300 MiB 对齐上游）、

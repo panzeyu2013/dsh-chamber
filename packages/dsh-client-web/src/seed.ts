@@ -6,30 +6,23 @@
  * of truth with the tsdown client externals); values stay shell-static
  * imports so every bundle sees the same instance.
  *
- * ## chamber patch (2026-08, dsh rc.8 baseline alignment)
+ * ## chamber patch (dsh rc.8 baseline alignment + C3 性能审计, 2026-09)
  *
- * Aligned with the official rc.8 seed: the row-capable words are gone (see
- * platform.ts for the invariant). A word here must never be a package the
- * host boot graph can emit as a plugin row — seed resolves before factories
- * in the module system, so a seed word that is also a row materializes the
- * static namespace as a loader entry and the boot fails ("invalid plugin").
- *
- * v0.1.2-alpha.1 alignment: the platform set gains the store engine word
- * `@deepseek-ai/dsh-client-store` (see platform.ts); the static import below
- * keeps the satisfies pin's two sides in lockstep.
+ * A word here must NEVER be a package the host boot graph can emit as a plugin
+ * row — seed resolves before factories in the module system, so a seed word
+ * that is also a row materializes the static namespace as a loader entry and
+ * the boot fails ("invalid plugin"). See platform.ts for the full invariant.
  *
  * C3 (2026-09 性能审计, 偏差登记): `@deepseek-ai/dsh-client-ui-primitives` is
- * deliberately NOT seeded (platform.ts) — its wholesale namespace import
- * pulled the whole primitives package (markdown/highlight/block renderers and
- * their vendor stack) into the main-graph eval that precedes the App mount.
- * The word is answered by the composite's covered factory instead
- * (chamber-entry.ts COVERED_FACTORIES); the shell gates every extra-bundle
- * load behind the chamber entry evaluation (shell.ts "C3 gate"). Residual
- * edge: if the shell-side chamber prefetch fails, the create-side import
- * retry can run concurrently with extra loads — an extra requiring the word
- * in that window fails loud and degrades (retry self-heals), never silent.
- * Keeping the word here would defeat the whole change — do not restore it
- * without removing the factory path too.
+ * deliberately NOT seeded (platform.ts) — its wholesale namespace import pulled
+ * the whole primitives package into the main-graph eval that precedes the App
+ * mount. The word is answered by the composite's covered factory instead
+ * (chamber-entry.ts COVERED_FACTORIES); the shell gates every extra-bundle load
+ * behind the chamber entry evaluation (shell.ts "C3 gate"). Residual edge: if
+ * the shell-side chamber prefetch fails, the create-side import retry can run
+ * concurrently with extra loads — an extra requiring the word in that window
+ * fails loud and degrades (retry self-heals), never silent. Do not restore the
+ * word here without removing the factory path too.
  */
 import * as React from 'react'
 import * as ReactJsxRuntime from 'react/jsx-runtime'

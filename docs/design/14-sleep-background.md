@@ -176,8 +176,10 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
 > 1. **渲染侧活性触发器**（`dsh-client-connection/src/client/liveness-triggers.ts`，
 >    `attachLivenessTriggers`）：system-resume 之外增加 `online`（唤醒/网络恢复）
 >    与 `visibilitychange→visible`（隐藏 ≥30s 后回前台；短 alt-tab 不触发）
->    触发 stop()+start() 立即重连；**最小重启间隔去抖，值代码级绑定
->    `CONNECTION_BACKOFF_MAX_MS`（10s）**（resume+online 同醒并发、online 抖动
+>    触发**控制器原生 `reconnect()`** 立即重连（2026-09 Batch 2：退役 stop()+start()
+>    与 loopEpoch 守卫，并带离线门——离线时上游 `setNetworkAvailable(false)` 已挂起
+>    重试，触发一律忽略）；**最小重启间隔去抖
+>    `DEFAULT_MIN_RESTART_INTERVAL_MS`（10s == recovery schema 默认 backoffMaxMs）**（resume+online 同醒并发、online 抖动
 >    合并为一次）。重连后 `handleConnected` 的 list 刷新 + resync 让卡死的
 >    running 位收敛。
 > 2. **控制面代理 WS 心跳，仅下游（浏览器）腿**（`control-plane/src/ws-frames.ts`

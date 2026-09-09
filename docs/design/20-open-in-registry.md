@@ -191,8 +191,10 @@ Electron `shell.openPath` 成功返回 `''`、失败返回错误串——提取�
   alias ×3、vendor-modules 声明、根脚本 `typecheck:open-in`、ci.yml）；
 - `sourceId` 与来源 proof 来自该 `AppWebEntry` 的私有 cordis Context：shell.ts 经
   `configureContext` 闭包注入
-  `chamberInstanceId/chamberBasePath/chamberSourceFingerprint/chamberTransport`，chamber-entry
-  显式用后者配置 ConnectionPlugin；open-in 只读本 ctx 的 `chamberInstanceId`，
+  `chamberInstanceId/chamberBasePath/chamberSourceFingerprint/chamberTransport`；
+  两个 base-path fork 的 `apply(ctx)` 各自读该 ctx 的 `chamberBasePath`
+  （2026-09 Batch 2 起不再经插件 config 传参）；open-in 只读本 ctx 的
+  `chamberInstanceId`，
   不使用已删除的页面级 `chamber-knob.ts`/`window.__DSH_BASE_PATH__` boot 写入，
   N-ctx 交错 boot 不会串源；
 - `OpenInButton` 三进门控（任一不满足 → 渲染 null）：① 桥就绪（有界轮询

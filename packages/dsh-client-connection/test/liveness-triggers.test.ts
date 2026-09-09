@@ -1,9 +1,10 @@
 /**
  * node:test for the chamber liveness-triggers patch
  * (`packages/dsh-client-connection/src/client/liveness-triggers.ts`) — the
- * sleep/wake recovery triggers: window events (system-resume / online) restart
- * immediately, a long hidden span restarts on visibility return, short
- * alt-tabs never restart, and the detach removes every listener.
+ * sleep/wake recovery triggers: window events (system-resume / online)
+ * reconnect immediately, a long hidden span reconnects on visibility return,
+ * short alt-tabs never reconnect, offline triggers are ignored, and the detach
+ * removes every listener.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -219,4 +220,61 @@ test('liveness: undefined window/document is a safe no-op', () => {
   detach()
   detach() // idempotent
   assert.equal(restarts, 0)
+})
+
+// ── offline gate (Batch 2: the native recovery control owns offline) ──────
+
+test('liveness: an offline browser ignores every trigger', () => {
+  const win = stubTarget()
+  const doc = stubDocument()
+  let clock = 0
+  const restarts: string[] = []
+  attachLivenessTriggers(win as never, doc as never, {
+    restart: () => restarts.push('restart'),
+    windowEvents: ['online'],
+    isOnline: () => false,
+    now: () => clock,
+  })
+  win.emit('online')
+  doc.setVisibility('hidden')
+  clock = DEFAULT_HIDDEN_RECONNECT_THRESHOLD_MS + 1
+  doc.setVisibility('visible')
+  assert.deepEqual(restarts, [], 'the controller\u2019s own setNetworkAvailable(false) covers offline')
+})
+
+test('liveness: the network gate is re-read per trigger, so a restored link reconnects', () => {
+  const win = stubTarget()
+  let clock = 0
+  let online = false
+  const restarts: string[] = []
+  attachLivenessTriggers(win as never, undefined, {
+    restart: () => restarts.push('restart'),
+    windowEvents: ['online'],
+    isOnline: () => online,
+    now: () => clock,
+  })
+  win.emit('online')
+  assert.deepEqual(restarts, [], 'offline event is ignored')
+  online = true
+  clock += 1
+  win.emit('online')
+  assert.deepEqual(restarts, ['restart'], 'the restored link reconnects on the next trigger')
+})
+
+test('liveness: without an explicit gate the browser navigator.onLine decides', () => {
+  const win = stubTarget()
+  const restarts: string[] = []
+  const previousNavigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator')
+  Object.defineProperty(globalThis, 'navigator', { value: { onLine: false }, configurable: true })
+  try {
+    attachLivenessTriggers(win as never, undefined, {
+      restart: () => restarts.push('restart'),
+      windowEvents: ['online'],
+    })
+    win.emit('online')
+    assert.deepEqual(restarts, [], 'navigator.onLine === false blocks the reconnect')
+  } finally {
+    if (previousNavigator === undefined) delete (globalThis as Record<string, unknown>).navigator
+    else Object.defineProperty(globalThis, 'navigator', previousNavigator)
+  }
 })
