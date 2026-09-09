@@ -22,11 +22,14 @@ import { mkdirSync, readFileSync, readdirSync, statSync, symlinkSync, writeFileS
 import { join } from 'node:path'
 import { tempDir } from './utils.ts'
 import {
+  assertHostSeedEntryNaming,
+  assertHostSeedInsertNaming,
   buildPatchOverlay,
   ensureHostPackage,
   ensureHostGraphPackage,
   ensureSeedPackage,
   missingHostPackageInserts,
+  HOST_ARCHIVE_CLEANUP_INSERT,
   HOST_GIT_WORKTREE_INSERT,
   HOST_ARCHIVE_CLEANUP_PACKAGE_NAME,
   HOST_GIT_WORKTREE_PACKAGE_NAME,
@@ -59,14 +62,14 @@ const silentLogger = { log() {}, warn() {}, error() {} }
  */
 const EXPECTED_OVERLAY = `- insert:
     - id: client-graph
-      name: '@dsh-chamber/dsh-host-client-graph'
+      name: '@dsh-chamber/dsh-chamber-seed-client-graph'
 `
 
 const EXPECTED_BOTH_OVERLAY = `- insert:
     - id: client-graph
-      name: '@dsh-chamber/dsh-host-client-graph'
+      name: '@dsh-chamber/dsh-chamber-seed-client-graph'
     - id: git-worktree
-      name: '@dsh-chamber/dsh-host-git-worktree'
+      name: '@dsh-chamber/dsh-chamber-seed-git-worktree'
 `
 
 /** The seeded package location inside a managed dsh home. */
@@ -317,7 +320,7 @@ test('ensureHostGraphPackage rejects a symlinked chamber scope without creating 
   }
   assert.throws(() => ensureHostGraphPackage(dshHome, source), /not a real directory/)
   assert.equal(readFileSync(sentinel, 'utf8'), 'DO NOT TOUCH')
-  assert.equal(existsSync(join(outside, 'dsh-host-client-graph')), false)
+  assert.equal(existsSync(join(outside, 'dsh-chamber-seed-client-graph')), false)
 })
 
 test('ensureHostGraphPackage rejects a symlinked chamber package directory without writing outside the profile', t => {
@@ -889,6 +892,77 @@ test('createControlPlane.startLocal() lets an extra seed entry shadow the base h
       'utf8',
     )
     assert.equal(seeded, 'export const synced = 1\n')
+  } finally {
+    await plane.stop()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Batch 1 naming unification (2026-09): the fail-loud host-seed namespace pin
+// ---------------------------------------------------------------------------
+
+test('assertHostSeedInsertNaming pins the canonical dsh-chamber-seed-<loader-id> namespace', () => {
+  assert.doesNotThrow(
+    () => assertHostSeedInsertNaming([HOST_GRAPH_INSERT, HOST_GIT_WORKTREE_INSERT, HOST_ARCHIVE_CLEANUP_INSERT]),
+  )
+  // A pre-rename name under the SAME loader id — the row shape an upgraded
+  // remote profile carries. The registry must refuse to seed it, not resolve
+  // it silently.
+  assert.throws(
+    () => assertHostSeedInsertNaming([{ id: 'client-graph', name: '@dsh-chamber/dsh-host-client-graph' }]),
+    /dsh-chamber-seed-<loader-id>/,
+  )
+  // Canonical prefix, wrong loader id: the suffix IS the loader id, so the
+  // seeded directory, the overlay row and the activation-probe domain agree.
+  assert.throws(
+    () => assertHostSeedInsertNaming([{ id: 'git-worktree', name: '@dsh-chamber/dsh-chamber-seed-client-graph' }]),
+    /dsh-chamber-seed-<loader-id>/,
+  )
+})
+
+test('assertHostSeedEntryNaming binds kind host only — the client mobile slot is exempt', () => {
+  const host = { insert: HOST_GRAPH_INSERT, kind: 'host' as const, source: 'packaged' as const, sourceDir: null }
+  const client = {
+    insert: { id: 'mobile', name: '@dsh-chamber/dsh-client-ui-mobile' },
+    kind: 'client' as const,
+    source: 'packaged' as const,
+    sourceDir: null,
+  }
+  assert.doesNotThrow(() => assertHostSeedEntryNaming([host, client]))
+  assert.throws(
+    () => assertHostSeedEntryNaming([
+      { ...host, insert: { id: 'client-graph', name: '@dsh-chamber/dsh-host-client-graph' } },
+      client,
+    ]),
+    /dsh-chamber-seed-<loader-id>/,
+  )
+})
+
+test('the seed registry refuses a non-canonical host entry before any profile write', async t => {
+  const dir = tempDir(t)
+  const plane = createControlPlane({
+    stateDir: dir,
+    port: 0,
+    dshWorkspacePath: join(dir, 'dsh'),
+    hostGraphPackageSourceDir: stageSource(t),
+    hostGitWorktreePackageSourceDir: join(dir, 'no-git-package'),
+    hostArchiveCleanupPackageSourceDir: join(dir, 'no-archive-cleanup-package'),
+    extraSeedEntries: [{
+      insert: { id: 'client-graph', name: '@dsh-chamber/dsh-host-client-graph' },
+      kind: 'host',
+      source: 'desktop-synced',
+      sourceDir: null,
+    }],
+    logger: silentLogger,
+    localConnectionDeps: healthyLocalConnectionDeps,
+  })
+  try {
+    // The registry is resolved at plane start (the artifact diagnostic loop)
+    // and again per spawn — the non-canonical entry aborts the first of them.
+    await assert.rejects(plane.start(), /dsh-chamber-seed-<loader-id>/)
+    // Fail-loud happens before the seed writes: no overlay, no profile copy.
+    assert.equal(existsSync(join(dir, HOST_GRAPH_PATCH_FILENAME)), false)
+    assert.equal(existsSync(seedTarget(join(dir, 'dsh-home'))), false)
   } finally {
     await plane.stop()
   }

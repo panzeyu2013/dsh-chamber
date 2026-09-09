@@ -31,7 +31,7 @@
 - [ ] `build:preload`：`tsconfig.preload.build.json` 输入与输出一致。
 - [ ] `build:renderer`：`dist/assets/*` 与 `manifest.json` 的 entries 一一
       对应（`__DSH_BOOT__` 指向真实存在的 bundle）。
-- [ ] host 包：`dsh-host-client-graph` / `dsh-chamber-host-git-worktree` 的
+- [ ] host 包：`dsh-chamber-seed-client-graph` / `dsh-chamber-seed-git-worktree` 的
       `dist/index.js` 与 `host-graph-seed.ts` 的 seed 源路径一致；`package.json`
       `files` 含 dist。
 - [ ] `build:desktop` 完整链在 `electron-builder` 前生成全部上述产物。

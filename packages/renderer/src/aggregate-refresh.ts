@@ -1,4 +1,4 @@
-import type { InstanceAggregate, InstanceSnapshot } from '@dsh-chamber/dsh-client-ui-sidebar/shared'
+import type { InstanceAggregate, InstanceSnapshot } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
 
 /**
  * Decide which ready sources need an authoritative unary aggregate refresh.

@@ -1,7 +1,7 @@
 /**
  * Gateway seed-cache for desktop-synced chamber host packages (design 17
  * §9.3, 2026-12 Phase 3): the three chamber host packages
- * (dsh-host-client-graph, dsh-host-git-worktree, dsh-host-archive-cleanup —
+ * (dsh-chamber-seed-client-graph, dsh-chamber-seed-git-worktree, dsh-chamber-seed-archive-cleanup —
  * the last added 2026-12, design 24) are no longer shipped inside
  * the gateway package — a connecting desktop uploads its own copies through
  * the authenticated `PUT /chamber/plugins` surface, and the gateway caches
@@ -32,6 +32,7 @@ import {
   HOST_ARCHIVE_CLEANUP_INSERT,
   HOST_GIT_WORKTREE_INSERT,
   HOST_GRAPH_INSERT,
+  assertHostSeedInsertNaming,
   atomicWritePrivateFileNoFollow,
   ensurePrivateDirectoryNoFollow,
   readPrivateFileNoFollow,
@@ -44,20 +45,27 @@ export const SYNCED_PLUGIN_DIR = 'chamber-plugins'
 
 /** The syncable chamber host packages (desktop-provided since 2026-12;
  *  insert id/name single-sourced from the control-plane seed registry
- *  (dedupe audit N3); dsh-host-archive-cleanup added 2026-12, design 24). */
+ *  (dedupe audit N3); dsh-chamber-seed-archive-cleanup added 2026-12, design 24). */
 export const SYNCABLE_HOST_PACKAGES = [
   HOST_GRAPH_INSERT,
   HOST_GIT_WORKTREE_INSERT,
   HOST_ARCHIVE_CLEANUP_INSERT,
 ] as const
 
+// Fail-fast naming pin (Batch 1 naming unification, 2026-09): the syncable
+// list is a host-seed registry of its own (it gates PUT /chamber/plugins, the
+// cache slug and the probe derivation), so a non-canonical host package name
+// aborts the gateway at load instead of accepting a desktop sync into a
+// pre-rename slug. Same drift class as the probe-domain pin below.
+assertHostSeedInsertNaming(SYNCABLE_HOST_PACKAGES)
+
 /** The activation-probe domain each syncable host package backs (design 24
  *  §7 C: the probe expectation derives from the actually seeded packages —
  *  this map is the sync-cache side of HOST_DOMAIN_PROBE_NAMES). */
 const HOST_PACKAGE_PROBE_DOMAINS: Readonly<Record<string, string>> = {
-  '@dsh-chamber/dsh-host-client-graph': 'clientGraph/graph',
-  '@dsh-chamber/dsh-host-git-worktree': 'gitWorktree/previewCreate',
-  '@dsh-chamber/dsh-host-archive-cleanup': 'archiveCleanup/probe',
+  '@dsh-chamber/dsh-chamber-seed-client-graph': 'clientGraph/graph',
+  '@dsh-chamber/dsh-chamber-seed-git-worktree': 'gitWorktree/previewCreate',
+  '@dsh-chamber/dsh-chamber-seed-archive-cleanup': 'archiveCleanup/probe',
 }
 
 // Fail-fast drift pin (design 24 §7 C): the map's domain VALUES must equal

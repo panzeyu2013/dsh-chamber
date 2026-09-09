@@ -30,10 +30,10 @@
 
 **分支任务登记（v0.1.3-alpha1 规划，2026-09；**方案已定稿，用户批准**；执行按批次推进——全量方案见 `docs/progress/todo/branch-plan-v0.1.3-alpha1.md`，绿门见其 §8）**：
 - **T1 追踪上游 alpha.2 —— ✅ Batch 0 已完成（2026-09）**：源码线升级（pin 82a5fd61a7、链接 271）+ fork 重放（connection recovery-config）+ 双线收口（四锚 rc.1→alpha.2）+ covered 一行，全量记录见上方基线对齐块与 CHANGELOG [Unreleased]；实机探针（attachments wire key、open-in host 行 dormant）结转待实机。
-- **T2 目录/包命名统一**：chamber 自建插件统一 `dsh-chamber-*` 前缀、种子包用 `dsh-chamber-seed-*`、基建豁免；fork 副本与 vendor 命名混淆一并澄清（包名=身份，目录名随包）。方案已定稿（Batch 1，原子单批，见方案 §3）；待执行。
+- **T2 目录/包命名统一 —— ✅ Batch 1 已完成（2026-09）**：命名收口为「目录 == 包名非 scope 段」——6 个 client 插件包名 → `@dsh-chamber/dsh-chamber-client-ui-*`（目录不变）；3 个宿主种子目录+包名 → `dsh-chamber-seed-<loader-id>` / `@dsh-chamber/dsh-chamber-seed-<loader-id>`（loader id、激活探针域、发布计数 15 不变）；mobile（client-kind）、三 fork 副本（shadow）、基建包不动。同批：`.gitignore` committed-dist 负规则随 `git mv`、全树引用 sweep（含锁文件 importer / renderer covered·factory / gateway 同步表 / 桌面 seed / 测试夹具）、两处种子登记处 fail-loud 命名断言（`kind === 'host'` ⇒ `dsh-chamber-seed-<loader-id>`；控制面在 start 与每次 spawn 解析、gateway 在模块加载）、远端 `cordis.patch.yml` 旧名行一次性 fold（`foldLegacyHostInserts`，防 id-bound 永久硬失败）、宿主 dist 产物字节不变（包名不内嵌 bundle）。绿门：16 项 typecheck + 全套测试（control-plane 359 / gateway 566 / desktop 897 + 各插件包，0 失败）+ build:renderer / build:host-packages / 桌面 build:control-plane·host-graph-package·preload + gateway build·pack·tarball `--help` 冒烟 + 锁文件 frozen 稳定 + verify:i18n / verify:workflows / verify-upstream-touchpoints（C1–C8）/ release-preflight --versions-only。既有失败登记不变（dsh-runtime ZFS rich-fixture）；另修 Batch 0 遗留：schemastery 桩补齐 a2 recovery schema 构造链（`test:connection` 转绿，提交 5685c9a）。
 - **T3 openin 插件统一**：吸收官方 `ui-open-in-app` client 按钮 + 补远程打开能力（远程仅 deeplink 等方式、其余抑制）+ API 通道复用；方案已定稿（Batch 3，Phase 0 门控可提前；covered 一行已随 T1 落地——双保险）；待执行。
 - **T4 上游接触面跟踪清单 —— ✅ Batch 0.5 已完成（2026-09）**：登记文档 `docs/checklists/upstream-touchpoints.md`（逐 fork 纯度表 / 有意未镜像表 / 深引与 roster / 契约镜像 / 再生物 / 保鲜自动化 / 每 tag 维护循环 / PR 自检项）+ 保鲜脚本 `scripts/dev/verify-upstream-touchpoints.mjs`（C1 pure 字节恒等、C2 `--tags` 重放报告 advisory、C3 完整性、C4 roster + remote 契约 13、C5 过期锚扫描、C6 EXCLUDED 存在性、C7 种子域锁步、C8 生成物陈旧 advisory）+ CI Bootstrap 后 fail-loud 步骤（C1/C3/C5/C6）+ update-vendor 完成提示 + PR 模板自检节。
-- **批次进度**：Batch 0（T1）✅ → Batch 0.5（T4）✅ → Batch 1（T2）→ Batch 2（fork 重锚）→ Batch 3（T3），每批独立提交与绿门。
+- **批次进度**：Batch 0（T1）✅ → Batch 0.5（T4）✅ → Batch 1（T2）✅ → Batch 2（fork 重锚）→ Batch 3（T3），每批独立提交与绿门。
 
 - **dsh 运行时版本管理（design 18 §3.6/§9，M5–M7 已落地）**：剩余——macOS 打包态
   `.app` 内共享 dsh-runtime/内嵌 pnpm/koffi 与完整激活-故障回退-恢复链的实机；Linux

@@ -61,10 +61,10 @@ mount loader rows; they neither interpret Git facts nor execute Git over SSH.
 | `packages/dsh-chamber-client-ui-settings-connections` | Self-built connections settings plugin (local instance card + remote host CRUD/connect/systemd/logs) |
 | `packages/dsh-chamber-client-ui-settings-bridge` | Self-built settings shell plugin (shadows the official SettingsRoot registration; server dropdown + fixed connections nav entry) |
 | `packages/dsh-chamber-client-ui-layout` | Self-built ui-layout shell fork (layout-store replacement persisting sidebarWidth) |
-| `packages/dsh-host-client-graph` | Host-side package: read-only exposure of the instance's client-plugin boot graph over a Typert Remote |
+| `packages/dsh-chamber-seed-client-graph` | Host-side package: read-only exposure of the instance's client-plugin boot graph over a Typert Remote |
 | `packages/dsh-chamber-client-ui-git` | Chamber-bundled Git worktree client: sidebar slot, per-instance topology, create/remove sagas; never executes Git directly |
 | `packages/dsh-chamber-client-ui-open-in` | Chamber-bundled open-in client plugin: session-header utilities open button (local Finder + local/remote VS Code via the main-process OpenInApp registry + `dsh-chamber://` deep link) |
-| `packages/dsh-chamber-host-git-worktree` | In-instance host package: authoritative workspace/agent guards plus constrained, local-only Git worktree lifecycle |
+| `packages/dsh-chamber-seed-git-worktree` | In-instance host package: authoritative workspace/agent guards plus constrained, local-only Git worktree lifecycle |
 
 ## 2. Environment setup
 
@@ -177,10 +177,10 @@ packages/
                             Self-built connections settings plugin
   dsh-chamber-client-ui-settings-bridge/
                             Self-built settings shell plugin
-  dsh-host-client-graph/    Self-built host-side package (read-only exposure of the client-plugin boot graph)
+  dsh-chamber-seed-client-graph/    Self-built host-side package (read-only exposure of the client-plugin boot graph)
   dsh-chamber-client-ui-git/
                             Git worktree client (sidebar + coordinator + sagas)
-  dsh-chamber-host-git-worktree/
+  dsh-chamber-seed-git-worktree/
                             In-instance Git worktree host Remote (guards + constrained Git)
   dsh-chamber-client-ui-open-in/
                             Open-in client plugin (session-header Finder/VS Code open)

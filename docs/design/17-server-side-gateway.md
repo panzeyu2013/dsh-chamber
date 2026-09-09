@@ -673,11 +673,11 @@ connection-target scope 所有的目标；
 **1. `/chamber/channels`**：通道注册表只读投影（§7；MVP 空实现）。
 
 **2. `/chamber/plugins`（桌面同步的宿主包种子缓存，Phase 3）**：三个 chamber
-宿主包（`dsh-host-client-graph`、`dsh-host-git-worktree`、`dsh-host-archive-cleanup`
+宿主包（`dsh-chamber-seed-client-graph`、`dsh-chamber-seed-git-worktree`、`dsh-chamber-seed-archive-cleanup`
 （design 24，2026-12 起））不再随 gateway 发行物
 分发——连接的桌面经 `PUT /chamber/plugins` 上传自己的副本（包名白名单 + 文件
 大小上限 + `package.json` 名称/版本校验，原子 0600 写入 `<stateDir>/
-chamber-plugins/<scope 剥离 slug>/`（如 `chamber-plugins/dsh-host-client-graph`，
+chamber-plugins/<scope 剥离 slug>/`（如 `chamber-plugins/dsh-chamber-seed-client-graph`，
 不落全限定包名），`GET /chamber/plugins` 返回非秘密投影（name +
 version）。每次 spawn 时控制面种子注册表从缓存注入托管 profile，因此：
 
@@ -1136,7 +1136,7 @@ gateway 托管前端」与 §3 装配矩阵已定义移动例外——`dsh-chamb
 「移动例外：不参与桌面同步」）；桌面侧 chamber 插件（sidebar/layout/
 settings-bridge/git/open-in）依旧不注入。机制上无需新能力：控制面 host-graph-seed
 的 `--patch` overlay（design 09 §3.1 方案 A）对 gateway spawn 的本地实例同样
-适用——与 `dsh-host-client-graph`/`dsh-host-git-worktree` 的 seed 路径同构，
+适用——与 `dsh-chamber-seed-client-graph`/`dsh-host-git-worktree` 的 seed 路径同构，
 区别仅在**分发来源**：宿主包经桌面 `PUT /chamber/plugins` 同步（§10 项 2，
 版本锁定到连接桌面），移动插件随 gateway 发行物打包（链路无桌面在场）。
 

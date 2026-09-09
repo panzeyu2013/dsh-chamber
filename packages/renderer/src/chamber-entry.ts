@@ -167,10 +167,10 @@ import * as UiTheme from '@deepseek-ai/dsh-client-ui-theme/client'
 // 'root' registration at priority 0 throws the one-declarer rule; the id
 // stays covered in chamber-covered.ts). The fork shares + persists the
 // sidebar width across every shell boot.
-import * as UiLayout from '@dsh-chamber/dsh-client-ui-layout/client'
-import * as UiSidebar from '@dsh-chamber/dsh-client-ui-sidebar/client'
-import * as UiGit from '@dsh-chamber/dsh-client-ui-git/client'
-import * as UiOpenIn from '@dsh-chamber/dsh-client-ui-open-in/client'
+import * as UiLayout from '@dsh-chamber/dsh-chamber-client-ui-layout/client'
+import * as UiSidebar from '@dsh-chamber/dsh-chamber-client-ui-sidebar/client'
+import * as UiGit from '@dsh-chamber/dsh-chamber-client-ui-git/client'
+import * as UiOpenIn from '@dsh-chamber/dsh-chamber-client-ui-open-in/client'
 // The official ui-settings (settingsScope / settingsSchema provider, official
 // SettingsRoot occupant) stays FIRST-SCREEN: locale and ui-theme — both
 // first-screen — ROOT-inject `settingsScope` (vendor client inject lists;
@@ -314,8 +314,8 @@ async function registerDeferred(ctx: Context): Promise<void> {
     import('@deepseek-ai/dsh-client-ui-settings-models/client'),
     import('@deepseek-ai/dsh-client-ui-settings-plugins/client'),
     import('@deepseek-ai/dsh-client-ui-settings-plugin-inventory/client'),
-    import('@dsh-chamber/dsh-client-ui-settings-connections/client'),
-    import('@dsh-chamber/dsh-client-ui-settings-bridge/client'),
+    import('@dsh-chamber/dsh-chamber-client-ui-settings-connections/client'),
+    import('@dsh-chamber/dsh-chamber-client-ui-settings-bridge/client'),
   ])
   ctx.plugin(jobs)
   ctx.plugin(goal)
@@ -569,10 +569,10 @@ const COVERED_FACTORIES: ReadonlyArray<readonly [id: string, factory: ClientPlug
   ['@deepseek-ai/dsh-api-workspace-controller', coveredFactory(ApiWorkspaceController)],
   ['@deepseek-ai/dsh-client-locale', coveredFactory(Locale)],
   ['@deepseek-ai/dsh-client-ui-theme', coveredFactory(UiTheme)],
-  ['@dsh-chamber/dsh-client-ui-layout', coveredFactory(UiLayout)],
-  ['@dsh-chamber/dsh-client-ui-sidebar', coveredFactory(UiSidebar)],
-  ['@dsh-chamber/dsh-client-ui-git', coveredFactory(UiGit)],
-  ['@dsh-chamber/dsh-client-ui-open-in', coveredFactory(UiOpenIn)],
+  ['@dsh-chamber/dsh-chamber-client-ui-layout', coveredFactory(UiLayout)],
+  ['@dsh-chamber/dsh-chamber-client-ui-sidebar', coveredFactory(UiSidebar)],
+  ['@dsh-chamber/dsh-chamber-client-ui-git', coveredFactory(UiGit)],
+  ['@dsh-chamber/dsh-chamber-client-ui-open-in', coveredFactory(UiOpenIn)],
   ['@deepseek-ai/dsh-client-ui-settings', coveredFactory(UiSettings)],
   ['@deepseek-ai/dsh-client-ui-conversation', coveredFactory(UiConversation)],
   ['@deepseek-ai/dsh-client-ui-commands', coveredFactory(UiCommands)],

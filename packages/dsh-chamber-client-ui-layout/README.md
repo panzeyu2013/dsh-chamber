@@ -1,4 +1,4 @@
-# @dsh-chamber/dsh-client-ui-layout
+# @dsh-chamber/dsh-chamber-client-ui-layout
 
 A minimal chamber-owned fork of the official
 `@deepseek-ai/dsh-client-ui-layout` shell plugin (design 06 — sidebar width
@@ -18,7 +18,7 @@ restart reset to the 280px contract default.
 
 The chamber fork feeds the store from — and writes every drag back to — the
 chamber sidebar package's page-wide view-prefs store
-(`@dsh-chamber/dsh-client-ui-sidebar/shared`, the single in-memory store all
+(`@dsh-chamber/dsh-chamber-client-ui-sidebar/shared`, the single in-memory store all
 boots share over the vite shared chunk, persisted under one versioned
 `localStorage` key):
 
@@ -57,5 +57,5 @@ one-declarer rule); it stays covered in
 
 The renderer's `chamber-entry.ts` registers this package's `/client` in the
 composite boot in place of the official layout; `vite.config.mjs` aliases
-`@dsh-chamber/dsh-client-ui-layout(/client)` to this source tree and resolves
+`@dsh-chamber/dsh-chamber-client-ui-layout(/client)` to this source tree and resolves
 the vendor deep subpaths through the `deepseekSource` plugin.

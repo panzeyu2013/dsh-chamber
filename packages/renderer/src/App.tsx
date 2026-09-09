@@ -49,7 +49,7 @@ import {
   type InstanceRuntimeReport,
   type InstanceSnapshot,
   type PluginGraphDiagnostic,
-} from '@dsh-chamber/dsh-client-ui-sidebar/shared'
+} from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
 import { detectNotificationEdges, dedupeCompleteEdges, type SessionFacts } from './notification-edges.ts'
 import { projectBadgeCount } from './badge-count.ts'
 import {

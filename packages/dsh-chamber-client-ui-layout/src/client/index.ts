@@ -32,7 +32,7 @@ import { createLayoutStore, subscribeLayoutInstances } from './stores.ts'
 import type { LayoutInstance, LayoutState } from './store-core.ts'
 import { LayoutController } from '@deepseek-ai/dsh-client-ui-layout/src/client/service.ts'
 import { ThemePresenter } from '@deepseek-ai/dsh-client-ui-layout/src/client/theme-presenter.ts'
-import { chamberBridge } from '@dsh-chamber/dsh-client-ui-sidebar/shared'
+import { chamberBridge } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
 import { createDocumentThemeProjector, type DocumentThemeSnapshot } from './document-theme.ts'
 
 /**

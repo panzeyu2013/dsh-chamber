@@ -62,7 +62,7 @@
   绝不静默降级。
 - **只附着，不下沉业务**：控制面可复制 chamber 自带 host 包并挂 loader row，
   但不解析其业务数据，也不执行 Git；Git worktree 事实与命令始终属于实例内
-  `@dsh-chamber/dsh-host-git-worktree`（设计 08）。
+  `@dsh-chamber/dsh-chamber-seed-git-worktree`（设计 08）。
 
 ---
 
@@ -156,9 +156,9 @@ host package（2026-12 起为三个，第三个见 design 24）：
 
 | loader id | package | 实例内职责 |
 |---|---|---|
-| `client-graph` | `@dsh-chamber/dsh-host-client-graph` | 只读暴露该实例的 client module boot graph |
-| `git-worktree` | `@dsh-chamber/dsh-host-git-worktree` | 在该实例进程/用户/文件系统内执行受限 Git worktree 领域操作（设计 08） |
-| `archive-cleanup` | `@dsh-chamber/dsh-host-archive-cleanup` | 已归档会话内容清理域 `archiveCleanup/{preview,purge}`：实例进程内权威清除归档集（含 subagent 级联），只删不读（设计 24） |
+| `client-graph` | `@dsh-chamber/dsh-chamber-seed-client-graph` | 只读暴露该实例的 client module boot graph |
+| `git-worktree` | `@dsh-chamber/dsh-chamber-seed-git-worktree` | 在该实例进程/用户/文件系统内执行受限 Git worktree 领域操作（设计 08） |
+| `archive-cleanup` | `@dsh-chamber/dsh-chamber-seed-archive-cleanup` | 已归档会话内容清理域 `archiveCleanup/{preview,purge}`：实例进程内权威清除归档集（含 subagent 级联），只删不读（设计 24） |
 
 本地托管实例的接线如下：
 
@@ -548,7 +548,7 @@ gateway 目标即其入口本身（自带认证边界，17 §5.1/§6）。该形
 | 孤儿回收安全模型 | 参考实现 `managed-process-registry.js`（记录在案 → 重验 → owner 死才杀） | 移植 + 改造：命令串含 `--profile web`、lsof 端口归属校验（§3.4） |
 | 健康监控 / 重启 / 背压 | 参考实现 `lifecycle.js`（共享失败计数、节流、单飞行重启、端口释放） | 探活载荷换统一身份方法；删"忙会话宽限"（§2.4/§3.5） |
 | 优雅退出 | dsh profile-boot（SIGTERM dispose） | SIGTERM 进程组 → SIGKILL 兜底（§3.7） |
-| chamber host 包附着 | `@dsh-chamber/dsh-host-client-graph` + `@dsh-chamber/dsh-host-git-worktree` + `@dsh-chamber/dsh-host-archive-cleanup`（design 24） | 按构建产物 seed + 单一 loader overlay；只分发，不消费 graph/Git/归档清理业务（§2.6） |
+| chamber host 包附着 | `@dsh-chamber/dsh-chamber-seed-client-graph` + `@dsh-chamber/dsh-chamber-seed-git-worktree` + `@dsh-chamber/dsh-chamber-seed-archive-cleanup`（design 24） | 按构建产物 seed + 单一 loader overlay；只分发，不消费 graph/Git/归档清理业务（§2.6） |
 
 ---
 

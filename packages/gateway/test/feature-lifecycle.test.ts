@@ -160,7 +160,7 @@ test('unknown chamber paths are claimed with a stable 404', async t => {
 test('chamber plugins sync caches desktop-provided host packages (2026-12 Phase 3)', async t => {
   const host = surface(t)
   const manifest = JSON.stringify({
-    name: '@dsh-chamber/dsh-host-client-graph',
+    name: '@dsh-chamber/dsh-chamber-seed-client-graph',
     version: '1.2.3',
     main: 'dist/index.js',
   })
@@ -170,38 +170,38 @@ test('chamber plugins sync caches desktop-provided host packages (2026-12 Phase 
   assert.equal(before.status, 200)
   assert.deepEqual(before.json(), {
     items: [
-      { name: '@dsh-chamber/dsh-host-client-graph', version: null },
-      { name: '@dsh-chamber/dsh-host-git-worktree', version: null },
-      { name: '@dsh-chamber/dsh-host-archive-cleanup', version: null },
+      { name: '@dsh-chamber/dsh-chamber-seed-client-graph', version: null },
+      { name: '@dsh-chamber/dsh-chamber-seed-git-worktree', version: null },
+      { name: '@dsh-chamber/dsh-chamber-seed-archive-cleanup', version: null },
     ],
   })
 
   const upload = (body: unknown): Promise<FakeResponse> => uploadVia(host, body)
 
-  const first = await upload({ name: '@dsh-chamber/dsh-host-client-graph', files: { 'package.json': manifest, 'dist/index.js': artifact } })
+  const first = await upload({ name: '@dsh-chamber/dsh-chamber-seed-client-graph', files: { 'package.json': manifest, 'dist/index.js': artifact } })
   assert.equal(first.status, 200)
   assert.deepEqual(first.json(), { ok: true, changed: true })
 
   const after = await handle(host, 'GET', '/chamber/plugins')
   assert.deepEqual(after.json(), {
     items: [
-      { name: '@dsh-chamber/dsh-host-client-graph', version: '1.2.3' },
-      { name: '@dsh-chamber/dsh-host-git-worktree', version: null },
-      { name: '@dsh-chamber/dsh-host-archive-cleanup', version: null },
+      { name: '@dsh-chamber/dsh-chamber-seed-client-graph', version: '1.2.3' },
+      { name: '@dsh-chamber/dsh-chamber-seed-git-worktree', version: null },
+      { name: '@dsh-chamber/dsh-chamber-seed-archive-cleanup', version: null },
     ],
   })
 
   // Idempotent re-upload: identical bytes → changed:false, no rewrite.
-  const second = await upload({ name: '@dsh-chamber/dsh-host-client-graph', files: { 'package.json': manifest, 'dist/index.js': artifact } })
+  const second = await upload({ name: '@dsh-chamber/dsh-chamber-seed-client-graph', files: { 'package.json': manifest, 'dist/index.js': artifact } })
   assert.deepEqual(second.json(), { ok: true, changed: false })
 
   // Validation: unknown package / manifest-name mismatch / malformed body.
   const badName = await upload({ name: '@dsh-chamber/dsh-client-ui-mobile', files: { 'package.json': manifest, 'dist/index.js': artifact } })
   assert.equal(badName.status, 400)
   assert.equal(badName.json().code, 'invalid_input')
-  const mismatched = await upload({ name: '@dsh-chamber/dsh-host-client-graph', files: { 'package.json': JSON.stringify({ name: 'other', version: '1.0.0' }), 'dist/index.js': artifact } })
+  const mismatched = await upload({ name: '@dsh-chamber/dsh-chamber-seed-client-graph', files: { 'package.json': JSON.stringify({ name: 'other', version: '1.0.0' }), 'dist/index.js': artifact } })
   assert.equal(mismatched.status, 400)
-  const malformed = await upload({ name: '@dsh-chamber/dsh-host-client-graph', files: { 'package.json': 'not json', 'dist/index.js': artifact } })
+  const malformed = await upload({ name: '@dsh-chamber/dsh-chamber-seed-client-graph', files: { 'package.json': 'not json', 'dist/index.js': artifact } })
   assert.equal(malformed.status, 400)
   assert.equal(malformed.json().code, 'invalid_input')
 })
@@ -209,12 +209,12 @@ test('chamber plugins sync caches desktop-provided host packages (2026-12 Phase 
 test('chamber plugins upload enforces the body and per-file size bounds', async t => {
   const host = surface(t)
   const manifest = JSON.stringify({
-    name: '@dsh-chamber/dsh-host-client-graph',
+    name: '@dsh-chamber/dsh-chamber-seed-client-graph',
     version: '1.0.0',
   })
   // Oversized request body (> 8 MiB) → 413 + socket destroy, never drained.
   const oversizedBody = JSON.stringify({
-    name: '@dsh-chamber/dsh-host-client-graph',
+    name: '@dsh-chamber/dsh-chamber-seed-client-graph',
     files: { 'package.json': manifest, 'dist/index.js': 'x'.repeat(9 * 1024 * 1024) },
   })
   const response = new FakeResponse()
@@ -233,24 +233,24 @@ test('chamber plugins upload enforces the body and per-file size bounds', async 
   const after = await handle(host, 'GET', '/chamber/plugins')
   assert.deepEqual(after.json(), {
     items: [
-      { name: '@dsh-chamber/dsh-host-client-graph', version: null },
-      { name: '@dsh-chamber/dsh-host-git-worktree', version: null },
-      { name: '@dsh-chamber/dsh-host-archive-cleanup', version: null },
+      { name: '@dsh-chamber/dsh-chamber-seed-client-graph', version: null },
+      { name: '@dsh-chamber/dsh-chamber-seed-git-worktree', version: null },
+      { name: '@dsh-chamber/dsh-chamber-seed-archive-cleanup', version: null },
     ],
   })
 
   // Per-file caps: manifest > 64 KiB → 400 invalid_input; artifact > 4 MiB → 400.
   const bigManifest = await uploadVia(host, {
-    name: '@dsh-chamber/dsh-host-client-graph',
+    name: '@dsh-chamber/dsh-chamber-seed-client-graph',
     files: {
-      'package.json': JSON.stringify({ name: '@dsh-chamber/dsh-host-client-graph', version: '1.0.0', pad: 'x'.repeat(SYNCED_PACKAGE_MAX_BYTES) }),
+      'package.json': JSON.stringify({ name: '@dsh-chamber/dsh-chamber-seed-client-graph', version: '1.0.0', pad: 'x'.repeat(SYNCED_PACKAGE_MAX_BYTES) }),
       'dist/index.js': 'ok',
     },
   })
   assert.equal(bigManifest.status, 400)
   assert.equal(bigManifest.json().code, 'invalid_input')
   const bigArtifact = await uploadVia(host, {
-    name: '@dsh-chamber/dsh-host-client-graph',
+    name: '@dsh-chamber/dsh-chamber-seed-client-graph',
     files: {
       'package.json': manifest,
       'dist/index.js': 'x'.repeat(SYNCED_ARTIFACT_MAX_BYTES + 1),
@@ -285,9 +285,9 @@ test('chamber plugins upload maps persistence failures to a coded 500, not 400',
   const pending = host.handle(request as unknown as ApiRequest, response as unknown as ApiResponse, '/chamber/plugins')
   queueMicrotask(() => {
     request.emit('data', Buffer.from(JSON.stringify({
-      name: '@dsh-chamber/dsh-host-client-graph',
+      name: '@dsh-chamber/dsh-chamber-seed-client-graph',
       files: {
-        'package.json': JSON.stringify({ name: '@dsh-chamber/dsh-host-client-graph', version: '1.0.0' }),
+        'package.json': JSON.stringify({ name: '@dsh-chamber/dsh-chamber-seed-client-graph', version: '1.0.0' }),
         'dist/index.js': 'export const ok = 1\n',
       },
     })))
@@ -302,13 +302,13 @@ test('chamber plugins cache lands 0600 files under 0700 dirs and rejects symlink
   const stateDir = mkdtempSync(join(tmpdir(), 'gateway-surface-'))
   t.after(() => rmSync(stateDir, { recursive: true, force: true }))
   const plugins = createChamberPlugins(stateDir, logger)
-  const manifest = JSON.stringify({ name: '@dsh-chamber/dsh-host-client-graph', version: '1.0.0' })
+  const manifest = JSON.stringify({ name: '@dsh-chamber/dsh-chamber-seed-client-graph', version: '1.0.0' })
   const artifact = 'export const ok = 1\n'
-  await plugins.put('@dsh-chamber/dsh-host-client-graph', { 'package.json': manifest, 'dist/index.js': artifact })
+  await plugins.put('@dsh-chamber/dsh-chamber-seed-client-graph', { 'package.json': manifest, 'dist/index.js': artifact })
 
   const cacheRoot = join(stateDir, 'chamber-plugins')
   // Cache subdirs use the scope-stripped slug (name minus '@dsh-chamber/').
-  const pkgDir = join(cacheRoot, 'dsh-host-client-graph')
+  const pkgDir = join(cacheRoot, 'dsh-chamber-seed-client-graph')
   assert.equal(statSync(cacheRoot).mode & 0o777, 0o700)
   assert.equal(statSync(pkgDir).mode & 0o777, 0o700)
   assert.equal(statSync(join(pkgDir, 'dist')).mode & 0o777, 0o700)
@@ -322,7 +322,7 @@ test('chamber plugins cache lands 0600 files under 0700 dirs and rejects symlink
   const decoy = join(stateDir, 'decoy.json')
   symlinkSync(decoy, target)
   await assert.rejects(
-    () => plugins.put('@dsh-chamber/dsh-host-client-graph', { 'package.json': manifest, 'dist/index.js': artifact }),
+    () => plugins.put('@dsh-chamber/dsh-chamber-seed-client-graph', { 'package.json': manifest, 'dist/index.js': artifact }),
   )
   assert.equal(existsSync(decoy), false, 'the decoy must never be written through the link')
 })

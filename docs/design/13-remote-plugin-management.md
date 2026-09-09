@@ -61,9 +61,9 @@
   **绝不信任**。
 - `seed`（设计 08/09 接线）：`seedRemoteChamberHostPackages` 经现有受限
   `cat/write-file` 原语，把本次**实际有 `dist/index.js` 构建产物**的 chamber
-  宿主包 `@dsh-chamber/dsh-host-client-graph`（loader id `client-graph`）、
-  `@dsh-chamber/dsh-host-git-worktree`（loader id `git-worktree`）与
-  `@dsh-chamber/dsh-host-archive-cleanup`（loader id `archive-cleanup`，design
+  宿主包 `@dsh-chamber/dsh-chamber-seed-client-graph`（loader id `client-graph`）、
+  `@dsh-chamber/dsh-chamber-seed-git-worktree`（loader id `git-worktree`）与
+  `@dsh-chamber/dsh-chamber-seed-archive-cleanup`（loader id `archive-cleanup`，design
   24，2026-12 起）落到远端
   install-level fallback `profiles/node_modules`，再合并 web profile 的
   `cordis.patch.yml`。`seedRemoteHostGraph` 保留为旧手动 IPC 的单包兼容 wrapper。
@@ -91,7 +91,7 @@
    “重启后生效”。
 
 该通道只复制 chamber 自有构建产物。Git worktree RPC/校验/子进程全部由远端
-实例加载后的 `@dsh-chamber/dsh-host-git-worktree` 执行（设计 08），Desktop
+实例加载后的 `@dsh-chamber/dsh-chamber-seed-git-worktree` 执行（设计 08），Desktop
 既不接收 Git argv，也不读 Git topology。
 
 ## 4. 数据与投影
@@ -131,7 +131,7 @@
 ## 6. UI（连接设置页 · 插件管理）
 
 - 远端同步视图 + 本地列表视图；`plugin-diff` 一键应用本地清单。
-- chamber 内建注入可见化：`@dsh-chamber/dsh-host-client-graph` 行显示
+- chamber 内建注入可见化：`@dsh-chamber/dsh-chamber-seed-client-graph` 行显示
   installed/patched 状态 + 模块 A 包版本号（本地/远端均解析 seeded
   package.json）；远端未注入时提供「注入」按钮。
 - 远端生效状态三态：经主进程隧道 RPC 探测（`probeClientGraphLive`，POST

@@ -13,12 +13,12 @@ build/
 # the control plane copies dist/index.js into profiles at seed time with zero
 # build dependencies, so the artifacts must be tracked despite the global
 # dist/ rule above (their build scripts still regenerate them on demand).
-!packages/dsh-host-client-graph/dist/
-!packages/dsh-host-client-graph/dist/index.js
-!packages/dsh-chamber-host-git-worktree/dist/
-!packages/dsh-chamber-host-git-worktree/dist/index.js
-!packages/dsh-host-archive-cleanup/dist/
-!packages/dsh-host-archive-cleanup/dist/index.js
+!packages/dsh-chamber-seed-client-graph/dist/
+!packages/dsh-chamber-seed-client-graph/dist/index.js
+!packages/dsh-chamber-seed-git-worktree/dist/
+!packages/dsh-chamber-seed-git-worktree/dist/index.js
+!packages/dsh-chamber-seed-archive-cleanup/dist/
+!packages/dsh-chamber-seed-archive-cleanup/dist/index.js
 # The shared runtime core's dist/index.js is likewise a committed esbuild
 # artifact: the desktop shims statically import the package main (dist) in
 # dev AND packaged mode, so a clean checkout must carry it. Regenerate via

@@ -63,7 +63,7 @@ dsh 官方 web 的客户端插件链路是完整的（已核 vendor 源码）：
 ### 3.1 图来源（方案对比；A 已落地）
 
 - **方案 A（已落地，2026-08）：chamber 自有 host 行暴露图**。chamber 自有小 host
-  包 `@dsh-chamber/dsh-host-client-graph`（`packages/dsh-host-client-graph`，宿主
+  包 `@dsh-chamber/dsh-chamber-seed-client-graph`（`packages/dsh-chamber-seed-client-graph`，宿主
   侧，非 vendor），注册一个 Remote 暴露 `clientModules.graph()`（宿主 ctx 上
   `clientModules` 服务现成）。控制面在本地 profile seed 该行（`--patch` overlay，
   模块 B）——先例：`seedDshHomeDefaults` 已 seed `settings.yaml`；远程实例由部署侧
@@ -72,7 +72,7 @@ dsh 官方 web 的客户端插件链路是完整的（已核 vendor 源码）：
   +archive-cleanup（设计 24）），机制同构、清单以 05 §6/02 §2.6 为权威。**包分发
   开放点（已定）**：seed 时
   控制面把模块 A 包（package.json + dist/index.js）裸包拷贝进
-  `profiles/web/node_modules/@dsh-chamber/dsh-host-client-graph/`（免 pnpm 的裸包
+  `profiles/web/node_modules/@dsh-chamber/dsh-chamber-seed-client-graph/`（免 pnpm 的裸包
   拷贝，行内注释记录），`--patch` 行经 profile node_modules 锚点解析。
 - **方案 B（备选，未采用）：前端提取宿主注入的图**。`GET /api/i/<id>/` 反代到
   宿主根路径，宿主返回官方 web-app index.html（`modules` 行 tap 注入
@@ -151,7 +151,7 @@ dsh 官方 web 的客户端插件链路是完整的（已核 vendor 源码）：
 |---|---|
 | `packages/renderer` | `host-graph.ts`（`fetchHostGraph` wire 调用 + `dedupeHostEntries` 去重 + `toExtraRows` 注入反代前缀 + `collectExtraRows`/`preloadedExtraBundles`，AppWebEntry 构造前预加载额外 bundle，loadModuleBundle 依赖注入可测）+ `chamber-covered.ts`（去重集） |
 | `packages/dsh-client-web`（拷贝包） | `boot.ts` `AppWebEntryOptions.extraRows` seam：额外 entry id 合并进 boot rows（N-ctx 模块表共享 seam 的扩展，见 05 §6） |
-| 方案 A 附加 | 新 host 包 `packages/dsh-host-client-graph`（Remote `clientGraph/graph` 暴露图）+ 控制面 `host-graph-seed.ts`（seed 模块 A 包进 profile + 物化 `--patch` overlay，`packages/control-plane`） |
+| 方案 A 附加 | 新 host 包 `packages/dsh-chamber-seed-client-graph`（Remote `clientGraph/graph` 暴露图）+ 控制面 `host-graph-seed.ts`（seed 模块 A 包进 profile + 物化 `--patch` overlay，`packages/control-plane`） |
 | 官方/宿主/vendor | 零改动 |
 
 ### 3.5 最终实现形态（落地契约）
@@ -173,14 +173,14 @@ dsh 官方 web 的客户端插件链路是完整的（已核 vendor 源码）：
   client-modules 宿主行之后启动。
 - **--patch seed（模块 B）**：`ensureHostGraphPackage(dshHome, sourceDir)` 把模块 A
   包（package.json + dist/index.js）幂等分发进
-  `$DSH_HOME/profiles/web/node_modules/@dsh-chamber/dsh-host-client-graph/`（内容
+  `$DSH_HOME/profiles/web/node_modules/@dsh-chamber/dsh-chamber-seed-client-graph/`（内容
   hash 一致跳过、漂移覆盖；`web/node_modules`→scope→chamber package→dist 的每个
   owned 最终目录逐级 no-follow 校验，target 以稳定有界 no-follow 读取、随机 O_EXCL
   temp + file/parent fsync 原子写；源 package 仍是普通只读分发边界并允许打包 symlink；
   源目录缺失 = 优雅跳过，不报错）；
   `buildPatchOverlay(stateDir)` 物化 `<stateDir>/dsh-chamber-graph.patch.yml`——
   loader patch 列表格式（`[{insert:[{id:'client-graph',
-  name:'@dsh-chamber/dsh-host-client-graph'}]}]`，与 bundle 的 cordis.patch.yml /
+  name:'@dsh-chamber/dsh-chamber-seed-client-graph'}]}]`，与 bundle 的 cordis.patch.yml /
   dsh CLI `--patch <path>` overlay 同格式，`@deepseek-ai/dsh-app-boot`
   loadOverlayPatches 为权威），幂等自愈（内容一致不动、漂移重写）。spawn 每次
   注入 `--patch`：`webProfileArgs(port, patchPath?)`（须在 `--profile web` 之后、

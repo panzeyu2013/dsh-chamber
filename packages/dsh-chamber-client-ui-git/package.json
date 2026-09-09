@@ -1,5 +1,5 @@
 {
-  "name": "@dsh-chamber/dsh-client-ui-git",
+  "name": "@dsh-chamber/dsh-chamber-client-ui-git",
   "description": "Chamber-bundled Git worktree client plugin: per-instance topology and safe create/remove lifecycle in the official sidebar shell",
   "version": "0.2.4",
   "private": true,
@@ -30,7 +30,7 @@
   },
   "license": "MIT",
   "dependencies": {
-    "@dsh-chamber/dsh-client-ui-sidebar": "workspace:^"
+    "@dsh-chamber/dsh-chamber-client-ui-sidebar": "workspace:^"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "workspace:^",

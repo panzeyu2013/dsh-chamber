@@ -723,8 +723,8 @@ test('buildRemoteExecArgv allows only the two whitelisted cat paths (always unde
 
 test('resolveWriteTarget allows the three prefixes and rejects traversal', () => {
   assert.equal(resolveWriteTarget(spec('w6'), '~/.dsh-chamber/plugins/pkg-abc123.tgz'), '~/.dsh-chamber/plugins/pkg-abc123.tgz')
-  assert.equal(resolveWriteTarget(spec('w6'), '~/.dsh/profiles/node_modules/@dsh-chamber/dsh-host-client-graph/package.json'), '~/.dsh/profiles/node_modules/@dsh-chamber/dsh-host-client-graph/package.json')
-  assert.equal(resolveWriteTarget(spec('w6'), '~/.dsh/profiles/node_modules/@dsh-chamber/dsh-host-git-worktree/dist/index.js'), '~/.dsh/profiles/node_modules/@dsh-chamber/dsh-host-git-worktree/dist/index.js')
+  assert.equal(resolveWriteTarget(spec('w6'), '~/.dsh/profiles/node_modules/@dsh-chamber/dsh-chamber-seed-client-graph/package.json'), '~/.dsh/profiles/node_modules/@dsh-chamber/dsh-chamber-seed-client-graph/package.json')
+  assert.equal(resolveWriteTarget(spec('w6'), '~/.dsh/profiles/node_modules/@dsh-chamber/dsh-chamber-seed-git-worktree/dist/index.js'), '~/.dsh/profiles/node_modules/@dsh-chamber/dsh-chamber-seed-git-worktree/dist/index.js')
   assert.equal(resolveWriteTarget(spec('w6'), '~/.dsh/profiles/web/cordis.patch.yml'), '~/.dsh/profiles/web/cordis.patch.yml')
   assert.equal(resolveWriteTarget(spec('w6'), '/etc/passwd'), null, 'refuses arbitrary path')
   assert.equal(resolveWriteTarget(spec('w6'), '~/.dsh-chamber/plugins/../evil.tgz'), null, 'refuses dot-dot')
@@ -737,15 +737,15 @@ test('resolveWriteTarget honors a custom remoteDshHome', () => {
 })
 
 test('resolveWriteTarget rejects traversal inside the seed subtree (shared SEED_RELATIVE_PATTERN)', () => {
-  const seed = '~/.dsh/profiles/node_modules/@dsh-chamber/dsh-host-client-graph/package.json'
+  const seed = '~/.dsh/profiles/node_modules/@dsh-chamber/dsh-chamber-seed-client-graph/package.json'
   assert.equal(resolveWriteTarget(spec('w7b'), seed), seed)
   assert.equal(
-    resolveWriteTarget(spec('w7b'), '~/.dsh/profiles/node_modules/@dsh-chamber/dsh-host-client-graph/../../etc/passwd'),
+    resolveWriteTarget(spec('w7b'), '~/.dsh/profiles/node_modules/@dsh-chamber/dsh-chamber-seed-client-graph/../../etc/passwd'),
     null,
     'dot-dot escapes the seed subtree',
   )
   assert.equal(
-    resolveWriteTarget(spec('w7b'), '~/.dsh/profiles/node_modules/@dsh-chamber/dsh-host-client-graph/./package.json'),
+    resolveWriteTarget(spec('w7b'), '~/.dsh/profiles/node_modules/@dsh-chamber/dsh-chamber-seed-client-graph/./package.json'),
     null,
     'self-segment is refused too',
   )
@@ -761,11 +761,11 @@ test('buildRemoteExecArgv accepts the fixed printf $HOME lookup (materialize rem
 })
 
 test('buildRemoteExecArgv allows the converged seed-subtree cat read (seed hash-skip)', () => {
-  const seedPkg = '~/.dsh/profiles/node_modules/@dsh-chamber/dsh-host-client-graph/package.json'
+  const seedPkg = '~/.dsh/profiles/node_modules/@dsh-chamber/dsh-chamber-seed-client-graph/package.json'
   assert.deepEqual(buildRemoteExecArgv(spec('w9'), { op: 'exec', command: 'cat', argv: [seedPkg] }), ['LC_ALL=C', 'cat', seedPkg])
-  const seedDist = '~/.dsh/profiles/node_modules/@dsh-chamber/dsh-host-client-graph/dist/index.js'
+  const seedDist = '~/.dsh/profiles/node_modules/@dsh-chamber/dsh-chamber-seed-client-graph/dist/index.js'
   assert.deepEqual(buildRemoteExecArgv(spec('w9'), { op: 'exec', command: 'cat', argv: [seedDist] }), ['LC_ALL=C', 'cat', seedDist])
-  const gitWorktreeDist = '~/.dsh/profiles/node_modules/@dsh-chamber/dsh-host-git-worktree/dist/index.js'
+  const gitWorktreeDist = '~/.dsh/profiles/node_modules/@dsh-chamber/dsh-chamber-seed-git-worktree/dist/index.js'
   assert.deepEqual(buildRemoteExecArgv(spec('w9'), { op: 'exec', command: 'cat', argv: [gitWorktreeDist] }), ['LC_ALL=C', 'cat', gitWorktreeDist])
   assert.equal(
     buildRemoteExecArgv(spec('w9'), { op: 'exec', command: 'cat', argv: ['~/.dsh/profiles/node_modules/other/pkg.json'] }),
@@ -1111,7 +1111,7 @@ test('run: a QUIET failure keeps the ENOENT error text but suppresses the ERROR 
   const result = await sshProvider.exec!(spec('wf8'), 'run', deps, {
     op: 'exec',
     command: 'cat',
-    argv: ['~/.dsh/profiles/node_modules/@dsh-chamber/dsh-host-client-graph/package.json'],
+    argv: ['~/.dsh/profiles/node_modules/@dsh-chamber/dsh-chamber-seed-client-graph/package.json'],
     quiet: true,
   })
   assert.equal(result.ok, false)
@@ -1167,7 +1167,7 @@ test('run: a zh_CN-locale ENOENT ("没有那个文件或目录") is classified a
   const spawnFn = (_command: string, _args: readonly string[], _options: SpawnOptions): SpawnedProcess => {
     const child = new FakeRunChild()
     setImmediate(() => {
-      child.stderrWrite('cat: ~/.dsh/profiles/node_modules/@dsh-chamber/dsh-host-git-worktree/package.json: 没有那个文件或目录\n')
+      child.stderrWrite('cat: ~/.dsh/profiles/node_modules/@dsh-chamber/dsh-chamber-seed-git-worktree/package.json: 没有那个文件或目录\n')
       child.simulateExit(1)
     })
     return child
@@ -1178,7 +1178,7 @@ test('run: a zh_CN-locale ENOENT ("没有那个文件或目录") is classified a
   const result = await sshProvider.exec!(spec('wzh'), 'run', deps, {
     op: 'exec',
     command: 'cat',
-    argv: ['~/.dsh/profiles/node_modules/@dsh-chamber/dsh-host-git-worktree/package.json'],
+    argv: ['~/.dsh/profiles/node_modules/@dsh-chamber/dsh-chamber-seed-git-worktree/package.json'],
     quiet: true,
   })
   assert.equal(result.ok, false)

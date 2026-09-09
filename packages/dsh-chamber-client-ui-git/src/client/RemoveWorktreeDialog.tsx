@@ -1,7 +1,7 @@
 /** Remove-worktree dialog shared by the per-workspace Git occupant. */
 import { useEffect, useState } from 'react'
 import { Button, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
-import { chamberBridge, fetchInstanceSnapshot, getInstanceClient } from '@dsh-chamber/dsh-client-ui-sidebar/shared'
+import { chamberBridge, fetchInstanceSnapshot, getInstanceClient } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
 import { gitCoordinator, removeWorktree, WorktreeDirtyError } from '../shared/coordinator.ts'
 import { GitSagaError } from '../shared/saga.ts'
 import { GitWorktreeRpcError } from '../shared/git-api.ts'

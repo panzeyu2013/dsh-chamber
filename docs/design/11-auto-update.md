@@ -282,8 +282,8 @@
 ## 8. 版本管理与数据兼容
 
 - chamber 版本分布于根 `dsh-chamber` + 14 个 `@dsh-chamber/*` 包（desktop/
-  control-plane/renderer/cli/dsh-runtime/dsh-host-client-graph/
-  dsh-chamber-host-git-worktree/gateway + **6 个客户端插件包** sidebar/layout/
+  control-plane/renderer/cli/dsh-runtime/dsh-chamber-seed-client-graph/
+  dsh-chamber-seed-git-worktree/gateway + **6 个客户端插件包** sidebar/layout/
   settings-connections/settings-bridge/git/open-in），发版时**一致 bump**（semver 比较；`main.ts`
   读 desktop package.json 的 version 并经 `dsh-chamber:info` 透传渲染层、注入
   更新控制器）。**release.yml 的 `Assert version matches package.json` 步骤复用

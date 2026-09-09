@@ -30,12 +30,12 @@ Desktop 的新执行面。**
 ## 2. 边界与部署形态
 
 ```text
-┌─ @dsh-chamber/dsh-client-ui-git ────────────────────┐
+┌─ @dsh-chamber/dsh-chamber-client-ui-git ────────────────────┐
 │ sidebar.workspace.git 座位、拓扑、创建/删除 saga、30s 单飞协调器     │
 └──────────────────────────┬──────────────────────┘
                            │ 每实例反代 + dsh 现有 unary
                            ▼
-┌─ @dsh-chamber/dsh-host-git-worktree ────────────────┐
+┌─ @dsh-chamber/dsh-chamber-seed-git-worktree ────────────────┐
 │ 运行于该 dsh 实例进程；workspaceRegistry/agents 权威校验  │
 │ Typert Remote: snapshot / previewCreate / create / rollback / remove │
 │ child_process.spawn("git", argv)；不经 shell，不提供网络 Git 动词 │

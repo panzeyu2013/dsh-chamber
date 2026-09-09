@@ -401,7 +401,7 @@ export function classifyDependencyValue(spec: string): SpecClass {
  * the injection is never a silent modification — the plugin management UI
  * shows it verbatim):
  * - `installed` — module A's package files are present in the profile
- *   (local: `<home>/profiles/web/node_modules/@dsh-chamber/dsh-host-client-graph`,
+ *   (local: `<home>/profiles/web/node_modules/@dsh-chamber/dsh-chamber-seed-client-graph`,
  *   seeded per-spawn by the control plane; remote: the install-level flat
  *   fallback `<home>/profiles/node_modules/…`, seeded by seedRemoteHostGraph).
  * - `patched` — the boot layer carries the client-graph insert (local: the
@@ -1341,7 +1341,9 @@ export type CordisPatchUpdate =
  * Decide how to fold the client-graph insert into an existing cordis.patch.yml
  * (design 13 §4.6): dedup when already present; deterministic rewrite for the
  * `initProfile` template (comments + `[]`); append for a user block-sequence
- * list (never overwriting user rows); fail-loud for a non-list.
+ * list (never overwriting user rows); fail-loud for a non-list. Pre-rename
+ * chamber rows (same loader id, `@dsh-chamber/dsh-host-*` name) are folded to
+ * the canonical name first (foldLegacyHostInserts, branch plan §3.4).
  *
  * The insert render/parse/conflict classification is single-sourced in
  * control-plane (cordis-inserts.ts, consumed through control-plane-module.ts);
@@ -1362,6 +1364,51 @@ function cordisConflictMessage(conflict: InsertConflictKind, insert: ChamberHost
   return `cordis.patch.yml package '${insert.packageName}' is already mounted under a different loader id`
 }
 
+/**
+ * Pre-rename chamber host package names keyed by loader id. The 2026-09
+ * Batch 1 naming unification renamed `@dsh-chamber/dsh-host-<loader-id>` →
+ * `@dsh-chamber/dsh-chamber-seed-<loader-id>` WITHOUT changing the loader ids,
+ * so a remote profile seeded by an older desktop still carries the old name
+ * bound to the same id. Without this fold the shared insertConflict
+ * classification would reject every later seed as 'id-bound' forever — the
+ * documented one-time transitional exception (branch plan §3.4). The names are
+ * frozen history and must never be reused.
+ */
+const LEGACY_HOST_PACKAGE_NAMES: Readonly<Record<string, string>> = {
+  [CLIENT_GRAPH_INSERT_ID]: '@dsh-chamber/dsh-host-client-graph',
+  [GIT_WORKTREE_INSERT_ID]: '@dsh-chamber/dsh-host-git-worktree',
+  [ARCHIVE_CLEANUP_INSERT_ID]: '@dsh-chamber/dsh-host-archive-cleanup',
+}
+
+/**
+ * One-time fold of pre-rename chamber rows (branch plan §3.4): a row whose
+ * loader id is a desired insert's id but whose name is that id's legacy
+ * chamber name is rewritten IN PLACE to the canonical name. Only the exact
+ * rendered row bytes the chamber seed writer itself produces are folded — a
+ * hand-written flow/inline variant keeps failing loud through the shared
+ * conflict classification instead of being guessed at.
+ *
+ * @returns the (possibly) rewritten patch plus whether anything was folded;
+ *   a fold is a write even when no row is missing.
+ */
+export function foldLegacyHostInserts(
+  existing: string,
+  inserts: readonly ChamberHostInsert[],
+): { content: string; folded: boolean } {
+  let content = existing
+  let folded = false
+  for (const insert of inserts) {
+    const legacyName = LEGACY_HOST_PACKAGE_NAMES[insert.insertId]
+    if (legacyName === undefined) continue
+    const legacyRow = renderCordisInserts([{ id: insert.insertId, name: legacyName }])
+    if (!content.includes(legacyRow)) continue
+    const canonicalRow = renderCordisInserts([{ id: insert.insertId, name: insert.packageName }])
+    content = content.split(legacyRow).join(canonicalRow)
+    folded = true
+  }
+  return { content, folded }
+}
+
 export function computeCordisPatchUpdate(
   existing: string | null,
   inserts: readonly ChamberHostInsert[] = [CLIENT_GRAPH_HOST_INSERT],
@@ -1369,25 +1416,29 @@ export function computeCordisPatchUpdate(
   if (existing === null) {
     return { error: 'remote profile is not initialized (cordis.patch.yml missing) — run a plugin add first' }
   }
+  // The one-time legacy fold runs BEFORE conflict classification: an old-name
+  // row under the same loader id is a rename to absorb, not an id-bound
+  // conflict to refuse.
+  const { content: foldedPatch, folded } = foldLegacyHostInserts(existing, inserts)
   for (const insert of inserts) {
-    const conflict = insertConflict(existing, toCordisInsert(insert))
+    const conflict = insertConflict(foldedPatch, toCordisInsert(insert))
     if (conflict !== null) return { error: cordisConflictMessage(conflict, insert) }
   }
-  const missing = inserts.filter(insert => !hasExactInsert(existing, toCordisInsert(insert)))
-  if (missing.length === 0) return { write: false }
+  const missing = inserts.filter(insert => !hasExactInsert(foldedPatch, toCordisInsert(insert)))
+  if (missing.length === 0) return folded ? { write: true, content: foldedPatch } : { write: false }
   const rendered = renderCordisInserts(missing.map(toCordisInsert))
-  const significant = existing.split('\n')
+  const significant = foldedPatch.split('\n')
     .map(line => line.trim())
     .filter(line => line !== '' && !line.startsWith('#'))
   // Empty list: the initProfile template (`# comments\n[]`) or a comments-only
   // file — deterministic rewrite, preserving the comment header.
   if (significant.length === 0 || (significant.length === 1 && significant[0] === '[]')) {
-    const base = existing.replace(/\[\]\s*$/, '').trimEnd()
+    const base = foldedPatch.replace(/\[\]\s*$/, '').trimEnd()
     return { write: true, content: base === '' ? rendered : `${base}\n${rendered}` }
   }
   // A block-sequence list: append at the end, never touching existing rows.
   if (significant[0].startsWith('-')) {
-    return { write: true, content: `${existing.replace(/\s+$/, '')}\n${rendered}` }
+    return { write: true, content: `${foldedPatch.replace(/\s+$/, '')}\n${rendered}` }
   }
   return { error: 'cordis.patch.yml is not a top-level YAML array — cannot seed chamber host inserts safely' }
 }

@@ -5,7 +5,11 @@
 > covered 一行落地（记录：STATUS 基线对齐块 / CHANGELOG [Unreleased]）。
 > **Batch 0.5（T4）✅ 已完成（2026-09）**——upstream-touchpoints.md + verify-upstream-touchpoints.mjs
 > （C1–C8）+ CI fail-loud 步骤 + update-vendor 提示 + PR 模板自检节（记录：STATUS T4 行）。
-> Batch 1（T2）→ 2（fork 重锚）→ 3（T3）待推进（每批完成即回写本文件与 STATUS）。
+> **Batch 1（T2）✅ 已完成（2026-09）**——目录/包名统一原子单批（client 补 chamber 词、种子
+> `dsh-chamber-seed-<loader-id>`、mobile/fork/基建不动）+ 两处种子登记处 fail-loud 命名断言 +
+> 远端 `cordis.patch.yml` 旧名行一次性 fold + 锁文件重生成（记录：STATUS T2 行 / CHANGELOG
+> [Unreleased]）。
+> Batch 2（fork 重锚）→ 3（T3）待推进（每批完成即回写本文件与 STATUS）。
 > 关联：任务登记在 `docs/progress/STATUS.md`「分支任务登记」块；升级操作手册见
 > `docs/checklists/dsh-upgrade-checklist.md`；上游接触面保鲜见 T4 拟建
 > `docs/checklists/upstream-touchpoints.md`。
@@ -144,6 +148,9 @@
 ### 3.4 过渡例外（两个，随本批发布）
 - 远端 `cordis.patch.yml` 旧名行：一次性 fold（按 loader id 超越 chamber-legacy 名行），
   否则升级后远端 seed 因 id-bound 冲突永久硬失败。
+  **✅ 已落地**：`plugin-sync.ts` 的 `foldLegacyHostInserts`（`LEGACY_HOST_PACKAGE_NAMES`
+  按 loader id 映射旧名）+ `computeCordisPatchUpdate` 在冲突分类前先 fold；只改写种子写入器
+  产出的精确行字节，手写 flow/inline 变体仍硬失败（单测钉住）。
 - 旧名 profile node_modules / chamber-plugins slug 目录：本地自愈；远端孤儿可清理可忽略。
 
 ## 4. Fork 重锚 alpha.2 + 补丁最小化（Batch 2；用户问题 2 的答案）

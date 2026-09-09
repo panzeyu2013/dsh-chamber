@@ -30,7 +30,7 @@ import type {
   EngineStoreHandle,
   EngineStoreInstance,
 } from '@deepseek-ai/dsh-client-store'
-import type { ChamberSidebarViewPrefs } from '@dsh-chamber/dsh-client-ui-sidebar/shared'
+import type { ChamberSidebarViewPrefs } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
 
 /**
  * Layout store state: panel width preferences in px (0 = closed), plus the

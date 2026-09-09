@@ -341,9 +341,9 @@ test('route: GET /chamber/plugins (seed-cache projection) still works; unknown s
   assert.equal(plugins.status, 200)
   assert.deepEqual(plugins.json(), {
     items: [
-      { name: '@dsh-chamber/dsh-host-client-graph', version: null },
-      { name: '@dsh-chamber/dsh-host-git-worktree', version: null },
-      { name: '@dsh-chamber/dsh-host-archive-cleanup', version: null },
+      { name: '@dsh-chamber/dsh-chamber-seed-client-graph', version: null },
+      { name: '@dsh-chamber/dsh-chamber-seed-git-worktree', version: null },
+      { name: '@dsh-chamber/dsh-chamber-seed-archive-cleanup', version: null },
     ],
   })
   const deep = await handle(host, 'GET', '/chamber/plugins/installed/extra')

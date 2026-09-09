@@ -1,5 +1,5 @@
 {
-  "name": "@dsh-chamber/dsh-client-ui-sidebar",
+  "name": "@dsh-chamber/dsh-chamber-client-ui-sidebar",
   "description": "Chamber sidebar plugin: multi-source session/workspace navigation (design 05 §2) — copied from the official ui-sidebar shell, region replaced with the chamber multi-source list",
   "version": "0.2.4",
   "publishConfig": {

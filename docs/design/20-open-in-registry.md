@@ -14,6 +14,10 @@
 > 等价，无 P0）与两轮修复。本轮全面契约复核又发现并修复/收敛新的边界；最终 HEAD
 > 的精确验证记录统一写在 `docs/progress/STATUS.md`。实机验收仍未完成（见 §8/§9）。
 >
+> **命名统一注记（2026-09，Batch 1 / T2）**：chamber 自建包名统一为
+> `@dsh-chamber/dsh-chamber-client-ui-*`（目录不变）。本文正文/演进表中的包名
+> 已按现行名字更新，历史基线列（`@dsh-chamber/dsh-client-ui-vscode`）保留原样。
+>
 > **连接模型 v2 注记**：现行来源 id 为 `dsh-<id>` / `gateway-<id>`，`ssh-<id>`
 > 仅作 legacy 兼容映射；插件的来源解析与主进程来源代 proof 已按 design 17
 > §2.2/§9.1 落地，该迁移已是当前基线。
@@ -51,7 +55,7 @@
 ## 2. 形态与分层
 
 ```text
-┌─ 客户端插件 @dsh-chamber/dsh-client-ui-open-in（自 ui-vscode 重命名扩展）──┐
+┌─ 客户端插件 @dsh-chamber/dsh-chamber-client-ui-open-in（自 ui-vscode 重命名扩展）──┐
 │  单条目 open-in（order -1，会话头部 utilities 槽）→ OpenInButton           │
 │    apps = openIn.apps() 按来源过滤（本地：[finder, vscode]；远程：仅        │
 │    remoteCapable）；≥2 → 主图标按钮（默认 vscode）+ chevron 下拉            │
@@ -180,7 +184,7 @@ interface OpenInApp {
 Electron `shell.openPath` 成功返回 `''`、失败返回错误串——提取为纯函数
 （`''`/非 string → null，非空串 → 原样）使该边界可单测。
 
-## 5. 客户端插件（@dsh-chamber/dsh-client-ui-open-in）
+## 5. 客户端插件（@dsh-chamber/dsh-chamber-client-ui-open-in）
 
 - 包自 `dsh-chamber-client-ui-vscode` **重命名**（锁步 10 项按 design 16 §7.2
   模板：chamber-entry import/plugin/coveredFactory、chamber-covered ×2、vite
@@ -227,7 +231,7 @@ Electron `shell.openPath` 成功返回 `''`、失败返回错误串——提取�
 
 | 维度 | design 16（历史基线） | design 20（现状） |
 |---|---|---|
-| 插件 | `@dsh-chamber/dsh-client-ui-vscode` | `@dsh-chamber/dsh-client-ui-open-in`（重命名） |
+| 插件 | `@dsh-chamber/dsh-client-ui-vscode` | `@dsh-chamber/dsh-chamber-client-ui-open-in`（重命名） |
 | 按钮 | 单 vscode 图标按钮 | 单 `open-in` 条目；本地 [finder, vscode] 下拉 / 远程单 vscode |
 | 桥面 | `vscode.availability()/open()` | `openIn.apps()/open()` + `platform` |
 | IPC | `vscode-availability` / `open-vscode` | `open-in-apps` / `open-in`（旧两通道已删除） |

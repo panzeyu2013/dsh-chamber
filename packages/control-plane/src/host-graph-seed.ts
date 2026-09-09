@@ -8,12 +8,12 @@
  * `dsh-client-modules` service) with the chamber composite bundle. To read
  * that graph the local host needs a chamber-owned host package exposing it
  * over a Remote (`clientModules.graph()`). This module distributes that
- * package (module A, `packages/dsh-host-client-graph`) into the managed local
+ * package (module A, `packages/dsh-chamber-seed-client-graph`) into the managed local
  * profile and materializes the `--patch` overlay that mounts it:
  *
  *   - ensureHostGraphPackage copies module A's package (package.json +
  *     dist/index.js) into <dshHome>/profiles/web/node_modules/@dsh-chamber/
- *     dsh-host-client-graph/ — the profile node_modules anchor user plugins
+ *     dsh-chamber-seed-client-graph/ — the profile node_modules anchor user plugins
  *     resolve from (profile layout: $DSH_HOME/profiles/web/package.json +
  *     cordis.patch.yml, see @deepseek-ai/dsh-app-boot profile.ts). Idempotent:
  *     an in-sync copy is skipped, a drifted one is overwritten.
@@ -53,14 +53,14 @@ import {
 export const HOST_GRAPH_PATCH_FILENAME = 'dsh-chamber-graph.patch.yml'
 
 /** The chamber host package the overlay mounts (design 09 方案 A, module A). */
-export const HOST_GRAPH_PACKAGE_NAME = '@dsh-chamber/dsh-host-client-graph'
+export const HOST_GRAPH_PACKAGE_NAME = '@dsh-chamber/dsh-chamber-seed-client-graph'
 
 /** Chamber-owned host package that executes Git worktree operations in-host. */
-export const HOST_GIT_WORKTREE_PACKAGE_NAME = '@dsh-chamber/dsh-host-git-worktree'
+export const HOST_GIT_WORKTREE_PACKAGE_NAME = '@dsh-chamber/dsh-chamber-seed-git-worktree'
 
 /** Chamber-owned host package that purges archived session content in-host
  *  (design 24: `archiveCleanup/{preview,purge}`). */
-export const HOST_ARCHIVE_CLEANUP_PACKAGE_NAME = '@dsh-chamber/dsh-host-archive-cleanup'
+export const HOST_ARCHIVE_CLEANUP_PACKAGE_NAME = '@dsh-chamber/dsh-chamber-seed-archive-cleanup'
 
 /** Loader ids for the three chamber-owned host packages. */
 export const HOST_GRAPH_INSERT_ID = 'client-graph'
@@ -142,6 +142,43 @@ export interface SeedEntry {
    *  `HOST_DOMAIN_PROBE_NAMES` in
    *  packages/dsh-runtime/src/activation-gate.ts (same three domains). */
   probeDomains?: readonly string[]
+}
+
+/**
+ * The canonical chamber host-seed package namespace (Batch 1 naming
+ * unification, 2026-09): every kind 'host' seed entry is named
+ * `@dsh-chamber/dsh-chamber-seed-<loader-id>`, matching its directory and its
+ * loader id. The pre-rename names (`@dsh-chamber/dsh-host-*`) are gone — a
+ * host entry outside this scheme would re-introduce the naming split the
+ * unification retired (and a name whose suffix is not the loader id makes the
+ * seeded profile directory, the overlay row and the activation-probe domain
+ * disagree).
+ */
+export const HOST_SEED_PACKAGE_PREFIX = '@dsh-chamber/dsh-chamber-seed-'
+
+/**
+ * Fail loud when a host seed insert escapes the canonical namespace. Called by
+ * both seed registries (control-plane's base entries plus every
+ * `extraSeedEntries` addition, and the gateway's syncable list) so a
+ * non-conforming host package can never be seeded, synced or probed. Client
+ * kind entries (the gateway mobile slot) are exempt by design: they are client
+ * plugins, not host seeds, and keep their own naming.
+ */
+export function assertHostSeedInsertNaming(inserts: readonly HostPackageInsert[]): void {
+  for (const insert of inserts) {
+    if (insert.name !== `${HOST_SEED_PACKAGE_PREFIX}${insert.id}`) {
+      throw new Error(
+        `chamber host seed: insert ${JSON.stringify(insert)} must be named `
+          + `${HOST_SEED_PACKAGE_PREFIX}<loader-id> (kind 'host' ⇒ dsh-chamber-seed-<loader-id>)`,
+      )
+    }
+  }
+}
+
+/** SeedEntry-level form of {@link assertHostSeedInsertNaming}: the host-kind
+ *  entries are the ones the namespace rule binds. */
+export function assertHostSeedEntryNaming(entries: readonly SeedEntry[]): void {
+  assertHostSeedInsertNaming(entries.filter(entry => entry.kind === 'host').map(entry => entry.insert))
 }
 
 /**

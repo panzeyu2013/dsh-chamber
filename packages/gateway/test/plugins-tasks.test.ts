@@ -138,7 +138,7 @@ function assertRefusal(result: PluginTaskSubmitResult, code: PluginTaskRefusalCo
 
 test('validation: denied names refuse with reserved (install/remove/materialize alike)', async t => {
   const h = makeHarness(t)
-  for (const name of ['@deepseek-ai/dsh', '@dsh-chamber/dsh-host-client-graph']) {
+  for (const name of ['@deepseek-ai/dsh', '@dsh-chamber/dsh-chamber-seed-client-graph']) {
     const install = await submitResult(h.tasks, { kind: 'install', name, spec: `${name}@1.0.0` })
     assertRefusal(install, 'reserved')
     const remove = await submitResult(h.tasks, { kind: 'remove', name })

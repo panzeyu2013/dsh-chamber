@@ -99,10 +99,10 @@ export const CHAMBER_COVERED_IDS: readonly string[] = [
   '@deepseek-ai/dsh-api-workspace-controller',
   '@deepseek-ai/dsh-client-locale',
   '@deepseek-ai/dsh-client-ui-theme',
-  '@dsh-chamber/dsh-client-ui-layout',
-  '@dsh-chamber/dsh-client-ui-sidebar',
-  '@dsh-chamber/dsh-client-ui-git',
-  '@dsh-chamber/dsh-client-ui-open-in',
+  '@dsh-chamber/dsh-chamber-client-ui-layout',
+  '@dsh-chamber/dsh-chamber-client-ui-sidebar',
+  '@dsh-chamber/dsh-chamber-client-ui-git',
+  '@dsh-chamber/dsh-chamber-client-ui-open-in',
   // ui-settings stays FIRST-SCREEN (C4, 2026-09 性能审计): locale/ui-theme
   // root-inject its settingsScope. Its section families + the chamber
   // settings shell/connections are deferred — the ids stay covered (see the
@@ -156,8 +156,8 @@ export const CHAMBER_COVERED_IDS: readonly string[] = [
   '@deepseek-ai/dsh-client-ui-settings-models',
   '@deepseek-ai/dsh-client-ui-settings-plugins',
   '@deepseek-ai/dsh-client-ui-settings-plugin-inventory',
-  '@dsh-chamber/dsh-client-ui-settings-connections',
-  '@dsh-chamber/dsh-client-ui-settings-bridge',
+  '@dsh-chamber/dsh-chamber-client-ui-settings-connections',
+  '@dsh-chamber/dsh-chamber-client-ui-settings-bridge',
   // ── page-own rows (see header comment) ──
   '@deepseek-ai/dsh-client-ui-sidebar',
   // The official layout registration the chamber ui-layout fork REPLACES
@@ -228,10 +228,10 @@ export const CHAMBER_COVERED_FACTORY_IDS: readonly string[] = [
   '@deepseek-ai/dsh-api-workspace-controller',
   '@deepseek-ai/dsh-client-locale',
   '@deepseek-ai/dsh-client-ui-theme',
-  '@dsh-chamber/dsh-client-ui-layout',
-  '@dsh-chamber/dsh-client-ui-sidebar',
-  '@dsh-chamber/dsh-client-ui-git',
-  '@dsh-chamber/dsh-client-ui-open-in',
+  '@dsh-chamber/dsh-chamber-client-ui-layout',
+  '@dsh-chamber/dsh-chamber-client-ui-sidebar',
+  '@dsh-chamber/dsh-chamber-client-ui-git',
+  '@dsh-chamber/dsh-chamber-client-ui-open-in',
   // ui-settings stays FIRST-SCREEN (C4, 2026-09 性能审计 — locale/ui-theme
   // root-inject its settingsScope); the C4-deferred settings sections + the
   // chamber settings shell/connections have NO static factory (registered

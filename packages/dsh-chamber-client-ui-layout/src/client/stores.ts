@@ -11,7 +11,7 @@
  * per-boot unpersisted preference, so a drag in one shell was invisible in
  * the others and every restart reset to SIDEBAR_DEFAULT. This fork seeds
  * `sidebar` from the chamber sidebar package's page-wide view-prefs store
- * (`@dsh-chamber/dsh-client-ui-sidebar/shared` — ONE in-memory store shared
+ * (`@dsh-chamber/dsh-chamber-client-ui-sidebar/shared` — ONE in-memory store shared
  * by every boot over the vite shared chunk, persisted under one versioned
  * localStorage key), writes every drag back into it, and has every live
  * instance subscribe to it so width changes propagate across boots live.
@@ -27,7 +27,7 @@ import {
   clampWidth, DETAILS_DEFAULT, DETAILS_MAX, DETAILS_MIN,
   SIDEBAR_DEFAULT, SIDEBAR_MAX, SIDEBAR_MIN,
 } from '@deepseek-ai/dsh-client-ui-layout/src/client/columns.ts'
-import { getViewPrefs, subscribeViewPrefs, updateViewPrefs } from '@dsh-chamber/dsh-client-ui-sidebar/shared'
+import { getViewPrefs, subscribeViewPrefs, updateViewPrefs } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
 import {
   createLayoutStore as createStore,
   onLayoutInstance,

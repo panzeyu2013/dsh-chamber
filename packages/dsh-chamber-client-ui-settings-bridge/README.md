@@ -1,4 +1,4 @@
-# @dsh-chamber/dsh-client-ui-settings-bridge
+# @dsh-chamber/dsh-chamber-client-ui-settings-bridge
 
 English | [中文](README.zh.md)
 
@@ -31,7 +31,7 @@ the ledger and its `settings.*` children declarations remain valid.
 
 - The pure gateway dsh-runtime core (status parse/fetch, action gates, error
   classification, restart-readiness poll) moved OUT of this package into the
-  sidebar shared face (`@dsh-chamber/dsh-client-ui-sidebar/shared`, exported from
+  sidebar shared face (`@dsh-chamber/dsh-chamber-client-ui-sidebar/shared`, exported from
   `src/shared/gateway-runtime*.ts`); this package imports it back for its
   gateway dsh-runtime section and typechecks it against the REAL sidebar shared
   source (P4-4: the handwritten ambient mirror

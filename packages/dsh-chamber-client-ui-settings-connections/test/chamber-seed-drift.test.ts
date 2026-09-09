@@ -101,10 +101,10 @@ test('chamberSeedDrift: the cache map is keyed by the exact chamber package name
   // gateway's syncable-name set, matching versions below would stop matching
   // (→ absent-cache) and this test fails loudly.
   const cached: Record<string, string | null> = {
-    '@dsh-chamber/dsh-host-client-graph': '1.0.0',
-    '@dsh-chamber/dsh-host-git-worktree': '2.0.0',
+    '@dsh-chamber/dsh-chamber-seed-client-graph': '1.0.0',
+    '@dsh-chamber/dsh-chamber-seed-git-worktree': '2.0.0',
   }
-  assert.equal(HOST_GRAPH_PACKAGE, '@dsh-chamber/dsh-host-client-graph')
-  assert.equal(GIT_WORKTREE_PACKAGE, '@dsh-chamber/dsh-host-git-worktree')
+  assert.equal(HOST_GRAPH_PACKAGE, '@dsh-chamber/dsh-chamber-seed-client-graph')
+  assert.equal(GIT_WORKTREE_PACKAGE, '@dsh-chamber/dsh-chamber-seed-git-worktree')
   assert.deepEqual(chamberSeedDrift(localBoth, cached), { hostGraph: 'match', gitWorktree: 'match' })
 })

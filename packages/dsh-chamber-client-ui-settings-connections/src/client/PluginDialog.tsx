@@ -55,7 +55,7 @@ import { Fragment, useCallback, useEffect, useId, useMemo, useRef, useState } fr
 import type { ReactNode } from 'react'
 import clsx from 'clsx'
 import { Button, IconRefreshOutline16, IconTrashOutline16, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
-import { pollGatewayReady } from '@dsh-chamber/dsh-client-ui-sidebar/shared'
+import { pollGatewayReady } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
 import type {
   ChamberHostGraphState,
   LocalPluginManifest,

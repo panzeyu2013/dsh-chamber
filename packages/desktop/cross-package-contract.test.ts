@@ -79,11 +79,11 @@ test('the control-plane facade selects packaged artifacts without importing Elec
  *  sides deliberately. */
 const GOLDEN_OVERLAY = `- insert:
     - id: client-graph
-      name: '@dsh-chamber/dsh-host-client-graph'
+      name: '@dsh-chamber/dsh-chamber-seed-client-graph'
     - id: git-worktree
-      name: '@dsh-chamber/dsh-host-git-worktree'
+      name: '@dsh-chamber/dsh-chamber-seed-git-worktree'
     - id: archive-cleanup
-      name: '@dsh-chamber/dsh-host-archive-cleanup'
+      name: '@dsh-chamber/dsh-chamber-seed-archive-cleanup'
 `
 
 test('the desktop-consumed insert render is byte-identical to control-plane for the same input (A2)', () => {

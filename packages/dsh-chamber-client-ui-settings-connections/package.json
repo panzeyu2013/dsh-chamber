@@ -1,5 +1,5 @@
 {
-  "name": "@dsh-chamber/dsh-client-ui-settings-connections",
+  "name": "@dsh-chamber/dsh-chamber-client-ui-settings-connections",
   "description": "Chamber connections settings section plugin (design 05 §5): local instance card (health / connections row / host logs) + remote host management (registry CRUD, connect/disconnect, on-demand systemd control, ring-buffer logs)",
   "version": "0.2.4",
   "publishConfig": {
@@ -37,7 +37,7 @@
     "clsx": "^2.0.0"
   },
   "peerDependencies": {
-    "@dsh-chamber/dsh-client-ui-sidebar": "workspace:^",
+    "@dsh-chamber/dsh-chamber-client-ui-sidebar": "workspace:^",
     "@deepseek-ai/cordis": "workspace:^",
     "@deepseek-ai/dsh-client-locale": "workspace:^",
     "@deepseek-ai/dsh-client-ui-primitives": "workspace:^",
@@ -45,7 +45,7 @@
     "react": "^18.2.0"
   },
   "devDependencies": {
-    "@dsh-chamber/dsh-client-ui-sidebar": "workspace:^",
+    "@dsh-chamber/dsh-chamber-client-ui-sidebar": "workspace:^",
     "@deepseek-ai/dsh-client-locale": "workspace:^",
     "@deepseek-ai/dsh-client-ui-primitives": "workspace:^",
     "@deepseek-ai/dsh-client-ui-settings": "workspace:^",

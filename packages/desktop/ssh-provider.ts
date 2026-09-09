@@ -621,7 +621,7 @@ async function probeRemoteMethod(
  * `clientGraph/graph` RPC — the exact wire call the renderer's module C boot
  * merge performs (renderer/src/host-graph.ts) — directly to the tunnel
  * endpoint, answering whether the RUNNING remote dsh instance has actually
- * loaded the seeded `@dsh-chamber/dsh-host-client-graph` module.
+ * loaded the seeded `@dsh-chamber/dsh-chamber-seed-client-graph` module.
  */
 export function probeClientGraphLive(
   endpoint: { host: string; port: number },

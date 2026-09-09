@@ -1,6 +1,6 @@
 {
-  "name": "@dsh-chamber/dsh-host-git-worktree",
-  "description": "Per-dsh-instance host gateway for conservative local Git worktree lifecycle operations",
+  "name": "@dsh-chamber/dsh-chamber-seed-client-graph",
+  "description": "Chamber host gateway exposing the instance's dsh.client boot graph (clientModules.graph()) to the chamber frontend over the wire — read-only, no write/execute surface",
   "version": "0.2.4",
   "private": true,
   "type": "module",
@@ -15,7 +15,6 @@
   "license": "MIT",
   "scripts": {
     "build": "node scripts/build.mjs",
-    "test": "node test/core.test.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "devDependencies": {
@@ -23,8 +22,7 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "workspace:^",
-    "@deepseek-ai/dsh-agent": "workspace:^",
-    "@deepseek-ai/dsh-typert-protocol": "workspace:^",
-    "@deepseek-ai/dsh-workspace": "workspace:^"
+    "@deepseek-ai/dsh-client-modules": "workspace:^",
+    "@deepseek-ai/dsh-typert-protocol": "workspace:^"
   }
 }

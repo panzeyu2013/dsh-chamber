@@ -112,6 +112,11 @@ export const insertConflict = controlPlaneModule.insertConflict
 export const HOST_GRAPH_INSERT = controlPlaneModule.HOST_GRAPH_INSERT
 export const HOST_GIT_WORKTREE_INSERT = controlPlaneModule.HOST_GIT_WORKTREE_INSERT
 export const HOST_ARCHIVE_CLEANUP_INSERT = controlPlaneModule.HOST_ARCHIVE_CLEANUP_INSERT
+// The canonical host-seed namespace + its fail-loud assertion (Batch 1 naming
+// unification, 2026-09) — consumed by plugin-sync's remote cordis.patch.yml
+// merge, which must also recognize the pre-rename names to fold them once.
+export const HOST_SEED_PACKAGE_PREFIX = controlPlaneModule.HOST_SEED_PACKAGE_PREFIX
+export const assertHostSeedInsertNaming = controlPlaneModule.assertHostSeedInsertNaming
 
 // Plugin spec/name whitelist family + reserved-name deny predicate
 // (plugin-spec.ts, design 21 §6.2/§6.7 — the shared source for the desktop

@@ -4,11 +4,11 @@
  * the App layer consume (id / authoritative sourceFingerprint / kind / label /
  * connected / phase). No tunnel URLs, no SSH material ever cross this
  * module. The chamberBridge face resolves the real sidebar `shared` source
- * (this package's `@dsh-chamber/dsh-client-ui-sidebar` workspace link +
+ * (this package's `@dsh-chamber/dsh-chamber-client-ui-sidebar` workspace link +
  * the sidebar package `exports["./shared"]`); the handwritten ambient
  * mirror (vendor-modules.d.ts) was retired in the P4-4 dedupe (2026-09).
  */
-import { chamberBridge, type ChamberServerAggregate } from '@dsh-chamber/dsh-client-ui-sidebar/shared'
+import { chamberBridge, type ChamberServerAggregate } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
 import { serverProjectionSignature } from './server-selector.ts'
 
 /** One server row the bridge section renders. */

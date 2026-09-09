@@ -37,7 +37,7 @@ import { parseAuthoritativeSourceFingerprint } from './deep-link-activation.ts'
 import { BOOT_TIMEOUT_MS } from './boot-budget.ts'
 import { isChamberSourceId, rawInstanceIdFromSourceId } from './transport-source.ts'
 import { BundleLoadTimeoutError, collectExtraRows, type ExtraModuleRow } from './host-graph.ts'
-import { chamberBridge } from '@dsh-chamber/dsh-client-ui-sidebar/shared'
+import { chamberBridge } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
 import { PendingOpenQueue } from './pending-open-queue.ts'
 import { PERF_MARKS, perfMark } from './perf-marks.ts'
 

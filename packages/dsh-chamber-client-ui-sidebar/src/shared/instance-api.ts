@@ -13,7 +13,7 @@
  *
  * Lives in this package's shared/ so the chamber App layer (renderer main
  * entry) and the sidebar plugin consume one copy (vite shared chunk, design
- * 05 §3); the renderer consumes it through `@dsh-chamber/dsh-client-ui-sidebar/shared`.
+ * 05 §3); the renderer consumes it through `@dsh-chamber/dsh-chamber-client-ui-sidebar/shared`.
  *
  * Types are intentionally local rows mirroring the v0.1.2-alpha.1
  * api-session-controller / api-workspace-controller `@Remote` faces

@@ -70,7 +70,7 @@ function startFakeDsh(port: number): Server {
           value: {
             entries: [
               { entryId: 'p1', moduleName: '@deepseek-ai/dsh-demo', enabled: true, fiberPhase: 'active' },
-              { entryId: 'p2', moduleName: '@dsh-chamber/dsh-host-client-graph', enabled: true, fiberPhase: 'active' },
+              { entryId: 'p2', moduleName: '@dsh-chamber/dsh-chamber-seed-client-graph', enabled: true, fiberPhase: 'active' },
             ],
           },
         },

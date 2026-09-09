@@ -1818,13 +1818,13 @@ if (!gotTheLock) {
         // degrades gracefully (no --patch overlay, v4 baseline spawn).
         hostGraphPackageSourceDir: app.isPackaged
           ? path.join(pkgDir, 'dist', 'host-graph-package')
-          : path.join(repoRoot, 'packages', 'dsh-host-client-graph'),
+          : path.join(repoRoot, 'packages', 'dsh-chamber-seed-client-graph'),
         hostGitWorktreePackageSourceDir: app.isPackaged
           ? path.join(pkgDir, 'dist', 'host-git-worktree-package')
-          : path.join(repoRoot, 'packages', 'dsh-chamber-host-git-worktree'),
+          : path.join(repoRoot, 'packages', 'dsh-chamber-seed-git-worktree'),
         hostArchiveCleanupPackageSourceDir: app.isPackaged
           ? path.join(pkgDir, 'dist', 'host-archive-cleanup-package')
-          : path.join(repoRoot, 'packages', 'dsh-host-archive-cleanup'),
+          : path.join(repoRoot, 'packages', 'dsh-chamber-seed-archive-cleanup'),
       });
       await controlPlane.start();
     } catch (err) {
@@ -2320,13 +2320,13 @@ if (!gotTheLock) {
     // the local control-plane seed.
     const moduleASourceDir = app.isPackaged
       ? path.join(pkgDir, 'dist', 'host-graph-package')
-      : path.join(repoRoot, 'packages', 'dsh-host-client-graph');
+      : path.join(repoRoot, 'packages', 'dsh-chamber-seed-client-graph');
     const gitWorktreeHostSourceDir = app.isPackaged
       ? path.join(pkgDir, 'dist', 'host-git-worktree-package')
-      : path.join(repoRoot, 'packages', 'dsh-chamber-host-git-worktree');
+      : path.join(repoRoot, 'packages', 'dsh-chamber-seed-git-worktree');
     const archiveCleanupHostSourceDir = app.isPackaged
       ? path.join(pkgDir, 'dist', 'host-archive-cleanup-package')
-      : path.join(repoRoot, 'packages', 'dsh-host-archive-cleanup');
+      : path.join(repoRoot, 'packages', 'dsh-chamber-seed-archive-cleanup');
     const chamberHostPackageSeeds: ChamberHostPackageSeed[] = [
       {
         insertId: CLIENT_GRAPH_INSERT_ID,
@@ -2433,13 +2433,13 @@ if (!gotTheLock) {
     const localChamberHostPackageSources = (): Array<{ name: string; packageJsonPath: string; distIndexPath: string }> => {
       const graphDir = app.isPackaged
         ? path.join(pkgDir, 'dist', 'host-graph-package')
-        : path.join(repoRoot, 'packages', 'dsh-host-client-graph');
+        : path.join(repoRoot, 'packages', 'dsh-chamber-seed-client-graph');
       const gitDir = app.isPackaged
         ? path.join(pkgDir, 'dist', 'host-git-worktree-package')
-        : path.join(repoRoot, 'packages', 'dsh-chamber-host-git-worktree');
+        : path.join(repoRoot, 'packages', 'dsh-chamber-seed-git-worktree');
       const archiveCleanupDir = app.isPackaged
         ? path.join(pkgDir, 'dist', 'host-archive-cleanup-package')
-        : path.join(repoRoot, 'packages', 'dsh-host-archive-cleanup');
+        : path.join(repoRoot, 'packages', 'dsh-chamber-seed-archive-cleanup');
       return [
         { name: CLIENT_GRAPH_PACKAGE_NAME, packageJsonPath: path.join(graphDir, 'package.json'), distIndexPath: path.join(graphDir, 'dist', 'index.js') },
         { name: GIT_WORKTREE_PACKAGE_NAME, packageJsonPath: path.join(gitDir, 'package.json'), distIndexPath: path.join(gitDir, 'dist', 'index.js') },

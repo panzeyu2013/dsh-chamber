@@ -24,7 +24,7 @@ import {
   type ConnectionRowWire,
   type ConnectionSummary,
   type HealthResponse,
-} from '@dsh-chamber/dsh-client-ui-sidebar/shared'
+} from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
 
 /** 统一错误形状（design 04 D1：{error, code?}）+ HTTP 状态 + 响应体 + 限流提示。 */
 export type { ApiError, ApiErrorBody }

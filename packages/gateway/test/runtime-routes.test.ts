@@ -1675,9 +1675,9 @@ test('2026-12 shape gate: a synced seed cache flips the activation to the FULL p
     // syncedHostDomainProbeNames matrix tests below.
     const plugins = createChamberPlugins(stateDir, silentLogger)
     for (const name of [
-      '@dsh-chamber/dsh-host-client-graph',
-      '@dsh-chamber/dsh-host-git-worktree',
-      '@dsh-chamber/dsh-host-archive-cleanup',
+      '@dsh-chamber/dsh-chamber-seed-client-graph',
+      '@dsh-chamber/dsh-chamber-seed-git-worktree',
+      '@dsh-chamber/dsh-chamber-seed-archive-cleanup',
     ]) {
       await plugins.put(name, {
         'package.json': JSON.stringify({ name, version: '1.0.0' }),
@@ -1757,9 +1757,9 @@ test('2026-12 shape gate: a synced seed cache flips the activation to the FULL p
 // ---------------------------------------------------------------------------
 
 const THREE_HOST_PACKAGES = [
-  '@dsh-chamber/dsh-host-client-graph',
-  '@dsh-chamber/dsh-host-git-worktree',
-  '@dsh-chamber/dsh-host-archive-cleanup',
+  '@dsh-chamber/dsh-chamber-seed-client-graph',
+  '@dsh-chamber/dsh-chamber-seed-git-worktree',
+  '@dsh-chamber/dsh-chamber-seed-archive-cleanup',
 ] as const
 
 const THREE_HOST_DOMAINS = ['clientGraph/graph', 'gitWorktree/previewCreate', 'archiveCleanup/probe'] as const

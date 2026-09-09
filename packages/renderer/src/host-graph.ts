@@ -7,7 +7,7 @@
  * be loaded at runtime. The host composes the same graph it would inject as
  * `window.__DSH_BOOT__` (dsh-client-modules' ClientModuleRegistry, vendor)
  * and the chamber frontend fetches it per instance over the reverse proxy
- * (`/api/i/<id>` — the chamber host gateway `@dsh-chamber/dsh-host-client-graph`
+ * (`/api/i/<id>` — the chamber host gateway `@dsh-chamber/dsh-chamber-seed-client-graph`
  * exposes it as Remote `clientGraph/graph`), drops the rows the chamber page
  * covers (chamber-covered.ts), and preloads the rest (collectExtraRows below —
  * the bundle loader is injected by shell.ts, which owns the DOM; the preload
@@ -33,7 +33,7 @@
  * client-request envelope + POST + body collection, bounded unary 30s — rides
  * the shared kernel postUnary (sidebar shared/wire-common.ts), imported HERE
  * by real-source relative path rather than the
- * '@dsh-chamber/dsh-client-ui-sidebar/shared' specifier: the renderer has no
+ * '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared' specifier: the renderer has no
  * install-tree copy of the sidebar package, and its plain-node tests
  * (host-graph.test.ts, no module loader) must resolve the real module without
  * a bundler. Specifier imports from other renderer files resolve to the same
@@ -46,7 +46,7 @@
  */
 
 import { CHAMBER_COVERED_IDS } from './chamber-covered.ts'
-import type { PluginGraphDiagnostic, PluginGraphDiagnosticState } from '@dsh-chamber/dsh-client-ui-sidebar/shared'
+import type { PluginGraphDiagnostic, PluginGraphDiagnosticState } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
 import {
   classifyGraphChannelFailure, postUnary, type UnaryPostOutcome,
 } from '../../dsh-chamber-client-ui-sidebar/src/shared/wire-common.ts'

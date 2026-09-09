@@ -1442,20 +1442,20 @@ test('P1-2: the password LOGIN is SPKI-pinned exactly like the probe — a misma
 // ---------------------------------------------------------------------------
 
 const GRAPH_PACKAGE: LocalChamberHostPackage = {
-  name: '@dsh-chamber/dsh-host-client-graph',
-  packageJson: JSON.stringify({ name: '@dsh-chamber/dsh-host-client-graph', version: '1.2.3' }),
+  name: '@dsh-chamber/dsh-chamber-seed-client-graph',
+  packageJson: JSON.stringify({ name: '@dsh-chamber/dsh-chamber-seed-client-graph', version: '1.2.3' }),
   distIndex: 'export const graph = 1\n',
 }
 const GIT_PACKAGE: LocalChamberHostPackage = {
-  name: '@dsh-chamber/dsh-host-git-worktree',
-  packageJson: JSON.stringify({ name: '@dsh-chamber/dsh-host-git-worktree', version: '2.0.0' }),
+  name: '@dsh-chamber/dsh-chamber-seed-git-worktree',
+  packageJson: JSON.stringify({ name: '@dsh-chamber/dsh-chamber-seed-git-worktree', version: '2.0.0' }),
   distIndex: 'export const git = 1\n',
 }
 // The third chamber host package (design 24): the desktop uploads all three
 // rows into the gateway seed cache (main.ts localChamberHostPackageSources).
 const ARCHIVE_PACKAGE: LocalChamberHostPackage = {
-  name: '@dsh-chamber/dsh-host-archive-cleanup',
-  packageJson: JSON.stringify({ name: '@dsh-chamber/dsh-host-archive-cleanup', version: '3.0.0' }),
+  name: '@dsh-chamber/dsh-chamber-seed-archive-cleanup',
+  packageJson: JSON.stringify({ name: '@dsh-chamber/dsh-chamber-seed-archive-cleanup', version: '3.0.0' }),
   distIndex: 'export const archive = 1\n',
 }
 
@@ -1504,9 +1504,9 @@ test('syncGatewayChamberPlugins: happy path uploads only the changed package and
         res.writeHead(200, { 'content-type': 'application/json' })
         res.end(JSON.stringify({
           items: [
-            { name: '@dsh-chamber/dsh-host-client-graph', version: '1.0.0' },
-            { name: '@dsh-chamber/dsh-host-git-worktree', version: '2.0.0' },
-            { name: '@dsh-chamber/dsh-host-archive-cleanup', version: '3.0.0' },
+            { name: '@dsh-chamber/dsh-chamber-seed-client-graph', version: '1.0.0' },
+            { name: '@dsh-chamber/dsh-chamber-seed-git-worktree', version: '2.0.0' },
+            { name: '@dsh-chamber/dsh-chamber-seed-archive-cleanup', version: '3.0.0' },
           ],
         }))
         return
@@ -1549,13 +1549,13 @@ test('syncGatewayChamberPlugins: happy path uploads only the changed package and
     // Only the version-mismatched package is uploaded, with the exact body.
     const put = seen.find(entry => entry.method === 'PUT')
     assert.ok(put !== undefined)
-    assert.equal((put.body as { name: string }).name, '@dsh-chamber/dsh-host-client-graph')
+    assert.equal((put.body as { name: string }).name, '@dsh-chamber/dsh-chamber-seed-client-graph')
     assert.deepEqual((put.body as { files: Record<string, string> }).files, {
       'package.json': GRAPH_PACKAGE.packageJson,
       'dist/index.js': GRAPH_PACKAGE.distIndex,
     })
     assert.deepEqual(warns, [])
-    assert.ok(logs.some(line => line.includes('uploaded @dsh-chamber/dsh-host-client-graph')))
+    assert.ok(logs.some(line => line.includes('uploaded @dsh-chamber/dsh-chamber-seed-client-graph')))
   } finally {
     await server.close()
   }
@@ -1568,9 +1568,9 @@ test('syncGatewayChamberPlugins: version-identical packages skip the upload (ide
     res.writeHead(200, { 'content-type': 'application/json' })
     res.end(JSON.stringify({
       items: [
-        { name: '@dsh-chamber/dsh-host-client-graph', version: '1.2.3' },
-        { name: '@dsh-chamber/dsh-host-git-worktree', version: '2.0.0' },
-        { name: '@dsh-chamber/dsh-host-archive-cleanup', version: '3.0.0' },
+        { name: '@dsh-chamber/dsh-chamber-seed-client-graph', version: '1.2.3' },
+        { name: '@dsh-chamber/dsh-chamber-seed-git-worktree', version: '2.0.0' },
+        { name: '@dsh-chamber/dsh-chamber-seed-archive-cleanup', version: '3.0.0' },
       ],
     }))
   })
@@ -1598,7 +1598,7 @@ test('syncGatewayChamberPlugins: a byte-identical PUT answer (changed:false) ask
     requests.push(`${req.method ?? ''} ${req.url ?? ''}`)
     if (req.method === 'GET') {
       res.writeHead(200, { 'content-type': 'application/json' })
-      res.end(JSON.stringify({ items: [{ name: '@dsh-chamber/dsh-host-client-graph', version: '1.0.0' }] }))
+      res.end(JSON.stringify({ items: [{ name: '@dsh-chamber/dsh-chamber-seed-client-graph', version: '1.0.0' }] }))
       return
     }
     res.writeHead(200, { 'content-type': 'application/json' })
@@ -2608,7 +2608,7 @@ test('syncGatewayChamberPlugins: an upload PUT refusal is an explicit failure, n
     assert.equal(result.uploaded, false)
     assert.equal(result.skipped, false)
     assert.equal(result.failed, true, 'a refused upload must never project as up to date')
-    assert.ok((result.error ?? '').includes('@dsh-chamber/dsh-host-client-graph'), 'the failure names the refused package')
+    assert.ok((result.error ?? '').includes('@dsh-chamber/dsh-chamber-seed-client-graph'), 'the failure names the refused package')
   } finally {
     await server.close()
   }
@@ -2624,7 +2624,7 @@ test('syncGatewayChamberPlugins: an upload PUT refusal is an explicit failure, n
       return
     }
     res.writeHead(400, { 'content-type': 'application/json' })
-    res.end(JSON.stringify({ error: 'unsyncable package "@dsh-chamber/dsh-host-archive-cleanup" (this gateway release cannot cache it — it may predate the package; update the gateway to match the connecting desktop)', code: 'invalid_input' }))
+    res.end(JSON.stringify({ error: 'unsyncable package "@dsh-chamber/dsh-chamber-seed-archive-cleanup" (this gateway release cannot cache it — it may predate the package; update the gateway to match the connecting desktop)', code: 'invalid_input' }))
   })
   try {
     const result = await syncGatewayChamberPlugins({
@@ -2635,7 +2635,7 @@ test('syncGatewayChamberPlugins: an upload PUT refusal is an explicit failure, n
       logger: syncLog().logger,
     })
     assert.equal(result.failed, true)
-    assert.ok((result.error ?? '').includes('uploading @dsh-chamber/dsh-host-archive-cleanup failed (HTTP 400'), 'the failure names the refused package and status')
+    assert.ok((result.error ?? '').includes('uploading @dsh-chamber/dsh-chamber-seed-archive-cleanup failed (HTTP 400'), 'the failure names the refused package and status')
     assert.ok((result.error ?? '').includes('unsyncable package'), 'the failure carries the gateway refusal reason')
     assert.ok((result.error ?? '').includes('update the gateway'), 'the failure carries the remediation hint')
   } finally {
@@ -2675,7 +2675,7 @@ test('syncGatewayChamberPlugins: a partial failure (one upload refused, one land
     })
     assert.equal(result.uploaded, true, 'the second package still landed')
     assert.equal(result.failed, true, 'the refused package is not hidden behind the partial success')
-    assert.ok((result.error ?? '').includes('@dsh-chamber/dsh-host-client-graph'), 'the failure names the refused package')
+    assert.ok((result.error ?? '').includes('@dsh-chamber/dsh-chamber-seed-client-graph'), 'the failure names the refused package')
   } finally {
     await server.close()
   }

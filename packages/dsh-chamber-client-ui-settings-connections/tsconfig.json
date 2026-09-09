@@ -1,7 +1,7 @@
 {
   "extends": "../../tsconfig.json",
   "compilerOptions": {
-    // P4-4: the `@dsh-chamber/dsh-client-ui-sidebar/shared` local paths mirror
+    // P4-4: the `@dsh-chamber/dsh-chamber-client-ui-sidebar/shared` local paths mirror
     // was deleted — the specifier now resolves through the ROOT tsconfig
     // paths to the REAL sidebar shared source (src/shared/index.ts) and the
     // ambient mirror file src/ambient/sidebar-shared.d.ts is gone. The shared

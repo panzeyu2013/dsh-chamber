@@ -1,4 +1,4 @@
-# @dsh-chamber/dsh-client-ui-sidebar
+# @dsh-chamber/dsh-chamber-client-ui-sidebar
 
 English | [中文](README.zh.md)
 
@@ -159,7 +159,7 @@ place of the official ui-sidebar (which stays untouched in
 - `src/shared/gateway-runtime.ts` + `src/shared/gateway-runtime-poll.ts` hold the
   pure gateway dsh-runtime core (status parse/fetch, action gates, error
   classification, restart-readiness poll — `pollGatewayReady`, 1 s interval /
-  120 s cap, abort-aware), exported through `@dsh-chamber/dsh-client-ui-sidebar/shared`
+  120 s cap, abort-aware), exported through `@dsh-chamber/dsh-chamber-client-ui-sidebar/shared`
   (`./shared` → `./src/shared/index.ts`, no build step; vite consumers bundle the
   real source).
 - Consumer packages (settings-bridge, connections, git, layout, renderer)

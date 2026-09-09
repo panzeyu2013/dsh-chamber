@@ -129,12 +129,12 @@
 
 ## 3. 宿主域契约（wire）
 
-新宿主包（结构镜像 `packages/dsh-chamber-host-git-worktree`，含提交态
+新宿主包（结构镜像 `packages/dsh-chamber-seed-git-worktree`，含提交态
 esbuild 产物 `dist/index.js`）。**命名**（评审修正）：scoped name 遵循两既有
-宿主包先例（`@dsh-chamber/dsh-host-client-graph`、`@dsh-chamber/dsh-host-git-worktree`
+宿主包先例（`@dsh-chamber/dsh-chamber-seed-client-graph`、`@dsh-chamber/dsh-chamber-seed-git-worktree`
 ——git-worktree 的 `dsh-chamber-host-*` 前缀只出现在目录名，是历史不一致）：
-包名 `@dsh-chamber/dsh-host-archive-cleanup`，目录
-`packages/dsh-host-archive-cleanup/`（目录与 scoped name 对齐，避免第三种命名制）。
+包名 `@dsh-chamber/dsh-chamber-seed-archive-cleanup`，目录
+`packages/dsh-chamber-seed-archive-cleanup/`（目录与 scoped name 对齐，避免第三种命名制）。
 
 - loader insert：`id: archive-cleanup`（loader id 全局唯一，见 cordis-inserts
   冲突规则；全仓无此 id/namespace 占用，已 grep 核实）
@@ -391,9 +391,9 @@ vendor 源码）+ 薄 Remote 门面（`index.ts`），编排逻辑：
 > 常量/seed 面、探针契约面、分发/打包面、门禁面、文档面。全部在实现落地时
 > 完成；本文档先行定稿契约。
 
-**A. 新包本体**：`packages/dsh-host-archive-cleanup/`（src/index.ts +
+**A. 新包本体**：`packages/dsh-chamber-seed-archive-cleanup/`（src/index.ts +
 src/core.ts + scripts/build.mjs + test/core.test.ts + **提交态 dist**）。
-根 `.gitignore` 需为 `packages/dsh-host-archive-cleanup/dist/` 新增否定
+根 `.gitignore` 需为 `packages/dsh-chamber-seed-archive-cleanup/dist/` 新增否定
 （并入既有「chamber host 包提交态产物」按包否定块——按内容描述：
 `# The chamber host packages ship committed esbuild artifacts…` 注释段 +
 逐包 `!packages/<pkg>/dist/` 与 `!packages/<pkg>/dist/index.js` 否定行，
@@ -736,7 +736,7 @@ archive-cleanup；host 包提交态 dist 随代码重建（esbuild 0.25 确定�
 6. **git-worktree missing 行探针门（design 08 §11.8 配套，另见 08 文档）**：
    §11.8「缺失行不得被任何文件系统探测触碰」承诺在删除/重放路径强制执行
    ——vanished-cwd 行免 dirty/submodule 探针、未注册删除降级残留记录清理
-   （dsh-chamber-host-git-worktree/src/core.ts + test/core.test.ts 新增 3 例）；
+   （dsh-chamber-seed-git-worktree/src/core.ts + test/core.test.ts 新增 3 例）；
 7. **updater 重启失败恢复（design 11 §9 配套）**：desktop 重启腿失败显式化
    ——`restartFailureText` 一次性失败携带 + 重启 stall watchdog（未 arm/
    超时复位单飞并放行重试），失败不再静默滞留（desktop/updater.ts +

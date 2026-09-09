@@ -42,7 +42,7 @@
 | 12 | A r1 闭环 ★ | 新增 `POST /chamber/runtime/start` 原语（仅 stopped/error/restart-exhausted；202+poll；受守卫：canStartLocal/恢复门/单飞）——停机移除后回到可启动的 UI 入口 |
 | 13 | A 安装期脚本 ★ | **默认允许**（与 ssh/桌面一致，不限制——避免用户困扰）；风险登记（安装代码=gateway 用户级）；二期提供 ignore-scripts/逐包放行配置与 OS 用户隔离（硬化） |
 | 14 | A 服务端 admission ★ | **不加**——主进程确认是桌面通道纪律而非服务端门；服务端信任 = 全权 auth 直连（与既有 /chamber/runtime 动作面同级暴露，如实登记） |
-| 15 | C 共享模块 | gateway-runtime 纯核心（parse + poll）迁 `@dsh-chamber/dsh-client-ui-sidebar/shared`（split 边界；ambient 镜像同步清单见 §5.2，后经 2026-09 P4-4 移除改真实源解析）★ |
+| 15 | C 共享模块 | gateway-runtime 纯核心（parse + poll）迁 `@dsh-chamber/dsh-chamber-client-ui-sidebar/shared`（split 边界；ambient 镜像同步清单见 §5.2，后经 2026-09 P4-4 移除改真实源解析）★ |
 | 16 | B 命名/图标 | 「连接日志」「网关主机日志」+ 图标去重；本地卡折叠区不改名 |
 | 17 | A 生命周期 writer barrier ★ | gateway 后端 executor 挂入 runtime-manager tracked-writers（activeOperations/单飞门），dispose()/dispatch.quiesce() 排空、stop 杀安装子进程、锁释放前 writer 证明——17 §4.1/§12、18 §9.3 表述随 §8 更新 |
 | 18 | 掩码语义 ★ | gateway readManifest 的远端 file: 值**一律掩码**（`MATERIALIZED_VALUE_MASK` 同常量：保留 file: 前缀供 name 基 diff、gateway 本地路径不进 renderer，§6.2）。**现状勘误（2026-12 audit 修订）**：ssh 清单已挂接掩码（`redactRemotePluginManifest`，plugin-sync.ts）；本地 LOCAL_PLUGIN_LIST 仍**原样透传**（main.ts:3456-3462，本地 file: 绝对路径可进 renderer）——按 §10 ③ 与 design 13 §7.0 勘误登记为已知分歧（本地侧 `redactLocalPluginManifest` 仍零生产调用点）；模型层 readManifest 挂接时统一收敛。旧文本“ssh/local 均未掩码、掩码常量无生产调用点”已过时 |
@@ -81,7 +81,7 @@ remove 先于 add、可 defer 重启；write-file 上限 50 MiB；spec/name 白�
 > 保留不改。
 桌面 ready 自动 `syncGatewayChamberPlugins`（gateway-provider.ts:1408+；main.ts:2152-2182 装配）；
 gateway `PUT/GET /chamber/plugins` 白名单三包缓存（2026-12 design 24 加入
-`dsh-host-archive-cleanup`；plugins.ts:38-41 白名单 + :43-45 大小上限；0700/0600/原子
+`dsh-chamber-seed-archive-cleanup`；plugins.ts:38-41 白名单 + :43-45 大小上限；0700/0600/原子
 no-follow；上传读体 8 MiB 上限在 routes.ts readUploadJsonBody:57-109/:62，非 plugins.ts）；
 seed = extraneous + patch overlay（不进 package.json，control-plane/index.ts:393-398），每次 spawn（含健康自动重启，
 local-connection.ts:599-613）前 seed thunk 重求值自愈（02 §2.6）；激活探针期望集按实际同步包
@@ -168,12 +168,12 @@ connectionState ∈ {error, restart-exhausted, stopped} 失败；'ok' 或旧网�
 split 而非 move：`gateway-runtime-api.ts`（778 行）中仅 parse/action/gates/error 分类/poll 为纯核心；
 `remoteRuntimeStatusView` + `RemoteRuntimeStatusView` 引用 SettingsBridgeKey（L22/546-551）**留在 settings-bridge**
 （与 REMOTE_PHASES/BLOCKED_PHASES 共享部分以 shared 导出形式回引）。纯核心 + `gateway-runtime-poll.ts` 迁
-`@dsh-chamber/dsh-client-ui-sidebar/shared`（exports "./shared" → src，免构建；renderer/settings-bridge/
+`@dsh-chamber/dsh-chamber-client-ui-sidebar/shared`（exports "./shared" → src，免构建；renderer/settings-bridge/
 connections/layout/git 均为既有消费者；vite 共享单实例）。**〔勘误 2026-09 P4-4〕** 本段原「ambient 镜像同步
 清单」已废止：去重审计 P4-4 删除了全部手写 ambient 镜像（connections/git `src/ambient/sidebar-shared.d.ts`、
 settings-bridge `src/ambient/chamber-bridge.d.ts`、layout `src/ambient/chamber-view-prefs.d.ts`、renderer
 `vendor-modules.d.ts` 的 shared overlay）及其镜像锁步测试（sidebar `gateway-runtime-mirror.test.ts`）。消费者
-现对**真源**做 typecheck：root tsconfig `paths`（`@dsh-chamber/dsh-client-ui-sidebar/shared` → 真实
+现对**真源**做 typecheck：root tsconfig `paths`（`@dsh-chamber/dsh-chamber-client-ui-sidebar/shared` → 真实
 `src/shared/index.ts`）供 git/layout/connections/renderer 继承（各 tsconfig 补 `rootDir: "../.."` 避免
 TS6059）；settings-bridge 保留自身 connections-section paths、经 workspace 链接 + sidebar
 `exports["./shared"]` 解析。`RemoteRuntimeStatus`（33 字段，30 必填+3 可选，2026 audit 复核）/parse/gates/

@@ -3,7 +3,7 @@
  * chamber App layer (renderer main entry) publishes the merged multi-source
  * projection and consumes open-session requests; the sidebar plugin
  * subscribes to the projection and publishes open-session requests. Both
- * import this module through `@dsh-chamber/dsh-client-ui-sidebar/shared`; a
+ * import this module through `@dsh-chamber/dsh-chamber-client-ui-sidebar/shared`; a
  * vite shared chunk keeps the runtime single instance.
  *
  * One workspace group in the sidebar projection (computed by shared/derive.ts).

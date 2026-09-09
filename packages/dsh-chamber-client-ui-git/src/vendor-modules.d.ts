@@ -12,7 +12,7 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
   export interface LocaleNamespaceMap {}
 }
 
-declare module '@dsh-chamber/dsh-client-ui-sidebar/client' {
+declare module '@dsh-chamber/dsh-chamber-client-ui-sidebar/client' {
   export interface SidebarWorkspaceGitOwnerProps { wide: boolean }
 }
 

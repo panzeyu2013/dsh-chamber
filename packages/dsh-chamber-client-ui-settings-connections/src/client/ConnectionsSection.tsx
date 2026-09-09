@@ -41,7 +41,7 @@ import {
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 // Type-only: pulls the settings shell's SlotMap merge ('settings.section').
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
-import { pollGatewayReady } from '@dsh-chamber/dsh-client-ui-sidebar/shared'
+import { pollGatewayReady } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
 import type {
   DesktopSshSurface, SshConfigDiscovery, SshConfigHost, SshInstanceSpec, SshLogEntry, SshPhase, SshStatusProjection, TransportKind, TransportMethod,
 } from '../global.d.ts'

@@ -27,7 +27,7 @@ import {
   sourceIdForInstance,
   sourceIdForRawInstance,
 } from '../src/transport-source.ts'
-import type { InstanceAggregate, InstanceSnapshot } from '@dsh-chamber/dsh-client-ui-sidebar/shared'
+import type { InstanceAggregate, InstanceSnapshot } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
 
 // ---- commitAggregatePull (2026-09 beta regression: archived-resurfacing) ----
 

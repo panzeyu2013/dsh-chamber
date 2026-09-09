@@ -450,7 +450,7 @@ export const chamberBridge: {
 ## 5. 连接设备页
 
 - chamber 自研插件包 `packages/dsh-chamber-client-ui-settings-connections`
-  （`@dsh-chamber/dsh-client-ui-settings-connections`），注册进 dsh 设置模态
+  （`@dsh-chamber/dsh-chamber-client-ui-settings-connections`），注册进 dsh 设置模态
   的 `settings.section` 槽（id `connections`，order 30，在 agent-presets 之后）。
 - 「dsh 运行时」段（design 18 §3.6/§9，2026-09 per-server 修订）：同为
   chamber 自研 `settings.section`（id `dsh-runtime`，order 31），注册在选中
@@ -535,7 +535,7 @@ export const chamberBridge: {
     `test:client-web` 的 configure-context boot 用例固定（不是模拟 shell 文本断言）。
 - 自研插件包（`@dsh-chamber/*` 前缀，替换/扩展官方插件注册）：
   - `packages/dsh-chamber-client-ui-sidebar/`——**chamber 自研侧边栏插件**（包名
-    `@dsh-chamber/dsh-client-ui-sidebar`，拷贝官方 ui-sidebar 结构改造：保留
+    `@dsh-chamber/dsh-chamber-client-ui-sidebar`，拷贝官方 ui-sidebar 结构改造：保留
     几何/折叠/孔位声明，会话区改为多来源统一列表）+ `shared/aggregate-store.ts`
     （chamberBridge）+ `shared/instance-api.ts`（每实例 unary 客户端，
     App 层与插件共享一份，vite 共享 chunk）；
@@ -561,11 +561,11 @@ export const chamberBridge: {
     选择本机 Finder 或 VS Code；能力探测与执行只经 preload 的 trusted IPC 到
     Desktop 主进程，无 host 插件、无 seed、无控制面执行面。
 - 自研宿主包（随 chamber 分发、运行于每个 dsh 实例进程）：
-  - `packages/dsh-host-client-graph/`——设计 09 的只读 client boot graph Remote；
-  - `packages/dsh-chamber-host-git-worktree/`——设计 08 的领域限定 Git Remote，
+  - `packages/dsh-chamber-seed-client-graph/`——设计 09 的只读 client boot graph Remote；
+  - `packages/dsh-chamber-seed-git-worktree/`——设计 08 的领域限定 Git Remote，
     与该实例 `workspaceRegistry`/live agents 同用户、同文件系统做权威守卫；
     Desktop 与控制面均不执行 Git。
-  - `packages/dsh-host-archive-cleanup/`——设计 24 的已归档会话内容清理域
+  - `packages/dsh-chamber-seed-archive-cleanup/`——设计 24 的已归档会话内容清理域
     （`archiveCleanup/{preview,purge}`，AGENTS 已登记的有界例外）：实例进程内
     经宿主权威状态 children-first 级联清除归档集内容（含 subagent 起源后代、
     官方事件发射），只删不读、绝不触碰运行中/未归档内容；上游 delete wire
@@ -582,14 +582,14 @@ export const chamberBridge: {
     bundle = vite 产物 `/assets/chamber-<hash>.js?rev=<rev>`。构建链 =
     gen-typert-remotes → vite build → gen-boot-manifest。
   - **每实例宿主图额外 entry（设计 09，2026-08 落地）**：boot 时前端经反代
-    （`/api/i/<id>`）调 chamber host 包 `@dsh-chamber/dsh-host-client-graph` 的
+    （`/api/i/<id>`）调 chamber host 包 `@dsh-chamber/dsh-chamber-seed-client-graph` 的
     Remote `clientGraph/graph` 取该实例宿主组合的客户端插件 boot 图，按
     `CHAMBER_COVERED_IDS`（`packages/renderer/src/chamber-covered.ts`：复合已覆盖
     + 页面自有 id）去重，预加载剩余 bundle
     （`/api/i/<id>/plugins/<pkg>/client.js?rev=…`），经 boot.ts `extraRows` seam
     合并进 boot rows（详见设计 09）。
-  - **三 host 包与 seed（设计 08/09/24）**：`packages/dsh-host-client-graph`、
-    `packages/dsh-chamber-host-git-worktree` 与 `packages/dsh-host-archive-cleanup`
+  - **三 host 包与 seed（设计 08/09/24）**：`packages/dsh-chamber-seed-client-graph`、
+    `packages/dsh-chamber-seed-git-worktree` 与 `packages/dsh-chamber-seed-archive-cleanup`
     都提交 esbuild `dist/index.js`
     （`@deepseek-ai/*` external）；控制面 `host-graph-seed.ts` 幂等 seed 所有
     已构建包进 `$DSH_HOME/profiles/web/node_modules/@dsh-chamber/*/`，并把

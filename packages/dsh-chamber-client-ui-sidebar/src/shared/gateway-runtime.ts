@@ -8,7 +8,7 @@
  * Design 21 §5.2 split: this file is the pure core moved OUT of the
  * settings-bridge gateway-runtime-api.ts into the sidebar package's shared
  * face. It is consumed by the settings-bridge (and later the connections
- * plugin) through `@dsh-chamber/dsh-client-ui-sidebar/shared`; the
+ * plugin) through `@dsh-chamber/dsh-chamber-client-ui-sidebar/shared`; the
  * render/view mapping (`remoteRuntimeStatusView` + `RemoteRuntimeStatusView`)
  * stays in settings-bridge because it carries the bridge's UI dictionary
  * keys. This file has NO locale/dictionary dependency of any kind.

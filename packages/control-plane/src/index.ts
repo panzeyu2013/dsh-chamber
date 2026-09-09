@@ -50,6 +50,7 @@ import {
 import { hostLogs } from './host-logs.ts'
 import { createStaticServing } from './static-serving.ts'
 import {
+  assertHostSeedEntryNaming,
   buildPatchOverlay,
   ensureSeedPackage,
   missingHostPackageInserts,
@@ -99,18 +100,18 @@ const REPO_ROOT = resolve(fileURLToPath(new URL('../../..', import.meta.url)))
  * Default module-A host package source dir (design 09 方案 A, module B): the
  * chamber host package whose dist/index.js + package.json the plane seeds
  * into the local profile so the spawned host exposes the boot graph. Dev and
- * CI layouts ship it at <repo>/packages/dsh-host-client-graph; packaged
+ * CI layouts ship it at <repo>/packages/dsh-chamber-seed-client-graph; packaged
  * runtimes pass the bundled location through ControlPlaneOptions (an absent
  * source is skipped, never an error).
  */
-export const DEFAULT_HOST_GRAPH_PACKAGE_SOURCE_DIR = join(REPO_ROOT, 'packages', 'dsh-host-client-graph')
+export const DEFAULT_HOST_GRAPH_PACKAGE_SOURCE_DIR = join(REPO_ROOT, 'packages', 'dsh-chamber-seed-client-graph')
 
 /** Default source for the chamber in-host Git worktree service package. */
-export const DEFAULT_HOST_GIT_WORKTREE_PACKAGE_SOURCE_DIR = join(REPO_ROOT, 'packages', 'dsh-chamber-host-git-worktree')
+export const DEFAULT_HOST_GIT_WORKTREE_PACKAGE_SOURCE_DIR = join(REPO_ROOT, 'packages', 'dsh-chamber-seed-git-worktree')
 
 /** Default source for the chamber in-host archived-session cleanup domain
  *  package (design 24; packaged runtimes pass the bundled location). */
-export const DEFAULT_HOST_ARCHIVE_CLEANUP_PACKAGE_SOURCE_DIR = join(REPO_ROOT, 'packages', 'dsh-host-archive-cleanup')
+export const DEFAULT_HOST_ARCHIVE_CLEANUP_PACKAGE_SOURCE_DIR = join(REPO_ROOT, 'packages', 'dsh-chamber-seed-archive-cleanup')
 
 /**
  * Default dsh workspace: <repo root>/ref-dsh when present, otherwise the
@@ -188,7 +189,7 @@ export interface ControlPlaneOptions {
   /**
    * Module-A host package source dir (design 09 方案 A, module B): the package
    * seeded into the local profile so the spawned host resolves the
-   * client-graph row. Defaults to <repo>/packages/dsh-host-client-graph;
+   * client-graph row. Defaults to <repo>/packages/dsh-chamber-seed-client-graph;
    * packaged runtimes pass the bundled location. An absent source — or a
    * source without its built dist/index.js artifact (module A not built in
    * this runtime) — is skipped (nothing to seed), never an error.
@@ -392,7 +393,13 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
     ]) {
       byId.set(entry.insert.id, entry)
     }
-    return [...byId.values()]
+    const entries = [...byId.values()]
+    // Fail-loud naming pin (Batch 1 naming unification, 2026-09): every
+    // host-kind entry — base or extra — lives in the canonical
+    // `@dsh-chamber/dsh-chamber-seed-<loader-id>` namespace, so a rename that
+    // forgets one call site cannot reach the profile seed at all.
+    assertHostSeedEntryNaming(entries)
+    return entries
   }
   // The seed gate is the BUILT artifact (dist/index.js), not the package
   // directory: the dir exists in any checkout of this repo, while the esbuild
@@ -1074,7 +1081,14 @@ export type {
   ParsedInsertRow,
 } from './cordis-inserts.ts'
 export type { Logger } from './types.ts'
-export { HOST_ARCHIVE_CLEANUP_INSERT, HOST_GIT_WORKTREE_INSERT, HOST_GRAPH_INSERT } from './host-graph-seed.ts'
+export {
+  assertHostSeedEntryNaming,
+  assertHostSeedInsertNaming,
+  HOST_ARCHIVE_CLEANUP_INSERT,
+  HOST_GIT_WORKTREE_INSERT,
+  HOST_GRAPH_INSERT,
+  HOST_SEED_PACKAGE_PREFIX,
+} from './host-graph-seed.ts'
 export type { HostPackageInsert } from './host-graph-seed.ts'
 export type { ApiCorsDecision, ApiCorsEvaluator, ApiRequest, ApiResponse, ApiSurface } from './api.ts'
 // Shared forwarding core (design 17 §6.2, 方案 A): extracted from

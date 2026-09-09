@@ -12,10 +12,10 @@ import type { PluginFiberPhase, PluginInventorySnapshot } from './plugin-invento
 /** The chamber-injected host package names (design 09 module A + design 08 +
  *  design 24): the same fixed rows the SSH plugin dialog surfaces; the single
  *  source of truth for the names is plugin-sync.ts CLIENT_GRAPH_PACKAGE_NAME. */
-export const HOST_GRAPH_PACKAGE = '@dsh-chamber/dsh-host-client-graph'
-export const GIT_WORKTREE_PACKAGE = '@dsh-chamber/dsh-host-git-worktree'
+export const HOST_GRAPH_PACKAGE = '@dsh-chamber/dsh-chamber-seed-client-graph'
+export const GIT_WORKTREE_PACKAGE = '@dsh-chamber/dsh-chamber-seed-git-worktree'
 /** Archived-session cleanup host domain (design 24, 2026-12). */
-export const ARCHIVE_CLEANUP_PACKAGE = '@dsh-chamber/dsh-host-archive-cleanup'
+export const ARCHIVE_CLEANUP_PACKAGE = '@dsh-chamber/dsh-chamber-seed-archive-cleanup'
 
 /** The gateway-packaged mobile client entry (design 21 §6.2: the single
  *  packaged exception — mobile access is bound to the gateway and has no

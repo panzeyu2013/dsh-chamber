@@ -10,6 +10,11 @@
 > M3 仍包含 macOS 打包态、冷/热启动与 N-ctx 等实机验收；这些项目未完成前，
 > 不把 open-in 演进后的整条链路写成 M3 已完成，最新状态以 STATUS 与设计 20 §8/§9 为准。
 >
+> **命名统一注记（2026-09，Batch 1 / T2）**：chamber 自建包名统一为
+> `@dsh-chamber/dsh-chamber-client-ui-*`（目录不变）。本文历史叙述中的
+> `@dsh-chamber/dsh-client-ui-vscode` / `-open-in` 是当时的包名，保留不改写；
+> 现行名字见 AGENTS.md 与 STATUS。
+>
 > **连接模型 v2 注记**：现行来源 id 为 `dsh-<id>` / `gateway-<id>`，`ssh-<id>`
 > 仅保留 legacy 兼容映射；kind 是目标类型，是否能使用 VS Code Remote-SSH 由
 > `transport === 'ssh'` 决定（17 §2.2/§9.1）。本文的 v1 `kind === 'ssh'`
@@ -344,7 +349,7 @@ detectVscodeAvailability(platform): { available: boolean }
 - main.ts 接线（§4.2/§4.3）；
 - electron-builder `protocols` 键；
 - release.yml 版本断言：**无需并入**（断言集只含 host 包：root/desktop/
-  control-plane/renderer/cli/dsh-host-client-graph/dsh-host-git-worktree/dsh-host-archive-cleanup；git client
+  control-plane/renderer/cli/dsh-chamber-seed-client-graph/dsh-chamber-seed-git-worktree/dsh-chamber-seed-archive-cleanup；git client
   插件亦不在集内）——新包独立 version 字段即可。
 
 ## 8. 安全不变量

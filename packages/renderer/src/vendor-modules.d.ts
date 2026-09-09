@@ -162,19 +162,19 @@ declare module '@deepseek-ai/dsh-client-ui-workspace/client'
  * multi-source session list. The renderer only plugs it into the per-instance
  * boot graph; loose face.
  */
-declare module '@dsh-chamber/dsh-client-ui-sidebar/client' {
+declare module '@dsh-chamber/dsh-chamber-client-ui-sidebar/client' {
   export const inject: string[]
   export function apply(ctx: any): void
 }
 
 /** Chamber Git worktree sidebar occupant (design 08). */
-declare module '@dsh-chamber/dsh-client-ui-git/client' {
+declare module '@dsh-chamber/dsh-chamber-client-ui-git/client' {
   export const inject: string[]
   export function apply(ctx: any): void
 }
 
 /** Chamber open-in header button (design 16 + open-in extension). */
-declare module '@dsh-chamber/dsh-client-ui-open-in/client' {
+declare module '@dsh-chamber/dsh-chamber-client-ui-open-in/client' {
   export const inject: string[]
   export function apply(ctx: any): void
 }
@@ -185,7 +185,7 @@ declare module '@dsh-chamber/dsh-client-ui-open-in/client' {
  * sidebar width preference is shared across every shell boot and persisted.
  * The renderer only plugs it into the per-instance boot graph; loose face.
  */
-declare module '@dsh-chamber/dsh-client-ui-layout/client' {
+declare module '@dsh-chamber/dsh-chamber-client-ui-layout/client' {
   export const inject: string[]
   export function apply(ctx: any): void
 }
@@ -197,7 +197,7 @@ declare module '@dsh-chamber/dsh-client-ui-layout/client' {
  * host management. The renderer only plugs it into the per-instance boot
  * graph; loose face.
  */
-declare module '@dsh-chamber/dsh-client-ui-settings-connections/client' {
+declare module '@dsh-chamber/dsh-chamber-client-ui-settings-connections/client' {
   export const inject: string[]
   export function apply(ctx: any): void
 }
@@ -210,7 +210,7 @@ declare module '@dsh-chamber/dsh-client-ui-settings-connections/client' {
  * settings sections, plus the fixed chamber-global connections entry. The
  * renderer only plugs it into the per-instance boot graph; loose face.
  */
-declare module '@dsh-chamber/dsh-client-ui-settings-bridge/client' {
+declare module '@dsh-chamber/dsh-chamber-client-ui-settings-bridge/client' {
   export const inject: string[]
   export function apply(ctx: any): void
 }

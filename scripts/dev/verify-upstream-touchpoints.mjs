@@ -152,7 +152,7 @@ const COVERED_SENTINELS = [
   '@deepseek-ai/dsh-client-ui-renderer',
   '@deepseek-ai/dsh-client-hmr',
   '@deepseek-ai/dsh-client-ui-open-in-app',
-  '@dsh-chamber/dsh-client-ui-open-in',
+  '@dsh-chamber/dsh-chamber-client-ui-open-in',
 ]
 
 // ---------------------------------------------------------------------------
@@ -376,9 +376,9 @@ for (const fork of FORKS) {
     return newest
   }
   const artifacts = [
-    ['packages/dsh-host-client-graph/dist/index.js', 'packages/dsh-host-client-graph/src'],
-    ['packages/dsh-chamber-host-git-worktree/dist/index.js', 'packages/dsh-chamber-host-git-worktree/src'],
-    ['packages/dsh-host-archive-cleanup/dist/index.js', 'packages/dsh-host-archive-cleanup/src'],
+    ['packages/dsh-chamber-seed-client-graph/dist/index.js', 'packages/dsh-chamber-seed-client-graph/src'],
+    ['packages/dsh-chamber-seed-git-worktree/dist/index.js', 'packages/dsh-chamber-seed-git-worktree/src'],
+    ['packages/dsh-chamber-seed-archive-cleanup/dist/index.js', 'packages/dsh-chamber-seed-archive-cleanup/src'],
   ]
   for (const [artifact, srcDir] of artifacts) {
     const artifactPath = join(ROOT, artifact)

@@ -800,7 +800,7 @@ test('CHAMBER_COVERED_FACTORY_IDS: no duplicates, legal names, and every factory
 })
 
 test('Git worktree client is a first-screen covered factory (static composite lockstep)', () => {
-  const id = '@dsh-chamber/dsh-client-ui-git'
+  const id = '@dsh-chamber/dsh-chamber-client-ui-git'
   assert.ok(CHAMBER_COVERED_IDS.includes(id))
   assert.ok(CHAMBER_COVERED_FACTORY_IDS.includes(id))
 })

@@ -121,7 +121,8 @@ jobs:
         run: pnpm run smoke
       - name: Renderer build
         run: pnpm run build:renderer
-      # Host-package esbuild bundles (dsh-host-client-graph / host-git-worktree
+      # Host-package esbuild bundles (dsh-chamber-seed-client-graph /
+      # dsh-chamber-seed-git-worktree / dsh-chamber-seed-archive-cleanup
       # dist/index.js) only used to build in release — their esbuild entry/
       # external mapping is an independent failure mode, so the push path
       # validates them too (2026 round-3 review).

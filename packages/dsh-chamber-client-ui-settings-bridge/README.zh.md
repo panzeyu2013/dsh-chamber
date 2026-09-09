@@ -1,4 +1,4 @@
-# @dsh-chamber/dsh-client-ui-settings-bridge
+# @dsh-chamber/dsh-chamber-client-ui-settings-bridge
 
 [English](README.md) | 中文
 
@@ -23,7 +23,7 @@ chamber 自研**设置壳**插件（2026-08 设计讨论）：以低于官方 Se
 ## 共享 gateway-runtime split（design 21 §5.2）
 
 - gateway dsh-runtime 纯核心（status parse/fetch、动作门、错误分类、重启就绪轮询）
-  已迁出本包进入 sidebar 共享面（`@dsh-chamber/dsh-client-ui-sidebar/shared`）；
+  已迁出本包进入 sidebar 共享面（`@dsh-chamber/dsh-chamber-client-ui-sidebar/shared`）；
   本包在其 gateway dsh-runtime 段回引该共享面，并对真实 sidebar shared 源做
   typecheck（P4-4：手写 ambient 镜像 `src/ambient/chamber-bridge.d.ts` 已删除——
   本包保留自身 tsconfig `paths`（connections-section 映射），故其

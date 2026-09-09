@@ -35,19 +35,19 @@ import {
   missingHostPackageInserts,
 } from '../src/host-graph-seed.ts'
 
-const CLIENT_GRAPH: CordisInsert = { id: 'client-graph', name: '@dsh-chamber/dsh-host-client-graph' }
-const GIT_WORKTREE: CordisInsert = { id: 'git-worktree', name: '@dsh-chamber/dsh-host-git-worktree' }
+const CLIENT_GRAPH: CordisInsert = { id: 'client-graph', name: '@dsh-chamber/dsh-chamber-seed-client-graph' }
+const GIT_WORKTREE: CordisInsert = { id: 'git-worktree', name: '@dsh-chamber/dsh-chamber-seed-git-worktree' }
 
 /** The canonical overlay bytes (the dsh-app-boot loadOverlayPatches shape). */
 const GOLDEN_ONE = `- insert:
     - id: client-graph
-      name: '@dsh-chamber/dsh-host-client-graph'
+      name: '@dsh-chamber/dsh-chamber-seed-client-graph'
 `
 const GOLDEN_BOTH = `- insert:
     - id: client-graph
-      name: '@dsh-chamber/dsh-host-client-graph'
+      name: '@dsh-chamber/dsh-chamber-seed-client-graph'
     - id: git-worktree
-      name: '@dsh-chamber/dsh-host-git-worktree'
+      name: '@dsh-chamber/dsh-chamber-seed-git-worktree'
 `
 
 // ---------------------------------------------------------------------------
@@ -77,22 +77,22 @@ test('parseLoaderRows reads direct block rows and ignores YAML comments', () => 
 - insert:
     # another comment
     - id: client-graph
-      name: '@dsh-chamber/dsh-host-client-graph' # trailing comment
+      name: '@dsh-chamber/dsh-chamber-seed-client-graph' # trailing comment
 `
   const rows = parseLoaderRows(patch)
   assert.equal(rows.length, 1)
   assert.deepEqual(rows[0]!.ids, ['client-graph'])
-  assert.deepEqual(rows[0]!.names, ['@dsh-chamber/dsh-host-client-graph'])
+  assert.deepEqual(rows[0]!.names, ['@dsh-chamber/dsh-chamber-seed-client-graph'])
 })
 
 test('parseLoaderRows keeps name-first rows and inline-flow rows as one loader row each', () => {
   const nameFirst = `- insert:
-    - name: '@dsh-chamber/dsh-host-git-worktree'
+    - name: '@dsh-chamber/dsh-chamber-seed-git-worktree'
       id: git-worktree
 `
   assert.deepEqual(parseLoaderRows(nameFirst)[0]!.ids, ['git-worktree'])
-  assert.deepEqual(parseLoaderRows(nameFirst)[0]!.names, ['@dsh-chamber/dsh-host-git-worktree'])
-  const inline = `- insert: [{ id: git-worktree, name: '@dsh-chamber/dsh-host-git-worktree' }, { id: other, name: '@dsh-chamber/other' }]
+  assert.deepEqual(parseLoaderRows(nameFirst)[0]!.names, ['@dsh-chamber/dsh-chamber-seed-git-worktree'])
+  const inline = `- insert: [{ id: git-worktree, name: '@dsh-chamber/dsh-chamber-seed-git-worktree' }, { id: other, name: '@dsh-chamber/other' }]
 `
   assert.equal(parseLoaderRows(inline).length, 2)
 })
@@ -102,7 +102,7 @@ test('parseLoaderRows never lets a nested config name complete a loader identity
     - id: git-worktree
       name: '@example/not-chamber'
       config:
-        name: '@dsh-chamber/dsh-host-git-worktree'
+        name: '@dsh-chamber/dsh-chamber-seed-git-worktree'
 `
   const rows = parseLoaderRows(nested)
   assert.equal(rows.length, 1)
@@ -112,7 +112,7 @@ test('parseLoaderRows never lets a nested config name complete a loader identity
 test('hasExactInsert matches only a single exact id/name pair in one loader row', () => {
   const exact = `- insert:
     - id: git-worktree
-      name: '@dsh-chamber/dsh-host-git-worktree'
+      name: '@dsh-chamber/dsh-chamber-seed-git-worktree'
 `
   assert.equal(hasExactInsert(exact, GIT_WORKTREE), true)
   assert.equal(hasExactInsert(exact, CLIENT_GRAPH), false)
@@ -120,13 +120,13 @@ test('hasExactInsert matches only a single exact id/name pair in one loader row'
   const crossed = `- insert:
     - id: git-worktree
       name: '@example/not-chamber'
-    - name: '@dsh-chamber/dsh-host-git-worktree'
+    - name: '@dsh-chamber/dsh-chamber-seed-git-worktree'
       id: another-git-service
 `
   assert.equal(hasExactInsert(crossed, GIT_WORKTREE), false)
   // An exact name-first row is reused.
   const nameFirst = `- insert:
-    - name: '@dsh-chamber/dsh-host-git-worktree'
+    - name: '@dsh-chamber/dsh-chamber-seed-git-worktree'
       id: git-worktree
 `
   assert.equal(hasExactInsert(nameFirst, GIT_WORKTREE), true)
@@ -138,11 +138,11 @@ test('fieldCount counts exact scalars with boundary checks and ignores comments'
     x: 1
 - insert:
     - id: client-graph
-      name: '@dsh-chamber/dsh-host-client-graph'
+      name: '@dsh-chamber/dsh-chamber-seed-client-graph'
 `
   assert.equal(fieldCount(patch, 'id', 'client-graph'), 1, 'client-graph-foo must not count as client-graph')
   assert.equal(fieldCount(patch, 'id', 'client-graph-foo'), 1)
-  assert.equal(fieldCount(patch, 'name', '@dsh-chamber/dsh-host-client-graph'), 1)
+  assert.equal(fieldCount(patch, 'name', '@dsh-chamber/dsh-chamber-seed-client-graph'), 1)
 })
 
 // ---------------------------------------------------------------------------
@@ -152,7 +152,7 @@ test('fieldCount counts exact scalars with boundary checks and ignores comments'
 test('insertConflict returns null for an exactly-present row and for a clean patch', () => {
   const exact = `- insert:
     - id: client-graph
-      name: '@dsh-chamber/dsh-host-client-graph'
+      name: '@dsh-chamber/dsh-chamber-seed-client-graph'
 `
   assert.equal(insertConflict(exact, CLIENT_GRAPH), null)
   assert.equal(insertConflict('# empty\n[]\n', CLIENT_GRAPH), null)
@@ -161,14 +161,14 @@ test('insertConflict returns null for an exactly-present row and for a clean pat
 
 test('insertConflict classifies duplicate identity / id-bound / name-bound', () => {
   assert.equal(
-    insertConflict(`- insert:\n    - id: client-graph\n      name: '@dsh-chamber/dsh-host-git-worktree'\n`, CLIENT_GRAPH),
+    insertConflict(`- insert:\n    - id: client-graph\n      name: '@dsh-chamber/dsh-chamber-seed-git-worktree'\n`, CLIENT_GRAPH),
     'id-bound',
   )
   assert.equal(
-    insertConflict(`- insert:\n    - id: user-row\n      name: '@dsh-chamber/dsh-host-client-graph'\n`, CLIENT_GRAPH),
+    insertConflict(`- insert:\n    - id: user-row\n      name: '@dsh-chamber/dsh-chamber-seed-client-graph'\n`, CLIENT_GRAPH),
     'name-bound',
   )
-  const duplicate = `- insert:\n    - id: client-graph\n      name: '@dsh-chamber/dsh-host-client-graph'\n    - id: client-graph\n      name: '@dsh-chamber/dsh-host-client-graph'\n`
+  const duplicate = `- insert:\n    - id: client-graph\n      name: '@dsh-chamber/dsh-chamber-seed-client-graph'\n    - id: client-graph\n      name: '@dsh-chamber/dsh-chamber-seed-client-graph'\n`
   assert.equal(insertConflict(duplicate, CLIENT_GRAPH), 'duplicate-identity')
 })
 

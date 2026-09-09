@@ -121,7 +121,7 @@ importers:
       '@deepseek-ai/dsh-client-ui-slots':
         specifier: workspace:^
         version: link:../../vendor/harness-packages/@deepseek-ai/dsh-client-ui-slots
-      '@dsh-chamber/dsh-client-ui-sidebar':
+      '@dsh-chamber/dsh-chamber-client-ui-sidebar':
         specifier: workspace:^
         version: link:../dsh-chamber-client-ui-sidebar
     devDependencies:
@@ -134,7 +134,7 @@ importers:
 
   packages/dsh-chamber-client-ui-layout:
     dependencies:
-      '@dsh-chamber/dsh-client-ui-sidebar':
+      '@dsh-chamber/dsh-chamber-client-ui-sidebar':
         specifier: workspace:^
         version: link:../dsh-chamber-client-ui-sidebar
     devDependencies:
@@ -254,10 +254,10 @@ importers:
       '@deepseek-ai/dsh-client-ui-theme':
         specifier: workspace:^
         version: link:../../vendor/harness-packages/@deepseek-ai/dsh-client-ui-theme
-      '@dsh-chamber/dsh-client-ui-settings-connections':
+      '@dsh-chamber/dsh-chamber-client-ui-settings-connections':
         specifier: workspace:^
         version: link:../dsh-chamber-client-ui-settings-connections
-      '@dsh-chamber/dsh-client-ui-sidebar':
+      '@dsh-chamber/dsh-chamber-client-ui-sidebar':
         specifier: workspace:^
         version: link:../dsh-chamber-client-ui-sidebar
       '@types/react':
@@ -288,7 +288,7 @@ importers:
       '@deepseek-ai/dsh-client-ui-slots':
         specifier: workspace:^
         version: link:../../vendor/harness-packages/@deepseek-ai/dsh-client-ui-slots
-      '@dsh-chamber/dsh-client-ui-sidebar':
+      '@dsh-chamber/dsh-chamber-client-ui-sidebar':
         specifier: workspace:^
         version: link:../dsh-chamber-client-ui-sidebar
       '@types/react':
@@ -350,7 +350,7 @@ importers:
         specifier: ^19.0.0
         version: 19.2.8
 
-  packages/dsh-chamber-host-git-worktree:
+  packages/dsh-chamber-seed-git-worktree:
     dependencies:
       '@deepseek-ai/cordis':
         specifier: workspace:^
@@ -464,7 +464,7 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3
 
-  packages/dsh-host-archive-cleanup:
+  packages/dsh-chamber-seed-archive-cleanup:
     dependencies:
       '@deepseek-ai/cordis':
         specifier: workspace:^
@@ -479,7 +479,7 @@ importers:
         specifier: workspace:^
         version: link:../../vendor/harness-packages/@deepseek-ai/dsh-workspace
 
-  packages/dsh-host-client-graph:
+  packages/dsh-chamber-seed-client-graph:
     dependencies:
       '@deepseek-ai/cordis':
         specifier: workspace:^
