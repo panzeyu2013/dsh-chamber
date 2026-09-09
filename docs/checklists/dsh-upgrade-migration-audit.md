@@ -62,7 +62,7 @@
 | **三 fork 副本** | connection `README×3`/`fixture.ts`/`src/index.ts` | OK | 与上游 alpha.2 **逐字节相等**（cmp+sha256） |
 | | connection/client-web/api-gateway `package.json` | OK | 版本 0.1.5-alpha.2 == 上游 |
 | | client-web `platform.ts`/`seed.ts` | OK | 未 seed dockkit、未加依赖、tsconfig 不镜像（登记在触点表 §2.4） |
-| **renderer** | `chamber-covered.ts`/`chamber-entry.ts` | 修复 | 53/25、dockkit 仅 factory；探针抽纯模块 + ctx 生命周期定时器 |
+| **renderer** | `chamber-covered.ts`/`chamber-entry.ts` | 修复 | 53/25（**三轮后 54/26**：`client-file-upload` 转 covered）、dockkit 仅 factory；探针抽纯模块 + ctx 生命周期定时器 |
 | | `required-extra-rows.ts` | **新增** | 纯判定 + 消息 + 常量（3 例单测） |
 | | `vendor-modules.d.ts` | 修复 | 补 `ctx.effect` 与 dockkit 模块声明 |
 | | `typert-remote-contract.test.mjs` | OK | 15 项集合与顺序与 vendor 装配一致 |
@@ -243,7 +243,7 @@ cookie 注入缺失、探针 5s 窗口在真机冷启动下是否足够。
 
 **纯净克隆（W5）**：`clone --shared` + 真实 submodule 物化后按 CI 顺序实跑——install / lockfile /
 ensure --check / 门禁（含真实 C8）/ i18n / typecheck / 5 个包测试全绿；C8 后整树 827 文件哈希不变；
-六锚、284 链接、53/25、15 契约全部复核一致。唯一红灯是 `test:runtime`（ZFS 目录 `st_size` 使
+六锚、284 链接、53/25（当时值；三轮后 54/26）、15 契约全部复核一致。唯一红灯是 `test:runtime`（ZFS 目录 `st_size` 使
 `failureBytes > 1024` 断言失败）——**第三轮已修**（fixture 的失败族文件改为 2 KiB，文件系统无关），
 该套现在本机也全绿。
 
@@ -300,3 +300,75 @@ frozen-lockfile / i18n / 触点门 C1–C9 / ensure --check / smoke 全绿。
 `provideRoot` 时序（`useResource`/`usePanelInfo`/`chamberFileApiBase`）、session v3 迁移在真实存储上
 的行为、移动端真机视觉与 `<768px` 全屏右栏下的抽屉层级、四处补丁 URL 在真机的 200/401 复验
 （本地与 gateway 来源应 200，ssh/http dsh 目标 401）、探针 5s 窗口在真机冷启动下是否足够。
+
+---
+
+## 12. 最终对比（收口，2026-09）
+
+> 对象：提交 `e778e8e`（三轮修正后）。方法：本机机械枚举（上游 web roster ↔ chamber 装配表、
+> 六锚/计数/契约实测）+ **纯净克隆全链实跑** + 两份独立只读复核（F1 文档↔代码、F2 上游面↔
+> chamber 面）。本节是「上游 v0.1.5-alpha.2 ↔ chamber 现状」的最终对照表。
+
+### 12.1 上游 web roster 全量对照（51 条 `dsh.client` 行，零遗漏）
+
+| chamber 处置 | 行数 | 行 |
+|---|---|---|
+| composite 首屏 covered factory | 16 | connection、api-remotes、api-session-controller、api-workspace-controller、locale、ui-theme、ui-session、ui-conversation、ui-approval、ui-chat、ui-workspace、ui-input-trigger、ui-commands、ui-model-selection、ui-settings、client-file-upload |
+| composite covered、非首屏（page-own 跳过 / deferred chunk） | 26 | ui-layout、ui-sidebar、ui-renderer、modules、ui-open-in-app、client-hmr、ui-settings-{general,models,plugin-inventory,plugins}、ui-brand-official、ui-attachment、ui-tool、ui-workflow-run、ui-deliverables、ui-skill、ui-subagent、ui-reference、ui-jobs、ui-goal、ui-message-feedback、ui-permission-presets、ui-agent-preset、ui-plan、ui-user-questions、ui-trajectory |
+| 保留为 host-graph extra row | 9 | session-log-export、api-workspace-files、cordis-client-runner、client-resources、ui-sidebar-right、ui-sidebar-documentpreview、ui-sidebar-files、ui-cordis、ui-schedule（上游 `disabled: true`，host 图不下发） |
+| **合计** | **51** | 无一行未处置 |
+
+`CHAMBER_COVERED_IDS` = **54** = 42 条上游 client 行（上表前两行）+ 6 个 chamber 自建 client id（layout/sidebar/git/open-in/settings-connections/settings-bridge）+ 2 个 fork 副本（`dsh-client-connection` 亦为上表行、`dsh-api-gateway` 不在 web roster）+ 5 个上游非 roster 包（`dsh-typert-registry`、`dsh-client-store`、`ui-primitives`、`ui-dockkit`、`ui-directory-picker-browse`）。`dsh-client-web` 不进 covered（shell 内核由 boot 行采纳，page-own）。
+
+### 12.2 chamber 自建物 ↔ 上游对应物
+
+| chamber 包 | 上游对应 | 关系 | 差异性质 |
+|---|---|---|---|
+| `dsh-client-connection` | `packages/client/connection` | fork 副本 | pure 16 / patched 7 / own 14 / dropped 2；补丁 = 每 entry base path（HTTP/WS/RPC 载波）+ recovery-policy/liveness 接缝 |
+| `dsh-client-web` | `packages/client/web` | fork 副本 | pure 5 / patched 9 / own 6 / dropped 2；补丁 = N-ctx boot re-base（extraRows/configureContext/异步 dispose） |
+| `dsh-api-gateway` | `packages/api/gateway`（client 半） | fork 副本 | pure 6 / patched 5 / own 2 / dropped 9；补丁 = `/api/remote.mux` 载波 base path；host 半不入本仓 |
+| `dsh-chamber-client-ui-layout` | `ui-layout` | 替换注册 | 镜像 alpha.2 槽模型 + 两项增值（sidebarWidth 共享持久化、单一 document theme 投影）+ `layoutFacts` 扩展 |
+| `dsh-chamber-client-ui-sidebar` | `ui-sidebar` | 替换注册 | 多来源会话导航 + chamberBridge + alpha.2 `brand.*`/`panellist` 孔位（CSS 与上游逐字节一致） |
+| `dsh-chamber-client-ui-settings-bridge` | `ui-settings`（SettingsRoot） | 替换注册 | 服务器下拉 + 连接入口 + 每服务器 `dsh-runtime` 段（child cordis ctx 台账与官方 sidebar children 同构） |
+| `dsh-chamber-client-ui-settings-connections` | 无 | 扩展 | 控制面连接管理（本地/远端 CRUD、systemd、日志） |
+| `dsh-chamber-client-ui-git` | 无 | 扩展 | design 08 的实例内 Git 工作树面 |
+| `dsh-chamber-client-ui-open-in` | `ui-open-in-app`（官方行 page-own 跳过） | 替换注册 | 多来源视图模型 + 桌面主进程 VS Code override（官方 client 为严格子集） |
+| `dsh-chamber-client-ui-mobile` | 无 | 扩展 | design 17 §18 移动端适配（纯 CSS 层 + DOM 锚点） |
+| `dsh-chamber-seed-{client-graph,git-worktree,archive-cleanup}` | 无 | 扩展 | 3 个宿主域（design 09 A / 08 / 24），激活探针域锁步 |
+| **vendor 补丁集** | `ui-chat` / `client-file-upload` / `ui-deliverables` | 构建期补丁（vendor 文件零写入） | 4 条 / 5 文件 / 18 锚点：同源绝对 URL 走本 entry 前缀，缺失回落上游 |
+
+### 12.3 前端可见差异（与官方前端逐项对照）
+
+| 面 | 官方行为 | chamber 行为 | 登记处 |
+|---|---|---|---|
+| 左栏 | `ui-sidebar` 单来源工作区树 | chamber sidebar（多来源会话列表 + 待办区 + 全局面板行/品牌孔位） | 05 §6、design 09 §3.2 |
+| 中列 | keyed `main` 槽 | 一致（fork 镜像） | design 06 |
+| 右栏 | `ui-sidebar-right` 官方行（额外行加载） | 一致 + 四处 URL 走本实例前缀 | design 09 §3.6、touchpoints §3 |
+| 移动端 | 无移动适配（<768px 由官方全屏右栏接管） | 触控抽屉/汉堡/遮罩（z-74/75/76，位于 `shell.overlay` z-20 栈内）+ 手机档排版；退役日志胶囊打标与自绘右栏覆盖层 | design 17 §18.4、`styles.ts` 头注 |
+| 设置 | `ui-settings` SettingsRoot | chamber 设置壳（服务器下拉 + 连接 + runtime 段），官方 section 由 deferred 簇提供 | 05 §5 |
+| open-in | 官方 `ui-open-in-app`（同源壳内自隐藏） | chamber open-in（多来源 + 桌面 override） | designs 16/20 |
+| 上传/附件 | 官方 `client-file-upload` 额外行 | 同款官方客户端（covered）+ base path 补丁 | design 09 §3.6 |
+| 主题 | 每 view 各自投影 | 单一 document 投影（active view 门控） | design 06 §4.6 |
+
+### 12.4 最终事实表（本机实测，2026-09）
+
+covered/factory **54/26**（factory ⊆ covered）· remote 装配 **15**（import 选择 == apply 挂载）·
+vendor 链接 **284** · harness.commit `b2e3b2a01258`（= submodule HEAD）· 六锚 **0.1.5-alpha.2** ·
+激活探针 **7**（4 官方 + 3 chamber 域）· 必需 extra-row 服务 **1**（`sidebarRight`）·
+vendor 补丁 **4 条 / 5 文件 / 18 锚点** · `@dsh-chamber/*` 包 **16** + 3 fork 副本 ·
+chamber entry raw **1,982,194**（warn 门 2,000,000）· main graph **1,208,064** · head CSS **245,227**。
+
+### 12.5 最终验证证据（纯净克隆，`e778e8e`）
+
+`git clone --shared` + 真实 submodule 物化后按 CI 顺序实跑：ensure vendor ✅ · frozen install ✅ ·
+lockfile 无漂移 ✅ · 门禁 C1–C9 ✅（C8 后整树 0 文件改动）· i18n ✅ · 根 typecheck ✅ ·
+test:layout/sidebar/mobile/renderer-shell/host-archive-cleanup/runtime/upgrade-tools ✅ ·
+`build:renderer`（含 vendor 补丁产物断言）✅ · `smoke` ✅。
+
+### 12.6 仍存在（有意边界，非缺陷）
+
+1. **ssh/http dsh 目标无 cookie 注入** → 四处补丁 URL 在那些来源返回 401（本地与 gateway 来源 200）；
+   属既有认证面，登记于 STATUS 与 design 17。
+2. **D5 缺口**：PluginDialog 缺专用 `update(name,version)`（其余动作已覆盖；登记为后续动作）。
+3. **实机门禁**：多来源 sleep/wake、gateway 形态回归、右栏栈与 `provideRoot` 装载时序、
+   session v3 迁移真实存储行为、移动端真机视觉、四处 URL 真机 200/401 复验。

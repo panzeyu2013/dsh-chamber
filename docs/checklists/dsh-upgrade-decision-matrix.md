@@ -682,7 +682,7 @@
 | test-fixtures/dsh-client-web.{mjs,d.mts} | upstream-align |
 | test/{api-path,carrier-assembly,client-apply,liveness-triggers,recovery-policy}.test.ts + test/fixtures/* | chamber-extension |
 | test/{boot-rows,boot-tolerance,configure-context}.test.ts + test/fixtures/boot-runtime.mjs | chamber-extension |
-| test/*.test.ts（15 个：aggregate-reconnect、aggregate-refresh、app-purged-memory-wiring、badge-count、baseline-harvest、deep-link-activation、host-graph、notification-edges、pending-open-queue、retention、shell、sidebar-scroll-sync、theme-fallback、view-transition + test-fixtures/） | chamber-extension |
+| test/*.test.ts（15 个：aggregate-reconnect、aggregate-refresh、app-purged-memory-wiring、badge-count、baseline-harvest、deep-link-activation、host-graph、notification-edges、pending-open-queue、required-extra-rows、retention、shell、sidebar-scroll-sync、theme-fallback、view-transition + test-fixtures/） | chamber-extension |
 | tsconfig.json | upstream-align |
 | tsconfig.json | chamber-extension |
 | tsconfig{,.client,.check-base,.check-client}.json | compat-patch |
