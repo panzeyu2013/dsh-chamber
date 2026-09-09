@@ -51,6 +51,41 @@ var MOBILE_CSS = `
   display: none;
 }
 
+/* ---- coarse-pointer chrome tier (width-independent) ---- */
+/* Sticky-hover tooltip bubbles (official ui-primitives Tooltip, bundle
+   component Fd) are a coarse-pointer artifact, not a narrow-viewport one: a
+   tap synthesizes the trigger's mouseenter but the mouseleave only arrives
+   with the NEXT tap elsewhere, so the delayed (200-500ms) bubble pops after
+   the tap and STAYS over the control that was just used (\u53D1\u9001/\u505C\u6B62 included).
+   The rule is therefore gated by pointer/hover ALONE \u2014 an iPad in landscape
+   is 1024px+ and still taps, while attaching a mouse flips hover to hover
+   and correctly restores hover tooltips \u2014 and is scoped to bubbles that
+   DUPLICATE an accessible name: button[aria-label] + [role="tooltip"]
+   (the component renders the bubble as the trigger's immediate next sibling;
+   [data-side] is the component's own marker \u2014 see the preserved list below).
+   Of the 31 official Tooltip sites, 27 are aria-labelled buttons (composer
+   send/stop/commands/ContextMeter, queue dock, goal bar, sidebar, message
+   feedback, workspace rows, chat copy/branch) whose aria-label names the same
+   action (3 of them phrase it slightly differently \u2014 workspace search \xD72,
+   trajectory load-earlier \u2014 same semantics; verified against the 0.1.2-rc.1
+   install, 2026-12 cross-check). Four informational bubbles are deliberately
+   NOT hidden because their trigger has no accessible duplicate: the chat
+   stats line (ui-chat:3853, ellipsized non-focusable div), the agent-preset
+   card description (ui-agent-preset:960, line-clamp:4), the trajectory
+   timeline span (ui-trajectory:6821, aria-hidden, no click path) and the
+   trajectory kind tag at \u2264620px (ui-trajectory:5554, visible label collapsed)
+   \u2014 they keep the sticky-hover quirk rather than lose content a touch user
+   cannot otherwise read. The tree's fifth role="tooltip" producer (ui-chat
+   turn-rail preview, :1735) is a non-button div WITHOUT data-side and is
+   therefore structurally outside this rule (it is aria-describedby-referenced
+   and its rail is container-hidden \u2264900px anyway). Desktop is untouched
+   (media-query scoped). */
+@media (pointer: coarse) and (hover: none) {
+  button[aria-label] + [role="tooltip"][data-side] {
+    display: none !important;
+  }
+}
+
 /* ---- touch tier: tablet/phone touch (design 17 \xA718.4.2) ---- */
 @media (max-width: 1023px) and (pointer: coarse) {
   /* Three-column frame \u2192 single column; the sidebar leaves the grid flow
@@ -294,20 +329,6 @@ var MOBILE_CSS = `
     text-size-adjust: 100%;
   }
 
-  /* Tooltip bubbles (official ui-primitives Tooltip): hover/focus chrome a
-     coarse pointer can never dismiss cleanly. A tap fires the trigger's
-     synthesized mouseenter (sticky hover) but the mouseleave only arrives
-     with the NEXT tap elsewhere \u2014 so after tapping \u53D1\u9001/\u505C\u6B62 the delayed
-     (delayMs 500) bubble pops and STAYS over the button that was just used.
-     Every official composer-bar tooltip trigger carries an aria-label that
-     duplicates the bubble text, and other role="tooltip" uses (turn-rail
-     previews) are hover-only and unreachable by touch \u2014 so the bubbles are
-     removed entirely on the touch tier. Desktop is untouched
-     (media-query scoped). */
-  [role="tooltip"] {
-    display: none !important;
-  }
-
   /* Keyboard compensation (composer.ts installKeyboardCompensation, IME
      ladder layer 5): engines that ignore 'interactive-widget=resizes-content'
      (iOS Safari, older Android WebViews) keep the LAYOUT viewport full-height
@@ -327,6 +348,23 @@ var MOBILE_CSS = `
   }
   [data-mobile-frame][data-mobile-kbd] [data-phase="active"] [data-composer-seat] {
     bottom: var(--dsh-mobile-kbd-offset, 0px) !important;
+    /* The phone-tier safe-area padding (below) is home-indicator spacing for
+       the UNCOVERED state; while the keyboard is up that inset sits behind
+       the keyboard and would add up to ~34px of dead space below the raised
+       seat (cross-check). Zeroing it cannot cause overlap: the lift comes
+       from the keyboard geometry, not from the inset. */
+    padding-bottom: 0 !important;
+  }
+
+  /* iOS focus zoom: ANY editable field below 16px auto-zooms the page on
+     focus and the page STAYS zoomed. The composer, settings fields and dialog
+     fields already carry the floor; the drawer's session search (13px,
+     ui-workspace:1187) and inline rename (14px, :531) were the gap \u2014 a
+     focus-zoom there used to leave the composer behind the keyboard for the
+     rest of the session (cross-check P1). */
+  [data-mobile-role="sidebar"] input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+  [data-mobile-role="sidebar"] textarea {
+    font-size: max(16px, var(--dsh-content-font-size, 16px)) !important;
   }
 }
 
@@ -359,8 +397,11 @@ var MOBILE_CSS = `
      + Close) stays pinned and only the section options scroll under it.
      All anchors are structural (panel [role=dialog][aria-modal] carrying
      the settings.header seat; direct nav/content children) \u2014 the :has()
-     anchor is static, no per-DOM-change re-evaluation hot path. A 100vh
-     fallback precedes 100dvh for older engines. */
+     anchor is scoped to aria-modal dialogs, so its invalidation cost stays
+     off the streaming conversation subtree (design 17 \xA718.4.4 records
+     :has() as a per-DOM-change cost; this selector only re-evaluates when a
+     modal dialog subtree changes). A 100vh fallback precedes 100dvh for
+     older engines. */
   [role="dialog"][aria-modal="true"]:has([data-slot="settings.header"]) {
     position: fixed !important;
     inset: 0 !important;
@@ -511,8 +552,11 @@ var MOBILE_CSS = `
     height: 18px;
   }
 
-  /* Scrolling body: the official padding-bottom for the composer is a
-     variable; keep it sane on short screens. */
+  /* Scrolling body: contain the pull gesture. The composer seat is a FLOW
+     child of this scroller (official rc.1: scrollBody > [session slot,
+     composerSeat]), so the official sheet declares NO padding-bottom here \u2014
+     the bottom spacing lives on the InputBar root (8px) and the message
+     column (16px), neither of which this rule touches. */
   [data-conversation-scroll] {
     overscroll-behavior-y: contain;
   }
@@ -631,6 +675,7 @@ function shouldRestamp(mutations) {
 // src/client/composer.ts
 var COMPOSER_INPUT_SELECTOR = "[data-composer-input]";
 var TOUCH_TIER_QUERY = "(max-width: 1023px) and (pointer: coarse)";
+var PHONE_TIER_QUERY = "(max-width: 768px) and (pointer: coarse)";
 function isComposerInput(target) {
   return target instanceof Element && target.closest(COMPOSER_INPUT_SELECTOR) !== null;
 }
@@ -834,10 +879,11 @@ function installImeLadder(root = document) {
     isKeyboardOpen: () => keyboardOpen
   };
 }
-var KBD_OFFSET_QUANTUM_PX = 48;
+var KBD_OFFSET_QUANTUM_PX = 16;
 var KBD_OFFSET_HEADROOM_PX = 8;
 var MOBILE_KBD_ATTR = "data-mobile-kbd";
 var MOBILE_KBD_VAR = "--dsh-mobile-kbd-offset";
+var KBD_EDITABLE_FOCUS_GRACE_MS = 1200;
 var ACTIVE_SEAT_SELECTOR = '[data-phase="active"] [data-composer-seat]';
 function kbdCoveredHeight(layoutHeight, visualHeight, visualOffsetTop) {
   return Math.max(0, layoutHeight - visualOffsetTop - visualHeight);
@@ -850,34 +896,73 @@ function isAtScrollEnd(scrollTop, scrollHeight, clientHeight, slack = 8) {
   if (clientHeight <= 0 || scrollHeight <= clientHeight) return true;
   return scrollTop + clientHeight >= scrollHeight - slack;
 }
+function shouldCompensateKeyboard(keyboardOpen, visualScale, editableFocused, composerFocused) {
+  if (!keyboardOpen || !editableFocused) return false;
+  if (visualScale > 1.01 && !composerFocused) return false;
+  return true;
+}
+function isEditableFocus(target) {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.isContentEditable) return true;
+  const tag = target.tagName;
+  return tag === "INPUT" || tag === "TEXTAREA";
+}
+function isComposerSelection() {
+  const selection = document.getSelection();
+  const anchor = selection?.anchorNode ?? null;
+  if (anchor === null) return false;
+  const element = anchor instanceof Element ? anchor : anchor.parentElement;
+  if (!(element instanceof Element)) return false;
+  return element.closest(COMPOSER_INPUT_SELECTOR) !== null || element.closest("[data-composer-seat]") !== null;
+}
 function installKeyboardCompensation(root = document) {
   const vv = window.visualViewport;
   if (vv === null) return () => {
   };
   let applied = 0;
   let armedFrame = null;
+  let lastEditableFocusAt = 0;
   const disarm = () => {
     if (armedFrame === null) return;
     armedFrame.removeAttribute(MOBILE_KBD_ATTR);
     armedFrame.style.removeProperty(MOBILE_KBD_VAR);
     armedFrame = null;
   };
+  const editableFocused = () => {
+    if (isEditableFocus(document.activeElement)) return true;
+    if (isComposerSelection()) return true;
+    return Date.now() - lastEditableFocusAt < KBD_EDITABLE_FOCUS_GRACE_MS;
+  };
+  const composerFocused = () => {
+    const active = document.activeElement;
+    if (active instanceof Element && (active.closest(COMPOSER_INPUT_SELECTOR) !== null || active.closest("[data-composer-seat]") !== null)) {
+      return true;
+    }
+    return isComposerSelection();
+  };
   const sync = () => {
     const layoutHeight = window.innerHeight;
-    const target = isKeyboardOpen(layoutHeight, vv.height) ? nextKbdOffset(kbdCoveredHeight(layoutHeight, vv.height, vv.offsetTop)) : 0;
-    if (target === applied) return;
+    const target = shouldCompensateKeyboard(
+      isKeyboardOpen(layoutHeight, vv.height),
+      vv.scale,
+      editableFocused(),
+      composerFocused()
+    ) ? nextKbdOffset(kbdCoveredHeight(layoutHeight, vv.height, vv.offsetTop)) : 0;
     if (target === 0) {
       applied = 0;
       disarm();
       return;
     }
     const seat = root.querySelector(ACTIVE_SEAT_SELECTOR);
-    if (seat === null) return;
-    const frame = seat instanceof Element ? seat.closest("[data-mobile-frame]") : null;
+    if (!(seat instanceof Element)) return;
+    const frame = seat.closest("[data-mobile-frame]");
     if (!(frame instanceof HTMLElement)) return;
-    const scroller = seat instanceof Element ? seat.closest("[data-conversation-scroll]") : null;
+    const armed = frame === armedFrame && frame.hasAttribute(MOBILE_KBD_ATTR);
+    if (armed && target === applied) return;
+    if (armedFrame !== null && armedFrame !== frame) disarm();
+    const scroller = seat.closest("[data-conversation-scroll]");
     const wasAtEnd = scroller instanceof HTMLElement && isAtScrollEnd(scroller.scrollTop, scroller.scrollHeight, scroller.clientHeight);
-    const delta = target - applied;
+    const delta = armed ? target - applied : target;
     frame.setAttribute(MOBILE_KBD_ATTR, "");
     frame.style.setProperty(MOBILE_KBD_VAR, `${target}px`);
     armedFrame = frame;
@@ -887,6 +972,13 @@ function installKeyboardCompensation(root = document) {
     }
   };
   const onViewportChange = () => sync();
+  const onFocusIn = (event) => {
+    if (isEditableFocus(event.target)) lastEditableFocusAt = Date.now();
+    sync();
+  };
+  const onFocusOut = (event) => {
+    if (isEditableFocus(event.target)) lastEditableFocusAt = Date.now();
+  };
   const onVisibility = () => {
     if (document.visibilityState === "visible") sync();
   };
@@ -894,11 +986,15 @@ function installKeyboardCompensation(root = document) {
   vv.addEventListener("resize", onViewportChange);
   vv.addEventListener("scroll", onViewportChange);
   window.addEventListener("resize", onViewportChange);
+  document.addEventListener("focusin", onFocusIn, true);
+  document.addEventListener("focusout", onFocusOut, true);
   document.addEventListener("visibilitychange", onVisibility);
   return () => {
     vv.removeEventListener("resize", onViewportChange);
     vv.removeEventListener("scroll", onViewportChange);
     window.removeEventListener("resize", onViewportChange);
+    document.removeEventListener("focusin", onFocusIn, true);
+    document.removeEventListener("focusout", onFocusOut, true);
     document.removeEventListener("visibilitychange", onVisibility);
     applied = 0;
     disarm();
@@ -1124,6 +1220,12 @@ function installDrawerTapHeal(active) {
 
 // src/client/settings-sheet.ts
 var SETTINGS_DIALOG_SELECTOR = '[role="dialog"][aria-modal="true"]';
+function isSectionChipClick(target, nav) {
+  if (target === null || nav === null) return false;
+  const chip = target.closest("button");
+  if (chip === null) return false;
+  return chip.closest("nav") === nav;
+}
 function installSettingsSheetScrollReset(active) {
   const onClick = (event) => {
     if (!active()) return;
@@ -1133,7 +1235,8 @@ function installSettingsSheetScrollReset(active) {
     if (!(dialog instanceof Element)) return;
     if (dialog.querySelector('[data-slot="settings.header"]') === null) return;
     const nav = dialog.querySelector(":scope > nav");
-    if (!(nav instanceof Element) || !nav.contains(target)) return;
+    if (!(nav instanceof Element)) return;
+    if (!isSectionChipClick(target, nav)) return;
     requestAnimationFrame(() => {
       let scroller = dialog.querySelector('[data-slot="settings.section"]')?.parentElement ?? null;
       while (scroller instanceof HTMLElement && scroller !== dialog) {
@@ -1323,6 +1426,7 @@ function apply(ctx) {
   ctx.effect(() => () => layoutSource.dispose(), "dsh-chamber: mobile layout source");
   ctx.effect(() => {
     const touchTier = window.matchMedia(TOUCH_TIER_QUERY);
+    const phoneTier = window.matchMedia(PHONE_TIER_QUERY);
     let disposers = [];
     const sync = () => {
       if (touchTier.matches) {
@@ -1339,7 +1443,7 @@ function apply(ctx) {
             installDrawerTapHeal(() => touchTier.matches),
             // Phone-tier settings sheet: switching section chips must reset
             // the shared options scroller (settings-sheet.ts).
-            installSettingsSheetScrollReset(() => touchTier.matches),
+            installSettingsSheetScrollReset(() => phoneTier.matches),
             ladder.attach()
           ];
         }

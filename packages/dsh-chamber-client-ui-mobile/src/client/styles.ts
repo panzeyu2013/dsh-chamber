@@ -31,9 +31,15 @@
  *    stacked full-screen sheet (nav strip + pinned close + scrolling
  *    options), section grids degraded, dialogs edge-capped, editable
  *    fields ≥16px (iOS focus zoom), safe-area guarantees.
- * EVERY rule lives inside a media query — desktop widths are byte-for-byte
- * untouched (the official layout must not be affected), and the hamburger
- * has an explicit `display: none` default outside the touch tier.
+ *  - `(pointer: coarse) and (hover: none)` — the width-independent CHROME
+ *    tier (cross-check round): sticky-hover tooltip bubbles are a
+ *    coarse-pointer artifact wherever the viewport is wide, so this one
+ *    cosmetic rule is gated by pointer/hover alone (an iPad in landscape is
+ *    1024px+ and still taps; attaching a mouse flips hover to `hover` and
+ *    stands the rule down).
+ * EVERY rule lives inside a media query — FINE-POINTER desktop widths are
+ * byte-for-byte untouched (the official layout must not be affected), and the
+ * hamburger has an explicit `display: none` default outside the touch tier.
  *
  * Empirical anchor notes (dsh 0.1.2-alpha.4, CDP audit):
  *  - `data-sidebar-collapsed` on the frame: present "true" when collapsed,
@@ -59,6 +65,41 @@ export const MOBILE_CSS = `
 .dsh-mobile-nav-toggle,
 .dsh-mobile-backdrop {
   display: none;
+}
+
+/* ---- coarse-pointer chrome tier (width-independent) ---- */
+/* Sticky-hover tooltip bubbles (official ui-primitives Tooltip, bundle
+   component Fd) are a coarse-pointer artifact, not a narrow-viewport one: a
+   tap synthesizes the trigger's mouseenter but the mouseleave only arrives
+   with the NEXT tap elsewhere, so the delayed (200-500ms) bubble pops after
+   the tap and STAYS over the control that was just used (发送/停止 included).
+   The rule is therefore gated by pointer/hover ALONE — an iPad in landscape
+   is 1024px+ and still taps, while attaching a mouse flips hover to hover
+   and correctly restores hover tooltips — and is scoped to bubbles that
+   DUPLICATE an accessible name: button[aria-label] + [role="tooltip"]
+   (the component renders the bubble as the trigger's immediate next sibling;
+   [data-side] is the component's own marker — see the preserved list below).
+   Of the 31 official Tooltip sites, 27 are aria-labelled buttons (composer
+   send/stop/commands/ContextMeter, queue dock, goal bar, sidebar, message
+   feedback, workspace rows, chat copy/branch) whose aria-label names the same
+   action (3 of them phrase it slightly differently — workspace search ×2,
+   trajectory load-earlier — same semantics; verified against the 0.1.2-rc.1
+   install, 2026-12 cross-check). Four informational bubbles are deliberately
+   NOT hidden because their trigger has no accessible duplicate: the chat
+   stats line (ui-chat:3853, ellipsized non-focusable div), the agent-preset
+   card description (ui-agent-preset:960, line-clamp:4), the trajectory
+   timeline span (ui-trajectory:6821, aria-hidden, no click path) and the
+   trajectory kind tag at ≤620px (ui-trajectory:5554, visible label collapsed)
+   — they keep the sticky-hover quirk rather than lose content a touch user
+   cannot otherwise read. The tree's fifth role="tooltip" producer (ui-chat
+   turn-rail preview, :1735) is a non-button div WITHOUT data-side and is
+   therefore structurally outside this rule (it is aria-describedby-referenced
+   and its rail is container-hidden ≤900px anyway). Desktop is untouched
+   (media-query scoped). */
+@media (pointer: coarse) and (hover: none) {
+  button[aria-label] + [role="tooltip"][data-side] {
+    display: none !important;
+  }
 }
 
 /* ---- touch tier: tablet/phone touch (design 17 §18.4.2) ---- */
@@ -304,20 +345,6 @@ export const MOBILE_CSS = `
     text-size-adjust: 100%;
   }
 
-  /* Tooltip bubbles (official ui-primitives Tooltip): hover/focus chrome a
-     coarse pointer can never dismiss cleanly. A tap fires the trigger's
-     synthesized mouseenter (sticky hover) but the mouseleave only arrives
-     with the NEXT tap elsewhere — so after tapping 发送/停止 the delayed
-     (delayMs 500) bubble pops and STAYS over the button that was just used.
-     Every official composer-bar tooltip trigger carries an aria-label that
-     duplicates the bubble text, and other role="tooltip" uses (turn-rail
-     previews) are hover-only and unreachable by touch — so the bubbles are
-     removed entirely on the touch tier. Desktop is untouched
-     (media-query scoped). */
-  [role="tooltip"] {
-    display: none !important;
-  }
-
   /* Keyboard compensation (composer.ts installKeyboardCompensation, IME
      ladder layer 5): engines that ignore 'interactive-widget=resizes-content'
      (iOS Safari, older Android WebViews) keep the LAYOUT viewport full-height
@@ -337,6 +364,23 @@ export const MOBILE_CSS = `
   }
   [data-mobile-frame][data-mobile-kbd] [data-phase="active"] [data-composer-seat] {
     bottom: var(--dsh-mobile-kbd-offset, 0px) !important;
+    /* The phone-tier safe-area padding (below) is home-indicator spacing for
+       the UNCOVERED state; while the keyboard is up that inset sits behind
+       the keyboard and would add up to ~34px of dead space below the raised
+       seat (cross-check). Zeroing it cannot cause overlap: the lift comes
+       from the keyboard geometry, not from the inset. */
+    padding-bottom: 0 !important;
+  }
+
+  /* iOS focus zoom: ANY editable field below 16px auto-zooms the page on
+     focus and the page STAYS zoomed. The composer, settings fields and dialog
+     fields already carry the floor; the drawer's session search (13px,
+     ui-workspace:1187) and inline rename (14px, :531) were the gap — a
+     focus-zoom there used to leave the composer behind the keyboard for the
+     rest of the session (cross-check P1). */
+  [data-mobile-role="sidebar"] input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+  [data-mobile-role="sidebar"] textarea {
+    font-size: max(16px, var(--dsh-content-font-size, 16px)) !important;
   }
 }
 
@@ -369,8 +413,11 @@ export const MOBILE_CSS = `
      + Close) stays pinned and only the section options scroll under it.
      All anchors are structural (panel [role=dialog][aria-modal] carrying
      the settings.header seat; direct nav/content children) — the :has()
-     anchor is static, no per-DOM-change re-evaluation hot path. A 100vh
-     fallback precedes 100dvh for older engines. */
+     anchor is scoped to aria-modal dialogs, so its invalidation cost stays
+     off the streaming conversation subtree (design 17 §18.4.4 records
+     :has() as a per-DOM-change cost; this selector only re-evaluates when a
+     modal dialog subtree changes). A 100vh fallback precedes 100dvh for
+     older engines. */
   [role="dialog"][aria-modal="true"]:has([data-slot="settings.header"]) {
     position: fixed !important;
     inset: 0 !important;
@@ -521,8 +568,11 @@ export const MOBILE_CSS = `
     height: 18px;
   }
 
-  /* Scrolling body: the official padding-bottom for the composer is a
-     variable; keep it sane on short screens. */
+  /* Scrolling body: contain the pull gesture. The composer seat is a FLOW
+     child of this scroller (official rc.1: scrollBody > [session slot,
+     composerSeat]), so the official sheet declares NO padding-bottom here —
+     the bottom spacing lives on the InputBar root (8px) and the message
+     column (16px), neither of which this rule touches. */
   [data-conversation-scroll] {
     overscroll-behavior-y: contain;
   }
