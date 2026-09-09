@@ -127,6 +127,7 @@ export function commitAggregatePull(
   current: InstanceAggregate | undefined,
   fallback: InstanceSnapshot,
   mounted: boolean,
+  rememberedArchiveSet?: readonly string[],
 ): InstanceAggregate {
   const currentIsFallbackDerived = isFallbackDerivedView(current)
   if (mounted && current !== undefined && current.state === 'ok' && !currentIsFallbackDerived) {
@@ -148,7 +149,21 @@ export function commitAggregatePull(
       error: null,
     }
   }
-  return { state: 'ok', ...fallback, error: null }
+  // 2026-09 §21 residual ①/③: the unary fallback carries NO archive wire
+  // source, so a degraded commit used to publish an EMPTY archive set — every
+  // archived row then rendered as an ordinary row until the next authoritative
+  // push (design 24 §20 residual ② family). When the App has already seen an
+  // AUTHORITATIVE archive set for this source (remembered across the degraded
+  // window), publish that remembered set with `archiveSetKnown` still FALSE:
+  // the sidebar filters archived rows correctly, while the archive manager
+  // keeps its honest degraded branch (provenance is not claimed).
+  const remembered = rememberedArchiveSet === undefined ? undefined : [...rememberedArchiveSet]
+  return {
+    state: 'ok',
+    ...fallback,
+    ...(remembered === undefined ? {} : { archivedSessionIds: remembered }),
+    error: null,
+  }
 }
 
 /**
@@ -173,10 +188,14 @@ export function commitAggregateFailure(mounted: boolean, errorText: string): Ins
  * NO unarchive wire, so the only host-side mutation that removes members from
  * the archived set is the cleanup purge's end-of-run removal — a strict shrink
  * is therefore the client's observable "a purge completed and those ids left
- * the set" signal. Returns the removed ids when BOTH sides are authoritative
- * (`archiveSetKnown: true`) and the previous side is an ok aggregate; [] for
- * every other combination (unknown provenance must never trigger — the unary
- * fallback's empty set is a known-degraded artifact, not a shrink fact).
+ * the set" signal. The baseline is the committed aggregate when it is
+ * archive-set-authoritative (`state==='ok' && archiveSetKnown===true`),
+ * otherwise the caller's `remembered` set — the last authoritative set the
+ * App observed for this source (2026-09 §21 F3: a shrink that completed while
+ * the committed aggregate was degraded is otherwise invisible forever). []
+ * when neither side is authoritative and for any non-authoritative `next`
+ * (unknown provenance must never trigger — the unary fallback's empty set is a
+ * known-degraded artifact, not a shrink fact).
  * Consumers (the App's mounted-push commit path) respond by requesting the
  * source's official session-list refresh: rows of the purged sessions may
  * still linger in the mounted ctx's official client summaries (they refresh
@@ -187,11 +206,20 @@ export function commitAggregateFailure(mounted: boolean, errorText: string): Ins
 export function archiveSetShrink(
   previous: InstanceAggregate | undefined,
   next: Pick<InstanceSnapshot, 'archivedSessionIds' | 'archiveSetKnown'>,
+  remembered?: readonly string[],
 ): string[] {
-  if (previous === undefined || previous.state !== 'ok' || previous.archiveSetKnown !== true) return []
   if (next.archiveSetKnown !== true) return []
+  // 2026-09 §21 residual ①: when the committed aggregate lost archive-set
+  // provenance (degraded unary view / not-connected / never pushed), the App
+  // falls back to the last AUTHORITATIVE set it observed for this source —
+  // otherwise a purge that completed while the producer's first projection was
+  // still pending (workspace baseline already post-purge) is invisible forever.
+  const previousSet = previous !== undefined && previous.state === 'ok' && previous.archiveSetKnown === true
+    ? previous.archivedSessionIds
+    : remembered
+  if (previousSet === undefined) return []
   const nextSet = new Set(next.archivedSessionIds)
-  return previous.archivedSessionIds.filter(id => !nextSet.has(id))
+  return previousSet.filter(id => !nextSet.has(id))
 }
 
 /**
@@ -230,14 +258,17 @@ export function shouldRequestSessionListRefresh(
  *   machine is self-terminating. Push-only evaluation is COMPLETE: mounted
  *   pull commits preserve the current archived set (commitAggregatePull
  *   merge) and full-fallback commits are provenance-gated (archiveSetShrink),
- *   so a pull can never first observe a shrink.
+ *   so a pull can never first observe a shrink. Since 2026-09 §21 F3 the
+ *   shrink baseline may come from the caller's remembered authoritative set
+ *   (see archiveSetShrink), which closes the degraded-view gap.
  */
 export function planSessionListRefresh(
   previous: InstanceAggregate | undefined,
   next: Pick<InstanceSnapshot, 'archivedSessionIds' | 'archiveSetKnown' | 'sessions'>,
   pending: readonly string[] | undefined,
+  remembered?: readonly string[],
 ): { request: boolean; pending: string[] } {
-  const removed = archiveSetShrink(previous, next)
+  const removed = archiveSetShrink(previous, next, remembered)
   const rowIds = new Set<string>()
   for (const session of next.sessions) rowIds.add(session.sessionId)
   const kept: string[] = []

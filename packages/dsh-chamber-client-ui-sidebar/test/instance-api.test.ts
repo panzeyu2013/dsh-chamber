@@ -155,6 +155,19 @@ test('purgeArchivedSessions decodes counts and per-item errors (partial failure 
   assert.equal(result.deletedSubagents, 2)
   assert.equal(result.skippedRunning, 1)
   assert.deepEqual(result.errors, [{ sessionId: 's2', code: 'storage', message: 'fake failure' }])
+  // The host's registry-global orphan sweep count (design 24 §20 residual ①)
+  // is absent when the host did not report it.
+  assert.equal(result.clearedOrphanMembers, undefined)
+})
+
+test('purgeArchivedSessions carries the orphan-sweep count when the host reports it', async () => {
+  const client = cleanupClient({ deletedSessions: 0, clearedOrphanMembers: 3 })
+  const result: ArchiveCleanupPurgeResult = await purgeArchivedSessions(client as never)
+  assert.equal(result.deletedSessions, 0)
+  assert.equal(result.clearedOrphanMembers, 3)
+  // A malformed/negative count degrades to absent, never to a fabricated zero.
+  const malformed = await purgeArchivedSessions(cleanupClient({ clearedOrphanMembers: -2 }) as never)
+  assert.equal(malformed.clearedOrphanMembers, undefined)
 })
 
 test('archiveCleanup business failures decode the NESTED domain carrier (security review Major-1)', async () => {

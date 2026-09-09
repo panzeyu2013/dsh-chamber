@@ -444,7 +444,8 @@ export function reconcileCompletedFacts(params: {
 
 /**
  * Project one ctx's sessions snapshot into the chamber runtime-facts report
- * (design 06 §4.2). STATELESS pass-through: every listed session carries its
+ * (design 06 §4.2). Pure pass-through (the caller may drop tombstoned ids —
+ * design 24 §21): every listed session carries its
  * live `running` bit (the App layer derives the completed-but-unread dot from
  * running→idle edges itself — it owns the active view and every open request,
  * so it is the single place that knows what "being read" means), while
@@ -1266,9 +1267,12 @@ export interface ArchivedSessionMetaRow {
  * InstanceSnapshot.sessions (the projection drops them), so the manager
  * lists top-level archived sessions only — their subagent descendants are
  * deleted together with the tree (host purge semantics). Rows sort by
- * recency (updatedAt desc; stable for ties). The unary-fallback snapshot
- * carries an EMPTY archive set (documented KNOWN DEGRADATION — no unary wire
- * source), so a fallback view yields no rows.
+ * recency (updatedAt desc; stable for ties). The unary-fallback snapshot has
+ * NO unary archive-set wire source (documented KNOWN DEGRADATION), so it
+ * carries an empty set — EXCEPT when the App substitutes its remembered
+ * authoritative set on a degraded commit (design 24 §21 F3(b)): rows are then
+ * filtered exactly as in a pushed view while `archiveSetKnown` stays false.
+ * `archiveSetKnown` remains the manager's provenance gate.
  *
  * Workspace attribution (2026 revision): each row carries the workspace that
  * accounts for it — authoritative membership first (snapshot workspace

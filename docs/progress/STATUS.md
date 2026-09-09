@@ -52,15 +52,49 @@
   冷却重发请求，行消失自终止——闭合「相邻 purge 收缩被合并窗口吞掉」与
   「刷新失败无重试」两 review 发现）+ 对话框每次 purge settle 即时请求，
   插件按实例调官方 `ctx.sessions.refresh()`（缺失/失败均 warn）；
-  design 05 §3 桥契约已同步）。剩余——实机 **gateway/远程 dsh 形态**、§20 收敛
-  执行腿（插件/App/对话框接线）与打包版 UI 目检（§19-9 偏差/待目检并入该腿，
-  含幽灵行不再浮现、刷新后无干扰）；事件发射为文档化 no-op
-  直至上游 wire，域随上游 `sessions.delete` wire 落地后退休（上游未落地）。
-  可选增强（未排期）：PluginDialog 三态行、rowError 本地化、已归档浏览区
-  （todo 12 A）；归档集合**历史无目录成员 + 收尾集合移除写失败（`archive-set`）
-  残留**收敛（「删除全部」退役后无 UI 路径可达，见 design 24 §20 残余登记
-  ①，建议收尾孤儿全集合清扫）；「归档当前活动会话→整源降级、
-  已归档行浮出」复现确认（§20 残余登记②，dev-QA 原登记于 commit 1b19712）。
+  design 05 §3 桥契约已同步）。**⚠ 该 seam 实机从未生效**——插件执行腿是
+  脱绑调用（`this` 丢失）⇒ 每次抛 TypeError 被吞掉、一个 RPC 都没发过
+  （§21 review BLOCKER 实测复现；§20 的「typecheck + 人工目检代证」正是
+  漏检原因）。**2026-09 幽灵行复现修正轮（§21）已实现**——§20 上线后实机仍
+  复现（切会话/任务完成/待办刷新时重现，发消息/约 30s/新建会话后自愈）：
+  5 个并行只读子代理扩大调查面 + 修正后四方只读 review（正确性/完整性/
+  最优性/对抗验证）确认收敛网是**一次性转移检测器**（实测：收敛后 summaries
+  再变脏的 push 两侧集合相同 ⇒ 永不重试；收缩 push 落在非权威聚合上 ⇒ 该次
+  purge 永久不可见；请求可能落在无订阅者时刻；官方 `refreshList()` 单飞可
+  复用 purge 前的在途响应且不补跑）+ 生产端签名只与自己上一次推送比较
+  ⇒「推送装回陈旧行、unary pull 清掉」稳态振荡。修正 = 生产端 **F1 墓碑
+  抑制**（权威归档集收缩 ⇒ 离开集合的 id 从上报 snapshot.sessions 与运行时
+  事实/current 中过滤；原始数组引用短路；诚实性依据 = 宿主 `clearIds` 只含
+  内容删除成功的树与无记录孤儿）+ **F2 校验式收敛链**（**方法调用**官方
+  refresh；resolve-残留/reject/hung 三类结果均有界重试；越界**一律保持抑制**
+  ——闭环复验证实「resolve 即释放」不成立：官方 refreshList 在拉取失败时也
+  resolve 且单飞会回 purge 前响应，按它释放会重开本缺陷；链单飞、attempt
+  栅栏、dispose 清定时器；状态机抽离为 `purged-tracker.ts`，生产端接线由
+  `test/producer-purged-wiring.test.ts` 9 项源码契约守卫——含方法调用
+  BLOCKER 回归闸与 probe/onRelease 接线，变异实测全部被捕获）。**2026-09 残余清零轮**：
+  ①③ = App 侧记住每来源最后**权威**归档集（`authoritativeArchiveSetRef`），
+  失去权威时作为收缩基线、降级 full 提交携带该集合但 `archiveSetKnown` 仍
+  false（侧边栏继续过滤已归档行，管理器保持降级分支）；② = 宿主每次 purge
+  收尾对**全集合**做 registry-global 孤儿清扫（双重确认 + fail-closed +
+  同一次集合写 + 独立计数 `clearedOrphanMembers?`，归档管理器 settle 文案
+  呈现，wire 见 design 24 §3/§4 步骤 4b）；④ = F2 终态改用 chamber unary
+  `session.list` 权威探针，只释放服务端仍存在的 id（resolve 不构成权威）。
+  **2026-09 二轮扫描轮**（4 视角 + 变异/探针复核）：修 F3(a) **记忆覆盖顺序**
+  （基线取覆盖前旧值，否则 F3(a) 是死代码；`test/app-purged-memory-wiring.test.ts`
+  钉住并变异验证）、F2 探针**独立看门狗**（否则探针迟到会取消下一尝试的看门狗、
+  链永久卡死）、**释放决策用探针启动时的抑制快照**（在飞期间新布的墓碑不得被
+  释放）、`onRelease` 改走 `sync()`（同步恢复运行时事实）、宿主孤儿清扫**按候选
+  逐个权威存在性校验**（官方 `persistence.inspect`，非 not-found 一律不清）、
+  枚举**并集**（query ∪ persistence，杜绝静默收窄）、**空语料/塌缩语料可信度门**；
+  宿主门禁 `test:host-archive-cleanup` 78 项（core 56 + binding 22）全绿，
+  dist 产物重构建（哈希幂等）。
+  剩余**仅测试类**：打包版实机目检、探针依赖实例就绪（fail-closed，行保持
+  抑制）、语义级接线以源码契约 + 目检代证、集合 >65,536 不清扫（容量边界）。
+  剩余——实机 **gateway/远程 dsh 形态**与打包版 UI 目检（§19-9 偏差/待目检
+  并入该腿，含幽灵行不再浮现、点击不再 `session/not-found`）；事件发射为
+  文档化 no-op 直至上游 wire，域随上游 `sessions.delete` wire 落地后退休
+  （上游未落地）。可选增强（未排期）：PluginDialog 三态行、rowError 本地化、
+  已归档浏览区（todo 12 A）、`preview` 暴露孤儿计数。
 - **移动端 Web 访问面（design 17 §18）**：P1/P1.5/适配轮已实现。剩余——实机门禁
   （§18.6：真机触控目标比例/抽屉开合/键盘遮挡/安全区/汉堡不重叠/crumbs 换行/
   Session 日志图标化/iOS 单击切换/设置手机档走查/刘海横屏/深层谱系高度等）；DOM

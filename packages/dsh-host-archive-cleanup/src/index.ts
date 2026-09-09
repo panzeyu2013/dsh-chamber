@@ -27,9 +27,20 @@
  * HOST BINDING (design 24 §10/§14, verified against the pinned vendor
  * dsh-v0.1.2-rc.1 a66e4702, 2026-12): implemented in ./binding.ts —
  *  - archived set: `workspaceRegistry.archivedSessionIds` (public getter);
- *  - session states: `sessionQuery.listSessions()` + live `sessions/agents`;
+ *  - session states: the UNION by id of `sessionQuery.listSessions()` and
+ *    `sessionPersistence.list()` + live `sessions/agents` — neither
+ *    enumeration is authoritative alone (the live-preferred corpus answers
+ *    live-only with no error when its optional persistence binding is absent;
+ *    the jsonl list skips unparseable artifacts and answers [] for an absent
+ *    root), so a narrowed leg can never make a content-bearing member look
+ *    like an orphan (2026-12 blocker fix);
  *  - content location: `sessionPersistence.locate(header)` (official
  *    absolute artifact path, no layout knowledge copied);
+ *  - content EXISTENCE (the sweep's decisive gate): `sessionPersistence.
+ *    inspect(id)` — the official single-id read resolves the artifact across
+ *    all project dirs with cwd unknown; only the official not-found carrier
+ *    may answer "no content", every other failure fails closed to "has
+ *    content" (2026-12 blocker fix);
  *  - archived-set member removal: NO public official primitive exists — the
  *    binding performs ONE single-state `setState` write INSIDE the official
  *    `enqueueOperation` chain (serialized; runtime-guarded; version-pinned;
