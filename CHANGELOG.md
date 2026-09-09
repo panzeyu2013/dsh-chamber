@@ -10,6 +10,45 @@
 
 > English: [docs/CHANGELOG.en-US.md](docs/CHANGELOG.en-US.md)
 
+## [未发布]
+
+### 修复
+
+- **移动端 Web 访问面（design 17 §18）**：四类真机反馈的复修与加固（含独立
+  交叉复核轮：6 条 lane 的代码/症状/控制面/文档/复现/最优性审查，P1 已修）。
+  - **tooltip 悬停残留**：官方 ui-primitives `Tooltip` 的 tap 会合成
+    mouseenter 而没有配对 mouseleave（sticky hover），延迟气泡（200–500ms）
+    常驻在刚用过的发送/停止键上。规则改为 `(pointer: coarse) and (hover: none)`
+    门控（宽屏触控设备同样会点按；接鼠标时 hover 翻转为 hover、自动让位）且只
+    针对**与可访问名重复**的气泡
+    （`button[aria-label] + [role="tooltip"][data-side]`，气泡是 trigger 的紧邻
+    下一兄弟且带组件自身的 `data-side` 标记）；四处信息型气泡（聊天统计行、
+    代理预设卡片描述、轨迹时间轴 span、≤620px 的轨迹 kind 标签）**刻意保留**
+    ——它们的 trigger 没有可访问的等价文本，隐藏等于让触控用户失去唯一可读
+    来源；第五处 `role="tooltip"`（轨迹 turn-rail 预览）无 `data-side`，结构性
+    排除。
+  - **键盘补偿加固**：arm 以 frame 元素为单位幂等（renderer 重挂替换 AppFrame
+    时重新打标，且旧 frame 的插件属性被清理）；新增**可编辑焦点**（focusin +
+    focusout 打点 + composer 选区兜底）守卫；**缩放策略**改为「只服务 composer」
+    ——原先的 `scale > 1.01` 一票否决会在 iOS 聚焦缩放后（抽屉 13px 搜索框是
+    常见触发源）让 composer 永久留在键盘后（复核 P1），现在缩放 + 焦点在
+    `[data-composer-seat]` 内照常补偿，非 composer 字段在缩放态仍否决；
+    同时从源头消除聚焦缩放（抽屉内输入框补 16px 底线）；量化步进 48px → 16px
+    （死区从 8–55px 收窄到 8–23px）；arm 期间归零 seat 的底部安全区 padding
+    （消除刘海机 0–34px 双重间距）；focusin 纳入重同步通道。
+  - **设置 sheet**：分区切换的滚动复位改为只认**分区 chip** 点击（判定抽为
+    纯函数并加单测），并门控在**手机档**（769–1023px 触控平板保留官方弹窗
+    几何与官方跨分区滚动行为）。
+  - **连接稳定性取证（未修复）**：gateway/控制面共用的 WS splice 拆链新增一行
+    有界日志（`WebSocket stream <id> closed (<cause>, <ms>ms)`），使**实例侧**
+    mux 心跳判死与客户端主动重连在日志中可区分（此前只有代理自身心跳有日志，
+    实例侧判死完全无痕；cause 为无括号 token，整行可解析，logger 抛异常不会
+    锁死拆链）；修复动作仍待浏览器侧 close code 取证，取证结论与候选修复见
+    `docs/progress/STATUS.md`。
+  - 测试：移动插件 **67** 用例（自 0.2.4 起 +15；本评审轮 +6——arm 决策/档位
+    常量/设置 chip 判定/粗指针 tooltip 规则与声明体/抽屉 16px 底线）、
+    control-plane `instance-proxy` 72 用例（+1，拆链日志契约）。
+
 ## [0.2.4] - 2026-09-09
 
 ### 修复

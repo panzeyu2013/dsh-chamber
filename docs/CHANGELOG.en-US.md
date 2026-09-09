@@ -10,6 +10,59 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 > 中文版: [CHANGELOG.md](../CHANGELOG.md)
 
+## [Unreleased]
+
+### Fixed
+
+- **Mobile web surface (design 17 §18)**: rework and hardening for four
+  device-reported problems, including an independent cross-check round (six
+  lanes: code, symptom coverage, control plane, docs, reproduction, optimality;
+  the P1 it found is fixed).
+  - **Sticky tooltip ghosts**: an official ui-primitives `Tooltip` tap
+    synthesizes mouseenter with no matching mouseleave (sticky hover), so the
+    delayed (200-500ms) bubble stays over the send/stop button that was just
+    used. The rule is now gated by `(pointer: coarse) and (hover: none)` (wide
+    touch devices tap too; attaching a mouse flips hover and stands the rule
+    down) and scoped to bubbles that DUPLICATE an accessible name
+    (`button[aria-label] + [role="tooltip"][data-side]` — the bubble is the
+    trigger's immediate next sibling and carries the component's own
+    `data-side`). Four informational bubbles (chat stats line, agent-preset
+    card description, trajectory timeline span, ≤620px trajectory kind tag) are
+    deliberately kept: their triggers have no accessible equivalent, so hiding
+    them would remove a touch user's only readable source; the fifth
+    `role="tooltip"` producer (the trajectory turn-rail preview) carries no
+    `data-side` and is structurally excluded.
+  - **Keyboard compensation hardening**: arming is idempotent per frame element
+    — a renderer remount that replaces the AppFrame while the keyboard stays
+    open re-stamps the new frame and cleans the old one; arming now requires an
+    editable focus (focusin + focusout stamps plus a composer-selection
+    fallback for the submit window). The ZOOM POLICY is "serve the composer
+    only": a blanket `scale > 1.01` veto would leave the composer behind the
+    keyboard for the rest of an iOS focus-zoomed session (the drawer's 13px
+    search field is a common trigger — cross-check P1), so zoom + a focused
+    composer is served while zoom + a non-composer field stays vetoed; the
+    focus-zoom trigger itself is removed at the source (the drawer's fields get
+    the 16px floor too). The offset quantum is 16px (dead band 8-23px instead
+    of 8-55px) and the seat's bottom safe-area padding is zeroed while armed
+    (0-34px of double spacing on notched iPhones).
+  - **Settings sheet**: the section-switch scroll reset now fires only on a
+    section CHIP click (the decision is a pure, unit-tested predicate) and is
+    gated on the PHONE tier (a 769-1023px touch tablet keeps the official modal
+    geometry and cross-section scroll behavior).
+  - **Connection-stability forensics (no fix yet)**: the gateway/control-plane
+    shared WS splice teardown now logs one bounded line
+    (`WebSocket stream <id> closed (<cause>, <ms>ms)`), making an INSTANCE-side
+    mux heartbeat termination distinguishable from a client-initiated reconnect
+    (previously only the proxy's own heartbeat was logged; an instance-side
+    termination left no trace). The cause is a paren-free token so the whole
+    line parses, and a throwing logger can no longer latch the teardown. The
+    fix itself still waits on browser-side close-code evidence — findings and
+    candidate fixes in `docs/progress/STATUS.md`.
+  - Tests: mobile plugin **67** cases (+15 since 0.2.4; +6 this review round —
+    the arm decision, tier constants, the settings-chip predicate, the
+    coarse-pointer tooltip rule and declaration, the drawer 16px floor),
+    control-plane `instance-proxy` 72 cases (+1, the teardown-log contract).
+
 ## [0.2.4] - 2026-09-09
 
 ### Fixed
