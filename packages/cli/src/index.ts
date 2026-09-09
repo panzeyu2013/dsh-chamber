@@ -75,7 +75,8 @@ interface ConnectionsResponse {
   connection: ConnectionRow | null
 }
 interface LogLine {
-  ts: number | string
+  /** 原始透传行没有时间戳（host-logs 原样转发），必须允许 null。 */
+  ts: number | string | null
   stream?: string
   line?: string
 }
@@ -367,7 +368,12 @@ async function hostLogsCommand(flags: FlagMap) {
       if (json) {
         console.log(JSON.stringify(entry))
       } else {
-        console.log(`[${new Date(entry?.ts).toISOString()}] [${entry?.stream ?? '?'}] ${entry?.line ?? ''}`)
+        // ts=null 曾渲染成 1970-01-01（new Date(null) === epoch）——2026-09
+        // 模块评审 D#5：无时间戳的原始行显式渲染为 `-`。
+        const stamp = entry?.ts === null || entry?.ts === undefined
+          ? '-'
+          : new Date(entry.ts).toISOString()
+        console.log(`[${stamp}] [${entry?.stream ?? '?'}] ${entry?.line ?? ''}`)
       }
     }
   }

@@ -192,7 +192,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // ④ 控制面 URL：POC_CP_URL 显式覆盖；缺省派生自 POC_PORT（sidecar-entry
         //    默认端口同源 17520）——消除 POC_PORT/POC_CP_URL 双 env 错位陷阱
         //    （A-3 审计收口；sidecar ready 帧 port 本侧记录于 onReady）。
-        let defaultCPPort = env["POC_PORT"] ?? "17520"
+        // 端口缺省：装配态 17500 / dev 17520（design 25 §3.3 A3；2026-09 模块
+        // 评审 minor：原实现两者共用 17520）。
+        let defaultCPPort = env["POC_PORT"] ?? (isPackaged ? "17500" : "17520")
         guard let rawCPURL = URL(string: env["POC_CP_URL"] ?? "http://127.0.0.1:\(defaultCPPort)/") else {
             fatalStartup("POC_CP_URL 无法解析为 URL")
         }
@@ -214,18 +216,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let bridge = BridgeClient(nodePath: nodePath, arguments: sidecarArguments, environment: childEnv)
         bridge.onReady = { [weak self] port, shellVersion in
             print("[poc] sidecar ready（port=\(port) shellVersion=\(shellVersion)）")
-            // E13：ready 后按序补发冷启动期间缓冲的深链（主线程收敛）。
-            DispatchQueue.main.async { self?.handleSidecarReady() }
+            // E13：ready 后按序补发冷启动期间缓冲的深链（主线程收敛）；
+            // 同时放开 A 桥 origin 门（ready 帧前一律拒绝）。
+            DispatchQueue.main.async {
+                self?.mainWindowController?.noteSidecarReady()
+                self?.handleSidecarReady()
+            }
         }
         let controller = MainWindowController(cpURL: cpURL, bridge: bridge)
         controller.closeDelegate = self
         mainWindowController = controller
-        // W-19/20 宿主腿接线：legs 以主窗为 UI 上下文（canShowUI = 应用激活态
-        // 的窗口存在性）；BridgeClient 默认表在 legs 报 unimplemented/
-        // ui-unavailable 前缀时回落（POC 无宿主实现不挂起）。实机 GUI 验收
-        // 属 M3 集成硬门禁（SwiftEdgeHostLegs 各腿 TODO 注释）。
-        let legs = SwiftEdgeHostLegs(config: .init(canShowUI: { [weak controller] in
-            controller?.window?.isVisible == true
+        // W-19/20 宿主腿接线：canShowUI = **有 app bundle（可呈现 UI/通知）**，
+        // 不再以窗口可见性为门（2026-09 模块评审 major：Electron 的通知面没有
+        // 可见性门，hide-to-tray 后 orderOut 会让通知被误判 ui-unavailable）。
+        // 需要窗口的腿（focusMainWindow/setBadge/setKeepAwake）各自经
+        // mainWindowProvider 守卫；headless（swift run 无 bundle）仍诚实降级。
+        let legs = SwiftEdgeHostLegs(config: .init(canShowUI: {
+            Bundle.main.bundleIdentifier != nil
         }))
         legs.mainWindowProvider = { [weak controller] in controller?.window }
         bridge.edgeHostLegs = legs

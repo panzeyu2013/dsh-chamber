@@ -244,7 +244,9 @@ test('W-13 ① info 真实载荷', async () => {
   assert.equal(r.ok, true)
   const result = r.result as Record<string, unknown>
   assert.equal(typeof result.controlPlaneUrl, 'string')
-  assert.equal(result.platform, 'darwin')
+  // 平台断言必须跟随运行平台（2026-09 模块评审 major #2：硬写 darwin 会让
+  // ubuntu 腿的 test:desktop 直接红）。
+  assert.equal(result.platform, process.platform)
   assert.equal(typeof result.version, 'string')
 })
 

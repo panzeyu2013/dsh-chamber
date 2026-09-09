@@ -59,6 +59,7 @@
     "test:control-plane": "pnpm --filter @dsh-chamber/control-plane run test",
     "typecheck:gateway": "tsc -p packages/gateway/tsconfig.json --noEmit",
     "test:desktop": "pnpm --filter @dsh-chamber/desktop run test",
+    "test:macos": "pnpm --filter @dsh-chamber/desktop run test:macos",
     "test:runtime": "pnpm --filter @dsh-chamber/dsh-runtime run test",
     "test:sidebar": "pnpm --filter @dsh-chamber/dsh-client-ui-sidebar run test",
     "test:open-in": "pnpm --filter @dsh-chamber/dsh-client-ui-open-in run test",

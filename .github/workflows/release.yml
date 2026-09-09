@@ -839,6 +839,10 @@ jobs:
           pnpm run build:host-packages
           pnpm run build:renderer
           pnpm --filter @dsh-chamber/desktop run build:control-plane
+          # 内置 dsh 工作区必须先物化（.gitignore 只提交 vendor/dsh/pnpm-lock.yaml，
+          # package.json + node_modules 由 bundle-dsh.mjs 生成；否则 build-sidecar
+          # 只 warn、下面 verify 的 test -f 直接失败——2026-09 模块评审 major）。
+          pnpm --filter @dsh-chamber/desktop run bundle:dsh
           # W-23：真实 Node 捆绑（官方 tar.gz + SHA-256 校验；命名必须是 node）。
           pnpm run build:sidecar
           if [[ -n "${KEYCHAIN_FILE:-}" ]]; then

@@ -458,7 +458,18 @@ public final class SwiftEdgeHostLegs {
         guard config.canShowUI() else {
             return (nil, Self.uiUnavailablePrefix + method)
         }
-        return body()
+        // 主线程 hop（2026-09 模块评审 major）：本腿由 BridgeClient 的**管道
+        // 读取线程**调用，而 body 里全是 AppKit（makeKeyAndOrderFront /
+        // NSApp.activate / dockTile）。AppKit 只允许主线程访问——统一在此收敛，
+        // 腿实现不必各自记得 hop。
+        if Thread.isMainThread {
+            return body()
+        }
+        var outcome: (result: AnyCodable?, error: String?) = (nil, nil)
+        DispatchQueue.main.sync {
+            outcome = body()
+        }
+        return outcome
     }
 
     // MARK: - launchApp 的 vscode 深链 URL 构造（纯逻辑，单测直测）

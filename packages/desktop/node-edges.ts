@@ -146,11 +146,15 @@ export type NodeEdges = HostEdges & {
 
 export function createNodeEdges(deps: NodeEdgesDeps): NodeEdges {
   // ---- 同步门缓存（v1 近似；hostFacts 刷新） ----
+  // 保守默认（2026-09 模块评审 low #4）：**交付门**相关事实在收到 hostFacts
+  // 之前按「未知 = 不可交付」处理（Electron 无窗即 false 的同向语义），
+  // 否则 ready 前的 rendererPush 会被当成已投递。能力类事实（托盘/角标/
+  // 通知支持）保持乐观默认——它们描述平台能力而非实时存活。
   const facts = {
     focused: deps.hostFacts?.focused ?? false,
-    mainWindowAlive: deps.hostFacts?.mainWindowAlive ?? true,
+    mainWindowAlive: deps.hostFacts?.mainWindowAlive ?? false,
     webViewLoading: deps.hostFacts?.webViewLoading ?? false,
-    webViewContentAlive: deps.hostFacts?.webViewContentAlive ?? true,
+    webViewContentAlive: deps.hostFacts?.webViewContentAlive ?? false,
     trayAvailable: deps.hostFacts?.trayAvailable ?? true,
     badgeCountApiAvailable: deps.hostFacts?.badgeCountApiAvailable ?? true,
     notificationSupported: deps.hostFacts?.notificationSupported ?? true,
@@ -170,8 +174,13 @@ export function createNodeEdges(deps: NodeEdgesDeps): NodeEdges {
 
   const edges: HostEdges = {
     rendererPush(channel, payload) {
+      // 交付信号必须诚实（2026-09 模块评审 medium #1）：electron-edges 在无窗
+      // 时返回 false，core 据此 hold/rollback/复位 ready 位；Swift flavor 原先
+      // 恒 true，会让通知打开/深链/唤醒事件静默丢失。这里按「渲染器存活」事实
+      // 返回（未收到 hostFacts 前为 false）。
+      const delivered = facts.mainWindowAlive && facts.webViewContentAlive
       deps.sendNotify('rendererPush', { channel, payload: jsonSafe(payload) })
-      return true
+      return delivered
     },
 
     showNativeNotification(spec: NativeNotificationSpec, clickRoute) {

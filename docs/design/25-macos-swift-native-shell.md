@@ -193,8 +193,11 @@ dsh-chamber desktop 的 Electron 使用面已收敛为薄壳（AGENTS.md 运行�
   （须命名为 node，spawn-dsh 纯 Node 分支，§4.3）。
 - **资源路径注入**：Swift 无 Electron 的 isPackaged/resourcesPath 概念——
   sidecar-entry 通过参数注入 .app 内路径：builtin dsh workspace
-  （Resources/sidecar/vendor/dsh）、webDistDir（Resources/sidecar/dist/web）、
-  三个宿主包 sourceDir、pnpm（Resources/sidecar/pnpm）。对应 main.ts 中
+  （Resources/sidecar/vendor/dsh）、webDistDir（**Resources/dist/web**，由
+  AppDelegate 按候选解析：resourceURL/dist/web → sidecar/dist/web）、
+  三个宿主包 sourceDir（Resources/sidecar/dist/<pkg>）、pnpm
+  （Resources/sidecar/pnpm；sidecar-ctx 依次探测 moduleDir/pnpm →
+  moduleDir/../pnpm → dev node_modules/pnpm）。对应 main.ts 中
   ≈15 处直拼点（350-359/766/1813/1819-1827/4026-4028 等）的 P1 参数化
   （§4.1 B1/B13）。
 
@@ -461,10 +464,10 @@ interface HostEdges {
   `bridge-manifest.test.ts`：生成物 == 提交物 + **通道数守恒（68 = 60+8）+
   无死键断言**（每个 IPC_CHANNELS 常量至少被 main 侧使用一次，B12/E8）——
   三侧（main/preload/Swift+shim）永不漂移。
-- P1 配套：`ipc-surface-mirror.test.ts` 的 `MAIN_SIDE_FILES=['main.ts']`
-  （:527）扩为新的注册者文件集（['main.ts','shell-core.ts']），badge pin
-  断言等源码文本锚点随迁（renderer-trust.test.ts:106-141、
-  transport-manager.test.ts:2185-2188 同族）。
+- P1 配套（**已落地**）：`ipc-surface-mirror.test.ts:248` 的
+  `MAIN_SIDE_FILES = ['main.ts', 'shell-core.ts', 'electron-edges.ts']` 覆盖
+  三处注册者文件，badge pin 断言等源码文本锚点随之（renderer-trust.test.ts、
+  transport-manager.test.ts 同族）。
 
 ### 4.5 通知点击与深链去重语义（design 19 §3.3 / 16 §4.2 的宿主移植）
 
@@ -529,12 +532,12 @@ interface HostEdges {
 - 旧版 Electron 产物兼容：`*.corrupt` / `*.unbound-*` 保留物（A13）在 Swift
   首启前决定处置（预期：沿现有语义保留禁用，不主动清理）。
 - 验证项 **U1**（实机）：确认 Swift 计算的根与 Electron 打包实根一致
-  （编号避开 §5 E 表，A9）。**实施现状（2026-09 审计登记）**：`AppDelegate`
-  的缺省仍是 `POC_USER_DATA ?? ~/Library/Application Support/dsh-chamber-poc-dev`
-  （dev 与装配态同一分支），即**打包态默认并不与 Electron 同根**，跨 flavor
-  互斥锁在默认配置下各锁各的目录；U1 因此仍未闭合。同根缺省与
-  `Bundle.main.resourceURL` 相对解析（sidecar/node/web-dist）一并列入
-  「打包态默认路径」待办（STATUS/todo 已登记）。
+  （编号避开 §5 E 表，A9）。**实施现状（2026-09 模块评审更新）**：`PackagedLayout`
+  已按 `isPackaged` 解析——装配态 userData = `~/Library/Application Support/dsh-chamber`
+  （与 Electron `app.getPath('userData')` 同根），node/sidecar/vendor-dsh/web-dist
+  全部 bundle-relative；`POC_*` 环境变量仍优先，dev 态保持
+  `dsh-chamber-poc-dev` 隔离。**代码侧已闭合**（`PackagedLayoutTests` 6 例 +
+  打包态 `.app` 实测），残余仅为实机双 flavor 并发互斥的 **C2 实机门禁**。
 
 ### 6.2 bundle id 与双 flavor 共存
 
@@ -557,8 +560,6 @@ interface HostEdges {
     （O_CREAT|O_NOFOLLOW，0600，原子创建）；fd 常驻进程寿命，进程死亡内核
     自动释放——天然免 stale；
   - 文件内 pid/启动时间只作诊断，不作仲裁；
-  - **Electron 版已落地该锁**（2026-09：`packages/desktop/chamber-lock.ts`，
-    Darwin `O_EXLOCK|O_NONBLOCK`；非 darwin 显式 unsupported——见下方条目）；
   - **防自锁陷阱**：sidecar"复验持锁"若在新 fd 上再 flock 会与 Swift 首锁
     互斥（flock 按 open file description 计）——sidecar 复验 = 读锁文件记录
     校验父 pid，**绝不二次 flock**。**复验语义（2026-09 实施定稿）**：记录里的
@@ -567,14 +568,14 @@ interface HostEdges {
     `record.pid ∉ {self, ppid}` **且**该 pid 仍存活才是「另一 flavor/实例占用」
     → loud `exit 3`（Swift Supervisor 对 exit 3 走 fatal、不重启）；
     `record.pid` 已死 = 陈旧记录（flock 随进程死亡由内核释放）→ 放行。
-  - 锁文件与秘密文件同纪律（0600、no-follow、原子创建）；新增 .lock 需随
-    立项登记进 AGENTS/STATUS 秘密文件纪律清单（随 D1 立项登记）。
+  - 锁文件与秘密文件同纪律（0600、no-follow、原子创建）；已随立项登记进
+    `AGENTS.md` 秘密文件纪律清单（AGENTS.md 锁纪律句）。
   - **Electron 侧同锁已落地（2026-09，`packages/desktop/chamber-lock.ts`）**：
     Node 没有 flock API，但 Darwin `open(2)` 的 `O_EXLOCK|O_NONBLOCK` 可经
     `fs.open` 的数值 flags 使用（实测：同进程第二次 open 得 EAGAIN、close 后
     可重取）——Electron main 在 whenReady 首步取同一把锁，失败 fail-closed
     弹窗退出（`dialog.showErrorBox` + `app.exit(1)`），`app.on('quit')` 释放
-    （清理链 settle 之后）。
+    （清理链 settle 之后；2026-09 二审把释放点从 will-quit 迁到 quit）。
     **平台范围（有意收窄）**：`O_EXLOCK` 为 BSD/Darwin 专有，Linux 需 flock(2)
     （Node 未导出）、Windows 无等价物；Swift flavor 仅 macOS 存在，故非 darwin
     返回 `unsupported` 并放行（调用方 loud 记录该范围，绝不假装已互斥）。
@@ -650,8 +651,8 @@ interface HostEdges {
 
 - §4.1 拆分 + HostEdges 全量定义（v2 字段集）；Electron 版跑全量测试作为
   门禁；core 对 electron 的 import 零容忍（CI lint）。
-- **3 个测试把 main.ts/preload.cts 当源码文本断言**（ipc-surface-mirror
-  :527 MAIN_SIDE_FILES、renderer-trust.test.ts:106-141、
+- **3 个测试把 main.ts/preload.cts 当源码文本断言**（ipc-surface-mirror.test.ts:248
+  MAIN_SIDE_FILES、renderer-trust.test.ts:106-141、
   transport-manager.test.ts:2185-2188）→ 锚点随处理器迁移 shell-core.ts
   （属搬运账内工作，非"测试原样绿"）；**control-plane-module.ts:39-58
   isPackaged 门 flavor 化**（纯 Node 恒判非打包 → 走 workspace TS 源码

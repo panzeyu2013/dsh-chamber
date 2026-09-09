@@ -95,6 +95,27 @@ final class TrustGuardTests: XCTestCase {
         XCTAssertEqual(TrustGuard.effectivePort(scheme: "http", port: 8080), 8080)
     }
 
+    /// 新窗外链判定（镜像 renderer-trust.ts isExternalLinkUrl）：只有 http(s)
+    /// 与 mailto 交系统；同源 http(s) 不算外链；其他 scheme 一律拒绝。
+    func testExternalLinkPredicate() {
+        XCTAssertTrue(TrustGuard.isExternalLink("https://example.com/x", expectedOrigin: origin))
+        XCTAssertTrue(TrustGuard.isExternalLink("http://example.com/", expectedOrigin: origin))
+        XCTAssertTrue(TrustGuard.isExternalLink("mailto:a@b.com", expectedOrigin: origin))
+        // 同源 http(s) 不算外链（在浏览器里只会得到无 shim 的重复壳）
+        XCTAssertFalse(TrustGuard.isExternalLink("http://127.0.0.1:17520/page", expectedOrigin: origin))
+        // 其他 scheme 与不可解析值
+        XCTAssertFalse(TrustGuard.isExternalLink("file:///etc/passwd", expectedOrigin: origin))
+        XCTAssertFalse(TrustGuard.isExternalLink("javascript:alert(1)", expectedOrigin: origin))
+        XCTAssertFalse(TrustGuard.isExternalLink("data:text/html,x", expectedOrigin: origin))
+        XCTAssertFalse(TrustGuard.isExternalLink("dsh-chamber://open-vscode", expectedOrigin: origin))
+        XCTAssertFalse(TrustGuard.isExternalLink("mailto:", expectedOrigin: origin))
+        XCTAssertFalse(TrustGuard.isExternalLink(nil, expectedOrigin: origin))
+        XCTAssertFalse(TrustGuard.isExternalLink("", expectedOrigin: origin))
+        XCTAssertFalse(TrustGuard.isExternalLink("not a url", expectedOrigin: origin))
+        // 无期望 origin 时 http(s) 一律视为外链
+        XCTAssertTrue(TrustGuard.isExternalLink("http://127.0.0.1:17520/", expectedOrigin: nil))
+    }
+
     func testMethodWhitelist() {
         let wl: Set<String> = ["dsh-chamber:info", "desktop_ssh_instances_get"]
         XCTAssertTrue(TrustGuard.isAllowedMethod("dsh-chamber:info", whitelist: wl))

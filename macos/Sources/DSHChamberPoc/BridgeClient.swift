@@ -35,10 +35,11 @@
 //   - id 自 1 起单调递增（NSLock 保护）；sidecar 原样 echo，pending 字典
 //     以 id 为键把响应配对回发起时的 continuation——**id 的所有权 = pending
 //     字典条目**：谁在锁内 removeValue 成功，谁负责 resume（恰好一次）。
-//   - 写帧 = 调用线程持锁直写（串行、天然有序、单帧原子 ≤4 MiB）。POC 帧
-//     率低且 sidecar 的 readline 持续消费，背压罕见；代价是极端背压可能
-//     阻塞调用线程——P1 换专用串行写队列 + stop 前显式排空（design 25
-//     §3.3 退出链 5s 硬顶前需可证明无 in-flight 写）。POC 注释声明。
+//   - 写帧 = **writeLock 串行**（2026-09 模块评审 minor：此前实际是锁外写，
+//     并发 invoke / edge 应答可在同一 FileHandle 上交错；现由独立 writeLock
+//     包住每次 write，单帧 ≤4 MiB）。帧率低、sidecar readline 持续消费，
+//     背压罕见；极端背压会阻塞调用线程——P1 换专用串行写队列 + stop 前显式
+//     排空（design 25 §3.3 退出链 5s 硬顶前需可证明无 in-flight 写）。
 //   - onEvent / 响应分发在**管道读取线程**（Foundation 内部队列，非主线程）
 //     回调；事件/结果只读不改状态，调用方负责切回主线程再碰 UI/WKWebView
 //     （MainWindowController 以 Task { @MainActor } 收敛，MessageHandler
@@ -178,6 +179,8 @@ public final class BridgeClient {
     // MARK: - 状态（除出站面回调属性外全部经 lock 保护）
 
     private let lock = NSLock()
+    /// 写串行锁（管道写不与其他帧交错；见文件头「写帧」注释）。
+    private let writeLock = NSLock()
     private var process: Process?
     private var inputPipe: Pipe?        // 子进程 stdin 写端
     private var outputPipe: Pipe?       // 子进程 stdout 读端（协议流）
@@ -773,6 +776,8 @@ public final class BridgeClient {
             return
         }
         do {
+            writeLock.lock()
+            defer { writeLock.unlock() }
             try input?.write(contentsOf: data)
         } catch {
             log("edgeId=\(edgeId) 应答写失败：\(error.localizedDescription)")
@@ -823,6 +828,8 @@ public final class BridgeClient {
             }
 
             do {
+                writeLock.lock()
+                defer { writeLock.unlock() }
                 try input.write(contentsOf: data)
             } catch {
                 // 写失败（子进程已亡 / 管道破裂等）：回滚登记。回滚结果决定

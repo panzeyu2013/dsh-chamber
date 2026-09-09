@@ -230,16 +230,24 @@ test('⑦ subscribe 推送与退订；start() 不改状态', async () => {
 
 test('⑧ 渲染器侧 known reason 映射与本地化键锁步（跨包文本断言）', () => {
   const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
+  // 字面量已抽到纯模块 blocked-reason.ts（.tsx 无法被 node:test 直接 import；
+  // 2026-09 模块评审 E#1 的重构），此处按新落位断言。
+  const reasonModule = readFileSync(
+    path.join(repoRoot, 'packages/dsh-chamber-client-ui-settings-bridge/src/client/blocked-reason.ts'),
+    'utf8')
+  assert.ok(
+    reasonModule.includes(`export const NATIVE_SHELL_BLOCKED_REASON = '${NATIVE_SHELL_INSTALL_BLOCKED_REASON}'`),
+    'blocked-reason.ts 的 known reason 字面量必须与 update-headless.ts 的常量逐字一致')
   const section = readFileSync(
     path.join(repoRoot, 'packages/dsh-chamber-client-ui-settings-bridge/src/client/UpdateSection.tsx'),
     'utf8')
   assert.ok(
-    section.includes(`const NATIVE_SHELL_BLOCKED_REASON = '${NATIVE_SHELL_INSTALL_BLOCKED_REASON}'`),
-    'UpdateSection 的 known reason 字面量必须与 update-headless.ts 的常量逐字一致')
-  assert.ok(
     section.includes("t('updateAvailableBlockedNativeShell'")
       && section.includes("t('updateInstallBlockedNativeShell'"),
     'available/downloaded 两条 blocked 行都应使用原生壳本地化键')
+  assert.ok(
+    section.includes("from './blocked-reason.ts'"),
+    'UpdateSection 必须从 blocked-reason.ts 取分类/字面量（单一来源）')
   const locales = readFileSync(
     path.join(repoRoot, 'packages/dsh-chamber-client-ui-settings-bridge/src/locales.ts'),
     'utf8')

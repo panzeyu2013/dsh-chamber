@@ -267,6 +267,13 @@ export interface PlaneHandle {
   /** Live port of the managed local host; null while it is not serving. */
   readonly localDshPort: number | null
   readonly instanceId: string
+  /**
+   * The activation-probe domains backed by the host packages **actually
+   * seeded** into the local profile (2026-09 模块评审 D#2）：desktop 两个
+   * owner 在启动探针时按此派生期望集，避免 host 包缺失时仍按「全 3 域」做
+   * exact-set 裁决而误判激活失败并回滚。
+   */
+  readonly seededProbeDomains: readonly string[]
   /** The managed local dsh host's port, or null when not ready (design 17
    * §2.1 改动①: exposed for the gateway-proxy's single-target resolution). */
   getLocalDshPort(): number | null
@@ -364,6 +371,8 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
   // populated the synced copies replace the packaged defaults — the base
   // rows exist only to preserve the legacy desktop shape (no
   // extraSeedEntries → no shadowing).
+  /** 最近一次 seed 实际落地的探针域（seed 时刷新；见 PlaneHandle 注释）。 */
+  let seededProbeDomains: readonly string[] = []
   const seedEntries = (): SeedEntry[] => {
     const byId = new Map<string, SeedEntry>()
     for (const entry of [
@@ -464,7 +473,9 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
         seedFiles: entry.seedFiles,
         insert: entry.insert,
         packageName: entry.insert.name,
+        probeDomains: entry.probeDomains ?? [],
       }))
+    seededProbeDomains = available.flatMap(entry => entry.probeDomains)
 
     if (available.length === 0) return null
     // Preflight every declared package before writing any of them. A damaged
@@ -1019,6 +1030,10 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
 
     refreshLocalExposure() {
       publishPublicLocalSnapshot()
+    },
+
+    get seededProbeDomains() {
+      return seededProbeDomains
     },
 
     /** Subscribe to the authoritative local-host lifecycle stream. */

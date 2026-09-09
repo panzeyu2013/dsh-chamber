@@ -71,6 +71,8 @@ export const zh = {
   // 原生壳（macOS Swift flavor）blocked-available 行：原因不是签名，而是壳本身
   // 没有自动安装腿（design 25 §7 / update-headless.ts 的 blocked reason）。
   updateAvailableBlockedNativeShell: '新版本 {version} 可用，原生壳不支持自动安装，请前往下载页手动安装',
+  // 未知阻塞原因（诚实透传，不套用「未配置签名」文案；2026-09 模块评审 E#1）。
+  updateAvailableBlockedUnknown: '新版本 {version} 可用，自动安装不可用（{reason}），请手动安装',
   updateAction: '更新',
   updateDownloading: '正在下载更新… {percent}%',
   updateDownloaded: '已下载，退出时安装',
@@ -309,6 +311,8 @@ export const en: Record<keyof typeof zh, string> = {
   // Native-shell (macOS Swift flavor) blocked-available line: the block is the
   // shell's missing auto-install leg, not signing (design 25 §7).
   updateAvailableBlockedNativeShell: 'New version {version} available — the native shell cannot auto-install; install manually from the download page',
+  // Unknown blocked reason (passed through verbatim — never claims a missing signature).
+  updateAvailableBlockedUnknown: 'New version {version} available — auto-install unavailable ({reason}); install manually',
   updateAction: 'Update',
   updateDownloading: 'Downloading update… {percent}%',
   updateDownloaded: 'Downloaded — will install on quit',

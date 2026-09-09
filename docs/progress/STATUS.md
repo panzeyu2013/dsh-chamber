@@ -287,8 +287,8 @@
    → 装配态参数 + `DSH_CHAMBER_SIDECAR_COMPILED=1` → 目录锁 + Supervisor →
    `sidecar ready（shellVersion=0.2.2）` → 窗口显示 + 页面 invoke 1..10；
    ad-hoc 签名 + 208 密封资源校验通过。
-   实测：`swift build` 0 告警、`swift test` **108/108**、`test:desktop` **953/953**、
-   `test:macos` **30/30**（darwin 锁 + 两打包脚本；ubuntu 腿不跑）、
+   实测：`swift build` 0 告警、`swift test` **115/115**、`test:desktop` **956/956**、
+   `test:macos` **31/31**（darwin 锁 + 两打包脚本；ubuntu 腿不跑）、
    `typecheck` 0、`verify:i18n` 无漂移。**W-26 CI/release 腿已落地**：
    `ci.yml` `test-macos`（swift build/test + 桥面锁步三件 + 打包 dry-run）；
    `release.yml` `build-swift`（与 Electron mac 腿同 tag 并行、`-native` 命名、
@@ -319,8 +319,8 @@
    sidecar-stdio 逐通道具体断言 + 深链端到端（core→宿主腿）+
    `chamber-lock-wiring.test.ts`（main.ts 锁接线源码断言）+ update-headless
    feed 三态（全 beta/全 draft → up-to-date，仅「无可解析版本」才 error）+
-   pin 守卫补 `@ref` 缺失判定。门禁：`swift test` **108/108**（0 skip）、
-   `test:desktop` **953/953**、`test:macos` **30/30**、typecheck 0、
+   pin 守卫补 `@ref` 缺失判定。门禁：`swift test` **115/115**（0 skip）、
+   `test:desktop` **956/956**、`test:macos` **31/31**、typecheck 0、
    verify:i18n 无漂移、build:preload 成功、verify:workflows OK、
    test:release-workflow 4/4、swift build 0 源告警。**三审后剩余**：E19 三处
    未声明偏离、默认端口折叠/userinfo 边界、真实 Apple 凭据公证、实机 G 门、
@@ -328,7 +328,7 @@
    **四审收口（2026-09-09 续）**：E19 三处偏离与 Electron 对齐（giveUp 非永久、
    排定重载可取消、退出期抑制）+ TrustGuard 边界（默认端口折叠、expectedOrigin
    userinfo 拒绝）+ chamber-lock 收紧 0o7777（setuid/sticky）。门禁：
-   `swift test` **108/108**、`test:desktop` **953/953**、`test:macos` **30/30**、
+   `swift test` **115/115**、`test:desktop` **956/956**、`test:macos` **31/31**、
    其余全绿。**剩余 = 外部阻断**：Apple 凭据公证、实机 G 门、真实 Node 归档
    下载与 runner 实跑。
    **第二轮验收（2026-09-09，3 并发 subagents ×2 批 + 自验）**：第一批（Swift/JS/
@@ -361,11 +361,19 @@
    成员名/解包基名检查）、HostInboundMethod 仅 4/7（补齐 7 条 + 锁步断言）、
    `drainDeepLinkLaunches` 缺调用、chamber-lock 不收紧既有权限、文档漂移
    5 处（Info.plist 注释/design §6.1 同根声称/§6.3 旧锁条目/AGENTS 纪律措辞/
-   测试头注释）。**仍开放（登记）**：打包态默认路径与 userData 同根（§6.1 U1）、
-   vendor-dsh/pnpm 装配、sidecar 侧 core 汇的端到端断言、Supervisor
-   launch/终止竞态与 E19 三处未声明偏离、退出码分级、hostFacts 重启簿记、
-   `.terminateLater` 已确认分支、深链 isReady 重启复位、策略测试 dry-run 门
-   断言（已加，见下）、pin 守卫漏无 @ref 行。
+   测试头注释）。**六模块评审（2026-09-09，3 并发 ×2 批）**：A Swift 壳 / B Electron-free 核心 /
+   C 打包·CI·发布 / D 控制面·网关·运行时 / E 前端与插件 / F 文档台账
+   —— 六域均 `pass-with-issues`、无 fail。评审发现并**已修**：A 4 major（隐藏
+   窗口无法发通知、`_blank` 外链静默丢弃、宿主腿跨线程碰 AppKit、MessageHandler
+   零测试→补 6 例并暴露 2 个真实崩溃面）+ B 3 medium（rendererPush 恒 true、
+   electron-free 无传递闭包、legacy 启动门绕过）+ C 2 major（release 缺
+   bundle:dsh、ubuntu 腿 darwin 硬断言）+ D 2 medium（loopback 不变量无测试、
+   两 owner 宿主域期望集不对称）+ E 2 low（未知阻塞原因文案不诚实、无插件内
+   锁步测试）+ F 10 项文档漂移。**仍开放（登记）**：Node 归档 SHA 未在仓库固定
+   （需联网取摘要）；CLI 命令面（serve/status/connections/host logs）无测试；
+   两 owner `activationFacts` 排除规则分歧未锁定；Swift `print` 无日志分级；
+   `QuitGate.reset`/`chamber-bridge.stub.js` 死代码；真实 Apple 凭据公证、
+   实机 G 门、runner 实跑。
 - **起始端口偏移**：本地默认 17510、控制面默认 17500；当前固定起始端口 + P+1 重试 +
   记录仲裁，是否开放配置仍未决。
 - **trusted-host 自定义 Host**：当前反代 Host 与实例自身 `127.0.0.1:<port>` 一致；

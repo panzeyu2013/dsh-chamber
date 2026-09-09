@@ -1497,6 +1497,8 @@ export async function buildHeadlessCtx(
         dshHome: localDshHome,
         call,
         signal,
+        // 模块评审 D#2：与 Electron 侧同源——期望集按实际 seed 的宿主域派生。
+        hostDomainNames: planeRef.current?.seededProbeDomains ?? [],
       })
     } finally {
       runtimeTransactionWorkspace = null

@@ -68,6 +68,7 @@ function config(stateDir: string): GatewayConfig {
 function fakePlane(overrides: Partial<PlaneHandle> = {}): PlaneHandle & { _state: { connectionState: string; restartError: string | null } } {
   const state = { connectionState: 'stopped', restartError: null as string | null }
   return {
+    seededProbeDomains: [],
     start: async () => {},
     startLocal: async () => {},
     stop: async () => {},

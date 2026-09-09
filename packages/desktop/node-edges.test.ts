@@ -108,21 +108,30 @@ test('⑤ __host.rendererLifecycle 未注入汇 → loud 拒绝', () => {
   )
 })
 
-test('⑥ __host.hostFacts 仍刷新同步门缓存（回归）', () => {
+test('⑥ __host.hostFacts 仍刷新同步门缓存（回归）+ 交付信号诚实', () => {
   const edges = makeEdges()
-  assert.equal(edges.webViewContentAlive(), true)
+  // 保守默认（2026-09 模块评审 low #4）：未收到 hostFacts 前，存活类事实按
+  // 「未知 = 不可交付」——rendererPush 必须诚实返回 false（core 据此 hold）。
+  assert.equal(edges.webViewContentAlive(), false)
   assert.equal(edges.isFocused(), false)
+  assert.equal(edges.rendererPush('dsh-chamber:test', {}), false, '未知存活 → 未投递')
   assert.deepEqual(
     edges.handleHostInbound(HOST_INBOUND.hostFacts, {
       focused: true,
-      webViewContentAlive: false,
+      mainWindowAlive: true,
+      webViewContentAlive: true,
       webViewLoading: true,
     }),
     { ok: true },
   )
   assert.equal(edges.isFocused(), true)
-  assert.equal(edges.webViewContentAlive(), false)
+  assert.equal(edges.webViewContentAlive(), true)
   assert.equal(edges.webViewLoading(), true)
+  assert.equal(edges.rendererPush('dsh-chamber:test', {}), true, '存活 → 已投递')
+
+  // 渲染器死掉后交付信号必须回到 false（不静默丢事件）。
+  edges.handleHostInbound(HOST_INBOUND.hostFacts, { webViewContentAlive: false })
+  assert.equal(edges.rendererPush('dsh-chamber:test', {}), false)
 })
 
 test('⑦ 未知 __host.* → loud 拒绝', () => {

@@ -75,6 +75,42 @@ test('W-14 面 A：白名单外顶层源码零 electron import', () => {
   assert.deepEqual(offenders, [], '白名单外文件不得 import/require electron')
 })
 
+test('W-14 面 D：core 家族的相对 import 传递闭包零 electron（2026-09 模块评审 medium #2）', () => {
+  // 面 A 只看顶层直接 import——闭包检查沿相对导入递归，任何一层引入 electron
+  // （或白名单文件）都会被抓到，避免"白名单文件把 electron 藏在被 import 的
+  // 模块里"。
+  const RELATIVE_IMPORT = /(?:from\s*|import\s*\(\s*)['"](\.[^'"]+)['"]/g
+  // 闭包只看**加载期**的 electron 依赖（顶层 import / 顶层 require）：
+  // updater.ts 的 require('electron') 在函数体内（懒加载，模块加载不需要
+  // electron），把它算进来会让「core 模块图不加载 electron」这一断言失真。
+  const STATIC_ELECTRON_IMPORT =
+    /^(?:import[^\n]*from\s*['"]electron['"]|(?:const|let|var)\s+[^\n]*require\s*\(\s*['"]electron['"]\s*\))/m
+  const visited = new Set<string>()
+  const offenders: string[] = []
+  const queue = [...coreFamily]
+  while (queue.length > 0) {
+    const name = queue.shift()
+    if (name === undefined || visited.has(name)) continue
+    visited.add(name)
+    if (!topLevelSources.includes(name)) continue
+    const code = stripComments(readFileSync(path.join(dir, name), 'utf8'))
+    if (STATIC_ELECTRON_IMPORT.test(code)) {
+      offenders.push(name)
+      continue
+    }
+    for (const match of code.matchAll(RELATIVE_IMPORT)) {
+      const spec = match[1]
+      if (spec.startsWith('..')) continue // 包外（workspace 包）不在本门禁范围
+      const base = path.posix.basename(spec)
+      const candidate = base.endsWith('.ts') || base.endsWith('.cts') ? base : `${base}.ts`
+      if (topLevelSources.includes(candidate)) queue.push(candidate)
+    }
+  }
+  assert.deepEqual(offenders, [], 'core 家族闭包内不得出现 electron import')
+  // 闭包必须真的走过多个文件（否则规则被空集骗过）。
+  assert.ok(visited.size >= coreFamily.size, `闭包遍历文件数异常：${[...visited].join(', ')}`)
+})
+
 test('W-14 面 B：白名单文件确实依赖 electron（防腐化）', () => {
   const missing: string[] = []
   for (const name of whitelist) {

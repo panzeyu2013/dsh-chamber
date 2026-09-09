@@ -79,7 +79,11 @@ final class BridgeClientEdgeIntegrationTests: XCTestCase {
         let env = ProcessInfo.processInfo.environment
 
         let nodePath: String
-        if let configured = env["POC_NODE_BIN"], !configured.isEmpty {
+        // 校验存在性：`POC_NODE_BIN=node`（字面名而非路径）曾被当成路径直接
+        // spawn，导致 11 例失败而非跳过（2026-09 模块评审 F 注记）。
+        if let configured = env["POC_NODE_BIN"],
+           !configured.isEmpty,
+           FileManager.default.isExecutableFile(atPath: configured) {
             nodePath = configured
         } else if FileManager.default.fileExists(atPath: Self.defaultNodePath) {
             nodePath = Self.defaultNodePath

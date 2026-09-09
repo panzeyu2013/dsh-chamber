@@ -64,6 +64,8 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     private let cpURL: URL
     /// 控制面 origin（scheme://host:port），导航放行与消息护栏共用
     private let cpOrigin: String
+    /// sidecar ready 帧已到（A 桥 origin 门在此之前一律拒绝）。
+    private var sidecarReady = false
 
     private var webView: WKWebView!
     private var bridgeHandler: ChamberMessageHandler!
@@ -124,7 +126,12 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         // 消息通道：ChamberMessageHandler 只做护栏与转发（W-04 实现）
         let handler = ChamberMessageHandler(
             whitelist: Self.invokeWhitelist,
-            expectedOrigin: { [weak self] in self?.cpOrigin },
+            // ready 帧前 expectedOrigin = nil → 一律拒绝（design 25 §4.4.1
+            // 第 2 条「port 只在 ready 帧后放开」；2026-09 模块评审 minor）。
+            expectedOrigin: { [weak self] in
+                guard let self, self.sidecarReady else { return nil }
+                return self.cpOrigin
+            },
             onInvoke: { [weak self] id, method, payload in
                 self?.handleInvoke(id: id, method: method, payload: payload)
             },
@@ -634,6 +641,11 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         print("[poc] 页面加载失败 \(error.localizedDescription)")
     }
 
+    /// sidecar ready（AppDelegate 的 bridge.onReady）→ 放开 A 桥 origin 门。
+    func noteSidecarReady() {
+        sidecarReady = true
+    }
+
     /// 退出清理开始 → 抑制渲染恢复并取消已排定重载（AppDelegate 调用）。
     func suppressRendererRecovery() {
         recoverySuppressed = true
@@ -715,8 +727,18 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
                  createWebViewWith configuration: WKWebViewConfiguration,
                  for navigationAction: WKNavigationAction,
                  windowFeatures: WKWindowFeatures) -> WKWebView? {
-        // 一律不开新窗：target=_blank 等走导航护栏/外链处理
-        print("[poc] 拒绝新建窗口请求")
+        // 一律不开新窗；但 target=_blank 的**外链**必须先交系统打开再拒绝
+        // （Electron main.ts setWindowOpenHandler 先 openExternally 再 deny；
+        // vendor markdown 的外链恒 _blank——2026-09 模块评审 major：原实现
+        // 静默丢弃）。
+        if navigationAction.targetFrame == nil,
+           let url = navigationAction.request.url,
+           TrustGuard.isExternalLink(url.absoluteString, expectedOrigin: cpOrigin) {
+            print("[poc] 新窗外链交系统打开 \(url.absoluteString)")
+            openExternally(url)
+        } else {
+            print("[poc] 拒绝新建窗口请求")
+        }
         return nil
     }
 

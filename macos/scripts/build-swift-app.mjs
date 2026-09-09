@@ -272,7 +272,13 @@ export async function runBuildSwiftApp(options, io = { log: console.log, error: 
 
   const desktopPkg = JSON.parse(readFileSync(path.join(desktopDir, 'package.json'), 'utf8'))
   const version = typeof desktopPkg.version === 'string' ? desktopPkg.version : '0.0.0'
-  const plist = renderInfoPlist(readFileSync(templatePath, 'utf8'), { VERSION: version })
+  // CFBundleVersion 只允许数字与点（Apple）；beta 版本 X.Y.Z-beta.N 取其
+  // 数字段（2026-09 模块评审 minor：plutil -lint 不查这条）。
+  const bundleVersion = version.split('-')[0]
+  const plist = renderInfoPlist(readFileSync(templatePath, 'utf8'), {
+    VERSION: version,
+    BUNDLE_VERSION: bundleVersion,
+  })
   writeFileSync(layout.infoPlist, plist)
   const lint = quiet('plutil', ['-lint', layout.infoPlist])
   if (lint.status !== 0) throw new Error(`Info.plist 非法：${lint.stdout}${lint.stderr}`)
@@ -323,7 +329,11 @@ export async function runBuildSwiftApp(options, io = { log: console.log, error: 
       (file) => file !== layout.executable,
     )
     for (const file of nested) {
-      run('codesign', codesignArgs(options, file, nodeEntitlements), io)
+      // 只有捆绑的 node 需要 JIT/可写可执行内存权限（design 25 §3.2「捆绑 node
+      // 另加」）；其余嵌套原生模块（.node/dylib）用裸 hardened runtime 签名，
+      // 避免无谓放大权限面（2026-09 模块评审 minor）。
+      const isNode = path.basename(file) === 'node'
+      run('codesign', codesignArgs(options, file, isNode ? nodeEntitlements : undefined), io)
     }
     if (nested.length > 0) {
       io.log(`[build-swift-app] 嵌套 Mach-O 已签名 ${nested.length} 个（含自带 node 与 .node 原生模块）`)

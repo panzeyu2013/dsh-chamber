@@ -37,7 +37,7 @@ import { computeQuitRisk, shouldHideToTray } from './chamber-settings.ts'
 // 没有 node_modules 树，facade 的 isPackagedSidecarRuntime 分支加载
 // `<sidecar>/dist/control-plane/index.js`；裸说明符在打包态 ERR_MODULE_NOT_FOUND
 // （2026-09 W-24 实测）。dev/测试态 facade 仍走 workspace 符号链接。
-import { createControlPlane } from './control-plane-module.ts'
+import { createControlPlane, isPackagedSidecarRuntime } from './control-plane-module.ts'
 import {
   drainDeepLinkLaunches,
   enqueueDeepLink,
@@ -137,8 +137,10 @@ if (existsSync(lockFile)) {
       try {
         process.kill(recordedPid, 0)
         alive = true
-      } catch {
-        alive = false
+      } catch (err) {
+        // EPERM = 进程存在但无权限发信号 → 仍然存活（2026-09 模块评审 low #5：
+        // 原实现把任何异常都当已死，会误放行另一 flavor 的持有者）。
+        alive = (err as NodeJS.ErrnoException).code === 'EPERM'
       }
       if (alive) {
         console.error(`[sidecar] 目录锁被占用（pid=${recordedPid}，本进程 ppid=${process.ppid}）——另一 flavor/实例正在使用 ${args.userDataDir}，退出`)
@@ -168,13 +170,24 @@ function writeProtocolLine(frame: unknown): void {
 
 const pendingEdges = new Map<number, { resolve(v: unknown): void; reject(e: Error): void }>()
 let nextEdgeId = 1
+/** edge 往返超时（2026-09 模块评审 low #6）：Swift 不应答时不得永久挂起。 */
+const EDGE_TIMEOUT_MS = 30_000
 
 const nodeEdges = createNodeEdges({
   sendEdge(method, payload) {
     return new Promise<unknown>((resolve, reject) => {
       const edgeId = nextEdgeId
       nextEdgeId += 1
-      pendingEdges.set(edgeId, { resolve, reject })
+      const timer = setTimeout(() => {
+        if (!pendingEdges.has(edgeId)) return
+        pendingEdges.delete(edgeId)
+        reject(new Error(`host edge 应答超时（${EDGE_TIMEOUT_MS}ms）：${method}`))
+      }, EDGE_TIMEOUT_MS)
+      timer.unref?.()
+      pendingEdges.set(edgeId, {
+        resolve(v) { clearTimeout(timer); resolve(v) },
+        reject(e) { clearTimeout(timer); reject(e) },
+      })
       writeProtocolLine({ edge: method, payload, edgeId })
     })
   },
@@ -332,7 +345,13 @@ async function boot(): Promise<void> {
   // main 同语义——全新 profile 离线时探针失败而阻塞，与 Electron 一致）；
   // DSH_SIDECAR_LEGACY_START=1 时用旧 dev 快捷门（直读 --dsh-path、无探针），
   // 供离线 dev 循环（POC dev；不进入任何产品路径）。
+  // 打包态拒绝 legacy 快捷门（2026-09 模块评审 medium #3）：它会绕过
+  // runtime 启动门（canStartLocal 恒 ok / 无探针），而入口就在产品装配里。
   const legacyStart = process.env.DSH_SIDECAR_LEGACY_START === '1'
+  if (legacyStart && isPackagedSidecarRuntime()) {
+    console.error('[sidecar] DSH_SIDECAR_LEGACY_START 在装配态被拒绝（绕过启动门，仅限 dev 循环）')
+    process.exit(EXIT_STARTUP_FAILURE)
+  }
   type SpawnGateShape = {
     getDshWorkspacePath(): string
     canStartLocal(): { ok: true } | { ok: false; reason: string }

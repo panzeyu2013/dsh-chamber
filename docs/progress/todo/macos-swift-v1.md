@@ -4,7 +4,7 @@
 > WKWebView + Node sidecar 全复用，方案草案 **未立项**）。本文件是其 companion 实施
 > 计划（windows-v1.md 先例）：把 design 25 的 P0–P4 细化为 **M0–M5 六道门** + WBS
 > 任务表 + runbook + 施工单 + 门禁清单 + 中止条件，随里程碑推进同步更新 STATUS。
-> 命令/脚本/测试名以 swift 分支当前 HEAD 为准（代码面自 258d6ab 起未变）；**需新增**均标注（新增）。
+> 命令/脚本/测试名以 swift 分支当前 HEAD 为准（**注：本计划正文的行号锚点基于 258d6ab 基线的 main.ts，合并 main + core 拆分后 main.ts 已从 5802 行降到 3824 行、60 个 handle 迁入 shell-core.ts**；如需行号请以 grep 现取，勿依赖正文旧锚点）。**需新增**均标注（新增）。
 > 本文档本身不实现任何功能——执行须先过 M0 决策包与 M1 P0 证伪门（design 25 §8.1
 > G1–G5），任一实质失败即回 design 25 §10 决策 1 重审，不硬着头皮继续（中止点见 §七）。
 
@@ -13,7 +13,7 @@
 ≈0.7 折算；③ P0 验证门过才续投；④ 总估时 **46–72 人-日（9–14 人周）**，对齐
 design 25。
 
-## 已核实关键事实（本计划锚点；行号以 swift 分支当前 HEAD 为准，代码面自 258d6ab 起未变）
+## 已核实关键事实（本计划锚点；**行号为 258d6ab 基线，main.ts 已大幅收窄，见顶部说明**）
 
 - 桥面：`packages/desktop/ipc-events.ts` IPC_CHANNELS 共 **68 条 = 60 个
   `ipcMain.handle`（main.ts，全包 trustedIpc）+ 8 条 `webContents.send` 推送**
@@ -513,7 +513,7 @@ PATH shim 时写错目标路径；真二进制无备份、stub 与框架配对�
   --user-data-dir … --port …` 在带/不带标记两种模式下均输出
   `{"notify":"ready","payload":{"port":…,"shellVersion":"0.2.2"}}` 且 SIGTERM
   exit 0（Node 捆绑本身因沙箱无外网未执行，`--skip-node` 路径已验）。
-  测试：`scripts/build-sidecar.test.mjs` 10 例（参数/布局/计划/归档命名/
+  测试：`scripts/build-sidecar.test.mjs` 12 例（参数/布局/计划/归档命名/
   SHASUMS 解析/SHA-256/A5 基名断言 + **A5 实证**：patch `process.execPath`
   后 `resolveNodeExecutable` 在 basename=node 时直用 execPath、其他基名回落）。
 - **W-24 `.app` 打包（本轮）**：新增 `macos/scripts/build-swift-app.mjs` +
@@ -539,7 +539,7 @@ PATH shim 时写错目标路径；真二进制无备份、stub 与框架配对�
   **`sidecar ready（port=17541 shellVersion=0.2.2）`** → 窗口显示、页面连续
   invoke 1..10（info/instances_get/settings-get/update-state/badge-count…）；
   ad-hoc 签名 + 208 个密封资源校验通过。
-  测试：`packages/desktop/scripts/build-swift-app.test.mjs` 11 例（参数/布局/
+  测试：`packages/desktop/scripts/build-swift-app.test.mjs` 12 例（参数/布局/
   Info.plist 渲染/计划/dry-run/真实组装/资源包位置/sidecar 拷贝 + A5 反例/
   缺 sidecar.js loud/**真实 ad-hoc codesign 校验**/entitlements 最小集）。
 - **W-26 CI/release 腿（本轮）**：`ci.yml` 新增 `test-macos`（macos-latest：
@@ -603,20 +603,18 @@ PATH shim 时写错目标路径；真二进制无备份、stub 与框架配对�
   macos-latest runner 有会话但属发布前演练，不进普通 push 链——design §8.6
   已如此登记）+ 真实控制面；估时 2–3 人日。**未实施原因**：本轮优先级让位于
   W-22…W-27 的发布链；登记在此以免遗漏。
-- **门禁（本轮实测）**：`swift build` 0 告警；`swift test` **108/108**（含 8 例集成，0 skip）；`test:desktop`
-  **953/953**（拆出 macOS 专属用例后的 ubuntu-safe 集）+ `test:macos` **30/30**；
+- **门禁（本轮实测）**：`swift build` 0 告警；`swift test` **115/115**（含 8 例集成，0 skip）；`test:desktop`
+  **956/956**（拆出 macOS 专属用例后的 ubuntu-safe 集）+ `test:macos` **31/31**；
   `typecheck` 0；`verify:i18n` 无漂移；`build:preload` 成功；`verify:workflows` 绿；
   `test:release-workflow` 绿（策略 + 产物清单）；ci.yml/release.yml YAML 解析通过。
 - **文档漂移更正**：「剩余路线」段的「POC 白名单 7 收窄暂维持」已被 POC dev 轮
   取代——Swift 侧 `invokeWhitelist = BridgeManifest.invokeChannels`（60/60）即
   事实；W-18 后半 B 的**运行时白名单消费策略**（是否收窄/如何分级）仍开放。
-- **下一批（按序）**：W-26 CI `test-macos`（swift build + test + manifest 门禁）+
-  release.yml Swift 产物腿（`dsh-chamber-native-<ver>-macos-<arch>.dmg/.zip`，
-  dry-run 全链）；W-27 双端同 tag 发布演练；`swift-harness-driver.test.ts`
-  （真实窗口集成）；实机门禁清单
-  不变（G2/G3/G4/G5/C1/C2 + 退出确认/隐藏恢复/通知点击/SMAppService/launchApp +
-  更新设置页 blocked 行目检）；正式发布仍缺 Apple 凭据（Developer ID/公证，
-  外部阻断）。
+- **下一批（2026-09-09 更新：W-26/W-27 已交付）**：`swift-harness-driver.test.ts`
+  （真实窗口集成，需 GUI 会话；方案已登记）；实机门禁清单不变（G2/G3/G4/G5/C1/C2
+  + 退出确认/隐藏恢复/通知点击/SMAppService/launchApp + 更新设置页 blocked 行
+  目检）；正式发布仍缺 Apple 凭据（Developer ID/公证，外部阻断）；Node 归档
+  SHA 固定（需联网取摘要）。
 
 **验收审计（2026-09-08，六路 subagents + 对抗性复核；用户要求）**：
 六域判定：swift-lifecycle `pass-with-issues`、js-wire `pass-with-issues`、
@@ -717,6 +715,28 @@ Electron 侧同锁、release 公证顺序、bash 3.2 展开、cpURL 归一化、
    `expectedOrigin` 带 userinfo 一律拒绝（原先只查 actual）；新增 10 条断言。
 5. **chamber-lock**：权限收紧判据改 `0o7777`（setuid/sticky 位同样清除），
    新增 sticky 场景测试（macOS 需创建后 `chmod` 才能造出 0o1600）。
+
+**六模块评审（2026-09-09，用户要求；3 并发 subagent ×2 批）**：
+A Swift 壳 / B Electron-free 核心 / C 打包·CI·发布 / D 控制面·网关·运行时 /
+E 前端与插件 / F 文档台账 —— 六域均 `pass-with-issues`、无 fail。**已修 19 项**：
+- A（4 major）：通知门不再绑窗口可见性；`_blank` 外链先交系统再拒建窗；宿主腿
+  统一主线程 hop；补 `MessageHandlerTests` 6 例（并修复 `anyCodablePayload`
+  NSException 崩溃面、`exactInt` 误拒 Int.max）；A 桥 origin 门 ready 前为 nil；
+  打包态缺省端口 17500。
+- B（3 medium + 3 low）：`rendererPush` 交付信号诚实；存活事实缺省保守；
+  electron-free 门加**传递闭包**；legacy 启动门在装配态拒绝；锁复验 EPERM 视为
+  存活；edge 往返加 30s 超时。
+- C（2 major + 4 minor）：release 腿补 `bundle:dsh`；ubuntu 腿平台断言改
+  `process.platform`；仅 node 用 node entitlements；dry-run 真校验输入源；
+  `CFBundleVersion` 纯数字；根 `test:macos` 转发脚本。
+- D（2 medium + 3 low）：补 loopback 不变量测试；control-plane 暴露
+  `seededProbeDomains` 并由两个 owner 传入（消除宿主域期望集不对称）；CLI
+  `ts=null` 不再渲染 1970。
+- E（2 low）：抽出 `blocked-reason.ts` 纯分类（未知原因原样透传，不再套「未配置
+  签名」文案）；补跨包字面量锁步 + 分类测试。
+- F（3 major + 7 minor）：design §6.1 U1 改「已闭合」、§3.2 装配布局、§4.4.3
+  MAIN_SIDE_FILES 三件、§6.3 锁条目去重、§8.2 锚点；STATUS/todo/README 数字与
+  开放项对齐。
 
 **仍开放（四审后剩余，均为外部/离线阻断）**：真实 Apple 凭据下的 Developer ID
 签名 + 公证 + stapler（release 腿已 fail-closed 就绪）；实机 G2/G3/G4/G5/C1/C2

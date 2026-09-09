@@ -250,6 +250,19 @@ export function buildPlan(options) {
         : `[4] Node 捆绑：${nodeDistUrl(options.nodeVersion, archive)} → SHA-256 校验 → ${layout.node}`,
     )
   }
+  // dry-run 的「输入校验」必须真的校验（2026-09 模块评审 minor：原实现只打印
+  // 计划，`--node-archive /nope --vendor-dsh /nope` 也报"输入校验通过"）。
+  if (options.dryRun) {
+    if (options.nodeArchive !== null && !existsSync(options.nodeArchive)) {
+      throw new Error(`--node-archive 不存在：${options.nodeArchive}`)
+    }
+    if (!options.skipVendor && !existsSync(path.join(options.vendorDshDir, 'package.json'))) {
+      throw new Error(`vendor/dsh 源不存在（先跑 bundle:dsh 或 --skip-vendor）：${options.vendorDshDir}`)
+    }
+    if (!options.skipVendor && !existsSync(path.join(options.pnpmDir, 'bin', 'pnpm.cjs'))) {
+      throw new Error(`pnpm 源不存在（先 pnpm install 或 --skip-vendor）：${options.pnpmDir}`)
+    }
+  }
   steps.push(`[5] 断言：${path.basename(layout.node)} 基名 + 产物存在`)
   return steps
 }

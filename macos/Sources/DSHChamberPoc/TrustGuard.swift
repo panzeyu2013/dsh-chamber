@@ -99,6 +99,24 @@ enum TrustGuard {
         return (path.isEmpty || path == "/") && (actual.query ?? "").isEmpty
     }
 
+    /// 可交 OS 默认处理器打开的外链（镜像 renderer-trust.ts `isExternalLinkUrl`）：
+    /// 仅 http(s)（默认浏览器）与 mailto（邮件客户端）；其他 scheme 一律拒绝。
+    /// 给出 expectedOrigin 时同源 http(s) 不算外链（同源在浏览器里只会得到
+    /// 无 shim 的重复壳）。`mailto:` 无 origin 概念，恒为外链。
+    static func isExternalLink(_ urlString: String?, expectedOrigin: String?) -> Bool {
+        guard let urlString, !urlString.isEmpty,
+              let actual = URLComponents(string: urlString),
+              let scheme = actual.scheme?.lowercased() else {
+            return false
+        }
+        if scheme == "mailto" {
+            return !actual.path.isEmpty
+        }
+        guard scheme == "http" || scheme == "https" else { return false }
+        guard let expectedOrigin else { return true }
+        return !isTrustedOrigin(urlString, expectedOrigin: expectedOrigin)
+    }
+
     /// 方法白名单判定：精确匹配（通道名均为小写下划线命名空间，大小写不
     /// 规范化；manifest 化后通道名以 ipc-events.ts IPC_CHANNELS 为权威，
     /// design 25 §4.4.3）。

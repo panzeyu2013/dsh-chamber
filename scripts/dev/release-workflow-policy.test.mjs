@@ -102,6 +102,13 @@ assert.match(swiftBuild, /= "node"/)
 assert.match(swiftBuild, /bridge-shim\.poc\.js/)
 assert.match(swiftBuild, /dist\/web\/index\.html/)
 assert.match(swiftBuild, /ARTIFACT_ARGS=\(--no-zip --no-dmg\)/)
+// 内置 dsh 工作区必须由 bundle:dsh 在 build:sidecar 之前物化（干净 runner 上
+// vendor/dsh/package.json + node_modules 不存在；缺则 verify 的 test -f 失败）。
+assert.ok(
+  swiftBuild.indexOf('run bundle:dsh') > 0
+    && swiftBuild.indexOf('run bundle:dsh') < swiftBuild.indexOf('pnpm run build:sidecar'),
+  'build-swift must run bundle:dsh before build:sidecar',
+)
 // macOS runners default to bash 3.2: an empty array under `set -u` makes
 // "${A[@]}" an unbound-variable error, so the dry-run path (empty array) MUST
 // use the guarded expansion form.

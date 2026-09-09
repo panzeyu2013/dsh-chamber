@@ -236,10 +236,10 @@ final class ChamberMessageHandler: NSObject, WKScriptMessageHandler {
     /// 错误码（A 桥版，与 renderer-trust / design 25 §4.4.1 拒绝语义同族：
     /// Electron 侧为 { code: 'ipc_sender_forbidden' } 等，web 侧 shim 据码
     /// reject Promise，UI 按既有错误投影呈现——loud，绝不静默吞错）。
-    private static let codeSenderForbidden = "ipc_sender_forbidden"   // origin / 主 frame 信任失败
-    private static let codeMethodNotAllowed = "method_not_allowed"    // method ∉ 白名单
-    private static let codeFrameTooLarge = "frame_too_large"          // 信封 > 4 MiB
-    private static let codeMalformedEnvelope = "malformed_envelope"   // 结构/JSON 表示不合法
+    static let codeSenderForbidden = "ipc_sender_forbidden"   // origin / 主 frame 信任失败
+    static let codeMethodNotAllowed = "method_not_allowed"    // method ∉ 白名单
+    static let codeFrameTooLarge = "frame_too_large"          // 信封 > 4 MiB
+    static let codeMalformedEnvelope = "malformed_envelope"   // 结构/JSON 表示不合法
 
     /// 护栏不过 → 经 evaluateJavaScript 回 `__dshChamberResolve(id, null, 码)`。
     private func reject(id: Int, code: String) {
@@ -257,14 +257,19 @@ final class ChamberMessageHandler: NSObject, WKScriptMessageHandler {
     /// 安全域内的 id（shim 的 id 为单调计数器，POC 内不越界；WebKit 对整值
     /// JS 数字常以 int64 存储直通，> 2^53 的双精度路径会丢精度——如未来 id
     /// 源变为大整数，需按 CFNumber 存储类型重做严格解析）。
-    private static func exactInt(from value: Any?) -> Int? {
+    static func exactInt(from value: Any?) -> Int? {
         guard let number = value as? NSNumber,
               CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
+        // 整型存储的 NSNumber（WebKit 对整值 JS 数字常走 int64 直通）：
+        // 直接取 int64——原实现统一走 double，会把 Int.max 判成 2^63 而误拒
+        // （2026-09 模块评审补测发现）。
+        if !CFNumberIsFloatType(number) {
+            return Int(number.int64Value)
+        }
+        // 浮点存储：只接受整值且在 2^53 内（JS Number 的精确整数域）。
         let d = number.doubleValue
-        guard d == d.rounded(),
-              d >= -9_223_372_036_854_775_808.0,   // -2^63（Double(Int.min)，可精确表示）
-              d < 9_223_372_036_854_775_808.0 else { return nil }  // 2^63 之上 Int 溢出
-        return Int(truncating: number)
+        guard d.isFinite, d == d.rounded(), abs(d) <= 9_007_199_254_740_992.0 else { return nil }
+        return Int(d)
     }
 
     /// 桥接 payload（[String: Any] / [Any] / 基础类型 / NSNull）→ AnyCodable。
@@ -275,7 +280,12 @@ final class ChamberMessageHandler: NSObject, WKScriptMessageHandler {
     /// Codable 契约解码（包装成单元素数组以兼容 JSONSerialization 顶层
     /// 片段限制）。若 FrameCodec 后续提供 init?(jsonObject:)/from(any:) 之类
     /// 便利构造，本函数是唯一替换点（调用方语义不变）。
-    private static func anyCodablePayload(from raw: Any) -> AnyCodable? {
+    static func anyCodablePayload(from raw: Any) -> AnyCodable? {
+        // 预扫描：JSONSerialization 对 Date/NaN 等非法值抛的是 NSException
+        // （Swift 无法 catch，直接崩进程）——任何序列化之前必须先判可序列化
+        // （2026-09 模块评审补测发现：原实现只在 didReceive ④ 前置扫描，
+        // 直调本函数会崩）。
+        guard Self.isJSONSerializableValue(raw) else { return nil }
         do {
             let data = try JSONSerialization.data(withJSONObject: [raw])
             let boxed = try JSONDecoder().decode([AnyCodable].self, from: data)
@@ -289,7 +299,7 @@ final class ChamberMessageHandler: NSObject, WKScriptMessageHandler {
     /// 取规范对象后 JSON 序列化。jsonObject 若含 NaN/∞（如直接手工构造的
     /// AnyCodable），先经 isJSONSerializableValue 拒绝，避免 JSONSerialization
     /// 抛 NSException（try? 拦不住）；失败返回 nil（调用方降级为 null）。
-    private static func jsPayloadLiteral(_ payload: AnyCodable?) -> String? {
+    static func jsPayloadLiteral(_ payload: AnyCodable?) -> String? {
         guard let payload else { return nil }
         let object = payload.jsonObject
         guard Self.isJSONSerializableValue(object) else { return nil }
@@ -302,14 +312,14 @@ final class ChamberMessageHandler: NSObject, WKScriptMessageHandler {
 
     /// JSON 嵌套深度上限：防受信页面构造 <4MiB 的极深嵌套信封在预扫描阶段
     /// 击穿 Swift 栈（静态审查 #4；超限按 malformed_envelope 拒绝）。
-    private static let maxJSONDepth = 512
+    static let maxJSONDepth = 512
 
     /// 递归确认值可被 JSONSerialization 无异常序列化。桥接/原生值只可能是
     /// NSNull/String/NSNumber/NSArray/[String:Any] 或其 Swift 原生等价物；
     /// 其余类型一律 false（fail closed）。NSNumber 需额外检查有限性——
     /// JSONSerialization 对 NaN/±Infinity 抛 NSException（非 NSError），
     /// 任何 try? 序列化之前必须先过此扫描（见 didReceive ④ 注释）。
-    private static func isJSONSerializableValue(_ value: Any, depth: Int = 0) -> Bool {
+    static func isJSONSerializableValue(_ value: Any, depth: Int = 0) -> Bool {
         if depth > maxJSONDepth { return false }
         if value is NSNull || value is String { return true }
         if let number = value as? NSNumber {
@@ -328,7 +338,7 @@ final class ChamberMessageHandler: NSObject, WKScriptMessageHandler {
 
     /// JS 字符串字面量：手工转义（JSON 转义集 ⊂ JS 字符串转义，控制字符
     /// \uXXXX），不依赖顶层片段序列化的可用性。
-    private static func jsStringLiteral(_ string: String) -> String {
+    static func jsStringLiteral(_ string: String) -> String {
         var literal = "\""
         for scalar in string.unicodeScalars {
             switch scalar.value {

@@ -84,7 +84,8 @@ Read the matching design and progress documents before changing a module:
 - Integration: `pnpm run smoke` (auto-SKIPs when dsh is not installed — normal).
 - Frontend: `pnpm run build:renderer` must succeed (vite build over the dsh workspace source).
 - Desktop preload: `pnpm --filter @dsh-chamber/desktop run build:preload` must succeed (esbuild over the sandboxed CommonJS preload boundary; root `typecheck` is not a substitute).
-- Packaging: `pnpm run dist:desktop:mac`.
+- Packaging: `pnpm run dist:desktop:mac`; Swift native assembly `pnpm run build:sidecar` (sidecar dir: node/sidecar.js/package.json/dist/{control-plane,host-*}/vendor/dsh/pnpm) and `pnpm run build:swift-app` (`.app` + dmg/zip; both accept `--dry-run`).
+- Packaging script tests are macOS-only: `pnpm --filter @dsh-chamber/desktop run test:macos` (root forwarder `pnpm run test:macos`), consumed by the ci.yml `test-macos` leg.
 - Gateway packaging: `pnpm run build:gateway` (= `build:dsh-runtime` + the gateway build; the pack step's `prepack` rebuilds anyway), then `pnpm --filter @dsh-chamber/gateway pack`; install the tarball into a clean temporary prefix and require `gateway --help` to succeed.
 - Gateway type check: `pnpm run typecheck:gateway`. CLI shell: `pnpm run test:cli`. Release workflow: `pnpm run test:release-workflow`.
 - i18n: `pnpm run verify:i18n` must not report DRIFTED pairs.

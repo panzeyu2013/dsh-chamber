@@ -2586,6 +2586,9 @@ if (!gotTheLock) {
           dshHome: localDshHome,
           call,
           signal,
+          // 模块评审 D#2：期望集按**实际 seed 的宿主域**派生（host 包缺失时
+          // 不按「全 3 域」裁决，否则 exact-set 必失败并回滚激活）。
+          hostDomainNames: cp.seededProbeDomains,
         });
       } finally {
         runtimeTransactionWorkspace = null;
