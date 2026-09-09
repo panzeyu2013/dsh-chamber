@@ -478,6 +478,50 @@ export const chamberBridge: {
 - **职责划分**：连接页本地卡的 启动/停止 = 连接生命周期（开机常驻与否）；
   「dsh 运行时」段的 重启 dsh = 运行时维护（刷新插件挂载、恢复服务）——两者
   不合并、文案不混用（起停不改运行时事实，重启不改指针/版本）。
+- **每来源插件设置贡献集（2026-12 修订，权威口径）**：设置壳对「某来源自己的设置
+  贡献」改为**图驱动**——贡献源是该来源自己的客户端插件图，不再是壳里的静态清单。
+  规则（实现见 `packages/dsh-chamber-client-ui-settings-bridge/src/client/`）：
+  - **基础集**（`bridge-context.ts` `BASE_PLUGINS`，fail-loud）：声明链 + `slots` +
+    locale + theme + 官方 settings 四段 + agent-preset + 自研 BridgeRows + 每来源
+    `dsh-runtime` 段。每个基础 id 必须 ∈ renderer `CHAMBER_COVERED_IDS`
+    （lockstep 不变量：否则扩展集会重复挂载同一包）——纯数据清单
+    `base-plugins.ts` 由 `base-plugins-lockstep.test.ts` 机械强制，装配入口另有
+    fail-loud 断言（清单与实挂集合不得漂移）。
+  - **扩展集**（`ExtensionPhase`）：经每实例代理读 `clientGraph/graph`
+    （`BridgeApiClient.clientGraph`），扣除 covered 行、拒绝非根相对 bundle URL、
+    经**页面级 union 模块表**装载（shared face `client-plugin-loader.ts`，与 shell
+    boot 的 `host-graph.ts` **同一实现**：combo 去重、first-load-wins、超时墓碑、
+    rev 冲突事实），再逐个 `ctx.plugin({...ns, name: row.id})` 挂进同一 child ctx。
+  - **归因**用 cordis 的 fiber-name 戳（`StoredEntry.registrant`）：第三方分节在 nav
+    上带「插件」来源标记，绝不与官方分节混淆。
+  - **诚实报告**（`settings-extensions.ts` + 壳内「插件设置」诊断页）：未激活
+    （列出缺失服务，含嵌套 `ctx.inject` 后代 fiber）、加载/挂载失败、非插件 bundle、
+    注册到壳不渲染的座位（`settings.trigger/header/close/onboarding`）、分节渲染崩溃
+    （`slots.onEntryError`）、跨来源模块实例共享、以及**能力降级**（插件订阅
+    `ctx.remote.$on` 而 child ctx 无事件流 → 不会自动刷新）。**任何未渲染的贡献都
+    必须可见**，不得静默消失。
+  - **座位矩阵**：壳渲染 `settings.section` + `settings.action`（action 保持既有
+    「仅本地来源」限定），子座位（`settings.general.item` / `plugins.tab` / keyed 卡片）
+    随所属分节渲染；`trigger/header/close/onboarding` 刻意不渲染 → 若有贡献则报告。
+  - **刷新**：手动「重新加载」只重取图并 **reconcile**（新增 id 挂载、消失 id 卸载、
+    已挂载且仍存在者保留 fiber 与判定），基础集永不重建（无闪烁）。安装/卸载插件后
+    仍需重启该实例（与官方前端一致），因为图的 rev 是进程级 nonce。
+  - **保留优先级 + 看门狗**：设置壳注册在保留 shadow 优先级（shared face
+    `settings-shell.ts` `SETTINGS_SHELL_SHADOW_PRIORITY = -1000`）；chamber 侧边栏
+    监视 `sidebar.settings` 的 cell winner，若有注册者低于该区间（即顶掉设置壳）则
+    `console.error` 报告（检测而非改写 slot 语义）。
+  - **D-5 关闭**：`settings-connections` 的 host-ctx `settings.section` 注册已删除
+    （该插件现只提供字典命名空间；固定入口 `__connections` 渲染同一组件）。
+  - **信任与共享**：扩展插件代码在桌面渲染器内执行（与 design 09 §4 同一模型），
+    执行面从「已打开 shell 的来源」扩到「设置面板打开的来源」，面板关闭即 dispose；
+    页面模块表按 id first-load-wins 共享（一个模块实例可支撑多来源/多 fiber），
+    因此插件作者契约 = **模块级无状态、状态进 `ctx.effect`/服务**。
+  - **保真天花板**：child ctx 的 `remote` 是手工面（六个 unary 命名空间）+ 无事件流
+    的 `$on`；插件调用其他 Remote 命名空间会在调用时失败并被 entry boundary /
+    `onEntryError` 捕获报告。上游声明式贡献通道（`contributes.settings` / descriptor
+    上线通道）为 T3 提案：`docs/progress/todo/settings-surface-upstream-contributions.md`。
+  - **可选机制（默认关）**：依赖闭包扩展（`DEPENDENCY_CLOSURE_ENABLED`）——把扩展行
+    `inject` 声明的 covered 依赖作为 provider 先挂进同一 ctx，按实测证据逐个放行。
 - 内容：本地实例卡（/health 状态徽标 + /api/connections 行端口/label +
   启动/停止（二次确认）+ host 日志只读）+ 远程主机卡片列表（label +
   user@host:port + phase 徽标 + 隧道 localPort + serviceName + logSummary；

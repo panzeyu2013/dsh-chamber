@@ -32,6 +32,7 @@ import { GeneralView } from './GeneralView.tsx'
 import {
   CONNECTIONS_SECTION_ID,
   GENERAL_SECTION_ID,
+  PLUGINS_SECTION_ID,
   resolveActiveSection,
   type SectionNavRow,
 } from './nav-active.ts'
@@ -44,6 +45,11 @@ import {
 import {
   mountBridgeSession, sectionRows, type BridgeSession,
 } from './bridge-context.ts'
+import { isBasePluginId } from './base-plugins.ts'
+import {
+  extensionNotices, isPluginProvidedRow,
+} from './settings-extensions.ts'
+import { ExtensionsView } from './ExtensionsView.tsx'
 import {
   nextMountRetryDelayMs,
 } from './mount-retry.ts'
@@ -392,6 +398,30 @@ function SettingsPanel({
     () => (selectedSession === undefined ? [] : sectionRows(selectedSession.slots)),
     [selectedSession, sectionVersion, localeRevision],
   )
+  // The selected source's own plugin contributions (2026-12): the extension
+  // phase streams in after the base chain, so this snapshot drives the nav
+  // count, the provenance marks and the diagnostics view.
+  const extensionSubscribe = useMemo(
+    () => (selectedSession === undefined ? (() => () => {}) : selectedSession.extensions.subscribe),
+    [selectedSession],
+  )
+  const extensionSnapshot = useSyncExternalStore(
+    extensionSubscribe,
+    useMemo(
+      () => (selectedSession === undefined ? () => undefined : selectedSession.extensions.getSnapshot),
+      [selectedSession],
+    ),
+  )
+  const extensionNoticesCount = useMemo(
+    () => (extensionSnapshot === undefined ? 0 : extensionNotices(extensionSnapshot).length),
+    [extensionSnapshot],
+  )
+  const [refreshing, setRefreshing] = useState(false)
+  const refreshExtensions = useCallback((): void => {
+    if (selectedSession === undefined || refreshing) return
+    setRefreshing(true)
+    void selectedSession.refreshExtensions().finally(() => { setRefreshing(false) })
+  }, [selectedSession, refreshing])
   // Active resolution (nav-active.ts): chamber-global fixed ids win; a
   // server-section id that left the ledger falls back to the first row.
   const active = resolveActiveSection(activeId, rows)
@@ -404,8 +434,14 @@ function SettingsPanel({
     ? t('connectionsNav')
     : active === GENERAL_SECTION_ID
       ? t('generalNav')
-      : rows.find(row => row.id === active)?.label ?? t('title')
+      : active === PLUGINS_SECTION_ID
+        ? t('pluginsTitle')
+        : rows.find(row => row.id === active)?.label ?? t('title')
+  // The header sub-line names the selected server for SERVER-OWNED content
+  // only (the chamber-global connections/general/plugin pages are
+  // server-independent — implying a server there would mislead).
   const headerSub = active !== CONNECTIONS_SECTION_ID && active !== GENERAL_SECTION_ID
+    && active !== PLUGINS_SECTION_ID
     ? selected?.label ?? ''
     : ''
   // Per-source client-plugin runtime diagnostics, keyed by source id
@@ -487,11 +523,34 @@ function SettingsPanel({
               >
                 {navIcon(row.id)}
                 <span className={css.navLabel}>{row.label}</span>
+                {/* Provenance (2026-12): a non-base registrant means this
+                    section came from the SELECTED source's own plugin list,
+                    not from the chamber's base set — never let a plugin-provided
+                    surface pass for an official one. */}
+                {isPluginProvidedRow(row, isBasePluginId) && (
+                  <span className={css.pluginTag} title={row.registrant}>{t('pluginTag')}</span>
+                )}
               </button>
             ))}
           </div>
           <div className={css.navDivider} />
           <div className={css.navList}>
+            {/* Plugin diagnostics (2026-12): rendered only when the selected
+                source's own plugin list produced something to say — an
+                unconditional row would be noise on every instance. */}
+            {(extensionNoticesCount > 0 || extensionSnapshot?.state === 'loading') && (
+              <button
+                key={PLUGINS_SECTION_ID}
+                type="button"
+                className={clsx(css.navCell, active === PLUGINS_SECTION_ID && css.active)}
+                aria-current={active === PLUGINS_SECTION_ID ? 'true' : undefined}
+                onClick={() => onSelectSection(PLUGINS_SECTION_ID)}
+              >
+                <IconPersonalizationOutline16 className={css.navIcon} size={16} />
+                <span className={css.navLabel}>{t('pluginsNav')}</span>
+                {extensionNoticesCount > 0 && <span className={css.pluginTag}>{extensionNoticesCount}</span>}
+              </button>
+            )}
             <button
               key={CONNECTIONS_SECTION_ID}
               type="button"
@@ -561,6 +620,15 @@ function SettingsPanel({
                  independent of the selected server. The update status (design
                  11) lives inside this section too. */
               <GeneralView t={t} />
+            ) : active === PLUGINS_SECTION_ID ? (
+              /* The selected source's own plugin contributions (2026-12):
+                 what loaded, what did not, and why. Never silent. */
+              <ExtensionsView
+                t={t}
+                snapshot={extensionSnapshot}
+                onRefresh={refreshExtensions}
+                refreshing={refreshing}
+              />
             ) : selectedId === undefined || selected === undefined ? (
               <p className={css.placeholder}>{t('noServers')}</p>
             ) : !selected.connected ? (

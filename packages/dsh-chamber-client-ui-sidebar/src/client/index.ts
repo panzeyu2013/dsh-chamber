@@ -19,6 +19,9 @@ import {
 } from '../shared/derive.ts'
 import { createPurgeTracker } from '../shared/purged-tracker.ts'
 import { fetchInstanceSnapshot, getInstanceClient } from '../shared/instance-api.ts'
+import {
+  classifySettingsSeatOccupant, settingsSeatTakeoverMessage,
+} from '../shared/settings-shell.ts'
 
 export type {
   SidebarFooterActionOwnerProps, SidebarRootComponentProps, SidebarRootInjected,
@@ -97,6 +100,27 @@ export function apply(ctx: ClientContext): void {
     }, SidebarRoot),
     'dsh-chamber: sidebar slot registration',
   )
+
+  // chamber (2026-12 settings-surface extension): the chamber settings shell
+  // owns `sidebar.settings` at the RESERVED shadow priority (sidebar shared
+  // face settings-shell.ts). The slot rule renders the lowest-priority winner,
+  // so a registrant BELOW that range would silently replace the whole settings
+  // surface — the only renderer of the connections/general pages and of every
+  // per-source plugin settings section. Detection only (console.error, the
+  // assertSingletonModule precedent): the sidebar cannot safely re-pin a slot
+  // cell, and a takeover must not pass unnoticed. The official SettingsRoot at
+  // priority 0 (the deferred-cluster window before the chamber shell registers)
+  // is NOT a takeover — classifySettingsSeatOccupant only reports registrants
+  // that went below the reserved range.
+  ctx.effect(() => {
+    const check = (): void => {
+      const winner = ctx.slots.entriesOfSlot('sidebar.settings')[0]
+      if (classifySettingsSeatOccupant(winner) !== 'taken-over') return
+      console.error(settingsSeatTakeoverMessage(winner?.options.id ?? 'unknown'))
+    }
+    check()
+    return ctx.slots.subscribe('sidebar.settings', check)
+  }, 'dsh-chamber: settings shell seat watchdog')
 
   // chamber patch (06 §4.3/§4.5): the runtime-facts channel's producer end.
   // Every boot is its own ctx with its own sessions store, so this plugin —

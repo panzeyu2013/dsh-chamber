@@ -205,6 +205,77 @@
 
 ## 一致性债务与开放登记（低–中，未排期；均指回代码面注释/design 登记）
 
+- **设置面图驱动贡献集（2026-12 落地，design 05 §5 / 09 §4·§6；剩余登记）**：
+  桌面设置壳对选中来源的贡献集已改为「基础集 + 该来源自己的客户端插件图」
+  （`clientGraph/graph` − `CHAMBER_COVERED_IDS`，经页面级 union 模块表装载，与 boot
+  同一 kernel）。剩余与有意偏差：
+  - **T2（真实 WS remote）未接线**：child ctx 的 `remote` 仍是手工 unary 面 +
+    `$on` no-op；依赖宿主事件推送的插件由其订阅被记录并**如实报告**「不会自动刷新」
+    （`CAPABILITY_REMOTE_EVENTS`）。全量接线需在 child ctx 内挂载官方 connection /
+    api-gateway / api-remotes（第二条 WS/来源 + 生命周期 fencing），且失败模式从
+    「面板降级」变成「基础链 5s 门失败 → 整个面板失败」——故按需推进，触发条件与
+    取舍见 design 09 §4 与 T3 提案；未接线期间不得声称保真等价。
+    **未接线的具体后果（2026-12 登记，用户问询后补全）**：
+    ① **面板常开期间数据不自动刷新**——官方 settings 镜像的刷新触发点是
+    `settings/document-updated` / `connection/reset`（vendor ui-settings index.ts:62-69），
+    两者在 child ctx 都不发生，且**无轮询**；面板内 child ctx 按来源缓存复用，故
+    「切走再切回」同样不刷新，唯一自动恢复路径是**关闭面板重开**（重新装配 →
+    重新 `settings.describe`）。影响面**含官方分节**（不只是第三方插件）：别处
+    （另一窗口 / CLI / gateway 其他用户 / 该实例自身前端）的改动在面板内不可见。
+    这是**预先存在**的降级（旧 stub 同为 no-op），非本次引入。
+    ② **11 个 Remote 命名空间缺席**（官方客户端挂 14 份生成 Remote / 17 个命名空间：
+    `workspace`/`commands`/`goals`/`skills`/`subagents`/`fileUploads`/`fileReferences`/
+    `directoryPicker`/`dynamicCordisRunner`/`messageFeedback`/`sessionReferenceResolver`
+    等），child ctx 只有 6 个且 `session`/`pluginInventory` 为子集 → inject 缺失可**事前**
+    报告（fiber PENDING + 缺失服务名），不 inject 直接调用则**调用时**失败（contained +
+    渲染崩溃报告）。
+    ③ **`connection` 是假面**：无 `state` 可观察量、`rpc` 为空对象、`start()` 为 no-op、
+    `$host.home` 为 undefined → 读连接状态/走 generic RPC 的插件表现同上（缺服务或崩溃）。
+    ④ **与官方前端/gateway 链不对称**：同一插件在实例自身前端（真 remote）可用、在桌面
+    设置页不可用或陈旧（17 §10.5 同源）。
+    **不是后果**：设置读写仍落目标宿主（`isLoopback` 固定 true → `persistence='host'`）；
+    官方分节功能完整；本次目标（每来源贡献来自自身图）已达成；扩展插件侧无静默。
+    **残余盲区**：①"渲染了但一直为空"且未调 `$on`、未崩溃的插件，与"该插件没有设置"
+    不可区分；②官方分节的陈旧**不产生任何提示**（能力报告只覆盖扩展插件）。
+    **不做 T2 的低成本缓解（候选，未实施）**：面板加「重新读取数据」动作（重跑
+    `settings.describe`；现有「重新加载」只重取插件图）；并把"面板内不自动刷新"的语义
+    写进诊断页文案（现仅对第三方 `$on` 订阅提示）。
+  - **依赖闭包扩展默认关**（`DEPENDENCY_CLOSURE_ENABLED=false`，机制与测试已就绪）：
+    把扩展行 `inject` 声明的 covered 依赖作为 provider 先挂进同一 ctx；默认关闭是
+    有意决策（未激活插件已如实列出缺失服务），按实测证据逐个放行。
+  - **模块级状态共享**：页面模块表按 id first-load-wins，同一模块实例可支撑多来源/
+    多 fiber（宿主实例另有 boot ctx 副本 = 双挂载）。契约 = 插件模块级无状态；跨来源
+    共享事实在诊断页报告，但不构成隔离保证。
+  - **bundle CSS 页面驻留**：模块表只给 `<style>` 打 `data-plugin` 标记，回收仅发生在
+    被 chamber 排除的 HMR 行 → 来源插件的样式一旦加载即驻留到页面结束（与 boot 路径
+    同一事实，不假装可隔离）。
+  - **执行面扩张已登记**：装载发生在「设置面板打开的来源」（原先仅「已打开 shell 的
+    来源」）；面板关闭 / 切换来源即 dispose。design 09 §4 已写为契约。
+  - **壳不渲染的座位**：`settings.trigger/header/close/onboarding` 刻意不渲染，第三方
+    贡献只报告不呈现；`settings.action` 保持「仅本地来源」限定。
+  - **未实机验证**：无真实实例/打包态环境，第三方插件装载、双挂载副作用、遮蔽看门狗
+    与 `onEntryError` 诊断均只经单测（settings-extensions 22 例 / client-plugin-loader
+    10 例 / settings-shell 4 例 / nav-active 6 例 / base-plugins-lockstep 2 例）与静态走查
+    确认，待实机冒烟。基础集 ↔ covered 的 lockstep 不变量已由该测试机械强制
+    （此前仅为文档口径）。
+  - **上游提案未排期**：`contributes.settings` 声明式描述符 + 设置面服务契约 +
+    descriptor 上线通道见 `docs/progress/todo/settings-surface-upstream-contributions.md`。
+  - **自审修复（2026-12，落地后两轮全量改动复查）**：
+    首轮：①**晚激活误报**——扩展集顺序挂载时，依赖「同一批中后挂载插件」提供的
+    服务的插件首轮被判 `inactive` 且**永久冻结**；现 `publish` 前按 live fiber 树
+    重分类（`mergeContributionVerdict`，保留归因事实、丢弃过期失败字段），补 2 例
+    单测；②`bridge-context.ts` 删除无人引用的 `OMITTED_SETTINGS_SEATS`/
+    `RENDERED_SETTINGS_SEATS`/类型再导出；③STATUS 计数校正。
+    次轮：④图缓存改为**恢复后**的最终行（`host-graph.ts` 原先把 pass-1 行入缓存，
+    重启跨越 boot 的实例会给面板留下 404 的陈旧 rev）；⑤装配失败路径先
+    `phase.cancel()` 再 dispose ctx（悬空 phase 不得触碰已释放上下文）；⑥
+    `internal/plugin` 观察者退订在已释放上下文上不得抛出。
+    复查同时确认：工作区无
+    计划外改动（受版本控制内容改动 36 个文件，逐项对应 P0–P3；`CHANGELOG.md`、
+    其英文镜像与 `docs/i18n-record.json` 仅 mtime 变化——本次新增条目已按
+    「仅发布时总结」规则移除，`verify:i18n` 一致）、构建产物
+    `packages/renderer/{.cache,src/generated}/` 属 gitignore、`pnpm-lock.yaml` 未被
+    改写、无调试残留与失效标识符引用。
 - 私有文件纪律三实现（cp `private-file.ts` 抛错式 vs dsh-runtime `private-fs.ts` kind
   结果式，同名异签）——统一需依赖方向裁定（design 18 §9.1）。
 - wire 载体（A–F）登记维持：P4-3 A↔C 传输层合并**裁定不合并**（前置 ①–⑦，任一项

@@ -1,0 +1,552 @@
+/**
+ * Settings-surface extension model (2026-12): the per-source plugin
+ * contribution set derived from the source's OWN client plugin graph.
+ *
+ * WHY: the chamber settings shell renders the selected source's official
+ * sections from a child cordis context, but that context used to mount a
+ * hardcoded plugin subset — a plugin installed in the source's profile
+ * contributed a `settings.section` on the source's own boot context and was
+ * silently unrendered. The fix is to derive the contribution set from the
+ * source's authoritative `clientGraph/graph` (design 09 §3.2 union table) and
+ * mount every non-covered row into the child context, with an honest verdict
+ * per plugin.
+ *
+ * This module holds the PURE part (row projection, namespace normalization,
+ * fiber classification, seat attribution) so it is unit-testable in plain node
+ * without a browser, a module table, or React; `bridge-context.ts` owns the
+ * effectful assembly.
+ */
+import type { ClientPluginRow } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
+
+/** cordis FiberState values (const enum, inlined at build). */
+export const FIBER_PENDING = 0
+export const FIBER_LOADING = 1
+export const FIBER_ACTIVE = 2
+export const FIBER_FAILED = 3
+
+/**
+ * The settings seats the chamber shell renders from a source's ledger. The
+ * shell's own chrome replaces the official header/trigger/close/onboarding, so
+ * contributions to those seats are reported instead of rendered (see
+ * {@link OMITTED_SETTINGS_SEATS}).
+ */
+export const RENDERED_SETTINGS_SEATS: readonly string[] = [
+  'settings.section',
+  'settings.action',
+]
+
+/**
+ * Seats the official SettingsRoot declares and renders but the chamber shell
+ * deliberately does not (self-drawn chrome, no onboarding flow). A third-party
+ * contribution here must never disappear silently — it is reported.
+ */
+export const OMITTED_SETTINGS_SEATS: readonly string[] = [
+  'settings.trigger',
+  'settings.header',
+  'settings.close',
+  'settings.onboarding',
+]
+
+/** Per-plugin contribution verdict (the honest answer to "why don't I see it?"). */
+export type ContributionState = 'active' | 'inactive' | 'failed' | 'skipped'
+
+export interface PluginContribution {
+  /** Package id (== the graph row id == the fiber name we mount it under). */
+  id: string
+  state: ContributionState
+  /** Required services that were never provided (inactive only). */
+  missing?: readonly string[]
+  /** Failure text (failed only). */
+  error?: string
+  /** Settings seats this plugin actually registered into. */
+  seats?: readonly string[]
+  /** Other sources whose child context already runs this page-level module instance. */
+  sharedWith?: readonly string[]
+  /**
+   * Child-context capabilities this plugin asked for but the surface cannot
+   * provide (2026-12). Today the only entry is `remote-events`: the plugin
+   * subscribed to forwarded host events (`ctx.remote.$on`), which the settings
+   * child context answers as a no-op — its settings will not live-update.
+   */
+  capabilities?: readonly string[]
+  /**
+   * `contribution` (default) = a plugin installed in the source's profile;
+   * `provider` = a chamber-covered package mounted ONLY to satisfy another
+   * plugin's declared package dependency (optional closure expansion, 2026-12).
+   * Provider outcomes are not reported as user-facing notices: the dependent
+   * plugin's own `inactive` line already tells the honest story.
+   */
+  role?: 'contribution' | 'provider'
+  /**
+   * The page already runs another rev of this plugin id (first-load-wins):
+   * `restart` = the same source rebuilt it (restart that instance to switch),
+   * `version` = a DIFFERENT source claimed the id first (cross-instance dsh
+   * runtime drift — align the runtimes). The section renders from the loaded
+   * factory, but the fact is never hidden.
+   */
+  revConflict?: 'restart' | 'version'
+}
+
+/** The capability id for "subscribed to forwarded host events". */
+export const CAPABILITY_REMOTE_EVENTS = 'remote-events'
+
+/**
+ * Stamp each contribution with the capabilities its plugin actually used.
+ * @param contributions - the phase's verdicts.
+ * @param subscriptions - caller-attributed `remote.$on` keys per plugin id.
+ * @returns the same verdicts with `capabilities` filled in.
+ */
+export function decorateContributions(
+  contributions: readonly PluginContribution[],
+  subscriptions: ReadonlyMap<string, ReadonlySet<string>>,
+): PluginContribution[] {
+  return contributions.map((contribution) => {
+    const keys = subscriptions.get(contribution.id)
+    if (keys === undefined || keys.size === 0) return contribution
+    const merged = new Set([...(contribution.capabilities ?? []), CAPABILITY_REMOTE_EVENTS])
+    return { ...contribution, capabilities: [...merged] }
+  })
+}
+
+/** A third-party entry registered into a seat the chamber shell does not render. */
+export interface OmittedSeatContribution {
+  seat: string
+  pluginId: string
+}
+
+/** One entry-render crash observed on the child context (`slots.onEntryError`). */
+export interface EntryCrash {
+  seat: string
+  pluginId?: string
+  detail: string
+}
+
+/** Extension-phase lifecycle for one source. */
+export type ExtensionState = 'pending' | 'loading' | 'ready' | 'unavailable'
+
+/** Immutable snapshot the shell renders (uSES source). */
+export interface ExtensionSnapshot {
+  state: ExtensionState
+  /** Why the phase produced nothing (unavailable only). */
+  reason?: string
+  /** Kept rows (after covered filtering + URL safety) considered by this phase. */
+  total: number
+  contributions: readonly PluginContribution[]
+  omittedSeats: readonly OmittedSeatContribution[]
+  crashes: readonly EntryCrash[]
+  /** Sorted id set of the kept rows (rebuild/reconcile key). */
+  signature: string
+}
+
+/** The empty snapshot (before the phase starts / after a total channel failure). */
+export const EMPTY_EXTENSION_SNAPSHOT: ExtensionSnapshot = {
+  state: 'pending',
+  total: 0,
+  contributions: [],
+  omittedSeats: [],
+  crashes: [],
+  signature: '',
+}
+
+/** One dropped row (unsafe URL) — reported, never silently merged. */
+export interface DroppedRow {
+  id: string
+  reason: string
+}
+
+/** Result of projecting raw graph rows into mountable extension rows. */
+export interface ExtensionRowProjection {
+  rows: ClientPluginRow[]
+  dropped: DroppedRow[]
+}
+
+/**
+ * Project a source's raw graph rows into the rows the child context may mount:
+ * drop the chamber-covered ids (double registration is fatal), drop rows whose
+ * bundle URL is not root-relative (a poisoned host graph must never steer the
+ * script loader to an external origin), and prefix the source's proxy base
+ * path so the script element fetches same-origin.
+ * @param raw - the source's raw graph rows.
+ * @param covered - the covered ids (composite registration + page-own rows).
+ * @param basePath - the source's per-instance proxy prefix ('/api/i/<id>').
+ * @returns the mountable rows plus every dropped row with its reason.
+ */
+export function projectExtensionRows(
+  raw: readonly ClientPluginRow[],
+  covered: readonly string[],
+  basePath: string,
+): ExtensionRowProjection {
+  const coveredIds = new Set(covered)
+  const rows: ClientPluginRow[] = []
+  const dropped: DroppedRow[] = []
+  for (const row of raw) {
+    if (coveredIds.has(row.id)) continue
+    if (!row.url.startsWith('/') || row.url.startsWith('//')) {
+      dropped.push({ id: row.id, reason: `bundle url is not root-relative: ${row.url}` })
+      continue
+    }
+    rows.push({
+      id: row.id,
+      url: `${basePath}${row.url}`,
+      rev: row.rev,
+      ...(row.inject === undefined ? {} : { inject: row.inject }),
+    })
+  }
+  return { rows, dropped }
+}
+
+/**
+ * Validate the `clientGraph/graph` Remote value and project its rows. Fails
+ * loud on malformed data (mirror of the renderer's graph parser: a wrong graph
+ * is a mount hazard, never a candidate for guesswork).
+ * @param value - the Remote result value.
+ * @returns the raw rows.
+ */
+export function parseClientGraphRows(value: unknown): ClientPluginRow[] {
+  if (typeof value !== 'object' || value === null) {
+    throw new Error('settings-bridge: clientGraph/graph value is not an object')
+  }
+  const entries = (value as { entries?: unknown }).entries
+  if (!Array.isArray(entries)) {
+    throw new Error('settings-bridge: clientGraph/graph value.entries must be an array')
+  }
+  const rows: ClientPluginRow[] = []
+  for (const raw of entries) {
+    if (typeof raw !== 'object' || raw === null) {
+      throw new Error('settings-bridge: clientGraph entry is not an object')
+    }
+    const row = raw as Record<string, unknown>
+    if (typeof row.id !== 'string' || typeof row.url !== 'string' || typeof row.rev !== 'string') {
+      throw new Error(`settings-bridge: clientGraph entry ${JSON.stringify(row)} must carry string id/url/rev`)
+    }
+    rows.push({
+      id: row.id,
+      url: row.url,
+      rev: row.rev,
+      // Package-level dependency edges are informational for mounting, but
+      // material for the optional dependency-closure expansion below.
+      ...(Array.isArray(row.inject) && row.inject.every(entry => typeof entry === 'string')
+        ? { inject: row.inject as string[] }
+        : {}),
+    })
+  }
+  return rows
+}
+
+/**
+ * OPTIONAL dependency-closure expansion (2026-12, gated by the caller).
+ *
+ * A plugin may depend on an official package the chamber composite already
+ * covers (e.g. `@deepseek-ai/dsh-client-ui-commands`): its client half is on
+ * the page module table, so the provider can be mounted into the SAME child
+ * context, letting the dependent plugin's services resolve instead of leaving
+ * it `inactive`. The mechanism is deliberately policy-free: it returns the
+ * provider ids to mount, and the caller decides whether to use them (the
+ * default is OFF — mounting speculative providers widens the surface for no
+ * proven benefit, and the dependent plugin's `inactive` report already names
+ * the missing service).
+ * @param rows - the projected extension rows (their `inject` edges).
+ * @param covered - the composite-covered ids (the only ones with page factories).
+ * @param mounted - ids already mounted in this child context.
+ * @returns the covered provider ids to mount first, in first-seen order.
+ */
+export function dependencyClosureProviders(
+  rows: readonly ClientPluginRow[],
+  covered: readonly string[],
+  mounted: readonly string[],
+): string[] {
+  const coveredIds = new Set(covered)
+  const already = new Set(mounted)
+  const providers: string[] = []
+  for (const row of rows) {
+    for (const dependency of row.inject ?? []) {
+      if (!coveredIds.has(dependency) || already.has(dependency) || providers.includes(dependency)) continue
+      providers.push(dependency)
+    }
+  }
+  return providers
+}
+
+/** Structural fiber face used for classification (no cordis import: pure + testable). */
+export interface FiberLike {
+  state: number
+  /** Required services (name → intercept config). */
+  inject?: Record<string, unknown>
+  ctx: { get(name: string): unknown }
+  parent?: { fiber?: FiberLike }
+}
+
+/**
+ * The required services a pending fiber is still waiting for. All child-context
+ * providers are synchronous, so an unsatisfied name is simply absent from the
+ * context registry — no timing guesswork involved.
+ * @param fiber - the pending fiber.
+ * @returns the missing service names (declaration order).
+ */
+export function missingInjectNames(fiber: FiberLike): string[] {
+  const declared = Object.keys(fiber.inject ?? {})
+  const missing: string[] = []
+  for (const name of declared) {
+    let provided: unknown
+    try {
+      provided = fiber.ctx.get(name)
+    } catch {
+      provided = undefined
+    }
+    if (provided === undefined) missing.push(name)
+  }
+  return missing
+}
+
+/**
+ * The fibers created UNDER one plugin's fiber (a plugin may register its
+ * settings contribution inside a nested `ctx.inject([...], …)` callback, whose
+ * fiber belongs to a different runtime record — a root-only check would report
+ * such a plugin "active" while nothing ever renders).
+ * @param root - the plugin's root fiber.
+ * @param all - every fiber observed on the child context.
+ * @returns the descendant fibers (root excluded).
+ */
+export function descendantFibers<T extends FiberLike>(root: T, all: readonly FiberLike[]): FiberLike[] {
+  return all.filter((candidate) => {
+    if (candidate === root) return false
+    let current: FiberLike | undefined = candidate.parent?.fiber
+    while (current !== undefined) {
+      if (current === root) return true
+      current = current.parent?.fiber
+    }
+    return false
+  })
+}
+
+/**
+ * Classify one mounted plugin from its fiber tree.
+ * @param root - the plugin's root fiber.
+ * @param all - every fiber observed on the child context since the mount began.
+ * @param error - the rejection `fiber.await()` surfaced, when any.
+ * @returns the contribution verdict (without the seat/sharing facts).
+ */
+export function classifyContribution(
+  id: string,
+  root: FiberLike,
+  all: readonly FiberLike[],
+  error: unknown,
+): PluginContribution {
+  if (error !== undefined && error !== null) {
+    return { id, state: 'failed', error: error instanceof Error ? error.message : String(error) }
+  }
+  if (root.state === FIBER_FAILED) {
+    return { id, state: 'failed', error: 'plugin apply failed (fiber FAILED)' }
+  }
+  const pending = [root, ...descendantFibers(root, all)].filter(fiber => fiber.state !== FIBER_ACTIVE)
+  if (pending.length > 0) {
+    const missing = [...new Set(pending.flatMap(fiber => missingInjectNames(fiber)))]
+    // A fiber that is neither active nor waiting on a service is still
+    // applying (LOADING): report it as inactive-without-reason rather than
+    // pretending it contributed nothing.
+    return missing.length > 0
+      ? { id, state: 'inactive', missing }
+      : { id, state: 'inactive' }
+  }
+  return { id, state: 'active' }
+}
+
+/**
+ * Merge a FRESH classification into an existing contribution verdict, keeping
+ * the attribution facts (role / seats / sharing / capabilities / rev conflict)
+ * and dropping stale failure fields.
+ *
+ * WHY: the extension phase mounts plugins sequentially, so a plugin whose
+ * service is provided by ANOTHER extension plugin mounted later in the same
+ * phase is `inactive` at its first verdict and activates moments afterwards.
+ * The report must follow the live fiber truth instead of freezing that first
+ * verdict (2026-12 review finding).
+ * @param previous - the contribution as last reported.
+ * @param fresh - the current classification of its fiber tree.
+ * @param seats - the seats it currently occupies.
+ * @returns the merged verdict.
+ */
+export function mergeContributionVerdict(
+  previous: PluginContribution,
+  fresh: PluginContribution,
+  seats: readonly string[],
+): PluginContribution {
+  const next: PluginContribution = { ...previous, state: fresh.state, seats: [...seats] }
+  if (fresh.missing !== undefined && fresh.missing.length > 0) next.missing = fresh.missing
+  else delete next.missing
+  if (fresh.error !== undefined) next.error = fresh.error
+  else delete next.error
+  return next
+}
+
+/** Structural slots face (read-only) used for attribution. */
+export interface SlotLedgerFace {
+  /** Entries carry the cordis fiber-name stamp at the entry top level (`registrant`). */
+  entries(key: string): readonly { registrant?: string }[]
+}
+
+/**
+ * The settings seats a plugin actually contributed to, attributed by the
+ * cordis fiber-name stamp the slot registry writes on every entry
+ * (`entry.registrant`, vendor ui-slots index.ts + renderer registry.ts) —
+ * exact, not a diff heuristic.
+ * @param slots - the child context's slot ledger face.
+ * @param pluginId - the plugin id (== the fiber name we mount it under).
+ * @returns the contributed seat keys, in {@link RENDERED_SETTINGS_SEATS} order.
+ */
+export function contributedSeats(slots: SlotLedgerFace, pluginId: string): string[] {
+  const seats: string[] = []
+  for (const seat of [...RENDERED_SETTINGS_SEATS, ...OMITTED_SETTINGS_SEATS]) {
+    if (slots.entries(seat).some(entry => entry.registrant === pluginId)) seats.push(seat)
+  }
+  return seats
+}
+
+/**
+ * Third-party contributions that landed in seats the chamber shell does not
+ * render. Official/base entries are excluded by registrant (the base set is
+ * mounted under explicit ids), so this reports ONLY plugin-authored entries —
+ * never the official chrome the child context always registers.
+ * @param slots - the child context's slot ledger face.
+ * @param isBasePluginId - predicate identifying the chamber's own base plugins.
+ * @returns one record per omitted-seat entry.
+ */
+export function omittedSeatContributions(
+  slots: SlotLedgerFace,
+  isBasePluginId: (id: string) => boolean,
+): OmittedSeatContribution[] {
+  const out: OmittedSeatContribution[] = []
+  for (const seat of OMITTED_SETTINGS_SEATS) {
+    for (const entry of slots.entries(seat)) {
+      const registrant = entry.registrant
+      if (registrant === undefined || isBasePluginId(registrant)) continue
+      out.push({ seat, pluginId: registrant })
+    }
+  }
+  return out
+}
+
+/** Plugin entrypoint shapes a client bundle may export. */
+export interface NormalizedPlugin {
+  /** The cordis plugin object/constructor to pass to `ctx.plugin()`. */
+  plugin: unknown
+  /** Whether a display name could be attached (object form). */
+  nameable: boolean
+}
+
+/**
+ * Normalize a materialized client-bundle namespace into a cordis plugin.
+ * dsh client packages export `apply` (+ `inject`); a bundle that exports a
+ * class/function as `default` is accepted as-is; anything else is not a plugin
+ * and must be skipped (a platform-word bundle is never an error).
+ * @param namespace - the module-table exports.
+ * @returns the plugin to mount, or null when the bundle is not a plugin.
+ */
+export function normalizePluginNamespace(namespace: unknown): NormalizedPlugin | null {
+  if (typeof namespace === 'function') return { plugin: namespace, nameable: false }
+  if (typeof namespace !== 'object' || namespace === null) return null
+  const record = namespace as Record<string, unknown>
+  if (typeof record.apply === 'function') return { plugin: record, nameable: true }
+  const fallback = record.default
+  if (typeof fallback === 'function') return { plugin: fallback, nameable: false }
+  if (typeof fallback === 'object' && fallback !== null
+    && typeof (fallback as { apply?: unknown }).apply === 'function') {
+    return { plugin: fallback, nameable: true }
+  }
+  return null
+}
+
+/** Dictionary keys the diagnostics view renders (asserted against the namespace at the shell). */
+export type SettingsNoticeKey =
+  | 'pluginsUnavailable'
+  | 'noticeInactive'
+  | 'noticeFailed'
+  | 'noticeOmittedSeat'
+  | 'noticeCrash'
+  | 'noticeShared'
+  | 'noticeCapability'
+  | 'noticeRevConflict'
+
+/** One rendered diagnostic line. */
+export interface SettingsNotice {
+  key: SettingsNoticeKey
+  /** `{param}` interpolation values (plugin / missing / seat / detail / sources / error). */
+  params?: Record<string, string>
+}
+
+/**
+ * Project an extension snapshot into the honest, human-readable notice list.
+ * Nothing that failed to render may stay invisible: every inactive/failed/
+ * skipped contribution, every omitted-seat registration, every contained
+ * render crash and every cross-source module-sharing fact becomes one line.
+ * @param snapshot - the live extension snapshot.
+ * @returns the notices, in a stable reading order.
+ */
+export function extensionNotices(snapshot: ExtensionSnapshot): SettingsNotice[] {
+  const notices: SettingsNotice[] = []
+  if (snapshot.state === 'unavailable') {
+    notices.push({ key: 'pluginsUnavailable', params: { error: snapshot.reason ?? 'unknown' } })
+  }
+  for (const contribution of snapshot.contributions) {
+    if (contribution.role === 'provider') continue
+    if (contribution.state === 'failed') {
+      notices.push({
+        key: 'noticeFailed',
+        params: { plugin: contribution.id, detail: contribution.error ?? 'unknown' },
+      })
+      continue
+    }
+    if (contribution.state === 'inactive') {
+      notices.push({
+        key: 'noticeInactive',
+        params: {
+          plugin: contribution.id,
+          missing: (contribution.missing ?? []).join(', ') || 'unknown',
+        },
+      })
+      continue
+    }
+    if (contribution.sharedWith !== undefined && contribution.sharedWith.length > 0) {
+      notices.push({
+        key: 'noticeShared',
+        params: { plugin: contribution.id, sources: contribution.sharedWith.join(', ') },
+      })
+    }
+    if (contribution.capabilities !== undefined && contribution.capabilities.length > 0) {
+      notices.push({
+        key: 'noticeCapability',
+        params: { plugin: contribution.id, capability: contribution.capabilities.join(', ') },
+      })
+    }
+    if (contribution.revConflict !== undefined) {
+      notices.push({
+        key: 'noticeRevConflict',
+        params: { plugin: contribution.id, kind: contribution.revConflict },
+      })
+    }
+  }
+  for (const omitted of snapshot.omittedSeats) {
+    notices.push({ key: 'noticeOmittedSeat', params: { plugin: omitted.pluginId, seat: omitted.seat } })
+  }
+  for (const crash of snapshot.crashes) {
+    notices.push({
+      key: 'noticeCrash',
+      params: { plugin: crash.pluginId ?? crash.seat, detail: crash.detail },
+    })
+  }
+  return notices
+}
+
+/**
+ * The provenance of one nav row: a non-base registrant means a plugin (not the
+ * chamber's own base set) provided this section, and the UI marks it as such.
+ * @param row - the projected nav row.
+ * @param isBasePluginId - the base-id predicate.
+ * @returns true when a plugin (not the chamber base set) contributed the row.
+ */
+export function isPluginProvidedRow(
+  row: { registrant?: string },
+  isBasePluginId: (id: string) => boolean,
+): boolean {
+  return row.registrant !== undefined && !isBasePluginId(row.registrant)
+}

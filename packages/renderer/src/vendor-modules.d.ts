@@ -77,6 +77,12 @@ declare module '@deepseek-ai/dsh-client-web' {
   export function ensureWebModuleSystem(seams?: BootSeams): {
     manifest: { plugins: ReadonlyArray<{ id: string; immediately?: boolean }> }
     prefetch(id: string): Promise<void>
+    /**
+     * Materialize a loaded row's module namespace (2026-12: the shared
+     * client-plugin-loader publishes this table so the settings bridge mounts a
+     * source's own plugins through the SAME union table the boot used).
+     */
+    import(specifier: string): Promise<unknown>
   }
   /** The web shell kernel consumed by shell.ts (boot.ts). */
   export class AppWebEntry {

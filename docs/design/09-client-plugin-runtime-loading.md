@@ -312,6 +312,18 @@ dsh 官方 web 的客户端插件链路是完整的（已核 vendor 源码）：
   宿主 `ClientModuleRegistry` 激活即 fail-loud，chamber 侧同样报错不静默）。
 - entry id 冲突 → 显式去重（§3.3）；`inject` 边缺失 → 官方机制已有的 loud 失败，
   不降级。
+- **设置面按需装载（2026-12 扩展，新增边界）**：桌面设置壳为**选中来源**装载其
+  插件图行（design 05 §5 2026-12 修订），执行面因此从「已打开 shell 的来源」扩到
+  「设置面板打开的来源」。边界约束：①插件在该来源的 settings child ctx 中实例化，
+  面板关闭 / 切换来源即 dispose（副作用被面板生命周期封顶）；②bundle 的 `<style>`
+  一旦加载即页面驻留（模块表只打标记，只有被 chamber 排除的 HMR 行会回收）——与
+  boot 路径同一事实，不假装可隔离；③页面模块表按 id **first-load-wins** 共享，
+  同一模块实例可支撑多来源/多 fiber，因此**插件必须模块级无状态**（状态进
+  `ctx.effect`/服务），跨来源共享事实在设置面板的诊断页如实报告；④未覆盖的
+  Remote 命名空间调用会在调用时失败（child ctx 的 `remote` 是手工面），由 entry
+  boundary + `slots.onEntryError` 捕获并报告，绝不静默；⑤装载走与 boot 完全相同的
+  页面级 kernel（shared face `client-plugin-loader.ts`），`host-graph.ts` 只保留
+  boot 策略（fail-loud + 一次恢复）。
 - 版本漂移：宿主图 rev 与 chamber 复合 bundle 的合并是 union 语义，不要求
   两图同 rev（chamber 复合由 chamber 构建管，宿主图由实例插件集管）。壳版本
   落后/超前于后端时，多出的核心行以"特性缺席"运行（§3.3 apply 降级），绝不使
@@ -385,9 +397,15 @@ dsh 官方 web 的客户端插件链路是完整的（已核 vendor 源码）：
 - **与 05 契约的关系：已修订（2026-08，本文定稿同批）**——05 §2/§6 与 04 §5 的
   `__DSH_BOOT__` 单 entry 表述已改为「单 entry + 每实例宿主图额外 entry」，05 §6
   构建链补充 host 包与 seed 说明。
-- **与 STATUS 预留通道的关系**：settings 页 `ns.inject('settings.section')` 通道
-  仍可用于后续插件化——本方案是通用客户端插件运行时加载，settings 区只是
-  一种座位，两者不冲突（本方案落地后该通道仍可用）。
+- **与设置面通道的关系（2026-12 修订，取代「预留通道」表述）**：settings 页
+  `slots.inject('settings.section')` 通道**已接线**——桌面设置壳对选中来源装载其
+  客户端插件图行（扣除 covered），把第三方插件的设置贡献渲染进设置面板
+  （design 05 §5 2026-12 修订）。旧表述「通道仍可用于后续插件化」描述的是当时
+  的缺口：宿主 boot ctx 上的第三方注册没有渲染者、child ctx 只挂静态白名单。
+  现口径：**贡献源 = 来源自己的插件图**；未被渲染的贡献（未激活/失败/壳不渲染的
+  座位）必须在设置面板的「插件设置」诊断页可见，不得静默消失。上游若要摆脱
+  「必须实例化才知道贡献」的限制，见 T3 提案
+  `docs/progress/todo/settings-surface-upstream-contributions.md`。
 - **Windows**：支持推进见 design 23（首版发布未出；插件运行时 win32 验证随 M3/M4
   实机门禁与 design 23 §8 矩阵）。
 

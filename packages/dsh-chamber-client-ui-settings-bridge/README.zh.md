@@ -2,18 +2,25 @@
 
 [English](README.md) | 中文
 
-chamber 自研**设置壳**插件（2026-08 设计讨论）：以低于官方 SettingsRoot
-注册的优先级（`-1`）向 `sidebar.settings` 槽注册「设置 / Settings」壳，
-从而**遮蔽官方壳**——绝不冲突：官方入口仍在账上，其 `settings.*` 子声明
-依然有效。
+chamber 自研**设置壳**插件（2026-08 设计讨论；2026-12 图驱动修订）：以**保留的
+shadow 优先级**（`-1000`，shared face `settings-shell.ts`）向 `sidebar.settings`
+槽注册「设置 / Settings」壳，从而**遮蔽官方 SettingsRoot**——绝不冲突：官方入口
+仍在账上，其 `settings.*` 子声明依然有效。chamber 侧边栏监视该槽的 cell winner，
+若有注册者低于保留区间（即顶掉设置壳）则 console 报告。
 
 ## 行为
 
-- 服务器下拉选择；面板为选中实例挂载**每实例子 cordis 上下文**（fake
-  connection + 官方设置插件子集），渲染目标实例的官方设置分区——桥仅代理
-  既有的 settings/credentials/llm RPC 面；选中 gateway 服务器时额外挂载
-  per-server「dsh 运行时」设置段（design 18 §3.6/§9.3，代理
-  `/chamber/runtime`，版本选择/应用/回滚/重启）。
+- 服务器下拉选择；面板为选中实例挂载**每实例子 cordis 上下文**，其插件集
+  **由图驱动**（2026-12 修订，design 05 §5）：基础集（声明链 + slots + locale +
+  theme + 官方设置家族 + BridgeRows + per-source「dsh 运行时」段）+ **该来源
+  自己的客户端插件图**（`clientGraph/graph`，扣除 covered 行，经页面级 union
+  模块表装载后逐个挂进同一子 ctx）。桥仅代理既有的 settings/credentials/llm
+  RPC 面；选中 gateway 服务器时额外挂载 per-server「dsh 运行时」设置段
+  （design 18 §3.6/§9.3，代理 `/chamber/runtime`，版本选择/应用/回滚/重启）。
+- **诚实报告**：第三方分节带「插件」来源标记；未渲染的贡献（未激活并列出缺失
+  服务、加载/挂载失败、壳不渲染的座位、渲染崩溃、跨来源模块实例共享、订阅
+  `remote.$on` 的能力降级）在「插件设置」诊断页如实列出，绝不静默消失；
+  「重新加载」只重取图并 reconcile（基础集不重建）。
 - 固定的 chamber 全局「连接」「通用」导航入口：连接页渲染 chamber 包的
   settings-connections 分区；通用页渲染 chamber 全局运行设置（design 14
   D7/15，退出确认/自启/防休眠 + design 11 更新状态）。

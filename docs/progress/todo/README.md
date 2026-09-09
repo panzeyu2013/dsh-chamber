@@ -12,6 +12,7 @@
 | 1 | [subagents-in-sidebar.md](subagents-in-sidebar.md) | session 的 subagents 在侧边栏中的显示 | 想法，未设计 / 未排期 |
 | 2 | [12-todo-archived-sessions.md](12-todo-archived-sessions.md) | 已归档会话管理剩余面：「已归档」浏览区（A，design 24 可选后续，未排期）；特权层直删（B，冻结）；上游 wire 草案（C，上游落地前不发明） | A 未排期；B 冻结；C 待上游 |
 | 3 | [windows-v1.md](windows-v1.md) | Windows v1 剩余外部门禁与取舍（design 23 companion；代码项已就绪） | 外部门禁待真实 runner/实机 |
+| 4 | [settings-surface-upstream-contributions.md](settings-surface-upstream-contributions.md) | 设置面的上游声明式贡献通道（T3 提案：`dsh.client.contributes.settings` / 设置面服务契约 / descriptor 上线通道）；chamber 侧图驱动设置面已落地（design 05 §5 / 09 §6，2026-12） | 上游提案，未排期 |
 
 ## 纪律
 

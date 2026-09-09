@@ -165,6 +165,18 @@ export class BridgeApiClient {
   readonly pluginInventory = {
     list: () => this.call('pluginInventory/list', {}),
   }
+
+  /**
+   * Host client-plugin boot graph face (chamber host gateway
+   * `dsh-chamber-seed-client-graph`, Remote `clientGraph/graph`): the composed
+   * `dsh.client` rows of THIS source, the same graph the host injects as
+   * `window.__DSH_BOOT__`. The settings bridge reads it to mount the selected
+   * source's own plugin contributions into the child context (2026-12) —
+   * read-only, no execution surface on the host side.
+   */
+  readonly clientGraph = {
+    graph: () => this.call('clientGraph/graph', {}),
+  }
 }
 
 /** Validate the server-response envelope and project its `result` (mirror of the official parseConnectionResponse). */
