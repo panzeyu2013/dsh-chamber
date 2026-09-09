@@ -106,11 +106,22 @@
       chamber 是否消费、新包是否要动作）。
 - [ ] 后续升级（如 rc.2 → 更高）时复用本 checklist，并在 STATUS.md 记录增量。
 
-## 9. 在途：dsh-v0.1.5-alpha.1 升级（2026-09 调研完成，pin 仍 alpha.2）
+## 9. 在途：dsh-v0.1.5-alpha.2 升级（2026-09 调研完成，pin 仍 0.1.3-alpha.2）
 
-> 状态：**未升级**（源码线/运行时线仍 0.1.3-alpha.2）。上游 `dsh-v0.1.5-alpha.1`
-> （5dda764e）已发布 npm；本节记录已完成的准备与剩余工作，供下一轮直接执行。
+> 状态：**未升级**（源码线/运行时线仍 0.1.3-alpha.2）。目标锚点已从 `dsh-v0.1.5-alpha.1`
+> 更新为 **`dsh-v0.1.5-alpha.2`**（`b2e3b2a0`，上游 master HEAD，npm `alpha` 已指向它）；
+> 本节记录已完成的准备与剩余工作，供下一轮直接执行。
 > 全部结论来自只读调研（`ls-remote`/`fetch` 与逐文件 diff），未改动 pin。
+>
+> **2026-09 补充（两轮）**：
+> ① 全量差异对比（rc.1→alpha.2 + chamber 兼容评估，含前端显示差异、右栏栈服务注入硬点、
+> 设计 24 的 v3 代际残留）见
+> [`dsh-upgrade-diff-0.1.2-rc1-to-0.1.5.md`](dsh-upgrade-diff-0.1.2-rc1-to-0.1.5.md)；
+> ② **逐文件/逐函数决策矩阵**（8 个域、848 行文件级决策 + 15 条冲突 + 7 个待裁决点）见
+> [`dsh-upgrade-decision-matrix.md`](dsh-upgrade-decision-matrix.md)。
+> 关键修正：alpha.2 又把中心列改为 keyed `main` 槽（`conversation` 槽消失）、官方 sidebar 新增
+> `sidebar.panellist`；`ALLOW_BUILDS` 的 `fs-ext` **不能删**（回滚目标仍依赖）；设计 24 有
+> **4** 个缺陷（含 `list()` 返回快照导致真机 preview/purge 全挂）。
 
 ### 9.1 已完成（已提交，与版本无关）
 - **`msgpackr-extract` 裁决**：0.1.5 线 store-index 依赖引入该原生加速器；pnpm 11
