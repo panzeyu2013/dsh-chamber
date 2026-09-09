@@ -321,7 +321,7 @@ chamber 的 sidebar fork 取代官方 `ui-sidebar`，若不复刻 `panellist` + 
 - `src/vendor-modules.d.ts:56-57` 的 store 快照声明同步。
 - `test/markup.test.ts` 大量 `'details'` 断言随之重写。
 
-#### 2.1.3 右栏栈必须落地（否则 chat 面不激活）——**需要用户裁决**
+#### 2.1.3 右栏栈必须落地（否则 chat 面不激活）——**已裁决并落地**（方案 A + 非致命 loud 探针，见 D2）
 
 实测：**composite 注册的全部官方包里，0.1.5 只有 `ui-chat` 的 cordis `inject` 变了**
 （`+sidebarRight`、`−layout`；`ui-chat/src/client/apply.ts:47-50`）。而 `sidebarRight`

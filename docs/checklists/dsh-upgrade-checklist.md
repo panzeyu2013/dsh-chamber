@@ -120,7 +120,7 @@
 > ① 全量差异对比（rc.1→alpha.2 + chamber 兼容评估，含前端显示差异、右栏栈服务注入硬点、
 > 设计 24 的 v3 代际残留）见
 > [`dsh-upgrade-diff-0.1.2-rc1-to-0.1.5.md`](dsh-upgrade-diff-0.1.2-rc1-to-0.1.5.md)；
-> ② **逐文件/逐函数决策矩阵**（8 个域、848 行文件级决策 + 15 条冲突 + 7 个待裁决点）见
+> ② **逐文件/逐函数决策矩阵**（8 个域、848 行文件级决策 + 15 条冲突 + 7 个裁决点，**三轮已全部裁决**）见
 > [`dsh-upgrade-decision-matrix.md`](dsh-upgrade-decision-matrix.md)。
 > 关键修正：alpha.2 又把中心列改为 keyed `main` 槽（`conversation` 槽消失）、官方 sidebar 新增
 > `sidebar.panellist`；`ALLOW_BUILDS` 的 `fs-ext` **不能删**（回滚目标仍依赖）；设计 24 有
