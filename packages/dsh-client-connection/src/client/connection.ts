@@ -1,29 +1,28 @@
-/** Stable Host facts delivered by one established Remote event generation. */
-export interface ConnectionHostInfo {
-  /** Host account home used only to abbreviate displayed filesystem paths. */
-  readonly home: string
-}
+/** Connection generation readiness, cancellation, and continuous recovery. */
+import { resolveConnectionConfig, type ConnectionRecoveryConfig } from '../recovery-config.ts'
 
-/** One successfully established Host generation. */
-export interface ConnectionGeneration {
-  /** Monotone generation number within this Client runtime. */
-  readonly id: number
-  /** Host facts carried by this generation's opening frame. */
-  readonly host: ConnectionHostInfo
-}
+export type { ConnectionRecoveryConfig } from '../recovery-config.ts'
 
-/**
- * Reconnect/backoff tunables. All fields are optional; defaults are below.
+/*
+ * ## chamber patch (dsh-chamber connection manager, design 05 §3.6 / design 14 D4)
  *
- * ## chamber patch (dsh-chamber connection manager, design 05 §3.6)
+ * Upstream moved the whole ConnectionConfig/backoff block into
+ * `recovery-config.ts` (v0.1.3-alpha.2). The chamber deltas below are
+ * re-applied on the upstream copy:
  *
- * `basePath` is the added per-instance parameter: the browser plugin apply
- * resolves the api-carrier base path from it (falling back to the legacy
- * `window.__DSH_BASE_PATH__` deployment knob when an embedder omits it).
- * Chamber supplies it explicitly per entry. `/api` is the stock value (no
- * prefix injection — paths are byte-identical to upstream); `/api/i/<id>`
- * routes every RPC/WS path through the control-plane per-instance proxy.
- * Defaults preserve existing behaviour.
+ * - `basePath` (the former per-instance controller-config member) now lives
+ *   only in the chamber apply config of `src/client/index.ts` — the
+ *   controller never read it, so nothing controller-side is lost.
+ * - `CONNECTION_BACKOFF_MAX_MS` stays exported: `liveness-triggers.ts`
+ *   re-exports it as `DEFAULT_MIN_RESTART_INTERVAL_MS` and tests pin
+ *   10_000 == the recovery-config schema default (backoffMaxMs).
+ * - loopEpoch guards #1/#3 + the while condition + the stop() bump (design
+ *   14 D4) are kept; guard #2 (the final-backoff-tier wait block) is dropped
+ *   because upstream `isRetryInterrupted` + the `isRunning()` rechecks now
+ *   supersede it.
+ * - the readiness handshake gained upstream semantics: a 3 s warn
+ *   (`generationReadyWarnMs`) then a 15 s hard deadline
+ *   (`generationReadyTimeoutMs`) that aborts the generation.
  *
  * Rebased for upstream v0.1.2-alpha.2: the recovery policy is now
  * network-aware — `reconnect()` (immediate manual retry) and
@@ -50,31 +49,30 @@ export interface ConnectionGeneration {
  * and reworked fixture.ts (session format v2 + live assistant-stream frames,
  * chunk-rows dropped); src/client/index.ts upstream delta was doc-only and
  * is not re-synced (chamber prose kept). No connection.ts changes.
+ *
+ * v0.1.3-alpha.2 baseline: recovery-config extraction above.
  */
-export interface ConnectionConfig {
-  /** First-retry backoff cap in ms (jittered: actual delay is cap/2..cap). */
-  backoffBaseMs?: number
-  /** Exponential growth factor per failed attempt; values at or below 1 make the base tier final. */
-  backoffFactor?: number
-  /** Upper bound for the backoff cap in ms. */
-  backoffMaxMs?: number
-  /** Maximum wait for the registered generation source's ready signal. */
-  generationReadyTimeoutMs?: number
-  /** chamber patch: per-instance api base path (`/api` stock; `/api/i/<id>` per instance). */
-  basePath?: string
+
+/** Stable Host facts delivered by one established Remote event generation. */
+export interface ConnectionHostInfo {
+  /** Host account home used only to abbreviate displayed filesystem paths. */
+  readonly home: string
 }
 
-/** Upper bound for the reconnect backoff cap in ms (exported: the liveness
- *  trigger debounce aligns to it — see liveness-triggers.ts). */
+/** One successfully established Host generation. */
+export interface ConnectionGeneration {
+  /** Monotone generation number within this Client runtime. */
+  readonly id: number
+  /** Host facts carried by this generation's opening frame. */
+  readonly host: ConnectionHostInfo
+}
+
+/** Upper bound for the reconnect backoff cap in ms (chamber export: the
+ *  liveness trigger debounce aligns to it — see liveness-triggers.ts, which
+ *  re-exports this as DEFAULT_MIN_RESTART_INTERVAL_MS). The value matches the
+ *  recovery-config schema default (backoffMaxMs = 10_000); the recovery
+ *  defaults themselves live upstream in recovery-config.ts. */
 export const CONNECTION_BACKOFF_MAX_MS = 10_000
-
-const CONNECTION_DEFAULTS: Required<ConnectionConfig> = {
-  backoffBaseMs: 500,
-  backoffFactor: 2,
-  backoffMaxMs: CONNECTION_BACKOFF_MAX_MS,
-  generationReadyTimeoutMs: 3_000,
-  basePath: '',
-}
 
 const MANUAL_RECONNECT = new Error('connection: manual reconnect requested')
 const NETWORK_STATE_CHANGED = new Error('connection: browser network state changed')
@@ -117,7 +115,8 @@ export interface ConnectionSinks {
 /**
  * One long-lived source defining a Connection generation. The source must
  * attach its incremental listeners before calling `ready`, then remain pending
- * until the generation is lost or `signal` aborts.
+ * until the generation is lost or `signal` aborts. On abort it must stop
+ * delivery, release its resources, and settle before a replacement can start.
  * @param signal - cancellation for the current generation.
  * @param ready - one-shot report that incremental delivery is attached.
  * @returns a promise settling only when this generation ends or fails.
@@ -141,7 +140,7 @@ export class ConnectionController {
   private immediateRetry = false
   private networkAvailable = true
   private lastState: ConnectionState | undefined
-  private readonly config: Required<ConnectionConfig>
+  private readonly config: Required<ConnectionRecoveryConfig>
   // chamber patch (design 14 D4): loop epoch. stop() bumps it so an in-flight
   // loop invocation from a PREVIOUS start() can never survive a synchronous
   // stop()+start() restart: the official `isRunning()` check alone is racy —
@@ -155,14 +154,14 @@ export class ConnectionController {
   constructor(
     source: ConnectionGenerationSource,
     sinks: ConnectionSinks = {},
-    config: ConnectionConfig = {},
+    config: ConnectionRecoveryConfig = {},
   ) {
     // chamber patch (erasableSyntaxOnly): upstream parameter properties are
     // explicit field assignments here so the copy typechecks under the
     // chamber's erasable-only config.
     this.source = source
     this.sinks = sinks
-    this.config = { ...CONNECTION_DEFAULTS, ...config }
+    this.config = resolveConnectionConfig(config)
   }
 
   /** Idempotent: begin the connect/pump/reconnect loop. */
@@ -221,10 +220,9 @@ export class ConnectionController {
     return cap / 2 + Math.random() * (cap / 2)
   }
 
-  private isFinalBackoffTier(attempt: number): boolean {
-    const cap = this.backoffCap(attempt)
-    const nextCap = this.backoffCap(attempt + 1)
-    return cap >= this.config.backoffMaxMs || !Number.isFinite(nextCap) || nextCap <= cap
+  /** Re-read retry inputs after a potentially reentrant state sink. */
+  private isRetryInterrupted(immediate: boolean): boolean {
+    return this.immediateRetry || (!this.networkAvailable && !immediate)
   }
 
   /** Read through a method: stop() flips the flag across awaits, so narrowing from the loop condition must not stick. */
@@ -261,18 +259,10 @@ export class ConnectionController {
         this.immediateRetry = false
         if (immediate) this.attempt = 0
         manualAttempt = immediate
-        if (!immediate && this.attempt > 0 && this.isFinalBackoffTier(this.attempt)) {
-          const retryDelay = new AbortController()
-          this.retryDelay = retryDelay
-          this.emitState('disconnected')
-          await waitForAbort(retryDelay.signal)
-          if (this.retryDelay === retryDelay) this.retryDelay = null
-          if (!this.isRunning() || epoch !== this.loopEpoch) return
-          continue
-        }
         const attempt = ++this.attempt
         this.emitState('connecting')
-        if (!this.isRunning()) return
+        if (!this.isRunning() || epoch !== this.loopEpoch) return
+        if (this.isRetryInterrupted(immediate)) continue
         if (!immediate) {
           const retryDelay = new AbortController()
           this.retryDelay = retryDelay
@@ -283,7 +273,7 @@ export class ConnectionController {
         }
         console.warn(`[connection] connection lost, retry #${String(attempt)}`)
         this.callSink(() => { this.sinks.onReconnectRequested?.() })
-        if (!this.isRunning()) return
+        if (!this.isRunning() || epoch !== this.loopEpoch) return
       }
 
       const gen = ++this.generation
@@ -302,7 +292,7 @@ export class ConnectionController {
         rejectSourceLost = reject
       })
       const reportReady = (host: ConnectionHostInfo): void => {
-        if (sourceReady) return
+        if (sourceReady || gen !== this.generation || !this.isGenerationActive(ac)) return
         sourceReady = true
         resolveReady(host)
       }
@@ -334,7 +324,7 @@ export class ConnectionController {
 
       try {
         const host = await Promise.race([
-          waitForReady(ready, this.config.generationReadyTimeoutMs, ac.signal),
+          waitForReady(ready, this.config, ac.signal),
           sourceLost,
         ])
         if (ac.signal.aborted) throw new Error('generation aborted during readiness handshake')
@@ -344,8 +334,8 @@ export class ConnectionController {
         if (this.isGenerationActive(ac)) {
           this.callSink(() => { this.sinks.onConnected?.(host) })
         }
-      } catch {
-        // Source settlement and controller cancellation already abort the generation.
+      } catch (error) {
+        if (!ac.signal.aborted) ac.abort(error)
       }
 
       await failed
@@ -374,19 +364,29 @@ export class ConnectionController {
   }
 }
 
-/** Await source readiness while reporting, but not cancelling, a slow Host. */
-function waitForReady<T>(ready: Promise<T>, timeoutMs: number, signal: AbortSignal): Promise<T> {
+/** Report a slow handshake before the hard deadline ends its generation. */
+function waitForReady<T>(
+  ready: Promise<T>,
+  config: Required<ConnectionRecoveryConfig>,
+  signal: AbortSignal,
+): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     let settled = false
+    const warning = setTimeout(() => {
+      console.warn(`[connection] generation is still not ready after ${String(config.generationReadyWarnMs)}ms`)
+    }, config.generationReadyWarnMs)
     const timeout = setTimeout(() => {
-      console.warn(`[connection] generation is still not ready after ${String(timeoutMs)}ms`)
-    }, timeoutMs)
+      const error = new Error(`connection generation was not ready within ${String(config.generationReadyTimeoutMs)}ms`)
+      console.warn(`[connection] ${error.message}; cancelling generation`)
+      finish({ error })
+    }, config.generationReadyTimeoutMs)
     const aborted = (): void => {
       finish({ error: new Error('connection generation aborted', { cause: signal.reason }) })
     }
     const finish = (outcome: { readonly value: T } | { readonly error: Error }): void => {
       if (settled) return
       settled = true
+      clearTimeout(warning)
       clearTimeout(timeout)
       signal.removeEventListener('abort', aborted)
       if ('error' in outcome) reject(outcome.error)

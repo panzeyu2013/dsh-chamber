@@ -1,7 +1,7 @@
 {
   "name": "@deepseek-ai/dsh-client-connection",
   "description": "Authenticated RPC transport, generation lifecycle, and browser fixture",
-  "version": "0.1.3-alpha.1",
+  "version": "0.1.3-alpha.2",
   "publishConfig": {
     "access": "public"
   },
@@ -61,6 +61,6 @@
     "@deepseek-ai/dsh-util-values": "workspace:^"
   },
   "scripts": {
-    "test": "node test/api-path.test.ts && node test/carrier-assembly.test.ts && node test/liveness-triggers.test.ts"
+    "test": "node test/api-path.test.ts && node test/carrier-assembly.test.ts && node --import ../../scripts/dev/test-connection-register.mjs test/liveness-triggers.test.ts"
   }
 }

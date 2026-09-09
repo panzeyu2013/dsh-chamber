@@ -12,7 +12,7 @@
 | 1 | [subagents-in-sidebar.md](subagents-in-sidebar.md) | session 的 subagents 在侧边栏中的显示 | 想法，未设计 / 未排期 |
 | 2 | [12-todo-archived-sessions.md](12-todo-archived-sessions.md) | 已归档会话管理剩余面：「已归档」浏览区（A，design 24 可选后续，未排期）；特权层直删（B，冻结）；上游 wire 草案（C，上游落地前不发明） | A 未排期；B 冻结；C 待上游 |
 | 3 | [windows-v1.md](windows-v1.md) | Windows v1 剩余外部门禁与取舍（design 23 companion；代码项已就绪） | 外部门禁待真实 runner/实机 |
-| 4 | [branch-plan-v0.1.3-alpha1.md](branch-plan-v0.1.3-alpha1.md) | v0.1.3-alpha1 分支执行计划 T1–T4：追踪 alpha.2 / 命名统一 / fork 重锚 / open-in 统一 / 上游触点清单（方案已定稿，用户批准） | 待执行（Batch 0→0.5→1→2→3；绿门见文内 §8） |
+| 4 | [branch-plan-v0.1.3-alpha1.md](branch-plan-v0.1.3-alpha1.md) | v0.1.3-alpha1 分支执行计划 T1–T4：追踪 alpha.2 / 命名统一 / fork 重锚 / open-in 统一 / 上游触点清单（方案已定稿，用户批准） | 执行中：**Batch 0（T1）✅ 已完成**（双线收口，记录见 STATUS）；Batch 0.5→1→2→3 待推进（绿门见文内 §8） |
 
 ## 纪律
 

@@ -5,13 +5,12 @@
  * ## chamber patch (dsh-chamber connection manager, design 05 §3.6)
  *
  * The plugin apply accepts an optional `ConnectionConfig` (the entry-level
- * twin of the controller config in ./connection.ts): its `basePath` option
- * (default `/api` = stock) is resolved at carrier construction and handed to
- * the generic RPC carrier, so every api path lands under the control-plane
- * per-instance proxy prefix (`/api/i/<id>`). Chamber always supplies the
- * per-entry config explicitly. When no config is passed,
- * `window.__DSH_BASE_PATH__` remains a compatibility fallback for other
- * embedding environments.
+ * twin of the controller config): its `basePath` option (default `/api` =
+ * stock) is resolved at carrier construction and handed to the generic RPC
+ * carrier, so every api path lands under the control-plane per-instance
+ * proxy prefix (`/api/i/<id>`). Chamber always supplies the per-entry config
+ * explicitly. When no config is passed, `window.__DSH_BASE_PATH__` remains a
+ * compatibility fallback for other embedding environments.
  *
  * merged with the upstream v0.1.2-alpha.2 rewrite: the ConnectionHandle
  * surface is `{ rpc, generation, state, reconnect, registerGenerationSource,
@@ -27,11 +26,22 @@
  * the typert RemoteError/RemoteFailure/RemoteResult family) — no chamber
  * consumer imported them, so the re-export is dropped with the upstream
  * change.
+ *
+ * v0.1.3-alpha.2 baseline: upstream moved the controller timing block into
+ * `../recovery-config.ts` and renamed the controller config type to
+ * `ConnectionRecoveryConfig`; `apply` now resolves the host-injected page
+ * global `__DSH_CONNECTION_RECOVERY__` and `start` merges
+ * `{...recovery, ...config}`. The chamber `ConnectionConfig` name survives
+ * as the local alias `ConnectionRecoveryConfig & { basePath?: string }` —
+ * the apply/start parameter type keeps `basePath` (the renderer
+ * chamber-entry passes strict literals); `basePath` is projected out before
+ * the recovery schema sees the merged object, and any recovery-timing
+ * fields in the chamber config override the page-global bootstrap values.
  */
 import type { Context } from '@deepseek-ai/cordis'
 import {
   ConnectionController,
-  type ConnectionConfig,
+  type ConnectionRecoveryConfig,
   type ConnectionGeneration,
   type ConnectionGenerationSource,
   type ConnectionSinks,
@@ -42,6 +52,7 @@ import { createWebConnectionRpc, type RpcFetch, type RpcStreamOpen } from './rpc
 import { assembleConnectionCarriers } from './carrier-assembly.ts'
 import { attachLivenessTriggers } from './liveness-triggers.ts'
 import { isLoopbackHostname } from '../loopback-hostname.ts'
+import { resolveConnectionConfig } from '../recovery-config.ts'
 import type { ClientConnectionRpc } from '../rpc.ts'
 
 declare module '@deepseek-ai/cordis' {
@@ -70,13 +81,26 @@ export {
 // Connection loop types are public through ConnectionHandle.start; the
 // controller remains package-internal.
 export type {
-  ConnectionConfig,
+  ConnectionRecoveryConfig,
   ConnectionGeneration,
   ConnectionGenerationSource,
   ConnectionHostInfo,
   ConnectionSinks,
   ConnectionState,
 } from './connection.ts'
+
+/**
+ * chamber patch: the apply/start config surface = the upstream recovery
+ * timing plus the per-instance `basePath` (upstream dropped the old
+ * ConnectionConfig name when it extracted recovery-config.ts; chamber
+ * consumers keep passing the basePath-carrying config, so the name survives
+ * as this alias).
+ */
+export type ConnectionConfig = ConnectionRecoveryConfig & {
+  /** chamber patch: per-instance api base path (`/api` stock, `/api/i/<id>` chamber). */
+  basePath?: string
+}
+
 export type {
   ClientConnectionRpc, ConnectionRpcFailure, ConnectionRpcResult,
 } from '../rpc.ts'
@@ -141,6 +165,8 @@ export interface ClientTransportHooks {
 /** Page global carrying {@link ClientTransportHooks}; absent in the served web app. */
 interface ClientTransportGlobal {
   __DSH_TRANSPORT__?: ClientTransportHooks
+  /** Host-injected recovery bootstrap (v0.1.3-alpha.2 webserver index-inject). */
+  __DSH_CONNECTION_RECOVERY__?: unknown
 }
 
 /**
@@ -176,7 +202,8 @@ export interface ConnectionHandle {
    * Start the connect/reconnect loop with the consumer's state callbacks.
    * API Gateway owns the loop; a second call throws.
    * @param sinks - connection-state callbacks.
-   * @param config - reconnect/backoff tunables.
+   * @param config - explicit timing overrides; omitted fields use the resolved
+   *   recovery timing (Host page-global bootstrap + chamber apply config).
    * @returns lifecycle controls for the loop.
    */
   start(sinks: ConnectionSinks, config?: ConnectionConfig): ConnectionLoop
@@ -219,7 +246,9 @@ function watchBrowserNetwork(controller: ConnectionController): () => void {
 /**
  * Client plugin body: pick the api by page mode and provide ctx.connection.
  * @param ctx - client cordis context.
- * @param config - optional chamber patch: per-instance base path config (defaults stock).
+ * @param config - chamber config: recovery-timing overrides + per-instance
+ *   base path (defaults to the stock `/api`; basePath never reaches the
+ *   recovery schema).
  */
 export function apply(ctx: Context, config?: ConnectionConfig): void {
   const pageLocation = typeof location === 'undefined' ? undefined : location
@@ -228,6 +257,16 @@ export function apply(ctx: Context, config?: ConnectionConfig): void {
   // transport installs it on the page global before plugin boot (chamber's
   // basePath patch still takes precedence for the RPC carrier).
   const transport = (globalThis as ClientTransportGlobal).__DSH_TRANSPORT__
+  // v0.1.3-alpha.2: the Host injects the recovery bootstrap into each served
+  // page (`__DSH_CONNECTION_RECOVERY__`); chamber config fields win over it.
+  const recovery = resolveConnectionConfig({
+    ...(globalThis as ClientTransportGlobal).__DSH_CONNECTION_RECOVERY__ as ConnectionRecoveryConfig,
+    backoffBaseMs: config?.backoffBaseMs,
+    backoffFactor: config?.backoffFactor,
+    backoffMaxMs: config?.backoffMaxMs,
+    generationReadyWarnMs: config?.generationReadyWarnMs,
+    generationReadyTimeoutMs: config?.generationReadyTimeoutMs,
+  })
   const fixtureRpc = fixture ? createFixtureConnectionRpc() : undefined
   // chamber patch: resolve the per-entry path once and fan the same immutable
   // value into the generic RPC carrier (plus the transport's fetch/stream
@@ -316,6 +355,10 @@ export function apply(ctx: Context, config?: ConnectionConfig): void {
       if (owner !== undefined) throw new Error('connection: the stream loop is already owned by another consumer')
       const source = generationSource
       if (source === undefined) throw new Error('connection: no generation source is registered')
+      // chamber patch: basePath is an apply-only member — project it out
+      // before the controller resolves the recovery schema over the merged
+      // `{...page recovery + apply overrides, ...start overrides}` object.
+      const { basePath: _applyOnly, ...startOverrides } = config ?? {}
       const token = {}
       const ownsGeneration = (): boolean => owner?.token === token
       const controller = new ConnectionController(source, {
@@ -334,7 +377,7 @@ export function apply(ctx: Context, config?: ConnectionConfig): void {
           publishState(state)
           sinks.onStateChange?.(state)
         },
-      }, config ?? {})
+      }, { ...recovery, ...startOverrides })
       const current = { token, source, controller, stopNetworkWatch: watchBrowserNetwork(controller) }
       owner = current
       // chamber patch (design 14 D4 + sleep/wake liveness extension): restart

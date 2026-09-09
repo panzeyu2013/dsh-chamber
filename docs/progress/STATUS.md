@@ -8,36 +8,32 @@
 
 ## 未完成 / 部分完成（剩余验收）
 
-> **2026-09 dsh 基线对齐记录（0.1.3-alpha.1，临时驻留；发布收口时并入 CHANGELOG 后移除）**：
-> 源码线 pin → dsh-v0.1.3-alpha.1（d347e7039，`update-vendor.mjs` 原子升级，tag 与远程一致；
-> 锁文件重生成后 frozen 稳定；vendor 链接 267（较 rc.1 增 6 个上游包目录：client/file-upload、
-> session/session-format、session/session-format-catalog、session/session-format-v0-to-v1、
-> session/session-format-v1-to-v2、util/http-proxy）。上游相对 rc.1 是**实质内容版本**
-> （328 commits）：fork 副本重放——connection 采纳流式 body 上传路由与 fixture 的
-> session-format v2 / live assistant-stream 重构（chunk-rows 面移除；tsconfig 补
-> `dsh-llm/assistant-stream` 别名；`src/client/index.ts` 上游注释净改动未回抄）、
-> api-gateway 采纳 journal-stream 无游标 notification 帧（vendor dsh-api-session-controller
-> 在 NEW 以 5 参消费，重放为强制项）、web 仅版本行；三副本版本标记 → 0.1.3-alpha.1。
-> chamber 适配：激活探针 `commands/execute` 载荷按 0.1.3 client 投影改名
-> `images` → `attachments`（typert 生成 wire key 未提交，需实机验证）；
-> allow-builds 增 `fs-ext`（0.1.3 session-persistence-jsonl 写租约 flock 引入，
-> 根树否认、运行时/打包树放行）。**运行时线未动**：`@deepseek-ai/dsh@0.1.3-alpha.1`
-> 未发布 npm → bundle 锁文件 / bundle-dsh 兜底 / release.yml env / install-gateway.sh 锚
-> 仍为 0.1.2-rc.1；release-preflight `FORK_VERSION` 默认随 fork 标记推进到 0.1.3-alpha.1
-> （双线门在运行时线跟随前会诚实失败，发布须等 npm publish）。
-> 验证：ensure --check、根/各包 typecheck、全套测试套件、build:renderer（含
-> gen-typert-remotes host lib 补 `ESNext.Disposable`——0.1.3 file-upload 的
-> `PromptFileBinding extends Disposable`）、verify:i18n、test:release-workflow 均绿；
-> 控制面『spawnDsh: abort during the post-TCP session/list wait…』为 rc.1 基线既有
-> 失败（unchanged main worktree 复现），与本次升级无关。实机探针验证（attachments
-> wire key）待 npm 发布、运行时线跟随后执行。
+> **2026-09 dsh 基线对齐记录（0.1.3-alpha.2，临时驻留；发布收口时并入 CHANGELOG 后移除）**：
+> 源码线 pin → dsh-v0.1.3-alpha.2（82a5fd61a7，`update-vendor.mjs` 原子升级，tag 与远程一致；
+> vendor 链接 267→**271**（+3 上游包目录：client/ui-open-in-app、host/open-in-app、
+> util/package-manifest；0 删除）；锁文件重生成后 frozen 稳定）。上游相对 alpha.1 为小内容
+> 版本：fork 副本重放——connection 采纳 recovery-config 抽取（重连/就绪时序默认值迁入共享
+> schema：3s 慢握手告警 + 15s 硬期限中止代次、达到上限后持续重试取代终态 disconnected；
+> chamber 的 loopEpoch 代际守卫与 `CONNECTION_BACKOFF_MAX_MS` 导出保留、`basePath` 收敛为
+> chamber apply 配置成员；connection node 测试新增 schemastery 桩 loader——vendor lib 为
+> source-only）、api-gateway 与 web 仅版本行；三副本版本标记 → 0.1.3-alpha.2。**运行时线
+> 收口**：npm `@deepseek-ai/dsh@0.1.3-alpha.2` 已发布 → bundle-dsh 兜底常量、desktop vendor
+> 锁文件（`bundle:dsh --force --refresh-lockfile`）、release.yml env、install-gateway.sh、
+> gateway `dshAnchorVersion` 四锚 rc.1→alpha.2，`bin.js --version` 冒烟 = 0.1.3-alpha.2
+> （双线门关闭）。chamber-covered 增 `@deepseek-ai/dsh-client-ui-open-in-app` 一行（T1 §2.4）。
+> 验证：ensure --check（271）、frozen、根/各 typecheck、全套测试（连接 recovery/liveness
+> 回归）、build:renderer、verify:i18n、test:release-workflow 绿。既有失败登记：控制面
+> spawnDsh post-TCP abort（rc.1 基线既有，unchanged 复现）；dsh-runtime
+> `runtimeDiskSummaryAsync` rich-fixture `>1024` 阈值断言（ZFS 目录 st_size≈3——平台性，
+> 非本次升级引入；async==sync 对等断言通过）。实机探针验证（`commands/execute attachments`
+> wire key；open-in 官方 host 行 dormant 处置）待实机实例后执行（见分支方案 §2.4/§2.5）。
 
-**分支任务登记（v0.1.3-alpha1 规划，2026-09；**方案已定稿，用户批准**；执行待按批次触发——全量方案见 `docs/progress/todo/branch-plan-v0.1.3-alpha1.md`，绿门见其 §8）**：
-- **T1 追踪上游 alpha.2**：上游已发布 dsh-v0.1.3-alpha.2（82a5fd61a7，npm 0.1.3-alpha.2 已发布）；源码线升级 + fork 重放（connection recovery-config 重构等）+ 双线收口（运行时四锚 rc.1→alpha.2）+ 实机探针验证。前置调研已完成（四份审计，见会话记录）；待评审后按 dsh-upgrade-checklist 执行。
-- **T2 目录/包命名统一**：chamber 自建插件统一 `dsh-chamber-*` 前缀、种子包用 `dsh-chamber-seed-*`、基建豁免；fork 副本与 vendor 命名混淆一并澄清（包名=身份，目录名随包）。受面调研进行中（全仓引用面/seed 键/文档），方案评审后定执行批次（建议与 alpha.2 拆批）。
-- **T3 openin 插件统一**：吸收官方 `ui-open-in-app` client 按钮 + 补远程打开能力（远程仅 deeplink 等方式、其余抑制）+ API 通道复用（避免重复造轮子）；含官方 client/host 深挖与 chamber 集成方案（代理通道/门控/红线）调研中；决策点：covered 屏蔽 vs 吸收、host 行处置、双按钮策略。
-- **T4 上游接触面跟踪清单（待建文档）**：单独文档登记"可能收到上游/从上游 fork/魔改"的全部文件（fork 副本逐文件纯度、深引 vendor 内部、契约镜像、covered/assembly 行、生成物），形成升级 checklist 与新鲜度扫描机制。
-- **方案定稿（2026-09，用户批准 5 决策点）**：T1–T4 全量方案已持久化于 `docs/progress/todo/branch-plan-v0.1.3-alpha1.md`；批次 Batch 0（T1）→ 0.5（T4）→ 1（T2）→ 2（fork 重锚）→ 3（T3），执行另触发。
+**分支任务登记（v0.1.3-alpha1 规划，2026-09；**方案已定稿，用户批准**；执行按批次推进——全量方案见 `docs/progress/todo/branch-plan-v0.1.3-alpha1.md`，绿门见其 §8）**：
+- **T1 追踪上游 alpha.2 —— ✅ Batch 0 已完成（2026-09）**：源码线升级（pin 82a5fd61a7、链接 271）+ fork 重放（connection recovery-config）+ 双线收口（四锚 rc.1→alpha.2）+ covered 一行，全量记录见上方基线对齐块与 CHANGELOG [Unreleased]；实机探针（attachments wire key、open-in host 行 dormant）结转待实机。
+- **T2 目录/包命名统一**：chamber 自建插件统一 `dsh-chamber-*` 前缀、种子包用 `dsh-chamber-seed-*`、基建豁免；fork 副本与 vendor 命名混淆一并澄清（包名=身份，目录名随包）。方案已定稿（Batch 1，原子单批，见方案 §3）；待执行。
+- **T3 openin 插件统一**：吸收官方 `ui-open-in-app` client 按钮 + 补远程打开能力（远程仅 deeplink 等方式、其余抑制）+ API 通道复用；方案已定稿（Batch 3，Phase 0 门控可提前；covered 一行已随 T1 落地——双保险）；待执行。
+- **T4 上游接触面跟踪清单（待建文档）**：单独文档登记"可能收到上游/从上游 fork/魔改"的全部文件（fork 副本逐文件纯度、深引 vendor 内部、契约镜像、covered/assembly 行、生成物），形成升级 checklist 与新鲜度扫描机制（Batch 0.5，方案 §6）；待执行。
+- **批次进度**：Batch 0（T1）✅ → Batch 0.5（T4）→ Batch 1（T2）→ Batch 2（fork 重锚）→ Batch 3（T3），每批独立提交与绿门。
 
 - **dsh 运行时版本管理（design 18 §3.6/§9，M5–M7 已落地）**：剩余——macOS 打包态
   `.app` 内共享 dsh-runtime/内嵌 pnpm/koffi 与完整激活-故障回退-恢复链的实机；Linux

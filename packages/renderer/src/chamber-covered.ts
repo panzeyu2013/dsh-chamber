@@ -184,6 +184,14 @@ export const CHAMBER_COVERED_IDS: readonly string[] = [
   // chamber-owned, chamber-entry.ts header), so the row is skipped, never
   // loaded — page-own, no factory.
   '@deepseek-ai/dsh-client-hmr',
+  // dsh-v0.1.3-alpha.2: the official open-in client row (ui-open-in-app).
+  // Chamber composes its own open-in surface (dsh-chamber-client-ui-open-in,
+  // designs 16/17/20) at the same conversation utility slot — an official
+  // row materialized from the host graph would add a second entry. Skipped
+  // like the other page-own official rows: the official button's availability
+  // probe fails inside the chamber shell and the entry self-hides (double
+  // guard, branch-plan T3 Phase 1). Page-own, no factory.
+  '@deepseek-ai/dsh-client-ui-open-in-app',
 ]
 
 /**
