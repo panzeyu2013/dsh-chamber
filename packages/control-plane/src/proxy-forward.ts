@@ -1161,6 +1161,7 @@ export async function forwardUpgrade(req: ProxyRequest, socket: ProxySocket, hea
     }
     deps.liveStreams.add(stream)
     let tornDown = false
+    const openedAt = Date.now()
     // chamber patch (design 14 extension): the spliced downlinks are
     // downlink-only WebSockets with no heartbeat from either side — a
     // silently dead (half-open) BROWSER leg after an OS sleep/wake fires no
@@ -1171,9 +1172,27 @@ export async function forwardUpgrade(req: ProxyRequest, socket: ProxySocket, hea
     // pump reconnects. Declared before tearDown (which stops it); started
     // once the splice is wired.
     let heartbeat: { stop(): void } | null = null
-    const tearDown = () => {
+    // Forensic instrument (mobile stability round, 2026-12): the gateway used
+    // to log ONLY its own heartbeat teardown, so a mux socket ended by the
+    // INSTANCE side (the official api-gateway server terminates a silent
+    // socket after MAX_MISSED_HEARTBEATS=2 x its 2s heartbeat) or by the
+    // browser left no trace at all and could not be told apart from a
+    // client-initiated reconnect. One bounded line per stream records which
+    // leg ended the splice and how long it lived — the cause strings are
+    // stable so the journal is greppable ("upstream close" = the dsh host /
+    // tunnel dropped the socket, "browser close" = the page's socket went
+    // away, "heartbeat lost" = this proxy's own browser-leg watchdog). No
+    // behavior change: teardown ordering, counters and destroys are as before.
+    const tearDown = (cause: string) => {
       if (tornDown) return
       tornDown = true
+      // The log runs BEFORE the bookkeeping on purpose (a throwing logger must
+      // not cost us the line), but it is wrapped: this is the only statement
+      // here that can throw, and an escaping exception from a socket
+      // 'close'/'error' handler would leave the stream latched forever.
+      try {
+        logger.log(`${deps.logPrefix}: WebSocket stream ${deps.id} closed (${cause}, ${String(Date.now() - openedAt)}ms)`)
+      } catch { /* logging must never break teardown */ }
       counters.activeStreams = Math.max(0, counters.activeStreams - 1)
       deps.liveStreams.delete(stream)
       heartbeat?.stop()
@@ -1191,10 +1210,10 @@ export async function forwardUpgrade(req: ProxyRequest, socket: ProxySocket, hea
     // "ended by the other party" 'error'. Without a listener on that end
     // the error becomes an uncaught exception. Either end failing or
     // closing tears both down exactly once.
-    socket.on('error', tearDown)
-    upstreamSocket.on('error', tearDown)
-    socket.on('close', tearDown)
-    upstreamSocket.on('close', tearDown)
+    socket.on('error', () => { tearDown('browser error') })
+    upstreamSocket.on('error', () => { tearDown('upstream error') })
+    socket.on('close', () => { tearDown('browser close') })
+    upstreamSocket.on('close', () => { tearDown('upstream close') })
     const wireHeaders: string[] = [`HTTP/1.1 ${upstreamRes.statusCode ?? 101} Switching Protocols`]
     for (const [name, value] of Object.entries(upstreamRes.headers)) {
       if (!WS_RESPONSE_HEADER_WHITELIST.has(name.toLowerCase())) continue
@@ -1231,8 +1250,10 @@ export async function forwardUpgrade(req: ProxyRequest, socket: ProxySocket, hea
       intervalMs: deps.wsPingIntervalMs,
       missesBeforeTeardown: deps.wsPingMissesBeforeTeardown,
       onDead: () => {
-        logger.log(`${deps.logPrefix}: WebSocket stream ${deps.id} heartbeat lost (no browser pong for ${deps.wsPingMissesBeforeTeardown} cycle(s)); tearing down`)
-        tearDown()
+        // Paren-free cause: every line keeps the parseable shape
+        // `closed (<cause>, <ms>ms)` (cross-check: nested parens broke a
+        // `[^)]*` parser). "heartbeat lost" stays the greppable keyword.
+        tearDown(`heartbeat lost after ${String(deps.wsPingMissesBeforeTeardown)} unanswered ping(s)`)
       },
     })
   })

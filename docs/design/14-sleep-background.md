@@ -198,9 +198,24 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
 >    **0.1.2 事实修正**：本段「宿主从不 ping」仅适用于 0.1.1 的
 >    events.mux/events.host；0.1.2 的 `/api/remote.mux` 宿主侧每
 >    `websocketHeartbeatIntervalMs`（默认 2s）ping 下游、2 次未答 terminate
->    （~6s）——控制面 30s 浏览器腿心跳对 mux 已退化为睡眠/唤醒场景的冗余
+>    （~6s；`MAX_MISSED_HEARTBEATS = 2` **硬编码不可配**，仅间隔可配——
+>    见安装树 `profiles/node_modules/@deepseek-ai/dsh-api-gateway/lib/types/
+>    stream-server.js:4`，本工作区 vendor 子模块未初始化故不可在仓内核验）
+>    ——控制面 30s 浏览器腿心跳对 mux 已退化为睡眠/唤醒场景的冗余
 >    兜底；30s 三重合（TCP keepalive 初始空闲 / WS_PING / ServerAlive）
 >    同值属巧合、理由各异，勿合并。
+>    **拆链取证日志（2026-12 移动稳定性轮）**：`proxy-forward.ts` 的 WS splice
+>    拆链现在必写一行有界日志
+>    `WebSocket stream <id> closed (<cause>, <ms>ms)`（cause 为无括号 token：
+>    `browser|upstream close|error`，或代理自身心跳的
+>    `heartbeat lost after N unanswered ping(s)`——整行可被
+>    `closed \(([^)]*), (\d+)ms\)` 解析）。此前只有代理自身心跳有日志，
+>    **实例侧** 2s 心跳判死在 gateway 侧完全无痕——该日志让「实例判死」与
+>    「客户端主动重连」在 journal 中可区分，是 design 17 §18 连接稳定性取证的
+>    第一手证据来源；行为（拆链顺序/计数/销毁）零变化，且 logger 抛异常不再
+>    可能锁死拆链。**归因边界**：cause 记录的是「先观察到哪条腿结束」——
+>    代理**主动**撤销（`closeAllStreams`/revoke）也会记成 `upstream close`，
+>    故该行不可单独用于判定"实例侧判死"。
 
 ### D5 keep-awake（v1 设置项，默认关）
 
