@@ -29,7 +29,7 @@
   "scripts": {
     "bundle": "tsdown",
     "watch": "tsdown --watch",
-    "test": "node test/layout-store.test.ts && node test/document-theme.test.ts"
+    "test": "node test/layout-store.test.ts && node test/root-props-wiring.test.ts && node test/document-theme.test.ts"
   },
   "license": "MIT",
   "peerDependencies": {

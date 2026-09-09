@@ -37,10 +37,64 @@ export const EXPECTED_REMOTE_PACKAGES = Object.freeze([
 ])
 
 const REMOTE_SPECIFIER = '@deepseek-ai/(dsh-[a-z0-9]+(?:-[a-z0-9]+)*)/remote'
-const VALUE_REMOTE_IMPORT = new RegExp(
-  `^\\s*import\\s+(?!type\\b)[^'"\\n]+?\\s+from\\s+['"]${REMOTE_SPECIFIER}['"]`,
+const REMOTE_SUFFIX = /@deepseek-ai\/(dsh-[a-z0-9]+(?:-[a-z0-9]+)*)\/remote/g
+const IMPORT_CLAUSE = new RegExp(
+  `^\\s*import\\s+([^'"\\n]+?)\\s+from\\s+['\"]${REMOTE_SPECIFIER}['\"]`,
   'gm',
 )
+
+/**
+ * Remove line/block comments so a commented-out import cannot be counted and
+ * an import inside a block comment cannot be missed (2026-09 round-3 W4-Q5-F6).
+ * @param {string} source - the module text.
+ * @returns {string} comment-free text (string bodies preserved).
+ */
+function stripComments(source) {
+  let out = ''
+  let quote
+  let line = false
+  let block = false
+  for (let i = 0; i < source.length; i += 1) {
+    const ch = source[i]
+    const next = source[i + 1]
+    if (line) {
+      if (ch === '\n') { line = false; out += ch } else out += ' '
+      continue
+    }
+    if (block) {
+      if (ch === '*' && next === '/') { block = false; out += '  '; i += 1 } else out += ch === '\n' ? ch : ' '
+      continue
+    }
+    if (quote !== undefined) {
+      out += ch
+      if (ch === '\\') { out += next ?? ''; i += 1; continue }
+      if (ch === quote) quote = undefined
+      continue
+    }
+    if (ch === '/' && next === '/') { line = true; out += '  '; i += 1; continue }
+    if (ch === '/' && next === '*') { block = true; out += '  '; i += 1; continue }
+    if (ch === '"' || ch === "'" || ch === '`') { quote = ch; out += ch; continue }
+    out += ch
+  }
+  return out
+}
+
+/**
+ * Is this import clause type-only? `import type X` and
+ * `import { type A, type B }` select no runtime contribution; a mixed clause
+ * (`import { type A, B }`) does.
+ * @param {string} clause - the text between `import` and `from`.
+ * @returns {boolean} true when nothing value-imported is selected.
+ */
+function isTypeOnlyClause(clause) {
+  const trimmed = clause.trim()
+  if (/^type\b/.test(trimmed)) return true
+  if (!trimmed.startsWith('{')) return false
+  const inner = trimmed.slice(1, trimmed.lastIndexOf('}'))
+  const specifiers = inner.split(',').map(part => part.trim()).filter(part => part !== '')
+  if (specifiers.length === 0) return true
+  return specifiers.every(specifier => /^type\b/.test(specifier))
+}
 
 const REMOTE_EXPORT = Object.freeze({
   types: './lib/typert.remote-client.d.ts',
@@ -57,18 +111,84 @@ const REMOTE_FILES = Object.freeze([
  */
 export function remotePackagesFromAssembly(source) {
   if (typeof source !== 'string') throw new TypeError('Remote assembly source must be a string')
+  return remoteAssembly(source).packages
+}
+
+/**
+ * Parse the assembly into its value-imported package list AND the local
+ * binding names, and fail loudly on any `/remote` edge this line-based parser
+ * cannot classify (multi-line imports, re-exports, dynamic import) — an
+ * unmodelled edge must never be silently invisible (W4-Q5-F2/F6).
+ * @param {string} source - the assembly module text.
+ * @returns {{ packages: string[], bindings: Map<string, string> }}
+ */
+export function remoteAssembly(source) {
+  if (typeof source !== 'string') throw new TypeError('Remote assembly source must be a string')
+  const code = stripComments(source)
   const packages = []
-  const seen = new Set()
-  for (const match of source.matchAll(VALUE_REMOTE_IMPORT)) {
-    const packageName = `@deepseek-ai/${match[1]}`
-    if (seen.has(packageName)) continue
-    seen.add(packageName)
-    packages.push(packageName)
+  const bindings = new Map()
+  let matchedEdges = 0
+  for (const match of code.matchAll(IMPORT_CLAUSE)) {
+    matchedEdges += 1
+    if (isTypeOnlyClause(match[1])) continue
+    const packageName = `@deepseek-ai/${match[2]}`
+    const binding = match[1].trim().split(/\s+/).pop()
+    if (binding === undefined || binding === '') continue
+    bindings.set(binding, packageName)
+    if (!packages.includes(packageName)) packages.push(packageName)
+  }
+  // Every `/remote` specifier occurrence must be explained by a recognised
+  // import or a type-only re-export; anything else (multi-line import, value
+  // re-export, dynamic import) fails loudly instead of staying invisible.
+  const typeReexport = new RegExp(
+    `^\\s*export\\s+type\\b[^'"\\n]*?\\s+from\\s+['\"]${REMOTE_SPECIFIER}['\"]`,
+    'gm',
+  )
+  const allEdges = [...code.matchAll(REMOTE_SUFFIX)].length
+  const explained = matchedEdges + [...code.matchAll(typeReexport)].length
+  if (allEdges !== explained) {
+    throw new Error(
+      `Remote assembly has ${allEdges} '/remote' specifier(s) but only ${explained} recognised edge(s) `
+      + `(${matchedEdges} import(s) + ${explained - matchedEdges} type re-export(s)) — `
+      + 'a multi-line import, value re-export, or dynamic import is unmodelled; re-derive the parser before trusting the contract',
+    )
   }
   if (packages.length === 0) {
     throw new Error('Remote assembly does not value-import any @deepseek-ai/dsh-*/remote contributions')
   }
-  return packages
+  return { packages, bindings }
+}
+
+/**
+ * Parse the packages mounted by `apply()`'s contribution array, in order.
+ * The imports are only the SELECTION; the mounted array is what actually
+ * becomes `ctx.remote` — a same-length edit to the array alone must fail.
+ * @param {string} source - the assembly module text.
+ * @returns {string[]} package names in mount order.
+ */
+export function remoteMountPackages(source) {
+  const { bindings } = remoteAssembly(source)
+  const code = stripComments(source)
+  const arrayStart = code.search(/for\s*\(\s*const\s+\w+\s+of\s*\[/)
+  if (arrayStart === -1) {
+    throw new Error('Remote assembly has no `for (const x of [ ... ])` mount array — re-derive the parser')
+  }
+  const open = code.indexOf('[', arrayStart)
+  const close = code.indexOf(']', open)
+  if (close === -1) throw new Error('Remote assembly mount array is unterminated')
+  const identifiers = code.slice(open + 1, close)
+    .split(',')
+    .map(part => part.trim())
+    .filter(part => part !== '')
+  const mounted = []
+  for (const identifier of identifiers) {
+    const packageName = bindings.get(identifier)
+    if (packageName === undefined) {
+      throw new Error(`Remote mount array names ${JSON.stringify(identifier)} which no /remote import binds`)
+    }
+    mounted.push(packageName)
+  }
+  return mounted
 }
 
 /**

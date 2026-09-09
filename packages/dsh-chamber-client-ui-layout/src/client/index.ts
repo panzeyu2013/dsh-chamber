@@ -105,6 +105,14 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface GlobalStandardProps {
     /** Subscribe to the selected main panel independently of parent renders. */
     usePanelInfo: UsePanelInfo
+    /**
+     * chamber extension (design 09 §3.6): this entry's API base path
+     * (`/api/i/<id>`), delivered to every slot scope as a plain prop. The
+     * renderer's registered ui-chat vendor patch reads it to build the
+     * file-API URL under the instance's proxy prefix; absent on an
+     * official-layout deployment, where the patch falls back to upstream.
+     */
+    chamberFileApiBase?: string
   }
 
   interface SlotMap {
@@ -213,7 +221,18 @@ export function apply(ctx: ClientContext): void {
       getSnapshot: () => instance.getSnapshot().panelInfo,
       subscribe: listener => instance.subscribe(listener),
     }
-    const disposePanelInfo = ctx.slots.provideRoot({ hooks: { panelInfo } })
+    // chamber patch (design 09 §3.6, D3): the per-entry API base path as a root
+    // standard PROP — immutable per entry, so no observable is needed. The
+    // renderer's registered vendor patch reads it in ui-chat to build the
+    // file-API URL under this instance's proxy prefix; absent (official-layout
+    // deployment) the patched code falls back to upstream behaviour. Plain
+    // props reach every slot scope: the vendor scoped-slots merges root
+    // standard sources into each scope's standard props.
+    const chamberFileApiBase = (ctx as ClientContext & { chamberBasePath?: string }).chamberBasePath
+    const disposePanelInfo = ctx.slots.provideRoot({
+      hooks: { panelInfo },
+      props: chamberFileApiBase === undefined ? {} : { chamberFileApiBase },
+    })
     const disposeService = ctx.reflect.provide('layout', layout)
     // CHAMBER FORK (design 17 §18 — mobile surface): layout facts bound to the
     // one root instance this ctx minted. Subscribers get the current snapshot

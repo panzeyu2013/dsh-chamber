@@ -2,7 +2,7 @@
 
 > 面向维护者：登记 dsh-chamber 对上游 dsh（deepseek-harness）的**全部接触面**——fork 副本逐文件
 > 纯度、深引 vendor 内部、契约镜像、covered/assembly 行、生成物——并给出每次升级 tag 后的保鲜闭环。
-> 机器侧门 = `scripts/dev/verify-upstream-touchpoints.mjs`（C1–C8；CI 在 Bootstrap 后跑 C1/C3/C5/C6，
+> 机器侧门 = `scripts/dev/verify-upstream-touchpoints.mjs`（C1–C9；CI 在 Bootstrap 后跑 C1/C3/C5/C6，
 > 其余本地跑）；本文件与脚本内的登记表**同源**，改动时两侧同步。
 > 基准：本表以 **dsh-v0.1.5-alpha.2（b2e3b2a01258，harness.commit）** 与 fork 版本标记
 > 0.1.5-alpha.2 为锚（C5 校验）；每次重锚后本表随维护循环刷新（§0 基线速查同步）。
@@ -16,7 +16,7 @@
 | fork 版本标记 ×3 | 0.1.5-alpha.2（connection / client-web / api-gateway） |
 | vendor 链接数 | 284（ensure-harness-vendor 断言 == 锁文件 importer 集合） |
 | typert remote 装配契约 | 15（C4；+command-feedback/+workspace-files） |
-| covered / factory | 53 / 25（live 计数；factory ⊆ covered，chamber-entry 锁步断言；+`ui-dockkit` covered factory） |
+| covered / factory | **54 / 26**（live 计数；factory ⊆ covered，chamber-entry 锁步断言；+`ui-dockkit`、+`client-file-upload` covered factory） |
 | 种子域 | `clientGraph/graph`、`gitWorktree/previewCreate`、`archiveCleanup/probe`（C7 双门） |
 
 ## 1. 标记约定（每文件分类）
@@ -126,12 +126,24 @@ host 插件入口/半、上游 `tests/`、`tsdown.config.ts`、上游 README（a
   登记 covered（precedent：ui-open-in-app 行随 a2 登记）。删包 fail-loud 哨兵在 verify 脚本 C4。
 - typert remote 装配：`vendor/…/dsh-api-remotes/src/client/index.ts` 契约 == **15**（集合与顺序；gen-typert-remotes
   与 C4 双向断言）；上游新增 remote 包 = 先裁决（是否 chamber 消费/镜像）再登记。
-- **复合首屏 ← 未覆盖官方行（反向依赖，2026-09 二轮登记）**：`ui-chat` ← `sidebarRight`
-  （`ui-sidebar-right`）、`ui-conversation` 根 inject ← `fileUpload`（`client-file-upload`，
-  唯一生产提供方）、全局 `useResource` 座 ← `resources`（`client-resources`）。三行都走
-  host-graph 额外行通道，缺一即对应 fiber PENDING（ui-chat 丢会话视图 / ui-conversation
-  丢整个中列，boot 仍报成功）。登记点 = `packages/renderer/src/required-extra-rows.ts`
-  的 `REQUIRED_EXTRA_ROW_SERVICES` + `required-extra-rows.test.ts`；上游新增/改名首屏
+- **vendor 源码补丁集（构建期改写，2026-09 三轮登记，design 09 §3.6）**：
+  `packages/renderer/scripts/vendor-patches.mjs` 登记「同源绝对 URL」类硬假设的补丁，
+  由 renderer 的 `deepseekSource().transform` 在构建期按**精确上游文本**改写，
+  vendor 文件零写入。当前 **4 条（5 文件 / 18 处锚点）**：① `ui-chat`
+  （`/api/file`，读 chamber layout fork 提供的 root 标准 prop `chamberFileApiBase`
+  = `ctx.chamberBasePath`）；② `client-file-upload`（`/api/session/uploadFileBinary`，
+  从服务自身的 ctx 读 `chamberBasePath`——该包已转为 **covered**，否则 extra-row
+  bundle 不经过我们的构建）；③④ `ui-deliverables`（`/api/present.host|open`，
+  控制器构造时接收 base path）。三处均保留「缺 base path → 回落上游」的形状。
+  门：**C9**（锚点必须唯一命中，漂移即硬失败）+ `scripts/vendor-patches.test.mjs`
+  （锚点/行为/id 形态）。新增补丁前先问「能否在 chamber 自己的包里修」。
+- **复合首屏 ← 未覆盖官方行（反向依赖，2026-09 二轮登记；三轮收敛为 1 条）**：
+  `ui-chat` ← `sidebarRight`（`ui-sidebar-right` 行提供）。二轮曾把 `fileUpload`
+  （`ui-conversation`/`api-session-controller` 根 inject）与 `resources`（渲染期
+  `useResource` 座，非 inject）列入；三轮把 `client-file-upload` **改为 covered**
+  （既消除 extra row 依赖，也让构建期补丁能覆盖它的同源绝对 URL）并删掉 `resources`
+  这一条不成立的理由。登记点 = `packages/renderer/src/required-extra-rows.ts` 的
+  `REQUIRED_EXTRA_ROW_SERVICES` + `required-extra-rows.test.ts`；上游新增/改名首屏
   inject 成员时，先在此清单与 `host-graph.ts` 降级注释同步（design 09 §3.2）。
 - `remotePackagesFromAssembly`（renderer/scripts/typert-remote-contract.mjs）为装配契约唯一入口。
 
@@ -144,7 +156,7 @@ host 插件入口/半、上游 `tests/`、`tsdown.config.ts`、上游 README（a
 | client/connection（recovery） | recovery-config 共享 schema（`DEFAULT_MIN_RESTART_INTERVAL_MS` 10_000 == schema 默认 backoffMaxMs） | liveness-triggers 钉值 + C1 |
 | dsh-runtime（激活探针域） | `HOST_DOMAIN_PROBE_NAMES` ↔ gateway `HOST_PACKAGE_PROBE_DOMAINS` | C7 + gateway 运行时 fail-loud |
 | dsh-host-webserver（index-inject） | `__DSH_CONNECTION_RECOVERY__` 全局注入（connection host 半） | fork C1（src/index.ts pure） |
-| dsh-host-open-in-app（官方 open-in 宿主路由） | chamber open-in 插件本地镜像 `shared/open-in-app-protocol.ts`（三条路由 + 载荷形状）与 `locales.ts` 的 `app.*` 标签表 | open-in 插件 `test/open-in-app-protocol.test.ts`（读 vendor `shared.ts`/`OpenInAppAction.tsx` 逐字比对） |
+| dsh-host-open-in-app（官方 open-in 宿主路由） | chamber open-in 插件本地镜像 `shared/open-in-app-protocol.ts`（三条路由 + 载荷形状）与 `locales.ts` 的 `app.*` 标签表。**为何不直接 import 官方 `./shared`（2026-09 三轮裁决）**：该 export 指向 `lib/types/shared.js`，源码态 vendor 只有 `src/`，本仓 tsconfig 又排除 `vendor/**` ⇒ 镜像 + 字节级锁步是可行等价物 | open-in 插件 `test/open-in-app-protocol.test.ts`（读 vendor `shared.ts`/`OpenInAppAction.tsx` 逐字比对） |
 
 ## 5. 再生物登记
 
@@ -157,11 +169,11 @@ host 插件入口/半、上游 `tests/`、`tsdown.config.ts`、上游 README（a
 
 ## 6. 保鲜自动化
 
-`node scripts/dev/verify-upstream-touchpoints.mjs`（除 C8 的「重建-比对后原样还原」外只读、exit-code 语义）：
+`node scripts/dev/verify-upstream-touchpoints.mjs`（除 C8 在**正常路径**下「重建-比对后原样还原」外只读；中断/并发/额外产物路径由整目录快照 + SIGINT/SIGTERM 处理器 + `wx` 独占锁兜底，exit-code 语义）：
 - C1 pure 字节恒等 / C3 完整性（fork 每文件分类、上游每文件裁决，漏 = 硬失败）/
   C5 过期锚扫描 / C6 EXCLUDED 存在性 —— **CI 在 Bootstrap 后 fail-loud**；
 - C4 roster（covered/factory 哨兵 + remote 契约 15 的集合与顺序）—— 本地/CI 均可；
-- C7 种子域锁步、C8 **提交态生成物 == src**（重建-比对，硬失败；写后原样还原，`--no-artifact-rebuild` 退回 mtime advisory）—— 本地跑。
+- C7 种子域锁步、C8 **提交态生成物 == src**（重建-比对，硬失败；写后原样还原，`--no-artifact-rebuild` 退回 mtime advisory）、C9 **vendor 补丁锚唯一命中**（硬失败）—— 本地跑。
 - C2 `--tags <old> <new>`：tag 间三 fork 面重放报告（advisory），升级前先跑。
 - `scripts/dev/preflight-vendor-pin.mjs <tag>`（只读，§7 第 0 步）：C2 的**超集**——
   额外报深引 vendor seam 文件、上游包集合增删、新增 client 行、运行时 npm 状态；
@@ -169,6 +181,12 @@ host 插件入口/半、上游 `tests/`、`tsdown.config.ts`、上游 README（a
 - update-vendor.mjs 完成输出提示运行本脚本；不进 preinstall。
 
 ## 7. 每 tag 维护循环（预检 + 8 步）
+
+> **顺序硬约束（2026-09 三轮 W5 实测）**：`pnpm install` 必须在
+> `ensure-harness-vendor.mjs`（或根 `preinstall`）**之后**——先 install 再 bootstrap
+> 会以 0 退出但只装 20/304 个 workspace 项目（vendor 成员的依赖缺失），随后
+> `build:renderer` 才以 `Rollup failed to resolve import "lexical"` 报错。CI 的
+> linux/win 两条腿都已是 `Bootstrap → install`。
 
 0. 预检（动 pin **之前**）：`node scripts/dev/preflight-vendor-pin.mjs <tag> --offline`
    —— 一次给出「fork pure/replay/dropped + 深引 vendor seam 文件 + 上游包增删 +

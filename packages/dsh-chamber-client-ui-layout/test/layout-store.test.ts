@@ -466,18 +466,25 @@ test('collapsedOf mirrors AppFrame: wide uses the preference, narrow the overrid
 
 test('one throwing instance does not starve the adoption fan-out', async () => {
   mock.timers.enable({ apis: ['setTimeout'] })
+  const errors: unknown[][] = []
+  const realError = console.error
+  console.error = (...args: unknown[]) => { errors.push(args) }
   try {
     const { env } = makeEnv({ sidebarWidth: 300 })
     const handle = createLayoutStore(env)
-    // Registration order IS the fan-out order: the throwing instance sits in
-    // the middle, so a `break`-on-error implementation would strand `later`.
+    // Registration order IS the fan-out order. Healthy instances sit on BOTH
+    // sides of the throwing one, so a `break`-on-error implementation is
+    // caught whichever direction the loop walks (2026-09 round-3 W4-11).
     const writer = handle.create()
+    const before = handle.create()
     const broken = handle.create()
-    const later = handle.create()
+    const after = handle.create()
     trackLayoutInstance(env, writer)
+    trackLayoutInstance(env, before)
     trackLayoutInstance(env, broken)
-    trackLayoutInstance(env, later)
-    assert.equal(later.getSnapshot().layoutInfo.sidebar, 300, 'later starts at the shared preference')
+    trackLayoutInstance(env, after)
+    assert.equal(before.getSnapshot().layoutInfo.sidebar, 300, 'before starts at the shared preference')
+    assert.equal(after.getSnapshot().layoutInfo.sidebar, 300, 'after starts at the shared preference')
     broken.store.update = () => { throw new Error('store update exploded') }
     writer.actions.setSidebar(360)
     mock.timers.tick(SIDEBAR_WRITE_DEBOUNCE_MS)
@@ -485,8 +492,13 @@ test('one throwing instance does not starve the adoption fan-out', async () => {
     await Promise.resolve()
     assert.equal(writer.getSnapshot().layoutInfo.sidebar, 360, 'writer keeps its own value')
     assert.equal(broken.getSnapshot().layoutInfo.sidebar, 300, 'the throwing instance is left untouched, not half-written')
-    assert.equal(later.getSnapshot().layoutInfo.sidebar, 360, 'the instance AFTER the throwing one still adopts (no starvation)')
+    assert.equal(before.getSnapshot().layoutInfo.sidebar, 360, 'the instance BEFORE the throwing one adopts')
+    assert.equal(after.getSnapshot().layoutInfo.sidebar, 360, 'the instance AFTER the throwing one still adopts (no starvation)')
+    // The throw is reported, not swallowed: exactly one adoption diagnostic.
+    const adoptionErrors = errors.filter(args => String(args[0]).includes('layout width adoption threw'))
+    assert.equal(adoptionErrors.length, 1, 'the adoption failure must be logged exactly once')
   } finally {
+    console.error = realError
     mock.timers.reset()
   }
 })

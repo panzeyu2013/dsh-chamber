@@ -17,6 +17,48 @@ function source(relative: string): string {
   return readFileSync(new URL(relative, import.meta.url), 'utf8')
 }
 
+/**
+ * Remove line/block comments while preserving string and template literals.
+ * The ordering lock below must not be satisfiable by a `syncPanels()` that only
+ * exists inside a comment (2026-09 round-3 W4-12).
+ * @param code - the source text.
+ * @returns the source with comments replaced by spaces.
+ */
+function stripComments(code: string): string {
+  let out = ''
+  let quote: string | undefined
+  let line = false
+  let block = false
+  for (let i = 0; i < code.length; i += 1) {
+    const ch = code[i]
+    const next = code[i + 1]
+    if (line) {
+      if (ch === '\n') { line = false; out += ch } else out += ' '
+      continue
+    }
+    if (block) {
+      if (ch === '*' && next === '/') { block = false; out += '  '; i += 1 } else out += ch === '\n' ? ch : ' '
+      continue
+    }
+    if (quote !== undefined) {
+      out += ch
+      if (ch === '\\') { out += next ?? ''; i += 1; continue }
+      if (ch === quote) quote = undefined
+      continue
+    }
+    if (ch === '/' && next === '/') { line = true; out += '  '; i += 1; continue }
+    if (ch === '/' && next === '*') { block = true; out += '  '; i += 1; continue }
+    if (ch === '"' || ch === "'" || ch === '`') { quote = ch; out += ch; continue }
+    out += ch
+  }
+  return out
+}
+
+/** Collapse whitespace so formatting changes cannot break a semantic lock. */
+function normalize(code: string): string {
+  return code.replace(/\s+/g, ' ')
+}
+
 const slots = source('../src/client/contract/slots.ts')
 const index = source('../src/client/index.ts')
 const root = source('../src/client/SidebarRoot.tsx')
@@ -60,8 +102,9 @@ test('the registration declares every child and wires the panel projection', () 
   // 2026-09 二轮：`includes('panels.sync(')` 被 syncPanels 的**定义行**满足，
   // 锁不住「注册后补一次同步」的顺序。改为顺序断言：注册之后必须出现一次
   // 独立调用（上游 ui-sidebar index.ts 同序，见 registry 侧注释）。
-  const registerAt = index.indexOf('ctx.slots.register({')
-  const syncCallAt = index.search(/^\s*syncPanels\(\)$/m)
+  const stripped = stripComments(index)
+  const registerAt = stripped.indexOf('ctx.slots.register({')
+  const syncCallAt = stripped.search(/^\s*syncPanels\(\);?\s*$/m)
   assert.ok(registerAt !== -1, 'the shell registration must exist')
   assert.ok(syncCallAt > registerAt, 'syncPanels() must run AFTER the slot registration (first-frame list must not be empty)')
   // 语义锁（空白归一化后匹配，抗格式化漂移）：点击直调 ctx.layout.selectPanel。
@@ -79,7 +122,7 @@ test('the shell renders the brand holes and the panel rows', () => {
   // 空态与宽窄几何：上游「无注册项时不渲染列表及其间距」+ 行按 wide 切换尺寸。
   assert.ok(root.includes('{panels.length > 0 && ('), 'an empty panellist must render nothing (upstream empty state)')
   assert.ok(root.includes('wide={wide}'), 'each row must receive the shell width state')
-  assert.ok(root.includes('{wide && <span className={clsx(css.panelTitle, css.wide)}>{label}</span>}'), 'the label renders only in the wide state')
+  assert.ok(normalize(root).includes(normalize('{wide && <span className={clsx(css.panelTitle, css.wide)}>{label}</span>}')), 'the label renders only in the wide state')
   for (const cls of ['panelList', 'panelRow', 'panelActive', 'panelGlyph', 'panelTitle']) {
     assert.ok(css.includes(`.${cls}`), `SidebarRoot.module.css must define .${cls}`)
     assert.ok(root.includes(`css.${cls}`), `SidebarRoot.tsx must use css.${cls}`)

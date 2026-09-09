@@ -202,6 +202,10 @@ import * as UiConversation from '@deepseek-ai/dsh-client-ui-conversation/client'
 // page until the deferred chunk arrives), ui-approval owns the composer
 // approval surface. ui-cordis (the new debug face) is deliberately NOT
 // registered — see chamber-covered.ts.
+// 2026-09 三轮: the upload client is covered (see chamber-covered.ts) so the
+// registered vendor patch can carry the per-entry base path; the host half
+// (the /api/session/uploadFileBinary route) stays an instance host row.
+import * as FileUpload from '@deepseek-ai/dsh-client-file-upload/client'
 import * as UiSession from '@deepseek-ai/dsh-client-ui-session/client'
 import * as UiChat from '@deepseek-ai/dsh-client-ui-chat/client'
 import * as UiApproval from '@deepseek-ai/dsh-client-ui-approval/client'
@@ -474,6 +478,10 @@ export function apply(ctx: Context): void {
   // sets, so registration order carries no activation semantics.
   ctx.plugin(ApiSessionController)
   ctx.plugin(ApiWorkspaceController)
+  // Background file uploads (covers the host-graph row): ui-conversation and
+  // api-session-controller root-inject `fileUpload`, and the composite-bundled
+  // copy is the only one the vendor patch can fix (see chamber-covered.ts).
+  ctx.plugin(FileUpload)
   ctx.plugin(Locale)
   ctx.plugin(UiTheme)
   ctx.plugin(UiLayout)
@@ -638,6 +646,7 @@ const COVERED_FACTORIES: ReadonlyArray<readonly [id: string, factory: ClientPlug
   ['@deepseek-ai/dsh-client-ui-session', coveredFactory(UiSession)],
   ['@deepseek-ai/dsh-client-ui-chat', coveredFactory(UiChat)],
   ['@deepseek-ai/dsh-client-ui-approval', coveredFactory(UiApproval)],
+  ['@deepseek-ai/dsh-client-file-upload', coveredFactory(FileUpload)],
   ['@deepseek-ai/dsh-client-ui-directory-picker-browse', coveredFactory(UiDirectoryPickerBrowse)],
 ]
 

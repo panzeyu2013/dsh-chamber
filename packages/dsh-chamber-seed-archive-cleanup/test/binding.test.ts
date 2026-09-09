@@ -331,6 +331,25 @@ test('binding: the purge refuses symlink/subdirectory entries and accepts every 
     })
     assert.equal(existsSync(join(hugeDir, 'session.v99999999999999999999.jsonl')), true, 'nothing removed on refusal')
 
+    // Near-miss names stay refused: uppercase suffix, leading-zero version, and
+    // a lease name that merely PREFIXES the real lease (2026-09 三轮 Q3 G1–G4).
+    for (const [project, name] of [
+      ['upper', 'session.v3.JSONL'],
+      ['zero', 'session.v01.jsonl'],
+      ['lease', 'session.lock.tmp'],
+    ] as const) {
+      const nearDir = join(dir, project, 's9')
+      mkdirSync(nearDir, { recursive: true })
+      writeFileSync(join(nearDir, 'session.v3.jsonl'), '{}')
+      writeFileSync(join(nearDir, name), '{}')
+      const nearHost = makeHostBinding({ sessionPersistence: { locate: locateFor(project) } })
+      await assert.rejects(() => nearHost.deleteSessionContent('s9', join(dir, project)), (error: unknown) => {
+        return error instanceof ArchiveCleanupError && error.code === 'storage'
+          && new RegExp(`unrecognized entry ${name.replace(/\./g, '\\.')}`).test(error.message)
+      })
+      assert.equal(existsSync(join(nearDir, 'session.v3.jsonl')), true, `${name}: nothing removed on refusal`)
+    }
+
     // The boundary itself IS canonical (MAX_SAFE_INTEGER), matching vendor.
     const maxDir = join(dir, 'max', 's6')
     mkdirSync(maxDir, { recursive: true })

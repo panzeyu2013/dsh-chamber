@@ -147,7 +147,10 @@ mobile 产物的真机视觉（`[data-mobile-role]` 三值与主列宽度）、�
 > W2 **从 alpha.2 源码独立重推端到端链路**（boot 时序 / 首屏服务提供方 / 归档清理 /
 > 种子探针）、W3 **全仓一致性扫描**（版本锚、计数、登记表、门禁实跑）。
 > 结论：**0 遗留 BLOCKER**；2 个 MAJOR（一门失效、一依赖漏登）与 6 个 MAJOR/MINOR
-> 实质缺陷全部修复，其余为登记/措辞修正。报告原文：`.analysis/out/W{1,2,3}-*.md`（scratch，不入库）。
+> 实质缺陷全部修复，其余为登记/措辞修正。
+> **⚠ 本节「门禁全绿」的成立前提已被第三轮推翻**：W4 证明当时 C1/C3、C4-roster 违规
+> 不影响退出码、C8 在 CI 空转且构建不可用时 fail-open。三处均已在第三轮修复（见 §9.1
+> T1–T3）；引用本节结论时请一并读 §9。报告原文：`.analysis/out/W{1,2,3}-*.md`（scratch，不入库）。
 
 ### 6.1 实质修复（代码/测试/门禁）
 
@@ -213,3 +216,87 @@ mobile 产物的真机视觉（`[data-mobile-role]` 三值与主列宽度）、�
 行为（含中断迁移暂存文件下的 purge、坏产物 `stat` 的抛错分支）、移动端真机视觉与
 `<768px` 全屏右栏下的抽屉层级、`<basePath>/api/file` 的 200/401 复验、ssh/http dsh 目标的
 cookie 注入缺失、探针 5s 窗口在真机冷启动下是否足够。
+
+---
+
+## 9. 第三轮复核（2026-09，3 个独立只读 agent + 本机实跑）
+
+> 对象：`8ed233a`（第二轮修正提交）及其后工作树的改动。
+> 方法：W4 **对抗式审查**（逐问验证第二轮修复是否真的成立、门是否可信）、W5 **纯净克隆验证**
+> （`git clone --shared` + 真实 submodule 物化，按 CI 顺序实跑全链）、W6 **决策证据**
+> （D3/D4/D5 的全仓证据与选项排序）。报告原文：`.analysis/out/W4-adversarial.md` /
+> `W5-pristine.md` / `W6-decisions.md`（scratch，不入库）。
+> 结论：**0 遗留 BLOCKER**；第三轮修掉 3 个 MAJOR 门缺陷、2 个真实功能缺陷（四处同源绝对
+> URL 中第二/三处）、2 个产物不可复现缺陷，并把 D3/D4/D5 全部按最优实践裁决落地或登记。
+
+### 9.1 门与验证基建（W4/W5）
+
+| # | 严重度 | 发现 | 处置 |
+|---|---|---|---|
+| T1 | **MAJOR（门失效）** | C1/C3 与 C4-roster 违规只 `hardFails += 1`、从不 `fail()` ⇒ **打印违规却 exit 0**（`hardFails` 从未被读） | `fail()` 统一持有计数与退出码，最终判定读 `hardFails`；负向测试：改一个 pure fork 文件 → exit 1 |
+| T2 | **MAJOR（CI 空转）** | 门禁步骤排在 `pnpm install` **之前** ⇒ node_modules 缺失、C8 四组全部 skip、脚本仍打印「全部通过」 | CI 拆两段：pre-install 跑 `--no-artifact-rebuild`（C1/C3/C5/C6/C9，纯文件）；post-install 新增「Committed artifacts match sources (C8 rebuild gate)」跑默认门（linux/win 两条腿） |
+| T3 | **MAJOR（fail-open）** | C8「构建不可用」只 warn 不失败（无 esbuild 时静默通过，且可被污染的产物骗过） | 判定逻辑抽到 `scripts/dev/artifact-gate.mjs` 纯模块：`skipped` 非空 = 硬失败（显式 `--no-artifact-rebuild` 才降级为 advisory）；+8 例单测（`test:upgrade-tools`） |
+| T4 | **MAJOR（脏树）** | 中断（SIGINT/SIGTERM）留下「已重建」字节；并发运行互相污染；还原是白名单，构建新增的产物会被留下 | 还原改**整目录快照**（新增项删除、原文件写回）+ `spawn` 异步（事件循环保持空闲）+ 信号处理器（还原→kill 子进程→exit 130/143）+ `tmpdir` 下 `wx` 独占锁（死 PID 自动接管）。实跑验证：SIGINT → exit 130 且产物原样；构建写额外文件 → 被清除；并发 → 第二个 run 响亮跳过 |
+| T5 | **MAJOR（产物不可复现 ×2）** | 新增 dsh-runtime 组后立刻抓出 `packages/dsh-runtime/scripts/build.mjs` 缺 `absWorkingDir`（root-CWD 构建 319,440B vs 包内 318,684B）；第二轮同因修过 mobile | 补 `absWorkingDir`；两组产物现与提交态逐字节一致 |
+| T6 | MINOR | 缺失产物与「字节不同」混在一条报错；spawn 无超时；C8 漏 `dsh-runtime/dist` | 消息拆分、300s 超时、新增该组（现 5 组） |
+| T7 | MAJOR（顺序陷阱） | 先 `pnpm install` 再 bootstrap 会以 0 退出但只装 20/304 workspace 项目，直到 `build:renderer` 才炸 | touchpoints §7 登记硬顺序约束（CI 两条腿本就正确） |
+
+**纯净克隆（W5）**：`clone --shared` + 真实 submodule 物化后按 CI 顺序实跑——install / lockfile /
+ensure --check / 门禁（含真实 C8）/ i18n / typecheck / 5 个包测试全绿；C8 后整树 827 文件哈希不变；
+六锚、284 链接、53/25、15 契约全部复核一致。唯一红灯是 `test:runtime`（ZFS 目录 `st_size` 使
+`failureBytes > 1024` 断言失败）——**第三轮已修**（fixture 的失败族文件改为 2 KiB，文件系统无关），
+该套现在本机也全绿。
+
+### 9.2 功能缺陷（W6 全仓扫描 → 第三轮修复）
+
+| # | 严重度 | 发现 | 处置 |
+|---|---|---|---|
+| T8 | **MAJOR（核心功能坏）** | 同源绝对 URL 共**四处**，第二轮只修了一处：② `client-file-upload` 的 `/api/session/uploadFileBinary`（**composer 附件上传 404**）；③④ `ui-deliverables` 的 `/api/present.host|open`（交付卡打开/定位 404） | 补丁集扩到 4 条 / 5 文件 / 18 锚点：file-upload 从服务 ctx 读 `chamberBasePath`、ui-deliverables 控制器构造时接收；**`client-file-upload` 转为 composite covered**（extra-row bundle 由实例提供、不经过我们的构建，不覆盖就无法打补丁），同时消除该 extra-row 依赖 |
+| T9 | MAJOR | 探针清单的理由不成立：`resources` 不是任何复合插件的 inject（渲染期 seat），且不可能单独缺失；`fileUpload` 的真实依赖方还包括 `api-session-controller`（后果是整壳） | 覆盖 file-upload 后清单收敛为 `['sidebarRight']`；design 09 §3.2、touchpoints §3、AGENTS、双语 CHANGELOG、矩阵 D2 同步；`required-extra-rows.test.ts` 重写 |
+| T10 | MINOR | remote 契约只建模 import 列表，真正挂载的是 `apply()` 数组（同长度改挂载仍绿）；多行 import/再导出/动态 import 不可见；vendor 文件缺失时 C4 静默消失 | 解析器重写：注释剥离、`type`-only 子句识别、`remoteMountPackages()` 解析挂载数组并与 import 1:1 同序断言、无法分类的 `/remote` 边 fail-loud；C4 缺文件即硬失败、解析异常即硬失败；+3 例单测 |
+| T11 | MINOR | 两处测试锁仍可被绕过：layout 反转+break 全绿；panel-wiring 的「死文本」`/* syncPanels() */` 满足顺序锁 | layout 测试改为「抛错实例两侧各一健康实例」+ 断言恰好一条采纳日志（变异验证：反转+break → 红）；panel-wiring 加注释剥离 + 空白归一化 JSX 断言（变异验证：死文本 → 红） |
+| T12 | MINOR | `binding.ts` 谓词的近似名未被测试覆盖（大写后缀、前导零版本、`session.lock.*` 前缀） | +3 组近失名断言（拒绝且不移除任何文件） |
+
+### 9.3 决策（按最优实践裁决并落地/登记）
+
+- **D3（同源绝对 URL）**：裁决 = **构建期 vendor 补丁集**（不 fork 整个 `ui-chat`、不用 DOM/SW 改写）。
+  已落地并加固：C9（锚点唯一命中）+ `vendor-patches.test.mjs`（锚点/改写后行为/id 形态）
+  + `build:renderer` 末步 `verify-vendor-patch-applied.mjs`（**产物**里必须出现补丁形状——这一条
+  正是本轮的教训：vite 给的是 realpath 后的子模块 id，错误的 id 形式会让补丁静默 no-op）。
+  剩余边界：ssh/http dsh 目标无 cookie 注入（实例侧 401）——既有认证面待办。
+- **D4（open-in 平行实现）**：裁决 = **保留 chamber 插件**（官方 client 是严格子集：单池 host catalog、
+  无 per-source 矩阵、无桌面主进程 VS Code override、无 ssh 远程路径；且其根绝对 URL 在同源壳内
+  自隐藏），**仅去重契约镜像**：`shared/open-in-app-protocol.ts` 改为直接 import 官方
+  `@deepseek-ai/dsh-host-open-in-app/shared`（与官方 client 同源）。矩阵原「建 fork」建议
+  **显式推翻**并登记理由。
+- **D5（插件管理面）**：裁决 = **保留 chamber PluginDialog**（4 来源超集，已消费官方
+  `pluginInventory/list`；上游「Desktop Plugins…」窗口只管 Electron 自身 profile、registry-only、
+  仅打包态），**补 `update(name, version)` 动作**；预设分组与暂存式健康检查事务列为可选后续。
+- **`runtime-host-adapter` 退役建议**：**不采纳**——它不是死代码：`test/fake-adapter.ts` 实现它，
+  `test/run-phase-fixture.ts` 以它为底座驱动 `dsh-runtime` 全部纯 Node 测试；design 18 §9.1 的
+  「desktop 与 gateway 各实现一份」已更正为「无生产实现者，生产走 DI seam」。
+
+### 9.4 第三轮绿门（修复后实跑）
+
+- 门禁：`verify-upstream-touchpoints` C1/C3–C9 全绿（C4 covered=54/factory=26、装配 15 = import 选择
+  == apply 挂载、C8 5 组重建一致、C9 5 文件/18 锚点）；`verify:i18n` 0 DRIFTED；
+  `test:upgrade-tools`（含新 `artifact-gate.test.mjs`）绿。
+- 负向验证（本机实跑）：pure fork 被改 → exit 1；污染 `dist` → C8 exit 1；无 `node_modules` →
+  C8 硬失败（不再静默）；SIGINT → exit 130 且产物原样；构建新增文件 → 被清除；并发 → 第二个 run 跳过；
+  产物断言 → 去掉 id 匹配即 exit 1；layout 反转+break / panel-wiring 死文本 → 各自被抓。
+- 全量：18 套 test + 16 项 typecheck + `build:renderer`（含产物断言）/`build:host-packages`/
+  `build:dsh-runtime`/`build:preload` + mobile build + frozen-lockfile + `smoke` +
+  `ensure --check` + `bin.js --version` 见 §10；**`test:runtime` 本轮起全绿**（ZFS fixture 修复）。
+
+## 10. 第三轮全量门禁（本机实跑）
+
+见本轮提交说明与 `docs/progress/STATUS.md` 的基线块；要点：18 套测试全绿（含 `test:runtime`）、
+16 项 typecheck 全 OK、全部构建通过（含 `build:renderer` 末步的 vendor 补丁产物断言）、
+frozen-lockfile / i18n / 触点门 C1–C9 / ensure --check / smoke 全绿。
+
+## 11. 仍未验证（实机门禁，三轮一致）
+
+多来源 sleep/wake 与隐藏恢复、gateway 形态回归、右侧栏栈在真实 profile 下的装载时序、
+`provideRoot` 时序（`useResource`/`usePanelInfo`/`chamberFileApiBase`）、session v3 迁移在真实存储上
+的行为、移动端真机视觉与 `<768px` 全屏右栏下的抽屉层级、四处补丁 URL 在真机的 200/401 复验
+（本地与 gateway 来源应 200，ssh/http dsh 目标 401）、探针 5s 窗口在真机冷启动下是否足够。

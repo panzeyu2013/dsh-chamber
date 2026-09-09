@@ -42,7 +42,14 @@ declare module '@deepseek-ai/cordis' {
       register(options: any, component: any): () => void
       entries(slot: string): Array<{ options: { key?: string } }>
       subscribe(slot: string, listener: () => void): () => void
-      provideRoot(contribution: { hooks: Record<string, unknown> }): () => void
+      /** Root standard sources (vendor `RootStandardSourceContribution`):
+       *  hooks become `use<Name>` props, `props` are copied verbatim into every
+       *  scope's standard props, keyedHooks become keyed selector hooks. */
+      provideRoot(contribution: {
+        hooks?: Record<string, unknown>
+        keyedHooks?: Record<string, unknown>
+        props?: Record<string, unknown>
+      }): () => void
     }
     on(event: string, listener: (snapshot: any) => void): () => void
     theme: { getTheme(): any }
@@ -97,7 +104,8 @@ declare module '@deepseek-ai/dsh-client-ui-theme/client'
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   /** Slot map (the fork's client/index.ts augments with the layout holes). */
   export interface SlotMap {}
-  /** Global standard props table (the fork augments it with `usePanelInfo`). */
+  /** Global standard props table (the fork augments it with `usePanelInfo`
+   *  and the chamber `chamberFileApiBase` prop). */
   export interface GlobalStandardProps {}
   /** Bare observable source bound to a `use<Name>` hook by the renderer. */
   export interface HostObservable<Snapshot> {

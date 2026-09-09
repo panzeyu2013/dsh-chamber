@@ -15,18 +15,17 @@ import {
   REQUIRED_SERVICE_PROBE_DEADLINE_MS,
 } from '../src/required-extra-rows.ts'
 
-test('the required set names the services the composite first-screen plugins inject', () => {
-  // 2026-09 二轮: ui-conversation's root inject adds `fileUpload` (provider =
-  // the dsh-client-file-upload extra row), so the set covers all three.
-  assert.deepEqual([...REQUIRED_EXTRA_ROW_SERVICES], ['sidebarRight', 'fileUpload', 'resources'])
+test('the required set names exactly the extra-row-only service a composite plugin injects', () => {
+  // 2026-09 三轮: `fileUpload` was removed (the upload client is now covered by
+  // the composite) and `resources` was removed (it is a rendering-time seat no
+  // composite plugin injects, and it can never go missing alone).
+  assert.deepEqual([...REQUIRED_EXTRA_ROW_SERVICES], ['sidebarRight'])
 })
 
 test('missingRequiredServices reports unprovided services in declaration order', () => {
   const none = missingRequiredServices(() => false)
-  assert.deepEqual(none, ['sidebarRight', 'fileUpload', 'resources'])
-  assert.deepEqual(missingRequiredServices(name => name === 'sidebarRight'), ['fileUpload', 'resources'])
-  assert.deepEqual(missingRequiredServices(name => name === 'fileUpload'), ['sidebarRight', 'resources'])
-  assert.deepEqual(missingRequiredServices(name => name === 'resources'), ['sidebarRight', 'fileUpload'])
+  assert.deepEqual(none, ['sidebarRight'])
+  assert.deepEqual(missingRequiredServices(name => name === 'sidebarRight'), [])
   assert.deepEqual(missingRequiredServices(() => true), [])
   // A caller-supplied set is honoured (probe reuse for future rows).
   assert.deepEqual(missingRequiredServices(name => name === 'a', ['a', 'b']), ['b'])
@@ -37,8 +36,8 @@ test('requiredServiceProbeMessage names the services, the deadline, and the inst
   assert.ok(withInstance.includes('instance local'), 'the instance id must be named when known')
   assert.ok(withInstance.includes('sidebarRight'), 'the missing service must be named')
   assert.ok(withInstance.includes(`${REQUIRED_SERVICE_PROBE_DEADLINE_MS}ms`), 'the deadline must be named')
-  assert.ok(withInstance.includes('centre column may stay unregistered'), 'the consequence must be stated')
-  assert.ok(requiredServiceProbeMessage(['fileUpload']).includes('fileUpload'), 'every required service is nameable')
-  const withoutInstance = requiredServiceProbeMessage(['resources'])
+  assert.ok(withInstance.includes('conversation view may stay unregistered'), 'the consequence must be stated')
+  assert.ok(withInstance.includes('ui-sidebar-right'), 'the responsible row must be named')
+  const withoutInstance = requiredServiceProbeMessage(['sidebarRight'])
   assert.ok(!withoutInstance.includes('instance'), 'an unknown instance adds no clause')
 })

@@ -18,13 +18,21 @@
 > settings bridge 台账、三 fork 副本、renderer（`ui-dockkit` covered factory；C4 契约 13→15）。
 > **设计 24 四项真机缺陷已修**：`list()` 快照形状（真机 preview/purge 曾全挂）、`inspect`→`stat`、
 > 代际全量删除 + 未识别条目整单拒绝、退役无消费者的错误分类器（design 24 §2 与 AGENTS 措辞同步）。
+> **D3 已裁决并落地（2026-09 三轮）**：N-ctx 同源壳下**四处**同源绝对 URL（`ui-chat`
+> 的 `/api/file`、`client-file-upload` 的 `/api/session/uploadFileBinary`、`ui-deliverables`
+> 的 `/api/present.host|open`）改为经构建期 vendor 补丁集走本实例前缀（design 09 §3.6，
+> 4 条/5 文件/18 锚点；门 = 触点表 C9 + 产物断言）；为让补丁覆盖上传客户端，
+> `client-file-upload` 转为 composite covered（covered/factory 54/26，探针清单收敛为
+> `sidebarRight`）。**剩余**：ssh/http dsh 目标无 cookie 注入（实例侧 401），属既有认证面。
 > **剩余实机门禁（未验证）**：多来源 sleep/wake 与隐藏恢复、gateway 形态回归、右侧栏栈在真实
-> profile 下的装载时序与 `provideRoot` 时序（`useResource`/`usePanelInfo`）、session v3 迁移在真实
-> 存储上的行为、open-in 官方 host 行随 a2 profile 进入托管实例。**已知既有失败**：dsh-runtime
+> profile 下的装载时序与 `provideRoot` 时序（`useResource`/`usePanelInfo`/`chamberFileApiBase`）、
+> session v3 迁移在真实存储上的行为、open-in 官方 host 行随 a2 profile 进入托管实例。**已知既有失败**：dsh-runtime
 > `runtimeDiskSummaryAsync` rich-fixture 阈值断言（ZFS 目录 st_size≈3，平台性，非本次引入）。
-> **待裁决项**（决策矩阵 D1–D7）：patched-copy 基础设施（同源绝对 URL 第二例已触发）、open-in
-> in-repo basePath fork、官方桌面插件窗口 vs chamber PluginDialog；`ALLOW_BUILDS` 的 `fs-ext`
-> **保留**（回滚目标 0.1.3-alpha.2 仍依赖，实测删除即安装失败）。
+> **待裁决项（三轮全部裁决完毕，决策矩阵 D1–D7）**：D3 = 构建期 vendor 补丁集（已落地）；
+> D4 = **保留** chamber open-in 插件（官方 client 为严格子集；契约镜像因源码态 vendor 无 `lib/`
+> 而保留，已登记理由）；D5 = **保留** PluginDialog，**待补 `update(name,version)` 动作**（唯一缺口，
+> 非缺陷）；`runtime-host-adapter` 退役**不采纳**（是测试夹具契约，非死代码）；`ALLOW_BUILDS` 的
+> `fs-ext` **保留**（回滚目标 0.1.3-alpha.2 仍依赖，实测删除即安装失败）。
 >
 > **2026-09 dsh 基线对齐记录（0.1.3-alpha.2，临时驻留；发布收口时并入 CHANGELOG 后移除）**：
 > 源码线 pin → dsh-v0.1.3-alpha.2（82a5fd61a7，`update-vendor.mjs` 原子升级，tag 与远程一致；

@@ -136,6 +136,14 @@ export const CHAMBER_COVERED_IDS: readonly string[] = [
   '@deepseek-ai/dsh-client-ui-session',
   '@deepseek-ai/dsh-client-ui-chat',
   '@deepseek-ai/dsh-client-ui-approval',
+  // 2026-09 三轮: the background-upload client is composite-covered for TWO
+  // reasons — (1) `ui-conversation` and `api-session-controller` root-inject
+  // `fileUpload`, and (2) the vendor bundle builds a same-origin absolute
+  // upload URL (`location.origin + /api/session/uploadFileBinary`) that 404s
+  // under the N-ctx shell; only a composite-bundled copy can carry the
+  // registered vendor patch (design 09 §3.6), because an extra-row bundle is
+  // served by the instance and never passes our build.
+  '@deepseek-ai/dsh-client-file-upload',
   // Directory picking: the composite pins the `browse` interaction (the host
   // pins the same per spawn — chamber-entry.ts import comment), so the
   // picker-auto-mounted browse row is composite-covered too.
@@ -259,5 +267,6 @@ export const CHAMBER_COVERED_FACTORY_IDS: readonly string[] = [
   '@deepseek-ai/dsh-client-ui-session',
   '@deepseek-ai/dsh-client-ui-chat',
   '@deepseek-ai/dsh-client-ui-approval',
+  '@deepseek-ai/dsh-client-file-upload',
   '@deepseek-ai/dsh-client-ui-directory-picker-browse',
 ]

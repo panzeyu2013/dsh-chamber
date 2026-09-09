@@ -1,25 +1,34 @@
 /**
  * Required host-graph extra-row services (alpha.2).
  *
- * The chamber composite registers several first-screen plugins directly, so
- * their fibers are NOT part of the boot kernel's loader sweep. Three of those
- * first-screen plugins declare a cordis inject member that only an extra row
- * provides (2026-09 二轮 from the alpha.2 sources):
+ * The chamber composite registers the first-screen plugins directly, so their
+ * fibers are NOT part of the boot kernel's loader sweep. Exactly ONE service
+ * they require is provided only by a non-covered host-graph row (2026-09 round-3
+ * audit over every root `inject` of every composite plugin):
  *
- *  - `ui-chat` injects `sidebarRight` -> `ui-sidebar-right` row;
- *  - `ui-conversation` injects `fileUpload` -> `dsh-client-file-upload` row
- *    (its only production provider; `immediately: true`, still an extra row);
- *  - the global `useResource` seat needs `resources` -> `client-resources` row.
+ *  - `ui-chat` injects `sidebarRight` -> the `ui-sidebar-right` row provides it
+ *    (`ctx.reflect.provide('sidebarRight', …)`).
  *
- * When one of those rows never applies, the dependent fiber stays PENDING and
- * the surface silently disappears (ui-chat: the conversation view; ui-conversation:
- * the whole centre column) while the boot still reports success — this module
- * owns the decision and the message, and `chamber-entry.ts` owns the timer
- * (tied to the ctx lifecycle).
+ * When that row never applies, the `ui-chat` fiber stays PENDING, its whole
+ * `apply` is skipped, and the conversation view stays unregistered while the
+ * boot still reports success — this module owns the decision and the message,
+ * and `chamber-entry.ts` owns the timer (tied to the ctx lifecycle).
+ *
+ * History (keep the reasoning; the list must stay minimal and true):
+ *  - `fileUpload` was listed in round 2 because `ui-conversation`'s and
+ *    `api-session-controller`'s root injects require it. Round 3 COVERED the
+ *    upload client in the composite (its vendor bundle needs the registered
+ *    base-path patch), so the composite now provides it — the entry was removed.
+ *  - `resources` was listed as if a first-screen plugin injected it; it is a
+ *    rendering-time `useResource` seat consumed only by non-covered rows, and it
+ *    can never go missing without `sidebarRight` also missing (the row that
+ *    injects `resources` is the one that provides `sidebarRight`). Removed as a
+ *    redundant, misleading entry rather than kept for a seat the composite does
+ *    not consume.
  */
 
 /** Services the composite's first-screen plugins require from extra rows. */
-export const REQUIRED_EXTRA_ROW_SERVICES = ['sidebarRight', 'fileUpload', 'resources'] as const
+export const REQUIRED_EXTRA_ROW_SERVICES = ['sidebarRight'] as const
 
 /**
  * Probe deadline. The extra rows load after the composite and their applies
@@ -54,6 +63,6 @@ export function missingRequiredServices(
 export function requiredServiceProbeMessage(missing: readonly string[], instanceId?: string): string {
   const where = instanceId === undefined ? '' : ` (instance ${instanceId})`
   return `[chamber-entry]${where} required extra-row service(s) missing after ${REQUIRED_SERVICE_PROBE_DEADLINE_MS}ms: `
-    + `${missing.join(', ')} — the ui-sidebar-right / client-file-upload / client-resources host-graph rows `
-    + 'did not apply; the conversation view or the whole centre column may stay unregistered'
+    + `${missing.join(', ')} — the ui-sidebar-right host-graph row did not apply; `
+    + 'the conversation view may stay unregistered (ui-chat pends on sidebarRight)'
 }

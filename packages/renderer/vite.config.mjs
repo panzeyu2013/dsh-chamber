@@ -3,6 +3,7 @@ import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import { applyVendorPatches } from './scripts/vendor-patches.mjs'
 
 /**
  * dsh-chamber renderer build (design 05 §2/§3.6, v4).
@@ -81,6 +82,16 @@ function deepseekSource() {
   return {
     name: 'dsh-chamber-deepseek-source',
     enforce: 'pre',
+    /**
+     * Registered vendor patches (design 09 §3.6): the ONE seam where a pinned
+     * upstream source must be altered for the N-ctx shell and forking the whole
+     * package is disproportionate. Anchored to exact upstream text; a drift
+     * throws here (build failure) instead of silently shipping an unpatched
+     * bundle. The vendor tree is never written to.
+     */
+    transform(code, id) {
+      return applyVendorPatches(id, code)
+    },
     resolveId(specifier) {
       if (typeof specifier !== 'string' || !specifier.startsWith('@deepseek-ai/')) return undefined
       const rest = specifier.slice('@deepseek-ai/'.length)

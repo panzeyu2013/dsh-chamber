@@ -828,7 +828,10 @@ round（plan 24）再修订——D6-A 用户拍板）**：
   共享包，现有 runtime 测试
   原样搬迁跟随（迁移期的行为等价证明）。allowBuilds 白名单、10 GiB 软阈值、
   保留策略等**单一来源常量**随共享包搬迁。
-- 宿主适配接口 `RuntimeHostAdapter`（desktop 与 gateway 各实现一份；
+- 宿主适配接口 `RuntimeHostAdapter`（**生产侧无实现者**：desktop 与 gateway 各自经
+  `StartupDeps`/`ApplyDeps`/`InstallerDeps`/`ControllerDeps` 直接适配共享核心；
+  该接口是**测试夹具契约**——`test/fake-adapter.ts` 实现它，`test/run-phase-fixture.ts`
+  以它为底座驱动共享包全部纯 Node 测试，2026-09 三轮据此保留（退役建议不成立）。
   **核心裁决逻辑零分叉**，分叉只允许出现在适配器）。**本接口是草图**：
   M5 实现时以 desktop 现有 `StartupDeps`/`ApplyDeps` 的并集 + gateway 需求
   为权威定型，其中已确认必须覆盖的 seam——时钟注入（`now`/`nowMs`，

@@ -18,21 +18,28 @@
  *   C8  提交态生成物 == src（确定性重建-比对，硬失败）：host dist ×3 +
  *       mobile dist/lib 四件；重建后字节不同 = 产物陈旧。写后原样还原，
  *       `--no-artifact-rebuild` 退回 mtime advisory（fresh checkout 会误报）
+ *   C9  vendor 源码补丁锚（硬失败）：`packages/renderer/scripts/vendor-patches.mjs`
+ *       注册的每处 expect 必须在 pin 住的上游文件里恰好命中一次——重锚后
+ *       上游文本一漂移即红，避免「补丁静默失效」
  *
  * 登记纪律：给某个文件打 chamber 补丁 = 在 FORKS.patched 里登记（含原因）；
  * 新增 chamber 自有文件 = own；上游文件有意不镜像 = dropped。任何对 pure
  * 文件的修改都会在此硬失败——升级/重锚后同步登记表（每 tag 维护循环见文档 §7）。
  *
  * 用法：
- *   node scripts/dev/verify-upstream-touchpoints.mjs            # C1/C3–C8
+ *   node scripts/dev/verify-upstream-touchpoints.mjs            # C1/C3–C9
  *   node scripts/dev/verify-upstream-touchpoints.mjs --tags <old> <new>  # +C2
  */
 
 import { createHash } from 'node:crypto'
-import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
-import { join, relative } from 'node:path'
+import {
+  closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync,
+} from 'node:fs'
+import { dirname, join, relative } from 'node:path'
+import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
+import { artifactGateVerdict, compareOutputs, restoreDir, snapshotDir } from './artifact-gate.mjs'
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url))
 const SUBMODULE = join(ROOT, 'vendor', 'harness-checkout')
@@ -157,8 +164,12 @@ const COVERED_SENTINELS = [
 
 // ---------------------------------------------------------------------------
 
+/** Hard-failure counter; `fail()` owns it so no violation can be logged without failing the run. */
+let hardFails = 0
+
 function fail(message) {
   console.error(`✗ ${message}`)
+  hardFails += 1
   process.exitCode = 1
 }
 
@@ -199,7 +210,6 @@ function within(rel, prefixes) {
 }
 
 const pin = readPin()
-let hardFails = 0
 
 // C1/C3 —— 逐 fork 分类校验
 for (const fork of FORKS) {
@@ -245,14 +255,12 @@ for (const fork of FORKS) {
   const upPkg = JSON.parse(readFileSync(join(upRoot, 'package.json'), 'utf8'))
   const forkPkg = JSON.parse(readFileSync(join(forkRoot, 'package.json'), 'utf8'))
   if (violations.length > 0) {
-    hardFails += 1
-    console.error(`✗ [${fork.name}] C1/C3 违规 ${violations.length} 项:`)
+    fail(`[${fork.name}] C1/C3 违规 ${violations.length} 项（pure 面被改 / 未登记补丁 / 上游文件漏裁决）:`)
     for (const v of violations) console.error(`    - ${v}`)
   } else {
     console.log(`✓ [${fork.name}] C1/C3: pure=${pure} patched=${patchedKeys.size} own=${forkFiles.length - pure - patchedKeys.size} dropped=${fork.dropped.length}`)
   }
   if (upPkg.version !== forkPkg.version) {
-    hardFails += 1
     fail(`C5 [${fork.name}] fork 版本 ${forkPkg.version} != 上游 ${upPkg.version}（过期锚——升级/重锚后应同步）`)
   }
 }
@@ -261,7 +269,6 @@ for (const fork of FORKS) {
 {
   const head = spawnSync('git', ['-C', SUBMODULE, 'rev-parse', 'HEAD'], { encoding: 'utf8' })
   if (head.status !== 0 || head.stdout.trim() !== pin) {
-    hardFails += 1
     fail(`C5 submodule HEAD != harness.commit（${pin.slice(0, 12)}）——请走 update-vendor.mjs`)
   } else {
     console.log(`✓ C5 锚: harness.commit = ${pin.slice(0, 12)}，三 fork 版本与上游一致`)
@@ -311,25 +318,38 @@ for (const fork of FORKS) {
   if (rosterFails === 0) {
     console.log(`✓ C4 covered=${covered.length} factory=${factory.length}（factory ⊆ covered，哨兵齐）`)
   } else {
-    hardFails += 1
+    fail(`C4 roster 校验 ${rosterFails} 项失败（covered/factory 存在性、哨兵或锁步断言）`)
   }
 
   const assemblyEntry = join(ROOT, 'vendor/harness-packages/@deepseek-ai/dsh-api-remotes/src/client/index.ts')
-  if (existsSync(assemblyEntry)) {
-    const { remotePackagesFromAssembly, EXPECTED_REMOTE_PACKAGES } = await import(
+  if (!existsSync(assemblyEntry)) {
+    fail(`C4 找不到上游装配面 ${relative(ROOT, assemblyEntry)} — 该面被删除/改名时必须重审 typert 契约（不能静默跳过）`)
+  } else {
+    const { remotePackagesFromAssembly, remoteMountPackages, EXPECTED_REMOTE_PACKAGES } = await import(
       join(ROOT, 'packages/renderer/scripts/typert-remote-contract.mjs')
     )
-    const remotes = remotePackagesFromAssembly(readFileSync(assemblyEntry, 'utf8'))
+    let remotes
+    let mounted
+    try {
+      remotes = remotePackagesFromAssembly(readFileSync(assemblyEntry, 'utf8'))
+      mounted = remoteMountPackages(readFileSync(assemblyEntry, 'utf8'))
+    } catch (error) {
+      fail(`C4 装配面解析失败（上游结构漂移）: ${error.message}`)
+      remotes = undefined
+    }
+    if (remotes !== undefined) {
     // Exact set AND order: a same-length swap (a package added while another
     // is removed, or a reordered assembly) must not pass silently. The
     // expected list is single-sourced in typert-remote-contract.mjs (shared
     // with the lockstep test) so an upstream change is one edit.
     const expected = [...EXPECTED_REMOTE_PACKAGES]
     if (remotes.length !== expected.length || remotes.some((name, index) => name !== expected[index])) {
-      hardFails += 1
       fail(`C4 remotePackagesFromAssembly = ${JSON.stringify(remotes)}（期望 ${JSON.stringify(expected)}）——上游装配面变更需重审 typert 契约`)
+    } else if (mounted.length !== expected.length || mounted.some((name, index) => name !== expected[index])) {
+      fail(`C4 apply() 挂载数组 = ${JSON.stringify(mounted)} != import 选择 ${JSON.stringify(remotes)}——挂载面与选择面必须 1:1 同序`)
     } else {
-      console.log(`✓ C4 remote assembly 契约 = ${remotes.length}（集合与顺序）`)
+      console.log(`✓ C4 remote assembly 契约 = ${remotes.length}（import 选择 == apply 挂载，集合与顺序）`)
+    }
     }
   }
 }
@@ -364,7 +384,6 @@ for (const fork of FORKS) {
   if (mapValues.length !== gatewaySet.size || listEntries.length !== runtimeSet.size
     || gatewaySet.size !== runtimeSet.size
     || [...gatewaySet].some((v) => !runtimeSet.has(v))) {
-    hardFails += 1
     fail('C7 种子域漂移：gateway HOST_PACKAGE_PROBE_DOMAINS 值集 != dsh-runtime HOST_DOMAIN_PROBE_NAMES（两侧同改）')
   } else {
     console.log(`✓ C7 种子域锁步: ${[...gatewaySet].join(', ')}`)
@@ -399,6 +418,12 @@ for (const fork of FORKS) {
     {
       script: 'packages/dsh-chamber-seed-archive-cleanup/scripts/build.mjs',
       outputs: ['packages/dsh-chamber-seed-archive-cleanup/dist/index.js'],
+    },
+    {
+      // The shared runtime core's committed bundle (the desktop/gateway
+      // installer ships it; a stale copy is as wrong as a stale seed bundle).
+      script: 'packages/dsh-runtime/scripts/build.mjs',
+      outputs: ['packages/dsh-runtime/dist/index.js'],
     },
     {
       // The mobile browser half is a committed artifact too (package.json
@@ -441,38 +466,145 @@ for (const fork of FORKS) {
     if (stale.length > 0) warn(`C8 生成物 mtime 落后（advisory；fresh checkout 会误报，请用默认重建门）: ${stale.join(', ')}`)
     else console.log('✓ C8 生成物 mtime 新鲜（advisory 模式）')
   } else {
-    const stale = []
-    const skipped = []
-    for (const group of groups) {
-      const paths = group.outputs.map((output) => join(ROOT, output))
-      const missing = group.outputs.filter((_, index) => !existsSync(paths[index]))
-      if (missing.length > 0) {
-        stale.push(...missing.map((output) => `${output}（缺失）`))
-        continue
-      }
-      const before = paths.map((path) => readFileSync(path))
+    // Serialize the in-place rebuild: two concurrent runs would interleave
+    // write/restore and leave rebuilt (uncommitted) bytes behind. The lock is
+    // an exclusive file in the OS temp dir, keyed by the repo path.
+    const lockPath = join(
+      tmpdir(),
+      `dsh-chamber-c8-${createHash('sha256').update(ROOT).digest('hex').slice(0, 16)}.lock`,
+    )
+    let lockFd
+    let lockTaken = false
+    for (let attempt = 0; attempt < 2 && !lockTaken; attempt += 1) {
       try {
-        const run = spawnSync(process.execPath, [join(ROOT, group.script)], { cwd: ROOT, encoding: 'utf8' })
-        if (run.status !== 0) {
-          const detail = `${run.stderr ?? ''}`.trim().split('\n').pop() ?? `exit ${run.status}`
-          skipped.push(`${group.script}（构建不可用：${detail}）`)
-          continue
+        lockFd = openSync(lockPath, 'wx')
+        writeFileSync(lockFd, `${process.pid}\n`)
+        lockTaken = true
+      } catch (error) {
+        if (error?.code !== 'EEXIST') throw error
+        // A killed gate cannot clean its own lock (process.exit bypasses
+        // finally): take over when the recorded PID is gone.
+        const recorded = Number.parseInt(`${readFileSync(lockPath, 'utf8')}`.trim(), 10)
+        let alive = false
+        if (Number.isInteger(recorded) && recorded > 0) {
+          try { process.kill(recorded, 0); alive = true } catch { alive = false }
         }
-        for (const [index, output] of group.outputs.entries()) {
-          if (!readFileSync(paths[index]).equals(before[index])) stale.push(output)
+        if (alive) {
+          fail(`C8 无法重建：另一个 C8 重建正在运行（pid ${recorded}，${lockPath}）——不能证明产物新鲜度，稍后重跑`)
+          break
+        }
+        rmSync(lockPath, { force: true })
+      }
+    }
+    if (!lockTaken && lockFd === undefined && !process.exitCode) {
+      // The lock loop broke on a live holder: `fail()` already reported it.
+      lockFd = undefined
+    }
+    if (lockFd !== undefined) {
+      // Snapshot/restore/compare live in scripts/dev/artifact-gate.mjs so the
+      // decision logic is unit-tested (see artifact-gate.test.mjs).
+      const artifactDirs = (group) => [...new Set(group.outputs.map(output => dirname(join(ROOT, output))))]
+      let inFlight = undefined
+      let child = undefined
+      const onSignal = (signal) => {
+        try { child?.kill('SIGTERM') } catch { /* already gone */ }
+        if (inFlight !== undefined) {
+          try { inFlight() } catch (error) { console.error(`C8 信号恢复失败: ${error.message}`) }
+        }
+        try { rmSync(lockPath, { force: true }) } catch { /* best effort */ }
+        process.exit(signal === 'SIGINT' ? 130 : 143)
+      }
+      process.on('SIGINT', () => onSignal('SIGINT'))
+      process.on('SIGTERM', () => onSignal('SIGTERM'))
+      // Async spawn (not spawnSync): the event loop must stay free so a signal
+      // during a rebuild is handled immediately — restore, kill the child, exit.
+      const BUILD_TIMEOUT_MS = 300_000
+      const runBuild = (script) => new Promise((resolve) => {
+        const proc = spawn(process.execPath, [script], { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'] })
+        child = proc
+        let stderr = ''
+        let timedOut = false
+        const timer = setTimeout(() => {
+          timedOut = true
+          try { proc.kill('SIGKILL') } catch { /* already gone */ }
+        }, BUILD_TIMEOUT_MS)
+        proc.stderr.on('data', (chunk) => { stderr += chunk })
+        proc.on('error', (error) => {
+          clearTimeout(timer)
+          child = undefined
+          resolve({ status: -1, stderr: error.message })
+        })
+        proc.on('close', (status) => {
+          clearTimeout(timer)
+          child = undefined
+          resolve({ status: timedOut ? -1 : status, stderr: timedOut ? `${stderr}\nbuild timed out after ${BUILD_TIMEOUT_MS}ms` : stderr })
+        })
+      })
+      const stale = []
+      const skipped = []
+      try {
+        for (const group of groups) {
+          const paths = group.outputs.map((output) => join(ROOT, output))
+          const missing = group.outputs.filter((_, index) => !existsSync(paths[index]))
+          if (missing.length > 0) {
+            stale.push(...missing.map((output) => `${output}（缺失）`))
+            continue
+          }
+          let snapshots
+          try {
+            snapshots = new Map(artifactDirs(group).map(dir => [dir, snapshotDir(dir)]))
+          } catch (error) {
+            stale.push(`${group.script} 的产物不可读：${error.message}`)
+            continue
+          }
+          inFlight = () => { for (const [dir, files] of snapshots) restoreDir(dir, files) }
+          try {
+            const run = await runBuild(group.script)
+            if (run.status !== 0) {
+              const detail = `${run.stderr ?? ''}`.trim().split('\n').pop() ?? `exit ${run.status}`
+              skipped.push(`${group.script}（构建不可用：${detail}）`)
+              continue
+            }
+            stale.push(...compareOutputs(
+              group.outputs,
+              ROOT,
+              snapshots,
+              (abs, dir) => relative(dir, abs),
+            ))
+          } finally {
+            // Restore the whole artifact directory verbatim (extra files
+            // removed, originals written back) — the gate must not leave a
+            // modified working tree, even on a build failure.
+            inFlight()
+            inFlight = undefined
+          }
         }
       } finally {
-        // Restore verbatim: the gate must not leave a modified working tree.
-        paths.forEach((path, index) => writeFileSync(path, before[index]))
+        closeSync(lockFd)
+        rmSync(lockPath, { force: true })
       }
+      for (const note of skipped) warn(`C8 跳过：${note}`)
+      const verdict = artifactGateVerdict({ stale, skipped })
+      if (!verdict.ok) fail(verdict.message)
+      else console.log(`✓ C8 提交态生成物与 src 一致（重建-比对，${groups.length} 组）`)
     }
-    for (const note of skipped) warn(`C8 跳过：${note}`)
-    if (stale.length > 0) {
-      hardFails += 1
-      fail(`C8 提交态生成物与 src 不一致（重建后字节不同）: ${stale.join(', ')} — 跑 pnpm run build:host-packages / node packages/dsh-chamber-client-ui-mobile/scripts/build.mjs 后提交`)
-    } else if (skipped.length === 0) {
-      console.log('✓ C8 提交态生成物与 src 一致（重建-比对）')
-    }
+  }
+}
+
+// C9 —— vendor 源码补丁锚（design 09 §3.6；硬失败）
+{
+  const { VENDOR_PATCHES, checkVendorPatchSources } = await import(
+    join(ROOT, 'packages/renderer/scripts/vendor-patches.mjs')
+  )
+  const results = checkVendorPatchSources()
+  const broken = results.filter(result => !result.ok)
+  const editCount = VENDOR_PATCHES.reduce((total, patch) => total + patch.edits.length, 0)
+  if (broken.length > 0) {
+    fail(`C9 vendor 补丁锚漂移（重锚后需按新 pin 重导补丁）: ${broken.map(b => `${b.vendorFile} — ${b.detail}`).join('; ')}`)
+  } else if (results.length === 0) {
+    warn('C9 未注册任何 vendor 补丁（如确已全部退役可忽略）')
+  } else {
+    console.log(`✓ C9 vendor 补丁锚: ${results.length} 文件 / ${editCount} 处锚点全部唯一命中`)
   }
 }
 
@@ -493,8 +625,9 @@ for (const fork of FORKS) {
   }
 }
 
-if ((process.exitCode ?? 0) !== 0) {
-  console.error('\n✗ verify-upstream-touchpoints: 存在硬失败——见上。')
+if (hardFails > 0 || (process.exitCode ?? 0) !== 0) {
+  process.exitCode = 1
+  console.error(`\n✗ verify-upstream-touchpoints: ${hardFails} 项硬失败——见上。`)
 } else {
-  console.log('\n✓ verify-upstream-touchpoints 全部通过（C1/C3–C8）')
+  console.log('\n✓ verify-upstream-touchpoints 全部通过（C1/C3–C9）')
 }

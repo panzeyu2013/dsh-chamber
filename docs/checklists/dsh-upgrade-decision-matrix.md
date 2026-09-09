@@ -109,7 +109,7 @@
 | C6 | settings bridge 子 ctx 台账（`bridge-context.ts:138-155`） | 上游 sidebar children 集 / chamber 台账 | 台账不同构 | 补 inert 声明键（panellist/brand.*）+ `usePanelInfo` |
 | C7 | open-in 平行实现（catalog/标签表/菜单） | 上游官方 client / chamber 自建 | 重复实现 | `retire` 平行件，改建 in-repo basePath fork |
 | C8 | `ui-chat` 根 inject `sidebarRight` × 复合首屏 | 上游新依赖 / chamber 复合装载 | **静默致命** | 5 行 load-as-extra-row + `assertRequiredExtraRowServices` 有界探针（**非致命**，见 D2 实际口径） |
-| C9 | `localPathMediaUrl` 用 `window.location.origin + '/api/file'` | 上游绝对 URL / chamber N-ctx 同源壳 | 第二例同源缺陷 | patched-copy 基础设施裁决（D3）。**二轮实测事实（W2 Q3）**：控制面只代理 `/api/i/<id>/*`（`instance-proxy.ts`），`/api/file` 落控制面自己的 api handler → 404 JSON（用户看到坏图）；改成绝对实例 origin 会被 CSP `img-src 'self'` 拦；可行修法 = 相对 `<basePath>/api/file`（本地实例已注入 spawn cookie，ssh/http dsh 目标不注入任何头 → 实例侧 401，需一并裁决） |
+| C9 | 同源绝对 URL（`localPathMediaUrl` 的 `/api/file`、`client-file-upload` 的 `/api/session/uploadFileBinary`、`ui-deliverables` 的 `/api/present.host|open`） | 上游绝对 URL / chamber N-ctx 同源壳 | 同源缺陷（三轮共四处） | patched-copy 基础设施裁决（D3）。**三轮已落地**：构建期 vendor 补丁集（design 09 §3.6，4 条/5 文件/18 锚点），门 = C9 + `vendor-patches.test.mjs` + `build:renderer` 末步产物断言；`client-file-upload` 转 covered 以让补丁生效。**二轮实测事实（W2 Q3）**：控制面只代理 `/api/i/<id>/*`（`instance-proxy.ts`），`/api/file` 落控制面自己的 api handler → 404 JSON（用户看到坏图）；改成绝对实例 origin 会被 CSP `img-src 'self'` 拦；可行修法 = 相对 `<basePath>/api/file`（本地实例已注入 spawn cookie，ssh/http dsh 目标不注入任何头 → 实例侧 401，需一并裁决） |
 | C11 | electron-builder 版本声明 | 上游 26.15.3 / chamber 声明 `^26.0.12` | 声明漂移 | 改 `^26.15.3` |
 | C12 | 升级顺序：`ui-workspace.startSession` → `ctx.layout.selectPanel(null)` | 上游新 API / chamber layout 未升 | **运行期 TypeError** | layout 重放必须在 ui-workspace 之前（§4 顺序） |
 | C13 | 运行时线锚 vs 源码线 `FORK_VERSION` | `release-preflight.mjs:146-155` | 顺序约束 | 运行时线重锚排在 fork 重放之后 |
@@ -1340,7 +1340,7 @@
 | layout fork 的 `handle.create` 猴补丁 | S2 | 上游 eager 实例（`store.create = () => instance`）使其永不执行 | S2 §2 |
 | `shared/` 中与上游 tree.ts 等价的语义移植（`derive.ts` 等） | S1 | 上游语义已有，需按 pin 复验 | S1 §2 |
 | `renderer/src/generated/typert/**` 的“随批提交”纪律 | S5 | 该目录被 `.gitignore:75` 忽略 | S5 §4 |
-| `dsh-runtime/src/runtime-host-adapter.ts`（+test/re-export/清单） | S8 | 无生产实现的草图（design 18 §9.1 自述） ⇒ `retire` —— **未采纳（2026-09 二轮裁决）**：AGENTS.md「Runtime boundaries」明示 `RuntimeHostAdapter` 为 documented sketch、design 18 §9.1 与 gateway `runtime-manager.ts` 注释同口径，删除须同步三处契约文档；本轮**保留**并在此登记偏差（如需退役，按 §4.1 原建议一次性删文件+test+`index.ts` 再导出+`package.json` 测试清单，并改三处文档） |
+| `dsh-runtime/src/runtime-host-adapter.ts`（+test/re-export/清单） | S8 | 无生产实现的草图（design 18 §9.1 自述） ⇒ 原建议 `retire` —— **不采纳（2026-09 三轮裁决，证据更正）**：该接口**不是死代码**——`test/fake-adapter.ts` 实现它，且 `test/run-phase-fixture.ts` 以它为底座驱动 `dsh-runtime` 全部纯 Node 测试（`test:runtime` 26 个文件）；删除需重写夹具并冒回归风险，而它同时是 AGENTS.md 与 design 18 §9.1 的「无生产实现者、生产走 DI seam」契约表述。裁决：**保留**，并把 design 18 §9.1 的「desktop 与 gateway 各实现一份」更正为事实口径 |
 | `isPersistenceNotFoundError`（`seed-archive-cleanup/src/binding.ts:145-151`） | S8 | `inspect` 已不存在，该错误分类无消费者 |
 
 ### 4.2 新增（chamber 必须补的）
@@ -1390,9 +1390,9 @@
 | # | 决策 | 选项 | 推荐 |
 |---|---|---|---|
 | D1 | `sidebar.panellist` 是否采纳 | 采纳（补声明+渲染+直调 selectPanel）/ 暂不采纳 | **采纳**（成本 S，避免上游/第三方注册悬空）；落地时改为**直调**——探测式降级的前提（官方 ui-layout 无该方法）不成立 |
-| D2 | 5 个 extra row 的失败是否转致命 | 致命 / 降级+loud 诊断 | **已按「降级 + loud 探针」执行**：fatal 会让 gateway 形态（可不加载该行）整壳挂掉；探针在 5s 内探测 `sidebarRight`/`resources` 并 console.error 点名，消除静默。若日后确认该行在所有形态都必须存在，再把探针升级为 fatal |
+| D2 | 5 个 extra row 的失败是否转致命 | 致命 / 降级+loud 诊断 | **已按「降级 + loud 探针」执行**：fatal 会让 gateway 形态（可不加载该行）整壳挂掉；探针在 5s 内探测 `sidebarRight` 并 console.error 点名，消除静默（三轮收敛：`fileUpload` 因该客户端转为 covered 而移出清单，`resources` 因非任何复合插件 inject 且不可能单独缺失而删除）。若日后确认该行在所有形态都必须存在，再把探针升级为 fatal |
 | D3 | patched-copy 基础设施 | 现在建（第二例已触发）/ 继续逐例绕过 | **现在建**（否则 `/api/file`、未来的同源绝对 URL 都会 404）。二轮补充事实：只代理 `/api/i/<id>/*`；绝对 origin 被 CSP `img-src 'self'` 拦；最小修法 = 相对 `<basePath>/api/file`；ssh/http dsh 目标无 cookie 注入 → 401 待裁决（见 C9） |
 | D7 | `ALLOW_BUILDS` 的 `fs-ext` | 保留条目（回滚可用）/ 删除（回滚到 0.1.3 硬失败）/ 版本条件化白名单 | **保留**（无害且保住回滚；注释改为“回滚目标依赖”） |
-| D4 | open-in 平行实现 | 建 in-repo basePath fork（`packages/dsh-client-ui-open-in-app`）/ 保留现平行件 | **建 fork**（以上游为准，删平行件） |
-| D5 | 官方桌面插件管理窗口 vs chamber PluginDialog | 保留统一模型 + 动作集对齐 / 改走上游窗口 | **保留统一模型** |
+| D4 | open-in 平行实现 | 建 in-repo basePath fork（`packages/dsh-client-ui-open-in-app`）/ 保留现平行件 | **推翻原建议（2026-09 三轮裁决）**：**保留** chamber 插件——官方 client 是严格子集（单池 host catalog、无 per-source 矩阵、无桌面主进程 VS Code override、无 ssh 远程路径），且其根绝对 URL 在同源壳内自隐藏。W6 建议的「契约去重」（改 import 官方 `@deepseek-ai/dsh-host-open-in-app/shared`）**在源码态 vendor 下不可行**：该包 `exports['./shared']` 指向 `lib/types/shared.js`，而 vendor 快照只有 `src/`，且本仓 tsconfig 排除 `vendor/**` ⇒ 现 33 行镜像 + `open-in-app-protocol.test.ts` 的字节级锁步（已登记为触点表 §4 的 contract mirror）是可行等价物 |
+| D5 | 官方桌面插件管理窗口 vs chamber PluginDialog | 保留统一模型 + 动作集对齐 / 改走上游窗口 | **保留统一模型（2026-09 三轮确认，证据补齐）**：上游确有桌面插件窗口（`apps/desktop` 菜单「Desktop Plugins…」，`ipc.ts` list/add/remove/update），但它只管理 **Electron 自身 profile/node_modules**、registry-only、仅打包态；chamber 的 PluginDialog 是 4 来源超集（local/ssh/gateway/http：物化、seed 同步、npm 搜索、undo journal、受控重启）且已消费官方 `pluginInventory/list`（官方 web 面只读）。**唯一真实缺口 = 无专用 `update(name,version)`**（ssh 折进 apply、local/gateway 走 re-add）：按上游 `upstream-align` 方向补 `update`（local 走 `dsh plugin add name@version`，见 `plugin-sync.ts`），登记为后续动作（非本轮缺陷） |
 | D6 | `ui-dockkit` 落法 | covered factory / seed 平台词 | **covered factory**（主图硬门 1.55MB） |

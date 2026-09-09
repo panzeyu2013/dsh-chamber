@@ -15,10 +15,10 @@
  *  - headCssRaw：dist/index.html 中全部 render-blocking 样式表合计——warn。
  *
  * 校准基线（2026-09 alpha.2 重锚后 dist，raw bytes，见 dist/web/perf-sizes.json）：
- * mainGraph ≈1,207,988；chamberEntry ≈1,976,340（距 warn 门 2,000,000 仅
- * ~1.2%，dockkit 走 covered factory 已是当前最低成本路径——再加一个首屏家族
- * 就会触 warn，需先评估拆分）；headCss ≈244,999。阈值不是历史账本：结构改动
- * 落地后按新实测值回填阈值并更新本注释，防止它变成下一份过期注释。
+ * mainGraph ≈1,208,064；chamberEntry ≈1,982,194（距 warn 门 2,000,000 仅
+ * ~0.9%：含 file-upload 转为 covered、vendor 补丁集与必需行探针的净增量——
+ * 再加一个首屏家族就会触 warn，需先评估拆分）；headCss ≈245,227。阈值不是历史账本：结构改动落地后按新实测值回填阈值并更新本注释，
+ * 防止它变成下一份过期注释。
  *
  * 输出：每次运行打印三项实测 + 阈值；硬门超限或资产缺失/未解析 exit 1
  * （build 失败）；并把本次构建快照 perf-sizes.json 写入 dist/web（vite
