@@ -234,12 +234,19 @@ export const chamberBridge: {
   clearPluginDiagnostic(sourceId: string): void
   getPluginDiagnostics(): Readonly<Record<string, PluginGraphDiagnostic>>
   onPluginDiagnostic(listener: (sourceId: string, diagnostic: PluginGraphDiagnostic | undefined) => void): () => void
+  // 活动视图事实（2026-12，design 06 §4.6）：文档级状态（主题投影、后续的
+  // lang 投影）只有活动视图的实例可以写，App 是「谁在屏上」的唯一权威。
+  setActiveSource(sourceId: string | undefined): void     // 同值重发为 no-op；undefined = 未发布
+  getActiveSource(): string | undefined                   // 未发布时 undefined（消费者 fail open）
+  onActiveSource(listener: (sourceId: string | undefined) => void): () => void  // 仅变化时通知
 }
 ```
 
 **App 层（renderer main entry）写入职责**：
 - 启动即 auto-start 本地实例（连接行不存在则 `POST /api/connections`）；
   按注册表 auto-connect 远程实例（`desktopSsh.connect`）。
+- 活动视图发布：`useLayoutEffect` 在**绘制前**把 `activeView` 写入
+  `setActiveSource`（延迟到 passive effect 会先画一帧旧主题）。
 - 状态合并发布：控制面 `/health`（health-events 推送流）+
   `/api/connections`（30s）+ desktopSsh status 推送（onStatusChanged）+
   已挂载 ctx 的完整快照上报；仅无完整生产者的 ready 来源 30s unary 兜底 →
@@ -490,8 +497,10 @@ export const chamberBridge: {
     立即退役并 dispose 所有受影响的已选/未选缓存；异步装配结果提交前再校验
     捕获的 proof 与当前 roster，迟到的旧代结果只 dispose、不进入缓存。
   - `packages/dsh-chamber-client-ui-layout/`——官方 ui-layout 壳插件的 chamber
-    fork（仅替换 layout store：`sidebarWidth` 经侧边栏共享 view-prefs store
-    播种/回写，钳位 [264,420]，覆盖 id；替换官方 ui-layout 注册，见设计 06）。
+    fork（①替换 layout store：`sidebarWidth` 经侧边栏共享 view-prefs store
+    播种/回写，钳位 [264,420]，覆盖 id；②**文档级主题投影的唯一写入者**：
+    全页单例 `ThemePresenter` + 按活动视图门控的 `document-theme.ts`，见设计 06
+    §4.6；替换官方 ui-layout 注册）。
   - `packages/dsh-chamber-client-ui-git/`——设计 08 的 chamber 内建 Git
     Worktree 插件：占用 `sidebar.git`，页面级 singleton 以 30s 单飞读取各实例
     topology，并编排 create/workspace/session 与 Git-first remove saga；它不把

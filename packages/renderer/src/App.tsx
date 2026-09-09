@@ -25,7 +25,7 @@
  * reportOpenSessionOutcome 回报每个侧边栏 shell——失败落在被点击的会话
  * 行内呈现，不再是单向通道的 console-only 盲区（2026-09 修订）。
  */
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import api, { type ConnectionSummary, type HealthResponse } from './api.ts'
 import {
   chamberBridge,
@@ -2056,7 +2056,20 @@ export default function App() {
   useEffect(() => {
     reclaimHiddenViewsRef.current = reclaimHiddenViews
     drainPrewarmRef.current = drainPrewarm
+    reclaimViewRef.current = reclaimView
   })
+
+  // 共享文档的主题投影归属（N-ctx 硬化，design 06）：文档级 color-scheme /
+  // body 调色板属性是 DOCUMENT-global 的，而本形态把 N 个实例壳挂在同一份
+  // 文档里——每个挂载中的视图都跑自己的 ui-layout theme presenter。App 是
+  // 「谁在屏上」的唯一权威，把它发布到 page-wide chamberBridge；ui-layout
+  // fork 的 document-theme 投影器据此只让活动视图写文档（详见
+  // packages/dsh-chamber-client-ui-layout/src/client/document-theme.ts）。
+  // useLayoutEffect：必须在切换视图的那一帧**绘制前**发布，否则主题不同的两个
+  // 视图互切会先画一帧旧调色板（2026-12 复查 MINOR-2）。
+  useLayoutEffect(() => {
+    chamberBridge.setActiveSource(activeView)
+  }, [activeView])
 
   // 活动视图落地即重计隐藏窗：离开活动的旧视图开始计时，新活动视图清计时。
   // 覆盖 selectView 过渡 apply、注册表删除回落（fallback 到 local）等一切路径；

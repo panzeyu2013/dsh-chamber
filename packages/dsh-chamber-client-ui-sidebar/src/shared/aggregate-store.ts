@@ -185,6 +185,8 @@ type RefreshListener = (sourceId: string) => void
  */
 type SessionListRefreshListener = (sourceId: string) => void
 type SourceListener = (sourceId: string) => void
+/** Page-wide active-view fact: the source whose shell is on screen, undefined until the App publishes. */
+type ActiveSourceListener = (sourceId: string | undefined) => void
 type RuntimeReportListener = (
   sourceId: string,
   report: InstanceRuntimeReport | undefined,
@@ -203,12 +205,21 @@ const openOutcomeListeners = new Set<OpenOutcomeListener>()
 const refreshListeners = new Set<RefreshListener>()
 const sessionListRefreshListeners = new Set<SessionListRefreshListener>()
 const activateSourceListeners = new Set<SourceListener>()
+const activeSourceListeners = new Set<ActiveSourceListener>()
 const runtimeReportListeners = new Set<RuntimeReportListener>()
 const snapshotReportListeners = new Set<SnapshotReportListener>()
 const pluginDiagnosticListeners = new Set<PluginDiagnosticListener>()
 let servers: ChamberServerAggregate[] = []
+let activeSourceId: string | undefined
 const runtimeReports: Record<string, InstanceRuntimeReport> = {}
 const runtimeProducerTokens: Record<string, number> = {}
+/** Boot generation of the ctx that currently owns each source's producers.
+ *  Registration is order-gated by this (see registerInstanceRuntimeProducer):
+ *  a hung earlier boot that resumes AFTER its successor registered must not
+ *  steal the producer token — its teardown clear() would then silence the
+ *  healthy successor for good (2026-12 review BLOCKER). */
+const runtimeProducerGenerations: Record<string, number> = {}
+const snapshotProducerGenerations: Record<string, number> = {}
 const runtimeProducerFingerprints: Record<string, string> = {}
 const instanceSnapshots: Record<string, InstanceSnapshot> = {}
 const snapshotProducerTokens: Record<string, number> = {}
@@ -322,6 +333,42 @@ export const chamberBridge = {
     activateSourceListeners.add(listener)
     return () => {
       activateSourceListeners.delete(listener)
+    }
+  },
+
+  /**
+   * App-layer write: the source whose shell is currently on screen. This is
+   * the authoritative active-view fact of the shared document — consumers that
+   * must act for ONE view only (the ui-layout document theme projection, which
+   * writes document-global `color-scheme`/palette state) gate on it instead of
+   * guessing from DOM classes or mount order. Undefined means "not published":
+   * consumers fail OPEN, so a boot without the App layer keeps its previous
+   * unconditional behavior.
+   */
+  setActiveSource(sourceId: string | undefined): void {
+    if (sourceId === activeSourceId) return
+    activeSourceId = sourceId
+    // Per-listener isolation (same discipline as the layout facts fan-out): a
+    // throwing projector must not abort the publish for its siblings.
+    for (const listener of [...activeSourceListeners]) {
+      try {
+        listener(activeSourceId)
+      } catch (error) {
+        console.error('[dsh-chamber] active-source subscriber threw:', error)
+      }
+    }
+  },
+
+  /** Page-wide active-view fact; undefined until the App publishes. */
+  getActiveSource(): string | undefined {
+    return activeSourceId
+  },
+
+  /** Subscribe to active-view changes (fires on change only); returns the unsubscribe. */
+  onActiveSource(listener: ActiveSourceListener): () => void {
+    activeSourceListeners.add(listener)
+    return () => {
+      activeSourceListeners.delete(listener)
     }
   },
 

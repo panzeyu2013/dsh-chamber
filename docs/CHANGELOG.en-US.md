@@ -14,6 +14,17 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 ### Fixed
 
+- **N-ctx document-level theme projection (problem E: checkbox shade mismatch).**
+  Document-level `html{color-scheme}` / `body[data-ds-dark-theme]` were written by
+  EVERY mounted instance (and the vendor `ThemePresenter.dispose()` retracted them
+  unconditionally), so a hidden view's apply repainted the visible one and its
+  teardown stripped the visible view's projection — a light palette next to dark
+  native widgets. The projection is now owned by the ACTIVE view only: `chamberBridge`
+  gained `setActiveSource/getActiveSource/onActiveSource`, the App publishes the active
+  view in a `useLayoutEffect`, and the ui-layout fork gates `document-theme.ts` on
+  `ctx.chamberInstanceId` (teardown never retracts; one page-wide presenter);
+  `styles.css`'s `:root{color-scheme}` fallback now matches the light palette default.
+
 - **Git source branch could not use the main checkout as its base (problem C).** The
   host always sent the full branch list; the exclusion happened client-side (the main
   checkout branch was filtered out and only shown as a placeholder), so single-branch

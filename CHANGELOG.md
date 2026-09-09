@@ -14,6 +14,15 @@
 
 ### 修复
 
+- **N-ctx 文档级主题投影（问题 E：checkbox 深浅错位）**：文档级
+  `html{color-scheme}` / `body[data-ds-dark-theme]` 原先由**每个挂载中的实例**各写
+  一份（官方 `ThemePresenter` 的 `dispose()` 还无条件回收），隐藏视图的 apply 会
+  重绘可见视图、其 teardown 会抹掉可见视图的投影 ⇒ 浅色调色板配深色原生控件。
+  现由**活动视图独占**：`chamberBridge` 新增 `setActiveSource/getActiveSource/
+  onActiveSource`，App 在 `useLayoutEffect` 中发布活动视图，ui-layout fork 用
+  `document-theme.ts` 按 `ctx.chamberInstanceId` 门控、teardown 永不回收、全页单例
+  presenter；`styles.css` 的 `:root{color-scheme}` 兜底与浅色默认调色板对齐。
+
 - **Git 来源分支无法以主 checkout 为 base（问题 C）**：host 一直下发完整分支表，排除
   发生在客户端选择器（把主 checkout 当前分支过滤掉、只作占位符），单分支仓库候选
   必空、localStorage 记忆值永久遮蔽 main。候选改为纯函数 `sourceBranchChoices()`
