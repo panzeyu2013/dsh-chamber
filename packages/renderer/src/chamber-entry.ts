@@ -500,6 +500,42 @@ export function apply(ctx: Context): void {
   void registerDeferred(ctx).catch((error) => {
     console.error('[chamber-entry] deferred plugin registration failed:', error)
   })
+
+  assertRequiredExtraRowServices(ctx)
+}
+
+/**
+ * alpha.2 required extra rows: `ui-sidebar-right` provides `ctx.sidebarRight`,
+ * which the composite's FIRST-SCREEN `ui-chat` now declares in its cordis
+ * inject set (ui-chat/src/client/apply.ts). The composite registers ui-chat
+ * directly, so its fiber is not part of the boot kernel's loader sweep: if the
+ * extra row never applies, the fiber stays PENDING and the whole conversation
+ * surface disappears while the boot still reports success. Probe the service
+ * after the extra rows have had time to materialize and report loudly instead
+ * of failing silently.
+ *
+ * This is a diagnostic, not a boot gate: a gateway-hosted instance may
+ * legitimately run without the row (the mobile deployment loads no sidebar
+ * surface), so the boot must not fail — the operator-facing log is the signal.
+ * @param ctx - the per-entry client root context.
+ */
+function assertRequiredExtraRowServices(ctx: Context): void {
+  const REQUIRED = ['sidebarRight', 'resources'] as const
+  const deadline = 5000
+  const started = Date.now()
+  const probe = (): void => {
+    const missing = REQUIRED.filter(name => (ctx as { get?: (key: string) => unknown }).get?.(name) === undefined)
+    if (missing.length === 0) return
+    if (Date.now() - started < deadline) {
+      setTimeout(probe, 250)
+      return
+    }
+    console.error(
+      `[chamber-entry] required extra-row service(s) missing after ${deadline}ms: ${missing.join(', ')} — `
+      + 'the ui-sidebar-right / client-resources host-graph rows did not apply; the conversation surface may stay unregistered',
+    )
+  }
+  setTimeout(probe, 0)
 }
 
 /** The module-table handoff shape (wire contract, dsh-client-modules). */
