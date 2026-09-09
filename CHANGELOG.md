@@ -14,6 +14,11 @@
 
 ### 修复
 
+- **Git 来源分支无法以主 checkout 为 base（问题 C）**：host 一直下发完整分支表，排除
+  发生在客户端选择器（把主 checkout 当前分支过滤掉、只作占位符），单分支仓库候选
+  必空、localStorage 记忆值永久遮蔽 main。候选改为纯函数 `sourceBranchChoices()`
+  （host 表原样放行、unborn 行跳过），并加源码级回归钉子。
+
 - **`test:gateway` 会停掉宿主 gateway 服务**：安装器 D2 跨形态清理直接调用裸
   `systemctl stop/disable dsh-chamber-gateway.service`（写死单元名），而相关测试只
   mock 了 `systemctl_for_mode` ⇒ 真实 systemctl 逃逸。全部 harness 改经

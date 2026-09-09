@@ -1,8 +1,9 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import {
   canTargetSession, collectSessionClosure, createSourceOptions, findWorktree,
-  gitFactsForWorkspace, removeBlockReason,
+  gitFactsForWorkspace, removeBlockReason, sourceBranchChoices,
 } from '../src/shared/git-facts.ts'
 import { GitActionLedger } from '../src/shared/action-ledger.ts'
 import { SerializedRefreshes } from '../src/shared/refresh-flight.ts'
@@ -70,8 +71,33 @@ test('topology helpers select and find by opaque identity, never display paths',
   assert.equal(findWorktree(snapshot, '/same', '/repo'), undefined)
 })
 
-test('safe-remove guard covers main/registration/live/current/fs safety and allows detached clean rows', () => {
-  assert.equal(removeBlockReason(worktree({ isMain: true })), 'main')
+test('source-branch choices keep the main checkout branch selectable and never empty for a real repo', () => {
+  // The host list is authoritative and passed through UNFILTERED: `main` is a
+  // valid base (the host resolves it via localBranchHead) and filtering it out
+  // made a single-branch repository show an empty picker (2026-12 report).
+  assert.deepEqual(sourceBranchChoices(['main'], []), ['main'])
+  assert.deepEqual(sourceBranchChoices(['main', 'mobile'], ['main']), ['main', 'mobile'])
+  // A deleted remembered branch is dropped by the caller's membership check,
+  // so a stale localStorage value can never resurrect a gone branch.
+  assert.equal(sourceBranchChoices(['main', 'mobile'], []).includes('swift'), false)
+  // Fallback path (host list absent/older): the selected repo's own worktree
+  // branches, deduplicated in row order, detached rows skipped.
+  assert.deepEqual(sourceBranchChoices([], ['main', 'mobile', 'main', null]), ['main', 'mobile'])
+  assert.deepEqual(sourceBranchChoices([], []), [])
+})
+
+test('the create dialog never filters the main checkout branch out of the source picker', () => {
+  // Source-level pin (the regression lived at the call site, so a pure-helper
+  // test alone cannot catch it being re-added). Positive pin: the picker must
+  // consume the unfiltered helper result directly.
+  const dialog = readFileSync(new URL('../src/client/CreateWorktreeDialog.tsx', import.meta.url), 'utf8')
+  assert.match(dialog, /options=\{existingBranchChoices\}/,
+    'the source-branch picker must offer the helper result unfiltered (main checkout branch included)')
+  assert.doesNotMatch(dialog, /existingBranchChoices\.filter/,
+    'the source-branch picker must never filter the main checkout branch out')
+})
+
+test('safe-remove guard covers main/registration/live/current/fs safety and allows detached clean rows', () => {  assert.equal(removeBlockReason(worktree({ isMain: true })), 'main')
   assert.equal(removeBlockReason(worktree({ workspaceId: null })), 'unregistered')
   assert.equal(removeBlockReason(worktree({ runningSessionIds: ['s'] })), 'running')
   assert.equal(removeBlockReason(worktree({ sessionIds: ['s'] }), 's'), 'current')

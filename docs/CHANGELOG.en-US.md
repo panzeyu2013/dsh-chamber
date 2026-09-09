@@ -14,6 +14,13 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 ### Fixed
 
+- **Git source branch could not use the main checkout as its base (problem C).** The
+  host always sent the full branch list; the exclusion happened client-side (the main
+  checkout branch was filtered out and only shown as a placeholder), so single-branch
+  repos had an empty picker and a remembered localStorage value permanently shadowed
+  `main`. The choices now come from the pure `sourceBranchChoices()` (host list passed
+  through, unborn rows skipped) with a source-level regression pin.
+
 - **`test:gateway` stopped the host gateway service.** The installer's D2 cross-mode
   cleanup calls bare `systemctl stop/disable dsh-chamber-gateway.service` (fixed unit
   name) while the tests mocked only `systemctl_for_mode`, so the real systemctl
