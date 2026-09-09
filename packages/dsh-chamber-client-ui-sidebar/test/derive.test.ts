@@ -1355,6 +1355,13 @@ test('serversProjectionSignature ignores the per-call updatedAt stamp but tracks
     serversProjectionSignature([server('ssh-r1', { transport: 'http' })]),
     'transport is independent from target kind',
   )
+  // 托管停机事实是渲染相关的（来源说明行/设置面板文案），必须进发布门——
+  // 否则"托管 dsh 停机 + 传输断开"的跃迁被去重、说明行冻结（2026-12 复查 MINOR）。
+  assert.notEqual(
+    serversProjectionSignature([server('ssh-r1')]),
+    serversProjectionSignature([server('ssh-r1', { managedRuntimeDown: true })]),
+    'the managed-down fact is render-relevant',
+  )
   assert.notEqual(
     serversProjectionSignature([server('ssh-r1', { rawId: 'r1' })]),
     serversProjectionSignature([server('ssh-r1', { rawId: 'other' })]),

@@ -166,11 +166,60 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
   follow，使 producer 重发带归档集的真实基线（`shouldRebaselineFallbackView`）。
   若该拉取瞬时失败，生产者的 loading 撤回 + idle baseline 重发负责恢复，不会永久停在
   error。推快照按来源序号使较旧在途 pull 失效。
+- **首屏基线收割（2026-12，`packages/renderer/src/baseline-harvest.ts`）**：
+  0.2.3 性能整改把"每个 ready 来源最终串行挂载"的旧通道移除后，首启只有 local
+  挂载 + 1 个预热槽且不轮转、被回收来源在用户点击前禁预热 ⇒ N-1 个 ready 远程源
+  **稳态停留**在 unary 兜底视图（合成 cwd 分组 + 空归档集 ⇒ 已归档会话按普通行
+  浮出、无真实工作区动作），而全部自愈臂都要求 `mounted===true`（至少推过一次
+  快照），对从未挂载的来源永不生效。收割把这类来源在**同一个后台预热槽**里挂一次，
+  拿到首个权威推送（真实分组 + 归档集，`archiveSetKnown:true`）即回收——回收后
+  来源转入已上线的"已回收来源"态（保留权威聚合，会话行由 30s unary merge 刷新）。
+  纪律：收割候选优先于普通预热且**不受**"回收后禁预热"抑制（抑制只为防止回收空转，
+  不能把降级源永久钉住）；每源尝试上限 2 次、失败退避 120s、挂载后
+  `BOOT_TIMEOUT_MS+15s` 无推送**且壳已 settle** 判失败并释放槽位（截止值由
+  `boot-budget.ts` 的 boot 预算推导，**高于**它，否则慢隧道上的健康 boot 会被
+  中途回收——正是收割要治的形态）；另有**绝对放弃上限** `HARVEST_ABANDON_MS`
+  （截止值 + boot 预算）：壳始终不 settle（挂死的 loader/fetch）时截止臂永远
+  不可达，此上限回收并**停用**该源（`harvestParked`），避免重试撞进同一挂死
+  （注意语义边界：回收拆的是**已注册**的壳；一个从未 settle 的 boot 若从未注册，
+  其 ctx/容器只能等它自己 settle 时才被拆除，页面生命周期内可能残留——同 id 的
+  后续挂载不受影响，因为 shell.ts 对"上一代 boot"的等待有 boot 预算上限）；
+  **同一上限也独立看管"在途挂载"本身**（按挂载时刻、且仅对**未 settle** 的挂载，
+  不依赖收割意图——用户点开收割壳会撤销意图、普通温壳预热从不写意图，否则挂死
+  boot 会永久占住后台槽；已 settle 的仍由上面的截止臂判定）。同 id boot 尾**从不
+  提前释放**（它是 generation 记录的持有者，提前释放会让迟到的前代与后继同号并
+  注册覆盖），改由 shell.ts 对"等待上一代 boot"设**绝对**上限（前代起始 + 两个
+  boot 预算，所有后继共享同一截止）解耦；同族加固——页面的 producer 注册表按
+  **代际**栅栏（`chamberBootGeneration` 经 ctx 注入）：迟到的老 boot 注册一律作废，
+  其 teardown 不再可能清空健康后继的通道；
+  且活动/待开视图不可回收——改为标记失败，让既有失败覆盖层与「重试」出现；
+  在途壳不计入 retention 的隐藏壳数（它此刻不可回收，计进去会挤掉用户的温壳）；
+  候选集在**存在任一收割候选时独占后台槽**（`prewarmCandidates` 只返回收割
+  候选，且返回**全部**候选，让 drain 能取到排在退避候选之后的"退避已满"者）——
+  若让温壳顶上来，它会成为 `autoPrewarmed` 而隐藏 1 壳时 retention 不回收它，
+  `remaining` 恒 0，本会话剩余来源永远拿不到基线（一个失败源阻塞全部，违反
+  正确性不变量）；**尝试耗尽且从未拿到基线**的源（`harvestParked`）不得退回
+  普通预热——否则白拿第三次 boot 并同样长期占用唯一槽位；托管 dsh **终态停机或
+  瞬态 starting/restarting** 的 gateway 源（问题 B 的投影事实，`managedRuntimeUnusable`）
+  不预热/不收割——壳 boot 必然 503，只白烧尝试次数；用户点开正在收割的视图 = 采用（撤销收割意图，绝不回收）；来源退役时
+  账本同源收敛。稳态仍是 ≤1 个后台壳（与预热共享槽位）。**收割另有独立预算线**
+  （2026-12 复查）：用户保留的隐藏温壳会让普通预热的槽位预算恒为 0（retention
+  只保 1 个隐藏壳），而收割壳是瞬时的（推送即回收 / 仅最后一个保留 / 有截止与
+  放弃上限），不能被它永久挡死——否则用户点开过任何来源之后，后变 ready 的来源
+  永远停在兜底视图；代价是最坏多一个隐藏壳（用户温壳 + 收割壳）在收割窗口内共存。
+  **代价与已知取舍**：
+  首启每个 ready 来源各付一次后台 boot（N 次，串行于全局 boot 链——启动窗口内
+  用户首次点击的排队概率上升，最坏仍受 60s boot 预算约束）；**最后收割的壳被保留
+  为温壳**（不再额外付一次预热 boot，且该源的挂载期状态事实——pending/完成点
+  ——保持在线），但它一旦遇到新的收割候选必须**让位**
+  （`shouldReclaimHarvestedShell`）——否则温壳会以 `autoPrewarmed` 身份长期占住
+  唯一槽位，后变 ready 的来源永远拿不到基线。
 
 ## 3. 桥接层（chamberBridge，renderer 共享单例）
 
-放在自研侧边栏包的 `shared/` 下；chamber App 层（main entry）与侧边栏插件
-（chamber bundle entry）共同 import，vite 共享 chunk 保证运行时单例。
+放在自研侧边栏包的 `shared/` 下；chamber App 层（main entry）、侧边栏插件
+（chamber bundle entry）与 ui-layout fork（文档级主题投影）共同 import，
+vite 共享 chunk 保证运行时单例。
 
 ```ts
 interface ChamberServerWorkspace {
@@ -216,13 +265,15 @@ export const chamberBridge: {
   onRequestSessionListRefresh(listener: (sourceId: string) => void): () => void // 各挂载 ctx 的 sidebar 插件订阅；仅 chamberInstanceId === sourceId 者动作
   requestActivateSource(sourceId: string): void           // 点击来源分组头调用
   onActivateSource(listener: (sourceId: string) => void): () => void  // App 层订阅
-  registerInstanceRuntimeProducer(sourceId: string, sourceFingerprint: string): { // 每个已挂载 ctx 一代生产者
+  registerInstanceRuntimeProducer(sourceId: string, sourceFingerprint: string,
+                                  bootGeneration?: number): { // 每个已挂载 ctx 一代生产者（代际栅栏）
     report(report: InstanceRuntimeReport): void         // token 命中才发布
     clear(): void                                       // generation-safe teardown
   }
   onRuntimeReport(listener: (sourceId: string, report: InstanceRuntimeReport | undefined,
                              sourceFingerprint: string | undefined) => void): () => void
-  registerInstanceSnapshotProducer(sourceId: string, sourceFingerprint: string): { // 每个已挂载 ctx 一代生产者
+  registerInstanceSnapshotProducer(sourceId: string, sourceFingerprint: string,
+                                   bootGeneration?: number): { // 每个已挂载 ctx 一代生产者（代际栅栏）
     report(snapshot: InstanceSnapshot | undefined): void // undefined = baseline 不完整，恢复兜底
     clear(): void                                         // generation-safe teardown
   }

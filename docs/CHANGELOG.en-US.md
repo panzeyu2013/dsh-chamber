@@ -24,14 +24,41 @@ Release artifacts and per-release notes also live on the GitHub Releases page
   view in a `useLayoutEffect`, and the ui-layout fork gates `document-theme.ts` on
   `ctx.chamberInstanceId` (teardown never retracts; one page-wide presenter);
   `styles.css`'s `:root{color-scheme}` fallback now matches the light palette default.
-
+- **First-screen whole-source degraded list (problem A).** A ready source that was
+  never mounted had only the unary fallback (synthetic groups, empty archive set ⇒
+  archived sessions surfacing as rows, no real workspace actions), and every self-heal
+  arm requires `mounted===true`. New baseline harvest: one background mount in the
+  single prewarm slot, reclaimed after the first authoritative push — 2 attempts,
+  120 s backoff, deadline = boot budget + 15 s, an absolute abandon cap that also
+  watches every mounted view by mount time (and the shell bounds its same-id
+  predecessor wait absolutely while the page producer registry is boot-generation
+  fenced, so a hung boot can neither pin the slot, block the source's next mount, nor
+  silence a healthy successor's channel) and reclaims/parks a wedged shell, harvest candidates reserving the slot (with their own
+  budget line, so a user-retained warm shell cannot block them forever), managed-down
+  gateways excluded, user click adopting the shell, and the last harvested shell kept
+  warm until another candidate needs the slot.
+- **Gateway managed-dsh downtime invisible (problem B).** The desktop's `ready` only
+  proves the gateway PROCESS is alive and the sidebar ignored the
+  `/chamber/runtime/status` `connectionState`, so a stopped managed dsh stayed
+  clickable but unusable. A 15 s foreground probe (single-flight, 10 s timeout) now
+  projects the three terminal-down states into the source's `phase` and `connected=false`
+  (decided by a dedicated `managedRuntimeDown` fact, set only while the transport is
+  usable and the probe reports a terminal-down state — never re-derived from the
+  merged `phase`, whose vocabulary shares `error`), with an inline reason + recovery
+  hint under the source header (which is no longer an activation affordance in that
+  state; the actionable entry remains Settings → Connections → start) and an accurate
+  settings-panel message ("gateway reachable, managed dsh not
+  running") or "managed dsh is starting" for the transient states; `starting`/
+  `restarting` also project into `phase`, disable actions and show a
+  `source.managedStarting` note (the dsh is not serving yet) while `degraded` keeps the
+  transport phase (rendered disconnected by the existing rule), and a missing probe
+  fails open.
 - **Git source branch could not use the main checkout as its base (problem C).** The
   host always sent the full branch list; the exclusion happened client-side (the main
   checkout branch was filtered out and only shown as a placeholder), so single-branch
   repos had an empty picker and a remembered localStorage value permanently shadowed
   `main`. The choices now come from the pure `sourceBranchChoices()` (host list passed
   through, unborn rows skipped) with a source-level regression pin.
-
 - **`test:gateway` stopped the host gateway service.** The installer's D2 cross-mode
   cleanup calls bare `systemctl stop/disable dsh-chamber-gateway.service` (fixed unit
   name) while the tests mocked only `systemctl_for_mode`, so the real systemctl
@@ -39,6 +66,9 @@ Release artifacts and per-release notes also live on the GitHub Releases page
   where a real systemctl exists) plus a source-level invariant test; verified on the
   Linux rig: 3 real calls before the fix, 0 after (45/45 on Linux; 43 passing plus two
   Linux-only skips on macOS).
+- Also landed: honest degraded-list label (`source.baselinePending`), the settings-panel
+  managed-down copy, the managed-runtime probe on foreground restore, publishing the
+  active source in a `useLayoutEffect` (no one-frame stale theme), and related fixes.
 
 ## [0.2.3] - 2026-09-07
 

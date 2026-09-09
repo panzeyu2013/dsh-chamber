@@ -10,6 +10,8 @@ export interface ServerProjectionRow extends ServerSelectorRow {
   rawId?: string
   connected: boolean
   phase: string
+  /** Gateway managed dsh terminal-down fact (render-relevant: copy branch). */
+  managedRuntimeDown?: boolean
   dshVersion?: string
   /** Transport refresh stamp; deliberately excluded from the rendered signature. */
   updatedAt?: number
@@ -33,6 +35,7 @@ export function serverProjectionSignature(rows: readonly ServerProjectionRow[]):
     label: row.label,
     connected: row.connected,
     phase: row.phase,
+    managedRuntimeDown: row.managedRuntimeDown === true,
     dshVersion: row.dshVersion ?? null,
     pluginDiagnostic: row.pluginDiagnostic === undefined ? null : {
       state: row.pluginDiagnostic.state,

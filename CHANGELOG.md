@@ -22,17 +22,36 @@
   onActiveSource`，App 在 `useLayoutEffect` 中发布活动视图，ui-layout fork 用
   `document-theme.ts` 按 `ctx.chamberInstanceId` 门控、teardown 永不回收、全页单例
   presenter；`styles.css` 的 `:root{color-scheme}` 兜底与浅色默认调色板对齐。
-
+- **首屏整源降级（问题 A）**：ready 但从未挂载的来源只剩 unary 兜底视图（合成分组 +
+  空归档集 ⇒ 已归档会话按普通行浮出、无真实工作区动作），而所有自愈臂都要求
+  `mounted===true`。新增**基线收割**：在同一个后台预热槽里挂一次、首个权威推送即
+  回收；尝试上限 2、退避 120s、截止= boot 预算 +15s、绝对放弃上限（同时按挂载时刻
+  独立看管每个挂载视图；shell 对"等待上一代 boot"设绝对上限、页面 producer 注册表
+  按代际栅栏，挂死 boot 既不占槽、不卡住后续重挂，也不会清空健康后继的通道）
+  回收并停用挂死壳、
+  收割候选独占槽位（且收割有独立预算线，不被用户保留的隐藏温壳永久挡死）、托管停机
+  源不收割、用户点开即采用；最后收割的壳保留为温壳并在出现新候选时让位。
+- **gateway 托管 dsh 停机不可见（问题 B）**：desktop 的 `ready` 只证明 gateway 进程
+  活着，侧栏不消费 `/chamber/runtime/status` 的 `connectionState` ⇒ 停机窗口里来源
+  可点而背后不可用。现由 15s 前台探针（单飞 + 10s 超时）投影：终态停机三态换成该源
+  `phase` 并置 `connected=false`（判定走独立字段 `managedRuntimeDown`，只在该源传输
+  可用且探针报终态停机时为 true——不从合并后的 `phase` 反推，两套词表都含 `error`），
+  来源头下方就地给出一行原因与恢复提示（前往 设置 → 连接 启动该实例）且该形态下
+  头部不再是可激活入口，设置面板同状态
+  改用"网关可达但托管 dsh 未运行"、瞬态用"托管 dsh 正在启动"文案；`starting/
+  restarting` 同样投影、禁用动作并给出 `source.managedStarting` 说明行（dsh 尚未
+  服务），`degraded` 保持传输态（按既有语义呈现为未连接），探针缺失一律 fail open。
 - **Git 来源分支无法以主 checkout 为 base（问题 C）**：host 一直下发完整分支表，排除
   发生在客户端选择器（把主 checkout 当前分支过滤掉、只作占位符），单分支仓库候选
   必空、localStorage 记忆值永久遮蔽 main。候选改为纯函数 `sourceBranchChoices()`
   （host 表原样放行、unborn 行跳过），并加源码级回归钉子。
-
 - **`test:gateway` 会停掉宿主 gateway 服务**：安装器 D2 跨形态清理直接调用裸
   `systemctl stop/disable dsh-chamber-gateway.service`（写死单元名），而相关测试只
   mock 了 `systemctl_for_mode` ⇒ 真实 systemctl 逃逸。全部 harness 改经
   `harnessSource()` 注入宿主安全桩（仅当存在真实 systemctl 时生效），并加源码级
   不变量测试；实机验证：修复前垫片记录 3 次真实调用，修复后 0 次（Linux 腿 45/45；macOS 腿 43 通过 + 2 条 Linux 专用跳过）。
+- 降级列表诚实标注（`source.baselinePending`）、设置面板托管停机文案、前台恢复补偿
+  先刷托管探针、活动来源发布改用 `useLayoutEffect`（消除切换一帧旧主题）等一并收口。
 
 ## [0.2.3] - 2026-09-07
 

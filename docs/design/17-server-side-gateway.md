@@ -135,6 +135,42 @@ settings-bridge 按来源 kind 装配子 ctx，同一设置页对不同来源显
 面板与插件同步。**dsh 直连** → 只挂 dsh 自身能力，任何 `/chamber/*` 请求必须
 稳定返回 404/403 且不伪装。各资源独立失败，单一路由错误不抹掉其他已加载数据。
 
+**就绪语义（2026-12 修订，问题 B）**：gateway 来源的 desktop `ready` 只证明
+**gateway 进程**活着——就绪探针读的就是 `/chamber/runtime/status`，托管 dsh 是
+独立进程（design 18 §9）。侧栏因此必须消费该响应的 `connectionState`，否则托管
+dsh 停机窗口里来源"可点但背后不可用"（`+` 建会话必失败、运行环/pending/完成点
+等挂载期事实缺失）。现行为：gateway 来源由 App 每 15s（仅前台）探一次
+`/api/i/<id>/chamber/runtime/status`（`shared/managed-runtime.ts`）——终态停机
+`stopped`/`error`/`restart-exhausted` 投影为该源 `phase`（侧栏既有状态点与
+`status.stopped/error/restartExhausted` 文案复用）并置 `connected=false`
+——按既有"断连来源"语义**整棵来源子树（行列表 + 归档入口）隐藏**、动作入口
+随之禁用（不是"只禁用动作"；这是有意的诚实投影：托管 dsh 停机时其会话数据
+不可用），**并在来源头下方就地给出一行原因 + 恢复提示**
+（`source.managedDown`，状态词复用既有 `status.*`；提示"前往 设置 → 连接 启动该
+实例"，实际入口是设置面板的「管理连接」/connections 页的「启动实例」）。该说明
+是**该来源在有说明时唯一的常驻 live region**（`role="status" aria-live="polite"`，空文本
+零高）：插入即带内容的 region 不会被 AT 播报，所以容器常驻、只换文本；此时状态点
+不再兼任 live region（同一事实不双播报），非交互头部改用 `aria-describedby` 指向
+该行而不是给它一个对 generic 角色无效的 `aria-label`。——实测该状态下点击来源头
+**到不了失败覆盖层**（壳能 boot、body 渲染空面板），因此该形态下**头部不再是
+可激活入口**（无 role/tabIndex，点击/键盘处理器由 `headerActivatable` 直接短路，title 改为
+说明原因）；设置面板同一状态
+改用 `managedDshDown` 文案（"网关可达但托管 dsh 未运行"）而非笼统的"不可达"。
+`starting`/`restarting` 同样投影进 `phase`（此时隧道是好的但 dsh 未起，绿点会
+撒谎）并**一并折叠进 `connected=false`**——dsh 尚未服务，动作入口只会 503，与终态
+停机同一理由禁用（忙碌点仍显示）；`degraded` 按既有语义呈现为**未连接**
+（`instanceConnected` 只认 `ready`，故其会话子树隐藏、动作入口禁用），本投影不改
+该语义；探针缺失/非 200/代理失败 **fail open**。
+
+**判定事实的独立性（2026-12 复查 BLOCKER）**：托管态**不得**从合并后的 `phase`
+反推——`phase` 是"托管态 ∪ 传输态"，两套词表都含 `error`，反推会把 SSH/隧道
+失败误诊为"托管 dsh 停机"。聚合里因此新增**独立字段** `managedRuntimeDown`
+（仅当 `kind==='gateway'`、传输 `ready|degraded`、且探针报告终态停机时为 true），
+侧栏与设置面板只消费该字段。
+停机态与 connections 页「启动实例」的可启动三元组是同一个（`stopped|error|
+restart-exhausted`），故本投影不会把用户锁死——恢复入口仍在。
+dsh 直连目标无此投影需求：其就绪探针直接探 dsh 本体。
+
 ## 4. 组合架构与生命周期
 
 ```text

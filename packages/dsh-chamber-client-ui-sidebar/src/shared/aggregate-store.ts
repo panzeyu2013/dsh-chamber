@@ -50,10 +50,20 @@ export interface ChamberServerAggregate {
   /** Registry identity used by desktop IPC. Never derive it by slicing a source-id prefix. */
   rawId?: string
   label: string
-  /** Local: dsh ready; remote: tunnel phase ready. */
+  /** Local: dsh ready; remote: tunnel phase ready; gateway: tunnel ready AND the managed dsh is not terminal-down. */
   connected: boolean
   /** Status text (ready/connecting/… projection). */
   phase: string
+  /**
+   * Gateway only: the managed dsh was probed into a terminal-down state while
+   * the TRANSPORT was up (`stopped`/`error`/`restart-exhausted`). A dedicated
+   * fact, never re-derived from `phase`: `phase` merges the managed state with
+   * the transport phase and both vocabularies contain `error`, so classifying
+   * the merged string would misdiagnose an SSH/tunnel failure as a stopped
+   * managed dsh (2026-12 review BLOCKER). Absent = not a gateway, transport
+   * down, probe missing, or a healthy/transient managed state (fail open).
+   */
+  managedRuntimeDown?: boolean
   workspaces: ChamberServerWorkspace[]
   /** True when the per-instance aggregate snapshot has actually landed
    *  (sessions; workspace groups derive from session cwd facts since
@@ -385,6 +395,8 @@ export const chamberBridge = {
     const snapshotFingerprint = snapshotProducerFingerprints[sourceId]
     delete runtimeProducerTokens[sourceId]
     delete snapshotProducerTokens[sourceId]
+    delete runtimeProducerGenerations[sourceId]
+    delete snapshotProducerGenerations[sourceId]
     delete runtimeProducerFingerprints[sourceId]
     delete snapshotProducerFingerprints[sourceId]
     delete runtimeReports[sourceId]
@@ -398,10 +410,21 @@ export const chamberBridge = {
    * Token gating makes async teardown generation-safe: an old ctx's late
    * clear/report can never erase or overwrite the replacement ctx's facts.
    */
-  registerInstanceRuntimeProducer(sourceId: string, sourceFingerprint: string): {
+  registerInstanceRuntimeProducer(
+    sourceId: string,
+    sourceFingerprint: string,
+    bootGeneration?: number,
+  ): {
     report: (report: InstanceRuntimeReport) => void
     clear: () => void
   } {
+    // 代际栅栏：更老的 boot 迟到注册一律作废（返回惰性句柄）。两者都无代
+    // （测试/非 chamber 挂载）时保持原"后注册者胜"的语义。
+    const currentGeneration = runtimeProducerGenerations[sourceId]
+    if (bootGeneration !== undefined && currentGeneration !== undefined && bootGeneration < currentGeneration) {
+      return { report: () => undefined, clear: () => undefined }
+    }
+    if (bootGeneration !== undefined) runtimeProducerGenerations[sourceId] = bootGeneration
     const token = ++nextRuntimeProducerToken
     const previousFingerprint = runtimeProducerFingerprints[sourceId]
     runtimeProducerTokens[sourceId] = token
@@ -420,6 +443,7 @@ export const chamberBridge = {
         if (runtimeProducerTokens[sourceId] !== token) return
         delete runtimeProducerTokens[sourceId]
         delete runtimeProducerFingerprints[sourceId]
+        delete runtimeProducerGenerations[sourceId]
         if (runtimeReports[sourceId] === undefined) return
         delete runtimeReports[sourceId]
         for (const listener of [...runtimeReportListeners]) listener(sourceId, undefined, sourceFingerprint)
@@ -440,10 +464,20 @@ export const chamberBridge = {
    * token makes teardown generation-safe: a late cleanup from an old shell
    * cannot clear a newer shell's report for the same source.
    */
-  registerInstanceSnapshotProducer(sourceId: string, sourceFingerprint: string): {
+  registerInstanceSnapshotProducer(
+    sourceId: string,
+    sourceFingerprint: string,
+    bootGeneration?: number,
+  ): {
     report: (snapshot: InstanceSnapshot | undefined) => void
     clear: () => void
   } {
+    // 同 runtime producer：代际栅栏，迟到的老 boot 不得夺走生产权。
+    const currentGeneration = snapshotProducerGenerations[sourceId]
+    if (bootGeneration !== undefined && currentGeneration !== undefined && bootGeneration < currentGeneration) {
+      return { report: () => undefined, clear: () => undefined }
+    }
+    if (bootGeneration !== undefined) snapshotProducerGenerations[sourceId] = bootGeneration
     const token = ++nextSnapshotProducerToken
     const previousFingerprint = snapshotProducerFingerprints[sourceId]
     snapshotProducerTokens[sourceId] = token
@@ -467,6 +501,7 @@ export const chamberBridge = {
         if (snapshotProducerTokens[sourceId] !== token) return
         delete snapshotProducerTokens[sourceId]
         delete snapshotProducerFingerprints[sourceId]
+        delete snapshotProducerGenerations[sourceId]
         if (instanceSnapshots[sourceId] === undefined) return
         delete instanceSnapshots[sourceId]
         for (const listener of [...snapshotReportListeners]) listener(sourceId, undefined, sourceFingerprint)
