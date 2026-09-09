@@ -685,7 +685,7 @@ function resolveRuntimeBetaFeed(): Promise<string> {
  * data is untrusted input, so a version that is not semver-shaped yields
  * null (no fabricated URL) instead of an openable link; the open action is
  * additionally gated by isAllowedReleaseUrl. */
-function releaseUrlFor(version: string): string | null {
+export function releaseUrlFor(version: string): string | null {
   if (typeof version !== 'string' || version === '' || version.length > 128
     || !/^[0-9A-Za-z][0-9A-Za-z.+-]*$/.test(version)) {
     return null

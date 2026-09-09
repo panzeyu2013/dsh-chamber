@@ -141,7 +141,7 @@ final class ChamberMessageHandler: NSObject, WKScriptMessageHandler {
         //    webView 强引用，只依赖这两处取当前值。
         let currentURL = message.webView?.url?.absoluteString ?? lastCommittedURL
         guard let expected = expectedOrigin(),
-              TrustGuard.isTrustedOrigin(currentURL, expectedOrigin: expected) else {
+              TrustGuard.isTrustedDocument(currentURL, expectedOrigin: expected) else {
             // 不信任来源页：无 shim 的 Promise 归因保证；仅当信封仍能解析出
             // id 时回执（错误码同族 renderer-trust {code:'ipc_sender_forbidden'}）。
             // 此时 evaluateJavaScript 的目标页 = 消息来源页，回执只含固定错误

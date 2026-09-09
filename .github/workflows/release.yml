@@ -761,8 +761,178 @@ jobs:
         env:
           VERSION: ${{ needs.create-release.outputs.version }}
 
+  # Swift 原生壳产物腿（design 25 §8.4 / W-26）：与 Electron mac 腿同 tag 并行，
+  # 产物名带 -native 防碰撞。dry-run 走 ad-hoc 且不发布（与 build-macos 同纪律：
+  # 剥离一切签名/公证/上传凭据）；正式腿 fail-closed——CSC_LINK 已在
+  # create-release 前置门校验，本腿导入同一 p12 并解析 Developer ID 身份，
+  # 缺失即失败（finalize 的 needs 因此挡住发布）。Apple 凭据类外部阻断登记在
+  # STATUS（A6）。
+  build-swift:
+    needs: [create-release, validation]
+    permissions:
+      contents: write
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          submodules: true
+      - uses: pnpm/action-setup@fe02b34f77f8bc703788d5817da081398fad5dd2 # v4.1.0
+        with:
+          version: 11.21.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Bootstrap vendor tree (verify pin + ensure links)
+        run: node scripts/dev/ensure-harness-vendor.mjs
+      - run: pnpm install --frozen-lockfile
+      - name: Assert lockfile not rewritten
+        run: git diff --exit-code -- pnpm-lock.yaml
+
+      - name: Build sidecar assembly + native .app
+        run: |
+          set -euo pipefail
+          if [[ "$DRY_RUN" == "true" ]]; then
+            unset CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID GH_TOKEN
+            IDENTITY="-"
+            echo "dry run: ad-hoc signature, no notarization, no upload"
+          else
+            test -n "${CSC_LINK:-}" || { echo "::error::formal Swift release requires CSC_LINK"; exit 1; }
+            KEYCHAIN_PASSWORD="$(openssl rand -base64 24)"
+            KEYCHAIN_FILE="$RUNNER_TEMP/dsh-chamber-swift-signing.keychain"
+            P12_FILE="$RUNNER_TEMP/dsh-chamber-swift-cert.p12"
+            TRIMMED_LINK="$(printf '%s' "$CSC_LINK" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+            if [[ "$TRIMMED_LINK" == https://* ]]; then
+              curl -fsSL "$TRIMMED_LINK" -o "$P12_FILE"
+            else
+              B64_ARG=""
+              if [[ "$TRIMMED_LINK" == data:*base64,* ]]; then
+                B64_ARG="${TRIMMED_LINK#*,}"
+              elif (( ${#TRIMMED_LINK} > 2048 )) || [[ "$TRIMMED_LINK" == *= ]]; then
+                B64_ARG="$TRIMMED_LINK"
+              fi
+              if [[ -n "$B64_ARG" ]]; then
+                printf '%s' "$B64_ARG" | base64 --decode > "$P12_FILE"
+              else
+                [[ "$TRIMMED_LINK" != file://* ]] || TRIMMED_LINK="${TRIMMED_LINK#file://}"
+                cp "$TRIMMED_LINK" "$P12_FILE"
+              fi
+            fi
+            test -s "$P12_FILE"
+            security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_FILE"
+            security set-keychain-settings -lut 21600 "$KEYCHAIN_FILE"
+            security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_FILE"
+            security import "$P12_FILE" -k "$KEYCHAIN_FILE" -P "$CSC_KEY_PASSWORD" \
+              -T /usr/bin/codesign -T /usr/bin/productbuild
+            security set-key-partition-list -S apple-tool:,apple: -s \
+              -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_FILE"
+            security list-keychains -d user -s "$KEYCHAIN_FILE" \
+              $(security list-keychains -d user | tr -d '"')
+            rm -f "$P12_FILE"
+            IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN_FILE" \
+              | awk '/Developer ID Application/ {print $2; exit}')"
+            test -n "$IDENTITY" || { echo "::error::no Developer ID Application identity in CSC_LINK"; exit 1; }
+            echo "signing identity: $IDENTITY"
+            export KEYCHAIN_PASSWORD KEYCHAIN_FILE
+          fi
+          pnpm run build:host-packages
+          pnpm run build:renderer
+          pnpm --filter @dsh-chamber/desktop run build:control-plane
+          # W-23：真实 Node 捆绑（官方 tar.gz + SHA-256 校验；命名必须是 node）。
+          pnpm run build:sidecar
+          if [[ -n "${KEYCHAIN_FILE:-}" ]]; then
+            security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_FILE"
+          fi
+          # 正式腿先只组装+签名 .app（--no-zip --no-dmg）：归档必须在公证与
+          # stapler 装订**之后**生成，否则上传的 zip/dmg 内 .app 没有票据
+          # （2026-09 审计 major：原顺序先打包后公证，离线 Gatekeeper 必失败）。
+          ARTIFACT_ARGS=()
+          if [[ "$DRY_RUN" != "true" ]]; then
+            ARTIFACT_ARGS=(--no-zip --no-dmg)
+          fi
+          pnpm run build:swift-app --out macos/release \
+            --app-name dsh-chamber-native \
+            --artifact-basename "dsh-chamber-native-${VERSION}-macos-arm64" \
+            --identity "$IDENTITY" ${ARTIFACT_ARGS[@]+"${ARTIFACT_ARGS[@]}"}
+        env:
+          VERSION: ${{ needs.create-release.outputs.version }}
+          DRY_RUN: ${{ github.event.inputs.dry_run == 'true' && 'true' || 'false' }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+      - name: Notarize + staple native app (release only)
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          VERSION: ${{ needs.create-release.outputs.version }}
+        run: |
+          set -euo pipefail
+          APP="macos/release/dsh-chamber-native.app"
+          BASE="macos/release/dsh-chamber-native-${VERSION}-macos-arm64"
+          test -d "$APP"
+          # 提交用临时 zip（公证接受 zip/dmg/pkg）；票据装订到 .app 后才生成
+          # 最终分发归档，保证上传物内的 .app 已 stapled。
+          SUBMIT_ZIP="$RUNNER_TEMP/dsh-chamber-native-notarize.zip"
+          ditto -c -k --sequesterRsrc --keepParent "$APP" "$SUBMIT_ZIP"
+          xcrun notarytool submit "$SUBMIT_ZIP" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+          xcrun stapler staple "$APP"
+          xcrun stapler validate "$APP"
+          rm -f "$SUBMIT_ZIP" "${BASE}.zip" "${BASE}.dmg"
+          ditto -c -k --sequesterRsrc --keepParent "$APP" "${BASE}.zip"
+          hdiutil create -volname dsh-chamber-native -srcfolder "$APP" \
+            -ov -format UDZO "${BASE}.dmg"
+          xcrun stapler validate "$APP"
+
+      - name: Verify native app (fail-closed on release)
+        run: |
+          set -euo pipefail
+          APP="macos/release/dsh-chamber-native.app"
+          test -d "$APP"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          # 装配面结构断言：sidecar 的 node 基名（A5）、打包 shim、renderer dist。
+          test -x "$APP/Contents/Resources/sidecar/node"
+          test "$(basename "$APP/Contents/Resources/sidecar/node")" = "node"
+          test -f "$APP/Contents/Resources/sidecar/sidecar.js"
+          test -f "$APP/Contents/Resources/DSHChamberPoc_DSHChamberPoc.bundle/bridge-shim.poc.js"
+          test -f "$APP/Contents/Resources/dist/web/index.html"
+          # 三审 #1/#2：打包态本地实例依赖内置 dsh 工作区与内嵌 pnpm。
+          test -f "$APP/Contents/Resources/sidecar/vendor/dsh/package.json"
+          test -f "$APP/Contents/Resources/sidecar/vendor/dsh/node_modules/.modules.yaml"
+          test -f "$APP/Contents/Resources/sidecar/pnpm/bin/pnpm.cjs"
+          test -n "$(ls macos/release/*.dmg 2>/dev/null | head -n 1)"
+          test -n "$(ls macos/release/*.zip 2>/dev/null | head -n 1)"
+          if [[ "${{ github.event.inputs.dry_run }}" != "true" ]]; then
+            codesign -dv --verbose=4 "$APP" 2>&1 | tee /tmp/swift-codesign-dv.txt
+            grep -q 'Authority=Developer ID' /tmp/swift-codesign-dv.txt
+            xcrun stapler validate "$APP"
+            spctl --assess --type execute --verbose=4 "$APP"
+          fi
+        env:
+          VERSION: ${{ needs.create-release.outputs.version }}
+
+      - name: Upload native artifacts to the draft release
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.create-release.outputs.version }}
+        run: |
+          set -euo pipefail
+          gh release upload "v${VERSION}" \
+            macos/release/*.dmg macos/release/*.zip --clobber
+
   finalize-release:
-    needs: [create-release, build-gateway, build-macos, build-windows, build-linux]
+    needs: [create-release, build-gateway, build-macos, build-windows, build-linux, build-swift]
     runs-on: ubuntu-latest
     permissions:
       contents: write

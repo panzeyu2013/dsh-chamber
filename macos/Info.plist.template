@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  dsh-chamber Swift 壳 Info.plist 模板（design 25 §5 E13 / W-24 输入）。
+
+  W-24 消费方式（macos/scripts/build-swift-app.mjs 已落地）：读取本文件 →
+  替换 __VERSION__（packages/desktop/package.json version）→ plutil -lint →
+  写入 <App>.app/Contents/Info.plist → codesign（嵌套 node 先签、主 app 后签）。
+
+  CFBundleURLTypes 是 E13 深链的注册面：Swift 侧 application(_:open:) 只有
+  在 LaunchServices 注册了 dsh-chamber scheme 后才会被投递（冷/热启动同路，
+  见 design 25 §4.5）。**共存注意（D2 未决）**：Electron 版同样注册
+  dsh-chamber://（packages/desktop/package.json build.protocols）——同机
+  双壳时 LaunchServices 对同 scheme 的归属由注册状态决定，需在 W-24/D2 决策
+  记录中显式登记（本模板不改 scheme，保持与 Electron 版一致）。
+-->
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleExecutable</key>
+    <string>DSHChamberPoc</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.dshchamber.native</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>dsh-chamber-native</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>__VERSION__</string>
+    <key>CFBundleVersion</key>
+    <string>__VERSION__</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>13.0</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>com.dshchamber.native.deeplink</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>dsh-chamber</string>
+            </array>
+        </dict>
+    </array>
+</dict>
+</plist>

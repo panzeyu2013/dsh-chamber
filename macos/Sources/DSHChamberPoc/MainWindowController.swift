@@ -3,11 +3,13 @@
 //  本文件持有 W-04 契约的接线点（ChamberMessageHandler / BridgeShimInjector
 //  为 MessageHandler.swift / BridgeShimInjector.swift 中他人实现，见共享契约）
 //
-//  职责：WKWebView 加载控制面 origin；把 bridge-shim.poc.js（Bundle.module
-//  资源，W-04 作者创建）注入 WebView；ChamberMessageHandler 注册为
-//  "dshChamber" 消息通道并回接 evaluateJavaScript；B 桥 invoke 结果与
+//  职责：WKWebView 加载控制面 origin 的壳文档（根路径）；把 bridge-shim.poc.js
+//  （ChamberResources 定位的 SwiftPM 资源）注入 WebView；ChamberMessageHandler
+//  注册为 "dshChamber" 消息通道并回接 evaluateJavaScript；B 桥 invoke 结果与
 //  sidecar 事件经 __dshChamberResolve / __dshChamberEmit 回写页面；
-//  导航护栏：仅放行 cp origin 的 http(s)，其余交给系统打开或一律取消。
+//  导航护栏：仅放行**壳文档**（origin 相等 + pathname=/ + 无 query，与 Electron
+//  isTrustedRendererUrl 对齐）——同源非壳文档（/api/i/* 代理 HTML）一律取消，
+//  其余交给系统打开或一律取消。
 //  hostFacts 推送（S-A）：本控制器是窗口/聚焦/加载事实的唯一事实源——
 //  窗口 key/关闭通知与 WKNavigationDelegate 生命周期回调经
 //  pushHostFacts 以 __host.hostFacts 推送 sidecar（node-edges.ts 同步门
@@ -23,7 +25,7 @@
 import AppKit
 import WebKit
 
-final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUIDelegate {
+final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUIDelegate, NSWindowDelegate {
 
     // MARK: - 常量
 
@@ -42,11 +44,19 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     private static let invokeWhitelist: Set<String> = BridgeManifest.invokeChannels
     /// 窗口默认内容尺寸
     private static let windowSize = NSSize(width: 1280, height: 800)
-    /// B 桥入站保留 method 名：hostFacts（node-edges.ts HOST_INBOUND.hostFacts
-    /// 同拼写；sidecar 对保留 method 应答 {id, ok} 帧——id 请求形态，见
-    /// sidecar-entry.ts handleInboundLine：不在 60 通道注册表、handleHostInbound
-    /// 专门路由、按键级合并进同步门缓存）
-    private static let hostFactsMethod = "__host.hostFacts"
+    /// B 桥入站保留 method 名（单源 = HostInboundMethod；node-edges.ts 同拼写）。
+    private static let hostFactsMethod = HostInboundMethod.hostFacts
+    /// renderer 崩溃有界重载策略（design 25 §5 E19；Electron 版 500ms/60s≤3）。
+    private let recoveryPolicy = RendererRecoveryPolicy()
+    /// 滚动窗口内的重载时间戳（主线程独占）。
+    private var recoveryAttempts: [Double] = []
+    /// 重载已排定（防同一崩溃回调重入排定）。
+    private var recoveryReloadWorkItem: DispatchWorkItem?
+    /// 退出中/已开始清理 → 抑制渲染恢复（Electron `reload()` 的 `quitRequested`
+    /// 早退；2026-09 三审 E19 偏离 #3）。
+    private var recoverySuppressed = false
+    /// 自动恢复已放弃（超限后不再重载，只 loud/弹窗一次）。
+
 
     // MARK: - 状态
 
@@ -57,6 +67,8 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
 
     private var webView: WKWebView!
     private var bridgeHandler: ChamberMessageHandler!
+    /// 关窗决策委托（AppDelegate；见 windowShouldClose）。
+    weak var closeDelegate: MainWindowCloseDeciding?
     private var consoleCatcher: POCConsoleCatcher?
     private var didSnapshot = false
     private var navRetries = 0
@@ -106,7 +118,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
             BridgeShimInjector.install(config: configuration, source: shimSource)
             print("[poc] A 桥 shim 注入完成（\(Self.shimResourceName)）")
         } else {
-            print("[poc] 警告：Bundle.module 中找不到 \(Self.shimResourceName)，跳过 shim 注入")
+            print("[poc] 警告：资源中找不到 \(Self.shimResourceName)，跳过 shim 注入")
         }
 
         // 消息通道：ChamberMessageHandler 只做护栏与转发（W-04 实现）
@@ -194,6 +206,9 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         window.title = "dsh-chamber POC"
         window.contentView = webView
         window.center()
+        // 关窗决策委托（E1/E20）：windowShouldClose 交给 AppDelegate（隐藏 vs
+        // 转入退出链由 core 决策，Swift 只执行）。
+        window.delegate = self
         self.window = window
 
         // S-A hostFacts 事实观察：窗口 key/关闭通知（主线程投递；object 限定
@@ -223,7 +238,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         print("[poc] 系统唤醒——发送 __host.systemResume")
         Task { @MainActor in
             try? await bridge.invoke(
-                method: "__host.systemResume",
+                method: HostInboundMethod.systemResume,
                 payload: .object(["timestamp": .number(Date().timeIntervalSince1970 * 1000)])
             )
         }
@@ -232,7 +247,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     @objc private func appDidBecomeActive(_ note: Notification) {
         print("[poc] 应用激活——发送 __host.mainWindowShown")
         Task { @MainActor in
-            _ = try? await bridge.invoke(method: "__host.mainWindowShown", payload: nil)
+            _ = try? await bridge.invoke(method: HostInboundMethod.mainWindowShown, payload: nil)
         }
     }
 
@@ -288,6 +303,13 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     ///     簿记：sidecar 缓存按键合并、只接受布尔，随后的同类事实变化事件
     ///     会携带最新值再推（启动期推送先于 sidecar 就绪时被其 stdin 管道
     ///     缓冲，实际几乎不失败——sidecar 模块求值完成后即处理）。
+    /// sidecar 重启（新进程没有历史事实）→ 清空去重簿记，下一次推送即全量
+    /// 快照；否则新 sidecar 会长期以「种子事实」运行（2026-09 三审 #8）。
+    func resetHostFactsBookkeeping() {
+        lastHostFacts = [:]
+        pushHostFacts(["mainWindowAlive": true, "webViewContentAlive": true])
+    }
+
     private func pushHostFacts(_ changes: [String: Bool]) {
         let (payload, merged) = Self.hostFactsDiff(last: lastHostFacts, changes: changes)
         guard !payload.isEmpty else { return }
@@ -324,9 +346,31 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     /// NSWindow.willCloseNotification：主窗关闭（隐藏到 Dock 常驻语义，窗口
     /// 对象不销毁）→ mainWindowAlive:false（electron-edges mainWindowAlive =
     /// 窗口存在且未销毁的折算：关窗期间同步门一律不过；Dock 重开后由
-    /// hostFactsWindowDidBecomeKey 推回 true）。
+    /// hostFactsWindowDidBecomeKey 推回 true）。同时上报 closed 生命周期
+    /// （design 25 §5 E19 三事件映射之一：core 复位 ready 位 + in-flight 重排）。
     @objc private func hostFactsWindowWillClose(_ notification: Notification) {
         pushHostFacts(["mainWindowAlive": false])
+        sendRendererLifecycle("closed")
+    }
+
+    // MARK: - 渲染器生命周期上报（design 25 §4.5/§5 E19）
+
+    /// 上报渲染器生命周期事件给 core（`__host.rendererLifecycle`）。语义单源
+    /// 在 core（shell-core.onRendererLifecycle：did-start-loading 复位 ready 位
+    /// + in-flight requeue、did-finish-load drain、crashed/closed 立即失效），
+    /// Swift 只做事件源，绝不复制状态机。fire-and-forget：失败 loud 不重试
+    /// （下一次事件会再报；sidecar 未就绪时帧被 stdin 管道缓冲）。
+    private func sendRendererLifecycle(_ event: String) {
+        print("[poc] rendererLifecycle 上报 \(event)")
+        Task { @MainActor in
+            do {
+                _ = try await bridge.invoke(
+                    method: HostInboundMethod.rendererLifecycle,
+                    payload: .object(["event": .string(event)]))
+            } catch {
+                print("[poc] rendererLifecycle 上报失败（\(event)）：\(error.localizedDescription)")
+            }
+        }
     }
 
     // MARK: - B 桥 invoke / sidecar 事件回写页面
@@ -436,9 +480,10 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
 
     // MARK: - 工具
 
-    /// 读取 A 桥 shim 源码（Bundle.module：SwiftPM 为 .process 资源生成的访问器）
+    /// 读取 A 桥 shim 源码（ChamberResources：打包态 Contents/Resources、
+    /// dev `swift run` 扁平布局都能定位；不用 Bundle.module——见该文件头注释）。
     private static func readShimSource() -> String? {
-        guard let url = Bundle.module.url(forResource: shimResourceName, withExtension: nil),
+        guard let url = ChamberResources.url(forResource: shimResourceName),
               let source = try? String(contentsOf: url, encoding: .utf8) else {
             return nil
         }
@@ -449,10 +494,17 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     /// 注：POC 用固定 dev 端口 17520，但这里从 POC_CP_URL 解析拼接，避免硬编码
     static func origin(of url: URL) -> String? {
         guard let scheme = url.scheme?.lowercased(),
-              let host = url.host, !host.isEmpty else {
+              let rawHost = url.host, !rawHost.isEmpty else {
             return nil
         }
-        var origin = "\(scheme)://\(host)"
+        // host 大小写折叠（与 TrustGuard 的判定一致，避免 origin 串因大小写
+        // 与浏览器规范化结果不同而在逐字比较处失配）。
+        let host = rawHost.lowercased()
+        // IPv6 字面量：URL.host 去掉方括号（"::1"），拼回 origin 时必须补回，
+        // 否则生成的 origin 串不可解析（2026-09 二审：`http://[::1]:17520` 曾
+        // 归到 `http://::1:17520` 导致归一化静默跳过、IPC 全拒）。
+        let hostPart = host.contains(":") && !host.hasPrefix("[") ? "[\(host)]" : host
+        var origin = "\(scheme)://\(hostPart)"
         if let port = url.port {
             origin += ":\(port)"
         }
@@ -469,6 +521,15 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         return String(data: data, encoding: .utf8)
     }
 
+    // MARK: - NSWindowDelegate：关窗决策（E1/E20）
+
+    /// 关窗请求：委托 AppDelegate 走 core 决策（hide-to-tray → orderOut 隐藏；
+    /// close-behavior='quit' → NSApp.terminate 完整退出链）。返回 false = 本次
+    /// 关闭被接管（AppKit 不销毁窗口）。无委托时放行（保守）。
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        closeDelegate?.handleWindowCloseRequest() ?? true
+    }
+
     // MARK: - WKNavigationDelegate：导航护栏
 
     func webView(_ webView: WKWebView,
@@ -482,9 +543,16 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         if scheme == "http" || scheme == "https" {
             // 目标是 cp origin 的 http(s)：放行（与 TrustGuard 同款大小写
             // 折叠判定——静态审查 #11：导航/消息两门行为统一）
-            if TrustGuard.isTrustedOrigin(url.absoluteString, expectedOrigin: cpOrigin) {
+            if TrustGuard.isTrustedDocument(url.absoluteString, expectedOrigin: cpOrigin) {
                 print("[poc] 放行导航 \(url.absoluteString)")
                 decisionHandler(.allow)
+                return
+            }
+            if TrustGuard.isTrustedOrigin(url.absoluteString, expectedOrigin: cpOrigin) {
+                // 同源但非壳文档（如 /api/i/<id>/* 代理回传的远端 HTML）：绝不
+                // 放行——放行会让该文档继承 shim 与全量 IPC 面（审计 major）。
+                print("[poc] 拦截同源非壳文档导航 \(url.absoluteString)")
+                decisionHandler(.cancel)
                 return
             }
             // 其余 http(s) 外链：交给系统默认浏览器打开
@@ -513,16 +581,23 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         // webViewLoading:true（electron-edges webViewLoading = isLoading 的
         // 事件化等价；加载失败无 didFinish 时保持 true，成功/重载后收敛）
         pushHostFacts(["webViewLoading": true])
+        // E19：导航开始即**取消已排定的崩溃重载**（Electron did-start-loading
+        // 里 clearCrashReloadTimer；2026-09 三审 E19 偏离 #2）并上报
+        // （core 复位 ready 位 + in-flight 重排）。
+        recoveryReloadWorkItem?.cancel()
+        recoveryReloadWorkItem = nil
+        sendRendererLifecycle("did-start-loading")
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         print("[poc] 页面加载完成 \(webView.url?.absoluteString ?? "(未知)")")
         // S-A：加载完成 → webViewLoading:false + webViewContentAlive:true。
         // 渲染进程终止后的恢复导航成功也在此把 alive 收敛回 true（崩溃回调
-        // webViewWebContentProcessDidTerminate 只推 false，不自动重载——
-        // Electron 侧 installRendererRecovery 的有界自动重载属其宿主面，
-        // Swift 侧自动恢复列 M3）。
+        // webViewWebContentProcessDidTerminate 推 false 并触发 E19 有界重载）。
         pushHostFacts(["webViewLoading": false, "webViewContentAlive": true])
+        // E19 三事件映射之二：加载完成 = core 的确定性 replay 边（drain 待发
+        // 通知点击/深链 intent）。
+        sendRendererLifecycle("did-finish-load")
         // POC dev 白屏诊断：延迟数秒后渲染快照落盘（takeSnapshot 不需要屏幕
         // 录制权限；多帧取样便于观察首屏演进）。
         guard !didSnapshot else { return }
@@ -559,13 +634,55 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         print("[poc] 页面加载失败 \(error.localizedDescription)")
     }
 
+    /// 退出清理开始 → 抑制渲染恢复并取消已排定重载（AppDelegate 调用）。
+    func suppressRendererRecovery() {
+        recoverySuppressed = true
+        recoveryReloadWorkItem?.cancel()
+        recoveryReloadWorkItem = nil
+    }
+
     /// WKWebView 渲染进程终止（崩溃/被系统回收；Electron render-process-gone
     /// 对应）→ webViewContentAlive:false（内容已死——通知/深链投递门即刻不
-    /// 过，绝不向死 frame 推送）。恢复导航（后续 didStartProvisionalNavigation
-    /// / didFinish）成功后由 didFinish 推回 alive:true。
+    /// 过，绝不向死 frame 推送）+ crashed 上报 + **有界自动重载**
+    /// （design 25 §5 E19 / main.ts installRendererRecovery:605-700 同参数：
+    /// 500ms 延迟、60s 滚动窗口内至多 3 次；超限弹 NSAlert 并停止自动恢复）。
+    /// 恢复导航成功由 didFinish 推回 alive:true 并 drain。
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         print("[poc] Web 内容进程终止（webViewWebContentProcessDidTerminate）")
+        // 退出中：不重载、不上报（Electron render-process-gone 在 quitRequested
+        // 时直接 return；2026-09 三审 E19 偏离 #3）。
+        guard !recoverySuppressed else {
+            print("[poc] 退出中——抑制渲染恢复")
+            return
+        }
         pushHostFacts(["webViewContentAlive": false])
+        // 崩溃到重载之间没有导航事件（did-start-loading 不触发）——必须显式
+        // 上报 crashed，否则 core 会继续向死 frame 推送丢事件。
+        sendRendererLifecycle("crashed")
+
+        guard recoveryReloadWorkItem == nil else { return }
+        let now = Date().timeIntervalSince1970
+        switch recoveryPolicy.decide(now: now, attempts: &recoveryAttempts) {
+        case .reload(let delay, let attempt):
+            print("[poc] 渲染进程异常，\(String(format: "%.2f", delay))s 后重载（\(attempt)/\(recoveryPolicy.maxReloads)）")
+            let item = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                self.recoveryReloadWorkItem = nil
+                guard !self.recoverySuppressed else { return }
+                self.webView.reload()
+            }
+            recoveryReloadWorkItem = item
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
+        case .giveUp(let attempts):
+            // 不置永久放弃位（Electron 语义：窗口外的下次崩溃重新计数——滚动
+            // 窗口自身限制 60s 内 ≤3 次；2026-09 三审 E19 偏离 #1）。
+            print("[poc] 渲染进程反复异常退出（\(attempts) 次），本次不重载")
+            let alert = NSAlert()
+            alert.alertStyle = .critical
+            alert.messageText = "dsh-chamber 前端异常"
+            alert.informativeText = "前端渲染进程反复崩溃，已停止自动恢复。请重新启动应用。"
+            alert.runModal()
+        }
     }
 
     func webView(_ webView: WKWebView,

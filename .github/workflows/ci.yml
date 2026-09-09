@@ -209,3 +209,73 @@ jobs:
         run: pnpm --filter @dsh-chamber/control-plane run test:win32
       - name: desktop test:win32 manifest (real icacls)
         run: pnpm --filter @dsh-chamber/desktop run test:win32
+
+  # macOS Swift shell leg (design 25, W-26): the SwiftPM package, the JS↔Swift
+  # bridge manifest lockstep and the packaging inputs are macOS-only surfaces —
+  # without this job a Swift/bridge/manifest regression lands unnoticed until a
+  # release. Deliberately NOT a packaging job: the .app/sidecar assembly and
+  # the real Node download stay in release.yml (network + credentials), and the
+  # expensive desktop suite keeps running on the linux leg. The macOS-only
+  # desktop tests (build-sidecar / build-swift-app packaging scripts, the
+  # sidecar stdio smoke) already ride `test:desktop`; this job re-runs the two
+  # cheapest bridge gates plus the Swift suite and the packaging dry runs.
+  test-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          # The pinned harness source tree is a git submodule (gitlink ==
+          # harness.commit); the Swift package itself has zero third-party
+          # dependencies (AppKit/WebKit only).
+          submodules: true
+      - name: Verify workflow action pins
+        run: node scripts/dev/verify-workflow-action-pins.mjs
+      - uses: pnpm/action-setup@fe02b34f77f8bc703788d5817da081398fad5dd2 # v4.1.0
+        with:
+          version: 11.21.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Bootstrap vendor tree (verify pin + ensure links)
+        run: node scripts/dev/ensure-harness-vendor.mjs
+      - run: pnpm install --frozen-lockfile
+      - name: Assert lockfile not rewritten
+        run: git diff --exit-code -- pnpm-lock.yaml
+      # POC_NODE_BIN turns the 8 Swift↔sidecar integration tests from
+      # XCTSkip into real runs (they spawn `node packages/desktop/sidecar-entry.ts`);
+      # locally verified 8/8 green with a plain node binary (2026-09 三审 #3).
+      - name: Swift build (release) + XCTest
+        working-directory: macos
+        run: |
+          export POC_NODE_BIN="$(command -v node)"
+          swift build -c release
+          swift test
+      # JS↔Swift bridge lockstep: the committed bridge-manifest.json /
+      # BridgeManifest.swift must equal a regeneration, and the shim surface
+      # must match preload (both are in the desktop chain; re-running the two
+      # cheap ones here keeps the macOS leg self-contained when only Swift
+      # changes are pushed).
+      - name: Bridge manifest + shim surface lockstep
+        run: |
+          node packages/desktop/bridge-manifest.test.ts
+          node packages/desktop/bridge-shim.test.ts
+          node packages/desktop/bridge-shim-surface.test.ts
+      # Packaging inputs, no network / no real Node download: the sidecar
+      # assembly needs build:control-plane first, then both packaging scripts
+      # validate their plans and layouts (the real Node fetch is release.yml).
+      # macOS-only desktop suites (platform-qualified manifest, same discipline
+      # as test:win32): the darwin O_EXLOCK lock assertions and the two
+      # packaging-script suites need macOS tools (plutil/codesign/ditto), the
+      # SwiftPM .build output and dist/control-plane — so they live in
+      # `test:macos` and run HERE, never in the ubuntu `test` leg.
+      - name: Packaging + darwin lock suites (test:macos)
+        run: |
+          pnpm --filter @dsh-chamber/desktop run build:control-plane
+          pnpm --filter @dsh-chamber/desktop run test:macos
+      # Packaging dry runs (no network / no real Node download): the sidecar
+      # assembly plan and the .app assembly plan validate their inputs.
+      - name: Packaging dry runs (sidecar + .app)
+        run: |
+          pnpm run build:sidecar --dry-run
+          pnpm run build:swift-app --dry-run --skip-build

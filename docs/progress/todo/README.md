@@ -12,7 +12,7 @@
 | 1 | [subagents-in-sidebar.md](subagents-in-sidebar.md) | session 的 subagents 在侧边栏中的显示 | 想法，未设计 / 未排期 |
 | 2 | [12-todo-archived-sessions.md](12-todo-archived-sessions.md) | 已归档会话管理剩余面：「已归档」浏览区（A，design 24 可选后续，未排期）；特权层直删（B，冻结）；上游 wire 草案（C，上游落地前不发明） | A 未排期；B 冻结；C 待上游 |
 | 3 | [windows-v1.md](windows-v1.md) | Windows v1 剩余外部门禁与取舍（design 23 companion；代码项已就绪） | 外部门禁待真实 runner/实机 |
-| 4 | [macos-swift-v1.md](macos-swift-v1.md) | macOS Swift 原生壳 v1 实施细化计划（design 25 路线 A companion：M0–M5 六门 + WBS W-01…W-32 + P0 runbook + 门禁/中止条件） | M0 未签核（D1–D7 待用户）；POC 代码已交付（W-03…W-05，2026-09-07）；G 门待 [用户机 GUI] |
+| 4 | [macos-swift-v1.md](macos-swift-v1.md) | macOS Swift 原生壳 v1 实施细化计划（design 25 路线 A companion：M0–M5 六门 + WBS W-01…W-32 + P0 runbook + 门禁/中止条件） | M0 未签核（D1–D7 待用户）；代码级 M2 ✅ / M3 ✅（W-15 Supervisor、E19 崩溃重载、E13 深链、E1/E9/E20 关窗退出链）/ M4 ✅（W-22 更新 blocked-available、W-23 sidecar 打包、W-24 `.app` 打包、W-26 CI/release 腿、W-27 演练准备 + Electron 侧同锁）；剩余 = 实机 G 门与 Apple 凭据类外部阻断 **+ 已登记代码级开放项**（打包态默认路径/同根 U1、vendor-dsh/pnpm 装配、Supervisor launch/终止竞态、E19 三处偏离、退出码分级、hostFacts 重启簿记、深链 relay 复位、pin 守卫、CI 下 8 例 Swift 集成跳过等，见 companion「仍开放」段）|
 
 ## 纪律
 

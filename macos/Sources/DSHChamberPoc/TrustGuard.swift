@@ -56,10 +56,47 @@ enum TrustGuard {
               let expectedHost = expected.host?.lowercased() else {
             return false
         }
-        return actual.user == nil
-            && actualScheme == expectedScheme
+        // 两侧都不得带 userinfo（原先只查 actual——expectedOrigin 若含 userinfo
+        // 会被接受，与「同源以无凭据 URL 为前提」矛盾；2026-09 三审边界收口）。
+        guard actual.user == nil, expected.user == nil else { return false }
+        // 默认端口折叠：与 WHATWG URL 的 origin 等价语义对齐
+        // （`http://h:80` ≡ `http://h`、`https://h:443` ≡ `https://h`；
+        // 2026-09 三审：原实现按字面 port 比较，会误拒同源默认端口写法）。
+        return actualScheme == expectedScheme
             && actualHost == expectedHost
-            && actual.port == expected.port
+            && effectivePort(scheme: actualScheme, port: actual.port)
+                == effectivePort(scheme: expectedScheme, port: expected.port)
+    }
+
+    /// 有效端口（缺省按 scheme 折叠为 80/443；其它 scheme 缺省为 nil）。
+    static func effectivePort(scheme: String, port: Int?) -> Int? {
+        if let port { return port }
+        switch scheme {
+        case "http": return 80
+        case "https": return 443
+        default: return nil
+        }
+    }
+
+    /// 文档面判定（2026-09 验收审计 major 收口）：A 桥只信任**固定壳文档**——
+    /// 与 Electron `isTrustedRendererUrl`（renderer-trust.ts:20-30）逐条对齐：
+    /// 期望 origin 必须 http(s)、origin 相等、`pathname == "/"`、无 query。
+    /// 原因：控制面同一 origin 下还透传远端实例响应（`/api/i/<id>/*`），
+    /// 仅 origin 相等会让被代理的远端 HTML 继承 shim 与全部 60 个 IPC 通道。
+    /// 消息护栏与导航护栏都改用本判定（isTrustedOrigin 保留为 origin 原语）。
+    static func isTrustedDocument(_ urlString: String?, expectedOrigin: String) -> Bool {
+        guard let urlString, !urlString.isEmpty,
+              let actual = URLComponents(string: urlString),
+              let expected = URLComponents(string: expectedOrigin),
+              let expectedScheme = expected.scheme?.lowercased(),
+              expectedScheme == "http" || expectedScheme == "https" else {
+            return false
+        }
+        guard isTrustedOrigin(urlString, expectedOrigin: expectedOrigin) else { return false }
+        // 与 WHATWG URL 对齐：无路径的 authority-only URL（`http://h:p`）pathname
+        // 等价于 "/"（URLComponents 给空串，Electron `new URL(...).pathname` 给 "/"）。
+        let path = actual.path
+        return (path.isEmpty || path == "/") && (actual.query ?? "").isEmpty
     }
 
     /// 方法白名单判定：精确匹配（通道名均为小写下划线命名空间，大小写不

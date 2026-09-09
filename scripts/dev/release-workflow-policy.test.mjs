@@ -29,7 +29,8 @@ const validation = between('\n  validation:', '\n  build-gateway:')
 const gatewayBuild = between('\n  build-gateway:', '\n  build-macos:')
 const macBuild = between('\n  build-macos:', '\n  build-windows:')
 const windowsBuild = between('\n  build-windows:', '\n  build-linux:')
-const linuxBuild = between('\n  build-linux:', '\n  finalize-release:')
+const linuxBuild = between('\n  build-linux:', '\n  build-swift:')
+const swiftBuild = between('\n  build-swift:', '\n  finalize-release:')
 
 assert.match(tagBinding, /git rev-parse "\$\{TAG\}\^\{commit\}"/)
 assert.match(tagBinding, /TAG_SHA.*RELEASE_SHA/)
@@ -80,9 +81,52 @@ assert.match(windowsBuild, /beta\.yml/)
 assert.match(windowsBuild, /latest\.yml/)
 assert.match(linuxBuild, /beta-linux\.yml/)
 assert.match(linuxBuild, /latest-linux\.yml/)
+// --- Swift native shell leg (design 25, W-26) -----------------------------
+// The native artifacts ship from the same tag under a -native name; the dry
+// run must be credential-free and the formal run fail-closed on the signing
+// identity (A6: missing Apple credentials block the release, never silently
+// downgrade to an ad-hoc build).
+assert.match(swiftBuild, /pnpm run build:sidecar/)
+assert.match(swiftBuild, /pnpm run build:swift-app --out macos\/release/)
+assert.match(swiftBuild, /--app-name dsh-chamber-native/)
+assert.match(swiftBuild, /--artifact-basename "dsh-chamber-native-\$\{VERSION\}-macos-arm64"/)
+assert.match(swiftBuild, /unset CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID GH_TOKEN/)
+assert.match(swiftBuild, /formal Swift release requires CSC_LINK/)
+assert.match(swiftBuild, /no Developer ID Application identity in CSC_LINK/)
+assert.match(swiftBuild, /notarytool submit/)
+assert.match(swiftBuild, /stapler staple/)
+assert.match(swiftBuild, /gh release upload "v\$\{VERSION\}"/)
+assert.match(swiftBuild, /--clobber/)
+assert.match(swiftBuild, /basename "\$APP\/Contents\/Resources\/sidecar\/node"/)
+assert.match(swiftBuild, /= "node"/)
+assert.match(swiftBuild, /bridge-shim\.poc\.js/)
+assert.match(swiftBuild, /dist\/web\/index\.html/)
+assert.match(swiftBuild, /ARTIFACT_ARGS=\(--no-zip --no-dmg\)/)
+// macOS runners default to bash 3.2: an empty array under `set -u` makes
+// "${A[@]}" an unbound-variable error, so the dry-run path (empty array) MUST
+// use the guarded expansion form.
+assert.ok(
+  swiftBuild.includes('${ARTIFACT_ARGS[@]+"${ARTIFACT_ARGS[@]}"}'),
+  'dry-run empty array must use the bash-3.2-safe guarded expansion',
+)
+assert.equal(
+  swiftBuild.split('${ARTIFACT_ARGS[').length - 1,
+  2,
+  'the guarded form is the ONLY ARTIFACT_ARGS expansion (an extra unguarded one breaks dry-run on bash 3.2)',
+)
+assert.match(swiftBuild, /notarytool submit "\$SUBMIT_ZIP"/)
+assert.match(swiftBuild, /stapler staple "\$APP"/)
+assert.ok(
+  swiftBuild.indexOf('stapler staple "$APP"') < swiftBuild.indexOf('ditto -c -k --sequesterRsrc --keepParent "$APP" "${BASE}.zip"'),
+  'final archives must be built AFTER stapling (ticket must be inside the shipped .app)',
+)
+// Notarize/Upload must stay gated on a non-dry-run (mutation steps).
+assert.match(swiftBuild, /- name: Notarize \+ staple native app \(release only\)\n        if: \$\{\{ github\.event\.inputs\.dry_run != 'true' \}\}/)
+assert.match(swiftBuild, /- name: Upload native artifacts to the draft release\n        if: \$\{\{ github\.event\.inputs\.dry_run != 'true' \}\}/)
+
 assert.match(workflow, /make_latest=false/)
 assert.match(workflow, /make_latest=true/)
-assert.match(workflow, /needs: \[create-release, build-gateway, build-macos, build-windows, build-linux\]/)
+assert.match(workflow, /needs: \[create-release, build-gateway, build-macos, build-windows, build-linux, build-swift\]/)
 for (const requiredGate of [
   'pnpm run typecheck:gateway',
   'pnpm run typecheck:runtime',
@@ -114,7 +158,8 @@ assert.equal(
   'formal desktop builds must not trust a committed third-party Electron mirror',
 )
 
-// Every build job (build-gateway / build-macos / build-windows / build-linux)
+// Every build job (build-gateway / build-macos / build-windows / build-linux /
+// build-swift)
 // must build from the exact SHA the create-release job validated and bound
 // the tag to; a default-branch advance between jobs must never ship an
 // unvalidated commit under a validated tag (S16).
@@ -122,7 +167,7 @@ const buildJobs = workflow.slice(workflow.indexOf('  build-gateway:'))
 const buildRefPins = buildJobs.match(/ref: \$\{\{ github\.sha \}\}/g) ?? []
 assert.equal(
   buildRefPins.length,
-  4,
+  5,
   'every build-job checkout must pin ref: ${{ github.sha }} to the validated workflow SHA',
 )
 

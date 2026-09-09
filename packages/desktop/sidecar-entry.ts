@@ -32,10 +32,28 @@ import { createInterface } from 'node:readline'
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { createControlPlane } from '@dsh-chamber/control-plane'
-import { installIpcHandlers, type IpcRegistrar, type ShellAssemblyCtx } from './shell-core.ts'
+import { computeQuitRisk, shouldHideToTray } from './chamber-settings.ts'
+// control-plane 一律经 facade 取（**不要** import 裸包名）：装配态（W-23）目录
+// 没有 node_modules 树，facade 的 isPackagedSidecarRuntime 分支加载
+// `<sidecar>/dist/control-plane/index.js`；裸说明符在打包态 ERR_MODULE_NOT_FOUND
+// （2026-09 W-24 实测）。dev/测试态 facade 仍走 workspace 符号链接。
+import { createControlPlane } from './control-plane-module.ts'
+import {
+  drainDeepLinkLaunches,
+  enqueueDeepLink,
+  installIpcHandlers,
+  onRendererLifecycle,
+  type IpcRegistrar,
+  type ShellAssemblyCtx,
+} from './shell-core.ts'
 import { createNodeEdges, HOST_INBOUND } from './node-edges.ts'
 import { buildHeadlessCtx, type HeadlessCtxAssembly } from './sidecar-ctx.ts'
+import {
+  EXIT_GRACEFUL,
+  EXIT_LOCK_CONFLICT,
+  EXIT_RUNTIME_CRASH,
+  EXIT_STARTUP_FAILURE,
+} from './sidecar-exit-codes.ts'
 
 // ---------------------------------------------------------------------------
 // 0. console 重定向（D2）：stdout 只允许协议写——console.log/info/debug 全部
@@ -98,23 +116,33 @@ mkdirSync(args.userDataDir, { recursive: true })
 
 // ---------------------------------------------------------------------------
 // 2. 目录锁复验（design 25 §6.3 B2：不二次 flock——Swift 侧持锁；本进程只读
-//    锁记录校验父 pid，防双 flavor 并发）。
+//    锁记录校验**父 pid**，防双 flavor 并发）。
+//
+//    语义（关键）：记录里的 pid 是**持锁方**（Swift 壳）的 pid，而本进程是它
+//    直接 spawn 的子进程 → 正常情形 `record.pid === process.ppid`，属「我方的
+//    父进程持锁」，**不是**冲突。只有记录 pid 既不是本进程也不是父进程、且仍
+//    存活时，才是「另一 flavor/实例正占用同一 userData」→ loud exit 3
+//    （Supervisor 对 exit 3 走 fatal 不重启，见 SidecarSupervisor）。
+//    记录 pid 已死 = 陈旧锁（flock 随进程死亡释放，内核已无持有者）→ 放行。
 // ---------------------------------------------------------------------------
 const lockFile = path.join(args.userDataDir, '.dsh-chamber.lock')
 if (existsSync(lockFile)) {
   try {
     const record = JSON.parse(readFileSync(lockFile, 'utf8')) as { pid?: number }
-    if (typeof record.pid === 'number' && record.pid > 0 && record.pid !== process.pid) {
+    const recordedPid = record.pid
+    const isSelf = recordedPid === process.pid
+    const isParent = recordedPid === process.ppid
+    if (typeof recordedPid === 'number' && recordedPid > 0 && !isSelf && !isParent) {
       let alive = false
       try {
-        process.kill(record.pid, 0)
+        process.kill(recordedPid, 0)
         alive = true
       } catch {
         alive = false
       }
       if (alive) {
-        console.error(`[sidecar] 目录锁被占用（pid=${record.pid}）——另一 flavor 正在使用 ${args.userDataDir}，退出`)
-        process.exit(3)
+        console.error(`[sidecar] 目录锁被占用（pid=${recordedPid}，本进程 ppid=${process.ppid}）——另一 flavor/实例正在使用 ${args.userDataDir}，退出`)
+        process.exit(EXIT_LOCK_CONFLICT)
       }
     }
   } catch (err) {
@@ -153,6 +181,41 @@ const nodeEdges = createNodeEdges({
   sendNotify(event, payload) {
     writeProtocolLine({ notify: event, payload })
   },
+  // 入站汇（design 25 §4.5/§5 E19）：Swift 深链与渲染器生命周期事件经 B 桥
+  // __host.deepLink / __host.rendererLifecycle 到达，原样进 core 权威状态机
+  // （enqueueDeepLink 归一化去重/队列；onRendererLifecycle ready 位复位 +
+  // in-flight requeue/drain）——语义单源，Swift 侧不复制。
+  onDeepLink(url) {
+    enqueueDeepLink(url)
+  },
+  onRendererLifecycle(event) {
+    onRendererLifecycle(event)
+  },
+  // 关窗/退出决策投影（E1/E9/E20）：事实取自无头 ctx（chamber settings 实时
+  // holder + LOCAL_RUNNING_STATES × localProcessAlive），决策由 chamber-settings
+  // 两个纯函数合成——与 Electron main.ts before-quit / close 分支同一语义源，
+  // Swift 侧不复制决策逻辑。
+  projectQuitFacts(input) {
+    if (headless === null) {
+      throw new Error('sidecar-edges:quit-facts-before-ctx-ready')
+    }
+    const facts = headless.quitFacts()
+    const hideOnClose = shouldHideToTray(
+      facts.windowCloseBehavior,
+      input.recoveryAvailable,
+      input.quitRequested,
+    )
+    const risk = computeQuitRisk({
+      quitConfirmation: facts.quitConfirmation,
+      localRunning: facts.localRunning,
+      updateDownloadReady: facts.updateDownloadReady,
+    })
+    return {
+      hideOnClose,
+      quitNeedsConfirm: risk.needsConfirm,
+      quitReasons: risk.reasons,
+    }
+  },
   hostFacts: {
     trayAvailable: true, // mac Dock 常驻（design 14 D1）
     isPackaged: true,
@@ -188,7 +251,12 @@ async function handleInboundLine(line: string): Promise<void> {
   try {
     if (hostInbound) {
       const outcome = nodeEdges.handleHostInbound(method, payload ?? null)
-      writeProtocolLine({ id, ok: outcome.ok, error: outcome.error })
+      writeProtocolLine({
+        id,
+        ok: outcome.ok,
+        ...(outcome.error === undefined ? {} : { error: outcome.error }),
+        ...(outcome.result === undefined ? {} : { result: outcome.result }),
+      })
       return
     }
     const handler = registry.get(method)
@@ -233,6 +301,7 @@ async function boot(): Promise<void> {
   // 副作用宿主腿与 installIpcHandlers 投递状态机同对象）。
   headless = await buildHeadlessCtx(args.userDataDir, nodeEdges, {
     builtinDshWorkspace: args.dshPath,
+    chamberVersion: shellVersion,
     hostPackageDirs: {
       graph: args.hostGraphDir,
       git: args.hostGitDir,
@@ -298,7 +367,7 @@ async function boot(): Promise<void> {
     await controlPlane.start()
   } catch (err) {
     console.error('[sidecar] 控制面启动失败（fatal）：' + String(err))
-    process.exit(1)
+    process.exit(EXIT_STARTUP_FAILURE)
   }
   console.log('[sidecar] control plane listening on http://127.0.0.1:' + controlPlane.port)
   controlPlaneInstance = controlPlane
@@ -325,8 +394,21 @@ async function boot(): Promise<void> {
         console.error('[sidecar] pre-spawn（legacy）失败：' + String(err))
       }
     }
+    // legacy 路径无启动尾部，但冷启动深链同样需要消费（与另一分支对齐；
+    // 2026-09 二审：原实现只在非 legacy 分支 drain）。
+    drainDeepLinkLaunches()
   } else {
-    void headless.runStartupTail()
+    // 用 then(ok, err) 而非 finally：runStartupTail 内部已 catch（不会 reject），
+    // 但若将来改变，`.finally` 的派生 promise 会变成未处理拒绝并命中本文件的
+    // unhandledRejection→exit 1；then 的第二参保证「无论成败都 drain 且不产生
+    // 未处理拒绝」，失败仍 loud（2026-09 二审 info）。
+    void headless.runStartupTail().then(
+      () => drainDeepLinkLaunches(),
+      (error) => {
+        console.error('[sidecar] 启动尾部异常（drain 仍执行）：' + String(error))
+        drainDeepLinkLaunches()
+      },
+    )
 
     // W-13 补（dev 观察实证）：启动事务只做探针拉起、探针进程退出后未驻留本地
     // 实例（connectionState 回到 stopped）——5s/12s 两拍回退为直接 pre-spawn
@@ -372,8 +454,8 @@ async function shutdown(code: number): Promise<void> {
 }
 
 void boot().catch((err) => {
-  console.error('[sidecar] boot 失败（fatal exit 1）：' + String(err))
-  process.exit(1)
+  console.error(`[sidecar] boot 失败（fatal exit ${EXIT_STARTUP_FAILURE}）：` + String(err))
+  process.exit(EXIT_STARTUP_FAILURE)
 })
 
 const rl = createInterface({ input: process.stdin, crlfDelay: Infinity })
@@ -385,20 +467,20 @@ rl.on('line', (line) => {
 })
 rl.on('close', () => {
   console.log('[sidecar] stdin EOF——退出')
-  void shutdown(0)
+  void shutdown(EXIT_GRACEFUL)
 })
 
 for (const signal of ['SIGTERM', 'SIGINT'] as const) {
   process.on(signal, () => {
-    void shutdown(0)
+    void shutdown(EXIT_GRACEFUL)
   })
 }
 
 process.on('uncaughtException', (err) => {
-  console.error('[sidecar] uncaughtException（fatal exit 1）：' + String(err))
-  process.exit(1)
+  console.error(`[sidecar] uncaughtException（fatal exit ${EXIT_RUNTIME_CRASH}）：` + String(err))
+  process.exit(EXIT_RUNTIME_CRASH)
 })
 process.on('unhandledRejection', (reason) => {
-  console.error('[sidecar] unhandledRejection（fatal exit 1）：' + String(reason))
-  process.exit(1)
+  console.error(`[sidecar] unhandledRejection（fatal exit ${EXIT_RUNTIME_CRASH}）：` + String(reason))
+  process.exit(EXIT_RUNTIME_CRASH)
 })

@@ -64,6 +64,9 @@ export const zh = {
   updateAvailableBeta: '新版本 {version} 可用（beta 通道）',
   updateAvailableBlocked: '新版本 {version} 可用，自动安装不可用（未配置签名），请手动安装',
   updateAvailableBlockedBeta: '新版本 {version} 可用（beta 通道），自动安装不可用（未配置签名），请手动安装',
+  // 原生壳（macOS Swift flavor）blocked-available 行：原因不是签名，而是壳本身
+  // 没有自动安装腿（design 25 §7 / update-headless.ts 的 blocked reason）。
+  updateAvailableBlockedNativeShell: '新版本 {version} 可用，原生壳不支持自动安装，请前往下载页手动安装',
   updateAction: '更新',
   updateDownloading: '正在下载更新… {percent}%',
   updateDownloaded: '已下载，退出时安装',
@@ -74,6 +77,7 @@ export const zh = {
   updateRestarting: '正在重启并安装…',
   updateDownloadBlocked: '已下载（{reason}），请手动安装',
   updateInstallBlockedMacSigning: '已下载（未配置自动安装签名），请手动安装',
+  updateInstallBlockedNativeShell: '已下载（原生壳不支持自动安装），请手动安装',
   updateDownloadFailed: '更新下载失败',
   updateCheckFailed: '无法检查更新',
   updateReleaseLink: '前往下载页',
@@ -296,6 +300,9 @@ export const en: Record<keyof typeof zh, string> = {
   updateAvailableBeta: 'New version {version} available (beta channel)',
   updateAvailableBlocked: 'New version {version} available — automatic install unavailable; install manually',
   updateAvailableBlockedBeta: 'New version {version} available (beta channel) — automatic install unavailable; install manually',
+  // Native-shell (macOS Swift flavor) blocked-available line: the block is the
+  // shell's missing auto-install leg, not signing (design 25 §7).
+  updateAvailableBlockedNativeShell: 'New version {version} available — the native shell cannot auto-install; install manually from the download page',
   updateAction: 'Update',
   updateDownloading: 'Downloading update… {percent}%',
   updateDownloaded: 'Downloaded — will install on quit',
@@ -306,6 +313,7 @@ export const en: Record<keyof typeof zh, string> = {
   updateRestarting: 'Restarting to install…',
   updateDownloadBlocked: 'Downloaded ({reason}) — install manually',
   updateInstallBlockedMacSigning: 'Downloaded (automatic install unavailable) — install manually',
+  updateInstallBlockedNativeShell: 'Downloaded (the native shell cannot auto-install) — install manually',
   updateDownloadFailed: 'Update download failed',
   updateCheckFailed: 'Unable to check for updates',
   updateReleaseLink: 'Go to download page',

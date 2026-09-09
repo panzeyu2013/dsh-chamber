@@ -87,6 +87,7 @@ import {
 // OpenInLaunchContext / OpenInRequest 随 open-in 注册体迁入 shell-core；updater.ts
 // 的 openReleasePage 随 OPEN_RELEASE 注册体迁入 shell-core）——
 import { createUpdateController } from './updater.ts';
+import { acquireChamberLock } from './chamber-lock.ts';
 import { DEFAULT_RUNTIME_LOGICAL_DISK_LIMIT_BYTES, DshRuntimeController } from './dsh-runtime-controller.ts';
 import type { RuntimeMetadataComponent, RuntimeMetadataHealthProjection } from './dsh-runtime-controller.ts';
 import { disposeRuntimeInstaller, fetchRegistryMetadata, installRuntimeVersion, pruneRuntimeStore } from '@dsh-chamber/dsh-runtime';
@@ -1098,6 +1099,25 @@ if (!gotTheLock) {
       },
     });
     const runtimeBaseDir = app.getPath('userData');
+    // 双 flavor 跨进程互斥锁（design 25 §6.3；Electron 侧 O_EXLOCK——见
+    // chamber-lock.ts 的平台范围说明）：另一 flavor 持有 → fail-closed 拒绝
+    // 启动，绝不让两个 writer 并发同一 registry/凭据/runtime 树。
+    const chamberLock = acquireChamberLock({ userDataDir: runtimeBaseDir, shell: 'electron' });
+    if (!chamberLock.ok) {
+      console.error(`[dsh-chamber] ${chamberLock.error}`);
+      dialog.showErrorBox('dsh-chamber 已在运行', chamberLock.error);
+      app.exit(1);
+      return;
+    }
+    if (chamberLock.unsupported) {
+      console.warn('[dsh-chamber] 目录锁：当前平台无 O_EXLOCK（Swift flavor 仅 macOS）——跨 flavor 互斥不适用');
+    }
+    // Release ONLY after the async cleanup finishes (2026-09 audit: releasing
+    // in a will-quit listener opened a window where another flavor could take
+    // the lock while transports/control-plane were still writing <userData>).
+    // `quit` fires after the cleanup chain settled; the OS also releases on
+    // process exit.
+    app.on('quit', () => chamberLock.handle.release());
     const localDshHome = localDshHomeDir(runtimeBaseDir);
     const runtimeWriterFence = new RuntimeOperationFence();
     const envOverrideActive = Boolean(process.env.DSH_CHAMBER_DSH_PATH);

@@ -3,3 +3,5 @@
 .swiftpm/
 *.xcodeproj
 .DS_Store
+# W-24 打包产物（build-swift-app.mjs 缺省输出目录：.app/zip/dmg）
+release/

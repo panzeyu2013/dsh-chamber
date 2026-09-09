@@ -121,6 +121,7 @@ import {
   chamberSettingsFilePath,
   gatewaySecretsFilePath,
   instancesFilePath,
+  LOCAL_RUNNING_STATES,
   localDshHomeDir,
   ownsNotificationSource,
   projectInstanceSecrets,
@@ -174,6 +175,7 @@ import {
 import { appendAuditEvent, configureAuditLog, type AuditEvent } from './audit-log.ts'
 import { createSshPluginJournal } from './ssh-plugin-journal.ts'
 import { sanitizeErrorText } from './sanitize-error.ts'
+import { createHeadlessUpdateController } from './update-headless.ts'
 import type { ApplyNowGateInput } from './apply-now-gate.ts'
 import { shouldSkipDiskRefresh } from './disk-evidence-gate.ts'
 import { call } from './control-plane-module.ts'
@@ -293,6 +295,10 @@ export interface HeadlessCtxInputs {
    *  dev = repo ref-dsh 等位）——resolveActiveRuntime 的 builtin 分支 + 启动
    *  事务的 bundled 版本解析共用（main builtinDshWorkspace 同义）。 */
   builtinDshWorkspace: string | null
+  /** 当前 chamber 版本（sidecar-entry 读 packages/desktop/package.json 的
+   *  shellVersion）——Swift flavor 更新控制器（update-headless.ts）的
+   *  currentVersion / 通道判定输入。 */
+  chamberVersion?: string
   /** chamber host 包源目录（sidecar-entry --host-graph-dir/--host-git-dir/
    *  --host-archive-dir；打包 Resources 布局由 Swift 侧传参——null = 用缺省
    *  解析（见 hostPackageSourceDir 注释）。 */
@@ -336,6 +342,19 @@ export interface HeadlessCtxAssembly {
    *  + sessionRefresh.dispose + gatewaySessions.dispose()，与 main.ts will-quit
    *  清理同源（main 1027-1063）；cp.stop 由 sidecar-entry 自行编排）。 */
   dispose(): Promise<void>
+  /** 关窗/退出事实投影输入（E1/E9/E20，design 25 §5 同款判据）：chamber
+   *  settings 的 windowCloseBehavior/quitConfirmation + 本地实例在跑判据
+   *  （`LOCAL_RUNNING_STATES.has(connectionState) && localProcessAlive`，与
+   *  main.ts before-quit 同源）。updateDownloadReady 恒 false——Swift v1 走
+   *  blocked-available，无退出自动安装腿（design 25 §7）。决策本身由
+   *  chamber-settings 的两个纯函数（shouldHideToTray / computeQuitRisk）在
+   *  装配侧合成，本面只给事实。 */
+  quitFacts(): {
+    windowCloseBehavior: ChamberSettings['windowCloseBehavior']
+    quitConfirmation: boolean
+    localRunning: boolean
+    updateDownloadReady: boolean
+  }
 }
 
 /**
@@ -375,6 +394,9 @@ export async function buildHeadlessCtx(
     }
   })()
   const builtinDshWorkspace = inputs.builtinDshWorkspace ?? null
+  /** chamber 版本（更新控制器 currentVersion / 通道判定；缺省 unknown 时
+   *  check 仍可用，只是版本比较恒判「不可比较」→ loud error，绝不静默）。 */
+  const chamberVersion = inputs.chamberVersion ?? 'unknown'
   const runtimeWriterFence = new RuntimeOperationFence()
   // 模块级事务槽与宿主门状态（main 380-388 同义；本文件每装配一份宿主状态，
   // 单进程单装配——main 模块级 let 的闭包等价）。
@@ -1198,17 +1220,19 @@ export async function buildHeadlessCtx(
   // =========================================================================
 
   // pnpm 入口解析（main 2293-2295 的 packaged/dev 两分支 → sidecar 位）：
+  //  - 装配（W-23 三审新增）：<moduleDir>/pnpm/bin/pnpm.cjs（build-sidecar
+  //    把内嵌 pnpm 拷进 sidecar 装配目录，与 node/vendor-dsh 同层）；
+  //  - 旧装配位：<moduleDir>/../pnpm/bin/pnpm.cjs（sidecar 装配于
+  //    Resources/sidecar/ 时的 Electron 同构位 Resources/pnpm——main 2294）；
   //  - dev：<moduleDir>/node_modules/pnpm/bin/pnpm.cjs（pnpm 11.21.0 pinned
-  //    dep——main 2295 dev 分支同值）；
-  //  - 打包：<moduleDir>/../pnpm/bin/pnpm.cjs（sidecar 装配于
-  //    Resources/sidecar/ 时 = Resources/pnpm/bin/pnpm.cjs——main 2294
-  //    packaged 分支 process.resourcesPath/pnpm 同构）。
+  //    dep——main 2295 dev 分支同值）。
   const pnpmEntry = ((): string => {
     const devEntry = path.join(moduleDir, 'node_modules', 'pnpm', 'bin', 'pnpm.cjs')
+    const assembledEntry = path.join(moduleDir, 'pnpm', 'bin', 'pnpm.cjs')
     const packagedEntry = path.join(moduleDir, '..', 'pnpm', 'bin', 'pnpm.cjs')
-    const firstExisting = [packagedEntry, devEntry].find(entry => existsSync(entry))
+    const firstExisting = [assembledEntry, packagedEntry, devEntry].find(entry => existsSync(entry))
     if (firstExisting !== undefined) return firstExisting
-    // 两者皆缺（非 dev 且无 Resources 装配）：保留 dev 形状——安装路径上的
+    // 全部缺失（非 dev 且无 Resources 装配）：保留 dev 形状——安装路径上的
     // loud 失败（installRuntimeVersion）与 main 缺 artifact 的 loud 语义同向。
     return devEntry
   })()
@@ -2576,29 +2600,28 @@ export async function buildHeadlessCtx(
         },
       },
     ) as ((..._args: never[]) => never)
-  // - updateController（I 组；main 2279-2289/updater.ts）：保持 loud。真实
-  //   createUpdateController 无法 headless：其缺省 seam（updater.ts
-  //   getRealAutoUpdater/getRealApp/probeLinuxAppImage/resolveRuntimeBetaFeed）
-  //   依赖 Electron app 上下文（electron-updater 实例 = Electron app 生命周期
-  //   对象——checkForUpdates/downloadUpdate/quitAndInstall 与 autoInstallOnAppQuit
-  //   退出腿均需 app quit 生命周期；updater.ts 单元测试全靠注入 deps 屏蔽真实
-  //   seam，注入 = 伪造 autoUpdater，正是本 flavor 不做的"假装有更新引擎"）。
-  //   Swift flavor 更新宿主在 Swift 侧（W-22 Sparkle 线——原生 app 更新机制 +
-  //   update 状态经 Swift → web 自有通道），sidecar 只做状态代理（未来若 Swift
-  //   推送更新状态到 hostFacts/update 事件面再接管本字段）；UPDATE_* 注册体在
-  //   本 flavor 调本字段即 loud 'sidecar-ctx-unavailable:updateController.*'，
-  //   与 Electron 差异属宿主机制——行为经 Swift 侧更新腿对齐（验收注记）。
-  //   subscribe 保持装配期空实现（installIpcHandlers I 组段先订阅后 start 契约）。
-  real.updateController = Object.assign(methodStub('updateController'), {
-    subscribe: () => {
-      /* Swift flavor 更新状态经 Swift 侧 W-22 Sparkle 线推送；sidecar 仅状态代理 */
+  // - updateController（I 组；W-22 真化——design 25 §7「v1 blocked-available
+  //   诚实形态」）：Swift flavor 用 update-headless.ts 的纯 Node 控制器——真实
+  //   check（GitHub releases 列表 API → 版本比较 → phase='available' +
+  //   releaseUrl）+ installBlockedReason 恒为「原生壳不支持自动安装」+
+  //   download/restart 核心层显式拒绝。**不是** electron-updater 的伪造注入：
+  //   Electron 版 createUpdateController 的 autoUpdater 依赖 app 生命周期
+  //   （quitAndInstall/autoInstallOnAppQuit），本 flavor 明确不做安装腿。
+  //   契约零改动（UpdateState 七值/字段集不变），消费面 settings-bridge
+  //   UpdateSection 只按 phase + installBlockedReason 呈现。
+  real.updateController = createHeadlessUpdateController({
+    version: chamberVersion,
+    logger: {
+      log: (...args: unknown[]) => console.log('[updater-headless]', ...args),
+      warn: (...args: unknown[]) => console.warn('[updater-headless]', ...args),
+      error: (...args: unknown[]) => console.error('[updater-headless]', ...args),
     },
   })
   // - setKeepAwake / setLoginItem（A 组 SETTINGS_SET 副作用叶）已于 S-C-2 真化、
   //   S-E async 化（见上方 real 字段——async 叶经注入 edges.sendEdge（node-edges
   //   公开转发）await B 桥应答；不再走 node-edges 的 HostEdges 同步叶）。
-  // - ctx 无其他残留 stub：A 组两叶真化后，注册体可达字段全部真实；updateController
-  //   为有意 loud（I 组更新宿主 = Swift W-22 Sparkle 线，见上方注记）。
+  // - ctx 无其他残留 stub：A 组两叶真化后，注册体可达字段全部真实（I 组
+  //   updateController 于 W-22 真化，见上方注记）。
   const ctx = new Proxy(real as object, {
     get(target: Record<string, unknown>, key: string | symbol) {
       if (typeof key === 'symbol') return undefined
@@ -2704,5 +2727,26 @@ export async function buildHeadlessCtx(
       gatewaySessions.dispose()
     }
   }
-  return { ctx, localSpawnGates, bindPlane, runStartupTail, dispose }
+  // 关窗/退出事实投影（E1/E9/E20）：chamber settings 实时 holder + 本地实例
+  // 在跑判据（main.ts before-quit 同源：状态机显示 running 不够，必须
+  // localProcessAlive——restart backoff/死亡未探活期间可能误报 running）。
+  const quitFacts = (): {
+    windowCloseBehavior: ChamberSettings['windowCloseBehavior']
+    quitConfirmation: boolean
+    localRunning: boolean
+    updateDownloadReady: boolean
+  } => {
+    const plane = planeRef.current
+    const localRunning = plane !== null
+      && LOCAL_RUNNING_STATES.has(plane.connectionState)
+      && plane.localProcessAlive
+    return {
+      windowCloseBehavior: settings.windowCloseBehavior,
+      quitConfirmation: settings.quitConfirmation,
+      localRunning,
+      updateDownloadReady: false,
+    }
+  }
+
+  return { ctx, localSpawnGates, bindPlane, runStartupTail, dispose, quitFacts }
 }

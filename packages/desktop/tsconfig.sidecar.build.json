@@ -1,0 +1,17 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "rootDir": ".",
+    "outDir": "dist/sidecar",
+    "rewriteRelativeImportExtensions": true,
+    "declaration": false,
+    "sourceMap": false
+  },
+  "include": ["*.ts"],
+  "exclude": [
+    "*.test.ts",
+    "main.ts",
+    "electron-edges.ts"
+  ]
+}

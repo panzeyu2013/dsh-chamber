@@ -53,11 +53,23 @@ export function isPackagedElectronRuntime(runtime: {
     && runtime.defaultApp !== true
 }
 
+/**
+ * Assembled-sidecar marker (design 25 §3.2/§4.3, W-23): the Swift Supervisor
+ * spawns `<sidecar>/sidecar.js` with `DSH_CHAMBER_SIDECAR_COMPILED=1`, where the
+ * workspace bare specifier is unresolvable (no node_modules tree) and the
+ * compiled artifact sits at `<sidecar>/dist/control-plane/index.js` — exactly
+ * the relative entry this module already resolves. Explicit and env-driven:
+ * never guessed from process shape, and never set by the Electron shell.
+ */
+export function isPackagedSidecarRuntime(runtime: NodeJS.ProcessEnv = process.env): boolean {
+  return runtime.DSH_CHAMBER_SIDECAR_COMPILED === '1'
+}
+
 const runtimeProcess = process as NodeJS.Process & { defaultApp?: boolean }
 const isPackaged = isPackagedElectronRuntime({
   electronVersion: process.versions.electron,
   defaultApp: runtimeProcess.defaultApp,
-})
+}) || isPackagedSidecarRuntime()
 
 if (isPackaged && !existsSync(CONTROL_PLANE_ENTRY)) {
   throw new Error(

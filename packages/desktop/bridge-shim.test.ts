@@ -20,7 +20,7 @@ import vm from 'node:vm'
 
 const dir = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.resolve(dir, '..', '..')
-const nodeBin = process.env.NODE_BIN ?? '/Applications/dsh-chamber.app/Contents/MacOS/dsh-chamber'
+const nodeBin = process.env.NODE_BIN ?? process.execPath
 const generator = path.join(dir, 'scripts', 'emit-bridge-manifest.mjs')
 const committedJson = readFileSync(path.join(dir, 'bridge-manifest.json'), 'utf8')
 const committedStub = readFileSync(

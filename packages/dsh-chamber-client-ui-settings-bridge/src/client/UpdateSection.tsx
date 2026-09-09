@@ -26,6 +26,14 @@ import css from './SettingsShell.module.css'
 type UpdateTranslate = (key: SettingsBridgeKey, params?: Record<string, unknown>) => string
 
 /**
+ * The native-shell (macOS Swift flavor) install-blocked reason — a wire value
+ * produced by packages/desktop/update-headless.ts (design 25 §7). Kept as a
+ * literal here because the plugin does not import desktop internals; the
+ * desktop-side cross-package contract test asserts this literal stays in sync.
+ */
+const NATIVE_SHELL_BLOCKED_REASON = '原生壳不支持自动安装'
+
+/**
  * Localized reason for the mac-install-blocked state (design 11 §3.1): the
  * main-process reasons are technical English; map the known ones to
  * dictionary keys so the zh/en row reads naturally, falling back to the raw
@@ -34,6 +42,9 @@ type UpdateTranslate = (key: SettingsBridgeKey, params?: Record<string, unknown>
 function blockedCopy(update: UpdateState, t: UpdateTranslate): string {
   if (update.installBlockedReason === 'missing Developer ID signature') {
     return t('updateInstallBlockedMacSigning')
+  }
+  if (update.installBlockedReason === NATIVE_SHELL_BLOCKED_REASON) {
+    return t('updateInstallBlockedNativeShell')
   }
   return t('updateDownloadBlocked', { reason: update.installBlockedReason ?? '' })
 }
@@ -102,9 +113,11 @@ function StatusRow({
         return installBlockedReason !== null ? (
           <div className={css.updateStatusLine}>
             <span className={css.updateStatusText}>
-              {update.channel === 'beta'
-                ? t('updateAvailableBlockedBeta', { version: latestVersion ?? '' })
-                : t('updateAvailableBlocked', { version: latestVersion ?? '' })}
+              {installBlockedReason === NATIVE_SHELL_BLOCKED_REASON
+                ? t('updateAvailableBlockedNativeShell', { version: latestVersion ?? '' })
+                : update.channel === 'beta'
+                  ? t('updateAvailableBlockedBeta', { version: latestVersion ?? '' })
+                  : t('updateAvailableBlocked', { version: latestVersion ?? '' })}
             </span>
             {releaseLink}
           </div>

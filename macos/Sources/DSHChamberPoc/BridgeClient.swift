@@ -230,6 +230,12 @@ public final class BridgeClient {
     /// 业务帧）。线程契约与 onEvent 相同（管道读取线程回调）。
     public var onReady: ((_ port: Int, _ shellVersion: String) -> Void)?
 
+    /// 自然终止出口（W-15 Supervisor 接线）：sidecar 崩溃/自行退出时回调
+    /// terminationStatus（管道读取线程，即 SIGCHLD 处理线程）。**主动 stop()
+    /// 不触发**（stop 先摘 terminationHandler 再 terminate）。赋值须在 start()
+    /// 之前（与 onEvent/onReady 同契约）。
+    public var onTerminated: ((Int32) -> Void)?
+
     /// 进程是否存活（含 start 前/stop 后 → false）。测试与未来 Supervisor 用。
     public var isRunning: Bool {
         lock.lock()
@@ -465,8 +471,8 @@ public final class BridgeClient {
 
         let status = takenProcess?.terminationStatus ?? -1
         let reason = takenProcess?.terminationReason ?? .exit
-        // 退出码分级文案 POC 版：只记日志；启动失败 vs 崩溃的 NSAlert 分流属
-        // SidecarSupervisor（M2，design 25 §3.3(4)）。
+        // 退出码分级：Supervisor（W-15）据 status 决定重启退避 / fatal 分流
+        // （0 = 自行优雅退出；3 = 目录锁冲突；其余非零 = 崩溃），本类只上报。
         log("sidecar 进程退出：terminationStatus=\(status)（reason=\(reason.rawValue)）")
         lock.lock()
         lastTerminationStatusStorage = takenProcess?.terminationStatus
@@ -477,6 +483,10 @@ public final class BridgeClient {
         // 语义上桥已断，注释声明此取舍：宁可 loud 丢弃也不悬挂）。
         finishStdoutReading()
         failAllPending(reason: "sidecar 进程退出，未决请求作废")
+
+        // 收尾完成后上报（Supervisor 的回调里可能新建/启动下一个 sidecar；
+        // 本实例状态已完全落定，无重入风险）。
+        onTerminated?(status)
     }
 
     // MARK: - 管道读取（stdout = 协议流；stderr = 日志流）

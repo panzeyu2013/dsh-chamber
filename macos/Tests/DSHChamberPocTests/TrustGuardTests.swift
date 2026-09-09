@@ -37,6 +37,64 @@ final class TrustGuardTests: XCTestCase {
         _ = TrustGuard.isTrustedOrigin("http://[::1]:17520/", expectedOrigin: origin)
     }
 
+    /// 2026-09 验收审计 major 收口：A 桥只信任固定壳文档（origin + pathname=="/"
+    /// + 无 query），与 Electron isTrustedRendererUrl 逐条对齐——同源非根文档
+    /// （如 /api/i/<id>/* 代理回传的远端 HTML）不得继承 shim/IPC 面。
+    func testTrustedDocumentIsShellDocumentOnly() {
+        XCTAssertTrue(TrustGuard.isTrustedDocument("http://127.0.0.1:17520/", expectedOrigin: origin))
+        XCTAssertTrue(TrustGuard.isTrustedDocument("http://127.0.0.1:17520", expectedOrigin: origin))
+        // 同源非壳文档 / 带 query / 带 fragment → 拒绝
+        XCTAssertFalse(TrustGuard.isTrustedDocument("http://127.0.0.1:17520/api/i/abc/", expectedOrigin: origin))
+        XCTAssertFalse(TrustGuard.isTrustedDocument("http://127.0.0.1:17520/page?x=1", expectedOrigin: origin))
+        XCTAssertFalse(TrustGuard.isTrustedDocument("http://127.0.0.1:17520/?x=1", expectedOrigin: origin))
+        // origin 原语仍应把它们判为同源（两个判定的差异是有意的）
+        XCTAssertTrue(TrustGuard.isTrustedOrigin("http://127.0.0.1:17520/page?x=1#y", expectedOrigin: origin))
+        XCTAssertFalse(TrustGuard.isTrustedDocument("http://127.0.0.1:17520/page?x=1#y", expectedOrigin: origin))
+        // fail-closed 面与 isTrustedOrigin 一致
+        XCTAssertFalse(TrustGuard.isTrustedDocument(nil, expectedOrigin: origin))
+        XCTAssertFalse(TrustGuard.isTrustedDocument("", expectedOrigin: origin))
+        XCTAssertFalse(TrustGuard.isTrustedDocument("not a url", expectedOrigin: origin))
+        XCTAssertFalse(TrustGuard.isTrustedDocument("http://127.0.0.1:17521/", expectedOrigin: origin))
+        XCTAssertFalse(TrustGuard.isTrustedDocument("https://127.0.0.1:17520/", expectedOrigin: origin))
+        XCTAssertFalse(TrustGuard.isTrustedDocument("http://u:p@127.0.0.1:17520/", expectedOrigin: origin))
+        // 期望 origin 非 http(s)（如 file://）→ 拒绝
+        XCTAssertFalse(TrustGuard.isTrustedDocument("file:///tmp/index.html", expectedOrigin: "file:///tmp"))
+    }
+
+    /// origin(of:) 的 origin 串构造（归一化与 cpOrigin 共用）：IPv6 必须补回
+    /// 方括号（2026-09 二审：`[::1]` 曾生成 `http://::1:17520` 不可解析）。
+    func testOriginStringConstruction() {
+        XCTAssertEqual(MainWindowController.origin(of: URL(string: "http://127.0.0.1:17520/")!),
+                       "http://127.0.0.1:17520")
+        XCTAssertEqual(MainWindowController.origin(of: URL(string: "https://Example.COM")!),
+                       "https://example.com")
+        XCTAssertEqual(MainWindowController.origin(of: URL(string: "http://[::1]:17520/")!),
+                       "http://[::1]:17520")
+        XCTAssertNil(MainWindowController.origin(of: URL(string: "file:///tmp/x")!))
+        // 补回括号后，IPv6 origin 与 URL 往返可解析（归一化路径不会静默跳过）。
+        let ipv6 = MainWindowController.origin(of: URL(string: "http://[::1]:17520/api")!)
+        XCTAssertNotNil(URL(string: (ipv6 ?? "") + "/"))
+        XCTAssertTrue(TrustGuard.isTrustedDocument("http://[::1]:17520/", expectedOrigin: ipv6 ?? ""))
+    }
+
+    /// 三审边界：默认端口折叠（http:80 / https:443）与 expectedOrigin 的
+    /// userinfo 拒绝——两者都要与 WHATWG origin 等价语义对齐。
+    func testDefaultPortFoldingAndExpectedUserinfo() {
+        XCTAssertTrue(TrustGuard.isTrustedOrigin("http://example.com:80/", expectedOrigin: "http://example.com"))
+        XCTAssertTrue(TrustGuard.isTrustedOrigin("http://example.com/", expectedOrigin: "http://example.com:80"))
+        XCTAssertTrue(TrustGuard.isTrustedOrigin("https://example.com:443/", expectedOrigin: "https://example.com"))
+        XCTAssertFalse(TrustGuard.isTrustedOrigin("http://example.com:443/", expectedOrigin: "http://example.com"))
+        XCTAssertFalse(TrustGuard.isTrustedOrigin("http://example.com:81/", expectedOrigin: "http://example.com"))
+        // expectedOrigin 带 userinfo → 一律拒绝（fail-closed）。
+        XCTAssertFalse(TrustGuard.isTrustedOrigin("http://u:p@example.com/", expectedOrigin: "http://u:p@example.com"))
+        XCTAssertFalse(TrustGuard.isTrustedDocument("http://u:p@example.com/", expectedOrigin: "http://u:p@example.com"))
+        // 非 http(s) scheme 缺省端口为 nil，不折叠。
+        XCTAssertEqual(TrustGuard.effectivePort(scheme: "http", port: nil), 80)
+        XCTAssertEqual(TrustGuard.effectivePort(scheme: "https", port: nil), 443)
+        XCTAssertNil(TrustGuard.effectivePort(scheme: "ws", port: nil))
+        XCTAssertEqual(TrustGuard.effectivePort(scheme: "http", port: 8080), 8080)
+    }
+
     func testMethodWhitelist() {
         let wl: Set<String> = ["dsh-chamber:info", "desktop_ssh_instances_get"]
         XCTAssertTrue(TrustGuard.isAllowedMethod("dsh-chamber:info", whitelist: wl))

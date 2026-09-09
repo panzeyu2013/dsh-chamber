@@ -203,14 +203,14 @@ dsh-chamber desktop 的 Electron 使用面已收敛为薄壳（AGENTS.md 运行�
 ```
 macos/                          # SwiftPM 可执行包（或 xcodeproj）
   Package.swift
-  Sources/DSHChamberApp/…        # AppKit 壳（AppDelegate、窗口、WKWebView）
-  Sources/DSHChamberBridge/…     # A 桥 shim 注入与消息处理、B 桥客户端、manifest
-  Sources/DSHChamberEdges/…      # 通知/角标/托盘/深链/open-in/对话框/更新/登录项
+  Sources/DSHChamberPoc/…        # 单 target（P0 从简；AppKit 壳 + A 桥/B 桥 + 宿主腿同 target，
+                                 #  product 化拆 target 未排期——见 Package.swift 头注释）
   Sources/DSHChamberPoc/Generated/BridgeManifest.swift   # 构建脚本生成（随提交，防漂移）
   Tests/…                        # XCTest（信封解析、护栏、监督、协议）
   Resources/                     # 运行时占位（sidecar 由构建脚本拷入）
-scripts/build-swift-app.mjs      # 调 pnpm 产物 + swift build + 资源装配
-scripts/emit-bridge-manifest.mjs # IPC 通道 manifest → Swift 枚举 + shim 存根（§4.4.3）
+macos/scripts/build-swift-app.mjs       # 调 pnpm 产物 + swift build + 资源装配（W-24 已落地）
+packages/desktop/scripts/build-sidecar.mjs  # sidecar 装配（W-23 已落地）
+packages/desktop/scripts/emit-bridge-manifest.mjs # IPC 通道 manifest → Swift 枚举 + shim 存根（§4.4.3）
 ```
 
 sidecar 的 JS 面不动仓库布局：`packages/desktop` 继续是双 flavor 的宿主
@@ -220,6 +220,39 @@ dist/web + dist/host-*-package + 捆绑 node/pnpm**，复用 build-control-plane
 的"双路径解析"机制（打包态 import 编译产物、dev/测试走 pnpm 符号链接，
 control-plane-module.ts:5-30 同款注释）——sidecar 与 Electron 打包共享同一
 产物目录族（packages/desktop/dist/{web,control-plane,host-*-package}）。
+
+**装配目录（W-23 定稿，`scripts/build-sidecar.mjs`）**：
+`<out>/{node, sidecar.js, package.json, dist/control-plane/, dist/web, dist/host-*-package}`。
+要点：
+- `sidecar.js` = esbuild 打包的入口（含 shell-core 全家 + sidecar-ctx +
+  node-edges + dsh-runtime）；`@dsh-chamber/control-plane`、`electron` 与
+  `./dist/control-plane/index.js` 为运行期外部；
+- 装配目录必须带 `package.json`（`{type:'module'}` + chamber 版本）——shell-core
+  的模块级 `version` 读取（`new URL('./package.json', import.meta.url)`）与 ESM
+  判定依赖它；
+- **运行期标记**：Swift Supervisor 在装配态 spawn 时注入
+  `DSH_CHAMBER_SIDECAR_COMPILED=1`（`control-plane-module.isPackagedSidecarRuntime`）
+  → control-plane 走相对编译入口；装配目录没有 node_modules 树，裸说明符不可解析；
+- Node 捆绑落位 `<out>/node`（**基名必须是 `node`**，§4.3 A5），SHA-256 校验
+  后才落盘。
+
+**`.app` 装配（W-24 定稿，`macos/scripts/build-swift-app.mjs`）**：
+`<App>.app/Contents/{Info.plist, MacOS/DSHChamberPoc, Resources/{icon.icns,
+DSHChamberPoc_DSHChamberPoc.bundle, sidecar/, dist/web}}`。三条实跑约束：
+- **SwiftPM 资源包必须放 `Contents/Resources`**：放 .app 根会被 codesign 判为
+  「unsealed contents present in the bundle root」；SwiftPM 生成的
+  `Bundle.module` 访问器只查 `Bundle.main.bundleURL`（= .app 根）与构建目录，
+  打包态因此改用 `ChamberResources`（resourceURL → bundleURL → 可执行目录）；
+- **entitlements plist 不能带 XML 注释**（codesign 的 AMFIUnserializeXML 直接
+  报解析失败）；壳侧最小集 = `disable-library-validation`（加载装配目录内
+  独立签名的 node 与运行时安装的未签名原生模块），捆绑 node 另加
+  `allow-jit` / `allow-unsigned-executable-memory`；
+- **control-plane 只能经 `control-plane-module` facade 取**：装配目录没有
+  node_modules 树，任何 runtime 裸说明符 `@dsh-chamber/control-plane` 都会
+  `ERR_MODULE_NOT_FOUND`；facade 在装配态（`DSH_CHAMBER_SIDECAR_COMPILED=1`）
+  加载 `<sidecar>/dist/control-plane/index.js`。
+签名顺序 = 嵌套 node 先、主 app 后；Developer ID 时两者均带 hardened runtime
+（公证前置），ad-hoc 路径不带 runtime。正式发布仍缺 Apple 凭据（外部阻断）。
 
 ### 3.3 启动序列（状态机）
 
@@ -379,7 +412,8 @@ interface HostEdges {
     05 §7.4 为权威）。
   - 防护：Object.defineProperty 非可配置挂载防页面覆盖。
 - Swift 端 `WKScriptMessageHandler` 护栏（只做传输层，语义校验在 sidecar）：
-  1. 主 frame；2. origin === 当前控制面 origin（port 只在 ready 帧后放开）；
+  1. 主 frame；2. **壳文档判定**（origin === 当前控制面 origin **且** pathname == "/"
+     且无 query——与 Electron `isTrustedRendererUrl` 对齐；port 只在 ready 帧后放开）；
   3. 信封结构/尺寸上限（≤4 MiB）、method ∈ manifest 白名单；4. 不响应
     "新窗口/导航"（WKUIDelegate 建窗返回 nil + decidePolicyFor 阻断离开
     origin；外链交 NSWorkspace——含 **mailto:/vscode:// 等非 http(s) scheme
@@ -394,6 +428,22 @@ interface HostEdges {
   代码，不重定向则"业务原样复用"与协议纪律直接冲突（D2）。
 - 信封：{id, method, payload} / {id, ok, result|error} / {event, payload} /
   edge:*（sidecar→Swift 的 HostEdge 请求，Swift 执行后回响应）；id 单调。
+- **保留入站 method（Swift → sidecar，不在 68 通道 manifest 内；单源 =
+  `packages/desktop/node-edges.ts` `HOST_INBOUND`）**：
+  `__host.hostFacts`（同步门事实缓存）、`__host.notifyClicked`（通知点击回灌）、
+  `__host.systemResume`、`__host.mainWindowShown`、
+  `__host.deepLink {url}`（§4.5：Swift `application(_:open:)` 冷/热启动统一入口
+  → core `enqueueDeepLink`）、
+  `__host.rendererLifecycle {event}`（§5 E19 三事件映射：did-start-loading /
+  did-finish-load / crashed / closed → core `onRendererLifecycle` 复位 ready 位
+  + in-flight requeue/drain）、
+  `__host.quitFacts {quitRequested, recoveryAvailable}` → **决策投影**（§5
+  E1/E9/E20：core 依 chamber settings 的 `windowCloseBehavior`/`quitConfirmation`
+  + `LOCAL_RUNNING_STATES × localProcessAlive` 用既有纯函数
+  `shouldHideToTray`/`computeQuitRisk` 合成，返回
+  `{hideOnClose, quitNeedsConfirm, quitReasons}`——判据单源在 core，Swift 只执行
+  隐藏/退出链，绝不复制决策）。Swift 侧拼写单源 = `HostInboundMethod`，
+  与 TS 表锁步由 `HostInboundMethodTests` 断言。
 - 护栏：Swift 只接受自己 spawn 的进程 fd；帧长上限与超时；非协议帧 fail-loud
   （重定向后仍泄漏说明有 console 直写，须修）。
 - 事件推送经 B 桥到 Swift → A 桥 emit，事件名清单 = manifest。
@@ -426,7 +476,8 @@ interface HostEdges {
   返回 click 回执绑定；**click 顺序（D3）** = NSApp.activate + 窗口 orderFront
   （含无窗重建，applicationShouldHandleReopen 同路）→ 回 B 桥
   notification-clicked → core 队列 → 窗口就绪后 push。就绪/重建竞态兜底 =
-  **三事件映射**（§5 E19，B5/D5）：didStartProvisionalNavigation（复位 ready
+  **事件映射**（§5 E19，B5/D5；WKWebView 三个触发点 → 4 个 wire 事件，
+含窗口关闭 `closed`）：didStartProvisionalNavigation（复位 ready
   位 + requeue in-flight）/ didFinish（drain）/ webViewWebContentProcess
   DidTerminate（复位 + requeue + 有界重载）。
 - 深链：**macOS 现状 = open-url 事件 + argv 防御式扫描双路径**（main.ts:
@@ -468,7 +519,7 @@ interface HostEdges {
 - 目录名机制：Electron userData = appData + `app.getName()` = 打包
   productName 'dsh-chamber'（desktop package.json:31-32）→ 实际根
   `~/Library/Application Support/dsh-chamber`（dev identity =
-  @dsh-chamber/desktop，用 --user-data-dir 隔离）。Swift 版默认**同根**，
+  @dsh-chamber/desktop，用 --user-data-dir 隔离）。Swift 版**目标形态**同根，
   sidecar 以 `--user-data-dir` 参数接收，内部零改动。
 - 直拼点全集（P1 参数化收口）：chamber-settings.json（:747）；runtime 基目录
   = userData 本体（:1688，dsh-runtime 树在 <userData>/dsh-runtime/…）；
@@ -478,7 +529,12 @@ interface HostEdges {
 - 旧版 Electron 产物兼容：`*.corrupt` / `*.unbound-*` 保留物（A13）在 Swift
   首启前决定处置（预期：沿现有语义保留禁用，不主动清理）。
 - 验证项 **U1**（实机）：确认 Swift 计算的根与 Electron 打包实根一致
-  （编号避开 §5 E 表，A9）。
+  （编号避开 §5 E 表，A9）。**实施现状（2026-09 审计登记）**：`AppDelegate`
+  的缺省仍是 `POC_USER_DATA ?? ~/Library/Application Support/dsh-chamber-poc-dev`
+  （dev 与装配态同一分支），即**打包态默认并不与 Electron 同根**，跨 flavor
+  互斥锁在默认配置下各锁各的目录；U1 因此仍未闭合。同根缺省与
+  `Bundle.main.resourceURL` 相对解析（sidecar/node/web-dist）一并列入
+  「打包态默认路径」待办（STATUS/todo 已登记）。
 
 ### 6.2 bundle id 与双 flavor 共存
 
@@ -501,13 +557,27 @@ interface HostEdges {
     （O_CREAT|O_NOFOLLOW，0600，原子创建）；fd 常驻进程寿命，进程死亡内核
     自动释放——天然免 stale；
   - 文件内 pid/启动时间只作诊断，不作仲裁；
-  - **Electron 版于 P1 同 PR 落地该锁**（现状 v0.2.2 Electron 无锁；落地前
-    的并发属文档化不防护窗口）；
+  - **Electron 版已落地该锁**（2026-09：`packages/desktop/chamber-lock.ts`，
+    Darwin `O_EXLOCK|O_NONBLOCK`；非 darwin 显式 unsupported——见下方条目）；
   - **防自锁陷阱**：sidecar"复验持锁"若在新 fd 上再 flock 会与 Swift 首锁
     互斥（flock 按 open file description 计）——sidecar 复验 = 读锁文件记录
-    校验父 pid，**绝不二次 flock**；
+    校验父 pid，**绝不二次 flock**。**复验语义（2026-09 实施定稿）**：记录里的
+    pid 是**持锁方**（Swift 壳）的 pid，而 sidecar 是它直接 spawn 的子进程 →
+    正常形态 `record.pid === process.ppid` 属「我方父进程持锁」，放行；只有
+    `record.pid ∉ {self, ppid}` **且**该 pid 仍存活才是「另一 flavor/实例占用」
+    → loud `exit 3`（Swift Supervisor 对 exit 3 走 fatal、不重启）；
+    `record.pid` 已死 = 陈旧记录（flock 随进程死亡由内核释放）→ 放行。
   - 锁文件与秘密文件同纪律（0600、no-follow、原子创建）；新增 .lock 需随
     立项登记进 AGENTS/STATUS 秘密文件纪律清单（随 D1 立项登记）。
+  - **Electron 侧同锁已落地（2026-09，`packages/desktop/chamber-lock.ts`）**：
+    Node 没有 flock API，但 Darwin `open(2)` 的 `O_EXLOCK|O_NONBLOCK` 可经
+    `fs.open` 的数值 flags 使用（实测：同进程第二次 open 得 EAGAIN、close 后
+    可重取）——Electron main 在 whenReady 首步取同一把锁，失败 fail-closed
+    弹窗退出（`dialog.showErrorBox` + `app.exit(1)`），`app.on('quit')` 释放
+    （清理链 settle 之后）。
+    **平台范围（有意收窄）**：`O_EXLOCK` 为 BSD/Darwin 专有，Linux 需 flock(2)
+    （Node 未导出）、Windows 无等价物；Swift flavor 仅 macOS 存在，故非 darwin
+    返回 `unsupported` 并放行（调用方 loud 记录该范围，绝不假装已互斥）。
 - 与既有机制关系：RuntimeOperationFence/RuntimeWriterFence（进程内单飞，
   dsh-runtime/runtime-operation-fence.ts）与跨进程 flock **正交互补**。
 
@@ -647,7 +717,7 @@ E1–E20 按 §5 实现（E15 走 §6.4）；manifest 生成与护栏；Supervis
 - R9 维护负担：Swift 壳新增一门语言/一条 macOS CI；需有人持续负责 Swift 侧。
 - R10 开发期双后端竞态：Electron dev 与 sidecar dev 共享 cp 端口族 → 各自
   退避 + 端口钉死 + 独立 .dev-user-data（详见 companion）。
-- R11 Swift 侧人手单点：护栏规则集中 DSHChamberBridge 单 target + Generated
+- R11 Swift 侧人手单点：护栏规则集中 DSHChamberPoc 单 target + Generated
   产物减少手写面。
 - R12 manifest 解析脆弱性：正则扫字面量会漏新写法 → 复用 mirror 解析函数 +
   通道数守恒断言（68=60+8）。

@@ -8,8 +8,10 @@
 //    Swift 代码：本窗口壳（main/AppDelegate/MainWindowController，W-03）与
 //    W-04 的 A/B 桥文件（BridgeShimInjector/MessageHandler/AnyCodable/
 //    FrameCodec/BridgeClient，其他作者创建）同 target，模块内直接互引共享契约。
-//  - resources .process("Resources")：bridge-shim.poc.js（W-04 作者放入
-//    Sources/DSHChamberPoc/Resources/）经 Bundle.module 读取；此处先声明。
+//  - resources .process("Resources")：bridge-shim.poc.js 随包编译为
+//    DSHChamberPoc_DSHChamberPoc.bundle；运行时由 ChamberResources 定位
+//    （resourceURL → bundleURL → 可执行目录；**不用 Bundle.module**——装配态
+//    .app 与 dev `swift run` 两种布局都要覆盖，见 ChamberResources.swift 头注释）。
 //  - testTarget「DSHChamberPocTests」（Tests/DSHChamberPocTests，测试文件由
 //    主 agent 后续创建）直接依赖 executable target：SwiftPM 允许测试依赖
 //    executable（@testable import DSHChamberPoc，构建期加 -enable-testing，

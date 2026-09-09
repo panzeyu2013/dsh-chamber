@@ -31,11 +31,16 @@
  *   clickRoute.onActivated()（core 的 owns+入队闭包）。dispose 注销映射。
  *
  * 保留入站 host method（由 sidecar-entry 分派到 handleHostInbound）：
- *   __host.notifyClicked  {notificationId}
- *   __host.systemResume    {timestamp}
- *   __host.mainWindowShown {}
- *   __host.hostFacts       {focused?, mainWindowAlive?, webViewLoading?,
- *                           webViewContentAlive?, trayAvailable?, resources?}
+ *   __host.notifyClicked    {notificationId}
+ *   __host.systemResume     {timestamp}
+ *   __host.mainWindowShown  {}
+ *   __host.hostFacts        {focused?, mainWindowAlive?, webViewLoading?,
+ *                            webViewContentAlive?, trayAvailable?, resources?}
+ *   __host.deepLink         {url}      → core enqueueDeepLink（design 25 §4.5：
+ *                            Swift application(_:open:) 冷/热启动统一入口）
+ *   __host.rendererLifecycle {event}   → core onRendererLifecycle（§5 E19 三事件
+ *                            映射：did-start-loading / did-finish-load /
+ *                            crashed / closed）
  *
  * S-E（settings 副作用叶 async 化）：公开面新增 sendEdge 转发（NodeEdges
  * 附加成员，不改 HostEdges 契约）——sidecar-ctx 的 A 组设置副作用叶
@@ -62,13 +67,43 @@ export const HOST_INBOUND = {
   systemResume: '__host.systemResume',
   mainWindowShown: '__host.mainWindowShown',
   hostFacts: '__host.hostFacts',
+  deepLink: '__host.deepLink',
+  rendererLifecycle: '__host.rendererLifecycle',
+  quitFacts: '__host.quitFacts',
 } as const
+
+/** 渲染器生命周期事件（core `RendererLifecycleEvent` 的 wire 子集；Swift 侧
+ *  三事件映射见 design 25 §4.5/§5 E19）。 */
+export const HOST_RENDERER_LIFECYCLE_EVENTS = [
+  'did-start-loading',
+  'did-finish-load',
+  'crashed',
+  'closed',
+] as const
+
+export type HostRendererLifecycleEvent = (typeof HOST_RENDERER_LIFECYCLE_EVENTS)[number]
 
 export interface NodeEdgesDeps {
   /** 发 edge 请求并等 Swift 应答（edgeId 关联由调用方保证唯一）。 */
   sendEdge(method: string, payload: unknown): Promise<unknown>
   /** 发单向 notify（不期待应答）。 */
   sendNotify(event: string, payload: unknown): void
+  /** 深链入站汇（design 25 §4.5：Swift application(_:open:) → core
+   *  enqueueDeepLink 原逻辑）。缺省未注入 → 入站 loud 拒绝（绝不静默丢弃）。 */
+  onDeepLink?: (url: string) => void
+  /** 渲染器生命周期入站汇（design 25 §5 E19 三事件映射 → core
+   *  onRendererLifecycle：ready 位复位 + in-flight requeue/drain）。
+   *  缺省未注入 → 入站 loud 拒绝。 */
+  onRendererLifecycle?: (event: HostRendererLifecycleEvent) => void
+  /** 关窗/退出决策投影（design 25 §5 E1/E9/E20）：输入 = Swift 宿主侧事实
+   *  （退出在途 / 恢复入口可用），输出 = core 依据 chamber settings + 本地实例
+   *  在跑判据算出的决策。决策逻辑单源在 core（shouldHideToTray /
+   *  computeQuitRisk），Swift 不复制。缺省未注入 → 入站 loud 拒绝（宿主拿不到
+   *  决策时必须走保守路径，绝不静默放行退出）。 */
+  projectQuitFacts?: (input: {
+    quitRequested: boolean
+    recoveryAvailable: boolean
+  }) => { hideOnClose: boolean; quitNeedsConfirm: boolean; quitReasons: string[] }
   /** 同步门缓存初始种子（可选；hostFacts 推送会覆盖）。 */
   hostFacts?: {
     focused?: boolean
@@ -99,7 +134,7 @@ function jsonSafe(value: unknown): unknown {
 }
 
 export type NodeEdges = HostEdges & {
-  handleHostInbound(method: string, payload: unknown): { ok: boolean; error?: string }
+  handleHostInbound(method: string, payload: unknown): { ok: boolean; result?: unknown; error?: string }
   /** 公开 edge 转发（S-E：NodeEdges 附加成员，不改 HostEdges 契约）——把 B 桥
    *  edge 请求面暴露给装配方（sidecar-entry → buildHeadlessCtx 的
    *  HeadlessCtxEdges），使 sidecar-ctx 的 A 组设置副作用叶能 await 应答：
@@ -297,8 +332,9 @@ export function createNodeEdges(deps: NodeEdgesDeps): NodeEdges {
     },
   }
 
-  /** sidecar-entry 把 __host.* 入站 method 分派到这里。返回 ok 与否。 */
-  function handleHostInbound(method: string, payload: unknown): { ok: boolean; error?: string } {
+  /** sidecar-entry 把 __host.* 入站 method 分派到这里。返回 ok/result/error
+   *  （result 仅对请求-应答型保留 method 有意义，如 __host.quitFacts）。 */
+  function handleHostInbound(method: string, payload: unknown): { ok: boolean; result?: unknown; error?: string } {
     const p = (payload ?? {}) as Record<string, unknown>
     switch (method) {
       case HOST_INBOUND.notifyClicked: {
@@ -319,6 +355,43 @@ export function createNodeEdges(deps: NodeEdgesDeps): NodeEdges {
       case HOST_INBOUND.mainWindowShown:
         onMainWindowShownCb?.()
         return { ok: true }
+      case HOST_INBOUND.deepLink: {
+        const url = typeof p.url === 'string' ? p.url : ''
+        if (url.length === 0) {
+          return { ok: false, error: 'sidecar-edges:deep-link-missing-url' }
+        }
+        if (deps.onDeepLink === undefined) {
+          // 未注入消费方：loud 拒绝（绝不静默丢弃——深链是用户可见动作）。
+          return { ok: false, error: 'sidecar-edges:deep-link-sink-unavailable' }
+        }
+        deps.onDeepLink(url)
+        return { ok: true }
+      }
+      case HOST_INBOUND.rendererLifecycle: {
+        const event = typeof p.event === 'string' ? p.event : ''
+        if (!(HOST_RENDERER_LIFECYCLE_EVENTS as readonly string[]).includes(event)) {
+          return { ok: false, error: 'sidecar-edges:unknown-renderer-lifecycle:' + event }
+        }
+        if (deps.onRendererLifecycle === undefined) {
+          return { ok: false, error: 'sidecar-edges:renderer-lifecycle-sink-unavailable' }
+        }
+        deps.onRendererLifecycle(event as HostRendererLifecycleEvent)
+        return { ok: true }
+      }
+      case HOST_INBOUND.quitFacts: {
+        const quitRequested = p.quitRequested
+        const recoveryAvailable = p.recoveryAvailable
+        if (typeof quitRequested !== 'boolean' || typeof recoveryAvailable !== 'boolean') {
+          return { ok: false, error: 'sidecar-edges:quit-facts-invalid-input' }
+        }
+        if (deps.projectQuitFacts === undefined) {
+          return { ok: false, error: 'sidecar-edges:quit-facts-sink-unavailable' }
+        }
+        return {
+          ok: true,
+          result: deps.projectQuitFacts({ quitRequested, recoveryAvailable }),
+        }
+      }
       case HOST_INBOUND.hostFacts: {
         if (typeof p.focused === 'boolean') facts.focused = p.focused
         if (typeof p.mainWindowAlive === 'boolean') facts.mainWindowAlive = p.mainWindowAlive
