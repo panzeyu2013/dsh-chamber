@@ -1,6 +1,11 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { shouldReconnectStaleMounted } from '../src/aggregate-refresh.ts'
+import {
+  AGGREGATE_RECONNECT_HTTP_STALE_MS,
+  AGGREGATE_RECONNECT_SSH_STALE_MS,
+  reconnectStalenessMsForTransport,
+  shouldReconnectStaleMounted,
+} from '../src/aggregate-refresh.ts'
 
 // ---- shouldReconnectStaleMounted (S2: watchdog reconnect of stale MOUNTED
 // sources — 对齐 ssh 断链自动恢复; see aggregate-refresh.ts). The predicate
@@ -67,4 +72,30 @@ test('shouldReconnectStaleMounted: a fresh push after a reconnect clears stalene
   // The reconnect healed the push channel: a new snapshot arrived, so the
   // source is fresh even though the last reconnect was recent.
   assert.equal(decide({ lastSnapshotAt: NOW - 1, lastReconnectAt: NOW - 1 }), false)
+})
+
+// ---- reconnectStalenessMsForTransport (2026-09 extension: per-transport
+// watchdog thresholds — http tight heal, ssh last-resort heal, local/unknown
+// skipped). ----
+
+test('reconnect threshold: http keeps the tight heal, ssh gets the long last-resort heal', () => {
+  assert.equal(reconnectStalenessMsForTransport('http'), AGGREGATE_RECONNECT_HTTP_STALE_MS)
+  assert.equal(reconnectStalenessMsForTransport('ssh'), AGGREGATE_RECONNECT_SSH_STALE_MS)
+  assert.equal(AGGREGATE_RECONNECT_HTTP_STALE_MS, 120_000)
+  assert.equal(AGGREGATE_RECONNECT_SSH_STALE_MS, 300_000)
+  // The ssh arm exists only as a last resort behind three independent tunnel
+  // detectors (proxy 30s WS ping / host mux 2s×2 / ssh keepalive ~90s), so its
+  // threshold MUST stay strictly longer than the http one — otherwise idle
+  // healthy ssh sources would pay a baseline replay at the http cadence.
+  assert.ok(AGGREGATE_RECONNECT_SSH_STALE_MS > AGGREGATE_RECONNECT_HTTP_STALE_MS)
+  // Both stay well above the 30s unary pull threshold (the arm is an addition
+  // to the pull, never a replacement).
+  assert.ok(AGGREGATE_RECONNECT_HTTP_STALE_MS > 30_000)
+  assert.ok(AGGREGATE_RECONNECT_SSH_STALE_MS > 30_000)
+})
+
+test('reconnect threshold: local and unknown transports are never touched by the arm', () => {
+  for (const transport of ['local', undefined, null, '', 'tcp', 7, {}]) {
+    assert.equal(reconnectStalenessMsForTransport(transport), null, String(transport))
+  }
 })

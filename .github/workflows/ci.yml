@@ -73,6 +73,11 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Release workflow safety policy
         run: pnpm run test:release-workflow
+      # Upgrade tooling (pin preflight classification + lockfile vendor-record
+      # restore guard): advisory tooling, but its classification drives real
+      # pin-bump decisions, so the pure helpers are pinned here.
+      - name: Upgrade tooling unit tests (pin preflight / lockfile restore guard)
+        run: pnpm run test:upgrade-tools
       - name: Shared runtime core unit tests (packages/dsh-runtime)
         run: pnpm run test:runtime
       - name: Control-plane unit tests

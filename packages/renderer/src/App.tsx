@@ -89,6 +89,9 @@ import {
   shouldRetainPushedAggregate,
   withoutRemovedSourceIds,
   withoutRemovedSourceKeys,
+  reconnectStalenessMsForTransport,
+  AGGREGATE_RECONNECT_HTTP_STALE_MS,
+  AGGREGATE_RECONNECT_SSH_STALE_MS,
 } from './aggregate-refresh.ts'
 import { errorMessage } from './status.ts'
 import type { SshInstanceSpec, SshStatusProjection, TransportKind } from './global.d.ts'
@@ -132,15 +135,14 @@ const AGGREGATE_FALLBACK_POLL_MS = 30_000
  * (S2): the watchdog may mark a healthy-but-quiet producer stale on recency
  * alone, so a failed (or unnecessary) reconnect must not retry every tick. */
 const AGGREGATE_RECONNECT_BACKOFF_MS = 60_000
-/** Staleness threshold for the S2 reconnect arm (deliberately ABOVE the 30s
- * pull threshold): the App cannot distinguish a frozen push channel from a
- * healthy-but-quiet one (producers only push on content changes), and every
- * reconnect replays baselines — so the steady-state cadence for an idle
- * healthy direct-http source is one lightweight connection bounce per
- * AGGREGATE_RECONNECT_STALE_MS (≈2min), the inherent cost of healing a real
- * freeze within that bound (review M2: honest idle cadence, halved vs the
- * original 60s). The unary pull keeps its own 30s cadence untouched. */
-const AGGREGATE_RECONNECT_STALE_MS = 120_000
+/** Staleness thresholds for the S2 reconnect arm live in aggregate-refresh.ts
+ * (per transport: http ≈2min tight heal, ssh ≈5min last-resort heal — see
+ * {@link AGGREGATE_RECONNECT_HTTP_STALE_MS} / {@link AGGREGATE_RECONNECT_SSH_STALE_MS}
+ * and {@link reconnectStalenessMsForTransport}). Both are deliberately ABOVE
+ * the 30s pull threshold: the App cannot distinguish a frozen push channel
+ * from a healthy-but-quiet one (producers only push on content changes), and
+ * every reconnect replays baselines. The unary pull keeps its own 30s cadence
+ * untouched. */
 /** Re-request floor for session-list refresh dispatch (design 24 §20): a
  *  refresh re-runs the OFFICIAL session.list of the mounted ctx; while ghost
  *  rows of purged sessions stay pending, requests are floored to one per
@@ -1391,7 +1393,7 @@ export default function App() {
   // channel. The reconnect is an ADDITION, never a replacement of the pull.
   // Cadence (two distinct regimes, review M2/Low-2): a HEALTHY-but-quiet
   // source rebaselines after each reconnect, whose baseline push refreshes
-  // snapshotAt — the next reconnect fires ~AGGREGATE_RECONNECT_STALE_MS later
+  // snapshotAt — the next reconnect fires one transport threshold later
   // (this depends on the producer's withdraw→re-publish chain resurfacing the
   // baseline; if that chain stays silent the regime degrades to the backoff
   // gate below). A TRULY dead channel gets no push after a reconnect, so once
@@ -1417,13 +1419,18 @@ export default function App() {
     // transport-caused (e.g. a dsh-restart rebaseline gap), so a
     // loopback-host direct-http target (local gateway dev) stays covered; a
     // healthy idle one there merely bounces every ~2min (bounded, dev form).
-    const directHttpSourceIds = new Set(
-      remoteInstances
-        .filter(instance => instance.transport === 'http')
-        .map(instance => sourceIdForInstance(instance)),
+    // Per-source transport decides the threshold (2026-09 extension): http
+    // keeps the 120s tight-heal cadence (no upstream heartbeat), ssh gets the
+    // 5min last-resort cadence (three independent tunnel detectors already
+    // cover transport-level death; this arm only heals an app-level freeze),
+    // and local/unknown sources are skipped entirely.
+    const transportBySourceId = new Map(
+      remoteInstances.map(instance => [sourceIdForInstance(instance), instance.transport]),
     )
     for (const id of ready) {
-      if (id === LOCAL_INSTANCE_ID || !directHttpSourceIds.has(id)) continue
+      if (id === LOCAL_INSTANCE_ID) continue
+      const stalenessMs = reconnectStalenessMsForTransport(transportBySourceId.get(id))
+      if (stalenessMs === null) continue
       // mounted here means "the ctx producer pushed at least one snapshot
       // this generation" (snapshotSources) — the S2 target class is a
       // channel that worked and then went silent; a channel dead from its
@@ -1434,7 +1441,7 @@ export default function App() {
         lastSnapshotAt: snapshotAtRef.current[id],
         lastReconnectAt: lastReconnectAtRef.current[id],
         now,
-        stalenessMs: AGGREGATE_RECONNECT_STALE_MS,
+        stalenessMs,
         reconnectBackoffMs: AGGREGATE_RECONNECT_BACKOFF_MS,
       })) continue
       // Record the attempt synchronously with firing so overlapping

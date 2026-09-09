@@ -125,9 +125,21 @@
      importer 记录**：0.1.5 把 landlock 系列移出 workspace（`native/landlock-run`
      目录消失，workspace 模式改为 `native/system*`），脚本把 4 条 landlock importer
      从 HEAD 补回 → frozen 验证报「锁文件有、链接缺(4)」。处置：手工删除这 4 个
-     importer 块后再 frozen。（后续可给脚本加「成员仍存在于链接集合」守卫。）
+     importer 块后再 frozen。**已修（2026-09）**：脚本按
+     `vendor/harness-packages/@deepseek-ai/<name>` 链接存在性（含断链）跳过并打印
+     清单，不再复活已移除成员；3 例单测钉住
+     （`scripts/dev/restore-lockfile-vendor-records.test.mjs`）。
+- **升级前 pin 预检（新增工具，只读）**：`node scripts/dev/preflight-vendor-pin.mjs
+  <tag> [--offline] [--json] [--fail-on-replay]` —— 在动 pin **之前**回答「哪些 fork
+  文件要人工重放、哪些 vendor 文件是 chamber 深引的 seam 风险、上游包集合增删、
+  新增 client 行、运行时是否已发布 npm」。这是 0.1.5 踩坑（先升 pin 才发现 ui-layout
+  三栏模型重写）的直接产物，**应作为本节流程第 0 步**。纯函数单测见
+  `scripts/dev/preflight-vendor-pin.test.mjs`；两者由根脚本 `pnpm run test:upgrade-tools`
+  + CI 步骤覆盖。
 
 ### 9.2 剩余工作（按序）
+0. **预检（先看清单再动 pin）**：`node scripts/dev/preflight-vendor-pin.mjs
+   dsh-v0.1.5-alpha.1 --offline`（实测输出见 §9.3）。
 1. **layout fork 重放（主体，规模门已触发）**：上游 0.1.5 把三栏模型改为
    sidebar/center/**rightbar** —— `columns.ts` 去 `DETAILS_*`（新增
    `RIGHTBAR_MIN`/`RIGHTBAR_MAX_RATIO`/`RIGHTBAR_DEFAULT_RATIO`，`CENTER_MIN` 640→400）、
@@ -138,8 +150,11 @@
    增值：**sidebarWidth 共享持久化**（view-prefs + 150ms 尾去抖 + 外部采纳）与
    **单一 document theme 投影**；`test/layout-store.test.ts`（382 行）随模型重写。
    实测现状：仅 pin 一升，`typecheck:layout` 即因 `DETAILS_*` 消失而红。
-2. **4 个新 client 行 roster 裁决**：bundle patch 新增 `dsh-client-resources`、
-   `ui-sidebar-right`、`ui-sidebar-files`、`ui-sidebar-textpreview`。
+2. **5 个新 client 行 roster 裁决**（预检补全：原列 4 个，漏了带 `dsh.client`
+   的 api 包 `dsh-api-workspace-files`）：bundle patch 新增 `dsh-client-resources`、
+   `ui-sidebar-right`、`ui-sidebar-files`、`ui-sidebar-textpreview`、
+   `dsh-api-workspace-files`（`dsh.client.inject` = api-gateway +
+   api-session-controller + client-resources）。
    `ui-sidebar-right` 注入 `layout` 并占用新 `rightbar` 槽；files/textpreview 注入
    `sidebarRightTabs` + `remote.workspaceFiles`。需决定 cover（chamber 不加载）或
    load（接受官方右栏），并与 chamber 的 sidebar/layout fork 槽契约对齐；同步
@@ -163,3 +178,12 @@
   等价物可采纳，`start(sinks, config)` 接缝在 0.1.5 的宿主半重构后依然存在）。
 - 新增 7 个包、4 个新 client 行、1 个平台词库；无新增 native 依赖（除
   `msgpackr-extract`，已否认其构建脚本）。
+- **预检实测**（`preflight-vendor-pin.mjs dsh-v0.1.5-alpha.1 --offline`，2026-09）：
+  上游变更 2552 文件 → fork 面 pure 5 / 需人工重放 6（三个 `package.json` 版本行 +
+  `client/web/src/platform.ts`·`seed.ts`·`tsconfig.json`）/ dropped 6；**seam 风险
+  16 个文件，全部落在 `packages/client/ui-layout/*`**（`AppFrame.tsx`/`columns.ts`/
+  `index.ts`/`service.ts`/`stores.ts`/`.module.css` + README 三件 + `package.json`）
+  —— 与 §9.2 第 1 项互为印证：layout fork 是唯一实质阻塞点。包集合 +15 / −4
+  （landlock 系列），新增 client 行 5（`dsh-api-workspace-files`、`client-resources`、
+  `ui-sidebar-{files,right,textpreview}` —— 比 §9.2 第 2 项多一行，roster 裁决需一并
+  覆盖），净 271 → 282 与 §9.2 第 6 项一致。

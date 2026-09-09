@@ -145,10 +145,18 @@ host 插件入口/半、上游 `tests/`、`tsdown.config.ts`、上游 README（a
 - C4 roster（covered/factory 哨兵 + remote 契约 13）—— 本地/CI 均可；
 - C7 种子域锁步、C8 生成物陈旧（advisory）—— 本地跑。
 - C2 `--tags <old> <new>`：tag 间三 fork 面重放报告（advisory），升级前先跑。
+- `scripts/dev/preflight-vendor-pin.mjs <tag>`（只读，§7 第 0 步）：C2 的**超集**——
+  额外报深引 vendor seam 文件、上游包集合增删、新增 client 行、运行时 npm 状态；
+  纯函数单测随 `pnpm run test:upgrade-tools` 在 CI 跑。
 - update-vendor.mjs 完成输出提示运行本脚本；不进 preinstall。
 
-## 7. 每 tag 维护循环（8 步）
+## 7. 每 tag 维护循环（预检 + 8 步）
 
+0. 预检（动 pin **之前**）：`node scripts/dev/preflight-vendor-pin.mjs <tag> --offline`
+   —— 一次给出「fork pure/replay/dropped + 深引 vendor seam 文件 + 上游包增删 +
+   新增 client 行 + 运行时 npm 状态」；`--fail-on-replay` 可当硬门。
+   （工具与 C2 的分工：C2 只报 fork 面，本脚本额外覆盖 seam 与 roster 面；
+   2026-09 加，0.1.5 的 layout 阻塞点即由此显式暴露。）
 1. 登记：STATUS/本表加「追踪 <tag>」行，读 C2 报告；
 2. `node scripts/dev/update-vendor.mjs <tag>`（原子升级 + 锁文件重生成）；
 3. C2 触点报告（`--tags old new`）→ 逐文件裁决：重放 [pure]/[patch-*] 或改登记；

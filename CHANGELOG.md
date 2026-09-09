@@ -35,6 +35,10 @@
   - **桌面主进程瘦身（红线）**：`OpenInApp` 注册表 vscode-only；`OpenInLaunchContext` 移除 `stat`/`openPath`/`showItemInFolder`，finder provider 与 `classifyLocalPath`/`invokeOpenPath`/`normalizeOpenPathError`/`shouldRevealDirectoryInsteadOfOpen` 一并退役。本地 launch 的信任界由 trusted IPC 迁至实例官方路由（实例连接栅栏 + 官方 resolver 白名单/存在性校验），控制面仍零执行面（逐字透传 + browser-auth cookie 注入）；VS Code 深链语义、来源代 proof 与 OS 深链 `dsh-chamber://open-vscode` 入口不变。
   - 红线修订登记：design 16/20/05 + AGENTS 同步（最终设计验收由用户完成）。
   - **未实机验证（[UNVERIFIABLE]）**：官方 host 行随 a2 默认 profile 进入托管实例、远程无 cookie 下 fence 行为、remote cwd 填充、图标缓存/CSP。
+- **升级工具 + 连接恢复收尾（W1/W2/W3，2026-09；源码线/运行时线 pin 仍 0.1.3-alpha.2）** —— 与 0.1.5 升级**版本无关**的三件收尾，全部在当前 pin 上验证：
+  - **升级前 pin 预检（新增 `scripts/dev/preflight-vendor-pin.mjs`，只读）**：对目标 tag 与当前 pin 做 diff，一次给出「三个 fork 副本按 pure/需人工重放/dropped 分类 + chamber 深引的 vendor seam 文件 + 上游包集合增删 + 新增 client 行 + 运行时是否已发布 npm」，支持 `--offline`/`--json`/`--fail-on-replay`（advisory 工具，不改工作树、不动 submodule HEAD）。对 `dsh-v0.1.5-alpha.1` 实测：变更 2552 文件 → pure 5 / 重放 6 / dropped 6、**seam 16（全部落在 `packages/client/ui-layout/*`）**、包 +15 / −4（landlock）、新增 client 行 5。这把 0.1.5 踩过的坑（先升 pin 才发现三栏模型重写 → `typecheck:layout` 立刻红）提前成「动 pin 前先看清单」的流程第 0 步。
+  - **锁文件 vendor 记录修复脚本加移除守卫（修复）**：`restore-lockfile-vendor-records.mjs` 原先无条件从 HEAD 复活被 pnpm 剪掉的 importer 记录；上游在 0.1.5 移除 workspace 成员（landlock 4 条）后，脚本会把已不存在的成员补回，frozen 安装随即以「锁文件有、链接缺」失败。现按 `vendor/harness-packages/@deepseek-ai/<name>` 链接存在性（含断链）跳过并打印清单。新增根脚本 `pnpm run test:upgrade-tools`（两个脚本测试）+ CI 步骤。
+  - **聚合刷新陈旧阈值按传输分级（H3）**：sidebar 聚合的 S2 重连 watchdog 原为单一 120s 且**只覆盖 direct-http 来源**；现按来源传输取阈值——http 保留 120s（浏览器腿有控制面 30s WS ping，上游腿无应用心跳、仅约 10min OS TCP keepalive，需较紧的自愈），**ssh 新增 300s 兜底**（隧道已有三层独立探测器：代理 30s/1 miss WS ping、宿主 mux 2s/2 misses、SSH keepalive 30×3≈90s，该臂只补「应用级冻结」这一层，阈值必须显著长于 http 以免空闲健康隧道每两分钟付一次基线重放），本地/未知来源不武装（`AGGREGATE_RECONNECT_HTTP_STALE_MS`/`AGGREGATE_RECONNECT_SSH_STALE_MS` + `reconnectStalenessMsForTransport`）；unary 30s 拉取节奏不变，watchdog 始终是「拉取的补充」。新增单测 2 例（http/ssh 阈值与 local/未知跳过）。
 
 ## [0.2.4] - 2026-09-09
 

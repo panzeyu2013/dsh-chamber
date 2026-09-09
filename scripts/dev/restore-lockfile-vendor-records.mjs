@@ -14,6 +14,12 @@
  * 提交版 lockfile（git HEAD:pnpm-lock.yaml）保留着完整的 vendor importer
  * 记录，是这些记录的唯一权威来源。本脚本在任意 lockfile 重生成之后执行：
  *   - 把 HEAD 里缺失的 vendor importer 记录补回当前 lockfile（只增不减）；
+ *   - **但跳过当前链接树中已不存在的成员**（2026-09 修复）：上游可以把一个
+ *     workspace 成员整个移除（实测 0.1.5 移除 `native/landlock-run` 的 4 个包），
+ *     此时 HEAD 仍带着它的 importer 记录，无条件补回会让 `pnpm install
+ *     --frozen-lockfile` 的 preinstall 断言报「锁文件有、链接缺」。判定依据 =
+ *     当前 `vendor/harness-packages/@deepseek-ai/<name>` 链接是否存在（断链视为
+ *     不存在）；跳过项会 loud 打印，便于升级时确认是预期移除；
  *   - 对 packages:/snapshots: 做并集恢复——真实裁剪会连同 vendor 图的全部
  *     传递依赖条目一起清掉（实测 347+ 条），HEAD 中缺失的条目全部补回；
  *   - 新增块按 pnpm 的归一化键排序落位，diff 最小。
@@ -57,6 +63,22 @@ function readHeadLockfile() {
 /** 行首键归一化：先剥行内值（`:` 及之后，含 `: {}` 单行块）再剥首尾单引号（仅用于键比较，不用于序列化）。 */
 function normalizeKey(keyLine) {
   return keyLine.trim().replace(/:.*$/, '').replace(/^'|'$/g, '')
+}
+
+const VENDOR_LINK_DIR = path.join(root, 'vendor', 'harness-packages', '@deepseek-ai')
+
+/**
+ * 该 vendor 成员在当前工作区链接树中是否存在（跟随符号链接：断链 → false）。
+ * 用于区分「pnpm 裁剪了记录」（要补回）与「上游移除了成员」（不能补回）。
+ * 测试可用 RESTORE_VENDOR_LINK_DIR 覆盖链接树位置。
+ */
+function vendorMemberExists(name) {
+  const dir = process.env.RESTORE_VENDOR_LINK_DIR ?? VENDOR_LINK_DIR
+  try {
+    return existsSync(path.join(dir, name))
+  } catch {
+    return false
+  }
 }
 
 /**
@@ -143,17 +165,25 @@ function merge(currentText, headText) {
   const headSections = new Map(head.sections.map((s) => [s.name, s]))
 
   let addedImporters = 0
+  const skippedRemovedMembers = []
   const curImporters = curSections.get('importers')
   const headImporters = headSections.get('importers')
   if (curImporters && headImporters) {
     const keys = new Set(curImporters.blocks.map((b) => normalizeKey(b.key)))
     for (const block of headImporters.blocks) {
       const key = normalizeKey(block.key)
-      if (key.startsWith(VENDOR_IMPORTER_PREFIX) && !keys.has(key)) {
-        curImporters.blocks.push({ key: block.key, lines: [...block.lines] })
+      if (!key.startsWith(VENDOR_IMPORTER_PREFIX) || keys.has(key)) continue
+      const member = key.slice(VENDOR_IMPORTER_PREFIX.length)
+      if (!vendorMemberExists(member)) {
+        // 上游已把该 workspace 成员整个移除：HEAD 的记录是历史残留，补回会让
+        // frozen 验证的链接/记录一致性断言失败。
+        skippedRemovedMembers.push(member)
         keys.add(key)
-        addedImporters++
+        continue
       }
+      curImporters.blocks.push({ key: block.key, lines: [...block.lines] })
+      keys.add(key)
+      addedImporters++
     }
   }
 
@@ -187,7 +217,13 @@ function merge(currentText, headText) {
     }
   }
 
-  return { parsed: cur, addedImporters, addedPackages: added.packages, addedSnapshots: added.snapshots }
+  return {
+    parsed: cur,
+    addedImporters,
+    addedPackages: added.packages,
+    addedSnapshots: added.snapshots,
+    skippedRemovedMembers,
+  }
 }
 
 if (!existsSync(lockfilePath)) {
@@ -197,7 +233,14 @@ if (!existsSync(lockfilePath)) {
 const currentText = readFileSync(lockfilePath, 'utf8')
 const headText = readHeadLockfile()
 
-const { parsed, addedImporters, addedPackages, addedSnapshots } = merge(currentText, headText)
+const { parsed, addedImporters, addedPackages, addedSnapshots, skippedRemovedMembers } = merge(currentText, headText)
+
+if (skippedRemovedMembers.length > 0) {
+  console.log(
+    `[restore-lockfile] 跳过 ${skippedRemovedMembers.length} 条已从上游 workspace 移除的成员记录（当前链接树中不存在）：`
+      + `${skippedRemovedMembers.slice(0, 6).join(', ')}${skippedRemovedMembers.length > 6 ? ' …' : ''}`,
+  )
+}
 
 if (addedImporters === 0 && addedPackages === 0 && addedSnapshots === 0) {
   console.log('[restore-lockfile] vendor importer 记录完整，无需修复。')

@@ -81,6 +81,48 @@ export function shouldRebaselineFallbackView(opts: {
 }
 
 /**
+ * Watchdog reconnect threshold per source transport (S2 arm; 2026-09 extension).
+ *
+ * The staleness watchdog cannot distinguish a FROZEN push channel from a
+ * healthy-but-quiet one (mounted producers only push on content changes), so
+ * every reconnect costs one baseline replay. The threshold is therefore chosen
+ * per transport by how much INDEPENDENT liveness coverage the transport
+ * already has:
+ *
+ * - `http` (direct remote host, no tunnel): the browser leg has the control
+ *   plane's 30s WS ping, but the upstream leg has no application heartbeat and
+ *   only ~10min OS TCP keepalive, so an app-level freeze can stay invisible
+ *   for minutes. 120s is the tightest cadence that still lets a healthy idle
+ *   source bounce at most once per two minutes.
+ * - `ssh` (tunnel): the tunnel already has three independent detectors — the
+ *   proxy's 30s browser-leg WS ping, the host mux's 2s/2-miss heartbeat, and
+ *   the ssh client's `ServerAliveInterval=30 × CountMax=3` (~90s) — so this
+ *   arm only adds a *last-resort* app-level freeze heal. A longer threshold
+ *   (5min) keeps idle-healthy ssh sources from paying a baseline replay every
+ *   two minutes while still healing a channel that survived every heartbeat
+ *   but stopped pushing.
+ * - `local` and unknown transports get `null`: the local aggregate is served
+ *   authoritatively (no push channel to freeze) and unknown transports are
+ *   already fail-closed elsewhere.
+ */
+export const AGGREGATE_RECONNECT_HTTP_STALE_MS = 120_000
+/** Last-resort app-level freeze heal for tunnel sources (see above). */
+export const AGGREGATE_RECONNECT_SSH_STALE_MS = 300_000
+
+/**
+ * The S2 reconnect threshold for one source's transport, or null when this
+ * arm must not touch it (local / unknown). Callers pass the authoritative
+ * per-instance transport from the roster projection.
+ * @param transport - `'http' | 'ssh' | 'local' | …` (untrusted shape).
+ * @returns staleness threshold in ms, or null to skip the source.
+ */
+export function reconnectStalenessMsForTransport(transport: unknown): number | null {
+  if (transport === 'http') return AGGREGATE_RECONNECT_HTTP_STALE_MS
+  if (transport === 'ssh') return AGGREGATE_RECONNECT_SSH_STALE_MS
+  return null
+}
+
+/**
  * Commit one unary aggregate pull over the current per-source aggregate.
  *
  * The unary fallback cannot express workspace identity or the archive set

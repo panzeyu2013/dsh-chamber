@@ -86,7 +86,7 @@ Read the matching design and progress documents before changing a module:
 - Desktop preload: `pnpm --filter @dsh-chamber/desktop run build:preload` must succeed (esbuild over the sandboxed CommonJS preload boundary; root `typecheck` is not a substitute).
 - Packaging: `pnpm run dist:desktop:mac`.
 - Gateway packaging: `pnpm run build:gateway` (= `build:dsh-runtime` + the gateway build; the pack step's `prepack` rebuilds anyway), then `pnpm --filter @dsh-chamber/gateway pack`; install the tarball into a clean temporary prefix and require `gateway --help` to succeed.
-- Gateway type check: `pnpm run typecheck:gateway`. CLI shell: `pnpm run test:cli`. Release workflow: `pnpm run test:release-workflow`.
+- Gateway type check: `pnpm run typecheck:gateway`. CLI shell: `pnpm run test:cli`. Release workflow: `pnpm run test:release-workflow`. Upgrade tooling (pin preflight + lockfile vendor-record restore guard): `pnpm run test:upgrade-tools`.
 - i18n: `pnpm run verify:i18n` must not report DRIFTED pairs.
 - Lockfile: after any `pnpm-lock.yaml` regeneration, `pnpm install --frozen-lockfile` must pass. pnpm 11 prunes the `vendor/harness-packages/@deepseek-ai/*` importer records (symlinked workspace packages) when writing the lockfile from scratch, and its own frozen check then fails — the committed lockfile keeps those records (regenerate with the vendor tree present and verify frozen; do not commit a pruned lockfile).
 - Do not assume the absence of a JS type-check means no validation is needed; run focused tests, syntax checks, builds, or runtime validation for the touched surface.
