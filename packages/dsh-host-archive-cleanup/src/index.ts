@@ -10,8 +10,11 @@
  * amendment for per-selection deletion): the domain intersects the filter
  * with the authoritative archived set at run start, so the filter can never
  * name a non-archived session (fail-closed invariant, enforced in core). The
- * domain never reads session content and never touches non-archived sessions
- * (design 24 §2 boundaries).
+ * domain never RETURNS session content and never touches non-archived
+ * sessions; its ONLY content read is the registry-global orphan sweep's
+ * fail-closed existence probe (`sessionPersistence.inspect`), consumed solely
+ * as a boolean membership gate and never projected, logged or persisted —
+ * the owner-approved exception recorded in design 24 §2 boundary 1.
  *
  * Fixed wire namespace: `archiveCleanup/{preview,purge,probe}` — preview and
  * probe are zero-arg; purge takes an OPTIONAL `sessionIds` JSON parameter
