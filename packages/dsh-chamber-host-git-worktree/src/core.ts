@@ -56,11 +56,30 @@ export interface AgentFact {
   readonly sessionId: string
   readonly status: 'idle' | 'running'
   readonly cwd?: string
+  /** The recorded parent session (`session.header.parentSession`). Loaded for
+   *  EVERY agent (any status), because the archived-aware running guard walks
+   *  the chain from a running descendant up to an archived ancestor (design 08
+   *  §6 amendment, 2026-09). The edge MEANS one of two things and only
+   *  `origin` tells them apart — see below. */
+  readonly parentSessionId?: string
+  /** Coarse durable child origin (`session.header.origin`). `'subagent'` marks
+   *  a DELEGATION child (`packages/subagent/subagent` sets it); ABSENT means
+   *  the `parentSessionId` edge is FORK lineage (upstream `session/fork` and
+   *  `SessionStore.fork` set `parentSession` with NO origin). Only
+   *  subagent-origin edges are lineage for the archived-aware running guard —
+   *  a fork edge TERMINATES the walk, because a fork is an independent session
+   *  whose run must never be treated as inert (design 08 §6 amendment). */
+  readonly origin?: 'subagent'
 }
 
 export interface WorktreeStateSource {
   listWorkspaces(): MaybePromise<readonly WorkspaceFact[]>
   listAgents(): MaybePromise<readonly AgentFact[]>
+  /** The authoritative archived-session set (`workspaceRegistry.
+   *  archivedSessionIds`). A missing/invalid surface must THROW — never read
+   *  as an empty set, which would silently turn every archived session back
+   *  into a blocking one. */
+  listArchivedSessionIds(): MaybePromise<readonly string[]>
 }
 
 export interface GitCommandRequest {
@@ -278,7 +297,12 @@ export interface SnapshotWorktree {
   readonly attention: readonly GitAttentionReason[]
   readonly workspaceId: string | null
   readonly sessionIds: readonly string[]
+  /** ALL running associated sessions (display fact). */
   readonly runningSessionIds: readonly string[]
+  /** The running sessions that actually BLOCK a removal — runningSessionIds
+   *  minus the INERT ones (archived, or under an archived ancestor). An old
+   *  client that only knows runningSessionIds stays conservative. */
+  readonly blockingRunningSessionIds: readonly string[]
 }
 
 export interface SnapshotRepository {
@@ -802,8 +826,29 @@ export function createLocalGitRunner(spawnGit: GitSpawner = spawn as unknown as 
 
 interface SourceSnapshot {
   readonly workspaces: readonly WorkspaceFact[]
+  /** ALL running session ids (display fact; see blockingRunningIds). */
   readonly runningSessionIds: ReadonlySet<string>
   readonly runningAgents: readonly AgentFact[]
+  /** The authoritative archived set (workspaceRegistry). */
+  readonly archivedSessionIds: ReadonlySet<string>
+  /** child → parent edges from every loaded agent's session header (fork
+   *  lineage included — the ORIGIN set below decides which edges are walked). */
+  readonly parentBySession: ReadonlyMap<string, string>
+  /** Sessions whose header carries `origin: 'subagent'` (delegation children).
+   *  A recorded parent edge of any OTHER session is fork lineage and is never
+   *  walked (design 08 §6 amendment). */
+  readonly subagentOriginSessions: ReadonlySet<string>
+  /** Rows whose `origin` is present but neither absent nor `'subagent'` (a
+   *  pinned-vendor drift). Handled PER ROW — such a session is NOT
+   *  subagent-origin, so its edge terminates and it keeps blocking
+   *  (fail-closed) — while the drift is reported as a snapshot diagnostic so
+   *  it is never silent and never darkens the whole domain (AGENTS: one failed
+   *  entity must not erase or block unrelated complete entities). */
+  readonly originDrift: readonly { readonly sessionId: string; readonly value: string }[]
+  /** Running sessions that actually BLOCK a worktree removal: the non-inert
+   *  ones (an archived session, or a SUBAGENT-origin descendant of an archived
+   *  ancestor, is inert — design 08 §6 amendment 2026-09). */
+  readonly blockingRunningIds: ReadonlySet<string>
 }
 
 interface SnapshotRunningLocation {
@@ -1163,6 +1208,17 @@ export class GitWorktreeCore {
 
     const errors: SnapshotError[] = []
     let sourceError: SnapshotResult['sourceError']
+    // Loud per-row diagnostic for a drifted agent `origin` (2026-09 robustness
+    // fix): the row is handled conservatively (not subagent-origin ⇒ it keeps
+    // blocking), but the drift must never be silent — the vendor mismatch has
+    // to be visible so it can be fixed.
+    for (const drift of state.originDrift) {
+      errors.push({
+        code: 'agent-origin-unknown',
+        operation: 'associate',
+        message: `session '${drift.sessionId}' has an unrecognized origin '${drift.value}'; treating it as a fork edge (its run keeps blocking)`,
+      })
+    }
     // Registry-change invalidation: any workspace id/path change clears the
     // discovery caches so new/adopted workspaces are always discovered.
     const signature = state.workspaces.map(workspace => `${workspace.workspaceId}:${workspace.path}`).sort().join('|')
@@ -1464,6 +1520,11 @@ export class GitWorktreeCore {
           for (const id of this.runningAtSnapshotPath(path, runningLocations)) {
             if (!runningSessionIds.includes(id)) runningSessionIds.push(id)
           }
+          // The BLOCKING subset (design 08 §6 amendment 2026-09): the running
+          // sessions that actually gate removal. An old client that reads only
+          // runningSessionIds stays conservative (blocks on any running
+          // session); a new client uses this field.
+          const blockingRunningSessionIds = runningSessionIds.filter(id => state.blockingRunningIds.has(id))
           worktrees.push({
             worktreeId: opaqueId('worktree', commonDir, path),
             path,
@@ -1481,6 +1542,7 @@ export class GitWorktreeCore {
             workspaceId: workspace?.workspaceId ?? null,
             sessionIds,
             runningSessionIds,
+            blockingRunningSessionIds,
           })
         }
 
@@ -1828,7 +1890,7 @@ export class GitWorktreeCore {
       || !sameMembership(workspace.sessionIds, intent.sessionIds)) {
       fail('operation-conflict', 'workspace receipt changed after Git-first removal')
     }
-    this.assertNoRunningSessions(workspace, state.runningSessionIds)
+    this.assertNoRunningSessions(workspace, state)
     await this.assertNoRunningAtPath(intent.path, state)
   }
 
@@ -2173,7 +2235,7 @@ export class GitWorktreeCore {
       let workspace = this.workspace(state, registeredWorkspaceId)
       const workspacePath = await this.existingPath(workspace.path)
       await this.assertNoOtherWorkspaceWithin(state, workspacePath, registeredWorkspaceId)
-      this.assertNoRunningSessions(workspace, state.runningSessionIds)
+      this.assertNoRunningSessions(workspace, state)
       await this.assertNoRunningAtPath(workspacePath, state)
 
       const topology = await this.topology(workspace.path)
@@ -2201,7 +2263,7 @@ export class GitWorktreeCore {
         fail('expected-mismatch', 'workspace path changed during removal')
       }
       await this.assertNoOtherWorkspaceWithin(state, workspacePath, registeredWorkspaceId)
-      this.assertNoRunningSessions(workspace, state.runningSessionIds)
+      this.assertNoRunningSessions(workspace, state)
       await this.assertNoRunningAtPath(workspacePath, state)
       const sessionIds = [...workspace.sessionIds]
 
@@ -2426,7 +2488,7 @@ export class GitWorktreeCore {
     const workspacePath = await this.existingPath(workspace.path)
     if (workspacePath !== intent.path) fail('operation-conflict', 'workspace path changed during removal recovery')
     await this.assertNoOtherWorkspaceWithin(state, workspacePath, input.workspaceId)
-    this.assertNoRunningSessions(workspace, state.runningSessionIds)
+    this.assertNoRunningSessions(workspace, state)
     await this.assertNoRunningAtPath(workspacePath, state)
     const refreshed: RemoveIntent = {
       ...intent,
@@ -2705,16 +2767,18 @@ export class GitWorktreeCore {
   private async readSource(): Promise<SourceSnapshot> {
     let rawWorkspaces: readonly WorkspaceFact[]
     let rawAgents: readonly AgentFact[]
+    let rawArchived: readonly string[]
     try {
-      [rawWorkspaces, rawAgents] = await Promise.all([
+      [rawWorkspaces, rawAgents, rawArchived] = await Promise.all([
         this.source.listWorkspaces(),
         this.source.listAgents(),
+        this.source.listArchivedSessionIds(),
       ])
     } catch (error) {
       if (error instanceof GitWorktreeError) throw error
       fail('state-source-unavailable', `host state source is unavailable: ${safeErrorMessage(error)}`)
     }
-    if (!Array.isArray(rawWorkspaces) || !Array.isArray(rawAgents)) {
+    if (!Array.isArray(rawWorkspaces) || !Array.isArray(rawAgents) || !Array.isArray(rawArchived)) {
       fail('state-source-invalid', 'host state source returned a non-array')
     }
     if (rawWorkspaces.length > MAX_WORKSPACES) {
@@ -2753,6 +2817,9 @@ export class GitWorktreeCore {
     })
     const runningSessionIds = new Set<string>()
     const runningAgents: AgentFact[] = []
+    const parentBySession = new Map<string, string>()
+    const subagentOriginSessions = new Set<string>()
+    const originDrift: { sessionId: string; value: string }[] = []
     for (let index = 0; index < rawAgents.length; index += 1) {
       const raw = rawAgents[index]
       assertRecord(raw, `agents[${index}]`)
@@ -2763,12 +2830,63 @@ export class GitWorktreeCore {
       const cwd = raw.cwd === undefined
         ? undefined
         : absoluteExpectedPath(raw.cwd, `agents[${index}].cwd`)
+      const parentSessionId = raw.parentSessionId === undefined
+        ? undefined
+        : requiredString(raw.parentSessionId, `agents[${index}].parentSessionId`, 256)
+      // Origin is handled PER ROW (2026-09 robustness fix): upstream declares
+      // exactly `'subagent'` or absent, and ONLY `'subagent'` enables
+      // inertness. Any other present value is a pinned-vendor drift — the row
+      // is treated as NOT subagent-origin (its edge terminates, so the session
+      // keeps blocking: fail-closed), and the drift is recorded for a loud
+      // snapshot diagnostic. Refusing the WHOLE source read would darken the
+      // entire git-worktree domain (no snapshot, no removal) for one drifted
+      // row, which AGENTS forbids ("one failed entity must not erase or block
+      // unrelated complete entities").
+      if (raw.origin !== undefined && raw.origin !== 'subagent') {
+        originDrift.push({
+          sessionId,
+          value: typeof raw.origin === 'string' ? raw.origin.slice(0, 64) : `(${typeof raw.origin})`,
+        })
+      }
+      if (raw.origin === 'subagent') subagentOriginSessions.add(sessionId)
+      // The chain link is recorded for EVERY loaded agent (idle included): the
+      // archived-aware guard may need to walk through an idle ancestor.
+      if (parentSessionId !== undefined && parentSessionId !== sessionId) {
+        parentBySession.set(sessionId, parentSessionId)
+      }
       if (raw.status === 'running') {
         runningSessionIds.add(sessionId)
         runningAgents.push({ sessionId, status: 'running', ...(cwd === undefined ? {} : { cwd }) })
       }
     }
-    return { workspaces, runningSessionIds, runningAgents }
+    const archivedSessionIds = new Set<string>()
+    for (let index = 0; index < rawArchived.length; index += 1) {
+      // Explicit element shape guard (state-source-invalid, mirroring the
+      // workspaces[].sessionIds leg): the archived set is the ONLY fact that
+      // can make a running session inert, so a drifted element must fail the
+      // read loudly instead of being coerced or skipped — "unreadable" must
+      // never degrade to "nothing archived".
+      const rawId = rawArchived[index]
+      if (typeof rawId !== 'string' || rawId.length === 0 || rawId.length > 256) {
+        fail('state-source-invalid', `archivedSessionIds[${index}] is not a bounded non-empty string`)
+      }
+      archivedSessionIds.add(rawId)
+    }
+    return {
+      workspaces,
+      runningSessionIds,
+      runningAgents,
+      archivedSessionIds,
+      parentBySession,
+      subagentOriginSessions,
+      originDrift,
+      blockingRunningIds: this.blockingRunningIds(
+        runningSessionIds,
+        archivedSessionIds,
+        parentBySession,
+        subagentOriginSessions,
+      ),
+    }
   }
 
   private workspace(state: SourceSnapshot, id: string): WorkspaceFact {
@@ -2777,11 +2895,87 @@ export class GitWorktreeCore {
     return workspace
   }
 
-  private assertNoRunningSessions(workspace: WorkspaceFact, running: ReadonlySet<string>): void {
-    const blocked = workspace.sessionIds.filter(id => running.has(id))
+  /** Membership leg of the RUNNING guard: only NON-INERT running sessions
+   *  block (an archived member, or a SUBAGENT-origin descendant of an archived
+   *  ancestor, is inert — see isInertRunningSession). */
+  private assertNoRunningSessions(workspace: WorkspaceFact, state: SourceSnapshot): void {
+    const blocked = workspace.sessionIds.filter(id => state.blockingRunningIds.has(id))
     if (blocked.length > 0) {
       fail('running-agent', `worktree has running associated session(s): ${blocked.join(', ')}`)
     }
+  }
+
+  /**
+   * TRUE when a running session is INERT for the running guards (design 08 §6
+   * amendment, 2026-09 user decision): the session itself is ARCHIVED, or a
+   * SUBAGENT-origin ancestor in its lineage is. An archived session is done —
+   * its run must not block a worktree removal, and the removal never touches
+   * it (stopping a run and purging content is the archive manager's job,
+   * design 24 §22.4). The chain is walked over the loaded agent rows (any
+   * status), so a running subagent under an archived root is inert too.
+   *
+   * LINEAGE IS SUBAGENT-ORIGIN EDGES ONLY: `session.header.parentSession` is
+   * recorded by BOTH delegation children (`origin: 'subagent'`) and forks
+   * (upstream `session/fork` / `SessionStore.fork` set `parentSession` with NO
+   * `origin`). A fork is an independent session — archiving the session it was
+   * forked from says nothing about the fork's own run, and the purge tree
+   * (design 24) never contains a fork descendant. So a fork edge (a node
+   * without `origin: 'subagent'`) TERMINATES the walk: it proves no
+   * subagent-ancestor inertness and the session blocks. This mirrors
+   * `dsh-host-archive-cleanup`'s `indexChildren`, which follows only
+   * `origin === 'subagent'`.
+   *
+   * FAIL CLOSED: a recorded parent that is neither loaded nor archived leaves
+   * the chain unresolvable, and an unresolvable chain is NEVER inert — the
+   * session blocks exactly as before.
+   *
+   * CYCLE RULE (parent decision, 2026-09): the archived test runs BEFORE the
+   * cycle guard, so a cycle that CONTAINS an archived member is inert exactly
+   * like any other archived ancestor (the walk reaches that member first),
+   * while a cycle with NO archived member is never inert. The order is
+   * deliberate: an archived member is positive proof that the run is done,
+   * while a cycle is only evidence that the recorded lineage is malformed —
+   * malformed evidence must never excuse a live run (fail closed).
+   */
+  private isInertRunningSession(
+    sessionId: string,
+    archived: ReadonlySet<string>,
+    parents: ReadonlyMap<string, string>,
+    subagentOrigins: ReadonlySet<string>,
+  ): boolean {
+    const seen = new Set<string>()
+    let current: string | undefined = sessionId
+    while (current !== undefined) {
+      // Archived first (see CYCLE RULE): positive proof beats cycle evidence.
+      if (archived.has(current)) return true
+      // A malformed cycle proves nothing: fail closed.
+      if (seen.has(current)) return false
+      seen.add(current)
+      // Fork lineage (or a top-level row) ends the walk: only a
+      // subagent-origin edge is an inertness-carrying lineage step.
+      if (!subagentOrigins.has(current)) return false
+      const parent: string | undefined = parents.get(current)
+      // Subagent origin without a recorded parent cannot be resolved to an
+      // ancestor: fail closed (never guess inertness).
+      if (parent === undefined) return false
+      // A recorded parent we cannot resolve is an unknown chain → fail closed
+      // (an archived-but-unloaded parent is still authoritative).
+      if (!parents.has(parent) && !archived.has(parent)) return false
+      current = parent
+    }
+    return false
+  }
+
+  /** The running sessions that actually BLOCK a removal (non-inert). */
+  private blockingRunningIds(
+    running: ReadonlySet<string>,
+    archived: ReadonlySet<string>,
+    parents: ReadonlyMap<string, string>,
+    subagentOrigins: ReadonlySet<string>,
+  ): Set<string> {
+    return new Set([...running].filter(
+      sessionId => !this.isInertRunningSession(sessionId, archived, parents, subagentOrigins),
+    ))
   }
 
   /** Canonicalize each distinct live cwd at most once for the whole snapshot. */
@@ -2841,6 +3035,8 @@ export class GitWorktreeCore {
     const matches = new Set<string>()
     for (const agent of state.runningAgents) {
       if (agent.cwd === undefined) continue
+      // Only non-inert running sessions can block (archived ones are inert).
+      if (!state.blockingRunningIds.has(agent.sessionId)) continue
       if (this.containsPath(target, agent.cwd)) {
         matches.add(agent.sessionId)
         continue

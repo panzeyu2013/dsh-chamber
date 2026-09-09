@@ -6,6 +6,7 @@ import { gitCoordinator, removeWorktree, WorktreeDirtyError } from '../shared/co
 import { GitSagaError } from '../shared/saga.ts'
 import { GitWorktreeRpcError } from '../shared/git-api.ts'
 import { collectSessionClosure } from '../shared/git-facts.ts'
+import { removeFailureCode, removeFailureCopyKey, removeRunningNotes } from '../shared/remove-notes.ts'
 import type { WorkspaceGitInjected } from './injected.ts'
 import css from './SidebarGit.module.css'
 
@@ -19,6 +20,17 @@ export interface RemoveViewTarget {
    *  dirty worktree requires the user to explicitly authorize discarding
    *  those files before removal (design 08 §6 amendment 2026-08). */
   dirty: boolean
+  /** Sessions the snapshot reports RUNNING under this worktree (ALL of them —
+   *  display fact). Running sessions are NEVER touched by a removal (2026-09
+   *  user decision, design 08 §6 amendment): nothing is stopped, cancelled or
+   *  deleted. Whether they BLOCK is the host's archived-aware fact
+   *  (`blockingRunningSessionIds`, see RemoveWorktreeDialog's note logic);
+   *  these ids drive the informational note. */
+  runningSessionIds: string[]
+  /** The running sessions that actually block the removal (non-inert: not
+   *  archived and not under an archived ancestor). ABSENT on an older host →
+   *  `runningSessionIds` is the conservative fallback. */
+  blockingRunningSessionIds?: string[]
 }
 
 interface RemoveSessionFacts {
@@ -27,7 +39,6 @@ interface RemoveSessionFacts {
   /** Direct sessions (id + title, up to the render cap); the rest are counted. */
   directTitles: Array<{ id: string; title: string }>
 }
-
 /** The host refusal `worktree-submodules` is a DETERMINISTIC pre-mutation
  *  rejection (the target still exists; nothing was removed — the saga never
  *  mints a recovery for it). The dialog force-shows the submodule discard
@@ -44,12 +55,17 @@ export interface RemoveWorktreeDialogProps {
   /** The source whose instance runs the removal saga. */
   sourceId: string
   target: RemoveViewTarget | null
+  /** The source's per-source `runtime` channel is present (the current session
+   *  is KNOWN). Absent → the fail-closed runtime-unknown guard applies (see
+   *  `runtimeUnknownBlock`); the caller derives it from the SAME
+   *  chamberBridge read the row uses. */
+  runtimeKnown: boolean
   t: WorkspaceGitInjected['t']
 }
 
 /** One source-scoped remove dialog; session-closure facts are fetched on open. */
 export function RemoveWorktreeDialog({
-  open, onClose, sourceId, target, t,
+  open, onClose, sourceId, target, runtimeKnown, t,
 }: RemoveWorktreeDialogProps): React.ReactNode {
   const source = gitCoordinator.getSource(sourceId)
   const [sessionFacts, setSessionFacts] = useState<RemoveSessionFacts | null>(null)
@@ -79,10 +95,31 @@ export function RemoveWorktreeDialog({
   const [freshDirty, setFreshDirty] = useState(false)
   /** A dirty worktree needs the discard checkbox before the remove is enabled. */
   const needsDiscardConfirmation = target?.dirty === true || freshDirty
+  /** Informational only (2026-09 user decision): running sessions are never
+   *  stopped or deleted by a removal, so the note distinguishes the ARCHIVED
+   *  ones (inert — they do not block; their stop/purge belongs to the archive
+   *  manager) from the NON-ARCHIVED ones (these still block, exactly as
+   *  before). Neither gates the confirm. Derived by the pure, tested
+   *  `removeRunningNotes` (set difference — never length subtraction), and on
+   *  an OLD host (no archived-aware field) the copy stays NEUTRAL: claiming
+   *  archivedness there would be a fabricated fact. */
+  const runningNotes = removeRunningNotes({
+    runningSessionIds: target?.runningSessionIds ?? [],
+    ...(target?.blockingRunningSessionIds === undefined
+      ? {}
+      : { blockingRunningSessionIds: target.blockingRunningSessionIds }),
+  })
+  /** Fail-closed pre-hint (review G1-5): while the per-source runtime channel
+   *  is absent the current session is UNKNOWN, so a worktree accounting
+   *  sessions must not be removable — the confirm is disabled up front with
+   *  the explanation, mirroring the row's runtime-unknown hard block, instead
+   *  of only refusing after the user confirms. */
+  const runtimeUnknownBlock = !runtimeKnown && target !== null && target.sessionIds.length > 0
   const confirmDisabled = actionLocked || target === null || branchDeleteFailed
     // Unknown session impact must block a destructive delete — the
     // user might unknowingly drop unarchived sessions (review P2-6).
     || sessionFactsError !== null
+    || runtimeUnknownBlock
     || (needsDiscardConfirmation && !discardChanges)
     || (submoduleBlock && !discardSubmodules)
 
@@ -184,7 +221,18 @@ export function RemoveWorktreeDialog({
         setSubmoduleBlock(true)
         setDiscardSubmodules(false)
       } else {
-        setRemoveError(error instanceof Error ? error.message : String(error))
+        // Host refusals a user can hit from this dialog get LOCALIZED copy
+        // (review G1-4: `running-agent` used to surface as the raw English
+        // host string). The fresh-preflight `worktree-dirty` refusal also
+        // force-shows the discard checkbox, exactly like WorktreeDirtyError —
+        // the user can authorize and retry without closing. Unmapped codes
+        // keep the host's own message (honest, if English).
+        const code = removeFailureCode(error)
+        if (code === 'worktree-dirty') setFreshDirty(true)
+        const key = removeFailureCopyKey(code)
+        setRemoveError(key === undefined
+          ? (error instanceof Error ? error.message : String(error))
+          : t(key))
       }
     }
   }
@@ -268,6 +316,26 @@ export function RemoveWorktreeDialog({
                 />
                 <span>{t('submoduleDiscardLabel')}</span>
               </label>
+            </div>
+          )}
+          {runtimeUnknownBlock && (
+            <div className={css.dirtyWarning}>
+              <span role="alert">{t('runtimeUnknownBlocked')}</span>
+            </div>
+          )}
+          {runningNotes.kind === 'blocking' && (
+            <div className={css.dirtyWarning}>
+              <span role="alert">{t('runningRemoveBlockNote').replace('{count}', String(runningNotes.blockingCount))}</span>
+            </div>
+          )}
+          {runningNotes.kind === 'legacy' && (
+            <div className={css.dirtyWarning}>
+              <span role="alert">{t('runningRemoveLegacyNote').replace('{count}', String(runningNotes.blockingCount))}</span>
+            </div>
+          )}
+          {runningNotes.inertCount > 0 && (
+            <div className={css.dirtyWarning}>
+              <span>{t('runningRemoveArchivedNote').replace('{count}', String(runningNotes.inertCount))}</span>
             </div>
           )}
           <label className={css.archiveToggle}>

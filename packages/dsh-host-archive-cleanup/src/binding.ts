@@ -18,6 +18,8 @@
  *    so per-item isolation holds (review Major-2); symlinked session
  *    dirs/artifacts fail closed (review Minor m2);
  *  - per-delete live guard refuses sessions that turned running (contract);
+ *    a merely LOADED (idle) session is refused with code `loaded` unless the
+ *    caller authorized `force` (2026-09 revision, design 24 §22);
  *  - COMPLETENESS UNION (2026-12 blocker fix): neither official enumeration is
  *    authoritative alone — `SessionCorpus.listSessions` answers LIVE-ONLY with
  *    no error when its optional persistence binding is absent (vendor
@@ -87,7 +89,7 @@ export interface HostCtxServices {
   readonly workspaceRegistry?: RegistryLike
   readonly sessionQuery?: { listSessions?(signal?: unknown): Promise<readonly SessionRecordLike[]> }
   readonly sessions?: { list?(): readonly { id: unknown }[] }
-  readonly agents?: { list?(): readonly { id: unknown }[] }
+  readonly agents?: { list?(): readonly { id: unknown; status?: unknown }[] }
   readonly sessionPersistence?: {
     list?(signal?: unknown): Promise<readonly SessionHeaderLike[]>
     locate?(header: SessionHeaderLike): { kind?: string; path?: string } | undefined
@@ -201,22 +203,41 @@ export function assertHostSurface(ctx: HostCtxServices): void {
   }
 }
 
-/** Live session id set (agents ∪ live store) — O(agents+live) per call. */
-function liveSessionIds(ctx: HostCtxServices): Set<string> {
-  const live = new Set<string>()
+/** Live-session facts (agents ∪ live store), split by WHY a session is live
+ *  (2026-09 revision): `running` = the agent is executing a turn (never
+ *  deletable); `loaded` = attached but idle (deletable only under `force`).
+ *  A drifted agent status fails the read loudly instead of silently
+ *  reclassifying a running agent as idle. */
+function liveSessionFacts(ctx: HostCtxServices): { running: Set<string>; loaded: Set<string> } {
+  const running = new Set<string>()
+  const loaded = new Set<string>()
   for (const agent of ctx.agents?.list?.() ?? []) {
-    if (agent !== null && typeof agent === 'object' && typeof (agent as { id?: unknown }).id === 'string') {
-      live.add(String((agent as { id: string }).id))
+    if (agent === null || typeof agent !== 'object' || typeof (agent as { id?: unknown }).id !== 'string') {
+      throw new ArchiveCleanupError(
+        'registry-unreadable',
+        'archiveCleanup: an agent entry has no string id — refusing the read (pinned-vendor drift)',
+      )
     }
+    const id = String((agent as { id: string }).id)
+    const status = (agent as { status?: unknown }).status
+    if (status !== 'idle' && status !== 'running') {
+      throw new ArchiveCleanupError(
+        'registry-unreadable',
+        `archiveCleanup: agent ${id} reports an unknown status ${JSON.stringify(status)} — refusing the read (a drifted status would silently reclassify a running agent as idle)`,
+      )
+    }
+    loaded.add(id)
+    if (status === 'running') running.add(id)
   }
-  // A session attached to the live store is never a deletion candidate
-  // (it may be open/current even without a running agent).
+  // A session attached to the live store is never a deletion candidate by
+  // default (it may be open/current even without a running agent); an
+  // explicit force purge may delete it after the caller stopped the run.
   for (const session of ctx.sessions?.list?.() ?? []) {
     if (session !== null && typeof session === 'object' && typeof (session as { id?: unknown }).id === 'string') {
-      live.add(String((session as { id: string }).id))
+      loaded.add(String((session as { id: string }).id))
     }
   }
-  return live
+  return { running, loaded }
 }
 
 export function makeHostBinding(ctx: HostCtxServices): ArchiveCleanupHost {
@@ -308,8 +329,9 @@ export function makeHostBinding(ctx: HostCtxServices): ArchiveCleanupHost {
       return [...byId.values()]
     },
 
-    async listLiveAgentIds() {
-      return [...liveSessionIds(ctx)]
+    async listLiveSessionFacts() {
+      const facts = liveSessionFacts(ctx)
+      return { running: [...facts.running], loaded: [...facts.loaded] }
     },
 
     async hasStoredContent(sessionId: string) {
@@ -344,15 +366,25 @@ export function makeHostBinding(ctx: HostCtxServices): ArchiveCleanupHost {
       }
     },
 
-    async deleteSessionContent(sessionId: string, cwd?: string) {
+    async deleteSessionContent(sessionId: string, cwd?: string, force = false) {
       try {
         // Live guard at deletion time (interface contract): never delete a
-        // session that is open/running. This is the caller's per-member live
-        // gate — the core keeps only the per-tree recheck (review F2), so a
-        // mid-tree running flip is refused HERE as an item `running` error
-        // that aborts the remaining members of that tree (review F1).
-        if (liveSessionIds(ctx).has(sessionId)) {
+        // session that is RUNNING; a merely loaded (idle) session is refused
+        // unless the caller authorized `force` (2026-09 revision — the caller
+        // cancelled the run first, so no live writer can recreate the
+        // artifact). This is the caller's per-member live gate — the core
+        // keeps only the per-tree recheck (review F2), so a mid-tree running
+        // flip is refused HERE as an item `running` error that aborts the
+        // remaining members of that tree (review F1).
+        const facts = liveSessionFacts(ctx)
+        if (facts.running.has(sessionId)) {
           throw new ArchiveCleanupError('running', `archiveCleanup: ${sessionId} is running`)
+        }
+        if (!force && facts.loaded.has(sessionId)) {
+          throw new ArchiveCleanupError(
+            'loaded',
+            `archiveCleanup: ${sessionId} is loaded in this process — delete it with force after stopping it, or restart dsh`,
+          )
         }
         if (persistence === undefined || typeof persistence.locate !== 'function') {
           throw new ArchiveCleanupError(

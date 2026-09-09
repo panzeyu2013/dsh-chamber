@@ -48,12 +48,31 @@ interface GitWorktreeHostContext extends Context {
       readonly path: string
       readonly sessionIds: readonly unknown[]
     }>
+    /** Authoritative archived-session set (design 08 §6 amendment 2026-09): an
+     *  archived running session is INERT and must not block a worktree
+     *  removal. The getter is read on every snapshot; a missing surface throws
+     *  (the core maps it to `state-source-unavailable`), never an empty set. */
+    readonly archivedSessionIds: readonly unknown[]
   }
   readonly agents: {
     list(): ReadonlyArray<{
       readonly id: unknown
       readonly status: 'idle' | 'running'
-      readonly session: { readonly header: { readonly cwd?: string } }
+      readonly session: {
+        readonly header: {
+          readonly cwd?: string
+          /** Recorded parent (`session.header.parentSession`): FORK lineage
+           *  when `origin` is absent, delegation lineage when it is
+           *  `'subagent'`. */
+          readonly parentSession?: unknown
+          /** Coarse durable child origin. `'subagent'` = delegation child
+           *  (upstream `packages/subagent/subagent`); absent = fork edge
+           *  (upstream `session/fork` sets no origin). This structural claim
+           *  is re-validated at runtime by the core's source intake, which
+           *  refuses any other value loudly. */
+          readonly origin?: 'subagent'
+        }
+      }
     }>
   }
 }
@@ -76,12 +95,34 @@ export class GitWorktreeGateway extends TypertRemoteService {
         })),
         // Agent-registry membership is live state; status narrows the
         // destructive guard to active drivers, while cwd also covers
-        // ungrouped sessions and subagents below a worktree.
+        // ungrouped sessions and subagents below a worktree. `origin` rides
+        // along for EVERY agent: only `origin === 'subagent'` edges are
+        // lineage for the archived-aware running guard (a fork edge ends the
+        // walk), so the guard needs the marker on idle rows too.
         listAgents: () => host.agents.list().map(agent => ({
           sessionId: String(agent.id),
           status: agent.status,
           ...(agent.session.header.cwd === undefined ? {} : { cwd: agent.session.header.cwd }),
+          ...(agent.session.header.parentSession === undefined
+            ? {}
+            : { parentSessionId: String(agent.session.header.parentSession) }),
+          ...(agent.session.header.origin === undefined
+            ? {}
+            : { origin: agent.session.header.origin }),
         })),
+        // Authoritative archived set. A malformed/absent surface throws here
+        // and readSource turns it into a loud `state-source-*` failure — the
+        // guard must never treat "unreadable" as "nothing archived".
+        // Elements are passed through RAW: the core validates each one as a
+        // non-empty string (`state-source-invalid`), so a drifted element can
+        // never be silently coerced by `String()` into a bogus member.
+        listArchivedSessionIds: () => {
+          const ids = host.workspaceRegistry.archivedSessionIds
+          if (!Array.isArray(ids)) throw new Error('workspaceRegistry.archivedSessionIds is not an array')
+          // The cast is the compile-time boundary only: the core re-validates
+          // every element (`requiredString` → `state-source-invalid`).
+          return ids as readonly string[]
+        },
       },
     })
   }

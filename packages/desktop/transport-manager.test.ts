@@ -37,6 +37,7 @@ import {
   RING_BUFFER_LIMIT,
   RING_LOG_MESSAGE_MAX_CHARS,
 } from './transport-manager.ts'
+import { CHAMBER_HOST_PACKAGES } from './control-plane-module.ts'
 import { prepareRegistryPasswordCommit } from './registry-password-commit.ts'
 import { CHILD_LINE_MAX_CHARS } from './bounded-lines.ts'
 import type { TransportManager, TransportManagerOptions } from './transport-manager.ts'
@@ -44,8 +45,7 @@ import { MAX_TRANSPORT_INSTANCES } from './transport-provider.ts'
 import type { TransportInstanceInput, TransportInstanceSpec, TransportKind, TransportProvider, TransportStatusProjection, TransportVerifyResult, SpawnedProcess } from './transport-provider.ts'
 import {
   configureSshPasswordStore,
-  probeClientGraphLive,
-  probeGitWorktreeLive,
+  probeChamberHostLive,
   purgeSshAuth,
   redactSshStderr,
   SERVER_ALIVE_COUNT_MAX,
@@ -1348,26 +1348,42 @@ test('verifyDshEndpoint keeps the generic message when no dsh signature exists',
   }
 })
 
-test('probeClientGraphLive classifies the running instance: live / not-live / unknown', async t => {
-  // ok:true server-response → the remote resolved clientGraph/graph: live.
+test('probeChamberHostLive classifies every registry host package the same way: live / not-live / unknown', async t => {
+  // Parameterized over the control-plane registry (CHAMBER_HOST_PACKAGES), so a
+  // package added to the registry is covered automatically — the probe is
+  // generic (method + args from the descriptor) and must not grow a per-package
+  // branch. Same discipline as the deleted per-package probes:
+  // 200 + ok:true = the running instance resolved the method; 404 = the gateway
+  // does not claim the namespace (injected, restart pending); no answer /
+  // unclassifiable body = unknown, never a guessed claim.
   const live = createServer((req, res) => {
     res.writeHead(200, { 'content-type': 'application/json' })
     let body = ''
     req.on('data', chunk => { body += chunk })
     req.on('end', () => {
       const envelope = JSON.parse(body) as { rpcId?: unknown }
-      res.end(JSON.stringify({ type: 'server-response', rpcId: envelope.rpcId, result: { ok: true, value: { rev: 'x', entries: [] } } }))
+      res.end(JSON.stringify({ type: 'server-response', rpcId: envelope.rpcId, result: { ok: true, value: { ok: true, value: {} } } }))
     })
   })
   await new Promise<void>(resolve => live.listen(0, '127.0.0.1', resolve))
   const livePort = (live.address() as AddressInfo).port
   t.after(() => { live.close() })
-  assert.equal(await probeClientGraphLive({ host: '127.0.0.1', port: livePort }), 'live')
 
-  // ok:false server-response (the gateway answered but the method is not
-  // resolvable — the running instance booted before the injection) →
-  // not-live: injected but restart pending, never a guessed claim.
-  const stale = createServer((req, res) => {
+  const missing = createServer((_req, res) => { res.writeHead(404); res.end() })
+  await new Promise<void>(resolve => missing.listen(0, '127.0.0.1', resolve))
+  const missingPort = (missing.address() as AddressInfo).port
+  t.after(() => { missing.close() })
+
+  const silent = createServer(() => { /* never answer */ })
+  await new Promise<void>(resolve => silent.listen(0, '127.0.0.1', resolve))
+  const silentPort = (silent.address() as AddressInfo).port
+  t.after(() => { silent.close() })
+
+  // A well-formed envelope with result.ok:false = the gateway answered but the
+  // method is not resolvable: deterministic not-live (the running instance
+  // booted before the injection). Kept from the deleted per-package probes —
+  // the classification lives in the ONE generic path now.
+  const unresolved = createServer((req, res) => {
     res.writeHead(200, { 'content-type': 'application/json' })
     let body = ''
     req.on('data', chunk => { body += chunk })
@@ -1376,94 +1392,30 @@ test('probeClientGraphLive classifies the running instance: live / not-live / un
       res.end(JSON.stringify({ type: 'server-response', rpcId: envelope.rpcId, result: { ok: false, error: { code: 'method_not_found' } } }))
     })
   })
-  await new Promise<void>(resolve => stale.listen(0, '127.0.0.1', resolve))
-  const stalePort = (stale.address() as AddressInfo).port
-  t.after(() => { stale.close() })
-  assert.equal(await probeClientGraphLive({ host: '127.0.0.1', port: stalePort }), 'not-live')
+  await new Promise<void>(resolve => unresolved.listen(0, '127.0.0.1', resolve))
+  const unresolvedPort = (unresolved.address() as AddressInfo).port
+  t.after(() => { unresolved.close() })
 
-  // A plain 404 is the dsh gateway's deterministic "no Remote namespace
-  // claimed" answer (vendored gateway test) — on a ready instance that is
-  // injected-but-not-loaded (restart pending), never an unclassifiable state.
-  const missing = createServer((_req, res) => { res.writeHead(404); res.end() })
-  await new Promise<void>(resolve => missing.listen(0, '127.0.0.1', resolve))
-  const missingPort = (missing.address() as AddressInfo).port
-  t.after(() => { missing.close() })
-  assert.equal(await probeClientGraphLive({ host: '127.0.0.1', port: missingPort }), 'not-live')
+  // Non-404 non-200 is unclassifiable — never a guessed claim.
+  const failing = createServer((_req, res) => { res.writeHead(500); res.end() })
+  await new Promise<void>(resolve => failing.listen(0, '127.0.0.1', resolve))
+  const failingPort = (failing.address() as AddressInfo).port
+  t.after(() => { failing.close() })
 
-  const wrong = createServer((_req, res) => {
-    res.writeHead(200, { 'content-type': 'application/json' })
-    res.end(JSON.stringify({ hello: 'world' }))
-  })
-  await new Promise<void>(resolve => wrong.listen(0, '127.0.0.1', resolve))
-  const wrongPort = (wrong.address() as AddressInfo).port
-  t.after(() => { wrong.close() })
-  assert.equal(await probeClientGraphLive({ host: '127.0.0.1', port: wrongPort }), 'unknown')
-
-  const silent = createServer(() => { /* never answer */ })
-  await new Promise<void>(resolve => silent.listen(0, '127.0.0.1', resolve))
-  const silentPort = (silent.address() as AddressInfo).port
-  t.after(() => { silent.close() })
-  assert.equal(await probeClientGraphLive({ host: '127.0.0.1', port: silentPort }, 50), 'unknown', 'a silent endpoint times out instead of hanging')
-})
-
-test('probeGitWorktreeLive classifies the running instance: live / not-live / unknown', async t => {
-  // A 200 server-response envelope with result.ok:true → the gateway
-  // RESOLVED gitWorktree/previewCreate: the boot row is loaded. The empty
-  // probe input fails the domain validation INSIDE result.ok:true (no git
-  // work performed) — the envelope alone proves the row loaded.
-  const live = createServer((req, res) => {
-    res.writeHead(200, { 'content-type': 'application/json' })
-    let body = ''
-    req.on('data', chunk => { body += chunk })
-    req.on('end', () => {
-      const envelope = JSON.parse(body) as { rpcId?: unknown }
-      res.end(JSON.stringify({ type: 'server-response', rpcId: envelope.rpcId, result: { ok: true, value: { ok: false, error: { code: 'invalid-input' } } } }))
-    })
-  })
-  await new Promise<void>(resolve => live.listen(0, '127.0.0.1', resolve))
-  const livePort = (live.address() as AddressInfo).port
-  t.after(() => { live.close() })
-  assert.equal(await probeGitWorktreeLive({ host: '127.0.0.1', port: livePort }), 'live')
-
-  // 404 = the gateway does not claim the gitWorktree namespace: the running
-  // instance never loaded the git-worktree boot row (injected, restart
-  // pending) — the exact case a host-graph-live probe misses.
-  const notLoaded = createServer((_req, res) => { res.writeHead(404); res.end() })
-  await new Promise<void>(resolve => notLoaded.listen(0, '127.0.0.1', resolve))
-  const notLoadedPort = (notLoaded.address() as AddressInfo).port
-  t.after(() => { notLoaded.close() })
-  assert.equal(await probeGitWorktreeLive({ host: '127.0.0.1', port: notLoadedPort }), 'not-live')
-
-  // A 200 error envelope (gateway answered but could not resolve) → not-live.
-  const stale = createServer((req, res) => {
-    res.writeHead(200, { 'content-type': 'application/json' })
-    let body = ''
-    req.on('data', chunk => { body += chunk })
-    req.on('end', () => {
-      const envelope = JSON.parse(body) as { rpcId?: unknown }
-      res.end(JSON.stringify({ type: 'server-response', rpcId: envelope.rpcId, result: { ok: false, error: { code: 'gateway/internal' } } }))
-    })
-  })
-  await new Promise<void>(resolve => stale.listen(0, '127.0.0.1', resolve))
-  const stalePort = (stale.address() as AddressInfo).port
-  t.after(() => { stale.close() })
-  assert.equal(await probeGitWorktreeLive({ host: '127.0.0.1', port: stalePort }), 'not-live')
-
-  // Non-404 non-200 / malformed body / silence → unknown (never a claim).
-  const wrong = createServer((_req, res) => {
-    res.writeHead(500)
-    res.end()
-  })
-  await new Promise<void>(resolve => wrong.listen(0, '127.0.0.1', resolve))
-  const wrongPort = (wrong.address() as AddressInfo).port
-  t.after(() => { wrong.close() })
-  assert.equal(await probeGitWorktreeLive({ host: '127.0.0.1', port: wrongPort }), 'unknown')
-
-  const silent = createServer(() => { /* never answer */ })
-  await new Promise<void>(resolve => silent.listen(0, '127.0.0.1', resolve))
-  const silentPort = (silent.address() as AddressInfo).port
-  t.after(() => { silent.close() })
-  assert.equal(await probeGitWorktreeLive({ host: '127.0.0.1', port: silentPort }, 50), 'unknown', 'a silent endpoint times out instead of hanging')
+  assert.ok(CHAMBER_HOST_PACKAGES.length > 0, 'the registry must carry at least one host package')
+  for (const descriptor of CHAMBER_HOST_PACKAGES) {
+    const { method, args } = descriptor.probe
+    assert.equal(await probeChamberHostLive({ host: '127.0.0.1', port: livePort }, method, args), 'live',
+      `${descriptor.insert.id}: a resolved method is live`)
+    assert.equal(await probeChamberHostLive({ host: '127.0.0.1', port: unresolvedPort }, method, args), 'not-live',
+      `${descriptor.insert.id}: an unresolved-method envelope = injected, restart pending`)
+    assert.equal(await probeChamberHostLive({ host: '127.0.0.1', port: missingPort }, method, args), 'not-live',
+      `${descriptor.insert.id}: 404 = the boot row is not loaded yet`)
+    assert.equal(await probeChamberHostLive({ host: '127.0.0.1', port: failingPort }, method, args), 'unknown',
+      `${descriptor.insert.id}: a non-404 non-200 answer is unclassifiable`)
+    assert.equal(await probeChamberHostLive({ host: '127.0.0.1', port: silentPort }, method, args, 50), 'unknown',
+      `${descriptor.insert.id}: silence times out instead of claiming a state`)
+  }
 })
 
 test('jitteredBackoffMs keeps the half-open jitter bounds [0.5x, 1x)', () => {

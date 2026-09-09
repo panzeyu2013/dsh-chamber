@@ -104,6 +104,7 @@ export class ArchiveCleanupGateway extends TypertRemoteService {
         archived: value.archived,
         deletable: value.deletableSessions,
         skippedRunning: value.skippedRunning,
+        skippedLoaded: value.skippedLoaded,
       })
       return value
     }))
@@ -112,18 +113,25 @@ export class ArchiveCleanupGateway extends TypertRemoteService {
   /** Delete the WHOLE archived set by default; with the optional `sessionIds`
    *  filter only the listed archived-set members (each as a deletable tree
    *  root). Zero-arg calls keep working — a missing JSON field reaches the
-   *  method as undefined. */
+   *  method as undefined. `force` (2026-09 revision) additionally deletes
+   *  subtrees that are merely LOADED in this process (the caller cancels the
+   *  run first); a RUNNING member is still refused. NOTE: the generic gateway
+   *  derives accepted arg names from this method's source text, so the
+   *  signature must stay plain identifiers without defaults or rest. */
   @Remote('purge')
-  purge(sessionIds?: readonly string[]): Promise<ArchiveCleanupDomainResult<PurgeResult>> {
+  purge(sessionIds?: readonly string[], force?: boolean): Promise<ArchiveCleanupDomainResult<PurgeResult>> {
     return domainResult(() => this.gate.run(async () => {
       this.logger?.info?.('[archiveCleanup] purge started', {
         ...(sessionIds === undefined ? {} : { filterCount: sessionIds.length }),
+        ...(force === true ? { force: true } : {}),
       })
-      const value = await this.core.purge(sessionIds)
+      const value = await this.core.purge(sessionIds, force === true)
       this.logger?.info?.('[archiveCleanup] purge finished', {
         deletedSessions: value.deletedSessions,
         deletedSubagents: value.deletedSubagents,
         skippedRunning: value.skippedRunning,
+        skippedLoaded: value.skippedLoaded,
+        forcedLoaded: value.forcedLoaded,
         errorCount: value.errors.length,
       })
       return value

@@ -14,10 +14,15 @@ import { EventEmitter } from 'node:events'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { createRequire } from 'node:module'
-import type { ApiRequest, ApiResponse, Logger, PlaneHandle } from '@dsh-chamber/control-plane'
+import { assertChamberHostRegistry, CHAMBER_HOST_PACKAGES, type ApiRequest, type ApiResponse, type Logger, type PlaneHandle } from '@dsh-chamber/control-plane'
 import type { GatewayConfig } from '../src/config.ts'
 import { createGatewayRuntimeManager, readBuiltinVersion } from '../src/runtime-manager.ts'
-import { createChamberPlugins, SYNCED_PLUGIN_DIR, SYNCABLE_HOST_PACKAGES, syncedHostDomainProbeNames } from '../src/plugins.ts'
+import {
+  createChamberPlugins,
+  SYNCED_PLUGIN_DIR,
+  SYNCABLE_HOST_PACKAGES,
+  syncedHostDomainProbeNames,
+} from '../src/plugins.ts'
 import {
   PROBE_NAMES_WITHOUT_HOST_DOMAINS,
   REQUIRED_ACTIVATION_PROBES,
@@ -132,7 +137,7 @@ async function waitForMutationSettle(manager: { mutationInProgress(): boolean })
  * derivation that replaced the binary hasSyncedHostSeed gate). The fake
  * host answers exactly the derived set the real dsh would serve: test
  * stateDirs start with no cache (reduced base set); the full-flip fixture
- * seeds all three packages (full 7-name closed set). */
+ * seeds every registry package (full 7-name closed set). */
 function probeResultsFor(stateDir: string): readonly string[] {
   return activationProbeNamesForDomains(syncedHostDomainProbeNames(stateDir))
 }
@@ -1664,29 +1669,24 @@ test('real manager: the B1 16 MiB settings/describe cap reaches the wire carrier
 test('2026-12 shape gate: a synced seed cache flips the activation to the FULL probe set — and drift fails closed', async () => {
   const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-shape-'))
   try {
-    // Seed ALL THREE host packages into the gateway seed cache, exactly as a
-    // connecting desktop would (PUT /chamber/plugins → chamber-plugins cache).
-    // The probe shape gate — the per-package derivation
-    // syncedHostDomainProbeNames over the actually-present packages — must
-    // now derive the full 7-name set (REQUIRED_ACTIVATION_PROBES); this is
-    // the flow that makes a fresh gateway pick the chamber host layer up
-    // after the first desktop sync. Partial syncs (2-of-3) derive the exact
-    // expected set instead (design 24 §7 C, M2) — covered directly by the
-    // syncedHostDomainProbeNames matrix tests below.
+    // Seed EVERY registry host package into the gateway seed cache, exactly
+    // as a connecting desktop would (PUT /chamber/plugins →
+    // chamber-plugins cache). The probe shape gate — the per-package
+    // derivation syncedHostDomainProbeNames over the actually-present
+    // packages — must now derive the full 7-name set
+    // (REQUIRED_ACTIVATION_PROBES); this is the flow that makes a fresh
+    // gateway pick the chamber host layer up after the first desktop sync.
+    // Partial syncs derive the exact expected set instead (design 24 §7 C, M2)
+    // — covered directly by the syncedHostDomainProbeNames matrix tests below.
     const plugins = createChamberPlugins(stateDir, silentLogger)
-    for (const name of [
-      '@dsh-chamber/dsh-host-client-graph',
-      '@dsh-chamber/dsh-host-git-worktree',
-      '@dsh-chamber/dsh-host-archive-cleanup',
-    ]) {
+    for (const name of HOST_PACKAGE_NAMES) {
       await plugins.put(name, {
         'package.json': JSON.stringify({ name, version: '1.0.0' }),
         'dist/index.js': 'export const ok = 1\n',
       })
     }
-    assert.deepEqual(syncedHostDomainProbeNames(stateDir),
-      ['clientGraph/graph', 'gitWorktree/previewCreate', 'archiveCleanup/probe'],
-      'the populated cache must derive the full three-domain probe list')
+    assert.deepEqual(syncedHostDomainProbeNames(stateDir), [...HOST_PACKAGE_DOMAINS],
+      'the populated cache must derive the full registry-domain probe list')
     assert.deepEqual(probeResultsFor(stateDir), [...REQUIRED_ACTIVATION_PROBES],
       'the synced shape expects the FULL probe set, chamber host domains included')
 
@@ -1756,13 +1756,12 @@ test('2026-12 shape gate: a synced seed cache flips the activation to the FULL p
 // per-package derivation that replaced the binary hasSyncedHostSeed gate.
 // ---------------------------------------------------------------------------
 
-const THREE_HOST_PACKAGES = [
-  '@dsh-chamber/dsh-host-client-graph',
-  '@dsh-chamber/dsh-host-git-worktree',
-  '@dsh-chamber/dsh-host-archive-cleanup',
-] as const
-
-const THREE_HOST_DOMAINS = ['clientGraph/graph', 'gitWorktree/previewCreate', 'archiveCleanup/probe'] as const
+// Derived from the control-plane registry (review G2-3): a hand-maintained
+// three-name copy would silently shrink this matrix when a 4th registry row
+// lands, so the package names and probe domains come from CHAMBER_HOST_PACKAGES
+// itself. The length pin below keeps the derivation honest.
+const HOST_PACKAGE_NAMES = CHAMBER_HOST_PACKAGES.map(descriptor => descriptor.insert.name)
+const HOST_PACKAGE_DOMAINS = CHAMBER_HOST_PACKAGES.map(descriptor => descriptor.probe.method)
 
 /** Seed the given host packages into a real cache under the test stateDir,
  *  exactly as a connecting desktop would (PUT /chamber/plugins). */
@@ -1776,6 +1775,43 @@ async function syncPackagesInto(stateDir: string, names: readonly string[]): Pro
   }
 }
 
+test('the registry derivation covers every chamber host package (never a shrunk three-row copy)', () => {
+  assert.ok(HOST_PACKAGE_NAMES.length >= 3, 'the registry must still carry the three base host packages')
+  assert.equal(HOST_PACKAGE_NAMES.length, SYNCABLE_HOST_PACKAGES.length,
+    'the syncable list is the registry')
+  assert.equal(HOST_PACKAGE_DOMAINS.length, HOST_PACKAGE_NAMES.length)
+  assert.equal(new Set(HOST_PACKAGE_DOMAINS).size, HOST_PACKAGE_DOMAINS.length,
+    'every registry row owns a distinct probe domain (assertChamberHostRegistry pins this at load)')
+  assertChamberHostRegistry(CHAMBER_HOST_PACKAGES)
+})
+
+test('assertChamberHostRegistry: a 4th row reusing an existing probe domain fails loud', () => {
+  // The set-equality drift pin alone would PASS here (the domain set is
+  // unchanged) while HOST_PACKAGE_PROBE_DOMAINS became ambiguous — the
+  // duplicate-method pin is what catches it.
+  assert.throws(
+    () => assertChamberHostRegistry([
+      ...CHAMBER_HOST_PACKAGES,
+      { insert: { id: 'ghost', name: '@dsh-chamber/dsh-host-ghost' }, probe: { method: HOST_PACKAGE_DOMAINS[0], args: {} } },
+    ]),
+    /probe method .* is claimed by more than one host package/,
+  )
+  assert.throws(
+    () => assertChamberHostRegistry([
+      ...CHAMBER_HOST_PACKAGES,
+      { insert: { id: CHAMBER_HOST_PACKAGES[0].insert.id, name: '@dsh-chamber/dsh-host-other' }, probe: { method: 'future/domain', args: {} } },
+    ]),
+    /duplicate loader insert id/,
+  )
+  assert.throws(
+    () => assertChamberHostRegistry([
+      ...CHAMBER_HOST_PACKAGES,
+      { insert: { id: 'other', name: CHAMBER_HOST_PACKAGES[0].insert.name }, probe: { method: 'future/domain', args: {} } },
+    ]),
+    /duplicate host package name/,
+  )
+})
+
 test('syncedHostDomainProbeNames: an empty cache derives an empty list (plain dsh shape)', () => {
   const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-derive-empty-'))
   try {
@@ -1785,31 +1821,32 @@ test('syncedHostDomainProbeNames: an empty cache derives an empty list (plain ds
   }
 })
 
-test('syncedHostDomainProbeNames: 1-of-3 and 2-of-3 caches derive exactly the mounted domains in canonical order', async () => {
+test('syncedHostDomainProbeNames: 1-of-N and 2-of-N caches derive exactly the mounted domains in canonical order', async () => {
   const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-derive-partial-'))
   try {
-    await syncPackagesInto(stateDir, [THREE_HOST_PACKAGES[0]])
-    assert.deepEqual(syncedHostDomainProbeNames(stateDir), [THREE_HOST_DOMAINS[0]])
-    await syncPackagesInto(stateDir, [THREE_HOST_PACKAGES[1]])
-    assert.deepEqual(syncedHostDomainProbeNames(stateDir), [THREE_HOST_DOMAINS[0], THREE_HOST_DOMAINS[1]])
-    // An interrupted third sync leaves the 2-of-3 derivation stable (the set
+    await syncPackagesInto(stateDir, [HOST_PACKAGE_NAMES[0]])
+    assert.deepEqual(syncedHostDomainProbeNames(stateDir), [HOST_PACKAGE_DOMAINS[0]])
+    await syncPackagesInto(stateDir, [HOST_PACKAGE_NAMES[1]])
+    assert.deepEqual(syncedHostDomainProbeNames(stateDir), [HOST_PACKAGE_DOMAINS[0], HOST_PACKAGE_DOMAINS[1]])
+    // An interrupted third sync leaves the 2-of-N derivation stable (the set
     // never shrinks from a later probe run).
-    assert.deepEqual(syncedHostDomainProbeNames(stateDir), [THREE_HOST_DOMAINS[0], THREE_HOST_DOMAINS[1]])
+    assert.deepEqual(syncedHostDomainProbeNames(stateDir), [HOST_PACKAGE_DOMAINS[0], HOST_PACKAGE_DOMAINS[1]])
   } finally {
     rmSync(stateDir, { recursive: true, force: true })
   }
 })
 
-test('syncedHostDomainProbeNames: a full cache derives all three domains; a stray non-syncable cache dir stays inert', async () => {
+test('syncedHostDomainProbeNames: a full cache derives every registry domain; a stray non-syncable cache dir stays inert', async () => {
   const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-derive-full-'))
   try {
-    await syncPackagesInto(stateDir, THREE_HOST_PACKAGES)
-    assert.deepEqual(syncedHostDomainProbeNames(stateDir), [...THREE_HOST_DOMAINS])
+    await syncPackagesInto(stateDir, HOST_PACKAGE_NAMES)
+    assert.deepEqual(syncedHostDomainProbeNames(stateDir), [...HOST_PACKAGE_DOMAINS],
+      'the full cache must derive EVERY registry domain, not a hand-written subset')
     // A pre-upgrade leftover dir for a package that is no longer syncable is
     // inert: stray cache content can neither add nor remove a derived domain.
     mkdirSync(join(stateDir, SYNCED_PLUGIN_DIR, 'stale-package', 'dist'), { recursive: true })
     writeFileSync(join(stateDir, SYNCED_PLUGIN_DIR, 'stale-package', 'dist', 'index.js'), 'export const stale = 1\n')
-    assert.deepEqual(syncedHostDomainProbeNames(stateDir), [...THREE_HOST_DOMAINS])
+    assert.deepEqual(syncedHostDomainProbeNames(stateDir), [...HOST_PACKAGE_DOMAINS])
   } finally {
     rmSync(stateDir, { recursive: true, force: true })
   }

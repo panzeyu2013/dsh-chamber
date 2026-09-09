@@ -266,13 +266,6 @@ export const VERIFY_UP_TIMEOUT_MS = 5_000
  */
 export const VERIFY_UP_MAX_BODY_BYTES = 1024 * 1024
 
-/** Timeout of the one-shot client-graph liveness probe (probeClientGraphLive). */
-export const CLIENT_GRAPH_PROBE_TIMEOUT_MS = 5_000
-
-/** Response-body cap of the client-graph liveness probe (an oversized answer
- *  is not a graph RPC envelope; bounded memory on a misbehaving endpoint). */
-export const CLIENT_GRAPH_PROBE_MAX_BODY_BYTES = 1024 * 1024
-
 /** Timeout of the secondary dsh-signature probe (the whole identity + legacy
  *  re-answer cycle when the identity method answers 404). */
 export const VERIFY_UP_SIGNATURE_TIMEOUT_MS = 2_000
@@ -550,12 +543,13 @@ async function verifyGatewayWithPasswordViaTunnel(
 /**
  * One-shot RPC liveness probe of a chamber host Remote over the tunnel
  * endpoint (the exact wire shape the renderer's module-C boot uses, design
- * 09 §3.5 / design 08 §11.6). Shared by probeClientGraphLive (module A:
- * `clientGraph/graph`) and probeGitWorktreeLive (the git-worktree host
- * package: `gitWorktree/previewCreate`). File presence alone (the
- * `installed`/`patched` probe) cannot distinguish "booted after the
- * injection" from "restart still pending" — this answers the
- * plugin-management UI's "已生效 vs 重启后生效" question per package.
+ * 09 §3.5 / design 08 §11.6). Reached through the generic
+ * probeChamberHostLive, whose method/args come from the control-plane
+ * registry descriptor — every seeded host package, including any added later,
+ * uses this one path. File presence alone (the `installed`/`patched` probe)
+ * cannot distinguish "booted after the injection" from "restart still
+ * pending" — this answers the plugin-management UI's "已生效 vs 重启后生效"
+ * question per package.
  *
  * Same discipline as verifyDshEndpoint: a destination that ANSWERED the
  * probe is classified deterministically; a destination that did not answer
@@ -617,46 +611,30 @@ async function probeRemoteMethod(
 }
 
 /**
- * Live-effect probe of module A (design 09 module A): POST the
- * `clientGraph/graph` RPC — the exact wire call the renderer's module C boot
- * merge performs (renderer/src/host-graph.ts) — directly to the tunnel
- * endpoint, answering whether the RUNNING remote dsh instance has actually
- * loaded the seeded `@dsh-chamber/dsh-host-client-graph` module.
+ * Live-effect probe of ONE chamber host package over the tunnel endpoint: the
+ * method/args come from the control-plane registry's probe descriptor
+ * (`CHAMBER_HOST_PACKAGES`), so every seeded host package — including any
+ * added later — is probed by the same generic path. A 404 from the dsh gateway
+ * deterministically means "that boot row is not loaded yet" (injected,
+ * restart pending).
  */
-export function probeClientGraphLive(
+export function probeChamberHostLive(
   endpoint: { host: string; port: number },
-  timeoutMs = CLIENT_GRAPH_PROBE_TIMEOUT_MS,
-  maxBodyBytes = CLIENT_GRAPH_PROBE_MAX_BODY_BYTES,
+  method: string,
+  args: unknown,
+  timeoutMs = CHAMBER_HOST_PROBE_TIMEOUT_MS,
+  maxBodyBytes = CHAMBER_HOST_PROBE_MAX_BODY_BYTES,
 ): Promise<LiveProbeResult> {
-  return probeRemoteMethod(endpoint, 'clientGraph/graph', {}, timeoutMs, maxBodyBytes)
+  return probeRemoteMethod(endpoint, method, args, timeoutMs, maxBodyBytes)
 }
 
-/** Timeout of the one-shot git-worktree liveness probe (probeGitWorktreeLive). */
-export const GIT_WORKTREE_PROBE_TIMEOUT_MS = 5_000
+/** Timeout of the generic chamber host-package liveness probe. */
+export const CHAMBER_HOST_PROBE_TIMEOUT_MS = 5_000
 
-/** Response-body cap of the git-worktree liveness probe (an oversized answer
- *  is not an RPC envelope; bounded memory on a misbehaving endpoint). */
-export const GIT_WORKTREE_PROBE_MAX_BODY_BYTES = 1024 * 1024
-
-/**
- * Live-effect probe of the chamber git-worktree host package (design 08
- * §11.6): POST `gitWorktree/previewCreate` with an EMPTY input to the tunnel
- * endpoint. The dsh gateway routes only claimed Remote namespaces, so:
- *   - 404 → the running instance never loaded the git-worktree boot row —
- *     injected, restart pending (the exact case a host-graph-live probe
- *     misses: host-graph can be live from an older boot while the newer
- *     git-worktree row still awaits the restart that seeded it);
- *   - 200 → the gateway resolved the method; the empty input fails the
- *     domain validation FIRST (parsePreviewInput), before any git call, and
- *     the rejection rides inside result.ok:true — cheap, no repo scan.
- */
-export function probeGitWorktreeLive(
-  endpoint: { host: string; port: number },
-  timeoutMs = GIT_WORKTREE_PROBE_TIMEOUT_MS,
-  maxBodyBytes = GIT_WORKTREE_PROBE_MAX_BODY_BYTES,
-): Promise<LiveProbeResult> {
-  return probeRemoteMethod(endpoint, 'gitWorktree/previewCreate', { input: {} }, timeoutMs, maxBodyBytes)
-}
+/** Response-body cap of the generic chamber host-package liveness probe (an
+ *  oversized answer is not an RPC envelope; bounded memory on a misbehaving
+ *  endpoint). */
+export const CHAMBER_HOST_PROBE_MAX_BODY_BYTES = 1024 * 1024
 
 /**
  * Instance spec validation (non-secret metadata only). id must match the

@@ -46,6 +46,51 @@ test('snapshot keeps valid siblings beside malformed rows and preserves opaque i
   assert.deepEqual(snapshot.errors.map(error => error.code), ['status-failed', 'invalid-worktree', 'duplicate-worktree-id', 'invalid-repo'])
 })
 
+test('snapshot projects the optional blockingRunningSessionIds (absent on an old host, malformed fails the row)', () => {
+  const base = {
+    repoId: REPO_ID, commonDir: '/repo/.git', mainPath: '/repo', branches: [],
+  }
+  const withField = normalizeGitSnapshot({
+    repos: [{
+      ...base,
+      worktrees: [worktree({ runningSessionIds: ['s1', 's2'], blockingRunningSessionIds: ['s2'] })],
+    }],
+    errors: [],
+  })
+  assert.deepEqual(withField.repos[0]!.worktrees[0]!.runningSessionIds, ['s1', 's2'])
+  assert.deepEqual(withField.repos[0]!.worktrees[0]!.blockingRunningSessionIds, ['s2'])
+
+  const withoutField = normalizeGitSnapshot({
+    repos: [{ ...base, worktrees: [worktree({ runningSessionIds: ['s1'] })] }],
+    errors: [],
+  })
+  assert.equal(withoutField.repos[0]!.worktrees[0]!.blockingRunningSessionIds, undefined,
+    'an old host omits the field — the client falls back to runningSessionIds')
+
+  const malformed = normalizeGitSnapshot({
+    repos: [{
+      ...base,
+      worktrees: [worktree({ blockingRunningSessionIds: ['ok', 7] as unknown as string[] })],
+    }],
+    errors: [],
+  })
+  assert.equal(malformed.repos[0]!.worktrees.length, 0, 'a present-but-malformed value fails the row (fail closed)')
+  assert.equal(malformed.errors.some(error => error.code === 'invalid-worktree'), true)
+
+  // Non-subset: the archived-aware field names RUNNING sessions that block —
+  // an id it names but runningSessionIds does not is a host defect, and the
+  // dialog's set-difference inert count would under-report. Fail the row.
+  const nonSubset = normalizeGitSnapshot({
+    repos: [{
+      ...base,
+      worktrees: [worktree({ runningSessionIds: ['s1'], blockingRunningSessionIds: ['s1', 's2'] })],
+    }],
+    errors: [],
+  })
+  assert.equal(nonSubset.repos[0]!.worktrees.length, 0, 'a non-subset blocking list fails the row (fail closed)')
+  assert.equal(nonSubset.errors.some(error => error.code === 'invalid-worktree'), true)
+})
+
 test('snapshot never turns missing collections or malformed membership into healthy empty facts', () => {
   assert.throws(() => normalizeGitSnapshot({ errors: [] }), /repos must be an array/)
   assert.throws(() => normalizeGitSnapshot({ repos: [] }), /errors must be an array/)
@@ -100,6 +145,18 @@ test('the create dialog never filters the main checkout branch out of the source
 test('safe-remove guard covers main/registration/live/current/fs safety and allows detached clean rows', () => {  assert.equal(removeBlockReason(worktree({ isMain: true })), 'main')
   assert.equal(removeBlockReason(worktree({ workspaceId: null })), 'unregistered')
   assert.equal(removeBlockReason(worktree({ runningSessionIds: ['s'] })), 'running')
+  // ARCHIVED-AWARE (host 2026-09): the blocking field names the running
+  // sessions that actually gate removal. An archived running session is inert
+  // (present in runningSessionIds, absent from the blocking list) and does not
+  // block; the OLD-HOST fallback (field absent) stays conservative.
+  assert.equal(removeBlockReason(worktree({ runningSessionIds: ['s'], blockingRunningSessionIds: [] })), undefined,
+    'an archived running session is inert')
+  assert.equal(removeBlockReason(worktree({ runningSessionIds: ['s'], blockingRunningSessionIds: ['s'] })), 'running',
+    'a non-archived running session still blocks')
+  assert.equal(removeBlockReason(worktree({ runningSessionIds: ['s', 't'], blockingRunningSessionIds: ['t'] })), 'running',
+    'one blocking session is enough')
+  assert.equal(removeBlockReason(worktree({ runningSessionIds: ['s'] })), 'running',
+    'an old host without the field stays conservative')
   assert.equal(removeBlockReason(worktree({ sessionIds: ['s'] }), 's'), 'current')
   // A BLANK current session carries no content and must not block removal.
   assert.equal(removeBlockReason(worktree({ sessionIds: ['s'] }), 's', true), undefined)
@@ -117,6 +174,33 @@ test('safe-remove guard covers main/registration/live/current/fs safety and allo
   // A known blank current still does not block (blankness is only lenient
   // when the channel is present).
   assert.equal(removeBlockReason(worktree({ sessionIds: ['s'] }), 's', true, false), 'runtime-unknown')
+  // PRECEDENCE (review G1-1): current/runtime-unknown are evaluated BEFORE
+  // running. The running reason is NOT a hard client block (the row keeps the
+  // delete control enabled for it and the host re-checks), so letting it win
+  // would bypass both fail-closed refusals whenever a STALE or archived-only
+  // running fact is present.
+  assert.equal(
+    removeBlockReason(worktree({ sessionIds: ['s'], runningSessionIds: ['r'] }), 's'),
+    'current',
+    'the current-session guard outranks a running fact',
+  )
+  assert.equal(
+    removeBlockReason(worktree({ sessionIds: ['s'], runningSessionIds: ['r'] }), undefined, false, false),
+    'runtime-unknown',
+    'the runtime-absent fail-closed guard outranks a running fact',
+  )
+  assert.equal(
+    removeBlockReason(worktree({ sessionIds: ['s'], runningSessionIds: ['r'], blockingRunningSessionIds: [] }), 'other', false, false),
+    'runtime-unknown',
+    'an archived-only (inert) running fact cannot bypass the runtime-absent guard either',
+  )
+  // With the channel present and no current match, the running fact still wins
+  // over the file-safety reasons.
+  assert.equal(
+    removeBlockReason(worktree({ runningSessionIds: ['r'], locked: true })),
+    'running',
+    'running still outranks locked/unhealthy/dirty once the fail-closed guards pass',
+  )
 })
 
 test('session targeting requires a healthy worktree', () => {

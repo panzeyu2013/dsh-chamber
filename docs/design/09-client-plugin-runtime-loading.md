@@ -171,8 +171,9 @@ dsh 官方 web 的客户端插件链路是完整的（已核 vendor 源码）：
   每次调用直接返回 `this.ctx.clientModules.graph()`（无本地缓存——图在插件 fiber
   事件间是稳定对象，读即单一事实源）；`static inject=['clientModules']` 保证排在
   client-modules 宿主行之后启动。
-- **--patch seed（模块 B）**：`ensureHostGraphPackage(dshHome, sourceDir)` 把模块 A
-  包（package.json + dist/index.js）幂等分发进
+- **--patch seed（模块 B）**：`ensureSeedPackage(dshHome, packageName, sourceDir)` 把宿主
+  包（package.json + dist/index.js）幂等分发进（2026-09 起同一入口按控制面注册表
+  `CHAMBER_HOST_PACKAGES` 逐包分发；旧单包入口 `ensureHostGraphPackage` 已删除）
   `$DSH_HOME/profiles/web/node_modules/@dsh-chamber/dsh-host-client-graph/`（内容
   hash 一致跳过、漂移覆盖；`web/node_modules`→scope→chamber package→dist 的每个
   owned 最终目录逐级 no-follow 校验，target 以稳定有界 no-follow 读取、随机 O_EXCL
@@ -352,7 +353,7 @@ dsh 官方 web 的客户端插件链路是完整的（已核 vendor 源码）：
 |---|---|---|
 | M1 | 图通道：方案 A host 包 + Remote + 每实例取图 | ✅ 模块 A+B：host-graph-seed 单测 8 项（overlay 幂等/0600/自愈、seed 首拷/跳过/漂移覆盖/缺源跳过、`--patch` 注入位置、patchPath 到 spawn 的接线）；实机 E2E：seed → `--patch` spawn → 宿主内插件装载 → 反代 wire 调用 `clientGraph/graph` 返回 38 条真实 boot graph 行，宿主日志无 client-graph 错误 |
 | M2 | 合并加载：boot 流程去重 + 加载额外 entry + `inject`/`immediately` 尊重 | ✅ 模块 C+D：renderer host-graph 单测 12 项（wire 调用形状/503 静默/畸形图响亮/去重/toExtraRows 前缀）、`build:renderer` 通过 |
-| M3 | N-ctx 与远程：远程实例宿主图加载、各自 ctx 子集、断开清理 | ◐ 链路同构（远程反代同一条 `/api/i/<id>/*` 透传，前端无本地/远程分支）；**远程 seed 编排已落地**（设计 13 M2：`seedRemoteHostGraph` 经 exec write-file 原语把模块 A 包落到远端平铺 fallback `profiles/node_modules` + `cordis.patch.yml` 列表 insert + restart，见 §6 遗留 1 更新）；远程实例图通道不可达时按降级语义运行（无额外插件，不报错） |
+| M3 | N-ctx 与远程：远程实例宿主图加载、各自 ctx 子集、断开清理 | ◐ 链路同构（远程反代同一条 `/api/i/<id>/*` 透传，前端无本地/远程分支）；**远程 seed 编排已落地**（设计 13 M2：`seedRemoteChamberHostPackages` 经 exec write-file 原语把模块 A 包落到远端平铺 fallback `profiles/node_modules` + `cordis.patch.yml` 列表 insert + restart，见 §6 遗留 1 更新）；远程实例图通道不可达时按降级语义运行（无额外插件，不报错） |
 | M4 | 收尾：信任声明入代码注释、STATUS/文档同步、失败路径（缺 bundle/坏图） | ✅ 信任声明已入 `host-graph.ts` / 模块 A `index.ts` 注释；失败路径实现 + 单测覆盖（图通道降级、畸形图/坏 bundle 响亮、503 静默）；本文定稿与 STATUS 同步完成；verify:i18n 见 STATUS 验证记录 |
 
 ## 6. 风险与开放问题（按落地后更新）
@@ -361,7 +362,7 @@ dsh 官方 web 的客户端插件链路是完整的（已核 vendor 源码）：
   node_modules」落地（免 pnpm，模块 B 行内注释记录）；B 保留为兜底思路（A 为
   长期契约）。
 - **遗留 1：远程实例 seed——编排已落地（2026-08，设计 13 M2），已接线并可见化**：
-  远端 `$DSH_HOME` 经 `seedRemoteHostGraph`（exec write-file 原语）落地模块 A 包到
+  远端 `$DSH_HOME` 经 `seedRemoteChamberHostPackages`（exec write-file 原语）落地宿主包到
   平铺 fallback `profiles/node_modules`（跨 `dsh plugin` pnpm 操作持久）+
   `cordis.patch.yml` 列表 insert（生效节奏 = 官方插件集变更：重启后生效，seed 本身
   不重启远端）。接线（2026-08）：desktop main 在 SSH 实例转 ready 时自动 seed

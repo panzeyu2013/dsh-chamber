@@ -112,6 +112,10 @@ export const insertConflict = controlPlaneModule.insertConflict
 export const HOST_GRAPH_INSERT = controlPlaneModule.HOST_GRAPH_INSERT
 export const HOST_GIT_WORKTREE_INSERT = controlPlaneModule.HOST_GIT_WORKTREE_INSERT
 export const HOST_ARCHIVE_CLEANUP_INSERT = controlPlaneModule.HOST_ARCHIVE_CLEANUP_INSERT
+// The authoritative chamber host-package registry (name + insert id + liveness
+// probe): the desktop derives every chamber row/probe from it — never a
+// hand-maintained parallel list (2026-09 user decision).
+export const CHAMBER_HOST_PACKAGES = controlPlaneModule.CHAMBER_HOST_PACKAGES
 
 // Plugin spec/name whitelist family + reserved-name deny predicate
 // (plugin-spec.ts, design 21 §6.2/§6.7 — the shared source for the desktop
@@ -168,8 +172,10 @@ export const attachSpkiPinVerifier = controlPlaneModule.attachSpkiPinVerifier
 // time, so re-exporting from the workspace package costs nothing at runtime.
 export type {
   AuditTrailEvent,
+  ChamberHostPackageDescriptor,
   ClientRequestEnvelope,
   CordisInsert,
+  HostPackageInsert,
   InsertConflictKind,
   ParsedInsertRow,
   RawUnaryOutcome,
