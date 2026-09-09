@@ -71,6 +71,28 @@ export function workspacePathForSession(
   return workspace?.path
 }
 
+/** Which mark the header entry renders for one view-model entry. */
+export type OpenInMarkKind = 'catalog-icon' | 'vscode' | 'file-manager' | 'generic'
+
+/**
+ * Mark selection (Batch 3 Phase 2): ONLY official-channel entries use the
+ * host-served catalog icon (real bundle art, 404 → generic fallback); a
+ * main-channel entry always keeps its chamber presentation — the VS Code
+ * product mark for the IPC override, the neutral folder for file managers,
+ * the generic square otherwise. Passing a catalog URL for a main entry would
+ * silently swap the VS Code mark for a 404 placeholder whenever the instance's
+ * catalog does not list that app.
+ */
+export function markKindFor(
+  entry: { readonly channel: 'official' | 'main'; readonly displayKind: string },
+  hasCatalogIcon: boolean,
+): OpenInMarkKind {
+  if (entry.channel === 'official' && hasCatalogIcon) return 'catalog-icon'
+  if (entry.displayKind === 'vscode') return 'vscode'
+  if (entry.displayKind === 'file-manager') return 'file-manager'
+  return 'generic'
+}
+
 /**
  * View id → raw registry id for the main-process launch: canonical dsh/
  * gateway prefixes and the legacy ssh prefix are all presentation identity;

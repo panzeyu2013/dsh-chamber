@@ -42,7 +42,7 @@ import type { Translate } from '../shared/coordinator.ts'
 import type { OpenInResult, OpenInSource } from '../shared/capabilities.ts'
 import type { OpenInViewEntry, OpenInViewModel } from '../shared/open-in-view-model.ts'
 import { OPEN_IN_APP_LABEL_KEY } from '../locales.ts'
-import { workspacePathForSession } from './open-in-gates.ts'
+import { markKindFor, workspacePathForSession } from './open-in-gates.ts'
 import styles from './OpenInButton.module.css'
 
 /** Injected face the plugin supplies: per-boot source id + bound translator. */
@@ -179,10 +179,16 @@ function appLabel(entry: OpenInViewEntry, t: Translate, platform: string | null)
 }
 
 function appMark(entry: OpenInViewEntry, iconUrl: string | null) {
-  if (iconUrl !== null) return <CatalogIcon id={entry.id} url={iconUrl} />
-  if (entry.displayKind === 'vscode') return <VscodeMark />
-  if (entry.displayKind === 'file-manager') return <FolderMark />
-  return <GenericAppMark />
+  switch (markKindFor(entry, iconUrl !== null)) {
+    case 'catalog-icon':
+      return <CatalogIcon id={entry.id} url={iconUrl as string} />
+    case 'vscode':
+      return <VscodeMark />
+    case 'file-manager':
+      return <FolderMark />
+    default:
+      return <GenericAppMark />
+  }
 }
 
 export function OpenInButton({

@@ -65,7 +65,7 @@ CSS `packages/renderer/src/styles.css` 引入）+ client 构面未列出的小�
 | 文件 | 标记 | 原因/补丁说明 |
 |---|---|---|
 | `package.json` | [patch-mod] | 描述/测试脚本/deps·peerDeps·files 面差异；版本行随上游 |
-| `README.md` / `README.zh.md` / `README.i18n.yaml` | [patch-mod] | chamber 说明（N-ctx boot kernel），非上游镜像（脚本按 patched 登记） |
+| `README.md` / `README.zh.md` / `README.i18n.yaml` | [own-divergent] | chamber 说明（N-ctx boot kernel），非上游镜像（脚本同在 patched 桶，标签一致） |
 | `src/boot.ts` | [patch-mod] | rc.8 N-ctx boot kernel（extraRows / `__ModuleLoader__` / configureContext / 异步 dispose） |
 | `src/index.ts` | [patch-mod] | 入口差异（module-system 宿主接线） |
 | `src/platform.ts` | [patch-mod] | PLATFORM_MODULES / 静态表 chamber 接线（C3 偏差：ui-primitives 不 seed） |
