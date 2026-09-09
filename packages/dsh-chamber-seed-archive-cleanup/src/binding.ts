@@ -17,7 +17,23 @@
  *  - filesystem failures (EACCES/EMFILE/EISDIR…) map to item code `storage`
  *    so per-item isolation holds (review Major-2); symlinked session
  *    dirs/artifacts fail closed (review Minor m2);
- *  - per-delete live guard refuses sessions that turned running (contract).
+ *  - per-delete live guard refuses sessions that turned running (contract);
+ *    a merely LOADED (idle) session is refused with code `loaded` unless the
+ *    caller authorized `force` (2026-09 revision, design 24 §22);
+ *  - COMPLETENESS UNION (2026-12 blocker fix): neither official enumeration is
+ *    authoritative alone — `SessionCorpus.listSessions` answers LIVE-ONLY with
+ *    no error when its optional persistence binding is absent (vendor
+ *    session-query/session-query/src/corpus.ts:68-87) and the jsonl
+ *    `listArtifacts` skips unparseable/empty artifacts and returns [] for an
+ *    absent sessions root (vendor session/session-persistence-jsonl/src/
+ *    index.ts:507-544,893-904) — so `listHeaders` unions both surfaces by id
+ *    and never drops a record either side reports;
+ *  - AUTHORITATIVE EXISTENCE PROBE (2026-12 blocker fix): `hasStoredContent`
+ *    asks the official `sessionPersistence.inspect(id)` — the jsonl backend
+ *    resolves an id across ALL project directories when cwd is unknown
+ *    (vendor session/session-persistence-jsonl/src/index.ts:227-234 findLog)
+ *    — and fails closed to `true` on every error except the official
+ *    not-found carrier.
  */
 
 import { rm, rmdir, lstat } from 'node:fs/promises'
@@ -73,10 +89,15 @@ export interface HostCtxServices {
   readonly workspaceRegistry?: RegistryLike
   readonly sessionQuery?: { listSessions?(signal?: unknown): Promise<readonly SessionRecordLike[]> }
   readonly sessions?: { list?(): readonly { id: unknown }[] }
-  readonly agents?: { list?(): readonly { id: unknown }[] }
+  readonly agents?: { list?(): readonly { id: unknown; status?: unknown }[] }
   readonly sessionPersistence?: {
     list?(signal?: unknown): Promise<readonly SessionHeaderLike[]>
     locate?(header: SessionHeaderLike): { kind?: string; path?: string } | undefined
+    /** Official single-session read (pinned `SessionPersistence.inspect(id,
+     *  signal)`) — the sweep's DECISIVE content-existence probe. Optional in
+     *  this structural view so a drifted/older host degrades to "never sweep"
+     *  instead of crashing (fail closed; see hasStoredContent below). */
+    inspect?(id: string, signal?: unknown): Promise<unknown>
   }
 }
 
@@ -107,6 +128,26 @@ function assertHeaderShape(header: unknown): void {
     malformed('parentSession', 'a string when present')
   }
   if (h.origin !== undefined && h.origin !== 'subagent') malformed('origin', "exactly 'subagent' when present")
+}
+
+/**
+ * Structural identification of the official "no materialized durable log"
+ * carrier (vendor session/session-persistence/src/errors.ts
+ * `SessionPersistenceNotFoundError`, pinned dsh-v0.1.2-rc.1): an Error whose
+ * `name` is exactly `SessionPersistenceNotFoundError` and whose `sessionId`
+ * (when present) names the probed id.
+ *
+ * This binding deliberately does NOT import vendor internals (design 24 §10:
+ * structural over official surfaces), so the match is on the RUNTIME SHAPE and
+ * fails closed on every deviation: a different name, a non-Error throw, or a
+ * `sessionId` that disagrees with the probe all mean "may have content".
+ */
+function isPersistenceNotFoundError(error: unknown, sessionId: string): boolean {
+  if (!(error instanceof Error)) return false
+  if (error.name !== 'SessionPersistenceNotFoundError') return false
+  const reported = (error as { sessionId?: unknown }).sessionId
+  if (reported !== undefined && String(reported) !== sessionId) return false
+  return true
 }
 
 /* ------------------------------------------------------------------ */
@@ -162,22 +203,41 @@ export function assertHostSurface(ctx: HostCtxServices): void {
   }
 }
 
-/** Live session id set (agents ∪ live store) — O(agents+live) per call. */
-function liveSessionIds(ctx: HostCtxServices): Set<string> {
-  const live = new Set<string>()
+/** Live-session facts (agents ∪ live store), split by WHY a session is live
+ *  (2026-09 revision): `running` = the agent is executing a turn (never
+ *  deletable); `loaded` = attached but idle (deletable only under `force`).
+ *  A drifted agent status fails the read loudly instead of silently
+ *  reclassifying a running agent as idle. */
+function liveSessionFacts(ctx: HostCtxServices): { running: Set<string>; loaded: Set<string> } {
+  const running = new Set<string>()
+  const loaded = new Set<string>()
   for (const agent of ctx.agents?.list?.() ?? []) {
-    if (agent !== null && typeof agent === 'object' && typeof (agent as { id?: unknown }).id === 'string') {
-      live.add(String((agent as { id: string }).id))
+    if (agent === null || typeof agent !== 'object' || typeof (agent as { id?: unknown }).id !== 'string') {
+      throw new ArchiveCleanupError(
+        'registry-unreadable',
+        'archiveCleanup: an agent entry has no string id — refusing the read (pinned-vendor drift)',
+      )
     }
+    const id = String((agent as { id: string }).id)
+    const status = (agent as { status?: unknown }).status
+    if (status !== 'idle' && status !== 'running') {
+      throw new ArchiveCleanupError(
+        'registry-unreadable',
+        `archiveCleanup: agent ${id} reports an unknown status ${JSON.stringify(status)} — refusing the read (a drifted status would silently reclassify a running agent as idle)`,
+      )
+    }
+    loaded.add(id)
+    if (status === 'running') running.add(id)
   }
-  // A session attached to the live store is never a deletion candidate
-  // (it may be open/current even without a running agent).
+  // A session attached to the live store is never a deletion candidate by
+  // default (it may be open/current even without a running agent); an
+  // explicit force purge may delete it after the caller stopped the run.
   for (const session of ctx.sessions?.list?.() ?? []) {
     if (session !== null && typeof session === 'object' && typeof (session as { id?: unknown }).id === 'string') {
-      live.add(String((session as { id: string }).id))
+      loaded.add(String((session as { id: string }).id))
     }
   }
-  return live
+  return { running, loaded }
 }
 
 export function makeHostBinding(ctx: HostCtxServices): ArchiveCleanupHost {
@@ -197,34 +257,58 @@ export function makeHostBinding(ctx: HostCtxServices): ArchiveCleanupHost {
   }
 
   const listHeaders = async (): Promise<readonly SessionHeaderLike[]> => {
-    // Live-preferred official corpus first. The gateway's static inject
-    // declares sessionQuery/sessionPersistence/... as required services
-    // (cordis mounts the plugin only when every listed service resolves), so
-    // the persistence.list fallback below guards a MOUNTED-but-method-
-    // incomplete surface (shape drift), not an absent service — and it keeps
-    // makeHostBinding directly usable under the partial fakes of the unit
-    // tests (implementation-review Minor-2 intent note).
+    // COMPLETENESS UNION (2026-12 blocker fix). Neither official enumeration
+    // is authoritative on its own, and the sweep's whole decision is "this id
+    // has no record":
+    //  - `sessionQuery.listSessions()` returns the LIVE-ONLY corpus with NO
+    //    error when its optional persistence binding is absent (vendor
+    //    session-query/session-query/src/corpus.ts:68-87 — `persisted = []`
+    //    when `_persistence === undefined`);
+    //  - the jsonl `listArtifacts` skips unparseable/empty artifacts and
+    //    returns `[]` when the sessions root is absent, also with NO error
+    //    (vendor session/session-persistence-jsonl/src/index.ts:507-544,
+    //    893-904).
+    // So when BOTH surfaces answer, the result is their UNION by id: an id
+    // either side still lists keeps its record and can therefore never look
+    // like an orphan. Dropping a record is the unsafe direction; adding one
+    // only makes the sweep more conservative. Every header from BOTH legs is
+    // shape-validated with the same loud F3 policy before it enters the union
+    // (a drifted record refuses the whole read, never a silent per-item skip).
+    //
+    // A leg that THROWS is never silently dropped: the failure propagates and
+    // the caller maps it to `registry-unreadable` before mutating anything,
+    // because "one leg is broken" is indistinguishable from "the other leg is
+    // narrowed" — a partial corpus must never become the sweep's evidence.
+    const byId = new Map<string, SessionHeaderLike>()
+    let sawEnumeration = false
     if (query?.listSessions !== undefined) {
       const records = await query.listSessions()
       if (Array.isArray(records)) {
-        // F3: raw official intake — every record header must pass the loud
-        // shape check BEFORE any cascade keys on it (a single drifted record
-        // refuses the whole enumeration, never a silent per-item skip).
         for (const record of records) assertHeaderShape(record?.header)
-        return records.map(record => record.header)
+        for (const record of records) {
+          const header = record.header
+          if (!byId.has(header.id)) byId.set(header.id, header)
+        }
+        sawEnumeration = true
       }
     }
     if (persistence?.list !== undefined) {
       const headers = await persistence.list()
       if (Array.isArray(headers)) {
         for (const header of headers) assertHeaderShape(header)
-        return headers
+        for (const header of headers) {
+          if (!byId.has(header.id)) byId.set(header.id, header)
+        }
+        sawEnumeration = true
       }
     }
-    throw new ArchiveCleanupError(
-      'registry-unreadable',
-      'archiveCleanup: no session enumeration service (sessionQuery/sessionPersistence) is mounted',
-    )
+    if (!sawEnumeration) {
+      throw new ArchiveCleanupError(
+        'registry-unreadable',
+        'archiveCleanup: no session enumeration service (sessionQuery/sessionPersistence) is mounted',
+      )
+    }
+    return [...byId.values()]
   }
 
   return {
@@ -245,19 +329,62 @@ export function makeHostBinding(ctx: HostCtxServices): ArchiveCleanupHost {
       return [...byId.values()]
     },
 
-    async listLiveAgentIds() {
-      return [...liveSessionIds(ctx)]
+    async listLiveSessionFacts() {
+      const facts = liveSessionFacts(ctx)
+      return { running: [...facts.running], loaded: [...facts.loaded] }
     },
 
-    async deleteSessionContent(sessionId: string, cwd?: string) {
+    async hasStoredContent(sessionId: string) {
+      // DECISIVE per-candidate existence probe (2026-12 blocker fix). The
+      // official `sessionPersistence.inspect(id)` resolves the session through
+      // the backend's own id→artifact lookup: the pinned jsonl backend
+      // documents exactly this — `loadStored(id)`: "Read a stored prefix by id
+      // across all project directories when cwd is unknown" (vendor
+      // session/session-persistence-jsonl/src/index.ts:227-234, findLog scans
+      // the project dirs for the encoded id). An unknown cwd is therefore NOT
+      // a reason to report "no content".
+      //
+      // Fail-closed mapping:
+      //  - resolved inspection ⇒ true (the id still materializes);
+      //  - official SessionPersistenceNotFoundError ⇒ false — the ONLY answer
+      //    that may clear a membership;
+      //  - ANY other failure (corruption, unsupported format/version,
+      //    transport/IO, absent service, drifted error shape) ⇒ true;
+      //  - no inspect surface at all ⇒ true (the sweep then skips entirely).
+      // A false negative here would clear the membership of a session whose
+      // content still exists — the exact blocker this probe closes.
+      const inspect = persistence?.inspect
+      if (typeof inspect !== 'function') return true
+      try {
+        // Call AS A METHOD on the service object: the official persistence
+        // implementations are instance-state classes (the same `this` trap
+        // that broke a destructured `locate` on a real machine in 2026-09).
+        await inspect.call(persistence, sessionId)
+        return true
+      } catch (error) {
+        return !isPersistenceNotFoundError(error, sessionId)
+      }
+    },
+
+    async deleteSessionContent(sessionId: string, cwd?: string, force = false) {
       try {
         // Live guard at deletion time (interface contract): never delete a
-        // session that is open/running. This is the caller's per-member live
-        // gate — the core keeps only the per-tree recheck (review F2), so a
-        // mid-tree running flip is refused HERE as an item `running` error
-        // that aborts the remaining members of that tree (review F1).
-        if (liveSessionIds(ctx).has(sessionId)) {
+        // session that is RUNNING; a merely loaded (idle) session is refused
+        // unless the caller authorized `force` (2026-09 revision — the caller
+        // cancelled the run first, so no live writer can recreate the
+        // artifact). This is the caller's per-member live gate — the core
+        // keeps only the per-tree recheck (review F2), so a mid-tree running
+        // flip is refused HERE as an item `running` error that aborts the
+        // remaining members of that tree (review F1).
+        const facts = liveSessionFacts(ctx)
+        if (facts.running.has(sessionId)) {
           throw new ArchiveCleanupError('running', `archiveCleanup: ${sessionId} is running`)
+        }
+        if (!force && facts.loaded.has(sessionId)) {
+          throw new ArchiveCleanupError(
+            'loaded',
+            `archiveCleanup: ${sessionId} is loaded in this process — delete it with force after stopping it, or restart dsh`,
+          )
         }
         if (persistence === undefined || typeof persistence.locate !== 'function') {
           throw new ArchiveCleanupError(

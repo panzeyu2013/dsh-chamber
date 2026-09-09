@@ -40,6 +40,25 @@
   - **锁文件 vendor 记录修复脚本加移除守卫（修复）**：`restore-lockfile-vendor-records.mjs` 原先无条件从 HEAD 复活被 pnpm 剪掉的 importer 记录；上游在 0.1.5 移除 workspace 成员（landlock 4 条）后，脚本会把已不存在的成员补回，frozen 安装随即以「锁文件有、链接缺」失败。现按 `vendor/harness-packages/@deepseek-ai/<name>` 链接存在性（含断链）跳过并打印清单。新增根脚本 `pnpm run test:upgrade-tools`（两个脚本测试）+ CI 步骤。
   - **聚合刷新陈旧阈值按传输分级（H3）**：sidebar 聚合的 S2 重连 watchdog 原为单一 120s 且**只覆盖 direct-http 来源**；现按来源传输取阈值——http 保留 120s（浏览器腿有控制面 30s WS ping，上游腿无应用心跳、仅约 10min OS TCP keepalive，需较紧的自愈），**ssh 新增 300s 兜底**（隧道已有三层独立探测器：代理 30s/1 miss WS ping、宿主 mux 2s/2 misses、SSH keepalive 30×3≈90s，该臂只补「应用级冻结」这一层，阈值必须显著长于 http 以免空闲健康隧道每两分钟付一次基线重放），本地/未知来源不武装（`AGGREGATE_RECONNECT_HTTP_STALE_MS`/`AGGREGATE_RECONNECT_SSH_STALE_MS` + `reconnectStalenessMsForTransport`）；unary 30s 拉取节奏不变，watchdog 始终是「拉取的补充」。新增单测 2 例（http/ssh 阈值与 local/未知跳过）。
 
+### 修复
+
+- **归档清理后已删会话在侧边栏反复浮现（design 24 §21）**：purge 删除已归档
+  会话内容后，官方客户端 `SessionManager.summaries` 不会刷新（宿主会话事件为
+  文档化 no-op），而归档集合的收缩经官方 workspace follow 即时到达客户端，于是
+  生产端推送把「收缩后的集合 + 陈旧的行」一起提交，已删会话以普通行渲染（点击报
+  `session/not-found`）；30s unary 兜底拉取又把它清掉，形成「推送装回、拉取清掉」
+  的闪烁。修复分四层：① 生产端**墓碑抑制**（离开权威归档集合的 id 从上报快照与
+  运行时事实通道中过滤，直至官方 summaries 收敛或该 id 重新入集合）；②
+  **校验式收敛链**（以方法调用官方 `ctx.sessions.refresh()`——此前的脱绑调用每次
+  抛 `TypeError` 被吞掉、从未真正发出请求——resolve/reject/hung 三类结果均有界
+  重试，终态用 chamber unary `session.list` 权威探针，只释放服务端仍存在的 id）；
+  ③ App 侧**权威归档集记忆**（失去权威时作为收缩基线，并让降级 unary 视图继续
+  过滤已归档行；`archiveSetKnown` 仍为 false，管理器保持非破坏性降级分支）；
+  ④ 宿主**registry-global 孤儿清扫**（每次 purge 收尾清全集合无会话记录的成员：
+  逐候选官方单 id 存在性校验 + 查询/持久化枚举并集 + 空/塌缩语料可信度门，
+  只清集合成员、零新增删除语义，双重确认与 fail-closed）。
+  设计与进度见 design 24 §20/§21 与 `docs/progress/STATUS.md`。
+
 ## [0.2.4] - 2026-09-09
 
 ### 修复

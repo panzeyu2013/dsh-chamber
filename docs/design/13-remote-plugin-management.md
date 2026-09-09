@@ -66,7 +66,10 @@
   `@dsh-chamber/dsh-chamber-seed-archive-cleanup`（loader id `archive-cleanup`，design
   24，2026-12 起）落到远端
   install-level fallback `profiles/node_modules`，再合并 web profile 的
-  `cordis.patch.yml`。`seedRemoteHostGraph` 保留为旧手动 IPC 的单包兼容 wrapper。
+  `cordis.patch.yml`。seed 由 `seedRemoteChamberHostPackages(exec, spec, seeds)`
+  统一执行（单包/多包同一条路径，seed 表来自控制面注册表
+  `CHAMBER_HOST_PACKAGES`；手动 IPC `desktop_ssh_seed_host_graph` 复用同一实现
+  ——2026-09 单注册表收敛时删除了旧的单包 wrapper `seedRemoteHostGraph`）。
 - `materialize`：本地路径包物化（pack → ssh 传输 → 远端 `add file:`）；
   `add file:` 走独立目录约束白名单分支（仅物化目录内绝对路径）。本地
   `pnpm pack` 固定 `--config.ignore-scripts=true`，选择目录只授权读取/传输，
@@ -130,13 +133,39 @@
 
 ## 6. UI（连接设置页 · 插件管理）
 
+- **2026-09 修订（用户拍板：seed 了就必须在页面上可见，且不得写死）**：
+  「chamber 内置（注入）」表由**控制面注册表**驱动——`CHAMBER_HOST_PACKAGES`
+  （`packages/control-plane/src/host-graph-seed.ts`：insert id + 包名 + 存活探测
+  Remote）是唯一权威清单，desktop 的本地/远端注入态投影改为**逐包列表**
+  （`ChamberHostPackageState[]`，含 `insertId/name/probe/installed/patched/
+  version/live`），UI 直接映射该列表渲染行；本地探测、ssh 探测、gateway
+  seed-cache 漂移、gateway 同步包表、远端 seed 清单全部由同一清单派生。
+  起因：2026-12 加入第三个宿主包（design 24 `dsh-chamber-seed-archive-cleanup`）时，
+  seed/探测/同步/分类都补齐了，唯独该表与 desktop 注入态是写死的两行
+  （host-graph + git-worktree），导致已 seed 的包在页面上不可见；同时
+  `remoteNeedsSeed` 只校验两包，会让缺少第三个包的远端被误报「已注入」。
+  新增宿主包 = 在注册表加一行（页面、探测、同步自动覆盖）。
+- **2026-09 硬化轮（P1.4/P2.7）**：「chamber 内置（注入）」表的**行派生**从
+  `PluginDialog.tsx` 内联搬入纯函数 `deriveChamberRows`
+  （`plugin-inventory-text.ts`，locale-free：只回 label KEY 与版本 STRING，
+  绝不回 JSX/本地化文本），并由 `test/chamber-rows.test.ts` 表驱动覆盖完整输入
+  矩阵（local/ssh/gateway/http × 清单有/无 × installed/patched/live ×
+  seed-cache 漂移/缺项/整盘缺/未读 × 空 expected）。**数据源矩阵是契约**：
+  LOCAL 目标的 expected 与本地列都读**它自己的 profile 清单**
+  （`localList.chamber`），gateway/http/ssh 读桌面本机清单投影，ssh 在远端探测
+  成功时优先远端清单；**空 expected 列表不得声称「seed cache 不存在」**。
+  gateway 的**客户端插件行**（移动端入口）改由 Loader inventory 中
+  `classifyChamberClientPlugin` 的分类派生（`@dsh-chamber/dsh-client-ui-*`
+  前缀，不再是写死的包名字面量）；inventory 不可用时渲染 unknown 行，
+  绝不显示写死的包名。
 - 远端同步视图 + 本地列表视图；`plugin-diff` 一键应用本地清单。
 - chamber 内建注入可见化：`@dsh-chamber/dsh-chamber-seed-client-graph` 行显示
   installed/patched 状态 + 模块 A 包版本号（本地/远端均解析 seeded
   package.json）；远端未注入时提供「注入」按钮。
-- 远端生效状态三态：经主进程隧道 RPC 探测（`probeClientGraphLive`，POST
-  `clientGraph/graph`——renderer module C 同款只读调用，复用 verifyUp 探测
-  纪律：应答才分类）——「已注入并已生效」/「已注入（重启后生效）」/「生效
+- 远端生效状态三态：经主进程隧道 RPC 探测（`probeChamberHostLive`——方法与参数
+  取自控制面注册表描述符 `CHAMBER_HOST_PACKAGES[].probe`，每个宿主包走同一条
+  通用路径；旧的两条包名专用探测 `probeClientGraphLive`/`probeGitWorktreeLive`
+  已随单注册表收敛删除）——「已注入并已生效」/「已注入（重启后生效）」/「生效
   状态未知」（无 ready 隧道或探测不可分类时）。本地侧按设计不单独探测
   （本地实例即 chamber 页面，boot 自身证明图通道）。
 - 注入结果写入实例环形缓冲日志（transport-manager `appendLog`，连接设置页

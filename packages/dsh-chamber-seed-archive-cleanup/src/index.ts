@@ -10,8 +10,11 @@
  * amendment for per-selection deletion): the domain intersects the filter
  * with the authoritative archived set at run start, so the filter can never
  * name a non-archived session (fail-closed invariant, enforced in core). The
- * domain never reads session content and never touches non-archived sessions
- * (design 24 §2 boundaries).
+ * domain never RETURNS session content and never touches non-archived
+ * sessions; its ONLY content read is the registry-global orphan sweep's
+ * fail-closed existence probe (`sessionPersistence.inspect`), consumed solely
+ * as a boolean membership gate and never projected, logged or persisted —
+ * the owner-approved exception recorded in design 24 §2 boundary 1.
  *
  * Fixed wire namespace: `archiveCleanup/{preview,purge,probe}` — preview and
  * probe are zero-arg; purge takes an OPTIONAL `sessionIds` JSON parameter
@@ -27,9 +30,20 @@
  * HOST BINDING (design 24 §10/§14, verified against the pinned vendor
  * dsh-v0.1.2-rc.1 a66e4702, 2026-12): implemented in ./binding.ts —
  *  - archived set: `workspaceRegistry.archivedSessionIds` (public getter);
- *  - session states: `sessionQuery.listSessions()` + live `sessions/agents`;
+ *  - session states: the UNION by id of `sessionQuery.listSessions()` and
+ *    `sessionPersistence.list()` + live `sessions/agents` — neither
+ *    enumeration is authoritative alone (the live-preferred corpus answers
+ *    live-only with no error when its optional persistence binding is absent;
+ *    the jsonl list skips unparseable artifacts and answers [] for an absent
+ *    root), so a narrowed leg can never make a content-bearing member look
+ *    like an orphan (2026-12 blocker fix);
  *  - content location: `sessionPersistence.locate(header)` (official
  *    absolute artifact path, no layout knowledge copied);
+ *  - content EXISTENCE (the sweep's decisive gate): `sessionPersistence.
+ *    inspect(id)` — the official single-id read resolves the artifact across
+ *    all project dirs with cwd unknown; only the official not-found carrier
+ *    may answer "no content", every other failure fails closed to "has
+ *    content" (2026-12 blocker fix);
  *  - archived-set member removal: NO public official primitive exists — the
  *    binding performs ONE single-state `setState` write INSIDE the official
  *    `enqueueOperation` chain (serialized; runtime-guarded; version-pinned;
@@ -93,6 +107,7 @@ export class ArchiveCleanupGateway extends TypertRemoteService {
         archived: value.archived,
         deletable: value.deletableSessions,
         skippedRunning: value.skippedRunning,
+        skippedLoaded: value.skippedLoaded,
       })
       return value
     }))
@@ -101,18 +116,25 @@ export class ArchiveCleanupGateway extends TypertRemoteService {
   /** Delete the WHOLE archived set by default; with the optional `sessionIds`
    *  filter only the listed archived-set members (each as a deletable tree
    *  root). Zero-arg calls keep working — a missing JSON field reaches the
-   *  method as undefined. */
+   *  method as undefined. `force` (2026-09 revision) additionally deletes
+   *  subtrees that are merely LOADED in this process (the caller cancels the
+   *  run first); a RUNNING member is still refused. NOTE: the generic gateway
+   *  derives accepted arg names from this method's source text, so the
+   *  signature must stay plain identifiers without defaults or rest. */
   @Remote('purge')
-  purge(sessionIds?: readonly string[]): Promise<ArchiveCleanupDomainResult<PurgeResult>> {
+  purge(sessionIds?: readonly string[], force?: boolean): Promise<ArchiveCleanupDomainResult<PurgeResult>> {
     return domainResult(() => this.gate.run(async () => {
       this.logger?.info?.('[archiveCleanup] purge started', {
         ...(sessionIds === undefined ? {} : { filterCount: sessionIds.length }),
+        ...(force === true ? { force: true } : {}),
       })
-      const value = await this.core.purge(sessionIds)
+      const value = await this.core.purge(sessionIds, force === true)
       this.logger?.info?.('[archiveCleanup] purge finished', {
         deletedSessions: value.deletedSessions,
         deletedSubagents: value.deletedSubagents,
         skippedRunning: value.skippedRunning,
+        skippedLoaded: value.skippedLoaded,
+        forcedLoaded: value.forcedLoaded,
         errorCount: value.errors.length,
       })
       return value

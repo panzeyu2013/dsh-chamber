@@ -62,7 +62,7 @@ namespace 固定为 `gitWorktree`：
 | `previewCreate(input)` | 验证 repo id、本地分支、目标 parent/basename 和当前 HEAD，返回短期 capability token；preview 不是最终授权 |
 | `create(input)` | 在 common-dir mutex 中重新验证；`operationId` 合并重复请求，响应丢失时同 id 返回同一结果 |
 | `rollbackCreate(input)` | 仅对本 operation 创建、尚未被 workspace 注册、身份未变且 clean 的 worktree 有效；不用 `--force` |
-| `remove(input)` | fresh 对账后仅删除权威 worktree list 中的 linked worktree；主 checkout、locked、身份变化、关联 running agent 都拒绝；dirty 默认拒绝，仅当 `discardChanges: true`（对话框显式勾选，§6 修订）时以 `git worktree remove --force` 移除；不删分支（除非显式 `deleteBranch`，§11.3） |
+| `remove(input)` | fresh 对账后仅删除权威 worktree list 中的 linked worktree；主 checkout、locked、身份变化都拒绝；关联 running agent 拒绝，**但已归档（或其祖先已归档）的运行中会话不阻塞**（§6 修订 2026-09；删除不触碰任何会话）；dirty 默认拒绝，仅当 `discardChanges: true`（对话框显式勾选，§6 修订）时以 `git worktree remove --force` 移除；不删分支（除非显式 `deleteBranch`，§11.3） |
 
 RPC 只接受领域 operation，不接受任意 Git argv。所有 mutation 的锁键是
 canonical common-dir，不是 renderer 提供的 repo path。
@@ -151,7 +151,7 @@ preflight -> git-creating -> workspace-adopting -> session-creating
    recovery，复用同 operation/session id 继续注册，永不以“补偿”为名删除来源不明的
    worktree。
 
-## 6. 删除事务（无归档）
+## 6. 删除事务（不隐式归档）
 
 ```text
 fresh-preflight -> git-removing -> git-removed
@@ -159,8 +159,12 @@ fresh-preflight -> git-removing -> git-removed
                                       \-> workspace-delete-pending (retry)
 ```
 
-- 确认时重拉 snapshot 和 session aggregate；UI 拒绝当前正在阅读的 Session，
-  host 核心拒绝任一关联 running agent。
+- 确认时重拉 snapshot 和 session aggregate；UI 拒绝当前正在阅读的 Session
+  （**唯一例外**：该会话是 blank/从未提交的新会话——§6 2026-09 修订，
+  `currentSessionIsBlank`：无内容可保护，不构成硬阻断），
+  host 核心拒绝任一关联 running agent（**唯一例外**：该会话已归档，或它经
+  **subagent-origin 边**链到的祖先已归档——§6 2026-09 修订；未归档者与默认行为
+  不变，且删除不触碰任何会话）。
 - Git remove 先执行且不用 force。响应丢失后以权威 topology 已无
   该 worktree 为成功对账条件。
 - **2026-08 修订（用户拍板）**：dirty 工作树不再硬性阻断删除——删除对话框
@@ -214,6 +218,64 @@ fresh-preflight -> git-removing -> git-removed
     客户端凭该信号把未决的 git-remove 恢复判为已解决（"未删除"）并清除
     ——§7「UI 保留未决」的有界例外（仅限 host 可证明的变更前拒绝；
     歧义失败与 definitive conflict 行为不变）。
+- **2026-09 修订（running 会话：已归档者不再阻塞，删除不触碰任何会话；用户裁定）**：
+  工作树删除**不停、不取消、不隐式归档、也不删除任何会话**（「先归档（含子会话）」
+  是删除对话框里**显式、默认关闭**的独立勾选项，见 §11.3——不勾选即不隐式归档）；
+  **运行中的会话仍然阻塞删除，除非它已归档（或其经 subagent-origin 边链到的
+  祖先已归档）**——归档即「已了结」，其运行不再挡住工作树删除，而它的停止与内容
+  清理只属于归档管理器（design 24 §22.4）。
+  - **判据（宿主侧，`assertNoRunningSessions` / `assertNoRunningAtPath` 共用；
+    同一条判据作用于所有 mutation 腿——首次删除、rollbackCreate 的 path 腿
+    （`assertNoRunningAtPath(facts.path)`）、以及 remove 的 receipt / reconcile
+    重放腿（`assertRemovedWorkspaceReceipt`、`reconcileBoundRemove`）；每条腿都
+    重新读归档集合，因此两次尝试之间**取消归档**会立即恢复阻塞）**：
+    运行中的会话 **INERT**（不阻塞）当且仅当 `workspaceRegistry.archivedSessionIds`
+    含其 id，**或**它经 **subagent-origin 边**链到的祖先在该集合中。
+    **lineage 只走 subagent-origin 边（与 design 24 的 purge tree 同构）**：链条经
+    **所有已加载 agent**（含 idle）的 `session.header.origin` +
+    `session.header.parentSession` 走；只有 `origin === 'subagent'` 的行是 delegation
+    子会话。**缺 `origin` 的边是 fork lineage**（上游 `session/fork` /
+    `SessionStore.fork` 只写 `parentSession`、不写 `origin`；`packages/api/session-controller/src/commands.ts`
+    + `packages/core/session/src/index.ts` 核实）：fork 是**独立会话**，归档它
+    fork 自的会话不使其运行 INERT，且 purge tree
+    永不含 fork 后代——因此 **fork 边终止链条**（照旧阻塞）。运行中的子代理因此可
+    因已归档的根而 INERT。
+    **成环规则（与实现一致，顺序有意）**：**先判归档、后判成环**——**不含已归档
+    成员的环永不 INERT**（成环只证明 lineage 记录畸形；畸形证据不能放行运行中的
+    会话，fail closed）；**环上出现已归档成员则按已归档祖先规则 INERT**（已归档是
+    "已了结"的正证，正证优先于畸形证据）。**链条无法解析（父 id 既未加载也未归档，
+    或 subagent-origin 行缺父）→ 绝不 INERT，照旧阻塞**（fail closed，不猜）；
+    **已归档但未加载的祖先仍然胜出**（父 id 不在 agents 列表但在归档集合里，
+    照常 INERT）。
+  - **默认行为不变**：未归档的运行中会话报同一 `running-agent` 码与同一消息；
+    其余守卫（main/locked/身份/expected/dirty/submodule/
+    `assertNoOtherWorkspaceWithin`）一律照旧。归档集合读不到（getter 缺失/非数组
+    或读取抛错）→ `state-source-unavailable`，集合元素漂移（非字符串/空串）或
+    agent `origin` 值漂移 → `state-source-invalid`：snapshot 以响亮 `sourceError`
+    返回、mutation 腿直接抛错，**绝不当作空集合**（空集合会把每个已归档会话重新
+    变成阻塞项，用户裁定要修的正是这一点）；集合元素也**绝不 `String()` 强转**，
+    强转会把漂移元素伪装成合法成员。
+  - **投影（加性，旧客户端不受影响）**：`GitWorktreeInfo.runningSessionIds` 仍是
+    **全部**运行中会话（展示事实）；新增 `blockingRunningSessionIds` = 其中
+    **非 INERT** 者（真正阻塞的）。只读旧字段的客户端保持保守（任一运行中即阻塞），
+    新客户端读新字段。
+  - **客户端**：`removeBlockReason` 以 `blockingRunningSessionIds` 判定（字段缺失
+    = 旧宿主 → 回退 `runningSessionIds`，保守）；无勾选框、无取消、无停止编排
+    （早前的「先停止再删除」与 `WorktreeRunningError` 已按用户裁定删除）。
+    对话框仅在存在**未归档**运行中会话时显示「会阻止移除」的非阻断说明，另有
+    已归档运行中会话时显示第二条说明（不阻塞、也不会被停止/删除，归档管理器中处理）。
+  - **当前会话硬阻断与 runtime-unknown fail-closed 保留**（二者不是 running 守卫：
+    删除正在查看会话的 cwd 会破坏其后续工具调用；运行时通道缺失时无法排除当前会话）。
+    **既有例外（2026-09 记入文档，行为未变）**：当前会话若是 **blank/从未提交**的
+    新会话（`currentSessionIsBlank`——该行 `blank === true`），则不构成硬阻断
+    （无内容可保护）；`runtime-unknown` 无例外，一律 fail-closed 禁用确认。
+  - 起因（2026-09 实机）：归档是**软隐藏**（上游 `archiveSession` 只把 id 追加进
+    `archivedSessionIds`），**不会**停止运行；会话卡在 `ask_user_question`
+    （agent 相位持续 running）时归档反而让它从侧边栏消失、失去任何停止入口，
+    于是工作树既删不掉、归档清理也清不掉。用户裁定：已归档的运行中会话不该再
+    挡住工作树删除；它的停止与清理在归档管理器里处理。文案同步修正：行标题改用 `runningRemoveTitle`（旧键 `runningBlocked` 已随本轮删除
+    ——它断言「已归档的运行中会话不阻塞」，在旧宿主上为假；现由 `runningRemoveLegacyNote`
+    在无 `blockingRunningSessionIds` 时给出不含归档性断言的中性文案）。
 - 然后调 `workspace.delete`：它只解注册，会话日志保留并转 Ungrouped。
 - workspace delete 失败时保留完整的 `operationId + workspaceId + opaque expected + path`
   恢复项。首次及每次重试 registry delete 前，都先重放 host remove 终态验证：目标仍
@@ -238,6 +300,24 @@ fresh-preflight -> git-removing -> git-removed
   受信配置剩余边界。
 - 一个工作区/repo 失败不撤掉其它成功实体。Git 二进制缺失是来源级
   错误；非 Git 工作区不被误报为整源失败。
+- **归档感知 running 判据绝不缓存、绝不降级**（§6 2026-09）：每次 `readSource`
+  （首次删除、rollback path 腿、receipt/reconcile 重放腿）都重新读
+  `workspaceRegistry.archivedSessionIds`，并且只沿 **subagent-origin** 边
+  （fork 边终止）。集合读不到或形状漂移 → 响亮 `state-source-*`
+  失败（snapshot 用 `sourceError`，mutation 腿抛错），**绝不退化成空集合或
+  部分集合**：该集合是唯一能让运行中会话 INERT 的事实，"读不到"若退化成空集合，
+  已归档的运行中会话会重新锁死工作树删除（正是本次修订要修的 fail-open 反面）。
+- **已接受的残余（2026-09 登记）**：
+  - **pre-#1569 的 subagent 行没有 `origin`**：没有判别子可用，只能按「非
+    subagent-origin」处理 ⇒ 该边终止、会话照旧阻塞（fail-closed，且与上游一致：
+    缺 `origin` 的上游同样无法证明是 delegation 子会话）。代价是这类历史子会话不会
+    因已归档祖先而 INERT，其停止/清理需在归档管理器或会话侧处理。
+  - **来源面漂移分两类**：`origin` **值**漂移**逐行**处理并留响亮诊断
+    （`agent-origin-unknown` SnapshotError，见 §6），不会拖垮整个域；而**真正损坏的
+    来源面**（`archivedSessionIds` 非数组/元素非字符串、workspace 行畸形等）仍让整次
+    读取以可重试的 `state-source-*` 失败告终——此时没有任何 mutation 被尝试；若同一
+    删除此前已产生「未决（uncertain outcome）」恢复项，该恢复项保留到来源面修好
+    为止（用户需按本节恢复纪律重试或手工核对 fresh topology）。
 - Snapshot 共用一个 in-flight：20 秒是 probe launch/Git budget，25 秒是对客户端的
   wall response deadline；最多 128 workspace、64 repo、每 repo 128 且全源合计
   256 worktree、16K session memberships。running agent cwd 每轮至多 canonicalize
@@ -284,10 +364,10 @@ fresh-preflight -> git-removing -> git-removed
 
 | 里程碑 | 纵向闭环 |
 |---|---|
-| M0 | 修正 workspace/session wrapper，定稿 host-in-instance 边界、幂等键与无归档删除 saga |
+| M0 | 修正 workspace/session wrapper，定稿 host-in-instance 边界、幂等键与不隐式归档的删除 saga |
 | M1 | host snapshot + 远程/本地分发 + singleton 30s facts + `sidebar.workspace.git` 只读拓扑（座位 2026-08 对齐轮后为 workspace 行内，独立面板座位 `sidebar.git` 已移除，见 §4） |
 | M2 | preview/create/workspace/session/open-intent 创建闭环，含丢响应重试和安全补偿 |
-| M3 | fresh guard + Git-first + workspace-delete retry 删除闭环，不归档、不删分支；force 仅经 `discardChanges` 显式授权（§6 修订） |
+| M3 | fresh guard + Git-first + workspace-delete retry 删除闭环，不隐式归档、不删分支；force 仅经 `discardChanges` 显式授权（§6 修订） |
 | M4 | N-ctx/断连/局部失败/无 Git/打包回归与远程实机验收 |
 
 v1 明确不做 commit/diff/stash/fetch/push/PR，也不新增任意 Git 终端。
@@ -311,11 +391,11 @@ M0–M3 合并进 main 后追加的三处能力（对齐 OpenChamber 的会话�
    尽力而为）。客户端解码强制校验新字段（对旧 host 包 fail-closed）；
    侧栏呈现健康/HEAD/attention/「当前会话」徽标；删除守卫新增
    `unhealthy` 阻断；`canTargetSession` 门控新会话入口。
-3. **删除级联语义对齐（§6 扩展，不改无归档默认）**：删除确认时递归枚举
+3. **删除级联语义对齐（§6 扩展，不改不隐式归档默认）**：删除确认时递归枚举
    （`collectSessionClosure`：`parentSessionId` 闭包，环安全）直接 + 全部子
    会话并显式呈现；文案明示「会话保留并转未分组，不删除」。提供「先归档
-   （含子会话）」选项：归档在**任何 Git mutation 之前**执行，任一归档失败
-   即中止且不删除任何工作树（显式报错，可重试）。
+   （含子会话）」选项（**显式勾选、默认关闭**，§11.3）：归档在**任何 Git
+   mutation 之前**执行，任一归档失败即中止且不删除任何工作树（显式报错，可重试）。
 
 验证：`test:git`（31→46 用例）、`test:host-git`（42→59 用例）、
 `typecheck:git`/`typecheck:host-git`、`build:renderer`、sidebar/renderer-shell
@@ -441,7 +521,9 @@ subagent 复查的修复。除仓库特性外，前端形态与 OpenChamber 一�
 ### 11.3 删除对话框
 
 - 会话闭包统计 + **会话标题列表**（≤5 + "还有 N 条"，取自侧栏 aggregate）；
-  可选先归档（含子会话）；**可选同时删除本地分支**（用户授权，违背 §6
+  「先归档（含子会话）」是**显式勾选项、默认关闭**（`archiveSessions` 初值
+  `false`，每次打开/换目标重置）——**不勾选即不隐式归档/不自动归档**，§6 的
+  「不隐式归档」正是指这一点；**可选同时删除本地分支**（用户授权，违背 §6
   "不删分支"的旧立场——`git branch -D` 白名单新增，尽力一次，失败如实
   返回 `branchDeleteFailed` 且不阻断已删工作树；对话框留存说明）。
 - **dirty 工作树（2026-08 修订，用户拍板）**：删除图标不再禁用（仅 dirty），
@@ -461,8 +543,48 @@ subagent 复查的修复。除仓库特性外，前端形态与 OpenChamber 一�
   码**（§6），对话框流程一致可用。未注册行删除（window.confirm，无
   对话框授权流）沿用 dirty 的不对称：确定性拒绝 + host 英文提示（终端
   删除 modules 目录或 --force）。
-- 硬阻断（locked/running/current/unhealthy/status-unknown）保留；
+- **运行中会话（2026-09 修订，§6）**：`blocked === 'running'` 时删除图标不再禁用
+  （与 dirty 同型），也**没有勾选框**——删除不询问、也不触碰会话。是否阻塞由宿主
+  的归档感知事实 `blockingRunningSessionIds` 决定（该事实只沿 **subagent-origin**
+  边判 INERT，fork lineage 永不使其 INERT——§6）：
+  **未归档**的运行中会话照旧阻塞
+  （行标题/aria 用 `runningRemoveTitle` 说明「有未归档的会话正在运行，无法移除；
+  已归档的运行中会话不会阻塞，请在归档管理器中处理」；旧键 `runningBlocked` 已删除，
+  旧宿主走 `runningRemoveLegacyTitle` 的中性文案），**已归档**
+  的运行中会话不阻塞。对话框在存在未归档运行中会话时显示非阻断说明
+  （`runningRemoveBlockNote`），另有已归档运行中会话时追加
+  `runningRemoveArchivedNote`（不阻塞、不会被停止/删除，归档管理器中处理）。
+- **硬阻断（locked/current/unhealthy/status-unknown）保留**（`current` 的既有例外
+  是 blank/从未提交的当前会话——§6）；
   main/unregistered 仍不可从此入口删除。
+- **会话事实拉取失败 = 硬阻断（fail-closed，2026-09 记入文档，行为未变）**：
+  对话框打开时拉取 instance snapshot 以枚举将被孤立的会话树；该拉取失败时
+  `sessionFactsError` 非空，`confirmDisabled` 成立——确认按钮禁用并就地显示错误
+  （未知的会话影响不得用于一次破坏性删除；与 `runtime-unknown` 同一纪律）。
+  这是独立于 running 守卫的第三道客户端硬阻断，不得被降级为提示。
+- **会话闭包是 FORK 闭包，故意不按 subagent 边对齐（2026-12 评审登记，勿再改动）**：
+  `collectSessionClosure` 的行源是 `fetchInstanceSnapshot`，而
+  `instance-api.ts` 在上游就丢弃 `origin === 'subagent'` 行（`session.origin !==
+  'subagent'` 过滤），所以该闭包能看到的每条边都是 **fork 边**；**不要**在此加
+  subagent 过滤——那会把闭包塌成根集，静默丢掉「先归档（含子会话）」必须覆盖的
+  fork。vendor 依据（`dsh-api-session-controller/lib/index.js`）：`fork()` 把源
+  header 的 cwd 复制给子会话（`meta.cwd = source.header.cwd`，~:695-700），并经
+  `forkWorkspace(source.header)`（:683；按 `workspaceRegistry.list()` 的
+  `sessionIds` 定位源所在工作区，:872-883）＋ `workspace.attachSession(childId)`
+  （:712-714）把子会话挂到**同一个工作区**——fork 与源共享工作树 cwd 且同属该
+  工作区，归档它正是「归档工作区中会话」的语义（不是无关会话）。subagent 后代不在
+  该闭包内：它们经 `worktree.sessionIds` 归档，与可见性过滤无关。subagent-only 的
+  清理/停止闭包是侧栏的 `sessionPurgeClosure`（读原始 `session/list` 行），两者
+  职责不同，**不可互换**。
+- **运行中会话文案的三个键与判定优先级（2026-09）**：归档感知宿主用
+  `runningRemoveTitle` + `runningRemoveBlockNote`（未归档运行中会话，会阻塞）；
+  旧宿主（无 `blockingRunningSessionIds` 字段）用中性 `runningRemoveLegacyTitle` +
+  `runningRemoveLegacyNote`——**不得声称归档状态**（那是编造事实）；另有已归档、或
+  位于已归档会话子代理之下的运行中会话时追加 `runningRemoveArchivedNote`（不阻塞、
+  也不会被停止/删除）。`removeBlockReason` 的判定顺序是 **main → unregistered →
+  current（blank 例外）→ runtime-unknown → running → locked → unhealthy → dirty →
+  status-unknown**：`current` / `runtime-unknown` 都在 `running` **之前**，因此过时
+  或「仅已归档」的 running 事实无法绕过二者（G1-1 复查结论）。
 
 ### 11.4 后端对齐
 

@@ -12,10 +12,8 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { FATAL_STARTUP_BLOCK_REASONS } from '@dsh-chamber/dsh-runtime'
 import {
+  CHAMBER_HOST_PACKAGES,
   DEFAULT_STATE_DIR,
-  HOST_ARCHIVE_CLEANUP_INSERT,
-  HOST_GIT_WORKTREE_INSERT,
-  HOST_GRAPH_INSERT,
   createControlPlane,
   defaultDshWorkspacePath,
   type Logger,
@@ -327,27 +325,21 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
       // through the runtime manager (env → override → anchor, design 18 §9.3).
       dshWorkspacePath: options.config.plane.dshWorkspacePath,
       extraSeedEntries: [
-        {
-          insert: HOST_GRAPH_INSERT,
-          kind: 'host',
-          source: 'desktop-synced',
-          sourceDir: syncedSourceDir(options.config.plane.stateDir, '@dsh-chamber/dsh-chamber-seed-client-graph'),
-          probeDomains: ['clientGraph/graph'],
-        },
-        {
-          insert: HOST_GIT_WORKTREE_INSERT,
-          kind: 'host',
-          source: 'desktop-synced',
-          sourceDir: syncedSourceDir(options.config.plane.stateDir, '@dsh-chamber/dsh-chamber-seed-git-worktree'),
-          probeDomains: ['gitWorktree/previewCreate'],
-        },
-        {
-          insert: HOST_ARCHIVE_CLEANUP_INSERT,
-          kind: 'host',
-          source: 'desktop-synced',
-          sourceDir: syncedSourceDir(options.config.plane.stateDir, '@dsh-chamber/dsh-chamber-seed-archive-cleanup'),
-          probeDomains: ['archiveCleanup/probe'],
-        },
+        // The host packages are DERIVED from the control-plane registry
+        // (CHAMBER_HOST_PACKAGES): insert row, package name, probe domain and
+        // the per-package sync-cache source dir all follow from one row, so a
+        // host package added to the registry is seeded here without editing
+        // this file (2026-09 user decision: never a hand-maintained parallel
+        // list). A new registry row still has to land in
+        // HOST_PACKAGE_PROBE_DOMAINS/HOST_DOMAIN_PROBE_NAMES (plugins.ts and
+        // dsh-runtime pin that loud).
+        ...CHAMBER_HOST_PACKAGES.map(descriptor => ({
+          insert: descriptor.insert,
+          kind: 'host' as const,
+          source: 'desktop-synced' as const,
+          sourceDir: syncedSourceDir(options.config.plane.stateDir, descriptor.insert.name),
+          probeDomains: [descriptor.probe.method],
+        })),
         {
           insert: { id: 'mobile', name: '@dsh-chamber/dsh-client-ui-mobile' },
           kind: 'client',

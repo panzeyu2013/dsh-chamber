@@ -69,6 +69,30 @@ test('thirdPartyEntries: the three chamber host packages and the mobile entry ar
   assert.deepEqual(rows.map(row => row.moduleName), ['@dsh-chamber/user-tool', 'my-third-party-plugin'])
 })
 
+test('thirdPartyEntries: the caller expected list excludes a registry package the literals do not know', () => {
+  // A FUTURE registry package the literals do not know: the literal name
+  // classification cannot know it, so it would leak into the http zone's
+  // third-party list. The registry-derived expected list of the view is what
+  // keeps that zone honest (review G2-5).
+  const snapshot: PluginInventorySnapshot = {
+    entries: [
+      { entryId: 'p1', moduleName: '@dsh-chamber/dsh-host-future-domain', enabled: true, fiberPhase: 'active' },
+      { entryId: 'p2', moduleName: 'cordis:include @dsh-chamber/dsh-host-future-domain', enabled: true, fiberPhase: 'active' },
+      { entryId: 'p3', moduleName: '@dsh-chamber/user-tool', enabled: true, fiberPhase: 'loading' },
+    ],
+  }
+  assert.deepEqual(
+    thirdPartyEntries(snapshot).map(row => row.moduleName),
+    ['@dsh-chamber/dsh-host-future-domain', 'cordis:include @dsh-chamber/dsh-host-future-domain', '@dsh-chamber/user-tool'],
+    'without the expected list the unknown host package is classified third-party',
+  )
+  assert.deepEqual(
+    thirdPartyEntries(snapshot, ['@dsh-chamber/dsh-host-future-domain']).map(row => row.moduleName),
+    ['@dsh-chamber/user-tool'],
+    'the registry-derived expected name excludes BOTH report forms',
+  )
+})
+
 test('localChamberBadge: injected is positive, absent is muted, unreadable is a warn-unknown', () => {
   assert.deepEqual(localChamberBadge(true, false), { labelKey: 'chamberBadgeInjected', tone: 'ok' })
   assert.deepEqual(localChamberBadge(false, false), { labelKey: 'chamberBadgeNotInjected', tone: 'muted' })

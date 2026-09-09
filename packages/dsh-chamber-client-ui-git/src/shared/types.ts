@@ -57,6 +57,12 @@ export interface GitWorktreeInfo {
   workspaceId: string | null
   sessionIds: string[]
   runningSessionIds: string[]
+  /** The running sessions that actually BLOCK a removal (host 2026-09): every
+   *  running session EXCEPT the INERT ones (archived, or under an archived
+   *  ancestor). ABSENT on an older host — callers then fall back to
+   *  `runningSessionIds`, which stays conservative (blocks on any running
+   *  session). */
+  blockingRunningSessionIds?: string[]
 }
 
 /** Repository identity is host-minted; paths below are display facts only. */

@@ -39,7 +39,7 @@ import type { TransportManager } from './transport-manager.ts';
 import { commitTransportCredentialUpdate } from './transport-manager.ts';
 import { canonicalizeTransportInstanceInput, type TransportInstanceInput, type TransportInstanceSpec } from './transport-provider.ts';
 import { deleteConnectionTransaction, saveConnectionTransaction, validateDeleteOnlyReplacement, type ConnectionCredentialMutations } from './connection-save.ts';
-import { MAX_SSH_PASSWORD_CHARS, sshProvider, probeClientGraphLive, probeGitWorktreeLive } from './ssh-provider.ts';
+import { MAX_SSH_PASSWORD_CHARS, sshProvider, probeChamberHostLive } from './ssh-provider.ts';
 import { cleanupStaleAskpassHelpers, configureSshPasswordStore, getSshPassword, setSshPassword, sshPasswordSupported } from './ssh-provider.ts';
 import { applyWindowsAclTightening } from './win-acl.ts';
 import { configureGatewaySecretStore, configureGatewaySessionProvider, gatewayChamberApplyBatch, gatewayChamberMaterialize, gatewayPasswordValidationError, gatewayProvider, gatewaySecretStorageMode, gatewayTokenValidationError, getGatewayPassword, getGatewayToken, setGatewayPassword, setGatewayToken, setInstanceSecrets, syncGatewayChamberPlugins } from './gateway-provider.ts';
@@ -157,14 +157,11 @@ import { allowedActions } from '@dsh-chamber/dsh-runtime';
 import { isSafeVersion } from '@dsh-chamber/dsh-runtime';
 import {
   applyPlugins,
-  ARCHIVE_CLEANUP_INSERT_ID,
   ARCHIVE_CLEANUP_PACKAGE_NAME,
-  CLIENT_GRAPH_INSERT_ID,
   CLIENT_GRAPH_PACKAGE_NAME,
   ExactOwnershipRegistry,
   describeLocalPluginAddConfirmation,
   describeLocalPluginRemoveConfirmation,
-  GIT_WORKTREE_INSERT_ID,
   GIT_WORKTREE_PACKAGE_NAME,
   localPluginList,
   materializeAndAdd,
@@ -182,6 +179,8 @@ import {
   runWithFinalOwnership,
 } from './plugin-sync.ts';
 import type { ChamberHostPackageSeed, ExactOwnershipToken, ExecFn, StatusFn, RemoteSpec } from './plugin-sync.ts';
+import { CHAMBER_HOST_PACKAGES } from './control-plane-module.ts';
+import type { ChamberHostPackageDescriptor } from './control-plane-module.ts';
 import {
   DEFAULT_CHAMBER_SETTINGS,
   computeQuitRisk,
@@ -2270,40 +2269,26 @@ if (!gotTheLock) {
     // matches the runtime status(id) projection directly.
     const execTransport = sm.exec as unknown as ExecFn;
     const statusTransport: StatusFn = (id) => sm.status(id);
-    // Live-effect probe for the chamber host-graph state (design 09 module A):
-    // adapts probeClientGraphLive (ssh-provider.ts, tunnel RPC) onto
-    // plugin-sync's LiveProbe shape. `readyUrl` is main-process only (never
-    // the renderer); no ready tunnel → null = "not probed" (the plugin UI then
-    // renders 生效状态未知 instead of a guessed claim).
-    const liveProbeFor = (id: string): (() => Promise<boolean | null>) => () => {
+    // Live-effect probe for the chamber host packages (design 09 module A /
+    // 08 §11 / 24 §7): adapts the generic tunnel RPC probe onto plugin-sync's
+    // per-package LiveProbe shape, driven by the control-plane registry's own
+    // probe descriptor (method + args) — no per-package branch here. A 404 is
+    // deterministic "the running instance never loaded that boot row"; a
+    // package live from an older boot does NOT prove a later-seeded row
+    // loaded. `readyUrl` is main-process only (never the renderer); no ready
+    // tunnel → null = "not probed" (the plugin UI then renders 生效状态未知
+    // instead of a guessed claim).
+    const liveProbeFor = (id: string): ((descriptor: ChamberHostPackageDescriptor) => Promise<boolean | null>) => async (descriptor) => {
       const url = sm.readyUrl(id);
-      if (url === null) return Promise.resolve(null);
+      if (url === null) return null;
       try {
         const parsed = new URL(url);
         const port = parsed.port === '' ? null : Number(parsed.port);
-        if (port === null || !Number.isInteger(port) || port < 1 || port > 65535) return Promise.resolve(null);
-        return probeClientGraphLive({ host: parsed.hostname, port }).then(result =>
-          result === 'live' ? true : result === 'not-live' ? false : null);
+        if (port === null || !Number.isInteger(port) || port < 1 || port > 65535) return null;
+        const result = await probeChamberHostLive({ host: parsed.hostname, port }, descriptor.probe.method, descriptor.probe.args);
+        return result === 'live' ? true : result === 'not-live' ? false : null;
       } catch {
-        return Promise.resolve(null);
-      }
-    };
-    // Live-effect probe for the SECOND chamber host package (design 08 §11):
-    // same shape as liveProbeFor, hitting gitWorktree/previewCreate. A 404
-    // there is deterministic "the running instance never loaded the
-    // git-worktree row" — host-graph being live from an older boot does NOT
-    // prove it (a ready-time seed can add the git row after that boot).
-    const gitWorktreeLiveProbeFor = (id: string): (() => Promise<boolean | null>) => () => {
-      const url = sm.readyUrl(id);
-      if (url === null) return Promise.resolve(null);
-      try {
-        const parsed = new URL(url);
-        const port = parsed.port === '' ? null : Number(parsed.port);
-        if (port === null || !Number.isInteger(port) || port < 1 || port > 65535) return Promise.resolve(null);
-        return probeGitWorktreeLive({ host: parsed.hostname, port }).then(result =>
-          result === 'live' ? true : result === 'not-live' ? false : null);
-      } catch {
-        return Promise.resolve(null);
+        return null;
       }
     };
     // Exact-incarnation single-flight for ready/manual host-package seeds. A
@@ -2327,26 +2312,27 @@ if (!gotTheLock) {
     const archiveCleanupHostSourceDir = app.isPackaged
       ? path.join(pkgDir, 'dist', 'host-archive-cleanup-package')
       : path.join(repoRoot, 'packages', 'dsh-chamber-seed-archive-cleanup');
-    const chamberHostPackageSeeds: ChamberHostPackageSeed[] = [
-      {
-        insertId: CLIENT_GRAPH_INSERT_ID,
-        packageName: CLIENT_GRAPH_PACKAGE_NAME,
-        sourceDir: moduleASourceDir,
-        label: 'host-graph',
-      },
-      {
-        insertId: GIT_WORKTREE_INSERT_ID,
-        packageName: GIT_WORKTREE_PACKAGE_NAME,
-        sourceDir: gitWorktreeHostSourceDir,
-        label: 'git-worktree',
-      },
-      {
-        insertId: ARCHIVE_CLEANUP_INSERT_ID,
-        packageName: ARCHIVE_CLEANUP_PACKAGE_NAME,
-        sourceDir: archiveCleanupHostSourceDir,
-        label: 'archive-cleanup',
-      },
-    ];
+    // Per-package SOURCE DIRS are desktop-specific (packaged vs repo paths);
+    // the insert id/name come from the control-plane registry, so a registry
+    // addition/rename can never drift from the seed list (2026-09 user
+    // decision: no hand-maintained parallel package list). This ONE map feeds
+    // both consumers — the remote ssh seed list below and the gateway sync
+    // upload (`localChamberHostPackageSources`), which used to carry a second,
+    // independently maintained copy of the same three paths.
+    const chamberHostSourceDirs: Record<string, string> = {
+      [CLIENT_GRAPH_PACKAGE_NAME]: moduleASourceDir,
+      [GIT_WORKTREE_PACKAGE_NAME]: gitWorktreeHostSourceDir,
+      [ARCHIVE_CLEANUP_PACKAGE_NAME]: archiveCleanupHostSourceDir,
+    };
+    const chamberHostPackageSeeds: ChamberHostPackageSeed[] = CHAMBER_HOST_PACKAGES.map(descriptor => ({
+      insertId: descriptor.insert.id,
+      packageName: descriptor.insert.name,
+      // A registry package with no desktop source dir is "not shipped here":
+      // seedRemoteChamberHostPackages skips it (an empty dir never resolves a
+      // dist/index.js) instead of writing a dangling loader row.
+      sourceDir: chamberHostSourceDirs[descriptor.insert.name] ?? '',
+      label: descriptor.insert.id,
+    }));
     type RemoteTarget = {
       spec: RemoteSpec
       fingerprint: string
@@ -2370,9 +2356,12 @@ if (!gotTheLock) {
       scopeExecToOwnership(execTransport, target.spec.id, () => extraOwner() && ownsRemoteTarget(target));
     const scopedStatusForTarget = (target: RemoteTarget): StatusFn => id =>
       id === target.spec.id && ownsRemoteTarget(target) ? statusTransport(id) : null;
-    const scopedProbeForTarget = (target: RemoteTarget, probe: () => Promise<boolean | null>): (() => Promise<boolean | null>) => async () => {
+    const scopedProbeForTarget = (
+      target: RemoteTarget,
+      probe: (descriptor: ChamberHostPackageDescriptor) => Promise<boolean | null>,
+    ): ((descriptor: ChamberHostPackageDescriptor) => Promise<boolean | null>) => async (descriptor) => {
       if (!ownsRemoteTarget(target)) return null;
-      const result = await probe();
+      const result = await probe(descriptor);
       return ownsRemoteTarget(target) ? result : null;
     };
     // Remote install-level fallback path shared by both chamber host packages.
@@ -2431,20 +2420,20 @@ if (!gotTheLock) {
     // control-plane seed uses; the sync uploads them into the gateway seed
     // cache after every gateway ready registration.
     const localChamberHostPackageSources = (): Array<{ name: string; packageJsonPath: string; distIndexPath: string }> => {
-      const graphDir = app.isPackaged
-        ? path.join(pkgDir, 'dist', 'host-graph-package')
-        : path.join(repoRoot, 'packages', 'dsh-chamber-seed-client-graph');
-      const gitDir = app.isPackaged
-        ? path.join(pkgDir, 'dist', 'host-git-worktree-package')
-        : path.join(repoRoot, 'packages', 'dsh-chamber-seed-git-worktree');
-      const archiveCleanupDir = app.isPackaged
-        ? path.join(pkgDir, 'dist', 'host-archive-cleanup-package')
-        : path.join(repoRoot, 'packages', 'dsh-chamber-seed-archive-cleanup');
-      return [
-        { name: CLIENT_GRAPH_PACKAGE_NAME, packageJsonPath: path.join(graphDir, 'package.json'), distIndexPath: path.join(graphDir, 'dist', 'index.js') },
-        { name: GIT_WORKTREE_PACKAGE_NAME, packageJsonPath: path.join(gitDir, 'package.json'), distIndexPath: path.join(gitDir, 'dist', 'index.js') },
-        { name: ARCHIVE_CLEANUP_PACKAGE_NAME, packageJsonPath: path.join(archiveCleanupDir, 'package.json'), distIndexPath: path.join(archiveCleanupDir, 'dist', 'index.js') },
-      ];
+      // Registry-driven: one entry per chamber host package, reusing the
+      // single per-package source-dir map declared with the seed list above
+      // (2026-09 P2 round: the two consumers must not maintain the paths
+      // twice — a packaged/repo path fix has to land in one place).
+      return CHAMBER_HOST_PACKAGES.flatMap(descriptor => {
+        const dir = chamberHostSourceDirs[descriptor.insert.name];
+        return dir === undefined
+          ? []
+          : [{
+            name: descriptor.insert.name,
+            packageJsonPath: path.join(dir, 'package.json'),
+            distIndexPath: path.join(dir, 'dist', 'index.js'),
+          }];
+      });
     };
     // Resolves the awaited sync outcome for the caller (the manual
     // gateway_plugin_sync IPC, design 21 §6.5) or null when the instance is
@@ -3277,7 +3266,6 @@ if (!gotTheLock) {
         () => ownsRemoteTarget(target),
         () => remotePluginList(scopedExecForTarget(target), target.spec, {
           liveProbe: scopedProbeForTarget(target, liveProbeFor(id)),
-          gitWorktreeLiveProbe: scopedProbeForTarget(target, gitWorktreeLiveProbeFor(id)),
         }),
       );
       // readManifest 投影统一掩码 (design 21 §6.2/§6.4, decision 18): the

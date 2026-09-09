@@ -67,7 +67,10 @@ import { atomicWritePrivateFileNoFollow, ensurePrivateDirectoryNoFollow, readPri
 // 09 module A / design 13 §4.6) — consumed through control-plane-module.ts
 // (the desktop dual-path facade) so the desktop-facing package-name/insert-id
 // constants below derive from control-plane's own seed and can never drift.
-import { HOST_ARCHIVE_CLEANUP_INSERT, HOST_GIT_WORKTREE_INSERT, HOST_GRAPH_INSERT } from './control-plane-module.ts'
+import {
+  CHAMBER_HOST_PACKAGES, HOST_ARCHIVE_CLEANUP_INSERT, HOST_GIT_WORKTREE_INSERT, HOST_GRAPH_INSERT,
+  type ChamberHostPackageDescriptor, type HostPackageInsert,
+} from './control-plane-module.ts'
 // ssh unified increments (design 21 §6.4, plan Phase 5): the reserved-name
 // deny + row assembly helpers (parseSpecName / buildSshApplyRows /
 // describeReservedNameRefusal — ssh-apply-rows.ts). Pure module, imports no
@@ -89,6 +92,10 @@ import {
 } from '@dsh-chamber/dsh-runtime'
 
 export { PLUGIN_SPEC_PATTERN, PLUGIN_NAME_PATTERN }
+// The authoritative chamber host-package registry (name + insert id + liveness
+// probe). Re-exported so every desktop consumer/tests derive from the SAME
+// list — the plugin-management projection must never re-declare it.
+export { CHAMBER_HOST_PACKAGES }
 
 // ============================================================================
 // Contract A types: TransportExecAction / TransportRunPayload imported from
@@ -403,30 +410,41 @@ export function classifyDependencyValue(spec: string): SpecClass {
  * - `installed` — module A's package files are present in the profile
  *   (local: `<home>/profiles/web/node_modules/@dsh-chamber/dsh-chamber-seed-client-graph`,
  *   seeded per-spawn by the control plane; remote: the install-level flat
- *   fallback `<home>/profiles/node_modules/…`, seeded by seedRemoteHostGraph).
+ *   fallback `<home>/profiles/node_modules/…`, seeded by
+ *   seedRemoteChamberHostPackages).
  * - `patched` — the boot layer carries the client-graph insert (local: the
  *   `--patch` overlay file; remote: the profile's cordis.patch.yml).
  * Both must hold for the row to actually resolve at boot — one without the
  * other is a half-injected state the UI renders distinctly, never "done".
  */
-export interface ChamberHostGraphState {
+/**
+ * One chamber host package's per-target state — the plugin-management page's
+ * chamber-table row. The EXPECTED package set comes from the control-plane
+ * registry (`CHAMBER_HOST_PACKAGES`: name + loader insert id + liveness probe
+ * method), so a new host package appears in the page with no UI change and no
+ * hand-maintained row list (2026-09 user decision).
+ */
+export interface ChamberHostPackageState {
+  /** Loader insert id (control-plane seed registry). */
+  insertId: string
+  /** Package name (profile node_modules dir + loader module specifier). */
+  name: string
+  /** Remote probed for liveness ('namespace/method'). */
+  probe: string
+  /** Both seed files (package.json + dist/index.js) present at the target. */
   installed: boolean
+  /** The target's loader overlay carries this exact insert row. */
   patched: boolean
-  /** Module A's own package version (read from the seeded package.json —
-   *  local: the profile node_modules copy; remote: the install-level flat
-   *  fallback, whose manifest the probe already cats). null when not
-   *  installed or the manifest is unreadable/version-less — never a guessed
-   *  default. */
+  /** The package's own version from the seeded manifest (null when absent or
+   *  unreadable — never a guessed default). */
   version: string | null
   /**
-   * Live-effect state of the RUNNING instance (design 09 module A liveness):
-   * true = the instance's clientGraph/graph remote answered the RPC probe
-   * (module A is loaded in the running process); false = injected but not
-   * loaded yet (a restart is pending); null = not probed (local side / no
-   * ready tunnel / the probe could not classify). The LOCAL side stays null
-   * by design — the local instance IS the chamber page, whose own boot
-   * already proves the graph channel (or degrades with the acknowledged
-   * module-C observability gap); only the remote side has a separate probe.
+   * Live-effect state of the RUNNING instance: true = the package's probe
+   * Remote answered the RPC probe (the boot row is loaded); false = injected
+   * but not loaded yet (a restart is pending); null = not probed (local side
+   * / no ready tunnel / the probe could not classify). The LOCAL side stays
+   * null by design — the local instance IS the chamber page, whose own boot
+   * already proves its channels; only remote targets get a separate probe.
    */
   live: boolean | null
 }
@@ -434,20 +452,15 @@ export interface ChamberHostGraphState {
 /**
  * Probe outcome: `ok:false` = the instance's injection state could not be
  *  read (remote ssh exec failure / unparseable patch) — loud, never a silent
- *  "not injected". `gitWorktree` reports the second chamber host package
- *  (design 08 §11): its loader row lives in the SAME cordis.patch.yml, so
- *  `patched` is checked per package (the host-graph insert present does NOT
- *  prove the git-worktree insert present — a machine seeded before the git
- *  package existed can carry only the client-graph row); `live` answers the
- *  same "已生效 vs 重启后生效" question for the RUNNING instance as
- *  hostGraph.live (host-graph can be live from an older boot while the
- *  newly-seeded git-worktree row still awaits its restart). */
+ *  "not injected". The projection is PER REGISTRY PACKAGE (the fixed
+ *  hostGraph/gitWorktree pair is gone): every row's loader row lives in the
+ *  SAME cordis.patch.yml, so `patched` is checked per package (one insert
+ *  present does NOT prove another's — a machine seeded before a newer host
+ *  package existed carries only the older rows); `live` answers the same
+ *  "已生效 vs 重启后生效" question per package (an older row can be live from
+ *  an earlier boot while a newly-seeded row still awaits its restart). */
 export type ChamberInjectionState =
-  | {
-    ok: true
-    hostGraph: ChamberHostGraphState
-    gitWorktree: { installed: boolean; patched: boolean; version: string | null; live: boolean | null }
-  }
+  | { ok: true; packages: ChamberHostPackageState[] }
   | { ok: false; error: string }
 
 export interface RemotePluginManifest {
@@ -633,42 +646,31 @@ export function localPluginList(localDshHome: string): LocalPluginManifest {
     clientLines,
     bundleLines,
     unsyncable,
-    // Chamber-injected host-graph (design 09 module B): module A's package in
-    // the profile node_modules + the `--patch` overlay beside the dsh home.
-    // Both must be present for the client-graph row to resolve at boot — the
-    // UI renders the half-injected state distinctly, never as "done".
+    // Chamber host packages (design 09 module B / 08 §11 / 24 §7): each
+    // registry row is probed for the SAME two facts the remote probe uses —
+    // both seed files present in the profile node_modules, and the `--patch`
+    // overlay beside the dsh home carrying that exact insert row (one overlay
+    // file, per-package row presence: a machine seeded before a package
+    // existed carries the older rows only, and must report that package as
+    // half-injected rather than "done"). `live` stays null locally: the local
+    // instance IS the chamber page, whose own boot proves the channels.
     chamber: {
       ok: true,
-      hostGraph: {
+      packages: CHAMBER_HOST_PACKAGES.map((descriptor): ChamberHostPackageState => ({
+        insertId: descriptor.insert.id,
+        name: descriptor.insert.name,
+        probe: descriptor.probe.method,
         // installed = BOTH seed files present — the same two-file definition
         // as the remote probe and the seed writer (SEED_FILES, control-plane
-        // host-graph-seed.ts HOST_GRAPH_SEED_FILES): a package.json without
-        // dist/index.js is a half-injected module A (the boot row could not
-        // resolve) and must report 未注入, never "done".
+        // host-graph-seed.ts): a package.json without dist/index.js is a
+        // half-injected package (the boot row could not resolve) and must
+        // report 未注入, never "done".
         installed: SEED_FILES.every(relative =>
-          existsSync(join(profileDir, 'node_modules', CLIENT_GRAPH_PACKAGE_NAME, relative))),
-        patched: existsSync(join(dirname(localDshHome), HOST_GRAPH_PATCH_FILENAME)),
-        // Module A's own version from the seeded manifest (null when absent).
-        version: readManifestVersion(readDependencyManifest(profileDir, CLIENT_GRAPH_PACKAGE_NAME)),
-        // Local side: the local instance IS the chamber page — its own boot
-        // proves the graph channel (or degrades with the acknowledged module-C
-        // observability gap). No separate liveness probe; the remote side
-        // carries one (probeRemoteChamber liveProbe).
+          existsSync(join(profileDir, 'node_modules', descriptor.insert.name, relative))),
+        patched: localOverlayCarriesInsert(localDshHome, descriptor.insert),
+        version: readManifestVersion(readDependencyManifest(profileDir, descriptor.insert.name)),
         live: null,
-      },
-      // Second chamber host package (design 08 §11) — same two-file presence
-      // definition as the remote probe; `patched` checks the overlay CONTENT
-      // for the git-worktree row (the overlay normally carries both rows, but
-      // a stale overlay from before the git package existed can carry only the
-      // client-graph row — the same half-injected state the remote probe's
-      // per-package insert check detects); no live probe on the local side.
-      gitWorktree: {
-        installed: SEED_FILES.every(relative =>
-          existsSync(join(profileDir, 'node_modules', GIT_WORKTREE_PACKAGE_NAME, relative))),
-        patched: localOverlayCarriesGitWorktree(localDshHome),
-        version: readManifestVersion(readDependencyManifest(profileDir, GIT_WORKTREE_PACKAGE_NAME)),
-        live: null,
-      },
+      })),
     },
   }
 }
@@ -806,11 +808,16 @@ export function describePluginApplyConfirmation(info: {
  * whose built artifacts exist, so a stale overlay can predate the git
  * package. Unreadable/absent → false (never a guessed "patched").
  */
-function localOverlayCarriesGitWorktree(localDshHome: string): boolean {
+/** True when the local overlay carries ONE exact chamber insert row. The
+ *  overlay is a single file for every chamber host package, so presence is
+ *  judged per package (a stale overlay from before a package existed carries
+ *  the older rows only — the same half-injected state the remote probe's
+ *  per-package insert check detects). */
+function localOverlayCarriesInsert(localDshHome: string, insert: HostPackageInsert): boolean {
   const overlayPath = join(dirname(localDshHome), HOST_GRAPH_PATCH_FILENAME)
   if (!existsSync(overlayPath)) return false
   try {
-    return hasExactInsert(readFileSync(overlayPath, 'utf8'), toCordisInsert(GIT_WORKTREE_HOST_INSERT))
+    return hasExactInsert(readFileSync(overlayPath, 'utf8'), registryInsertToCordis(insert))
   } catch {
     return false
   }
@@ -870,7 +877,11 @@ function readDependencyManifest(profileDir: string, name: string): unknown {
 // 2. remotePluginList
 // ============================================================================
 
-export async function remotePluginList(exec: ExecFn, spec: RemoteSpec, opts?: { liveProbe?: LiveProbe; gitWorktreeLiveProbe?: LiveProbe }): Promise<RemotePluginListResult> {
+export async function remotePluginList(
+  exec: ExecFn,
+  spec: RemoteSpec,
+  opts?: { liveProbe?: ChamberLiveProbe },
+): Promise<RemotePluginListResult> {
   const path = remoteManifestPath(spec.remoteDshHome)
   // Quiet (2026-08 review fix): on an uninitialized remote profile the
   // manifest cat ENOENTs — an EXPECTED probe failure that must not write an
@@ -903,16 +914,20 @@ export async function remotePluginList(exec: ExecFn, spec: RemoteSpec, opts?: { 
  * Live-effect probe of the running instance (design 09 module A): true = the
  * instance's clientGraph/graph remote answered (module A loaded), false =
  * injected but restart pending, null = unknown/unprobed. The desktop main
- * adapts probeClientGraphLive (ssh-provider.ts) onto this shape.
+ * adapts probeChamberHostLive (ssh-provider.ts) onto this shape.
  */
 export type LiveProbe = () => Promise<boolean | null>
+
+/** Per-package liveness probe (the registry descriptor names the Remote). */
+export type ChamberLiveProbe = (descriptor: ChamberHostPackageDescriptor) => Promise<boolean | null>
 
 /**
  * Read-only probe of the chamber-injected host-graph state on a remote
  * instance (design 09 module A+B): module A's TWO seed files (package.json +
- * dist/index.js — the same SEED_FILES set seedRemoteHostGraph writes) at the
- * install-level flat fallback (`<home>/profiles/node_modules/…`, the layer
- * seedRemoteHostGraph writes and `dsh plugin` pnpm relinks never prune) +
+ * dist/index.js — the same SEED_FILES set seedRemoteChamberHostPackages
+ * writes) at the install-level flat fallback
+ * (`<home>/profiles/node_modules/…`, the layer that seed writes and
+ * `dsh plugin` pnpm relinks never prune) +
  * the profile's cordis.patch.yml inserts (reusing computeCordisPatchUpdate's
  * dedup rules, checked PER package — the host-graph insert present does not
  * prove the git-worktree insert present, design 08 §11). Three extra `cat`
@@ -924,100 +939,87 @@ export type LiveProbe = () => Promise<boolean | null>
  * resolve) and must not report "installed".
  *
  * Additionally parses each package's own VERSION from the package.json it
- * already cats, and — when a `liveProbe`/`gitWorktreeLiveProbe` is supplied
- * (the desktop main's tunnel RPC probes) — reports whether the RUNNING
- * instance has actually loaded the module (live tri-state), so the plugin UI
- * can distinguish "已生效" from "重启后生效" instead of a constant claim.
+ * already cats, and — when a `liveProbe` is supplied (the desktop main's
+ * per-descriptor tunnel RPC probe, probeChamberHostLive) — reports whether the
+ * RUNNING instance has actually loaded the module (live tri-state), so the
+ * plugin UI can distinguish "已生效" from "重启后生效" instead of a constant
+ * claim.
  */
-async function probeRemoteChamber(exec: ExecFn, spec: RemoteSpec, opts?: { liveProbe?: LiveProbe; gitWorktreeLiveProbe?: LiveProbe }): Promise<ChamberInjectionState> {
+async function probeRemoteChamber(
+  exec: ExecFn,
+  spec: RemoteSpec,
+  opts?: { liveProbe?: (descriptor: ChamberHostPackageDescriptor) => Promise<boolean | null> },
+): Promise<ChamberInjectionState> {
   const home = remoteHome(spec.remoteDshHome)
-  const pkgPath = `${home}/profiles/node_modules/${CLIENT_GRAPH_PACKAGE_NAME}/package.json`
-  const indexPath = `${home}/profiles/node_modules/${CLIENT_GRAPH_PACKAGE_NAME}/dist/index.js`
-  const pkgRes = await exec(spec.id, 'run', { op: 'exec', command: 'cat', argv: [pkgPath], quiet: true })
-  let pkgInstalled: boolean
-  let version: string | null = null
-  if (pkgRes.ok) {
-    pkgInstalled = true
-    version = parsePackageVersion(pkgRes.stdout ?? '')
-  } else if (ENOENT_PATTERN.test(pkgRes.error)) {
-    pkgInstalled = false
-  } else {
-    return { ok: false, error: `host-graph probe failed: ${pkgRes.error}` }
-  }
-  const indexRes = await exec(spec.id, 'run', { op: 'exec', command: 'cat', argv: [indexPath], quiet: true })
-  let indexInstalled: boolean
-  if (indexRes.ok) {
-    indexInstalled = true
-  } else if (ENOENT_PATTERN.test(indexRes.error)) {
-    indexInstalled = false
-  } else {
-    return { ok: false, error: `host-graph probe failed: ${indexRes.error}` }
-  }
-  const installed = pkgInstalled && indexInstalled
-
+  // One patch read for the whole registry (every chamber host package lives in
+  // the same overlay file, judged row by row).
   const patchRes = await exec(spec.id, 'run', { op: 'exec', command: 'cat', argv: [remotePatchPath(spec.remoteDshHome)], quiet: true })
-  let patched = false
-  let gitPatched = false
+  let patchContent: string | null = null
   if (patchRes.ok) {
-    // Per-package insert presence: the two chamber boot rows live in the SAME
-    // cordis.patch.yml, but one can predate the other (a machine seeded before
-    // the git-worktree package existed carries only the client-graph row —
-    // hostGraph live would then report 已生效 while the git RPC 404s and the
-    // sidebar silently shows no git surface). Each row is judged against its
-    // own insert; a conflict in either is a loud probe error.
-    const update = computeCordisPatchUpdate(patchRes.stdout ?? '', [CLIENT_GRAPH_HOST_INSERT])
-    if ('error' in update) return { ok: false, error: update.error }
-    patched = update.write === false
-    const gitUpdate = computeCordisPatchUpdate(patchRes.stdout ?? '', [GIT_WORKTREE_HOST_INSERT])
-    if ('error' in gitUpdate) return { ok: false, error: gitUpdate.error }
-    gitPatched = gitUpdate.write === false
+    patchContent = patchRes.stdout ?? ''
   } else if (!ENOENT_PATTERN.test(patchRes.error)) {
-    return { ok: false, error: `host-graph probe failed: ${patchRes.error}` }
+    return { ok: false, error: `chamber host-package probe failed: ${patchRes.error}` }
   }
 
-  // Liveness only when BOTH halves are present AND a probe was supplied: a
-  // half-injected module cannot be live by definition; without a ready tunnel
-  // the desktop cannot reach the instance's RPC (null = honest "not probed").
-  const live = installed && patched && opts?.liveProbe !== undefined
-    ? await opts.liveProbe()
-    : null
+  const packages: ChamberHostPackageState[] = []
+  for (const descriptor of CHAMBER_HOST_PACKAGES) {
+    const pkgPath = `${home}/profiles/node_modules/${descriptor.insert.name}/package.json`
+    const indexPath = `${home}/profiles/node_modules/${descriptor.insert.name}/dist/index.js`
+    const pkgRes = await exec(spec.id, 'run', { op: 'exec', command: 'cat', argv: [pkgPath], quiet: true })
+    let pkgInstalled: boolean
+    let version: string | null = null
+    if (pkgRes.ok) {
+      pkgInstalled = true
+      version = parsePackageVersion(pkgRes.stdout ?? '')
+    } else if (ENOENT_PATTERN.test(pkgRes.error)) {
+      pkgInstalled = false
+    } else {
+      return { ok: false, error: `${descriptor.insert.name} probe failed: ${pkgRes.error}` }
+    }
+    const indexRes = await exec(spec.id, 'run', { op: 'exec', command: 'cat', argv: [indexPath], quiet: true })
+    let indexInstalled: boolean
+    if (indexRes.ok) {
+      indexInstalled = true
+    } else if (ENOENT_PATTERN.test(indexRes.error)) {
+      indexInstalled = false
+    } else {
+      return { ok: false, error: `${descriptor.insert.name} probe failed: ${indexRes.error}` }
+    }
+    const installed = pkgInstalled && indexInstalled
 
-  // Second chamber host package (design 08 §11). Its own boot-row presence
-  // (gitPatched) and its own running-process liveness (gitWorktreeLiveProbe)
-  // are probed separately: host-graph live from an older boot does NOT prove
-  // the git-worktree row loaded (a restart seeded the row after that boot).
-  const gitPkgPath = `${home}/profiles/node_modules/${GIT_WORKTREE_PACKAGE_NAME}/package.json`
-  const gitIndexPath = `${home}/profiles/node_modules/${GIT_WORKTREE_PACKAGE_NAME}/dist/index.js`
-  const gitPkgRes = await exec(spec.id, 'run', { op: 'exec', command: 'cat', argv: [gitPkgPath], quiet: true })
-  let gitPkgInstalled: boolean
-  let gitVersion: string | null = null
-  if (gitPkgRes.ok) {
-    gitPkgInstalled = true
-    gitVersion = parsePackageVersion(gitPkgRes.stdout ?? '')
-  } else if (ENOENT_PATTERN.test(gitPkgRes.error)) {
-    gitPkgInstalled = false
-  } else {
-    return { ok: false, error: `git-worktree probe failed: ${gitPkgRes.error}` }
-  }
-  const gitIndexRes = await exec(spec.id, 'run', { op: 'exec', command: 'cat', argv: [gitIndexPath], quiet: true })
-  let gitIndexInstalled: boolean
-  if (gitIndexRes.ok) {
-    gitIndexInstalled = true
-  } else if (ENOENT_PATTERN.test(gitIndexRes.error)) {
-    gitIndexInstalled = false
-  } else {
-    return { ok: false, error: `git-worktree probe failed: ${gitIndexRes.error}` }
-  }
-  const gitInstalled = gitPkgInstalled && gitIndexInstalled
-  const gitLive = gitInstalled && gitPatched && opts?.gitWorktreeLiveProbe !== undefined
-    ? await opts.gitWorktreeLiveProbe()
-    : null
+    // Per-package insert presence: the chamber boot rows live in the SAME
+    // cordis.patch.yml, but one can predate another (a machine seeded before
+    // a package existed carries the older rows only — an earlier package
+    // being live would then claim "done" while the newer RPC 404s). Each row
+    // is judged against its own insert; a conflict in any row is a loud probe
+    // error.
+    let patched = false
+    if (patchContent !== null) {
+      const update = computeCordisPatchUpdate(patchContent, [registryInsertToLocal(descriptor.insert)])
+      if ('error' in update) return { ok: false, error: update.error }
+      patched = update.write === false
+    }
 
-  return {
-    ok: true,
-    hostGraph: { installed, patched, version, live },
-    gitWorktree: { installed: gitInstalled, patched: gitPatched, version: gitVersion, live: gitLive },
+    // Liveness only when BOTH halves are present AND a probe was supplied: a
+    // half-injected package cannot be live by definition; without a ready
+    // tunnel the desktop cannot reach the instance's RPC (null = honest
+    // "not probed").
+    const live = installed && patched && opts?.liveProbe !== undefined
+      ? await opts.liveProbe(descriptor)
+      : null
+
+    packages.push({
+      insertId: descriptor.insert.id,
+      name: descriptor.insert.name,
+      probe: descriptor.probe.method,
+      installed,
+      patched,
+      version,
+      live,
+    })
   }
+
+  return { ok: true, packages }
 }
 
 // ============================================================================
@@ -1313,16 +1315,6 @@ export interface ChamberHostPackageSeedState {
 
 type ChamberHostInsert = Pick<ChamberHostPackageSeed, 'insertId' | 'packageName'>
 
-const CLIENT_GRAPH_HOST_INSERT: ChamberHostInsert = {
-  insertId: CLIENT_GRAPH_INSERT_ID,
-  packageName: CLIENT_GRAPH_PACKAGE_NAME,
-}
-
-const GIT_WORKTREE_HOST_INSERT: ChamberHostInsert = {
-  insertId: GIT_WORKTREE_INSERT_ID,
-  packageName: GIT_WORKTREE_PACKAGE_NAME,
-}
-
 /**
  * Adapt the local {insertId, packageName} pair to the shared CordisInsert
  * ({id, name}) — the insert render/parse/conflict logic is single-sourced in
@@ -1332,24 +1324,41 @@ function toCordisInsert(insert: ChamberHostInsert): CordisInsert {
   return { id: insert.insertId, name: insert.packageName }
 }
 
+/** The registry row is already the shared {id, name} shape — pass it through
+ *  (kept as a named helper so call sites read the same as the local pair). */
+function registryInsertToCordis(insert: HostPackageInsert): CordisInsert {
+  return { id: insert.id, name: insert.name }
+}
+
+/** Registry row → the desktop-local {insertId, packageName} pair the overlay
+ *  writers/renderers take (cordis-inserts.ts stays the single source of the
+ *  row grammar). */
+function registryInsertToLocal(insert: HostPackageInsert): ChamberHostInsert {
+  return { insertId: insert.id, packageName: insert.name }
+}
+
 export type CordisPatchUpdate =
   | { write: false }
   | { write: true; content: string }
   | { error: string }
 
 /**
- * Decide how to fold the client-graph insert into an existing cordis.patch.yml
- * (design 13 §4.6): dedup when already present; deterministic rewrite for the
- * `initProfile` template (comments + `[]`); append for a user block-sequence
- * list (never overwriting user rows); fail-loud for a non-list. Pre-rename
- * chamber rows (same loader id, `@dsh-chamber/dsh-host-*` name) are folded to
- * the canonical name first (foldLegacyHostInserts, branch plan §3.4).
+ * Decide how to fold the chamber loader inserts into an existing
+ * cordis.patch.yml (design 13 §4.6): dedup when already present; deterministic
+ * rewrite for the `initProfile` template (comments + `[]`); append for a user
+ * block-sequence list (never overwriting user rows); fail-loud for a non-list.
+ * The inserts are REQUIRED (there is no single-package default any more: the
+ * registry is the source of the rows, and a silent client-graph fallback would
+ * seed a row the caller never asked for). Pre-rename chamber rows (same loader
+ * id, `@dsh-chamber/dsh-host-*` name) are folded to the canonical name first
+ * (foldLegacyHostInserts, branch plan §3.4).
  *
  * The insert render/parse/conflict classification is single-sourced in
  * control-plane (cordis-inserts.ts, consumed through control-plane-module.ts);
  * the fold semantics and message wording stay here.
  * @param existing - the file content, or null when the file does not exist
  *   (profile not initialized).
+ * @param inserts - the loader rows to ensure, in order.
  */
 
 /** The cordis.patch.yml conflict wording for one desired insert (the shared
@@ -1411,7 +1420,7 @@ export function foldLegacyHostInserts(
 
 export function computeCordisPatchUpdate(
   existing: string | null,
-  inserts: readonly ChamberHostInsert[] = [CLIENT_GRAPH_HOST_INSERT],
+  inserts: readonly ChamberHostInsert[],
 ): CordisPatchUpdate {
   if (existing === null) {
     return { error: 'remote profile is not initialized (cordis.patch.yml missing) — run a plugin add first' }
@@ -1442,8 +1451,6 @@ export function computeCordisPatchUpdate(
   }
   return { error: 'cordis.patch.yml is not a top-level YAML array — cannot seed chamber host inserts safely' }
 }
-
-export type SeedRemoteResult = { ok: true; wrote: boolean; patched: boolean } | { ok: false; error: string }
 
 export type SeedRemoteHostPackagesResult =
   | { ok: true; wrote: boolean; patched: boolean; packages: ChamberHostPackageSeedState[] }
@@ -1602,22 +1609,6 @@ export async function seedRemoteChamberHostPackages(
     patched = true
   }
   return { ok: true, wrote, patched, packages: states }
-}
-
-/** Backwards-compatible single-package wrapper used by the existing IPC. */
-export async function seedRemoteHostGraph(
-  exec: ExecFn,
-  spec: RemoteSpec,
-  moduleASourceDir: string,
-): Promise<SeedRemoteResult> {
-  const result = await seedRemoteChamberHostPackages(exec, spec, [{
-    insertId: CLIENT_GRAPH_INSERT_ID,
-    packageName: CLIENT_GRAPH_PACKAGE_NAME,
-    sourceDir: moduleASourceDir,
-    label: 'host-graph',
-  }])
-  if (!result.ok) return result
-  return { ok: true, wrote: result.wrote, patched: result.patched }
 }
 
 // ============================================================================

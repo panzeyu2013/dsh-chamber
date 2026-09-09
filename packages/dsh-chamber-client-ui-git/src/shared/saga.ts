@@ -368,6 +368,16 @@ export async function runPreRemoveArchive(
   return toArchive
 }
 
+/**
+ * NO STOP-THEN-REMOVE HERE (2026-09 final rule, design 08 §6): a worktree
+ * removal never stops, cancels or deletes a session. What blocks is the host's
+ * archived-aware running fact (an archived session, or one under an archived
+ * ancestor, is inert), so the git plugin needs no cancel loop at all. The
+ * former local `runStopRunningSessions` + its deps were removed; the only
+ * cancel/wait implementation left in the repo belongs to the archive manager
+ * (`stopSessionsForPurge`, design 24 §22.6).
+ */
+
 /** Git-first removal. A registry failure is retry-only; Git is never recreated. */
 export async function runRemoveSaga(deps: RemoveSagaDeps): Promise<RemoveWorktreeResult> {
   let removed: RemoveWorktreeResult

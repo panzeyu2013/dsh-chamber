@@ -191,7 +191,13 @@ export type SshExecIpcResult = SshStatusProjection | { error: string }
  *  `version` = module A's own package version (null when not installed);
  *  `live` = whether the RUNNING remote instance has loaded the module (true) /
  *  restart still pending (false) / not probed (null; local side stays null). */
-export interface ChamberHostGraphState {
+/** One chamber host package's per-target state (mirror of the desktop's
+ *  plugin-sync.ts). The EXPECTED set is the control-plane registry, so a new
+ *  host package appears in the plugin-management page without a UI change. */
+export interface ChamberHostPackageState {
+  insertId: string
+  name: string
+  probe: string
   installed: boolean
   patched: boolean
   version: string | null
@@ -201,11 +207,7 @@ export interface ChamberHostGraphState {
 /** Probe outcome: ok:false = the injection state could not be read (remote ssh
  *  exec failure / unparseable patch) — loud, never a silent "not injected". */
 export type ChamberInjectionState =
-  | {
-    ok: true
-    hostGraph: ChamberHostGraphState
-    gitWorktree: { installed: boolean; patched: boolean; version: string | null; live: boolean | null }
-  }
+  | { ok: true; packages: ChamberHostPackageState[] }
   | { ok: false; error: string }
 
 /** Remote plugin manifest projection (design 13 §4.3): the remote profile

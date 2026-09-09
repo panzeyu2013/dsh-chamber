@@ -52,6 +52,7 @@ import { createStaticServing } from './static-serving.ts'
 import {
   assertHostSeedEntryNaming,
   buildPatchOverlay,
+  CHAMBER_HOST_PACKAGES,
   ensureSeedPackage,
   missingHostPackageInserts,
   HOST_ARCHIVE_CLEANUP_INSERT,
@@ -356,43 +357,47 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
     ?? DEFAULT_HOST_GIT_WORKTREE_PACKAGE_SOURCE_DIR
   const hostArchiveCleanupPackageSourceDir = options.hostArchiveCleanupPackageSourceDir
     ?? DEFAULT_HOST_ARCHIVE_CLEANUP_PACKAGE_SOURCE_DIR
-  // Seed registry (2026-12): the three base chamber host packages
-  // (client-graph / git-worktree / archive-cleanup) plus any extra entries
-  // (client-plugin slots like the gateway mobile stub). An extra entry that
-  // re-declares a base package's id WINS over the base entry
+  // Seed registry (2026-12): the base chamber host packages are DERIVED from
+  // the authoritative registry (CHAMBER_HOST_PACKAGES — insert row, package
+  // name and probe domain all come from that one list; a hand-written
+  // parallel row table here was the defect the registry exists to prevent).
+  // The ONLY per-package desktop input is its packaged source directory,
+  // looked up by insert id — the public option names are unchanged. Any extra
+  // entry (client-plugin slots like the gateway mobile stub) is appended; an
+  // extra entry that re-declares a base package's id WINS over the base entry
   // (last-writer-wins by loader id): the gateway passes the three host
   // packages as desktop-synced extra entries, so once its seed cache is
   // populated the synced copies replace the packaged defaults — the base
   // rows exist only to preserve the legacy desktop shape (no
   // extraSeedEntries → no shadowing).
+  const hostPackageSourceDirs: ReadonlyMap<string, string> = new Map([
+    [HOST_GRAPH_INSERT.id, hostGraphPackageSourceDir],
+    [HOST_GIT_WORKTREE_INSERT.id, hostGitWorktreePackageSourceDir],
+    [HOST_ARCHIVE_CLEANUP_INSERT.id, hostArchiveCleanupPackageSourceDir],
+  ])
   const seedEntries = (): SeedEntry[] => {
     const byId = new Map<string, SeedEntry>()
-    for (const entry of [
-      {
-        insert: HOST_GRAPH_INSERT,
-        kind: 'host' as const,
-        source: 'packaged' as const,
-        sourceDir: hostGraphPackageSourceDir,
-        probeDomains: ['clientGraph/graph'],
-      },
-      {
-        insert: HOST_GIT_WORKTREE_INSERT,
-        kind: 'host' as const,
-        source: 'packaged' as const,
-        sourceDir: hostGitWorktreePackageSourceDir,
-        probeDomains: ['gitWorktree/previewCreate'],
-      },
-      {
-        insert: HOST_ARCHIVE_CLEANUP_INSERT,
-        kind: 'host' as const,
-        source: 'packaged' as const,
-        sourceDir: hostArchiveCleanupPackageSourceDir,
-        probeDomains: ['archiveCleanup/probe'],
-      },
-      ...(options.extraSeedEntries ?? []),
-    ]) {
-      byId.set(entry.insert.id, entry)
+    for (const descriptor of CHAMBER_HOST_PACKAGES) {
+      const sourceDir = hostPackageSourceDirs.get(descriptor.insert.id)
+      if (sourceDir === undefined) {
+        // A registry row with no packaged source mapped on this owner is a
+        // code defect (the registry grew without its desktop source option),
+        // never a runtime condition — fail loud rather than silently seeding
+        // a partial registry.
+        throw new Error(
+          `chamber seed registry: no packaged sourceDir mapped for host package `
+          + `'${descriptor.insert.name}' (insert id '${descriptor.insert.id}')`,
+        )
+      }
+      byId.set(descriptor.insert.id, {
+        insert: descriptor.insert,
+        kind: 'host',
+        source: 'packaged',
+        sourceDir,
+        probeDomains: [descriptor.probe.method],
+      })
     }
+    for (const entry of options.extraSeedEntries ?? []) byId.set(entry.insert.id, entry)
     const entries = [...byId.values()]
     // Fail-loud naming pin (Batch 1 naming unification, 2026-09): every
     // host-kind entry — base or extra — lives in the canonical
@@ -439,7 +444,7 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
    * such packages: without the per-spawn re-seed the next instance restart
    * would boot with a --patch row that cannot resolve and fail loudly, the
    * only self-heal being a desktop-app restart. This thunk is idempotent
-   * (content-hash skip in ensureHostGraphPackage, content-compare in
+   * (content-hash skip in ensureSeedPackage, content-compare in
    * buildPatchOverlay). Returns the --patch overlay path, or null when
    * module A's built artifact is absent (v4 baseline command line, nothing
    * to mount). Failure semantics: a seed throw on the initial-spawn path
@@ -453,9 +458,9 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
     // wording distinguishes a true stub (packaged entry whose package has not
     // shipped yet, e.g. the gateway mobile slot) from a desktop-synced entry
     // merely awaiting its first sync (an expected pre-sync state, logged once
-    // per spawn as informational). The three base packaged dirs (client-graph
-    // / git-worktree / archive-cleanup) keep their documented silent-skip
-    // behavior (absent source or dist = no row, no overlay).
+    // per spawn as informational). The base packaged dirs keep their
+    // documented silent-skip behavior (absent source or dist = no row, no
+    // overlay).
     for (const entry of options.extraSeedEntries ?? []) {
       if (entry.sourceDir === null || !existsSync(entry.sourceDir)) {
         const message = `seed entry '${entry.insert.id}' (${entry.insert.name}): source absent; skipped`
@@ -1082,14 +1087,16 @@ export type {
 } from './cordis-inserts.ts'
 export type { Logger } from './types.ts'
 export {
+  assertChamberHostRegistry,
   assertHostSeedEntryNaming,
   assertHostSeedInsertNaming,
+  CHAMBER_HOST_PACKAGES,
   HOST_ARCHIVE_CLEANUP_INSERT,
   HOST_GIT_WORKTREE_INSERT,
   HOST_GRAPH_INSERT,
   HOST_SEED_PACKAGE_PREFIX,
 } from './host-graph-seed.ts'
-export type { HostPackageInsert } from './host-graph-seed.ts'
+export type { ChamberHostPackageDescriptor, HostPackageInsert } from './host-graph-seed.ts'
 export type { ApiCorsDecision, ApiCorsEvaluator, ApiRequest, ApiResponse, ApiSurface } from './api.ts'
 // Shared forwarding core (design 17 §6.2, 方案 A): extracted from
 // instance-proxy.ts so `gateway-proxy.ts` reuses the same Host/Origin

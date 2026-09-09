@@ -27,7 +27,10 @@ import type { DshChamberBridge } from '../../renderer/src/global.d.ts'
  * every registry-returning path.
  */
 export type {
-  ChamberHostGraphState,
+  // Registry-driven chamber projection (design 13 §6, 2026-09 round): the
+  // per-package state list (the two former fixed-row types are gone) —
+  // re-export the authoritative renderer types, never a local mirror.
+  ChamberHostPackageState,
   ChamberInjectionState,
   ConnectionCredentialMutations,
   GatewayPluginApplyIpcResult,

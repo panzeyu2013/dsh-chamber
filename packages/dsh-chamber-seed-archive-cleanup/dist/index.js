@@ -53,6 +53,7 @@ import { Remote, TypertRemoteService } from "@deepseek-ai/dsh-typert-protocol";
 // src/core.ts
 var MAX_PURGE_SESSIONS = 65536;
 var MAX_PURGE_ERROR_RECORDS = 1e3;
+var MAX_SWEEP_CONTENT_PROBES = 4096;
 var ArchiveCleanupError = class extends Error {
   code;
   retryable;
@@ -78,18 +79,20 @@ async function domainResult(operation) {
     };
   }
 }
-function subtreeRunning(sessionId, statesBySession, childrenOf, liveAgentIds) {
+function subtreeLiveness(sessionId, statesBySession, childrenOf, facts) {
   const visited = /* @__PURE__ */ new Set();
   const queue = [sessionId];
+  let sawLoaded = false;
   while (queue.length > 0) {
     const current = queue.shift();
     if (visited.has(current)) continue;
     visited.add(current);
     const state = statesBySession.get(current);
-    if (liveAgentIds.has(current) || state?.running === true) return true;
+    if (facts.running.has(current) || state?.running === true) return "running";
+    if (facts.loaded.has(current)) sawLoaded = true;
     for (const child of childrenOf.get(current) ?? []) queue.push(child);
   }
-  return false;
+  return sawLoaded ? "loaded" : "clear";
 }
 function indexChildren(states) {
   const childrenOf = /* @__PURE__ */ new Map();
@@ -102,9 +105,11 @@ function indexChildren(states) {
   }
   return childrenOf;
 }
-function resolveDeletableTree(rootSessionId, statesBySession, childrenOf, liveAgentIds) {
+function resolveDeletableTree(rootSessionId, statesBySession, childrenOf, facts, force = false) {
   if (!statesBySession.has(rootSessionId)) return null;
-  if (subtreeRunning(rootSessionId, statesBySession, childrenOf, liveAgentIds)) return null;
+  const liveness = subtreeLiveness(rootSessionId, statesBySession, childrenOf, facts);
+  if (liveness === "running") return null;
+  if (liveness === "loaded" && !force) return null;
   const order = [];
   const visited = /* @__PURE__ */ new Set();
   const stack = [
@@ -130,6 +135,18 @@ function resolveDeletableTree(rootSessionId, statesBySession, childrenOf, liveAg
     subagentCount: order.length - 1
   };
 }
+function liveSessionIdsOf(facts) {
+  return /* @__PURE__ */ new Set([...facts.running, ...facts.loaded]);
+}
+function orphanArchivedMembers(archivedIds, statesBySession, liveSessionIds) {
+  const orphans = [];
+  for (const id of archivedIds) {
+    if (statesBySession.has(id)) continue;
+    if (liveSessionIds.has(id)) continue;
+    orphans.push(id);
+  }
+  return orphans;
+}
 var ArchiveCleanupCore = class {
   host;
   constructor(host) {
@@ -145,7 +162,7 @@ var ArchiveCleanupCore = class {
       [archivedIds, states, live] = await Promise.all([
         this.host.listArchivedSessionIds(),
         this.host.listSessionStates(),
-        this.host.listLiveAgentIds()
+        this.host.listLiveSessionFacts()
       ]);
     } catch (error) {
       if (error instanceof ArchiveCleanupError) throw error;
@@ -164,41 +181,104 @@ var ArchiveCleanupCore = class {
       archivedIds: [...new Set(archivedIds.map(String))],
       statesBySession,
       childrenOf,
-      liveAgentIds: new Set(live.map(String))
+      liveFacts: {
+        running: new Set(live.running.map(String)),
+        loaded: new Set(live.loaded.map(String))
+      },
+      snapshotRecordCount: states.length
     };
   }
   /** Resolve the run plan: candidate roots not already covered by another
    *  deletable root's subtree, each mapped to its deletable tree (or skipped
-   *  when running). Candidates are the full archived set (purge without a
-   *  filter) or the requested subset ∩ archived set (filtered purge); a root
-   *  that is itself a subagent descendant of an earlier deletable root is
-   *  covered by that root's tree and skipped here (no double deletion). */
-  resolvePlan(candidateIds, statesBySession, childrenOf, liveAgentIds) {
+   *  when running, or when loaded without `force`). Candidates are the full
+   *  archived set (purge without a filter) or the requested subset ∩ archived
+   *  set (filtered purge); a root that is itself a subagent descendant of an
+   *  earlier deletable root is covered by that root's tree and skipped here
+   *  (no double deletion). Orphan candidates (no session record) are no tree
+   *  and are NOT collected here: the registry-global orphan sweep
+   *  (`orphanArchivedMembers`) covers them — and every other record-less
+   *  member — in one pass. */
+  resolvePlan(candidateIds, statesBySession, childrenOf, liveFacts, force) {
     const trees = [];
     let skippedRunning = 0;
-    const orphanRoots = [];
+    let skippedLoaded = 0;
     const covered = /* @__PURE__ */ new Set();
     for (const id of candidateIds) {
       if (covered.has(id)) continue;
       if (!statesBySession.has(id)) {
-        orphanRoots.push(id);
         continue;
       }
-      const tree = resolveDeletableTree(id, statesBySession, childrenOf, liveAgentIds);
+      const tree = resolveDeletableTree(id, statesBySession, childrenOf, liveFacts, force);
       if (tree === null) {
-        skippedRunning += 1;
+        if (subtreeLiveness(id, statesBySession, childrenOf, liveFacts) === "running") skippedRunning += 1;
+        else skippedLoaded += 1;
         continue;
       }
       for (const member of tree.order) covered.add(member);
       trees.push(tree);
     }
-    return { trees, skippedRunning, orphanRoots };
+    return { trees, skippedRunning, skippedLoaded };
+  }
+  /**
+   * DECISIVE sweep gate (2026-12 blocker fix): keep only the candidates the
+   * OFFICIAL persistence proves it cannot materialize. The bulk snapshot and
+   * the confirmation read are both best-effort enumerations that can narrow
+   * silently (see `ArchiveCleanupHost.hasStoredContent`); this per-candidate
+   * read is the only authority for "no content".
+   *
+   * Fail-closed rules, in order:
+   *  - capability absent (not a function) ⇒ NOTHING is swept, one run-level
+   *    `archive-set` note;
+   *  - the probe throws ANY error ⇒ that candidate keeps its membership (a
+   *    failed existence check is "may have content"), the run is never
+   *    aborted, and ONE run-level `archive-set` note summarizes the failures
+   *    (per-candidate records would flood the shared item cap);
+   *  - any return other than the exact boolean `false` ⇒ keeps its membership
+   *    (a truthy/undefined answer is not a proof of absence);
+   *  - at most MAX_SWEEP_CONTENT_PROBES probes per run; a truncated remainder
+   *    stays archived and ONE run-level `archive-set` note is recorded.
+   *
+   * The probe is invoked AS A METHOD on the host object (implementations are
+   * routinely instance-state classes — the detached-`locate` real-machine
+   * regression of 2026-09).
+   */
+  async selectContentFreeCandidates(candidateIds, recordNote) {
+    if (candidateIds.length === 0) return [];
+    const probe = this.host.hasStoredContent;
+    if (typeof probe !== "function") {
+      recordNote("", "archive-set", `archiveCleanup: orphan sweep skipped \u2014 the host has no hasStoredContent capability (${candidateIds.length} record-less member(s) kept archived)`);
+      return [];
+    }
+    const bounded = candidateIds.slice(0, MAX_SWEEP_CONTENT_PROBES);
+    if (candidateIds.length > bounded.length) {
+      recordNote("", "archive-set", `archiveCleanup: orphan sweep truncated at ${MAX_SWEEP_CONTENT_PROBES} content-existence probes \u2014 ${candidateIds.length - bounded.length} member(s) kept archived for a later run`);
+    }
+    const swept = [];
+    let probeFailures = 0;
+    let firstProbeFailure = "";
+    for (const sessionId of bounded) {
+      let hasContent;
+      try {
+        hasContent = await this.host.hasStoredContent(sessionId);
+      } catch (error) {
+        probeFailures += 1;
+        if (firstProbeFailure === "") {
+          firstProbeFailure = error instanceof Error ? error.message : String(error);
+        }
+        continue;
+      }
+      if (hasContent === false) swept.push(sessionId);
+    }
+    if (probeFailures > 0) {
+      recordNote("", "archive-set", `archiveCleanup: orphan sweep kept ${probeFailures} member(s) \u2014 content-existence probe failed (fail-closed): ${firstProbeFailure}`);
+    }
+    return swept;
   }
   /** Read-only preview (design 24 §3): a point-in-time snapshot for confirm
    *  copy — never authoritative for the purge itself. */
   async preview() {
-    const { archivedIds, statesBySession, childrenOf, liveAgentIds } = await this.readAuthoritativeState();
-    const plan = this.resolvePlan(archivedIds, statesBySession, childrenOf, liveAgentIds);
+    const { archivedIds, statesBySession, childrenOf, liveFacts } = await this.readAuthoritativeState();
+    const plan = this.resolvePlan(archivedIds, statesBySession, childrenOf, liveFacts, false);
     let deletableSessions = 0;
     let deletableSubagents = 0;
     for (const tree of plan.trees) {
@@ -209,7 +289,8 @@ var ArchiveCleanupCore = class {
       archived: archivedIds.length,
       deletableSessions,
       deletableSubagents,
-      skippedRunning: plan.skippedRunning
+      skippedRunning: plan.skippedRunning,
+      skippedLoaded: plan.skippedLoaded
     };
   }
   /**
@@ -223,7 +304,8 @@ var ArchiveCleanupCore = class {
    * with the authoritative archived set read at run start — and a listed id
    * that already left the set (concurrent purge in another shell) is simply
    * no candidate: idempotent, never an error. `undefined` = the full set
-   * (unchanged semantics); a provided EMPTY array = delete nothing.
+   * (unchanged semantics); a provided EMPTY array = delete NO content (the
+   * registry-global orphan sweep below still runs — see SWEEP).
    *
    * BUCKET SEMANTICS NOTE (review round 2026-09): counts are per TREE ROOT,
    * not per row origin — when the archived set itself contains a
@@ -234,6 +316,39 @@ var ArchiveCleanupCore = class {
    * therefore flip with candidate order for one selection — the UI never
    * selects hidden subagent rows, so presentation is unaffected.
    *
+   * SWEEP (design 24 §20 residual ①): independently of the filter, every run
+   * clears archived-set members that are ORPHANS across the ENTIRE archived
+   * set — ids with no session record in the run's authoritative snapshot
+   * (`orphanArchivedMembers`). Historical no-directory members accumulated by
+   * older versions / failed set writes are otherwise unreachable (the manager
+   * lists rows ∩ set) and would accumulate forever. ZERO new
+   * content-deletion semantics: the sweep only removes membership of
+   * record-less ids, never deletes content, and never touches an id that has
+   * a record (running or not). FAIL-CLOSED, TRIPLE-GATED (2026-12 blocker
+   * fix — "absent from the snapshot" is NOT proof of absent content, because
+   * both bulk enumerations can narrow silently):
+   *  G1 credibility — an EMPTY snapshot corpus while members are archived, or
+   *  a confirmation corpus collapsing to empty, SKIPS the sweep with a
+   *  run-level `archive-set` note;
+   *  G2 double confirmation — the swept ids must ALSO be record-less, still
+   *  archived and not live in a FRESH read taken after the content deletions;
+   *  a failed fresh read SKIPS the sweep (run-level `archive-set` note);
+   *  G3 the DECISIVE per-candidate authoritative existence probe — the
+   *  official single-id persistence read (`hasStoredContent`) must prove it
+   *  cannot materialize the id; a probe that throws, is unavailable, or
+   *  answers anything but the exact boolean `false` keeps the membership
+   *  (bounded by MAX_SWEEP_CONTENT_PROBES per run, truncation noted).
+   * Every skip is a run-level `archive-set` note, never an abort: the
+   * completed content deletions are still committed. The confirmation read
+   * happens ONLY when the snapshot shows orphan members, so a converged
+   * instance keeps the single-scan contract. The sweep is bounded by the
+   * defensive capacity: an archived set beyond MAX_PURGE_SESSIONS is not
+   * swept (a full-set purge over it already refuses with `purge-capacity`).
+   * Swept ids ride the SAME single `removeArchivedSessionIds` write as the
+   * completed trees, deduped, and are counted separately in
+   * `clearedOrphanMembers` (never in
+   * `deletedSessions`/`deletedSubagents`).
+   *
    * Performance contract (design 24 perf review): the authoritative snapshot
    * (archived set + session states + lineage) is read ONCE; per deletable
    * tree only the cheap in-memory live set is re-read and checked at the
@@ -241,17 +356,27 @@ var ArchiveCleanupCore = class {
    * a mid-tree live flip surfaces through the binding's delete-time
    * `running` refusal). Per-member deletion uses the snapshot's cwd so the
    * binding never re-enumerates the corpus. Completed roots (and any
-   * archived descendants their completed trees covered) plus orphans are
-   * removed from the archived set in a single official write after the whole
-   * run. Per-session failures land in `errors` (truncated at
+   * archived descendants their completed trees covered) plus swept orphans
+   * are removed from the archived set in a single official write after the
+   * whole run. The orphan sweep adds at most MAX_SWEEP_CONTENT_PROBES
+   * single-id persistence reads (only for members that survived G1+G2).
+   * Per-session failures land in `errors` (truncated at
    * MAX_PURGE_ERROR_RECORDS with `truncated`). The FIRST in-tree failure
    * aborts the REMAINING members of that tree (review F1): ancestors and the
    * root stay untouched and archived so a rerun re-enumerates and converges,
    * while members deleted before the failure stay deleted (prefix deletions
    * are not rolled back). Per-session isolation across INDEPENDENT trees is
    * unchanged: the run continues with the next tree.
+   *
+   * `force` (2026-09 revision, user motion "已归档的对话应该终止"): when true,
+   * a subtree whose strongest liveness is merely `loaded` (idle agent /
+   * attached session) is deleted too — the caller MUST have terminated the
+   * run first (client-orchestrated `session/cancel` before purge). A RUNNING
+   * member is still refused unconditionally (a live writer recreates a
+   * header-less artifact through `open(path,"a")`, design 24 §22). Default
+   * (absent) = the historical fail-closed behavior, byte-for-byte.
    */
-  async purge(sessionIds) {
+  async purge(sessionIds, force = false) {
     if (sessionIds !== void 0) {
       if (!Array.isArray(sessionIds) || sessionIds.some((id) => typeof id !== "string" || id === "")) {
         throw new ArchiveCleanupError(
@@ -265,11 +390,8 @@ var ArchiveCleanupCore = class {
           `archiveCleanup: purge subset filter exceeds ${MAX_PURGE_SESSIONS} entries`
         );
       }
-      if (sessionIds.length === 0) {
-        return { deletedSessions: 0, deletedSubagents: 0, skippedRunning: 0, errors: [] };
-      }
     }
-    const { archivedIds, statesBySession, childrenOf, liveAgentIds } = await this.readAuthoritativeState();
+    const { archivedIds, statesBySession, childrenOf, liveFacts, snapshotRecordCount } = await this.readAuthoritativeState();
     let candidates;
     if (sessionIds === void 0) {
       if (archivedIds.length > MAX_PURGE_SESSIONS) {
@@ -281,9 +403,11 @@ var ArchiveCleanupCore = class {
       candidates = archivedIds.filter((id) => selected.has(id));
     }
     const archivedAtStart = new Set(archivedIds);
-    const plan = this.resolvePlan(candidates, statesBySession, childrenOf, liveAgentIds);
+    const sweepCandidates = archivedIds.length <= MAX_PURGE_SESSIONS ? orphanArchivedMembers(archivedIds, statesBySession, liveSessionIdsOf(liveFacts)) : [];
+    const plan = this.resolvePlan(candidates, statesBySession, childrenOf, liveFacts, force);
     let deletedSessions = 0;
     let deletedSubagents = 0;
+    let forcedLoaded = 0;
     let truncated = false;
     const errors = [];
     const recordError = (sessionId, code, message) => {
@@ -296,22 +420,28 @@ var ArchiveCleanupCore = class {
     const completedRoots = [];
     const coveredArchivedMembers = [];
     for (const tree of plan.trees) {
-      let nowLive;
+      let nowFacts;
       try {
-        nowLive = new Set(await this.host.listLiveAgentIds());
+        const facts = await this.host.listLiveSessionFacts();
+        nowFacts = { running: new Set(facts.running.map(String)), loaded: new Set(facts.loaded.map(String)) };
       } catch (error) {
         if (error instanceof ArchiveCleanupError) throw error;
         throw new ArchiveCleanupError("registry-unreadable", `live agent \u72B6\u6001\u4E0D\u53EF\u8BFB\uFF1A${error instanceof Error ? error.message : String(error)}`);
       }
-      if (subtreeRunning(tree.rootSessionId, statesBySession, childrenOf, nowLive)) {
+      const liveness = subtreeLiveness(tree.rootSessionId, statesBySession, childrenOf, nowFacts);
+      if (liveness === "running") {
         plan.skippedRunning += 1;
+        continue;
+      }
+      if (liveness === "loaded" && !force) {
+        plan.skippedLoaded += 1;
         continue;
       }
       let treeAborted = false;
       for (const sessionId of tree.order) {
         const state = statesBySession.get(sessionId);
         try {
-          const outcome = await this.host.deleteSessionContent(sessionId, state?.cwd);
+          const outcome = await this.host.deleteSessionContent(sessionId, state?.cwd, force);
           if (sessionId === tree.rootSessionId) {
             if (outcome === "deleted") deletedSessions += 1;
           } else if (outcome === "deleted") {
@@ -336,16 +466,45 @@ var ArchiveCleanupCore = class {
         continue;
       }
       completedRoots.push(tree.rootSessionId);
+      if (liveness === "loaded") forcedLoaded += 1;
       for (const member of tree.order) {
         if (member !== tree.rootSessionId && archivedAtStart.has(member)) {
           coveredArchivedMembers.push(member);
         }
       }
     }
-    const clearIds = [.../* @__PURE__ */ new Set([...completedRoots, ...coveredArchivedMembers, ...plan.orphanRoots])];
+    let sweptOrphanMembers = [];
+    if (sweepCandidates.length > 0) {
+      if (snapshotRecordCount === 0) {
+        recordError("", "archive-set", `archiveCleanup: orphan sweep skipped \u2014 the snapshot session corpus is empty while ${archivedIds.length} archived member(s) exist; an empty corpus is not credible evidence of absent content`);
+      } else {
+        try {
+          const [freshArchivedIds, freshStates, freshLiveFacts] = await Promise.all([
+            this.host.listArchivedSessionIds(),
+            this.host.listSessionStates(),
+            this.host.listLiveSessionFacts()
+          ]);
+          if (freshStates.length === 0) {
+            recordError("", "archive-set", `archiveCleanup: orphan sweep skipped \u2014 the confirmation read's session corpus collapsed to empty (snapshot had ${snapshotRecordCount} record(s)); a collapsed corpus is not credible evidence of absent content`);
+          } else {
+            const freshArchived = new Set(freshArchivedIds.map(String));
+            const freshRecordIds = new Set(freshStates.map((state) => state.sessionId));
+            const freshLiveIds = liveSessionIdsOf(freshLiveFacts);
+            const confirmed = sweepCandidates.filter((id) => freshArchived.has(id) && !freshRecordIds.has(id) && !freshLiveIds.has(id));
+            sweptOrphanMembers = await this.selectContentFreeCandidates(confirmed, recordError);
+          }
+        } catch (error) {
+          if (!(error instanceof ArchiveCleanupError)) throw error;
+          recordError("", "archive-set", `archiveCleanup: orphan sweep skipped \u2014 ${error.message}`);
+        }
+      }
+    }
+    const clearIds = [.../* @__PURE__ */ new Set([...completedRoots, ...coveredArchivedMembers, ...sweptOrphanMembers])];
+    let clearedOrphanMembers = 0;
     if (clearIds.length > 0) {
       try {
         await this.host.removeArchivedSessionIds(clearIds);
+        clearedOrphanMembers = sweptOrphanMembers.length;
       } catch (error) {
         if (!(error instanceof ArchiveCleanupError)) throw error;
         recordError("", "archive-set", error.message);
@@ -361,8 +520,11 @@ var ArchiveCleanupCore = class {
       deletedSessions,
       deletedSubagents,
       skippedRunning: plan.skippedRunning,
+      skippedLoaded: plan.skippedLoaded,
+      forcedLoaded,
       errors,
-      ...truncated ? { truncated: true } : {}
+      ...truncated ? { truncated: true } : {},
+      ...clearedOrphanMembers > 0 ? { clearedOrphanMembers } : {}
     };
   }
 };
@@ -393,6 +555,13 @@ function assertHeaderShape(header) {
   }
   if (h.origin !== void 0 && h.origin !== "subagent") malformed("origin", "exactly 'subagent' when present");
 }
+function isPersistenceNotFoundError(error, sessionId) {
+  if (!(error instanceof Error)) return false;
+  if (error.name !== "SessionPersistenceNotFoundError") return false;
+  const reported = error.sessionId;
+  if (reported !== void 0 && String(reported) !== sessionId) return false;
+  return true;
+}
 function headerToState(header) {
   assertHeaderShape(header);
   return {
@@ -421,19 +590,33 @@ function assertHostSurface(ctx) {
     );
   }
 }
-function liveSessionIds(ctx) {
-  const live = /* @__PURE__ */ new Set();
+function liveSessionFacts(ctx) {
+  const running = /* @__PURE__ */ new Set();
+  const loaded = /* @__PURE__ */ new Set();
   for (const agent of ctx.agents?.list?.() ?? []) {
-    if (agent !== null && typeof agent === "object" && typeof agent.id === "string") {
-      live.add(String(agent.id));
+    if (agent === null || typeof agent !== "object" || typeof agent.id !== "string") {
+      throw new ArchiveCleanupError(
+        "registry-unreadable",
+        "archiveCleanup: an agent entry has no string id \u2014 refusing the read (pinned-vendor drift)"
+      );
     }
+    const id = String(agent.id);
+    const status = agent.status;
+    if (status !== "idle" && status !== "running") {
+      throw new ArchiveCleanupError(
+        "registry-unreadable",
+        `archiveCleanup: agent ${id} reports an unknown status ${JSON.stringify(status)} \u2014 refusing the read (a drifted status would silently reclassify a running agent as idle)`
+      );
+    }
+    loaded.add(id);
+    if (status === "running") running.add(id);
   }
   for (const session of ctx.sessions?.list?.() ?? []) {
     if (session !== null && typeof session === "object" && typeof session.id === "string") {
-      live.add(String(session.id));
+      loaded.add(String(session.id));
     }
   }
-  return live;
+  return { running, loaded };
 }
 function makeHostBinding(ctx) {
   const registry = ctx.workspaceRegistry;
@@ -449,24 +632,36 @@ function makeHostBinding(ctx) {
     return registry;
   };
   const listHeaders = async () => {
+    const byId = /* @__PURE__ */ new Map();
+    let sawEnumeration = false;
     if (query?.listSessions !== void 0) {
       const records = await query.listSessions();
       if (Array.isArray(records)) {
         for (const record of records) assertHeaderShape(record?.header);
-        return records.map((record) => record.header);
+        for (const record of records) {
+          const header = record.header;
+          if (!byId.has(header.id)) byId.set(header.id, header);
+        }
+        sawEnumeration = true;
       }
     }
     if (persistence?.list !== void 0) {
       const headers = await persistence.list();
       if (Array.isArray(headers)) {
         for (const header of headers) assertHeaderShape(header);
-        return headers;
+        for (const header of headers) {
+          if (!byId.has(header.id)) byId.set(header.id, header);
+        }
+        sawEnumeration = true;
       }
     }
-    throw new ArchiveCleanupError(
-      "registry-unreadable",
-      "archiveCleanup: no session enumeration service (sessionQuery/sessionPersistence) is mounted"
-    );
+    if (!sawEnumeration) {
+      throw new ArchiveCleanupError(
+        "registry-unreadable",
+        "archiveCleanup: no session enumeration service (sessionQuery/sessionPersistence) is mounted"
+      );
+    }
+    return [...byId.values()];
   };
   return {
     async listArchivedSessionIds() {
@@ -481,13 +676,31 @@ function makeHostBinding(ctx) {
       }
       return [...byId.values()];
     },
-    async listLiveAgentIds() {
-      return [...liveSessionIds(ctx)];
+    async listLiveSessionFacts() {
+      const facts = liveSessionFacts(ctx);
+      return { running: [...facts.running], loaded: [...facts.loaded] };
     },
-    async deleteSessionContent(sessionId, cwd) {
+    async hasStoredContent(sessionId) {
+      const inspect = persistence?.inspect;
+      if (typeof inspect !== "function") return true;
       try {
-        if (liveSessionIds(ctx).has(sessionId)) {
+        await inspect.call(persistence, sessionId);
+        return true;
+      } catch (error) {
+        return !isPersistenceNotFoundError(error, sessionId);
+      }
+    },
+    async deleteSessionContent(sessionId, cwd, force = false) {
+      try {
+        const facts = liveSessionFacts(ctx);
+        if (facts.running.has(sessionId)) {
           throw new ArchiveCleanupError("running", `archiveCleanup: ${sessionId} is running`);
+        }
+        if (!force && facts.loaded.has(sessionId)) {
+          throw new ArchiveCleanupError(
+            "loaded",
+            `archiveCleanup: ${sessionId} is loaded in this process \u2014 delete it with force after stopping it, or restart dsh`
+          );
         }
         if (persistence === void 0 || typeof persistence.locate !== "function") {
           throw new ArchiveCleanupError(
@@ -610,21 +823,25 @@ var ArchiveCleanupGateway = class extends (_a = TypertRemoteService, _preview_de
       this.logger?.info?.("[archiveCleanup] preview answered", {
         archived: value.archived,
         deletable: value.deletableSessions,
-        skippedRunning: value.skippedRunning
+        skippedRunning: value.skippedRunning,
+        skippedLoaded: value.skippedLoaded
       });
       return value;
     }));
   }
-  purge(sessionIds) {
+  purge(sessionIds, force) {
     return domainResult(() => this.gate.run(async () => {
       this.logger?.info?.("[archiveCleanup] purge started", {
-        ...sessionIds === void 0 ? {} : { filterCount: sessionIds.length }
+        ...sessionIds === void 0 ? {} : { filterCount: sessionIds.length },
+        ...force === true ? { force: true } : {}
       });
-      const value = await this.core.purge(sessionIds);
+      const value = await this.core.purge(sessionIds, force === true);
       this.logger?.info?.("[archiveCleanup] purge finished", {
         deletedSessions: value.deletedSessions,
         deletedSubagents: value.deletedSubagents,
         skippedRunning: value.skippedRunning,
+        skippedLoaded: value.skippedLoaded,
+        forcedLoaded: value.forcedLoaded,
         errorCount: value.errors.length
       });
       return value;
@@ -659,12 +876,15 @@ export {
   BUSY_MESSAGE,
   MAX_PURGE_ERROR_RECORDS,
   MAX_PURGE_SESSIONS,
+  MAX_SWEEP_CONTENT_PROBES,
   RunGate,
   assertHostSurface,
   index_default as default,
   domainResult,
   indexChildren,
+  liveSessionIdsOf,
   makeHostBinding,
+  orphanArchivedMembers,
   resolveDeletableTree,
-  subtreeRunning
+  subtreeLiveness
 };

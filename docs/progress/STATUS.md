@@ -39,8 +39,7 @@
 - **dsh 0.1.5 升级（在途，pin 仍 alpha.2）**：调研完成并已落地与版本无关的准备——`msgpackr-extract` 构建脚本显式否认（根 pnpm-workspace + dsh-runtime `DENY_BUILDS`/单源渲染器 + 测试）；**升级流程两处卡点均已修**（① `update-vendor` gitlink 先 `git add vendor/harness-checkout`；② `restore-lockfile-vendor-records.mjs` 加「成员仍在链接集合」守卫，不再从 HEAD 复活已移除的 landlock 4 条）；**新增升级前只读预检** `scripts/dev/preflight-vendor-pin.mjs`（fork pure/replay/dropped + 深引 vendor seam + 上游包增删 + 新增 client 行 + 运行时 npm 状态；`--offline`/`--json`/`--fail-on-replay`），实测 0.1.5：变更 2552 文件、pure 5/重放 6/dropped 6、**seam 16 全在 `client/ui-layout/*`**、包 +15/−4、新增 client 行 **5**（含带 `dsh.client` 的 `dsh-api-workspace-files`——原清单漏此一行）。剩余主体：**layout fork 重放**（上游把三栏模型改为 sidebar/center/rightbar，`DETAILS_*` 移除、`rightbar` 槽与 store 语义重写 → `typecheck:layout` 一升 pin 即红）+ **5 个新 client 行的 roster 裁决** + 平台词 `ui-dockkit` + connection/api-gateway 重放 + 运行时四锚 + 锁文件（271→282）。全量方案见 `docs/checklists/dsh-upgrade-checklist.md` §9（预检为第 0 步）。
 - **收尾（2026-09）**：五批次全部落地（Batch 0 / 0.5 / 1 / 2 / 3 Phase 0+2，各自独立提交与绿门），并经**四路独立只读审计 + 一轮复核审计**确认（1 处 MEDIUM 实质缺口——open-in 同 id 裁决与方案 §5.1「vscode 全家走 IPC 覆盖」相反——及全部 LOW 登记/文档项已修，提交 `d85bc51` / `3f9511e`）。**方案文件已退役**：`docs/progress/todo/branch-plan-v0.1.3-alpha1.md` 与其 todo README 条目按该目录纪律删除（全文留存 git 历史），执行结果记录见本块与 CHANGELOG [Unreleased]。**收尾补批（W1/W2/W3，2026-09，pin 仍 alpha.2）**：锁文件 vendor 记录修复脚本加移除守卫（+3 例单测）、新增升级前 pin 预检脚本（+5 例单测）、聚合刷新陈旧阈值按传输分级（ssh 新增 300s 兜底）；三者由根脚本 `pnpm run test:upgrade-tools` 与 CI 步骤覆盖。**实机门禁（未验证，需真实实例/桌面）**：Batch 2 的 sleep/wake、隐藏恢复、版本歪斜容忍、gateway 形态回归；Batch 3 的官方 host 行随 a2 默认 profile 进入托管实例、远程无 cookie 下 fence 行为、remote cwd 填充、图标缓存/CSP；以及既有实机探针（`commands/execute attachments` wire key、open-in 官方 host 行 dormant 处置）。
 
-- **dsh 运行时版本管理（design 18 §3.6/§9，M5–M7 已落地）**：剩余——macOS 打包态
-  `.app` 内共享 dsh-runtime/内嵌 pnpm/koffi 与完整激活-故障回退-恢复链的实机；Linux
+- **dsh 运行时版本管理（design 18 §3.6/§9）**：剩余——macOS 打包态  `.app` 内共享 dsh-runtime/内嵌 pnpm/koffi 与完整激活-故障回退-恢复链的实机；Linux
   server 同款端到端；Gateway 重启窗口的前端重连与 connections 的 SSH
   `restart_service` systemd IPC 端到端；`restartLocal()` 在真实 1s SIGTERM→SIGKILL
   grace 与健康计时器交错的覆盖；settings-bridge 的 gateway React 组件级交互仍以纯
@@ -62,51 +61,42 @@
   在生产 TLS 下全链；Linux system/user service 安装升级与回退；`--bind 0.0.0.0`/
   隧道/tailscale 全链负例。凭据管理剩余：desktop settings-bridge 便捷重置（推迟项）
   + 真实 TLS 下改密/轮换/停机态 CLI 恢复。
-- **S0/S2 http 直连链路（design 17 §10.5）**：S0 注入与 S2 非 loopback TCP
-  keepalive + staleness 自愈已实现（见 §10.5/代码注释与 git 历史，不在此复述）；
-  **S2-c（放宽 dsh mux 心跳，可选增强）未实现**——前置 = 扩展 gateway patch
-  写入器，单列。剩余验收：打包态实机（浏览器直连 gateway 的 Models/插件设置可
+- **S0/S2 http 直连链路（design 17 §10.5）**：**S2-c（放宽 dsh mux 心跳，可选增强）
+  未实现**——前置 = 扩展 gateway patch 写入器，单列。剩余验收：打包态实机（浏览器直连 gateway 的 Models/插件设置可
   写；杀托管 dsh/断网后 sidebar 60–120s 自动恢复；升级 dsh 版本复验钩子存在性）。
-- **设计 21 网关插件能力对齐（已实现）**：剩余——§9 实机 E2E 矩阵（真实
+- **设计 21 网关插件能力对齐**：剩余——§9 实机 E2E 矩阵（真实
   gateway×desktop 双通道手动/脚本化门禁、registry 实装传递依赖与 lifecycle scripts、
   故障注入、journal 中断对账；发布前执行；.172 测试机 gateway 侧升级因凭据轮换
   暂停，待用户侧恢复后按 §9 重跑）；UI 余留照实：who/when 归因 tooltip 未渲染、
   gateway 拒绝码→本地化文案映射未做（409 逐字英文）、pollGatewayReady 英文错误串
   未本地化；archive-pick file+folder 双模式对话框为 **macOS-v1**（非 macOS 保持
   文件夹对话框，随 design 22/23）。
-- **归档清理与归档管理器（design 24，已实现）**：**2026 purge 幽灵行收敛
-  轮（§20）已实现并经三方只读 review 修订**——purge 后已删会话浮出侧边栏/
-  点击 `session/not-found` 的缺陷修复（官方 ctx 会话行 summaries 仅连接代数
-  刷新 + purge 事件 no-op → 归档集合移除后行失去过滤；收敛 = chamberBridge
-  `requestSessionListRefresh` + App **收敛状态机**（每次 ready 推送评估
-  `planSessionListRefresh`：收缩移除 ∪ pending 中仍列行者 = 幽灵 → 按 5s
-  冷却重发请求，行消失自终止——闭合「相邻 purge 收缩被合并窗口吞掉」与
-  「刷新失败无重试」两 review 发现）+ 对话框每次 purge settle 即时请求，
-  插件按实例调官方 `ctx.sessions.refresh()`（缺失/失败均 warn）；
-  design 05 §3 桥契约已同步）。剩余——实机 **gateway/远程 dsh 形态**、§20 收敛
-  执行腿（插件/App/对话框接线）与打包版 UI 目检（§19-9 偏差/待目检并入该腿，
-  含幽灵行不再浮现、刷新后无干扰）；事件发射为文档化 no-op
-  直至上游 wire，域随上游 `sessions.delete` wire 落地后退休（上游未落地）。
-  可选增强（未排期）：PluginDialog 三态行、rowError 本地化、已归档浏览区
-  （todo 12 A）；归档集合**历史无目录成员 + 收尾集合移除写失败（`archive-set`）
-  残留**收敛（「删除全部」退役后无 UI 路径可达，见 design 24 §20 残余登记
-  ①，建议收尾孤儿全集合清扫）；「归档当前活动会话→整源降级、
-  已归档行浮出」复现确认（§20 残余登记②，dev-QA 原登记于 commit 1b19712）。
-- **移动端 Web 访问面（design 17 §18）**：P1/P1.5/适配轮已实现。剩余——实机门禁
+- **归档清理与归档管理器（design 24）**：剩余**仅测试类**——打包版实机目检（含
+  幽灵行不再浮现、点击不再 `session/not-found`）、探针依赖实例就绪（fail-closed，
+  行保持抑制）、语义级接线以源码契约 + 目检代证、集合 >65,536 不清扫（容量边界）；
+  以及实机 **gateway/远程 dsh 形态**与打包版 UI 目检（§19-9 偏差/待目检并入该腿）。
+  **§22 force 轮剩余实机验收**：卡在提问的归档会话 → 管理器删除 → 停止 + 强制清理成功；旧宿主（无 `force` 参数）的回退 + 说明；
+  运行中子代理后代所在归档树一次删除收敛；本机 5 个「已加载」残留
+  （`d8ae9ae5`/`d4d9bdbf`/`c54461f6`/`32b74f4a`/`10d9124a`）一次删除收敛。
+  **登记残余**：事件发射为文档化 no-op 直至上游 wire，域随上游 `sessions.delete`
+  wire 落地后退休（上游未落地）；维护阶段（compaction/schedule）对外报 `idle`，
+  force 可能删到正在追加的档（「读私有 phase 字段」为否决方案）；归档集合在 run
+  起点快照、窗口内不重读。可选增强（未排期）：PluginDialog 三态行、rowError
+  本地化、已归档浏览区（todo 12 A）、`preview` 暴露孤儿计数。
+- **移动端 Web 访问面（design 17 §18）**：剩余——实机门禁
   （§18.6：真机触控目标比例/抽屉开合/键盘遮挡/安全区/汉堡不重叠/crumbs 换行/
   Session 日志图标化/iOS 单击切换/设置手机档走查/刘海横屏/深层谱系高度等）；DOM
   锚点审计剩余（details 打标缺口修复的**接线仅实机可验**、`[class$=_…]` 后缀命名
   契约测试固定、composer 锚点 fixture 化、Android 键盘盲区真机门禁）；P2（PWA 安装
   + SW 壳离线，per-instance scope，尊重官方「不完整离线」立场）；P3（公网认证流转
   正式化 + Web Push；先行形态 = 内网/可信网络 `--no-auth`/tailscale）。
-- **Windows 首版（design 23）**：M0–M4 代码项已就绪、POSIX 单测绿（design 23 §2 /
-  todo 头注）。剩余全为**外部门禁**，台账见 `docs/progress/todo/windows-v1.md`
+- **Windows 首版（design 23）**：剩余全为**外部门禁**，台账见 `docs/progress/todo/windows-v1.md`
   （已剪为剩余项清单；windows-baseline.md 首跑数据待填）：真实 Windows runner
   首跑绿（test-windows 腿，含 submodule 物化 + junction 建链）；M0.5 上游 dsh
   win32/NSIS protocols/Defender/原生依赖实证；M2a runner 事务矩阵；**M2b UI 翻转
   （纪律：M2a 真实 win32 全绿前不做）**；M3/M4 实机矩阵与打包验证。M5/M6 发布面
   决策/演练待发布前（另见桌面端更新、发布/CI 条）。
-- **Linux 桌面（design 22，已落地 + 无头验证绿）**：剩余实机门禁按 design 22 §8
+- **Linux 桌面（design 22）**：剩余实机门禁按 design 22 §8
   清单（GNOME X11+Wayland/KDE 抽验：XDG 自启、深链冷/热与 CHROME_DESKTOP/xdg-mime
   路由及升级后重注册、托盘/通知点击、safeStorage keyring、SSH 密码全链、运行时
   打包态全链、自动更新端到端、AppImage 沙箱与 Wayland 焦点；另复核 before-quit
@@ -117,18 +107,22 @@
   关窗/托盘/后台三形态与打包态实机；徽标剩余 macOS Dock 打包态三态（武装/解除/退役
   + 重载与退出清零）实机；Linux 仅 Unity launcher 家族可见（文档化平台限制）；Windows
   任务栏 overlay v1 门控未接线（design 23 实机矩阵排期）。
-- **会话待办区（design 06 §8，已实现）**：剩余实机门禁——通用页开关即时生效、
+- **会话待办区（design 06 §8）**：剩余实机门禁——通用页开关即时生效、
   同源/跨来源/未常驻跳转与权威移除、折叠来源中目标、断连→重连重现、rail 不渲染、
   「还有 N 项」展开/收起与自动收起、展开内滚动（8 行上限）、拖拽尾随点击不误开、
   同会话内联重命名不打断、打包态。
 - **VS Code 深链 + open-in（designs 16/20；窗口策略已核查修复）**：剩余 macOS 实机
   验收——深链冷/热启动、打包态、托盘/退出在途、N-ctx、VS Code 缺失、`sshPort != 22`、
-  本地官方应用下拉在 vendor 会话头部的定位/层叠、远程来源仅 VS Code（新窗口/复用两态在
-  打包态真机确认）。
+  本地官方应用下拉在 vendor 会话头部的定位/层叠、远程来源仅 VS Code（新窗口/复用两态在  打包态真机确认）。
 - **Git Worktree 插件（design 08）**：剩余真实远程 Linux + Git 仓库端到端（首次
-  ready-time seed 后重启生效、并发 session 删除竞态、Git LFS/filter 与恢复边界）。
+  ready-time seed 后重启生效、并发 session 删除竞态、Git LFS/filter 与恢复边界）；
+  剩余实机验收——运行中会话（未归档）→ 删除被拒并给出诚实文案；同会话归档后 →
+  工作树删除成功且该会话未被停止/删除、其 cwd 消失后日志仍可读；运行中子代理位于
+  已归档根下 → 不阻塞。归档管理器是唯一「停止运行中回合 → 清理已归档内容」的入口。
 - **远程实例插件管理（design 13）**：本地 `dsh plugin`/`pnpm pack` 依赖
   `resolvePnpmBinDir` 对 PATH/nvm/volta/homebrew 的 best-effort 探测——需打包态实机。
+  剩余实机验收：本地/ssh/gateway/http 四来源的 chamber 表行数=3、archive-cleanup 的
+  installed/patched/live 三态与「注入/重启」按钮行为、gateway seed-cache 漂移列。
 - **会话创建/fork 侧边栏收敛延迟修复**：剩余本地 + 远程 SSH 实例实机验收（行出现
   延迟、状态图标延迟、位置跳动）。
 - **chamber shell 内官方 bundle 的实例相对绝对路径（已知缺陷，2026-08 缓办决策）**：
@@ -144,9 +138,7 @@
   §7 五条实机复测全开放（宽侧栏冷 settle CLS、连点冷挂载切换、版本事务主进程阻塞
   采样、更新模式侧栏写频、H3 懒加载验证——需打包版或带会话 dev 实例）。
 - **性能整改第二阶段（视图保留/后台门控/行窗口，2026 A/B/C/D）剩余实机验收**：
-  代码面已落地（0.2.3；retention/session-row-window/measure-ui，2026 三方评审修复
-  随行——预热保留槽门控、回收诊断收敛、边界语义对齐，commit 1c494a6）。剩余——
-  打包版/带会话 dev 实例同环境 A/B（measure-ui：DOM 节点分壳/堆/空闲长任务/合成
+  剩余——打包版/带会话 dev 实例同环境 A/B（measure-ui：DOM 节点分壳/堆/空闲长任务/合成
   输入帧/预热壳数）+「打开→切走→重开 ×3 堆无净增长」（×3 需多次快照序列）；
   验收表与语义偏差见 performance-baseline.md §10 与 design 05 §1 注记。已知取舍
   （登记）：被回收壳内运行中任务完成蓝点/通知边沿暂停至源重开（冷 boot 首报重
@@ -185,42 +177,19 @@
   对账空态双提示；settings-dshruntime：PUT registry 成功不 bump versionsEpoch（旧源
   数据至下次自然刷新）、30s 超时文案双层措辞、围栏/超时逻辑内联组件 effect（可测性
   债务；窗口级残余服务端读侧无害 ≤3s 自愈）。
-- **`test:gateway` 会停掉宿主 gateway 服务（2026-12 实机定位 + 已修）**：实机
-  取证链——宿主 `dsh-chamber-gateway.service` 的三次"无故停机"（07:27:42、
-  07:42:53、08:10:57 UTC）与三次 `pnpm run test:gateway` **任务启动**逐秒对应
-  （+35s/+35s/+41s；后两者先跑了两个 typecheck，纯套件偏移 41s），`/tmp/gw.log`、
-  `/tmp/b1.log` 均在 `install-script.test.ts` 处被 SIGTERM 截断，且 `/tmp/
-  gateway-installer-overlay-rollback-*` 残留目录的 mtime 正是停机秒（`finally`
-  未执行）。以 PATH 垫片捕获到真实调用 `systemctl stop dsh-chamber-gateway.service`
-  + `disable`，父进程正是该测试的 `harness.sh`，触发者是 **`do_install` 用例**
-  （"overlay install rollback…"）而非 cmd_update 用例。根因：
-  `scripts/install-gateway.sh` 的 D2 跨形态清理**直接调用裸 `systemctl`**（不是
-  `systemctl_for_mode`）并写死单元名（`install-gateway.sh:2619-2623`），而相关测试
-  只 mock 了 `systemctl_for_mode`——真实 systemctl 逃逸，把运行测试的机器的真实
-  服务停掉（**测试机上的实际损害是 stop**：套件本身在 gateway 单元 cgroup 内，
-  `stop` 先 SIGTERM 掉调用方，`disable` 来不及执行；在普通开发机上两者都会落地）。
-  **已修**：全部 harness 统一经 `harnessSource()` 注入宿主安全桩（仅当存在真实
-  `systemctl` 时定义 `systemctl()` 空实现；`systemctl_for_mode` 留给库本身以保留
-  作用域断言；测试自定义的 mock 仍覆盖），并加**源码级不变量测试**（每个
-  `writeFileSync(harness, …)` 必须走 `harnessSource` 或落在显式 allowlist，否则
-  测试失败）。**残留/约束**：D2 清理的固定单元名是安装器设计行为（跨形态迁移必须
-  停旧形态）；`install-script.test.ts` 仍有 2 处直接 spawn 真实安装器（`--help`/
-  `install --version`，当前只走用法/解析即退出）——若未来让它们走更远，会再次逃逸
-  （stub 只覆盖库切片 harness）；`03:16:06` 的同签名停机**未被钉死**（/tmp 证据被
-  07:29:45 容器重启清掉），01:22 的非优雅死亡与 01:35 陈旧锁接管已解释为容器被外部
-  非正常终止 + 网关自身的锁接管恢复，09-07 23:45:29 已解释为手工 install/update。
-- **N-ctx 文档级主题投影归属（2026-12 修复，design 06 §4.6）**：文档级
-  `color-scheme`/`body[data-ds-dark-theme]` 改由**活动视图独占**投影（App 经
-  chamberBridge 发布活动来源；ui-layout fork 的 `document-theme.ts` 按
-  `ctx.chamberInstanceId` 门控、teardown 永不回收、全页单例 presenter）；
-  代码面已收口（单测/typecheck/build 均过），**剩余=打包态实机目检**：首屏、
-  视图切换与回收窗口的 checkbox 深浅，以及预热视图不再互踩主题。
-- **Git 来源分支候选（2026-12 修复，design 08 §11.5 尾条）**：主 checkout 当前
-  分支不再被候选过滤（单分支仓库不再空候选；localStorage 记忆不再永久遮蔽
-  main），候选推导抽为纯函数并单测。**剩余=打包态实机目检**（判别期 harness
-  gateway 停机，wire 快照仅由 host 代码路径 + 宿主 git 事实推断）；unborn
-  （零提交）仓库 `branches` 必空 + 默认 base 40 零直送 git 无 preview 门仍为
-  代码面已知残留（实机无此形态）。
+- **`test:gateway` 宿主服务隔离（2026-12 实机定位）**：残留/约束——
+  D2 跨形态清理的固定单元名是安装器设计行为（跨形态迁移必须停旧形态）；
+  `install-script.test.ts` 仍有 2 处直接 spawn 真实安装器（`--help`/
+  `install --version`，当前只走用法/解析即退出），若未来让它们走更远会再次逃逸
+  （宿主安全桩只覆盖库切片 harness）；`03:16:06` 的同签名停机未被钉死（/tmp 证据被
+  容器重启清掉），01:22 的非优雅死亡与 01:35 陈旧锁接管已解释为容器被外部非正常
+  终止 + 网关自身的锁接管恢复，09-07 23:45:29 已解释为手工 install/update。
+- **N-ctx 文档级主题投影归属（design 06 §4.6）**：剩余=打包态实机目检——首屏、视图
+  切换与回收窗口的 checkbox 深浅，以及预热视图不再互踩主题。
+- **Git 来源分支候选（design 08 §11.5 尾条）**：剩余=打包态实机目检（判别期 harness
+  gateway 停机，wire 快照仅由 host 代码路径 + 宿主 git 事实推断）；unborn（零提交）
+  仓库 `branches` 必空 + 默认 base 40 零直送 git 无 preview 门仍为代码面已知残留
+  （实机无此形态）。
 
 ## 设计未决
 

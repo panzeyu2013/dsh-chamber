@@ -1136,7 +1136,7 @@ gateway 托管前端」与 §3 装配矩阵已定义移动例外——`dsh-chamb
 「移动例外：不参与桌面同步」）；桌面侧 chamber 插件（sidebar/layout/
 settings-bridge/git/open-in）依旧不注入。机制上无需新能力：控制面 host-graph-seed
 的 `--patch` overlay（design 09 §3.1 方案 A）对 gateway spawn 的本地实例同样
-适用——与 `dsh-chamber-seed-client-graph`/`dsh-host-git-worktree` 的 seed 路径同构，
+适用——与 `dsh-chamber-seed-client-graph`/`dsh-chamber-seed-git-worktree` 的 seed 路径同构，
 区别仅在**分发来源**：宿主包经桌面 `PUT /chamber/plugins` 同步（§10 项 2，
 版本锁定到连接桌面），移动插件随 gateway 发行物打包（链路无桌面在场）。
 

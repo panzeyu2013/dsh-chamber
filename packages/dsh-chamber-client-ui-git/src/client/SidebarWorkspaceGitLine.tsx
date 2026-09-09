@@ -24,6 +24,7 @@ import {
   clearActionError, createSessionHere, currentSessionIsBlank, gitCoordinator, removeUnregisteredWorktree, retryRecovery,
 } from '../shared/coordinator.ts'
 import { gitFactsForWorkspace, removeBlockReason } from '../shared/git-facts.ts'
+import { removeRunningNotes } from '../shared/remove-notes.ts'
 import type { GitBusyKind, GitRecovery, GitWorktreeInfo } from '../shared/types.ts'
 import type { GitSidebarKey } from '../locales.ts'
 import { CreateWorktreeDialog } from './CreateWorktreeDialog.tsx'
@@ -73,12 +74,18 @@ function busyLabel(kind: GitBusyKind, t: SidebarWorkspaceGitInjected['t']): stri
   return t('busyRecovery')
 }
 
+/** Localized copy for a hard-blocked remove action. `'running'` is
+ *  deliberately ABSENT: both call sites pre-filter it into the dedicated
+ *  running title (`runningRemoveTitle` on an archived-aware host, the neutral
+ *  `runningRemoveLegacyTitle` on an old host — the reason is not a hard block,
+ *  so the row keeps the control enabled and the host re-checks). A `'running'`
+ *  argument would therefore fall through to `undefined`; there is no dead copy
+ *  key left for it (2026-12 lens-C re-verification). */
 function blockLabel(
   reason: ReturnType<typeof removeBlockReason>,
   status: GitWorktreeInfo['status'],
   t: SidebarWorkspaceGitInjected['t'],
 ): string | undefined {
-  if (reason === 'running') return t('runningBlocked')
   if (reason === 'current') return t('currentBlocked')
   if (reason === 'runtime-unknown') return t('runtimeUnknownBlocked')
   if (reason === 'locked') return t('lockedBlocked')
@@ -273,6 +280,21 @@ export function SidebarWorkspaceGitLine({
   const busy = source.busy !== undefined
   const actionLocked = busy || source.recovery !== undefined
   const blocked = removeBlockReason(primary, currentSessionId, currentSessionIsBlank(context.sourceId, currentSessionId), runtimeKnown)
+  /** The running title must not claim archivedness on an OLD host (no
+   *  archived-aware field): there the `running` reason is the conservative
+   *  `runningSessionIds` fallback, and neutral copy is the honest one
+   *  (review G1-2). Derived through the SAME pure helper the dialog uses
+   *  (`removeRunningNotes` → kind 'legacy') so the two can never drift
+   *  (2026-12 cohesion nit). */
+  const runningNotes = removeRunningNotes({
+    runningSessionIds: primary.runningSessionIds,
+    ...(primary.blockingRunningSessionIds === undefined
+      ? {}
+      : { blockingRunningSessionIds: primary.blockingRunningSessionIds }),
+  })
+  const runningTitle = runningNotes.kind === 'legacy'
+    ? t('runningRemoveLegacyTitle')
+    : t('runningRemoveTitle')
   // Only worktree workspaces (not the repo's main checkout) can be removed as
   // worktrees; the sidebar's own workspace kebab handles plain deletion.
   const canOfferRemove = !primary.isMain && primary.workspaceId !== null
@@ -302,11 +324,27 @@ export function SidebarWorkspaceGitLine({
             className={`${css.headerGitAction} git-ws-action`}
             // A dirty worktree is NOT disabled: the remove dialog collects an
             // explicit discard-changes checkbox instead (design 08 §6
-            // amendment 2026-08). Every other block (running/current/locked/
-            // unhealthy/status-unknown) stays a hard disable.
-            disabled={actionLocked || (blocked !== undefined && blocked !== 'dirty')}
-            aria-label={blocked === 'dirty' ? t('dirtyRemoveTitle') : (blockLabel(blocked, primary.status, t) ?? t('remove'))}
-            title={blocked === 'dirty' ? t('dirtyRemoveTitle') : (blockLabel(blocked, primary.status, t) ?? t('remove'))}
+            // amendment 2026-08). A worktree with RUNNING sessions is not
+            // disabled either (2026-09 user decision): there is NO wire flag
+            // to opt out of the host's RUNNING guard — the host re-checks and
+            // refuses with `running-agent` (the dialog maps that refusal to
+            // localized copy), and the row stays clickable so the dialog can
+            // explain the running facts first. Every other block
+            // (current/runtime-unknown/locked/unhealthy/status-unknown) stays
+            // a hard disable — current and runtime-unknown are evaluated
+            // BEFORE running in removeBlockReason, so a stale running fact can
+            // never shadow them.
+            disabled={actionLocked || (blocked !== undefined && blocked !== 'dirty' && blocked !== 'running')}
+            aria-label={blocked === 'dirty'
+              ? t('dirtyRemoveTitle')
+              : blocked === 'running'
+                ? runningTitle
+                : (blockLabel(blocked, primary.status, t) ?? t('remove'))}
+            title={blocked === 'dirty'
+              ? t('dirtyRemoveTitle')
+              : blocked === 'running'
+                ? runningTitle
+                : (blockLabel(blocked, primary.status, t) ?? t('remove'))}
             onClick={() => setRemoveTarget({
               repoId: rows[0]!.repoId,
               worktreeId: primary.worktreeId,
@@ -314,6 +352,10 @@ export function SidebarWorkspaceGitLine({
               branch: primary.branch,
               sessionIds: primary.sessionIds,
               dirty: primary.dirty === true,
+              runningSessionIds: [...primary.runningSessionIds],
+              ...(primary.blockingRunningSessionIds === undefined
+                ? {}
+                : { blockingRunningSessionIds: [...primary.blockingRunningSessionIds] }),
             })}
           >
             <IconTrashOutline16 size={16} />
@@ -333,6 +375,7 @@ export function SidebarWorkspaceGitLine({
         onClose={() => setRemoveTarget(null)}
         sourceId={context.sourceId}
         target={removeTarget}
+        runtimeKnown={runtimeKnown}
         t={t}
       />
     </>

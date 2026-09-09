@@ -341,7 +341,16 @@ for (const fork of FORKS) {
     return end === -1 ? rest : rest.slice(0, end)
   }
   const mapBlock = blockOf(gatewaySrc, 'HOST_PACKAGE_PROBE_DOMAINS:', '}')
-  const mapValues = [...mapBlock.matchAll(/'([^']+)':\s*'([^']+)'/g)].map((m) => m[2])
+  // 两种形态同门：① 字面表（逐行 `'<name>': '<domain>'`）；② 2026-09 起的
+  // 注册表派生表（`Object.fromEntries(CHAMBER_HOST_PACKAGES.map(...))`）——
+  // 派生形态的值唯一来源是控制面注册表，故改读 host-graph-seed.ts 的
+  // `{ insert: …, probe: { method: '<domain>' } }` 行（与 chamber-seed-drift
+  // 客户端镜像测试同一提取口径）。派生表在 gateway 模块加载时另有 fail-loud
+  // 运行时门（mappedProbeDomains vs HOST_DOMAIN_PROBE_NAMES），本门是文本哨兵。
+  const mapValues = mapBlock.includes('CHAMBER_HOST_PACKAGES')
+    ? [...readFileSync(join(ROOT, 'packages/control-plane/src/host-graph-seed.ts'), 'utf8')
+        .matchAll(/\{ insert: HOST_[A-Z_]+_INSERT, probe: \{ method: '([^']+)'/g)].map((m) => m[1])
+    : [...mapBlock.matchAll(/'([^']+)':\s*'([^']+)'/g)].map((m) => m[2])
   const listBlock = blockOf(runtimeSrc, 'HOST_DOMAIN_PROBE_NAMES = [', '] as const')
   const listEntries = [...listBlock.matchAll(/'([^']+)'/g)].map((m) => m[1])
   const gatewaySet = new Set(mapValues)

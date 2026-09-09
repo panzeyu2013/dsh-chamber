@@ -316,9 +316,10 @@
   `updatedAt`；快照含 `current?: string`（当前会话 id）。
 - 每个实例 boot = 独立 ctx、独立 store；侧边栏插件在每个 ctx 都挂载，
   即每个来源都有一个可订阅自身运行时的事实生产者。
-- **插件 = 无状态投影（2026-08 修订，远程完成未读蓝点修复）**：上报端只做
-  快照直通——`current` + 每个列出会话的实时 `running` 位 + vendor 已武装的
-  `completed`/`pending`，**不自持任何状态**。官方 `completed` 提醒只在
+- **插件 = 投影（2026-08 修订，远程完成未读蓝点修复；2026-09 补注）**：上报端只做
+  快照投影——`current` + 每个列出会话的实时 `running` 位 + vendor 已武装的
+  `completed`/`pending`，除 design 24 §21 的**purged 墓碑抑制集 + 收敛链**
+  （唯一自持状态：内容已删的 id 从上报中过滤）外**不自持状态**。官方 `completed` 提醒只在
   「运行→空闲」边沿且会话**非本 ctx selected** 时武装，后台来源 shell 的
   selected 保持「最后打开」不随活动视图切换更新，会把后续完成误判为
   「正在阅读」而永久压制蓝点——因此**蓝点的武装/解除整体上移到 App 层**
@@ -443,7 +444,8 @@
 ### 4.4 代码落点
 
 - `shared/aggregate-store.ts`（通道 + `ChamberServerAggregate.runtime?` +
-  `runningSubagents` 行字段）、`client/index.ts`（订阅与无状态上报 +
+  `runningSubagents` 行字段）、`client/index.ts`（订阅与投影上报 +
+  design 24 §21 的墓碑抑制/收敛链 +
   `indexSubagentDescendants` 注入）、`App.tsx`（runtimeFacts +
   completedBySource 对账 + 合并 + 清理 + 激活兜底；runningSubagents 随
   事实行透传，状态机无需感知）、

@@ -716,3 +716,61 @@ test('planSessionListRefresh: unknown provenance or non-ok previous never reques
   const notConnected: InstanceAggregate = { state: 'not-connected', workspaces: [], sessions: [], archivedSessionIds: [], error: null }
   assert.deepEqual(planSessionListRefresh(notConnected, snapshotWithRows(['a2'], ['s0', 'a2']), ['a2']), { request: true, pending: ['a2'] })
 })
+
+// ---- 2026-09 §21 residuals ①/③: remembered authoritative archive set ----
+
+test('archiveSetShrink: a remembered authoritative set is the baseline when the committed aggregate lost provenance', () => {
+  const fallbackView = okAggregate([], false)
+  assert.deepEqual(
+    archiveSetShrink(fallbackView, { archivedSessionIds: ['keep'], archiveSetKnown: true }, ['g1', 'g2', 'keep']),
+    ['g1', 'g2'],
+  )
+  // No memory and no provenance -> no shrink (unchanged conservative rule).
+  assert.deepEqual(archiveSetShrink(fallbackView, { archivedSessionIds: [], archiveSetKnown: true }), [])
+  // A non-authoritative next snapshot never shrinks, memory or not.
+  assert.deepEqual(
+    archiveSetShrink(fallbackView, { archivedSessionIds: [], archiveSetKnown: false }, ['g1']),
+    [],
+  )
+  // A committed authoritative aggregate still wins over the memory.
+  assert.deepEqual(
+    archiveSetShrink(okAggregate(['a1', 'a2']), { archivedSessionIds: ['a2'], archiveSetKnown: true }, ['zzz']),
+    ['a1'],
+  )
+})
+
+test('planSessionListRefresh: a remembered baseline makes a shrink observable from a degraded view', () => {
+  const degraded = okAggregate([], false)
+  const push = { archivedSessionIds: [] as string[], archiveSetKnown: true, sessions: [{ sessionId: 'g1', running: false, blank: false }] }
+  assert.deepEqual(planSessionListRefresh(degraded, push, undefined), { request: false, pending: [] })
+  assert.deepEqual(
+    planSessionListRefresh(degraded, push, undefined, ['g1']),
+    { request: true, pending: ['g1'] },
+  )
+})
+
+test('commitAggregatePull: a degraded full commit carries the remembered archive set without claiming provenance', () => {
+  const fallback = { ...fallbackSnapshot, archiveSetKnown: false }
+  const committed = commitAggregatePull(undefined, fallback, false, ['archived-1', 'archived-2'])
+  assert.equal(committed.state, 'ok')
+  assert.deepEqual(committed.archivedSessionIds, ['archived-1', 'archived-2'])
+  // Provenance stays FALSE: the remembered set is a rendering aid, never an
+  // authority (the archive manager must keep its degraded branch).
+  assert.equal(committed.archiveSetKnown, false)
+  // The fallback's synthetic groups and rows still ride along.
+  assert.deepEqual(committed.sessions, fallback.sessions)
+})
+
+test('commitAggregatePull: without a remembered set the degraded commit stays byte-identical to the old behaviour', () => {
+  assert.deepEqual(
+    commitAggregatePull(undefined, fallbackSnapshot, false),
+    { state: 'ok', ...fallbackSnapshot, error: null },
+  )
+})
+
+test('commitAggregatePull: the remembered set never leaks into the mounted merge branch', () => {
+  const authoritative = { ...mountedAggregate, archiveSetKnown: true }
+  const merged = commitAggregatePull(authoritative, fallbackSnapshot, true, ['remembered-x'])
+  assert.deepEqual(merged.archivedSessionIds, authoritative.archivedSessionIds)
+  assert.equal(merged.archiveSetKnown, true)
+})

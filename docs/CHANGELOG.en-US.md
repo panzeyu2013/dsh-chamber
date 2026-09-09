@@ -40,6 +40,33 @@ Release artifacts and per-release notes also live on the GitHub Releases page
   - **Removal guard for the lockfile vendor-record repair script (fix)**: `restore-lockfile-vendor-records.mjs` used to resurrect every importer record pnpm pruned, unconditionally, from HEAD; once upstream removed workspace members (the 4 landlock records at 0.1.5) the script replayed members that no longer exist and the frozen install then failed with "in lockfile, missing link". It now skips (and prints) records whose `vendor/harness-packages/@deepseek-ai/<name>` link is absent, including broken symlinks. New root script `pnpm run test:upgrade-tools` (both script test files) plus a CI step.
   - **Per-transport aggregate staleness thresholds (H3)**: the sidebar aggregate's S2 reconnect watchdog used a single 120 s threshold and **covered direct-http sources only**; it is now chosen per source transport — http keeps 120 s (the browser leg has the control plane's 30 s WS ping, but the upstream leg has no application heartbeat and only ~10 min of OS TCP keepalive, so a tight heal is warranted), while **ssh gains a 300 s last-resort arm** (the tunnel already has three independent detectors: the proxy's 30 s/1-miss WS ping, the host mux's 2 s/2-miss heartbeat and the ssh keepalive at 30×3≈90 s; this arm only adds app-level-freeze healing, and its threshold must stay well above the http one so idle healthy tunnels do not pay a baseline replay every two minutes), and local/unknown sources are never touched (`AGGREGATE_RECONNECT_HTTP_STALE_MS`/`AGGREGATE_RECONNECT_SSH_STALE_MS` + `reconnectStalenessMsForTransport`). The unary 30 s pull cadence is unchanged — the watchdog remains an addition to the pull. Two new unit tests (http/ssh thresholds, local/unknown skipped).
 
+### Fixed
+
+- **Purged archived sessions kept resurfacing in the sidebar (design 24 §21).**
+  After a purge deleted the content of archived sessions, the official client's
+  `SessionManager.summaries` never refreshed (host session events are documented
+  no-ops) while the archive-set shrink reached the client immediately through the
+  official workspace follow, so the producer pushed "shrunk set + stale rows" and
+  the deleted sessions rendered as ordinary rows (clicking one failed with
+  `session/not-found`); the 30s unary fallback then cleared them again, producing
+  a push-restores / pull-clears flicker. Four layers fix it: (1) producer-side
+  **tombstone suppression** (ids that left the authoritative archive set are
+  filtered out of the emitted snapshot and the runtime-fact channel until the
+  official summaries converge or the id is re-archived); (2) a **verified
+  convergence chain** (the official `ctx.sessions.refresh()` is now invoked as a
+  METHOD — the previous detached call threw `TypeError` on every attempt and never
+  issued a request — with bounded retries for resolved-but-unconverged, rejected
+  and hung outcomes, ending in a chamber unary `session.list` authoritative probe
+  that releases only ids the server still lists); (3) an App-side **authoritative
+  archive-set memory** (shrink baseline when provenance is lost, plus archived-row
+  filtering for the degraded unary view; `archiveSetKnown` stays false so the
+  archive manager keeps its non-destructive degraded branch); (4) a host-side
+  **registry-global orphan sweep** (every purge clears record-less archive-set
+  members across the WHOLE set: per-candidate official single-id existence check,
+  union of the query/persistence enumerations, empty/collapsed-corpus credibility
+  gates, membership-only with zero new content deletion, double-confirmed and
+  fail-closed). See design 24 §20/§21 and `docs/progress/STATUS.md`.
+
 ## [0.2.4] - 2026-09-09
 
 ### Fixed

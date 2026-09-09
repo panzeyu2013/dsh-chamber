@@ -161,7 +161,14 @@ export interface InstancesChangedPayload {
 export type SshExecIpcResult = SshStatusProjection | { error: string }
 
 /** Chamber-owned host packages installed into and loaded by one dsh profile. */
-export interface ChamberHostGraphState {
+/** One chamber host package's per-target state — mirror of plugin-sync.ts
+ *  (the wire producer) and the renderer's global.d.ts. The expected package
+ *  set is the control-plane registry, so a new host package appears in the
+ *  plugin-management page without a UI change. */
+export interface ChamberHostPackageState {
+  insertId: string
+  name: string
+  probe: string
   installed: boolean
   patched: boolean
   version: string | null
@@ -171,11 +178,7 @@ export interface ChamberHostGraphState {
  *  never a silent "not injected"). The preload mirror of plugin-sync.ts /
  *  renderer global.d.ts — the L3 lockstep test guards shape drift. */
 export type ChamberInjectionState =
-  | {
-    ok: true
-    hostGraph: ChamberHostGraphState
-    gitWorktree: { installed: boolean; patched: boolean; version: string | null; live: boolean | null }
-  }
+  | { ok: true; packages: ChamberHostPackageState[] }
   | { ok: false; error: string }
 /** Remote plugin manifest projection (design 13 §4.3). */
 export interface SshRemotePluginManifest {
