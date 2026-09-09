@@ -8,7 +8,7 @@
 
 ## 未完成 / 部分完成（剩余验收）
 
-- **dsh 运行时版本管理（design 18 §3.6/§9，M5–M7 已落地）**：剩余——macOS 打包态
+- **dsh 运行时版本管理（design 18 §3.6/§9）**：剩余——macOS 打包态
   `.app` 内共享 dsh-runtime/内嵌 pnpm/koffi 与完整激活-故障回退-恢复链的实机；Linux
   server 同款端到端；Gateway 重启窗口的前端重连与 connections 的 SSH
   `restart_service` systemd IPC 端到端；`restartLocal()` 在真实 1s SIGTERM→SIGKILL
@@ -31,114 +31,42 @@
   在生产 TLS 下全链；Linux system/user service 安装升级与回退；`--bind 0.0.0.0`/
   隧道/tailscale 全链负例。凭据管理剩余：desktop settings-bridge 便捷重置（推迟项）
   + 真实 TLS 下改密/轮换/停机态 CLI 恢复。
-- **S0/S2 http 直连链路（design 17 §10.5）**：S0 注入与 S2 非 loopback TCP
-  keepalive + staleness 自愈已实现（见 §10.5/代码注释与 git 历史，不在此复述）；
-  **S2-c（放宽 dsh mux 心跳，可选增强）未实现**——前置 = 扩展 gateway patch
-  写入器，单列。剩余验收：打包态实机（浏览器直连 gateway 的 Models/插件设置可
+- **S0/S2 http 直连链路（design 17 §10.5）**：**S2-c（放宽 dsh mux 心跳，可选增强）
+  未实现**——前置 = 扩展 gateway patch 写入器，单列。剩余验收：打包态实机（浏览器直连 gateway 的 Models/插件设置可
   写；杀托管 dsh/断网后 sidebar 60–120s 自动恢复；升级 dsh 版本复验钩子存在性）。
-- **设计 21 网关插件能力对齐（已实现）**：剩余——§9 实机 E2E 矩阵（真实
+- **设计 21 网关插件能力对齐**：剩余——§9 实机 E2E 矩阵（真实
   gateway×desktop 双通道手动/脚本化门禁、registry 实装传递依赖与 lifecycle scripts、
   故障注入、journal 中断对账；发布前执行；.172 测试机 gateway 侧升级因凭据轮换
   暂停，待用户侧恢复后按 §9 重跑）；UI 余留照实：who/when 归因 tooltip 未渲染、
   gateway 拒绝码→本地化文案映射未做（409 逐字英文）、pollGatewayReady 英文错误串
   未本地化；archive-pick file+folder 双模式对话框为 **macOS-v1**（非 macOS 保持
   文件夹对话框，随 design 22/23）。
-- **归档清理与归档管理器（design 24，已实现）**：**2026 purge 幽灵行收敛
-  轮（§20）已实现并经三方只读 review 修订**——purge 后已删会话浮出侧边栏/
-  点击 `session/not-found` 的缺陷修复（官方 ctx 会话行 summaries 仅连接代数
-  刷新 + purge 事件 no-op → 归档集合移除后行失去过滤；收敛 = chamberBridge
-  `requestSessionListRefresh` + App **收敛状态机**（每次 ready 推送评估
-  `planSessionListRefresh`：收缩移除 ∪ pending 中仍列行者 = 幽灵 → 按 5s
-  冷却重发请求，行消失自终止——闭合「相邻 purge 收缩被合并窗口吞掉」与
-  「刷新失败无重试」两 review 发现）+ 对话框每次 purge settle 即时请求，
-  插件按实例调官方 `ctx.sessions.refresh()`（缺失/失败均 warn）；
-  design 05 §3 桥契约已同步）。**⚠ 该 seam 实机从未生效**——插件执行腿是
-  脱绑调用（`this` 丢失）⇒ 每次抛 TypeError 被吞掉、一个 RPC 都没发过
-  （§21 review BLOCKER 实测复现；§20 的「typecheck + 人工目检代证」正是
-  漏检原因）。**2026-09 幽灵行复现修正轮（§21）已实现**——§20 上线后实机仍
-  复现（切会话/任务完成/待办刷新时重现，发消息/约 30s/新建会话后自愈）：
-  5 个并行只读子代理扩大调查面 + 修正后四方只读 review（正确性/完整性/
-  最优性/对抗验证）确认收敛网是**一次性转移检测器**（实测：收敛后 summaries
-  再变脏的 push 两侧集合相同 ⇒ 永不重试；收缩 push 落在非权威聚合上 ⇒ 该次
-  purge 永久不可见；请求可能落在无订阅者时刻；官方 `refreshList()` 单飞可
-  复用 purge 前的在途响应且不补跑）+ 生产端签名只与自己上一次推送比较
-  ⇒「推送装回陈旧行、unary pull 清掉」稳态振荡。修正 = 生产端 **F1 墓碑
-  抑制**（权威归档集收缩 ⇒ 离开集合的 id 从上报 snapshot.sessions 与运行时
-  事实/current 中过滤；原始数组引用短路；诚实性依据 = 宿主 `clearIds` 只含
-  内容删除成功的树与无记录孤儿）+ **F2 校验式收敛链**（**方法调用**官方
-  refresh；resolve-残留/reject/hung 三类结果均有界重试；越界**一律保持抑制**
-  ——闭环复验证实「resolve 即释放」不成立：官方 refreshList 在拉取失败时也
-  resolve 且单飞会回 purge 前响应，按它释放会重开本缺陷；链单飞、attempt
-  栅栏、dispose 清定时器；状态机抽离为 `purged-tracker.ts`，生产端接线由
-  `test/producer-purged-wiring.test.ts` 9 项源码契约守卫——含方法调用
-  BLOCKER 回归闸与 probe/onRelease 接线，变异实测全部被捕获）。**2026-09 残余清零轮**：
-  ①③ = App 侧记住每来源最后**权威**归档集（`authoritativeArchiveSetRef`），
-  失去权威时作为收缩基线、降级 full 提交携带该集合但 `archiveSetKnown` 仍
-  false（侧边栏继续过滤已归档行，管理器保持降级分支）；② = 宿主每次 purge
-  收尾对**全集合**做 registry-global 孤儿清扫（双重确认 + fail-closed +
-  同一次集合写 + 独立计数 `clearedOrphanMembers?`，归档管理器 settle 文案
-  呈现，wire 见 design 24 §3/§4 步骤 4b）；④ = F2 终态改用 chamber unary
-  `session.list` 权威探针，只释放服务端仍存在的 id（resolve 不构成权威）。
-  **2026-09 二轮扫描轮**（4 视角 + 变异/探针复核）：修 F3(a) **记忆覆盖顺序**
-  （基线取覆盖前旧值，否则 F3(a) 是死代码；`test/app-purged-memory-wiring.test.ts`
-  钉住并变异验证）、F2 探针**独立看门狗**（否则探针迟到会取消下一尝试的看门狗、
-  链永久卡死）、**释放决策用探针启动时的抑制快照**（在飞期间新布的墓碑不得被
-  释放）、`onRelease` 改走 `sync()`（同步恢复运行时事实）、宿主孤儿清扫**按候选
-  逐个权威存在性校验**（官方 `persistence.inspect`，非 not-found 一律不清）、
-  枚举**并集**（query ∪ persistence，杜绝静默收窄）、**空语料/塌缩语料可信度门**；
-  宿主门禁 `test:host-archive-cleanup` 78 项（core 56 + binding 22）全绿，
-  dist 产物重构建（哈希幂等）。
-  剩余**仅测试类**：打包版实机目检、探针依赖实例就绪（fail-closed，行保持
-  抑制）、语义级接线以源码契约 + 目检代证、集合 >65,536 不清扫（容量边界）。
-  剩余——实机 **gateway/远程 dsh 形态**与打包版 UI 目检（§19-9 偏差/待目检
-  并入该腿，含幽灵行不再浮现、点击不再 `session/not-found`）；事件发射为
-  文档化 no-op 直至上游 wire，域随上游 `sessions.delete` wire 落地后退休
-  （上游未落地）。可选增强（未排期）：PluginDialog 三态行、rowError 本地化、
-  已归档浏览区（todo 12 A）、`preview` 暴露孤儿计数。
-  **2026-09 修订（§22：force 删除已加载会话 + 删除前自动停止运行中会话）**
-  已实现并经单测覆盖——`purge({sessionIds, force?})` 的 force 只放过「本进程
-  已加载（idle）」子树、running 永远拒绝（裸删会产生无头残档）；管理器删除前
-  用官方 `session/cancel` 停止选中项的运行中回合，并排除当前正在查看的会话；
-  结果口径拆为 `skippedRunning`/`skippedLoaded`/`forcedLoaded`，`deleteSessionContent`
-  新增 item 码 `loaded`。**2026-09 P1/P2 硬化轮（§22.4/§22.6）**：停止范围改为
-  选中根的闭包（`fetchSessionRunningLineage` 读同一次 `session/list` 的运行位 +
-  `parentSessionId` 边；无血统时退化为仅根，绝不猜父链），不可见的运行中子代理
-  后代因此可被停止与等待；旧宿主整体拒收 `force` 时去掉 force 重试一次并置
-  `forceUnsupported`（管理器如实说明「已加载空闲会话被跳过、需重启该实例 dsh」，
-  绝不静默降级）；force 残余风险（删档后宿主内存写回重建无头残档）已文档化，
-  并 fail-closed：`server.runtime === undefined`（运行时通道缺失/重连中）时不使用
-  force 路径，如实提示且行保持不动。工作树侧按用户最终裁定不触碰任何会话
-  （design 08 §6 归档感知守卫），本域是唯一的「停止运行中回合 → 清理已归档内容」
-  入口。剩余实机验收：卡在提问的归档会话 → 管理器删除 → 停止 + 强制清理成功；
-  旧宿主（无 force 参数）的回退 + 说明；运行中子代理后代所在归档树一次删除收敛；
-  本机 5 个「已加载」残留（`d8ae9ae5`/`d4d9bdbf`/`c54461f6`/`32b74f4a`/`10d9124a`）
-  一次删除收敛。
-  **2026-09 五路 review 收口轮（§22.2/§22.5/§22.6）**：①闭包只沿
-  `origin === 'subagent'` 边（fork 子会话有 `parentSession` 但无 origin，绝不
-  误取消——`sessionPurgeClosure` 为唯一实现）；②当前查看会话的排除覆盖**闭包**
-  （所选根的闭包含 `runtime.current` → 整根跳过，不取消不清理）；③停止环节失败
-  不再中止删除（建议性），但当血统读失败**且**当前会话已知时 fail-closed 拒绝
-  force 路径（`closureUnknown`，`archive-purge.ts:228-241`，零 cancel 零 purge）；
-  ④决策与文案抽为纯函数（`purgeRefusalReason`/`archivePurgeNote`/`currentInClosureNote`）
-  并由 `test/archive-purge.test.ts`（11 例）固定（原对话框 767 行无测试）；⑤维护阶段
-  残余如实登记（dsh 在 compaction/schedule 维护阶段对外报 `idle`，force 可能删到
-  正在追加的档；「读私有 phase 字段」记录为否决方案）；⑥归档集合在 run 起点快照、
-  窗口内不重读（已登记）。
-- **移动端 Web 访问面（design 17 §18）**：P1/P1.5/适配轮已实现。剩余——实机门禁
+- **归档清理与归档管理器（design 24）**：剩余**仅测试类**——打包版实机目检（含
+  幽灵行不再浮现、点击不再 `session/not-found`）、探针依赖实例就绪（fail-closed，
+  行保持抑制）、语义级接线以源码契约 + 目检代证、集合 >65,536 不清扫（容量边界）；
+  以及实机 **gateway/远程 dsh 形态**与打包版 UI 目检（§19-9 偏差/待目检并入该腿）。
+  **§22 force 轮剩余实机验收**：卡在提问的归档会话 → 管理器删除 → 停止 + 强制清理成功；旧宿主（无 `force` 参数）的回退 + 说明；
+  运行中子代理后代所在归档树一次删除收敛；本机 5 个「已加载」残留
+  （`d8ae9ae5`/`d4d9bdbf`/`c54461f6`/`32b74f4a`/`10d9124a`）一次删除收敛。
+  **登记残余**：事件发射为文档化 no-op 直至上游 wire，域随上游 `sessions.delete`
+  wire 落地后退休（上游未落地）；维护阶段（compaction/schedule）对外报 `idle`，
+  force 可能删到正在追加的档（「读私有 phase 字段」为否决方案）；归档集合在 run
+  起点快照、窗口内不重读。可选增强（未排期）：PluginDialog 三态行、rowError
+  本地化、已归档浏览区（todo 12 A）、`preview` 暴露孤儿计数。
+- **移动端 Web 访问面（design 17 §18）**：剩余——实机门禁
   （§18.6：真机触控目标比例/抽屉开合/键盘遮挡/安全区/汉堡不重叠/crumbs 换行/
   Session 日志图标化/iOS 单击切换/设置手机档走查/刘海横屏/深层谱系高度等）；DOM
   锚点审计剩余（details 打标缺口修复的**接线仅实机可验**、`[class$=_…]` 后缀命名
   契约测试固定、composer 锚点 fixture 化、Android 键盘盲区真机门禁）；P2（PWA 安装
   + SW 壳离线，per-instance scope，尊重官方「不完整离线」立场）；P3（公网认证流转
   正式化 + Web Push；先行形态 = 内网/可信网络 `--no-auth`/tailscale）。
-- **Windows 首版（design 23）**：M0–M4 代码项已就绪、POSIX 单测绿（design 23 §2 /
-  todo 头注）。剩余全为**外部门禁**，台账见 `docs/progress/todo/windows-v1.md`
+- **Windows 首版（design 23）**：剩余全为**外部门禁**，台账见 `docs/progress/todo/windows-v1.md`
   （已剪为剩余项清单；windows-baseline.md 首跑数据待填）：真实 Windows runner
   首跑绿（test-windows 腿，含 submodule 物化 + junction 建链）；M0.5 上游 dsh
   win32/NSIS protocols/Defender/原生依赖实证；M2a runner 事务矩阵；**M2b UI 翻转
   （纪律：M2a 真实 win32 全绿前不做）**；M3/M4 实机矩阵与打包验证。M5/M6 发布面
   决策/演练待发布前（另见桌面端更新、发布/CI 条）。
-- **Linux 桌面（design 22，已落地 + 无头验证绿）**：剩余实机门禁按 design 22 §8
+- **Linux 桌面（design 22）**：剩余实机门禁按 design 22 §8
   清单（GNOME X11+Wayland/KDE 抽验：XDG 自启、深链冷/热与 CHROME_DESKTOP/xdg-mime
   路由及升级后重注册、托盘/通知点击、safeStorage keyring、SSH 密码全链、运行时
   打包态全链、自动更新端到端、AppImage 沙箱与 Wayland 焦点；另复核 before-quit
@@ -149,91 +77,22 @@
   关窗/托盘/后台三形态与打包态实机；徽标剩余 macOS Dock 打包态三态（武装/解除/退役
   + 重载与退出清零）实机；Linux 仅 Unity launcher 家族可见（文档化平台限制）；Windows
   任务栏 overlay v1 门控未接线（design 23 实机矩阵排期）。
-- **会话待办区（design 06 §8，已实现）**：剩余实机门禁——通用页开关即时生效、
+- **会话待办区（design 06 §8）**：剩余实机门禁——通用页开关即时生效、
   同源/跨来源/未常驻跳转与权威移除、折叠来源中目标、断连→重连重现、rail 不渲染、
   「还有 N 项」展开/收起与自动收起、展开内滚动（8 行上限）、拖拽尾随点击不误开、
   同会话内联重命名不打断、打包态。
-- **VS Code 深链 + open-in（designs 16/20；窗口策略已核查修复）**：剩余 macOS 实机
-  验收——深链冷/热启动、打包态、托盘/退出在途、N-ctx、VS Code 缺失、`sshPort != 22`、
+- **VS Code 深链 + open-in（designs 16/20）**：剩余 macOS 实机验收——深链冷/热启动、打包态、托盘/退出在途、N-ctx、VS Code 缺失、`sshPort != 22`、
   Finder 下拉在 vendor 会话头部的定位/层叠、远程来源仅 VS Code（新窗口/复用两态在
   打包态真机确认）。
 - **Git Worktree 插件（design 08）**：剩余真实远程 Linux + Git 仓库端到端（首次
-  ready-time seed 后重启生效、并发 session 删除竞态、Git LFS/filter 与恢复边界）。
-  **2026-09 修订（running 会话：已归档者不再阻塞，删除不触碰任何会话；最终裁定，
-  §6/§11.3）**已实现并经单测覆盖：宿主 RUNNING 守卫改为归档感知——运行中的会话
-  **INERT**（不阻塞）当且仅当 `workspaceRegistry.archivedSessionIds` 含其 id 或
-  其祖先链上有已归档会话——**链只沿 `origin === 'subagent'` 边**（fork 子会话有
-  `parentSession` 但无 origin，**fork 边终止上溯 → 未归档 fork 照旧阻塞**，与 purge
-  树的 `indexChildren` 同定义；2026-09 五路 review 收口轮修正了此前把 fork 误当委派
-  链的 fail-open）；链经所有已加载 agent 的 header 走（含 idle），
-  **不可解析 → fail-closed 照旧阻塞**；**不含归档成员的环阻塞、环上出现归档成员则
-  按已归档祖先判定**（代码 + 文档同口径、测试双向固定）；未归档运行中会话报同一
-  `running-agent` 码与消息，其余守卫（main/locked/身份/expected/dirty/submodule/
-  `assertNoOtherWorkspaceWithin`）零改动；归档集合读不到 → `state-source-*`
-  响亮失败，绝不当作空集合。快照加性投影 `blockingRunningSessionIds`
-  （`runningSessionIds` 仍是全部展示事实，旧客户端保守）。客户端
-  `removeBlockReason` 读该字段（缺失回退旧字段），无勾选框/取消/停止编排
-  （早前「先停止再删除」与 `WorktreeRunningError` 已按用户裁定删除），对话框只在
-  有未归档运行中会话时显示非阻断说明（`runningRemoveBlockNote`）并对已归档运行中
-  会话追加 `runningRemoveArchivedNote`（zh+en 齐备）。单测：host core 六例
-  （未归档阻塞 / 已归档不阻塞 / 已归档祖先使子代理 INERT / 链条不可解析与成环
-  fail-closed / cwd 腿同规则 / 快照双字段）、git client（字段判定与旧宿主回退、
-  快照解码 fail-closed）。同轮补强：origin 与归档集合元素形状校验（非字符串/空元素/
-  漂移 → 响亮 `state-source-*`，不再 `String()` 强转）；客户端判定顺序改为
-  `current`/`runtime-unknown` 先于 `running`（此前该顺序可绕过 fail-closed 保护）；
-  旧宿主（无 `blockingRunningSessionIds`）走中性文案（`runningRemoveLegacyNote`/
-  `runningRemoveLegacyTitle`，不再谎称归档性）；惰性计数改为集合差（新纯模块
-  `shared/remove-notes.ts` + `test/remove-notes.test.ts`）；宿主拒绝码
-  （`running-agent`/`main-worktree`/locked/dirty/invalid）映射为本地化文案；
-  runtime 通道缺席时确认按钮前置禁用并解释；非子集 `blockingRunningSessionIds`
-  在解码层拒绝（行 fail-closed）。单测合计：host core 113、git 68、snapshot/remove-notes
-  纯函数齐备。剩余实机验收：运行中会话（未归档）→ 删除被拒并给出
-  诚实文案；同会话归档后 → 工作树删除成功且该会话未被停止/删除、其 cwd 消失后
-  日志仍可读；运行中子代理位于已归档根下 → 不阻塞。归档管理器是唯一「停止运行
-  中回合 → 清理已归档内容」的入口。
+  ready-time seed 后重启生效、并发 session 删除竞态、Git LFS/filter 与恢复边界）；
+  剩余实机验收——运行中会话（未归档）→ 删除被拒并给出诚实文案；同会话归档后 →
+  工作树删除成功且该会话未被停止/删除、其 cwd 消失后日志仍可读；运行中子代理位于
+  已归档根下 → 不阻塞。归档管理器是唯一「停止运行中回合 → 清理已归档内容」的入口。
 - **远程实例插件管理（design 13）**：本地 `dsh plugin`/`pnpm pack` 依赖
   `resolvePnpmBinDir` 对 PATH/nvm/volta/homebrew 的 best-effort 探测——需打包态实机。
-  **2026-09 修订（用户拍板：seed 了就必须在插件管理页可见，且不得写死）**：已实现——
-  `CHAMBER_HOST_PACKAGES`（control-plane `host-graph-seed.ts`：insert id + 包名 + 存活探测
-  Remote）成为唯一权威清单；desktop 注入态投影改为逐包列表
-  `ChamberInjectionState = { ok:true, packages: ChamberHostPackageState[] }`（含
-  insertId/name/probe/installed/patched/version/live），本地探测、ssh 探测、gateway
-  seed-cache 漂移、gateway 同步包表、远端 seed 清单全部由该清单派生；`PluginDialog` 的
-  「chamber 内置（注入）」表逐行渲染该列表（新增宿主包 = 注册表加一行），
-  `remoteNeedsSeed`/重启提示改为逐包判定（原先只校验两包，缺 archive-cleanup 的远端
-  会被误报「已注入」）。单测：desktop plugin-sync（101，含注册表 1:1 投影与第三包探测）、
-  ipc-surface-mirror、connections chamber-seed-drift（含与注册表源文本的锁步守卫）。
-  剩余实机验收：本地/ssh/gateway/http 四来源的 chamber 表行数=3、archive-cleanup
-  的 installed/patched/live 三态与「注入/重启」按钮行为、gateway seed-cache 漂移列。
-  **2026-09 P1.4/P2.7 硬化轮**：行派生从组件内联搬入纯函数 `deriveChamberRows`
-  （plugin-inventory-text.ts，只回 label KEY 与版本 STRING），新增
-  `test/chamber-rows.test.ts` 表驱动覆盖四 target ×（清单有/无）×
-  （installed/patched/live 组合）×（seed-cache 漂移/缺项/整盘缺/未读）×（空
-  expected 列表），并钉住 LOCAL 目标读自身 profile 清单的回归；gateway 的客户端
-  插件行改由 Loader inventory 的 chamber CLIENT 分类派生
-  （`classifyChamberClientPlugin`，不再写死 `MOBILE_PACKAGE`；inventory 不可用
-  时渲染 unknown 行、绝不显示写死的包名）。同轮修复继承缺陷：`src/global.d.ts`
-  重导出已删除的 `ChamberHostGraphState`、`plugin-diff.test.ts` 夹具仍是旧的
-  `{hostGraph, gitWorktree}` 形状、`PluginDialog.tsx` 悬空引用
-  `sshRemoteChamber`（现取 `remoteManifest.chamber`）——三者使
-  `typecheck:connections` 在进入本轮前即失败。
-  **2026-09 五路 review 收口轮（单注册表收尾）**：①control-plane 与 gateway 的 seed
-  行改为从 `CHAMBER_HOST_PACKAGES` 派生（`sourceDir` 按 insert id 查表；未映射行 →
-  响亮抛错），注册表所有者新增 `assertChamberHostRegistry`（探测方法/insert id/包名
-  重复 → 定义处加载即失败，control-plane/gateway/desktop 三消费方按构造受保护；
-  2026-09 五路 review 后从 gateway 迁回所有者处并改名），gateway 测试矩阵与
-  `chamber-seed-drift` 均改为从注册表派生并加
-  重复域用例；②http 直连区第三方分类改按注册表派生名（未来新增
-  `@dsh-chamber/dsh-host-*` 不再漏进第三方列表）；③gateway 客户端插件行在清单可读
-  但无 chamber-client 条目时补一条 muted「未注入」行（不再整行消失）；④旧探测
-  `probeClientGraphLive`/`probeGitWorktreeLive`、`seedRemoteHostGraph`、
-  `ensureHostPackage*`、`CLIENT_GRAPH_HOST_INSERT`、`SeedRemoteResult`、
-  `fetchRunningSessionIds`/`RunningSnapshot` 等生产死代码删除（逐项 grep 证据）；
-  `previewArchiveCleanup` 按 design 24 §5/§17-18 刻意保留（宿主 preview 端点的已测
-  客户端半面）。**门禁纪律（本轮教训）**：`test:*` 走 node 类型擦除、根 `typecheck`
-  不含自建插件，故自建客户端插件改动必须逐项跑 `typecheck:*`（本轮由此发现
-  `typecheck:connections` 的继承缺陷；`typecheck:connection`/`typecheck:api-gateway`
-  的失败经证明为 worktree 未初始化 vendor submodule 所致，填充后双双通过）。
+  剩余实机验收：本地/ssh/gateway/http 四来源的 chamber 表行数=3、archive-cleanup 的
+  installed/patched/live 三态与「注入/重启」按钮行为、gateway seed-cache 漂移列。
 - **会话创建/fork 侧边栏收敛延迟修复**：剩余本地 + 远程 SSH 实例实机验收（行出现
   延迟、状态图标延迟、位置跳动）。
 - **chamber shell 内官方 bundle 的实例相对绝对路径（已知缺陷，2026-08 缓办决策）**：
@@ -249,9 +108,7 @@
   §7 五条实机复测全开放（宽侧栏冷 settle CLS、连点冷挂载切换、版本事务主进程阻塞
   采样、更新模式侧栏写频、H3 懒加载验证——需打包版或带会话 dev 实例）。
 - **性能整改第二阶段（视图保留/后台门控/行窗口，2026 A/B/C/D）剩余实机验收**：
-  代码面已落地（0.2.3；retention/session-row-window/measure-ui，2026 三方评审修复
-  随行——预热保留槽门控、回收诊断收敛、边界语义对齐，commit 1c494a6）。剩余——
-  打包版/带会话 dev 实例同环境 A/B（measure-ui：DOM 节点分壳/堆/空闲长任务/合成
+  剩余——打包版/带会话 dev 实例同环境 A/B（measure-ui：DOM 节点分壳/堆/空闲长任务/合成
   输入帧/预热壳数）+「打开→切走→重开 ×3 堆无净增长」（×3 需多次快照序列）；
   验收表与语义偏差见 performance-baseline.md §10 与 design 05 §1 注记。已知取舍
   （登记）：被回收壳内运行中任务完成蓝点/通知边沿暂停至源重开（冷 boot 首报重
@@ -290,42 +147,19 @@
   对账空态双提示；settings-dshruntime：PUT registry 成功不 bump versionsEpoch（旧源
   数据至下次自然刷新）、30s 超时文案双层措辞、围栏/超时逻辑内联组件 effect（可测性
   债务；窗口级残余服务端读侧无害 ≤3s 自愈）。
-- **`test:gateway` 会停掉宿主 gateway 服务（2026-12 实机定位 + 已修）**：实机
-  取证链——宿主 `dsh-chamber-gateway.service` 的三次"无故停机"（07:27:42、
-  07:42:53、08:10:57 UTC）与三次 `pnpm run test:gateway` **任务启动**逐秒对应
-  （+35s/+35s/+41s；后两者先跑了两个 typecheck，纯套件偏移 41s），`/tmp/gw.log`、
-  `/tmp/b1.log` 均在 `install-script.test.ts` 处被 SIGTERM 截断，且 `/tmp/
-  gateway-installer-overlay-rollback-*` 残留目录的 mtime 正是停机秒（`finally`
-  未执行）。以 PATH 垫片捕获到真实调用 `systemctl stop dsh-chamber-gateway.service`
-  + `disable`，父进程正是该测试的 `harness.sh`，触发者是 **`do_install` 用例**
-  （"overlay install rollback…"）而非 cmd_update 用例。根因：
-  `scripts/install-gateway.sh` 的 D2 跨形态清理**直接调用裸 `systemctl`**（不是
-  `systemctl_for_mode`）并写死单元名（`install-gateway.sh:2619-2623`），而相关测试
-  只 mock 了 `systemctl_for_mode`——真实 systemctl 逃逸，把运行测试的机器的真实
-  服务停掉（**测试机上的实际损害是 stop**：套件本身在 gateway 单元 cgroup 内，
-  `stop` 先 SIGTERM 掉调用方，`disable` 来不及执行；在普通开发机上两者都会落地）。
-  **已修**：全部 harness 统一经 `harnessSource()` 注入宿主安全桩（仅当存在真实
-  `systemctl` 时定义 `systemctl()` 空实现；`systemctl_for_mode` 留给库本身以保留
-  作用域断言；测试自定义的 mock 仍覆盖），并加**源码级不变量测试**（每个
-  `writeFileSync(harness, …)` 必须走 `harnessSource` 或落在显式 allowlist，否则
-  测试失败）。**残留/约束**：D2 清理的固定单元名是安装器设计行为（跨形态迁移必须
-  停旧形态）；`install-script.test.ts` 仍有 2 处直接 spawn 真实安装器（`--help`/
-  `install --version`，当前只走用法/解析即退出）——若未来让它们走更远，会再次逃逸
-  （stub 只覆盖库切片 harness）；`03:16:06` 的同签名停机**未被钉死**（/tmp 证据被
-  07:29:45 容器重启清掉），01:22 的非优雅死亡与 01:35 陈旧锁接管已解释为容器被外部
-  非正常终止 + 网关自身的锁接管恢复，09-07 23:45:29 已解释为手工 install/update。
-- **N-ctx 文档级主题投影归属（2026-12 修复，design 06 §4.6）**：文档级
-  `color-scheme`/`body[data-ds-dark-theme]` 改由**活动视图独占**投影（App 经
-  chamberBridge 发布活动来源；ui-layout fork 的 `document-theme.ts` 按
-  `ctx.chamberInstanceId` 门控、teardown 永不回收、全页单例 presenter）；
-  代码面已收口（单测/typecheck/build 均过），**剩余=打包态实机目检**：首屏、
-  视图切换与回收窗口的 checkbox 深浅，以及预热视图不再互踩主题。
-- **Git 来源分支候选（2026-12 修复，design 08 §11.5 尾条）**：主 checkout 当前
-  分支不再被候选过滤（单分支仓库不再空候选；localStorage 记忆不再永久遮蔽
-  main），候选推导抽为纯函数并单测。**剩余=打包态实机目检**（判别期 harness
-  gateway 停机，wire 快照仅由 host 代码路径 + 宿主 git 事实推断）；unborn
-  （零提交）仓库 `branches` 必空 + 默认 base 40 零直送 git 无 preview 门仍为
-  代码面已知残留（实机无此形态）。
+- **`test:gateway` 宿主服务隔离（2026-12 实机定位）**：残留/约束——
+  D2 跨形态清理的固定单元名是安装器设计行为（跨形态迁移必须停旧形态）；
+  `install-script.test.ts` 仍有 2 处直接 spawn 真实安装器（`--help`/
+  `install --version`，当前只走用法/解析即退出），若未来让它们走更远会再次逃逸
+  （宿主安全桩只覆盖库切片 harness）；`03:16:06` 的同签名停机未被钉死（/tmp 证据被
+  容器重启清掉），01:22 的非优雅死亡与 01:35 陈旧锁接管已解释为容器被外部非正常
+  终止 + 网关自身的锁接管恢复，09-07 23:45:29 已解释为手工 install/update。
+- **N-ctx 文档级主题投影归属（design 06 §4.6）**：剩余=打包态实机目检——首屏、视图
+  切换与回收窗口的 checkbox 深浅，以及预热视图不再互踩主题。
+- **Git 来源分支候选（design 08 §11.5 尾条）**：剩余=打包态实机目检（判别期 harness
+  gateway 停机，wire 快照仅由 host 代码路径 + 宿主 git 事实推断）；unborn（零提交）
+  仓库 `branches` 必空 + 默认 base 40 零直送 git 无 preview 门仍为代码面已知残留
+  （实机无此形态）。
 
 ## 设计未决
 
