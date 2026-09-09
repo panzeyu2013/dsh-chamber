@@ -469,16 +469,23 @@ test('one throwing instance does not starve the adoption fan-out', async () => {
   try {
     const { env } = makeEnv({ sidebarWidth: 300 })
     const handle = createLayoutStore(env)
+    // Registration order IS the fan-out order: the throwing instance sits in
+    // the middle, so a `break`-on-error implementation would strand `later`.
+    const writer = handle.create()
     const broken = handle.create()
-    const healthy = handle.create()
+    const later = handle.create()
+    trackLayoutInstance(env, writer)
     trackLayoutInstance(env, broken)
-    trackLayoutInstance(env, healthy)
-    // Make the FIRST tracked instance throw on the adoption write.
+    trackLayoutInstance(env, later)
+    assert.equal(later.getSnapshot().layoutInfo.sidebar, 300, 'later starts at the shared preference')
     broken.store.update = () => { throw new Error('store update exploded') }
-    healthy.actions.setSidebar(360)
+    writer.actions.setSidebar(360)
     mock.timers.tick(SIDEBAR_WRITE_DEBOUNCE_MS)
+    // Flush the adoption microtask queued by the view-prefs notification.
     await Promise.resolve()
-    assert.equal(healthy.getSnapshot().layoutInfo.sidebar, 360, 'writer keeps its own value')
+    assert.equal(writer.getSnapshot().layoutInfo.sidebar, 360, 'writer keeps its own value')
+    assert.equal(broken.getSnapshot().layoutInfo.sidebar, 300, 'the throwing instance is left untouched, not half-written')
+    assert.equal(later.getSnapshot().layoutInfo.sidebar, 360, 'the instance AFTER the throwing one still adopts (no starvation)')
   } finally {
     mock.timers.reset()
   }

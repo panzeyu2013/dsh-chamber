@@ -340,19 +340,22 @@
   border-radius: 8px;
   background: transparent;
   color: var(--dsw-alias-label-secondary);
-  font-size: 13px;
-  line-height: 20px;
+  font: inherit;
+  line-height: 22px;
+  text-align: left;
   cursor: pointer;
-  overflow: hidden;
 }
 
 .panelRow:hover {
   background: var(--dsw-alias-interactive-bg-hover);
-  color: var(--dsw-alias-label-primary);
 }
 
-.panelActive {
-  background: var(--dsw-alias-interactive-bg-hover);
+/* The compound selector is load-bearing: `.panelRow:hover` (0,2,0) would
+   otherwise beat a bare `.panelActive` (0,1,0) and flip an ACTIVE row's
+   background to the hover token while the pointer is over it (2026-09 二轮
+   CSS diff vs the official ui-sidebar stylesheet). */
+.panelRow.panelActive {
+  background: var(--dsw-alias-interactive-bg-active);
   color: var(--dsw-alias-label-primary);
   font-weight: 500;
 }
@@ -363,10 +366,10 @@
 }
 
 .panelGlyph {
+  flex: none;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  flex: none;
 }
 
 .panelTitle {
@@ -379,7 +382,6 @@
 .collapsed .panelList {
   gap: 12px;
   margin-bottom: 12px;
-  align-items: center;
 }
 
 .collapsed .panelRow {

@@ -51,6 +51,15 @@
  *    `<768px` fullscreen presentation (upstream), so this stylesheet no
  *    longer re-presents it — the third track stays locked at 0 and the
  *    official surface owns the overlay.
+ *  - STACKING SCOPE (2026-09 二轮): this plugin's fixed layers (drawer 75,
+ *    backdrop 74, hamburger 76) are mounted inside the official
+ *    `shell.overlay` layer, which is `position: absolute; z-index: 20` — a
+ *    stacking context of its own. The tiers therefore order correctly among
+ *    THEMSELVES and above the frame content / normal rightbar column (z-10),
+ *    but they can never paint above a sibling stacking context: the official
+ *    fullscreen rightbar (z-40) and the floating-panel host (z-60) cover them.
+ *    Intentional: a fullscreen official surface owns the screen and the
+ *    drawer yields. Escaping would require a body-level portal (not done).
  *  - ONBOARDING/directory dialogs portal to a body-level root
  *    (`div._root_15u5s_2`), but the SETTINGS dialog renders INSIDE the
  *    sidebar DOM (sidebar.settings slot, no body portal) — the drawer's

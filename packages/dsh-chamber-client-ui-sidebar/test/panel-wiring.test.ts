@@ -56,9 +56,17 @@ test('the registration declares every child and wires the panel projection', () 
     assert.ok(index.includes(child), `children must declare ${child}`)
   }
   assert.ok(index.includes("ctx.slots.subscribe('sidebar.panellist', syncPanels)"), 'the ledger subscription must be wired')
-  assert.ok(index.includes('panels.sync('), 'the projection must be re-read from the ledger')
   assert.ok(index.includes('hooks: { panels: panels.source }'), 'the projection must ride the inject hooks compartment')
-  assert.ok(index.includes('selectPanel: (id) => { ctx.layout.selectPanel(id) }'), 'row clicks must call the layout service directly')
+  // 2026-09 二轮：`includes('panels.sync(')` 被 syncPanels 的**定义行**满足，
+  // 锁不住「注册后补一次同步」的顺序。改为顺序断言：注册之后必须出现一次
+  // 独立调用（上游 ui-sidebar index.ts 同序，见 registry 侧注释）。
+  const registerAt = index.indexOf('ctx.slots.register({')
+  const syncCallAt = index.search(/^\s*syncPanels\(\)$/m)
+  assert.ok(registerAt !== -1, 'the shell registration must exist')
+  assert.ok(syncCallAt > registerAt, 'syncPanels() must run AFTER the slot registration (first-frame list must not be empty)')
+  // 语义锁（空白归一化后匹配，抗格式化漂移）：点击直调 ctx.layout.selectPanel。
+  const compactIndex = index.replace(/\s+/g, ' ')
+  assert.ok(compactIndex.includes('selectPanel: (id) => { ctx.layout.selectPanel(id) }'), 'row clicks must call the layout service directly')
 })
 
 test('the shell renders the brand holes and the panel rows', () => {
@@ -68,9 +76,15 @@ test('the shell renders the brand holes and the panel rows', () => {
   assert.ok(root.includes('const panels = (usePanels as PanelsHook)('), 'the shell must read the injected panel snapshot')
   assert.ok(root.includes('const active = usePanelInfo(info => info.activePanelId === id)'), 'each row must derive its own selection state')
   assert.ok(root.includes("t('panels.label')"), 'the panel list needs its accessible label')
+  // 空态与宽窄几何：上游「无注册项时不渲染列表及其间距」+ 行按 wide 切换尺寸。
+  assert.ok(root.includes('{panels.length > 0 && ('), 'an empty panellist must render nothing (upstream empty state)')
+  assert.ok(root.includes('wide={wide}'), 'each row must receive the shell width state')
+  assert.ok(root.includes('{wide && <span className={clsx(css.panelTitle, css.wide)}>{label}</span>}'), 'the label renders only in the wide state')
   for (const cls of ['panelList', 'panelRow', 'panelActive', 'panelGlyph', 'panelTitle']) {
     assert.ok(css.includes(`.${cls}`), `SidebarRoot.module.css must define .${cls}`)
     assert.ok(root.includes(`css.${cls}`), `SidebarRoot.tsx must use css.${cls}`)
   }
-  assert.ok(locales.includes("'panels.label'"), 'the panels.label copy must exist in both dictionaries')
+  // Both dictionaries, not just one: the zh and en copies must both exist.
+  assert.ok(locales.includes("'panels.label': '全局面板'"), 'the zh panels.label copy must exist')
+  assert.ok(locales.includes("'panels.label': 'Global panels'"), 'the en panels.label copy must exist')
 })

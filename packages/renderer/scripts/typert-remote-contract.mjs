@@ -8,6 +8,34 @@
  * renderer build must generate exactly that set before Vite resolves it.
  */
 
+/**
+ * The pinned assembly contract: every remote package the official
+ * `dsh-api-remotes` client half VALUE-imports, in assembly order
+ * (dsh-v0.1.5-alpha.2 = 15 rows). SINGLE SOURCE for both consumers — the
+ * lockstep test (`typert-remote-contract.test.mjs`) and the upgrade touchpoint
+ * gate (`scripts/dev/verify-upstream-touchpoints.mjs` C4). A same-length swap
+ * (one package added while another is removed, or a reorder) must not pass
+ * silently, so both compare the parsed assembly against this exact list; an
+ * upstream change is one edit here plus the package contract assertions.
+ */
+export const EXPECTED_REMOTE_PACKAGES = Object.freeze([
+  '@deepseek-ai/dsh-agent-presets',
+  '@deepseek-ai/dsh-commands',
+  '@deepseek-ai/dsh-api-settings-controller',
+  '@deepseek-ai/dsh-goal',
+  '@deepseek-ai/dsh-llm',
+  '@deepseek-ai/dsh-cordis-host-runner',
+  '@deepseek-ai/dsh-host-plugin-inventory',
+  '@deepseek-ai/dsh-message-feedback',
+  '@deepseek-ai/dsh-command-feedback',
+  '@deepseek-ai/dsh-client-file-upload',
+  '@deepseek-ai/dsh-session-reference',
+  '@deepseek-ai/dsh-subagent',
+  '@deepseek-ai/dsh-api-session-controller',
+  '@deepseek-ai/dsh-api-workspace-controller',
+  '@deepseek-ai/dsh-api-workspace-files',
+])
+
 const REMOTE_SPECIFIER = '@deepseek-ai/(dsh-[a-z0-9]+(?:-[a-z0-9]+)*)/remote'
 const VALUE_REMOTE_IMPORT = new RegExp(
   `^\\s*import\\s+(?!type\\b)[^'"\\n]+?\\s+from\\s+['"]${REMOTE_SPECIFIER}['"]`,

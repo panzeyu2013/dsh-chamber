@@ -143,8 +143,9 @@ interface LayoutStoreRuntime {
  * AppFrame's sidebar-collapsed derivation over one layout snapshot — the
  * vendor frame's own rule (`narrow = viewportWidth < SIDEBAR_AUTO_COLLAPSE`,
  * then `narrow ? !narrowExpanded : sidebar === 0`). Exported so the layoutFacts
- * face and the mobile plugin share one derivation, and so the rule stays
- * unit-tested after the mobile plugin's local copy was retired.
+ * face can project it as `getCollapsed()` (the mobile plugin consumes THAT
+ * method — it never imports this function), and so the rule stays unit-tested
+ * after the mobile plugin's local copy was retired.
  * @param snapshot - the layout store snapshot.
  * @param autoCollapse - the sidebar auto-collapse breakpoint (vendor columns.ts).
  * @returns true when the sidebar renders as the collapsed rail.

@@ -105,11 +105,11 @@
 | C2 | `client/web/src/platform.ts`、`seed.ts` | 上游 +`ui-dockkit` / chamber 删 `ui-primitives`（C3） | 结构冲突 | 上游词不落 seed，改 covered factory；两文件只加偏差注释 |
 | C3 | `ui-layout` 全包（`main`/`rightbar`/store/service/AppFrame） | 上游重写 / chamber fork 深引 + 自有 store | **P0 语义冲突** | `upstream-align`：整体重放 + 保留两项增值 |
 | C4 | 中心列 DOM 锚点 `data-slot="conversation"` → `"main"` | 上游改名 / 移动插件按 slot 找列 | 硬编码冲突 | 移动插件加 `ROLE_SLOT_KEYS` 映射 |
-| C5 | `sidebar.panellist` / `sidebar.brand.*` 声明 | 上游新增/保留 / chamber fork 缺失 | 槽位缺口 | `upstream-align`：补声明 + 渲染 + 探测式 `selectPanel` |
+| C5 | `sidebar.panellist` / `sidebar.brand.*` 声明 | 上游新增/保留 / chamber fork 缺失 | 槽位缺口 | `upstream-align`：补声明 + 渲染 + 直调 `selectPanel`（两种 layout 都有该方法；缺即误配置，响亮失败） |
 | C6 | settings bridge 子 ctx 台账（`bridge-context.ts:138-155`） | 上游 sidebar children 集 / chamber 台账 | 台账不同构 | 补 inert 声明键（panellist/brand.*）+ `usePanelInfo` |
 | C7 | open-in 平行实现（catalog/标签表/菜单） | 上游官方 client / chamber 自建 | 重复实现 | `retire` 平行件，改建 in-repo basePath fork |
-| C8 | `ui-chat` 根 inject `sidebarRight` × 复合首屏 | 上游新依赖 / chamber 复合装载 | **静默致命** | 5 行 load-as-extra-row + `REQUIRED_EXTRA_ROWS` 失败转致命（D2） |
-| C9 | `localPathMediaUrl` 用 `window.location.origin + '/api/file'` | 上游绝对 URL / chamber N-ctx 同源壳 | 第二例同源缺陷 | patched-copy 基础设施裁决（D3） |
+| C8 | `ui-chat` 根 inject `sidebarRight` × 复合首屏 | 上游新依赖 / chamber 复合装载 | **静默致命** | 5 行 load-as-extra-row + `assertRequiredExtraRowServices` 有界探针（**非致命**，见 D2 实际口径） |
+| C9 | `localPathMediaUrl` 用 `window.location.origin + '/api/file'` | 上游绝对 URL / chamber N-ctx 同源壳 | 第二例同源缺陷 | patched-copy 基础设施裁决（D3）。**二轮实测事实（W2 Q3）**：控制面只代理 `/api/i/<id>/*`（`instance-proxy.ts`），`/api/file` 落控制面自己的 api handler → 404 JSON（用户看到坏图）；改成绝对实例 origin 会被 CSP `img-src 'self'` 拦；可行修法 = 相对 `<basePath>/api/file`（本地实例已注入 spawn cookie，ssh/http dsh 目标不注入任何头 → 实例侧 401，需一并裁决） |
 | C11 | electron-builder 版本声明 | 上游 26.15.3 / chamber 声明 `^26.0.12` | 声明漂移 | 改 `^26.15.3` |
 | C12 | 升级顺序：`ui-workspace.startSession` → `ctx.layout.selectPanel(null)` | 上游新 API / chamber layout 未升 | **运行期 TypeError** | layout 重放必须在 ui-workspace 之前（§4 顺序） |
 | C13 | 运行时线锚 vs 源码线 `FORK_VERSION` | `release-preflight.mjs:146-155` | 顺序约束 | 运行时线重锚排在 fork 重放之后 |
@@ -1188,7 +1188,7 @@
 |---|---|---|---|---|---|---|
 | S1 | `CHAMBER_COVERED_IDS` | `packages/renderer/src/chamber-covered.ts:74-195` | 无 | 去重集；5 个新行**必须缺席** | `compat-patch` | 只加 `@deepseek-ai/dsh-client-ui-dockkit`；显式注释“新 5 行故意不覆盖” |
 | S2 | `CHAMBER_COVERED_FACTORY_IDS` / `COVERED_FACTORIES` | `chamber-covered.ts:213-255` / `chamber-entry.ts:551-587` | 无 | factory ⊆ covered（执行期断言 `chamber-entry.ts:379-405`） | `compat-patch` | 加 dockkit；保持两表精确一致 |
-| S3 | `classifySweepEntry` / `toleratedIds` | `boot-tolerance.ts:55-78`、`boot.ts:338-358,373-400` | 官方无容忍语义 | 当前**所有**额外行失败都降级 | `compat-patch` | 新增 `REQUIRED_EXTRA_ROWS`（`client-resources`、`ui-sidebar-right` 及其传递提供者）：其 materialize/apply 失败 → `fatal`（该实例 boot 响亮失败），理由=首屏 `ui-chat` 依赖 `sidebarRight`；其余行保持降级。附单测（`test/boot-tolerance.test.ts`）与 `chamber-entry.ts` 头注不变量 |
+| S3 | `classifySweepEntry` / `toleratedIds` | `boot-tolerance.ts:55-78`、`boot.ts:338-358,373-400` | 官方无容忍语义 | 当前**所有**额外行失败都降级 | `compat-patch` | **实际口径（2026-09 二轮）**：不改为 fatal（gateway 形态可合法不加载该行，fatal 会让整壳挂掉），改为 `chamber-entry.ts` 的 `assertRequiredExtraRowServices` 有界探针（纯判定在 `required-extra-rows.ts`，3 例单测；缺失 5s 后 console.error 点名 instance + 服务）。原「失败转致命」建议**未采纳**，理由见 D2 |
 | S4 | `PLATFORM_MODULES` / `getStaticModules` | `dsh-client-web/src/platform.ts:33-37`、`seed.ts:40-52` | `platform.ts:13` 含 dockkit、`seed.ts:17,37` seed 之 | chamber 用 factory 回答该词 | `compat-patch` | platform.ts/seed.ts 不加 dockkit，写偏差注释（与 ui-primitives 同段）；chamber-entry 静态导入 + factory；`vendor-modules.d.ts:104` 附近补声明 |
 | S5 | `remotePackagesFromAssembly` | `renderer/scripts/typert-remote-contract.mjs:30-44` | 装配源 `api/remotes/src/client/index.ts:12-17` | 实测 15 项 | `upstream-align` | 改 `verify-upstream-touchpoints.mjs:322` 与 `typert-remote-contract.test.mjs:16-30`；实跑 `gen-typert-remotes.mjs` 核对 15 份产物 |
 | S6 | `AppWebEntry.run()` / `prefetchImmediateTier` | `dsh-client-web/src/boot.ts:175-204,264-276` | 同（blob 同 pin） | 无 | `upstream-adopt` | 无 rebase；注意 `:267-268` 仍优先 `__DSH_TRANSPORT__.loadBundle`（chamber 不注入该字段） |
@@ -1340,7 +1340,7 @@
 | layout fork 的 `handle.create` 猴补丁 | S2 | 上游 eager 实例（`store.create = () => instance`）使其永不执行 | S2 §2 |
 | `shared/` 中与上游 tree.ts 等价的语义移植（`derive.ts` 等） | S1 | 上游语义已有，需按 pin 复验 | S1 §2 |
 | `renderer/src/generated/typert/**` 的“随批提交”纪律 | S5 | 该目录被 `.gitignore:75` 忽略 | S5 §4 |
-| `dsh-runtime/src/runtime-host-adapter.ts`（+test/re-export/清单） | S8 | 无生产实现的草图（design 18 §9.1 自述） ⇒ `retire` |
+| `dsh-runtime/src/runtime-host-adapter.ts`（+test/re-export/清单） | S8 | 无生产实现的草图（design 18 §9.1 自述） ⇒ `retire` —— **未采纳（2026-09 二轮裁决）**：AGENTS.md「Runtime boundaries」明示 `RuntimeHostAdapter` 为 documented sketch、design 18 §9.1 与 gateway `runtime-manager.ts` 注释同口径，删除须同步三处契约文档；本轮**保留**并在此登记偏差（如需退役，按 §4.1 原建议一次性删文件+test+`index.ts` 再导出+`package.json` 测试清单，并改三处文档） |
 | `isPersistenceNotFoundError`（`seed-archive-cleanup/src/binding.ts:145-151`） | S8 | `inspect` 已不存在，该错误分类无消费者 |
 
 ### 4.2 新增（chamber 必须补的）
@@ -1348,11 +1348,11 @@
 | 对象 | 域 | 动作 |
 |---|---|---|
 | `main`(keyed/root) + `rightbar`(single/root) 槽声明、`usePanelInfo`、`selectPanel`/`beginNavigation` | S2 | layout fork 重放 |
-| `sidebar.panellist` 声明 + 渲染 + `selectPanel` 探测 | S1 | 侧边栏 fork |
+| `sidebar.panellist` 声明 + 渲染 + `selectPanel` 直调 | S1 | 侧边栏 fork |
 | `sidebar.brand.mark/name` 声明 + `renderSlot` fallback | S1 | 侧边栏 fork |
 | `ui-dockkit` covered factory + 两表一行 | S5 | renderer |
 | C4 契约 13→15、`COVERED_SENTINELS` 复核 | S5 | verify 脚本 + 契约测试 |
-| `REQUIRED_EXTRA_ROWS`（client-resources → ui-sidebar-right 传递闭包）失败转致命 | S5 | host-graph（D2 裁决） |
+| `assertRequiredExtraRowServices` 探针（`required-extra-rows.ts` + `chamber-entry.ts`，**非致命**） | S5 | 已执行（D2 实际口径） |
 | settings bridge 台账补 `sidebar.panellist`/`brand.*` + `usePanelInfo` | S3 | bridge-context / bridge-outlet |
 | `trackLayoutInstance(instance)` 显式登记导出 | S2 | layout fork |
 | patched-copy 基础设施（若 D3 采纳） | S7 | renderer/构建面 |
@@ -1374,24 +1374,24 @@
 
 | 批次 | 内容 | 绿门 |
 |---|---|---|
-| B0 | 预检 `preflight-vendor-pin.mjs dsh-v0.1.5-alpha.2`；裁决 D1–D7 | — |
-| B1 | `update-vendor.mjs` + 锁文件（271→282+）+ `ensure --check` + frozen | frozen / ensure --check |
-| B2 | layout fork 重放（含 store-core/store/index/vendor-modules.d.ts/test） | `typecheck:layout` + `test:layout` |
-| B3 | 侧边栏 fork（panellist/brand）+ settings bridge 台账 | `typecheck:sidebar` + `test:sidebar` + `typecheck:settings-bridge` |
-| B4 | 移动插件（main/rightbar 锚点、退役打标与覆盖层） | `typecheck:mobile` + `test:mobile` |
-| B5 | 渲染器 roster（dockkit factory、C4 15、REQUIRED_EXTRA_ROWS）+ 三个 fork 副本重放 | `test:renderer-shell` + `test:client-web` + `test:connection` + `typecheck:*` |
-| B6 | open-in 平行件退役 + basePath fork（若采纳） | `test:open-in` + `test:desktop` |
+| B0 ✅ | 预检 `preflight-vendor-pin.mjs dsh-v0.1.5-alpha.2` 已跑；D1/D2/D6/D7 已裁决（D3/D4/D5 待用户裁决） | — |
+| B1 ✅ | `update-vendor.mjs` + 锁文件（271→**284**）+ `ensure --check` + frozen | frozen / ensure --check |
+| B2 ✅ | layout fork 重放（含 store-core/store/index/vendor-modules.d.ts/test） | `typecheck:layout` + `test:layout` |
+| B3 ✅ | 侧边栏 fork（panellist/brand）+ settings bridge 台账 | `typecheck:sidebar` + `test:sidebar` + `typecheck:settings-bridge` |
+| B4 ✅ | 移动插件（main/rightbar 锚点、退役打标与覆盖层） | `typecheck:mobile` + `test:mobile` |
+| B5 ✅ | 渲染器 roster（dockkit factory、C4 15、必需行探针）+ 三个 fork 副本重放 | `test:renderer-shell` + `test:client-web` + `test:connection` + `typecheck:*` |
+| B6 ⏳ | open-in 平行件退役 + basePath fork（**待 D4 裁决，本轮未执行**） | `test:open-in` + `test:desktop` |
 | B7 ✅ | 设计 24 四项修复（先修 ④ 快照形状，再 ①`stat()`、②全代际删除、③保留私有 `locate` + 形状证明）+ 夹具改 alpha.2 形态 | `test:host-archive-cleanup` |
-| B8 | 运行时线六锚 + `bundle:dsh --force --refresh-lockfile` + 冒烟（含 `runtime-host-adapter` 退役） | `test:desktop` + `bin.js --version` |
-| B9 | 全量门禁 + 文档回写（STATUS/CHANGELOG 双语/触点表/本矩阵） | 全套 `test:*`/`typecheck:*`/`build:renderer`/`verify:i18n`/`verify-upstream-touchpoints` |
+| B8 ✅ | 运行时线六锚 + `bundle:dsh --force --refresh-lockfile` + 冒烟（`runtime-host-adapter` 退役**未执行**，见 §4.1） | `test:desktop` + `bin.js --version` |
+| B9 ✅ | 全量门禁 + 文档回写（STATUS/CHANGELOG 双语/触点表/本矩阵）；二轮复核见 `dsh-upgrade-migration-audit.md` | 全套 `test:*`/`typecheck:*`/`build:renderer`/`verify:i18n`/`verify-upstream-touchpoints` |
 
 ### 5.3 需要用户裁决
 
 | # | 决策 | 选项 | 推荐 |
 |---|---|---|---|
-| D1 | `sidebar.panellist` 是否采纳 | 采纳（补声明+渲染+探测式 selectPanel）/ 暂不采纳 | **采纳**（成本 S，避免上游/第三方注册悬空） |
-| D2 | 5 个 extra row 的失败是否转致命 | `REQUIRED_EXTRA_ROWS` 致命 / 保持降级+诊断 | **致命**（否则会话面静默消失） |
-| D3 | patched-copy 基础设施 | 现在建（第二例已触发）/ 继续逐例绕过 | **现在建**（否则 `/api/file`、未来的同源绝对 URL 都会 404） |
+| D1 | `sidebar.panellist` 是否采纳 | 采纳（补声明+渲染+直调 selectPanel）/ 暂不采纳 | **采纳**（成本 S，避免上游/第三方注册悬空）；落地时改为**直调**——探测式降级的前提（官方 ui-layout 无该方法）不成立 |
+| D2 | 5 个 extra row 的失败是否转致命 | 致命 / 降级+loud 诊断 | **已按「降级 + loud 探针」执行**：fatal 会让 gateway 形态（可不加载该行）整壳挂掉；探针在 5s 内探测 `sidebarRight`/`resources` 并 console.error 点名，消除静默。若日后确认该行在所有形态都必须存在，再把探针升级为 fatal |
+| D3 | patched-copy 基础设施 | 现在建（第二例已触发）/ 继续逐例绕过 | **现在建**（否则 `/api/file`、未来的同源绝对 URL 都会 404）。二轮补充事实：只代理 `/api/i/<id>/*`；绝对 origin 被 CSP `img-src 'self'` 拦；最小修法 = 相对 `<basePath>/api/file`；ssh/http dsh 目标无 cookie 注入 → 401 待裁决（见 C9） |
 | D7 | `ALLOW_BUILDS` 的 `fs-ext` | 保留条目（回滚可用）/ 删除（回滚到 0.1.3 硬失败）/ 版本条件化白名单 | **保留**（无害且保住回滚；注释改为“回滚目标依赖”） |
 | D4 | open-in 平行实现 | 建 in-repo basePath fork（`packages/dsh-client-ui-open-in-app`）/ 保留现平行件 | **建 fork**（以上游为准，删平行件） |
 | D5 | 官方桌面插件管理窗口 vs chamber PluginDialog | 保留统一模型 + 动作集对齐 / 改走上游窗口 | **保留统一模型** |

@@ -15,8 +15,9 @@
  *   C6  EXCLUDED 上游存在性（ensure-harness-vendor 排除的三个 fork 源目录）
  *   C7  种子域锁步：gateway HOST_PACKAGE_PROBE_DOMAINS 值集 ==
  *       dsh-runtime HOST_DOMAIN_PROBE_NAMES 列表（文本双门；运行时已有 fail-loud）
- *   C8  生成物陈旧（advisory）：host dist ×3 与 mobile lib/client.js 的
- *       mtime 落后于 src 最新文件时告警不失败
+ *   C8  提交态生成物 == src（确定性重建-比对，硬失败）：host dist ×3 +
+ *       mobile dist/lib 四件；重建后字节不同 = 产物陈旧。写后原样还原，
+ *       `--no-artifact-rebuild` 退回 mtime advisory（fresh checkout 会误报）
  *
  * 登记纪律：给某个文件打 chamber 补丁 = 在 FORKS.patched 里登记（含原因）；
  * 新增 chamber 自有文件 = own；上游文件有意不镜像 = dropped。任何对 pure
@@ -28,7 +29,7 @@
  */
 
 import { createHash } from 'node:crypto'
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
@@ -315,29 +316,15 @@ for (const fork of FORKS) {
 
   const assemblyEntry = join(ROOT, 'vendor/harness-packages/@deepseek-ai/dsh-api-remotes/src/client/index.ts')
   if (existsSync(assemblyEntry)) {
-    const { remotePackagesFromAssembly } = await import(
+    const { remotePackagesFromAssembly, EXPECTED_REMOTE_PACKAGES } = await import(
       join(ROOT, 'packages/renderer/scripts/typert-remote-contract.mjs')
     )
     const remotes = remotePackagesFromAssembly(readFileSync(assemblyEntry, 'utf8'))
     // Exact set AND order: a same-length swap (a package added while another
-    // is removed, or a reordered assembly) must not pass silently.
-    const expected = [
-      '@deepseek-ai/dsh-agent-presets',
-      '@deepseek-ai/dsh-commands',
-      '@deepseek-ai/dsh-api-settings-controller',
-      '@deepseek-ai/dsh-goal',
-      '@deepseek-ai/dsh-llm',
-      '@deepseek-ai/dsh-cordis-host-runner',
-      '@deepseek-ai/dsh-host-plugin-inventory',
-      '@deepseek-ai/dsh-message-feedback',
-      '@deepseek-ai/dsh-command-feedback',
-      '@deepseek-ai/dsh-client-file-upload',
-      '@deepseek-ai/dsh-session-reference',
-      '@deepseek-ai/dsh-subagent',
-      '@deepseek-ai/dsh-api-session-controller',
-      '@deepseek-ai/dsh-api-workspace-controller',
-      '@deepseek-ai/dsh-api-workspace-files',
-    ]
+    // is removed, or a reordered assembly) must not pass silently. The
+    // expected list is single-sourced in typert-remote-contract.mjs (shared
+    // with the lockstep test) so an upstream change is one edit.
+    const expected = [...EXPECTED_REMOTE_PACKAGES]
     if (remotes.length !== expected.length || remotes.some((name, index) => name !== expected[index])) {
       hardFails += 1
       fail(`C4 remotePackagesFromAssembly = ${JSON.stringify(remotes)}（期望 ${JSON.stringify(expected)}）——上游装配面变更需重审 typert 契约`)
@@ -384,43 +371,109 @@ for (const fork of FORKS) {
   }
 }
 
-// C8 —— 生成物陈旧（advisory）
+// C8 —— 生成物陈旧（确定性重建-比对；2026-09 二轮改为内容门）
+//
+// The 2026-09 V1 review found the previous mtime comparison to be a paper
+// gate: on a fresh checkout every file carries the checkout time, so a
+// committed-but-stale bundle was never detected (exactly the BLOCKER shape:
+// the alpha.2 slot rename lived in src while lib/client.js still walked the
+// retired slots), while a freshly built tree could report a false positive
+// when the artifact was written a millisecond before its own source. Both
+// build scripts are deterministic (esbuild, fixed target/externals, LF-only
+// committed artifacts per .gitattributes), so the gate rebuilds each artifact
+// group in place and byte-compares against the bytes captured first, then
+// restores them verbatim — the repo is left unchanged, and the only observable
+// effect is the artifact mtime. A mismatch is a hard failure: the committed
+// artifact no longer matches its source. `--no-artifact-rebuild` keeps the
+// old advisory mtime behavior for environments without esbuild.
 {
-  const stale = []
-  const newestMtime = (dir) => {
-    let newest = 0
-    const walk = (d) => {
-      for (const entry of readdirSync(d, { withFileTypes: true })) {
-        const full = join(d, entry.name)
-        if (entry.isDirectory()) {
-          if (entry.name !== 'node_modules' && entry.name !== 'lib' && entry.name !== 'dist') walk(full)
-        } else {
-          newest = Math.max(newest, statSync(full).mtimeMs)
+  const groups = [
+    {
+      script: 'packages/dsh-chamber-seed-client-graph/scripts/build.mjs',
+      outputs: ['packages/dsh-chamber-seed-client-graph/dist/index.js'],
+    },
+    {
+      script: 'packages/dsh-chamber-seed-git-worktree/scripts/build.mjs',
+      outputs: ['packages/dsh-chamber-seed-git-worktree/dist/index.js'],
+    },
+    {
+      script: 'packages/dsh-chamber-seed-archive-cleanup/scripts/build.mjs',
+      outputs: ['packages/dsh-chamber-seed-archive-cleanup/dist/index.js'],
+    },
+    {
+      // The mobile browser half is a committed artifact too (package.json
+      // exports ./client -> lib/client.js) and the gateway seeds it byte for
+      // byte; a stale bundle silently keeps retired DOM anchors (2026-09 V1
+      // review BLOCKER). lib/index.js is the mirrored host half.
+      script: 'packages/dsh-chamber-client-ui-mobile/scripts/build.mjs',
+      outputs: [
+        'packages/dsh-chamber-client-ui-mobile/dist/index.js',
+        'packages/dsh-chamber-client-ui-mobile/lib/index.js',
+        'packages/dsh-chamber-client-ui-mobile/lib/client.js',
+        'packages/dsh-chamber-client-ui-mobile/lib/client.js.map',
+      ],
+    },
+  ]
+  if (process.argv.includes('--no-artifact-rebuild')) {
+    // Advisory fallback: mtime is unreliable on fresh checkouts — say so.
+    const stale = []
+    for (const group of groups) {
+      for (const artifact of group.outputs) {
+        const artifactPath = join(ROOT, artifact)
+        if (!existsSync(artifactPath)) continue
+        const srcDir = join(ROOT, artifact.split('/dist/')[0].split('/lib/')[0], 'src')
+        if (!existsSync(srcDir)) continue
+        let newest = 0
+        const walk = (d) => {
+          for (const entry of readdirSync(d, { withFileTypes: true })) {
+            const full = join(d, entry.name)
+            if (entry.isDirectory()) {
+              if (entry.name !== 'node_modules' && entry.name !== 'lib' && entry.name !== 'dist') walk(full)
+            } else {
+              newest = Math.max(newest, statSync(full).mtimeMs)
+            }
+          }
         }
+        walk(srcDir)
+        if (statSync(artifactPath).mtimeMs < newest) stale.push(artifact)
       }
     }
-    walk(dir)
-    return newest
-  }
-  const artifacts = [
-    ['packages/dsh-chamber-seed-client-graph/dist/index.js', 'packages/dsh-chamber-seed-client-graph/src'],
-    ['packages/dsh-chamber-seed-git-worktree/dist/index.js', 'packages/dsh-chamber-seed-git-worktree/src'],
-    ['packages/dsh-chamber-seed-archive-cleanup/dist/index.js', 'packages/dsh-chamber-seed-archive-cleanup/src'],
-    // The mobile browser half is a committed artifact too (package.json
-    // exports ./client -> lib/client.js) and the gateway seeds it byte for
-    // byte; a stale bundle silently keeps retired DOM anchors (2026-09 V1
-    // review BLOCKER: the alpha.2 slot rename was invisible in this check).
-    ['packages/dsh-chamber-client-ui-mobile/lib/client.js', 'packages/dsh-chamber-client-ui-mobile/src'],
-  ]
-  for (const [artifact, srcDir] of artifacts) {
-    const artifactPath = join(ROOT, artifact)
-    if (!existsSync(artifactPath)) continue
-    if (statSync(artifactPath).mtimeMs < newestMtime(join(ROOT, srcDir))) {
-      stale.push(artifact)
+    if (stale.length > 0) warn(`C8 生成物 mtime 落后（advisory；fresh checkout 会误报，请用默认重建门）: ${stale.join(', ')}`)
+    else console.log('✓ C8 生成物 mtime 新鲜（advisory 模式）')
+  } else {
+    const stale = []
+    const skipped = []
+    for (const group of groups) {
+      const paths = group.outputs.map((output) => join(ROOT, output))
+      const missing = group.outputs.filter((_, index) => !existsSync(paths[index]))
+      if (missing.length > 0) {
+        stale.push(...missing.map((output) => `${output}（缺失）`))
+        continue
+      }
+      const before = paths.map((path) => readFileSync(path))
+      try {
+        const run = spawnSync(process.execPath, [join(ROOT, group.script)], { cwd: ROOT, encoding: 'utf8' })
+        if (run.status !== 0) {
+          const detail = `${run.stderr ?? ''}`.trim().split('\n').pop() ?? `exit ${run.status}`
+          skipped.push(`${group.script}（构建不可用：${detail}）`)
+          continue
+        }
+        for (const [index, output] of group.outputs.entries()) {
+          if (!readFileSync(paths[index]).equals(before[index])) stale.push(output)
+        }
+      } finally {
+        // Restore verbatim: the gate must not leave a modified working tree.
+        paths.forEach((path, index) => writeFileSync(path, before[index]))
+      }
+    }
+    for (const note of skipped) warn(`C8 跳过：${note}`)
+    if (stale.length > 0) {
+      hardFails += 1
+      fail(`C8 提交态生成物与 src 不一致（重建后字节不同）: ${stale.join(', ')} — 跑 pnpm run build:host-packages / node packages/dsh-chamber-client-ui-mobile/scripts/build.mjs 后提交`)
+    } else if (skipped.length === 0) {
+      console.log('✓ C8 提交态生成物与 src 一致（重建-比对）')
     }
   }
-  if (stale.length > 0) warn(`C8 生成物陈旧（advisory，构建后提交）: ${stale.join(', ')}`)
-  else console.log('✓ C8 host 生成物新鲜')
 }
 
 // C2 —— tag 重放报告（advisory）

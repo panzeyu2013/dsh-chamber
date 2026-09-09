@@ -11,7 +11,7 @@
 > alpha.2 重写；凡标 **[B]** 的条目均指 `alpha.2(pin 0.1.3-alpha.2)` → `0.1.5-alpha.2`。
 >
 > 证据源：`git clone --filter=blob:none` 的只读镜像（tag `dsh-v0.1.2-rc.1` a66e4702 /
-> `dsh-v0.1.3-alpha.2` 82a5fd61 = **本仓当前 pin** / `dsh-v0.1.5-alpha.1` 5dda764e /
+> `dsh-v0.1.3-alpha.2` 82a5fd61 = 上一版 pin（0.1.3 线）/ `dsh-v0.1.5-alpha.1` 5dda764e /
 > `dsh-v0.1.5-alpha.2` b2e3b2a0）+ 本仓 `scripts/dev/preflight-vendor-pin.mjs` 的纯函数分类器
 > 实测输出。所有结论标注 **[A]**（rc.1→0.1.5 全区间）或 **[B]**（本仓 pin→0.1.5-alpha.2，
 > 即尚未吸收的部分）；**[A-only]** 表示该改动已随 0.1.3-alpha.2 吸收。
@@ -26,9 +26,9 @@
 |---|---|---|---|
 | `dsh-v0.1.2-rc.1` | `a66e4702` | 2026-09-03 | npm `latest` 仍是它 |
 | `dsh-v0.1.3-alpha.1` | `d347e703` | 2026-09-04 | |
-| `dsh-v0.1.3-alpha.2` | `82a5fd61` | 2026-09-07 | **本仓源码线 pin** |
+| `dsh-v0.1.3-alpha.2` | `82a5fd61` | 2026-09-07 | 上一版源码线 pin（0.1.3 线） |
 | `dsh-v0.1.5-alpha.1` | `5dda764e` | 2026-09-08 | 上一次分析基线 |
-| `dsh-v0.1.5-alpha.2` | `b2e3b2a0` | 2026-09-09 | **本次锚定**：上游 master HEAD，npm `alpha` 指向它 |
+| `dsh-v0.1.5-alpha.2` | `b2e3b2a0` | 2026-09-09 | **本仓当前 pin（本次锚定）**：上游 master HEAD，npm `alpha` 指向它 |
 
 - 规模：`rc.1..0.1.5-alpha.2` = **1469 commits / 6759 路径 / 6516 文件 / +203128 −53543**；
   `pin(alpha.2)..0.1.5-alpha.2` = **3151 文件**（alpha.1 时是 2552，多出的 599 主要是 alpha.2 的
@@ -108,12 +108,13 @@ supersede，且 alpha.2 不是小补丁：
 
 移除 4 个：`node-addon-landlock-run*`（`native/landlock-run` 整树被 `native/system` 取代）。
 
-对 chamber 的直接影响：vendor 链接集合 **271 → 282**（+15 −4，与 STATUS §9.2 第 6 项一致），
-锁文件 importer 记录需按 §4 纪律重生成。
+对 chamber 的直接影响：vendor 链接集合 **271 → 282**（rc.1→alpha.1：+15 −4，与 STATUS §9.2 第 6 项一致；
+alpha.1→alpha.2 再 +2 —— `fs/tool-present`、`util/chunked-list`，`ui-sidebar-textpreview`→
+`ui-sidebar-documentpreview` 为改名不增链接 ⇒ **终值 284**），锁文件 importer 记录需按 §4 纪律重生成。
 
 ### 1.2 宿主 / 后端契约变化
 
-| 契约 | rc.1 | 0.1.5-alpha.1 | 归属 | chamber 消费点 |
+| 契约 | rc.1 | 0.1.5-alpha.1（alpha.2 增量见 §1.6） | 归属 | chamber 消费点 |
 |---|---|---|---|---|
 | `SessionPersistence` | `locate/readRaw/inspect/load/readFrom/borrowSession/listSnapshots/append/prepare` | **只剩 `create/open/flush/stat/list` + `SessionHandle`** | **[A]** | `dsh-chamber-seed-archive-cleanup` 的 `inspect`/`locate` |
 | `SESSION_FORMAT_VERSION` | `0` | **`3`**（v0→v1→v2→v3 自动迁移） | v1/v2 [A]、**v2→v3 [B]** | 同上（磁盘布局、代际文件） |
@@ -269,7 +270,7 @@ slot 组件 props 的测试夹具都要补这两个字段**。
 - Node 底线不变（`^22.19.0 || >=24.0.0`，`packageManager pnpm@11.7.0`）。
 - **对本仓的含义**：`apps/*` 在 `pnpm-workspace.yaml` 的 glob 内，因此
   `apps/desktop`/`apps/desktop-host` 会作为两个新 vendor 链接进入
-  `vendor/harness-packages/@deepseek-ai/`（计入 271→282）；本仓不 import 它们，
+  `vendor/harness-packages/@deepseek-ai/`（计入 271→284）；本仓不 import 它们，
   属“登记但不使用”。产品层面的重叠（自建壳 vs 上游壳）需要单独决策，本报告只登记事实。
 
 ---
@@ -375,8 +376,9 @@ fiber 永久 PENDING ⇒ chat 面整体不注册**（不是“少一个面板”
 - `packages/renderer/src/chamber-covered.ts`（`CHAMBER_COVERED_IDS` / `CHAMBER_COVERED_FACTORY_IDS`）
   ——**决策（S5）：5 个新行全部保持“不覆盖”**，由 `host-graph.ts:474` 的 extra row 自动加载；
   两表只加 `ui-dockkit`（covered factory 一行 + `chamber-entry.ts` 的 import/factory）。
-  `REQUIRED_EXTRA_ROWS`（`client-resources → ui-sidebar-right` 传递闭包）把 apply 失败
-  从“静默降级”升级为致命（见 §2.1.3 方案 A 的待验证项 ②）；
+  `assertRequiredExtraRowServices`（`required-extra-rows.ts` + `chamber-entry.ts`）在
+  5s 内探测 `sidebarRight`/`resources` 缺失并 console.error 点名（**非致命**——fatal 会让
+  gateway 形态整壳挂掉；见决策矩阵 D2 的实际口径）；
 - `scripts/dev/verify-upstream-touchpoints.mjs`：C4 的 `COVERED_SENTINELS` 与
   **remote 装配契约 13 → 15**（实测 rc.1=12、pin(0.1.3-alpha.2)=13、0.1.5-alpha.1=14、**0.1.5-alpha.2=15**，新增 `dsh-command-feedback`）；
 - `packages/dsh-client-web/src/platform.ts` + `seed.ts` 的**第 8 个平台词**
@@ -428,7 +430,7 @@ fiber 永久 PENDING ⇒ chat 面整体不注册**（不是“少一个面板”
 
 ### 2.5 运行时线锚 + 锁文件
 
-- 运行时线六个锚（本仓现状全部 `0.1.3-alpha.2`）：
+- 运行时线六个锚（**已执行，现状全部 `0.1.5-alpha.2`**）：
   `packages/desktop/scripts/bundle-dsh.mjs:79` 兜底常量、
   `packages/desktop/vendor/dsh` 锁文件（`bundle:dsh --force --refresh-lockfile`）、
   `.github/workflows/release.yml:67` env、
@@ -436,7 +438,7 @@ fiber 永久 PENDING ⇒ chat 面整体不注册**（不是“少一个面板”
   `packages/gateway/package.json` 的 `dshAnchorVersion`、
   `scripts/dev/release-preflight.mjs:67` `FORK_VERSION`。
   → 目标版本（npm 已发布：alpha.1 与 **alpha.2** 都可用）。
-- 锁文件/vendor 链接：**271 → 282**；按 §4 纪律用 `update-vendor.mjs` 原子重生成，
+- 锁文件/vendor 链接：**271 → 284**（实测终值；rc.1→alpha.1 的 282 再加 alpha.2 两包）；按 §4 纪律用 `update-vendor.mjs` 原子重生成，
   注意 0.1.5 移除了 landlock 4 条 importer（`restore-lockfile-vendor-records.mjs`
   的“成员仍在链接集合”守卫已修，见 STATUS §9.1）。
 - **`allowBuilds` 单源：`fs-ext` 必须保留（S8 实测纠正）**。0.1.5 用**预编译 Node-API addon**

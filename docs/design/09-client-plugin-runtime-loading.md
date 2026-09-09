@@ -87,6 +87,18 @@ dsh 官方 web 的客户端插件链路是完整的（已核 vendor 源码）：
   `ui-*` 包（`chamber-entry.ts` 静态注册），宿主图里这些 id **跳过**，只加载
   chamber 复合未覆盖的新 entry（用户新装包）。去重集 = `CHAMBER_COVERED_IDS`
   （`packages/renderer/src/chamber-covered.ts`，见 §3.5）。
+- **反向依赖（2026-09 二轮登记，alpha.2）**：覆盖集解决的是「复合行不需要宿主图」，
+  但反向依赖仍在——复合内三个首屏家族的 cordis inject 成员由**未覆盖**的官方行
+  提供：`ui-chat` ← `sidebarRight`（`ui-sidebar-right`）、`ui-conversation` 根
+  inject ← `fileUpload`（`client-file-upload`，唯一生产提供方）、全局
+  `useResource` 座 ← `resources`（`client-resources`）。这些行仍走 host-graph
+  额外行通道：宿主图通道降级（返回 `[]`）或该行 apply 失败时，对应 fiber 停在
+  PENDING——ui-chat 丢会话视图、ui-conversation 丢整个中列——而 boot 仍报成功。
+  `chamber-entry.ts` 的 `assertRequiredExtraRowServices`（纯判定在
+  `required-extra-rows.ts`，服务清单 `REQUIRED_EXTRA_ROW_SERVICES`）在 5s 内探测
+  这三个服务并 `console.error` 点名 instance + 服务（**诊断，非启动门**：gateway/
+  移动形态可合法不加载该行）。清单变更须同步 `host-graph.ts` 的降级注释与
+  `docs/checklists/upstream-touchpoints.md` §3 的登记行。
 - **覆盖集也是模块表的 factory 提供方（2026-08 修复）**：被跳过的覆盖行不是
   "不存在"，而是由复合 bundle 替代——共享模块表对 fetch bundle 的**同步 require
   边**只有 seed → statics → 已物化缓存（loadCache）→ 已注册 factory 一条解析路径

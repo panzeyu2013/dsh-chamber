@@ -2,18 +2,24 @@
  * Required host-graph extra-row services (alpha.2).
  *
  * The chamber composite registers several first-screen plugins directly, so
- * their fibers are NOT part of the boot kernel's loader sweep. `ui-chat`
- * declares `sidebarRight` in its cordis inject set, and that service is
- * provided by the `ui-sidebar-right` host-graph row; `resources` comes from
- * the `client-resources` row and backs the global `useResource` hook. When one
- * of those rows never applies, the dependent fiber stays PENDING and the
- * surface silently disappears while the boot still reports success — this
- * module owns the decision and the message, and `chamber-entry.ts` owns the
- * timer (tied to the ctx lifecycle).
+ * their fibers are NOT part of the boot kernel's loader sweep. Three of those
+ * first-screen plugins declare a cordis inject member that only an extra row
+ * provides (2026-09 二轮 from the alpha.2 sources):
+ *
+ *  - `ui-chat` injects `sidebarRight` -> `ui-sidebar-right` row;
+ *  - `ui-conversation` injects `fileUpload` -> `dsh-client-file-upload` row
+ *    (its only production provider; `immediately: true`, still an extra row);
+ *  - the global `useResource` seat needs `resources` -> `client-resources` row.
+ *
+ * When one of those rows never applies, the dependent fiber stays PENDING and
+ * the surface silently disappears (ui-chat: the conversation view; ui-conversation:
+ * the whole centre column) while the boot still reports success — this module
+ * owns the decision and the message, and `chamber-entry.ts` owns the timer
+ * (tied to the ctx lifecycle).
  */
 
 /** Services the composite's first-screen plugins require from extra rows. */
-export const REQUIRED_EXTRA_ROW_SERVICES = ['sidebarRight', 'resources'] as const
+export const REQUIRED_EXTRA_ROW_SERVICES = ['sidebarRight', 'fileUpload', 'resources'] as const
 
 /**
  * Probe deadline. The extra rows load after the composite and their applies
@@ -48,6 +54,6 @@ export function missingRequiredServices(
 export function requiredServiceProbeMessage(missing: readonly string[], instanceId?: string): string {
   const where = instanceId === undefined ? '' : ` (instance ${instanceId})`
   return `[chamber-entry]${where} required extra-row service(s) missing after ${REQUIRED_SERVICE_PROBE_DEADLINE_MS}ms: `
-    + `${missing.join(', ')} — the ui-sidebar-right / client-resources host-graph rows did not apply; `
-    + 'the conversation surface may stay unregistered'
+    + `${missing.join(', ')} — the ui-sidebar-right / client-file-upload / client-resources host-graph rows `
+    + 'did not apply; the conversation view or the whole centre column may stay unregistered'
 }

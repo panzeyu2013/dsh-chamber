@@ -2,33 +2,20 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
-import { assertRemotePackageContract, remotePackagesFromAssembly } from './typert-remote-contract.mjs'
+import {
+  assertRemotePackageContract,
+  EXPECTED_REMOTE_PACKAGES,
+  remotePackagesFromAssembly,
+} from './typert-remote-contract.mjs'
 
 const VENDOR = fileURLToPath(new URL('../../../vendor/harness-packages/@deepseek-ai/', import.meta.url))
 
 test('rc.8 dsh-api-remotes assembly and renderer generation stay in lockstep', () => {
   const source = readFileSync(`${VENDOR}dsh-api-remotes/src/client/index.ts`, 'utf8')
   const packages = remotePackagesFromAssembly(source)
-  // dsh-v0.1.5-alpha.2 assembly (15 rows): the settings/session/workspace
-  // controllers' /remote faces, the generic file-upload row (alpha.1), the
-  // command-feedback row (alpha.2) and the workspace-files row (alpha.2).
-  assert.deepEqual(packages, [
-    '@deepseek-ai/dsh-agent-presets',
-    '@deepseek-ai/dsh-commands',
-    '@deepseek-ai/dsh-api-settings-controller',
-    '@deepseek-ai/dsh-goal',
-    '@deepseek-ai/dsh-llm',
-    '@deepseek-ai/dsh-cordis-host-runner',
-    '@deepseek-ai/dsh-host-plugin-inventory',
-    '@deepseek-ai/dsh-message-feedback',
-    '@deepseek-ai/dsh-command-feedback',
-    '@deepseek-ai/dsh-client-file-upload',
-    '@deepseek-ai/dsh-session-reference',
-    '@deepseek-ai/dsh-subagent',
-    '@deepseek-ai/dsh-api-session-controller',
-    '@deepseek-ai/dsh-api-workspace-controller',
-    '@deepseek-ai/dsh-api-workspace-files',
-  ])
+  // The expected list is single-sourced in typert-remote-contract.mjs (shared
+  // with the upgrade gate's C4) so an upstream assembly change is ONE edit.
+  assert.deepEqual(packages, [...EXPECTED_REMOTE_PACKAGES])
   for (const packageName of packages) {
     const shortName = packageName.slice('@deepseek-ai/'.length)
     const manifest = JSON.parse(readFileSync(`${VENDOR}${shortName}/package.json`, 'utf8'))

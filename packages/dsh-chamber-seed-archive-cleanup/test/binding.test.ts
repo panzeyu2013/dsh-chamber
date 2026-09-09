@@ -229,6 +229,36 @@ test('binding: content removal removes the official artifact and reclaims an emp
     assert.equal(await tempHost.deleteSessionContent('s5', join(dir, 'proj4')), 'deleted')
     assert.equal(existsSync(tempy), false, 'generation + leftover temp removed, dir reclaimed')
 
+    // A leftover MIGRATION staging file (an interrupted vN->vM migration) is
+    // this session's own content staging and purges with the rest (2026-09
+    // 二轮 W2 F5: without recognition the session was permanently unpurgeable).
+    const migrated = join(dir, 'proj5', 's6')
+    mkdirSync(migrated, { recursive: true })
+    writeFileSync(join(migrated, 'session.v2.jsonl'), '{}')
+    writeFileSync(join(migrated, 'session.v3.jsonl'), '{}')
+    writeFileSync(join(migrated, 'session.migration.0123456789abcdef.jsonl.tmp'), '{}')
+    writeFileSync(join(migrated, 'session.migration.fedcba9876543210.jsonl.zstd.tmp'), '{}')
+    const migratedHost = makeHostBinding({
+      sessionPersistence: { locate: h => ({ kind: 'jsonl', path: join(dir, 'proj5', h.id, 'session.v3.jsonl') }) },
+    })
+    assert.equal(await migratedHost.deleteSessionContent('s6', join(dir, 'proj5')), 'deleted')
+    assert.equal(existsSync(migrated), false, 'generations + migration staging files removed, dir reclaimed')
+
+    // The staging name is matched exactly: a 12-hex (publish-token) length or
+    // an uppercase token is NOT the vendor shape and still refuses.
+    const nearMiss = join(dir, 'proj6', 's7')
+    mkdirSync(nearMiss, { recursive: true })
+    writeFileSync(join(nearMiss, 'session.v3.jsonl'), '{}')
+    writeFileSync(join(nearMiss, 'session.migration.0123456789ab.jsonl.tmp'), '{}')
+    const nearMissHost = makeHostBinding({
+      sessionPersistence: { locate: h => ({ kind: 'jsonl', path: join(dir, 'proj6', h.id, 'session.v3.jsonl') }) },
+    })
+    await assert.rejects(() => nearMissHost.deleteSessionContent('s7', join(dir, 'proj6')), (error: unknown) => {
+      return error instanceof ArchiveCleanupError && error.code === 'storage'
+        && /unrecognized entry session\.migration\.0123456789ab\.jsonl\.tmp/.test(error.message)
+    })
+    assert.equal(existsSync(join(nearMiss, 'session.v3.jsonl')), true, 'nothing removed on refusal')
+
     // A legacy version-zero directory (`session.jsonl`) purges normally.
     const legacy = join(dir, 'proj3', 's4')
     mkdirSync(legacy, { recursive: true })
@@ -287,6 +317,27 @@ test('binding: the purge refuses symlink/subdirectory entries and accepts every 
     await assert.rejects(() => zeroHost.deleteSessionContent('s4', join(dir, 'zero')), (error: unknown) => {
       return error instanceof ArchiveCleanupError && error.code === 'storage' && /unrecognized entry session\.v0\.jsonl/.test(error.message)
     })
+
+    // An out-of-range version is NOT canonical upstream either
+    // (`Number.isSafeInteger` in parseSessionFormatLogFilename), so the
+    // whitelist must refuse it instead of deleting it (2026-09 二轮 N13).
+    const hugeDir = join(dir, 'huge', 's5')
+    mkdirSync(hugeDir, { recursive: true })
+    writeFileSync(join(hugeDir, 'session.v99999999999999999999.jsonl'), '{}')
+    const hugeHost = makeHostBinding({ sessionPersistence: { locate: locateFor('huge') } })
+    await assert.rejects(() => hugeHost.deleteSessionContent('s5', join(dir, 'huge')), (error: unknown) => {
+      return error instanceof ArchiveCleanupError && error.code === 'storage'
+        && /unrecognized entry session\.v99999999999999999999\.jsonl/.test(error.message)
+    })
+    assert.equal(existsSync(join(hugeDir, 'session.v99999999999999999999.jsonl')), true, 'nothing removed on refusal')
+
+    // The boundary itself IS canonical (MAX_SAFE_INTEGER), matching vendor.
+    const maxDir = join(dir, 'max', 's6')
+    mkdirSync(maxDir, { recursive: true })
+    writeFileSync(join(maxDir, 'session.v9007199254740991.jsonl'), '{}')
+    const maxHost = makeHostBinding({ sessionPersistence: { locate: locateFor('max') } })
+    assert.equal(await maxHost.deleteSessionContent('s6', join(dir, 'max')), 'deleted')
+    assert.equal(existsSync(maxDir), false, 'a safe-integer version is canonical and purges')
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

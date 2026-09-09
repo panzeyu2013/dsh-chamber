@@ -28,7 +28,7 @@
  * only unexpected internal failures escape as throws.
  *
  * HOST BINDING (design 24 §10/§14, verified against the pinned vendor
- * dsh-v0.1.2-rc.1 a66e4702, 2026-12): implemented in ./binding.ts —
+ * dsh-v0.1.5-alpha.2 b2e3b2a0, 2026-12): implemented in ./binding.ts —
  *  - archived set: `workspaceRegistry.archivedSessionIds` (public getter);
  *  - session states: the UNION by id of `sessionQuery.listSessions()` and
  *    `sessionPersistence.list()` + live `sessions/agents` — neither

@@ -1245,8 +1245,10 @@ settings-bridge/git/open-in）依旧不注入。机制上无需新能力：控�
 >    作用域化；行为层 effect（IME/回车换行/自愈/Esc）为 document 级单实例设计——
 >    gateway 部署单 shell 下成立，未来多 shell renderer 挂载时必须作用域化
 >    （代码注释已标注）；
-> 3. **layout store 驱动**：chamber 的 `dsh-chamber-client-ui-layout` 已持有
->    `narrow`/`narrowExpanded`（镜像官方 SIDEBAR_AUTO_COLLAPSE），移动插件
+> 3. **layout store 驱动**：chamber 的 `dsh-chamber-client-ui-layout` 持有
+>    `viewportWidth`/`narrowExpanded`（alpha.2 起 store 不再有 `narrow` 字段，
+>    窄屏标记由 `viewportWidth < SIDEBAR_AUTO_COLLAPSE` 派生，经
+>    `layoutFacts.getCollapsed()` 暴露），移动插件
 >    **直接订阅 layout store** 驱动窄屏态与抽屉，不做社区通用的
 >    `data-sidebar-collapsed` 属性观察。**部署矩阵例外（2026-12 落地确认）**：
 >    `layoutFacts` 订阅面只在 chamber layout fork 存在，而 §18.2/§3 矩阵明确
@@ -1286,7 +1288,7 @@ append-only 无删除方法），走 dsh 实例自身 host 插件（`ctx.inject(
 （`data-mobile-nav="…"` 自有标记 + `[class$="_…"]`）。**chamber 走第三条路且
 更稳**：已 fork `dsh-client-web` 与 `ui-layout`（AGENTS.md 允许改源码的 chamber
 包），可在 fork 内直接加 `data-*` 钩子，不猜选择器；版本随 dsh 基线
-（v0.1.2-rc.1，harness pin a66e470）对齐 + 回归测试。断点锚定官方
+（v0.1.5-alpha.2，harness pin b2e3b2a0）对齐 + 回归测试。断点锚定官方
 `SIDEBAR_AUTO_COLLAPSE`（<1024px）为主断点（mobile-shell 同款），768px 为
 手机档（mobile-adapt 同款），420/359px 微调可选。**档位表补第三条（2026-12
 复核轮）**：宽度无关的 **chrome 档** `(pointer: coarse) and (hover: none)`，
@@ -1348,7 +1350,12 @@ append-only 无删除方法），走 dsh 实例自身 host 插件（`ctx.inject(
   覆盖层**（`data-details-collapsed` 移除时 details 列 `position:fixed; right:0`）：
   **alpha.2 重锚已退役**——官方右栏栈自带移动呈现（`ui-sidebar-right` 在 <768px
   自动全屏、`position:fixed; inset:0`），自绘覆盖层与之重复且打架，插件只保留第三轨
-  的网格锁（`[data-mobile-role="details"] { grid-column: 3 }`）。
+  的网格锁（`[data-mobile-role="details"] { grid-column: 3 }`）。**层级范围（2026-09
+  二轮实测登记）**：插件的抽屉/遮罩/汉堡（z-74/75/76）挂在官方 `shell.overlay`
+  层内，而该层是 `position:absolute; z-index:20` 的**独立栈上下文**——三者因此压在
+  框架内容与普通右栏列（z-10）之上，但**低于官方全屏右栏（z-40）与浮动面板宿主
+  （z-60）**。这是有意的：官方全屏面板接管屏幕时，移动抽屉让位（要跨栈必须把节点
+  移到 body 级 portal，未做）。
 
 **18.4.4 行为层（移动端复杂度的真正核心）**
 

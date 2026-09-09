@@ -399,9 +399,16 @@ export interface CollectExtraRowsDeps {
  * before loader.create runs, not after.
  *
  * Degrades to [] when the graph CHANNEL fails (fetch throws — network /
- * non-2xx / malformed graph): the boot proceeds without extra plugins; the
- * composite still provides the entire official shell, only profile-installed
- * client plugins are lost (graph-channel failure degrade). A 503
+ * non-2xx / malformed graph): the boot proceeds without extra plugins. That is
+ * NOT a complete shell any more (2026-09 二轮, alpha.2 sources): three inject
+ * members of the composite's own first-screen families are provided by
+ * non-covered official rows — `sidebarRight` (ui-sidebar-right, required by
+ * ui-chat), `fileUpload` (client-file-upload, required by ui-conversation's
+ * root inject), and `resources` (client-resources, the global `useResource`
+ * seat). On a degrade those fibers stay PENDING, so the conversation view or
+ * the whole centre column disappears while boot still reports success; the
+ * `assertRequiredExtraRowServices` probe in chamber-entry.ts turns that into a
+ * loud, named diagnostic (design 09 §3.2). A 503
  * `instance_unavailable` is the expected pre-ready state: the fetch is
  * retried on a bounded budget (the instance's graph appears moments after the
  * proxy stops answering 503 — see CollectExtraRowsDeps.retry) and only then

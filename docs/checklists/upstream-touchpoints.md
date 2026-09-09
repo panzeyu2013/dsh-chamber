@@ -126,6 +126,13 @@ host 插件入口/半、上游 `tests/`、`tsdown.config.ts`、上游 README（a
   登记 covered（precedent：ui-open-in-app 行随 a2 登记）。删包 fail-loud 哨兵在 verify 脚本 C4。
 - typert remote 装配：`vendor/…/dsh-api-remotes/src/client/index.ts` 契约 == **15**（集合与顺序；gen-typert-remotes
   与 C4 双向断言）；上游新增 remote 包 = 先裁决（是否 chamber 消费/镜像）再登记。
+- **复合首屏 ← 未覆盖官方行（反向依赖，2026-09 二轮登记）**：`ui-chat` ← `sidebarRight`
+  （`ui-sidebar-right`）、`ui-conversation` 根 inject ← `fileUpload`（`client-file-upload`，
+  唯一生产提供方）、全局 `useResource` 座 ← `resources`（`client-resources`）。三行都走
+  host-graph 额外行通道，缺一即对应 fiber PENDING（ui-chat 丢会话视图 / ui-conversation
+  丢整个中列，boot 仍报成功）。登记点 = `packages/renderer/src/required-extra-rows.ts`
+  的 `REQUIRED_EXTRA_ROW_SERVICES` + `required-extra-rows.test.ts`；上游新增/改名首屏
+  inject 成员时，先在此清单与 `host-graph.ts` 降级注释同步（design 09 §3.2）。
 - `remotePackagesFromAssembly`（renderer/scripts/typert-remote-contract.mjs）为装配契约唯一入口。
 
 ## 4. contract-mirror 登记（按上游属主分组）
@@ -144,18 +151,17 @@ host 插件入口/半、上游 `tests/`、`tsdown.config.ts`、上游 README（a
 | 再生物 | 源 | 提交纪律 |
 |---|---|---|
 | renderer typert 工件（gen-typert-remotes 输出） | vendor typert/remote 源码 | 升级后重生成 diff 随批提交（Batch 0 §2.5） |
-| host dist ×3（`dist/index.js`）+ mobile `lib/client.js` | chamber host 包 src / mobile src | `build:host-packages` / mobile `build` 后提交（C8 advisory 盯陈旧；mobile 产物由 gateway 逐字节 seed，漏检=线上锚点失效） |
-| mobile `lib/client.js`（+map） | mobile src | mobile build 随命名/升级批重建 |
+| host dist ×3（`dist/index.js`）+ mobile `dist/index.js`/`lib/index.js`/`lib/client.js`(+map) | chamber host 包 src / mobile src | `build:host-packages` / mobile `build` 后提交。C8 **重建-比对硬失败**盯陈旧（mobile 产物由 gateway 逐字节 seed，陈旧即线上锚点失效）；两个 build 脚本都带 `absWorkingDir`，产物与调用者 CWD 无关 |
 | boot manifest / perf-sizes | build:renderer | 构建产物 diff 随批审查 |
 | schemastery 桩 loader（connection/web 测试） | vendor source-only 现实 | 新增 vendor 运行时导入面时同步补桩 |
 
 ## 6. 保鲜自动化
 
-`node scripts/dev/verify-upstream-touchpoints.mjs`（只读、exit-code 语义）：
+`node scripts/dev/verify-upstream-touchpoints.mjs`（除 C8 的「重建-比对后原样还原」外只读、exit-code 语义）：
 - C1 pure 字节恒等 / C3 完整性（fork 每文件分类、上游每文件裁决，漏 = 硬失败）/
   C5 过期锚扫描 / C6 EXCLUDED 存在性 —— **CI 在 Bootstrap 后 fail-loud**；
 - C4 roster（covered/factory 哨兵 + remote 契约 15 的集合与顺序）—— 本地/CI 均可；
-- C7 种子域锁步、C8 生成物陈旧（advisory）—— 本地跑。
+- C7 种子域锁步、C8 **提交态生成物 == src**（重建-比对，硬失败；写后原样还原，`--no-artifact-rebuild` 退回 mtime advisory）—— 本地跑。
 - C2 `--tags <old> <new>`：tag 间三 fork 面重放报告（advisory），升级前先跑。
 - `scripts/dev/preflight-vendor-pin.mjs <tag>`（只读，§7 第 0 步）：C2 的**超集**——
   额外报深引 vendor seam 文件、上游包集合增删、新增 client 行、运行时 npm 状态；

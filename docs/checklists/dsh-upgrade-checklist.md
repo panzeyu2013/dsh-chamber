@@ -151,7 +151,11 @@
   `scripts/dev/preflight-vendor-pin.test.mjs`；两者由根脚本 `pnpm run test:upgrade-tools`
   + CI 步骤覆盖。
 
-### 9.2 剩余工作（按序）
+### 9.2 执行记录（原计划项 0–7，**现已全部落地**）
+
+> 下列序列是升级前的计划；每项均已执行，逐文件判定见
+> [`dsh-upgrade-migration-audit.md`](dsh-upgrade-migration-audit.md)，决策/动作见
+> [`dsh-upgrade-decision-matrix.md`](dsh-upgrade-decision-matrix.md)。
 0. **预检（先看清单再动 pin）**：`node scripts/dev/preflight-vendor-pin.mjs
    dsh-v0.1.5-alpha.1 --offline`（实测输出见 §9.3）。
 1. **layout fork 重放（主体，规模门已触发）**：上游 0.1.5 把三栏模型改为
@@ -169,10 +173,10 @@
    `ui-sidebar-right`、`ui-sidebar-files`、`ui-sidebar-textpreview`、
    `dsh-api-workspace-files`（`dsh.client.inject` = api-gateway +
    api-session-controller + client-resources）。
-   `ui-sidebar-right` 注入 `layout` 并占用新 `rightbar` 槽；files/textpreview 注入
-   `sidebarRightTabs` + `remote.workspaceFiles`。需决定 cover（chamber 不加载）或
-   load（接受官方右栏），并与 chamber 的 sidebar/layout fork 槽契约对齐；同步
-   `chamber-covered.ts`/factory 表/AGENTS/C4 期望。
+   `ui-sidebar-right` 注入 `layout` 并占用新 `rightbar` 槽；files/documentpreview 注入
+   `sidebarRightTabs` + `remote.workspaceFiles`。**裁决结果**：五行全部**不 cover、
+   继续走 host-graph 额外行**（首屏时序由 `assertRequiredExtraRowServices` 探针兜底）；
+   `ui-sidebar-textpreview` 在 alpha.2 改名为 `ui-sidebar-documentpreview`。
 3. **平台词 `dsh-client-ui-dockkit`**：库（无 `dsh.client`），被上述三行依赖 →
    必须采纳到 `client-web` 的 `platform.ts`/`seed.ts` + `package.json` 依赖
    （已试通：typecheck 绿）。
@@ -183,15 +187,20 @@
    （bundle-dsh 兜底常量、`vendor/dsh` 锁文件 `--force --refresh-lockfile`、
    release.yml env、install-gateway.sh、gateway `dshAnchorVersion`、
    release-preflight `FORK_VERSION`）。
-6. **锁文件**：vendor 成员 271 → **284**（−4 landlock、+17：含 `apps/desktop`、`apps/desktop-host`、`native/system*` 6 个、`ui-sidebar-documentpreview` 等；实测 284）
-   + 3 其他），按 §4 纪律重生成 + 手工处理 landlock 复活记录。
+6. **锁文件**：vendor 成员 271 → **284**（净 +13 = +17/−4：新增含 `apps/desktop`、
+   `apps/desktop-host`、`native/system*` 6 个、`ui-sidebar-documentpreview`、
+   `fs/tool-present`、`util/chunked-list` 等；移除 landlock 系列 4 条），按 §4 纪律
+   重生成 + 处理 landlock 复活记录（守卫已修，见 §9.1）。
 7. 全量门禁（§6）+ 文档回写（§7）+ `verify:i18n` + 触点表 §2/§5 更新。
 
 ### 9.3 已证伪/确认的假设
 - 上游 connection **客户端恢复模型在 alpha.2→0.1.5 零改动**（我们的连接加固无上游
   等价物可采纳，`start(sinks, config)` 接缝在 0.1.5 的宿主半重构后依然存在）。
-- 新增 7 个包、4 个新 client 行、1 个平台词库；无新增 native 依赖（除
-  `msgpackr-extract`，已否认其构建脚本）。
+- 包集合 rc.1→alpha.2 净 **+13**（+17/−4，实测 vendor 链接 271→**284**）；新增 client 行 **5**
+  （`dsh-api-workspace-files`、`client-resources`、`ui-sidebar-{files,right,documentpreview}`；
+  `ui-sidebar-textpreview` 在 alpha.2 改名 `documentpreview`）；平台词库 **1**
+  （`ui-dockkit`，走 covered factory）；无新增 native 依赖（除 `msgpackr-extract`，
+  已否认其构建脚本）。
 - **预检实测**（`preflight-vendor-pin.mjs dsh-v0.1.5-alpha.1 --offline`，2026-09）：
   上游变更 2552 文件 → fork 面 pure 5 / 需人工重放 6（三个 `package.json` 版本行 +
   `client/web/src/platform.ts`·`seed.ts`·`tsconfig.json`）/ dropped 6；**seam 风险
@@ -200,4 +209,5 @@
   —— 与 §9.2 第 1 项互为印证：layout fork 是唯一实质阻塞点。包集合 +15 / −4
   （landlock 系列），新增 client 行 5（`dsh-api-workspace-files`、`client-resources`、
   `ui-sidebar-{files,right,textpreview}` —— 比 §9.2 第 2 项多一行，roster 裁决需一并
-  覆盖），净 271 → **284**（实测；原估 282 漏计 `apps/desktop`/`apps/desktop-host`）。
+  覆盖），净 271 → **284**（实测；alpha.1 时为 282，alpha.2 再加 `fs/tool-present`、
+  `util/chunked-list` 两个链接；`ui-sidebar-textpreview`→`documentpreview` 为改名不增链接）。

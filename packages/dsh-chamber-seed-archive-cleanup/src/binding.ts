@@ -6,7 +6,7 @@
  *
  * Trust model: this code runs inside each dsh host process. All capability
  * views are structural over the OFFICIAL ctx services (verified against the
- * pinned vendor dsh-v0.1.2-rc.1 a66e4702 — design 24 §14); an unavailable
+ * pinned vendor dsh-v0.1.5-alpha.2 b2e3b2a0 — design 24 §14); an unavailable
  * surface refuses loudly with code `registry-unreadable`/`storage`, never a
  * guessed layout. Security-review dispositions (2026-12):
  *  - archived-set member removal runs INSIDE the registry's official
@@ -137,13 +137,27 @@ function assertHeaderShape(header: unknown): void {
 const LEASE_FILENAME = 'session.lock'
 
 /**
+ * Is this version component canonical? Mirrors the vendor
+ * `parseSessionFormatLogFilename` exactly: `[1-9][0-9]*` AND a safe integer
+ * (vendor `Number.isSafeInteger` rejects an out-of-range version as
+ * non-canonical). Without the upper bound the whitelist would call
+ * `session.v99999999999999999999.jsonl` removable while the vendor calls it
+ * non-canonical — the opposite of the fail-closed direction the surrounding
+ * refusal relies on (2026-09 二轮 W1 N13).
+ */
+function isCanonicalVersion(version: string | undefined): boolean {
+  return version === undefined || Number.isSafeInteger(Number(version))
+}
+
+/**
  * Is this filename one canonical immutable generation artifact? Mirrors the
  * vendor `sessionFormatLogFilename` + compression suffix: `session.jsonl`,
- * `session.vN.jsonl` (N >= 1, no leading zero) and either with a trailing
- * `.zstd`. Version-zero-tagged and non-canonical names do not match.
+ * `session.vN.jsonl` (N >= 1, no leading zero, safe integer) and either with a
+ * trailing `.zstd`. Version-zero-tagged and non-canonical names do not match.
  */
 function isGenerationFilename(name: string): boolean {
-  return /^session(?:\.v[1-9][0-9]*)?\.jsonl(?:\.zstd)?$/.test(name)
+  const match = /^session(?:\.v([1-9][0-9]*))?\.jsonl(?:\.zstd)?$/.exec(name)
+  return match !== null && isCanonicalVersion(match[1])
 }
 
 /**
@@ -152,9 +166,25 @@ function isGenerationFilename(name: string): boolean {
  * `<generation>.<12 hex>.tmp` in the same directory, so an interrupted write
  * leaves one behind. It is this session's own artifact and belongs to the
  * purge; anything else in the directory still refuses the whole operation.
+ * The version bound matches {@link isGenerationFilename}.
  */
 function isGenerationTempFilename(name: string): boolean {
-  return /^session(?:\.v[1-9][0-9]*)?\.jsonl(?:\.zstd)?\.[0-9a-f]{12}\.tmp$/.test(name)
+  const match = /^session(?:\.v([1-9][0-9]*))?\.jsonl(?:\.zstd)?\.[0-9a-f]{12}\.tmp$/.exec(name)
+  return match !== null && isCanonicalVersion(match[1])
+}
+
+/**
+ * Is this filename a leftover MIGRATION staging file? The jsonl backend stages
+ * a vN->vM migration as `session.migration.<16 hex>.jsonl[.zstd].tmp` in the
+ * same Session directory (vendor `generation.ts` migration path; the token is
+ * `randomBytes(8).toString('hex')`), so an interrupted migration leaves one
+ * behind. It holds this session's own content (the migrated log), so the purge
+ * removes it with the rest; anything else still refuses the whole operation.
+ * 2026-09 二轮 (W2 F5): without this recognition a crashed migration made the
+ * session permanently unpurgeable (fail-closed refusal).
+ */
+function isMigrationTempFilename(name: string): boolean {
+  return /^session\.migration\.[0-9a-f]{16}\.jsonl(?:\.zstd)?\.tmp$/.test(name)
 }
 
 /* ------------------------------------------------------------------ */
@@ -370,13 +400,15 @@ export function makeHostBinding(ctx: HostCtxServices): ArchiveCleanupHost {
       // Fail-closed mapping:
       //  - a resolved snapshot => true (the id still materializes);
       //  - `undefined` => false — the ONLY answer that may clear a membership.
-      //    Upstream answers undefined for an absent log AND for a log it cannot
-      //    materialize (empty/corrupt head, unsupported encoding), so this gate
-      //    is fail-closed against THROWN errors, not against an unreadable
-      //    artifact: the domain follows upstream's own "is there a session
-      //    here?" answer, and an unreadable artifact's bytes are never deleted
-      //    by this purge (design 24 §22 note);
-      //  - ANY failure (corruption, unsupported format/version, transport/IO,
+      //    Upstream (jsonl backend) answers undefined for an absent log
+      //    (ENOENT) and for a head it cannot materialize (unparseable JSON /
+      //    malformed header) — NOT for every unreadable artifact: a corrupt
+      //    zstd frame, a generation/header version mismatch, a too-new stored
+      //    format version, or a non-ENOENT IO error all THROW (2026-09 二轮
+      //    vendor read; design 24 §22⑦). So this gate is fail-closed against
+      //    thrown errors, while an artifact upstream itself calls "no session"
+      //    clears the membership (its bytes are never deleted by this purge);
+      //  - ANY failure (corrupt zstd, unsupported/too-new format, transport/IO,
       //    absent service, drifted method shape) => true;
       //  - no stat surface at all => true (the sweep then skips entirely).
       // A false negative here would clear the membership of a session whose
@@ -483,9 +515,11 @@ export function makeHostBinding(ctx: HostCtxServices): ArchiveCleanupHost {
         // resolves only the CURRENT generation. Removing that single artifact
         // would leave every older generation on disk while the session
         // disappears from every official list — the opposite of a content
-        // purge. Delete every canonical generation file plus the lease, and
-        // refuse the whole operation on any unexpected entry so a drifted
-        // layout fails closed instead of half-deleting.
+        // purge. Delete every canonical generation file plus the lease and the
+        // two recognized temp classes (publish temp `<gen>.<12hex>.tmp`,
+        // migration staging `session.migration.<16hex>.jsonl[.zstd].tmp`), and
+        // refuse the whole operation on any OTHER entry so a drifted layout
+        // fails closed instead of half-deleting.
         const entries = await readdir(dir, { withFileTypes: true })
         const removable: string[] = []
         for (const entry of entries) {
@@ -495,7 +529,8 @@ export function makeHostBinding(ctx: HostCtxServices): ArchiveCleanupHost {
               `archiveCleanup: refusing to purge ${sessionId}: unexpected ${entry.isDirectory() ? 'directory' : entry.isSymbolicLink() ? 'symlink' : 'special file'} ${entry.name} in the session directory`,
             )
           }
-          if (entry.name === LEASE_FILENAME || isGenerationFilename(entry.name) || isGenerationTempFilename(entry.name)) {
+          if (entry.name === LEASE_FILENAME || isGenerationFilename(entry.name)
+            || isGenerationTempFilename(entry.name) || isMigrationTempFilename(entry.name)) {
             removable.push(join(dir, entry.name))
             continue
           }
@@ -553,7 +588,7 @@ export function makeHostBinding(ctx: HostCtxServices): ArchiveCleanupHost {
         // mirroring the registry's own insertBefore mutation; official
         // persistence + publication path (in-process, no out-of-process edit
         // — todo-12-B risk does not apply). Guarded at runtime; version-
-        // pinned to dsh-v0.1.2-rc.1 (design 24 §10/§11).
+        // pinned to dsh-v0.1.5-alpha.2 (design 24 §10/§11).
         await reg.setState!({ initialized: true, workspaceIds, archivedSessionIds: next })
       }
       try {

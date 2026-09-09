@@ -556,11 +556,19 @@ function assertHeaderShape(header) {
   if (h.origin !== void 0 && h.origin !== "subagent") malformed("origin", "exactly 'subagent' when present");
 }
 var LEASE_FILENAME = "session.lock";
+function isCanonicalVersion(version) {
+  return version === void 0 || Number.isSafeInteger(Number(version));
+}
 function isGenerationFilename(name) {
-  return /^session(?:\.v[1-9][0-9]*)?\.jsonl(?:\.zstd)?$/.test(name);
+  const match = /^session(?:\.v([1-9][0-9]*))?\.jsonl(?:\.zstd)?$/.exec(name);
+  return match !== null && isCanonicalVersion(match[1]);
 }
 function isGenerationTempFilename(name) {
-  return /^session(?:\.v[1-9][0-9]*)?\.jsonl(?:\.zstd)?\.[0-9a-f]{12}\.tmp$/.test(name);
+  const match = /^session(?:\.v([1-9][0-9]*))?\.jsonl(?:\.zstd)?\.[0-9a-f]{12}\.tmp$/.exec(name);
+  return match !== null && isCanonicalVersion(match[1]);
+}
+function isMigrationTempFilename(name) {
+  return /^session\.migration\.[0-9a-f]{16}\.jsonl(?:\.zstd)?\.tmp$/.test(name);
 }
 function headerToState(header) {
   assertHeaderShape(header);
@@ -750,7 +758,7 @@ function makeHostBinding(ctx) {
               `archiveCleanup: refusing to purge ${sessionId}: unexpected ${entry.isDirectory() ? "directory" : entry.isSymbolicLink() ? "symlink" : "special file"} ${entry.name} in the session directory`
             );
           }
-          if (entry.name === LEASE_FILENAME || isGenerationFilename(entry.name) || isGenerationTempFilename(entry.name)) {
+          if (entry.name === LEASE_FILENAME || isGenerationFilename(entry.name) || isGenerationTempFilename(entry.name) || isMigrationTempFilename(entry.name)) {
             removable.push(join(dir, entry.name));
             continue;
           }

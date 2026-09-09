@@ -8,9 +8,10 @@
  * ledger stores label thunks, which follow the active locale) — and notifies
  * only when the projection actually changes.
  *
- * The shell keeps the button; selection goes through `ctx.layout.selectPanel`,
- * which the sidebar's inject face probes (a gateway-hosted instance runs the
- * official ui-layout, whose `ILayout` has no `selectPanel`).
+ * The shell keeps the button; selection goes through `ctx.layout.selectPanel`
+ * directly (both the chamber layout fork and the alpha.2 official ui-layout
+ * declare it, so a missing method is a misconfiguration that must fail loud
+ * instead of silently dropping the click).
  */
 import type { HostObservable } from '@deepseek-ai/dsh-client-ui-slots'
 import type { MainPanelId } from '@deepseek-ai/dsh-client-ui-layout/client'

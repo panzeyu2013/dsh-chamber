@@ -16,8 +16,12 @@ the official `ui-sidebar` entry** — `sidebar.brand.mark`, `sidebar.brand.name`
 `sidebar.panellist`, `sidebar.workspaces`, `sidebar.settings`,
 `sidebar.footer.action` — so a section that targets any of those holes
 registers instead of failing on an undeclared slot. The standard-props kit also
-provides an empty `usePanelInfo` seat (stable snapshot reference) because the
-official settings components read it as a global standard prop.
+provides an empty `usePanelInfo` seat (stable snapshot reference) to keep the
+standard-prop SHAPE complete for any component that reads it; **no official
+settings component reads it today** (2026-09 二轮 source check: the only vendor
+readers are `ui-layout`'s frame/DocumentTitle and `ui-sidebar`'s panel row), and
+`useResource` is deliberately not seated for the same reason (add a seat the day
+a real consumer lands).
 
 ## Behavior
 
