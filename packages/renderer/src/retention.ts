@@ -84,8 +84,12 @@ export function decideReclaimCandidates(input: ReclaimDecisionInput): string[] {
     prewarmOriginIds,
     now,
   } = input
+  // 在途预热/收割壳不计入隐藏壳数（2026-12 复查）：它此刻通常尚未 settle、
+  // 本就不在 reclaimable 集合里，若计进 excess，收割窗口内候选就只剩用户的
+  // 温壳——它会被回收并写入抑制，用户最近用过的源白白失去温壳。该壳由收割
+  // 自身（推送/截止/放弃上限）或 settle 后的下一轮负责回收。
   const hiddenNonLocalCount = mountedViews.filter(
-    id => id !== localId && id !== activeViewId,
+    id => id !== localId && id !== activeViewId && id !== prewarmInflightId,
   ).length
   const excess = hiddenNonLocalCount - RETAINED_HIDDEN_VIEWS
   if (excess <= 0) return []

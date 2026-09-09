@@ -25,7 +25,7 @@
  * reportOpenSessionOutcome 回报每个侧边栏 shell——失败落在被点击的会话
  * 行内呈现，不再是单向通道的 console-only 盲区（2026-09 修订）。
  */
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import api, { type ConnectionSummary, type HealthResponse } from './api.ts'
 import {
   chamberBridge,
@@ -33,9 +33,12 @@ import {
   deriveServerWorkspaces,
   emptyAggregate,
   fetchInstanceSnapshot,
+  fetchManagedRuntimeState,
   getInstanceClient,
   instanceSnapshotSignature,
   isInstanceUnavailable,
+  managedRuntimeDown,
+  managedRuntimeUnusable,
   mergeRuntimeFacts,
   releaseInstanceClient,
   reconcileCompletedFacts,
@@ -101,6 +104,21 @@ import {
   shouldRunBackgroundPhase,
   VIEW_RECLAIM_TICK_MS,
 } from './retention.ts'
+import {
+  HARVEST_ABANDON_MS,
+  harvestAbandoned,
+  harvestAttemptStarted,
+  harvestDeadlinePassed,
+  harvestParked,
+  harvestParkedRecord,
+  harvestPending,
+  harvestRetryDue,
+  harvestSatisfied,
+  pickPrewarmTarget,
+  prewarmCandidates,
+  shouldReclaimHarvestedShell,
+  type HarvestRecord,
+} from './baseline-harvest.ts'
 import InstanceView from './components/InstanceView.tsx'
 import { PERF_MARKS, perfMark } from './perf-marks.ts'
 
@@ -146,6 +164,10 @@ const AGGREGATE_RETRY_LIMIT = 5
  * 没看但已在后台 boot 全量 UI"的壳；配合保留策略（retention.ts）把稳态
  * 壳数压到 local + 活动 + ≤1 隐藏 + ≤1 预热中，且仅前台推进。 */
 const MAX_PREWARMED_REMOTE_VIEWS = 1
+/** 问题 B：gateway 托管 dsh 状态轮询周期（仅前台，见 managed-runtime.ts）。 */
+const MANAGED_RUNTIME_POLL_MS = 15_000
+/** 单次托管 dsh 状态探针上限：悬挂的代理请求不得堵死轮询（单飞守卫）。 */
+const MANAGED_RUNTIME_PROBE_TIMEOUT_MS = 10_000
 /** 连接行（label/dshPort）低频轮询：状态本身走推送，行字段极少变化。 */
 const CONNECTIONS_POLL_MS = 30_000
 /** Cold-start roster failures retry quickly before the 30s steady-state poll. */
@@ -238,6 +260,7 @@ function deriveServers(
   completedBySource: Record<string, Record<string, boolean>>,
   activeViewId: string,
   pluginDiagnostics: Record<string, PluginGraphDiagnostic | undefined>,
+  managedRuntime: Record<string, string | null>,
 ): ChamberServerAggregate[] {
   const servers: ChamberServerAggregate[] = []
   const now = Date.now()
@@ -251,12 +274,34 @@ function deriveServers(
     statusKind?: TransportKind,
   ): void => {
     const statusKey = kind === 'local' ? id : (rawId ?? id)
-    const phase = kind === 'local'
+    const transportPhase = kind === 'local'
       ? (health?.dsh?.status ?? 'unknown')
       : (remoteStatus[statusKey]?.phase ?? 'idle')
+    // 问题 B 修复（2026-12）：gateway 形态的 ready 只证明 gateway 进程活着
+    // （desktop 的就绪探针读的就是 `/chamber/runtime/status`），托管 dsh 是
+    // 独立进程。把它的 connectionState 投影进该源——phase 走侧栏既有的状态点
+    // （status.stopped/error/restartExhausted 文案已存在），终态停机时
+    // connected=false 让动作入口按既有语义禁用而不是"可点但背后不可用"。
+    // 探针缺失/未知一律 fail open（不拿缺失的探针隐藏健康来源）。
+    // **只在该源的传输确实可用时**才认这条事实：`phase` 是"托管态 ∪ 传输态"的
+    // 合并值，而两套词表都含 `error`——若让消费者重新分类合并后的 phase，
+    // SSH/隧道失败会被误诊为"托管 dsh 停机"（2026-12 复查 BLOCKER）。
+    const runtimeState = kind === 'gateway' ? managedRuntime[id] : null
+    const transportUsable = kind === 'local'
+      ? transportPhase === 'ready'
+      : transportPhase === 'ready' || transportPhase === 'degraded'
+    const managedDown = kind === 'gateway' && transportUsable && managedRuntimeDown(runtimeState)
+    // 托管态的**瞬态**（starting/restarting）同样投影进 phase：此时隧道是好的、
+    // 但 dsh 还没起来，绿点会撒谎（2026-12 复查 MINOR）。degraded 保持传输态
+    // （设计 17 既有语义：degraded 仍可交互）。
+    const managedTransient = kind === 'gateway' && transportUsable
+      && (runtimeState === 'starting' || runtimeState === 'restarting')
+    const phase = managedDown || managedTransient ? runtimeState! : transportPhase
     let workspaces: ChamberServerAggregate['workspaces'] = []
     const aggregate = aggregates[id]
-    const connected = instanceConnected(
+    // 托管态瞬态（starting/restarting）同样不可用：dsh 还没服务，动作入口只会
+    // 503（与终态停机同一理由，2026-12 复查 MINOR）。phase 已携带忙碌点。
+    const connected = !managedDown && !managedTransient && instanceConnected(
       kind === 'local' ? 'local' : (statusKind ?? kind),
       health,
       remoteStatus,
@@ -295,6 +340,7 @@ function deriveServers(
       label,
       connected,
       phase,
+      ...(managedDown ? { managedRuntimeDown: true } : {}),
       workspaces,
       ...(archivedSessions === undefined ? {} : { archivedSessions, archiveSetKnown }),
       aggregateReady: aggregate !== undefined && aggregate.state === 'ok',
@@ -458,6 +504,20 @@ export default function App() {
   // 点开（selectView 清除）或来源从注册表删除（retireSources 清除）——否则
   // prewarmEligible 会立刻把刚回收的源重新 boot，回收空转（见 reclaimView）。
   const prewarmSuppressedRef = useRef<Set<string>>(new Set())
+  // 首屏基线收割（design 05 §2.3 / baseline-harvest.ts）：ready 但从未挂载过的
+  // 来源在后台预热槽里挂一次，拿到首个权威推送即回收——否则它稳态停留在
+  // unary 兜底视图（合成分组 + 空归档集）直到用户点击。harvestStateRef 是
+  // 每源账本（尝试次数/退避/是否已满足），harvestIntentRef 记录"当前这次挂载
+  // 是收割挂载"（提交推送、boot 失败、用户点开三条路径据此分流）。
+  const harvestStateRef = useRef<Record<string, HarvestRecord>>({})
+  const harvestIntentRef = useRef<Set<string>>(new Set())
+  // 仍需收割的来源（prewarmEligible 的渲染期镜像）：提交推送时据此决定"保留
+  // 最后收割的壳当温壳"还是"回收让位给下一个候选"。
+  const harvestCandidatesRef = useRef<Set<string>>(new Set())
+  // reclaimView 的 ref 镜像：定义在下方（依赖 mountedViews），而
+  // handleShellState / onInstanceSnapshot 是 [] 依赖的回调——它们只能经此
+  // 拿到最新闭包（同 reclaimHiddenViewsRef 纪律）。
+  const reclaimViewRef = useRef<(id: string, reason?: 'retention' | 'harvest') => void>(() => undefined)
   // 保留策略计时：每视图"连续隐藏"起点（ms epoch；活动视图无键）。settle
   // 完成或切走时置 now，重新选中删除，随 mountedViews 收敛清理（回收 effect
   // 内统一处理）。previousActiveViewRef 供 activeView 落地 effect 对比。
@@ -531,6 +591,9 @@ export default function App() {
   // 每实例运行时事实（06 §4）：来自各来源 ctx 的 chamberBridge 上报，仅附加
   const [runtimeFacts, setRuntimeFacts] = useState<Record<string, InstanceRuntimeReport | undefined>>({})
   const [hostFacts, setHostFacts] = useState<Record<string, HostFacts | undefined>>({})
+  // 问题 B（2026-12）：gateway 来源的托管 dsh connectionState（探针见下方
+  // managed-runtime.ts）。null = 探不到（fail open），键随来源生命周期收敛。
+  const [managedRuntime, setManagedRuntime] = useState<Record<string, string | null>>({})
   // chamber (06 §4.1, 2026-08)：App 自持的「完成未读」蓝点（completedBySource）
   // 与边沿记忆（prevRunningRef）。蓝点不依赖各来源 shell 的 selected——后台
   // 来源的陈旧 selected 会让 vendor 提醒错误压制「完成但未读」——而是由 App
@@ -554,8 +617,8 @@ export default function App() {
   // chamberBridge 投影（05 §3）：health/remoteStatus/aggregates 任一变化后
   // 派生并发布；首帧（health 未就绪）即发布 connected=false 的分组。
   const servers = useMemo(
-    () => deriveServers(health, connections, remoteInstances, remoteStatus, aggregates, hostFacts, runtimeFacts, completedBySource, activeView, pluginDiagnostics),
-    [health, connections, remoteInstances, remoteStatus, aggregates, hostFacts, runtimeFacts, completedBySource, activeView, pluginDiagnostics],
+    () => deriveServers(health, connections, remoteInstances, remoteStatus, aggregates, hostFacts, runtimeFacts, completedBySource, activeView, pluginDiagnostics, managedRuntime),
+    [health, connections, remoteInstances, remoteStatus, aggregates, hostFacts, runtimeFacts, completedBySource, activeView, pluginDiagnostics, managedRuntime],
   )
   // chamberBridge publish 签名闸（2026-08 perf pass）：servers 在每次依赖变化
   // 时都会重建（含聚合快照上报/兜底、30s 注册表轮询、状态推送的恒新对象），但
@@ -569,6 +632,86 @@ export default function App() {
     lastServersSignatureRef.current = signature
     chamberBridge.publish(servers)
   }, [servers])
+
+  // 问题 B（2026-12）：gateway 来源的托管 dsh 状态探针。desktop 的 ready 只
+  // 证明 gateway 进程活着，托管 dsh 是独立进程——不消费 connectionState 时，
+  // 停机窗口里的来源"可点但背后不可用"（`+` 建会话必失败、状态显示缺失）。
+  // 探针只跑 gateway 来源、仅前台、15s 一轮；探不到（非 200/代理失败/未挂载
+  // 隧道）一律 null = fail open（见 managed-runtime.ts 头注）。
+  // 探针函数另存 ref：前台恢复补偿要在 drain 之前先刷新一轮，否则窗口隐藏
+  // 期间（探针被跳过）首次 drain 可能把一个托管 dsh 已停机的源拿去收割/预热
+  // （2026-12 复查 MINOR-1）。
+  const probeManagedRuntimeRef = useRef<() => Promise<void>>(async () => undefined)
+  useEffect(() => {
+    const gatewayIds = remoteInstances
+      .filter(instance => instance.kind === 'gateway')
+      .map(sourceIdForInstance)
+    const live = new Set(gatewayIds)
+    setManagedRuntime(prev => {
+      const next: Record<string, string | null> = {}
+      let changed = false
+      for (const [id, state] of Object.entries(prev)) {
+        if (!live.has(id)) {
+          changed = true
+          continue
+        }
+        next[id] = state
+      }
+      return changed ? next : prev
+    })
+    if (gatewayIds.length === 0) return
+    let cancelled = false
+    let inFlight: Promise<void> | null = null
+    const controller = new AbortController()
+    // 单飞 + 单次探针超时（问题 B 复查 MINOR-3）：代理悬挂时既不堆叠请求，
+    // 也不会永久堵死轮询（15s 周期 × 10s 上限 ⇒ 每轮至多一个在途请求）。
+    const probeSignal = (): AbortSignal => {
+      const timeout = typeof AbortSignal.timeout === 'function'
+        ? AbortSignal.timeout(MANAGED_RUNTIME_PROBE_TIMEOUT_MS)
+        : undefined
+      if (timeout === undefined || typeof AbortSignal.any !== 'function') return controller.signal
+      return AbortSignal.any([controller.signal, timeout])
+    }
+    const probe = (): Promise<void> => {
+      // 单飞返回**同一个在途 promise**（不是 no-op）：可见性恢复补偿要先等
+      // 探针落地再 drain，否则 drain 会读到 15s tick 留下的旧投影，把一个已
+      // 停机的 gateway 源拿去收割（白烧一次尝试；2026-12 复查 NIT）。
+      if (inFlight !== null) return inFlight
+      if (!shouldRunBackgroundPhase(document.visibilityState)) return Promise.resolve()
+      const run = (async (): Promise<void> => {
+      try {
+        const signal = probeSignal()
+        const entries = await Promise.all(gatewayIds.map(async id =>
+          [id, await fetchManagedRuntimeState(id, { signal })] as const))
+        if (cancelled) return
+        setManagedRuntime(prev => {
+          let changed = false
+          const next = { ...prev }
+          for (const [id, state] of entries) {
+            if (next[id] !== state) {
+              next[id] = state
+              changed = true
+            }
+          }
+          return changed ? next : prev
+        })
+      } finally {
+        inFlight = null
+      }
+      })()
+      inFlight = run
+      return run
+    }
+    void probe()
+    probeManagedRuntimeRef.current = probe
+    const timer = setInterval(() => { void probe() }, MANAGED_RUNTIME_POLL_MS)
+    return () => {
+      cancelled = true
+      controller.abort()
+      probeManagedRuntimeRef.current = async () => undefined
+      clearInterval(timer)
+    }
+  }, [remoteInstances])
 
   // 注册表 id 的命令式权威集合：selectView 与 openSession 在 apply 时用它拒绝
   // 已回收来源（视图生命周期 = 注册表条目生命周期，05 §4）。This is not a render
@@ -616,6 +759,9 @@ export default function App() {
         autoPrewarmedRef.current.delete(id)
         // 保留策略：注册表删除 = 生命周期终结，抑制键随视图一起收敛。
         prewarmSuppressedRef.current.delete(id)
+        // 收割账本同源收敛：同 id 重新注册 = 新来源代，账本从零开始。
+        delete harvestStateRef.current[id]
+        harvestIntentRef.current.delete(id)
         disposeInstanceShell(id)
         chamberBridge.clearPluginDiagnostic(id)
       }
@@ -866,6 +1012,9 @@ export default function App() {
       // 保留策略：注册表删除的源不再占用"回收后不自动预热"键（与其它
       // ref 键空间同纪律随生命周期收敛）。
       prewarmSuppressedRef.current.delete(sourceId)
+      // 收割账本/意图随来源生命周期收敛（同 id 重新注册 = 新来源代）。
+      delete harvestStateRef.current[sourceId]
+      harvestIntentRef.current.delete(sourceId)
       chamberBridge.retireInstanceProducers(sourceId)
       disposeInstanceShell(sourceId)
       releaseInstanceClient(sourceId)
@@ -904,6 +1053,7 @@ export default function App() {
     )
     if (prewarmInflightRef.current !== null && retired.has(prewarmInflightRef.current)) {
       prewarmInflightRef.current = null
+      prewarmInflightAtRef.current = 0
     }
 
     // Queue every React owner deletion before any roster render. A replacement
@@ -916,6 +1066,9 @@ export default function App() {
     setSnapshotSources(prev => withoutRemovedSourceKeys(prev, retired))
     setRuntimeFacts(prev => withoutRemovedSourceKeys(prev, retired))
     setPluginDiagnostics(prev => withoutRemovedSourceKeys(prev, retired))
+    // 托管 dsh 状态同源收敛（问题 B 复查 MINOR-4）：轮询 effect 的 roster 差分
+    // 是异步的，同 id 重新注册在那一拍之前会读到上一代的 stopped/error。
+    setManagedRuntime(prev => withoutRemovedSourceKeys(prev, retired))
     setCompletedBySource(prev => withoutRemovedSourceKeys(prev, retired))
     const removedRawIds = new Set([...retired]
       .map(rawInstanceIdFromSourceId)
@@ -1358,14 +1511,34 @@ export default function App() {
   // watchdog（隐藏期暂停的 30s 兜底/stale 拉取在此收敛，含已回收源）、
   // 空闲预热队列与保留回收检查。三个目标都是 ref 镜像的最新闭包。
   useEffect(() => {
+    let compensationTimer: number | undefined
+    let disposed = false
     const onVisibilityChange = (): void => {
       if (document.visibilityState !== 'visible') return
       runStalenessWatchdogRef.current()
-      drainPrewarmRef.current()
-      reclaimHiddenViewsRef.current()
+      // 托管 dsh 状态**先刷新完再** drain：隐藏期探针被跳过，若并行 drain 会
+      // 读到期前的 managedRuntime 投影，把一个已停机的 gateway 源拿去收割/预热
+      // （白烧一次尝试；复查 MINOR-2）。
+      // 探针 promise 在微任务里 resolve，而 React 要到下一个宏任务才提交
+      // setManagedRuntime——直接 drain 会读到探针前的投影（2026-12 复查
+      // MINOR）。延后一个宏任务，让补偿真正看到新事实；定时器随卸载清理，
+      // 探针 reject 也不能让补偿整条腿消失（复查 NIT）。
+      probeManagedRuntimeRef.current().then(() => {
+        if (disposed) return
+        compensationTimer = window.setTimeout(() => {
+          compensationTimer = undefined
+          if (document.visibilityState !== 'visible') return
+          drainPrewarmRef.current()
+          reclaimHiddenViewsRef.current()
+        }, 0)
+      }).catch(() => undefined)
     }
     document.addEventListener('visibilitychange', onVisibilityChange)
-    return () => document.removeEventListener('visibilitychange', onVisibilityChange)
+    return () => {
+      disposed = true
+      if (compensationTimer !== undefined) window.clearTimeout(compensationTimer)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+    }
   }, [])
 
   useEffect(() => () => {
@@ -1760,6 +1933,11 @@ export default function App() {
     // 用户主动点开 = 意图使用：解除"回收后不自动预热"抑制（此后闲置仍会被
     // 再次回收并再次抑制）。
     prewarmSuppressedRef.current.delete(viewId)
+    // 收割中被点开 = 采用为用户视图：撤销收割意图（绝不回收用户正在看的壳），
+    // 账本记为已满足——这次挂载的首个推送（或用户自己的 boot）即权威基线。
+    if (harvestIntentRef.current.delete(viewId)) {
+      harvestStateRef.current[viewId] = harvestSatisfied(harvestStateRef.current[viewId])
+    }
     // 镜像查重（非闭包）：在途/顺延中的同一意图直接跳过；已落地视图只有在
     // 无在途意图时才跳过——过渡在途时 UI 仍显示旧视图，点击旧视图 = 撤销
     // 意图（最后一次意图胜出，view-transition.ts），不能按当前态误丢。
@@ -1895,6 +2073,12 @@ export default function App() {
   const localSettledRef = useRef(false)
   const prewarmQueueRef = useRef<string[]>([])
   const prewarmInflightRef = useRef<string | null>(null)
+  // 在途挂载的挂载时刻（绝对放弃上限用；0 = 无在途）。与 prewarmInflightRef
+  // 同生命周期：drainPrewarm 置位，settle / 退役 / 回收清除。
+  const prewarmInflightAtRef = useRef(0)
+  // 每个挂载视图的挂载时刻：绝对放弃上限按**视图**判定，不能只看预热在途
+  // （用户点开/深链挂载的壳同样可能挂死；2026-12 复查 MAJOR）。
+  const viewBootStartedAtRef = useRef<Record<string, number>>({})
 
   /**
    * 渲染期镜像（与 commit 同步，微任务安全）：settle 微任务可能先于 effect
@@ -1922,21 +2106,64 @@ export default function App() {
     const retentionSlotOccupied = mountedViews.some(id =>
       id !== LOCAL_INSTANCE_ID
       && id !== activeView
-      && !autoPrewarmedRef.current.has(id))
-    const remaining = retentionSlotOccupied
+      && !autoPrewarmedRef.current.has(id)
+      // 已失败的用户壳（error !== null）不算占用：它既不会被回收（隐藏 1 壳
+      // 时 excess=0）也不是预热壳，若算占用则 remaining 恒 0、收割链整场停摆
+      // （2026-12 复查 MINOR-2：用户点开一个停机 gateway → boot 失败 → 切回）。
+      && shellStates[id]?.error == null)
+    // 只统计"仍挂载且未失败"的预热壳：一个 boot 失败的预热壳会一直挂在
+    // autoPrewarmedRef 里且不会被回收（无收割意图、excess=0），若计进占用则
+    // warmRemaining 恒 0（2026-12 复查 MINOR-3）。
+    const liveAutoPrewarmed = mountedViews.filter(id =>
+      autoPrewarmedRef.current.has(id) && shellStates[id]?.error == null).length
+    const warmRemaining = retentionSlotOccupied
       ? 0
-      : Math.max(0, MAX_PREWARMED_REMOTE_VIEWS - autoPrewarmedRef.current.size)
-    const eligible = remoteInstances
-      .filter(instance => remoteStatus[instance.id]?.phase === 'ready')
+      : Math.max(0, MAX_PREWARMED_REMOTE_VIEWS - liveAutoPrewarmed)
+    const readyUnmountedIds = remoteInstances
+      // `phase === 'ready'` 之外再过一道 instanceConnected：remoteStatus 以 raw id
+      // 为键，kind 切换（ssh↔http）后可能残留旧 READY 投影，status.kind 不匹配时
+      // instanceConnected 会拒绝——否则会给其实未就绪的源白烧一次尝试
+      // （2026-12 复查 NIT）。
+      .filter(instance => remoteStatus[instance.id]?.phase === 'ready'
+        && instanceConnected(instance.kind, health, remoteStatus, instance.id))
+      // 托管 dsh 终态停机的 gateway 源不预热/不收割：壳 boot 必然失败（网关
+      // 侧 503），只会白烧尝试次数并占用唯一后台槽（问题 B 的投影事实在此
+      // 直接作为门控输入；用户启动托管 dsh 后本门随 15s 探针自动放开）。
+      .filter(instance => !(instance.kind === 'gateway'
+        && managedRuntimeUnusable(managedRuntime[sourceIdForInstance(instance)])))
       .map(sourceIdForInstance)
       .filter(id => !mountedViews.includes(id))
-      // 保留策略：被回收过的源不再自动预热——否则回收(拆壳)会立即被
-      // drainPrewarm 重新 boot(白回收循环)。抑制持续到用户主动点开
-      // （selectView 清除）或来源从注册表删除（retireSources 清除）。
+    // 收割优先（design 05 §2.3 / baseline-harvest.ts）：还没拿到权威基线的源
+    // 排在最前，且**不受**"回收后禁预热"抑制——收割正是这类源（从未推送、
+    // 或曾降级后被回收）的治本臂；抑制只为防止 drainPrewarm 立刻重 boot 已
+    // 回收的温壳，不能反过来把降级源永久钉在兜底视图里。
+    const harvestIds = readyUnmountedIds
+      .filter(id => harvestPending(harvestStateRef.current[id]))
+    harvestCandidatesRef.current = new Set(harvestIds)
+    // 保留策略：被回收过的源不再自动预热——否则回收(拆壳)会立即被
+    // drainPrewarm 重新 boot(白回收循环)。抑制持续到用户主动点开
+    // （selectView 清除）或来源从注册表删除（retireSources 清除）。
+    // 另外排除"尝试耗尽且从未拿到基线"的源（harvestParked）：它若退回普通
+    // 预热会白拿第三次 boot，并以 autoPrewarmed 身份长期占用唯一后台槽
+    // （隐藏 1 壳时 retention 不会回收它）——此后本会话再没有任何源能预热
+    // 或收割（2026-12 复查 MAJOR-2）。
+    const warmIds = readyUnmountedIds
       .filter(id => !prewarmSuppressedRef.current.has(id))
-      .slice(0, remaining)
-    return new Set(eligible)
-  }, [remoteInstances, remoteStatus, mountedViews, activeView])
+      .filter(id => !harvestParked(harvestStateRef.current[id]))
+      .filter(id => !harvestIds.includes(id))
+    // 收割候选在场时**独占**后台槽（prewarmCandidates）：若让温壳顶上来，它会
+    // 变成 autoPrewarmed，而隐藏 1 壳时 retention 不会回收它 ⇒ remaining 恒 0、
+    // 本会话剩余来源永远拿不到基线（一个失败源阻塞全部——违反正确性不变量；
+    // 2026-12 复查 MAJOR-1）。退避期空转槽位是有界代价，收割全部结束/停用后
+    // 温壳预热照常恢复。
+    // **收割有自己的预算线**：用户保留的隐藏温壳会让 warmRemaining 恒 0
+    // （retention 只保 1 个隐藏壳），但收割壳是瞬时的（推送即回收 / 仅最后
+    // 一个保留 / 有截止与放弃上限），不能被用户温壳永久挡死——否则用户点开过
+    // 任何来源之后，后变 ready 的来源永远停在兜底视图（2026-12 复查 MAJOR-1
+    // 的第二形态）。
+    const slotBudget = harvestIds.length > 0 ? MAX_PREWARMED_REMOTE_VIEWS : warmRemaining
+    return new Set(prewarmCandidates(harvestIds, warmIds, slotBudget))
+  }, [remoteInstances, remoteStatus, mountedViews, activeView, managedRuntime, shellStates])
   prewarmEligibleRef.current = prewarmEligible
 
   const drainPrewarm = useCallback(() => {
@@ -1945,19 +2172,34 @@ export default function App() {
     // 2026 性能整改：仅前台推进预热——窗口隐藏期不为"用户没看"的源继续
     // boot 全量 UI（恢复可见由 visibilitychange 补偿一轮 drain）。
     if (!shouldRunBackgroundPhase(document.visibilityState)) return
-    let next: string | undefined
-    do {
-      next = prewarmQueueRef.current.shift()
-    } while (next !== undefined && !prewarmEligibleRef.current.has(next))
+    const now = Date.now()
+    const pendingOf = (id: string): boolean => harvestPending(harvestStateRef.current[id])
+    const dueOf = (id: string): boolean => harvestRetryDue(harvestStateRef.current[id], now)
+    // 选取顺序（baseline-harvest.pickPrewarmTarget）：退避已满的收割候选优先，
+    // 其次温壳；退避中的收割候选被跳过而不是挡住它后面的温壳。
+    const next = pickPrewarmTarget(prewarmQueueRef.current, prewarmEligibleRef.current, pendingOf, dueOf)
     if (next === undefined) return
+    prewarmQueueRef.current = prewarmQueueRef.current.filter(id => id !== next)
+    // 这次挂载是否为收割挂载：未满足基线的源都是（提交推送/ boot 失败 /
+    // 用户点开三条路径据此分流，见 onInstanceSnapshot / handleShellState /
+    // selectView）。
+    if (pendingOf(next)) {
+      harvestIntentRef.current.add(next)
+      harvestStateRef.current[next] = harvestAttemptStarted(harvestStateRef.current[next], now)
+    }
     prewarmInflightRef.current = next
+    prewarmInflightAtRef.current = now
     autoPrewarmedRef.current.add(next)
     setMountedViews(prev => (prev.includes(next) ? prev : [...prev, next]))
   }, [])
 
   const handleInstanceSettled = useCallback((instanceId: string) => {
+    delete viewBootStartedAtRef.current[instanceId]
     if (instanceId === LOCAL_INSTANCE_ID) localSettledRef.current = true
-    if (prewarmInflightRef.current === instanceId) prewarmInflightRef.current = null
+    if (prewarmInflightRef.current === instanceId) {
+      prewarmInflightRef.current = null
+      prewarmInflightAtRef.current = 0
+    }
     // 保留策略：settle 完成才起 60s 回收窗——隐藏视图（预热完成/切走后
     // settle）从此刻计"可回收时长"，boot 耗时不被白付；活动视图保持无键。
     if (instanceId === activeViewRef.current) delete hiddenSinceRef.current[instanceId]
@@ -1971,7 +2213,17 @@ export default function App() {
   const handleShellState = useCallback((instanceId: string, state: ShellState) => {
     // 注：settle/boot-failed 的 perf 标记由 shell.ts 在 settle 返回点统一打点
     // （本回调只消费状态，避免同名双标记污染 trace）。
+    // 重新进入 booting/idle（「重试」复位）即重新计时：否则在放弃后很久才重试的
+    // 视图会立刻被同一轮清扫再判超时（2026-12 复查 MINOR）。
+    if (!state.booted && state.error === null) viewBootStartedAtRef.current[instanceId] = Date.now()
     setShellStates(prev => (prev[instanceId] === state ? prev : { ...prev, [instanceId]: state }))
+    // 收割挂载 boot 失败：本次尝试失败（尝试计数与退避已随 attempt 武装），
+    // 立即释放该壳——失败壳占着后台槽，也让来源停在兜底视图；重试由退避
+    // 期满后的 drain 承担（attempts 上限见 baseline-harvest.ts）。
+    if (state.error !== null && harvestIntentRef.current.has(instanceId)) {
+      harvestIntentRef.current.delete(instanceId)
+      reclaimViewRef.current(instanceId, 'harvest')
+    }
   }, [])
 
   // ---- N-ctx 保留策略（2026 性能整改，纯函数与语义见 src/retention.ts）----
@@ -1984,6 +2236,25 @@ export default function App() {
     }
     return settled
   }, [shellStates])
+
+  /** 把"永不 settle 的挂载"标记为失败：让既有失败覆盖层与重试出现（该壳若是
+   * 活动/待开视图则不可回收，见 reclaimHiddenViews 的绝对放弃臂）。 */
+  const markAbandonedShellFailed = useCallback((id: string) => {
+    // 重新计时（2026-12 复查 MAJOR）：否则用户点「重试」后，挂载时刻仍是原值，
+    // 同一轮清扫会立刻再次判超时——覆盖层原地复活、新 boot 永远看不到，切走还会
+    // 把在途重试的壳按保留策略回收掉。
+    viewBootStartedAtRef.current[id] = Date.now()
+    setShellStates(prev => ({
+      ...prev,
+      [id]: {
+        instanceId: id,
+        basePath: instanceBasePath(id),
+        booted: false,
+        booting: false,
+        error: `实例启动超时：挂载后 ${Math.round(HARVEST_ABANDON_MS / 1000)} 秒未收到任何响应（可重试或切换来源）`,
+      },
+    }))
+  }, [])
 
   /**
    * 回收一个超限隐藏壳（幂等）。与注册表删除分支（retireSources）的区别：
@@ -1999,14 +2270,23 @@ export default function App() {
    * runtime-facts 通道撤回而暂停，直至该源重开（冷 boot 首报重新播种）——
    * 60s 安全窗 + RETAINED_HIDDEN_VIEWS=1 限制损失面，登记于 STATUS.md。
    */
-  const reclaimView = useCallback((id: string) => {
+  const reclaimView = useCallback((id: string, reason: 'retention' | 'harvest' = 'retention') => {
     if (id === LOCAL_INSTANCE_ID || !mountedViews.includes(id)) return
     if (id === activeViewRef.current || id === pendingViewRef.current) return
+    // 收割回收时后台槽就是它自己：boot 已产出首个推送（或已失败），先释放槽位
+    // 再回收，否则 prewarmInflight 守卫会把自己挡回去（保留回收语义不变）。
+    if (reason === 'harvest' && prewarmInflightRef.current === id) {
+      prewarmInflightRef.current = null
+      prewarmInflightAtRef.current = 0
+    }
     if (id === prewarmInflightRef.current) return
+    harvestIntentRef.current.delete(id)
     autoPrewarmedRef.current.delete(id)
     // 保留策略：回收后禁止自动预热（否则 drainPrewarm 立刻重新 boot 它，
     // 回收空转）；用户主动点开（selectView）或注册表删除（retireSources）时清除。
-    prewarmSuppressedRef.current.add(id)
+    // 收割回收不写抑制键：它回收的是"已经拿到基线（或按上限放弃）"的源，
+    // 抑制键会把从未推送的降级源永久钉在兜底视图里，与收割目的相反。
+    if (reason === 'retention') prewarmSuppressedRef.current.add(id)
     prewarmQueueRef.current = withoutRemovedSourceIds(prewarmQueueRef.current, new Set([id]))
     if (prewarmEligibleRef.current.has(id)) {
       const next = new Set(prewarmEligibleRef.current)
@@ -2030,9 +2310,58 @@ export default function App() {
   }, [mountedViews])
 
   /** 保留策略检查：仅前台执行（窗口隐藏期不拆壳；恢复可见由
-   * visibilitychange 补偿一轮）。守卫与上限见 decideReclaimCandidates。 */
+   * visibilitychange 补偿一轮）。守卫与上限见 decideReclaimCandidates。
+   * 同轮承担收割超时清扫：挂载后 HARVEST_DEADLINE_MS 内没有权威推送 = 本次
+   * 尝试失败，释放后台槽（尝试上限与退避已随 attempt 武装）。 */
   const reclaimHiddenViews = useCallback(() => {
     if (!shouldRunBackgroundPhase(document.visibilityState)) return
+    const now = Date.now()
+    for (const id of [...harvestIntentRef.current]) {
+      const record = harvestStateRef.current[id]
+      if (record === undefined) continue
+      if (harvestDeadlinePassed(record, now) && settledViewIds.has(id)) {
+        // 只在壳已 settle 后按截止值判超时：boot 预算 60s（shell.ts
+        // BOOT_TIMEOUT_MS），截止值高于它——settle 前只可能是排队/在途 boot。
+        harvestIntentRef.current.delete(id)
+        reclaimView(id, 'harvest')
+        continue
+      }
+      if (harvestAbandoned(record, now)) {
+        // 绝对上限：壳**始终**不 settle（挂死的 loader/fetch）时截止臂永远
+        // 不可达，而后台槽被 prewarmInflight 永久占住。此时回收并**停用**
+        // 该源（attempts 打满 → harvestParked），否则重试会撞进同一个挂死。
+        harvestIntentRef.current.delete(id)
+        harvestStateRef.current[id] = harvestParkedRecord()
+        reclaimView(id, 'harvest')
+      }
+    }
+    // 绝对放弃臂（2026-12 复查 MAJOR）：上面的截止臂只扫 harvestIntentRef，而
+    // "用户点开正在收割的壳"会撤销意图、普通温壳预热从不写意图、selectView/深链
+    // 挂载的壳更与预热无关——boot 挂死时后台槽/该视图就永久卡住。这里按**每个挂载
+    // 视图的挂载时刻**独立兜底：只判仍未 settle 的挂载（已 settle 的走上方的截止
+    // 臂），超上限后按身份分流。
+    for (const id of mountedViews) {
+      if (settledViewIds.has(id)) continue
+      const startedAt = viewBootStartedAtRef.current[id]
+      if (startedAt === undefined || now - startedAt < HARVEST_ABANDON_MS) continue
+      const wasHarvest = harvestIntentRef.current.has(id)
+      if (wasHarvest) {
+        harvestIntentRef.current.delete(id)
+        harvestStateRef.current[id] = harvestParkedRecord()
+      }
+      if (prewarmInflightRef.current === id) {
+        prewarmInflightRef.current = null
+        prewarmInflightAtRef.current = 0
+      }
+      if (id === activeViewRef.current || id === pendingViewRef.current) {
+        // 活动/待开视图不可回收（reclaimView 会拒绝）。若不标记，用户会永久停在
+        // boot 蒙层上（无错误、无重试）——标记为失败让既有失败覆盖层 + 重试出现。
+        markAbandonedShellFailed(id)
+      } else {
+        // 隐藏视图：收割壳不写抑制键（它可能仍需重试），用户/温壳按保留策略回收。
+        reclaimView(id, wasHarvest ? 'harvest' : 'retention')
+      }
+    }
     const candidates = decideReclaimCandidates({
       mountedViews,
       activeViewId: activeViewRef.current,
@@ -2056,7 +2385,20 @@ export default function App() {
   useEffect(() => {
     reclaimHiddenViewsRef.current = reclaimHiddenViews
     drainPrewarmRef.current = drainPrewarm
+    reclaimViewRef.current = reclaimView
   })
+
+  // 共享文档的主题投影归属（N-ctx 硬化，design 06）：文档级 color-scheme /
+  // body 调色板属性是 DOCUMENT-global 的，而本形态把 N 个实例壳挂在同一份
+  // 文档里——每个挂载中的视图都跑自己的 ui-layout theme presenter。App 是
+  // 「谁在屏上」的唯一权威，把它发布到 page-wide chamberBridge；ui-layout
+  // fork 的 document-theme 投影器据此只让活动视图写文档（详见
+  // packages/dsh-chamber-client-ui-layout/src/client/document-theme.ts）。
+  // useLayoutEffect：必须在切换视图的那一帧**绘制前**发布，否则主题不同的两个
+  // 视图互切会先画一帧旧调色板（2026-12 复查 MINOR-2）。
+  useLayoutEffect(() => {
+    chamberBridge.setActiveSource(activeView)
+  }, [activeView])
 
   // 活动视图落地即重计隐藏窗：离开活动的旧视图开始计时，新活动视图清计时。
   // 覆盖 selectView 过渡 apply、注册表删除回落（fallback 到 local）等一切路径；
@@ -2076,6 +2418,14 @@ export default function App() {
     for (const id of Object.keys(hiddenSinceRef.current)) {
       if (!live.has(id)) delete hiddenSinceRef.current[id]
     }
+    // 挂载时刻（绝对放弃上限的基准；settle 时清除）。
+    const now = Date.now()
+    for (const id of mountedViews) {
+      if (viewBootStartedAtRef.current[id] === undefined) viewBootStartedAtRef.current[id] = now
+    }
+    for (const id of Object.keys(viewBootStartedAtRef.current)) {
+      if (!live.has(id)) delete viewBootStartedAtRef.current[id]
+    }
     reclaimHiddenViews()
   }, [mountedViews, reclaimHiddenViews])
 
@@ -2085,9 +2435,27 @@ export default function App() {
   useEffect(() => {
     const timer = setInterval(() => {
       reclaimHiddenViewsRef.current()
+      // 退避期满的重试不能只靠 30s roster 轮询带来的重渲染驱动（轮询失败时
+      // 后台槽会无限空转）：同一 tick 补一次 drain（复查 MINOR-4）。
+      drainPrewarmRef.current()
     }, VIEW_RECLAIM_TICK_MS)
     return () => { clearInterval(timer) }
   }, [])
+
+  // 温壳为收割让位（2026-12 复查 M3）：把最后收割的壳留在温壳位省了一次 boot，
+  // 但该壳（autoPrewarmed + 隐藏）会占住唯一后台槽且不被 retention 回收——一旦
+  // 出现新的收割候选，它必须让位，否则后变 ready 的来源永远拿不到基线（与
+  // "一个失败实体不得阻塞其它"同源）。已有权威聚合，回收只是拆壳。
+  useEffect(() => {
+    if (!shouldRunBackgroundPhase(document.visibilityState)) return
+    if (harvestCandidatesRef.current.size === 0) return
+    const warm = mountedViews.find(id =>
+      id !== LOCAL_INSTANCE_ID
+      && id !== activeView
+      && autoPrewarmedRef.current.has(id)
+      && harvestStateRef.current[id]?.satisfied === true)
+    if (warm !== undefined) reclaimView(warm, 'harvest')
+  }, [mountedViews, activeView, prewarmEligible, reclaimView])
 
   useEffect(() => {
     const eligible = prewarmEligibleRef.current
@@ -2462,6 +2830,25 @@ export default function App() {
           && instanceSnapshotSignature(current) === instanceSnapshotSignature(snapshot)) return prev
         return { ...prev, [sourceId]: { state: 'ok', ...snapshot, error: null } }
       })
+      // 收割完成（design 05 §2.3）：该源的首个挂载推送就是权威基线（真实
+      // 工作区分组 + 归档集，`archiveSetKnown:true`）——标记已满足并立即回收
+      // 后台壳，来源转入已上线的"已回收来源"态（30s unary merge 刷新会话行）。
+      // 非收割挂载的推送同样满足基线需求（用户点开、retention 温壳、退避后
+      // 被用户抢先点开）：不标记会让已推送过的源在回收后又被收割白 boot 一次。
+      if (harvestIntentRef.current.has(sourceId)) {
+        harvestIntentRef.current.delete(sourceId)
+        harvestStateRef.current[sourceId] = harvestSatisfied(harvestStateRef.current[sourceId])
+        // 保留**最后收割的壳当温壳**（2026-12 复查 M3/N2）：省掉一次完整后台
+        // boot，并让该源的运行时状态事实（pending/完成点）保持在线；仅当还有
+        // 别的收割候选时才回收，把唯一后台槽让给基线恢复。
+        if (shouldReclaimHarvestedShell(
+          harvestCandidatesRef.current,
+          sourceId,
+          id => harvestPending(harvestStateRef.current[id]),
+        )) reclaimViewRef.current(sourceId, 'harvest')
+      } else {
+        harvestStateRef.current[sourceId] = harvestSatisfied(harvestStateRef.current[sourceId])
+      }
     })
   }, [])
 

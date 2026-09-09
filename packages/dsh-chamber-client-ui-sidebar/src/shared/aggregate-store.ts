@@ -50,10 +50,20 @@ export interface ChamberServerAggregate {
   /** Registry identity used by desktop IPC. Never derive it by slicing a source-id prefix. */
   rawId?: string
   label: string
-  /** Local: dsh ready; remote: tunnel phase ready. */
+  /** Local: dsh ready; remote: tunnel phase ready; gateway: tunnel ready AND the managed dsh is not terminal-down. */
   connected: boolean
   /** Status text (ready/connecting/… projection). */
   phase: string
+  /**
+   * Gateway only: the managed dsh was probed into a terminal-down state while
+   * the TRANSPORT was up (`stopped`/`error`/`restart-exhausted`). A dedicated
+   * fact, never re-derived from `phase`: `phase` merges the managed state with
+   * the transport phase and both vocabularies contain `error`, so classifying
+   * the merged string would misdiagnose an SSH/tunnel failure as a stopped
+   * managed dsh (2026-12 review BLOCKER). Absent = not a gateway, transport
+   * down, probe missing, or a healthy/transient managed state (fail open).
+   */
+  managedRuntimeDown?: boolean
   workspaces: ChamberServerWorkspace[]
   /** True when the per-instance aggregate snapshot has actually landed
    *  (sessions; workspace groups derive from session cwd facts since
@@ -185,6 +195,8 @@ type RefreshListener = (sourceId: string) => void
  */
 type SessionListRefreshListener = (sourceId: string) => void
 type SourceListener = (sourceId: string) => void
+/** Page-wide active-view fact: the source whose shell is on screen, undefined until the App publishes. */
+type ActiveSourceListener = (sourceId: string | undefined) => void
 type RuntimeReportListener = (
   sourceId: string,
   report: InstanceRuntimeReport | undefined,
@@ -203,12 +215,21 @@ const openOutcomeListeners = new Set<OpenOutcomeListener>()
 const refreshListeners = new Set<RefreshListener>()
 const sessionListRefreshListeners = new Set<SessionListRefreshListener>()
 const activateSourceListeners = new Set<SourceListener>()
+const activeSourceListeners = new Set<ActiveSourceListener>()
 const runtimeReportListeners = new Set<RuntimeReportListener>()
 const snapshotReportListeners = new Set<SnapshotReportListener>()
 const pluginDiagnosticListeners = new Set<PluginDiagnosticListener>()
 let servers: ChamberServerAggregate[] = []
+let activeSourceId: string | undefined
 const runtimeReports: Record<string, InstanceRuntimeReport> = {}
 const runtimeProducerTokens: Record<string, number> = {}
+/** Boot generation of the ctx that currently owns each source's producers.
+ *  Registration is order-gated by this (see registerInstanceRuntimeProducer):
+ *  a hung earlier boot that resumes AFTER its successor registered must not
+ *  steal the producer token — its teardown clear() would then silence the
+ *  healthy successor for good (2026-12 review BLOCKER). */
+const runtimeProducerGenerations: Record<string, number> = {}
+const snapshotProducerGenerations: Record<string, number> = {}
 const runtimeProducerFingerprints: Record<string, string> = {}
 const instanceSnapshots: Record<string, InstanceSnapshot> = {}
 const snapshotProducerTokens: Record<string, number> = {}
@@ -326,6 +347,42 @@ export const chamberBridge = {
   },
 
   /**
+   * App-layer write: the source whose shell is currently on screen. This is
+   * the authoritative active-view fact of the shared document — consumers that
+   * must act for ONE view only (the ui-layout document theme projection, which
+   * writes document-global `color-scheme`/palette state) gate on it instead of
+   * guessing from DOM classes or mount order. Undefined means "not published":
+   * consumers fail OPEN, so a boot without the App layer keeps its previous
+   * unconditional behavior.
+   */
+  setActiveSource(sourceId: string | undefined): void {
+    if (sourceId === activeSourceId) return
+    activeSourceId = sourceId
+    // Per-listener isolation (same discipline as the layout facts fan-out): a
+    // throwing projector must not abort the publish for its siblings.
+    for (const listener of [...activeSourceListeners]) {
+      try {
+        listener(activeSourceId)
+      } catch (error) {
+        console.error('[dsh-chamber] active-source subscriber threw:', error)
+      }
+    }
+  },
+
+  /** Page-wide active-view fact; undefined until the App publishes. */
+  getActiveSource(): string | undefined {
+    return activeSourceId
+  },
+
+  /** Subscribe to active-view changes (fires on change only); returns the unsubscribe. */
+  onActiveSource(listener: ActiveSourceListener): () => void {
+    activeSourceListeners.add(listener)
+    return () => {
+      activeSourceListeners.delete(listener)
+    }
+  },
+
+  /**
    * Synchronously revoke every producer owned by one registry incarnation.
    * Shell disposal is async, so waiting for plugin cleanup leaves a window in
    * which the old ctx can report after the authoritative roster has already
@@ -338,6 +395,8 @@ export const chamberBridge = {
     const snapshotFingerprint = snapshotProducerFingerprints[sourceId]
     delete runtimeProducerTokens[sourceId]
     delete snapshotProducerTokens[sourceId]
+    delete runtimeProducerGenerations[sourceId]
+    delete snapshotProducerGenerations[sourceId]
     delete runtimeProducerFingerprints[sourceId]
     delete snapshotProducerFingerprints[sourceId]
     delete runtimeReports[sourceId]
@@ -351,10 +410,21 @@ export const chamberBridge = {
    * Token gating makes async teardown generation-safe: an old ctx's late
    * clear/report can never erase or overwrite the replacement ctx's facts.
    */
-  registerInstanceRuntimeProducer(sourceId: string, sourceFingerprint: string): {
+  registerInstanceRuntimeProducer(
+    sourceId: string,
+    sourceFingerprint: string,
+    bootGeneration?: number,
+  ): {
     report: (report: InstanceRuntimeReport) => void
     clear: () => void
   } {
+    // 代际栅栏：更老的 boot 迟到注册一律作废（返回惰性句柄）。两者都无代
+    // （测试/非 chamber 挂载）时保持原"后注册者胜"的语义。
+    const currentGeneration = runtimeProducerGenerations[sourceId]
+    if (bootGeneration !== undefined && currentGeneration !== undefined && bootGeneration < currentGeneration) {
+      return { report: () => undefined, clear: () => undefined }
+    }
+    if (bootGeneration !== undefined) runtimeProducerGenerations[sourceId] = bootGeneration
     const token = ++nextRuntimeProducerToken
     const previousFingerprint = runtimeProducerFingerprints[sourceId]
     runtimeProducerTokens[sourceId] = token
@@ -373,6 +443,7 @@ export const chamberBridge = {
         if (runtimeProducerTokens[sourceId] !== token) return
         delete runtimeProducerTokens[sourceId]
         delete runtimeProducerFingerprints[sourceId]
+        delete runtimeProducerGenerations[sourceId]
         if (runtimeReports[sourceId] === undefined) return
         delete runtimeReports[sourceId]
         for (const listener of [...runtimeReportListeners]) listener(sourceId, undefined, sourceFingerprint)
@@ -393,10 +464,20 @@ export const chamberBridge = {
    * token makes teardown generation-safe: a late cleanup from an old shell
    * cannot clear a newer shell's report for the same source.
    */
-  registerInstanceSnapshotProducer(sourceId: string, sourceFingerprint: string): {
+  registerInstanceSnapshotProducer(
+    sourceId: string,
+    sourceFingerprint: string,
+    bootGeneration?: number,
+  ): {
     report: (snapshot: InstanceSnapshot | undefined) => void
     clear: () => void
   } {
+    // 同 runtime producer：代际栅栏，迟到的老 boot 不得夺走生产权。
+    const currentGeneration = snapshotProducerGenerations[sourceId]
+    if (bootGeneration !== undefined && currentGeneration !== undefined && bootGeneration < currentGeneration) {
+      return { report: () => undefined, clear: () => undefined }
+    }
+    if (bootGeneration !== undefined) snapshotProducerGenerations[sourceId] = bootGeneration
     const token = ++nextSnapshotProducerToken
     const previousFingerprint = snapshotProducerFingerprints[sourceId]
     snapshotProducerTokens[sourceId] = token
@@ -420,6 +501,7 @@ export const chamberBridge = {
         if (snapshotProducerTokens[sourceId] !== token) return
         delete snapshotProducerTokens[sourceId]
         delete snapshotProducerFingerprints[sourceId]
+        delete snapshotProducerGenerations[sourceId]
         if (instanceSnapshots[sourceId] === undefined) return
         delete instanceSnapshots[sourceId]
         for (const listener of [...snapshotReportListeners]) listener(sourceId, undefined, sourceFingerprint)

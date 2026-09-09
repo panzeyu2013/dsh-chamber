@@ -493,8 +493,30 @@ subagent 复查的修复。除仓库特性外，前端形态与 OpenChamber 一�
   删除结果被解码丢弃。
 - P3：死样式/死 locale 清理、`createSourceOptions` 死条件、chip 双击误入
   重命名、detached/unborn 区分、禁用态透明度。
+- **2026-12 用户报告修复（来源分支无法以主 checkout 为 base）**：实机判别
+  确认 H1——host 侧 `gitWorktree/snapshot` 一直下发**完整**分支表
+  （`core.ts` `listBranches` → `git show-ref --heads`），排除完全发生在客户端
+  选择器：`CreateWorktreeDialog.tsx` 把主 checkout 当前分支从候选中过滤掉、
+  同时只把它作为**占位符**呈现（`startRef === ''` 时才是"主工作树 HEAD"），
+  于是①单分支仓库候选**必空**（实机：pve-vm-develop 两个仓库、harness 的
+  memcurio / dsh-mcp-scope）；②一旦 localStorage 记过任何分支
+  （实机 harness 仓库记住 `mobile`），主 checkout 分支被**永久遮蔽**且
+  MenuSelect 无清除项。修复：候选改为 `sourceBranchChoices()`（host 分支表
+  原样放行，主 checkout 分支可选——host 侧 `localBranchHead` 把它解析为该分支
+  HEAD；**仅当主 checkout 附着在分支上时**才与省略 `startRef` 等价，detached
+  时默认 base 是 detached commit），host 表缺失时回退所选仓库自身 worktree 分支
+  去重集（**该回退先于本次修复就已存在**，本次只去掉过滤器并抽出纯函数
+  `shared/git-facts.ts` + 单测 + 一条源码级回归钉子）；unborn（零提交）行在
+  回退集里被跳过（其分支名解析不到 commit，给出来只会把空选择器变成必败选择）。
+  **残留**：unborn 仓库 `branches` 必空 + 默认 base 40 零直送 git 无 preview 门
+  （代码面已知，实机无此形态）；detached/unborn 主 checkout 一旦记过分支，
+  MenuSelect 仍无"回到默认"入口（只影响这两种形态）；非 git 注册工作区不渲染
+  入口为**设计行为**（H2，非缺陷）；host 侧 `show-ref` 失败静默返回 `[]` 时
+  选择器只剩"已 checkout 的分支"且无自由输入回退（新-branch 页签；existing
+  页签已有 Input 回退），登记为后续小项。
 
-验证（v0.1.4）：`test:host-git` 76、`test:git` 53、sidebar/renderer-shell/
+验证（v0.1.4 轮次；计数为当轮快照，非当前值——当前 `test:git` 60、
+`test:host-git` 98）：`test:host-git` 76、`test:git` 53、sidebar/renderer-shell/
 desktop/connection/client-web/settings-bridge/connections 全绿、8 个
 typecheck（含根）、verify:i18n、build:host-git（dist 重建且与 src 字节级
 一致）、build:renderer。

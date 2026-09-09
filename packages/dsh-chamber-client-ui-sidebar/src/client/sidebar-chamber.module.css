@@ -182,6 +182,23 @@
   color: var(--dsw-alias-label-tertiary);
 }
 
+/* 来源级"数据不可信"说明行（2026-12：托管 dsh 停机 / 会话基线未就绪）——
+   与 searchStatus 同级的次级文本，但语义是来源状态而非搜索状态，故独立成类
+   （搜索样式改名/移除时不该连带影响它）。 */
+.sourceNote {
+  padding: 2px 4px 2px 22px;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* 说明行为常驻 live region（内容为空时零高）：插入即带内容的 region 不会被 AT
+   播报，因此容器必须一直在文档里，只换文本。 */
+.sourceNote:empty {
+  padding: 0;
+  line-height: 0;
+}
+
 /* 会话行渲染窗口的"还有 N 个会话"展开条（2026 性能整改 B2）——整行可点，
    视觉与 searchStatus 同级（次级文本），hover 转主文本。 */
 .sessionRowsMore {

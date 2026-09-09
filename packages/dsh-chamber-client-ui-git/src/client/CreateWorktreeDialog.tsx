@@ -11,7 +11,7 @@
 import { useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { Button, IconChevronRightOutline14, Input, Menu, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
 import { createFromPreview, gitCoordinator, previewCreate } from '../shared/coordinator.ts'
-import { createSourceOptions } from '../shared/git-facts.ts'
+import { createSourceOptions, sourceBranchChoices } from '../shared/git-facts.ts'
 import type { GitWorktreeSnapshot } from '../shared/types.ts'
 import type { WorkspaceGitInjected } from './injected.ts'
 import css from './SidebarGit.module.css'
@@ -226,24 +226,19 @@ export function CreateWorktreeDialog({
   const sourceBranchStorageKey = sourceRepo === undefined ? null : `dsh-chamber.git.source-branch.${sourceRepo.repoId}`
 
   // Existing-branch choices: the host's branch list (show-ref --heads)
-  // preferred, then the snapshot's known worktree branches as a fallback.
-  const existingBranchChoices = useMemo(() => {
-    const repoBranches = sourceRepo?.branches ?? []
-    if (repoBranches.length > 0) return repoBranches
-    // The fallback is scoped to the SELECTED repository: branches of other
-    // repos must not leak into this picker (P3-1).
-    const seen = new Set<string>()
-    const out: string[] = []
-    if (sourceRepo !== undefined) {
-      for (const worktree of sourceRepo.worktrees) {
-        if (worktree.branch !== null && !seen.has(worktree.branch)) {
-          seen.add(worktree.branch)
-          out.push(worktree.branch)
-        }
-      }
-    }
-    return out
-  }, [sourceRepo])
+  // preferred, then the snapshot's known worktree branches as a fallback. An
+  // unborn (zero-commit) row is skipped: its branch name resolves to no commit
+  // (`localBranchHead` → branch-not-found), so offering it would only turn an
+  // empty picker into a failing one.
+  const existingBranchChoices = useMemo(
+    () => sourceBranchChoices(
+      sourceRepo?.branches ?? [],
+      sourceRepo?.worktrees
+        .filter(worktree => worktree.headState !== 'unborn')
+        .map(worktree => worktree.branch) ?? [],
+    ),
+    [sourceRepo],
+  )
 
   // Restore the remembered source branch when the key and choices are ready
   // and the form still has no explicit choice (best-effort).
@@ -444,7 +439,12 @@ export function CreateWorktreeDialog({
               <MenuSelect
                 value={startRef}
                 placeholder={sourceBranch ?? t('sourceBranchDefault')}
-                options={existingBranchChoices.filter(branch => branch !== (sourceBranch ?? ''))}
+                // The main checkout's branch stays SELECTABLE (2026-12): the
+                // host resolves it to that branch's HEAD, and filtering it out
+                // (it is the implicit default when startRef is empty) left a
+                // remembered pick permanently shadowing main and single-branch
+                // repositories with an empty picker.
+                options={existingBranchChoices}
                 disabled={actionLocked}
                 ariaLabel={t('sourceBranch')}
                 onChange={value => {

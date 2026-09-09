@@ -824,6 +824,9 @@ export function serversProjectionSignature(servers: readonly ChamberServerAggreg
       label: server.label,
       connected: server.connected,
       phase: server.phase,
+      // Render-relevant: the source header's managed-down note and the
+      // settings panel's copy branch on this fact.
+      managedRuntimeDown: server.managedRuntimeDown === true,
       dshVersion: server.dshVersion ?? null,
       aggregateError: server.aggregateError ?? null,
       // pluginDiagnostic STAYS in the publish gate even though the sidebar no

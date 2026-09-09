@@ -10,12 +10,73 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 > 中文版: [CHANGELOG.md](../CHANGELOG.md)
 
+
 ## [Unreleased]
 
 ### Changed
 
 - **dsh source line upgraded to 0.1.3-alpha.1** — the build-time vendor source (submodule pin) advances to dsh-v0.1.3-alpha.1 (d347e7039): upstream is a real content release relative to rc.1 (328 commits, 6 new packages), and the fork copies replay accordingly — connection adopts the upstream streaming-body upload routes and the fixture's session-format v2 / live assistant-stream rework (chunk-rows surface removed, the tsconfigs gain a `dsh-llm/assistant-stream` alias), api-gateway adopts the cursorless `notification` frames on journal-stream, web is version-only; the activation probe `commands/execute` payload follows the 0.1.3 wire rename `images` → `attachments`. **Runtime line unchanged**: `@deepseek-ai/dsh@0.1.3-alpha.1` is not yet published to npm, so the bundled-runtime anchors stay at 0.1.2-rc.1 (the dual-line gate closes when the npm publish lands).
 - **dsh source line upgraded to 0.1.3-alpha.2 with the runtime line closed (dual lines same-generation)** — the build-time vendor source (submodule pin) advances to dsh-v0.1.3-alpha.2 (82a5fd61a7, vendor links 267→271, three new packages: `client/ui-open-in-app`, `host/open-in-app`, `util/package-manifest`); the fork copies replay accordingly — connection adopts the upstream recovery-config extraction (reconnect/readiness timing defaults move into a shared schema: a 3 s slow-handshake warning plus a 15 s hard deadline that aborts the generation, continuous retries at the cap replace the terminal `disconnected` tier; the chamber loopEpoch generation guards and the `CONNECTION_BACKOFF_MAX_MS` export survive, `basePath` is now a chamber apply-config member), api-gateway and web are version-only; the three copy markers move to 0.1.3-alpha.2. **Runtime line closure**: `@deepseek-ai/dsh@0.1.3-alpha.2` is published on npm, so the four anchors — the bundle-dsh fallback constant, the desktop vendor lockfile (`bundle:dsh --force --refresh-lockfile`), the release.yml env, install-gateway.sh and the gateway `dshAnchorVersion` — move from rc.1 to alpha.2, and `bin.js --version` smoke-prints 0.1.3-alpha.2 (dual-line gate closed). chamber-covered gains the `@deepseek-ai/dsh-client-ui-open-in-app` row (the official open-in client row stays covered once it appears in the host graph; the official button's availability probe fails inside the chamber shell and it self-hides — the T3 double guard).
+
+## [0.2.4] - 2026-09-09
+
+### Fixed
+
+- **N-ctx document-level theme projection (problem E: checkbox shade mismatch).**
+  Document-level `html{color-scheme}` / `body[data-ds-dark-theme]` were written by
+  EVERY mounted instance (and the vendor `ThemePresenter.dispose()` retracted them
+  unconditionally), so a hidden view's apply repainted the visible one and its
+  teardown stripped the visible view's projection — a light palette next to dark
+  native widgets. The projection is now owned by the ACTIVE view only: `chamberBridge`
+  gained `setActiveSource/getActiveSource/onActiveSource`, the App publishes the active
+  view in a `useLayoutEffect`, and the ui-layout fork gates `document-theme.ts` on
+  `ctx.chamberInstanceId` (teardown never retracts; one page-wide presenter);
+  `styles.css`'s `:root{color-scheme}` fallback now matches the light palette default.
+- **First-screen whole-source degraded list (problem A).** A ready source that was
+  never mounted had only the unary fallback (synthetic groups, empty archive set ⇒
+  archived sessions surfacing as rows, no real workspace actions), and every self-heal
+  arm requires `mounted===true`. New baseline harvest: one background mount in the
+  single prewarm slot, reclaimed after the first authoritative push — 2 attempts,
+  120 s backoff, deadline = boot budget + 15 s, an absolute abandon cap that also
+  watches every mounted view by mount time (and the shell bounds its same-id
+  predecessor wait absolutely while the page producer registry is boot-generation
+  fenced, so a hung boot can neither pin the slot, block the source's next mount, nor
+  silence a healthy successor's channel) and reclaims/parks a wedged shell, harvest candidates reserving the slot (with their own
+  budget line, so a user-retained warm shell cannot block them forever), managed-down
+  gateways excluded, user click adopting the shell, and the last harvested shell kept
+  warm until another candidate needs the slot.
+- **Gateway managed-dsh downtime invisible (problem B).** The desktop's `ready` only
+  proves the gateway PROCESS is alive and the sidebar ignored the
+  `/chamber/runtime/status` `connectionState`, so a stopped managed dsh stayed
+  clickable but unusable. A 15 s foreground probe (single-flight, 10 s timeout) now
+  projects the three terminal-down states into the source's `phase` and `connected=false`
+  (decided by a dedicated `managedRuntimeDown` fact, set only while the transport is
+  usable and the probe reports a terminal-down state — never re-derived from the
+  merged `phase`, whose vocabulary shares `error`), with an inline reason + recovery
+  hint under the source header (which is no longer an activation affordance in that
+  state; the actionable entry remains Settings → Connections → start) and an accurate
+  settings-panel message ("gateway reachable, managed dsh not
+  running") or "managed dsh is starting" for the transient states; `starting`/
+  `restarting` also project into `phase`, disable actions and show a
+  `source.managedStarting` note (the dsh is not serving yet) while `degraded` keeps the
+  transport phase (rendered disconnected by the existing rule), and a missing probe
+  fails open.
+- **Git source branch could not use the main checkout as its base (problem C).** The
+  host always sent the full branch list; the exclusion happened client-side (the main
+  checkout branch was filtered out and only shown as a placeholder), so single-branch
+  repos had an empty picker and a remembered localStorage value permanently shadowed
+  `main`. The choices now come from the pure `sourceBranchChoices()` (host list passed
+  through, unborn rows skipped) with a source-level regression pin.
+- **`test:gateway` stopped the host gateway service.** The installer's D2 cross-mode
+  cleanup calls bare `systemctl stop/disable dsh-chamber-gateway.service` (fixed unit
+  name) while the tests mocked only `systemctl_for_mode`, so the real systemctl
+  escaped. Every harness now composes through `harnessSource()` (host-safe stub only
+  where a real systemctl exists) plus a source-level invariant test; verified on the
+  Linux rig: 3 real calls before the fix, 0 after (45/45 on Linux; 43 passing plus two
+  Linux-only skips on macOS).
+- Also landed: honest degraded-list label (`source.baselinePending`), the settings-panel
+  managed-down copy, the managed-runtime probe on foreground restore, publishing the
+  active source in a `useLayoutEffect` (no one-frame stale theme), and related fixes.
 
 ## [0.2.3] - 2026-09-07
 

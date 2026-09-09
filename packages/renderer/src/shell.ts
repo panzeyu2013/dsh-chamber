@@ -5,9 +5,11 @@
  * materialization; per-instance identity and basePath are bound into each
  * AppWebEntry Context through a closure, so the bounded queue timeout may let
  * a later DIFFERENT-instance boot proceed without page-global knob
- * cross-contamination. Same-id boots stay strictly serialized through settle
- * and async teardown, preventing producer-registration reversal and two React
- * roots from ever targeting one container. Instance shells stay mounted once
+ * cross-contamination. Same-id boots stay serialized through the predecessor's
+ * settle and async teardown — bounded by INSTANCE_TAIL_WAIT_CAP_MS when a
+ * predecessor never settles — and the late predecessor is kept superseded by
+ * the generation gate plus the boot-generation fence on producer registration,
+ * so no producer reversal or two-React-roots container can survive. Instance shells stay mounted once
  * booted (hide/show switching is pure CSS, sessions stay alive).
  *
  * 保留策略例外（2026 性能整改，05 §1/§4 偏差）：上述"booted 后常驻"是 App
@@ -32,6 +34,7 @@ import { AppWebEntry, ensureWebModuleSystem } from '@deepseek-ai/dsh-client-web'
 import type { Context } from '@deepseek-ai/cordis'
 
 import { parseAuthoritativeSourceFingerprint } from './deep-link-activation.ts'
+import { BOOT_TIMEOUT_MS } from './boot-budget.ts'
 import { isChamberSourceId, rawInstanceIdFromSourceId } from './transport-source.ts'
 import { BundleLoadTimeoutError, collectExtraRows, type ExtraModuleRow } from './host-graph.ts'
 import { chamberBridge } from '@dsh-chamber/dsh-client-ui-sidebar/shared'
@@ -78,7 +81,6 @@ const OPEN_RETRY_MS = 400
  * do not consume a page-global queue slot while waiting: they first await their
  * predecessor's full settle/teardown, then join the current global tail.
  */
-const BOOT_TIMEOUT_MS = 60_000
 const QUEUED_OPEN_TIMEOUT_MS = BOOT_TIMEOUT_MS + OPEN_WAIT_MS
 
 /** Same-origin module-script loader (ESM chunks; the stock loader uses classic scripts). */
@@ -162,6 +164,7 @@ export function createChamberContextSetup(
   basePath: string,
   sourceFingerprint: string,
   transport: ChamberTransport = instanceId === 'local' ? 'local' : 'ssh',
+  bootGeneration?: number,
 ): (ctx: Pick<Context, 'provide'>) => void {
   if (instanceId.trim() === '') throw new Error('shell: empty instance id')
   if (!isChamberSourceId(instanceId)
@@ -184,6 +187,10 @@ export function createChamberContextSetup(
     ctx.provide('chamberBasePath', basePath)
     ctx.provide('chamberSourceFingerprint', sourceFingerprint)
     ctx.provide('chamberTransport', transport)
+    // 代际事实（2026-12 复查 BLOCKER）：页面的 producer 注册表按注册顺序
+    // 授权，一个挂死后又恢复的老 boot 会夺走生产权，其 teardown clear 会把
+    // 健康后继的通道永久清空。消费者（侧栏 producer 注册）用它做代际栅栏。
+    if (bootGeneration !== undefined) ctx.provide('chamberBootGeneration', bootGeneration)
   }
 }
 
@@ -222,6 +229,8 @@ const entries = new Map<string, ShellHolder>()
  * queue. This prevents same-container mounts and producer registration order
  * from reversing across the page-level 60s timeout. */
 const instanceBootTails = new Map<string, Promise<void>>()
+/** When the id's current boot started (absolute same-id wait deadline). */
+const instanceBootStartedAt = new Map<string, number>()
 
 /** Every async AppWebEntry.dispose() currently in flight, folded per id. */
 const instanceTeardownBarriers = new Map<string, Promise<void>>()
@@ -283,11 +292,15 @@ export function bootInstanceShell(
   // Validate the source/base-path pair before installing module globals or
   // starting the host-graph request. An invalid source must not be able to
   // steer even a same-origin probe through a crafted /api/i/... prefix.
-  const configureContext = createChamberContextSetup(instanceId, basePath, sourceFingerprint, transport)
-  // 取序必须在入队前：dispose 记录的阈值与 settle 检查都按本次 boot 的代。
+  // 取序必须在入队前：dispose 记录的阈值与 settle 检查都按本次 boot 的代；
+  // 也在 configureContext 之前，因为上下文要携带本次代际事实。
   const gen = (bootGenerations.get(instanceId) ?? 0) + 1
   bootGenerations.set(instanceId, gen)
+  const configureContext = createChamberContextSetup(
+    instanceId, basePath, sourceFingerprint, transport, gen)
   const previousInstanceTail = instanceBootTails.get(instanceId)
+  // 前代 boot 的起始时刻（绝对等待上限用）：必须在覆盖本代记录之前读取。
+  const previousInstanceBootStartedAt = instanceBootStartedAt.get(instanceId)
   const before: ShellState = { instanceId, basePath, booted: false, booting: true, error: null }
   onState(before)
   // A completed boot no longer has an instance tail, but removing/replacing
@@ -380,7 +393,19 @@ export function bootInstanceShell(
   // queue position. Thus a hung source never hides a different source behind
   // its strict instance tail: after the predecessor's 60s page-level slot is
   // released, unrelated ids may proceed while this successor keeps waiting.
-  const task = previousInstanceBoot.then(() => {
+  // The wait is BOUNDED by the same boot budget (2026-12 review BLOCKER): a
+  // predecessor whose entry.run() never settles must not pin the id forever.
+  // Releasing the tail instead would be wrong — the tail is what keeps
+  // `bootGenerations`/`cancelledBoots` owned, so a late abandoned boot would
+  // compare equal to its successor's generation and register over it. A bounded
+  // wait keeps the generation records intact and therefore keeps the late
+  // predecessor correctly superseded.
+  const task = boundedTailWait(
+    previousInstanceBoot,
+    previousInstanceBootStartedAt === undefined
+      ? undefined
+      : previousInstanceBootStartedAt + INSTANCE_TAIL_WAIT_CAP_MS,
+  ).then(() => {
     const runTask = bootChain.then(async () => {
     let staleEntry: AppWebEntry | undefined
     try {
@@ -502,7 +527,8 @@ export function bootInstanceShell(
       }
       const holder: ShellHolder = { entry, activeDispatchCancels: new Set() }
       entries.set(instanceId, holder)
-      // 注册成功即清掉本实例的旧阈值：same-id boot tail 已保证前代完成 teardown，
+      // 注册成功即清掉本实例的旧阈值：同 id 尾（有绝对上限）已让前代完成/被判
+      // superseded，
       // current-generation 门又覆盖本代 await 期间被更新一代取代的情形；残留
       // 阈值这里只会扩大 Map，不再承担旧 ctx 隔离职责。
       cancelledBoots.delete(instanceId)
@@ -543,8 +569,12 @@ export function bootInstanceShell(
   })
   const instanceTail = task.then(() => undefined, () => undefined)
   instanceBootTails.set(instanceId, instanceTail)
+  instanceBootStartedAt.set(instanceId, Date.now())
   void instanceTail.then(() => {
-    if (instanceBootTails.get(instanceId) === instanceTail) instanceBootTails.delete(instanceId)
+    if (instanceBootTails.get(instanceId) === instanceTail) {
+      instanceBootTails.delete(instanceId)
+      instanceBootStartedAt.delete(instanceId)
+    }
     scheduleInstanceLifecycleOwnerCleanup(instanceId)
   })
   return task
@@ -569,6 +599,48 @@ function blockedBoot(instanceId: string, gen: number): { superseded: boolean; me
  * per-id tail still await the original task. A same-id successor therefore
  * never passes a predecessor that has not settled and torn down.
  */
+/**
+ * Absolute cap on waiting for a same-id predecessor that never settles.
+ *
+ * (See boundedTailWait below.)
+ *
+ * The strict per-id tail is what keeps a successor from racing a live
+ * predecessor's registration/teardown, so it must stay (and it is what keeps
+ * `bootGenerations`/`cancelledBoots` owned — releasing the tail early would let
+ * a late abandoned boot compare equal to its successor's generation and
+ * register over it; 2026-12 review BLOCKER). But an unbounded wait means a
+ * boot whose `entry.run()` never settles pins the id forever. The cap is two
+ * boot budgets: comfortably past a slow-but-healthy predecessor (queue + boot),
+ * and below the App's absolute harvest-abandon cap (135 s), so by the time a
+ * wedged shell is abandoned and the user retries, the wait has already expired.
+ */
+export const INSTANCE_TAIL_WAIT_CAP_MS = BOOT_TIMEOUT_MS * 2
+
+/**
+ * Remaining wait for a same-id predecessor, in ms. All successors of one
+ * predecessor share the ABSOLUTE deadline (predecessor start + cap) instead of
+ * each arming a fresh cap — otherwise a retry at the abandon cap would wait a
+ * whole extra cap before joining the queue (2026-12 review MAJOR). Exported for
+ * its unit test (the integration path is timing-sensitive).
+ */
+export function tailWaitRemainingMs(deadlineAt: number | undefined, now: number): number {
+  if (deadlineAt === undefined) return INSTANCE_TAIL_WAIT_CAP_MS
+  return Math.max(0, deadlineAt - now)
+}
+
+function boundedTailWait(previous: Promise<void> | undefined, deadlineAt?: number): Promise<void> {
+  if (previous === undefined) return Promise.resolve()
+  const remaining = tailWaitRemainingMs(deadlineAt, Date.now())
+  if (remaining <= 0) return Promise.resolve()
+  return new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, remaining)
+    void previous.then(
+      () => { clearTimeout(timer); resolve() },
+      () => { clearTimeout(timer); resolve() },
+    )
+  })
+}
+
 function withBootTimeout(promise: Promise<ShellState>): Promise<void> {
   return new Promise((resolve) => {
     const timer = setTimeout(() => {

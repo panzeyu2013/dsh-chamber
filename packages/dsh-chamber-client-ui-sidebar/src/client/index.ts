@@ -121,8 +121,13 @@ export function apply(ctx: ClientContext): void {
       || !isValidProducerSourceFingerprint(chamberInstanceId, chamberSourceFingerprint)) return () => {}
     const sessionsList = (ctx.sessions as unknown as { list: ObservableSnapshot<SessionListState> }).list
     const workspacesList = (ctx.workspaces as unknown as { list: ObservableSnapshot<WorkspaceSnapshot> }).list
-    const runtimeProducer = chamberBridge.registerInstanceRuntimeProducer(chamberInstanceId, chamberSourceFingerprint)
-    const snapshotProducer = chamberBridge.registerInstanceSnapshotProducer(chamberInstanceId, chamberSourceFingerprint)
+    // 代际事实由 shell 的 configureContext 注入：页面的 producer 注册表按注册
+    // 顺序授权，挂死后恢复的老 boot 会夺走生产权（2026-12 复查 BLOCKER）。
+    const bootGeneration = (ctx as any).chamberBootGeneration as number | undefined
+    const runtimeProducer = chamberBridge.registerInstanceRuntimeProducer(
+      chamberInstanceId, chamberSourceFingerprint, bootGeneration)
+    const snapshotProducer = chamberBridge.registerInstanceSnapshotProducer(
+      chamberInstanceId, chamberSourceFingerprint, bootGeneration)
     // design 24 §20 (archive-cleanup convergence): this ctx's OFFICIAL
     // session client (`ctx.sessions` — ClientSessions) is requested to re-run
     // its session-list refresh. The purge of archived content is invisible to

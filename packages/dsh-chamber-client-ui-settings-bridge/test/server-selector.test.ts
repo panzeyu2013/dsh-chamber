@@ -1,5 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import {
   filterServerRows,
   serverDropdownPlacement,
@@ -55,6 +56,27 @@ test('settings roster signature tracks rendered pluginId but ignores timestamp-o
   assert.notEqual(signature, serverProjectionSignature([{
     ...base, sourceFingerprint: 'proof-b', updatedAt: 2,
   }]))
+  // 托管停机事实必须material（否则"托管 dsh 停机 + 传输断开"这一跃迁会被去重，
+  // 设置面板会一直显示过期的 managedDshDown 文案；2026-12 复查 MINOR）。
+  assert.notEqual(signature, serverProjectionSignature([{
+    ...base, managedRuntimeDown: true, updatedAt: 2,
+  }]))
+  assert.equal(
+    serverProjectionSignature([{ ...base, managedRuntimeDown: true, updatedAt: 2 }]),
+    serverProjectionSignature([{ ...base, managedRuntimeDown: true, updatedAt: 9 }]),
+    'the timestamp stays excluded')
+})
+
+test('the managed-down panel copy branch and its dictionary key are pinned', () => {
+  // 该分支没有组件级测试：删掉它会让面板对"网关可达但托管 dsh 未运行"重新显示
+  // 笼统的不可达文案，而所有门都仍是绿的（2026-12 复查 MAJOR）。
+  const shell = readFileSync(new URL('../src/client/SettingsShell.tsx', import.meta.url), 'utf8')
+  assert.match(shell, /selected\.managedRuntimeDown === true/, 'the panel must branch on the dedicated fact')
+  assert.match(shell, /t\('managedDshDown'\)/, 'the branch must use the managed-dsh dictionary key')
+  assert.match(shell, /t\('managedDshStarting'\)/, 'the transient managed state must get its own copy, not targetUnavailable')
+  assert.match(shell, /role="alert"/, 'the whole-branch swap must be announced (a polite status inserted with its content is not)')
+  const locales = readFileSync(new URL('../src/locales.ts', import.meta.url), 'utf8')
+  assert.match(locales, /managedDshDown:/, 'both dictionaries must carry the key (satisfies enforces parity)')
 })
 
 test('settings roster signature cannot collide through separator-like user text', () => {

@@ -42,6 +42,37 @@ export function findWorktree(
   return repo === undefined || worktree === undefined ? undefined : { repo, worktree }
 }
 
+/**
+ * Base-ref picker options for the create dialog: the host's branch list
+ * (`git show-ref --heads`) when it has any, otherwise the selected
+ * repository's own worktree branches, deduplicated in row order.
+ *
+ * The main checkout's branch is deliberately INCLUDED. The host accepts it as
+ * `startRef` (`localBranchHead` resolves it to that branch's HEAD commit), and
+ * the picker previously filtered it out because it is the implicit default —
+ * which made it unreachable once any other branch had ever been chosen, and
+ * left a single-branch repository with an empty picker (2026-12 user report:
+ * "cannot use main / the main checkout as the base").
+ * @param repoBranches - Host branch list for the selected repository.
+ * @param worktreeBranches - The same repository's worktree branches (fallback; `null` = detached).
+ * @returns The picker options, never filtered against the main checkout branch.
+ */
+export function sourceBranchChoices(
+  repoBranches: readonly string[],
+  worktreeBranches: readonly (string | null)[],
+): string[] {
+  if (repoBranches.length > 0) return [...repoBranches]
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const branch of worktreeBranches) {
+    if (branch !== null && !seen.has(branch)) {
+      seen.add(branch)
+      out.push(branch)
+    }
+  }
+  return out
+}
+
 export interface WorktreeWithRepo {
   repoId: string
   worktree: GitWorktreeInfo

@@ -73,15 +73,22 @@ test('在途切换意图（pending）不回收', () => {
   assert.deepEqual(result, ['dsh-a'], 'pending 目标绝不回收，超限时回收另一个')
 })
 
-test('在途预热（prewarm inflight）不回收', () => {
-  const result = decide({
+test('在途预热（prewarm inflight）不计入隐藏壳数，既不回收它也不挤掉用户温壳', () => {
+  const input = {
     mountedViews: [LOCAL, 'dsh-a', 'dsh-b'],
     activeViewId: LOCAL,
     prewarmInflightId: 'dsh-b',
     hiddenSince: hiddenFor(['dsh-a', 'dsh-b'], LONG_AGO),
-    settled: settledSet(['dsh-a', 'dsh-b']),
-  })
-  assert.deepEqual(result, ['dsh-a'])
+    // 在途壳在 App 里必然是**未 settle** 的（settle 会清 prewarmInflightRef），
+    // 夹具必须复现该形态，否则钉不住真正的场景（2026-12 复查 NIT）。
+    settled: settledSet(['dsh-a']),
+  }
+  // 在途壳本身不可回收；它若计入上限，唯一候选就是用户的 dsh-a（会被回收并写入
+  // 抑制键，用户最近用过的源白白失去温壳）。正确行为：本轮不回收——在途壳由
+  // 收割（推送/截止/放弃上限）或 settle 后的下一轮负责（2026-12 复查 MINOR）。
+  assert.deepEqual(decide(input), [])
+  // 在途结束后恢复既有语义：超限回收最久未用者。
+  assert.deepEqual(decide({ ...input, prewarmInflightId: null }), ['dsh-a'])
 })
 
 test('未 settle（booting/未上报）不回收', () => {

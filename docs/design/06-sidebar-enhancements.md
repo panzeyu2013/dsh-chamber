@@ -490,6 +490,67 @@ await 中），我们单点只显示子 agent 计数文案，官方同快照显�
 聚合轮询陈旧（≤一个轮询周期）时 running 环与子 agent 环瞬时同形，
 取实时通道为真。
 
+### 4.6 文档级主题投影归属（N-ctx，2026-12）
+
+- **缺陷（已修）**：官方 `ThemePresenter`（vendor
+  `packages/client/ui-layout/src/client/theme-presenter.ts`）把主题投影到
+  **文档级**状态——`html{color-scheme}`（原生控件/滚动条）、
+  `body[data-ds-dark-theme]`（token 调色板）、`--dsh-content-font-size`、
+  一个 `theme-color` meta——且 `dispose()` **无条件回收**它们。单壳部署下
+  正确；chamber 桌面把 N 个实例壳挂在同一份文档里，每个挂载中的视图各跑
+  自己的 ui-layout fiber ⇒ N 个 presenter 争夺同一组全局量：隐藏视图
+  （空闲预热）的 apply 会重绘可见视图，其 teardown（retention 回收）会
+  **抹掉可见视图的投影**，把 dsh 的浅色默认调色板（`design-platform.css`
+  的 `body` 块，无属性即浅色）与 chamber 壳的 `:root{color-scheme}` 兜底
+  拼在一起——「浅色界面 + 深色原生 checkbox」直到某次 theme/change 或重挂载
+  才自愈（用户观察：点服务器/切主题后刷新才恢复）。
+- **归属规则（现行为）**：**主题**投影只由活动视图的实例写（其余文档级写入者
+  另见下方「同族残留」——本节结论仅覆盖主题这组全局量）。
+  App 是「谁在屏上」的唯一权威，经 page-wide chamberBridge 发布
+  （`setActiveSource`/`getActiveSource`/`onActiveSource`，`shared/aggregate-store.ts`）；
+  ui-layout fork 的 `document-theme.ts` 按 `ctx.chamberInstanceId` 门控：
+  非活动视图**不写**文档，变为活动视图时用最近一次快照重投影（无需新的
+  theme/change），teardown **永不回收**文档（全页单例 presenter 交给下一个
+  活动视图复用，其 retraction 集因此天然是"上一个 applier 的 token 集"）；
+  活动来源未发布、或 boot 无 `chamberInstanceId`（官方单壳形态）时**失败开放**
+  为旧的无条件行为。
+- **兜底值**：chamber `styles.css` 的 `:root{color-scheme}` 与「无属性即浅色」
+  的调色板默认对齐（`light`）；活动实例投影落地后由 `html` 内联值覆盖。
+- **代码落点**：`packages/dsh-chamber-client-ui-layout/src/client/document-theme.ts`
+  （纯投影器 + 单测 `test/document-theme.test.ts`）、`src/client/index.ts`
+  （全页单例 presenter + effect）、`packages/renderer/src/App.tsx`
+  （活动视图发布，`useLayoutEffect` 保证绘制前生效）、`shared/aggregate-store.ts`
+  （活动来源事实 + 单测）、`packages/renderer/src/styles.css`（兜底值，
+  源码级钉子 `packages/renderer/test/theme-fallback.test.ts`）。
+- **验证**：单测（4 条投影规则 + 1 条源码级接线钉子 + 1 条通道语义 +
+  App 发布钉子 + CSS 兜底钉子）、`typecheck:layout`、`typecheck:sidebar`、
+  根 `typecheck`、`test:sidebar`、`test:layout`、`test:renderer-shell`、
+  `build:renderer` 均通过；**打包态实机目检未做**（首屏/切换/回收窗口的
+  checkbox 深浅、预热视图不互踩主题）。**注意**：安装态 `.app` 可能落后于
+  仓库一个构建——实机验收前必须 `pnpm run dist:desktop:mac` 重打包。
+- **同族残留（2026-12 复查登记，非本节修复面）**：同一份文档里还有其它
+  document-global 状态被逐实例写/监听，属同一"N-ctx 单文档"缺陷族：
+  ①**文档级 `drop` 扇出（真实缺陷）**——vendor `ui-attachment`
+  `ComposerAttachments.tsx` 在 document 上挂 drop 监听且无 containment/活动视图
+  判定，local 与任一挂载远程同时在场时，拖入的图片会同时附到**两个**实例的
+  草稿（修法需 vendor patch 路线：按 event.target 归属或按活动来源门控）；
+  ②**`<html lang>` last-writer-wins（真实缺陷）**——vendor `locale` 每次 boot
+  写 `documentElement.lang` 且无 teardown 回收，预热实例的 dsh locale 为 en 时
+  会把可见的中文文档翻成 `lang=en`（连带影响 runtime 分节的本地化）；
+  ③**`document.title`（已被主进程掩盖）**——每个壳的 DocumentTitle 竞争写/清，
+  桌面主进程冻结标题故当前不可见；④**`--dsh-content-font-size` 播种**
+  （vendor `bootstrapFontSize` 读 body 变量）会读到"上一个 applier"的值，
+  下一次投影自愈；⑤**portal 逃逸（真实缺陷，未修）**——vendor
+  `ui-primitives/Modal`（含 backdrop）与 chamber 的 SettingsShell/AppMenu 都
+  portal 到 `document.body`，而 `.instance-hidden` 只隐藏视图子树：视图 A 里
+  打开的模态在程序化切换（深链/通知/注册表回落）后仍盖在 B 上，直到 A 被回收；
+  同族 `ui-attachment/DropOverlay` 由每个挂载中的 ComposerAttachments 各渲染
+  一份（N 层遮罩，隐藏视图的禁用副本可能盖在活动视图的启用副本之上）；
+  ⑥**主题样式表重复**——vendor `installThemeStyles` 每个实例 ctx 各插 6 个
+  `<style>`（同内容，随各自 fiber 移除，级联无影响，属良性重复）。
+  ①/② 的治本同本节：按活动来源门控，但落在 vendor 源码，需 seed/patch 路线
+  裁定后实施（②可纯 chamber 侧做：同样的 producer+projector 模式）。
+
 ## 5. 已知取舍与开放项（已决）
 
 - 跨实例 `dsh.sessions.current` localStorage 共享键（last-writer-wins）：

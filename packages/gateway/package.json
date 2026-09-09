@@ -1,6 +1,6 @@
 {
   "name": "@dsh-chamber/gateway",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "dshAnchorVersion": "0.1.3-alpha.2",
   "description": "Server-side access gateway for dsh-chamber: exposes a managed dsh as an authenticated URL (design 17)",
   "type": "module",
