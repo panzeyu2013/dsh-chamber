@@ -559,6 +559,9 @@ var LEASE_FILENAME = "session.lock";
 function isGenerationFilename(name) {
   return /^session(?:\.v[1-9][0-9]*)?\.jsonl(?:\.zstd)?$/.test(name);
 }
+function isGenerationTempFilename(name) {
+  return /^session(?:\.v[1-9][0-9]*)?\.jsonl(?:\.zstd)?\.[0-9a-f]{12}\.tmp$/.test(name);
+}
 function headerToState(header) {
   assertHeaderShape(header);
   return {
@@ -580,7 +583,7 @@ function assertHostSurface(ctx) {
   const query = ctx.sessionQuery;
   const persistence = ctx.sessionPersistence;
   const canEnumerate = query !== void 0 && typeof query.listSessions === "function" || persistence !== void 0 && typeof persistence.list === "function";
-  if (!canEnumerate || persistence === void 0 || typeof persistence.locate !== "function") {
+  if (!canEnumerate || persistence === void 0 || typeof persistence.locate !== "function" || typeof persistence.stat !== "function") {
     throw new ArchiveCleanupError(
       "registry-unreadable",
       "archiveCleanup: the session enumeration/storage surface is not mounted with the expected shape"
@@ -633,26 +636,34 @@ function makeHostBinding(ctx) {
     let sawEnumeration = false;
     if (query?.listSessions !== void 0) {
       const records = await query.listSessions();
-      if (Array.isArray(records)) {
-        for (const record of records) assertHeaderShape(record?.header);
-        for (const record of records) {
-          const header = record.header;
-          if (!byId.has(header.id)) byId.set(header.id, header);
-        }
-        sawEnumeration = true;
+      if (!Array.isArray(records)) {
+        throw new ArchiveCleanupError(
+          "registry-unreadable",
+          "archiveCleanup: sessionQuery.listSessions() did not answer an array \u2014 refusing the read (pinned-vendor surface drift)"
+        );
       }
+      for (const record of records) assertHeaderShape(record?.header);
+      for (const record of records) {
+        const header = record.header;
+        if (!byId.has(header.id)) byId.set(header.id, header);
+      }
+      sawEnumeration = true;
     }
     if (persistence?.list !== void 0) {
       const snapshots = await persistence.list();
-      if (Array.isArray(snapshots)) {
-        const headers = snapshots.map((snapshot) => snapshot?.header);
-        for (const header of headers) assertHeaderShape(header);
-        for (const header of headers) {
-          const typed = header;
-          if (!byId.has(typed.id)) byId.set(typed.id, typed);
-        }
-        sawEnumeration = true;
+      if (!Array.isArray(snapshots)) {
+        throw new ArchiveCleanupError(
+          "registry-unreadable",
+          "archiveCleanup: sessionPersistence.list() did not answer an array \u2014 refusing the read (pinned-vendor surface drift)"
+        );
       }
+      const headers = snapshots.map((snapshot) => snapshot?.header);
+      for (const header of headers) assertHeaderShape(header);
+      for (const header of headers) {
+        const typed = header;
+        if (!byId.has(typed.id)) byId.set(typed.id, typed);
+      }
+      sawEnumeration = true;
     }
     if (!sawEnumeration) {
       throw new ArchiveCleanupError(
@@ -739,7 +750,7 @@ function makeHostBinding(ctx) {
               `archiveCleanup: refusing to purge ${sessionId}: unexpected ${entry.isDirectory() ? "directory" : entry.isSymbolicLink() ? "symlink" : "special file"} ${entry.name} in the session directory`
             );
           }
-          if (entry.name === LEASE_FILENAME || isGenerationFilename(entry.name)) {
+          if (entry.name === LEASE_FILENAME || isGenerationFilename(entry.name) || isGenerationTempFilename(entry.name)) {
             removable.push(join(dir, entry.name));
             continue;
           }

@@ -48,7 +48,7 @@ export const MAX_PURGE_ERROR_RECORDS = 1_000
  * Upper bound on per-candidate authoritative content-existence probes
  * (`hasStoredContent`) performed by ONE registry-global orphan sweep
  * (2026-12 blocker fix). Each probe is a full official persistence read
- * (`sessionPersistence.inspect` — the jsonl backend parses the session log),
+ * (`sessionPersistence.stat` — the jsonl backend parses the session log),
  * so the sweep carries its own budget, tighter than the archived-set capacity
  * that bounds how many members a run may CONSIDER. The live instance observed
  * by the 2026-12 review had 739 record-less candidates — comfortably inside

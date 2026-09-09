@@ -129,8 +129,9 @@
    孤儿清扫的**存在性探测**（官方 `sessionPersistence.stat(id)`；0.1.3-alpha.1 起取代
    `inspect(id)`）会在官方
    持久化层读取并解析该会话工件，用途**仅为**回答「该 id 是否仍有可物化内容」
-   这一布尔值（官方 not-found 载体 ⇒ `false`，其余一切失败/能力缺失 ⇒ `true`，
-   fail-closed）；读取结果**不进任何返回面、不进日志、不落盘**，只被消费于
+   这一布尔值（官方 `stat(id)` 返回 `undefined` ⇒ `false`；**任何抛出/能力缺失**
+   ⇒ `true`，fail-closed。注意 `undefined` 同时覆盖「无日志」与「工件不可物化」
+   两种情况——见 §22⑦）；读取结果**不进任何返回面、不进日志、不落盘**，只被消费于
    「该成员是否可移出归档集合」这一个成员关系判断。该例外**不扩展**本域的
    内容接触面（无标题/路径/正文投影，无检索/导出，无字节统计），也**不构成**
    新能力的先例（见第 5 条）；
@@ -273,9 +274,9 @@ vendor 源码）+ 薄 Remote 门面（`index.ts`），编排逻辑：
      只回 live 行且不报错）；
    - 每个候选必须再经**官方单 id 权威读**（`sessionPersistence.stat(id)`，0.1.3-alpha.1 起取代
      `inspect(id)`；
-     未知 cwd 也按 id 跨项目目录解析）确认：**只有精确的 `false`（官方
-     not-found 载体）才清**，任何其他错误/能力缺失/非布尔回答一律保留成员
-     关系（fail-closed，绝不 abort 已完成的内容删除）；
+     未知 cwd 也按 id 跨项目目录、跨代际解析）确认：**只有 `undefined` 才清**
+     （上游对「无日志」与「工件不可物化」都答 `undefined`，见 §22⑦），
+     任何抛出/能力缺失一律保留成员关系（fail-closed，绝不 abort 已完成的内容删除）；
    - 枚举本身改为 `sessionQuery.listSessions()` ∪ `sessionPersistence.list()`
      的**按 id 并集**（两侧同口径 loud 形状校验；任一侧抛错即整轮拒绝），
      杜绝「query 侧收窄」丢失记录；
@@ -698,11 +699,16 @@ todo 12 C（§2 已记），不得在核对前凭 §4 的实现猜测落地。
    合并，含 `header.origin`/`parentSession`/`cwd`）——与官方 session/list
    投影同源，`archivedSessionIds` 为 registry-global 集合；
 3. 官方进程内**无会话内容删除例程**（persistence 抽象只有
-   create/open/flush/stat/list（0.1.3-alpha.1 起的公开面；rc.1 的 inspect/locate 已退役）→
+   create/open/flush/stat/list（0.1.3-alpha.1 起的公开面；rc.1 的 `inspect` 已退役，
+   `locate` 降为后端**私有**方法但仍可经服务对象调用）→
    **分支 b 落地**：`sessionPersistence.locate(header)` 给出官方绝对产物
-   路径（零布局知识复制），删除产物文件 + 空目录回收（rmdir 非递归，
-   余留文件 fail-closed）；运行保护 = `agents.list()` ∪ live
-   `sessions.list()`；
+   路径，作为**唯一目录锚**；目录内的**全部不可变代际工件**（`session.jsonl`、
+   `session.vN.jsonl`，含可选 `.zstd` 与遗留 `.tmp` 发布临时件）连同写租约
+   `session.lock` 一并删除，未知条目/符号链接/子目录**整单拒绝**（不再半删），
+   目录仅在清空后尽力回收（rmdir 非递归）；运行保护 = `agents.list()` ∪ live
+   `sessions.list()`；**跨进程**：删除租约即放弃 jsonl 的跨进程互斥
+   （vendor lease 警告），故本域契约要求「先停运行再清理」，第二个 dsh 进程
+   同根写入不在本域可观测范围内（§22⑨）；
 4. **归档集合成员移除无公开原语**（registry 仅 archiveSession 增向；
    startup/任何路径均不透传裁剪）→ binding 以文档化结构 seam 执行**一次
    纯 `workspaceRegistry.setState({initialized, workspaceIds,
@@ -1423,11 +1429,20 @@ attempt 栅栏是**防御性冗余**（直连结构下才必需），已如实�
 调用形状与顺序，不证明运行时语义）；④ 归档集合 > `MAX_PURGE_SESSIONS`
 （65,536）时宿主不清扫（该规模全量 purge 本就 `purge-capacity` 拒绝）；
 ⑤ 宿主侧未对**构建后的 vendor backend** 跑过真实 `stat`（本 worktree 的
-vendor 为源码态）：not-found 载体由 pinned 源码阅读 + 形状一致的 fake 确立；
+vendor 为源码态）：`stat` 的 `undefined`/抛出语义由 pinned 源码阅读 + 形状一致的
+fake 确立（真机未跑）；
 ⑥ 合法空语料（全部会话已删）下 G1a/G1b 会跳过清扫，历史无记录成员因此
-不收敛（管理器不可见、无用户影响）——fail-closed 的代价；⑦ 损坏/不可读工件
-（stat 抛错）保留成员关系且 purge 也删不了（无记录）——需人工
-处理；⑧ 并集枚举每次多一次 `persistence.list()`（可后续记忆化）。
+不收敛（管理器不可见、无用户影响）——fail-closed 的代价；⑦ 官方 `stat(id)` 对**空/损坏/编码不支持**的工件同样答 `undefined`
+（vendor jsonl 读首行失败即返回 undefined，不抛错）——这类工件因此会被判
+「无内容」而**清掉成员关系**（成员不再可见），但其字节不会被本域删除
+（purge 只处理仍可枚举的会话）；这是跟随上游「是否还有会话」语义的代价，
+登记为已知偏差。**stat 抛错**（IO/权限等）则保留成员关系且 purge 也删不了
+（无记录）——需人工处理；⑧ 并集枚举每次多一次 `persistence.list()`（可后续记忆化）；
+⑨ **租约**：purge 会删除 `session.lock`，即放弃该会话的跨进程写互斥
+（vendor lease 明确警告 forfeits exclusion）；本域以「先停运行再清理」的契约
+约束调用方，跨进程场景不做探测（无 flock 依赖，见 §2 红线）；⑩ 目录内出现
+未知条目（上游布局漂移）时整单拒绝，该会话在修复前无法清理——fail-closed
+的代价。
 
 **已闭合的原残余**（本轮全部消除，留档）：§20 残余① → F4 宿主全集合孤儿
 清扫（逐候选官方单 id 权威读 + 并集枚举 + 可信度门 + 双重确认 + fail-closed

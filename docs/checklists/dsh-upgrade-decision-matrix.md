@@ -12,6 +12,13 @@
 > **证据**：8 份域报告 `.analysis/out/S1..S8-*.md`（逐文件、逐函数、带 `路径:行`）+
 > 本仓 `preflight-vendor-pin.mjs` 实测（pin `0.1.3-alpha.2` → `0.1.5-alpha.2`：
 > **3151 文件 / pure 5 / replay 6 / dropped 6 / seam 19 / +17 包 / 5 新 client 行**）。
+>
+> **执行状态（2026-09，本矩阵落地后更新）**：B0–B5、B7、B8 已执行并提交（4 个提交，
+> 见 `git log`）；B6（open-in）与 D3/D4/D5 待裁决；D1/D2/D6/D7 按推荐采纳。
+> **设计 24 的实际修复口径**：④`list()` 快照形状 + ①`stat()` 存在性 + ②全代际删除 +
+> **③保留私有 `locate` 调用**（上游未公开 `locate`，但它是唯一目录锚；「去私有依赖」一项
+> **未采纳**——改为登记 + 目录形状证明 + 未识别条目整单拒绝），编号口径以 CHANGELOG
+> [Unreleased] 与 `docs/progress/STATUS.md` 基线记录为准。
 
 ---
 
@@ -1351,7 +1358,7 @@
 | patched-copy 基础设施（若 D3 采纳） | S7 | renderer/构建面 |
 | ALLOW_BUILDS 复核（`fs-ext` 保留；`protobufjs`/`@google/genai` 转 deny）+ 验证门 | S8 | dsh-runtime |
 | 六锚 + `bundle-dsh` 兜底 + 锁文件刷新 | S6/S8 | 运行时线 |
-| 设计 24 四项修复（④`list()` 快照形状 + ①`stat()` 存在性 + ②全代际删除 + ③去私有 `locate` 依赖） | S8 | seed-archive-cleanup |
+| 设计 24 四项修复（**已执行**：④`list()` 快照形状 + ①`stat()` 存在性 + ②全代际删除 + ③保留私有 `locate` + 目录形状证明/整单拒绝） | S8 | seed-archive-cleanup |
 
 ---
 
@@ -1374,7 +1381,7 @@
 | B4 | 移动插件（main/rightbar 锚点、退役打标与覆盖层） | `typecheck:mobile` + `test:mobile` |
 | B5 | 渲染器 roster（dockkit factory、C4 15、REQUIRED_EXTRA_ROWS）+ 三个 fork 副本重放 | `test:renderer-shell` + `test:client-web` + `test:connection` + `typecheck:*` |
 | B6 | open-in 平行件退役 + basePath fork（若采纳） | `test:open-in` + `test:desktop` |
-| B7 | 设计 24 四项修复（先修 ④ 快照形状，再 ①`stat()`、②全代际删除、③去私有依赖）+ 夹具改 alpha.2 形态 | `test:host-archive-cleanup` |
+| B7 ✅ | 设计 24 四项修复（先修 ④ 快照形状，再 ①`stat()`、②全代际删除、③保留私有 `locate` + 形状证明）+ 夹具改 alpha.2 形态 | `test:host-archive-cleanup` |
 | B8 | 运行时线六锚 + `bundle:dsh --force --refresh-lockfile` + 冒烟（含 `runtime-host-adapter` 退役） | `test:desktop` + `bin.js --version` |
 | B9 | 全量门禁 + 文档回写（STATUS/CHANGELOG 双语/触点表/本矩阵） | 全套 `test:*`/`typecheck:*`/`build:renderer`/`verify:i18n`/`verify-upstream-touchpoints` |
 

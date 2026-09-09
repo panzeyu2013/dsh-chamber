@@ -8,6 +8,22 @@ multi-source session/workspace list, registered into the `sidebar` slot in
 place of the official ui-sidebar (which stays untouched in
 `vendor/harness-packages`, never in the boot graph).
 
+## alpha.2 extension holes (brand + global panels)
+
+The shell declares and renders the three holes the alpha.2 official
+`ui-sidebar` adds, so an upstream/third-party registration never dangles:
+
+- `sidebar.brand.mark` / `sidebar.brand.name` — the top-left brand row; the
+  chamber wordmark stays the mark fallback and the name hole renders nothing
+  when unoccupied (the rail renders the mark hole too).
+- `sidebar.panellist` (list) — global main-panel rows. `src/client/panel-source.ts`
+  mirrors the slot ledger into `{id, order, label}` metadata (label thunks are
+  resolved at read time, notifications fire only on change), the shell renders
+  one `PanelRow` per entry, and a click calls `ctx.layout.selectPanel(id)`.
+  Upstream ships an empty list, so the section is invisible by default; the
+  projection and wiring are pinned by `test/panel-source.test.ts` and
+  `test/panel-wiring.test.ts`.
+
 ## Structure
 
 - Source groups → workspace groups → session rows: every source (local + each

@@ -98,11 +98,16 @@ test('binding: official setState failures map to item code storage', async () =>
 })
 
 test('binding: deleteSessionContent refuses running (always) and loaded (unless forced)', async () => {
-  const ctx: HostCtxServices = {
-    agents: { list: () => [{ id: 'live-1', status: 'running' }, { id: 'idle-1', status: 'idle' }] },
-    sessionPersistence: { locate: h => ({ kind: 'jsonl', path: join(tmpdir(), 'x', h.id) }) },
-  }
-  const host = makeHostBinding(ctx)
+  // A unique temp dir: the previous hardcoded join(tmpdir(), 'x') collided
+  // with any real /tmp/x and turned the artifact leg into a false storage
+  // refusal (2026-09 audit).
+  const missingDir = mkdtempSync(join(tmpdir(), 'archive-cleanup-missing-'))
+  try {
+    const ctx: HostCtxServices = {
+      agents: { list: () => [{ id: 'live-1', status: 'running' }, { id: 'idle-1', status: 'idle' }] },
+      sessionPersistence: { locate: h => ({ kind: 'jsonl', path: join(missingDir, h.id) }) },
+    }
+    const host = makeHostBinding(ctx)
   await assert.rejects(() => host.deleteSessionContent('live-1', '/work'), (error: unknown) => {
     return error instanceof ArchiveCleanupError && error.code === 'running'
   })
@@ -130,6 +135,9 @@ test('binding: deleteSessionContent refuses running (always) and loaded (unless 
   await assert.rejects(() => host.deleteSessionContent('unknown-1'), (error: unknown) => {
     return error instanceof ArchiveCleanupError && error.code === 'registry-unreadable'
   })
+  } finally {
+    rmSync(missingDir, { recursive: true, force: true })
+  }
 })
 
 test('binding: a drifted agent status fails the live read loudly', async () => {
@@ -209,6 +217,18 @@ test('binding: content removal removes the official artifact and reclaims an emp
     })
     assert.equal(existsSync(join(drifted, 'session.v3.jsonl')), true, 'nothing removed on refusal')
 
+    // A leftover generation temp file (an interrupted publish) is this
+    // session's own artifact and purges with the rest.
+    const tempy = join(dir, 'proj4', 's5')
+    mkdirSync(tempy, { recursive: true })
+    writeFileSync(join(tempy, 'session.v3.jsonl'), '{}')
+    writeFileSync(join(tempy, 'session.v3.jsonl.0123456789ab.tmp'), '{}')
+    const tempHost = makeHostBinding({
+      sessionPersistence: { locate: h => ({ kind: 'jsonl', path: join(dir, 'proj4', h.id, 'session.v3.jsonl') }) },
+    })
+    assert.equal(await tempHost.deleteSessionContent('s5', join(dir, 'proj4')), 'deleted')
+    assert.equal(existsSync(tempy), false, 'generation + leftover temp removed, dir reclaimed')
+
     // A legacy version-zero directory (`session.jsonl`) purges normally.
     const legacy = join(dir, 'proj3', 's4')
     mkdirSync(legacy, { recursive: true })
@@ -218,6 +238,55 @@ test('binding: content removal removes the official artifact and reclaims an emp
     })
     assert.equal(await legacyHost.deleteSessionContent('s4', join(dir, 'proj3')), 'deleted')
     assert.equal(existsSync(legacy), false, 'legacy generation dir reclaimed')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('binding: the purge refuses symlink/subdirectory entries and accepts every canonical generation name', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'archive-cleanup-shape-'))
+  try {
+    const locateFor = (project: string) => (h: { id: string; cwd?: string }) =>
+      ({ kind: 'jsonl', path: join(dir, project, h.id, 'session.v3.jsonl') })
+
+    // A symlinked entry inside the session directory refuses the whole purge.
+    const linkDir = join(dir, 'sym', 's1')
+    mkdirSync(linkDir, { recursive: true })
+    writeFileSync(join(linkDir, 'session.v3.jsonl'), '{}')
+    symlinkSync(join(linkDir, 'session.v3.jsonl'), join(linkDir, 'session.v2.jsonl'))
+    const linkHost = makeHostBinding({ sessionPersistence: { locate: locateFor('sym') } })
+    await assert.rejects(() => linkHost.deleteSessionContent('s1', join(dir, 'sym')), (error: unknown) => {
+      return error instanceof ArchiveCleanupError && error.code === 'storage' && /symlink/.test(error.message)
+    })
+    assert.equal(existsSync(join(linkDir, 'session.v3.jsonl')), true, 'nothing removed on refusal')
+
+    // A subdirectory entry refuses too.
+    const subDir = join(dir, 'sub', 's2')
+    mkdirSync(join(subDir, 'nested'), { recursive: true })
+    writeFileSync(join(subDir, 'session.v3.jsonl'), '{}')
+    const subHost = makeHostBinding({ sessionPersistence: { locate: locateFor('sub') } })
+    await assert.rejects(() => subHost.deleteSessionContent('s2', join(dir, 'sub')), (error: unknown) => {
+      return error instanceof ArchiveCleanupError && error.code === 'storage' && /directory/.test(error.message)
+    })
+
+    // Every canonical generation name is removable: v0 bare, vN, and both
+    // compressed forms; a leading-zero tag is NOT canonical and refuses.
+    const okDir = join(dir, 'ok', 's3')
+    mkdirSync(okDir, { recursive: true })
+    for (const name of ['session.jsonl', 'session.v2.jsonl', 'session.v3.jsonl.zstd', 'session.v12.jsonl.zstd']) {
+      writeFileSync(join(okDir, name), '{}')
+    }
+    const okHost = makeHostBinding({ sessionPersistence: { locate: locateFor('ok') } })
+    assert.equal(await okHost.deleteSessionContent('s3', join(dir, 'ok')), 'deleted')
+    assert.equal(existsSync(okDir), false, 'all canonical generations removed, dir reclaimed')
+
+    const zeroDir = join(dir, 'zero', 's4')
+    mkdirSync(zeroDir, { recursive: true })
+    writeFileSync(join(zeroDir, 'session.v0.jsonl'), '{}')
+    const zeroHost = makeHostBinding({ sessionPersistence: { locate: locateFor('zero') } })
+    await assert.rejects(() => zeroHost.deleteSessionContent('s4', join(dir, 'zero')), (error: unknown) => {
+      return error instanceof ArchiveCleanupError && error.code === 'storage' && /unrecognized entry session\.v0\.jsonl/.test(error.message)
+    })
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
@@ -438,11 +507,12 @@ test('binding sweep: a purge clears registry-global record-less members in ONE c
 
 test('binding: assertHostSurface passes on the full surface and refuses otherwise (probe leg)', () => {
   // Full surface (merge-round Minor-3 hardened the probe to the complete
-  // domain surface): registry + session enumeration + storage locate.
+  // domain surface): registry + session enumeration + storage locate + the
+  // `stat` existence probe the sweep depends on.
   assertHostSurface({
     workspaceRegistry: { archivedSessionIds: [], list: () => [], setState: async () => {} },
     sessionQuery: { listSessions: async () => [] },
-    sessionPersistence: { list: async () => [], locate: () => undefined },
+    sessionPersistence: { list: async () => [], locate: () => undefined, stat: async () => undefined },
   } as never)
   assert.throws(() => assertHostSurface({} as never), (error: unknown) => {
     return error instanceof ArchiveCleanupError && error.code === 'registry-unreadable'
@@ -462,6 +532,31 @@ test('binding: assertHostSurface passes on the full surface and refuses otherwis
     sessionQuery: { listSessions: async () => [] },
   } as never), (error: unknown) => {
     return error instanceof ArchiveCleanupError && error.code === 'registry-unreadable'
+  })
+  // …and without the decisive `stat` probe (the sweep's existence gate).
+  assert.throws(() => assertHostSurface({
+    workspaceRegistry: { archivedSessionIds: [], list: () => [], setState: async () => {} },
+    sessionQuery: { listSessions: async () => [] },
+    sessionPersistence: { list: async () => [], locate: () => undefined },
+  } as never), (error: unknown) => {
+    return error instanceof ArchiveCleanupError && error.code === 'registry-unreadable'
+  })
+})
+
+test('binding: a non-array enumeration leg refuses the read loudly (no silent narrowing)', async () => {
+  const host = makeHostBinding({
+    sessionQuery: { listSessions: async () => ({ not: 'an array' }) },
+  } as never)
+  await assert.rejects(() => host.listSessionStates(), (error: unknown) => {
+    return error instanceof ArchiveCleanupError && error.code === 'registry-unreadable'
+      && /did not answer an array/.test(error.message)
+  })
+  const host2 = makeHostBinding({
+    sessionPersistence: { list: async () => 'nope', locate: () => undefined, stat: async () => undefined },
+  } as never)
+  await assert.rejects(() => host2.listSessionStates(), (error: unknown) => {
+    return error instanceof ArchiveCleanupError && error.code === 'registry-unreadable'
+      && /did not answer an array/.test(error.message)
   })
 })
 
@@ -562,7 +657,7 @@ test('binding union: a failing enumeration leg refuses loudly instead of returni
     sessionPersistence: {
       list: async () => { throw new Error('fake: persistence list exploded') },
       locate: () => undefined,
-      inspect: async () => ({}),
+      stat: async () => ({ header: header('s1') }),
     },
   } as never, registry))
   await assert.rejects(() => host.listSessionStates(), /persistence list exploded/)

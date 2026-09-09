@@ -139,6 +139,21 @@ interface LayoutStoreRuntime {
   writeTimer: ReturnType<typeof setTimeout> | undefined
 }
 
+/**
+ * AppFrame's sidebar-collapsed derivation over one layout snapshot — the
+ * vendor frame's own rule (`narrow = viewportWidth < SIDEBAR_AUTO_COLLAPSE`,
+ * then `narrow ? !narrowExpanded : sidebar === 0`). Exported so the layoutFacts
+ * face and the mobile plugin share one derivation, and so the rule stays
+ * unit-tested after the mobile plugin's local copy was retired.
+ * @param snapshot - the layout store snapshot.
+ * @param autoCollapse - the sidebar auto-collapse breakpoint (vendor columns.ts).
+ * @returns true when the sidebar renders as the collapsed rail.
+ */
+export function collapsedOf(snapshot: LayoutState, autoCollapse: number): boolean {
+  const { sidebar, viewportWidth, narrowExpanded } = snapshot.layoutInfo
+  return viewportWidth < autoCollapse ? !narrowExpanded : sidebar === 0
+}
+
 /** Trailing debounce for the persistence write (drag → ONE updateViewPrefs). */
 export const SIDEBAR_WRITE_DEBOUNCE_MS = 150
 
@@ -183,7 +198,17 @@ export function trackLayoutInstance(env: LayoutStoreEnvironment, instance: Layou
         }
         const current = currentInstance.getSnapshot().layoutInfo.sidebar
         if (current === 0 || current === width) continue
-        currentInstance.store.update((d) => { d.layoutInfo.sidebar = width })
+        // Per-instance isolation (mirrors the layoutFacts notify guard): one
+        // shell whose store update throws must not starve the rest of the
+        // adoption fan-out.
+        try {
+          // Adoption deliberately bypasses `setSidebar`: it must not re-run
+          // the persistence write (the width is already persisted) and it
+          // leaves `rightbarInstant` alone (no geometry gesture happened).
+          currentInstance.store.update((d) => { d.layoutInfo.sidebar = width })
+        } catch (error) {
+          console.error('[dsh-chamber] layout width adoption threw:', error)
+        }
       }
     })
   })

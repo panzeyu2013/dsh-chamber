@@ -11,8 +11,7 @@
  *     │    present from first paint)
  *     ├─ div.<centerCol>  > div[data-slot="main"]      (keyed main panel; the
  *     │    reserved `conversation` key renders
- *     │    div[data-slot="main.conversation"] > …
- *     │      └─ div.root[data-phase] > div[data-slot="conversation.session.header"]
+ *     │      div.root[data-phase] > div[data-slot="conversation.session.header"]
  *     │           └─ <header> (session-gated; children: titleRow [+ tabs]))
  *     ├─ div.<rightbarCol>[data-rightbar-col] (resident SHELL from first paint;
  *     │    its inner [data-slot="rightbar"] outlet is the docking surface)
@@ -110,18 +109,18 @@ export function stampFrame(root: ElementLike): ElementLike | null {
 
 /**
  * Is an added node a structural stamping target? Pure decision for the
- * childList observer (design 17 §18 alpha.4 audit). The stamp set changes
+ * childList observer (design 17 §18 alpha.2 anchor audit). The stamp set changes
  * when any of these mounts:
  *   1. a root slot itself, or a node directly under a root slot (the frame);
  *   2. an already-stamped frame or column re-appearing (remount recovery);
  *   3. a column shell directly under a stamped frame (the a3-era recorded
  *      shape);
- *   4. a slot OUTLET mounting inside a resident column shell — two levels
- *      under a stamped frame. This is the real alpha.3/alpha.4 shape for
- *      the details column (shell resident from first paint, session-gated
- *      outlet mounting later); without it the empty shell was never
- *      stamped and a later details outlet stayed invisible under the
- *      mobile grid lock. NOTE (coupling): convergence depends on the
+ *   4. a slot OUTLET wrapper mounting inside a resident column shell — two
+ *      levels under a stamped frame. Both column shells and their outlet
+ *      wrappers are resident from first paint in the alpha.2 frame; this
+ *      branch covers the transient/remount shapes (a shell appearing before
+ *      its parent is stamped) so a late mount is never left unstamped under
+ *      the mobile grid lock. NOTE (coupling): convergence depends on the
  *      empirical shape where the outlet IS the shell's direct child — the
  *      same one-level shape findColumn() searches. If upstream ever inserts
  *      a wrapper between shell and outlet (col > wrapper > [data-slot=…]),

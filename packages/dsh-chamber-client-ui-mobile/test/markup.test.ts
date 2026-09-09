@@ -131,7 +131,7 @@ test('stampFrame stamps the frame and all three columns (idempotent)', () => {
 })
 
 // ---------------------------------------------------------------------------
-// Re-stamp predicate (alpha.4 anchor audit): a slot outlet mounting inside a
+// Re-stamp predicate (alpha.2 anchor audit): a slot outlet mounting inside a
 // resident column shell must count as structural, while deep content stays
 // filtered out of the streaming hot path.
 // ---------------------------------------------------------------------------
@@ -146,7 +146,7 @@ test('isStructuralTarget: a boot-time stamp skips the empty details shell', () =
     'the resident empty details shell must NOT be stamped at boot')
 })
 
-test('isStructuralTarget: session activation outlet mount re-stamps details (alpha.4 regression)', () => {
+test('isStructuralTarget: a right-column outlet mount re-stamps the resident shell', () => {
   const { root, detailsCol } = bootFrame()
   stampFrame(root)
   // Session activates: the [data-slot="details"] outlet mounts INSIDE the
@@ -266,11 +266,3 @@ test('isElementNode guards non-element additions', () => {
   assert.equal(isElementNode(undefined), false)
   assert.equal(isElementNode({}), false)
 })
-
-// ---------------------------------------------------------------------------
-// Session-header chrome stamps: the "Session 日志" export capsule
-// (official session-log-export, header utilities) gets the phone-tier
-// compact mark. The stamp walks the anchor shape (conversation column →
-// session-header slot outlet → buttons) and matches the bilingual official
-// copy + the structural download-icon guard.
-// ---------------------------------------------------------------------------

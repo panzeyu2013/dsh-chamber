@@ -38,7 +38,10 @@ export interface PanelSource {
   sync(slots: SlotsReader): void
 }
 
-/** Resolve a possibly-thunked ledger label at read time. */
+/** Resolve a possibly-thunked ledger label at read time. Inlined mirror of
+ *  the vendor `resolveSlotLabel` (ui-slots): this package deliberately avoids a
+ *  runtime value import of the slots package beyond what it already consumes,
+ *  and the rule is a one-liner (`typeof === 'function' ? label() : label`). */
 function labelOf(label: string | (() => string) | undefined): string | undefined {
   return typeof label === 'function' ? label() : label
 }

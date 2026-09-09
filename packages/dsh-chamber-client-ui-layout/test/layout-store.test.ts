@@ -17,6 +17,7 @@
 import { test, mock } from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  collapsedOf,
   createLayoutStore,
   trackLayoutInstance,
   SIDEBAR_WRITE_DEBOUNCE_MS,
@@ -429,6 +430,55 @@ test('the no-op guard cancels a stale pending write when the drag returns to the
     mock.timers.tick(SIDEBAR_WRITE_DEBOUNCE_MS)
     assert.equal(viewPrefs.writeCount(), 0)
     assert.equal(viewPrefs.getViewPrefs().sidebarWidth, 300)
+  } finally {
+    mock.timers.reset()
+  }
+})
+
+// ---- AppFrame collapsed derivation (shared by layoutFacts + the mobile plugin) ----
+
+test('collapsedOf mirrors AppFrame: wide uses the preference, narrow the override', () => {
+  const state = (layoutInfo: {
+    sidebar: number
+    viewportWidth: number
+    narrowExpanded: boolean
+  }) => ({
+    panelInfo: { activePanelId: null },
+    layoutInfo: {
+      ...layoutInfo,
+      rightbar: null,
+      rightbarShown: false,
+      rightbarTrack: false,
+      rightbarFullscreen: false,
+      rightbarInstant: false,
+    },
+  })
+  // Wide: the sidebar preference decides; narrowExpanded is meaningless.
+  assert.equal(collapsedOf(state({ sidebar: 0, viewportWidth: 1600, narrowExpanded: false }), SIDEBAR_AUTO_COLLAPSE), true)
+  assert.equal(collapsedOf(state({ sidebar: 280, viewportWidth: 1600, narrowExpanded: false }), SIDEBAR_AUTO_COLLAPSE), false)
+  assert.equal(collapsedOf(state({ sidebar: 0, viewportWidth: 1600, narrowExpanded: true }), SIDEBAR_AUTO_COLLAPSE), true)
+  // Narrow: auto-collapsed unless the manual override re-expands.
+  assert.equal(collapsedOf(state({ sidebar: 280, viewportWidth: SIDEBAR_AUTO_COLLAPSE - 1, narrowExpanded: false }), SIDEBAR_AUTO_COLLAPSE), true)
+  assert.equal(collapsedOf(state({ sidebar: 0, viewportWidth: SIDEBAR_AUTO_COLLAPSE - 1, narrowExpanded: true }), SIDEBAR_AUTO_COLLAPSE), false)
+  // Breakpoint boundary: exactly SIDEBAR_AUTO_COLLAPSE is WIDE.
+  assert.equal(collapsedOf(state({ sidebar: 280, viewportWidth: SIDEBAR_AUTO_COLLAPSE, narrowExpanded: true }), SIDEBAR_AUTO_COLLAPSE), false)
+})
+
+test('one throwing instance does not starve the adoption fan-out', async () => {
+  mock.timers.enable({ apis: ['setTimeout'] })
+  try {
+    const { env } = makeEnv({ sidebarWidth: 300 })
+    const handle = createLayoutStore(env)
+    const broken = handle.create()
+    const healthy = handle.create()
+    trackLayoutInstance(env, broken)
+    trackLayoutInstance(env, healthy)
+    // Make the FIRST tracked instance throw on the adoption write.
+    broken.store.update = () => { throw new Error('store update exploded') }
+    healthy.actions.setSidebar(360)
+    mock.timers.tick(SIDEBAR_WRITE_DEBOUNCE_MS)
+    await Promise.resolve()
+    assert.equal(healthy.getSnapshot().layoutInfo.sidebar, 360, 'writer keeps its own value')
   } finally {
     mock.timers.reset()
   }

@@ -8,6 +8,17 @@ LOWER priority (`-1`) than the official SettingsRoot registration, so the
 official shell is shadowed — never conflicted: the official entry stays on
 the ledger and its `settings.*` children declarations remain valid.
 
+## alpha.2 ledger parity
+
+The child context declares no sidebar shell of its own, so it supplies the
+declaration chain with inert entries. That child set is kept **isomorphic with
+the official `ui-sidebar` entry** — `sidebar.brand.mark`, `sidebar.brand.name`,
+`sidebar.panellist`, `sidebar.workspaces`, `sidebar.settings`,
+`sidebar.footer.action` — so a section that targets any of those holes
+registers instead of failing on an undeclared slot. The standard-props kit also
+provides an empty `usePanelInfo` seat (stable snapshot reference) because the
+official settings components read it as a global standard prop.
+
 ## Behavior
 
 - A server dropdown over the selected instance; the panel mounts a

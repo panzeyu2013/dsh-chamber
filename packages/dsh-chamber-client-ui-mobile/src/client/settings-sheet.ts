@@ -8,7 +8,8 @@
  *
  * Anchors are the same structural grammar the stylesheet sheet rules use:
  * the settings dialog is `[role="dialog"][aria-modal="true"]` carrying the
- * `settings.header` slot (inside the nav's title cell, rc.1 shape) with the
+ * `settings.header` slot (inside the nav's title cell, rc.1 shape, unchanged
+ * at alpha.2) with the
  * section-chip list as its direct `nav` child (dialog > nav + content). Only
  * a click on a nav CHIP (a `button` inside that nav) resets; the nav title,
  * the options area and the dialog chrome never do. The reset walks the
@@ -36,7 +37,7 @@ export interface ChipTargetLike {
 }
 
 /** Is this click a settings SECTION-CHIP click? Pure — unit-tested. The
- *  official nav's only buttons are the section chips (rc.1: the navTitle cell
+ *  official nav's only buttons are the section chips (since rc.1: the navTitle cell
  *  holds a text-only `settings.header` occupant and the Close button lives in
  *  the content header), so requiring a `button` whose nearest nav ancestor is
  *  THE settings nav excludes the title, the options area and the dialog

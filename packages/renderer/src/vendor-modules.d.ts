@@ -20,6 +20,8 @@ declare module '@deepseek-ai/cordis' {
     emit(...args: any[]): unknown
     get(...args: any[]): unknown
     provide(...args: any[]): unknown
+    /** Cordis effect scope: the callback's returned disposer runs on fiber teardown. */
+    effect(fn: () => (() => void) | void, label?: string): void
     /**
      * chamber v1: per-instance sessions runtime face (loose mirror of ISessions
      * from @deepseek-ai/dsh-api-session-controller/client — the dsh-v0.1.2-alpha.1

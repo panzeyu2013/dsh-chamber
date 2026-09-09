@@ -27,7 +27,9 @@
 
 > 2026-09 submodule 化后：**源码线**（构建期 vendor 树）由 git submodule
 > 固定 commit，升级唯一入口是 `scripts/dev/update-vendor.mjs`；**运行时线**
-> （打包进桌面的 `@deepseek-ai/dsh` npm 包）维持原有四常量。
+> （打包进桌面的 `@deepseek-ai/dsh` npm 包）维持六个锚（bundle-dsh 兜底常量、
+> desktop vendor 锁文件、release.yml env、install-gateway.sh、gateway
+> `dshAnchorVersion`、release-preflight `FORK_VERSION`）。
 
 - [ ] **源码线（submodule）**：`node scripts/dev/update-vendor.mjs <tag>` 原子升级
       （fetch+校验 tag → 切 submodule → 更新 `harness.commit` → 差量建链 →
@@ -42,7 +44,7 @@
       同步（此 env 仅存在于 release.yml，CI 不打包；若将来把打包 job 加回
       ci.yml，必须连同 ci.yml 一起同步）。
 - [ ] **安装脚本常量同步**：`scripts/install-gateway.sh` 内置
-      `DSH_CHAMBER_DSH_VERSION`（当前 `0.1.3-alpha.2`）→ 目标版本（与 release.yml
+      `DSH_CHAMBER_DSH_VERSION`（当前 `0.1.5-alpha.2`）→ 目标版本（与 release.yml
       的 env 同步；脚本默认安装该版本，用户可交互覆盖）。
 - [ ] 重建 vendor 树：`node scripts/dev/ensure-harness-vendor.mjs` → 链接数 = 目标
       版本包数（240 之类），无告警（submodule HEAD==pin）。
@@ -106,13 +108,14 @@
       chamber 是否消费、新包是否要动作）。
 - [ ] 后续升级（如 rc.2 → 更高）时复用本 checklist，并在 STATUS.md 记录增量。
 
-## 9. 在途：dsh-v0.1.5-alpha.2 升级（2026-09 调研完成，pin 仍 0.1.3-alpha.2）
+## 9. 已执行：dsh-v0.1.5-alpha.2 升级（2026-09，源码线 + 运行时线均已收口）
 
-> 状态：**未升级**（源码线/运行时线仍 0.1.3-alpha.2）。目标锚点已从 `dsh-v0.1.5-alpha.1`
-> 更新为 **`dsh-v0.1.5-alpha.2`**（`b2e3b2a0`，上游 master HEAD，npm `alpha` 已指向它）；
-> 本节记录已完成的准备与剩余工作，供下一轮直接执行。
-> 全部结论来自只读调研（`ls-remote`/`fetch` 与逐文件 diff），未改动 pin。
->
+> 状态：**已升级**——源码线 pin = `b2e3b2a01258`（dsh-v0.1.5-alpha.2，vendor 链接 284），
+> 运行时线六锚 = 0.1.5-alpha.2（`bin.js --version` 冒烟通过）。本节保留为**执行记录**：
+> 调研结论、已落地的重放/修复与剩余实机门禁；完成细节见 CHANGELOG [Unreleased] 与
+> `docs/progress/STATUS.md` 的「2026-09 dsh 基线对齐记录（0.1.5-alpha.2）」。
+> 目标锚点从 `dsh-v0.1.5-alpha.1` 更新为 **`dsh-v0.1.5-alpha.2`**（上游 master HEAD，
+> npm `alpha` 已指向它）。
 > **2026-09 补充（两轮）**：
 > ① 全量差异对比（rc.1→alpha.2 + chamber 兼容评估，含前端显示差异、右栏栈服务注入硬点、
 > 设计 24 的 v3 代际残留）见
@@ -176,11 +179,11 @@
 4. **connection / api-gateway 重放**：connection 纯文件照抄（READMEs、
    `src/index.ts` 宿主半 `webServer` 可选注入重构、`src/client/fixture.ts` +291）、
    `package.json` 版本 + 保留本仓 scripts；api-gateway 仅版本（client 半零改动）。
-5. **运行时四锚 + 捆绑**：npm `@deepseek-ai/dsh@0.1.5-alpha.1` 已发布 → 可双线收口
+5. **运行时六锚 + 捆绑**：npm `@deepseek-ai/dsh@0.1.5-alpha.2` 已发布 → 可双线收口
    （bundle-dsh 兜底常量、`vendor/dsh` 锁文件 `--force --refresh-lockfile`、
    release.yml env、install-gateway.sh、gateway `dshAnchorVersion`、
    release-preflight `FORK_VERSION`）。
-6. **锁文件**：vendor 成员 271 → 282（−4 landlock、+15：7 新包 + 5 `node-addon-system*`
+6. **锁文件**：vendor 成员 271 → **284**（−4 landlock、+17：含 `apps/desktop`、`apps/desktop-host`、`native/system*` 6 个、`ui-sidebar-documentpreview` 等；实测 284）
    + 3 其他），按 §4 纪律重生成 + 手工处理 landlock 复活记录。
 7. 全量门禁（§6）+ 文档回写（§7）+ `verify:i18n` + 触点表 §2/§5 更新。
 
@@ -197,4 +200,4 @@
   —— 与 §9.2 第 1 项互为印证：layout fork 是唯一实质阻塞点。包集合 +15 / −4
   （landlock 系列），新增 client 行 5（`dsh-api-workspace-files`、`client-resources`、
   `ui-sidebar-{files,right,textpreview}` —— 比 §9.2 第 2 项多一行，roster 裁决需一并
-  覆盖），净 271 → 282 与 §9.2 第 6 项一致。
+  覆盖），净 271 → **284**（实测；原估 282 漏计 `apps/desktop`/`apps/desktop-host`）。

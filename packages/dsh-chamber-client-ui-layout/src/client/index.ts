@@ -34,6 +34,7 @@ import type { PanelInfo } from '@deepseek-ai/dsh-client-ui-layout/src/client/ser
 import { AppFrame } from '@deepseek-ai/dsh-client-ui-layout/src/client/AppFrame.tsx'
 import { SIDEBAR_AUTO_COLLAPSE } from '@deepseek-ai/dsh-client-ui-layout/src/client/columns.ts'
 import { createLayoutStore, trackLayoutInstance } from './stores.ts'
+import { collapsedOf } from './store-core.ts'
 import type { LayoutState } from './store-core.ts'
 import { LayoutController } from '@deepseek-ai/dsh-client-ui-layout/src/client/service.ts'
 import { ThemePresenter } from '@deepseek-ai/dsh-client-ui-layout/src/client/theme-presenter.ts'
@@ -85,12 +86,6 @@ export interface LayoutFacts {
   getCollapsed(): boolean
   /** Subscribe to snapshot changes; fires once immediately on subscribe. */
   subscribeLayout(listener: () => void): () => void
-}
-
-/** AppFrame's collapsed derivation over one snapshot (single source of truth). */
-function collapsedOf(snapshot: LayoutState): boolean {
-  const { sidebar, viewportWidth, narrowExpanded } = snapshot.layoutInfo
-  return viewportWidth < SIDEBAR_AUTO_COLLAPSE ? !narrowExpanded : sidebar === 0
 }
 
 declare module '@deepseek-ai/cordis' {
@@ -237,7 +232,7 @@ export function apply(ctx: ClientContext): void {
     }
     const layoutFacts: LayoutFacts = {
       getLayoutSnapshot: () => instance.getSnapshot(),
-      getCollapsed: () => collapsedOf(instance.getSnapshot()),
+      getCollapsed: () => collapsedOf(instance.getSnapshot(), SIDEBAR_AUTO_COLLAPSE),
       subscribeLayout: listener => {
         listeners.add(listener)
         listener()

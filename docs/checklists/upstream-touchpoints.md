@@ -4,8 +4,8 @@
 > 纯度、深引 vendor 内部、契约镜像、covered/assembly 行、生成物——并给出每次升级 tag 后的保鲜闭环。
 > 机器侧门 = `scripts/dev/verify-upstream-touchpoints.mjs`（C1–C8；CI 在 Bootstrap 后跑 C1/C3/C5/C6，
 > 其余本地跑）；本文件与脚本内的登记表**同源**，改动时两侧同步。
-> 基准：本表以 **dsh-v0.1.3-alpha.2（82a5fd61a7，harness.commit）** 与 fork 版本标记
-> 0.1.3-alpha.2 为锚（C5 校验）；重锚（Batch 2 一次性重锚）后本表随维护循环刷新。
+> 基准：本表以 **dsh-v0.1.5-alpha.2（b2e3b2a01258，harness.commit）** 与 fork 版本标记
+> 0.1.5-alpha.2 为锚（C5 校验）；每次重锚后本表随维护循环刷新（§0 基线速查同步）。
 
 ## 0. 基线速查
 
@@ -99,8 +99,16 @@ host 插件入口/半、上游 `tests/`、`tsdown.config.ts`、上游 README（a
 - dsh-v0.1.3-alpha.2：connection recovery-config 抽取重放（本表 §2.1）；api-gateway/web 版本行。
 - dsh-v0.1.5-alpha.2（b2e3b2a01258，**已升级**）：connection 纯文件重放（README×3 +
   `src/client/fixture.ts` + `src/index.ts` 宿主半 webServer 可选注入，实测 fork-pure）、
-  client-web 版本行 + `ui-dockkit` 偏差注释（走 covered factory，不 seed）、api-gateway
-  版本行；客户端外壳两代槽位模型重放见 STATUS「0.1.5-alpha.2 基线对齐记录」。
+  client-web 版本行 + `ui-dockkit` 偏差注释（走 covered factory，不 seed；上游
+  `tsconfig.json` 的 `../ui-dockkit` reference 有意不镜像——chamber 构面用 paths，无
+  references）、api-gateway 版本行；客户端外壳两代槽位模型重放见 STATUS
+  「0.1.5-alpha.2 基线对齐记录」。
+- **契约镜像补充（alpha.2 新增，2026-09 复核）**：composite 首屏 `ui-chat` 的 cordis
+  inject 新增 `sidebarRight`（由 host-graph extra row `ui-sidebar-right` 提供）与
+  `resources`（`client-resources` 行）——chamber-entry 新增
+  `assertRequiredExtraRowServices` 有界探针（纯判定在 `src/required-extra-rows.ts`，
+  定时器挂 ctx 生命周期）。该「首屏依赖 extra row 服务」耦合是本表 §4 之外的**新触点类别**：
+  上游新增 client 行若被复合首屏 inject，需同步登记并在探针集合里加名。
 - **历史动向记录（2026-09 只读调研，当时 pin 仍 82a5fd61a7cf）**：上游 tag
   `dsh-v0.1.5-alpha.1`（5dda764e）。三个 fork 的**客户端恢复模型零改动**
   （`connection/src/client/{connection,index}.ts` 未变；变的是 fixture、宿主半
@@ -116,7 +124,7 @@ host 插件入口/半、上游 `tests/`、`tsdown.config.ts`、上游 README（a
 - covered/factory：`packages/renderer/src/chamber-covered.ts`（CHAMBER_COVERED_IDS /
   CHAMBER_COVERED_FACTORY_IDS）；chamber-entry 执行期断言 map==列表；新增官方 client 行须
   登记 covered（precedent：ui-open-in-app 行随 a2 登记）。删包 fail-loud 哨兵在 verify 脚本 C4。
-- typert remote 装配：`vendor/…/dsh-api-remotes/src/client/index.ts` 契约 == 13（gen-typert-remotes
+- typert remote 装配：`vendor/…/dsh-api-remotes/src/client/index.ts` 契约 == **15**（集合与顺序；gen-typert-remotes
   与 C4 双向断言）；上游新增 remote 包 = 先裁决（是否 chamber 消费/镜像）再登记。
 - `remotePackagesFromAssembly`（renderer/scripts/typert-remote-contract.mjs）为装配契约唯一入口。
 
@@ -124,7 +132,7 @@ host 插件入口/半、上游 `tests/`、`tsdown.config.ts`、上游 README（a
 
 | 上游属主 | chamber 契约镜像点 | 保鲜 |
 |---|---|---|
-| dsh-api-remotes（client） | typert remote 装配（13）/ message-feedback、session-reference、subagent 等 wire 面 | gen-typert-remotes + C4 |
+| dsh-api-remotes（client） | typert remote 装配（15）/ message-feedback、session-reference、subagent 等 wire 面 | gen-typert-remotes + C4 |
 | dsh-api-session-controller | api-gateway fork journal-stream 帧（无游标 notification） | fork 重放 + 升级复验 |
 | client/connection（recovery） | recovery-config 共享 schema（`DEFAULT_MIN_RESTART_INTERVAL_MS` 10_000 == schema 默认 backoffMaxMs） | liveness-triggers 钉值 + C1 |
 | dsh-runtime（激活探针域） | `HOST_DOMAIN_PROBE_NAMES` ↔ gateway `HOST_PACKAGE_PROBE_DOMAINS` | C7 + gateway 运行时 fail-loud |
@@ -136,7 +144,7 @@ host 插件入口/半、上游 `tests/`、`tsdown.config.ts`、上游 README（a
 | 再生物 | 源 | 提交纪律 |
 |---|---|---|
 | renderer typert 工件（gen-typert-remotes 输出） | vendor typert/remote 源码 | 升级后重生成 diff 随批提交（Batch 0 §2.5） |
-| host dist ×3（`dist/index.js`） | chamber host 包 src | `build:host-packages` 后提交（C8 advisory 盯陈旧） |
+| host dist ×3（`dist/index.js`）+ mobile `lib/client.js` | chamber host 包 src / mobile src | `build:host-packages` / mobile `build` 后提交（C8 advisory 盯陈旧；mobile 产物由 gateway 逐字节 seed，漏检=线上锚点失效） |
 | mobile `lib/client.js`（+map） | mobile src | mobile build 随命名/升级批重建 |
 | boot manifest / perf-sizes | build:renderer | 构建产物 diff 随批审查 |
 | schemastery 桩 loader（connection/web 测试） | vendor source-only 现实 | 新增 vendor 运行时导入面时同步补桩 |
@@ -146,7 +154,7 @@ host 插件入口/半、上游 `tests/`、`tsdown.config.ts`、上游 README（a
 `node scripts/dev/verify-upstream-touchpoints.mjs`（只读、exit-code 语义）：
 - C1 pure 字节恒等 / C3 完整性（fork 每文件分类、上游每文件裁决，漏 = 硬失败）/
   C5 过期锚扫描 / C6 EXCLUDED 存在性 —— **CI 在 Bootstrap 后 fail-loud**；
-- C4 roster（covered/factory 哨兵 + remote 契约 13）—— 本地/CI 均可；
+- C4 roster（covered/factory 哨兵 + remote 契约 15 的集合与顺序）—— 本地/CI 均可；
 - C7 种子域锁步、C8 生成物陈旧（advisory）—— 本地跑。
 - C2 `--tags <old> <new>`：tag 间三 fork 面重放报告（advisory），升级前先跑。
 - `scripts/dev/preflight-vendor-pin.mjs <tag>`（只读，§7 第 0 步）：C2 的**超集**——

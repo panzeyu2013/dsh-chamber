@@ -8,7 +8,7 @@
  *   C2  --tags <old> <new>：上游两 tag 间三 fork 面的重放差异报告（advisory）
  *   C3  完整性：fork 每文件有分类（pure/patched/own），上游每文件有裁决
  *       （mirrored/dropped）；漏分类/新文件漏裁决 = 硬失败
- *   C4  roster：typert remote 装配契约 == 13、covered/factory 存在性、
+ *   C4  roster：typert remote 装配契约 == 15（集合与顺序）、covered/factory 存在性、
  *       删包 fail-loud（存在性哨兵列表）
  *   C5  过期锚扫描：三 fork package.json 版本 == 上游同文件版本；
  *       submodule HEAD == harness.commit
@@ -319,11 +319,30 @@ for (const fork of FORKS) {
       join(ROOT, 'packages/renderer/scripts/typert-remote-contract.mjs')
     )
     const remotes = remotePackagesFromAssembly(readFileSync(assemblyEntry, 'utf8'))
-    if (remotes.length !== 15) {
+    // Exact set AND order: a same-length swap (a package added while another
+    // is removed, or a reordered assembly) must not pass silently.
+    const expected = [
+      '@deepseek-ai/dsh-agent-presets',
+      '@deepseek-ai/dsh-commands',
+      '@deepseek-ai/dsh-api-settings-controller',
+      '@deepseek-ai/dsh-goal',
+      '@deepseek-ai/dsh-llm',
+      '@deepseek-ai/dsh-cordis-host-runner',
+      '@deepseek-ai/dsh-host-plugin-inventory',
+      '@deepseek-ai/dsh-message-feedback',
+      '@deepseek-ai/dsh-command-feedback',
+      '@deepseek-ai/dsh-client-file-upload',
+      '@deepseek-ai/dsh-session-reference',
+      '@deepseek-ai/dsh-subagent',
+      '@deepseek-ai/dsh-api-session-controller',
+      '@deepseek-ai/dsh-api-workspace-controller',
+      '@deepseek-ai/dsh-api-workspace-files',
+    ]
+    if (remotes.length !== expected.length || remotes.some((name, index) => name !== expected[index])) {
       hardFails += 1
-      fail(`C4 remotePackagesFromAssembly = ${remotes.length}（期望 15）——上游装配面变更需重审 typert 契约`)
+      fail(`C4 remotePackagesFromAssembly = ${JSON.stringify(remotes)}（期望 ${JSON.stringify(expected)}）——上游装配面变更需重审 typert 契约`)
     } else {
-      console.log('✓ C4 remote assembly 契约 = 15')
+      console.log(`✓ C4 remote assembly 契约 = ${remotes.length}（集合与顺序）`)
     }
   }
 }
@@ -387,6 +406,11 @@ for (const fork of FORKS) {
     ['packages/dsh-chamber-seed-client-graph/dist/index.js', 'packages/dsh-chamber-seed-client-graph/src'],
     ['packages/dsh-chamber-seed-git-worktree/dist/index.js', 'packages/dsh-chamber-seed-git-worktree/src'],
     ['packages/dsh-chamber-seed-archive-cleanup/dist/index.js', 'packages/dsh-chamber-seed-archive-cleanup/src'],
+    // The mobile browser half is a committed artifact too (package.json
+    // exports ./client -> lib/client.js) and the gateway seeds it byte for
+    // byte; a stale bundle silently keeps retired DOM anchors (2026-09 V1
+    // review BLOCKER: the alpha.2 slot rename was invisible in this check).
+    ['packages/dsh-chamber-client-ui-mobile/lib/client.js', 'packages/dsh-chamber-client-ui-mobile/src'],
   ]
   for (const [artifact, srcDir] of artifacts) {
     const artifactPath = join(ROOT, artifact)

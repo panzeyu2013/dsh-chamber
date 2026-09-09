@@ -1,10 +1,11 @@
 /**
  * Mobile adaptation stylesheet (design 17 §18.4.3/§18.4.5): a single global
  * sheet injected at apply() as `<style data-plugin="…">`. Anchors are the
- * OFFICIAL stable attributes confirmed against the dsh 0.1.2-alpha.4 DOM
- * (CDP empirical audit; ui-layout AppFrame byte-identical with the alpha.3
- * pin — alpha.4 anchor audit) plus the plugin's own `data-mobile-*`
- * stamps — no hashed class names. Production CSS-modules naming is
+ * OFFICIAL stable attributes confirmed against the dsh 0.1.5-alpha.2 DOM
+ * (CDP empirical audit, re-anchored when the vendored pin moved: the centre
+ * column is the keyed `main` slot, the right column is `rightbar`, and the
+ * frame carries `data-sidebar-collapsed` / `data-rightbar-collapsed`) plus
+ * the plugin's own `data-mobile-*` stamps — no hashed class names. Production CSS-modules naming is
  * `_<local>_<hash>_<idx>` (verified on the production bundle), so
  * `[class$="_<local>"]` suffix selectors can never match — legacy suffix
  * rules predate that verification and are migrated to attribute anchors;
@@ -21,7 +22,7 @@
  *
  * Breakpoints (design 17 §18.4.2):
  *  - `(max-width: 1023px) and (pointer: coarse)` — the touch tier: the
- *    sidebar rail becomes an overlay drawer, the details column is hidden,
+ *    sidebar rail becomes an overlay drawer, the right column is hidden,
  *    the conversation takes the full width, touch targets get the 44px
  *    floor. The `pointer: coarse` guard is the "PC leak" lesson (a desktop
  *    window narrower than 1024 must NOT get the mobile UI) — applied to
@@ -88,7 +89,8 @@ export const MOBILE_CSS = `
    feedback, workspace rows, chat copy/branch) whose aria-label names the same
    action (3 of them phrase it slightly differently — workspace search ×2,
    trajectory load-earlier — same semantics; verified against the 0.1.2-rc.1
-   install, 2026-12 cross-check). Four informational bubbles are deliberately
+   install and unchanged at 0.1.5-alpha.2, 2026-09 re-anchor). Four
+   informational bubbles are deliberately
    NOT hidden because their trigger has no accessible duplicate: the chat
    stats line (ui-chat:3853, ellipsized non-focusable div), the agent-preset
    card description (ui-agent-preset:960, line-clamp:4), the trajectory
@@ -113,9 +115,9 @@ export const MOBILE_CSS = `
      explicitly locked so the center column is never squeezed into a 0-width
      track by the fixed sibling. IMPORTANT (P1-C): the official AppFrame
      sets NO explicit grid-column — with the sidebar fixed (out of flow),
-     auto-placement would put conversation into track 1 (0px) and details
-     into track 2 (full width). Both remaining columns must be pinned
-     explicitly. */
+     auto-placement would put the main column into track 1 (0px) and the
+     rightbar column into track 2 (full width). Both remaining columns must
+     be pinned explicitly. */
   [data-mobile-frame] {
     grid-template-columns: 0 minmax(0, 1fr) 0 !important;
   }
@@ -162,7 +164,7 @@ export const MOBILE_CSS = `
   }
 
   /* Drawer backdrop: dims the conversation behind the open drawer and — by
-     sitting above it (z-39 < drawer 40) — absorbs stray taps on the ~50px
+     sitting above it (z-74 < drawer 75) — absorbs stray taps on the ~50px
      live seam right of the drawer (the composer send button must not be
      hit while the drawer is open). Tap on the backdrop closes the drawer
      (the toggle component wires the click). */
@@ -363,6 +365,10 @@ export const MOBILE_CSS = `
 @media (max-width: 768px) and (pointer: coarse) {
   /* Composer toolbar: one line. The official row wraps; force nowrap (the
      official 12px gap is kept — no gap override). */
+  /* Infix match (production names are _<local>_<hash>_<idx>): this also hits
+     sibling rows whose local name ends in "row" inside the composer bar
+     subtree (e.g. the queue dock's .row), which is harmless today — those
+     rows declare no flex-wrap and carry no _trigger_ child. */
   [data-slot="conversation.composer.bar"] [class*="_row_"] {
     flex-wrap: nowrap !important;
   }
@@ -521,7 +527,7 @@ export const MOBILE_CSS = `
   }
 
   /* Scrolling body: contain the pull gesture. The composer seat is a FLOW
-     child of this scroller (official rc.1: scrollBody > [session slot,
+     child of this scroller (official shape since rc.1: scrollBody > [session slot,
      composerSeat]), so the official sheet declares NO padding-bottom here —
      the bottom spacing lives on the InputBar root (8px) and the message
      column (16px), neither of which this rule touches. */

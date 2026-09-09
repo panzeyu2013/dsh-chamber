@@ -12,7 +12,7 @@
  *
  * 用法：
  *   node scripts/dev/release-preflight.mjs <version> [--fork-version <v>]
- *       默认 fork 副本基线 0.1.3-alpha.1。--fork-version 可覆盖。
+ *       默认 fork 副本基线 0.1.5-alpha.2（见下方 FORK_VERSION）。--fork-version 可覆盖。
  *   node scripts/dev/release-preflight.mjs --actions-only   # CI 模式：只验
  *       证 .github/workflows/*.yml 的 action SHA（网络解析），其余跳过。
  *   node scripts/dev/release-preflight.mjs <version> --versions-only

@@ -1370,6 +1370,9 @@ export function SidebarRoot({
               <span className={css.brandMark}>
                 {renderSlot('sidebar.brand.mark', { size: 24 }, { fallback: <BrandWordmark /> })}
               </span>
+              {/* No name fallback: the chamber wordmark already carries the
+                  product name in the mark hole, so an unoccupied name hole
+                  renders nothing rather than duplicating it. */}
               <span className={css.brandName}>
                 {renderSlot('sidebar.brand.name', {}, { fallback: null })}
               </span>

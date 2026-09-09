@@ -1336,18 +1336,19 @@ append-only 无删除方法），走 dsh 实例自身 host 插件（`ctx.inject(
   (b) 官方 crumbs 行 nowrap + overflow hidden 会静默截断长标题链/谱系
   chip（如「N 个子代理」目录触发器）→ 换行不裁切（单段省略号保留）；
   (c) 官方 session-log-export 的「Session 日志」胶囊（header utilities，
-  min-width 111px+ 药丸）在手机上吃满标题行而移动端几乎不导出 → 手机档由
-  markup.ts 按官方双语文案 + 下载图标结构打标
-  （`data-mobile-dismiss="session-log-export"`，幂等、剪枝搜索，聊天滚动体
-  不遍历）收成 44px 圆形图标（label 用 font-size:0 保留可访问名）。
+  min-width 111px+ 药丸）在手机上吃满标题行而移动端几乎不导出 → **alpha.2
+  重锚已退役本项**：上游把该控件改为会话头 more-actions 菜单里的 28×28 图标
+  按钮（`HeaderAction.tsx`），插件不再按文案打标（旧 `data-mobile-dismiss`
+  机制与 CSS 一并删除）。
 - **安全区一次做全**：`viewport-fit=cover` + `env(safe-area-inset-*)` 全表面 +
   `100dvh`/`dvh` + `theme-color` 跟随主题 + `interactive-widget=resizes-content`；
   `touch-action` 需给 textarea 恢复 `auto`（否则吞光标）；
 - **轨迹详情**：移动端改底部悬浮卡（`bottom` 抬到输入区上方，`min(52vh,460px)`），
-  或新增 Status 标签页承载统计（mobile-shell 思路）。**P1 实现采用第三种形态——
-  右侧覆盖层**：`data-details-collapsed` 移除时 details 列 `position:fixed; right:0`
-  覆盖会话区（保持官方 DOM 零改动、`transform:none` 防 containing-block），取舍：
-  零重写、与抽屉同机制、官方轨迹面板原样可用。
+  或新增 Status 标签页承载统计（mobile-shell 思路）。**P1 曾采用第三种形态——右侧
+  覆盖层**（`data-details-collapsed` 移除时 details 列 `position:fixed; right:0`）：
+  **alpha.2 重锚已退役**——官方右栏栈自带移动呈现（`ui-sidebar-right` 在 <768px
+  自动全屏、`position:fixed; inset:0`），自绘覆盖层与之重复且打架，插件只保留第三轨
+  的网格锁（`[data-mobile-role="details"] { grid-column: 3 }`）。
 
 **18.4.4 行为层（移动端复杂度的真正核心）**
 

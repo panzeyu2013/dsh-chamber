@@ -28,10 +28,10 @@
  *    absent sessions root (vendor session/session-persistence-jsonl/src/
  *    index.ts:507-544,893-904) — so `listHeaders` unions both surfaces by id
  *    and never drops a record either side reports;
- *  - AUTHORITATIVE EXISTENCE PROBE (2026-12 blocker fix): `hasStoredContent`
- *    asks the official `sessionPersistence.inspect(id)` — the jsonl backend
- *    resolves an id across ALL project directories when cwd is unknown
- *    (vendor session/session-persistence-jsonl/src/index.ts:227-234 findLog)
+ *  - AUTHORITATIVE EXISTENCE PROBE (2026-12 blocker fix; surface re-anchored
+ *    2026-09 to `stat(id)`): `hasStoredContent` asks the official
+ *    `sessionPersistence.stat(id)` — the jsonl backend resolves an id across
+ *    ALL project directories and ALL format generations when cwd is unknown
  *    — and fails closed to `true` on every error except the official
  *    not-found carrier.
  */
@@ -146,6 +146,17 @@ function isGenerationFilename(name: string): boolean {
   return /^session(?:\.v[1-9][0-9]*)?\.jsonl(?:\.zstd)?$/.test(name)
 }
 
+/**
+ * Is this filename a leftover generation temp file? The jsonl backend
+ * publishes each generation via `link()`+`unlink()` from
+ * `<generation>.<12 hex>.tmp` in the same directory, so an interrupted write
+ * leaves one behind. It is this session's own artifact and belongs to the
+ * purge; anything else in the directory still refuses the whole operation.
+ */
+function isGenerationTempFilename(name: string): boolean {
+  return /^session(?:\.v[1-9][0-9]*)?\.jsonl(?:\.zstd)?\.[0-9a-f]{12}\.tmp$/.test(name)
+}
+
 /* ------------------------------------------------------------------ */
 /* Binding implementation (design 24 §10/§14: branch b, verified).     */
 /* ------------------------------------------------------------------ */
@@ -191,7 +202,10 @@ export function assertHostSurface(ctx: HostCtxServices): void {
   const persistence = ctx.sessionPersistence
   const canEnumerate = (query !== undefined && typeof query.listSessions === 'function')
     || (persistence !== undefined && typeof persistence.list === 'function')
-  if (!canEnumerate || persistence === undefined || typeof persistence.locate !== 'function') {
+  // `locate` resolves the artifact directory and `stat` is the sweep's decisive
+  // existence probe; both are required by this domain (see hasStoredContent).
+  if (!canEnumerate || persistence === undefined || typeof persistence.locate !== 'function'
+    || typeof persistence.stat !== 'function') {
     throw new ArchiveCleanupError(
       'registry-unreadable',
       'archiveCleanup: the session enumeration/storage surface is not mounted with the expected shape',
@@ -279,28 +293,39 @@ export function makeHostBinding(ctx: HostCtxServices): ArchiveCleanupHost {
     let sawEnumeration = false
     if (query?.listSessions !== undefined) {
       const records = await query.listSessions()
-      if (Array.isArray(records)) {
-        for (const record of records) assertHeaderShape(record?.header)
-        for (const record of records) {
-          const header = record.header
-          if (!byId.has(header.id)) byId.set(header.id, header)
-        }
-        sawEnumeration = true
+      // A non-array answer is a drifted surface, NOT an empty corpus: taking
+      // it as "no sessions" would narrow the union silently and could clear a
+      // membership whose content still exists.
+      if (!Array.isArray(records)) {
+        throw new ArchiveCleanupError(
+          'registry-unreadable',
+          'archiveCleanup: sessionQuery.listSessions() did not answer an array — refusing the read (pinned-vendor surface drift)',
+        )
       }
+      for (const record of records) assertHeaderShape(record?.header)
+      for (const record of records) {
+        const header = record.header
+        if (!byId.has(header.id)) byId.set(header.id, header)
+      }
+      sawEnumeration = true
     }
     if (persistence?.list !== undefined) {
       const snapshots = await persistence.list()
-      if (Array.isArray(snapshots)) {
-        // dsh >= 0.1.3-alpha.1: list() answers SessionPersistenceSnapshot[] —
-        // the header is the snapshot's `header` field, not the record itself.
-        const headers = snapshots.map(snapshot => (snapshot as { header?: unknown } | undefined)?.header)
-        for (const header of headers) assertHeaderShape(header)
-        for (const header of headers) {
-          const typed = header as SessionHeaderLike
-          if (!byId.has(typed.id)) byId.set(typed.id, typed)
-        }
-        sawEnumeration = true
+      if (!Array.isArray(snapshots)) {
+        throw new ArchiveCleanupError(
+          'registry-unreadable',
+          'archiveCleanup: sessionPersistence.list() did not answer an array — refusing the read (pinned-vendor surface drift)',
+        )
       }
+      // dsh >= 0.1.3-alpha.1: list() answers SessionPersistenceSnapshot[] —
+      // the header is the snapshot's `header` field, not the record itself.
+      const headers = snapshots.map(snapshot => (snapshot as { header?: unknown } | undefined)?.header)
+      for (const header of headers) assertHeaderShape(header)
+      for (const header of headers) {
+        const typed = header as SessionHeaderLike
+        if (!byId.has(typed.id)) byId.set(typed.id, typed)
+      }
+      sawEnumeration = true
     }
     if (!sawEnumeration) {
       throw new ArchiveCleanupError(
@@ -344,7 +369,13 @@ export function makeHostBinding(ctx: HostCtxServices): ArchiveCleanupHost {
       //
       // Fail-closed mapping:
       //  - a resolved snapshot => true (the id still materializes);
-      //  - `undefined` => false — the ONLY answer that may clear a membership;
+      //  - `undefined` => false — the ONLY answer that may clear a membership.
+      //    Upstream answers undefined for an absent log AND for a log it cannot
+      //    materialize (empty/corrupt head, unsupported encoding), so this gate
+      //    is fail-closed against THROWN errors, not against an unreadable
+      //    artifact: the domain follows upstream's own "is there a session
+      //    here?" answer, and an unreadable artifact's bytes are never deleted
+      //    by this purge (design 24 §22 note);
       //  - ANY failure (corruption, unsupported format/version, transport/IO,
       //    absent service, drifted method shape) => true;
       //  - no stat surface at all => true (the sweep then skips entirely).
@@ -438,6 +469,14 @@ export function makeHostBinding(ctx: HostCtxServices): ArchiveCleanupHost {
         if (dirStat.isSymbolicLink() || !dirStat.isDirectory()) {
           throw new ArchiveCleanupError('storage', `archiveCleanup: refusing a non-directory/symlinked session path for ${sessionId}`)
         }
+        // CROSS-PROCESS NOTE (design 24 §22): removing `session.lock` forfeits
+        // the jsonl lease's cross-process exclusion (vendor lease.ts:17-19), so
+        // this purge must never run while another process is writing the
+        // session. The in-process live gate above covers RUNNING/LOADED agents;
+        // a second dsh process on the same sessions root is out of reach and is
+        // the caller's responsibility (the domain's contract says "stop the
+        // run first").
+        //
         // dsh >= 0.1.3-alpha.1 keeps ONE FILE PER IMMUTABLE FORMAT GENERATION
         // in this directory (`session.jsonl`, `session.vN.jsonl`, each with an
         // optional `.zstd`) plus the write lease `session.lock`; `locate()`
@@ -456,7 +495,7 @@ export function makeHostBinding(ctx: HostCtxServices): ArchiveCleanupHost {
               `archiveCleanup: refusing to purge ${sessionId}: unexpected ${entry.isDirectory() ? 'directory' : entry.isSymbolicLink() ? 'symlink' : 'special file'} ${entry.name} in the session directory`,
             )
           }
-          if (entry.name === LEASE_FILENAME || isGenerationFilename(entry.name)) {
+          if (entry.name === LEASE_FILENAME || isGenerationFilename(entry.name) || isGenerationTempFilename(entry.name)) {
             removable.push(join(dir, entry.name))
             continue
           }

@@ -59,14 +59,12 @@ export function apply(ctx: ClientContext): void {
   }
   // alpha.2 global panel axis: mirror `sidebar.panellist` registrations into a
   // serializable snapshot the shell renders, and forward row clicks to
-  // `ctx.layout.selectPanel`. The probe is deliberate: a gateway-hosted
-  // instance runs the OFFICIAL ui-layout, whose `ILayout` has no selectPanel —
-  // there the rows render but are inert (the slot is empty by default).
+  // `ctx.layout.selectPanel` (present in every supported layout: both the
+  // chamber fork and the alpha.2 official ui-layout declare it).
   const panels = createPanelSource()
   const syncPanels = (): void => { panels.sync(ctx.slots as Parameters<typeof panels.sync>[0]) }
   ctx.effect(() => ctx.slots.subscribe('sidebar.panellist', syncPanels), 'dsh-chamber: sidebar panel entries')
   ctx.effect(() => ctx.locale.subscribe(syncPanels), 'dsh-chamber: sidebar panel labels')
-  syncPanels()
 
   const injectProps = (): SidebarRootInjected => ({
     // The shell's New Session button rides the Workspace UI's shared action
@@ -74,13 +72,12 @@ export function apply(ctx: ClientContext): void {
     // always acts on the current source.
     startSession: (workspaceId) => { workspaceNavigation.startSession(workspaceId) },
     toggleSidebar: () => { ctx.layout.toggleSidebar() },
-    // alpha.2: select the global main panel addressed by a sidebar row. The
-    // layout service is probed per call so an official ui-layout deployment
-    // degrades to a no-op instead of throwing.
-    selectPanel: (id) => {
-      const layout = ctx.layout as { selectPanel?: (panel: unknown) => void }
-      layout.selectPanel?.(id)
-    },
+    // alpha.2: select the global main panel addressed by a sidebar row. Direct
+    // call: a layout without `selectPanel` is a misconfiguration (the sidebar
+    // shell only ever loads beside the chamber layout fork, and the alpha.2
+    // official layout declares the method too), so it must fail loud rather
+    // than silently ignore the click.
+    selectPanel: (id) => { ctx.layout.selectPanel(id) },
     hooks: { panels: panels.source },
     // chamber patch (05 §4): the renderer shell installs this immutable
     // per-entry fact before any plugin materializes.
@@ -121,6 +118,9 @@ export function apply(ctx: ClientContext): void {
     }, SidebarRoot),
     'dsh-chamber: sidebar slot registration',
   )
+  // Upstream order: publish the (possibly already populated) panel list after
+  // the registration exists, so the first render sees it.
+  syncPanels()
 
   // chamber patch (06 §4.3/§4.5): the runtime-facts channel's producer end.
   // Every boot is its own ctx with its own sessions store, so this plugin —
