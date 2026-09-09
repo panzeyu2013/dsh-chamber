@@ -5,7 +5,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ALLOW_BUILDS } from '../src/allow-builds.mjs';
+import { ALLOW_BUILDS, DENY_BUILDS, renderAllowBuildsBlock } from '../src/allow-builds.mjs';
 
 test('ALLOW_BUILDS: 可 import 且数组内容正确（6 项，与设计 18 §4 一致）', () => {
   assert.deepEqual(ALLOW_BUILDS, [
@@ -16,4 +16,15 @@ test('ALLOW_BUILDS: 可 import 且数组内容正确（6 项，与设计 18 §4 
     '@google/genai',
     '@deepseek-ai/dsh-subprocess-local',
   ]);
+});
+
+test('DENY_BUILDS: 显式否认项（strictDepBuilds 下未列出即硬失败，必须登记）', () => {
+  assert.deepEqual(DENY_BUILDS, ['msgpackr-extract']);
+});
+
+test('renderAllowBuildsBlock: 放行项 true、否认项 false，两个生成点共用同一渲染', () => {
+  const block = renderAllowBuildsBlock();
+  for (const name of ALLOW_BUILDS) assert.ok(block.includes(`${JSON.stringify(name)}: true`), name);
+  for (const name of DENY_BUILDS) assert.ok(block.includes(`${JSON.stringify(name)}: false`), name);
+  assert.equal(block.split('\n').length, ALLOW_BUILDS.length + DENY_BUILDS.length);
 });

@@ -23,7 +23,7 @@ import {
 } from 'node:fs'
 import { open } from 'node:fs/promises'
 import { join } from 'node:path'
-import { ALLOW_BUILDS } from './allow-builds.mjs'
+import { renderAllowBuildsBlock } from './allow-builds.mjs'
 import { validateVersionTree, readStorePruneRequest } from './dsh-runtime-store.ts'
 import type { RuntimeInstallResolution } from './dsh-runtime-updater.ts'
 import { createIntegrityVerifier, isSupportedIntegrity } from './registry-integrity.ts'
@@ -1118,7 +1118,7 @@ export async function installRuntimeVersion(opts: InstallOptions): Promise<Insta
       private: true,
       dependencies: { '@deepseek-ai/dsh': 'file:./dsh-runtime-package.tgz' },
     }, null, 2)}\n`)
-    atomicWriteRuntimeFileNoFollow(opts.baseDir, join(workDir, 'pnpm-workspace.yaml'), `minimumReleaseAge: 0\nallowBuilds:\n${ALLOW_BUILDS.map((name) => `  ${JSON.stringify(name)}: true`).join('\n')}\n`)
+    atomicWriteRuntimeFileNoFollow(opts.baseDir, join(workDir, 'pnpm-workspace.yaml'), `minimumReleaseAge: 0\nallowBuilds:\n${renderAllowBuildsBlock()}\n`)
 
     const nodeWithSandbox = () => {
       const resolved = nodeFn()

@@ -172,7 +172,9 @@ test('installRuntimeVersion: writes allowBuilds before pnpm and publishes no tar
     for (const name of ['node-pty', 'koffi', 'protobufjs', '@google/genai', '@deepseek-ai/dsh-subprocess-local']) {
       assert.ok(yaml.includes(`${JSON.stringify(name)}: true`), `allowBuilds ${name} must be true`)
     }
-    assert.doesNotMatch(yaml, /: false/)
+    for (const name of ['msgpackr-extract']) {
+      assert.ok(yaml.includes(`${JSON.stringify(name)}: false`), `allowBuilds ${name} must be denied explicitly`)
+    }
     return { status: 0, stdout: '', stderr: '' }
   }
   const result = await installRuntimeVersion({

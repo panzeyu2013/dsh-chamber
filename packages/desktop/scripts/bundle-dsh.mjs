@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { commitBundleSwap, recoverBundleSwap } from './bundle-swap.mjs';
-import { ALLOW_BUILDS, pruneRuntimeArtifacts } from '@dsh-chamber/dsh-runtime';
+import { renderAllowBuildsBlock, pruneRuntimeArtifacts } from '@dsh-chamber/dsh-runtime';
 
 /**
  * 将 dsh 官方发布包 @deepseek-ai/dsh 安装为本地运行时（方案 B）。
@@ -125,7 +125,7 @@ writeFileSync(
 );
 writeFileSync(
   path.join(work, 'pnpm-workspace.yaml'),
-  `minimumReleaseAge: 0\nallowBuilds:\n${ALLOW_BUILDS.map((name) => `  ${JSON.stringify(name)}: true`).join('\n')}\n`,
+  `minimumReleaseAge: 0\nallowBuilds:\n${renderAllowBuildsBlock()}\n`,
 );
 
 /**

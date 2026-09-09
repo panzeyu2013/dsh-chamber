@@ -105,3 +105,61 @@
 - [ ] 上游行为变化是否需要 chamber 适配（如限额翻倍与代理上限冲突、事件改名
       chamber 是否消费、新包是否要动作）。
 - [ ] 后续升级（如 rc.2 → 更高）时复用本 checklist，并在 STATUS.md 记录增量。
+
+## 9. 在途：dsh-v0.1.5-alpha.1 升级（2026-09 调研完成，pin 仍 alpha.2）
+
+> 状态：**未升级**（源码线/运行时线仍 0.1.3-alpha.2）。上游 `dsh-v0.1.5-alpha.1`
+> （5dda764e）已发布 npm；本节记录已完成的准备与剩余工作，供下一轮直接执行。
+> 全部结论来自只读调研（`ls-remote`/`fetch` 与逐文件 diff），未改动 pin。
+
+### 9.1 已完成（已提交，与版本无关）
+- **`msgpackr-extract` 裁决**：0.1.5 线 store-index 依赖引入该原生加速器；pnpm 11
+  `strictDepBuilds` 默认 true，未列出即硬失败。已按上游裁决显式否认：
+  根 `pnpm-workspace.yaml` `allowBuilds` + `dsh-runtime` 的
+  `DENY_BUILDS`/`renderAllowBuildsBlock()`（两个生成点单源：bundle-dsh 与运行期
+  安装器），并有测试钉住。
+- **升级流程两处卡点与处置**（实测）：
+  1. `update-vendor` 首次运行必在 step 5 失败（`harness.commit` 已改、gitlink 未加）
+     → `git add vendor/harness-checkout` 后重跑（tag fetch 幂等）。
+  2. `restore-lockfile-vendor-records.mjs` 会**从 HEAD 复活已移除 vendor 成员的
+     importer 记录**：0.1.5 把 landlock 系列移出 workspace（`native/landlock-run`
+     目录消失，workspace 模式改为 `native/system*`），脚本把 4 条 landlock importer
+     从 HEAD 补回 → frozen 验证报「锁文件有、链接缺(4)」。处置：手工删除这 4 个
+     importer 块后再 frozen。（后续可给脚本加「成员仍存在于链接集合」守卫。）
+
+### 9.2 剩余工作（按序）
+1. **layout fork 重放（主体，规模门已触发）**：上游 0.1.5 把三栏模型改为
+   sidebar/center/**rightbar** —— `columns.ts` 去 `DETAILS_*`（新增
+   `RIGHTBAR_MIN`/`RIGHTBAR_MAX_RATIO`/`RIGHTBAR_DEFAULT_RATIO`，`CENTER_MIN` 640→400）、
+   `stores.ts` 新 state（`viewportWidth`/`rightbar`(ratio)/`narrowExpanded`/presentation
+   报告）、`index.ts` SlotMap `details`→`rightbar` + `RightbarOwnerProps`、
+   `service.ts` 与 `AppFrame.tsx`/`.module.css` 重写（src 合计 +268/−206）。
+   `packages/dsh-chamber-client-ui-layout` 必须在新模型上重放，同时保留两个 chamber
+   增值：**sidebarWidth 共享持久化**（view-prefs + 150ms 尾去抖 + 外部采纳）与
+   **单一 document theme 投影**；`test/layout-store.test.ts`（382 行）随模型重写。
+   实测现状：仅 pin 一升，`typecheck:layout` 即因 `DETAILS_*` 消失而红。
+2. **4 个新 client 行 roster 裁决**：bundle patch 新增 `dsh-client-resources`、
+   `ui-sidebar-right`、`ui-sidebar-files`、`ui-sidebar-textpreview`。
+   `ui-sidebar-right` 注入 `layout` 并占用新 `rightbar` 槽；files/textpreview 注入
+   `sidebarRightTabs` + `remote.workspaceFiles`。需决定 cover（chamber 不加载）或
+   load（接受官方右栏），并与 chamber 的 sidebar/layout fork 槽契约对齐；同步
+   `chamber-covered.ts`/factory 表/AGENTS/C4 期望。
+3. **平台词 `dsh-client-ui-dockkit`**：库（无 `dsh.client`），被上述三行依赖 →
+   必须采纳到 `client-web` 的 `platform.ts`/`seed.ts` + `package.json` 依赖
+   （已试通：typecheck 绿）。
+4. **connection / api-gateway 重放**：connection 纯文件照抄（READMEs、
+   `src/index.ts` 宿主半 `webServer` 可选注入重构、`src/client/fixture.ts` +291）、
+   `package.json` 版本 + 保留本仓 scripts；api-gateway 仅版本（client 半零改动）。
+5. **运行时四锚 + 捆绑**：npm `@deepseek-ai/dsh@0.1.5-alpha.1` 已发布 → 可双线收口
+   （bundle-dsh 兜底常量、`vendor/dsh` 锁文件 `--force --refresh-lockfile`、
+   release.yml env、install-gateway.sh、gateway `dshAnchorVersion`、
+   release-preflight `FORK_VERSION`）。
+6. **锁文件**：vendor 成员 271 → 282（−4 landlock、+15：7 新包 + 5 `node-addon-system*`
+   + 3 其他），按 §4 纪律重生成 + 手工处理 landlock 复活记录。
+7. 全量门禁（§6）+ 文档回写（§7）+ `verify:i18n` + 触点表 §2/§5 更新。
+
+### 9.3 已证伪/确认的假设
+- 上游 connection **客户端恢复模型在 alpha.2→0.1.5 零改动**（我们的连接加固无上游
+  等价物可采纳，`start(sinks, config)` 接缝在 0.1.5 的宿主半重构后依然存在）。
+- 新增 7 个包、4 个新 client 行、1 个平台词库；无新增 native 依赖（除
+  `msgpackr-extract`，已否认其构建脚本）。

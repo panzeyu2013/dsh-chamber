@@ -19,3 +19,27 @@ export const ALLOW_BUILDS = [
   '@google/genai',
   '@deepseek-ai/dsh-subprocess-local',
 ];
+
+/**
+ * 显式否认的 build-script 依赖（design 18 §4，2026-09 0.1.5 线补录）。
+ *
+ * pnpm 11 的 strictDepBuilds 默认 true：**未列出**的 build-script 依赖是硬失败
+ * （ERR_PNPM_IGNORED_BUILDS），所以「不使用其安装脚本」也必须显式登记，否则构建期
+ * （bundle:dsh）与运行期（M2 安装器）都会装不上。语义 = 已评审并拒绝该包在安装期
+ * 执行脚本。
+ * - msgpackr-extract：msgpackr 的原生加速器（0.1.5 线 store-index 依赖引入）；
+ *   只用 msgpackr 的可移植 JS 编解码即可，与上游 pnpm-workspace 的裁决一致。
+ */
+export const DENY_BUILDS = ['msgpackr-extract'];
+
+/**
+ * 渲染 pnpm-workspace.yaml 的 allowBuilds 块（两个生成点共用，防漂移）：
+ * 放行项 → `true`，否认项 → `false`。
+ * @returns 缩进好的 YAML 行（不含 `allowBuilds:` 头）。
+ */
+export function renderAllowBuildsBlock() {
+  return [
+    ...ALLOW_BUILDS.map((name) => `  ${JSON.stringify(name)}: true`),
+    ...DENY_BUILDS.map((name) => `  ${JSON.stringify(name)}: false`),
+  ].join('\n');
+}
