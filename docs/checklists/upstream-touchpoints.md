@@ -17,7 +17,7 @@
 | fork 版本标记 ×3 | 0.1.5-alpha.2（connection / client-web / api-gateway） |
 | vendor 链接数 | 284（ensure-harness-vendor 断言 == 锁文件 importer 集合） |
 | typert remote 装配契约 | 15（C4；+command-feedback/+workspace-files） |
-| covered / factory | **54 / 26**（live 计数；factory ⊆ covered，chamber-entry 锁步断言；+`ui-dockkit`、+`client-file-upload` covered factory） |
+| covered / factory | **57 / 26**（live 计数；factory ⊆ covered，chamber-entry 锁步断言；+`ui-dockkit`、+`client-file-upload` covered factory，四轮再 +`session-log-export`（deferred）与两个 page-own 跳过 id） |
 | 种子域 | `clientGraph/graph`、`gitWorktree/previewCreate`、`archiveCleanup/probe`（C7 双门） |
 
 ## 1. 标记约定（每文件分类）
@@ -130,12 +130,14 @@ host 插件入口/半、上游 `tests/`、`tsdown.config.ts`、上游 README（a
 - **vendor 源码补丁集（构建期改写，2026-09 三轮登记，design 09 §3.6）**：
   `packages/renderer/scripts/vendor-patches.mjs` 登记「同源绝对 URL」类硬假设的补丁，
   由 renderer 的 `deepseekSource().transform` 在构建期按**精确上游文本**改写，
-  vendor 文件零写入。当前 **4 条（5 文件 / 18 处锚点）**：① `ui-chat`
+  vendor 文件零写入。当前 **7 条（7 文件 / 21 处锚点）**：① `ui-chat`
   （`/api/file`，读 chamber layout fork 提供的 root 标准 prop `chamberFileApiBase`
   = `ctx.chamberBasePath`）；② `client-file-upload`（`/api/session/uploadFileBinary`，
   从服务自身的 ctx 读 `chamberBasePath`——该包已转为 **covered**，否则 extra-row
   bundle 不经过我们的构建）；③④ `ui-deliverables`（`/api/present.host|open`，
-  控制器构造时接收 base path）。三处均保留「缺 base path → 回落上游」的形状。
+  控制器构造时接收 base path）；⑤⑥ `session-log-export`（`/api/session.export`，控制器字段，
+  该包已转 covered-deferred）。全部保留「缺 base path → 回落上游」的形状，读取一律走
+  `ctx.get('chamberBasePath')`（cordis 代理对未 provide 的服务是抛错而非 undefined）。
   门：**C9**（锚点必须唯一命中，漂移即硬失败）+ `scripts/vendor-patches.test.mjs`
   （锚点/行为/id 形态）。新增补丁前先问「能否在 chamber 自己的包里修」。
 - **复合首屏 ← 未覆盖官方行（反向依赖，2026-09 二轮登记；三轮收敛为 1 条）**：

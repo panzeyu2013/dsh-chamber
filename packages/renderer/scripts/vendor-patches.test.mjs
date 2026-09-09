@@ -119,7 +119,26 @@ test('the ui-deliverables patches prefix both present routes and pass the ctx fa
     readFileSync(`${VENDOR}dsh-client-ui-deliverables/src/client/index.ts`, 'utf8'),
   )
   assert.notEqual(index, undefined)
-  assert.ok(index.code.includes('new PresentedOpenController((ctx as ClientContext & { chamberBasePath?: string }).chamberBasePath ?? \'\')'), 'apply passes ctx.chamberBasePath')
+  assert.ok(index.code.includes("new PresentedOpenController((ctx.get('chamberBasePath') as string | undefined) ?? '')"), 'apply passes the chamber fact through ctx.get (undefined-safe)')
+})
+
+test('the session-log-export patches route the export URL through the per-entry base path', () => {
+  const controller = applyVendorPatches(
+    '/x/vendor/harness-checkout/packages/session-query/session-log-export/src/client/controller.ts',
+    readFileSync(`${VENDOR}dsh-session-log-export/src/client/controller.ts`, 'utf8'),
+  )
+  assert.notEqual(controller, undefined)
+  assert.ok(controller.code.includes('chamberFileApiBase = \'\''), 'the controller carries a base-path field')
+  assert.ok(
+    controller.code.includes('new URL(`${this.chamberFileApiBase}/api/session.export`, hostBase())'),
+    'the export URL carries the base path',
+  )
+  const index = applyVendorPatches(
+    '/x/vendor/harness-checkout/packages/session-query/session-log-export/src/client/index.ts',
+    readFileSync(`${VENDOR}dsh-session-log-export/src/client/index.ts`, 'utf8'),
+  )
+  assert.notEqual(index, undefined)
+  assert.ok(index.code.includes("controller.chamberFileApiBase = (ctx.get('chamberBasePath') as string | undefined) ?? ''"), 'apply sets the base path via ctx.get')
 })
 
 test('an id without a registered patch is left untouched', () => {

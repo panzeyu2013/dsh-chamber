@@ -330,7 +330,7 @@ Markdown 里的本地图片，在同源壳里 origin 是控制面，于是 404�
 - 应用点：renderer 的 `deepseekSource().transform`（我们的 vite 配置），vendor 文件
   **零写入**；模块 id 同时接受软链形式与 `realpathSync` 后的子模块形式（vite 实际
   给的是后者）。
-- 落点（2026-09 三轮扩到四处同源绝对 URL，共 5 个文件 / 18 处锚点）：
+- 落点（2026-09 三轮四处、四轮补第五处，共 7 个文件 / 21 处锚点）：
   ① `ui-chat` 的 `chat/AssistantMarkdown.tsx` + `chat/AssistantNodeView.tsx` 读取新增
   root 标准 **prop** `chamberFileApiBase`（chamber layout fork 经
   `ctx.slots.provideRoot({ props })` 提供，值 = 本 entry 的 `ctx.chamberBasePath`；
@@ -340,7 +340,10 @@ Markdown 里的本地图片，在同源壳里 origin 是控制面，于是 404�
   `chamberBasePath`——**该包已转为 composite covered**，因为 extra-row bundle 由实例
   提供、永远不经过我们的构建；③④ `ui-deliverables` 的 `client/present-open.ts` +
   `client/index.ts`（`/api/present.host|open`），控制器由 `apply(ctx)` 构造时接收
-  base path。三处都保留「base path 缺失 → 回落上游行为」的形状。
+  base path；⑤⑥ `session-log-export` 的 `client/controller.ts` + `client/index.ts`
+  （`/api/session.export`，控制器字段；该包转 **covered-deferred**，否则 extra-row bundle
+  不经过构建）。全部保留「base path 缺失 → 回落上游行为」的形状，读取一律用
+  `ctx.get('chamberBasePath')`（cordis 代理对未 provide 的服务**抛错**，属性读取会炸）。
 - 保鲜门：`verify-upstream-touchpoints.mjs` **C9** 对 pin 住的 vendor 文件逐锚点校验
   （硬失败），`scripts/vendor-patches.test.mjs` 另在 CI 侧验证锚点唯一、改写后的函数
   行为（含上游回落分支）与 id 形态匹配。

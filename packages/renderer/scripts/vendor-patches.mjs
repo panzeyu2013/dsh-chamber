@@ -108,7 +108,9 @@ export const VENDOR_PATCHES = Object.freeze([
         expect: '    this.transport = hook === undefined ? workerTransport() : customTransport(hook.fetch)',
         replace: '    // chamber patch: the page origin is the control plane under the N-ctx\n'
           + '    // shell, so every upload URL must carry this entry\'s API base path.\n'
-          + '    const chamberFileApiBase = (ctx as Context & { chamberBasePath?: string }).chamberBasePath ?? \'\'\n'
+          + '    // ctx.get returns undefined when the chamber fact is absent (the cordis\n'
+          + '    // proxy THROWS on an unprovided service, so never read it as a property).\n'
+          + '    const chamberFileApiBase = (ctx.get(\'chamberBasePath\') as string | undefined) ?? \'\'\n'
           + '    this.transport = hook === undefined ? workerTransport(chamberFileApiBase) : customTransport(hook.fetch, chamberFileApiBase)',
       }),
       Object.freeze({
@@ -134,6 +136,47 @@ export const VENDOR_PATCHES = Object.freeze([
       Object.freeze({
         expect: "  return new URL(path, origin === undefined || origin === 'null' ? 'http://dsh.internal' : origin)",
         replace: "  return new URL(`${basePath}${path}`, origin === undefined || origin === 'null' ? 'http://dsh.internal' : origin)",
+      }),
+    ]),
+  }),
+  Object.freeze({
+    idSuffixes: Object.freeze([
+      'dsh-session-log-export/src/client/controller.ts',
+      'packages/session-query/session-log-export/src/client/controller.ts',
+    ]),
+    vendorFile: 'dsh-session-log-export/src/client/controller.ts',
+    reason: 'same-origin absolute export URL: `new URL("/api/session.export", location.origin)` downloads from the control plane in the N-ctx shell (the /export dialog and header action 404)',
+    edits: Object.freeze([
+      Object.freeze({
+        expect: '  readonly store: SnapshotStore<SessionLogDownloadState> = createSnapshotStore(INITIAL)\n'
+          + '\n'
+          + '  private readonly active = new Map<SessionId, { readonly abort: AbortController; readonly done: Promise<void> }>()',
+        replace: '  readonly store: SnapshotStore<SessionLogDownloadState> = createSnapshotStore(INITIAL)\n'
+          + '\n'
+          + '  /** chamber patch: per-entry API base path for the export route. */\n'
+          + '  chamberFileApiBase = \'\'\n'
+          + '\n'
+          + '  private readonly active = new Map<SessionId, { readonly abort: AbortController; readonly done: Promise<void> }>()',
+      }),
+      Object.freeze({
+        expect: "      const url = new URL('/api/session.export', hostBase())",
+        replace: "      const url = new URL(`${this.chamberFileApiBase}/api/session.export`, hostBase())",
+      }),
+    ]),
+  }),
+  Object.freeze({
+    idSuffixes: Object.freeze([
+      'dsh-session-log-export/src/client/index.ts',
+      'packages/session-query/session-log-export/src/client/index.ts',
+    ]),
+    vendorFile: 'dsh-session-log-export/src/client/index.ts',
+    reason: 'hands the per-entry API base path to the export controller (apply owns the only ctx)',
+    edits: Object.freeze([
+      Object.freeze({
+        expect: '  const controller = new SessionLogDownloadController()',
+        replace: '  const controller = new SessionLogDownloadController()\n'
+          + '  // chamber patch: the export URL must carry this entry\'s API base path.\n'
+          + '  controller.chamberFileApiBase = (ctx.get(\'chamberBasePath\') as string | undefined) ?? \'\'',
       }),
     ]),
   }),
@@ -179,7 +222,7 @@ export const VENDOR_PATCHES = Object.freeze([
     edits: Object.freeze([
       Object.freeze({
         expect: '  const opener = new PresentedOpenController()',
-        replace: '  const opener = new PresentedOpenController((ctx as ClientContext & { chamberBasePath?: string }).chamberBasePath ?? \'\')',
+        replace: '  const opener = new PresentedOpenController((ctx.get(\'chamberBasePath\') as string | undefined) ?? \'\')',
       }),
     ]),
   }),

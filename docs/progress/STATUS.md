@@ -18,12 +18,13 @@
 > settings bridge 台账、三 fork 副本、renderer（`ui-dockkit` covered factory；C4 契约 13→15）。
 > **设计 24 四项真机缺陷已修**：`list()` 快照形状（真机 preview/purge 曾全挂）、`inspect`→`stat`、
 > 代际全量删除 + 未识别条目整单拒绝、退役无消费者的错误分类器（design 24 §2 与 AGENTS 措辞同步）。
-> **D3 已裁决并落地（2026-09 三轮）**：N-ctx 同源壳下**四处**同源绝对 URL（`ui-chat`
+> **D3 已裁决并落地（2026-09 三轮，四轮补全）**：N-ctx 同源壳下**五处**同源绝对 URL（`ui-chat`
 > 的 `/api/file`、`client-file-upload` 的 `/api/session/uploadFileBinary`、`ui-deliverables`
-> 的 `/api/present.host|open`）改为经构建期 vendor 补丁集走本实例前缀（design 09 §3.6，
-> 4 条/5 文件/18 锚点；门 = 触点表 C9 + 产物断言）；为让补丁覆盖上传客户端，
-> `client-file-upload` 转为 composite covered（covered/factory 54/26，探针清单收敛为
-> `sidebarRight`）。**剩余**：ssh/http dsh 目标无 cookie 注入（实例侧 401），属既有认证面。
+> 的 `/api/present.host|open`、`session-log-export` 的 `/api/session.export`）改为经构建期
+> vendor 补丁集走本实例前缀（design 09 §3.6，7 条/7 文件/21 锚点；门 = 触点表 C9 + 产物断言）；
+> 为让补丁覆盖上传/导出客户端，`client-file-upload` 与 `session-log-export` 转为 composite
+> covered（covered/factory **57/26**，探针清单收敛为 `sidebarRight`），并把 `dsh-client-ui-mobile`
+> 与官方 `ui-directory-picker-native` 登记为 page-own 跳过。**剩余**：ssh/http dsh 目标无 cookie 注入（实例侧 401），属既有认证面。
 > **剩余实机门禁（未验证）**：多来源 sleep/wake 与隐藏恢复、gateway 形态回归、右侧栏栈在真实
 > profile 下的装载时序与 `provideRoot` 时序（`useResource`/`usePanelInfo`/`chamberFileApiBase`）、
 > session v3 迁移在真实存储上的行为、open-in 官方 host 行随 a2 profile 进入托管实例。**既有失败已清零**：

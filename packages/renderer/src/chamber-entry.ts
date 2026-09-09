@@ -162,7 +162,7 @@ import * as Store from '@deepseek-ai/dsh-client-store'
 // bundle loads, so this factory answers their `require(...ui-primitives)`
 // edges; run()'s own prefetch of this entry is then a module-cache hit.
 import * as UiPrimitives from '@deepseek-ai/dsh-client-ui-primitives'
-// alpha.2 (S2/S5 裁决): ui-dockkit is upstream's 8th PLATFORM_MODULES word and
+// alpha.2 (S2/S5 裁决): ui-dockkit is upstream's 9th PLATFORM_MODULES word and
 // is value-imported by ui-sidebar-right/-files/-documentpreview. The chamber
 // seed does NOT carry it (chunk-budget: seeding pulls the docking kit into the
 // main-graph eval, the same reason ui-primitives left the seed), so this
@@ -260,6 +260,7 @@ async function registerDeferred(ctx: Context): Promise<void> {
     workflowRun,
     deliverables,
     subagent,
+    sessionLogDownload,
     messageFeedback,
     plan,
     userQuestions,
@@ -308,6 +309,10 @@ async function registerDeferred(ctx: Context): Promise<void> {
     import('@deepseek-ai/dsh-client-ui-workflow-run/client'),
     import('@deepseek-ai/dsh-client-ui-deliverables/client'),
     import('@deepseek-ai/dsh-client-ui-subagent/client'),
+    // 2026-09 四轮: the session-log export client is covered so its registered
+    // vendor patch can carry the per-entry base path on `/api/session.export`
+    // (the host half keeps the route + /export command).
+    import('@deepseek-ai/dsh-session-log-export/client'),
     import('@deepseek-ai/dsh-client-ui-message-feedback/client'),
     import('@deepseek-ai/dsh-client-ui-plan/client'),
     import('@deepseek-ai/dsh-client-ui-user-questions/client'),
@@ -341,6 +346,7 @@ async function registerDeferred(ctx: Context): Promise<void> {
   ctx.plugin(workflowRun)
   ctx.plugin(deliverables)
   ctx.plugin(subagent)
+  ctx.plugin(sessionLogDownload)
   ctx.plugin(messageFeedback)
   ctx.plugin(plan)
   ctx.plugin(userQuestions)

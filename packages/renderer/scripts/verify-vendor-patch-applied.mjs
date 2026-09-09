@@ -59,6 +59,12 @@ const ASSERTIONS = [
     absent: null,
   },
   {
+    what: 'session-log export URL carries the per-entry base path',
+    // `new URL(`${X}/api/session.export`, ...)` — patched; upstream is a literal.
+    present: /new URL\(`\$\{(?:this\.)?[A-Za-z_$][\w$.]*\}\/api\/session\.export`/,
+    absent: null,
+  },
+  {
     what: 'ui-deliverables present routes carry the per-entry base path',
     // `fetch(`${X}${Y}`)` — patched; upstream is `fetch(Y)`. The first
     // interpolation may be a member expression (`this.chamberFileApiBase`).

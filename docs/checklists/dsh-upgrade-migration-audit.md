@@ -311,16 +311,20 @@ frozen-lockfile / i18n / 触点门 C1–C9 / ensure --check / smoke 全绿。
 > 六锚/计数/契约实测）+ **纯净克隆全链实跑** + 两份独立只读复核（F1 文档↔代码、F2 上游面↔
 > chamber 面）。本节是「上游 v0.1.5-alpha.2 ↔ chamber 现状」的最终对照表。
 
-### 12.1 上游 web roster 全量对照（51 条 `dsh.client` 行，零遗漏）
+### 12.1 上游 web roster 全量对照（53 条静态 `dsh.client` 行，零遗漏）
+
+> 上游 shipped web profile = 2 条 base 层 + 51 条 web-app 层静态 client 行（另 1 个动态
+> picker 面由 host 解析）；下表按 web-app 层 51 条列出，base 层两条（`modules`、`connection`）
+> 已并入对应桶。
 
 | chamber 处置 | 行数 | 行 |
 |---|---|---|
 | composite 首屏 covered factory | 16 | connection、api-remotes、api-session-controller、api-workspace-controller、locale、ui-theme、ui-session、ui-conversation、ui-approval、ui-chat、ui-workspace、ui-input-trigger、ui-commands、ui-model-selection、ui-settings、client-file-upload |
-| composite covered、非首屏（page-own 跳过 / deferred chunk） | 26 | ui-layout、ui-sidebar、ui-renderer、modules、ui-open-in-app、client-hmr、ui-settings-{general,models,plugin-inventory,plugins}、ui-brand-official、ui-attachment、ui-tool、ui-workflow-run、ui-deliverables、ui-skill、ui-subagent、ui-reference、ui-jobs、ui-goal、ui-message-feedback、ui-permission-presets、ui-agent-preset、ui-plan、ui-user-questions、ui-trajectory |
-| 保留为 host-graph extra row | 9 | session-log-export、api-workspace-files、cordis-client-runner、client-resources、ui-sidebar-right、ui-sidebar-documentpreview、ui-sidebar-files、ui-cordis、ui-schedule（上游 `disabled: true`，host 图不下发） |
+| composite covered、非首屏（page-own 跳过 / deferred chunk） | 27 | ui-layout、ui-sidebar、ui-renderer、modules、ui-open-in-app、client-hmr、session-log-export（deferred）、ui-settings-{general,models,plugin-inventory,plugins}、ui-brand-official、ui-attachment、ui-tool、ui-workflow-run、ui-deliverables、ui-skill、ui-subagent、ui-reference、ui-jobs、ui-goal、ui-message-feedback、ui-permission-presets、ui-agent-preset、ui-plan、ui-user-questions、ui-trajectory |
+| 保留为 host-graph extra row | 8 | api-workspace-files、cordis-client-runner、client-resources、ui-sidebar-right、ui-sidebar-documentpreview、ui-sidebar-files、ui-cordis、ui-schedule（上游 `disabled: true`，host 图不下发） |
 | **合计** | **51** | 无一行未处置 |
 
-`CHAMBER_COVERED_IDS` = **54** = 42 条上游 client 行（上表前两行）+ 6 个 chamber 自建 client id（layout/sidebar/git/open-in/settings-connections/settings-bridge）+ 2 个 fork 副本（`dsh-client-connection` 亦为上表行、`dsh-api-gateway` 不在 web roster）+ 5 个上游非 roster 包（`dsh-typert-registry`、`dsh-client-store`、`ui-primitives`、`ui-dockkit`、`ui-directory-picker-browse`）。`dsh-client-web` 不进 covered（shell 内核由 boot 行采纳，page-own）。
+`CHAMBER_COVERED_IDS` = **57** = 43 条上游 client 行（上表前两行）+ 6 个 chamber 自建 client id（layout/sidebar/git/open-in/settings-connections/settings-bridge）+ 2 个 fork 副本（`dsh-client-connection` 亦为上表行、`dsh-api-gateway` 不在 web roster）+ 6 个上游非 roster 包（`dsh-typert-registry`、`dsh-client-store`、`ui-primitives`、`ui-dockkit`、`ui-directory-picker-browse`、`ui-directory-picker-native`）+ 1 个 chamber 自建 page-own（`dsh-client-ui-mobile`）。`dsh-client-web` 不进 covered（shell 内核由 boot 行采纳，page-own）。
 
 ### 12.2 chamber 自建物 ↔ 上游对应物
 
@@ -337,7 +341,7 @@ frozen-lockfile / i18n / 触点门 C1–C9 / ensure --check / smoke 全绿。
 | `dsh-chamber-client-ui-open-in` | `ui-open-in-app`（官方行 page-own 跳过） | 替换注册 | 多来源视图模型 + 桌面主进程 VS Code override（官方 client 为严格子集） |
 | `dsh-chamber-client-ui-mobile` | 无 | 扩展 | design 17 §18 移动端适配（纯 CSS 层 + DOM 锚点） |
 | `dsh-chamber-seed-{client-graph,git-worktree,archive-cleanup}` | 无 | 扩展 | 3 个宿主域（design 09 A / 08 / 24），激活探针域锁步 |
-| **vendor 补丁集** | `ui-chat` / `client-file-upload` / `ui-deliverables` | 构建期补丁（vendor 文件零写入） | 4 条 / 5 文件 / 18 锚点：同源绝对 URL 走本 entry 前缀，缺失回落上游 |
+| **vendor 补丁集** | `ui-chat` / `client-file-upload` / `ui-deliverables` / `session-log-export` | 构建期补丁（vendor 文件零写入） | **7 条 / 7 文件 / 21 锚点**：五处同源绝对 URL 走本 entry 前缀，缺失回落上游 |
 
 ### 12.3 前端可见差异（与官方前端逐项对照）
 
@@ -350,15 +354,16 @@ frozen-lockfile / i18n / 触点门 C1–C9 / ensure --check / smoke 全绿。
 | 设置 | `ui-settings` SettingsRoot | chamber 设置壳（服务器下拉 + 连接 + runtime 段），官方 section 由 deferred 簇提供 | 05 §5 |
 | open-in | 官方 `ui-open-in-app`（同源壳内自隐藏） | chamber open-in（多来源 + 桌面 override） | designs 16/20 |
 | 上传/附件 | 官方 `client-file-upload` 额外行 | 同款官方客户端（covered）+ base path 补丁 | design 09 §3.6 |
+| 会话导出 | 官方 `session-log-export` 额外行 | 同款官方客户端（covered-deferred）+ base path 补丁；`/export` 命令仍由宿主半注册 | design 09 §3.6 |
 | 主题 | 每 view 各自投影 | 单一 document 投影（active view 门控） | design 06 §4.6 |
 
 ### 12.4 最终事实表（本机实测，2026-09）
 
-covered/factory **54/26**（factory ⊆ covered）· remote 装配 **15**（import 选择 == apply 挂载）·
+covered/factory **57/26**（factory ⊆ covered）· remote 装配 **15**（import 选择 == apply 挂载）·
 vendor 链接 **284** · harness.commit `b2e3b2a01258`（= submodule HEAD）· 六锚 **0.1.5-alpha.2** ·
 激活探针 **7**（4 官方 + 3 chamber 域）· 必需 extra-row 服务 **1**（`sidebarRight`）·
-vendor 补丁 **4 条 / 5 文件 / 18 锚点** · `@dsh-chamber/*` 包 **16** + 3 fork 副本 ·
-chamber entry raw **1,982,194**（warn 门 2,000,000）· main graph **1,208,064** · head CSS **245,227**。
+vendor 补丁 **7 条 / 7 文件 / 21 锚点** · `@dsh-chamber/*` 包 **16** + 3 fork 副本 ·
+chamber entry raw **1,982,358**（warn 门 2,000,000）· main graph **1,208,191** · head CSS **245,227**。
 
 ### 12.5 最终验证证据（纯净克隆，`e778e8e`）
 
@@ -369,8 +374,53 @@ test:layout/sidebar/mobile/renderer-shell/host-archive-cleanup/runtime/upgrade-t
 
 ### 12.6 仍存在（有意边界，非缺陷）
 
-1. **ssh/http dsh 目标无 cookie 注入** → 四处补丁 URL 在那些来源返回 401（本地与 gateway 来源 200）；
+1. **ssh/http dsh 目标无 cookie 注入** → 五处补丁 URL 在那些来源返回 401（本地与 gateway 来源 200）；
    属既有认证面，登记于 STATUS 与 design 17。
 2. **D5 缺口**：PluginDialog 缺专用 `update(name,version)`（其余动作已覆盖；登记为后续动作）。
 3. **实机门禁**：多来源 sleep/wake、gateway 形态回归、右栏栈与 `provideRoot` 装载时序、
    session v3 迁移真实存储行为、移动端真机视觉、四处 URL 真机 200/401 复验。
+
+---
+
+## 13. 第四轮（最终对比）修正
+
+> 方法：两份独立只读复核 **F1**（文档↔代码/文档↔文档，24 项不一致）+ **F2**（上游面↔chamber 面，
+> 5 项发现）+ 本机机械枚举与纯净克隆复跑。报告原文：`.analysis/out/F1-final-consistency.md`、
+> `F2-final-surface.md`（scratch，不入库）。
+
+### 13.1 代码/装配修正（F2）
+
+| # | 严重度 | 发现 | 处置 |
+|---|---|---|---|
+| U1 | **MAJOR** | 同源绝对 URL 的**第五处**：`session-log-export` 的 `new URL('/api/session.export', location.origin)`（`/export` 与头部下载动作在控制面 404）。该行是 extra row，补丁无从施加 | 该包转 **covered-deferred**（`registerDeferred` 动态导入 + `ctx.plugin`），新增 2 条补丁（`controller.ts` 的 `chamberFileApiBase` 字段 + `index.ts` 注入），补丁集 → **7 条 / 7 文件 / 21 锚点**；`/export` 命令仍由宿主半注册（不受影响） |
+| U2 | MINOR | `@dsh-chamber/dsh-client-ui-mobile` 未覆盖 ⇒ 桌面接入 gateway 目标时会把移动插件预加载进多壳页面（其自述的 document 级行为是单壳设计） | 加入 `CHAMBER_COVERED_IDS` 作 **page-own 跳过**（chamber 页面永不是移动面；gateway 官方前端路径不经该清单） |
+| U3 | MINOR | 官方 `ui-directory-picker-native` 未覆盖 ⇒ 未钉 `SSH_CONNECTION` 的宿主会把它作为 extra row 预加载，与复合体的 `browse` 面争同一对 single 槽并注册失败（被 boot 容忍） | 加入 `CHAMBER_COVERED_IDS` 作 **page-own 跳过**（chamber 钉死 browse，见 design 02 §3.9 / 05 §4） |
+| U4 | MINOR | 两条补丁里的 `ctx.chamberBasePath ?? ''` 回落不可达：cordis 代理对未 provide 的服务**抛错** | 改为 `ctx.get('chamberBasePath')`（缺省返回 undefined），补丁头注与 design 09 §3.6 同步 |
+| U5 | NIT | 补丁计数措辞（实为 5 文件起，现 7）与 `ui-dockkit` 的 PLATFORM_MODULES 序号（第 9，非第 8） | 文档与 `chamber-entry.ts` 注释更正；产物断言补上 export 形状 |
+
+覆盖集现为 **57 / 26**（factory ⊆ covered），C9 锚点 **7 文件 / 21 处**全部唯一命中；
+`build:renderer` 末步 5 条产物断言全绿；chamber entry raw 1,982,358（warn 门 2,000,000，仍有余量）。
+
+### 13.2 文档一致性修正（F1，24 项）
+
+F1 报 **0 BLOCKER / 8 MAJOR / 12 MINOR / 4 NIT，全部为文档陈述与代码不符，无代码缺陷**，已逐项修正：
+
+- **MAJOR**：矩阵执行状态与 B0 行改为「D1–D7 全部裁决完毕、B6 关闭」；open-in 相关 7 处（§0.3-4、
+  §1#17、C7、文件/函数退役行、§4.1）标注 **D4 推翻**（保留 chamber 实现与 33 行契约镜像，直接
+  import 官方 `./shared` 在源码态 vendor 下不可行）；audit §9.3 的 D4 结论同步更正；STATUS 的
+  dsh-runtime ZFS「已知既有失败」改为**已修**（fixture 2 KiB，`test:runtime` 全绿）；checklist §9.2
+  第 3 项改为「dockkit 走 covered factory」（原「采纳进 client-web platform/seed」被推翻）；diff §2.4
+  四条设计 24 缺陷标注执行状态；diff §2.2 roster/探针句补 `client-file-upload` 与 `sidebarRight`
+  收敛；矩阵/diff 的「当前 bundle 锚点 = 0.1.3-alpha.2」改为 0.1.5-alpha.2（0.1.3 仅为回滚目标）。
+- **MINOR/NIT**：diff 门禁清单（C1/C3–C9，C8 默认硬门）、touchpoints 的 CI 两段范围与再生物表
+  （typert 工件 gitignored 不提交、补 `dsh-runtime/dist` 组）、移动插件用例数 67 → 60（双语
+  CHANGELOG + STATUS 的 [Unreleased] 记录）、矩阵 S1/S2/S17/D3/B6/C11 与 `test:runtime` 27 文件、
+  audit 严重度汇总与计数口径、机械扫描范围限定、checklist seam 16 = ui-layout 15 + ui-renderer 1、
+  preflight 数字标注为历史运行、STATUS 的 C8 描述更新为重建-比对硬门。
+
+### 13.3 第四轮门禁
+
+`verify-upstream-touchpoints` C1/C3–C9 全绿（covered=57/factory=26、装配 15、C8 5 组、C9 7 文件/
+21 锚点）· `verify:i18n` 0 DRIFTED · 根 typecheck · `test:renderer-shell`/`test:layout`/`test:sidebar`/
+`test:mobile`/`test:host-archive-cleanup`/`test:runtime`/`test:upgrade-tools` · `build:renderer`
+（含 5 条产物断言）· `build:host-packages`/`build:dsh-runtime` · frozen-lockfile · `smoke`。

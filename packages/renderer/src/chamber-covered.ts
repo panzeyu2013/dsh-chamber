@@ -149,6 +149,21 @@ export const CHAMBER_COVERED_IDS: readonly string[] = [
   // picker-auto-mounted browse row is composite-covered too.
   '@deepseek-ai/dsh-client-ui-directory-picker-browse',
   '@deepseek-ai/dsh-client-ui-permission-presets',
+  // 2026-09 四轮: the session-log export client is composite-covered (deferred)
+  // for the same reason as file-upload — its vendor bundle builds a same-origin
+  // absolute export URL (`/api/session.export`) that 404s under the N-ctx shell,
+  // and only a composite-bundled copy can carry the registered vendor patch.
+  '@deepseek-ai/dsh-session-log-export',
+  // chamber page-own skips (covered, no factory, never loaded into the chamber
+  // shell): the mobile adaptation is the GATEWAY deployment's single-shell
+  // surface — a desktop attached to a gateway-kind target must not preload it
+  // into the multi-shell page (its own header says its document-level effects
+  // are single-shell by design); the `native` directory-picker face can never
+  // win in the chamber shell because the host's picker interaction is pinned to
+  // `browse` (design 02 §3.9 / 05 §4) — loading it would double-register the
+  // same two single directoryFlow holes and fail the row.
+  '@dsh-chamber/dsh-client-ui-mobile',
+  '@deepseek-ai/dsh-client-ui-directory-picker-native',
   // ── rc.8 deferred families (chamber-entry.ts registerDeferred dynamic
   // imports, design 09 §4 baseline alignment): registered after the boot
   // settles — composite-owned namespaces all the same, so a host-graph row

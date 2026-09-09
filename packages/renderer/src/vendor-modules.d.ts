@@ -119,6 +119,9 @@ declare module '@deepseek-ai/dsh-client-ui-agent-preset/client'
 // 2026-09 三轮: covered so the registered vendor patch can carry the per-entry
 // base path on the upload URL (the host half stays an instance host row).
 declare module '@deepseek-ai/dsh-client-file-upload/client'
+// 2026-09 四轮: covered (deferred) so the registered vendor patch can carry the
+// per-entry base path on the export URL; the host half keeps the route/command.
+declare module '@deepseek-ai/dsh-session-log-export/client'
 declare module '@deepseek-ai/dsh-client-ui-approval/client'
 // rc.8 deferred-family client entries (design 09 §4; chamber-entry.ts
 // registerDeferred dynamic imports): attachment (composer + message-image
