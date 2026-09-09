@@ -81,7 +81,7 @@ const FORKS = [
     rel: 'packages/dsh-client-web',
     upstream: 'packages/client/web',
     patched: {
-      'package.json': '[patch-add] 描述+测试脚本差异（其余与上游一致；版本行随上游推进）',
+      'package.json': '[patch-mod] 描述/测试脚本/deps·peerDeps·files 面差异（版本行随上游推进）',
       'README.md': '[own-divergent] chamber 说明（boot kernel 差异/维护约定），非上游镜像',
       'README.zh.md': '[own-divergent] 同 README.md（中文镜像）',
       'README.i18n.yaml': '[own-divergent] chamber README 对的哈希记录',

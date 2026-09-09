@@ -8,6 +8,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 
 import { attachLivenessTriggers, DEFAULT_HIDDEN_RECONNECT_THRESHOLD_MS, DEFAULT_MIN_RESTART_INTERVAL_MS } from '../src/client/liveness-triggers.ts'
 
@@ -220,6 +221,22 @@ test('liveness: undefined window/document is a safe no-op', () => {
   detach()
   detach() // idempotent
   assert.equal(restarts, 0)
+})
+
+// ── the debounce value is pinned to the vendored recovery default ─────────
+
+test('liveness: DEFAULT_MIN_RESTART_INTERVAL_MS equals the vendored recovery backoffMaxMs default', () => {
+  // The chamber value must track the upstream recovery schema's own slowest
+  // retry step; nothing else pins the literal, so a vendor bump would
+  // otherwise drift silently (upstream-touchpoints §4 contract-mirror row).
+  assert.equal(DEFAULT_MIN_RESTART_INTERVAL_MS, 10_000)
+  const vendor = readFileSync(
+    new URL('../../../vendor/harness-checkout/packages/client/connection/src/recovery-config.ts', import.meta.url),
+    'utf8',
+  )
+  const match = vendor.match(/backoffMaxMs:[\s\S]*?\.default\(([0-9_]+)\)/)
+  assert.ok(match !== null, 'the vendored recovery-config must declare a backoffMaxMs default')
+  assert.equal(Number(match[1]!.replaceAll('_', '')), DEFAULT_MIN_RESTART_INTERVAL_MS)
 })
 
 // ── offline gate (Batch 2: the native recovery control owns offline) ──────

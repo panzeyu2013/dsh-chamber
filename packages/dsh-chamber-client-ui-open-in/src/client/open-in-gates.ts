@@ -35,7 +35,7 @@ export function usableAppsForSource(
   // input hardening — no behavior change for reachable inputs.
   if (typeof sourceId !== 'string') return []
   const source = sourceFromLooseFacts(sourceId, transport)
-  const model = buildOpenInViewModel({ source, official: null, main: apps })
+  const model = buildOpenInViewModel({ source, officialEntries: null, mainEntries: apps })
   const byId = new Map(apps.map(app => [app.id, app]))
   return model.entries
     .map(entry => byId.get(entry.id))

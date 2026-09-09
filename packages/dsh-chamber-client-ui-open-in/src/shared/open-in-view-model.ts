@@ -21,9 +21,15 @@
  * | `dsh-*`/`gateway-*` + ssh       | none (source-not-local) | remote-capable only |
  * | http / malformed / inconsistent | none                 | none                 |
  *
- * Dedup is channel-priority: the official entry wins a shared id, the main
- * duplicate is suppressed (`duplicate-app-id`) — the official catalog is the
- * host's own truth, the main provider is the override.
+ * Channel priority on a shared id (approved §5.1 "vscode 全家走 IPC 覆盖" + r6
+ * "展示并集 + IPC 兜底"): the desktop main-process provider is the OVERRIDE —
+ * when it reports the id AVAILABLE, the official entry is suppressed
+ * (`duplicate-app-id`) and the app launches through the trusted IPC path (so
+ * the chamber's `vscodeOpenInNewWindow` policy, the exact-boot source proof
+ * and the renderer deep-link intent push stay in force). When the main
+ * provider reports the id UNAVAILABLE, the official entry survives and
+ * launches through the instance's own route instead — the union of both
+ * detectors is shown, never a hidden installed app.
  */
 import type { OpenInApp, OpenInSource } from './capabilities.ts'
 
@@ -42,7 +48,8 @@ export type OpenInSuppressionReason =
   | 'app-unavailable'
   /** A remote source can only use apps with a remote carrier. */
   | 'app-not-remote-capable'
-  /** A lower-priority channel re-declared an id the higher channel already won. */
+  /** The id is owned by another channel: an available main-provider override
+   *  outranks the official entry, and any remaining duplicate loses. */
   | 'duplicate-app-id'
 
 export interface OpenInViewEntry {
@@ -71,10 +78,10 @@ export interface OpenInViewModel {
 
 export interface OpenInViewModelInput {
   readonly source: OpenInSource
-  /** Host catalog projection; null = unknown/unread (fail-closed). */
-  readonly official: readonly OpenInApp[] | null
+  /** Instance host-catalog projection; null = unknown/unread (fail-closed). */
+  readonly officialEntries: readonly OpenInApp[] | null
   /** Desktop main-process projection; null = unknown/unread (fail-closed). */
-  readonly main: readonly OpenInApp[] | null
+  readonly mainEntries: readonly OpenInApp[] | null
 }
 
 type SourceClass = 'local' | 'remote-ssh' | 'unsupported'
@@ -111,6 +118,10 @@ export function buildOpenInViewModel(input: OpenInViewModelInput): OpenInViewMod
   const entries: OpenInViewEntry[] = []
   const suppressed: OpenInSuppressedApp[] = []
   const accepted = new Set<string>()
+  const mainEntries = input.mainEntries ?? []
+  // An AVAILABLE main-provider entry owns its id (the IPC override); an
+  // unavailable one does not, so the official entry may serve as the fallback.
+  const mainOverrideIds = new Set(mainEntries.filter(app => app.available).map(app => app.id))
   const consider = (app: OpenInApp, channel: OpenInChannel): void => {
     if (sourceClass === 'unsupported') {
       suppressed.push({ id: app.id, channel, reason: unsupportedReason(input.source) })
@@ -120,16 +131,23 @@ export function buildOpenInViewModel(input: OpenInViewModelInput): OpenInViewMod
       suppressed.push({ id: app.id, channel, reason: 'source-not-local' })
       return
     }
-    if (accepted.has(app.id)) {
+    if (channel === 'official' && mainOverrideIds.has(app.id)) {
       suppressed.push({ id: app.id, channel, reason: 'duplicate-app-id' })
-      return
-    }
-    if (!app.available) {
-      suppressed.push({ id: app.id, channel, reason: 'app-unavailable' })
       return
     }
     if (sourceClass === 'remote-ssh' && !app.remoteCapable) {
       suppressed.push({ id: app.id, channel, reason: 'app-not-remote-capable' })
+      return
+    }
+    // Availability outranks the duplicate check: an unavailable main entry
+    // that duplicates a rendered official entry is reported as unavailable
+    // (that is WHY the IPC override did not take the id), not as a duplicate.
+    if (!app.available) {
+      suppressed.push({ id: app.id, channel, reason: 'app-unavailable' })
+      return
+    }
+    if (accepted.has(app.id)) {
+      suppressed.push({ id: app.id, channel, reason: 'duplicate-app-id' })
       return
     }
     accepted.add(app.id)
@@ -141,8 +159,8 @@ export function buildOpenInViewModel(input: OpenInViewModelInput): OpenInViewMod
       order: entries.length,
     })
   }
-  for (const app of input.official ?? []) consider(app, 'official')
-  for (const app of input.main ?? []) consider(app, 'main')
+  for (const app of input.officialEntries ?? []) consider(app, 'official')
+  for (const app of mainEntries) consider(app, 'main')
   const defaultEntryId = (entries.find(entry => entry.displayKind === 'vscode') ?? entries[0])?.id
   return { entries, suppressed, defaultEntryId, visible: entries.length > 0 }
 }

@@ -132,7 +132,8 @@
 新宿主包（结构镜像 `packages/dsh-chamber-seed-git-worktree`，含提交态
 esbuild 产物 `dist/index.js`）。**命名**（评审修正）：scoped name 遵循两既有
 宿主包先例（`@dsh-chamber/dsh-chamber-seed-client-graph`、`@dsh-chamber/dsh-chamber-seed-git-worktree`
-——git-worktree 的 `dsh-chamber-host-*` 前缀只出现在目录名，是历史不一致）：
+——旧的 `dsh-chamber-host-*` 目录前缀已于 2026-09 Batch 1 命名统一时退役，包名/目录均为
+`dsh-chamber-seed-<loader-id>`）：
 包名 `@dsh-chamber/dsh-chamber-seed-archive-cleanup`，目录
 `packages/dsh-chamber-seed-archive-cleanup/`（目录与 scoped name 对齐，避免第三种命名制）。
 

@@ -29,7 +29,9 @@
 > - **本地来源**：实例自身官方宿主目录（`dsh-host-open-in-app`，随 a2 默认 web
 >   bundle 在）经**每实例代理** `<basePath>/open-in-app/{apps,icon/<id>,open}` 提供
 >   全量本地应用拾取器（真实 bundle 图标 + 官方 app.* 标签表 + 选择持久化，均已
->   吸收进本插件）；桌面主进程提供方只再补 VS Code 覆盖项（同 id 时官方目录胜出）。
+>   吸收进本插件）；**同 id 裁决（§5.1「vscode 全家走 IPC 覆盖」+ r6「展示并集 + IPC 兜底」）**：主进程该项
+>   **可用**时它胜出（vscode 走 IPC，保留 `vscodeOpenInNewWindow`、来源代 proof 与深链 intent 推送）；
+>   主进程**不可用**时官方条目兜底（走实例路由，已装应用不隐藏）。
 > - **远程 ssh 来源**：仅桌面主进程的 remote-capable 项（VS Code Remote-SSH，
 >   主进程构造 `vscode://vscode-remote` URL，不经 chamber 隧道/凭据）。
 > - **http/畸形来源**：空。
@@ -47,7 +49,7 @@
 
 - **本地环境识别（Batch 3 Phase 2 修订）**：`sourceId === 'local'` 且 transport=`local`
   时可用集 = 实例官方宿主目录（official 池，全量本地应用）+ 桌面主进程 vscode 覆盖项
-  （main 池；同 id 时 official 胜出）——≥2 → 图标按钮 + chevron 下拉选择；远程来源（现行
+  （main 池；同 id 由**可用的** main 项胜出，否则 official 兜底）——≥2 → 图标按钮 + chevron 下拉选择；远程来源（现行
   `dsh-<id>` / `gateway-<id>`，兼容 legacy `ssh-<id>`）只有 transport=`ssh` 时
   可用 main 池的 vscode（`remoteCapable` 过滤，行为与 design 16 完全一致）；
   transport=`http` 没有 Remote-SSH authority，隐藏 open-in 按钮；
@@ -99,7 +101,8 @@
 └──────────────────────────────────────────────────┘ └──────────────────────────────────────────┘
 ```
 
-- 无 host 插件、无 seed、无控制面改动——动作是本机拉起，没有实例内执行面
+- 无 chamber 侧 host 插件、无 seed、无控制面代码改动——本地动作在**实例进程内**执行
+  （官方宿主半边 + 实例连接栅栏），主进程只保留 VS Code 面
   （design 16 同款形态纪律）；
 - `deep-link.ts` 的 URI 构造/执行管线继续由 vscode provider 复用；共享的 path
   校验、异常描述器、有界 intent 队列同样保持 electron-free、可独立单测。
@@ -337,10 +340,10 @@ design 16 文档保留为 OS 深链与 vscode 拉起的契约（§3.4/§5.2/§6.
 - **Windows 盘符路径**（design 23 M4 已解锁）：本地实例（`instanceId='local'`）的
   工作区走 `validateLocalPath`（接受盘符/UNC）；远端 dsh 会话路径仍
   `validateRemotePath` POSIX 口径；win32 实机验收见 design 23 §8；
-- **`showItemInFolder` 为 Electron void API**：同步 throw 已被执行管线归一为 loud
-  结果，但 API 不提供 reveal 完成/失败回执；非 macOS 目录的 `openPath` 有完整错误串；
-  Darwin 上任意注册扩展/package bit 都可能改变目录的 LaunchServices 分类，因此所有
-  目录统一采用 reveal 的 void 边界，不维护不可完备的后缀黑名单；
+- **本地文件管理器面（Batch 3 Phase 2 已迁出主进程）**：`showItemInFolder`/
+  `openPath` 的 Electron 边界（void reveal、错误串语义、Darwin LaunchServices 包分类）
+  现由实例自身官方 resolver 负责，主进程不再持有该面；历史边界说明见 git 历史与
+  design 16 §8；
 - **apps 会话内记忆化**：协调器 memo 真实结果；打开下拉或窗口重新获得 focus 时
   `refreshApps()` 重探，会话中途装/卸 app 与持续探测失败后的恢复无需刷新页面；
   点击时主进程仍做活体复检兜底（loud）；

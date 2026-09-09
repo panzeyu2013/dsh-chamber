@@ -51,7 +51,7 @@ design 05 / STATUS）。
 | `src/client/connection.ts` | [patch-mod] | **仅** erasableSyntaxOnly 显式字段改写（两个构造参数属性）+ 顶部 chamber 说明；其余逐字节上游（Batch 2 重锚：loopEpoch 代际守卫与 `CONNECTION_BACKOFF_MAX_MS` 导出退役，活性触发改用原生 `reconnect()`/`setNetworkAvailable()`） |
 | `src/client/index.ts` | [patch-mod] | `apply(ctx)` 读 `ctx.chamberBasePath` → 载波装配 + `SYSTEM_RESUME_EVENT`/liveness 触发（design 14 D4）+ 头部 chamber 说明 |
 | `src/client/rpc.ts` | [patch-mod] | basePath 前缀拼装 + `WebConnectionRpcOptions`（chamber 选项对象）+ 头部 chamber 说明 |
-| `tsconfig.client.json` / `tsconfig.host.json` | [own-divergent] | chamber 构面（extends/rootDir/vendor paths）；`files` 列表与上游增量同步维护 |
+| `tsconfig.client.json` / `tsconfig.host.json` | [patch-mod] | chamber 构面（extends/rootDir/vendor paths）；`files` 列表与上游增量同步维护（脚本按 patched 登记） |
 | `src/client/carrier-assembly.ts`、`src/client/liveness-triggers.ts` | [own] | chamber 自有（载波装配策略 / sleep-wake 活性触发：原生 reconnect + 离线门） |
 | `tsconfig.check-base/client/host.json` | [own] | chamber erasable-only 校验构面 |
 | `test/` | [own] | chamber 自有测试 + fixtures（含 schemastery/fixture/recovery-config 桩 loader） |
@@ -64,13 +64,13 @@ CSS `packages/renderer/src/styles.css` 引入）+ client 构面未列出的小�
 
 | 文件 | 标记 | 原因/补丁说明 |
 |---|---|---|
-| `package.json` | [patch-add] | 描述/测试脚本差异；版本行随上游 |
-| `README.md` / `README.zh.md` / `README.i18n.yaml` | [own-divergent] | chamber 说明（N-ctx boot kernel），非上游镜像 |
+| `package.json` | [patch-mod] | 描述/测试脚本/deps·peerDeps·files 面差异；版本行随上游 |
+| `README.md` / `README.zh.md` / `README.i18n.yaml` | [patch-mod] | chamber 说明（N-ctx boot kernel），非上游镜像（脚本按 patched 登记） |
 | `src/boot.ts` | [patch-mod] | rc.8 N-ctx boot kernel（extraRows / `__ModuleLoader__` / configureContext / 异步 dispose） |
 | `src/index.ts` | [patch-mod] | 入口差异（module-system 宿主接线） |
 | `src/platform.ts` | [patch-mod] | PLATFORM_MODULES / 静态表 chamber 接线（C3 偏差：ui-primitives 不 seed） |
 | `src/seed.ts` | [patch-mod] | seed 行 chamber 接线（extraRows / `__ModuleLoader__`；C3 偏差同步） |
-| `tsconfig.json` | [own-divergent] | chamber 构面 |
+| `tsconfig.json` | [patch-mod] | chamber 构面（脚本按 patched 登记） |
 | `src/boot-rows.ts`、`src/boot-tolerance.ts` | [own] | chamber 自有（每实例 boot-rows / boot 容忍恢复） |
 | `test/` | [own] | chamber 自有测试 + fixtures |
 | `tsdown.config.ts`、上游 `tests/` | [dropped] | 同上 |

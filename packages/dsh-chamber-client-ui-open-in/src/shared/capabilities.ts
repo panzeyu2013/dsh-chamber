@@ -174,7 +174,7 @@ export function buildOpenInLaunchRequest(
  */
 export function usableOpenInApps(apps: readonly OpenInApp[] | null, source: OpenInSource): OpenInApp[] {
   const pool = apps ?? []
-  const model = buildOpenInViewModel({ source, official: null, main: pool })
+  const model = buildOpenInViewModel({ source, officialEntries: null, mainEntries: pool })
   const byId = new Map(pool.map(app => [app.id, app]))
   return model.entries
     .map(entry => byId.get(entry.id))
