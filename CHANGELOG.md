@@ -10,7 +10,7 @@
 
 > English: [docs/CHANGELOG.en-US.md](docs/CHANGELOG.en-US.md)
 
-## [未发布]
+## [0.2.4] - 2026-09-09
 
 ### 修复
 

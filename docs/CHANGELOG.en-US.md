@@ -10,7 +10,7 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 > 中文版: [CHANGELOG.md](../CHANGELOG.md)
 
-## [Unreleased]
+## [0.2.4] - 2026-09-09
 
 ### Fixed
 
