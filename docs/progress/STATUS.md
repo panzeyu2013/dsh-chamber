@@ -14,7 +14,8 @@
 > util/package-manifest；0 删除）；锁文件重生成后 frozen 稳定）。上游相对 alpha.1 为小内容
 > 版本：fork 副本重放——connection 采纳 recovery-config 抽取（重连/就绪时序默认值迁入共享
 > schema：3s 慢握手告警 + 15s 硬期限中止代次、达到上限后持续重试取代终态 disconnected；
-> chamber 的 loopEpoch 代际守卫与 `CONNECTION_BACKOFF_MAX_MS` 导出保留、`basePath` 收敛为
+> chamber 的 loopEpoch 代际守卫与 `CONNECTION_BACKOFF_MAX_MS` 导出当时保留（**Batch 2 已退役**，
+> 见下方 T2/重锚记录）、`basePath` 收敛为
 > chamber apply 配置成员；connection node 测试新增 schemastery 桩 loader——vendor lib 为
 > source-only）、api-gateway 与 web 仅版本行；三副本版本标记 → 0.1.3-alpha.2。**运行时线
 > 收口**：npm `@deepseek-ai/dsh@0.1.3-alpha.2` 已发布 → bundle-dsh 兜底常量、desktop vendor
