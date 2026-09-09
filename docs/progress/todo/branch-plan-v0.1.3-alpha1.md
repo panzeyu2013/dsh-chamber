@@ -2,8 +2,10 @@
 
 > 本文件持久化 v0.1.3-alpha1 分支上四项已批准工作的**全量方案**（调研结论 + 决策 + 批次与绿门）。
 > 执行状态：**Batch 0（T1）✅ 已完成（2026-09）**——源码线 alpha.2 + fork 重放 + 双线收口 +
-> covered 一行落地（记录：STATUS 基线对齐块 / CHANGELOG [Unreleased]）；Batch 0.5（T4）→
-> 1（T2）→ 2（fork 重锚）→ 3（T3）待推进（每批完成即回写本文件与 STATUS）。
+> covered 一行落地（记录：STATUS 基线对齐块 / CHANGELOG [Unreleased]）。
+> **Batch 0.5（T4）✅ 已完成（2026-09）**——upstream-touchpoints.md + verify-upstream-touchpoints.mjs
+> （C1–C8）+ CI fail-loud 步骤 + update-vendor 提示 + PR 模板自检节（记录：STATUS T4 行）。
+> Batch 1（T2）→ 2（fork 重锚）→ 3（T3）待推进（每批完成即回写本文件与 STATUS）。
 > 关联：任务登记在 `docs/progress/STATUS.md`「分支任务登记」块；升级操作手册见
 > `docs/checklists/dsh-upgrade-checklist.md`；上游接触面保鲜见 T4 拟建
 > `docs/checklists/upstream-touchpoints.md`。

@@ -45,6 +45,11 @@ jobs:
       # drift) and is idempotent (no-op when the link set is unchanged).
       - name: Bootstrap vendor tree (verify pin + ensure links)
         run: node scripts/dev/ensure-harness-vendor.mjs
+      # Upstream-touchpoint registry gates (docs/checklists/upstream-touchpoints.md):
+      # C1 pure fork files must stay byte-identical, C3 every fork/upstream file
+      # has a ruling, C5 anchors must not go stale, C6 EXCLUDED dirs must exist.
+      - name: Upstream touchpoint registry (C1/C3/C5/C6)
+        run: node scripts/dev/verify-upstream-touchpoints.mjs
       - run: pnpm install --frozen-lockfile
       # The lockfile is the deterministic contract between the committed
       # workspace members and the resolution result; a non-frozen install
@@ -184,6 +189,11 @@ jobs:
       # creates junctions on win32).
       - name: Bootstrap vendor tree (verify pin + ensure links)
         run: node scripts/dev/ensure-harness-vendor.mjs
+      # Upstream-touchpoint registry gates (docs/checklists/upstream-touchpoints.md):
+      # C1 pure fork files must stay byte-identical, C3 every fork/upstream file
+      # has a ruling, C5 anchors must not go stale, C6 EXCLUDED dirs must exist.
+      - name: Upstream touchpoint registry (C1/C3/C5/C6)
+        run: node scripts/dev/verify-upstream-touchpoints.mjs
       - run: pnpm install --frozen-lockfile
       - name: Assert lockfile not rewritten
         run: git diff --exit-code -- pnpm-lock.yaml

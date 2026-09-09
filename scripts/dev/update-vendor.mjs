@@ -168,6 +168,7 @@ function main() {
     console.log('注意：提交 gitlink 前不要运行 `git submodule update`（会把 HEAD 拉回旧 gitlink）；')
     console.log('运行时线同步见 checklist §2（bundle-dsh / release.yml env / install-gateway.sh 常量）。')
     console.log('回归：按 docs/checklists/dsh-upgrade-checklist.md §6 全量测试套件 + typecheck + 构建 + smoke')
+    console.log('触点：按 docs/checklists/upstream-touchpoints.md §7 循环重放/登记——先跑 node scripts/dev/verify-upstream-touchpoints.mjs --tags <旧tag> <新tag>')
   } catch (err) {
     console.error(`✗ update-vendor: ${err.message}`)
     if (oldPin !== null) {

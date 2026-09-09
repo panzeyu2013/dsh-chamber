@@ -26,6 +26,14 @@
 |---|---|
 |  |  |
 
+## Upstream touchpoint self-check
+
+<!-- 改动含下列任一项 ⇒ 必须登记/刷新 docs/checklists/upstream-touchpoints.md 与
+     scripts/dev/verify-upstream-touchpoints.mjs（漏登 = CI C1/C3 硬失败）： -->
+
+- [ ] 无上游接触面改动（新增 `@deepseek-ai/*` 深导入、改 fork 副本、镜像 wire、新再生物、covered/assembly 行）——或已登记
+- [ ] `node scripts/dev/verify-upstream-touchpoints.mjs` 通过（若改动触及触点面）
+
 ## Risks and failure behavior
 
 <!-- 覆盖相关失败、回滚、清理、兼容性、安全、性能、数据丢失、跨运行时问题。除非有具体理由，不要写 "None identified"。 -->

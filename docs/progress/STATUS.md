@@ -32,8 +32,8 @@
 - **T1 追踪上游 alpha.2 —— ✅ Batch 0 已完成（2026-09）**：源码线升级（pin 82a5fd61a7、链接 271）+ fork 重放（connection recovery-config）+ 双线收口（四锚 rc.1→alpha.2）+ covered 一行，全量记录见上方基线对齐块与 CHANGELOG [Unreleased]；实机探针（attachments wire key、open-in host 行 dormant）结转待实机。
 - **T2 目录/包命名统一**：chamber 自建插件统一 `dsh-chamber-*` 前缀、种子包用 `dsh-chamber-seed-*`、基建豁免；fork 副本与 vendor 命名混淆一并澄清（包名=身份，目录名随包）。方案已定稿（Batch 1，原子单批，见方案 §3）；待执行。
 - **T3 openin 插件统一**：吸收官方 `ui-open-in-app` client 按钮 + 补远程打开能力（远程仅 deeplink 等方式、其余抑制）+ API 通道复用；方案已定稿（Batch 3，Phase 0 门控可提前；covered 一行已随 T1 落地——双保险）；待执行。
-- **T4 上游接触面跟踪清单（待建文档）**：单独文档登记"可能收到上游/从上游 fork/魔改"的全部文件（fork 副本逐文件纯度、深引 vendor 内部、契约镜像、covered/assembly 行、生成物），形成升级 checklist 与新鲜度扫描机制（Batch 0.5，方案 §6）；待执行。
-- **批次进度**：Batch 0（T1）✅ → Batch 0.5（T4）→ Batch 1（T2）→ Batch 2（fork 重锚）→ Batch 3（T3），每批独立提交与绿门。
+- **T4 上游接触面跟踪清单 —— ✅ Batch 0.5 已完成（2026-09）**：登记文档 `docs/checklists/upstream-touchpoints.md`（逐 fork 纯度表 / 有意未镜像表 / 深引与 roster / 契约镜像 / 再生物 / 保鲜自动化 / 每 tag 维护循环 / PR 自检项）+ 保鲜脚本 `scripts/dev/verify-upstream-touchpoints.mjs`（C1 pure 字节恒等、C2 `--tags` 重放报告 advisory、C3 完整性、C4 roster + remote 契约 13、C5 过期锚扫描、C6 EXCLUDED 存在性、C7 种子域锁步、C8 生成物陈旧 advisory）+ CI Bootstrap 后 fail-loud 步骤（C1/C3/C5/C6）+ update-vendor 完成提示 + PR 模板自检节。
+- **批次进度**：Batch 0（T1）✅ → Batch 0.5（T4）✅ → Batch 1（T2）→ Batch 2（fork 重锚）→ Batch 3（T3），每批独立提交与绿门。
 
 - **dsh 运行时版本管理（design 18 §3.6/§9，M5–M7 已落地）**：剩余——macOS 打包态
   `.app` 内共享 dsh-runtime/内嵌 pnpm/koffi 与完整激活-故障回退-恢复链的实机；Linux
