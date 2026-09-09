@@ -234,4 +234,16 @@ final class SwiftEdgeHostLegsTests: XCTestCase {
         XCTAssertEqual(SwiftEdgeHostLegs.vscodeFileURL(for: "/trailing/")?.absoluteString,
                        "vscode://file/trailing/")
     }
+
+    /// 二轮评审 P3：EdgePayload.int 对非有限/越界值返回 nil，绝不 trap。
+    func testEdgePayloadIntDoesNotTrap() {
+        XCTAssertEqual(EdgePayload.int(.number(3)), 3)
+        XCTAssertEqual(EdgePayload.int(.number(-2)), -2)
+        XCTAssertNil(EdgePayload.int(.number(Double.nan)))
+        XCTAssertNil(EdgePayload.int(.number(Double.infinity)))
+        XCTAssertNil(EdgePayload.int(.number(-Double.infinity)))
+        XCTAssertNil(EdgePayload.int(.number(1e30)))
+        XCTAssertNil(EdgePayload.int(.string("3")))
+        XCTAssertNil(EdgePayload.int(AnyCodable?.none))
+    }
 }

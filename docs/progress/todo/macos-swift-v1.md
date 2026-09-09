@@ -738,6 +738,24 @@ E 前端与插件 / F 文档台账 —— 六域均 `pass-with-issues`、无 fai
   MAIN_SIDE_FILES 三件、§6.3 锁条目去重、§8.2 锚点；STATUS/todo/README 数字与
   开放项对齐。
 
+**二轮检查（2026-09-09 续；3 并发 subagent + 自验）**：结论 **regression-found → 已修**。
+- A：**P0 端口错配**（`--port` 恒 17520 而打包态 CP URL 已 17500 → 白窗）→ 统一
+  `defaultCPPort`；**P1 ready 门单向/桩态死锁**（重启不落闸、poc-sidecar 无 ready
+  帧 → invoke 永久被拒）→ `noteSidecarReady(false)` + 重启落闸 + 桩态免门；
+  P2 `performUI` 改有界 async 等待（1s，避免 stop() 主线程轮询导致优雅退出退化
+  SIGKILL）+ 外链打开预算（10s/8 次 + 30s 冷却，镜像 shell-core）；
+  P3 崩溃面（`AnyCodable` 非有限数拒绝、`EdgePayload.int` 用 `Int(exactly:)`）；
+  顺带修 hostFacts 推送失败不回滚意图（首推早于 bridge.start → 保守默认下
+  rendererPush 永久 false）与 mailto 判定、死代码。
+- B/C：**major dry-run 校验依赖 release-only 产物**（干净树 CI 必红）→ 只对显式
+  传入的源严格、默认源 warn；交互腿（showMessage/pickPluginSource）edge 超时
+  10 分钟 + 迟到应答 loud；`rendererPush` 未投递不发送；`import type` 免误报。
+- D：**P1 裁决侧期望集未同源**（我只传了探针侧 hostDomainNames）→ 两 owner 补
+  `probeExpectedNames` getter（与探针同快照）；影子 host 条目缺 probeDomains
+  改 loud；补 seededProbeDomains 三态测试。
+- E/F：design §6.3 pid 表述自相矛盾、host-graph-seed 注释「无消费者」、design 18
+  §3.4 全域验证表述、en 文案丢原因 → 均已修；CLI 抽出 `formatLogLine` + 3 例测试。
+
 **仍开放（四审后剩余，均为外部/离线阻断）**：真实 Apple 凭据下的 Developer ID
 签名 + 公证 + stapler（release 腿已 fail-closed 就绪）；实机 G2/G3/G4/G5/C1/C2
 与退出确认/通知点击/SMAppService/launchApp；真实官方 Node 归档下载与 runner 实跑。

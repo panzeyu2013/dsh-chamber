@@ -306,7 +306,7 @@ export const en: Record<keyof typeof zh, string> = {
   updateUpToDate: 'You\u2019re up to date',
   updateAvailable: 'New version {version} available',
   updateAvailableBeta: 'New version {version} available (beta channel)',
-  updateAvailableBlocked: 'New version {version} available — automatic install unavailable; install manually',
+  updateAvailableBlocked: 'New version {version} available — automatic install unavailable (missing signature); install manually',
   updateAvailableBlockedBeta: 'New version {version} available (beta channel) — automatic install unavailable; install manually',
   // Native-shell (macOS Swift flavor) blocked-available line: the block is the
   // shell's missing auto-install leg, not signing (design 25 §7).
@@ -322,7 +322,7 @@ export const en: Record<keyof typeof zh, string> = {
   // Restart in-progress line (F9: honest progress copy while the quit window runs).
   updateRestarting: 'Restarting to install…',
   updateDownloadBlocked: 'Downloaded ({reason}) — install manually',
-  updateInstallBlockedMacSigning: 'Downloaded (automatic install unavailable) — install manually',
+  updateInstallBlockedMacSigning: 'Downloaded (missing auto-install signature) — install manually',
   updateInstallBlockedNativeShell: 'Downloaded (the native shell cannot auto-install) — install manually',
   updateDownloadFailed: 'Update download failed',
   updateCheckFailed: 'Unable to check for updates',

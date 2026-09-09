@@ -179,7 +179,11 @@ export function createNodeEdges(deps: NodeEdgesDeps): NodeEdges {
       // 恒 true，会让通知打开/深链/唤醒事件静默丢失。这里按「渲染器存活」事实
       // 返回（未收到 hostFacts 前为 false）。
       const delivered = facts.mainWindowAlive && facts.webViewContentAlive
-      deps.sendNotify('rendererPush', { channel, payload: jsonSafe(payload) })
+      // 与 electron-edges 同向：**未投递就不发送**（返回 false 让 core hold 并在
+      // 下次生命周期事件重投；若这里仍发，隐藏/已死窗可能收到重复投递）。
+      if (delivered) {
+        deps.sendNotify('rendererPush', { channel, payload: jsonSafe(payload) })
+      }
       return delivered
     },
 

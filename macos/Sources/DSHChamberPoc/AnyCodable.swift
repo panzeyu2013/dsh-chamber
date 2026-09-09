@@ -149,7 +149,12 @@ public enum AnyCodable: Codable, Equatable {
             // 此处已按 CFTypeID 排除数值 NSNumber，boolValue 安全。
             return .bool((object as! NSNumber).boolValue)
         case CFNumberGetTypeID():
-            return .number((object as! NSNumber).doubleValue)
+            // JSON 文本里的 `-1e400` 会被 JSONSerialization 解析成 -inf；一旦
+            // 落进 AnyCodable，下游 `Int(n)`（EdgePayload.int）会直接 trap 崩
+            // 进程（2026-09 二轮评审 P3）。非有限值一律拒绝（fail closed）。
+            let number = (object as! NSNumber).doubleValue
+            guard number.isFinite else { return nil }
+            return .number(number)
         case CFStringGetTypeID():
             return .string(object as! String)
         case CFArrayGetTypeID():

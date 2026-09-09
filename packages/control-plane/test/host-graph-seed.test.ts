@@ -514,6 +514,75 @@ test('createLocalConnection re-resolves the patchPath thunk on the restart path'
 // only reaps writers; DSH_HOME remains untouched until the fenced spawn path.
 // ---------------------------------------------------------------------------
 
+test('seededProbeDomains 按实际 seed 派生（全/部分/空三态；2026-09 二轮 P1）', async t => {
+  const dir = tempDir(t)
+  const graphSource = stageSource(t, 'export const v = 1\n')
+  // 部分 seed：graph 在、git/archive 源缺失
+  const partial = createControlPlane({
+    stateDir: dir,
+    port: 0,
+    dshWorkspacePath: join(dir, 'dsh'),
+    hostGraphPackageSourceDir: graphSource,
+    hostGitWorktreePackageSourceDir: join(dir, 'no-git'),
+    hostArchiveCleanupPackageSourceDir: join(dir, 'no-archive'),
+    logger: silentLogger,
+    localConnectionDeps: healthyLocalConnectionDeps,
+  })
+  try {
+    await partial.start()
+    assert.deepEqual([...partial.seededProbeDomains], [], '未 seed 前为空')
+    await partial.startLocal()
+    assert.deepEqual([...partial.seededProbeDomains], ['clientGraph/graph'], '只含实际 seed 的域')
+  } finally {
+    await partial.stop()
+  }
+
+  // 空 seed：三源全缺 → 空集（激活期望集退化为无宿主域，不误判失败）
+  const emptyDir = tempDir(t)
+  const empty = createControlPlane({
+    stateDir: emptyDir,
+    port: 0,
+    dshWorkspacePath: join(emptyDir, 'dsh'),
+    hostGraphPackageSourceDir: join(emptyDir, 'no-graph'),
+    hostGitWorktreePackageSourceDir: join(emptyDir, 'no-git'),
+    hostArchiveCleanupPackageSourceDir: join(emptyDir, 'no-archive'),
+    logger: silentLogger,
+    localConnectionDeps: healthyLocalConnectionDeps,
+  })
+  try {
+    await empty.start()
+    await empty.startLocal()
+    assert.deepEqual([...empty.seededProbeDomains], [])
+  } finally {
+    await empty.stop()
+  }
+
+  // 三源齐备 → 全三域
+  const fullDir = tempDir(t)
+  const gitFull = stageSource(t, 'export const v = 3\n')
+  const archiveFull = stageSource(t, 'export const v = 4\n')
+  const full = createControlPlane({
+    stateDir: fullDir,
+    port: 0,
+    dshWorkspacePath: join(fullDir, 'dsh'),
+    hostGraphPackageSourceDir: stageSource(t, 'export const v = 5\n'),
+    hostGitWorktreePackageSourceDir: gitFull,
+    hostArchiveCleanupPackageSourceDir: archiveFull,
+    logger: silentLogger,
+    localConnectionDeps: healthyLocalConnectionDeps,
+  })
+  try {
+    await full.start()
+    await full.startLocal()
+    assert.deepEqual(
+      [...full.seededProbeDomains].sort(),
+      ['archiveCleanup/probe', 'clientGraph/graph', 'gitWorktree/previewCreate'].sort(),
+    )
+  } finally {
+    await full.stop()
+  }
+})
+
 test('createControlPlane.startLocal() seeds the host package and materializes the overlay when dist/index.js exists', async t => {
   const dir = tempDir(t)
   const source = stageSource(t, 'export const v = 1\n')

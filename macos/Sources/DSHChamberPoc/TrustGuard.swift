@@ -110,7 +110,9 @@ enum TrustGuard {
             return false
         }
         if scheme == "mailto" {
-            return !actual.path.isEmpty
+            // 与 Electron 对齐（renderer-trust.ts：`parsed.href !== 'mailto:'`）：
+            // `mailto:?subject=x` 也是有效外链（path 为空但 query 非空）。
+            return urlString.lowercased() != "mailto:"
         }
         guard scheme == "http" || scheme == "https" else { return false }
         guard let expectedOrigin else { return true }

@@ -9,7 +9,7 @@
 //  默认表让位于 legs（legs 报 unimplemented/ui-unavailable 时回落默认表，
 //  语义：POC 无宿主仍不挂起）。
 //
-//  降级语义（headless/无窗/config.canShowUI()==false → 一律诚实错误
+//  降级语义（headless/无窗/self.config.canShowUI()==false → 一律诚实错误
 //  "swift-edge-ui-unavailable:<method>"，绝不静默假装成功）：
 //  - 已实现腿（全部带守卫）：focusMainWindow / pickPluginSource /
 //    showMessage（异步 NSAlert 消费）/ showNativeNotification
@@ -46,8 +46,10 @@ enum EdgePayload {
     }
 
     static func int(_ value: AnyCodable?) -> Int? {
-        guard case .number(let n)? = value else { return nil }
-        return Int(n)
+        guard case .number(let n)? = value, n.isFinite else { return nil }
+        // Int(n) 对 NaN/±inf/越界值直接 trap（2026-09 二轮评审 P3：实测
+        // `-1e400` 经 JSON 桥接后 exit 133）；Int(exactly:) 失败即 nil。
+        return Int(exactly: n)
     }
 
     static func bool(_ value: AnyCodable?) -> Bool? {
@@ -132,7 +134,7 @@ public final class SwiftEdgeHostLegs {
     public func canHandleAsync(method: String) -> Bool {
         switch method {
         case "showNativeNotification":
-            return config.canShowUI()
+            return self.config.canShowUI()
         default:
             return false
         }
@@ -147,7 +149,7 @@ public final class SwiftEdgeHostLegs {
         payload: AnyCodable?,
         completion: @escaping (AnyCodable?, String?) -> Void
     ) {
-        guard config.canShowUI() else {
+        guard self.config.canShowUI() else {
             completion(nil, Self.uiUnavailablePrefix + "showNativeNotification")
             return
         }
@@ -182,7 +184,7 @@ public final class SwiftEdgeHostLegs {
         switch method {
         case "focusMainWindow":
             return performUI(method: method) {
-                guard let window = mainWindowProvider?() else {
+                guard let window = self.mainWindowProvider?() else {
                     return (nil, Self.uiUnavailablePrefix + method + ":no-window")
                 }
                 window.makeKeyAndOrderFront(nil)
@@ -192,7 +194,7 @@ public final class SwiftEdgeHostLegs {
         case "showNativeNotification":
             // 同步路径仅覆盖 UI 不可用（真实调度走 respondAsync/canHandleAsync）；
             // 谎报 shown 绝不允许。
-            guard config.canShowUI() else {
+            guard self.config.canShowUI() else {
                 return (nil, Self.uiUnavailablePrefix + method)
             }
             return (nil, Self.unimplementedPrefix + method + ":use-async-leg")
@@ -212,7 +214,7 @@ public final class SwiftEdgeHostLegs {
             // 通知瞬间的失败窗口（尽力面，注释登记）+ 失败日志落点；对
             // renderer 的可见性两边一致（均无失败回执）→ parity 成立。
             return performUI(method: method) {
-                guard mainWindowProvider?() != nil else {
+                guard self.mainWindowProvider?() != nil else {
                     return (nil, Self.uiUnavailablePrefix + method + ":no-window")
                 }
                 let count = dict.flatMap { EdgePayload.int($0["count"]) } ?? 0
@@ -224,17 +226,17 @@ public final class SwiftEdgeHostLegs {
             // （blocker id 语义注释同 electron-edges）。窗口上下文守卫防
             // headless 测试副作用（真实用途恒有主窗）。
             return performUI(method: method) {
-                guard mainWindowProvider?() != nil else {
+                guard self.mainWindowProvider?() != nil else {
                     return (nil, Self.uiUnavailablePrefix + method + ":no-window")
                 }
                 let on = dict.flatMap { EdgePayload.bool($0["on"]) } ?? false
-                updateKeepAwake(enabled: on)
+                self.updateKeepAwake(enabled: on)
                 return (nil, nil)
             }
         case "showItemInFolder":
             // Finder 揭示叶：payload {path: string}；窗口上下文守卫。
             return performUI(method: method) {
-                guard mainWindowProvider?() != nil else {
+                guard self.mainWindowProvider?() != nil else {
                     return (nil, Self.uiUnavailablePrefix + method + ":no-window")
                 }
                 guard let raw = dict.flatMap({ EdgePayload.string($0["path"]) }) else {
@@ -249,7 +251,7 @@ public final class SwiftEdgeHostLegs {
             // 无窗/headless → 诚实降级。应答形状 {status:'cancelled'} 或
             // {status:'picked', path}（node-edges pickPluginSource 折算）。
             return performUI(method: method) {
-                guard mainWindowProvider?() != nil else {
+                guard self.mainWindowProvider?() != nil else {
                     return (nil, Self.uiUnavailablePrefix + method + ":no-window")
                 }
                 var pickedPath: String?
@@ -284,7 +286,7 @@ public final class SwiftEdgeHostLegs {
             // dialog.showErrorBox 对应腿：payload {title, detail}；主线程模态
             // alert（无窗守卫——深链消费等错误路径须有 UI 上下文才弹）。
             return performUI(method: method) {
-                guard mainWindowProvider?() != nil else {
+                guard self.mainWindowProvider?() != nil else {
                     return (nil, Self.uiUnavailablePrefix + method + ":no-window")
                 }
                 let title = dict.flatMap { EdgePayload.string($0["title"]) } ?? "dsh-chamber"
@@ -324,7 +326,7 @@ public final class SwiftEdgeHostLegs {
             //   - 缺省（未知 appId）→ loud ui-unavailable（镜像 open-in.ts
             //     unknown-open-in-app 的 loud，绝不按 path 默认打开）。
             return performUI(method: method) {
-                guard mainWindowProvider?() != nil else {
+                guard self.mainWindowProvider?() != nil else {
                     return (nil, Self.uiUnavailablePrefix + method + ":no-window")
                 }
                 guard let appId = dict.flatMap({ EdgePayload.string($0["appId"]) }),
@@ -369,7 +371,7 @@ public final class SwiftEdgeHostLegs {
             // 调用）。登录项本身无需窗口（Electron 侧无窗照常设置）→ 本腿
             // 不做 no-window 守卫（canShowUI 已表达 POC 的 UI 上下文门）。
             return performUI(method: method) {
-                guard config.isAppBundled() else {
+                guard self.config.isAppBundled() else {
                     return (nil, Self.uiUnavailablePrefix + method + ":no-bundle")
                 }
                 let enabled = dict.flatMap { EdgePayload.bool($0["enabled"]) } ?? false
@@ -392,7 +394,7 @@ public final class SwiftEdgeHostLegs {
             // 主线程模态 NSAlert；应答 = 按钮序（0 基，electron-edges 同契约；
             // 无 buttons → 默认 ["OK"]）。无窗/headless → 诚实降级。
             return performUI(method: method) {
-                guard mainWindowProvider?() != nil else {
+                guard self.mainWindowProvider?() != nil else {
                     return (nil, Self.uiUnavailablePrefix + method + ":no-window")
                 }
                 let dict0 = dict ?? [:]
@@ -433,7 +435,7 @@ public final class SwiftEdgeHostLegs {
                 guard let url = Self.extractURL(method: method, dict: dict) else {
                     return (nil, Self.unimplementedPrefix + method + ":url-extract")
                 }
-                guard mainWindowProvider?() != nil else {
+                guard self.mainWindowProvider?() != nil else {
                     // 无主窗上下文（headless/未接线）不触发系统副作用。
                     return (nil, Self.uiUnavailablePrefix + method + ":no-window")
                 }
@@ -453,9 +455,10 @@ public final class SwiftEdgeHostLegs {
         }
     }
 
-    private func performUI(method: String, _ body: () -> (result: AnyCodable?, error: String?))
+    private func performUI(method: String,
+                           _ body: @escaping () -> (result: AnyCodable?, error: String?))
         -> (result: AnyCodable?, error: String?) {
-        guard config.canShowUI() else {
+        guard self.config.canShowUI() else {
             return (nil, Self.uiUnavailablePrefix + method)
         }
         // 主线程 hop（2026-09 模块评审 major）：本腿由 BridgeClient 的**管道
@@ -465,9 +468,18 @@ public final class SwiftEdgeHostLegs {
         if Thread.isMainThread {
             return body()
         }
+        // 有界等待（2026-09 二轮评审 P2）：主线程可能正被 BridgeClient.stop()
+        // 的有界轮询占用（SIGTERM→SIGKILL ≤2s），`main.sync` 会一直等到它结束
+        // 才应答，sidecar 的优雅退出因此退化为 SIGKILL。改为 async + 1s 超时：
+        // 主线程空闲时照常应答，忙时 loud 失败（core 侧报 leg 失败，可重试）。
         var outcome: (result: AnyCodable?, error: String?) = (nil, nil)
-        DispatchQueue.main.sync {
+        let semaphore = DispatchSemaphore(value: 0)
+        DispatchQueue.main.async {
             outcome = body()
+            semaphore.signal()
+        }
+        if semaphore.wait(timeout: .now() + 1.0) == .timedOut {
+            return (nil, Self.uiUnavailablePrefix + method + ":main-thread-busy")
         }
         return outcome
     }

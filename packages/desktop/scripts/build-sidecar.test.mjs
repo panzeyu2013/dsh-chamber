@@ -178,7 +178,7 @@ test('④b A5 归档成员断言：合成 tar 三例 + stdout 注入', () => {
   }
 })
 
-test('③c dry-run 真校验输入源（缺失即抛）且不写盘', () => {
+test('③c dry-run 真校验输入源（显式缺失即抛 / 默认缺失 warn）且不写盘', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'dsh-sidecar-dry-'))
   try {
     const out = path.join(dir, 'out')
@@ -187,16 +187,30 @@ test('③c dry-run 真校验输入源（缺失即抛）且不写盘', () => {
     assert.match(plan, /\[4\] Node 捆绑/)
     assert.equal(existsSync(out), false, 'dry-run 不得创建输出目录')
     // 缺 --node-archive 源 → 抛（原实现静默"校验通过"）
-    assert.throws(
-      () => runDryRun(['--dry-run', '--out', out, '--node-archive', path.join(dir, 'missing.tgz')]),
+    await assert.rejects(
+      runDryRun(['--dry-run', '--out', out, '--node-archive', path.join(dir, 'missing.tgz')]),
       /--node-archive 不存在/,
     )
-    // 缺 vendor 源 → 抛
-    assert.throws(
-      () => runDryRun(['--dry-run', '--out', out, '--vendor-dsh', path.join(dir, 'no-vendor')]),
-      /vendor\/dsh 源不存在/,
+    // **显式**传入的 vendor 源缺失 → 抛（调用方路径写错）
+    await assert.rejects(
+      runDryRun(['--dry-run', '--out', out, '--vendor-dsh', path.join(dir, 'no-vendor')]),
+      /--vendor-dsh 源不存在/,
     )
-    assert.equal(existsSync(out), false, '失败路径同样不得写盘')
+    // 默认源缺失 → 只 warn（干净 checkout 的正常形态；2026-09 二轮：严格校验
+    // 会让 push CI 必红，因为 vendor/dsh 由 release 腿的 bundle:dsh 物化）。
+    // 直接改 options 的默认源路径（保持 Explicit=false）来模拟干净 checkout。
+    const warnings = []
+    const cleanOptions = parseBuildSidecarArgs(['--dry-run', '--out', out])
+    cleanOptions.vendorDshDir = path.join(dir, 'no-vendor')
+    cleanOptions.pnpmDir = path.join(dir, 'no-pnpm')
+    await runBuildSidecar(cleanOptions, {
+      log() {},
+      warn(message) { warnings.push(message) },
+      error() {},
+    })
+    assert.ok(warnings.some(w => /未找到内置 dsh 工作区/.test(w)), '默认 vendor 源缺失应 warn')
+    assert.ok(warnings.some(w => /未找到 pnpm/.test(w)), '默认 pnpm 源缺失应 warn')
+    assert.equal(existsSync(out), false, 'dry-run 不得写盘')
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
@@ -330,18 +344,11 @@ test('⑥ --dry-run 子进程：输入校验通过、无写盘、无联网', asy
 })
 
 /** 跑 dry-run 的输入校验路径（不写盘、不联网）。 */
-function runDryRun(argv) {
-  const options = parseBuildSidecarArgs(argv)
-  // buildPlan 只打印；校验逻辑在 runBuildSidecar 的 dry-run 分支——这里复用
-  // 同一份判定，避免测试与实现分叉。
-  if (options.nodeArchive !== null && !existsSync(options.nodeArchive)) {
-    throw new Error(`--node-archive 不存在：${options.nodeArchive}`)
-  }
-  if (!options.skipVendor && !existsSync(path.join(options.vendorDshDir, 'package.json'))) {
-    throw new Error(`vendor/dsh 源不存在（先跑 bundle:dsh 或 --skip-vendor）：${options.vendorDshDir}`)
-  }
-  if (!options.skipVendor && !existsSync(path.join(options.pnpmDir, 'bin', 'pnpm.cjs'))) {
-    throw new Error(`pnpm 源不存在（先 pnpm install 或 --skip-vendor）：${options.pnpmDir}`)
-  }
-  return buildPlan(options)
+/** 跑真实的 dry-run 校验路径（runBuildSidecar 的 dry-run 分支）。 */
+async function runDryRun(argv, warnings = []) {
+  await runBuildSidecar(parseBuildSidecarArgs(argv), {
+    log() {},
+    warn(message) { warnings.push(message) },
+    error() {},
+  })
 }

@@ -265,6 +265,7 @@ import {
   type RuntimeMetadataHealth,
   type StartupDeps,
   type StartupResult,
+  activationProbeNamesForDomains,
 } from '@dsh-chamber/dsh-runtime'
 import { runtimeDiskSummaryAsync, runtimeFailureSummary } from '@dsh-chamber/dsh-runtime'
 import { runRuntimeCheckCycle } from './shell-core.ts'
@@ -1564,6 +1565,11 @@ export async function buildHeadlessCtx(
       throw new Error('无法确认内建 dsh 运行时版本')
     }
     return {
+      // 与 Electron 侧同源：期望集按实际 seed 的宿主域派生（getter 在 gate
+      // 读取时求值，届时本事务 seed 已完成）。
+      get probeExpectedNames() {
+        return activationProbeNamesForDomains(planeRef.current?.seededProbeDomains ?? [])
+      },
       sourceVersion: bundledVersion,
       sourceIsBuiltin: true,
       sourceWasKnownGood: true,

@@ -465,6 +465,13 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
         else logger.warn(`${message} (stub: package not shipped in this runtime)`)
       }
     }
+    // 影子条目（extraSeedEntries 覆盖同 id）若缺 probeDomains，会让该宿主域在
+    // 激活期望集中静默消失（2026-09 二轮评审 P2）——必须 loud。
+    for (const entry of seedEntries()) {
+      if (entry.kind === 'host' && (entry.probeDomains ?? []).length === 0) {
+        logger.warn(`seed entry '${entry.insert.id}' (${entry.insert.name}): host entry without probeDomains; its chamber domain will not be probed`)
+      }
+    }
     const available = seedEntries()
       .filter(entry => entry.sourceDir !== null && existsSync(join(entry.sourceDir, 'dist', 'index.js')))
       .map(entry => ({

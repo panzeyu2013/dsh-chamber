@@ -66,6 +66,8 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     private let cpOrigin: String
     /// sidecar ready 帧已到（A 桥 origin 门在此之前一律拒绝）。
     private var sidecarReady = false
+    /// 外链打开预算（镜像 shell-core openExternally：10s/8 次 + 30s 冷却）。
+    private var externalBudget = ExternalOpenBudget()
 
     private var webView: WKWebView!
     private var bridgeHandler: ChamberMessageHandler!
@@ -284,6 +286,17 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     ///     收敛，见 pushHostFacts 注释）。
     /// 字典键序不影响 JSON 对象语义（sidecar 侧 handleHostInbound 按键级
     /// 合并：仅 typeof boolean 的键生效）。
+    /// 推送失败后的意图回滚（纯逻辑，单测直测）：只撤销**本次推送且期间未被
+    /// 更新的**键（同键同值才撤），使下一次同类事件重新携带该事实；若期间有
+    /// 更新（值已变），保留新意图不撤（避免用旧值覆盖）。
+    static func hostFactsRollback(last: [String: Bool], pushed: [String: Bool]) -> [String: Bool] {
+        var rolledBack = last
+        for (key, value) in pushed where rolledBack[key] == value {
+            rolledBack.removeValue(forKey: key)
+        }
+        return rolledBack
+    }
+
     static func hostFactsDiff(last: [String: Bool], changes: [String: Bool])
         -> (payload: [String: Bool], merged: [String: Bool]) {
         var merged = last
@@ -306,10 +319,11 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     ///     invoke 的登记与写帧在任务首个同步段完成（其后挂起等应答），故帧
     ///     写序 = 事件入队序，杜绝并发推送乱序把旧值后写到 sidecar；invoke
     ///     的线程安全由 BridgeClient 保证（与 onEvent/handleInvoke 同款收敛）；
-    ///   - 失败 loud 打印「[poc] hostFacts 推送失败」，不重试、不回滚意图
-    ///     簿记：sidecar 缓存按键合并、只接受布尔，随后的同类事实变化事件
-    ///     会携带最新值再推（启动期推送先于 sidecar 就绪时被其 stdin 管道
-    ///     缓冲，实际几乎不失败——sidecar 模块求值完成后即处理）。
+    ///   - 失败 loud 打印并**回滚本次意图**（`hostFactsRollback`）：启动期首推
+    ///     早于 `bridge.start()`（invoke 必抛「未在运行」），不回滚会让去重簿记
+    ///     误判已送达——而 sidecar 侧存活事实缺省「未知=不可交付」，rendererPush
+    ///     将长期返回 false（通知/深链被 hold）。回滚后下一次同类事件重推；
+    ///     ready 时的 `resetHostFactsBookkeeping()` 仍会推全量快照兜底。
     /// sidecar 重启（新进程没有历史事实）→ 清空去重簿记，下一次推送即全量
     /// 快照；否则新 sidecar 会长期以「种子事实」运行（2026-09 三审 #8）。
     func resetHostFactsBookkeeping() {
@@ -324,11 +338,17 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         let summary = payload.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: " ")
         print("[poc] hostFacts 推送 \(summary)")
         let object = AnyCodable.object(payload.mapValues { .bool($0) })
+        let pushed = payload
         Task { @MainActor in
             do {
                 _ = try await bridge.invoke(method: Self.hostFactsMethod, payload: object)
             } catch {
-                print("[poc] hostFacts 推送失败：\(error.localizedDescription)")
+                // 失败必须回滚意图（2026-09 二轮自查）：首推发生在 bridge.start()
+                // 之前 → invoke 直接抛「未在运行」；若不回滚，去重簿记会认为该
+                // 事实已送达，而 sidecar 侧存活事实缺省为「未知=不可交付」，于是
+                // rendererPush 长期返回 false、通知/深链被永久 hold。
+                self.lastHostFacts = Self.hostFactsRollback(last: self.lastHostFacts, pushed: pushed)
+                print("[poc] hostFacts 推送失败（已回滚意图，等待下次事件重推）：\(error.localizedDescription)")
             }
         }
     }
@@ -641,9 +661,12 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         print("[poc] 页面加载失败 \(error.localizedDescription)")
     }
 
-    /// sidecar ready（AppDelegate 的 bridge.onReady）→ 放开 A 桥 origin 门。
-    func noteSidecarReady() {
-        sidecarReady = true
+    /// sidecar 就绪态（AppDelegate 的 bridge.onReady / 重启回调）。
+    /// `false` = 新进程未就绪 → A 桥 origin 门落闸（重启窗口不放行）。
+    /// 桩态（poc-sidecar.ts 无 B 桥协议、永无 ready 帧）由 AppDelegate 显式
+    /// 传 true 免门——否则页面 invoke 会被永久拒绝（2026-09 二轮实测）。
+    func noteSidecarReady(_ ready: Bool = true) {
+        sidecarReady = ready
     }
 
     /// 退出清理开始 → 抑制渲染恢复并取消已排定重载（AppDelegate 调用）。
@@ -745,6 +768,15 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     // MARK: - 私有
 
     private func openExternally(_ url: URL) {
+        // 预算（二轮评审 A-P2）：页面可经 window.open 连续刷外链，超限后
+        // 30s 冷却并 loud（与 shell-core 同参数）。
+        switch externalBudget.decide(now: Date().timeIntervalSince1970) {
+        case .blocked(let remaining):
+            print("[poc] 外链打开被预算限制（冷却 \(Int(remaining))s）：\(url.absoluteString)")
+            return
+        case .allow:
+            break
+        }
         if #available(macOS 14.0, *) {
             NSWorkspace.shared.open(url, configuration: NSWorkspace.OpenConfiguration()) { _, _ in }
         } else {

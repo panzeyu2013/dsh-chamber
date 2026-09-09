@@ -90,7 +90,13 @@ import { createUpdateController } from './updater.ts';
 import { acquireChamberLock } from './chamber-lock.ts';
 import { DEFAULT_RUNTIME_LOGICAL_DISK_LIMIT_BYTES, DshRuntimeController } from './dsh-runtime-controller.ts';
 import type { RuntimeMetadataComponent, RuntimeMetadataHealthProjection } from './dsh-runtime-controller.ts';
-import { disposeRuntimeInstaller, fetchRegistryMetadata, installRuntimeVersion, pruneRuntimeStore } from '@dsh-chamber/dsh-runtime';
+import {
+  activationProbeNamesForDomains,
+  disposeRuntimeInstaller,
+  fetchRegistryMetadata,
+  installRuntimeVersion,
+  pruneRuntimeStore,
+} from '@dsh-chamber/dsh-runtime';
 import { sanitizeErrorText } from './sanitize-error.ts';
 // W-10 S11：evaluateApplyNowGate 随 APPLY_NOW 注册体迁入 shell-core（K 组段
 // 直接 import apply-now-gate.ts 纯门）；本文件保留门输入构造叶 readApplyNowGateInput
@@ -2670,6 +2676,15 @@ if (!gotTheLock) {
         throw new Error('无法确认内建 dsh 运行时版本');
       }
       return {
+        // 激活裁决的期望集必须与探针结果集**同源同快照**（design 18 §3.4；
+        // gateway runtime-manager.ts:999-1003 同款）：getter 在 gate 读取时
+        // 求值 → 此时本事务的 seed 已完成（cp.startLocal() 内），与
+        // startAndProbeRuntime 传入的 hostDomainNames 完全一致。缺此字段时
+        // gate 默认「全 7 探针」，部分/空 seed 必 exact-set 失配并回滚
+        // （2026-09 二轮评审 P1）。
+        get probeExpectedNames() {
+          return activationProbeNamesForDomains(cp.seededProbeDomains);
+        },
         cleanupStaleInstalls: () => cleanupStaleInstalls(runtimeBaseDir),
         evict: () => evictVersions(runtimeBaseDir),
         completeInterruptedRestore: () => completeInterruptedRestore(runtimeBaseDir, localDshHome),

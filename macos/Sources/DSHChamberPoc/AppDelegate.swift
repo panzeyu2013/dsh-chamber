@@ -15,8 +15,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// 打包态路径解析集中在 `PackagedLayout`（纯函数、可单测）：装配态
     /// node/sidecar/userData/vendor-dsh 都按 `<App>/Contents/Resources/...`
     /// 与 Electron 同根 userData 解析，`POC_*` 环境变量始终优先。
-    /// 缺省控制面 URL（dev 态控制面，design 25 §3.3）
-    private static let defaultControlPlaneURL = "http://127.0.0.1:17520/"
     /// dev 态 sidecar 脚本相对仓库根的位置（自当前工作目录向上查找）
     private static let sidecarRelativePath = "packages/desktop/poc-sidecar.ts"
     /// 退出清理硬顶（design 25 §3.3(4)：Swift terminate 超时 = 强制放行退出）。
@@ -71,6 +69,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let isPackaged = PackagedLayout.isAppBundle(executablePath: executablePath)
         let fileExists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }
         if isPackaged { print("[poc] 装配态（.app）——按 Contents/Resources 解析缺省路径") }
+        // 端口缺省：装配态 17500 / dev 17520（design 25 §3.3 A3；2026-09 模块
+        // 评审 minor：原实现两者共用 17520）。
+        let defaultCPPort = env["POC_PORT"] ?? (isPackaged ? "17500" : "17520")
+
 
         // ① Node 路径：POC_NODE_BIN → 装配态自带 <Resources>/sidecar/node →
         //    旧缺省 Electron 二进制（ELECTRON_RUN_AS_NODE=1 当 Node 24 用）
@@ -136,7 +138,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 } else {
                     webDir = repoRoot + "/packages/desktop/dist/web"
                 }
-                let port = env["POC_PORT"] ?? "17520"
+                // sidecar 监听端口必须与控制面 URL 同源（2026-09 二轮：此前
+                // 恒 17520，打包态 URL 已改 17500 → 端口错配、白窗）。
+                let port = defaultCPPort
                 sidecarArguments += [
                     "--user-data-dir", stateDir,
                     "--web-dist-dir", webDir,
@@ -192,9 +196,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // ④ 控制面 URL：POC_CP_URL 显式覆盖；缺省派生自 POC_PORT（sidecar-entry
         //    默认端口同源 17520）——消除 POC_PORT/POC_CP_URL 双 env 错位陷阱
         //    （A-3 审计收口；sidecar ready 帧 port 本侧记录于 onReady）。
-        // 端口缺省：装配态 17500 / dev 17520（design 25 §3.3 A3；2026-09 模块
-        // 评审 minor：原实现两者共用 17520）。
-        let defaultCPPort = env["POC_PORT"] ?? (isPackaged ? "17500" : "17520")
         guard let rawCPURL = URL(string: env["POC_CP_URL"] ?? "http://127.0.0.1:\(defaultCPPort)/") else {
             fatalStartup("POC_CP_URL 无法解析为 URL")
         }
@@ -253,7 +254,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                     onRestartScheduled: { [weak self] attempt, delay in
                         DispatchQueue.main.async {
                             self?.deepLinks.reset()
-                            print("[poc] sidecar 重启中（attempt=\(attempt)）——深链转缓冲")
+                            // 新进程未就绪 → A 桥 origin 门重新落闸（否则重启
+                            // 窗口内的消息会被当成「已就绪」放行）。
+                            self?.mainWindowController?.noteSidecarReady(false)
+                            print("[poc] sidecar 重启中（attempt=\(attempt)）——深链转缓冲、A 桥门落闸")
                         }
                     }))
             do {

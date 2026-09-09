@@ -134,4 +134,24 @@ final class HostFactsDiffTests: XCTestCase {
         XCTAssertEqual(pushes[1], ["focused": false])
         XCTAssertEqual(last, ["focused": false])
     }
+
+    /// 二轮评审：推送失败后的意图回滚——只撤「本次推送且期间未被更新」的键，
+    /// 期间已变的键保留新意图（避免用旧值覆盖）。
+    func testHostFactsRollbackOnlyRevertsUnchangedKeys() {
+        let pushed: [String: Bool] = ["mainWindowAlive": true, "webViewContentAlive": true]
+        // 场景 A：期间无更新 → 两键都撤（下次事件重推）
+        let unchanged = MainWindowController.hostFactsRollback(
+            last: ["mainWindowAlive": true, "webViewContentAlive": true, "focused": false],
+            pushed: pushed)
+        XCTAssertEqual(unchanged, ["focused": false])
+
+        // 场景 B：期间 webViewContentAlive 被更新为 false → 只撤 mainWindowAlive
+        let updated = MainWindowController.hostFactsRollback(
+            last: ["mainWindowAlive": true, "webViewContentAlive": false],
+            pushed: pushed)
+        XCTAssertEqual(updated, ["webViewContentAlive": false])
+
+        // 场景 C：空推送 → 原样返回
+        XCTAssertEqual(MainWindowController.hostFactsRollback(last: ["a": true], pushed: [:]), ["a": true])
+    }
 }

@@ -83,8 +83,9 @@ test('W-14 面 D：core 家族的相对 import 传递闭包零 electron（2026-0
   // 闭包只看**加载期**的 electron 依赖（顶层 import / 顶层 require）：
   // updater.ts 的 require('electron') 在函数体内（懒加载，模块加载不需要
   // electron），把它算进来会让「core 模块图不加载 electron」这一断言失真。
+  // `import type ... from 'electron'` 是**类型位置**（运行时零依赖），不算违规。
   const STATIC_ELECTRON_IMPORT =
-    /^(?:import[^\n]*from\s*['"]electron['"]|(?:const|let|var)\s+[^\n]*require\s*\(\s*['"]electron['"]\s*\))/m
+    /^(?:import(?!\s+type\b)[^\n]*from\s*['"]electron['"]|(?:const|let|var)\s+[^\n]*require\s*\(\s*['"]electron['"]\s*\))/m
   const visited = new Set<string>()
   const offenders: string[] = []
   const queue = [...coreFamily]

@@ -170,19 +170,27 @@ function writeProtocolLine(frame: unknown): void {
 
 const pendingEdges = new Map<number, { resolve(v: unknown): void; reject(e: Error): void }>()
 let nextEdgeId = 1
-/** edge 往返超时（2026-09 模块评审 low #6）：Swift 不应答时不得永久挂起。 */
+/** edge 往返超时（2026-09 模块评审 low #6）：Swift 不应答时不得永久挂起。
+ *  **交互腿豁免**（二轮评审 medium）：showMessage / pickPluginSource 是主线程
+ *  模态（NSAlert / NSOpenPanel），用户思考/浏览可能远超 30s——按 10 分钟上限，
+ *  超时才 loud 失败。 */
 const EDGE_TIMEOUT_MS = 30_000
+const INTERACTIVE_EDGE_TIMEOUT_MS = 600_000
+const INTERACTIVE_EDGE_METHODS = new Set(['showMessage', 'pickPluginSource'])
 
 const nodeEdges = createNodeEdges({
   sendEdge(method, payload) {
     return new Promise<unknown>((resolve, reject) => {
       const edgeId = nextEdgeId
       nextEdgeId += 1
+      const timeoutMs = INTERACTIVE_EDGE_METHODS.has(method)
+        ? INTERACTIVE_EDGE_TIMEOUT_MS
+        : EDGE_TIMEOUT_MS
       const timer = setTimeout(() => {
         if (!pendingEdges.has(edgeId)) return
         pendingEdges.delete(edgeId)
-        reject(new Error(`host edge 应答超时（${EDGE_TIMEOUT_MS}ms）：${method}`))
-      }, EDGE_TIMEOUT_MS)
+        reject(new Error(`host edge 应答超时（${timeoutMs}ms）：${method}`))
+      }, timeoutMs)
       timer.unref?.()
       pendingEdges.set(edgeId, {
         resolve(v) { clearTimeout(timer); resolve(v) },
@@ -252,6 +260,9 @@ async function handleInboundLine(line: string): Promise<void> {
       pendingEdges.delete(frame.edgeId)
       if (frame.ok === true) pending.resolve(frame.result ?? null)
       else pending.reject(new Error(typeof frame.error === 'string' ? frame.error : 'edge-failed'))
+    } else {
+      // 迟到应答（已超时/已作废）：原实现静默丢弃，用户操作结果无声消失。
+      console.error(`[sidecar] 迟到的 edge 应答（edgeId=${frame.edgeId}，已超时或已取消）：ok=${frame.ok === true}`)
     }
     return
   }

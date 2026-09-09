@@ -195,6 +195,12 @@ export function parseBuildSidecarArgs(argv) {
     skipVendor: false,
     vendorDshDir: path.join(desktopDir, 'vendor', 'dsh'),
     pnpmDir: path.join(desktopDir, 'node_modules', 'pnpm'),
+    // 仅当调用方**显式**传入源目录时才在 dry-run 里严格校验：默认路径在
+    // 干净 checkout 上不存在（.gitignore 只提交 vendor/dsh/pnpm-lock.yaml，
+    // 由 release 腿的 bundle:dsh 物化）——严格校验会让 push CI 必红
+    // （2026-09 二轮评审 major）。
+    vendorDshExplicit: false,
+    pnpmExplicit: false,
     nodeVersion: DEFAULT_NODE_VERSION,
     nodeSha256: null,
     nodeArchive: null,
@@ -213,8 +219,14 @@ export function parseBuildSidecarArgs(argv) {
     else if (arg === '--skip-bundle') options.skipBundle = true
     else if (arg === '--skip-host-packages') options.skipHostPackages = true
     else if (arg === '--skip-vendor') options.skipVendor = true
-    else if (arg === '--vendor-dsh') options.vendorDshDir = path.resolve(next())
-    else if (arg === '--pnpm-dir') options.pnpmDir = path.resolve(next())
+    else if (arg === '--vendor-dsh') {
+      options.vendorDshDir = path.resolve(next())
+      options.vendorDshExplicit = true
+    }
+    else if (arg === '--pnpm-dir') {
+      options.pnpmDir = path.resolve(next())
+      options.pnpmExplicit = true
+    }
     else if (arg === '--node-version') options.nodeVersion = next()
     else if (arg === '--node-sha256') options.nodeSha256 = next().toLowerCase()
     else if (arg === '--node-archive') options.nodeArchive = path.resolve(next())
@@ -249,19 +261,6 @@ export function buildPlan(options) {
         ? `[4] Node 捆绑：本地 ${options.nodeArchive} → SHA-256 校验 → ${layout.node}`
         : `[4] Node 捆绑：${nodeDistUrl(options.nodeVersion, archive)} → SHA-256 校验 → ${layout.node}`,
     )
-  }
-  // dry-run 的「输入校验」必须真的校验（2026-09 模块评审 minor：原实现只打印
-  // 计划，`--node-archive /nope --vendor-dsh /nope` 也报"输入校验通过"）。
-  if (options.dryRun) {
-    if (options.nodeArchive !== null && !existsSync(options.nodeArchive)) {
-      throw new Error(`--node-archive 不存在：${options.nodeArchive}`)
-    }
-    if (!options.skipVendor && !existsSync(path.join(options.vendorDshDir, 'package.json'))) {
-      throw new Error(`vendor/dsh 源不存在（先跑 bundle:dsh 或 --skip-vendor）：${options.vendorDshDir}`)
-    }
-    if (!options.skipVendor && !existsSync(path.join(options.pnpmDir, 'bin', 'pnpm.cjs'))) {
-      throw new Error(`pnpm 源不存在（先 pnpm install 或 --skip-vendor）：${options.pnpmDir}`)
-    }
   }
   steps.push(`[5] 断言：${path.basename(layout.node)} 基名 + 产物存在`)
   return steps
@@ -406,7 +405,7 @@ async function bundleNode(options, layout, log) {
   }
 }
 
-export async function runBuildSidecar(options, io = { log: console.log, error: console.error }) {
+export async function runBuildSidecar(options, io = { log: console.log, warn: console.warn, error: console.error }) {
   const layout = sidecarLayout(options.outDir)
   const plan = buildPlan(options)
   for (const step of plan) io.log(`  ${step}`)
@@ -414,6 +413,32 @@ export async function runBuildSidecar(options, io = { log: console.log, error: c
   // 输入校验（dry-run 同样执行）。
   const tsconfig = path.join(desktopDir, 'tsconfig.sidecar.build.json')
   const sidecarEntry = path.join(desktopDir, 'sidecar-entry.ts')
+  // dry-run 的「输入校验」必须真的校验（2026-09 模块评审 minor：原实现只打印
+  // 计划，`--node-archive /nope --vendor-dsh /nope` 也报"输入校验通过"）。
+  if (options.dryRun) {
+    if (options.nodeArchive !== null && !existsSync(options.nodeArchive)) {
+      throw new Error(`--node-archive 不存在：${options.nodeArchive}`)
+    }
+    // 显式传入的源缺失 = 调用方写错路径 → 抛；默认源缺失 = 干净 checkout 的
+    // 正常形态 → warn（release 腿在 build:sidecar 之前跑 bundle:dsh）。
+    const vendorPresent = existsSync(path.join(options.vendorDshDir, 'package.json'))
+    const pnpmPresent = existsSync(path.join(options.pnpmDir, 'bin', 'pnpm.cjs'))
+    if (!options.skipVendor) {
+      if (!vendorPresent && options.vendorDshExplicit) {
+        throw new Error(`--vendor-dsh 源不存在：${options.vendorDshDir}`)
+      }
+      if (!pnpmPresent && options.pnpmExplicit) {
+        throw new Error(`--pnpm-dir 源不存在：${options.pnpmDir}`)
+      }
+      if (!vendorPresent) {
+        io.warn(`[build-sidecar] 警告：未找到内置 dsh 工作区 ${options.vendorDshDir}（干净 checkout 正常；release 腿先跑 bundle:dsh）`)
+      }
+      if (!pnpmPresent) {
+        io.warn(`[build-sidecar] 警告：未找到 pnpm ${options.pnpmDir}（先 pnpm install）`)
+      }
+    }
+  }
+
   const controlPlaneSource = path.join(desktopDir, 'dist', 'control-plane', 'index.js')
   for (const [label, file] of [
     ['tsconfig.sidecar.build.json', tsconfig],

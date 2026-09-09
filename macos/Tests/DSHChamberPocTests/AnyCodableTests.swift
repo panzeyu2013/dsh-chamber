@@ -60,4 +60,15 @@ final class AnyCodableTests: XCTestCase {
         let obj = round.jsonObject
         XCTAssertEqual((obj as? NSNumber)?.int64Value, 7)
     }
+
+    /// 二轮评审 P3：JSON 桥接的非有限数值必须被拒绝（否则下游 Int(n) trap）。
+    func testFromJSONObjectRejectsNonFiniteNumbers() {
+        XCTAssertNil(AnyCodable.fromJSONObject(NSNumber(value: Double.infinity)))
+        XCTAssertNil(AnyCodable.fromJSONObject(NSNumber(value: -Double.infinity)))
+        XCTAssertNil(AnyCodable.fromJSONObject(NSNumber(value: Double.nan)))
+        XCTAssertEqual(AnyCodable.fromJSONObject(NSNumber(value: 1.5)), .number(1.5))
+        // 嵌套同样拒绝
+        XCTAssertNil(AnyCodable.fromJSONObject(["k": NSNumber(value: Double.infinity)]))
+        XCTAssertNil(AnyCodable.fromJSONObject([NSNumber(value: Double.nan)]))
+    }
 }

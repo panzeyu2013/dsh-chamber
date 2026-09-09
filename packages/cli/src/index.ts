@@ -80,6 +80,18 @@ interface LogLine {
   stream?: string
   line?: string
 }
+/** 单行日志渲染（纯函数，导出以便单测）：无效/缺失时间戳显示 `-`，
+ *  绝不 `new Date(x).toISOString()` 抛异常（2026-09 二轮评审 P5）。 */
+export function formatLogLine(entry: LogLine | null | undefined): string {
+  let stamp = '-'
+  const ts = entry?.ts
+  if (typeof ts === 'number' || (typeof ts === 'string' && ts.length > 0)) {
+    const parsed = new Date(ts)
+    if (!Number.isNaN(parsed.getTime())) stamp = parsed.toISOString()
+  }
+  return `[${stamp}] [${entry?.stream ?? '?'}] ${entry?.line ?? ''}`
+}
+
 interface HostLogsResult {
   lines?: LogLine[]
   port?: number
@@ -365,16 +377,7 @@ async function hostLogsCommand(flags: FlagMap) {
   }
   function printLines(lines: LogLine[]) {
     for (const entry of lines) {
-      if (json) {
-        console.log(JSON.stringify(entry))
-      } else {
-        // ts=null 曾渲染成 1970-01-01（new Date(null) === epoch）——2026-09
-        // 模块评审 D#5：无时间戳的原始行显式渲染为 `-`。
-        const stamp = entry?.ts === null || entry?.ts === undefined
-          ? '-'
-          : new Date(entry.ts).toISOString()
-        console.log(`[${stamp}] [${entry?.stream ?? '?'}] ${entry?.line ?? ''}`)
-      }
+      console.log(json ? JSON.stringify(entry) : formatLogLine(entry))
     }
   }
   if (!flags.has('follow')) {

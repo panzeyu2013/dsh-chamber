@@ -361,7 +361,13 @@
    成员名/解包基名检查）、HostInboundMethod 仅 4/7（补齐 7 条 + 锁步断言）、
    `drainDeepLinkLaunches` 缺调用、chamber-lock 不收紧既有权限、文档漂移
    5 处（Info.plist 注释/design §6.1 同根声称/§6.3 旧锁条目/AGENTS 纪律措辞/
-   测试头注释）。**六模块评审（2026-09-09，3 并发 ×2 批）**：A Swift 壳 / B Electron-free 核心 /
+   测试头注释）。**二轮检查（2026-09-09，3 并发 subagent + 自验）**：结论 regression-found →
+   全部已修：Swift 打包态 `--port` 错配（P0 白窗）、ready 门单向/桩态死锁、
+   宿主腿有界等待 + 外链预算、`AnyCodable`/`EdgePayload.int` 崩溃面、
+   hostFacts 失败不回滚；JS 侧 dry-run 校验依赖 release-only 产物（干净树 CI
+   必红）→ 只对显式源严格、交互腿 edge 超时 10 分钟、rendererPush 未投递不发送；
+   裁决侧 `probeExpectedNames` 与探针同源（补齐 D#2 的另一半）+ 三态测试；
+   文档/文案 4 处。**六模块评审（2026-09-09，3 并发 ×2 批）**：A Swift 壳 / B Electron-free 核心 /
    C 打包·CI·发布 / D 控制面·网关·运行时 / E 前端与插件 / F 文档台账
    —— 六域均 `pass-with-issues`、无 fail。评审发现并**已修**：A 4 major（隐藏
    窗口无法发通知、`_blank` 外链静默丢弃、宿主腿跨线程碰 AppKit、MessageHandler

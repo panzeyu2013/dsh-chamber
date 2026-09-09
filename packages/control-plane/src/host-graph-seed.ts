@@ -126,10 +126,10 @@ export interface SeedEntry {
   /** Seed file set; defaults to the host base (package.json + dist/index.js).
    *  Client plugins may extend (css/assets) when their package lands. */
   seedFiles?: readonly string[]
-  /** Activation-probe domains this entry backs (kind 'host' only). Pure
-   *  metadata with NO code consumer today: the activation expected set is
-   *  derived per spawn from the ACTUALLY SEEDED host entries instead, never
-   *  from this registry — the gateway derives `syncedHostDomainProbeNames`
+  /** Activation-probe domains this entry backs (kind 'host' only). Consumed
+   *  by control-plane (`PlaneHandle.seededProbeDomains`, derived per spawn
+   *  from the ACTUALLY SEEDED host entries — 2026-09) and by the gateway
+   *  (`syncedHostDomainProbeNames`)
    *  (packages/gateway/src/plugins.ts) over its per-package domain map
    *  `HOST_PACKAGE_PROBE_DOMAINS` (cache presence per package), and
    *  dsh-runtime folds that derived list into the expected set through

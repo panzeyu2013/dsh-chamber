@@ -559,7 +559,8 @@ interface HostEdges {
   - 双 flavor 同持 `<userData>/.dsh-chamber.lock` 的 **flock(LOCK_EX|LOCK_NB)**
     （O_CREAT|O_NOFOLLOW，0600，原子创建）；fd 常驻进程寿命，进程死亡内核
     自动释放——天然免 stale；
-  - 文件内 pid/启动时间只作诊断，不作仲裁；
+  - 文件内 pid/启动时间**只作诊断与 sidecar 复验**（不是锁的仲裁依据——仲裁
+    始终是 flock 本身）；sidecar 用记录 pid 判定「是否我方父进程持锁」，见下条；
   - **防自锁陷阱**：sidecar"复验持锁"若在新 fd 上再 flock 会与 Swift 首锁
     互斥（flock 按 open file description 计）——sidecar 复验 = 读锁文件记录
     校验父 pid，**绝不二次 flock**。**复验语义（2026-09 实施定稿）**：记录里的
