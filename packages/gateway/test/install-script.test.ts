@@ -33,11 +33,44 @@ const library = source.slice(0, mainOffset)
 // before it and still fail closed through the trap.
 const LIB_EPILOGUE = '\nEXITED_OK=1\n'
 
+/**
+ * Host-global safety net prepended to every harness body.
+ *
+ * The installer's D2 cross-mode cleanup calls `systemctl` DIRECTLY — not the
+ * `systemctl_for_mode` wrapper — with the FIXED unit name
+ * `dsh-chamber-gateway.service` (`scripts/install-gateway.sh:2619-2623`:
+ * "cross-mode overwrite install first cleans the old mode's residue"), and the
+ * install/update paths reach it. A harness body that mocks only
+ * `systemctl_for_mode` therefore lets the REAL systemctl through: running this
+ * suite on a machine that has the real gateway service installed STOPS (and, on
+ * a normal dev box, also DISABLES) that service. Observed on the project's own
+ * Linux test rig — three `test:gateway` runs each stopped the host gateway
+ * ~35-41 s in, triggered by the `do_install` test ("overlay install rollback…"),
+ * taking their own agent session down with it (the suite runs inside the
+ * gateway unit's cgroup, so its own `stop` killed the caller before `disable`).
+ *
+ * The stub is installed only where a real `systemctl` exists, so the macOS leg
+ * keeps its previous "no systemd" behavior, and `systemctl_for_mode` is left to
+ * the library (tests that assert scope routing still exercise it). A test that
+ * wants to observe systemctl defines its own function in the body, which
+ * overrides this stub.
+ */
+const HOST_SAFE_STUBS = `
+if command -v systemctl >/dev/null 2>&1; then
+  systemctl() { printf 'systemctl-stubbed: %s\\n' "$*" >&2; return 0; }
+fi
+`
+
+/** Compose one harness script: installer library + host-safe stubs + test body. */
+function harnessSource(body: string): string {
+  return `${library}\n${HOST_SAFE_STUBS}\n${body}${LIB_EPILOGUE}`
+}
+
 function runLibrary(body: string, env: Record<string, string> = {}): string {
   const dir = mkdtempSync(join(tmpdir(), 'gateway-installer-test-'))
   const harness = join(dir, 'harness.sh')
   try {
-    writeFileSync(harness, `${library}\n${body}${LIB_EPILOGUE}`, { mode: 0o700 })
+    writeFileSync(harness, harnessSource(body), { mode: 0o700 })
     const result = spawnSync('bash', [harness], {
       encoding: 'utf8',
       env: {
@@ -60,7 +93,7 @@ function runLibraryResult(body: string, env: Record<string, string> = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'gateway-installer-test-'))
   const harness = join(dir, 'harness.sh')
   try {
-    writeFileSync(harness, `${library}\n${body}${LIB_EPILOGUE}`, { mode: 0o700 })
+    writeFileSync(harness, harnessSource(body), { mode: 0o700 })
     return spawnSync('bash', [harness], {
       encoding: 'utf8',
       env: {
@@ -719,7 +752,7 @@ test('private layout dirs converge to 0700 even when created under a loose umask
     const harness = join(dir, 'harness.sh')
     // 全局 umask 077 之外的第二道保险：即使调用方以松散 umask（022）创建，
     // ensure_private_layout 也必须把全部自有目录收敛到 0700。
-    writeFileSync(harness, `${library}\numask 0022\nensure_private_layout\nprintf 'layout-ok\\n'${LIB_EPILOGUE}`, { mode: 0o700 })
+    writeFileSync(harness, harnessSource(`umask 0022\nensure_private_layout\nprintf 'layout-ok\\n'`), { mode: 0o700 })
     const result = spawnSync('bash', [harness], {
       encoding: 'utf8',
       env: { ...process.env, DSH_CHAMBER_BASE_DIR: base },
@@ -1157,6 +1190,160 @@ test('--no-dsh-upgrade skips anchor work entirely and the update still succeeds'
   }
 })
 
+test('update heals a conf-ahead version mismatch (rollback leftover) and completes the interrupted upgrade', () => {
+  const base = mkdtempSync(join(tmpdir(), 'gateway-installer-f6-heal-upgrade-'))
+  const gatewayDir = join(base, 'gateway')
+  const versionsDir = join(gatewayDir, 'versions')
+  const oldTree = join(versionsDir, '1.0.0')
+  const current = join(gatewayDir, 'current')
+  try {
+    writeGatewayTree(oldTree, '1.0.0')
+    const result = runLibraryResult(`
+mkdir -p "$GATEWAY_DIR"
+ln -s "$VERSIONS_DIR/1.0.0" "$GATEWAY_DIR/current"
+VERSION=2.0.0
+INSTALL_METHOD=local
+GATEWAY_PORT=30801
+DSH_PORT=30800
+BIND_HOST=127.0.0.1
+PUBLIC_ORIGIN=""
+TRUSTED_PROXY=""
+SERVICE_MODE=user
+DSH_WS=/tmp/dsh
+NO_AUTH=1
+ENV_ANCHOR=0
+UI_PASSWORD=""
+API_TOKEN=""
+write_config
+
+# Rollback leftover: conf was committed to 2.0.0 by an aborted transaction
+# while gateway/current still points at the 1.0.0 tree. Simulate the parsed
+# CLI flag (latest is also 2.0.0) before cmd_update reloads gateway.conf.
+VERSION=2.0.0
+NONINTERACTIVE=1
+resolve_version() { :; }
+DOWNLOAD_V=""
+download_verify() { DOWNLOAD_V="$VERSION"; mkdir -p "$1"; : > "$1/dsh-chamber-gateway-\${VERSION}.tgz"; }
+stage_local_version() { mkdir -p "$VERSIONS_DIR/$2"; }
+systemctl_for_mode() { [[ "$1" == "is-active" ]] && return 1; return 0; }
+launch_identity() { printf old-boot; }
+write_unit() { return 0; }
+restart_service() { return 0; }
+health_wait() { return 0; }
+cmd_update
+printf 'download-version=<%s>\\n' "$DOWNLOAD_V"
+`, { DSH_CHAMBER_BASE_DIR: base })
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`)
+    assert.match(result.stdout, /版本树与配置不一致：配置 VERSION=2\.0\.0，current 树为 v1\.0\.0/, 'the heal must be announced before proceeding')
+    assert.match(result.stdout, /安装配置已对齐到实际版本树：VERSION=1\.0\.0/)
+    assert.match(result.stdout, /download-version=<2\.0\.0>/, 'the target download must use the requested version, not the healed tree version')
+    assert.match(result.stdout, /已升级到 2\.0\.0/, 'a plain update replays the interrupted upgrade instead of dying')
+    assert.equal(readlinkSync(current), join(versionsDir, '2.0.0'), 'the pointer must land on the requested target')
+    assert.match(readFileSync(join(gatewayDir, 'gateway.conf'), 'utf8'), /^VERSION=2\.0\.0$/m, 'the final config records the completed upgrade')
+  } finally {
+    rmSync(base, { recursive: true, force: true })
+  }
+})
+
+test('update heals a conf-ahead version mismatch and no-ops at the actual tree version', () => {
+  const base = mkdtempSync(join(tmpdir(), 'gateway-installer-f6-heal-only-'))
+  const gatewayDir = join(base, 'gateway')
+  const versionsDir = join(gatewayDir, 'versions')
+  const oldTree = join(versionsDir, '1.0.0')
+  const current = join(gatewayDir, 'current')
+  try {
+    writeGatewayTree(oldTree, '1.0.0')
+    const result = runLibraryResult(`
+mkdir -p "$GATEWAY_DIR"
+ln -s "$VERSIONS_DIR/1.0.0" "$GATEWAY_DIR/current"
+VERSION=2.0.0
+INSTALL_METHOD=local
+GATEWAY_PORT=30801
+DSH_PORT=30800
+BIND_HOST=127.0.0.1
+PUBLIC_ORIGIN=""
+TRUSTED_PROXY=""
+SERVICE_MODE=user
+DSH_WS=/tmp/dsh
+NO_AUTH=1
+ENV_ANCHOR=0
+UI_PASSWORD=""
+API_TOKEN=""
+write_config
+
+# The operator asks for exactly the version the tree already runs; the conf
+# only needs to be reconciled, nothing else may change.
+VERSION=1.0.0
+NONINTERACTIVE=1
+resolve_version() { :; }
+launch_identity() { printf old-boot; }
+cmd_update
+`, { DSH_CHAMBER_BASE_DIR: base })
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`)
+    assert.match(result.stdout, /版本树与配置不一致/)
+    assert.match(result.stdout, /已是最新版本 1\.0\.0（指针\/树身份校验通过）/)
+    assert.equal(readlinkSync(current), oldTree, 'the pointer must not move on the heal-only path')
+    assert.equal(existsSync(join(versionsDir, '2.0.0')), false, 'no target tree is staged on the heal-only path')
+    assert.match(readFileSync(join(gatewayDir, 'gateway.conf'), 'utf8'), /^VERSION=1\.0\.0$/m, 'the config is reconciled down to the actual tree version')
+  } finally {
+    rmSync(base, { recursive: true, force: true })
+  }
+})
+
+test('update rollback persists the OLD version in gateway.conf even when it fails after the config commit', () => {
+  const base = mkdtempSync(join(tmpdir(), 'gateway-installer-rollback-conf-'))
+  const gatewayDir = join(base, 'gateway')
+  const versionsDir = join(gatewayDir, 'versions')
+  const oldTree = join(versionsDir, '1.0.0')
+  const current = join(gatewayDir, 'current')
+  try {
+    writeGatewayTree(oldTree, '1.0.0')
+    const result = runLibraryResult(`
+mkdir -p "$GATEWAY_DIR"
+ln -s "$VERSIONS_DIR/1.0.0" "$GATEWAY_DIR/current"
+VERSION=1.0.0
+INSTALL_METHOD=local
+GATEWAY_PORT=30801
+DSH_PORT=30800
+BIND_HOST=127.0.0.1
+PUBLIC_ORIGIN=""
+TRUSTED_PROXY=""
+SERVICE_MODE=systemd
+DSH_WS=/tmp/dsh
+NO_AUTH=1
+ENV_ANCHOR=0
+UI_PASSWORD=""
+API_TOKEN=""
+write_config
+
+VERSION=2.0.0
+NONINTERACTIVE=1
+resolve_version() { :; }
+download_verify() { mkdir -p "$1"; : > "$1/dsh-chamber-gateway-\${VERSION}.tgz"; }
+stage_local_version() { mkdir -p "$VERSIONS_DIR/$2"; }
+systemctl_for_mode() { [[ "$1" == "is-active" ]] && return 1; return 0; }
+launch_identity() { printf old-boot; }
+write_unit() { return 0; }
+restart_service() { return 0; }
+health_wait() { return 0; }
+# Simulate the post-commit tail step failing (ownership handover): the first
+# call (pre-restart) succeeds, the second (after the conf commit) fails, and
+# the rollback's own ownership step keeps failing too.
+APPLY_CALLS=0
+apply_service_user_ownership() { APPLY_CALLS=$((APPLY_CALLS + 1)); [[ "$APPLY_CALLS" -eq 1 ]]; }
+cmd_update
+`, { DSH_CHAMBER_BASE_DIR: base })
+    assert.equal(result.status, 1, `${result.stdout}${result.stderr}`)
+    assert.match(`${result.stdout}${result.stderr}`, /升级失败且回滚未完全成功，请人工介入：数据目录属主移交失败/)
+    assert.equal(readlinkSync(current), oldTree, 'rollback restores the exact old current target')
+    assert.equal(existsSync(join(versionsDir, '2.0.0')), false, 'the failed target tree is removed after rollback')
+    assert.match(readFileSync(join(gatewayDir, 'gateway.conf'), 'utf8'), /^VERSION=1\.0\.0$/m,
+      'rollback must write the old version back into gateway.conf so the next update/restart is not bricked by an identity mismatch')
+  } finally {
+    rmSync(base, { recursive: true, force: true })
+  }
+})
+
 test('installer has no unbraced $VAR immediately followed by a multibyte char (bash 3.2 name-scan crash class)', () => {
   // bash 3.2 under a UTF-8 LC_CTYPE eats the first byte of a multibyte char
   // into the variable name: "$x）" → "x…: unbound variable" under set -u.
@@ -1172,4 +1359,119 @@ test('installer has no unbraced $VAR immediately followed by a multibyte char (b
     }
   }
   assert.deepEqual(offenders, [], 'unbraced variable before a multibyte char crashes bash 3.2 under UTF-8 locales')
+})
+
+test('the host-safe stub really intercepts a bare systemctl from a harness body', { skip: process.platform !== 'linux' ? 'linux-only (the stub is inert without a real systemctl)' : false }, () => {
+  // 2026-12 复查 MINOR：上面那条只钉"组合方式"；这条钉**桩本身有效**——在真实
+  // systemctl 存在的机器上，harness 里的裸 `systemctl stop <unit>` 必须被截获并
+  // 打印 systemctl-stubbed: 标记（macOS 上桩按设计不生效，故跳过）。
+  const result = runLibraryResult(`systemctl stop dsh-chamber-gateway.service`)
+  assert.match(result.stderr, /systemctl-stubbed: stop dsh-chamber-gateway\.service/,
+    'the injected stub must intercept the installer\'s bare systemctl call')
+})
+
+test('every harness is composed through harnessSource (host-global stubs cannot be bypassed)', () => {
+  // The D2 cross-mode cleanup calls BARE `systemctl` with the fixed unit name
+  // `dsh-chamber-gateway.service` (scripts/install-gateway.sh:2619-2623), so a
+  // harness body that reaches an install/update flow without the injected stub
+  // stops and disables the REAL service of the machine running the suite (that
+  // is how this suite killed the project's own gateway rig three times on
+  // 2026-09-08). `harnessSource()` is the only thing keeping that out, so pin
+  // the invariant mechanically: every raw harness must be an explicit,
+  // systemctl-free allowlist entry.
+  const self = readFileSync(fileURLToPath(import.meta.url), 'utf8')
+  // A raw harness can only appear where the installer is exercised, so pin the
+  // ownership too: this is the only gateway test file allowed to reference the
+  // installer (2026-12 review MINOR — a sibling file would escape the scan).
+  const testDir = fileURLToPath(new URL('.', import.meta.url))
+  const walk = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap(entry =>
+    entry.isDirectory()
+      ? walk(join(dir, entry.name))
+      : [join(dir, entry.name)])
+  const siblings = walk(testDir).filter(path =>
+    (path.endsWith('.ts') || path.endsWith('.mjs')) && !path.endsWith('install-script.test.ts'))
+  const foreignInstallerRefs = siblings.filter(path =>
+    readFileSync(path, 'utf8').includes('install-gateway'))
+  assert.deepEqual(foreignInstallerRefs, [],
+    'installer harnesses belong in install-script.test.ts (composed through harnessSource); a new file touching the installer must extend this guard')
+  // Structural allowlist (a substring check would let a body that merely
+  // mentions the marker pass): the single allowed raw body is the EXIT-trap
+  // harness — a printf-only template over `${library}`/`${tail}` with no other
+  // command, separator, substitution or systemctl call.
+  const isAllowlistedRawBody = (body: string): boolean =>
+    body.startsWith('`${library}')
+    && body.endsWith('${tail}`')
+    && /printf 'body-ran/.test(body)
+    && !/[;&|]|systemctl|\$\(/.test(body)
+  // Shape-robust scan (2026-12 review MINOR): an exact-literal regex misses a
+  // body containing a comma, different write options, a differently named path
+  // variable, or a bare `writeFileSync(harness, body)`. Walk EVERY
+  // `writeFileSync(` call, take its balanced argument list, and judge the
+  // second argument.
+  const argumentsOf = (text: string, open: number): string[] => {
+    const parts: string[] = []
+    let depth = 1
+    let current = ''
+    for (let i = open + 1; i < text.length; i += 1) {
+      const char = text[i]
+      if (char === '(' || char === '[' || char === '{') depth += 1
+      else if (char === ')' || char === ']' || char === '}') {
+        depth -= 1
+        if (depth === 0) { parts.push(current.trim()); return parts }
+      }
+      if (char === ',' && depth === 1) { parts.push(current.trim()); current = ''; continue }
+      current += char
+    }
+    return parts
+  }
+  // Comments never count as call sites: this test's own prose names
+  // `writeFileSync(harness, body)` as an evasion example. Line comments are
+  // removed by dropping whole comment-only lines (a regex would also eat a
+  // call site that follows a `//` inside a string).
+  const code = self
+    .split('\n')
+    .filter(line => !/^\s*(\/\/|\*|\/\*)/.test(line))
+    .join('\n')
+  // An aliased writer cannot be followed statically — forbid the shape instead.
+  assert.doesNotMatch(code,
+    /=\s*(?:write|append|copy)FileSync\b/,
+    'do not alias the write API: the harness guard cannot follow aliases')
+  // Identifiers that hold a harness path (`const h = join(dir, 'harness.sh')`)
+  // so an aliased target cannot slip through.
+  const harnessAliases = new Set<string>()
+  for (const match of code.matchAll(/(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=[^\n]*?(?:harness|\.sh)/g)) {
+    harnessAliases.add(match[1])
+  }
+  const calls: { target: string; body: string; options: string }[] = []
+  for (const match of code.matchAll(/\b(?:write|append|copy)FileSync\b/g)) {
+    const index = match.index
+    const open = code.indexOf('(', index + match[0].length)
+    // `writeFileSync (` (whitespace before the paren) must not slip through.
+    if (open === -1 || !/^\s*$/.test(code.slice(index + match[0].length, open))) continue
+    const args = argumentsOf(code, open)
+    if (args.length < 2) continue
+    const [target, body, options = ''] = args
+    const inScope = /harness/i.test(target)
+      || /\.(?:sh|bash|zsh|ksh)['"`]/.test(target)
+      || /0o700/.test(options)
+      || harnessAliases.has(target)
+    if (!inScope) continue
+    calls.push({ target, body, options })
+  }
+  assert.ok(calls.length >= 3, `expected the harness write sites to stay discoverable, saw ${calls.length}`)
+  // The second argument must BE one complete harnessSource(...) call: a
+  // trailing concatenation (`harnessSource(x) + raw`) is still a raw body.
+  const isCompleteHarnessSourceCall = (body: string): boolean => {
+    if (!body.startsWith('harnessSource(')) return false
+    const args = argumentsOf(body, 'harnessSource'.length)
+    if (args.length !== 1) return false
+    // argumentsOf returns at the balanced close paren; require nothing after it.
+    return body.trimEnd().endsWith(')')
+      && body.slice(body.trimEnd().length - 1) === ')'
+      && !/\+/.test(body.slice(0, body.lastIndexOf(')')))
+  }
+  const offenders = calls.filter(({ body }) =>
+    !isCompleteHarnessSourceCall(body) && !isAllowlistedRawBody(body))
+  assert.deepEqual(offenders, [],
+    'every harness body must be composed through harnessSource() (or be an allowlisted stub-free body) — a raw body can reach the real systemctl')
 })

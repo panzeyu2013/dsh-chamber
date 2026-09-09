@@ -10,6 +10,174 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 > 中文版: [CHANGELOG.md](../CHANGELOG.md)
 
+## [0.2.4] - 2026-09-09
+
+### Fixed
+
+- **N-ctx document-level theme projection (problem E: checkbox shade mismatch).**
+  Document-level `html{color-scheme}` / `body[data-ds-dark-theme]` were written by
+  EVERY mounted instance (and the vendor `ThemePresenter.dispose()` retracted them
+  unconditionally), so a hidden view's apply repainted the visible one and its
+  teardown stripped the visible view's projection — a light palette next to dark
+  native widgets. The projection is now owned by the ACTIVE view only: `chamberBridge`
+  gained `setActiveSource/getActiveSource/onActiveSource`, the App publishes the active
+  view in a `useLayoutEffect`, and the ui-layout fork gates `document-theme.ts` on
+  `ctx.chamberInstanceId` (teardown never retracts; one page-wide presenter);
+  `styles.css`'s `:root{color-scheme}` fallback now matches the light palette default.
+- **First-screen whole-source degraded list (problem A).** A ready source that was
+  never mounted had only the unary fallback (synthetic groups, empty archive set ⇒
+  archived sessions surfacing as rows, no real workspace actions), and every self-heal
+  arm requires `mounted===true`. New baseline harvest: one background mount in the
+  single prewarm slot, reclaimed after the first authoritative push — 2 attempts,
+  120 s backoff, deadline = boot budget + 15 s, an absolute abandon cap that also
+  watches every mounted view by mount time (and the shell bounds its same-id
+  predecessor wait absolutely while the page producer registry is boot-generation
+  fenced, so a hung boot can neither pin the slot, block the source's next mount, nor
+  silence a healthy successor's channel) and reclaims/parks a wedged shell, harvest candidates reserving the slot (with their own
+  budget line, so a user-retained warm shell cannot block them forever), managed-down
+  gateways excluded, user click adopting the shell, and the last harvested shell kept
+  warm until another candidate needs the slot.
+- **Gateway managed-dsh downtime invisible (problem B).** The desktop's `ready` only
+  proves the gateway PROCESS is alive and the sidebar ignored the
+  `/chamber/runtime/status` `connectionState`, so a stopped managed dsh stayed
+  clickable but unusable. A 15 s foreground probe (single-flight, 10 s timeout) now
+  projects the three terminal-down states into the source's `phase` and `connected=false`
+  (decided by a dedicated `managedRuntimeDown` fact, set only while the transport is
+  usable and the probe reports a terminal-down state — never re-derived from the
+  merged `phase`, whose vocabulary shares `error`), with an inline reason + recovery
+  hint under the source header (which is no longer an activation affordance in that
+  state; the actionable entry remains Settings → Connections → start) and an accurate
+  settings-panel message ("gateway reachable, managed dsh not
+  running") or "managed dsh is starting" for the transient states; `starting`/
+  `restarting` also project into `phase`, disable actions and show a
+  `source.managedStarting` note (the dsh is not serving yet) while `degraded` keeps the
+  transport phase (rendered disconnected by the existing rule), and a missing probe
+  fails open.
+- **Git source branch could not use the main checkout as its base (problem C).** The
+  host always sent the full branch list; the exclusion happened client-side (the main
+  checkout branch was filtered out and only shown as a placeholder), so single-branch
+  repos had an empty picker and a remembered localStorage value permanently shadowed
+  `main`. The choices now come from the pure `sourceBranchChoices()` (host list passed
+  through, unborn rows skipped) with a source-level regression pin.
+- **`test:gateway` stopped the host gateway service.** The installer's D2 cross-mode
+  cleanup calls bare `systemctl stop/disable dsh-chamber-gateway.service` (fixed unit
+  name) while the tests mocked only `systemctl_for_mode`, so the real systemctl
+  escaped. Every harness now composes through `harnessSource()` (host-safe stub only
+  where a real systemctl exists) plus a source-level invariant test; verified on the
+  Linux rig: 3 real calls before the fix, 0 after (45/45 on Linux; 43 passing plus two
+  Linux-only skips on macOS).
+- Also landed: honest degraded-list label (`source.baselinePending`), the settings-panel
+  managed-down copy, the managed-runtime probe on foreground restore, publishing the
+  active source in a `useLayoutEffect` (no one-frame stale theme), and related fixes.
+
+## [0.2.3] - 2026-09-07
+
+### Fixed
+
+- **Disconnect keeps pushed aggregates + rate-limited degraded-view
+  self-heal (design 05 §2.3 semantics revision, aggregate-refresh.ts)** —
+  root-cause fix for archived sessions resurfacing in the sidebar after a
+  remote disconnect/reconnect (clicks dead-ending in the official empty-
+  session view): the disconnect branch retains a mounted source's pushed ok
+  aggregate (rows render gated on connected, nothing shows while
+  disconnected) and the ready-edge pull becomes a sessions-only merge so the
+  archive set / workspaces are never lost (`shouldRetainPushedAggregate`);
+  the staleness watchdog gained a rate-limited self-heal arm — a mounted
+  source stuck on the degraded (synthetic-row) view gets a bounded ctx
+  reconnect that replays the workspace follow so the producer re-publishes
+  its real baseline WITH the archive set (`shouldRebaselineFallbackView` /
+  `isFallbackDerivedView`, 60s backoff; merged into the watchdog callback it
+  inherits the 2026 visibility gating and restore compensation). Pure
+  functions extracted into aggregate-refresh.ts; +7 unit tests.
+- **Long-RPC proxy exemption: the 45s window no longer kills slow unary host
+  business (design 03 §3.4)** — unary POST requests without an upstream
+  duration cap (manual `/compact` = an LLM summary replaying the whole
+  compactable history; design 24's `archiveCleanup/purge`) now ride a
+  30-minute insurance fuse (not an SLA): the measured ~627k-token session
+  cut at exactly 45 001 ms with a fabricated client disconnect is fixed;
+  every other path keeps the 45s window; exemption/fuse-trip counters joined
+  both owners' diagnostics (list-liveness probe), with a decision table and
+  regression tests.
+- **Gateway F4 startup gate: fresh shell-version mismatch now arms (design
+  18 §3.5; 0.2.2 release gap)** — the gateway previously armed only when the
+  activation journal was missing, so a healthy upgrade over an applied
+  override with a settled applied-monitoring journal (reproduced on the
+  real 0.2.1→0.2.2 box) never armed and the first startLocal crashed into
+  the installer's automatic rollback; now desktop-aligned: a fresh mismatch
+  arms for missing / applied-monitoring / intent journals, and only
+  LIVE-transaction phases (prepared/switched/restoring…) stay unarmed (an
+  old shell's in-flight transaction keeps its journal-mismatch semantics);
+  3 regression tests.
+- **Plugin sync/install QA closure (design 21 §10 ⑱–㉒)** — sync 400 reasons
+  are passed through (an older gateway that does not know a host package
+  answers with a sanitized reason + upgrade hint instead of a bare 400; the
+  desktop merges the gateway reason into the failure string); after a
+  materialize 202 the desktop settles the executor op (task poll) → asks for
+  the controlled restart → polls readiness, with the IPC outcome
+  `{executed,restarted}` mirrored across preload/global.d.ts/ipc-surface-
+  mirror golden (the list refreshes immediately and plugins take effect in
+  flow; the pure-auth-header JSON-exchange pitfall is locked by a unit
+  test); terminal ops RETAIN their staged archive (a profile manifest
+  `file:` reference must never dangle) with a boot-time orphan sweep
+  (retention = manifest references ∪ deferred intents ∪ live ops, bounded);
+  third-party rows gained a live-state column (Loader-snapshot matched by
+  moduleName; category-honest — only bundle-layer rows show "activates on
+  restart") and honest install copy (materializeLive/restartNeededHint/
+  deferredOfflineNote; local add no longer claims "Applied"; ssh doApply
+  auto-reloads the installed list).
+
+### Changed
+
+- **N-ctx view retention/reclaim + visibility gating (design 05 §1 note /
+  performance-baseline §10; phase-2 perf items A/C/D code side)** — the early
+  "booted shells persist forever (view lifetime = registry-entry lifetime)"
+  semantics narrows to a chamber retention policy: local stays forever,
+  hidden shells keep at most 1 (`RETAINED_HIDDEN_VIEWS`), and the oldest
+  "settled + hidden ≥60s" shell is reclaimed past that cap (pure
+  `retention.ts` + App.tsx reclaim primitive — same primitive as registry
+  deletion: dispose shell + unmount the UI shell; the instance process,
+  tunnels and background tasks are unaffected; reopening does a cold boot +
+  entry replay); prewarm drops 3→1 / foreground-only; hidden windows stop
+  the 30s watchdog, S2 reconnect and 3s retry pull chains (visibility gate
+  with recovery compensation). Recorded trade-off: completion dots /
+  notification edges of tasks running inside a reclaimed shell pause until
+  that source reopens (runtime-facts channel withdraws); the sidebar
+  aggregate falls back to the existing 30s unary path (05 §2.3).
+- **Sidebar per-workspace session-row windowing + publish hardening
+  (design 05 §2.3; phase-2 perf item B)** — each workspace renders at most
+  200 rows on first paint with a "Show {n} more sessions" expansion bar
+  (`session-row-window.ts` pure functions + ServerSection wiring, zh/en
+  locale pair); the aggregate publish entry gained reference-equality
+  defense (publish closure on top of subscription-side dedupe). New
+  `scripts/perf/measure-ui.mjs` steady-state baseline probe (schema
+  `measure-ui/v1`: per-shell DOM nodes / heap / idle long tasks / synthetic
+  input frame intervals).
+- **Archive manager grouped by workspace and collapsible (design 24
+  §18/§19)** — the standalone "delete all" button is retired: clearing the
+  whole set requires explicitly ticking select-all and confirming the
+  counted delete-selected, so a purge always carries an explicit id list
+  (degraded/pending views offer no destructive action); the listing groups
+  by workspace (authoritative membership → canonical-cwd fallback →
+  ungrouped bucket), group headers reuse the nav fold chrome + workspace
+  accent with tri-state group checkboxes, and collapse is dialog-local view
+  state.
+- **Archive manager matching round (design 24 §19-6..9, dsh/repo
+  conventions)** — destructive confirms moved to an IN-DIALOG two-stage
+  flow (arming freezes list input and shows a risk bar: counted
+  irreversible copy / cancel / confirm-delete; Escape only disarms — a
+  capture-phase stop arbitrates the official Modal's bubble Escape; cancel/
+  Esc return focus to the arming control) replacing OS window.confirm and
+  the nested-Modal option (the official Modal has no layering — one Escape
+  would close both layers); session rows nest under their workspace group
+  through an indent container (`.archiveManagerGroupRows` — row titles
+  exactly align with their group title); the row trash joined the module's
+  `.actionIcon` language (20px color-only hover + error-ink modifier) with
+  hover/focus-ring/small-type shared rule tables consolidated; a four-facet
+  read-only review (correctness/completeness/optimality/a11y) fix round
+  landed (rAF focus return, explicit aria-checked=mixed select-all, text-
+  only role=alert, …) with deviations and pending 目检 items recorded in
+  §19-9.
+
 ## [0.2.2] - 2026-09-05
 
 ### Added
@@ -115,6 +283,18 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 ### Fixed
 
+- **Long-RPC proxy exemption: the 45s window no longer kills slow unary
+  host business (design 03 §3.4)** — the chamber reverse proxy used to cut
+  unary `POST /api/commands/execute` requests (manual `/compact` = an LLM
+  summary call replaying the whole compactable history; a measured
+  ~627k-token session was cut at exactly 45 001 ms, cancelling the host
+  compaction with the session unchanged) into a misleading `transport
+  failure for /api/commands/execute: HTTP 504` plus a fabricated client
+  disconnect; POST requests exactly matching `LONG_RPC_PATHS`
+  (commands/execute and design 24's archiveCleanup/purge) now get a
+  30-minute insurance fuse (not an SLA) while every other path keeps the
+  45s window; exemption/fuse-trip counters joined the diagnostics and a
+  decision table plus regression tests landed (instance-proxy.test.ts).
 - **Dock/taskbar unread badge subagent false positives (design 19
   §3.5/§3.7 increment)** — an armed dot whose parent turn ended while
   background subagents are still alive (runningSubagents > 0) no longer

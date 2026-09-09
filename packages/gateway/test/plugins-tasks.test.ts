@@ -34,6 +34,9 @@ class FakeManager implements GatewayRuntimeManagerLike {
   granted = 0
   held = 0
   released = 0
+  /** 每次 beginProfileWrite 尝试（含 queue_full 拒绝）的事件内时间戳——
+   *  wave 排序断言的确定性锚（2026 flake 修复，见 wave 测试）。 */
+  grantedAt: number[] = []
   refusal: { code: ProfileWriteRefusalCode; error: string } | null = null
   /** Runtime mutation execution window (canRun wiring; false = window open). */
   mutationBusy = false
@@ -44,6 +47,7 @@ class FakeManager implements GatewayRuntimeManagerLike {
 
   beginProfileWrite() {
     this.granted += 1
+    this.grantedAt.push(Date.now())
     if (this.refusal !== null) {
       return { ok: false as const, code: this.refusal.code, error: this.refusal.error }
     }
@@ -583,15 +587,22 @@ test('lease release survives a synchronous terminal (CLI resolution failure on t
 function slowOkSpawn(
   base: ReturnType<typeof makeSpawnHarness>,
   delayMs = 200,
-): { spawn: ReturnType<typeof makeSpawnHarness>['spawn']; spawnedAt: number[] } {
+): { spawn: ReturnType<typeof makeSpawnHarness>['spawn']; spawnedAt: number[]; closeAt: number[] } {
   const spawnedAt: number[] = []
+  const closeAt: number[] = []
   return {
     spawnedAt,
+    closeAt,
     spawn: (command, args, options) => {
       const child = base.spawn(command, args, options)
       const record = base.calls[base.calls.length - 1]!
       spawnedAt.push(Date.now())
-      setTimeout(() => record.child.close(0), delayMs)
+      setTimeout(() => {
+        // 先记录 close 时刻再 close：executor 在 close 回调里同步推进（放
+        // 槽 → 下一波 grant），closeAt 必须先于随后 grant 的时间戳落盘。
+        closeAt.push(Date.now())
+        record.child.close(0)
+      }, delayMs)
       return child
     },
   }
@@ -644,13 +655,20 @@ test('drain WAVES past the queue cap: 10 deferred intents all clear on a healthy
   // while exactly 8 leases stay held until the first children terminate.
   await waitFor(() => manager.granted === grantedBaseline + 10, 'wave-1 round attempts all ten intents (8 accepted + 2 queue_full)', 2000)
   assert.equal(manager.held, 8, 'exactly the queue cap of leases is held after wave 1 (refused submissions released)')
-  const wave1DoneAt = Date.now()
   // Wave-2 proof: the 11th grant happens only after a first-wave child
   // terminated (~200 ms later) freed a slot — the drain's slot wait is real.
+  // 确定性断言（2026 flake 修复）：不用两次 waitFor 观察点之间的墙钟差
+  // （轮询滞后会把真实 ~200ms 间隔压缩成 27ms 导致误报），改用事件内时间
+  // 戳比较——首次波-2 grant 尝试（attempt 下标 grantedBaseline+10）不得
+  // 早于首个波-1 child 的 close 时刻。closeAt 在 close 前落盘、grantedAt 在
+  // grant 钩子内落盘，同进程单调时间，顺序即语义。
   await waitFor(() => manager.granted >= grantedBaseline + 11, 'wave 2 grants after a terminal frees a slot', 5000)
-  const wave2StartAt = Date.now()
-  assert.ok(wave2StartAt - wave1DoneAt >= 100,
-    `wave 2 must wait for a first-wave terminal before granting (gap ${wave2StartAt - wave1DoneAt} ms)`)
+  assert.ok(slow.closeAt.length > 0, 'wave-1 child terminals must exist before wave 2')
+  assert.ok(manager.grantedAt.length >= grantedBaseline + 11, 'grantedAt must cover the wave-2 grant')
+  const firstWave1CloseAt = slow.closeAt[0]!
+  const firstWave2GrantAt = manager.grantedAt[grantedBaseline + 10]!
+  assert.ok(firstWave2GrantAt >= firstWave1CloseAt,
+    `wave 2 grant (${firstWave2GrantAt}) must not precede the first wave-1 terminal (${firstWave1CloseAt})`)
   const cleared = await drainPromise
   assert.equal(cleared, 10, 'all ten intents clear across waves')
   await waitFor(() => manager.held === 0, 'every drained op released its lease')
@@ -795,8 +813,12 @@ test('the outward tasks projection masks file: specs while the journal keeps the
   const projected = h.tasks.tasks().tasks[0]!
   assert.equal(projected.name, 'slug')
   assert.equal(projected.spec, MATERIALIZED_VALUE_MASK, 'the projection masks the staging path')
-  // The staged archive is gone once the op is terminal (staged-archive GC).
-  await waitFor(() => existsSync(staged) === false, 'staged archive removed at the op terminal')
+  // An EXECUTED materialize op RETAINS its staged archive: the dsh CLI
+  // permanently records `file:<staged>` in the profile manifest + pnpm
+  // lockfile, and a later re-resolution fetches that exact path again —
+  // deleting it at the terminal would leave the manifest dangling (the same
+  // "kept, never cleaned" policy as the desktop ssh plugin dir).
+  assert.equal(existsSync(staged), true, 'the staged archive is retained after the op is terminal')
 })
 
 test('the tasks projection never exposes a pending op\'s live childPid; the journal keeps it internally', async t => {
@@ -816,4 +838,37 @@ test('the tasks projection never exposes a pending op\'s live childPid; the jour
   h.spawnCalls[0]!.child.close(0)
   await waitFor(() => journal.recent().find(op => op.name === 'pid-proj-pkg')?.status === 'ok', 'op ok')
   await waitFor(() => h.manager.held === 0, 'lease released')
+})
+
+test('the boot orphan sweep removes staged archives nothing references and keeps manifest-/intent-referenced ones', async t => {
+  const h = makeHarness(t)
+  const root = thirdPartyRoot(h.stateDir)
+  // Executed-op retention: the profile manifest dependency points at this
+  // staged archive — the sweep must never touch it.
+  const keptByManifest = join(root, 'slug-alpha', 'alpha-1.0.0-11111111.tgz')
+  // Deferred intent: drains at the next ready edge — its archive must
+  // survive the sweep.
+  const keptByIntent = join(root, 'slug-beta', 'beta-1.0.0-22222222.tgz')
+  // Nothing references this one: a remove/upgrade cycle left it behind.
+  const orphan = join(root, 'slug-gamma', 'gamma-0.0.1-33333333.tgz')
+  for (const staged of [keptByManifest, keptByIntent, orphan]) {
+    mkdirSync(join(root, staged.split('/').at(-2)!), { recursive: true, mode: 0o700 })
+    writeFileSync(staged, 'tgz-bytes', { mode: 0o600 })
+  }
+  writeManifestFixture(h.stateDir, { alpha: `file:${keptByManifest}` })
+  h.manager.refusal = { code: 'runtime_busy', error: 'busy' }
+  const deferred = await submitResult(h.tasks, { kind: 'materialize', name: 'beta', spec: `file:${keptByIntent}` })
+  assert.ok(deferred.ok)
+  assert.equal(deferred.deferred, true, 'the intent is persisted for the next ready edge')
+  h.manager.refusal = null
+
+  h.tasks.sweepOrphanedStagedArchives()
+  assert.equal(existsSync(keptByManifest), true, 'the manifest-referenced archive is retained')
+  assert.equal(existsSync(keptByIntent), true, 'the intent-referenced archive is retained')
+  assert.equal(existsSync(orphan), false, 'the unreferenced archive is reclaimed')
+
+  // Idempotent: a second sweep leaves every referenced archive alone.
+  h.tasks.sweepOrphanedStagedArchives()
+  assert.equal(existsSync(keptByManifest), true)
+  assert.equal(existsSync(keptByIntent), true)
 })

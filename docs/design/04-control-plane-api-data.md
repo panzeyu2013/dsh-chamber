@@ -194,7 +194,7 @@ SSE：text/event-stream 响应直通（不缓冲、不解析、不重封装）
 | 请求体上传超时 | 408 `{error, code:'request_timeout'}` |
 | 请求体预算耗尽（进程级并发缓冲上限） | 503 `{error, code:'resource_exhausted'}` |
 | 上游连接拒绝 / 请求失败 | 502 `{error, code:'upstream_failed'}`（脱敏） |
-| 上游空闲超时（默认 45s） | 504 `{error, code:'upstream_timeout'}` |
+| 上游空闲超时（默认 45s；长 RPC 豁免 30 分钟，见 03 §3.4） | 504 `{error, code:'upstream_timeout'}` |
 | id 未知 | 404 `{error, code:'instance_not_found'}` |
 | 已声明请求体 > 300MiB、未知长度请求体 > 32MiB / 响应体 > 300MiB | 413 `{error, code:'body_too_large'}` / 取消上游流 + 413 |
 

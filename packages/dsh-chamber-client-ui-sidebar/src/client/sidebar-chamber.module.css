@@ -182,6 +182,42 @@
   color: var(--dsw-alias-label-tertiary);
 }
 
+/* 来源级"数据不可信"说明行（2026-12：托管 dsh 停机 / 会话基线未就绪）——
+   与 searchStatus 同级的次级文本，但语义是来源状态而非搜索状态，故独立成类
+   （搜索样式改名/移除时不该连带影响它）。 */
+.sourceNote {
+  padding: 2px 4px 2px 22px;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* 说明行为常驻 live region（内容为空时零高）：插入即带内容的 region 不会被 AT
+   播报，因此容器必须一直在文档里，只换文本。 */
+.sourceNote:empty {
+  padding: 0;
+  line-height: 0;
+}
+
+/* 会话行渲染窗口的"还有 N 个会话"展开条（2026 性能整改 B2）——整行可点，
+   视觉与 searchStatus 同级（次级文本），hover 转主文本。 */
+.sessionRowsMore {
+  display: block;
+  width: 100%;
+  padding: 3px 4px;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-tertiary);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  text-align: left;
+}
+
+.sessionRowsMore:hover {
+  color: var(--dsw-alias-label-primary);
+}
+
 /* Content-search failure banner (06 §1.2). */
 .searchWarning {
   margin: 2px 4px 4px;
@@ -559,7 +595,12 @@
   border-radius: 8px;
 }
 
-.workspaceHeader:hover {
+/* Hover wash shared by the nav workspace header and the archive-manager
+   dialog's group header (2026 matching refactor — one rule list, the same
+   token; the dialog's header is a sibling surface, not a .workspaceHeader
+   subclass). */
+.workspaceHeader:hover,
+.archiveManagerGroupHeader:hover {
   background: var(--dsw-alias-interactive-bg-hover);
 }
 
@@ -619,15 +660,23 @@
   display: inline-flex;
 }
 
+/* The archive-manager group headers (2026 grouping revision) reuse the SAME
+   folder↔chevron hover/focus swap: the manager header has no kebab/actions,
+   so the .rowActionsVisible variant below is a no-op for it — one shared
+   rule list, no duplicate table to keep in sync. */
 .workspaceHeader:hover .foldToggleFolder .foldChevron,
 .workspaceHeader:has(:focus-visible) .foldToggleFolder .foldChevron,
-.workspaceHeader:has(.rowActionsVisible) .foldToggleFolder .foldChevron {
+.workspaceHeader:has(.rowActionsVisible) .foldToggleFolder .foldChevron,
+.archiveManagerGroupHeader:hover .foldToggleFolder .foldChevron,
+.archiveManagerGroupHeader:has(:focus-visible) .foldToggleFolder .foldChevron {
   display: inline-flex;
 }
 
 .workspaceHeader:hover .foldToggleFolder .foldFolder,
 .workspaceHeader:has(:focus-visible) .foldToggleFolder .foldFolder,
-.workspaceHeader:has(.rowActionsVisible) .foldToggleFolder .foldFolder {
+.workspaceHeader:has(.rowActionsVisible) .foldToggleFolder .foldFolder,
+.archiveManagerGroupHeader:hover .foldToggleFolder .foldFolder,
+.archiveManagerGroupHeader:has(:focus-visible) .foldToggleFolder .foldFolder {
   display: none;
 }
 
@@ -796,7 +845,11 @@
   cursor: pointer;
 }
 
-.sessionRow:hover {
+/* Hover wash shared by the nav session rows and the archive-manager
+   dialog's rows (select-all row included — 2026 matching refactor, one rule
+   list, the same token). */
+.sessionRow:hover,
+.archiveManagerRow:hover {
   background: var(--dsw-alias-interactive-bg-hover);
 }
 
@@ -955,6 +1008,17 @@
   cursor: default;
 }
 
+/* Destructive icon-action modifier — the archive manager's row trash (2026
+   refactor): hover turns the glyph error-primary ink. Color-only hover is
+   the module icon-button language (no box — the row pill carries the hover
+   background); disabled dim and the focus ring come free from the
+   .actionIcon base rules. Hit area 20px = the module icon-button standard
+   (nav actions alike); the WCAG 2.2 2.5.8 24px target deviation is
+   registered in design 24 §19-9 (module-wide language, visual leg). */
+.actionIcon.actionIconDanger:hover:not(:disabled) {
+  color: var(--dsw-alias-state-error-primary);
+}
+
 /* P2-5: 排序按钮的 updated（按更新时间）态——品牌色 + 浅底，视觉可辨
    （菜单勾选之外的可感知样式；hover 保持文字色变化）。2026-08: 按钮改为
    菜单入口（aria-pressed 换成 .sortActive 状态类——菜单按钮的 pressed
@@ -964,7 +1028,16 @@
   background: color-mix(in srgb, var(--dsw-alias-brand-primary) 14%, transparent);
 }
 
-.actionIcon:focus-visible {
+/* Keyboard focus ring — ONE shared constants table for every icon-family
+   control (2026 matching refactor): .actionIcon buttons (incl. the archive
+   manager's .actionIconDanger row trash) AND the archive-manager group
+   header's fold toggle ride the same brand 1px OUTWARD ring (the 2026 a11y
+   review ring; constants realigned from the earlier -1px inset). Note the
+   NAV workspace fold toggle deliberately has no branded ring (UA default;
+   its keyboard cue is the glyph swap) — the dialog rule below is the §19-5
+   a11y improvement, sharing constants, not nav parity. */
+.actionIcon:focus-visible,
+.archiveManagerGroupHeader .foldToggle:focus-visible {
   outline: 1px solid var(--dsw-alias-brand-primary);
   outline-offset: 1px;
 }
@@ -1371,75 +1444,92 @@
 }
 
 /* ---------------------------------------------------------------------------
- * chamber archive manager dialog (design 24 §6 revision 2026-09): a
- * full-window overlay listing a source's archived sessions with per-row /
- * multi-select / delete-all purge actions. Uses the official dsh alias
- * tokens so the dialog follows the active theme.
+ * chamber archive manager dialog (design 24 §6 revision 2026-09; style pass
+ * 2026; matching refactor 2026): the dialog chrome is the OFFICIAL
+ * primitives Modal — this file only sizes the card and styles the bespoke
+ * row list (native checkboxes + title/project rows + the per-row trash,
+ * which is the module's .actionIcon + .actionIconDanger — no bespoke icon
+ * button) plus the in-dialog two-stage confirm bar and the footer action
+ * bar. All colors ride the official --dsw-alias tokens so the dialog
+ * follows the active theme; the destructive actions follow the ui-git
+ * remove-confirm convention (Button outline + error ink).
  * ------------------------------------------------------------------------- */
-.archiveManagerMask {
-  position: fixed;
-  inset: 0;
-  z-index: 120;
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
-  padding: 8vh 24px 24px;
-  background: rgba(8, 10, 14, 0.48);
+
+/* Modal card sizing: the manager lists sessions, so it is wider than the
+   default 380px confirmation modal (and never exceeds the viewport). */
+.archiveManagerDialog {
+  width: min(620px, calc(100vw - 32px));
 }
 
-.archiveManager {
+/* Body column: view-state notes / outcome notes sit above or below the
+   scrollable list. tabIndex -1 (initial focus) must not paint a ring. */
+.archiveManagerPanel {
   display: flex;
   flex-direction: column;
-  width: min(600px, 100%);
-  max-height: min(600px, 74vh);
-  overflow: hidden;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 10px;
-  background: var(--dsw-specific-sidebar-fill);
-  color: var(--dsw-alias-label-primary);
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.42);
+  gap: 6px;
+  min-width: 0;
   outline: none;
 }
 
-.archiveManagerHead {
+/* In-dialog two-stage confirm bar (2026 refactor; ArchiveManagerDialog
+   module doc): rendered INSIDE the panel — above the view content — while a
+   destructive action is armed. Single Modal, no second layer, no native
+   window.confirm. Danger-tinted wash uses the color-mix-over-token pattern
+   (.actionIcon.sortActive's brand wash precedent); the icon is error ink
+   (official RiskConfirmation vocabulary), the message rides label-primary;
+   the action pair is the official Button sm atoms — 取消 renders first so
+   arming focus lands on the safe default. Wash strength is 9% (vs the 14%
+   brand precedent) because error-primary's higher visual weight reads at
+   lower alpha — both themes verified at 目检 (design 24 §19-9); the bar
+   message font rides the shared dialog small-text rule list below.
+   ARMED-freeze note (2026 a11y review): while armed every row dims
+   (.archiveManagerRow:has(.archiveManagerCheck:disabled) 0.6) and the
+   trash additionally dims (.actionIcon:disabled 0.42) — the ~0.25 composite
+   is intentional freeze feedback (rows are inert until 取消/确认删除);
+   token contrast at the dimmed state still clears AA (review-computed,
+   design 24 §19-9). */
+.archiveManagerConfirmBar {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 9px 10px 9px 14px;
-  border-bottom: 1px solid var(--dsw-alias-border-l2);
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 9%, transparent);
 }
 
-.archiveManagerTitle {
+.archiveManagerConfirmIcon {
+  flex: none;
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.archiveManagerConfirmText {
   flex: 1;
   min-width: 0;
-  font-size: 13px;
-  font-weight: 600;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  color: var(--dsw-alias-label-primary);
 }
 
-.archiveManagerSource {
-  color: var(--dsw-alias-label-secondary);
-  font-weight: 400;
-}
-
-.archiveManagerBody {
-  min-height: 96px;
+/* Scrollable row list (long archive sets scroll internally; the card keeps
+   its fixed footer). Rows breathe on a 10px pill like list rows elsewhere. */
+.archiveManagerList {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  max-height: min(420px, 52vh);
   overflow-y: auto;
-  padding: 6px 8px;
+  margin: 0 -10px;
+  padding: 0 10px 2px;
 }
 
 .archiveManagerRow {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 4px 8px;
-  border-radius: 6px;
-}
-
-.archiveManagerRow:hover {
-  background: var(--dsw-alias-interactive-bg-hover);
+  min-width: 0;
+  padding: 5px 8px;
+  border-radius: 10px;
 }
 
 .archiveManagerCheck {
@@ -1453,11 +1543,34 @@
   opacity: 0.6;
 }
 
+/* Busy dim for the group HEADER only dims its checkbox (2026 a11y review):
+   the fold toggle stays usable while a run is in flight (view state only),
+   so dimming the whole header would make it look disabled. The rows below
+   are individually dimmed by their own rule above. */
+.archiveManagerGroupHeader .archiveManagerCheck:disabled {
+  opacity: 0.6;
+}
+
+.archiveManagerRowTitleSelectAll {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--dsw-alias-label-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .archiveManagerRowTitle {
   flex: 1;
   min-width: 0;
-  font-size: 12.5px;
-  line-height: 18px;
+  font-size: 13px;
+  line-height: 19px;
+  /* Archived-session names are entity labels — explicit standard ink (the
+     Modal card carries no text color, so an unset rule inherits the muted
+     body ink instead of label-primary). */
+  color: var(--dsw-alias-label-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1466,7 +1579,7 @@
 .archiveManagerRowPath {
   flex: none;
   max-width: 42%;
-  font-size: 11px;
+  font-size: 11.5px;
   line-height: 16px;
   color: var(--dsw-alias-label-tertiary);
   white-space: nowrap;
@@ -1474,100 +1587,137 @@
   text-overflow: ellipsis;
 }
 
-.archiveManagerRowDelete {
-  color: var(--dsw-alias-label-tertiary);
+/* (The fold-toggle keyboard ring shares the .actionIcon:focus-visible
+   constants table above — one rule list, no duplicate to sync.) */
+
+/* Workspace group sections of the archived list (2026 grouping revision):
+   one collapsible header per workspace with its rows underneath (rows nest
+   one tree level under the header — 2026 indent revision, see
+   .archiveManagerGroupRows below; the header hover wash is shared with
+   .workspaceHeader — see the nav rule above). The header
+   reuses the NAV workspace chrome — the SAME module's fold-toggle classes
+   (folder glyph at rest, chevron swap on hover/focus, folded rotation) and
+   the workspaceAccentStyle accent var — so a group stays visually bound to
+   its workspace row in the session list. It does NOT reuse .workspaceHeader
+   itself: that class hides its count on hover expecting the nav action
+   cluster this dialog does not have. The ungrouped bucket renders chevron
+   only (no folder, no accent) — nav parity. */
+.archiveManagerGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
 }
 
-.archiveManagerRowDelete:hover:not(:disabled) {
-  color: var(--dsw-alias-state-error-primary);
+.archiveManagerGroup + .archiveManagerGroup {
+  margin-top: 4px;
+}
+
+.archiveManagerGroupHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 5px 8px;
+  border-radius: 10px;
+}
+
+/* Session rows nest one tree level under their group header (2026 indent
+   revision — see also the ArchiveManagerDialog module doc). Nesting is
+   ancestor-side: each expanded group renders its rows inside
+   .archiveManagerGroupRows, whose 24px left padding indents the whole
+   subtree once. The step is chosen so the row TITLE column lands exactly
+   under its group's title on any platform — header title x = 8 pad +
+   checkbox w + 8 gap + 16 toggle + 8 gap = 40 + w; nested row title x =
+   24 step + 8 pad + checkbox w + 8 gap = 40 + w — the native checkbox
+   width cancels, so the parent → child relationship reads from the
+   checkbox rail (8 → 32) and the title column alike, with no
+   platform-specific pixel guessing. Container over per-row margin/child
+   combinator: .archiveManagerRow is REUSED for the top-level select-all
+   row, so a row class must stay level-agnostic — indentation is the
+   ancestor box's concern (a future wrapper/virtualization around the rows
+   keeps working; a position-derived child rule would silently break).
+   Only rows under a group are indented (select-all is not inside the
+   container); the ungrouped bucket's rows nest identically under their
+   synthetic header. */
+.archiveManagerGroupRows {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  padding-left: 24px;
+}
+
+.archiveManagerGroupTitle {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  line-height: 19px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .archiveManagerEmpty {
   padding: 30px 12px;
   text-align: center;
-  font-size: 12px;
-  line-height: 18px;
+  font-size: 13px;
+  line-height: 20px;
   color: var(--dsw-alias-label-secondary);
+}
+
+/* Dialog small-text family (2026 matching refactor — one rule list): the
+   view-state/outcome note rows, the error row and the two-stage confirm
+   bar's message share the 12.5/18 wrapped metrics; only
+   display/padding/color and the confirm message's flex layout differ per
+   rule below (NoteRow/Error duplication is pre-existing; ConfirmText was
+   new — it joins the shared list instead of re-declaring). */
+.archiveManagerNoteRow,
+.archiveManagerError,
+.archiveManagerConfirmText {
+  font-size: 12.5px;
+  line-height: 18px;
+  white-space: normal;
+  word-break: break-word;
 }
 
 .archiveManagerNoteRow {
   display: block;
-  padding: 10px 8px;
-  font-size: 12px;
-  line-height: 16px;
-  color: var(--dsw-alias-label-secondary);
-  white-space: normal;
-  word-break: break-word;
-}
-
-.archiveManagerFoot {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 8px 12px 10px;
-  border-top: 1px solid var(--dsw-alias-border-l2);
-}
-
-.archiveManagerFootBar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.archiveManagerCount {
-  flex: 1;
-  min-width: 0;
-  font-size: 11.5px;
+  padding: 4px 2px;
   color: var(--dsw-alias-label-secondary);
 }
 
 .archiveManagerError {
-  flex-basis: 100%;
-  font-size: 12px;
-  line-height: 16px;
+  display: block;
+  padding: 4px 2px;
   color: var(--dsw-alias-state-error-primary);
-  white-space: normal;
-  word-break: break-word;
 }
 
+/* Footer action bar (official Modal footer): status/count left, destructive
+   actions right. */
+.archiveManagerFootBar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+}
 
-.archiveManagerBusy {
+.archiveManagerFootStatus {
+  flex: 1;
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  font-size: 12px;
+  gap: 6px;
+  min-width: 0;
+  font-size: 12.5px;
+  line-height: 18px;
   color: var(--dsw-alias-label-secondary);
 }
 
-.archiveManagerBtn {
-  display: inline-flex;
-  align-items: center;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 6px;
-  padding: 3px 10px;
-  background: transparent;
-  color: var(--dsw-alias-label-primary);
-  font-size: 12px;
-  line-height: 18px;
-  cursor: pointer;
-}
-
-.archiveManagerBtn:hover:not(:disabled) {
-  background: var(--dsw-alias-interactive-bg-hover);
-}
-
-.archiveManagerBtn:disabled {
-  opacity: 0.45;
-  cursor: default;
-}
-
-.archiveManagerBtnDanger {
-  border-color: transparent;
-  background: var(--dsw-alias-state-error-primary);
-  color: #fff;
-}
-
-.archiveManagerBtnDanger:hover:not(:disabled) {
-  background: var(--dsw-alias-state-error-primary);
-  filter: brightness(1.08);
+/* Destructive dialog actions (ui-git remove-confirm convention): outline
+   capsule + error ink on the official Button atom. */
+.archiveManagerDanger {
+  color: var(--dsw-alias-state-error-primary);
 }

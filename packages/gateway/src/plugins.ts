@@ -104,6 +104,13 @@ function invalidInput(message: string): Error & { code: 'invalid_input' } {
   return error
 }
 
+/** One shared unsyncable-package refusal message (the route echoes it back
+ * sanitized — a syncing desktop meeting an OLDER gateway release must see
+ * why its package was refused instead of a bare 400). */
+function unsyncableMessage(name: string): string {
+  return `unsyncable package ${JSON.stringify(name)} (this gateway release cannot cache it — it may predate the package; update the gateway to match the connecting desktop)`
+}
+
 /** Read one cache file (0600 no-follow, bounded); null when absent. */
 function readCacheFile(path: string, maxBytes: number): string | null {
   try {
@@ -142,7 +149,7 @@ export function createChamberPlugins(stateDir: string, logger: Logger): ChamberP
 
     async put(name, files) {
       const slug = slugFor(name)
-      if (slug === null) throw invalidInput(`unsyncable package ${JSON.stringify(name)}`)
+      if (slug === null) throw invalidInput(unsyncableMessage(name))
       const manifestText = files['package.json']
       const artifactText = files['dist/index.js']
       if (typeof manifestText !== 'string' || typeof artifactText !== 'string') {
@@ -168,7 +175,7 @@ export function createChamberPlugins(stateDir: string, logger: Logger): ChamberP
         throw invalidInput('plugin package.json version is missing or oversized')
       }
       const dir = packageDir(name)
-      if (dir === null) throw invalidInput(`unsyncable package ${JSON.stringify(name)}`)
+      if (dir === null) throw invalidInput(unsyncableMessage(name))
       // Atomic 0600 publication under the 0700 cache root (no-follow
       // discipline; a pnpm operation may prune the profile target, but never
       // this gateway-owned cache).

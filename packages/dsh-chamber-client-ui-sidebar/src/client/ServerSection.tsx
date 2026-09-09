@@ -36,8 +36,10 @@ import {
   type SourceSearchState,
 } from '../shared/search-state.ts'
 import { clearPendingClick, noteSessionRowClick } from '../shared/pending-click.ts'
+import { openErrorKey } from '../shared/open-outcome.ts'
 import { getSourceRepoLayouts, getWorkspaceGitFlag, hiddenByMainWorkspaceFold, isSourceGitFlagsLoaded } from '../shared/workspace-git-flags.ts'
 import { resolveWorkspaceDrop } from '../shared/workspace-drag-order.ts'
+import { sessionRowWindow, SESSION_ROWS_VISIBLE_FIRST } from '../shared/session-row-window.ts'
 import { sourceAccentStyle, useSidebarSection, workspaceDropEnv } from './sidebar-context.ts'
 import cc from './sidebar-chamber.module.css'
 
@@ -91,6 +93,34 @@ function sourceStatusKind(server: ChamberServerAggregate): SourceStatusKind {
   if (phase === 'connecting' || phase === 'starting' || phase === 'restarting' || phase === 'degraded') return 'busy'
   if (phase === 'error' || phase === 'stopped' || phase === 'restart-exhausted') return 'err'
   return 'idle'
+}
+
+
+/** Header title/aria text: the managed-down reason replaces "switch to this instance". */
+function sourceHeaderTitle(
+  server: ChamberServerAggregate,
+  chamberInstanceId: string | undefined,
+  t: (key: SidebarKey, params?: Record<string, string | number>) => string,
+): string | undefined {
+  if (server.id === chamberInstanceId) return undefined
+  if (server.managedRuntimeDown === true) {
+    return t('source.managedDown', { state: t(sourceStatusLabelKey(server)) })
+  }
+  // 瞬态托管态同样不可激活：title 不能还宣称"切换到该实例"（2026-12 复查 MINOR）。
+  if (server.kind === 'gateway' && (server.phase === 'starting' || server.phase === 'restarting')) {
+    return t('source.managedStarting', { state: t(sourceStatusLabelKey(server)) })
+  }
+  return t('list.activate')
+}
+
+/** Whether a source header is an activation affordance (not self, not managed-down). */
+function sourceHeaderActivatable(server: ChamberServerAggregate, chamberInstanceId: string | undefined): boolean {
+  // 终态停机与瞬态 starting/restarting 都不可激活：两者的壳 boot 必然 503
+  // （App 侧同样按 managedRuntimeUnusable 拒绝预热/收割），头部不应承诺切换。
+  const managedUnusable = server.managedRuntimeDown === true
+    || (server.kind === 'gateway'
+      && (server.phase === 'starting' || server.phase === 'restarting'))
+  return server.id !== chamberInstanceId && !managedUnusable
 }
 
 /** Localized status-label key for a projected phase (tooltip/aria only). */
@@ -182,7 +212,19 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
   useEffect(() => subscribeSearch(() => { setSearchState(getSearchStates()) }), [])
   const searchRoot = useRef<HTMLDivElement | null>(null)
   const searchInput = useRef<HTMLInputElement | null>(null)
+  /** 用户展开搜索时把焦点送进输入框（必须在胶囊挂载后，见下方 effect）。 */
+  const focusSearchOnMount = useRef(false)
+  // 断连导致搜索胶囊卸载时的焦点落点（见下方 focus-restore）。
+  const foldToggleRef = useRef<HTMLButtonElement | null>(null)
+  const prevSearchCapsuleMounted = useRef(false)
+  /** 上一轮渲染时焦点是否在搜索胶囊内（卸载后 activeElement 会回落，必须提前记）。 */
+  const capsuleHeldFocus = useRef(false)
   const searchButton = useRef<HTMLButtonElement | null>(null)
+
+  // chamber (2026 性能整改 B2)：会话行渲染窗口的"已展开"标记——每工作区一
+  // 个本地浏览态布尔（不持久化、不跨 ctx 同步；窗口只在渲染层，见
+  // shared/session-row-window.ts）。
+  const [sessionRowsExpanded, setSessionRowsExpanded] = useState<Record<string, boolean>>({})
 
   // Outside-click closes an expanded capsule only while its query is empty
   // (official semantics): a non-empty query must not silently drop the
@@ -327,12 +369,66 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
 
   // chamber (06): hover-card relative times share one render-time clock.
   const now = Date.now()
+  // 2026-12（复查 MAJOR-2/BLOCKER）：头部是否为可激活入口，以及其
+  // title/aria 文案（托管 dsh 停机时改为说明原因，而不是"切换到该实例"）。
+  const headerActivatable = sourceHeaderActivatable(server, chamberInstanceId)
+  const headerTitle = sourceHeaderTitle(server, chamberInstanceId, t)
+  // 来源级"数据不可信"说明：单一定居 live region（见下方 sourceNote 的渲染与
+  // CSS :empty）。两条说明互斥（managedDown ⇒ connected=false），所以一个区域
+  // 足够；内容变化时既有的 live region 才可被 AT 播报（"插入即带内容"不会播报，
+  // 2026-12 复查 MINOR）。
+  // 托管瞬态：必须**按 kind 限定**——本地 /health 的词表同样含 starting/
+  // restarting（2026-12 复查 MAJOR），只判 phase 会给本地源挂上网关专属文案。
+  const managedTransient = server.kind === 'gateway'
+    && (server.phase === 'starting' || server.phase === 'restarting')
+  const sourceNote = server.managedRuntimeDown === true
+    ? t('source.managedDown', { state: t(sourceStatusLabelKey(server)) })
+    : managedTransient
+      // 托管 dsh 正在启动：此刻 connected=false 会隐藏整棵会话子树，必须说明，
+      // 否则重启网关时侧栏整组凭空消失（2026-12 复查 MINOR）。
+      ? t('source.managedStarting', { state: t(sourceStatusLabelKey(server)) })
+      : server.connected && server.aggregateReady === true && server.archiveSetKnown !== true
+        ? t('source.baselinePending')
+        : ''
+  // 说明行是否携带了状态词（决定状态点要不要让出 live region 角色）。任何说明行
+  // 在场时点都让位：一个来源只应有一个 live region（2026-12 复查 NIT）。
+  const noteCarriesPhase = sourceNote !== ''
+  // 每个已挂载壳各有一份侧栏 DOM（同一来源会出现多份）：id 必须按壳限定，
+  // 否则 aria-describedby 可能解析到另一份（隐藏壳）的同名节点。
+  const sourceNoteId = `chamber-source-note-${chamberInstanceId ?? 'unknown'}-${server.id}`
 
               // chamber (06 §1.2): the state's query is the sanitized current
               // value by construction; the loading fallback covers the
               // expand-without-query render pass defensively.
               const search = searchState.get(server.id)
               const query = sanitizeSearchQuery(search?.query ?? '')
+              // 搜索胶囊的挂载条件含 `server.connected`：托管 dsh 停机时胶囊会被
+              // 卸载，焦点随之掉到 body（键盘用户迷路）。这里把焦点交还给折叠
+              // 按钮——该头部唯一恒在的键盘入口（2026-12 复查 MINOR）。
+              const searchCapsuleMounted = server.connected
+                && viewPrefs.sourceFolded?.[server.id] !== true
+                && search?.expanded === true
+              // 展开后聚焦输入框：挂载前 ref 为空，只能等这一轮提交后再聚焦
+              // （2026-12 复查 MINOR）。
+              if (searchCapsuleMounted && focusSearchOnMount.current) {
+                focusSearchOnMount.current = false
+                queueMicrotask(() => searchInput.current?.focus())
+              }
+              useEffect(() => {
+                // 仅当焦点确实落在胶囊里才回交给折叠按钮：任何断连都不该把用户
+                // 从别处（会话行等）抢回头部（2026-12 复查 MINOR）。判定必须发生
+                // 在卸载之后，此时 activeElement 已回落到 body——所以用卸载前
+                // 记录的"胶囊是否持有焦点"。
+                // 断连会让搜索状态在同一批里被清掉（search-state 只保留已连接来源），
+                // 所以判定条件必须是"连接事实"而不是 expanded（2026-12 复查 MINOR）；
+                // 折叠路径 connected 仍为 true，不会误抢焦点。
+                if (prevSearchCapsuleMounted.current && !searchCapsuleMounted
+                  && capsuleHeldFocus.current && server.connected !== true) {
+                  foldToggleRef.current?.focus()
+                }
+                prevSearchCapsuleMounted.current = searchCapsuleMounted
+                if (searchCapsuleMounted) capsuleHeldFocus.current = false
+              }, [searchCapsuleMounted, server.connected])
               const currentRemote = search !== undefined && search.query === query
                 ? search
                 : { query, status: 'loading' as const, items: [] as SearchRow[], hasMore: false }
@@ -367,6 +463,22 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
               // toggleSourceFold), so expanding restores every workspace with
               // its sessions as they were.
               const sourceFolded = viewPrefs.sourceFolded?.[server.id] === true
+              // chamber (打开失败可见性): this server's open-failure rows
+              // currently held by the outcome channel (SidebarRoot writes
+              // rowErrors under shared/open-outcome.ts keys). Both key ends
+              // are anchored literals (`${server.id}/session/` … '/open'), so
+              // the slice recovers any embedded session id verbatim; the
+              // rename/archive/fork family shares the prefix but ends in its
+              // own suffix, and no other key family ends in '/open'.
+              const serverOpenFailures: { sessionId: string; message: string }[] = []
+              const openErrorPrefix = `${server.id}/session/`
+              for (const [key, message] of Object.entries(rowErrors)) {
+                if (!key.startsWith(openErrorPrefix) || !key.endsWith('/open')) continue
+                serverOpenFailures.push({
+                  sessionId: key.slice(openErrorPrefix.length, key.length - '/open'.length),
+                  message,
+                })
+              }
               // chamber: the row-render ghost predicate is hoisted so the
               // workspace header count reuses the SAME rule — a ghost is a
               // blank "New Session" row that stopped being current (the
@@ -538,14 +650,18 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                   className={clsx(
                     cc.sourceHeader,
                     server.id === chamberInstanceId && cc.sourceActive,
-                    server.id !== chamberInstanceId && cc.sourceHeaderClickable,
+                    headerActivatable && cc.sourceHeaderClickable,
                   )}
                   data-chamber-row={server.id}
                   style={sourceAccentStyle(server)}
-                  title={server.id === chamberInstanceId ? undefined : t('list.activate')}
-                  role={server.id === chamberInstanceId ? undefined : 'button'}
-                  tabIndex={server.id === chamberInstanceId ? undefined : 0}
-                  aria-label={server.id === chamberInstanceId ? undefined : t('list.activate')}
+                  title={headerTitle}
+                  role={headerActivatable ? 'button' : undefined}
+                  tabIndex={headerActivatable ? 0 : undefined}
+                  // 非交互形态（托管停机）不给 generic 角色加 aria-label（命名对
+                  // generic 无效，2026-12 复查 MINOR）——改用 aria-describedby
+                  // 指向下方说明行。
+                  aria-label={headerActivatable ? headerTitle : undefined}
+                  aria-describedby={!headerActivatable && sourceNote !== '' ? sourceNoteId : undefined}
                   // chamber (06 §2.4 — option
                   // 1): the source header is the drag handle for the
                   // server-group display-order drag. The same trailing-click
@@ -602,10 +718,14 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                     if (suppressClickRef.current) return
                     // A remote source's header switches the active N-ctx view
                     // without opening a session (App layer owns the switch).
-                    if (server.id !== chamberInstanceId) chamberBridge.requestActivateSource(server.id)
+                    // A managed-down gateway is NOT activatable: its boot is
+                    // guaranteed to fail (gateway 503), so the header must not
+                    // promise a switch the App itself refuses to prewarm/harvest
+                    // (2026-12 review MAJOR-2). The inline note explains why.
+                    if (headerActivatable) chamberBridge.requestActivateSource(server.id)
                   }}
                   onKeyDown={(event) => {
-                    if (server.id === chamberInstanceId) return
+                    if (!headerActivatable) return
                     // Only respond to the header's OWN focus. A keydown
                     // bubbling from an inner button (fold toggle / sort /
                     // add-workspace / search) must not be swallowed:
@@ -630,6 +750,7 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                       header's activate click (and the pending-click
                       discipline) out. */}
                   <button
+                    ref={foldToggleRef}
                     type="button"
                     className={clsx(cc.sourceFoldToggle, sourceFolded && cc.sourceFoldToggleFolded)}
                     aria-label={sourceFolded ? t('server.expand') : t('server.collapse')}
@@ -661,8 +782,12 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                   <span
                     className={cc.sourceStatus}
                     title={t(sourceStatusLabelKey(server))}
-                    aria-label={t(sourceStatusLabelKey(server))}
-                    role="status"
+                    // 两个门要分开（2026-12 复查 MINOR）：live region 角色只要有说明行
+                    // 就让位（一个来源一个 live region），但**状态词的承载**只有携带
+                    // phase 的说明行才接管——baselinePending 不含 phase，点必须继续
+                    // 通过 aria-label 承担它。
+                    aria-label={noteCarriesPhase ? undefined : t(sourceStatusLabelKey(server))}
+                    role={sourceNote === '' ? 'status' : undefined}
                   >
                     {sourceStatusKind(server) === 'busy' ? (
                       <IconLoadingOutline16 className={cc.statusSpinner} size={12} />
@@ -784,7 +909,7 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                             }
                           } else {
                             expandSearch(server.id)
-                            searchInput.current?.focus()
+                            focusSearchOnMount.current = true
                           }
                         }}
                     >
@@ -794,8 +919,10 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                     {/* chamber (design 24 §6, revision 2026-09): server-row
                         "archive manager" — same hover-reveal discipline and
                         gating as the sibling actions; opens the manager
-                        dialog (list + single/multi-select/delete-all). All
-                        cleanup state lives INSIDE the dialog. */}
+                        dialog (list + per-row / multi-select delete; whole-set
+                        deletion only via explicit select-all — no standalone
+                        delete-all). All cleanup state lives INSIDE the
+                        dialog. */}
                     {server.connected && (server.aggregateError === undefined || search?.expanded === true) && (
                       <button
                         type="button"
@@ -814,6 +941,20 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                     )}
                   </span>
                 </header>
+                {/* 2026-12（诚实投影，用户视角复查 M1/M4）：两种"数据不可信"
+                    状态就地说明——避免托管 dsh 停机时只剩"空面板 + 红点"，
+                    以及把 unary 兜底的降级列表当真实列表读。状态词复用既有
+                    `status.*` 文案，不引入新词。 */}
+                <div id={sourceNoteId} className={cc.sourceNote} role="status" aria-live="polite">
+                  {sourceNote}
+                </div>
+                {/* chamber (打开失败可见性): with the source folded no session
+                    row exists on screen (the fold gate hides the whole list),
+                    so open failures hoist under the header — the header is
+                    the one part that stays rendered. */}
+                {sourceFolded && serverOpenFailures.map(failure => (
+                  <div key={failure.sessionId} className={cc.rowError} role="alert">{failure.message}</div>
+                ))}
                 {/* chamber (06 §2.4): the
                     server-level fold hides EVERYTHING below the header —
                     search capsule, source-scope git alert and the workspace
@@ -824,10 +965,16 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                 <>
                 {/* chamber (06 §1.2): the search capsule row beneath the header.
                     Escape clears and collapses; the clear button does the same. */}
-                {search?.expanded === true && (
+                {/* 断连/托管停机的源不渲染搜索胶囊（2026-12 复查 MINOR）：结果
+                    与状态分支本就被 connected 门挡住，留一个活输入框是键盘死路。 */}
+                {server.connected && search?.expanded === true && (
                   <div
                     ref={searchRoot}
                     className={cc.searchCapsule}
+                    // 焦点归属必须**事件驱动**记录：effect 只在依赖变化时跑，采样
+                    // 到的 activeElement 早已回落（2026-12 复查 MINOR）。
+                    onFocusCapture={() => { capsuleHeldFocus.current = true }}
+                    onBlurCapture={() => { capsuleHeldFocus.current = false }}
                   >
                     <input
                       ref={searchInput}
@@ -836,7 +983,9 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                       maxLength={SEARCH_QUERY_MAX_CODE_UNITS}
                       placeholder={t('search.placeholder')}
                       value={search?.query ?? ''}
-                      autoFocus
+                      // 不用 autoFocus：胶囊会因断连/恢复而卸载重挂，autoFocus
+                      // 会在恢复时抢走用户当前焦点；用户主动展开的那条路径已由
+                      // 搜索按钮显式 focus()（2026-12 复查 MINOR）。
                       onChange={(event) => setSearchQuery(server.id, event.target.value)}
                       onKeyDown={(event) => {
                         if (event.key !== 'Escape') return
@@ -874,6 +1023,21 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                   {renderWorkspaceGit('sidebar.workspace.git', { wide }, {
                     hookContext: { sourceId: server.id, workspaceId: '' },
                   })}
+                  {/* chamber (打开失败可见性): open failures whose session has
+                      NO row in the current projection (e.g. a fork/commit/new-
+                      session child that never surfaced while the runtime was
+                      wedged) — the row slot cannot render them, so they
+                      surface above the list, outside the tree (same
+                      discipline as the git alert above). Known bound (F1
+                      review, 非回归): a failure whose session IS in the
+                      projection but whose only render anchor vanished — a
+                      worktree group hidden behind a folded git MAIN workspace,
+                      or an active search that no longer matches the session —
+                      stays invisible for the 10s window (pre-F1 the inline
+                      slot was suppressed identically). */}
+                  {serverOpenFailures.filter(failure => !visibleIds.has(failure.sessionId)).map(failure => (
+                    <div key={failure.sessionId} className={cc.rowError} role="alert">{failure.message}</div>
+                  ))}
                   <div
                     className={cc.workspaceList}
                     // The browse list is one tree (official .list role="tree");
@@ -903,39 +1067,45 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                             const running = projectedRunning(item.sessionId)
                             const stateDot = sessionStateDot(server, { id: item.sessionId, running })
                             const stateLabel = sessionStateLabel(server, { id: item.sessionId, running })
+                            const openError = rowErrors[openErrorKey(server.id, item.sessionId)]
                             return (
-                              // 行是 <button role="treeitem">（官方
-                              // SearchResultItem 同款）——键盘可激活（Enter/
-                              // 空格）；状态槽恒渲染（空态占位，标题对齐，
-                              // 官方 slot 同款）。
-                              <button
-                                type="button"
-                                key={item.sessionId}
-                                className={cc.searchResultRow}
-                                role="treeitem"
-                                aria-selected={item.sessionId === currentId}
-                                onClick={() => openSession(server.id, item.sessionId)}
-                              >
-                                <span className={cc.searchResultHeading}>
-                                  <span
-                                    className={clsx(cc.sessionStateSlot, sessionStatePending(server, { id: item.sessionId }) !== undefined && cc.sessionStateSlotPending)}
-                                    title={stateLabel}
-                                    aria-label={stateLabel}
-                                    // 空态不注册 live region（官方仅在有
-                                    // 状态时放隐藏标签）——role 条件化避免 SR 噪音。
-                                    role={stateDot !== null ? 'status' : undefined}
-                                  >
-                                    {stateDot}
+                              // chamber (打开失败可见性): the search tree replaces
+                              // the workspace tree, so an open failure must also
+                              // surface under the result row — Fragment keeps the
+                              // button keyboard-activatable (official
+                              // SearchResultItem 同款).
+                              <Fragment key={item.sessionId}>
+                                <button
+                                  type="button"
+                                  className={cc.searchResultRow}
+                                  role="treeitem"
+                                  aria-selected={item.sessionId === currentId}
+                                  onClick={() => openSession(server.id, item.sessionId)}
+                                >
+                                  <span className={cc.searchResultHeading}>
+                                    <span
+                                      className={clsx(cc.sessionStateSlot, sessionStatePending(server, { id: item.sessionId }) !== undefined && cc.sessionStateSlotPending)}
+                                      title={stateLabel}
+                                      aria-label={stateLabel}
+                                      // 空态不注册 live region（官方仅在有
+                                      // 状态时放隐藏标签）——role 条件化避免 SR 噪音。
+                                      role={stateDot !== null ? 'status' : undefined}
+                                    >
+                                      {stateDot}
+                                    </span>
+                                    <span className={cc.searchResultTitle}>{resolved.title}</span>
                                   </span>
-                                  <span className={cc.searchResultTitle}>{resolved.title}</span>
-                                </span>
-                                {resolved.workspaceLabel !== undefined && (
-                                  <span className={cc.searchResultWorkspace}>{resolved.workspaceLabel}</span>
+                                  {resolved.workspaceLabel !== undefined && (
+                                    <span className={cc.searchResultWorkspace}>{resolved.workspaceLabel}</span>
+                                  )}
+                                  {item.snippet !== '' && (
+                                    <span className={cc.searchResultSnippet}>{item.snippet}</span>
+                                  )}
+                                </button>
+                                {openError !== undefined && (
+                                  <div className={clsx(cc.rowError, cc.sessionNested)} role="alert">{openError}</div>
                                 )}
-                                {item.snippet !== '' && (
-                                  <span className={cc.searchResultSnippet}>{item.snippet}</span>
-                                )}
-                              </button>
+                              </Fragment>
                             )
                           })}
                           {currentRemote.status === 'loading' && (
@@ -1042,6 +1212,36 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                             (count, session) => count + (isGhostSession(session) ? 0 : 1),
                             0,
                           )
+                          // chamber (2026 性能整改 B2)：会话行渲染窗口——行
+                          // DOM 不随会话数无界膨胀。组头徽标（上方
+                          // visibleSessionCount）与一切数据面操作仍用全量
+                          // sessions；这里只决定渲染行数与展开条文案。当前
+                          // 会话行不被藏匿（窗口自动覆盖之，见
+                          // shared/session-row-window.ts）。
+                          const currentSessionIndex = currentId === undefined
+                            ? -1
+                            : sessions.findIndex(row => row.id === currentId)
+                          const sessionWindow = sessionRowWindow({
+                            total: sessions.length,
+                            currentIndex: currentSessionIndex,
+                            expanded: sessionRowsExpanded[workspaceKey] === true,
+                            visibleFirst: SESSION_ROWS_VISIBLE_FIRST,
+                          })
+                          const visibleSessions = sessionWindow.hiddenCount === 0
+                            ? sessions
+                            : sessions.slice(0, sessionWindow.renderCount)
+                          // 展开条文案按「可见（非 ghost）会话」计（2026 评审
+                          // 修复）：sessions 含短暂 blank-ghost 占位（≤
+                          // BLANK_GHOST_GRACE_MS，渲染期跳过），直接复用窗口
+                          // hiddenCount 会让「还有 N 个会话」在幽灵期内与组头
+                          // 徽标（visibleSessionCount 已去 ghost）漂移 ±幽灵数。
+                          // 窗口切片仍保留 ghost 行（占位防回流，见上），仅
+                          // 对外文案减去窗口内的 ghost 数。
+                          const visibleInSlice = visibleSessions.reduce(
+                            (count, session) => count + (isGhostSession(session) ? 0 : 1),
+                            0,
+                          )
+                          const hiddenVisibleCount = Math.max(0, visibleSessionCount - visibleInSlice)
                           const marker = workspaceDragMarker(workspace)
                           const activeSessionDrag = sessionDrag !== null
                             && sessionDrag.sourceId === server.id
@@ -1398,14 +1598,36 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                             {rowErrors[`${server.id}/workspace-drag/${workspace.id}`] !== undefined && (
                               <div className={cc.rowError} role="alert">{rowErrors[`${server.id}/workspace-drag/${workspace.id}`]}</div>
                             )}
+                            {/* chamber (打开失败可见性): session open failures
+                                whose row this group's fold/window gate hides —
+                                hoisted like the workspace errors above, so a
+                                failure survives a mid-flight fold (or a row
+                                windowed out of the visible slice). Visible
+                                rows render the error inline below themselves
+                                instead. */}
+                            {sessions
+                              .filter(session => rowErrors[openErrorKey(server.id, session.id)] !== undefined
+                                && (folded || !visibleSessions.some(visible => visible.id === session.id)))
+                              .map(session => (
+                                <div key={session.id} className={clsx(cc.rowError, cc.sessionNested)} role="alert">
+                                  {rowErrors[openErrorKey(server.id, session.id)]}
+                                </div>
+                              ))}
                             {!folded && (
                             <>
-                              {sessions.map((session) => {
+                              {visibleSessions.map((session) => {
                                 const sessionKey = `${server.id}/session/${session.id}`
                                 const sessionDragError = rowErrors[`${server.id}/session-drag/${session.id}`]
                                 const sessionActionError = rowErrors[`${server.id}/session/${session.id}/rename`]
                                   ?? rowErrors[`${server.id}/session/${session.id}/archive`]
                                   ?? rowErrors[`${server.id}/session/${session.id}/fork`]
+                                  // chamber (打开失败可见性): open failures land
+                                  // in the same slot (SidebarRoot reports the
+                                  // App-layer outcome; low precedence — a
+                                  // rename/archive/fork failure of the same row
+                                  // wins). Key template shared with the writer
+                                  // (shared/open-outcome.ts).
+                                  ?? rowErrors[openErrorKey(server.id, session.id)]
                                 // chamber (design 06 §2.2):
                                 // a blank row the projection still carries after
                                 // it stopped being current is a GHOST — the App
@@ -1681,6 +1903,17 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                                 </Fragment>
                                 )
                               })}
+                              {hiddenVisibleCount > 0 && (
+                                <button
+                                  type="button"
+                                  className={cc.sessionRowsMore}
+                                  onClick={() => {
+                                    setSessionRowsExpanded(prev => ({ ...prev, [workspaceKey]: true }))
+                                  }}
+                                >
+                                  {t('sessionRows.showMore', { n: hiddenVisibleCount })}
+                                </button>
+                              )}
                             </>
                             )}
                           </div>

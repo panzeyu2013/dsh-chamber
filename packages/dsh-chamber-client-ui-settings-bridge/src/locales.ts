@@ -16,6 +16,10 @@ export const zh = {
   noServers: '暂无可管理的实例。请在「连接」中启动本地实例或注册远程主机。',
   loadingServers: '正在加载实例…',
   targetUnavailable: '该实例当前不可达，其配置存储在该实例的宿主机器上，建立连接后可编辑。',
+  // 2026-12（问题 B 诚实投影）：隧道正常但托管 dsh 停机时，"不可达"的说法
+  // 不准确——必须说清是哪一层停了、去哪里恢复。
+  managedDshDown: '网关可达，但该实例的托管 dsh 未运行。请在「连接」中启动该实例后重试。',
+  managedDshStarting: '该实例的托管 dsh 正在启动，就绪后本面板自动恢复。',
   localNotReady: '本地实例尚未就绪，可在「连接」中启动。',
   sectionsEmpty: '该实例没有可显示的内容（可能正在启动，稍后自动出现）。',
   current: '当前',
@@ -252,6 +256,8 @@ export const en: Record<keyof typeof zh, string> = {
   noServers: 'Nothing to manage yet. Start the local instance or register a remote host in Connections.',
   loadingServers: 'Loading instances…',
   targetUnavailable: 'This instance is not reachable right now. Its config lives on the instance host machine; connect first to edit.',
+  managedDshDown: 'The gateway is reachable, but this instance\'s managed dsh is not running. Start the instance in Connections, then retry.',
+  managedDshStarting: 'This instance\'s managed dsh is starting; this panel recovers automatically once it is ready.',
   localNotReady: 'The local instance is not ready yet — start it in Connections.',
   sectionsEmpty: 'Nothing to show yet (the instance may still be starting — it appears automatically).',
   current: 'Current',
@@ -477,7 +483,8 @@ export const en: Record<keyof typeof zh, string> = {
   dshRuntimeEnvHint: 'Set via DSH_CHAMBER_DSH_PATH — version selection and switching are disabled',
   dshRuntimeInvalidationFallback: 'After the app update, dsh fell back to the bundled runtime; the original v{version} selection is retained ({at}).',
   dshRuntimeInvalidationRecovered: 'The bundled runtime failed its compatibility probe after the app update, so runtime v{version} was restored; the original selection remains retained ({at}).',
-}
+} satisfies Record<SettingsBridgeKey, string>
+
 
 /** Dictionary key set for the settings bridge namespace. */
 export type SettingsBridgeKey = keyof typeof zh

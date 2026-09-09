@@ -32,6 +32,23 @@ import { createLayoutStore, subscribeLayoutInstances } from './stores.ts'
 import type { LayoutInstance, LayoutState } from './store-core.ts'
 import { LayoutController } from '@deepseek-ai/dsh-client-ui-layout/src/client/service.ts'
 import { ThemePresenter } from '@deepseek-ai/dsh-client-ui-layout/src/client/theme-presenter.ts'
+import { chamberBridge } from '@dsh-chamber/dsh-client-ui-sidebar/shared'
+import { createDocumentThemeProjector, type DocumentThemeSnapshot } from './document-theme.ts'
+
+/**
+ * Page-wide document theme writer: ONE vendor ThemePresenter for the whole
+ * document (this module is statically imported by the chamber composite entry,
+ * so every per-instance boot reaches the same copy). Instance teardown never
+ * disposes it — the projection belongs to whichever view is active next, and
+ * the vendor `dispose()` would strip the ACTIVE view's palette. See
+ * `document-theme.ts`.
+ */
+let documentThemePresenter: ThemePresenter | undefined
+
+/** Project one resolved snapshot onto the shared document. */
+function applyDocumentTheme(snapshot: DocumentThemeSnapshot): void {
+  ;(documentThemePresenter ??= new ThemePresenter()).apply(snapshot)
+}
 
 // Contract exports only (export-convergence rule: cross-package consumers
 // keep a symbol exported; test-only/package-internal symbols live off /src).
@@ -250,13 +267,31 @@ export function apply(ctx: ClientContext): void {
 
   // Theme presentation: pure DOM writes from resolved snapshots — initial
   // state through the getter once, then event-driven only; no React path.
+  // CHAMBER FORK (N-ctx hardening): the document is shared by every mounted
+  // view, so only the ACTIVE view's instance may project onto it and teardown
+  // must never retract it — see document-theme.ts.
   ctx.effect(() => {
-    const presenter = new ThemePresenter()
-    presenter.apply(ctx.theme.getTheme())
-    const off = ctx.on('theme/change', (snapshot) => { presenter.apply(snapshot) })
+    // The cordis ctx proxy THROWS for an un-provided service rather than
+    // returning undefined, so a fork mounted on a ctx without the chamber boot
+    // fact must be read defensively — otherwise apply() throws instead of the
+    // projector failing open (2026-12 review MINOR-1; same discipline as the
+    // mobile plugin's layoutFacts probe).
+    let instanceId: string | undefined
+    try {
+      instanceId = (ctx as ClientContext & { chamberInstanceId?: string }).chamberInstanceId
+    } catch {
+      instanceId = undefined
+    }
+    const projector = createDocumentThemeProjector(instanceId, {
+      getActiveSource: () => chamberBridge.getActiveSource(),
+      onActiveSource: listener => chamberBridge.onActiveSource(listener),
+      apply: applyDocumentTheme,
+    })
+    projector.project(ctx.theme.getTheme())
+    const off = ctx.on('theme/change', (snapshot) => { projector.project(snapshot) })
     return () => {
       off()
-      presenter.dispose()
+      projector.dispose()
     }
-  }, 'ui-layout: theme presenter')
+  }, 'ui-layout: document theme presenter (active view only)')
 }

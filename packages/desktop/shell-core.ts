@@ -3207,9 +3207,21 @@ export function installIpcHandlers(deps: {
         version,
         authority: instance.transport === 'ssh' ? gatewayTunnelAuthority(instance.remotePort) : undefined,
       });
-      return result.ok
-        ? { ok: true as const, deferred: result.deferred }
-        : { ok: false as const, error: sanitizeErrorText(result.error) };
+      // d86a772（main 侧，2026-09 合并移植）：materialize 的 202/受控重启
+      // 对账结果带 outcome{executed,restarted}——成功分支优先回传 outcome，
+      // 失败分支同样透传 outcome（网关侧已脱敏），无 outcome 时保持旧的
+      // deferred 语义。
+      if (result.ok && 'outcome' in result) {
+        return { ok: true as const, outcome: result.outcome };
+      }
+      if (result.ok) {
+        return { ok: true as const, deferred: true as const };
+      }
+      return {
+        ok: false as const,
+        error: sanitizeErrorText(result.error),
+        ...(result.outcome === undefined ? {} : { outcome: result.outcome }),
+      };
     } catch (error) {
       // Builder errors carry machine codes (path too long / cap exceeded /
       // folder changed while packing / unreadable) whose message text is

@@ -37,6 +37,14 @@ assertSingletonModule('derive')
 /** Synthetic id of the trailing group that collects sessions outside every workspace. */
 export const UNGROUPED_WORKSPACE_ID = '__ungrouped__'
 
+/** Canonical-path equality key: trailing separators normalized only. No
+ *  fs.realpath in the browser, so symlinked spellings (e.g. macOS /tmp →
+ *  /private/tmp) can still miss — documented limitation; unmatched sessions
+ *  fall back to the ungrouped bucket, which remains the honest fallback. */
+function canonicalPathKey(value: string): string {
+  return value.replace(/[\\/]+$/, '')
+}
+
 /**
  * One-shot diagnostic flag for the cwd-membership wire-degradation fallback
  * (projectInstanceSnapshot): the degenerate cross-section repeats on every
@@ -595,13 +603,13 @@ export function projectInstanceSnapshot(
       : []
   })
   // Canonical-path equality is not available client-side (no fs.realpath in
-  // the browser): compare with trailing separators normalized only.
+  // the browser): compare with trailing separators normalized only
+  // (canonicalPathKey — shared with the archive manager's cwd attribution).
   // Symlinked spellings (e.g. macOS /tmp → /private/tmp) can still miss —
   // documented limitation; unmatched sessions stay in the ungrouped bucket,
   // which remains the honest fallback.
-  const pathKey = (value: string): string => value.replace(/[\\/]+$/, '')
   if (zeroAccounted && (sessions.ids ?? []).length > 0 && cwdRows.length > 0
-    && items.some(item => cwdRows.some(row => pathKey(row.cwd) === pathKey(item.path)))) {
+    && items.some(item => cwdRows.some(row => canonicalPathKey(row.cwd) === canonicalPathKey(item.path)))) {
     // ONE diagnostic warning per page lifetime (module-level flag): the
     // degenerate cross-section repeats on every store notification while the
     // host index stays incomplete — the console must not flood.
@@ -612,9 +620,9 @@ export function projectInstanceSnapshot(
         + 'synthesizing membership from session cwd facts (host canonical-cwd index incomplete?)',
       )
     }
-    const pathToItem = new Map(items.map(item => [pathKey(item.path), item]))
+    const pathToItem = new Map(items.map(item => [canonicalPathKey(item.path), item]))
     for (const row of cwdRows) {
-      const item = pathToItem.get(pathKey(row.cwd))
+      const item = pathToItem.get(canonicalPathKey(row.cwd))
       if (item !== undefined) item.sessionIds.push(row.id)
     }
   }
@@ -816,6 +824,9 @@ export function serversProjectionSignature(servers: readonly ChamberServerAggreg
       label: server.label,
       connected: server.connected,
       phase: server.phase,
+      // Render-relevant: the source header's managed-down note and the
+      // settings panel's copy branch on this fact.
+      managedRuntimeDown: server.managedRuntimeDown === true,
       dshVersion: server.dshVersion ?? null,
       aggregateError: server.aggregateError ?? null,
       // pluginDiagnostic STAYS in the publish gate even though the sidebar no
@@ -848,13 +859,16 @@ export function serversProjectionSignature(servers: readonly ChamberServerAggreg
       // Archive-manager metadata rides the publish gate too: a purge while
       // the manager dialog is open must re-publish (the dialog list derives
       // from these rows) or it would go stale. Change detection only needs
-      // identity + recency per row (review round 2026-09): title/cwd of an
-      // archived row cannot change through any UI surface (archived rows are
-      // invisible to rename), so full metadata is omitted from the signature
+      // identity + recency per row (review round 2026-09): an archived row's
+      // title/cwd/workspace cannot change through any UI surface (archived
+      // rows are invisible to rename; no UI can re-home or move an archived
+      // row between workspaces — only host-side archive/purge/content
+      // changes do, and every such path also moves the workspace block
+      // below), so full metadata is omitted from the signature
       // — at a 65k archived-set scale this keeps each compare cheap. The
       // archive-set PROVENANCE flag rides along: a mounted↔fallback view
-      // transition must also re-publish (the dialog's degraded branch and
-      // delete-all availability depend on it).
+      // transition must also re-publish (the dialog's degraded branch
+      // depends on it — deletion surfaces only from the listed view).
       archivedSessions: server.archivedSessions === undefined ? null : server.archivedSessions.map(row => ({
         sessionId: row.sessionId,
         updatedAt: row.updatedAt ?? null,
@@ -1225,7 +1239,9 @@ export function increasedForkTitle(title: string): string {
 }
 
 /** Archived-session metadata row carried to archive-manager surfaces
- *  (design 24 revision 2026-09: the manager lists WHAT is archived). */
+ *  (design 24 revision 2026-09: the manager lists WHAT is archived; 2026
+ *  revision: rows carry their workspace attribution for the grouped
+ *  collapsible listing). */
 export interface ArchivedSessionMetaRow {
   sessionId: string
   /** Title projection when the session has one (untitled sessions omit it). */
@@ -1234,6 +1250,12 @@ export interface ArchivedSessionMetaRow {
   cwd?: string
   /** Epoch ms of last activity; absent on the wire when unknown. */
   updatedAt?: number
+  /** Workspace attribution (2026 revision): the host workspace whose
+   *  registry membership contains this session — or, failing that, whose
+   *  path equals the session's canonical cwd. Absent = the session is not
+   *  accounted by any live workspace (deleted-workspace orphans etc.); the
+   *  manager lists it in the trailing ungrouped bucket. */
+  workspace?: { id: string; title: string }
 }
 
 /**
@@ -1247,24 +1269,119 @@ export interface ArchivedSessionMetaRow {
  * recency (updatedAt desc; stable for ties). The unary-fallback snapshot
  * carries an EMPTY archive set (documented KNOWN DEGRADATION — no unary wire
  * source), so a fallback view yields no rows.
+ *
+ * Workspace attribution (2026 revision): each row carries the workspace that
+ * accounts for it — authoritative membership first (snapshot workspace
+ * sessionIds, the registry header index: archiving keeps the session in its
+ * workspace, only content purge self-heals the accounting), then a canonical
+ * cwd==path fallback (wire-degradation parity with projectInstanceSnapshot),
+ * otherwise no workspace (manager ungrouped bucket).
  */
 export function deriveArchivedSessions(snapshot: InstanceSnapshot): ArchivedSessionMetaRow[] {
+  // Fast paths (2026 performance review): the derive runs on the render path
+  // for every connected source on every input change, so empty results must
+  // cost nothing — no Set build, no session scan, no sort, no attribution
+  // index (M1 disposition: the aggregate-identity cache stays a deferred
+  // renderer-side option; these guards remove the common-case cost).
+  if (snapshot.archivedSessionIds.length === 0) return []
   const archived = new Set(snapshot.archivedSessionIds)
   // Both snapshot producers keep session ids unique (commitAggregatePull
   // replaces, never appends), so the filter cannot yield duplicates today;
   // row order = snapshot order, then stable recency sort below.
   const rows = snapshot.sessions.filter(session => archived.has(session.sessionId))
+  if (rows.length === 0) return []
   rows.sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0))
-  return rows.map(session => ({
-    sessionId: session.sessionId,
-    ...(session.title !== undefined ? { title: session.title } : {}),
-    ...(session.cwd !== undefined ? { cwd: session.cwd } : {}),
-    ...(session.updatedAt !== undefined ? { updatedAt: session.updatedAt } : {}),
-    // NOTE: the running bit is deliberately NOT carried — the host purge is
-    // the running authority (it skips running subtrees whole and reports
-    // skippedRunning); per-row delete of a running archived session is a
-    // safe post-hoc skip, surfaced by the result note.
-  }))
+  // Workspace attribution indexes over the SNAPSHOT's workspace rows (the
+  // full membership view — NOT the nav projection, which drops archived
+  // rows). Synthetic cwd-derived fallback groups (`__cwd__:` ids) only ever
+  // coexist with an empty archive set (unary fallback → no rows at all), so
+  // attribution never resolves through them in practice. Built only when
+  // rows exist (the fast paths above returned already).
+  const memberOf = new Map<string, { id: string; title: string }>()
+  const byCwd = new Map<string, { id: string; title: string }>()
+  for (const workspace of snapshot.workspaces) {
+    const meta = { id: workspace.workspaceId, title: workspace.title }
+    for (const sessionId of workspace.sessionIds) memberOf.set(sessionId, meta)
+    byCwd.set(canonicalPathKey(workspace.path), meta)
+  }
+  return rows.map(session => {
+    const workspace = memberOf.get(session.sessionId)
+      ?? (session.cwd !== undefined ? byCwd.get(canonicalPathKey(session.cwd)) : undefined)
+    return {
+      sessionId: session.sessionId,
+      ...(session.title !== undefined ? { title: session.title } : {}),
+      ...(session.cwd !== undefined ? { cwd: session.cwd } : {}),
+      ...(session.updatedAt !== undefined ? { updatedAt: session.updatedAt } : {}),
+      ...(workspace !== undefined ? { workspace } : {}),
+      // NOTE: the running bit is deliberately NOT carried — the host purge is
+      // the running authority (it skips running subtrees whole and reports
+      // skippedRunning); per-row delete of a running archived session is a
+      // safe post-hoc skip, surfaced by the result note.
+    }
+  })
+}
+
+/** One workspace group of the manager's collapsible listing (2026
+ *  revision): the header facts plus its archived rows. */
+export interface ArchivedSessionGroup {
+  /** The workspace's registry id, or UNGROUPED_WORKSPACE_ID for rows with no
+   *  attribution. */
+  key: string
+  /** Display title of real workspace groups ('' for the ungrouped bucket —
+   *  the manager localizes its title). */
+  title: string
+  /** Present only for real workspace groups (folder/accent chrome). */
+  workspace?: { id: string; title: string }
+  rows: ArchivedSessionMetaRow[]
+}
+
+/**
+ * Split archived rows into ordered workspace groups for the manager's
+ * collapsible listing (2026 revision). Ordering: groups by their NEWEST
+ * member (updatedAt desc; stable for ties) — the dialog's delete-oriented
+ * scan wants recent activity on top, mirroring the flat list's recency sort;
+ * rows within a group by recency desc. The UNGROUPED bucket (rows without
+ * workspace attribution) trails LAST, mirroring the nav's synthetic trailing
+ * group. PURE — plain-node unit-testable.
+ */
+export function groupArchivedRows(rows: readonly ArchivedSessionMetaRow[]): ArchivedSessionGroup[] {
+  const byKey = new Map<string, { group: ArchivedSessionGroup; newest: number }>()
+  for (const row of rows) {
+    const key = row.workspace?.id ?? UNGROUPED_WORKSPACE_ID
+    let entry = byKey.get(key)
+    if (entry === undefined) {
+      entry = {
+        group: {
+          key,
+          title: row.workspace?.title ?? '',
+          ...(row.workspace !== undefined ? { workspace: row.workspace } : {}),
+          rows: [],
+        },
+        newest: 0,
+      }
+      byKey.set(key, entry)
+    }
+    entry.group.rows.push(row)
+    const at = row.updatedAt ?? 0
+    if (at > entry.newest) entry.newest = at
+  }
+  const entries = [...byKey.values()].sort((left, right) => right.newest - left.newest)
+  // Ungrouped trails last (nav trailing-bucket parity) regardless of recency.
+  const ungroupedIndex = entries.findIndex(entry => entry.group.key === UNGROUPED_WORKSPACE_ID)
+  if (ungroupedIndex !== -1 && ungroupedIndex !== entries.length - 1) {
+    const [entry] = entries.splice(ungroupedIndex, 1)
+    if (entry !== undefined) entries.push(entry)
+  }
+  for (const entry of entries) {
+    // Self-contained: each group's rows sort newest-first even if the caller
+    // did not pre-sort (the only in-tree caller, deriveArchivedSessions,
+    // already returns global-recency rows, so this re-sort is a defensive
+    // no-op there — kept so the pure function stays total for arbitrary
+    // inputs, at the documented cost of one extra sort pass; the derive-side
+    // fast paths above keep the common no-rows case free).
+    entry.group.rows.sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0))
+  }
+  return entries.map(entry => entry.group)
 }
 
 /**

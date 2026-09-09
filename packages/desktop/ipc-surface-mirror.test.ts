@@ -481,8 +481,15 @@ test('the IPC result unions carry identical FIELD SETS across the mirrors that n
   )
   assert.deepEqual(
     interfaceFieldNames(preload, 'GatewayPluginMaterializeIpcResult'),
-    ['cancelled', 'deferred', 'error', 'ok'],
+    ['cancelled', 'deferred', 'error', 'ok', 'outcome'],
     'gateway_plugin_materialize result union must remain exact',
+  )
+  // The materialize executed-outcome shape is exact too: executed/restarted
+  // only — the 202-settle parity fields the main handler projects.
+  assert.deepEqual(
+    interfaceFieldNames(preload, 'GatewayPluginMaterializeOutcome'),
+    ['executed', 'restarted'],
+    'gateway_plugin_materialize outcome must remain exact',
   )
   // The partial-outcome summary shape is itself exact: installed/removed
   // only, matching the main-handler projection.

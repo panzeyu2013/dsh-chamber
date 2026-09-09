@@ -63,6 +63,21 @@ import './base.css'
 /** Module transport hook replaced by jsdom tests. */
 export type BootSeams = Pick<ClientModuleCreateOptions, 'loadBundle'>
 
+/**
+ * 启动性能 User Timing 埋点守卫（C2，2026-09 性能审计落点）。本包无法反向
+ * 依赖 renderer，故内联同名守卫；标记名注册表（唯一规范，改名须同步）：
+ * packages/renderer/src/perf-marks.ts。只做观测、零业务语义：缺失/抛错静默。
+ */
+function perfMark(name: string): void {
+  try {
+    if (typeof performance !== 'undefined' && typeof performance.mark === 'function') {
+      performance.mark(name)
+    }
+  } catch {
+    // User Timing 失败不影响 boot 路径。
+  }
+}
+
 /** Stable boot diagnostics for arbitrary thrown values. The configureContext
  * seam and plugin/runtime graph are external execution boundaries; their
  * catch handler must not itself reject when reflection or String coercion on
@@ -166,6 +181,7 @@ export class AppWebEntry {
       // also skips the duplicate bootstrap registration.
       this.modules = ensureWebModuleSystem(this.seams)
       this.manifest = this.modules.manifest
+      perfMark('dsh:boot:run-start')
 
       const prefetching = this.prefetchImmediateTier()
       const ctx = new Context()
@@ -177,8 +193,10 @@ export class AppWebEntry {
       this.configureContext?.(ctx)
       await this.runPluginBoot(ctx, prefetching)
       await this.mountApp(ctx)
+      perfMark('dsh:boot:settled')
     } catch (reason) {
       // Stay on the loading page; surface the sweep report (fail loud).
+      perfMark('dsh:boot:failed')
       console.error(reason)
       this.bootFailure = describeBootError(reason)
       this.page.fail(this.bootFailure)
@@ -298,6 +316,7 @@ export class AppWebEntry {
     // need every immediately-tier factory already registered (module
     // comment). Resolves even when individual prefetches failed.
     await prefetching
+    perfMark('dsh:boot:prefetch')
 
     // Entry creation order carries no semantics (fiber inject waiting owns
     // activation order); creating concurrently lets non-prefetched bundle
@@ -333,7 +352,9 @@ export class AppWebEntry {
       }
     }))
 
+    perfMark('dsh:boot:rows-created')
     await loader.await()
+    perfMark('dsh:boot:loader-awaited')
     this.assertEntriesActive(toleratedIds)
   }
 
@@ -409,6 +430,7 @@ export class AppWebEntry {
     } finally {
       if (timer !== undefined) clearTimeout(timer)
     }
+    perfMark('dsh:boot:mounted')
   }
 }
 

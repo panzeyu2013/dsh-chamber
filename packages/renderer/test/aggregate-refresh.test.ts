@@ -2,14 +2,20 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   AggregateRefreshQueue,
+  archiveSetShrink,
   commitAggregateFailure,
   commitAggregatePull,
   invalidateRemovedAggregateSources,
+  isFallbackDerivedView,
   isSnapshotStale,
   planAggregateRefreshes,
+  planSessionListRefresh,
   refreshPullStillCurrent,
   remoteRetiredSourceIds,
   retireSelectedSource,
+  shouldRebaselineFallbackView,
+  shouldRequestSessionListRefresh,
+  shouldRetainPushedAggregate,
   withoutRemovedSourceIds,
   withoutRemovedSourceKeys,
 } from '../src/aggregate-refresh.ts'
@@ -309,6 +315,126 @@ test('chamber source-id validation accepts canonical and legacy prefixes but rej
   )
 })
 
+// ---- disconnect retention + fallback-view heal (2026-09: reconnect
+// resurfaces archived conversations / clicks dead-end into the new-session
+// view) ----
+
+test('isFallbackDerivedView: only ok aggregates with synthetic rows are the degraded unary view', () => {
+  assert.equal(isFallbackDerivedView(undefined), false)
+  assert.equal(isFallbackDerivedView({ ...mountedAggregate }), false)
+  assert.equal(isFallbackDerivedView({
+    state: 'ok',
+    workspaces: [],
+    sessions: [],
+    archivedSessionIds: [],
+    error: null,
+  }), false, 'an EMPTY workspace set is a legitimate mounted state, never synthetic')
+  assert.equal(isFallbackDerivedView({
+    state: 'not-connected',
+    workspaces: [{ workspaceId: '__cwd__:/x', path: '/x', title: 'x', sessionIds: [], createdAt: '', updatedAt: '', synthetic: true }],
+    sessions: [],
+    archivedSessionIds: [],
+    error: null,
+  }), false, 'not-connected/error states are not an ok fallback VIEW')
+  assert.equal(isFallbackDerivedView({
+    state: 'ok',
+    workspaces: [{ workspaceId: '__cwd__:/x', path: '/x', title: 'x', sessionIds: [], createdAt: '', updatedAt: '', synthetic: true }],
+    sessions: [],
+    archivedSessionIds: [],
+    error: null,
+  }), true)
+})
+
+test('shouldRetainPushedAggregate: a previously-pushed mounted source keeps its ok aggregate through a transport outage', () => {
+  assert.equal(shouldRetainPushedAggregate(true, mountedAggregate), true)
+  assert.equal(shouldRetainPushedAggregate(true, { ...mountedAggregate, archiveSetKnown: true }), true)
+  // Legitimate empty workspaces (fresh mounted instance) stay retainable.
+  assert.equal(shouldRetainPushedAggregate(true, {
+    state: 'ok',
+    workspaces: [],
+    sessions: [],
+    archivedSessionIds: [],
+    error: null,
+  }), true)
+})
+
+test('shouldRetainPushedAggregate: never-pushed / unmounted / degraded / non-ok currents are NOT retainable', () => {
+  assert.equal(shouldRetainPushedAggregate(false, mountedAggregate), false, 'unmounted sources keep the fallback scope')
+  assert.equal(shouldRetainPushedAggregate(true, undefined), false)
+  assert.equal(shouldRetainPushedAggregate(true, { state: 'not-connected', workspaces: [], sessions: [], archivedSessionIds: [], error: null }), false)
+  assert.equal(shouldRetainPushedAggregate(true, { state: 'error', workspaces: [], sessions: [], archivedSessionIds: [], error: 'x' }), false)
+  // A current ALREADY degraded to the fallback view is not retainable — the
+  // retention fix prevents NEW degraded views, it must not freeze existing ones.
+  assert.equal(shouldRetainPushedAggregate(true, {
+    state: 'ok',
+    workspaces: [{ workspaceId: '__cwd__:/real', path: '/real', title: 'Real', sessionIds: ['s1'], createdAt: '', updatedAt: '', synthetic: true }],
+    sessions: [{ sessionId: 's1', running: false, blank: false }],
+    archivedSessionIds: [],
+    error: null,
+  }), false)
+})
+
+test('retention closes the ready-edge full-commit: a retained ok aggregate merges sessions-only (archive set survives the reconnect pull)', () => {
+  // End-to-end shape of the 2026-09 fix: the aggregate that survived the
+  // outage (state ok, real workspaces, archive set) meets the ready-edge
+  // unary pull — the commit is the MOUNTED MERGE, never the full fallback.
+  const committed = commitAggregatePull(mountedAggregate, fallbackSnapshot, true)
+  assert.deepEqual(committed.archivedSessionIds, mountedAggregate.archivedSessionIds)
+  assert.deepEqual(committed.workspaces, mountedAggregate.workspaces)
+  assert.deepEqual(committed.sessions, fallbackSnapshot.sessions)
+})
+
+// ---- shouldRebaselineFallbackView (2026-09: heal a mounted source whose
+// aggregate is stuck on the degraded fallback view via a bounded ctx
+// reconnect) ----
+
+const NOW2 = 2_000_000
+const BACKOFF2 = 60_000
+
+test('shouldRebaselineFallbackView: a mounted source stuck on the fallback view reconnects when the backoff has elapsed', () => {
+  assert.equal(shouldRebaselineFallbackView({
+    mounted: true,
+    fallbackView: true,
+    lastReconnectAt: undefined,
+    now: NOW2,
+    reconnectBackoffMs: BACKOFF2,
+  }), true)
+  assert.equal(shouldRebaselineFallbackView({
+    mounted: true,
+    fallbackView: true,
+    lastReconnectAt: NOW2 - BACKOFF2,
+    now: NOW2,
+    reconnectBackoffMs: BACKOFF2,
+  }), true)
+})
+
+test('shouldRebaselineFallbackView: a recent reconnect holds off the next attempt (backoff window)', () => {
+  assert.equal(shouldRebaselineFallbackView({
+    mounted: true,
+    fallbackView: true,
+    lastReconnectAt: NOW2 - 1,
+    now: NOW2,
+    reconnectBackoffMs: BACKOFF2,
+  }), false)
+})
+
+test('shouldRebaselineFallbackView: unmounted sources and healthy (non-fallback) views never arm', () => {
+  assert.equal(shouldRebaselineFallbackView({
+    mounted: false,
+    fallbackView: true,
+    lastReconnectAt: undefined,
+    now: NOW2,
+    reconnectBackoffMs: BACKOFF2,
+  }), false, 'unmounted sources have no ctx connection to reconnect — unary fallback is their scope')
+  assert.equal(shouldRebaselineFallbackView({
+    mounted: true,
+    fallbackView: false,
+    lastReconnectAt: undefined,
+    now: NOW2,
+    reconnectBackoffMs: BACKOFF2,
+  }), false, 'a real pushed view needs no rebaseline bounce')
+})
+
 // ---- refresh pull validity domains (2026-10: create/fork latency fix) ----
 
 test('a mutation-triggered pull stays committable across pushes (the interim frame cross-section must not kill it)', () => {
@@ -479,4 +605,114 @@ test('authoritative removal delta survives two pulls that both observe the final
 
   // Presentation-only edits carry no retired ids and preserve the ctx.
   assert.equal(remoteRetiredSourceIds([]).size, 0)
+})
+
+// ---- archiveSetShrink / shouldRequestSessionListRefresh (design 24 §20:
+// purge-completed signal + official session-list refresh coalescing) ----
+
+const okAggregate = (archivedSessionIds: string[], archiveSetKnown = true): InstanceAggregate => ({
+  state: 'ok',
+  workspaces: [],
+  sessions: [],
+  archivedSessionIds,
+  archiveSetKnown,
+  error: null,
+})
+
+test('archiveSetShrink returns exactly the ids a known ok aggregate lost to the next known snapshot', () => {
+  const previous = okAggregate(['a1', 'a2', 'a3'])
+  assert.deepEqual(
+    archiveSetShrink(previous, { archivedSessionIds: ['a1', 'a3'], archiveSetKnown: true }),
+    ['a2'],
+  )
+  // A full removal and an empty-next case both shrink.
+  assert.deepEqual(archiveSetShrink(previous, { archivedSessionIds: [], archiveSetKnown: true }), ['a1', 'a2', 'a3'])
+  // Same set or additions only = no shrink (no unarchive wire, but a registry
+  // re-seed could re-add; additions must never trigger).
+  assert.deepEqual(archiveSetShrink(previous, { archivedSessionIds: ['a1', 'a2', 'a3', 'a4'], archiveSetKnown: true }), [])
+  assert.deepEqual(archiveSetShrink(previous, { archivedSessionIds: ['a1', 'a2', 'a3'], archiveSetKnown: true }), [])
+})
+
+test('archiveSetShrink never triggers from unknown provenance or non-ok aggregates', () => {
+  // The unary fallback's EMPTY unknown set is a known-degraded artifact, never
+  // a shrink fact.
+  assert.deepEqual(archiveSetShrink(okAggregate(['a1']), { archivedSessionIds: [], archiveSetKnown: false }), [])
+  assert.deepEqual(archiveSetShrink(undefined, { archivedSessionIds: ['a1'], archiveSetKnown: true }), [])
+  // A legacy aggregate without the provenance flag stays untrusted.
+  assert.deepEqual(archiveSetShrink(okAggregate(['a1'], false), { archivedSessionIds: [], archiveSetKnown: true }), [])
+  const notConnected: InstanceAggregate = { state: 'not-connected', workspaces: [], sessions: [], archivedSessionIds: [], error: null }
+  assert.deepEqual(archiveSetShrink(notConnected, { archivedSessionIds: [], archiveSetKnown: true }), [])
+  const errorState: InstanceAggregate = { state: 'error', workspaces: [], sessions: [], archivedSessionIds: [], error: 'x' }
+  assert.deepEqual(archiveSetShrink(errorState, { archivedSessionIds: [], archiveSetKnown: true }), [])
+})
+
+test('shouldRequestSessionListRefresh opens on absent history and reopens only past the coalescing gap', () => {
+  assert.equal(shouldRequestSessionListRefresh(undefined, 1_000, 5_000), true)
+  assert.equal(shouldRequestSessionListRefresh(0, 1_000, 5_000), false)
+  assert.equal(shouldRequestSessionListRefresh(1_000, 5_999, 5_000), false)
+  assert.equal(shouldRequestSessionListRefresh(1_000, 6_000, 5_000), true)
+})
+
+// ---- planSessionListRefresh (design 24 §20 ghost-row convergence machine) ----
+
+const snapshotWithRows = (archivedSessionIds: string[], rowIds: string[], archiveSetKnown = true): InstanceSnapshot => ({
+  workspaces: [],
+  sessions: rowIds.map(sessionId => ({ sessionId, running: false, blank: false })),
+  archivedSessionIds,
+  archiveSetKnown,
+})
+
+test('planSessionListRefresh: a shrink whose rows are still listed requests convergence and keeps them pending', () => {
+  const previous = okAggregate(['a1', 'a2', 'a3'])
+  const next = snapshotWithRows(['a1', 'a3'], ['s0', 'a2', 'a3', 's1'])
+  const decision = planSessionListRefresh(previous, next, undefined)
+  assert.equal(decision.request, true)
+  assert.deepEqual(decision.pending, ['a2'])
+  // Converged push: the rows of a2 are gone → pending cleared, no request.
+  const converged = snapshotWithRows(['a1', 'a3'], ['s0', 'a3', 's1'])
+  assert.deepEqual(planSessionListRefresh(previous, converged, decision.pending), { request: false, pending: [] })
+})
+
+test('planSessionListRefresh: a shrink whose rows are already gone (refreshed elsewhere) never requests', () => {
+  const previous = okAggregate(['a1', 'a2'])
+  const next = snapshotWithRows(['a1'], ['s0', 'a1'])
+  assert.deepEqual(planSessionListRefresh(previous, next, undefined), { request: false, pending: [] })
+})
+
+test('planSessionListRefresh: carried pending ids re-request while still listed and clear once gone', () => {
+  const previous = okAggregate(['a1']) // shrink already committed in an earlier push
+  // No NEW shrink here — the previous push already removed a2 from the set.
+  const same = snapshotWithRows(['a1'], ['s0', 'a2'])
+  assert.deepEqual(planSessionListRefresh(previous, same, ['a2']), { request: true, pending: ['a2'] })
+  assert.deepEqual(planSessionListRefresh(previous, same, ['a2', 'ghost-unknown']), { request: true, pending: ['a2'] })
+  // Rows vanished without this push seeing a shrink (generation change /
+  // host restart) → converged by observation.
+  const gone = snapshotWithRows(['a1'], ['s0'])
+  assert.deepEqual(planSessionListRefresh(previous, gone, ['a2']), { request: false, pending: [] })
+})
+
+test('planSessionListRefresh: a new shrink unioned with carried pending dedupes and orders removed-first', () => {
+  const previous = okAggregate(['a1', 'a2', 'a3', 'a4'])
+  const next = snapshotWithRows(['a2', 'a4'], ['a1', 'a2', 's0'])
+  // New shrink removes a1 and a3; a2 (pending carried from an earlier run,
+  // still listed) rides along; a3 has no row and a4 is still archived.
+  const decision = planSessionListRefresh(previous, next, ['a2', 'a3'])
+  assert.deepEqual(decision.pending, ['a1', 'a2'])
+  assert.equal(decision.request, true)
+})
+
+test('planSessionListRefresh: unknown provenance or non-ok previous never requests and drains carried pending only by row absence', () => {
+  // Unknown NEXT (degraded full commit) → no shrink contribution, but carried
+  // pending still drains when its rows leave the snapshot.
+  const degradedNext = { ...snapshotWithRows([], ['s0']), archiveSetKnown: false }
+  assert.deepEqual(planSessionListRefresh(okAggregate(['a1']), degradedNext, undefined), { request: false, pending: [] })
+  assert.deepEqual(planSessionListRefresh(okAggregate(['a1']), degradedNext, ['a1']), { request: false, pending: [] })
+  const degradedWithRow = { ...snapshotWithRows([], ['s0', 'a1']), archiveSetKnown: false }
+  assert.deepEqual(planSessionListRefresh(okAggregate(['a1']), degradedWithRow, ['a1']), { request: true, pending: ['a1'] })
+  // Legacy previous without the provenance flag: never a shrink source, but
+  // carried pending semantics are unaffected (untrusted shrink only).
+  const legacy = okAggregate(['a1', 'a2'], false)
+  assert.deepEqual(planSessionListRefresh(legacy, snapshotWithRows(['a2'], ['a2']), undefined), { request: false, pending: [] })
+  const notConnected: InstanceAggregate = { state: 'not-connected', workspaces: [], sessions: [], archivedSessionIds: [], error: null }
+  assert.deepEqual(planSessionListRefresh(notConnected, snapshotWithRows(['a2'], ['s0', 'a2']), ['a2']), { request: true, pending: ['a2'] })
 })

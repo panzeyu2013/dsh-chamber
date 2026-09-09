@@ -107,6 +107,70 @@ export function chamberRemoteKey(
   return 'chamberRemoteInjectedUnknown'
 }
 
+/* ---- Third-party row live state (Loader-derived, per-row 生效状态) ----
+ * The installed-row lists (local / gateway / http zones) render each
+ * third-party row's live state from the managed instance's Loader plugin
+ * snapshot — the profile manifest alone can never claim liveness. Chamber
+ * rows never reach this projection (the callers filter them out; their own
+ * badges are remoteChamberBadge). */
+
+/** One third-party row's live-state chip: a localized label plus the same
+ *  badge tone vocabulary as the chamber rows. */
+export interface ThirdPartyLiveState {
+  labelKey: SettingsConnectionsKey
+  tone: ChamberBadgeTone
+}
+
+/**
+ * Live state of one installed third-party package, derived from the managed
+ * instance's Loader snapshot. Exact-name match (`moduleName === packageName`
+ * — the historical exact-name contract for non-chamber names, mirroring
+ * chamberRemoteKey): a profile dependency whose package mounts as a Loader
+ * entry keeps the package name as its module name. Each state stays under
+ * its honesty ceiling — a live claim only from an enabled + active fiber:
+ *  - no matching entry AND the package is a profile LAYER (in
+ *    `dsh.profile.bundles` / `localList.bundles` — `expectsLoaderEntry`) →
+ *    the RUNNING instance has not mounted it yet; it activates on the
+ *    instance's next restart (never a live claim);
+ *  - no matching entry and NOT a profile layer (plain / client-only
+ *    dependency — nothing mounts it on restart: `dsh plugin add` only adds
+ *    dsh.bundle-declaring packages to the bundle layers) → null: the state
+ *    cell stays neutral; "重启后生效" would be a false promise;
+ *  - matched but disabled → installed, explicitly disabled (已停用);
+ *  - matched + enabled + active → mounted and live (生效中);
+ *  - matched + enabled + failed → the load failed (加载失败);
+ *  - matched + enabled in any other phase (pending / loading / unloading /
+ *    null fiber) → still loading or between lifecycles (加载中).
+ * @param snapshot - the Loader inventory snapshot; null (the read failed or
+ *   the instance is not reachable, e.g. a stopped local instance) → null:
+ *   the caller keeps the state cell neutral — an unreadable snapshot is
+ *   never a state claim.
+ * @param expectsLoaderEntry - whether the installed row names a profile
+ *   bundle layer (local: `localList.bundles.includes(name)`; gateway:
+ *   `installed.bundles.includes(name)`). Only such rows can ever mount via
+ *   the Loader, so only they may render the "activates on restart" state
+ *   when the snapshot has no entry yet.
+ * @returns The chip {labelKey, tone}, or null when no snapshot is available
+ *   or the row cannot mount (no entry + not a bundle layer).
+ */
+export function thirdPartyLiveState(
+  snapshot: Pick<PluginInventorySnapshot, 'entries'> | null,
+  packageName: string,
+  expectsLoaderEntry: boolean,
+): ThirdPartyLiveState | null {
+  if (snapshot === null) return null
+  const entry = snapshot.entries.find(candidate => candidate.moduleName === packageName)
+  if (entry === undefined) {
+    return expectsLoaderEntry ? { labelKey: 'thirdPartyLiveRestart', tone: 'warn' } : null
+  }
+  if (!entry.enabled) return { labelKey: 'pluginDisabled', tone: 'muted' }
+  if (entry.fiberPhase === 'active') return { labelKey: 'thirdPartyLiveActive', tone: 'ok' }
+  // The failed-load label is the shared badge copy (chamberBadgeFailed:
+  // 加载失败 / Failed to load) — the tone is what carries the danger color.
+  if (entry.fiberPhase === 'failed') return { labelKey: 'chamberBadgeFailed', tone: 'danger' }
+  return { labelKey: 'thirdPartyLiveStarting', tone: 'muted' }
+}
+
 /* ---- Chamber row badges (plan 24 B1.5: the three-row chamber table is
  * badge-ized — a short label plus a tone the renderer colors) ---- */
 

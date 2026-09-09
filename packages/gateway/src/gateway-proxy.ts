@@ -60,6 +60,10 @@ export interface GatewayProxyDeps {
   /** Narrow forwarding seams used by deterministic lifecycle tests. */
   httpRequest?: HttpRequestFactory
   upstreamTimeoutMs?: number
+  /** Upstream idle window for long-RPC paths (design 03 §3.4; default LONG_RPC_UPSTREAM_TIMEOUT_MS). */
+  longRpcUpstreamTimeoutMs?: number
+  /** Long-RPC paths selecting the exemption (default LONG_RPC_PATHS; `[]` disables the exemption). */
+  longRpcPaths?: readonly string[]
 }
 
 export interface GatewayProxyDiagnostics {
@@ -69,6 +73,8 @@ export interface GatewayProxyDiagnostics {
   activeHttpRequests: number
   pendingUpgrades: number
   bufferedRequestBytes: number
+  longRpcRequests: number
+  longRpcTimeouts: number
 }
 
 export interface GatewayProxy {
@@ -85,6 +91,8 @@ export function createGatewayProxy(deps: GatewayProxyDeps): GatewayProxy {
     failures: 0,
     activeStreams: 0,
     bufferedRequestBytes: 0,
+    longRpcRequests: 0,
+    longRpcTimeouts: 0,
   }
   let activeHttpRequests = 0
   const pendingUpgrades = createPendingUpgradeTracker()
@@ -98,6 +106,8 @@ export function createGatewayProxy(deps: GatewayProxyDeps): GatewayProxy {
     id: 'local',
     logPrefix: 'gateway-proxy',
     upstreamTimeoutMs: deps.upstreamTimeoutMs ?? UPSTREAM_TIMEOUT_MS,
+    ...(deps.longRpcUpstreamTimeoutMs === undefined ? {} : { longRpcUpstreamTimeoutMs: deps.longRpcUpstreamTimeoutMs }),
+    ...(deps.longRpcPaths === undefined ? {} : { longRpcPaths: deps.longRpcPaths }),
     clientBodyIdleTimeoutMs: CLIENT_BODY_IDLE_TIMEOUT_MS,
     wsPingIntervalMs: WS_PING_INTERVAL_MS,
     wsPingMissesBeforeTeardown: WS_PING_MISSES_BEFORE_TEARDOWN,
@@ -258,6 +268,8 @@ export function createGatewayProxy(deps: GatewayProxyDeps): GatewayProxy {
         activeHttpRequests,
         pendingUpgrades: pendingUpgrades.size,
         bufferedRequestBytes: counters.bufferedRequestBytes,
+        longRpcRequests: counters.longRpcRequests,
+        longRpcTimeouts: counters.longRpcTimeouts,
       }
     },
 

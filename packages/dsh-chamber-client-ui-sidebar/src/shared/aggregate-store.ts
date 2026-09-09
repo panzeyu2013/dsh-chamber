@@ -50,10 +50,20 @@ export interface ChamberServerAggregate {
   /** Registry identity used by desktop IPC. Never derive it by slicing a source-id prefix. */
   rawId?: string
   label: string
-  /** Local: dsh ready; remote: tunnel phase ready. */
+  /** Local: dsh ready; remote: tunnel phase ready; gateway: tunnel ready AND the managed dsh is not terminal-down. */
   connected: boolean
   /** Status text (ready/connecting/… projection). */
   phase: string
+  /**
+   * Gateway only: the managed dsh was probed into a terminal-down state while
+   * the TRANSPORT was up (`stopped`/`error`/`restart-exhausted`). A dedicated
+   * fact, never re-derived from `phase`: `phase` merges the managed state with
+   * the transport phase and both vocabularies contain `error`, so classifying
+   * the merged string would misdiagnose an SSH/tunnel failure as a stopped
+   * managed dsh (2026-12 review BLOCKER). Absent = not a gateway, transport
+   * down, probe missing, or a healthy/transient managed state (fail open).
+   */
+  managedRuntimeDown?: boolean
   workspaces: ChamberServerWorkspace[]
   /** True when the per-instance aggregate snapshot has actually landed
    *  (sessions; workspace groups derive from session cwd facts since
@@ -66,7 +76,9 @@ export interface ChamberServerAggregate {
   runtime?: InstanceRuntimeReport
   /**
    * Archived-session metadata rows of this source (design 24 revision
-   * 2026-09 — the archive manager lists what is archived). Present when the
+   * 2026-09 — the archive manager lists what is archived; 2026 revision:
+   * rows additionally carry their workspace attribution for the manager's
+   * grouped listing — see ArchivedSessionMetaRow). Present when the
    * per-instance aggregate snapshot has landed. `archiveSetKnown` says
    * whether an EMPTY rows list is a true "nothing archived" fact:
    * - known (true): the mounted workspace baseline projected the registry
@@ -75,8 +87,9 @@ export interface ChamberServerAggregate {
    *   landed (aggregate not ok) or carries no archive-set metadata;
    * - known (false): the unary-fallback view — its archive set is unknown
    *   (documented KNOWN DEGRADATION) — [] must NEVER be read as "no archived
-   *   sessions"; the archive manager shows an honest degraded branch and
-   *   keeps whole-set purge available.
+   *   sessions"; the archive manager shows an honest degraded branch with no
+   *   destructive action (no list to select; whole-set purge was retired
+   *   with the standalone delete-all — 2026 user decision).
    */
   archivedSessions?: ArchivedSessionMetaRow[]
   archiveSetKnown?: boolean
@@ -119,6 +132,17 @@ export interface OpenSessionRequest {
 }
 
 /**
+ * Terminal outcome of one App-layer open attempt, published back to every
+ * sidebar shell (design 05 §3's request channel is one-way — the App layer
+ * owns the dispatch budget and the failure; the sidebar owns the row).
+ * Success carries no message; failure carries the dispatch's loud report.
+ */
+export interface OpenSessionOutcome extends OpenSessionRequest {
+  /** Present only on failure: the terminal error report (App-wrapped text). */
+  message?: string
+}
+
+/**
  * Per-instance runtime facts projected by the sidebar plugin of the source's
  * own ctx (design 06 §4): current session id plus per-session live rows. The
  * plugin is a STATELESS projection of the source's session-list snapshot —
@@ -150,8 +174,29 @@ export interface InstanceRuntimeReport {
 
 type Listener = () => void
 type OpenListener = (request: OpenSessionRequest) => void
+type OpenOutcomeListener = (outcome: OpenSessionOutcome) => void
 type RefreshListener = (sourceId: string) => void
+/**
+ * Per-source session-list refresh request (archive-cleanup convergence, design
+ * 24 §20): a source's MOUNTED ctx session summaries are the official client's
+ * in-memory rows, refreshed only on connection generations — content purged by
+ * the chamber host domain never triggers an official event (documented no-op),
+ * so the deleted rows linger in the summaries and resurface in the sidebar
+ * once the host removes their ids from the archived set (no filter covers them
+ * anymore; opening one fails with the official session/not-found). The mounted
+ * ctx of that source must re-run its OFFICIAL session-list refresh
+ * (`ctx.sessions.refresh()`), which reconciles the summaries against the
+ * server corpus (a per-call disk walk) and drops the deleted rows. Subscribers
+ * are the sidebar plugins of every mounted ctx; each plugin acts only when its
+ * own chamberInstanceId matches the requested source. Fired by the App's
+ * ghost-row convergence machine (planSessionListRefresh — every ready mounted
+ * push whose removed-archived rows are still listed) and by the archive
+ * manager after every purge settle — see design 24 §20 / App.tsx.
+ */
+type SessionListRefreshListener = (sourceId: string) => void
 type SourceListener = (sourceId: string) => void
+/** Page-wide active-view fact: the source whose shell is on screen, undefined until the App publishes. */
+type ActiveSourceListener = (sourceId: string | undefined) => void
 type RuntimeReportListener = (
   sourceId: string,
   report: InstanceRuntimeReport | undefined,
@@ -166,14 +211,25 @@ type PluginDiagnosticListener = (sourceId: string, diagnostic: PluginGraphDiagno
 
 const listeners = new Set<Listener>()
 const openListeners = new Set<OpenListener>()
+const openOutcomeListeners = new Set<OpenOutcomeListener>()
 const refreshListeners = new Set<RefreshListener>()
+const sessionListRefreshListeners = new Set<SessionListRefreshListener>()
 const activateSourceListeners = new Set<SourceListener>()
+const activeSourceListeners = new Set<ActiveSourceListener>()
 const runtimeReportListeners = new Set<RuntimeReportListener>()
 const snapshotReportListeners = new Set<SnapshotReportListener>()
 const pluginDiagnosticListeners = new Set<PluginDiagnosticListener>()
 let servers: ChamberServerAggregate[] = []
+let activeSourceId: string | undefined
 const runtimeReports: Record<string, InstanceRuntimeReport> = {}
 const runtimeProducerTokens: Record<string, number> = {}
+/** Boot generation of the ctx that currently owns each source's producers.
+ *  Registration is order-gated by this (see registerInstanceRuntimeProducer):
+ *  a hung earlier boot that resumes AFTER its successor registered must not
+ *  steal the producer token — its teardown clear() would then silence the
+ *  healthy successor for good (2026-12 review BLOCKER). */
+const runtimeProducerGenerations: Record<string, number> = {}
+const snapshotProducerGenerations: Record<string, number> = {}
 const runtimeProducerFingerprints: Record<string, string> = {}
 const instanceSnapshots: Record<string, InstanceSnapshot> = {}
 const snapshotProducerTokens: Record<string, number> = {}
@@ -196,8 +252,22 @@ export const chamberBridge = {
     }
   },
 
-  /** App-layer write: replace the projection and notify subscribers. */
+  /**
+   * App-layer write: replace the projection and notify subscribers.
+   *
+   * 2026 性能核查（登记）：调用面已有多重收口，本层无需再做微任务单槽合并
+   * ——App 发布前有 serversProjectionSignature 签名闸（等值不 publish），
+   * 订阅侧（SidebarRoot）在 setState 前再比一次签名，refreshAggregate 等
+   * 写路径 identity-preserving（同内容不换对象）。React 19 批处理已把同一
+   * macrotask 内的多次 publish 合并为一次渲染，异步合并反而会引入
+   * getServers() 读到中间态的竞态窗口。本入口只保留引用相等防御：publish
+   * 语义是"换快照 + 通知"，同引用重发无任何增量（快照本身不可变）。
+   * 不变式（2026 评审补注）：同引用重发布被静默丢弃——不可变快照下同引用
+   * ≡ 无内容变化；若未来引入原地突变 + 同引用重发布（今日被不可变性禁止），
+   * 此守卫会吞掉它——任何此类改动必须先改写本注释，而非绕过守卫。
+   */
   publish(next: ChamberServerAggregate[]): void {
+    if (next === servers) return
     servers = next
     for (const listener of [...listeners]) listener()
   },
@@ -215,6 +285,21 @@ export const chamberBridge = {
     }
   },
 
+  /** App-layer report that one requested open settled (failure carries the
+   *  loud terminal message). Every sidebar shell receives the report and
+   *  surfaces failures on the session row; success clears a stale failure. */
+  reportOpenSessionOutcome(outcome: OpenSessionOutcome): void {
+    for (const listener of [...openOutcomeListeners]) listener(outcome)
+  },
+
+  /** Sidebar subscription to open-outcome reports; returns the unsubscribe. */
+  onOpenSessionOutcome(listener: OpenOutcomeListener): () => void {
+    openOutcomeListeners.add(listener)
+    return () => {
+      openOutcomeListeners.delete(listener)
+    }
+  },
+
   /** Sidebar call after an action: unmounted/incomplete sources ask App for one pull; mounted stores push. */
   requestRefresh(sourceId: string): void {
     for (const listener of [...refreshListeners]) listener(sourceId)
@@ -225,6 +310,26 @@ export const chamberBridge = {
     refreshListeners.add(listener)
     return () => {
       refreshListeners.delete(listener)
+    }
+  },
+
+  /**
+   * Ask the MOUNTED ctx of `sourceId` to refresh its official session list
+   * (sidebar-plugin subscriber: only the plugin whose chamberInstanceId equals
+   * `sourceId` acts). See the SessionListRefreshListener note — the convergence
+   * net for rows of purged sessions lingering in the official client summaries.
+   * Unmounted sources have no subscriber and need none (their rows ride the
+   * unary list, which is authoritative per call).
+   */
+  requestSessionListRefresh(sourceId: string): void {
+    for (const listener of [...sessionListRefreshListeners]) listener(sourceId)
+  },
+
+  /** Sidebar-plugin subscription to session-list refresh requests; returns the unsubscribe. */
+  onRequestSessionListRefresh(listener: SessionListRefreshListener): () => void {
+    sessionListRefreshListeners.add(listener)
+    return () => {
+      sessionListRefreshListeners.delete(listener)
     }
   },
 
@@ -242,6 +347,42 @@ export const chamberBridge = {
   },
 
   /**
+   * App-layer write: the source whose shell is currently on screen. This is
+   * the authoritative active-view fact of the shared document — consumers that
+   * must act for ONE view only (the ui-layout document theme projection, which
+   * writes document-global `color-scheme`/palette state) gate on it instead of
+   * guessing from DOM classes or mount order. Undefined means "not published":
+   * consumers fail OPEN, so a boot without the App layer keeps its previous
+   * unconditional behavior.
+   */
+  setActiveSource(sourceId: string | undefined): void {
+    if (sourceId === activeSourceId) return
+    activeSourceId = sourceId
+    // Per-listener isolation (same discipline as the layout facts fan-out): a
+    // throwing projector must not abort the publish for its siblings.
+    for (const listener of [...activeSourceListeners]) {
+      try {
+        listener(activeSourceId)
+      } catch (error) {
+        console.error('[dsh-chamber] active-source subscriber threw:', error)
+      }
+    }
+  },
+
+  /** Page-wide active-view fact; undefined until the App publishes. */
+  getActiveSource(): string | undefined {
+    return activeSourceId
+  },
+
+  /** Subscribe to active-view changes (fires on change only); returns the unsubscribe. */
+  onActiveSource(listener: ActiveSourceListener): () => void {
+    activeSourceListeners.add(listener)
+    return () => {
+      activeSourceListeners.delete(listener)
+    }
+  },
+
+  /**
    * Synchronously revoke every producer owned by one registry incarnation.
    * Shell disposal is async, so waiting for plugin cleanup leaves a window in
    * which the old ctx can report after the authoritative roster has already
@@ -254,6 +395,8 @@ export const chamberBridge = {
     const snapshotFingerprint = snapshotProducerFingerprints[sourceId]
     delete runtimeProducerTokens[sourceId]
     delete snapshotProducerTokens[sourceId]
+    delete runtimeProducerGenerations[sourceId]
+    delete snapshotProducerGenerations[sourceId]
     delete runtimeProducerFingerprints[sourceId]
     delete snapshotProducerFingerprints[sourceId]
     delete runtimeReports[sourceId]
@@ -267,10 +410,21 @@ export const chamberBridge = {
    * Token gating makes async teardown generation-safe: an old ctx's late
    * clear/report can never erase or overwrite the replacement ctx's facts.
    */
-  registerInstanceRuntimeProducer(sourceId: string, sourceFingerprint: string): {
+  registerInstanceRuntimeProducer(
+    sourceId: string,
+    sourceFingerprint: string,
+    bootGeneration?: number,
+  ): {
     report: (report: InstanceRuntimeReport) => void
     clear: () => void
   } {
+    // 代际栅栏：更老的 boot 迟到注册一律作废（返回惰性句柄）。两者都无代
+    // （测试/非 chamber 挂载）时保持原"后注册者胜"的语义。
+    const currentGeneration = runtimeProducerGenerations[sourceId]
+    if (bootGeneration !== undefined && currentGeneration !== undefined && bootGeneration < currentGeneration) {
+      return { report: () => undefined, clear: () => undefined }
+    }
+    if (bootGeneration !== undefined) runtimeProducerGenerations[sourceId] = bootGeneration
     const token = ++nextRuntimeProducerToken
     const previousFingerprint = runtimeProducerFingerprints[sourceId]
     runtimeProducerTokens[sourceId] = token
@@ -289,6 +443,7 @@ export const chamberBridge = {
         if (runtimeProducerTokens[sourceId] !== token) return
         delete runtimeProducerTokens[sourceId]
         delete runtimeProducerFingerprints[sourceId]
+        delete runtimeProducerGenerations[sourceId]
         if (runtimeReports[sourceId] === undefined) return
         delete runtimeReports[sourceId]
         for (const listener of [...runtimeReportListeners]) listener(sourceId, undefined, sourceFingerprint)
@@ -309,10 +464,20 @@ export const chamberBridge = {
    * token makes teardown generation-safe: a late cleanup from an old shell
    * cannot clear a newer shell's report for the same source.
    */
-  registerInstanceSnapshotProducer(sourceId: string, sourceFingerprint: string): {
+  registerInstanceSnapshotProducer(
+    sourceId: string,
+    sourceFingerprint: string,
+    bootGeneration?: number,
+  ): {
     report: (snapshot: InstanceSnapshot | undefined) => void
     clear: () => void
   } {
+    // 同 runtime producer：代际栅栏，迟到的老 boot 不得夺走生产权。
+    const currentGeneration = snapshotProducerGenerations[sourceId]
+    if (bootGeneration !== undefined && currentGeneration !== undefined && bootGeneration < currentGeneration) {
+      return { report: () => undefined, clear: () => undefined }
+    }
+    if (bootGeneration !== undefined) snapshotProducerGenerations[sourceId] = bootGeneration
     const token = ++nextSnapshotProducerToken
     const previousFingerprint = snapshotProducerFingerprints[sourceId]
     snapshotProducerTokens[sourceId] = token
@@ -336,6 +501,7 @@ export const chamberBridge = {
         if (snapshotProducerTokens[sourceId] !== token) return
         delete snapshotProducerTokens[sourceId]
         delete snapshotProducerFingerprints[sourceId]
+        delete snapshotProducerGenerations[sourceId]
         if (instanceSnapshots[sourceId] === undefined) return
         delete instanceSnapshots[sourceId]
         for (const listener of [...snapshotReportListeners]) listener(sourceId, undefined, sourceFingerprint)

@@ -51,6 +51,17 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
         远程目标：dsh（API 面 profile）或 gateway；按需使用 SSH+systemd 或 HTTP(S) 直连
 ```
 
+> **2026 性能整改语义注记（§1 形态图外部）**：早期"booted 壳无限常驻（视图
+> 生命周期 = 注册表条目生命周期）"在 v0.2.3+ 收窄为 chamber 保留策略——除
+> local 恒留外，隐藏壳最多保留 `RETAINED_HIDDEN_VIEWS=1` 个
+> （`src/retention.ts`），超限回收"已 settle + 连续隐藏 ≥60s"的最久者；
+> 回收 = dispose shell + 卸载 UI 壳（App 层 reclaimView，与注册表删除同
+> 原语），实例进程/隧道/后台任务不受影响，重开走冷 boot + entry 重放；被
+> 回收源的侧栏聚合落到 30s unary 兜底（§2.3 语义）。取舍：被回收壳内运行
+> 中任务的完成蓝点/通知边沿暂停至该源重开。预热/可见性门控等细节与偏差
+> 登记见 STATUS.md、performance-baseline.md §10 与本文件 §4 的原始语义
+> （§1 拓扑图为收窄后形态；偏差对照以本注与 STATUS 为准）。
+
 ## 2. 侧边栏契约（核心：多来源会话统一导航）
 
 ### 2.1 形态与呈现
@@ -91,6 +102,12 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
 
 - **点击会话行**（任意来源）→ `chamberBridge.requestOpenSession(sourceId,
   sessionId)` → 桥接层切到该来源的 shell（若未 boot 先入队）并打开会话。
+  打开尝试 settle 后（成功，或 dispatch 预算耗尽失败——§4 两种终态报告之
+  一），App 层经 `chamberBridge.reportOpenSessionOutcome` 回报每个侧边栏
+  shell：失败文案在目标会话行内呈现（复用 session action-error 槽，低优先
+  级；10s 自动消退；再次点击/后续成功即提前清除）。2026-09 修订——此前
+  requestOpenSession 是单向通道，失败仅 console.error，用户切换视图后看到
+  的是未选中会话的目标服务器且无任何可见错误。
 - **点击来源分组头**（非当前来源）= 切换活动来源视图：
   `chamberBridge.requestActivateSource(sourceId)` → App 层仅切换该来源
   shell（N-ctx），不打开会话。
@@ -140,15 +157,69 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
   不是 mounted 来源的 no-op；本段与 05 §3 同源旧句已过时，实际语义 =
   mounted 来源以 host-store 事件推送为主 + requestRefresh 即时 unary pull
   双通道。每个来源的 not-ready → ready
-  连接代边沿固定执行一次 unary：生产者会对同内容快照去重，而 App 在断线时已清空
-  聚合，该单次权威拉取保证“内容未变”的重连也恢复列表；稳定 ready 代仍为零轮询。
+  连接代边沿固定执行一次 unary：生产者会对同内容快照去重。**2026 勘误
+  （sidebar-hidden 合并后语义修订；修订记录在 STATUS 与 aggregate-refresh.ts）**：
+  App 断线分支不再清空已推送来源的聚合（`shouldRetainPushedAggregate`——行渲染
+  以 connected 为门，断连不显示；ready-edge 拉取为 sessions-only merge，归档集/
+  工作区不丢失）；稳定 ready 代亦非零轮询——30s unary 兜底 watchdog 对 stale
+  来源照常拉取，卡在降级视图（合成行）的来源由限流自愈臂重连并重放 workspace
+  follow，使 producer 重发带归档集的真实基线（`shouldRebaselineFallbackView`）。
   若该拉取瞬时失败，生产者的 loading 撤回 + idle baseline 重发负责恢复，不会永久停在
   error。推快照按来源序号使较旧在途 pull 失效。
+- **首屏基线收割（2026-12，`packages/renderer/src/baseline-harvest.ts`）**：
+  0.2.3 性能整改把"每个 ready 来源最终串行挂载"的旧通道移除后，首启只有 local
+  挂载 + 1 个预热槽且不轮转、被回收来源在用户点击前禁预热 ⇒ N-1 个 ready 远程源
+  **稳态停留**在 unary 兜底视图（合成 cwd 分组 + 空归档集 ⇒ 已归档会话按普通行
+  浮出、无真实工作区动作），而全部自愈臂都要求 `mounted===true`（至少推过一次
+  快照），对从未挂载的来源永不生效。收割把这类来源在**同一个后台预热槽**里挂一次，
+  拿到首个权威推送（真实分组 + 归档集，`archiveSetKnown:true`）即回收——回收后
+  来源转入已上线的"已回收来源"态（保留权威聚合，会话行由 30s unary merge 刷新）。
+  纪律：收割候选优先于普通预热且**不受**"回收后禁预热"抑制（抑制只为防止回收空转，
+  不能把降级源永久钉住）；每源尝试上限 2 次、失败退避 120s、挂载后
+  `BOOT_TIMEOUT_MS+15s` 无推送**且壳已 settle** 判失败并释放槽位（截止值由
+  `boot-budget.ts` 的 boot 预算推导，**高于**它，否则慢隧道上的健康 boot 会被
+  中途回收——正是收割要治的形态）；另有**绝对放弃上限** `HARVEST_ABANDON_MS`
+  （截止值 + boot 预算）：壳始终不 settle（挂死的 loader/fetch）时截止臂永远
+  不可达，此上限回收并**停用**该源（`harvestParked`），避免重试撞进同一挂死
+  （注意语义边界：回收拆的是**已注册**的壳；一个从未 settle 的 boot 若从未注册，
+  其 ctx/容器只能等它自己 settle 时才被拆除，页面生命周期内可能残留——同 id 的
+  后续挂载不受影响，因为 shell.ts 对"上一代 boot"的等待有 boot 预算上限）；
+  **同一上限也独立看管"在途挂载"本身**（按挂载时刻、且仅对**未 settle** 的挂载，
+  不依赖收割意图——用户点开收割壳会撤销意图、普通温壳预热从不写意图，否则挂死
+  boot 会永久占住后台槽；已 settle 的仍由上面的截止臂判定）。同 id boot 尾**从不
+  提前释放**（它是 generation 记录的持有者，提前释放会让迟到的前代与后继同号并
+  注册覆盖），改由 shell.ts 对"等待上一代 boot"设**绝对**上限（前代起始 + 两个
+  boot 预算，所有后继共享同一截止）解耦；同族加固——页面的 producer 注册表按
+  **代际**栅栏（`chamberBootGeneration` 经 ctx 注入）：迟到的老 boot 注册一律作废，
+  其 teardown 不再可能清空健康后继的通道；
+  且活动/待开视图不可回收——改为标记失败，让既有失败覆盖层与「重试」出现；
+  在途壳不计入 retention 的隐藏壳数（它此刻不可回收，计进去会挤掉用户的温壳）；
+  候选集在**存在任一收割候选时独占后台槽**（`prewarmCandidates` 只返回收割
+  候选，且返回**全部**候选，让 drain 能取到排在退避候选之后的"退避已满"者）——
+  若让温壳顶上来，它会成为 `autoPrewarmed` 而隐藏 1 壳时 retention 不回收它，
+  `remaining` 恒 0，本会话剩余来源永远拿不到基线（一个失败源阻塞全部，违反
+  正确性不变量）；**尝试耗尽且从未拿到基线**的源（`harvestParked`）不得退回
+  普通预热——否则白拿第三次 boot 并同样长期占用唯一槽位；托管 dsh **终态停机或
+  瞬态 starting/restarting** 的 gateway 源（问题 B 的投影事实，`managedRuntimeUnusable`）
+  不预热/不收割——壳 boot 必然 503，只白烧尝试次数；用户点开正在收割的视图 = 采用（撤销收割意图，绝不回收）；来源退役时
+  账本同源收敛。稳态仍是 ≤1 个后台壳（与预热共享槽位）。**收割另有独立预算线**
+  （2026-12 复查）：用户保留的隐藏温壳会让普通预热的槽位预算恒为 0（retention
+  只保 1 个隐藏壳），而收割壳是瞬时的（推送即回收 / 仅最后一个保留 / 有截止与
+  放弃上限），不能被它永久挡死——否则用户点开过任何来源之后，后变 ready 的来源
+  永远停在兜底视图；代价是最坏多一个隐藏壳（用户温壳 + 收割壳）在收割窗口内共存。
+  **代价与已知取舍**：
+  首启每个 ready 来源各付一次后台 boot（N 次，串行于全局 boot 链——启动窗口内
+  用户首次点击的排队概率上升，最坏仍受 60s boot 预算约束）；**最后收割的壳被保留
+  为温壳**（不再额外付一次预热 boot，且该源的挂载期状态事实——pending/完成点
+  ——保持在线），但它一旦遇到新的收割候选必须**让位**
+  （`shouldReclaimHarvestedShell`）——否则温壳会以 `autoPrewarmed` 身份长期占住
+  唯一槽位，后变 ready 的来源永远拿不到基线。
 
 ## 3. 桥接层（chamberBridge，renderer 共享单例）
 
-放在自研侧边栏包的 `shared/` 下；chamber App 层（main entry）与侧边栏插件
-（chamber bundle entry）共同 import，vite 共享 chunk 保证运行时单例。
+放在自研侧边栏包的 `shared/` 下；chamber App 层（main entry）、侧边栏插件
+（chamber bundle entry）与 ui-layout fork（文档级主题投影）共同 import，
+vite 共享 chunk 保证运行时单例。
 
 ```ts
 interface ChamberServerWorkspace {
@@ -186,17 +257,23 @@ export const chamberBridge: {
   publish(servers: ChamberServerAggregate[]): void        // App 层调用
   requestOpenSession(sourceId: string, sessionId: string): void
   onOpenSession(listener: (req: OpenSessionRequest) => void): () => void
+  reportOpenSessionOutcome(outcome: OpenSessionOutcome): void  // App 层调用：一次打开尝试的终态回报（失败带文案）
+  onOpenSessionOutcome(listener: (outcome: OpenSessionOutcome) => void): () => void  // 侧边栏订阅：失败行内呈现/成功清残留
   requestRefresh(sourceId: string): void                  // 侧边栏动作成功后调用
   onRefresh(listener: (sourceId: string) => void): () => void  // App 层订阅
+  requestSessionListRefresh(sourceId: string): void       // design 24 §20：请求该来源挂载 ctx 重跑官方 session.list（purge 幽灵行收敛）
+  onRequestSessionListRefresh(listener: (sourceId: string) => void): () => void // 各挂载 ctx 的 sidebar 插件订阅；仅 chamberInstanceId === sourceId 者动作
   requestActivateSource(sourceId: string): void           // 点击来源分组头调用
   onActivateSource(listener: (sourceId: string) => void): () => void  // App 层订阅
-  registerInstanceRuntimeProducer(sourceId: string, sourceFingerprint: string): { // 每个已挂载 ctx 一代生产者
+  registerInstanceRuntimeProducer(sourceId: string, sourceFingerprint: string,
+                                  bootGeneration?: number): { // 每个已挂载 ctx 一代生产者（代际栅栏）
     report(report: InstanceRuntimeReport): void         // token 命中才发布
     clear(): void                                       // generation-safe teardown
   }
   onRuntimeReport(listener: (sourceId: string, report: InstanceRuntimeReport | undefined,
                              sourceFingerprint: string | undefined) => void): () => void
-  registerInstanceSnapshotProducer(sourceId: string, sourceFingerprint: string): { // 每个已挂载 ctx 一代生产者
+  registerInstanceSnapshotProducer(sourceId: string, sourceFingerprint: string,
+                                   bootGeneration?: number): { // 每个已挂载 ctx 一代生产者（代际栅栏）
     report(snapshot: InstanceSnapshot | undefined): void // undefined = baseline 不完整，恢复兜底
     clear(): void                                         // generation-safe teardown
   }
@@ -208,12 +285,19 @@ export const chamberBridge: {
   clearPluginDiagnostic(sourceId: string): void
   getPluginDiagnostics(): Readonly<Record<string, PluginGraphDiagnostic>>
   onPluginDiagnostic(listener: (sourceId: string, diagnostic: PluginGraphDiagnostic | undefined) => void): () => void
+  // 活动视图事实（2026-12，design 06 §4.6）：文档级状态（主题投影、后续的
+  // lang 投影）只有活动视图的实例可以写，App 是「谁在屏上」的唯一权威。
+  setActiveSource(sourceId: string | undefined): void     // 同值重发为 no-op；undefined = 未发布
+  getActiveSource(): string | undefined                   // 未发布时 undefined（消费者 fail open）
+  onActiveSource(listener: (sourceId: string | undefined) => void): () => void  // 仅变化时通知
 }
 ```
 
 **App 层（renderer main entry）写入职责**：
 - 启动即 auto-start 本地实例（连接行不存在则 `POST /api/connections`）；
   按注册表 auto-connect 远程实例（`desktopSsh.connect`）。
+- 活动视图发布：`useLayoutEffect` 在**绘制前**把 `activeView` 写入
+  `setActiveSource`（延迟到 passive effect 会先画一帧旧主题）。
 - 状态合并发布：控制面 `/health`（health-events 推送流）+
   `/api/connections`（30s）+ desktopSsh status 推送（onStatusChanged）+
   已挂载 ctx 的完整快照上报；仅无完整生产者的 ready 来源 30s unary 兜底 →
@@ -221,7 +305,9 @@ export const chamberBridge: {
   收敛生产者同内容去重后的聚合空窗。拉取失败的来源带 `aggregateError` 文本发布。
   每行同时携带当前权威 `sourceFingerprint`；共享发布签名必须纳入该字段，
   使“同 id、其余投影不变”的 replacement 仍会通知来源所有者。
-- 订阅 `onOpenSession` → 激活对应来源视图 + `openInstanceSession`（§4）。
+- 订阅 `onOpenSession` → 激活对应来源视图 + `openInstanceSession`（§4）；
+  每次尝试 settle 后经 `reportOpenSessionOutcome` 回报所有侧边栏 shell
+  （成功清残留失败文本；失败携带 §4 终态报告文案，行内呈现见 §2.2）。
 - 订阅 `onActivateSource` → 仅切换活动来源视图（不打开会话）。
 - 订阅 `onRefresh` → 每个 live 来源无条件执行一次即时 mutation-pull（与
   §2.3 2026-12 勘误一致：mounted 来源 host-store 推送为主、requestRefresh
@@ -325,7 +411,18 @@ export const chamberBridge: {
   清 timer 并 reject 全部 holder-owned 在途 dispatch。boot/dispose/总截止时间到达同样
   loud reject，旧 runtime 永不能在 teardown 后迟到执行 open；runtimeCtx/list/open 的
   getter/调用若抛任意 hostile value，也必须经同一 never-throw 描述器 reject 并清理
-  timer/cancel handle，不能把 timer-driven open 永久挂起。
+  timer/cancel handle，不能把 timer-driven open 永久挂起。**sessions 服务就绪与列表
+  可见性共用同一轮询预算（2026-09 修复登记）**：boot settle（loader.await +
+  assertEntriesActive）只等 entry **根** fiber，`ctx.sessions` 由 composite 的
+  **子** fiber 提供（child 在异步 api-remotes 命名空间 mount 后才激活）——queued
+  open 的 flush（entries.set 同刻）或就绪窗内的点击可能落在 holder 已注册而
+  sessions 服务尚未注册的窗口。该状态是**瞬态**：poller 按 400ms 节奏在 deadline 内
+  等待服务就绪与目标会话可见，绝不 fail-fast；deadline 到达才 loud reject，且区分
+  两种终态报告（服务从未就绪 → 「boot 未完全就绪」；服务就绪但会话始终未列出 →
+  「等待超时」）。终态失败文案经 `reportOpenSessionOutcome` 回报侧边栏并在
+  目标会话行内呈现（§2.2），不再是 console-only。修复前 fail-fast 使跨服务器
+  冷壳/回收重 boot 后的首次会话点击在视图已切换后瞬间失败，用户落在目标服务器
+  UI 而未选中会话（呈现为该 workspace 的新对话输入框）。
 - **每 entry Context 私有注入（2026-08-28 N-ctx 复核）**：`AppWebEntry`
   提供 `configureContext(ctx)` seam；shell.ts 创建 entry 时用闭包把该视图自己的
   `chamberInstanceId`、`chamberBasePath` 与主进程签发的
@@ -451,8 +548,10 @@ export const chamberBridge: {
     立即退役并 dispose 所有受影响的已选/未选缓存；异步装配结果提交前再校验
     捕获的 proof 与当前 roster，迟到的旧代结果只 dispose、不进入缓存。
   - `packages/dsh-chamber-client-ui-layout/`——官方 ui-layout 壳插件的 chamber
-    fork（仅替换 layout store：`sidebarWidth` 经侧边栏共享 view-prefs store
-    播种/回写，钳位 [264,420]，覆盖 id；替换官方 ui-layout 注册，见设计 06）。
+    fork（①替换 layout store：`sidebarWidth` 经侧边栏共享 view-prefs store
+    播种/回写，钳位 [264,420]，覆盖 id；②**文档级主题投影的唯一写入者**：
+    全页单例 `ThemePresenter` + 按活动视图门控的 `document-theme.ts`，见设计 06
+    §4.6；替换官方 ui-layout 注册）。
   - `packages/dsh-chamber-client-ui-git/`——设计 08 的 chamber 内建 Git
     Worktree 插件：占用 `sidebar.git`，页面级 singleton 以 30s 单飞读取各实例
     topology，并编排 create/workspace/session 与 Git-first remove saga；它不把

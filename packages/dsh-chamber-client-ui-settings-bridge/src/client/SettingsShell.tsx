@@ -564,9 +564,21 @@ function SettingsPanel({
             ) : selectedId === undefined || selected === undefined ? (
               <p className={css.placeholder}>{t('noServers')}</p>
             ) : !selected.connected ? (
-              <div className={css.unavailableView}>
+              /* role="alert"：该分支是"插入即带内容"的整块替换，polite 的
+                 status 不会被播报（2026-12 复查 MINOR）。 */
+              <div className={css.unavailableView} role="alert">
                 <p className={css.placeholder}>
-                  {selected.id === LOCAL_INSTANCE_ID ? t('localNotReady') : t('targetUnavailable')}
+                  {selected.id === LOCAL_INSTANCE_ID
+                    ? t('localNotReady')
+                    : selected.managedRuntimeDown === true
+                      // 2026-12（问题 B）：隧道正常、托管 dsh 停机——"不可达"
+                      // 的说法不准确，改说清是哪一层停了。
+                      ? t('managedDshDown')
+                      : selected.kind === 'gateway'
+                        && (selected.phase === 'starting' || selected.phase === 'restarting')
+                        // 瞬态同理：不是"不可达"，只是还没起来（2026-12 复查 MINOR）。
+                        ? t('managedDshStarting')
+                        : t('targetUnavailable')}
                 </p>
                 <button type="button" className={css.inlineAction} onClick={() => onSelectSection(CONNECTIONS_SECTION_ID)}>
                   {t('manageConnections')}

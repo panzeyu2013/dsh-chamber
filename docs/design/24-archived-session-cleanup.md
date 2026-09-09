@@ -18,6 +18,23 @@
 > 归档管理器对话框（列示已归档会话 + 逐条/多选/清空全部）。§3/§5/§6 的
 > 零参与确认按钮流表述以 §17 为准。
 >
+> **2026 用户修订（§18/§19，delete-archived 分支）**：归档管理器移除独立
+> 「删除全部」按钮——整集清理必须先显式全选再确认带计数的「删除选中」，
+> purge 永远携带明确 id 列表；降级/pending 视图不再提供任何删除动作；
+> 列表按工作区分组、可折叠（§19）。§17.3/§17.6 中「删除全部仍可用/放行/
+> 去计数」的表述以 §18/§19 为准。§19 条目 6–9（缩进容器化、整体匹配轮、
+> 全面重构轮、四方分面评审处置轮）为合入后继续修订——wire/UI 表述以
+> §19 最新条目为准；§20（purge 幽灵行收敛轮）为最新修订，交互表述以
+> §20 为准。
+>
+> **2026 purge 幽灵行收敛轮（§20，delete-archived 分支续）**：purge 后已删
+> 会话以普通行浮出侧边栏、点击报 `session/not-found` 的实机缺陷——根因为
+> 官方客户端 ctx 会话行 summaries 仅连接代数刷新、purge 事件为 no-op，
+> 归档集合移除后行失去过滤覆盖；§20 落地「官方会话列表刷新 seam」
+> （chamberBridge `requestSessionListRefresh` + App 归档集合收缩检测 +
+> 对话框 settle 即时请求），并修正 §15-② 的「chamber 可见行不受影响」
+> 断言（实机证伪）。
+>
 > v2/v3 修订：2026-12 由三个只读 subagent 分面评审（客户端 UI/wire、宿主
 > 域与分发接线、契约治理）+ 作者自审 + 一轮 v2 合规复核（闭合矩阵 12 项
 > 全部核实），结论零 Blocker；全部 [Major] 与高优 [Minor] 已并入本版
@@ -262,7 +279,10 @@ vendor 源码）+ 薄 Remote 门面（`index.ts`），编排逻辑：
   调用——归档管理器列表来自会话快照投影——保留为宿主 preview 端点的已测
   客户端半面）/ `purgeArchivedSessions(client, sessionIds?)`（长预算，常量
   `PURGE_CALL_TIMEOUT_MS = 5 * 60_000`，放 instance-api.ts；`sessionIds`
-  可选子集过滤，见 §17）；
+  可选子集过滤，见 §17）。**wire 上游空闲窗（2026-09 修订）**：代理豁免名单
+  `LONG_RPC_PATHS` 已含 `/api/archiveCleanup/purge`（03 §3.4），purge 的
+  上游静止容忍由 30 分钟保险丝覆盖——5 分钟客户端预算成为唯一先到截止，
+  其诚实超时文案（下条）不再被代理 45s 窗的误导性 504 抢先；
 - **超时文案**（诚实，zh 硬编码先例）：「清理超时——可能仍在进行，请稍后
   重新预览/重试（重复执行是安全的）」；预览超时给「预览超时，请重试」；
 - 503 `instance_unavailable` 沿用 `wrapWireError` 既有文案与 `isInstanceUnavailable`
@@ -285,7 +305,9 @@ vendor 源码）+ 薄 Remote 门面（`index.ts`），编排逻辑：
 > **2026-09 修订（§17）**：本节的 v1 交互流（preview → window.confirm →
 > purge 全部 + header 下错误槽位）已被**归档管理器对话框**取代——§6 正文
 > 保留为 v1 历史契约与 UI 位置基线（trash 按钮仍在同簇同门控位置，点击改
-> 为打开管理器）。交互细节以 §17 为准。
+> 为打开管理器）。交互细节以 §17 为准（§17 又经 §18/§19 修订：无独立
+> 「删除全部」、列表按工作区分组折叠——交互细节以 §18/§19 为准；§19
+> 条目 6–9 续修订：缩进、匹配轮、两段式确认重构与分面评审处置）。
 
 位置与行为（`packages/dsh-chamber-client-ui-sidebar/src/client/SidebarRoot.tsx`）：
 
@@ -653,10 +675,13 @@ aria-busy、confirm 零值/单复数拆键、truncated 端到端、写时 livene
 
 **文档债务（登记；①③ 已于 2026-12 合入修订轮闭合）**：① §6 正文已按
 实现对齐（部分失败走 `role="alert"` 错误行 + step3 复查仅 connected 的
-E-m2 理由入文）；② 占位/幽灵窗口措辞：vendor `sessionIds` 为内存
-header 索引派生，内容删除后至重启/下次实体写前，官方 workspaceView 仍含
-占位 id（chamber 可见行不受影响；A-区/上游 wire 前置登记——§14 残余
-定案后该窗口仅指 UI 幽灵行，与 archived 集合无关）；③ §3 错误码枚举
+E-m2 理由入文）；② **占位/幽灵窗口措辞（2026 实机证伪并修正，见 §20）**：
+vendor `sessionIds` 为内存 header 索引派生，内容删除后至重启/下次实体写
+前，官方 workspaceView 仍含占位 id——原断言「chamber 可见行不受影响」不
+成立：§14 残余定案后 purge 收尾把完成树根移出 archived 集合，官方客户端
+ctx 的会话行 summaries（仅连接代数刷新）在集合移除后不再被归档过滤覆盖，
+被删会话以普通行浮出、点击即 `session/not-found`；§20 的会话列表刷新
+seam 为该窗口的收敛机制；③ §3 错误码枚举
 已并入 `purge-capacity`/`archive-set`/`truncated`（含 65,536 上限与
 不可重试登记，Minor-5）；④ desktop 激活恒全量 vs seed 产物门为设计内取舍
 （构建期 preflight 兜底），登记不修；⑤ seam 退役机制化：上游 unarchive/
@@ -726,7 +751,11 @@ archive-cleanup；host 包提交态 dist 随代码重建（esbuild 0.25 确定�
 
 **编号说明**：§13 空号（历史修订留空）；§14/§15 为合入前实现与评审登记，
 §16（2026-09 合入后修复轮）接于其后；§17（2026-09 修订轮：M4 本地实跑 +
-归档管理器 revision）为最新修订，wire/UI 表述以其为准。
+归档管理器 revision）为 wire/UI 表述基线；§18（2026 用户修订轮：移除
+独立「删除全部」按钮）与 §19（2026 分组实施轮：工作区分组折叠）为最新
+修订——§17.3/§17.6 的「删除全部」相关表述以 §18/§19 为准；§19 条目
+6–9（合入后修订：缩进容器化、整体匹配轮、全面重构轮、四方分面评审处置
+轮）续接——交互/样式表述以 §19 最新条目为准。
 
 **§16 补记（2026-09 第二波回扫）**：三路只读回扫零新 Blocker/Major；本域
 复核结论——`assertHeaderShape` 谓词严格弱于 pinned vendor 写入期校验
@@ -742,7 +771,9 @@ rerun 收敛互操作经代码追踪成立；dist 已镜像。补强落点：`em
 用户驱动 revision：M4 实机验证在真实本地 dsh 实例执行（此前 M4 待验），
 同时按用户要求把交互从「v1 server 行 hover 确认按钮流（preview →
 window.confirm → purge 全部）」升级为**归档管理器对话框**（列出具体已归档
-会话，支持逐条 / 多选 / 清空全部），并据此修订宿主 wire。处置登记：
+会话，支持逐条 / 多选 / 清空全部〔2026 修订：独立「清空全部」已随 §18
+退役，整集删除 = 显式全选；列表按工作区分组折叠见 §19〕），并据此修订
+宿主 wire。处置登记：
 
 1. **删除失效根因（M4 实跑发现并修复）**：`binding.ts` `deleteSessionContent`
    先解构 `const locate = persistence?.locate` 再脱绑调用——官方
@@ -767,21 +798,23 @@ window.confirm → purge 全部）」升级为**归档管理器对话框**（列
    archived 后代 + orphan 同一收尾批量写移除）。
 3. **归档管理器 UI（替代 §6 v1 流程）**：server 行 trash 按钮 → 打开
    对话框：列出该源已归档会话（标题 + 目录标签），逐行 checkbox 多选 +
-   全选，逐行删除、删除选中、删除全部；销毁动作保持 confirm 门（不可恢复
-   文案，逐条/选中/全部三形态）；运行结果内联呈现（role=status/alert）：
-   完成摘要、运行跳过、部分失败（明细前 3 条）、busy、域缺失 404、超时/
-   网络中断诚实文案——错误绝不静默。v1 的 header 下错误槽位、
-   purgeInFlight/cleanupNotes 状态与 preview→confirm 流整体移除。
-   数据源：**对话框不发任何新读取**——行元数据（id/title/cwd/updatedAt）
-   走 bridge 新投影字段 `ChamberServerAggregate.archivedSessions`
+   全选，逐行删除、删除选中、删除全部（2026 修订：独立「删除全部」按钮
+   **已移除**，整集清理 = 显式全选 + 确认删除选中，见 §18）；销毁动作保持
+   confirm 门（不可恢复文案，逐条/选中两形态）；运行结果内联呈现
+   （role=status/alert）：完成摘要、运行跳过、部分失败（明细前 3 条）、
+   busy、域缺失 404、超时/网络中断诚实文案——错误绝不静默。v1 的 header
+   下错误槽位、purgeInFlight/cleanupNotes 状态与 preview→confirm 流整体
+   移除。数据源：**对话框不发任何新读取**——行元数据（id/title/cwd/
+   updatedAt）走 bridge 新投影字段 `ChamberServerAggregate.archivedSessions`
    （`deriveArchivedSessions`：快照 sessions ∩ archivedSessionIds，仅元
    数据、不读会话内容；服务器端官方行本就携带归档行，chamber 只是此前在
    可见性层丢弃）。**归档集权威性三态**（2026-09 评审修复轮）：
    `archiveSetKnown:true`（挂载基线）的空列表 = 真「无已归档」；unary 兜底
    快照（KNOWN DEGRADATION，无 wire 源）标记 `archiveSetKnown:false` →
-   对话框走**降级分支**：不声称空态、不列行，仍保留「删除全部」
-   （`purge(undefined)` 与列表无关，确认文案不含计数）；快照未落地的
-   `pending` 分支显示加载/拉取错误并同样放行「删除全部」（错误态）。
+   对话框走**降级分支**：不声称空态、不列行；2026 修订后此分支**不再提供
+   任何删除动作**（原「仍保留删除全部」随独立按钮一并退役——见 §18）；
+   快照未落地的 `pending` 分支显示加载/拉取错误（原「错误态放行删除全部」
+   同样退役）。
    `serversProjectionSignature` 纳入 archivedSessions 与 archiveSetKnown
    保证 purge 后 bridge 重发布、对话框列表随刷新收敛（选中集按幸存行
    修剪；签名内容只取 id+updatedAt——归档行标题/目录无任何 UI 变更面）。
@@ -807,10 +840,10 @@ window.confirm → purge 全部）」升级为**归档管理器对话框**（列
    - **版本错配实证**：generic gateway `assertExactArguments` 对描述符外
      键**严格拒绝**（复刻实例实测 `unexpected "sessionIds"`）——新客户端子集
      请求到旧宿主绝无「静默全量删除」分支；该 `gateway/arguments-invalid`
-     在 purge wrapper 重映射为 zh 重启提示（删除全部仍可用）；
+     在 purge wrapper 重映射为 zh 重启提示（删除全部仍可用）〔2026 修订：该括注后缀已随 §18-3 移除——提示仅建议重启 dsh〕；
    - **UI 收口**：关闭策略统一（Esc/X/遮罩任意时刻可关——关闭不取消宿主
      purge、requestRefresh 仍无条件发出）、Tab 焦点圈闭 + 关闭焦点还原、
-     snapshot 拉取错误呈现（替代永恒 loading）、删除全部确认文案去计数
+     snapshot 拉取错误呈现（替代永恒 loading）、删除全部确认文案去计数〔2026 修订：独立「删除全部」与去计数确认已随 §18 退役〕
      （宿主删除集可大于列表：subagent 成员从不入列）、空列表（权威）时
      disabled 与 v1 一致；
    - **死代码/注释清理**：旧 `confirm.purgeArchived*` locale 键、
@@ -821,3 +854,355 @@ window.confirm → purge 全部）」升级为**归档管理器对话框**（列
      独选（祖先不删）、子集 F1 树中止、重复过滤 id、畸形/空过滤零读取、
      `[]` 载荷形状端到端、旧宿主拒绝 zh 文案、serversProjectionSignature
      参与 archivedSessions/archiveSetKnown 的回归测试。
+
+## 18. 2026 用户修订轮：移除独立「删除全部」按钮（delete-archived 分支）
+
+用户驱动修订（delete-archived 分支，2026）：归档管理器当前同时存在
+「删除选中（N）」与「删除全部」两个破坏性按钮——**移除独立「删除全部」**
+按钮，整集清理的唯一路径 = 用户先显式勾选全选、再确认带计数的
+「删除选中（N）」。同时按用户要求落地「按工作区分组、可折叠」的列表形态
+（§19）。本节取代 §17.3/§17.6 中「删除全部
+仍可用/放行/去计数」的一切表述。处置：
+
+1. **UI 语义收窄为「列表即唯一可删面」**（ArchiveManagerDialog.tsx）：
+   footer 只剩条件渲染的「删除选中（N）」（列表视图且选中数 > 0 时）；
+   `deleteAll`/`deleteAllDisabled` 与「删除全部」按钮整体移除；
+   `runPurge` 收窄为必带 `sessionIds` 数组——UI 不再有任何
+   `purge(undefined)`（整集）调用路径；对话框模块文档的 VIEW MODES 同步
+   改写。全选 checkbox（顶部行）保留且语义不变：勾选 = 选中**当前列出的
+   全部行**，随后「删除选中」的 confirm 携带实际计数（`confirmSelected`），
+   文案对所选行树（含其子代理内容）负责——不再有「不限于当前列表」的
+   整集承诺。
+2. **降级/错误视图不再放行删除**：`archiveSetKnown:false`（unary 兜底，
+   KNOWN DEGRADATION）与快照未落地（loading/拉取错误）分支只呈现说明性
+   文本（degraded/listUnavailable/loading），**无任何破坏性动作**——原
+   「删除全部是列表无关的逃生口」（§17.3，`purge(undefined)` 直击权威
+   整集）随按钮一并退役。自愈路径保留：来源的挂载基线就绪后 bridge 重新
+   发布，对话框从 server prop 自动重新派生为列表视图（无需重开）。登记
+   的范围后果：**无挂载基线的来源（从未推送/未挂载窗口，含部分远程形态）
+   在其降级窗口内无法清理任何已归档内容**（v1 能力回归，用户决策接受；
+   若未来需要，须等 unary 侧出现归档集 wire 或上游 delete wire——§11
+   退役条件同源）。
+3. **版本错配提示对齐**（instance-api.ts）：旧宿主（零参 purge）拒绝子集
+   过滤的 zh 重启提示删除「（删除全部仍可用）」后缀——新 UI 下旧宿主拒绝
+   管理器的**每一次**按条删除，提示如实改为仅建议重启 dsh；wrapper 的
+   `undefined`（整集）legacy 形状**保留**为已测的 wire 层契约（测试仍覆盖
+   「no filter keeps the zero-arg shape」），但注明无 UI 调用者。
+4. **locale 清理**：`archive.manager.deleteAll`/`archive.manager.confirmAll`
+   两键从 zh/en 双字典移除（typecheck:sidebar 的 satisfies 对称门禁）；
+   `degraded` 文案改写为
+   「基线就绪后自动列出、届时可勾选/全选删除」，不再承诺「仍可删除全部」。
+5. **测试面**：既有单测无直接引用已删 locale 键；`deriveArchivedSessions`/
+   `serversProjectionSignature`/purge 转发测试不变（wrapper 契约未动，仅
+   注释与文案）；旧宿主拒绝用例的断言（`includes('版本过旧')`）继续成立。
+   组件行为（无独立删除全部按钮、降级分支无动作）为对话框渲染面，验证 =
+   typecheck + 人工目检（登记 STATUS 的打包版 UI 目检腿一并覆盖）。
+
+**工作区分组方向（用户提出）**：已按 §19 实施落地（同轮：移除独立「删除
+全部」按钮——见上 1–5 与本段上一句）。
+
+## 19. 2026 分组实施轮：归档管理器按工作区分组、可折叠（delete-archived 分支）
+
+§18 同轮落地（用户批准修订方案；先经既有组件/样式 review——复用结论见
+下 4）。既有审查面：导航工作区折叠样式与 accent（同 css module 内可复用）、
+PluginDialog 多选行（跨包不可复用，仅交互先例）、官方 DisclosureRow
+（24px 设置流式行、title `flex:none` 不可省略号、无尾部插槽，语义不符，
+弃用）、官方 FoldToggle（带 hidden 计数的文字折叠钮、无 icon 槽，官方
+ui-workspace 用，弃用）、
+官方 Checkbox 不存在（原生 input + accent-color 为四插件共用惯例）。处置：
+
+1. **归属在 App 派生层计算**（derive.ts，零新增宿主读取、零 wire 改动）：
+   `ArchivedSessionMetaRow` 增可选 `workspace?: { id, title }`；
+   `deriveArchivedSessions` 建立归属索引——**权威成员关系优先**
+   （snapshot workspaces 的 sessionIds，registry header 索引：归档不摘除
+   成员、内容清理才自愈账目），其次**规范 cwd==path 回退**（尾分隔符
+   归一化的等值比较——`canonicalPathKey` 提升为模块级、与
+   projectInstanceSnapshot 的 cwd 合成共享同款文档化限制），两者皆不中 =
+   无归属（删除的 workspace 的孤儿会话 → 管理器「未分组」桶）。纯函数
+   `groupArchivedRows`（导出、node 单测）：组按**组内最新会话倒序**、
+   组内按 recency 倒序、未分组桶恒尾置（导航 trailing-bucket parity）。
+   `serversProjectionSignature` **无需加字段**：workspace 标题/成员变化已由
+   workspaces 块驱动重发布，归档行随之重派生。
+2. **对话框 UI**（ArchiveManagerDialog.tsx）：列表 = 顶部全选行（语义
+   不变：勾选 = 全部已列出行，**含折叠组**）+ 每工作区一个可折叠组段。
+   组头 = 组复选框（原生、部分选中经 ref 设 `indeterminate` 三态）+ 折叠钮
+   + 标题（600 字重、省略号）+ 「已归档 N 个会话」计数（复用 rowCount 键）。
+   折叠为**对话框本地视图态**（默认展开、不持久化、不与导航 folded 互扰、
+   只藏行不改选中）。折叠/全选/组选与「删除选中（N）」的关系不变：purge
+   仍只携带显式 id 列表。组头折叠钮复用**导航同款 chrome**：本 css module
+   的 `foldToggle/foldToggleFolded/foldToggleFolder/foldChevron/foldFolder`
+   类 + `workspaceAccentStyle(server.id, key, gitFlag)`（git flag 已加载时
+   同 seed——accent 与导航同工作区一致）；不整体复用 `.workspaceHeader`
+   （其 hover 隐计数依赖导航动作簇）。新增少量组段 css
+   （`.archiveManagerGroup*/…` + folder↔chevron hover 交换规则）。
+3. **locale**：仅新增 `archive.manager.groupSelectAria`（zh/en 成对）；
+   其余复用既有键（`workspace.expand/collapse`、`list.ungrouped`、
+   `rowCount`、`selectAllAria`…）。
+4. **测试/验证**：derive 侧新增 4 例（成员归属、cwd 回退 + 尾分隔符归一、
+   组序与未分组尾置、空输入与自洽排序）——sidebar 全套 **288/288 绿**、
+   `typecheck:sidebar` 绿、根 `typecheck` 唯一报错为 gateway 测试的
+   **既存漂移**（public-http.test.ts 缺 `longRpcRequests/longRpcTimeouts`，
+   与本轮无关）。对话框渲染面验证 = typecheck + 人工目检（登记 STATUS 的
+   打包版 UI 目检腿一并覆盖）。范围外不变：降级/错误视图无动作（§18-2）、
+   无搜索/恢复、rail/窄栏不做。
+5. **评审修复轮（2026，4 个只读 subagent 分面评审：逻辑正确性 / 完整性 /
+   代码质量与最优性 / a11y 与交互——Blocker 0、Major 1；作者裁决）**：
+   - **性能（Major M1，部分采纳）**：`deriveArchivedSessions` 位于渲染路径、
+     先于签名发布闸，空归档集/零命中行也建索引+排序 → 采纳零行快速路径
+     （`archivedSessionIds` 空或过滤零行直接返回，不建 Set/索引/排序）；
+     **App 侧按 identity-preserving aggregate 对象做每源派生缓存未采纳**——
+     跨 mounted push/merged pull 双生产路径的缓存失效管理复杂化收益面窄，
+     登记为后续轮候选（65k 规模+高频 derive 场景再现时再议）。
+   - **a11y/交互采纳**：顶部全选行补 indeterminate（与组头三态一致）；组
+     复选框在部分选中时显式 `aria-checked="mixed"`（HTML-AAM 对 native
+     indeterminate→mixed 无规范保证）；busy 整头 60% 变暗改为**仅复选框**
+     变暗（折叠钮 busy 期仍可用，视图态）；行删除钮与组折叠钮补品牌
+     `:focus-visible` 环；purge 刷新卸载聚焦行后焦点落 body 的**回焦 panel
+     兜底 effect**（非 trap）。
+   - **清理/注释/文案采纳**：instance-api.ts 降级 docblock 残留「keeps
+     whole-set purge available」与超时文案「重新预览」措辞、SidebarRoot
+     挂载注释旧三分法、zh degraded 文案补「逐行删除」、derive.ts 签名注释
+     补「无 UI 面可移动/改 cwd 归档行」论证；css hover-swap 规则并入导航
+     共享选择器表（消除同体两表）；derive.test.ts 补「成员关系优先于 cwd」
+     冲突 fixture（原 fixture 倒置实现也能全绿）。
+   - **复核后不改（登记理由）**：wrapper `undefined` 整集 legacy 形状保留
+     （已测 wire 契约、注明无 UI 调用者）；组内排序保留为纯函数自洽防御
+     （注释点明代价）；`listVisible` 的 `rows.length>0` 并非冗余（同派生
+     同时门控 footer，化简会让权威空态露出 disabled 删除钮）；折叠钮 aria
+     label 追加组名与初始焦点改列表首控件暂缓（需打包版目检确认读屏语序，
+     避免 locale 相关标点拍脑袋）；STATUS.md 登记按仓库惯例随合入 commit
+     收口（§16 先例）。
+   - **文档对账**：§18-4 门禁表述改「typecheck:sidebar 的 satisfies 对称
+     门禁」（verify:i18n 只校验顶层双语文档对）；§17.6 两条历史 bullet 补
+     2026 原位标注；§6 引言与 §17 导语补第三跳标注；design 01 地图行同步。
+     修复后验证：`typecheck:sidebar` 绿、`test:sidebar` 全绿（冲突 fixture
+     并入既有成员归属用例，用例总数不变）。
+
+6. **session/workspace 缩进关系修正（2026 用户提出，delete-archived 合入
+   main 后；实现经 §19-7 匹配轮复核改为容器式）**：分组列表的 session 行
+   相对组头**嵌套一级**：每个展开组把行渲染进专用嵌套容器
+   `.archiveManagerGroupRows`（`padding-left: 24px`，祖先侧缩进——见
+   §19-7 对结构选择器/子级 margin 方案的取舍记录）。
+   几何：组头标题 x = 8 pad + w + 8 gap + 16 折叠钮 + 8 gap = **40 + w**；
+   嵌套行标题 x = 24 step + 8 pad + w + 8 gap = **40 + w**——原生 checkbox
+   宽度 w 在两边抵消，任何平台下**行标题列与所属组标题精确同列**，层级由
+   checkbox rail 台阶（8 → 32）+ 折叠钮表达。全选行与组头保留外列；未分组
+   桶行同规（其合成组头下同样嵌套）。修正前组头标题因 checkbox+折叠钮反而
+   比下方 session 标题靠右 ~24px（父子缩进倒置读法）；本规则同时修正该倒置，
+   session 不再比自己的 workspace 标题更靠左。
+
+7. **dsh/仓库整体匹配轮（2026，用户发起：选择器设计 + 样式/交互/界面风格
+   对照审阅；代码落地 + 维持项登记）**：
+   - **缩进选择器方案（答复用户问题）**：`.archiveManagerGroup >
+     .archiveManagerRow { margin-left }`（结构子选择器 + 子级 margin）**不是
+     行业最优做法**——行类 `.archiveManagerRow` 同时被顶部全选行复用，层级
+     语义由 DOM 位置推导：今后任何包裹/虚拟化插入都会静默破坏规则（双向）；
+     margin 式缩进把「层级」摊到每个子行上。最优静态树做法 = **祖先容器
+     padding 缩进**（一次声明、行类与层级无关、包裹/虚拟化天然兼容；官方/
+     仓库惯例里树形容器与行级专用类并存，但复用行类场景下容器是唯一不
+     依赖位置的方案）。已按此落地（item 6 重述）。
+   - **危险确认门**：对照官方原语 `RiskConfirmation`（Modal 家族、勾选
+     acknowledge 才可确认；settings-bridge PermissionRow 已采用——官方设置
+     面先例）。本对话框**维持 window.confirm**：官方 Modal 每次 open 都挂
+     document 级 Escape 监听且互不知晓 → 确认弹层叠在管理器 Modal 之上时
+     **一次 Esc 会同时关闭两层**；双 mask 叠影；仓库内无嵌套 Modal 先例
+     （PermissionRow 的确认不在任何 Modal 内）。若上游 Modal 获得层级
+     （stack/优先级/Escape 仲裁），再迁 RiskConfirmation——登记不排期。
+     **〔原位注：本条已由 §19-8 取代——全面重构轮在本模块范围落地
+     对话框内两段式确认（非 OS 弹窗、非第二层 Modal），维持结论中的
+     嵌套 Modal 风险分析仍然成立；以 §19-8/§19-9 为准。〕**
+   - **键盘焦点环常数对齐**：行删除钮/组折叠钮 focus-visible 由
+     `outline-offset: -1px`（内嵌环）改为模块 `.actionIcon` 标准 +1px 外扩
+     （原注释声称跟随 actionIcon 但常数并不一致——修正注释与实现；§19-8
+     重构后行删除钮直接并入 .actionIcon 基类，专属环表删除）。
+   - **复核维持项（理由登记；§19-8 已落地其中可执行者）**：danger 动作 =
+     官方 Button outline + error ink（仓库无 danger variant 先例，ui-git
+     remove-confirm 惯例）；原生 checkbox + accent-color（官方无 Checkbox
+     组件，§19-2 记录）；footer Button/icon/字体均走 alias token；组头
+     chrome 复用导航 fold 类已并入共享选择器表；zh 内联文案 §5 纪律；
+     spinner 13px（导航 12px）随所在行高，维持。
+   - **验证**：`typecheck:sidebar`、`test:sidebar`、`build:renderer` 绿
+     （本轮代码改动）；视觉确认仍待打包版目检（STATUS 登记的打包版 UI
+     目检腿，design 24 §16/§17 先例）。
+   - **武装态行为补记（§19-9 评审追认，实现早已如此）**：武装期关闭对话框
+     （X/mask/非武装态 Esc）只丢弃武装、绝不删除任何内容（与关闭期运行中
+     purge 照常继续的语义区分开）；武装期 footer「删除选中」隐藏（防双
+     入口）；bridge publish 把列表收成空/降级视图时风险条仍在（渲染在
+     VIEW MODES 条件外）——accept 仍按冻结 id 执行，宿主交集语义保证安全
+     方向，空结果走「没有可删除…」兜底。
+
+8. **全面重构轮（2026 用户发起：按最优方案重构，随后复核）**——落地
+   item 7 中可执行项 + 交互重构：
+   - **两段式确认门替换 window.confirm（本模块范围）**：破坏性动作不再走
+     OS 原生弹窗，也不叠第二层 Modal（官方 Modal 每开一次注册一个
+     document 级 BUBBLE Escape 监听、互不知晓——叠层时一次 Esc 双关，且
+     无官方嵌套先例，见 item 7）。改为**对话框内武装态**：`confirming`
+     状态（id 列表在武装瞬间冻结 + 单行标题或计数文案）→ 行输入全冻结
+     （`inputLocked`：checkbox/行删除钮/全选禁用；折叠钮保持可用——
+     视图态）+ 面板顶部**风险条**（官方 Warning 图标 error 墨 +
+     color-mix error 9% 底 + 陈述式不可恢复文案 + 官方 Button sm 对：
+     取消/确认删除）。取消或 **Esc 解除武装**（Esc 经 document CAPTURE
+     相位 stopPropagation，官方 Modal 的 bubble 监听不触发——武装期 Esc
+     绝不关对话框；解除后 Esc 恢复默认关闭语义）；确认删除 → 解除武装 →
+     `runPurge(冻结 ids)`。焦点：武装落**取消**（条内首个 button，安全
+     默认）；取消/Esc 焦点回**武装源控件**（行删除钮/footer 钮，`isConnected`
+     兜底 panel）；确认后条卸载致焦点落 body → busy/rows 双依赖的既有
+     焦点兜底效应接管。文案改为陈述式（原「…继续？」为对话框问句残余），
+     新增 `archive.manager.confirmDelete` zh/en 对；`role="alert"` 播报
+     风险条。单选与多选共用同一条，只换主体文案。
+   - **行删除钮并入模块 `.actionIcon` 家族**：删除 24px 专属样式四段
+     （基类/hover bg+error/disabled .5/焦点环）→ `<button class="actionIcon
+     actionIconDanger">`：20px 命中 + 纯色 hover 是模块图标按钮语言（行
+     pill 已承 hover 底）；`actionIconDanger` 修饰 hover 转 error ink；
+     disabled .42 与焦点环随基类（无第二张表可漂移）。
+   - **hover 重复规则并入导航共享表**（消除同体两表，item 7 曾登记维持）：
+     `.workspaceHeader:hover` + `.archiveManagerGroupHeader:hover` 合一；
+     `.sessionRow:hover` + `.archiveManagerRow:hover` 合一（含全选行）——
+     值与 token 相同，沿 §19-5「folder↔chevron 共享规则表」先例。
+   - **风险登记（如实）**：两段式交互（武装/解除/焦点/Esc 语义）与
+     actionIcon 视觉收窄（24→20、hover 去底）仅经 typecheck/单测/构建
+     验证——对话框渲染面无组件测试基建（§19-4 已登记同况），视觉与键盘
+     实感待打包版目检（STATUS 登记的打包版 UI 目检腿）；若 Esc 捕获与
+     其他 surface 的 capture 监听冲突，回退点为武装期仅阻止对话框关闭
+     （去掉 stopPropagation 全局语义，改由 disarmConfirm 显式拦截）。
+
+9. **四方分面评审处置轮（2026，用户发起「subagent 从正确性/完整性/最优性
+   等角度彻底检查」；4 个只读 subagent：逻辑正确性 / 完整性 / 代码质量与
+   最优性 / a11y 与交互——结论：正确性 1 Major + 2 Minor、完整性零
+   Blocker/Major（doc 层若干 Minor/Nit）、最优性 2 Minor + nits、a11y
+   1 Major + 6 Minor）**：
+   - **Major（三方互证）——取消/Esc 焦点回退在行删除路径静默失效**：
+     `disarmConfirm(true)` 原同步调用 `opener.focus()`，但武装期 opener
+     仍带 `disabled`（inputLocked，解除提交前不落）→ 对禁用控件的 focus()
+     是规范 no-op → 焦点落 body 且 `[rows,busy]` 守卫不触发。修复：解除
+     后经 `requestAnimationFrame` 延迟回焦（提交后 opener 已重新可用），
+     frame 内重查 `isConnected`，失联则落 panel（关闭窗口期自身卸载时
+     no-op）；footer 路径经 isConnected 兜底本就安全。accept 无需显式回焦
+     （busy 翻转 + 守卫接管，a11y 分面确认）。回归验证 = 打包版键盘腿
+     （行删除武装 → Esc/取消 → 焦点在行删除钮；accept → panel）。
+   - **Minor 修复（本轮落地）**：`toggle/toggleAll/toggleGroup` 补
+     `confirming` 守卫（武装冻结不再只靠 disabled 属性）；焦点丢失守卫
+     去掉 `rows === undefined` 早退（列表视图消失后的 accept 也能落
+     panel）；`server === null` 时自动解除武装（旧冻结 id 不得随新列表
+     复现）；`role="alert"` 从风险条容器移到**纯文本消息 span**（容器首钮
+     同 commit 抢焦点 → SR 播报竞态，APG 文本性 alert 惯例）；全选主
+     checkbox 补显式 `aria-checked="mixed"`（组头三态 parity，HTML-AAM
+     无规范保证）；焦点环常数合并为 `.actionIcon:focus-visible,
+     .archiveManagerGroupHeader .foldToggle:focus-visible` 单一规则表；
+     对话框小字号族（NoteRow/Error/ConfirmText）合并共享字体规则；
+     `disarmConfirm` 收敛 accept/取消/Esc 三处解除路径（消除重复与死
+     参数）。
+   - **登记为偏差/待目检（理由登记）**：行删除钮 20px 命中 < WCAG 2.2
+     2.5.8 的 24px（模块图标按钮语言全局标准，§19-8 收窄为语言合并的
+     结果——登记为模块级偏差，视觉腿复核）；武装期行 dim 0.6 × trash
+     .42 ≈ 0.25 复合（评审计算 token 对比度仍 ≥ AA——冻结核的意图
+     反馈）；9% wash 强度与深浅主题可读性、风险条 SR 播报顺序（NVDA/
+     VO）、窄卡换行与矮视口裁剪（<~480-540px）、行 aria 标签在重复/未
+     命名标题下的非唯一性（并入 §19-5 已登记的 SR 语境目检项，追加
+     project label 或容器 group 语义待 SR 腿验证后定）、两处「取消」标签
+     同现（条内取消 vs 头 X=action.cancel；Shift+Tab 会先触 X——X 语义为
+     关整个对话框，保持）、held-Escape 连发无害（解除→关闭良性链）、
+     dark 主题 danger ink ~4.25:1 为 token 级共享惯例。
+   - **模块 doc/§19-6/7 原位对账（完整性分面）**：§19-7「维持
+     window.confirm」条已加原位注（被 §19-8 取代）；头部/§6/编号说明
+     跳转补至条目 9；模块 doc 补武装态关闭与 footer 隐藏语义、修正
+     window.confirm 动因表述（本模块范围——同包 SidebarRoot 导航流仍走
+     window.confirm）、修正孤儿句与「controls disabled」概括；§19-8 增
+     验证 bullet 与武装态行为补记。
+   - **验证**：修复后 `typecheck:sidebar`、`test:sidebar`、`build:renderer`
+     重跑绿（见 §19-8 同款命令）；键盘/视觉项打包版目检腿。
+
+## 20. 2026 purge 幽灵行收敛轮：官方会话列表刷新 seam（delete-archived 分支）
+
+实机现象（用户报告 + 本机数据实证）：归档管理器整集/多选删除后，**已删
+会话以普通会话行重新出现在侧边栏**，逐行点击触发官方对话区
+「历史加载失败：session "…" not found（session/not-found）」（官方
+`chat.loadError`，session-controller 对磁盘重扫无此会话的回答）。现场核
+对：purge 内容目录删除与归档集合成员移除均成功（workspace.json 归档集合
+已不含目标 id），但官方客户端 ctx 会话行与 workspace 成员账目仍列这些 id
+（本机实例 workspace.json 每工作区 13–18 个无目录成员占位）。
+
+**根因（三层，均经 pinned vendor 0.1.2-rc.1 运行时源码核实）**：
+
+1. 宿主删除对官方运行时不可见——`emitSessionRemoved` 等为文档化 no-op
+   （§10/§14）；
+2. 服务端冷读面**即时自愈**：`session-persistence-jsonl.list()` 每次调用
+   重扫磁盘、`session-query` 的 `SessionCorpus.listSessions()` = 持久化重扫
+   + live 合并——任何服务端/unary 列表都不会再含已删会话；
+3. **滞留点在官方客户端 ctx**：`dsh-api-session-controller` client 的
+   `SessionManager.summaries` 只在其 ctx 连接代数重建（`handleConnected` →
+   `refreshList`）或本地 mutation 帧时更新，**无事件即无全量重列**；chamber
+   的 mounted 快照生产者（sidebar client/index.ts）读的正是这份 store。
+   purge 把 id 移出归档集合后，chamber 可见性过滤（archived ∩ rows）不再
+   覆盖这些行 → **幽灵行以普通会话渲染**（mounted 推送整体替换聚合，
+   App.tsx 提交路径）；`refresh()` 的 `mergeOrderedBaseline` 会丢弃服务端
+   已不存在的行——即官方公开的收敛原语，但此前无人触发它。
+
+**修复 seam（本轮的收敛机制，客户端零宿主改动；经 2026 三方只读 review
+——正确性/完整性/最优性——修订为收敛状态机，见下）**：
+
+- **桥通道**：`chamberBridge.requestSessionListRefresh(sourceId)` 广播 +
+  `onRequestSessionListRefresh` 订阅（aggregate-store.ts，与 requestRefresh
+  同构）。挂载 ctx 的 sidebar 插件按 `chamberInstanceId === sourceId`
+  匹配后调用**官方公开面** `ctx.sessions.refresh()`（ClientSessions；
+  运行时守卫，方法缺失与调用失败均 console.warn——失效绝不静默；同步
+  throw 防御包裹——桥监听器异常不得中断 App 推送处理）；刷新完成后
+  summaries 丢弃已删行 → store notify → 生产者 queueSnapshot → 推送干净
+  快照 → App 全量提交替换聚合。未挂载来源无订阅者也不需要（其行走 unary，
+  服务端逐调重扫）。
+- **触发 1（App 收敛状态机，正确性主闸）**：mounted 推送提交前对**每一次**
+  ready 推送评估 `planSessionListRefresh`（aggregate-refresh.ts 纯函数）：
+  (a) 检测**归档集合收缩**（`archiveSetShrink`：无 unarchive wire ⇒ 收缩 =
+  宿主 purge 完成集合移除的唯一客户端可观测信号；仅两侧 `archiveSetKnown:
+  true` 才产生，降级空集永不误报）；(b) 收缩移除的 id ∪ 上一轮未收敛
+  （pending）id 中**仍以行存在于本推送**者 = 幽灵候选；(c) 幽灵候选非空即
+  请求会话列表刷新，并按来源以 5s 冷却封底重发节流（官方 refreshList 单飞
+  兜底并发；忙碌来源上失败的刷新不会逐推送堆叠 RPC）；(d) 行消失即收敛
+  ——pending 清空、状态机自终止。**覆盖超时续跑（宿主晚完成后的收缩推送）、
+  跨壳/他处 purge、未来任何删除入口**；刷新瞬时失败由后续推送在冷却后重发
+  收敛，被冷却压下的请求不丢 id（留在 pending 随下次推送重估）。行渲染的
+  最终兜底：安静来源（推送停止）由 30s staleness 看门狗的 unary merge 拉取
+  在 ≤1 个周期内把聚合 session 行换成服务端干净列表（行自隐），无需任何
+  触发。仅推送侧评估是完备的：mounted 的 pull 提交保留当前归档集合
+  （commitAggregatePull merge）、full-fallback 提交被 provenance 门挡住，
+  pull 不可能先于推送观察到收缩。
+- **触发 2（对话框即时路径）**：ArchiveManagerDialog 每次 purge settle
+  （成功路径与 catch——超时/网络/busy 亦可能已有宿主侧删除落地）均请求
+  一次，覆盖「收缩推送到达前」的窗口，且对话框关闭也不丢请求。注：对话框
+  请求不进 App 的冷却戳（跨包解耦），与触发 1 在单次 purge 上重叠
+  （≈2 次 session.list RPC，第二次通常空转）——purge 罕见、RPC 廉价，
+  属有意的双通道冗余，非缺陷。
+
+**修正**：§15-②「chamber 可见行不受影响」断言不成立（占位窗口内行可见），
+原文已改为登记并指回本节。设计 05 §3 桥契约随之新增一对通道（同 requestRefresh
+形态，非会话数据面，无权威性）——该清单已同步（见 05 §3 通道表）。
+
+**验证与门禁**：`archiveSetShrink`/`shouldRequestSessionListRefresh`/
+`planSessionListRefresh`（renderer aggregate-refresh.test.ts，含收敛/携带
+pending/未知来源/legacy provenance 用例）与桥通道广播/退订（sidebar
+aggregate-store.test.ts）单测绿。本 seam 执行腿（插件调官方 refresh、App
+状态机接线、对话框触发点）无单测基建，验证 = typecheck + 人工目检（登记
+STATUS 的打包版 UI 目检腿一并覆盖，含「幽灵行不再浮现」断言，§19-4 先例）；
+完整工具链门禁（test:sidebar / test:renderer-shell / typecheck:sidebar / 根
+typecheck）随合入 commit 收口。pinned vendor 前置事实（`refresh()` 存在且
+mergeOrderedBaseline 丢弃服务端缺失行）已在真实运行时源码核验；合入门/实机
+腿再验一次（插件 loose 守卫保证形状不符时只 warn 不破坏）。
+
+**残余登记（不随本轮修）**：① 归档集合中的**历史无目录成员**（旧版 purge
+保留的集合成员，本机实例 739 成员中 734 无目录）在「删除全部」退役后无 UI
+路径可收敛（管理器只列「有行 ∩ 集合」，孤儿清理只在候选集内发生）——建议
+后续把孤儿收敛改为每次 purge 收尾对全集合执行（与子集过滤正交、零新增删除
+语义），作为独立项排期。**该登记同时覆盖本 seam 放大的一类新形态**：purge
+内容删除成功但收尾集合移除写失败（item 码 `archive-set`）时，settle 刷新会
+把内容已删的行从 summaries 移除 → 管理器行（∩ 集合）消失 → 残留集合成员
+不可达（子集 purge 需有行可选、整集 purge 已退役）；修复前的陈旧 summaries
+反而让这些行可重选收敛。与历史成员同类的修复方向（收尾孤儿全集合清扫）一并
+覆盖。② 「归档当前活动会话 → 整源落入 unary 降级视图、已归档行（含运行中/
+正查看）浮出直至重载」为另一家族（dev-QA 登记于 commit 1b19712，机制 =
+官方壳 ctx 代数重建后 chamber 快照生产者首报缺位），本轮的会话列表刷新
+seam 不覆盖它（降级视图的问题是归档集知识丢失而非行滞留）；现有缓解（生产
+者挂载即首报 + 断连保留推送聚合 + rebaseline 重连自愈）之外是否仍有复现
+路径待实机确认后单独修。③ 会话列表刷新瞬时失败的重试由状态机在后续推送
+上收敛；「刷新持续失败 + 推送持续流动」的最坏情形下请求以 5s 冷却封底
+（≤12 RPC/分/来源）且行可见直至通道恢复——如实接受，不引入退避状态。
+④ 对话框与 App 触发重叠（上文注）：多出的一次 session.list 为接受代价。

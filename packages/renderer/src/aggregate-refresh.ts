@@ -5,10 +5,80 @@ import type { InstanceAggregate, InstanceSnapshot } from '@dsh-chamber/dsh-clien
  *
  * A mounted producer normally suppresses unary work. The exception is a
  * not-ready -> ready edge: the producer de-duplicates identical snapshots, so
- * it may have nothing new to publish after a reconnect even though the App
- * deliberately replaced the old aggregate with `not-connected`. One pull per
- * connection generation restores the aggregate without reintroducing a timer.
+ * it may have nothing new to publish after a reconnect (a previously-pushed
+ * mounted source keeps its pushed view through the outage —
+ * shouldRetainPushedAggregate — and only NEVER-pushed sources were replaced
+ * with `not-connected`). One pull per connection generation restores the
+ * aggregate without reintroducing a timer.
  */
+
+/**
+ * Whether an aggregate is the DEGRADED unary-fallback view: ok state plus at
+ * least one cwd-derived SYNTHETIC workspace row. Only the unary fallback ever
+ * produces synthetic rows (a mounted push never does), so any synthetic row
+ * means the last commit itself came from the fallback. An EMPTY workspace set
+ * is never synthetic (a legitimate mounted fresh-instance state).
+ */
+export function isFallbackDerivedView(current: InstanceAggregate | undefined): boolean {
+  return current !== undefined && current.state === 'ok'
+    && current.workspaces.length > 0
+    && current.workspaces.some(workspace => workspace.synthetic === true)
+}
+
+/**
+ * Whether a not-ready source's current aggregate may be RETAINED through a
+ * transport outage instead of being replaced by `not-connected`.
+ *
+ * 2026-09 bugfix (sidebar: reconnect resurfaces archived conversations, click
+ * dead-ends into the new-session view): the disconnect wipe used to replace
+ * EVERY ok aggregate with `not-connected`, so the not-ready -> ready edge
+ * committed the FULL unary fallback view — which carries NO archive set and
+ * cwd-derived synthetic groups. When the mounted ctx store then stayed
+ * silent (nothing changed + producer signature dedupe suppresses an identical
+ * rebaseline push), that degraded view became PERMANENT: archived sessions
+ * resurfaced as openable rows and clicking one opened an archived current the
+ * official runtime immediately clears (empty new-session view). Retaining the
+ * last PUSHED view through the outage is safe for rendering (deriveServers
+ * hides all rows while the transport is not ready) and makes the ready-edge
+ * pull take the merge branch of {@link commitAggregatePull} — workspaces +
+ * archive set stay authoritative, only session rows refresh from the unary.
+ * Never-pushed / unmounted sources are NOT retainable (the unary fallback is
+ * their documented scope).
+ */
+export function shouldRetainPushedAggregate(
+  mounted: boolean,
+  current: InstanceAggregate | undefined,
+): boolean {
+  return mounted === true
+    && current !== undefined
+    && current.state === 'ok'
+    && !isFallbackDerivedView(current)
+}
+
+/**
+ * Whether a MOUNTED source whose aggregate is STUCK on the degraded fallback
+ * view (synthetic rows present) should get a lightweight ctx connection
+ * reconnect, bounded by the same backoff as the S2 stale-channel arm. The
+ * reconnect replays the workspace follow baseline; the store withdrawal
+ * clears the producer's content signature, so the identical recovered
+ * baseline is re-published and replaces the fallback view (with its archive
+ * set) — the heal for aggregates that degraded before this retention fix (or
+ * through any residual full-commit path). Recording discipline（2026 评审校
+ * 正，与 S2 臂一致 = M4）：仅在 reconnectInstanceConnection() 实际调用成功
+ * （返回 true）时记录 lastReconnectAt——no-op 重连（无连接持有者，如已回收
+ * 来源）不消耗退避窗，每可见 tick 的重试是廉价 no-op。
+ */
+export function shouldRebaselineFallbackView(opts: {
+  mounted: boolean
+  fallbackView: boolean
+  lastReconnectAt: number | undefined
+  now: number
+  reconnectBackoffMs: number
+}): boolean {
+  return opts.mounted === true
+    && opts.fallbackView === true
+    && (opts.lastReconnectAt === undefined || opts.now - opts.lastReconnectAt >= opts.reconnectBackoffMs)
+}
 
 /**
  * Commit one unary aggregate pull over the current per-source aggregate.
@@ -41,25 +111,24 @@ import type { InstanceAggregate, InstanceSnapshot } from '@dsh-chamber/dsh-clien
  * (fresh instance — everything renders ungrouped) and is never treated as
  * synthetic.
  *
- * Third reachable degraded state (documented, not fixable via unary): a
- * mounted source whose ctx stores never withdrew (transport flipped
- * not-connected → ready while the stores stayed idle+ready) lands a full
- * fallback commit on the ready edge (current.state !== 'ok' → full commit);
- * the `some` guard then keeps it on full commits until the next real push —
- * archived sessions resurface until the next CONTENT-CHANGE push (a healthy
- * but quiet channel suppresses the reconnect rebaseline via signature
- * dedupe, so the window does not close on channel recovery alone; a
- * permanently silent channel keeps it — the sessions-only contract's
- * inherent bound).
+ * Reachability of the full-commit degraded view (2026-09 revision): the
+ * not-ready → ready-edge full commit only fires when the current aggregate
+ * was NOT retained through the outage (see shouldRetainPushedAggregate — a
+ * previously-pushed mounted source keeps its pushed view, so the ready-edge
+ * pull takes the merge branch and archived sessions never resurface on
+ * reconnect). The full commit remains the honest stopgap for never-pushed /
+ * unmounted sources (first-boot window, KNOWN DEGRADATION scope) and for
+ * previously-degraded currents — those keep receiving full commits until a
+ * real push replaces them, and the App's fallback-view watchdog additionally
+ * arms a ctx reconnect (shouldRebaselineFallbackView) so a silent mounted
+ * channel heals instead of freezing the degraded view forever.
  */
 export function commitAggregatePull(
   current: InstanceAggregate | undefined,
   fallback: InstanceSnapshot,
   mounted: boolean,
 ): InstanceAggregate {
-  const currentIsFallbackDerived = current !== undefined && current.state === 'ok'
-    && current.workspaces.length > 0
-    && current.workspaces.some(workspace => workspace.synthetic === true)
+  const currentIsFallbackDerived = isFallbackDerivedView(current)
   if (mounted && current !== undefined && current.state === 'ok' && !currentIsFallbackDerived) {
     // The merge keeps every authoritative pushed field (workspaces +
     // archivedSessionIds + archive-set PROVENANCE) and contributes only the
@@ -98,6 +167,93 @@ export function commitAggregateFailure(mounted: boolean, errorText: string): Ins
   if (mounted) return null
   return { state: 'error', workspaces: [], sessions: [], archivedSessionIds: [], error: errorText }
 }
+/**
+ * Detect an archived-set SHRINK between the last committed aggregate and an
+ * incoming snapshot (archive-cleanup convergence, design 24 §20). There is
+ * NO unarchive wire, so the only host-side mutation that removes members from
+ * the archived set is the cleanup purge's end-of-run removal — a strict shrink
+ * is therefore the client's observable "a purge completed and those ids left
+ * the set" signal. Returns the removed ids when BOTH sides are authoritative
+ * (`archiveSetKnown: true`) and the previous side is an ok aggregate; [] for
+ * every other combination (unknown provenance must never trigger — the unary
+ * fallback's empty set is a known-degraded artifact, not a shrink fact).
+ * Consumers (the App's mounted-push commit path) respond by requesting the
+ * source's official session-list refresh: rows of the purged sessions may
+ * still linger in the mounted ctx's official client summaries (they refresh
+ * only on connection generations; purge events are documented no-ops) and
+ * would otherwise resurface in the sidebar as ordinary rows once the archived
+ * set no longer covers them — opening one fails with session/not-found.
+ */
+export function archiveSetShrink(
+  previous: InstanceAggregate | undefined,
+  next: Pick<InstanceSnapshot, 'archivedSessionIds' | 'archiveSetKnown'>,
+): string[] {
+  if (previous === undefined || previous.state !== 'ok' || previous.archiveSetKnown !== true) return []
+  if (next.archiveSetKnown !== true) return []
+  const nextSet = new Set(next.archivedSessionIds)
+  return previous.archivedSessionIds.filter(id => !nextSet.has(id))
+}
+
+/**
+ * Decide whether a session-list refresh request may be DISPATCHED for a source
+ * (bounded re-request floor for {@link planSessionListRefresh} consumers): a
+ * request may go out when the source was never requested before (`undefined`
+ * = never requested — dispatch) or the last request stamp is older than the
+ * coalescing gap. NOTE: `0` is not "never requested" — it behaves as an
+ * ancient stamp and suppresses for one full gap (Date.now() stamps can never
+ * be 0, so this only matters for tests/typos; only `undefined` means never).
+ */
+export function shouldRequestSessionListRefresh(
+  lastRequestedAt: number | undefined,
+  now: number,
+  coalesceMs: number,
+): boolean {
+  return lastRequestedAt === undefined || now - lastRequestedAt >= coalesceMs
+}
+
+/**
+ * One plan step of the App-side ghost-row convergence state machine (design 24
+ * §20). Evaluated on EVERY ready mounted push of a source, BEFORE the aggregate
+ * commit (against the last-committed aggregate via the render mirror):
+ * - "removed" = the archived-set shrink of this push (archiveSetShrink — a
+ *   strict shrink is the client-observable "a purge completed" signal; no
+ *   unarchive wire exists);
+ * - ghost candidates = removed ∪ previously-pending ids that are STILL LISTED
+ *   as session rows of this push (rows already gone are converged — the id is
+ *   dropped and no request is made for it);
+ * - `request: true` means rows of purged sessions are still visible and the
+ *   source's official session-list refresh is outstanding. The caller
+ *   dispatches at most once per coalescing gap and re-evaluates on the next
+ *   push, so a transiently failed refresh converges as soon as the channel
+ *   heals or the rows vanish (the next push clears `pending`). A push whose
+ *   rows no longer carry any candidate returns `pending: []` — the state
+ *   machine is self-terminating. Push-only evaluation is COMPLETE: mounted
+ *   pull commits preserve the current archived set (commitAggregatePull
+ *   merge) and full-fallback commits are provenance-gated (archiveSetShrink),
+ *   so a pull can never first observe a shrink.
+ */
+export function planSessionListRefresh(
+  previous: InstanceAggregate | undefined,
+  next: Pick<InstanceSnapshot, 'archivedSessionIds' | 'archiveSetKnown' | 'sessions'>,
+  pending: readonly string[] | undefined,
+): { request: boolean; pending: string[] } {
+  const removed = archiveSetShrink(previous, next)
+  const rowIds = new Set<string>()
+  for (const session of next.sessions) rowIds.add(session.sessionId)
+  const kept: string[] = []
+  const seen = new Set<string>()
+  const consider = (id: string): void => {
+    if (seen.has(id) || !rowIds.has(id)) return
+    seen.add(id)
+    kept.push(id)
+  }
+  for (const id of removed) consider(id)
+  if (pending !== undefined) {
+    for (const id of pending) consider(id)
+  }
+  return { request: kept.length > 0, pending: kept }
+}
+
 export function planAggregateRefreshes(
   readySourceIds: readonly string[],
   previouslyReady: ReadonlySet<string>,

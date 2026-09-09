@@ -110,3 +110,115 @@ test('event-side retirement rejects old reports before a replacement producer re
   unsubscribeRuntime()
   unsubscribeSnapshot()
 })
+
+test('open-session outcomes fan out to subscribers and unsubscribing stops delivery', () => {
+  const events: string[] = []
+  const unsubscribe = chamberBridge.onOpenSessionOutcome((outcome) => {
+    events.push(`${outcome.sourceId}/${outcome.sessionId}/${outcome.message ?? 'ok'}`)
+  })
+  chamberBridge.reportOpenSessionOutcome({ sourceId: 'ssh-a', sessionId: 's1' })
+  chamberBridge.reportOpenSessionOutcome({ sourceId: 'ssh-a', sessionId: 's1', message: '打开会话失败：boom' })
+  chamberBridge.reportOpenSessionOutcome({ sourceId: 'local', sessionId: 's2', message: '等待超时' })
+  assert.deepEqual(events, [
+    'ssh-a/s1/ok',
+    'ssh-a/s1/打开会话失败：boom',
+    'local/s2/等待超时',
+  ])
+  unsubscribe()
+  chamberBridge.reportOpenSessionOutcome({ sourceId: 'ssh-a', sessionId: 's1' })
+  assert.deepEqual(events, [
+    'ssh-a/s1/ok',
+    'ssh-a/s1/打开会话失败：boom',
+    'local/s2/等待超时',
+  ])
+})
+
+test('session-list refresh requests broadcast to every subscriber with the source id', () => {
+  const received: string[] = []
+  const first = chamberBridge.onRequestSessionListRefresh(sourceId => { received.push(`a:${sourceId}`) })
+  const second = chamberBridge.onRequestSessionListRefresh(sourceId => { received.push(`b:${sourceId}`) })
+  chamberBridge.requestSessionListRefresh('local')
+  chamberBridge.requestSessionListRefresh('ssh-dev')
+  assert.deepEqual(received, ['a:local', 'b:local', 'a:ssh-dev', 'b:ssh-dev'])
+  first()
+  chamberBridge.requestSessionListRefresh('local')
+  assert.deepEqual(received, ['a:local', 'b:local', 'a:ssh-dev', 'b:ssh-dev', 'b:local'])
+  // Unsubscribing the last subscriber must not throw and the request is a no-op.
+  second()
+  chamberBridge.requestSessionListRefresh('gateway-west')
+  assert.deepEqual(received, ['a:local', 'b:local', 'a:ssh-dev', 'b:ssh-dev', 'b:local'])
+})
+
+test('the active-view fact publishes on change only, and undefined is a real value', () => {
+  assert.equal(chamberBridge.getActiveSource(), undefined, 'unpublished until the App writes it')
+  const seen: (string | undefined)[] = []
+  const off = chamberBridge.onActiveSource(sourceId => { seen.push(sourceId) })
+  chamberBridge.setActiveSource('local')
+  chamberBridge.setActiveSource('local')
+  chamberBridge.setActiveSource('ssh-dev')
+  chamberBridge.setActiveSource(undefined)
+  assert.deepEqual(seen, ['local', 'ssh-dev', undefined], 'same-value writes are no-ops; clearing notifies')
+  assert.equal(chamberBridge.getActiveSource(), undefined)
+  off()
+  chamberBridge.setActiveSource('local')
+  assert.deepEqual(seen, ['local', 'ssh-dev', undefined])
+})
+
+test('producer registration is boot-generation fenced (a late older boot cannot steal the token)', () => {
+  // 2026-12 复查 BLOCKER：一个挂死后恢复的老 boot 若在健康后继注册之后再注册，
+  // 旧实现会让它夺走 token，其 teardown clear() 随即清空后继的通道。
+  const sourceId = 'ssh-producer-fence'
+  const fingerprint = 'f'.repeat(64)
+  const store = chamberBridge
+  const seen: (string | undefined)[] = []
+  const unsubscribe = store.onInstanceSnapshot((_sourceId, value) => {
+    seen.push(value === undefined ? undefined : String(value.sessions.length))
+  })
+  try {
+    const newer = store.registerInstanceSnapshotProducer(sourceId, fingerprint, 2)
+    newer.report(snapshot('one'))
+    assert.deepEqual(seen, ['1'])
+    // 老代（gen 1）迟到注册：必须作废，且它的 clear 不得清空通道。
+    const older = store.registerInstanceSnapshotProducer(sourceId, fingerprint, 1)
+    older.report(snapshot('stale'))
+    assert.deepEqual(seen, ['1'], 'an older generation must not report')
+    older.clear()
+    assert.deepEqual(seen, ['1'], 'an older generation must not clear the newer channel')
+    newer.report(snapshot('two'))
+    assert.deepEqual(seen, ['1', '1'], 'the newer generation keeps the channel')
+    newer.clear()
+    assert.deepEqual(seen, ['1', '1', undefined], 'the owner can still clear')
+  } finally {
+    unsubscribe()
+    store.retireInstanceProducers(sourceId)
+  }
+})
+
+test('the generation fence is order-independent for equal generations and re-arms after a clear', () => {
+  // 同级重注册必须胜出（重试同代/非 chamber 挂载）；被清理过的来源必须可以再次
+  // 注册（否则一次 clear 会永久封死该源；2026-12 复查 NIT）。
+  const sourceId = 'ssh-producer-fence-2'
+  const fingerprint = 'a'.repeat(64)
+  const store = chamberBridge
+  const seen: (string | undefined)[] = []
+  const unsubscribe = store.onInstanceSnapshot((_sourceId, value) => {
+    seen.push(value === undefined ? undefined : String(value.sessions.length))
+  })
+  try {
+    const first = store.registerInstanceSnapshotProducer(sourceId, fingerprint, 3)
+    first.report(snapshot('one'))
+    const sameGeneration = store.registerInstanceSnapshotProducer(sourceId, fingerprint, 3)
+    sameGeneration.report(snapshot('two'))
+    // 注册即接管：旧 report 先被撤回（既有的"后注册者胜"语义）。
+    assert.deepEqual(seen, ['1', undefined, '1'], 'an equal generation re-registration wins')
+    sameGeneration.clear()
+    assert.deepEqual(seen, ['1', undefined, '1', undefined])
+    // 清理后同代或更老的注册都必须被接受（记录已随 clear 删除）。
+    const after = store.registerInstanceSnapshotProducer(sourceId, fingerprint, 2)
+    after.report(snapshot('three'))
+    assert.deepEqual(seen, ['1', undefined, '1', undefined, '1'], 'a cleared source is re-registrable')
+  } finally {
+    unsubscribe()
+    store.retireInstanceProducers(sourceId)
+  }
+})

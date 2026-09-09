@@ -23,6 +23,14 @@ const entryStates = []
 const openedSessions = []
 let entrySequence = 0
 let sessionsListed = true
+// Models the window between boot settle (root fibers active) and the runtime
+// sessions service activation (a composite CHILD fiber): while false, the
+// entry's runtimeCtx carries no sessions face yet. Module-global: every entry
+// runtimeCtx read reflects the CURRENT value (like the real per-boot state).
+let sessionsAvailable = true
+// Thrown by the runtimeCtx getter itself (distinct from sessionsSnapshotError,
+// which throws from list.getSnapshot): pins the shell's hostile-read arm.
+let sessionsReadError = undefined
 let sessionsSnapshotError = undefined
 let sessionsOpenError = undefined
 
@@ -83,6 +91,8 @@ export class AppWebEntry {
 
   get runtimeCtx() {
     if (this.disposed) return undefined
+    if (sessionsReadError !== undefined) throw sessionsReadError
+    if (!sessionsAvailable) return { sessions: undefined }
     const label = this.label
     return {
       sessions: {
@@ -104,13 +114,42 @@ export class AppWebEntry {
   }
 }
 
+// C3 gate face (2026-09): mirrors the slice of the real ClientModuleSystem
+// that shell.ts consumes after C3 — `manifest` (the chamber boot row) and
+// `prefetch(id)`. prefetch pushes an event synchronously so tests can pin
+// call order, and honors two knobs: an injected error (the shell gate
+// swallows it — the loud path is run()'s create-side import, not tested
+// here) and an optional gate (tests can hold extra-bundle loads until the
+// chamber "eval" settles).
+let chamberPrefetchError = undefined
+const prefetchGates = []
+const allPrefetchGates = new Set()
+const moduleSystemFace = {
+  manifest: { plugins: [{ id: '@dsh-chamber/app', immediately: true }] },
+  async prefetch(id) {
+    eventLog.push(`prefetch:${id}`)
+    if (chamberPrefetchError !== undefined) throw chamberPrefetchError
+    const gate = prefetchGates.shift()
+    if (gate !== undefined) {
+      gate.markStarted()
+      try {
+        await gate.wait
+      } finally {
+        allPrefetchGates.delete(gate)
+      }
+    }
+  },
+}
+
 export function ensureWebModuleSystem() {
   // Records the call so tests can pin the first-boot ordering (sink install
   // must precede any host-graph fetch / bundle preload). The real module-system
   // install itself is not exercised here (that logic is boot.ts's; verified
-  // by typecheck/build) — this only simulates its failure gate.
+  // by typecheck/build) — this only simulates its failure gate and hands back
+  // the C3 face above (shell.ts fireChamberPrefetch / awaitBeforeLoad).
   eventLog.push('ensure')
   if (moduleSystemError !== undefined) throw moduleSystemError
+  return moduleSystemFace
 }
 
 /** Test knobs (same module instance as shell.ts sees — the loader maps to this URL). */
@@ -124,6 +163,23 @@ export function __testSetRunError(value) {
 
 export function __testSetModuleSystemError(value) {
   moduleSystemError = value
+}
+
+/** Make the C3 chamber prefetch reject (shell gate swallows; create-side loud untested). */
+export function __testSetChamberPrefetchError(value) {
+  chamberPrefetchError = value
+}
+
+/** Gate the next chamber prefetch: release() lets the "eval" settle. */
+export function __testQueueChamberPrefetchGate() {
+  let markStarted
+  let release
+  const started = new Promise(resolve => { markStarted = resolve })
+  const wait = new Promise(resolve => { release = resolve })
+  const gate = { wait, markStarted, release }
+  prefetchGates.push(gate)
+  allPrefetchGates.add(gate)
+  return { started, release }
 }
 
 export function __testDisposedCount() {
@@ -192,6 +248,16 @@ export function __testSetSessionsListed(value) {
   sessionsListed = value
 }
 
+/** Simulate the runtime sessions service being (un)available at read time. */
+export function __testSetSessionsAvailable(value) {
+  sessionsAvailable = value
+}
+
+/** Make the runtimeCtx read itself throw (hostile-boundary arm). */
+export function __testSetSessionsReadError(value) {
+  sessionsReadError = value
+}
+
 export function __testSetSessionsSnapshotError(value) {
   sessionsSnapshotError = value
 }
@@ -203,16 +269,22 @@ export function __testSetSessionsOpenError(value) {
 export function __testResetLifecycle() {
   for (const gate of allRunGates) gate.release()
   for (const gate of allDisposeGates) gate.release()
+  for (const gate of allPrefetchGates) gate.release()
   allRunGates.clear()
   allDisposeGates.clear()
+  allPrefetchGates.clear()
   runGates.length = 0
   disposeGates.length = 0
+  prefetchGates.length = 0
   entryStates.length = 0
   openedSessions.length = 0
   entrySequence = 0
   sessionsListed = true
+  sessionsAvailable = true
+  sessionsReadError = undefined
   sessionsSnapshotError = undefined
   sessionsOpenError = undefined
+  chamberPrefetchError = undefined
 }
 
 /** Event log: 'ensure' (module-system install) vs 'fetch' (host-graph channel) call order. */

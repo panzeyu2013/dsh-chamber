@@ -6,6 +6,12 @@
  * instance facts into each entry Context; once booted the shell stays mounted
  * and switching is pure CSS hide/show.
  *
+ * 保留策略（2026 性能整改，05 §1/§4 偏差）：App 层不再让隐藏壳无限常驻——
+ * 超限的隐藏壳由 App 先 disposeInstanceShell 再从 mountedViews 移除，本组件
+ * 随之卸载（回收语义与注册表删除一致，aliveRef 的卸载丢弃逻辑同时覆盖两种
+ * 回收路径）；重开 = 重新挂载 + 冷 boot + entry 重放。本组件自身从不
+ * dispose shell——卸载只发生在 App 已处置之后。
+ *
  * Switching is driven by the App layer wrapping the active-view change in a
  * View Transition (view-transition.ts): the previous view is captured as a
  * static snapshot that stays on screen until the incoming view is actually
@@ -64,6 +70,8 @@ export default function InstanceView({
 }: InstanceViewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const startedRef = useRef(false)
+  /** 每次 boot 尝试的令牌：丢弃被重试取代的迟到 settle。 */
+  const bootTokenRef = useRef(0)
   // 卸载门控（2026-08 review 加固）：视图被回收（注册表删除）后，在途 boot
   // 的 settle 仍会经 .then 回调——若不经门控上报，陈旧终态（如取消 boot 的
   // "shell disposed"）会写进 App 的 shellStates，在 remove→re-add 窗口内对
@@ -85,10 +93,15 @@ export default function InstanceView({
     // 否则容器一旦为 null，本视图永远不再尝试 boot。
     if (el === null) return
     startedRef.current = true
+    // 本次尝试的令牌（2026-12 复查 MINOR）：重试后旧 boot 若迟到 settle，
+    // 不得覆盖新尝试已经落地的健康状态。
+    const bootToken = bootTokenRef.current + 1
+    bootTokenRef.current = bootToken
     void bootInstanceShell(instanceId, basePath, el, setShell, sourceFingerprint, transport).then((next) => {
       // 卸载后到达的 settle 一律丢弃（视图已回收，App 已清理该视图状态；
-      // 陈旧上报会污染重加视图的失败覆盖层判定）。
-      if (!aliveRef.current) return
+      // 陈旧上报会污染重加视图的失败覆盖层判定）；被更新的尝试取代的迟到
+      // settle 同样丢弃。
+      if (!aliveRef.current || bootToken !== bootTokenRef.current) return
       // settle 落地：可见视图用 View Transition（骨架 → 内容/失败报告）；
       // 后台 boot（预热）即时落位——用户点击切换时的过渡由 App 层覆盖。
       // 键 'settle'（perf T2）：与视图切换流跨键隔离——settle 若被同键吞并
@@ -122,7 +135,12 @@ export default function InstanceView({
 
   return (
     <div className={viewClass} data-instance={instanceId}>
-      <div ref={containerRef} className="instance-shell" />
+      {/* 每次重试换一个容器元素（2026-12 复查 MAJOR）：上一个尝试若挂死，
+          它的 AppWebEntry 仍持有旧容器——复用同一个 div 会让第二次尝试把新的
+          boot 页/React root 追加进已有 root 的容器里（shell.ts 头注的
+          "一容器一 root" 不变量）。旧容器随 key 变更被 React 摘除，挂死尝试
+          写进的是已脱离文档的节点。 */}
+      <div key={retryToken ?? 0} ref={containerRef} className="instance-shell" />
       {!settled && (
         <div className="instance-loading" aria-busy="true">
           <div className="instance-loading-main">

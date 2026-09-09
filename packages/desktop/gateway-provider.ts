@@ -1409,8 +1409,18 @@ export async function syncGatewayChamberPlugins(options: {
         timeoutMs,
       })
       if (put.status !== 200) {
-        options.logger.warn(`[dsh-chamber] gateway plugin sync: uploading ${pkg.name} failed (HTTP ${put.status}); the managed dsh keeps running without it`)
-        if (firstFailure === null) firstFailure = `uploading ${pkg.name} failed (HTTP ${put.status})`
+        // Carry the gateway's own refusal reason when it sent one (e.g. an
+        // older gateway answering invalid_input for a host package it does
+        // not know yet): a bare "HTTP 400" leaves the user no remediation.
+        // The body travels the authenticated surface and is re-sanitized
+        // before it ever reaches a renderer via the IPC result.
+        const refused = put.payload as { error?: unknown } | null
+        const reason = refused !== null && typeof refused.error === 'string' && refused.error !== ''
+          ? sanitizeErrorText(refused.error).slice(0, 300)
+          : null
+        const failure = `uploading ${pkg.name} failed (HTTP ${put.status}${reason === null ? '' : `: ${reason}`})`
+        options.logger.warn(`[dsh-chamber] gateway plugin sync: ${failure}; the managed dsh keeps running without it`)
+        if (firstFailure === null) firstFailure = failure
         continue
       }
       // Byte-identical upload (same version, same bytes) → nothing to apply;
@@ -1815,12 +1825,30 @@ async function pollRestartSettled(params: {
   return { ok: false, error: 'restart accepted but the gateway did not reach ready in time' }
 }
 
-/** Materialize result: ok:true deferred = the submission was persisted as a
- *  deferred install intent (executed at the next ready edge); deferred
- *  false = accepted onto the executor queue. */
+/** Materialize outcome after the desktop waited for the executor op
+ *  (parity with the apply batch's settle/restart discipline): the op's
+ *  profile mutation terminally succeeded (`executed`) and the controlled
+ *  restart of the managed dsh was accepted AND settled (`restarted` — the
+ *  plugin only mounts on the next spawn). */
+export interface GatewayMaterializeOutcome {
+  executed: boolean
+  restarted: boolean
+}
+
+/** Materialize result. ok:true deferred = the submission was persisted as a
+ *  deferred install intent (the gateway executes it — restart included — at
+ *  the next ready edge; nothing more to do). ok:true outcome = the executor
+ *  ran the op to a terminal success and the desktop then asked for the
+ *  controlled restart: restarted:true means the plugin is live on the
+ *  running instance; restarted:false (outcome still returned) is only
+ *  reachable through ok:false below. ok:false is loud — refusal, op
+ *  failure, settle timeout or restart failure; the optional outcome tells
+ *  the caller exactly how far the install got (executed before the restart
+ *  failed = the profile already changed). */
 export type GatewayChamberMaterializeResult =
-  | { ok: true; deferred: boolean }
-  | { ok: false; error: string }
+  | { ok: true; deferred: true }
+  | { ok: true; outcome: GatewayMaterializeOutcome }
+  | { ok: false; error: string; outcome?: GatewayMaterializeOutcome }
 
 /** Raw-body PUT with the S23 pin discipline: the tarball bytes never leave
  *  the machine before the peer key matches a configured pin. */
@@ -1882,7 +1910,15 @@ function gatewayRawBodyPut(
  *  with the x-plugin-name / x-plugin-version headers (both pre-validated
  *  here against the shared whitelists + the route's version grammar). The
  *  archive size is re-checked against TARBALL_MAX_ARCHIVE_BYTES before any
- *  byte is sent. Non-202 answers map their {error, code} body honestly. */
+ *  byte is sent. Non-202 answers map their {error, code} body honestly.
+ *  After a 202 the desktop does NOT stop at acceptance (the 2026 review
+ *  gap that made .tgz installs invisible until a manual refresh + manual
+ *  restart): it waits for the accepted op to terminally settle on the
+ *  gateway (GET /chamber/plugins/tasks), then asks for the controlled
+ *  restart and polls the runtime status — exactly the apply-batch parity
+ *  (settle → restart → status poll). A deferred answer (intent persisted)
+ *  returns immediately: the gateway drains + restarts at the next ready
+ *  edge. */
 export async function gatewayChamberMaterialize(params: {
   /** Instance id (caller-validated). */
   id: string
@@ -1898,9 +1934,15 @@ export async function gatewayChamberMaterialize(params: {
   version: string
   /** Tunnel Host-header override (the REMOTE gateway authority). */
   authority?: string
-  timeoutMs?: number
+  /** Per-request timeout for the upload and the settle/status JSON calls. */
+  requestTimeoutMs?: number
+  settleIntervalMs?: number
+  settleTimeoutMs?: number
+  restartPollIntervalMs?: number
+  restartPollTimeoutMs?: number
 }): Promise<GatewayChamberMaterializeResult> {
   const { url } = params
+  const timeoutMs = params.requestTimeoutMs ?? GATEWAY_MATERIALIZE_TIMEOUT_MS
   if (typeof params.name !== 'string' || !PLUGIN_NAME_PATTERN.test(params.name) || isDeniedPluginName(params.name)) {
     return { ok: false, error: 'invalid plugin name for the materialize upload' }
   }
@@ -1928,7 +1970,7 @@ export async function gatewayChamberMaterialize(params: {
       body: params.tarball,
       insecure,
       spkiPin: params.spkiPin,
-      timeoutMs: params.timeoutMs ?? GATEWAY_MATERIALIZE_TIMEOUT_MS,
+      timeoutMs,
     })
     if (response.status !== 202) {
       const record = response.payload as { error?: unknown; code?: unknown } | null
@@ -1936,8 +1978,68 @@ export async function gatewayChamberMaterialize(params: {
       const code = record !== null && typeof record.code === 'string' && record.code !== '' ? record.code : null
       return { ok: false, error: `materialize of ${params.name}@${params.version} refused (HTTP ${response.status}${code === null ? '' : `, code ${code}`}): ${bodyError}` }
     }
-    const accepted = response.payload as { deferred?: unknown } | null
-    return { ok: true, deferred: accepted?.deferred === true }
+    const accepted = response.payload as { deferred?: unknown; opId?: unknown } | null
+    // Deferred intent: the gateway persists the install and drains it —
+    // restart included — at the next ready edge. Nothing to settle here.
+    if (accepted?.deferred === true) return { ok: true, deferred: true }
+    const opId = typeof accepted?.opId === 'string' && accepted.opId !== '' ? accepted.opId : null
+    if (opId === null) {
+      return { ok: false, error: 'the gateway accepted the materialize upload but answered no opId; the install outcome cannot be confirmed — refresh the plugin list later' }
+    }
+    const request = (
+      method: 'GET' | 'PUT' | 'POST',
+      path: string,
+      body?: unknown,
+    ): Promise<{ status: number; payload: unknown }> => {
+      // Clean auth-only headers for the JSON exchange — NEVER the upload
+      // headers: the materialize request carries content-type/content-length
+      // for the gzip body, and a stale content-length on a GET would make
+      // the gateway wait for a body that never comes.
+      const jsonHeaders: Record<string, string> = { ...params.headers }
+      if (params.authority !== undefined) jsonHeaders.host = params.authority
+      return gatewayJsonRequest(`${url}${path}`, {
+        method,
+        headers: jsonHeaders,
+        body,
+        insecure,
+        spkiPin: params.spkiPin,
+        timeoutMs,
+      })
+    }
+    // Settle the executor op first: the controlled restart is REFUSED while
+    // the gateway holds a profile-write lease.
+    const settled = await waitForOpsToSettle({
+      request,
+      opIds: [opId],
+      intervalMs: params.settleIntervalMs ?? GATEWAY_APPLY_POLL_INTERVAL_MS,
+      timeoutMs: params.settleTimeoutMs ?? GATEWAY_APPLY_OP_SETTLE_TIMEOUT_MS,
+    })
+    if (!settled.ok) return { ok: false, error: settled.error }
+    const restart = await request('POST', '/chamber/runtime/restart')
+    if (restart.status !== 202 && restart.status !== 200) {
+      // Honest partial: the plugin IS installed but the managed dsh did not
+      // restart — it mounts at the next natural spawn; the user can restart
+      // from the instance (r0) or retry here.
+      const record = restart.payload as { error?: unknown; code?: unknown } | null
+      const bodyError = record !== null && typeof record.error === 'string' && record.error !== '' ? record.error : '(no error body)'
+      const code = record !== null && typeof record.code === 'string' && record.code !== '' ? record.code : null
+      return {
+        ok: false,
+        error: `restart of the managed dsh refused after the plugin was installed (HTTP ${restart.status}${code === null ? '' : `, code ${code}`}): ${bodyError}`,
+        outcome: { executed: true, restarted: false },
+      }
+    }
+    const polled = await pollRestartSettled({
+      request,
+      intervalMs: params.restartPollIntervalMs ?? GATEWAY_APPLY_POLL_INTERVAL_MS,
+      timeoutMs: params.restartPollTimeoutMs ?? GATEWAY_APPLY_RESTART_POLL_TIMEOUT_MS,
+    })
+    if (!polled.ok) {
+      // The restart was accepted; the poll could not confirm readiness —
+      // loud, with the executed fact carried.
+      return { ok: false, error: polled.error, outcome: { executed: true, restarted: false } }
+    }
+    return { ok: true, outcome: { executed: true, restarted: true } }
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error)
     return { ok: false, error: `gateway plugin materialize failed: ${detail}` }

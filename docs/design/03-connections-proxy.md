@@ -302,6 +302,26 @@ WS   /api/i/<id>/api/events.host   → 实例 WS  /api/events.host
   计时会在 host 已提交后截断慢速 `git worktree remove` 为 504，见设计 08
   §6 修订与 STATUS），既阻止停滞流，也不误杀持续有进展的大响应；SSE/已
   升级 WS 保持长连接语义。
+- **长 RPC 豁免（2026-09）**：`POST` 且上游 pathname **精确命中**
+  `LONG_RPC_PATHS`（当前 `/api/commands/execute` 与
+  `/api/archiveCleanup/purge`）的 unary RPC 改用 `LONG_RPC_UPSTREAM_TIMEOUT_MS`
+  （30 分钟）作**保险丝而非 SLA**，替代 45s 空闲窗。这类端点的宿主业务没有
+  上游时长上限（`/compact` → commands/execute → dsh-command-compact →
+  dsh-compaction-basic 用 LLM 重放全部可压缩历史做摘要；chamber 归档清理
+  purge 为逐会话无上限 fs 删除、自身客户端预算 5 分钟，见设计 24 §5），且
+  进度经 mux 会话事件（或设计 24 的文档化 no-op + 幂等收敛）**带外交付**，
+  HTTP 响应只是完成回执——45s 窗等于替仍在等待的客户端伪造断开并取消合法
+  宿主工作（实测：~62.7 万 token 会话的手动 `/compact` 在 45 001 ms 被代理
+  切断，宿主记 `compaction/end {error: "DeepSeek request aborted by
+  caller"}`，会话无变化）。结束条件仍由真实活性驱动：客户端断连 abort 上游
+  （res close）；宿主 socket 死亡由代理显式收尾为 502（health/reaper 是实例级
+  杀/重启机制，不负责单请求收尾）；wedged-but-alive handler 占用一个有界
+  请求槽直到保险丝或客户端断开。豁免名单刻意狭窄（POST + 精确路径、扩展须
+  符合同一契约——git worktree 域宿主 mutation 有 30s 硬上限，明确不入列）；
+  豁免命中与保险丝触发均有独立计数器（`longRpcRequests`/`longRpcTimeouts`，
+  兼作名单活性探针）。任意长命令的治本方案是上游把 `commands.execute` 改为
+  受理即回、结果经会话事件流交付（宿主非 chamber 可写范围，属上游跟踪项，
+  见 STATUS）。
 - **代理 WS 心跳（仅下游浏览器腿）**：splice 建立后向浏览器周期发免掩码
   ping（`WS_PING_INTERVAL_MS=30s`、`WS_PING_MISSES_BEFORE_TEARDOWN=1`，
   与 `ws` README 官方心跳示例对齐）；PongScanner 被动扫描、不消费字节；

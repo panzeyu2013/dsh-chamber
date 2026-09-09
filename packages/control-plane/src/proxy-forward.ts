@@ -89,6 +89,59 @@ export function getProcessBufferedRequestBytes(): number {
  */
 export const UPSTREAM_TIMEOUT_MS = 45_000
 
+/**
+ * Long-RPC upstream paths, matched EXACTLY against the RESOLVED target's
+ * pathname (the /api/i/<id> instance prefix is stripped before forwarding;
+ * root-mounted owners like the gateway keep the path verbatim). Upstream
+ * unary RPCs are always `POST /api/<service>/<method>` (two segments — the
+ * upstream gateway claims exactly that shape, so pathname variants like a
+ * trailing slash or nested sub-path never execute host business and keep the
+ * ordinary window; exact matching also guarantees a future POST sub-resource
+ * can never be silently exempted).
+ *
+ * These unary dsh endpoints may legitimately stay silent far beyond the
+ * ordinary window: the host business has NO upstream duration cap and its
+ * progress is delivered out-of-band (session-log events over the WS mux, or
+ * — for chamber host domains — a documented event no-op with idempotent
+ * convergence), so the HTTP response is only a completion echo. Cutting them
+ * on the ordinary idle window would fabricate a client disconnect that never
+ * happened and cancel legitimate host work. Measured 2026-09: a manual
+ * `/compact` (commands/execute → dsh-command-compact → dsh-compaction-basic,
+ * an LLM summarization call replaying a ~627k-token history) was aborted at
+ * exactly 45 001 ms — the proxy idle window — with `compaction/end {error:
+ * "DeepSeek request aborted by caller"}` and the session unchanged.
+ *
+ * Members (2026-09): `/api/commands/execute` (the single funnel for every
+ * upstream slash command — /compact is currently the only LLM-blocking
+ * handler, future long commands arrive through the same path for free) and
+ * `/api/archiveCleanup/purge` (chamber archived-session cleanup host domain,
+ * design 24: unbounded per-session fs deletions with no cancellation wiring,
+ * its own client budget is 5 min — design 24 §5 — which the proxy must not
+ * preempt with a misleading 504). The git worktree domain is deliberately
+ * NOT here: its host mutation has a hard 30s cap below the ordinary window
+ * (design 08). Extend the list only for endpoints with the same contract;
+ * the durable fix for arbitrarily long commands is an admission-only
+ * upstream `commands.execute` whose outcome arrives over the session-event
+ * stream (STATUS).
+ */
+export const LONG_RPC_PATHS: readonly string[] = ['/api/commands/execute', '/api/archiveCleanup/purge']
+
+/**
+ * Long-RPC insurance fuse — deliberately generous, NOT an SLA, and NOT a
+ * business deadline: exempted paths keep a bound so a wedged-but-alive
+ * handler cannot occupy a bounded request slot forever, while real end
+ * conditions stay liveness-driven (client teardown aborts the upstream; a
+ * dead host surfaces through its socket death as an explicit upstream
+ * failure). The value has no empirically grounded ceiling — compaction cost
+ * grows with session size and any estimate would couple the proxy to session
+ * business — so the fuse is set an order of magnitude above the only
+ * measured crossing (~627k-token session still running at 45s) and long-RPC
+ * activity is observable via the `longRpcRequests`/`longRpcTimeouts`
+ * counters. Revisit trigger: a fuse trip counter that is non-zero in a
+ * release means a legitimate operation hit the fuse.
+ */
+export const LONG_RPC_UPSTREAM_TIMEOUT_MS = 30 * 60_000
+
 /** Maximum silence between client request-body chunks. */
 export const CLIENT_BODY_IDLE_TIMEOUT_MS = 30_000
 
@@ -292,6 +345,12 @@ export interface ProxyForwardCounters {
   activeStreams: number
   /** Bytes currently reserved against the process-wide request-body budget. */
   bufferedRequestBytes: number
+  /** Requests that took the long-RPC window (design 03 §3.4; doubles as a
+   * liveness probe for the exemption list — sustained execute traffic with a
+   * stuck-at-zero counter means the upstream route moved). */
+  longRpcRequests: number
+  /** Long-RPC requests that hit the insurance fuse (explicit 504 + abort). */
+  longRpcTimeouts: number
 }
 
 /** One established WS splice. `ownerId` is set by the multi-transport
@@ -313,6 +372,10 @@ export interface ProxyForwardDeps {
   httpRequest?: HttpRequestFactory
   /** Upstream timeout in ms (default UPSTREAM_TIMEOUT_MS; tests inject small values). */
   upstreamTimeoutMs: number
+  /** Upstream idle window for long-RPC paths (default LONG_RPC_UPSTREAM_TIMEOUT_MS; tests inject small values). */
+  longRpcUpstreamTimeoutMs?: number
+  /** Long-RPC paths selecting the exemption (default LONG_RPC_PATHS; `[]` disables the exemption entirely). */
+  longRpcPaths?: readonly string[]
   /** Client upload idle timeout in ms (tests inject small values). */
   clientBodyIdleTimeoutMs: number
   /** WebSocket heartbeat ping cadence in ms (tests inject small values). */
@@ -547,7 +610,7 @@ export function rejectUpgrade(socket: ProxySocket, status: number, code: string,
 }
 
 /**
- * One-shot upstream silence guard (design 03 §3.3): fires the callback when
+ * One-shot upstream silence guard (design 03 §3.4): fires the callback when
  * the upstream produced no socket activity for upstreamTimeoutMs. Covers
  * "headers never arrive" and (re-armed after headers) "body idles" for
  * non-SSE responses; SSE/WebSocket streams never re-arm it, so their
@@ -571,6 +634,16 @@ export function armUpstreamTimeout(deps: ProxyForwardDeps, counters: ProxyForwar
       handle = null
     }
   }
+}
+
+/**
+ * Whether one HTTP request takes the long-RPC window (design 03 §3.4): POST
+ * on one of the exact `paths`. Pure decision predicate — zero timers, tested
+ * by table in instance-proxy.test.ts; forwardHttp consumes it so the arm
+ * sites and the counters agree with the same verdict.
+ */
+export function matchesLongRpcPath(method: string, pathname: string, paths: readonly string[]): boolean {
+  return method.toUpperCase() === 'POST' && paths.includes(pathname)
 }
 
 /** Forward an HTTP request to a fully-resolved target (method/body/query kept).
@@ -727,7 +800,25 @@ export async function forwardHttp(req: ProxyRequest, res: ProxyResponse, target:
   // Headers must arrive within upstreamTimeoutMs; a non-SSE body must not
   // idle longer than that either (re-armed after headers arrive). SSE and
   // upgraded WebSockets never re-arm — long-lived by nature.
-  let clearUpstreamTimeout = armUpstreamTimeout(deps, counters, logger, timeoutAbort)
+  // Long-RPC exemption (design 03 §3.4, LONG_RPC_PATHS): unary endpoints
+  // like /api/commands/execute carry host business with no upstream cap and
+  // out-of-band progress — they get the generous insurance fuse, not the
+  // ordinary idle window. One effective deps object drives every arm so the
+  // log line and re-arms report the same window; the counters make both the
+  // exemption usage and the fuse trips observable (list-liveness probe).
+  const longRpc = matchesLongRpcPath(method, target.pathname, deps.longRpcPaths ?? LONG_RPC_PATHS)
+  const longRpcWindowMs = deps.longRpcUpstreamTimeoutMs ?? LONG_RPC_UPSTREAM_TIMEOUT_MS
+  const timeoutDeps = !longRpc || deps.upstreamTimeoutMs === longRpcWindowMs
+    ? deps
+    : { ...deps, upstreamTimeoutMs: longRpcWindowMs }
+  if (longRpc) counters.longRpcRequests += 1
+  const upstreamTimeout = longRpc
+    ? () => {
+      counters.longRpcTimeouts += 1
+      timeoutAbort()
+    }
+    : timeoutAbort
+  let clearUpstreamTimeout = armUpstreamTimeout(timeoutDeps, counters, logger, upstreamTimeout)
   clearTimeoutGuards = (): void => {
     clearUpstreamTimeout()
     clearUpstreamTimeout = () => {}
@@ -830,7 +921,7 @@ export async function forwardHttp(req: ProxyRequest, res: ProxyResponse, target:
     // Headers are out (or held back only for a small htmlInjectable body): a
     // stalled non-SSE body gets the same explicit teardown (headersSent=true
     // → destroy, the browser sees the stream cut).
-    if (!isSse) clearUpstreamTimeout = armUpstreamTimeout(deps, counters, logger, timeoutAbort)
+    if (!isSse) clearUpstreamTimeout = armUpstreamTimeout(timeoutDeps, counters, logger, upstreamTimeout)
     let received = 0
     // Buffered htmlInjectable body ([] = still accumulating, null = flushed
     // or never eligible). The buffer is capped at MAX_HTML_INJECTION_BYTES;
@@ -854,7 +945,7 @@ export async function forwardHttp(req: ProxyRequest, res: ProxyResponse, target:
       // chunk proves progress and starts a fresh idle window.
       if (!isSse) {
         clearUpstreamTimeout()
-        clearUpstreamTimeout = armUpstreamTimeout(deps, counters, logger, timeoutAbort)
+        clearUpstreamTimeout = armUpstreamTimeout(timeoutDeps, counters, logger, upstreamTimeout)
       }
       received += chunk.length
       if (!isSse && received > MAX_RESPONSE_BODY_BYTES) {

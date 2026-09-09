@@ -155,7 +155,8 @@ export interface SidebarSectionContextValue {
   commitRename: () => void
   /** Server-row archive-cleanup entry: opens the archive manager dialog
    *  (design 24 §6 revision 2026-09 — the manager lists what is archived and
-   *  offers single / multi-select / delete-all purges). */
+   *  offers per-row / multi-select purges; whole-set deletion goes through
+   *  the explicit select-all checkbox — no standalone delete-all). */
   onOpenArchiveCleanup: (server: ChamberServerAggregate) => void
   /** Source-header add-workspace entry (opens the directory browser). */
   setAddingWorkspace: Dispatch<SetStateAction<string | null>>

@@ -315,14 +315,29 @@ export type GatewayPluginApplyIpcResult =
   | { ok: true; installed: string[]; removed: string[]; restarted: boolean; deferred?: boolean }
   | { ok: false; error: string; partial?: GatewayPluginApplyPartial }
 
+/** Gateway materialize executed outcome (settle/restart parity with the
+ *  apply batch — 2026 fix): executed = the executor op terminally succeeded
+ *  (the profile changed); restarted = the controlled managed-dsh restart
+ *  was accepted AND settled, so the plugin is mounted on the running
+ *  instance. ok:false may still carry the outcome when the profile change
+ *  executed before a restart failure. */
+export interface GatewayPluginMaterializeOutcome {
+  executed: boolean
+  restarted: boolean
+}
+
 /** Local plugin materialize outcome (design 21 §6.5/§10 ⑧): cancelled = the
- *  user dismissed the picker; ok:true deferred = the gateway cached the
- *  install intent for the next ready edge (false = accepted onto the
- *  executor queue); ok:false is loud. */
+ *  user dismissed the picker; ok:true deferred = the gateway persisted the
+ *  install intent for the next ready edge (it drains + restarts there);
+ *  ok:true outcome = the executor ran the install AND the desktop asked for
+ *  the controlled restart (outcome.restarted says whether the plugin is
+ *  live now); ok:false is loud and carries outcome when the install
+ *  executed before a restart failure. */
 export type GatewayPluginMaterializeIpcResult =
   | { ok: true; cancelled: true }
-  | { ok: true; deferred: boolean }
-  | { ok: false; error: string }
+  | { ok: true; deferred: true }
+  | { ok: true; outcome: GatewayPluginMaterializeOutcome }
+  | { ok: false; error: string; outcome?: GatewayPluginMaterializeOutcome }
 
 /**
  * The dsh-chamber update surface (design 11) — non-secret only: versions,

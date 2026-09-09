@@ -124,6 +124,7 @@ import {
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { SidebarRootComponentProps } from './contract/slots.ts'
 import { chamberBridge, type ChamberServerAggregate } from '../shared/aggregate-store.ts'
+import { openErrorKey, withoutOpenError } from '../shared/open-outcome.ts'
 import {
   armBlankGhost, BLANK_GHOST_GRACE_MS, increasedForkTitle, nextServerOrder, nextUpdatedOrder,
   orderServersForDisplay, reconciledSessionOrder, serversProjectionSignature, sourceAccentColor,
@@ -170,6 +171,15 @@ const COLLAPSE_SETTLE_MS = 150
  * edge — on the way to the conversation, or around a portalled menu.
  */
 const SCROLLBAR_LINGER_MS = 2000
+
+/**
+ * How long a failed session open stays visible as the row's inline error.
+ * The App-layer dispatch owns the failure (it pays the whole polling budget
+ * before reporting), so the sidebar only presents it — bounded, then gone.
+ * A later outcome for the same session (a fresh request or a success) clears
+ * it early.
+ */
+const OPEN_FAILURE_VISIBLE_MS = 10_000
 
 /**
  * Remote sources carry the derived accent; the local source keeps the default
@@ -702,6 +712,58 @@ export function SidebarRoot({
   // confirm is in flight — the dialog's busy freeze).
   const [renaming, setRenaming] = useState<RenameTarget | null>(null)
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({})
+  // chamber (打开失败可见性): the row-error key one failed/succeeded open
+  // reports into — ServerSection renders it in the session row's action-error
+  // slot. Key template and delete semantics live in shared/open-outcome.ts so
+  // the writer and the reader can never drift.
+  const openErrorTimers = useRef<Map<string, number>>(new Map())
+  /** Drop one session's open-failure row error (early clear paths only). */
+  const clearOpenRowError = useCallback((serverId: string, sessionId: string) => {
+    const key = openErrorKey(serverId, sessionId)
+    const timer = openErrorTimers.current.get(key)
+    if (timer !== undefined) {
+      window.clearTimeout(timer)
+      openErrorTimers.current.delete(key)
+    }
+    setRowErrors(prev => withoutOpenError(prev, key))
+  }, [])
+  // chamber (打开失败可见性): every App-layer open outcome is reported back
+  // over the chamberBridge. Each sidebar shell renders the SAME aggregated
+  // rows, so once the target shell's tree is mounted (the open outcome can
+  // only settle after the shell that serves it mounted — the dispatch budget
+  // runs against its holder) the shell the user is looking at shows the
+  // failure on the very row that was clicked — the old one-way channel left
+  // every failure as a console line while the user stared at the switched
+  // view with nothing selected. Failures appear for OPEN_FAILURE_VISIBLE_MS;
+  // success (or a fresh click, cleared in openSession) removes the error
+  // early. Outcomes settling before the target tree mounts are lost by
+  // design — those edges already surface elsewhere (registry-guard and
+  // replacement failures name the source; queue timeouts land on the boot
+  // failure overlay).
+  useEffect(() => {
+    const armExpiry = (key: string): void => {
+      const previous = openErrorTimers.current.get(key)
+      if (previous !== undefined) window.clearTimeout(previous)
+      openErrorTimers.current.set(key, window.setTimeout(() => {
+        openErrorTimers.current.delete(key)
+        setRowErrors(prev => withoutOpenError(prev, key))
+      }, OPEN_FAILURE_VISIBLE_MS))
+    }
+    const unsubscribe = chamberBridge.onOpenSessionOutcome(({ sourceId, sessionId, message }) => {
+      const key = openErrorKey(sourceId, sessionId)
+      if (message === undefined) {
+        clearOpenRowError(sourceId, sessionId)
+        return
+      }
+      setRowErrors(prev => (prev[key] === message ? prev : { ...prev, [key]: message }))
+      armExpiry(key)
+    })
+    return () => {
+      unsubscribe()
+      for (const timer of openErrorTimers.current.values()) window.clearTimeout(timer)
+      openErrorTimers.current.clear()
+    }
+  }, [clearOpenRowError])
   const [menuOpen, setMenuOpen] = useState<Record<string, boolean>>({})
   const toggleMenu = (key: string): void => {
     setMenuOpen(prev => ({ ...prev, [key]: prev[key] !== true }))
@@ -758,8 +820,11 @@ export function SidebarRoot({
   // chamber (design 24 revision 2026-09): the ARCHIVE MANAGER dialog — one
   // per source. The manager lists the source's archived sessions (metadata
   // rides ChamberServerAggregate.archivedSessions; the dialog issues NO
-  // session read of its own) and offers single-row / multi-select /
-  // delete-all purges through the optional sessionIds purge filter.
+  // session read of its own) and offers per-row and multi-select purges
+  // through the optional sessionIds purge filter. Whole-set deletion has NO
+  // standalone button (2026 user decision): "delete everything" means
+  // ticking the select-all checkbox and confirming the counted
+  // delete-selected, so a purge never covers rows the dialog could not list.
   // Supersedes the v1 server-row preview → window.confirm → purge-everything
   // flow (design 24 §6 as merged); destructive calls stay confirm-gated
   // INSIDE the dialog.
@@ -808,6 +873,9 @@ export function SidebarRoot({
   }
 
   const openSession = (serverId: string, sessionId: string): void => {
+    // A fresh click dismisses any stale failure text on the row immediately
+    // (the dispatch outcome will re-report it if it fails again).
+    clearOpenRowError(serverId, sessionId)
     chamberBridge.requestOpenSession(serverId, sessionId)
   }
 
@@ -1347,8 +1415,10 @@ export function SidebarRoot({
         />
       )}
       {/* chamber (design 24 revision 2026-09): the per-source archive
-          manager — lists what is archived and deletes single / selected /
-          all. Mounted only while a target source is chosen. */}
+          manager — lists what is archived (grouped by workspace, §19) and
+          deletes per-row / selected rows (whole set only via the explicit
+          select-all checkbox — no standalone delete-all, §18). Mounted only
+          while a target source is chosen. */}
       {archiveCleanupServerId !== null && (
         <ArchiveManagerDialog
           server={servers.find(candidate => candidate.id === archiveCleanupServerId) ?? null}

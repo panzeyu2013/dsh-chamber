@@ -1063,21 +1063,40 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     }
     // F4 shell-upgrade fallback (design 18 §3.5): a shell-version mismatch
     // invalidates the persisted override and starts the builtin-switch
-    // transaction. The durable intent journal is normally the resume proof of
-    // an interrupted first transaction — but an update rollback (installer
-    // restarts an older gateway shell against the newer shell's journal) or a
-    // crash window can consume/clear that journal while the pointer still
-    // names the old tree. The stranded result — pointer set + override
-    // invalidated + no resumable journal — makes resolveWorkspace fail loud
-    // on EVERY boot with no HTTP recovery surface (the gateway never reaches
-    // startLocal), so it must self-heal instead of crash-looping. Re-arm F4
-    // whenever the current pointer has no ACTIVE override and nothing
-    // resumable is on disk: the snapshot + probe-gated builtin switch is
-    // exactly the transaction the interrupted invalidation never finished.
-    // A settled invalidation always leaves the pointer cleared (F4 applied)
-    // or the record reactivated (F4 rolled back), so pointer-valid +
-    // invalidatedAt-set + journal-missing uniquely identifies the stranded
-    // state — never a healthy post-F4 boot.
+    // transaction. TWO fingerprints arm it:
+    //  1. FRESH mismatch — the override is not yet invalidated and the
+    //     journal holds nothing RESUMMABLE (missing, or the settled
+    //     applied-monitoring steady state): the upgrade happened while an
+    //     APPLIED override was active, so the new shell must run the
+    //     snapshot + probe-gated builtin switch instead of crashing at the
+    //     first startLocal ('current pointer has no matching active
+    //     override'). Desktop-parity: the desktop controller arms exactly
+    //     this fingerprint (main.ts "A newly observed shell-version mismatch
+    //     starts F4"); the pre-fix gateway owner required the journal to be
+    //     MISSING, so a healthy upgrade over an applied override (settled
+    //     journal) never armed and the gateway crash-looped into the
+    //     installer's rollback. Only LIVE-transaction
+    //     journals (prepared/switched/restoring/…) are NOT armed: an old
+    //     shell's in-flight transaction must never be re-armed under the new
+    //     shell — it keeps its own journal-mismatch block / rollback-
+    //     continuation semantics (runStartupPhase), and writeActivationIntent
+    //     refuses anyway. An intent-phase old-shell transaction IS replaced
+    //     by the fresh arm (desktop parity).
+    //  2. STRANDED invalidation — pointer set + override invalidated + no
+    //     resumable journal: an update rollback (installer restarts an older
+    //     gateway shell against the newer shell's journal) or a crash window
+    //     consumed/cleared the intent journal while the pointer still names
+    //     the old tree. The stranded result makes resolveWorkspace fail loud
+    //     on EVERY boot with no HTTP recovery surface (the gateway never
+    //     reaches startLocal), so it must self-heal instead of
+    //     crash-looping. Re-arm F4 whenever the current pointer has no
+    //     ACTIVE override and nothing resumable is on disk: the snapshot +
+    //     probe-gated builtin switch is exactly the transaction the
+    //     interrupted invalidation never finished. A settled invalidation
+    //     always leaves the pointer cleared (F4 applied) or the record
+    //     reactivated (F4 rolled back), so pointer-valid + invalidatedAt-set
+    //     + journal-missing uniquely identifies the stranded state — never a
+    //     healthy post-F4 boot.
     if (envPath === null) {
       const record = readOverride(baseDir)
       const existingJournal = readActivationJournalState(baseDir)
@@ -1113,7 +1132,26 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
           lastError: null,
         })
       }
-      if (existingJournal.kind === 'missing' && (shellMismatch || strandedInvalidation)) {
+      // Arming gate (2026-09 upgrade-regression fix, desktop parity): a
+      // FRESH shell mismatch arms unless a LIVE transaction journal exists
+      // (prepared/switched/restoring/… phases — an old shell's in-flight
+      // transaction must not be re-armed under the new shell; it keeps its
+      // journal-mismatch block / rollback-continuation semantics, and
+      // writeActivationIntent refuses those phases anyway). Settled and
+      // intent-phase journals DO arm: missing/applied-monitoring = the
+      // healthy post-commit upgrade case (the intent write queues onto the
+      // monitoring journal and the startup phase converts it); an
+      // intent-phase version-switch from the old shell is replaced by the
+      // fresh shell-invalidation intent — exactly the desktop controller's
+      // behavior (main.ts writes the F4 intent unconditionally on a fresh
+      // mismatch). A STRANDED invalidation arms only when its intent journal
+      // was lost (journal-missing) — with the journal present the
+      // transaction simply resumes.
+      const journalLiveTransaction = existingJournal.kind === 'valid'
+        && existingJournal.journal.phase !== 'applied-monitoring'
+        && existingJournal.journal.phase !== 'intent'
+      if ((shellMismatch && !journalLiveTransaction)
+        || (strandedInvalidation && existingJournal.kind === 'missing')) {
         writeActivationIntent(baseDir, {
           targetVersion: requireBuiltinVersion(),
           targetIsBuiltin: true,

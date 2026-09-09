@@ -196,6 +196,17 @@ declare module '@deepseek-ai/dsh-client-ui-primitives' {
   }
   /** Row action dropdown (portal mode for the overflow-clipping sidebar). */
   export const Menu: (props: any) => ReactElement | null
+  /**
+   * Official modal shell (archive manager chrome, 2026 style pass): centered
+   * body-portaled card over a blurred mask; Esc / mask / close button all
+   * invoke onClose; `open`/`title`/`closeLabel` (+ optional `description`,
+   * `footer`, `className`, `contentClassName`, `headless`). Loose face (the
+   * vendor shape is the source of truth).
+   */
+  export const Modal: (props: any) => ReactElement | null
+  /** Official capsule button atom (`variant`: primary/ghost/outline/toolbar;
+   *  `size`: md/sm; `icon`; native button props pass through). Loose face. */
+  export const Button: (props: any) => ReactElement | null
 }
 
 declare module '@deepseek-ai/dsh-client-ui-directory-picker-browse/client/DirectoryBrowser.tsx' {

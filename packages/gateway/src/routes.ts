@@ -56,6 +56,7 @@ import type { ChamberInstalled } from './plugins-installed.ts'
 import { thirdPartyRoot } from './plugins-journal.ts'
 import type { PluginTaskSubmitInput, PluginTaskSubmitResult, PluginTaskTasksProjection } from './plugins-tasks.ts'
 import { scanTgzMetadata, TGZ_MAX_ENTRIES, TGZ_MAX_UNPACKED_BYTES } from './tgz-scan.ts'
+import { sanitizeRouteError } from './sanitize-route-error.ts'
 import { codedError, headerValue, jsonResponse, readBoundedBody } from './http-utils.ts'
 
 /** The A1 mutation-orchestrator surface the routes drive (design 21 §6.2;
@@ -1000,7 +1001,13 @@ export function createChamberSurface(deps: ChamberSurfaceDeps): ChamberSurface {
           }
           if (code === 'request_aborted') return true
           if (code === 'invalid_input') {
-            jsonResponse(res, 400, { error: 'invalid_input', code: 'invalid_input' })
+            // Echo the REASON (sanitized — names/size bounds only, never a
+            // path or credential), not a bare code: a syncing desktop that
+            // meets an older gateway must see why its package was refused
+            // (e.g. "unsyncable package … — this gateway release does not
+            // know it"), instead of an unexplained 400.
+            const detail = error instanceof Error && error.message !== '' ? error.message : 'invalid_input'
+            jsonResponse(res, 400, { error: sanitizeRouteError(detail), code: 'invalid_input' })
             return true
           }
           // Any other throw is a persistence failure (fs write, permissions,

@@ -24,14 +24,16 @@ import {
   __testConfiguredContexts, __testDisposedCount, __testEventLog,
   __testEntryStates, __testOpenedSessions, __testQueueDisposeGate, __testQueueRunGate,
   __testResetConfiguredContexts, __testResetDisposed, __testResetEventLog,
-  __testResetLifecycle, __testSetSessionsListed, __testSetSessionsOpenError,
+  __testResetLifecycle, __testSetSessionsAvailable, __testSetSessionsListed,
+  __testSetSessionsOpenError, __testSetSessionsReadError,
   __testSetSessionsSnapshotError,
-  __testSetBootError, __testSetModuleSystemError, __testSetRunError,
+  __testSetBootError, __testSetChamberPrefetchError, __testSetModuleSystemError, __testSetRunError,
 } from '../test-fixtures/dsh-client-web.mjs'
 
 const shellModule = await import('../src/shell.ts')
 const {
-  disposeAllShells, disposeInstanceShell, openInstanceSession,
+  disposeAllShells, disposeInstanceShell, INSTANCE_TAIL_WAIT_CAP_MS, openInstanceSession,
+  tailWaitRemainingMs,
 } = shellModule
 
 const testSourceFingerprint = (instanceId: string): string => instanceId === 'local'
@@ -139,6 +141,8 @@ test('bootInstanceShell: a clean run settles booted with no error and keeps the 
       chamberBasePath: '/api/i/ssh-test-clean-2',
       chamberSourceFingerprint: testSourceFingerprint('ssh-test-clean-2'),
       chamberTransport: 'ssh',
+      // 代际事实（producer 注册表的栅栏输入）。
+      chamberBootGeneration: 1,
     }])
   } finally {
     __testResetConfiguredContexts()
@@ -282,12 +286,15 @@ test('bootInstanceShell: installs the module system BEFORE any host-graph fetch 
     const state = await bootInstanceShell('ssh-test-order-5', '/api/i/ssh-test-order-5', {} as HTMLElement, () => {})
     assert.equal(state.booted, true)
     // The fixture's ensureWebModuleSystem records 'ensure' synchronously at
-    // bootInstanceShell entry; the fetch is collectExtraRows's first step.
+    // bootInstanceShell entry; the C3 gate's chamber prefetch fires right
+    // after (its event is pushed synchronously); the fetch is
+    // collectExtraRows's first step.
     // collectExtraRows now retries the pre-ready 503 on a bounded budget, so
     // the event log carries repeated 'fetch' entries — the invariant under
-    // test is the ORDER (module system installed before the FIRST fetch).
+    // test is the ORDER (module system installed before the FIRST fetch, and
+    // the chamber prefetch between the two — C3 gate, 2026-09).
     const events = __testEventLog()
-    assert.deepEqual(events.slice(0, 2), ['ensure', 'fetch'])
+    assert.deepEqual(events.slice(0, 3), ['ensure', 'prefetch:@dsh-chamber/app', 'fetch'])
   } finally {
     __testResetEventLog()
     restoreFetch()
@@ -366,6 +373,81 @@ test('bootInstanceShell: a cancelled generation cannot overwrite the retry plugi
     console.error = originalConsoleError
     restoreWindow()
   }
+})
+
+test('bootInstanceShell: a never-settling same-id predecessor stops pinning the id at the wait cap', async (t) => {
+  // 2026-12 复查 BLOCKER：严格同 id 尾必须保留（它是 generation 记录的持有者），
+  // 但"等待上一代"必须有绝对上限——否则一个 entry.run() 永不 settle 的 boot 会让
+  // 该源此后每次重挂都卡住。上限 = 两个 boot 预算，低于 App 的放弃上限。
+  const instanceId = 'ssh-test-tail-cap-9'
+  __testResetLifecycle()
+  const gen1Gate = __testQueueRunGate('gen1')
+  const restoreFetch = stubReadyGraph(() => undefined)
+  const restoreWindow = stubWindow()
+  const originalConsoleError = console.error
+  let gen1Boot: ReturnType<typeof bootInstanceShell> | undefined
+  let gen2Boot: ReturnType<typeof bootInstanceShell> | undefined
+  let gen2Gate: ReturnType<typeof __testQueueRunGate> | undefined
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  console.error = () => {}
+  try {
+    gen1Boot = bootInstanceShell(instanceId, `/api/i/${instanceId}`, {} as HTMLElement, () => {})
+    await gen1Gate.started
+
+    gen2Gate = __testQueueRunGate('gen2')
+    gen2Boot = bootInstanceShell(instanceId, `/api/i/${instanceId}`, {} as HTMLElement, () => {})
+    await Promise.resolve()
+    // 上限之前：后继代仍严格等前代（不抢注册/teardown）。
+    t.mock.timers.tick(INSTANCE_TAIL_WAIT_CAP_MS - 1)
+    await Promise.resolve()
+    // 上限到点：后继代放行，且迟到注册的前代被 generation 判为 superseded。
+    t.mock.timers.tick(1)
+    await gen2Gate.started
+    assert.equal(__testEntryStates().filter(entry => entry.label === 'gen2').length, 1)
+    gen2Gate.release()
+    const gen2State = await gen2Boot
+    assert.equal(gen2State.booted, true)
+
+    // 迟到后继：同 id 尾已在上一代 settle 后释放，它必须立刻入队。
+    // 绝对截止（共享，而非每个后继各等一个上限）由纯函数 tailWaitRemainingMs 单测
+    // 钉住——时间敏感的一体化断言在这里观察不到（2026-12 复查 MINOR）。
+    const lateGate = __testQueueRunGate('late')
+    const lateBoot = bootInstanceShell(instanceId, `/api/i/${instanceId}`, {} as HTMLElement, () => {})
+    await lateGate.started
+    lateGate.release()
+    const lateState = await lateBoot
+    assert.equal(lateState.booted, true, 'a late successor joins without a fresh full cap')
+
+    // 前代最终 settle 时不得覆盖后继（generation 阈值）。
+    gen1Gate.release()
+    const gen1State = await gen1Boot
+    assert.equal(gen1State.booted, false)
+    assert.match(gen1State.error ?? '', /superseded/)
+    // 每个新代都会退役上一代（同 id 前驱），最终只有最新一代存活。
+    assert.deepEqual(__testEntryStates(), [
+      { label: 'gen1', disposed: true },
+      { label: 'gen2', disposed: true },
+      { label: 'late', disposed: false },
+    ])
+  } finally {
+    gen1Gate.release()
+    gen2Gate?.release()
+    restoreFetch()
+    restoreWindow()
+    console.error = originalConsoleError
+    disposeAllShells()
+    __testResetLifecycle()
+  }
+})
+
+test('tailWaitRemainingMs: all successors share one absolute deadline', () => {
+  // 2026-12 复查 MINOR：时间敏感的一体化断言观察不到"共享截止"，这里用纯函数钉住
+  // 语义——已过期的截止必须立刻放行（0），未给截止才退回一个完整上限。
+  assert.equal(tailWaitRemainingMs(undefined, 1_000), INSTANCE_TAIL_WAIT_CAP_MS)
+  assert.equal(tailWaitRemainingMs(1_000 + INSTANCE_TAIL_WAIT_CAP_MS, 1_000), INSTANCE_TAIL_WAIT_CAP_MS)
+  assert.equal(tailWaitRemainingMs(1_000 + INSTANCE_TAIL_WAIT_CAP_MS - 1, 1_000), INSTANCE_TAIL_WAIT_CAP_MS - 1)
+  assert.equal(tailWaitRemainingMs(1_000, 1_000), 0, 'an expired deadline joins immediately')
+  assert.equal(tailWaitRemainingMs(500, 1_000), 0, 'a long-expired deadline joins immediately')
 })
 
 test('bootInstanceShell: timeout releases a different id while same-id gen2 waits for gen1 teardown', async (t) => {
@@ -945,5 +1027,266 @@ test('openInstanceSession: a late boot flush keeps the original 68s total deadli
     console.error = originalConsoleError
     restoreFetch()
     restoreWindow()
+  }
+})
+
+test('openInstanceSession: a direct dispatch whose sessions service registers after the first attempt still opens', async (t) => {
+  const instanceId = 'ssh-test-service-late-direct'
+  const restoreFetch = stubReadyGraph()
+  const restoreWindow = stubWindow()
+  __testResetLifecycle()
+  __testSetSessionsAvailable(false)
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
+  try {
+    const state = await bootInstanceShell(instanceId, `/api/i/${instanceId}`, {} as HTMLElement, () => {})
+    assert.equal(state.booted, true)
+    // The holder exists but the runtime sessions service is not registered
+    // yet (boot settle waits only on root fibers). The open must stay pending
+    // and poll, never fail on the first attempt.
+    const opening = openInstanceSession(instanceId, 'late-service-session')
+    let settled = false
+    void opening.then(() => { settled = true }, () => { settled = true })
+    await Promise.resolve()
+    assert.equal(settled, false)
+
+    __testSetSessionsAvailable(true)
+    t.mock.timers.tick(400)
+    await opening
+    assert.deepEqual(__testOpenedSessions(), [
+      { label: 'entry-1', sessionId: 'late-service-session' },
+    ])
+  } finally {
+    disposeInstanceShell(instanceId)
+    __testResetLifecycle()
+    t.mock.timers.reset()
+    restoreFetch()
+    restoreWindow()
+  }
+})
+
+test('openInstanceSession: a queued open flushed before the sessions service registers polls instead of failing instantly', async (t) => {
+  const instanceId = 'ssh-test-service-late-flush'
+  const restoreFetch = stubReadyGraph()
+  const restoreWindow = stubWindow()
+  const originalConsoleError = console.error
+  __testResetLifecycle()
+  __testSetSessionsAvailable(false)
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
+  console.error = () => {}
+  let boot: ReturnType<typeof bootInstanceShell> | undefined
+  let opening: Promise<void> | undefined
+  try {
+    // Cold-shell click: the open is queued while the boot is still gated, so
+    // the flush (right after entries.set) is the first dispatch attempt.
+    const runGate = __testQueueRunGate('slow-boot')
+    opening = openInstanceSession(instanceId, 'flushed-before-service')
+    let settled = false
+    void opening.then(() => { settled = true }, () => { settled = true })
+    boot = bootInstanceShell(instanceId, `/api/i/${instanceId}`, {} as HTMLElement, () => {})
+    await runGate.started
+    runGate.release()
+    const state = await boot
+    assert.equal(state.booted, true)
+    await Promise.resolve()
+    assert.equal(settled, false)
+
+    __testSetSessionsAvailable(true)
+    t.mock.timers.tick(400)
+    await opening
+    assert.equal(settled, true)
+    assert.deepEqual(__testOpenedSessions(), [
+      { label: 'slow-boot', sessionId: 'flushed-before-service' },
+    ])
+  } finally {
+    if (boot !== undefined) await Promise.allSettled([boot])
+    disposeInstanceShell(instanceId)
+    if (opening !== undefined) await Promise.allSettled([opening])
+    __testResetLifecycle()
+    t.mock.timers.reset()
+    console.error = originalConsoleError
+    restoreFetch()
+    restoreWindow()
+  }
+})
+
+test('openInstanceSession: a sessions service that never registers fails loud at the deadline with the boot-readiness report', async (t) => {
+  const instanceId = 'ssh-test-service-never-ready'
+  const restoreFetch = stubReadyGraph()
+  const restoreWindow = stubWindow()
+  const originalConsoleError = console.error
+  __testResetLifecycle()
+  __testSetSessionsAvailable(false)
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
+  console.error = () => {}
+  try {
+    const state = await bootInstanceShell(instanceId, `/api/i/${instanceId}`, {} as HTMLElement, () => {})
+    assert.equal(state.booted, true)
+    const opening = openInstanceSession(instanceId, 'never-ready-session')
+    const rejected = assert.rejects(opening, /boot 未完全就绪/)
+    let settled = false
+    void opening.then(() => { settled = true }, () => { settled = true })
+    await Promise.resolve()
+    // Pins the fail-fast removal: pre-fix code rejected synchronously here,
+    // so `settled` would already be true with the same terminal message.
+    assert.equal(settled, false)
+
+    // Still polling halfway through the 8s budget — the failure must land on
+    // the dispatch's own deadline, not on the first attempt.
+    t.mock.timers.tick(4_000)
+    await Promise.resolve()
+    assert.equal(settled, false)
+    t.mock.timers.tick(4_001)
+    await rejected
+    assert.equal(settled, true)
+    assert.deepEqual(__testOpenedSessions(), [])
+  } finally {
+    disposeInstanceShell(instanceId)
+    __testResetLifecycle()
+    t.mock.timers.reset()
+    console.error = originalConsoleError
+    restoreFetch()
+    restoreWindow()
+  }
+})
+
+test('openInstanceSession: disposing while the sessions service is still absent cancels the wait and nothing opens later', async (t) => {
+  const instanceId = 'ssh-test-service-dispose-wait'
+  const restoreFetch = stubReadyGraph()
+  const restoreWindow = stubWindow()
+  __testResetLifecycle()
+  __testSetSessionsAvailable(false)
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
+  try {
+    const state = await bootInstanceShell(instanceId, `/api/i/${instanceId}`, {} as HTMLElement, () => {})
+    assert.equal(state.booted, true)
+    const opening = openInstanceSession(instanceId, 'disposed-while-waiting')
+    const rejected = assert.rejects(opening, /shell disposed/)
+
+    disposeInstanceShell(instanceId)
+    await rejected
+    // The cancelled poller must not survive the holder: even a service that
+    // arrives later must never reach sessions.open for the disposed shell.
+    __testSetSessionsAvailable(true)
+    t.mock.timers.tick(4_000)
+    await Promise.resolve()
+    assert.deepEqual(__testOpenedSessions(), [])
+  } finally {
+    disposeInstanceShell(instanceId)
+    __testResetLifecycle()
+    t.mock.timers.reset()
+    restoreFetch()
+    restoreWindow()
+  }
+})
+
+test('openInstanceSession: a throwing runtimeCtx read fails loud instantly (distinct from the transient undefined arm)', async (t) => {
+  const instanceId = 'ssh-test-service-read-hostile'
+  const restoreFetch = stubReadyGraph()
+  const restoreWindow = stubWindow()
+  const originalConsoleError = console.error
+  __testResetLifecycle()
+  __testSetSessionsReadError(hostileThrownValue())
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
+  console.error = () => {}
+  try {
+    const state = await bootInstanceShell(instanceId, `/api/i/${instanceId}`, {} as HTMLElement, () => {})
+    assert.equal(state.booted, true)
+    // A throwing read is terminal on the first attempt (never-throw
+    // descriptor); only an UNDEFINED read is the transient poll state.
+    const opening = openInstanceSession(instanceId, 'read-hostile-session')
+    const rejected = assert.rejects(opening, /unknown error/)
+    await Promise.resolve()
+    await rejected
+    t.mock.timers.tick(4_000)
+    await Promise.resolve()
+    assert.deepEqual(__testOpenedSessions(), [])
+  } finally {
+    disposeInstanceShell(instanceId)
+    __testResetLifecycle()
+    t.mock.timers.reset()
+    console.error = originalConsoleError
+    restoreFetch()
+    restoreWindow()
+  }
+})
+
+test('openInstanceSession: a service that arrives after the first attempt but never lists the session reports 等待超时 at the deadline', async (t) => {
+  const instanceId = 'ssh-test-service-late-never-listed'
+  const restoreFetch = stubReadyGraph()
+  const restoreWindow = stubWindow()
+  const originalConsoleError = console.error
+  __testResetLifecycle()
+  __testSetSessionsAvailable(false)
+  __testSetSessionsListed(false)
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
+  console.error = () => {}
+  try {
+    const state = await bootInstanceShell(instanceId, `/api/i/${instanceId}`, {} as HTMLElement, () => {})
+    assert.equal(state.booted, true)
+    const opening = openInstanceSession(instanceId, 'late-service-never-listed')
+    const rejected = assert.rejects(opening, /等待超时/)
+
+    // Attempt 1 saw no service; from attempt 2 on the service exists (so the
+    // boot-readiness report must NOT fire) but the session never surfaces.
+    __testSetSessionsAvailable(true)
+    t.mock.timers.tick(8_001)
+    await rejected
+    assert.deepEqual(__testOpenedSessions(), [])
+  } finally {
+    disposeInstanceShell(instanceId)
+    __testResetLifecycle()
+    t.mock.timers.reset()
+    console.error = originalConsoleError
+    restoreFetch()
+    restoreWindow()
+  }
+})
+
+// ── C3 gate (2026-09 性能审计): the chamber prefetch must fire before the
+// extra-row channel is consulted, and its failure is swallowed by the shell
+// gate (the loud path is run()'s create-side import; a boot with no extra
+// rows never even reaches the gate's await). The fixture now returns the
+// module-system face (manifest + prefetch) so these paths are exercised for
+// real instead of degrading through a swallowed TypeError.
+test('C3 gate: chamber prefetch fires after the module system install and before the boot settles', async () => {
+  const instanceId = 'local'
+  const restoreFetch = stubReadyGraph()
+  __testResetEventLog()
+  __testResetLifecycle()
+  try {
+    const state = await bootInstanceShell(instanceId, '/api/i/local', {} as HTMLElement, () => {})
+    assert.equal(state.booted, true)
+    const log = __testEventLog()
+    assert.ok(log.includes('ensure'), `module system installed first (log: ${log.join(',')})`)
+    const prefetchAt = log.indexOf('prefetch:@dsh-chamber/app')
+    assert.ok(prefetchAt !== -1, `chamber prefetch fired (log: ${log.join(',')})`)
+    assert.ok(prefetchAt > log.indexOf('ensure'), 'prefetch strictly after the module-system install')
+  } finally {
+    disposeInstanceShell(instanceId)
+    __testResetLifecycle()
+    __testResetEventLog()
+    restoreFetch()
+  }
+})
+
+test('C3 gate: a chamber prefetch rejection is swallowed — the boot still settles (loud owned by create-side import)', async () => {
+  const instanceId = 'local'
+  const restoreFetch = stubReadyGraph()
+  const originalConsoleError = console.error
+  console.error = () => {}
+  __testResetEventLog()
+  __testResetLifecycle()
+  try {
+    __testSetChamberPrefetchError(new Error('chamber bundle load failed'))
+    const state = await bootInstanceShell(instanceId, '/api/i/local', {} as HTMLElement, () => {})
+    assert.equal(state.booted, true)
+    assert.ok(__testEventLog().includes('prefetch:@dsh-chamber/app'))
+  } finally {
+    disposeInstanceShell(instanceId)
+    __testSetChamberPrefetchError(undefined)
+    __testResetLifecycle()
+    __testResetEventLog()
+    console.error = originalConsoleError
+    restoreFetch()
   }
 })

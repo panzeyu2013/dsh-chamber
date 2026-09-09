@@ -356,6 +356,17 @@ export interface CollectExtraRowsDeps {
   loadModuleBundle(url: string): Promise<void>
   reportDiagnostic?(sourceId: string, diagnostic: PluginGraphDiagnostic): void
   /**
+   * C3 (2026-09 性能审计): awaited once the graph rows are known, BEFORE the
+   * first extra-bundle load pass. The chamber composite entry evaluates
+   * inside this window and its covered-factory registration answers the
+   * `@deepseek-ai/dsh-client-ui-primitives` require edges the seed no longer
+   * serves (dsh-client-web seed.ts/platform.ts deviation). The graph fetch
+   * itself stays concurrent with the chamber evaluation — the gate is only at
+   * the load step, so a slow/503-retrying instance probe overlaps the chamber
+   * entry's main-thread eval. Optional: absent callers keep today's ordering.
+   */
+  awaitBeforeLoad?(): Promise<void>
+  /**
    * Retry budget for the transient 503 `instance_unavailable` pre-ready
    * signal (design 09 module C race: the shell may boot while the instance is
    * still starting; the proxy answers 503 fast and the graph appears moments
@@ -461,6 +472,13 @@ export async function collectExtraRows(
   }
   if (firstFetch.rows === null) return []
   const rows = toExtraRows(dedupeHostEntries(firstFetch.rows, CHAMBER_COVERED_IDS), basePath)
+  // C3: the chamber entry must have evaluated before any extra bundle executes
+  // (its covered factory answers the ui-primitives platform-word require edges
+  // the seed no longer serves — see the deps comment). The gate promise was
+  // already fired by the shell in parallel with this graph fetch.
+  if (deps.awaitBeforeLoad !== undefined && rows.length > 0) {
+    await deps.awaitBeforeLoad()
+  }
   let restartConflict: ExtraModuleRow | undefined
   let versionConflict: ExtraModuleRow | undefined
   /** Rows whose FRESH load failed with an ordinary error (not a DOM-script
@@ -579,6 +597,12 @@ export async function collectExtraRows(
     }
   }
   await Promise.all(rows.map(row => loadRow(row)))
+  // The C3 gate (`deps.awaitBeforeLoad`) is NOT re-awaited here: it settled
+  // before the first load pass above, and the recovery reloads only re-execute
+  // bundle scripts (registering factories); the synchronous require edges they
+  // carry run later, during run()'s loader.create materialization — by then
+  // the chamber entry has evaluated (or its failure is loud via the known
+  // create-side race, chamber-entry.ts header). Do not add a second gate here.
   // Bounded recovery cycle (2026-09 restart-straddle fix, module docstring):
   // upstream bundle revs are opaque per-process nonces, so an instance
   // restart between the graph fetch and the bundle loads makes every

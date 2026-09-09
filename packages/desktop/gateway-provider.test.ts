@@ -1473,7 +1473,15 @@ function startSyncHttpServer(
   handler: (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse) => void,
 ): Promise<{ port: number; close(): Promise<void> }> {
   return new Promise((resolve, reject) => {
-    const server = createServer(handler)
+    // connection: close keeps every stub request on a FRESH socket — several
+    // stub handlers answer without consuming the request body, and node's
+    // server parser can desync on keep-alive reuse after an unconsumed body
+    // (HPE_INVALID_METHOD on the next request), which would corrupt the very
+    // settle/restart sequences these tests drive.
+    const server = createServer((req, res) => {
+      res.setHeader('connection', 'close')
+      handler(req, res)
+    })
     server.on('error', reject)
     server.listen(0, '127.0.0.1', () => {
       const address = server.address() as AddressInfo
@@ -2236,14 +2244,40 @@ test('gatewayChamberApplyBatch: settle timeout and restart-poll timeout stay lou
   }
 })
 
-test('gatewayChamberMaterialize: uploads the tarball with the exact headers and maps 202 (opId) to deferred:false', async () => {
+test('gatewayChamberMaterialize: uploads the tarball with the exact headers, waits for the executor op and restarts the managed dsh (202 settle parity)', async () => {
   const seen: Array<{ method: string; url: string; headers: import('node:http').IncomingHttpHeaders; body: Buffer }> = []
+  let statusCalls = 0
   const server = await startSyncHttpServer((req, res) => {
+    res.setHeader('connection', 'close')
     const chunks: Buffer[] = []
     req.on('data', (chunk: Buffer) => chunks.push(chunk))
     req.on('end', () => {
       seen.push({ method: req.method ?? '', url: req.url ?? '', headers: req.headers, body: Buffer.concat(chunks) })
-      fixtureJson(res, 202, { accepted: true, opId: 'op-mat-1' })
+      if (req.url === '/chamber/plugins/materialize' && req.method === 'PUT') {
+        fixtureJson(res, 202, { accepted: true, opId: 'op-mat-1' })
+        return
+      }
+      if (req.url === '/chamber/plugins/tasks' && req.method === 'GET') {
+        fixtureJson(res, 200, {
+          ok: true,
+          busy: false,
+          tasks: [{ id: 'op-mat-1', kind: 'materialize', name: 'custom-pkg', preImage: null, status: 'ok' }],
+          deferred: [],
+        })
+        return
+      }
+      if (req.url === '/chamber/runtime/restart' && req.method === 'POST') {
+        fixtureJson(res, 202, { accepted: true })
+        return
+      }
+      if (req.url === '/chamber/runtime/status' && req.method === 'GET') {
+        statusCalls += 1
+        fixtureJson(res, 200, statusCalls === 1
+          ? { kind: GATEWAY_RUNTIME_IDENTITY, connectionState: 'restarting', restart: 'running' }
+          : { kind: GATEWAY_RUNTIME_IDENTITY, connectionState: 'ready', restart: 'ok' })
+        return
+      }
+      fixtureJson(res, 404, { error: 'not_found', code: 'not_found' })
     })
   })
   try {
@@ -2255,22 +2289,37 @@ test('gatewayChamberMaterialize: uploads the tarball with the exact headers and 
       tarball: FIXTURE_TARBALL,
       name: 'custom-pkg',
       version: '1.2.3',
+      settleIntervalMs: 5,
+      restartPollIntervalMs: 5,
+      requestTimeoutMs: 2_000,
     })
-    assert.deepEqual(result, { ok: true, deferred: false })
-    assert.equal(seen.length, 1)
-    assert.equal(seen[0].method, 'PUT')
-    assert.equal(seen[0].url, '/chamber/plugins/materialize')
-    assert.equal(seen[0].headers['x-plugin-name'], 'custom-pkg')
-    assert.equal(seen[0].headers['x-plugin-version'], '1.2.3')
-    assert.equal(seen[0].headers['content-length'], String(FIXTURE_TARBALL.length))
-    assert.equal(seen[0].headers.authorization, 'Bearer test-token')
-    assert.ok(seen[0].body.equals(FIXTURE_TARBALL))
+    assert.deepEqual(result, { ok: true, outcome: { executed: true, restarted: true } })
+    assert.deepEqual(seen.map(entry => `${entry.method} ${entry.url}`), [
+      'PUT /chamber/plugins/materialize',
+      // The desktop does NOT stop at the 202: it waits for the executor op
+      // to settle, then asks for the controlled restart and polls it —
+      // exactly the apply-batch discipline (the plugin mounts only on the
+      // next spawn, so the restart is part of the install flow).
+      'GET /chamber/plugins/tasks',
+      'POST /chamber/runtime/restart',
+      'GET /chamber/runtime/status',
+      'GET /chamber/runtime/status',
+    ])
+    const upload = seen[0]!
+    assert.equal(upload.method, 'PUT')
+    assert.equal(upload.url, '/chamber/plugins/materialize')
+    assert.equal(upload.headers['x-plugin-name'], 'custom-pkg')
+    assert.equal(upload.headers['x-plugin-version'], '1.2.3')
+    assert.equal(upload.headers['content-length'], String(FIXTURE_TARBALL.length))
+    assert.equal(upload.headers.authorization, 'Bearer test-token')
+    assert.ok(upload.body.equals(FIXTURE_TARBALL))
+    for (const entry of seen) assert.equal(entry.headers.authorization, 'Bearer test-token')
   } finally {
     await server.close()
   }
 })
 
-test('gatewayChamberMaterialize: a deferred answer maps to {ok:true, deferred:true}; refusals map their code', async () => {
+test('gatewayChamberMaterialize: a deferred answer maps to {ok:true,deferred:true}; refusals map their code', async () => {
   const deferredServer = await startSyncHttpServer((_req, res) => {
     fixtureJson(res, 202, { accepted: true, deferred: true, intentId: 'int-mat' })
   })
@@ -2309,6 +2358,174 @@ test('gatewayChamberMaterialize: a deferred answer maps to {ok:true, deferred:tr
     }
   } finally {
     await refusalServer.close()
+  }
+})
+
+test('gatewayChamberMaterialize: a failed executor op and a refused restart are loud, with the executed fact carried', async () => {
+  // Op failure: the executor reports the terminal op as failed.
+  const failedOpServer = await startSyncHttpServer((req, res) => {
+    if (req.url === '/chamber/plugins/materialize' && req.method === 'PUT') {
+      fixtureJson(res, 202, { accepted: true, opId: 'op-mat-fail' })
+      return
+    }
+    if (req.url === '/chamber/plugins/tasks' && req.method === 'GET') {
+      fixtureJson(res, 200, {
+        ok: true,
+        busy: false,
+        tasks: [{ id: 'op-mat-fail', kind: 'materialize', name: 'custom-pkg', preImage: null, status: 'failed', error: 'pnpm install failed on the gateway' }],
+        deferred: [],
+      })
+      return
+    }
+    fixtureJson(res, 404, { error: 'not_found', code: 'not_found' })
+  })
+  try {
+    const failed = await gatewayChamberMaterialize({
+      id: 'gw-1',
+      url: `http://127.0.0.1:${failedOpServer.port}`,
+      headers: {},
+      spkiPin: null,
+      tarball: FIXTURE_TARBALL,
+      name: 'custom-pkg',
+      version: '1.2.3',
+      settleIntervalMs: 5,
+      requestTimeoutMs: 2_000,
+    })
+    assert.equal(failed.ok, false)
+    if (!failed.ok) {
+      assert.equal(failed.outcome, undefined, 'a failed op executed nothing')
+      assert.match(failed.error, /materialize of custom-pkg failed on the gateway: pnpm install failed on the gateway/)
+    }
+  } finally {
+    await failedOpServer.close()
+  }
+
+  // Restart refused AFTER the op settled: loud partial with the executed fact.
+  const restartRefusalServer = await startSyncHttpServer((req, res) => {
+    if (req.url === '/chamber/plugins/materialize' && req.method === 'PUT') {
+      fixtureJson(res, 202, { accepted: true, opId: 'op-mat-ok' })
+      return
+    }
+    if (req.url === '/chamber/plugins/tasks' && req.method === 'GET') {
+      fixtureJson(res, 200, {
+        ok: true,
+        busy: false,
+        tasks: [{ id: 'op-mat-ok', kind: 'materialize', name: 'custom-pkg', preImage: null, status: 'ok' }],
+        deferred: [],
+      })
+      return
+    }
+    if (req.url === '/chamber/runtime/restart' && req.method === 'POST') {
+      fixtureJson(res, 409, { error: 'a mutation is still running', code: 'busy' })
+      return
+    }
+    fixtureJson(res, 404, { error: 'not_found', code: 'not_found' })
+  })
+  try {
+    const refused = await gatewayChamberMaterialize({
+      id: 'gw-1',
+      url: `http://127.0.0.1:${restartRefusalServer.port}`,
+      headers: {},
+      spkiPin: null,
+      tarball: FIXTURE_TARBALL,
+      name: 'custom-pkg',
+      version: '1.2.3',
+      settleIntervalMs: 5,
+      requestTimeoutMs: 2_000,
+    })
+    assert.equal(refused.ok, false)
+    if (!refused.ok) {
+      assert.deepEqual(refused.outcome, { executed: true, restarted: false }, 'the install executed before the restart refusal')
+      assert.match(refused.error, /restart of the managed dsh refused after the plugin was installed \(HTTP 409, code busy\)/)
+    }
+  } finally {
+    await restartRefusalServer.close()
+  }
+})
+
+test('gatewayChamberMaterialize: an unsettled executor op and an unsettled restart are loud timeouts', async () => {
+  // The op never reaches a terminal journal state within the poll budget.
+  const pendingServer = await startSyncHttpServer((req, res) => {
+    if (req.url === '/chamber/plugins/materialize' && req.method === 'PUT') {
+      fixtureJson(res, 202, { accepted: true, opId: 'op-mat-slow' })
+      return
+    }
+    if (req.url === '/chamber/plugins/tasks' && req.method === 'GET') {
+      fixtureJson(res, 200, {
+        ok: true,
+        busy: true,
+        tasks: [{ id: 'op-mat-slow', kind: 'materialize', name: 'custom-pkg', preImage: null, status: 'pending' }],
+        deferred: [],
+      })
+      return
+    }
+    fixtureJson(res, 404, { error: 'not_found', code: 'not_found' })
+  })
+  try {
+    const pending = await gatewayChamberMaterialize({
+      id: 'gw-1',
+      url: `http://127.0.0.1:${pendingServer.port}`,
+      headers: {},
+      spkiPin: null,
+      tarball: FIXTURE_TARBALL,
+      name: 'custom-pkg',
+      version: '1.2.3',
+      settleIntervalMs: 5,
+      settleTimeoutMs: 60,
+      requestTimeoutMs: 2_000,
+    })
+    assert.equal(pending.ok, false)
+    if (!pending.ok) assert.match(pending.error, /has not finished applying the plugin ops/)
+  } finally {
+    await pendingServer.close()
+  }
+
+  // The restart 202 was accepted but readiness never settles.
+  const restartTimeoutServer = await startSyncHttpServer((req, res) => {
+    if (req.url === '/chamber/plugins/materialize' && req.method === 'PUT') {
+      fixtureJson(res, 202, { accepted: true, opId: 'op-mat-r' })
+      return
+    }
+    if (req.url === '/chamber/plugins/tasks' && req.method === 'GET') {
+      fixtureJson(res, 200, {
+        ok: true,
+        busy: false,
+        tasks: [{ id: 'op-mat-r', kind: 'materialize', name: 'custom-pkg', preImage: null, status: 'ok' }],
+        deferred: [],
+      })
+      return
+    }
+    if (req.url === '/chamber/runtime/restart' && req.method === 'POST') {
+      fixtureJson(res, 202, { accepted: true })
+      return
+    }
+    if (req.url === '/chamber/runtime/status' && req.method === 'GET') {
+      fixtureJson(res, 200, { kind: GATEWAY_RUNTIME_IDENTITY, connectionState: 'restarting', restart: 'running' })
+      return
+    }
+    fixtureJson(res, 404, { error: 'not_found', code: 'not_found' })
+  })
+  try {
+    const timedOut = await gatewayChamberMaterialize({
+      id: 'gw-1',
+      url: `http://127.0.0.1:${restartTimeoutServer.port}`,
+      headers: {},
+      spkiPin: null,
+      tarball: FIXTURE_TARBALL,
+      name: 'custom-pkg',
+      version: '1.2.3',
+      settleIntervalMs: 5,
+      restartPollIntervalMs: 5,
+      restartPollTimeoutMs: 60,
+      requestTimeoutMs: 2_000,
+    })
+    assert.equal(timedOut.ok, false)
+    if (!timedOut.ok) {
+      assert.deepEqual(timedOut.outcome, { executed: true, restarted: false })
+      assert.match(timedOut.error, /restart accepted but the gateway did not reach ready in time/)
+    }
+  } finally {
+    await restartTimeoutServer.close()
   }
 })
 
@@ -2371,6 +2588,7 @@ test('gatewayChamberMaterialize: an SPKI-pinned https gateway receives zero byte
 
 test('syncGatewayChamberPlugins: an upload PUT refusal is an explicit failure, never the both-false "up to date" tuple', async () => {
   const server = await startSyncHttpServer((req, res) => {
+    res.setHeader('connection', 'close')
     if (req.method === 'GET') {
       res.writeHead(200, { 'content-type': 'application/json' })
       res.end(JSON.stringify({ items: [] }))
@@ -2393,6 +2611,35 @@ test('syncGatewayChamberPlugins: an upload PUT refusal is an explicit failure, n
     assert.ok((result.error ?? '').includes('@dsh-chamber/dsh-host-client-graph'), 'the failure names the refused package')
   } finally {
     await server.close()
+  }
+
+  // A 400 refusal with a gateway REASON body carries the reason (the
+  // old-gateway "unsyncable package" case): the user must see WHY the
+  // upload was refused, not a bare HTTP status.
+  const reasonServer = await startSyncHttpServer((req, res) => {
+    res.setHeader('connection', 'close')
+    if (req.method === 'GET') {
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ items: [] }))
+      return
+    }
+    res.writeHead(400, { 'content-type': 'application/json' })
+    res.end(JSON.stringify({ error: 'unsyncable package "@dsh-chamber/dsh-host-archive-cleanup" (this gateway release cannot cache it — it may predate the package; update the gateway to match the connecting desktop)', code: 'invalid_input' }))
+  })
+  try {
+    const result = await syncGatewayChamberPlugins({
+      origin: `http://127.0.0.1:${reasonServer.port}`,
+      headers: { authorization: 'Bearer test-token' },
+      spkiPin: null,
+      packages: [ARCHIVE_PACKAGE],
+      logger: syncLog().logger,
+    })
+    assert.equal(result.failed, true)
+    assert.ok((result.error ?? '').includes('uploading @dsh-chamber/dsh-host-archive-cleanup failed (HTTP 400'), 'the failure names the refused package and status')
+    assert.ok((result.error ?? '').includes('unsyncable package'), 'the failure carries the gateway refusal reason')
+    assert.ok((result.error ?? '').includes('update the gateway'), 'the failure carries the remediation hint')
+  } finally {
+    await reasonServer.close()
   }
 })
 
