@@ -68,7 +68,7 @@ function interfaceMethodNames(source: string, interfaceName: string): string[] {
 }
 
 /** Extract the sorted field names of one interface/type block (covers union
- *  member shapes like `| { ok: true; hostGraph: ... }`). */
+ *  member shapes like `| { ok: true; packages: [...] }`). */
 function interfaceFieldNames(source: string, typeName: string): string[] {
   const fields = new Set<string>()
   for (const line of stripComments(interfaceBlock(source, typeName)).split('\n')) {
@@ -461,7 +461,7 @@ test('the apply-result and notification/sessionTodo settings shapes are type-ide
 })
 
 test('flat shared interfaces are TYPE-identical across preload and renderer (L3 — not just field names)', () => {
-  for (const name of ['ChamberHostGraphState', 'ChamberSettings']) {
+  for (const name of ['ChamberHostPackageState', 'ChamberSettings']) {
     const authoritative = interfaceFieldSignatures(preload, name)
     assert.deepEqual(interfaceFieldSignatures(renderer, name), authoritative, `${name} renderer type drift`)
   }
@@ -508,10 +508,10 @@ test('settings-connections re-exports the whole IPC face from the renderer (sing
   }
 })
 
-test('ChamberInjectionState / ChamberHostGraphState / ChamberSettings stay in lockstep (L3 — shape drift guard)', () => {
-  // ChamberInjectionState union: ok/hostGraph/gitWorktree/error must match.
+test('ChamberInjectionState / ChamberHostPackageState / ChamberSettings stay in lockstep (L3 — shape drift guard)', () => {
+  // ChamberInjectionState union: ok/packages/error must match.
   assert.deepEqual(interfaceFieldNames(preload, 'ChamberInjectionState'), interfaceFieldNames(renderer, 'ChamberInjectionState'), 'ChamberInjectionState preload/renderer drifted')
-  assert.deepEqual(interfaceFieldNames(preload, 'ChamberHostGraphState'), interfaceFieldNames(renderer, 'ChamberHostGraphState'), 'ChamberHostGraphState preload/renderer drifted')
+  assert.deepEqual(interfaceFieldNames(preload, 'ChamberHostPackageState'), interfaceFieldNames(renderer, 'ChamberHostPackageState'), 'ChamberHostPackageState preload/renderer drifted')
   assert.deepEqual(interfaceFieldNames(renderer, 'ChamberSettings'), interfaceFieldNames(preload, 'ChamberSettings'), 'ChamberSettings preload/renderer drifted')
 })
 

@@ -61,6 +61,35 @@
   残留**收敛（「删除全部」退役后无 UI 路径可达，见 design 24 §20 残余登记
   ①，建议收尾孤儿全集合清扫）；「归档当前活动会话→整源降级、
   已归档行浮出」复现确认（§20 残余登记②，dev-QA 原登记于 commit 1b19712）。
+  **2026-09 修订（§21：force 删除已加载会话 + 删除前自动停止运行中会话）**
+  已实现并经单测覆盖——`purge({sessionIds, force?})` 的 force 只放过「本进程
+  已加载（idle）」子树、running 永远拒绝（裸删会产生无头残档）；管理器删除前
+  用官方 `session/cancel` 停止选中项的运行中回合，并排除当前正在查看的会话；
+  结果口径拆为 `skippedRunning`/`skippedLoaded`/`forcedLoaded`，`deleteSessionContent`
+  新增 item 码 `loaded`。**2026-09 P1/P2 硬化轮（§21.4/§21.6）**：停止范围改为
+  选中根的闭包（`fetchSessionRunningLineage` 读同一次 `session/list` 的运行位 +
+  `parentSessionId` 边；无血统时退化为仅根，绝不猜父链），不可见的运行中子代理
+  后代因此可被停止与等待；旧宿主整体拒收 `force` 时去掉 force 重试一次并置
+  `forceUnsupported`（管理器如实说明「已加载空闲会话被跳过、需重启该实例 dsh」，
+  绝不静默降级）；force 残余风险（删档后宿主内存写回重建无头残档）已文档化，
+  并 fail-closed：`server.runtime === undefined`（运行时通道缺失/重连中）时不使用
+  force 路径，如实提示且行保持不动。工作树侧按用户最终裁定不触碰任何会话
+  （design 08 §6 归档感知守卫），本域是唯一的「停止运行中回合 → 清理已归档内容」
+  入口。剩余实机验收：卡在提问的归档会话 → 管理器删除 → 停止 + 强制清理成功；
+  旧宿主（无 force 参数）的回退 + 说明；运行中子代理后代所在归档树一次删除收敛；
+  本机 5 个「已加载」残留（`d8ae9ae5`/`d4d9bdbf`/`c54461f6`/`32b74f4a`/`10d9124a`）
+  一次删除收敛。
+  **2026-09 五路 review 收口轮（§21.2/§21.5/§21.6）**：①闭包只沿
+  `origin === 'subagent'` 边（fork 子会话有 `parentSession` 但无 origin，绝不
+  误取消——`sessionPurgeClosure` 为唯一实现）；②当前查看会话的排除覆盖**闭包**
+  （所选根的闭包含 `runtime.current` → 整根跳过，不取消不清理）；③停止环节失败
+  不再中止删除（建议性），但当血统读失败**且**当前会话已知时 fail-closed 拒绝
+  force 路径（`closureUnknown`，`archive-purge.ts:228-241`，零 cancel 零 purge）；
+  ④决策与文案抽为纯函数（`purgeRefusalReason`/`archivePurgeNote`/`currentInClosureNote`）
+  并由 `test/archive-purge.test.ts`（11 例）固定（原对话框 767 行无测试）；⑤维护阶段
+  残余如实登记（dsh 在 compaction/schedule 维护阶段对外报 `idle`，force 可能删到
+  正在追加的档；「读私有 phase 字段」记录为否决方案）；⑥归档集合在 run 起点快照、
+  窗口内不重读（已登记）。
 - **移动端 Web 访问面（design 17 §18）**：P1/P1.5/适配轮已实现。剩余——实机门禁
   （§18.6：真机触控目标比例/抽屉开合/键盘遮挡/安全区/汉堡不重叠/crumbs 换行/
   Session 日志图标化/iOS 单击切换/设置手机档走查/刘海横屏/深层谱系高度等）；DOM
@@ -96,8 +125,81 @@
   打包态真机确认）。
 - **Git Worktree 插件（design 08）**：剩余真实远程 Linux + Git 仓库端到端（首次
   ready-time seed 后重启生效、并发 session 删除竞态、Git LFS/filter 与恢复边界）。
+  **2026-09 修订（running 会话：已归档者不再阻塞，删除不触碰任何会话；最终裁定，
+  §6/§11.3）**已实现并经单测覆盖：宿主 RUNNING 守卫改为归档感知——运行中的会话
+  **INERT**（不阻塞）当且仅当 `workspaceRegistry.archivedSessionIds` 含其 id 或
+  其祖先链上有已归档会话——**链只沿 `origin === 'subagent'` 边**（fork 子会话有
+  `parentSession` 但无 origin，**fork 边终止上溯 → 未归档 fork 照旧阻塞**，与 purge
+  树的 `indexChildren` 同定义；2026-09 五路 review 收口轮修正了此前把 fork 误当委派
+  链的 fail-open）；链经所有已加载 agent 的 header 走（含 idle），
+  **不可解析 → fail-closed 照旧阻塞**；**不含归档成员的环阻塞、环上出现归档成员则
+  按已归档祖先判定**（代码 + 文档同口径、测试双向固定）；未归档运行中会话报同一
+  `running-agent` 码与消息，其余守卫（main/locked/身份/expected/dirty/submodule/
+  `assertNoOtherWorkspaceWithin`）零改动；归档集合读不到 → `state-source-*`
+  响亮失败，绝不当作空集合。快照加性投影 `blockingRunningSessionIds`
+  （`runningSessionIds` 仍是全部展示事实，旧客户端保守）。客户端
+  `removeBlockReason` 读该字段（缺失回退旧字段），无勾选框/取消/停止编排
+  （早前「先停止再删除」与 `WorktreeRunningError` 已按用户裁定删除），对话框只在
+  有未归档运行中会话时显示非阻断说明（`runningRemoveBlockNote`）并对已归档运行中
+  会话追加 `runningRemoveArchivedNote`（zh+en 齐备）。单测：host core 六例
+  （未归档阻塞 / 已归档不阻塞 / 已归档祖先使子代理 INERT / 链条不可解析与成环
+  fail-closed / cwd 腿同规则 / 快照双字段）、git client（字段判定与旧宿主回退、
+  快照解码 fail-closed）。同轮补强：origin 与归档集合元素形状校验（非字符串/空元素/
+  漂移 → 响亮 `state-source-*`，不再 `String()` 强转）；客户端判定顺序改为
+  `current`/`runtime-unknown` 先于 `running`（此前该顺序可绕过 fail-closed 保护）；
+  旧宿主（无 `blockingRunningSessionIds`）走中性文案（`runningRemoveLegacyNote`/
+  `runningRemoveLegacyTitle`，不再谎称归档性）；惰性计数改为集合差（新纯模块
+  `shared/remove-notes.ts` + `test/remove-notes.test.ts`）；宿主拒绝码
+  （`running-agent`/`main-worktree`/locked/dirty/invalid）映射为本地化文案；
+  runtime 通道缺席时确认按钮前置禁用并解释；非子集 `blockingRunningSessionIds`
+  在解码层拒绝（行 fail-closed）。单测合计：host core 113、git 68、snapshot/remove-notes
+  纯函数齐备。剩余实机验收：运行中会话（未归档）→ 删除被拒并给出
+  诚实文案；同会话归档后 → 工作树删除成功且该会话未被停止/删除、其 cwd 消失后
+  日志仍可读；运行中子代理位于已归档根下 → 不阻塞。归档管理器是唯一「停止运行
+  中回合 → 清理已归档内容」的入口。
 - **远程实例插件管理（design 13）**：本地 `dsh plugin`/`pnpm pack` 依赖
   `resolvePnpmBinDir` 对 PATH/nvm/volta/homebrew 的 best-effort 探测——需打包态实机。
+  **2026-09 修订（用户拍板：seed 了就必须在插件管理页可见，且不得写死）**：已实现——
+  `CHAMBER_HOST_PACKAGES`（control-plane `host-graph-seed.ts`：insert id + 包名 + 存活探测
+  Remote）成为唯一权威清单；desktop 注入态投影改为逐包列表
+  `ChamberInjectionState = { ok:true, packages: ChamberHostPackageState[] }`（含
+  insertId/name/probe/installed/patched/version/live），本地探测、ssh 探测、gateway
+  seed-cache 漂移、gateway 同步包表、远端 seed 清单全部由该清单派生；`PluginDialog` 的
+  「chamber 内置（注入）」表逐行渲染该列表（新增宿主包 = 注册表加一行），
+  `remoteNeedsSeed`/重启提示改为逐包判定（原先只校验两包，缺 archive-cleanup 的远端
+  会被误报「已注入」）。单测：desktop plugin-sync（101，含注册表 1:1 投影与第三包探测）、
+  ipc-surface-mirror、connections chamber-seed-drift（含与注册表源文本的锁步守卫）。
+  剩余实机验收：本地/ssh/gateway/http 四来源的 chamber 表行数=3、archive-cleanup
+  的 installed/patched/live 三态与「注入/重启」按钮行为、gateway seed-cache 漂移列。
+  **2026-09 P1.4/P2.7 硬化轮**：行派生从组件内联搬入纯函数 `deriveChamberRows`
+  （plugin-inventory-text.ts，只回 label KEY 与版本 STRING），新增
+  `test/chamber-rows.test.ts` 表驱动覆盖四 target ×（清单有/无）×
+  （installed/patched/live 组合）×（seed-cache 漂移/缺项/整盘缺/未读）×（空
+  expected 列表），并钉住 LOCAL 目标读自身 profile 清单的回归；gateway 的客户端
+  插件行改由 Loader inventory 的 chamber CLIENT 分类派生
+  （`classifyChamberClientPlugin`，不再写死 `MOBILE_PACKAGE`；inventory 不可用
+  时渲染 unknown 行、绝不显示写死的包名）。同轮修复继承缺陷：`src/global.d.ts`
+  重导出已删除的 `ChamberHostGraphState`、`plugin-diff.test.ts` 夹具仍是旧的
+  `{hostGraph, gitWorktree}` 形状、`PluginDialog.tsx` 悬空引用
+  `sshRemoteChamber`（现取 `remoteManifest.chamber`）——三者使
+  `typecheck:connections` 在进入本轮前即失败。
+  **2026-09 五路 review 收口轮（单注册表收尾）**：①control-plane 与 gateway 的 seed
+  行改为从 `CHAMBER_HOST_PACKAGES` 派生（`sourceDir` 按 insert id 查表；未映射行 →
+  响亮抛错），注册表所有者新增 `assertChamberHostRegistry`（探测方法/insert id/包名
+  重复 → 定义处加载即失败，control-plane/gateway/desktop 三消费方按构造受保护；
+  2026-09 五路 review 后从 gateway 迁回所有者处并改名），gateway 测试矩阵与
+  `chamber-seed-drift` 均改为从注册表派生并加
+  重复域用例；②http 直连区第三方分类改按注册表派生名（未来新增
+  `@dsh-chamber/dsh-host-*` 不再漏进第三方列表）；③gateway 客户端插件行在清单可读
+  但无 chamber-client 条目时补一条 muted「未注入」行（不再整行消失）；④旧探测
+  `probeClientGraphLive`/`probeGitWorktreeLive`、`seedRemoteHostGraph`、
+  `ensureHostPackage*`、`CLIENT_GRAPH_HOST_INSERT`、`SeedRemoteResult`、
+  `fetchRunningSessionIds`/`RunningSnapshot` 等生产死代码删除（逐项 grep 证据）；
+  `previewArchiveCleanup` 按 design 24 §5/§17-18 刻意保留（宿主 preview 端点的已测
+  客户端半面）。**门禁纪律（本轮教训）**：`test:*` 走 node 类型擦除、根 `typecheck`
+  不含自建插件，故自建客户端插件改动必须逐项跑 `typecheck:*`（本轮由此发现
+  `typecheck:connections` 的继承缺陷；`typecheck:connection`/`typecheck:api-gateway`
+  的失败经证明为 worktree 未初始化 vendor submodule 所致，填充后双双通过）。
 - **会话创建/fork 侧边栏收敛延迟修复**：剩余本地 + 远程 SSH 实例实机验收（行出现
   延迟、状态图标延迟、位置跳动）。
 - **chamber shell 内官方 bundle 的实例相对绝对路径（已知缺陷，2026-08 缓办决策）**：

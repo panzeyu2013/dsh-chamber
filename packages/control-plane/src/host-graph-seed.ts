@@ -11,9 +11,9 @@
  * package (module A, `packages/dsh-host-client-graph`) into the managed local
  * profile and materializes the `--patch` overlay that mounts it:
  *
- *   - ensureHostGraphPackage copies module A's package (package.json +
+ *   - ensureSeedPackage copies a chamber host package (package.json +
  *     dist/index.js) into <dshHome>/profiles/web/node_modules/@dsh-chamber/
- *     dsh-host-client-graph/ — the profile node_modules anchor user plugins
+ *     <package>/ — the profile node_modules anchor user plugins
  *     resolve from (profile layout: $DSH_HOME/profiles/web/package.json +
  *     cordis.patch.yml, see @deepseek-ai/dsh-app-boot profile.ts). Idempotent:
  *     an in-sync copy is skipped, a drifted one is overwritten.
@@ -89,6 +89,79 @@ export const HOST_ARCHIVE_CLEANUP_INSERT: HostPackageInsert = {
 }
 
 /**
+ * One chamber host package: its loader overlay row plus the Typert Remote that
+ * proves it live inside a RUNNING instance.
+ *
+ * THE single source for every consumer — the control-plane seed registry, the
+ * gateway's syncable/probe map, the desktop's local+remote injection probes
+ * and the connections plugin-management page all derive from this list.
+ * Adding a chamber host package means adding ONE row here; a hand-maintained
+ * parallel row table anywhere else is a defect (2026-09 user decision: a
+ * seeded host package MUST show up in the plugin-management page, and the
+ * page must not hardcode the package set).
+ */
+export interface ChamberHostPackageDescriptor {
+  /** The loader overlay row (id/name — see cordis-inserts.ts). */
+  readonly insert: HostPackageInsert
+  /** Liveness probe: the Remote method (`namespace/method`) and the args it
+   *  accepts. The method MUST be one of dsh-runtime's
+   *  `HOST_DOMAIN_PROBE_NAMES` (pinned by the desktop/gateway drift tests),
+   *  and every probe must be cheap: a 404 from the dsh gateway deterministically
+   *  means "boot row not loaded yet" (injected, restart pending). */
+  readonly probe: { readonly method: string; readonly args: unknown }
+}
+
+/** The chamber host packages in seed order (the authoritative registry). */
+export const CHAMBER_HOST_PACKAGES: readonly ChamberHostPackageDescriptor[] = [
+  { insert: HOST_GRAPH_INSERT, probe: { method: 'clientGraph/graph', args: {} } },
+  { insert: HOST_GIT_WORKTREE_INSERT, probe: { method: 'gitWorktree/previewCreate', args: { input: {} } } },
+  { insert: HOST_ARCHIVE_CLEANUP_INSERT, probe: { method: 'archiveCleanup/probe', args: {} } },
+]
+
+/**
+ * Fail-fast registry pin (review G2-2, cohesion E-#2): every registry row must
+ * own a DISTINCT probe method, insert id and package name.
+ *
+ * The gateway's set-equality drift pin against dsh-runtime's
+ * `HOST_DOMAIN_PROBE_NAMES` compares only the SET of domain values, so a 4th
+ * row reusing an existing domain would pass it while the per-package
+ * activation-probe map silently became ambiguous (one domain standing for two
+ * rows); duplicate loader identities are equally unrepresentable in the
+ * overlay. Throws, never warns.
+ *
+ * Lives with the registry's OWNER (this module) and runs at load below, so
+ * every consumer — control plane, gateway and the desktop facade — is covered
+ * by construction rather than by each consumer remembering to call it. The
+ * `registry` parameter exists only so the plain-node suites can pin the
+ * duplicate cases with a synthetic list (the load-time call can only ever see
+ * the real registry).
+ */
+export function assertChamberHostRegistry(
+  registry: readonly ChamberHostPackageDescriptor[] = CHAMBER_HOST_PACKAGES,
+): void {
+  const methods = new Set<string>()
+  const ids = new Set<string>()
+  const names = new Set<string>()
+  for (const descriptor of registry) {
+    const { id, name } = descriptor.insert
+    const method = descriptor.probe.method
+    if (methods.has(method)) {
+      throw new Error(
+        `CHAMBER_HOST_PACKAGES: probe method '${method}' is claimed by more than one host package `
+          + '(the per-package activation-probe map would be ambiguous)',
+      )
+    }
+    if (ids.has(id)) throw new Error(`CHAMBER_HOST_PACKAGES: duplicate loader insert id '${id}'`)
+    if (names.has(name)) throw new Error(`CHAMBER_HOST_PACKAGES: duplicate host package name '${name}'`)
+    methods.add(method)
+    ids.add(id)
+    names.add(name)
+  }
+}
+
+assertChamberHostRegistry()
+
+/**
  * Seed registry (2026-12 interface): one seedable chamber package/plugin
  * entry. The loader overlay row itself is identical for every entry (cordis
  * `insert` id/name — see cordis-inserts.ts); `kind`/`source` are metadata
@@ -151,7 +224,7 @@ export interface SeedEntry {
  * (a `--patch` overlay and a bundle's cordis.patch.yml share the format;
  * rendered by the shared renderCordisInserts, single-sourced in
  * cordis-inserts.ts). `name` resolves through the profile's node_modules
- * anchor, which ensureHostGraphPackage fills.
+ * anchor, which ensureSeedPackage fills.
  */
 
 /**
@@ -318,18 +391,4 @@ export function ensureSeedPackage(
     wrote = true
   }
   return wrote
-}
-
-/** Backwards-compatible host-package wrapper (legacy callers/tests). */
-export function ensureHostPackage(
-  dshHome: string,
-  packageName: string,
-  sourceDir: string,
-): boolean {
-  return ensureSeedPackage(dshHome, packageName, sourceDir)
-}
-
-/** Backwards-compatible module-A wrapper retained for existing callers/tests. */
-export function ensureHostGraphPackage(dshHome: string, sourceDir: string): boolean {
-  return ensureHostPackage(dshHome, HOST_GRAPH_PACKAGE_NAME, sourceDir)
 }

@@ -118,7 +118,8 @@ import cc from './sidebar-chamber.module.css'
 import type { ChamberServerAggregate } from '../shared/aggregate-store.ts'
 import { chamberBridge } from '../shared/aggregate-store.ts'
 import { groupArchivedRows, workspaceAccentStyle, type ArchivedSessionGroup } from '../shared/derive.ts'
-import { getInstanceClient, purgeArchivedSessions } from '../shared/instance-api.ts'
+import { getInstanceClient } from '../shared/instance-api.ts'
+import { archivePurgeNote, purgeRefusalReason, runArchivePurge } from '../shared/archive-purge.ts'
 import { getWorkspaceGitFlag, isSourceGitFlagsLoaded } from '../shared/workspace-git-flags.ts'
 import type { SidebarKey } from './locales.ts'
 
@@ -363,15 +364,43 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
   /** Purge exactly the listed session ids (host intersects the filter with
    *  the authoritative archived set — never a non-archived target). No
    *  whole-set `undefined` path reaches this call: with delete-all retired,
-   *  a purge always stems from an explicit per-row / select-all selection. */
+   *  a purge always stems from an explicit per-row / select-all selection.
+   *
+   *  2026-09 revision ("已归档的对话应该终止"): the run first STOPS the
+   *  selected sessions' running turns through the official `session/cancel`
+   *  wire, then purges with `force: true` so the host may also delete the
+   *  merely LOADED (idle, attached) content. The host still refuses a RUNNING
+   *  member (fail-closed), so the stop pass is an accelerator, never the
+   *  safety boundary. The stop pass covers the CLOSURE of the selection
+   *  (roots + transitive SUBAGENT-origin descendants) — a running descendant
+   *  has no row here, yet it blocks the whole archived tree (design 24 §21).
+   *  The session currently being viewed is excluded from the ROOTS and from
+   *  any root whose CLOSURE contains it: its live writer would recreate a
+   *  header-less artifact after deletion, and the host deletes the whole tree.
+   *  All of this is decided in the pure `runArchivePurge` flow
+   *  (`shared/archive-purge.ts`), which the node tests pin. */
   const runPurge = (sessionIds: readonly string[]): void => {
     if (busy) return
+    // RUNTIME-CHANNEL GUARD (design 24 §21 residual risk): the force path may
+    // delete a merely LOADED session, and the only protection against the
+    // deleted writer recreating a header-less artifact is excluding the
+    // session this client is currently viewing. That exclusion is read from
+    // the source's runtime report; without it (producer not registered yet /
+    // source reconnecting) the manager cannot know the current session and
+    // must not use the force path at all — refuse honestly instead of
+    // guessing. The rule is the pure `purgeRefusalReason` (tested).
+    const refusalKey = purgeRefusalReason(server)
+    if (refusalKey !== null) {
+      setNote({ kind: 'error', text: t(refusalKey) })
+      return
+    }
     const client = getInstanceClient(server.id)
+    const currentId = server.runtime?.current
     setBusy(true)
     setNote(null)
     void (async () => {
       try {
-        const result = await purgeArchivedSessions(client, sessionIds)
+        const run = await runArchivePurge(client, sessionIds, currentId)
         // UNCONDITIONAL refresh (v1 F9 parity): even if this dialog already
         // unmounted, the host purge may have completed and chamberBridge's
         // App-side consumers are global/generation-fenced.
@@ -383,35 +412,19 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
         // sidebar once the host removes their ids from the archived set.
         chamberBridge.requestSessionListRefresh(server.id)
         if (!mountedRef.current) return
-        const lines: string[] = []
-        if (result.deletedSessions > 0 || result.deletedSubagents > 0) {
-          lines.push(`清理完成：删除 ${result.deletedSessions} 个会话 / ${result.deletedSubagents} 个子代理内容。`)
+        // Every outcome line (refusal reasons, legacy-host clause, failures) is
+        // composed by the pure `archivePurgeNote` as dictionary KEYS + params
+        // and rendered here through `t()` — the module itself carries no copy.
+        const outcome = archivePurgeNote(run)
+        setNote({
+          kind: outcome.kind,
+          text: outcome.lines.map(line => t(line.key, line.params)).join('\n'),
+        })
+        if (outcome.kind === 'info') {
+          // The refreshed aggregate (requestRefresh above) prunes the rows;
+          // the selection effect drops ids that no longer exist.
+          setSelected(new Set())
         }
-        if (result.skippedRunning > 0) {
-          // Archived-but-running rows delete as post-hoc skips: the host is
-          // the running authority and reports them here (review round
-          // 2026-09 decision — no per-row running pre-marking client-side).
-          lines.push(`已跳过 ${result.skippedRunning} 项运行中的会话（未删除）。`)
-        }
-        if (result.truncated === true && result.errors.length >= 1000) {
-          lines.push('失败明细过多，仅显示前 1000 项。')
-        }
-        if (result.errors.length > 0) {
-          lines.push(`${result.errors.length} 项失败，可重试（重复执行安全）。`)
-          const samples = result.errors.slice(0, 3).map(error => error.message)
-          for (const sample of samples) lines.push(`· ${sample}`)
-          setNote({ kind: 'error', text: lines.join('\n') })
-          return
-        }
-        if (lines.length === 0) {
-          // Another shell may have purged between the list and this run — an
-          // empty outcome must never be silent (v1 E-n2 parity).
-          lines.push('没有可删除的已归档会话。')
-        }
-        setNote({ kind: 'info', text: lines.join('\n') })
-        // The refreshed aggregate (requestRefresh above) prunes the rows;
-        // the selection effect drops ids that no longer exist.
-        setSelected(new Set())
       } catch (error) {
         // A settle of ANY kind may still mean host-side deletions happened
         // (client timeout ≠ host stop; another shell's purge raced this one)
@@ -488,6 +501,14 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
   // input freezes (inputLocked = busy OR armed) so the counted copy can never
   // go stale — the selection/checkboxes cannot move under the armed promise.
   const inputLocked = busy || confirming !== null
+  // PRE-CLICK GATE (C#9, design 24 §21): the delete controls are DISABLED while
+  // the force path is refused (no runtime report, or an unknown current
+  // session), with the refusal as their explanatory title — mirroring the git
+  // dialog's runtime-unknown pre-hint. `runPurge` keeps the same gate as
+  // belt-and-braces, so a disabled-state race can never reach the wire.
+  const purgeRefusalKey = purgeRefusalReason(server)
+  const purgeRefusalTitle = purgeRefusalKey === null ? undefined : t(purgeRefusalKey)
+  const purgeBlocked = purgeRefusalTitle !== undefined
   // The armed confirm's message: single-row subject copy (title) or the
   // counted selected-set copy (title null). Rendered only while armed.
   const armedCountKey: SidebarKey = (confirming?.ids.length ?? 0) === 1
@@ -515,7 +536,8 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
             <Button
               variant="outline"
               className={cc.archiveManagerDanger}
-              disabled={inputLocked || selected.size === 0}
+              disabled={inputLocked || purgeBlocked || selected.size === 0}
+              {...(purgeBlocked ? { title: purgeRefusalTitle } : {})}
               onClick={(event: ReactMouseEvent<HTMLButtonElement>) => { deleteSelected(event.currentTarget) }}
             >
               {t(selectedCountKey, { count: selected.size })}
@@ -678,8 +700,8 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
                             type="button"
                             className={clsx(cc.actionIcon, cc.actionIconDanger)}
                             aria-label={t('archive.manager.rowDeleteAria', { title: titleText(row.title) })}
-                            title={t('archive.manager.rowDeleteAria', { title: titleText(row.title) })}
-                            disabled={inputLocked}
+                            title={purgeRefusalTitle ?? t('archive.manager.rowDeleteAria', { title: titleText(row.title) })}
+                            disabled={inputLocked || purgeBlocked}
                             onClick={(event) => {
                               event.stopPropagation()
                               deleteSingle(event.currentTarget, row.sessionId, titleText(row.title))

@@ -113,6 +113,25 @@ export type RemoveBlockReason =
  * very session the user is viewing. When the runtime channel is absent AND
  * the worktree accounts sessions, removal is blocked ('runtime-unknown')
  * until the channel returns.
+ *
+ * The RUNNING reason reads the host's ARCHIVED-AWARE fact (design 08 §6
+ * amendment, 2026-09 user decision): `blockingRunningSessionIds` names only
+ * the running sessions that actually gate removal — archived sessions (and
+ * sessions under an archived ancestor) are INERT and do not block. The field
+ * is ABSENT on an older host, and the fallback to `runningSessionIds` keeps
+ * that case conservative (any running session blocks). A removal never touches
+ * a session either way.
+ *
+ * PRECEDENCE (2026-12 review G1-1): `current` and `runtime-unknown` are
+ * evaluated BEFORE `running`. The RUNNING reason is NOT a hard client block —
+ * the row deliberately keeps the delete control enabled for it (the dialog
+ * explains the running facts and the host re-checks with its `running-agent`
+ * guard) — so letting it win would shadow the two fail-closed refusals: a
+ * worktree whose STALE snapshot still lists running sessions (or whose running
+ * set is non-blocking/archived) would then bypass the current-session guard
+ * and the runtime-absent fail-closed guard in `coordinator.ts`'s fresh
+ * preflight, and the removal could proceed while the current session's cwd is
+ * unknown.
  */
 export function removeBlockReason(
   worktree: GitWorktreeInfo,
@@ -122,7 +141,6 @@ export function removeBlockReason(
 ): RemoveBlockReason {
   if (worktree.isMain) return 'main'
   if (worktree.workspaceId === null) return 'unregistered'
-  if (worktree.runningSessionIds.length > 0) return 'running'
   // A BLANK (never-submitted) current session carries no content worth
   // protecting, so it must not block removal (2026-08 user report: clicking
   // "new session" on a worktree and removing it before typing).
@@ -131,6 +149,8 @@ export function removeBlockReason(
   // we cannot rule the current session out of this worktree. Blank-current
   // leniency cannot apply — blankness is unknown too.
   if (!runtimeKnown && worktree.sessionIds.length > 0) return 'runtime-unknown'
+  const blockingRunning = worktree.blockingRunningSessionIds ?? worktree.runningSessionIds
+  if (blockingRunning.length > 0) return 'running'
   if (worktree.locked) return 'locked'
   if (worktree.status !== 'ready') return 'unhealthy'
   if (worktree.dirty === true) return 'dirty'
@@ -147,6 +167,27 @@ export function canTargetSession(worktree: GitWorktreeInfo): boolean {
  * Session closure over `parentSessionId`: the roots plus every session
  * transitively parented under them (cycle-safe, order stable). Used to
  * enumerate the full session tree a worktree removal would orphan.
+ *
+ * This is the FORK closure over the VISIBLE (non-subagent) session rows: the
+ * caller's row source is `fetchInstanceSnapshot`, which DROPS subagent-origin
+ * rows upstream (`@dsh-chamber/dsh-client-ui-sidebar/shared` instance-api
+ * filters `origin === 'subagent'`), so every edge this function can see is a
+ * fork edge — and a fork IS a worktree session by construction, so it belongs
+ * in the closure. Vendor evidence (dsh-api-session-controller/lib/index.js):
+ * `fork()` copies the source header's cwd into the child
+ * (`meta: { ...(source.header.cwd === undefined ? {} : { cwd: source.header.cwd }), parentSession: source.header.id, isSeeded: true }`,
+ * ~:695-700) and attaches the child to the SOURCE's workspace through
+ * `forkWorkspace(source.header)` (:683 → workspace lookup over
+ * `workspaceRegistry.list()` by `sessionIds`, :872-883) plus
+ * `workspace.attachSession(childId)` (:712-714). The fork therefore shares the
+ * worktree cwd AND is a member of the same workspace, which is exactly why
+ * archiving it is the intended semantics of 「归档工作区中会话」 (it is not an
+ * unrelated session). Subagent-origin rows are NOT part of this closure by
+ * construction; do NOT add an `origin === 'subagent'` filter here — it would
+ * collapse the closure to the roots and silently drop the forks the option
+ * must archive (2026-12 review correction; the subagent-only purge/stop
+ * closure lives in the sidebar's `sessionPurgeClosure`, which reads the raw
+ * `session/list` rows instead).
  */
 export function collectSessionClosure(
   sessions: ReadonlyArray<{ readonly sessionId: string; readonly parentSessionId?: string }>,

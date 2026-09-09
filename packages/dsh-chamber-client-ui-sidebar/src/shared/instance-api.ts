@@ -323,6 +323,11 @@ class InstanceApiClient {
       this.call('session/fork', { args: { request: payload } }, signal),
     rename: (payload: unknown, signal?: AbortSignal): Promise<UnaryResult<any>> =>
       this.call('session/rename', { args: { request: payload } }, signal),
+    /** Official stop wire: aborts the session's running turn
+     *  (`agent.cancel({kind:'user'}, {keepInbox:true})`; a no-op on an idle
+     *  agent, `session/not-found` when the session is not attached). */
+    cancel: (payload: unknown, signal?: AbortSignal): Promise<UnaryResult<any>> =>
+      this.call('session/cancel', { args: { request: payload } }, signal),
   }
 
   /**
@@ -359,17 +364,24 @@ class InstanceApiClient {
    * whole archived set (legacy zero-arg shape, `{args:{}}` — old hosts keep
    * working); present = delete only the listed archived members (a provided
    * EMPTY array is a deliberate delete-nothing subset, never the full set).
-   * Both carry the domain-missing 404 opt-in; purge rides the long call
-   * budget (the host keeps running past a client timeout — rerun is
+   * The OPTIONAL `force` flag (2026-09 revision) additionally deletes
+   * subtrees that are merely LOADED in the host process; a RUNNING member is
+   * still refused. Both carry the domain-missing 404 opt-in; purge rides the
+   * long call budget (the host keeps running past a client timeout — rerun is
    * idempotent). See previewArchiveCleanup / purgeArchivedSessions wrappers.
    */
   readonly archiveCleanup = {
     preview: (_payload: unknown, signal?: AbortSignal): Promise<UnaryResult<any>> =>
       this.call('archiveCleanup/preview', { args: {} }, signal, { notFoundAsDomainMissing: true }),
-    purge: (sessionIds?: readonly string[]): Promise<UnaryResult<any>> =>
+    purge: (sessionIds?: readonly string[], force?: boolean): Promise<UnaryResult<any>> =>
       this.call(
         'archiveCleanup/purge',
-        sessionIds === undefined ? { args: {} } : { args: { sessionIds } },
+        {
+          args: {
+            ...(sessionIds === undefined ? {} : { sessionIds }),
+            ...(force === true ? { force: true } : {}),
+          },
+        },
         undefined,
         {
           timeoutMs: PURGE_CALL_TIMEOUT_MS,
@@ -724,12 +736,32 @@ export async function archiveSession(client: InstanceApiClient, sessionId: strin
   await callAndThrow(client, () => client.workspace.archiveSession({ sessionId }))
 }
 
+/**
+ * Stop one session's running turn through the OFFICIAL `session/cancel` wire
+ * (`{sessionId}` → `{accepted:true}`; host side `agent.cancel({kind:'user'},
+ * {keepInbox:true})`). Safe to call on an idle agent (no-op) and idempotent;
+ * a session that is not attached answers `session/not-found`, which callers
+ * treating "already not running" as success must swallow themselves.
+ */
+export async function cancelSession(client: InstanceApiClient, sessionId: string): Promise<void> {
+  await callAndThrow(client, () => client.session.cancel({ sessionId }))
+}
+
+/** True when an error is the official "session is not attached" refusal —
+ *  i.e. nothing is running there, so a cancel is a no-op success. */
+export function isSessionNotAttached(error: unknown): boolean {
+  return error instanceof InstanceRpcError && error.code === 'session/not-found'
+}
+
 /** archiveCleanup/preview result counts (design 24 §3). */
 export interface ArchiveCleanupPreview {
   readonly archived: number
   readonly deletableSessions: number
   readonly deletableSubagents: number
   readonly skippedRunning: number
+  /** Subtrees skipped only because a member is loaded (idle) in the host
+   *  process — deletable through an explicit force purge. */
+  readonly skippedLoaded: number
 }
 
 /** One per-item failure of an archiveCleanup/purge run (design 24 §3). */
@@ -745,6 +777,16 @@ export interface ArchiveCleanupPurgeResult {
   readonly deletedSessions: number
   readonly deletedSubagents: number
   readonly skippedRunning: number
+  /** Roots skipped because a member is loaded (idle) — never deleted by this
+   *  run; a force run (after the caller cancelled the run) removes them. */
+  readonly skippedLoaded: number
+  /** Roots deleted DESPITE a loaded member because this run authorized force. */
+  readonly forcedLoaded: number
+  /** True when this run ASKED for force and the host refused the flag, so the
+   *  run was repeated with the legacy shape (design 24 §21 compatibility leg):
+   *  loaded-but-idle subtrees were therefore skipped, and the caller must say
+   *  so — the force intent is never dropped silently. */
+  readonly forceUnsupported: boolean
   readonly errors: readonly ArchiveCleanupPurgeItemError[]
   /** True when item errors were truncated at the host cap (1000). */
   readonly truncated: boolean
@@ -842,6 +884,7 @@ export async function previewArchiveCleanup(client: InstanceApiClient): Promise<
     deletableSessions: countField(value, 'deletableSessions'),
     deletableSubagents: countField(value, 'deletableSubagents'),
     skippedRunning: countField(value, 'skippedRunning'),
+    skippedLoaded: countField(value, 'skippedLoaded'),
   }
 }
 
@@ -866,23 +909,63 @@ export async function previewArchiveCleanup(client: InstanceApiClient): Promise<
  * manager delete until the instance restarts with the current seed; the
  * `undefined` whole-set shape below remains only as the tested wire-level
  * legacy contract (no UI caller).
+ *
+ * FORCE LEG (2026-09 revision): `force: true` authorizes the host to delete
+ * subtrees that are merely LOADED (idle agent / attached session). The caller
+ * MUST cancel the run first (official `session/cancel`) — the manager does
+ * this automatically; a RUNNING member is refused by the host either way.
+ *
+ * FORCE-SKEW FALLBACK (2026-09 P1 round): a host that predates the flag
+ * refuses the WHOLE call (`gateway/arguments-invalid`), so a hard refusal
+ * would break deletion entirely on every not-yet-restarted instance. The
+ * force intent is already satisfied by the caller's cancel pass, so the call
+ * is retried ONCE with the legacy shape and the outcome carries
+ * `forceUnsupported: true` — the caller must then state that loaded-but-idle
+ * subtrees were skipped and that the instance's dsh needs a restart. The
+ * intent is never dropped silently. If the legacy shape is refused too, the
+ * host predates force AND the subset filter: the force refusal plus the
+ * restart hint is reported (either fact is true; the restart is the action).
  */
 export async function purgeArchivedSessions(
   client: InstanceApiClient,
   sessionIds?: readonly string[],
+  force?: boolean,
 ): Promise<ArchiveCleanupPurgeResult> {
+  const attempt = async (withForce?: boolean): Promise<UnaryResult<any>> => {
+    try {
+      return await callAndThrow(client, () => client.archiveCleanup.purge(sessionIds, withForce))
+    } catch (error) {
+      if (looksNoResponse(error)) {
+        throw new Error('清理超时或网络中断——清理可能仍在进行，请稍后重试（重复执行是安全的）。')
+      }
+      throw error
+    }
+  }
   let result: UnaryResult<any>
+  let forceUnsupported = false
   try {
-    result = await callAndThrow(client, () => client.archiveCleanup.purge(sessionIds))
+    result = await attempt(force)
   } catch (error) {
-    if (looksNoResponse(error)) {
-      throw new Error('清理超时或网络中断——清理可能仍在进行，请稍后重试（重复执行是安全的）。')
-    }
-    if (sessionIds !== undefined && error instanceof InstanceRpcError && error.code === 'gateway/arguments-invalid') {
-      // Old host domain (zero-param purge) refusing the subset filter shape.
+    const refusedShape = error instanceof InstanceRpcError && error.code === 'gateway/arguments-invalid'
+    if (!refusedShape) throw error
+    if (force === true) {
+      try {
+        result = await attempt(undefined)
+        forceUnsupported = true
+      } catch (retryError) {
+        if (retryError instanceof InstanceRpcError && retryError.code === 'gateway/arguments-invalid') {
+          throw new Error('该实例的归档清理域版本过旧，不支持强制删除——请重启该实例的 dsh 后再试。')
+        }
+        throw retryError
+      }
+    } else if (sessionIds !== undefined) {
+      // Old host domain refusing a shape it does not declare: the subset
+      // filter (2026-09). The legacy whole-set shape (both absent) is
+      // accepted by old hosts, so it never takes this branch.
       throw new Error('该实例的归档清理域版本过旧，不支持按条删除——请重启该实例的 dsh 后再试。')
+    } else {
+      throw error
     }
-    throw error
   }
   const { value } = decodeDomainResult<Record<string, unknown> | undefined>(result)
   const rawErrors = (value as Record<string, unknown> | null | undefined)?.errors
@@ -902,8 +985,281 @@ export async function purgeArchivedSessions(
     deletedSessions: countField(value, 'deletedSessions'),
     deletedSubagents: countField(value, 'deletedSubagents'),
     skippedRunning: countField(value, 'skippedRunning'),
+    skippedLoaded: countField(value, 'skippedLoaded'),
+    forcedLoaded: countField(value, 'forcedLoaded'),
+    forceUnsupported,
     truncated: (value as Record<string, unknown> | null | undefined)?.truncated === true,
     errors,
+  }
+}
+
+/**
+ * One `session/list` read projected onto the facts a pre-purge stop pass
+ * needs: the running bits AND the SUBAGENT-origin parent edges of the same
+ * rows.
+ *
+ * WHY lineage (2026-09 P1 closure round, design 24 §21): the host skips an
+ * archived TREE whose any member is running, and subagent-origin rows are
+ * never listed by the archive manager — a running descendant is therefore
+ * invisible in the UI and, with roots-only cancels, permanently undeletable.
+ * `parents` is child → parent; a row without a non-empty `parentSessionId`
+ * contributes NO edge, so a caller can never invent a parent chain.
+ *
+ * SUBAGENT EDGES ONLY (2026-09 fail-open fix): the official row carries
+ * `origin: 'subagent'` for DELEGATION children and NOTHING for forks —
+ * upstream `session/fork` records `parentSessionId` with no origin. The purge
+ * tree (design 24) follows subagent-origin descendants only, so a fork child
+ * of a selected archived root is never inside it; cancelling such a child
+ * would abort a live, unrelated session. A row whose origin is absent (fork)
+ * or unknown therefore contributes NO edge, and without any edge the closure
+ * degrades to the requested roots — a parent is never guessed.
+ */
+export interface SessionRunningLineage {
+  /** Running session ids (subagent-origin rows included). */
+  readonly running: ReadonlySet<string>
+  /** child → parent edges from SUBAGENT-ORIGIN rows only (fork rows carry no
+   *  edge — the purge tree never contains a fork descendant). A subagent row
+   *  whose parent link is missing/empty contributes NO entry: row presence is
+   *  tracked separately in `subagentIds`, so the absence stays detectable. */
+  readonly parents: ReadonlyMap<string, string>
+  /** EVERY session id present in this read. The vendor list skips cold
+   *  records without a cwd (`api-session-controller/src/list.ts` filters
+   *  `record.header.cwd === undefined`), so a row can be absent even though
+   *  the session exists — callers must be able to tell "no edge" from
+   *  "no row". */
+  readonly listed: ReadonlySet<string>
+  /** Ids whose row is SUBAGENT-origin, whether or not its parent link is
+   *  usable. This is what makes an incomplete upward chain detectable. */
+  readonly subagentIds: ReadonlySet<string>
+}
+
+/**
+ * Running session ids + subagent lineage from the OFFICIAL session list
+ * (`session/list` rows carry the live running bit, `parentSessionId` and the
+ * coarse `origin`). Subagent-origin rows are INCLUDED: a running descendant
+ * makes its whole archived tree undeletable, so callers that wait for
+ * "nothing running" must see it. Fork rows are included in `running` (their
+ * liveness is real) but never in `parents` (their edge is not lineage).
+ */
+export async function fetchSessionRunningLineage(client: InstanceApiClient): Promise<SessionRunningLineage> {
+  let result: UnaryResult<{ items?: readonly unknown[] }>
+  try {
+    result = await client.session.list({})
+  } catch (error) {
+    throw wrapWireError(error)
+  }
+  const failure = resultError(result)
+  if (failure !== null) throw failure
+  const items = ((result.ok ? result.value?.items : undefined) ?? []) as readonly any[]
+  const running = new Set<string>()
+  const parents = new Map<string, string>()
+  const listed = new Set<string>()
+  const subagentIds = new Set<string>()
+  for (const item of items) {
+    if (item === null || typeof item !== 'object') continue
+    const sessionId = typeof item.sessionId === 'string' ? item.sessionId : ''
+    if (sessionId === '') continue
+    listed.add(sessionId)
+    if (item.running === true) running.add(sessionId)
+    // Delegation children only. An absent/unknown origin (fork lineage) and a
+    // drifted value both contribute NO edge — never guess a parent chain.
+    if (item.origin !== 'subagent') continue
+    subagentIds.add(sessionId)
+    const parent = typeof item.parentSessionId === 'string' ? item.parentSessionId : ''
+    // A self-referencing row is malformed, not a lineage fact — never an edge.
+    if (parent !== '' && parent !== sessionId) parents.set(sessionId, parent)
+  }
+  return { running, parents, listed, subagentIds }
+}
+
+/**
+ * TRUE when the upward subagent chain from `sessionId` is fully resolvable
+ * over the SAME read: every link has a row, and the chain ends at a row that
+ * is not subagent-origin (a top-level session or a fork edge).
+ *
+ * WHY (2026-09 fail-closed round, design 24 §21.2): a PARTIALLY incomplete
+ * list — the vendor skips cwd-less cold records, and a subagent inherits its
+ * parent's cwd only when the parent has one — silently drops an intermediate
+ * ancestor's edge. The client would then neither exclude nor refuse the viewed
+ * session while the HOST (full corpus, no cwd filter) deletes the whole
+ * subagent tree. An unresolvable link is therefore UNKNOWN and callers refuse.
+ */
+export function upwardChainComplete(sessionId: string, lineage: SessionRunningLineage): boolean {
+  const seen = new Set<string>()
+  let current: string | undefined = sessionId
+  while (current !== undefined) {
+    // A malformed cycle cannot be resolved to a top-level row: unknown.
+    if (seen.has(current)) return false
+    seen.add(current)
+    // The row is absent from this read (cold cwd-less record / transient
+    // gap): its origin is unknowable, so the chain is incomplete.
+    if (!lineage.listed.has(current)) return false
+    // Not a delegation child (top-level or fork edge): the chain ends here.
+    if (!lineage.subagentIds.has(current)) return true
+    const parent: string | undefined = lineage.parents.get(current)
+    // A subagent row without a usable parent link is an incomplete chain.
+    if (parent === undefined) return false
+    current = parent
+  }
+  return true
+}
+
+/** Outcome of the pre-purge stop pass (design 24 §21). */
+export interface StopSessionsResult {
+  /** Ids whose running turn was aborted by this pass (closure members). */
+  readonly cancelled: readonly string[]
+  /** Closure ids still reported running after the settle wait. */
+  readonly stillRunning: readonly string[]
+  /** Per-id cancel failures (other than "not attached" = already not running). */
+  readonly failures: readonly { readonly sessionId: string; readonly message: string }[]
+  /** TRUE when the initial `session/list` read failed: the stop pass was
+   *  SKIPPED (caught, never thrown — design 24 §21) and the caller must then
+   *  REFUSE the force path because the closure is unknown. */
+  readonly unavailable: boolean
+  /** Requested roots REFUSED because an excluded id (the session currently
+   *  being viewed) appears in their closure: never cancelled, and the caller
+   *  must not purge them either (the host would delete the viewed session's
+   *  content with the tree). */
+  readonly refusedRoots: readonly string[]
+  /** The lineage read this pass used, or null when the read failed. Callers
+   *  use it to verify the viewed session's upward chain is complete
+   *  (`upwardChainComplete`) before trusting the closure. */
+  readonly lineage: SessionRunningLineage | null
+}
+
+/**
+ * Roots plus every transitive SUBAGENT-origin descendant of the roots (BFS
+ * over the child → parent edges). Roots keep their caller order and
+ * descendants follow in edge order, so the cancel order is deterministic;
+ * `seen` makes a malformed/cyclic parent chain terminate instead of looping.
+ * Exported for the archive manager's closure-based current-session refusal
+ * (design 24 §21) and for tests; it is the ONE closure definition both paths
+ * share.
+ */
+export function sessionPurgeClosure(
+  roots: readonly string[],
+  lineage: SessionRunningLineage | null,
+): string[] {
+  const closure: string[] = []
+  const seen = new Set<string>()
+  const queue = [...roots]
+  const parents = lineage?.parents ?? new Map<string, string>()
+  while (queue.length > 0) {
+    const id = queue.shift() as string
+    if (seen.has(id)) continue
+    seen.add(id)
+    closure.push(id)
+    for (const [child, parent] of parents) {
+      if (parent === id && !seen.has(child)) queue.push(child)
+    }
+  }
+  return closure
+}
+
+/**
+ * Stop the selected archived sessions' running turns before a purge, using
+ * the official `session/cancel` wire — the "已归档的对话应该终止" semantics
+ * (design 24 §21): the host's force purge may then delete the merely LOADED
+ * content, while a RUNNING member is still refused host-side (so this pass is
+ * a best-effort accelerator, never the safety boundary).
+ *
+ * CLOSURE (2026-09 P1 round): the host skips an archived tree whose ANY member
+ * runs, and a running subagent descendant has no row in the manager — so the
+ * pass cancels the running members of the closure of the requested roots
+ * (roots + all transitive SUBAGENT-origin descendants from the same
+ * `session/list` lineage) and waits until no closure member is running.
+ * Without lineage facts (rows without a subagent-origin edge) the closure
+ * degrades to the roots exactly as before — a parent is never guessed.
+ *
+ * ADVISORY (2026-09 fix): a failed initial read must NOT abort the delete
+ * (the purge is the operation the user asked for; the stop pass only improves
+ * its outcome). The pass then reports `unavailable: true` and the caller
+ * continues with the force purge plus an honest note.
+ *
+ * EXCLUSION (2026-09 fix): `exclude` ids (the session currently being viewed)
+ * are never cancelled, and a requested root whose closure contains one is
+ * returned in `refusedRoots` so the caller can skip it entirely — the host
+ * would otherwise delete that root's whole tree, viewed session included.
+ *
+ * Idle agents are skipped (cancel would be a no-op), `session/not-found` is
+ * treated as already-settled, and the pass waits up to
+ * `attempts × intervalMs` for the aborted turns to leave the running set. A
+ * mid-wait list failure stops the polling and reports the last known state.
+ */
+export async function stopSessionsForPurge(
+  client: InstanceApiClient,
+  sessionIds: readonly string[],
+  deps: {
+    readonly fetchRunning?: (client: InstanceApiClient) => Promise<SessionRunningLineage>
+    readonly cancel?: (client: InstanceApiClient, sessionId: string) => Promise<void>
+    readonly delay?: (ms: number) => Promise<void>
+    readonly attempts?: number
+    readonly intervalMs?: number
+    /** Ids that must never be cancelled and whose presence in a requested
+     *  root's closure refuses that root (design 24 §21). */
+    readonly exclude?: readonly string[]
+  } = {},
+): Promise<StopSessionsResult> {
+  const fetchRunning = deps.fetchRunning ?? fetchSessionRunningLineage
+  const cancel = deps.cancel ?? cancelSession
+  const delay = deps.delay ?? ((ms: number) => new Promise<void>(resolve => { setTimeout(resolve, ms) }))
+  const attempts = deps.attempts ?? 10
+  const intervalMs = deps.intervalMs ?? 300
+  const cancelled: string[] = []
+  const failures: { sessionId: string; message: string }[] = []
+  const excluded = new Set(deps.exclude ?? [])
+
+  let snapshot: SessionRunningLineage
+  try {
+    snapshot = await fetchRunning(client)
+  } catch {
+    // CAUGHT, never thrown: the caller must REFUSE the force path (the closure
+    // is unknown) and report honestly. Raw wire text never surfaces.
+    return {
+      cancelled: [],
+      stillRunning: [],
+      failures: [],
+      unavailable: true,
+      refusedRoots: [],
+      lineage: null,
+    }
+  }
+  const roots = [...new Set(sessionIds)]
+  const refusedRoots = excluded.size === 0
+    ? []
+    : roots.filter(root => sessionPurgeClosure([root], snapshot).some(id => excluded.has(id)))
+  const kept = roots.filter(root => !refusedRoots.includes(root))
+  let running = snapshot.running
+  const wanted = sessionPurgeClosure(kept, snapshot).filter(id => !excluded.has(id))
+  for (const sessionId of wanted) {
+    if (!running.has(sessionId)) continue
+    try {
+      await cancel(client, sessionId)
+      cancelled.push(sessionId)
+    } catch (error) {
+      // Not attached = nothing was running there (idempotent success).
+      if (isSessionNotAttached(error)) continue
+      failures.push({ sessionId, message: error instanceof Error ? error.message : String(error) })
+    }
+  }
+  if (cancelled.length > 0) {
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      await delay(intervalMs)
+      try {
+        running = (await fetchRunning(client)).running
+      } catch {
+        break
+      }
+      if (wanted.every(id => !running.has(id))) break
+    }
+  }
+  return {
+    cancelled,
+    stillRunning: wanted.filter(id => running.has(id)),
+    failures,
+    unavailable: false,
+    refusedRoots,
+    lineage: snapshot,
   }
 }
 

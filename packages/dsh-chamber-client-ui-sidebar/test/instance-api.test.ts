@@ -105,11 +105,18 @@ test('fetchInstanceSnapshot cwd grouping titles handle Windows separators, trail
 // ---------------------------------------------------------------------------
 
 import {
+  cancelSession,
+  fetchSessionRunningLineage,
   getInstanceClient,
   InstanceUnavailableError,
   isInstanceDomainMissing,
+  isSessionNotAttached,
   previewArchiveCleanup,
   purgeArchivedSessions,
+  sessionPurgeClosure,
+  stopSessionsForPurge,
+  upwardChainComplete,
+  type SessionRunningLineage,
   type ArchiveCleanupPurgeResult,
 } from '../src/shared/instance-api.ts'
 
@@ -118,6 +125,7 @@ const PREVIEW_VALUE = {
   deletableSessions: 2,
   deletableSubagents: 2,
   skippedRunning: 1,
+  skippedLoaded: 0,
 }
 
 function cleanupClient(overrides: Record<string, unknown> = {}) {
@@ -462,4 +470,399 @@ test('purgeArchivedSessions: an OLD zero-param host refuses the subset filter wi
   } finally {
     globalThis.fetch = originalFetch
   }
+})
+
+// ---------------------------------------------------------------------------
+// 2026-09 revision ("已归档的对话应该终止"): stop-then-purge. The manager
+// cancels the selected sessions' running turns through the OFFICIAL
+// session/cancel wire, waits for them to leave the running set, and then
+// purges with force so the host may delete merely LOADED content.
+// ---------------------------------------------------------------------------
+
+test('purgeArchivedSessions forwards force and decodes the split skip counts', async () => {
+  const originalFetch = globalThis.fetch
+  const bodies: string[] = []
+  try {
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const raw = String(init?.body ?? '')
+      bodies.push(raw)
+      const envelope = JSON.parse(raw) as { rpcId?: string }
+      return new Response(JSON.stringify({
+        type: 'server-response',
+        rpcId: envelope.rpcId,
+        result: {
+          ok: true,
+          value: {
+            ok: true,
+            value: {
+              deletedSessions: 2,
+              deletedSubagents: 1,
+              skippedRunning: 0,
+              skippedLoaded: 1,
+              forcedLoaded: 2,
+              errors: [],
+            },
+          },
+        },
+      }), { status: 200, headers: { 'content-type': 'application/json' } })
+    }) as typeof fetch
+
+    const client = getInstanceClient('local')
+    const result = await purgeArchivedSessions(client, ['s1'], true)
+    assert.equal(result.forcedLoaded, 2)
+    assert.equal(result.skippedLoaded, 1)
+    assert.equal(result.forceUnsupported, false, 'a host that accepts force is never marked as refusing it')
+    const payload = (JSON.parse(bodies[0] as string) as { payload?: unknown }).payload
+    assert.deepEqual(payload, { args: { sessionIds: ['s1'], force: true } })
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+// 2026-09 P1 round: an instance whose dsh predates the force flag refuses the
+// WHOLE call. Dropping force (the shape that host accepts) keeps deletion
+// working; the result must MARK it so the manager can say honestly that
+// loaded-but-idle subtrees were skipped.
+test('purgeArchivedSessions retries ONCE without force when an old host refuses the flag, and marks the result', async () => {
+  const originalFetch = globalThis.fetch
+  const payloads: unknown[] = []
+  try {
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const envelope = JSON.parse(String(init?.body ?? '{}')) as { rpcId?: string; payload?: { args?: Record<string, unknown> } }
+      payloads.push(envelope.payload)
+      if (envelope.payload?.args?.force === true) {
+        return new Response(JSON.stringify({
+          type: 'server-response',
+          rpcId: envelope.rpcId,
+          result: {
+            ok: false,
+            error: {
+              code: 'gateway/arguments-invalid',
+              message: 'typert gateway: archiveCleanup/purge: args fields do not match the descriptor: unexpected "force"',
+              details: {},
+            },
+          },
+        }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      return new Response(JSON.stringify({
+        type: 'server-response',
+        rpcId: envelope.rpcId,
+        result: {
+          ok: true,
+          value: {
+            ok: true,
+            value: { deletedSessions: 1, deletedSubagents: 0, skippedRunning: 0, skippedLoaded: 3, forcedLoaded: 0, errors: [] },
+          },
+        },
+      }), { status: 200, headers: { 'content-type': 'application/json' } })
+    }) as typeof fetch
+
+    const result = await purgeArchivedSessions(getInstanceClient('local'), ['s1'], true)
+    assert.equal(result.forceUnsupported, true, 'the caller must be able to tell the user force was not honored')
+    assert.equal(result.skippedLoaded, 3, 'the legacy run skipped the loaded-but-idle subtree')
+    assert.deepEqual(payloads, [
+      { args: { sessionIds: ['s1'], force: true } },
+      { args: { sessionIds: ['s1'] } },
+    ], 'exactly one legacy-shape retry, never a silent drop of the force shape')
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('purgeArchivedSessions: a host too old for force AND the subset filter still gets the honest restart hint', async () => {
+  const originalFetch = globalThis.fetch
+  let calls = 0
+  try {
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      calls += 1
+      const envelope = JSON.parse(String(init?.body ?? '{}')) as { rpcId?: string }
+      return new Response(JSON.stringify({
+        type: 'server-response',
+        rpcId: envelope.rpcId,
+        result: {
+          ok: false,
+          error: { code: 'gateway/arguments-invalid', message: 'args fields do not match the descriptor', details: {} },
+        },
+      }), { status: 200, headers: { 'content-type': 'application/json' } })
+    }) as typeof fetch
+
+    await assert.rejects(
+      () => purgeArchivedSessions(getInstanceClient('local'), ['s1'], true),
+      (error: unknown) => error instanceof Error && error.message.includes('不支持强制删除'),
+    )
+    assert.equal(calls, 2, 'one force attempt + one legacy retry, then the honest refusal')
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('purgeArchivedSessions: an OLD host without the force flag answers an honest restart hint', async () => {
+  const originalFetch = globalThis.fetch
+  try {
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const envelope = JSON.parse(String(init?.body ?? '{}')) as { rpcId?: string }
+      return new Response(JSON.stringify({
+        type: 'server-response',
+        rpcId: envelope.rpcId,
+        result: {
+          ok: false,
+          error: {
+            code: 'gateway/arguments-invalid',
+            message: 'typert gateway: archiveCleanup/purge: args fields do not match the descriptor: unexpected "force"',
+            details: {},
+          },
+        },
+      }), { status: 200, headers: { 'content-type': 'application/json' } })
+    }) as typeof fetch
+
+    const client = getInstanceClient('local')
+    await assert.rejects(
+      () => purgeArchivedSessions(client, ['s1'], true),
+      (error: unknown) => error instanceof Error && error.message.includes('不支持强制删除'),
+    )
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('cancelSession posts the official session/cancel request shape', async () => {
+  const originalFetch = globalThis.fetch
+  const bodies: string[] = []
+  try {
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const raw = String(init?.body ?? '')
+      bodies.push(raw)
+      const envelope = JSON.parse(raw) as { rpcId?: string }
+      return new Response(JSON.stringify({
+        type: 'server-response',
+        rpcId: envelope.rpcId,
+        result: { ok: true, value: { accepted: true } },
+      }), { status: 200, headers: { 'content-type': 'application/json' } })
+    }) as typeof fetch
+
+    await cancelSession(getInstanceClient('local'), 's1')
+    const envelope = JSON.parse(bodies[0] as string) as { method?: string; payload?: unknown }
+    assert.equal(envelope.method, 'session/cancel')
+    assert.deepEqual(envelope.payload, { args: { request: { sessionId: 's1' } } })
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('fetchSessionRunningLineage keeps subagent rows but only SUBAGENT-origin edges (fork rows carry none)', async () => {
+  const client = {
+    session: {
+      list: async () => ({
+        ok: true as const,
+        value: {
+          items: [
+            { sessionId: 's1', running: true },
+            { sessionId: 'a1', running: true, origin: 'subagent', parentSessionId: 's1' },
+            { sessionId: 'fork1', running: true, parentSessionId: 's1' },
+            { sessionId: 's2', running: false },
+            { sessionId: 's3' },
+          ],
+        },
+      }),
+    },
+  }
+  const lineage = await fetchSessionRunningLineage(client as never)
+  assert.deepEqual([...lineage.running].sort(), ['a1', 'fork1', 's1'],
+    'a running fork is a real running session (its own guards must see it)')
+  assert.deepEqual([...lineage.parents.entries()], [['a1', 's1']],
+    'only origin === "subagent" is lineage: the fork edge is never followed')
+})
+
+test('stopSessionsForPurge: cancels only running ids, waits for settle, reports leftovers', async () => {
+  const cancelled: string[] = []
+  let running = new Set(['s1', 's2', 'child-1'])
+  const client = {} as never
+  const result = await stopSessionsForPurge(client, ['s1', 's2', 's3'], {
+    fetchRunning: async () => lineageOf(running, new Map()),
+    cancel: async (_client, sessionId) => { cancelled.push(sessionId) },
+    delay: async () => { running = new Set(['child-1']) },
+    attempts: 3,
+    intervalMs: 1,
+  })
+  assert.deepEqual(cancelled, ['s1', 's2'])
+  assert.deepEqual(result.cancelled, ['s1', 's2'])
+  assert.deepEqual(result.stillRunning, [])
+  assert.deepEqual(result.failures, [])
+  assert.equal(result.unavailable, false)
+  assert.deepEqual(result.refusedRoots, [])
+})
+
+test('stopSessionsForPurge: session/not-found is an already-settled success; other failures are reported', async () => {
+  const client = {} as never
+  const result = await stopSessionsForPurge(client, ['gone', 'broken'], {
+    fetchRunning: async () => lineageOf(new Set(['gone', 'broken']), new Map()),
+    cancel: async (_client, sessionId) => {
+      if (sessionId === 'gone') {
+        const { InstanceRpcError: RpcError } = await import('../src/shared/instance-rpc-error.ts')
+        throw new RpcError('session/not-found', `session "${sessionId}" not found (not attached)`)
+      }
+      throw new Error('boom')
+    },
+    delay: async () => {},
+    attempts: 1,
+  })
+  assert.deepEqual(result.cancelled, [])
+  assert.deepEqual(result.failures, [{ sessionId: 'broken', message: 'boom' }])
+  assert.deepEqual(result.stillRunning, ['gone', 'broken'])
+  assert.equal(isSessionNotAttached(new Error('boom')), false)
+})
+
+test('stopSessionsForPurge catches a failed session/list read (never throws) and reports unavailable (F4)', async () => {
+  const client = {} as never
+  const result = await stopSessionsForPurge(client, ['root'], {
+    fetchRunning: async () => { throw new Error('session/list exploded: raw wire text') },
+    cancel: async () => { assert.fail('nothing may be cancelled when the read failed') },
+    attempts: 1,
+  })
+  assert.deepEqual(result.cancelled, [])
+  assert.deepEqual(result.stillRunning, [])
+  assert.deepEqual(result.failures, [])
+  assert.equal(result.unavailable, true,
+    'caught, never thrown — the caller refuses the force path on an unknown closure')
+  assert.equal(result.lineage, null, 'no lineage facts were read')
+  assert.deepEqual(result.refusedRoots, [])
+})
+
+// ---------------------------------------------------------------------------
+// 2026-09 P1 round: the pre-purge stop pass covers the CLOSURE of the
+// selected roots. The host skips an archived tree whose ANY member runs, and
+// a running subagent descendant has no row in the manager — roots-only
+// cancels can never settle such a tree.
+// 2026-09 fail-open fix: the closure follows SUBAGENT-origin edges only (a
+// running FORK of a selected root is never cancelled — the purge tree never
+// contains it), and the currently-viewed session is excluded from the CLOSURE.
+// ---------------------------------------------------------------------------
+
+function lineageClient(items: readonly unknown[]) {
+  return { session: { list: async () => ({ ok: true as const, value: { items } }) } }
+}
+
+/** A hand-built lineage for the stop-pass seams: `listed`/`subagentIds` default
+ *  to what the rows imply (edge keys are subagent rows; every referenced id is
+ *  listed), so the E-#1 completeness rule sees a resolvable chain unless a test
+ *  deliberately omits a row. */
+function lineageOf(
+  running: ReadonlySet<string>,
+  parents: ReadonlyMap<string, string>,
+  overrides: Partial<SessionRunningLineage> = {},
+): SessionRunningLineage {
+  const listed = new Set<string>([...running, ...parents.keys(), ...parents.values()])
+  return { running, parents, listed, subagentIds: new Set(parents.keys()), ...overrides }
+}
+
+const LINEAGE_ROWS = [
+  { sessionId: 'root', running: false, parentSessionId: null },
+  { sessionId: 'child', running: true, origin: 'subagent', parentSessionId: 'root' },
+  { sessionId: 'grand', running: true, origin: 'subagent', parentSessionId: 'child' },
+  { sessionId: 'fork', running: true, parentSessionId: 'root' },
+  { sessionId: 'fork-grand', running: true, origin: 'subagent', parentSessionId: 'fork' },
+  { sessionId: 'unrelated', running: true, parentSessionId: null },
+  { sessionId: 'self', running: false, parentSessionId: 'self' },
+]
+
+test('fetchSessionRunningLineage reads running ids AND the SUBAGENT parent edges of one session/list call', async () => {
+  const lineage = await fetchSessionRunningLineage(lineageClient(LINEAGE_ROWS) as never)
+  assert.deepEqual([...lineage.running].sort(), ['child', 'fork', 'fork-grand', 'grand', 'unrelated'])
+  assert.deepEqual([...lineage.parents.entries()], [['child', 'root'], ['grand', 'child'], ['fork-grand', 'fork']],
+    'subagent edges only; the fork row and the self-referencing row contribute no edge')
+  assert.deepEqual([...lineage.subagentIds].sort(), ['child', 'fork-grand', 'grand'],
+    'subagent ROW presence is tracked separately from edge usability (E-#1)')
+  assert.deepEqual([...lineage.listed].sort(),
+    ['child', 'fork', 'fork-grand', 'grand', 'root', 'self', 'unrelated'],
+    'every listed row is recorded so a MISSING row is detectable')
+  assert.equal(upwardChainComplete('grand', lineage), true, 'the full chain resolves')
+  assert.equal(upwardChainComplete('fork-grand', lineage), true, 'the chain ends at the fork edge')
+})
+
+test('sessionPurgeClosure follows subagent-origin edges only (a fork subtree is NOT the root tree)', async () => {
+  const lineage = await fetchSessionRunningLineage(lineageClient(LINEAGE_ROWS) as never)
+  assert.deepEqual(sessionPurgeClosure(['root'], lineage), ['root', 'child', 'grand'],
+    'the fork child (and everything under it) is outside the purge tree')
+  assert.deepEqual(sessionPurgeClosure(['root'], null), ['root'], 'no lineage facts => roots only, never a guess')
+})
+
+test('stopSessionsForPurge cancels the running CLOSURE and waits for the whole closure to settle', async () => {
+  const cancelled: string[] = []
+  const parents = new Map([['child', 'root'], ['grand', 'child']])
+  let running = new Set(['child', 'grand', 'unrelated'])
+  const result = await stopSessionsForPurge(lineageClient(LINEAGE_ROWS) as never, ['root'], {
+    fetchRunning: async () => lineageOf(running, parents),
+    cancel: async (_client, sessionId) => { cancelled.push(sessionId) },
+    delay: async () => { running = new Set(['unrelated']) },
+    attempts: 3,
+    intervalMs: 1,
+  })
+  assert.deepEqual(cancelled, ['child', 'grand'],
+    'an invisible running descendant (and its own child) is cancelled; unrelated running ids are never touched')
+  assert.deepEqual(result.cancelled, ['child', 'grand'])
+  assert.deepEqual(result.stillRunning, [], 'the wait covers every closure member')
+  assert.deepEqual(result.failures, [])
+})
+
+test('stopSessionsForPurge never cancels a running FORK of the selected root (F3)', async () => {
+  const cancelled: string[] = []
+  const lineage = await fetchSessionRunningLineage(lineageClient(LINEAGE_ROWS) as never)
+  const result = await stopSessionsForPurge(lineageClient(LINEAGE_ROWS) as never, ['root'], {
+    fetchRunning: async () => lineage,
+    cancel: async (_client, sessionId) => { cancelled.push(sessionId) },
+    delay: async () => {},
+    attempts: 1,
+  })
+  assert.deepEqual(cancelled, ['child', 'grand'],
+    'only the subagent closure is cancelled: the fork (and its own subagent child) live in another tree')
+  assert.deepEqual(result.cancelled, ['child', 'grand'])
+})
+
+test('stopSessionsForPurge refuses roots whose CLOSURE contains the excluded viewed session (F2)', async () => {
+  const cancelled: string[] = []
+  const parents = new Map([['child', 'root'], ['grand', 'child']])
+  const running = new Set(['child', 'grand', 'sibling'])
+  const lineage = lineageOf(running, parents)
+  const result = await stopSessionsForPurge(lineageClient(LINEAGE_ROWS) as never, ['root', 'sibling'], {
+    fetchRunning: async () => lineage,
+    cancel: async (_client, sessionId) => { cancelled.push(sessionId) },
+    delay: async () => { running.clear() },
+    attempts: 2,
+    intervalMs: 1,
+    exclude: ['grand'],
+  })
+  assert.deepEqual(result.refusedRoots, ['root'],
+    'the viewed session sits in root\'s closure => root is refused whole')
+  assert.deepEqual(cancelled, ['sibling'],
+    'the refused root is never cancelled and the viewed id itself is excluded from the pass')
+  assert.deepEqual(result.stillRunning, [], 'the refused root is not part of the wait set')
+})
+
+test('stopSessionsForPurge reports a lingering closure descendant in stillRunning (fail-closed)', async () => {
+  const parents = new Map([['child', 'root'], ['grand', 'child']])
+  let running = new Set(['child', 'grand'])
+  const result = await stopSessionsForPurge(lineageClient(LINEAGE_ROWS) as never, ['root'], {
+    fetchRunning: async () => lineageOf(running, parents),
+    cancel: async () => {},
+    delay: async () => { running = new Set(['grand']) },
+    attempts: 2,
+    intervalMs: 1,
+  })
+  assert.deepEqual(result.cancelled, ['child', 'grand'])
+  assert.deepEqual(result.stillRunning, ['grand'],
+    'a descendant that did not settle is reported so the caller stays fail-closed')
+})
+
+test('stopSessionsForPurge without lineage facts stays roots-only (a parent is never guessed)', async () => {
+  const cancelled: string[] = []
+  let running = new Set(['root', 'child'])
+  const result = await stopSessionsForPurge({} as never, ['root'], {
+    fetchRunning: async () => lineageOf(running, new Map()),
+    cancel: async (_client, sessionId) => { cancelled.push(sessionId) },
+    delay: async () => { running = new Set(['child']) },
+    attempts: 2,
+    intervalMs: 1,
+  })
+  assert.deepEqual(cancelled, ['root'], 'no edges => only the requested roots are cancelled')
+  assert.deepEqual(result.stillRunning, [])
 })

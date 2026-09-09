@@ -6,11 +6,14 @@
  * action dispatch (design 21 §3 single-model matrix). Unified zones:
  *   ① diagnostic banner (bannerProjection — state name + message, never the
  *     state/pluginId/message triple repetition);
- *   ② chamber built-in component table (host-graph / git-worktree / mobile,
- *     mobile for gateway sources only, injected with the gateway release) —
- *     columns package | local badge | remote/gateway badge | version, using
- *     the badge projections localChamberBadge/remoteChamberBadge; version
- *     drift chips and the「重新同步 chamber 组件」action live in this zone;
+ *   ② chamber built-in component table — one row per registry host package
+ *     (CHAMBER_HOST_PACKAGES projection), plus the gateway's chamber CLIENT
+ *     rows derived from the Loader inventory (the packaged mobile entry today;
+ *     never a hardcoded package name) — columns package | local badge |
+ *     remote/gateway badge | version. The rows themselves come from the pure,
+ *     tested `deriveChamberRows` (plugin-inventory-text.ts); this component
+ *     only maps descriptors to elements. Version drift chips and the
+ *     「重新同步 chamber 组件」action live in this zone;
  *   ③ third-party plugin zone (installed list + per-row remove + add: spec
  *     input + npm search + local import — a plugin source folder OR a ready
  *     .tgz archive, design 21 §10 archive-pick; the macOS picker offers
@@ -57,7 +60,7 @@ import clsx from 'clsx'
 import { Button, IconRefreshOutline16, IconTrashOutline16, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
 import { pollGatewayReady } from '@dsh-chamber/dsh-client-ui-sidebar/shared'
 import type {
-  ChamberHostGraphState,
+  ChamberHostPackageState,
   LocalPluginManifest,
   NpmSearchPackage,
   PluginApplyFailure,
@@ -97,17 +100,11 @@ import {
   type PluginDiff, type PluginRow, type PluginRowKind,
 } from './plugin-diff.ts'
 import {
-  GIT_WORKTREE_PACKAGE,
-  HOST_GRAPH_PACKAGE,
-  MOBILE_PACKAGE,
-  chamberSeedDrift,
-  localChamberBadge,
-  remoteChamberBadge,
+  deriveChamberRows,
   thirdPartyEntries,
   thirdPartyLiveState,
-  type ChamberBadge,
   type ChamberBadgeTone,
-  type ChamberSeedDriftState,
+  type ChamberRowDescriptor,
   type ThirdPartyLiveState,
 } from './plugin-inventory-text.ts'
 import { bannerProjection, pluginDiagnosticTone, type PluginDiagnostic } from './plugin-diagnostic.ts'
@@ -206,23 +203,10 @@ function chamberBadgeClass(tone: ChamberBadgeTone): string {
 }
 
 /**
- * The ssh remote-side chamber badge: the probed ChamberHostGraphState
- * tri-state mapped onto the shared badge vocabulary — present + enabled +
- * live = 已生效 (ok); present but not proven live = 已注入 (muted); present
- * without the boot layer = 已注入 (warn, the half-injected state); absent =
- * 未注入; probe failure/absent state = 未知 (warn/muted). Never a live claim
- * from a file probe (the same live-Loader semantics the gateway badge uses).
+ * The ssh remote-side chamber badge now lives in plugin-inventory-text.ts
+ * (sshChamberBadge) — the row derivation needs it, and that module is the
+ * locale-free projection the plain-node suite covers.
  */
-function sshRemoteBadge(state: ChamberHostGraphState | null | undefined): ChamberBadge {
-  if (state === undefined) return { labelKey: 'chamberBadgeUnknown', tone: 'muted' }
-  if (state === null) return { labelKey: 'chamberBadgeUnknown', tone: 'warn' }
-  if (state.installed && state.patched) {
-    if (state.live === true) return { labelKey: 'chamberBadgeLive', tone: 'ok' }
-    return { labelKey: 'chamberBadgeInjected', tone: 'muted' }
-  }
-  if (state.installed) return { labelKey: 'chamberBadgeInjected', tone: 'warn' }
-  return { labelKey: 'chamberBadgeNotInjected', tone: 'muted' }
-}
 
 /** The dialog target descriptor the four card kinds build (plan 24 B1.1). */
 export type PluginDialogTarget =
@@ -230,15 +214,6 @@ export type PluginDialogTarget =
   | { kind: 'ssh'; spec: SshInstanceSpec }
   | { kind: 'gateway'; sourceId: string; label: string }
   | { kind: 'http'; sourceId: string; label: string }
-
-/** One chamber table row (plan 24 B1.5). */
-interface ChamberRowView {
-  key: string
-  nameCell: ReactNode
-  localBadge: ChamberBadge | null
-  remoteBadge: ChamberBadge | null
-  versionCell: ReactNode
-}
 
 /**
  * The unified plugin dialog.
@@ -338,11 +313,12 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
   const snapshotRef = useRef<PluginInventorySnapshot | null>(null)
   /** reload 进行中：刷新按钮 in-flight 禁用（防重复并发 + 隐式 busy 提示）。 */
   const [reloading, setReloading] = useState(false)
-  // The LOCAL side of the chamber rows (gateway/http): the desktop's own
-  // profile manifest — unreadable is the same loud hint, never a silent
-  // "not injected". Re-runs on every reload.
-  const [localInjected, setLocalInjected] = useState<{ hostGraph: boolean; gitWorktree: boolean } | null>(null)
-  const [localVersion, setLocalVersion] = useState<{ hostGraph: string | null; gitWorktree: string | null } | null>(null)
+  // The EXPECTED chamber host-package set + the local side's per-package
+  // state, from the desktop's profile manifest (which derives it from the
+  // control-plane registry — the page never hardcodes the package list).
+  // Unreadable is the same loud hint, never a silent "not injected". Re-runs
+  // on every reload.
+  const [localChamberPackages, setLocalChamberPackages] = useState<ChamberHostPackageState[] | null>(null)
   const [localSideFailed, setLocalSideFailed] = useState(false)
   // 「重启生效」(design 21 §5.1): controlled managed-dsh restart — the same
   // POST + pollGatewayReady semantics as the connection card.
@@ -730,31 +706,21 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
       if (cancelled) return
       if ('error' in res) {
         setLocalSideFailed(true)
-        setLocalInjected(null)
-        setLocalVersion(null)
+        setLocalChamberPackages(null)
         return
       }
       const chamber = res.manifest.chamber
       if (chamber.ok !== true) {
         setLocalSideFailed(true)
-        setLocalInjected(null)
-        setLocalVersion(null)
+        setLocalChamberPackages(null)
         return
       }
       setLocalSideFailed(false)
-      setLocalInjected({
-        hostGraph: chamber.hostGraph.installed && chamber.hostGraph.patched,
-        gitWorktree: chamber.gitWorktree.installed && chamber.gitWorktree.patched,
-      })
-      setLocalVersion({
-        hostGraph: chamber.hostGraph.version,
-        gitWorktree: chamber.gitWorktree.version,
-      })
+      setLocalChamberPackages([...chamber.packages])
     }).catch(() => {
       if (cancelled) return
       setLocalSideFailed(true)
-      setLocalInjected(null)
-      setLocalVersion(null)
+      setLocalChamberPackages(null)
     })
     return () => { cancelled = true }
   }, [sourceId, reloadNonce])
@@ -1198,167 +1164,63 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
     : null
 
   // ---- ② chamber built-in table ----
-  /** The ssh local-side chamber facts (the sync load fills localManifest). */
-  const sshLocalChamber = isSsh ? (localManifest === null ? undefined : localManifest.chamber) : undefined
-  const sshRemoteChamber = isSsh ? (remoteManifest === null ? undefined : remoteManifest.chamber) : undefined
-  const sshHostGraphRemote = sshRemoteChamber === undefined ? undefined : sshRemoteChamber.ok ? sshRemoteChamber.hostGraph : null
-  const sshGitRemote = sshRemoteChamber === undefined ? undefined : sshRemoteChamber.ok ? sshRemoteChamber.gitWorktree : null
-  // BOTH boot rows must be present for the chamber host layer to be complete.
+  /** The chamber rows are DERIVED by the pure, tested projection in
+   *  plugin-inventory-text.ts (deriveChamberRows) — this component only maps
+   *  descriptors to elements. Data sources per target (design 13 §6 / 21
+   *  §6.2 / 24 §7): the LOCAL target's expected AND local list come from its
+   *  OWN profile manifest (`localList.chamber`), gateway/http/ssh read the
+   *  desktop's local manifest projection (`localChamberPackages`), and ssh
+   *  prefers the remote probe's list when it succeeded. An unreadable local
+   *  manifest leaves the list empty; the ssh arm still renders the remote
+   *  probe's own list, so a remote-only read failure is never invisible. */
+  /** The ssh remote probe (design 13 §6): the remote profile manifest's own
+   *  chamber projection, loaded by loadSync. */
+  const sshRemoteChamber = isSsh ? remoteManifest?.chamber : undefined
+  const chamberRows: ChamberRowDescriptor[] = deriveChamberRows({
+    target: target.kind,
+    expected: isLocal
+      ? (localList !== null && localList.chamber.ok === true ? localList.chamber.packages : null)
+      : localChamberPackages,
+    localManifestChamber: localChamberPackages,
+    remoteChamber: isSsh ? (sshRemoteChamber ?? null) : null,
+    inventory: snapshot,
+    seedCache: isGateway ? seedCache : null,
+    localSideFailed,
+  })
+  const chamberCacheAbsent = chamberRows.some(row => row.cacheAbsent)
+
+  // BOTH boot rows of EVERY registry package must be present for the chamber
+  // host layer to be complete — derived over the whole list, so a package
+  // added to the registry can never be silently exempt.
   const remoteNeedsSeed = isSsh && sshRemoteChamber !== undefined
-    && (!sshRemoteChamber.ok
-      || !(sshRemoteChamber.hostGraph.installed && sshRemoteChamber.hostGraph.patched)
-      || !(sshRemoteChamber.gitWorktree.installed && sshRemoteChamber.gitWorktree.patched))
+    && (sshRemoteChamber.ok !== true
+      || sshRemoteChamber.packages.some(pkg => !(pkg.installed && pkg.patched)))
   const remoteInjectedNotLive = isSsh && sshRemoteChamber?.ok === true
-    && sshRemoteChamber.hostGraph.installed && sshRemoteChamber.hostGraph.patched && sshRemoteChamber.hostGraph.live === false
-  const remoteGitNotLive = isSsh && sshRemoteChamber?.ok === true
-    && sshRemoteChamber.gitWorktree.installed && sshRemoteChamber.gitWorktree.patched && sshRemoteChamber.gitWorktree.live === false
-  const restartPending = remoteInjectedNotLive || remoteGitNotLive || pendingRestart
+    && sshRemoteChamber.packages.some(pkg => pkg.installed && pkg.patched && pkg.live === false)
+  const restartPending = remoteInjectedNotLive || pendingRestart
 
-  // Gateway seed-cache drift (local manifest vs gateway cache); http-direct
-  // and non-gateway backends have no /chamber surface → null.
-  const driftStates = isGateway && seedCache !== null && localVersion !== null
-    ? chamberSeedDrift(localVersion, seedCache)
-    : null
-  const bothAbsent = seedCache !== null
-    && (seedCache[HOST_GRAPH_PACKAGE] ?? null) === null
-    && (seedCache[GIT_WORKTREE_PACKAGE] ?? null) === null
-
-  /** One gateway row's version cell: local version + the cached gateway
-   *  version with a drift marker when it differs (the「重新同步」gap) — `· 未
-   *  同步` when the cache lacks the package (suppressed while the whole
-   *  cache is absent). */
-  const gatewayVersionCell = (packageName: string, driftState: ChamberSeedDriftState | null): ReactNode => {
-    const localFor = packageName === HOST_GRAPH_PACKAGE
-      ? (localVersion?.hostGraph ?? null)
-      : (localVersion?.gitWorktree ?? null)
-    const cachedVersion = seedCache === null ? null : (seedCache[packageName] ?? null)
+  /** One row's version cell: the derived version text plus the gateway
+   *  seed-cache comparison (drift marker / 未同步) when the cache was read. */
+  const chamberVersionCell = (row: ChamberRowDescriptor): ReactNode => {
+    if (row.versionHintKey !== null) return <span className={css.dim}>{t(row.versionHintKey)}</span>
     return (
       <span className={css.chamberCell}>
-        {localFor !== null ? <span className={css.dim}>v{localFor}</span> : <span className={css.dim}>—</span>}
-        {seedCache === null
-          ? null
-          : cachedVersion === null
-            ? (!bothAbsent ? <span className={css.dim}> · {t('chamberNotSynced')}</span> : null)
-            : (
-              <>
-                <span className={css.dim}> · gateway v{cachedVersion}</span>
-                {driftState === 'drift'
-                  ? (
-                    <span
-                      className={css.pluginWarn}
-                      title={`${t('chamberVersionDrift')}: v${localFor ?? '?'} ≠ gateway v${cachedVersion}`}
-                    >
-                      {t('chamberVersionDrift')}
-                    </span>
-                  )
-                  : null}
-              </>
-            )}
+        <span className={css.dim}>{row.versionText ?? '—'}</span>
+        {row.cacheVersionText !== null ? <span className={css.dim}> · gateway {row.cacheVersionText}</span> : null}
+        {row.cacheNotSynced ? <span className={css.dim}> · {t('chamberNotSynced')}</span> : null}
+        {row.driftState === 'drift'
+          ? (
+            <span
+              className={css.pluginWarn}
+              title={`${t('chamberVersionDrift')}: ${row.versionText ?? 'v?'} ≠ gateway ${row.cacheVersionText ?? 'v?'}`}
+            >
+              · {t('chamberVersionDrift')}
+            </span>
+          )
+          : null}
       </span>
     )
   }
-
-  /** The chamber rows for the current backend (plan 24 B1.5): package |
-   *  local badge | remote/gateway badge | version; mobile for gateway only. */
-  const chamberRows: ChamberRowView[] = ((): ChamberRowView[] => {
-    if (isLocal) {
-      const ch = localList?.chamber
-      const injectedOf = (pkg: 'hostGraph' | 'gitWorktree'): boolean | null =>
-        ch === undefined ? null : ch.ok ? ch[pkg].installed && ch[pkg].patched : false
-      return [
-        {
-          key: 'host-graph',
-          nameCell: <code className={css.pluginName}>{HOST_GRAPH_PACKAGE}</code>,
-          localBadge: localChamberBadge(injectedOf('hostGraph'), false),
-          remoteBadge: null,
-          versionCell: ch?.ok === true
-            ? <span className={css.dim}>v{ch.hostGraph.version}</span>
-            : <span className={css.dim}>—</span>,
-        },
-        {
-          key: 'git-worktree',
-          nameCell: <code className={css.pluginName}>{GIT_WORKTREE_PACKAGE}</code>,
-          localBadge: localChamberBadge(injectedOf('gitWorktree'), false),
-          remoteBadge: null,
-          versionCell: ch?.ok === true
-            ? <span className={css.dim}>v{ch.gitWorktree.version}</span>
-            : <span className={css.dim}>—</span>,
-        },
-      ]
-    }
-    if (isSsh) {
-      const ch = sshLocalChamber
-      const injectedOf = (pkg: 'hostGraph' | 'gitWorktree'): boolean | null =>
-        ch === undefined ? null : ch.ok ? ch[pkg].installed && ch[pkg].patched : false
-      const versionOf = (pkg: 'hostGraph' | 'gitWorktree'): string | null =>
-        ch?.ok === true ? ch[pkg].version : sshRemoteChamber?.ok === true ? sshRemoteChamber[pkg].version : null
-      return [
-        {
-          key: 'host-graph',
-          nameCell: <code className={css.pluginName}>{HOST_GRAPH_PACKAGE}</code>,
-          localBadge: localChamberBadge(injectedOf('hostGraph'), localFailed),
-          remoteBadge: sshRemoteBadge(sshHostGraphRemote),
-          versionCell: versionOf('hostGraph') !== null
-            ? <span className={css.dim}>v{versionOf('hostGraph')}</span>
-            : <span className={css.dim}>—</span>,
-        },
-        {
-          key: 'git-worktree',
-          nameCell: <code className={css.pluginName}>{GIT_WORKTREE_PACKAGE}</code>,
-          localBadge: localChamberBadge(injectedOf('gitWorktree'), localFailed),
-          remoteBadge: sshRemoteBadge(sshGitRemote),
-          versionCell: versionOf('gitWorktree') !== null
-            ? <span className={css.dim}>v{versionOf('gitWorktree')}</span>
-            : <span className={css.dim}>—</span>,
-        },
-      ]
-    }
-    // gateway / http-direct: the Loader inventory answers the remote badges;
-    // only gateway has the seed-cache drift surface.
-    const entries = snapshot?.entries ?? []
-    /** Loader 快照尚缺（首载/读取失败）时，远端徽标用「未知」——绝不把
-     *  「读取中/失败」谎报成「未注入」（诚实信号纪律）。 */
-    const unknownBadge: ChamberBadge = { labelKey: 'chamberBadgeUnknown', tone: 'muted' }
-    const rows: ChamberRowView[] = [
-      {
-        key: 'host-graph',
-        nameCell: <code className={css.pluginName}>{HOST_GRAPH_PACKAGE}</code>,
-        localBadge: localChamberBadge(localInjected?.hostGraph ?? null, localSideFailed),
-        remoteBadge: snapshot === null ? unknownBadge : remoteChamberBadge(entries, HOST_GRAPH_PACKAGE),
-        versionCell: isGateway
-          ? gatewayVersionCell(HOST_GRAPH_PACKAGE, driftStates?.hostGraph ?? null)
-          : localVersion?.hostGraph != null
-            ? <span className={css.dim}>v{localVersion.hostGraph}</span>
-            : <span className={css.dim}>—</span>,
-      },
-      {
-        key: 'git-worktree',
-        nameCell: <code className={css.pluginName}>{GIT_WORKTREE_PACKAGE}</code>,
-        localBadge: localChamberBadge(localInjected?.gitWorktree ?? null, localSideFailed),
-        remoteBadge: snapshot === null ? unknownBadge : remoteChamberBadge(entries, GIT_WORKTREE_PACKAGE),
-        versionCell: isGateway
-          ? gatewayVersionCell(GIT_WORKTREE_PACKAGE, driftStates?.gitWorktree ?? null)
-          : localVersion?.gitWorktree != null
-            ? <span className={css.dim}>v{localVersion.gitWorktree}</span>
-            : <span className={css.dim}>—</span>,
-      },
-    ]
-    if (isGateway) {
-      rows.push({
-        key: 'mobile',
-        nameCell: (
-          <span className={css.chamberCell}>
-            {t('chamberMobileRow')}
-            <code className={css.pluginName}>{MOBILE_PACKAGE}</code>
-          </span>
-        ),
-        localBadge: null,
-        remoteBadge: snapshot === null ? unknownBadge : remoteChamberBadge(entries, MOBILE_PACKAGE),
-        versionCell: <span className={css.dim}>{t('chamberMobileHint')}</span>,
-      })
-    }
-    return rows
-  })()
 
   const chamberZone = (
     <div className={css.pluginChamber}>
@@ -1372,7 +1234,7 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
           : null}
       </p>
       {isGateway && seedCacheError !== null ? <p className={css.error} role="alert">{seedCacheError}</p> : null}
-      {isGateway && bothAbsent ? <p className={css.hint} role="status">{t('chamberSeedCacheAbsent')}</p> : null}
+      {isGateway && chamberCacheAbsent ? <p className={css.hint} role="status">{t('chamberSeedCacheAbsent')}</p> : null}
       <div className={css.chamberTable}>
         <div className={clsx(css.chamberTableRow, css.chamberTableHead)}>
           <span>{t('pluginsColName')}</span>
@@ -1382,7 +1244,12 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
         </div>
         {chamberRows.map(row => (
           <div key={row.key} className={css.chamberTableRow}>
-            <span className={css.chamberCell}>{row.nameCell}</span>
+            <span className={css.chamberCell}>
+              {row.nameLabelKey !== null ? t(row.nameLabelKey) : null}
+              {row.name !== null
+                ? <code className={css.pluginName}>{row.name}</code>
+                : <span className={css.dim}>—</span>}
+            </span>
             <span className={css.chamberCell}>
               {row.localBadge !== null
                 ? <span className={chamberBadgeClass(row.localBadge.tone)}>{t(row.localBadge.labelKey)}</span>
@@ -1393,7 +1260,7 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
                 ? <span className={chamberBadgeClass(row.remoteBadge.tone)}>{t(row.remoteBadge.labelKey)}</span>
                 : <span className={css.dim}>—</span>}
             </span>
-            {row.versionCell}
+            {chamberVersionCell(row)}
           </div>
         ))}
       </div>
@@ -1736,10 +1603,13 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
   /** http-direct: read-only Loader third-party entries (no /chamber
    *  surface, no add surface — design 21 §3 backend matrix). The
    *  third-party projection is the shared pure function (mobile + official
-   *  + chamber rows excluded). Each row carries its live-state chip
-   *  (snapshot-derived — rows ARE Loader entries here, so the match is the
-   *  entry itself; the chip subsumes the former disabled/failed inline
-   *  markers with the active/starting states included). */
+   *  + every registry-derived chamber row excluded — the expected names come
+   *  from the chamber projection above, never from a literal list, so a
+   *  future registry host package cannot leak into this zone). Each row
+   *  carries its live-state chip (snapshot-derived — rows ARE Loader entries
+   *  here, so the match is the entry itself; the chip subsumes the former
+   *  disabled/failed inline markers with the active/starting states
+   *  included). */
   const httpZone = isHttp
     ? ((): ReactNode => {
       if (viewPhase === 'loading') return <p className={css.dim}>{t('pluginsLoading')}</p>
@@ -1747,7 +1617,7 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
         return <p className={css.error} role="alert">{viewError !== null ? viewError : t('inventoryError')}</p>
       }
       if (snapshot === null) return <p className={css.dim}>{t('inventoryError')}</p>
-      const thirdParty = thirdPartyEntries(snapshot)
+      const thirdParty = thirdPartyEntries(snapshot, chamberRows.flatMap(row => (row.name === null ? [] : [row.name])))
       if (thirdParty.length === 0) return <p className={css.dim}>{t('inventoryNoThirdParty')}</p>
       return (
         <div className={css.pluginStack}>

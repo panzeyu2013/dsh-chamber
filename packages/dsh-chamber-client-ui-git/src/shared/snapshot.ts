@@ -63,6 +63,22 @@ function normalizeWorktree(value: unknown): GitWorktreeInfo | undefined {
   if (!isRecord(value)) return undefined
   const sessionIds = stringIds(value.sessionIds)
   const runningSessionIds = stringIds(value.runningSessionIds)
+  // Optional (a NEWER host): absent on an older host → the caller falls back
+  // to runningSessionIds (conservative). A present-but-malformed value fails
+  // the row (fail-closed), never a silent fallback.
+  const blockingRunningSessionIds = value.blockingRunningSessionIds === undefined
+    ? undefined
+    : stringIds(value.blockingRunningSessionIds)
+  // The archived-aware field is a SUBSET of runningSessionIds by contract: it
+  // names the running sessions that gate removal. A non-subset is a host
+  // defect, and the dialog's set-difference count would then silently
+  // under-report the inert sessions — reject the row (fail-closed), exactly
+  // like a present-but-malformed value.
+  if (
+    blockingRunningSessionIds !== undefined
+    && runningSessionIds !== undefined
+    && blockingRunningSessionIds.some(id => !runningSessionIds.includes(id))
+  ) return undefined
   const attention = attentionReasons(value.attention)
   // upstream/ahead/behind are OPTIONAL in the decode: an older host omits
   // them (degrade to null/0); a present-but-malformed value fails the row.
@@ -94,6 +110,7 @@ function normalizeWorktree(value: unknown): GitWorktreeInfo | undefined {
     || !(value.workspaceId === null || isNonEmptyString(value.workspaceId))
     || sessionIds === undefined
     || runningSessionIds === undefined
+    || (value.blockingRunningSessionIds !== undefined && blockingRunningSessionIds === undefined)
   ) return undefined
   return {
     worktreeId: value.worktreeId,
@@ -112,6 +129,7 @@ function normalizeWorktree(value: unknown): GitWorktreeInfo | undefined {
     workspaceId: value.workspaceId,
     sessionIds,
     runningSessionIds,
+    ...(blockingRunningSessionIds === undefined ? {} : { blockingRunningSessionIds }),
   }
 }
 

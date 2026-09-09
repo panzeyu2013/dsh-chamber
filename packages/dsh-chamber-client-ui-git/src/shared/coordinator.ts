@@ -613,7 +613,11 @@ export class WorktreeDirtyError extends Error {
 export async function removeWorktree(
   sourceId: string,
   target: RemoveTarget,
-  options: { archiveSessions?: boolean; deleteBranch?: string; discardChanges?: boolean } = {},
+  options: {
+    archiveSessions?: boolean
+    deleteBranch?: string
+    discardChanges?: boolean
+  } = {},
 ): Promise<RemoveWorktreeResult> {
   const operationId = nextId('remove')
   return runBusy(sourceId, { kind: 'remove', operationId }, async () => {
@@ -625,15 +629,32 @@ export async function removeWorktree(
     if (found === undefined) throw new Error('工作树已不存在；请刷新后重试')
     const server = chamberBridge.getServers().find(candidate => candidate.id === sourceId)
     const current = server?.runtime?.current
-    const blocked = removeBlockReason(
-      found.worktree,
+    // NO IMPLICIT SESSION TOUCHING (2026-09 user decision, design 08 §6
+    // amendment): a worktree removal never stops, cancels, or deletes a
+    // session, and never archives one UNLESS the user opted in — the
+    // 「归档工作区中会话」 checkbox is explicit, default-OFF, and drives the
+    // pre-remove archive pass below (runPreRemoveArchive).
+    // What blocks is decided by the HOST's archived-aware running fact
+    // (`blockingRunningSessionIds`): a running session that is archived — or
+    // whose ancestor is — is INERT and no longer blocks. `removeBlockReason`
+    // reads that field and falls back to `runningSessionIds` on an older host
+    // (conservative). The `current` hard block and the `runtime-unknown`
+    // fail-closed block are NOT running guards and stay in force (removing the
+    // cwd of the session being viewed would break its subsequent tool calls).
+    // removeBlockReason evaluates BOTH before the running reason (review
+    // G1-1), so a stale or archived-only running fact cannot bypass them —
+    // this fresh preflight is the last client-side gate before the host's own
+    // `running-agent` re-check.
+    const blockOf = (worktree: GitWorktreeInfo): ReturnType<typeof removeBlockReason> => removeBlockReason(
+      worktree,
       current,
       currentSessionIsBlank(sourceId, current),
       server?.runtime !== undefined,
     )
+    const worktree = found.worktree
+    const blocked = blockOf(worktree)
     if (blocked === 'main') throw new Error('主工作树不能删除')
     if (blocked === 'unregistered') throw new Error('该工作树未关联 dsh workspace，不能从此处删除')
-    if (blocked === 'running') throw new Error('该工作树仍有运行中的会话')
     if (blocked === 'current') throw new Error('该工作树包含当前正在查看的会话')
     if (blocked === 'runtime-unknown') throw new Error('无法确认当前会话状态（来源重连中），暂不能删除，请稍后重试')
     if (blocked === 'locked') throw new Error('已锁定的工作树不能删除')
@@ -647,7 +668,7 @@ export async function removeWorktree(
       throw new WorktreeDirtyError()
     }
     if (blocked === 'status-unknown') throw new Error('无法确认工作树是否干净，不能删除')
-    const workspaceId = found.worktree.workspaceId
+    const workspaceId = worktree.workspaceId
     if (workspaceId === null) throw new Error('工作树缺少 workspace id')
 
     // Optional soft-archive of the whole session tree BEFORE any Git mutation.
@@ -655,7 +676,7 @@ export async function removeWorktree(
     // workspace members plus every session transitively parented under them
     // (already-archived ids are skipped, so a retry after a partial failure
     // never re-archives).
-    const directSessionIds = found.worktree.sessionIds
+    const directSessionIds = worktree.sessionIds
     if (options.archiveSessions === true && directSessionIds.length > 0) {
       try {
         await runPreRemoveArchive({
@@ -675,11 +696,11 @@ export async function removeWorktree(
       workspaceId,
       expected: {
         repoId: found.repo.repoId,
-        worktreeId: found.worktree.worktreeId,
-        branch: found.worktree.branch,
-        head: found.worktree.head,
+        worktreeId: worktree.worktreeId,
+        branch: worktree.branch,
+        head: worktree.head,
       },
-      path: found.worktree.path,
+      path: worktree.path,
       ...(options.deleteBranch === undefined ? {} : { deleteBranch: options.deleteBranch }),
       ...(options.discardChanges === true ? { discardChanges: true } : {}),
     })

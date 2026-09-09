@@ -8,7 +8,7 @@ import {
   ArchiveCleanupError,
   indexChildren,
   resolveDeletableTree,
-  subtreeRunning,
+  subtreeLiveness,
   MAX_PURGE_SESSIONS,
   MAX_PURGE_ERROR_RECORDS,
   type ArchivedSessionState,
@@ -32,7 +32,10 @@ interface InjectedFailure {
 class FakeHost implements ArchiveCleanupHost {
   readonly archived = new Set<string>()
   readonly states = new Map<string, ArchivedSessionState>()
+  /** RUNNING ids (agent executing a turn) — never deletable. */
   readonly live = new Set<string>()
+  /** LOADED-only ids (attached, idle) — deletable only under `force`. */
+  readonly loaded = new Set<string>()
   readonly deleteLog: string[] = []
   readonly removedFromArchived: string[] = []
   readonly emittedRemoved: string[] = []
@@ -65,10 +68,11 @@ class FakeHost implements ArchiveCleanupHost {
     return [...this.states.values()]
   }
 
-  async listLiveAgentIds(): Promise<string[]> {
+  async listLiveSessionFacts(): Promise<{ running: string[]; loaded: string[] }> {
     if (this.failLiveRead) throw new ArchiveCleanupError('registry-unreadable', 'fake: live read failed')
     this.liveListCalls += 1
-    return [...this.live]
+    // Mirror the binding: running ⊆ loaded (a running agent is attached too).
+    return { running: [...this.live], loaded: [...new Set([...this.live, ...this.loaded])] }
   }
 
   private consumeFailure(map: Map<string, InjectedFailure>, sessionId: string): string | null {
@@ -79,13 +83,16 @@ class FakeHost implements ArchiveCleanupHost {
     return failure.code
   }
 
-  async deleteSessionContent(sessionId: string, _cwd?: string): Promise<'deleted' | 'missing'> {
+  async deleteSessionContent(sessionId: string, _cwd?: string, force = false): Promise<'deleted' | 'missing'> {
     const injected = this.consumeFailure(this.failDeletes, sessionId)
     if (injected !== null) {
       throw new ArchiveCleanupError(injected, `fake: delete failed for ${sessionId}`)
     }
     if (this.live.has(sessionId)) {
       throw new ArchiveCleanupError('running', `fake: ${sessionId} is running`)
+    }
+    if (!force && this.loaded.has(sessionId)) {
+      throw new ArchiveCleanupError('loaded', `fake: ${sessionId} is loaded`)
     }
     if (!this.states.has(sessionId)) return 'missing'
     this.states.delete(sessionId)
@@ -146,6 +153,16 @@ test('preview: counts deletable trees, subagents, running subtrees and orphans',
   assert.equal(preview.deletableSessions, 2) // s1 + s2; s3 skipped (running child), s-orphan has no record
   assert.equal(preview.deletableSubagents, 2) // a1 + a1a
   assert.equal(preview.skippedRunning, 1)
+  assert.equal(preview.skippedLoaded, 0)
+})
+
+test('preview: loaded-only subtrees are reported separately from running ones', async () => {
+  const host = buildHost()
+  host.loaded.add('s2')
+  const preview = await new ArchiveCleanupCore(host).preview()
+  assert.equal(preview.skippedRunning, 1) // s3 (durable-running child)
+  assert.equal(preview.skippedLoaded, 1) // s2 (attached but idle)
+  assert.equal(preview.deletableSessions, 1) // s1 only under the default guard
 })
 
 test('indexChildren: uninterrupted subagent-origin children only', () => {
@@ -157,28 +174,78 @@ test('indexChildren: uninterrupted subagent-origin children only', () => {
   assert.equal(children.has('s2'), false)
 })
 
-test('subtreeRunning: a running member anywhere in the tree skips it whole', () => {
-  const host = buildHost()
-  const states = new Map([...host.states.entries()])
-  const children = indexChildren([...states.values()])
-  assert.equal(subtreeRunning('s1', states, children, host.live), false)
-  host.live.add('a1a')
-  assert.equal(subtreeRunning('s1', states, children, host.live), true)
-  host.live.clear()
-  host.live.add('s4')
-  assert.equal(subtreeRunning('s1', states, children, host.live), false)
-})
-
 test('resolveDeletableTree: children-first post-order, root last; null when running or unknown', () => {
   const host = buildHost()
   const states = new Map([...host.states.entries()])
   const children = indexChildren([...states.values()])
-  const tree = resolveDeletableTree('s1', states, children, host.live)
+  const facts = { running: host.live, loaded: host.loaded }
+  const tree = resolveDeletableTree('s1', states, children, facts)
   assert.ok(tree !== null)
   assert.deepEqual(tree.order, ['a1a', 'a1', 's1'])
   assert.equal(tree.subagentCount, 2)
-  assert.equal(resolveDeletableTree('s3', states, children, host.live), null)
-  assert.equal(resolveDeletableTree('nope', states, children, host.live), null)
+  assert.equal(resolveDeletableTree('s3', states, children, facts), null)
+  assert.equal(resolveDeletableTree('nope', states, children, facts), null)
+})
+
+test('subtreeLiveness: running beats loaded beats clear; force never overrides running', () => {
+  const host = buildHost()
+  const states = new Map([...host.states.entries()])
+  const children = indexChildren([...states.values()])
+  const facts = { running: host.live, loaded: host.loaded }
+
+  assert.equal(subtreeLiveness('s1', states, children, facts), 'clear')
+  host.loaded.add('a1a')
+  assert.equal(subtreeLiveness('s1', states, children, facts), 'loaded')
+  // A LOADED-only subtree is deletable with force…
+  assert.ok(resolveDeletableTree('s1', states, children, facts) === null)
+  assert.ok(resolveDeletableTree('s1', states, children, facts, true) !== null)
+  // …but a RUNNING member wins, and force does NOT override it.
+  host.live.add('a1a')
+  assert.equal(subtreeLiveness('s1', states, children, facts), 'running')
+  assert.equal(resolveDeletableTree('s1', states, children, facts, true), null)
+})
+
+test('purge: loaded-only subtrees are skipped by default and deleted under force', async () => {
+  const host = buildHost()
+  // s2 is attached-but-idle (loaded); s3 keeps its durable-running child b1.
+  host.loaded.add('s2')
+  const core = new ArchiveCleanupCore(host)
+
+  const skipped = await core.purge()
+  assert.equal(skipped.deletedSessions, 1) // s1 only
+  assert.equal(skipped.skippedRunning, 1) // s3
+  assert.equal(skipped.skippedLoaded, 1) // s2
+  assert.equal(skipped.forcedLoaded, 0)
+  assert.equal(host.states.has('s2'), true)
+  assert.deepEqual(host.archived, new Set(['s2', 's3']))
+
+  // The default run left s2 archived; force (caller already cancelled the
+  // run) deletes it — the running subtree s3 is STILL refused.
+  const forced = await core.purge(['s2', 's3'], true)
+  assert.equal(forced.deletedSessions, 1) // s2
+  assert.equal(forced.forcedLoaded, 1)
+  assert.equal(forced.skippedRunning, 1) // s3's b1 is running — force must not bypass
+  assert.equal(host.states.has('s2'), false)
+  assert.equal(host.states.has('s3'), true)
+  assert.equal(host.states.has('b1'), true)
+  assert.deepEqual(host.archived, new Set(['s3']))
+})
+
+test('purge: a running member is refused with force too (delete-time guard)', async () => {
+  const host = buildHost()
+  // Deleting s1's leaf a1a flips its parent a1 RUNNING inside the SAME tree —
+  // only the binding's delete-time guard can catch it, and force must not
+  // bypass it (a live writer would recreate the artifact).
+  host.liveAddOnDeleteOf = 'a1a'
+  host.liveAddOnDelete = 'a1'
+  const core = new ArchiveCleanupCore(host)
+  const result = await core.purge(['s1'], true)
+  assert.deepEqual(host.deleteLog, ['a1a'])
+  assert.equal(result.errors.length, 1)
+  assert.equal(result.errors[0]?.code, 'running')
+  assert.equal(host.states.has('a1'), true)
+  assert.equal(host.states.has('s1'), true)
+  assert.deepEqual(host.archived, new Set(['s1', 's2', 's3', 's-orphan']))
 })
 
 test('purge: deletes children-first, removes archived members last, emits events once', async () => {

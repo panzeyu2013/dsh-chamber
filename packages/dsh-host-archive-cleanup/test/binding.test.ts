@@ -92,20 +92,59 @@ test('binding: official setState failures map to item code storage', async () =>
   })
 })
 
-test('binding: deleteSessionContent live guard refuses running; missing stays missing', async () => {
+test('binding: deleteSessionContent refuses running (always) and loaded (unless forced)', async () => {
   const ctx: HostCtxServices = {
-    agents: { list: () => [{ id: 'live-1' }] },
+    agents: { list: () => [{ id: 'live-1', status: 'running' }, { id: 'idle-1', status: 'idle' }] },
     sessionPersistence: { locate: h => ({ kind: 'jsonl', path: join(tmpdir(), 'x', h.id) }) },
   }
   const host = makeHostBinding(ctx)
   await assert.rejects(() => host.deleteSessionContent('live-1', '/work'), (error: unknown) => {
     return error instanceof ArchiveCleanupError && error.code === 'running'
   })
+  // Force never bypasses a RUNNING session (a live writer would recreate a
+  // header-less artifact through open(path,"a")).
+  await assert.rejects(() => host.deleteSessionContent('live-1', '/work', true), (error: unknown) => {
+    return error instanceof ArchiveCleanupError && error.code === 'running'
+  })
+  // A merely LOADED (idle) session is refused with code `loaded`…
+  await assert.rejects(() => host.deleteSessionContent('idle-1', '/work'), (error: unknown) => {
+    return error instanceof ArchiveCleanupError && error.code === 'loaded'
+  })
+  // …and only force reaches the artifact leg (missing here: no such path).
+  assert.equal(await host.deleteSessionContent('idle-1', '/work', true), 'missing')
+  // Live-store membership without an agent is also `loaded`.
+  const attached = makeHostBinding({
+    sessions: { list: () => [{ id: 'attached-1' }] },
+    sessionPersistence: { locate: () => undefined },
+  })
+  await assert.rejects(() => attached.deleteSessionContent('attached-1', '/work'), (error: unknown) => {
+    return error instanceof ArchiveCleanupError && error.code === 'loaded'
+  })
   // No header/artifact → idempotent missing (no list service mounted → the
   // cwd-less fallback must fail registry-unreadable instead of guessing).
   await assert.rejects(() => host.deleteSessionContent('unknown-1'), (error: unknown) => {
     return error instanceof ArchiveCleanupError && error.code === 'registry-unreadable'
   })
+})
+
+test('binding: a drifted agent status fails the live read loudly', async () => {
+  const host = makeHostBinding({
+    agents: { list: () => [{ id: 'a', status: 'waiting' }] },
+    sessionPersistence: { locate: () => undefined },
+  })
+  await assert.rejects(() => host.listLiveSessionFacts(), (error: unknown) => {
+    return error instanceof ArchiveCleanupError && error.code === 'registry-unreadable'
+  })
+})
+
+test('binding: listLiveSessionFacts splits running from loaded', async () => {
+  const host = makeHostBinding({
+    agents: { list: () => [{ id: 'run-1', status: 'running' }, { id: 'idle-1', status: 'idle' }] },
+    sessions: { list: () => [{ id: 'idle-1' }, { id: 'attached-1' }] },
+  })
+  const facts = await host.listLiveSessionFacts()
+  assert.deepEqual([...facts.running].sort(), ['run-1'])
+  assert.deepEqual([...facts.loaded].sort(), ['attached-1', 'idle-1', 'run-1'])
 })
 
 test('binding: content removal removes the official artifact and reclaims an empty dir; FS errors map to storage', async () => {

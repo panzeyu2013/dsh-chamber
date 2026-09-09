@@ -68,11 +68,25 @@ remove 先于 add、可 defer 重启；write-file 上限 50 MiB；spec/name 白�
 （渲染端 PluginAddView ADD_SPEC 为**无锁步测试的手写镜像**——v2 补锁步，见 §6.2）。
 
 ### 2.3 插件管理 UI【已实现】
-卡片分流（ConnectionsSection.tsx:1307-1310）：ssh+dsh → PluginSyncModal（远程 sync/add）；本地 → PluginSyncModal
-（spec=null，list/add）；gateway/http 直连 → PluginInventoryView（**2026-12 audit 勘误：非只读**——已含已安装
-行/移除/撤销/restart 面板/tasks 投影/sync 状态）。PluginSyncModal/PluginAddView、plugin-diff.ts 纯函数族
+**当前形态（2026-12）**：四个来源（本地 / ssh+dsh / gateway / http 直连）共用同一个 `PluginDialog`
+（`PluginDialog.tsx`，plan 24 D5-A / §6.6 收敛）——旧的双组件分流（`PluginSyncModal` + `PluginInventoryView`）
+已删除，卡片按 `target.kind` 把数据源喂给同一个对话框；**2026-12 audit 勘误保留**：gateway/http 直连区
+**非只读**——已含已安装行/移除/撤销/restart 面板/tasks 投影/sync 状态。
+`plugin-diff.ts` 纯函数族
 （missing/update/extra/materialize/unsyncable/consistent——**无 scope 逻辑**）、plugin-inventory-text/plugin-diagnostic
-纯投影（thirdPartyEntries 过滤 @deepseek-ai/* + chamber 三包——2026-12 design 24 起含 archive-cleanup，仅用于 Loader 已加载事实层）。测试 = connections 纯模块文件，**无组件级测试**。
+纯投影（thirdPartyEntries 过滤 @deepseek-ai/* + chamber 注册表包——2026-12 design 24 起含 archive-cleanup，
+并额外排除调用方传入的注册表派生 expected 名单，仅用于 Loader 已加载事实层）。测试 = connections 纯模块文件，**无组件级测试**。
+**历史基线（旧分流，已删除）**：卡片分流（ConnectionsSection.tsx:1307-1310）曾为 ssh+dsh → PluginSyncModal
+（远程 sync/add）；本地 → PluginSyncModal（spec=null，list/add）；gateway/http 直连 → PluginInventoryView；
+两者连同 PluginAddView 已在 2026-12 合并为 PluginDialog。
+**2026-09 修订（用户拍板）**：「chamber 内置（注入）」表的行集不再写死两包——由控制面
+`CHAMBER_HOST_PACKAGES` 注册表经 desktop IPC 投影（`chamber.packages[]`）驱动，UI 逐行映射；
+`remoteNeedsSeed`/重启提示/seed-cache 漂移/同步包表同样逐包派生（design 13 §6 修订）。
+**2026-09 硬化轮（P1.4/P2.7）**：行派生收敛为纯函数 `deriveChamberRows`
+（plugin-inventory-text.ts，只回 label KEY 与版本 STRING，组件只做 descriptor→JSX 映射），
+新增 `test/chamber-rows.test.ts` 表驱动测试（含 LOCAL 目标读自身清单、空 expected 不谎报
+seed-cache、gateway 客户端行由 Loader inventory 分类派生、inventory 不可用时 unknown 行
+而非写死包名）。
 （历史基线；已由 PluginDialog 收敛——见 §6.6 落地状态，2026-12）
 
 ### 2.4 chamber 宿主包同步与 seed【已实现】
