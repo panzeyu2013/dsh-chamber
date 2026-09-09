@@ -3437,6 +3437,13 @@ var ALLOW_BUILDS = [
   "@google/genai",
   "@deepseek-ai/dsh-subprocess-local"
 ];
+var DENY_BUILDS = ["msgpackr-extract"];
+function renderAllowBuildsBlock() {
+  return [
+    ...ALLOW_BUILDS.map((name) => `  ${JSON.stringify(name)}: true`),
+    ...DENY_BUILDS.map((name) => `  ${JSON.stringify(name)}: false`)
+  ].join("\n");
+}
 
 // src/windows-process.ts
 import { spawnSync } from "node:child_process";
@@ -4373,7 +4380,7 @@ async function installRuntimeVersion(opts) {
 `);
     atomicWriteRuntimeFileNoFollow(opts.baseDir, join6(workDir, "pnpm-workspace.yaml"), `minimumReleaseAge: 0
 allowBuilds:
-${ALLOW_BUILDS.map((name) => `  ${JSON.stringify(name)}: true`).join("\n")}
+${renderAllowBuildsBlock()}
 `);
     const nodeWithSandbox = () => {
       const resolved = nodeFn();
@@ -7532,6 +7539,7 @@ export {
   DEFAULT_REGISTRY_METADATA_MAX_BYTES,
   DEFAULT_REGISTRY_TIMEOUT_MS,
   DEFAULT_TARBALL_MAX_BYTES,
+  DENY_BUILDS,
   EXACT_SEMVER,
   FATAL_STARTUP_BLOCK_REASONS,
   HOST_DOMAIN_PROBE_NAMES,
@@ -7647,6 +7655,7 @@ export {
   registryRedirectOrigins,
   removeKnownGoodCandidate,
   removeRuntimeFileNoFollow,
+  renderAllowBuildsBlock,
   replayDecision,
   rescueCorruptMetadataRecoveryMarker,
   resetCandidateHealthWindow,

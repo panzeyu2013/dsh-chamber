@@ -102,6 +102,9 @@ declare module '@deepseek-ai/dsh-client-store'
 // chamber-entry.ts (covered factory, never ctx.plugin — see the seed.ts /
 // platform.ts deviation notes in dsh-client-web).
 declare module '@deepseek-ai/dsh-client-ui-primitives'
+// alpha.2: the docking-kit platform word the composite answers with a
+// covered factory (pure library — no cordis plugin, no ./client export).
+declare module '@deepseek-ai/dsh-client-ui-dockkit'
 declare module '@deepseek-ai/dsh-api-session-controller/client'
 declare module '@deepseek-ai/dsh-api-workspace-controller/client'
 declare module '@deepseek-ai/dsh-client-locale/client'

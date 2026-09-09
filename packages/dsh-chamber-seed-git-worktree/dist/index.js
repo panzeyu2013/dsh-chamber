@@ -1959,7 +1959,7 @@ var GitWorktreeCore = class {
    * (design 24) never contains a fork descendant. So a fork edge (a node
    * without `origin: 'subagent'`) TERMINATES the walk: it proves no
    * subagent-ancestor inertness and the session blocks. This mirrors
-   * `dsh-host-archive-cleanup`'s `indexChildren`, which follows only
+   * `dsh-chamber-seed-archive-cleanup`'s `indexChildren`, which follows only
    * `origin === 'subagent'`.
    *
    * FAIL CLOSED: a recorded parent that is neither loaded nor archived leaves

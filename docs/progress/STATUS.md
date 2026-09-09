@@ -8,6 +8,24 @@
 
 ## 未完成 / 部分完成（剩余验收）
 
+> **2026-09 dsh 基线对齐记录（0.1.5-alpha.2，临时驻留；发布收口时并入 CHANGELOG 后移除）**：
+> 源码线 pin → dsh-v0.1.5-alpha.2（b2e3b2a01258，`update-vendor.mjs` 原子升级；vendor 链接
+> 271→**284**，上游 +17/−4 包）；运行时线六锚 → 0.1.5-alpha.2（`bin.js --version` 冒烟通过）。
+> 上游两代槽位模型重写（`details`→`rightbar`(root)、中心列 `conversation`→**keyed `main`**、
+> `sidebar.panellist`、`usePanelInfo`/`useResource`、`ctx.layout.selectPanel`）已全量重放：
+> layout fork（eager 实例 + `LayoutController(actions, hasMainPanel)` + 嵌套 store + `layoutFacts.getCollapsed()`）、
+> sidebar fork（brand/panellist 声明与投影）、mobile 插件（`ROLE_SLOT_KEYS` + 退役胶囊打标与自绘右栏覆盖层）、
+> settings bridge 台账、三 fork 副本、renderer（`ui-dockkit` covered factory；C4 契约 13→15）。
+> **设计 24 四项真机缺陷已修**：`list()` 快照形状（真机 preview/purge 曾全挂）、`inspect`→`stat`、
+> 代际全量删除 + 未识别条目整单拒绝、退役无消费者的错误分类器（design 24 §2 与 AGENTS 措辞同步）。
+> **剩余实机门禁（未验证）**：多来源 sleep/wake 与隐藏恢复、gateway 形态回归、右侧栏栈在真实
+> profile 下的装载时序与 `provideRoot` 时序（`useResource`/`usePanelInfo`）、session v3 迁移在真实
+> 存储上的行为、open-in 官方 host 行随 a2 profile 进入托管实例。**已知既有失败**：dsh-runtime
+> `runtimeDiskSummaryAsync` rich-fixture 阈值断言（ZFS 目录 st_size≈3，平台性，非本次引入）。
+> **待裁决项**（决策矩阵 D1–D7）：patched-copy 基础设施（同源绝对 URL 第二例已触发）、open-in
+> in-repo basePath fork、官方桌面插件窗口 vs chamber PluginDialog；`ALLOW_BUILDS` 的 `fs-ext`
+> **保留**（回滚目标 0.1.3-alpha.2 仍依赖，实测删除即安装失败）。
+>
 > **2026-09 dsh 基线对齐记录（0.1.3-alpha.2，临时驻留；发布收口时并入 CHANGELOG 后移除）**：
 > 源码线 pin → dsh-v0.1.3-alpha.2（82a5fd61a7，`update-vendor.mjs` 原子升级，tag 与远程一致；
 > vendor 链接 267→**271**（+3 上游包目录：client/ui-open-in-app、host/open-in-app、

@@ -126,7 +126,8 @@
 1. 域只做「已归档集合的内容清除（含级联）」一件事；**不做** unarchive、不做
    普通（未归档）会话删除、不做任何会话内容**检索/导出/投影**、不做字节统计。
    **唯一例外（2026-09 用户批准的边界修订，§21 孤儿清扫）**：registry-global
-   孤儿清扫的**存在性探测**（官方 `sessionPersistence.inspect(id)`）会在官方
+   孤儿清扫的**存在性探测**（官方 `sessionPersistence.stat(id)`；0.1.3-alpha.1 起取代
+   `inspect(id)`）会在官方
    持久化层读取并解析该会话工件，用途**仅为**回答「该 id 是否仍有可物化内容」
    这一布尔值（官方 not-found 载体 ⇒ `false`，其余一切失败/能力缺失 ⇒ `true`，
    fail-closed）；读取结果**不进任何返回面、不进日志、不落盘**，只被消费于
@@ -270,7 +271,8 @@ vendor 源码）+ 薄 Remote 门面（`index.ts`），编排逻辑：
      记录」不构成「无内容」的证明（上游枚举会**静默收窄**：jsonl 跳过
      不可解析/空工件、根缺失返回 []，session-query 在 persistence 未绑定时
      只回 live 行且不报错）；
-   - 每个候选必须再经**官方单 id 权威读**（`sessionPersistence.inspect(id)`，
+   - 每个候选必须再经**官方单 id 权威读**（`sessionPersistence.stat(id)`，0.1.3-alpha.1 起取代
+     `inspect(id)`；
      未知 cwd 也按 id 跨项目目录解析）确认：**只有精确的 `false`（官方
      not-found 载体）才清**，任何其他错误/能力缺失/非布尔回答一律保留成员
      关系（fail-closed，绝不 abort 已完成的内容删除）；
@@ -696,7 +698,7 @@ todo 12 C（§2 已记），不得在核对前凭 §4 的实现猜测落地。
    合并，含 `header.origin`/`parentSession`/`cwd`）——与官方 session/list
    投影同源，`archivedSessionIds` 为 registry-global 集合；
 3. 官方进程内**无会话内容删除例程**（persistence 抽象只有
-   create/append/load/inspect/list/listSnapshots/locate…，无 remove）→
+   create/open/flush/stat/list（0.1.3-alpha.1 起的公开面；rc.1 的 inspect/locate 已退役）→
    **分支 b 落地**：`sessionPersistence.locate(header)` 给出官方绝对产物
    路径（零布局知识复制），删除产物文件 + 空目录回收（rmdir 非递归，
    余留文件 fail-closed）；运行保护 = `agents.list()` ∪ live
@@ -1420,11 +1422,11 @@ attempt 栅栏是**防御性冗余**（直连结构下才必需），已如实�
 测试 + 目检代证（`producer-purged-wiring` / `app-purged-memory-wiring` 钉住
 调用形状与顺序，不证明运行时语义）；④ 归档集合 > `MAX_PURGE_SESSIONS`
 （65,536）时宿主不清扫（该规模全量 purge 本就 `purge-capacity` 拒绝）；
-⑤ 宿主侧未对**构建后的 vendor backend** 跑过真实 `inspect`（本 worktree 的
+⑤ 宿主侧未对**构建后的 vendor backend** 跑过真实 `stat`（本 worktree 的
 vendor 为源码态）：not-found 载体由 pinned 源码阅读 + 形状一致的 fake 确立；
 ⑥ 合法空语料（全部会话已删）下 G1a/G1b 会跳过清扫，历史无记录成员因此
 不收敛（管理器不可见、无用户影响）——fail-closed 的代价；⑦ 损坏/不可读工件
-（inspect 抛非 not-found）保留成员关系且 purge 也删不了（无记录）——需人工
+（stat 抛错）保留成员关系且 purge 也删不了（无记录）——需人工
 处理；⑧ 并集枚举每次多一次 `persistence.list()`（可后续记忆化）。
 
 **已闭合的原残余**（本轮全部消除，留档）：§20 残余① → F4 宿主全集合孤儿

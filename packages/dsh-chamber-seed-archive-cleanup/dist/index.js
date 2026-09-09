@@ -530,8 +530,8 @@ var ArchiveCleanupCore = class {
 };
 
 // src/binding.ts
-import { rm, rmdir, lstat } from "node:fs/promises";
-import { basename, dirname } from "node:path";
+import { rm, rmdir, lstat, readdir } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
 var BUSY_MESSAGE = "archiveCleanup is already running on this instance \u2014 retry after it settles";
 function assertHeaderShape(header) {
   if (header === null || typeof header !== "object") {
@@ -555,12 +555,9 @@ function assertHeaderShape(header) {
   }
   if (h.origin !== void 0 && h.origin !== "subagent") malformed("origin", "exactly 'subagent' when present");
 }
-function isPersistenceNotFoundError(error, sessionId) {
-  if (!(error instanceof Error)) return false;
-  if (error.name !== "SessionPersistenceNotFoundError") return false;
-  const reported = error.sessionId;
-  if (reported !== void 0 && String(reported) !== sessionId) return false;
-  return true;
+var LEASE_FILENAME = "session.lock";
+function isGenerationFilename(name) {
+  return /^session(?:\.v[1-9][0-9]*)?\.jsonl(?:\.zstd)?$/.test(name);
 }
 function headerToState(header) {
   assertHeaderShape(header);
@@ -646,11 +643,13 @@ function makeHostBinding(ctx) {
       }
     }
     if (persistence?.list !== void 0) {
-      const headers = await persistence.list();
-      if (Array.isArray(headers)) {
+      const snapshots = await persistence.list();
+      if (Array.isArray(snapshots)) {
+        const headers = snapshots.map((snapshot) => snapshot?.header);
         for (const header of headers) assertHeaderShape(header);
         for (const header of headers) {
-          if (!byId.has(header.id)) byId.set(header.id, header);
+          const typed = header;
+          if (!byId.has(typed.id)) byId.set(typed.id, typed);
         }
         sawEnumeration = true;
       }
@@ -681,13 +680,13 @@ function makeHostBinding(ctx) {
       return { running: [...facts.running], loaded: [...facts.loaded] };
     },
     async hasStoredContent(sessionId) {
-      const inspect = persistence?.inspect;
-      if (typeof inspect !== "function") return true;
+      const stat = persistence?.stat;
+      if (typeof stat !== "function") return true;
       try {
-        await inspect.call(persistence, sessionId);
+        const snapshot = await stat.call(persistence, sessionId);
+        return snapshot !== void 0 && snapshot !== null;
+      } catch {
         return true;
-      } catch (error) {
-        return !isPersistenceNotFoundError(error, sessionId);
       }
     },
     async deleteSessionContent(sessionId, cwd, force = false) {
@@ -731,16 +730,32 @@ function makeHostBinding(ctx) {
         if (dirStat.isSymbolicLink() || !dirStat.isDirectory()) {
           throw new ArchiveCleanupError("storage", `archiveCleanup: refusing a non-directory/symlinked session path for ${sessionId}`);
         }
-        const artifactStat = await lstat(artifactPath).catch(() => void 0);
-        if (artifactStat === void 0) return "missing";
-        if (artifactStat.isSymbolicLink() || artifactStat.isDirectory()) {
-          throw new ArchiveCleanupError("storage", `archiveCleanup: refusing a symlinked/non-file artifact for ${sessionId}`);
+        const entries = await readdir(dir, { withFileTypes: true });
+        const removable = [];
+        for (const entry of entries) {
+          if (entry.isSymbolicLink() || entry.isDirectory() || !entry.isFile()) {
+            throw new ArchiveCleanupError(
+              "storage",
+              `archiveCleanup: refusing to purge ${sessionId}: unexpected ${entry.isDirectory() ? "directory" : entry.isSymbolicLink() ? "symlink" : "special file"} ${entry.name} in the session directory`
+            );
+          }
+          if (entry.name === LEASE_FILENAME || isGenerationFilename(entry.name)) {
+            removable.push(join(dir, entry.name));
+            continue;
+          }
+          throw new ArchiveCleanupError(
+            "storage",
+            `archiveCleanup: refusing to purge ${sessionId}: unrecognized entry ${entry.name} in the session directory (pinned-vendor layout drift \u2014 a partial purge would leave content behind)`
+          );
         }
-        try {
-          await rm(artifactPath, { force: false });
-        } catch (error) {
-          if (error.code === "ENOENT") return "missing";
-          throw error;
+        if (removable.length === 0) return "missing";
+        for (const path of removable) {
+          try {
+            await rm(path, { force: false });
+          } catch (error) {
+            if (error.code === "ENOENT") continue;
+            throw error;
+          }
         }
         if (basename(dir) !== "" && basename(dir) !== "." && basename(dir) !== "..") {
           try {

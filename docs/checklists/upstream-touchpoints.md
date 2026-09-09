@@ -11,12 +11,12 @@
 
 | 项 | 当前值 |
 |---|---|
-| 源码线 pin（harness.commit == submodule gitlink） | `82a5fd61a7cf5c293cec4bdff68f455398d685e9`（dsh-v0.1.3-alpha.2） |
-| 运行时线锚（npm `@deepseek-ai/dsh`） | 0.1.3-alpha.2（bundle-dsh 兜底 / desktop vendor 锁文件 / release.yml env / install-gateway.sh / gateway `dshAnchorVersion`） |
-| fork 版本标记 ×3 | 0.1.3-alpha.2（connection / client-web / api-gateway） |
-| vendor 链接数 | 271（ensure-harness-vendor 断言 == 锁文件 importer 集合） |
-| typert remote 装配契约 | 13（C4） |
-| covered / factory | 52 / 24（live 计数；factory ⊆ covered，chamber-entry 锁步断言） |
+| 源码线 pin（harness.commit == submodule gitlink） | `b2e3b2a0125854567a4a5fcba75782e42fe84901`（dsh-v0.1.5-alpha.2） |
+| 运行时线锚（npm `@deepseek-ai/dsh`） | 0.1.5-alpha.2（bundle-dsh 兜底 / desktop vendor 锁文件 / release.yml env / install-gateway.sh / gateway `dshAnchorVersion` / release-preflight `FORK_VERSION`） |
+| fork 版本标记 ×3 | 0.1.5-alpha.2（connection / client-web / api-gateway） |
+| vendor 链接数 | 284（ensure-harness-vendor 断言 == 锁文件 importer 集合） |
+| typert remote 装配契约 | 15（C4；+command-feedback/+workspace-files） |
+| covered / factory | 53 / 25（live 计数；factory ⊆ covered，chamber-entry 锁步断言；+`ui-dockkit` covered factory） |
 | 种子域 | `clientGraph/graph`、`gitWorktree/previewCreate`、`archiveCleanup/probe`（C7 双门） |
 
 ## 1. 标记约定（每文件分类）
@@ -97,7 +97,11 @@ host 插件入口/半、上游 `tests/`、`tsdown.config.ts`、上游 README（a
 - dsh-v0.1.3-alpha.1：connection 流式 body 路由/fixture session-format v2 重放；api-gateway
   journal-stream 无游标 notification 帧；web 版本行。
 - dsh-v0.1.3-alpha.2：connection recovery-config 抽取重放（本表 §2.1）；api-gateway/web 版本行。
-- **未升级的动向记录（2026-09 只读调研，pin 仍 82a5fd61a7cf）**：上游最新 tag
+- dsh-v0.1.5-alpha.2（b2e3b2a01258，**已升级**）：connection 纯文件重放（README×3 +
+  `src/client/fixture.ts` + `src/index.ts` 宿主半 webServer 可选注入，实测 fork-pure）、
+  client-web 版本行 + `ui-dockkit` 偏差注释（走 covered factory，不 seed）、api-gateway
+  版本行；客户端外壳两代槽位模型重放见 STATUS「0.1.5-alpha.2 基线对齐记录」。
+- **历史动向记录（2026-09 只读调研，当时 pin 仍 82a5fd61a7cf）**：上游 tag
   `dsh-v0.1.5-alpha.1`（5dda764e）。三个 fork 的**客户端恢复模型零改动**
   （`connection/src/client/{connection,index}.ts` 未变；变的是 fixture、宿主半
   `src/index.ts` 的 `webServer` 可选注入重构、README/版本行）；`client/web` 新增平台词
