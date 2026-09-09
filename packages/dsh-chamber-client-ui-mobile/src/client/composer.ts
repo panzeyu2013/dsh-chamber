@@ -119,6 +119,14 @@ export function installEnterToNewline(): () => void {
         }
       }
     }
+    // The insert chain bypasses the official keymap pipeline (we stopped the
+    // event before Lexical's submit path), so the pipeline's caret reveal
+    // never runs for this Enter — when the composer has grown past its max
+    // height the new line can land below the visible fold of the composer's
+    // internal scrollport with nobody scrolling it. Reveal is a no-op when
+    // the caret is already visible (and after a fully failed insert there is
+    // nothing to reveal).
+    revealCaretInComposerScroll(input)
   }
   document.addEventListener('keydown', onKeyDown, true)
   return () => {
@@ -172,6 +180,56 @@ function insertLineBreakManually(input: Element | null): boolean {
 }
 
 /**
+ * Signed scroll delta (px) that brings the caret rect fully into the
+ * composer's internal scrollport ([data-input-scroll]) with a margin.
+ * Positive scrolls down, negative scrolls up, 0 = already visible. Pure —
+ * unit-tested.
+ */
+export function caretRevealDelta(
+  rectTop: number,
+  rectBottom: number,
+  hostTop: number,
+  hostBottom: number,
+  margin = 8,
+): number {
+  if (rectBottom > hostBottom) return rectBottom - hostBottom + margin
+  if (rectTop < hostTop) return rectTop - hostTop - margin
+  return 0
+}
+
+/**
+ * Reveal the caret inside the composer's own scrollport after an Enter
+ * newline insert. Native caret scrolling after a programmatic execCommand
+ * insert is engine-dependent, so when the composer has grown past its max
+ * height ([data-input-scroll] scrollable) the new line can land below the
+ * visible fold with nobody scrolling it. No-op when the caret is already
+ * visible or the composer has no inner overflow (everything is visible by
+ * construction). DOM-bound — the geometry decision (caretRevealDelta) is
+ * the unit-tested pure part.
+ */
+function revealCaretInComposerScroll(input: Element | null): void {
+  if (input === null) return
+  const scrollHost = input.closest('[data-input-scroll]')
+  if (!(scrollHost instanceof HTMLElement)) return
+  // No inner overflow → the caret cannot be below the fold.
+  if (scrollHost.scrollHeight <= scrollHost.clientHeight) return
+  const selection = document.getSelection()
+  if (selection === null || selection.rangeCount === 0) return
+  const hostRect = scrollHost.getBoundingClientRect()
+  // Collapsed caret rects can be 0×0 at a node boundary (start/end of a
+  // line): fall back to the focus node's own box, then give up.
+  let rect = selection.getRangeAt(0).getBoundingClientRect()
+  if (rect.height === 0 && rect.width === 0) {
+    const anchor = selection.focusNode
+    const element = anchor instanceof Element ? anchor : anchor?.parentElement
+    if (element instanceof Element) rect = element.getBoundingClientRect()
+  }
+  if (rect.height === 0 && rect.width === 0) return
+  const delta = caretRevealDelta(rect.top, rect.bottom, hostRect.top, hostRect.bottom)
+  if (delta !== 0) scrollHost.scrollTop += delta
+}
+
+/**
  * Minimal editability recovery (IME ladder layer 2): when the composer
  * flips back to editable while still focused, the IME may stay closed (a
  * focus event is not re-fired by the official component). Blur + refocus on
@@ -219,8 +277,9 @@ export function isKeyboardOpen(layoutHeight: number, visualHeight: number): bool
  *   4. visualViewport keyboard detection — feeds layer 3's guard and the
  *      keyboard visibility state.
  * Layer 2 (editability flip) lives in installEditabilityRecovery; layer 5
- * (keyboard-visible composer pinning) lives in the stylesheet
- * (interactive-widget=resizes-content) + installKeyboardPinning below.
+ * (keyboard-visible composer compensation) lives in the stylesheet
+ * (interactive-widget=resizes-content where the engine honors it) +
+ * installKeyboardCompensation below (the visual-viewport fallback).
  */
 
 /**
@@ -374,31 +433,141 @@ export function installImeLadder(root: ParentNode = document): ImeLadder {
 }
 
 /**
- * Keyboard-visible composer pinning (IME ladder layer 5, P1.5): with
- * interactive-widget=resizes-content the layout viewport already shrinks;
- * this is the fallback for engines that ignore the token — when the
- * keyboard opens and the composer seat is below the visual viewport, scroll
- * it into view (nearest, no jarring jumps).
+ * Keyboard-visible composer compensation (IME ladder layer 5, P1.5 +
+ * mobile round): with interactive-widget=resizes-content the layout viewport
+ * already shrinks; this is the fallback for engines that ignore the token —
+ * iOS Safari (the soft keyboard overlays the LAYOUT viewport) and older
+ * Android WebViews. The official composer seat is `position: sticky;
+ * bottom: 0` inside the conversation scrollport, so it pins to the LAYOUT
+ * bottom and ends up BEHIND the keyboard; scrolling the scrollport cannot
+ * lift it (sticky re-pins it) and scrollIntoView cannot see the visual
+ * viewport — the old pinning attempt was a no-op exactly there. The
+ * compensation mirrors resizes-content semantics against the visual
+ * viewport instead: while the keyboard is open the seat's sticky bottom is
+ * raised to the keyboard top and the scrollport gets an equal bottom
+ * padding (both via the frame's `--dsh-mobile-kbd-offset`, see styles.ts),
+ * and a bottom-pinned conversation is scrolled down by the same delta so
+ * the message tail stays readable right above the raised seat.
+ *
+ * Re-sync entries beyond visualViewport events: window resize (rotation /
+ * browser chrome) and visibilitychange (mobile browsers do not deliver the
+ * missed visualViewport events while the tab is suspended — returning to
+ * the tab must re-evaluate the armed offset). A seat unmount mid-keyboard
+ * (a reconnect settle or session switch) disarms the offset; the next sync
+ * re-arms when an active seat is back — keyboard-open state is preserved in
+ * the meantime.
  */
-export function installKeyboardPinning(root: ParentNode = document): () => void {
-  let keyboardOpen = false
-  const onResize = (): void => {
-    const vv = window.visualViewport
-    const next = vv !== null && isKeyboardOpen(window.innerHeight, vv.height)
-    if (next === keyboardOpen) return
-    keyboardOpen = next
-    if (!keyboardOpen) return
-    const seat = root.querySelector('[data-composer-seat]')
-    if (seat instanceof Element) {
-      const rect = seat.getBoundingClientRect()
-      const vvBottom = vv !== null ? vv.height : window.innerHeight
-      if (rect.bottom > vvBottom) {
-        seat.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
-      }
+export const KBD_OFFSET_QUANTUM_PX = 48
+/** Extra lift above the raw covered height (keeps the seat clear of the
+ *  keyboard top even when the engine's final geometry lands mid-step). */
+export const KBD_OFFSET_HEADROOM_PX = 8
+/** State attribute toggled on the stamped frame (plugin-owned surface). */
+export const MOBILE_KBD_ATTR = 'data-mobile-kbd'
+/** Offset custom property set on the stamped frame (styles.ts consumes it). */
+export const MOBILE_KBD_VAR = '--dsh-mobile-kbd-offset'
+/** The active conversation's sticky composer seat (phase guard: hero/blank
+ *  seats are not sticky — only an active session has the bottom-pinned
+ *  seat the keyboard can cover). */
+const ACTIVE_SEAT_SELECTOR = '[data-phase="active"] [data-composer-seat]'
+
+/** Height of the layout viewport bottom edge the keyboard covers: layout
+ *  bottom minus the visual viewport bottom, both in layout coordinates.
+ *  Pure — unit-tested. */
+export function kbdCoveredHeight(layoutHeight: number, visualHeight: number, visualOffsetTop: number): number {
+  return Math.max(0, layoutHeight - visualOffsetTop - visualHeight)
+}
+
+/** Quantized (ceil) offset: applied in coarse steps while the keyboard
+ *  slides, always ≥ covered + headroom so the seat never sits under the
+ *  keyboard top. 0 when nothing is covered. Pure — unit-tested. */
+export function nextKbdOffset(
+  covered: number,
+  quantum: number = KBD_OFFSET_QUANTUM_PX,
+  headroom: number = KBD_OFFSET_HEADROOM_PX,
+): number {
+  if (covered <= 0) return 0
+  return Math.ceil((covered + headroom) / quantum) * quantum
+}
+
+/** Is the scrollport pinned to its content end (the conversation bottom)?
+ *  Pure — unit-tested. */
+export function isAtScrollEnd(scrollTop: number, scrollHeight: number, clientHeight: number, slack = 8): boolean {
+  if (clientHeight <= 0 || scrollHeight <= clientHeight) return true
+  return scrollTop + clientHeight >= scrollHeight - slack
+}
+
+export function installKeyboardCompensation(root: ParentNode = document): () => void {
+  const vv = window.visualViewport
+  if (vv === null) return () => {}
+  let applied = 0
+  /** The frame currently carrying the offset (for teardown when the seat
+   *  unmounts mid-keyboard — a reconnect settle or session switch while
+   *  typing). */
+  let armedFrame: HTMLElement | null = null
+
+  const disarm = (): void => {
+    if (armedFrame === null) return
+    armedFrame.removeAttribute(MOBILE_KBD_ATTR)
+    armedFrame.style.removeProperty(MOBILE_KBD_VAR)
+    armedFrame = null
+  }
+
+  const sync = (): void => {
+    const layoutHeight = window.innerHeight
+    const target = isKeyboardOpen(layoutHeight, vv.height)
+      ? nextKbdOffset(kbdCoveredHeight(layoutHeight, vv.height, vv.offsetTop))
+      : 0
+    if (target === applied) return
+    if (target === 0) {
+      applied = 0
+      disarm()
+      return
+    }
+    // Only the ACTIVE session seat is sticky bottom-pinned; a hero/blank
+    // seat must not be lifted (its scrollport can scroll normally).
+    // Single-shell deployment: one seat.
+    const seat = root.querySelector(ACTIVE_SEAT_SELECTOR)
+    if (seat === null) return
+    const frame = seat instanceof Element ? seat.closest('[data-mobile-frame]') : null
+    if (!(frame instanceof HTMLElement)) return
+    // Was the conversation pinned to its end before this step? If yes, keep
+    // the message tail glued above the seat: the scrollport grows by the
+    // offset (bottom padding) below the content, so without a matching
+    // scroll the last messages would slide behind the keyboard. The end
+    // check runs BEFORE the geometry change (the post-change max already
+    // includes the new padding).
+    const scroller = seat instanceof Element ? seat.closest('[data-conversation-scroll]') : null
+    const wasAtEnd = scroller instanceof HTMLElement
+      && isAtScrollEnd(scroller.scrollTop, scroller.scrollHeight, scroller.clientHeight)
+    const delta = target - applied
+    frame.setAttribute(MOBILE_KBD_ATTR, '')
+    frame.style.setProperty(MOBILE_KBD_VAR, `${target}px`)
+    armedFrame = frame
+    applied = target
+    // The scrollTop write forces layout with the new padding already in
+    // place; a pinned scrollport clamps exactly to the new content end.
+    if (wasAtEnd && scroller instanceof HTMLElement && delta > 0) {
+      scroller.scrollTop += delta
     }
   }
-  window.visualViewport?.addEventListener('resize', onResize)
-  return () => window.visualViewport?.removeEventListener('resize', onResize)
+
+  const onViewportChange = (): void => sync()
+  const onVisibility = (): void => {
+    if (document.visibilityState === 'visible') sync()
+  }
+  sync()
+  vv.addEventListener('resize', onViewportChange)
+  vv.addEventListener('scroll', onViewportChange)
+  window.addEventListener('resize', onViewportChange)
+  document.addEventListener('visibilitychange', onVisibility)
+  return () => {
+    vv.removeEventListener('resize', onViewportChange)
+    vv.removeEventListener('scroll', onViewportChange)
+    window.removeEventListener('resize', onViewportChange)
+    document.removeEventListener('visibilitychange', onVisibility)
+    applied = 0
+    disarm()
+  }
 }
 
 /**

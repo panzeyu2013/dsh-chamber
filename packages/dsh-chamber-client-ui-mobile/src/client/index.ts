@@ -44,9 +44,10 @@ import {
 import { createLayoutFactSource } from './layout-facts.ts'
 import {
   installComposerSelfHeal, installEditabilityRecovery, installEnterToNewline,
-  installImeLadder, installKeyboardPinning, TOUCH_TIER_QUERY,
+  installImeLadder, installKeyboardCompensation, TOUCH_TIER_QUERY,
 } from './composer.ts'
 import { installDrawerTapHeal } from './drawer-taps.ts'
+import { installSettingsSheetScrollReset } from './settings-sheet.ts'
 import { MobileNavToggle, type MobileNavToggleInjected } from './MobileNavToggle.tsx'
 
 export type { MobileNavToggleInjected } from './MobileNavToggle.tsx'
@@ -270,12 +271,15 @@ export function apply(ctx: ClientContext): void {
           disposers = [
             installEnterToNewline(),
             installEditabilityRecovery(),
-            installKeyboardPinning(),
+            installKeyboardCompensation(),
             installComposerSelfHeal(),
             // iOS suppresses the compatibility click for drawer taps (the
             // hover-reveal layout shift) — heal the lost activation so one
             // tap switches sessions (drawer-taps.ts).
             installDrawerTapHeal(() => touchTier.matches),
+            // Phone-tier settings sheet: switching section chips must reset
+            // the shared options scroller (settings-sheet.ts).
+            installSettingsSheetScrollReset(() => touchTier.matches),
             ladder.attach(),
           ]
         }

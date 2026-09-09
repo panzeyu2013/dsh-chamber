@@ -61,11 +61,20 @@
   残留**收敛（「删除全部」退役后无 UI 路径可达，见 design 24 §20 残余登记
   ①，建议收尾孤儿全集合清扫）；「归档当前活动会话→整源降级、
   已归档行浮出」复现确认（§20 残余登记②，dev-QA 原登记于 commit 1b19712）。
-- **移动端 Web 访问面（design 17 §18）**：P1/P1.5/适配轮已实现。剩余——实机门禁
-  （§18.6：真机触控目标比例/抽屉开合/键盘遮挡/安全区/汉堡不重叠/crumbs 换行/
-  Session 日志图标化/iOS 单击切换/设置手机档走查/刘海横屏/深层谱系高度等）；DOM
-  锚点审计剩余（details 打标缺口修复的**接线仅实机可验**、`[class$=_…]` 后缀命名
-  契约测试固定、composer 锚点 fixture 化、Android 键盘盲区真机门禁）；P2（PWA 安装
+- **移动端 Web 访问面（design 17 §18）**：P1/P1.5/适配轮已实现。本轮（mobile
+  分支）落地：触控档隐藏官方 tooltip 气泡（tap 后 sticky-hover 残留文案）、
+  visualViewport 键盘补偿替换 layer-5 pinning（frame 级 `data-mobile-kbd` +
+  `--dsh-mobile-kbd-offset`，量化步进 + visualViewport/window/visibilitychange
+  重同步 + 底部锚定联动滚动）、Enter 换行后 composer 内滚 caret reveal、设置
+  sheet 分区切换滚动重置与 chips 条滚动条隐藏。剩余——上述改动的**实机门禁**
+  （§18.6：真机触控目标比例/抽屉开合/键盘遮挡（含新补偿层的 iOS 时序与
+  Android WebView 盲区）/安全区/汉堡不重叠/crumbs 换行/Session 日志图标化/
+  iOS 单击切换/设置手机档走查（含分区切换重置）/刘海横屏/深层谱系高度等）；
+  **移动端 git 侧边栏**（桌面链 chamber sidebar + `sidebar.workspace.git`
+  座席为桌面专有形态，gateway 链官方 sidebar 无该座席；接入需装配矩阵第二
+  客户端例外 + 移动交互设计，列为下一阶段）；DOM 锚点审计剩余（details 打标
+  缺口修复的**接线仅实机可验**、`[class$=_…]` 后缀命名契约测试固定、composer
+  锚点 fixture 化、Android 键盘盲区真机门禁）；P2（PWA 安装
   + SW 壳离线，per-instance scope，尊重官方「不完整离线」立场）；P3（公网认证流转
   正式化 + Web Push；先行形态 = 内网/可信网络 `--no-auth`/tailscale）。
 - **Windows 首版（design 23）**：M0–M4 代码项已就绪、POSIX 单测绿（design 23 §2 /

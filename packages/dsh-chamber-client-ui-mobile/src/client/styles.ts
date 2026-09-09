@@ -303,6 +303,41 @@ export const MOBILE_CSS = `
     -webkit-text-size-adjust: 100%;
     text-size-adjust: 100%;
   }
+
+  /* Tooltip bubbles (official ui-primitives Tooltip): hover/focus chrome a
+     coarse pointer can never dismiss cleanly. A tap fires the trigger's
+     synthesized mouseenter (sticky hover) but the mouseleave only arrives
+     with the NEXT tap elsewhere — so after tapping 发送/停止 the delayed
+     (delayMs 500) bubble pops and STAYS over the button that was just used.
+     Every official composer-bar tooltip trigger carries an aria-label that
+     duplicates the bubble text, and other role="tooltip" uses (turn-rail
+     previews) are hover-only and unreachable by touch — so the bubbles are
+     removed entirely on the touch tier. Desktop is untouched
+     (media-query scoped). */
+  [role="tooltip"] {
+    display: none !important;
+  }
+
+  /* Keyboard compensation (composer.ts installKeyboardCompensation, IME
+     ladder layer 5): engines that ignore 'interactive-widget=resizes-content'
+     (iOS Safari, older Android WebViews) keep the LAYOUT viewport full-height
+     when the soft keyboard opens, so the official sticky composer seat —
+     pinned to the scrollport's layout bottom — ends up BEHIND the keyboard.
+     The installer mirrors resizes-content semantics against the visual
+     viewport: while the keyboard is open it raises the seat's sticky bottom
+     to the keyboard top AND pads the conversation scrollport by the same
+     offset, so the message tail can scroll up beside the raised seat instead
+     of hiding under the keyboard. State rides the plugin's own frame stamp:
+     'data-mobile-kbd' + the '--dsh-mobile-kbd-offset' custom property on the
+     stamped frame (never official attributes). Android Chrome WITH the token
+     shrinks the layout viewport itself: covered height ≈ 0, the installer
+     never arms, these rules stay inert. */
+  [data-mobile-frame][data-mobile-kbd] [data-phase="active"] [data-conversation-scroll] {
+    padding-bottom: var(--dsh-mobile-kbd-offset, 0px) !important;
+  }
+  [data-mobile-frame][data-mobile-kbd] [data-phase="active"] [data-composer-seat] {
+    bottom: var(--dsh-mobile-kbd-offset, 0px) !important;
+  }
 }
 
 /* ---- phone tier (design 17 §18.4.2/§18.4.3) ---- */
@@ -372,6 +407,12 @@ export const MOBILE_CSS = `
     flex: 1;
     min-width: 0;
     overflow-x: auto;
+    /* The chip strip is a tab bar, not a document: no visible scrollbar
+       (Firefox scrollbar-width + Chromium/WebKit ::-webkit-scrollbar). */
+    scrollbar-width: none;
+  }
+  [role="dialog"][aria-modal="true"]:has([data-slot="settings.header"]) > nav > div:last-child::-webkit-scrollbar {
+    display: none;
   }
   [role="dialog"][aria-modal="true"]:has([data-slot="settings.header"]) > nav button {
     flex: none;

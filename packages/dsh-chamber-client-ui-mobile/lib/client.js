@@ -293,6 +293,41 @@ var MOBILE_CSS = `
     -webkit-text-size-adjust: 100%;
     text-size-adjust: 100%;
   }
+
+  /* Tooltip bubbles (official ui-primitives Tooltip): hover/focus chrome a
+     coarse pointer can never dismiss cleanly. A tap fires the trigger's
+     synthesized mouseenter (sticky hover) but the mouseleave only arrives
+     with the NEXT tap elsewhere \u2014 so after tapping \u53D1\u9001/\u505C\u6B62 the delayed
+     (delayMs 500) bubble pops and STAYS over the button that was just used.
+     Every official composer-bar tooltip trigger carries an aria-label that
+     duplicates the bubble text, and other role="tooltip" uses (turn-rail
+     previews) are hover-only and unreachable by touch \u2014 so the bubbles are
+     removed entirely on the touch tier. Desktop is untouched
+     (media-query scoped). */
+  [role="tooltip"] {
+    display: none !important;
+  }
+
+  /* Keyboard compensation (composer.ts installKeyboardCompensation, IME
+     ladder layer 5): engines that ignore 'interactive-widget=resizes-content'
+     (iOS Safari, older Android WebViews) keep the LAYOUT viewport full-height
+     when the soft keyboard opens, so the official sticky composer seat \u2014
+     pinned to the scrollport's layout bottom \u2014 ends up BEHIND the keyboard.
+     The installer mirrors resizes-content semantics against the visual
+     viewport: while the keyboard is open it raises the seat's sticky bottom
+     to the keyboard top AND pads the conversation scrollport by the same
+     offset, so the message tail can scroll up beside the raised seat instead
+     of hiding under the keyboard. State rides the plugin's own frame stamp:
+     'data-mobile-kbd' + the '--dsh-mobile-kbd-offset' custom property on the
+     stamped frame (never official attributes). Android Chrome WITH the token
+     shrinks the layout viewport itself: covered height \u2248 0, the installer
+     never arms, these rules stay inert. */
+  [data-mobile-frame][data-mobile-kbd] [data-phase="active"] [data-conversation-scroll] {
+    padding-bottom: var(--dsh-mobile-kbd-offset, 0px) !important;
+  }
+  [data-mobile-frame][data-mobile-kbd] [data-phase="active"] [data-composer-seat] {
+    bottom: var(--dsh-mobile-kbd-offset, 0px) !important;
+  }
 }
 
 /* ---- phone tier (design 17 \xA718.4.2/\xA718.4.3) ---- */
@@ -362,6 +397,12 @@ var MOBILE_CSS = `
     flex: 1;
     min-width: 0;
     overflow-x: auto;
+    /* The chip strip is a tab bar, not a document: no visible scrollbar
+       (Firefox scrollbar-width + Chromium/WebKit ::-webkit-scrollbar). */
+    scrollbar-width: none;
+  }
+  [role="dialog"][aria-modal="true"]:has([data-slot="settings.header"]) > nav > div:last-child::-webkit-scrollbar {
+    display: none;
   }
   [role="dialog"][aria-modal="true"]:has([data-slot="settings.header"]) > nav button {
     flex: none;
@@ -643,6 +684,7 @@ function installEnterToNewline() {
         }
       }
     }
+    revealCaretInComposerScroll(input);
   };
   document.addEventListener("keydown", onKeyDown, true);
   return () => {
@@ -672,6 +714,29 @@ function insertLineBreakManually(input) {
   } catch {
     return false;
   }
+}
+function caretRevealDelta(rectTop, rectBottom, hostTop, hostBottom, margin = 8) {
+  if (rectBottom > hostBottom) return rectBottom - hostBottom + margin;
+  if (rectTop < hostTop) return rectTop - hostTop - margin;
+  return 0;
+}
+function revealCaretInComposerScroll(input) {
+  if (input === null) return;
+  const scrollHost = input.closest("[data-input-scroll]");
+  if (!(scrollHost instanceof HTMLElement)) return;
+  if (scrollHost.scrollHeight <= scrollHost.clientHeight) return;
+  const selection = document.getSelection();
+  if (selection === null || selection.rangeCount === 0) return;
+  const hostRect = scrollHost.getBoundingClientRect();
+  let rect = selection.getRangeAt(0).getBoundingClientRect();
+  if (rect.height === 0 && rect.width === 0) {
+    const anchor = selection.focusNode;
+    const element = anchor instanceof Element ? anchor : anchor?.parentElement;
+    if (element instanceof Element) rect = element.getBoundingClientRect();
+  }
+  if (rect.height === 0 && rect.width === 0) return;
+  const delta = caretRevealDelta(rect.top, rect.bottom, hostRect.top, hostRect.bottom);
+  if (delta !== 0) scrollHost.scrollTop += delta;
 }
 function installEditabilityRecovery(root = document) {
   let lastEditable = true;
@@ -769,25 +834,75 @@ function installImeLadder(root = document) {
     isKeyboardOpen: () => keyboardOpen
   };
 }
-function installKeyboardPinning(root = document) {
-  let keyboardOpen = false;
-  const onResize = () => {
-    const vv = window.visualViewport;
-    const next = vv !== null && isKeyboardOpen(window.innerHeight, vv.height);
-    if (next === keyboardOpen) return;
-    keyboardOpen = next;
-    if (!keyboardOpen) return;
-    const seat = root.querySelector("[data-composer-seat]");
-    if (seat instanceof Element) {
-      const rect = seat.getBoundingClientRect();
-      const vvBottom = vv !== null ? vv.height : window.innerHeight;
-      if (rect.bottom > vvBottom) {
-        seat.scrollIntoView({ block: "nearest", behavior: "smooth" });
-      }
+var KBD_OFFSET_QUANTUM_PX = 48;
+var KBD_OFFSET_HEADROOM_PX = 8;
+var MOBILE_KBD_ATTR = "data-mobile-kbd";
+var MOBILE_KBD_VAR = "--dsh-mobile-kbd-offset";
+var ACTIVE_SEAT_SELECTOR = '[data-phase="active"] [data-composer-seat]';
+function kbdCoveredHeight(layoutHeight, visualHeight, visualOffsetTop) {
+  return Math.max(0, layoutHeight - visualOffsetTop - visualHeight);
+}
+function nextKbdOffset(covered, quantum = KBD_OFFSET_QUANTUM_PX, headroom = KBD_OFFSET_HEADROOM_PX) {
+  if (covered <= 0) return 0;
+  return Math.ceil((covered + headroom) / quantum) * quantum;
+}
+function isAtScrollEnd(scrollTop, scrollHeight, clientHeight, slack = 8) {
+  if (clientHeight <= 0 || scrollHeight <= clientHeight) return true;
+  return scrollTop + clientHeight >= scrollHeight - slack;
+}
+function installKeyboardCompensation(root = document) {
+  const vv = window.visualViewport;
+  if (vv === null) return () => {
+  };
+  let applied = 0;
+  let armedFrame = null;
+  const disarm = () => {
+    if (armedFrame === null) return;
+    armedFrame.removeAttribute(MOBILE_KBD_ATTR);
+    armedFrame.style.removeProperty(MOBILE_KBD_VAR);
+    armedFrame = null;
+  };
+  const sync = () => {
+    const layoutHeight = window.innerHeight;
+    const target = isKeyboardOpen(layoutHeight, vv.height) ? nextKbdOffset(kbdCoveredHeight(layoutHeight, vv.height, vv.offsetTop)) : 0;
+    if (target === applied) return;
+    if (target === 0) {
+      applied = 0;
+      disarm();
+      return;
+    }
+    const seat = root.querySelector(ACTIVE_SEAT_SELECTOR);
+    if (seat === null) return;
+    const frame = seat instanceof Element ? seat.closest("[data-mobile-frame]") : null;
+    if (!(frame instanceof HTMLElement)) return;
+    const scroller = seat instanceof Element ? seat.closest("[data-conversation-scroll]") : null;
+    const wasAtEnd = scroller instanceof HTMLElement && isAtScrollEnd(scroller.scrollTop, scroller.scrollHeight, scroller.clientHeight);
+    const delta = target - applied;
+    frame.setAttribute(MOBILE_KBD_ATTR, "");
+    frame.style.setProperty(MOBILE_KBD_VAR, `${target}px`);
+    armedFrame = frame;
+    applied = target;
+    if (wasAtEnd && scroller instanceof HTMLElement && delta > 0) {
+      scroller.scrollTop += delta;
     }
   };
-  window.visualViewport?.addEventListener("resize", onResize);
-  return () => window.visualViewport?.removeEventListener("resize", onResize);
+  const onViewportChange = () => sync();
+  const onVisibility = () => {
+    if (document.visibilityState === "visible") sync();
+  };
+  sync();
+  vv.addEventListener("resize", onViewportChange);
+  vv.addEventListener("scroll", onViewportChange);
+  window.addEventListener("resize", onViewportChange);
+  document.addEventListener("visibilitychange", onVisibility);
+  return () => {
+    vv.removeEventListener("resize", onViewportChange);
+    vv.removeEventListener("scroll", onViewportChange);
+    window.removeEventListener("resize", onViewportChange);
+    document.removeEventListener("visibilitychange", onVisibility);
+    applied = 0;
+    disarm();
+  };
 }
 var BUSY_STUCK_MS = 3e4;
 function installComposerSelfHeal(root = document) {
@@ -1007,6 +1122,32 @@ function installDrawerTapHeal(active) {
   };
 }
 
+// src/client/settings-sheet.ts
+var SETTINGS_DIALOG_SELECTOR = '[role="dialog"][aria-modal="true"]';
+function installSettingsSheetScrollReset(active) {
+  const onClick = (event) => {
+    if (!active()) return;
+    const target = event.target instanceof Element ? event.target : null;
+    if (target === null) return;
+    const dialog = target.closest(SETTINGS_DIALOG_SELECTOR);
+    if (!(dialog instanceof Element)) return;
+    if (dialog.querySelector('[data-slot="settings.header"]') === null) return;
+    const nav = dialog.querySelector(":scope > nav");
+    if (!(nav instanceof Element) || !nav.contains(target)) return;
+    requestAnimationFrame(() => {
+      let scroller = dialog.querySelector('[data-slot="settings.section"]')?.parentElement ?? null;
+      while (scroller instanceof HTMLElement && scroller !== dialog) {
+        scroller.scrollTop = 0;
+        scroller = scroller.parentElement;
+      }
+      const content = dialog.lastElementChild;
+      if (content instanceof HTMLElement) content.scrollTop = 0;
+    });
+  };
+  document.addEventListener("click", onClick, true);
+  return () => document.removeEventListener("click", onClick, true);
+}
+
 // src/client/MobileNavToggle.tsx
 var import_react = require("react");
 var import_jsx_runtime = require("react/jsx-runtime");
@@ -1190,12 +1331,15 @@ function apply(ctx) {
           disposers = [
             installEnterToNewline(),
             installEditabilityRecovery(),
-            installKeyboardPinning(),
+            installKeyboardCompensation(),
             installComposerSelfHeal(),
             // iOS suppresses the compatibility click for drawer taps (the
             // hover-reveal layout shift) — heal the lost activation so one
             // tap switches sessions (drawer-taps.ts).
             installDrawerTapHeal(() => touchTier.matches),
+            // Phone-tier settings sheet: switching section chips must reset
+            // the shared options scroller (settings-sheet.ts).
+            installSettingsSheetScrollReset(() => touchTier.matches),
             ladder.attach()
           ];
         }

@@ -1,15 +1,17 @@
 /**
- * Composer behavior pure-logic tests (P1.5 + 2026 review round): the
- * keyboard heuristic, the self-heal constant and the layer-1
- * navigation-gesture predicate — the DOM-bound installers stay
- * integration-tested on device, the pure decision functions are covered
- * here.
+ * Composer behavior pure-logic tests (P1.5 + 2026 review + mobile rounds):
+ * the keyboard heuristic, the self-heal constant, the layer-1
+ * navigation-gesture predicate, the layer-5 keyboard-compensation geometry
+ * (covered height / quantized offset / scroll-end) and the Enter-newline
+ * caret-reveal delta — the DOM-bound installers stay integration-tested on
+ * device, the pure decision functions are covered here.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   isKeyboardOpen, BUSY_STUCK_MS, TOUCH_TIER_QUERY,
   isNavigationGestureTarget, NAV_GESTURE_SELECTOR,
+  kbdCoveredHeight, nextKbdOffset, isAtScrollEnd, caretRevealDelta,
   type ClosestLike,
 } from '../src/client/composer.ts'
 
@@ -69,4 +71,55 @@ test('isNavigationGestureTarget: non-navigation gestures are typing intent', () 
   // match answered for the nav selector only).
   const seatOnly = new ClosestStub({})
   assert.equal(isNavigationGestureTarget(seatOnly), false)
+})
+
+test('kbdCoveredHeight: layout bottom minus visual viewport bottom (layout coordinates)', () => {
+  // No keyboard / layout == visual → nothing covered.
+  assert.equal(kbdCoveredHeight(812, 812, 0), 0)
+  // iOS style: layout stays 812, visual shrinks to 512 → 300 covered.
+  assert.equal(kbdCoveredHeight(812, 512, 0), 300)
+  // Panned visual viewport (offsetTop > 0) reduces the covered band.
+  assert.equal(kbdCoveredHeight(812, 512, 40), 260)
+  // Zoomed-in visual viewport taller than the gap → clamped to 0.
+  assert.equal(kbdCoveredHeight(812, 900, 0), 0)
+})
+
+test('nextKbdOffset: ceil quantization with headroom, zero when uncovered', () => {
+  // Nothing covered → never arm.
+  assert.equal(nextKbdOffset(0), 0)
+  // 300 covered + 8 headroom → ceil(308/48)=7 → 336 (never under the top).
+  assert.equal(nextKbdOffset(300), 336)
+  // Small covered heights still get the minimal non-zero lift.
+  assert.equal(nextKbdOffset(5), 48)
+  // Explicit quantum/headroom for readability.
+  assert.equal(nextKbdOffset(100, 48, 8), 144)
+  assert.equal(nextKbdOffset(47, 48, 8), 96)
+  assert.equal(nextKbdOffset(-1), 0)
+})
+
+test('isAtScrollEnd: pinned-to-end detection with slack', () => {
+  // Empty / non-scrollable containers are trivially at the end.
+  assert.equal(isAtScrollEnd(0, 100, 200), true)
+  assert.equal(isAtScrollEnd(0, 0, 0), true)
+  // Mid-history is not at the end.
+  assert.equal(isAtScrollEnd(500, 5000, 1000), false)
+  // Exactly at the end (max = scrollHeight - clientHeight).
+  assert.equal(isAtScrollEnd(4000, 5000, 1000), true)
+  // Within the slack of the end.
+  assert.equal(isAtScrollEnd(3995, 5000, 1000), true)
+  // Beyond the end (post-clamp transient) is still end-pinned.
+  assert.equal(isAtScrollEnd(4100, 5000, 1000), true)
+})
+
+test('caretRevealDelta: signed scroll delta to bring the caret into the host viewport', () => {
+  // Caret fully visible → no scroll.
+  assert.equal(caretRevealDelta(100, 120, 0, 200), 0)
+  // Caret below the fold → scroll down by overflow + margin.
+  assert.equal(caretRevealDelta(190, 210, 0, 200), 18)
+  // Caret above the viewport → scroll up by overflow + margin.
+  assert.equal(caretRevealDelta(-20, 0, 0, 200), -28)
+  // Bottom edge flush with the fold but inside → no scroll.
+  assert.equal(caretRevealDelta(180, 200, 0, 200), 0)
+  // Custom margin.
+  assert.equal(caretRevealDelta(190, 210, 0, 200, 2), 12)
 })
