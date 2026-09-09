@@ -278,6 +278,45 @@ test('liveness: the network gate is re-read per trigger, so a restored link reco
   assert.deepEqual(restarts, ['restart'], 'the restored link reconnects on the next trigger')
 })
 
+test('liveness: an always-fire event bypasses the offline gate but still honours the debounce', () => {
+  const win = stubTarget()
+  let clock = 0
+  const restarts: string[] = []
+  attachLivenessTriggers(win as never, undefined, {
+    restart: () => restarts.push('restart'),
+    windowEvents: ['system-resume', 'online'],
+    alwaysFireEvents: ['system-resume'],
+    isOnline: () => false,
+    now: () => clock,
+  })
+  // An OS wake is the one moment the browser's offline flag is least
+  // trustworthy (a page frozen across suspend/resume can miss `online`).
+  win.emit('system-resume')
+  assert.deepEqual(restarts, ['restart'], 'the wake event forces one bounded attempt')
+  // The forced event still shares the debounce with every other trigger.
+  clock += DEFAULT_MIN_RESTART_INTERVAL_MS - 1
+  win.emit('system-resume')
+  assert.deepEqual(restarts, ['restart'], 'a second wake inside the debounce window collapses')
+  clock += 1
+  win.emit('system-resume')
+  assert.deepEqual(restarts, ['restart', 'restart'])
+  // A non-always-fire event stays gated while offline.
+  win.emit('online')
+  assert.deepEqual(restarts, ['restart', 'restart'])
+})
+
+test('liveness: an always-fire event list is empty by default (no bypass without opting in)', () => {
+  const win = stubTarget()
+  const restarts: string[] = []
+  attachLivenessTriggers(win as never, undefined, {
+    restart: () => restarts.push('restart'),
+    windowEvents: ['system-resume'],
+    isOnline: () => false,
+  })
+  win.emit('system-resume')
+  assert.deepEqual(restarts, [], 'without alwaysFireEvents the offline gate still applies')
+})
+
 test('liveness: without an explicit gate the browser navigator.onLine decides', () => {
   const win = stubTarget()
   const restarts: string[] = []

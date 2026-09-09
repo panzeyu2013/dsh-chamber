@@ -16,6 +16,7 @@ import { Service } from '@deepseek-ai/cordis'
 import { RemoteError, remoteErrorOf } from '@deepseek-ai/dsh-typert-protocol'
 export type { TypertGatewayFaultDetails } from '../remote-error-codes.ts'
 import type { Context } from '@deepseek-ai/cordis'
+import { recoveryOverridesForTransport } from '@deepseek-ai/dsh-client-connection/client'
 import type {
   ConnectionHandle,
 } from '@deepseek-ai/dsh-client-connection/client'
@@ -176,6 +177,14 @@ class ClientRemoteService extends Service implements ClientRemote {
     if (connection.rpc.open === undefined) this.streams.start()
     let disposed = false
     let loop: ReturnType<ConnectionHandle['start']> | undefined
+    // chamber patch (Batch 2 follow-up): the page-global
+    // `__DSH_CONNECTION_RECOVERY__` bootstrap is absent under the chamber shell
+    // (the page is served by the control plane), so remote sources would run
+    // the loopback-tuned 15 s readiness deadline. Pass the per-source override
+    // through upstream's supported `start(sinks, config)` seam instead.
+    const recoveryOverrides = recoveryOverridesForTransport(
+      (ctx as { readonly chamberTransport?: unknown }).chamberTransport,
+    )
     const start = (): void => {
       if (disposed) return
       if (connection.rpc.open === undefined) this.streams.start()
@@ -184,7 +193,7 @@ class ClientRemoteService extends Service implements ClientRemote {
         onReconnectRequested: () => {
           if (connection.rpc.open === undefined) this.streams.reconnect()
         },
-      })
+      }, recoveryOverrides)
     }
     const loader = ctx.get('loader') as LoaderReadiness | undefined
     if (loader === undefined) start()

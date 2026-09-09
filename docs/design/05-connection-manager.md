@@ -530,6 +530,18 @@ export const chamberBridge: {
     `/api`），但 chamber 运行链不再写该全局。该接缝由
     `test:connection` 的 client-apply / carrier-assembly 行为门与独立
     `typecheck:connection` 源码门固定，不能只靠字符串/AST 检查；
+    **连接层职责边界（2026-09 加固登记）**：
+    ① **连接层是 push 通道（`/api/remote.mux`）的唯一重开者**——控制面/桌面各层只
+    「发现」（心跳/探针/相位/看门狗）与「撤销或重注册传输」，从不重开一条流；mux 客户端
+    （`dsh-api-gateway`）自身无退避，其重试节拍由连接循环的 `onReconnectRequested` 驱动。
+    ② **禁止同实例 `stop()+start()`**：上游 `reconnect()` 已覆盖立即重连语义且不产生第二个
+    泵循环；若未来重新引入 stop+start，必须同时恢复代际守卫（Batch 2 退役的 loopEpoch）。
+    ③ **每来源恢复时序**由 `recovery-policy.ts` 决定并经上游支持的
+    `connection.start(sinks, config)` 传入（远端 ssh/http 45s 就绪期限 / 5s 告警；本地与
+    未知来源保持上游 15s/3s）——chamber 页面拿不到宿主注入的
+    `__DSH_CONNECTION_RECOVERY__` 页面全局，故不能依赖页面级配置。
+    ④ 活性触发集合 = `system-resume`（**旁路离线门**，见 design 14 D4）+ `online` +
+    隐藏 ≥30s 回前台（两者受离线门约束），共享 10s 去抖；
   - `packages/dsh-client-web/`——`boot.ts` N-ctx 模块表共享 seam + 公开
     `runtimeCtx` getter（实例 shell 打开会话的 seam）+ `configureContext` 同步注入
     seam + 可等待的异步 `dispose()`。真实 `AppWebEntry.run()` 的 Context 注入顺序由

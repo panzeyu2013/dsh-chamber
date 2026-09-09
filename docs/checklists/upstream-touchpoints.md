@@ -49,10 +49,10 @@ design 05 / STATUS）。
 | `package.json` | [patch-add] | 仅追加 chamber test 脚本；其余与上游一致 |
 | `src/api-path.ts` | [patch-mod] | 追加 `resolveInstanceBasePath` + 头部 chamber 说明（basePath 语义，design 05 §3.6） |
 | `src/client/connection.ts` | [patch-mod] | **仅** erasableSyntaxOnly 显式字段改写（两个构造参数属性）+ 顶部 chamber 说明；其余逐字节上游（Batch 2 重锚：loopEpoch 代际守卫与 `CONNECTION_BACKOFF_MAX_MS` 导出退役，活性触发改用原生 `reconnect()`/`setNetworkAvailable()`） |
-| `src/client/index.ts` | [patch-mod] | `apply(ctx)` 读 `ctx.chamberBasePath` → 载波装配 + `SYSTEM_RESUME_EVENT`/liveness 触发（design 14 D4）+ 头部 chamber 说明 |
+| `src/client/index.ts` | [patch-mod] | `apply(ctx)` 读 `ctx.chamberBasePath` → 载波装配 + `SYSTEM_RESUME_EVENT`/liveness 触发（design 14 D4）+ recovery-policy 转出 + 头部 chamber 说明 |
 | `src/client/rpc.ts` | [patch-mod] | basePath 前缀拼装 + `WebConnectionRpcOptions`（chamber 选项对象）+ 头部 chamber 说明 |
 | `tsconfig.client.json` / `tsconfig.host.json` | [patch-mod] | chamber 构面（extends/rootDir/vendor paths）；`files` 列表与上游增量同步维护（脚本按 patched 登记） |
-| `src/client/carrier-assembly.ts`、`src/client/liveness-triggers.ts` | [own] | chamber 自有（载波装配策略 / sleep-wake 活性触发：原生 reconnect + 离线门） |
+| `src/client/carrier-assembly.ts`、`src/client/liveness-triggers.ts`、`src/client/recovery-policy.ts` | [own] | chamber 自有（载波装配策略 / sleep-wake 活性触发：原生 reconnect + 离线门 + 唤醒事件旁路 / 每来源恢复时序策略：远端 45s·5s，本地默认） |
 | `tsconfig.check-base/client/host.json` | [own] | chamber erasable-only 校验构面 |
 | `test/` | [own] | chamber 自有测试 + fixtures（含 schemastery/fixture/recovery-config 桩 loader） |
 | `tsdown.config.ts`、上游 `tests/` | [dropped] | chamber 无 tsdown/镜像上游测试 |
@@ -82,7 +82,7 @@ pure **6**（以脚本计数为准）。
 | 文件 | 标记 | 原因/补丁说明 |
 |---|---|---|
 | `package.json` | [patch-mod] | description/peer 集裁剪（host 依赖 dropped）；版本行随上游 |
-| `src/client/index.ts` | [patch-mod] | `apply(ctx)` 读 `ctx.chamberBasePath` → `/api/remote.mux` 落到实例前缀（design 05 §3.6） |
+| `src/client/index.ts` | [patch-mod] | `apply(ctx)` 读 `ctx.chamberBasePath` → `/api/remote.mux` 落到实例前缀 + `start(sinks, recoveryOverridesForTransport(transport))`（design 05 §3.6） |
 | `src/client/stream-client.ts` | [patch-mod] | per-entry basePath（流载波 URL 拼装） |
 | `tsconfig.json` / `tsconfig.client.json` | [own-divergent] | chamber 构面 |
 | `tsconfig.check-base/client.json` | [own] | chamber erasable-only 校验构面 |
@@ -97,6 +97,13 @@ host 插件入口/半、上游 `tests/`、`tsdown.config.ts`、上游 README（a
 - dsh-v0.1.3-alpha.1：connection 流式 body 路由/fixture session-format v2 重放；api-gateway
   journal-stream 无游标 notification 帧；web 版本行。
 - dsh-v0.1.3-alpha.2：connection recovery-config 抽取重放（本表 §2.1）；api-gateway/web 版本行。
+- **未升级的动向记录（2026-09 只读调研，pin 仍 82a5fd61a7cf）**：上游最新 tag
+  `dsh-v0.1.5-alpha.1`（5dda764e）。三个 fork 的**客户端恢复模型零改动**
+  （`connection/src/client/{connection,index}.ts` 未变；变的是 fixture、宿主半
+  `src/index.ts` 的 `webServer` 可选注入重构、README/版本行）；`client/web` 新增平台词
+  `@deepseek-ai/dsh-client-ui-dockkit`（+ 保留 ui-primitives）。**升级时注意**：
+  dockkit 是「平台词还是 host-graph 行」必须先裁决（seed 词 = 行 ⇒ 启动失败，本仓
+  的 C3 不变量），宿主半的 `webServer` 可选注入会影响 connection 宿主半的重放。
 
 ## 3. deep-import 与 roster 登记
 

@@ -79,6 +79,19 @@ export type {
   ClientConnectionRpc, ConnectionRpcFailure, ConnectionRpcResult,
 } from '../rpc.ts'
 export type { RpcFetch } from './rpc.ts'
+/**
+ * chamber patch (Batch 2 follow-up): the per-source recovery-timing policy.
+ * Exported through the `/client` barrel so consumers (the chamber api-gateway
+ * fork) can pass it to `start(sinks, config)`; deep subpath imports are not
+ * resolvable through the chamber vite alias, which maps only the package root
+ * and `/client` to this copy.
+ */
+export {
+  recoveryOverridesForTransport,
+  REMOTE_GENERATION_READY_TIMEOUT_MS,
+  REMOTE_GENERATION_READY_WARN_MS,
+  type ConnectionRecoveryOverrides,
+} from './recovery-policy.ts'
 
 /**
  * chamber patch (design 14 D4): the window event the chamber shell dispatches
@@ -369,6 +382,11 @@ export function apply(ctx: Context): void {
             }
           },
           windowEvents: [SYSTEM_RESUME_EVENT, 'online'],
+          // An OS wake bypasses the offline gate: a page frozen across
+          // suspend/resume can miss the browser's `online` event and keep
+          // reporting offline while the link is back. `reconnect()` forces one
+          // bounded attempt (immediateRetry skips the suspension branch).
+          alwaysFireEvents: [SYSTEM_RESUME_EVENT],
         },
       )
       controller.start()

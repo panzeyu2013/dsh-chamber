@@ -65,6 +65,20 @@ export interface LivenessTriggerOptions {
    * `navigator.onLine`; `undefined` (non-browser) counts as online.
    */
   isOnline?: () => boolean
+  /**
+   * Window events that BYPASS {@link isOnline} (2026-09 hardening): an OS
+   * wake is the one moment where the browser's offline flag is least
+   * trustworthy — a page frozen across a suspend/resume can miss the
+   * `online` event entirely and keep reporting `offline` while the link is
+   * back, which would leave the loop parked in the controller's offline
+   * suspension with no other chamber layer able to wake it (the controller's
+   * `reconnect()` sets `immediateRetry`, which skips the suspension branch
+   * and forces exactly one bounded attempt; a genuinely offline host fails
+   * that attempt fast and re-suspends). Keep this list to wake-class events
+   * only — an `online`/visibility trigger gains nothing from forcing an
+   * attempt while the browser says the link is down.
+   */
+  alwaysFireEvents?: readonly string[]
   /** Injectable clock (tests). */
   now?: () => number
 }
@@ -105,14 +119,17 @@ export function attachLivenessTriggers(
   const threshold = options.hiddenReconnectThresholdMs ?? DEFAULT_HIDDEN_RECONNECT_THRESHOLD_MS
   const minRestartInterval = options.minRestartIntervalMs ?? DEFAULT_MIN_RESTART_INTERVAL_MS
   const isOnline = options.isOnline ?? browserIsOnline
+  const alwaysFire = new Set(options.alwaysFireEvents ?? [])
   const now = options.now ?? Date.now
   // De-dup overlapping triggers (system-resume + online on one wake, `online`
   // flapping): a reconnect more often than every minRestartInterval is never
   // useful — each reconnect re-runs the handshake and re-syncs every open
   // session, so bursts must collapse into one.
   let lastRestart = Number.NEGATIVE_INFINITY
-  const fireRestart = (): void => {
-    if (!isOnline()) return
+  const fireRestart = (event?: string): void => {
+    if (event === undefined || !alwaysFire.has(event)) {
+      if (!isOnline()) return
+    }
     const at = now()
     if (at - lastRestart < minRestartInterval) return
     lastRestart = at
@@ -121,7 +138,7 @@ export function attachLivenessTriggers(
   const windowEntries: Array<[string, () => void]> = []
   if (win !== undefined) {
     for (const type of options.windowEvents ?? []) {
-      const onEvent = (): void => { fireRestart() }
+      const onEvent = (): void => { fireRestart(type) }
       win.addEventListener(type, onEvent)
       windowEntries.push([type, onEvent])
     }

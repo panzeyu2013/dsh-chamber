@@ -177,11 +177,16 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
 >    `attachLivenessTriggers`）：system-resume 之外增加 `online`（唤醒/网络恢复）
 >    与 `visibilitychange→visible`（隐藏 ≥30s 后回前台；短 alt-tab 不触发）
 >    触发**控制器原生 `reconnect()`** 立即重连（2026-09 Batch 2：退役 stop()+start()
->    与 loopEpoch 守卫，并带离线门——离线时上游 `setNetworkAvailable(false)` 已挂起
->    重试，触发一律忽略）；**最小重启间隔去抖
+>    与 loopEpoch 守卫）；`online` 与可见性触发受**离线门**约束（离线时上游
+>    `setNetworkAvailable(false)` 已挂起重试），而 **`system-resume` 旁路离线门**
+>    （2026-09 加固）：页面跨挂起/恢复被冻结时可能整体错过 `online` 事件、持续误报
+>    offline，而 `reconnect()` 的 `immediateRetry` 会跳过挂起分支只强制一次有界尝试
+>    （真离线则快速失败并重新挂起）；**最小重启间隔去抖
 >    `DEFAULT_MIN_RESTART_INTERVAL_MS`（10s == recovery schema 默认 backoffMaxMs）**（resume+online 同醒并发、online 抖动
->    合并为一次）。重连后 `handleConnected` 的 list 刷新 + resync 让卡死的
->    running 位收敛。
+>    合并为一次）。**远端就绪期限放宽**（同次加固）：ssh/http 来源经
+>    `recovery-policy.ts` + `connection.start(sinks, config)` 用 45s 期限 / 5s 告警
+>    （本地保持上游 15s/3s），避免冷隧道/慢链路握手超期后被无限重试。重连后
+>    `handleConnected` 的 list 刷新 + resync 让卡死的 running 位收敛。
 > 2. **控制面代理 WS 心跳，仅下游（浏览器）腿**（`control-plane/src/ws-frames.ts`
 >    + `ws-heartbeat.ts`，RFC 6455 §5.5.2/§5.5.3）：splice 建立后向浏览器周期
 >    发免掩码 ping（浏览器按 RFC 自动 pong，透明不上抛 app），`PongScanner`
