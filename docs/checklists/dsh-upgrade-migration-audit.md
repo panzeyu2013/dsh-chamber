@@ -227,7 +227,7 @@ cookie 注入缺失、探针 5s 窗口在真机冷启动下是否足够。
 > （`git clone --shared` + 真实 submodule 物化，按 CI 顺序实跑全链）、W6 **决策证据**
 > （D3/D4/D5 的全仓证据与选项排序）。报告原文：`.analysis/out/W4-adversarial.md` /
 > `W5-pristine.md` / `W6-decisions.md`（scratch，不入库）。
-> 结论：**0 遗留 BLOCKER**；第三轮修掉 3 个 MAJOR 门缺陷、2 个真实功能缺陷（四处同源绝对
+> 结论：**0 遗留 BLOCKER**；第三轮修掉 3 个 MAJOR 门缺陷、2 个真实功能缺陷（四处同源绝对（四轮再补第五处，见 §13.1）
 > URL 中第二/三处）、2 个产物不可复现缺陷，并把 D3/D4/D5 全部按最优实践裁决落地或登记。
 
 ### 9.1 门与验证基建（W4/W5）
@@ -252,7 +252,7 @@ ensure --check / 门禁（含真实 C8）/ i18n / typecheck / 5 个包测试全�
 
 | # | 严重度 | 发现 | 处置 |
 |---|---|---|---|
-| T8 | **MAJOR（核心功能坏）** | 同源绝对 URL 共**四处**，第二轮只修了一处：② `client-file-upload` 的 `/api/session/uploadFileBinary`（**composer 附件上传 404**）；③④ `ui-deliverables` 的 `/api/present.host|open`（交付卡打开/定位 404） | 补丁集扩到 4 条 / 5 文件 / 18 锚点：file-upload 从服务 ctx 读 `chamberBasePath`、ui-deliverables 控制器构造时接收；**`client-file-upload` 转为 composite covered**（extra-row bundle 由实例提供、不经过我们的构建，不覆盖就无法打补丁），同时消除该 extra-row 依赖 |
+| T8 | **MAJOR（核心功能坏）** | 同源绝对 URL 共**四处**，第二轮只修了一处：② `client-file-upload` 的 `/api/session/uploadFileBinary`（**composer 附件上传 404**）；③④ `ui-deliverables` 的 `/api/present.host|open`（交付卡打开/定位 404） | 补丁集扩到 4 条 / 5 文件 / 18 锚点：file-upload 从服务 ctx 读 `chamberBasePath`、ui-deliverables 控制器构造时接收；**`client-file-upload` 转为 composite covered**（extra-row bundle 由实例提供、不经过我们的构建，不覆盖就无法打补丁），同时消除该 extra-row 依赖（四轮再补第五处 `session-log-export`，见 §13.1） |
 | T9 | MAJOR | 探针清单的理由不成立：`resources` 不是任何复合插件的 inject（渲染期 seat），且不可能单独缺失；`fileUpload` 的真实依赖方还包括 `api-session-controller`（后果是整壳） | 覆盖 file-upload 后清单收敛为 `['sidebarRight']`；design 09 §3.2、touchpoints §3、AGENTS、双语 CHANGELOG、矩阵 D2 同步；`required-extra-rows.test.ts` 重写 |
 | T10 | MINOR | remote 契约只建模 import 列表，真正挂载的是 `apply()` 数组（同长度改挂载仍绿）；多行 import/再导出/动态 import 不可见；vendor 文件缺失时 C4 静默消失 | 解析器重写：注释剥离、`type`-only 子句识别、`remoteMountPackages()` 解析挂载数组并与 import 1:1 同序断言、无法分类的 `/remote` 边 fail-loud；C4 缺文件即硬失败、解析异常即硬失败；+3 例单测 |
 | T11 | MINOR | 两处测试锁仍可被绕过：layout 反转+break 全绿；panel-wiring 的「死文本」`/* syncPanels() */` 满足顺序锁 | layout 测试改为「抛错实例两侧各一健康实例」+ 断言恰好一条采纳日志（变异验证：反转+break → 红）；panel-wiring 加注释剥离 + 空白归一化 JSX 断言（变异验证：死文本 → 红） |
@@ -281,7 +281,7 @@ ensure --check / 门禁（含真实 C8）/ i18n / typecheck / 5 个包测试全�
 ### 9.4 第三轮绿门（修复后实跑）
 
 - 门禁：`verify-upstream-touchpoints` C1/C3–C9 全绿（C4 covered=54/factory=26、装配 15 = import 选择
-  == apply 挂载、C8 5 组重建一致、C9 5 文件/18 锚点）；`verify:i18n` 0 DRIFTED；
+  == apply 挂载、C8 5 组重建一致、C9 5 文件/18 锚点，四轮起 7/21）；`verify:i18n` 0 DRIFTED；
   `test:upgrade-tools`（含新 `artifact-gate.test.mjs`）绿。
 - 负向验证（本机实跑）：pure fork 被改 → exit 1；污染 `dist` → C8 exit 1；无 `node_modules` →
   C8 硬失败（不再静默）；SIGINT → exit 130 且产物原样；构建新增文件 → 被清除；并发 → 第二个 run 跳过；
@@ -300,7 +300,7 @@ frozen-lockfile / i18n / 触点门 C1–C9 / ensure --check / smoke 全绿。
 
 多来源 sleep/wake 与隐藏恢复、gateway 形态回归、右侧栏栈在真实 profile 下的装载时序、
 `provideRoot` 时序（`useResource`/`usePanelInfo`/`chamberFileApiBase`）、session v3 迁移在真实存储上
-的行为、移动端真机视觉与 `<768px` 全屏右栏下的抽屉层级、四处补丁 URL 在真机的 200/401 复验
+的行为、移动端真机视觉与 `<768px` 全屏右栏下的抽屉层级、五处补丁 URL 在真机的 200/401 复验
 （本地与 gateway 来源应 200，ssh/http dsh 目标 401）、探针 5s 窗口在真机冷启动下是否足够。
 
 ---
@@ -349,7 +349,7 @@ frozen-lockfile / i18n / 触点门 C1–C9 / ensure --check / smoke 全绿。
 |---|---|---|---|
 | 左栏 | `ui-sidebar` 单来源工作区树 | chamber sidebar（多来源会话列表 + 待办区 + 全局面板行/品牌孔位） | 05 §6、design 09 §3.2 |
 | 中列 | keyed `main` 槽 | 一致（fork 镜像） | design 06 |
-| 右栏 | `ui-sidebar-right` 官方行（额外行加载） | 一致 + 四处 URL 走本实例前缀 | design 09 §3.6、touchpoints §3 |
+| 右栏 | `ui-sidebar-right` 官方行（额外行加载） | 一致 + 五处 URL 走本实例前缀 | design 09 §3.6、touchpoints §3 |
 | 移动端 | 无移动适配（<768px 由官方全屏右栏接管） | 触控抽屉/汉堡/遮罩（z-74/75/76，位于 `shell.overlay` z-20 栈内）+ 手机档排版；退役日志胶囊打标与自绘右栏覆盖层 | design 17 §18.4、`styles.ts` 头注 |
 | 设置 | `ui-settings` SettingsRoot | chamber 设置壳（服务器下拉 + 连接 + runtime 段），官方 section 由 deferred 簇提供 | 05 §5 |
 | open-in | 官方 `ui-open-in-app`（同源壳内自隐藏） | chamber open-in（多来源 + 桌面 override） | designs 16/20 |
@@ -378,7 +378,7 @@ test:layout/sidebar/mobile/renderer-shell/host-archive-cleanup/runtime/upgrade-t
    属既有认证面，登记于 STATUS 与 design 17。
 2. **D5 缺口**：PluginDialog 缺专用 `update(name,version)`（其余动作已覆盖；登记为后续动作）。
 3. **实机门禁**：多来源 sleep/wake、gateway 形态回归、右栏栈与 `provideRoot` 装载时序、
-   session v3 迁移真实存储行为、移动端真机视觉、四处 URL 真机 200/401 复验。
+   session v3 迁移真实存储行为、移动端真机视觉、五处 URL 真机 200/401 复验。
 
 ---
 
