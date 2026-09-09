@@ -5,7 +5,7 @@
 > 方法：4 个独立只读复核 agent（V1 layout+mobile / V2 sidebar+bridge / V3 forks+renderer /
 > V4 seeds+runtime+docs）逐文件对照上游 alpha.2 源码，加本机机械扫描（残留标识符、版本锚、
 > 产物新鲜度）与全量门禁实跑。
-> 结论：**0 BLOCKER / 0 MAJOR 遗留**（1 个 BLOCKER 与 3 个 MAJOR 已在复核后修复），
+> 结论：**0 BLOCKER / 0 MAJOR 遗留**（1 个 BLOCKER 与 **8 个 MAJOR**（V1 3 + V4 5，§2.2 归并 4 行）已在复核后修复），
 > 详见下表。
 
 ## 0. 结论总览
@@ -17,7 +17,8 @@
 | 三 fork 副本 + renderer | V3 | 0 | 0 | 12 | 全部修复（2 项为登记/注释） |
 | 归档清理 + 运行时锚 + 文档 | V4 | 0 | 5 | 14 | 全部修复 |
 
-机械扫描（本仓全树，排除 vendor/node_modules/dist/`.analysis`）：
+机械扫描（本仓受跟踪源，排除 vendor/node_modules/dist/`.analysis` 与 gitignored 打包缓存
+`packages/gateway/host-packages/`——后者由构建从当前 mobile 包复制、不入库）：
 `DETAILS_MIN|MAX|DEFAULT`、`openDetails|closeDetails|setDetails`、`setNarrow`、`attachPanels`、
 `deriveCollapsed`、`stampSessionLogDismiss|SESSION_LOG_`、`data-details-collapsed`、
 `CONVERSATION_SESSION_HEADER_SLOT|findHeaderSlot`、`isSessionLogExportButton`、
@@ -115,7 +116,7 @@
 
 ## 3. 复核实跑的绿门（本轮修复后）
 
-- typecheck：根 + `runtime` + 12 个包/插件面（layout/mobile/sidebar/settings-bridge/
+- typecheck：根 + `runtime` + 11 个包/插件面（layout/mobile/sidebar/settings-bridge/
   host-archive-cleanup/open-in/git/connections/client-web/connection/api-gateway）全 OK。
 - test：control-plane / gateway / desktop / renderer-shell / layout / mobile / sidebar /
   settings-bridge / host-archive-cleanup / connection / client-web / git / host-git /
@@ -266,9 +267,10 @@ ensure --check / 门禁（含真实 C8）/ i18n / typecheck / 5 个包测试全�
   剩余边界：ssh/http dsh 目标无 cookie 注入（实例侧 401）——既有认证面待办。
 - **D4（open-in 平行实现）**：裁决 = **保留 chamber 插件**（官方 client 是严格子集：单池 host catalog、
   无 per-source 矩阵、无桌面主进程 VS Code override、无 ssh 远程路径；且其根绝对 URL 在同源壳内
-  自隐藏），**仅去重契约镜像**：`shared/open-in-app-protocol.ts` 改为直接 import 官方
-  `@deepseek-ai/dsh-host-open-in-app/shared`（与官方 client 同源）。矩阵原「建 fork」建议
-  **显式推翻**并登记理由。
+  自隐藏），**契约镜像保留**：W6 建议的「改为直接 import 官方 `@deepseek-ai/dsh-host-open-in-app/shared`」
+  **不可行**——该 export 指向 `lib/types/shared.js`，源码态 vendor 只有 `src/`，且本仓 tsconfig
+  排除 `vendor/**`；现 33 行镜像 + `open-in-app-protocol.test.ts` 字节级锁步是可行等价物。
+  矩阵原「建 fork/退役平行件」建议**显式推翻**并登记理由。
 - **D5（插件管理面）**：裁决 = **保留 chamber PluginDialog**（4 来源超集，已消费官方
   `pluginInventory/list`；上游「Desktop Plugins…」窗口只管 Electron 自身 profile、registry-only、
   仅打包态），**补 `update(name, version)` 动作**；预设分组与暂存式健康检查事务列为可选后续。
@@ -284,7 +286,7 @@ ensure --check / 门禁（含真实 C8）/ i18n / typecheck / 5 个包测试全�
 - 负向验证（本机实跑）：pure fork 被改 → exit 1；污染 `dist` → C8 exit 1；无 `node_modules` →
   C8 硬失败（不再静默）；SIGINT → exit 130 且产物原样；构建新增文件 → 被清除；并发 → 第二个 run 跳过；
   产物断言 → 去掉 id 匹配即 exit 1；layout 反转+break / panel-wiring 死文本 → 各自被抓。
-- 全量：18 套 test + 16 项 typecheck + `build:renderer`（含产物断言）/`build:host-packages`/
+- 全量：19 套 test（18 + `test:runtime`）+ 16 项 typecheck + `build:renderer`（含产物断言）/`build:host-packages`/
   `build:dsh-runtime`/`build:preload` + mobile build + frozen-lockfile + `smoke` +
   `ensure --check` + `bin.js --version` 见 §10；**`test:runtime` 本轮起全绿**（ZFS fixture 修复）。
 

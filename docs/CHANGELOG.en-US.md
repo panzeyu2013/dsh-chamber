@@ -121,7 +121,7 @@ Release artifacts and per-release notes also live on the GitHub Releases page
     line parses, and a throwing logger can no longer latch the teardown. The
     fix itself still waits on browser-side close-code evidence — findings and
     candidate fixes in `docs/progress/STATUS.md`.
-  - Tests: mobile plugin **67** cases (+15 since 0.2.4; +6 this review round —
+  - Tests: mobile plugin **60** cases (67 at 0.2.4; the alpha.2 migration rewrote the markup/drawer cases —
     the arm decision, tier constants, the settings-chip predicate, the
     coarse-pointer tooltip rule and declaration, the drawer 16px floor),
     control-plane `instance-proxy` 72 cases (+1, the teardown-log contract).

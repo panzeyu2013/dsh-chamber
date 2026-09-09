@@ -100,7 +100,7 @@
     实例侧判死完全无痕；cause 为无括号 token，整行可解析，logger 抛异常不会
     锁死拆链）；修复动作仍待浏览器侧 close code 取证，取证结论与候选修复见
     `docs/progress/STATUS.md`。
-  - 测试：移动插件 **67** 用例（自 0.2.4 起 +15；本评审轮 +6——arm 决策/档位
+  - 测试：移动插件 **60** 用例（0.2.4 时为 67；alpha.2 迁移重写 markup/drawer 用例后为 60——arm 决策/档位
     常量/设置 chip 判定/粗指针 tooltip 规则与声明体/抽屉 16px 底线）、
     control-plane `instance-proxy` 72 用例（+1，拆链日志契约）。
 

@@ -375,9 +375,10 @@ fiber 永久 PENDING ⇒ chat 面整体不注册**（不是“少一个面板”
 连带更新：
 - `packages/renderer/src/chamber-covered.ts`（`CHAMBER_COVERED_IDS` / `CHAMBER_COVERED_FACTORY_IDS`）
   ——**决策（S5）：5 个新行全部保持“不覆盖”**，由 `host-graph.ts:474` 的 extra row 自动加载；
-  两表只加 `ui-dockkit`（covered factory 一行 + `chamber-entry.ts` 的 import/factory）。
+  两表加 `ui-dockkit`（二轮，covered factory 一行 + `chamber-entry.ts` 的 import/factory）与
+  `@deepseek-ai/dsh-client-file-upload`（三轮：上传客户端必须进复合体才能被构建期补丁覆盖）。
   `assertRequiredExtraRowServices`（`required-extra-rows.ts` + `chamber-entry.ts`）在
-  5s 内探测 `sidebarRight`/`resources` 缺失并 console.error 点名（**非致命**——fatal 会让
+  5s 内探测 `sidebarRight` 缺失并 console.error 点名（清单已收敛为 1 条；**非致命**——fatal 会让
   gateway 形态整壳挂掉；见决策矩阵 D2 的实际口径）；
 - `scripts/dev/verify-upstream-touchpoints.mjs`：C4 的 `COVERED_SENTINELS` 与
   **remote 装配契约 13 → 15**（实测 rc.1=12、pin(0.1.3-alpha.2)=13、0.1.5-alpha.1=14、**0.1.5-alpha.2=15**，新增 `dsh-command-feedback`）；
@@ -404,23 +405,23 @@ fiber 永久 PENDING ⇒ chat 面整体不注册**（不是“少一个面板”
 `fork` 版本标记三处（connection / client-web / api-gateway 的 `package.json`
 `"version"`）→ `0.1.5-alpha.2`。
 
-### 2.4 宿主种子与设计 24（**本次发现的实质缺陷**）
+### 2.4 宿主种子与设计 24（**本次发现的实质缺陷；⚠ 全部已修，见 CHANGELOG [Unreleased] 与 design 24 §22**）
 
-1. **`sessionPersistence.inspect` 已不存在**（[A]，alpha.2 起就失效）。
+1. **`sessionPersistence.inspect` 已不存在**（[A]，alpha.2 起就失效）。**✅ 已修（2026-09 复核）**：改吃官方 `stat(id)`（`binding.ts:392-430`）。
    `dsh-chamber-seed-archive-cleanup/src/binding.ts:356-366` 的 fail-closed 分支
    `typeof inspect !== 'function' → return true` 意味着**孤儿清扫的成员存在性探针恒为“存在”**，
    整轮 sweep 跳过。这是“保守不删”，不会误删，但设计 24 §2 边界 1 登记的那条
    “唯一经用户批准的例外”实际处于**失效**状态。替代面：`stat(id) !== undefined`
    （`SessionPersistence` 新抽象方法）或 `sessionQuery.listSessions()`。
-2. **`locate` 是私有方法**：`session-persistence-jsonl/src/index.ts:293` 是 TS `private locate`，
+2. **`locate` 是私有方法**（**仍适用**，design 24 §22 保留私有 `locate` 并以服务对象方法调用）：`session-persistence-jsonl/src/index.ts:293` 是 TS `private locate`，
    运行时仍在原型上，`assertHostSurface`（`binding.ts:196`）与删除路径（`:417`）能通过——
    属“靠 TS private 只在编译期”的既成事实，升级后需重新确认（上游没有把它提为公开 API）。
-3. **`sessionPersistence.list()` 返回快照而非 header（P0，S8 实测）**：自 `0.1.3-alpha.1`
+3. **`sessionPersistence.list()` 返回快照而非 header（P0，S8 实测）**。**✅ 已修（2026-09 复核）**：改读 `snapshot.header`（`binding.ts:343`）：自 `0.1.3-alpha.1`
    起 `list()` 的返回类型是 `SessionPersistenceSnapshot[]`（`index.ts:198`），而
    `binding.ts:295-304` 仍当 `SessionHeader[]` 用 ⇒ `assertHeaderShape(snapshot)` 必抛
    `registry-unreadable` ⇒ **真机 preview/purge 全挂**（单测夹具还是 rc.1 形态，所以测试全绿）。
    这是 4 个缺陷里最致命的一个：不修它，①②③的修复都没有意义。
-4. **v2→v3 代际残留（新风险，[B]）**：`format.ts` 的 `logPath()` 返回**当前代**
+4. **v2→v3 代际残留（新风险，[B]）**。**✅ 已修（2026-09 复核）**：purge 删除目录内全部代际 + `.tmp` + `session.lock`（`binding.ts:514-533`）：`format.ts` 的 `logPath()` 返回**当前代**
    （`session.v3.jsonl`），scanner 也只认当前代；而 `deleteSessionContent`
    （`binding.ts:452-469`）只 `rm` 这一个 artifact，然后 `rmdir`（非空则保留）。
    迁移后目录里还有 `session.v2.jsonl`（上游**故意字节保留**旧代际）→
@@ -445,7 +446,7 @@ fiber 永久 PENDING ⇒ chat 面整体不注册**（不是“少一个面板”
   （`@deepseek-ai/node-addon-system` + 4 个平台包）取代 `fs-ext@2.1.1`，看似可删；
   但实测（pnpm 11.21.0 + node 24.20.0，真 registry）：去掉 `ALLOW_BUILDS` 里的 `fs-ext`
   后安装 `@deepseek-ai/dsh@0.1.3-alpha.2` **exit 1 / ERR_PNPM_IGNORED_BUILDS fs-ext@2.1.1**，
-  而 0.1.3-alpha.2 既是当前 bundle 锚点、又是 `dsh-runtime` 的回滚目标
+  而 0.1.3-alpha.2 是 `dsh-runtime` 的回滚目标（**当前 bundle 锚点已是 0.1.5-alpha.2**）
   （`dsh-runtime-updater.ts:226-283`）⇒ **删除会让“回滚到 0.1.3”硬失败**。
   决策：保留条目 + 把注释改为“回滚目标依赖”；若要严格化则改“版本条件化白名单”。
   另两条复核：`protobufjs`/`@google/genai` 应转 deny（实测仍装成功）；
@@ -462,7 +463,7 @@ host-archive-cleanup / sidebar / layout / settings-bridge / connections / client
 connection / open-in / mobile / cli / runtime / upgrade-tools / release-workflow）、
 `build:renderer`、`build:host-packages`、`desktop build:preload`、
 `verify:i18n`（CHANGELOG 双语对 + 重录）、`verify:workflows`、
-`verify-upstream-touchpoints`（C1/C3/C4/C5/C6/C7 硬门，C2/C8 advisory）、
+`verify-upstream-touchpoints`（C1/C3–C9；C8 默认重建-比对**硬门**，仅 `--no-artifact-rebuild` 降级 advisory；C2 仍 advisory）、
 `pnpm install --frozen-lockfile`、`ensure-harness-vendor --check`、
 `node packages/desktop/vendor/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js --version` 冒烟。
 

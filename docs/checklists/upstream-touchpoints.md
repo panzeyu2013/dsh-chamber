@@ -2,8 +2,9 @@
 
 > 面向维护者：登记 dsh-chamber 对上游 dsh（deepseek-harness）的**全部接触面**——fork 副本逐文件
 > 纯度、深引 vendor 内部、契约镜像、covered/assembly 行、生成物——并给出每次升级 tag 后的保鲜闭环。
-> 机器侧门 = `scripts/dev/verify-upstream-touchpoints.mjs`（C1–C9；CI 在 Bootstrap 后跑 C1/C3/C5/C6，
-> 其余本地跑）；本文件与脚本内的登记表**同源**，改动时两侧同步。
+> 机器侧门 = `scripts/dev/verify-upstream-touchpoints.mjs`（C1–C9；CI 两条腿在 Bootstrap 后 pre-install 跑
+> `--no-artifact-rebuild`（C1/C3–C9，C8 advisory）、post-install 跑完整门（C8 重建-比对硬失败）；C2 本地 advisory）；
+> 本文件与脚本内的登记表**同源**，改动时两侧同步。
 > 基准：本表以 **dsh-v0.1.5-alpha.2（b2e3b2a01258，harness.commit）** 与 fork 版本标记
 > 0.1.5-alpha.2 为锚（C5 校验）；每次重锚后本表随维护循环刷新（§0 基线速查同步）。
 
@@ -162,8 +163,8 @@ host 插件入口/半、上游 `tests/`、`tsdown.config.ts`、上游 README（a
 
 | 再生物 | 源 | 提交纪律 |
 |---|---|---|
-| renderer typert 工件（gen-typert-remotes 输出） | vendor typert/remote 源码 | 升级后重生成 diff 随批提交（Batch 0 §2.5） |
-| host dist ×3（`dist/index.js`）+ mobile `dist/index.js`/`lib/index.js`/`lib/client.js`(+map) | chamber host 包 src / mobile src | `build:host-packages` / mobile `build` 后提交。C8 **重建-比对硬失败**盯陈旧（mobile 产物由 gateway 逐字节 seed，陈旧即线上锚点失效）；两个 build 脚本都带 `absWorkingDir`，产物与调用者 CWD 无关 |
+| renderer typert 工件（gen-typert-remotes 输出） | vendor typert/remote 源码 | **构建期生成、`.gitignore` 忽略，不提交**（`renderer/src/generated/`；升级后由 `build:renderer` 重生成） |
+| host dist ×3（`dist/index.js`）+ `dsh-runtime/dist/index.js` + mobile `dist/index.js`/`lib/index.js`/`lib/client.js`(+map) | chamber host 包 src / dsh-runtime src / mobile src | `build:host-packages` / `build:dsh-runtime` / mobile `build` 后提交（C8 共 5 组）。C8 **重建-比对硬失败**盯陈旧（mobile 产物由 gateway 逐字节 seed，陈旧即线上锚点失效）；两个 build 脚本都带 `absWorkingDir`，产物与调用者 CWD 无关 |
 | boot manifest / perf-sizes | build:renderer | 构建产物 diff 随批审查 |
 | schemastery 桩 loader（connection/web 测试） | vendor source-only 现实 | 新增 vendor 运行时导入面时同步补桩 |
 
@@ -173,7 +174,7 @@ host 插件入口/半、上游 `tests/`、`tsdown.config.ts`、上游 README（a
 - C1 pure 字节恒等 / C3 完整性（fork 每文件分类、上游每文件裁决，漏 = 硬失败）/
   C5 过期锚扫描 / C6 EXCLUDED 存在性 —— **CI 在 Bootstrap 后 fail-loud**；
 - C4 roster（covered/factory 哨兵 + remote 契约 15 的集合与顺序）—— 本地/CI 均可；
-- C7 种子域锁步、C8 **提交态生成物 == src**（重建-比对，硬失败；写后原样还原，`--no-artifact-rebuild` 退回 mtime advisory）、C9 **vendor 补丁锚唯一命中**（硬失败）—— 本地跑。
+- C7 种子域锁步、C8 **提交态生成物 == src**（重建-比对，硬失败；写后原样还原，`--no-artifact-rebuild` 退回 mtime advisory）、C9 **vendor 补丁锚唯一命中**（硬失败）—— CI 与本地均跑（CI 分 pre/post-install 两段）。
 - C2 `--tags <old> <new>`：tag 间三 fork 面重放报告（advisory），升级前先跑。
 - `scripts/dev/preflight-vendor-pin.mjs <tag>`（只读，§7 第 0 步）：C2 的**超集**——
   额外报深引 vendor seam 文件、上游包集合增删、新增 client 行、运行时 npm 状态；

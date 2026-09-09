@@ -157,7 +157,8 @@
 > [`dsh-upgrade-migration-audit.md`](dsh-upgrade-migration-audit.md)，决策/动作见
 > [`dsh-upgrade-decision-matrix.md`](dsh-upgrade-decision-matrix.md)。
 0. **预检（先看清单再动 pin）**：`node scripts/dev/preflight-vendor-pin.mjs
-   dsh-v0.1.5-alpha.1 --offline`（实测输出见 §9.3）。
+   dsh-v0.1.5-alpha.1 --offline`（§9.3 的数字是 **0.1.3-alpha.2 → alpha.1** 那次运行；
+   今天从当前 pin 再跑会报 `b2e3b2a01258 → alpha.1`，数字自然不同）。
 1. **layout fork 重放（主体，规模门已触发）**：上游 0.1.5 把三栏模型改为
    sidebar/center/**rightbar** —— `columns.ts` 去 `DETAILS_*`（新增
    `RIGHTBAR_MIN`/`RIGHTBAR_MAX_RATIO`/`RIGHTBAR_DEFAULT_RATIO`，`CENTER_MIN` 640→400）、
@@ -177,9 +178,9 @@
    `sidebarRightTabs` + `remote.workspaceFiles`。**裁决结果**：五行全部**不 cover、
    继续走 host-graph 额外行**（首屏时序由 `assertRequiredExtraRowServices` 探针兜底）；
    `ui-sidebar-textpreview` 在 alpha.2 改名为 `ui-sidebar-documentpreview`。
-3. **平台词 `dsh-client-ui-dockkit`**：库（无 `dsh.client`），被上述三行依赖 →
-   必须采纳到 `client-web` 的 `platform.ts`/`seed.ts` + `package.json` 依赖
-   （已试通：typecheck 绿）。
+3. ~~**平台词 `dsh-client-ui-dockkit` 采纳到 `client-web` 的 platform.ts/seed.ts + 依赖**~~
+   **裁决改为 covered factory**（不 seed、不加依赖；seed 会把 docking kit 拉进主图 eval，同
+   `ui-primitives` 的 C3 先例）——见 §9.3 与 diff 报告 §2.2；`platform.ts`/`seed.ts` 只留偏差注释。
 4. **connection / api-gateway 重放**：connection 纯文件照抄（READMEs、
    `src/index.ts` 宿主半 `webServer` 可选注入重构、`src/client/fixture.ts` +291）、
    `package.json` 版本 + 保留本仓 scripts；api-gateway 仅版本（client 半零改动）。
@@ -204,8 +205,9 @@
 - **预检实测**（`preflight-vendor-pin.mjs dsh-v0.1.5-alpha.1 --offline`，2026-09）：
   上游变更 2552 文件 → fork 面 pure 5 / 需人工重放 6（三个 `package.json` 版本行 +
   `client/web/src/platform.ts`·`seed.ts`·`tsconfig.json`）/ dropped 6；**seam 风险
-  16 个文件，全部落在 `packages/client/ui-layout/*`**（`AppFrame.tsx`/`columns.ts`/
-  `index.ts`/`service.ts`/`stores.ts`/`.module.css` + README 三件 + `package.json`）
+  16 个文件 = `packages/client/ui-layout/*` 15 个**（`AppFrame.tsx`/`columns.ts`/
+  `index.ts`/`service.ts`/`stores.ts`/`.module.css` + README 三件 + `package.json`）**+ 1 个
+  `packages/client/ui-renderer/package.json`**（版本行）
   —— 与 §9.2 第 1 项互为印证：layout fork 是唯一实质阻塞点。包集合 +15 / −4
   （landlock 系列），新增 client 行 5（`dsh-api-workspace-files`、`client-resources`、
   `ui-sidebar-{files,right,textpreview}` —— 比 §9.2 第 2 项多一行，roster 裁决需一并
