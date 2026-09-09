@@ -23,6 +23,7 @@
   - **client-web**：`src/base.css` 恢复逐字节上游，五份 ui-theme token 表改由 renderer 入口 CSS（`packages/renderer/src/styles.css`）引入——head CSS 顺序不变，token 仍在插件 CSS 之前；seed/platform/index 的 rebase 散文收敛为「不变量 + 指路」，5 个不可替代 seam（模块表宿主 / extraRows / configureContext / boot 容忍 / 异步 dispose）不动。
   - **api-gateway**：`apply(ctx)` 直接读 `ctx.chamberBasePath`（去掉 `ClientRemoteOptions` 参数），流载波补丁不变。
   - 上游触点登记同步（pure：connection 15→16、client-web 4→5、api-gateway 6；C1 逐字节门覆盖新纯文件），design 05/14/20 措辞随之修订。
+- **open-in 统一 · Phase 0 纯门控（Batch 3）** —— 新增 per-source 视图模型 `packages/dsh-chamber-client-ui-open-in/src/shared/open-in-view-model.ts`：把「官方宿主目录（official）」与「桌面主进程提供方（main）」两个池按来源矩阵（local = 两池全量；`dsh-*`/`gateway-*` + ssh = 仅 main 的 remote-capable；http/畸形来源 = 空）折成单一决策面，每个被拒候选都带显式抑制原因（`unknown-source`/`transport-not-ssh`/`source-not-local`/`app-unavailable`/`app-not-remote-capable`/`duplicate-app-id`），并给出 channel 优先级的去重与默认选中项；既有 `usableOpenInApps`/`usableAppsForSource` 改为该视图模型的薄适配层（行为不变，单一决策面）。单测钉矩阵/去重/抑制原因（8 例）。Phase 2（吸收官方 client + 桌面主进程瘦身至 vscode-only + 实机验证）待执行。
 
 ## [0.2.4] - 2026-09-09
 

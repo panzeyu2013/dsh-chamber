@@ -7,7 +7,8 @@
  * DOM: which apps a source may use, whether a header's session maps to a
  * concrete workspace path, and the view-id → raw-registry-id strip.
  */
-import type { OpenInApp } from '../shared/coordinator.ts'
+import type { OpenInApp, OpenInSource } from '../shared/coordinator.ts'
+import { buildOpenInViewModel } from '../shared/open-in-view-model.ts'
 
 /**
  * Gate 1 — which apps THIS source may actually use, fail-closed:
@@ -17,25 +18,44 @@ import type { OpenInApp } from '../shared/coordinator.ts'
  * - either target over HTTP and unknown/malformed sources get NOTHING because
  *   vscode-remote is a transport capability, not a target-kind capability.
  * The bridge's `available` flag is honored as a hard filter.
+ *
+ * Since Batch 3 Phase 0 this is a thin adapter over the shared per-source
+ * view-model (`shared/open-in-view-model.ts`) — the single decision surface
+ * the unified open-in entry consumes; the returned apps are the input objects
+ * in view-model order.
  */
 export function usableAppsForSource(
   sourceId: string,
   apps: ReadonlyArray<OpenInApp>,
   transport: 'local' | 'ssh' | 'http',
 ): OpenInApp[] {
-  const availableApps = apps.filter(app => app.available)
   // Non-string source ids (defensive: the slot face is loose) are unknown →
   // fail-closed like gateway/unknown strings. Production never passes one
   // (the client entry bails on an absent chamberInstanceId), so this is pure
   // input hardening — no behavior change for reachable inputs.
   if (typeof sourceId !== 'string') return []
-  if (sourceId === 'local') return transport === 'local' ? availableApps : []
-  if (transport !== 'ssh') return []
-  const prefix = ['dsh-', 'gateway-', 'ssh-'].find(candidate => sourceId.startsWith(candidate))
-  if (prefix !== undefined && /^(?!local$)[A-Za-z0-9_-]{1,64}$/.test(sourceId.slice(prefix.length))) {
-    return availableApps.filter(app => app.remoteCapable)
+  const source = sourceFromLooseFacts(sourceId, transport)
+  const model = buildOpenInViewModel({ source, official: null, main: apps })
+  const byId = new Map(apps.map(app => [app.id, app]))
+  return model.entries
+    .map(entry => byId.get(entry.id))
+    .filter((app): app is OpenInApp => app !== undefined)
+}
+
+/** Adapt the loose (sourceId, transport) gate inputs to the strict view-model
+ *  source shape. Malformed ids stay malformed — the view-model classifies them
+ *  as `unsupported`, which is exactly this gate's fail-closed outcome. */
+function sourceFromLooseFacts(sourceId: string, transport: 'local' | 'ssh' | 'http'): OpenInSource {
+  if (sourceId === 'local') {
+    return { sourceId: 'local', instanceId: 'local', local: true, transport }
   }
-  return []
+  const prefix = ['dsh-', 'gateway-', 'ssh-'].find(candidate => sourceId.startsWith(candidate))
+  return {
+    sourceId,
+    instanceId: prefix === undefined ? sourceId : sourceId.slice(prefix.length),
+    local: false,
+    transport,
+  }
 }
 
 /**

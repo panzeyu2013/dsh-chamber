@@ -1,4 +1,5 @@
 /** Runtime-validated faces for the desktop open-in capability projection. */
+import { buildOpenInViewModel } from './open-in-view-model.ts'
 
 /** One launchable app as reported by the main-process bridge. */
 export interface OpenInApp {
@@ -164,8 +165,18 @@ export function buildOpenInLaunchRequest(
   return { appId, instanceId: source.instanceId, path, sourceFingerprint }
 }
 
-/** Source-aware capability filter kept pure for deterministic client tests. */
+/**
+ * Source-aware capability filter kept pure for deterministic client tests.
+ * Since Batch 3 Phase 0 this delegates to the per-source view-model
+ * (`open-in-view-model.ts`): the official catalog pool is absent here (the
+ * current UI has no host-catalog channel yet), so the main pool decides — the
+ * returned apps are the input objects in view-model order.
+ */
 export function usableOpenInApps(apps: readonly OpenInApp[] | null, source: OpenInSource): OpenInApp[] {
-  if (apps === null) return []
-  return apps.filter(app => app.available && (source.local || (source.transport === 'ssh' && app.remoteCapable)))
+  const pool = apps ?? []
+  const model = buildOpenInViewModel({ source, official: null, main: pool })
+  const byId = new Map(pool.map(app => [app.id, app]))
+  return model.entries
+    .map(entry => byId.get(entry.id))
+    .filter((app): app is OpenInApp => app !== undefined)
 }

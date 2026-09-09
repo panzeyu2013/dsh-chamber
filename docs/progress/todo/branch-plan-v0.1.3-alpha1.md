@@ -14,7 +14,9 @@
 > 离线门）、basePath 收敛 `apply(ctx)` 读 `ctx.chamberBasePath`；client-web `base.css` 恢复
 > 上游字节（token 表移 renderer 入口 CSS）；api-gateway `apply(ctx)` 直读 ctx；触点登记同步
 > （pure 16/5/6）。实机回归（sleep/wake、隐藏恢复、版本歪斜、gateway 形态）待实机执行。
-> Batch 3（T3）待推进（每批完成即回写本文件与 STATUS）。
+> **Batch 3（T3）Phase 0 ✅ 已完成（2026-09）**——per-source 视图模型（official/main 双池 × 来源
+> 矩阵 + 显式抑制原因 + channel 去重 + 默认选中；既有门函数改为薄适配层）+ 8 例单测。
+> Phase 2（吸收官方 client + desktop 主进程瘦身 + 实机验证）待推进（每批完成即回写本文件与 STATUS）。
 > 关联：任务登记在 `docs/progress/STATUS.md`「分支任务登记」块；升级操作手册见
 > `docs/checklists/dsh-upgrade-checklist.md`；上游接触面保鲜见 T4 拟建
 > `docs/checklists/upstream-touchpoints.md`。
