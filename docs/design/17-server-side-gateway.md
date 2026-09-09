@@ -1195,11 +1195,40 @@ settings-bridge/git/open-in）依旧不注入。机制上无需新能力：控�
 
 ### 18.4 社区实现借鉴
 
-调研基线（2026-09，GitHub API 源码级；2026-12 本地克隆源码复核）：
+调研基线（2026-09，GitHub API 源码级；2026-12 本地克隆源码复核；2026-12
+移动修复轮再次现场抓取源码）：
 `dsh-client-ui-mobile-adapt`（Hotsteel2901）、`dsh-mobile-shell`（Yui-Little，
 派生自 mexiaosqwq/dsh-web-mobile）、`dsh-ui-mobile`（jasondu，npm 已发布）、
-`dsh-web-ui-mobile`（whoamihappyhacking）、`dsh-mobile-pwa`（zylzyqzz）。
-均 MIT、均已停更（2026-08 末），宜作**架构参考而非上游依赖**。
+`dsh-web-ui-mobile`（whoamihappyhacking）、`dsh-mobile-pwa`（zylzyqzz）；
+2026-12 追加 `dsh-meow-smooth`（Phant0Meow，41★，本清单中唯一仍在活跃开发，
+键盘/IME 机制最完整）。前五者均 MIT、均已停更（2026-08 末），宜作**架构参考
+而非上游依赖**。
+
+**社区形态复核（2026-12，源码级；补充第三种设置页形态）**：
+- **设置页**：主流形态与 chamber 同构——`mobile-adapt/lib/client.js` 的
+  `.VOzbGW_panel{position:fixed;inset:0;flex-direction:column}` +
+  `.VOzbGW_nav{flex-direction:row}` + `.VOzbGW_navList`/`.VOzbGW_navCell`
+  横向 chips + `.VOzbGW_options{flex:1;overflow-y:auto}`，与 §18.4.3 的 chamber
+  版逐条对应（chamber 版另有 44px 触控底线、chips 横向滚动与安全区）。
+  **社区还存在第三种形态**：`dsh-mobile-shell/src/client/mobile.css.ts` 用
+  **左侧 72px 图标导航栏 + 右侧内容列**（navCell 竖排 icon+label、rail 自身
+  `overflow-y:auto`、Close 变返回箭头、无遮罩全页）。对 4 个官方分区在 375px
+  宽度上，72px 侧栏比顶部 chips 更费宽度，故 chamber 取 chips 形态——这是
+  **取舍**，不是「社区没有该做法」。（注：§18.4.3 上条 P1 取舍里的「只全屏 +
+  整列滚动」描述的是 **chamber 自己的 P1 实现**，与社区形态无关。）
+- **tooltip 粘滞**：`dsh-ui-mobile/src/client/mobile.module.css` 与 chamber
+  首版同款全局隐藏（`[role='tooltip']{display:none!important}`，并带单测），
+  注释同样以「标签仍可由 aria-label 取得」为据——社区与 chamber 共享该判断，
+  也共享「信息型气泡被一并隐藏」的盲区；chamber 2026-12 已精化为
+  `(pointer: coarse) and (hover: none)` 下的
+  `button[aria-label] + [role="tooltip"][data-side]`。
+- **键盘**：`dsh-mobile-shell` 与 chamber 同为
+  `interactive-widget=resizes-content` + `innerHeight - visualViewport.height`
+  探测；`dsh-meow-smooth` 更进一步（动态 vv 基线替代 `screen.height`——其注释
+  记录了折叠屏/分屏恒误报事故、**可编辑焦点信号**、`offsetTop` 补偿 fixed
+  元素）。chamber 2026-12 吸收了「收缩不是充分条件」这一结论，但**未照搬**
+  其"缩放一票否决"：iOS 聚焦缩放（抽屉 13px 搜索框）会让否决永久生效，故
+  chamber 的缩放策略是「只服务 composer」（见 §18.4.4）。
 
 > **实现纪律（2026-12 用户拍板）：零代码复制，完整重写。** 本节全部内容仅为
 > 架构与机制参照——`dsh-chamber-client-ui-mobile` **不 fork、不搬运任何社区
@@ -1257,9 +1286,13 @@ append-only 无删除方法），走 dsh 实例自身 host 插件（`ctx.inject(
 （`data-mobile-nav="…"` 自有标记 + `[class$="_…"]`）。**chamber 走第三条路且
 更稳**：已 fork `dsh-client-web` 与 `ui-layout`（AGENTS.md 允许改源码的 chamber
 包），可在 fork 内直接加 `data-*` 钩子，不猜选择器；版本随 dsh 基线
-（v0.1.2-alpha.3）对齐 + 回归测试。断点锚定官方 `SIDEBAR_AUTO_COLLAPSE`
-（<1024px）为主断点（mobile-shell 同款），768px 为手机档（mobile-adapt 同款），
-420/359px 微调可选。
+（v0.1.2-rc.1，harness pin a66e470）对齐 + 回归测试。断点锚定官方
+`SIDEBAR_AUTO_COLLAPSE`（<1024px）为主断点（mobile-shell 同款），768px 为
+手机档（mobile-adapt 同款），420/359px 微调可选。**档位表补第三条（2026-12
+复核轮）**：宽度无关的 **chrome 档** `(pointer: coarse) and (hover: none)`，
+目前只承载「粘滞 tooltip 气泡抑制」这一条装饰性规则——它是粗指针产物而非
+窄视口产物（iPad 横屏 1024px+ 同样点按），且必须与两个宽度档一起被
+「所有规则都在媒体查询内」的回归测试覆盖。
 
 **18.4.3 布局覆盖要点（实证验证过的坑）**
 
@@ -1278,8 +1311,8 @@ append-only 无删除方法），走 dsh 实例自身 host 插件（`ctx.inject(
   直接打标；
 - **输入工具行单行**：`flex-wrap: nowrap` + 触发器限宽 112px + 字号 12px；
 - **设置整页适配（2026 移动适配轮，手机档 ≤768px；平板 >768 保留桌面弹窗
-  几何；实机门禁 §18.6）**：取代上条 P1 取舍（只全屏 + 整列滚动、nav 不
-  横向滚动）。官方壳是 800px `flex-row`（188px 竖排 nav rail + 内容列），
+  几何；实机门禁 §18.6）**：取代上条 **chamber P1** 取舍（只全屏 + 整列滚动、
+  nav 不横向滚动）。官方壳是 800px `flex-row`（188px 竖排 nav rail + 内容列），
   手机档把 panel 改 `flex-direction: column` 全屏堆叠：nav rail 变顶部横条
   （标题 + **横向滚动分区 chips**，44px 触控，顶部安全区）；内容列 header
   （actions+Close）以 `position: sticky` 固定不再随内容滚走（P1 的"整个
@@ -1327,8 +1360,52 @@ Promise 链（返回 `originalSink()` 否则输入框永久卡死，社区 v0.1.
 合并替代）。**chamber 的 dsh-client-web fork 是这些行为补丁的合法落点**
 （现有 fork 补丁面已含 boot/context 类改动）。P1.5 已按五层落地 IME 恢复（程序化
 focus 丢弃循环 / editability 翻转 / pointerup 手势 refocus / visualViewport 键盘判定
-/ 键盘钉住）+ 30s busy 自愈 + 键盘遮挡兜底（实现见
+/ 键盘补偿）+ 30s busy 自愈 + 键盘遮挡兜底（实现见
 `packages/dsh-chamber-client-ui-mobile/src/client/composer.ts`）。
+
+**layer-5 修订（2026-12 移动修复轮 + 交叉复核轮）**：原「键盘钉住」
+（`installKeyboardPinning`，对 seat 做 `scrollIntoView`）在 iOS 上**恒为空转**
+——官方 composer seat 是 `position: sticky` 且是会话滚动器
+`[data-conversation-scroll]` 的**流内子元素**，滚动它只会被 sticky 重新钉回
+layout 底部，`scrollIntoView` 也看不见 visual viewport。现改为**键盘补偿**
+（`installKeyboardCompensation`）：键盘打开期间把 seat 的 sticky `bottom` 抬到
+键盘顶、给滚动器加等量 `padding-bottom`（frame 级 `data-mobile-kbd` +
+`--dsh-mobile-kbd-offset`），并对贴底会话做等量 scrollTop 补偿；外层跟随仍归
+官方（ui-chat 的 seat ResizeObserver）。`covered = layout − offsetTop − vv.height`
+在任意缩放态都成立（vv 高度已同时含缩放与键盘收缩）。
+
+守卫与取舍（复核轮定稿）：
+- **可编辑焦点**（focusin + focusout 打点 + composer 选区兜底）：收缩不是充分
+  条件；focusout 打点让「提交期 editability 翻转」和「blur→收起动画」都在正确
+  的时刻起算，选区兜底覆盖官方 `contenteditable` 在 `adjudicating|submitting`
+  期间翻 false 的窗口。
+- **缩放策略 = 只服务 composer**：一刀切 `scale > 1.01` 否决是错的——iOS 会
+  对抽屉 13px 搜索框（`ui-workspace:1187`）聚焦缩放且页面**保持缩放**，否决会
+  让 composer 在键盘开着时永久留在后面（复核 P1）。现在缩放 + 焦点在
+  `[data-composer-seat]` 内照常补偿（几何上就是把 seat 拉到可视视口底边），
+  非 composer 字段在缩放态仍否决（缩放页面的平移不得驱动偏移）；同时从源头
+  消除聚焦缩放——抽屉内输入框补 16px 底线。
+- **量化 16px**（原 48px）：死区从 8–55px 收窄到 8–23px；vv 事件按帧合并，
+  步进增多的写入可忽略。「移动中量化 + 静止吸附精确值」留作实机观察后的备选。
+- **arm 期间归零 seat 底部安全区 padding**：键盘弹起时该 inset 位于键盘之后，
+  不归零会多出 0–34px 死区；抬升量来自键盘几何，归零不会造成遮挡。
+- **arm 以 frame 元素为单位幂等**：renderer 重挂替换 AppFrame 时按元素重打标
+  （并清理旧 frame 的插件属性），而非依赖数值 `applied` 短路（否则新 frame
+  无属性、composer 停在键盘后）。
+
+Enter 换行路径另补 `[data-input-scroll]` 内光标揭示——官方 `revealSelection`
+的依赖数组是布尔 `[draft !== ""]`，非空 draft 插入换行不触发它。
+
+**tooltip 粘滞（2026-12 移动修复轮 + 交叉复核轮）**：官方 ui-primitives
+`Tooltip` 只有 mouseenter/mouseleave/focus/blur，粗指针上 tap 合成 mouseenter
+而无配对 mouseleave ⇒ 延迟气泡常驻。规则以 `(pointer: coarse) and (hover: none)`
+门控（宽屏触控设备同样点按；接鼠标时 hover 翻转让位）且只隐藏
+`button[aria-label] + [role="tooltip"][data-side]`（气泡是 trigger 的紧邻下一
+兄弟并带组件自身的 `data-side`；官方 31 处用法中 27 处为带 aria-label 的按钮，
+其中 3 处措辞略有差异、语义相同）；四处信息型气泡（聊天统计行、代理预设卡片
+描述、轨迹时间轴 span、≤620px 轨迹 kind 标签）保留，第五处 `role="tooltip"`
+（轨迹 turn-rail 预览）无 `data-side` 被结构性排除。原生 `title` 长按气泡**不
+抑制**（刻意手势，且部分 title 是截断行的唯一全文入口，登记于 STATUS）。
 移动导航机制再补两条（2026 移动适配轮；实机门禁见 §18.6）：
 - **抽屉点击自愈**：iOS Safari 抑制抽屉内点击的合成 click（行 hover
   展开使命中元素在 touchstart/touchend 间位移；社区实测为合成 click 可
@@ -1436,13 +1513,29 @@ PWA / Web Push 社区实现机制（dsh-ui-mobile，jasondu，npm 0.1.8，MIT，
 - 实机（移动视口清单，CDP 设备模拟 + 真机抽检）：
   - 触控目标 ≥44px 比例、无横向溢出、抽屉开合、弹层不出屏、设置全屏可滚动、
     输入行单行、安全区/100dvh、键盘不遮挡输入区；
+  - 键盘补偿（2026-12 新增）：iOS 键盘弹出后 composer 停在键盘顶上方且**不
+    常驻气泡**；捏合缩放（双指放大）**不得**抬升 composer（缩放守卫）；键盘
+    服务于设置/提问字段时不得抬升 composer（焦点守卫）；**iOS 聚焦缩放后的
+    打字**必须仍被补偿（复核 P1 的正例：抽屉搜索框 13px 触发聚焦缩放后，点回
+    composer 不得停在键盘后）；**缩放页面上的平移不得引起 seat/滚动范围抖动**
+    （缩放态只服务 composer 的取舍需实机确认）；提交（`submitting`）窗口内
+    seat 不得闪落；会话切换/reconnect settle 重挂 seat 后 composer 仍在键盘
+    上方（幂等 arm）；**arm 期间 seat 与键盘顶之间的死区应 ≤23px**（16px 量化
+    的正例，刘海机上还须确认安全区归零无双重间距）；Android WebView 无
+    `interactive-widget` 时同样生效；
+  - tooltip（2026-12 新增）：点按发送/停止/指令/ContextMeter/队列/侧边栏等
+    带 aria-label 的按钮后**无**残留气泡；聊天统计行/代理预设卡片描述/轨迹
+    时间轴与 kind 标签的悬停气泡仍可读（信息型气泡保留）；轨迹 turn-rail
+    预览（901–1023px 触控平板）不受影响；接鼠标的触控设备 hover 气泡恢复；
+    桌面宽度零变化；**原生 `title` 长按气泡为已登记取舍**（刻意手势，不抑制）；
   - 会话头：汉堡不重叠头部内容、crumbs 长链/chip 换行不裁切、「Session 日志」
     手机档图标化且可点；抽屉里单击会话行即切换（iOS Safari 自愈生效）、
     切换不弹键盘（composer 意图焦点不受影响）；
   - 设置（手机档）：竖排 nav 变顶部横向 chips 且分类可达/可滚动、Close 固定
     不随内容滚走、各分区（General/Models/Agent presets/Plugins+inventory）
     无横向溢出且模型行/卡片网格降级生效、onboarding 等弹层不出屏可滚动、
-    输入框聚焦不触发页面缩放、键盘弹出不遮输入、深浅色与横竖屏走查；
+    输入框聚焦不触发页面缩放、键盘弹出不遮输入、深浅色与横竖屏走查、**分区
+    chip 切换后 options 从顶部开始（且点 nav 标题/选项区不复位）**；
   - PWA：manifest 生效、SW 注册、安装引导（分期验收）。
 
 ### 18.7 分期

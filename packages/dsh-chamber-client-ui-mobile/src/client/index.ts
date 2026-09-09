@@ -44,9 +44,10 @@ import {
 import { createLayoutFactSource } from './layout-facts.ts'
 import {
   installComposerSelfHeal, installEditabilityRecovery, installEnterToNewline,
-  installImeLadder, installKeyboardPinning, TOUCH_TIER_QUERY,
+  installImeLadder, installKeyboardCompensation, PHONE_TIER_QUERY, TOUCH_TIER_QUERY,
 } from './composer.ts'
 import { installDrawerTapHeal } from './drawer-taps.ts'
+import { installSettingsSheetScrollReset } from './settings-sheet.ts'
 import { MobileNavToggle, type MobileNavToggleInjected } from './MobileNavToggle.tsx'
 
 export type { MobileNavToggleInjected } from './MobileNavToggle.tsx'
@@ -262,6 +263,10 @@ export function apply(ctx: ClientContext): void {
   // the tier matches/unmatches. ----
   ctx.effect(() => {
     const touchTier = window.matchMedia(TOUCH_TIER_QUERY)
+    // The settings sheet is PHONE-tier CSS; its scroll-reset behavior gates on
+    // the same tier (a 769-1023px touch tablet keeps the official modal
+    // geometry and the official cross-section scroll behavior).
+    const phoneTier = window.matchMedia(PHONE_TIER_QUERY)
     let disposers: Array<() => void> = []
     const sync = (): void => {
       if (touchTier.matches) {
@@ -270,12 +275,15 @@ export function apply(ctx: ClientContext): void {
           disposers = [
             installEnterToNewline(),
             installEditabilityRecovery(),
-            installKeyboardPinning(),
+            installKeyboardCompensation(),
             installComposerSelfHeal(),
             // iOS suppresses the compatibility click for drawer taps (the
             // hover-reveal layout shift) — heal the lost activation so one
             // tap switches sessions (drawer-taps.ts).
             installDrawerTapHeal(() => touchTier.matches),
+            // Phone-tier settings sheet: switching section chips must reset
+            // the shared options scroller (settings-sheet.ts).
+            installSettingsSheetScrollReset(() => phoneTier.matches),
             ladder.attach(),
           ]
         }

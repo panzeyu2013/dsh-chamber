@@ -1948,6 +1948,74 @@ test('real Node streams: WS upgrade handshake is not aborted by req close', asyn
   }
 })
 
+test('WS stream teardown logs the ending leg and lifetime (stability forensics)', async () => {
+  // Mobile stability round (2026-12): the instance-side mux heartbeat can end
+  // a socket with no gateway trace, so a churn investigation could not tell
+  // an instance termination from a client reconnect. One bounded line per
+  // stream now names the leg that ended the splice and its lifetime; the
+  // cause strings are the greppable contract.
+  const lines: string[] = []
+  const logger = {
+    log: (...args: unknown[]) => { lines.push(args.map(String).join(' ')) },
+    warn: (...args: unknown[]) => { lines.push(args.map(String).join(' ')) },
+    error: (...args: unknown[]) => { lines.push(args.map(String).join(' ')) },
+  }
+  const upstream = createServer(() => {})
+  upstream.on('upgrade', (_req, socket) => {
+    socket.write(
+      'HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n',
+    )
+    // End the UPSTREAM leg after the handshake: this is the shape an
+    // instance-side mux heartbeat termination takes at the proxy (a plain
+    // socket close, no error, no gateway trace before this instrument).
+    setTimeout(() => { socket.end() }, 120)
+  })
+  let upstreamPort = 0
+  const proxy = createInstanceProxy({
+    logger,
+    getLocalState: () => 'ready',
+    getLocalDshPort: () => upstreamPort,
+  })
+  let server: ReturnType<typeof createServer> | null = null
+  await new Promise<void>((resolve) => {
+    upstream.listen(0, '127.0.0.1', () => {
+      upstreamPort = (upstream.address() as AddressInfo).port
+      server = createServer((req, res) => { void proxy.handleHttp(req as any, res as any) })
+      server.on('upgrade', (req, socket, head) => { void proxy.handleUpgrade(req as any, socket as any, head) })
+      server.listen(0, '127.0.0.1', () => resolve())
+    })
+  })
+  try {
+    await new Promise<void>((resolve) => {
+      const req = httpRequest({
+        host: '127.0.0.1',
+        port: (server!.address() as AddressInfo).port,
+        path: '/api/i/local/api/remote.mux',
+        headers: {
+          connection: 'upgrade',
+          upgrade: 'websocket',
+          'sec-websocket-key': 'dGhlIHNhbXBsZSBub25jZQ==',
+          'sec-websocket-version': '13',
+        },
+      })
+      req.on('upgrade', () => resolve())
+      req.on('error', () => resolve())
+      req.end()
+    })
+    // Poll until the MATCHING line arrives (not merely any line): an unrelated
+    // log line must not end the wait early.
+    const closeLine = /WebSocket stream \S+ closed \(upstream close, \d+ms\)/
+    for (let i = 0; i < 40 && !lines.some(line => closeLine.test(line)); i += 1) await sleep(25)
+    assert.ok(
+      lines.some(line => closeLine.test(line)),
+      `expected an upstream-close teardown line, got: ${lines.join(' | ')}`,
+    )
+  } finally {
+    server!.close()
+    upstream.close()
+  }
+})
+
 // ---------------------------------------------------------------------------
 // SPKI certificate pinning forwarding (design 17 §13.4.2 / S23): the same
 // embedded self-signed fixture certs as gateway-provider.test.ts (test

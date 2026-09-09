@@ -7,7 +7,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { MOBILE_CSS, VIEWPORT_TOKENS } from '../src/client/styles.ts'
-import { TOUCH_TIER_QUERY } from '../src/client/composer.ts'
+import { PHONE_TIER_QUERY, TOUCH_TIER_QUERY } from '../src/client/composer.ts'
 
 test('touch tier guard: drawer rules live under (pointer: coarse)', () => {
   assert.ok(
@@ -174,3 +174,72 @@ test('no user-scalable lock (WCAG 1.4.4); viewport tokens add fit-cover + resize
   assert.deepEqual(VIEWPORT_TOKENS, ['viewport-fit=cover', 'interactive-widget=resizes-content'])
   assert.ok(!MOBILE_CSS.includes('user-scalable'))
 })
+
+test('phone tier query is the stylesheet phone tier', () => {
+  assert.ok(MOBILE_CSS.includes(`@media ${PHONE_TIER_QUERY}`), 'phone tier string must match the stylesheet')
+})
+
+test('sticky-hover tooltip suppression is coarse-gated and aria-label scoped', () => {
+  // Comments quote selectors verbatim, so every assertion below runs on the
+  // COMMENT-STRIPPED sheet: prose must never satisfy a rule assertion
+  // (cross-check: the earlier `includes` form passed even after the real rule
+  // was reverted to a blanket hide).
+  const code = stripComments(MOBILE_CSS)
+  // Exactly ONE selector in the whole sheet may TARGET a tooltip bubble —
+  // reverting to a blanket `[role="tooltip"]` (or an unquoted/~= variant, or a
+  // first-rule-in-block form) makes this set wrong regardless of formatting.
+  // `:not(...)` clauses are stripped first: the drag-handle rule legitimately
+  // EXCLUDES bubbles via `:not([role="tooltip"])` and must not be counted.
+  const tooltipSelectors = [...code.matchAll(/([^{}]+)\{/g)]
+    .map(match => (match[1] ?? '').trim())
+    .map(selector => selector.replace(/:not\([^)]*\)/g, ''))
+    .filter(selector => /\[role\s*[~^$*|]?=\s*["']?tooltip["']?\]/.test(selector))
+  assert.deepEqual(
+    tooltipSelectors,
+    ['button[aria-label] + [role="tooltip"][data-side]'],
+    'only bubbles duplicating an accessible name may be hidden',
+  )
+  // The declaration itself is pinned (a `display: block` mutant must fail).
+  assert.match(
+    code,
+    /button\[aria-label\] \+ \[role="tooltip"\]\[data-side\]\s*\{\s*display:\s*none\s*!important;/,
+  )
+  // ...and it must sit inside the width-independent coarse+hover tier, which
+  // opens before the touch tier (an iPad in landscape is 1024px+ and still
+  // taps; a mouse flips hover and stands the rule down).
+  const coarseAt = code.indexOf('@media (pointer: coarse) and (hover: none)')
+  const touchAt = code.indexOf('@media (max-width: 1023px)')
+  const ruleAt = code.indexOf('button[aria-label] + [role="tooltip"][data-side]')
+  assert.ok(coarseAt !== -1, 'the coarse+hover chrome tier must exist')
+  assert.ok(ruleAt > coarseAt && ruleAt < touchAt, 'the rule must live in the coarse+hover tier, not the touch tier')
+})
+
+test('keyboard compensation CSS rides the plugin frame stamp, never official attributes', () => {
+  const code = stripComments(MOBILE_CSS)
+  assert.ok(code.includes('[data-mobile-frame][data-mobile-kbd] [data-phase="active"] [data-conversation-scroll]'))
+  assert.ok(code.includes('padding-bottom: var(--dsh-mobile-kbd-offset, 0px) !important;'))
+  assert.ok(code.includes('[data-mobile-frame][data-mobile-kbd] [data-phase="active"] [data-composer-seat]'))
+  assert.ok(code.includes('bottom: var(--dsh-mobile-kbd-offset, 0px) !important;'))
+  // The phone-tier safe-area inset must be neutralized while armed (up to
+  // ~34px of dead space below the raised seat otherwise).
+  assert.match(
+    code,
+    /\[data-mobile-frame\]\[data-mobile-kbd\] \[data-phase="active"\] \[data-composer-seat\]\s*\{[^}]*padding-bottom:\s*0\s*!important;/,
+  )
+})
+
+test('the drawer fields carry the 16px floor (no iOS focus zoom from the drawer)', () => {
+  // iOS focus-zooms on any editable below 16px and the page STAYS zoomed; the
+  // drawer's 13px session search was the remaining trigger (cross-check P1).
+  const code = stripComments(MOBILE_CSS)
+  assert.match(
+    code,
+    /\[data-mobile-role="sidebar"\] input:not\(\[type="checkbox"\]\):not\(\[type="radio"\]\):not\(\[type="range"\]\)[^{]*\{\s*font-size:\s*max\(16px, var\(--dsh-content-font-size, 16px\)\) !important;/,
+  )
+})
+
+/** The sheet with comments stripped: selector/declaration assertions must not
+ *  be satisfiable by prose that quotes them. */
+function stripComments(css: string): string {
+  return css.replace(/\/\*[\s\S]*?\*\//g, '')
+}

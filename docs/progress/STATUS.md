@@ -39,7 +39,7 @@
 - **dsh 0.1.5 升级（在途，pin 仍 alpha.2）**：调研完成并已落地与版本无关的准备——`msgpackr-extract` 构建脚本显式否认（根 pnpm-workspace + dsh-runtime `DENY_BUILDS`/单源渲染器 + 测试）；**升级流程两处卡点均已修**（① `update-vendor` gitlink 先 `git add vendor/harness-checkout`；② `restore-lockfile-vendor-records.mjs` 加「成员仍在链接集合」守卫，不再从 HEAD 复活已移除的 landlock 4 条）；**新增升级前只读预检** `scripts/dev/preflight-vendor-pin.mjs`（fork pure/replay/dropped + 深引 vendor seam + 上游包增删 + 新增 client 行 + 运行时 npm 状态；`--offline`/`--json`/`--fail-on-replay`），实测 0.1.5：变更 2552 文件、pure 5/重放 6/dropped 6、**seam 16 全在 `client/ui-layout/*`**、包 +15/−4、新增 client 行 **5**（含带 `dsh.client` 的 `dsh-api-workspace-files`——原清单漏此一行）。剩余主体：**layout fork 重放**（上游把三栏模型改为 sidebar/center/rightbar，`DETAILS_*` 移除、`rightbar` 槽与 store 语义重写 → `typecheck:layout` 一升 pin 即红）+ **5 个新 client 行的 roster 裁决** + 平台词 `ui-dockkit` + connection/api-gateway 重放 + 运行时四锚 + 锁文件（271→282）。全量方案见 `docs/checklists/dsh-upgrade-checklist.md` §9（预检为第 0 步）。
 - **收尾（2026-09）**：五批次全部落地（Batch 0 / 0.5 / 1 / 2 / 3 Phase 0+2，各自独立提交与绿门），并经**四路独立只读审计 + 一轮复核审计**确认（1 处 MEDIUM 实质缺口——open-in 同 id 裁决与方案 §5.1「vscode 全家走 IPC 覆盖」相反——及全部 LOW 登记/文档项已修，提交 `d85bc51` / `3f9511e`）。**方案文件已退役**：`docs/progress/todo/branch-plan-v0.1.3-alpha1.md` 与其 todo README 条目按该目录纪律删除（全文留存 git 历史），执行结果记录见本块与 CHANGELOG [Unreleased]。**收尾补批（W1/W2/W3，2026-09，pin 仍 alpha.2）**：锁文件 vendor 记录修复脚本加移除守卫（+3 例单测）、新增升级前 pin 预检脚本（+5 例单测）、聚合刷新陈旧阈值按传输分级（ssh 新增 300s 兜底）；三者由根脚本 `pnpm run test:upgrade-tools` 与 CI 步骤覆盖。**实机门禁（未验证，需真实实例/桌面）**：Batch 2 的 sleep/wake、隐藏恢复、版本歪斜容忍、gateway 形态回归；Batch 3 的官方 host 行随 a2 默认 profile 进入托管实例、远程无 cookie 下 fence 行为、remote cwd 填充、图标缓存/CSP；以及既有实机探针（`commands/execute attachments` wire key、open-in 官方 host 行 dormant 处置）。
 
-- **dsh 运行时版本管理（design 18 §3.6/§9）**：剩余——macOS 打包态  `.app` 内共享 dsh-runtime/内嵌 pnpm/koffi 与完整激活-故障回退-恢复链的实机；Linux
+- **dsh 运行时版本管理（design 18 §3.6/§9）**：剩余——macOS 打包态 `.app` 内共享 dsh-runtime/内嵌 pnpm/koffi 与完整激活-故障回退-恢复链的实机；Linux
   server 同款端到端；Gateway 重启窗口的前端重连与 connections 的 SSH
   `restart_service` systemd IPC 端到端；`restartLocal()` 在真实 1s SIGTERM→SIGKILL
   grace 与健康计时器交错的覆盖；settings-bridge 的 gateway React 组件级交互仍以纯
@@ -83,15 +83,69 @@
   force 可能删到正在追加的档（「读私有 phase 字段」为否决方案）；归档集合在 run
   起点快照、窗口内不重读。可选增强（未排期）：PluginDialog 三态行、rowError
   本地化、已归档浏览区（todo 12 A）、`preview` 暴露孤儿计数。
-- **移动端 Web 访问面（design 17 §18）**：剩余——实机门禁
-  （§18.6：真机触控目标比例/抽屉开合/键盘遮挡/安全区/汉堡不重叠/crumbs 换行/
-  Session 日志图标化/iOS 单击切换/设置手机档走查/刘海横屏/深层谱系高度等）；DOM
-  锚点审计剩余（details 打标缺口修复的**接线仅实机可验**、`[class$=_…]` 后缀命名
-  契约测试固定、composer 锚点 fixture 化、Android 键盘盲区真机门禁）；P2（PWA 安装
-  + SW 壳离线，per-instance scope，尊重官方「不完整离线」立场）；P3（公网认证流转
+- **移动端 Web 访问面（design 17 §18）**：P1/P1.5/适配轮已实现。mobile 分支
+  已落地：visualViewport 键盘补偿替换 layer-5 pinning（frame 级
+  `data-mobile-kbd` + `--dsh-mobile-kbd-offset` + 底部锚定联动滚动）、
+  Enter 换行后 composer 内滚 caret reveal、设置 sheet 分区切换滚动重置与
+  chips 条滚动条隐藏。**2026-12 评审修复轮 + 交叉复核轮**（6 lane 独立审查：
+  代码/症状/控制面/文档/复现/最优性；复核发现的 P1 已修）：
+  - tooltip 规则定为 `(pointer: coarse) and (hover: none)` +
+    `button[aria-label] + [role="tooltip"][data-side]`（原全局隐藏会连带杀掉
+    4 处信息型气泡：聊天统计行 / 代理预设卡片描述 / 轨迹时间轴 span /
+    ≤620px 轨迹 kind 标签；第五处 turn-rail 预览无 `data-side`，结构性排除）；
+  - 键盘补偿：arm 按 frame 元素幂等（重挂重新打标 + 清理旧 frame 属性）、
+    可编辑焦点守卫（focusin/focusout 打点 + 提交期 composer 选区兜底 + 1.2s
+    宽限）、**缩放策略 = 只服务 composer**（原 `scale > 1.01` 一票否决会让
+    iOS 聚焦缩放后 composer 永久停在键盘后——复核 P1；抽屉 13px 搜索框已补
+    16px 底线从源头消除聚焦缩放）、量化 16px（死区 8–23px，原 48px 为
+    8–55px）、arm 期间归零 seat 底部安全区 padding；
+  - 设置滚动复位只认分区 chip（纯函数 `isSectionChipClick` + 单测）且门控
+    手机档（769–1023px 触控平板保留官方行为）；
+  - 测试：移动插件 **67** 用例（自 0.2.4 起 +15）。
+  **复核提出但本轮未做**（待实机证据或设计决策，均已登记 §18.6 门禁）：
+  「移动中量化 + 静止吸附精确值」（现 16px 固定量化，实机看抖动再定）、
+  设置分区滚动位置记忆（现为一律复位——tab 惯例，非严格更优：无稳定 section
+  id、异步内容高度不足会钳到顶）、宽屏触控设备（iPad 横屏 1024px+）的键盘
+  补偿（行为层与 CSS 同在 1023px 触屏档，扩展需设计决策）、原生 `title`
+  长按气泡不抑制（刻意手势，且部分 title 是截断行的唯一全文入口）。
+  剩余——上述改动的**实机门禁**（§18.6：真机触控目标比例/抽屉开合/键盘遮挡
+  （含新补偿层的 iOS 时序与 Android WebView 盲区、**聚焦缩放后的打字正例**、
+  缩放态平移不得引起抖动、捏合缩放负例、提交窗口不闪落、重挂 re-arm、
+  死区 ≤23px）/安全区/汉堡不重叠/crumbs 换行/Session 日志图标化/iOS 单击
+  切换/设置手机档走查（含分区切换重置）/刘海横屏/深层谱系高度等）；
+  **移动端 git 侧边栏**（桌面链 chamber sidebar + `sidebar.workspace.git`
+  座席为桌面专有形态，gateway 链官方 sidebar 无该座席；接入需装配矩阵第二
+  客户端例外 + 移动交互设计，列为下一阶段）；DOM 锚点审计剩余（details 打标
+  缺口修复的**接线仅实机可验**、`[class$=_…]` 后缀命名契约测试固定、composer
+  锚点 fixture 化、Android 键盘盲区真机门禁）；P2（PWA 安装 + SW 壳离线，
+  per-instance scope，尊重官方「不完整离线」立场）；P3（公网认证流转
   正式化 + Web Push；先行形态 = 内网/可信网络 `--no-auth`/tailscale）。
-- **Windows 首版（design 23）**：剩余全为**外部门禁**，台账见 `docs/progress/todo/windows-v1.md`
-  （已剪为剩余项清单；windows-baseline.md 首跑数据待填）：真实 Windows runner
+  - **连接稳定性（未修复，取证中；2026-12 评审证据）**：机制已源码级确认——
+    唯一长连接 `/api/remote.mux`；实例侧官方 api-gateway 心跳 2s ×
+    `MAX_MISSED_HEARTBEATS=2`（**硬编码不可配**，见安装树
+    `dsh-api-gateway/lib/types/stream-server.js:4`）⇒ 静默 4–6s 即 `terminate`，
+    且**在 gateway 侧完全无日志**；代理浏览器腿 30s / 1 miss（
+    `WS_PING_MISSES_BEFORE_TEARDOWN=1`，拆链会同时销毁 upstream 腿）；客户端
+    按 `dsh-client-connection` 指数退避（500ms×2 上限 10s）重连并 baseline
+    replay；pending approval/question 在 generation 结束时被
+    `remote-events.ts` abort、重投时**换新 key** ⇒ 草稿丢失、弹窗重建（命令
+    菜单不关）。**本机日志复核结论**：gateway journal（9/04–9/09）只有 1 次
+    浏览器腿心跳拆链 ⇒ 代理心跳不是主因；`audit.log` 无周期性 login（
+    127.0.0.1 的 50–70s 突发为本机测试流量）；无周期性整页重载/SW 行为。
+    本轮新增**有界取证日志**（`proxy-forward.ts`：`WebSocket stream <id>
+    closed (<cause>, <ms>ms)`，cause 无括号、logger 抛异常不锁死拆链）以区分
+    实例侧判死与客户端主动重连；**归因边界**：cause 记「先观察到哪条腿结束」，
+    代理主动撤销也会记成 `upstream close`。下一步：浏览器 DevTools 抓
+    `remote.mux` 的 **close code + 节奏**（1006 链路断 / 4000 客户端重连）；
+    若为实例心跳，最小改动是给 patch overlay 增加 `config` 行能力（现
+    `cordis-inserts.ts` 仅发 id/name）以调宽 `websocketHeartbeatIntervalMs`。
+    复核否决的替代：**解析 close 帧（opcode 0x8）**——实例侧用
+    `socket.terminate()` 不发 close 帧，解析器对目标场景盲；若日志不足，改用
+    上游 ping 间隔计数（~15 行，复用 PongScanner）。另注意：桌面渲染器的 idle
+    重连看门狗只按 `transport === 'http'` 过滤（`App.tsx:1422`），**gateway
+    目标也吃 ~2min 一次的连接 bounce**——「桌面也发生」若指桌面 chamber App，
+    此即现成解释。
+- **Windows 首版（design 23）**：剩余全为**外部门禁**，台账见 `docs/progress/todo/windows-v1.md`  （已剪为剩余项清单；windows-baseline.md 首跑数据待填）：真实 Windows runner
   首跑绿（test-windows 腿，含 submodule 物化 + junction 建链）；M0.5 上游 dsh
   win32/NSIS protocols/Defender/原生依赖实证；M2a runner 事务矩阵；**M2b UI 翻转
   （纪律：M2a 真实 win32 全绿前不做）**；M3/M4 实机矩阵与打包验证。M5/M6 发布面

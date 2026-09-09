@@ -15,6 +15,10 @@
 const COMPOSER_INPUT_SELECTOR = '[data-composer-input]'
 /** The touch tier (design 17 §18.4.2) — shared with the stylesheet tier. */
 export const TOUCH_TIER_QUERY = '(max-width: 1023px) and (pointer: coarse)'
+/** The phone tier (design 17 §18.4.2) — shared with the stylesheet tier; the
+ *  settings sheet's behavior (settings-sheet.ts) rides THIS tier, not the
+ *  touch tier: the stacked sheet it resets is phone-tier CSS only. */
+export const PHONE_TIER_QUERY = '(max-width: 768px) and (pointer: coarse)'
 
 function isComposerInput(target: EventTarget | null): boolean {
   // closest(): the keydown target is usually a leaf node inside the
@@ -119,6 +123,14 @@ export function installEnterToNewline(): () => void {
         }
       }
     }
+    // The insert chain bypasses the official keymap pipeline (we stopped the
+    // event before Lexical's submit path), so the pipeline's caret reveal
+    // never runs for this Enter — when the composer has grown past its max
+    // height the new line can land below the visible fold of the composer's
+    // internal scrollport with nobody scrolling it. Reveal is a no-op when
+    // the caret is already visible (and after a fully failed insert there is
+    // nothing to reveal).
+    revealCaretInComposerScroll(input)
   }
   document.addEventListener('keydown', onKeyDown, true)
   return () => {
@@ -172,6 +184,56 @@ function insertLineBreakManually(input: Element | null): boolean {
 }
 
 /**
+ * Signed scroll delta (px) that brings the caret rect fully into the
+ * composer's internal scrollport ([data-input-scroll]) with a margin.
+ * Positive scrolls down, negative scrolls up, 0 = already visible. Pure —
+ * unit-tested.
+ */
+export function caretRevealDelta(
+  rectTop: number,
+  rectBottom: number,
+  hostTop: number,
+  hostBottom: number,
+  margin = 8,
+): number {
+  if (rectBottom > hostBottom) return rectBottom - hostBottom + margin
+  if (rectTop < hostTop) return rectTop - hostTop - margin
+  return 0
+}
+
+/**
+ * Reveal the caret inside the composer's own scrollport after an Enter
+ * newline insert. Native caret scrolling after a programmatic execCommand
+ * insert is engine-dependent, so when the composer has grown past its max
+ * height ([data-input-scroll] scrollable) the new line can land below the
+ * visible fold with nobody scrolling it. No-op when the caret is already
+ * visible or the composer has no inner overflow (everything is visible by
+ * construction). DOM-bound — the geometry decision (caretRevealDelta) is
+ * the unit-tested pure part.
+ */
+function revealCaretInComposerScroll(input: Element | null): void {
+  if (input === null) return
+  const scrollHost = input.closest('[data-input-scroll]')
+  if (!(scrollHost instanceof HTMLElement)) return
+  // No inner overflow → the caret cannot be below the fold.
+  if (scrollHost.scrollHeight <= scrollHost.clientHeight) return
+  const selection = document.getSelection()
+  if (selection === null || selection.rangeCount === 0) return
+  const hostRect = scrollHost.getBoundingClientRect()
+  // Collapsed caret rects can be 0×0 at a node boundary (start/end of a
+  // line): fall back to the focus node's own box, then give up.
+  let rect = selection.getRangeAt(0).getBoundingClientRect()
+  if (rect.height === 0 && rect.width === 0) {
+    const anchor = selection.focusNode
+    const element = anchor instanceof Element ? anchor : anchor?.parentElement
+    if (element instanceof Element) rect = element.getBoundingClientRect()
+  }
+  if (rect.height === 0 && rect.width === 0) return
+  const delta = caretRevealDelta(rect.top, rect.bottom, hostRect.top, hostRect.bottom)
+  if (delta !== 0) scrollHost.scrollTop += delta
+}
+
+/**
  * Minimal editability recovery (IME ladder layer 2): when the composer
  * flips back to editable while still focused, the IME may stay closed (a
  * focus event is not re-fired by the official component). Blur + refocus on
@@ -219,8 +281,9 @@ export function isKeyboardOpen(layoutHeight: number, visualHeight: number): bool
  *   4. visualViewport keyboard detection — feeds layer 3's guard and the
  *      keyboard visibility state.
  * Layer 2 (editability flip) lives in installEditabilityRecovery; layer 5
- * (keyboard-visible composer pinning) lives in the stylesheet
- * (interactive-widget=resizes-content) + installKeyboardPinning below.
+ * (keyboard-visible composer compensation) lives in the stylesheet
+ * (interactive-widget=resizes-content where the engine honors it) +
+ * installKeyboardCompensation below (the visual-viewport fallback).
  */
 
 /**
@@ -374,31 +437,275 @@ export function installImeLadder(root: ParentNode = document): ImeLadder {
 }
 
 /**
- * Keyboard-visible composer pinning (IME ladder layer 5, P1.5): with
- * interactive-widget=resizes-content the layout viewport already shrinks;
- * this is the fallback for engines that ignore the token — when the
- * keyboard opens and the composer seat is below the visual viewport, scroll
- * it into view (nearest, no jarring jumps).
+ * Keyboard-visible composer compensation (IME ladder layer 5, P1.5 +
+ * mobile round): with interactive-widget=resizes-content the layout viewport
+ * already shrinks; this is the fallback for engines that ignore the token —
+ * iOS Safari (the soft keyboard overlays the LAYOUT viewport) and older
+ * Android WebViews. The official composer seat is `position: sticky;
+ * bottom: 0` and a FLOW child of the conversation scrollport, so it pins to
+ * the LAYOUT bottom and ends up BEHIND the keyboard; scrolling the
+ * scrollport cannot lift it (sticky re-pins it) and scrollIntoView cannot
+ * see the visual viewport — the old pinning attempt was a no-op exactly
+ * there. The compensation mirrors resizes-content semantics against the
+ * visual viewport instead: while the keyboard is open the seat's sticky
+ * bottom is raised to the keyboard top and the scrollport gets an equal
+ * bottom padding (both via the frame's `--dsh-mobile-kbd-offset`, see
+ * styles.ts), and a bottom-pinned conversation is scrolled down by the same
+ * delta so the message tail stays readable right above the raised seat. The
+ * official chat already re-glues the OUTER scroll on seat resize (ui-chat's
+ * ResizeObserver follows `[data-composer-seat]`), so this installer owns only
+ * the keyboard-driven geometry change.
+ *
+ * Guards (2026-12 review + cross-check round): a visual-viewport shrink is
+ * necessary but NOT sufficient — zoom shrinks the visual viewport with no
+ * keyboard (the plugin deliberately keeps user-scalable for WCAG 1.4.4), and
+ * a keyboard can belong to a field that is not the composer. The community's
+ * most developed implementation reached the same conclusion after a
+ * foldable/split-screen false-positive round (dsh-meow-smooth's dynamic
+ * baseline + editable-focus signal).
+ *
+ * Zoom policy (cross-check P1): a blanket scale veto is WRONG — iOS
+ * focus-zooms on the drawer's 13px search field (ui-workspace:1187) and the
+ * page stays zoomed, so vetoing every zoomed state would leave the composer
+ * behind the keyboard for the rest of the session. Under zoom the compensation
+ * is served for the COMPOSER only: `covered = layout - offsetTop - vv.height`
+ * is exactly how far the sticky seat's layout position exceeds the visual
+ * viewport's bottom edge, so lifting by it brings the composer back above the
+ * keyboard (the browser's own pan usually already zeroes it). Non-composer
+ * fields keep the veto — panning a zoomed page must not drive the offset.
+ * The focus-zoom trigger itself is also removed at the source (styles.ts
+ * gives the drawer's fields the same 16px floor as the composer/dialogs).
+ *
+ * Re-sync entries beyond visualViewport events: window resize (rotation /
+ * browser chrome), visibilitychange (mobile browsers do not deliver the
+ * missed visualViewport events while the tab is suspended), focusin (a seat
+ * remount — session switch or reconnect settle — re-arms without a viewport
+ * event) and focusout (a blur starts the grace window at the moment it
+ * happens, not at the last focusin). Arming is IDEMPOTENT per frame element:
+ * a renderer remount replaces the AppFrame while the keyboard stays open with
+ * unchanged geometry, so the numeric `applied` short-circuit alone would
+ * leave the new frame unarmed and the composer behind the keyboard.
  */
-export function installKeyboardPinning(root: ParentNode = document): () => void {
-  let keyboardOpen = false
-  const onResize = (): void => {
-    const vv = window.visualViewport
-    const next = vv !== null && isKeyboardOpen(window.innerHeight, vv.height)
-    if (next === keyboardOpen) return
-    keyboardOpen = next
-    if (!keyboardOpen) return
-    const seat = root.querySelector('[data-composer-seat]')
-    if (seat instanceof Element) {
-      const rect = seat.getBoundingClientRect()
-      const vvBottom = vv !== null ? vv.height : window.innerHeight
-      if (rect.bottom > vvBottom) {
-        seat.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
-      }
+export const KBD_OFFSET_QUANTUM_PX = 16
+/** Extra lift above the raw covered height (keeps the seat clear of the
+ *  keyboard top even when the engine's final geometry lands mid-step). */
+export const KBD_OFFSET_HEADROOM_PX = 8
+/** State attribute toggled on the stamped frame (plugin-owned surface). */
+export const MOBILE_KBD_ATTR = 'data-mobile-kbd'
+/** Offset custom property set on the stamped frame (styles.ts consumes it). */
+export const MOBILE_KBD_VAR = '--dsh-mobile-kbd-offset'
+/** Recently-focused-editable grace window: a blur (or an editability flip
+ *  during submit) must keep the compensation armed through the
+ *  keyboard-close animation and the editability-recovery refocus instead of
+ *  dropping the seat mid-transition. */
+export const KBD_EDITABLE_FOCUS_GRACE_MS = 1_200
+/** The active conversation's sticky composer seat (phase guard: hero/blank
+ *  seats are not sticky — only an active session has the bottom-pinned
+ *  seat the keyboard can cover). */
+const ACTIVE_SEAT_SELECTOR = '[data-phase="active"] [data-composer-seat]'
+
+/** Height of the layout viewport bottom edge the keyboard covers: layout
+ *  bottom minus the visual viewport bottom, both in layout coordinates.
+ *  Valid at any zoom: the visual viewport's reported height already accounts
+ *  for both the zoom shrink and the keyboard, so the difference is exactly
+ *  how far the layout bottom exceeds the visible bottom edge. Pure —
+ *  unit-tested. */
+export function kbdCoveredHeight(layoutHeight: number, visualHeight: number, visualOffsetTop: number): number {
+  return Math.max(0, layoutHeight - visualOffsetTop - visualHeight)
+}
+
+/** Quantized (ceil) offset: applied in steps while the keyboard slides,
+ *  always ≥ covered + headroom so the seat never sits under the keyboard
+ *  top. 0 when nothing is covered. 16px (cross-check: the 48px step left an
+ *  8-55px dead band above the keyboard — iPhone 14 48px, SE 45px, Gboard
+ *  44px; 16px leaves 8-23px, and visualViewport events are frame-coalesced,
+ *  so the extra steps cost nothing measurable). Pure — unit-tested. */
+export function nextKbdOffset(
+  covered: number,
+  quantum: number = KBD_OFFSET_QUANTUM_PX,
+  headroom: number = KBD_OFFSET_HEADROOM_PX,
+): number {
+  if (covered <= 0) return 0
+  return Math.ceil((covered + headroom) / quantum) * quantum
+}
+
+/** Is the scrollport pinned to its content end (the conversation bottom)?
+ *  Pure — unit-tested. */
+export function isAtScrollEnd(scrollTop: number, scrollHeight: number, clientHeight: number, slack = 8): boolean {
+  if (clientHeight <= 0 || scrollHeight <= clientHeight) return true
+  return scrollTop + clientHeight >= scrollHeight - slack
+}
+
+/** Should the keyboard compensation arm? Pure — unit-tested. See the zoom
+ *  policy above: a shrink alone is not enough, and under zoom only the
+ *  composer is served. */
+export function shouldCompensateKeyboard(
+  keyboardOpen: boolean,
+  visualScale: number,
+  editableFocused: boolean,
+  composerFocused: boolean,
+): boolean {
+  if (!keyboardOpen || !editableFocused) return false
+  // Zoom (pinch or iOS focus-zoom): vv.height shrinks while the layout
+  // viewport does not. 1.01 tolerates float noise in the reported scale.
+  if (visualScale > 1.01 && !composerFocused) return false
+  return true
+}
+
+/** Does this focus target open a soft keyboard? Covers the Lexical composer
+ *  (contenteditable), plain inputs/textareas (settings sheet, question cards)
+ *  — the keyboard's owner, whatever the field. */
+function isEditableFocus(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false
+  if (target.isContentEditable) return true
+  const tag = target.tagName
+  return tag === 'INPUT' || tag === 'TEXTAREA'
+}
+
+/** Is the caret inside the composer's editor/seat? Used as the zoom-policy
+ *  discriminator and as a fallback while the official editor flips
+ *  `contenteditable` off during submit (`live && !locked && !machineBusy`,
+ *  ui-conversation:15371) — the DOM selection survives that flip. */
+function isComposerSelection(): boolean {
+  const selection = document.getSelection()
+  const anchor = selection?.anchorNode ?? null
+  if (anchor === null) return false
+  const element = anchor instanceof Element ? anchor : anchor.parentElement
+  if (!(element instanceof Element)) return false
+  return element.closest(COMPOSER_INPUT_SELECTOR) !== null || element.closest('[data-composer-seat]') !== null
+}
+
+export function installKeyboardCompensation(root: ParentNode = document): () => void {
+  const vv = window.visualViewport
+  if (vv === null) return () => {}
+  let applied = 0
+  /** The frame currently carrying the offset (teardown handle: the frame
+   *  persists across seat remounts, so disarm must target the element that
+   *  actually carries the attribute). */
+  let armedFrame: HTMLElement | null = null
+  let lastEditableFocusAt = 0
+
+  const disarm = (): void => {
+    if (armedFrame === null) return
+    armedFrame.removeAttribute(MOBILE_KBD_ATTR)
+    armedFrame.style.removeProperty(MOBILE_KBD_VAR)
+    armedFrame = null
+  }
+
+  /** The keyboard's owner: an editable element focused right now, a caret
+   *  still inside the composer (the editor flips `contenteditable` off during
+   *  submit without blurring), or either of those within the grace window
+   *  (blur / session-switch refocus). */
+  const editableFocused = (): boolean => {
+    if (isEditableFocus(document.activeElement)) return true
+    if (isComposerSelection()) return true
+    return Date.now() - lastEditableFocusAt < KBD_EDITABLE_FOCUS_GRACE_MS
+  }
+
+  /** Is the keyboard the COMPOSER's? The zoom policy serves only this case
+   *  (cross-check P1). */
+  const composerFocused = (): boolean => {
+    const active = document.activeElement
+    if (active instanceof Element
+      && (active.closest(COMPOSER_INPUT_SELECTOR) !== null || active.closest('[data-composer-seat]') !== null)) {
+      return true
+    }
+    return isComposerSelection()
+  }
+
+  const sync = (): void => {
+    const layoutHeight = window.innerHeight
+    const target = shouldCompensateKeyboard(
+      isKeyboardOpen(layoutHeight, vv.height),
+      vv.scale,
+      editableFocused(),
+      composerFocused(),
+    )
+      ? nextKbdOffset(kbdCoveredHeight(layoutHeight, vv.height, vv.offsetTop))
+      : 0
+    if (target === 0) {
+      applied = 0
+      disarm()
+      return
+    }
+    // Only the ACTIVE session seat is sticky bottom-pinned; a hero/blank
+    // seat must not be lifted (its scrollport can scroll normally).
+    // Single-shell deployment: one seat.
+    const seat = root.querySelector(ACTIVE_SEAT_SELECTOR)
+    if (!(seat instanceof Element)) return
+    const frame = seat.closest('[data-mobile-frame]')
+    if (!(frame instanceof HTMLElement)) return
+    // Idempotent ensure keyed on the FRAME ELEMENT, not on the numeric
+    // offset alone: a renderer remount replaces the AppFrame while the
+    // keyboard stays open with unchanged geometry, so `target === applied`
+    // must not short-circuit — the new frame still needs the attribute
+    // (review fix: the old form left the composer behind the keyboard until
+    // the geometry happened to change).
+    const armed = frame === armedFrame && frame.hasAttribute(MOBILE_KBD_ATTR)
+    if (armed && target === applied) return
+    // A re-arm onto a DIFFERENT frame must clean the previous one: the old
+    // element keeps its plugin-owned attribute/custom property forever
+    // otherwise (cross-check: only reachable while detached, but it is
+    // plugin state leaking onto a dead node).
+    if (armedFrame !== null && armedFrame !== frame) disarm()
+    // Was the conversation pinned to its end before this step? If yes, keep
+    // the message tail glued above the seat: the scrollport grows by the
+    // offset (bottom padding) below the content, so without a matching
+    // scroll the last messages would slide behind the keyboard. The end
+    // check runs BEFORE the geometry change (the post-change max already
+    // includes the new padding).
+    const scroller = seat.closest('[data-conversation-scroll]')
+    const wasAtEnd = scroller instanceof HTMLElement
+      && isAtScrollEnd(scroller.scrollTop, scroller.scrollHeight, scroller.clientHeight)
+    // A freshly armed frame carries no offset yet: the effective previous
+    // offset is 0, so the glue delta is the full target (the alternative —
+    // trusting the stale counter — would under-scroll after a remount).
+    const delta = armed ? target - applied : target
+    frame.setAttribute(MOBILE_KBD_ATTR, '')
+    frame.style.setProperty(MOBILE_KBD_VAR, `${target}px`)
+    armedFrame = frame
+    applied = target
+    // The scrollTop write forces layout with the new padding already in
+    // place; a pinned scrollport clamps exactly to the new content end.
+    if (wasAtEnd && scroller instanceof HTMLElement && delta > 0) {
+      scroller.scrollTop += delta
     }
   }
-  window.visualViewport?.addEventListener('resize', onResize)
-  return () => window.visualViewport?.removeEventListener('resize', onResize)
+
+  const onViewportChange = (): void => sync()
+  const onFocusIn = (event: FocusEvent): void => {
+    if (isEditableFocus(event.target)) lastEditableFocusAt = Date.now()
+    // A seat remount (session switch / reconnect settle) re-arms here even
+    // when no visualViewport event follows.
+    sync()
+  }
+  const onFocusOut = (event: FocusEvent): void => {
+    // Stamp the grace window at the MOMENT of the blur — the editor flipping
+    // `contenteditable` off during submit, a keepFocus-less control taking
+    // focus and the keyboard-close animation all start here, not at the last
+    // focusin (cross-check D2).
+    if (isEditableFocus(event.target)) lastEditableFocusAt = Date.now()
+  }
+  const onVisibility = (): void => {
+    if (document.visibilityState === 'visible') sync()
+  }
+  sync()
+  vv.addEventListener('resize', onViewportChange)
+  vv.addEventListener('scroll', onViewportChange)
+  window.addEventListener('resize', onViewportChange)
+  document.addEventListener('focusin', onFocusIn, true)
+  document.addEventListener('focusout', onFocusOut, true)
+  document.addEventListener('visibilitychange', onVisibility)
+  return () => {
+    vv.removeEventListener('resize', onViewportChange)
+    vv.removeEventListener('scroll', onViewportChange)
+    window.removeEventListener('resize', onViewportChange)
+    document.removeEventListener('focusin', onFocusIn, true)
+    document.removeEventListener('focusout', onFocusOut, true)
+    document.removeEventListener('visibilitychange', onVisibility)
+    applied = 0
+    disarm()
+  }
 }
 
 /**

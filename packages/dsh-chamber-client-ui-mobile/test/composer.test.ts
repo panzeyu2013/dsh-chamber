@@ -1,15 +1,18 @@
 /**
- * Composer behavior pure-logic tests (P1.5 + 2026 review round): the
- * keyboard heuristic, the self-heal constant and the layer-1
- * navigation-gesture predicate — the DOM-bound installers stay
- * integration-tested on device, the pure decision functions are covered
- * here.
+ * Composer behavior pure-logic tests (P1.5 + 2026 review + mobile rounds):
+ * the keyboard heuristic, the self-heal constant, the layer-1
+ * navigation-gesture predicate, the layer-5 keyboard-compensation geometry
+ * (covered height / quantized offset / scroll-end / arm decision) and the
+ * Enter-newline caret-reveal delta — the DOM-bound installers stay
+ * integration-tested on device, the pure decision functions are covered here.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  isKeyboardOpen, BUSY_STUCK_MS, TOUCH_TIER_QUERY,
+  isKeyboardOpen, BUSY_STUCK_MS, TOUCH_TIER_QUERY, PHONE_TIER_QUERY,
   isNavigationGestureTarget, NAV_GESTURE_SELECTOR,
+  kbdCoveredHeight, nextKbdOffset, isAtScrollEnd, caretRevealDelta,
+  shouldCompensateKeyboard, KBD_EDITABLE_FOCUS_GRACE_MS, KBD_OFFSET_QUANTUM_PX,
   type ClosestLike,
 } from '../src/client/composer.ts'
 
@@ -69,4 +72,86 @@ test('isNavigationGestureTarget: non-navigation gestures are typing intent', () 
   // match answered for the nav selector only).
   const seatOnly = new ClosestStub({})
   assert.equal(isNavigationGestureTarget(seatOnly), false)
+})
+
+test('kbdCoveredHeight: layout bottom minus visual viewport bottom (layout coordinates)', () => {
+  // No keyboard / layout == visual → nothing covered.
+  assert.equal(kbdCoveredHeight(812, 812, 0), 0)
+  // iOS style: layout stays 812, visual shrinks to 512 → 300 covered.
+  assert.equal(kbdCoveredHeight(812, 512, 0), 300)
+  // Panned visual viewport (offsetTop > 0) reduces the covered band.
+  assert.equal(kbdCoveredHeight(812, 512, 40), 260)
+  // Zoomed-in visual viewport taller than the gap → clamped to 0.
+  assert.equal(kbdCoveredHeight(812, 900, 0), 0)
+})
+
+test('nextKbdOffset: ceil quantization with headroom, zero when uncovered', () => {
+  // Nothing covered → never arm.
+  assert.equal(nextKbdOffset(0), 0)
+  // 300 covered + 8 headroom → ceil(308/16)=20 → 320 (never under the top).
+  assert.equal(nextKbdOffset(300), 320)
+  // Small covered heights still get the minimal non-zero lift.
+  assert.equal(nextKbdOffset(5), 16)
+  // Explicit quantum/headroom for readability.
+  assert.equal(nextKbdOffset(100, 16, 8), 112)
+  assert.equal(nextKbdOffset(47, 16, 8), 64)
+  assert.equal(nextKbdOffset(-1), 0)
+  // The default step stays small enough that the dead band above the keyboard
+  // cannot grow past ~23px (cross-check: 48px left 8-55px).
+  assert.ok(KBD_OFFSET_QUANTUM_PX <= 16)
+})
+
+test('isAtScrollEnd: pinned-to-end detection with slack', () => {
+  // Empty / non-scrollable containers are trivially at the end.
+  assert.equal(isAtScrollEnd(0, 100, 200), true)
+  assert.equal(isAtScrollEnd(0, 0, 0), true)
+  // Mid-history is not at the end.
+  assert.equal(isAtScrollEnd(500, 5000, 1000), false)
+  // Exactly at the end (max = scrollHeight - clientHeight).
+  assert.equal(isAtScrollEnd(4000, 5000, 1000), true)
+  // Within the slack of the end.
+  assert.equal(isAtScrollEnd(3995, 5000, 1000), true)
+  // Beyond the end (post-clamp transient) is still end-pinned.
+  assert.equal(isAtScrollEnd(4100, 5000, 1000), true)
+})
+
+test('caretRevealDelta: signed scroll delta to bring the caret into the host viewport', () => {
+  // Caret fully visible → no scroll.
+  assert.equal(caretRevealDelta(100, 120, 0, 200), 0)
+  // Caret below the fold → scroll down by overflow + margin.
+  assert.equal(caretRevealDelta(190, 210, 0, 200), 18)
+  // Caret above the viewport → scroll up by overflow + margin.
+  assert.equal(caretRevealDelta(-20, 0, 0, 200), -28)
+  // Bottom edge flush with the fold but inside → no scroll.
+  assert.equal(caretRevealDelta(180, 200, 0, 200), 0)
+  // Custom margin.
+  assert.equal(caretRevealDelta(190, 210, 0, 200, 2), 12)
+})
+
+test('shouldCompensateKeyboard: a visual-viewport shrink alone is not enough', () => {
+  // No keyboard detected → never arm.
+  assert.equal(shouldCompensateKeyboard(false, 1, true, true), false)
+  // Keyboard detected but no editable focus (the keyboard belongs elsewhere,
+  // or the editor blurred) → do not lift the composer seat.
+  assert.equal(shouldCompensateKeyboard(true, 1, false, false), false)
+  // Zoom without the composer focused: vetoed — panning a zoomed page must
+  // not drive the offset (iOS focus-zooms on the drawer's 13px search).
+  assert.equal(shouldCompensateKeyboard(true, 2, true, false), false)
+  // Zoom WITH the composer focused: served — covered = layout - offsetTop -
+  // vv.height is exactly how far the seat exceeds the visible bottom edge,
+  // so the blanket veto would leave the composer behind the keyboard for the
+  // rest of a focus-zoomed session (cross-check P1).
+  assert.equal(shouldCompensateKeyboard(true, 2, true, true), true)
+  // Engine float noise around scale 1 is tolerated.
+  assert.equal(shouldCompensateKeyboard(true, 1.005, true, false), true)
+  // The real case: keyboard open, no zoom, editor focused.
+  assert.equal(shouldCompensateKeyboard(true, 1, true, true), true)
+})
+
+test('phone tier query is shared with the stylesheet and distinct from the touch tier', () => {
+  assert.equal(PHONE_TIER_QUERY, '(max-width: 768px) and (pointer: coarse)')
+  assert.notEqual(PHONE_TIER_QUERY, TOUCH_TIER_QUERY)
+  // The grace window must outlast a keyboard-close animation (~250ms) and
+  // stay short enough not to hold a stale offset after the user leaves.
+  assert.ok(KBD_EDITABLE_FOCUS_GRACE_MS >= 500 && KBD_EDITABLE_FOCUS_GRACE_MS <= 2_000)
 })
