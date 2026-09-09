@@ -23,7 +23,13 @@
   - **client-web**：`src/base.css` 恢复逐字节上游，五份 ui-theme token 表改由 renderer 入口 CSS（`packages/renderer/src/styles.css`）引入——head CSS 顺序不变，token 仍在插件 CSS 之前；seed/platform/index 的 rebase 散文收敛为「不变量 + 指路」，5 个不可替代 seam（模块表宿主 / extraRows / configureContext / boot 容忍 / 异步 dispose）不动。
   - **api-gateway**：`apply(ctx)` 直接读 `ctx.chamberBasePath`（去掉 `ClientRemoteOptions` 参数），流载波补丁不变。
   - 上游触点登记同步（pure：connection 15→16、client-web 4→5、api-gateway 6；C1 逐字节门覆盖新纯文件），design 05/14/20 措辞随之修订。
-- **open-in 统一 · Phase 0 纯门控（Batch 3）** —— 新增 per-source 视图模型 `packages/dsh-chamber-client-ui-open-in/src/shared/open-in-view-model.ts`：把「官方宿主目录（official）」与「桌面主进程提供方（main）」两个池按来源矩阵（local = 两池全量；`dsh-*`/`gateway-*` + ssh = 仅 main 的 remote-capable；http/畸形来源 = 空）折成单一决策面，每个被拒候选都带显式抑制原因（`unknown-source`/`transport-not-ssh`/`source-not-local`/`app-unavailable`/`app-not-remote-capable`/`duplicate-app-id`），并给出 channel 优先级的去重与默认选中项；既有 `usableOpenInApps`/`usableAppsForSource` 改为该视图模型的薄适配层（行为不变，单一决策面）。单测钉矩阵/去重/抑制原因（8 例）。Phase 2（吸收官方 client + 桌面主进程瘦身至 vscode-only + 实机验证）待执行。
+- **open-in 统一 · Phase 0 纯门控（Batch 3）** —— 新增 per-source 视图模型 `packages/dsh-chamber-client-ui-open-in/src/shared/open-in-view-model.ts`：把「官方宿主目录（official）」与「桌面主进程提供方（main）」两个池按来源矩阵（local = 两池全量；`dsh-*`/`gateway-*` + ssh = 仅 main 的 remote-capable；http/畸形来源 = 空）折成单一决策面，每个被拒候选都带显式抑制原因（`unknown-source`/`transport-not-ssh`/`source-not-local`/`app-unavailable`/`app-not-remote-capable`/`duplicate-app-id`），并给出 channel 优先级的去重与默认选中项；既有 `usableOpenInApps`/`usableAppsForSource` 改为该视图模型的薄适配层（行为不变，单一决策面）。单测钉矩阵/去重/抑制原因（8 例）。Phase 2 见下条。
+- **open-in 统一 · Phase 2（Batch 3 核心，红线修订）** —— 单一 header 入口改为消费 per-source 视图模型（Phase 0 已落地），本地来源吸收官方 client：
+  - **本地来源（official 通道）**：实例自身官方宿主目录（`dsh-host-open-in-app`，随 a2 默认 web bundle 在）经每实例代理 `<basePath>/open-in-app/{apps,icon/<id>,open}` 提供全量本地应用拾取器——catalog 协议（`shared/open-in-app-protocol.ts`，与 vendor `shared.ts` 逐字锁步测试）、真实 bundle 图标（404 回退中性方框）、官方 `app.*` 标签表与按钮文案（并入单一 chamber locale NS）、选择持久化（官方 key `dsh.open-in-app.choice`，storage 不可用降级内存）、busy/error 呈现（250ms 延迟 busy、2s 错误衰减）全部吸收；桌面主进程只再补 VS Code 覆盖项（同 id 时官方目录胜出）。
+  - **远程 ssh 来源**：仅主进程 remote-capable 项（VS Code Remote-SSH，主进程构造 `vscode://vscode-remote` URL）；**http/未知来源**：无入口。
+  - **桌面主进程瘦身（红线）**：`OpenInApp` 注册表 vscode-only；`OpenInLaunchContext` 移除 `stat`/`openPath`/`showItemInFolder`，finder provider 与 `classifyLocalPath`/`invokeOpenPath`/`normalizeOpenPathError`/`shouldRevealDirectoryInsteadOfOpen` 一并退役。本地 launch 的信任界由 trusted IPC 迁至实例官方路由（实例连接栅栏 + 官方 resolver 白名单/存在性校验），控制面仍零执行面（逐字透传 + browser-auth cookie 注入）；VS Code 深链语义、来源代 proof 与 OS 深链 `dsh-chamber://open-vscode` 入口不变。
+  - 红线修订登记：design 16/20/05 + AGENTS 同步（最终设计验收由用户完成）。
+  - **未实机验证（[UNVERIFIABLE]）**：官方 host 行随 a2 默认 profile 进入托管实例、远程无 cookie 下 fence 行为、remote cwd 填充、图标缓存/CSP。
 
 ## [0.2.4] - 2026-09-09
 

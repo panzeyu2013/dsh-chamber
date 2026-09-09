@@ -27,7 +27,7 @@
  */
 
 import { app, BrowserWindow, crashReporter, dialog, ipcMain, Menu, Notification, Tray, nativeImage, powerMonitor, powerSaveBlocker, safeStorage, session, shell } from 'electron';
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync, promises as fsp } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
@@ -73,7 +73,7 @@ import {
   runVscodeLaunch,
 } from './deep-link.ts';
 import type { VscodeLaunchContext, VscodeLaunchRequest } from './deep-link.ts';
-import { classifyLocalPath, invokeOpenPath, listOpenInApps, runOpenInLaunch } from './open-in.ts';
+import { listOpenInApps, runOpenInLaunch } from './open-in.ts';
 import type { OpenInLaunchContext, OpenInRequest } from './open-in.ts';
 import { createUpdateController, openReleasePage } from './updater.ts';
 import { DEFAULT_RUNTIME_LOGICAL_DISK_LIMIT_BYTES, DshRuntimeController } from './dsh-runtime-controller.ts';
@@ -3903,26 +3903,16 @@ if (!gotTheLock) {
       },
     };
 
-    // open-in 注册表（open-in.ts）：apps() 能力协商 + 统一执行管线。wiredCtx
-    // 复用 registry/availability/openVscodeUrl 依赖，补 shell 文件系统面
-    // （stat/openPath/showItemInFolder 均为主进程包装）。原 design 16 的两个
-    // vscode IPC（vscode-availability / open-vscode）随旧插件删除而移除——渲染
-    // 层唯一入口收敛为 open-in 两个通道（复核 2026-08）。
+    // open-in 注册表（open-in.ts）：apps() 能力协商 + 统一执行管线。Batch 3
+    // Phase 2 起 provider 只有 vscode——本地文件管理器/其余本地应用由实例自身
+    // 的官方 open-in 宿主目录经每实例代理执行，主进程不再持有 finder/stat/
+    // openPath/reveal 的本地执行面（红线修订见 design 16/20 与 AGENTS）。
     const openInCtx: OpenInLaunchContext = {
       platform: process.platform,
       lookupInstance: wiredCtx.lookupInstance,
       vscodeAvailable: wiredCtx.vscodeAvailable,
       vscodeOpenInNewWindow: wiredCtx.vscodeOpenInNewWindow,
       openVscodeUrl: wiredCtx.openVscodeUrl,
-      stat: p => classifyLocalPath(value => fsp.stat(value), p),
-      openPath: async (p) => {
-        // shell.openPath 部分失败模式（win32/linux）存在 reject 路径——与
-        // openVscodeUrl 封装同款纪律：reject 归一为错误串（loud），绝不落
-        // transport rejection。invokeOpenPath 只返回原始宿主错误，公共
-        // "open path failed" 前缀由 provider 添加一次。
-        return invokeOpenPath(value => shell.openPath(value), p)
-      },
-      showItemInFolder: (p) => shell.showItemInFolder(p),
     }
     ipcMain.handle(IPC_CHANNELS.OPEN_IN_APPS, trustedIpc(() => ({
       apps: listOpenInApps(openInCtx, (appId, error) => {

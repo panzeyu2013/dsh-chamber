@@ -1,9 +1,17 @@
 /**
  * open-in registry — the generic "open this source's path in an app" launch
  * surface (desktop main process). This is the M0+M1 generalization of the
- * VS Code deep-link module (design 16): vscode becomes ONE provider of a
- * registry whose apps are looked up by id, and the finder provider opens the
- * local file manager for the local instance.
+ * VS Code deep-link module (design 16): vscode is ONE provider of a registry
+ * whose apps are looked up by id.
+ *
+ * Batch 3 Phase 2 (2026-09): the provider set is deliberately vscode-only.
+ * The local file manager (and every other local application) now comes from
+ * the INSTANCE's own official open-in catalog (`dsh-host-open-in-app`, reached
+ * through the per-instance proxy), so the main process no longer carries
+ * finder/stat/openPath/reveal IPC surfaces — the local launch trust boundary
+ * moved from trusted IPC to the instance's own authenticated host route, and
+ * the main process keeps only what the instance cannot do: constructing the
+ * VS Code remote URL for SSH sources from the chamber's registry facts.
  *
  * The registry mirrors two established philosophies:
  * - transport-provider.ts's "new source = new provider": each app is a
@@ -13,9 +21,9 @@
  * - deep-link.ts's injection-test shape: the module is electron-free by
  *   construction (imports only node built-ins + INSTANCE_ID_PATTERN and the
  *   deep-link core), and every host capability (registry lookup, vscode
- *   availability/url-open, fs stat, shell open/reveal) is injected via
- *   OpenInLaunchContext, so the pure-Node test suite (open-in.test.ts) runs
- *   without electron or any third-party dependency.
+ *   availability/url-open) is injected via OpenInLaunchContext, so the
+ *   pure-Node test suite (open-in.test.ts) runs without electron or any
+ *   third-party dependency.
  *
  * Responsibilities:
  * - getOpenInApp / listOpenInApps: id lookup + capability negotiation
@@ -29,8 +37,6 @@
  *   via the injected ctx (defense in depth; vscode's runVscodeLaunch has its
  *   own re-check inside, keeping the double guard) → app.open. Every failure
  *   is loud, never a silent success.
- * - normalizeOpenPathError: the shell.openPath success/error boundary as a
- *   testable pure function.
  *
  * main.ts only wires this module (IPC handlers + the OpenInLaunchContext
  * host adapters); it holds no open-in logic.
@@ -48,10 +54,10 @@ export interface OpenInRequest {
   sourceFingerprint?: string
 }
 
-/** Host capabilities injected by main.ts (stat/openPath/showItemInFolder are
- *  electron shell/fs wrappers); the module itself stays electron-free and
- *  unit-testable. A superset of VscodeLaunchContext — structurally
- *  compatible, so the vscode provider delegates to runVscodeLaunch directly. */
+/** Host capabilities injected by main.ts; the module itself stays
+ *  electron-free and unit-testable. A superset of VscodeLaunchContext —
+ *  structurally compatible, so the vscode provider delegates to
+ *  runVscodeLaunch directly. */
 export interface OpenInLaunchContext {
   /** Host platform (`process.platform` in production). */
   platform: string
@@ -68,12 +74,6 @@ export interface OpenInLaunchContext {
    *  default reuse/replace policy). Passed through to runVscodeLaunch by the
    *  vscode provider. */
   vscodeOpenInNewWindow?(): boolean
-  /** Host stat wrapper (follows symlinks in production). */
-  stat(path: string): Promise<{ kind: 'dir' | 'file' } | null>
-  /** shell.openPath wrapper: success (null or empty string) → null, failure → error string. */
-  openPath(path: string): Promise<string | null>
-  /** shell.showItemInFolder wrapper: reveal a file in the OS file manager. */
-  showItemInFolder(path: string): void
 }
 
 /** The open-in execution result — loud {error} on failure, never a silent success. */
@@ -106,66 +106,6 @@ export interface OpenInApp {
 }
 
 /**
- * Electron opens a directory through the desktop's default handler. On macOS,
- * LaunchServices may classify a directory as a package through an arbitrary
- * registered extension or package metadata, so no suffix deny-list can prove
- * it is an ordinary folder. The only complete safe policy is to reveal every
- * Darwin directory in Finder. Other platforms retain directory openPath.
- */
-export function shouldRevealDirectoryInsteadOfOpen(platform: string): boolean {
-  return platform === 'darwin'
-}
-
-/**
- * The finder provider: opens the OS file manager (常驻文件管理器 — always
- * present, so available is constant true). Local instance only — a remote
- * path has nothing to reveal in THIS machine's file manager, so any non-local
- * instanceId is refused loudly (defense in depth: the pipeline's
- * remoteCapable gate would already have refused, but the provider re-checks).
- * Path discipline mirrors deep-link (absolute / control-char-free / ≤ 4096);
- * local workspaces validate via validateLocalPath (drive/UNC included,
- * design 21 M4), remote dsh paths stay validateRemotePath. Files are
- * revealed. Directories use openPath outside
- * macOS; every macOS directory is revealed because LaunchServices package
- * classification cannot be exhaustively predicted from a suffix list.
- */
-const finderApp = Object.freeze<OpenInApp>({
-  id: 'finder',
-  displayKind: 'file-manager',
-  remoteCapable: false,
-  available: () => true,
-  async open(req, ctx) {
-    if (req.instanceId !== 'local') {
-      return { ok: false, error: 'finder is only available for the local instance' }
-    }
-    // design 21 M4: the local instance's workspace lives on THIS machine, so
-    // drive-absolute/UNC paths validate on win32 hosts (validateLocalPath);
-    // remote dsh paths stay POSIX-only (validateRemotePath).
-    const validated = req.instanceId === 'local'
-      ? validateLocalPath(req.path)
-      : validateRemotePath(req.path)
-    if (!validated.ok) return validated
-    const entry = await ctx.stat(validated.path)
-    if (entry === null) {
-      return { ok: false, error: `path does not exist: ${validated.path}` }
-    }
-    if (entry.kind === 'dir') {
-      if (shouldRevealDirectoryInsteadOfOpen(ctx.platform)) {
-        ctx.showItemInFolder(validated.path)
-        return { ok: true }
-      }
-      const error = await ctx.openPath(validated.path)
-      if (error !== null) {
-        return { ok: false, error: `open path failed: ${error}` }
-      }
-      return { ok: true }
-    }
-    ctx.showItemInFolder(validated.path)
-    return { ok: true }
-  },
-})
-
-/**
  * The vscode provider: wraps runVscodeLaunch with zero behavior change — the
  * existing pipeline (registry lookup → authority construction → availability
  * re-check → openVscodeUrl, design 16 §3.4) runs untouched. The injected
@@ -183,8 +123,13 @@ const vscodeApp = Object.freeze<OpenInApp>({
   open: (req, ctx) => runVscodeLaunch(req, ctx),
 })
 
-/** The fixed-order registry — [finder, vscode] is the documented list order. */
-const openInApps: readonly OpenInApp[] = Object.freeze([finderApp, vscodeApp])
+/**
+ * The fixed-order registry. Batch 3 Phase 2: vscode only — the local file
+ * manager and every other local application come from the instance's own
+ * official open-in catalog over the per-instance proxy (the instance performs
+ * those launches; the main process never regains a local-execution surface).
+ */
+const openInApps: readonly OpenInApp[] = Object.freeze([vscodeApp])
 
 /** Whitelist lookup by id; a non-string appId (untrusted IPC payload) is
  *  never guessed — it resolves to null like any unknown id. */
@@ -222,54 +167,6 @@ export function listOpenInApps(
       }
     })(),
   }))
-}
-
-/** Production stat adapter semantics: only a genuinely absent path maps to
- * null. Permission, I/O and hostile failures propagate to runOpenInLaunch's
- * structured provider boundary instead of masquerading as non-existence. */
-export async function classifyLocalPath(
-  stat: (path: string) => Promise<{ isDirectory(): boolean }>,
-  path: string,
-): Promise<{ kind: 'dir' | 'file' } | null> {
-  try {
-    const entry = await stat(path)
-    return entry.isDirectory() ? { kind: 'dir' } : { kind: 'file' }
-  } catch (error) {
-    let code: unknown
-    try {
-      code = error !== null && typeof error === 'object'
-        ? (error as { code?: unknown }).code
-        : undefined
-    } catch {
-      throw error
-    }
-    if (code === 'ENOENT' || code === 'ENOTDIR') return null
-    throw error
-  }
-}
-
-/**
- * Electron `shell.openPath` result normalization: the API resolves '' on
- * success and an error string on failure. '' / non-string → null (success);
- * a non-empty string → the error text. Extracted as an electron-free pure
- * function so the boundary is unit-testable (the wrapper lives in main.ts).
- */
-export function normalizeOpenPathError(err: unknown): string | null {
-  return typeof err === 'string' && err.length > 0 ? err : null
-}
-
-/** Complete Electron openPath adapter boundary, including its documented
- * resolved error string and platform-specific rejection paths. Returning only
- * the raw host error leaves the public prefix to finderApp exactly once. */
-export async function invokeOpenPath(
-  openPath: (path: string) => Promise<unknown>,
-  path: string,
-): Promise<string | null> {
-  try {
-    return normalizeOpenPathError(await openPath(path))
-  } catch (error) {
-    return describeUnknownError(error)
-  }
 }
 
 /**

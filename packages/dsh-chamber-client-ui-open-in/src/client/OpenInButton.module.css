@@ -49,6 +49,18 @@
   background: var(--dsw-alias-interactive-bg-hover);
 }
 
+/* Launch phases (absorbed from the official split button): the busy dress is
+   delayed by the component (250ms), so it never flashes on a quick launch;
+   the error dress decays after 2s. */
+.button[data-state='busy'] {
+  color: var(--dsw-alias-label-dimmed);
+  cursor: wait;
+}
+
+.button[data-state='error'] {
+  box-shadow: inset 0 0 0 1px var(--dsw-alias-state-error-primary);
+}
+
 .button:hover img {
   filter: brightness(1.15);
 }

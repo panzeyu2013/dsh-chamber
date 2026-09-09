@@ -118,6 +118,7 @@ host 插件入口/半、上游 `tests/`、`tsdown.config.ts`、上游 README（a
 | client/connection（recovery） | recovery-config 共享 schema（`DEFAULT_MIN_RESTART_INTERVAL_MS` 10_000 == schema 默认 backoffMaxMs） | liveness-triggers 钉值 + C1 |
 | dsh-runtime（激活探针域） | `HOST_DOMAIN_PROBE_NAMES` ↔ gateway `HOST_PACKAGE_PROBE_DOMAINS` | C7 + gateway 运行时 fail-loud |
 | dsh-host-webserver（index-inject） | `__DSH_CONNECTION_RECOVERY__` 全局注入（connection host 半） | fork C1（src/index.ts pure） |
+| dsh-host-open-in-app（官方 open-in 宿主路由） | chamber open-in 插件本地镜像 `shared/open-in-app-protocol.ts`（三条路由 + 载荷形状）与 `locales.ts` 的 `app.*` 标签表 | open-in 插件 `test/open-in-app-protocol.test.ts`（读 vendor `shared.ts`/`OpenInAppAction.tsx` 逐字比对） |
 
 ## 5. 再生物登记
 

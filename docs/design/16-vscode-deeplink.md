@@ -15,6 +15,15 @@
 > `@dsh-chamber/dsh-client-ui-vscode` / `-open-in` 是当时的包名，保留不改写；
 > 现行名字见 AGENTS.md 与 STATUS。
 >
+> **Batch 3 Phase 2 红线修订（2026-09）**：本地 Finder/文件管理器等应用的
+> 目录探测与 launch 已移出桌面主进程——改由**实例自身官方宿主半边**
+> （`dsh-host-open-in-app`，随 a2 默认 web bundle 在）经每实例代理
+> `<basePath>/open-in-app/*` 执行；主进程 open-in 注册表收窄为 **vscode-only**
+> （`finder`/`stat`/`openPath`/`showItemInFolder` 面退役），VS Code 深链语义
+> （本地 `vscode://file`、远程 `vscode://vscode-remote/ssh-remote+…`、六步 loud
+> 管线、来源代 proof、OS 深链 `dsh-chamber://open-vscode`）全部不变。详见设计 20
+> 顶部修订块。
+>
 > **连接模型 v2 注记**：现行来源 id 为 `dsh-<id>` / `gateway-<id>`，`ssh-<id>`
 > 仅保留 legacy 兼容映射；kind 是目标类型，是否能使用 VS Code Remote-SSH 由
 > `transport === 'ssh'` 决定（17 §2.2/§9.1）。本文的 v1 `kind === 'ssh'`

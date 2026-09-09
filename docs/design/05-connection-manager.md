@@ -557,10 +557,13 @@ export const chamberBridge: {
     Worktree 插件：占用 `sidebar.git`，页面级 singleton 以 30s 单飞读取各实例
     topology，并编排 create/workspace/session 与 Git-first remove saga；它不把
     Git 事实塞进 App aggregate，也不暴露任意 argv/path mutation。
-  - `packages/dsh-chamber-client-ui-open-in/`——设计 17 的 chamber 内建桌面打开
-    插件：占用 `conversation.session.header.utilities`，按当前 N-ctx 的 source/workspace
-    选择本机 Finder 或 VS Code；能力探测与执行只经 preload 的 trusted IPC 到
-    Desktop 主进程，无 host 插件、无 seed、无控制面执行面。
+  - `packages/dsh-chamber-client-ui-open-in/`——设计 16/20 的 chamber 内建桌面打开
+    插件（Batch 3 Phase 2 统一）：占用 `conversation.session.header.utilities`，
+    按当前 N-ctx 的 source 经 per-source 视图模型选择入口——**本地**来源走实例自身
+    官方宿主目录（`dsh-host-open-in-app`，经每实例代理 `<basePath>/open-in-app/*`，
+    执行在实例进程内）+ 桌面主进程的 VS Code 覆盖项；**远程 ssh** 来源只有主进程的
+    VS Code Remote（trusted IPC + 来源代 proof）；http/未知来源无入口。无 host
+    插件、无 seed、无控制面执行面（主进程亦已收窄为 vscode-only，见设计 20 修订块）。
 - 自研宿主包（随 chamber 分发、运行于每个 dsh 实例进程）：
   - `packages/dsh-chamber-seed-client-graph/`——设计 09 的只读 client boot graph Remote；
   - `packages/dsh-chamber-seed-git-worktree/`——设计 08 的领域限定 Git Remote，
@@ -657,10 +660,10 @@ instanceId}` +
   推送 `dsh-chamber:system-resume`（OS 唤醒，载荷 `{timestamp}`，渲染端立即
   重连——设计 14 D4）；设计 19 的 notifications 嵌套设置仍属于该 chamber 全局面，
   不进入任何实例配置平面；
-- 桌面 open-in 面（设计 16/20，无实例内执行面）：
-  `dsh-chamber:open-in-apps`（本机 app 能力协商，非秘密投影）与
+- 桌面 open-in 面（设计 16/20；Batch 3 Phase 2 起主进程 vscode-only）：
+  `dsh-chamber:open-in-apps`（本机 app 能力协商，非秘密投影，现只投影 vscode）与
   `dsh-chamber:open-in`（appId/instanceId/path/sourceFingerprint 主进程统一校验后
-  拉起 Finder/VS Code）。`sourceFingerprint` 是主进程内存签发、随 roster 投影的
+  拉起 VS Code；本地文件管理器等应用由实例官方宿主路由执行，不经该 IPC）。`sourceFingerprint` 是主进程内存签发、随 roster 投影的
   非秘密 opaque proof（local 固定为 `local`，远程为 64 位小写十六进制）；renderer
   不得自行构造。主进程在接受请求、异步宿主调用边界及排入 renderer intent 前复验
   精确来源所有权，旧 shell 按钮不能操作同 id replacement；

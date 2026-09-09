@@ -1,8 +1,10 @@
 /**
- * Chamber open-in client plugin (design 16 + open-in extension): a header
- * utility button that opens the current session's workspace in an installed
- * app — Finder (local sources) and/or VS Code (local + any SSH-transport
- * remote target, whether dsh or gateway).
+ * Chamber open-in client plugin (design 16 + open-in extension + Batch 3
+ * Phase 2 unification): ONE header utility entry that opens the current
+ * session's workspace in an installed app, over the per-source view-model —
+ * the instance's own host catalog for LOCAL sources (absorbed official
+ * channel) and the desktop main-process provider (VS Code, and the remote
+ * deeplink carrier for SSH targets).
  *
  * Registered into the OFFICIAL conversation header utilities slot
  * (`conversation.session.header.utilities`, the same right-aligned row as the
@@ -14,16 +16,42 @@
  * per-header `sessionId` and the framework's global `useWorkspaces` hook —
  * no direct ctx store access (inject face stays `['slots', 'locale']`).
  *
- * The source id rides `ctx.chamberInstanceId` (provided by chamber-entry);
- * the workspace path for the header's session comes from the framework store
- * (see OpenInButton).
+ * Per-entry facts ride this ctx (`chamberInstanceId`, `chamberBasePath`,
+ * `chamberSourceFingerprint`, `chamberTransport`, all provided by
+ * chamber-entry/shell.ts): the source id and transport decide the matrix, the
+ * base path scopes the official host-catalog requests to this instance's
+ * proxy prefix, and the fingerprint is the exact-boot proof the trusted main
+ * process verifies before a launch.
  */
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 // Type-only import activates the locale service's Context merge.
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import { OpenInButton, type OpenInInjected } from './OpenInButton.tsx'
+import { createOfficialCatalog } from './official-catalog.ts'
+import { getOpenInChoice, setOpenInChoice, subscribeOpenInChoice } from './choice-store.ts'
 import { en, zh, type OpenInKey } from '../locales.ts'
-import { parseOpenInSource, parseOpenInSourceFingerprint } from '../shared/capabilities.ts'
+import {
+  buildOpenInLaunchRequest,
+  describeOpenInError,
+  parseOpenInResult,
+  parseOpenInSource,
+  parseOpenInSourceFingerprint,
+  type OpenInApp,
+  type OpenInResult,
+} from '../shared/capabilities.ts'
+import {
+  bridgePlatform,
+  getOpenInApps,
+  refreshApps,
+  subscribeOpenIn,
+  type OpenInBridgeSurface,
+  type Translate,
+} from '../shared/coordinator.ts'
+import {
+  buildOpenInViewModel,
+  type OpenInViewEntry,
+  type OpenInViewModel,
+} from '../shared/open-in-view-model.ts'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
@@ -55,13 +83,103 @@ export function apply(ctx: ClientContext): void {
   )
   if (sourceFingerprint === null) return
 
-  const t = ctx.locale.bind(NS)
+  const t = ctx.locale.bind(NS) as Translate
+
+  // Per-ctx official channel (Batch 3 Phase 2): only a LOCAL source has the
+  // instance's own host half; its routes are reached through THIS entry's
+  // proxy prefix, so the catalog is per-ctx, never page-global.
+  const basePath = (ctx as { chamberBasePath?: string }).chamberBasePath
+  const catalog = source.local && typeof basePath === 'string'
+    ? createOfficialCatalog({ basePath })
+    : null
+
+  let official: OpenInApp[] | null = null
+  let officialProbe: Promise<void> | null = null
+  const listeners = new Set<() => void>()
+  const emit = (): void => {
+    for (const listener of [...listeners]) listener()
+  }
+  const loadOfficial = (): Promise<void> => {
+    if (catalog === null) return Promise.resolve()
+    officialProbe ??= catalog.load().then((entries) => {
+      official = entries
+      emit()
+    })
+    return officialProbe
+  }
+  /** Re-probe both pools: the page-wide main provider and this ctx's catalog. */
+  const refresh = async (): Promise<void> => {
+    officialProbe = null
+    await Promise.all([refreshApps(), loadOfficial()])
+  }
+  const subscribe = (listener: () => void): (() => void) => {
+    listeners.add(listener)
+    return () => { listeners.delete(listener) }
+  }
+
+  // Initial probe + change subscriptions. The main pool is page-wide (the
+  // coordinator's single-flight probe); the catalog is this ctx's own.
+  void refresh()
+  const unsubscribeMain = subscribeOpenIn(emit)
+  const unsubscribeChoice = subscribeOpenInChoice(emit)
+  ctx.effect(() => () => {
+    unsubscribeMain()
+    unsubscribeChoice()
+  }, 'dsh-chamber: open-in subscriptions')
+
+  const getViewModel = (): OpenInViewModel => buildOpenInViewModel({
+    source,
+    official,
+    main: getOpenInApps(),
+  })
+
+  /**
+   * Launch one view-model entry through its channel: official entries POST to
+   * the instance's own host route (the instance, not the control plane,
+   * performs the launch); main entries ride the trusted preload IPC with the
+   * exact boot-bound source proof. Never throws — the button renders the
+   * error dress from the result.
+   */
+  const launch = async (entry: OpenInViewEntry, path: string): Promise<OpenInResult> => {
+    if (entry.channel === 'official') {
+      if (catalog === null) return { ok: false, error: 'official catalog unavailable' }
+      try {
+        await catalog.launch(entry.id, path)
+        return { ok: true }
+      } catch (error) {
+        return { ok: false, error: describeOpenInError(error) }
+      }
+    }
+    const bridge = (window as unknown as OpenInBridgeSurface).dshChamber?.openIn
+    if (bridge === undefined) return { ok: false, error: t('bridgeUnavailable') }
+    const request = buildOpenInLaunchRequest(entry.id, source, path, sourceFingerprint)
+    try {
+      const raw = await bridge.open(request.appId, request.instanceId, request.path, request.sourceFingerprint)
+      const result = parseOpenInResult(raw)
+      return result ?? { ok: false, error: t('invalidResponse') }
+    } catch (error) {
+      return { ok: false, error: describeOpenInError(error) }
+    }
+  }
 
   // The slot inject factory closes over ctx (same pattern as the vendor
-  // session-log entry): it hands the component this ctx's source id and the
-  // bound translator; the per-header session id and the workspace rows come
-  // from the framework standard kit (see OpenInButton props).
-  const injected = (): OpenInInjected => ({ source, sourceFingerprint, t })
+  // session-log entry): it hands the component this ctx's source id, the
+  // bound translator and the per-ctx model/launch faces; the per-header
+  // session id and the workspace rows come from the framework standard kit
+  // (see OpenInButton props).
+  const injected = (): OpenInInjected => ({
+    source,
+    sourceFingerprint,
+    t,
+    getViewModel,
+    subscribe,
+    refresh,
+    launch,
+    getChoice: getOpenInChoice,
+    choose: setOpenInChoice,
+    iconUrl: appId => catalog?.iconUrl(appId) ?? null,
+    platform: bridgePlatform(),
+  })
 
   ctx.slots.inject(OPEN_IN_HEADER_SLOT, () => ctx.slots.register({
     name: OPEN_IN_HEADER_SLOT,

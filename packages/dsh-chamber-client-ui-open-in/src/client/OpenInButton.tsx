@@ -1,61 +1,47 @@
 /**
- * Open-in header utility button (design 16 §6 + open-in extension,
- * real-machine placement fix 2026-08): registered into the OFFICIAL
- * conversation header utilities slot (`conversation.session.header.utilities`,
- * the same right-aligned row as the vendor "Session log" action), so the
- * button lays out INLINE beside it — the original `shell.overlay` top-right
- * anchor was measured to overlap that row (details column closed ⇒ the center
- * column reaches the frame edge), so the frame-level position is gone
- * entirely.
+ * Open-in header utility entry (design 16 §6 + open-in extension + Batch 3
+ * Phase 2 unification): the SINGLE header entry that opens the current
+ * session's workspace in an installed app, over the per-source view-model.
  *
- * The button opens the current session's workspace in an installed app,
- * chosen per source: LOCAL sources (sourceId === 'local') can open in any
- * reported app (Finder + VS Code on a typical mac) — ≥2 apps render the main
- * icon button (default = VS Code when present) plus a chevron dropdown;
- * REMOTE sources whose transport is SSH (whether target kind is dsh or
- * gateway) only get remote-capable apps (VS Code). HTTP transports get no
- * vscode-remote action. Exactly one usable app renders the plain icon button.
+ * Registered into the OFFICIAL conversation header utilities slot
+ * (`conversation.session.header.utilities`, the same right-aligned row as the
+ * vendor "Session log" action), so the control lays out INLINE beside it — the
+ * original `shell.overlay` top-right anchor was measured to overlap that row
+ * (details column closed ⇒ the center column reaches the frame edge), so the
+ * frame-level position is gone entirely.
  *
- * Three gates (design 16 §6.3), ANY failure → render null (never a dead
- * button):
- *  1. the probed app list is non-empty after filtering (unknown/probe-failed →
+ * Presentation matrix (see `shared/open-in-view-model.ts`, the single decision
+ * surface):
+ *  - LOCAL sources render the instance's own host catalog (the absorbed
+ *    official channel: real bundle icons over the per-instance proxy) plus the
+ *    desktop main-process provider (the VS Code override);
+ *  - SSH-transport remote sources render the main provider's remote-capable
+ *    apps only (VS Code Remote-SSH);
+ *  - HTTP/unknown sources render nothing.
+ * ≥2 entries render the main button (remembered/default selection) plus a
+ * chevron menu; exactly one renders the plain icon button; zero renders null.
+ *
+ * Absorbed from the official `open-in-app` client: the catalog protocol +
+ * icon URLs (`official-catalog.ts`), the product-label table and button copy
+ * (`../locales.ts`), the persisted choice (`choice-store.ts`), and the busy/
+ * error dress of the split button (delayed busy paint, decaying error).
+ *
+ * Two gates (design 16 §6.3), ANY failure → render null (never a dead button):
+ *  1. the merged view-model has ≥1 usable entry (unknown/probe-failed →
  *     hidden, fail-closed);
- *  2. THIS header's session belongs to a workspace whose path exists
- *    (the slot delivers the per-header `sessionId`; both remote AND local
- *    sources show — user decision 2026-08: local opens `vscode://file/<path>`,
- *    remote opens `ssh-remote+`).
+ *  2. THIS header's session belongs to a workspace with a concrete path.
  *
  * Workspace rows come from the framework's global `useWorkspaces` selector
  * hook (the same store the sidebar groups by), so the plugin keeps zero
  * @dsh-chamber dependency and no direct ctx store access (design 16 §6.2).
- *
- * Marks: the VS Code mark is the ACTUAL product icon extracted from the
- * installed VS Code app (`vscode-icon.png`, Code.icns → 32px @2x), replacing
- * the original hand-drawn older-logo SVG path — nominative reference (design
- * 16 §6), so the button always matches the user's installed icon. Finder (and
- * Explorer / file managers) get a neutral inline folder outline in design
- * tokens.
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import vscodeIcon from './vscode-icon.png'
 import { AccessibleAppMenu } from './AccessibleAppMenu.tsx'
-import {
-  bridgePlatform,
-  getApps,
-  getOpenInApps,
-  openInBridgeReady,
-  refreshApps,
-  subscribeOpenIn,
-  type Translate,
-} from '../shared/coordinator.ts'
-import {
-  buildOpenInLaunchRequest,
-  describeOpenInError,
-  parseOpenInResult,
-  usableOpenInApps,
-  type OpenInApp,
-  type OpenInSource,
-} from '../shared/capabilities.ts'
+import type { Translate } from '../shared/coordinator.ts'
+import type { OpenInResult, OpenInSource } from '../shared/capabilities.ts'
+import type { OpenInViewEntry, OpenInViewModel } from '../shared/open-in-view-model.ts'
+import { OPEN_IN_APP_LABEL_KEY } from '../locales.ts'
 import { workspacePathForSession } from './open-in-gates.ts'
 import styles from './OpenInButton.module.css'
 
@@ -67,6 +53,22 @@ export interface OpenInInjected {
   sourceFingerprint: string
   /** Bound translator for the plugin namespace. */
   t: Translate
+  /** Current merged per-source view-model (official + main pools). */
+  getViewModel(): OpenInViewModel
+  /** Subscribe to view-model changes (pool probes, choice). */
+  subscribe(listener: () => void): () => void
+  /** Re-probe both pools (menu open / window focus). */
+  refresh(): Promise<void>
+  /** Launch one entry through its channel; rejects on failure. */
+  launch(entry: OpenInViewEntry, path: string): Promise<OpenInResult>
+  /** The persisted app choice ('' before the first pick). */
+  getChoice(): string
+  /** Remember a picked app id. */
+  choose(appId: string): void
+  /** Host-served icon URL for an official entry, null when the source has no official channel. */
+  iconUrl(appId: string): string | null
+  /** Host platform string ('darwin' | 'win32' | 'linux' | …) or null. */
+  platform: string | null
 }
 
 /**
@@ -84,6 +86,13 @@ export interface OpenInProps extends OpenInInjected {
     items: ReadonlyArray<{ workspaceId: string; path: string; sessionIds: string[] }>
   }) => S) => S
 }
+
+/** Quick launches settle well under this delay, so their busy dress never
+ *  paints — the visible dim-and-wait treatment is reserved for launches that
+ *  are actually taking a while (absorbed from the official client). */
+const BUSY_DRESS_DELAY_MS = 250
+/** Error dress decay (absorbed from the official client). */
+const ERROR_DECAY_MS = 2_000
 
 /** The official Visual Studio Code product icon (32px @2x raster extracted
  *  from the installed app's Code.icns). Microsoft trademark — used here as
@@ -116,9 +125,8 @@ function FolderMark() {
   )
 }
 
-/** Neutral application mark for future providers whose presentation family is
- * unknown to this client version. It deliberately does not impersonate the
- * file manager. */
+/** Neutral application mark for catalog families this client version cannot
+ *  name, and for an icon image the host does not serve. */
 function GenericAppMark() {
   return (
     <svg className={styles.genericMark} viewBox="0 0 20 20" width="20" height="20" aria-hidden="true" focusable="false">
@@ -130,152 +138,181 @@ function GenericAppMark() {
   )
 }
 
-/** Platform-appropriate wording for the "file manager" app: Finder on macOS,
- *  Explorer on Windows, generic file manager elsewhere. */
+/** App ids whose icon image already failed this page (a 404 icon is fetched
+ *  once, not per menu open — absorbed from the official client). */
+const failedIcons = new Set<string>()
+
+/** One official catalog entry's real bundle icon with the generic fallback. */
+function CatalogIcon({ id, url }: { id: string; url: string }) {
+  const [failed, setFailed] = useState(failedIcons.has(id))
+  if (failed) return <GenericAppMark />
+  return (
+    <img
+      src={url}
+      alt=""
+      draggable={false}
+      onError={() => {
+        failedIcons.add(id)
+        setFailed(true)
+      }}
+    />
+  )
+}
+
+/** Platform-appropriate wording for the "file manager" family: Finder on
+ *  macOS, Explorer on Windows, generic file manager elsewhere. */
 function finderLabel(t: Translate, platform: string | null): string {
   if (platform === 'darwin') return t('titleFinder')
   if (platform === 'win32') return t('titleExplorer')
   return t('titleFileManager')
 }
 
-/** Per-app title used for both the button tooltip/aria-label and the dropdown
- *  row label. */
-function appLabel(app: OpenInApp, t: Translate, platform: string | null): string {
-  if (app.displayKind === 'vscode') return t('titleVscode')
-  if (app.displayKind === 'file-manager') return finderLabel(t, platform)
-  return t('titleGeneric', { app: app.id })
+/** Per-entry title used for both the button tooltip/aria-label and the dropdown
+ *  row label: the absorbed official label table first, then the chamber's
+ *  family wording, then the raw id (a host catalog extension stays visible). */
+function appLabel(entry: OpenInViewEntry, t: Translate, platform: string | null): string {
+  const labelKey = OPEN_IN_APP_LABEL_KEY[entry.id]
+  if (labelKey !== undefined) return t(labelKey)
+  if (entry.displayKind === 'file-manager') return finderLabel(t, platform)
+  if (entry.displayKind === 'vscode') return t('titleVscode')
+  return t('titleGeneric', { app: entry.id })
 }
 
-function appMark(app: OpenInApp) {
-  if (app.displayKind === 'vscode') return <VscodeMark />
-  if (app.displayKind === 'file-manager') return <FolderMark />
+function appMark(entry: OpenInViewEntry, iconUrl: string | null) {
+  if (iconUrl !== null) return <CatalogIcon id={entry.id} url={iconUrl} />
+  if (entry.displayKind === 'vscode') return <VscodeMark />
+  if (entry.displayKind === 'file-manager') return <FolderMark />
   return <GenericAppMark />
 }
 
-export function OpenInButton({ source, sourceFingerprint, t, sessionId, useWorkspaces }: OpenInProps) {
-  const [appList, setAppList] = useState<OpenInApp[] | null>(getOpenInApps())
-  const [selectedAppId, setSelectedAppId] = useState<string | null>(null)
+export function OpenInButton({
+  t,
+  sessionId,
+  useWorkspaces,
+  getViewModel,
+  subscribe,
+  refresh,
+  launch,
+  getChoice,
+  choose,
+  iconUrl,
+  platform,
+}: OpenInProps) {
+  const [model, setModel] = useState<OpenInViewModel>(() => getViewModel())
+  const [phase, setPhase] = useState<'idle' | 'busy' | 'error'>('idle')
+  const inFlight = useRef(false)
+  const busyTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const errorTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
-  useEffect(() => {
-    // The preload exposes the bridge after an async info round-trip, so a
-    // mount before hydration would probe nothing and (with the coordinator's
-    // bridge-missing reset, frontend-review P1-1) stay unknown. Poll for the
-    // bridge like App.tsx's sshBridgeReady guard (bounded: web builds without
-    // a bridge stay hidden after the budget instead of retrying forever).
-    let cancelled = false
-    let attempts = 0
-    const timer = setInterval(() => {
-      if (cancelled) return
-      if (!openInBridgeReady()) {
-        attempts += 1
-        if (attempts >= 40) clearInterval(timer)
-        return
-      }
-      clearInterval(timer)
-      void getApps().then(setAppList)
-    }, 500)
-    const unsubscribe = subscribeOpenIn(() => setAppList(getOpenInApps()))
-    return () => {
-      cancelled = true
-      clearInterval(timer)
-      unsubscribe()
-    }
+  useEffect(() => subscribe(() => { setModel(getViewModel()) }), [subscribe, getViewModel])
+
+  useEffect(() => () => {
+    clearTimeout(busyTimer.current)
+    clearTimeout(errorTimer.current)
   }, [])
 
   // Hooks run unconditionally (before any gate's early return).
   const workspaces = useWorkspaces(ws => ws.items)
 
-  // Gate 1: the probed app list, fail-closed (null/undefined/empty all hide),
-  // filtered to what this source may actually use. LOCAL sources get every
-  // available app; REMOTE sources over SSH get only remote-capable ones,
-  // irrespective of dsh/gateway target kind. HTTP transports get none. The
-  // bridge's `available` flag is honored as a hard filter (fail-closed).
-  const usableApps = usableOpenInApps(appList, source)
-  if (usableApps.length === 0) return null
+  // Gate 1: the merged view-model decides what this source may use. Unknown or
+  // failed probes contribute nothing (fail-closed); an empty set renders null.
+  const entries = model.entries
+  if (entries.length === 0) return null
 
   // Gate 2: THIS header's session must live in a workspace with a concrete
   // path. Both remote and local sources show (user decision 2026-08); the
-  // launch branch (ssh-remote vs file) is decided in the main process from
-  // the authoritative instance transport behind instanceId.
+  // launch channel decides ssh-remote vs local/instance semantics.
   const path = workspacePathForSession(workspaces, sessionId)
   if (path === undefined || path === '') return null
 
-  // Default selection (this mount's memory only, no localStorage): VS Code
-  // when present, else the first app.
-  const defaultApp = usableApps.find(app => app.displayKind === 'vscode') ?? usableApps[0]
-  const activeApp = usableApps.find(app => app.id === selectedAppId) ?? defaultApp
+  // Remembered selection wins when still usable; otherwise the view-model's
+  // default (first VS Code entry, else the first entry).
+  const choice = getChoice()
+  const activeEntry = entries.find(entry => entry.id === choice)
+    ?? entries.find(entry => entry.id === model.defaultEntryId)
+    ?? entries[0]
 
-  const platform = bridgePlatform()
-
-  const openApp = (app: OpenInApp): void => {
-    const bridge = (window as unknown as {
-      dshChamber?: { openIn?: { open(appId: string, instanceId: string, path: string, sourceFingerprint: string): Promise<unknown> } }
-    }).dshChamber?.openIn
-    if (bridge === undefined) {
-      console.error(`[dsh-chamber] ${t('openFailed')}${t('bridgeUnavailable')}`)
-      return
-    }
-    const request = buildOpenInLaunchRequest(app.id, source, path, sourceFingerprint)
-    void bridge.open(request.appId, request.instanceId, request.path, request.sourceFingerprint).then((rawResult) => {
-      const result = parseOpenInResult(rawResult)
-      if (result === null) {
-        console.error(`[dsh-chamber] ${t('openFailed')}${t('invalidResponse')}`)
-      } else if (!result.ok) {
-        console.error(`[dsh-chamber] ${t('openFailed')}${result.error}`)
+  const openApp = (entry: OpenInViewEntry): void => {
+    if (inFlight.current) return
+    inFlight.current = true
+    clearTimeout(errorTimer.current)
+    clearTimeout(busyTimer.current)
+    busyTimer.current = setTimeout(() => { setPhase('busy') }, BUSY_DRESS_DELAY_MS)
+    void launch(entry, path).then((result) => {
+      inFlight.current = false
+      clearTimeout(busyTimer.current)
+      if (result.ok) {
+        setPhase('idle')
+        return
       }
+      console.error(`[dsh-chamber] ${t('openFailed')}${result.error}`)
+      setPhase('error')
+      errorTimer.current = setTimeout(() => { setPhase('idle') }, ERROR_DECAY_MS)
     }).catch((error: unknown) => {
-      // Transport-level rejection (IPC fence / handler throw): loud, never
-      // an unhandled rejection (frontend-review P2-3).
-      console.error(`[dsh-chamber] ${t('openFailed')}${describeOpenInError(error)}`)
+      // Transport-level rejection (IPC fence / host route throw): loud, never
+      // an unhandled rejection.
+      inFlight.current = false
+      clearTimeout(busyTimer.current)
+      console.error(`[dsh-chamber] ${t('openFailed')}${String(error)}`)
+      setPhase('error')
+      errorTimer.current = setTimeout(() => { setPhase('idle') }, ERROR_DECAY_MS)
     })
   }
 
-  // One usable app → plain icon button (VS Code remote behavior unchanged).
-  if (usableApps.length === 1) {
-    const app = usableApps[0]
-    const label = appLabel(app, t, platform)
+  const activeLabel = phase === 'error' ? t('openError') : appLabel(activeEntry, t, platform)
+
+  // One usable entry → plain icon button.
+  if (entries.length === 1) {
     return (
       <button
         type="button"
         className={styles.button}
-        onClick={() => openApp(app)}
-        aria-label={label}
-        title={label}
+        data-state={phase}
+        disabled={phase === 'busy'}
+        onClick={() => { openApp(activeEntry) }}
+        aria-label={activeLabel}
+        title={activeLabel}
       >
-        {appMark(app)}
+        {appMark(activeEntry, iconUrl(activeEntry.id))}
       </button>
     )
   }
 
-  // ≥2 usable apps → main icon button (default selection) + chevron dropdown.
-  const items = usableApps.map(app => ({ id: app.id, label: appLabel(app, t, platform) }))
-  const activeLabel = appLabel(activeApp, t, platform)
+  // ≥2 usable entries → main icon button (remembered/default selection) + chevron menu.
+  const items = entries.map(entry => ({ id: entry.id, label: appLabel(entry, t, platform) }))
   return (
     <span className={styles.group}>
       <button
         type="button"
         className={styles.button}
-        onClick={() => openApp(activeApp)}
+        data-state={phase}
+        disabled={phase === 'busy'}
+        onClick={() => { openApp(activeEntry) }}
         aria-label={activeLabel}
         title={activeLabel}
       >
-        {appMark(activeApp)}
+        {appMark(activeEntry, iconUrl(activeEntry.id))}
       </button>
       <AccessibleAppMenu
         items={items}
-        selectedId={activeApp.id}
-        triggerLabel={t('chooseAppAria')}
+        selectedId={activeEntry.id}
+        triggerLabel={t('menuToggle')}
         triggerClassName={styles.chevron}
         triggerIcon={(
           <svg className={styles.chevronMark} viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" focusable="false">
             <path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
         )}
-        onOpening={() => { void refreshApps() }}
+        onOpening={() => { void refresh() }}
         onSelect={(id) => {
-          setSelectedAppId(id)
-          const chosen = usableApps.find(app => app.id === id)
-          if (chosen !== undefined) openApp(chosen)
+          const chosen = entries.find(entry => entry.id === id)
+          if (chosen === undefined) return
+          // A pick while a launch is in flight is ignored whole: persisting the
+          // choice without launching would leave the button naming an app the
+          // gesture never opened (official-client semantics).
+          if (inFlight.current) return
+          choose(id)
+          openApp(chosen)
         }}
       />
     </span>

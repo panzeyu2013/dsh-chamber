@@ -16,7 +16,11 @@
 > （pure 16/5/6）。实机回归（sleep/wake、隐藏恢复、版本歪斜、gateway 形态）待实机执行。
 > **Batch 3（T3）Phase 0 ✅ 已完成（2026-09）**——per-source 视图模型（official/main 双池 × 来源
 > 矩阵 + 显式抑制原因 + channel 去重 + 默认选中；既有门函数改为薄适配层）+ 8 例单测。
-> Phase 2（吸收官方 client + desktop 主进程瘦身 + 实机验证）待推进（每批完成即回写本文件与 STATUS）。
+> **Batch 3（T3）Phase 2 ✅ 已完成（2026-09）**——本地来源吸收官方 client（catalog 协议锁步
+> 镜像 / 真实 bundle 图标 / 官方 app.* 标签表 / 选择持久化 / busy·error 呈现），经每实例代理
+> `<basePath>/open-in-app/*` 由实例进程内执行；桌面主进程收窄 vscode-only（红线修订已登记
+> design 16/20/05 + AGENTS）。实机验证项（官方 host 行、远程 fence、remote cwd、图标 CSP）待实机。
+> 五批次全部落地（实机项单独登记）。
 > 关联：任务登记在 `docs/progress/STATUS.md`「分支任务登记」块；升级操作手册见
 > `docs/checklists/dsh-upgrade-checklist.md`；上游接触面保鲜见 T4 拟建
 > `docs/checklists/upstream-touchpoints.md`。
