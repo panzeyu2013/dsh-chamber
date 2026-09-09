@@ -145,7 +145,8 @@ export interface OpenSessionOutcome extends OpenSessionRequest {
 /**
  * Per-instance runtime facts projected by the sidebar plugin of the source's
  * own ctx (design 06 §4): current session id plus per-session live rows. The
- * plugin is a STATELESS projection of the source's session-list snapshot —
+ * plugin projects the source's session-list snapshot (minus the ids it has
+ * tombstoned as purged — design 24 §21) —
  * every listed session carries its live `running` bit (the App layer derives
  * the completed-but-unread dot from running→idle edges itself, see App.tsx),
  * completed/pending ride the vendor armed state as sparse extras, and
@@ -191,7 +192,11 @@ type RefreshListener = (sourceId: string) => void
  * own chamberInstanceId matches the requested source. Fired by the App's
  * ghost-row convergence machine (planSessionListRefresh — every ready mounted
  * push whose removed-archived rows are still listed) and by the archive
- * manager after every purge settle — see design 24 §20 / App.tsx.
+ * manager after every purge settle — see design 24 §20 / App.tsx. Since §21
+ * the PRODUCER also triggers the same verified chain directly from its own
+ * archive-set shrink observation (the channel is a backstop, not the only
+ * trigger), and the official refresh MUST be invoked as a method on the
+ * service object (`ctx.sessions.refresh()` — a detached call loses `this`).
  */
 type SessionListRefreshListener = (sourceId: string) => void
 type SourceListener = (sourceId: string) => void

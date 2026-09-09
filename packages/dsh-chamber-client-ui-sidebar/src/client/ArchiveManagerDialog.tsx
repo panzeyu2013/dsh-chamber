@@ -387,6 +387,12 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
         if (result.deletedSessions > 0 || result.deletedSubagents > 0) {
           lines.push(`清理完成：删除 ${result.deletedSessions} 个会话 / ${result.deletedSubagents} 个子代理内容。`)
         }
+        if ((result.clearedOrphanMembers ?? 0) > 0) {
+          // design 24 §20 residual ①: the run also converged archived-set
+          // members that have no session record at all (no content, invisible
+          // to this list) — report it so a sweep-only run is never silent.
+          lines.push(`顺带清理了 ${result.clearedOrphanMembers} 条无内容的归档集合残留成员。`)
+        }
         if (result.skippedRunning > 0) {
           // Archived-but-running rows delete as post-hoc skips: the host is
           // the running authority and reports them here (review round

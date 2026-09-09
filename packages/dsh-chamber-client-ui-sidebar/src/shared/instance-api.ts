@@ -357,8 +357,10 @@ class InstanceApiClient {
    * zero-arg — the payload envelope is `{args:{}}`. purge takes an OPTIONAL
    * `sessionIds` subset filter (2026-09 wire amendment): absent = delete the
    * whole archived set (legacy zero-arg shape, `{args:{}}` — old hosts keep
-   * working); present = delete only the listed archived members (a provided
-   * EMPTY array is a deliberate delete-nothing subset, never the full set).
+   * working); present = delete only the listed archived members. A provided
+   * EMPTY array deletes NO CONTENT (never the full-set interpretation) but —
+   * since design 24 §21 — the host still runs its registry-global orphan
+   * sweep, so an empty filter is not a zero-work request (2026-09 §4 step 4b).
    * Both carry the domain-missing 404 opt-in; purge rides the long call
    * budget (the host keeps running past a client timeout — rerun is
    * idempotent). See previewArchiveCleanup / purgeArchivedSessions wrappers.
@@ -748,6 +750,11 @@ export interface ArchiveCleanupPurgeResult {
   readonly errors: readonly ArchiveCleanupPurgeItemError[]
   /** True when item errors were truncated at the host cap (1000). */
   readonly truncated: boolean
+  /** Archived-set members removed by the host's registry-global ORPHAN SWEEP
+   *  this run (design 24 §20 residual ①): record-less ids that sat in the
+   *  archived set with no content — membership-only removal, never counted in
+   *  deletedSessions/deletedSubagents. Absent on older hosts / when zero. */
+  readonly clearedOrphanMembers?: number
 }
 
 function countField(value: unknown, key: string): number {
@@ -898,11 +905,13 @@ export async function purgeArchivedSessions(
       return [{ sessionId, code, message }]
     })
     : []
+  const clearedOrphanMembers = countField(value, 'clearedOrphanMembers')
   return {
     deletedSessions: countField(value, 'deletedSessions'),
     deletedSubagents: countField(value, 'deletedSubagents'),
     skippedRunning: countField(value, 'skippedRunning'),
     truncated: (value as Record<string, unknown> | null | undefined)?.truncated === true,
+    ...(clearedOrphanMembers > 0 ? { clearedOrphanMembers } : {}),
     errors,
   }
 }

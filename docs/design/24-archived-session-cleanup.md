@@ -33,7 +33,19 @@
 > 归档集合移除后行失去过滤覆盖；§20 落地「官方会话列表刷新 seam」
 > （chamberBridge `requestSessionListRefresh` + App 归档集合收缩检测 +
 > 对话框 settle 即时请求），并修正 §15-② 的「chamber 可见行不受影响」
-> 断言（实机证伪）。
+> 断言（实机证伪）。**§20 的收敛 seam 本身在实机从未生效**——其
+> `ctx.sessions.refresh` 脱绑调用（`this` 丢失）每次都抛 TypeError 并被
+> 吞掉（§21 评审 BLOCKER 复核），§21 修正并改为校验式收敛链。
+>
+> **2026-09 幽灵行复现修正轮（§21，delete-archived 分支）**：§20 上线后实机
+> 仍复现（切会话/任务完成/待办刷新重现，发消息/约 30s/新建会话自愈）。扩大
+> 调查面（5 个并行只读子代理）+ 修正后四方只读 review（正确性/完整性/
+> 最优性/对抗验证）确认：收敛网是一次性转移检测器且请求发后不理；生产端
+> 签名只与自己上一次推送比较 ⇒「推送装回陈旧行、unary pull 清掉」稳态
+> 振荡。§21 落地生产端 **F1 墓碑抑制**（权威归档集收缩 ⇒ 离开集合的 id 从
+> 上报 snapshot.sessions 与运行时事实中过滤）+ **F2 校验式收敛链**（方法
+> 调用官方 refresh、resolve/reject/hung 三类结果均有界重试，越界**一律保持
+> 抑制**——resolve 不构成权威，见 §21 F2）。交互与 wire 表述不变。
 >
 > v2/v3 修订：2026-12 由三个只读 subagent 分面评审（客户端 UI/wire、宿主
 > 域与分发接线、契约治理）+ 作者自审 + 一轮 v2 合规复核（闭合矩阵 12 项
@@ -161,6 +173,10 @@ archiveCleanup/purge({})          → domain { ok, value: {
                                        deletedSubagents: number
                                        skippedRunning: number
                                        errors: { sessionId, code, message }[]
+                                       // 2026-09 §21（§20 残余①闭合）：registry-global
+                                       // 孤儿清扫计数，仅 >0 时出现；只清集合成员、
+                                       // 不删内容，故不进 deletedSessions/Subagents
+                                       clearedOrphanMembers?: number
                                      } }
 // purge 亦可带可选子集过滤（2026-09 修订，§17）：
 archiveCleanup/purge({sessionIds}) → 同上（sessionIds 仅收窄候选集）
@@ -217,6 +233,30 @@ vendor 源码）+ 薄 Remote 门面（`index.ts`），编排逻辑：
    完成树所覆盖的**已归档后代成员**（本身在 archived 集合中的 subagent 行）
    随同一次收尾批量写清除，无跨轮 marker 滞后（2026-12 合入修订轮，Nit N1）；
    崩溃乱序场景入单测（§9）；
+4b. **registry-global 孤儿清扫**（2026-09 §21，闭合 §20 残余①）：每次 purge
+   与候选集过滤**正交地**再清一遍**整个归档集合**里无会话记录的成员（旧版
+   遗留 / 收尾写失败产生的「无目录成员」，管理器只列「行 ∩ 集合」故永不可达）。
+   零新增删除语义：孤儿无内容，唯一操作是移除其集合成员关系；有记录的成员
+   （含 running）绝不触碰。**fail-closed（2026-09 二轮扫描加固）**：
+   - 谓词只在成功枚举后运行，且谓词输出只是**候选**——「两次批量枚举都没
+     记录」不构成「无内容」的证明（上游枚举会**静默收窄**：jsonl 跳过
+     不可解析/空工件、根缺失返回 []，session-query 在 persistence 未绑定时
+     只回 live 行且不报错）；
+   - 每个候选必须再经**官方单 id 权威读**（`sessionPersistence.inspect(id)`，
+     未知 cwd 也按 id 跨项目目录解析）确认：**只有精确的 `false`（官方
+     not-found 载体）才清**，任何其他错误/能力缺失/非布尔回答一律保留成员
+     关系（fail-closed，绝不 abort 已完成的内容删除）；
+   - 枚举本身改为 `sessionQuery.listSessions()` ∪ `sessionPersistence.list()`
+     的**按 id 并集**（两侧同口径 loud 形状校验；任一侧抛错即整轮拒绝），
+     杜绝「query 侧收窄」丢失记录；
+   - 可信度门：快照记录数为 0 而归档集合非空 ⇒ 跳过；确认读记录数从非空
+     塌缩为 0 ⇒ 跳过；每次跳过记 run 级 `archive-set` 注记；
+   - 候选数受 `MAX_SWEEP_CONTENT_PROBES`（4,096/轮）限流，超限记注记，
+     余量后续轮次收敛；清扫 id 与完成树同乘**一次**收尾写（去重、仍最后
+     移除），计数独立于 `deletedSessions`/`deletedSubagents`
+     （`clearedOrphanMembers?`）；集合超过 `MAX_PURGE_SESSIONS` 时不清扫
+     （该规模的全量 purge 本就 `purge-capacity` 拒绝）；仅在快照确实含候选时
+     才多一次扫描（已收敛实例保持单次扫描契约）；
 5. **执行**（§10 核对后二选一）：
    - a) 官方宿主进程内存在可复用的删除例程（未来 delete wire / dispose
      流程所用）→ 直接调用（首选，零布局知识复制）；
@@ -834,7 +874,8 @@ window.confirm → purge 全部）」升级为**归档管理器对话框**（列
      消除 unary 兜底下的「没有可删除的已归档会话」误报与删除全部能力回归
      （v1 全量 purge 在未挂载来源本可用）；
    - **core 收口**：子集过滤校验先于权威读取（畸形请求不付全库扫描）、
-     空选集短路（零读取）、clearIds 去重、桶语义注记（archived subagent 行
+     空选集**不删内容**〔2026-09 §21 修订：空选集不再零读取短路——宿主仍要
+     跑 registry-global 孤儿清扫，见 §4 步骤 4b〕、clearIds 去重、桶语义注记（archived subagent 行
      单独成根计 deletedSessions；被覆盖时计 deletedSubagents——UI 不列
      subagent 行，仅 wire 可达）；
    - **版本错配实证**：generic gateway `assertExactArguments` 对描述符外
@@ -851,7 +892,8 @@ window.confirm → purge 全部）」升级为**归档管理器对话框**（列
      data 属性；`previewArchiveCleanup` 保留并注明为宿主 preview 端点已测
      客户端半面；
    - **测试补强**：covered 祖先同选（N1 语义子集化）、archived subagent 行
-     独选（祖先不删）、子集 F1 树中止、重复过滤 id、畸形/空过滤零读取、
+     独选（祖先不删）、子集 F1 树中止、重复过滤 id、畸形过滤零读取〔空过滤
+     语义随 §21 变为「不删内容但跑孤儿清扫」〕、
      `[]` 载荷形状端到端、旧宿主拒绝 zh 文案、serversProjectionSignature
      参与 archivedSessions/archiveSetKnown 的回归测试。
 
@@ -1114,6 +1156,13 @@ ui-workspace 用，弃用）、
 
 ## 20. 2026 purge 幽灵行收敛轮：官方会话列表刷新 seam（delete-archived 分支）
 
+> **2026-09 更正（§21）**：本节 seam 的插件执行腿调用的是**脱绑方法**
+> （`const refresh = ctx.sessions.refresh; refresh()`），`ClientSessions.refresh`
+> 是读 `this.manager` 的原型方法 ⇒ 每次调用抛 TypeError 并被 try/catch
+> 吞掉，**§20 的官方刷新从未真正发出过**（review 实测复现；本节「执行腿
+> 由 typecheck + 人工目检代证」正是漏检原因）。§21 改为方法调用并加
+> 校验式收敛链；本节的收缩检测/桥通道/对话框触发点仍然有效并被 §21 保留。
+
 实机现象（用户报告 + 本机数据实证）：归档管理器整集/多选删除后，**已删
 会话以普通会话行重新出现在侧边栏**，逐行点击触发官方对话区
 「历史加载失败：session "…" not found（session/not-found）」（官方
@@ -1188,21 +1237,171 @@ typecheck）随合入 commit 收口。pinned vendor 前置事实（`refresh()` �
 mergeOrderedBaseline 丢弃服务端缺失行）已在真实运行时源码核验；合入门/实机
 腿再验一次（插件 loose 守卫保证形状不符时只 warn 不破坏）。
 
-**残余登记（不随本轮修）**：① 归档集合中的**历史无目录成员**（旧版 purge
+**残余登记（不随本轮修）**：① ~~归档集合中的**历史无目录成员**（旧版 purge
 保留的集合成员，本机实例 739 成员中 734 无目录）在「删除全部」退役后无 UI
-路径可收敛（管理器只列「有行 ∩ 集合」，孤儿清理只在候选集内发生）——建议
-后续把孤儿收敛改为每次 purge 收尾对全集合执行（与子集过滤正交、零新增删除
-语义），作为独立项排期。**该登记同时覆盖本 seam 放大的一类新形态**：purge
+路径可收敛~~ —— **已由 §21 闭合**：每次 purge 收尾对**全集合**执行孤儿清扫
+（与子集过滤正交、零新增删除语义，双重确认 + fail-closed；见 §4 步骤 4b）。**该登记同时覆盖本 seam 放大的一类新形态**：purge
 内容删除成功但收尾集合移除写失败（item 码 `archive-set`）时，settle 刷新会
 把内容已删的行从 summaries 移除 → 管理器行（∩ 集合）消失 → 残留集合成员
 不可达（子集 purge 需有行可选、整集 purge 已退役）；修复前的陈旧 summaries
 反而让这些行可重选收敛。与历史成员同类的修复方向（收尾孤儿全集合清扫）一并
-覆盖。② 「归档当前活动会话 → 整源落入 unary 降级视图、已归档行（含运行中/
-正查看）浮出直至重载」为另一家族（dev-QA 登记于 commit 1b19712，机制 =
-官方壳 ctx 代数重建后 chamber 快照生产者首报缺位），本轮的会话列表刷新
-seam 不覆盖它（降级视图的问题是归档集知识丢失而非行滞留）；现有缓解（生产
-者挂载即首报 + 断连保留推送聚合 + rebaseline 重连自愈）之外是否仍有复现
-路径待实机确认后单独修。③ 会话列表刷新瞬时失败的重试由状态机在后续推送
+覆盖。② ~~「归档当前活动会话 → 整源落入 unary 降级视图、已归档行（含运行中/
+正查看）浮出直至重载」为另一家族…待实机确认后单独修~~ —— **已由 §21
+F3(b) 闭合**（App 记忆的权威归档集随降级 full 提交发布、`archiveSetKnown`
+仍为 false：侧边栏继续过滤已归档行，管理器保持非破坏性降级分支）。边界：
+从未推送过的来源没有记忆，仍属 §2.3 文档化降级（首 boot / 收割窗口）。③ 会话列表刷新瞬时失败的重试由状态机在后续推送
 上收敛；「刷新持续失败 + 推送持续流动」的最坏情形下请求以 5s 冷却封底
 （≤12 RPC/分/来源）且行可见直至通道恢复——如实接受，不引入退避状态。
 ④ 对话框与 App 触发重叠（上文注）：多出的一次 session.list 为接受代价。
+
+## 21. 2026-09 幽灵行复现修正轮：生产端墓碑抑制 + 校验式收敛链（delete-archived 分支）
+
+**实机现象**（用户报告）：purge 后已归档删除的会话**反复短暂浮现**——切换
+会话、任务完成/提问（侧边栏待办刷新）时重现；发消息/等待约 30s/新建会话
+后自愈。§20 上线后仍复现。
+
+**根因（四层，均有源码/实机依据；调查面 = 5 个并行只读子代理）**：
+
+1. purge 删内容 + 移出 registry-global 归档集合；官方会话行事件为文档化
+   no-op。**但归档集合的收缩经官方 `domain/changed` → workspace follow
+   `{type:'archived'}` 立即到达客户端**（`api/workspace-controller` 的
+   `feed.ts` → `client/model.ts` `replaceArchived`），而官方
+   `SessionManager.summaries` 只在连接代数或显式 `refresh()` 时更新 ⇒
+   生产端推送「收缩后的集合 + 陈旧的行」，`sessionVisible` 的归档门失去
+   覆盖 ⇒ 以普通行渲染。
+2. App 侧 `planSessionListRefresh` 是**一次性转移检测器**：只在观察到归档
+   集合收缩的那一次 push 上请求刷新，且请求是发后不理的页级广播。实测
+   （真实纯函数）两个洞：收敛后 summaries 再变脏 ⇒ 两侧集合相同
+   （`removed=[]`）且 `pending` 已清空 ⇒ `request:false` **永不重试**；
+   收缩 push 落在非权威聚合上（`archiveSetKnown !== true`）⇒ 该次 purge
+   **永久不可见**。请求还可能落在无订阅者时刻（外壳回收/boot/teardown），
+   而 App 已写掉 5s 冷却戳。
+3. 生产端签名去重只与**自己上一次推送**比较，App 的 unary pull 它无从得知
+   ⇒ 任何投影字段变化（running 位、活动时间、标题、blank、成员/分组）都把
+   仍脏的行重新推送，30s 看门狗/侧边栏动作的 pull 又清掉 ⇒ **推送装回、
+   拉取清掉**的稳态振荡。
+4. **§20 的收敛 seam 本身从未生效**（本轮 review BLOCKER，实测复现）：
+   `const refresh = ctx.sessions.refresh; refresh()` 是脱绑调用，
+   `ClientSessions.refresh` 为读 `this.manager` 的原型方法 ⇒ 每次抛
+   `TypeError`、被 try/catch 吞掉并 warn，**一个 `session.list` RPC 都没发
+   过**。这解释了「§20 之后仍复现」与「只能靠 pull 自愈」。
+
+**修正（四层：生产端插件 + App + 宿主域；无会话内容读取、无新 wire 端点）**：
+
+- **F1 墓碑抑制**（`src/shared/purged-rows.ts` 纯函数 + `src/shared/purged-tracker.ts` 状态机 + `src/client/index.ts` 接线）：
+  生产端自己跟踪工作区 store 的权威归档集合（原始数组引用比对短路：官方
+  `installArchived` 仅在集合内容变化时安装新数组，稳态成本 = 一次引用比较）；
+  发生**严格收缩**时把离开集合的 id 记为墓碑，并从**上报的
+  snapshot.sessions** 与**运行时事实通道**（含 `current`）中过滤，直到原始
+  summaries 不再列出该 id、或它重新入集合（**无**「resolve 即释放」阀，
+  见 F2）。诚实性依据：宿主 `core.ts` 的 `clearIds` 只包含**内容
+  删除成功**的树与无记录孤儿（集合写失败时 id 留在集合 ⇒ 永不布防），因此
+  「离开归档集合 ⇔ 内容已不存在」。首次观测永不布防（新 boot 的 summaries
+  本就干净）。过滤在签名计算**之前**完成；无过滤时返回同一数组引用。
+- **F2 校验式收敛链**（`src/shared/purged-convergence.ts`）：收缩与桥请求
+  都触发链——**方法调用**官方 `ctx.sessions.refresh()`（脱绑调用是 §20 的
+  致命缺陷），随后按 `ctx.sessions.list.byId` 校验墓碑 id 是否已消失：
+  - resolve 且仍有残留 ⇒ 重试（官方 `refreshList` 单飞会把 purge 前的在途
+    响应回给新调用者）；
+  - reject ⇒ 重试（瞬时 RPC 失败且 summaries 未动）；
+  - 每次尝试都有看门狗（默认 2×重试间隔）⇒ hung 刷新不会永久禁用 seam；
+  - 达到 `PURGED_REFRESH_MAX_ATTEMPTS`（3，间隔 1.5s）后进入**权威探针**
+    终态：用 chamber 自己的 unary `session.list`（经实例代理、每次调用重扫
+    磁盘，无官方单飞、无客户端缓存）独立取一次行集合，**只释放它仍列出的
+    id**（这些会话服务端确实存在 ⇒ 该次收缩并非内容删除，隐藏会丢活行），
+    其余保持抑制并如实 warn；探针失败/超时一律保持抑制。
+    **刻意不设「resolve 即释放」阀**：2026-09 闭环 review 证实 `refreshList`
+    在拉取失败时同样 resolve（summaries 未动）且单飞会把手上的 purge 前响应
+    回给新调用者——按 resolve 释放会**重新打开本轮要修的幽灵行缺陷**（实测
+    复现：3 次失败拉取后释放 ⇒ 下一次推送重新发出幽灵行）。
+  - 链**单飞**（同来源请求加入进行中的链，不重启尝试预算），`dispose`
+    取消挂起定时器。
+- **F3 App 侧权威归档集记忆**（`App.tsx` + `renderer/aggregate-refresh.ts`，
+  闭合 §20 残余②与本轮残余 ①③）：App 记住每来源最后一次**权威**推送的
+  归档集合（随来源生命周期回收），并在两处使用——(a) 当已提交聚合失去归档集
+  权威时作为收缩基线（否则「workspace 基线先到、sessions 基线在途」窗口内
+  完成的 purge 永久不可见）；(b) 降级 full 提交（unary 兜底视图）携带该记忆
+  集合而 `archiveSetKnown` 仍为 false（侧边栏据此继续过滤已归档行，管理器
+  保持诚实的降级分支、不获得任何破坏性动作）。记忆集合永不单独构成权威。
+  **顺序是承重的**（2026-09 二轮扫描 MAJOR）：基线必须是**覆盖前**的旧值，
+  否则 remembered ≡ 本次快照集合 ⇒ `archiveSetShrink` 恒为 []（F3(a) 死代码）；
+  `test/app-purged-memory-wiring.test.ts` 钉住该顺序。
+- **F4 宿主 registry-global 孤儿清扫**（`dsh-host-archive-cleanup`，闭合 §20
+  残余①）：见 §4 步骤 4b——每次 purge 收尾清全集合无记录成员，双重确认 +
+  fail-closed + 同一次集合写 + 独立计数（`clearedOrphanMembers?`，归档管理器
+  settle 文案呈现）。
+- App 状态机与归档管理器触发点**全部保留**：正常 purge 路径下 F1 过滤后
+  `planSessionListRefresh` 看不到行（`kept=[]` ⇒ 不再请求），但它与 F3 一起
+  覆盖「生产端未布防 / 首次观测即 post-purge」的形态。
+
+**不变量**：桥通道契约不变（不新增通道、请求只带 sourceId、无会话内容）；
+`archiveSetKnown` 三态/撤回/代际栅栏语义不变；无周期 RPC（墓碑与链都是
+事件驱动、有界）；identity-preserving（无过滤时同引用）；每 ctx 生命周期
+独立（`dispose` 清定时器与订阅）。
+
+**验证**：`test/purged-rows.test.ts`（12 项：首次观测不布防/严格收缩/
+增长与不变/非字符串 id 归一/重归档释放/自终止/identity-preserving/
+收敛生命周期）+ `test/purged-convergence.test.ts`（23 项：纯判定收敛/重试/
+越界进入权威探针 + 链的单飞旧响应重试、reject 重试、resolved-未收敛重试、
+hung 看门狗、看门狗默认值、迟到 settle 不终止后续尝试、探针只释放其确认的
+id、探针缺该 id/拒绝/hung 均保持抑制、**探针迟到不得取消下一次尝试/下一次探针的看门狗**（每探针独立
+句柄）、**探针在飞期间新布的墓碑不得被释放**、拒绝后放弃、二次 converge 合并、
+dispose、无 refresh 面、disposed 惰性）
++ `test/purged-tracker.test.ts`（13 项：状态机抽离后可测——首次观测不布防/
+严格收缩布防/数组引用短路/增长与非数组不布防/filter 同引用/自终止/
+重归档释放/二次 purge 合并/dispose/链读实时抑制集/**越界后抑制仍在**/
+探针确认即释放并回调 onRelease/探针未确认则保持）
++ `test/producer-purged-wiring.test.ts`（9 项生产端接线契约：源码文本守卫
+——方法调用 `service.refresh()`（BLOCKER 回归闸）、tracker 构造（含
+`probe`/`onRelease`）、`observeArchive`→`filter`→签名/上报、arm 分支内
+`sync()`（锚定）、`reconcile(listedSummaryIds())`、`report.sessions`+`current`
+过滤、桥请求/`dispose`；接线变异实测被捕获）
++ `test/app-purged-memory-wiring.test.ts`（3 项 App 侧接线契约：**记忆必须在
+被覆盖前捕获**（否则 F3(a) 是死代码——2026-09 二轮扫描 MAJOR）、两个消费点
+（`planSessionListRefresh` 基线 / `commitAggregatePull` 降级过滤）、随来源
+回收；顺序变异实测被捕获）
++ `test:sidebar`（全绿）+ `test:renderer-shell`（全绿，`aggregate-refresh`
+53 项）+ `test:host-archive-cleanup`（78 项：core 56 + binding 22，含二轮扫描
+新增的「两次批量枚举都缺、但官方单 id 读证明有内容 ⇒ 不清」「空语料/塌缩
+语料门」「确认读列出即不清」「并发 purge 不重复清」「probe 失败/缺失/非
+布尔一律 fail-closed」「并集枚举保住仅 persistence 可见的记录」「预算截断
+注记」）+
+`typecheck:sidebar` + `typecheck:host-archive-cleanup` + `build:renderer` +
+`build:host-archive-cleanup`（两个打包产物均含新逻辑；根 `typecheck` 不覆盖
+自建插件源码）。**review 处置**：四方只读 review（正确性/完整性/最优性/对抗验证）+ 一轮
+**闭环复验**（同一 diff 的逐条闭合核查）——BLOCKER（脱绑调用，实测 0 RPC）
+已修；MAJOR（reject 不重试、hung 无界、无释放阀）由重试+看门狗闭合，且
+**闭环复验指出首版的「resolve 即释放」阀不成立**（见 F2 第 4 条）已改为
+保守终止；attempt/outcome 错配：`Promise.race` 本身已使每次尝试只 settle 一次，
+attempt 栅栏是**防御性冗余**（直连结构下才必需），已如实注明而非宣称
+为修复；MINOR（每推送成本、链单飞、barrel 导出、运行时事实节奏、
+`current` 未过滤）已修；**wiring 不可测**：状态机已抽离为
+`purged-tracker.ts` 并由 11 项测试覆盖，生产端五处接线由
+`test/producer-purged-wiring.test.ts` 的源码文本契约守卫（语义仍以实机
+目检为准，如实登记）。实机门禁（打包版 UI 目检：purge 后
+切会话/任务完成不再浮现、点击不再 `session/not-found`）并入 STATUS 的归档
+清理条目。
+
+**残余登记（仅测试类）**：① **实机门禁**——打包版 UI 目检（purge → 切会话/
+任务完成不再浮现；点击不再 `session/not-found`；归档正常会话仍隐藏；两次
+连续 purge；purge 后回收再打开；purge 后断隧道恢复；local/ssh/gateway 三形态）
+与 30s 合并窗口观测，无自动化基建可替代（§19-4 先例），并入 STATUS 归档清理
+条目；② **探针依赖实例就绪**：官方刷新与 unary 探针都失败时保持抑制
+（fail-closed），实例长期不可达时官方 summaries 的收敛延后到连接代数——
+行不可见（用户可见正确性成立），属验证类缺口；③ **语义级接线**以源码契约
+测试 + 目检代证（`producer-purged-wiring` / `app-purged-memory-wiring` 钉住
+调用形状与顺序，不证明运行时语义）；④ 归档集合 > `MAX_PURGE_SESSIONS`
+（65,536）时宿主不清扫（该规模全量 purge 本就 `purge-capacity` 拒绝）；
+⑤ 宿主侧未对**构建后的 vendor backend** 跑过真实 `inspect`（本 worktree 的
+vendor 为源码态）：not-found 载体由 pinned 源码阅读 + 形状一致的 fake 确立；
+⑥ 合法空语料（全部会话已删）下 G1a/G1b 会跳过清扫，历史无记录成员因此
+不收敛（管理器不可见、无用户影响）——fail-closed 的代价；⑦ 损坏/不可读工件
+（inspect 抛非 not-found）保留成员关系且 purge 也删不了（无记录）——需人工
+处理；⑧ 并集枚举每次多一次 `persistence.list()`（可后续记忆化）。
+
+**已闭合的原残余**（本轮全部消除，留档）：§20 残余① → F4 宿主全集合孤儿
+清扫（逐候选官方单 id 权威读 + 并集枚举 + 可信度门 + 双重确认 + fail-closed
++ 独立计数并呈现）；§20 残余② / 本轮①③ → F3 App 记忆权威归档集（**覆盖前**
+捕获的收缩基线 + 降级视图过滤，顺序由契约测试钉住）；本轮④（非 purge 收缩
+无法释放）→ F2 权威探针（只释放服务端仍存在的 id；探针独立看门狗 + 释放
+决策用启动时快照）；本轮⑤（hung 官方刷新）→ 每尝试看门狗 + 探针终态。

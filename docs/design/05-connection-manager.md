@@ -261,8 +261,8 @@ export const chamberBridge: {
   onOpenSessionOutcome(listener: (outcome: OpenSessionOutcome) => void): () => void  // 侧边栏订阅：失败行内呈现/成功清残留
   requestRefresh(sourceId: string): void                  // 侧边栏动作成功后调用
   onRefresh(listener: (sourceId: string) => void): () => void  // App 层订阅
-  requestSessionListRefresh(sourceId: string): void       // design 24 §20：请求该来源挂载 ctx 重跑官方 session.list（purge 幽灵行收敛）
-  onRequestSessionListRefresh(listener: (sourceId: string) => void): () => void // 各挂载 ctx 的 sidebar 插件订阅；仅 chamberInstanceId === sourceId 者动作
+  requestSessionListRefresh(sourceId: string): void       // design 24 §20/§21：请求该来源挂载 ctx 重跑官方 session.list（purge 幽灵行收敛；§21 起由生产端校验式收敛链处理：reject/hung 有界重试，越界一律保持抑制——resolve 不构成权威）
+  onRequestSessionListRefresh(listener: (sourceId: string) => void): () => void // 各挂载 ctx 的 sidebar 插件订阅；仅 chamberInstanceId === sourceId 者动作（§21：插件自身观测到归档集收缩也会直接触发同一链，不依赖本通道送达）
   requestActivateSource(sourceId: string): void           // 点击来源分组头调用
   onActivateSource(listener: (sourceId: string) => void): () => void  // App 层订阅
   registerInstanceRuntimeProducer(sourceId: string, sourceFingerprint: string,

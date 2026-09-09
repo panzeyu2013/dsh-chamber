@@ -10,6 +10,27 @@
 
 > English: [docs/CHANGELOG.en-US.md](docs/CHANGELOG.en-US.md)
 
+## [未发布]
+
+### 修复
+
+- **归档清理后已删会话在侧边栏反复浮现（design 24 §21）**：purge 删除已归档
+  会话内容后，官方客户端 `SessionManager.summaries` 不会刷新（宿主会话事件为
+  文档化 no-op），而归档集合的收缩经官方 workspace follow 即时到达客户端，于是
+  生产端推送把「收缩后的集合 + 陈旧的行」一起提交，已删会话以普通行渲染（点击报
+  `session/not-found`）；30s unary 兜底拉取又把它清掉，形成「推送装回、拉取清掉」
+  的闪烁。修复分四层：① 生产端**墓碑抑制**（离开权威归档集合的 id 从上报快照与
+  运行时事实通道中过滤，直至官方 summaries 收敛或该 id 重新入集合）；②
+  **校验式收敛链**（以方法调用官方 `ctx.sessions.refresh()`——此前的脱绑调用每次
+  抛 `TypeError` 被吞掉、从未真正发出请求——resolve/reject/hung 三类结果均有界
+  重试，终态用 chamber unary `session.list` 权威探针，只释放服务端仍存在的 id）；
+  ③ App 侧**权威归档集记忆**（失去权威时作为收缩基线，并让降级 unary 视图继续
+  过滤已归档行；`archiveSetKnown` 仍为 false，管理器保持非破坏性降级分支）；
+  ④ 宿主**registry-global 孤儿清扫**（每次 purge 收尾清全集合无会话记录的成员：
+  逐候选官方单 id 存在性校验 + 查询/持久化枚举并集 + 空/塌缩语料可信度门，
+  只清集合成员、零新增删除语义，双重确认与 fail-closed）。
+  设计与进度见 design 24 §20/§21 与 `docs/progress/STATUS.md`。
+
 ## [0.2.4] - 2026-09-09
 
 ### 修复

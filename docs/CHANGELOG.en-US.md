@@ -10,6 +10,35 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 > 中文版: [CHANGELOG.md](../CHANGELOG.md)
 
+## [Unreleased]
+
+### Fixed
+
+- **Purged archived sessions kept resurfacing in the sidebar (design 24 §21).**
+  After a purge deleted the content of archived sessions, the official client's
+  `SessionManager.summaries` never refreshed (host session events are documented
+  no-ops) while the archive-set shrink reached the client immediately through the
+  official workspace follow, so the producer pushed "shrunk set + stale rows" and
+  the deleted sessions rendered as ordinary rows (clicking one failed with
+  `session/not-found`); the 30s unary fallback then cleared them again, producing
+  a push-restores / pull-clears flicker. Four layers fix it: (1) producer-side
+  **tombstone suppression** (ids that left the authoritative archive set are
+  filtered out of the emitted snapshot and the runtime-fact channel until the
+  official summaries converge or the id is re-archived); (2) a **verified
+  convergence chain** (the official `ctx.sessions.refresh()` is now invoked as a
+  METHOD — the previous detached call threw `TypeError` on every attempt and never
+  issued a request — with bounded retries for resolved-but-unconverged, rejected
+  and hung outcomes, ending in a chamber unary `session.list` authoritative probe
+  that releases only ids the server still lists); (3) an App-side **authoritative
+  archive-set memory** (shrink baseline when provenance is lost, plus archived-row
+  filtering for the degraded unary view; `archiveSetKnown` stays false so the
+  archive manager keeps its non-destructive degraded branch); (4) a host-side
+  **registry-global orphan sweep** (every purge clears record-less archive-set
+  members across the WHOLE set: per-candidate official single-id existence check,
+  union of the query/persistence enumerations, empty/collapsed-corpus credibility
+  gates, membership-only with zero new content deletion, double-confirmed and
+  fail-closed). See design 24 §20/§21 and `docs/progress/STATUS.md`.
+
 ## [0.2.4] - 2026-09-09
 
 ### Fixed

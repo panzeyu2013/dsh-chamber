@@ -327,7 +327,8 @@ function deriveServers(
       // never issues its own session read. archiveSetKnown is the provenance
       // tri-state: the mounted baseline reports an authoritative set (even
       // when empty); the unary-fallback view reports NOT known — consumers
-      // must never read its empty rows as "no archived sessions".
+      // must never read its set as "no archived sessions" (it may be empty OR
+      // the remembered authoritative set, §21 F3(b)).
       archivedSessions = deriveArchivedSessions(aggregate)
       archiveSetKnown = aggregate.archiveSetKnown === true
     }
@@ -566,6 +567,16 @@ export default function App() {
   // empty/absent = converged (rows gone or never listed). Reaped with the
   // source like the stamp map above (same-id re-add starts clean).
   const sessionListRefreshPendingRef = useRef<Record<string, string[]>>({})
+  // Last AUTHORITATIVE archive set per source (design 24 §21 residuals ①/③):
+  // the ids published by a mounted push with `archiveSetKnown: true`. It
+  // survives the aggregate being replaced by the degraded unary view (which
+  // carries no archive wire), so (a) a purge whose shrink lands while the
+  // producer's first projection is still pending is still detectable as a
+  // shrink, and (b) a degraded commit can keep filtering archived rows
+  // instead of un-hiding every archived session. Never authoritative on its
+  // own: `archiveSetKnown` stays false wherever this memory is used as a
+  // substitute. Reaped with the source like the refs above.
+  const authoritativeArchiveSetRef = useRef<Record<string, readonly string[]>>({})
   // Synchronous connection-generation edge memory. A mounted producer may
   // suppress an identical post-reconnect snapshot, while the App has already
   // replaced its aggregate with not-connected; one authoritative pull on each
@@ -851,6 +862,11 @@ export default function App() {
     for (const id of Object.keys(sessionListRefreshPendingRef.current)) {
       if (!servers.some(server => server.id === id)) {
         delete sessionListRefreshPendingRef.current[id]
+      }
+    }
+    for (const id of Object.keys(authoritativeArchiveSetRef.current)) {
+      if (!servers.some(server => server.id === id)) {
+        delete authoritativeArchiveSetRef.current[id]
       }
     }
     setPluginDiagnostics(prev => {
@@ -1204,6 +1220,7 @@ export default function App() {
           current,
           snapshot,
           snapshotSourcesRef.current[instanceId] === true,
+          authoritativeArchiveSetRef.current[instanceId],
         )
         if (current !== undefined && current.state === 'ok'
           && instanceSnapshotSignature(current) === instanceSnapshotSignature(next)) {
@@ -2806,10 +2823,22 @@ export default function App() {
       // stay pending and re-evaluate on the next push. Quiet sources with no
       // further push self-hide within one watchdog cycle (the 30s merge pull
       // replaces the aggregate's session rows with the clean unary list).
+      // Remember the last AUTHORITATIVE archive set (see the ref's doc): used
+      // as the shrink baseline when the committed aggregate lost provenance,
+      // and as the archived-row filter for a degraded commit. ORDER IS
+      // LOAD-BEARING (2026-09 scan MAJOR): the PRE-update value is the
+      // baseline — updating the memory first would make the remembered set
+      // equal to the incoming snapshot's own set, so archiveSetShrink could
+      // never observe a shrink (the fallback branch would be dead code).
+      const rememberedArchiveSet = authoritativeArchiveSetRef.current[sourceId]
+      if (snapshot.archiveSetKnown === true) {
+        authoritativeArchiveSetRef.current[sourceId] = snapshot.archivedSessionIds
+      }
       const decision = planSessionListRefresh(
         watchdogAggregatesRef.current[sourceId],
         snapshot,
         sessionListRefreshPendingRef.current[sourceId],
+        rememberedArchiveSet,
       )
       if (decision.pending.length > 0) sessionListRefreshPendingRef.current[sourceId] = decision.pending
       else delete sessionListRefreshPendingRef.current[sourceId]
