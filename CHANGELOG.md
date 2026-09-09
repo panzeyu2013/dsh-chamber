@@ -10,6 +10,16 @@
 
 > English: [docs/CHANGELOG.en-US.md](docs/CHANGELOG.en-US.md)
 
+## [未发布]
+
+### 修复
+
+- **`test:gateway` 会停掉宿主 gateway 服务**：安装器 D2 跨形态清理直接调用裸
+  `systemctl stop/disable dsh-chamber-gateway.service`（写死单元名），而相关测试只
+  mock 了 `systemctl_for_mode` ⇒ 真实 systemctl 逃逸。全部 harness 改经
+  `harnessSource()` 注入宿主安全桩（仅当存在真实 systemctl 时生效），并加源码级
+  不变量测试；实机验证：修复前垫片记录 3 次真实调用，修复后 0 次（Linux 腿 45/45；macOS 腿 43 通过 + 2 条 Linux 专用跳过）。
+
 ## [0.2.3] - 2026-09-07
 
 ### 修复

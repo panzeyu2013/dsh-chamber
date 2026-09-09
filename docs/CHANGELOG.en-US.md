@@ -10,6 +10,18 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 > 中文版: [CHANGELOG.md](../CHANGELOG.md)
 
+## [Unreleased]
+
+### Fixed
+
+- **`test:gateway` stopped the host gateway service.** The installer's D2 cross-mode
+  cleanup calls bare `systemctl stop/disable dsh-chamber-gateway.service` (fixed unit
+  name) while the tests mocked only `systemctl_for_mode`, so the real systemctl
+  escaped. Every harness now composes through `harnessSource()` (host-safe stub only
+  where a real systemctl exists) plus a source-level invariant test; verified on the
+  Linux rig: 3 real calls before the fix, 0 after (45/45 on Linux; 43 passing plus two
+  Linux-only skips on macOS).
+
 ## [0.2.3] - 2026-09-07
 
 ### Fixed
