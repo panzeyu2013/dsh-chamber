@@ -171,6 +171,7 @@ host 插件入口/半、上游 `tests/`、`tsdown.config.ts`、上游 README（a
 | dsh-api-session-controller | api-gateway fork journal-stream 帧（无游标 notification） | fork 重放 + 升级复验 |
 | client/connection（recovery） | recovery-config 共享 schema（`DEFAULT_MIN_RESTART_INTERVAL_MS` 10_000 == schema 默认 backoffMaxMs） | liveness-triggers 钉值 + C1 |
 | dsh-runtime（激活探针域） | `HOST_DOMAIN_PROBE_NAMES` ↔ gateway `HOST_PACKAGE_PROBE_DOMAINS` | C7 + gateway 运行时 fail-loud |
+| interaction/commands（`commands/execute` 第三参数） | 激活探针载荷的键名 == 上游 `execute(agent, line, submittedAttachments, signal)` 的参数名（`images` ≤0.1.2；**自 0.1.3-alpha.1 起各代皆为 `submittedAttachments`**，`attachments` 从不是上游线名） | `runtime-probes.test.ts`：读 vendor 签名逐字比对 + 夹具按真实 typert gateway 校验参数键集（**2026-09 实机：0.1.3-alpha.1 升级时写错的 `attachments` 使每条激活探针失败、每次首装本地实例被隔离，直至验收轮才发现**） |
 | dsh-host-webserver（index-inject） | `__DSH_CONNECTION_RECOVERY__` 全局注入（connection host 半） | fork C1（src/index.ts pure） |
 | dsh-host-open-in-app（官方 open-in 宿主路由） | chamber open-in 插件本地镜像 `shared/open-in-app-protocol.ts`（三条路由 + 载荷形状）与 `locales.ts` 的 `app.*` 标签表。**为何不直接 import 官方 `./shared`（2026-09 三轮裁决）**：该 export 指向 `lib/types/shared.js`，源码态 vendor 只有 `src/`，本仓 tsconfig 又排除 `vendor/**` ⇒ 镜像 + 字节级锁步是可行等价物 | open-in 插件 `test/open-in-app-protocol.test.ts`（读 vendor `shared.ts`/`OpenInAppAction.tsx` 逐字比对） |
 

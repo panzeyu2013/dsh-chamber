@@ -22,11 +22,20 @@
  * desktop control-plane's own identity probes warn on the same condition via
  * their logger — see control-plane dsh-client probeHostIdentity).
  *
- * dsh-v0.1.3-alpha.1 delta (source line, 2026-09): the `commands/execute`
- * third wire argument was renamed `images` → `attachments` (`readonly
- * CommandSubmitAttachment[]` in the session-controller client projection;
- * host execute param `submittedAttachments`) — the probe payload below follows
- * the rename.
+ * commands/execute wire argument (the probe payload below carries it): the
+ * third argument of the upstream projection `execute(agent, line,
+ * submittedAttachments, signal)` — `images` up to 0.1.2, and
+ * **`submittedAttachments` on every line since 0.1.3-alpha.1**, pinned line
+ * included (per-tag check of `interaction/commands/src/index.ts`; the
+ * tool-cordis `@Remote` catalog prints the same name). `attachments` was never
+ * an upstream wire name — the 0.1.3 upgrade wrote that key here by mistake and
+ * the local fixture mirrored it, so every fresh install failed this probe and
+ * quarantined its local instance from 0.1.3-alpha.1 until the 2026-09
+ * real-machine acceptance round found it. A drifted name is not a silent miss:
+ * the typert gateway rejects unknown arg fields with
+ * `gateway/arguments-invalid`, which fails this probe loud, and the fixture in
+ * test/runtime-probes.test.ts now enforces the same exact key set while a
+ * vendor-lockstep test pins the name to the upstream signature.
  */
 import { constants } from 'node:fs'
 import { open } from 'node:fs/promises'
@@ -126,12 +135,15 @@ function renderError(error: unknown): string {
   }
 }
 
-const resultError = (error: unknown): string => {
+const resultError = (error: unknown, method: string): string => {
   // Strip quoted absolute paths first so spaces cannot defeat the shared
-  // token-oriented sanitizer; then apply the repository-wide fallback.
+  // token-oriented sanitizer; then apply the repository-wide fallback. The
+  // probe's own method name is declared as a kept token: it is RPC vocabulary,
+  // not path material, and the sanitizer would otherwise publish it as
+  // `commands[path]` and hide which probe failed.
   const withoutQuotedPaths = renderError(error)
     .replace(/(['"])(?:[A-Za-z]:[\\/]|\/)[^'"\r\n]*\1/gu, '[path]')
-  return sanitizeErrorText(withoutQuotedPaths).slice(0, 2_000)
+  return sanitizeErrorText(withoutQuotedPaths, [method]).slice(0, 2_000)
 }
 
 function abortReason(signal: AbortSignal): Error {
@@ -323,7 +335,7 @@ export async function runRuntimeActivationProbes(opts: RuntimeProbeOptions): Pro
       }
       return { name, ok: true }
     } catch (error) {
-      return { name, ok: false, error: resultError(error) }
+      return { name, ok: false, error: resultError(error, name) }
     }
   }
 
@@ -378,10 +390,10 @@ export async function runRuntimeActivationProbes(opts: RuntimeProbeOptions): Pro
             if (identityMethodNotFound(legacyError)) {
               return { name, ok: false, error: `neither ${name} nor the legacy session/list method is registered (HTTP 404)` }
             }
-            return { name, ok: false, error: resultError(legacyError) }
+            return { name, ok: false, error: resultError(legacyError, name) }
           }
         }
-        return { name, ok: false, error: resultError(error) }
+        return { name, ok: false, error: resultError(error, name) }
       }
     })(),
     wantsDomain('clientGraph/graph')
@@ -425,7 +437,7 @@ export async function runRuntimeActivationProbes(opts: RuntimeProbeOptions): Pro
           }
           return { name, ok: false, error: 'malformed probe response' }
         } catch (error) {
-          return { name, ok: false, error: resultError(error) }
+          return { name, ok: false, error: resultError(error, name) }
         }
       })()
       : Promise.resolve(null),
@@ -437,16 +449,19 @@ export async function runRuntimeActivationProbes(opts: RuntimeProbeOptions): Pro
     // resume it before CommandRuntime sees even a syntax-miss line. A fixed
     // nonexistent identity must fail at the read-only persistence lookup with
     // session/not-found, before Agent publication or command/run appends.
-    // dsh-v0.1.3-alpha.1 projection execute(agentId, line, attachments, signal):
-    // the Agent parameter is a typert lookup wired as `agentId`
+    // dsh-v0.1.3-alpha.1 projection execute(agentId, line, submittedAttachments,
+    // signal): the Agent parameter is a typert lookup wired as `agentId`
     // (session-controller resolveAgent) whose cold miss still surfaces
-    // session/not-found; the third argument was renamed images -> attachments
-    // (CommandSubmitAttachment[]) on the 0.1.3 wire.
+    // session/not-found. The third argument is named `submittedAttachments` on
+    // the pinned line — and has been on every line since 0.1.3-alpha.1
+    // (`images` up to 0.1.2); the typert gateway rejects any other field name
+    // with `gateway/arguments-invalid` BEFORE the controller runs, so a stale
+    // name here degrades into a failed activation probe, not a silent miss.
     await call('commands/execute', {
       args: {
         agentId: COMMAND_MISSING_SESSION,
         line: COMMAND_SYNTAX_MISS,
-        attachments: [],
+        submittedAttachments: [],
       },
     })
     commands = { name: 'commands/execute', ok: false, error: 'missing-session command probe unexpectedly executed' }
@@ -458,7 +473,7 @@ export async function runRuntimeActivationProbes(opts: RuntimeProbeOptions): Pro
     // argument while guaranteeing CommandRuntime itself was never entered.
     commands = code === 'session/not-found'
       ? { name: 'commands/execute', ok: true }
-      : { name: 'commands/execute', ok: false, error: resultError(error) }
+      : { name: 'commands/execute', ok: false, error: resultError(error, 'commands/execute') }
   }
 
   let dataSettings: ProbeResult
@@ -467,7 +482,7 @@ export async function runRuntimeActivationProbes(opts: RuntimeProbeOptions): Pro
     if (!settingsRpcOk) throw new Error('settings RPC could not parse the active profile')
     dataSettings = { name: 'data.settings', ok: true }
   } catch (error) {
-    dataSettings = { name: 'data.settings', ok: false, error: resultError(error) }
+    dataSettings = { name: 'data.settings', ok: false, error: resultError(error, 'data.settings') }
   }
 
   const byName = new Map<string, ProbeResult>()

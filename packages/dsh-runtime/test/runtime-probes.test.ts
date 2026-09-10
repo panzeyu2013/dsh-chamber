@@ -3,13 +3,15 @@ import assert from 'node:assert/strict'
 import {
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   symlinkSync,
   truncateSync,
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { PROBE_NAMES_WITHOUT_HOST_DOMAINS, REQUIRED_ACTIVATION_PROBES, activationProbeNamesForDomains } from '../src/activation-gate.ts'
 import {
   SETTINGS_FILE_MAX_BYTES,
@@ -53,12 +55,42 @@ function successfulCall(fx: Fixture): RuntimeProbeCall {
     assert.ok((options?.timeoutMs ?? 0) > 0)
     assert.equal(options?.signal?.aborted, false)
     if (method === 'commands/execute') {
+      assertCommandsExecuteArgShape(payload)
       const error = new Error('missing probe session') as Error & { code: string }
       error.code = 'session/not-found'
       throw error
     }
     return { result: { value: successfulValue(method) } }
   }
+}
+
+const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
+
+/** The pinned `commands/execute` arg descriptor, as the REAL typert gateway
+ *  enforces it: an unknown or missing arg field is rejected with
+ *  `gateway/arguments-invalid` before the controller runs. The previous fake
+ *  threw session/not-found for ANY payload, which is exactly how the mistyped
+ *  `attachments` key (never an upstream wire name) shipped green from the
+ *  0.1.3-alpha.1 upgrade onward — a fresh install then failed the activation
+ *  probe and its local instance was quarantined (2026-09 real-machine find). */
+const COMMANDS_EXECUTE_ARGS = new Set(['agentId', 'line', 'submittedAttachments'])
+
+function assertCommandsExecuteArgShape(payload: unknown): void {
+  const args = (payload as { args?: unknown } | undefined)?.args
+  assert.ok(typeof args === 'object' && args !== null, 'commands/execute args must be an object')
+  const keys = Object.keys(args as Record<string, unknown>)
+  const missing = [...COMMANDS_EXECUTE_ARGS].filter(name => !keys.includes(name))
+  const unexpected = keys.filter(name => !COMMANDS_EXECUTE_ARGS.has(name))
+  if (missing.length === 0 && unexpected.length === 0) return
+  const parts = [
+    missing.length > 0 ? `missing ${missing.map(name => `"${name}"`).join(', ')}` : '',
+    unexpected.length > 0 ? `unexpected ${unexpected.map(name => `"${name}"`).join(', ')}` : '',
+  ].filter(part => part !== '')
+  const error = new Error(
+    `typert gateway: commands/execute: args fields do not match the descriptor: ${parts.join('; ')}`,
+  ) as Error & { code: string }
+  error.code = 'gateway/arguments-invalid'
+  throw error
 }
 
 test('real probe runner executes the closed read-only set with bounded RPCs', async () => {
@@ -78,7 +110,7 @@ test('real probe runner executes the closed read-only set with bounded RPCs', as
       args: {
         agentId: '__dsh_chamber_missing_session_probe__',
         line: 'dsh-chamber-activation-probe',
-        attachments: [],
+        submittedAttachments: [],
       },
     })
     assert.deepEqual(fx.calls.find(entry => entry.method === 'session/canOpenWorkspacePath')?.payload, { args: {} })
@@ -89,6 +121,82 @@ test('real probe runner executes the closed read-only set with bounded RPCs', as
     rmSync(fx.root, { recursive: true, force: true })
   }
 })
+test('the commands/execute probe arg name is locked to the pinned upstream signature', async () => {
+  // 2026-09 real-machine blocker: the probe sent a mistyped `attachments`
+  // (never an upstream wire name) while the runtime declares
+  // `submittedAttachments`, so the typert gateway answered
+  // gateway/arguments-invalid, the activation probe failed and every fresh
+  // install quarantined its local instance — from the 0.1.3-alpha.1 upgrade
+  // until the acceptance round found it. Read the vendored signature read-only
+  // (the open-in lockstep / C1 discipline) and require the probe payload to
+  // carry exactly the upstream third-parameter name, so a vendor rename can
+  // never silently desynchronize the probe again.
+  const vendorSource = readFileSync(
+    join(repoRoot, 'vendor', 'harness-checkout', 'packages', 'interaction', 'commands', 'src', 'index.ts'),
+    'utf8',
+  )
+  const signature = vendorSource.match(/async execute\(\s*agent\s*:[^,]*,\s*line\s*:[^,]*,\s*([A-Za-z_$][\w$]*)\s*:/)
+  assert.ok(signature !== null, 'the vendored interaction/commands execute signature must declare agent, line and its third parameter')
+  const upstreamArgName = signature![1]!
+
+  const fx = fixture()
+  try {
+    await runRuntimeActivationProbes({
+      baseUrl: 'http://127.0.0.1:17510',
+      dshHome: fx.dshHome,
+      call: successfulCall(fx),
+      windowMs: 1_000,
+      rpcTimeoutMs: 100,
+    })
+    const payload = fx.calls.find(entry => entry.method === 'commands/execute')?.payload as
+      | { args?: Record<string, unknown> }
+      | undefined
+    assert.ok(payload?.args !== undefined, 'the probe must call commands/execute')
+    assert.deepEqual(
+      Object.keys(payload.args).sort(),
+      ['agentId', upstreamArgName, 'line'].sort(),
+      `the probe must send exactly the pinned upstream arg names (upstream third parameter = "${upstreamArgName}")`,
+    )
+  } finally {
+    rmSync(fx.root, { recursive: true, force: true })
+  }
+})
+
+test('a failing probe reports its method name verbatim and still redacts paths', async () => {
+  // 2026-09 acceptance finding: the probe error rode the renderer projection as
+  // `commands[path]` because the path sanitizer matches `word/word` from inside
+  // the token — the failing METHOD disappeared from the only surface that shows
+  // a quarantined install. The method name is RPC vocabulary, not path material.
+  const fx = fixture()
+  try {
+    const call: RuntimeProbeCall = async (_base, method, payload) => {
+      fx.calls.push({ method, payload })
+      if (method === 'commands/execute') {
+        const error = new Error(
+          'typert gateway: commands/execute: args fields do not match the descriptor (cwd /Users/alice/Library/dsh)',
+        ) as Error & { code: string }
+        error.code = 'gateway/arguments-invalid'
+        throw error
+      }
+      return { result: { value: successfulValue(method) } }
+    }
+    const results = await runRuntimeActivationProbes({
+      baseUrl: 'http://127.0.0.1:17510',
+      dshHome: fx.dshHome,
+      call,
+      windowMs: 1_000,
+      rpcTimeoutMs: 100,
+    })
+    const commands = results.find(result => result.name === 'commands/execute')
+    assert.equal(commands?.ok, false)
+    assert.match(commands?.error ?? '', /commands\/execute/)
+    assert.doesNotMatch(commands?.error ?? '', /commands\[path\]/)
+    assert.doesNotMatch(commands?.error ?? '', /Users\/alice/)
+  } finally {
+    rmSync(fx.root, { recursive: true, force: true })
+  }
+})
+
 test('the identity probe accepts value false; the closed set never reads session data', async () => {
   // 2026 probe-contract: value true AND value false are both healthy — only
   // method presence / protocol / controller assembly are under test, and no

@@ -60,3 +60,28 @@ test('sanitizeErrorText: plain text passes through unchanged', () => {
   assert.equal(sanitizeErrorText('everything is fine'), 'everything is fine');
   assert.equal(sanitizeErrorText(''), '');
 });
+
+test('sanitizeErrorText: caller-declared tokens survive redaction', () => {
+  // Default behavior is unchanged: the POSIX branch matches `word/word` from
+  // INSIDE the token, so a registered RPC method name reads as a path.
+  assert.equal(sanitizeErrorText('commands/execute failed'), 'commands[path] failed');
+  // A declared token is restored verbatim while everything else is still redacted.
+  assert.equal(
+    sanitizeErrorText('commands/execute: /Users/alice/x is bad', ['commands/execute']),
+    'commands/execute: [path] is bad',
+  );
+  assert.equal(
+    sanitizeErrorText(
+      'session/canOpenWorkspacePath and commands/execute both survived',
+      ['commands/execute', 'session/canOpenWorkspacePath'],
+    ),
+    'session/canOpenWorkspacePath and commands/execute both survived',
+  );
+  // URL-path redaction and the kept token do not interfere.
+  assert.equal(
+    sanitizeErrorText('see https://github.com/a/b for commands/execute', ['commands/execute']),
+    'see https://github.com[path] for commands/execute',
+  );
+  // A declared token that is absent changes nothing.
+  assert.equal(sanitizeErrorText('nothing to keep', ['commands/execute']), 'nothing to keep');
+});

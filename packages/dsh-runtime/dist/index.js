@@ -187,8 +187,17 @@ function delayedRollbackTarget(journal) {
 }
 
 // src/sanitize-error.ts
-function sanitizeErrorText(message) {
-  return message.replace(/\bfile:\/\/[^\s"'<>]*/giu, "[path]").replace(/(?:[A-Za-z]:[\\/](?![/]))[^\s]*/g, "[path]").replace(/(?<![:/])\/(?:[^\s/]+(?:[/\\][^\s]*)?)/g, "[path]");
+function sanitizeErrorText(message, keep = []) {
+  const held = [];
+  let masked = message;
+  for (const token of keep.filter((entry) => entry !== "").sort((a, b) => b.length - a.length)) {
+    if (!masked.includes(token)) continue;
+    const index = held.push(token) - 1;
+    masked = masked.split(token).join(`__DSH_KEEP_${index}__`);
+  }
+  const redacted = masked.replace(/\bfile:\/\/[^\s"'<>]*/giu, "[path]").replace(/(?:[A-Za-z]:[\\/](?![/]))[^\s]*/g, "[path]").replace(/(?<![:/])\/(?:[^\s/]+(?:[/\\][^\s]*)?)/g, "[path]");
+  if (held.length === 0) return redacted;
+  return redacted.replace(/__DSH_KEEP_(\d+)__/g, (token, rawIndex) => held[Number(rawIndex)] ?? token);
 }
 
 // src/apply-phase.ts
@@ -6639,9 +6648,9 @@ function renderError(error) {
     return "<unrenderable error>";
   }
 }
-var resultError = (error) => {
+var resultError = (error, method) => {
   const withoutQuotedPaths = renderError(error).replace(/(['"])(?:[A-Za-z]:[\\/]|\/)[^'"\r\n]*\1/gu, "[path]");
-  return sanitizeErrorText(withoutQuotedPaths).slice(0, 2e3);
+  return sanitizeErrorText(withoutQuotedPaths, [method]).slice(0, 2e3);
 };
 function abortReason(signal) {
   if (signal.reason instanceof Error) return signal.reason;
@@ -6783,7 +6792,7 @@ async function runRuntimeActivationProbes(opts) {
       }
       return { name, ok: true };
     } catch (error) {
-      return { name, ok: false, error: resultError(error) };
+      return { name, ok: false, error: resultError(error, name) };
     }
   };
   const hostDomainNames = opts.hostDomainNames ?? (opts.hostDomains === false ? [] : [...HOST_DOMAIN_PROBE_NAMES]);
@@ -6817,10 +6826,10 @@ async function runRuntimeActivationProbes(opts) {
             if (identityMethodNotFound(legacyError)) {
               return { name, ok: false, error: `neither ${name} nor the legacy session/list method is registered (HTTP 404)` };
             }
-            return { name, ok: false, error: resultError(legacyError) };
+            return { name, ok: false, error: resultError(legacyError, name) };
           }
         }
-        return { name, ok: false, error: resultError(error) };
+        return { name, ok: false, error: resultError(error, name) };
       }
     })(),
     wantsDomain("clientGraph/graph") ? probe("clientGraph/graph", "clientGraph/graph", { args: {} }, graphValue) : Promise.resolve(null),
@@ -6855,7 +6864,7 @@ async function runRuntimeActivationProbes(opts) {
         }
         return { name, ok: false, error: "malformed probe response" };
       } catch (error) {
-        return { name, ok: false, error: resultError(error) };
+        return { name, ok: false, error: resultError(error, name) };
       }
     })() : Promise.resolve(null)
   ]);
@@ -6865,13 +6874,13 @@ async function runRuntimeActivationProbes(opts) {
       args: {
         agentId: COMMAND_MISSING_SESSION,
         line: COMMAND_SYNTAX_MISS,
-        attachments: []
+        submittedAttachments: []
       }
     });
     commands = { name: "commands/execute", ok: false, error: "missing-session command probe unexpectedly executed" };
   } catch (error) {
     const code = typeof error === "object" && error !== null ? error.code : void 0;
-    commands = code === "session/not-found" ? { name: "commands/execute", ok: true } : { name: "commands/execute", ok: false, error: resultError(error) };
+    commands = code === "session/not-found" ? { name: "commands/execute", ok: true } : { name: "commands/execute", ok: false, error: resultError(error, "commands/execute") };
   }
   let dataSettings;
   try {
@@ -6879,7 +6888,7 @@ async function runRuntimeActivationProbes(opts) {
     if (!settingsRpcOk) throw new Error("settings RPC could not parse the active profile");
     dataSettings = { name: "data.settings", ok: true };
   } catch (error) {
-    dataSettings = { name: "data.settings", ok: false, error: resultError(error) };
+    dataSettings = { name: "data.settings", ok: false, error: resultError(error, "data.settings") };
   }
   const byName = /* @__PURE__ */ new Map();
   byName.set(commands.name, commands);

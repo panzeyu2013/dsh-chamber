@@ -16,10 +16,30 @@
  * by TWO slashes) so URLs survive it too. `file://` is the exception: its
  * authority/path is local filesystem material, so the entire token is
  * removed before the generic URL-preserving path rules run.
+ *
+ * `keep` holds the caller's own non-secret vocabulary out of the redaction: the
+ * POSIX branch matches `word/word` from INSIDE a token, so a registered RPC
+ * method name (`commands/execute`, `session/canOpenWorkspacePath`, …) would ride
+ * the renderer projection as `commands[path]` and lose the method that failed —
+ * the 2026-09 acceptance round read exactly that mangled form while hunting a
+ * quarantined fresh install. Passing the vocabulary restores only those literals;
+ * every path and URL rule above still applies to the rest of the message.
+ * @param message - the error text to redact.
+ * @param keep - literal non-secret tokens to preserve verbatim (default: none).
+ * @returns the redacted message with the kept tokens restored.
  */
-export function sanitizeErrorText(message: string): string {
-  return message
+export function sanitizeErrorText(message: string, keep: readonly string[] = []): string {
+  const held: string[] = []
+  let masked = message
+  for (const token of keep.filter((entry) => entry !== '').sort((a, b) => b.length - a.length)) {
+    if (!masked.includes(token)) continue
+    const index = held.push(token) - 1
+    masked = masked.split(token).join(`__DSH_KEEP_${index}__`)
+  }
+  const redacted = masked
     .replace(/\bfile:\/\/[^\s"'<>]*/giu, '[path]')
     .replace(/(?:[A-Za-z]:[\\/](?![/]))[^\s]*/g, '[path]')
     .replace(/(?<![:/])\/(?:[^\s/]+(?:[/\\][^\s]*)?)/g, '[path]')
+  if (held.length === 0) return redacted
+  return redacted.replace(/__DSH_KEEP_(\d+)__/g, (token, rawIndex: string) => held[Number(rawIndex)] ?? token)
 }

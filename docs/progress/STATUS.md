@@ -14,7 +14,6 @@
     `usePanelInfo` / `chamberFileApiBase`）、session v3 迁移在真实存储上的行为；
   - open-in：官方 host 行随 alpha.2 默认 profile 进入托管实例、官方 host 行 dormant
     处置、远程无 cookie 下 fence 行为、remote cwd 填充、图标缓存 / CSP；
-  - 实机探针：`commands/execute attachments` wire key。
 - **ssh/http dsh 目标无 cookie 注入（实例侧 401）**：五处同源绝对 URL 由构建期 vendor
   补丁集走本实例前缀（design 09 §3.6）；ssh/http dsh 目标的 cookie 注入属既有认证面，
   未覆盖。
