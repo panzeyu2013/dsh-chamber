@@ -96,6 +96,11 @@ bundle 未覆盖的 entry（方案 A，§3）。第 1、2 步在 chamber 托管�
   点名 instance，并把 `ShellState.degraded`（`graph-unavailable` /
   `required-services-missing`）交给 App，由 App 在该来源 ready 时**自动重挂一次**
   （每个 ready 世代一次，纯判定在 `degraded-retry.ts`；此前只有整页 reload 能恢复）。
+  ③ 同一道门被**设置壳**复用：`waitForSourceServing`（shared face
+  `serving-gate.ts`，读 chamberBridge 投影的 `connected`）——桥的图读取在
+  `instance_unavailable` / `dsh_not_ready` 这类**冷启动拒绝**上等来源并重试一次，
+  不再把"实例还在启动"报成"插件图不可达"；终态来源（error/stopped/
+  restart-exhausted）与未知来源**立即**失败，真实原因照旧呈现。
   `chamber-entry.ts` 的 `assertRequiredExtraRowServices`（纯判定在
   `required-extra-rows.ts`）在 5s 内探测、点名并把判词经 shell 的
   `chamberReportBootDegraded` 上报（**仍是诊断，不是启动门**：gateway/移动形态可合法
