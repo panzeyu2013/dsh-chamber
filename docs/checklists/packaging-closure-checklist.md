@@ -52,6 +52,11 @@
 - [ ] `@dsh-chamber/dsh-runtime` 经 `build.beforePack`（`scripts/before-pack.mjs`）
       物化进 node_modules（`files` 的 `from/to` 映射对 node_modules 目标无效，
       勿回归）。
+- [ ] 该物化是**进程内临时态**：`before-pack` 的默认导出必须在物化**之前**注册
+      退出还原（含 SIGINT/SIGTERM/SIGHUP），使成功、失败与中断的打包都还原 pnpm 的
+      workspace 链接（`before-pack.test.mjs` 用子进程覆盖退出路径）。不还原会让开发树
+      永久丢掉 dsh-runtime 的类型面（`pnpm typecheck` 以 TS7016 失败，
+      `pnpm install --frozen-lockfile` 修不回来）。
 
 ## 4. 快速清单速查（当前基线，2026-09）
 

@@ -102,23 +102,42 @@ export function restoreRuntimeCoreLink({
 }
 
 /** Restore bookkeeping: the hook registers once per process and keeps the
- *  exact link text the first materialization replaced (pnpm writes a relative
- *  link; reusing it is faithful even if that shape changes). */
+ *  target plus the exact link text the first materialization replaced (pnpm
+ *  writes a relative link; reusing it is faithful even if that shape changes). */
 let restoreState = null
 let restoreRegistered = false
 
+/** Resolve the restore plan for the current process (dirs + recorded link). */
+function restorePlan(overrides = {}) {
+  return {
+    targetDir: overrides.targetDir ?? restoreState?.targetDir ?? DEFAULT_TARGET_DIR,
+    sourceDir: overrides.sourceDir ?? restoreState?.sourceDir ?? DEFAULT_SOURCE_DIR,
+    linkTarget: overrides.linkTarget ?? restoreState?.linkTarget ?? null,
+  }
+}
+
 function restoreLink(log = console.log, errorLog = console.error) {
   try {
-    const result = restoreRuntimeCoreLink(restoreState ?? {})
-    if (result.restored) log(`[before-pack] restored the workspace link -> ${DEFAULT_TARGET_DIR}`)
+    const result = restoreRuntimeCoreLink(restorePlan())
+    if (result.restored) log(`[before-pack] restored the workspace link -> ${restorePlan().targetDir}`)
     else if (result.reason !== 'already a workspace link') errorLog(`[before-pack] workspace link not restored: ${result.reason}`)
   } catch (error) {
     errorLog(`[before-pack] failed to restore the workspace link: ${error instanceof Error ? error.message : String(error)}`)
   }
 }
 
-/** @param log - sink for the restore note. */
-export function registerExitRestore(log = console.log) {
+/**
+ * Arm the restore for THIS process. Called before materialization, so a
+ * failure *inside* materialization (it clears the link before it copies) still
+ * leaves an armed handler behind.
+ * @param root0 - restore inputs.
+ * @param root0.sourceDir - workspace package to point the link at.
+ * @param root0.targetDir - node_modules path the pack materializes.
+ * @param root0.log - sink for the restore note.
+ * @returns whether a handler was registered by this call.
+ */
+export function registerExitRestore({ sourceDir = DEFAULT_SOURCE_DIR, targetDir = DEFAULT_TARGET_DIR, log = console.log } = {}) {
+  restoreState = { sourceDir, targetDir, linkTarget: restoreState?.linkTarget ?? null }
   if (restoreRegistered) return { registered: false }
   restoreRegistered = true
   // electron-builder keeps running in THIS process, so one exit hook covers the
@@ -127,17 +146,33 @@ export function registerExitRestore(log = console.log) {
   for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143], ['SIGHUP', 129]]) {
     process.once(signal, () => {
       restoreLink(log)
-      process.exit(code)
+      // Re-raise after dropping our own listener: the default action (and any
+      // other listener, e.g. electron-builder's async cleanup) then runs with
+      // the conventional 128+n status instead of being preempted by exit().
+      // Windows has no real signal delivery, so fall back to an explicit exit.
+      try {
+        process.removeAllListeners(signal)
+        process.kill(process.pid, signal)
+      } catch {
+        process.exit(code)
+      }
     })
   }
   return { registered: true }
 }
 
-export default async function beforePack() {
-  const state = materializeRuntimeCore()
-  restoreState ??= { linkTarget: state.linkTarget }
-  restoreState.linkTarget ??= state.linkTarget
-  // Registered even when the tree already arrived materialized: that is how a
-  // SIGKILLed pack (whose handlers cannot run) is healed by the next one.
-  registerExitRestore()
+/**
+ * electron-builder beforePack entry. Accepts the builder's pack context (its
+ * keys are ignored) and, for tests, an explicit `{ sourceDir, targetDir, log }`.
+ */
+export default async function beforePack(options = {}) {
+  const sourceDir = options.sourceDir ?? DEFAULT_SOURCE_DIR
+  const targetDir = options.targetDir ?? DEFAULT_TARGET_DIR
+  const log = options.log ?? console.log
+  // Registered BEFORE materializing, and also when the tree already arrived
+  // materialized: that is how a SIGKILLed pack (whose handlers cannot run) is
+  // healed by the next one, and how a copy that dies mid-way still restores.
+  registerExitRestore({ sourceDir, targetDir, log })
+  const state = materializeRuntimeCore({ sourceDir, targetDir, log })
+  if (state.linkTarget !== null) restoreState.linkTarget = state.linkTarget
 }
