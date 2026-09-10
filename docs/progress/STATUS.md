@@ -20,7 +20,15 @@
     才恢复；探针只报一次 console 诊断、**不重试**（`required-extra-rows.ts` 的 5s deadline
     是诊断而非自愈）。复现条件 = 本地实例被写者静默门拦下（`409 connection_busy`，见下条）
     或 gateway 来源不可达；健康冷启动（实例 7s 内 ready）不触发。判据 = 控制台
-    `required extra-row service(s) missing after 5000ms: sidebarRight`。
+    `required extra-row service(s) missing after 5000ms: sidebarRight`（2026-09-10 实测：
+    干净冷启动本地 ready 3.07s / 壳 settled 3.81s，被 `409` 挡下时 `starting` 停住、
+    输入框之后的三个反馈面全无）。余量很薄：取图 503 预算只有 `host-graph.ts` 的
+    10×500ms，而预算耗尽的路径 `host-graph.ts:473`（`if (firstFetch.rows === null) return []`）
+    **既不打日志也不发布 `pluginDiagnostic`**（非 503 通道失败才 `console.error` +
+    `reportDiagnostic`），connection 设置页因此仍显示「正常」；唯一诊断只到 renderer
+    DevTools console，而桌面壳没有 `console-message` 钩子。用户可见面 = 「输入框能用、
+    回车后草稿被清空、气泡/忙碌指示/本轮失败卡片全无」——回合内失败（如 AUTH）只由
+    ui-chat 的 ChatView 渲染，视图不注册即一起消失。
   - **实例写者静默门拦住自动启动后的恢复路径（同上验收）**：shell 被 `SIGKILL`/孤儿 dsh
     占住 DSH_HOME 时，控制面如实拒绝（`409 connection_busy`：writer quiescence is not
     proven）+ connections 页就地解释，但「启动/停止」按钮在此状态下**点不动**（状态停在
@@ -29,6 +37,18 @@
 - **ssh/http dsh 目标无 cookie 注入（实例侧 401）**：五处同源绝对 URL 由构建期 vendor
   补丁集走本实例前缀（design 09 §3.6）；ssh/http dsh 目标的 cookie 注入属既有认证面，
   未覆盖。
+- **gateway 来源的插件播种被拒（HTTP 400 `invalid_input`，2026-09-10 实机）**：dev 实例接
+  `test`（`http://192.168.110.172:30801`）时启动日志三连
+  `gateway plugin sync: uploading @dsh-chamber/dsh-chamber-seed-{client-graph,git-worktree,archive-cleanup} failed (HTTP 400: invalid_input)`。
+  根因 = 该 gateway 是 2026-09「Batch 1 naming unification」之前的构建：`GET /chamber/plugins`
+  实测只返回 `@dsh-chamber/dsh-host-client-graph`、`@dsh-chamber/dsh-host-git-worktree`
+  （v0.2.4，两项），而现仓清单名是 `dsh-chamber-seed-*` 三项
+  （`packages/gateway/src/plugins.ts:44-55` 从 control-plane 的 `CHAMBER_HOST_PACKAGES`
+  派生并做命名钉死）——未知包名即 400。gateway 会在 body 里回 sanitized 原因
+  （`unsyncableMessage`，`plugins.ts:112-115` → `routes.ts:1003-1010`），桌面侧只透出
+  code、丢掉原因，诊断断在这里；两侧任一的处置（就地重建 gateway / 桌面透出 body
+  原因）尚未排期。
+
 - **PluginDialog `update(name, version)` 动作缺失**：2026-09 裁决**保留** PluginDialog
   本体，唯一缺口 = 尚未提供 `update(name, version)` 动作（非缺陷）。
 
