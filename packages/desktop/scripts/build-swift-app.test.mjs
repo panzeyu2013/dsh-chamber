@@ -22,7 +22,18 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readlinkSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -289,4 +300,52 @@ test('⑦ entitlements 文件是合法 plist 且含最小集', () => {
   // 壳不继承 Electron 的 JIT 权限（那是 V8 需求）。
   assert.ok(!readFileSync(path.join(macosDir, 'entitlements.plist'), 'utf8').includes('allow-jit'))
   assert.ok(readFileSync(path.join(macosDir, 'entitlements.node.plist'), 'utf8').includes('allow-jit'))
+})
+
+test('⑩ sidecar 含逃出 bundle 的绝对符号链接 → 归一化后真实 codesign 校验通过', async (t) => {
+  // P2 回归锁（2026-09 GUI 验收）：cpSync 会把相对链接绝对化，bundle 内出现
+  // 指向构建机源树的链接时 `codesign --verify --strict` 报
+  // `invalid destination for symbolic link in bundle`。本用例用**真实 codesign**
+  // 覆盖 sidecar 载荷（⑥/⑦ 的 --skip-sidecar 路径看不到这一层）。
+  if (!existsSync('/usr/bin/codesign')) {
+    t.skip('codesign 不可用')
+    return
+  }
+  const out = tempOut()
+  const sidecar = mkdtempSync(path.join(tmpdir(), 'dsh-fake-sidecar-link-'))
+  const external = mkdtempSync(path.join(tmpdir(), 'dsh-external-target-'))
+  try {
+    writeFileSync(path.join(sidecar, 'sidecar.js'), '// fake')
+    writeFileSync(path.join(sidecar, 'package.json'), '{}')
+    writeFileSync(path.join(sidecar, 'node'), '#!/bin/sh\necho fake\n')
+    // 树外目标 + 树内目标各一枚绝对链接（cpSync 的产物形状）。
+    writeFileSync(path.join(external, 'outside.js'), 'outside\n')
+    mkdirSync(path.join(sidecar, 'vendor', 'dsh', 'node_modules', '.bin'), { recursive: true })
+    mkdirSync(path.join(sidecar, 'vendor', 'dsh', 'node_modules', 'pkg'), { recursive: true })
+    writeFileSync(path.join(sidecar, 'vendor', 'dsh', 'node_modules', 'pkg', 'cli.js'), 'cli\n')
+    const bin = path.join(sidecar, 'vendor', 'dsh', 'node_modules', '.bin')
+    symlinkSync(path.join(external, 'outside.js'), path.join(bin, 'outside'))
+    // 树内**相对**链接（pnpm .bin 的真实形状）：必须原样保留。
+    symlinkSync('../pkg/cli.js', path.join(bin, 'inside'))
+
+    await runBuildSwiftApp(parseBuildSwiftAppArgs([
+      '--out', out, '--sidecar', sidecar, '--skip-build', '--no-zip', '--no-dmg',
+    ]), { log: () => {}, error: () => {} })
+    const layout = appLayout(out)
+
+    // ① 不再有逃出 bundle 的链接
+    const bundBin = path.join(layout.sidecarDir, 'vendor', 'dsh', 'node_modules', '.bin')
+    assert.ok(!lstatSync(path.join(bundBin, 'outside')).isSymbolicLink(), '树外链接必须实体化')
+    assert.equal(readFileSync(path.join(bundBin, 'outside'), 'utf8'), 'outside\n')
+    assert.ok(lstatSync(path.join(bundBin, 'inside')).isSymbolicLink(), '树内链接必须保留为链接')
+    assert.equal(readlinkSync(path.join(bundBin, 'inside')), '../pkg/cli.js', '树内链接保持相对拼写')
+
+    // ② 真实 codesign 校验（ad-hoc 默认身份）
+    const verify = spawnSync('codesign', ['--verify', '--deep', '--strict', layout.appDir], { encoding: 'utf8' })
+    assert.equal(verify.status, 0, verify.stderr + verify.stdout)
+  } finally {
+    rmSync(out, { recursive: true, force: true })
+    rmSync(sidecar, { recursive: true, force: true })
+    rmSync(external, { recursive: true, force: true })
+  }
 })

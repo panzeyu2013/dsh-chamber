@@ -9,13 +9,27 @@
  *  ⑤ **A5 断言**：捆绑 Node 基名必须叫 node——正例通过、反例 loud；
  *     并实证 resolveNodeExecutable 的纯 Node 分支前提（basename(execPath) ==
  *     'node' → 直用 execPath；其他基名 → 回落，不直用）；
- *  ⑥ --dry-run 真实子进程：输入校验通过、不写盘、不联网（exit 0）。
+ *  ⑥ --dry-run 真实子进程：输入校验通过、不写盘、不联网（exit 0）；
+ *  ⑦ normalizeSymlinks：树内绝对链接→相对、树外链接→实体化、悬空→loud、
+ *     幂等（P2：cpSync 会把相对链接绝对化，bundle 因此过不了 codesign）；
+ *  ⑧ copyTree：树内相对链接原样保留、树外链接实体化（cpSync 的替代）。
  * 不联网、不下载 Node、不写仓库外路径（dry-run 无副作用）。
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readlinkSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -25,6 +39,8 @@ import {
   assertBundledNodeBasename,
   assertNodeArchiveMembers,
   copyPnpm,
+  copyTree,
+  normalizeSymlinks,
   copyVendorDsh,
   buildPlan,
   nodeArchiveName,
@@ -352,3 +368,67 @@ async function runDryRun(argv, warnings = []) {
     error() {},
   })
 }
+
+test('⑦ normalizeSymlinks：树内→相对、树外→实体化、悬空 loud、幂等', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'dsh-symlink-'))
+  try {
+    const dest = path.join(root, 'dest')
+    const external = path.join(root, 'external')
+    mkdirSync(path.join(dest, '.bin'), { recursive: true })
+    mkdirSync(path.join(dest, 'pkg'), { recursive: true })
+    mkdirSync(path.join(external, 'dir'), { recursive: true })
+    writeFileSync(path.join(dest, 'pkg', 'cli.js'), 'console.log(1)\n')
+    writeFileSync(path.join(external, 'outside.js'), 'outside\n')
+    writeFileSync(path.join(external, 'dir', 'a.txt'), 'a\n')
+    // cpSync 的产物形状：相对链接被改写成绝对链接。
+    symlinkSync(path.join(dest, 'pkg', 'cli.js'), path.join(dest, '.bin', 'inside'))
+    symlinkSync(path.join(external, 'outside.js'), path.join(dest, '.bin', 'outside'))
+    symlinkSync(path.join(external, 'dir'), path.join(dest, 'dirlink'))
+
+    const rewritten = normalizeSymlinks(dest)
+    assert.equal(rewritten, 3)
+    // 树内 → 相对链接（保留链接语义）
+    assert.equal(readlinkSync(path.join(dest, '.bin', 'inside')), '../pkg/cli.js')
+    // 树外 → 实体化（文件/目录），不再是链接
+    assert.ok(!lstatSync(path.join(dest, '.bin', 'outside')).isSymbolicLink())
+    assert.equal(readFileSync(path.join(dest, '.bin', 'outside'), 'utf8'), 'outside\n')
+    assert.ok(!lstatSync(path.join(dest, 'dirlink')).isSymbolicLink())
+    assert.ok(statSync(path.join(dest, 'dirlink')).isDirectory())
+    assert.equal(readFileSync(path.join(dest, 'dirlink', 'a.txt'), 'utf8'), 'a\n')
+    // 幂等
+    assert.equal(normalizeSymlinks(dest), 0)
+    // 悬空 → loud
+    symlinkSync(path.join(root, 'missing'), path.join(dest, '.bin', 'dangling'))
+    assert.throws(() => normalizeSymlinks(dest), /符号链接目标不存在/)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('⑧ copyTree：树内相对链接原样保留、树外链接实体化', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'dsh-copytree-'))
+  try {
+    const src = path.join(root, 'src')
+    const dst = path.join(root, 'dst')
+    const external = path.join(root, 'ext')
+    mkdirSync(path.join(src, '.bin'), { recursive: true })
+    mkdirSync(path.join(src, 'pkg'), { recursive: true })
+    mkdirSync(external, { recursive: true })
+    writeFileSync(path.join(src, 'pkg', 'cli.js'), 'cli\n')
+    writeFileSync(path.join(external, 'out.js'), 'out\n')
+    symlinkSync('../pkg/cli.js', path.join(src, '.bin', 'inside'))
+    symlinkSync(path.join(external, 'out.js'), path.join(src, '.bin', 'outside'))
+
+    const materialized = copyTree(src, dst)
+    assert.equal(materialized, 1)
+    // 树内相对链接：语义不变（pnpm .bin shim 的 import.meta.url 依赖它）
+    assert.ok(lstatSync(path.join(dst, '.bin', 'inside')).isSymbolicLink())
+    assert.equal(readlinkSync(path.join(dst, '.bin', 'inside')), '../pkg/cli.js')
+    assert.equal(readFileSync(path.join(dst, 'pkg', 'cli.js'), 'utf8'), 'cli\n')
+    // 树外链接：实体化，产物自包含
+    assert.ok(!lstatSync(path.join(dst, '.bin', 'outside')).isSymbolicLink())
+    assert.equal(readFileSync(path.join(dst, '.bin', 'outside'), 'utf8'), 'out\n')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})

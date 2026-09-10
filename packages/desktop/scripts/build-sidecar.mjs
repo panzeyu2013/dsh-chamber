@@ -39,11 +39,16 @@ import {
   cpSync,
   createReadStream,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
+  readlinkSync,
+  realpathSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs'
 import { createHash } from 'node:crypto'
@@ -94,6 +99,120 @@ export const VENDOR_DSH_FILES = ['package.json', 'pnpm-lock.yaml', 'pnpm-workspa
 /** Electron extraResources 同款过滤器：pnpm 只带 package.json + bin/pnpm.{cjs,mjs} + dist。 */
 export const PNPM_BIN_FILES = ['pnpm.cjs', 'pnpm.mjs']
 
+/**
+ * 拷贝目录树并**正确保留树内相对符号链接**。
+ *
+ * 为什么不用 `fs.cpSync`：cpSync（含 `dereference: true`）会把相对链接改写成
+ * 指向源树的**绝对**链接（Node 24 实测），产物于是含逃出 bundle 的链接，
+ * `codesign --verify --strict` 必挂；而把 `.bin/*` 一律实体化又会破坏
+ * `import.meta.url` 相对解析（那些 shim 指向模块文件）。
+ *
+ * 规则：
+ * - 链接目标（realpath）在**源树内** → 目标字符串原样复制到镜像位置
+ *   （源树结构同构，相对目标在副本里依然成立，语义不变）；
+ * - 目标在源树外 → 实体化（文件 / 目录递归复制），产物自包含；
+ * - 目标不存在 → throw（loud）。
+ *
+ * 返回实体化计数。
+ */
+export function copyTree(sourceDir, destDir) {
+  const realSource = realpathSync(sourceDir)
+  const insideSource = (p) => p === realSource || p.startsWith(realSource + path.sep)
+  let materialized = 0
+  const walk = (src, dst) => {
+    mkdirSync(dst, { recursive: true })
+    for (const entry of readdirSync(src)) {
+      const from = path.join(src, entry)
+      const to = path.join(dst, entry)
+      const lst = lstatSync(from)
+      if (lst.isSymbolicLink()) {
+        const raw = readlinkSync(from)
+        const resolved = path.resolve(path.dirname(from), raw)
+        if (!existsSync(resolved)) {
+          throw new Error(`符号链接目标不存在：${from} -> ${raw}`)
+        }
+        const real = realpathSync(resolved)
+        if (insideSource(real)) {
+          symlinkSync(raw, to)
+        } else {
+          rmSync(to, { recursive: true, force: true })
+          cpSync(real, to, { recursive: true, dereference: true })
+          materialized += 1
+        }
+      } else if (lst.isDirectory()) {
+        walk(from, to)
+      } else {
+        copyFileSync(from, to)
+      }
+    }
+  }
+  walk(sourceDir, destDir)
+  return materialized
+}
+
+/**
+ * 归一化目录树内的符号链接，使产物**自包含**且可过 `codesign --verify --strict`。
+ *
+ * 背景（2026-09 GUI 验收 P2，release 阻塞）：Node 的 `fs.cpSync`（含
+ * `dereference: true`）会把**相对**符号链接改写成**指向源树的绝对**链接
+ * （实测 Node 24：`.bin/dsh -> ../@deepseek-ai/dsh/lib/bin.js` 复制后变成
+ * `/…/packages/desktop/vendor/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js`）。
+ * bundle 内出现逃出 bundle 的符号链接 → codesign 报
+ * `invalid destination for symbolic link in bundle`，签名/ad-hoc 构建全挂。
+ *
+ * 规则：
+ * - 目标在树内 → 改写为**相对**链接（保留链接语义：pnpm `.bin` 依赖它）；
+ * - 目标在树外（或树内但经 realpath 逃出）→ **实体化**（文件复制 / 目录递归
+ *   复制），产物自包含；
+ * - 目标不存在 → throw（loud，绝不留下悬空链接）。
+ *
+ * 幂等：已规范化的树再次调用不产生变化。
+ */
+export function normalizeSymlinks(rootDir) {
+  if (!existsSync(rootDir)) return 0
+  const realRoot = realpathSync(rootDir)
+  const inside = (p) => p === realRoot || p.startsWith(realRoot + path.sep)
+  let rewritten = 0
+  const stack = [rootDir]
+  while (stack.length > 0) {
+    const dir = stack.pop()
+    for (const entry of readdirSync(dir)) {
+      const entryPath = path.join(dir, entry)
+      const lst = lstatSync(entryPath)
+      if (lst.isSymbolicLink()) {
+        const rawTarget = readlinkSync(entryPath)
+        const resolved = path.resolve(path.dirname(entryPath), rawTarget)
+        if (!existsSync(resolved)) {
+          throw new Error(`符号链接目标不存在：${entryPath} -> ${rawTarget}`)
+        }
+        const real = realpathSync(resolved)
+        if (inside(real)) {
+          // 相对链接的基准必须与目标同为 realpath 拼写（macOS /tmp →
+          // /private/tmp 这类别名否则会算出越界相对路径）。
+          const baseDir = realpathSync(path.dirname(entryPath))
+          const relative = path.relative(baseDir, real)
+          if (relative !== rawTarget) {
+            rmSync(entryPath, { force: true })
+            symlinkSync(relative, entryPath)
+            rewritten += 1
+          }
+          const st = statSync(entryPath)
+          if (st.isDirectory()) stack.push(entryPath)
+        } else {
+          // 逃出树外：实体化（复制内容，不再是链接）。
+          rmSync(entryPath, { recursive: true, force: true })
+          cpSync(real, entryPath, { recursive: true, dereference: true })
+          rewritten += 1
+          if (statSync(entryPath).isDirectory()) stack.push(entryPath)
+        }
+      } else if (lst.isDirectory()) {
+        stack.push(entryPath)
+      }
+    }
+  }
+  return rewritten
+}
+
 /** 拷贝内置 dsh 工作区（缺源时返回 false，由调用方决定 warn/fatal）。 */
 export function copyVendorDsh(sourceDir, destDir) {
   const manifest = path.join(sourceDir, 'package.json')
@@ -106,7 +225,10 @@ export function copyVendorDsh(sourceDir, destDir) {
   }
   const modules = path.join(sourceDir, 'node_modules')
   if (existsSync(modules)) {
-    cpSync(modules, path.join(destDir, 'node_modules'), { recursive: true, dereference: true })
+    // copyTree（而非 cpSync）：保留树内相对链接、实体化树外链接——见其注释。
+    copyTree(modules, path.join(destDir, 'node_modules'))
+    // 兜底网：任何仍逃出树的链接一律实体化（签名/公证腿的硬前提）。
+    normalizeSymlinks(path.join(destDir, 'node_modules'))
   }
   if (!existsSync(path.join(destDir, 'package.json'))) {
     throw new Error(`vendor/dsh 拷贝不完整：${path.join(destDir, 'package.json')}`)
@@ -127,7 +249,11 @@ export function copyPnpm(sourceDir, destDir) {
     if (existsSync(from)) cpSync(from, path.join(destDir, 'bin', file))
   }
   const dist = path.join(sourceDir, 'dist')
-  if (existsSync(dist)) cpSync(dist, path.join(destDir, 'dist'), { recursive: true, dereference: true })
+  if (existsSync(dist)) {
+    // 同 copyVendorDsh：copyTree 保相对链接 + 实体化树外链接，再归一化兜底。
+    copyTree(dist, path.join(destDir, 'dist'))
+    normalizeSymlinks(path.join(destDir, 'dist'))
+  }
   if (!existsSync(path.join(destDir, 'bin', 'pnpm.cjs'))) {
     throw new Error(`pnpm 拷贝不完整：${path.join(destDir, 'bin', 'pnpm.cjs')}`)
   }

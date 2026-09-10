@@ -42,6 +42,10 @@ import {
 } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+// 共享装配 seam（monorepo 内相对导入，同 packages/desktop/scripts/
+// build-swift-app.test.mjs 的反向引用）：bundle 内符号链接归一化必须与 W-23
+// sidecar 装配同源，绝不允许两份实现漂移。
+import { copyTree, normalizeSymlinks } from '../../packages/desktop/scripts/build-sidecar.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const macosDir = path.resolve(here, '..')
@@ -295,7 +299,17 @@ export async function runBuildSwiftApp(options, io = { log: console.log, error: 
   if (options.skipSidecar) {
     io.log('[build-swift-app] 跳过 sidecar 拷贝（--skip-sidecar）')
   } else if (existsSync(options.sidecarDir)) {
-    cpSync(options.sidecarDir, layout.sidecarDir, { recursive: true })
+    // P2（2026-09 GUI 验收）：`cpSync` 会把相对符号链接改写成指向**源树**的
+    // 绝对链接，bundle 内随即出现逃出 bundle 的链接，`codesign --verify
+    // --strict` 直接报 `invalid destination for symbolic link in bundle`。
+    // copyTree 保留树内相对链接（pnpm `.bin` 的语义）、实体化树外链接。
+    rmSync(layout.sidecarDir, { recursive: true, force: true })
+    const materialized = copyTree(options.sidecarDir, layout.sidecarDir)
+    // 兜底网：任何仍逃出树的链接一律实体化（对手工/旧装配目录也成立）。
+    const normalizedLinks = normalizeSymlinks(layout.sidecarDir)
+    if (materialized > 0 || normalizedLinks > 0) {
+      io.log(`[build-swift-app] 符号链接归一化：实体化 ${materialized} 处 / 改写 ${normalizedLinks} 处（bundle 自包含）`)
+    }
     io.log(`[build-swift-app] sidecar → ${layout.sidecarDir}`)
     // A5 前置断言（W-23 已保证，这里防手工/外部装配目录把 node 放错名）：
     // sidecar 目录下任何以 node 开头的条目都必须恰好叫 node。

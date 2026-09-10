@@ -79,9 +79,12 @@ design 25。
   （macos-latest=arm64 macOS26、Developer ID keychain 自举、notarize、dry-run 剥离
   凭据）。发布 tag v* → create-release → 各腿传 draft。根命令：dist:desktop:mac、
   test:release-workflow、verify:i18n。
-- userData 根：userData 名 = app.getName() = 打包 productName 'dsh-chamber'（desktop
-  package.json:31–32）→ 实际根 ~/Library/Application Support/dsh-chamber；dev identity
-  = @dsh-chamber/desktop（electron-dev.mjs:14–16）→ dev 用 --user-data-dir 隔离。
+- userData 根：userData 名 = app.getName() = **顶层** productName ?? name；本仓
+  productName 只在 `build.productName`（electron-builder 产物名）→ 实际取到包名
+  `@dsh-chamber/desktop` → 实根 `~/Library/Application Support/@dsh-chamber/desktop`
+  （2026-09 GUI 验收实机核实：运行中的打包宿主 `--user-data-dir`；同源声明
+  electron-dev.mjs:14–23）。Swift 侧 `PackagedLayout.userDataDir` 同根，由
+  `packages/desktop/chamber-lock.test.ts` ⑦ lockstep 断言钉住。
 - 更新面：UpdatePhase（updater.ts:108）= idle|checking|up-to-date|available|
   downloading|downloaded|error；UpdateState :111–134；消费面 settings-bridge
   UpdateSection.tsx + update-store/update-gate；**通道 6 个与接口方法/字段集在 v1 降级下

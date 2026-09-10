@@ -26,7 +26,7 @@ final class PackagedLayoutTests: XCTestCase {
         XCTAssertEqual(PackagedLayout.dshWorkspace(resourcesDir: resources), resources + "/sidecar/vendor/dsh")
         XCTAssertEqual(PackagedLayout.webDistDir(resourcesDir: resources), resources + "/dist/web")
         XCTAssertEqual(PackagedLayout.userDataDir(home: "/Users/tester"),
-                       "/Users/tester/Library/Application Support/dsh-chamber")
+                       "/Users/tester/Library/Application Support/@dsh-chamber/desktop")
     }
 
     func testResolveNode() {
@@ -71,10 +71,12 @@ final class PackagedLayoutTests: XCTestCase {
     func testResolveUserData() {
         XCTAssertEqual(PackagedLayout.resolveUserData(
             env: ["POC_USER_DATA": "/custom/ud"], home: "/Users/tester", isPackaged: true), "/custom/ud")
-        // 装配态与 Electron 打包实根同根（design 25 §6.1 U1）
+        // 装配态与 Electron 打包实根同根（design 25 §6.1 U1；实根拼写 =
+        // appData + `app.getName()`，见 ChamberResources.swift 注释与
+        // packages/desktop/chamber-lock.test.ts 的 lockstep 断言）
         XCTAssertEqual(PackagedLayout.resolveUserData(
             env: [:], home: "/Users/tester", isPackaged: true),
-            "/Users/tester/Library/Application Support/dsh-chamber")
+            "/Users/tester/Library/Application Support/@dsh-chamber/desktop")
         // dev 保持独立目录（不污染真实 userData）
         XCTAssertEqual(PackagedLayout.resolveUserData(
             env: [:], home: "/Users/tester", isPackaged: false),

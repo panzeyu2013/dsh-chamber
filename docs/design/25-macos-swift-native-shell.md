@@ -519,10 +519,15 @@ interface HostEdges {
 
 ### 6.1 userData 目录
 
-- 目录名机制：Electron userData = appData + `app.getName()` = 打包
-  productName 'dsh-chamber'（desktop package.json:31-32）→ 实际根
-  `~/Library/Application Support/dsh-chamber`（dev identity =
-  @dsh-chamber/desktop，用 --user-data-dir 隔离）。Swift 版**目标形态**同根，
+- 目录名机制：Electron userData = appData + `app.getName()`，而 `app.getName()`
+  取 package.json 的**顶层** `productName`、其次 `name`。本仓 `productName` 只在
+  electron-builder 的 `build.productName`（只影响 .app/DMG 名），顶层没有 →
+  实际取到包名 → **实根 `~/Library/Application Support/@dsh-chamber/desktop`**
+  （2026-09 GUI 验收实机核实：运行中的打包宿主 `--user-data-dir=…/@dsh-chamber/
+  desktop`；同源声明见 `packages/desktop/scripts/electron-dev.mjs:14-23`）。
+  Swift 版**同根**（`PackagedLayout.userDataDir`，由
+  `packages/desktop/chamber-lock.test.ts` ⑦ 的 lockstep 断言钉住：Swift 常量
+  必须等于 `顶层 productName ?? name` 推导；改 identity 必须同步两侧）。
   sidecar 以 `--user-data-dir` 参数接收，内部零改动。
 - 直拼点全集（P1 参数化收口）：chamber-settings.json（:747）；runtime 基目录
   = userData 本体（:1688，dsh-runtime 树在 <userData>/dsh-runtime/…）；
@@ -532,12 +537,15 @@ interface HostEdges {
 - 旧版 Electron 产物兼容：`*.corrupt` / `*.unbound-*` 保留物（A13）在 Swift
   首启前决定处置（预期：沿现有语义保留禁用，不主动清理）。
 - 验证项 **U1**（实机）：确认 Swift 计算的根与 Electron 打包实根一致
-  （编号避开 §5 E 表，A9）。**实施现状（2026-09 模块评审更新）**：`PackagedLayout`
-  已按 `isPackaged` 解析——装配态 userData = `~/Library/Application Support/dsh-chamber`
-  （与 Electron `app.getPath('userData')` 同根），node/sidecar/vendor-dsh/web-dist
-  全部 bundle-relative；`POC_*` 环境变量仍优先，dev 态保持
-  `dsh-chamber-poc-dev` 隔离。**代码侧已闭合**（`PackagedLayoutTests` 6 例 +
-  打包态 `.app` 实测），残余仅为实机双 flavor 并发互斥的 **C2 实机门禁**。
+  （编号避开 §5 E 表，A9）。**实施现状（2026-09 GUI 验收修正）**：`PackagedLayout`
+  已按 `isPackaged` 解析——装配态 userData =
+  `~/Library/Application Support/@dsh-chamber/desktop`（与 Electron
+  `app.getPath('userData')` 同根，见 §6.1 的实根推导），node/sidecar/vendor-dsh/
+  web-dist 全部 bundle-relative；`POC_*` 环境变量仍优先，dev 态保持
+  `dsh-chamber-poc-dev` 隔离。**代码侧已闭合**（`PackagedLayoutTests` +
+  `chamber-lock.test.ts` ⑦ 跨语言 lockstep），残余仅为实机双 flavor 并发互斥的
+  **C2 实机门禁**——注意互斥成立的前提是 Electron 侧**装的是含锁的构建**
+  （2026-09 实测：本机 /Applications 内的旧构建无 `chamber-lock`，因此不会持锁）。
 
 ### 6.2 bundle id 与双 flavor 共存
 

@@ -545,13 +545,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     /// fatal 分流（Supervisor 不可恢复：锁冲突 / 重启耗尽 / spawn 失败）——
-    /// 非阻塞式提示（运行中 fatal 不直接退出：窗口仍在，用户可自行退出）。
+    /// 运行中 fatal 不直接退出（窗口仍在，用户可自行退出）。
+    ///
+    /// 呈现语义（2026-09 GUI 验收修正）：
+    /// - **单次呈现门**：同一 fatal 会同时走 Supervisor.onFatal 与本类的
+    ///   `fatalStartup`（锁冲突实测连弹两个文案相同的框）——首个呈现后其余丢弃；
+    /// - **非阻塞**：有可见窗口时用 sheet（`beginSheetModal`），主线程继续服务
+    ///   其余 edge 腿；无窗口才退回 `runModal`（此前恒 `runModal`，与「非阻塞」
+    ///   注释不符，且会占用主线程导致 UI 腿 `main-thread-busy`）。
+    private static var fatalAlertShown = false
+
     private static func presentFatalAlert(_ message: String) {
+        guard !fatalAlertShown else { return }
+        fatalAlertShown = true
         let alert = NSAlert()
         alert.alertStyle = .critical
         alert.messageText = "dsh-chamber sidecar 异常"
         alert.informativeText = message
-        alert.runModal()
+        if let window = NSApp.windows.first(where: { $0.isVisible }) {
+            alert.beginSheetModal(for: window, completionHandler: nil)
+        } else {
+            alert.runModal()
+        }
     }
 
     // MARK: - 启动辅助
@@ -569,14 +584,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         return nil
     }
 
-    /// 致命启动错误：stderr 一行（无 GUI 可验证）+ 弹窗提示后退出
+    /// 致命启动错误：stderr 一行（无 GUI 可验证）+ 弹窗提示后退出。
+    /// 与 `presentFatalAlert` 共用单次呈现门：同一 fatal 已呈现（如 Supervisor
+    /// 的锁冲突分流）时不再弹第二个框，但仍按致命路径退出。
     private func fatalStartup(_ message: String) -> Never {
         fputs("[poc] 致命错误：\(message)\n", stderr)
-        let alert = NSAlert()
-        alert.alertStyle = .critical
-        alert.messageText = "dsh-chamber POC 启动失败"
-        alert.informativeText = message
-        alert.runModal()
+        if !Self.fatalAlertShown {
+            Self.fatalAlertShown = true
+            let alert = NSAlert()
+            alert.alertStyle = .critical
+            alert.messageText = "dsh-chamber POC 启动失败"
+            alert.informativeText = message
+            alert.runModal()
+        }
         exit(1)
     }
 

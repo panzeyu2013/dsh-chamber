@@ -7,7 +7,9 @@
  *  ③ release 幂等；
  *  ④ 符号链接 fail-closed（O_NOFOLLOW）；
  *  ⑤ 非 darwin：unsupported 放行且**不创建锁文件**（平台范围诚实）；
- *  ⑥ 记录读取对损坏/缺字段的容错（诊断面绝不 throw）。
+ *  ⑥ 记录读取对损坏/缺字段的容错（诊断面绝不 throw）；
+ *  ⑦ 双 flavor 同根 lockstep：Swift `PackagedLayout.userDataDir` == Electron
+ *     `app.getName()` 推导（顶层 productName ?? name），防两 flavor 各锁各的。
  * 非 darwin 平台自动跳过 ①–④（本机 macOS 恒跑）。
  */
 import { test } from 'node:test'
@@ -24,6 +26,7 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import {
   CHAMBER_LOCK_FILE,
   acquireChamberLock,
@@ -168,4 +171,35 @@ test('⑥ 记录读取容错（损坏/缺字段 → null，不 throw）', () => 
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
+})
+
+/**
+ * ⑦ 双 flavor 同根 lockstep（2026-09 GUI 验收 P1 修正）：Swift 的
+ * `PackagedLayout.userDataDir` 必须与 Electron `app.getPath('userData')` 的
+ * 推导**逐字一致**，否则两个 flavor 锁的是两个不同文件，互斥静默失效
+ * （design 25 §6.3 的不变量）。
+ *
+ * Electron 的推导：userData = appData + `app.getName()`，而 `app.getName()` 取
+ * package.json 的**顶层** `productName`，其次 `name`（`build.productName` 是
+ * electron-builder 的产物命名，不参与推导——本仓正是踩了这个坑）。
+ * 同源声明见 scripts/electron-dev.mjs 的 dev 隔离注释。
+ */
+test('⑦ 双 flavor 同根 lockstep：Swift 常量 == Electron identity 推导', () => {
+  const desktopDir = path.dirname(fileURLToPath(import.meta.url))
+  const repoRoot = path.resolve(desktopDir, '..', '..')
+  const manifest = JSON.parse(readFileSync(path.join(desktopDir, 'package.json'), 'utf8')) as {
+    name?: string
+    productName?: string
+  }
+  // Electron app.getName()：顶层 productName 优先，其次 name。
+  const identity = manifest.productName ?? manifest.name
+  assert.equal(identity, '@dsh-chamber/desktop',
+    'Electron userData 目录名 = app.getName()；改了 package.json identity 就必须同步 Swift 常量')
+
+  const swiftSource = readFileSync(
+    path.join(repoRoot, 'macos', 'Sources', 'DSHChamberPoc', 'ChamberResources.swift'), 'utf8')
+  const match = /func userDataDir\(home: String\) -> String \{\s*\n\s*home \+ "([^"]+)"/.exec(swiftSource)
+  assert.ok(match, 'ChamberResources.swift 的 userDataDir 字面量形状变化——请同步本 lockstep 断言')
+  assert.equal(match[1], `/Library/Application Support/${identity}`,
+    'Swift PackagedLayout.userDataDir 必须与 Electron app.getName() 推导同根（双 flavor 目录锁据此互斥）')
 })

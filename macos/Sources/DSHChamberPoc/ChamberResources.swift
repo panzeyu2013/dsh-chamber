@@ -67,12 +67,23 @@ public enum ChamberResources {
 /// 装配态布局（design 25 §3.2，`macos/scripts/build-swift-app.mjs`）：
 ///   <App>/Contents/Resources/sidecar/{node, sidecar.js, dist/, vendor/dsh, pnpm}
 ///   <App>/Contents/Resources/dist/web/index.html
-/// userData 与 Electron 打包实根同根（`~/Library/Application Support/dsh-chamber`，
-/// Electron `app.getPath('userData')` = appData + productName "dsh-chamber"）。
+/// userData 与 Electron 打包实根同根（design 25 §6.1 的「同根」不变量；双 flavor
+/// 目录锁据此互斥）。
+///
+/// **实根拼写（2026-09 GUI 验收实测修正）**：Electron `app.getPath('userData')`
+/// = appData + `app.getName()`，而 `app.getName()` 只认 package.json 的**顶层**
+/// `productName`，其次 `name`。`packages/desktop/package.json` 的 productName 位于
+/// electron-builder 的 `build.productName`（只影响 .app/DMG 名），顶层没有 →
+/// 实际取到包名 `@dsh-chamber/desktop`。运行中的打包宿主实证：
+/// `--user-data-dir=~/Library/Application Support/@dsh-chamber/desktop`
+/// （同源声明见 `packages/desktop/scripts/electron-dev.mjs:14-23`）。
+/// 本常量必须与该拼写逐字一致，由 `packages/desktop/chamber-lock.test.ts` 的
+/// lockstep 断言（从本文件提取字面量 + 按 `productName ?? name` 推导）钉住。
 public enum PackagedLayout {
-    /// Electron 打包实根（design 25 §6.1 的「同根」目标；双 flavor 目录锁据此互斥）。
+    /// Electron 打包实根（双 flavor 目录锁据此互斥）。改这里必须同步
+    /// `packages/desktop/package.json` 的 identity 推导结论（lockstep 测试会红）。
     public static func userDataDir(home: String) -> String {
-        home + "/Library/Application Support/dsh-chamber"
+        home + "/Library/Application Support/@dsh-chamber/desktop"
     }
 
     public static func sidecarDir(resourcesDir: String) -> String {
