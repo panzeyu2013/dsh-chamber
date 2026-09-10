@@ -12,7 +12,7 @@
  * re-exports `createLayoutStore`, keeping the registration face
  * (`client/index.ts` → `store: createLayoutStore`) unchanged.
  *
- * Baseline: upstream `dsh-v0.1.5-alpha.2` `ui-layout/src/client/stores.ts` —
+ * Baseline: upstream `dsh-v0.1.5-rc.1` `ui-layout/src/client/stores.ts` —
  * nested `LayoutState` (`panelInfo` + `layoutInfo`), eight actions including
  * `selectPanel`/`retainMainPanels`, and the eager root instance the frame's
  * `AppFrame` reads (`PropsStore<ReturnType<typeof createLayoutStore>>`).

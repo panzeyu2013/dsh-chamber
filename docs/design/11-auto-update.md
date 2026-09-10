@@ -314,9 +314,9 @@ electron-updater 6.x **安装成功后从不删除**下载产物（`DownloadedUp
   `@dsh-chamber/*` 包必须等于目标版本，新增包自动纳入；三个 fork 副本
   （`@deepseek-ai/dsh-client-connection` / `dsh-client-web` /
   `dsh-api-gateway`）必须保持上游基线版本
-  **0.1.5-alpha.2**（`release-preflight.mjs` 的 `FORK_VERSION`，随源码线 pin 移动），
+  **0.1.5-rc.1**（`release-preflight.mjs` 的 `FORK_VERSION`，随源码线 pin 移动），
   不随 chamber 发版移动。发布 checklist §1/§1.5 与该硬门同口径。
-  vendored dsh 源为 0.1.5-alpha.2——插件版本只在 chamber 侧参与 workspace 解析，
+  vendored dsh 源为 0.1.5-rc.1——插件版本只在 chamber 侧参与 workspace 解析，
   从不与 dsh 源逐位对齐，也从不参与任何比较/展示。
 - 更新只替换应用本体；`userData`（`ssh-instances.json`、state、
   `ssh-passwords.json`（schema v2 endpoint binding）、`gateway-secrets.json`

@@ -1,6 +1,6 @@
 /**
  * Local mirror of the official host open-in-app route contract
- * (`@deepseek-ai/dsh-host-open-in-app/shared`, dsh-v0.1.5-alpha.2 — 逐字一致，alpha.1→alpha.2 未动).
+ * (`@deepseek-ai/dsh-host-open-in-app/shared`, dsh-v0.1.5-rc.1 — 逐字一致，alpha.1→alpha.2 与 alpha.2→rc.1 均未动).
  *
  * The chamber open-in plugin cannot depend on the vendor host package (it is
  * a browser-side client plugin and the host half ships inside the instance),

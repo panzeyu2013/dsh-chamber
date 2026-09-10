@@ -175,8 +175,12 @@ pnpm run test:mobile
 
 ## Anchor baseline
 
-Official dsh **v0.1.5-alpha.2** DOM, empirically audited via CDP and
-re-anchored when the vendored pin moved: `data-sidebar-collapsed`
+Official dsh **v0.1.5-rc.1** DOM, empirically audited via CDP (at v0.1.5-alpha.2) and
+re-anchored when the vendored pin moved — every anchor below still resolves in the
+rc.1 tree, whose client delta (the `ui-sidebar-*` guide/preview rows, the
+`ui-primitives` `CodeBlock` wrapper, the `ui-chat` stats dialog, two `z-index`
+additions in `ui-dockkit`'s CSS and a slot-catalog doc pointer) touches neither this
+anchors' emitters nor the layers this plugin stacks against: `data-sidebar-collapsed`
 present=collapsed / removed=expanded; the centre column is the keyed **`main`**
 slot and the right column is **`rightbar`** (both column shells and their
 `[data-slot=…]` outlet wrappers are resident from first paint — the renderer
@@ -188,8 +192,10 @@ dialog renders INSIDE the sidebar DOM (no body portal; the drawer open state
 must use `transform: none` — an identity transform still creates a containing
 block).
 
-The vendored base is now **v0.1.5-alpha.2** (harness pin b2e3b2a0); the anchors
-above were re-verified against the alpha.2 source (2026-09 re-anchor), which also
+The vendored base is now **v0.1.5-rc.1** (harness pin 183f08e9c6dd); the anchors
+above were re-verified against the alpha.2 source (2026-09 re-anchor) and hold at
+rc.1 (whose client delta is listed above and leaves those anchors, and the
+z-index layers this plugin stacks against, untouched), which also
 established: the composer seat is a flow child of `[data-conversation-scroll]`
 (sticky only while the content overflows), `[data-input-scroll]` is the
 composer's inner scroller (`max-height: 336px`), the official

@@ -6,7 +6,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, mkdirSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -18,6 +18,30 @@ import {
   type HostCtxServices,
 } from '../src/binding.ts'
 import { ArchiveCleanupCore, ArchiveCleanupError } from '../src/core.ts'
+
+/**
+ * Is the temp filesystem case-INSENSITIVE (macOS APFS default, Windows NTFS)?
+ * There the second spelling below never becomes a distinct directory entry:
+ * `session.v3.JSONL` resolves to the existing `session.v3.jsonl` (whichever
+ * spelling the directory keeps), so the directory holds ONE entry and the purge
+ * correctly sees only the canonical name — the refusal this suite asserts cannot
+ * be exercised. Probed, not assumed: Linux CI (case-sensitive, the main leg)
+ * keeps full coverage.
+ * @returns true when the two spellings collapse onto one directory entry.
+ */
+function isCaseInsensitiveFs(): boolean {
+  const probe = mkdtempSync(join(tmpdir(), 'archive-cleanup-case-'))
+  try {
+    writeFileSync(join(probe, 'session.v3.jsonl'), '{}')
+    writeFileSync(join(probe, 'session.v3.JSONL'), '{}')
+    // Counting entries (not matching a spelling) also covers a filesystem that
+    // renames to the last-written case: either way a distinct near-miss entry
+    // cannot exist, which is the only thing this probe needs to decide.
+    return readdirSync(probe).length === 1
+  } finally {
+    rmSync(probe, { recursive: true, force: true })
+  }
+}
 
 function header(id: string, extra: Partial<{ cwd: string; parentSession: string; origin: 'subagent' }> = {}) {
   return { id, ...extra }
@@ -333,6 +357,7 @@ test('binding: the purge refuses symlink/subdirectory entries and accepts every 
 
     // Near-miss names stay refused: uppercase suffix, leading-zero version, and
     // a lease name that merely PREFIXES the real lease (2026-09 三轮 Q3 G1–G4).
+    const caseInsensitive = isCaseInsensitiveFs()
     for (const [project, name] of [
       ['upper', 'session.v3.JSONL'],
       ['zero', 'session.v01.jsonl'],
@@ -342,6 +367,17 @@ test('binding: the purge refuses symlink/subdirectory entries and accepts every 
       mkdirSync(nearDir, { recursive: true })
       writeFileSync(join(nearDir, 'session.v3.jsonl'), '{}')
       writeFileSync(join(nearDir, name), '{}')
+      if (name === 'session.v3.JSONL' && caseInsensitive) {
+        // The two spellings are ONE directory entry here (see
+        // {@link isCaseInsensitiveFs}), so there is no near-miss to refuse —
+        // assert the collapsed reality instead: the canonical generation is the
+        // only member and the purge reclaims the directory.
+        assert.equal(readdirSync(nearDir).length, 1, 'the two spellings collapse onto one entry')
+        const nearHost = makeHostBinding({ sessionPersistence: { locate: locateFor(project) } })
+        assert.equal(await nearHost.deleteSessionContent('s9', join(dir, project)), 'deleted')
+        assert.equal(existsSync(nearDir), false, 'uppercase spelling does not block the purge; dir reclaimed')
+        continue
+      }
       const nearHost = makeHostBinding({ sessionPersistence: { locate: locateFor(project) } })
       await assert.rejects(() => nearHost.deleteSessionContent('s9', join(dir, project)), (error: unknown) => {
         return error instanceof ArchiveCleanupError && error.code === 'storage'

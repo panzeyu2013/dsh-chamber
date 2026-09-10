@@ -6,7 +6,7 @@
 > 上游更新阶段（harness.commit 升级）须按 §4 清单复查，条件满足即按
 > §5 蓝本实现。本文档 + 05 为实现契约（05 的 settings.section 槽位契约见
 > 05 §5；官方 Models 页为 vendor `dsh-client-ui-settings-models`）。
-> **vendor 证据基线（本轮按 pinned vendor `0.1.5-alpha.2` 复核）**：本文引用的
+> **vendor 证据基线（本轮按 pinned vendor `0.1.5-rc.1` 复核）**：本文引用的
 > 上游机制以当前 pin 为准——旧 `exposedNamespaces` 白名单符号在 pin 树中已
 > 不存在（0 命中），settings `describe` 返回**全部**注册 namespace；
 > `serialize.ts` 白名单字段、`DeepSeekCatalogModel` 无 per-model effort 字段、

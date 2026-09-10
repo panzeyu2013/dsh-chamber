@@ -475,6 +475,11 @@
   1,403,568 → 1,185,439 raw（−218KB / −77KB gzip），chamber 入口净 +217KB
   → C4 后再 −176KB（分步再着色）；vendor 栈仍经内核 onboarding 静态链留在
   主图（部分收益，剩余面待内核懒化）。
+  **跨代依赖（版本歪斜下的可见后果）**：实例侧 `ui-sidebar-documentpreview` 的代码预览
+  **行为依赖**与 composite 同代的 `ui-primitives`（`CodeBlock` 的 `contentRef` 经
+  `[data-code-block-content]` 成为其唯一滚动/行定位锚点）。composite 比实例旧一代时，
+  该行失去独立滚动区、代码行定位失效（纯文本仍可用）——即本条「不 seed、由 covered
+  factory 回答」的偏差在歪斜下从体积优化升级为可见功能面。
 - **settings 簇 deferred C4（2026-09 性能审计，已登记 chamber-entry.ts /
   chamber-covered.ts 注释）**：官方 ui-settings **保留首屏**（locale/ui-theme
   首屏 root-inject 其 `settingsScope`，defer 会瘫痪壳）；其后移的是 4 个官方

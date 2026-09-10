@@ -764,8 +764,8 @@ design 18 §3.4（域枚举文字，随常量同 commit）、designs 09/13/16/17
 
 ## 10. 宿主面事实（vendor 核对结论）
 
-在 vendor/harness-packages（pinned submodule，基线 dsh-v0.1.5-alpha.2
-b2e3b2a0）核对的宿主面事实，本域的 binding 与算法以此为准：
+在 vendor/harness-packages（pinned submodule，当前 pin dsh-v0.1.5-rc.1 183f08e9c6dd；
+下列宿主面自 alpha.2 b2e3b2a0 审计以来未变）核对的宿主面事实，本域的 binding 与算法以此为准：
 
 1. `workspaceRegistry` ctx 服务：`list()`/`archivedSessionIds`（public getter）/
    `archiveSession`（仅增向）可用；**成员 `sessionIds` 是 header 索引派生的
@@ -988,7 +988,7 @@ workspace follow `{type:'archived'}` 立即到达客户端（`api/workspace-cont
     上探针 `ok:false`（activation gate fail，走 §7 C 的回退/拒绝语义），而
     `hasStoredContent` 在运行期对同一缺失返回 `true`（跳过清扫、不清成员）——
     **能力门响亮失败 + 运行期 fail-closed 降级**的分工：域的正确性依赖 `stat`，
-    但绝不因为面缺失而误清成员。当前支持基线（0.1.5-alpha.2）与回滚目标
+    但绝不因为面缺失而误清成员。当前支持基线（0.1.5-rc.1）与回滚目标
     （0.1.3-alpha.2）都满足该面；
 12. **force 路径与维护相位（不声称已解决）**：dsh 在**维护相位
     （maintenance phase）**期间对外仍报 `status === 'idle'`（vendor

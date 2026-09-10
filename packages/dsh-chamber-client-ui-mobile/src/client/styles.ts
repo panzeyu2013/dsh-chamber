@@ -2,7 +2,9 @@
  * Mobile adaptation stylesheet (design 17 §18.4.3/§18.4.5): a single global
  * sheet injected at apply() as `<style data-plugin="…">`. Anchors are the
  * OFFICIAL stable attributes confirmed against the dsh 0.1.5-alpha.2 DOM
- * (CDP empirical audit, re-anchored when the vendored pin moved: the centre
+ * (CDP empirical audit, re-anchored when the vendored pin moved — that audit
+ * generation is alpha.2; at the current pin 0.1.5-rc.1 those emitting files are
+ * unchanged, so the anchors still hold: the centre
  * column is the keyed `main` slot, the right column is `rightbar`, and the
  * frame carries `data-sidebar-collapsed` / `data-rightbar-collapsed`) plus
  * the plugin's own `data-mobile-*` stamps — no hashed class names. Production CSS-modules naming is

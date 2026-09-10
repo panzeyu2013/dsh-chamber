@@ -6494,6 +6494,9 @@ importers:
       '@deepseek-ai/dsh-attachment':
         specifier: workspace:^
         version: link:../dsh-attachment
+      '@deepseek-ai/dsh-attachment-local':
+        specifier: workspace:^
+        version: link:../dsh-attachment-local
       '@deepseek-ai/dsh-credentials':
         specifier: workspace:^
         version: link:../dsh-credentials
@@ -18312,7 +18315,7 @@ snapshots:
 
   buffer-image-size@0.6.4:
     dependencies:
-      '@types/node': 26.2.0
+      '@types/node': 22.20.1
 
   buffer@6.0.3:
     dependencies:
@@ -19166,7 +19169,7 @@ snapshots:
 
   happy-dom@20.11.15:
     dependencies:
-      '@types/node': 26.2.0
+      '@types/node': 22.20.1
       '@types/whatwg-mimetype': 3.0.2
       '@types/ws': 8.18.1
       buffer-image-size: 0.6.4

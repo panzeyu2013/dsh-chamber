@@ -24,6 +24,13 @@
 
 ## 1. 上游差异审计（只读）
 
+> **顺序约束（rc.1 实测）**：本节必须在 §2 动 pin **之前**做。`update-vendor` 的第 1 步是
+> `git fetch --depth 1 origin tag <tag>`，它会在新 commit 处写入 shallow 嫁接——此后
+> `git log/rev-list <旧>..<新>` 只数得到 1 个 commit、`merge-base --is-ancestor` 为假
+> （对象其实都在，被嫁接截断的只是遍历）。要事后恢复完整历史：
+> `git -C vendor/harness-checkout fetch --unshallow origin`（只影响本地 git 状态，
+> 与 gitlink/提交无关）。CI 物化 submodule 不受影响。
+
 - [ ] 规模与主题：`git log --oneline <旧>..<新> | wc -l`、`git diff --stat <旧> <新>`。
 - [ ] 新包/删包：`git ls-tree -r --name-only <新> -- packages | grep package.json`
        对比——新增包会进 vendor 树，删除包会在锁文件留下需要清理的 importer 记录。
@@ -46,6 +53,13 @@
       （fetch+校验 tag → 切 submodule → 更新 `harness.commit` → 差量建链 →
       重生成锁文件 → frozen 验证）；输出确认 commit 与 tag 远程解析一致。
       禁止手工改 gitlink / `harness.commit`。
+- [ ] **index 里的 gitlink 必须已指向目标 commit**（worktree / 新检出常见坑，rc.1 实测）：
+      `update-vendor` 只切 submodule HEAD 与 `harness.commit`，**不写 index 的 gitlink**；
+      而 `ensure-harness-vendor` 的 `verifyPin` 会用 index gitlink 与 pin 对拍，于是升级在
+      第 5 步（差量建链）硬失败：`submodule gitlink=<旧> != harness.commit pin=<新>`。
+      处置 = `git add vendor/harness-checkout`（把工具刚切到的**真实** HEAD 记进 index，
+      不是手改 gitlink）后重跑同一条 `update-vendor`（幂等）；随后的提交本就要求
+      gitlink 与 pin 同批。
 - [ ] 源码线验证：`node scripts/dev/ensure-harness-vendor.mjs --check` 通过
       （submodule HEAD == harness.commit，链接集合 == 锁文件 importer 集合）。
 - [ ] **运行时线**：`bundle-dsh.mjs` `DEFAULT_DSH_VERSION` +
@@ -84,6 +98,14 @@
       （参照既有 vendor 记录格式，零依赖成员为单行 `key: {}` 块）；**删除的 vendor 成员**
       不得被脚本从 HEAD 复活（守卫已按链接集合存在性跳过，见
       `scripts/dev/restore-lockfile-vendor-records.test.mjs`）。
+- [ ] **已有 vendor 成员的依赖集变化**（不是新增/删除包）同样会动 importer 记录：脚本是
+      **只增不减**（键已存在即跳过），所以一旦 pnpm 裁掉了该段，它会从 HEAD 复活**旧**记录，
+      而旧记录不含新依赖边 ⇒ frozen 验证以「specifiers don't match」失败。判据就是
+      `update-vendor` 第 6 步的 frozen 安装；失败时按上面同一条手工补齐口径，把新依赖按
+      字母序补进该成员记录（`'@deepseek-ai/<dep>': { specifier: workspace:^, version:
+      link:../<dep> }`）。**rc.1 实测**：`dsh-llm-deepseek` 新增
+      `@deepseek-ai/dsh-attachment-local`，本次 pnpm 未裁剪该段（restore 报「0 条」），
+      记录被就地更新、frozen 通过——风险是条件性的，但每一步都以 frozen 结果为准。
 - [ ] `pnpm install --frozen-lockfile` 通过；`node scripts/dev/ensure-harness-vendor.mjs --check`
       通过；`git diff --exit-code -- pnpm-lock.yaml` 为空（漂移断言）。
 

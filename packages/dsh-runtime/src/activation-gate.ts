@@ -27,7 +27,7 @@
  * list must never become a vacuous success when a caller forgets to wire one
  * of the Design 18 compatibility checks.
  *
- * Wire baseline: the pinned upstream dsh tree (0.1.5-alpha.2, session-controller).
+ * Wire baseline: the pinned upstream dsh tree (0.1.5-rc.1, session-controller).
  * All unary methods live on slash endpoints (`session.list` → `session/list`,
  * `settings.describe` → `settings/describe`), `host.describe` was deleted and
  * `workspace.list` became the `workspace/follow` stream, so the probe set
