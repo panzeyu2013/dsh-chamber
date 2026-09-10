@@ -616,13 +616,22 @@ for (const fork of FORKS) {
 // C10 —— 版本锚一致性 + 活版本字面量白名单（硬失败）
 {
   const DSH_VERSION_RE = /0\.1\.[0-9]+-(?:alpha|beta|rc)\.[0-9]+/g
-  // The bundled-runtime manifest is the single source for the anchored version.
-  const runtimeManifest = JSON.parse(
-    readFileSync(join(ROOT, 'packages', 'desktop', 'vendor', 'dsh', 'package.json'), 'utf8'),
-  )
-  const current = runtimeManifest?.dependencies?.['@deepseek-ai/dsh']
+  // SINGLE SOURCE = the TRACKED bundle lockfile (`bundle:dsh` regenerates it;
+  // the sibling package.json is gitignored and absent in a fresh checkout).
+  // When that manifest does exist locally it must agree, so a hand-edited
+  // workdir cannot silently disagree with the anchored line.
+  const lockPath = join(ROOT, 'packages', 'desktop', 'vendor', 'dsh', 'pnpm-lock.yaml')
+  const lockText = existsSync(lockPath) ? readFileSync(lockPath, 'utf8') : ''
+  const lockMatch = /'@deepseek-ai\/dsh':\n\s+specifier: (\S+)\n\s+version: (\S+)/.exec(lockText)
+  const current = lockMatch?.[1]
+  const manifestPath = join(ROOT, 'packages', 'desktop', 'vendor', 'dsh', 'package.json')
+  const manifestVersion = existsSync(manifestPath)
+    ? JSON.parse(readFileSync(manifestPath, 'utf8'))?.dependencies?.['@deepseek-ai/dsh']
+    : undefined
   if (typeof current !== 'string' || !DSH_VERSION_RE.test(current)) {
-    fail(`C10 无法从 packages/desktop/vendor/dsh/package.json 读出运行时版本（得到 ${JSON.stringify(current)}）`)
+    fail(`C10 无法从 packages/desktop/vendor/dsh/pnpm-lock.yaml 读出运行时版本（得到 ${JSON.stringify(current)}）`)
+  } else if (manifestVersion !== undefined && manifestVersion !== current) {
+    fail(`C10 运行时线自相矛盾：锁文件 ${current} != bundle 工作目录清单 ${manifestVersion}（重跑 bundle:dsh）`)
   } else {
     DSH_VERSION_RE.lastIndex = 0
     // Files MAY carry a live dsh version literal — each entry is an anchor or a
@@ -630,9 +639,9 @@ for (const fork of FORKS) {
     // anchor:true  → 每处活字面量必须等于 current（锚/单一来源/fork 基线）
     // anchor:false → 具名诊断常量（上限 1 处，值本身是历史事实，例如「身份探针自哪一代起注册」）
     const ALLOWED = new Map([
-      ['packages/desktop/vendor/dsh/package.json', { anchor: true, reason: '运行时版本的单一来源本身（C10 的 current 即读自此处）' }],
+      ['packages/desktop/vendor/dsh/package.json', { anchor: true, reason: 'bundle 工作目录清单（gitignored；本地存在时与锁文件交叉校验）' }],
       ['packages/desktop/scripts/bundle-dsh.mjs', { anchor: true, reason: '运行时线锚 1/6（bundle 兜底常量）' }],
-      ['packages/desktop/vendor/dsh/pnpm-lock.yaml', { anchor: true, reason: '运行时线锚 2/6（bundle 锁文件，生成物）' }],
+      ['packages/desktop/vendor/dsh/pnpm-lock.yaml', { anchor: true, reason: '运行时版本的**单一来源**（C10 的 current 读自此处；bundle:dsh 生成且已提交）' }],
       ['.github/workflows/release.yml', { anchor: true, reason: '运行时线锚 3/6（release env）' }],
       ['scripts/install-gateway.sh', { anchor: true, reason: '运行时线锚 4/6（gateway 安装默认值）' }],
       ['packages/gateway/package.json', { anchor: true, reason: '运行时线锚 5/6（dshAnchorVersion）' }],

@@ -128,7 +128,8 @@ host 插件入口/半、上游 `tests/`、`tsdown.config.ts`、上游 README（a
 - typert remote 装配：`vendor/…/dsh-api-remotes/src/client/index.ts` 契约 == **15**（集合与顺序；gen-typert-remotes
   与 C4 双向断言）；上游新增 remote 包 = 先裁决（是否 chamber 消费/镜像）再登记。
 - **版本锚与「活」版本字面量（2026-09 四轮登记，门 = C10）**：dsh 运行时版本的**单一来源**
-  是 `packages/desktop/vendor/dsh/package.json` 的 `dependencies['@deepseek-ai/dsh']`；六个运行时
+  是**已提交**的 `packages/desktop/vendor/dsh/pnpm-lock.yaml`（`bundle:dsh` 生成；同目录的
+  `package.json` 被 gitignore，fresh checkout 不存在，仅本地存在时与锁文件交叉校验）；六个运行时
   线锚（`bundle-dsh.mjs` 兜底、`vendor/dsh` 锁文件、`release.yml` env、`install-gateway.sh`、
   gateway `dshAnchorVersion`、`release-preflight` `FORK_VERSION`）与三个 fork 副本的版本必须等于它。
   生产源码/脚本/配置（非注释、非测试夹具、非产物）里**不得**再出现其他 dsh 版本字面量：历史

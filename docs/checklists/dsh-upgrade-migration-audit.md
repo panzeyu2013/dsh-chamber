@@ -433,8 +433,9 @@ F1 报 **0 BLOCKER / 8 MAJOR / 12 MINOR / 4 NIT，全部为文档陈述与代码
 
 ### 14.1 单一来源与六锚一致性（门 = C10）
 
-- **单一来源**：`packages/desktop/vendor/dsh/package.json` 的 `dependencies['@deepseek-ai/dsh']`
-  = **0.1.5-alpha.2**。六个运行时线锚与三个 fork 副本必须等于它——C10 每次实跑校验
+- **单一来源**：已提交的 `packages/desktop/vendor/dsh/pnpm-lock.yaml`（`bundle:dsh` 生成）里的
+  `@deepseek-ai/dsh` specifier = **0.1.5-alpha.2**；gitignored 的 `vendor/dsh/package.json` 仅在
+  本地存在时作交叉校验（fresh checkout 无此文件，早期 C10 版本会因此 ENOENT，已修）。六个运行时线锚与三个 fork 副本必须等于它——C10 每次实跑校验
   （`bundle-dsh.mjs` 兜底、`vendor/dsh` 锁文件、`release.yml` env、`install-gateway.sh`、
   gateway `dshAnchorVersion`、`release-preflight` `FORK_VERSION`；`dsh-client-connection`/
   `dsh-client-web`/`dsh-api-gateway` 的 `version`）。
