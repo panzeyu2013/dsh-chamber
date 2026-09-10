@@ -67,6 +67,7 @@ pnpm run build:renderer                       # 渲染层构建成功
 pnpm run build:gateway                        # gateway + dsh-runtime 构建成功
 pnpm --filter @dsh-chamber/desktop run build:preload
 pnpm run verify:i18n
+pnpm run verify:styles
 ```
 
 改动涉及运行时、认证、协议或桌面壳行为时，请补充或更新聚焦测试——静态检查不能证明运行时正确性。

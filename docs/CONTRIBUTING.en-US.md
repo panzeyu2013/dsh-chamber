@@ -67,6 +67,7 @@ pnpm run build:renderer                       # renderer build succeeds
 pnpm run build:gateway                        # gateway + dsh-runtime build succeeds
 pnpm --filter @dsh-chamber/desktop run build:preload
 pnpm run verify:i18n
+pnpm run verify:styles
 ```
 
 For changes that touch runtime, auth, protocol, or desktop-shell behavior, add or update focused tests — static checks alone do not prove runtime correctness.

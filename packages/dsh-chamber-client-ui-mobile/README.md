@@ -139,7 +139,7 @@ trajectory turn-rail preview, `aria-describedby`-referenced) carries no
   bottom, behind the keyboard. While the keyboard is open the seat's sticky
   bottom is raised to the keyboard top and the conversation scrollport gets
   an equal bottom padding (frame-level `data-mobile-kbd` +
-  `--dsh-mobile-kbd-offset`, styles.ts); a bottom-pinned conversation scrolls
+  `--chamber-mobile-kbd-offset`, styles.ts); a bottom-pinned conversation scrolls
   down by the same delta so the message tail stays glued above the seat (the
   official chat already re-glues the outer scroll on seat resize, so this owns
   only the keyboard-driven change). The seat's bottom safe-area padding is

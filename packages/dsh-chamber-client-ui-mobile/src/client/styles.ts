@@ -146,7 +146,12 @@ export const MOBILE_CSS = `
      is disabled under prefers-reduced-motion. visibility hides the closed
      drawer from the tab order (WCAG 2.4.3 — off-canvas content must not be
      focusable) with a 0s delay so the close animation still plays. The
-     official elevation shadow separates the drawer from the conversation. */
+     official elevation shadow separates the drawer from the conversation:
+     --dsw-elevation-prominent is the raised-surface token (0.5px hairline
+     stroke + two soft shadows, ui-theme's gradient-shadow-text.css), not the
+     legacy --dsw-shadow-lv* scale upstream keeps only for Toast / HoverCard
+     / ImageLightbox. (No backticks in this template: the stylesheet IS a
+     template literal, so a quoted token name would end it.) */
   [data-mobile-role="sidebar"] {
     position: fixed !important;
     top: 0 !important;
@@ -154,7 +159,7 @@ export const MOBILE_CSS = `
     left: 0 !important;
     z-index: 75;
     width: min(86vw, 280px) !important;
-    box-shadow: var(--dsw-shadow-lv3, 0 12px 32px rgba(0, 0, 0, 0.08));
+    box-shadow: var(--dsw-elevation-prominent);
     transform: translateX(-105%);
     visibility: hidden;
     transition:
@@ -184,7 +189,7 @@ export const MOBILE_CSS = `
     position: fixed;
     inset: 0;
     z-index: 74;
-    background: var(--dsw-alias-bg-mask-1, rgba(0, 0, 0, 0.24));
+    background: var(--dsw-alias-bg-mask-1);
     -webkit-backdrop-filter: var(--dsw-mask-blur, blur(2px));
     backdrop-filter: var(--dsw-mask-blur, blur(2px));
     border: none;
@@ -243,14 +248,14 @@ export const MOBILE_CSS = `
     appearance: none;
   }
   .dsh-mobile-nav-toggle:hover {
-    background: var(--dsw-alias-interactive-bg-hover, rgba(0, 0, 0, 0.05));
+    background: var(--dsw-alias-interactive-bg-hover);
   }
   .dsh-mobile-nav-toggle:active {
-    background: var(--dsw-alias-interactive-bg-active, rgba(0, 0, 0, 0.08));
+    background: var(--dsw-alias-interactive-bg-active);
   }
   .dsh-mobile-nav-toggle:focus-visible {
     outline: none;
-    box-shadow: 0 0 0 2px var(--dsw-alias-state-business-primary, #4176e6);
+    box-shadow: 0 0 0 2px var(--dsw-alias-state-business-primary);
   }
   .dsh-mobile-nav-toggle-bars,
   .dsh-mobile-nav-toggle-bars::before,
@@ -259,7 +264,7 @@ export const MOBILE_CSS = `
     width: 20px;
     height: 2px;
     border-radius: 2px;
-    background: var(--dsw-alias-label-primary, #0f1115);
+    background: var(--dsw-alias-label-primary);
   }
   .dsh-mobile-nav-toggle-bars { position: relative; }
   .dsh-mobile-nav-toggle-bars::before,
@@ -343,15 +348,15 @@ export const MOBILE_CSS = `
      to the keyboard top AND pads the conversation scrollport by the same
      offset, so the message tail can scroll up beside the raised seat instead
      of hiding under the keyboard. State rides the plugin's own frame stamp:
-     'data-mobile-kbd' + the '--dsh-mobile-kbd-offset' custom property on the
+     'data-mobile-kbd' + the '--chamber-mobile-kbd-offset' custom property on the
      stamped frame (never official attributes). Android Chrome WITH the token
      shrinks the layout viewport itself: covered height ≈ 0, the installer
      never arms, these rules stay inert. */
   [data-mobile-frame][data-mobile-kbd] [data-phase="active"] [data-conversation-scroll] {
-    padding-bottom: var(--dsh-mobile-kbd-offset, 0px) !important;
+    padding-bottom: var(--chamber-mobile-kbd-offset, 0px) !important;
   }
   [data-mobile-frame][data-mobile-kbd] [data-phase="active"] [data-composer-seat] {
-    bottom: var(--dsh-mobile-kbd-offset, 0px) !important;
+    bottom: var(--chamber-mobile-kbd-offset, 0px) !important;
     /* The phone-tier safe-area padding (below) is home-indicator spacing for
        the UNCOVERED state; while the keyboard is up that inset sits behind
        the keyboard and would add up to ~34px of dead space below the raised
@@ -476,7 +481,7 @@ export const MOBILE_CSS = `
     position: sticky;
     top: 0;
     z-index: 1;
-    background: var(--dsw-alias-bg-layer-2, #ffffff);
+    background: var(--dsw-alias-bg-layer-2);
   }
   [role="dialog"][aria-modal="true"]:has([data-slot="settings.header"]) > div:last-child > div:last-child {
     flex: 1;

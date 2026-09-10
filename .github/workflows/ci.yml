@@ -76,6 +76,14 @@ jobs:
           pnpm run typecheck:runtime
       - name: i18n pair consistency
         run: pnpm run verify:i18n
+      # Upstream design-token conformance: S1 未声明 --dsw-* 引用 / S2 命名空间越界 /
+      # S3 0.5px 发丝线 / S4 字面量 fallback / S5 边框+阴影配对 / S6 死声明 /
+      # S7 全圆角配对. Upstream enforces these with specs that scan ITS OWN
+      # packages/; chamber's packages are outside that scan, so this gate applies
+      # the same rules across every chamber package and every CSS-carrying file
+      # kind. Needs the bootstrapped vendor tree (Bootstrap step above).
+      - name: Upstream design-token conformance (S1–S7)
+        run: pnpm run verify:styles
       - name: Workflow action pins resolve upstream (release-preflight --actions-only)
         run: node scripts/dev/release-preflight.mjs --actions-only
         env:
@@ -224,6 +232,10 @@ jobs:
           pnpm run typecheck:host-archive-cleanup
           pnpm run typecheck:gateway
           pnpm run typecheck:runtime
+      # Upstream design-token conformance (S1–S7) — see the linux leg. File-only
+      # and platform-neutral, so it runs here too.
+      - name: Upstream design-token conformance (S1–S7)
+        run: pnpm run verify:styles
       # Windows leg consumes each package's platform manifest — `test:win32`
       # scripts in package.json are the single source of truth (structural
       # rule, 2026-09): no test file lists live in this YAML. Pre-M2b the

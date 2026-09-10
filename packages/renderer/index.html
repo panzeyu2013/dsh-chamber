@@ -40,6 +40,12 @@
         width: 28px;
         height: 28px;
         border-radius: 50%;
+        /* ui-theme's corner-shape.css smooths every corner to a superellipse
+           once the dsh bundle lands, and the boot skeleton is still on screen
+           until React mounts — an unpaired 50% radius would render the ring as
+           a wobbling squircle. Every full-round radius pairs the keyword
+           (ui-theme's corner-shape spec). */
+        corner-shape: round;
         border: 2px solid #262c38;
         border-top-color: #4f8cff;
         animation: dsh-boot-spin 0.8s linear infinite;

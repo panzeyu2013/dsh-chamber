@@ -70,9 +70,12 @@
   line-height: 14px;
 }
 
+/* Warn tone of the status capsule, on the official Tag's warning recipe
+   (ui-primitives/Tag.module.css `[data-tone='warning']`): one token drives
+   fill and text via a 12% self-tint. */
 .unregisteredStatusWarn {
-  background: var(--dsw-alias-state-warning-bg, var(--dsw-alias-interactive-bg-hover));
-  color: var(--dsw-alias-state-warning-primary, var(--dsw-alias-label-primary));
+  background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 12%, transparent);
+  color: var(--dsw-alias-state-warn-primary);
 }
 
 .unregisteredSpacer {
@@ -100,7 +103,7 @@
 }
 
 .unregisteredActionDanger:not(:disabled):hover {
-  background: var(--dsw-alias-state-error-bg, var(--dsw-alias-interactive-bg-hover));
+  background: var(--dsw-alias-interactive-bg-hover-danger);
   color: var(--dsw-alias-state-error-primary, var(--dsw-alias-label-primary));
 }
 
@@ -113,7 +116,7 @@
 .factsRetry {
   margin-left: 8px;
   padding: 1px 8px;
-  border: 1px solid var(--dsw-alias-border-l2);
+  border: 0.5px solid var(--dsw-alias-border-l2);
   border-radius: 6px;
   background: transparent;
   color: var(--dsw-alias-label-primary);
@@ -129,7 +132,7 @@
 /* Directory-collision precheck note under the directory field (A3). */
 .directoryConflict {
   margin: 0;
-  color: var(--dsw-alias-state-warning-primary, var(--dsw-alias-label-secondary));
+  color: var(--dsw-alias-state-warn-primary);
   font-size: 11px;
 }
 
@@ -300,7 +303,7 @@
   gap: 4px;
   margin-top: 2px;
   padding: 8px 10px;
-  border: 1px solid var(--dsw-alias-state-warning-primary, var(--dsw-alias-border-l2));
+  border: 1px solid var(--dsw-alias-state-warn-primary);
   border-radius: 8px;
   background: var(--dsw-alias-interactive-bg-hover);
   color: var(--dsw-alias-label-primary);
@@ -319,7 +322,7 @@
   gap: 6px;
   margin: 2px 4px 4px;
   padding: 5px 7px;
-  border: 1px solid var(--dsw-alias-state-warning-primary, var(--dsw-alias-border-l2));
+  border: 1px solid var(--dsw-alias-state-warn-primary);
   border-radius: 6px;
   background: var(--dsw-alias-interactive-bg-hover);
   color: var(--dsw-alias-label-secondary);
@@ -361,7 +364,7 @@
   position: relative;
   display: inline-flex;
   padding: 2px;
-  border: 1px solid var(--dsw-alias-border-l2);
+  border: 0.5px solid var(--dsw-alias-border-l2);
   border-radius: 12px;
   background: var(--dsw-alias-bg-layer-1);
   overflow: hidden;
@@ -435,7 +438,7 @@
   height: 32px;
   box-sizing: border-box;
   padding: 0 8px;
-  border: 1px solid var(--dsw-alias-border-l2);
+  border: 0.5px solid var(--dsw-alias-border-l2);
   border-radius: 12px;
   background: var(--dsw-alias-bg-layer-1);
   color: var(--dsw-alias-label-primary);

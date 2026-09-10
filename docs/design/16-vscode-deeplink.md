@@ -263,7 +263,7 @@ detectVscodeAvailability(platform): { available: boolean }
   `useWorkspaces` 选择器钩子（同一 store，侧边栏归组同源），**不直接读 ctx 的
   sessions/workspaces**（inject 声明保持 `['slots','locale']`）；
 - 按钮 CSS：行内 32×32 图标按钮，**样式与 vendor "Session log" pill 同款复用**
-  （`1px solid var(--dsw-alias-border-l2)` 描边、`border-radius: 18px`、透明底、
+  （`0.5px solid var(--dsw-alias-border-l2)` 描边、`border-radius: 18px`、透明底、
   hover 主题 tint、focus 环），与头部工具行对齐；aria-label / tooltip /
   键盘可聚焦保持；
 - **行内排序**：条目注册带 `order: -1`——utilities 行按 `order`

@@ -56,7 +56,7 @@
   gap: 4px;
   margin: 2px 6px 6px;
   padding: 2px 4px 2px 8px;
-  border: 1px solid var(--dsw-alias-border-l2);
+  border: 0.5px solid var(--dsw-alias-border-l2);
   border-radius: 10px;
   background: var(--dsw-alias-interactive-bg-hover);
 }
@@ -459,11 +459,11 @@
 
 /* Active source (the instance this ctx belongs to): visual emphasis, still
    in the same shared list as every other source (05 §2.1). The left inset
-   rides the per-element --dsh-source-accent (set inline from the source
+   rides the per-element --chamber-source-accent (set inline from the source
    accent), falling back to ink for the local source. */
 .sourceActive {
   background: var(--dsw-alias-interactive-bg-hover);
-  box-shadow: inset 2px 0 0 var(--dsh-source-accent, var(--dsw-alias-label-primary));
+  box-shadow: inset 2px 0 0 var(--chamber-source-accent, var(--dsw-alias-label-primary));
 }
 
 .sourceLabel {
@@ -551,7 +551,7 @@
 .workspaceList {
   position: relative;
   margin-left: 10px;
-  border-left: 1px solid var(--dsw-alias-border-l2);
+  border-left: 0.5px solid var(--dsw-alias-border-l2);
   padding-left: 6px;
 }
 
@@ -607,7 +607,7 @@
 /* Workspace group fold toggle: a right chevron that points down while the
    group is expanded and rotates back to the right when folded. The glyph
    (folder / git-branch / chevron) carries the workspace's own accent color
-   (chamber 2026-09): an inline --dsh-workspace-accent set per header row,
+   (chamber 2026-09): an inline --chamber-workspace-accent set per header row,
    with the old caption ink as fallback (the ungrouped bucket sets none). */
 .foldToggle {
   flex: none;
@@ -620,7 +620,7 @@
   padding: 0;
   border-radius: 4px;
   background: transparent;
-  color: var(--dsh-workspace-accent, var(--dsw-alias-label-caption));
+  color: var(--chamber-workspace-accent, var(--dsw-alias-label-caption));
   cursor: pointer;
 }
 
@@ -628,7 +628,7 @@
    affordance is the row background tint (.workspaceHeader:hover) — a hover
    color jump on a colored glyph would read as a selection state. */
 .foldToggle:hover {
-  color: var(--dsh-workspace-accent, var(--dsw-alias-label-primary));
+  color: var(--chamber-workspace-accent, var(--dsw-alias-label-primary));
 }
 
 /* The chevron glyph rotates (down when expanded, right when folded) — the
@@ -731,11 +731,11 @@
   border-radius: 4px;
   background: transparent;
   /* The glyph rides the SOURCE accent (inherited from the header's inline
-     --dsh-source-accent — the same variable as the active-source left
+     --chamber-source-accent — the same variable as the active-source left
      inset), so a remote server's fold toggle carries its identity hue;
      the local source sets no accent and falls back to the default caption
      ink. */
-  color: var(--dsh-source-accent, var(--dsw-alias-label-caption));
+  color: var(--chamber-source-accent, var(--dsw-alias-label-caption));
   cursor: pointer;
 }
 
@@ -744,7 +744,7 @@
    color jump on a colored glyph would read as a selection state (workspace
    fold toggle parity). */
 .sourceFoldToggle:hover {
-  color: var(--dsh-source-accent, var(--dsw-alias-label-primary));
+  color: var(--chamber-source-accent, var(--dsw-alias-label-primary));
 }
 
 .sourceFoldChevron {
@@ -1082,7 +1082,7 @@
   flex: 1;
   min-width: 0;
   box-sizing: border-box;
-  border: 1px solid var(--dsw-alias-border-l2);
+  border: 0.5px solid var(--dsw-alias-border-l2);
   border-radius: 6px;
   padding: 3px 6px;
   background: var(--dsw-specific-sidebar-fill);
@@ -1191,15 +1191,18 @@
 }
 
 /* Plan A: the workspace's path no longer exists (externally deleted
-   worktree left an orphaned registration). Doubles as the cleanup button. */
+   worktree left an orphaned registration). Doubles as the cleanup button.
+   Warn capsule = the official Tag's warning tone (ui-primitives/Tag.module.css
+   `[data-tone='warning']`): ONE token tints both fill and text, so a palette
+   change moves them together and neither needs a second token. */
 .orphanBadge {
   flex: none;
   padding: 0 6px;
   border: 0;
   border-radius: 999px;
   corner-shape: round;
-  background: var(--dsw-alias-state-warning-bg, var(--dsw-alias-interactive-bg-hover));
-  color: var(--dsw-alias-state-warning-primary, var(--dsw-alias-label-primary));
+  background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 12%, transparent);
+  color: var(--dsw-alias-state-warn-primary);
   cursor: pointer;
   font: inherit;
   font-size: 10px;
@@ -1208,7 +1211,7 @@
 }
 
 .orphanBadge:hover {
-  background: var(--dsw-alias-state-warning-bg, var(--dsw-alias-interactive-bg-hover));
+  background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 12%, transparent);
   filter: brightness(1.08);
 }
 
@@ -1245,10 +1248,10 @@
   background: var(--dsw-alias-label-secondary);
 }
 
-/* Active-source ring rides the per-element --dsh-source-accent (remote hue;
+/* Active-source ring rides the per-element --chamber-source-accent (remote hue;
    local falls back to ink) — consistent with the source/session insets. */
 .railDotActive {
-  box-shadow: 0 0 0 2px var(--dsh-source-accent, var(--dsw-alias-label-primary));
+  box-shadow: 0 0 0 2px var(--chamber-source-accent, var(--dsw-alias-label-primary));
 }
 
 /* 会话待办区（sidebar todo area, 2026-12）: pinned block between the New
