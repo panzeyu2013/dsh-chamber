@@ -12,8 +12,20 @@
   - 多来源 sleep/wake 与隐藏恢复、版本歪斜容忍、gateway 形态回归；
   - 右侧栏栈在真实 profile 下的装载时序与 `provideRoot` 时序（`useResource` /
     `usePanelInfo` / `chamberFileApiBase`）、session v3 迁移在真实存储上的行为；
-  - open-in：官方 host 行随 alpha.2 默认 profile 进入托管实例、官方 host 行 dormant
+  - open-in：官方 host 行随当前 pin（rc.1）默认 profile 进入托管实例、官方 host 行 dormant
     处置、远程无 cookie 下 fence 行为、remote cwd 填充、图标缓存 / CSP；
+  - **来源启动窗口内的 `sidebarRight` 缺席（2026-09 rc.1 验收实机复现一次）**：来源自己的
+    客户端插件图在**实例尚未服务时**取不到时，`ui-sidebar-right` 行不 apply ⇒ `ui-chat`
+    永久 PENDING，该来源的对话视图**不注册**，唯有整页 reload（或等来源真正 ready 后重挂）
+    才恢复；探针只报一次 console 诊断、**不重试**（`required-extra-rows.ts` 的 5s deadline
+    是诊断而非自愈）。复现条件 = 本地实例被写者静默门拦下（`409 connection_busy`，见下条）
+    或 gateway 来源不可达；健康冷启动（实例 7s 内 ready）不触发。判据 = 控制台
+    `required extra-row service(s) missing after 5000ms: sidebarRight`。
+  - **实例写者静默门拦住自动启动后的恢复路径（同上验收）**：shell 被 `SIGKILL`/孤儿 dsh
+    占住 DSH_HOME 时，控制面如实拒绝（`409 connection_busy`：writer quiescence is not
+    proven）+ connections 页就地解释，但「启动/停止」按钮在此状态下**点不动**（状态停在
+    `starting`、端口 0），实际恢复 = 优雅重启应用（reaper 才prove quiescence）。
+    优雅退出本身正常（日志 `will-quit 清理完成`），仅硬杀后出现。
 - **ssh/http dsh 目标无 cookie 注入（实例侧 401）**：五处同源绝对 URL 由构建期 vendor
   补丁集走本实例前缀（design 09 §3.6）；ssh/http dsh 目标的 cookie 注入属既有认证面，
   未覆盖。
@@ -65,6 +77,11 @@
   force 可能删到正在追加的档（「读私有 phase 字段」为否决方案）；归档集合在 run
   起点快照、窗口内不重读。可选增强（未排期）：PluginDialog 三态行、rowError
   本地化、已归档浏览区（todo 12 A）、`preview` 暴露孤儿计数。
+  **单删确认的空标题文案（2026-09 rc.1 验收实机所见）**：行内归档确认取自会话标题，
+  标题为空串（侧栏显示占位「未命名会话」）时渲染成 `归档「」？`——`blank` 标记为假而
+  `title` 为空的会话走不到 `t('session.new')` 回退；判据 = `SidebarRoot.tsx:1026` 的
+  `t('confirm.archive', { title })` 调用点未对空标题取占位。清理成功后 `storages/
+  session_projcache/sessions/<id>.json` 仍留 4 KB 缓存档（聚合缓存与标题已清）。
 - **移动端 Web 访问面（design 17 §18；实现契约见 §18.3–§18.5，门禁见 §18.6）**：
   **复核提出但尚未实施**（待实机证据或设计决策，均已登记 §18.6 门禁）：
   「移动中量化 + 静止吸附精确值」（现 16px 固定量化，实机看抖动再定）、
