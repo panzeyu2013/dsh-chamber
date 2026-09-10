@@ -14,12 +14,11 @@
     `usePanelInfo` / `chamberFileApiBase`）、session v3 迁移在真实存储上的行为；
   - open-in：官方 host 行随当前 pin（rc.1）默认 profile 进入托管实例、官方 host 行 dormant
     处置、远程无 cookie 下 fence 行为、remote cwd 填充、图标缓存 / CSP；
-  - **实例写者静默门拦住自动启动后的恢复路径（同上验收）**：shell 被 `SIGKILL`/孤儿 dsh
-    占住 DSH_HOME 时，控制面如实拒绝（`409 connection_busy`：writer quiescence is not
-    proven）+ connections 页就地解释，但「启动/停止」按钮在此状态下**点不动**（状态停在
-    `starting`、端口 0），实际恢复 = 优雅重启应用（reaper 才 prove quiescence）。
-    优雅退出本身正常（日志 `will-quit 清理完成`），仅硬杀后出现。（本条说的是**实例本身**
-    起不来；视图侧「半死挂载」已由取图等就绪 + 降级自愈覆盖，见 design 09 §3.2。）
+  - **写入期终止失败后闩锁只能靠重启应用再证明（2026-09-10，02 §3.4）**：扫描判定类
+    阻塞已可在会话内再证明，并可由连接页「清理并接管」显式清障（owner 仍活的另一实例
+    永不受影响）；但 `onWriterQuiescenceUnknown`（刚杀过的进程组无法证实已退出）**没有任何
+    扫描证据**可依——记录可能已删——该闩锁对本平面生命周期粘滞，诊断只提示重启应用。
+    触发面：受管进程组信号被拒（受限沙箱、加固运行时）或子进程终止超时。
 - **ssh/http dsh 目标无 cookie 注入（实例侧 401）**：五处同源绝对 URL 由构建期 vendor
   补丁集走本实例前缀（design 09 §3.6）；ssh/http dsh 目标的 cookie 注入属既有认证面，
   未覆盖。

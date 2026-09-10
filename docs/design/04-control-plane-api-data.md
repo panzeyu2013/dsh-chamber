@@ -130,13 +130,19 @@ gateway 部署的认证（password/token/JWT cookie）、凭据存储（safeStor
 | POST | `{kind:'local', label?, accentColor?}` | `{connection, spawned: bool}` | 400 `connection_kind_unsupported`（kind ≠ local）；400 `connection_invalid_input`；503 `dsh_not_ready`（spawn 失败） |
 | PATCH `/local` | `{label?, accentColor?}` | `{connection}` | 400 `connection_invalid_input`；404 `not_found` |
 | DELETE `/local` | — | `{stopped: true}` | 409 `connection_busy`（restarting 中）；404 `not_found` |
+| GET `/local/writers` | — | `{quiescent, writers:[{name,status,pid,reason,takeOverAvailable}], errors[]}`（写者静默诊断，02 §3.4；只读） | 501 `not_implemented`（该面没有托管本地宿主） |
+| POST `/local/reclaim` | — | `{reclaimed:[pid], connection, spawned}`（清理并接管：清本状态目录自己的陈旧/孤儿写者记录后启动） | 409 `connection_busy`（仍有活写者，带 `detail`）；501 `not_implemented` |
 
 - **POST 幂等启动**：`stopped` → spawn（02 §3.1），同步返回 `starting` 态
   （`spawned: true`），就绪经 GET 轮询；`starting/ready/degraded/…` →
   返回既有状态（`spawned: false`），绝不重复 spawn；
 - `kind: 'local'` 以外的值一律 400——远程实例由桌面注册表管理
   （03 §2.2），不在本 API 面；
-- DELETE = 优雅停止（02 §3.7），行保留（local 不可删）。
+- DELETE = 优雅停止（02 §3.7），行保留（local 不可删）；
+- **POST 的 409 `connection_busy` 现在带结构化 `detail`**（2026-09-10，02 §3.4）：
+  `{writers:[{pid,reason,takeOverAvailable}], errors:[…], sticky:bool}`。连接页据此
+  点名阻塞写者并在可接管时给出「清理并接管」；`sticky:true` 表示写入期终止失败
+  （扫描无法再证明），此时只提示重启应用。
 
 ### 3.3 GET /api/host/logs
 
@@ -158,10 +164,11 @@ gateway 部署的认证（password/token/JWT cookie）、凭据存储（safeStor
 | `connection_kind_unsupported` | 400 | POST 非 local kind |
 | `connection_invalid_input` | 400 | label / accentColor 校验失败 |
 | `connection_not_found` | 404 | GET 无连接行 |
-| `connection_busy` | 409 | restarting 等过渡态中拒绝停止 |
+| `connection_busy` | 409 | restarting 等过渡态中拒绝停止；本地实例被未证明静止的写者记录挡住（02 §3.4，带 `detail`） |
 | `origin_forbidden` | 403 | HTTP/WS 的浏览器 Origin 不在本机/显式 allowlist |
 | `invalid_argument` | 400 | host-logs 参数非法 |
 | `not_found` | 404 | host-logs 无托管记录/日志文件；未知路径 |
+| `not_implemented` | 501 | 该面没有托管本地宿主（`/local/writers`、`/local/reclaim`） |
 | `internal` | 500 | 兜底（脱敏消息） |
 
 ---

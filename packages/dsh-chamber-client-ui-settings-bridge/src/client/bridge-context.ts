@@ -39,7 +39,7 @@ import { SlotRegistry } from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type { LocaleFace, StoredEntry } from '@deepseek-ai/dsh-client-ui-slots'
 import {
   cachedSourceClientGraph, clientPluginLoader, clientRowSignatures, loadClientPluginRows, notePluginMounted,
-  notePluginUnmounted, publishSourceClientGraph,
+  notePluginUnmounted, publishSourceClientGraph, isServingWindowFailure, waitForSourceServing,
   type ClientPluginRow,
 } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
 import { getBridgeApiClient, type BridgeApiClient } from './bridge-api.ts'
@@ -741,8 +741,22 @@ class ExtensionPhase {
   private async fetchGraph(): Promise<ClientPluginRow[] | null> {
     const { instanceId, sourceFingerprint } = this.options
     try {
-      const result = await getBridgeApiClient(instanceId).clientGraph.graph()
+      let result = await getBridgeApiClient(instanceId).clientGraph.graph()
       if (this.cancelled) return null
+      if (!result.ok && isServingWindowFailure(result.error)) {
+        // A cold-started instance answers before the managed dsh serves; the
+        // shell's boot fetch waits for it (host-graph `waitForServing`) and the
+        // panel must not call that "unreachable" (2026-09-10, design 09 §3.2):
+        // wait for the source, then retry ONCE. A terminally down or unknown
+        // source fails the gate immediately, so a real failure still shows at
+        // once instead of holding the panel for a minute.
+        const serving = await waitForSourceServing(instanceId)
+        if (this.cancelled) return null
+        if (serving) {
+          result = await getBridgeApiClient(instanceId).clientGraph.graph()
+          if (this.cancelled) return null
+        }
+      }
       if (!result.ok) {
         this.publish({
           state: 'unavailable',

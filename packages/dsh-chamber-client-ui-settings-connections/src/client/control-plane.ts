@@ -18,6 +18,8 @@ import {
   post,
   request,
   toConnectionSummary,
+  toLocalWriterDiagnosis,
+  type LocalWriterDiagnosisWire,
   type ApiError,
   type ApiErrorBody,
   type ConnectionRowWire,
@@ -60,6 +62,36 @@ export const cp = {
   createLocal: async (): Promise<ConnectionSummary> => {
     const body = await post<{ connection?: ConnectionRowWire }>('/api/connections', { kind: 'local' })
     return toConnectionSummary(body?.connection ?? { id: 'local', status: 'starting' })
+  },
+
+  /**
+   * GET /api/connections/local/writers → 写者静默诊断（2026-09-10，02 §3.4）。
+   * 没有该路由的形态（501/404）返回 null：页面不渲染该块。
+   */
+  localWriters: async (): Promise<LocalWriterDiagnosisWire | null> => {
+    try {
+      return toLocalWriterDiagnosis(await request<unknown>('/api/connections/local/writers'))
+    } catch (err) {
+      const status = (err as ApiError)?.status
+      if (status === 501 || status === 404) return null
+      throw err
+    }
+  },
+
+  /**
+   * POST /api/connections/local/reclaim → 清理并接管：清除本状态目录自己的
+   * 陈旧/孤儿托管写者记录后启动本地实例（仍在运行的其它应用实例不受影响）。
+   * 仍有活写者时 409 connection_busy（带结构化 detail）。
+   */
+  reclaimLocal: async (): Promise<{ connection: ConnectionSummary; reclaimed: number[] }> => {
+    const body = await post<{ connection?: ConnectionRowWire; reclaimed?: unknown }>(
+      '/api/connections/local/reclaim', {})
+    return {
+      connection: toConnectionSummary(body?.connection ?? { id: 'local', status: 'starting' }),
+      reclaimed: Array.isArray(body?.reclaimed)
+        ? body.reclaimed.filter((pid): pid is number => typeof pid === 'number')
+        : [],
+    }
   },
 
   /** DELETE /api/connections/<id> → {stopped:true}（04 §3.2；本面上只有 local 行）。 */

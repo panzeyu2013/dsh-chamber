@@ -46,6 +46,8 @@ import type {
   DesktopSshSurface, SshConfigDiscovery, SshConfigHost, SshInstanceSpec, SshLogEntry, SshPhase, SshStatusProjection, TransportKind, TransportMethod,
 } from '../global.d.ts'
 import type { SettingsConnectionsKey } from '../locales.ts'
+import type { LocalWriterDiagnosisWire } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
+import { writerNotice, writerReasonKey } from './writer-diagnosis.ts'
 import { cp, type ConnectionSummary, type HealthResponse, type HostLogsResponse } from './control-plane.ts'
 import { classifyRestartError, serverRefusalText } from './managed-restart.ts'
 import { PluginDialog, type PluginDialogTarget } from './PluginDialog.tsx'
@@ -383,6 +385,11 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
   const [connection, setConnection] = useState<ConnectionSummary | null>(null)
   const [localBusy, setLocalBusy] = useState(false)
   const [localError, setLocalError] = useState<string | null>(null)
+  // 写者静默诊断（2026-09-10）：本地实例为何起不来 + 显式接管动作。
+  const [writerDiagnosis, setWriterDiagnosis] = useState<LocalWriterDiagnosisWire | null>(null)
+  const [reclaiming, setReclaiming] = useState(false)
+  const [reclaimError, setReclaimError] = useState<string | null>(null)
+  const [reclaimOk, setReclaimOk] = useState(false)
   const [stopConfirm, setStopConfirm] = useState(false)
   const [stopping, setStopping] = useState(false)
   const [hostLogs, setHostLogs] = useState<HostLogsResponse | null>(null)
@@ -481,6 +488,12 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
       setConnection(await cp.connectionsList())
     } catch (err) { failed ??= err }
     setLocalError(failed === null ? null : errorMessage(failed))
+    try {
+      setWriterDiagnosis(await cp.localWriters())
+    } catch (err) {
+      // 诊断读取失败不是本地实例的错误：只清空该块（启动/停止的报错另有出处）。
+      setWriterDiagnosis(null)
+    }
   }, [])
 
   const loadHostLogs = useCallback(async (): Promise<void> => {
@@ -512,6 +525,27 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
     }
     void loadLocal()
   }, [loadLocal, runtimeStartBlocked])
+
+  /**
+   * 清理并接管（POST /api/connections/local/reclaim，2026-09-10）：清除本状态
+   * 目录自己的陈旧/孤儿托管写者记录，然后启动本地实例。仍在运行的其它应用实例
+   * 不会被影响（控制面拒绝）。失败时把控制面给出的阻塞原因原样呈现。
+   */
+  const reclaimLocal = useCallback(async (): Promise<void> => {
+    setReclaiming(true)
+    setReclaimError(null)
+    try {
+      const outcome = await cp.reclaimLocal()
+      setConnection(outcome.connection)
+      setReclaimOk(true)
+      setLocalError(null)
+    } catch (err) {
+      setReclaimError(errorMessage(err))
+    } finally {
+      setReclaiming(false)
+    }
+    void loadLocal()
+  }, [loadLocal])
 
   /** 优雅停止本地实例（DELETE /api/connections/local）。 */
   const stopLocal = useCallback(async (): Promise<void> => {
@@ -1284,6 +1318,9 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
   const dsh = health?.dsh
   const healthy = dsh?.status === 'ready' || dsh?.status === 'degraded'
   const starting = dsh?.status === 'starting' || dsh?.status === 'restarting'
+  // 写者静默通知（2026-09-10）：诊断非静默时在本地卡片上点名阻塞写者并给出
+  // 「清理并接管」；纯判定在 writer-diagnosis.ts（有单测）。
+  const notice = writerNotice(writerDiagnosis)
   /** 确认 Modal 的目标卡是否正处「本卡重启」忙碌态（他卡在飞不影响本 Modal）。 */
   const restartConfirmBusy = restartConfirmFor !== null && restartingIds[restartConfirmFor.id] === true
 
@@ -1376,6 +1413,46 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
           </div>
           {dsh?.error != null && dsh.error !== '' ? <p className={css.error}>{dsh.error}</p> : null}
           {localError !== null ? <p className={css.error} role="alert">{localError}</p> : null}
+          {notice !== null ? (
+            <div className={css.writerBlocked} role="status">
+              <p className={css.writerBlockedTitle}>{t('writerBlockedTitle')}</p>
+              <p className={css.warnHint}>
+                {notice.restartRequired
+                  ? t('writerBlockedSticky')
+                  : t('writerBlockedBody').replace('{detail}', notice.blockers
+                    .map(blocker => `pid ${blocker.pid ?? '—'} (${blocker.reason})`)
+                    .join(', '))}
+              </p>
+              {notice.blockers.length > 0 ? (
+                <ul className={css.writerBlockedList}>
+                  {notice.blockers.map(blocker => (
+                    <li key={`${String(blocker.pid)}:${blocker.reason}`}>
+                      <span className={css.mono}>pid {blocker.pid ?? '—'}</span>
+                      {' · '}{t(writerReasonKey(blocker.reason))}
+                      {' '}<span className={css.mono}>({blocker.reason})</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+              {notice.errors.length > 0 ? (
+                <ul className={css.writerBlockedList}>
+                  {notice.errors.map(line => <li key={line}><span className={css.mono}>{line}</span></li>)}
+                </ul>
+              ) : null}
+              {notice.canTakeOver ? (
+                <Button
+                  variant="primary"
+                  size="sm"
+                  disabled={reclaiming}
+                  onClick={() => { void reclaimLocal() }}
+                >
+                  {reclaiming ? t('writerReclaimBusy') : t('writerReclaim')}
+                </Button>
+              ) : null}
+              {reclaimError !== null ? <p className={css.error} role="alert">{reclaimError}</p> : null}
+              {reclaimOk ? <p className={css.writerReclaimOk}>{t('writerReclaimOk')}</p> : null}
+            </div>
+          ) : null}
           {runtimeState?.phase === 'applying'
             ? <p className={css.hint}>{t('localRuntimeApplying')}</p>
             : runtimeSurfacePresent && runtimeState === null

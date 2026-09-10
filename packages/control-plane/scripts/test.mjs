@@ -48,6 +48,9 @@ const FILES = [
   'rpc-envelope.test.ts',
   'cordis-inserts.test.ts',
   'reaper.test.ts',
+  // Writer-quiescence latch recovery (2026-09-10): the in-session re-proof, the
+  // structured 409 detail and the explicit 清理并接管 action.
+  'writer-latch.test.ts',
   // S0 injection-budget pin: MAX_HTML_INJECTION_BYTES is the single source
   // (the gateway html-inject.ts consumes it via @dsh-chamber/control-plane —
   // no twin constant since the B-6e dedupe); the test pins the budget value.

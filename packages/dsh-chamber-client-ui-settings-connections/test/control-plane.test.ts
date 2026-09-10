@@ -301,3 +301,63 @@ test('gatewayPluginSync: forwards the RAW registry id and passes the ok/error un
     else Object.defineProperty(globalThis, 'window', previous)
   }
 })
+
+// ── writer-quiescence surface (2026-09-10, design 02 §3.4 / 04 §3.2) ───────
+
+const writerBody = {
+  quiescent: false,
+  writers: [
+    { name: '4242.json', status: 'kept', pid: 4242, reason: 'identity-unverified', takeOverAvailable: true },
+    { name: 'garbage', status: 'nonsense', pid: 'x', reason: 7 },
+  ],
+  errors: ['a probe failed', 42],
+}
+
+test('cp.localWriters: normalizes the diagnosis and drops malformed rows', async () => {
+  const restoreOrigin = withPageOrigin('http://127.0.0.1:17500')
+  const stub = stubFetch(200, writerBody)
+  try {
+    const diagnosis = await cp.localWriters()
+    assert.equal(stub.calls[0].url, 'http://127.0.0.1:17500/api/connections/local/writers')
+    assert.equal(diagnosis?.quiescent, false)
+    assert.deepEqual(diagnosis?.writers, [{
+      name: '4242.json', status: 'kept', pid: 4242, reason: 'identity-unverified', takeOverAvailable: true,
+    }])
+    assert.deepEqual(diagnosis?.errors, ['a probe failed'])
+  } finally {
+    stub.restore()
+    restoreOrigin()
+  }
+})
+
+test('cp.localWriters: a surface without the route answers null instead of throwing', async () => {
+  const restoreOrigin = withPageOrigin('http://127.0.0.1:17500')
+  for (const status of [501, 404]) {
+    const stub = stubFetch(status, { error: 'not_implemented', code: 'not_implemented' })
+    try {
+      assert.equal(await cp.localWriters(), null)
+    } finally {
+      stub.restore()
+    }
+  }
+  restoreOrigin()
+})
+
+test('cp.reclaimLocal: posts the takeover and returns the reclaimed pids', async () => {
+  const restoreOrigin = withPageOrigin('http://127.0.0.1:17500')
+  const stub = stubFetch(200, {
+    reclaimed: [4242, 'x'],
+    connection: { id: 'local', status: 'starting' },
+  })
+  try {
+    const outcome = await cp.reclaimLocal()
+    assert.equal(stub.calls[0].url, 'http://127.0.0.1:17500/api/connections/local/reclaim')
+    assert.equal(stub.calls[0].init.method, 'POST')
+    assert.deepEqual(outcome.reclaimed, [4242])
+    assert.equal(outcome.connection.connectionId, 'local')
+    assert.equal(outcome.connection.status, 'starting')
+  } finally {
+    stub.restore()
+    restoreOrigin()
+  }
+})
