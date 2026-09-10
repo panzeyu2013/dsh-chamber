@@ -216,6 +216,7 @@ vendor/
 | `pnpm run dist:desktop:win` | Package the Windows app (nsis + zip; must run on Windows) |
 | `pnpm run cli -- <args>` | In-repo CLI thin shell (serve/status/connections/host logs) |
 | `pnpm run verify:i18n` | Fail when an EN ↔ ZH pair drifts (re-record with `-- --write`) |
+| `pnpm run verify:styles` | Upstream design-token conformance (S1 undeclared `--dsw-*` reference / S2 namespace overreach / S3 0.5px hairline / S4 literal fallback / S5 border-beside-shadow pairing / S6 dead declaration / S7 full-round radius pairing) across every chamber package and every CSS-carrying file kind |
 | `pnpm run gen:notices` | Regenerate THIRD_PARTY_NOTICES.md (Chinese root + docs/ English mirror) from the installed dependency tree |
 
 Test commands live in [CONTRIBUTING.md](../CONTRIBUTING.md) "Testing" and "Before Submitting".

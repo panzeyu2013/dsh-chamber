@@ -214,6 +214,7 @@ vendor/
 | `pnpm run dist:desktop:win` | 打包 Windows 应用（nsis + zip；须在 Windows 上运行） |
 | `pnpm run cli -- <args>` | 仓库内 CLI 薄壳（serve/status/connections/host logs） |
 | `pnpm run verify:i18n` | EN ↔ 中文对漂移时报错（同步后用 `-- --write` 重新记录） |
+| `pnpm run verify:styles` | 上游设计 token 合规门（S1 未声明 `--dsw-*` 引用 / S2 命名空间越界 / S3 0.5px 发丝线 / S4 字面量 fallback / S5 边框+阴影配对 / S6 死声明 / S7 全圆角配对），扫全部 chamber 包与全部可承载 CSS 的文件类型 |
 | `pnpm run gen:notices` | 按已安装依赖树重新生成 THIRD_PARTY_NOTICES.md（根中文 + docs/ 英文镜像） |
 
 测试命令见 [CONTRIBUTING.md](../CONTRIBUTING.md)「测试」与「提交前验证」。

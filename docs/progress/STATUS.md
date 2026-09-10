@@ -258,6 +258,23 @@
   gateway 停机，wire 快照仅由 host 代码路径 + 宿主 git 事实推断）；unborn（零提交）
   仓库 `branches` 必空 + 默认 base 40 零直送 git 无 preview 门仍为代码面已知残留
   （实机无此形态）。
+- **样式门 `verify:styles` 的扫描面之外：非代码引用需人工纪律（2026-09 风格对齐轮登记）**：
+  S1–S7 只扫 `packages/`＋`scripts/` 的 `.css|.ts|.tsx|.html`（`scripts/dev/verify-style-tokens.mjs`
+  的 `STYLE_FILE`），故两类引用不在覆盖内，改名/改值后必须手工跟：
+  - **`docs/**/*.md` 的 token 引用**：本轮把 `--dsh-source-accent`/`--dsh-workspace-accent`/
+    `--dsh-mobile-kbd-offset` 改为 `--chamber-*` 后，`docs/design/06-sidebar-enhancements.md:572,580`
+    与 `docs/design/17-server-side-gateway.md:1385` 仍写着旧名；`OpenInButton` 描边
+    1px→0.5px 后 `docs/design/16-vscode-deeplink.md:266` 仍写 1px——三处均已人工改正，
+    但**没有门禁会再拦下一次**（`.md` 不在 `STYLE_FILE`，且设计文档不是 i18n 对）。
+  - **包级 `README.i18n.yaml` 哈希记录**：`verify:i18n` 只管根目录 5 对文档，包级记录
+    是纯人工纪律（文件头自述），故**已漂移**：`dsh-chamber-client-ui-settings-bridge`
+    的 `README.md`、`dsh-chamber-client-ui-settings-connections` 与
+    `dsh-chamber-client-ui-sidebar` 的两侧，记录哈希与文件不符（**先于本轮改动**，已用
+    `git status` 确认这 3 包的 README 本轮未被触碰）。修复前提是**先人工复核该包中英
+    两版内容仍对等**再重录——直接按当前文件重算等于给未经复核的内容盖章。
+  - 三种记录格式并存加剧漂移：mobile/settings-bridge 用 sha256（前者嵌套 `en:`/`zh:`、
+    后者平铺），client-web/connection 用 git blob SHA-1 且注释指向**仓内不存在**的
+    `pnpm run verify-translation-pairing --write`。统一格式并纳入门禁是后续候选。
 
 ## 设计未决
 
@@ -325,6 +342,20 @@
   ctx 跟随目标实例 locale。
 - **默认排序 `manual`（06 §3.1）**：按 wire 顺序，与官方默认 `updated` 不同，是
   有意产品取舍。**窗口标题冻结**：桌面原生标题固定 `dsh-chamber`。
+- **样式 token 对齐后的两处未对齐（2026-09 风格对齐轮登记，均为有意/待裁）**：
+  - **菜单圆角 12px vs 上游 20px**：`AccessibleAppMenu.module.css .menu` 与
+    `SettingsShell.module.css .dropdownList` 是官方 `ui-primitives/Menu.module.css .list`
+    的逐项移植（218/360px 宽、4px 内边距、`--dsw-specific-menu`、l1 stroke 重绑、
+    elevated-prominent、z-index 1100/1200 全同），唯余 `border-radius: 12px`
+    vs 上游 `20px`（`PopupSelectView` 同为 20px；上游该行注释写 "r12" 属过期注释，
+    代码为准）。属圆角而非边框，本轮未动，改 2 行即可。
+  - **open-in header pill 规格不对应任何 pinned vendor 面**：`OpenInButton.module.css`
+    为 32px / `0.5px border-l2` / r18，而 pinned vendor 的
+    `session-query/session-log-export/HeaderAction.module.css` 是 28px 圆形 + `border: none`
+    + r28，官方 `ui-open-in-app/OpenInAppAction.module.css` 是 28px / r14 / `border-l4`
+    分体按钮——旧注释自称「vendor Session log pill 逐字复用」不属实（**先于本轮**，
+    本轮 1px→0.5px 后已把注释改为陈述事实并标注差异）。是否对齐到上游其中一款是
+    设计决策，非缺陷修复。
 - **Electron 二进制惰性安装**（每机器共享 dist，worktree 并行共用）；**dev 实例隔离**
   （独立 user-data、控制面端口 17520 起自动退避）。
 - **内建版本行引导（2026-12 决策，方案 2）**：选中与内建同版本行且未装受管树、

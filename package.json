@@ -37,6 +37,7 @@
     "cli": "node packages/cli/src/index.ts",
     "smoke": "node packages/control-plane/test/smoke.test.ts",
     "verify:i18n": "node scripts/dev/verify-i18n.mjs",
+    "verify:styles": "node scripts/dev/verify-style-tokens.mjs",
     "verify:workflows": "node scripts/dev/verify-workflow-action-pins.mjs",
     "test:release-workflow": "node scripts/dev/release-workflow-policy.test.mjs",
     "test:upgrade-tools": "node --test scripts/dev/preflight-vendor-pin.test.mjs scripts/dev/artifact-gate.test.mjs scripts/dev/restore-lockfile-vendor-records.test.mjs",
