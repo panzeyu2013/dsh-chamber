@@ -107,7 +107,7 @@ Tooltip 用法中 27 处是带 aria-label 的按钮，标签命名同一动作�
   WebView）在键盘弹出时保持 **layout 视口**满高，而官方 composer seat 是
   会话滚动器的**流内子元素**，于是钉在 layout 底部、落在键盘背后。键盘打开
   期间把 seat 的 sticky `bottom` 抬到键盘顶，并给会话滚动器加等量底部
-  padding（frame 级 `data-mobile-kbd` + `--dsh-mobile-kbd-offset`，
+  padding（frame 级 `data-mobile-kbd` + `--chamber-mobile-kbd-offset`，
   styles.ts）；原本贴底的会话按同一差值向下滚，消息尾保持贴在抬升后的 seat
   上方（外层滚动跟随由官方 chat 的 seat ResizeObserver 负责，本安装器只管
   键盘驱动的几何变化）。arm 期间 seat 的底部安全区 padding 归零（键盘弹起时

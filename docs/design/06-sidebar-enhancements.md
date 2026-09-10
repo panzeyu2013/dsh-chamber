@@ -569,7 +569,7 @@ await 中），我们单点只显示子 agent 计数文案，官方同快照显�
   （running 蓝）、搜索胶囊 focus 边框 `--dsw-alias-brand-primary`、折叠
   chevron `--dsw-alias-label-caption`、来源头底色 `--dsw-specific-sidebar-fill`；
   不存在的 `--dsw-alias-accent/success/danger/input-fill` 一律不得使用。
-- **来源 accent**：每元素 `--dsh-source-accent` CSS 变量承载远程来源 hue
+- **来源 accent**：每元素 `--chamber-source-accent` CSS 变量承载远程来源 hue
 （**柔和色板（用户反馈定稿）：`hsl(hue 34% 61%)`**；
   本地来源省略、回退默认 ink），用于来源头激活左
   内边线与 rail 活动环（**workspace 组 chevron 不取来源
@@ -577,7 +577,7 @@ await 中），我们单点只显示子 agent 计数文案，官方同快照显�
   （用户反馈；折叠字形 accent 承担身份；rail 点保留）。
 - **workspace 图标 accent**：workspace
   头行内联
-  `--dsh-workspace-accent`（`.foldToggle` 基色/hover 同取，图标走
+  `--chamber-workspace-accent`（`.foldToggle` 基色/hover 同取，图标走
   currentColor）——色相 = `(serverId, 家族种子)` 哈希 × 137.508 黄金角
   步进 mod 360，明度 = 56/61/66%（第二哈希抖动，近色相兜底）；家族种子
   = `repoKey`（worktree 与主检出共享家族色相，主检出未注册/改名不漂移；

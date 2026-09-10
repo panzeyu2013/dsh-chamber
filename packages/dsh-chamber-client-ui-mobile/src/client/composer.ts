@@ -449,7 +449,7 @@ export function installImeLadder(root: ParentNode = document): ImeLadder {
  * there. The compensation mirrors resizes-content semantics against the
  * visual viewport instead: while the keyboard is open the seat's sticky
  * bottom is raised to the keyboard top and the scrollport gets an equal
- * bottom padding (both via the frame's `--dsh-mobile-kbd-offset`, see
+ * bottom padding (both via the frame's `--chamber-mobile-kbd-offset`, see
  * styles.ts), and a bottom-pinned conversation is scrolled down by the same
  * delta so the message tail stays readable right above the raised seat. The
  * official chat already re-glues the OUTER scroll on seat resize (ui-chat's
@@ -493,7 +493,7 @@ export const KBD_OFFSET_HEADROOM_PX = 8
 /** State attribute toggled on the stamped frame (plugin-owned surface). */
 export const MOBILE_KBD_ATTR = 'data-mobile-kbd'
 /** Offset custom property set on the stamped frame (styles.ts consumes it). */
-export const MOBILE_KBD_VAR = '--dsh-mobile-kbd-offset'
+export const MOBILE_KBD_VAR = '--chamber-mobile-kbd-offset'
 /** Recently-focused-editable grace window: a blur (or an editability flip
  *  during submit) must keep the compensation armed through the
  *  keyboard-close animation and the editability-recovery refocus instead of

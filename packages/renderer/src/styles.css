@@ -19,19 +19,19 @@
      兜底必须与「无属性」的浅色调色板一致——曾写死 dark 时，任一视图在投影
      缺席的窗口里就是"浅色界面 + 深色原生控件"（checkbox 深浅错位）。活动
      实例投影落地后由 `html` 内联 color-scheme 覆盖本值。 */
+  /* chamber 外壳 chrome 自有色板（深色，独立于 dsh 的 --dsw-* token 表；本页
+     是 N-ctx 连接管理壳，不随 dsh 主题切换）。只保留实际被消费的条目——
+     2026-09 死代码清扫删除了从未被 var() 引用的 --panel / --green / --yellow
+     / --gray；新增颜色前先确认消费点，verify:styles 的 S6 会拦下无人使用的声明。 */
   color-scheme: light;
   --bg: #0f1115;
-  --panel: #161a22;
   --panel-2: #1b2029;
   --border: #262c38;
   --text: #e6e9ef;
   --muted: #8b94a7;
   --accent: #4f8cff;
   --accent-dim: #2b4a80;
-  --green: #3fb950;
-  --yellow: #d29922;
   --red: #f85149;
-  --gray: #6e7681;
 }
 
 * {

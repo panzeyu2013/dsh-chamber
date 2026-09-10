@@ -85,7 +85,11 @@
   border-radius: 24px;
   overflow: hidden;
   background: var(--dsw-alias-bg-layer-2);
-  box-shadow: var(--dsw-shadow-lv3);
+  /* Elevated surface, official Modal treatment (ui-primitives/Modal.module.css
+     `.dialog`: r24 + layer-2 fill + elevation-prominent). The hairline stroke
+     rides the shadow at the default l4 stroke color, exactly as Modal leaves
+     it — no border of its own to double-draw the outline. */
+  box-shadow: var(--dsw-elevation-prominent);
   /* Elevated surface: the scrollbar thumb takes the l2 elevation tokens. */
   --dsh-scrollbar-thumb: var(--dsw-alias-scrollbar-bg-l2);
   --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2);
@@ -123,7 +127,7 @@
    connections entry. */
 .navDivider {
   flex: none;
-  border-top: 1px solid var(--dsw-alias-border-l2);
+  border-top: 0.5px solid var(--dsw-alias-border-l2);
 }
 
 .navCell {
@@ -178,7 +182,7 @@
   gap: 8px;
   width: 100%;
   padding: 6px 10px;
-  border: 1px solid var(--dsw-alias-border-l2);
+  border: 0.5px solid var(--dsw-alias-border-l2);
   border-radius: 10px;
   background: var(--dsw-alias-bg-layer-3);
   font-size: 13px;
@@ -227,11 +231,18 @@
   /* Body-portal list: inline geometry is viewport-clamped by server-selector. */
   max-width: none;
   padding: 4px;
-  /* Official Menu float border (transparent hairline in light mode). */
-  border: 1px solid var(--dsw-alias-border-inverted);
+  /* Elevated surface, official Menu treatment (ui-primitives/Menu.module.css
+     `.list`): the hairline lives inside the elevation shadow as its 0.5px
+     first layer, so the card declares no border — pairing a neutral
+     `--dsw-alias-border-*` border with an lv/elevation shadow double-draws the
+     outline and shifts layout by the border width, which ui-theme's elevation
+     spec rejects. The stroke rebinds one step lighter than the default l4,
+     as every menu surface does. */
+  border: 0;
   border-radius: 12px;
   background: var(--dsw-alias-bg-layer-3);
-  box-shadow: var(--dsw-shadow-lv3);
+  --dsw-elevation-stroke-color: var(--dsw-alias-border-l1);
+  box-shadow: var(--dsw-elevation-prominent);
   /* Elevated-surface scrollbar rebind (official convention). */
   --dsh-scrollbar-thumb: var(--dsw-alias-scrollbar-bg-l2);
   --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2);
@@ -246,7 +257,7 @@
   height: 34px;
   margin-bottom: 4px;
   padding: 6px 9px;
-  border: 1px solid var(--dsw-alias-border-l2);
+  border: 0.5px solid var(--dsw-alias-border-l2);
   border-radius: 8px;
   background: var(--dsw-alias-bg-layer-2);
   color: var(--dsw-alias-label-primary);
@@ -440,7 +451,7 @@
 .inlineAction {
   margin-top: 8px;
   padding: 7px 12px;
-  border: 1px solid var(--dsw-alias-border-l2);
+  border: 0.5px solid var(--dsw-alias-border-l2);
   border-radius: 8px;
   background: var(--dsw-alias-bg-layer-3);
   color: var(--dsw-alias-label-primary);
@@ -545,7 +556,7 @@
 .generalSection > .generalGroup + .updateSection,
 .generalSection > .updateSection + .generalGroup,
 .generalSection > .updateSection + .updateSection {
-  border-top: 1px solid var(--dsw-alias-border-l2);
+  border-top: 0.5px solid var(--dsw-alias-border-l2);
   padding-top: 12px;
 }
 
@@ -567,7 +578,7 @@
    12px 上内距；块间距由所在 group 的 10px gap 提供，线与上一块内容之间
    视觉居中。 */
 .generalGroupTitleBlock {
-  border-top: 1px solid var(--dsw-alias-border-l2);
+  border-top: 0.5px solid var(--dsw-alias-border-l2);
   padding-top: 12px;
 }
 
@@ -622,7 +633,7 @@
   gap: 8px;
   min-width: 0;
   padding: 12px 14px;
-  border: 1px solid var(--dsw-alias-border-l2);
+  border: 0.5px solid var(--dsw-alias-border-l2);
   border-radius: 12px;
   background: var(--dsw-alias-bg-layer-3);
 }
@@ -734,7 +745,7 @@
    内距与前一单元分割；降列布局不画竖线（首列/独行的竖线会悬空误导）。 */
 @container (min-width: 470px) {
   .generalEventRow + .generalEventRow {
-    border-left: 1px solid var(--dsw-alias-border-l2);
+    border-left: 0.5px solid var(--dsw-alias-border-l2);
     padding-left: 10px;
   }
 }
@@ -756,7 +767,7 @@
   flex-direction: column;
   gap: 10px;
   padding: 12px 14px;
-  border: 1px solid var(--dsw-alias-border-l2);
+  border: 0.5px solid var(--dsw-alias-border-l2);
   border-radius: 12px;
   background: var(--dsw-alias-bg-layer-3);
   animation: contentFadeIn var(--ds-transition-duration) var(--ds-ease-in-out);
@@ -899,7 +910,7 @@
   justify-content: center;
   height: 28px;
   padding: 0 10px;
-  border: 1px solid var(--dsw-alias-border-l2);
+  border: 0.5px solid var(--dsw-alias-border-l2);
   border-radius: 14px;
   background: transparent;
   cursor: pointer;
@@ -1032,7 +1043,7 @@
   height: 18px;
   margin-left: 8px;
   padding: 1px 8px;
-  border: 1px solid var(--dsw-alias-border-l2);
+  border: 0.5px solid var(--dsw-alias-border-l2);
   border-radius: 999px;
   corner-shape: round;
   font-size: 11px;
@@ -1055,8 +1066,8 @@
 }
 
 .runtimeBadgeWarn {
-  color: var(--dsw-alias-state-warning-primary);
-  border-color: var(--dsw-alias-state-warning-primary);
+  color: var(--dsw-alias-state-warn-primary);
+  border-color: var(--dsw-alias-state-warn-primary);
 }
 
 .runtimeBadgeDanger {
@@ -1073,7 +1084,7 @@
   box-sizing: border-box;
   height: 28px;
   padding: 0 10px;
-  border: 1px solid var(--dsw-alias-border-l2);
+  border: 0.5px solid var(--dsw-alias-border-l2);
   border-radius: 8px;
   background: var(--dsw-alias-bg-layer-1);
   color: var(--dsw-alias-label-primary);
@@ -1177,7 +1188,7 @@
   font-size: 11px;
   line-height: 16px;
   color: var(--dsw-alias-label-tertiary);
-  background: var(--dsw-alias-bg-fill-tertiary, rgba(127, 127, 127, 0.12));
+  background: var(--dsw-alias-bg-module-platform);
 }
 
 .pluginsView {
@@ -1223,12 +1234,12 @@
   font-size: 12px;
   line-height: 18px;
   color: var(--dsw-alias-label-secondary);
-  background: var(--dsw-alias-bg-fill-tertiary, rgba(127, 127, 127, 0.08));
+  background: var(--dsw-alias-bg-module-platform);
   overflow-wrap: anywhere;
 }
 
 /* 通道级不可用（图不可达）比单插件状态更醒目。 */
 .noticeWarn {
   color: var(--dsw-alias-label-primary);
-  border: 1px solid var(--dsw-alias-border-danger, rgba(220, 90, 90, 0.5));
+  border: 1px solid var(--dsw-alias-state-error-primary);
 }

@@ -128,7 +128,7 @@ export function workspaceAccentStyle(
   serverId: string,
   workspaceId: string,
   seed?: WorkspaceAccentSeed,
-): { '--dsh-workspace-accent': string } | undefined {
+): { '--chamber-workspace-accent': string } | undefined {
   if (workspaceId === UNGROUPED_WORKSPACE_ID) return undefined
   const family = seed !== undefined && (seed.isWorktree === true || seed.isMain === true)
     ? (seed.repoKey ?? seed.mainWorkspaceId ?? workspaceId)
@@ -142,7 +142,7 @@ export function workspaceAccentStyle(
   // hierarchy and the near-hue jitter tie-break.
   const saturation = seed?.isWorktree === true ? 21 : 34
   const lightness = 56 + (hashString(workspaceId) % 3) * 5
-  return { '--dsh-workspace-accent': `hsl(${hue} ${saturation}% ${lightness}%)` }
+  return { '--chamber-workspace-accent': `hsl(${hue} ${saturation}% ${lightness}%)` }
 }
 
 /**

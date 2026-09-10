@@ -11,7 +11,7 @@
   padding: 2px;
   width: fit-content;
   align-self: flex-start;
-  border: 1px solid var(--dsw-alias-border-l2);
+  border: 0.5px solid var(--dsw-alias-border-l2);
   border-radius: 10px;
   background: var(--dsw-alias-bg-layer-2);
 }

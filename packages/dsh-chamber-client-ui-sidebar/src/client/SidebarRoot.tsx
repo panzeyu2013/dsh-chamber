@@ -19,7 +19,7 @@
  * derived from the source id (hue hash); the local source omits the accent
  * and falls back to the default ink. The accent also feeds the active
  * source/session left inset through a per-element CSS variable
- * (--dsh-source-accent). A session row click asks
+ * (--chamber-source-accent). A session row click asks
  * the App layer to switch to that source's
  * shell and open the session (chamberBridge.requestOpenSession); clicking a
  * remote source's header asks the App layer to switch the active N-ctx view

@@ -3,11 +3,16 @@
    utilities slot, so this is a plain INLINE icon button in the header's
    right-aligned utilities row (beside the vendor "Session log" pill) — no
    absolute positioning: the header's own flow layout orders it and no
-   frame-level anchor can collide with the header content. The pill is the
-   vendor "Session log" header action's own affordance reused verbatim
-   (HeaderAction.module.css: 32px row height, 1px --dsw-alias-border-l2
-   hairline, 18px radius, transparent base, hover tint, focus ring), so the
-   two adjacent controls read as one row of matching pills. */
+   frame-level anchor can collide with the header content. The pill carries the
+   header row's own vocabulary — 32px row height, a 0.5px
+   --dsw-alias-border-l2 hairline, 18px radius, transparent base, hover tint,
+   focus ring — so the two adjacent controls read as one row of matching
+   pills. (The values are the header row's, NOT a copy of the pinned vendor
+   session-log button: session-log-export/HeaderAction.module.css is a 28px
+   circle with `border: none` and a 28px radius, and the official
+   ui-open-in-app action is a 28px / r14 / border-l4 split button. This pill
+   predates both; aligning it to either is a design decision, not a defect
+   fix.) */
 
 /* The two-button group (main icon button + chevron) reads as one control. */
 .group {
@@ -26,7 +31,7 @@
   /* The vendor "Session log" pill's border/radius values, reused verbatim —
      the hairline outline keeps the icon button visible on the white header
      (transparent base) exactly like its native neighbour. */
-  border: 1px solid var(--dsw-alias-border-l2);
+  border: 0.5px solid var(--dsw-alias-border-l2);
   border-radius: 18px;
   background: transparent;
   /* The official VS Code logo carries its own brand fill; hover feedback is
@@ -114,7 +119,7 @@
   width: 20px;
   height: 32px;
   padding: 0;
-  border: 1px solid var(--dsw-alias-border-l2);
+  border: 0.5px solid var(--dsw-alias-border-l2);
   border-radius: 0 18px 18px 0;
   background: transparent;
   color: var(--dsw-alias-label-secondary);

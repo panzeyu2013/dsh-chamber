@@ -1382,7 +1382,7 @@ focus 丢弃循环 / editability 翻转 / pointerup 手势 refocus / visualViewp
 layout 底部，`scrollIntoView` 也看不见 visual viewport。现改为**键盘补偿**
 （`installKeyboardCompensation`）：键盘打开期间把 seat 的 sticky `bottom` 抬到
 键盘顶、给滚动器加等量 `padding-bottom`（frame 级 `data-mobile-kbd` +
-`--dsh-mobile-kbd-offset`），并对贴底会话做等量 scrollTop 补偿；外层跟随仍归
+`--chamber-mobile-kbd-offset`），并对贴底会话做等量 scrollTop 补偿；外层跟随仍归
 官方（ui-chat 的 seat ResizeObserver）。`covered = layout − offsetTop − vv.height`
 在任意缩放态都成立（vv 高度已同时含缩放与键盘收缩）。
 

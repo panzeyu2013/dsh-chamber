@@ -59,9 +59,9 @@ export type DropOver = { id: string; half: 'before' | 'after' }
  * the remote source's hue string, omitted for the local source so the CSS
  * falls back to the default ink (visual audit P2-3).
  */
-export function sourceAccentStyle(server: ChamberServerAggregate): { '--dsh-source-accent': string } | undefined {
+export function sourceAccentStyle(server: ChamberServerAggregate): { '--chamber-source-accent': string } | undefined {
   const color = sourceAccentColor(server.id)
-  return color === undefined ? undefined : { '--dsh-source-accent': color }
+  return color === undefined ? undefined : { '--chamber-source-accent': color }
 }
 
 /**

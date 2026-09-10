@@ -71,7 +71,14 @@ test('the hamburger has an explicit desktop default: none (no ghost button)', ()
 
 test('drawer stays within the official sidebar width (280px) and uses official elevation', () => {
   assert.ok(MOBILE_CSS.includes('width: min(86vw, 280px)'))
-  assert.ok(MOBILE_CSS.includes('var(--dsw-shadow-lv3'))
+  // Raised surfaces take an elevation token (0.5px hairline stroke + soft
+  // shadows). The legacy --dsw-shadow-lv* scale is what upstream keeps only
+  // for Toast / HoverCard / ImageLightbox.
+  assert.ok(MOBILE_CSS.includes('box-shadow: var(--dsw-elevation-prominent)'))
+  // Prose may NAME the legacy scale while explaining why it is not used, so
+  // the assertion targets the declaration, not the string anywhere.
+  assert.ok(!MOBILE_CSS.includes('box-shadow: var(--dsw-shadow-lv'),
+    'the drawer must not fall back to the legacy shadow scale')
 })
 
 test('motion uses official tokens with a reduced-motion branch', () => {
@@ -258,9 +265,9 @@ test('sticky-hover tooltip suppression is coarse-gated and aria-label scoped', (
 test('keyboard compensation CSS rides the plugin frame stamp, never official attributes', () => {
   const code = stripComments(MOBILE_CSS)
   assert.ok(code.includes('[data-mobile-frame][data-mobile-kbd] [data-phase="active"] [data-conversation-scroll]'))
-  assert.ok(code.includes('padding-bottom: var(--dsh-mobile-kbd-offset, 0px) !important;'))
+  assert.ok(code.includes('padding-bottom: var(--chamber-mobile-kbd-offset, 0px) !important;'))
   assert.ok(code.includes('[data-mobile-frame][data-mobile-kbd] [data-phase="active"] [data-composer-seat]'))
-  assert.ok(code.includes('bottom: var(--dsh-mobile-kbd-offset, 0px) !important;'))
+  assert.ok(code.includes('bottom: var(--chamber-mobile-kbd-offset, 0px) !important;'))
   // The phone-tier safe-area inset must be neutralized while armed (up to
   // ~34px of dead space below the raised seat otherwise).
   assert.match(
