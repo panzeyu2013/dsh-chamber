@@ -69,6 +69,7 @@ import {
   type SourceOwnershipToken,
 } from './deep-link-activation.ts'
 import { openInstanceSession, reconnectInstanceConnection, disposeAllShells, disposeInstanceShell, type ShellState } from './shell.ts'
+import { planDegradedRetries } from './degraded-retry.ts'
 import { runViewTransition } from './view-transition.ts'
 import { captureSidebarScrollAnchor, restoreSidebarScroll } from './sidebar-scroll-sync.ts'
 import {
@@ -531,6 +532,30 @@ export default function App() {
   // （失败报告 + 重试 + 服务器切换）。retryTokens 驱动 InstanceView 的重试
   // 重 boot（令牌递增 → 视图复位 → 重新启动 shell）。
   const [shellStates, setShellStates] = useState<Record<string, ShellState>>({})
+  /**
+   * 来源就绪门 + 降级自愈（2026-09-10，sidebarRight 彻底修复）：
+   * ① 实例仍启动时让取图等它就绪（冷启动 / 重启跨越窗口不再丢掉整套 profile
+   *    客户端插件；`ui-chat` 依赖的 `sidebarRight` 只由其中的 ui-sidebar-right
+   *    行提供）；
+   * ② boot 以降级收尾（无图 / 必需 extra-row 服务缺席）而来源随后 ready 时，
+   *    自动重挂一次——此前只有整页 reload 能恢复。每个 ready 世代一次。
+   * 相位从 servers 的渲染期镜像读取，门自身带绝对上限，来源被移除即放弃。
+   */
+  const serversPhaseRef = useRef<Record<string, string>>({})
+  const waitForServing = useCallback((instanceId: string): Promise<boolean> => {
+    const deadline = Date.now() + SERVING_WAIT_MS
+    return new Promise<boolean>((resolve) => {
+      const check = (): void => {
+        const phase = serversPhaseRef.current[instanceId]
+        if (phase === undefined) { resolve(false); return }
+        if (phase === 'ready') { resolve(true); return }
+        if (Date.now() >= deadline) { resolve(false); return }
+        setTimeout(check, SERVING_POLL_MS)
+      }
+      check()
+    })
+  }, [])
+  const degradedRetriedRef = useRef<Record<string, boolean>>({})
   const [retryTokens, setRetryTokens] = useState<Record<string, number>>({})
   // 每实例 workspace/session 聚合（已挂载 ctx 推送 + 未挂载 unary 兜底；控制面不持有会话事实）
   const [aggregates, setAggregates] = useState<Record<string, InstanceAggregate>>({})
@@ -645,6 +670,33 @@ export default function App() {
     lastServersSignatureRef.current = signature
     chamberBridge.publish(servers)
   }, [servers])
+
+  // 相位镜像（waitForServing 读它；effect 里写，避免渲染期改 ref）。
+  useEffect(() => {
+    serversPhaseRef.current = Object.fromEntries(servers.map(server => [server.id, server.phase]))
+  }, [servers])
+
+  // 降级自愈：boot 以降级收尾（无客户端插件图 / 必需 extra-row 服务缺席）而来源
+  // 随后 ready 时，自动重挂一次——此前只有整页 reload 能恢复（2026-09-10，
+  // sidebarRight 彻底修复）。每个 ready 世代一次。
+  useEffect(() => {
+    const phases = Object.fromEntries(servers.map(server => [server.id, server.phase]))
+    const plan = planDegradedRetries({
+      degraded: Object.entries(shellStates)
+        .filter(([, state]) => state.degraded !== null)
+        .map(([instanceId]) => instanceId),
+      phaseOf: (instanceId) => phases[instanceId],
+      retried: degradedRetriedRef.current,
+    })
+    degradedRetriedRef.current = plan.retried
+    if (plan.retry.length === 0) return
+    console.warn(`[app] degraded shell(s) re-booting after the source became ready: ${plan.retry.join(', ')}`)
+    setRetryTokens(prev => {
+      const next = { ...prev }
+      for (const instanceId of plan.retry) next[instanceId] = (next[instanceId] ?? 0) + 1
+      return next
+    })
+  }, [servers, shellStates])
 
   // 问题 B（2026-12）：gateway 来源的托管 dsh 状态探针。desktop 的 ready 只
   // 证明 gateway 进程活着，托管 dsh 是独立进程——不消费 connectionState 时，
@@ -2276,6 +2328,8 @@ export default function App() {
         booted: false,
         booting: false,
         error: `实例启动超时：挂载后 ${Math.round(HARVEST_ABANDON_MS / 1000)} 秒未收到任何响应（可重试或切换来源）`,
+        // 超时是失败态，不是降级态：自愈重挂由失败覆盖层的「重试」负责。
+        degraded: null,
       },
     }))
   }, [])
@@ -3157,7 +3211,18 @@ export default function App() {
   // 会话中途则要求错误持续 HEALTH_ERROR_GRACE_MS（容忍 SSE 重连/瞬时抖动的
   // 一次失败，避免闪烁），否则陈旧 health 会永远掩盖中途失联。ticker 只在该
   // 条件下运行，正常态零开销。
-  const HEALTH_ERROR_GRACE_MS = 10_000
+  /**
+ * How long a boot's host-graph fetch may wait for its source to start serving
+ * (2026-09-10): parallel to the shell's 60s page-level slot, so a source that
+ * legitimately needs a cold start still gets its client plugins, while a source
+ * that never serves stops holding the boot.
+ */
+const SERVING_WAIT_MS = 60_000
+
+/** Poll interval of the serving gate (cheap; ends the moment the phase flips). */
+const SERVING_POLL_MS = 250
+
+const HEALTH_ERROR_GRACE_MS = 10_000
   const [, setHealthErrorTick] = useState(0)
   useEffect(() => {
     if (healthError === null || healthErrorAt === null) return
@@ -3195,6 +3260,7 @@ export default function App() {
               onSettled={handleInstanceSettled}
               onStateChange={handleShellState}
               retryToken={retryTokens[viewId]}
+              waitForServing={waitForServing}
             />
           )
         })}

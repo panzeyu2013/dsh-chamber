@@ -14,26 +14,12 @@
     `usePanelInfo` / `chamberFileApiBase`）、session v3 迁移在真实存储上的行为；
   - open-in：官方 host 行随当前 pin（rc.1）默认 profile 进入托管实例、官方 host 行 dormant
     处置、远程无 cookie 下 fence 行为、remote cwd 填充、图标缓存 / CSP；
-  - **来源启动窗口内的 `sidebarRight` 缺席（2026-09 rc.1 验收实机复现一次）**：来源自己的
-    客户端插件图在**实例尚未服务时**取不到时，`ui-sidebar-right` 行不 apply ⇒ `ui-chat`
-    永久 PENDING，该来源的对话视图**不注册**，唯有整页 reload（或等来源真正 ready 后重挂）
-    才恢复；探针只报一次 console 诊断、**不重试**（`required-extra-rows.ts` 的 5s deadline
-    是诊断而非自愈）。复现条件 = 本地实例被写者静默门拦下（`409 connection_busy`，见下条）
-    或 gateway 来源不可达；健康冷启动（实例 7s 内 ready）不触发。判据 = 控制台
-    `required extra-row service(s) missing after 5000ms: sidebarRight`（2026-09-10 实测：
-    干净冷启动本地 ready 3.07s / 壳 settled 3.81s，被 `409` 挡下时 `starting` 停住、
-    输入框之后的三个反馈面全无）。余量很薄：取图 503 预算只有 `host-graph.ts` 的
-    10×500ms，而预算耗尽的路径 `host-graph.ts:473`（`if (firstFetch.rows === null) return []`）
-    **既不打日志也不发布 `pluginDiagnostic`**（非 503 通道失败才 `console.error` +
-    `reportDiagnostic`），connection 设置页因此仍显示「正常」；唯一诊断只到 renderer
-    DevTools console，而桌面壳没有 `console-message` 钩子。用户可见面 = 「输入框能用、
-    回车后草稿被清空、气泡/忙碌指示/本轮失败卡片全无」——回合内失败（如 AUTH）只由
-    ui-chat 的 ChatView 渲染，视图不注册即一起消失。
   - **实例写者静默门拦住自动启动后的恢复路径（同上验收）**：shell 被 `SIGKILL`/孤儿 dsh
     占住 DSH_HOME 时，控制面如实拒绝（`409 connection_busy`：writer quiescence is not
     proven）+ connections 页就地解释，但「启动/停止」按钮在此状态下**点不动**（状态停在
     `starting`、端口 0），实际恢复 = 优雅重启应用（reaper 才 prove quiescence）。
-    优雅退出本身正常（日志 `will-quit 清理完成`），仅硬杀后出现。
+    优雅退出本身正常（日志 `will-quit 清理完成`），仅硬杀后出现。（本条说的是**实例本身**
+    起不来；视图侧「半死挂载」已由取图等就绪 + 降级自愈覆盖，见 design 09 §3.2。）
 - **ssh/http dsh 目标无 cookie 注入（实例侧 401）**：五处同源绝对 URL 由构建期 vendor
   补丁集走本实例前缀（design 09 §3.6）；ssh/http dsh 目标的 cookie 注入属既有认证面，
   未覆盖。

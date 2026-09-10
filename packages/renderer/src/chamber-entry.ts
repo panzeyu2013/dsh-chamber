@@ -541,6 +541,15 @@ export function apply(ctx: Context): void {
  */
 function assertRequiredExtraRowServices(ctx: Context): void {
   const started = Date.now()
+  // Shell-provided seam (shell.ts createChamberContextSetup): reports a
+  // post-settle degrade to the App. Absent in plain-node tests / other hosts.
+  const reportBootDegraded = (ctx as { chamberReportBootDegraded?: (message: string) => void })
+    .chamberReportBootDegraded
+  const degradedSeam = (message: string): void => {
+    try { reportBootDegraded?.(message) } catch (error) {
+      console.error('[chamber-entry] failed to report the missing extra-row service:', error)
+    }
+  }
   const isProvided = (name: string): boolean =>
     (ctx as { get: (key: string) => unknown }).get(name) !== undefined
   const instanceId = (ctx as { chamberInstanceId?: string }).chamberInstanceId
@@ -553,7 +562,15 @@ function assertRequiredExtraRowServices(ctx: Context): void {
         timer = setTimeout(probe, REQUIRED_SERVICE_PROBE_INTERVAL_MS)
         return
       }
-      console.error(requiredServiceProbeMessage(missing, instanceId))
+      const message = requiredServiceProbeMessage(missing, instanceId)
+      console.error(message)
+      // 2026-09-10: a mount whose conversation view never registers has to be
+      // recoverable without a manual reload. The probe's verdict is the only
+      // place that KNOWS the graph arrived yet the row did not apply, so report
+      // it through the shell seam: the App re-boots the instance on the next
+      // ready transition (a fresh boot re-fetches the graph and re-applies the
+      // rows — the same effect a full page reload had).
+      degradedSeam(message)
     }
     timer = setTimeout(probe, 0)
     return () => { if (timer !== undefined) clearTimeout(timer) }

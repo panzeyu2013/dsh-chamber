@@ -358,18 +358,99 @@ test('collectExtraRows: a missing graph endpoint reports not-injected', async ()
   }
 })
 
-test('collectExtraRows: 503 instance_unavailable retries on the bounded budget, then stays silent and returns []', async () => {
+test('collectExtraRows: an exhausted 503 budget names itself, publishes the diagnostic and returns []', async () => {
+  // 2026-09-10 (sidebarRight 彻底修复): this used to degrade in TOTAL silence —
+  // the operator saw nothing, the connections page still said 正常, and the App
+  // had no fact to self-heal from. A source that only needs longer is now
+  // recoverable; a source that never serves is at least visible.
   const stub = stubFetch(503, { code: 'instance_unavailable', error: 'instance not ready' })
   const consoleCapture = captureConsoleError()
   const noSleep = async () => {}
+  const diagnostics: { sourceId: string; state: string }[] = []
+  const unavailable: string[] = []
   try {
     assert.deepEqual(await collectExtraRows('local', '/api/i/local', {
       loadModuleBundle: async () => {},
       retry: { attempts: 3, delayMs: 1, sleep: noSleep },
+      reportDiagnostic: (sourceId, diagnostic) => diagnostics.push({ sourceId, state: diagnostic.state }),
+      onGraphUnavailable: (message) => unavailable.push(message),
     }), [])
     // The transient pre-ready 503 is retried up to the budget, not one-shot.
     assert.equal(stub.calls.length, 3)
-    assert.equal(consoleCapture.messages.length, 0)
+    assert.equal(consoleCapture.messages.length, 1)
+    assert.match(consoleCapture.messages[0], /boot-graph unavailable/)
+    assert.deepEqual(diagnostics, [{ sourceId: 'local', state: 'graph-unreachable' }])
+    assert.equal(unavailable.length, 1)
+    assert.match(unavailable[0], /no profile client plugins/)
+  } finally {
+    stub.restore()
+    consoleCapture.restore()
+  }
+})
+
+test('collectExtraRows: a slow source is waited for, then served on a fresh budget (2026-09-10)', async () => {
+  // Cold local start / restart-straddled attach: the 503 budget alone is far
+  // shorter than the spawn, which used to cost the boot its whole profile
+  // client-plugin set (ui-chat pends on sidebarRight → no conversation view).
+  let calls = 0
+  const original = globalThis.fetch
+  globalThis.fetch = (() => {
+    calls += 1
+    // 1..2: still starting (exhausts the 2-attempt budget); 3: after the wait.
+    const starting = calls <= 2
+    const body = starting
+      ? { code: 'instance_unavailable', error: 'instance not ready' }
+      : envelope([row('@scope/slow-p1')])
+    return Promise.resolve(new Response(JSON.stringify(body), {
+      status: starting ? 503 : 200,
+      headers: { 'content-type': 'application/json' },
+    }))
+  }) as typeof fetch
+  const waits: string[] = []
+  try {
+    const rows = await collectExtraRows('local', '/api/i/local', {
+      loadModuleBundle: async () => {},
+      retry: { attempts: 2, delayMs: 1, sleep: async () => {} },
+      waitForServing: async (instanceId) => { waits.push(instanceId); return true },
+    })
+    assert.deepEqual(rows.map(entry => entry.id), ['@scope/slow-p1'])
+    assert.deepEqual(waits, ['local'], 'the gate is asked exactly once before the fresh budget')
+    assert.ok(calls >= 3, 'the fetch runs again after the source started serving')
+  } finally {
+    globalThis.fetch = original
+  }
+})
+
+test('collectExtraRows: a gate that never sees the source serve ends degraded (no infinite wait)', async () => {
+  const stub = stubFetch(503, { code: 'instance_unavailable', error: 'instance not ready' })
+  const unavailable: string[] = []
+  try {
+    const rows = await collectExtraRows('local', '/api/i/local', {
+      loadModuleBundle: async () => {},
+      retry: { attempts: 2, delayMs: 1, sleep: async () => {} },
+      waitForServing: async () => false,
+      onGraphUnavailable: (message) => unavailable.push(message),
+    })
+    assert.deepEqual(rows, [])
+    assert.equal(unavailable.length, 1)
+  } finally {
+    stub.restore()
+  }
+})
+
+test('collectExtraRows: a non-503 channel failure stays a documented (non-degraded) skip', async () => {
+  // The gateway/mobile shape legitimately runs without the graph — that is not
+  // a degrade, and the App must NOT be asked to re-boot for it.
+  const stub = stubFetch(404, { code: 'not_found', error: 'unknown method' })
+  const unavailable: string[] = []
+  const consoleCapture = captureConsoleError()
+  try {
+    assert.deepEqual(await collectExtraRows('local', '/api/i/local', {
+      loadModuleBundle: async () => {},
+      retry: { attempts: 2, delayMs: 1, sleep: async () => {} },
+      onGraphUnavailable: (message) => unavailable.push(message),
+    }), [])
+    assert.deepEqual(unavailable, [], 'a missing graph endpoint is not a serving degrade')
   } finally {
     stub.restore()
     consoleCapture.restore()

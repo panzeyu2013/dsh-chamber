@@ -87,10 +87,20 @@ bundle 未覆盖的 entry（方案 A，§3）。第 1、2 步在 chamber 托管�
   `resources` 因「非任何复合插件的 inject、且不可能单独缺失」不再登记）。
   宿主图通道降级（返回 `[]`）
   或该行 apply 失败时，`ui-chat` 的 fiber 停在 PENDING、整个 apply 被跳过——会话视图
-  不注册——而 boot 仍报成功。`chamber-entry.ts` 的 `assertRequiredExtraRowServices`
-  （纯判定在 `required-extra-rows.ts`）在 5s 内探测并 `console.error` 点名 instance
-  + 服务（**诊断，非启动门**：gateway/移动形态可合法不加载该行）。清单变更须同步
-  `host-graph.ts` 的降级注释与 `docs/checklists/upstream-touchpoints.md` §3 登记行。
+  不注册——而 boot 仍报成功。**两级自愈（2026-09-10）**：① 取图撞上
+  `503 instance_unavailable`（实例仍在启动）时，shell 经 App 注入的 `waitForServing`
+  门**等来源就绪**再取一次（`host-graph.ts` 的 `MAX_SERVING_WAITS` /
+  `SERVING_HEAL_BUDGET_MS`，App 侧门上限 60s），而不是在固定预算（10×500ms）用尽后
+  丢掉整套 profile 客户端插件——冷启动与重启跨越窗口正是这样丢的；② 门也用尽、或该行
+  仍不 apply 时 boot **不再静默**：发布 `graph-unreachable` 诊断 + `console.error`
+  点名 instance，并把 `ShellState.degraded`（`graph-unavailable` /
+  `required-services-missing`）交给 App，由 App 在该来源 ready 时**自动重挂一次**
+  （每个 ready 世代一次，纯判定在 `degraded-retry.ts`；此前只有整页 reload 能恢复）。
+  `chamber-entry.ts` 的 `assertRequiredExtraRowServices`（纯判定在
+  `required-extra-rows.ts`）在 5s 内探测、点名并把判词经 shell 的
+  `chamberReportBootDegraded` 上报（**仍是诊断，不是启动门**：gateway/移动形态可合法
+  不加载该行）。清单变更须同步 `host-graph.ts` 的降级注释与
+  `docs/checklists/upstream-touchpoints.md` §3 登记行。
 - **覆盖集也是模块表的 factory 提供方**：被跳过的覆盖行不是
   "不存在"，而是由复合 bundle 替代——共享模块表对 fetch bundle 的**同步 require
   边**只有 seed → statics → 已物化缓存（loadCache）→ 已注册 factory 一条解析路径

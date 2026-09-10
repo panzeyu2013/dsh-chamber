@@ -41,7 +41,7 @@ import { CHAMBER_COVERED_IDS } from './chamber-covered.ts'
 import {
   installClientPluginLoader, retireSourceClientGraph,
 } from '../../dsh-chamber-client-ui-sidebar/src/shared/client-plugin-loader.ts'
-import { chamberBridge } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
+import { chamberBridge, type PluginGraphDiagnostic } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
 import { PendingOpenQueue } from './pending-open-queue.ts'
 import { PERF_MARKS, perfMark } from './perf-marks.ts'
 
@@ -156,6 +156,26 @@ export interface ShellState {
    * failure-presentation revision) — null on a clean settle.
    */
   error: string | null
+  /**
+   * The boot settled with a KNOWN gap that the App is expected to self-heal
+   * (2026-09-10, sidebarRight 彻底修复):
+   *  - `graph-unavailable`: the source never served its client plugin graph
+   *    inside the boot window, so this entry runs with no profile client
+   *    plugins — `ui-chat` pends on `sidebarRight`, the conversation view
+   *    never registers.
+   *  - `required-services-missing`: the graph WAS available but the required
+   *    extra-row service still never materialized (the 5s probe's verdict).
+   * Both are recoverable by a fresh boot once the source serves: the App
+   * re-boots the instance on the ready transition instead of leaving a
+   * half-dead mount (previously only a manual page reload recovered).
+   */
+  degraded: ShellDegradedFact | null
+}
+
+/** Why a settled boot is known to be incomplete (see {@link ShellState.degraded}). */
+export interface ShellDegradedFact {
+  kind: 'graph-unavailable' | 'required-services-missing'
+  message: string
 }
 
 /** One serialized boot queue shared by every instance (module/plugin discipline). */
@@ -169,6 +189,7 @@ export function createChamberContextSetup(
   sourceFingerprint: string,
   transport: ChamberTransport = instanceId === 'local' ? 'local' : 'ssh',
   bootGeneration?: number,
+  reportRequiredServicesMissing?: (message: string) => void,
 ): (ctx: Pick<Context, 'provide'>) => void {
   if (instanceId.trim() === '') throw new Error('shell: empty instance id')
   if (!isChamberSourceId(instanceId)
@@ -195,6 +216,12 @@ export function createChamberContextSetup(
     // 授权，一个挂死后又恢复的老 boot 会夺走生产权，其 teardown clear 会把
     // 健康后继的通道永久清空。消费者（侧栏 producer 注册）用它做代际栅栏。
     if (bootGeneration !== undefined) ctx.provide('chamberBootGeneration', bootGeneration)
+    // The entry's required-service probe reports a post-settle degrade through
+    // this seam (2026-09-10): the App re-boots the instance instead of leaving
+    // a mount whose conversation view never registers.
+    if (reportRequiredServicesMissing !== undefined) {
+      ctx.provide('chamberReportBootDegraded', reportRequiredServicesMissing)
+    }
   }
 }
 
@@ -223,6 +250,29 @@ type DispatchCancel = (error: Error) => void
 interface ShellHolder {
   entry: AppWebEntry
   activeDispatchCancels: Set<DispatchCancel>
+  /**
+   * The settle channel of the boot that installed this holder (2026-09-10):
+   * a degrade discovered AFTER settle (the required-service probe's 5s
+   * verdict) has to reach the App through the same `onState` seam, otherwise
+   * the App can never learn that a mounted shell is half-dead.
+   */
+  onState?: (next: ShellState) => void
+  lastState?: ShellState
+}
+
+/**
+ * Record a post-settle degrade on the live holder and republish the state.
+ * No-op when the instance has no holder (never booted / disposed) or its boot
+ * did not succeed — a failed boot already reports its own error.
+ */
+function reportSettledDegrade(instanceId: string, fact: ShellDegradedFact): void {
+  const holder = entries.get(instanceId)
+  if (holder?.lastState === undefined || holder.onState === undefined) return
+  if (!holder.lastState.booted) return
+  if (holder.lastState.degraded?.kind === fact.kind) return
+  const next: ShellState = { ...holder.lastState, degraded: fact }
+  holder.lastState = next
+  holder.onState(next)
 }
 
 /** The live AppWebEntry holder per booted instance (unmount on teardown). */
@@ -275,7 +325,7 @@ export function __testShellLifecycleOwnerCounts(): {
 const pendingOpens = new PendingOpenQueue(QUEUED_OPEN_TIMEOUT_MS)
 
 export function shellStateIdle(instanceId: string, basePath: string): ShellState {
-  return { instanceId, basePath, booted: false, booting: false, error: null }
+  return { instanceId, basePath, booted: false, booting: false, error: null, degraded: null }
 }
 
 /**
@@ -290,6 +340,12 @@ export function bootInstanceShell(
   onState: (next: ShellState) => void,
   sourceFingerprint: string,
   transport: ChamberTransport = instanceId === 'local' ? 'local' : 'ssh',
+  /**
+   * Boot seams the App owns (2026-09-10): `waitForServing` lets the host-graph
+   * fetch wait for a still-starting source instead of losing its client
+   * plugins (see host-graph.ts CollectExtraRowsDeps.waitForServing).
+   */
+  options: { waitForServing?: (instanceId: string) => Promise<boolean> } = {},
 ): Promise<ShellState> {
   // C2 perf 埋点：boot 入口（含全局队列排队；注册表见 perf-marks.ts）。
   perfMark(PERF_MARKS.shellBootStart)
@@ -300,12 +356,31 @@ export function bootInstanceShell(
   // 也在 configureContext 之前，因为上下文要携带本次代际事实。
   const gen = (bootGenerations.get(instanceId) ?? 0) + 1
   bootGenerations.set(instanceId, gen)
+  // Only the current, non-cancelled generation may publish: an old slow boot's
+  // late failure must never overwrite a newer healthy mount's facts.
+  const mayPublish = (): boolean =>
+    bootGenerations.get(instanceId) === gen && (cancelledBoots.get(instanceId) ?? 0) < gen
+  /**
+   * The two degrade facts of this boot, filled by the host-graph fetch and by
+   * the entry's required-service probe. `graphUnavailable` is known BEFORE the
+   * boot settles (it is part of the settled state); the probe's verdict arrives
+   * ~5s later and is republished through the holder (reportSettledDegrade).
+   */
+  let graphUnavailable: string | null = null
+  const reportPluginDiagnostic = (sourceId: string, diagnostic: PluginGraphDiagnostic): void => {
+    if (!mayPublish()) return
+    chamberBridge.reportPluginDiagnostic(sourceId, diagnostic)
+  }
+  const reportRequiredServicesMissing = (message: string): void => {
+    if (!mayPublish()) return
+    reportSettledDegrade(instanceId, { kind: 'required-services-missing', message })
+  }
   const configureContext = createChamberContextSetup(
-    instanceId, basePath, sourceFingerprint, transport, gen)
+    instanceId, basePath, sourceFingerprint, transport, gen, reportRequiredServicesMissing)
   const previousInstanceTail = instanceBootTails.get(instanceId)
   // 前代 boot 的起始时刻（绝对等待上限用）：必须在覆盖本代记录之前读取。
   const previousInstanceBootStartedAt = instanceBootStartedAt.get(instanceId)
-  const before: ShellState = { instanceId, basePath, booted: false, booting: true, error: null }
+  const before: ShellState = { instanceId, basePath, booted: false, booting: true, error: null, degraded: null }
   onState(before)
   // A completed boot no longer has an instance tail, but removing/replacing
   // its live holder registers an async teardown barrier synchronously. Capture
@@ -388,13 +463,12 @@ export function bootInstanceShell(
         // the settings panel must never reuse another incarnation's rows.
         sourceFingerprint,
         // A retry starts its graph request before the previous queued boot has
-        // necessarily settled. Only the current, non-cancelled generation may
-        // publish: otherwise an old slow failure can overwrite a newer ok.
-        reportDiagnostic: (sourceId, diagnostic) => {
-          if (bootGenerations.get(instanceId) !== gen) return
-          if ((cancelledBoots.get(instanceId) ?? 0) >= gen) return
-          chamberBridge.reportPluginDiagnostic(sourceId, diagnostic)
-        },
+        // necessarily settled — the shared generation-guarded reporter covers it.
+        reportDiagnostic: reportPluginDiagnostic,
+        // 503 = the source is still starting (cold start / restart straddle).
+        // Wait for it instead of booting without any profile client plugins.
+        ...(options.waitForServing === undefined ? {} : { waitForServing: options.waitForServing }),
+        onGraphUnavailable: (message) => { if (mayPublish()) graphUnavailable = message },
       })
       : Promise.resolve<ExtraModuleRow[]>([])
     // An eager different-id prefetch may reject while waiting for its global
@@ -443,7 +517,7 @@ export function bootInstanceShell(
           blocked = blockedBoot(instanceId, gen)
           if (blocked !== undefined) {
             if (bootGenerations.get(instanceId) === gen) rejectPendingOpens(instanceId, blocked.message)
-            return { instanceId, basePath, booted: false, booting: false, error: blocked.message }
+            return { instanceId, basePath, booted: false, booting: false, error: blocked.message, degraded: null }
           }
           // Defensive direct replacement: normal App retry first disposes the
           // failed holder, but duplicate callers must retire and AWAIT a live
@@ -501,7 +575,7 @@ export function bootInstanceShell(
         // current (cancelled) generation, however, no later entry can dispatch
         // them and they must fail loud.
         if (bootGenerations.get(instanceId) === gen) rejectPendingOpens(instanceId, blocked.message)
-        return { instanceId, basePath, booted: false, booting: false, error: blocked.message } satisfies ShellState
+        return { instanceId, basePath, booted: false, booting: false, error: blocked.message, degraded: null } satisfies ShellState
       }
       // chamber (2026-08 failure-presentation revision, 05 §4): run() RESOLVES
       // on boot-chain failures by design (the dsh loading page renders the
@@ -520,7 +594,7 @@ export function bootInstanceShell(
           // 与 catch 分支同代际门控：teardown await 期间可能换代。
           perfMark(PERF_MARKS.shellBootFailed, instanceId)
         }
-        return { instanceId, basePath, booted: false, booting: false, error: bootFailure } satisfies ShellState
+        return { instanceId, basePath, booted: false, booting: false, error: bootFailure, degraded: null } satisfies ShellState
       }
       // An older timed-out boot may have begun teardown while this entry ran.
       // Drain it before registration, again making the final barrier/holder
@@ -536,14 +610,20 @@ export function bootInstanceShell(
         if (blocked !== undefined) {
           await teardownEntry(instanceId, entry, 'superseded during registration')
           if (bootGenerations.get(instanceId) === gen) rejectPendingOpens(instanceId, blocked.message)
-          return { instanceId, basePath, booted: false, booting: false, error: blocked.message } satisfies ShellState
+          return { instanceId, basePath, booted: false, booting: false, error: blocked.message, degraded: null } satisfies ShellState
         }
         const displacedHolder = entries.get(instanceId)
         if (displacedHolder === undefined || displacedHolder.entry === entry) break
         entries.delete(instanceId)
         await disposeHolder(instanceId, displacedHolder, 'shell replaced during registration')
       }
-      const holder: ShellHolder = { entry, activeDispatchCancels: new Set() }
+      const settled: ShellState = {
+        instanceId, basePath, booted: true, booting: false, error: null,
+        degraded: graphUnavailable === null
+          ? null
+          : { kind: 'graph-unavailable', message: graphUnavailable },
+      }
+      const holder: ShellHolder = { entry, activeDispatchCancels: new Set(), onState, lastState: settled }
       entries.set(instanceId, holder)
       // 注册成功即清掉本实例的旧阈值：同 id 尾（有绝对上限）已让前代完成/被判
       // superseded，
@@ -553,7 +633,7 @@ export function bootInstanceShell(
       flushPendingOpens(instanceId)
       // C2 perf 埋点：该实例 shell 成功 settle（真实 UI 可用的最近似点）。
       perfMark(PERF_MARKS.shellSettled, instanceId)
-      return { instanceId, basePath, booted: true, booting: false, error: null } satisfies ShellState
+      return settled
     } catch (reason) {
       const message = describeShellError(reason)
       // run() 不再拒绝（rc.8 形状：一切失败经 bootError 上浮），catch 兜底
@@ -575,7 +655,7 @@ export function bootInstanceShell(
         rejectPendingOpens(instanceId, message)
         perfMark(PERF_MARKS.shellBootFailed, instanceId)
       }
-      return { instanceId, basePath, booted: false, booting: false, error: message } satisfies ShellState
+      return { instanceId, basePath, booted: false, booting: false, error: message, degraded: null } satisfies ShellState
     }
     })
     // 页面级链推进用超时护栏：一个永不 settle 的 boot 在

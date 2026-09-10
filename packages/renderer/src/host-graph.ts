@@ -342,6 +342,27 @@ export interface CollectExtraRowsDeps {
   loadModuleBundle(url: string): Promise<void>
   reportDiagnostic?(sourceId: string, diagnostic: PluginGraphDiagnostic): void
   /**
+   * Instance-serving gate for the 503 path (2026-09-10, sidebarRight 彻底修复):
+   * `503 instance_unavailable` means "the instance is not serving YET", not
+   * "the graph is broken" — but the boot window is short, and a cold local
+   * start or a restart-straddled attach routinely outlives it, which used to
+   * cost the boot its whole client-plugin set (and silently: see
+   * {@link onGraphUnavailable}). The App supplies this gate from its own
+   * per-source phase projection; it resolves true once the source is serving
+   * again, false when the source left / the gate's own deadline passed.
+   * Omitted (pure-node tests, mobile shape) → the legacy fixed budget only.
+   */
+  waitForServing?(instanceId: string): Promise<boolean>
+  /**
+   * This boot settled WITHOUT the host graph (503 budget + serving wait both
+   * exhausted). The rows are gone for this boot, but the source is expected to
+   * serve later, so the shell records the fact and the App re-boots the
+   * instance once the source turns ready (2026-09-10). Never called for a
+   * non-503 channel failure: an instance that does not inject the graph at all
+   * (gateway/mobile shapes) is legitimate, not degraded.
+   */
+  onGraphUnavailable?(message: string): void
+  /**
    * The authoritative roster proof this boot belongs to (2026-12): the fetched
    * graph is published into the page-level cache under it, so the settings
    * panel only reuses the rows for the SAME source incarnation. Omitted
@@ -427,6 +448,23 @@ export interface CollectExtraRowsDeps {
  * keeps observing the original element's eventual outcome (a late load is
  * success; a late error allows a later retry), exactly as before.
  */
+/**
+ * How many times one boot may wait for the source to start serving before it
+ * gives up on the graph. ONE is the honest bound: the wait is already as long
+ * as the App's readiness gate (60s), and a source that serves but still has no
+ * answerable graph is a channel problem, not a serving problem. A source that
+ * restarts *while* this boot waits therefore ends degraded — and the App's
+ * self-heal re-boots it on the next ready transition, which is the layer that
+ * owns repeated attempts.
+ */
+const MAX_SERVING_WAITS = 1
+
+/**
+ * Backstop wall-clock ceiling for the serving wait of one boot (the gate itself
+ * is capped at 60s by the App; parallel to the shell's 60s page-level slot).
+ */
+const SERVING_HEAL_BUDGET_MS = 70_000
+
 export async function collectExtraRows(
   instanceId: string,
   basePath: string,
@@ -437,29 +475,63 @@ export async function collectExtraRows(
     delayMs: deps.retry?.delayMs ?? 500,
     sleep: deps.retry?.sleep ?? ((ms: number) => new Promise(resolve => setTimeout(resolve, ms))),
   }
-  /** Fetch the host graph on the bounded 503-retry budget. Resolves the rows,
-   *  or `{ rows: null, error }` when the channel failed (non-503 — fail fast,
-   *  a hung fetch already consumed its own 30s timeout) and `{ rows: null,
-   *  error: null }` when the 503 budget ran out (instance still starting). */
-  const fetchWithRetry = async (): Promise<{ rows: HostGraphRow[] | null; error: unknown }> => {
+  /** Fetch the host graph on the bounded 503-retry budget, then (when the App
+   *  gave us a serving gate) wait for the source to actually serve and retry on
+   *  a fresh budget. Resolves the rows, `{ rows: null, error }` when the
+   *  channel failed (non-503 — fail fast, a hung fetch already consumed its own
+   *  30s timeout), and `{ rows: null, error: null, starting: true }` when both
+   *  the budget and the serving waits ran out (instance still not serving). */
+  const fetchWithRetry = async (): Promise<{ rows: HostGraphRow[] | null; error: unknown; starting: boolean }> => {
     let lastError: unknown = null
-    for (let attempt = 1; attempt <= retry.attempts; attempt++) {
-      try {
-        const entries = await fetchHostGraph(basePath)
-        if (entries !== null) return { rows: entries, error: null }
-      } catch (error) {
-        // Non-503 channel failures are NOT transient — fail fast as before
-        // (a hung fetch already consumed its own 30s timeout; retrying would
-        // only stack them).
-        lastError = error
-        break
+    let servingWaits = 0
+    const healDeadline = deps.waitForServing === undefined ? 0 : Date.now() + SERVING_HEAL_BUDGET_MS
+    for (;;) {
+      for (let attempt = 1; attempt <= retry.attempts; attempt++) {
+        try {
+          const entries = await fetchHostGraph(basePath)
+          if (entries !== null) return { rows: entries, error: null, starting: false }
+        } catch (error) {
+          // Non-503 channel failures are NOT transient — fail fast as before
+          // (a hung fetch already consumed its own 30s timeout; retrying would
+          // only stack them).
+          lastError = error
+          return { rows: null, error: lastError, starting: false }
+        }
+        // 503 instance_unavailable: instance still starting. Bounded retry.
+        if (attempt < retry.attempts) await retry.sleep(retry.delayMs)
       }
-      // 503 instance_unavailable: instance still starting. Bounded retry.
-      if (attempt < retry.attempts) await retry.sleep(retry.delayMs)
+      // The budget is gone and the channel never answered non-503 → the source
+      // is still starting. Wait for it (App-bounded) and retry on a fresh
+      // budget; a source that never serves ends here with `starting: true`.
+      if (deps.waitForServing === undefined
+        || servingWaits >= MAX_SERVING_WAITS
+        || Date.now() >= healDeadline) {
+        return { rows: null, error: lastError, starting: true }
+      }
+      servingWaits += 1
+      const serving = await deps.waitForServing(instanceId)
+      if (!serving) return { rows: null, error: lastError, starting: true }
     }
-    return { rows: null, error: lastError }
   }
   const firstFetch = await fetchWithRetry()
+  if (firstFetch.rows === null && firstFetch.error === null && firstFetch.starting) {
+    // 2026-09-10 (sidebarRight 彻底修复): this used to degrade in TOTAL
+    // silence. The boot keeps succeeding (a gateway/mobile shape may legitimately
+    // run without the graph, so a hard gate would be wrong), but a source that
+    // is merely slow now (a) names itself in the log, (b) publishes the
+    // `graph-unreachable` diagnostic the connections page renders, and (c) tells
+    // the shell, which hands the fact to the App so the instance is re-booted
+    // once the source turns ready — instead of losing its client plugins (and,
+    // through ui-chat's `sidebarRight` inject, the whole conversation view) for
+    // the lifetime of the mount.
+    const message = `instance did not serve its client plugin graph inside the boot window `
+      + `(${retry.attempts}×${retry.delayMs}ms${deps.waitForServing === undefined ? '' : ' + serving wait'}); `
+      + 'this boot carries no profile client plugins'
+    console.error(`[shell] instance ${instanceId} boot-graph unavailable: ${message}`)
+    reportDiagnostic(instanceId, 'graph-unreachable', { message }, deps.reportDiagnostic)
+    deps.onGraphUnavailable?.(message)
+    return []
+  }
   if (firstFetch.error !== null) {
     console.error(`[shell] instance ${instanceId} host boot-graph fetch failed; booting without extra plugins`, firstFetch.error)
     reportDiagnostic(
@@ -470,7 +542,11 @@ export async function collectExtraRows(
     )
     return []
   }
-  if (firstFetch.rows === null) return []
+  if (firstFetch.rows === null) {
+    // Non-503 channel failure already logged + published above; the boot
+    // continues without profile plugins (the documented gateway/mobile shape).
+    return []
+  }
   // The RAW rows the page-level cache will publish (2026-12). Kept in a
   // variable so the bounded recovery pass below can replace it with the FRESH
   // read: publishing the pre-recovery rows would hand the settings panel stale
