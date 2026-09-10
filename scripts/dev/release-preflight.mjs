@@ -32,12 +32,15 @@
 
 import { execFileSync, spawnSync } from 'node:child_process'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
-import { join, relative } from 'node:path'
+import { join, relative, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { parseReleaseVersion } from './release-semver.mjs'
 
 const REPO_ROOT = fileURLToPath(new URL('../..', import.meta.url))
-const SELF_PATH = relative(REPO_ROOT, fileURLToPath(import.meta.url))
+// `git status --porcelain` always reports POSIX-separated paths, so the
+// self-exemption key must be POSIX too (a Windows run would otherwise never
+// match it).
+const SELF_PATH = relative(REPO_ROOT, fileURLToPath(import.meta.url)).split(sep).join('/')
 
 // ---------------------------------------------------------------------------
 // 命令行
