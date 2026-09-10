@@ -152,15 +152,19 @@ function renderError(error: unknown): string {
   }
 }
 
-const resultError = (error: unknown, method: string): string => {
+const resultError = (error: unknown, method = ''): string => {
   // Strip quoted absolute paths first so spaces cannot defeat the shared
   // token-oriented sanitizer; then apply the repository-wide fallback. The
   // probe's own method name is declared as a kept token: it is RPC vocabulary,
   // not path material, and the sanitizer would otherwise publish it as
   // `commands[path]` and hide which probe failed.
+  //
+  // `method` is optional because the data.settings probe is not an RPC at all
+  // (it reads the profile's settings.yaml), so it has no method name to keep —
+  // its probe NAME would declare a literal that never appears in the text.
   const withoutQuotedPaths = renderError(error)
     .replace(/(['"])(?:[A-Za-z]:[\\/]|\/)[^'"\r\n]*\1/gu, '[path]')
-  return sanitizeErrorText(withoutQuotedPaths, [method]).slice(0, 2_000)
+  return sanitizeErrorText(withoutQuotedPaths, method === '' ? [] : [method]).slice(0, 2_000)
 }
 
 function abortReason(signal: AbortSignal): Error {
@@ -509,7 +513,7 @@ export async function runRuntimeActivationProbes(opts: RuntimeProbeOptions): Pro
     if (!settingsRpcOk) throw new Error('settings RPC could not parse the active profile')
     dataSettings = { name: 'data.settings', ok: true }
   } catch (error) {
-    dataSettings = { name: 'data.settings', ok: false, error: resultError(error, 'data.settings') }
+    dataSettings = { name: 'data.settings', ok: false, error: resultError(error) }
   }
 
   const byName = new Map<string, ProbeResult>()

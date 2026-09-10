@@ -56,6 +56,26 @@ test('sanitizeErrorText: Windows drive paths redacted; scheme-like x:// survives
   assert.equal(sanitizeErrorText('C://foo is fine'), 'C://foo is fine');
 });
 
+test('sanitizeErrorText: UNC shares are redacted (no drive letter, no forward slash)', () => {
+  // 2026-09 review: a UNC path matches neither the drive rule nor the POSIX
+  // rule, so it used to ride the projection verbatim — the gap widened when
+  // probe failure details started carrying host-side text.
+  assert.equal(
+    sanitizeErrorText(String.raw`open \\fileserver\share\alice\secret.json failed`),
+    'open [path] failed',
+  );
+  // extended-length form carries the same material
+  assert.equal(
+    sanitizeErrorText(String.raw`open \\?\C:\Users\alice\x.json failed`),
+    'open [path] failed',
+  );
+  // a UNC token with forward slashes is eaten whole, not left half-redacted
+  assert.equal(
+    sanitizeErrorText(String.raw`open \\fileserver\share/alice/x.json failed`),
+    'open [path] failed',
+  );
+});
+
 test('sanitizeErrorText: plain text passes through unchanged', () => {
   assert.equal(sanitizeErrorText('everything is fine'), 'everything is fine');
   assert.equal(sanitizeErrorText(''), '');

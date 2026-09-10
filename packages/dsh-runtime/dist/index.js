@@ -201,7 +201,7 @@ function sanitizeErrorText(message, keep = []) {
     const index = held.push(token) - 1;
     masked = masked.split(token).join(`__DSH_KEEP_${index}__`);
   }
-  const redacted = masked.replace(/\bfile:\/\/[^\s"'<>]*/giu, "[path]").replace(/(?:[A-Za-z]:[\\/](?![/]))[^\s]*/g, "[path]").replace(/(?<![:/])\/(?:[^\s/]+(?:[/\\][^\s]*)?)/g, "[path]");
+  const redacted = masked.replace(/\bfile:\/\/[^\s"'<>]*/giu, "[path]").replace(/(?:[A-Za-z]:[\\/](?![/]))[^\s]*/g, "[path]").replace(/\\\\[^\s"'<>]*/g, "[path]").replace(/(?<![:/])\/(?:[^\s/]+(?:[/\\][^\s]*)?)/g, "[path]");
   if (held.length === 0) return redacted;
   return redacted.replace(/__DSH_KEEP_(\d+)__/g, (token, rawIndex) => held[Number(rawIndex)] ?? token);
 }
@@ -223,9 +223,9 @@ function renderError(error) {
     return "<unrenderable error>";
   }
 }
-var resultError = (error, method) => {
+var resultError = (error, method = "") => {
   const withoutQuotedPaths = renderError(error).replace(/(['"])(?:[A-Za-z]:[\\/]|\/)[^'"\r\n]*\1/gu, "[path]");
-  return sanitizeErrorText(withoutQuotedPaths, [method]).slice(0, 2e3);
+  return sanitizeErrorText(withoutQuotedPaths, method === "" ? [] : [method]).slice(0, 2e3);
 };
 function abortReason(signal) {
   if (signal.reason instanceof Error) return signal.reason;
@@ -470,7 +470,7 @@ async function runRuntimeActivationProbes(opts) {
     if (!settingsRpcOk) throw new Error("settings RPC could not parse the active profile");
     dataSettings = { name: "data.settings", ok: true };
   } catch (error) {
-    dataSettings = { name: "data.settings", ok: false, error: resultError(error, "data.settings") };
+    dataSettings = { name: "data.settings", ok: false, error: resultError(error) };
   }
   const byName = /* @__PURE__ */ new Map();
   byName.set(commands.name, commands);
@@ -522,6 +522,12 @@ async function safeProbe(probe) {
   } catch (error) {
     return [{ name: "probe", ok: false, error: errorText(error) }];
   }
+}
+function failedProbeNames(probes) {
+  return probes.filter((probe) => !probe.ok).map((probe) => probe.name);
+}
+function namedProbes(names) {
+  return names.length === 0 ? "" : `\uFF08${names.join(", ")}\uFF09`;
 }
 function abortedOutcome() {
   return makeOutcome({
@@ -856,8 +862,9 @@ async function continueRollback(opts, initial) {
       });
     }
     const fallbackVersion = journal.rollbackTarget ?? opts.builtinVersion;
+    const fallbackProbes = await safeProbe(() => deps.probe(fallbackVersion, journal.rollbackTarget === null, rollbackProbeSignal(opts.signal)));
     const fallbackVerdict = decideVerdict(
-      await safeProbe(() => deps.probe(fallbackVersion, journal.rollbackTarget === null, rollbackProbeSignal(opts.signal))),
+      fallbackProbes,
       { elapsedMs: 0, observedOnce: true, ...deps.probeExpectedNames === void 0 ? {} : { expectedNames: deps.probeExpectedNames } }
     );
     if (fallbackVerdict === "pass") {
@@ -877,7 +884,7 @@ async function continueRollback(opts, initial) {
         swapAttempted: true,
         runtimeBlocked: true,
         failureKind: "terminal",
-        error: "\u5185\u5EFA\u56DE\u9000\u8FD0\u884C\u65F6\u63A2\u9488\u5931\u8D25"
+        error: `\u5185\u5EFA\u56DE\u9000\u8FD0\u884C\u65F6\u63A2\u9488\u5931\u8D25${namedProbes(failedProbeNames(fallbackProbes))}`
       });
     }
     try {
@@ -927,8 +934,9 @@ async function continueRollback(opts, initial) {
         error: `\u56DE\u9000\u76EE\u6807\u5931\u8D25\uFF0C\u843D\u5185\u5EFA\u8FD0\u884C\u65F6\u4E5F\u5931\u8D25\uFF1A${errorText(error)}`
       });
     }
+    const builtinProbes = await safeProbe(() => deps.probe(opts.builtinVersion, true, rollbackProbeSignal(opts.signal)));
     const builtinVerdict = decideVerdict(
-      await safeProbe(() => deps.probe(opts.builtinVersion, true, rollbackProbeSignal(opts.signal))),
+      builtinProbes,
       { elapsedMs: 0, observedOnce: true, ...deps.probeExpectedNames === void 0 ? {} : { expectedNames: deps.probeExpectedNames } }
     );
     return makeOutcome({
@@ -940,7 +948,7 @@ async function continueRollback(opts, initial) {
       retryAction: builtinVerdict !== "pass" ? "apply" : null,
       runtimeBlocked: builtinVerdict !== "pass",
       failureKind: "terminal",
-      error: builtinVerdict === "pass" ? "\u53EF\u4FE1\u56DE\u9000\u76EE\u6807\u63A2\u9488\u5931\u8D25\uFF0C\u5DF2\u843D\u5185\u5EFA\u8FD0\u884C\u65F6" : "\u53EF\u4FE1\u56DE\u9000\u76EE\u6807\u4E0E\u5185\u5EFA\u8FD0\u884C\u65F6\u63A2\u9488\u5747\u5931\u8D25"
+      error: builtinVerdict === "pass" ? "\u53EF\u4FE1\u56DE\u9000\u76EE\u6807\u63A2\u9488\u5931\u8D25\uFF0C\u5DF2\u843D\u5185\u5EFA\u8FD0\u884C\u65F6" : `\u53EF\u4FE1\u56DE\u9000\u76EE\u6807\u4E0E\u5185\u5EFA\u8FD0\u884C\u65F6\u63A2\u9488\u5747\u5931\u8D25\uFF08\u5185\u5EFA\uFF1A${failedProbeNames(builtinProbes).join(", ") || "\u672A\u62A5\u544A\u540D\u79F0"}\uFF09`
     });
   }
   return makeOutcome({
