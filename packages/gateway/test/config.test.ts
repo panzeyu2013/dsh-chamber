@@ -1,5 +1,5 @@
 /**
- * Gateway config unit tests (design 17 §3.1): the S1 exposure guard, host
+ * Gateway config unit tests (design 17 §5.1): the S1 exposure guard, host
  * validation, tls pairing, auth-kind resolution, and the CLI-to-config option
  * mapping. (Written structure-correct; run with `node --test`.)
  */

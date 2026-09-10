@@ -48,6 +48,7 @@ import {
   type CurrentPointerState,
   type OverrideState,
 } from './dsh-runtime-store.ts'
+import { PROBE_TEXT_KEEP_TOKENS } from './runtime-probes.ts'
 import { sanitizeErrorText } from './sanitize-error.ts'
 /**
  * The snapshot restore marker (`dsh-runtime/restore-in-progress`) is
@@ -1697,7 +1698,7 @@ export function recordMetadataRecoveryProbeFailure(
   assertPublishedStash(paths, state.record)
   assertNoUnplannedEvidence(paths, state.record)
   const timestamp = nowIso(ops)
-  const message = sanitizeErrorText(error instanceof Error ? error.message : String(error)).slice(0, 4_000)
+  const message = sanitizeErrorText(error instanceof Error ? error.message : String(error), PROBE_TEXT_KEEP_TOKENS).slice(0, 4_000)
     || 'builtin runtime probe failed'
   return checkpoint(paths, {
     ...state.record,

@@ -1,7 +1,7 @@
 /**
  * Gateway seed-cache for desktop-synced chamber host packages (design 17
  * §9.3, 2026-12 Phase 3): the three chamber host packages
- * (dsh-host-client-graph, dsh-host-git-worktree, dsh-host-archive-cleanup —
+ * (dsh-chamber-seed-client-graph, dsh-chamber-seed-git-worktree, dsh-chamber-seed-archive-cleanup —
  * the last added 2026-12, design 24) are no longer shipped inside
  * the gateway package — a connecting desktop uploads its own copies through
  * the authenticated `PUT /chamber/plugins` surface, and the gateway caches
@@ -29,9 +29,8 @@
 import { existsSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import {
-  HOST_ARCHIVE_CLEANUP_INSERT,
-  HOST_GIT_WORKTREE_INSERT,
-  HOST_GRAPH_INSERT,
+  CHAMBER_HOST_PACKAGES,
+  assertHostSeedInsertNaming,
   atomicWritePrivateFileNoFollow,
   ensurePrivateDirectoryNoFollow,
   readPrivateFileNoFollow,
@@ -42,29 +41,35 @@ import { HOST_DOMAIN_PROBE_NAMES } from '@dsh-chamber/dsh-runtime'
 /** Cache root under the gateway stateDir. */
 export const SYNCED_PLUGIN_DIR = 'chamber-plugins'
 
-/** The syncable chamber host packages (desktop-provided since 2026-12;
- *  insert id/name single-sourced from the control-plane seed registry
- *  (dedupe audit N3); dsh-host-archive-cleanup added 2026-12, design 24). */
-export const SYNCABLE_HOST_PACKAGES = [
-  HOST_GRAPH_INSERT,
-  HOST_GIT_WORKTREE_INSERT,
-  HOST_ARCHIVE_CLEANUP_INSERT,
-] as const
+/** The syncable chamber host packages — DERIVED from the control-plane's
+ *  authoritative registry (name + insert id + probe), so a new host package
+ *  is covered here without editing this file (2026-09 user decision: never a
+ *  hand-maintained parallel list). */
+export const SYNCABLE_HOST_PACKAGES = CHAMBER_HOST_PACKAGES.map(descriptor => descriptor.insert)
+
+// Fail-fast naming pin (Batch 1 naming unification, 2026-09): the syncable
+// list is a host-seed registry of its own (it gates PUT /chamber/plugins, the
+// cache slug and the probe derivation), so a non-canonical host package name
+// aborts the gateway at load instead of accepting a desktop sync into a
+// pre-rename slug. Same drift class as the probe-domain pin below.
+assertHostSeedInsertNaming(SYNCABLE_HOST_PACKAGES)
 
 /** The activation-probe domain each syncable host package backs (design 24
  *  §7 C: the probe expectation derives from the actually seeded packages —
  *  this map is the sync-cache side of HOST_DOMAIN_PROBE_NAMES). */
-const HOST_PACKAGE_PROBE_DOMAINS: Readonly<Record<string, string>> = {
-  '@dsh-chamber/dsh-host-client-graph': 'clientGraph/graph',
-  '@dsh-chamber/dsh-host-git-worktree': 'gitWorktree/previewCreate',
-  '@dsh-chamber/dsh-host-archive-cleanup': 'archiveCleanup/probe',
-}
+const HOST_PACKAGE_PROBE_DOMAINS: Readonly<Record<string, string>> = Object.fromEntries(
+  CHAMBER_HOST_PACKAGES.map(descriptor => [descriptor.insert.name, descriptor.probe.method]),
+)
 
 // Fail-fast drift pin (design 24 §7 C): the map's domain VALUES must equal
 // the dsh-runtime authoritative set (HOST_DOMAIN_PROBE_NAMES) — a typo'd or
 // one-sided domain aborts the gateway at load instead of passing a mounted
 // chamber domain unprobed (same drift class as the map-miss throw below and
-// dsh-runtime's activationProbeNamesForDomains unknown-name throw).
+// dsh-runtime's activationProbeNamesForDomains unknown-name throw). The
+// registry's own uniqueness pin (`assertChamberHostRegistry`, run at load in
+// control-plane's host-graph-seed.ts — the registry's owner, so every
+// consumer is covered by construction) guarantees the size comparison below
+// is meaningful: no two rows can collapse into one domain value.
 const mappedProbeDomains = new Set<string>(Object.values(HOST_PACKAGE_PROBE_DOMAINS))
 if (mappedProbeDomains.size !== HOST_DOMAIN_PROBE_NAMES.length
   || HOST_DOMAIN_PROBE_NAMES.some(domain => !mappedProbeDomains.has(domain))) {

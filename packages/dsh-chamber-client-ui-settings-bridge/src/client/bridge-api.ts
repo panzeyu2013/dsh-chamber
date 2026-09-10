@@ -15,7 +15,7 @@
  * every call lands on the TARGET instance's host — the control plane
  * forwards it untouched. P4-2 (N6): the transport byte (URL join +
  * client-request envelope + POST + body collection, bounded unary 30s) rides
- * the shared kernel postUnary (`@dsh-chamber/dsh-client-ui-sidebar/shared`,
+ * the shared kernel postUnary (`@dsh-chamber/dsh-chamber-client-ui-sidebar/shared`,
  * wire-common.ts) — the SAME source copy the renderer bundles; the
  * envelope/server-response classification ('bridge:' validation, ok-value
  * shaping) stays local, while the C≡D wrapWireError fold + 503
@@ -30,7 +30,7 @@
 import {
   isRecord, postUnary, throwIfInstanceUnavailable, wrapWireError,
   type UnaryPostOutcome,
-} from '@dsh-chamber/dsh-client-ui-sidebar/shared'
+} from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
 
 export interface BridgeRpcFailure {
   code: string
@@ -164,6 +164,18 @@ export class BridgeApiClient {
   /** Host plugin inventory (the plugin-inventory settings tab's read face). */
   readonly pluginInventory = {
     list: () => this.call('pluginInventory/list', {}),
+  }
+
+  /**
+   * Host client-plugin boot graph face (chamber host gateway
+   * `dsh-chamber-seed-client-graph`, Remote `clientGraph/graph`): the composed
+   * `dsh.client` rows of THIS source, the same graph the host injects as
+   * `window.__DSH_BOOT__`. The settings bridge reads it to mount the selected
+   * source's own plugin contributions into the child context (2026-12) —
+   * read-only, no execution surface on the host side.
+   */
+  readonly clientGraph = {
+    graph: () => this.call('clientGraph/graph', {}),
   }
 }
 

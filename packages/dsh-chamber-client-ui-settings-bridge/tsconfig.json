@@ -1,7 +1,7 @@
 {
   "extends": "../../tsconfig.json",
   "compilerOptions": {
-    // P4-4: the `@dsh-chamber/dsh-client-ui-sidebar/shared` local paths mirror
+    // P4-4: the `@dsh-chamber/dsh-chamber-client-ui-sidebar/shared` local paths mirror
     // was deleted and the ambient mirror file src/ambient/chamber-bridge.d.ts
     // is gone. NOTE: this package keeps its OWN `paths` (connections-section
     // below), and a child tsconfig `paths` REPLACES the inherited root paths —
@@ -17,7 +17,7 @@
     "rootDir": "../..",
     "outDir": "lib/types",
     "paths": {
-      "@dsh-chamber/dsh-client-ui-settings-connections/section": [
+      "@dsh-chamber/dsh-chamber-client-ui-settings-connections/section": [
         "./src/ambient/connections-section.d.ts"
       ]
     }

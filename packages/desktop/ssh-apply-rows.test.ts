@@ -60,12 +60,12 @@ test('parseSpecName: non-registry garbage is refused without throwing', () => {
 
 test('buildSshApplyRows: parses row names and reports reserved names across add+remove', () => {
   const result = buildSshApplyRows(
-    ['pkg-a@^1.0.0', '@scope/pkg-b', '@dsh-chamber/dsh-host-client-graph@1.2.3', '@deepseek-ai/ui@2.0.0'],
+    ['pkg-a@^1.0.0', '@scope/pkg-b', '@dsh-chamber/dsh-chamber-seed-client-graph@1.2.3', '@deepseek-ai/ui@2.0.0'],
     ['@dsh-chamber/git-worktree', 'plain-name', '@deepseek-ai/ui'],
   )
   assert.equal(result.rows.length, 7)
   assert.deepEqual(result.rows.filter(row => row.name === null), [])
-  assert.deepEqual(result.refused.sort(), ['@deepseek-ai/ui', '@dsh-chamber/dsh-host-client-graph', '@dsh-chamber/git-worktree'])
+  assert.deepEqual(result.refused.sort(), ['@deepseek-ai/ui', '@dsh-chamber/dsh-chamber-seed-client-graph', '@dsh-chamber/git-worktree'])
 })
 
 test('buildSshApplyRows: tolerated unknown payload shapes (main preflight safety)', () => {

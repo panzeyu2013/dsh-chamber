@@ -7,7 +7,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { MOBILE_CSS, VIEWPORT_TOKENS } from '../src/client/styles.ts'
-import { TOUCH_TIER_QUERY } from '../src/client/composer.ts'
+import { PHONE_TIER_QUERY, TOUCH_TIER_QUERY } from '../src/client/composer.ts'
 
 test('touch tier guard: drawer rules live under (pointer: coarse)', () => {
   assert.ok(
@@ -83,7 +83,38 @@ test('motion uses official tokens with a reduced-motion branch', () => {
 test('backdrop dims the conversation behind the open drawer', () => {
   assert.ok(MOBILE_CSS.includes('.dsh-mobile-backdrop'))
   assert.ok(MOBILE_CSS.includes('var(--dsw-alias-bg-mask-1'))
-  assert.ok(MOBILE_CSS.includes('z-index: 39'))
+  assert.ok(MOBILE_CSS.includes('z-index: 74'))
+})
+
+test('mobile layering pairs each selector with its own z-index', () => {
+  // Backdrop 74 < drawer 75 < toggle 76 must stay above the official
+  // fullscreen right panel (40), its float layer (60) and dockkit (70).
+  // Assert the SELECTOR→value pairing (not just that the numbers appear
+  // somewhere) so swapping two values fails.
+  const tier = normalizeTouchTier()
+  const drawer = cssBlock(tier, '[data-mobile-role="sidebar"]')
+  assert.ok(drawer !== null && drawer.includes('z-index: 75'), 'drawer must sit at 75')
+  const backdrop = cssBlock(tier, '[data-mobile-frame]:not([data-sidebar-collapsed]) .dsh-mobile-backdrop')
+  assert.ok(backdrop !== null && backdrop.includes('z-index: 74'), 'backdrop must sit at 74')
+  const toggle = cssBlock(tier, '.dsh-mobile-nav-toggle')
+  assert.ok(toggle !== null && toggle.includes('z-index: 76'), 'toggle must sit at 76')
+})
+
+test('the retired mechanisms leave no trace in the stylesheet', () => {
+  assert.ok(!MOBILE_CSS.includes('data-mobile-dismiss'), 'session-log stamping CSS must be gone')
+  // No self-drawn right-column overlay: the third track stays grid-locked and
+  // the official right surface owns the mobile presentation.
+  const tier = normalizeTouchTier()
+  const rightColumn = cssBlock(tier, '[data-mobile-role="details"]')
+  assert.ok(rightColumn !== null && rightColumn.includes('grid-column: 3'), 'the grid lock stays')
+  assert.ok(!/\[data-mobile-role="details"\][^{]*\{[^}]*position:\s*fixed/.test(tier), 'no self-drawn fixed overlay')
+  // Dockkit split chrome is hidden on touch.
+  assert.ok(MOBILE_CSS.includes('[data-dockkit-divider]'))
+  assert.ok(MOBILE_CSS.includes('[data-dockkit-split-button]'))
+  // The composer-bar row rules use the production class-name shape.
+  const phone = normalizePhoneTier()
+  assert.ok(phone.includes('[class*="_row_"]'))
+  assert.ok(phone.includes('[class*="_trigger_"]'))
 })
 
 test('settings full-screen rule targets the official settings dialog shape', () => {
@@ -147,6 +178,16 @@ function normalizePhoneTier(): string {
     .replace(/\s+/g, ' ')
 }
 
+/** The touch tier (1023px) with comments stripped and whitespace normalized —
+ *  the drawer/backdrop/toggle and the column grid locks live here, not on the
+ *  phone tier. */
+function normalizeTouchTier(): string {
+  return MOBILE_CSS
+    .slice(MOBILE_CSS.indexOf('@media (max-width: 1023px)'))
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\s+/g, ' ')
+}
+
 /** The CSS block `selector { … }` (normalized form), or null. Anchored on the
  *  selector followed by its opening brace: a LONGER rule that merely starts
  *  with the same prefix (e.g. `A > B > C` for `A > B`) can never satisfy a
@@ -174,3 +215,72 @@ test('no user-scalable lock (WCAG 1.4.4); viewport tokens add fit-cover + resize
   assert.deepEqual(VIEWPORT_TOKENS, ['viewport-fit=cover', 'interactive-widget=resizes-content'])
   assert.ok(!MOBILE_CSS.includes('user-scalable'))
 })
+
+test('phone tier query is the stylesheet phone tier', () => {
+  assert.ok(MOBILE_CSS.includes(`@media ${PHONE_TIER_QUERY}`), 'phone tier string must match the stylesheet')
+})
+
+test('sticky-hover tooltip suppression is coarse-gated and aria-label scoped', () => {
+  // Comments quote selectors verbatim, so every assertion below runs on the
+  // COMMENT-STRIPPED sheet: prose must never satisfy a rule assertion
+  // (cross-check: the earlier `includes` form passed even after the real rule
+  // was reverted to a blanket hide).
+  const code = stripComments(MOBILE_CSS)
+  // Exactly ONE selector in the whole sheet may TARGET a tooltip bubble —
+  // reverting to a blanket `[role="tooltip"]` (or an unquoted/~= variant, or a
+  // first-rule-in-block form) makes this set wrong regardless of formatting.
+  // `:not(...)` clauses are stripped first: the drag-handle rule legitimately
+  // EXCLUDES bubbles via `:not([role="tooltip"])` and must not be counted.
+  const tooltipSelectors = [...code.matchAll(/([^{}]+)\{/g)]
+    .map(match => (match[1] ?? '').trim())
+    .map(selector => selector.replace(/:not\([^)]*\)/g, ''))
+    .filter(selector => /\[role\s*[~^$*|]?=\s*["']?tooltip["']?\]/.test(selector))
+  assert.deepEqual(
+    tooltipSelectors,
+    ['button[aria-label] + [role="tooltip"][data-side]'],
+    'only bubbles duplicating an accessible name may be hidden',
+  )
+  // The declaration itself is pinned (a `display: block` mutant must fail).
+  assert.match(
+    code,
+    /button\[aria-label\] \+ \[role="tooltip"\]\[data-side\]\s*\{\s*display:\s*none\s*!important;/,
+  )
+  // ...and it must sit inside the width-independent coarse+hover tier, which
+  // opens before the touch tier (an iPad in landscape is 1024px+ and still
+  // taps; a mouse flips hover and stands the rule down).
+  const coarseAt = code.indexOf('@media (pointer: coarse) and (hover: none)')
+  const touchAt = code.indexOf('@media (max-width: 1023px)')
+  const ruleAt = code.indexOf('button[aria-label] + [role="tooltip"][data-side]')
+  assert.ok(coarseAt !== -1, 'the coarse+hover chrome tier must exist')
+  assert.ok(ruleAt > coarseAt && ruleAt < touchAt, 'the rule must live in the coarse+hover tier, not the touch tier')
+})
+
+test('keyboard compensation CSS rides the plugin frame stamp, never official attributes', () => {
+  const code = stripComments(MOBILE_CSS)
+  assert.ok(code.includes('[data-mobile-frame][data-mobile-kbd] [data-phase="active"] [data-conversation-scroll]'))
+  assert.ok(code.includes('padding-bottom: var(--dsh-mobile-kbd-offset, 0px) !important;'))
+  assert.ok(code.includes('[data-mobile-frame][data-mobile-kbd] [data-phase="active"] [data-composer-seat]'))
+  assert.ok(code.includes('bottom: var(--dsh-mobile-kbd-offset, 0px) !important;'))
+  // The phone-tier safe-area inset must be neutralized while armed (up to
+  // ~34px of dead space below the raised seat otherwise).
+  assert.match(
+    code,
+    /\[data-mobile-frame\]\[data-mobile-kbd\] \[data-phase="active"\] \[data-composer-seat\]\s*\{[^}]*padding-bottom:\s*0\s*!important;/,
+  )
+})
+
+test('the drawer fields carry the 16px floor (no iOS focus zoom from the drawer)', () => {
+  // iOS focus-zooms on any editable below 16px and the page STAYS zoomed; the
+  // drawer's 13px session search was the remaining trigger (cross-check P1).
+  const code = stripComments(MOBILE_CSS)
+  assert.match(
+    code,
+    /\[data-mobile-role="sidebar"\] input:not\(\[type="checkbox"\]\):not\(\[type="radio"\]\):not\(\[type="range"\]\)[^{]*\{\s*font-size:\s*max\(16px, var\(--dsh-content-font-size, 16px\)\) !important;/,
+  )
+})
+
+/** The sheet with comments stripped: selector/declaration assertions must not
+ *  be satisfiable by prose that quotes them. */
+function stripComments(css: string): string {
+  return css.replace(/\/\*[\s\S]*?\*\//g, '')
+}

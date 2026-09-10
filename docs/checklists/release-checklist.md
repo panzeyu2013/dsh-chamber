@@ -1,7 +1,7 @@
 # 发布前 Checklist
 
 > 面向发布者：按序执行，任何 ❌ 都阻断发布。依据：`.github/workflows/release.yml`、
-> `docs/DEVELOPMENT.md` §5、AGENTS.md 验证清单。命令前先
+> `docs/DEVELOPMENT.md` §5、本文件 §3。命令前先
 > `export PATH="$HOME/.nvm/versions/node/v24.20.0/bin:$PATH"`（node v24 / pnpm 11.21）。
 
 ## 发布流程总览
@@ -27,15 +27,15 @@ CI:    §7b dry_run 先行（新路径必须验证过一次）→ §7c 正式 ta
 
 ## 1. 版本断言（release.yml create-release 会硬校验）
 
-- [ ] 根 `package.json` + 全部 `@dsh-chamber/*` 包（当前 15 个）version = 目标版本
+- [ ] 根 `package.json` + 全部 `@dsh-chamber/*` 包（当前 16 个）version = 目标版本
       （数据驱动，见 §1.5；release.yml 复用同一 preflight 扫描器硬断言根 +
       全部非 fork chamber 包，新增包自动纳入）。
 - [ ] fork 副本例外：`@deepseek-ai/dsh-client-connection` / `dsh-client-web` /
-      `dsh-api-gateway` 版本 = 上游基线版本（如 `0.1.2-rc.1`），**不随发布
+      `dsh-api-gateway` 版本 = 上游基线版本（当前 `0.1.5-rc.1`），**不随发布
       版本**；release.yml
       同样经 preflight 硬断言该基线。
 - [ ] **安装脚本 dsh 版本常量**：`scripts/install-gateway.sh` 内置的
-      `DSH_CHAMBER_DSH_VERSION`（当前 `0.1.2-rc.1`）与
+      `DSH_CHAMBER_DSH_VERSION`（当前 `0.1.5-rc.1`）与
       `.github/workflows/release.yml` 的 `env.DSH_CHAMBER_DSH_VERSION`、
       `packages/gateway/package.json` 的 `dshAnchorVersion` 三者一致
       ——dsh 运行时版本变更时必须同步改脚本常量与 gateway 包字段
@@ -63,7 +63,7 @@ CI:    §7b dry_run 先行（新路径必须验证过一次）→ §7c 正式 ta
       DEVELOPMENT/CONTRIBUTING/CHANGELOG/THIRD_PARTY_NOTICES 任意文本后须
       `node scripts/dev/verify-i18n.mjs --write` 刷新）。
 
-## 3. 测试与类型检查（AGENTS.md 清单）
+## 3. 测试与类型检查
 
 - [ ] **全量测试套件在精确发布提交（`git rev-parse HEAD`）上运行**——上一提交的记录
       不算数。

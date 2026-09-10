@@ -10,6 +10,110 @@
 
 > English: [docs/CHANGELOG.en-US.md](docs/CHANGELOG.en-US.md)
 
+
+## [Unreleased]
+
+### 变更
+
+- **dsh 双线重锚 0.1.5-rc.1（源码线 + 运行时线同代）** —— 构建期 vendor 源（submodule pin）与捆绑运行时同时推进到 `dsh-v0.1.5-rc.1`（183f08e9c6dd；npm `@deepseek-ai/dsh@0.1.5-rc.1` 已发布，双线无需分批，preflight 报「运行时已发布 npm：true」）。本次是**版本行级升级**：上游 17 commits / 373 文件（+1209/−722）中，三个 fork 副本的上游 counterpart（`client/connection`、`client/web`、`api/gateway`）**只有 `package.json` 版本行**（`src/` 零改动，preflight 实测 pure 0 / 需人工重放 3 = 三个版本行 / dropped 0），故 fork 重放 = 三行版本号，无任何非版本字段需要镜像，`tsconfig` 的 `files` 增量也为空。上游 workspace 成员集合不变（vendor 链接仍 **284**）、**无新增 client 行、`dsh.client` 元数据零变化**（官方 client 行 **57** 条，两侧集合与元数据逐字相同）⇒ covered/factory 维持 **57/26**、typert remote 契约维持 **15**；vendor 补丁集 **7 文件 / 21 处锚点全部唯一命中、零漂移**；chamber 深引 seam（`ui-layout`/`ui-renderer`）仅 `package.json` 版本行。**首屏耦合探针不变**：`ui-sidebar-right` 的 `provide('sidebarRight')` 与 `ui-chat` 的 inject 两侧逐字节未动，`REQUIRED_EXTRA_ROW_SERVICES` 仍为 `['sidebarRight']`。
+  - **上游 23 个实质源文件全部落在 chamber 不接管的面上**：`ui-sidebar-{files,right,documentpreview}` 三行的 guide/preview 精修（extra row，由实例侧 bundle 提供；含 `definition.ts`→`.tsx` 的包内改名与 guide 的 `description?` 可选增量）、`ui-chat` StatsPills 的零值统计行不再渲染、`ui-primitives` `CodeBlock` 新增可选 `contentRef` 并以 `[data-code-block-content]` 包裹正文、`ui-dockkit` 两条 `z-index`、`cordis-client-runner` 的 slot-catalog 文档指针；`sidebar.right.tab.document` 槽 props 新增**必填** `scrollportRef`（chamber 未实现该槽渲染器，无需动作）。
+  - **锁文件**：唯一非版本 manifest 变更是 `dsh-llm-deepseek` 新增 `@deepseek-ai/dsh-attachment-local`（host 半依赖，chamber 构建面不消费）；`update-vendor` 第 6 步 frozen 验证时 pnpm **未**裁剪 vendor importer 段，该记录被就地更新，frozen 安装与「前后哈希一致」断言均通过（该条件性风险已写入升级 checklist §4）。同批重生成顺带把两条无关传递边 `@types/node` 26.2.0→22.20.1（`buffer-image-size`/`happy-dom` 的 peer 链接；两个版本本就都在锁文件里，根仍 pin `^26.2.0`，仅影响类型侧）。
+  - **运行时线六锚 + 3 fork 标记**：`bundle-dsh` 兜底常量、`vendor/dsh` 锁文件（`bundle:dsh --force --refresh-lockfile`；重生成后包集合不变——`packages:`/`snapshots:` 两侧包名逐字相同——变的除 dsh 版本串外只有各包新 tarball 的 integrity、pnpm 的 peer 解析后缀与极少数键的序列化形式（含一处 `tarball:` 字段），属重发布的自然结果）、release.yml env、install-gateway.sh、gateway `dshAnchorVersion`、release-preflight `FORK_VERSION` → 0.1.5-rc.1；`bin.js --version` 冒烟 = 0.1.5-rc.1。原生构建仍走既有 `allowBuilds`（node-pty / koffi / protobufjs 实跑，fs-ext 等维持显式否认），**无新增原生依赖**。
+  - **经运行时线进入受管实例的上游可见变化**：base bundle 默认模型 `deepseek-v4-flash` → **`deepseek-flash`**（V41 Flash；catalog 3→4 条，保留 V4 Flash / V4 Pro / V4 Flash Vision Exp），该条目声明 `systemPromptUpdate: 'in-history'`（V4 系不声明、行为不变）；上游自带告诫——网关未启用该 id 前请求可能 `INVALID_REQUEST`，可在设置里改回 V4 系。
+  - **版本歪斜登记**：实例侧 documentpreview 的代码预览自 rc.1 起行为依赖同代 `ui-primitives`（`CodeBlock` 的 `contentRef` 成为其唯一滚动/行定位锚点），旧代 composite 服务新 instance 时该预览失去独立滚动区与行定位——登记于 STATUS 的平台词偏差 C3 条。
+  - **验证**：`verify-upstream-touchpoints` C1/C3–C10 全绿（C5 新锚、C8 五组重建-比对、C9 21 锚点唯一命中、C10 六锚 + 3 fork 一致且无未登记活版本字面量）；C2 报告确认 tag 间 fork 面仅三行版本号；根脚本全量回归 40 步全绿（19 个 `test:*`——checklist §6 清单 17 项 + `upgrade-tools` + `release-workflow`——、16 项 typecheck、`build:renderer`、`verify:i18n`、`smoke`，外加触点门禁与 workflow 策略脚本）通过；`build:desktop` 全链通过且 `bundle:dsh` 复跑不改变运行时锁文件字节（可复现）。
+  - **同批测试可移植性修复（本轮回归暴露的既有缺陷，与 pin 无关）**：`test:host-archive-cleanup` 的「大写后缀 near-miss」用例在**大小写不敏感文件系统**（macOS APFS 默认 / Windows NTFS）上本就不成立（`session.v3.JSONL` 与 `session.v3.jsonl` 折叠为同一目录项，目录里始终只有规范名），原先恒定失败；现按运行时探测：该平台断言折叠后的真实行为（唯一目录项 + 清理回收），大小写敏感平台（Linux CI 主腿）保持原「拒绝」断言。
+  - **未验证（[UNVERIFIABLE]）**：alpha.2 批次的实机门禁（多来源 sleep/wake 与隐藏恢复、gateway 形态回归、打包态目视等）仍按 STATUS 未完成项挂账；本次升级未新增实机证据。
+
+- **修复 N-ctx 同源壳下五处同源绝对 URL（D3 裁决：构建期 vendor 补丁集）** —— 官方客户端假定自己由 dsh 源提供，但 chamber 单页多实例（N-ctx）下页面 origin 是控制面，而控制面只代理 `/api/i/<id>/*`。三轮/四轮全仓扫描出**五处**（二轮只发现一处）：① `ui-chat` 的 `/api/file`（Markdown 本地图片，坏图）；② `client-file-upload` 的 `/api/session/uploadFileBinary`（**composer 附件上传 404**）；③④ `ui-deliverables` 的 `/api/present.host|open`（交付卡「打开/定位」404）；⑤ `session-log-export` 的 `/api/session.export`（**/export 下载 404**）。裁决（以上游为准 + 最小侵入）：**不为几行 URL fork 整个 `ui-chat`**（82 文件 / ~11.3k 行），改为**登记式构建期补丁集**——`packages/renderer/scripts/vendor-patches.mjs` 由 renderer 的 `deepseekSource().transform` 按**精确上游锚点**改写（当前 7 条 / 7 文件 / 21 处锚点），vendor 文件零写入，锚点漂移即构建失败：`ui-chat` 读新增 root 标准 prop `chamberFileApiBase`（layout fork 经 `ctx.slots.provideRoot({ props })` 提供 = 本 entry 的 `ctx.chamberBasePath`）、`client-file-upload` 从服务自身的 ctx 读同一事实、`ui-deliverables` 控制器构造时接收；base path 缺失（官方布局部署）回落上游行为。为让补丁覆盖上传与导出客户端，`client-file-upload` 与 `session-log-export`（后者走 deferred 簇）**转为 composite covered**（covered/factory **57/26**；extra-row bundle 由实例提供、不经过我们的构建），同时消除 `fileUpload` 的 extra-row 依赖（探针清单收敛为 `sidebarRight` 一条）；`dsh-client-ui-mobile` 与官方 `ui-directory-picker-native` 一并登记为 **page-own 跳过**（前者是 gateway 单壳面、后者与 chamber 钉死的 browse 面互斥）。保鲜门：触点表 **C9**（锚点唯一命中，硬失败）+ `scripts/vendor-patches.test.mjs`（锚点/改写后行为/id 形态）+ `build:renderer` 末步 `verify-vendor-patch-applied.mjs`（**构建产物**里必须出现补丁形状，防 transform 静默 no-op）。**已知边界**：本地与 gateway 来源经控制面注入 cookie 后可用；ssh/http dsh 目标仍无 cookie 注入（实例侧 401），属既有认证面待办。
+- **dsh 双线重锚 0.1.5-alpha.2（源码线 + 运行时线同代）** —— 构建期 vendor 源（submodule pin）与捆绑运行时同时推进到 `dsh-v0.1.5-alpha.2`（b2e3b2a01258，上游 master HEAD；vendor 链接 271→**284**，上游 +17/−4 包：新增 `apps/desktop`、`apps/desktop-host`、`native/system` 家族、`api/workspace-files`、`client/resources`、`ui-dockkit`、`ui-sidebar-{right,files,documentpreview}`、`session-format-v2-to-v3`、`fs/tool-present`、`util/chunked-list`，移除 landlock 家族）。上游在本区间重写了客户端外壳的两代槽位模型（`details`→`rightbar` 且 scope 由 session 改 root；中心列 `conversation`→**keyed `main`**；新增 `sidebar.panellist` 全局面板轴、`usePanelInfo`/`useResource` 全局座、`ctx.layout.selectPanel`/`beginNavigation`），chamber 自建物随之全量重放：
+  - **layout fork（P0）**：`children` 改为 `sidebar`/`main`(keyed,root)/`rightbar`(single,root)/`shell.overlay`（否则官方 ui-conversation 的 `slots.inject('main')` 永不解析、对话面整体不注册）；store 嵌套为 `{panelInfo:{activePanelId}, layoutInfo:{…}}` 并补齐 `selectPanel`/`retainMainPanels`；`apply` 改为 eager 单实例 + `LayoutController(actions, hasMainPanel)`（上游已删 `attachPanels`）+ `provideRoot({hooks:{panelInfo}})`；两条 chamber 增值保留——sidebarWidth 共享持久化（`trackLayoutInstance` 显式登记取代失效的 `handle.create` 猴补丁）与单一 document theme 投影；`layoutFacts` 增加 `getCollapsed()`（AppFrame 派生下沉，插件不再复制断点常量）。
+  - **sidebar fork**：补齐 `sidebar.brand.mark`/`brand.name`/`panellist` 三处声明与渲染（品牌行 fallback 保留 chamber 字标；面板行按 alpha.2 的 `{id,order,label}` 元数据渲染，点击直调 `ctx.layout.selectPanel`——chamber fork 与 alpha.2 官方 ui-layout 都声明该方法，缺失即误配置，故响亮失败而非探测降级），新增 `panel-source.ts` 投影（locale thunk 读取时解析 + 变更才通知）与 5 例单测。
+  - **mobile 插件**：列锚点改为 `ROLE_SLOT_KEYS`（conversation→`main`、details→`rightbar`），`layoutFacts.getCollapsed()` 取代本地推导；退役两套上游已解决/重复的机制——Session 日志胶囊按文案打标（上游改为 28×28 图标按钮 + 菜单）与自绘右栏覆盖层（上游 `<768px` 自动全屏）；层级重排为 74/75/76 以压在 dockkit 与官方全屏之上；修正 `[class$=…]` 死规则并隐藏触摸端 dockkit 分栏件。
+  - **settings bridge**：子 ctx 声明台账补齐 brand/panellist 键，kit 补 `usePanelInfo` 空座。
+  - **三个 fork 副本**：connection 纯文件照抄（`src/index.ts` 实测 fork-pure，宿主半 webServer 可选注入无需人工合并）+ 版本行；client-web 版本行与 dockkit 偏差注释（**不 seed**）；api-gateway 仅版本行。
+  - **renderer**：`ui-dockkit` 走 covered factory（seed 会把 docking kit 拉进主图 eval，同 ui-primitives 的 C3 先例），covered/factory **57/26**（三轮起含 `client-file-upload`，四轮含 `session-log-export` + 两个 page-own 跳过）；C4 typert remote 装配契约 **13→15**（+`command-feedback`、+`workspace-files`）并同步锁步测试；新增 `assertRequiredExtraRowServices` 有界探针（`required-extra-rows.ts` + `chamber-entry.ts`）——首屏 `ui-chat` 的 cordis inject 依赖 extra row 提供的 `sidebarRight`，缺失时 5s 内 `console.error` 点名 instance 与服务（**诊断而非启动门**：gateway/移动形态可合法不加载该行，探针只消除“静默消失”）。
+  - **设计 24 四项修复（真机缺陷）**：① `sessionPersistence.list()` 自 0.1.3-alpha.1 起返回快照数组，旧代码当 header 用 → 真机 preview/purge 全挂（单测夹具掩盖），改为读 `snapshot.header`；② 存在性探针 `inspect(id)` 已退役 → 改用官方 `stat(id)`（跨全部 project dir/全部代际，`undefined` 即无内容，任何异常仍 fail-closed）；③ purge 只删当前代 → 改为删除目录内**全部代际**文件 + `session.lock`，并对未识别条目/符号链接/子目录整单拒绝（不再半删）；④ 删除已无消费者的 `isPersistenceNotFoundError`。design 24 §2 与 AGENTS 的边界措辞同步为 `stat(id)`。
+  - **运行时线六锚**：`bundle-dsh` 兜底常量、`vendor/dsh` 锁文件（`bundle:dsh --force --refresh-lockfile`）、release.yml env、install-gateway.sh、gateway `dshAnchorVersion`、release-preflight `FORK_VERSION` → 0.1.5-alpha.2；`bin.js --version` 冒烟 = 0.1.5-alpha.2。
+  - **未验证（[UNVERIFIABLE]）**：实机多来源 sleep/wake 与隐藏恢复、gateway 形态回归、右侧栏栈在真实 profile 下的装载时序、`useResource`/`usePanelInfo` 的 provideRoot 时序、session v3 迁移在真实存储上的行为。
+- **dsh 源码线升级至 0.1.3-alpha.1** —— 构建期 vendor 源（submodule pin）推进到 dsh-v0.1.3-alpha.1（d347e7039）：上游相对 rc.1 是实质内容版本（328 commits、6 个新包），fork 副本随之重放——connection 采纳上游流式 body 上传路由与 fixture 的 session-format v2 / live assistant-stream 重构（chunk-rows 面移除，tsconfig 补 `dsh-llm/assistant-stream` 别名）、api-gateway 采纳 journal-stream 的无游标 notification 帧、web 仅版本行；激活探针 `commands/execute` 载荷按 0.1.3 wire 改名 `images` → `attachments`。**运行时线未动**：`@deepseek-ai/dsh@0.1.3-alpha.1` 尚未发布 npm，捆绑运行时四锚仍为 0.1.2-rc.1（双线门待 npm 发布后收口）。
+- **dsh 源码线升级至 0.1.3-alpha.2 + 运行时线收口（双线同代）** —— 构建期 vendor 源（submodule pin）推进到 dsh-v0.1.3-alpha.2（82a5fd61a7，vendor 链接 267→271，新增 `client/ui-open-in-app`、`host/open-in-app`、`util/package-manifest` 三包）；fork 副本随之重放——connection 采纳上游 recovery-config 抽取（重连/就绪时序默认值迁入共享 schema：3s 慢握手告警 + 15s 硬期限中止代次、达到上限后持续重试取代「终态 disconnected」，chamber 的 loopEpoch 代际守卫与 `CONNECTION_BACKOFF_MAX_MS` 导出当时保留（**Batch 2 重锚已退役**，见下条）、`basePath` 收敛为 chamber apply 配置成员）、api-gateway 与 web 仅版本行；三副本版本标记 → 0.1.3-alpha.2。**运行时线收口**：`@deepseek-ai/dsh@0.1.3-alpha.2` 已发布 npm → bundle-dsh 兜底常量、desktop vendor 锁文件（`bundle:dsh --force --refresh-lockfile`）、release.yml env、install-gateway.sh、gateway `dshAnchorVersion` 四锚 rc.1→alpha.2，`bin.js --version` 冒烟 = 0.1.3-alpha.2（双线门关闭）。chamber-covered 增 `@deepseek-ai/dsh-client-ui-open-in-app` 一行（官方 open-in client 行随 host-graph 出现时保持 covered，官方按钮在 chamber 壳内 availability 失败自隐藏——T3 双保险）。
+- **chamber 自建包命名统一（Batch 1 / T2，原子单批）** —— 命名收口为「目录 == 包名非 scope 段」：6 个 client 插件包名 `@dsh-chamber/dsh-client-ui-*` → `@dsh-chamber/dsh-chamber-client-ui-*`（目录不变）；3 个宿主种子包的目录与包名 → `dsh-chamber-seed-<loader-id>`（`@dsh-chamber/dsh-chamber-seed-client-graph` / `-git-worktree` / `-archive-cleanup`；loader id、激活探针域与发布计数不变）；`dsh-client-ui-mobile`（client-kind 例外）、三个 fork 副本（shadow 机制）与基建包不动。同批：`.gitignore` 的 committed-dist 负规则随 `git mv` 落地、全树引用（脚本 / renderer 表 / gateway 同步表 / 桌面 seed / 测试夹具 / 锁文件 importer / 文档）一次替换、两处种子登记处加 fail-loud 命名断言（`kind === 'host'` ⇒ `@dsh-chamber/dsh-chamber-seed-<loader-id>`：控制面注册表在 start 与每次 spawn 解析时校验，gateway 可同步列表在模块加载时校验）。**远端过渡例外**：旧名 `cordis.patch.yml` 行一次性 fold（同 loader id 的 `@dsh-chamber/dsh-host-*` 行原地改写为规范名，仅限种子写入器产出的精确行字节；手写 flow/inline 变体仍硬失败）——否则升级后远端 seed 会因 id-bound 冲突永久硬失败。已提交的宿主包 `dist/index.js` 产物字节不变（包名不内嵌于 bundle），锁文件重生成后 frozen 稳定且 vendor importer 记录完整。
+- **fork 重锚 alpha.2 + 补丁最小化（Batch 2）** —— 三个 fork 副本以 dsh-v0.1.3-alpha.2 为锚逐文件复核，能纯的恢复逐字节、该补的收敛到最小：
+  - **connection**：`src/client/connection.ts` 收敛为「上游内容 + erasableSyntaxOnly 显式字段改写 + 头部说明」（`src/browser-auth.ts` 恢复逐字节上游）——退役 loopEpoch 代际守卫与 stop()+start() 重连路径（上游原生 `reconnect()`/`setNetworkAvailable()` 已覆盖同一语义，且不存在第二个泵循环的竞态），`CONNECTION_BACKOFF_MAX_MS` 导出删除，活性触发去抖值改为 `liveness-triggers.ts` 内部的 `DEFAULT_MIN_RESTART_INTERVAL_MS`（10s == recovery schema 默认 `backoffMaxMs`）并加离线门（离线时上游已挂起重试，触发忽略）；`basePath` 收敛为 `apply(ctx)` 读 `ctx.chamberBasePath`（与 api-gateway 对称，chamber-entry 不再传插件 config），`createWebConnectionRpc` 去掉兼容重载只留 chamber 选项对象；新增 `client-apply` 行为门（ctx→载波/handle）并扩展测试桩 loader（fixture / recovery-config）。
+  - **client-web**：`src/base.css` 恢复逐字节上游，五份 ui-theme token 表改由 renderer 入口 CSS（`packages/renderer/src/styles.css`）引入——head CSS 顺序不变，token 仍在插件 CSS 之前；seed/platform/index 的 rebase 散文收敛为「不变量 + 指路」，5 个不可替代 seam（模块表宿主 / extraRows / configureContext / boot 容忍 / 异步 dispose）不动。
+  - **api-gateway**：`apply(ctx)` 直接读 `ctx.chamberBasePath`（去掉 `ClientRemoteOptions` 参数），流载波补丁不变。
+  - 上游触点登记同步（pure：connection 15→16、client-web 4→5、api-gateway 6；C1 逐字节门覆盖新纯文件），design 05/14/20 措辞随之修订。
+- **open-in 统一 · Phase 0 纯门控（Batch 3）** —— 新增 per-source 视图模型 `packages/dsh-chamber-client-ui-open-in/src/shared/open-in-view-model.ts`：把「官方宿主目录（official）」与「桌面主进程提供方（main）」两个池按来源矩阵（local = 两池全量；`dsh-*`/`gateway-*` + ssh = 仅 main 的 remote-capable；http/畸形来源 = 空）折成单一决策面，每个被拒候选都带显式抑制原因（`unknown-source`/`transport-not-ssh`/`source-not-local`/`app-unavailable`/`app-not-remote-capable`/`duplicate-app-id`），并给出 channel 优先级的去重与默认选中项；既有 `usableOpenInApps`/`usableAppsForSource` 改为该视图模型的薄适配层（行为不变，单一决策面）。单测钉矩阵/去重/抑制原因（8 例）。Phase 2 见下条。
+- **连接恢复加固（2026-09，Batch 2 后续）** —— 针对「上游连接管理只按本地/单实例设计，chamber 需面对隧道/慢链路/唤醒」的专项调研结论：
+  - **每来源就绪期限**（新增 `dsh-client-connection/src/client/recovery-policy.ts`）：chamber 页面拿不到宿主注入的 `__DSH_CONNECTION_RECOVERY__` 页面全局，一直吃 15s 硬期限；现由 api-gateway fork 经上游支持的 `connection.start(sinks, config)` 为 ssh/http 来源传 45s 期限 / 5s 告警，本地与未知来源保持上游默认——冷 SSH 隧道或慢链路不再因握手超期被反复取消。
+  - **唤醒事件旁路离线门**：页面跨挂起/恢复被冻结时可能整体错过 `online` 事件并持续误报 offline，而离线门会连 `system-resume` 一起挡掉。现 `system-resume` 旁路门（`reconnect()` 的 `immediateRetry` 跳过挂起分支，只强制一次有界尝试，真离线则快速失败重挂），`online`/可见性仍受门约束，三者共享 10s 去抖。
+  - **职责边界登记**：连接层是 push 通道（`/api/remote.mux`）唯一重开者（各 chamber 层只发现/撤销/重注册传输；mux 客户端自身无退避）；禁止同实例 `stop()+start()`（如重新引入须恢复代际守卫）。
+  - **上游动向（只读调研，未升级）**：最新 tag `dsh-v0.1.5-alpha.1`，但三个 fork 的客户端恢复模型**零改动**（仅 fixture/宿主半 `webServer` 可选注入重构/平台词新增 `dsh-client-ui-dockkit`）——故本次加固无上游等价物可采纳，全部走上游稳定接缝；升级注意项已记入触点表 §2.4。
+- **open-in 统一 · Phase 2（Batch 3 核心，红线修订）** —— 单一 header 入口改为消费 per-source 视图模型（Phase 0 已落地），本地来源吸收官方 client：
+  - **本地来源（official 通道）**：实例自身官方宿主目录（`dsh-host-open-in-app`，随 a2 默认 web bundle 在）经每实例代理 `<basePath>/open-in-app/{apps,icon/<id>,open}` 提供全量本地应用拾取器——catalog 协议（`shared/open-in-app-protocol.ts`，与 vendor `shared.ts` 逐字锁步测试）、真实 bundle 图标（404 回退中性方框）、官方 `app.*` 标签表与按钮文案（并入单一 chamber locale NS）、选择持久化（官方 key `dsh.open-in-app.choice`，storage 不可用降级内存）、busy/error 呈现（250ms 延迟 busy、2s 错误衰减）全部吸收；桌面主进程的 VS Code 覆盖项按 §5.1「vscode 全家走 IPC 覆盖」+ r6「展示并集 + IPC 兜底」裁决：主进程该项可用时胜出（vscode 走 IPC，保留 `vscodeOpenInNewWindow`、来源代 proof 与深链 intent 推送），不可用时官方条目兜底（走实例路由）。
+  - **远程 ssh 来源**：仅主进程 remote-capable 项（VS Code Remote-SSH，主进程构造 `vscode://vscode-remote` URL）；**http/未知来源**：无入口。
+  - **桌面主进程瘦身（红线）**：`OpenInApp` 注册表 vscode-only；`OpenInLaunchContext` 移除 `stat`/`openPath`/`showItemInFolder`，finder provider 与 `classifyLocalPath`/`invokeOpenPath`/`normalizeOpenPathError`/`shouldRevealDirectoryInsteadOfOpen` 一并退役。本地 launch 的信任界由 trusted IPC 迁至实例官方路由（实例连接栅栏 + 官方 resolver 白名单/存在性校验），控制面仍零执行面（逐字透传 + browser-auth cookie 注入）；VS Code 深链语义、来源代 proof 与 OS 深链 `dsh-chamber://open-vscode` 入口不变。
+  - 红线修订登记：design 16/20/05 + AGENTS 同步（最终设计验收由用户完成）。
+  - **未实机验证（[UNVERIFIABLE]）**：官方 host 行随 a2 默认 profile 进入托管实例、远程无 cookie 下 fence 行为、remote cwd 填充、图标缓存/CSP。
+- **升级工具 + 连接恢复收尾（W1/W2/W3，2026-09；源码线/运行时线 pin 仍 0.1.3-alpha.2）** —— 与 0.1.5 升级**版本无关**的三件收尾，全部在当前 pin 上验证：
+  - **升级前 pin 预检（新增 `scripts/dev/preflight-vendor-pin.mjs`，只读）**：对目标 tag 与当前 pin 做 diff，一次给出「三个 fork 副本按 pure/需人工重放/dropped 分类 + chamber 深引的 vendor seam 文件 + 上游包集合增删 + 新增 client 行 + 运行时是否已发布 npm」，支持 `--offline`/`--json`/`--fail-on-replay`（advisory 工具，不改工作树、不动 submodule HEAD）。对 `dsh-v0.1.5-alpha.1` 实测：变更 2552 文件 → pure 5 / 重放 6 / dropped 6、**seam 16（全部落在 `packages/client/ui-layout/*`）**、包 +15 / −4（landlock）、新增 client 行 5。这把 0.1.5 踩过的坑（先升 pin 才发现三栏模型重写 → `typecheck:layout` 立刻红）提前成「动 pin 前先看清单」的流程第 0 步。
+  - **锁文件 vendor 记录修复脚本加移除守卫（修复）**：`restore-lockfile-vendor-records.mjs` 原先无条件从 HEAD 复活被 pnpm 剪掉的 importer 记录；上游在 0.1.5 移除 workspace 成员（landlock 4 条）后，脚本会把已不存在的成员补回，frozen 安装随即以「锁文件有、链接缺」失败。现按 `vendor/harness-packages/@deepseek-ai/<name>` 链接存在性（含断链）跳过并打印清单。新增根脚本 `pnpm run test:upgrade-tools`（两个脚本测试）+ CI 步骤。
+  - **聚合刷新陈旧阈值按传输分级（H3）**：sidebar 聚合的 S2 重连 watchdog 原为单一 120s 且**只覆盖 direct-http 来源**；现按来源传输取阈值——http 保留 120s（浏览器腿有控制面 30s WS ping，上游腿无应用心跳、仅约 10min OS TCP keepalive，需较紧的自愈），**ssh 新增 300s 兜底**（隧道已有三层独立探测器：代理 30s/1 miss WS ping、宿主 mux 2s/2 misses、SSH keepalive 30×3≈90s，该臂只补「应用级冻结」这一层，阈值必须显著长于 http 以免空闲健康隧道每两分钟付一次基线重放），本地/未知来源不武装（`AGGREGATE_RECONNECT_HTTP_STALE_MS`/`AGGREGATE_RECONNECT_SSH_STALE_MS` + `reconnectStalenessMsForTransport`）；unary 30s 拉取节奏不变，watchdog 始终是「拉取的补充」。新增单测 2 例（http/ssh 阈值与 local/未知跳过）。
+
+### 修复
+
+- **归档清理后已删会话在侧边栏反复浮现（design 24 §12）**：purge 删除已归档
+  会话内容后，官方客户端 `SessionManager.summaries` 不会刷新（宿主会话事件为
+  文档化 no-op），而归档集合的收缩经官方 workspace follow 即时到达客户端，于是
+  生产端推送把「收缩后的集合 + 陈旧的行」一起提交，已删会话以普通行渲染（点击报
+  `session/not-found`）；30s unary 兜底拉取又把它清掉，形成「推送装回、拉取清掉」
+  的闪烁。修复分四层：① 生产端**墓碑抑制**（离开权威归档集合的 id 从上报快照与
+  运行时事实通道中过滤，直至官方 summaries 收敛或该 id 重新入集合）；②
+  **校验式收敛链**（以方法调用官方 `ctx.sessions.refresh()`——此前的脱绑调用每次
+  抛 `TypeError` 被吞掉、从未真正发出请求——resolve/reject/hung 三类结果均有界
+  重试，终态用 chamber unary `session.list` 权威探针，只释放服务端仍存在的 id）；
+  ③ App 侧**权威归档集记忆**（失去权威时作为收缩基线，并让降级 unary 视图继续
+  过滤已归档行；`archiveSetKnown` 仍为 false，管理器保持非破坏性降级分支）；
+  ④ 宿主**registry-global 孤儿清扫**（每次 purge 收尾清全集合无会话记录的成员：
+  逐候选官方单 id 存在性校验 + 查询/持久化枚举并集 + 空/塌缩语料可信度门，
+  只清集合成员、零新增删除语义，双重确认与 fail-closed）。
+  设计与进度见 design 24 §12 与 `docs/progress/STATUS.md`。
+- **移动端 Web 访问面（design 17 §18）**：四类真机反馈的复修与加固（含独立
+  交叉复核轮：6 条 lane 的代码/症状/控制面/文档/复现/最优性审查，P1 已修）。
+  - **tooltip 悬停残留**：官方 ui-primitives `Tooltip` 的 tap 会合成
+    mouseenter 而没有配对 mouseleave（sticky hover），延迟气泡（200–500ms）
+    常驻在刚用过的发送/停止键上。规则改为 `(pointer: coarse) and (hover: none)`
+    门控（宽屏触控设备同样会点按；接鼠标时 hover 翻转为 hover、自动让位）且只
+    针对**与可访问名重复**的气泡
+    （`button[aria-label] + [role="tooltip"][data-side]`，气泡是 trigger 的紧邻
+    下一兄弟且带组件自身的 `data-side` 标记）；四处信息型气泡（聊天统计行、
+    代理预设卡片描述、轨迹时间轴 span、≤620px 的轨迹 kind 标签）**刻意保留**
+    ——它们的 trigger 没有可访问的等价文本，隐藏等于让触控用户失去唯一可读
+    来源；第五处 `role="tooltip"`（轨迹 turn-rail 预览）无 `data-side`，结构性
+    排除。
+  - **键盘补偿加固**：arm 以 frame 元素为单位幂等（renderer 重挂替换 AppFrame
+    时重新打标，且旧 frame 的插件属性被清理）；新增**可编辑焦点**（focusin +
+    focusout 打点 + composer 选区兜底）守卫；**缩放策略**改为「只服务 composer」
+    ——原先的 `scale > 1.01` 一票否决会在 iOS 聚焦缩放后（抽屉 13px 搜索框是
+    常见触发源）让 composer 永久留在键盘后（复核 P1），现在缩放 + 焦点在
+    `[data-composer-seat]` 内照常补偿，非 composer 字段在缩放态仍否决；
+    同时从源头消除聚焦缩放（抽屉内输入框补 16px 底线）；量化步进 48px → 16px
+    （死区从 8–55px 收窄到 8–23px）；arm 期间归零 seat 的底部安全区 padding
+    （消除刘海机 0–34px 双重间距）；focusin 纳入重同步通道。
+  - **设置 sheet**：分区切换的滚动复位改为只认**分区 chip** 点击（判定抽为
+    纯函数并加单测），并门控在**手机档**（769–1023px 触控平板保留官方弹窗
+    几何与官方跨分区滚动行为）。
+  - **连接稳定性取证（未修复）**：gateway/控制面共用的 WS splice 拆链新增一行
+    有界日志（`WebSocket stream <id> closed (<cause>, <ms>ms)`），使**实例侧**
+    mux 心跳判死与客户端主动重连在日志中可区分（此前只有代理自身心跳有日志，
+    实例侧判死完全无痕；cause 为无括号 token，整行可解析，logger 抛异常不会
+    锁死拆链）；修复动作仍待浏览器侧 close code 取证，取证结论与候选修复见
+    `docs/progress/STATUS.md`。
+  - 测试：移动插件 **60** 用例（0.2.4 时为 67；alpha.2 迁移重写 markup/drawer 用例后为 60——arm 决策/档位
+    常量/设置 chip 判定/粗指针 tooltip 规则与声明体/抽屉 16px 底线）、
+    control-plane `instance-proxy` 72 用例（+1，拆链日志契约）。
+
 ## [0.2.4] - 2026-09-09
 
 ### 修复
@@ -81,7 +185,7 @@
   applied-monitoring / intent 时武装，仅 live 事务 phase（prepared/switched/
   restoring…）不武装（旧壳在途事务保持 journal-mismatch 阻塞语义），回归
   测试 ×3。
-- **plugin sync/install QA 收口（design 21 §10 ⑱–㉒）** —— 同步 400 原因
+- **plugin sync/install QA 收口（design 21 §6.2/§6.3/§6.6 ⑱–㉒）** —— 同步 400 原因
   透传（旧网关不认识新宿主域不再裸 400，拒绝文案给升级指引；桌面把网关
   原因并入失败串）；materialize 202 后桌面侧 settle/受控重启对账（op 终态
   轮询 → POST 受控重启 → 就绪轮询，IPC outcome `{executed,restarted}`，
@@ -96,7 +200,7 @@
 
 ### 变更
 
-- **N-ctx 视图保留/回收 + 可见性门控（design 05 §1 注记/performance-baseline
+- **N-ctx 视图保留/回收 + 可见性门控（design 05 §4 注记/performance-baseline
   §10；性能第二阶段代码面 A/C/D）** —— 早期「booted 壳无限常驻（视图生命周期
   = 注册表条目生命周期）」收窄为 chamber 保留策略：local 恒留，隐藏壳最多
   保留 1 个（`RETAINED_HIDDEN_VIEWS`），超限回收「已 settle + 连续隐藏
@@ -113,12 +217,12 @@
   `scripts/perf/measure-ui.mjs` 稳态基线尺子（schema `measure-ui/v1`：
   DOM 节点分壳/堆/空闲长任务/合成输入帧间隔）。
 
-- **归档管理器按工作区分组、可折叠（design 24 §18/§19）** —— 移除独立
+- **归档管理器按工作区分组、可折叠（design 24 §6）** —— 移除独立
   「删除全部」：整集清理必须先显式全选再确认带计数的「删除选中」，purge
   永远携带明确 id 列表（降级/pending 视图无任何销毁动作）；列表按工作区
   分组（权威成员关系 → canonical cwd 兜底 → 未分组桶），组头复用导航折叠
   chrome + workspace accent + 三态组复选框，折叠为对话框本地视图态。
-- **归档管理器整体匹配轮（design 24 §19-6..9，dsh/仓库惯例对齐）** ——
+- **归档管理器整体匹配轮（design 24 §6，dsh/仓库惯例对齐）** ——
   危险确认改**对话框内两段式**（武装冻结列表输入 + 风险条：计数不可恢复
   文案/取消/确认删除；Esc 只解除武装绝不关框——capture 相位仲裁官方 Modal
   的 bubble Escape；取消/Esc 焦点回武装源控件）替代 OS window.confirm 与
@@ -127,7 +231,7 @@
   标题精确同列）；行删除钮并入模块 `.actionIcon` 语言（20px 纯色 hover +
   error ink 修饰）、hover/焦点环/小字号族共享规则表收口；四方只读分面评审
   （正确性/完整性/最优性/a11y）修复落地（焦点 rAF 回退、aria-checked=mixed
-  全选行、role=alert 文本化等），偏差与待目检项登记 §19-9。
+  全选行、role=alert 文本化等），偏差与待目检项登记 §13（第 17 条）。
 
 ## [0.2.2] - 2026-09-05
 
@@ -219,7 +323,7 @@
   分流：registered missing → 侧栏孤儿徽标 + `git worktree repair`；
   present-but-broken / 未注册 missing → repair/prune；locked →
   `git worktree unlock`；未注册行按因分发。
-- **侧边栏 Git 仓库组折叠与行尾 rest 态清理（design 08 §11.7，2026-09
+- **侧边栏 Git 仓库组折叠与行尾 rest 态清理（design 08 §3.3，2026-09
   用户决策）** —— 折叠 git main workspace 即整体隐藏其派生 worktree 行
   （纯展示派生、不写派生行折叠偏好；`hiddenByMainWorkspaceFold` 谓词带主行
   存在性守卫——主行注册消失时陈旧折叠偏好绝不锁死派生行）；折叠态拖放

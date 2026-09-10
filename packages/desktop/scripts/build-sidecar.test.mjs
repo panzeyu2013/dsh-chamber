@@ -24,6 +24,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   readlinkSync,
   rmSync,
   statSync,
@@ -91,7 +92,7 @@ test('① 布局：node / sidecar.js / package.json / dist/control-plane / host 
   assert.equal(layout.dist, '/tmp/out/dist')
   assert.equal(layout.controlPlaneDist, '/tmp/out/dist/control-plane')
   assert.equal(layout.controlPlaneEntry, '/tmp/out/dist/control-plane/index.js')
-  assert.equal(layout.hostPackageDist('dsh-host-client-graph'), '/tmp/out/dist/dsh-host-client-graph')
+  assert.equal(layout.hostPackageDist('dsh-chamber-seed-client-graph'), '/tmp/out/dist/dsh-chamber-seed-client-graph')
 })
 
 test('② 计划文本反映开关', () => {
@@ -430,5 +431,35 @@ test('⑧ copyTree：树内相对链接原样保留、树外链接实体化', ()
     assert.equal(readFileSync(path.join(dst, '.bin', 'outside'), 'utf8'), 'out\n')
   } finally {
     rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('⑨ 装配目录重建：上一轮遗留的 host 包目录（T2 改名前的旧名）不留在产物里', async () => {
+  const out = mkdtempSync(path.join(tmpdir(), 'dsh-sidecar-rebuild-'))
+  try {
+    // 模拟"改名前的上一轮装配"：旧名 host 包目录 + 一个无关的陈旧目录。
+    const stale = path.join(out, 'dist', 'dsh-host-client-graph', 'dist')
+    mkdirSync(stale, { recursive: true })
+    writeFileSync(path.join(stale, 'index.js'), 'stale\n')
+    mkdirSync(path.join(out, 'dist', 'leftover-junk'), { recursive: true })
+
+    await runBuildSidecar(parseBuildSidecarArgs(['--out', out, '--skip-node']), {
+      log: () => {},
+      error: () => {},
+    })
+    const layout = sidecarLayout(out)
+    // <out>/dist 由本脚本独家拥有 → 整目录重建，旧目录必须消失
+    assert.ok(!existsSync(path.join(layout.dist, 'dsh-host-client-graph')), '旧名 host 包目录不应残留')
+    assert.ok(!existsSync(path.join(layout.dist, 'leftover-junk')), '无关陈旧目录不应残留')
+    // 当前 host 包与 control-plane 仍齐全
+    assert.ok(existsSync(layout.controlPlaneEntry))
+    for (const host of HOST_PACKAGES) {
+      assert.ok(existsSync(path.join(layout.hostPackageDist(host.name), 'dist', 'index.js')))
+    }
+    // dist/ 顶层 == {control-plane} ∪ HOST_PACKAGES（无第三方成员）
+    const expected = ['control-plane', ...HOST_PACKAGES.map((h) => h.name)].sort()
+    assert.deepEqual(readdirSync(layout.dist).sort(), expected)
+  } finally {
+    rmSync(out, { recursive: true, force: true })
   }
 })

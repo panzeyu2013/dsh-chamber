@@ -1,0 +1,28 @@
+{
+  "name": "@dsh-chamber/dsh-chamber-seed-client-graph",
+  "description": "Chamber host gateway exposing the instance's dsh.client boot graph (clientModules.graph()) to the chamber frontend over the wire — read-only, no write/execute surface",
+  "version": "0.2.4",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "exports": {
+    ".": "./dist/index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist/index.js"
+  ],
+  "license": "MIT",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@standard-schema/spec": "^1.1.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "workspace:^",
+    "@deepseek-ai/dsh-client-modules": "workspace:^",
+    "@deepseek-ai/dsh-typert-protocol": "workspace:^"
+  }
+}

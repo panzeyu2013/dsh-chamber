@@ -233,8 +233,9 @@
  * HostEdges 其余边沿叶与双 flavor 属后续批（W-10 之外）。
  */
 
-import { existsSync, promises as fsp, readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
+import type { ChamberHostPackageDescriptor } from './control-plane-module.ts';
 import { findFreePort } from './free-port.ts';
 import { computeSupported, validatePatch } from './chamber-settings.ts';
 import type { ChamberSettings, ChamberSettingsStatus } from './chamber-settings.ts';
@@ -297,7 +298,7 @@ import type { VscodeLaunchContext, VscodeLaunchRequest } from './deep-link.ts';
 // electron/electron-updater 均经 createRequire 惰性解析，见其文件头注记；本文件
 // 只调用纯 URL 白名单 + 宿主叶路径）。update 面只做**类型** import（UpdateController
 // 结构纯类型，无 electron 依赖——实例本体仍在 main 装配侧构造、经 ctx 注入）。
-import { classifyLocalPath, invokeOpenPath, listOpenInApps, runOpenInLaunch } from './open-in.ts';
+import { listOpenInApps, runOpenInLaunch } from './open-in.ts';
 import type { OpenInLaunchContext, OpenInRequest } from './open-in.ts';
 import { openReleasePage } from './updater.ts';
 import type { UpdateController } from './updater.ts';
@@ -1580,9 +1581,11 @@ export interface ShellAssemblyCtx {
     ownsRemoteTarget(target: SshPluginTarget): boolean
     scopedExecForTarget(target: SshPluginTarget, extraOwner?: () => boolean): ExecFn
     scopedStatusForTarget(target: SshPluginTarget): StatusFn
-    scopedProbeForTarget(target: SshPluginTarget, probe: () => Promise<boolean | null>): () => Promise<boolean | null>
-    liveProbeFor(id: string): () => Promise<boolean | null>
-    gitWorktreeLiveProbeFor(id: string): () => Promise<boolean | null>
+    scopedProbeForTarget(
+      target: SshPluginTarget,
+      probe: (descriptor: ChamberHostPackageDescriptor) => Promise<boolean | null>,
+    ): (descriptor: ChamberHostPackageDescriptor) => Promise<boolean | null>
+    liveProbeFor(id: string): (descriptor: ChamberHostPackageDescriptor) => Promise<boolean | null>
   }
   // —— W-10 S7（gateway 插件批）新增字段：G 组 3 注册体的装配依赖。编排纯模块
   // （gateway-ipc-shared / gateway-sync-registry / gateway-provider /
@@ -1828,7 +1831,6 @@ export function installIpcHandlers(deps: {
       scopedStatusForTarget,
       scopedProbeForTarget,
       liveProbeFor,
-      gitWorktreeLiveProbeFor,
     },
     syncGatewayChamberPluginsFor,
     // W-10 S8 另增 H 组字段：runLocalPluginMutation（main 装配侧执行叶——runtime
@@ -2727,7 +2729,6 @@ export function installIpcHandlers(deps: {
       () => ownsRemoteTarget(target),
       () => remotePluginList(scopedExecForTarget(target), target.spec, {
         liveProbe: scopedProbeForTarget(target, liveProbeFor(id)),
-        gitWorktreeLiveProbe: scopedProbeForTarget(target, gitWorktreeLiveProbeFor(id)),
       }),
     );
     // readManifest 投影统一掩码 (design 21 §6.2/§6.4, decision 18): the
@@ -3502,15 +3503,6 @@ export function installIpcHandlers(deps: {
     vscodeAvailable: wiredCtx.vscodeAvailable,
     vscodeOpenInNewWindow: wiredCtx.vscodeOpenInNewWindow,
     openVscodeUrl: wiredCtx.openVscodeUrl,
-    stat: p => classifyLocalPath(value => fsp.stat(value), p),
-    openPath: async (p) => {
-      // shell.openPath 部分失败模式（win32/linux）存在 reject 路径——与
-      // openVscodeUrl 封装同款纪律：reject 归一为错误串（loud），绝不落
-      // transport rejection。invokeOpenPath 只返回原始宿主错误，公共
-      // "open path failed" 前缀由 provider 添加一次。
-      return invokeOpenPath(value => deps.edges.openPath(value), p)
-    },
-    showItemInFolder: (p) => deps.edges.showItemInFolder(p),
   }
   deps.ipc.handle(IPC_CHANNELS.OPEN_IN_APPS, () => ({
     apps: listOpenInApps(openInCtx, (appId, error) => {

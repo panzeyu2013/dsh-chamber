@@ -29,7 +29,7 @@ body:
     id: version
     attributes:
       label: 版本（若已知）
-      placeholder: "e.g. 0.1.0"
+      placeholder: "例如 0.2.x（设置 → 通用 中可见）"
 
   - type: textarea
     id: logs

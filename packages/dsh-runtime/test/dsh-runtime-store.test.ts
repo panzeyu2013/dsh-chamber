@@ -1362,7 +1362,9 @@ function makeRichAccountingFixture(base: string): void {
     ['.install-home/home/pnpm.cjs', 'install-home'],
     ['.xdg-cache/cache/data', 'xdg-cache'],
     ['.work-active/work/pid', 'work'],
-    ['.3.0.0.failed/tree/payload', 'failed-tree'],
+    // >1 KiB so the quota-visibility assertion below is filesystem-independent
+    // (directory st_size is 4096 on ext4 but near zero on ZFS/tmpfs).
+    ['.3.0.0.failed/tree/payload', Buffer.alloc(2048, 7)],
     ['failures/1.0.0.json', '{"count":1}'],
     ['.9.9.9.publish-backup-cafebabe/payload', 'publish-backup'],
     ['metadata-recovery-data/tx/evidence/current', 'recovery'],

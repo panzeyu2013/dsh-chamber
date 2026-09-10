@@ -15,6 +15,9 @@ import type {} from '@deepseek-ai/dsh-client-locale/client'
 // Type-only: pulls the slot registry face (ctx.slots) and the sidebar seat
 // ('sidebar.settings') into this program.
 import type {} from '@deepseek-ai/dsh-client-ui-slots'
+import {
+  SETTINGS_SHELL_ENTRY_ID, SETTINGS_SHELL_SHADOW_PRIORITY,
+} from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
 import { SettingsShell } from './SettingsShell.tsx'
 import type { SettingsShellInjected } from './SettingsShell.tsx'
 import { en, zh, type SettingsBridgeKey } from '../locales.ts'
@@ -37,11 +40,15 @@ const NS = 'dsh-chamber.settings.bridge'
 const CONNECTIONS_NS = 'dsh-chamber.settings.connections'
 
 /**
- * Shadow priority: the official SettingsRoot registers at the default 0;
- * the slot core's shadowing rule renders the LOWEST priority winner, so -1
- * replaces the official shell without touching its ledger entry.
+ * Shadow priority: the official SettingsRoot registers at the default 0; the
+ * slot core's shadowing rule renders the LOWEST priority winner, so a lower
+ * value replaces the official shell without touching its ledger entry. 2026-12:
+ * the value is the documented RESERVED range (sidebar shared face
+ * `settings-shell.ts`) — the chamber sidebar watchdog reports any registrant
+ * that goes below it, because the shell is the only renderer of the
+ * connections/general pages and of every per-source plugin settings section.
  */
-const SHADOW_PRIORITY = -1
+const SHADOW_PRIORITY = SETTINGS_SHELL_SHADOW_PRIORITY
 
 /** Required services: the slot registry and the locale face. */
 export const inject = ['slots', 'locale']
@@ -61,7 +68,7 @@ export function apply(ctx: ClientContext): void {
 
   ctx.slots.inject('sidebar.settings', () => ctx.slots.register({
     name: 'sidebar.settings',
-    id: 'chamber-shell',
+    id: SETTINGS_SHELL_ENTRY_ID,
     priority: SHADOW_PRIORITY,
     label: () => t('trigger'),
     inject: injected,

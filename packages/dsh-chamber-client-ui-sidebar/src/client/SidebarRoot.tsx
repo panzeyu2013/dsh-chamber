@@ -122,7 +122,18 @@ import clsx from 'clsx'
 import {
   BrandWordmark, FishLogo, IconNewChatOutline16, IconPanelLeftOutline16, Tooltip,
 } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { SidebarRootComponentProps } from './contract/slots.ts'
+import type { SidebarPanelMetadata, SidebarRootComponentProps } from './contract/slots.ts'
+
+/** Root panel-selection snapshot (alpha.2 `ctx.layout` / `usePanelInfo`). */
+interface PanelInfoSnapshot {
+  readonly activePanelId: string | null
+}
+
+/** Selector hook over the panel selection (framework-bound prop). */
+type PanelSelectorHook = <Selected>(selector: (info: PanelInfoSnapshot) => Selected) => Selected
+
+/** Selector hook over the registered global panels (inject hooks compartment). */
+type PanelsHook = <Selected>(selector: (panels: readonly SidebarPanelMetadata[]) => Selected) => Selected
 import { chamberBridge, type ChamberServerAggregate } from '../shared/aggregate-store.ts'
 import { openErrorKey, withoutOpenError } from '../shared/open-outcome.ts'
 import {
@@ -244,16 +255,64 @@ function useNativeDragAcceptance(active: boolean): void {
   }, [active])
 }
 
+/**
+ * One global-panel row (alpha.2 `sidebar.panellist`): the sidebar owns the
+ * button and the row subscribes only to its own selection state, so a panel
+ * switch re-renders the affected rows instead of the whole column. The icon
+ * comes from the addressing list entry; the label is the shell's resolved
+ * metadata.
+ */
+function PanelRow({
+  id,
+  label,
+  wide,
+  usePanelInfo,
+  selectPanel,
+  renderSlot,
+}: {
+  id: SidebarPanelMetadata['id']
+  label: string
+  wide: boolean
+  usePanelInfo: PanelSelectorHook
+  selectPanel: (id: SidebarPanelMetadata['id']) => void
+  renderSlot: SidebarRootComponentProps['renderSlot']
+}) {
+  const active = usePanelInfo(info => info.activePanelId === id)
+  return (
+    <Tooltip label={label} delayMs={500} disabled={wide}>
+      <button
+        type="button"
+        className={clsx(css.panelRow, active && css.panelActive)}
+        aria-label={label}
+        aria-current={active ? 'page' : undefined}
+        onClick={() => { selectPanel(id) }}
+      >
+        <span className={css.panelGlyph} aria-hidden="true">
+          {renderSlot('sidebar.panellist', { size: wide ? 16 : 18, active }, { only: id })}
+        </span>
+        {wide && <span className={clsx(css.panelTitle, css.wide)}>{label}</span>}
+      </button>
+    </Tooltip>
+  )
+}
+
 export function SidebarRoot({
   collapsed,
   width,
   startSession,
   toggleSidebar,
+  selectPanel,
+  usePanels,
+  usePanelInfo,
   chamberInstanceId,
   directoryBrowserT,
   t,
   renderSlot,
 }: SidebarRootComponentProps) {
+  // alpha.2 global panel axis: the shell renders one row per registration
+  // (empty by default). The selector hook keeps a row's re-render scoped to
+  // its own selection state.
+  const panels = (usePanels as PanelsHook)(snapshot => snapshot)
   // The sidebar's own typecheck program resolves the slots render share
   // through the loose ambient seam (renderSlot is a 2-arg signature there),
   // so the contextual 3-arg occurrence is narrowed locally. The runtime
@@ -928,8 +987,8 @@ export function SidebarRoot({
   }
 
   // chamber (06): fork a session at its last completed turn, refresh, and
-  // open the child — the official row-menu fork→open flow (设计 06 §0 原判
-  // 「回合尾部 forkAt 覆盖、侧边栏不做」本轮契约反转：行内 kebab 增加分叉入口).
+  // open the child — the official row-menu fork→open flow (设计 06 原判
+  // 「回合尾部 forkAt 覆盖、侧边栏不做」，现行契约见 design 05 §2.2：行内 kebab 增加分叉入口).
   // Wire session.fork 只收 { sessionId, atSeq? }（increaseTitle 非 wire
   // 字段），子会话标题 = 源标题；chamber 侧按官方 runtime service 移植的
   // increasedForkTitle 在 fork 成功后对子会话做标题递增 rename（经该来源
@@ -1140,7 +1199,7 @@ export function SidebarRoot({
   // full order, a no-op (vanished pieces / already in place) or blocked (a
   // drop that would split a contiguous repo family — e.g. a foreign workspace
   // into a worktree group's interior, or a worktree out of its own group;
-  // design 08 §11). A blocked/no-op verdict leaves the order untouched. A
+  // design 08 §3.3). A blocked/no-op verdict leaves the order untouched. A
   // MOVE of a git family's main carries the whole family (moved = main first,
   // then its worktrees): each member is re-anchored in order, one wire call
   // per member (insertWorkspaceBefore is single-row; the optimistic override
@@ -1304,7 +1363,20 @@ export function SidebarRoot({
             aria-label={t('session.new.label')}
             onClick={() => { startSession() }}
           >
-            <BrandWordmark />
+            {/* alpha.2 brand holes: the shell keeps the chamber wordmark as
+                the mark fallback and renders nothing for an unregistered
+                name occupant. */}
+            <span className={css.brandIdentity} aria-hidden="true">
+              <span className={css.brandMark}>
+                {renderSlot('sidebar.brand.mark', { size: 24 }, { fallback: <BrandWordmark /> })}
+              </span>
+              {/* No name fallback: the chamber wordmark already carries the
+                  product name in the mark hole, so an unoccupied name hole
+                  renders nothing rather than duplicating it. */}
+              <span className={css.brandName}>
+                {renderSlot('sidebar.brand.name', {}, { fallback: null })}
+              </span>
+            </span>
           </button>
         )}
         {/* Rail resting state is the whale mark; hovering swaps in the panel
@@ -1316,7 +1388,11 @@ export function SidebarRoot({
             aria-label={collapsed ? t('toggle.open') : t('toggle.collapse')}
             onClick={() => { toggleSidebar() }}
           >
-            {!wide && <FishLogo className={css.railFish} size={24} />}
+            {!wide && (
+              <span className={css.railMark} aria-hidden="true">
+                {renderSlot('sidebar.brand.mark', { size: 24 }, { fallback: <FishLogo className={css.railFish} size={24} /> })}
+              </span>
+            )}
             {/* Rail icons render at 18 (figma rail spec); expanded keeps the glyph-native sizes. */}
             <IconPanelLeftOutline16 className={css.panelIcon} size={wide ? 16 : 18} />
           </button>
@@ -1335,6 +1411,24 @@ export function SidebarRoot({
           {wide && <span className={clsx(css.newSessionLabel, css.wide)}>{t('session.new')}</span>}
         </button>
       </Tooltip>
+
+      {/* alpha.2 global panel axis: rows appear only when some plugin
+          registers into `sidebar.panellist` (upstream ships none). */}
+      {panels.length > 0 && (
+        <nav className={css.panelList} aria-label={t('panels.label')}>
+          {panels.map(panel => (
+            <PanelRow
+              key={panel.id}
+              id={panel.id}
+              label={panel.label}
+              wide={wide}
+              usePanelInfo={usePanelInfo}
+              selectPanel={selectPanel}
+              renderSlot={renderSlot}
+            />
+          ))}
+        </nav>
+      )}
 
       {/* The browsing region fills the column between the controls and the
           foot in both states. chamber patch: the multi-source session list
@@ -1415,9 +1509,9 @@ export function SidebarRoot({
         />
       )}
       {/* chamber (design 24 revision 2026-09): the per-source archive
-          manager — lists what is archived (grouped by workspace, §19) and
+          manager — lists what is archived (grouped by workspace, §6) and
           deletes per-row / selected rows (whole set only via the explicit
-          select-all checkbox — no standalone delete-all, §18). Mounted only
+          select-all checkbox — no standalone delete-all, §6). Mounted only
           while a target source is chosen. */}
       {archiveCleanupServerId !== null && (
         <ArchiveManagerDialog

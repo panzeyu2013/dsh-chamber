@@ -3,7 +3,7 @@
  * — pure model first, UI wiring later; design 21 §3 single-model matrix).
  *
  * This module is the pure, UI-free and backend-free core of the unified model
- * view that PluginSyncModal evolves into (§6.6 direction): intent ordering
+ * view that PluginDialog now renders (§6.6 direction): intent ordering
  * (remove before add), batch failure policy (the SINGLE definition shared by
  * the ssh and gateway flows), apply-result normalization for both backends,
  * the gateway task projection → row model, the v1 undo derive (撤销最近变更,
@@ -119,10 +119,10 @@ export function orderApplyOps(input: ApplyInput): OrderedApplyOps {
  * the view attributes per-row outcomes from result.failed against its own
  * submitted rows. The ssh producer's fail-loud ok:true states (verified /
  * ready recheck, plugin-sync.ts applyPlugins ④/⑤) are PRESERVED as markers
- * on the executed summary — the ssh modal renders them loudly today
- * (PluginSyncModal.tsx:837-843) and the unified result surface must keep
- * doing so (ssh 等价 is the refactor's load-bearing wall); the gateway
- * ok:true arm carries no such members.
+ * on the executed summary — the ssh arm renders them loudly today
+ * (PluginDialog.tsx) and the unified result surface must keep doing so
+ * (ssh 等价 is the refactor's load-bearing wall); the gateway ok:true arm
+ * carries no such members.
  */
 
 /** Local structural twin of the desktop gateway_plugin_apply IPC union
@@ -158,7 +158,7 @@ export interface SshApplyResultShape {
  *  renderer global.d.ts DesktopSshSurface.plugin_apply / desktop preload.cts
  *  SshPluginApplyIpcResult — ipc-surface-mirror.test.ts pins the producer
  *  union). NO `{ok:true,cancelled:true}` arm: the ssh apply handler has no
- *  confirmation dialog or picker to dismiss (design 21 §10 — the ssh apply
+ *  confirmation dialog or picker to dismiss (design 21 §7 — the ssh apply
  *  confirm gap is a registered open item), so the twin carries no cancelled
  *  arm — the gateway twin keeps it (classifyGatewayApplyResult). */
 export type SshApplyShape =
@@ -175,9 +175,9 @@ export interface ApplyExecutedSummary {
   deferred: boolean
   /** ssh FAIL-LOUD markers (the ssh producer reports these INSIDE ok:true —
    *  applyPlugins asserts and re-checks readiness itself, plugin-sync.ts
-   *  ④/⑤). The result surface MUST render any present marker (the ssh modal
+   *  ④/⑤). The result surface MUST render any present marker (the ssh arm
    *  equivalents are pluginsVerifyFailed / pluginsReadyFailed / the readyNote
-   *  verbatim, PluginSyncModal.tsx:837-843) — an executed summary with these
+   *  verbatim, PluginDialog.tsx) — an executed summary with these
    *  members absent is the only shape that may render as a clean success.
    *  The gateway ok:true arm never carries them (its execution failures land
    *  in the task journal as per-op rows, never inside the apply result).
@@ -239,7 +239,7 @@ export function classifyGatewayApplyResult(result: GatewayApplyShape, attemptedO
 }
 
 /** Classify a plugin_apply (ssh) IPC result. ok:true with per-item failures
- *  is still an EXECUTED batch (single-item isolation, design 13 §4.5) with
+ *  is still an EXECUTED batch (single-item isolation, design 13 §3) with
  *  partial {done: applied, total: applied + failed} — skipped ops were never
  *  attempted and do not count toward the total. The ssh result carries no
  *  per-name success list, so the executed arm's removed/installed stay []
@@ -256,7 +256,7 @@ export function classifySshApplyResult(result: SshApplyShape, attemptedOps?: num
     return { failed: { error: result.error, partialDone: 0, partialTotal: attemptedOps ?? 0 } }
   }
   // No cancelled arm: plugin_apply has no cancellation path (the ssh apply
-  // confirm gap, design 21 §10) — the only cancelled producer is the gateway
+  // confirm gap, design 21 §7) — the only cancelled producer is the gateway
   // apply, classified by classifyGatewayApplyResult.
   const r = result.result
   const partial = r.failed.length > 0

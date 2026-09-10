@@ -58,7 +58,7 @@ import {
   resetRemoteRuntimeActivityOwners,
   type RemoteRuntimeStatus,
   type RemoteVersions,
-} from '@dsh-chamber/dsh-client-ui-sidebar/shared'
+} from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
 import { projectRemoteRuntimeBadge, remoteRuntimeStatusView } from './gateway-runtime-api.ts'
 import css from './SettingsShell.module.css'
 

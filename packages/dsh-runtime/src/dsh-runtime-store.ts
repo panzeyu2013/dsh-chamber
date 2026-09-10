@@ -24,6 +24,7 @@ import { lstat as lstatP, readdir as readdirP } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { EXACT_SEMVER, assertSafeVersion, isSafeVersion } from './version-safety.ts'
+import { PROBE_TEXT_KEEP_TOKENS } from './runtime-probes.ts'
 import { sanitizeErrorText } from './sanitize-error.ts'
 import {
   CRITICAL_FILE_DIGEST_PATTERN,
@@ -1115,7 +1116,7 @@ export function recordRuntimeFailure(baseDir: string, input: RuntimeFailureInput
     firstFailedAt: previous?.firstFailedAt ?? timestamp,
     lastFailedAt: timestamp,
     occurrences: (previous?.occurrences ?? 0) + 1,
-    error: sanitizeErrorText(input.error instanceof Error ? input.error.message : String(input.error)).slice(0, 2_000),
+    error: sanitizeErrorText(input.error instanceof Error ? input.error.message : String(input.error), PROBE_TEXT_KEEP_TOKENS).slice(0, 2_000),
     restoreOutcome: input.restoreOutcome ?? null,
     snapshotName: input.snapshotPath ? basename(input.snapshotPath) : null,
   }

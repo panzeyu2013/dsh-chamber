@@ -14,6 +14,9 @@
       "@deepseek-ai/dsh-host-directory-picker/types": [
         "../../vendor/harness-packages/@deepseek-ai/dsh-host-directory-picker/src/types.ts"
       ],
+      "@deepseek-ai/dsh-llm/assistant-stream": [
+        "../../vendor/harness-packages/@deepseek-ai/dsh-llm/src/assistant-stream.ts"
+      ],
       "@deepseek-ai/dsh-llm/brand": [
         "../../vendor/harness-packages/@deepseek-ai/dsh-llm/src/brand.ts"
       ],
@@ -22,9 +25,6 @@
       ],
       "@deepseek-ai/dsh-llm/types": [
         "../../vendor/harness-packages/@deepseek-ai/dsh-llm/src/types.ts"
-      ],
-      "@deepseek-ai/dsh-session/chunk-rows": [
-        "../../vendor/harness-packages/@deepseek-ai/dsh-session/src/chunk-rows.ts"
       ],
       "@deepseek-ai/dsh-session/surface": [
         "../../vendor/harness-packages/@deepseek-ai/dsh-session/src/surface.ts"

@@ -147,8 +147,7 @@ import type { TransportInstanceSpec } from './transport-provider.ts'
 import {
   cleanupStaleAskpassHelpers,
   configureSshPasswordStore,
-  probeClientGraphLive,
-  probeGitWorktreeLive,
+  probeChamberHostLive,
   sshProvider,
 } from './ssh-provider.ts'
 import {
@@ -180,6 +179,7 @@ import type { ApplyNowGateInput } from './apply-now-gate.ts'
 import { shouldSkipDiskRefresh } from './disk-evidence-gate.ts'
 import { call } from './control-plane-module.ts'
 import type { ChamberHostPackageSeed, ExecFn, RemoteSpec, StatusFn } from './plugin-sync.ts'
+import type { ChamberHostPackageDescriptor } from './control-plane-module.ts'
 import {
   ARCHIVE_CLEANUP_INSERT_ID,
   ARCHIVE_CLEANUP_PACKAGE_NAME,
@@ -716,9 +716,9 @@ export async function buildHeadlessCtx(
     return path.join(fallbackRepoRoot, 'packages', packageDir)
   }
   const hostDirs = inputs.hostPackageDirs ?? { graph: null, git: null, archive: null }
-  const moduleASourceDir = hostPackageSourceDir('dsh-host-client-graph', hostDirs.graph)
-  const gitWorktreeHostSourceDir = hostPackageSourceDir('dsh-chamber-host-git-worktree', hostDirs.git)
-  const archiveCleanupHostSourceDir = hostPackageSourceDir('dsh-host-archive-cleanup', hostDirs.archive)
+  const moduleASourceDir = hostPackageSourceDir('dsh-chamber-seed-client-graph', hostDirs.graph)
+  const gitWorktreeHostSourceDir = hostPackageSourceDir('dsh-chamber-seed-git-worktree', hostDirs.git)
+  const archiveCleanupHostSourceDir = hostPackageSourceDir('dsh-chamber-seed-archive-cleanup', hostDirs.archive)
   // Host 包种子数组（main 1636-1655 同参：insertId/packageName/sourceDir/label
   // 常量同源——自动 seed 路径（ready 边缘/reseed）与手动 seed 注册体共用）。
   const chamberHostPackageSeeds: ChamberHostPackageSeed[] = [
@@ -778,39 +778,29 @@ export async function buildHeadlessCtx(
     scopeExecToOwnership(execTransport, target.spec.id, () => extraOwner() && ownsRemoteTarget(target))
   const scopedStatusForTarget = (target: RemoteTarget): StatusFn => id =>
     id === target.spec.id && ownsRemoteTarget(target) ? statusTransport(id) : null
-  const scopedProbeForTarget = (target: RemoteTarget, probe: () => Promise<boolean | null>): (() => Promise<boolean | null>) => async () => {
+  const scopedProbeForTarget = (
+    target: RemoteTarget,
+    probe: (descriptor: ChamberHostPackageDescriptor) => Promise<boolean | null>,
+  ): ((descriptor: ChamberHostPackageDescriptor) => Promise<boolean | null>) => async (descriptor) => {
     if (!ownsRemoteTarget(target)) return null
-    const result = await probe()
+    const result = await probe(descriptor)
     return ownsRemoteTarget(target) ? result : null
   }
-  // Live-effect probe for the chamber host-graph state（main 1579-1596 同源——
-  // probeClientGraphLive 纯叶；无 ready 隧道 → null = "not probed"）。
-  const liveProbeFor = (id: string): (() => Promise<boolean | null>) => () => {
+  // Live-effect probe for the chamber host packages（design 09 module A / 08 §11 /
+  // 24 §7，与 main.ts 同源契约）：单个通用隧道 RPC 探针，由控制面注册表自带的
+  // probe 描述子（method + args）驱动——不再有每包分支（合并前 host-graph /
+  // git-worktree 各一个专用探针，main 已泛化）。无 ready 隧道 → null = "未探测"。
+  const liveProbeFor = (id: string): ((descriptor: ChamberHostPackageDescriptor) => Promise<boolean | null>) => async (descriptor) => {
     const url = sm.readyUrl(id)
-    if (url === null) return Promise.resolve(null)
+    if (url === null) return null
     try {
       const parsed = new URL(url)
       const port = parsed.port === '' ? null : Number(parsed.port)
-      if (port === null || !Number.isInteger(port) || port < 1 || port > 65535) return Promise.resolve(null)
-      return probeClientGraphLive({ host: parsed.hostname, port }).then(result =>
-        result === 'live' ? true : result === 'not-live' ? false : null)
+      if (port === null || !Number.isInteger(port) || port < 1 || port > 65535) return null
+      const result = await probeChamberHostLive({ host: parsed.hostname, port }, descriptor.probe.method, descriptor.probe.args)
+      return result === 'live' ? true : result === 'not-live' ? false : null
     } catch {
-      return Promise.resolve(null)
-    }
-  }
-  // Live-effect probe for the SECOND chamber host package（main 1597-1614
-  // 同源——gitWorktree/previewCreate；404 = 确定性 "git-worktree 行未加载"）。
-  const gitWorktreeLiveProbeFor = (id: string): (() => Promise<boolean | null>) => () => {
-    const url = sm.readyUrl(id)
-    if (url === null) return Promise.resolve(null)
-    try {
-      const parsed = new URL(url)
-      const port = parsed.port === '' ? null : Number(parsed.port)
-      if (port === null || !Number.isInteger(port) || port < 1 || port > 65535) return Promise.resolve(null)
-      return probeGitWorktreeLive({ host: parsed.hostname, port }).then(result =>
-        result === 'live' ? true : result === 'not-live' ? false : null)
-    } catch {
-      return Promise.resolve(null)
+      return null
     }
   }
   // 自动 chamber host seed（main 1687-1734 逐字搬：单飞注册表 begin/owns/finish +
@@ -2548,7 +2538,6 @@ export async function buildHeadlessCtx(
       scopedStatusForTarget,
       scopedProbeForTarget,
       liveProbeFor,
-      gitWorktreeLiveProbeFor,
     },
     syncGatewayChamberPluginsFor,
     runLocalPluginMutation,

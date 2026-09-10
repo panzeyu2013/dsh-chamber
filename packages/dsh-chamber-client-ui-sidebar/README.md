@@ -1,4 +1,4 @@
-# @dsh-chamber/dsh-client-ui-sidebar
+# @dsh-chamber/dsh-chamber-client-ui-sidebar
 
 English | [中文](README.zh.md)
 
@@ -7,6 +7,22 @@ ui-sidebar shell whose `sidebar.workspaces` region is replaced by the chamber
 multi-source session/workspace list, registered into the `sidebar` slot in
 place of the official ui-sidebar (which stays untouched in
 `vendor/harness-packages`, never in the boot graph).
+
+## alpha.2 extension holes (brand + global panels)
+
+The shell declares and renders the three holes the alpha.2 official
+`ui-sidebar` adds, so an upstream/third-party registration never dangles:
+
+- `sidebar.brand.mark` / `sidebar.brand.name` — the top-left brand row; the
+  chamber wordmark stays the mark fallback and the name hole renders nothing
+  when unoccupied (the rail renders the mark hole too).
+- `sidebar.panellist` (list) — global main-panel rows. `src/client/panel-source.ts`
+  mirrors the slot ledger into `{id, order, label}` metadata (label thunks are
+  resolved at read time, notifications fire only on change), the shell renders
+  one `PanelRow` per entry, and a click calls `ctx.layout.selectPanel(id)`.
+  Upstream ships an empty list, so the section is invisible by default; the
+  projection and wiring are pinned by `test/panel-source.test.ts` and
+  `test/panel-wiring.test.ts`.
 
 ## Structure
 
@@ -159,7 +175,7 @@ place of the official ui-sidebar (which stays untouched in
 - `src/shared/gateway-runtime.ts` + `src/shared/gateway-runtime-poll.ts` hold the
   pure gateway dsh-runtime core (status parse/fetch, action gates, error
   classification, restart-readiness poll — `pollGatewayReady`, 1 s interval /
-  120 s cap, abort-aware), exported through `@dsh-chamber/dsh-client-ui-sidebar/shared`
+  120 s cap, abort-aware), exported through `@dsh-chamber/dsh-chamber-client-ui-sidebar/shared`
   (`./shared` → `./src/shared/index.ts`, no build step; vite consumers bundle the
   real source).
 - Consumer packages (settings-bridge, connections, git, layout, renderer)

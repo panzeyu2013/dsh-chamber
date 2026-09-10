@@ -10,6 +10,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  markKindFor,
   rawInstanceIdForLaunch,
   usableAppsForSource,
   workspacePathForSession,
@@ -71,4 +72,15 @@ test('launch instance id: canonical dsh/gateway and legacy ssh prefixes are stri
   assert.equal(rawInstanceIdForLaunch('dsh-edge-west'), 'edge-west')
   assert.equal(rawInstanceIdForLaunch('ssh-edge-west'), 'edge-west')
   assert.equal(rawInstanceIdForLaunch('gateway-edge-west'), 'edge-west')
+})
+
+test('mark selection: only official entries use the host catalog icon; the IPC override keeps its product mark', () => {
+  assert.equal(markKindFor({ channel: 'official', displayKind: 'vscode' }, true), 'catalog-icon')
+  assert.equal(markKindFor({ channel: 'official', displayKind: 'vscode' }, false), 'vscode')
+  assert.equal(markKindFor({ channel: 'main', displayKind: 'vscode' }, true), 'vscode',
+    'a main-channel entry must never render a catalog URL (404 placeholder would replace the product mark)')
+  assert.equal(markKindFor({ channel: 'main', displayKind: 'vscode' }, false), 'vscode')
+  assert.equal(markKindFor({ channel: 'main', displayKind: 'file-manager' }, true), 'file-manager')
+  assert.equal(markKindFor({ channel: 'official', displayKind: 'terminal' }, false), 'generic')
+  assert.equal(markKindFor({ channel: 'main', displayKind: 'unknown-family' }, true), 'generic')
 })

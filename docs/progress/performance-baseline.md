@@ -26,7 +26,7 @@ T2（键控单槽合并）、T4（置顶写回防抖）语义由代码注释/设
 | 项 | 值 |
 |---|---|
 | 实测载体 | dev Electron v43.4.0-darwin-arm64（共享平台缓存 dist；`--user-data-dir=packages/desktop/.dev-user-data`；`--remote-debugging-port=9333`）；渲染目标 = dev 控制面 17520/"DSH 本地构建" |
-| 实机 dsh | 内建 vendor runtime `@deepseek-ai/dsh@0.1.2-rc.1`（本地实例自动就绪；host 插件已播种） |
+| 实机 dsh | 内建 vendor runtime `@deepseek-ai/dsh@0.1.5-alpha.2`（本地实例自动就绪；host 插件已播种）。**本次实测的载体就是该版本**——源码线/运行时线此后已整体重锚到 `0.1.5-rc.1`（见 CHANGELOG 发布节），本文 §2 起的数字仍属 alpha.2 代，未在新锚上复测 |
 | 采集手段 | CDP `Runtime.evaluate` + `PerformanceObserver('longtask'/'layout-shift'/'paint'/'resource')` 早期注入（buffered）；UI 驱动 = 合成 MouseEvent；磁盘 = 合成 fixture（`disk-walk-baseline.mjs`） |
 | 脚本 | `scripts/perf/{cdp-lib,boot-measure,switch-measure,eval-measure,disk-walk-baseline,measure-ui}.mjs`（README 见同目录）；数据落 `scripts/perf/data/*.json` |
 | 复测命令 | boot：`node scripts/perf/boot-measure.mjs 3 --out ...`；切换：`switch-measure.mjs`（cycles / `--rapid N`）；归因：`eval-measure.mjs`；磁盘：`disk-walk-baseline.mjs [--async]` |
@@ -188,7 +188,7 @@ disk-walk-after-t3}.json（14 个，全部入库于 scripts/perf/data/，.gitign
 ## 10. 视图保留/后台门控整改（2026 性能清单 A/B/C/D，测量面登记）
 
 本段是后续性能整改（chamber 层，与 P0–P2 同源的第二阶段）的测量锚点。代码面
-落点与语义偏差登记见 STATUS.md 与 design 05 §1 注记；这里只记方法、定案与
+落点与语义偏差登记见 STATUS.md 与 design 05 §4 注记；这里只记方法、定案与
 待实机 A/B 面。清单条目以字母编号（A/B/C/D），不沿用 T 编号（防伪造原案粒度，
 同 §9 纪律）。
 

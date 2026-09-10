@@ -2,7 +2,7 @@
 /**
  * ensure-harness-vendor.mjs — 保证 `vendor/harness-packages/@deepseek-ai/*`
  * workspace 包源树就绪（构建期源码复用：vite 与 gen-typert-remotes 均按源码
- * 解析，见设计 05 §3.6 与 vite.config.mjs）。
+ * 解析，见设计 05 §6 与 vite.config.mjs）。
  *
  * 单一事实来源（2026-09 submodule 化）：`vendor/harness-checkout` 是固定
  * commit 的 git submodule（gitlink 即 pin），本脚本只认这一个源——不读

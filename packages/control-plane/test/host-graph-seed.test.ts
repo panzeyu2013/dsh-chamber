@@ -2,7 +2,7 @@
  * Todo 09 module B unit tests — the control-plane host-graph seed:
  *   - buildPatchOverlay: canonical content, idempotency (in-sync skip),
  *     0600 perms, and self-heal of a drifted overlay;
- *   - ensureHostGraphPackage: first copy, in-sync skip, content-change
+ *   - ensureSeedPackage (host graph): first copy, in-sync skip, content-change
  *     overwrite, absent-source skip, 0600 perms, and fail-loud on a source
  *     that passes the caller's dist gate but misses a declared file;
  *   - webProfileArgs: --patch injection (position before the web flags) and
@@ -22,11 +22,12 @@ import { mkdirSync, readFileSync, readdirSync, statSync, symlinkSync, writeFileS
 import { join } from 'node:path'
 import { tempDir } from './utils.ts'
 import {
+  assertHostSeedEntryNaming,
+  assertHostSeedInsertNaming,
   buildPatchOverlay,
-  ensureHostPackage,
-  ensureHostGraphPackage,
   ensureSeedPackage,
   missingHostPackageInserts,
+  HOST_ARCHIVE_CLEANUP_INSERT,
   HOST_GIT_WORKTREE_INSERT,
   HOST_ARCHIVE_CLEANUP_PACKAGE_NAME,
   HOST_GIT_WORKTREE_PACKAGE_NAME,
@@ -59,14 +60,14 @@ const silentLogger = { log() {}, warn() {}, error() {} }
  */
 const EXPECTED_OVERLAY = `- insert:
     - id: client-graph
-      name: '@dsh-chamber/dsh-host-client-graph'
+      name: '@dsh-chamber/dsh-chamber-seed-client-graph'
 `
 
 const EXPECTED_BOTH_OVERLAY = `- insert:
     - id: client-graph
-      name: '@dsh-chamber/dsh-host-client-graph'
+      name: '@dsh-chamber/dsh-chamber-seed-client-graph'
     - id: git-worktree
-      name: '@dsh-chamber/dsh-host-git-worktree'
+      name: '@dsh-chamber/dsh-chamber-seed-git-worktree'
 `
 
 /** The seeded package location inside a managed dsh home. */
@@ -236,7 +237,7 @@ test('missingHostPackageInserts keeps crossed inline-flow mappings separate', ()
 })
 
 // ---------------------------------------------------------------------------
-// ensureHostGraphPackage
+// ensureSeedPackage (host graph)
 // ---------------------------------------------------------------------------
 
 /** Stage a fake module-A package (package.json + dist/index.js). */
@@ -248,10 +249,10 @@ function stageSource(t: any, distContent = 'export default {}\n') {
   return dir
 }
 
-test('ensureHostGraphPackage copies package.json + dist/index.js once, then skips in-sync copies', t => {
+test('ensureSeedPackage (host-graph) copies package.json + dist/index.js once, then skips in-sync copies', t => {
   const dshHome = tempDir(t)
   const source = stageSource(t, 'export const v = 1\n')
-  const first = ensureHostGraphPackage(dshHome, source)
+  const first = ensureSeedPackage(dshHome, HOST_GRAPH_PACKAGE_NAME, source)
   assert.equal(first, true)
   const target = seedTarget(dshHome)
   assert.equal(
@@ -261,22 +262,22 @@ test('ensureHostGraphPackage copies package.json + dist/index.js once, then skip
   assert.equal(readFileSync(join(target, 'dist', 'index.js'), 'utf8'), 'export const v = 1\n')
   assert.equal(statSync(join(target, 'dist', 'index.js')).mode & 0o777, 0o600)
   const mtime = statSync(join(target, 'dist', 'index.js')).mtimeMs
-  const second = ensureHostGraphPackage(dshHome, source)
+  const second = ensureSeedPackage(dshHome, HOST_GRAPH_PACKAGE_NAME, source)
   assert.equal(second, false)
   assert.equal(statSync(join(target, 'dist', 'index.js')).mtimeMs, mtime, 'an in-sync seed is not rewritten')
 })
 
-test('ensureHostGraphPackage overwrites a drifted dist when the source content changes', t => {
+test('ensureSeedPackage (host-graph) overwrites a drifted dist when the source content changes', t => {
   const dshHome = tempDir(t)
   const source = stageSource(t, 'export const v = 1\n')
-  ensureHostGraphPackage(dshHome, source)
+  ensureSeedPackage(dshHome, HOST_GRAPH_PACKAGE_NAME, source)
   writeFileSync(join(source, 'dist', 'index.js'), 'export const v = 2\n')
-  const wrote = ensureHostGraphPackage(dshHome, source)
+  const wrote = ensureSeedPackage(dshHome, HOST_GRAPH_PACKAGE_NAME, source)
   assert.equal(wrote, true)
   assert.equal(readFileSync(join(seedTarget(dshHome), 'dist', 'index.js'), 'utf8'), 'export const v = 2\n')
 })
 
-test('ensureHostGraphPackage rejects a symlinked profile node_modules anchor without writing through it', t => {
+test('ensureSeedPackage (host-graph) rejects a symlinked profile node_modules anchor without writing through it', t => {
   const dshHome = tempDir(t)
   const source = stageSource(t, 'export const safe = true\n')
   const outside = tempDir(t)
@@ -293,12 +294,12 @@ test('ensureHostGraphPackage rejects a symlinked profile node_modules anchor wit
     }
     throw error
   }
-  assert.throws(() => ensureHostGraphPackage(dshHome, source), /not a real directory/)
+  assert.throws(() => ensureSeedPackage(dshHome, HOST_GRAPH_PACKAGE_NAME, source), /not a real directory/)
   assert.equal(readFileSync(sentinel, 'utf8'), 'DO NOT TOUCH')
   assert.equal(existsSync(join(outside, '@dsh-chamber')), false)
 })
 
-test('ensureHostGraphPackage rejects a symlinked chamber scope without creating the package outside the profile', t => {
+test('ensureSeedPackage (host-graph) rejects a symlinked chamber scope without creating the package outside the profile', t => {
   const dshHome = tempDir(t)
   const source = stageSource(t, 'export const safe = true\n')
   const outside = tempDir(t)
@@ -315,12 +316,12 @@ test('ensureHostGraphPackage rejects a symlinked chamber scope without creating 
     }
     throw error
   }
-  assert.throws(() => ensureHostGraphPackage(dshHome, source), /not a real directory/)
+  assert.throws(() => ensureSeedPackage(dshHome, HOST_GRAPH_PACKAGE_NAME, source), /not a real directory/)
   assert.equal(readFileSync(sentinel, 'utf8'), 'DO NOT TOUCH')
-  assert.equal(existsSync(join(outside, 'dsh-host-client-graph')), false)
+  assert.equal(existsSync(join(outside, 'dsh-chamber-seed-client-graph')), false)
 })
 
-test('ensureHostGraphPackage rejects a symlinked chamber package directory without writing outside the profile', t => {
+test('ensureSeedPackage (host-graph) rejects a symlinked chamber package directory without writing outside the profile', t => {
   const dshHome = tempDir(t)
   const source = stageSource(t, 'export const safe = true\n')
   const outside = tempDir(t)
@@ -337,13 +338,13 @@ test('ensureHostGraphPackage rejects a symlinked chamber package directory witho
     }
     throw error
   }
-  assert.throws(() => ensureHostGraphPackage(dshHome, source), /not a real directory/)
+  assert.throws(() => ensureSeedPackage(dshHome, HOST_GRAPH_PACKAGE_NAME, source), /not a real directory/)
   assert.equal(readFileSync(sentinel, 'utf8'), 'DO NOT TOUCH')
   assert.equal(existsSync(join(outside, 'package.json')), false)
   assert.equal(existsSync(join(outside, 'dist', 'index.js')), false)
 })
 
-test('ensureHostGraphPackage retains the ordinary source boundary for a symlinked package source', t => {
+test('ensureSeedPackage (host-graph) retains the ordinary source boundary for a symlinked package source', t => {
   const dshHome = tempDir(t)
   const source = stageSource(t, 'export const linkedSource = true\n')
   const sourceLink = join(tempDir(t), 'source-link')
@@ -356,26 +357,26 @@ test('ensureHostGraphPackage retains the ordinary source boundary for a symlinke
     }
     throw error
   }
-  assert.equal(ensureHostGraphPackage(dshHome, sourceLink), true)
+  assert.equal(ensureSeedPackage(dshHome, HOST_GRAPH_PACKAGE_NAME, sourceLink), true)
   assert.equal(
     readFileSync(join(seedTarget(dshHome), 'dist', 'index.js'), 'utf8'),
     'export const linkedSource = true\n',
   )
 })
 
-test('ensureHostGraphPackage returns false without touching the profile when the source package is absent', t => {
+test('ensureSeedPackage (host-graph) returns false without touching the profile when the source package is absent', t => {
   const dshHome = tempDir(t)
-  assert.equal(ensureHostGraphPackage(dshHome, join(dshHome, 'no-such-package')), false)
+  assert.equal(ensureSeedPackage(dshHome, HOST_GRAPH_PACKAGE_NAME, join(dshHome, 'no-such-package')), false)
   assert.equal(existsSync(seedTarget(dshHome)), false)
 })
 
-test('ensureHostPackage reuses the seed path for the Git worktree host package', t => {
+test('ensureSeedPackage reuses the seed path for the Git worktree host package', t => {
   const dshHome = tempDir(t)
   const source = tempDir(t)
   mkdirSync(join(source, 'dist'), { recursive: true })
   writeFileSync(join(source, 'package.json'), JSON.stringify({ name: HOST_GIT_WORKTREE_PACKAGE_NAME }))
   writeFileSync(join(source, 'dist', 'index.js'), 'export default {}\n')
-  assert.equal(ensureHostPackage(dshHome, HOST_GIT_WORKTREE_PACKAGE_NAME, source), true)
+  assert.equal(ensureSeedPackage(dshHome, HOST_GIT_WORKTREE_PACKAGE_NAME, source), true)
   assert.equal(
     readFileSync(join(dshHome, 'profiles', 'web', 'node_modules', HOST_GIT_WORKTREE_PACKAGE_NAME, 'dist', 'index.js'), 'utf8'),
     'export default {}\n',
@@ -672,10 +673,15 @@ test('createControlPlane.startLocal() seeds ALL THREE host packages behind one m
     // probeDomains is documented pure metadata (never serialized into the
     // overlay) — the activation-contract lockstep (architecture-review M3:
     // catches archiveCleanup/preview↔probe drift) is asserted at the seed
-    // SOURCE: the third row must name the zero-cost probe endpoint.
+    // SOURCE. Since the seed rows DERIVE from the registry
+    // (CHAMBER_HOST_PACKAGES), the probe endpoint lives in the registry row
+    // and the call site must carry no parallel literal at all.
+    const registrySource = readFileSync(join(process.cwd(), 'src', 'host-graph-seed.ts'), 'utf8')
+    assert.ok(registrySource.includes(`probe: { method: 'archiveCleanup/probe'`), 'registry row names the probe endpoint')
+    assert.ok(!registrySource.includes('archiveCleanup/preview'), 'no stale preview probe domain in the registry')
     const seedSource = readFileSync(join(process.cwd(), 'src', 'index.ts'), 'utf8')
-    assert.ok(seedSource.includes(`probeDomains: ['archiveCleanup/probe']`), 'seed row names the probe endpoint')
-    assert.ok(!seedSource.includes(`probeDomains: ['archiveCleanup/preview']`), 'no stale preview probe domain in the seed')
+    assert.ok(seedSource.includes('CHAMBER_HOST_PACKAGES'), 'the seed derives its rows from the registry, never a parallel row table')
+    assert.ok(!/probeDomains: \['/.test(seedSource), 'the seed call site must not hand-write a probe domain literal')
     assert.equal(
       readFileSync(join(dir, 'dsh-home', 'profiles', 'web', 'node_modules', HOST_ARCHIVE_CLEANUP_PACKAGE_NAME, 'dist', 'index.js'), 'utf8'),
       'export const archiveCleanup = 1\n',
@@ -844,10 +850,10 @@ test('createControlPlane.startLocal() skips an absent extra seed entry (stub) wi
 })
 
 // ---------------------------------------------------------------------------
-// ensureHostGraphPackage: fail-loud on a source missing a declared file
+// ensureSeedPackage (host graph): fail-loud on a source missing a declared file
 // ---------------------------------------------------------------------------
 
-test('ensureHostGraphPackage throws when the source exists but a declared file is missing', t => {
+test('ensureSeedPackage (host-graph) throws when the source exists but a declared file is missing', t => {
   const dshHome = tempDir(t)
   // dist/index.js present but package.json missing — the caller's gate (dist
   // artifact only) passes, so this is the shipped-but-broken module A case:
@@ -855,12 +861,12 @@ test('ensureHostGraphPackage throws when the source exists but a declared file i
   const distOnly = tempDir(t)
   mkdirSync(join(distOnly, 'dist'), { recursive: true })
   writeFileSync(join(distOnly, 'dist', 'index.js'), 'export const v = 1\n')
-  assert.throws(() => ensureHostGraphPackage(dshHome, distOnly), /missing in package/)
+  assert.throws(() => ensureSeedPackage(dshHome, HOST_GRAPH_PACKAGE_NAME, distOnly), /missing in package/)
   // package.json present but dist/index.js missing — the same fail-loud
   // contract on the other declared file.
   const manifestOnly = tempDir(t)
   writeFileSync(join(manifestOnly, 'package.json'), JSON.stringify({ name: HOST_GRAPH_PACKAGE_NAME, version: '0.0.0', main: 'dist/index.js' }) + '\n')
-  assert.throws(() => ensureHostGraphPackage(dshHome, manifestOnly), /missing in package/)
+  assert.throws(() => ensureSeedPackage(dshHome, HOST_GRAPH_PACKAGE_NAME, manifestOnly), /missing in package/)
 })
 
 // ---------------------------------------------------------------------------
@@ -958,6 +964,77 @@ test('createControlPlane.startLocal() lets an extra seed entry shadow the base h
       'utf8',
     )
     assert.equal(seeded, 'export const synced = 1\n')
+  } finally {
+    await plane.stop()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Batch 1 naming unification (2026-09): the fail-loud host-seed namespace pin
+// ---------------------------------------------------------------------------
+
+test('assertHostSeedInsertNaming pins the canonical dsh-chamber-seed-<loader-id> namespace', () => {
+  assert.doesNotThrow(
+    () => assertHostSeedInsertNaming([HOST_GRAPH_INSERT, HOST_GIT_WORKTREE_INSERT, HOST_ARCHIVE_CLEANUP_INSERT]),
+  )
+  // A pre-rename name under the SAME loader id — the row shape an upgraded
+  // remote profile carries. The registry must refuse to seed it, not resolve
+  // it silently.
+  assert.throws(
+    () => assertHostSeedInsertNaming([{ id: 'client-graph', name: '@dsh-chamber/dsh-host-client-graph' }]),
+    /dsh-chamber-seed-<loader-id>/,
+  )
+  // Canonical prefix, wrong loader id: the suffix IS the loader id, so the
+  // seeded directory, the overlay row and the activation-probe domain agree.
+  assert.throws(
+    () => assertHostSeedInsertNaming([{ id: 'git-worktree', name: '@dsh-chamber/dsh-chamber-seed-client-graph' }]),
+    /dsh-chamber-seed-<loader-id>/,
+  )
+})
+
+test('assertHostSeedEntryNaming binds kind host only — the client mobile slot is exempt', () => {
+  const host = { insert: HOST_GRAPH_INSERT, kind: 'host' as const, source: 'packaged' as const, sourceDir: null }
+  const client = {
+    insert: { id: 'mobile', name: '@dsh-chamber/dsh-client-ui-mobile' },
+    kind: 'client' as const,
+    source: 'packaged' as const,
+    sourceDir: null,
+  }
+  assert.doesNotThrow(() => assertHostSeedEntryNaming([host, client]))
+  assert.throws(
+    () => assertHostSeedEntryNaming([
+      { ...host, insert: { id: 'client-graph', name: '@dsh-chamber/dsh-host-client-graph' } },
+      client,
+    ]),
+    /dsh-chamber-seed-<loader-id>/,
+  )
+})
+
+test('the seed registry refuses a non-canonical host entry before any profile write', async t => {
+  const dir = tempDir(t)
+  const plane = createControlPlane({
+    stateDir: dir,
+    port: 0,
+    dshWorkspacePath: join(dir, 'dsh'),
+    hostGraphPackageSourceDir: stageSource(t),
+    hostGitWorktreePackageSourceDir: join(dir, 'no-git-package'),
+    hostArchiveCleanupPackageSourceDir: join(dir, 'no-archive-cleanup-package'),
+    extraSeedEntries: [{
+      insert: { id: 'client-graph', name: '@dsh-chamber/dsh-host-client-graph' },
+      kind: 'host',
+      source: 'desktop-synced',
+      sourceDir: null,
+    }],
+    logger: silentLogger,
+    localConnectionDeps: healthyLocalConnectionDeps,
+  })
+  try {
+    // The registry is resolved at plane start (the artifact diagnostic loop)
+    // and again per spawn — the non-canonical entry aborts the first of them.
+    await assert.rejects(plane.start(), /dsh-chamber-seed-<loader-id>/)
+    // Fail-loud happens before the seed writes: no overlay, no profile copy.
+    assert.equal(existsSync(join(dir, HOST_GRAPH_PATCH_FILENAME)), false)
+    assert.equal(existsSync(seedTarget(join(dir, 'dsh-home'))), false)
   } finally {
     await plane.stop()
   }

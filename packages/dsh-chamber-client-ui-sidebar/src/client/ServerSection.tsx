@@ -534,7 +534,7 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
               // single authority for every surface — the marker below, the
               // onDragOver gate, the top indicator and the commit all ask
               // the same verdict: blocked positions (a drop that would split
-              // a contiguous repo family, design 08 §11) never render a
+              // a contiguous repo family, design 08 §3.3) never render a
               // marker and never become the target.
               const workspaceDropBlocked = (targetId: string, half: 'before' | 'after'): boolean => {
                 if (workspaceDrag === null || workspaceDrag.sourceId !== server.id) return false

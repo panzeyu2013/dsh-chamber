@@ -7,7 +7,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import {
@@ -15,6 +15,7 @@ import {
   ELECTRON_CACHE_ROOT_ENV,
   ELECTRON_DIST_ENV,
   ELECTRON_PKG_DIR_ENV,
+  RENDERER_DIST_RELATIVE,
   distIsUsable,
   effectiveDownloadArch,
   ensureSharedElectronDist,
@@ -160,3 +161,24 @@ test('ensure returns cached when marker and executable match', () =>
     assert.equal(result.status, 'cached')
     assert.equal(result.distDir, dist)
   }))
+
+test('the dev renderer artifact path is locked to vite outDir and main.ts webDistDir', () => {
+  // 2026-09 efficiency review: the launcher's lazy-build check pointed at
+  // `dist/index.html` long after the composite renderer moved its output to
+  // `dist/web`, so every `pnpm run dev*` paid a full build:renderer (~9 s
+  // warm). These three sources must stay in step.
+  const repoRoot = path.resolve(import.meta.dirname, '..', '..', '..')
+  const viteConfig = readFileSync(path.join(repoRoot, 'packages/renderer/vite.config.mjs'), 'utf8')
+  const outDir = /outDir:\s*'([^']+)'/.exec(viteConfig)?.[1]
+  assert.equal(outDir, '../desktop/dist/web', 'renderer outDir moved — update RENDERER_DIST_RELATIVE and the launcher')
+  const builtDist = path.resolve(repoRoot, 'packages/renderer', outDir)
+  const launcherDist = path.resolve(repoRoot, 'packages/desktop', ...RENDERER_DIST_RELATIVE.slice(0, -1))
+  assert.equal(launcherDist, builtDist, 'the launcher must look at the directory the renderer build writes')
+  assert.equal(RENDERER_DIST_RELATIVE.at(-1), 'index.html', 'the launcher entry artifact is the built index.html')
+  const mainTs = readFileSync(path.join(repoRoot, 'packages/desktop/main.ts'), 'utf8')
+  assert.match(
+    mainTs,
+    /webDistDir:\s*path\.join\(pkgDir, 'dist', 'web'\)/,
+    'main.ts webDistDir moved — the control plane serves a different directory than the launcher checks',
+  )
+})

@@ -63,10 +63,17 @@ export interface InstanceViewProps {
    * dispose，重 boot 干净）。
    */
   retryToken?: number
+  /**
+   * 来源就绪门（2026-09-10）：交给实例 shell 的取图重试——实例仍在启动时
+   * （冷启动 / 重启跨越窗口）先等它就绪再取客户端插件图，而不是在固定预算用尽后
+   * 静默少一片插件（`ui-chat` 会因此永久 PENDING、对话视图不注册）。
+   */
+  waitForServing?: (instanceId: string) => Promise<boolean>
 }
 
 export default function InstanceView({
   instanceId, basePath, sourceFingerprint, transport, active, label, onSettled, onStateChange, retryToken,
+  waitForServing,
 }: InstanceViewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const startedRef = useRef(false)
@@ -97,7 +104,7 @@ export default function InstanceView({
     // 不得覆盖新尝试已经落地的健康状态。
     const bootToken = bootTokenRef.current + 1
     bootTokenRef.current = bootToken
-    void bootInstanceShell(instanceId, basePath, el, setShell, sourceFingerprint, transport).then((next) => {
+    void bootInstanceShell(instanceId, basePath, el, setShell, sourceFingerprint, transport, { waitForServing }).then((next) => {
       // 卸载后到达的 settle 一律丢弃（视图已回收，App 已清理该视图状态；
       // 陈旧上报会污染重加视图的失败覆盖层判定）；被更新的尝试取代的迟到
       // settle 同样丢弃。
@@ -112,7 +119,7 @@ export default function InstanceView({
       // 失败呈现由 App 统一负责（覆盖层）：每次 settle 上报最终状态。
       onStateChange?.(instanceId, next)
     })
-  }, [instanceId, basePath, sourceFingerprint, transport, shell, onSettled, onStateChange])
+  }, [instanceId, basePath, sourceFingerprint, transport, shell, onSettled, onStateChange, waitForServing])
 
   // 重试令牌：App 失败覆盖层的「重试」→ 递增令牌 → 复位 boot 状态，boot
   // effect 观察 shell 变化重新启动。

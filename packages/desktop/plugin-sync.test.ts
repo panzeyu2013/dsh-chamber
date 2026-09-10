@@ -32,6 +32,7 @@ import {
   describePluginApplyConfirmation,
   describeSeedConfirmation,
   ExactOwnershipRegistry,
+  foldLegacyHostInserts,
   GIT_WORKTREE_INSERT_ID,
   GIT_WORKTREE_PACKAGE_NAME,
   isAllowedLocalFileSpec,
@@ -54,10 +55,56 @@ import {
   scopeExecToOwnership,
   runWithFinalOwnership,
   seedRemoteChamberHostPackages,
-  seedRemoteHostGraph,
   PLUGIN_SPEC_PATTERN,
   PLUGIN_NAME_PATTERN,
+  CHAMBER_HOST_PACKAGES,
+  type ChamberHostPackageState,
+  type ChamberInjectionState,
 } from './plugin-sync.ts'
+
+/** One chamber host package's state from the dynamic registry projection. */
+function chamberPackageOf(chamber: ChamberInjectionState, name: string): ChamberHostPackageState {
+  assert.ok(chamber.ok, 'chamber probe failed')
+  const found = chamber.packages.find(pkg => pkg.name === name)
+  assert.ok(found !== undefined, `chamber package ${name} missing from the projection`)
+  return found
+}
+
+/** The dynamic registry projection (one row per CHAMBER_HOST_PACKAGES entry) —
+ *  the removed fixed `hostGraph`/`gitWorktree` pair must not come back, so
+ *  redaction fixtures build the real shape instead of casting a stale literal
+ *  under `as never`. */
+function chamberProjection(
+  overrides: Record<string, Partial<ChamberHostPackageState>> = {},
+): ChamberInjectionState {
+  return {
+    ok: true,
+    packages: CHAMBER_HOST_PACKAGES.map(descriptor => ({
+      insertId: descriptor.insert.id,
+      name: descriptor.insert.name,
+      probe: descriptor.probe.method,
+      installed: false,
+      patched: false,
+      version: null,
+      live: null,
+      ...(overrides[descriptor.insert.name] ?? {}),
+    })),
+  }
+}
+
+function chamberFacts(chamber: ChamberInjectionState): Record<string, { installed: boolean; patched: boolean; version: string | null; live: boolean | null }> {
+  assert.ok(chamber.ok, 'chamber probe failed')
+  return Object.fromEntries(chamber.packages.map(pkg => [pkg.name, {
+    installed: pkg.installed, patched: pkg.patched, version: pkg.version, live: pkg.live,
+  }]))
+}
+
+/** The four probed facts of one package (the registry identity fields are
+ *  covered by the registry-driven assertions below). */
+function chamberStateOf(chamber: ChamberInjectionState, name: string): { installed: boolean; patched: boolean; version: string | null; live: boolean | null } {
+  const pkg = chamberPackageOf(chamber, name)
+  return { installed: pkg.installed, patched: pkg.patched, version: pkg.version, live: pkg.live }
+}
 import type { ChamberHostPackageSeed, ExecFn, ExecResult, SshApplyJournalSink, StatusFn, RemoteSpec } from './plugin-sync.ts'
 import type { TransportRunPayload } from './transport-provider.ts'
 import { NotificationSourceIncarnations } from './notifications.ts'
@@ -349,6 +396,32 @@ test('resolveLocalMaterializeDirectory: MAIN resolves the manifest entry and enf
   if (!mismatched.ok) assert.match(mismatched.error, /does not match/)
 })
 
+test('localPluginList: the chamber projection is REGISTRY-DRIVEN — one row per control-plane host package (never a hardcoded pair)', () => {
+  // The user-reported gap (2026-09): the plugin-management page showed only
+  // client-graph + git-worktree because the projection hardcoded the pair, so
+  // the seeded archive-cleanup package was invisible. The projection now maps
+  // the control-plane registry 1:1 — a NEW registry row appears here (and in
+  // the page) with no code change.
+  const base = tempDir()
+  const home = join(base, 'home')
+  writeLocalProfile(home, {}, [])
+  const manifest = localPluginList(home)
+  assert.ok(manifest.chamber.ok)
+  if (manifest.chamber.ok) {
+    assert.deepEqual(
+      manifest.chamber.packages.map(pkg => ({ insertId: pkg.insertId, name: pkg.name, probe: pkg.probe })),
+      CHAMBER_HOST_PACKAGES.map(descriptor => ({
+        insertId: descriptor.insert.id,
+        name: descriptor.insert.name,
+        probe: descriptor.probe.method,
+      })),
+      'the projection must mirror the registry exactly (order included)',
+    )
+    assert.equal(manifest.chamber.packages.length, CHAMBER_HOST_PACKAGES.length)
+    assert.ok(manifest.chamber.packages.some(pkg => pkg.name === ARCHIVE_CLEANUP_PACKAGE_NAME), 'the third host package is projected')
+  }
+})
+
 test('localPluginList: chamber host-graph state — installed + patched', () => {
   // Nest the dsh home under a base dir so the `--patch` overlay (which lives
   // BESIDE the home: dirname(home)/dsh-chamber-graph.patch.yml) stays inside
@@ -358,12 +431,16 @@ test('localPluginList: chamber host-graph state — installed + patched', () => 
   const profileDir = writeLocalProfile(home, {}, [])
   const moduleADir = join(profileDir, 'node_modules', CLIENT_GRAPH_PACKAGE_NAME)
   mkdirSync(join(moduleADir, 'dist'), { recursive: true })
-  writeFileSync(join(moduleADir, 'package.json'), '{"name":"@dsh-chamber/dsh-host-client-graph"}')
+  writeFileSync(join(moduleADir, 'package.json'), '{"name":"@dsh-chamber/dsh-chamber-seed-client-graph"}')
   writeFileSync(join(moduleADir, 'dist', 'index.js'), 'export const graph = 1\n')
-  writeFileSync(join(base, 'dsh-chamber-graph.patch.yml'), '- insert:\n    - id: client-graph\n')
+  writeFileSync(join(base, 'dsh-chamber-graph.patch.yml'), "- insert:\n    - id: client-graph\n      name: '@dsh-chamber/dsh-chamber-seed-client-graph'\n")
 
   const manifest = localPluginList(home)
-  assert.deepEqual(manifest.chamber, { ok: true, hostGraph: { installed: true, patched: true, version: null, live: null }, gitWorktree: { installed: false, patched: false, version: null, live: null } })
+  assert.deepEqual(chamberFacts(manifest.chamber), {
+    [CLIENT_GRAPH_PACKAGE_NAME]: { installed: true, patched: true, version: null, live: null },
+    [GIT_WORKTREE_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
+    [ARCHIVE_CLEANUP_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
+  })
 })
 
 test('localPluginList: chamber host-graph state — absent = not injected (honest, never "done")', () => {
@@ -371,7 +448,11 @@ test('localPluginList: chamber host-graph state — absent = not injected (hones
   const home = join(base, 'home')
   writeLocalProfile(home, {}, [])
   const manifest = localPluginList(home)
-  assert.deepEqual(manifest.chamber, { ok: true, hostGraph: { installed: false, patched: false, version: null, live: null }, gitWorktree: { installed: false, patched: false, version: null, live: null } })
+  assert.deepEqual(chamberFacts(manifest.chamber), {
+    [CLIENT_GRAPH_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
+    [GIT_WORKTREE_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
+    [ARCHIVE_CLEANUP_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
+  })
 })
 
 test('localPluginList: chamber host-graph state — package.json alone is a half-injected module A (installed:false)', () => {
@@ -383,11 +464,15 @@ test('localPluginList: chamber host-graph state — package.json alone is a half
   const profileDir = writeLocalProfile(home, {}, [])
   const moduleADir = join(profileDir, 'node_modules', CLIENT_GRAPH_PACKAGE_NAME)
   mkdirSync(moduleADir, { recursive: true })
-  writeFileSync(join(moduleADir, 'package.json'), '{"name":"@dsh-chamber/dsh-host-client-graph"}')
-  writeFileSync(join(base, 'dsh-chamber-graph.patch.yml'), '- insert:\n    - id: client-graph\n')
+  writeFileSync(join(moduleADir, 'package.json'), '{"name":"@dsh-chamber/dsh-chamber-seed-client-graph"}')
+  writeFileSync(join(base, 'dsh-chamber-graph.patch.yml'), "- insert:\n    - id: client-graph\n      name: '@dsh-chamber/dsh-chamber-seed-client-graph'\n")
 
   const manifest = localPluginList(home)
-  assert.deepEqual(manifest.chamber, { ok: true, hostGraph: { installed: false, patched: true, version: null, live: null }, gitWorktree: { installed: false, patched: false, version: null, live: null } })
+  assert.deepEqual(chamberFacts(manifest.chamber), {
+    [CLIENT_GRAPH_PACKAGE_NAME]: { installed: false, patched: true, version: null, live: null },
+    [GIT_WORKTREE_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
+    [ARCHIVE_CLEANUP_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
+  })
 })
 
 test('localPluginList: chamber host-graph version is read from the seeded module A manifest', () => {
@@ -396,15 +481,15 @@ test('localPluginList: chamber host-graph version is read from the seeded module
   const profileDir = writeLocalProfile(home, {}, [])
   const moduleADir = join(profileDir, 'node_modules', CLIENT_GRAPH_PACKAGE_NAME)
   mkdirSync(join(moduleADir, 'dist'), { recursive: true })
-  writeFileSync(join(moduleADir, 'package.json'), '{"name":"@dsh-chamber/dsh-host-client-graph","version":"0.1.2"}')
+  writeFileSync(join(moduleADir, 'package.json'), '{"name":"@dsh-chamber/dsh-chamber-seed-client-graph","version":"0.1.2"}')
   writeFileSync(join(moduleADir, 'dist', 'index.js'), 'export const graph = 1\n')
   writeFileSync(join(base, 'dsh-chamber-graph.patch.yml'), '- insert:\n    - id: client-graph\n')
 
   const manifest = localPluginList(home)
   assert.ok(manifest.chamber.ok)
   if (manifest.chamber.ok) {
-    assert.equal(manifest.chamber.hostGraph.version, '0.1.2', 'the seeded package version is projected')
-    assert.equal(manifest.chamber.hostGraph.live, null, 'local side has no separate liveness probe')
+    assert.equal(chamberPackageOf(manifest.chamber, CLIENT_GRAPH_PACKAGE_NAME).version, '0.1.2', 'the seeded package version is projected')
+    assert.equal(chamberPackageOf(manifest.chamber, CLIENT_GRAPH_PACKAGE_NAME).live, null, 'local side has no separate liveness probe')
   }
 })
 
@@ -425,25 +510,25 @@ test('localPluginList: git-worktree patched is CONTENT-aware — a stale overlay
     writeFileSync(join(pkgDir, 'dist', 'index.js'), 'export const x = 1\n')
   }
   // Stale overlay: only the client-graph row.
-  writeFileSync(join(base, 'dsh-chamber-graph.patch.yml'), "- insert:\n    - id: client-graph\n      name: '@dsh-chamber/dsh-host-client-graph'\n")
+  writeFileSync(join(base, 'dsh-chamber-graph.patch.yml'), "- insert:\n    - id: client-graph\n      name: '@dsh-chamber/dsh-chamber-seed-client-graph'\n")
   const stale = localPluginList(home)
   assert.ok(stale.chamber.ok)
   if (stale.chamber.ok) {
-    assert.deepEqual(stale.chamber.gitWorktree, { installed: true, patched: false, version: null, live: null })
+    assert.deepEqual(chamberStateOf(stale.chamber, GIT_WORKTREE_PACKAGE_NAME), { installed: true, patched: false, version: null, live: null })
   }
   // Regenerated overlay with BOTH rows → patched.
-  writeFileSync(join(base, 'dsh-chamber-graph.patch.yml'), "- insert:\n    - id: client-graph\n      name: '@dsh-chamber/dsh-host-client-graph'\n    - id: git-worktree\n      name: '@dsh-chamber/dsh-host-git-worktree'\n")
+  writeFileSync(join(base, 'dsh-chamber-graph.patch.yml'), "- insert:\n    - id: client-graph\n      name: '@dsh-chamber/dsh-chamber-seed-client-graph'\n    - id: git-worktree\n      name: '@dsh-chamber/dsh-chamber-seed-git-worktree'\n")
   const fresh = localPluginList(home)
   assert.ok(fresh.chamber.ok)
   if (fresh.chamber.ok) {
-    assert.deepEqual(fresh.chamber.gitWorktree, { installed: true, patched: true, version: null, live: null })
+    assert.deepEqual(chamberStateOf(fresh.chamber, GIT_WORKTREE_PACKAGE_NAME), { installed: true, patched: true, version: null, live: null })
   }
   // Absent overlay → not patched.
   writeFileSync(join(base, 'dsh-chamber-graph.patch.yml'), '')
   const none = localPluginList(home)
   assert.ok(none.chamber.ok)
   if (none.chamber.ok) {
-    assert.equal(none.chamber.gitWorktree.patched, false)
+    assert.equal(chamberPackageOf(none.chamber, GIT_WORKTREE_PACKAGE_NAME).patched, false)
   }
 })
 
@@ -458,21 +543,24 @@ test('remotePluginList: parses dependencies + bundles from cat output', async ()
       if (path.endsWith('/profiles/web/package.json')) {
         return ok(JSON.stringify({ dependencies: { foo: '^1.0.0' }, dsh: { profile: { bundles: ['foo'] } } }))
       }
-      if (path.includes('@dsh-chamber/dsh-host-client-graph/dist/index.js')) {
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-client-graph/dist/index.js')) {
         return ok('export const graph = 1\n')
       }
-      if (path.includes('@dsh-chamber/dsh-host-client-graph/package.json')) {
-        return ok('{"name":"@dsh-chamber/dsh-host-client-graph"}')
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-client-graph/package.json')) {
+        return ok('{"name":"@dsh-chamber/dsh-chamber-seed-client-graph"}')
       }
-      if (path.includes('@dsh-chamber/dsh-host-git-worktree/dist/index.js')) {
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-git-worktree/dist/index.js')) {
         return ok('export const git = 1\n')
       }
-      if (path.includes('@dsh-chamber/dsh-host-git-worktree/package.json')) {
-        return ok('{"name":"@dsh-chamber/dsh-host-git-worktree"}')
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-git-worktree/package.json')) {
+        return ok('{"name":"@dsh-chamber/dsh-chamber-seed-git-worktree"}')
+      }
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-archive-cleanup')) {
+        return err(`run command failed (exit 1): cat: ${path}: No such file or directory`)
       }
       if (path.endsWith('/cordis.patch.yml')) {
         // A fully-seeded machine: BOTH chamber boot rows present.
-        return ok("- insert:\n    - id: client-graph\n      name: '@dsh-chamber/dsh-host-client-graph'\n    - id: git-worktree\n      name: '@dsh-chamber/dsh-host-git-worktree'\n")
+        return ok("- insert:\n    - id: client-graph\n      name: '@dsh-chamber/dsh-chamber-seed-client-graph'\n    - id: git-worktree\n      name: '@dsh-chamber/dsh-chamber-seed-git-worktree'\n")
       }
     }
     return err(`unexpected cat ${payload?.argv?.[0]}`)
@@ -485,7 +573,11 @@ test('remotePluginList: parses dependencies + bundles from cat output', async ()
       bundles: ['foo'],
       profileExists: true,
       error: undefined,
-      chamber: { ok: true, hostGraph: { installed: true, patched: true, version: null, live: null }, gitWorktree: { installed: true, patched: true, version: null, live: null } },
+      chamber: { ok: true, packages: [
+        { insertId: 'client-graph', name: CLIENT_GRAPH_PACKAGE_NAME, probe: 'clientGraph/graph', installed: true, patched: true, version: null, live: null },
+        { insertId: 'git-worktree', name: GIT_WORKTREE_PACKAGE_NAME, probe: 'gitWorktree/previewCreate', installed: true, patched: true, version: null, live: null },
+        { insertId: 'archive-cleanup', name: ARCHIVE_CLEANUP_PACKAGE_NAME, probe: 'archiveCleanup/probe', installed: false, patched: false, version: null, live: null },
+      ] },
     },
   })
 })
@@ -500,7 +592,11 @@ test('remotePluginList: ENOENT → profileExists:false, ssh failure → {ok:fals
         dependencies: {},
         bundles: [],
         profileExists: false,
-        chamber: { ok: true, hostGraph: { installed: false, patched: false, version: null, live: null }, gitWorktree: { installed: false, patched: false, version: null, live: null } },
+        chamber: { ok: true, packages: [
+        { insertId: 'client-graph', name: CLIENT_GRAPH_PACKAGE_NAME, probe: 'clientGraph/graph', installed: false, patched: false, version: null, live: null },
+        { insertId: 'git-worktree', name: GIT_WORKTREE_PACKAGE_NAME, probe: 'gitWorktree/previewCreate', installed: false, patched: false, version: null, live: null },
+        { insertId: 'archive-cleanup', name: ARCHIVE_CLEANUP_PACKAGE_NAME, probe: 'archiveCleanup/probe', installed: false, patched: false, version: null, live: null },
+      ] },
       },
     },
   )
@@ -517,7 +613,7 @@ test('remotePluginList: a zh_CN-locale remote ENOENT ("没有那个文件或目�
   // instead of `No such file or directory`. Before the locale-broadened
   // ENOENT_PATTERN this surfaced as "git-worktree probe failed: run command
   // failed (exit 1): cat: …: 没有那个文件或目录" instead of 未注入.
-  const zhEnoent: ExecFn = async () => err('run command failed (exit 1): cat: /home/zeyu/.dsh/profiles/node_modules/@dsh-chamber/dsh-host-git-worktree/package.json: 没有那个文件或目录')
+  const zhEnoent: ExecFn = async () => err('run command failed (exit 1): cat: /home/zeyu/.dsh/profiles/node_modules/@dsh-chamber/dsh-chamber-seed-git-worktree/package.json: 没有那个文件或目录')
   assert.deepEqual(
     await remotePluginList(zhEnoent, { id: 's1', remoteDshHome: null }),
     {
@@ -526,7 +622,11 @@ test('remotePluginList: a zh_CN-locale remote ENOENT ("没有那个文件或目�
         dependencies: {},
         bundles: [],
         profileExists: false,
-        chamber: { ok: true, hostGraph: { installed: false, patched: false, version: null, live: null }, gitWorktree: { installed: false, patched: false, version: null, live: null } },
+        chamber: { ok: true, packages: [
+        { insertId: 'client-graph', name: CLIENT_GRAPH_PACKAGE_NAME, probe: 'clientGraph/graph', installed: false, patched: false, version: null, live: null },
+        { insertId: 'git-worktree', name: GIT_WORKTREE_PACKAGE_NAME, probe: 'gitWorktree/previewCreate', installed: false, patched: false, version: null, live: null },
+        { insertId: 'archive-cleanup', name: ARCHIVE_CLEANUP_PACKAGE_NAME, probe: 'archiveCleanup/probe', installed: false, patched: false, version: null, live: null },
+      ] },
       },
     },
   )
@@ -545,10 +645,12 @@ test('remotePluginList: chamber probe — installed but the boot-layer insert mi
     if (action === 'run' && payload?.op === 'exec' && payload.command === 'cat') {
       const path = payload.argv?.[0] ?? ''
       if (path.endsWith('/profiles/web/package.json')) return ok('{}')
-      if (path.includes('@dsh-chamber/dsh-host-client-graph/dist/index.js')) return ok('export const graph = 1\n')
-      if (path.includes('@dsh-chamber/dsh-host-client-graph/package.json')) return ok('{"name":"@dsh-chamber/dsh-host-client-graph"}')
-      if (path.includes('@dsh-chamber/dsh-host-git-worktree/dist/index.js')) return ok('export const git = 1\n')
-      if (path.includes('@dsh-chamber/dsh-host-git-worktree/package.json')) return ok('{"name":"@dsh-chamber/dsh-host-git-worktree"}')
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-archive-cleanup/package.json')) return err(`run command failed (exit 1): cat: ${path}: No such file or directory`)
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-archive-cleanup/dist/index.js')) return err(`run command failed (exit 1): cat: ${path}: No such file or directory`)
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-client-graph/dist/index.js')) return ok('export const graph = 1\n')
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-client-graph/package.json')) return ok('{"name":"@dsh-chamber/dsh-chamber-seed-client-graph"}')
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-git-worktree/dist/index.js')) return ok('export const git = 1\n')
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-git-worktree/package.json')) return ok('{"name":"@dsh-chamber/dsh-chamber-seed-git-worktree"}')
       // initProfile template: comments + empty list → the seed would rewrite it.
       if (path.endsWith('/cordis.patch.yml')) return ok('# comment\n[]')
     }
@@ -557,7 +659,11 @@ test('remotePluginList: chamber probe — installed but the boot-layer insert mi
   const result = await remotePluginList(exec, { id: 's1', remoteDshHome: null })
   assert.ok(result.ok)
   if (result.ok) {
-    assert.deepEqual(result.manifest.chamber, { ok: true, hostGraph: { installed: true, patched: false, version: null, live: null }, gitWorktree: { installed: true, patched: false, version: null, live: null } })
+    assert.deepEqual(chamberFacts(result.manifest.chamber), {
+    [CLIENT_GRAPH_PACKAGE_NAME]: { installed: true, patched: false, version: null, live: null },
+    [GIT_WORKTREE_PACKAGE_NAME]: { installed: true, patched: false, version: null, live: null },
+    [ARCHIVE_CLEANUP_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
+  })
   }
 })
 
@@ -566,7 +672,8 @@ test('remotePluginList: chamber probe ssh failure is loud, never a silent "not i
     if (action === 'run' && payload?.op === 'exec' && payload.command === 'cat') {
       const path = payload.argv?.[0] ?? ''
       if (path.endsWith('/profiles/web/package.json')) return ok('{}')
-      if (path.includes('@dsh-chamber/dsh-host-client-graph/package.json')) {
+      if (path.endsWith('/cordis.patch.yml')) return ok('# comment\n[]')
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-client-graph/package.json')) {
         return err('the ssh exec could not reach the host (exit 255)')
       }
     }
@@ -576,7 +683,7 @@ test('remotePluginList: chamber probe ssh failure is loud, never a silent "not i
   assert.ok(result.ok)
   if (result.ok) {
     assert.equal(result.manifest.chamber.ok, false)
-    assert.match(result.manifest.chamber.error, /host-graph probe failed/)
+    assert.match(result.manifest.chamber.error, /dsh-chamber-seed-client-graph probe failed/)
   }
 })
 
@@ -585,22 +692,24 @@ test('remotePluginList: chamber probe — package.json present but dist/index.js
     if (action === 'run' && payload?.op === 'exec' && payload.command === 'cat') {
       const path = payload.argv?.[0] ?? ''
       if (path.endsWith('/profiles/web/package.json')) return ok('{}')
-      if (path.includes('@dsh-chamber/dsh-host-client-graph/package.json')) return ok('{"name":"@dsh-chamber/dsh-host-client-graph"}')
-            if (path.includes('@dsh-chamber/dsh-host-git-worktree/dist/index.js')) return ok('export const git = 1\n')
-            if (path.includes('@dsh-chamber/dsh-host-git-worktree/package.json')) return ok('{"name":"@dsh-chamber/dsh-host-git-worktree"}')
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-archive-cleanup/package.json')) return err(`run command failed (exit 1): cat: ${path}: No such file or directory`)
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-archive-cleanup/dist/index.js')) return err(`run command failed (exit 1): cat: ${path}: No such file or directory`)
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-client-graph/package.json')) return ok('{"name":"@dsh-chamber/dsh-chamber-seed-client-graph"}')
+            if (path.includes('@dsh-chamber/dsh-chamber-seed-git-worktree/dist/index.js')) return ok('export const git = 1\n')
+            if (path.includes('@dsh-chamber/dsh-chamber-seed-git-worktree/package.json')) return ok('{"name":"@dsh-chamber/dsh-chamber-seed-git-worktree"}')
       // dist/index.js genuinely missing: a package.json alone is a
       // half-installed module A (the boot row could not resolve).
-      if (path.includes('@dsh-chamber/dsh-host-git-worktree/dist/index.js')) {
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-git-worktree/dist/index.js')) {
         return ok('export const git = 1\n')
       }
-      if (path.includes('@dsh-chamber/dsh-host-git-worktree/package.json')) {
-        return ok('{"name":"@dsh-chamber/dsh-host-git-worktree"}')
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-git-worktree/package.json')) {
+        return ok('{"name":"@dsh-chamber/dsh-chamber-seed-git-worktree"}')
       }
-      if (path.includes('@dsh-chamber/dsh-host-client-graph/dist/index.js')) {
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-client-graph/dist/index.js')) {
         return err(`run command failed (exit 1): cat: ${path}: No such file or directory`)
       }
       if (path.endsWith('/cordis.patch.yml')) {
-        return ok("- insert:\n    - id: client-graph\n      name: '@dsh-chamber/dsh-host-client-graph'\n")
+        return ok("- insert:\n    - id: client-graph\n      name: '@dsh-chamber/dsh-chamber-seed-client-graph'\n")
       }
     }
     return err(`unexpected cat ${payload?.argv?.[0]}`)
@@ -608,7 +717,11 @@ test('remotePluginList: chamber probe — package.json present but dist/index.js
   const result = await remotePluginList(exec, { id: 's1', remoteDshHome: null })
   assert.ok(result.ok)
   if (result.ok) {
-    assert.deepEqual(result.manifest.chamber, { ok: true, hostGraph: { installed: false, patched: true, version: null, live: null }, gitWorktree: { installed: true, patched: false, version: null, live: null } })
+    assert.deepEqual(chamberFacts(result.manifest.chamber), {
+    [CLIENT_GRAPH_PACKAGE_NAME]: { installed: false, patched: true, version: null, live: null },
+    [GIT_WORKTREE_PACKAGE_NAME]: { installed: true, patched: false, version: null, live: null },
+    [ARCHIVE_CLEANUP_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
+  })
   }
 })
 
@@ -617,10 +730,11 @@ test('remotePluginList: chamber probe ssh failure on dist/index.js is loud, neve
     if (action === 'run' && payload?.op === 'exec' && payload.command === 'cat') {
       const path = payload.argv?.[0] ?? ''
       if (path.endsWith('/profiles/web/package.json')) return ok('{}')
-      if (path.includes('@dsh-chamber/dsh-host-client-graph/package.json')) return ok('{"name":"@dsh-chamber/dsh-host-client-graph"}')
-            if (path.includes('@dsh-chamber/dsh-host-git-worktree/dist/index.js')) return ok('export const git = 1\n')
-            if (path.includes('@dsh-chamber/dsh-host-git-worktree/package.json')) return ok('{"name":"@dsh-chamber/dsh-host-git-worktree"}')
-      if (path.includes('@dsh-chamber/dsh-host-client-graph/dist/index.js')) {
+      if (path.endsWith('/cordis.patch.yml')) return ok('# comment\n[]')
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-client-graph/package.json')) return ok('{"name":"@dsh-chamber/dsh-chamber-seed-client-graph"}')
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-git-worktree/dist/index.js')) return ok('export const git = 1\n')
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-git-worktree/package.json')) return ok('{"name":"@dsh-chamber/dsh-chamber-seed-git-worktree"}')
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-client-graph/dist/index.js')) {
         return err('the ssh exec could not reach the host (exit 255)')
       }
     }
@@ -630,7 +744,7 @@ test('remotePluginList: chamber probe ssh failure on dist/index.js is loud, neve
   assert.ok(result.ok)
   if (result.ok) {
     assert.equal(result.manifest.chamber.ok, false)
-    assert.ok(result.manifest.chamber.ok === false && /host-graph probe failed/.test(result.manifest.chamber.error))
+    assert.ok(result.manifest.chamber.ok === false && /dsh-chamber-seed-client-graph probe failed/.test(result.manifest.chamber.error))
   }
 })
 
@@ -646,10 +760,13 @@ test('remotePluginList: a `.ssh`-named home whose probe cat ENOENTs under redact
       if (path.endsWith('/profiles/web/package.json')) {
         return err('run command failed (exit 1): cat: [ssh material redacted]: No such file or directory')
       }
-      if (path.includes('@dsh-chamber/dsh-host-client-graph')) {
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-client-graph')) {
         return err('run command failed (exit 1): [ssh material redacted]: No such file or directory')
       }
-      if (path.includes('@dsh-chamber/dsh-host-git-worktree')) {
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-git-worktree')) {
+        return err('run command failed (exit 1): [ssh material redacted]: No such file or directory')
+      }
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-archive-cleanup')) {
         return err('run command failed (exit 1): [ssh material redacted]: No such file or directory')
       }
       if (path.endsWith('/cordis.patch.yml')) {
@@ -662,7 +779,11 @@ test('remotePluginList: a `.ssh`-named home whose probe cat ENOENTs under redact
   assert.ok(result.ok, 'a redacted ENOENT is a probe miss, not a loud probe failure')
   if (result.ok) {
     assert.equal(result.manifest.profileExists, false)
-    assert.deepEqual(result.manifest.chamber, { ok: true, hostGraph: { installed: false, patched: false, version: null, live: null }, gitWorktree: { installed: false, patched: false, version: null, live: null } })
+    assert.deepEqual(chamberFacts(result.manifest.chamber), {
+    [CLIENT_GRAPH_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
+    [GIT_WORKTREE_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
+    [ARCHIVE_CLEANUP_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
+  })
   }
 })
 
@@ -671,49 +792,65 @@ test('remotePluginList: chamber probe parses module A version and reports live-e
     if (action === 'run' && payload?.op === 'exec' && payload.command === 'cat') {
       const path = payload.argv?.[0] ?? ''
       if (path.endsWith('/profiles/web/package.json')) return ok('{}')
-      if (path.includes('@dsh-chamber/dsh-host-client-graph/dist/index.js')) return ok('export const graph = 1\n')
-      if (path.includes('@dsh-chamber/dsh-host-git-worktree/dist/index.js')) return ok('export const git = 1\n')
-      if (path.includes('@dsh-chamber/dsh-host-git-worktree/package.json')) return ok('{"name":"@dsh-chamber/dsh-host-git-worktree"}')
-      if (path.includes('@dsh-chamber/dsh-host-client-graph/package.json')) {
-        return ok('{"name":"@dsh-chamber/dsh-host-client-graph","version":"0.1.2"}')
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-archive-cleanup/package.json')) return err(`run command failed (exit 1): cat: ${path}: No such file or directory`)
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-archive-cleanup/dist/index.js')) return err(`run command failed (exit 1): cat: ${path}: No such file or directory`)
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-client-graph/dist/index.js')) return ok('export const graph = 1\n')
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-git-worktree/dist/index.js')) return ok('export const git = 1\n')
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-git-worktree/package.json')) return ok('{"name":"@dsh-chamber/dsh-chamber-seed-git-worktree"}')
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-client-graph/package.json')) {
+        return ok('{"name":"@dsh-chamber/dsh-chamber-seed-client-graph","version":"0.1.2"}')
       }
       if (path.endsWith('/cordis.patch.yml')) {
-        return ok("- insert:\n    - id: client-graph\n      name: '@dsh-chamber/dsh-host-client-graph'\n    - id: git-worktree\n      name: '@dsh-chamber/dsh-host-git-worktree'\n")
+        return ok("- insert:\n    - id: client-graph\n      name: '@dsh-chamber/dsh-chamber-seed-client-graph'\n    - id: git-worktree\n      name: '@dsh-chamber/dsh-chamber-seed-git-worktree'\n")
       }
     }
     return err(`unexpected cat ${payload?.argv?.[0]}`)
   }
-  const fullySeeded = { installed: true, patched: true, version: null, live: null }
+  const gitSeeded = (live: boolean | null) => ({ installed: true, patched: true, version: null, live })
   // live = true → the RUNNING instance has loaded the module (已生效).
   const live = await remotePluginList(exec, { id: 's1', remoteDshHome: null }, { liveProbe: async () => true })
   assert.ok(live.ok)
   if (live.ok) {
-    assert.deepEqual(live.manifest.chamber, { ok: true, hostGraph: { installed: true, patched: true, version: '0.1.2', live: true }, gitWorktree: fullySeeded })
+    assert.deepEqual(chamberFacts(live.manifest.chamber), {
+    [CLIENT_GRAPH_PACKAGE_NAME]: { installed: true, patched: true, version: '0.1.2', live: true },
+    [GIT_WORKTREE_PACKAGE_NAME]: gitSeeded(true),
+    [ARCHIVE_CLEANUP_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
+  })
   }
   // live = false → injected but restart still pending (重启后生效).
   const pending = await remotePluginList(exec, { id: 's1', remoteDshHome: null }, { liveProbe: async () => false })
   assert.ok(pending.ok)
   if (pending.ok) {
-    assert.deepEqual(pending.manifest.chamber, { ok: true, hostGraph: { installed: true, patched: true, version: '0.1.2', live: false }, gitWorktree: fullySeeded })
+    assert.deepEqual(chamberFacts(pending.manifest.chamber), {
+    [CLIENT_GRAPH_PACKAGE_NAME]: { installed: true, patched: true, version: '0.1.2', live: false },
+    [GIT_WORKTREE_PACKAGE_NAME]: gitSeeded(false),
+    [ARCHIVE_CLEANUP_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
+  })
   }
   // live = null → the desktop could not classify (no ready tunnel): the UI
   // renders 生效状态未知 — never a guessed claim.
   const unknown = await remotePluginList(exec, { id: 's1', remoteDshHome: null }, { liveProbe: async () => null })
   assert.ok(unknown.ok)
   if (unknown.ok) {
-    assert.deepEqual(unknown.manifest.chamber, { ok: true, hostGraph: { installed: true, patched: true, version: '0.1.2', live: null }, gitWorktree: fullySeeded })
+    assert.deepEqual(chamberFacts(unknown.manifest.chamber), {
+    [CLIENT_GRAPH_PACKAGE_NAME]: { installed: true, patched: true, version: '0.1.2', live: null },
+    [GIT_WORKTREE_PACKAGE_NAME]: gitSeeded(null),
+    [ARCHIVE_CLEANUP_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
+  })
   }
   // A version-less seeded package.json → version:null (never a guessed one).
   const versionless: ExecFn = async (_id, action, payload) => {
     if (action === 'run' && payload?.op === 'exec' && payload.command === 'cat') {
       const path = payload.argv?.[0] ?? ''
       if (path.endsWith('/profiles/web/package.json')) return ok('{}')
-      if (path.includes('@dsh-chamber/dsh-host-client-graph/dist/index.js')) return ok('export const graph = 1\n')
-      if (path.includes('@dsh-chamber/dsh-host-client-graph/package.json')) return ok('{"name":"@dsh-chamber/dsh-host-client-graph"}')
-      if (path.includes('@dsh-chamber/dsh-host-git-worktree/dist/index.js')) return ok('export const git = 1\n')
-      if (path.includes('@dsh-chamber/dsh-host-git-worktree/package.json')) return ok('{"name":"@dsh-chamber/dsh-host-git-worktree"}')
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-archive-cleanup/package.json')) return err(`run command failed (exit 1): cat: ${path}: No such file or directory`)
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-archive-cleanup/dist/index.js')) return err(`run command failed (exit 1): cat: ${path}: No such file or directory`)
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-client-graph/dist/index.js')) return ok('export const graph = 1\n')
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-client-graph/package.json')) return ok('{"name":"@dsh-chamber/dsh-chamber-seed-client-graph"}')
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-git-worktree/dist/index.js')) return ok('export const git = 1\n')
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-git-worktree/package.json')) return ok('{"name":"@dsh-chamber/dsh-chamber-seed-git-worktree"}')
       if (path.endsWith('/cordis.patch.yml')) {
-        return ok("- insert:\n    - id: client-graph\n      name: '@dsh-chamber/dsh-host-client-graph'\n    - id: git-worktree\n      name: '@dsh-chamber/dsh-host-git-worktree'\n")
+        return ok("- insert:\n    - id: client-graph\n      name: '@dsh-chamber/dsh-chamber-seed-client-graph'\n    - id: git-worktree\n      name: '@dsh-chamber/dsh-chamber-seed-git-worktree'\n")
       }
     }
     return err(`unexpected cat ${payload?.argv?.[0]}`)
@@ -722,7 +859,7 @@ test('remotePluginList: chamber probe parses module A version and reports live-e
   assert.ok(noVersion.ok)
   if (noVersion.ok) {
     assert.equal(noVersion.manifest.chamber.ok, true)
-    if (noVersion.manifest.chamber.ok) assert.equal(noVersion.manifest.chamber.hostGraph.version, null)
+    assert.equal(chamberPackageOf(noVersion.manifest.chamber, CLIENT_GRAPH_PACKAGE_NAME).version, null)
   }
 })
 
@@ -731,17 +868,20 @@ test('remotePluginList: git-worktree live is probed SEPARATELY — host-graph li
   // loaded) while the git-worktree row was seeded LATER (files + insert
   // written at ready, but the running instance still boots the old layer) —
   // the git RPC 404s and the sidebar shows no git surface. The probe must
-  // report gitWorktree.live === false independently of hostGraph.live.
+  // report the git-worktree ROW's live === false independently of the
+  // client-graph row's live state.
   const exec: ExecFn = async (_id, action, payload) => {
     if (action === 'run' && payload?.op === 'exec' && payload.command === 'cat') {
       const path = payload.argv?.[0] ?? ''
       if (path.endsWith('/profiles/web/package.json')) return ok('{}')
-      if (path.includes('@dsh-chamber/dsh-host-client-graph/dist/index.js')) return ok('export const graph = 1\n')
-      if (path.includes('@dsh-chamber/dsh-host-client-graph/package.json')) return ok('{"name":"@dsh-chamber/dsh-host-client-graph"}')
-      if (path.includes('@dsh-chamber/dsh-host-git-worktree/dist/index.js')) return ok('export const git = 1\n')
-      if (path.includes('@dsh-chamber/dsh-host-git-worktree/package.json')) return ok('{"name":"@dsh-chamber/dsh-host-git-worktree"}')
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-archive-cleanup/package.json')) return err(`run command failed (exit 1): cat: ${path}: No such file or directory`)
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-archive-cleanup/dist/index.js')) return err(`run command failed (exit 1): cat: ${path}: No such file or directory`)
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-client-graph/dist/index.js')) return ok('export const graph = 1\n')
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-client-graph/package.json')) return ok('{"name":"@dsh-chamber/dsh-chamber-seed-client-graph"}')
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-git-worktree/dist/index.js')) return ok('export const git = 1\n')
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-git-worktree/package.json')) return ok('{"name":"@dsh-chamber/dsh-chamber-seed-git-worktree"}')
       if (path.endsWith('/cordis.patch.yml')) {
-        return ok("- insert:\n    - id: client-graph\n      name: '@dsh-chamber/dsh-host-client-graph'\n    - id: git-worktree\n      name: '@dsh-chamber/dsh-host-git-worktree'\n")
+        return ok("- insert:\n    - id: client-graph\n      name: '@dsh-chamber/dsh-chamber-seed-client-graph'\n    - id: git-worktree\n      name: '@dsh-chamber/dsh-chamber-seed-git-worktree'\n")
       }
     }
     return err(`unexpected cat ${payload?.argv?.[0]}`)
@@ -749,22 +889,24 @@ test('remotePluginList: git-worktree live is probed SEPARATELY — host-graph li
   // host-graph live, git-worktree NOT live → the exact "已生效 + 重启后生效"
   // pair the UI must be able to render (and gate its restart button on).
   const result = await remotePluginList(exec, { id: 's1', remoteDshHome: null }, {
-    liveProbe: async () => true,
-    gitWorktreeLiveProbe: async () => false,
+    liveProbe: async descriptor => descriptor.insert.name !== GIT_WORKTREE_PACKAGE_NAME,
   })
   assert.ok(result.ok)
   if (result.ok) {
-    assert.deepEqual(result.manifest.chamber, { ok: true, hostGraph: { installed: true, patched: true, version: null, live: true }, gitWorktree: { installed: true, patched: true, version: null, live: false } })
+    assert.deepEqual(chamberFacts(result.manifest.chamber), {
+    [CLIENT_GRAPH_PACKAGE_NAME]: { installed: true, patched: true, version: null, live: true },
+    [GIT_WORKTREE_PACKAGE_NAME]: { installed: true, patched: true, version: null, live: false },
+    [ARCHIVE_CLEANUP_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
+  })
   }
   // Both live → 已生效 for both.
   const bothLive = await remotePluginList(exec, { id: 's1', remoteDshHome: null }, {
     liveProbe: async () => true,
-    gitWorktreeLiveProbe: async () => true,
   })
   assert.ok(bothLive.ok)
   if (bothLive.ok) {
     assert.equal(bothLive.manifest.chamber.ok, true)
-    if (bothLive.manifest.chamber.ok) assert.equal(bothLive.manifest.chamber.gitWorktree.live, true)
+    assert.equal(chamberPackageOf(bothLive.manifest.chamber, GIT_WORKTREE_PACKAGE_NAME).live, true)
   }
 })
 
@@ -777,23 +919,31 @@ test('remotePluginList: the git-worktree INSERT missing from the patch is its ow
     if (action === 'run' && payload?.op === 'exec' && payload.command === 'cat') {
       const path = payload.argv?.[0] ?? ''
       if (path.endsWith('/profiles/web/package.json')) return ok('{}')
-      if (path.includes('@dsh-chamber/dsh-host-client-graph/dist/index.js')) return ok('export const graph = 1\n')
-      if (path.includes('@dsh-chamber/dsh-host-client-graph/package.json')) return ok('{"name":"@dsh-chamber/dsh-host-client-graph"}')
-      if (path.includes('@dsh-chamber/dsh-host-git-worktree/dist/index.js')) return ok('export const git = 1\n')
-      if (path.includes('@dsh-chamber/dsh-host-git-worktree/package.json')) return ok('{"name":"@dsh-chamber/dsh-host-git-worktree"}')
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-archive-cleanup/package.json')) return err(`run command failed (exit 1): cat: ${path}: No such file or directory`)
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-archive-cleanup/dist/index.js')) return err(`run command failed (exit 1): cat: ${path}: No such file or directory`)
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-client-graph/dist/index.js')) return ok('export const graph = 1\n')
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-client-graph/package.json')) return ok('{"name":"@dsh-chamber/dsh-chamber-seed-client-graph"}')
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-git-worktree/dist/index.js')) return ok('export const git = 1\n')
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-git-worktree/package.json')) return ok('{"name":"@dsh-chamber/dsh-chamber-seed-git-worktree"}')
       if (path.endsWith('/cordis.patch.yml')) {
-        return ok("- insert:\n    - id: client-graph\n      name: '@dsh-chamber/dsh-host-client-graph'\n")
+        return ok("- insert:\n    - id: client-graph\n      name: '@dsh-chamber/dsh-chamber-seed-client-graph'\n")
       }
     }
     return err(`unexpected cat ${payload?.argv?.[0]}`)
   }
   const result = await remotePluginList(exec, { id: 's1', remoteDshHome: null }, {
-    liveProbe: async () => true,
-    gitWorktreeLiveProbe: async () => { throw new Error('must not run: the git row is not patched, so it cannot be live') },
+    liveProbe: async descriptor => {
+      if (descriptor.insert.name === GIT_WORKTREE_PACKAGE_NAME) throw new Error('must not run: the git row is not patched, so it cannot be live')
+      return true
+    },
   })
   assert.ok(result.ok)
   if (result.ok) {
-    assert.deepEqual(result.manifest.chamber, { ok: true, hostGraph: { installed: true, patched: true, version: null, live: true }, gitWorktree: { installed: true, patched: false, version: null, live: null } })
+    assert.deepEqual(chamberFacts(result.manifest.chamber), {
+    [CLIENT_GRAPH_PACKAGE_NAME]: { installed: true, patched: true, version: null, live: true },
+    [GIT_WORKTREE_PACKAGE_NAME]: { installed: true, patched: false, version: null, live: null },
+    [ARCHIVE_CLEANUP_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
+  })
   }
 })
 
@@ -804,33 +954,42 @@ test('remotePluginList: liveProbe is NOT consulted when the injection is half-pr
     if (action === 'run' && payload?.op === 'exec' && payload.command === 'cat') {
       const path = payload.argv?.[0] ?? ''
       if (path.endsWith('/profiles/web/package.json')) return ok('{}')
-      if (path.includes('@dsh-chamber/dsh-host-client-graph/package.json')) return ok('{"name":"@dsh-chamber/dsh-host-client-graph","version":"0.1.2"}')
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-archive-cleanup/package.json')) return err(`run command failed (exit 1): cat: ${path}: No such file or directory`)
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-archive-cleanup/dist/index.js')) return err(`run command failed (exit 1): cat: ${path}: No such file or directory`)
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-client-graph/package.json')) return ok('{"name":"@dsh-chamber/dsh-chamber-seed-client-graph","version":"0.1.2"}')
       // dist/index.js missing → installed:false.
-      if (path.includes('@dsh-chamber/dsh-host-git-worktree/dist/index.js')) {
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-git-worktree/dist/index.js')) {
         return ok('export const git = 1\n')
       }
-      if (path.includes('@dsh-chamber/dsh-host-git-worktree/package.json')) {
-        return ok('{"name":"@dsh-chamber/dsh-host-git-worktree"}')
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-git-worktree/package.json')) {
+        return ok('{"name":"@dsh-chamber/dsh-chamber-seed-git-worktree"}')
       }
-      if (path.includes('@dsh-chamber/dsh-host-client-graph/dist/index.js')) {
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-client-graph/dist/index.js')) {
         return err(`run command failed (exit 1): cat: ${path}: No such file or directory`)
       }
       if (path.endsWith('/cordis.patch.yml')) {
         // The git-worktree boot row is ALSO absent (a stale patch from before
         // the git package existed): both packages are half-present, so neither
         // live probe may run.
-        return ok("- insert:\n    - id: client-graph\n      name: '@dsh-chamber/dsh-host-client-graph'\n")
+        return ok("- insert:\n    - id: client-graph\n      name: '@dsh-chamber/dsh-chamber-seed-client-graph'\n")
       }
     }
     return err(`unexpected cat ${payload?.argv?.[0]}`)
   }
   const result = await remotePluginList(exec, { id: 's1', remoteDshHome: null }, {
-    liveProbe: async () => { probed = true; return true },
-    gitWorktreeLiveProbe: async () => { gitProbed = true; return true },
+    liveProbe: async (descriptor) => {
+      if (descriptor.insert.name === GIT_WORKTREE_PACKAGE_NAME) gitProbed = true
+      else probed = true
+      return true
+    },
   })
   assert.ok(result.ok)
   if (result.ok) {
-    assert.deepEqual(result.manifest.chamber, { ok: true, hostGraph: { installed: false, patched: true, version: '0.1.2', live: null }, gitWorktree: { installed: true, patched: false, version: null, live: null } })
+    assert.deepEqual(chamberFacts(result.manifest.chamber), {
+    [CLIENT_GRAPH_PACKAGE_NAME]: { installed: false, patched: true, version: '0.1.2', live: null },
+    [GIT_WORKTREE_PACKAGE_NAME]: { installed: true, patched: false, version: null, live: null },
+    [ARCHIVE_CLEANUP_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
+  })
   }
   assert.equal(probed, false, 'a half-injected module is never "live" — the probe is skipped')
   assert.equal(gitProbed, false, 'the git probe is skipped while the module is half-present')
@@ -964,10 +1123,10 @@ test('applyPlugins: reserved names (@deepseek-ai/* + @dsh-chamber/*) refuse the 
   }
   const spec: RemoteSpec = { id: 's1', remoteDshHome: null }
 
-  const chamberAdd = await applyPlugins(exec, readyStatus, spec, { add: ['@dsh-chamber/dsh-host-client-graph@1.2.3'], remove: [] })
+  const chamberAdd = await applyPlugins(exec, readyStatus, spec, { add: ['@dsh-chamber/dsh-chamber-seed-client-graph@1.2.3'], remove: [] })
   assert.equal(chamberAdd.ok, false)
   if (!chamberAdd.ok) {
-    assert.match(chamberAdd.error, /reserved plugin name\(s\): @dsh-chamber\/dsh-host-client-graph/)
+    assert.match(chamberAdd.error, /reserved plugin name\(s\): @dsh-chamber\/dsh-chamber-seed-client-graph/)
   }
 
   const officialRemove = await applyPlugins(exec, readyStatus, spec, { add: [], remove: ['@deepseek-ai/ui'] })
@@ -1128,45 +1287,106 @@ const TEMPLATE = `# Your patch layer for this dsh profile, applied after every b
 []
 `
 
+/** The single client-graph loader row (computeCordisPatchUpdate's inserts are
+ *  REQUIRED — the old one-argument default was production-dead and has been
+ *  removed). */
+const GRAPH_INSERTS = [{ insertId: CLIENT_GRAPH_INSERT_ID, packageName: CLIENT_GRAPH_PACKAGE_NAME }]
+
 test('seed: initProfile template is deterministically rewritten with the insert', () => {
-  const update = computeCordisPatchUpdate(TEMPLATE)
+  const update = computeCordisPatchUpdate(TEMPLATE, GRAPH_INSERTS)
   assert.equal('error' in update, false)
   if ('error' in update) return
   assert.equal(update.write, true)
   if (!update.write) return
   assert.ok(update.content.includes('- insert:'))
-  assert.ok(update.content.includes("name: '@dsh-chamber/dsh-host-client-graph'"))
+  assert.ok(update.content.includes("name: '@dsh-chamber/dsh-chamber-seed-client-graph'"))
   assert.ok(!update.content.includes('[]'), 'empty list marker is replaced')
   // comments preserved
   assert.ok(update.content.includes('Your patch layer'))
 })
 
 test('seed: an existing insert is deduped (no write)', () => {
-  const already = TEMPLATE.replace('[]', `[\n  - insert: { id: client-graph, name: '@dsh-chamber/dsh-host-client-graph' }\n]`)
-  assert.deepEqual(computeCordisPatchUpdate(already), { write: false })
+  const already = TEMPLATE.replace('[]', `[\n  - insert: { id: client-graph, name: '@dsh-chamber/dsh-chamber-seed-client-graph' }\n]`)
+  assert.deepEqual(computeCordisPatchUpdate(already, GRAPH_INSERTS), { write: false })
+})
+
+// Batch 1 naming unification (2026-09): the one-time legacy fold (plan §3.4).
+const LEGACY_CLIENT_GRAPH_ROW = `- insert:\n    - id: client-graph\n      name: '@dsh-chamber/dsh-host-client-graph'\n`
+
+test('seed: a pre-rename row under the same loader id folds to the canonical name (never an id-bound conflict)', () => {
+  const update = computeCordisPatchUpdate(LEGACY_CLIENT_GRAPH_ROW, GRAPH_INSERTS)
+  assert.equal('error' in update, false, 'the old-name row is a rename to absorb, not a conflict to refuse')
+  if ('error' in update || !update.write) return assert.fail('expected a fold write')
+  assert.equal(update.content, `- insert:\n    - id: client-graph\n      name: '@dsh-chamber/dsh-chamber-seed-client-graph'\n`)
+  // One-time: the folded patch is already canonical, so the next pass is a no-op.
+  assert.deepEqual(computeCordisPatchUpdate(update.content, GRAPH_INSERTS), { write: false })
+})
+
+test('seed: the legacy fold is scoped to the matching loader id and the exact rendered row', () => {
+  // The same legacy name under a DIFFERENT loader id is a user row: it is left
+  // verbatim and the missing canonical row is appended beside it.
+  const userRow = `- insert:\n    - id: user-row\n      name: '@dsh-chamber/dsh-host-client-graph'\n`
+  const update = computeCordisPatchUpdate(userRow, GRAPH_INSERTS)
+  assert.equal('error' in update, false)
+  if ('error' in update || !update.write) return assert.fail('expected an append write')
+  assert.ok(update.content.startsWith(userRow), 'the user row is preserved verbatim')
+  assert.ok(update.content.includes("name: '@dsh-chamber/dsh-chamber-seed-client-graph'"))
+  // A hand-written flow-style legacy row is NOT guessed at: the shared
+  // classification reports the id conflict loudly instead of rewriting bytes
+  // the seed writer never produced.
+  const flow = `- insert: [{ id: client-graph, name: '@dsh-chamber/dsh-host-client-graph' }]\n`
+  const conflict = computeCordisPatchUpdate(flow, GRAPH_INSERTS)
+  assert.ok('error' in conflict)
+  if ('error' in conflict) assert.match(conflict.error, /already bound to a different package/)
+})
+
+test('seed: all three pre-rename rows fold in one pass; unrelated rows stay untouched', () => {
+  const legacyPatch = [
+    `- id: system-prompt\n  config:\n    persona: hi\n`,
+    `- insert:\n    - id: ${CLIENT_GRAPH_INSERT_ID}\n      name: '@dsh-chamber/dsh-host-client-graph'\n`,
+    `- insert:\n    - id: ${GIT_WORKTREE_INSERT_ID}\n      name: '@dsh-chamber/dsh-host-git-worktree'\n`,
+    `- insert:\n    - id: ${ARCHIVE_CLEANUP_INSERT_ID}\n      name: '@dsh-chamber/dsh-host-archive-cleanup'\n`,
+  ].join('')
+  const inserts = [
+    { insertId: CLIENT_GRAPH_INSERT_ID, packageName: CLIENT_GRAPH_PACKAGE_NAME },
+    { insertId: GIT_WORKTREE_INSERT_ID, packageName: GIT_WORKTREE_PACKAGE_NAME },
+    { insertId: ARCHIVE_CLEANUP_INSERT_ID, packageName: ARCHIVE_CLEANUP_PACKAGE_NAME },
+  ]
+  const update = computeCordisPatchUpdate(legacyPatch, inserts)
+  assert.equal('error' in update, false)
+  if ('error' in update || !update.write) return assert.fail('expected a fold write')
+  assert.equal(update.content, [
+    `- id: system-prompt\n  config:\n    persona: hi\n`,
+    `- insert:\n    - id: ${CLIENT_GRAPH_INSERT_ID}\n      name: '${CLIENT_GRAPH_PACKAGE_NAME}'\n`,
+    `- insert:\n    - id: ${GIT_WORKTREE_INSERT_ID}\n      name: '${GIT_WORKTREE_PACKAGE_NAME}'\n`,
+    `- insert:\n    - id: ${ARCHIVE_CLEANUP_INSERT_ID}\n      name: '${ARCHIVE_CLEANUP_PACKAGE_NAME}'\n`,
+  ].join(''))
+  assert.deepEqual(computeCordisPatchUpdate(update.content, inserts), { write: false })
+  // foldLegacyHostInserts is the exported seam: nothing to fold = no write.
+  assert.deepEqual(foldLegacyHostInserts(update.content, inserts), { content: update.content, folded: false })
 })
 
 test('seed: a user block list is appended to, never clobbered', () => {
   const userList = `- id: system-prompt\n  config:\n    persona: hi\n`
-  const update = computeCordisPatchUpdate(userList)
+  const update = computeCordisPatchUpdate(userList, GRAPH_INSERTS)
   assert.equal('error' in update, false)
   if ('error' in update) return
   assert.equal(update.write, true)
   if (!update.write) return
   assert.ok(update.content.startsWith('- id: system-prompt'), 'user rows preserved')
   assert.ok(update.content.includes('- insert:'))
-  assert.ok(update.content.includes("name: '@dsh-chamber/dsh-host-client-graph'"))
+  assert.ok(update.content.includes("name: '@dsh-chamber/dsh-chamber-seed-client-graph'"))
 })
 
 test('seed: a non-list file fails loud', () => {
   const mapping = 'system-prompt:\n  persona: hi\n'
-  const update = computeCordisPatchUpdate(mapping)
+  const update = computeCordisPatchUpdate(mapping, GRAPH_INSERTS)
   assert.ok('error' in update)
   if ('error' in update) assert.match(update.error, /not a top-level YAML array/)
 })
 
 test('seed: a missing cordis.patch.yml (uninitialized profile) fails loud', () => {
-  const update = computeCordisPatchUpdate(null)
+  const update = computeCordisPatchUpdate(null, GRAPH_INSERTS)
   assert.ok('error' in update)
   if ('error' in update) assert.match(update.error, /not initialized/)
 })
@@ -1179,7 +1399,7 @@ test('seed: a similar-but-different entry does NOT dedup (client-graph-foo id is
   config:
     x: 1
 `
-  const update = computeCordisPatchUpdate(similar)
+  const update = computeCordisPatchUpdate(similar, GRAPH_INSERTS)
   assert.equal('error' in update, false)
   if ('error' in update) return
   assert.equal(update.write, true, 'a client-graph-foo id must not count as the client-graph entry')
@@ -1213,9 +1433,9 @@ test('seed: two chamber host rows merge together and only a missing row is appen
 test('seed: crossed id/name rows fail loud before appending a boot-breaking duplicate', () => {
   const crossed = `- insert:
     - id: client-graph
-      name: '@dsh-chamber/dsh-host-git-worktree'
+      name: '@dsh-chamber/dsh-chamber-seed-git-worktree'
     - id: git-worktree
-      name: '@dsh-chamber/dsh-host-client-graph'
+      name: '@dsh-chamber/dsh-chamber-seed-client-graph'
 `
   const update = computeCordisPatchUpdate(crossed, [
     { insertId: CLIENT_GRAPH_INSERT_ID, packageName: CLIENT_GRAPH_PACKAGE_NAME },
@@ -1234,7 +1454,7 @@ test('seed: same chamber id with a different package fails loud', () => {
 })
 
 test('seed: same chamber package under a different id fails loud', () => {
-  const update = computeCordisPatchUpdate(`- insert:\n    - id: user-git-row\n      name: '@dsh-chamber/dsh-host-git-worktree'\n`, [
+  const update = computeCordisPatchUpdate(`- insert:\n    - id: user-git-row\n      name: '@dsh-chamber/dsh-chamber-seed-git-worktree'\n`, [
     { insertId: GIT_WORKTREE_INSERT_ID, packageName: GIT_WORKTREE_PACKAGE_NAME },
   ])
   assert.equal('error' in update, true)
@@ -1242,7 +1462,7 @@ test('seed: same chamber package under a different id fails loud', () => {
 })
 
 test('seed: duplicate exact chamber rows fail loud instead of accepting the next boot failure', () => {
-  const duplicate = `- insert:\n    - id: git-worktree\n      name: '@dsh-chamber/dsh-host-git-worktree'\n    - id: git-worktree\n      name: '@dsh-chamber/dsh-host-git-worktree'\n`
+  const duplicate = `- insert:\n    - id: git-worktree\n      name: '@dsh-chamber/dsh-chamber-seed-git-worktree'\n    - id: git-worktree\n      name: '@dsh-chamber/dsh-chamber-seed-git-worktree'\n`
   const update = computeCordisPatchUpdate(duplicate, [
     { insertId: GIT_WORKTREE_INSERT_ID, packageName: GIT_WORKTREE_PACKAGE_NAME },
   ])
@@ -1254,7 +1474,7 @@ test('seed: name-first sibling rows cannot be cross-paired into a false exact ma
   const crossed = `- insert:
     - id: git-worktree
       name: '@example/not-chamber'
-    - name: '@dsh-chamber/dsh-host-git-worktree'
+    - name: '@dsh-chamber/dsh-chamber-seed-git-worktree'
       id: another-git-service
 `
   const update = computeCordisPatchUpdate(crossed, [
@@ -1266,7 +1486,7 @@ test('seed: name-first sibling rows cannot be cross-paired into a false exact ma
 
 test('seed: an exact name-first loader row is reused', () => {
   const exact = `- insert:
-    - name: '@dsh-chamber/dsh-host-git-worktree'
+    - name: '@dsh-chamber/dsh-chamber-seed-git-worktree'
       id: git-worktree
 `
   assert.deepEqual(computeCordisPatchUpdate(exact, [
@@ -1279,7 +1499,7 @@ test('seed: a nested config name cannot complete the parent loader identity', ()
     - id: git-worktree
       name: '@example/not-chamber'
       config:
-        name: '@dsh-chamber/dsh-host-git-worktree'
+        name: '@dsh-chamber/dsh-chamber-seed-git-worktree'
 `
   const update = computeCordisPatchUpdate(nested, [
     { insertId: GIT_WORKTREE_INSERT_ID, packageName: GIT_WORKTREE_PACKAGE_NAME },
@@ -1289,7 +1509,7 @@ test('seed: a nested config name cannot complete the parent loader identity', ()
 })
 
 test('seed: crossed inline-flow mappings stay separate', () => {
-  const crossed = `- insert: [{ id: git-worktree, name: '@example/not-chamber' }, { id: other, name: '@dsh-chamber/dsh-host-git-worktree' }]
+  const crossed = `- insert: [{ id: git-worktree, name: '@example/not-chamber' }, { id: other, name: '@dsh-chamber/dsh-chamber-seed-git-worktree' }]
 `
   const update = computeCordisPatchUpdate(crossed, [
     { insertId: GIT_WORKTREE_INSERT_ID, packageName: GIT_WORKTREE_PACKAGE_NAME },
@@ -1442,7 +1662,7 @@ test('applyPlugins: a non-boolean restart is refused (string "false" must never 
   if (!result.ok) assert.match(result.error, /restart must be a boolean/)
 })
 
-test('applyPlugins: a known bundle add missing from the remote bundles layer → verified:false (design 13 §4.5 ④)', async () => {
+test('applyPlugins: a known bundle add missing from the remote bundles layer → verified:false (design 13 §3)', async () => {
   const exec: ExecFn = async (_id, action, payload) => {
     if (action === 'run' && payload?.op === 'exec' && payload.command === 'dsh') return ok()
     if (action === 'run' && payload?.op === 'exec' && payload.command === 'cat') {
@@ -1480,7 +1700,7 @@ test('applyPlugins: a known bundle add in dependencies AND bundles → verified:
 })
 
 // ============================================================================
-// seedRemoteHostGraph (design 13 §4.6)
+// seedRemoteChamberHostPackages — single-package edge cases (design 13 §3)
 // ============================================================================
 
 function makeSeedExec(overrides: {
@@ -1537,6 +1757,18 @@ function writeModuleA(root: string, pkgJson: string | Buffer, distJs: string | B
 }
 
 const SEED_SPEC: RemoteSpec = { id: 's1', remoteDshHome: null }
+
+/** One single-package seed list (the client-graph row) — the legacy
+ *  `seedRemoteHostGraph` wrapper was deleted as production-dead; its edge-case
+ *  coverage lives on through these single-package calls. */
+function singleGraphSeed(sourceDir: string): ChamberHostPackageSeed[] {
+  return [{
+    insertId: CLIENT_GRAPH_INSERT_ID,
+    packageName: CLIENT_GRAPH_PACKAGE_NAME,
+    sourceDir,
+    label: 'host-graph',
+  }]
+}
 
 function writeHostSeedPackage(root: string, dirName: string, packageName: string, distJs: string): string {
   const sourceDir = join(root, dirName)
@@ -1662,19 +1894,20 @@ test('seedRemoteChamberHostPackages: an unbuilt package is omitted from files an
   assert.ok(!remote.calls.some(call => call.includes(GIT_WORKTREE_PACKAGE_NAME)))
 })
 
-test('seedRemoteHostGraph: module A absent = not shipped → no files AND no patch (never a broken insert)', async () => {
+test('seedRemoteChamberHostPackages (single package): module A absent = not shipped → no files AND no patch (never a broken insert)', async () => {
   const remote = makeSeedExec({ patchContent: TEMPLATE })
-  const result = await seedRemoteHostGraph(remote.exec, SEED_SPEC, join(tempDir(), 'does-not-exist'))
-  assert.deepEqual(result, { ok: true, wrote: false, patched: false })
+  const result = await seedRemoteChamberHostPackages(remote.exec, SEED_SPEC, singleGraphSeed(join(tempDir(), 'does-not-exist')))
+  assert.deepEqual(result, { ok: true, wrote: false, patched: false, packages: [] },
+    'an unbuilt package yields no row, no write and no patch')
   assert.deepEqual(remote.calls, [], 'no remote exec at all when module A is absent')
   assert.equal(remote.written.length, 0)
 })
 
-test('seedRemoteHostGraph: writes both seed files and appends the patch insert', async () => {
+test('seedRemoteChamberHostPackages (single package): writes both seed files and appends the patch insert', async () => {
   const root = tempDir()
-  const sourceDir = writeModuleA(root, JSON.stringify({ name: '@dsh-chamber/dsh-host-client-graph', version: '1.0.0' }), 'export const graph = 1\n')
+  const sourceDir = writeModuleA(root, JSON.stringify({ name: '@dsh-chamber/dsh-chamber-seed-client-graph', version: '1.0.0' }), 'export const graph = 1\n')
   const remote = makeSeedExec({ patchContent: TEMPLATE })
-  const result = await seedRemoteHostGraph(remote.exec, SEED_SPEC, sourceDir)
+  const result = await seedRemoteChamberHostPackages(remote.exec, SEED_SPEC, singleGraphSeed(sourceDir))
   assert.equal(result.ok, true)
   if (!result.ok) return
   assert.equal(result.wrote, true)
@@ -1683,10 +1916,10 @@ test('seedRemoteHostGraph: writes both seed files and appends the patch insert',
   const patchWrite = remote.written.find(entry => entry.path === '~/.dsh/profiles/web/cordis.patch.yml')
   assert.ok(patchWrite !== undefined)
   assert.ok(patchWrite.bytes.toString('utf8').includes('- insert:'))
-  assert.ok(remote.calls.some(call => call === 'write:~/.dsh/profiles/node_modules/@dsh-chamber/dsh-host-client-graph/dist/index.js'))
+  assert.ok(remote.calls.some(call => call === 'write:~/.dsh/profiles/node_modules/@dsh-chamber/dsh-chamber-seed-client-graph/dist/index.js'))
 })
 
-test('seedRemoteHostGraph: hash-identical seed files are skipped in the BYTE domain, patch still ensured', async () => {
+test('seedRemoteChamberHostPackages (single package): hash-identical seed files are skipped in the BYTE domain, patch still ensured', async () => {
   const root = tempDir()
   // dist/index.js carries invalid UTF-8 bytes — the old string-domain hash
   // would have false-mismatched (U+FFFD) and rewritten; the byte-domain
@@ -1695,10 +1928,10 @@ test('seedRemoteHostGraph: hash-identical seed files are skipped in the BYTE dom
   const pkgJson = Buffer.from('{"name":"x"}')
   const sourceDir = writeModuleA(root, pkgJson, distJs)
   const seedFiles = new Map<string, Buffer>()
-  seedFiles.set('~/.dsh/profiles/node_modules/@dsh-chamber/dsh-host-client-graph/package.json', pkgJson)
-  seedFiles.set('~/.dsh/profiles/node_modules/@dsh-chamber/dsh-host-client-graph/dist/index.js', distJs)
+  seedFiles.set('~/.dsh/profiles/node_modules/@dsh-chamber/dsh-chamber-seed-client-graph/package.json', pkgJson)
+  seedFiles.set('~/.dsh/profiles/node_modules/@dsh-chamber/dsh-chamber-seed-client-graph/dist/index.js', distJs)
   const remote = makeSeedExec({ patchContent: TEMPLATE, seedFiles })
-  const result = await seedRemoteHostGraph(remote.exec, SEED_SPEC, sourceDir)
+  const result = await seedRemoteChamberHostPackages(remote.exec, SEED_SPEC, singleGraphSeed(sourceDir))
   assert.equal(result.ok, true)
   if (!result.ok) return
   assert.equal(result.wrote, false, 'identical bytes are skipped (no rewrite)')
@@ -1706,30 +1939,30 @@ test('seedRemoteHostGraph: hash-identical seed files are skipped in the BYTE dom
   assert.equal(remote.written[0].path, '~/.dsh/profiles/web/cordis.patch.yml')
 })
 
-test('seedRemoteHostGraph: an uninitialized remote profile (patch ENOENT) fails loud', async () => {
+test('seedRemoteChamberHostPackages (single package): an uninitialized remote profile (patch ENOENT) fails loud', async () => {
   const root = tempDir()
   const sourceDir = writeModuleA(root, '{"name":"x"}', 'export const graph = 1\n')
   const remote = makeSeedExec({ patchContent: null })
-  const result = await seedRemoteHostGraph(remote.exec, SEED_SPEC, sourceDir)
+  const result = await seedRemoteChamberHostPackages(remote.exec, SEED_SPEC, singleGraphSeed(sourceDir))
   assert.equal(result.ok, false)
   if (!result.ok) assert.match(result.error, /not initialized/)
   assert.equal(remote.written.length, 0, 'the patch probe runs FIRST — no package files are left behind by the fail-loud path')
 })
 
-test('seedRemoteHostGraph: a seed write failure fails loud and never reaches the patch', async () => {
+test('seedRemoteChamberHostPackages (single package): a seed write failure fails loud and never reaches the patch', async () => {
   const root = tempDir()
   const sourceDir = writeModuleA(root, '{"name":"x"}', 'export const graph = 1\n')
   const remote = makeSeedExec({
     patchContent: TEMPLATE,
     failWrite: path => (path.includes('dist/index.js') ? 'write-file target not allowed' : null),
   })
-  const result = await seedRemoteHostGraph(remote.exec, SEED_SPEC, sourceDir)
+  const result = await seedRemoteChamberHostPackages(remote.exec, SEED_SPEC, singleGraphSeed(sourceDir))
   assert.equal(result.ok, false)
   if (!result.ok) assert.match(result.error, /write-file failed for dist\/index\.js/)
   assert.ok(!remote.written.some(entry => entry.path === '~/.dsh/profiles/web/cordis.patch.yml'), 'no patch without the package files')
 })
 
-test('seedRemoteHostGraph: a NON-ENOENT seed-file cat failure fails loud WITHOUT attempting the write', async () => {
+test('seedRemoteChamberHostPackages (single package): a NON-ENOENT seed-file cat failure fails loud WITHOUT attempting the write', async () => {
   const root = tempDir()
   const sourceDir = writeModuleA(root, '{"name":"x"}', 'export const graph = 1\n')
   const remote = makeSeedExec({
@@ -1740,14 +1973,14 @@ test('seedRemoteHostGraph: a NON-ENOENT seed-file cat failure fails loud WITHOUT
     // misleading "write-file failed").
     failSeedCat: path => (path.endsWith('/package.json') ? 'the ssh exec could not reach the host (exit 255)' : null),
   })
-  const result = await seedRemoteHostGraph(remote.exec, SEED_SPEC, sourceDir)
+  const result = await seedRemoteChamberHostPackages(remote.exec, SEED_SPEC, singleGraphSeed(sourceDir))
   assert.equal(result.ok, false)
   if (!result.ok) assert.match(result.error, /host-graph seed read package\.json failed/)
   assert.equal(remote.written.length, 0, 'no write is attempted after a non-ENOENT read-back failure')
   assert.ok(!remote.calls.some(call => call.startsWith('write:')), 'the failing cat is never papered over by a write')
 })
 
-test('seedRemoteHostGraph: every probe cat is marked quiet (expected ENOENT on a first seed)', async () => {
+test('seedRemoteChamberHostPackages (single package): every probe cat is marked quiet (expected ENOENT on a first seed)', async () => {
   const root = tempDir()
   const sourceDir = writeModuleA(root, '{"name":"x"}', 'export const graph = 1\n')
   const payloads: TransportRunPayload[] = []
@@ -1761,7 +1994,7 @@ test('seedRemoteHostGraph: every probe cat is marked quiet (expected ENOENT on a
     if (action === 'run' && payload?.op === 'write-file') return ok()
     return ok()
   }
-  const result = await seedRemoteHostGraph(exec, SEED_SPEC, sourceDir)
+  const result = await seedRemoteChamberHostPackages(exec, SEED_SPEC, singleGraphSeed(sourceDir))
   assert.equal(result.ok, true)
   if (!result.ok) return
   const probes = payloads.filter(p => p.op === 'exec' && p.command === 'cat')
@@ -1772,10 +2005,10 @@ test('seedRemoteHostGraph: every probe cat is marked quiet (expected ENOENT on a
 })
 
 // ============================================================================
-// materializeAndAdd (design 13 §4.6)
+// materializeAndAdd (design 13 §3)
 // ============================================================================
 
-test('materializePluginsDir is the stable literal dir for every remoteDshHome (design 13 §4.6)', () => {
+test('materializePluginsDir is the stable literal dir for every remoteDshHome (design 13 §3)', () => {
   assert.equal(materializePluginsDir(null), '~/.dsh-chamber/plugins')
   assert.equal(materializePluginsDir('~/.dsh'), '~/.dsh-chamber/plugins')
   assert.equal(materializePluginsDir('/opt/dsh'), '~/.dsh-chamber/plugins')
@@ -1884,7 +2117,7 @@ test('materializeAndAdd: a write-file failure fails loud before the add', async 
   if (!result.ok) assert.match(result.error, /write-file failed/)
 })
 
-// materializeArchiveAndAdd (design 21 §10 archive-pick): a READY .tgz uploads
+// materializeArchiveAndAdd (design 21 §6.5 archive-pick): a READY .tgz uploads
 // verbatim — no local package.json read, no pnpm pack — through the same
 // write-file → remote $HOME → add file: tail.
 test('materializeArchiveAndAdd: archive bytes → write-file → remote $HOME → add file:<absolute>', async () => {
@@ -2021,7 +2254,10 @@ test('redactLocalPluginManifest: local-path spec values are masked, registry val
     clientLines: ['link-dep'],
     bundleLines: ['file-dep'],
     unsyncable: [{ name: 'workspace-dep', reason: 'workspace protocol' }],
-    chamber: { ok: true, hostGraph: { installed: true, patched: true, version: '1.0.0', live: null }, gitWorktree: { installed: true, patched: true, version: '1.0.0', live: null } },
+    chamber: chamberProjection({
+      [CLIENT_GRAPH_PACKAGE_NAME]: { installed: true, patched: true, version: '1.0.0' },
+      [GIT_WORKTREE_PACKAGE_NAME]: { installed: true, patched: true, version: '1.0.0' },
+    }),
   }
   const redacted = redactLocalPluginManifest(manifest as never)
   assert.equal(redacted.dependencies['file-dep'], MATERIALIZED_VALUE_MASK)
@@ -2110,7 +2346,9 @@ test('redactRemotePluginManifest: file: dependency values are masked (file: pref
     },
     bundles: ['file-dep'],
     profileExists: true,
-    chamber: { ok: true, hostGraph: { installed: true, patched: true, version: '1.0.0', live: null }, gitWorktree: { installed: false, patched: false, version: null, live: null } },
+    chamber: chamberProjection({
+      [CLIENT_GRAPH_PACKAGE_NAME]: { installed: true, patched: true, version: '1.0.0' },
+    }),
   }
   const redacted = redactRemotePluginManifest(manifest as never)
   assert.equal(redacted.dependencies['file-dep'], MATERIALIZED_VALUE_MASK)
@@ -2129,7 +2367,7 @@ test('redactRemotePluginManifest: the mask keeps materialize classification (nam
   // The client diff keys materialize rows on name + isPathSpec; the mask's
   // kept `file:` prefix must classify identically on both sides.
   assert.equal(classifyDependencyValue(MATERIALIZED_VALUE_MASK).kind, 'materialize')
-  assert.equal(classifyDependencyValue(redactRemotePluginManifest({ dependencies: { x: 'file:/a/b.tgz' }, bundles: [], profileExists: true, chamber: { ok: true, hostGraph: { installed: true, patched: true, version: null, live: null }, gitWorktree: { installed: false, patched: false, version: null, live: null } } } as never).dependencies.x).kind, 'materialize')
+  assert.equal(classifyDependencyValue(redactRemotePluginManifest({ dependencies: { x: 'file:/a/b.tgz' }, bundles: [], profileExists: true, chamber: chamberProjection({ [CLIENT_GRAPH_PACKAGE_NAME]: { installed: true, patched: true } }) } as never).dependencies.x).kind, 'materialize')
 })
 
 test('redactRemotePluginManifest: masks only the dependencies projection — error/profile fields untouched', () => {
@@ -2147,7 +2385,7 @@ test('redactRemotePluginManifest: masks only the dependencies projection — err
 })
 
 // ---------------------------------------------------------------------------
-// Local folder-pick add gate (design 21 §10 缺陷①, plan 24 小项④)
+// Local folder-pick add gate (design 21 §6.5 缺陷①, plan 24 小项④)
 // ---------------------------------------------------------------------------
 
 test('isAllowedLocalFileSpec: absolute POSIX/Windows/UNC paths only — relative and control-char input refused', () => {
@@ -2175,7 +2413,7 @@ test('runLocalDshPlugin: a file: pick is refused without allowFileSpec and passe
 
     // With allowFileSpec (the MAIN-process folder-picker path, desktop_local_
     // plugin_add_file) the same pick passes the gate and proceeds to the
-    // workspace's (absent) dsh CLI entry — design 21 §10 缺陷① fixed.
+    // workspace's (absent) dsh CLI entry — design 21 §6.5 缺陷① fixed.
     const gated = await runLocalDshPlugin(dir, dir, 'add', 'file:/tmp/picked-folder', { allowFileSpec: true })
     assert.equal(gated.ok, false)
     assert.match(gated.error ?? '', /no dsh CLI entry found/)

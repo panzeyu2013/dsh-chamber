@@ -171,9 +171,28 @@ test('rollback target probe failure falls to builtin once and ends loud', async 
   assert.equal(outcome.status, 'failed')
   assert.deepEqual(switchVersions(fixture), ['0.3.0', '0.2.0', null])
   assert.match(outcome.error ?? '', /内建运行时探针均失败/)
+  // 2026-09 review: the verdict names the failing probe — "probe failed" with no
+  // name is the invisible-failure family the desktop projection fix closed.
+  assert.match(outcome.error ?? '', /内建：session\/canOpenWorkspacePath/)
   assert.equal(outcome.retainPending, true)
   assert.equal(outcome.retryAction, 'apply')
   assert.equal(outcome.runtimeBlocked, true)
+})
+
+test('a resumed builtin fallback that fails again names the failing probe', async () => {
+  // resumed mid-rollback with no trusted target: the fallback probe IS the
+  // builtin tree, so a second failure is terminal and must still name the probe
+  const journal = durableJournal('rollback-needed', { rollbackTarget: null })
+  const fixture = new RunPhaseFixture({ pointer: '0.2.0', journal: { kind: 'valid', journal } })
+  fixture.setProbe(async () => fail())
+  const outcome = await applyPendingVersion({
+    pendingVersion: journal.targetVersion, builtinVersion: '0.1.1-rc.2', sourceVersion: '0.2.0', sourceWasKnownGood: true,
+    knownGoodVersion: '0.2.0', journal, deps: fixture.makeApplyDeps(),
+  })
+  assert.equal(outcome.status, 'failed')
+  assert.equal(outcome.failureKind, 'terminal')
+  assert.match(outcome.error ?? '', /内建回退运行时探针失败/)
+  assert.match(outcome.error ?? '', /session\/canOpenWorkspacePath/)
 })
 
 test('rollback target falls to known-good when source not trusted', async () => {

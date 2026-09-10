@@ -2,7 +2,7 @@
 /**
  * update-vendor.mjs — 原子升级 dsh 源码 pin（submodule 化后的唯一升级入口）。
  *
- * 用法：node scripts/dev/update-vendor.mjs <tag>      # tag 如 dsh-v0.1.1-rc.2
+ * 用法：node scripts/dev/update-vendor.mjs <tag>   # tag 形如 dsh-vX.Y.Z-<stage>.N（如 dsh-v0.1.5-alpha.2）
  *
  * 流程（vendor/.vendor-update.lock 目录锁防并发；任一步失败即中止并打印
  * 恢复指引，不产生静默半提交状态）：
@@ -64,9 +64,9 @@ function sha256(file) {
 
 function main() {
   const tag = process.argv[2]
-  if (tag === undefined) fail('缺少 <tag> 参数（如 dsh-v0.1.1-rc.2）')
+  if (tag === undefined) fail('缺少 <tag> 参数（形如 dsh-vX.Y.Z 或 dsh-vX.Y.Z-alpha.N）')
   if (!TAG_RE.test(tag)) {
-    fail(`tag 命名不合法: ${tag}（须为 dsh-vX.Y.Z 或 dsh-vX.Y.Z-(alpha|beta|rc).N；上游真实 tag 含 alpha，如 dsh-v0.1.2-alpha.1）`)
+    fail(`tag 命名不合法: ${tag}（须为 dsh-vX.Y.Z 或 dsh-vX.Y.Z-(alpha|beta|rc).N）`)
   }
 
   // 目录锁：vendor/.vendor-update.lock 存在即拒绝（mkdir 原子）
@@ -168,6 +168,7 @@ function main() {
     console.log('注意：提交 gitlink 前不要运行 `git submodule update`（会把 HEAD 拉回旧 gitlink）；')
     console.log('运行时线同步见 checklist §2（bundle-dsh / release.yml env / install-gateway.sh 常量）。')
     console.log('回归：按 docs/checklists/dsh-upgrade-checklist.md §6 全量测试套件 + typecheck + 构建 + smoke')
+    console.log('触点：按 docs/checklists/upstream-touchpoints.md §7 循环重放/登记——先跑 node scripts/dev/verify-upstream-touchpoints.mjs --tags <旧tag> <新tag>')
   } catch (err) {
     console.error(`✗ update-vendor: ${err.message}`)
     if (oldPin !== null) {

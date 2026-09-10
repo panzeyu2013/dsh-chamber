@@ -162,9 +162,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 // 整体缺席并走「构建产物缺失」loud 路径）。
                 if isCompiled {
                     let hostDirs: [(flag: String, name: String)] = [
-                        ("--host-graph-dir", "dsh-host-client-graph"),
-                        ("--host-git-dir", "dsh-chamber-host-git-worktree"),
-                        ("--host-archive-dir", "dsh-host-archive-cleanup"),
+                        ("--host-graph-dir", "dsh-chamber-seed-client-graph"),
+                        ("--host-git-dir", "dsh-chamber-seed-git-worktree"),
+                        ("--host-archive-dir", "dsh-chamber-seed-archive-cleanup"),
                     ]
                     for host in hostDirs {
                         let candidate = sidecarDir + "/dist/" + host.name

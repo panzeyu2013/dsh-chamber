@@ -71,9 +71,9 @@ export const DEFAULT_ARCH = 'arm64'
  *  → seed 走「构建产物缺失」loud 路径，Git worktree / client graph / 归档清理
  *  三个宿主域整体缺席。Swift 侧按显式参数注入（AppDelegate 装配态分支）。 */
 export const HOST_PACKAGES = [
-  { name: 'dsh-host-client-graph', arg: 'host-graph-dir' },
-  { name: 'dsh-chamber-host-git-worktree', arg: 'host-git-dir' },
-  { name: 'dsh-host-archive-cleanup', arg: 'host-archive-dir' },
+  { name: 'dsh-chamber-seed-client-graph', arg: 'host-graph-dir' },
+  { name: 'dsh-chamber-seed-git-worktree', arg: 'host-git-dir' },
+  { name: 'dsh-chamber-seed-archive-cleanup', arg: 'host-archive-dir' },
 ]
 
 export function sidecarLayout(outDir) {
@@ -595,7 +595,14 @@ export async function runBuildSidecar(options, io = { log: console.log, warn: co
     io.log(`[build-sidecar] sidecar.js → ${layout.entry}`)
   }
 
-  // 3. 拷贝 control-plane 编译产物。
+  // 3. 装配 <out>/dist：本脚本是这棵子树的**唯一写入者**（control-plane 拷贝 +
+  // chamber host 包），所以整目录重建而非逐个覆盖——否则改名/删包之后，上一轮装
+  // 配留下的目录会继续躺在装配里，并被 build-swift-app 原样拷进 .app 一起签名
+  // 发布（实测：T2 包改名后三个旧 host 包目录仍留在 release/sidecar/dist）。
+  rmSync(layout.dist, { recursive: true, force: true })
+  mkdirSync(layout.dist, { recursive: true })
+
+  // 3a. 拷贝 control-plane 编译产物。
   rmSync(layout.controlPlaneDist, { recursive: true, force: true })
   cpSync(path.join(desktopDir, 'dist', 'control-plane'), layout.controlPlaneDist, { recursive: true })
   if (!existsSync(layout.controlPlaneEntry)) {

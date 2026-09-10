@@ -313,7 +313,7 @@ test('runtime gate plus stop invalidates a queued start before every DSH_HOME se
   const stateDir = mkdtempSync(join(tmpdir(), 'dsh-chamber-runtime-fence-'))
   const graphSource = join(stateDir, 'host-graph-source')
   mkdirSync(join(graphSource, 'dist'), { recursive: true })
-  writeFileSync(join(graphSource, 'package.json'), JSON.stringify({ name: '@dsh-chamber/dsh-host-client-graph' }))
+  writeFileSync(join(graphSource, 'package.json'), JSON.stringify({ name: '@dsh-chamber/dsh-chamber-seed-client-graph' }))
   writeFileSync(join(graphSource, 'dist', 'index.js'), 'export const graph = true\n')
 
   let blocked = false
@@ -362,7 +362,7 @@ test('runtime gate plus stop invalidates a queued start before every DSH_HOME se
     assert.equal(spawns, 0)
     assert.equal(existsSync(join(stateDir, 'dsh-home', 'settings.yaml')), false, 'default locale was not seeded')
     assert.equal(
-      existsSync(join(stateDir, 'dsh-home', 'profiles', 'web', 'node_modules', '@dsh-chamber', 'dsh-host-client-graph')),
+      existsSync(join(stateDir, 'dsh-home', 'profiles', 'web', 'node_modules', '@dsh-chamber', 'dsh-chamber-seed-client-graph')),
       false,
       'host package was not seeded',
     )

@@ -51,6 +51,42 @@ var MOBILE_CSS = `
   display: none;
 }
 
+/* ---- coarse-pointer chrome tier (width-independent) ---- */
+/* Sticky-hover tooltip bubbles (official ui-primitives Tooltip, bundle
+   component Fd) are a coarse-pointer artifact, not a narrow-viewport one: a
+   tap synthesizes the trigger's mouseenter but the mouseleave only arrives
+   with the NEXT tap elsewhere, so the delayed (200-500ms) bubble pops after
+   the tap and STAYS over the control that was just used (\u53D1\u9001/\u505C\u6B62 included).
+   The rule is therefore gated by pointer/hover ALONE \u2014 an iPad in landscape
+   is 1024px+ and still taps, while attaching a mouse flips hover to hover
+   and correctly restores hover tooltips \u2014 and is scoped to bubbles that
+   DUPLICATE an accessible name: button[aria-label] + [role="tooltip"]
+   (the component renders the bubble as the trigger's immediate next sibling;
+   [data-side] is the component's own marker \u2014 see the preserved list below).
+   Of the 31 official Tooltip sites, 27 are aria-labelled buttons (composer
+   send/stop/commands/ContextMeter, queue dock, goal bar, sidebar, message
+   feedback, workspace rows, chat copy/branch) whose aria-label names the same
+   action (3 of them phrase it slightly differently \u2014 workspace search \xD72,
+   trajectory load-earlier \u2014 same semantics; verified against the pinned
+   install at the 2026-09 re-anchor, see the module header). Four
+   informational bubbles are deliberately
+   NOT hidden because their trigger has no accessible duplicate: the chat
+   stats line (ui-chat:3853, ellipsized non-focusable div), the agent-preset
+   card description (ui-agent-preset:960, line-clamp:4), the trajectory
+   timeline span (ui-trajectory:6821, aria-hidden, no click path) and the
+   trajectory kind tag at \u2264620px (ui-trajectory:5554, visible label collapsed)
+   \u2014 they keep the sticky-hover quirk rather than lose content a touch user
+   cannot otherwise read. The tree's fifth role="tooltip" producer (ui-chat
+   turn-rail preview, :1735) is a non-button div WITHOUT data-side and is
+   therefore structurally outside this rule (it is aria-describedby-referenced
+   and its rail is container-hidden \u2264900px anyway). Desktop is untouched
+   (media-query scoped). */
+@media (pointer: coarse) and (hover: none) {
+  button[aria-label] + [role="tooltip"][data-side] {
+    display: none !important;
+  }
+}
+
 /* ---- touch tier: tablet/phone touch (design 17 \xA718.4.2) ---- */
 @media (max-width: 1023px) and (pointer: coarse) {
   /* Three-column frame \u2192 single column; the sidebar leaves the grid flow
@@ -58,9 +94,9 @@ var MOBILE_CSS = `
      explicitly locked so the center column is never squeezed into a 0-width
      track by the fixed sibling. IMPORTANT (P1-C): the official AppFrame
      sets NO explicit grid-column \u2014 with the sidebar fixed (out of flow),
-     auto-placement would put conversation into track 1 (0px) and details
-     into track 2 (full width). Both remaining columns must be pinned
-     explicitly. */
+     auto-placement would put the main column into track 1 (0px) and the
+     rightbar column into track 2 (full width). Both remaining columns must
+     be pinned explicitly. */
   [data-mobile-frame] {
     grid-template-columns: 0 minmax(0, 1fr) 0 !important;
   }
@@ -84,7 +120,7 @@ var MOBILE_CSS = `
     top: 0 !important;
     bottom: 0 !important;
     left: 0 !important;
-    z-index: 40;
+    z-index: 75;
     width: min(86vw, 280px) !important;
     box-shadow: var(--dsw-shadow-lv3, 0 12px 32px rgba(0, 0, 0, 0.08));
     transform: translateX(-105%);
@@ -107,7 +143,7 @@ var MOBILE_CSS = `
   }
 
   /* Drawer backdrop: dims the conversation behind the open drawer and \u2014 by
-     sitting above it (z-39 < drawer 40) \u2014 absorbs stray taps on the ~50px
+     sitting above it (z-74 < drawer 75) \u2014 absorbs stray taps on the ~50px
      live seam right of the drawer (the composer send button must not be
      hit while the drawer is open). Tap on the backdrop closes the drawer
      (the toggle component wires the click). */
@@ -115,47 +151,12 @@ var MOBILE_CSS = `
     display: block;
     position: fixed;
     inset: 0;
-    z-index: 39;
+    z-index: 74;
     background: var(--dsw-alias-bg-mask-1, rgba(0, 0, 0, 0.24));
     -webkit-backdrop-filter: var(--dsw-mask-blur, blur(2px));
     backdrop-filter: var(--dsw-mask-blur, blur(2px));
     border: none;
     padding: 0;
-  }
-
-  /* Details column \u2192 right-side overlay when opened (data-details-collapsed
-     removed): the official details/trajectory panel stays reachable on
-     touch. Design \xA718.4.3 offers two variants (bottom sheet / Status tab);
-     this implementation uses a THIRD form \u2014 a right-side overlay that
-     keeps the official DOM untouched (zero re-implementation). The grid's
-     third track stays 0 \u2014 the fixed column overlays the conversation.
-     transform: none while open (same containing-block rule as the
-     drawer). */
-  [data-mobile-role="details"] {
-    position: fixed !important;
-    top: 0 !important;
-    right: 0 !important;
-    bottom: 0 !important;
-    z-index: 38;
-    width: min(86vw, 320px) !important;
-    box-shadow: var(--dsw-shadow-lv3, 0 12px 32px rgba(0, 0, 0, 0.08));
-    transform: translateX(105%);
-    visibility: hidden;
-    transition:
-      transform var(--ds-transition-duration-slow, 0.3s) var(--ds-ease-in-out, cubic-bezier(0.4, 0, 0.2, 1)),
-      visibility 0s 0.3s;
-  }
-  [data-mobile-frame]:not([data-details-collapsed]) [data-mobile-role="details"] {
-    transform: none;
-    visibility: visible;
-    transition:
-      transform var(--ds-transition-duration-slow, 0.3s) var(--ds-ease-in-out, cubic-bezier(0.4, 0, 0.2, 1)),
-      visibility 0s;
-  }
-  @media (prefers-reduced-motion: reduce) {
-    [data-mobile-role="details"] {
-      transition: none;
-    }
   }
 
   /* Drag handles are desktop affordances (mouse resizing) \u2014 hidden on
@@ -175,6 +176,12 @@ var MOBILE_CSS = `
   [data-mobile-frame] [data-side]:not([role="tooltip"]) {
     display: none !important;
   }
+  /* Dockkit split affordances: pointer-drag chrome with no touch equivalent
+     (the right surface is fullscreen on this tier). */
+  [data-mobile-frame] [data-dockkit-divider],
+  [data-mobile-frame] [data-dockkit-split-button] {
+    display: none !important;
+  }
 
   /* Floating drawer toggle: the official sidebar toggle lives inside the
      sidebar DOM, which the off-canvas transform hides \u2014 this shell.overlay
@@ -188,7 +195,7 @@ var MOBILE_CSS = `
     position: fixed;
     top: max(10px, env(safe-area-inset-top, 0px));
     left: max(10px, env(safe-area-inset-left, 0px));
-    z-index: 41;
+    z-index: 76;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -293,16 +300,58 @@ var MOBILE_CSS = `
     -webkit-text-size-adjust: 100%;
     text-size-adjust: 100%;
   }
+
+  /* Keyboard compensation (composer.ts installKeyboardCompensation, IME
+     ladder layer 5): engines that ignore 'interactive-widget=resizes-content'
+     (iOS Safari, older Android WebViews) keep the LAYOUT viewport full-height
+     when the soft keyboard opens, so the official sticky composer seat \u2014
+     pinned to the scrollport's layout bottom \u2014 ends up BEHIND the keyboard.
+     The installer mirrors resizes-content semantics against the visual
+     viewport: while the keyboard is open it raises the seat's sticky bottom
+     to the keyboard top AND pads the conversation scrollport by the same
+     offset, so the message tail can scroll up beside the raised seat instead
+     of hiding under the keyboard. State rides the plugin's own frame stamp:
+     'data-mobile-kbd' + the '--dsh-mobile-kbd-offset' custom property on the
+     stamped frame (never official attributes). Android Chrome WITH the token
+     shrinks the layout viewport itself: covered height \u2248 0, the installer
+     never arms, these rules stay inert. */
+  [data-mobile-frame][data-mobile-kbd] [data-phase="active"] [data-conversation-scroll] {
+    padding-bottom: var(--dsh-mobile-kbd-offset, 0px) !important;
+  }
+  [data-mobile-frame][data-mobile-kbd] [data-phase="active"] [data-composer-seat] {
+    bottom: var(--dsh-mobile-kbd-offset, 0px) !important;
+    /* The phone-tier safe-area padding (below) is home-indicator spacing for
+       the UNCOVERED state; while the keyboard is up that inset sits behind
+       the keyboard and would add up to ~34px of dead space below the raised
+       seat (cross-check). Zeroing it cannot cause overlap: the lift comes
+       from the keyboard geometry, not from the inset. */
+    padding-bottom: 0 !important;
+  }
+
+  /* iOS focus zoom: ANY editable field below 16px auto-zooms the page on
+     focus and the page STAYS zoomed. The composer, settings fields and dialog
+     fields already carry the floor; the drawer's session search (13px,
+     ui-workspace:1187) and inline rename (14px, :531) were the gap \u2014 a
+     focus-zoom there used to leave the composer behind the keyboard for the
+     rest of the session (cross-check P1). */
+  [data-mobile-role="sidebar"] input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+  [data-mobile-role="sidebar"] textarea {
+    font-size: max(16px, var(--dsh-content-font-size, 16px)) !important;
+  }
 }
 
 /* ---- phone tier (design 17 \xA718.4.2/\xA718.4.3) ---- */
 @media (max-width: 768px) and (pointer: coarse) {
   /* Composer toolbar: one line. The official row wraps; force nowrap (the
      official 12px gap is kept \u2014 no gap override). */
-  [data-slot="conversation.composer.bar"] [class$="_row"] {
+  /* Infix match (production names are _<local>_<hash>_<idx>): this also hits
+     sibling rows whose local name ends in "row" inside the composer bar
+     subtree (e.g. the queue dock's .row), which is harmless today \u2014 those
+     rows declare no flex-wrap and carry no _trigger_ child. */
+  [data-slot="conversation.composer.bar"] [class*="_row_"] {
     flex-wrap: nowrap !important;
   }
-  [data-slot="conversation.composer.bar"] [class$="_row"] [class$="_trigger"],
+  [data-slot="conversation.composer.bar"] [class*="_row_"] [class*="_trigger_"],
   [data-slot="conversation.input.model"] button {
     max-width: 112px !important;
     flex: 0 1 auto !important;
@@ -324,8 +373,11 @@ var MOBILE_CSS = `
      + Close) stays pinned and only the section options scroll under it.
      All anchors are structural (panel [role=dialog][aria-modal] carrying
      the settings.header seat; direct nav/content children) \u2014 the :has()
-     anchor is static, no per-DOM-change re-evaluation hot path. A 100vh
-     fallback precedes 100dvh for older engines. */
+     anchor is scoped to aria-modal dialogs, so its invalidation cost stays
+     off the streaming conversation subtree (design 17 \xA718.4.4 records
+     :has() as a per-DOM-change cost; this selector only re-evaluates when a
+     modal dialog subtree changes). A 100vh fallback precedes 100dvh for
+     older engines. */
   [role="dialog"][aria-modal="true"]:has([data-slot="settings.header"]) {
     position: fixed !important;
     inset: 0 !important;
@@ -362,6 +414,12 @@ var MOBILE_CSS = `
     flex: 1;
     min-width: 0;
     overflow-x: auto;
+    /* The chip strip is a tab bar, not a document: no visible scrollbar
+       (Firefox scrollbar-width + Chromium/WebKit ::-webkit-scrollbar). */
+    scrollbar-width: none;
+  }
+  [role="dialog"][aria-modal="true"]:has([data-slot="settings.header"]) > nav > div:last-child::-webkit-scrollbar {
+    display: none;
   }
   [role="dialog"][aria-modal="true"]:has([data-slot="settings.header"]) > nav button {
     flex: none;
@@ -447,31 +505,11 @@ var MOBILE_CSS = `
     font-size: max(16px, var(--dsh-content-font-size, 16px)) !important;
   }
 
-  /* "Session \u65E5\u5FD7" export capsule (official session-log-export, header
-     utilities): a 111px+ min-width pill that eats the whole phone title
-     row. Mobile users rarely export session ZIPs \u2014 compact it to a round
-     44px icon target (the stamp data-mobile-dismiss="session-log-export"
-     is applied by markup.ts when the capsule copy matches). The label span
-     is zeroed (font-size, not display:none) so the accessible name stays in
-     the tree; the official download icon grows to the target center. */
-  [data-mobile-dismiss="session-log-export"] {
-    width: 44px !important;
-    height: 44px !important;
-    min-width: 44px !important;
-    gap: 0 !important;
-    padding: 0 !important;
-    border-radius: 50% !important;
-  }
-  [data-mobile-dismiss="session-log-export"] span {
-    font-size: 0;
-  }
-  [data-mobile-dismiss="session-log-export"] svg {
-    width: 18px;
-    height: 18px;
-  }
-
-  /* Scrolling body: the official padding-bottom for the composer is a
-     variable; keep it sane on short screens. */
+  /* Scrolling body: contain the pull gesture. The composer seat is a FLOW
+     child of this scroller (official shape since rc.1: scrollBody > [session slot,
+     composerSeat]), so the official sheet declares NO padding-bottom here \u2014
+     the bottom spacing lives on the InputBar root (8px) and the message
+     column (16px), neither of which this rule touches. */
   [data-conversation-scroll] {
     overscroll-behavior-y: contain;
   }
@@ -484,32 +522,11 @@ var PLUGIN_STYLE_TAG = "dsh-chamber-client-ui-mobile";
 var ROOT_SLOT_SELECTOR = '[data-slot="root"]';
 var MOBILE_FRAME_ATTR = "data-mobile-frame";
 var MOBILE_ROLE_ATTR = "data-mobile-role";
-var CONVERSATION_SESSION_HEADER_SLOT = "conversation.session.header";
-var SESSION_LOG_DISMISS_ATTR = "data-mobile-dismiss";
-var SESSION_LOG_DISMISS_VALUE = "session-log-export";
-var SESSION_LOG_EXPORT_LABELS = ["Session \u65E5\u5FD7", "Session log"];
-function isSessionLogExportButton(button) {
-  if (SESSION_LOG_EXPORT_LABELS.includes((button.textContent ?? "").trim())) {
-    return findDescendant(button, (el) => el !== button && isSvgElement(el)) !== null;
-  }
-  return false;
-}
-function isSvgElement(el) {
-  const tag = el.tag;
-  const tagName = el.tagName;
-  const name = typeof tag === "string" ? tag : tagName;
-  return typeof name === "string" && name.toLowerCase() === "svg";
-}
-function findDescendant(root, test) {
-  const stack = [];
-  for (const child of root.children) stack.push(child);
-  while (stack.length > 0) {
-    const current = stack.shift();
-    if (test(current)) return current;
-    for (const child of current.children) stack.push(child);
-  }
-  return null;
-}
+var ROLE_SLOT_KEYS = {
+  sidebar: "sidebar",
+  conversation: "main",
+  details: "rightbar"
+};
 function findFrame(root) {
   for (const child of root.children) {
     if (child !== null) return child;
@@ -528,40 +545,11 @@ function stampFrame(root) {
   const frame = findFrame(root);
   if (frame === null) return null;
   frame.setAttribute(MOBILE_FRAME_ATTR, "");
-  for (const slot of ["sidebar", "conversation", "details"]) {
-    const column = findColumn(frame, slot);
-    if (column !== null) column.setAttribute(MOBILE_ROLE_ATTR, slot);
+  for (const role of ["sidebar", "conversation", "details"]) {
+    const column = findColumn(frame, ROLE_SLOT_KEYS[role]);
+    if (column !== null) column.setAttribute(MOBILE_ROLE_ATTR, role);
   }
   return frame;
-}
-function stampSessionLogDismiss(frame) {
-  const conversation = findColumn(frame, "conversation");
-  if (conversation === null) return null;
-  const headerSlot = findHeaderSlot(conversation);
-  if (headerSlot === null) return null;
-  const buttons = headerSlot.querySelectorAll("button");
-  for (let index = 0; index < buttons.length; index++) {
-    const button = buttons[index];
-    const candidate = button;
-    if (isSessionLogExportButton(candidate)) {
-      button.setAttribute(SESSION_LOG_DISMISS_ATTR, SESSION_LOG_DISMISS_VALUE);
-      return button;
-    }
-  }
-  return null;
-}
-function findHeaderSlot(root) {
-  for (const child of root.children) {
-    if (child.getAttribute("data-slot") === CONVERSATION_SESSION_HEADER_SLOT) return child;
-    if (child.hasAttribute("data-conversation-scroll")) continue;
-    if (child.hasAttribute("data-composer-seat")) continue;
-    const nested = findHeaderSlot(child);
-    if (nested !== null) return nested;
-  }
-  return null;
-}
-function deriveCollapsed(snapshot) {
-  return snapshot.narrow ? !snapshot.narrowExpanded : snapshot.sidebar === 0;
 }
 function isStructuralTarget(target) {
   if (target === null || target === void 0) return false;
@@ -590,6 +578,7 @@ function shouldRestamp(mutations) {
 // src/client/composer.ts
 var COMPOSER_INPUT_SELECTOR = "[data-composer-input]";
 var TOUCH_TIER_QUERY = "(max-width: 1023px) and (pointer: coarse)";
+var PHONE_TIER_QUERY = "(max-width: 768px) and (pointer: coarse)";
 function isComposerInput(target) {
   return target instanceof Element && target.closest(COMPOSER_INPUT_SELECTOR) !== null;
 }
@@ -643,6 +632,7 @@ function installEnterToNewline() {
         }
       }
     }
+    revealCaretInComposerScroll(input);
   };
   document.addEventListener("keydown", onKeyDown, true);
   return () => {
@@ -672,6 +662,29 @@ function insertLineBreakManually(input) {
   } catch {
     return false;
   }
+}
+function caretRevealDelta(rectTop, rectBottom, hostTop, hostBottom, margin = 8) {
+  if (rectBottom > hostBottom) return rectBottom - hostBottom + margin;
+  if (rectTop < hostTop) return rectTop - hostTop - margin;
+  return 0;
+}
+function revealCaretInComposerScroll(input) {
+  if (input === null) return;
+  const scrollHost = input.closest("[data-input-scroll]");
+  if (!(scrollHost instanceof HTMLElement)) return;
+  if (scrollHost.scrollHeight <= scrollHost.clientHeight) return;
+  const selection = document.getSelection();
+  if (selection === null || selection.rangeCount === 0) return;
+  const hostRect = scrollHost.getBoundingClientRect();
+  let rect = selection.getRangeAt(0).getBoundingClientRect();
+  if (rect.height === 0 && rect.width === 0) {
+    const anchor = selection.focusNode;
+    const element = anchor instanceof Element ? anchor : anchor?.parentElement;
+    if (element instanceof Element) rect = element.getBoundingClientRect();
+  }
+  if (rect.height === 0 && rect.width === 0) return;
+  const delta = caretRevealDelta(rect.top, rect.bottom, hostRect.top, hostRect.bottom);
+  if (delta !== 0) scrollHost.scrollTop += delta;
 }
 function installEditabilityRecovery(root = document) {
   let lastEditable = true;
@@ -769,25 +782,126 @@ function installImeLadder(root = document) {
     isKeyboardOpen: () => keyboardOpen
   };
 }
-function installKeyboardPinning(root = document) {
-  let keyboardOpen = false;
-  const onResize = () => {
-    const vv = window.visualViewport;
-    const next = vv !== null && isKeyboardOpen(window.innerHeight, vv.height);
-    if (next === keyboardOpen) return;
-    keyboardOpen = next;
-    if (!keyboardOpen) return;
-    const seat = root.querySelector("[data-composer-seat]");
-    if (seat instanceof Element) {
-      const rect = seat.getBoundingClientRect();
-      const vvBottom = vv !== null ? vv.height : window.innerHeight;
-      if (rect.bottom > vvBottom) {
-        seat.scrollIntoView({ block: "nearest", behavior: "smooth" });
-      }
+var KBD_OFFSET_QUANTUM_PX = 16;
+var KBD_OFFSET_HEADROOM_PX = 8;
+var MOBILE_KBD_ATTR = "data-mobile-kbd";
+var MOBILE_KBD_VAR = "--dsh-mobile-kbd-offset";
+var KBD_EDITABLE_FOCUS_GRACE_MS = 1200;
+var ACTIVE_SEAT_SELECTOR = '[data-phase="active"] [data-composer-seat]';
+function kbdCoveredHeight(layoutHeight, visualHeight, visualOffsetTop) {
+  return Math.max(0, layoutHeight - visualOffsetTop - visualHeight);
+}
+function nextKbdOffset(covered, quantum = KBD_OFFSET_QUANTUM_PX, headroom = KBD_OFFSET_HEADROOM_PX) {
+  if (covered <= 0) return 0;
+  return Math.ceil((covered + headroom) / quantum) * quantum;
+}
+function isAtScrollEnd(scrollTop, scrollHeight, clientHeight, slack = 8) {
+  if (clientHeight <= 0 || scrollHeight <= clientHeight) return true;
+  return scrollTop + clientHeight >= scrollHeight - slack;
+}
+function shouldCompensateKeyboard(keyboardOpen, visualScale, editableFocused, composerFocused) {
+  if (!keyboardOpen || !editableFocused) return false;
+  if (visualScale > 1.01 && !composerFocused) return false;
+  return true;
+}
+function isEditableFocus(target) {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.isContentEditable) return true;
+  const tag = target.tagName;
+  return tag === "INPUT" || tag === "TEXTAREA";
+}
+function isComposerSelection() {
+  const selection = document.getSelection();
+  const anchor = selection?.anchorNode ?? null;
+  if (anchor === null) return false;
+  const element = anchor instanceof Element ? anchor : anchor.parentElement;
+  if (!(element instanceof Element)) return false;
+  return element.closest(COMPOSER_INPUT_SELECTOR) !== null || element.closest("[data-composer-seat]") !== null;
+}
+function installKeyboardCompensation(root = document) {
+  const vv = window.visualViewport;
+  if (vv === null) return () => {
+  };
+  let applied = 0;
+  let armedFrame = null;
+  let lastEditableFocusAt = 0;
+  const disarm = () => {
+    if (armedFrame === null) return;
+    armedFrame.removeAttribute(MOBILE_KBD_ATTR);
+    armedFrame.style.removeProperty(MOBILE_KBD_VAR);
+    armedFrame = null;
+  };
+  const editableFocused = () => {
+    if (isEditableFocus(document.activeElement)) return true;
+    if (isComposerSelection()) return true;
+    return Date.now() - lastEditableFocusAt < KBD_EDITABLE_FOCUS_GRACE_MS;
+  };
+  const composerFocused = () => {
+    const active = document.activeElement;
+    if (active instanceof Element && (active.closest(COMPOSER_INPUT_SELECTOR) !== null || active.closest("[data-composer-seat]") !== null)) {
+      return true;
+    }
+    return isComposerSelection();
+  };
+  const sync = () => {
+    const layoutHeight = window.innerHeight;
+    const target = shouldCompensateKeyboard(
+      isKeyboardOpen(layoutHeight, vv.height),
+      vv.scale,
+      editableFocused(),
+      composerFocused()
+    ) ? nextKbdOffset(kbdCoveredHeight(layoutHeight, vv.height, vv.offsetTop)) : 0;
+    if (target === 0) {
+      applied = 0;
+      disarm();
+      return;
+    }
+    const seat = root.querySelector(ACTIVE_SEAT_SELECTOR);
+    if (!(seat instanceof Element)) return;
+    const frame = seat.closest("[data-mobile-frame]");
+    if (!(frame instanceof HTMLElement)) return;
+    const armed = frame === armedFrame && frame.hasAttribute(MOBILE_KBD_ATTR);
+    if (armed && target === applied) return;
+    if (armedFrame !== null && armedFrame !== frame) disarm();
+    const scroller = seat.closest("[data-conversation-scroll]");
+    const wasAtEnd = scroller instanceof HTMLElement && isAtScrollEnd(scroller.scrollTop, scroller.scrollHeight, scroller.clientHeight);
+    const delta = armed ? target - applied : target;
+    frame.setAttribute(MOBILE_KBD_ATTR, "");
+    frame.style.setProperty(MOBILE_KBD_VAR, `${target}px`);
+    armedFrame = frame;
+    applied = target;
+    if (wasAtEnd && scroller instanceof HTMLElement && delta > 0) {
+      scroller.scrollTop += delta;
     }
   };
-  window.visualViewport?.addEventListener("resize", onResize);
-  return () => window.visualViewport?.removeEventListener("resize", onResize);
+  const onViewportChange = () => sync();
+  const onFocusIn = (event) => {
+    if (isEditableFocus(event.target)) lastEditableFocusAt = Date.now();
+    sync();
+  };
+  const onFocusOut = (event) => {
+    if (isEditableFocus(event.target)) lastEditableFocusAt = Date.now();
+  };
+  const onVisibility = () => {
+    if (document.visibilityState === "visible") sync();
+  };
+  sync();
+  vv.addEventListener("resize", onViewportChange);
+  vv.addEventListener("scroll", onViewportChange);
+  window.addEventListener("resize", onViewportChange);
+  document.addEventListener("focusin", onFocusIn, true);
+  document.addEventListener("focusout", onFocusOut, true);
+  document.addEventListener("visibilitychange", onVisibility);
+  return () => {
+    vv.removeEventListener("resize", onViewportChange);
+    vv.removeEventListener("scroll", onViewportChange);
+    window.removeEventListener("resize", onViewportChange);
+    document.removeEventListener("focusin", onFocusIn, true);
+    document.removeEventListener("focusout", onFocusOut, true);
+    document.removeEventListener("visibilitychange", onVisibility);
+    applied = 0;
+    disarm();
+  };
 }
 var BUSY_STUCK_MS = 3e4;
 function installComposerSelfHeal(root = document) {
@@ -850,7 +964,7 @@ function createLayoutFactSource(ctx) {
     const onTierChange2 = () => notify2();
     tier.addEventListener("change", onTierChange2);
     return {
-      getCollapsed: () => deriveCollapsed(facts.getLayoutSnapshot()),
+      getCollapsed: () => facts.getCollapsed(),
       getNarrow: () => tier.matches,
       subscribe: (listener) => {
         listeners2.add(listener);
@@ -877,7 +991,7 @@ function createLayoutFactSource(ctx) {
     if (frame !== null) frameObserver.disconnect();
     frame = next;
     if (frame !== null) {
-      frameObserver.observe(frame, { attributes: true, attributeFilter: ["data-sidebar-collapsed", "data-details-collapsed"] });
+      frameObserver.observe(frame, { attributes: true, attributeFilter: ["data-sidebar-collapsed", "data-rightbar-collapsed"] });
     }
     notify();
   };
@@ -892,6 +1006,8 @@ function createLayoutFactSource(ctx) {
   const onTierChange = () => notify();
   tier.addEventListener("change", onTierChange);
   return {
+    // Fail-safe null: no frame yet reads as "collapsed" (no scroll lock),
+    // which is the safe direction while the shell is still mounting.
     getCollapsed: () => frame === null || frame.hasAttribute("data-sidebar-collapsed"),
     getNarrow: () => tier.matches,
     subscribe: (listener) => {
@@ -1007,6 +1123,39 @@ function installDrawerTapHeal(active) {
   };
 }
 
+// src/client/settings-sheet.ts
+var SETTINGS_DIALOG_SELECTOR = '[role="dialog"][aria-modal="true"]';
+function isSectionChipClick(target, nav) {
+  if (target === null || nav === null) return false;
+  const chip = target.closest("button");
+  if (chip === null) return false;
+  return chip.closest("nav") === nav;
+}
+function installSettingsSheetScrollReset(active) {
+  const onClick = (event) => {
+    if (!active()) return;
+    const target = event.target instanceof Element ? event.target : null;
+    if (target === null) return;
+    const dialog = target.closest(SETTINGS_DIALOG_SELECTOR);
+    if (!(dialog instanceof Element)) return;
+    if (dialog.querySelector('[data-slot="settings.header"]') === null) return;
+    const nav = dialog.querySelector(":scope > nav");
+    if (!(nav instanceof Element)) return;
+    if (!isSectionChipClick(target, nav)) return;
+    requestAnimationFrame(() => {
+      let scroller = dialog.querySelector('[data-slot="settings.section"]')?.parentElement ?? null;
+      while (scroller instanceof HTMLElement && scroller !== dialog) {
+        scroller.scrollTop = 0;
+        scroller = scroller.parentElement;
+      }
+      const content = dialog.lastElementChild;
+      if (content instanceof HTMLElement) content.scrollTop = 0;
+    });
+  };
+  document.addEventListener("click", onClick, true);
+  return () => document.removeEventListener("click", onClick, true);
+}
+
 // src/client/MobileNavToggle.tsx
 var import_react = require("react");
 var import_jsx_runtime = require("react/jsx-runtime");
@@ -1113,10 +1262,7 @@ function apply(ctx) {
     let frameAttributeObserver = null;
     const stamp = () => {
       const roots = document.querySelectorAll(ROOT_SLOT_SELECTOR);
-      for (const root of roots) {
-        const frame = stampFrame(root);
-        if (frame !== null) stampSessionLogDismiss(frame);
-      }
+      for (const root of roots) stampFrame(root);
       frameAttributeObserver?.disconnect();
       frameAttributeObserver = null;
       const frames = [];
@@ -1129,7 +1275,7 @@ function apply(ctx) {
       for (const frame of frames) {
         frameAttributeObserver.observe(frame, {
           attributes: true,
-          attributeFilter: ["data-sidebar-collapsed", "data-details-collapsed"]
+          attributeFilter: ["data-sidebar-collapsed", "data-rightbar-collapsed"]
         });
       }
     };
@@ -1182,6 +1328,7 @@ function apply(ctx) {
   ctx.effect(() => () => layoutSource.dispose(), "dsh-chamber: mobile layout source");
   ctx.effect(() => {
     const touchTier = window.matchMedia(TOUCH_TIER_QUERY);
+    const phoneTier = window.matchMedia(PHONE_TIER_QUERY);
     let disposers = [];
     const sync = () => {
       if (touchTier.matches) {
@@ -1190,12 +1337,15 @@ function apply(ctx) {
           disposers = [
             installEnterToNewline(),
             installEditabilityRecovery(),
-            installKeyboardPinning(),
+            installKeyboardCompensation(),
             installComposerSelfHeal(),
             // iOS suppresses the compatibility click for drawer taps (the
             // hover-reveal layout shift) — heal the lost activation so one
             // tap switches sessions (drawer-taps.ts).
             installDrawerTapHeal(() => touchTier.matches),
+            // Phone-tier settings sheet: switching section chips must reset
+            // the shared options scroller (settings-sheet.ts).
+            installSettingsSheetScrollReset(() => phoneTier.matches),
             ladder.attach()
           ];
         }

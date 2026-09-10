@@ -18,7 +18,7 @@
   ensure-electron 物化**每机器共享** Electron dist，逻辑见
   `packages/desktop/scripts/electron-shared.mjs`）
 - `update-vendor.mjs` —— 上游 dsh 源码 pin 升级（submodule 原子流程）：
-  `node scripts/dev/update-vendor.mjs <tag>`（tag 如 `dsh-v0.1.1-rc.2`）：fetch+校验 tag →
+  `node scripts/dev/update-vendor.mjs <tag>`（tag 形如 `dsh-vX.Y.Z-alpha.N`；当前 pin 见 `harness.commit`）：fetch+校验 tag →
   切 submodule → 更新 `harness.commit` → 差量建链 → 原子重生成锁文件 → frozen 验证。
 - `verify-i18n.mjs`、`typecheck-client-web.mjs`、`typecheck-connection.mjs`、
   `typecheck-api-gateway.mjs`、`verify-workflow-action-pins.mjs`、

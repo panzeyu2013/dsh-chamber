@@ -1,6 +1,6 @@
 /**
  * The window.dshChamber page bridge as consumed by the connections section
- * (desktop preload.cts, design 05 §3.3). Mirrors the renderer's
+ * (desktop preload.cts, design 05 §7.4). Mirrors the renderer's
  * global.d.ts declaration structurally (interface merging): returns/events/
  * projections are non-secret — never a tunnel URL or credential material;
  * save_connection alone accepts transient write-only credential input.
@@ -27,7 +27,10 @@ import type { DshChamberBridge } from '../../renderer/src/global.d.ts'
  * every registry-returning path.
  */
 export type {
-  ChamberHostGraphState,
+  // Registry-driven chamber projection (design 13 §6, 2026-09 round): the
+  // per-package state list (the two former fixed-row types are gone) —
+  // re-export the authoritative renderer types, never a local mirror.
+  ChamberHostPackageState,
   ChamberInjectionState,
   ConnectionCredentialMutations,
   GatewayPluginApplyIpcResult,

@@ -20,6 +20,8 @@ declare module '@deepseek-ai/cordis' {
     emit(...args: any[]): unknown
     get(...args: any[]): unknown
     provide(...args: any[]): unknown
+    /** Cordis effect scope: the callback's returned disposer runs on fiber teardown. */
+    effect(fn: () => (() => void) | void, label?: string): void
     /**
      * chamber v1: per-instance sessions runtime face (loose mirror of ISessions
      * from @deepseek-ai/dsh-api-session-controller/client — the dsh-v0.1.2-alpha.1
@@ -44,7 +46,7 @@ declare module '@deepseek-ai/dsh-client-web' {
     loadBundle?: (url: string) => Promise<void>
   }
   /**
-   * chamber patch (05 §3.6 / design 09): mirror of boot.ts AppWebEntryOptions —
+   * chamber patch (design 05 §6 / design 09): mirror of boot.ts AppWebEntryOptions —
    * per-instance extra host-graph client-plugin rows (bundles pre-loaded by
    * the chamber shell; ids only merged into the boot rows here). dsh-v0.1.2-alpha.1
    * BootModuleRow alignment: the required `initialUrl` (the preloaded combo
@@ -77,6 +79,12 @@ declare module '@deepseek-ai/dsh-client-web' {
   export function ensureWebModuleSystem(seams?: BootSeams): {
     manifest: { plugins: ReadonlyArray<{ id: string; immediately?: boolean }> }
     prefetch(id: string): Promise<void>
+    /**
+     * Materialize a loaded row's module namespace (2026-12: the shared
+     * client-plugin-loader publishes this table so the settings bridge mounts a
+     * source's own plugins through the SAME union table the boot used).
+     */
+    import(specifier: string): Promise<unknown>
   }
   /** The web shell kernel consumed by shell.ts (boot.ts). */
   export class AppWebEntry {
@@ -102,6 +110,9 @@ declare module '@deepseek-ai/dsh-client-store'
 // chamber-entry.ts (covered factory, never ctx.plugin — see the seed.ts /
 // platform.ts deviation notes in dsh-client-web).
 declare module '@deepseek-ai/dsh-client-ui-primitives'
+// alpha.2: the docking-kit platform word the composite answers with a
+// covered factory (pure library — no cordis plugin, no ./client export).
+declare module '@deepseek-ai/dsh-client-ui-dockkit'
 declare module '@deepseek-ai/dsh-api-session-controller/client'
 declare module '@deepseek-ai/dsh-api-workspace-controller/client'
 declare module '@deepseek-ai/dsh-client-locale/client'
@@ -111,6 +122,12 @@ declare module '@deepseek-ai/dsh-api-gateway/client'
 declare module '@deepseek-ai/dsh-api-remotes/client'
 
 declare module '@deepseek-ai/dsh-client-ui-agent-preset/client'
+// 2026-09 三轮: covered so the registered vendor patch can carry the per-entry
+// base path on the upload URL (the host half stays an instance host row).
+declare module '@deepseek-ai/dsh-client-file-upload/client'
+// 2026-09 四轮: covered (deferred) so the registered vendor patch can carry the
+// per-entry base path on the export URL; the host half keeps the route/command.
+declare module '@deepseek-ai/dsh-session-log-export/client'
 declare module '@deepseek-ai/dsh-client-ui-approval/client'
 // rc.8 deferred-family client entries (design 09 §4; chamber-entry.ts
 // registerDeferred dynamic imports): attachment (composer + message-image
@@ -162,19 +179,19 @@ declare module '@deepseek-ai/dsh-client-ui-workspace/client'
  * multi-source session list. The renderer only plugs it into the per-instance
  * boot graph; loose face.
  */
-declare module '@dsh-chamber/dsh-client-ui-sidebar/client' {
+declare module '@dsh-chamber/dsh-chamber-client-ui-sidebar/client' {
   export const inject: string[]
   export function apply(ctx: any): void
 }
 
 /** Chamber Git worktree sidebar occupant (design 08). */
-declare module '@dsh-chamber/dsh-client-ui-git/client' {
+declare module '@dsh-chamber/dsh-chamber-client-ui-git/client' {
   export const inject: string[]
   export function apply(ctx: any): void
 }
 
 /** Chamber open-in header button (design 16 + open-in extension). */
-declare module '@dsh-chamber/dsh-client-ui-open-in/client' {
+declare module '@dsh-chamber/dsh-chamber-client-ui-open-in/client' {
   export const inject: string[]
   export function apply(ctx: any): void
 }
@@ -185,7 +202,7 @@ declare module '@dsh-chamber/dsh-client-ui-open-in/client' {
  * sidebar width preference is shared across every shell boot and persisted.
  * The renderer only plugs it into the per-instance boot graph; loose face.
  */
-declare module '@dsh-chamber/dsh-client-ui-layout/client' {
+declare module '@dsh-chamber/dsh-chamber-client-ui-layout/client' {
   export const inject: string[]
   export function apply(ctx: any): void
 }
@@ -197,7 +214,7 @@ declare module '@dsh-chamber/dsh-client-ui-layout/client' {
  * host management. The renderer only plugs it into the per-instance boot
  * graph; loose face.
  */
-declare module '@dsh-chamber/dsh-client-ui-settings-connections/client' {
+declare module '@dsh-chamber/dsh-chamber-client-ui-settings-connections/client' {
   export const inject: string[]
   export function apply(ctx: any): void
 }
@@ -210,7 +227,7 @@ declare module '@dsh-chamber/dsh-client-ui-settings-connections/client' {
  * settings sections, plus the fixed chamber-global connections entry. The
  * renderer only plugs it into the per-instance boot graph; loose face.
  */
-declare module '@dsh-chamber/dsh-client-ui-settings-bridge/client' {
+declare module '@dsh-chamber/dsh-chamber-client-ui-settings-bridge/client' {
   export const inject: string[]
   export function apply(ctx: any): void
 }

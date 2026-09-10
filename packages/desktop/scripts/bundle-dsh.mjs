@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { commitBundleSwap, recoverBundleSwap } from './bundle-swap.mjs';
-import { ALLOW_BUILDS, pruneRuntimeArtifacts } from '@dsh-chamber/dsh-runtime';
+import { renderAllowBuildsBlock, pruneRuntimeArtifacts } from '@dsh-chamber/dsh-runtime';
 
 /**
  * 将 dsh 官方发布包 @deepseek-ai/dsh 安装为本地运行时（方案 B）。
@@ -17,7 +17,7 @@ import { ALLOW_BUILDS, pruneRuntimeArtifacts } from '@dsh-chamber/dsh-runtime';
  *   - 默认固定为经验证的精确版本（构建永不解析浮动 tag/range）
  *   - 此版本只属于桌面应用内嵌的本地 runtime，不要求远程 dsh 同版本；
  *     远程实例独立升级，只在连接时做协议能力兼容检查
- *   - 环境变量 DSH_CHAMBER_DSH_VERSION 只接受精确 semver（如 0.1.2-alpha.4）
+ *   - 环境变量 DSH_CHAMBER_DSH_VERSION 只接受精确 semver（形如 X.Y.Z-<stage>.N）
  *     用于显式升级验证；`latest`、range 与 URL 一律拒绝
  *   - 封装完成后 vendor/dsh/package.json 记录实际解析到的精确版本
  *     （dependencies["@deepseek-ai/dsh"]），可复现重建；--force 刷新当前 pin。
@@ -76,7 +76,7 @@ function lockfileDshVersion() {
     const match = /@deepseek-ai\/dsh@(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)/.exec(text);
     if (match !== null) return match[1];
   } catch { /* fall through to the pin */ }
-  return '0.1.2-rc.1';
+  return '0.1.5-rc.1';
 }
 const DEFAULT_DSH_VERSION = lockfileDshVersion();
 const BUNDLE_PNPM_VERSION = '11.21.0';
@@ -125,7 +125,7 @@ writeFileSync(
 );
 writeFileSync(
   path.join(work, 'pnpm-workspace.yaml'),
-  `minimumReleaseAge: 0\nallowBuilds:\n${ALLOW_BUILDS.map((name) => `  ${JSON.stringify(name)}: true`).join('\n')}\n`,
+  `minimumReleaseAge: 0\nallowBuilds:\n${renderAllowBuildsBlock()}\n`,
 );
 
 /**

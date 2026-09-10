@@ -7,7 +7,7 @@
  * VIEW MAPPING ONLY — the pure core lives in the sidebar package shared face
  * (design 21 §5.2 split): the parsers / fetchers / action gates / error
  * classification / the settle poll are exported by
- * `@dsh-chamber/dsh-client-ui-sidebar/shared` (gateway-runtime.ts), and the
+ * `@dsh-chamber/dsh-chamber-client-ui-sidebar/shared` (gateway-runtime.ts), and the
  * restart-readiness poll by the same shared face (gateway-runtime-poll.ts).
  * This file keeps only the view mapping because it carries the bridge's UI
  * dictionary keys (SettingsBridgeKey); the shared known-enum arrays
@@ -28,7 +28,7 @@ import {
   type RemoteRuntimePhase,
   type RemoteRuntimeSource,
   type RemoteRuntimeStatus,
-} from '@dsh-chamber/dsh-client-ui-sidebar/shared'
+} from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
 
 /** Render three-state projection of the remote status (design 18 §3.6
  *  status/文案口径 via the §9.3 status contract):

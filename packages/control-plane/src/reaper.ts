@@ -1,8 +1,8 @@
 /**
  * Orphan reaper for managed dsh hosts.
  *
- * Design: docs/design/02-host-management-deployment.md §3.4.2 (reaper 判定序列)
- * with §3.4.1 (记录文件格式). Direct port of the reference implementation's
+ * Design: docs/design/02-host-management-deployment.md §3.4 (reaper 判定序列)
+ * with §3.3 (记录文件格式). Direct port of the reference implementation's
  * managed-process-registry safety model: a spawn record is only reclaimed when
  * all of "we recorded it", "identity re-verified (command line + port
  * listener)", and "orphaned (reparented to init or owner dead)" hold; any
@@ -141,7 +141,7 @@ function realManagedTreeAlive(pid: number): boolean {
 }
 
 /**
- * Signal the whole process group of a managed dsh host (design 02 §3.4.2:
+ * Signal the whole process group of a managed dsh host (design 02 §3.4:
  * "进程组 SIGTERM → 轮询 1.5s → SIGKILL" — spawn-dsh's terminateChild does
  * the same group kill). A group can be absent even while the pid is alive
  * (pid not a group leader, or the leader already reparented) — fall back to
@@ -449,7 +449,7 @@ async function processEntry(dir: string, name: string, log: LogFn, deps: Require
 
 /**
  * Scan <stateDir>/managed-dsh and reclaim orphaned managed dsh hosts per
- * design 02 §3.4.2. Safe under concurrent control-plane instances: entries
+ * design 02 §3.4. Safe under concurrent control-plane instances: entries
  * whose owner is still alive are never touched.
  * @param options - {stateDir, logger, deps?} (deps are test seams; default =
  *   the real ps/lsof/ss/proc/signal implementations).

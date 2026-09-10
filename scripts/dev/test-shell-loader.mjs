@@ -31,7 +31,7 @@ export async function resolve(specifier, context, nextResolve) {
   // module instead of the package's shared barrel: the barrel also links the
   // source-only dsh connection/runtime packages that this isolated Node test
   // intentionally does not install or execute.
-  if (specifier === '@dsh-chamber/dsh-client-ui-sidebar/shared') {
+  if (specifier === '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared') {
     return { url: CHAMBER_BRIDGE_URL, shortCircuit: true }
   }
   return nextResolve(specifier, context)

@@ -35,8 +35,8 @@ test('the host-graph packaging build distributes the three chamber host packages
   const archive = HOST_PACKAGE_BUILD_ROWS.find(row => row.label === 'archive-cleanup')
   assert.ok(archive !== undefined, 'the third chamber host package row must exist')
   assert.ok(
-    archive.sourceDir.endsWith(join('packages', 'dsh-host-archive-cleanup')),
-    `archive-cleanup source must be the packaged dsh-host-archive-cleanup tree: ${archive.sourceDir}`,
+    archive.sourceDir.endsWith(join('packages', 'dsh-chamber-seed-archive-cleanup')),
+    `archive-cleanup source must be the packaged dsh-chamber-seed-archive-cleanup tree: ${archive.sourceDir}`,
   )
   assert.ok(
     archive.outDir.endsWith(join('dist', 'host-archive-cleanup-package')),

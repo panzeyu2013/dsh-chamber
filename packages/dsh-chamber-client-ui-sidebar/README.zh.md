@@ -1,4 +1,4 @@
-# @dsh-chamber/dsh-client-ui-sidebar
+# @dsh-chamber/dsh-chamber-client-ui-sidebar
 
 [English](README.md) | 中文
 
@@ -128,7 +128,7 @@ chamber 自研侧边栏插件（设计 05 §2）：拷贝官方 ui-sidebar 外�
 - `src/shared/gateway-runtime.ts` + `src/shared/gateway-runtime-poll.ts` 承载
   gateway dsh-runtime 纯核心（status parse/fetch、动作门、错误分类、重启就绪
   轮询 `pollGatewayReady`：1s/120s、abort 感知），经
-  `@dsh-chamber/dsh-client-ui-sidebar/shared` 导出（`./shared` →
+  `@dsh-chamber/dsh-chamber-client-ui-sidebar/shared` 导出（`./shared` →
   `./src/shared/index.ts`，免构建；vite 消费者打真实源码单实例）。
 - 消费包（settings-bridge/connections/git/layout/renderer）对**真实 shared 源码**
   做 typecheck：P4-4（2026-09）删除手写 ambient 镜像（`src/ambient/*.d.ts`），

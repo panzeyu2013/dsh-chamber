@@ -6,16 +6,17 @@
  * ## chamber fork (WP3/M3): chamber copy of the upstream
  * `packages/api/gateway` client half with the per-entry base-path patch. The
  * Remote stream WebSocket route must land under the control-plane per-instance
- * proxy prefix (`/api/i/<id>`), so `apply(ctx, config?)` accepts an optional
- * `{ basePath }` and threads it into `RemoteStreamMuxClient`; when omitted it
- * falls back to the entry Context's `chamberBasePath` (per-entry plugin
- * config, never a page-global knob). Everything else is verbatim upstream.
+ * proxy prefix (`/api/i/<id>`), so `apply(ctx)` reads the entry Context's
+ * `chamberBasePath` (bound by the shell before plugin materialization, never a
+ * page-global knob) and threads it into `RemoteStreamMuxClient`. Everything
+ * else is verbatim upstream.
  */
 
 import { Service } from '@deepseek-ai/cordis'
 import { RemoteError, remoteErrorOf } from '@deepseek-ai/dsh-typert-protocol'
 export type { TypertGatewayFaultDetails } from '../remote-error-codes.ts'
 import type { Context } from '@deepseek-ai/cordis'
+import { recoveryOverridesForTransport } from '@deepseek-ai/dsh-client-connection/client'
 import type {
   ConnectionHandle,
 } from '@deepseek-ai/dsh-client-connection/client'
@@ -140,27 +141,15 @@ declare module '@deepseek-ai/cordis' {
 /** Required Client services: the Typert registry and the existing Connection carrier. */
 export const inject = ['typert', 'connection']
 
-/** chamber patch: optional per-entry base path for the Remote stream WebSocket route. */
-export interface ClientRemoteOptions {
-  /**
-   * Per-entry control-plane proxy base path (`/api/i/<id>`), prepended to the
-   * Remote stream mux route so the socket lands under the per-instance proxy.
-   * Falls back to the entry Context's `chamberBasePath` when omitted; `''`
-   * keeps the stock `/api/remote.mux` route.
-   */
-  readonly basePath?: string
-}
-
 /**
  * Install the typed Client Remote service.
- * @param ctx - Client Cordis root.
- * @param config - optional chamber per-entry base path (`{ basePath }`).
+ * @param ctx - Client Cordis root (carries the per-entry `chamberBasePath`).
  */
-export function apply(ctx: Context, config: ClientRemoteOptions = {}): void {
-  new ClientRemoteService(ctx, config.basePath ?? chamberBasePathOf(ctx))
+export function apply(ctx: Context): void {
+  new ClientRemoteService(ctx, chamberBasePathOf(ctx))
 }
 
-/** chamber patch: read the per-entry base path bound by the shell before plugin materialization (05 §4). */
+/** chamber patch: read the per-entry base path bound by the shell before plugin materialization (05 §4) — the same seam the connection fork reads. */
 function chamberBasePathOf(ctx: Context): string | undefined {
   return (ctx as { readonly chamberBasePath?: string }).chamberBasePath
 }
@@ -188,6 +177,14 @@ class ClientRemoteService extends Service implements ClientRemote {
     if (connection.rpc.open === undefined) this.streams.start()
     let disposed = false
     let loop: ReturnType<ConnectionHandle['start']> | undefined
+    // chamber patch (Batch 2 follow-up): the page-global
+    // `__DSH_CONNECTION_RECOVERY__` bootstrap is absent under the chamber shell
+    // (the page is served by the control plane), so remote sources would run
+    // the loopback-tuned 15 s readiness deadline. Pass the per-source override
+    // through upstream's supported `start(sinks, config)` seam instead.
+    const recoveryOverrides = recoveryOverridesForTransport(
+      (ctx as { readonly chamberTransport?: unknown }).chamberTransport,
+    )
     const start = (): void => {
       if (disposed) return
       if (connection.rpc.open === undefined) this.streams.start()
@@ -196,7 +193,7 @@ class ClientRemoteService extends Service implements ClientRemote {
         onReconnectRequested: () => {
           if (connection.rpc.open === undefined) this.streams.reconnect()
         },
-      })
+      }, recoveryOverrides)
     }
     const loader = ctx.get('loader') as LoaderReadiness | undefined
     if (loader === undefined) start()

@@ -1,5 +1,5 @@
 /**
- * Gateway chamber surface (design 17 §8.5, 2026-12 收窄): the gateway-owned
+ * Gateway chamber surface (design 17 §10, 2026-12 收窄): the gateway-owned
  * `/chamber/*` routes behind the auth gate (dispatch.ts). After the 2026-12
  * orchestration strip (approvals/notifications, cross-session schedule,
  * session index, git worktree records, feature settings all removed — dsh
@@ -937,7 +937,7 @@ function materializeSlug(name: string): string {
 }
 
 /**
- * The gateway's own `/chamber/*` surface (design 17 §8.5, 2026-12 scope):
+ * The gateway's own `/chamber/*` surface (design 17 §10, 2026-12 scope):
  * channels projection + plugin-sync seed cache + the design 21 A1 plugin
  * write surface (install/materialize/remove/tasks, plan Phase 4.4) + browser
  * dashboard assets. Reads are GET/HEAD; the plugin MUTATION routes answer

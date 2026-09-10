@@ -40,6 +40,21 @@ declare module '@deepseek-ai/cordis' {
   }
 }
 
+/**
+ * Service base class (cordis service.ts): registering through the constructor
+ * makes every method call CALLER-bound — `this.ctx` inside a method is the
+ * calling plugin's context, which is how the settings bridge attributes a
+ * plugin's `remote.$on(...)` subscriptions to that plugin (2026-12 capability
+ * report).
+ */
+declare module '@deepseek-ai/cordis' {
+  export class Service<T = never> {
+    constructor(ctx: Context, name: string)
+    ctx: Context
+    name: string
+  }
+}
+
 declare module '@deepseek-ai/dsh-client-ui-renderer/client' {
   import type { Context } from '@deepseek-ai/cordis'
   import type { LocaleFace, StoredEntry } from '@deepseek-ai/dsh-client-ui-slots'
@@ -53,6 +68,13 @@ declare module '@deepseek-ai/dsh-client-ui-renderer/client' {
     getVersion(key: string): number
     subscribe(key: string, fn: () => void): () => void
     spec(key: string): { kind: string; scope: string } | undefined
+    /**
+     * Entry-render supervision seam (2026-12 settings extension): observe every
+     * render-time entry failure the boundaries contain, with the entry's
+     * registrant stamp — the honest diagnostic source for a plugin whose
+     * section renders but crashes.
+     */
+    onEntryError(fn: (key: string, entry: StoredEntry, error: unknown, info: { abdicated: boolean }) => void): () => void
     installLocale(face: LocaleFace): void
   }
   export interface RootOwnerProps {}

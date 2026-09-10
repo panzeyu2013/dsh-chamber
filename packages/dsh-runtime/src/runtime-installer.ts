@@ -23,7 +23,7 @@ import {
 } from 'node:fs'
 import { open } from 'node:fs/promises'
 import { join } from 'node:path'
-import { ALLOW_BUILDS } from './allow-builds.mjs'
+import { renderAllowBuildsBlock } from './allow-builds.mjs'
 import { validateVersionTree, readStorePruneRequest } from './dsh-runtime-store.ts'
 import type { RuntimeInstallResolution } from './dsh-runtime-updater.ts'
 import { createIntegrityVerifier, isSupportedIntegrity } from './registry-integrity.ts'
@@ -36,6 +36,7 @@ import {
   sha256FileDigest,
 } from './runtime-critical-files.ts'
 import { canonicalRegistryOrigin, isAllowedRegistryUrl, registryRedirectOrigins } from './registry-url.ts'
+import { PROBE_TEXT_KEEP_TOKENS } from './runtime-probes.ts'
 import { sanitizeErrorText } from './sanitize-error.ts'
 import { makeOwnedTreeWritable } from './tree-writable.ts'
 import { assertSafeVersion } from './version-safety.ts'
@@ -47,6 +48,13 @@ import {
   ensureRuntimeRootNoFollow,
   ensureRuntimeSubdirectoryNoFollow,
 } from './private-fs.ts'
+
+/**
+ * Version written into the synthetic install workdir's package.json. The
+ * stub is private and never published or resolved by version, so it only has
+ * to be a valid exact semver — named here so no bare literal floats in code.
+ */
+const INSTALL_STUB_VERSION = '0.0.0'
 
 export const DEFAULT_INSTALL_TIMEOUT_MS = 10 * 60 * 1000
 export const INSTALL_TERMINATE_GRACE_MS = 1_000
@@ -170,7 +178,7 @@ export function sanitizeInstallerOutput(raw: string, limit: number): string {
     /\b(token|password|passwd|secret|authorization|cookie)\s*[:=]\s*[^\s,;]+/gi,
     '$1=[redacted]',
   )
-  const sanitized = sanitizeErrorText(withoutNamedSecrets)
+  const sanitized = sanitizeErrorText(withoutNamedSecrets, PROBE_TEXT_KEEP_TOKENS)
   if (Buffer.byteLength(sanitized) <= limit) return sanitized
   return Buffer.from(sanitized).subarray(0, limit).toString('utf8').replace(/\uFFFD$/u, '')
 }
@@ -1114,11 +1122,11 @@ export async function installRuntimeVersion(opts: InstallOptions): Promise<Insta
     writeState('preparing')
     atomicWriteRuntimeFileNoFollow(opts.baseDir, join(workDir, 'package.json'), `${JSON.stringify({
       name: 'dsh-runtime-install',
-      version: '0.0.0',
+      version: INSTALL_STUB_VERSION,
       private: true,
       dependencies: { '@deepseek-ai/dsh': 'file:./dsh-runtime-package.tgz' },
     }, null, 2)}\n`)
-    atomicWriteRuntimeFileNoFollow(opts.baseDir, join(workDir, 'pnpm-workspace.yaml'), `minimumReleaseAge: 0\nallowBuilds:\n${ALLOW_BUILDS.map((name) => `  ${JSON.stringify(name)}: true`).join('\n')}\n`)
+    atomicWriteRuntimeFileNoFollow(opts.baseDir, join(workDir, 'pnpm-workspace.yaml'), `minimumReleaseAge: 0\nallowBuilds:\n${renderAllowBuildsBlock()}\n`)
 
     const nodeWithSandbox = () => {
       const resolved = nodeFn()

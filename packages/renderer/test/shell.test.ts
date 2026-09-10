@@ -136,14 +136,88 @@ test('bootInstanceShell: a clean run settles booted with no error and keeps the 
     assert.equal(state.booted, true)
     assert.equal(state.error, null)
     assert.equal(__testDisposedCount(), 0)
-    assert.deepEqual(__testConfiguredContexts(), [{
+    const [facts] = __testConfiguredContexts() as [Record<string, unknown>]
+    const { chamberReportBootDegraded, ...immutableFacts } = facts
+    assert.deepEqual(immutableFacts, {
       chamberInstanceId: 'ssh-test-clean-2',
       chamberBasePath: '/api/i/ssh-test-clean-2',
       chamberSourceFingerprint: testSourceFingerprint('ssh-test-clean-2'),
       chamberTransport: 'ssh',
       // 代际事实（producer 注册表的栅栏输入）。
       chamberBootGeneration: 1,
-    }])
+    })
+    // 降级上报缝（2026-09-10）：条目里的必需服务探针经它把「挂载已知不完整」
+    // 交给 App（App 据此在该来源 ready 后自动重挂），必须随每个 boot 一起提供。
+    assert.equal(typeof chamberReportBootDegraded, 'function')
+  } finally {
+    __testResetConfiguredContexts()
+    restoreFetch()
+    restoreWindow()
+  }
+})
+
+test('bootInstanceShell: the serving gate is threaded into the host-graph fetch (rows after a wait)', async () => {
+  // The App injects `waitForServing`; the boot must pass it to collectExtraRows
+  // so a source that is still starting (503) is waited for instead of costing
+  // the boot its whole profile client-plugin set — and the settle must then be
+  // CLEAN (no degrade fact), which is what stops the App from re-booting a
+  // healthy mount.
+  let calls = 0
+  const original = globalThis.fetch
+  globalThis.fetch = (async () => {
+    calls += 1
+    const starting = calls <= 10                      // exhaust the default budget once
+    return new Response(JSON.stringify(starting
+      ? { code: 'instance_unavailable', error: 'instance not ready' }
+      : { rpcId: 'r1', result: { ok: true, value: { rev: 'g', entries: [] } } }), {
+      status: starting ? 503 : 200, headers: { 'content-type': 'application/json' },
+    })
+  }) as typeof fetch
+  const restoreWindow = stubWindow()
+  __testResetDisposed(); __testResetConfiguredContexts(); __testSetBootError(undefined); __testSetRunError(undefined)
+  const waits: string[] = []
+  try {
+    const state = await shellModule.bootInstanceShell(
+      'ssh-test-gate-8', '/api/i/ssh-test-gate-8', {} as HTMLElement, () => {},
+      testSourceFingerprint('ssh-test-gate-8'), 'ssh',
+      { waitForServing: async (instanceId) => { waits.push(instanceId); return true } },
+    )
+    assert.equal(state.booted, true)
+    assert.equal(state.degraded, null, 'a boot that got its rows after the wait must not be marked degraded')
+    assert.deepEqual(waits, ['ssh-test-gate-8'])
+    assert.ok(calls > 10, 'the fetch retried on a fresh budget after the source started serving')
+  } finally {
+    __testResetConfiguredContexts()
+    globalThis.fetch = original
+    restoreWindow()
+  }
+})
+
+test('bootInstanceShell: a graph-less boot settles degraded and republishes a late probe verdict', async () => {
+  // 2026-09-10（sidebarRight 彻底修复）：取图在启动窗口内拿不到时，boot 仍成功但
+  // 必须带上「已知不完整」这个事实（App 据此在来源 ready 后自动重挂）；条目里
+  // 5s 必需服务探针的判词晚于 settle，经同一条 onState 缝补发。
+  const restoreFetch = stubUnavailableGraph()
+  const restoreWindow = stubWindow()
+  __testResetDisposed()
+  __testResetConfiguredContexts()
+  __testSetBootError(undefined)
+  __testSetRunError(undefined)
+  const states: Array<{ booted: boolean; degraded: { kind: string } | null }> = []
+  try {
+    const state = await bootInstanceShell(
+      'ssh-test-degrade-7', '/api/i/ssh-test-degrade-7', {} as HTMLElement,
+      (next) => states.push(next as unknown as { booted: boolean; degraded: { kind: string } | null }),
+    )
+    assert.equal(state.booted, true)
+    assert.equal(state.error, null)
+    assert.equal(state.degraded?.kind, 'graph-unavailable')
+    const ctx = __testConfiguredContexts().at(-1) as { chamberReportBootDegraded?: (message: string) => void }
+    assert.equal(typeof ctx.chamberReportBootDegraded, 'function', 'the entry needs the degrade seam')
+    ctx.chamberReportBootDegraded?.('required extra-row service(s) missing after 5000ms: sidebarRight')
+    const last = states.at(-1)!
+    assert.equal(last.booted, true)
+    assert.equal(last.degraded?.kind, 'required-services-missing')
   } finally {
     __testResetConfiguredContexts()
     restoreFetch()

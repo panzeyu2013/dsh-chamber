@@ -49,7 +49,7 @@ import {
   type InstanceRuntimeReport,
   type InstanceSnapshot,
   type PluginGraphDiagnostic,
-} from '@dsh-chamber/dsh-client-ui-sidebar/shared'
+} from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
 import { detectNotificationEdges, dedupeCompleteEdges, type SessionFacts } from './notification-edges.ts'
 import { projectBadgeCount } from './badge-count.ts'
 import {
@@ -69,6 +69,8 @@ import {
   type SourceOwnershipToken,
 } from './deep-link-activation.ts'
 import { openInstanceSession, reconnectInstanceConnection, disposeAllShells, disposeInstanceShell, type ShellState } from './shell.ts'
+import { BOOT_TIMEOUT_MS } from './boot-budget.ts'
+import { planDegradedRetries } from './degraded-retry.ts'
 import { runViewTransition } from './view-transition.ts'
 import { captureSidebarScrollAnchor, restoreSidebarScroll } from './sidebar-scroll-sync.ts'
 import {
@@ -89,6 +91,9 @@ import {
   shouldRetainPushedAggregate,
   withoutRemovedSourceIds,
   withoutRemovedSourceKeys,
+  reconnectStalenessMsForTransport,
+  AGGREGATE_RECONNECT_HTTP_STALE_MS,
+  AGGREGATE_RECONNECT_SSH_STALE_MS,
 } from './aggregate-refresh.ts'
 import { errorMessage } from './status.ts'
 import type { SshInstanceSpec, SshStatusProjection, TransportKind } from './global.d.ts'
@@ -132,16 +137,15 @@ const AGGREGATE_FALLBACK_POLL_MS = 30_000
  * (S2): the watchdog may mark a healthy-but-quiet producer stale on recency
  * alone, so a failed (or unnecessary) reconnect must not retry every tick. */
 const AGGREGATE_RECONNECT_BACKOFF_MS = 60_000
-/** Staleness threshold for the S2 reconnect arm (deliberately ABOVE the 30s
- * pull threshold): the App cannot distinguish a frozen push channel from a
- * healthy-but-quiet one (producers only push on content changes), and every
- * reconnect replays baselines — so the steady-state cadence for an idle
- * healthy direct-http source is one lightweight connection bounce per
- * AGGREGATE_RECONNECT_STALE_MS (≈2min), the inherent cost of healing a real
- * freeze within that bound (review M2: honest idle cadence, halved vs the
- * original 60s). The unary pull keeps its own 30s cadence untouched. */
-const AGGREGATE_RECONNECT_STALE_MS = 120_000
-/** Re-request floor for session-list refresh dispatch (design 24 §20): a
+/** Staleness thresholds for the S2 reconnect arm live in aggregate-refresh.ts
+ * (per transport: http ≈2min tight heal, ssh ≈5min last-resort heal — see
+ * {@link AGGREGATE_RECONNECT_HTTP_STALE_MS} / {@link AGGREGATE_RECONNECT_SSH_STALE_MS}
+ * and {@link reconnectStalenessMsForTransport}). Both are deliberately ABOVE
+ * the 30s pull threshold: the App cannot distinguish a frozen push channel
+ * from a healthy-but-quiet one (producers only push on content changes), and
+ * every reconnect replays baselines. The unary pull keeps its own 30s cadence
+ * untouched. */
+/** Re-request floor for session-list refresh dispatch (design 24 §12): a
  *  refresh re-runs the OFFICIAL session.list of the mounted ctx; while ghost
  *  rows of purged sessions stay pending, requests are floored to one per
  *  coalescing window per source (the official refreshList single-flight bounds
@@ -149,7 +153,7 @@ const AGGREGATE_RECONNECT_STALE_MS = 120_000
  *  a busy source). Suppressed dispatches never lose the ids — they stay in the
  *  per-source pending set and re-evaluate on the next push. The archive-manager
  *  dialog additionally requests one on every purge settle (immediate path,
- *  not stamped here — deliberate cross-package decoupling, §20 notes the
+ *  not stamped here — deliberate cross-package decoupling, §12 notes the
  *  overlap). */
 const SESSION_LIST_REFRESH_COALESCE_MS = 5_000
 /** Bounded wave over whatever edge-triggered refresh set a poll produces. */
@@ -327,7 +331,8 @@ function deriveServers(
       // never issues its own session read. archiveSetKnown is the provenance
       // tri-state: the mounted baseline reports an authoritative set (even
       // when empty); the unary-fallback view reports NOT known — consumers
-      // must never read its empty rows as "no archived sessions".
+      // must never read its set as "no archived sessions" (it may be empty OR
+      // the remembered authoritative set, §12 F3(b)).
       archivedSessions = deriveArchivedSessions(aggregate)
       archiveSetKnown = aggregate.archiveSetKnown === true
     }
@@ -528,6 +533,30 @@ export default function App() {
   // （失败报告 + 重试 + 服务器切换）。retryTokens 驱动 InstanceView 的重试
   // 重 boot（令牌递增 → 视图复位 → 重新启动 shell）。
   const [shellStates, setShellStates] = useState<Record<string, ShellState>>({})
+  /**
+   * 来源就绪门 + 降级自愈（2026-09-10，sidebarRight 彻底修复）：
+   * ① 实例仍启动时让取图等它就绪（冷启动 / 重启跨越窗口不再丢掉整套 profile
+   *    客户端插件；`ui-chat` 依赖的 `sidebarRight` 只由其中的 ui-sidebar-right
+   *    行提供）；
+   * ② boot 以降级收尾（无图 / 必需 extra-row 服务缺席）而来源随后 ready 时，
+   *    自动重挂一次——此前只有整页 reload 能恢复。每个 ready 世代一次。
+   * 相位从 servers 的渲染期镜像读取，门自身带绝对上限，来源被移除即放弃。
+   */
+  const serversPhaseRef = useRef<Record<string, string>>({})
+  const waitForServing = useCallback((instanceId: string): Promise<boolean> => {
+    const deadline = Date.now() + SERVING_WAIT_MS
+    return new Promise<boolean>((resolve) => {
+      const check = (): void => {
+        const phase = serversPhaseRef.current[instanceId]
+        if (phase === undefined) { resolve(false); return }
+        if (phase === 'ready') { resolve(true); return }
+        if (Date.now() >= deadline) { resolve(false); return }
+        setTimeout(check, SERVING_POLL_MS)
+      }
+      check()
+    })
+  }, [])
+  const degradedRetriedRef = useRef<Record<string, boolean>>({})
   const [retryTokens, setRetryTokens] = useState<Record<string, number>>({})
   // 每实例 workspace/session 聚合（已挂载 ctx 推送 + 未挂载 unary 兜底；控制面不持有会话事实）
   const [aggregates, setAggregates] = useState<Record<string, InstanceAggregate>>({})
@@ -552,20 +581,30 @@ export default function App() {
   // mounted source (AGGREGATE_RECONNECT_BACKOFF_MS). Reaped with the source
   // like snapshotAtRef (a same-id re-add must start a fresh backoff window).
   const lastReconnectAtRef = useRef<Record<string, number>>({})
-  // Last session-list refresh request timestamp per source (design 24 §20,
+  // Last session-list refresh request timestamp per source (design 24 §12,
   // ms epoch; absent = never requested). Floors the re-request cadence of the
   // ghost-row convergence machine below (SESSION_LIST_REFRESH_COALESCE_MS): a
   // refresh re-runs the OFFICIAL session.list of the mounted ctx, and a
   // failing refresh on a busy source must not stack RPCs per push. Reaped with
   // the source like lastReconnectAtRef (same-id re-add starts a fresh window).
   const sessionListRefreshAtRef = useRef<Record<string, number>>({})
-  // Un-converged ghost-row ids per source (design 24 §20): archived ids removed
+  // Un-converged ghost-row ids per source (design 24 §12): archived ids removed
   // by a purge whose rows are STILL listed in the latest mounted push of this
   // source (rows linger in the official client summaries until a session-list
   // refresh drops them). Maintained by planSessionListRefresh on every push;
   // empty/absent = converged (rows gone or never listed). Reaped with the
   // source like the stamp map above (same-id re-add starts clean).
   const sessionListRefreshPendingRef = useRef<Record<string, string[]>>({})
+  // Last AUTHORITATIVE archive set per source (design 24 §12 F3):
+  // the ids published by a mounted push with `archiveSetKnown: true`. It
+  // survives the aggregate being replaced by the degraded unary view (which
+  // carries no archive wire), so (a) a purge whose shrink lands while the
+  // producer's first projection is still pending is still detectable as a
+  // shrink, and (b) a degraded commit can keep filtering archived rows
+  // instead of un-hiding every archived session. Never authoritative on its
+  // own: `archiveSetKnown` stays false wherever this memory is used as a
+  // substitute. Reaped with the source like the refs above.
+  const authoritativeArchiveSetRef = useRef<Record<string, readonly string[]>>({})
   // Synchronous connection-generation edge memory. A mounted producer may
   // suppress an identical post-reconnect snapshot, while the App has already
   // replaced its aggregate with not-connected; one authoritative pull on each
@@ -632,6 +671,33 @@ export default function App() {
     lastServersSignatureRef.current = signature
     chamberBridge.publish(servers)
   }, [servers])
+
+  // 相位镜像（waitForServing 读它；effect 里写，避免渲染期改 ref）。
+  useEffect(() => {
+    serversPhaseRef.current = Object.fromEntries(servers.map(server => [server.id, server.phase]))
+  }, [servers])
+
+  // 降级自愈：boot 以降级收尾（无客户端插件图 / 必需 extra-row 服务缺席）而来源
+  // 随后 ready 时，自动重挂一次——此前只有整页 reload 能恢复（2026-09-10，
+  // sidebarRight 彻底修复）。每个 ready 世代一次。
+  useEffect(() => {
+    const phases = Object.fromEntries(servers.map(server => [server.id, server.phase]))
+    const plan = planDegradedRetries({
+      degraded: Object.entries(shellStates)
+        .filter(([, state]) => state.degraded !== null)
+        .map(([instanceId]) => instanceId),
+      phaseOf: (instanceId) => phases[instanceId],
+      retried: degradedRetriedRef.current,
+    })
+    degradedRetriedRef.current = plan.retried
+    if (plan.retry.length === 0) return
+    console.warn(`[app] degraded shell(s) re-booting after the source became ready: ${plan.retry.join(', ')}`)
+    setRetryTokens(prev => {
+      const next = { ...prev }
+      for (const instanceId of plan.retry) next[instanceId] = (next[instanceId] ?? 0) + 1
+      return next
+    })
+  }, [servers, shellStates])
 
   // 问题 B（2026-12）：gateway 来源的托管 dsh 状态探针。desktop 的 ready 只
   // 证明 gateway 进程活着，托管 dsh 是独立进程——不消费 connectionState 时，
@@ -841,7 +907,7 @@ export default function App() {
       }
     }
     // Same lockstep for the session-list-refresh coalescing stamps and the
-    // ghost-row convergence state (design 24 §20): a same-id re-add must start
+    // ghost-row convergence state (design 24 §12): a same-id re-add must start
     // a fresh request window and a fresh pending set.
     for (const id of Object.keys(sessionListRefreshAtRef.current)) {
       if (!servers.some(server => server.id === id)) {
@@ -851,6 +917,11 @@ export default function App() {
     for (const id of Object.keys(sessionListRefreshPendingRef.current)) {
       if (!servers.some(server => server.id === id)) {
         delete sessionListRefreshPendingRef.current[id]
+      }
+    }
+    for (const id of Object.keys(authoritativeArchiveSetRef.current)) {
+      if (!servers.some(server => server.id === id)) {
+        delete authoritativeArchiveSetRef.current[id]
       }
     }
     setPluginDiagnostics(prev => {
@@ -1204,6 +1275,7 @@ export default function App() {
           current,
           snapshot,
           snapshotSourcesRef.current[instanceId] === true,
+          authoritativeArchiveSetRef.current[instanceId],
         )
         if (current !== undefined && current.state === 'ok'
           && instanceSnapshotSignature(current) === instanceSnapshotSignature(next)) {
@@ -1391,7 +1463,7 @@ export default function App() {
   // channel. The reconnect is an ADDITION, never a replacement of the pull.
   // Cadence (two distinct regimes, review M2/Low-2): a HEALTHY-but-quiet
   // source rebaselines after each reconnect, whose baseline push refreshes
-  // snapshotAt — the next reconnect fires ~AGGREGATE_RECONNECT_STALE_MS later
+  // snapshotAt — the next reconnect fires one transport threshold later
   // (this depends on the producer's withdraw→re-publish chain resurfacing the
   // baseline; if that chain stays silent the regime degrades to the backoff
   // gate below). A TRULY dead channel gets no push after a reconnect, so once
@@ -1417,13 +1489,18 @@ export default function App() {
     // transport-caused (e.g. a dsh-restart rebaseline gap), so a
     // loopback-host direct-http target (local gateway dev) stays covered; a
     // healthy idle one there merely bounces every ~2min (bounded, dev form).
-    const directHttpSourceIds = new Set(
-      remoteInstances
-        .filter(instance => instance.transport === 'http')
-        .map(instance => sourceIdForInstance(instance)),
+    // Per-source transport decides the threshold (2026-09 extension): http
+    // keeps the 120s tight-heal cadence (no upstream heartbeat), ssh gets the
+    // 5min last-resort cadence (three independent tunnel detectors already
+    // cover transport-level death; this arm only heals an app-level freeze),
+    // and local/unknown sources are skipped entirely.
+    const transportBySourceId = new Map(
+      remoteInstances.map(instance => [sourceIdForInstance(instance), instance.transport]),
     )
     for (const id of ready) {
-      if (id === LOCAL_INSTANCE_ID || !directHttpSourceIds.has(id)) continue
+      if (id === LOCAL_INSTANCE_ID) continue
+      const stalenessMs = reconnectStalenessMsForTransport(transportBySourceId.get(id))
+      if (stalenessMs === null) continue
       // mounted here means "the ctx producer pushed at least one snapshot
       // this generation" (snapshotSources) — the S2 target class is a
       // channel that worked and then went silent; a channel dead from its
@@ -1434,7 +1511,7 @@ export default function App() {
         lastSnapshotAt: snapshotAtRef.current[id],
         lastReconnectAt: lastReconnectAtRef.current[id],
         now,
-        stalenessMs: AGGREGATE_RECONNECT_STALE_MS,
+        stalenessMs,
         reconnectBackoffMs: AGGREGATE_RECONNECT_BACKOFF_MS,
       })) continue
       // Record the attempt synchronously with firing so overlapping
@@ -2252,6 +2329,8 @@ export default function App() {
         booted: false,
         booting: false,
         error: `实例启动超时：挂载后 ${Math.round(HARVEST_ABANDON_MS / 1000)} 秒未收到任何响应（可重试或切换来源）`,
+        // 超时是失败态，不是降级态：自愈重挂由失败覆盖层的「重试」负责。
+        degraded: null,
       },
     }))
   }, [])
@@ -2787,7 +2866,7 @@ export default function App() {
       // that notification overwrite the authoritative not-connected row;
       // the next ready edge performs one unary refresh.
       if (!readyAggregateSourcesRef.current.has(sourceId)) return
-      // design 24 §20 (archive-cleanup convergence): an archived-set SHRINK
+      // design 24 §12 (archive-cleanup convergence): an archived-set SHRINK
       // in a mounted push is the client-observable "a purge completed" signal
       // (no unarchive wire — only the cleanup purge removes set members). The
       // purged sessions' rows may still linger in the official client session
@@ -2806,10 +2885,22 @@ export default function App() {
       // stay pending and re-evaluate on the next push. Quiet sources with no
       // further push self-hide within one watchdog cycle (the 30s merge pull
       // replaces the aggregate's session rows with the clean unary list).
+      // Remember the last AUTHORITATIVE archive set (see the ref's doc): used
+      // as the shrink baseline when the committed aggregate lost provenance,
+      // and as the archived-row filter for a degraded commit. ORDER IS
+      // LOAD-BEARING (2026-09 scan MAJOR): the PRE-update value is the
+      // baseline — updating the memory first would make the remembered set
+      // equal to the incoming snapshot's own set, so archiveSetShrink could
+      // never observe a shrink (the fallback branch would be dead code).
+      const rememberedArchiveSet = authoritativeArchiveSetRef.current[sourceId]
+      if (snapshot.archiveSetKnown === true) {
+        authoritativeArchiveSetRef.current[sourceId] = snapshot.archivedSessionIds
+      }
       const decision = planSessionListRefresh(
         watchdogAggregatesRef.current[sourceId],
         snapshot,
         sessionListRefreshPendingRef.current[sourceId],
+        rememberedArchiveSet,
       )
       if (decision.pending.length > 0) sessionListRefreshPendingRef.current[sourceId] = decision.pending
       else delete sessionListRefreshPendingRef.current[sourceId]
@@ -3121,7 +3212,22 @@ export default function App() {
   // 会话中途则要求错误持续 HEALTH_ERROR_GRACE_MS（容忍 SSE 重连/瞬时抖动的
   // 一次失败，避免闪烁），否则陈旧 health 会永远掩盖中途失联。ticker 只在该
   // 条件下运行，正常态零开销。
-  const HEALTH_ERROR_GRACE_MS = 10_000
+  /**
+ * How long a boot's host-graph fetch may wait for its source to start serving
+ * (2026-09-10). SINGLE-SOURCED from the boot budget on purpose: the same 60s
+ * sizes the shell's page-level slot (`boot-budget.ts`), the prewarm harvest
+ * deadline (`HARVEST_DEADLINE_MS = budget + 15s`) and the mount abandonment
+ * threshold (`HARVEST_ABANDON_MS = deadline + budget`). A hand-written number
+ * here would silently drift out of that ladder (the "same fact twice" failure
+ * this repo already paid for elsewhere) — worst case the gate would outlive the
+ * abandonment sweep and the failure overlay would race a still-waiting boot.
+ */
+const SERVING_WAIT_MS = BOOT_TIMEOUT_MS
+
+/** Poll interval of the serving gate (cheap; ends the moment the phase flips). */
+const SERVING_POLL_MS = 250
+
+const HEALTH_ERROR_GRACE_MS = 10_000
   const [, setHealthErrorTick] = useState(0)
   useEffect(() => {
     if (healthError === null || healthErrorAt === null) return
@@ -3159,6 +3265,7 @@ export default function App() {
               onSettled={handleInstanceSettled}
               onStateChange={handleShellState}
               retryToken={retryTokens[viewId]}
+              waitForServing={waitForServing}
             />
           )
         })}

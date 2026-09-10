@@ -56,7 +56,52 @@ test('sanitizeErrorText: Windows drive paths redacted; scheme-like x:// survives
   assert.equal(sanitizeErrorText('C://foo is fine'), 'C://foo is fine');
 });
 
+test('sanitizeErrorText: UNC shares are redacted (no drive letter, no forward slash)', () => {
+  // 2026-09 review: a UNC path matches neither the drive rule nor the POSIX
+  // rule, so it used to ride the projection verbatim — the gap widened when
+  // probe failure details started carrying host-side text.
+  assert.equal(
+    sanitizeErrorText(String.raw`open \\fileserver\share\alice\secret.json failed`),
+    'open [path] failed',
+  );
+  // extended-length form carries the same material
+  assert.equal(
+    sanitizeErrorText(String.raw`open \\?\C:\Users\alice\x.json failed`),
+    'open [path] failed',
+  );
+  // a UNC token with forward slashes is eaten whole, not left half-redacted
+  assert.equal(
+    sanitizeErrorText(String.raw`open \\fileserver\share/alice/x.json failed`),
+    'open [path] failed',
+  );
+});
+
 test('sanitizeErrorText: plain text passes through unchanged', () => {
   assert.equal(sanitizeErrorText('everything is fine'), 'everything is fine');
   assert.equal(sanitizeErrorText(''), '');
+});
+
+test('sanitizeErrorText: caller-declared tokens survive redaction', () => {
+  // Default behavior is unchanged: the POSIX branch matches `word/word` from
+  // INSIDE the token, so a registered RPC method name reads as a path.
+  assert.equal(sanitizeErrorText('commands/execute failed'), 'commands[path] failed');
+  // A declared token is restored verbatim while everything else is still redacted.
+  assert.equal(
+    sanitizeErrorText('commands/execute: /Users/alice/x is bad', ['commands/execute']),
+    'commands/execute: [path] is bad',
+  );
+  assert.equal(
+    sanitizeErrorText(
+      'session/canOpenWorkspacePath and commands/execute both survived',
+      ['commands/execute', 'session/canOpenWorkspacePath'],
+    ),
+    'session/canOpenWorkspacePath and commands/execute both survived',
+  );
+  // URL-path redaction and the kept token do not interfere.
+  assert.equal(
+    sanitizeErrorText('see https://github.com/a/b for commands/execute', ['commands/execute']),
+    'see https://github.com[path] for commands/execute',
+  );
+  // A declared token that is absent changes nothing.
+  assert.equal(sanitizeErrorText('nothing to keep', ['commands/execute']), 'nothing to keep');
 });

@@ -1,19 +1,16 @@
 /**
  * Markup helper tests: frame/column stamping plus the re-stamp predicate
- * (isStructuralTarget/shouldRestamp) against the empirical 0.1.2-alpha.4 DOM
- * shape (a3/a4 ui-layout AppFrame byte-identical — alpha.4 anchor audit),
- * exercised with a minimal ElementLike/StructuralNodeLike fake (plain node
- * has no DOM).
+ * (isStructuralTarget/shouldRestamp) against the empirical 0.1.5-alpha.2 DOM
+ * shape (the centre column is the keyed `main` slot, the right column is
+ * `rightbar`), exercised with a minimal ElementLike/StructuralNodeLike fake
+ * (plain node has no DOM).
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import type { ElementLike } from '../src/client/markup.ts'
 import {
-  findFrame, findColumn, stampFrame,
+  findFrame, findColumn, stampFrame, ROLE_SLOT_KEYS,
   isStructuralTarget, isElementNode, shouldRestamp,
-  stampSessionLogDismiss, isSessionLogExportButton,
-  SESSION_LOG_DISMISS_ATTR, SESSION_LOG_DISMISS_VALUE,
-  CONVERSATION_SESSION_HEADER_SLOT,
 } from '../src/client/markup.ts'
 
 /**
@@ -83,22 +80,22 @@ function fullFrame(): { root: FakeElement; frame: FakeElement } {
   root.setAttribute('data-slot', 'root')
   const frame = new FakeElement('div')
   attach(root, frame)
-  attach(frame, columnShell('sidebar'))
-  attach(frame, columnShell('conversation'))
-  attach(frame, columnShell('details'))
+  attach(frame, columnShell(ROLE_SLOT_KEYS.sidebar))
+  attach(frame, columnShell(ROLE_SLOT_KEYS.conversation))
+  attach(frame, columnShell(ROLE_SLOT_KEYS.details))
   return { root, frame }
 }
 
-/** The real alpha.4 boot shape: resident shells; sidebar/conversation
- * outlets present from first paint, the details shell EMPTY (its outlet is
- * session-gated and mounts only when a session activates). */
+/** The alpha.2 boot shape: resident shells; the sidebar and centre (`main`)
+ * outlets are present from first paint, the right column shell is EMPTY
+ * until its docking surface registers. */
 function bootFrame(): { root: FakeElement; frame: FakeElement; detailsCol: FakeElement } {
   const root = new FakeElement('div')
   root.setAttribute('data-slot', 'root')
   const frame = new FakeElement('div')
   attach(root, frame)
-  attach(frame, columnShell('sidebar'))
-  attach(frame, columnShell('conversation'))
+  attach(frame, columnShell(ROLE_SLOT_KEYS.sidebar))
+  attach(frame, columnShell(ROLE_SLOT_KEYS.conversation))
   const detailsCol = new FakeElement('div')
   attach(frame, detailsCol)
   return { root, frame, detailsCol }
@@ -110,11 +107,16 @@ test('findFrame returns the first element child of the root slot', () => {
   assert.equal(findFrame(new FakeElement('div')), null)
 })
 
-test('findColumn locates columns by their inner data-slot', () => {
+test('findColumn locates columns by their inner data-slot key', () => {
   const { frame } = fullFrame()
-  assert.equal(findColumn(frame, 'sidebar'), frame.children[0])
-  assert.equal(findColumn(frame, 'details'), frame.children[2])
-  assert.equal(findColumn(frame, 'sidebar')?.getAttribute('data-mobile-role'), null)
+  assert.equal(findColumn(frame, ROLE_SLOT_KEYS.sidebar), frame.children[0])
+  assert.equal(findColumn(frame, ROLE_SLOT_KEYS.conversation), frame.children[1])
+  assert.equal(findColumn(frame, ROLE_SLOT_KEYS.details), frame.children[2])
+  assert.equal(findColumn(frame, ROLE_SLOT_KEYS.sidebar)?.getAttribute('data-mobile-role'), null)
+})
+
+test('ROLE_SLOT_KEYS tracks the alpha.2 vendor slot names', () => {
+  assert.deepEqual(ROLE_SLOT_KEYS, { sidebar: 'sidebar', conversation: 'main', details: 'rightbar' })
 })
 
 test('stampFrame stamps the frame and all three columns (idempotent)', () => {
@@ -129,7 +131,7 @@ test('stampFrame stamps the frame and all three columns (idempotent)', () => {
 })
 
 // ---------------------------------------------------------------------------
-// Re-stamp predicate (alpha.4 anchor audit): a slot outlet mounting inside a
+// Re-stamp predicate (alpha.2 anchor audit): a slot outlet mounting inside a
 // resident column shell must count as structural, while deep content stays
 // filtered out of the streaming hot path.
 // ---------------------------------------------------------------------------
@@ -144,12 +146,12 @@ test('isStructuralTarget: a boot-time stamp skips the empty details shell', () =
     'the resident empty details shell must NOT be stamped at boot')
 })
 
-test('isStructuralTarget: session activation outlet mount re-stamps details (alpha.4 regression)', () => {
+test('isStructuralTarget: a right-column outlet mount re-stamps the resident shell', () => {
   const { root, detailsCol } = bootFrame()
   stampFrame(root)
   // Session activates: the [data-slot="details"] outlet mounts INSIDE the
   // resident (unstamped) shell — two levels under the stamped frame.
-  const mounted = attach(detailsCol, outlet('details'))
+  const mounted = attach(detailsCol, outlet(ROLE_SLOT_KEYS.details))
   assert.equal(isStructuralTarget(mounted), true,
     'an outlet mounting inside a resident column shell is structural')
   stampFrame(root)
@@ -163,13 +165,13 @@ test('isStructuralTarget: the same late-outlet shape works for sidebar/conversat
   const frame = new FakeElement('div')
   attach(root, frame)
   stampFrame(root)
-  for (const slot of ['sidebar', 'conversation'] as const) {
+  for (const role of ['sidebar', 'conversation'] as const) {
     const shell = new FakeElement('div')
     attach(frame, shell)
-    const mounted = attach(shell, outlet(slot))
-    assert.equal(isStructuralTarget(mounted), true, `${slot} outlet mount must be structural`)
+    const mounted = attach(shell, outlet(ROLE_SLOT_KEYS[role]))
+    assert.equal(isStructuralTarget(mounted), true, `${role} outlet mount must be structural`)
     stampFrame(root)
-    assert.equal(shell.getAttribute('data-mobile-role'), slot)
+    assert.equal(shell.getAttribute('data-mobile-role'), role)
   }
 })
 
@@ -196,14 +198,9 @@ test('isStructuralTarget: streaming content under the scroll body is NOT structu
   assert.equal(isStructuralTarget(streamed), false, 'deep streamed content never matches')
   assert.equal(isStructuralTarget(block), false, 'content directly inside the scroll body never matches')
   // The CONVERSATION ROOT container mounting under the outlet (three hops to
-  // the column role) IS structural — it carries the session header outlet;
-  // without it the header chrome stamp could miss a late header mount
-  // (2026 review widening: bounded walk covers node + 4 ancestors).
+  // the column role) IS structural — a resident shell gaining its content
+  // must be re-stamped (bounded walk covers node + 4 ancestors).
   assert.equal(isStructuralTarget(rootDiv), true, 'the ConversationRoot mount must re-stamp')
-  const headerOutlet = outlet(CONVERSATION_SESSION_HEADER_SLOT)
-  attach(rootDiv, headerOutlet)
-  assert.equal(isStructuralTarget(headerOutlet), true,
-    'the session header slot outlet mounting four levels under the frame is structural')
 })
 
 test('isStructuralTarget: whole-column and frame mounts still trigger (regression)', () => {
@@ -213,7 +210,7 @@ test('isStructuralTarget: whole-column and frame mounts still trigger (regressio
   attach(root, frame)
   stampFrame(root)
   // A whole column shell (with outlet) mounting under the stamped frame.
-  const wholeColumn = columnShell('details')
+  const wholeColumn = columnShell(ROLE_SLOT_KEYS.details)
   attach(frame, wholeColumn)
   assert.equal(isStructuralTarget(wholeColumn), true)
   // A brand-new root slot (N-ctx second instance).
@@ -243,7 +240,7 @@ test('shouldRestamp: batch decision — childList additions only, attribute reco
   // chain, frame already stamped — the real shape the observer sees).
   const { root, detailsCol } = bootFrame()
   stampFrame(root)
-  const outletNode = attach(detailsCol, outlet('details'))
+  const outletNode = attach(detailsCol, outlet(ROLE_SLOT_KEYS.details))
   assert.equal(shouldRestamp([{ type: 'childList', addedNodes: [outletNode] }]), true)
   // Deep content: an element-like node that is NOT structural (no frame
   // ancestor within two levels).
@@ -268,102 +265,4 @@ test('isElementNode guards non-element additions', () => {
   assert.equal(isElementNode(null), false)
   assert.equal(isElementNode(undefined), false)
   assert.equal(isElementNode({}), false)
-})
-
-// ---------------------------------------------------------------------------
-// Session-header chrome stamps: the "Session 日志" export capsule
-// (official session-log-export, header utilities) gets the phone-tier
-// compact mark. The stamp walks the anchor shape (conversation column →
-// session-header slot outlet → buttons) and matches the bilingual official
-// copy + the structural download-icon guard.
-// ---------------------------------------------------------------------------
-
-/** The with-session header DOM shape: resident conversation column with the
- * session-gated header outlet mounted (session open). */
-function headerFrame(labels: Array<{ text: string; svg: boolean }>): { root: FakeElement; buttons: FakeElement[] } {
-  const { root, frame } = fullFrame()
-  const conversationCol = frame.children[1]
-  const conversationOutlet = conversationCol.children[0]
-  const rootDiv = new FakeElement('div')
-  attach(conversationOutlet, rootDiv)
-  const headerSlot = new FakeElement('div')
-  headerSlot.setAttribute('data-slot', CONVERSATION_SESSION_HEADER_SLOT)
-  attach(rootDiv, headerSlot)
-  const header = new FakeElement('header')
-  attach(headerSlot, header)
-  const titleRow = new FakeElement('div')
-  attach(header, titleRow)
-  const utilities = new FakeElement('div')
-  attach(titleRow, utilities)
-  const buttons: FakeElement[] = []
-  for (const { text, svg } of labels) {
-    const button = new FakeElement('button')
-    button.textContent = text
-    if (svg) attach(button, new FakeElement('svg'))
-    attach(utilities, button)
-    buttons.push(button)
-  }
-  return { root, buttons }
-}
-
-test('stampSessionLogDismiss: no session header (hero/boot) stamps nothing', () => {
-  const { root } = fullFrame()
-  assert.equal(stampSessionLogDismiss(findFrame(root) as FakeElement), null)
-  const { root: boot } = bootFrame()
-  assert.equal(stampSessionLogDismiss(findFrame(boot) as FakeElement), null)
-})
-
-test('stampSessionLogDismiss: zh capsule is stamped (idempotent)', () => {
-  const { root, buttons } = headerFrame([{ text: 'Session 日志', svg: true }])
-  const frame = findFrame(root) as FakeElement
-  const stamped = stampSessionLogDismiss(frame)
-  assert.equal(stamped, buttons[0])
-  assert.equal(buttons[0].getAttribute(SESSION_LOG_DISMISS_ATTR), SESSION_LOG_DISMISS_VALUE)
-  // Idempotent: a second stamp keeps the single button marked.
-  assert.equal(stampSessionLogDismiss(frame), buttons[0])
-  assert.equal(buttons[0].getAttribute(SESSION_LOG_DISMISS_ATTR), SESSION_LOG_DISMISS_VALUE)
-})
-
-test('stampSessionLogDismiss: en capsule copy matches too', () => {
-  const { root, buttons } = headerFrame([{ text: 'Session log', svg: true }])
-  const stamped = stampSessionLogDismiss(findFrame(root) as FakeElement)
-  assert.equal(stamped, buttons[0])
-  assert.equal(buttons[0].getAttribute(SESSION_LOG_DISMISS_ATTR), SESSION_LOG_DISMISS_VALUE)
-})
-
-test('stampSessionLogDismiss: trailing whitespace does not defeat the match', () => {
-  const { root } = headerFrame([{ text: '  Session 日志  ', svg: true }])
-  assert.notEqual(stampSessionLogDismiss(findFrame(root) as FakeElement), null)
-})
-
-test('stampSessionLogDismiss: same copy without the download icon is NOT the capsule', () => {
-  const { root } = headerFrame([{ text: 'Session 日志', svg: false }])
-  assert.equal(stampSessionLogDismiss(findFrame(root) as FakeElement), null)
-})
-
-test('stampSessionLogDismiss: unrelated header buttons never match', () => {
-  const { root, buttons } = headerFrame([
-    { text: '3 个子代理', svg: true },
-    { text: 'Session 日誌', svg: true }, // close but not the official copy
-    { text: '设置', svg: false },
-  ])
-  const frame = findFrame(root) as FakeElement
-  assert.equal(stampSessionLogDismiss(frame), null)
-  for (const button of buttons) {
-    assert.equal(button.hasAttribute(SESSION_LOG_DISMISS_ATTR), false)
-  }
-})
-
-test('isSessionLogExportButton: pure label + icon decision', () => {
-  const zh = new FakeElement('button')
-  zh.textContent = 'Session 日志'
-  attach(zh, new FakeElement('svg'))
-  assert.equal(isSessionLogExportButton(zh), true)
-  const plain = new FakeElement('button')
-  plain.textContent = 'Session 日志'
-  assert.equal(isSessionLogExportButton(plain), false)
-  const other = new FakeElement('button')
-  other.textContent = '下载'
-  attach(other, new FakeElement('svg'))
-  assert.equal(isSessionLogExportButton(other), false)
 })

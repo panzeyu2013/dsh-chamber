@@ -3,6 +3,7 @@ import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import { applyVendorPatches } from './scripts/vendor-patches.mjs'
 
 /**
  * dsh-chamber renderer build (design 05 §2/§3.6, v4).
@@ -81,6 +82,16 @@ function deepseekSource() {
   return {
     name: 'dsh-chamber-deepseek-source',
     enforce: 'pre',
+    /**
+     * Registered vendor patches (design 09 §3.6): the ONE seam where a pinned
+     * upstream source must be altered for the N-ctx shell and forking the whole
+     * package is disproportionate. Anchored to exact upstream text; a drift
+     * throws here (build failure) instead of silently shipping an unpatched
+     * bundle. The vendor tree is never written to.
+     */
+    transform(code, id) {
+      return applyVendorPatches(id, code)
+    },
     resolveId(specifier) {
       if (typeof specifier !== 'string' || !specifier.startsWith('@deepseek-ai/')) return undefined
       const rest = specifier.slice('@deepseek-ai/'.length)
@@ -225,40 +236,40 @@ export default defineConfig({
       // @dsh-chamber/* row. The renderer imports only /client (boot graph)
       // and /shared (chamberBridge + instance unary client); the bare spec
       // maps to the host no-op entry for completeness.
-      { find: /^@dsh-chamber\/dsh-client-ui-sidebar$/, replacement: src('../dsh-chamber-client-ui-sidebar/src/index.ts') },
-      { find: /^@dsh-chamber\/dsh-client-ui-sidebar\/client$/, replacement: src('../dsh-chamber-client-ui-sidebar/src/client/index.ts') },
-      { find: /^@dsh-chamber\/dsh-client-ui-sidebar\/shared$/, replacement: src('../dsh-chamber-client-ui-sidebar/src/shared/index.ts') },
+      { find: /^@dsh-chamber\/dsh-chamber-client-ui-sidebar$/, replacement: src('../dsh-chamber-client-ui-sidebar/src/index.ts') },
+      { find: /^@dsh-chamber\/dsh-chamber-client-ui-sidebar\/client$/, replacement: src('../dsh-chamber-client-ui-sidebar/src/client/index.ts') },
+      { find: /^@dsh-chamber\/dsh-chamber-client-ui-sidebar\/shared$/, replacement: src('../dsh-chamber-client-ui-sidebar/src/shared/index.ts') },
       // Chamber Git worktree occupant: static first-screen client + shared
       // coordinator/API helpers. It depends on the sidebar's neutral shared
       // bridge, never on an App-owned Git aggregate.
-      { find: /^@dsh-chamber\/dsh-client-ui-git$/, replacement: src('../dsh-chamber-client-ui-git/src/index.ts') },
-      { find: /^@dsh-chamber\/dsh-client-ui-git\/client$/, replacement: src('../dsh-chamber-client-ui-git/src/client/index.ts') },
-      { find: /^@dsh-chamber\/dsh-client-ui-git\/shared$/, replacement: src('../dsh-chamber-client-ui-git/src/shared/index.ts') },
+      { find: /^@dsh-chamber\/dsh-chamber-client-ui-git$/, replacement: src('../dsh-chamber-client-ui-git/src/index.ts') },
+      { find: /^@dsh-chamber\/dsh-chamber-client-ui-git\/client$/, replacement: src('../dsh-chamber-client-ui-git/src/client/index.ts') },
+      { find: /^@dsh-chamber\/dsh-chamber-client-ui-git\/shared$/, replacement: src('../dsh-chamber-client-ui-git/src/shared/index.ts') },
       // Chamber open-in header button (design 16 + open-in extension): static
       // first-screen client; the coordinator reads the main-process app list
       // through the preload bridge (zero @dsh-chamber dependencies).
-      { find: /^@dsh-chamber\/dsh-client-ui-open-in$/, replacement: src('../dsh-chamber-client-ui-open-in/src/index.ts') },
-      { find: /^@dsh-chamber\/dsh-client-ui-open-in\/client$/, replacement: src('../dsh-chamber-client-ui-open-in/src/client/index.ts') },
-      { find: /^@dsh-chamber\/dsh-client-ui-open-in\/shared$/, replacement: src('../dsh-chamber-client-ui-open-in/src/shared/index.ts') },
+      { find: /^@dsh-chamber\/dsh-chamber-client-ui-open-in$/, replacement: src('../dsh-chamber-client-ui-open-in/src/index.ts') },
+      { find: /^@dsh-chamber\/dsh-chamber-client-ui-open-in\/client$/, replacement: src('../dsh-chamber-client-ui-open-in/src/client/index.ts') },
+      { find: /^@dsh-chamber\/dsh-chamber-client-ui-open-in\/shared$/, replacement: src('../dsh-chamber-client-ui-open-in/src/shared/index.ts') },
       // The chamber-owned ui-layout fork (design 06) resolves to source the
       // same way: it replaces the official layout in the boot graph, and its
       // client imports the vendor frame through `@deepseek-ai/.../src/*` deep
       // subpaths (deepseekSource resolves those). The renderer imports only
       // /client; the bare spec maps to the host no-op entry for completeness.
-      { find: /^@dsh-chamber\/dsh-client-ui-layout$/, replacement: src('../dsh-chamber-client-ui-layout/src/index.ts') },
-      { find: /^@dsh-chamber\/dsh-client-ui-layout\/client$/, replacement: src('../dsh-chamber-client-ui-layout/src/client/index.ts') },
+      { find: /^@dsh-chamber\/dsh-chamber-client-ui-layout$/, replacement: src('../dsh-chamber-client-ui-layout/src/index.ts') },
+      { find: /^@dsh-chamber\/dsh-chamber-client-ui-layout\/client$/, replacement: src('../dsh-chamber-client-ui-layout/src/client/index.ts') },
       // The chamber self-built connections settings section plugin (design
       // 05 §5) resolves to source the same way.
-      { find: /^@dsh-chamber\/dsh-client-ui-settings-connections$/, replacement: src('../dsh-chamber-client-ui-settings-connections/src/index.ts') },
-      { find: /^@dsh-chamber\/dsh-client-ui-settings-connections\/client$/, replacement: src('../dsh-chamber-client-ui-settings-connections/src/client/index.ts') },
+      { find: /^@dsh-chamber\/dsh-chamber-client-ui-settings-connections$/, replacement: src('../dsh-chamber-client-ui-settings-connections/src/index.ts') },
+      { find: /^@dsh-chamber\/dsh-chamber-client-ui-settings-connections\/client$/, replacement: src('../dsh-chamber-client-ui-settings-connections/src/client/index.ts') },
       // The chamber self-built settings SHELL plugin (design discussion
       // 2026-08) resolves to source the same way.
-      { find: /^@dsh-chamber\/dsh-client-ui-settings-bridge$/, replacement: src('../dsh-chamber-client-ui-settings-bridge/src/index.ts') },
-      { find: /^@dsh-chamber\/dsh-client-ui-settings-bridge\/client$/, replacement: src('../dsh-chamber-client-ui-settings-bridge/src/client/index.ts') },
+      { find: /^@dsh-chamber\/dsh-chamber-client-ui-settings-bridge$/, replacement: src('../dsh-chamber-client-ui-settings-bridge/src/index.ts') },
+      { find: /^@dsh-chamber\/dsh-chamber-client-ui-settings-bridge\/client$/, replacement: src('../dsh-chamber-client-ui-settings-bridge/src/client/index.ts') },
       // The settings shell embeds the connections section component directly
       // (stable `./section` exports subpath — A6; explicit alias so the
       // resolution does not ride the generic npm fallback).
-      { find: /^@dsh-chamber\/dsh-client-ui-settings-connections\/section$/, replacement: src('../dsh-chamber-client-ui-settings-connections/src/client/ConnectionsSection.tsx') },
+      { find: /^@dsh-chamber\/dsh-chamber-client-ui-settings-connections\/section$/, replacement: src('../dsh-chamber-client-ui-settings-connections/src/client/ConnectionsSection.tsx') },
       // CSS `@import` of workspace stylesheets bypasses the resolveId plugin
       // container (vite's back-compat CSS resolver runs alias + node
       // resolution only), and the packages' `./styles` export points at the

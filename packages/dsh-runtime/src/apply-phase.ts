@@ -14,6 +14,7 @@ import type {
   CurrentPointerState,
 } from './dsh-runtime-store.ts'
 import { ROLLBACK_CONTINUATION_PHASES, delayedRollbackTarget } from './rollback-facts.ts'
+import { PROBE_TEXT_KEEP_TOKENS } from './runtime-probes.ts'
 import { sanitizeErrorText } from './sanitize-error.ts'
 
 export interface ManualRollbackPreparation {
@@ -103,7 +104,7 @@ export interface ApplyOptions {
 }
 
 function errorText(error: unknown): string {
-  return sanitizeErrorText(error instanceof Error ? error.message : String(error))
+  return sanitizeErrorText(error instanceof Error ? error.message : String(error), PROBE_TEXT_KEEP_TOKENS)
 }
 
 function currentPointer(deps: ApplyDeps): string | null {
@@ -133,6 +134,25 @@ async function safeProbe(probe: () => Promise<ProbeResult[]>): Promise<ProbeResu
   } catch (error) {
     return [{ name: 'probe', ok: false, error: errorText(error) }]
   }
+}
+
+/**
+ * Names of the probes that came back failing. A non-pass verdict can also come
+ * from the timing window with every probe healthy — then this is empty and the
+ * message stays as it was. The point is that a REAL probe failure is never
+ * reported without naming the probe: these verdict strings ride the runtime
+ * projection verbatim, and "probe failed" with no name was the same
+ * invisible-failure family the 2026-09 acceptance round fixed one layer up.
+ * @param probes - the probe set the verdict was computed from.
+ * @returns the failing probe names, in probe order.
+ */
+function failedProbeNames(probes: readonly ProbeResult[]): string[] {
+  return probes.filter((probe) => !probe.ok).map((probe) => probe.name)
+}
+
+/** Render probe names as a parenthesized suffix (`''` when there are none). */
+function namedProbes(names: readonly string[]): string {
+  return names.length === 0 ? '' : `（${names.join(', ')}）`
 }
 
 /**
@@ -451,8 +471,9 @@ async function continueRollback(opts: ApplyOptions, initial: ActivationJournal):
       })
     }
     const fallbackVersion = journal.rollbackTarget ?? opts.builtinVersion
+    const fallbackProbes = await safeProbe(() => deps.probe(fallbackVersion, journal.rollbackTarget === null, rollbackProbeSignal(opts.signal)))
     const fallbackVerdict = decideVerdict(
-      await safeProbe(() => deps.probe(fallbackVersion, journal.rollbackTarget === null, rollbackProbeSignal(opts.signal))),
+      fallbackProbes,
       { elapsedMs: 0, observedOnce: true, ...(deps.probeExpectedNames === undefined ? {} : { expectedNames: deps.probeExpectedNames }) },
     )
     if (fallbackVerdict === 'pass') {
@@ -464,7 +485,7 @@ async function continueRollback(opts: ApplyOptions, initial: ActivationJournal):
     if (journal.rollbackTarget === null) {
       return makeOutcome({
         status: 'failed', snapshotPath: preSwapPath, restoreOutcome: 'complete', swapAttempted: true,
-        runtimeBlocked: true, failureKind: 'terminal', error: '内建回退运行时探针失败',
+        runtimeBlocked: true, failureKind: 'terminal', error: `内建回退运行时探针失败${namedProbes(failedProbeNames(fallbackProbes))}`,
       })
     }
     try {
@@ -497,8 +518,9 @@ async function continueRollback(opts: ApplyOptions, initial: ActivationJournal):
         error: `回退目标失败，落内建运行时也失败：${errorText(error)}`,
       })
     }
+    const builtinProbes = await safeProbe(() => deps.probe(opts.builtinVersion, true, rollbackProbeSignal(opts.signal)))
     const builtinVerdict = decideVerdict(
-      await safeProbe(() => deps.probe(opts.builtinVersion, true, rollbackProbeSignal(opts.signal))),
+      builtinProbes,
       { elapsedMs: 0, observedOnce: true, ...(deps.probeExpectedNames === undefined ? {} : { expectedNames: deps.probeExpectedNames }) },
     )
     return makeOutcome({
@@ -508,7 +530,7 @@ async function continueRollback(opts: ApplyOptions, initial: ActivationJournal):
       runtimeBlocked: builtinVerdict !== 'pass', failureKind: 'terminal',
       error: builtinVerdict === 'pass'
         ? '可信回退目标探针失败，已落内建运行时'
-        : '可信回退目标与内建运行时探针均失败',
+        : `可信回退目标与内建运行时探针均失败（内建：${failedProbeNames(builtinProbes).join(', ') || '未报告名称'}）`,
     })
   }
 

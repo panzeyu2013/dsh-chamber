@@ -1,7 +1,7 @@
 /**
  * workspace-drag-order.ts unit tests (plain node:test, no dsh, no DOM): the
  * single drop resolver behind the workspace-drag marker / onDragOver gate /
- * drop handler / commit (design 06 §2.2, design 08 §11). Covers the repo
+ * drop handler / commit (design 06 §2.2, design 08 §3.3). Covers the repo
  * family invariant: no foreign workspace may land INSIDE a contiguous family,
  * a worktree reorders only within its family, a main drag relocates the whole
  * family, and marker/commit lockstep over fold-hidden rows.
@@ -267,7 +267,7 @@ test('already-broken families do not block foreign drops until healed', () => {
 })
 
 // ---------------------------------------------------------------------------
-// Fold-hidden rows (design 08 §11.7): 'after' anchors on the next visible row
+// Fold-hidden rows (design 08 §3.3): 'after' anchors on the next visible row
 // ---------------------------------------------------------------------------
 
 test("'after' a visible row skips the hidden rows that follow it", () => {

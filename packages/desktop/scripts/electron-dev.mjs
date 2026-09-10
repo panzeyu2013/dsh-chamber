@@ -3,12 +3,12 @@ import { spawn, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { ensureSharedElectronDist, platformExecutableName } from './electron-shared.mjs';
+import { RENDERER_DIST_RELATIVE, ensureSharedElectronDist, platformExecutableName } from './electron-shared.mjs';
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const desktopDir = path.resolve(scriptDir, '..');
 const repoRoot = path.resolve(desktopDir, '..', '..');
-const DIST_INDEX = path.join(desktopDir, 'dist', 'index.html');
+const DIST_INDEX = path.join(desktopDir, ...RENDERER_DIST_RELATIVE);
 const forceBuild = process.argv.includes('--build');
 
 // Dev-mode isolation: the dev instance must coexist with a running packaged
@@ -50,7 +50,7 @@ async function main() {
 
   if (forceBuild || !existsSync(DIST_INDEX)) {
     if (!forceBuild) {
-      console.log('[electron:dev] 未找到渲染层构建产物 packages/desktop/dist/index.html，先执行 build:renderer');
+      console.log(`[electron:dev] 未找到渲染层构建产物 ${path.relative(repoRoot, DIST_INDEX)}，先执行 build:renderer`);
     }
     const result = spawnSync('npm', ['run', 'build:renderer'], {
       cwd: repoRoot,

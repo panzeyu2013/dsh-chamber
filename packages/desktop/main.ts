@@ -57,7 +57,7 @@ import type { PlaneHandle } from '@dsh-chamber/control-plane';
 import { attemptCommittedRegistryPush, computeRemovedInstanceIds, computeRetiredInstanceIds, createTransportManager } from './transport-manager.ts';
 import type { TransportManager } from './transport-manager.ts';
 import type { TransportInstanceSpec } from './transport-provider.ts';
-import { sshProvider, probeClientGraphLive, probeGitWorktreeLive } from './ssh-provider.ts';
+import { sshProvider, probeChamberHostLive } from './ssh-provider.ts';
 import { cleanupStaleAskpassHelpers, configureSshPasswordStore } from './ssh-provider.ts';
 import { applyWindowsAclTightening } from './win-acl.ts';
 import { configureGatewaySecretStore, configureGatewaySessionProvider, gatewayProvider, getGatewayPassword, getGatewayToken, syncGatewayChamberPlugins } from './gateway-provider.ts';
@@ -172,12 +172,9 @@ import {
 import { allowedActions } from '@dsh-chamber/dsh-runtime';
 import { isSafeVersion } from '@dsh-chamber/dsh-runtime';
 import {
-  ARCHIVE_CLEANUP_INSERT_ID,
   ARCHIVE_CLEANUP_PACKAGE_NAME,
-  CLIENT_GRAPH_INSERT_ID,
   CLIENT_GRAPH_PACKAGE_NAME,
   ExactOwnershipRegistry,
-  GIT_WORKTREE_INSERT_ID,
   GIT_WORKTREE_PACKAGE_NAME,
   remoteHome,
   ReadyPhaseEdges,
@@ -187,6 +184,8 @@ import {
   scopeExecToOwnership,
 } from './plugin-sync.ts';
 import type { ChamberHostPackageSeed, ExecFn, StatusFn, RemoteSpec } from './plugin-sync.ts';
+import { CHAMBER_HOST_PACKAGES } from './control-plane-module.ts';
+import type { ChamberHostPackageDescriptor } from './control-plane-module.ts';
 import {
   DEFAULT_CHAMBER_SETTINGS,
   computeQuitRisk,
@@ -1245,7 +1244,7 @@ if (!gotTheLock) {
         // quarantined until the full probe verdict opens runtimeStartBlocked.
         canExposeLocal: () => !runtimeStartBlocked,
         // The built dsh frontend (renderer vite output) served by the control
-        // plane (design 05 §3.3): <pkg>/dist/web in dev and packaged (asar)
+        // plane (design 05 §7.3): <pkg>/dist/web in dev and packaged (asar)
         // alike (P2-4 isolation: renderer owns dist/web only; preload.cjs /
         // control-plane / host packages live beside it in dist/).
         webDistDir: path.join(pkgDir, 'dist', 'web'),
@@ -1256,13 +1255,13 @@ if (!gotTheLock) {
         // degrades gracefully (no --patch overlay, v4 baseline spawn).
         hostGraphPackageSourceDir: app.isPackaged
           ? path.join(pkgDir, 'dist', 'host-graph-package')
-          : path.join(repoRoot, 'packages', 'dsh-host-client-graph'),
+          : path.join(repoRoot, 'packages', 'dsh-chamber-seed-client-graph'),
         hostGitWorktreePackageSourceDir: app.isPackaged
           ? path.join(pkgDir, 'dist', 'host-git-worktree-package')
-          : path.join(repoRoot, 'packages', 'dsh-chamber-host-git-worktree'),
+          : path.join(repoRoot, 'packages', 'dsh-chamber-seed-git-worktree'),
         hostArchiveCleanupPackageSourceDir: app.isPackaged
           ? path.join(pkgDir, 'dist', 'host-archive-cleanup-package')
-          : path.join(repoRoot, 'packages', 'dsh-host-archive-cleanup'),
+          : path.join(repoRoot, 'packages', 'dsh-chamber-seed-archive-cleanup'),
       });
       await controlPlane.start();
     } catch (err) {
@@ -1602,40 +1601,26 @@ if (!gotTheLock) {
     // matches the runtime status(id) projection directly.
     const execTransport = sm.exec as unknown as ExecFn;
     const statusTransport: StatusFn = (id) => sm.status(id);
-    // Live-effect probe for the chamber host-graph state (design 09 module A):
-    // adapts probeClientGraphLive (ssh-provider.ts, tunnel RPC) onto
-    // plugin-sync's LiveProbe shape. `readyUrl` is main-process only (never
-    // the renderer); no ready tunnel → null = "not probed" (the plugin UI then
-    // renders 生效状态未知 instead of a guessed claim).
-    const liveProbeFor = (id: string): (() => Promise<boolean | null>) => () => {
+    // Live-effect probe for the chamber host packages (design 09 module A /
+    // 08 §11 / 24 §7): adapts the generic tunnel RPC probe onto plugin-sync's
+    // per-package LiveProbe shape, driven by the control-plane registry's own
+    // probe descriptor (method + args) — no per-package branch here. A 404 is
+    // deterministic "the running instance never loaded that boot row"; a
+    // package live from an older boot does NOT prove a later-seeded row
+    // loaded. `readyUrl` is main-process only (never the renderer); no ready
+    // tunnel → null = "not probed" (the plugin UI then renders 生效状态未知
+    // instead of a guessed claim).
+    const liveProbeFor = (id: string): ((descriptor: ChamberHostPackageDescriptor) => Promise<boolean | null>) => async (descriptor) => {
       const url = sm.readyUrl(id);
-      if (url === null) return Promise.resolve(null);
+      if (url === null) return null;
       try {
         const parsed = new URL(url);
         const port = parsed.port === '' ? null : Number(parsed.port);
-        if (port === null || !Number.isInteger(port) || port < 1 || port > 65535) return Promise.resolve(null);
-        return probeClientGraphLive({ host: parsed.hostname, port }).then(result =>
-          result === 'live' ? true : result === 'not-live' ? false : null);
+        if (port === null || !Number.isInteger(port) || port < 1 || port > 65535) return null;
+        const result = await probeChamberHostLive({ host: parsed.hostname, port }, descriptor.probe.method, descriptor.probe.args);
+        return result === 'live' ? true : result === 'not-live' ? false : null;
       } catch {
-        return Promise.resolve(null);
-      }
-    };
-    // Live-effect probe for the SECOND chamber host package (design 08 §11):
-    // same shape as liveProbeFor, hitting gitWorktree/previewCreate. A 404
-    // there is deterministic "the running instance never loaded the
-    // git-worktree row" — host-graph being live from an older boot does NOT
-    // prove it (a ready-time seed can add the git row after that boot).
-    const gitWorktreeLiveProbeFor = (id: string): (() => Promise<boolean | null>) => () => {
-      const url = sm.readyUrl(id);
-      if (url === null) return Promise.resolve(null);
-      try {
-        const parsed = new URL(url);
-        const port = parsed.port === '' ? null : Number(parsed.port);
-        if (port === null || !Number.isInteger(port) || port < 1 || port > 65535) return Promise.resolve(null);
-        return probeGitWorktreeLive({ host: parsed.hostname, port }).then(result =>
-          result === 'live' ? true : result === 'not-live' ? false : null);
-      } catch {
-        return Promise.resolve(null);
+        return null;
       }
     };
     // Exact-incarnation single-flight for ready/manual host-package seeds. A
@@ -1644,41 +1629,42 @@ if (!gotTheLock) {
     const hostPackageSeeding = new ExactOwnershipRegistry();
     const readySeedEdges = new ReadyPhaseEdges();
     // The authoritative local dsh home is <userData>/state/dsh-home (the real
-    // spawn home, design 13 §2.2) — never dsh-chamber:info.dshHome.
+    // spawn home, design 13 §4.2) — never dsh-chamber:info.dshHome.
     // localDshHome was resolved before control-plane construction so the
     // startup transaction and every plugin action share one authoritative path.
-    // Host package sources for the remote seed (design 13 §4.6). Packaged
+    // Host package sources for the remote seed (design 13 §3). Packaged
     // builds carry copies under dist/; dev reads the same source dirs used by
     // the local control-plane seed.
     const moduleASourceDir = app.isPackaged
       ? path.join(pkgDir, 'dist', 'host-graph-package')
-      : path.join(repoRoot, 'packages', 'dsh-host-client-graph');
+      : path.join(repoRoot, 'packages', 'dsh-chamber-seed-client-graph');
     const gitWorktreeHostSourceDir = app.isPackaged
       ? path.join(pkgDir, 'dist', 'host-git-worktree-package')
-      : path.join(repoRoot, 'packages', 'dsh-chamber-host-git-worktree');
+      : path.join(repoRoot, 'packages', 'dsh-chamber-seed-git-worktree');
     const archiveCleanupHostSourceDir = app.isPackaged
       ? path.join(pkgDir, 'dist', 'host-archive-cleanup-package')
-      : path.join(repoRoot, 'packages', 'dsh-host-archive-cleanup');
-    const chamberHostPackageSeeds: ChamberHostPackageSeed[] = [
-      {
-        insertId: CLIENT_GRAPH_INSERT_ID,
-        packageName: CLIENT_GRAPH_PACKAGE_NAME,
-        sourceDir: moduleASourceDir,
-        label: 'host-graph',
-      },
-      {
-        insertId: GIT_WORKTREE_INSERT_ID,
-        packageName: GIT_WORKTREE_PACKAGE_NAME,
-        sourceDir: gitWorktreeHostSourceDir,
-        label: 'git-worktree',
-      },
-      {
-        insertId: ARCHIVE_CLEANUP_INSERT_ID,
-        packageName: ARCHIVE_CLEANUP_PACKAGE_NAME,
-        sourceDir: archiveCleanupHostSourceDir,
-        label: 'archive-cleanup',
-      },
-    ];
+      : path.join(repoRoot, 'packages', 'dsh-chamber-seed-archive-cleanup');
+    // Per-package SOURCE DIRS are desktop-specific (packaged vs repo paths);
+    // the insert id/name come from the control-plane registry, so a registry
+    // addition/rename can never drift from the seed list (2026-09 user
+    // decision: no hand-maintained parallel package list). This ONE map feeds
+    // both consumers — the remote ssh seed list below and the gateway sync
+    // upload (`localChamberHostPackageSources`), which used to carry a second,
+    // independently maintained copy of the same three paths.
+    const chamberHostSourceDirs: Record<string, string> = {
+      [CLIENT_GRAPH_PACKAGE_NAME]: moduleASourceDir,
+      [GIT_WORKTREE_PACKAGE_NAME]: gitWorktreeHostSourceDir,
+      [ARCHIVE_CLEANUP_PACKAGE_NAME]: archiveCleanupHostSourceDir,
+    };
+    const chamberHostPackageSeeds: ChamberHostPackageSeed[] = CHAMBER_HOST_PACKAGES.map(descriptor => ({
+      insertId: descriptor.insert.id,
+      packageName: descriptor.insert.name,
+      // A registry package with no desktop source dir is "not shipped here":
+      // seedRemoteChamberHostPackages skips it (an empty dir never resolves a
+      // dist/index.js) instead of writing a dangling loader row.
+      sourceDir: chamberHostSourceDirs[descriptor.insert.name] ?? '',
+      label: descriptor.insert.id,
+    }));
     type RemoteTarget = {
       spec: RemoteSpec
       fingerprint: string
@@ -1702,9 +1688,12 @@ if (!gotTheLock) {
       scopeExecToOwnership(execTransport, target.spec.id, () => extraOwner() && ownsRemoteTarget(target));
     const scopedStatusForTarget = (target: RemoteTarget): StatusFn => id =>
       id === target.spec.id && ownsRemoteTarget(target) ? statusTransport(id) : null;
-    const scopedProbeForTarget = (target: RemoteTarget, probe: () => Promise<boolean | null>): (() => Promise<boolean | null>) => async () => {
+    const scopedProbeForTarget = (
+      target: RemoteTarget,
+      probe: (descriptor: ChamberHostPackageDescriptor) => Promise<boolean | null>,
+    ): ((descriptor: ChamberHostPackageDescriptor) => Promise<boolean | null>) => async (descriptor) => {
       if (!ownsRemoteTarget(target)) return null;
-      const result = await probe();
+      const result = await probe(descriptor);
       return ownsRemoteTarget(target) ? result : null;
     };
     // Remote install-level fallback path shared by both chamber host packages.
@@ -1763,20 +1752,20 @@ if (!gotTheLock) {
     // control-plane seed uses; the sync uploads them into the gateway seed
     // cache after every gateway ready registration.
     const localChamberHostPackageSources = (): Array<{ name: string; packageJsonPath: string; distIndexPath: string }> => {
-      const graphDir = app.isPackaged
-        ? path.join(pkgDir, 'dist', 'host-graph-package')
-        : path.join(repoRoot, 'packages', 'dsh-host-client-graph');
-      const gitDir = app.isPackaged
-        ? path.join(pkgDir, 'dist', 'host-git-worktree-package')
-        : path.join(repoRoot, 'packages', 'dsh-chamber-host-git-worktree');
-      const archiveCleanupDir = app.isPackaged
-        ? path.join(pkgDir, 'dist', 'host-archive-cleanup-package')
-        : path.join(repoRoot, 'packages', 'dsh-host-archive-cleanup');
-      return [
-        { name: CLIENT_GRAPH_PACKAGE_NAME, packageJsonPath: path.join(graphDir, 'package.json'), distIndexPath: path.join(graphDir, 'dist', 'index.js') },
-        { name: GIT_WORKTREE_PACKAGE_NAME, packageJsonPath: path.join(gitDir, 'package.json'), distIndexPath: path.join(gitDir, 'dist', 'index.js') },
-        { name: ARCHIVE_CLEANUP_PACKAGE_NAME, packageJsonPath: path.join(archiveCleanupDir, 'package.json'), distIndexPath: path.join(archiveCleanupDir, 'dist', 'index.js') },
-      ];
+      // Registry-driven: one entry per chamber host package, reusing the
+      // single per-package source-dir map declared with the seed list above
+      // (2026-09 P2 round: the two consumers must not maintain the paths
+      // twice — a packaged/repo path fix has to land in one place).
+      return CHAMBER_HOST_PACKAGES.flatMap(descriptor => {
+        const dir = chamberHostSourceDirs[descriptor.insert.name];
+        return dir === undefined
+          ? []
+          : [{
+            name: descriptor.insert.name,
+            packageJsonPath: path.join(dir, 'package.json'),
+            distIndexPath: path.join(dir, 'dist', 'index.js'),
+          }];
+      });
     };
     // Resolves the awaited sync outcome for the caller (the manual
     // gateway_plugin_sync IPC, design 21 §6.5) or null when the instance is
@@ -2574,6 +2563,25 @@ if (!gotTheLock) {
     const probesPassed = (probes: Awaited<ReturnType<typeof runRuntimeActivationProbes>>) =>
       probes.length > 0 && probes.every(probe => probe.ok);
 
+    /**
+     * Name the probes that failed and why ('' when none did) — shared by every
+     * activation throw below and by metadataProbeError. The bare "probes failed"
+     * string those throws used was the ONLY diagnostic on the activation path:
+     * the 2026-09 acceptance round met a quarantined fresh install whose real
+     * cause — a mistyped `commands/execute` wire argument answered with
+     * `gateway/arguments-invalid` — was invisible in every log and surface, and
+     * had been since the 0.1.3-alpha.1 upgrade. `ProbeResult.error` is sanitized
+     * in dsh-runtime (`sanitizeErrorText` + quoted-path strip, 2 000-char cap),
+     * so attaching it here leaks nothing new; the text stays bounded for the UI.
+     */
+    const probeFailureDetail = (
+      probes: Awaited<ReturnType<typeof runRuntimeActivationProbes>>,
+    ): string => probes
+      .filter(probe => !probe.ok)
+      .map(probe => `${probe.name}: ${probe.error ?? '探针未通过'}`)
+      .join('; ')
+      .slice(0, 600);
+
     const startAndProbeWorkspace = async (workspace: string, signal?: AbortSignal) => {
       if (quitRequested) throw new Error('application is quitting');
       signal?.throwIfAborted();
@@ -2781,7 +2789,7 @@ if (!gotTheLock) {
       if (!blocked && (outcome.status === 'snapshot-failed' || !cp.localProcessAlive)) {
         try {
           const resumed = await startAndProbeCurrent(runtimeOperationAbort?.signal);
-          if (!probesPassed(resumed.probes)) throw new Error('原运行时兼容性探针失败');
+          if (!probesPassed(resumed.probes)) throw new Error(`原运行时兼容性探针失败 — ${probeFailureDetail(resumed.probes) || 'no probe results'}`);
         } catch (resumeError) {
           await cp.stopLocal().catch(() => undefined);
           blocked = true;
@@ -2845,13 +2853,11 @@ if (!gotTheLock) {
     const metadataProbeError = (
       probes: Awaited<ReturnType<typeof runRuntimeActivationProbes>>,
     ): string => {
-      const failed = probes.filter(probe => !probe.ok).map(probe => (
-        `${probe.name}: ${probe.error ?? '探针未通过'}`
-      ));
+      const detail = probeFailureDetail(probes);
       return sanitizeErrorText(
-        failed.length === 0
+        detail === ''
           ? '内建 dsh 运行时探针未返回完整成功结果'
-          : `内建 dsh 运行时探针失败：${failed.join('; ')}`,
+          : `内建 dsh 运行时探针失败：${detail}`,
       );
     };
 
@@ -2979,7 +2985,7 @@ if (!gotTheLock) {
         }
         const current = await startAndProbeCurrent(signal);
         if (current.active.source !== 'env' || !probesPassed(current.probes)) {
-          throw new Error('env runtime compatibility probes failed');
+          throw new Error(`env runtime compatibility probes failed — ${probeFailureDetail(current.probes) || 'no probe results'}`);
         }
         setRuntimeGate(false);
         await refreshRuntimeEvidence({
@@ -3116,7 +3122,7 @@ if (!gotTheLock) {
               return null;
             }
             const current = await startAndProbeCurrent(runtimeOperationAbort.signal);
-            if (!probesPassed(current.probes)) throw new Error('runtime compatibility probes failed');
+            if (!probesPassed(current.probes)) throw new Error(`runtime compatibility probes failed — ${probeFailureDetail(current.probes) || 'no probe results'}`);
             setRuntimeGate(false);
             await refreshRuntimeEvidence({
               phase: 'idle', error: null, runtimeBlocked: false, runtimeBlockedReason: null,
@@ -3236,7 +3242,7 @@ if (!gotTheLock) {
 
         try {
           const current = await startAndProbeCurrent(runtimeOperationAbort.signal);
-          if (!probesPassed(current.probes)) throw new Error('runtime compatibility probes failed');
+          if (!probesPassed(current.probes)) throw new Error(`runtime compatibility probes failed — ${probeFailureDetail(current.probes) || 'no probe results'}`);
           if (current.active.source === 'user' && current.active.version !== null) {
             noteBoot(runtimeBaseDir, current.active.version);
             promoteDueCandidates(runtimeBaseDir);
@@ -3704,7 +3710,6 @@ if (!gotTheLock) {
         scopedStatusForTarget,
         scopedProbeForTarget,
         liveProbeFor,
-        gitWorktreeLiveProbeFor,
       },
       // W-10 S7（gateway 插件批）：G 组 3 注册体（GATEWAY_PLUGIN_SYNC/APPLY/
       // MATERIALIZE）迁入 installIpcHandlers ② G 组段的装配依赖——syncGateway

@@ -125,6 +125,15 @@ export function buildClientRequest(
 export const HOST_IDENTITY_METHOD = 'session/canOpenWorkspacePath'
 
 /**
+ * Earliest pinned generation whose SessionController registers
+ * {@link HOST_IDENTITY_METHOD}. Named here (instead of repeated as a literal in
+ * diagnostics) so the cutoff has ONE home: the operator-facing warnings that
+ * explain a legacy fallback interpolate this constant, and a re-anchor that
+ * moves the cutoff changes one line.
+ */
+export const HOST_IDENTITY_METHOD_SINCE = '0.1.2-rc.1'
+
+/**
  * The legacy host probe method (`session/list`, the same slash-path wire the
  * pre-identity runtimes answer). Its response GROWS with the session list —
  * consumers keep it bounded at 1 MiB and only reach it on an identity-method

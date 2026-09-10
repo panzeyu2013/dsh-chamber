@@ -55,10 +55,10 @@ Git worktree 功能由 chamber-bundled client 插件与**每实例内** host 插
 | `packages/dsh-chamber-client-ui-settings-connections` | 自研连接设置插件（本地实例卡 + 远程主机 CRUD/连接/systemd/日志） |
 | `packages/dsh-chamber-client-ui-settings-bridge` | 自研设置壳插件（shadow 官方 SettingsRoot 注册，服务器下拉 + 固定连接导航项） |
 | `packages/dsh-chamber-client-ui-layout` | 自研 ui-layout 壳 fork（layout store 替换，持久化 sidebarWidth） |
-| `packages/dsh-host-client-graph` | 宿主侧包：经 Typert Remote 只读暴露实例的客户端插件 boot 图 |
+| `packages/dsh-chamber-seed-client-graph` | 宿主侧包：经 Typert Remote 只读暴露实例的客户端插件 boot 图 |
 | `packages/dsh-chamber-client-ui-git` | chamber 内建 Git worktree 客户端：sidebar 座位、每实例拓扑、创建/删除 saga；不直接执行 Git |
 | `packages/dsh-chamber-client-ui-open-in` | chamber 内建 open-in 客户端插件：会话头部 utilities 槽打开按钮（本地 Finder + 本地/远程 VS Code，主进程 OpenInApp 注册表 + `dsh-chamber://` 深链） |
-| `packages/dsh-chamber-host-git-worktree` | 实例内 host 包：按 workspace/agent 权威校验并执行受限、本地-only Git worktree 生命周期 |
+| `packages/dsh-chamber-seed-git-worktree` | 实例内 host 包：按 workspace/agent 权威校验并执行受限、本地-only Git worktree 生命周期 |
 
 ## 2. 环境搭建
 
@@ -176,12 +176,12 @@ packages/
                             自研连接设置插件
   dsh-chamber-client-ui-settings-bridge/
                             自研设置壳插件
-  dsh-host-client-graph/    自研宿主侧 host 包（只读暴露客户端插件 boot 图）
+  dsh-chamber-seed-client-graph/    自研宿主侧 host 包（只读暴露客户端插件 boot 图）
   dsh-chamber-client-ui-git/
                             Git worktree 客户端（sidebar + coordinator + saga）
   dsh-chamber-client-ui-open-in/
                             open-in 客户端插件（会话头部 Finder/VS Code 打开）
-  dsh-chamber-host-git-worktree/
+  dsh-chamber-seed-git-worktree/
                             实例内 Git worktree host Remote（权威校验 + 受限 Git）
 docs/
   design/                   设计文档（01 为入口；05 为表面/架构契约（v1））
@@ -225,7 +225,7 @@ vendor/
 | [README.md](../README.md) | 用户使用（功能/安装/部署/FAQ） |
 | 本文件 `docs/DEVELOPMENT.md` | 开发：架构/构建/打包/CI/发布 |
 | [CONTRIBUTING.md](../CONTRIBUTING.md) | 贡献流程（测试/Commit/PR 契约） |
-| [AGENTS.md](../AGENTS.md) | 常驻仓库规则（包边界/约束/验证清单） |
+| [AGENTS.md](../AGENTS.md) | 常驻仓库规则（包职责/硬性约束/STATUS 记录要求） |
 | [CHANGELOG.md](../CHANGELOG.md) | 版本变更记录 |
 | [docs/design/01-overview.md](design/01-overview.md) | 设计入口与收拢原则 |
 | [docs/progress/STATUS.md](progress/STATUS.md) | 进度总览（唯一进度记录） |

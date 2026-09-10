@@ -4,7 +4,7 @@
  * projection remain internal; the static module table and its platform words
  * form the package's build-time contract.
  *
- * ## chamber patch (dsh-chamber connection manager, design 05 §3.6/§4)
+ * ## chamber patch (dsh-chamber connection manager, design 05 §6/§4)
  *
  * The N-ctx module-table sharing seam: `ensureWebModuleSystem` (install-or-
  * reuse the page-level module system + `__ModuleLoader__` registration sink —

@@ -12,7 +12,7 @@
  *
  * 用法：
  *   node scripts/dev/release-preflight.mjs <version> [--fork-version <v>]
- *       默认 fork 副本基线 0.1.2-rc.1。--fork-version 可覆盖。
+ *       默认 fork 副本基线 0.1.5-rc.1（见下方 FORK_VERSION）。--fork-version 可覆盖。
  *   node scripts/dev/release-preflight.mjs --actions-only   # CI 模式：只验
  *       证 .github/workflows/*.yml 的 action SHA（网络解析），其余跳过。
  *   node scripts/dev/release-preflight.mjs <version> --versions-only
@@ -27,17 +27,20 @@
  *
  * 约定：按「release-checklist.md §1.5（建议新增）」承接清单 §1/§2/§4/§5 的
  * 机械项；§3 完整单测不在此执行（见文末 NOTICE——必须在**精确 release
- * 提交**上重跑，参见 AGENTS.md 验证清单）。
+ * 提交**上重跑，参见 docs/checklists/release-checklist.md §3）。
  */
 
 import { execFileSync, spawnSync } from 'node:child_process'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
-import { join, relative } from 'node:path'
+import { join, relative, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { parseReleaseVersion } from './release-semver.mjs'
 
 const REPO_ROOT = fileURLToPath(new URL('../..', import.meta.url))
-const SELF_PATH = relative(REPO_ROOT, fileURLToPath(import.meta.url))
+// `git status --porcelain` always reports POSIX-separated paths, so the
+// self-exemption key must be POSIX too (a Windows run would otherwise never
+// match it).
+const SELF_PATH = relative(REPO_ROOT, fileURLToPath(import.meta.url)).split(sep).join('/')
 
 // ---------------------------------------------------------------------------
 // 命令行
@@ -64,7 +67,7 @@ for (let i = 0; i < args.length; i++) {
 }
 
 const VERSION = positional[0]
-const FORK_VERSION = flags.forkVersion ?? '0.1.2-rc.1'
+const FORK_VERSION = flags.forkVersion ?? '0.1.5-rc.1'
 
 // ---------------------------------------------------------------------------
 // 检查器（fail-fast：任一失败即退出 1，消息指明修复方向）

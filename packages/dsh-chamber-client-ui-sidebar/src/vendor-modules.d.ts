@@ -124,15 +124,48 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
   export interface LocaleNamespaceMap {}
   /** Slot map (contract/slots.ts augments with the sidebar holes). */
   export interface SlotMap {}
+  /** Bare observable source bound to a `use<Name>` selector hook. */
+  export interface HostObservable<T> {
+    getSnapshot(): T
+    subscribe(listener: () => void): () => void
+  }
+  /**
+   * Component-side view of a registrant inject face: the reserved `hooks`
+   * compartment arrives as bound `use<Name>` selector hooks. Loose here — the
+   * vendor conditional type is the source of truth at build time.
+   */
+  export type InjectFace<I extends object> = Omit<I, 'hooks'> & Record<string, any>
   /** Locale seat the slot registrant receives. */
   export type PropsLocale<T extends string> = { t: import('@deepseek-ai/dsh-client-locale/client').Translate }
-  /** The declared holes' render shares. */
-  export type PropsRenderSlots<H extends string> = { renderSlot: (hole: H, props?: any) => ReactNode }
+  /** The declared holes' render shares (dispatch options: keyed entry, list
+   *  filter, empty fallback). */
+  export type PropsRenderSlots<H extends string> = {
+    renderSlot: (
+      hole: H,
+      props?: any,
+      opts?: { entryKey?: string; only?: string; fallback?: ReactNode },
+    ) => ReactNode
+  }
   /** Owner runtime share (collapsed/width etc. — loose). */
   export type PropsRuntime<N extends string> = Record<string, any>
 }
 
-declare module '@deepseek-ai/dsh-client-ui-layout/client'
+declare module '@deepseek-ai/dsh-client-ui-layout/client' {
+  /** Branded global main-panel id (alpha.2 sidebar panel axis). */
+  export type MainPanelId = string
+  /** Root-scoped panel selection snapshot. */
+  export interface PanelInfo {
+    readonly activePanelId: MainPanelId | null
+  }
+  /** Panel navigation + geometry actions exposed through ctx.layout. */
+  export interface ILayout {
+    selectPanel(panelId: MainPanelId | null): void
+    beginNavigation(): AbortSignal
+    toggleSidebar(): void
+    openRightbar(track: boolean, fullscreen: boolean): void
+    closeRightbar(): void
+  }
+}
 
 declare module '@deepseek-ai/dsh-client-ui-session/client' {
   /** Loose pending-interaction face (SessionPendingInteractionBase mirror; the

@@ -29,16 +29,27 @@ allowBuilds:
   # 的发布包、不构建上游源码，该脚本非必需。
   "@deepseek-ai/dsh-subprocess-local": false
   # 原生模块（经工作区 linked 包引入）：chamber 树不构建/不执行它们——运行时
-  # 由 bundle:dsh 的独立安装树自带（见 packages/desktop/scripts/bundle-dsh.mjs
-  # 的 ALLOW_BUILDS 评审清单）。显式否认，避免 pnpm 报 ignored builds。
+  # 由 bundle:dsh 的独立安装树自带（单源清单见
+  # packages/dsh-runtime/src/allow-builds.mjs 的 ALLOW_BUILDS；bundle-dsh.mjs
+  # 只经 renderAllowBuildsBlock() 消费，本仓已无第二份副本）。
+  # 显式否认，避免 pnpm 报 ignored builds。
   # node-pty 同时作为根 devDependency 提升到根 node_modules（见 package.json），
   # 仅作 dsh-subprocess-local postinstall 的 import.meta.resolve 解析目标
   # （配合 ensure-harness-vendor.mjs 的快照解析 shim）；构建仍否认——本树
   # 不需要其原生二进制。
   "node-pty": false
   "koffi": false
+  # fs-ext（dsh 0.1.3 线 session-persistence-jsonl 写租约 flock 引入）：同为
+  # 原生模块——chamber 树不构建/不执行（运行时由 bundle:dsh 独立安装树自带，
+  # 见 dsh-runtime/src/allow-builds.mjs 的 ALLOW_BUILDS 清单）。显式否认，
+  # 避免 pnpm 报 ignored builds。
+  "fs-ext": false
   "protobufjs": false
   "@google/genai": false
+  # msgpackr-extract（0.1.5 线引入的 msgpackr 原生加速器）：store-index 重写只用
+  # msgpackr 的可移植 JS 编解码，本树不构建其原生二进制（与上游 pnpm-workspace
+  # 的裁决一致）。显式否认，避免 pnpm 报 ignored builds。
+  "msgpackr-extract": false
 
 # app-builder-lib 26.15.3 声明 @electron/get@^3.0.0，但 3.0.0 缺少其代码引用的
 # ElectronDownloadCacheMode 导出（3.1.0 才有）；锁文件在 3.1.0 发布前生成，

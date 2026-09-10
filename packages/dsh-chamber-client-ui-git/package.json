@@ -1,5 +1,5 @@
 {
-  "name": "@dsh-chamber/dsh-client-ui-git",
+  "name": "@dsh-chamber/dsh-chamber-client-ui-git",
   "description": "Chamber-bundled Git worktree client plugin: per-instance topology and safe create/remove lifecycle in the official sidebar shell",
   "version": "0.2.4",
   "private": true,
@@ -26,11 +26,11 @@
     }
   },
   "scripts": {
-    "test": "node test/git-api.test.ts && node test/snapshot-facts.test.ts && node test/saga.test.ts && node test/slot-contract.test.ts && node test/visibility-gate.test.ts"
+    "test": "node test/git-api.test.ts && node test/snapshot-facts.test.ts && node test/remove-notes.test.ts && node test/saga.test.ts && node test/slot-contract.test.ts && node test/visibility-gate.test.ts"
   },
   "license": "MIT",
   "dependencies": {
-    "@dsh-chamber/dsh-client-ui-sidebar": "workspace:^"
+    "@dsh-chamber/dsh-chamber-client-ui-sidebar": "workspace:^"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "workspace:^",

@@ -1,5 +1,5 @@
 /**
- * Neutral per-workspace Git flags (design 08 §11, OpenChamber sidebar
+ * Neutral per-workspace Git flags (design 08 §3.2, OpenChamber sidebar
  * alignment): a tiny shared registry the chamber Git plugin publishes and
  * the sidebar reads — the sidebar stays free of Git types, it only consumes
  * booleans. Drives:

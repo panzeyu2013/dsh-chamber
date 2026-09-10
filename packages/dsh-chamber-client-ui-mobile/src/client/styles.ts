@@ -1,10 +1,13 @@
 /**
  * Mobile adaptation stylesheet (design 17 §18.4.3/§18.4.5): a single global
  * sheet injected at apply() as `<style data-plugin="…">`. Anchors are the
- * OFFICIAL stable attributes confirmed against the dsh 0.1.2-alpha.4 DOM
- * (CDP empirical audit; ui-layout AppFrame byte-identical with the alpha.3
- * pin — alpha.4 anchor audit) plus the plugin's own `data-mobile-*`
- * stamps — no hashed class names. Production CSS-modules naming is
+ * OFFICIAL stable attributes confirmed against the dsh 0.1.5-alpha.2 DOM
+ * (CDP empirical audit, re-anchored when the vendored pin moved — that audit
+ * generation is alpha.2; at the current pin 0.1.5-rc.1 those emitting files are
+ * unchanged, so the anchors still hold: the centre
+ * column is the keyed `main` slot, the right column is `rightbar`, and the
+ * frame carries `data-sidebar-collapsed` / `data-rightbar-collapsed`) plus
+ * the plugin's own `data-mobile-*` stamps — no hashed class names. Production CSS-modules naming is
  * `_<local>_<hash>_<idx>` (verified on the production bundle), so
  * `[class$="_<local>"]` suffix selectors can never match — legacy suffix
  * rules predate that verification and are migrated to attribute anchors;
@@ -21,7 +24,7 @@
  *
  * Breakpoints (design 17 §18.4.2):
  *  - `(max-width: 1023px) and (pointer: coarse)` — the touch tier: the
- *    sidebar rail becomes an overlay drawer, the details column is hidden,
+ *    sidebar rail becomes an overlay drawer, the right column is hidden,
  *    the conversation takes the full width, touch targets get the 44px
  *    floor. The `pointer: coarse` guard is the "PC leak" lesson (a desktop
  *    window narrower than 1024 must NOT get the mobile UI) — applied to
@@ -31,15 +34,34 @@
  *    stacked full-screen sheet (nav strip + pinned close + scrolling
  *    options), section grids degraded, dialogs edge-capped, editable
  *    fields ≥16px (iOS focus zoom), safe-area guarantees.
- * EVERY rule lives inside a media query — desktop widths are byte-for-byte
- * untouched (the official layout must not be affected), and the hamburger
- * has an explicit `display: none` default outside the touch tier.
+ *  - `(pointer: coarse) and (hover: none)` — the width-independent CHROME
+ *    tier (cross-check round): sticky-hover tooltip bubbles are a
+ *    coarse-pointer artifact wherever the viewport is wide, so this one
+ *    cosmetic rule is gated by pointer/hover alone (an iPad in landscape is
+ *    1024px+ and still taps; attaching a mouse flips hover to `hover` and
+ *    stands the rule down).
+ * EVERY rule lives inside a media query — FINE-POINTER desktop widths are
+ * byte-for-byte untouched (the official layout must not be affected), and the
+ * hamburger has an explicit `display: none` default outside the touch tier.
  *
- * Empirical anchor notes (dsh 0.1.2-alpha.4, CDP audit):
+ * Empirical anchor notes (dsh 0.1.5-alpha.2, CDP audit):
  *  - `data-sidebar-collapsed` on the frame: present "true" when collapsed,
  *    REMOVED when expanded — `:not([data-sidebar-collapsed])` is the open
  *    drawer condition.
- *  - `data-details-collapsed` same semantics.
+ *  - `data-rightbar-collapsed` is the alpha.2 rename of the details column
+ *    flag; the right column is now a docking surface with its own
+ *    `<768px` fullscreen presentation (upstream), so this stylesheet no
+ *    longer re-presents it — the third track stays locked at 0 and the
+ *    official surface owns the overlay.
+ *  - STACKING SCOPE (2026-09 二轮): this plugin's fixed layers (drawer 75,
+ *    backdrop 74, hamburger 76) are mounted inside the official
+ *    `shell.overlay` layer, which is `position: absolute; z-index: 20` — a
+ *    stacking context of its own. The tiers therefore order correctly among
+ *    THEMSELVES and above the frame content / normal rightbar column (z-10),
+ *    but they can never paint above a sibling stacking context: the official
+ *    fullscreen rightbar (z-40) and the floating-panel host (z-60) cover them.
+ *    Intentional: a fullscreen official surface owns the screen and the
+ *    drawer yields. Escaping would require a body-level portal (not done).
  *  - ONBOARDING/directory dialogs portal to a body-level root
  *    (`div._root_15u5s_2`), but the SETTINGS dialog renders INSIDE the
  *    sidebar DOM (sidebar.settings slot, no body portal) — the drawer's
@@ -61,6 +83,42 @@ export const MOBILE_CSS = `
   display: none;
 }
 
+/* ---- coarse-pointer chrome tier (width-independent) ---- */
+/* Sticky-hover tooltip bubbles (official ui-primitives Tooltip, bundle
+   component Fd) are a coarse-pointer artifact, not a narrow-viewport one: a
+   tap synthesizes the trigger's mouseenter but the mouseleave only arrives
+   with the NEXT tap elsewhere, so the delayed (200-500ms) bubble pops after
+   the tap and STAYS over the control that was just used (发送/停止 included).
+   The rule is therefore gated by pointer/hover ALONE — an iPad in landscape
+   is 1024px+ and still taps, while attaching a mouse flips hover to hover
+   and correctly restores hover tooltips — and is scoped to bubbles that
+   DUPLICATE an accessible name: button[aria-label] + [role="tooltip"]
+   (the component renders the bubble as the trigger's immediate next sibling;
+   [data-side] is the component's own marker — see the preserved list below).
+   Of the 31 official Tooltip sites, 27 are aria-labelled buttons (composer
+   send/stop/commands/ContextMeter, queue dock, goal bar, sidebar, message
+   feedback, workspace rows, chat copy/branch) whose aria-label names the same
+   action (3 of them phrase it slightly differently — workspace search ×2,
+   trajectory load-earlier — same semantics; verified against the pinned
+   install at the 2026-09 re-anchor, see the module header). Four
+   informational bubbles are deliberately
+   NOT hidden because their trigger has no accessible duplicate: the chat
+   stats line (ui-chat:3853, ellipsized non-focusable div), the agent-preset
+   card description (ui-agent-preset:960, line-clamp:4), the trajectory
+   timeline span (ui-trajectory:6821, aria-hidden, no click path) and the
+   trajectory kind tag at ≤620px (ui-trajectory:5554, visible label collapsed)
+   — they keep the sticky-hover quirk rather than lose content a touch user
+   cannot otherwise read. The tree's fifth role="tooltip" producer (ui-chat
+   turn-rail preview, :1735) is a non-button div WITHOUT data-side and is
+   therefore structurally outside this rule (it is aria-describedby-referenced
+   and its rail is container-hidden ≤900px anyway). Desktop is untouched
+   (media-query scoped). */
+@media (pointer: coarse) and (hover: none) {
+  button[aria-label] + [role="tooltip"][data-side] {
+    display: none !important;
+  }
+}
+
 /* ---- touch tier: tablet/phone touch (design 17 §18.4.2) ---- */
 @media (max-width: 1023px) and (pointer: coarse) {
   /* Three-column frame → single column; the sidebar leaves the grid flow
@@ -68,9 +126,9 @@ export const MOBILE_CSS = `
      explicitly locked so the center column is never squeezed into a 0-width
      track by the fixed sibling. IMPORTANT (P1-C): the official AppFrame
      sets NO explicit grid-column — with the sidebar fixed (out of flow),
-     auto-placement would put conversation into track 1 (0px) and details
-     into track 2 (full width). Both remaining columns must be pinned
-     explicitly. */
+     auto-placement would put the main column into track 1 (0px) and the
+     rightbar column into track 2 (full width). Both remaining columns must
+     be pinned explicitly. */
   [data-mobile-frame] {
     grid-template-columns: 0 minmax(0, 1fr) 0 !important;
   }
@@ -94,7 +152,7 @@ export const MOBILE_CSS = `
     top: 0 !important;
     bottom: 0 !important;
     left: 0 !important;
-    z-index: 40;
+    z-index: 75;
     width: min(86vw, 280px) !important;
     box-shadow: var(--dsw-shadow-lv3, 0 12px 32px rgba(0, 0, 0, 0.08));
     transform: translateX(-105%);
@@ -117,7 +175,7 @@ export const MOBILE_CSS = `
   }
 
   /* Drawer backdrop: dims the conversation behind the open drawer and — by
-     sitting above it (z-39 < drawer 40) — absorbs stray taps on the ~50px
+     sitting above it (z-74 < drawer 75) — absorbs stray taps on the ~50px
      live seam right of the drawer (the composer send button must not be
      hit while the drawer is open). Tap on the backdrop closes the drawer
      (the toggle component wires the click). */
@@ -125,47 +183,12 @@ export const MOBILE_CSS = `
     display: block;
     position: fixed;
     inset: 0;
-    z-index: 39;
+    z-index: 74;
     background: var(--dsw-alias-bg-mask-1, rgba(0, 0, 0, 0.24));
     -webkit-backdrop-filter: var(--dsw-mask-blur, blur(2px));
     backdrop-filter: var(--dsw-mask-blur, blur(2px));
     border: none;
     padding: 0;
-  }
-
-  /* Details column → right-side overlay when opened (data-details-collapsed
-     removed): the official details/trajectory panel stays reachable on
-     touch. Design §18.4.3 offers two variants (bottom sheet / Status tab);
-     this implementation uses a THIRD form — a right-side overlay that
-     keeps the official DOM untouched (zero re-implementation). The grid's
-     third track stays 0 — the fixed column overlays the conversation.
-     transform: none while open (same containing-block rule as the
-     drawer). */
-  [data-mobile-role="details"] {
-    position: fixed !important;
-    top: 0 !important;
-    right: 0 !important;
-    bottom: 0 !important;
-    z-index: 38;
-    width: min(86vw, 320px) !important;
-    box-shadow: var(--dsw-shadow-lv3, 0 12px 32px rgba(0, 0, 0, 0.08));
-    transform: translateX(105%);
-    visibility: hidden;
-    transition:
-      transform var(--ds-transition-duration-slow, 0.3s) var(--ds-ease-in-out, cubic-bezier(0.4, 0, 0.2, 1)),
-      visibility 0s 0.3s;
-  }
-  [data-mobile-frame]:not([data-details-collapsed]) [data-mobile-role="details"] {
-    transform: none;
-    visibility: visible;
-    transition:
-      transform var(--ds-transition-duration-slow, 0.3s) var(--ds-ease-in-out, cubic-bezier(0.4, 0, 0.2, 1)),
-      visibility 0s;
-  }
-  @media (prefers-reduced-motion: reduce) {
-    [data-mobile-role="details"] {
-      transition: none;
-    }
   }
 
   /* Drag handles are desktop affordances (mouse resizing) — hidden on
@@ -185,6 +208,12 @@ export const MOBILE_CSS = `
   [data-mobile-frame] [data-side]:not([role="tooltip"]) {
     display: none !important;
   }
+  /* Dockkit split affordances: pointer-drag chrome with no touch equivalent
+     (the right surface is fullscreen on this tier). */
+  [data-mobile-frame] [data-dockkit-divider],
+  [data-mobile-frame] [data-dockkit-split-button] {
+    display: none !important;
+  }
 
   /* Floating drawer toggle: the official sidebar toggle lives inside the
      sidebar DOM, which the off-canvas transform hides — this shell.overlay
@@ -198,7 +227,7 @@ export const MOBILE_CSS = `
     position: fixed;
     top: max(10px, env(safe-area-inset-top, 0px));
     left: max(10px, env(safe-area-inset-left, 0px));
-    z-index: 41;
+    z-index: 76;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -303,16 +332,58 @@ export const MOBILE_CSS = `
     -webkit-text-size-adjust: 100%;
     text-size-adjust: 100%;
   }
+
+  /* Keyboard compensation (composer.ts installKeyboardCompensation, IME
+     ladder layer 5): engines that ignore 'interactive-widget=resizes-content'
+     (iOS Safari, older Android WebViews) keep the LAYOUT viewport full-height
+     when the soft keyboard opens, so the official sticky composer seat —
+     pinned to the scrollport's layout bottom — ends up BEHIND the keyboard.
+     The installer mirrors resizes-content semantics against the visual
+     viewport: while the keyboard is open it raises the seat's sticky bottom
+     to the keyboard top AND pads the conversation scrollport by the same
+     offset, so the message tail can scroll up beside the raised seat instead
+     of hiding under the keyboard. State rides the plugin's own frame stamp:
+     'data-mobile-kbd' + the '--dsh-mobile-kbd-offset' custom property on the
+     stamped frame (never official attributes). Android Chrome WITH the token
+     shrinks the layout viewport itself: covered height ≈ 0, the installer
+     never arms, these rules stay inert. */
+  [data-mobile-frame][data-mobile-kbd] [data-phase="active"] [data-conversation-scroll] {
+    padding-bottom: var(--dsh-mobile-kbd-offset, 0px) !important;
+  }
+  [data-mobile-frame][data-mobile-kbd] [data-phase="active"] [data-composer-seat] {
+    bottom: var(--dsh-mobile-kbd-offset, 0px) !important;
+    /* The phone-tier safe-area padding (below) is home-indicator spacing for
+       the UNCOVERED state; while the keyboard is up that inset sits behind
+       the keyboard and would add up to ~34px of dead space below the raised
+       seat (cross-check). Zeroing it cannot cause overlap: the lift comes
+       from the keyboard geometry, not from the inset. */
+    padding-bottom: 0 !important;
+  }
+
+  /* iOS focus zoom: ANY editable field below 16px auto-zooms the page on
+     focus and the page STAYS zoomed. The composer, settings fields and dialog
+     fields already carry the floor; the drawer's session search (13px,
+     ui-workspace:1187) and inline rename (14px, :531) were the gap — a
+     focus-zoom there used to leave the composer behind the keyboard for the
+     rest of the session (cross-check P1). */
+  [data-mobile-role="sidebar"] input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+  [data-mobile-role="sidebar"] textarea {
+    font-size: max(16px, var(--dsh-content-font-size, 16px)) !important;
+  }
 }
 
 /* ---- phone tier (design 17 §18.4.2/§18.4.3) ---- */
 @media (max-width: 768px) and (pointer: coarse) {
   /* Composer toolbar: one line. The official row wraps; force nowrap (the
      official 12px gap is kept — no gap override). */
-  [data-slot="conversation.composer.bar"] [class$="_row"] {
+  /* Infix match (production names are _<local>_<hash>_<idx>): this also hits
+     sibling rows whose local name ends in "row" inside the composer bar
+     subtree (e.g. the queue dock's .row), which is harmless today — those
+     rows declare no flex-wrap and carry no _trigger_ child. */
+  [data-slot="conversation.composer.bar"] [class*="_row_"] {
     flex-wrap: nowrap !important;
   }
-  [data-slot="conversation.composer.bar"] [class$="_row"] [class$="_trigger"],
+  [data-slot="conversation.composer.bar"] [class*="_row_"] [class*="_trigger_"],
   [data-slot="conversation.input.model"] button {
     max-width: 112px !important;
     flex: 0 1 auto !important;
@@ -334,8 +405,11 @@ export const MOBILE_CSS = `
      + Close) stays pinned and only the section options scroll under it.
      All anchors are structural (panel [role=dialog][aria-modal] carrying
      the settings.header seat; direct nav/content children) — the :has()
-     anchor is static, no per-DOM-change re-evaluation hot path. A 100vh
-     fallback precedes 100dvh for older engines. */
+     anchor is scoped to aria-modal dialogs, so its invalidation cost stays
+     off the streaming conversation subtree (design 17 §18.4.4 records
+     :has() as a per-DOM-change cost; this selector only re-evaluates when a
+     modal dialog subtree changes). A 100vh fallback precedes 100dvh for
+     older engines. */
   [role="dialog"][aria-modal="true"]:has([data-slot="settings.header"]) {
     position: fixed !important;
     inset: 0 !important;
@@ -372,6 +446,12 @@ export const MOBILE_CSS = `
     flex: 1;
     min-width: 0;
     overflow-x: auto;
+    /* The chip strip is a tab bar, not a document: no visible scrollbar
+       (Firefox scrollbar-width + Chromium/WebKit ::-webkit-scrollbar). */
+    scrollbar-width: none;
+  }
+  [role="dialog"][aria-modal="true"]:has([data-slot="settings.header"]) > nav > div:last-child::-webkit-scrollbar {
+    display: none;
   }
   [role="dialog"][aria-modal="true"]:has([data-slot="settings.header"]) > nav button {
     flex: none;
@@ -457,31 +537,11 @@ export const MOBILE_CSS = `
     font-size: max(16px, var(--dsh-content-font-size, 16px)) !important;
   }
 
-  /* "Session 日志" export capsule (official session-log-export, header
-     utilities): a 111px+ min-width pill that eats the whole phone title
-     row. Mobile users rarely export session ZIPs — compact it to a round
-     44px icon target (the stamp data-mobile-dismiss="session-log-export"
-     is applied by markup.ts when the capsule copy matches). The label span
-     is zeroed (font-size, not display:none) so the accessible name stays in
-     the tree; the official download icon grows to the target center. */
-  [data-mobile-dismiss="session-log-export"] {
-    width: 44px !important;
-    height: 44px !important;
-    min-width: 44px !important;
-    gap: 0 !important;
-    padding: 0 !important;
-    border-radius: 50% !important;
-  }
-  [data-mobile-dismiss="session-log-export"] span {
-    font-size: 0;
-  }
-  [data-mobile-dismiss="session-log-export"] svg {
-    width: 18px;
-    height: 18px;
-  }
-
-  /* Scrolling body: the official padding-bottom for the composer is a
-     variable; keep it sane on short screens. */
+  /* Scrolling body: contain the pull gesture. The composer seat is a FLOW
+     child of this scroller (official shape since rc.1: scrollBody > [session slot,
+     composerSeat]), so the official sheet declares NO padding-bottom here —
+     the bottom spacing lives on the InputBar root (8px) and the message
+     column (16px), neither of which this rule touches. */
   [data-conversation-scroll] {
     overscroll-behavior-y: contain;
   }

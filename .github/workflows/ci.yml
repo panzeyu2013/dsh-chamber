@@ -45,7 +45,21 @@ jobs:
       # drift) and is idempotent (no-op when the link set is unchanged).
       - name: Bootstrap vendor tree (verify pin + ensure links)
         run: node scripts/dev/ensure-harness-vendor.mjs
+      # Upstream-touchpoint registry gates (docs/checklists/upstream-touchpoints.md):
+      # C1 pure fork files must stay byte-identical, C3 every fork/upstream file
+      # has a ruling, C5 anchors must not go stale, C6 EXCLUDED dirs must exist,
+      # C9 vendor patch anchors must match the pin. These are file-only, so they
+      # run before the install (fail fast). C8 (committed artifacts == sources)
+      # rebuilds with esbuild and therefore needs node_modules — it runs in the
+      # post-install step below; here it is explicitly advisory.
+      - name: Upstream touchpoint registry (C1/C3/C4/C5/C6/C7/C9/C10)
+        run: node scripts/dev/verify-upstream-touchpoints.mjs --no-artifact-rebuild
       - run: pnpm install --frozen-lockfile
+      # C8 deterministic artifact gate: rebuilds the committed host/mobile
+      # bundles in place, byte-compares, restores. A skipped build (missing
+      # esbuild) is a loud warning, never a silent pass.
+      - name: Committed artifacts match sources (C8 rebuild gate)
+        run: node scripts/dev/verify-upstream-touchpoints.mjs
       # The lockfile is the deterministic contract between the committed
       # workspace members and the resolution result; a non-frozen install
       # must never silently rewrite it (pnpm 11 prunes symlinked-member
@@ -68,6 +82,11 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Release workflow safety policy
         run: pnpm run test:release-workflow
+      # Upgrade tooling (pin preflight classification + lockfile vendor-record
+      # restore guard): advisory tooling, but its classification drives real
+      # pin-bump decisions, so the pure helpers are pinned here.
+      - name: Upgrade tooling unit tests (pin preflight / lockfile restore guard)
+        run: pnpm run test:upgrade-tools
       - name: Shared runtime core unit tests (packages/dsh-runtime)
         run: pnpm run test:runtime
       - name: Control-plane unit tests
@@ -116,7 +135,8 @@ jobs:
         run: pnpm run smoke
       - name: Renderer build
         run: pnpm run build:renderer
-      # Host-package esbuild bundles (dsh-host-client-graph / host-git-worktree
+      # Host-package esbuild bundles (dsh-chamber-seed-client-graph /
+      # dsh-chamber-seed-git-worktree / dsh-chamber-seed-archive-cleanup
       # dist/index.js) only used to build in release — their esbuild entry/
       # external mapping is an independent failure mode, so the push path
       # validates them too (2026 round-3 review).
@@ -184,7 +204,16 @@ jobs:
       # creates junctions on win32).
       - name: Bootstrap vendor tree (verify pin + ensure links)
         run: node scripts/dev/ensure-harness-vendor.mjs
+      # Upstream-touchpoint registry gates (docs/checklists/upstream-touchpoints.md):
+      # C1 pure fork files must stay byte-identical, C3 every fork/upstream file
+      # has a ruling, C5 anchors must not go stale, C6 EXCLUDED dirs must exist,
+      # C9 vendor patch anchors must match the pin (file-only, pre-install).
+      - name: Upstream touchpoint registry (C1/C3/C5/C6/C9)
+        run: node scripts/dev/verify-upstream-touchpoints.mjs --no-artifact-rebuild
       - run: pnpm install --frozen-lockfile
+      # C8 deterministic artifact gate (see the linux leg): needs node_modules.
+      - name: Committed artifacts match sources (C8 rebuild gate)
+        run: node scripts/dev/verify-upstream-touchpoints.mjs
       - name: Assert lockfile not rewritten
         run: git diff --exit-code -- pnpm-lock.yaml
       - name: Type check (tsc + chamber host packages + gateway + runtime)

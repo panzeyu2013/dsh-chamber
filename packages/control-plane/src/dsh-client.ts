@@ -53,6 +53,7 @@ import {
   buildHostIdentityProbePayload,
   buildLegacyHostProbePayload,
   HOST_IDENTITY_METHOD,
+  HOST_IDENTITY_METHOD_SINCE,
   HOST_PROBE_MAX_RESPONSE_BYTES,
   LEGACY_HOST_PROBE_METHOD,
   mintRpcId,
@@ -63,6 +64,7 @@ import type { RawData } from 'ws'
 
 export {
   HOST_IDENTITY_METHOD,
+  HOST_IDENTITY_METHOD_SINCE,
   HOST_PROBE_MAX_RESPONSE_BYTES,
   LEGACY_HOST_PROBE_METHOD,
   buildHostIdentityProbePayload,
@@ -949,7 +951,7 @@ export async function probeHostIdentity(
         legacyFallbackWarnedBaseUrls.add(baseUrl)
         logger.warn(
           `dsh host identity probe: ${HOST_IDENTITY_METHOD} answered HTTP 404 while the legacy ${LEGACY_HOST_PROBE_METHOD} probe succeeded — `
-          + 'the host runtime tree predates the identity method (dsh < 0.1.2-rc.1) or does not register it; '
+          + `the host runtime tree predates the identity method (dsh < ${HOST_IDENTITY_METHOD_SINCE}) or does not register it; `
           + 'the legacy probe response grows with session data (1 MiB cap). '
           + '(reported once per legacy episode — re-armed when the identity method answers again)',
         )

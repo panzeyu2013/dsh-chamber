@@ -1,6 +1,6 @@
 /**
  * The window.dshChamber bridge contract (desktop preload.cts, design 05
- * §3.3). The Electron shell exposes this via contextBridge; the web build
+ * §7.4). The Electron shell exposes this via contextBridge; the web build
  * has no injection, so the property is optional and every consumer guards
  * with ?. / typeof checks.
  *
@@ -191,7 +191,13 @@ export type SshExecIpcResult = SshStatusProjection | { error: string }
  *  `version` = module A's own package version (null when not installed);
  *  `live` = whether the RUNNING remote instance has loaded the module (true) /
  *  restart still pending (false) / not probed (null; local side stays null). */
-export interface ChamberHostGraphState {
+/** One chamber host package's per-target state (mirror of the desktop's
+ *  plugin-sync.ts). The EXPECTED set is the control-plane registry, so a new
+ *  host package appears in the plugin-management page without a UI change. */
+export interface ChamberHostPackageState {
+  insertId: string
+  name: string
+  probe: string
   installed: boolean
   patched: boolean
   version: string | null
@@ -201,14 +207,10 @@ export interface ChamberHostGraphState {
 /** Probe outcome: ok:false = the injection state could not be read (remote ssh
  *  exec failure / unparseable patch) — loud, never a silent "not injected". */
 export type ChamberInjectionState =
-  | {
-    ok: true
-    hostGraph: ChamberHostGraphState
-    gitWorktree: { installed: boolean; patched: boolean; version: string | null; live: boolean | null }
-  }
+  | { ok: true; packages: ChamberHostPackageState[] }
   | { ok: false; error: string }
 
-/** Remote plugin manifest projection (design 13 §4.3): the remote profile
+/** Remote plugin manifest projection (design 13 §4.1): the remote profile
  *  package.json dependencies + the active bundle layer. profileExists=false
  *  means the remote profile is not yet initialized (first `dsh plugin add`
  *  creates it); error is the loud reason when cat/parse failed. */
@@ -221,7 +223,7 @@ export interface RemotePluginManifest {
   chamber: ChamberInjectionState
 }
 
-/** Local plugin manifest projection (design 13 §4.3): the local profile
+/** Local plugin manifest projection (design 13 §4.1): the local profile
  *  dependencies + bundle/client classification (main reads each dep's
  *  manifest) + the unsyncable set (workspace:/git+/URL/range/alias — refused
  *  for direct pass, §7.2). */
@@ -242,7 +244,7 @@ export interface PluginApplyFailure {
   error: string
 }
 
-/** plugin_apply result projection (design 13 §4.5): the honest outcome. */
+/** plugin_apply result projection (design 13 §3): the honest outcome. */
 export interface PluginApplyResult {
   applied: number
   skipped: number
@@ -282,7 +284,7 @@ export interface NpmSearchPackage {
 }
 
 /**
- * The desktop_ssh_* IPC surface (design 05 §3.3) — returns, events, and
+ * The desktop_ssh_* IPC surface (design 05 §7.4) — returns, events, and
  * projections are non-secret: never a transport URL, SSH material, or gateway
  * token. The sole credential-bearing direction is save_connection's transient
  * write-only input. The systemd/plugin
@@ -333,32 +335,32 @@ export interface DesktopSshSurface {
   is_active(id: string): Promise<SshExecIpcResult>
   /** systemd restart (design 13 §4.1): exit-code honest, never silent. */
   restart_service(id: string): Promise<SshExecIpcResult>
-  /** Remote plugin manifest (design 13 §4.3): cat → parse → projection. */
+  /** Remote plugin manifest (design 13 §4.1): cat → parse → projection. */
   plugin_list(id: string): Promise<{ ok: true; manifest: RemotePluginManifest } | { ok: false; error: string }>
-  /** Apply plugin add/remove (design 13 §4.5): main re-validates, execs serially,
+  /** Apply plugin add/remove (design 13 §3): main re-validates, execs serially,
    *  restarts (unless deferred), asserts, and re-checks readiness. */
   plugin_apply(id: string, input: PluginApplyInput): Promise<{ ok: true; result: PluginApplyResult } | { ok: false; error: string }>
   /** Undo the latest OK plugin change of a remote instance (design 21 §6.4):
    *  main-process journal + confirm; id-only, no renderer-supplied spec. */
   ssh_plugin_undo(id: string): Promise<SshPluginUndoIpcResult>
-  /** Local plugin manifest (design 13 §4.3): main reads the authoritative local
+  /** Local plugin manifest (design 13 §4.1): main reads the authoritative local
    *  profile path (never dsh-chamber:info.dshHome). */
   local_plugin_list(): Promise<{ ok: true; manifest: LocalPluginManifest } | { ok: false; error: string }>
-  /** npm registry search (design 13 §5.8): main-side, non-secret projection. */
+  /** npm registry search (design 13 §5): main-side, non-secret projection. */
   npm_search(query: string): Promise<{ ok: true; packages: NpmSearchPackage[] } | { ok: false; error: string }>
-  /** Seed module A onto a remote instance (design 13 §4.6, 09 遗留 1). */
+  /** Seed module A onto a remote instance (design 13 §3, 09 遗留 1). */
   seed_host_graph(id: string): Promise<SshSeedHostGraphResult>
   /** Materialize a named dependency; MAIN resolves its authoritative path. */
   plugin_materialize_add(id: string, name: string): Promise<SshMaterializeResult>
   /** Pick a local plugin source (folder or .tgz archive) in MAIN and
-   *  materialize it remotely (pick-only, design 13 §5.8 / design 21 §10 ⑧). */
+   *  materialize it remotely (pick-only, design 13 §5 / design 21 §6.5). */
   plugin_materialize_add_pick(id: string): Promise<SshMaterializeResult>
-  /** Install a spec into the LOCAL dsh profile (design 13 §5.1). */
+  /** Install a spec into the LOCAL dsh profile (design 13 §5). */
   local_plugin_add(spec: string): Promise<SshLocalPluginExecIpcResult>
   /** Pick a local plugin source (folder or .tgz archive) and install it into
-   *  the LOCAL dsh profile (pick-only, design 13 §5.8 / design 21 §10 ⑧). */
+   *  the LOCAL dsh profile (pick-only, design 13 §5 / design 21 §6.5). */
   local_plugin_add_file(): Promise<SshLocalPluginExecIpcResult>
-  /** Remove a plugin from the LOCAL dsh profile (design 13 §5.1). */
+  /** Remove a plugin from the LOCAL dsh profile (design 13 §5). */
   local_plugin_remove(name: string): Promise<SshLocalPluginExecIpcResult>
   onStatusChanged(callback: (payload: SshStatusChangedPayload) => void): () => void
   /** Registry changed: retire trusted lifecycle deltas before re-pulling the roster. */
@@ -378,24 +380,24 @@ export type SshConfigDiscovery =
   | { hosts: SshConfigHost[] }
   | { error: string }
 
-/** Host-graph seed outcome (design 13 §4.6): wrote = a module A file was written,
+/** Host-graph seed outcome (design 13 §3): wrote = a module A file was written,
  *  patched = cordis.patch.yml gained the insert line. No `{ok:true,
  *  cancelled:true}` arm: the main-process seed handler has no confirmation
- *  dialog or picker to dismiss (design 21 §10 — the ssh seed confirm gap is a
+ *  dialog or picker to dismiss (design 21 §7 — the ssh seed confirm gap is a
  *  registered open item), so this union can never carry a user-cancelled
  *  result (parity: preload.cts SshSeedHostGraphResult). */
 export type SshSeedHostGraphResult =
   | { ok: true; wrote: boolean; patched: boolean }
   | { ok: false; error: string }
 
-/** Materialize-and-add outcome (design 13 §4.6). `cancelled` = the user dismissed
+/** Materialize-and-add outcome (design 13 §3). `cancelled` = the user dismissed
  *  the local-source picker (a silent no-op, not an error). */
 export type SshMaterializeResult =
   | { ok: true; spec: string; remotePath: string }
   | { ok: true; cancelled: true }
   | { ok: false; error: string }
 
-/** Local `dsh plugin` exec outcome (design 13 §5.1). `cancelled` = the user
+/** Local `dsh plugin` exec outcome (design 13 §5). `cancelled` = the user
  *  dismissed the local-source picker on the `local_plugin_add_file` path. */
 export type SshLocalPluginExecIpcResult =
   | { ok: true }

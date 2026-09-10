@@ -1,3 +1,3 @@
 import { clientBundle } from '../tsdown.client.ts'
 
-export default clientBundle('@dsh-chamber/dsh-client-ui-sidebar', ['lib/types/index.js', 'lib/types/invariant.js'])
+export default clientBundle('@dsh-chamber/dsh-chamber-client-ui-sidebar', ['lib/types/index.js', 'lib/types/invariant.js'])

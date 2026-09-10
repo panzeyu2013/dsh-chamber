@@ -1,33 +1,29 @@
-# 19 · 桌面通知：会话 complete / ask / request（设置可选项）
+# 19 · 桌面通知与未读徽标（会话 complete / ask / request，设置可选项）
 
-> **状态：M1–M2 已实现，合并前竞态加固与自动化复验已完成；M3 的 macOS
-> 权限/打包态实机验收仍未完成（2026-09；实现与验证记录见
-> `docs/progress/STATUS.md`，入口形态以 §3.4 的 2026-09 用户拍板为准）。
-> **未读徽标（§3.7）M1–M2 已实现（2026-12）**：Dock/任务栏应用图标上的
-> 红色数字气泡——renderer 未读计数投影 + `dsh-chamber:badge-count` IPC +
-> 主进程设置裁决与平台门；Windows 任务栏 overlay 门控未接线（设计 23 排期）。
+> **状态：现行（桌面原生通知 + 未读徽标，2026-12）**——会话 complete / ask / request
+> 时推送原生通知，Dock/任务栏应用图标显示未读红气泡（均为主进程裁决的设置可选项）；
+> 检测端复用 renderer 既有事实通道，控制面零改动、无新 host 插件；
+> **未完成门禁**：macOS 权限/拒绝行为与打包态实机验收、Windows 任务栏 overlay 门控
+> （design 23 排期）——见 `docs/progress/STATUS.md`。
 > 需求来源：用户要求「一个 session 在 complete、ask、request 时给用户推送通知」，
-> 做成设置中的可选项。本文先给出
-> **OpenChamber 通知功能调研**（外部参考，本地源码
+> 做成设置中的可选项；未读徽标是同一投影的被动指示。
+> 本文先给出 **OpenChamber 通知功能调研**（外部参考，本地源码
 > `/Users/panzeyu2013/Desktop/code/develop/OpenChamber`，同设计 14 的调研体例），
 > 再给出 dsh-chamber 的移植设计契约。
 
 ---
 
-## 1. 需求与设计前现状对照（dsh-chamber）
+## 1. 事实源与术语（dsh-chamber）
 
-> 本节保留立项时的差距分析；现行实现以 §3–§5 为准。
-
-| 项 | 现状 | 证据 |
+| 项 | 事实 | 证据 |
 |---|---|---|
-| 桌面通知 | **当时无任何通知能力**：main.ts 无 `Notification` 导入、无通知 IPC、无权限处理 | 设计前 `packages/desktop/main.ts` |
-| 会话状态检测 | **已具备事实源**：06 §4 运行时事实通道——每个已挂载 ctx 的侧边栏插件注册 generation-safe runtime producer，上报每会话 `{running, completed, pending}`（`pending = 'approval' \| 'plan-review' \| 'question'`，来自 vendor sessions store 的实时 mux 交互状态）；App 层另有 running→idle「完成未读」蓝点边沿机（`reconcileCompletedFacts`） | `packages/dsh-chamber-client-ui-sidebar/src/client/index.ts`；`packages/renderer/src/App.tsx` |
+| 会话状态检测 | **已有事实源**：06 §4 运行时事实通道——每个已挂载 ctx 的侧边栏插件注册 generation-safe runtime producer，上报每会话 `{running, completed, pending}`（`pending = 'approval' \| 'plan-review' \| 'question'`，来自 vendor sessions store 的实时 mux 交互状态）；App 层另有 running→idle「完成未读」蓝点边沿机（`reconcileCompletedFacts`） | `packages/dsh-chamber-client-ui-sidebar/src/client/index.ts`；`packages/renderer/src/App.tsx` |
 | 会话标题/来源 label | App 聚合已持有（`aggregates[sourceId].sessions[].title`、`server.label`） | `App.tsx` `deriveServers` |
-| 窗口隐藏场景 | 设计 14 已落地：关窗 hide 到托盘 / macOS 无窗常驻 / 后台启动——**窗口不可见时用户对会话完成与等待输入一无所知**（蓝点/pending 徽标只在窗口内） | 设计 14 |
+| 窗口隐藏场景 | 设计 14：关窗 hide 到托盘 / macOS 无窗常驻——**窗口不可见时用户对会话完成与等待输入一无所知**（蓝点/pending 徽标只在窗口内） | 设计 14 |
 | 设置存储 | chamber 全局设置 `chamber-settings.json`（主进程权威、`dsh-chamber:settings-get/set` IPC + push、`validatePatch` 白名单） | `packages/desktop/chamber-settings.ts` |
 
-**结论**：dsh-chamber 缺的是「呈现 + 裁决」两端——Electron 原生通知（桌面壳宿主能力，
-与托盘/退出确认同层级）与设置入口；检测端**已有现成事实通道**，零控制面改动、
+**结论**：本设计只补「呈现 + 裁决」两端——Electron 原生通知（桌面壳宿主能力，
+与托盘/退出确认同层级）与设置入口；检测端**复用现成事实通道**，零控制面改动、
 零新 host 插件即可接上。
 
 **术语映射**（与用户需求对齐）：`complete` = 会话回合结束（running→idle 边沿，
@@ -276,13 +272,14 @@ interface NotificationSurface {
 
 ```ts
 interface ChamberSettings {
-  // …既有 4 键不变
+  // …既有 chamber 级键不变（设计 14/16/18 的设置段）
   notifications: {
     enabled: boolean          // 主开关；默认 false（低打扰，用户显式开启）
     mode: 'hidden-only' | 'always'  // 默认 hidden-only
     onComplete: boolean       // 默认 true
     onAsk: boolean            // 默认 true
     onRequest: boolean        // 默认 true
+    badgeEnabled: boolean     // 未读徽标（§3.7）；默认 true
   }
 }
 ```
@@ -293,13 +290,13 @@ interface ChamberSettings {
 
 **设置 UI**（`packages/dsh-chamber-client-ui-settings-bridge`）：
 
-- 决策（2026-09 用户拍板，实现以此为准）：**并入 `__general` 通用页**，新增
-  「通知」控制组（不新增设置壳固定入口——设计 15 v1 平铺形态的入口数保持
+- 决策（用户拍板，实现以此为准）：**并入 `__general` 通用页**，新增
+  「通知」控制组（不新增设置壳固定入口——设计 15 平铺形态的入口数保持
   2 个不变）；通用页各控制组之间用**分割线**（`.generalGroup + …` hairline，
-  `--dsw-alias-border-l2`）分隔，通知组插在「运行」与「更新」之间。备选
-  （未采纳）：独立 `__notifications` 固定入口。
+  `--dsw-alias-border-l2`）分隔，通知组插在「运行/会话待办区」与「更新」之间。
+  备选（未采纳）：独立 `__notifications` 固定入口。
 - 通知组内容（settings-panel 设计语言 + `settings-store` 复用）：
-  - 控制组「通知」：主开关行；
+  - 控制组「通知」：主开关行 + 未读徽标开关行（§3.7）；
   - 「通知时机」：模式单选（仅窗口隐藏时 / 始终）+ 事件开关 ×3（完成 / 提问 /
     审批请求）；「始终」下注明「正在查看的会话除外」；
   - 「发送测试通知」按钮（调 `notifications.notify({sourceId:'local',
@@ -307,11 +304,10 @@ interface ChamberSettings {
     绕过门禁直接显示；'test' 豁免空 sessionId 白名单，click 不触发打开会话）；
   - i18n zh/en（`locales.ts` 扩展；配对由 `typecheck:settings-bridge` 的
     `Record<keyof typeof zh, string>` 编译期强制）。
-
-**UI 修订注（2026-12，纯展示层）**：通知组边框收敛——主开关改为无边框披露行
-（`.generalSwitchRow`），启用后展开的子设置（通知时机 / 事件开关 ×3 / 测试按钮）
-整体收入唯一一张卡片（`.generalNotifyCard`），内部行不再自带边框（`.generalLinePlain`
-/ `.generalEventRow`）；通知组从五层边框降到一层。开关关闭时子设置仍整体收起。
+- **展示层契约**：主开关是无边框披露行（`.generalSwitchRow`），启用后展开的子设置
+  （通知时机 / 事件开关 ×3 / 测试按钮）整体收入唯一一张卡片（`.generalNotifyCard`），
+  内部行不再自带边框（`.generalLinePlain` / `.generalEventRow`）——通知组只保留一层
+  边框；开关关闭时子设置整体收起。
 
 ### 3.5 覆盖边界与诚实性
 
@@ -353,7 +349,7 @@ interface ChamberSettings {
   host/user/port 信息。
 - 控制面零改动；无新 host 插件；不消费宿主帧；设置不落实例 dsh home。
 
-### 3.7 未读徽标：Dock/任务栏应用图标红气泡（2026-12，M1–M2）
+### 3.7 未读徽标：Dock/任务栏应用图标红气泡
 
 OpenChamber 参考实现：`packages/electron/main.mjs` 的 `desktop_tray_update`
 分支读 `args.dockBadgeCount` → `app.setBadgeCount(Math.max(0, Math.floor(count)))`
@@ -421,37 +417,30 @@ completedBySource（App 完成未读蓝点集，06 §4.1，只读复用——徽
 
 ---
 
-## 4. 分期
-
-- **M1 主链路**：`desktop/notifications.ts`（裁决/去重/决策纯逻辑 + 单测）→
-  main.ts IPC 接线（notify + notification-open + pending drain +
-  notifications-ready 就绪信号）→ preload + global.d.ts → renderer
-  `notification-edges.ts`（边沿检测 + complete 去重）+ App effect 接线 →
-  chamber-settings 扩展 + 测试。
-- **M2 设置 UI**：通用页「通知」控制组（GeneralView 内联，无新入口）+
-  分组分割线 + i18n + 测试按钮。
-- **M3 打磨**：macOS 通知权限（未授权时的设置页提示）、文案定稿、
-  打包态实机验收（关窗/托盘/后台三形态 + 点击打开 + 窗口重建）。
-
-## 5. 测试与验证门
+## 4. 验证门与实机验收
 
 - `test:desktop`：chamber-settings 新键 normalize/validate/corrupt 用例；
   notifications 覆盖裁决链 enabled/kind/mode/requireHidden、claim/rate/active
   hard cap、honest show/failed/timeout/hostile error、严格 `local | ssh-<raw-id>` 来源、
   opaque proof 校验与 same-id replacement、active-only Map churn、notification-open
-  retain-until-ACK/FIFO/reload replay/旧 attempt 隔离；最终 HEAD 数字只见 STATUS。
+  retain-until-ACK/FIFO/reload replay/旧 attempt 隔离；badge 的校验/裁决/平台门用例。
 - `test:renderer-shell`：`notification-edges` 纯函数单测（complete 边沿与
   dedupe 去重、ask/request 值变化边沿（含直切）、首报播种、断连补发、
-  同 tick 去重）。
+  同 tick 去重）；`badge-count` 投影用例。
 - `test:sidebar`：`projectRuntimeFacts` 的 subagent 行排除用例。
 - `test:settings-bridge`：通知设置纯函数（notifications-settings：缺省回落/
   partial patch/未知键过滤/默认值镜像）+ 既有套件（入口解析不变——通知组
   不新增固定入口）。
 - `verify:i18n` 无 DRIFTED（settings-bridge 命名空间配对由
   `typecheck:settings-bridge` 编译期强制）；`typecheck`；
-  `build:renderer`；`dist:desktop:mac` 打包态通知冒烟（macOS 权限 + 点击打开）。
+  `build:renderer`；`dist:desktop:mac` 打包态通知冒烟。
+- 最终 HEAD 的测试数字只见 `docs/progress/STATUS.md`。
 
-## 6. 关联
+**实机验收（未完成）**：macOS 通知权限（未授权/被拒绝时的设置页提示）、文案定稿、
+打包态三形态（关窗/托盘/后台）+ 点击打开会话 + 窗口重建；徽标 macOS Dock 打包态
+三态（武装/解除/退役 + 重载与退出清零）；Windows 任务栏 overlay 门控（design 23 排期）。
+
+## 5. 关联
 
 - 设计 06 §4：运行时事实通道（检测事实源，本设计不改其契约）。
 - 设计 14：关窗/托盘/后台常驻（通知的主要使用场景——窗口不可见时才打扰）。

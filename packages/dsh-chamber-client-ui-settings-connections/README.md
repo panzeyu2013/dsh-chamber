@@ -1,4 +1,4 @@
-# @dsh-chamber/dsh-client-ui-settings-connections
+# @dsh-chamber/dsh-chamber-client-ui-settings-connections
 
 English | [中文](README.zh.md)
 

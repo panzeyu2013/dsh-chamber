@@ -219,13 +219,16 @@ packages/desktop/scripts/emit-bridge-manifest.mjs # IPC 通道 manifest → Swif
 sidecar 的 JS 面不动仓库布局：`packages/desktop` 继续是双 flavor 的宿主
 （Electron entry `main.ts` 保留；新增 `sidecar-entry.ts` 及其 host-edge 适配，
 §4.1）。sidecar 打包布局 = **tsc 编译产物（control-plane/dsh-runtime）+
-dist/web + dist/host-*-package + 捆绑 node/pnpm**，复用 build-control-plane.mjs
+dist/web + dist/`<host 包名>` + 捆绑 node/pnpm**，复用 build-control-plane.mjs
 的"双路径解析"机制（打包态 import 编译产物、dev/测试走 pnpm 符号链接，
-control-plane-module.ts:5-30 同款注释）——sidecar 与 Electron 打包共享同一
-产物目录族（packages/desktop/dist/{web,control-plane,host-*-package}）。
+control-plane-module.ts:5-30 同款注释）——sidecar 与 Electron 共享
+`packages/desktop/dist/{web,control-plane}` 一族；**host 包不同源**：Electron 走
+`build-host-graph-package.mjs` 产的 `dist/host-*-package` 产物，sidecar 直接读
+`packages/dsh-chamber-seed-*/{package.json,dist/index.js}` 拷进自己的
+`dist/dsh-chamber-seed-*/`（两条腿各自成对，别把一侧的目录名当成另一侧）。
 
 **装配目录（W-23 定稿，`scripts/build-sidecar.mjs`）**：
-`<out>/{node, sidecar.js, package.json, dist/control-plane/, dist/web, dist/host-*-package}`。
+`<out>/{node, sidecar.js, package.json, dist/control-plane/, dist/web, dist/dsh-chamber-seed-*}`。
 要点：
 - `sidecar.js` = esbuild 打包的入口（含 shell-core 全家 + sidecar-ctx +
   node-edges + dsh-runtime）；`@dsh-chamber/control-plane`、`electron` 与
@@ -233,6 +236,11 @@ control-plane-module.ts:5-30 同款注释）——sidecar 与 Electron 打包共
 - 装配目录必须带 `package.json`（`{type:'module'}` + chamber 版本）——shell-core
   的模块级 `version` 读取（`new URL('./package.json', import.meta.url)`）与 ESM
   判定依赖它；
+- **三个 chamber host 包**（T2 包名，`packages/dsh-chamber-seed-{client-graph,
+  git-worktree,archive-cleanup}`）：拷贝进 `<out>/dist/<同名>/`，Swift 侧按
+  `--host-graph-dir/--host-git-dir/--host-archive-dir` 注入同一基名
+  （`BuildSidecar.HOST_PACKAGES` 单源；`sidecar-ctx` 的 `hostPackageSourceDir`
+  dev 兜底也按同名在 `packages/` 下探测）——三处必须同拼写，改名要一起改。
 - **运行期标记**：Swift Supervisor 在装配态 spawn 时注入
   `DSH_CHAMBER_SIDECAR_COMPILED=1`（`control-plane-module.isPackagedSidecarRuntime`）
   → control-plane 走相对编译入口；装配目录没有 node_modules 树，裸说明符不可解析；

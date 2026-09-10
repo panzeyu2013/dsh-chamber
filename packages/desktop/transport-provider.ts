@@ -344,7 +344,7 @@ export interface TransportRunPayload {
   sha256?: string
   /**
    * True = a non-zero exit is EXPECTED (a first-seed probe of a file that
-   * does not exist yet, design 13 §4.6): the failure is still returned as
+   * does not exist yet, design 13 §3): the failure is still returned as
    * `ok:false` with the same error text (callers' ENOENT classification
    * keeps working), but the ERROR-level "run command failed" log and the
    * raw-stderr INFO echo are suppressed — an expected probe failure must

@@ -17,9 +17,16 @@ import {
   projectInstanceSnapshot,
   projectRuntimeFacts,
 } from '../shared/derive.ts'
+import { createPanelSource } from './panel-source.ts'
+import { createPurgeTracker } from '../shared/purged-tracker.ts'
+import { fetchInstanceSnapshot, getInstanceClient } from '../shared/instance-api.ts'
+import {
+  classifySettingsSeatOccupant, settingsSeatTakeoverMessage,
+} from '../shared/settings-shell.ts'
 
 export type {
-  SidebarFooterActionOwnerProps, SidebarRootComponentProps, SidebarRootInjected,
+  SidebarBrandMarkOwnerProps, SidebarBrandNameOwnerProps, SidebarFooterActionOwnerProps,
+  SidebarPanelIconOwnerProps, SidebarPanelMetadata, SidebarRootComponentProps, SidebarRootInjected,
   SidebarSectionOwnerProps, SidebarSettingsOwnerProps, SidebarWorkspaceGitOwnerProps,
 } from './contract/slots.ts'
 export type { SidebarKey } from './locales.ts'
@@ -53,12 +60,28 @@ export function apply(ctx: ClientContext): void {
   const workspaceNavigation = ctx.get('uiWorkspace') as unknown as {
     startSession(workspaceId?: Parameters<SidebarRootInjected['startSession']>[0]): void
   }
+  // alpha.2 global panel axis: mirror `sidebar.panellist` registrations into a
+  // serializable snapshot the shell renders, and forward row clicks to
+  // `ctx.layout.selectPanel` (present in every supported layout: both the
+  // chamber fork and the alpha.2 official ui-layout declare it).
+  const panels = createPanelSource()
+  const syncPanels = (): void => { panels.sync(ctx.slots as Parameters<typeof panels.sync>[0]) }
+  ctx.effect(() => ctx.slots.subscribe('sidebar.panellist', syncPanels), 'dsh-chamber: sidebar panel entries')
+  ctx.effect(() => ctx.locale.subscribe(syncPanels), 'dsh-chamber: sidebar panel labels')
+
   const injectProps = (): SidebarRootInjected => ({
     // The shell's New Session button rides the Workspace UI's shared action
     // (current Session Workspace, then recent Workspace) — of THIS ctx, so it
     // always acts on the current source.
     startSession: (workspaceId) => { workspaceNavigation.startSession(workspaceId) },
     toggleSidebar: () => { ctx.layout.toggleSidebar() },
+    // alpha.2: select the global main panel addressed by a sidebar row. Direct
+    // call: a layout without `selectPanel` is a misconfiguration (the sidebar
+    // shell only ever loads beside the chamber layout fork, and the alpha.2
+    // official layout declares the method too), so it must fail loud rather
+    // than silently ignore the click.
+    selectPanel: (id) => { ctx.layout.selectPanel(id) },
+    hooks: { panels: panels.source },
     // chamber patch (05 §4): the renderer shell installs this immutable
     // per-entry fact before any plugin materializes.
     chamberInstanceId: (ctx as any).chamberInstanceId as string | undefined,
@@ -71,6 +94,9 @@ export function apply(ctx: ClientContext): void {
       name: 'sidebar',
       locale: NS,
       children: {
+        'sidebar.brand.mark': { kind: 'single', scope: 'root' },
+        'sidebar.brand.name': { kind: 'single', scope: 'root' },
+        'sidebar.panellist': { kind: 'list', scope: 'root' },
         'sidebar.workspaces': { kind: 'single', scope: 'root' },
         // chamber (08 §11): the per-workspace Git hole. The slot-level inject
         // factory is git-agnostic (closes over only the sidebar-owned
@@ -95,6 +121,30 @@ export function apply(ctx: ClientContext): void {
     }, SidebarRoot),
     'dsh-chamber: sidebar slot registration',
   )
+  // Upstream order: publish the (possibly already populated) panel list after
+  // the registration exists, so the first render sees it.
+  syncPanels()
+
+  // chamber (2026-12 settings-surface extension): the chamber settings shell
+  // owns `sidebar.settings` at the RESERVED shadow priority (sidebar shared
+  // face settings-shell.ts). The slot rule renders the lowest-priority winner,
+  // so a registrant BELOW that range would silently replace the whole settings
+  // surface — the only renderer of the connections/general pages and of every
+  // per-source plugin settings section. Detection only (console.error, the
+  // assertSingletonModule precedent): the sidebar cannot safely re-pin a slot
+  // cell, and a takeover must not pass unnoticed. The official SettingsRoot at
+  // priority 0 (the deferred-cluster window before the chamber shell registers)
+  // is NOT a takeover — classifySettingsSeatOccupant only reports registrants
+  // that went below the reserved range.
+  ctx.effect(() => {
+    const check = (): void => {
+      const winner = ctx.slots.entriesOfSlot('sidebar.settings')[0]
+      if (classifySettingsSeatOccupant(winner) !== 'taken-over') return
+      console.error(settingsSeatTakeoverMessage(winner?.options.id ?? 'unknown'))
+    }
+    check()
+    return ctx.slots.subscribe('sidebar.settings', check)
+  }, 'dsh-chamber: settings shell seat watchdog')
 
   // chamber patch (06 §4.3/§4.5): the runtime-facts channel's producer end.
   // Every boot is its own ctx with its own sessions store, so this plugin —
@@ -108,9 +158,12 @@ export function apply(ctx: ClientContext): void {
   // projection for every source. The component no longer subscribes to the
   // store itself; boot frames before the first report simply render no
   // highlight (06 §4.3). zustand subscribe does not fire on mount, so the
-  // snapshot is reported immediately. This producer keeps NO state of its own
-  // — the report is a pure pass-through of the source's own list snapshot,
-  // and the subagent counts reuse the vendor's indexSubagentDescendants
+  // snapshot is reported immediately. The producer keeps exactly ONE piece of
+  // its own state: the purged-row suppression set + its verified convergence
+  // chain (design 24 §12 — purge 后官方 summaries 不刷新，生产端因此过滤掉
+  // 离开归档集合的行并做校验式收敛；`purged-tracker.ts` 持有该状态机，其余
+  // 字段仍是源 store 的纯投影，运行时事实通道同样只过滤 tombstoned id)。
+  // The subagent counts reuse the vendor's indexSubagentDescendants
   // verbatim (runningCount per parent through uninterrupted subagent-origin
   // lineage — the same number the official ui-workspace tree renders, so the
   // subagent-live ring semantics can never drift from the official UI).
@@ -128,43 +181,120 @@ export function apply(ctx: ClientContext): void {
       chamberInstanceId, chamberSourceFingerprint, bootGeneration)
     const snapshotProducer = chamberBridge.registerInstanceSnapshotProducer(
       chamberInstanceId, chamberSourceFingerprint, bootGeneration)
-    // design 24 §20 (archive-cleanup convergence): this ctx's OFFICIAL
-    // session client (`ctx.sessions` — ClientSessions) is requested to re-run
-    // its session-list refresh. The purge of archived content is invisible to
-    // the official runtime (host events are documented no-ops), so rows of
-    // purged sessions linger in the official client summaries (refreshed only
-    // on connection generations) and would keep resurfacing in the chamber
-    // sidebar after the host removes their ids from the archived set — opening
-    // one then fails with session/not-found. `refresh()` reconciles the
-    // summaries against the server corpus (a per-call disk walk) and drops the
-    // deleted rows; the notify then flows through queueSnapshot below and the
-    // producer pushes a clean snapshot. Loose face + runtime guard: only act
-    // for THIS ctx's own instance; a missing method is WARNED (an inert seam
-    // must never be silent), and the invocation is try/catch-wrapped — the
-    // official refreshList has no synchronous throw path in the pinned vendor,
-    // but a bridge-listener throw would abort the rest of the App's push
-    // handling for this notification.
-    const unsubscribeSessionListRefresh = chamberBridge.onRequestSessionListRefresh((sourceId) => {
-      if (sourceId !== chamberInstanceId) return
-      const refresh = (ctx.sessions as unknown as { refresh?: () => Promise<unknown> }).refresh
-      if (typeof refresh !== 'function') {
+    // design 24 §12 (archive-cleanup convergence) + 2026-09 修正轮 (purged-row
+    // suppression): this ctx's OFFICIAL session client (`ctx.sessions` —
+    // ClientSessions) is requested to re-run its session-list refresh. The
+    // purge of archived content is invisible to the official runtime (host
+    // session events are documented no-ops), so rows of purged sessions linger
+    // in the official client summaries (refreshed only on connection
+    // generations) and would keep resurfacing in the chamber sidebar after the
+    // host removes their ids from the archived set — opening one then fails
+    // with session/not-found. `refresh()` reconciles the summaries against the
+    // server corpus (a per-call disk walk) and drops the deleted rows; the
+    // notify then flows through queueSnapshot below and the producer pushes a
+    // clean snapshot. Loose face + runtime guard: only act for THIS ctx's own
+    // instance; a missing method is WARNED (an inert seam must never be
+    // silent), and the invocation is try/catch-wrapped — the official
+    // refreshList has no synchronous throw path in the pinned vendor, but a
+    // bridge-listener throw would abort the rest of the App's push handling
+    // for this notification.
+    //
+    // 2026-09 修正轮 (F1/F2, see shared/purged-rows.ts): the App-side
+    // convergence machine is a ONE-SHOT transition detector — it can only
+    // request this refresh while an archive-set shrink is newly observed
+    // against an archive-set-authoritative previous aggregate, and its request
+    // is a fire-and-forget page-wide broadcast. Two proven gaps let the ghosts
+    // return indefinitely: (1) after a converged view, any later re-dirtied
+    // push carries rows whose ids already left the set, so no shrink is ever
+    // observed again; (2) a shrink observed while the committed aggregate lost
+    // provenance is invisible to it forever. The producer therefore owns the
+    // fix itself:
+    //   - F1 suppression: an authoritative shrink tombstones the removed ids
+    //     (host `clearIds` only ever contains trees whose content deletion
+    //     SUCCEEDED plus no-record orphans, so "left the archive set" ⇔ "the
+    //     content is gone") and they are filtered out of every emitted
+    //     snapshot until the raw summaries stop listing them or they are
+    //     re-archived — the ghosts can never render, not even during the
+    //     refresh round-trip;
+    //   - F2 verified convergence: the same shrink (and every bridge request)
+    //     runs the official refresh and then VERIFIES the ids left the
+    //     summaries, retrying a bounded number of times. That repairs the
+    //     official client itself (no dead-end opens) and covers
+    //     `refreshList()`'s single-flight stale-response and transient-error
+    //     holes, which the App cannot see.
+    /**
+     * One official session-list refresh. CRITICAL: `refresh()` is a PROTOTYPE
+     * method on the service object (`ClientSessions.refresh` reads
+     * `this.manager`), so it MUST be invoked as a method — a detached
+     * `const f = ctx.sessions.refresh; f()` throws
+     * `TypeError: Cannot read properties of undefined` and silently made the
+     * §12 convergence seam a no-op until the 2026-09 review caught it.
+     */
+    const officialSessionRefresh = (): Promise<unknown> | undefined => {
+      const service = ctx.sessions as unknown as { refresh?: () => Promise<unknown> }
+      if (typeof service.refresh !== 'function') {
         console.warn(`[chamber] session list refresh requested for ${chamberInstanceId} but the official ` +
           'session client exposes no refresh() method — ghost-row convergence is unavailable')
-        return
+        return undefined
       }
       try {
-        void refresh().catch((error: unknown) => {
-          console.warn(`[chamber] session list refresh failed for ${chamberInstanceId}:`,
-            error instanceof Error ? error.message : String(error))
-          // Transient-failure residual (design 24 §20): the App-side
-          // convergence machine keeps the purged ids pending and re-requests
-          // on a later push, so this catch only records — no local retry
-          // state is needed here.
-        })
+        return Promise.resolve(service.refresh())
       } catch (error) {
         console.warn(`[chamber] session list refresh for ${chamberInstanceId} threw synchronously:`,
           error instanceof Error ? error.message : String(error))
+        return undefined
       }
+    }
+
+    /** Ids still listed by the OFFICIAL summaries (the convergence probe). */
+    const listedSummaryIds = (): Set<string> => {
+      const byId = (sessionsList.getSnapshot() as { byId?: Record<string, unknown> }).byId ?? {}
+      return new Set(Object.keys(byId))
+    }
+
+    /**
+     * INDEPENDENT authoritative row source (design 24 §12 terminal step): the
+     * chamber's own unary `session.list` over the instance proxy — a fresh
+     * per-call disk rescan with neither the official single-flight nor its
+     * client cache. Used only when the bounded official-refresh chain could
+     * not converge: an id this still lists is a live session the shrink did
+     * NOT purge (release the suppression); an id it omits has no content
+     * (keep the suppression). Failures return undefined ⇒ keep suppression.
+     */
+    const authoritativeListedIds = async (): Promise<ReadonlySet<string> | undefined> => {
+      try {
+        const snapshot = await fetchInstanceSnapshot(getInstanceClient(chamberInstanceId))
+        return new Set(snapshot.sessions.map(row => row.sessionId))
+      } catch (error) {
+        console.warn(`[chamber] authoritative session-list probe failed for ${chamberInstanceId}:`,
+          error instanceof Error ? error.message : String(error))
+        return undefined
+      }
+    }
+
+    /**
+     * Per-source purged-row suppression + verified convergence (design 24
+     * §12, state machine in shared/purged-tracker.ts): observes the
+     * authoritative archive set, tombstones the ids a shrink removed, filters
+     * them out of the emitted snapshot/runtime facts, and runs the bounded
+     * official refresh chain. Triggered by the bridge channel (App
+     * convergence machine / archive manager) AND by the producer's own shrink
+     * observation, so a request whose broadcast reached nobody is still
+     * covered locally.
+     */
+    const purgedRows = createPurgeTracker({
+      refresh: officialSessionRefresh,
+      listedSummaryIds,
+      probe: authoritativeListedIds,
+      // A probe-confirmed release must re-publish BOTH channels: sync()
+      // re-reports runtime facts (the suppressed id's running/pending/
+      // completed/current facts were dropped) and queues the snapshot.
+      onRelease: () => { sync() },
+      warn: (message) => { console.warn(`[chamber] ${message} (${chamberInstanceId})`) },
+    })
+    const unsubscribeSessionListRefresh = chamberBridge.onRequestSessionListRefresh((sourceId) => {
+      if (sourceId !== chamberInstanceId) return
+      purgedRows.converge()
     })
     // 2026-09 beta 回归修复：pending（审批/提问/plan-review）的权威 0.1.2 源是
     // 官方 ui-session 的 pending-interaction 注册表（官方 ui-workspace 侧边栏
@@ -190,16 +320,43 @@ export function apply(ctx: ClientContext): void {
     const syncSnapshot = (): void => {
       snapshotQueued = false
       if (disposed) return
-      const projected = projectInstanceSnapshot(workspacesList.getSnapshot(), sessionsList.getSnapshot())
+      const workspacesSnapshot = workspacesList.getSnapshot()
+      const sessionsSnapshot = sessionsList.getSnapshot()
+      const projected = projectInstanceSnapshot(workspacesSnapshot, sessionsSnapshot)
       if (projected === undefined) {
         snapshotSignature = ''
         snapshotProducer.report(undefined)
         return
       }
-      const nextSignature = instanceSnapshotSignature(projected)
+      // F1 (design 24 §12): an authoritative archive-set shrink is the
+      // client-observable "a purge completed and those ids left the set"
+      // signal. The tracker tombstones the removed ids (and runs the verified
+      // convergence chain); the ids are then filtered out of the EMITTED
+      // snapshot until the raw summaries stop listing them.
+      const armed = purgedRows.observeArchive(
+        (workspacesSnapshot as { archivedSessionIds?: unknown }).archivedSessionIds,
+      )
+      if (armed.length > 0) {
+        // Re-report runtime facts in the SAME pass (the workspace
+        // subscription does not call sync()), so a purged session's
+        // pending/completed facts cannot outlive its row.
+        sync()
+      }
+      if (purgedRows.suppressed().size > 0) {
+        // Reconcile against the RAW summary ids (not the projected rows: the
+        // projection drops subagent-origin rows, and a tombstone must clear
+        // when the official summaries stop listing the id, not when the
+        // chamber projection happens not to render it).
+        purgedRows.reconcile(listedSummaryIds())
+      }
+      const filteredSessions = purgedRows.filter(projected.sessions)
+      const emitted = filteredSessions === projected.sessions
+        ? projected
+        : { ...projected, sessions: [...filteredSessions] }
+      const nextSignature = instanceSnapshotSignature(emitted)
       if (nextSignature === snapshotSignature) return
       snapshotSignature = nextSignature
-      snapshotProducer.report(projected)
+      snapshotProducer.report(emitted)
     }
     const queueSnapshot = (): void => {
       if (snapshotQueued) return
@@ -214,7 +371,17 @@ export function apply(ctx: ClientContext): void {
       for (const [parentId, summary] of indexSubagentDescendants(snapshot.byId)) {
         if (summary.runningCount > 0) subagentRunning.set(parentId, summary.runningCount)
       }
-      runtimeProducer.report(projectRuntimeFacts(snapshot, subagentRunning, pendingInteractions.getSnapshot()))
+      const report = projectRuntimeFacts(snapshot, subagentRunning, pendingInteractions.getSnapshot())
+      // F1 同纪律：tombstoned（内容已删）的会话不得进入运行时事实通道——
+      // 否则完成未读蓝点/design-19 通知边沿/徽标计数会为一个已不存在的会话
+      // 武装（行虽被过滤，计数与边沿是独立消费面）。current 一并收敛，避免
+      // 把一个已删会话继续当成来源当前会话。
+      const suppressed = purgedRows.suppressed()
+      if (suppressed.size > 0) {
+        for (const id of suppressed) delete report.sessions[id]
+        if (report.current !== undefined && suppressed.has(report.current)) delete report.current
+      }
+      runtimeProducer.report(report)
       queueSnapshot()
     }
     // v0.1.2-alpha.1: the host-description producer is REMOVED — the
@@ -233,6 +400,7 @@ export function apply(ctx: ClientContext): void {
     const unsubscribePending = pendingInteractions.subscribe(sync)
     return () => {
       disposed = true
+      purgedRows.dispose()
       unsubscribeSessions()
       unsubscribeWorkspaces()
       unsubscribePending()

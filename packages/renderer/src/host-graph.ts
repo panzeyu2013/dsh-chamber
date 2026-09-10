@@ -7,7 +7,7 @@
  * be loaded at runtime. The host composes the same graph it would inject as
  * `window.__DSH_BOOT__` (dsh-client-modules' ClientModuleRegistry, vendor)
  * and the chamber frontend fetches it per instance over the reverse proxy
- * (`/api/i/<id>` — the chamber host gateway `@dsh-chamber/dsh-host-client-graph`
+ * (`/api/i/<id>` — the chamber host gateway `@dsh-chamber/dsh-chamber-seed-client-graph`
  * exposes it as Remote `clientGraph/graph`), drops the rows the chamber page
  * covers (chamber-covered.ts), and preloads the rest (collectExtraRows below —
  * the bundle loader is injected by shell.ts, which owns the DOM; the preload
@@ -33,7 +33,7 @@
  * client-request envelope + POST + body collection, bounded unary 30s — rides
  * the shared kernel postUnary (sidebar shared/wire-common.ts), imported HERE
  * by real-source relative path rather than the
- * '@dsh-chamber/dsh-client-ui-sidebar/shared' specifier: the renderer has no
+ * '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared' specifier: the renderer has no
  * install-tree copy of the sidebar package, and its plain-node tests
  * (host-graph.test.ts, no module loader) must resolve the real module without
  * a bundler. Specifier imports from other renderer files resolve to the same
@@ -46,10 +46,26 @@
  */
 
 import { CHAMBER_COVERED_IDS } from './chamber-covered.ts'
-import type { PluginGraphDiagnostic, PluginGraphDiagnosticState } from '@dsh-chamber/dsh-client-ui-sidebar/shared'
+import type { PluginGraphDiagnostic, PluginGraphDiagnosticState } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
 import {
   classifyGraphChannelFailure, postUnary, type UnaryPostOutcome,
 } from '../../dsh-chamber-client-ui-sidebar/src/shared/wire-common.ts'
+// Page-level client-plugin load kernel (2026-12 settings-surface extension):
+// the boot path and the settings bridge share ONE implementation of combo/id
+// bookkeeping, timeout tombstones and rev-conflict facts. Imported by real
+// relative source path for the same reason wire-common is (the renderer has no
+// install-tree copy of the sidebar package and its plain-node tests must
+// resolve the real module without a bundler).
+import {
+  BundleLoadTimeoutError,
+  clientPluginRowOwner,
+  dedupeCoveredRows,
+  loadClientPluginRows,
+  publishSourceClientGraph,
+  type ClientRowOutcome,
+} from '../../dsh-chamber-client-ui-sidebar/src/shared/client-plugin-loader.ts'
+
+export { BundleLoadTimeoutError }
 
 /** Re-exported for existing consumers (the type lives in the chamber shared face). */
 export type { PluginGraphDiagnostic, PluginGraphDiagnosticState }
@@ -208,8 +224,9 @@ export async function fetchHostGraph(basePath: string): Promise<HostGraphRow[] |
  * cordis ctx — this filter is load-bearing, not an optimization.
  */
 export function dedupeHostEntries(entries: readonly HostGraphRow[], covered: readonly string[]): HostGraphRow[] {
-  const coveredIds = new Set(covered)
-  return entries.filter(row => !coveredIds.has(row.id))
+  // Single-sourced with the settings bridge (sidebar shared face): the same
+  // first-load-wins union-table rule decides what the page may load again.
+  return dedupeCoveredRows(entries, covered)
 }
 
 /**
@@ -304,44 +321,13 @@ export function toExtraRows(rows: readonly HostGraphRow[], basePath: string): Ex
  * the same plugin from different dsh runtimes) cannot be fixed by any
  * restart and reports instance-version-conflict instead (honest copy over
  * the misleading "restart the app to switch").
+ *
+ * 2026-12: the combo/id tables, the timeout tombstone and the per-row load
+ * verdicts MOVED to the sidebar shared face (`client-plugin-loader.ts`) so the
+ * settings bridge mounts a source's plugins through the exact same
+ * bookkeeping. This module keeps the BOOT policy: fail loud, one bounded
+ * recovery pass, and the per-boot diagnostic projection.
  */
-interface PreloadedCombo {
-  /** The ids whose factories this combo script registers (failure rollback set). */
-  ids: Set<string>
-  load: Promise<void>
-}
-
-const preloadedCombos = new Map<string, PreloadedCombo>()
-
-/** The combo record whose script registered one id's factory, plus the row
- *  rev it was seen at (restart-conflict + failure rollback) and the instance
- *  that first claimed the id on this page (ownerSourceId — the first-load-
- *  wins owner; a LATER instance at a different rev is a cross-instance dsh
- *  runtime version drift when the owner is a different instance, vs. a
- *  restart-fixable rebuilt plugin when the owner is this same instance). The
- *  combo reference is held (not a promise snapshot) so a late-success
- *  conversion of the shared load is observed by later boots. */
-interface PreloadedIdRecord {
-  rev: string
-  combo: PreloadedCombo
-  /** Instance id that first claimed this id on this page (page-level map). */
-  ownerSourceId: string
-}
-
-const preloadedIds = new Map<string, PreloadedIdRecord>()
-
-/** A module element can still execute after its request-level timeout. The
- * explicit type keeps that one exceptional lifecycle distinct from ordinary
- * load failures without inspecting arbitrary thrown objects. */
-export class BundleLoadTimeoutError extends Error {
-  readonly bundleOutcome: Promise<boolean>
-
-  constructor(message: string, bundleOutcome: Promise<boolean>) {
-    super(message)
-    this.bundleOutcome = bundleOutcome
-  }
-}
-
 function reportDiagnostic(
   instanceId: string,
   state: PluginGraphDiagnosticState,
@@ -355,6 +341,34 @@ function reportDiagnostic(
 export interface CollectExtraRowsDeps {
   loadModuleBundle(url: string): Promise<void>
   reportDiagnostic?(sourceId: string, diagnostic: PluginGraphDiagnostic): void
+  /**
+   * Instance-serving gate for the 503 path (2026-09-10, sidebarRight 彻底修复):
+   * `503 instance_unavailable` means "the instance is not serving YET", not
+   * "the graph is broken" — but the boot window is short, and a cold local
+   * start or a restart-straddled attach routinely outlives it, which used to
+   * cost the boot its whole client-plugin set (and silently: see
+   * {@link onGraphUnavailable}). The App supplies this gate from its own
+   * per-source phase projection; it resolves true once the source is serving
+   * again, false when the source left / the gate's own deadline passed.
+   * Omitted (pure-node tests, mobile shape) → the legacy fixed budget only.
+   */
+  waitForServing?(instanceId: string): Promise<boolean>
+  /**
+   * This boot settled WITHOUT the host graph (503 budget + serving wait both
+   * exhausted). The rows are gone for this boot, but the source is expected to
+   * serve later, so the shell records the fact and the App re-boots the
+   * instance once the source turns ready (2026-09-10). Never called for a
+   * non-503 channel failure: an instance that does not inject the graph at all
+   * (gateway/mobile shapes) is legitimate, not degraded.
+   */
+  onGraphUnavailable?(message: string): void
+  /**
+   * The authoritative roster proof this boot belongs to (2026-12): the fetched
+   * graph is published into the page-level cache under it, so the settings
+   * panel only reuses the rows for the SAME source incarnation. Omitted
+   * callers publish under '' (never reused across an incarnation change).
+   */
+  sourceFingerprint?: string
   /**
    * C3 (2026-09 性能审计): awaited once the graph rows are known, BEFORE the
    * first extra-bundle load pass. The chamber composite entry evaluates
@@ -399,9 +413,16 @@ export interface CollectExtraRowsDeps {
  * before loader.create runs, not after.
  *
  * Degrades to [] when the graph CHANNEL fails (fetch throws — network /
- * non-2xx / malformed graph): the boot proceeds without extra plugins; the
- * composite still provides the entire official shell, only profile-installed
- * client plugins are lost (graph-channel failure degrade). A 503
+ * non-2xx / malformed graph): the boot proceeds without extra plugins. That is
+ * NOT a complete shell any more (2026-09 二轮, alpha.2 sources): three inject
+ * members of the composite's own first-screen families are provided by
+ * non-covered official rows — `sidebarRight` (ui-sidebar-right, required by
+ * ui-chat), `fileUpload` (client-file-upload, required by ui-conversation's
+ * root inject), and `resources` (client-resources, the global `useResource`
+ * seat). On a degrade those fibers stay PENDING, so the conversation view or
+ * the whole centre column disappears while boot still reports success; the
+ * `assertRequiredExtraRowServices` probe in chamber-entry.ts turns that into a
+ * loud, named diagnostic (design 09 §3.2). A 503
  * `instance_unavailable` is the expected pre-ready state: the fetch is
  * retried on a bounded budget (the instance's graph appears moments after the
  * proxy stops answering 503 — see CollectExtraRowsDeps.retry) and only then
@@ -427,6 +448,23 @@ export interface CollectExtraRowsDeps {
  * keeps observing the original element's eventual outcome (a late load is
  * success; a late error allows a later retry), exactly as before.
  */
+/**
+ * How many times one boot may wait for the source to start serving before it
+ * gives up on the graph. ONE is the honest bound: the wait is already as long
+ * as the App's readiness gate (60s), and a source that serves but still has no
+ * answerable graph is a channel problem, not a serving problem. A source that
+ * restarts *while* this boot waits therefore ends degraded — and the App's
+ * self-heal re-boots it on the next ready transition, which is the layer that
+ * owns repeated attempts.
+ */
+const MAX_SERVING_WAITS = 1
+
+/**
+ * Backstop wall-clock ceiling for the serving wait of one boot (the gate itself
+ * is capped at 60s by the App; parallel to the shell's 60s page-level slot).
+ */
+const SERVING_HEAL_BUDGET_MS = 70_000
+
 export async function collectExtraRows(
   instanceId: string,
   basePath: string,
@@ -437,29 +475,63 @@ export async function collectExtraRows(
     delayMs: deps.retry?.delayMs ?? 500,
     sleep: deps.retry?.sleep ?? ((ms: number) => new Promise(resolve => setTimeout(resolve, ms))),
   }
-  /** Fetch the host graph on the bounded 503-retry budget. Resolves the rows,
-   *  or `{ rows: null, error }` when the channel failed (non-503 — fail fast,
-   *  a hung fetch already consumed its own 30s timeout) and `{ rows: null,
-   *  error: null }` when the 503 budget ran out (instance still starting). */
-  const fetchWithRetry = async (): Promise<{ rows: HostGraphRow[] | null; error: unknown }> => {
+  /** Fetch the host graph on the bounded 503-retry budget, then (when the App
+   *  gave us a serving gate) wait for the source to actually serve and retry on
+   *  a fresh budget. Resolves the rows, `{ rows: null, error }` when the
+   *  channel failed (non-503 — fail fast, a hung fetch already consumed its own
+   *  30s timeout), and `{ rows: null, error: null, starting: true }` when both
+   *  the budget and the serving waits ran out (instance still not serving). */
+  const fetchWithRetry = async (): Promise<{ rows: HostGraphRow[] | null; error: unknown; starting: boolean }> => {
     let lastError: unknown = null
-    for (let attempt = 1; attempt <= retry.attempts; attempt++) {
-      try {
-        const entries = await fetchHostGraph(basePath)
-        if (entries !== null) return { rows: entries, error: null }
-      } catch (error) {
-        // Non-503 channel failures are NOT transient — fail fast as before
-        // (a hung fetch already consumed its own 30s timeout; retrying would
-        // only stack them).
-        lastError = error
-        break
+    let servingWaits = 0
+    const healDeadline = deps.waitForServing === undefined ? 0 : Date.now() + SERVING_HEAL_BUDGET_MS
+    for (;;) {
+      for (let attempt = 1; attempt <= retry.attempts; attempt++) {
+        try {
+          const entries = await fetchHostGraph(basePath)
+          if (entries !== null) return { rows: entries, error: null, starting: false }
+        } catch (error) {
+          // Non-503 channel failures are NOT transient — fail fast as before
+          // (a hung fetch already consumed its own 30s timeout; retrying would
+          // only stack them).
+          lastError = error
+          return { rows: null, error: lastError, starting: false }
+        }
+        // 503 instance_unavailable: instance still starting. Bounded retry.
+        if (attempt < retry.attempts) await retry.sleep(retry.delayMs)
       }
-      // 503 instance_unavailable: instance still starting. Bounded retry.
-      if (attempt < retry.attempts) await retry.sleep(retry.delayMs)
+      // The budget is gone and the channel never answered non-503 → the source
+      // is still starting. Wait for it (App-bounded) and retry on a fresh
+      // budget; a source that never serves ends here with `starting: true`.
+      if (deps.waitForServing === undefined
+        || servingWaits >= MAX_SERVING_WAITS
+        || Date.now() >= healDeadline) {
+        return { rows: null, error: lastError, starting: true }
+      }
+      servingWaits += 1
+      const serving = await deps.waitForServing(instanceId)
+      if (!serving) return { rows: null, error: lastError, starting: true }
     }
-    return { rows: null, error: lastError }
   }
   const firstFetch = await fetchWithRetry()
+  if (firstFetch.rows === null && firstFetch.error === null && firstFetch.starting) {
+    // 2026-09-10 (sidebarRight 彻底修复): this used to degrade in TOTAL
+    // silence. The boot keeps succeeding (a gateway/mobile shape may legitimately
+    // run without the graph, so a hard gate would be wrong), but a source that
+    // is merely slow now (a) names itself in the log, (b) publishes the
+    // `graph-unreachable` diagnostic the connections page renders, and (c) tells
+    // the shell, which hands the fact to the App so the instance is re-booted
+    // once the source turns ready — instead of losing its client plugins (and,
+    // through ui-chat's `sidebarRight` inject, the whole conversation view) for
+    // the lifetime of the mount.
+    const message = `instance did not serve its client plugin graph inside the boot window `
+      + `(${retry.attempts}×${retry.delayMs}ms${deps.waitForServing === undefined ? '' : ' + serving wait'}); `
+      + 'this boot carries no profile client plugins'
+    console.error(`[shell] instance ${instanceId} boot-graph unavailable: ${message}`)
+    reportDiagnostic(instanceId, 'graph-unreachable', { message }, deps.reportDiagnostic)
+    deps.onGraphUnavailable?.(message)
+    return []
+  }
   if (firstFetch.error !== null) {
     console.error(`[shell] instance ${instanceId} host boot-graph fetch failed; booting without extra plugins`, firstFetch.error)
     reportDiagnostic(
@@ -470,7 +542,16 @@ export async function collectExtraRows(
     )
     return []
   }
-  if (firstFetch.rows === null) return []
+  if (firstFetch.rows === null) {
+    // Non-503 channel failure already logged + published above; the boot
+    // continues without profile plugins (the documented gateway/mobile shape).
+    return []
+  }
+  // The RAW rows the page-level cache will publish (2026-12). Kept in a
+  // variable so the bounded recovery pass below can replace it with the FRESH
+  // read: publishing the pre-recovery rows would hand the settings panel stale
+  // bundle revs (per-process nonces) that 404 after a restart-straddled boot.
+  let rawRows = firstFetch.rows
   const rows = toExtraRows(dedupeHostEntries(firstFetch.rows, CHAMBER_COVERED_IDS), basePath)
   // C3: the chamber entry must have evaluated before any extra bundle executes
   // (its covered factory answers the ui-primitives platform-word require edges
@@ -485,118 +566,32 @@ export async function collectExtraRows(
    *  timeout): candidates for the single bounded recovery pass below. */
   const failedRows: { row: ExtraModuleRow; error: unknown }[] = []
 
-  /** Load one row's bundle once (shared-combo discipline). Throws for the
-   *  non-recoverable classes — a DOM-script timeout (its tagged tombstone
-   *  keeps observing the original element's eventual outcome), a failure of
-   *  an already-claimed shared load, and (with `deferOrdinary = false`, the
-   *  recovery pass) an ordinary failure. Ordinary fresh-load failures in the
-   *  FIRST pass are recorded in `failedRows` and resolved by the recovery
-   *  pass instead of failing the boot immediately. */
-  const loadRow = async (row: ExtraModuleRow, deferOrdinary = true): Promise<void> => {
-    // A script already executed a factory for this id (the id's combo record
-    // is published at preload). A DIFFERENT rev (the combo query carries the
-    // rev, so a newer plugin revision means a different script) cannot swap
-    // the loaded factory without a restart: re-executing a second bundle for
-    // the same id would hit the duplicate-registration sink. Reuse the loaded
-    // factory and report the honest diagnostic; the merged row still surfaces.
-    // NOTE: the shared module table is PAGE-level, so the id's factory — and
-    // the original load — is shared across every instance; the per-instance
-    // basePath prefix in `row.url` must NOT be treated as a different script
-    // (same id + same rev = same factory, whatever instance proxy it was
-    // fetched through).
-    // The diagnostic distinguishes the owner (design 09 §3.5): a rebuilt
-    // plugin on THIS same instance (ownerSourceId === instanceId) is fixed by
-    // restarting that instance → restart-required; a DIFFERENT instance
-    // serving the same plugin from another dsh runtime version is a
-    // cross-instance version drift that no restart can fix →
-    // instance-version-conflict (restarting the app would only re-run the
-    // same first-load-wins claim).
-    const owned = preloadedIds.get(row.id)
-    if (owned !== undefined) {
-      if (owned.rev !== row.rev) {
-        if (owned.ownerSourceId !== instanceId) versionConflict ??= row
-        else restartConflict ??= row
-        return
-      }
-      // Await the ORIGINAL load (read live off the combo record): a
-      // still-pending or tombstoned load must fail THIS boot loud too, and a
-      // late-success conversion of the shared load is observed by later boots.
-      try {
-        await owned.combo.load
-      } catch (error) {
-        reportDiagnostic(instanceId, 'bundle-load-failed', {
-          pluginId: row.id,
-          message: error instanceof Error ? error.message : String(error),
-        }, deps.reportDiagnostic)
-        throw error
-      }
+  /** Shared-kernel seams for this boot: the shell's transport plus the
+   *  page-level diagnostic sink (the kernel reports a shared-load failure and
+   *  a DOM-script timeout itself; the boot maps the rest). */
+  const rowLoadDeps = {
+    loadBundle: deps.loadModuleBundle,
+    ...(deps.reportDiagnostic === undefined ? {} : { reportDiagnostic: deps.reportDiagnostic }),
+  }
+  /** Map one kernel verdict into this boot's policy: a rev conflict is
+   *  recorded (the loaded factory is reused; the diagnostic is projected at the
+   *  end of the boot), an ordinary first-pass failure defers to the recovery
+   *  pass below. A DOM-script timeout and a non-deferred failure reject inside
+   *  the kernel exactly as the boot has always required (fail loud). */
+  const applyOutcome = (outcome: ClientRowOutcome<ExtraModuleRow>): void => {
+    if (outcome.state === 'rev-conflict') {
+      if (outcome.conflict === 'version') versionConflict ??= outcome.row
+      else restartConflict ??= outcome.row
       return
     }
-    let combo = preloadedCombos.get(row.url)
-    if (combo === undefined) {
-      // Promise.resolve().then also normalizes a synchronously throwing test /
-      // alternate loader into the same shared rejected promise.
-      combo = {
-        ids: new Set(),
-        load: Promise.resolve().then(() => deps.loadModuleBundle(row.url)),
-      }
-      preloadedCombos.set(row.url, combo)
-    }
-    // Publish the ownership BEFORE the load (a concurrent row for the same
-    // id must await the shared execution, never start its own) and fold this
-    // id into the combo's rollback set. The url-level map is what dedupes a
-    // multi-id combo: rows sharing one url await ONE load (each combo script
-    // registers every id its query names).
-    combo.ids.add(row.id)
-    preloadedIds.set(row.id, { rev: row.rev, combo, ownerSourceId: instanceId })
-    try {
-      await combo.load
-    } catch (error) {
-      // 预加载失败不永久标记（见 Map 注释：模块系统不会自取 extra bundle，
-      // 永久标记会把该插件在本页面永久卡死）。The combo record is the owner:
-      // a retry installs a NEW record for the same url, so a later catch in
-      // another waiter of the old promise must not clear the new one.
-      const bundleOutcome = error instanceof BundleLoadTimeoutError ? error.bundleOutcome : null
-      const clearCombo = (): void => {
-        if (preloadedCombos.get(row.url) !== combo) return
-        preloadedCombos.delete(row.url)
-        for (const id of combo.ids) {
-          if (preloadedIds.get(id)?.combo === combo) preloadedIds.delete(id)
-        }
-      }
-      if (bundleOutcome === null) {
-        // Ordinary failure — records are cleared so a later load of the same
-        // or a newer URL is safe. The FIRST pass defers to the recovery pass
-        // below; a recovery retry (`deferOrdinary = false`) has no further
-        // recovery to defer to and fails loud.
-        clearCombo()
-        if (deferOrdinary) {
-          failedRows.push({ row, error })
-        } else {
-          throw error
-        }
-      } else {
-        // DOM-script timeout: removing the element does not reliably cancel
-        // its fetch, so leave the tagged tombstone attached and observe the
-        // eventual outcome (late load → success, late error → a later retry
-        // is safe). A timeout is NOT part of the recovery cycle.
-        void bundleOutcome.then(
-          succeeded => {
-            if (preloadedCombos.get(row.url) !== combo) return
-            if (succeeded) combo.load = Promise.resolve()
-            else clearCombo()
-          },
-          () => { clearCombo() },
-        )
-        reportDiagnostic(instanceId, 'bundle-load-failed', {
-          pluginId: row.id,
-          message: error instanceof Error ? error.message : String(error),
-        }, deps.reportDiagnostic)
-        throw error
-      }
-    }
+    if (outcome.state === 'failed') failedRows.push({ row: outcome.row, error: outcome.error })
   }
-  await Promise.all(rows.map(row => loadRow(row)))
+  for (const outcome of await loadClientPluginRows(instanceId, rows, rowLoadDeps, {
+    ordinary: 'defer',
+    timeout: 'throw',
+  })) {
+    applyOutcome(outcome)
+  }
   // The C3 gate (`deps.awaitBeforeLoad`) is NOT re-awaited here: it settled
   // before the first load pass above, and the recovery reloads only re-execute
   // bundle scripts (registering factories); the synchronous require edges they
@@ -618,6 +613,7 @@ export async function collectExtraRows(
     const secondFetch = await fetchWithRetry()
     const keptFailures: { row: ExtraModuleRow; error: unknown }[] = []
     const recoveredRows: ExtraModuleRow[] = []
+    if (secondFetch.error === null && secondFetch.rows !== null) rawRows = secondFetch.rows
     if (secondFetch.error !== null || secondFetch.rows === null) {
       // The graph channel failed again (or the 503 budget ran out): no fresh
       // verdict is available — keep every original failure loud.
@@ -636,7 +632,10 @@ export async function collectExtraRows(
         try {
           // A recovery retry failing ordinary has no further recovery to
           // defer to — fail loud so the kept-failure set below is exact.
-          await loadRow(fresh, false)
+          await loadClientPluginRows(instanceId, [fresh], rowLoadDeps, {
+            ordinary: 'throw',
+            timeout: 'throw',
+          })
           recoveredRows.push(fresh)
         } catch (error) {
           keptFailures.push({ row: fresh, error })
@@ -673,7 +672,7 @@ export async function collectExtraRows(
     // revision, so a different dsh runtime generation or content change can
     // both produce the drift), after which the plugin revs
     // match and the diagnostic disappears.
-    const ownerSourceId = preloadedIds.get(versionConflict.id)?.ownerSourceId ?? '—'
+    const ownerSourceId = clientPluginRowOwner(versionConflict.id) ?? '—'
     reportDiagnostic(instanceId, 'instance-version-conflict', {
       pluginId: versionConflict.id,
       message: `实例间 ${versionConflict.id} 插件版本不同：已使用实例 ${ownerSourceId} 先加载的版本；对齐两个实例的 dsh 运行时（或插件）版本后可切换`,
@@ -686,5 +685,13 @@ export async function collectExtraRows(
   } else {
     reportDiagnostic(instanceId, 'ok', {}, deps.reportDiagnostic)
   }
+  // Publish the source's LATEST raw rows into the page-level cache: the
+  // settings panel reuses this exact read for the same source incarnation
+  // instead of paying another round trip, and both consumers then agree on the
+  // plugin set (post-recovery, so the revs are the live ones).
+  publishSourceClientGraph(instanceId, {
+    sourceFingerprint: deps.sourceFingerprint ?? '',
+    rows: rawRows,
+  })
   return rows
 }

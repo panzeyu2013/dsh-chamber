@@ -72,8 +72,8 @@ test('deny mirror matrix: official and chamber domains denied, third-party allow
   for (const denied of [
     '@deepseek-ai/dsh',
     '@deepseek-ai/dsh-client-ui-primitives',
-    '@dsh-chamber/dsh-host-client-graph',
-    '@dsh-chamber/dsh-host-git-worktree',
+    '@dsh-chamber/dsh-chamber-seed-client-graph',
+    '@dsh-chamber/dsh-chamber-seed-git-worktree',
     // 真实 registry 名（mobile 是 gateway 打包的单例例外，无桌面链路）。
     '@dsh-chamber/dsh-client-ui-mobile',
     '@dsh-chamber/anything-else',
@@ -224,7 +224,7 @@ test('gateway: ok:false without partial reports 0 done / 0 total (nothing ran)',
 // 3b. Apply-result normalization — ssh shape (plugin_apply union twin:
 // {ok:true,result}|{ok:false,error}; result reports COUNTS only —
 // applied/skipped/failed, never per-name success; no cancelled arm —
-// plugin_apply has no cancellation path, design 21 §10)
+// plugin_apply has no cancellation path, design 21 §7)
 // ---------------------------------------------------------------------------
 
 test('ssh: ok:true clean result executes with restarted/deferred passthrough; no name lists (counts-only result)', () => {
@@ -549,7 +549,7 @@ test('undoForLatest: empty rows and deferred-intent-only rows → none-executed'
 
 test('filterDeniedRows: partitions name rows into allowed and denied (official + chamber domains)', () => {
   const rows = [
-    { name: '@dsh-chamber/dsh-host-client-graph', note: 'seed host package' },
+    { name: '@dsh-chamber/dsh-chamber-seed-client-graph', note: 'seed host package' },
     { name: 'third-party-a', note: 'fine' },
     { name: '@deepseek-ai/dsh', note: 'official' },
     { name: 'third-party-b', note: 'fine' },
@@ -557,7 +557,7 @@ test('filterDeniedRows: partitions name rows into allowed and denied (official +
   ]
   const { allowed, denied } = filterDeniedRows(rows)
   assert.deepEqual(allowed.map(row => row.name), ['third-party-a', 'third-party-b', '@scope/third-party'])
-  assert.deepEqual(denied.map(row => row.name), ['@dsh-chamber/dsh-host-client-graph', '@deepseek-ai/dsh'])
+  assert.deepEqual(denied.map(row => row.name), ['@dsh-chamber/dsh-chamber-seed-client-graph', '@deepseek-ai/dsh'])
   // Original array untouched; generic name-carrying shapes work.
   assert.equal(rows.length, 5)
 })

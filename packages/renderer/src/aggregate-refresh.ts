@@ -1,4 +1,4 @@
-import type { InstanceAggregate, InstanceSnapshot } from '@dsh-chamber/dsh-client-ui-sidebar/shared'
+import type { InstanceAggregate, InstanceSnapshot } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
 
 /**
  * Decide which ready sources need an authoritative unary aggregate refresh.
@@ -81,6 +81,48 @@ export function shouldRebaselineFallbackView(opts: {
 }
 
 /**
+ * Watchdog reconnect threshold per source transport (S2 arm; 2026-09 extension).
+ *
+ * The staleness watchdog cannot distinguish a FROZEN push channel from a
+ * healthy-but-quiet one (mounted producers only push on content changes), so
+ * every reconnect costs one baseline replay. The threshold is therefore chosen
+ * per transport by how much INDEPENDENT liveness coverage the transport
+ * already has:
+ *
+ * - `http` (direct remote host, no tunnel): the browser leg has the control
+ *   plane's 30s WS ping, but the upstream leg has no application heartbeat and
+ *   only ~10min OS TCP keepalive, so an app-level freeze can stay invisible
+ *   for minutes. 120s is the tightest cadence that still lets a healthy idle
+ *   source bounce at most once per two minutes.
+ * - `ssh` (tunnel): the tunnel already has three independent detectors — the
+ *   proxy's 30s browser-leg WS ping, the host mux's 2s/2-miss heartbeat, and
+ *   the ssh client's `ServerAliveInterval=30 × CountMax=3` (~90s) — so this
+ *   arm only adds a *last-resort* app-level freeze heal. A longer threshold
+ *   (5min) keeps idle-healthy ssh sources from paying a baseline replay every
+ *   two minutes while still healing a channel that survived every heartbeat
+ *   but stopped pushing.
+ * - `local` and unknown transports get `null`: the local aggregate is served
+ *   authoritatively (no push channel to freeze) and unknown transports are
+ *   already fail-closed elsewhere.
+ */
+export const AGGREGATE_RECONNECT_HTTP_STALE_MS = 120_000
+/** Last-resort app-level freeze heal for tunnel sources (see above). */
+export const AGGREGATE_RECONNECT_SSH_STALE_MS = 300_000
+
+/**
+ * The S2 reconnect threshold for one source's transport, or null when this
+ * arm must not touch it (local / unknown). Callers pass the authoritative
+ * per-instance transport from the roster projection.
+ * @param transport - `'http' | 'ssh' | 'local' | …` (untrusted shape).
+ * @returns staleness threshold in ms, or null to skip the source.
+ */
+export function reconnectStalenessMsForTransport(transport: unknown): number | null {
+  if (transport === 'http') return AGGREGATE_RECONNECT_HTTP_STALE_MS
+  if (transport === 'ssh') return AGGREGATE_RECONNECT_SSH_STALE_MS
+  return null
+}
+
+/**
  * Commit one unary aggregate pull over the current per-source aggregate.
  *
  * The unary fallback cannot express workspace identity or the archive set
@@ -127,6 +169,7 @@ export function commitAggregatePull(
   current: InstanceAggregate | undefined,
   fallback: InstanceSnapshot,
   mounted: boolean,
+  rememberedArchiveSet?: readonly string[],
 ): InstanceAggregate {
   const currentIsFallbackDerived = isFallbackDerivedView(current)
   if (mounted && current !== undefined && current.state === 'ok' && !currentIsFallbackDerived) {
@@ -148,7 +191,21 @@ export function commitAggregatePull(
       error: null,
     }
   }
-  return { state: 'ok', ...fallback, error: null }
+  // 2026-09 §12: the unary fallback carries NO archive wire
+  // source, so a degraded commit used to publish an EMPTY archive set — every
+  // archived row then rendered as an ordinary row until the next authoritative
+  // push (design 24 §12 F3(b) family). When the App has already seen an
+  // AUTHORITATIVE archive set for this source (remembered across the degraded
+  // window), publish that remembered set with `archiveSetKnown` still FALSE:
+  // the sidebar filters archived rows correctly, while the archive manager
+  // keeps its honest degraded branch (provenance is not claimed).
+  const remembered = rememberedArchiveSet === undefined ? undefined : [...rememberedArchiveSet]
+  return {
+    state: 'ok',
+    ...fallback,
+    ...(remembered === undefined ? {} : { archivedSessionIds: remembered }),
+    error: null,
+  }
 }
 
 /**
@@ -169,14 +226,18 @@ export function commitAggregateFailure(mounted: boolean, errorText: string): Ins
 }
 /**
  * Detect an archived-set SHRINK between the last committed aggregate and an
- * incoming snapshot (archive-cleanup convergence, design 24 §20). There is
+ * incoming snapshot (archive-cleanup convergence, design 24 §12). There is
  * NO unarchive wire, so the only host-side mutation that removes members from
  * the archived set is the cleanup purge's end-of-run removal — a strict shrink
  * is therefore the client's observable "a purge completed and those ids left
- * the set" signal. Returns the removed ids when BOTH sides are authoritative
- * (`archiveSetKnown: true`) and the previous side is an ok aggregate; [] for
- * every other combination (unknown provenance must never trigger — the unary
- * fallback's empty set is a known-degraded artifact, not a shrink fact).
+ * the set" signal. The baseline is the committed aggregate when it is
+ * archive-set-authoritative (`state==='ok' && archiveSetKnown===true`),
+ * otherwise the caller's `remembered` set — the last authoritative set the
+ * App observed for this source (2026-09 §12 F3: a shrink that completed while
+ * the committed aggregate was degraded is otherwise invisible forever). []
+ * when neither side is authoritative and for any non-authoritative `next`
+ * (unknown provenance must never trigger — the unary fallback's empty set is a
+ * known-degraded artifact, not a shrink fact).
  * Consumers (the App's mounted-push commit path) respond by requesting the
  * source's official session-list refresh: rows of the purged sessions may
  * still linger in the mounted ctx's official client summaries (they refresh
@@ -187,11 +248,20 @@ export function commitAggregateFailure(mounted: boolean, errorText: string): Ins
 export function archiveSetShrink(
   previous: InstanceAggregate | undefined,
   next: Pick<InstanceSnapshot, 'archivedSessionIds' | 'archiveSetKnown'>,
+  remembered?: readonly string[],
 ): string[] {
-  if (previous === undefined || previous.state !== 'ok' || previous.archiveSetKnown !== true) return []
   if (next.archiveSetKnown !== true) return []
+  // 2026-09 §12: when the committed aggregate lost archive-set
+  // provenance (degraded unary view / not-connected / never pushed), the App
+  // falls back to the last AUTHORITATIVE set it observed for this source —
+  // otherwise a purge that completed while the producer's first projection was
+  // still pending (workspace baseline already post-purge) is invisible forever.
+  const previousSet = previous !== undefined && previous.state === 'ok' && previous.archiveSetKnown === true
+    ? previous.archivedSessionIds
+    : remembered
+  if (previousSet === undefined) return []
   const nextSet = new Set(next.archivedSessionIds)
-  return previous.archivedSessionIds.filter(id => !nextSet.has(id))
+  return previousSet.filter(id => !nextSet.has(id))
 }
 
 /**
@@ -213,7 +283,7 @@ export function shouldRequestSessionListRefresh(
 
 /**
  * One plan step of the App-side ghost-row convergence state machine (design 24
- * §20). Evaluated on EVERY ready mounted push of a source, BEFORE the aggregate
+ * §12). Evaluated on EVERY ready mounted push of a source, BEFORE the aggregate
  * commit (against the last-committed aggregate via the render mirror):
  * - "removed" = the archived-set shrink of this push (archiveSetShrink — a
  *   strict shrink is the client-observable "a purge completed" signal; no
@@ -230,14 +300,17 @@ export function shouldRequestSessionListRefresh(
  *   machine is self-terminating. Push-only evaluation is COMPLETE: mounted
  *   pull commits preserve the current archived set (commitAggregatePull
  *   merge) and full-fallback commits are provenance-gated (archiveSetShrink),
- *   so a pull can never first observe a shrink.
+ *   so a pull can never first observe a shrink. Since 2026-09 §12 F3 the
+ *   shrink baseline may come from the caller's remembered authoritative set
+ *   (see archiveSetShrink), which closes the degraded-view gap.
  */
 export function planSessionListRefresh(
   previous: InstanceAggregate | undefined,
   next: Pick<InstanceSnapshot, 'archivedSessionIds' | 'archiveSetKnown' | 'sessions'>,
   pending: readonly string[] | undefined,
+  remembered?: readonly string[],
 ): { request: boolean; pending: string[] } {
-  const removed = archiveSetShrink(previous, next)
+  const removed = archiveSetShrink(previous, next, remembered)
   const rowIds = new Set<string>()
   for (const session of next.sessions) rowIds.add(session.sessionId)
   const kept: string[] = []

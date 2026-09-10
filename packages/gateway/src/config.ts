@@ -1,5 +1,5 @@
 /**
- * Gateway configuration (design 17 §3.1): the parsed config of the
+ * Gateway configuration (design 17 §5.1): the parsed config of the
  * server-side access shape — bind host/port, state/dsh roots, auth kind,
  * CORS origins, optional TLS. `parseGatewayConfig` enforces
  * the S1 exposure guard at config time: a non-loopback bind without auth is a
@@ -17,7 +17,7 @@ import {
 export type GatewayBindHost = '127.0.0.1' | '0.0.0.0'
 export type GatewayAuthKind = 'none' | 'password' | 'token' | 'password+token'
 // Credential bounds = the shared wire-protocol single source
-// (control-plane gateway-session-protocol.ts, design 17 §5.2/§7.1) — the
+// (control-plane gateway-session-protocol.ts, design 17 §7.2/§7.1) — the
 // same values the proxy injection gate and the desktop client enforce.
 // Local names stay as aliases for CLI/config call sites and their tests.
 export const MIN_GATEWAY_PASSWORD_CHARS = GATEWAY_PASSWORD_MIN_CHARS
@@ -43,7 +43,7 @@ export interface GatewayConfig {
     kind: GatewayAuthKind
     /** scrypt-verified browser credential (design 17 §5). */
     password?: string
-    /** shared bearer token (design 17 §5.2). May coexist with password. */
+    /** shared bearer token (design 17 §7.2). May coexist with password. */
     token?: string
   }
   corsOrigins: string[]
@@ -55,7 +55,7 @@ export interface GatewayConfig {
    * unrecognized Host are rejected (421). */
   publicOrigin?: string
   tls?: { cert: string; key: string }
-  /** Explicit operator opt-in (design 17 §3.1 S1 deviation): bind externally
+  /** Explicit operator opt-in (design 17 §5.1 S1 deviation): bind externally
    * with NO authentication. Default false — the S1 exposure guard stays hard.
    * The CLI surfaces this as --no-auth. */
   allowAnonymousExternal?: boolean
@@ -160,7 +160,7 @@ function canonicalCorsOrigin(value: string): string {
   try {
     const parsed = new URL(value)
     if (parsed.protocol === 'http:' || parsed.protocol === 'https:') return canonicalOrigin(value, '--cors-origin')
-    // Packaged clients use opaque custom schemes (design 17 §5.2). URL.origin
+    // Packaged clients use opaque custom schemes (design 17 §6). URL.origin
     // is the literal "null" for these, so validate the exact scheme+authority
     // string instead of normalizing through `.origin`.
     if ((parsed.protocol === 'capacitor:' || parsed.protocol === 'openchamber-ui:')
@@ -228,7 +228,7 @@ export function parseGatewayConfig(input: GatewayConfigInput, stateDir: string, 
     throw new GatewayConfigError('--tls-cert and --tls-key must be provided together')
   }
   // HTTPS server is not implemented: refuse rather than silently serving
-  // plaintext while the operator believes TLS is on (design 17 §3.1).
+  // plaintext while the operator believes TLS is on (design 17 §5.1).
   if (tlsCert !== undefined && tlsKey !== undefined) {
     throw new GatewayConfigError('--tls-cert/--tls-key are not implemented yet (HTTPS server is pending); use a reverse proxy for TLS termination')
   }

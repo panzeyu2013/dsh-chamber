@@ -117,13 +117,22 @@ export const fieldCount = controlPlaneModule.fieldCount
 export const insertConflict = controlPlaneModule.insertConflict
 
 // Chamber host-package insert facts (host-graph-seed.ts, design 09 module A /
-// design 13 §4.6 — re-exported by the control-plane package index) — consumed
+// design 13 §3 — re-exported by the control-plane package index) — consumed
 // by plugin-sync, whose desktop-facing package-name/insert-id constants
 // derive from these so the local seed, the remote seed writer and
 // control-plane's own seed can never drift.
 export const HOST_GRAPH_INSERT = controlPlaneModule.HOST_GRAPH_INSERT
 export const HOST_GIT_WORKTREE_INSERT = controlPlaneModule.HOST_GIT_WORKTREE_INSERT
 export const HOST_ARCHIVE_CLEANUP_INSERT = controlPlaneModule.HOST_ARCHIVE_CLEANUP_INSERT
+// The canonical host-seed namespace + its fail-loud assertion (Batch 1 naming
+// unification, 2026-09) — consumed by plugin-sync's remote cordis.patch.yml
+// merge, which must also recognize the pre-rename names to fold them once.
+export const HOST_SEED_PACKAGE_PREFIX = controlPlaneModule.HOST_SEED_PACKAGE_PREFIX
+export const assertHostSeedInsertNaming = controlPlaneModule.assertHostSeedInsertNaming
+// The authoritative chamber host-package registry (name + insert id + liveness
+// probe): the desktop derives every chamber row/probe from it — never a
+// hand-maintained parallel list (2026-09 user decision).
+export const CHAMBER_HOST_PACKAGES = controlPlaneModule.CHAMBER_HOST_PACKAGES
 
 // Plugin spec/name whitelist family + reserved-name deny predicate
 // (plugin-spec.ts, design 21 §6.2/§6.7 — the shared source for the desktop
@@ -180,8 +189,10 @@ export const attachSpkiPinVerifier = controlPlaneModule.attachSpkiPinVerifier
 // time, so re-exporting from the workspace package costs nothing at runtime.
 export type {
   AuditTrailEvent,
+  ChamberHostPackageDescriptor,
   ClientRequestEnvelope,
   CordisInsert,
+  HostPackageInsert,
   InsertConflictKind,
   ParsedInsertRow,
   RawUnaryOutcome,

@@ -16,7 +16,7 @@
  *   <repo>/ref-dsh (falling back to the desktop vendor bundle when absent).
  * - port/host: the control plane's own HTTP bind (standalone default
  *   DEFAULT_CONTROL_PLANE_PORT).
- * - webDistDir: optional static frontend dist directory (design 05 §3.3).
+ * - webDistDir: optional static frontend dist directory (design 05 §7.3).
  *   When set, the plane serves / (index.html with the __DSH_BOOT__ manifest
  *   injected from <dist>/manifest.json) and the dist assets (index.html,
  *   /assets/*, /manifest.json, SPA fallback); when unset (standalone dev)
@@ -50,7 +50,9 @@ import {
 import { hostLogs } from './host-logs.ts'
 import { createStaticServing } from './static-serving.ts'
 import {
+  assertHostSeedEntryNaming,
   buildPatchOverlay,
+  CHAMBER_HOST_PACKAGES,
   ensureSeedPackage,
   missingHostPackageInserts,
   HOST_ARCHIVE_CLEANUP_INSERT,
@@ -99,18 +101,18 @@ const REPO_ROOT = resolve(fileURLToPath(new URL('../../..', import.meta.url)))
  * Default module-A host package source dir (design 09 方案 A, module B): the
  * chamber host package whose dist/index.js + package.json the plane seeds
  * into the local profile so the spawned host exposes the boot graph. Dev and
- * CI layouts ship it at <repo>/packages/dsh-host-client-graph; packaged
+ * CI layouts ship it at <repo>/packages/dsh-chamber-seed-client-graph; packaged
  * runtimes pass the bundled location through ControlPlaneOptions (an absent
  * source is skipped, never an error).
  */
-export const DEFAULT_HOST_GRAPH_PACKAGE_SOURCE_DIR = join(REPO_ROOT, 'packages', 'dsh-host-client-graph')
+export const DEFAULT_HOST_GRAPH_PACKAGE_SOURCE_DIR = join(REPO_ROOT, 'packages', 'dsh-chamber-seed-client-graph')
 
 /** Default source for the chamber in-host Git worktree service package. */
-export const DEFAULT_HOST_GIT_WORKTREE_PACKAGE_SOURCE_DIR = join(REPO_ROOT, 'packages', 'dsh-chamber-host-git-worktree')
+export const DEFAULT_HOST_GIT_WORKTREE_PACKAGE_SOURCE_DIR = join(REPO_ROOT, 'packages', 'dsh-chamber-seed-git-worktree')
 
 /** Default source for the chamber in-host archived-session cleanup domain
  *  package (design 24; packaged runtimes pass the bundled location). */
-export const DEFAULT_HOST_ARCHIVE_CLEANUP_PACKAGE_SOURCE_DIR = join(REPO_ROOT, 'packages', 'dsh-host-archive-cleanup')
+export const DEFAULT_HOST_ARCHIVE_CLEANUP_PACKAGE_SOURCE_DIR = join(REPO_ROOT, 'packages', 'dsh-chamber-seed-archive-cleanup')
 
 /**
  * Default dsh workspace: <repo root>/ref-dsh when present, otherwise the
@@ -154,7 +156,7 @@ export function seedDshHomeDefaults(dshHome: string): boolean {
 /**
  * createControlPlane options (all optional; see the module docblock).
  * `corsOrigins` is the explicit cross-origin allowlist; `webDistDir`
- * enables the static frontend service (design 05 §3.3).
+ * enables the static frontend service (design 05 §7.3).
  */
 export interface ControlPlaneOptions {
   port?: number
@@ -188,7 +190,7 @@ export interface ControlPlaneOptions {
   /**
    * Module-A host package source dir (design 09 方案 A, module B): the package
    * seeded into the local profile so the spawned host resolves the
-   * client-graph row. Defaults to <repo>/packages/dsh-host-client-graph;
+   * client-graph row. Defaults to <repo>/packages/dsh-chamber-seed-client-graph;
    * packaged runtimes pass the bundled location. An absent source — or a
    * source without its built dist/index.js artifact (module A not built in
    * this runtime) — is skipped (nothing to seed), never an error.
@@ -362,46 +364,56 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
     ?? DEFAULT_HOST_GIT_WORKTREE_PACKAGE_SOURCE_DIR
   const hostArchiveCleanupPackageSourceDir = options.hostArchiveCleanupPackageSourceDir
     ?? DEFAULT_HOST_ARCHIVE_CLEANUP_PACKAGE_SOURCE_DIR
-  // Seed registry (2026-12): the three base chamber host packages
-  // (client-graph / git-worktree / archive-cleanup) plus any extra entries
-  // (client-plugin slots like the gateway mobile stub). An extra entry that
-  // re-declares a base package's id WINS over the base entry
+  // Seed registry (2026-12): the base chamber host packages are DERIVED from
+  // the authoritative registry (CHAMBER_HOST_PACKAGES — insert row, package
+  // name and probe domain all come from that one list; a hand-written
+  // parallel row table here was the defect the registry exists to prevent).
+  // The ONLY per-package desktop input is its packaged source directory,
+  // looked up by insert id — the public option names are unchanged. Any extra
+  // entry (client-plugin slots like the gateway mobile stub) is appended; an
+  // extra entry that re-declares a base package's id WINS over the base entry
   // (last-writer-wins by loader id): the gateway passes the three host
   // packages as desktop-synced extra entries, so once its seed cache is
   // populated the synced copies replace the packaged defaults — the base
   // rows exist only to preserve the legacy desktop shape (no
   // extraSeedEntries → no shadowing).
+  const hostPackageSourceDirs: ReadonlyMap<string, string> = new Map([
+    [HOST_GRAPH_INSERT.id, hostGraphPackageSourceDir],
+    [HOST_GIT_WORKTREE_INSERT.id, hostGitWorktreePackageSourceDir],
+    [HOST_ARCHIVE_CLEANUP_INSERT.id, hostArchiveCleanupPackageSourceDir],
+  ])
   /** 最近一次 seed 实际落地的探针域（seed 时刷新；见 PlaneHandle 注释）。 */
   let seededProbeDomains: readonly string[] = []
   const seedEntries = (): SeedEntry[] => {
     const byId = new Map<string, SeedEntry>()
-    for (const entry of [
-      {
-        insert: HOST_GRAPH_INSERT,
-        kind: 'host' as const,
-        source: 'packaged' as const,
-        sourceDir: hostGraphPackageSourceDir,
-        probeDomains: ['clientGraph/graph'],
-      },
-      {
-        insert: HOST_GIT_WORKTREE_INSERT,
-        kind: 'host' as const,
-        source: 'packaged' as const,
-        sourceDir: hostGitWorktreePackageSourceDir,
-        probeDomains: ['gitWorktree/previewCreate'],
-      },
-      {
-        insert: HOST_ARCHIVE_CLEANUP_INSERT,
-        kind: 'host' as const,
-        source: 'packaged' as const,
-        sourceDir: hostArchiveCleanupPackageSourceDir,
-        probeDomains: ['archiveCleanup/probe'],
-      },
-      ...(options.extraSeedEntries ?? []),
-    ]) {
-      byId.set(entry.insert.id, entry)
+    for (const descriptor of CHAMBER_HOST_PACKAGES) {
+      const sourceDir = hostPackageSourceDirs.get(descriptor.insert.id)
+      if (sourceDir === undefined) {
+        // A registry row with no packaged source mapped on this owner is a
+        // code defect (the registry grew without its desktop source option),
+        // never a runtime condition — fail loud rather than silently seeding
+        // a partial registry.
+        throw new Error(
+          `chamber seed registry: no packaged sourceDir mapped for host package `
+          + `'${descriptor.insert.name}' (insert id '${descriptor.insert.id}')`,
+        )
+      }
+      byId.set(descriptor.insert.id, {
+        insert: descriptor.insert,
+        kind: 'host',
+        source: 'packaged',
+        sourceDir,
+        probeDomains: [descriptor.probe.method],
+      })
     }
-    return [...byId.values()]
+    for (const entry of options.extraSeedEntries ?? []) byId.set(entry.insert.id, entry)
+    const entries = [...byId.values()]
+    // Fail-loud naming pin (Batch 1 naming unification, 2026-09): every
+    // host-kind entry — base or extra — lives in the canonical
+    // `@dsh-chamber/dsh-chamber-seed-<loader-id>` namespace, so a rename that
+    // forgets one call site cannot reach the profile seed at all.
+    assertHostSeedEntryNaming(entries)
+    return entries
   }
   // The seed gate is the BUILT artifact (dist/index.js), not the package
   // directory: the dir exists in any checkout of this repo, while the esbuild
@@ -441,7 +453,7 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
    * such packages: without the per-spawn re-seed the next instance restart
    * would boot with a --patch row that cannot resolve and fail loudly, the
    * only self-heal being a desktop-app restart. This thunk is idempotent
-   * (content-hash skip in ensureHostGraphPackage, content-compare in
+   * (content-hash skip in ensureSeedPackage, content-compare in
    * buildPatchOverlay). Returns the --patch overlay path, or null when
    * module A's built artifact is absent (v4 baseline command line, nothing
    * to mount). Failure semantics: a seed throw on the initial-spawn path
@@ -455,9 +467,9 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
     // wording distinguishes a true stub (packaged entry whose package has not
     // shipped yet, e.g. the gateway mobile slot) from a desktop-synced entry
     // merely awaiting its first sync (an expected pre-sync state, logged once
-    // per spawn as informational). The three base packaged dirs (client-graph
-    // / git-worktree / archive-cleanup) keep their documented silent-skip
-    // behavior (absent source or dist = no row, no overlay).
+    // per spawn as informational). The base packaged dirs keep their
+    // documented silent-skip behavior (absent source or dist = no row, no
+    // overlay).
     for (const entry of options.extraSeedEntries ?? []) {
       if (entry.sourceDir === null || !existsSync(entry.sourceDir)) {
         const message = `seed entry '${entry.insert.id}' (${entry.insert.name}): source absent; skipped`
@@ -580,7 +592,7 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
   // Per-instance reverse proxy (design 03 §3): /api/i/<id>/* HTTP/WS/SSE
   // passthrough, reachable without any session (v1); ssh transports are
   // registered by the desktop main process through the handle (design 05
-  // §3.3).
+  // §7.3).
   const instanceProxy = createInstanceProxy({
     logger,
     getLocalState: () => local.getState(),
@@ -718,7 +730,7 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
   let lifecycleEpoch = 0
 
   // ---------------------------------------------------------------------------
-  // Static frontend service (design 05 §3.3 / 04 §5): dist/ + __DSH_BOOT__,
+  // Static frontend service (design 05 §7.3 / 04 §5): dist/ + __DSH_BOOT__,
   // assembled in static-serving.ts. Anonymous like every other surface (v1
   // has no authentication). Disabled when webDistDir is not configured.
   // ---------------------------------------------------------------------------
@@ -1003,7 +1015,7 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
     },
 
     /**
-     * Register a remote instance transport (design 05 §3.3 + design 17 §9.3):
+     * Register a remote instance transport (design 05 §7.3 + design 17 §9.3):
      * the desktop main process reports a ready target as connectionId
      * `dsh:<id>` or `gateway:<id>` plus `opts.transport` (legacy
      * `ssh:<id>` spelling remains SSH-only) — the
@@ -1096,10 +1108,19 @@ export type {
   ParsedInsertRow,
 } from './cordis-inserts.ts'
 export type { Logger } from './types.ts'
-export { HOST_ARCHIVE_CLEANUP_INSERT, HOST_GIT_WORKTREE_INSERT, HOST_GRAPH_INSERT } from './host-graph-seed.ts'
-export type { HostPackageInsert } from './host-graph-seed.ts'
+export {
+  assertChamberHostRegistry,
+  assertHostSeedEntryNaming,
+  assertHostSeedInsertNaming,
+  CHAMBER_HOST_PACKAGES,
+  HOST_ARCHIVE_CLEANUP_INSERT,
+  HOST_GIT_WORKTREE_INSERT,
+  HOST_GRAPH_INSERT,
+  HOST_SEED_PACKAGE_PREFIX,
+} from './host-graph-seed.ts'
+export type { ChamberHostPackageDescriptor, HostPackageInsert } from './host-graph-seed.ts'
 export type { ApiCorsDecision, ApiCorsEvaluator, ApiRequest, ApiResponse, ApiSurface } from './api.ts'
-// Shared forwarding core (design 17 §6.2, 方案 A): extracted from
+// Shared forwarding core (design 17 §8, 方案 A): extracted from
 // instance-proxy.ts so `gateway-proxy.ts` reuses the same Host/Origin
 // rewrite + WS splice + limits/errors without forking.
 export * from './proxy-forward.ts'

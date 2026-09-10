@@ -84,12 +84,12 @@ export interface RemoveWorktreeInput {
   /** Required when workspaceId is absent: the exact worktree path. */
   path?: string
   expected: { repoId: string; worktreeId: string; branch: string | null; head: string }
-  /** Optional local branch to delete after the worktree removal (design 08 §11). */
+  /** Optional local branch to delete after the worktree removal (design 08 §5.3). */
   deleteBranch?: string
   /** Explicit user authorization to DISCARD the worktree's uncommitted state:
    *  the host then removes a dirty worktree with `git worktree remove
    *  --force` (branch/commits/HEAD untouched). Never set without a confirmed
-   *  dialog checkbox (design 08 §6 amendment 2026-08). */
+   *  dialog checkbox (design 08 §5.3 amendment 2026-08). */
   discardChanges?: boolean
 }
 

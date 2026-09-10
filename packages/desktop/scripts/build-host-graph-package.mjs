@@ -7,7 +7,7 @@
  *
  * 背景（设计 09 §3.5）：控制面 seed 时把 host 包分发进本地 profile 的
  * node_modules，并把 --patch overlay 注入 spawn 命令。开发态直接从源码树
- * packages/dsh-host-client-graph/ 读取；打包态没有源码树，必须随应用分发
+ * packages/dsh-chamber-seed-client-graph/ 读取；打包态没有源码树，必须随应用分发
  * 一份拷贝——electron-builder 的 files 包含 dist/**，所以放这里。
  * 幂等：每次构建清空重建（与 build:control-plane 同节奏）。
  *
@@ -32,17 +32,17 @@ const repoRoot = join(desktopDir, '..', '..')
 export const HOST_PACKAGE_BUILD_ROWS = [
   {
     label: 'host-graph',
-    sourceDir: join(repoRoot, 'packages', 'dsh-host-client-graph'),
+    sourceDir: join(repoRoot, 'packages', 'dsh-chamber-seed-client-graph'),
     outDir: join(desktopDir, 'dist', 'host-graph-package'),
   },
   {
     label: 'git-worktree',
-    sourceDir: join(repoRoot, 'packages', 'dsh-chamber-host-git-worktree'),
+    sourceDir: join(repoRoot, 'packages', 'dsh-chamber-seed-git-worktree'),
     outDir: join(desktopDir, 'dist', 'host-git-worktree-package'),
   },
   {
     label: 'archive-cleanup',
-    sourceDir: join(repoRoot, 'packages', 'dsh-host-archive-cleanup'),
+    sourceDir: join(repoRoot, 'packages', 'dsh-chamber-seed-archive-cleanup'),
     outDir: join(desktopDir, 'dist', 'host-archive-cleanup-package'),
   },
 ]

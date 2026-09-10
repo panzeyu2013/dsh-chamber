@@ -2,36 +2,33 @@
  * Browser wire client. The plugin selects fixture or HTTP transport, provides
  * the shared RPC client, and lets API Gateway own the connection loop.
  *
- * ## chamber patch (dsh-chamber connection manager, design 05 §3.6)
+ * ## chamber patch (dsh-chamber connection manager, design 05 §6; re-anchored
+ * on upstream dsh-v0.1.5-alpha.2 at the 2026-09 re-anchor — that upstream file is
+ * byte-identical at the current pin dsh-v0.1.5-rc.1)
  *
- * The plugin apply accepts an optional `ConnectionConfig` (the entry-level
- * twin of the controller config in ./connection.ts): its `basePath` option
- * (default `/api` = stock) is resolved at carrier construction and handed to
- * the generic RPC carrier, so every api path lands under the control-plane
- * per-instance proxy prefix (`/api/i/<id>`). Chamber always supplies the
- * per-entry config explicitly. When no config is passed,
- * `window.__DSH_BASE_PATH__` remains a compatibility fallback for other
- * embedding environments.
+ * Three chamber deltas only:
+ *  - `basePath` is read from the per-entry Context (`ctx.chamberBasePath`, the
+ *    same seam the chamber api-gateway fork uses — never a page-global knob)
+ *    and handed to the generic RPC carrier, so every api path lands under the
+ *    control-plane per-instance proxy prefix (`/api/i/<id>`). The resolved
+ *    value is also exposed as `handle.basePath`.
+ *  - the carrier assembly (`carrier-assembly.ts`) owns the RPC carrier
+ *    construction; the liveness triggers (`liveness-triggers.ts`, design 14 D4)
+ *    drive the controller's native `reconnect()` on OS wake / network return /
+ *    long-hidden recovery.
+ *  - `SYSTEM_RESUME_EVENT` is exported as the single canonical wake-event name
+ *    the chamber shell dispatches.
  *
- * merged with the upstream v0.1.2-alpha.2 rewrite: the ConnectionHandle
- * surface is `{ rpc, generation, state, reconnect, registerGenerationSource,
- * start }` — alpha.2 restored the observable recovery state
- * (`state: ConnectionStateSource`) and the immediate `reconnect()` command
- * (upstream recovery-control decision) on top of the alpha.1 wire; the
- * browser `online`/`offline` watch (watchBrowserNetwork) is upstream-owned
- * too. The chamber carrier assembly (`carrier-assembly.ts`) owns the RPC
- * carrier; the liveness-trigger restart (design 14 D4) operates on the
- * controller the handle.start() call constructs, and `handle.basePath` plus
- * the `SYSTEM_RESUME_EVENT` window event remain chamber exports. Upstream
- * alpha.2 deleted the `RpcError`/`RpcErrorCode` vocabulary (superseded by
- * the typert RemoteError/RemoteFailure/RemoteResult family) — no chamber
- * consumer imported them, so the re-export is dropped with the upstream
- * change.
+ * Everything else is verbatim upstream: the page-global
+ * `__DSH_CONNECTION_RECOVERY__` bootstrap, the `{...recovery, ...config}`
+ * merge in `start`, the browser online/offline watch (`watchBrowserNetwork` →
+ * `setNetworkAvailable`), and the `{ rpc, generation, state, reconnect,
+ * registerGenerationSource, start }` handle surface.
  */
 import type { Context } from '@deepseek-ai/cordis'
 import {
   ConnectionController,
-  type ConnectionConfig,
+  type ConnectionRecoveryConfig,
   type ConnectionGeneration,
   type ConnectionGenerationSource,
   type ConnectionSinks,
@@ -42,6 +39,7 @@ import { createWebConnectionRpc, type RpcFetch, type RpcStreamOpen } from './rpc
 import { assembleConnectionCarriers } from './carrier-assembly.ts'
 import { attachLivenessTriggers } from './liveness-triggers.ts'
 import { isLoopbackHostname } from '../loopback-hostname.ts'
+import { resolveConnectionConfig } from '../recovery-config.ts'
 import type { ClientConnectionRpc } from '../rpc.ts'
 
 declare module '@deepseek-ai/cordis' {
@@ -70,17 +68,31 @@ export {
 // Connection loop types are public through ConnectionHandle.start; the
 // controller remains package-internal.
 export type {
-  ConnectionConfig,
+  ConnectionRecoveryConfig,
   ConnectionGeneration,
   ConnectionGenerationSource,
   ConnectionHostInfo,
   ConnectionSinks,
   ConnectionState,
 } from './connection.ts'
+
 export type {
   ClientConnectionRpc, ConnectionRpcFailure, ConnectionRpcResult,
 } from '../rpc.ts'
 export type { RpcFetch } from './rpc.ts'
+/**
+ * chamber patch (Batch 2 follow-up): the per-source recovery-timing policy.
+ * Exported through the `/client` barrel so consumers (the chamber api-gateway
+ * fork) can pass it to `start(sinks, config)`; deep subpath imports are not
+ * resolvable through the chamber vite alias, which maps only the package root
+ * and `/client` to this copy.
+ */
+export {
+  recoveryOverridesForTransport,
+  REMOTE_GENERATION_READY_TIMEOUT_MS,
+  REMOTE_GENERATION_READY_WARN_MS,
+  type ConnectionRecoveryOverrides,
+} from './recovery-policy.ts'
 
 /**
  * chamber patch (design 14 D4): the window event the chamber shell dispatches
@@ -141,6 +153,8 @@ export interface ClientTransportHooks {
 /** Page global carrying {@link ClientTransportHooks}; absent in the served web app. */
 interface ClientTransportGlobal {
   __DSH_TRANSPORT__?: ClientTransportHooks
+  /** Host-injected recovery bootstrap (webserver index-inject, present since v0.1.5-alpha.2). */
+  __DSH_CONNECTION_RECOVERY__?: unknown
 }
 
 /**
@@ -176,10 +190,11 @@ export interface ConnectionHandle {
    * Start the connect/reconnect loop with the consumer's state callbacks.
    * API Gateway owns the loop; a second call throws.
    * @param sinks - connection-state callbacks.
-   * @param config - reconnect/backoff tunables.
+   * @param config - explicit timing overrides; omitted fields use the resolved
+   *   recovery timing (Host page-global bootstrap + explicit overrides).
    * @returns lifecycle controls for the loop.
    */
-  start(sinks: ConnectionSinks, config?: ConnectionConfig): ConnectionLoop
+  start(sinks: ConnectionSinks, config?: ConnectionRecoveryConfig): ConnectionLoop
 }
 
 /** Controls retained by the sole owner of a running connection loop. */
@@ -216,26 +231,30 @@ function watchBrowserNetwork(controller: ConnectionController): () => void {
   }
 }
 
+/** chamber patch: read the per-entry base path bound by the shell before plugin
+ *  materialization (`shell.ts` ctx.provide('chamberBasePath'); design 05 §4 —
+ *  the same seam the chamber api-gateway fork reads). */
+function chamberBasePathOf(ctx: Context): string | undefined {
+  return (ctx as { readonly chamberBasePath?: string }).chamberBasePath
+}
+
 /**
  * Client plugin body: pick the api by page mode and provide ctx.connection.
- * @param ctx - client cordis context.
- * @param config - optional chamber patch: per-instance base path config (defaults stock).
+ * @param ctx - client cordis context (carries the per-entry `chamberBasePath`).
  */
-export function apply(ctx: Context, config?: ConnectionConfig): void {
+export function apply(ctx: Context): void {
   const pageLocation = typeof location === 'undefined' ? undefined : location
   const fixture = pageLocation !== undefined && new URLSearchParams(pageLocation.search).has('fixture')
-  // merged: upstream transport hook — a shell owning a different physical
-  // transport installs it on the page global before plugin boot (chamber's
-  // basePath patch still takes precedence for the RPC carrier).
   const transport = (globalThis as ClientTransportGlobal).__DSH_TRANSPORT__
+  const recovery = resolveConnectionConfig((globalThis as ClientTransportGlobal).__DSH_CONNECTION_RECOVERY__)
   const fixtureRpc = fixture ? createFixtureConnectionRpc() : undefined
-  // chamber patch: resolve the per-entry path once and fan the same immutable
-  // value into the generic RPC carrier (plus the transport's fetch/stream
-  // hooks when a page-owned transport is present). The pure assembly policy is
-  // behavior-tested without loading the source-only vendor graph; production
-  // supplies the real constructor here.
+  // chamber patch: resolve the per-entry path once (from the entry Context) and
+  // fan the same immutable value into the generic RPC carrier (plus the
+  // transport's fetch/stream hooks when a page-owned transport is present). The
+  // pure assembly policy is behavior-tested without loading the source-only
+  // vendor graph; production supplies the real constructor here.
   const { basePath, rpc } = assembleConnectionCarriers(
-    config?.basePath,
+    chamberBasePathOf(ctx),
     fixtureRpc,
     transport,
     {
@@ -334,23 +353,20 @@ export function apply(ctx: Context, config?: ConnectionConfig): void {
           publishState(state)
           sinks.onStateChange?.(state)
         },
-      }, config ?? {})
+      }, { ...recovery, ...config })
       const current = { token, source, controller, stopNetworkWatch: watchBrowserNetwork(controller) }
       owner = current
-      // chamber patch (design 14 D4 + sleep/wake liveness extension): restart
-      // the loop immediately on OS wake (system-resume), network restore
-      // (online) or the window becoming visible again after a long hidden
-      // span (hide-to-tray / backgrounded sleep) — instead of waiting for a
-      // close/error that a silently-dead half-open stream never fires.
-      // stop()+start() is the controller's own public restart semantics
-      // (made atomic-safe by the loop-epoch guard in connection.ts). The
-      // listeners are registered here (loop owned) and removed by the
-      // returned stop handle — once stopped, the triggers are never observed.
-      // (Upstream alpha.2 also watches online/offline natively via
-      // watchBrowserNetwork → setNetworkAvailable; the chamber online restart
-      // remains as the full stop()+start() fallback for the silently-dead
-      // half-open stream case — debounced by minRestartIntervalMs, so the two
-      // mechanisms converge without a burst.)
+      // chamber patch (design 14 D4 + sleep/wake liveness extension): reconnect
+      // immediately on OS wake (system-resume), network restore (online) or the
+      // window becoming visible again after a long hidden span (hide-to-tray /
+      // backgrounded sleep) — instead of waiting for a close/error that a
+      // silently-dead half-open stream never fires. The controller's native
+      // reconnect() aborts the in-flight generation in place (no second pump
+      // loop, no stop()+start() race), and the triggers are offline-gated
+      // because upstream's own watchBrowserNetwork already suspends retries
+      // while the browser reports no network. Listeners are registered here
+      // (loop owned) and removed by the returned stop handle — once stopped,
+      // the triggers are never observed.
       const detachTriggers = attachLivenessTriggers(
         typeof window === 'undefined' ? undefined : window,
         typeof document === 'undefined' ? undefined : document,
@@ -361,13 +377,17 @@ export function apply(ctx: Context, config?: ConnectionConfig): void {
             // without running this detach).
             if (!ownsGeneration()) return
             try {
-              controller.stop()
-              controller.start()
+              controller.reconnect()
             } catch (error) {
               console.warn('[web-runtime] liveness reconnect failed:', error)
             }
           },
           windowEvents: [SYSTEM_RESUME_EVENT, 'online'],
+          // An OS wake bypasses the offline gate: a page frozen across
+          // suspend/resume can miss the browser's `online` event and keep
+          // reporting offline while the link is back. `reconnect()` forces one
+          // bounded attempt (immediateRetry skips the suspension branch).
+          alwaysFireEvents: [SYSTEM_RESUME_EVENT],
         },
       )
       controller.start()

@@ -1,5 +1,5 @@
 /**
- * Pure workspace-drag order rules (design 06 §2.2 / design 08 §11): ONE
+ * Pure workspace-drag order rules (design 06 §2.2 / design 08 §3.3): ONE
  * implementation of the repo-group invariant, shared by the drop marker, the
  * onDragOver gate, the drop handler and the commit — the visual, the accepted
  * drop and the committed order can no longer drift.
@@ -19,7 +19,7 @@
  * deepened; only the main's own drag heals the family.
  *
  * Rows hidden by their main's repo-group fold render nothing (design 08
- * §11.7), so an 'after' drop must anchor on the next VISIBLE row — the
+ * §3.3), so an 'after' drop must anchor on the next VISIBLE row — the
  * resolver takes a hidden() verdict per row to keep view and commit in
  * lockstep (a marker drawn below a visible row lands below the hidden block
  * that follows it).

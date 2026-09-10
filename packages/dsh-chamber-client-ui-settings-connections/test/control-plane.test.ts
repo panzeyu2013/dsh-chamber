@@ -128,8 +128,8 @@ test('gatewayChamberSeedCache: GETs the seed cache through the instance proxy', 
   const restoreOrigin = withPageOrigin('http://127.0.0.1:17500')
   const stub = stubFetch(200, {
     items: [
-      { name: '@dsh-chamber/dsh-host-client-graph', version: '1.0.0' },
-      { name: '@dsh-chamber/dsh-host-git-worktree', version: null },
+      { name: '@dsh-chamber/dsh-chamber-seed-client-graph', version: '1.0.0' },
+      { name: '@dsh-chamber/dsh-chamber-seed-git-worktree', version: null },
     ],
   })
   try {

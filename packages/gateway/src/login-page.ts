@@ -1,5 +1,5 @@
 /**
- * Gateway login page rendering (design 21): the self-contained pre-auth
+ * Gateway login page rendering (design 17 §7.1): the self-contained pre-auth
  * browser surface for `/auth/login`, replacing the minimal LOGIN_PAGE_HTML
  * in dispatch.ts. Pure string builder — zero imports, zero DOM, no runtime
  * dependencies; the page ships inline with the gateway (design 17 §7.1).
@@ -11,11 +11,11 @@
  *     and the output never contains a `value="` attribute.
  *   - Failure states keep the exact status-code matrix (401/429/503) with the
  *     form re-rendered in HTML for browsers; JSON clients are negotiated out
- *     via wantsHtmlLoginResponse and keep the existing JSON shape (design 21 §6).
+ *     via wantsHtmlLoginResponse and keep the existing JSON shape (design 17 §7.3).
  *   - `secure` mirrors the request policy's `decision.secure` (same fact as
  *     the conditional `; Secure` cookie attribute): plaintext connections get
  *     an honest warning, never a TLS claim (C8).
- *   - en/zh copy tables are kept in sync here (design 21 §8); `{n}` is the
+ *   - en/zh copy tables are kept in sync here; `{n}` is the
  *     server-ceiled retryAfterSec, substituted only for rate_limited.
  *
  * Request-boundary error page: dispatch.ts renders renderBoundaryErrorPage
@@ -54,7 +54,7 @@ export interface LoginPageOptions {
   desktop?: boolean
 }
 
-/** Login-page CSP (design 21 §7.2): `img-src data:` is the only sanctioned
+/** Login-page CSP: `img-src data:` is the only sanctioned
  * increment over design 17 §7.1 — the inline SVG favicon/brand marks.
  * `script-src` stays absent (C1). Shared by the boundary error page. */
 export const LOGIN_PAGE_CSP: string = "default-src 'none'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; style-src 'unsafe-inline'; img-src data:"
@@ -81,7 +81,7 @@ interface LoginPageCopy {
   tokenOnlyBodyNone: string
 }
 
-/** en/zh copy (design 21 §8). Kept as one typed table so a missing key is a
+/** en/zh copy. Kept as one typed table so a missing key is a
  * compile error, never a silent mismatch between the two languages. */
 const COPY: Record<Lang, LoginPageCopy> = {
   en: {
@@ -282,7 +282,7 @@ const BRAND_MARK = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'
  * an exclamation — neutral enough for both display modes. */
 const DENIED_MARK = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='w' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%23f59e0b'/%3E%3Cstop offset='1' stop-color='%23dd8629'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='9' fill='url(%23w)'/%3E%3Cpath d='M16 9.5v9.5' stroke='%23fff' stroke-width='3' stroke-linecap='round'/%3E%3Ccircle cx='16' cy='23.4' r='1.7' fill='%23fff'/%3E%3C/svg%3E"
 
-/** Component styles (design 21 §4.2): card = .panel, input = .custom input,
+/** Component styles: card = .panel, input = .custom input,
  * button = button.primary equivalents over the dsh token layer, extended
  * with the light-mode palette variables, autofill theming, focus rings, the
  * brand header and the boundary-page elements. */
@@ -322,7 +322,7 @@ code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:
 
 /** Full self-contained document shell: charset, viewport, theme-color for
  * both display modes, title, inline SVG data: favicon (the `img-src data:`
- * CSP increment, design 21 §7.2), inline styles, and the given body. Never
+ * CSP increment, design 17 §7.1), inline styles, and the given body. Never
  * emits external URLs or script elements. */
 function pageShell(lang: Lang, title: string, body: string): string {
   return `<!doctype html>
@@ -383,7 +383,7 @@ function errorBannerCopy(opts: LoginPageOptions, copy: LoginPageCopy): string {
   return opts.error === 'busy' ? copy.errorBusy : copy.errorInvalid
 }
 
-/** The login form (design 21 §5.1/§7.3): browser-native POST to /auth/login,
+/** The login form (design 17 §7.1/§7.3): browser-native POST to /auth/login,
  * autofocus on the single input, full credential-input hygiene, and the a11y
  * attributes wired to the error banner only when one is shown. The password
  * input is never pre-filled (S5). */
@@ -411,7 +411,7 @@ function brandHeader(inner: string, mark: string): string {
     + '</div>'
 }
 
-/** Render the pre-auth login page (design 21 §5.2). Stacking order: brand →
+/** Render the pre-auth login page (design 17 §7.1). Stacking order: brand →
  * plaintext warning (secure=false) → error banner (invalid/rate_limited/busy)
  * → expired hint (expired) → form → secure badge (secure=true). */
 export function renderLoginPage(opts: LoginPageOptions): string {
@@ -442,7 +442,7 @@ export function renderLoginPage(opts: LoginPageOptions): string {
   return pageShell(opts.lang, copy.title, body)
 }
 
-/** Content negotiation for the login page (design 21 §6.1): a browser-native
+/** Content negotiation for the login page (design 17 §7.3): a browser-native
  * form POST (form-urlencoded body) that advertises HTML in Accept. JSON
  * clients — including the desktop main process — never match and keep the
  * existing JSON error shape. */
@@ -453,7 +453,7 @@ export function wantsHtmlLoginResponse(headers: Record<string, string | string[]
   return contentType === 'application/x-www-form-urlencoded' && accept.includes('text/html')
 }
 
-/** Accept-Language → render language (design 21 §8): first comma-separated
+/** Accept-Language → render language: first comma-separated
  * tag; `zh`/`zh-*` (zh-CN, zh-TW, …) → 'zh', everything else (including a
  * missing header) → 'en'. */
 export function detectLoginLang(acceptLanguage: string | undefined): 'en' | 'zh' {
@@ -462,7 +462,7 @@ export function detectLoginLang(acceptLanguage: string | undefined): 'en' | 'zh'
   return first.startsWith('zh') ? 'zh' : 'en'
 }
 
-/** Token-only / no-auth deployments (design 21 §5.3): a minimal HTML
+/** Token-only / no-auth deployments (design 17 §6): a minimal HTML
  * explanation page (no form) served with the same 404 status for browsers;
  * API clients still receive the JSON 404. The back link reuses the same-origin
  * `/`, whose reachability under token auth is unchanged. `variant` keeps the

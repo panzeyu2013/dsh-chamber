@@ -1,5 +1,5 @@
 /**
- * Static frontend service (design 05 §3.3 / 04 §5): dist/ + __DSH_BOOT__.
+ * Static frontend service (design 05 §7.3 / 04 §5): dist/ + __DSH_BOOT__.
  *
  * createStaticServing assembles the pure static-serve surface over a
  * webDistDir: MIME resolution, on-the-fly gzip (with a tiny per-file cache),

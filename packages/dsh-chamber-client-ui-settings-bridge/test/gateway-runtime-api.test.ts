@@ -7,13 +7,13 @@
  * The moved pure core kept its cases where the core now lives: parsers /
  * fetchers / action gates / error classification / the settle poll are
  * covered by the sidebar shared test (gateway-runtime.test.ts,
- * `@dsh-chamber/dsh-client-ui-sidebar/shared`), and the restart poll by the
+ * `@dsh-chamber/dsh-chamber-client-ui-sidebar/shared`), and the restart poll by the
  * sidebar shared poll test (gateway-runtime-poll.test.ts).
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { projectRemoteRuntimeBadge, remoteRuntimeStatusView } from '../src/client/gateway-runtime-api.ts'
-import type { RemoteRuntimeStatus } from '@dsh-chamber/dsh-client-ui-sidebar/shared'
+import type { RemoteRuntimeStatus } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
 
 function status(overrides: Partial<RemoteRuntimeStatus> = {}): RemoteRuntimeStatus {
   return {

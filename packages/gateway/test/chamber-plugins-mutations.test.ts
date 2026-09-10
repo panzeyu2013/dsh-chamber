@@ -311,7 +311,7 @@ test('materialize: header validation (name pattern/denied/version) → 400 befor
   const versionedName = await rawUpload(host, bytes, { 'x-plugin-name': 'pkg@1.0.0' })
   assert.equal(versionedName.res.status, 400)
 
-  const denied = await rawUpload(host, bytes, { 'x-plugin-name': '@dsh-chamber/dsh-host-client-graph' })
+  const denied = await rawUpload(host, bytes, { 'x-plugin-name': '@dsh-chamber/dsh-chamber-seed-client-graph' })
   assert.equal(denied.res.status, 400)
   assert.equal(denied.res.json().code, 'reserved')
 
