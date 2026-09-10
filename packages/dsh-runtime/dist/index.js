@@ -933,7 +933,7 @@ function assertSafeVersion(raw) {
   const trimmed = raw.trim();
   if (!isSafeVersion(trimmed)) {
     throw new Error(
-      `\u4E0D\u5B89\u5168\u7684 dsh \u8FD0\u884C\u65F6\u7248\u672C\u4E32 ${JSON.stringify(raw)}\uFF1A\u5FC5\u987B\u662F\u7CBE\u786E semver\uFF08\u5982 0.1.1-rc.2\uFF09\u4E14\u4E0D\u542B /\u3001\\\u3001..`
+      `\u4E0D\u5B89\u5168\u7684 dsh \u8FD0\u884C\u65F6\u7248\u672C\u4E32 ${JSON.stringify(raw)}\uFF1A\u5FC5\u987B\u662F\u7CBE\u786E semver\uFF08X.Y.Z[-prerelease]\uFF09\u4E14\u4E0D\u542B /\u3001\\\u3001..`
     );
   }
   return trimmed;
@@ -3602,6 +3602,7 @@ function killWindowsTreeWithResidual(pid) {
 }
 
 // src/runtime-installer.ts
+var INSTALL_STUB_VERSION = "0.0.0";
 var DEFAULT_INSTALL_TIMEOUT_MS = 10 * 60 * 1e3;
 var INSTALL_TERMINATE_GRACE_MS = 1e3;
 var INSTALL_OUTPUT_LIMIT_BYTES = 64 * 1024;
@@ -4373,7 +4374,7 @@ async function installRuntimeVersion(opts) {
     writeState("preparing");
     atomicWriteRuntimeFileNoFollow(opts.baseDir, join6(workDir, "package.json"), `${JSON.stringify({
       name: "dsh-runtime-install",
-      version: "0.0.0",
+      version: INSTALL_STUB_VERSION,
       private: true,
       dependencies: { "@deepseek-ai/dsh": "file:./dsh-runtime-package.tgz" }
     }, null, 2)}
@@ -6623,6 +6624,9 @@ import { constants as constants4 } from "node:fs";
 import { open as open2 } from "node:fs/promises";
 import { join as join9 } from "node:path";
 import { TextDecoder } from "node:util";
+var HOST_IDENTITY_METHOD = "session/canOpenWorkspacePath";
+var LEGACY_HOST_PROBE_METHOD = "session/list";
+var HOST_IDENTITY_METHOD_SINCE = "0.1.2-rc.1";
 var SETTINGS_FILE_MAX_BYTES = 16 * 1024 * 1024;
 var MAX_TIMER_MS = 2147483647;
 var SETTINGS_FILE_READ_CHUNK_BYTES = 64 * 1024;
@@ -6795,19 +6799,19 @@ async function runRuntimeActivationProbes(opts) {
     // activation/rollback behavior identical; the fallback fires the warn
     // sink so upstream method drift never goes silent.
     (async () => {
-      const name = "session/canOpenWorkspacePath";
+      const name = HOST_IDENTITY_METHOD;
       try {
         const response = await call(name, { args: {} });
         return typeof response.result?.value === "boolean" ? { name, ok: true } : { name, ok: false, error: "malformed probe response" };
       } catch (error) {
         if (identityMethodNotFound(error)) {
           try {
-            const legacy = await call("session/list", { args: { _request: {} } });
+            const legacy = await call(LEGACY_HOST_PROBE_METHOD, { args: { _request: {} } });
             const legacyValue = legacy.result?.value;
             if (typeof legacyValue !== "object" || legacyValue === null || !Array.isArray(legacyValue.items)) {
               return { name, ok: false, error: "malformed session list" };
             }
-            opts.warn?.(`runtime activation session probe: ${name} answered HTTP 404 while the legacy session/list probe succeeded \u2014 the runtime tree predates the identity method (dsh < 0.1.2-rc.1); the legacy probe response grows with session data`);
+            opts.warn?.(`runtime activation session probe: ${name} answered HTTP 404 while the legacy ${LEGACY_HOST_PROBE_METHOD} probe succeeded \u2014 the runtime tree predates the identity method (dsh < ${HOST_IDENTITY_METHOD_SINCE}); the legacy probe response grows with session data`);
             return { name, ok: true };
           } catch (legacyError) {
             if (identityMethodNotFound(legacyError)) {

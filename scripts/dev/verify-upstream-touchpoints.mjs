@@ -21,13 +21,17 @@
  *   C9  vendor 源码补丁锚（硬失败）：`packages/renderer/scripts/vendor-patches.mjs`
  *       注册的每处 expect 必须在 pin 住的上游文件里恰好命中一次——重锚后
  *       上游文本一漂移即红，避免「补丁静默失效」
+ *   C10 版本锚一致性 + 活版本字面量白名单（硬失败）：运行时版本从
+ *       `packages/desktop/vendor/dsh/package.json` 单一来源读出，六锚 / 三 fork
+ *       副本必须等于它；生产源码（非注释、非测试、非产物）里出现任何其他
+ *       dsh 版本字面量即红——历史叙述只能留在注释里
  *
  * 登记纪律：给某个文件打 chamber 补丁 = 在 FORKS.patched 里登记（含原因）；
  * 新增 chamber 自有文件 = own；上游文件有意不镜像 = dropped。任何对 pure
  * 文件的修改都会在此硬失败——升级/重锚后同步登记表（每 tag 维护循环见文档 §7）。
  *
  * 用法：
- *   node scripts/dev/verify-upstream-touchpoints.mjs            # C1/C3–C9
+ *   node scripts/dev/verify-upstream-touchpoints.mjs            # C1/C3–C10
  *   node scripts/dev/verify-upstream-touchpoints.mjs --tags <old> <new>  # +C2
  */
 
@@ -35,9 +39,10 @@ import { createHash } from 'node:crypto'
 import {
   closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync,
 } from 'node:fs'
+import { createRequire } from 'node:module'
 import { dirname, join, relative } from 'node:path'
 import { tmpdir } from 'node:os'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { spawn, spawnSync } from 'node:child_process'
 import { artifactGateVerdict, compareOutputs, restoreDir, snapshotDir } from './artifact-gate.mjs'
 
@@ -608,6 +613,195 @@ for (const fork of FORKS) {
   }
 }
 
+// C10 —— 版本锚一致性 + 活版本字面量白名单（硬失败）
+{
+  const DSH_VERSION_RE = /0\.1\.[0-9]+-(?:alpha|beta|rc)\.[0-9]+/g
+  // The bundled-runtime manifest is the single source for the anchored version.
+  const runtimeManifest = JSON.parse(
+    readFileSync(join(ROOT, 'packages', 'desktop', 'vendor', 'dsh', 'package.json'), 'utf8'),
+  )
+  const current = runtimeManifest?.dependencies?.['@deepseek-ai/dsh']
+  if (typeof current !== 'string' || !DSH_VERSION_RE.test(current)) {
+    fail(`C10 无法从 packages/desktop/vendor/dsh/package.json 读出运行时版本（得到 ${JSON.stringify(current)}）`)
+  } else {
+    DSH_VERSION_RE.lastIndex = 0
+    // Files MAY carry a live dsh version literal — each entry is an anchor or a
+    // named diagnostic constant; a value != the pinned runtime version fails.
+    // anchor:true  → 每处活字面量必须等于 current（锚/单一来源/fork 基线）
+    // anchor:false → 具名诊断常量（上限 1 处，值本身是历史事实，例如「身份探针自哪一代起注册」）
+    const ALLOWED = new Map([
+      ['packages/desktop/vendor/dsh/package.json', { anchor: true, reason: '运行时版本的单一来源本身（C10 的 current 即读自此处）' }],
+      ['packages/desktop/scripts/bundle-dsh.mjs', { anchor: true, reason: '运行时线锚 1/6（bundle 兜底常量）' }],
+      ['packages/desktop/vendor/dsh/pnpm-lock.yaml', { anchor: true, reason: '运行时线锚 2/6（bundle 锁文件，生成物）' }],
+      ['.github/workflows/release.yml', { anchor: true, reason: '运行时线锚 3/6（release env）' }],
+      ['scripts/install-gateway.sh', { anchor: true, reason: '运行时线锚 4/6（gateway 安装默认值）' }],
+      ['packages/gateway/package.json', { anchor: true, reason: '运行时线锚 5/6（dshAnchorVersion）' }],
+      ['scripts/dev/release-preflight.mjs', { anchor: true, reason: '运行时线锚 6/6（FORK_VERSION）' }],
+      ['packages/dsh-client-connection/package.json', { anchor: true, reason: 'fork 副本版本 = 上游基线' }],
+      ['packages/dsh-client-web/package.json', { anchor: true, reason: 'fork 副本版本 = 上游基线' }],
+      ['packages/dsh-api-gateway/package.json', { anchor: true, reason: 'fork 副本版本 = 上游基线' }],
+      ['packages/control-plane/src/rpc-envelope.ts', { anchor: false, reason: 'HOST_IDENTITY_METHOD_SINCE：身份探针「自哪一代起注册」的唯一常量（历史事实，不等于 current）' }],
+      ['packages/dsh-runtime/src/runtime-probes.ts', { anchor: false, reason: '上条常量的跨包镜像（本包不依赖控制面）' }],
+    ])
+    const REQUIRED = [
+      'packages/desktop/scripts/bundle-dsh.mjs',
+      '.github/workflows/release.yml',
+      'scripts/install-gateway.sh',
+      'packages/gateway/package.json',
+      'scripts/dev/release-preflight.mjs',
+      'packages/desktop/vendor/dsh/pnpm-lock.yaml',
+    ]
+    // Live-literal extraction: TS/JS via esbuild (comments stripped, strings
+    // preserved); yml/sh/json via a line scan that drops `#`/`//` comments.
+    const esbuildEntry = (() => {
+      try {
+        const requireFromRenderer = createRequire(join(ROOT, 'packages', 'renderer', 'package.json'))
+        const viteEntry = requireFromRenderer.resolve('vite')
+        return createRequire(viteEntry).resolve('esbuild')
+      } catch {
+        return undefined
+      }
+    })()
+    let transformSync
+    if (esbuildEntry !== undefined) {
+      const esbuild = await import(pathToFileURL(esbuildEntry).href)
+      transformSync = esbuild.transformSync
+    }
+    /** Drop line and block comments outside JSON strings. */
+    const stripJsonComments = (text) => {
+      let out = ''
+      let quote = false
+      let i = 0
+      while (i < text.length) {
+        const ch = text[i]
+        const next = text[i + 1]
+        if (quote) {
+          out += ch
+          if (ch === '\\') { out += next ?? ''; i += 2; continue }
+          if (ch === '"') quote = false
+          i += 1
+          continue
+        }
+        if (ch === '"') { quote = true; out += ch; i += 1; continue }
+        if (ch === '/' && next === '/') {
+          while (i < text.length && text[i] !== '\n') i += 1
+          continue
+        }
+        if (ch === '/' && next === '*') {
+          i += 2
+          while (i < text.length && !(text[i] === '*' && text[i + 1] === '/')) i += 1
+          i += 2
+          continue
+        }
+        out += ch
+        i += 1
+      }
+      return out
+    }
+
+    const candidates = []
+    const walk = (dir) => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = join(dir, entry.name)
+        const rel = relative(ROOT, full)
+        if (entry.isDirectory()) {
+          if (['node_modules', 'dist', 'lib', '.git', 'docs', 'coverage', 'generated'].includes(entry.name)) continue
+          if (rel.startsWith('packages/desktop/vendor/') && entry.name !== 'dsh') continue
+          if (rel === 'packages/desktop/vendor/dsh' || rel.startsWith('packages/desktop/vendor/dsh/')) {
+            // only the runtime manifest + lockfile are scanned below
+            if (entry.name !== 'dsh') continue
+            for (const inner of ['package.json', 'pnpm-lock.yaml']) {
+              const innerPath = join(full, inner)
+              if (existsSync(innerPath)) candidates.push(innerPath)
+            }
+            continue
+          }
+          walk(full)
+          continue
+        }
+        if (!/\.(ts|tsx|mjs|js|yml|yaml|json|sh)$/.test(entry.name)) continue
+        if (entry.name.endsWith('.test.ts') || entry.name.endsWith('.test.mjs')) continue
+        if (rel.includes('/test/') || rel.includes('/test-fixtures/')) continue
+        if (rel === 'pnpm-lock.yaml') continue
+        candidates.push(full)
+      }
+    }
+    for (const dir of ['packages', 'scripts', '.github']) {
+      const full = join(ROOT, dir)
+      if (existsSync(full)) walk(full)
+    }
+    if (existsSync(join(ROOT, 'package.json'))) candidates.push(join(ROOT, 'package.json'))
+
+    const liveLiterals = (file) => {
+      const src = readFileSync(file, 'utf8')
+      const rel = relative(ROOT, file)
+      if (/\.(ts|tsx|mjs|js)$/.test(file)) {
+        if (transformSync === undefined) return undefined // esbuild unavailable: report a skip
+        const code = transformSync(src, {
+          loader: file.endsWith('.tsx') ? 'tsx' : file.endsWith('.ts') ? 'ts' : 'js',
+          minifyWhitespace: true,
+          legalComments: 'none',
+        }).code
+        return [...code.matchAll(DSH_VERSION_RE)].map((m) => m[0])
+      }
+      // yml/sh (`#`) and jsonc (`//`, `/* */`) comments are stripped with a
+      // string-aware scan so a comment can never masquerade as a live literal.
+      const stripped = file.endsWith('.json')
+        ? stripJsonComments(src)
+        : src.split('\n').map((line) => line.replace(/#.*$/, '')).join('\n')
+      return [...stripped.matchAll(DSH_VERSION_RE)].map((m) => m[0])
+    }
+
+    const unregistered = []
+    const stale = []
+    const skipped = []
+    const seen = new Map()
+    for (const file of candidates) {
+      const rel = relative(ROOT, file)
+      const found = liveLiterals(file)
+      if (found === undefined) {
+        skipped.push(rel)
+        continue
+      }
+      if (found.length === 0) continue
+      seen.set(rel, [...new Set(found)])
+      const rule = ALLOWED.get(rel)
+      if (rule === undefined) {
+        unregistered.push(`${rel} → ${[...new Set(found)].join(', ')}`)
+        continue
+      }
+      if (!rule.anchor) {
+        // Named diagnostic constant: exactly one literal, value is a recorded
+        // historical fact (not the pin) — more than one means it proliferated.
+        if (found.length > 1) {
+          stale.push(`${rel} → ${found.length} 处版本字面量（具名常量上限 1 处：${rule.reason}）`)
+        }
+        continue
+      }
+      for (const value of new Set(found)) {
+        if (value !== current) stale.push(`${rel} → ${value}（应为 ${current}；${rule.reason}）`)
+      }
+    }
+    for (const rel of REQUIRED) {
+      if (!seen.has(rel)) {
+        // A required anchor with NO literal is also drift (it must pin the version).
+        const full = join(ROOT, rel)
+        const raw = existsSync(full) ? readFileSync(full, 'utf8') : ''
+        if (!raw.includes(current)) stale.push(`${rel} → 未出现运行时版本 ${current}`)
+      }
+    }
+    if (unregistered.length > 0) {
+      fail(`C10 未登记的「活」dsh 版本字面量（生产源码/脚本/配置里不应硬编码版本；历史叙述请留在注释里，或登记到 C10 白名单并说明理由）: ${unregistered.join('; ')}`)
+    } else if (stale.length > 0) {
+      fail(`C10 版本锚不一致: ${stale.join('; ')}`)
+    } else if (skipped.length > 0) {
+      warn(`C10 跳过 ${skipped.length} 个文件（esbuild 不可用，无法剥离注释做活字面量扫描）`)
+    } else {
+      console.log(`✓ C10 版本锚 = ${current}（六锚 + 3 fork 一致；生产源码无未登记版本字面量，扫描 ${candidates.length} 文件）`)
+    }
+  }
+}
+
 // C2 —— tag 重放报告（advisory）
 {
   const tagIndex = process.argv.indexOf('--tags')
@@ -629,5 +823,5 @@ if (hardFails > 0 || (process.exitCode ?? 0) !== 0) {
   process.exitCode = 1
   console.error(`\n✗ verify-upstream-touchpoints: ${hardFails} 项硬失败——见上。`)
 } else {
-  console.log('\n✓ verify-upstream-touchpoints 全部通过（C1/C3–C9）')
+  console.log('\n✓ verify-upstream-touchpoints 全部通过（C1/C3–C10）')
 }

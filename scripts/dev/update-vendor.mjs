@@ -64,9 +64,9 @@ function sha256(file) {
 
 function main() {
   const tag = process.argv[2]
-  if (tag === undefined) fail('缺少 <tag> 参数（如 dsh-v0.1.1-rc.2）')
+  if (tag === undefined) fail('缺少 <tag> 参数（形如 dsh-vX.Y.Z 或 dsh-vX.Y.Z-alpha.N）')
   if (!TAG_RE.test(tag)) {
-    fail(`tag 命名不合法: ${tag}（须为 dsh-vX.Y.Z 或 dsh-vX.Y.Z-(alpha|beta|rc).N；上游真实 tag 含 alpha，如 dsh-v0.1.2-alpha.1）`)
+    fail(`tag 命名不合法: ${tag}（须为 dsh-vX.Y.Z 或 dsh-vX.Y.Z-(alpha|beta|rc).N）`)
   }
 
   // 目录锁：vendor/.vendor-update.lock 存在即拒绝（mkdir 原子）

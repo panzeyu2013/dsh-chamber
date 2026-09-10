@@ -424,3 +424,44 @@ F1 报 **0 BLOCKER / 8 MAJOR / 12 MINOR / 4 NIT，全部为文档陈述与代码
 21 锚点）· `verify:i18n` 0 DRIFTED · 根 typecheck · `test:renderer-shell`/`test:layout`/`test:sidebar`/
 `test:mobile`/`test:host-archive-cleanup`/`test:runtime`/`test:upgrade-tools` · `build:renderer`
 （含 5 条产物断言）· `build:host-packages`/`build:dsh-runtime` · frozen-lockfile · `smoke`。
+
+---
+
+## 14. 最终版本锚清扫（2026-09，收口轮）
+
+> 目标：全仓只保留**一个** dsh 版本锚（当前 pin），其余「活」版本字面量全部清除或登记。
+
+### 14.1 单一来源与六锚一致性（门 = C10）
+
+- **单一来源**：`packages/desktop/vendor/dsh/package.json` 的 `dependencies['@deepseek-ai/dsh']`
+  = **0.1.5-alpha.2**。六个运行时线锚与三个 fork 副本必须等于它——C10 每次实跑校验
+  （`bundle-dsh.mjs` 兜底、`vendor/dsh` 锁文件、`release.yml` env、`install-gateway.sh`、
+  gateway `dshAnchorVersion`、`release-preflight` `FORK_VERSION`；`dsh-client-connection`/
+  `dsh-client-web`/`dsh-api-gateway` 的 `version`）。
+- C10 同时扫描**生产源码/脚本/工作流/清单**（486 文件；TS/JS 用 esbuild 去注释后只保留字符串，
+  yml/sh 去 `#`，json/jsonc 字符串感知地去 `//`、块注释）中的活字面量：未登记者即硬失败，
+  白名单内 `anchor: true` 者必须等于 current，`anchor: false`（具名诊断常量）上限 1 处。
+
+### 14.2 本轮清除/收敛的「活」版本字面量
+
+| # | 位置 | 处置 |
+|---|---|---|
+| V1 | `control-plane/src/dsh-client.ts` 的身份探针降级告警（内联 `dsh < 0.1.2-rc.1`） | 提出具名常量 `HOST_IDENTITY_METHOD_SINCE`（定义在 `rpc-envelope.ts`，与 `HOST_IDENTITY_METHOD` 同处），消息插值该常量 |
+| V2 | `dsh-runtime/src/runtime-probes.ts` 的同类告警 + 探针方法名裸串 | 常量化为 `HOST_IDENTITY_METHOD` / `LEGACY_HOST_PROBE_METHOD` / `HOST_IDENTITY_METHOD_SINCE`（注明是控制面常量的跨包镜像：本包不依赖控制面，C10 白名单登记） |
+| V3 | `dsh-runtime/src/version-safety.ts` 错误文案里的示例版本 | 改为版本形状描述（`X.Y.Z[-prerelease]`），去掉具体版本 |
+| V4 | `dsh-runtime/src/runtime-installer.ts` 安装 stub `version: '0.0.0'` | 具名常量 `INSTALL_STUB_VERSION`（附理由注释） |
+| V5 | `scripts/dev/update-vendor.mjs` 两处 CLI 示例 tag | 改为形状描述（`dsh-vX.Y.Z[-alpha.N]`），不再钉具体版本 |
+| V6 | `scripts/README.md` 示例 tag | 改为形状描述并指向 `harness.commit` |
+| V7 | `desktop/scripts/after-pack-adhoc-sign.test.mjs` 断言 `manifest.version === '0.2.4'` | 改为与**根 package.json 的 version** 比较（发布门已保证全包一致），不再硬编码 chamber 版本 |
+| V8 | `dsh-chamber-client-ui-mobile/src/client/styles.ts` CSS 字符串内的版本叙述 | 移出版本号（指向模块头注），使**出厂 CSS 字节里不再含版本** |
+
+历史叙述（代码注释、设计文档过去时、CHANGELOG、测试夹具的合成版本）**保留**：注释不是锚，
+C10 只针对「活」字面量；测试夹具（`*/test/**`、`*.test.ts|mjs`）按 fixture 处理，不在扫描面。
+
+### 14.3 本轮门禁与负向验证
+
+- C10 实跑：`✓ C10 版本锚 = 0.1.5-alpha.2（六锚 + 3 fork 一致；生产源码无未登记版本字面量，扫描 486 文件）`。
+- 负向验证（本机实跑）：在生产源码里塞入 `0.1.3-alpha.2` → exit 1（点名文件与字面量）；
+  把 `install-gateway.sh` 的锚改成旧版本 → exit 1（点名「应为 0.1.5-alpha.2」）；恢复后全绿。
+- 全量门禁见本轮提交说明（16 项 typecheck + 19 套 test + 全部构建 + C1–C10 + i18n + frozen +
+  ensure --check + smoke）。

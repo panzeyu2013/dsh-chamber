@@ -67,8 +67,8 @@ var MOBILE_CSS = `
    send/stop/commands/ContextMeter, queue dock, goal bar, sidebar, message
    feedback, workspace rows, chat copy/branch) whose aria-label names the same
    action (3 of them phrase it slightly differently \u2014 workspace search \xD72,
-   trajectory load-earlier \u2014 same semantics; verified against the 0.1.2-rc.1
-   install and unchanged at 0.1.5-alpha.2, 2026-09 re-anchor). Four
+   trajectory load-earlier \u2014 same semantics; verified against the pinned
+   install at the 2026-09 re-anchor, see the module header). Four
    informational bubbles are deliberately
    NOT hidden because their trigger has no accessible duplicate: the chat
    stats line (ui-chat:3853, ellipsized non-focusable div), the agent-preset

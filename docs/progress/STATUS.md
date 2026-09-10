@@ -18,6 +18,9 @@
 > settings bridge 台账、三 fork 副本、renderer（`ui-dockkit` covered factory；C4 契约 13→15）。
 > **设计 24 四项真机缺陷已修**：`list()` 快照形状（真机 preview/purge 曾全挂）、`inspect`→`stat`、
 > 代际全量删除 + 未识别条目整单拒绝、退役无消费者的错误分类器（design 24 §2 与 AGENTS 措辞同步）。
+> **版本锚收口（2026-09 收口轮）**：dsh 版本单一来源 = `packages/desktop/vendor/dsh/package.json`，
+> 六锚 + 3 fork 副本必须等于它；生产源码/脚本/配置里的其他「活」版本字面量已全部清除或按
+> C10 白名单登记（历史叙述只留在注释/CHANGELOG/测试夹具里）。
 > **D3 已裁决并落地（2026-09 三轮，四轮补全）**：N-ctx 同源壳下**五处**同源绝对 URL（`ui-chat`
 > 的 `/api/file`、`client-file-upload` 的 `/api/session/uploadFileBinary`、`ui-deliverables`
 > 的 `/api/present.host|open`、`session-log-export` 的 `/api/session.export`）改为经构建期

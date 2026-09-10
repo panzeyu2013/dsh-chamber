@@ -463,7 +463,7 @@ host-archive-cleanup / sidebar / layout / settings-bridge / connections / client
 connection / open-in / mobile / cli / runtime / upgrade-tools / release-workflow）、
 `build:renderer`、`build:host-packages`、`desktop build:preload`、
 `verify:i18n`（CHANGELOG 双语对 + 重录）、`verify:workflows`、
-`verify-upstream-touchpoints`（C1/C3–C9；C8 默认重建-比对**硬门**，仅 `--no-artifact-rebuild` 降级 advisory；C2 仍 advisory）、
+`verify-upstream-touchpoints`（C1/C3–C10；C8 默认重建-比对**硬门**，C10 版本锚白名单**硬门**，仅 `--no-artifact-rebuild` 让 C8 降级 advisory；C2 仍 advisory）、
 `pnpm install --frozen-lockfile`、`ensure-harness-vendor --check`、
 `node packages/desktop/vendor/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js --version` 冒烟。
 

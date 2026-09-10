@@ -102,6 +102,18 @@ export interface RuntimeProbeOptions {
   hostDomainNames?: readonly string[]
 }
 
+/**
+ * The fixed-size host-identity wire method and the generation that introduced
+ * it. Mirrored from control-plane's `rpc-envelope.ts` (A2 cross-package
+ * single-sourcing): this package deliberately has no dependency on the control
+ * plane, so the two constants are kept textually identical and the gate
+ * `verify-upstream-touchpoints` C10 flags any live version literal outside the
+ * registered anchors.
+ */
+const HOST_IDENTITY_METHOD = 'session/canOpenWorkspacePath'
+const LEGACY_HOST_PROBE_METHOD = 'session/list'
+const HOST_IDENTITY_METHOD_SINCE = '0.1.2-rc.1'
+
 export const SETTINGS_FILE_MAX_BYTES = 16 * 1024 * 1024
 const MAX_TIMER_MS = 2_147_483_647
 const SETTINGS_FILE_READ_CHUNK_BYTES = 64 * 1024
@@ -334,7 +346,7 @@ export async function runRuntimeActivationProbes(opts: RuntimeProbeOptions): Pro
     // activation/rollback behavior identical; the fallback fires the warn
     // sink so upstream method drift never goes silent.
     (async (): Promise<ProbeResult> => {
-      const name = 'session/canOpenWorkspacePath'
+      const name = HOST_IDENTITY_METHOD
       try {
         const response = await call(name, { args: {} })
         return typeof response.result?.value === 'boolean'
@@ -343,7 +355,7 @@ export async function runRuntimeActivationProbes(opts: RuntimeProbeOptions): Pro
       } catch (error) {
         if (identityMethodNotFound(error)) {
           try {
-            const legacy = await call('session/list', { args: { _request: {} } })
+            const legacy = await call(LEGACY_HOST_PROBE_METHOD, { args: { _request: {} } })
             // IDENTITY-LEG DIVERGENCE (stage2 ruling, 2026): the cp twin
             // (dsh-client.ts probeHostIdentity) only requires an object; this
             // core leg demands Array.isArray(items) — align only via a probe-
@@ -362,7 +374,7 @@ export async function runRuntimeActivationProbes(opts: RuntimeProbeOptions): Pro
             // Warn only after the fallback SUCCEEDED — same timing as the
             // control-plane probeHostIdentity; a both-404 or failing legacy
             // fallback is already loud on its own.
-            opts.warn?.(`runtime activation session probe: ${name} answered HTTP 404 while the legacy session/list probe succeeded — the runtime tree predates the identity method (dsh < 0.1.2-rc.1); the legacy probe response grows with session data`)
+            opts.warn?.(`runtime activation session probe: ${name} answered HTTP 404 while the legacy ${LEGACY_HOST_PROBE_METHOD} probe succeeded — the runtime tree predates the identity method (dsh < ${HOST_IDENTITY_METHOD_SINCE}); the legacy probe response grows with session data`)
             return { name, ok: true }
           } catch (legacyError) {
             if (identityMethodNotFound(legacyError)) {
