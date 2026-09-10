@@ -74,6 +74,19 @@ export const ELECTRON_CACHE_ROOT_ENV = 'DSH_CHAMBER_ELECTRON_CACHE_ROOT'
 export const ELECTRON_PKG_DIR_ENV = 'DSH_CHAMBER_ELECTRON_PKG_DIR'
 /** Freshness marker written inside the shared dist dir. */
 export const DIST_META_FILE = '.electron-dist.json'
+
+/**
+ * The dev-mode renderer artifact the launcher lazily builds when missing:
+ * `<desktop>/dist/web/index.html`. That path is the contract of THREE places —
+ * `packages/renderer/vite.config.mjs` (`build.outDir: '../desktop/dist/web'`),
+ * `main.ts` (`webDistDir: <pkg>/dist/web`, the dir the control plane serves and
+ * injects the boot manifest into), and this constant. It used to be read as
+ * `dist/index.html` here, which after the composite-renderer move (2026-09-03)
+ * no longer exists — so EVERY `pnpm run dev*` start paid a full
+ * `build:renderer` (measured ~9 s warm, worse cold) before Electron even
+ * launched. `electron-shared.test.mjs` locks the three in step.
+ */
+export const RENDERER_DIST_RELATIVE = ['dist', 'web', 'index.html']
 /** Stale tmp-sibling cleanup threshold (crashed materializations leave ~300MB
  * `${distDir}.tmp-*` orphans; younger dirs may belong to a concurrent run). */
 const TMP_STALE_MS = 60 * 60 * 1000
