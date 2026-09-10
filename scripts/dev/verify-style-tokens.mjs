@@ -68,6 +68,7 @@
  */
 
 import { createHash } from 'node:crypto'
+import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { basename, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -132,6 +133,31 @@ function fail(message) {
   hardFails += 1
 }
 
+/**
+ * Directories git ignores (one `ls-files` call, `--directory` collapses each
+ * ignored tree to its root). The scan面 is "everything the repository owns",
+ * and a filesystem walk cannot know that: `packages/desktop/.dev-user-data/`
+ * is ignored local state that holds OTHER checkouts (`dsh-home/worktrees/…`),
+ * so walking into it audited a stranger's tree and failed the gate on files
+ * this repository does not contain (2026-09-10, merge of `compare` — the gate
+ * passed in CI only because a fresh runner has no dev state).
+ */
+function ignoredDirs() {
+  const roots = new Set()
+  try {
+    const out = execFileSync('git', ['ls-files', '--others', '--ignored', '--exclude-standard', '--directory', '-z'],
+      { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
+    for (const entry of out.split('\0')) {
+      if (entry !== '') roots.add(join(ROOT, entry))
+    }
+  } catch {
+    // No git (or not a work tree): fall back to the name-based skip list.
+  }
+  return roots
+}
+
+const IGNORED_DIRS = ignoredDirs()
+
 function walk(dir, out = []) {
   let entries
   try {
@@ -142,7 +168,9 @@ function walk(dir, out = []) {
   for (const entry of entries) {
     if (entry.isDirectory()) {
       if (SKIP_DIRS.has(entry.name)) continue
-      walk(join(dir, entry.name), out)
+      const child = join(dir, entry.name)
+      if (IGNORED_DIRS.has(child) || IGNORED_DIRS.has(`${child}/`)) continue
+      walk(child, out)
     } else if (STYLE_FILE.test(entry.name)) {
       out.push(join(dir, entry.name))
     }
