@@ -21,12 +21,12 @@ __export(prune_runtime_exports, {
   pruneRuntimeArtifacts: () => pruneRuntimeArtifacts
 });
 import { existsSync as existsSync3, readdirSync as readdirSync3, rmSync as rmSync2 } from "node:fs";
-import { join as join5 } from "node:path";
+import { join as join6 } from "node:path";
 function pruneRuntimeArtifacts(root) {
-  const pnpmDir = join5(root, "node_modules", ".pnpm");
+  const pnpmDir = join6(root, "node_modules", ".pnpm");
   function packageDirs(rel) {
     const dirs = /* @__PURE__ */ new Set();
-    const top = join5(root, "node_modules", rel);
+    const top = join6(root, "node_modules", rel);
     if (existsSync3(top)) dirs.add(top);
     let pnpmEntries = [];
     try {
@@ -34,26 +34,26 @@ function pruneRuntimeArtifacts(root) {
     } catch {
     }
     for (const entry of pnpmEntries) {
-      const pkg = join5(pnpmDir, entry, "node_modules", rel);
+      const pkg = join6(pnpmDir, entry, "node_modules", rel);
       if (existsSync3(pkg)) dirs.add(pkg);
     }
     return [...dirs];
   }
   for (const pkg of packageDirs("node-pty")) {
     for (const sub of ["deps", "third_party", "src", "scripts", "typings", "binding.gyp"]) {
-      rmSync2(join5(pkg, sub), { recursive: true, force: true });
+      rmSync2(join6(pkg, sub), { recursive: true, force: true });
     }
-    const prebuilds = join5(pkg, "prebuilds");
+    const prebuilds = join6(pkg, "prebuilds");
     if (existsSync3(prebuilds)) {
       const current = `${process.platform}-${process.arch}`;
       for (const entry of readdirSync3(prebuilds)) {
-        if (entry !== current) rmSync2(join5(prebuilds, entry), { recursive: true, force: true });
+        if (entry !== current) rmSync2(join6(prebuilds, entry), { recursive: true, force: true });
       }
     }
   }
   for (const rel of ["@mistralai/mistralai", "openai"]) {
     for (const pkg of packageDirs(rel)) {
-      for (const sub of ["src", "examples", "tests"]) rmSync2(join5(pkg, sub), { recursive: true, force: true });
+      for (const sub of ["src", "examples", "tests"]) rmSync2(join6(pkg, sub), { recursive: true, force: true });
     }
   }
   let removedFiles = 0;
@@ -61,7 +61,7 @@ function pruneRuntimeArtifacts(root) {
   const countFiles = (dir) => {
     let n = 0;
     for (const entry of readdirSync3(dir, { withFileTypes: true })) {
-      const full = join5(dir, entry.name);
+      const full = join6(dir, entry.name);
       if (entry.isDirectory()) n += countFiles(full);
       else n += 1;
     }
@@ -69,7 +69,7 @@ function pruneRuntimeArtifacts(root) {
   };
   const walk = (dir) => {
     for (const entry of readdirSync3(dir, { withFileTypes: true })) {
-      const full = join5(dir, entry.name);
+      const full = join6(dir, entry.name);
       if (entry.isDirectory()) {
         if (PRUNE_DIR_NAMES.has(entry.name)) {
           removedFiles += countFiles(full);
@@ -186,6 +186,12 @@ function delayedRollbackTarget(journal) {
   });
 }
 
+// src/runtime-probes.ts
+import { constants } from "node:fs";
+import { open } from "node:fs/promises";
+import { join } from "node:path";
+import { TextDecoder } from "node:util";
+
 // src/sanitize-error.ts
 function sanitizeErrorText(message, keep = []) {
   const held = [];
@@ -200,9 +206,296 @@ function sanitizeErrorText(message, keep = []) {
   return redacted.replace(/__DSH_KEEP_(\d+)__/g, (token, rawIndex) => held[Number(rawIndex)] ?? token);
 }
 
+// src/runtime-probes.ts
+var HOST_IDENTITY_METHOD = "session/canOpenWorkspacePath";
+var LEGACY_HOST_PROBE_METHOD = "session/list";
+var HOST_IDENTITY_METHOD_SINCE = "0.1.2-rc.1";
+var PROBE_TEXT_KEEP_TOKENS = [...REQUIRED_ACTIVATION_PROBES, LEGACY_HOST_PROBE_METHOD];
+var SETTINGS_FILE_MAX_BYTES = 16 * 1024 * 1024;
+var MAX_TIMER_MS = 2147483647;
+var SETTINGS_FILE_READ_CHUNK_BYTES = 64 * 1024;
+var COMMAND_SYNTAX_MISS = "dsh-chamber-activation-probe";
+var COMMAND_MISSING_SESSION = "__dsh_chamber_missing_session_probe__";
+function renderError(error) {
+  try {
+    return error instanceof Error ? error.message : String(error);
+  } catch {
+    return "<unrenderable error>";
+  }
+}
+var resultError = (error, method) => {
+  const withoutQuotedPaths = renderError(error).replace(/(['"])(?:[A-Za-z]:[\\/]|\/)[^'"\r\n]*\1/gu, "[path]");
+  return sanitizeErrorText(withoutQuotedPaths, [method]).slice(0, 2e3);
+};
+function abortReason(signal) {
+  if (signal.reason instanceof Error) return signal.reason;
+  return new Error(typeof signal.reason === "string" ? signal.reason : "runtime probe aborted");
+}
+function raceWithSignal(operation, signal) {
+  if (signal.aborted) return Promise.reject(abortReason(signal));
+  return new Promise((resolve3, reject) => {
+    const onAbort = () => {
+      signal.removeEventListener("abort", onAbort);
+      reject(abortReason(signal));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    operation.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve3(value);
+      },
+      (error) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      }
+    );
+  });
+}
+function safeFsCode(error) {
+  const code = error !== null && typeof error === "object" && "code" in error ? error.code : void 0;
+  return typeof code === "string" && /^[A-Z0-9_]{1,32}$/u.test(code) ? ` (${code})` : "";
+}
+async function readBoundedRegularUtf8File(filePath, signal) {
+  signal.throwIfAborted();
+  let handle;
+  try {
+    handle = await open(filePath, constants.O_RDONLY | constants.O_NOFOLLOW);
+  } catch (error) {
+    throw new Error(`settings.yaml could not be opened${safeFsCode(error)}`);
+  }
+  try {
+    let info;
+    try {
+      info = await handle.stat();
+    } catch (error) {
+      throw new Error(`settings.yaml could not be inspected${safeFsCode(error)}`);
+    }
+    if (!info.isFile()) throw new Error("settings.yaml is not a regular file");
+    if (!Number.isSafeInteger(info.size) || info.size < 0 || info.size > SETTINGS_FILE_MAX_BYTES) {
+      throw new Error("settings.yaml is unexpectedly large");
+    }
+    const capacity = Math.min(SETTINGS_FILE_MAX_BYTES + 1, Math.max(1, info.size + 1));
+    const bytes = Buffer.allocUnsafe(capacity);
+    let offset = 0;
+    while (offset < capacity) {
+      signal.throwIfAborted();
+      const length = Math.min(SETTINGS_FILE_READ_CHUNK_BYTES, capacity - offset);
+      let bytesRead;
+      try {
+        const readResult = await handle.read(bytes, offset, length, null);
+        bytesRead = readResult.bytesRead;
+      } catch (error) {
+        throw new Error(`settings.yaml could not be read${safeFsCode(error)}`);
+      }
+      if (bytesRead === 0) break;
+      offset += bytesRead;
+    }
+    if (offset !== info.size || offset > SETTINGS_FILE_MAX_BYTES) {
+      throw new Error("settings.yaml changed while being read or is unexpectedly large");
+    }
+    signal.throwIfAborted();
+    try {
+      new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(0, offset));
+    } catch {
+      throw new Error("settings.yaml is not valid UTF-8");
+    }
+  } finally {
+    await handle.close().catch(() => {
+    });
+  }
+}
+function objectValue(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+function graphValue(value) {
+  return objectValue(value) && Array.isArray(value.entries);
+}
+function settingsValue(value) {
+  return objectValue(value) && Array.isArray(value.namespaces);
+}
+function expectedGitValidationMiss(value) {
+  if (!objectValue(value)) return false;
+  const result = value;
+  if (result.ok !== false || !objectValue(result.error)) return false;
+  return result.error.code === "invalid-input";
+}
+function archiveCleanupProbeShape(value) {
+  if (!objectValue(value)) return "malformed";
+  const domain = value;
+  if (domain.ok === true) return objectValue(domain.value) ? "ok" : "malformed";
+  if (domain.ok === false) return objectValue(domain.error) ? "business-failure" : "malformed";
+  return "malformed";
+}
+function identityMethodNotFound(error) {
+  if (typeof error !== "object" || error === null) return false;
+  return error.status === 404;
+}
+async function runRuntimeActivationProbes(opts) {
+  const windowMs = opts.windowMs ?? 6e4;
+  const rpcTimeoutMs = opts.rpcTimeoutMs ?? 7500;
+  if (!Number.isInteger(windowMs) || windowMs <= 0 || windowMs > MAX_TIMER_MS) {
+    throw new Error("probe window must be a positive timer-safe integer");
+  }
+  if (!Number.isInteger(rpcTimeoutMs) || rpcTimeoutMs <= 0 || rpcTimeoutMs > MAX_TIMER_MS) {
+    throw new Error("RPC timeout must be a positive timer-safe integer");
+  }
+  const windowSignal = AbortSignal.timeout(windowMs);
+  const signal = opts.signal === void 0 ? windowSignal : AbortSignal.any([opts.signal, windowSignal]);
+  const perCallTimeoutMs = Math.min(windowMs, rpcTimeoutMs);
+  const call = (method, payload, maxResponseBytes) => {
+    if (signal.aborted) return Promise.reject(abortReason(signal));
+    const rpcDeadline = new AbortController();
+    const timer = setTimeout(
+      () => rpcDeadline.abort(new Error("runtime RPC probe timed out")),
+      perCallTimeoutMs
+    );
+    const rpcSignal = AbortSignal.any([signal, rpcDeadline.signal]);
+    const operation = Promise.resolve().then(() => opts.call(opts.baseUrl, method, payload, {
+      signal: rpcSignal,
+      timeoutMs: perCallTimeoutMs,
+      ...maxResponseBytes === void 0 ? {} : { maxResponseBytes }
+    }));
+    return raceWithSignal(operation, rpcSignal).finally(() => clearTimeout(timer));
+  };
+  let settingsRpcOk = false;
+  const probe = async (name, method, payload, accept, maxResponseBytes) => {
+    try {
+      const response = await call(method, payload, maxResponseBytes);
+      const value = response.result?.value;
+      if (accept !== void 0 && !accept(value)) {
+        return { name, ok: false, error: "malformed probe response" };
+      }
+      return { name, ok: true };
+    } catch (error) {
+      return { name, ok: false, error: resultError(error, name) };
+    }
+  };
+  const hostDomainNames = opts.hostDomainNames ?? (opts.hostDomains === false ? [] : [...HOST_DOMAIN_PROBE_NAMES]);
+  const wantsDomain = (domain) => hostDomainNames.includes(domain);
+  const [sessions, graph, settings, git, archiveCleanup] = await Promise.all([
+    // The fixed-size host-identity probe: session/canOpenWorkspacePath is a
+    // zero-arg boolean Remote of the upstream SessionController (`session`
+    // namespace, dsh ≥ 0.1.2-rc.1). Value true AND value false are both
+    // healthy — only method presence / protocol correctness / controller
+    // assembly is under test. A runtime tree that predates the identity
+    // method answers HTTP 404 and is served by the legacy session/list probe
+    // (the same call this layer made before), which keeps old-tree
+    // activation/rollback behavior identical; the fallback fires the warn
+    // sink so upstream method drift never goes silent.
+    (async () => {
+      const name = HOST_IDENTITY_METHOD;
+      try {
+        const response = await call(name, { args: {} });
+        return typeof response.result?.value === "boolean" ? { name, ok: true } : { name, ok: false, error: "malformed probe response" };
+      } catch (error) {
+        if (identityMethodNotFound(error)) {
+          try {
+            const legacy = await call(LEGACY_HOST_PROBE_METHOD, { args: { _request: {} } });
+            const legacyValue = legacy.result?.value;
+            if (typeof legacyValue !== "object" || legacyValue === null || !Array.isArray(legacyValue.items)) {
+              return { name, ok: false, error: "malformed session list" };
+            }
+            opts.warn?.(`runtime activation session probe: ${name} answered HTTP 404 while the legacy ${LEGACY_HOST_PROBE_METHOD} probe succeeded \u2014 the runtime tree predates the identity method (dsh < ${HOST_IDENTITY_METHOD_SINCE}); the legacy probe response grows with session data`);
+            return { name, ok: true };
+          } catch (legacyError) {
+            if (identityMethodNotFound(legacyError)) {
+              return {
+                name,
+                ok: false,
+                error: sanitizeErrorText(
+                  `neither ${name} nor the legacy ${LEGACY_HOST_PROBE_METHOD} method is registered (HTTP 404)`,
+                  PROBE_TEXT_KEEP_TOKENS
+                )
+              };
+            }
+            return { name, ok: false, error: resultError(legacyError, name) };
+          }
+        }
+        return { name, ok: false, error: resultError(error, name) };
+      }
+    })(),
+    wantsDomain("clientGraph/graph") ? probe("clientGraph/graph", "clientGraph/graph", { args: {} }, graphValue) : Promise.resolve(null),
+    (async () => {
+      const outcome = await probe("settings/describe", "settings/describe", { args: {} }, settingsValue, SETTINGS_FILE_MAX_BYTES);
+      settingsRpcOk = outcome.ok;
+      return outcome;
+    })(),
+    // Empty input is rejected by domain validation before any git process or
+    // repository scan. Require that exact business miss; a success value would
+    // no longer prove the request stayed on the side-effect-free path.
+    wantsDomain("gitWorktree/previewCreate") ? probe(
+      "gitWorktree/previewCreate",
+      "gitWorktree/previewCreate",
+      { args: { input: {} } },
+      expectedGitValidationMiss
+    ) : Promise.resolve(null),
+    // archiveCleanup/probe (design 24, M1 execution leg): zero-arg, no
+    // side effects. Presence = a well-formed domain carrier answer; a
+    // well-formed business failure means the domain IS mounted but abnormal
+    // (binding-pending / registry-unreadable / busy) → fail-closed. A
+    // success without an object value is malformed. No legacy fallback —
+    // chamber host domains never downgrade (gitWorktree parity).
+    wantsDomain("archiveCleanup/probe") ? (async () => {
+      const name = "archiveCleanup/probe";
+      try {
+        const response = await call(name, { args: {} });
+        const shape = archiveCleanupProbeShape(response.result?.value);
+        if (shape === "ok") return { name, ok: true };
+        if (shape === "business-failure") {
+          return { name, ok: false, error: "archiveCleanup domain answered a business failure on empty input" };
+        }
+        return { name, ok: false, error: "malformed probe response" };
+      } catch (error) {
+        return { name, ok: false, error: resultError(error, name) };
+      }
+    })() : Promise.resolve(null)
+  ]);
+  let commands;
+  try {
+    await call("commands/execute", {
+      args: {
+        agentId: COMMAND_MISSING_SESSION,
+        line: COMMAND_SYNTAX_MISS,
+        submittedAttachments: []
+      }
+    });
+    commands = { name: "commands/execute", ok: false, error: "missing-session command probe unexpectedly executed" };
+  } catch (error) {
+    const code = typeof error === "object" && error !== null ? error.code : void 0;
+    commands = code === "session/not-found" ? { name: "commands/execute", ok: true } : { name: "commands/execute", ok: false, error: resultError(error, "commands/execute") };
+  }
+  let dataSettings;
+  try {
+    await readBoundedRegularUtf8File(join(opts.dshHome, "settings.yaml"), signal);
+    if (!settingsRpcOk) throw new Error("settings RPC could not parse the active profile");
+    dataSettings = { name: "data.settings", ok: true };
+  } catch (error) {
+    dataSettings = { name: "data.settings", ok: false, error: resultError(error, "data.settings") };
+  }
+  const byName = /* @__PURE__ */ new Map();
+  byName.set(commands.name, commands);
+  byName.set(sessions.name, sessions);
+  if (wantsDomain("clientGraph/graph")) {
+    if (graph === null) throw new Error("internal: chamber host-domain probes did not run");
+    byName.set(graph.name, graph);
+  }
+  if (wantsDomain("gitWorktree/previewCreate")) {
+    if (git === null) throw new Error("internal: chamber host-domain probes did not run");
+    byName.set(git.name, git);
+  }
+  if (wantsDomain("archiveCleanup/probe")) {
+    if (archiveCleanup === null) throw new Error("internal: chamber host-domain probes did not run");
+    byName.set(archiveCleanup.name, archiveCleanup);
+  }
+  byName.set(settings.name, settings);
+  byName.set(dataSettings.name, dataSettings);
+  const expected = activationProbeNamesForDomains(hostDomainNames);
+  return expected.map((name) => byName.get(name) ?? { name, ok: false, error: "probe not wired" });
+}
+
 // src/apply-phase.ts
 function errorText(error) {
-  return sanitizeErrorText(error instanceof Error ? error.message : String(error));
+  return sanitizeErrorText(error instanceof Error ? error.message : String(error), PROBE_TEXT_KEEP_TOKENS);
 }
 function currentPointer(deps) {
   const state = deps.readCurrentPointerState();
@@ -927,7 +1220,7 @@ import {
   statSync
 } from "node:fs";
 import { lstat as lstatP, readdir as readdirP } from "node:fs/promises";
-import { basename as basename3, dirname as dirname2, join as join3 } from "node:path";
+import { basename as basename3, dirname as dirname2, join as join4 } from "node:path";
 import { randomBytes as randomBytes2 } from "node:crypto";
 
 // src/version-safety.ts
@@ -973,7 +1266,7 @@ function sha256FileDigest(filePath) {
 
 // src/tree-writable.ts
 import { chmodSync, existsSync, lstatSync as lstatSync2, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { join as join2 } from "node:path";
 function makeOwnedTreeWritable(treePath) {
   if (!existsSync(treePath)) return;
   const visit = (entryPath) => {
@@ -981,7 +1274,7 @@ function makeOwnedTreeWritable(treePath) {
     if (info.isSymbolicLink()) return;
     if (info.isDirectory()) {
       chmodSync(entryPath, info.mode | 448);
-      for (const entry of readdirSync(entryPath)) visit(join(entryPath, entry));
+      for (const entry of readdirSync(entryPath)) visit(join2(entryPath, entry));
     } else if (info.isFile()) {
       chmodSync(entryPath, info.mode | 384);
     }
@@ -995,7 +1288,7 @@ function makeOwnedTreeWritable(treePath) {
 // src/private-fs.ts
 import {
   closeSync,
-  constants,
+  constants as constants2,
   fchmodSync,
   fstatSync,
   fsyncSync,
@@ -1008,7 +1301,7 @@ import {
   writeFileSync
 } from "node:fs";
 import { randomBytes } from "node:crypto";
-import { basename as basename2, dirname, join as join2, relative as relative2, sep } from "node:path";
+import { basename as basename2, dirname, join as join3, relative as relative2, sep } from "node:path";
 var PRIVATE_RUNTIME_DIR_MODE = 448;
 var PRIVATE_RUNTIME_FILE_MODE = 384;
 function sameIdentity(left, right) {
@@ -1021,19 +1314,19 @@ function samePreciseFileSnapshot(left, right) {
   return left.dev === right.dev && left.ino === right.ino && left.isFile() && right.isFile() && left.nlink === 1n && right.nlink === 1n && left.size === right.size && left.mtimeNs === right.mtimeNs && left.ctimeNs === right.ctimeNs;
 }
 function noFollowReadFlags() {
-  if (typeof constants.O_NOFOLLOW !== "number") {
+  if (typeof constants2.O_NOFOLLOW !== "number") {
     throw new Error("\u5F53\u524D\u5E73\u53F0\u7F3A\u5C11 O_NOFOLLOW\uFF0C\u62D2\u7EDD\u8BBF\u95EE runtime \u79C1\u6709\u72B6\u6001");
   }
-  return constants.O_RDONLY | constants.O_NOFOLLOW;
+  return constants2.O_RDONLY | constants2.O_NOFOLLOW;
 }
 function noFollowWriteFlags() {
-  if (typeof constants.O_NOFOLLOW !== "number") {
+  if (typeof constants2.O_NOFOLLOW !== "number") {
     throw new Error("\u5F53\u524D\u5E73\u53F0\u7F3A\u5C11 O_NOFOLLOW\uFF0C\u62D2\u7EDD\u5199\u5165 runtime \u79C1\u6709\u72B6\u6001");
   }
-  return constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW;
+  return constants2.O_WRONLY | constants2.O_CREAT | constants2.O_EXCL | constants2.O_NOFOLLOW;
 }
 function noFollowDirectoryFlags() {
-  const directory = typeof constants.O_DIRECTORY === "number" ? constants.O_DIRECTORY : 0;
+  const directory = typeof constants2.O_DIRECTORY === "number" ? constants2.O_DIRECTORY : 0;
   return noFollowReadFlags() | directory;
 }
 function syncFd(fd, deps) {
@@ -1133,7 +1426,7 @@ function createPrivateDirectoryNoFollow(path, deps) {
   }
 }
 function runtimeRootPath(baseDir) {
-  return join2(baseDir, "dsh-runtime");
+  return join3(baseDir, "dsh-runtime");
 }
 function ensureRuntimeRootNoFollow(baseDir, deps) {
   inspectRealDirectory(baseDir, false);
@@ -1153,7 +1446,7 @@ function ensureRuntimeSubdirectoryNoFollow(baseDir, ...segments) {
     if (segment === "" || segment === "." || segment === ".." || basename2(segment) !== segment) {
       throw new Error(`\u4E0D\u5B89\u5168\u7684 runtime \u5B50\u76EE\u5F55\u540D\uFF1A${JSON.stringify(segment)}`);
     }
-    current = join2(current, segment);
+    current = join3(current, segment);
     ensurePrivateDirectoryNoFollow(current);
   }
   return current;
@@ -1198,7 +1491,7 @@ function atomicWriteRuntimeFileNoFollow(baseDir, filePath, data, deps) {
   ensureOwnedParent(baseDir, filePath, deps);
   assertReplaceableLeaf(filePath);
   const parent = dirname(filePath);
-  const tmp = join2(parent, `.${basename2(filePath)}.tmp-${randomBytes(6).toString("hex")}`);
+  const tmp = join3(parent, `.${basename2(filePath)}.tmp-${randomBytes(6).toString("hex")}`);
   const parentPin = pinRealDirectory(parent, true);
   let fd = null;
   let tmpIdentity = null;
@@ -1365,7 +1658,7 @@ function quarantineRuntimeFileNoFollow(baseDir, filePath, destinationPath, deps)
       if (segment === "" || segment === "." || segment === ".." || basename2(segment) !== segment) {
         throw new Error("runtime \u9694\u79BB\u6587\u4EF6\u7236\u76EE\u5F55\u4E0D\u5B89\u5168");
       }
-      current = join2(current, segment);
+      current = join3(current, segment);
       inspectRealDirectory(current, true);
     }
   }
@@ -1490,7 +1783,7 @@ var ACTIVATION_JOURNAL_PHASES = [
 ];
 var BUILTIN_ANCHOR_VERSION_TOKEN = "builtin-anchor";
 function runtimeDirPath(baseDir) {
-  return join3(baseDir, "dsh-runtime");
+  return join4(baseDir, "dsh-runtime");
 }
 function atomicWriteJson(baseDir, filePath, payload) {
   atomicWriteRuntimeFileNoFollow(baseDir, filePath, `${JSON.stringify(payload, null, 2)}
@@ -1535,7 +1828,7 @@ function preserveSafeCorruptAuthority(baseDir, filePath, expected) {
   }
 }
 function currentPointerPath(baseDir) {
-  return join3(runtimeDirPath(baseDir), "current");
+  return join4(runtimeDirPath(baseDir), "current");
 }
 function readCurrentPointerState(baseDir) {
   const filePath = currentPointerPath(baseDir);
@@ -1562,7 +1855,7 @@ function clearCurrentPointer(baseDir) {
   removeRuntimeFileNoFollow(baseDir, currentPointerPath(baseDir));
 }
 function overridePath(baseDir) {
-  return join3(runtimeDirPath(baseDir), "override.json");
+  return join4(runtimeDirPath(baseDir), "override.json");
 }
 function nullableString(record, field) {
   const value = record[field];
@@ -1703,7 +1996,7 @@ function deleteOverride(baseDir) {
   removeRuntimeFileNoFollow(baseDir, overridePath(baseDir));
 }
 function activationJournalPath(baseDir) {
-  return join3(runtimeDirPath(baseDir), "activation-journal.json");
+  return join4(runtimeDirPath(baseDir), "activation-journal.json");
 }
 function isActivationJournalPhase(value) {
   return ACTIVATION_JOURNAL_PHASES.includes(value);
@@ -1941,7 +2234,7 @@ function validateCriticalRuntimeFiles(treePath, version, dshManifest) {
     if (typeof expected !== "string" || !CRITICAL_FILE_DIGEST_PATTERN.test(expected)) {
       return `\u7248\u672C\u6811\u5173\u952E\u6587\u4EF6\u6458\u8981\u65E0\u6548\uFF1A${relativePath}`;
     }
-    const candidate = join3(treePath, relativePath);
+    const candidate = join4(treePath, relativePath);
     try {
       const opened = openCriticalRuntimeFile(rootReal, candidate);
       if (opened.kind === "not-regular-file") return `\u7248\u672C\u6811\u5173\u952E\u6587\u4EF6\u4E0D\u662F\u5B9E\u4F53\u6587\u4EF6\uFF1A${relativePath}`;
@@ -1952,7 +2245,7 @@ function validateCriticalRuntimeFiles(treePath, version, dshManifest) {
     }
   }
   try {
-    const packageManifest = JSON.parse(readFileSync2(join3(treePath, CRITICAL_RUNTIME_FILES[0]), "utf8"));
+    const packageManifest = JSON.parse(readFileSync2(join4(treePath, CRITICAL_RUNTIME_FILES[0]), "utf8"));
     if (packageManifest === null || typeof packageManifest !== "object" || Array.isArray(packageManifest)) {
       return "\u7248\u672C\u6811 dsh package manifest \u5F62\u72B6\u65E0\u6548";
     }
@@ -1965,7 +2258,7 @@ function validateCriticalRuntimeFiles(treePath, version, dshManifest) {
 }
 function validateVersionTree(baseDir, version, platform = `${process.platform}-${process.arch}`) {
   if (!isSafeVersion(version)) return { ok: false, error: "\u7248\u672C\u53F7\u4E0D\u662F\u5B89\u5168\u7684\u7CBE\u786E semver" };
-  const treePath = join3(runtimeDirPath(baseDir), version);
+  const treePath = join4(runtimeDirPath(baseDir), version);
   try {
     if (!lstatSync4(treePath).isDirectory()) return { ok: false, error: "\u7248\u672C\u6811\u4E0D\u5B58\u5728\u6216\u4E0D\u662F\u5B9E\u4F53\u76EE\u5F55" };
   } catch {
@@ -1973,7 +2266,7 @@ function validateVersionTree(baseDir, version, platform = `${process.platform}-$
   }
   let manifest;
   try {
-    manifest = JSON.parse(readFileSync2(join3(treePath, "package.json"), "utf8"));
+    manifest = JSON.parse(readFileSync2(join4(treePath, "package.json"), "utf8"));
   } catch {
     return { ok: false, error: "\u7248\u672C\u6811 package.json \u7F3A\u5931\u6216\u635F\u574F" };
   }
@@ -1995,7 +2288,7 @@ function listValidVersionTrees(baseDir, platform = `${process.platform}-${proces
   return listVersionTrees(baseDir).filter((version) => validateVersionTree(baseDir, version, platform).ok);
 }
 function explicitInstallsPath(baseDir) {
-  return join3(runtimeDirPath(baseDir), "explicit-installs.json");
+  return join4(runtimeDirPath(baseDir), "explicit-installs.json");
 }
 function readVersionTimestampMap(filePath) {
   const read = readAuthorityMetadata(filePath, 256 * 1024);
@@ -2066,7 +2359,7 @@ function isExplicitInstall(baseDir, version) {
   return Object.prototype.hasOwnProperty.call(state.versions, version);
 }
 function knownGoodPath(baseDir) {
-  return join3(runtimeDirPath(baseDir), "known-good.json");
+  return join4(runtimeDirPath(baseDir), "known-good.json");
 }
 function listKnownGoodVersions(baseDir) {
   const state = readVersionTimestampMap(knownGoodPath(baseDir));
@@ -2100,7 +2393,7 @@ function forgetKnownGood(baseDir, version) {
   atomicWriteJson(baseDir, filePath, { versions });
 }
 function failurePath(baseDir, version) {
-  return join3(runtimeDirPath(baseDir), "failures", `${assertSafeVersion(version)}.json`);
+  return join4(runtimeDirPath(baseDir), "failures", `${assertSafeVersion(version)}.json`);
 }
 function validFailurePhase(phase) {
   return /^[a-z][a-z0-9-]{0,63}$/.test(phase);
@@ -2171,7 +2464,7 @@ function recordRuntimeFailure(baseDir, input, now = /* @__PURE__ */ new Date()) 
     firstFailedAt: previous?.firstFailedAt ?? timestamp,
     lastFailedAt: timestamp,
     occurrences: (previous?.occurrences ?? 0) + 1,
-    error: sanitizeErrorText(input.error instanceof Error ? input.error.message : String(input.error)).slice(0, 2e3),
+    error: sanitizeErrorText(input.error instanceof Error ? input.error.message : String(input.error), PROBE_TEXT_KEEP_TOKENS).slice(0, 2e3),
     restoreOutcome: input.restoreOutcome ?? null,
     snapshotName: input.snapshotPath ? basename3(input.snapshotPath) : null
   };
@@ -2179,7 +2472,7 @@ function recordRuntimeFailure(baseDir, input, now = /* @__PURE__ */ new Date()) 
   return record;
 }
 function listRuntimeFailures(baseDir) {
-  const dir = join3(runtimeDirPath(baseDir), "failures");
+  const dir = join4(runtimeDirPath(baseDir), "failures");
   let entries;
   try {
     entries = readdirSync2(dir, { withFileTypes: true });
@@ -2232,7 +2525,7 @@ function runtimeSnapshotRetentionState(baseDir) {
       if (name !== null) protectedSnapshotNames.add(name);
     }
   }
-  const failureDir = join3(runtimeDirPath(baseDir), "failures");
+  const failureDir = join4(runtimeDirPath(baseDir), "failures");
   let failureEntries = [];
   try {
     failureEntries = readdirSync2(failureDir);
@@ -2263,7 +2556,7 @@ function isKnownGoodProtected(baseDir, version) {
   return state.kind === "corrupt" || state.kind === "valid" && Object.prototype.hasOwnProperty.call(state.versions, version);
 }
 function isKnownGoodCandidateProtected(baseDir, version) {
-  const filePath = join3(runtimeDirPath(baseDir), "known-good-candidates.json");
+  const filePath = join4(runtimeDirPath(baseDir), "known-good-candidates.json");
   const read = readAuthorityMetadata(filePath, 256 * 1024);
   if (read.kind === "missing") return false;
   if (read.kind === "unsafe") return true;
@@ -2280,7 +2573,7 @@ function isKnownGoodCandidateProtected(baseDir, version) {
 }
 function hasFailureEvidence(baseDir, version) {
   const prefix = `${version}.json`;
-  const failureDir = join3(runtimeDirPath(baseDir), "failures");
+  const failureDir = join4(runtimeDirPath(baseDir), "failures");
   try {
     const info = lstatSync4(failureDir);
     if (info.isSymbolicLink() || !info.isDirectory()) return true;
@@ -2307,7 +2600,7 @@ function isProtectedVersion(baseDir, version, options = {}) {
   if (override.kind === "corrupt") return true;
   if (override.kind === "valid" && (override.record.pending === version || override.record.chosenVersion === version || override.record.resolvedVersion === version)) return true;
   if (hasFailureEvidence(baseDir, version)) return true;
-  if (existsSync2(join3(runtimeDir, `${version}.failed`))) return true;
+  if (existsSync2(join4(runtimeDir, `${version}.failed`))) return true;
   if (options.ignoreExplicitInstall !== true && isExplicitInstall(baseDir, version)) return true;
   return false;
 }
@@ -2317,7 +2610,7 @@ function cleanupExplicitRuntimeVersion(baseDir, version) {
   if (isProtectedVersion(baseDir, safe, { ignoreExplicitInstall: true })) {
     return { removed: false, retentionCleared: false, stillProtected: true };
   }
-  const treePath = join3(runtimeDirPath(baseDir), safe);
+  const treePath = join4(runtimeDirPath(baseDir), safe);
   const exists = existsSync2(treePath);
   if (exists) {
     makeOwnedTreeWritable(treePath);
@@ -2331,7 +2624,7 @@ function cleanupExplicitRuntimeVersion(baseDir, version) {
   return { removed: exists, retentionCleared: true, stillProtected: false };
 }
 function storePruneMarkerPath(baseDir) {
-  return join3(runtimeDirPath(baseDir), "store-prune-needed.json");
+  return join4(runtimeDirPath(baseDir), "store-prune-needed.json");
 }
 function readStorePruneRequest(baseDir) {
   const read = readAuthorityMetadata(storePruneMarkerPath(baseDir), 64 * 1024);
@@ -2358,7 +2651,7 @@ function clearStorePruneRequest(baseDir) {
 }
 function versionTreeMtimeMs(baseDir, version) {
   try {
-    return statSync(join3(runtimeDirPath(baseDir), version)).mtimeMs;
+    return statSync(join4(runtimeDirPath(baseDir), version)).mtimeMs;
   } catch {
     return 0;
   }
@@ -2373,7 +2666,7 @@ function evictVersions(baseDir, keep = 3) {
   let total = trees.length;
   for (const version of removable) {
     if (total <= keep) break;
-    const treePath = join3(runtimeDirPath(baseDir), version);
+    const treePath = join4(runtimeDirPath(baseDir), version);
     makeOwnedTreeWritable(treePath);
     rmSync(treePath, { recursive: true, force: true });
     evicted.push(version);
@@ -2395,9 +2688,9 @@ function isPidAlive(pid, group = false) {
 }
 function readWorkStateMarker(workDir) {
   try {
-    const info = lstatSync4(join3(workDir, "state"));
+    const info = lstatSync4(join4(workDir, "state"));
     if (info.isSymbolicLink() || !info.isFile() || info.size > 32) return null;
-    const value = readFileSync2(join3(workDir, "state"), "utf8").trim();
+    const value = readFileSync2(join4(workDir, "state"), "utf8").trim();
     return value === "preparing" || value === "spawning" || value === "spawned" || value === "failed" ? value : null;
   } catch {
     return null;
@@ -2415,8 +2708,8 @@ function cleanupStaleInstalls(baseDir) {
   const removed = [];
   for (const entry of entries) {
     if (!entry.isDirectory() || !entry.name.startsWith(".work-")) continue;
-    const workDir = join3(runtimeDirPath(baseDir), entry.name);
-    const pidPath = join3(workDir, "pid");
+    const workDir = join4(runtimeDirPath(baseDir), entry.name);
+    const pidPath = join4(workDir, "pid");
     let pid = null;
     let pidEvidence = "missing";
     try {
@@ -2470,7 +2763,7 @@ function measurePathBytes(path) {
   if (info.isSymbolicLink()) return info.size;
   if (!info.isDirectory()) return info.size;
   let total = info.size;
-  for (const entry of readdirSync2(path)) total += measurePathBytes(join3(path, entry));
+  for (const entry of readdirSync2(path)) total += measurePathBytes(join4(path, entry));
   return total;
 }
 function measureDedupedBytes(roots) {
@@ -2488,7 +2781,7 @@ function measureDedupedBytes(roots) {
     seen.add(key);
     if (info.isSymbolicLink() || !info.isDirectory()) return info.size;
     let total2 = info.size;
-    for (const entry of readdirSync2(entryPath)) total2 += visit(join3(entryPath, entry), false);
+    for (const entry of readdirSync2(entryPath)) total2 += visit(join4(entryPath, entry), false);
     return total2;
   };
   let total = 0;
@@ -2502,7 +2795,7 @@ function isRuntimePublishBackupName(name) {
   return version === version.trim() && isSafeVersion(version);
 }
 var RUNTIME_LOGICAL_DISK_LIMIT_BYTES = 10 * 1024 ** 3;
-function runtimeDiskSummary(baseDir, dshHome = join3(baseDir, "state", "dsh-home")) {
+function runtimeDiskSummary(baseDir, dshHome = join4(baseDir, "state", "dsh-home")) {
   const runtime = runtimeDirPath(baseDir);
   const trees = listVersionTrees(baseDir);
   const treeSet = new Set(trees);
@@ -2514,14 +2807,14 @@ function runtimeDiskSummary(baseDir, dshHome = join3(baseDir, "state", "dsh-home
       throw error;
     }
   })();
-  const workDirs = runtimeEntries.filter((entry) => entry.isDirectory() && entry.name.startsWith(".work-")).map((entry) => join3(runtime, entry.name));
-  const failedTrees = runtimeEntries.filter((entry) => entry.isDirectory() && entry.name.endsWith(".failed")).map((entry) => join3(runtime, entry.name));
-  const publishBackups = runtimeEntries.filter((entry) => isRuntimePublishBackupName(entry.name)).map((entry) => join3(runtime, entry.name));
+  const workDirs = runtimeEntries.filter((entry) => entry.isDirectory() && entry.name.startsWith(".work-")).map((entry) => join4(runtime, entry.name));
+  const failedTrees = runtimeEntries.filter((entry) => entry.isDirectory() && entry.name.endsWith(".failed")).map((entry) => join4(runtime, entry.name));
+  const publishBackups = runtimeEntries.filter((entry) => isRuntimePublishBackupName(entry.name)).map((entry) => join4(runtime, entry.name));
   const dshHomeParent = dirname2(dshHome);
   const dshHomeName = basename3(dshHome);
   const restoreBackups = (() => {
     try {
-      return readdirSync2(dshHomeParent, { withFileTypes: true }).filter((entry) => entry.isDirectory() && (entry.name === `${dshHomeName}.old` || entry.name.startsWith(`${dshHomeName}.old-`))).map((entry) => join3(dshHomeParent, entry.name));
+      return readdirSync2(dshHomeParent, { withFileTypes: true }).filter((entry) => entry.isDirectory() && (entry.name === `${dshHomeName}.old` || entry.name.startsWith(`${dshHomeName}.old-`))).map((entry) => join4(dshHomeParent, entry.name));
     } catch (error) {
       if (error.code === "ENOENT") return [];
       throw error;
@@ -2531,21 +2824,21 @@ function runtimeDiskSummary(baseDir, dshHome = join3(baseDir, "state", "dsh-home
   for (const entry of runtimeEntries) {
     const name = entry.name;
     const known = treeSet.has(name) && entry.isDirectory() || entry.isDirectory() && name.startsWith(".work-") || entry.isDirectory() && name.endsWith(".failed") || isRuntimePublishBackupName(name) || name === "failures" || name === "metadata-recovery-data" || name === "metadata-recovery-rescue-data" || name === "metadata-recovery.json" || name === ".pnpm-store" || name === ".pnpm-cache" || name === ".install-home" || name === ".xdg-cache" || name === "snapshots" || name === "pre-rollback";
-    if (!known) unclassifiedPaths.push(join3(runtime, name));
+    if (!known) unclassifiedPaths.push(join4(runtime, name));
   }
-  const versionTreeBytes = trees.reduce((sum, version) => sum + measurePathBytes(join3(runtime, version)), 0);
-  const storeBytes = measurePathBytes(join3(runtime, ".pnpm-store"));
-  const cacheBytes = measurePathBytes(join3(runtime, ".pnpm-cache"));
-  const installHomeBytes = measurePathBytes(join3(runtime, ".install-home"));
-  const xdgCacheBytes = measurePathBytes(join3(runtime, ".xdg-cache"));
+  const versionTreeBytes = trees.reduce((sum, version) => sum + measurePathBytes(join4(runtime, version)), 0);
+  const storeBytes = measurePathBytes(join4(runtime, ".pnpm-store"));
+  const cacheBytes = measurePathBytes(join4(runtime, ".pnpm-cache"));
+  const installHomeBytes = measurePathBytes(join4(runtime, ".install-home"));
+  const xdgCacheBytes = measurePathBytes(join4(runtime, ".xdg-cache"));
   const workBytes = workDirs.reduce((sum, dir) => sum + measurePathBytes(dir), 0);
-  const failureBytes = measurePathBytes(join3(runtime, "failures")) + failedTrees.reduce((sum, tree) => sum + measurePathBytes(tree), 0) + publishBackups.reduce((sum, backup) => sum + measurePathBytes(backup), 0) + measurePathBytes(join3(runtime, "metadata-recovery-data")) + measurePathBytes(join3(runtime, "metadata-recovery-rescue-data")) + measurePathBytes(join3(runtime, "metadata-recovery.json"));
-  const snapshotBytes = measurePathBytes(join3(runtime, "snapshots"));
-  const preRollbackBytes = measurePathBytes(join3(runtime, "pre-rollback"));
+  const failureBytes = measurePathBytes(join4(runtime, "failures")) + failedTrees.reduce((sum, tree) => sum + measurePathBytes(tree), 0) + publishBackups.reduce((sum, backup) => sum + measurePathBytes(backup), 0) + measurePathBytes(join4(runtime, "metadata-recovery-data")) + measurePathBytes(join4(runtime, "metadata-recovery-rescue-data")) + measurePathBytes(join4(runtime, "metadata-recovery.json"));
+  const snapshotBytes = measurePathBytes(join4(runtime, "snapshots"));
+  const preRollbackBytes = measurePathBytes(join4(runtime, "pre-rollback"));
   const restoreBackupBytes = restoreBackups.reduce((sum, backup) => sum + measurePathBytes(backup), 0);
   const unclassifiedBytes = measureDedupedBytes(unclassifiedPaths);
   const totalBytes = measureDedupedBytes([
-    ...runtimeEntries.map((entry) => join3(runtime, entry.name)),
+    ...runtimeEntries.map((entry) => join4(runtime, entry.name)),
     ...restoreBackups
   ]);
   return {
@@ -2627,7 +2920,7 @@ async function chargeNodeAsync(path, target, rootMissingIsZero, acc, opts) {
   if (!info.isDirectory()) return;
   const names = await readdirP(path);
   for (const name of names) {
-    await chargeNodeAsync(join3(path, name), target, false, acc, opts);
+    await chargeNodeAsync(join4(path, name), target, false, acc, opts);
   }
 }
 var ENTRY_TARGET_RULES = [
@@ -2652,7 +2945,7 @@ function asyncTargetForEntry(name, isDirectory, treeSet) {
   }
   return "unclassified";
 }
-async function runtimeDiskSummaryAsync(baseDir, dshHome = join3(baseDir, "state", "dsh-home"), options = {}) {
+async function runtimeDiskSummaryAsync(baseDir, dshHome = join4(baseDir, "state", "dsh-home"), options = {}) {
   const opts = {
     // yieldEvery ≤0 会让 visited % yieldEvery 恒为 NaN 而永不让渡（静默退化
     // 为阻塞遍历，2026-09 review）——钳制到 ≥1。
@@ -2690,13 +2983,13 @@ async function runtimeDiskSummaryAsync(baseDir, dshHome = join3(baseDir, "state"
   }
   let restoreBackups = [];
   try {
-    restoreBackups = (await readdirP(dshHomeParent, { withFileTypes: true })).filter((entry) => entry.isDirectory() && (entry.name === `${dshHomeName}.old` || entry.name.startsWith(`${dshHomeName}.old-`))).map((entry) => join3(dshHomeParent, entry.name));
+    restoreBackups = (await readdirP(dshHomeParent, { withFileTypes: true })).filter((entry) => entry.isDirectory() && (entry.name === `${dshHomeName}.old` || entry.name.startsWith(`${dshHomeName}.old-`))).map((entry) => join4(dshHomeParent, entry.name));
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
   }
   for (const entry of runtimeEntries) {
     await chargeNodeAsync(
-      join3(runtime, entry.name),
+      join4(runtime, entry.name),
       asyncTargetForEntry(entry.name, entry.isDirectory, treeSet),
       true,
       acc,
@@ -2980,7 +3273,7 @@ function buildCachedVersionList(cachedVersions, active) {
 }
 
 // src/known-good-monitor.ts
-import { join as join4 } from "node:path";
+import { join as join5 } from "node:path";
 var DEFAULT_HEALTH_POLICY = {
   minUptimeMs: 24 * 60 * 60 * 1e3,
   minBoots: 1
@@ -2993,7 +3286,7 @@ function shouldPromote(candidate, nowMs, policy = DEFAULT_HEALTH_POLICY) {
   return nowMs - candidate.healthWindowStartedAt >= policy.minUptimeMs && candidate.bootCount >= policy.minBoots;
 }
 function knownGoodCandidatesPath(baseDir) {
-  return join4(baseDir, "dsh-runtime", "known-good-candidates.json");
+  return join5(baseDir, "dsh-runtime", "known-good-candidates.json");
 }
 function readCandidates(baseDir) {
   const read = readPrivateFileNoFollow(knownGoodCandidatesPath(baseDir), 256 * 1024);
@@ -3434,8 +3727,8 @@ import {
   rmSync as rmSync3,
   writeFileSync as writeFileSync2
 } from "node:fs";
-import { open } from "node:fs/promises";
-import { join as join6 } from "node:path";
+import { open as open2 } from "node:fs/promises";
+import { join as join7 } from "node:path";
 
 // src/allow-builds.mjs
 var ALLOW_BUILDS = [
@@ -3638,7 +3931,7 @@ function sanitizeInstallerOutput(raw, limit) {
     /\b(token|password|passwd|secret|authorization|cookie)\s*[:=]\s*[^\s,;]+/gi,
     "$1=[redacted]"
   );
-  const sanitized = sanitizeErrorText(withoutNamedSecrets);
+  const sanitized = sanitizeErrorText(withoutNamedSecrets, PROBE_TEXT_KEEP_TOKENS);
   if (Buffer.byteLength(sanitized) <= limit) return sanitized;
   return Buffer.from(sanitized).subarray(0, limit).toString("utf8").replace(/\uFFFD$/u, "");
 }
@@ -3647,7 +3940,7 @@ function errorMessage(error) {
 }
 function criticalFilePath(root, relativePath) {
   const rootReal = realpathSync3(root);
-  const candidate = join6(root, relativePath);
+  const candidate = join7(root, relativePath);
   const opened = openCriticalRuntimeFile(rootReal, candidate);
   if (opened.kind === "not-regular-file") {
     throw new Error(`runtime critical file is not a regular file: ${relativePath}`);
@@ -3683,7 +3976,7 @@ function verifyRuntimeTreeCriticalFiles(root, version) {
   const safeVersion = assertSafeVersion(version);
   let rootManifest;
   try {
-    rootManifest = JSON.parse(readFileSync3(join6(root, "package.json"), "utf8"));
+    rootManifest = JSON.parse(readFileSync3(join7(root, "package.json"), "utf8"));
   } catch (error) {
     throw new Error(`published runtime manifest is missing or invalid: ${sanitizeInstallerOutput(errorMessage(error), 300)}`);
   }
@@ -3720,7 +4013,7 @@ function makeRuntimeTreeReadOnly(root) {
     const info = lstatSync5(entryPath);
     if (info.isSymbolicLink()) return;
     if (info.isDirectory()) {
-      for (const entry of readdirSync4(entryPath)) visit(join6(entryPath, entry));
+      for (const entry of readdirSync4(entryPath)) visit(join7(entryPath, entry));
     } else if (!info.isFile()) {
       throw new Error("runtime version tree contains an unsupported special file");
     }
@@ -3735,15 +4028,15 @@ function removeOwnedTree(root) {
   rmSync3(root, { recursive: true, force: true });
 }
 function failedScenePath(runtimeDir, version) {
-  return join6(runtimeDir, `${assertSafeVersion(version)}.failed`);
+  return join7(runtimeDir, `${assertSafeVersion(version)}.failed`);
 }
 function writeFailedScene(runtimeDir, version, stage, error) {
   const destination = failedScenePath(runtimeDir, version);
-  const tmp = join6(runtimeDir, `.${version}.failed-tmp-${randomBytes3(4).toString("hex")}`);
+  const tmp = join7(runtimeDir, `.${version}.failed-tmp-${randomBytes3(4).toString("hex")}`);
   try {
     createPrivateDirectoryNoFollow(tmp);
     const detail = sanitizeInstallerOutput(errorMessage(error), FAILED_ERROR_LIMIT);
-    writeFileSync2(join6(tmp, "failure.json"), `${JSON.stringify({
+    writeFileSync2(join7(tmp, "failure.json"), `${JSON.stringify({
       schemaVersion: 1,
       version,
       stage,
@@ -4154,7 +4447,7 @@ async function downloadVerifiedRegistryTarball(rawResolution, destination, opts)
       throw new Error(`registry tarball exceeds ${maxBytes} bytes`);
     }
     const total = Number.isFinite(declaredLength) && declaredLength >= 0 ? declaredLength : null;
-    file = await open(destination, "wx", 384);
+    file = await open2(destination, "wx", 384);
     let received = 0;
     for await (const raw of response.body) {
       opts.signal.throwIfAborted();
@@ -4236,7 +4529,7 @@ function reclaimRuntimeCacheContents(baseDir) {
       throw error;
     }
     for (const entry of entries) {
-      const entryPath = join6(dir, entry.name);
+      const entryPath = join7(dir, entry.name);
       let info;
       try {
         info = lstatSync5(entryPath);
@@ -4251,10 +4544,10 @@ function reclaimRuntimeCacheContents(baseDir) {
 async function pruneRuntimeStore(opts) {
   const runtimeDir = ensureRuntimeRootNoFollow(opts.baseDir);
   const deadline = createOperationDeadline(opts.signal, opts.timeoutMs ?? DEFAULT_INSTALL_TIMEOUT_MS);
-  const storeDir = join6(runtimeDir, ".pnpm-store");
-  const installHome = join6(runtimeDir, ".install-home");
-  const xdgCacheDir = join6(runtimeDir, ".xdg-cache");
-  const npmrc = join6(runtimeDir, ".npmrc");
+  const storeDir = join7(runtimeDir, ".pnpm-store");
+  const installHome = join7(runtimeDir, ".install-home");
+  const xdgCacheDir = join7(runtimeDir, ".xdg-cache");
+  const npmrc = join7(runtimeDir, ".npmrc");
   const nodeFn = opts.deps?.node ?? resolveInstallerNodeExecutable;
   const runFn = opts.deps?.run ?? ((args, runOpts) => defaultSupervisor.run(args, runOpts));
   try {
@@ -4297,7 +4590,7 @@ async function pruneRuntimeStore(opts) {
 }
 async function defaultSmoke(node, run, workDir, version, context) {
   const n = node();
-  const bin = join6(workDir, "node_modules", "@deepseek-ai", "dsh", "lib", "bin.js");
+  const bin = join7(workDir, "node_modules", "@deepseek-ai", "dsh", "lib", "bin.js");
   const res = await run([n.file, ...n.args, bin, "--version"], {
     cwd: workDir,
     env: n.env,
@@ -4313,12 +4606,12 @@ async function installRuntimeVersion(opts) {
   const resolution = assertInstallResolution(opts.resolution);
   const version = resolution.version;
   const runtimeDir = ensureRuntimeRootNoFollow(opts.baseDir);
-  const versionTreeDir = join6(runtimeDir, version);
+  const versionTreeDir = join7(runtimeDir, version);
   if (existsSync4(versionTreeDir) && existingRuntimeTreeIsValid(opts.baseDir, version)) {
     throw new Error(`dsh runtime ${version} is already installed and valid; refusing to overwrite it`);
   }
-  const workDir = join6(runtimeDir, `.work-${randomBytes3(4).toString("hex")}`);
-  const backupDir = join6(runtimeDir, `.${version}.publish-backup-${randomBytes3(4).toString("hex")}`);
+  const workDir = join7(runtimeDir, `.work-${randomBytes3(4).toString("hex")}`);
+  const backupDir = join7(runtimeDir, `.${version}.publish-backup-${randomBytes3(4).toString("hex")}`);
   let stage = "prepare";
   let deadline = null;
   let previousTreeBackedUp = false;
@@ -4345,14 +4638,14 @@ async function installRuntimeVersion(opts) {
     const renameFn = opts.deps?.rename ?? renameSync2;
     const makeReadOnlyFn = opts.deps?.makeReadOnly ?? makeRuntimeTreeReadOnly;
     const verifyPublishedFn = opts.deps?.verifyPublished ?? verifyRuntimeTreeCriticalFiles;
-    const storeDir = join6(runtimeDir, ".pnpm-store");
-    const cacheDir = join6(runtimeDir, ".pnpm-cache");
-    const installHome = join6(runtimeDir, ".install-home");
-    const xdgCacheDir = join6(runtimeDir, ".xdg-cache");
-    const npmrc = join6(runtimeDir, ".npmrc");
-    const pidPath = join6(workDir, "pid");
-    const tarballPath = join6(workDir, "dsh-runtime-package.tgz");
-    const statePath = join6(workDir, "state");
+    const storeDir = join7(runtimeDir, ".pnpm-store");
+    const cacheDir = join7(runtimeDir, ".pnpm-cache");
+    const installHome = join7(runtimeDir, ".install-home");
+    const xdgCacheDir = join7(runtimeDir, ".xdg-cache");
+    const npmrc = join7(runtimeDir, ".npmrc");
+    const pidPath = join7(workDir, "pid");
+    const tarballPath = join7(workDir, "dsh-runtime-package.tgz");
+    const statePath = join7(workDir, "state");
     const writeState = (value) => {
       atomicWriteRuntimeFileNoFollow(opts.baseDir, statePath, `${value}
 `);
@@ -4381,14 +4674,14 @@ async function installRuntimeVersion(opts) {
     ensureRuntimeSubdirectoryNoFollow(opts.baseDir, ".xdg-cache");
     atomicWriteRuntimeFileNoFollow(opts.baseDir, npmrc, "");
     writeState("preparing");
-    atomicWriteRuntimeFileNoFollow(opts.baseDir, join6(workDir, "package.json"), `${JSON.stringify({
+    atomicWriteRuntimeFileNoFollow(opts.baseDir, join7(workDir, "package.json"), `${JSON.stringify({
       name: "dsh-runtime-install",
       version: INSTALL_STUB_VERSION,
       private: true,
       dependencies: { "@deepseek-ai/dsh": "file:./dsh-runtime-package.tgz" }
     }, null, 2)}
 `);
-    atomicWriteRuntimeFileNoFollow(opts.baseDir, join6(workDir, "pnpm-workspace.yaml"), `minimumReleaseAge: 0
+    atomicWriteRuntimeFileNoFollow(opts.baseDir, join7(workDir, "pnpm-workspace.yaml"), `minimumReleaseAge: 0
 allowBuilds:
 ${renderAllowBuildsBlock()}
 `);
@@ -4453,7 +4746,7 @@ ${renderAllowBuildsBlock()}
     });
     deadline.signal.throwIfAborted();
     stage = "manifest";
-    const manifest = JSON.parse(readFileSync3(join6(workDir, "package.json"), "utf8"));
+    const manifest = JSON.parse(readFileSync3(join7(workDir, "package.json"), "utf8"));
     manifest.dependencies = { "@deepseek-ai/dsh": version };
     manifest.dsh = {
       platform: `${process.platform}-${process.arch}`,
@@ -4461,7 +4754,7 @@ ${renderAllowBuildsBlock()}
       integrity: resolution.integrity,
       criticalFiles: computeCriticalDigests(workDir, version)
     };
-    atomicWriteRuntimeFileNoFollow(opts.baseDir, join6(workDir, "package.json"), `${JSON.stringify(manifest, null, 2)}
+    atomicWriteRuntimeFileNoFollow(opts.baseDir, join7(workDir, "package.json"), `${JSON.stringify(manifest, null, 2)}
 `);
     rmSync3(pidPath, { force: true });
     deadline.signal.throwIfAborted();
@@ -4546,7 +4839,7 @@ ${renderAllowBuildsBlock()}
 import {
   chmodSync as chmodSync3,
   closeSync as closeSync3,
-  constants as constants3,
+  constants as constants4,
   existsSync as existsSync6,
   fstatSync as fstatSync3,
   fsyncSync as fsyncSync2,
@@ -4565,7 +4858,7 @@ import {
   writeSync
 } from "node:fs";
 import { createHash as createHash3, randomBytes as randomBytes5 } from "node:crypto";
-import { basename as basename6, dirname as dirname4, isAbsolute as isAbsolute2, join as join8, relative as relative3, resolve as resolve2, sep as sep3 } from "node:path";
+import { basename as basename6, dirname as dirname4, isAbsolute as isAbsolute2, join as join9, relative as relative3, resolve as resolve2, sep as sep3 } from "node:path";
 
 // src/restore-marker.ts
 var RESTORE_MARKER_BASENAME = "restore-in-progress";
@@ -4574,14 +4867,14 @@ var RESTORE_MARKER_BASENAME = "restore-in-progress";
 import { cp, lstat, mkdir, readdir, rm } from "node:fs/promises";
 import {
   closeSync as closeSync2,
-  constants as constants2,
+  constants as constants3,
   existsSync as existsSync5,
   fchmodSync as fchmodSync2,
   fstatSync as fstatSync2,
   lstatSync as lstatSync6,
   openSync as openSync2
 } from "node:fs";
-import { basename as basename5, dirname as dirname3, join as join7, resolve, sep as sep2 } from "node:path";
+import { basename as basename5, dirname as dirname3, join as join8, resolve, sep as sep2 } from "node:path";
 import { randomBytes as randomBytes4 } from "node:crypto";
 
 // src/rename-retry.ts
@@ -4640,11 +4933,11 @@ function restoreMarkerAuthorityStatus(baseDir) {
   return state.kind === "valid" ? "present" : "unsafe";
 }
 function snapshotPaths(baseDir) {
-  const runtime = join7(baseDir, "dsh-runtime");
+  const runtime = join8(baseDir, "dsh-runtime");
   return {
-    snapshotsDir: join7(runtime, "snapshots"),
-    preRollbackDir: join7(runtime, "pre-rollback"),
-    restoreMarker: join7(runtime, RESTORE_MARKER_BASENAME)
+    snapshotsDir: join8(runtime, "snapshots"),
+    preRollbackDir: join8(runtime, "pre-rollback"),
+    restoreMarker: join8(runtime, RESTORE_MARKER_BASENAME)
   };
 }
 var defaultCopy = async (src, dest) => {
@@ -4724,7 +5017,7 @@ function tightenOwnedDirectory(path) {
   if (before.isSymbolicLink() || !before.isDirectory()) return false;
   let fd = null;
   try {
-    fd = openSync2(path, constants2.O_RDONLY | constants2.O_NOFOLLOW);
+    fd = openSync2(path, constants3.O_RDONLY | constants3.O_NOFOLLOW);
     const opened = fstatSync2(fd);
     if (!opened.isDirectory() || !sameIdentity3(before, opened)) return false;
     fchmodSync2(fd, PRIVATE_DIR_MODE);
@@ -4757,7 +5050,7 @@ async function removeCrashTemporaryEntries(root, relativeRoot) {
   const removed = [];
   for (const entry of entries) {
     if (!entry.name.startsWith(".tmp-")) continue;
-    await rm(join7(root, entry.name), { recursive: true, force: true });
+    await rm(join8(root, entry.name), { recursive: true, force: true });
     removed.push(`${relativeRoot}/${entry.name}`);
   }
   return removed;
@@ -4824,7 +5117,7 @@ async function cleanupSnapshotArtifacts(baseDir, dshHome) {
   const backups = [];
   for (const entry of siblingEntries) {
     if (!restoreBackupNameMatches(homeName, entry.name)) continue;
-    const path = join7(homeParent, entry.name);
+    const path = join8(homeParent, entry.name);
     let info;
     try {
       info = await lstat(path);
@@ -4883,10 +5176,10 @@ function safeSnapshotSource(sourceVersion) {
 }
 async function nextSnapshotPath(snapshotsDir, sourceVersion) {
   let timestamp = Date.now();
-  let candidate = join7(snapshotsDir, `${sourceVersion}-${timestamp}`);
+  let candidate = join8(snapshotsDir, `${sourceVersion}-${timestamp}`);
   while (existsSync5(candidate)) {
     timestamp += 1;
-    candidate = join7(snapshotsDir, `${sourceVersion}-${timestamp}`);
+    candidate = join8(snapshotsDir, `${sourceVersion}-${timestamp}`);
   }
   return candidate;
 }
@@ -4894,7 +5187,7 @@ async function snapshotDshHome(baseDir, dshHome, sourceVersion, copyFn = default
   const paths = snapshotPaths(baseDir);
   const safeSource = safeSnapshotSource(sourceVersion);
   await ensureRuntimeSubdir(baseDir, paths.snapshotsDir);
-  const staging = join7(paths.snapshotsDir, `.tmp-${randomBytes4(6).toString("hex")}`);
+  const staging = join8(paths.snapshotsDir, `.tmp-${randomBytes4(6).toString("hex")}`);
   const finalPath = await nextSnapshotPath(paths.snapshotsDir, safeSource);
   await ensurePrivateDir(staging);
   try {
@@ -4913,7 +5206,7 @@ async function snapshotDshHome(baseDir, dshHome, sourceVersion, copyFn = default
 }
 function newTransactionPaths(dshHome) {
   const id = `${Date.now()}-${randomBytes4(5).toString("hex")}`;
-  const stagingPath = join7(dirname3(dshHome), `.${basename5(dshHome)}.restore-${id}`);
+  const stagingPath = join8(dirname3(dshHome), `.${basename5(dshHome)}.restore-${id}`);
   const preferredBackup = `${dshHome}.old`;
   const backupPath = entryExistsNoFollow(preferredBackup) ? `${preferredBackup}-${id}` : preferredBackup;
   return { stagingPath, backupPath };
@@ -5154,7 +5447,7 @@ async function listSnapshotsForVersion(baseDir, version) {
     throw error;
   }
   const prefix = `${safe}-`;
-  return entries.filter((entry) => entry.isDirectory() && entry.name.startsWith(prefix) && /^\d+$/.test(entry.name.slice(prefix.length))).map((entry) => ({ path: join7(snapshotsDir, entry.name), timestamp: Number(entry.name.slice(prefix.length)) })).sort((a, b) => b.timestamp - a.timestamp).map((entry) => entry.path);
+  return entries.filter((entry) => entry.isDirectory() && entry.name.startsWith(prefix) && /^\d+$/.test(entry.name.slice(prefix.length))).map((entry) => ({ path: join8(snapshotsDir, entry.name), timestamp: Number(entry.name.slice(prefix.length)) })).sort((a, b) => b.timestamp - a.timestamp).map((entry) => entry.path);
 }
 async function findLatestSnapshotForVersion(baseDir, version) {
   return (await listSnapshotsForVersion(baseDir, version))[0] ?? null;
@@ -5162,7 +5455,7 @@ async function findLatestSnapshotForVersion(baseDir, version) {
 async function resolveSnapshotName(baseDir, snapshotName) {
   if (typeof snapshotName !== "string" || snapshotName.length === 0 || snapshotName.length > 255 || basename5(snapshotName) !== snapshotName || snapshotName === "." || snapshotName === "..") return null;
   const { snapshotsDir } = snapshotPaths(baseDir);
-  const candidate = join7(snapshotsDir, snapshotName);
+  const candidate = join8(snapshotsDir, snapshotName);
   return pathIsInside(candidate, snapshotsDir) && await isPublishedSnapshotPath(baseDir, candidate) ? candidate : null;
 }
 function isStashName(name) {
@@ -5191,7 +5484,7 @@ async function listPreRollbackStashes(baseDir) {
 async function resolveStashPath(baseDir, stashName) {
   if (typeof stashName !== "string" || !isStashName(stashName)) return null;
   const { preRollbackDir } = snapshotPaths(baseDir);
-  const candidate = join7(preRollbackDir, stashName);
+  const candidate = join8(preRollbackDir, stashName);
   if (!pathIsInside(candidate, preRollbackDir)) return null;
   if (ownedDirectoryState(candidate) !== "directory" || !tightenOwnedDirectory(candidate)) return null;
   return candidate;
@@ -5199,8 +5492,8 @@ async function resolveStashPath(baseDir, stashName) {
 async function stashPreRollback(baseDir, dshHome, copyFn = defaultCopy) {
   const { preRollbackDir } = snapshotPaths(baseDir);
   await ensureRuntimeSubdir(baseDir, preRollbackDir);
-  const dest = join7(preRollbackDir, `${Date.now()}-${randomBytes4(4).toString("hex")}`);
-  const staging = join7(preRollbackDir, `.tmp-${randomBytes4(6).toString("hex")}`);
+  const dest = join8(preRollbackDir, `${Date.now()}-${randomBytes4(4).toString("hex")}`);
+  const staging = join8(preRollbackDir, `.tmp-${randomBytes4(6).toString("hex")}`);
   await ensurePrivateDir(staging);
   try {
     const sourceState = ownedDirectoryState(dshHome);
@@ -5222,7 +5515,7 @@ async function stashPreRollback(baseDir, dshHome, copyFn = defaultCopy) {
     throw error;
   }
   for (const entry of entries) {
-    const full = join7(preRollbackDir, entry);
+    const full = join8(preRollbackDir, entry);
     if (full !== dest) {
       if (ownedDirectoryState(preRollbackDir) !== "directory") throw new Error("\u56DE\u6EDA\u6682\u5B58\u6839\u76EE\u5F55\u4E0D\u5B89\u5168");
       await rm(full, { recursive: true, force: true }).catch(() => {
@@ -5236,7 +5529,7 @@ function parseSnapshotEntry(snapshotsDir, name) {
   if (match === null || !isSafeVersion(match[1])) return null;
   const timestamp = Number(match[2]);
   if (!Number.isSafeInteger(timestamp)) return null;
-  return { name, path: join7(snapshotsDir, name), sourceVersion: match[1], timestamp };
+  return { name, path: join8(snapshotsDir, name), sourceVersion: match[1], timestamp };
 }
 async function readRestoreSnapshotProtection(baseDir) {
   const paths = snapshotPaths(baseDir);
@@ -5324,7 +5617,7 @@ async function snapshotSummary(baseDir) {
   if (snapshotRootState === "directory") try {
     snapshots = (await readdir(paths.snapshotsDir, { withFileTypes: true })).filter((entry) => entry.isDirectory()).map((entry) => {
       const match = /-(\d+)$/.exec(entry.name);
-      return match === null ? null : { path: join7(paths.snapshotsDir, entry.name), timestamp: Number(match[1]) };
+      return match === null ? null : { path: join8(paths.snapshotsDir, entry.name), timestamp: Number(match[1]) };
     }).filter((entry) => entry !== null && Number.isSafeInteger(entry.timestamp) && !Number.isNaN(new Date(entry.timestamp).getTime())).sort((a, b) => b.timestamp - a.timestamp);
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
@@ -5441,10 +5734,10 @@ function fsyncRegularFileNoFollow(path, label) {
   if (pathInfo.isSymbolicLink() || !pathInfo.isFile() || pathInfo.nlink !== 1) {
     throw new Error(`${label} is not a uniquely linked real file`);
   }
-  const noFollow = typeof constants3.O_NOFOLLOW === "number" ? constants3.O_NOFOLLOW : 0;
+  const noFollow = typeof constants4.O_NOFOLLOW === "number" ? constants4.O_NOFOLLOW : 0;
   let descriptor = null;
   try {
-    descriptor = openSync3(path, constants3.O_RDONLY | noFollow);
+    descriptor = openSync3(path, constants4.O_RDONLY | noFollow);
     const info = fstatSync3(descriptor);
     if (!info.isFile() || info.nlink !== 1 || info.dev !== pathInfo.dev || info.ino !== pathInfo.ino) {
       throw new Error(`${label} identity changed before sync`);
@@ -5457,11 +5750,11 @@ function fsyncRegularFileNoFollow(path, label) {
 function fsyncRealDirectory(path, label) {
   const info = lstatSync7(path);
   if (info.isSymbolicLink() || !info.isDirectory()) throw new Error(`${label} is not a real directory`);
-  const noFollow = typeof constants3.O_NOFOLLOW === "number" ? constants3.O_NOFOLLOW : 0;
-  const directoryOnly = typeof constants3.O_DIRECTORY === "number" ? constants3.O_DIRECTORY : 0;
+  const noFollow = typeof constants4.O_NOFOLLOW === "number" ? constants4.O_NOFOLLOW : 0;
+  const directoryOnly = typeof constants4.O_DIRECTORY === "number" ? constants4.O_DIRECTORY : 0;
   let descriptor = null;
   try {
-    descriptor = openSync3(path, constants3.O_RDONLY | noFollow | directoryOnly);
+    descriptor = openSync3(path, constants4.O_RDONLY | noFollow | directoryOnly);
     const opened = fstatSync3(descriptor);
     if (!opened.isDirectory() || opened.dev !== info.dev || opened.ino !== info.ino) {
       throw new Error(`${label} identity changed before sync`);
@@ -5479,13 +5772,13 @@ function fsyncRealDirectory(path, label) {
 function recoveryRootPaths(baseDirInput, storageKind = "default") {
   const baseDir = normalizeOwnedPath(baseDirInput, "baseDir");
   assertExistingRealDirectory(baseDir, "baseDir");
-  const runtimeDir = join8(baseDir, "dsh-runtime");
+  const runtimeDir = join9(baseDir, "dsh-runtime");
   assertContained(baseDir, runtimeDir, "runtime directory");
   if (existsSync6(runtimeDir)) assertExistingRealDirectory(runtimeDir, "runtime directory");
   return {
     runtimeDir,
-    marker: join8(runtimeDir, RECOVERY_MARKER),
-    dataRoot: join8(
+    marker: join9(runtimeDir, RECOVERY_MARKER),
+    dataRoot: join9(
       runtimeDir,
       storageKind === "marker-rescue" ? RECOVERY_RESCUE_DATA_DIR : RECOVERY_DATA_DIR
     )
@@ -5494,15 +5787,15 @@ function recoveryRootPaths(baseDirInput, storageKind = "default") {
 function recoveryPaths(baseDirInput, id, storageKind = "default") {
   const roots = recoveryRootPaths(baseDirInput, storageKind);
   const safeId = assertRecoveryId(id);
-  const transactionDir = join8(roots.dataRoot, safeId);
+  const transactionDir = join9(roots.dataRoot, safeId);
   const paths = {
     ...roots,
     transactionDir,
-    stashTmp: join8(transactionDir, STASH_TMP_DIR),
-    stash: join8(transactionDir, STASH_DIR),
-    stashReady: join8(transactionDir, STASH_READY),
-    evidence: join8(transactionDir, EVIDENCE_DIR),
-    finalizedReceipt: join8(transactionDir, FINALIZED_RECEIPT)
+    stashTmp: join9(transactionDir, STASH_TMP_DIR),
+    stash: join9(transactionDir, STASH_DIR),
+    stashReady: join9(transactionDir, STASH_READY),
+    evidence: join9(transactionDir, EVIDENCE_DIR),
+    finalizedReceipt: join9(transactionDir, FINALIZED_RECEIPT)
   };
   for (const candidate of Object.values(paths)) {
     if (candidate !== roots.runtimeDir) assertContained(roots.runtimeDir, candidate, "metadata recovery path");
@@ -5590,13 +5883,13 @@ function sameOpaqueBytes(left, right) {
   return left.byteLength === right.byteLength && left.sha256 === right.sha256;
 }
 function fingerprintRegularFile(filePath, retainContent, requireNoFollow = true) {
-  if (requireNoFollow && typeof constants3.O_NOFOLLOW !== "number") {
+  if (requireNoFollow && typeof constants4.O_NOFOLLOW !== "number") {
     throw new Error("this platform cannot safely open recovery-marker evidence");
   }
-  const noFollow = typeof constants3.O_NOFOLLOW === "number" ? constants3.O_NOFOLLOW : 0;
+  const noFollow = typeof constants4.O_NOFOLLOW === "number" ? constants4.O_NOFOLLOW : 0;
   let descriptor = null;
   try {
-    descriptor = openSync3(filePath, constants3.O_RDONLY | noFollow);
+    descriptor = openSync3(filePath, constants4.O_RDONLY | noFollow);
     const before = fstatSync3(descriptor);
     if (!before.isFile() || before.nlink !== 1 || !Number.isSafeInteger(before.size) || before.size < 0) {
       throw new Error("recovery marker is not a bounded regular file");
@@ -5668,11 +5961,11 @@ function assertCopySourceConstraint(source, constraint, openedDevice, openedInod
   if (!isContained(realRoot, realSource)) throw new Error("copy source escaped its pinned root");
 }
 function defaultCopyFile(source, destination, constraint) {
-  const noFollow = constants3.O_NOFOLLOW ?? 0;
+  const noFollow = constants4.O_NOFOLLOW ?? 0;
   let sourceFd = null;
   let destinationFd = null;
   try {
-    sourceFd = openSync3(source, constants3.O_RDONLY | noFollow);
+    sourceFd = openSync3(source, constants4.O_RDONLY | noFollow);
     const sourceInfo = fstatSync3(sourceFd);
     if (!sourceInfo.isFile() || sourceInfo.nlink !== 1) {
       throw new Error("source file is not a uniquely linked regular file");
@@ -5683,7 +5976,7 @@ function defaultCopyFile(source, destination, constraint) {
     assertCopySourceConstraint(source, constraint, sourceInfo.dev, sourceInfo.ino);
     destinationFd = openSync3(
       destination,
-      constants3.O_WRONLY | constants3.O_CREAT | constants3.O_EXCL | noFollow,
+      constants4.O_WRONLY | constants4.O_CREAT | constants4.O_EXCL | noFollow,
       PRIVATE_FILE_MODE
     );
     const buffer = Buffer.allocUnsafe(1024 * 1024);
@@ -5733,7 +6026,7 @@ function writePrivateJson(filePath, payload, runtimeRoot, ops, kind) {
   assertContained(runtimeRoot, filePath, "metadata recovery JSON");
   const parent = dirname4(filePath);
   assertExistingRealDirectory(parent, "metadata recovery JSON parent");
-  const tmp = join8(parent, `.${basename6(filePath)}.tmp-${randomBytes5(4).toString("hex")}`);
+  const tmp = join9(parent, `.${basename6(filePath)}.tmp-${randomBytes5(4).toString("hex")}`);
   assertContained(parent, tmp, "metadata recovery JSON temporary file");
   try {
     writeFileSync3(tmp, `${JSON.stringify(payload, null, 2)}
@@ -5862,7 +6155,7 @@ function detectRuntimeMetadataHealth(baseDir, shellVersion) {
 var ACTIVE_RESTORE_PHASES = /* @__PURE__ */ new Set(["rollback-needed", "restoring", "manual-restoring"]);
 function publishedSnapshotEntryExists(baseDir, snapshotName) {
   try {
-    const info = lstatSync7(join8(snapshotPaths(baseDir).snapshotsDir, snapshotName));
+    const info = lstatSync7(join9(snapshotPaths(baseDir).snapshotsDir, snapshotName));
     return info.isDirectory() && !info.isSymbolicLink();
   } catch {
     return false;
@@ -5913,7 +6206,7 @@ function sourcePathHash(dshHomeInput, runtimeDir) {
 function collectEvidence(runtimeDir, requireSelectionEvidence = true) {
   const entries = readdirSync5(runtimeDir, { withFileTypes: true }).filter((entry) => isSelectionEvidenceBasename(entry.name) || entry.name === RESTORE_MARKER_BASENAME).sort((left, right) => left.name.localeCompare(right.name));
   for (const entry of entries) {
-    const source = join8(runtimeDir, entry.name);
+    const source = join9(runtimeDir, entry.name);
     assertContained(runtimeDir, source, "metadata evidence source");
     const info = lstatSync7(source);
     if (info.isSymbolicLink() || !info.isFile() || info.nlink !== 1) {
@@ -5968,7 +6261,7 @@ function buildSourceTreeManifest(source, manifest = /* @__PURE__ */ new Map()) {
   const identity = sourceTreeIdentity(source);
   manifest.set(source, identity);
   if (identity.children !== null) {
-    for (const child of identity.children) buildSourceTreeManifest(join8(source, child), manifest);
+    for (const child of identity.children) buildSourceTreeManifest(join9(source, child), manifest);
     assertSourceTreeIdentity(source, identity);
   }
   return manifest;
@@ -6018,8 +6311,8 @@ function copySourceTree(source, destination, destinationRoot, sourceRoot, source
   for (const child of expected.children) {
     assertSourceTreeIdentity(source, expected);
     copySourceTree(
-      join8(source, child),
-      join8(destination, child),
+      join9(source, child),
+      join9(destination, child),
       destinationRoot,
       sourceRoot,
       sourceManifest,
@@ -6042,7 +6335,7 @@ function assertStashTreeSafe(path) {
   if (!info.isDirectory()) throw new Error("owned recovery data contains a special filesystem entry");
   for (const entry of readdirSync5(path, { withFileTypes: true })) {
     assertSafeBasename(entry.name, "owned recovery entry");
-    assertStashTreeSafe(join8(path, entry.name));
+    assertStashTreeSafe(join9(path, entry.name));
   }
 }
 function removeOwnedPartialTree(path, transactionDir) {
@@ -6188,8 +6481,8 @@ function newRecoveryRecord(baseDir, builtinVersion, dshHomePathHash, dshHomeWasM
 function archiveEvidenceFile(paths, name, ops) {
   assertSafeBasename(name, "metadata evidence");
   if (!isEvidenceBasename(name)) throw new Error("refusing to archive a non-metadata basename");
-  const source = join8(paths.runtimeDir, name);
-  const destination = join8(paths.evidence, name);
+  const source = join9(paths.runtimeDir, name);
+  const destination = join9(paths.evidence, name);
   assertContained(paths.runtimeDir, source, "metadata evidence source");
   assertContained(paths.evidence, destination, "metadata evidence destination");
   const sourceExists = existsSync6(source);
@@ -6218,14 +6511,14 @@ function assertNoUnplannedEvidence(paths, record) {
     throw new Error(`new runtime metadata appeared during recovery: ${remaining.sort().join(", ")}`);
   }
   for (const name of record.evidenceFiles) {
-    const archivedPath = join8(paths.evidence, name);
+    const archivedPath = join9(paths.evidence, name);
     const info = lstatSync7(archivedPath);
     if (info.isSymbolicLink() || !info.isFile() || info.nlink !== 1) {
       throw new Error(`metadata evidence is incomplete: ${name}`);
     }
   }
   if (record.priorRecoveryMarker !== null) {
-    const priorPath = join8(paths.evidence, PRIOR_RECOVERY_MARKER_EVIDENCE);
+    const priorPath = join9(paths.evidence, PRIOR_RECOVERY_MARKER_EVIDENCE);
     const prior = fingerprintRegularFile(priorPath, false).fingerprint;
     if (!sameOpaqueBytes(prior, record.priorRecoveryMarker)) {
       throw new Error("prior corrupt recovery-marker evidence no longer matches its provenance");
@@ -6276,8 +6569,8 @@ function bootstrapCorruptMetadataRecoveryMarker(options) {
     provenance
   );
   ensurePublishedStash(paths, source.dshHome, provisional, ops);
-  const opaqueTmp = join8(paths.evidence, `.${PRIOR_RECOVERY_MARKER_EVIDENCE}.tmp`);
-  const opaqueEvidence = join8(paths.evidence, PRIOR_RECOVERY_MARKER_EVIDENCE);
+  const opaqueTmp = join9(paths.evidence, `.${PRIOR_RECOVERY_MARKER_EVIDENCE}.tmp`);
+  const opaqueEvidence = join9(paths.evidence, PRIOR_RECOVERY_MARKER_EVIDENCE);
   assertContained(paths.evidence, opaqueTmp, "opaque recovery-marker temporary evidence");
   assertContained(paths.evidence, opaqueEvidence, "opaque recovery-marker evidence");
   try {
@@ -6421,7 +6714,7 @@ function recordMetadataRecoveryProbeFailure(baseDir, expectedRecoveryId, error, 
   assertPublishedStash(paths, state.record);
   assertNoUnplannedEvidence(paths, state.record);
   const timestamp = nowIso(ops);
-  const message = sanitizeErrorText(error instanceof Error ? error.message : String(error)).slice(0, 4e3) || "builtin runtime probe failed";
+  const message = sanitizeErrorText(error instanceof Error ? error.message : String(error), PROBE_TEXT_KEEP_TOKENS).slice(0, 4e3) || "builtin runtime probe failed";
   return checkpoint(paths, {
     ...state.record,
     probeAttempts: state.record.probeAttempts + 1,
@@ -6627,289 +6920,6 @@ var RuntimeOperationFence = class {
     }
   }
 };
-
-// src/runtime-probes.ts
-import { constants as constants4 } from "node:fs";
-import { open as open2 } from "node:fs/promises";
-import { join as join9 } from "node:path";
-import { TextDecoder } from "node:util";
-var HOST_IDENTITY_METHOD = "session/canOpenWorkspacePath";
-var LEGACY_HOST_PROBE_METHOD = "session/list";
-var HOST_IDENTITY_METHOD_SINCE = "0.1.2-rc.1";
-var SETTINGS_FILE_MAX_BYTES = 16 * 1024 * 1024;
-var MAX_TIMER_MS = 2147483647;
-var SETTINGS_FILE_READ_CHUNK_BYTES = 64 * 1024;
-var COMMAND_SYNTAX_MISS = "dsh-chamber-activation-probe";
-var COMMAND_MISSING_SESSION = "__dsh_chamber_missing_session_probe__";
-function renderError(error) {
-  try {
-    return error instanceof Error ? error.message : String(error);
-  } catch {
-    return "<unrenderable error>";
-  }
-}
-var resultError = (error, method) => {
-  const withoutQuotedPaths = renderError(error).replace(/(['"])(?:[A-Za-z]:[\\/]|\/)[^'"\r\n]*\1/gu, "[path]");
-  return sanitizeErrorText(withoutQuotedPaths, [method]).slice(0, 2e3);
-};
-function abortReason(signal) {
-  if (signal.reason instanceof Error) return signal.reason;
-  return new Error(typeof signal.reason === "string" ? signal.reason : "runtime probe aborted");
-}
-function raceWithSignal(operation, signal) {
-  if (signal.aborted) return Promise.reject(abortReason(signal));
-  return new Promise((resolve3, reject) => {
-    const onAbort = () => {
-      signal.removeEventListener("abort", onAbort);
-      reject(abortReason(signal));
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
-    operation.then(
-      (value) => {
-        signal.removeEventListener("abort", onAbort);
-        resolve3(value);
-      },
-      (error) => {
-        signal.removeEventListener("abort", onAbort);
-        reject(error);
-      }
-    );
-  });
-}
-function safeFsCode(error) {
-  const code = error !== null && typeof error === "object" && "code" in error ? error.code : void 0;
-  return typeof code === "string" && /^[A-Z0-9_]{1,32}$/u.test(code) ? ` (${code})` : "";
-}
-async function readBoundedRegularUtf8File(filePath, signal) {
-  signal.throwIfAborted();
-  let handle;
-  try {
-    handle = await open2(filePath, constants4.O_RDONLY | constants4.O_NOFOLLOW);
-  } catch (error) {
-    throw new Error(`settings.yaml could not be opened${safeFsCode(error)}`);
-  }
-  try {
-    let info;
-    try {
-      info = await handle.stat();
-    } catch (error) {
-      throw new Error(`settings.yaml could not be inspected${safeFsCode(error)}`);
-    }
-    if (!info.isFile()) throw new Error("settings.yaml is not a regular file");
-    if (!Number.isSafeInteger(info.size) || info.size < 0 || info.size > SETTINGS_FILE_MAX_BYTES) {
-      throw new Error("settings.yaml is unexpectedly large");
-    }
-    const capacity = Math.min(SETTINGS_FILE_MAX_BYTES + 1, Math.max(1, info.size + 1));
-    const bytes = Buffer.allocUnsafe(capacity);
-    let offset = 0;
-    while (offset < capacity) {
-      signal.throwIfAborted();
-      const length = Math.min(SETTINGS_FILE_READ_CHUNK_BYTES, capacity - offset);
-      let bytesRead;
-      try {
-        const readResult = await handle.read(bytes, offset, length, null);
-        bytesRead = readResult.bytesRead;
-      } catch (error) {
-        throw new Error(`settings.yaml could not be read${safeFsCode(error)}`);
-      }
-      if (bytesRead === 0) break;
-      offset += bytesRead;
-    }
-    if (offset !== info.size || offset > SETTINGS_FILE_MAX_BYTES) {
-      throw new Error("settings.yaml changed while being read or is unexpectedly large");
-    }
-    signal.throwIfAborted();
-    try {
-      new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(0, offset));
-    } catch {
-      throw new Error("settings.yaml is not valid UTF-8");
-    }
-  } finally {
-    await handle.close().catch(() => {
-    });
-  }
-}
-function objectValue(value) {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-function graphValue(value) {
-  return objectValue(value) && Array.isArray(value.entries);
-}
-function settingsValue(value) {
-  return objectValue(value) && Array.isArray(value.namespaces);
-}
-function expectedGitValidationMiss(value) {
-  if (!objectValue(value)) return false;
-  const result = value;
-  if (result.ok !== false || !objectValue(result.error)) return false;
-  return result.error.code === "invalid-input";
-}
-function archiveCleanupProbeShape(value) {
-  if (!objectValue(value)) return "malformed";
-  const domain = value;
-  if (domain.ok === true) return objectValue(domain.value) ? "ok" : "malformed";
-  if (domain.ok === false) return objectValue(domain.error) ? "business-failure" : "malformed";
-  return "malformed";
-}
-function identityMethodNotFound(error) {
-  if (typeof error !== "object" || error === null) return false;
-  return error.status === 404;
-}
-async function runRuntimeActivationProbes(opts) {
-  const windowMs = opts.windowMs ?? 6e4;
-  const rpcTimeoutMs = opts.rpcTimeoutMs ?? 7500;
-  if (!Number.isInteger(windowMs) || windowMs <= 0 || windowMs > MAX_TIMER_MS) {
-    throw new Error("probe window must be a positive timer-safe integer");
-  }
-  if (!Number.isInteger(rpcTimeoutMs) || rpcTimeoutMs <= 0 || rpcTimeoutMs > MAX_TIMER_MS) {
-    throw new Error("RPC timeout must be a positive timer-safe integer");
-  }
-  const windowSignal = AbortSignal.timeout(windowMs);
-  const signal = opts.signal === void 0 ? windowSignal : AbortSignal.any([opts.signal, windowSignal]);
-  const perCallTimeoutMs = Math.min(windowMs, rpcTimeoutMs);
-  const call = (method, payload, maxResponseBytes) => {
-    if (signal.aborted) return Promise.reject(abortReason(signal));
-    const rpcDeadline = new AbortController();
-    const timer = setTimeout(
-      () => rpcDeadline.abort(new Error("runtime RPC probe timed out")),
-      perCallTimeoutMs
-    );
-    const rpcSignal = AbortSignal.any([signal, rpcDeadline.signal]);
-    const operation = Promise.resolve().then(() => opts.call(opts.baseUrl, method, payload, {
-      signal: rpcSignal,
-      timeoutMs: perCallTimeoutMs,
-      ...maxResponseBytes === void 0 ? {} : { maxResponseBytes }
-    }));
-    return raceWithSignal(operation, rpcSignal).finally(() => clearTimeout(timer));
-  };
-  let settingsRpcOk = false;
-  const probe = async (name, method, payload, accept, maxResponseBytes) => {
-    try {
-      const response = await call(method, payload, maxResponseBytes);
-      const value = response.result?.value;
-      if (accept !== void 0 && !accept(value)) {
-        return { name, ok: false, error: "malformed probe response" };
-      }
-      return { name, ok: true };
-    } catch (error) {
-      return { name, ok: false, error: resultError(error, name) };
-    }
-  };
-  const hostDomainNames = opts.hostDomainNames ?? (opts.hostDomains === false ? [] : [...HOST_DOMAIN_PROBE_NAMES]);
-  const wantsDomain = (domain) => hostDomainNames.includes(domain);
-  const [sessions, graph, settings, git, archiveCleanup] = await Promise.all([
-    // The fixed-size host-identity probe: session/canOpenWorkspacePath is a
-    // zero-arg boolean Remote of the upstream SessionController (`session`
-    // namespace, dsh ≥ 0.1.2-rc.1). Value true AND value false are both
-    // healthy — only method presence / protocol correctness / controller
-    // assembly is under test. A runtime tree that predates the identity
-    // method answers HTTP 404 and is served by the legacy session/list probe
-    // (the same call this layer made before), which keeps old-tree
-    // activation/rollback behavior identical; the fallback fires the warn
-    // sink so upstream method drift never goes silent.
-    (async () => {
-      const name = HOST_IDENTITY_METHOD;
-      try {
-        const response = await call(name, { args: {} });
-        return typeof response.result?.value === "boolean" ? { name, ok: true } : { name, ok: false, error: "malformed probe response" };
-      } catch (error) {
-        if (identityMethodNotFound(error)) {
-          try {
-            const legacy = await call(LEGACY_HOST_PROBE_METHOD, { args: { _request: {} } });
-            const legacyValue = legacy.result?.value;
-            if (typeof legacyValue !== "object" || legacyValue === null || !Array.isArray(legacyValue.items)) {
-              return { name, ok: false, error: "malformed session list" };
-            }
-            opts.warn?.(`runtime activation session probe: ${name} answered HTTP 404 while the legacy ${LEGACY_HOST_PROBE_METHOD} probe succeeded \u2014 the runtime tree predates the identity method (dsh < ${HOST_IDENTITY_METHOD_SINCE}); the legacy probe response grows with session data`);
-            return { name, ok: true };
-          } catch (legacyError) {
-            if (identityMethodNotFound(legacyError)) {
-              return { name, ok: false, error: `neither ${name} nor the legacy session/list method is registered (HTTP 404)` };
-            }
-            return { name, ok: false, error: resultError(legacyError, name) };
-          }
-        }
-        return { name, ok: false, error: resultError(error, name) };
-      }
-    })(),
-    wantsDomain("clientGraph/graph") ? probe("clientGraph/graph", "clientGraph/graph", { args: {} }, graphValue) : Promise.resolve(null),
-    (async () => {
-      const outcome = await probe("settings/describe", "settings/describe", { args: {} }, settingsValue, SETTINGS_FILE_MAX_BYTES);
-      settingsRpcOk = outcome.ok;
-      return outcome;
-    })(),
-    // Empty input is rejected by domain validation before any git process or
-    // repository scan. Require that exact business miss; a success value would
-    // no longer prove the request stayed on the side-effect-free path.
-    wantsDomain("gitWorktree/previewCreate") ? probe(
-      "gitWorktree/previewCreate",
-      "gitWorktree/previewCreate",
-      { args: { input: {} } },
-      expectedGitValidationMiss
-    ) : Promise.resolve(null),
-    // archiveCleanup/probe (design 24, M1 execution leg): zero-arg, no
-    // side effects. Presence = a well-formed domain carrier answer; a
-    // well-formed business failure means the domain IS mounted but abnormal
-    // (binding-pending / registry-unreadable / busy) → fail-closed. A
-    // success without an object value is malformed. No legacy fallback —
-    // chamber host domains never downgrade (gitWorktree parity).
-    wantsDomain("archiveCleanup/probe") ? (async () => {
-      const name = "archiveCleanup/probe";
-      try {
-        const response = await call(name, { args: {} });
-        const shape = archiveCleanupProbeShape(response.result?.value);
-        if (shape === "ok") return { name, ok: true };
-        if (shape === "business-failure") {
-          return { name, ok: false, error: "archiveCleanup domain answered a business failure on empty input" };
-        }
-        return { name, ok: false, error: "malformed probe response" };
-      } catch (error) {
-        return { name, ok: false, error: resultError(error, name) };
-      }
-    })() : Promise.resolve(null)
-  ]);
-  let commands;
-  try {
-    await call("commands/execute", {
-      args: {
-        agentId: COMMAND_MISSING_SESSION,
-        line: COMMAND_SYNTAX_MISS,
-        submittedAttachments: []
-      }
-    });
-    commands = { name: "commands/execute", ok: false, error: "missing-session command probe unexpectedly executed" };
-  } catch (error) {
-    const code = typeof error === "object" && error !== null ? error.code : void 0;
-    commands = code === "session/not-found" ? { name: "commands/execute", ok: true } : { name: "commands/execute", ok: false, error: resultError(error, "commands/execute") };
-  }
-  let dataSettings;
-  try {
-    await readBoundedRegularUtf8File(join9(opts.dshHome, "settings.yaml"), signal);
-    if (!settingsRpcOk) throw new Error("settings RPC could not parse the active profile");
-    dataSettings = { name: "data.settings", ok: true };
-  } catch (error) {
-    dataSettings = { name: "data.settings", ok: false, error: resultError(error, "data.settings") };
-  }
-  const byName = /* @__PURE__ */ new Map();
-  byName.set(commands.name, commands);
-  byName.set(sessions.name, sessions);
-  if (wantsDomain("clientGraph/graph")) {
-    if (graph === null) throw new Error("internal: chamber host-domain probes did not run");
-    byName.set(graph.name, graph);
-  }
-  if (wantsDomain("gitWorktree/previewCreate")) {
-    if (git === null) throw new Error("internal: chamber host-domain probes did not run");
-    byName.set(git.name, git);
-  }
-  if (wantsDomain("archiveCleanup/probe")) {
-    if (archiveCleanup === null) throw new Error("internal: chamber host-domain probes did not run");
-    byName.set(archiveCleanup.name, archiveCleanup);
-  }
-  byName.set(settings.name, settings);
-  byName.set(dataSettings.name, dataSettings);
-  const expected = activationProbeNamesForDomains(hostDomainNames);
-  return expected.map((name) => byName.get(name) ?? { name, ok: false, error: "probe not wired" });
-}
 
 // src/runtime-startup.ts
 var FATAL_STARTUP_BLOCK_REASONS = [
@@ -7563,6 +7573,7 @@ export {
   PRIVATE_RUNTIME_DIR_MODE,
   PRIVATE_RUNTIME_FILE_MODE,
   PROBE_NAMES_WITHOUT_HOST_DOMAINS,
+  PROBE_TEXT_KEEP_TOKENS,
   PRUNE_DIR_NAMES,
   PRUNE_FILE_PATTERNS,
   REQUIRED_ACTIVATION_PROBES,

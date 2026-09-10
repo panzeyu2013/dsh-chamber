@@ -14,6 +14,7 @@ import type {
   CurrentPointerState,
 } from './dsh-runtime-store.ts'
 import { ROLLBACK_CONTINUATION_PHASES, delayedRollbackTarget } from './rollback-facts.ts'
+import { PROBE_TEXT_KEEP_TOKENS } from './runtime-probes.ts'
 import { sanitizeErrorText } from './sanitize-error.ts'
 
 export interface ManualRollbackPreparation {
@@ -103,7 +104,7 @@ export interface ApplyOptions {
 }
 
 function errorText(error: unknown): string {
-  return sanitizeErrorText(error instanceof Error ? error.message : String(error))
+  return sanitizeErrorText(error instanceof Error ? error.message : String(error), PROBE_TEXT_KEEP_TOKENS)
 }
 
 function currentPointer(deps: ApplyDeps): string | null {

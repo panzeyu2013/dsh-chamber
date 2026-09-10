@@ -36,6 +36,7 @@ import {
   sha256FileDigest,
 } from './runtime-critical-files.ts'
 import { canonicalRegistryOrigin, isAllowedRegistryUrl, registryRedirectOrigins } from './registry-url.ts'
+import { PROBE_TEXT_KEEP_TOKENS } from './runtime-probes.ts'
 import { sanitizeErrorText } from './sanitize-error.ts'
 import { makeOwnedTreeWritable } from './tree-writable.ts'
 import { assertSafeVersion } from './version-safety.ts'
@@ -177,7 +178,7 @@ export function sanitizeInstallerOutput(raw: string, limit: number): string {
     /\b(token|password|passwd|secret|authorization|cookie)\s*[:=]\s*[^\s,;]+/gi,
     '$1=[redacted]',
   )
-  const sanitized = sanitizeErrorText(withoutNamedSecrets)
+  const sanitized = sanitizeErrorText(withoutNamedSecrets, PROBE_TEXT_KEEP_TOKENS)
   if (Buffer.byteLength(sanitized) <= limit) return sanitized
   return Buffer.from(sanitized).subarray(0, limit).toString('utf8').replace(/\uFFFD$/u, '')
 }

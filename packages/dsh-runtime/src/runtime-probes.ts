@@ -43,6 +43,7 @@ import { join } from 'node:path'
 import { TextDecoder } from 'node:util'
 import {
   HOST_DOMAIN_PROBE_NAMES,
+  REQUIRED_ACTIVATION_PROBES,
   activationProbeNamesForDomains,
   type ProbeResult,
 } from './activation-gate.ts'
@@ -120,6 +121,22 @@ export interface RuntimeProbeOptions {
 const HOST_IDENTITY_METHOD = 'session/canOpenWorkspacePath'
 const LEGACY_HOST_PROBE_METHOD = 'session/list'
 const HOST_IDENTITY_METHOD_SINCE = '0.1.2-rc.1'
+
+/**
+ * Literals the probe engine can write into failure text that the shared path
+ * sanitizer must NOT read as filesystem material: every required probe name
+ * plus the legacy identity fallback method. The POSIX branch of
+ * {@link sanitizeErrorText} matches `word/word` from inside a token, so a pass
+ * WITHOUT this vocabulary republishes `commands/execute` as
+ * `commands[path]` — and no later pass can undo it. Every sanitize pass on the
+ * way to a renderer projection therefore passes this list as `keep` (desktop's
+ * projection wrapper, the gateway's probe summary, and this package's own
+ * failure text). The legacy entry is the one a `REQUIRED_ACTIVATION_PROBES`-only
+ * list misses: the both-404 diagnosis names `session/list` while that method is
+ * deliberately NOT required (a tree predating the identity method is a healthy
+ * old tree, not a broken new one).
+ */
+export const PROBE_TEXT_KEEP_TOKENS = [...REQUIRED_ACTIVATION_PROBES, LEGACY_HOST_PROBE_METHOD] as const
 
 export const SETTINGS_FILE_MAX_BYTES = 16 * 1024 * 1024
 const MAX_TIMER_MS = 2_147_483_647
@@ -388,7 +405,17 @@ export async function runRuntimeActivationProbes(opts: RuntimeProbeOptions): Pro
             return { name, ok: true }
           } catch (legacyError) {
             if (identityMethodNotFound(legacyError)) {
-              return { name, ok: false, error: `neither ${name} nor the legacy session/list method is registered (HTTP 404)` }
+              // Sanitized with the probe vocabulary: the diagnosis names BOTH
+              // methods, and a pass without it turns the legacy name into path
+              // material before any caller can see it.
+              return {
+                name,
+                ok: false,
+                error: sanitizeErrorText(
+                  `neither ${name} nor the legacy ${LEGACY_HOST_PROBE_METHOD} method is registered (HTTP 404)`,
+                  PROBE_TEXT_KEEP_TOKENS,
+                ),
+              }
             }
             return { name, ok: false, error: resultError(legacyError, name) }
           }

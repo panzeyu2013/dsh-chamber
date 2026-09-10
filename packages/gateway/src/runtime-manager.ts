@@ -101,6 +101,7 @@ import {
   createCoalescedRefresher,
   runtimeDiskSummaryAsync,
   runtimeFailureSummary,
+  PROBE_TEXT_KEEP_TOKENS,
   sanitizeErrorText,
   snapshotSummary,
   shouldInvalidate,
@@ -955,7 +956,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
       const failed = probes.filter(probe => !probe.ok)
       return failed.length === 0
         ? null
-        : failed.map(probe => `${probe.name}${probe.error === undefined ? '' : `: ${sanitizeErrorText(probe.error)}`}`).join('; ')
+        : failed.map(probe => `${probe.name}${probe.error === undefined ? '' : `: ${sanitizeErrorText(probe.error, PROBE_TEXT_KEEP_TOKENS)}`}`).join('; ')
     } finally {
       internalSpawn = false
     }

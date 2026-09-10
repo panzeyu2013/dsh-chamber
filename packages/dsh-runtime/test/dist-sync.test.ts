@@ -17,7 +17,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { PROBE_NAMES_WITHOUT_HOST_DOMAINS, REQUIRED_ACTIVATION_PROBES } from '../src/activation-gate.ts'
 import { HOST_DOMAIN_PROBE_NAMES } from '../src/activation-gate.ts'
-import { SETTINGS_FILE_MAX_BYTES } from '../src/runtime-probes.ts'
+import { PROBE_TEXT_KEEP_TOKENS, SETTINGS_FILE_MAX_BYTES } from '../src/runtime-probes.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
 
@@ -42,6 +42,7 @@ test('dist/index.js carries the CURRENT probe-contract constant values (value-le
     ['HOST_DOMAIN_PROBE_NAMES', HOST_DOMAIN_PROBE_NAMES],
     ['PROBE_NAMES_WITHOUT_HOST_DOMAINS', PROBE_NAMES_WITHOUT_HOST_DOMAINS],
     ['SETTINGS_FILE_MAX_BYTES', SETTINGS_FILE_MAX_BYTES],
+    ['PROBE_TEXT_KEEP_TOKENS', PROBE_TEXT_KEEP_TOKENS],
   ]
   for (const [name, expected] of constCases) {
     assert.deepEqual(dist[name], expected, `${name} drifted in the committed dist — rebuild with \`pnpm run build:dsh-runtime\``)

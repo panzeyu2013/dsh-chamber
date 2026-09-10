@@ -14,10 +14,12 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { PROBE_NAMES_WITHOUT_HOST_DOMAINS, REQUIRED_ACTIVATION_PROBES, activationProbeNamesForDomains } from '../src/activation-gate.ts'
 import {
+  PROBE_TEXT_KEEP_TOKENS,
   SETTINGS_FILE_MAX_BYTES,
   runRuntimeActivationProbes,
   type RuntimeProbeCall,
 } from '../src/runtime-probes.ts'
+import { sanitizeErrorText } from '../src/sanitize-error.ts'
 
 interface Fixture {
   root: string
@@ -195,6 +197,51 @@ test('a failing probe reports its method name verbatim and still redacts paths',
   } finally {
     rmSync(fx.root, { recursive: true, force: true })
   }
+})
+
+test('the both-404 legacy diagnosis keeps both method names through a projection pass', async () => {
+  // The composed text names the required identity method AND `session/list`,
+  // which is deliberately NOT part of REQUIRED_ACTIVATION_PROBES. A projection
+  // pass carrying only the required set republishes the legacy name as
+  // `session[path]`, so the vocabulary must cover it (2026-09 review).
+  const fx = fixture()
+  try {
+    const notFound = (): never => {
+      const error = new Error('HTTP 404') as Error & { status: number }
+      error.status = 404
+      throw error
+    }
+    const call: RuntimeProbeCall = async (_base, method, payload) => {
+      fx.calls.push({ method, payload })
+      if (method === 'session/canOpenWorkspacePath' || method === 'session/list') notFound()
+      return { result: { value: successfulValue(method) } }
+    }
+    const results = await runRuntimeActivationProbes({
+      baseUrl: 'http://127.0.0.1:17510',
+      dshHome: fx.dshHome,
+      call,
+      windowMs: 1_000,
+      rpcTimeoutMs: 100,
+    })
+    const identity = results.find(result => result.name === 'session/canOpenWorkspacePath')
+    assert.equal(identity?.ok, false)
+    const raw = identity?.error ?? ''
+    assert.match(raw, /neither session\/canOpenWorkspacePath nor the legacy session\/list method is registered/)
+    // the vocabulary is complete for this text …
+    assert.match(sanitizeErrorText(raw, PROBE_TEXT_KEEP_TOKENS), /session\/list/)
+    // … and a required-set-only pass is exactly what would lose it
+    assert.doesNotMatch(sanitizeErrorText(raw, REQUIRED_ACTIVATION_PROBES), /session\/list/)
+  } finally {
+    rmSync(fx.root, { recursive: true, force: true })
+  }
+})
+
+test('the probe text vocabulary covers every required probe name plus the legacy method', () => {
+  for (const name of REQUIRED_ACTIVATION_PROBES) {
+    assert.equal(PROBE_TEXT_KEEP_TOKENS.includes(name), true, `${name} missing from PROBE_TEXT_KEEP_TOKENS`)
+  }
+  assert.equal(PROBE_TEXT_KEEP_TOKENS.includes('session/list' as typeof PROBE_TEXT_KEEP_TOKENS[number]), true)
+  assert.equal(new Set(PROBE_TEXT_KEEP_TOKENS).size, PROBE_TEXT_KEEP_TOKENS.length, 'no duplicates')
 })
 
 test('the identity probe accepts value false; the closed set never reads session data', async () => {
