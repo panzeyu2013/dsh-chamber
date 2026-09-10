@@ -5,8 +5,9 @@
  * decorators and is exercised by typecheck + M4 boot E2E).
  *
  * Trust model: this code runs inside each dsh host process. All capability
- * views are structural over the OFFICIAL ctx services (verified against the
- * pinned vendor dsh-v0.1.5-alpha.2 b2e3b2a0 — design 24 §10); an unavailable
+ * views are structural over the OFFICIAL ctx services (audited at the then-pin
+ * dsh-v0.1.5-alpha.2 b2e3b2a0, whose session surfaces are unchanged at the
+ * current pin rc.1 183f08e9c6dd — design 24 §10); an unavailable
  * surface refuses loudly with code `registry-unreadable`/`storage`, never a
  * guessed layout. Security-review dispositions (2026-12):
  *  - archived-set member removal runs INSIDE the registry's official
@@ -588,7 +589,7 @@ export function makeHostBinding(ctx: HostCtxServices): ArchiveCleanupHost {
         // mirroring the registry's own insertBefore mutation; official
         // persistence + publication path (in-process, no out-of-process edit
         // — todo-12-B risk does not apply). Guarded at runtime; version-
-        // pinned to dsh-v0.1.5-alpha.2 (design 24 §10/§11).
+        // pinned to dsh-v0.1.5-alpha.2 (unchanged at rc.1; design 24 §10/§11).
         await reg.setState!({ initialized: true, workspaceIds, archivedSessionIds: next })
       }
       try {

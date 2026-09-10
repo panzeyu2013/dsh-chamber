@@ -1239,7 +1239,7 @@ settings-bridge/git/open-in）依旧不注入。机制上无需新能力：控�
 > 文件**（MIT 许可仅保证可阅读，不作为代码来源），只吸收以下设计决策后按
 > chamber 基座完整重写。**重写输入（chamber 自身特性，社区单实例插件均未
 > 处理过）**：
-> 1. **dsh 基线 v0.1.5-alpha.2**（harness pin b2e3b2a0；`dsh-client-web` fork
+> 1. **dsh 基线 v0.1.5-rc.1**（harness pin 183f08e9c6dd；`dsh-client-web` fork
 >    提供 `__ModuleLoader__`、`extraRows`、异步 dispose 缝）：插件按 chamber
 >    现有 `dsh-chamber-client-ui-*` 模板与构建体系写，不采用任何社区的构建
 >    形态（tsdown/内联 CSS 等）；
@@ -1292,7 +1292,7 @@ append-only 无删除方法），走 dsh 实例自身 host 插件（`ctx.inject(
 （`data-mobile-nav="…"` 自有标记 + `[class$="_…"]`）。**chamber 走第三条路且
 更稳**：已 fork `dsh-client-web` 与 `ui-layout`（AGENTS.md 允许改源码的 chamber
 包），可在 fork 内直接加 `data-*` 钩子，不猜选择器；版本随 dsh 基线
-（v0.1.5-alpha.2，harness pin b2e3b2a0）对齐 + 回归测试。断点锚定官方
+（v0.1.5-rc.1，harness pin 183f08e9c6dd）对齐 + 回归测试。断点锚定官方
 `SIDEBAR_AUTO_COLLAPSE`（<1024px）为主断点（mobile-shell 同款），768px 为
 手机档（mobile-adapt 同款），420/359px 微调可选。**档位表第三条**：宽度无关的
 **chrome 档** `(pointer: coarse) and (hover: none)`，
@@ -1462,7 +1462,7 @@ Enter 换行路径另补 `[data-input-scroll]` 内光标揭示——官方 `reve
   做完整，**gateway 现有空 `sw.js` 占位不得演变为"假离线"承诺**（见 §18.5）。
 
 PWA / Web Push 社区实现机制（dsh-ui-mobile，jasondu，npm 0.1.8，MIT，
-2026-08 三天密集开发后停更；其 API 面与 chamber 基线（v0.1.5-alpha.2）已漂移，
+2026-08 三天密集开发后停更；其 API 面与 chamber 基线（停更时 v0.1.5-alpha.2）已漂移，
 只能作机制参照）：
 
 - **双半部架构**：node host 半部（`webServer.tapIndex` 在浏览器解析前注入

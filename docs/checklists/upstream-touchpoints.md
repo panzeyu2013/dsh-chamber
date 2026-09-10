@@ -5,16 +5,16 @@
 > 机器侧门 = `scripts/dev/verify-upstream-touchpoints.mjs`（C1–C10；CI 两条腿在 Bootstrap 后 pre-install 跑
 > `--no-artifact-rebuild`（C1/C3–C10，C8 advisory）、post-install 跑完整门（C8 重建-比对硬失败）；C2 本地 advisory）；
 > 本文件与脚本内的登记表**同源**，改动时两侧同步。
-> 基准：本表以 **dsh-v0.1.5-alpha.2（b2e3b2a01258，harness.commit）** 与 fork 版本标记
-> 0.1.5-alpha.2 为锚（C5 校验）；每次重锚后本表随维护循环刷新（§0 基线速查同步）。
+> 基准：本表以 **dsh-v0.1.5-rc.1（183f08e9c6dd，harness.commit）** 与 fork 版本标记
+> 0.1.5-rc.1 为锚（C5 校验）；每次重锚后本表随维护循环刷新（§0 基线速查同步）。
 
 ## 0. 基线速查
 
 | 项 | 当前值 |
 |---|---|
-| 源码线 pin（harness.commit == submodule gitlink） | `b2e3b2a0125854567a4a5fcba75782e42fe84901`（dsh-v0.1.5-alpha.2） |
-| 运行时线锚（npm `@deepseek-ai/dsh`） | 0.1.5-alpha.2（bundle-dsh 兜底 / desktop vendor 锁文件 / release.yml env / install-gateway.sh / gateway `dshAnchorVersion` / release-preflight `FORK_VERSION`） |
-| fork 版本标记 ×3 | 0.1.5-alpha.2（connection / client-web / api-gateway） |
+| 源码线 pin（harness.commit == submodule gitlink） | `183f08e9c6dde7e36cd2318eaee70b0da08fb35e`（dsh-v0.1.5-rc.1） |
+| 运行时线锚（npm `@deepseek-ai/dsh`） | 0.1.5-rc.1（bundle-dsh 兜底 / desktop vendor 锁文件 / release.yml env / install-gateway.sh / gateway `dshAnchorVersion` / release-preflight `FORK_VERSION`） |
+| fork 版本标记 ×3 | 0.1.5-rc.1（connection / client-web / api-gateway） |
 | vendor 链接数 | 284（ensure-harness-vendor 断言 == 锁文件 importer 集合） |
 | typert remote 装配契约 | 15（C4；+command-feedback/+workspace-files） |
 | covered / factory | **57 / 26**（live 计数；factory ⊆ covered，chamber-entry 锁步断言；+`ui-dockkit`、+`client-file-upload` covered factory，四轮再 +`session-log-export`（deferred）与两个 page-own 跳过 id） |
@@ -104,12 +104,40 @@ host 插件入口/半、上游 `tests/`、`tsdown.config.ts`、上游 README（a
   `tsconfig.json` 的 `../ui-dockkit` reference 有意不镜像——chamber 构面用 paths，无
   references）、api-gateway 版本行；客户端外壳两代槽位模型重放见 `CHANGELOG.md`
   发布节与 design 05 §2 / design 06 的槽位模型契约。
+- dsh-v0.1.5-rc.1（183f08e9c6dd，**已升级**）：三个 fork 副本**仅版本行**——上游
+  counterpart 的 `src/` 零改动（connection 连 README/宿主半都未动，client-web 的
+  `platform.ts`/`seed.ts`/`boot.ts` 未动，api-gateway 仅版本行），实测 preflight
+  pure 0 / 需重放 3（即三个 `package.json`）/ dropped 0。上游 workspace 成员集合不变
+  （vendor 链接仍 **284**：三个同名 fork 与 `website`/`examples`/`python` 三个根一律不镜像，
+  同时含上游 `vendor/*` 根的 cordis 家族 9 个成员）、**无新增 client 行、`dsh.client` 元数据零变化**（官方 client
+  行 **57** 条，两侧集合与元数据逐字相同：47 条由 composite covered、10 条走 extra row）、vendor 补丁集 7 文件 / 21 锚点零漂移、深引 seam
+  （`ui-layout`/`ui-renderer`）仅 `package.json` 版本行。唯一非版本 manifest 变更 =
+  `dsh-llm-deepseek` 新增 `@deepseek-ai/dsh-attachment-local`（host 半依赖，chamber
+  构建面不消费；其锁文件 importer 记录由 `update-vendor` 重生成时带上，见
+  `dsh-upgrade-checklist.md` §4）。上游实质源码改动（23 文件）全部落在不被 chamber
+  构建面接管的面上：`ui-sidebar-{files,right,documentpreview}` 三行的 guide/preview
+  精修（extra row，由实例侧 bundle 提供；含 `definition.ts`→`.tsx` 包内改名）、
+  `ui-chat` StatsPills 的条件统计行、`ui-primitives` `CodeBlock` 新增
+  `contentRef` + `[data-code-block-content]` 包装、`ui-dockkit` 两条 `z-index`、
+  `cordis-client-runner` 的 slot-catalog 文档指针；base bundle 默认模型
+  `deepseek-v4-flash` → **`deepseek-flash`**（见 CHANGELOG 发布节）。新登记：
+  `SidebarRightGuideEntry.description?`（可选，纯增量）、`sidebar.right.tab.document`
+  槽 props 新增**必填** `scrollportRef`（chamber 未实现该槽渲染器）。
+- **平台词 `ui-primitives` 的跨代耦合（rc.1 新增，登记于 STATUS）**：实例侧
+  `ui-sidebar-documentpreview` 的代码预览现在**行为上依赖**与 composite 同代的
+  `ui-primitives`（`CodeBlock` 的 `contentRef` 经 `[data-code-block-content]` 成为其
+  唯一滚动/行定位锚点）。composite 比实例旧一代时，该行失去独立滚动区、代码行
+  定位失效（纯文本仍可用）——即 C3「不 seed ui-primitives、由 covered factory 回答」
+  这一偏差在版本歪斜下从「体积优化」升级为「可见功能面」。
 - **契约镜像补充（alpha.2 新增，2026-09 复核）**：composite 首屏 `ui-chat` 的 cordis
   inject 新增 `sidebarRight`（由 host-graph extra row `ui-sidebar-right` 提供）与
   `resources`（`client-resources` 行）——chamber-entry 新增
   `assertRequiredExtraRowServices` 有界探针（纯判定在 `src/required-extra-rows.ts`，
   定时器挂 ctx 生命周期）。该「首屏依赖 extra row 服务」耦合是本表 §4 之外的**新触点类别**：
   上游新增 client 行若被复合首屏 inject，需同步登记并在探针集合里加名。
+  **后续收敛（勿按本条误读现状）**：`fileUpload` 于三轮转为 covered、`resources`
+  于四轮以「非 inject 座、与 sidebarRight 同源」删除——探针集合现为
+  `['sidebarRight']` 一条（权威在 `required-extra-rows.ts` 头注）；rc.1 该集合不变。
 - **历史动向记录（2026-09 只读调研，当时 pin 仍 82a5fd61a7cf）**：上游 tag
   `dsh-v0.1.5-alpha.1`（5dda764e）。三个 fork 的**客户端恢复模型零改动**
   （`connection/src/client/{connection,index}.ts` 未变；变的是 fixture、宿主半
