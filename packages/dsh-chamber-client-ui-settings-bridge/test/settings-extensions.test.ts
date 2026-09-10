@@ -90,6 +90,36 @@ test('descendantFibers: finds nested ctx.inject waiters through the parent chain
   assert.deepEqual(descendantFibers(root, [root, child, grandchild, unrelated]), [child, grandchild]);
 });
 
+test('descendantFibers: a self-parented chain (cordis root) stays bounded and is not a descendant', () => {
+  // Cordis ends every parent chain at a self-parented root (`Fiber.name` walks
+  // `do { … } while (fiber !== fiber.parent.fiber)`), so the chain never becomes
+  // `undefined`. The unguarded walk therefore spun at 100% of one core and froze
+  // the renderer while the settings shell was mounted (2026-09 acceptance).
+  const root = fiber(2);
+  const looping = fiber(0, { sessions: null }, []);
+  looping.parent = { fiber: looping };
+  assert.deepEqual(descendantFibers(root, [root, looping]), []);
+});
+
+test('descendantFibers: a two-node parent cycle stays bounded and yields no descendants', () => {
+  // A malformed graph must be just as bounded as cordis's self-parented root.
+  const root = fiber(2);
+  const first = fiber(0, { sessions: null }, []);
+  const second = fiber(0, { uiConversation: null }, []);
+  first.parent = { fiber: second };
+  second.parent = { fiber: first };
+  assert.deepEqual(descendantFibers(root, [root, first, second]), []);
+});
+
+test('descendantFibers: a cycle hanging off a real descendant does not hide that descendant', () => {
+  const root = fiber(2);
+  const child = fiber(0, { sessions: null }, []);
+  child.parent = { fiber: root };
+  const looping = fiber(0, { uiConversation: null }, []);
+  looping.parent = { fiber: looping };
+  assert.deepEqual(descendantFibers(root, [root, child, looping]), [child]);
+});
+
 test('classifyContribution: active only when the whole fiber tree is active', () => {
   const root = fiber(2);
   assert.deepEqual(classifyContribution('p', root, [root], undefined), { id: 'p', state: 'active' });

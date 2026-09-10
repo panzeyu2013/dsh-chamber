@@ -311,8 +311,24 @@ export function descendantFibers<T extends FiberLike>(root: T, all: readonly Fib
   return all.filter((candidate) => {
     if (candidate === root) return false
     let current: FiberLike | undefined = candidate.parent?.fiber
+    // Cordis terminates its parent chain at a SELF-PARENTED root, not at
+    // `undefined` (`vendor/cordis/src/fiber.ts` `Fiber.name` walks with
+    // `do { … } while (fiber !== fiber.parent.fiber)`), so a walk that stops only
+    // on `undefined` never stops at all: classifying any fiber that is NOT a
+    // descendant climbs to the root and spins on its self-loop forever. That is
+    // what froze the renderer — opening the settings shell against a connected
+    // instance pinned one core for as long as the panel stayed mounted, while the
+    // instance itself stayed healthy and every host-side log looked normal
+    // (2026-09 acceptance; located via a V8 tick profile of the frozen renderer).
+    // A chain that revisits a node cannot reach `root` through its remaining
+    // edges, so "not a descendant" is the honest bounded answer — the same
+    // terminator cordis uses — and the classification keeps every other verdict
+    // it can still prove.
+    const seen = new Set<FiberLike>([candidate])
     while (current !== undefined) {
       if (current === root) return true
+      if (seen.has(current)) return false
+      seen.add(current)
       current = current.parent?.fiber
     }
     return false
