@@ -338,7 +338,10 @@ test('binding: the purge refuses symlink/subdirectory entries and accepts every 
     // `session.v3.JSONL` and `session.v3.jsonl` are the SAME file, so writing
     // both leaves a single canonical entry and the refusal has nothing to reject
     // (2026-09 local-replay finding: red on macOS, green on Linux CI). Probe the
-    // volume instead of guessing from process.platform.
+    // volume instead of guessing from process.platform; where the leg cannot
+    // exist it is skipped outright — asserting the collapsed layout instead would
+    // report coverage the uppercase contract does not have (canonical purging is
+    // covered by the happy-path legs above).
     const caseProbe = join(dir, 'case-probe.tmp')
     writeFileSync(caseProbe, '')
     const caseSensitive = !existsSync(join(dir, 'CASE-PROBE.TMP'))
@@ -349,16 +352,6 @@ test('binding: the purge refuses symlink/subdirectory entries and accepts every 
     ]
     if (caseSensitive) {
       nearMissNames.unshift(['upper', 'session.v3.JSONL'])
-    } else {
-      // A case-insensitive volume collapses the two names into ONE canonical
-      // entry, so assert that collapsed layout still purges as canonical — the
-      // leg stays a real assertion instead of a silent skip.
-      const collapsedDir = join(dir, 'upper', 's9')
-      mkdirSync(collapsedDir, { recursive: true })
-      writeFileSync(join(collapsedDir, 'session.v3.jsonl'), '{}')
-      const collapsedHost = makeHostBinding({ sessionPersistence: { locate: locateFor('upper') } })
-      assert.equal(await collapsedHost.deleteSessionContent('s9', join(dir, 'upper')), 'deleted')
-      assert.equal(existsSync(collapsedDir), false, 'case-insensitive volume: the single canonical entry purges')
     }
     for (const [project, name] of nearMissNames) {
       const nearDir = join(dir, project, 's9')
