@@ -19,6 +19,14 @@
  *   400 connection_invalid_input; 404 when the row is absent
  * - DELETE /api/connections/local → {stopped:true} (graceful stop, the row
  *   stays); 409 connection_busy while restarting
+ * - GET /api/connections/local/writers → {quiescent, writers[], errors[]} —
+ *   the writer-quiescence diagnosis (2026-09-10, 02 §3.4): which managed-host
+ *   records keep the local instance from starting, why, and whether the
+ *   explicit takeover could clear them. Read-only.
+ * - POST /api/connections/local/reclaim → 清理并接管: clear this state
+ *   directory's own stale/orphaned writers and start the local connection
+ *   {reclaimed:[pid], connection, spawned}; 409 connection_busy (with detail)
+ *   when a writer whose control plane is still alive remains
  * - GET /api/host/logs?port=&limit=&offset= → {port, lines, truncated}
  *   (the managed-host rolling log, 02 §3.8)
  * - /api/i/<id>/* — per-instance reverse proxy (03 §3 / 04 §4), mounted
@@ -154,6 +162,11 @@ export interface ApiDeps {
   getHealth(): { ok: boolean; dsh: { status: string; port: number; error?: string } }
   getConnectionRow(): ConnectionRowView | null
   startConnection(input: { kind: string; label?: string; accentColor?: string }): Promise<{ connection: ConnectionRowView | null; spawned: boolean }>
+  /** Writer-quiescence diagnosis (design 02 §3.4); read-only. Absent ⇒ the
+   *  route answers 501 (a surface without managed local hosts). */
+  localWriterDiagnosis?(): { quiescent: boolean; writers: unknown[]; errors: string[] }
+  /** Explicit 清理并接管 (design 02 §3.4 / 04 §3.2). Absent ⇒ 501. */
+  reclaimConnection?(): Promise<{ reclaimed: number[]; connection: ConnectionRowView | null; spawned: boolean }>
   updateConnectionProfile(input: { connectionId: string; label?: string; accentColor?: string }): Promise<ConnectionRowView | null>
   stopConnection(connectionId: string): Promise<unknown>
   hostLogs?(query: { port?: number; limit?: number; offset?: number }): Promise<unknown>
@@ -263,7 +276,7 @@ export function createApi(deps: ApiDeps) {
    * `{error: string, code?: string}` — 4xx carries a displayable message;
    * 5xx never echoes upstream details (masked) except the safe dsh_not_ready.
    */
-  function jsonError(res: ApiResponse, status: number, errorBody: string | { code?: string; message?: string }) {
+  function jsonError(res: ApiResponse, status: number, errorBody: string | { code?: string; message?: string; detail?: unknown }) {
     let message: string
     let code: string | undefined
     if (typeof errorBody === 'string') {
@@ -279,7 +292,13 @@ export function createApi(deps: ApiDeps) {
       message = 'Internal server error'
       if (code === undefined) code = 'internal'
     }
-    json(res, status, code !== undefined ? { error: message, code } : { error: message })
+    // A structured detail (2026-09-10: the writer-quiescence blockers on a 409)
+    // rides along with the code; every error without one keeps the exact
+    // two-field shape it had.
+    const detail = typeof errorBody === 'object' && errorBody !== null && errorBody.detail !== undefined
+      ? { detail: errorBody.detail }
+      : {}
+    json(res, status, code !== undefined ? { error: message, code, ...detail } : { error: message, ...detail })
   }
 
   /** Read and parse a JSON request body; null on any parse failure. */
@@ -476,7 +495,40 @@ export function createApi(deps: ApiDeps) {
               return json(res, 200, outcome)
             } catch (error) {
               const err = error as ApiError
-              if (err.code === 'connection_busy') return jsonError(res, 409, { code: err.code, message: err.message })
+              if (err.code === 'connection_busy') {
+                // The structured blockers travel with the 409 so the UI can
+                // name the writer and offer the takeover (2026-09-10).
+                return jsonError(res, 409, {
+                  code: err.code,
+                  message: err.message,
+                  ...(err.details === undefined ? {} : { detail: err.details }),
+                })
+              }
+              return jsonError(res, 503, { code: 'dsh_not_ready', message: 'dsh is not ready' })
+            }
+          }
+        }
+        if (b === 'local' && segments[3] === 'writers' && segments.length === 4 && method === 'GET') {
+          return async () => deps.localWriterDiagnosis === undefined
+            ? jsonError(res, 501, { code: 'not_implemented', message: 'this surface has no managed local host' })
+            : json(res, 200, deps.localWriterDiagnosis())
+        }
+        if (b === 'local' && segments[3] === 'reclaim' && segments.length === 4 && method === 'POST') {
+          return async () => {
+            try {
+              if (deps.reclaimConnection === undefined) {
+                return jsonError(res, 501, { code: 'not_implemented', message: 'this surface has no managed local host' })
+              }
+              return json(res, 200, await deps.reclaimConnection())
+            } catch (error) {
+              const err = error as ApiError
+              if (err.code === 'connection_busy') {
+                return jsonError(res, 409, {
+                  code: err.code,
+                  message: err.message,
+                  ...(err.details === undefined ? {} : { detail: err.details }),
+                })
+              }
               return jsonError(res, 503, { code: 'dsh_not_ready', message: 'dsh is not ready' })
             }
           }

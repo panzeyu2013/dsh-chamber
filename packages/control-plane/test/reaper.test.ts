@@ -279,3 +279,158 @@ test('reaper: a claim record is only removed once its owner is dead; a live owne
   assert.deepEqual(deadResult, { reclaimed: 0, kept: 0, errors: [] })
   assert.equal(recordExists(dir, 'claim-9000.json'), false, 'claim with a dead owner is removed')
 })
+
+// ── takeover mode (2026-09-10, design 02 §3.4) ─────────────────────────────
+// The explicit 清理并接管 action clears THIS state directory's own stale or
+// orphaned writers that the fail-closed default keeps forever. The rules that
+// must never bend: no unverified process is signalled, and a writer whose
+// owning control plane is still alive is never touched.
+
+test('reaper takeover: ps unavailable + dead owner + verified listener reclaims the orphan', async t => {
+  const dir = tempStateDir(t)
+  writeRecord(dir, '4242.json', spawnRecord)
+  const signalled: string[] = []
+  const outcomes: any[] = []
+  const deps = dshDeps({
+    // The restricted-environment shape: identity cannot be re-verified at all.
+    psIdentity: () => { throw new Error('spawnSync ps EPERM') },
+    alive: (pid: number) => pid !== spawnRecord.ownerPid,
+    signal: (_pid: number, sig: string) => { signalled.push(sig); return true },
+    managedTreeAlive: () => signalled.length < 1,
+  })
+  const result = await runReaper({
+    stateDir: dir, deps, takeover: true, onEntry: outcome => outcomes.push(outcome),
+  })
+  assert.deepEqual(result, { reclaimed: 1, kept: 0, errors: [] })
+  assert.deepEqual(signalled, ['SIGTERM'])
+  assert.equal(recordExists(dir, '4242.json'), false)
+  assert.deepEqual(outcomes, [{
+    name: '4242.json', status: 'reclaimed', pid: 4242, reason: 'takeover-reclaimed', takeOverAvailable: false,
+  }])
+})
+
+test('reaper takeover: an unverifiable writer is still never signalled (fail closed)', async t => {
+  const dir = tempStateDir(t)
+  writeRecord(dir, '4242.json', spawnRecord)
+  const signalled: string[] = []
+  const outcomes: any[] = []
+  const deps = dshDeps({
+    psIdentity: () => { throw new Error('spawnSync ps EPERM') },
+    // The recorded pid no longer owns the recorded listener: no proof left.
+    lsofPort: () => false,
+    alive: (pid: number) => pid !== spawnRecord.ownerPid,
+    signal: (_pid: number, sig: string) => { signalled.push(sig); return true },
+  })
+  const result = await runReaper({
+    stateDir: dir, deps, takeover: true, onEntry: outcome => outcomes.push(outcome),
+  })
+  assert.deepEqual(result, { reclaimed: 0, kept: 1, errors: [] })
+  assert.deepEqual(signalled, [])
+  assert.equal(recordExists(dir, '4242.json'), true)
+  assert.equal(outcomes[0].reason, 'identity-unverified')
+  assert.equal(outcomes[0].takeOverAvailable, true)
+})
+
+test('reaper takeover: a pid that provably runs something else drops only the record', async t => {
+  const dir = tempStateDir(t)
+  writeRecord(dir, '4242.json', spawnRecord)
+  const signalled: string[] = []
+  const deps = dshDeps({
+    psIdentity: () => ({ ppid: '1', command: '/usr/bin/python3 /srv/unrelated.py' }),
+    alive: (pid: number) => pid !== spawnRecord.ownerPid,
+    signal: (_pid: number, sig: string) => { signalled.push(sig); return true },
+  })
+  const result = await runReaper({ stateDir: dir, deps, takeover: true })
+  assert.deepEqual(result, { reclaimed: 0, kept: 0, errors: [] })
+  assert.deepEqual(signalled, [], 'an unrelated process must never be signalled')
+  assert.equal(recordExists(dir, '4242.json'), false, 'the stale record is the only thing dropped')
+})
+
+test('reaper takeover: a live foreign writer (owner alive) is neither killed nor cleared', async t => {
+  const dir = tempStateDir(t)
+  writeRecord(dir, '4242.json', spawnRecord)
+  const signalled: string[] = []
+  const outcomes: any[] = []
+  const deps = dshDeps({
+    psIdentity: () => ({ ppid: '555', command: '/usr/bin/python3 /srv/unrelated.py' }),
+    alive: () => true,                       // both the writer AND its owner live
+    signal: (_pid: number, sig: string) => { signalled.push(sig); return true },
+  })
+  const result = await runReaper({
+    stateDir: dir, deps, takeover: true, onEntry: outcome => outcomes.push(outcome),
+  })
+  assert.deepEqual(result, { reclaimed: 0, kept: 1, errors: [] })
+  assert.deepEqual(signalled, [])
+  assert.equal(recordExists(dir, '4242.json'), true)
+  assert.equal(outcomes[0].reason, 'identity-mismatch')
+  assert.equal(outcomes[0].takeOverAvailable, false, 'another running app instance is not a takeover target')
+})
+
+test('reaper takeover: a live verified writer whose owner is alive stays untouched', async t => {
+  const dir = tempStateDir(t)
+  writeRecord(dir, '4242.json', spawnRecord)
+  const signalled: string[] = []
+  const deps = dshDeps({
+    // Verified managed host (matching command), but NOT an orphan: its parent
+    // is alive and so is the control plane that spawned it.
+    psIdentity: () => ({ ppid: '555', command: DSH_COMMAND }),
+    alive: () => true,
+    signal: (_pid: number, sig: string) => { signalled.push(sig); return true },
+  })
+  const result = await runReaper({ stateDir: dir, deps, takeover: true })
+  assert.deepEqual(result, { reclaimed: 0, kept: 1, errors: [] })
+  assert.deepEqual(signalled, [])
+  assert.equal(recordExists(dir, '4242.json'), true)
+})
+
+test('reaper: a corrupted record stays even under takeover (no proof, no deletion)', async t => {
+  const dir = tempStateDir(t)
+  writeFileSync(join(dir, 'managed-dsh', '4242.json'), '{ not json')
+  const outcomes: any[] = []
+  const deps = dshDeps()
+  const result = await runReaper({
+    stateDir: dir, deps, takeover: true, onEntry: outcome => outcomes.push(outcome),
+  })
+  assert.deepEqual(result, { reclaimed: 0, kept: 1, errors: [] })
+  assert.equal(recordExists(dir, '4242.json'), true)
+  assert.equal(outcomes[0].reason, 'invalid-record')
+})
+
+test('reaper: the default mode reports per-entry reasons without changing its verdicts', async t => {
+  const dir = tempStateDir(t)
+  writeRecord(dir, '4242.json', spawnRecord)
+  const outcomes: any[] = []
+  const deps = dshDeps({
+    psIdentity: () => { throw new Error('spawnSync ps EPERM') },
+    // Recorded owner gone, recorded listener still owned by the pid: the two
+    // facts the explicit action needs (and that the default mode ignores).
+    alive: (pid: number) => pid !== spawnRecord.ownerPid,
+  })
+  const result = await runReaper({ stateDir: dir, deps, onEntry: outcome => outcomes.push(outcome) })
+  assert.deepEqual(result, { reclaimed: 0, kept: 1, errors: [] }, 'startup stays fail-closed')
+  assert.deepEqual(outcomes, [{
+    name: '4242.json', status: 'kept', pid: 4242, reason: 'identity-unverified', takeOverAvailable: true,
+  }])
+})
+
+test('reaper takeover: a record without a usable ownerPid is never killed on the ps-free proof', async t => {
+  const dir = tempStateDir(t)
+  // No ownerPid column at all: orphanhood cannot be proven without ps, and the
+  // port proof alone must never authorize a kill.
+  writeRecord(dir, '4242.json', { ...spawnRecord, ownerPid: undefined })
+  const signalled: string[] = []
+  const outcomes: any[] = []
+  const deps = dshDeps({
+    psIdentity: () => { throw new Error('spawnSync ps EPERM') },
+    lsofPort: () => true,
+    signal: (_pid: number, sig: string) => { signalled.push(sig); return true },
+  })
+  const result = await runReaper({
+    stateDir: dir, deps, takeover: true, onEntry: outcome => outcomes.push(outcome),
+  })
+  assert.deepEqual(result, { reclaimed: 0, kept: 1, errors: [] })
+  assert.deepEqual(signalled, [])
+  assert.equal(recordExists(dir, '4242.json'), true)
+  assert.equal(outcomes[0].reason, 'identity-unverified')
+  assert.equal(outcomes[0].takeOverAvailable, false, 'nothing can be proven about its owner')
+})

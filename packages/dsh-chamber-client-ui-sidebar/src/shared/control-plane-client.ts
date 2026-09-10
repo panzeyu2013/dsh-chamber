@@ -108,6 +108,52 @@ export interface HealthResponse {
   dsh: { status: string; port: number; error?: string | null }
 }
 
+/**
+ * 写者静默诊断的 wire 形状（2026-09-10，02 §3.4 / 04 §3.2）。
+ * `GET /api/connections/local/writers` 的响应：本地实例为何起不来。`sticky`
+ * 表示闩锁是被「写入期终止失败」关死的（扫描无法再证明），只能重启应用恢复。
+ */
+export interface LocalWriterBlockerWire {
+  name: string
+  status: 'reclaimed' | 'kept' | 'removed'
+  pid: number | null
+  reason: string
+  takeOverAvailable: boolean
+}
+
+export interface LocalWriterDiagnosisWire {
+  quiescent: boolean
+  writers: LocalWriterBlockerWire[]
+  errors: string[]
+}
+
+/**
+ * 规范化诊断响应：只保留 blocking（kept）条目，并把缺字段补成安全默认——
+ * 旧控制面/其它形态不提供该路由时调用方拿到 null，页面就不渲染该块。
+ */
+export function toLocalWriterDiagnosis(wire: unknown): LocalWriterDiagnosisWire | null {
+  if (wire === null || typeof wire !== 'object') return null
+  const raw = wire as { quiescent?: unknown; writers?: unknown; errors?: unknown }
+  if (typeof raw.quiescent !== 'boolean' || !Array.isArray(raw.writers)) return null
+  const writers = raw.writers.flatMap(entry => {
+    if (entry === null || typeof entry !== 'object') return []
+    const row = entry as Partial<LocalWriterBlockerWire>
+    if (typeof row.reason !== 'string') return []
+    return [{
+      name: typeof row.name === 'string' ? row.name : '—',
+      status: row.status === 'reclaimed' || row.status === 'removed' ? row.status : 'kept',
+      pid: typeof row.pid === 'number' ? row.pid : null,
+      reason: row.reason,
+      takeOverAvailable: row.takeOverAvailable === true,
+    } satisfies LocalWriterBlockerWire]
+  })
+  return {
+    quiescent: raw.quiescent,
+    writers,
+    errors: Array.isArray(raw.errors) ? raw.errors.filter((line): line is string => typeof line === 'string') : [],
+  }
+}
+
 /** /api/connections 行的 wire 形状（04 §3.2；控制面为权威）。 */
 export interface ConnectionRowWire {
   id: string

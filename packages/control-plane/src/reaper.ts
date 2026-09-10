@@ -280,13 +280,11 @@ function resolveDeps(deps?: ReaperDeps): Required<ReaperDeps> {
   }
 }
 
-async function portOwnedBy(pid: number, port: number, deps: Required<ReaperDeps>): Promise<boolean> {
+async function portVerdict(pid: number, port: number, deps: Required<ReaperDeps>): Promise<boolean | null> {
   let verdict: boolean | null = deps.lsofPort(pid, port)
   if (verdict === null) verdict = deps.ssPort(pid, port)
   if (verdict === null) verdict = await deps.procPort(pid, port)
-  // fail-closed: when every probe is unavailable we cannot prove the pid owns
-  // the port, so never treat it as owned (an unverifiable process is kept).
-  return verdict === true
+  return verdict
 }
 
 async function killAndConfirm(pid: number, deps: Required<ReaperDeps>): Promise<void> {
@@ -332,7 +330,55 @@ async function removeFile(file: string, expected: PrivateFileIdentity, expectedV
 /** One entry's verdict: reclaimed (killed), kept (left in place), removed. */
 type EntryStatus = 'reclaimed' | 'kept' | 'removed'
 
+/**
+ * Why one managed-host record ended up in its status (2026-09-10, design 02
+ * §3.4 takeover mode). Stable machine tokens: the control plane publishes them
+ * to the connections page so a blocked local instance names its blocker
+ * instead of reporting a bare 409, and so the explicit takeover action can say
+ * what it did (and what it refuses to do).
+ */
+export type ReaperEntryReason =
+  /** pid gone and no residual group: the record was dropped. */
+  | 'dead'
+  /** leader gone but its detached process group still has members: kept. */
+  | 'residual-group'
+  /** identity + listener verified and the writer is orphaned: killed. */
+  | 'orphan-reclaimed'
+  /** verified writer whose owning control plane is still alive: never touched. */
+  | 'live-foreign-writer'
+  /** the ps identity probe was unavailable, so the pid could not be re-verified. */
+  | 'identity-unverified'
+  /** ps proved the pid is NOT the recorded host (stale record / pid reuse). */
+  | 'identity-mismatch'
+  /** identity matched but no port probe could confirm the listener. */
+  | 'port-unverified'
+  /** malformed record or unusable pid: kept as evidence. */
+  | 'invalid-record'
+  /** v2-era claim whose recorded owner is gone: dropped. */
+  | 'claim-removed'
+  /** v2-era claim whose recorded owner is alive: never touched. */
+  | 'claim-owner-alive'
+  /** takeover proof (dead owner + owned listener) killed the writer. */
+  | 'takeover-reclaimed'
+  /** takeover proved the pid is not our host: only the record was dropped. */
+  | 'takeover-stale-removed'
+
+/** One managed-host record's classification (see ReaperEntryReason). */
+export interface ReaperEntryOutcome {
+  name: string
+  status: EntryStatus
+  pid: number | null
+  reason: ReaperEntryReason
+  /** Whether the explicit takeover action could still clear this entry. */
+  takeOverAvailable: boolean
+}
+
 type LogFn = (message: string) => void
+
+interface ProcessEntryOptions {
+  takeover: boolean
+  onEntry?: (outcome: ReaperEntryOutcome) => void
+}
 
 /**
  * Match only one recorded absolute entry token from a supported dsh layout.
@@ -346,9 +392,14 @@ export function commandMatchesEntry(command: string, entry: string | null, binar
   return recordedEntry !== null && commandHasToken(command, recordedEntry)
 }
 
-async function processEntry(dir: string, name: string, log: LogFn, deps: Required<ReaperDeps>): Promise<{ status: EntryStatus }> {
+async function processEntry(dir: string, name: string, log: LogFn, deps: Required<ReaperDeps>, options: ProcessEntryOptions): Promise<ReaperEntryOutcome> {
   const file = join(dir, name)
   const label = name.slice(0, -5)
+  const done = (status: EntryStatus, pid: number | null, reason: ReaperEntryReason, takeOverAvailable = false): ReaperEntryOutcome => {
+    const outcome: ReaperEntryOutcome = { name, status, pid, reason, takeOverAvailable }
+    options.onEntry?.(outcome)
+    return outcome
+  }
   let record: any
   let recordIdentity: PrivateFileIdentity | null = null
   let recordValue: string | null = null
@@ -365,24 +416,27 @@ async function processEntry(dir: string, name: string, log: LogFn, deps: Require
       // can only survive from a v2-era installation — but the defensive
       // handling stays.
       log(`reaper: ${label} corrupt claim kept (${String(error)})`)
-      return { status: 'kept' }
+      return done('kept', null, 'invalid-record')
     }
     // A managed-host record is the only durable evidence for a detached
     // process group after the owning control plane dies.  Malformed bytes do
     // not prove that writer absent, so preserve the record and make startup's
-    // writer-quiescence latch fail closed.
+    // writer-quiescence latch fail closed. Even the explicit takeover action
+    // does not delete it: without a trustworthy pid there is nothing to verify,
+    // and dropping the record would re-open DSH_HOME writes while an
+    // unidentifiable writer may still hold them.
     log(`reaper: ${label} corrupt record kept (${String(error)})`)
-    return { status: 'kept' }
+    return done('kept', null, 'invalid-record')
   }
   if (name.startsWith('claim-')) {
     const ownerPid = Number.isInteger(record.ownerPid) ? record.ownerPid : null
     if (ownerPid !== null && deps.alive(ownerPid)) {
       log(`reaper: ${label} claim owner ${ownerPid} alive; kept`)
-      return { status: 'kept' }
+      return done('kept', ownerPid, 'claim-owner-alive')
     }
     await removeFile(file, recordIdentity!, recordValue!)
     log(`reaper: ${label} claim owner ${String(ownerPid)} dead; claim removed`)
-    return { status: 'removed' }
+    return done('removed', ownerPid, 'claim-removed')
   }
   const pid = record.pid
   if (!Number.isInteger(pid) || pid <= 0) {
@@ -390,8 +444,16 @@ async function processEntry(dir: string, name: string, log: LogFn, deps: Require
     // Without a trustworthy PGID there is no safe absence proof; deleting the
     // file would erase the only recovery evidence and reopen DSH_HOME writes.
     log(`reaper: ${label} invalid pid; record kept`)
-    return { status: 'kept' }
+    return done('kept', null, 'invalid-record')
   }
+  const ownerPid = Number.isInteger(record.ownerPid) ? record.ownerPid : null
+  // kill(pid, 0) based, therefore ps-free: the takeover proof below must stay
+  // answerable even when process inspection is unavailable.
+  const ownerAlive = ownerPid !== null && deps.alive(ownerPid)
+  // A record WITHOUT a usable ownerPid cannot prove orphanhood ps-free: only the
+  // record itself may be dropped on that, never a process (another live control
+  // plane could own the writer).
+  const ownerProvenGone = ownerPid !== null && !ownerAlive
   if (!deps.alive(pid)) {
     // A crashed leader can leave PTY/plugin descendants in its detached
     // group. We can no longer re-verify the leader identity safely, so keep
@@ -399,54 +461,95 @@ async function processEntry(dir: string, name: string, log: LogFn, deps: Require
     // only evidence and racing a runtime snapshot.
     if (deps.managedTreeAlive(pid)) {
       log(`reaper: ${pid} leader dead but residual process group alive; record kept`)
-      return { status: 'kept' }
+      return done('kept', pid, 'residual-group')
     }
     await removeFile(file, recordIdentity!, recordValue!)
     log(`reaper: ${pid} dead; record removed`)
-    return { status: 'removed' }
+    return done('removed', pid, 'dead')
   }
   // A new record can be published for a reused pid while this scan is in
   // flight. Do not even inspect or signal the live process on stale evidence.
   assertRecordStillOwned(file, recordIdentity!, recordValue!)
   const portNum = Number(record.port)
-  const identity = deps.psIdentity(pid)
+  const portKnown = Number.isInteger(portNum) && portNum > 0
   const profile = typeof record.profile === 'string' && record.profile !== '' ? record.profile : null
   const entry = typeof record.entry === 'string' && record.entry !== '' ? record.entry : null
   const binary = typeof record.binary === 'string' && record.binary !== '' ? record.binary : null
+  let identity: { ppid: string; command: string } | null = null
+  let probeError: unknown = null
+  try {
+    identity = deps.psIdentity(pid)
+  } catch (error) {
+    probeError = error
+  }
   // Exact identity, not a basename heuristic: the record carries the
   // absolute entry path that spawn-dsh actually passed to Node. Requiring
   // that token plus the exact profile and port flags makes stale-record PID
   // reuse fail closed even when the unrelated process also runs `bin.ts`.
-  const commandOk = profile === 'web'
-    && Number.isInteger(portNum)
-    && portNum > 0
+  const commandOk = identity !== null
+    && profile === 'web'
+    && portKnown
     && commandMatchesEntry(identity.command, entry, binary)
     && commandHasFlagValue(identity.command, '--profile', profile)
     && commandHasFlagValue(identity.command, '--port', String(portNum))
   // Missing/invalid port ⇒ cannot verify the listener belongs to this pid;
-  // fail-closed (kept) instead of the previous fail-open default.
-  const portOk = Number.isInteger(portNum) && portNum > 0 ? await portOwnedBy(pid, portNum, deps) : false
-  if (!commandOk || !portOk) {
-    // A stale record may now point at an unrelated process whose argv carries
-    // credentials. The command is inspection-only evidence and must never be
-    // copied into chamber logs.
+  // fail-closed (kept) instead of the previous fail-open default. The raw
+  // verdict is kept as well: the takeover action distinguishes "no probe
+  // could answer" (null) from "the listener is not his" (false).
+  const listenerVerdict = portKnown ? await portVerdict(pid, portNum, deps) : false
+  const portOk = listenerVerdict === true
+  const orphan = (identity !== null && identity.ppid === '1')
+    || (ownerPid !== null && !ownerAlive)
+  /** Kill the verified orphan and drop its record (shared by both proofs). */
+  const reclaim = async (how: string, reason: ReaperEntryReason): Promise<ReaperEntryOutcome> => {
+    log(`reaper: ${pid} ${how}; SIGTERM`)
+    assertRecordStillOwned(file, recordIdentity!, recordValue!)
+    await killAndConfirm(pid, deps)
+    await removeFile(file, recordIdentity!, recordValue!)
+    log(`reaper: ${pid} exited; record removed`)
+    return done('reclaimed', pid, reason)
+  }
+  if (commandOk && portOk) {
+    if (!orphan) {
+      log(`reaper: ${pid} owner ${String(ownerPid)} alive (ppid ${identity!.ppid}); record kept`)
+      return done('kept', pid, 'live-foreign-writer')
+    }
+    return await reclaim('orphan', 'orphan-reclaimed')
+  }
+  if (commandOk) {
+    // ps proved this pid IS the recorded managed host; only the listener probe
+    // could not confirm (or contradicted) it.
+    if (options.takeover && ownerProvenGone && listenerVerdict === null) {
+      return await reclaim(`orphaned (owner ${String(ownerPid)} dead, listener unverifiable); takeover`,
+        'takeover-reclaimed')
+    }
+    log(`reaper: ${pid} listener not verified (${String(listenerVerdict)}); record kept`)
+    return done('kept', pid, 'port-unverified')
+  }
+  if (identity !== null) {
+    // ps answered and the command is NOT the recorded host: the writer this
+    // record describes is gone (a stale record, or its pid was reused). The
+    // process itself is never signalled — only the record is at stake.
+    if (options.takeover && !ownerAlive) {
+      await removeFile(file, recordIdentity!, recordValue!)
+      log(`reaper: ${pid} does not run the recorded host; stale record removed (process untouched)`)
+      return done('removed', pid, 'takeover-stale-removed')
+    }
     log(`reaper: ${pid} identity mismatch; record kept`)
-    return { status: 'kept' }
+    return done('kept', pid, 'identity-mismatch', ownerProvenGone)
   }
-  const ownerPid = Number.isInteger(record.ownerPid) ? record.ownerPid : null
-  const orphan = identity.ppid === '1' || (ownerPid !== null && !deps.alive(ownerPid))
-  if (!orphan) {
-    log(`reaper: ${pid} owner ${String(ownerPid)} alive (ppid ${identity.ppid}); record kept`)
-    return { status: 'kept' }
+  // ps is unavailable (restricted environment, missing binary, hardened
+  // runtime): the identity cannot be re-verified. The record's own owning
+  // control plane must be provably dead, and the recorded pid must still own
+  // the recorded listener — same state directory ⇒ same DSH_HOME family ⇒ this
+  // is our own orphaned managed host. Nothing weaker is ever killed.
+  if (options.takeover && ownerProvenGone && portOk) {
+    return await reclaim(`orphaned (owner ${String(ownerPid)} dead, listener ${String(portNum)} verified); takeover`,
+      'takeover-reclaimed')
   }
-  log(`reaper: ${pid} orphan; SIGTERM`)
-  assertRecordStillOwned(file, recordIdentity!, recordValue!)
-  await killAndConfirm(pid, deps)
-  await removeFile(file, recordIdentity!, recordValue!)
-  log(`reaper: ${pid} exited; record removed`)
-  return { status: 'reclaimed' }
+  log(`reaper: ${pid} identity probe unavailable (${String(probeError)}); record kept`)
+  return done('kept', pid, 'identity-unverified', ownerProvenGone && portKnown)
 }
-
 /**
  * Scan <stateDir>/managed-dsh and reclaim orphaned managed dsh hosts per
  * design 02 §3.4. Safe under concurrent control-plane instances: entries
@@ -467,10 +570,24 @@ export async function runReaper({
   stateDir,
   logger,
   deps,
+  takeover = false,
+  onEntry,
 }: {
   stateDir: string
   logger?: Logger
   deps?: ReaperDeps
+  /**
+   * Explicit takeover (2026-09-10, design 02 §3.4): clear THIS state
+   * directory's own stale/orphaned writers that the fail-closed default keeps
+   * forever — a pid that provably no longer runs the recorded host, or an
+   * orphan whose control plane is demonstrably dead while the recorded
+   * listener still belongs to it. A writer whose owning control plane is still
+   * alive is never touched, and no unverified process is ever signalled. Only
+   * the user-facing 清理并接管 action passes true.
+   */
+  takeover?: boolean
+  /** Per-entry classification sink (diagnostics / the takeover report). */
+  onEntry?: (outcome: ReaperEntryOutcome) => void
 }): Promise<ReaperResult> {
   const resolved = resolveDeps(deps)
   const log: LogFn = typeof logger?.log === 'function'
@@ -490,12 +607,13 @@ export async function runReaper({
   for (const name of names) {
     if (!name.endsWith('.json')) continue
     try {
-      const outcome = await processEntry(dir, name, log, resolved)
+      const outcome = await processEntry(dir, name, log, resolved, { takeover, ...(onEntry === undefined ? {} : { onEntry }) })
       if (outcome.status === 'reclaimed') reclaimed++
       else if (outcome.status === 'kept') kept++
     } catch (error) {
       errors.push(`reaper: ${name}: ${String(error)}`)
       kept++
+      onEntry?.({ name, status: 'kept', pid: null, reason: 'invalid-record', takeOverAvailable: false })
     }
   }
   return { reclaimed, kept, errors }

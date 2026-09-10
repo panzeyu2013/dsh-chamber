@@ -32,11 +32,12 @@ import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { existsSync, readFileSync, statSync } from 'node:fs'
+import type { ConnectionRowView } from './api.ts'
 import { createCatalog } from './catalog.ts'
 import { createLocalConnection } from './local-connection.ts'
 import type { LocalConnectionDeps } from './local-connection.ts'
 import { createApi } from './api.ts'
-import { runReaper } from './reaper.ts'
+import { runReaper, type ReaperEntryOutcome } from './reaper.ts'
 import {
   createInstanceProxy,
   type InstanceProxy,
@@ -298,6 +299,21 @@ export interface PlaneHandle {
   restartLocal(): Promise<void>
   /** Re-publish the public local lifecycle after canExposeLocal changes. */
   refreshLocalExposure(): void
+  /**
+   * Writer-quiescence diagnosis (2026-09-10, 04 §3.2): the last scan's verdict
+   * plus per-record detail, WITHOUT acting. The connections page uses it to
+   * name what blocks the local instance; a stale view is refreshed by the
+   * re-proof the start path runs anyway.
+   */
+  localWriterDiagnosis?(): { quiescent: boolean; writers: ReaperEntryOutcome[]; errors: string[] }
+  /**
+   * Explicit takeover (清理并接管): clear THIS state directory's own stale or
+   * orphaned managed-host writers (runReaper takeover semantics — a writer
+   * whose control plane is still alive is never touched, no unverified process
+   * is signalled), then start the local connection. Resolves with the reclaim
+   * report; throws connection_busy (with detail) when a live writer remains.
+   */
+  reclaimLocal?(): Promise<{ reclaimed: number[]; connection: ConnectionRowView | null; spawned: boolean }>
   /** Subscribe to authoritative local-host lifecycle transitions. Gateway
    * consumers use this to attach only while the managed dsh is ready; the
    * desktop also uses it for delayed rollback policy. */
@@ -329,6 +345,30 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
   const logger = (options.logger ?? console) as Logger
   const reapManagedHosts = options.reaper ?? runReaper
   let localWritersQuiescent = false
+  /**
+   * Why the writer-quiescence latch is closed, as of the last scan
+   * (2026-09-10). Published to the connections page so a blocked local
+   * instance names its blocker (pid, what was verified, whether the explicit
+   * 清理并接管 action can clear it) instead of returning a bare 409 whose only
+   * advice is "restart the app".
+   */
+  let writerScan: { quiescent: boolean; writers: ReaperEntryOutcome[]; errors: string[] } = {
+    quiescent: false, writers: [], errors: [],
+  }
+  /**
+   * The latch has TWO distinct closure causes and only one of them is
+   * re-provable: a SCAN verdict (records kept / probes unavailable) is cleared
+   * by a fresh scan, while a live write-time termination failure means a
+   * process group could not be confirmed gone — no scan can prove that absent
+   * (its record may already be gone), so it stays closed for the plane's
+   * lifetime and only an app restart re-proves it. Sticky is set by
+   * onWriterQuiescenceUnknown and never cleared.
+   */
+  let writerLatchSticky = false
+  /** In-session re-proof bookkeeping (single-flight + cooldown). */
+  let writerReproveInFlight: Promise<void> | null = null
+  let writerReprovedAt = 0
+  const WRITER_REPROVE_COOLDOWN_MS = 2000
 
   /**
    * Combine the external runtime-apply gate with the internal process-writer
@@ -338,12 +378,82 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
    */
   function localStartGate(): { ok: true } | { ok: false; reason: string } {
     if (!localWritersQuiescent) {
+      const blockers = writerBlockers()
+      const detail = blockers.map(b => `pid ${String(b.pid)} (${b.reason})`).join(', ')
       return {
         ok: false,
-        reason: 'local DSH_HOME writer quiescence is not proven; restart and reaper recovery are required',
+        reason: writerLatchSticky
+          ? 'local DSH_HOME writer quiescence is not proven: a previous termination could not be confirmed; restart the app to re-prove it'
+          : 'local DSH_HOME writer quiescence is not proven'
+            + (detail === '' ? '' : `: ${detail}`),
       }
     }
     return options.canStartLocal?.() ?? { ok: true }
+  }
+
+  /**
+   * Run one writer-quiescence scan and publish its verdict + per-entry detail.
+   * `takeover` is the explicit user action (see runReaper); the automatic paths
+   * (startup, a refused start, the diagnosis read) stay fail-closed.
+   */
+  async function scanLocalWriters(takeover: boolean): Promise<ReaperEntryOutcome[]> {
+    const writers: ReaperEntryOutcome[] = []
+    const reaped = await reapManagedHosts({
+      stateDir,
+      logger,
+      ...(takeover ? { takeover: true } : {}),
+      onEntry: outcome => writers.push(outcome),
+    })
+    localWritersQuiescent = !writerLatchSticky && reaped.kept === 0 && reaped.errors.length === 0
+    writerScan = {
+      quiescent: localWritersQuiescent,
+      writers,
+      errors: writerLatchSticky
+        ? [...reaped.errors, 'a previous termination could not be confirmed; restart the app to re-prove writer quiescence']
+        : [...reaped.errors],
+    }
+    if (reaped.reclaimed > 0) logger.log(`reaper: reclaimed ${reaped.reclaimed} orphaned dsh host(s)`)
+    for (const reaperError of reaped.errors) logger.error(`reaper: ${String(reaperError)}`)
+    return writers
+  }
+
+  function writerBlockers(): ReaperEntryOutcome[] {
+    return writerScan.writers.filter(entry => entry.status === 'kept')
+  }
+
+  /**
+   * The 409 payload for a closed latch: the bare reason plus the structured
+   * blockers. Every other 409 on this surface keeps its plain shape.
+   */
+  function writerBusyError(): Error & { code: string; details?: unknown } {
+    const blockers = writerBlockers()
+    const error = new Error(
+      'local DSH_HOME writer quiescence is not proven'
+      + (blockers.length === 0 ? '' : `: ${blockers.map(b => `pid ${String(b.pid)} (${b.reason})`).join(', ')}`),
+    ) as Error & { code: string; details?: unknown }
+    error.code = 'connection_busy'
+    error.details = { writers: blockers, errors: writerScan.errors, sticky: writerLatchSticky }
+    return error
+  }
+
+  /**
+   * Re-prove writer quiescence inside a running plane (2026-09-10). The startup
+   * scan runs once; without this, a record that only BECOMES stale later (the
+   * orphan exited, or the ps identity probe was unavailable at startup) keeps
+   * the latch closed for the whole session — the local instance then answers
+   * 409 to every start and the in-app 启动/停止 buttons do nothing until the
+   * app restarts. Single-flight + a short cooldown bound the scan cost.
+   */
+  async function reproveLocalWriters(): Promise<void> {
+    // A sticky latch is not a scan verdict: re-proving would only "clear" it by
+    // forgetting why it closed (see writerLatchSticky).
+    if (writerLatchSticky) return
+    if (writerReproveInFlight !== null) return await writerReproveInFlight
+    if (Date.now() - writerReprovedAt < WRITER_REPROVE_COOLDOWN_MS) return
+    writerReproveInFlight = scanLocalWriters(false)
+      .then(() => { writerReprovedAt = Date.now() })
+      .finally(() => { writerReproveInFlight = null })
+    return await writerReproveInFlight
   }
 
   function localExposureAllowed(): boolean {
@@ -521,7 +631,16 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
       canSpawn: localStartGate,
       onWriterQuiescenceUnknown: (writerError) => {
         localWritersQuiescent = false
-        logger.error(`local writer quiescence became unknown; further starts are blocked until restart/reaper: ${writerError.message}`)
+        writerLatchSticky = true
+        writerScan = {
+          quiescent: false,
+          writers: [],
+          errors: [
+            `writer quiescence unknown: ${writerError.message}`,
+            'restart the app to re-prove writer quiescence',
+          ],
+        }
+        logger.error(`local writer quiescence became unknown; further starts are blocked until an app restart re-proves it: ${writerError.message}`)
       },
       patchPath: () => {
         // This thunk is reached only after local-connection's spawn fence.
@@ -608,8 +727,13 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
    * existing state — never a duplicate spawn. Shared by the POST route and
    * the handle's startLocal pre-spawn. */
   const startLocalConnection = async (label?: string, accentColor?: string) => {
+    // A closed writer latch is re-proven before refusing: the usual cause is a
+    // managed-host record whose orphan has since exited, which the startup-only
+    // scan can never notice (2026-09-10).
+    if (!localWritersQuiescent) await reproveLocalWriters()
     const gate = localStartGate()
     if (gate?.ok === false) {
+      if (!localWritersQuiescent) throw writerBusyError()
       const error = new Error(gate.reason) as Error & { code: string }
       error.code = 'connection_busy'
       throw error
@@ -624,6 +748,23 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
     if (local.getState() === 'ready') return { connection: connectionRowView(), spawned: false }
     await local.start()
     return { connection: connectionRowView(), spawned: true }
+  }
+
+  /**
+   * Explicit 清理并接管 (2026-09-10): one takeover scan (records that provably
+   * belong to this state directory and whose owning control plane is gone),
+   * then the ordinary start. Returning the reclaim report lets the UI say what
+   * was cleared; a still-live foreign writer surfaces as connection_busy with
+   * the structured detail the start path already produces.
+   */
+  const reclaimLocalConnection = async () => {
+    const before = new Set(writerScan.writers.filter(entry => entry.status === 'reclaimed').map(entry => entry.name))
+    await scanLocalWriters(true)
+    const reclaimed = writerScan.writers
+      .filter(entry => entry.status === 'reclaimed' && !before.has(entry.name) && entry.pid !== null)
+      .map(entry => entry.pid as number)
+    const started = await startLocalConnection()
+    return { reclaimed, connection: started.connection, spawned: started.spawned }
   }
 
   const api = createApi({
@@ -647,6 +788,12 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
       }
       return startLocalConnection(label, accentColor)
     },
+    localWriterDiagnosis: () => ({
+      quiescent: writerScan.quiescent,
+      writers: [...writerScan.writers],
+      errors: [...writerScan.errors],
+    }),
+    reclaimConnection: () => reclaimLocalConnection(),
     updateConnectionProfile: async ({ connectionId, label, accentColor }) => {
       const row = catalog.getConnection(connectionId)
       if (row === null) {
@@ -772,12 +919,7 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
             }
           }
 
-          const reaped = await reapManagedHosts({ stateDir, logger })
-          localWritersQuiescent = reaped.kept === 0 && reaped.errors.length === 0
-          if (reaped.reclaimed > 0) logger.log(`reaper: reclaimed ${reaped.reclaimed} orphaned dsh host(s)`)
-          if (reaped.errors.length > 0) {
-            for (const reaperError of reaped.errors) logger.error(`reaper: ${String(reaperError)}`)
-          }
+          await scanLocalWriters(false)
           if (epoch !== lifecycleEpoch) throw new Error('control plane start cancelled by stop')
 
           const middlewareCtx: PlaneMiddlewareContext = { api, instanceProxy }
@@ -977,6 +1119,14 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
     get localWritersQuiescent() {
       return localWritersQuiescent
     },
+
+    localWriterDiagnosis: () => ({
+      quiescent: writerScan.quiescent,
+      writers: [...writerScan.writers],
+      errors: [...writerScan.errors],
+    }),
+
+    reclaimLocal: reclaimLocalConnection,
 
     /** The live local dsh port, used only by main-process activation probes. */
     get localDshPort() {
