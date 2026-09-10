@@ -312,7 +312,8 @@ export function descendantFibers<T extends FiberLike>(root: T, all: readonly Fib
     if (candidate === root) return false
     let current: FiberLike | undefined = candidate.parent?.fiber
     // Cordis terminates its parent chain at a SELF-PARENTED root, not at
-    // `undefined` (`vendor/cordis/src/fiber.ts` `Fiber.name` walks with
+    // `undefined` (`vendor/harness-checkout/vendor/cordis/src/fiber.ts` — cordis is
+    // vendored inside the pinned dsh checkout — `Fiber.name` walks with
     // `do { … } while (fiber !== fiber.parent.fiber)`), so a walk that stops only
     // on `undefined` never stops at all: classifying any fiber that is NOT a
     // descendant climbs to the root and spins on its self-loop forever. That is

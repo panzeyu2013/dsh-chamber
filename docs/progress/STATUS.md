@@ -24,7 +24,7 @@
   - **实例写者静默门拦住自动启动后的恢复路径（同上验收）**：shell 被 `SIGKILL`/孤儿 dsh
     占住 DSH_HOME 时，控制面如实拒绝（`409 connection_busy`：writer quiescence is not
     proven）+ connections 页就地解释，但「启动/停止」按钮在此状态下**点不动**（状态停在
-    `starting`、端口 0），实际恢复 = 优雅重启应用（reaper 才prove quiescence）。
+    `starting`、端口 0），实际恢复 = 优雅重启应用（reaper 才 prove quiescence）。
     优雅退出本身正常（日志 `will-quit 清理完成`），仅硬杀后出现。
 - **ssh/http dsh 目标无 cookie 注入（实例侧 401）**：五处同源绝对 URL 由构建期 vendor
   补丁集走本实例前缀（design 09 §3.6）；ssh/http dsh 目标的 cookie 注入属既有认证面，
@@ -80,8 +80,10 @@
   **单删确认的空标题文案（2026-09 rc.1 验收实机所见）**：行内归档确认取自会话标题，
   标题为空串（侧栏显示占位「未命名会话」）时渲染成 `归档「」？`——`blank` 标记为假而
   `title` 为空的会话走不到 `t('session.new')` 回退；判据 = `SidebarRoot.tsx:1026` 的
-  `t('confirm.archive', { title })` 调用点未对空标题取占位。清理成功后 `storages/
-  session_projcache/sessions/<id>.json` 仍留 4 KB 缓存档（聚合缓存与标题已清）。
+  `t('confirm.archive', { title })` 调用点未对空标题取占位。
+  **清理残留（同上验收）**：单删成功后 `storages/session_projcache/sessions/<id>.json`
+  仍留一份 4 KB 缓存档（该档 `title` 已清、聚合缓存已移除）——主题档是否随清理回收，
+  待设计裁决（缓存，非权威面）。
 - **移动端 Web 访问面（design 17 §18；实现契约见 §18.3–§18.5，门禁见 §18.6）**：
   **复核提出但尚未实施**（待实机证据或设计决策，均已登记 §18.6 门禁）：
   「移动中量化 + 静止吸附精确值」（现 16px 固定量化，实机看抖动再定）、
