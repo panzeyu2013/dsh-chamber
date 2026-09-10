@@ -69,6 +69,7 @@ import {
   type SourceOwnershipToken,
 } from './deep-link-activation.ts'
 import { openInstanceSession, reconnectInstanceConnection, disposeAllShells, disposeInstanceShell, type ShellState } from './shell.ts'
+import { BOOT_TIMEOUT_MS } from './boot-budget.ts'
 import { planDegradedRetries } from './degraded-retry.ts'
 import { runViewTransition } from './view-transition.ts'
 import { captureSidebarScrollAnchor, restoreSidebarScroll } from './sidebar-scroll-sync.ts'
@@ -3213,11 +3214,15 @@ export default function App() {
   // 条件下运行，正常态零开销。
   /**
  * How long a boot's host-graph fetch may wait for its source to start serving
- * (2026-09-10): parallel to the shell's 60s page-level slot, so a source that
- * legitimately needs a cold start still gets its client plugins, while a source
- * that never serves stops holding the boot.
+ * (2026-09-10). SINGLE-SOURCED from the boot budget on purpose: the same 60s
+ * sizes the shell's page-level slot (`boot-budget.ts`), the prewarm harvest
+ * deadline (`HARVEST_DEADLINE_MS = budget + 15s`) and the mount abandonment
+ * threshold (`HARVEST_ABANDON_MS = deadline + budget`). A hand-written number
+ * here would silently drift out of that ladder (the "same fact twice" failure
+ * this repo already paid for elsewhere) — worst case the gate would outlive the
+ * abandonment sweep and the failure overlay would race a still-waiting boot.
  */
-const SERVING_WAIT_MS = 60_000
+const SERVING_WAIT_MS = BOOT_TIMEOUT_MS
 
 /** Poll interval of the serving gate (cheap; ends the moment the phase flips). */
 const SERVING_POLL_MS = 250
