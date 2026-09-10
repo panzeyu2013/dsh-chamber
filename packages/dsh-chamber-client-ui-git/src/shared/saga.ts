@@ -40,7 +40,7 @@ export class GitSagaError extends Error {
  *  typed `worktree-submodules` gate and the reclassified `git-command-failed`
  *  both carry it). Such a refusal resolves a pending git-remove recovery that
  *  replays the SAME removal as "not removed", so the recovery may be cleared
- *  instead of retrying the same refusal forever (design 08 §7 bounded
+ *  instead of retrying the same refusal forever (design 08 §6.2 bounded
  *  exception, 2026-09). Saga-minted recoveries (e.g. workspace-delete, which
  *  exists only after a git-removal receipt) are never pre-mutation proofs and
  *  are excluded by the `recovery === undefined` guard — a future host path
@@ -179,7 +179,7 @@ export async function runCreateSaga(
     throw new GitSagaError(workspaceError, undefined, true, false)
   }
 
-  // OpenChamber-aligned create (design 08 §11): an ordinary create registers
+  // OpenChamber-aligned create (design 08 §4.2): an ordinary create registers
   // the worktree workspace WITHOUT committing a session — the workspace
   // appears immediately (0 sessions) and the user starts sessions in it
   // afterwards. `createSession: false` skips the session step entirely (and
@@ -333,7 +333,7 @@ export interface RemoveSagaDeps {
   deleteBranch?: string
   /** The original removal's discard-changes authorization — echoed onto the
    *  workspace-delete recovery so a force-removal replay stays byte-identical
-   *  (2026-08, design 08 §6 amendment). */
+   *  (2026-08, design 08 §5.3 amendment). */
   discardChanges?: boolean
   ambiguousRecovery(error: unknown): Extract<GitRecovery, { kind: 'git-remove' }> | undefined
 }
@@ -369,13 +369,13 @@ export async function runPreRemoveArchive(
 }
 
 /**
- * NO STOP-THEN-REMOVE HERE (2026-09 final rule, design 08 §6): a worktree
+ * NO STOP-THEN-REMOVE HERE (2026-09 final rule, design 08 §5.2): a worktree
  * removal never stops, cancels or deletes a session. What blocks is the host's
  * archived-aware running fact (an archived session, or one under an archived
  * ancestor, is inert), so the git plugin needs no cancel loop at all. The
  * former local `runStopRunningSessions` + its deps were removed; the only
  * cancel/wait implementation left in the repo belongs to the archive manager
- * (`stopSessionsForPurge`, design 24 §22.6).
+ * (`stopSessionsForPurge`, design 24 §5).
  */
 
 /** Git-first removal. A registry failure is retry-only; Git is never recreated. */

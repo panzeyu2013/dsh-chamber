@@ -1,5 +1,5 @@
 /**
- * Plugin diff pure function (design 13 §4.5, derive style): local plugin
+ * Plugin diff pure function (design 13 §6, derive style): local plugin
  * manifest projection + remote plugin manifest projection → the sync row set.
  *
  * This package only computes the view — it never executes, never reaches the

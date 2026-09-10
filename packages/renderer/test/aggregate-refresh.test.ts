@@ -607,7 +607,7 @@ test('authoritative removal delta survives two pulls that both observe the final
   assert.equal(remoteRetiredSourceIds([]).size, 0)
 })
 
-// ---- archiveSetShrink / shouldRequestSessionListRefresh (design 24 §20:
+// ---- archiveSetShrink / shouldRequestSessionListRefresh (design 24 §12:
 // purge-completed signal + official session-list refresh coalescing) ----
 
 const okAggregate = (archivedSessionIds: string[], archiveSetKnown = true): InstanceAggregate => ({
@@ -653,7 +653,7 @@ test('shouldRequestSessionListRefresh opens on absent history and reopens only p
   assert.equal(shouldRequestSessionListRefresh(1_000, 6_000, 5_000), true)
 })
 
-// ---- planSessionListRefresh (design 24 §20 ghost-row convergence machine) ----
+// ---- planSessionListRefresh (design 24 §12 ghost-row convergence machine) ----
 
 const snapshotWithRows = (archivedSessionIds: string[], rowIds: string[], archiveSetKnown = true): InstanceSnapshot => ({
   workspaces: [],
@@ -717,7 +717,7 @@ test('planSessionListRefresh: unknown provenance or non-ok previous never reques
   assert.deepEqual(planSessionListRefresh(notConnected, snapshotWithRows(['a2'], ['s0', 'a2']), ['a2']), { request: true, pending: ['a2'] })
 })
 
-// ---- 2026-09 §21 residuals ①/③: remembered authoritative archive set ----
+// ---- 2026-09 §12 F3: remembered authoritative archive set ----
 
 test('archiveSetShrink: a remembered authoritative set is the baseline when the committed aggregate lost provenance', () => {
   const fallbackView = okAggregate([], false)

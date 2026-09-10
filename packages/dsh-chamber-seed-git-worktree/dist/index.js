@@ -1623,7 +1623,7 @@ var GitWorktreeCore = class {
     fail("worktree-not-found", `no repository in the source lists a missing worktree at '${targetPath}'`);
   }
   /** Best-effort optional branch deletion after a removal, once per
-   *  operation (design 08 §11 user decision). Called from every terminal
+   *  operation (design 08 §5.3 user decision). Called from every terminal
    *  removal path — including the target-absent replay paths — so a removal
    *  that committed before a failure still reports the branch outcome
    *  honestly (branchDeleted / branchDeleteFailed on the result). */
@@ -1943,12 +1943,12 @@ var GitWorktreeCore = class {
     }
   }
   /**
-   * TRUE when a running session is INERT for the running guards (design 08 §6
+   * TRUE when a running session is INERT for the running guards (design 08 §5.2
    * amendment, 2026-09 user decision): the session itself is ARCHIVED, or a
    * SUBAGENT-origin ancestor in its lineage is. An archived session is done —
    * its run must not block a worktree removal, and the removal never touches
    * it (stopping a run and purging content is the archive manager's job,
-   * design 24 §22.4). The chain is walked over the loaded agent rows (any
+   * design 24 §5). The chain is walked over the loaded agent rows (any
    * status), so a running subagent under an archived root is inert too.
    *
    * LINEAGE IS SUBAGENT-ORIGIN EDGES ONLY: `session.header.parentSession` is

@@ -191,10 +191,10 @@ export function commitAggregatePull(
       error: null,
     }
   }
-  // 2026-09 §21 residual ①/③: the unary fallback carries NO archive wire
+  // 2026-09 §12: the unary fallback carries NO archive wire
   // source, so a degraded commit used to publish an EMPTY archive set — every
   // archived row then rendered as an ordinary row until the next authoritative
-  // push (design 24 §20 residual ② family). When the App has already seen an
+  // push (design 24 §12 F3(b) family). When the App has already seen an
   // AUTHORITATIVE archive set for this source (remembered across the degraded
   // window), publish that remembered set with `archiveSetKnown` still FALSE:
   // the sidebar filters archived rows correctly, while the archive manager
@@ -226,14 +226,14 @@ export function commitAggregateFailure(mounted: boolean, errorText: string): Ins
 }
 /**
  * Detect an archived-set SHRINK between the last committed aggregate and an
- * incoming snapshot (archive-cleanup convergence, design 24 §20). There is
+ * incoming snapshot (archive-cleanup convergence, design 24 §12). There is
  * NO unarchive wire, so the only host-side mutation that removes members from
  * the archived set is the cleanup purge's end-of-run removal — a strict shrink
  * is therefore the client's observable "a purge completed and those ids left
  * the set" signal. The baseline is the committed aggregate when it is
  * archive-set-authoritative (`state==='ok' && archiveSetKnown===true`),
  * otherwise the caller's `remembered` set — the last authoritative set the
- * App observed for this source (2026-09 §21 F3: a shrink that completed while
+ * App observed for this source (2026-09 §12 F3: a shrink that completed while
  * the committed aggregate was degraded is otherwise invisible forever). []
  * when neither side is authoritative and for any non-authoritative `next`
  * (unknown provenance must never trigger — the unary fallback's empty set is a
@@ -251,7 +251,7 @@ export function archiveSetShrink(
   remembered?: readonly string[],
 ): string[] {
   if (next.archiveSetKnown !== true) return []
-  // 2026-09 §21 residual ①: when the committed aggregate lost archive-set
+  // 2026-09 §12: when the committed aggregate lost archive-set
   // provenance (degraded unary view / not-connected / never pushed), the App
   // falls back to the last AUTHORITATIVE set it observed for this source —
   // otherwise a purge that completed while the producer's first projection was
@@ -283,7 +283,7 @@ export function shouldRequestSessionListRefresh(
 
 /**
  * One plan step of the App-side ghost-row convergence state machine (design 24
- * §20). Evaluated on EVERY ready mounted push of a source, BEFORE the aggregate
+ * §12). Evaluated on EVERY ready mounted push of a source, BEFORE the aggregate
  * commit (against the last-committed aggregate via the render mirror):
  * - "removed" = the archived-set shrink of this push (archiveSetShrink — a
  *   strict shrink is the client-observable "a purge completed" signal; no
@@ -300,7 +300,7 @@ export function shouldRequestSessionListRefresh(
  *   machine is self-terminating. Push-only evaluation is COMPLETE: mounted
  *   pull commits preserve the current archived set (commitAggregatePull
  *   merge) and full-fallback commits are provenance-gated (archiveSetShrink),
- *   so a pull can never first observe a shrink. Since 2026-09 §21 F3 the
+ *   so a pull can never first observe a shrink. Since 2026-09 §12 F3 the
  *   shrink baseline may come from the caller's remembered authoritative set
  *   (see archiveSetShrink), which closes the degraded-view gap.
  */

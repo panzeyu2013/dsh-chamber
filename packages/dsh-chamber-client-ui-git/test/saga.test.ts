@@ -689,7 +689,7 @@ test('rollback success resolves committed:false and never adopts a workspace', a
 test('a definitive 404 host error surfaces as a no-recovery failure, never a recovery entry', async () => {
   // 404 = the host Remote is not loaded (host package missing / restart
   // pending): a definitive error — retrying the same create cannot help, so
-  // the saga must throw without minting a recovery entry (design 08 §11).
+  // the saga must throw without minting a recovery entry (design 08 §6.3).
   const deps = {
     fetchGitFacts: async () => ({ repos: [], errors: [] }),
     hostCreate: async () => {

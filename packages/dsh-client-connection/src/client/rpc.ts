@@ -1,6 +1,6 @@
 /** Browser caller for generic Connection unary RPC channels.
  *
- * ## chamber patch (dsh-chamber connection manager, design 05 §3.6)
+ * ## chamber patch (dsh-chamber connection manager, design 05 §6)
  *
  * The URL is built as `<instanceBase><channel>/<endpoint>` so every generic RPC
  * call lands under the control-plane's per-instance proxy prefix. The origin

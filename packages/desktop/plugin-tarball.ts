@@ -1,6 +1,6 @@
 /**
  * Desktop plugin-source tarball builder + bounded tgz manifest reader +
- * picked-source classifier (design 21 §6.5/§10 archive-pick, plan Phase 4.6 —
+ * picked-source classifier (design 21 §6.5 archive-pick, plan Phase 4.6 —
  * `gateway_plugin_materialize`; folder pick → tarball upload, or a ready
  * `.tgz` plugin archive uploads verbatim).
  *

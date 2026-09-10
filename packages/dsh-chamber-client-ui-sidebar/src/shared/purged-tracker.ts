@@ -1,5 +1,5 @@
 /**
- * Per-source purged-row suppression tracker (design 24 §21) — the STATEFUL
+ * Per-source purged-row suppression tracker (design 24 §12) — the STATEFUL
  * half of the producer's F1, extracted from `client/index.ts` so it is
  * node-testable (the producer file imports React/CSS and cannot be imported
  * by a node test, which is how two rounds of wiring defects escaped review).

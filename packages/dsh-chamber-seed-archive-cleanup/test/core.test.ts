@@ -302,7 +302,7 @@ test('purge: a running member is refused with force too (delete-time guard)', as
   // The aborted tree keeps its members archived (s1 + the unrelated running
   // s2/s3). `s-orphan` IS cleared: the registry-global orphan sweep is
   // orthogonal to this run's tree outcome and only removes members with no
-  // session record at all (design 24 §20 residual ①) — it deletes no content.
+  // session record at all (design 24 §4 step 5) — it deletes no content.
   assert.deepEqual(host.archived, new Set(['s1', 's2', 's3']))
 })
 
@@ -619,7 +619,7 @@ test('purge subset: a single selected root deletes only its deletable tree; the 
   assert.deepEqual(host.deleteLog, ['s2'])
   assert.equal(host.archived.has('s1'), true, 'a record-bearing member outside the subset is untouched')
   assert.equal(host.archived.has('s3'), true)
-  // Design 24 §20 residual ①: the record-less member is cleared even though
+  // Design 24 §4 step 5: the record-less member is cleared even though
   // the filter never named it, and it never inflates the content counts.
   assert.equal(host.archived.has('s-orphan'), false)
   assert.equal(result.clearedOrphanMembers, 1)
@@ -649,7 +649,7 @@ test('purge subset: a stale/non-archived id is no candidate — nothing deleted,
   assert.equal(result.deletedSubagents, 0)
   assert.equal(host.deleteLog.length, 0)
   // No content candidates — but the registry-global orphan sweep is
-  // orthogonal to the filter (design 24 §20 residual ①): the record-less set
+  // orthogonal to the filter (design 24 §4 step 5): the record-less set
   // member is cleared in the same single write.
   assert.deepEqual(host.removalCalls, [['s-orphan']])
   assert.equal(result.clearedOrphanMembers, 1)
@@ -716,8 +716,8 @@ test('purge subset: malformed filters refuse loudly before any mutation', async 
 
 test('purge subset: an empty selection deletes NO content but still converges the registry-global orphan backlog', async () => {
   // The empty filter is a deliberate delete-nothing CONTENT subset; the
-  // registry-global orphan sweep is orthogonal to it (design 24 §20
-  // residual ①), so the run still reads the corpus and clears record-less
+  // registry-global orphan sweep is orthogonal to it (design 24 §4 step 5),
+  // so the run still reads the corpus and clears record-less
   // set members in one write — no content is ever touched.
   const host = buildHost()
   const core = new ArchiveCleanupCore(host)
@@ -858,7 +858,7 @@ test('purge subset: an empty selection reads the corpus for the sweep but delete
 })
 
 /* ------------------------------------------------------------------ */
-/* Registry-global orphan sweep (design 24 §20 residual ①).            */
+/* Registry-global orphan sweep (design 24 §4 step 5).            */
 /* ------------------------------------------------------------------ */
 
 test('orphanArchivedMembers: record-less members only; a live record-less id is excluded (fail-closed predicate)', () => {

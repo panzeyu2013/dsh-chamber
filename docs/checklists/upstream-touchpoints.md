@@ -48,7 +48,7 @@ design 05 / STATUS）。
 | 文件 | 标记 | 原因/补丁说明 |
 |---|---|---|
 | `package.json` | [patch-add] | 仅追加 chamber test 脚本；其余与上游一致 |
-| `src/api-path.ts` | [patch-mod] | 追加 `resolveInstanceBasePath` + 头部 chamber 说明（basePath 语义，design 05 §3.6） |
+| `src/api-path.ts` | [patch-mod] | 追加 `resolveInstanceBasePath` + 头部 chamber 说明（basePath 语义，design 05 §6） |
 | `src/client/connection.ts` | [patch-mod] | **仅** erasableSyntaxOnly 显式字段改写（两个构造参数属性）+ 顶部 chamber 说明；其余逐字节上游（Batch 2 重锚：loopEpoch 代际守卫与 `CONNECTION_BACKOFF_MAX_MS` 导出退役，活性触发改用原生 `reconnect()`/`setNetworkAvailable()`） |
 | `src/client/index.ts` | [patch-mod] | `apply(ctx)` 读 `ctx.chamberBasePath` → 载波装配 + `SYSTEM_RESUME_EVENT`/liveness 触发（design 14 D4）+ recovery-policy 转出 + 头部 chamber 说明 |
 | `src/client/rpc.ts` | [patch-mod] | basePath 前缀拼装 + `WebConnectionRpcOptions`（chamber 选项对象）+ 头部 chamber 说明 |
@@ -83,7 +83,7 @@ pure **6**（以脚本计数为准）。
 | 文件 | 标记 | 原因/补丁说明 |
 |---|---|---|
 | `package.json` | [patch-mod] | description/peer 集裁剪（host 依赖 dropped）；版本行随上游 |
-| `src/client/index.ts` | [patch-mod] | `apply(ctx)` 读 `ctx.chamberBasePath` → `/api/remote.mux` 落到实例前缀 + `start(sinks, recoveryOverridesForTransport(transport))`（design 05 §3.6） |
+| `src/client/index.ts` | [patch-mod] | `apply(ctx)` 读 `ctx.chamberBasePath` → `/api/remote.mux` 落到实例前缀 + `start(sinks, recoveryOverridesForTransport(transport))`（design 05 §6） |
 | `src/client/stream-client.ts` | [patch-mod] | per-entry basePath（流载波 URL 拼装） |
 | `tsconfig.json` / `tsconfig.client.json` | [own-divergent] | chamber 构面 |
 | `tsconfig.check-base/client.json` | [own] | chamber erasable-only 校验构面 |
@@ -102,8 +102,8 @@ host 插件入口/半、上游 `tests/`、`tsdown.config.ts`、上游 README（a
   `src/client/fixture.ts` + `src/index.ts` 宿主半 webServer 可选注入，实测 fork-pure）、
   client-web 版本行 + `ui-dockkit` 偏差注释（走 covered factory，不 seed；上游
   `tsconfig.json` 的 `../ui-dockkit` reference 有意不镜像——chamber 构面用 paths，无
-  references）、api-gateway 版本行；客户端外壳两代槽位模型重放见 STATUS
-  「0.1.5-alpha.2 基线对齐记录」。
+  references）、api-gateway 版本行；客户端外壳两代槽位模型重放见 `CHANGELOG.md`
+  发布节与 design 05 §2 / design 06 的槽位模型契约。
 - **契约镜像补充（alpha.2 新增，2026-09 复核）**：composite 首屏 `ui-chat` 的 cordis
   inject 新增 `sidebarRight`（由 host-graph extra row `ui-sidebar-right` 提供）与
   `resources`（`client-resources` 行）——chamber-entry 新增

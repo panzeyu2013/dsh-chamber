@@ -112,32 +112,32 @@ export interface DesktopSshSurface {
   is_active(id: string): Promise<SshExecIpcResult>
   /** Restart the remote systemd service (design 13 M2): fresh projection or {error}. */
   restart_service(id: string): Promise<SshExecIpcResult>
-  /** Read the remote instance's plugin manifest (design 13 §4.3). */
+  /** Read the remote instance's plugin manifest (design 13 §4.1). */
   plugin_list(id: string): Promise<SshRemotePluginListResult>
-  /** Apply a plugin-set change to a remote instance (design 13 §4.3/§4.5). */
+  /** Apply a plugin-set change to a remote instance (design 13 §4.1/§3). */
   plugin_apply(id: string, input: SshPluginApplyInput): Promise<SshPluginApplyIpcResult>
   /** Undo the latest OK plugin change of a remote instance (design 21 §6.4):
    *  main-process journal + confirm; id-only, no renderer-supplied spec. */
   ssh_plugin_undo(id: string): Promise<SshPluginUndoIpcResult>
-  /** Read the LOCAL instance's plugin manifest (design 13 §4.3). */
+  /** Read the LOCAL instance's plugin manifest (design 13 §4.1). */
   local_plugin_list(): Promise<SshLocalPluginListResult>
-  /** Best-effort npm registry search (main-process fetch; design 13 §5.8). */
+  /** Best-effort npm registry search (main-process fetch; design 13 §5). */
   npm_search(query: string): Promise<SshNpmSearchResult>
-  /** Seed module A onto a remote instance (design 13 §4.6, 09 遗留 1). */
+  /** Seed module A onto a remote instance (design 13 §3, 09 遗留 1). */
   seed_host_graph(id: string): Promise<SshSeedHostGraphResult>
   /** Pack a named local-manifest dependency and install it remotely. Main
    *  resolves the directory; renderer paths are never accepted. */
   plugin_materialize_add(id: string, name: string): Promise<SshMaterializeResult>
   /** Install a user-PICKED local plugin source (folder or .tgz archive) and
    *  materialize it remotely (pick-only; the main process opens the picker,
-   *  no renderer-supplied path, design 13 §5.8 / design 21 §10 ⑧). */
+   *  no renderer-supplied path, design 13 §5 / design 21 §6.5). */
   plugin_materialize_add_pick(id: string): Promise<SshMaterializeResult>
-  /** Install a spec into the LOCAL dsh profile (design 13 §5.1). */
+  /** Install a spec into the LOCAL dsh profile (design 13 §5). */
   local_plugin_add(spec: string): Promise<SshLocalPluginExecIpcResult>
   /** Pick a local plugin source (folder or .tgz archive) and install it into
-   *  the LOCAL dsh profile (pick-only, design 13 §5.8 / design 21 §10 ⑧). */
+   *  the LOCAL dsh profile (pick-only, design 13 §5 / design 21 §6.5). */
   local_plugin_add_file(): Promise<SshLocalPluginExecIpcResult>
-  /** Remove a plugin from the LOCAL dsh profile (design 13 §5.1). */
+  /** Remove a plugin from the LOCAL dsh profile (design 13 §5). */
   local_plugin_remove(name: string): Promise<SshLocalPluginExecIpcResult>
   onStatusChanged(callback: (payload: SshStatusChangedPayload) => void): () => void
   /** Registry changed via the main-owned save/delete transaction. The
@@ -180,7 +180,7 @@ export interface ChamberHostPackageState {
 export type ChamberInjectionState =
   | { ok: true; packages: ChamberHostPackageState[] }
   | { ok: false; error: string }
-/** Remote plugin manifest projection (design 13 §4.3). */
+/** Remote plugin manifest projection (design 13 §4.1). */
 export interface SshRemotePluginManifest {
   dependencies: Record<string, string>
   bundles: string[]
@@ -195,7 +195,7 @@ export type SshRemotePluginListResult =
   | { ok: true; manifest: SshRemotePluginManifest }
   | { ok: false; error: string }
 
-/** Local plugin manifest projection (design 13 §4.3). */
+/** Local plugin manifest projection (design 13 §4.1). */
 export interface SshLocalPluginManifest {
   dependencies: Record<string, string>
   bundles: string[]
@@ -209,7 +209,7 @@ export type SshLocalPluginListResult =
   | { ok: true; manifest: SshLocalPluginManifest }
   | { ok: false; error: string }
 
-/** Apply outcome (design 13 §4.5). */
+/** Apply outcome (design 13 §3). */
 export interface SshPluginApplyResult {
   applied: number
   skipped: number
@@ -254,7 +254,7 @@ export interface SshPluginApplyInput {
   restart?: boolean
 }
 
-/** Best-effort npm search package projection (design 13 §5.8). */
+/** Best-effort npm search package projection (design 13 §5). */
 export interface SshNpmSearchPackage {
   name: string
   version: string
@@ -264,19 +264,19 @@ export type SshNpmSearchResult =
   | { ok: true; packages: SshNpmSearchPackage[] }
   | { ok: false; error: string }
 
-/** Host-graph seed outcome (design 13 §4.6). */
+/** Host-graph seed outcome (design 13 §3). */
 export type SshSeedHostGraphResult =
   | { ok: true; wrote: boolean; patched: boolean }
   | { ok: false; error: string }
 
-/** Materialize-and-add outcome (design 13 §4.6). `cancelled` = the user dismissed
+/** Materialize-and-add outcome (design 13 §3). `cancelled` = the user dismissed
  *  the local-source picker (a silent no-op, not an error). */
 export type SshMaterializeResult =
   | { ok: true; spec: string; remotePath: string }
   | { ok: true; cancelled: true }
   | { ok: false; error: string }
 
-/** Local `dsh plugin` exec outcome (design 13 §5.1). `cancelled` = the user
+/** Local `dsh plugin` exec outcome (design 13 §5). `cancelled` = the user
  *  dismissed the local-source picker on the `local_plugin_add_file` path. */
 export type SshLocalPluginExecIpcResult =
   | { ok: true }
@@ -329,7 +329,7 @@ export interface GatewayPluginMaterializeOutcome {
   restarted: boolean
 }
 
-/** Local plugin materialize outcome (design 21 §6.5/§10 ⑧): cancelled = the
+/** Local plugin materialize outcome (design 21 §6.5): cancelled = the
  *  user dismissed the picker; ok:true deferred = the gateway persisted the
  *  install intent for the next ready edge (it drains + restarts there);
  *  ok:true outcome = the executor ran the install AND the desktop asked for

@@ -143,7 +143,7 @@ const AGGREGATE_RECONNECT_BACKOFF_MS = 60_000
  * from a healthy-but-quiet one (producers only push on content changes), and
  * every reconnect replays baselines. The unary pull keeps its own 30s cadence
  * untouched. */
-/** Re-request floor for session-list refresh dispatch (design 24 §20): a
+/** Re-request floor for session-list refresh dispatch (design 24 §12): a
  *  refresh re-runs the OFFICIAL session.list of the mounted ctx; while ghost
  *  rows of purged sessions stay pending, requests are floored to one per
  *  coalescing window per source (the official refreshList single-flight bounds
@@ -151,7 +151,7 @@ const AGGREGATE_RECONNECT_BACKOFF_MS = 60_000
  *  a busy source). Suppressed dispatches never lose the ids — they stay in the
  *  per-source pending set and re-evaluate on the next push. The archive-manager
  *  dialog additionally requests one on every purge settle (immediate path,
- *  not stamped here — deliberate cross-package decoupling, §20 notes the
+ *  not stamped here — deliberate cross-package decoupling, §12 notes the
  *  overlap). */
 const SESSION_LIST_REFRESH_COALESCE_MS = 5_000
 /** Bounded wave over whatever edge-triggered refresh set a poll produces. */
@@ -330,7 +330,7 @@ function deriveServers(
       // tri-state: the mounted baseline reports an authoritative set (even
       // when empty); the unary-fallback view reports NOT known — consumers
       // must never read its set as "no archived sessions" (it may be empty OR
-      // the remembered authoritative set, §21 F3(b)).
+      // the remembered authoritative set, §12 F3(b)).
       archivedSessions = deriveArchivedSessions(aggregate)
       archiveSetKnown = aggregate.archiveSetKnown === true
     }
@@ -555,21 +555,21 @@ export default function App() {
   // mounted source (AGGREGATE_RECONNECT_BACKOFF_MS). Reaped with the source
   // like snapshotAtRef (a same-id re-add must start a fresh backoff window).
   const lastReconnectAtRef = useRef<Record<string, number>>({})
-  // Last session-list refresh request timestamp per source (design 24 §20,
+  // Last session-list refresh request timestamp per source (design 24 §12,
   // ms epoch; absent = never requested). Floors the re-request cadence of the
   // ghost-row convergence machine below (SESSION_LIST_REFRESH_COALESCE_MS): a
   // refresh re-runs the OFFICIAL session.list of the mounted ctx, and a
   // failing refresh on a busy source must not stack RPCs per push. Reaped with
   // the source like lastReconnectAtRef (same-id re-add starts a fresh window).
   const sessionListRefreshAtRef = useRef<Record<string, number>>({})
-  // Un-converged ghost-row ids per source (design 24 §20): archived ids removed
+  // Un-converged ghost-row ids per source (design 24 §12): archived ids removed
   // by a purge whose rows are STILL listed in the latest mounted push of this
   // source (rows linger in the official client summaries until a session-list
   // refresh drops them). Maintained by planSessionListRefresh on every push;
   // empty/absent = converged (rows gone or never listed). Reaped with the
   // source like the stamp map above (same-id re-add starts clean).
   const sessionListRefreshPendingRef = useRef<Record<string, string[]>>({})
-  // Last AUTHORITATIVE archive set per source (design 24 §21 residuals ①/③):
+  // Last AUTHORITATIVE archive set per source (design 24 §12 F3):
   // the ids published by a mounted push with `archiveSetKnown: true`. It
   // survives the aggregate being replaced by the degraded unary view (which
   // carries no archive wire), so (a) a purge whose shrink lands while the
@@ -854,7 +854,7 @@ export default function App() {
       }
     }
     // Same lockstep for the session-list-refresh coalescing stamps and the
-    // ghost-row convergence state (design 24 §20): a same-id re-add must start
+    // ghost-row convergence state (design 24 §12): a same-id re-add must start
     // a fresh request window and a fresh pending set.
     for (const id of Object.keys(sessionListRefreshAtRef.current)) {
       if (!servers.some(server => server.id === id)) {
@@ -2811,7 +2811,7 @@ export default function App() {
       // that notification overwrite the authoritative not-connected row;
       // the next ready edge performs one unary refresh.
       if (!readyAggregateSourcesRef.current.has(sourceId)) return
-      // design 24 §20 (archive-cleanup convergence): an archived-set SHRINK
+      // design 24 §12 (archive-cleanup convergence): an archived-set SHRINK
       // in a mounted push is the client-observable "a purge completed" signal
       // (no unarchive wire — only the cleanup purge removes set members). The
       // purged sessions' rows may still linger in the official client session

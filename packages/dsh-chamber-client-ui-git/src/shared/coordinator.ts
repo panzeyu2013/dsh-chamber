@@ -83,7 +83,7 @@ function bumpSourceEpoch(sourceId: string): number {
 }
 
 /** Publish per-workspace git flags to the sidebar's neutral registry
- *  (design 08 §11): which workspaces are worktrees / the main checkout.
+ *  (design 08 §3.2): which workspaces are worktrees / the main checkout.
  *  Workspaces with no git association get their flag cleared. */
 function pathBasename(path: string): string {
   const trimmed = path.replace(/\/+$/u, '')
@@ -182,7 +182,7 @@ function connectedSource(sourceId: string): boolean {
   return chamberBridge.getServers().some(server => server.id === sourceId && server.connected)
 }
 
-/** Last-seen workspace id sets per source (design 08 §11): a workspace added
+/** Last-seen workspace id sets per source (design 08 §3.1): a workspace added
  *  or removed without a connection change (e.g. the sidebar's add-workspace,
  *  an adopt, or an external change) must trigger a git refresh immediately —
  *  otherwise the new workspace's git line waits for the 30s poll. */
@@ -574,7 +574,7 @@ async function performRemoveSaga(
       // still exists: git removed nothing, core.ts commitBoundRemove)
       // resolves a pending git-remove recovery replaying THIS same removal
       // as "not removed": clear the recovery instead of preserving an
-      // endless same-reason retry with no dismiss (design 08 §7 bounded
+      // endless same-reason retry with no dismiss (design 08 §6.2 bounded
       // exception, 2026-09 submodule report). Every genuinely ambiguous
       // failure and every saga-minted recovery keep their semantics.
       setRecovery(sourceId, isProvenPreMutationRefusal(error)
@@ -629,7 +629,7 @@ export async function removeWorktree(
     if (found === undefined) throw new Error('工作树已不存在；请刷新后重试')
     const server = chamberBridge.getServers().find(candidate => candidate.id === sourceId)
     const current = server?.runtime?.current
-    // NO IMPLICIT SESSION TOUCHING (2026-09 user decision, design 08 §6
+    // NO IMPLICIT SESSION TOUCHING (2026-09 user decision, design 08 §5.2
     // amendment): a worktree removal never stops, cancels, or deletes a
     // session, and never archives one UNLESS the user opted in — the
     // 「归档工作区中会话」 checkbox is explicit, default-OFF, and drives the
@@ -662,7 +662,7 @@ export async function removeWorktree(
     // Dirty is NOT an automatic throw here: the dialog collects an explicit
     // user checkbox (discardChanges) authorizing the host to force-remove —
     // the worktree's uncommitted files are discarded, the branch is kept
-    // (design 08 §6 amendment 2026-08). The typed marker lets the dialog
+    // (design 08 §5.3 amendment 2026-08). The typed marker lets the dialog
     // force-show the checkbox even when its row fact was stale-clean.
     if (blocked === 'dirty' && options.discardChanges !== true) {
       throw new WorktreeDirtyError()
@@ -838,7 +838,7 @@ function refreshConnectedSources(): void {
 function start(): void {
   stopBridge = chamberBridge.subscribe(syncServers)
   syncServers()
-  // Hidden-tab polling gate (design 08 §4): a backgrounded page must not keep
+  // Hidden-tab polling gate (design 08 §3.1): a backgrounded page must not keep
   // refreshing every 30s — the timer keeps running but skips while hidden, and
   // becoming visible re-syncs the roster AND immediately refreshes every
   // connected source (not only sources whose workspace key changed).

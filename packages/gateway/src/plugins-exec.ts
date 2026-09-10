@@ -37,7 +37,7 @@
  *       ignore-scripts). HOME is deliberately NOT pinned: pnpm derives its
  *       DEFAULT store from the effective home, and the managed profile was
  *       provisioned under the same effective home (see ensurePrivateRunEnv /
- *       §10 ⑨) — a pinned HOME silently moves the store and pnpm 11 refuses
+ *       §6.3 ⑨) — a pinned HOME silently moves the store and pnpm 11 refuses
  *       every mutation against the provisioned profile;
  *   (4) spawn with bounded stdout/stderr capture (512 KiB tail default),
  *       process-group kill on timeout (SIGTERM → SIGKILL after 1 s),
@@ -610,7 +610,7 @@ export function createPluginsExec(deps: PluginExecDeps): PluginExec {
    * child without HOME; pnpm falls back to the passwd home). A pinned HOME
    * silently moves pnpm's default store elsewhere, and pnpm 11 then refuses
    * every mutation against the provisioned profile ("pnpm now wants to use
-   * the store at …") — real-machine E2E (design 21 §9/§10 ⑦) caught this on
+   * the store at …") — real-machine E2E (design 21 §9/§7) caught this on
    * the first third-party install. Caches/config stay private via the XDG +
    * userconfig pins; the store itself remains the operator-home store the
    * profile was linked against. */

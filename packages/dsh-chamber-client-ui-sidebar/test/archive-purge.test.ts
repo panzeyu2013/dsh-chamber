@@ -1,5 +1,5 @@
 /**
- * Pure archive-purge decisions (design 24 §22, 2026-09 fix rounds): the
+ * Pure archive-purge decisions (design 24 §5, 2026-09 fix rounds): the
  * runtime-report gate, the known-current requirement (N1), the closure-based
  * current-session refusal, the partial-lineage refusal (E-#1), the fail-closed
  * unknown-closure rule, and the outcome note KEYS + params (the module is

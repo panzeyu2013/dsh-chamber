@@ -9,7 +9,7 @@
  *   - the unary default 30s timeout policy (control).
  * Run directly: node packages/control-plane/test/m1-dsh-client.test.ts
  * Also run via the root test:control-plane script (pnpm run test:control-plane)
- * per AGENTS.md Validation; the integration smoke test lives at
+ * per docs/checklists/release-checklist.md §3; the integration smoke test lives at
  * test/smoke.test.ts and runs separately via pnpm run smoke.
  */
 

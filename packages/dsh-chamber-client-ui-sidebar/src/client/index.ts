@@ -160,7 +160,7 @@ export function apply(ctx: ClientContext): void {
   // highlight (06 §4.3). zustand subscribe does not fire on mount, so the
   // snapshot is reported immediately. The producer keeps exactly ONE piece of
   // its own state: the purged-row suppression set + its verified convergence
-  // chain (design 24 §21 — purge 后官方 summaries 不刷新，生产端因此过滤掉
+  // chain (design 24 §12 — purge 后官方 summaries 不刷新，生产端因此过滤掉
   // 离开归档集合的行并做校验式收敛；`purged-tracker.ts` 持有该状态机，其余
   // 字段仍是源 store 的纯投影，运行时事实通道同样只过滤 tombstoned id)。
   // The subagent counts reuse the vendor's indexSubagentDescendants
@@ -181,7 +181,7 @@ export function apply(ctx: ClientContext): void {
       chamberInstanceId, chamberSourceFingerprint, bootGeneration)
     const snapshotProducer = chamberBridge.registerInstanceSnapshotProducer(
       chamberInstanceId, chamberSourceFingerprint, bootGeneration)
-    // design 24 §20 (archive-cleanup convergence) + 2026-09 修正轮 (purged-row
+    // design 24 §12 (archive-cleanup convergence) + 2026-09 修正轮 (purged-row
     // suppression): this ctx's OFFICIAL session client (`ctx.sessions` —
     // ClientSessions) is requested to re-run its session-list refresh. The
     // purge of archived content is invisible to the official runtime (host
@@ -228,7 +228,7 @@ export function apply(ctx: ClientContext): void {
      * `this.manager`), so it MUST be invoked as a method — a detached
      * `const f = ctx.sessions.refresh; f()` throws
      * `TypeError: Cannot read properties of undefined` and silently made the
-     * §20 convergence seam a no-op until the 2026-09 review caught it.
+     * §12 convergence seam a no-op until the 2026-09 review caught it.
      */
     const officialSessionRefresh = (): Promise<unknown> | undefined => {
       const service = ctx.sessions as unknown as { refresh?: () => Promise<unknown> }
@@ -253,7 +253,7 @@ export function apply(ctx: ClientContext): void {
     }
 
     /**
-     * INDEPENDENT authoritative row source (design 24 §21 terminal step): the
+     * INDEPENDENT authoritative row source (design 24 §12 terminal step): the
      * chamber's own unary `session.list` over the instance proxy — a fresh
      * per-call disk rescan with neither the official single-flight nor its
      * client cache. Used only when the bounded official-refresh chain could
@@ -274,7 +274,7 @@ export function apply(ctx: ClientContext): void {
 
     /**
      * Per-source purged-row suppression + verified convergence (design 24
-     * §21, state machine in shared/purged-tracker.ts): observes the
+     * §12, state machine in shared/purged-tracker.ts): observes the
      * authoritative archive set, tombstones the ids a shrink removed, filters
      * them out of the emitted snapshot/runtime facts, and runs the bounded
      * official refresh chain. Triggered by the bridge channel (App
@@ -328,7 +328,7 @@ export function apply(ctx: ClientContext): void {
         snapshotProducer.report(undefined)
         return
       }
-      // F1 (design 24 §20/§21): an authoritative archive-set shrink is the
+      // F1 (design 24 §12): an authoritative archive-set shrink is the
       // client-observable "a purge completed and those ids left the set"
       // signal. The tracker tombstones the removed ids (and runs the verified
       // convergence chain); the ids are then filtered out of the EMITTED

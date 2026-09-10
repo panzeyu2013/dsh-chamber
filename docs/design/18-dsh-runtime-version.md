@@ -1,73 +1,19 @@
-# 18 · dsh 运行时版本管理（npm 拉取安装，2026-08 现行）
+# 18 · dsh 运行时版本管理（运行期从 npm 拉取安装）
 
-> **状态：现行实现；M0/M2/M4 done，M1/M3 partial。** M1 的开发树安装
-> 与 hermetic fake-registry 验收已完成，macOS 打包态执行夹具已就绪，但本轮按
-> 用户要求未生成或检查真实 `.app`；Windows 管理面保持只读。唯一权威的当前进度、
-> 已执行验证与验收边界见 `docs/progress/STATUS.md`（design 18 条目）；本文只保留
-> 架构与行为契约，不以历史验证记录冒充当前结果。
->
-> 决策记录（2026-08 多轮讨论，用户拍板）：
-> 1. **通道保留**；**获取方式 = 运行期从 npm 拉取 `@deepseek-ai/dsh` 安装进壳**
->    ——「dsh 可以使用 npm 等方式拉取最新的包，然后装到 chamber 的壳里」，
->    **不是** chamber 每次发版捆绑对应的 dsh 版本；
-> 2. **无验证区分**：高速开发期不做「已验证/未验证」徽标，不区别对待版本；
-> 3. **默认跟随内建版本**（2026-10 修订为决策 11），用户可自由选择/回滚任一版本；
-> 4. **三版本缓存**：可正常运行版本 / 失败版本（保留现场）/ 尝试中的版本；
-> 5. 应用时机 = **下次启动**（不动退出路径）；探针门控激活 + 自动回退；
-> 6. **显示本地 dsh 版本号**（补上零消费的 `dshVersion` 投影）。
-> 7. **完全移除 Provider B**（2026-08 用户拍板）：运行期 npm 安装为唯一获取方式，
->    不再有发布侧自动预打包的降级 provider。
-> 8. **registry 源用户自设**（2026-08 用户拍板）：软件内 settings 显式设置（默认
->    npmjs，白名单镜像可选，自定义走 URL 白名单校验），**不做按 locale 的静默默认
->    切换**——语言≠地理位置，静默换 registry 等于静默换信任锚。
-> 9. **宿主范围扩展（§9 已实现）**：运行时管理核心抽取为共享包
->    `@dsh-chamber/dsh-runtime`（无 Electron/IPC 依赖），desktop 主进程与
->    gateway 服务进程为两个宿主，经真实 DI seam（`StartupDeps`/`ApplyDeps`/
->    `InstallerDeps`；`ControllerDeps` 为 desktop 侧绑定层）注入状态根、内建锚、
->    Node/pnpm 执行器、spawn/probe 与子进程回收（`RuntimeHostAdapter` 为 §9.1
->    文档草图，非宿主实际 seam）；核心裁决逻辑零分叉。gateway
->    侧存储根 `<stateDir>/dsh-runtime`、解析链 `DSH_GATEWAY_DSH_PATH` → override
->    → `--dsh-path` 内建锚、`/chamber/runtime` 管理面——细节见 §9。
-> 10. **设置落点 per-server 化（§3.6，2026-09 用户拍板，已实现；dsh 直连不挂载
->     修订）**：dsh 运行时设置从「通用」视图迁出，成为每个服务器自己的设置段
->     （agent 预设之后，`settings.section` id `dsh-runtime`）；local/gateway 两种
->     来源行为按 §3.6 分支，dsh 直连（ssh/http）不挂载。
-> 11. **版本选择器默认选中当前激活版本（§3.6 A.2，2026-10 用户拍板 + 交互习惯
->     细化，修订决策 3）**：选择器默认选中**当前激活版本**——默认态（无用户
->     override）下激活版本即内建版本，因此等价于「默认跟随内建版本」；下拉始终
->     如实反映正在运行的版本，改动选择才武装「更新到/回滚到」动作，绝不预选
->     `dist-tags.latest`（npm latest 可能是低于内建兼容基线的旧 rc）。内建版本
->     行加「内建」后缀；不再显示「推荐」与「可能无法启动」后缀；`latest`/
->     `belowBaseline` 数据标记仍投影，仅不再展示；`dist-tags.latest` 也不再钉位
->     第二位——列表 = 当前版本置顶 + 纯 semver 降序。
->
-> 平台范围（2026-08 审查明确）：**macOS/Linux 是运行时安装、切换与数据恢复的
-> 管理契约目标**；Windows 会投影版本与状态，但安装、选择、切换、清理等 mutation
-> 在 controller/main/UI 三层均门控为**只读**，不把未经 Windows 实机验证的恢复与
-> 进程组语义声明为可用。只读为**默认口径**：`DSH_CHAMBER_WINDOWS_RUNTIME_MUTATIONS=1`
-> （严格 `'1'`，默认关）仅向开发/CI 验证开放 mutation（design 23 M2a 后台能力），
-> 正式解锁以真实 Windows 验证记录为准（design 23 §2/§4）。
->
-> 审查记录（2026-08，三轮共 4 次独立审查）：
-> - 自审 17 项（P0×4/P1×6/P2×7）→ 已吸收；
-> - 独立边界审查 17 项（P0×2/P1×10/P2×5）→ 已吸收（修订标注 F1–F17）；
-> - 独立代码事实核对（10 清单全对码，无 WRONG；P2×7/P3×1）→ 已吸收；
-> - 第三轮 5 视角并行审查（修订后一致性 P1×3/P2×11；Provider A 安装深度 P0×0/
->   P1×4/P2×多；UX 与状态机 P1×4/P2×11/P3×4；测试计划 P1×3/P2×9；发布/版本纪律
->   P1×2/P2×6/P3×3）→ 本节已吸收全部 P1 与主要 P2，修订标注 R3-*。
+> **状态：现行（dsh 运行时版本管理；macOS/Linux 为安装/切换/回退/恢复的 mutation 契约目标，Windows 只读，2026-12）**——本文是 dsh 运行时版本管理的权威行为契约：运行期从 npm 做 source-bound 安装、不可变版本树 + 原子指针切换、探针门控激活与自动回退、DSH_HOME 快照与幂等恢复、per-server 设置段与 gateway `/chamber/runtime` 管理面；未完成门禁见 `docs/progress/STATUS.md`（design 18 条目）。
 
 ## 1. 需求与动机
 
-- 现状：dsh 运行时随 chamber 捆绑（`vendor/dsh` → extraResources →
-  `resourcesPath/vendor/dsh`），dsh 更新只能随 chamber 整包更新（设计 11），
-  每次全量下载 100–140MB（win exe ~97.5MB / mac zip ~139.7MB，**外部实测**
-  v0.1.3，M1 回填实测值）；设计前本地 dsh 版本号已投影
-  （`dsh-chamber:info.dshVersion`）但全仓库零 UI 消费——M0 起该投影接入
-  settings「dsh 运行时」块与 connections 本地卡片。
+- 内建基线：dsh 运行时随 chamber 捆绑（`vendor/dsh` → extraResources →
+  `resourcesPath/vendor/dsh`），整包更新随应用发版（设计 11），一次全量下载
+  100–140MB（v0.1.3 外部实测：win exe ~97.5MB / mac zip ~139.7MB）。本文的运行时
+  通道在此外提供**不随 chamber 发版**的版本获取路径，内建树则始终是回退锚。
+- 版本显示：本地 dsh 版本号已有既成投影（`dsh-chamber:info.dshVersion`），
+  settings「dsh 运行时」段与 connections 本地卡片消费同一条 resolve 结果。
 - 目标（用户拍板）：
   1. **dsh 版本更新不等 chamber 发版**——运行期从 npm 拉取最新包安装进壳；
-  2. **版本选择/回滚**：settings 里用户自由选版本（默认跟随内建，见决策 11），
-     坏了可回滚，或升级应用本体求兼容；
+  2. **版本选择/回滚**：settings 里用户自由选版本（默认选中当前激活版本，
+     见 §3.6 A.2），坏了可回滚，或升级应用本体求兼容；
   3. **显示本地 dsh 版本号**。
 
 ## 2. 关键技术事实（设计前提）
@@ -81,22 +27,22 @@
   版本树。即 **bundle-dsh 语义从构建期搬到运行期**。
 - 运行期安装的**额外收益**：安装在目标机执行 → 原生模块自动是本机平台 →
   **省掉 per-platform 资产矩阵**。
-- 运行期安装的**代价/风险**（M1 平台验证范围）：
+- 运行期安装的**代价/风险**（平台差异面）：
   - 原生模块 prebuilt 与否（node-pty prebuilt ✓；koffi 3.x optionalDeps prebuilt
     结构已由 lockfile 证实，其 install 脚本 `cnoke --prebuild` 先 require 探测；
-    开发树 Electron-as-node 安装链已有记录，**真实打包 `.app` 内的 koffi load 仍以
-    STATUS 的 M1 边界为准**）；
+    开发树 Electron-as-node 安装链已有记录，**真实打包 `.app` 内的 koffi load
+    结果以 STATUS 登记的实机门禁为准**）；
   - 浮动依赖解析（运行期无 frozen lockfile）；
   - 安装耗时/体积（预估 2–10 分钟、数百 MB 解压）；
   - 内嵌 pnpm（npm 包实测 37MB，**删 artifacts 后 ~19MB 可正常运行**，
     开发树记录）；
   - **Electron-as-node 跑 pnpm 全链路（ESM shim/worker_threads）**：开发树路径
-    已实测；打包态 extraResources 路径由 acceptance harness 覆盖，但没有真实
-    `.app` 结果时不得视为通过（R3-2 F2）。
+    已实测；打包态 extraResources 路径由 acceptance harness 覆盖，没有真实
+    `.app` 结果时不得视为通过。
 
 ## 3. 架构
 
-### 3.1 获取层：运行期 npm 安装（单一实现，2026-08 用户拍板移除 Provider B）
+### 3.1 获取层：运行期 npm 安装（通道保留，无预打包降级 provider）
 
 ```
 dsh-runtime-updater.ts（客户端）
@@ -113,11 +59,11 @@ dsh-runtime-updater.ts（客户端）
   发生变化，也不能替换已绑定的顶层字节。传递依赖仍由 pnpm 从同一显式 registry
   解析，并按各自 npm integrity 校验。
 - 客户端数据面：「目录里有版本树 → 切指针 → 探针门控 → 回退」。
-- **无降级 provider**：运行期安装是唯一获取方式（完全移除 Provider B 预打包方案）。
-  M1 平台验收只确认实现细节（Electron-as-node、原生模块与打包资源等），不过则
-  修实现，不再有 A/B 分支。
+- **无降级 provider**：运行期安装是唯一获取方式（Provider B 预打包方案已整体移除）。
+  平台验收只确认实现细节（Electron-as-node、原生模块与打包资源等），不过则修实现，
+  不存在 A/B 分支。
 
-### 3.2 存储模型：不可变版本树 + 原子指针切换（R3-1 P1-1/P2-5）
+### 3.2 存储模型：不可变版本树 + 原子指针切换
 
 **宿主根（§9 扩展）**：desktop = `<userData>/dsh-runtime/`；gateway =
 `<stateDir>/dsh-runtime/`（与 gateway state 同目录，权限纪律并入 design 17 §12：
@@ -130,22 +76,23 @@ dsh-runtime-updater.ts（客户端）
   （tmp + rename），不 rename 任何目录树——Windows 文件锁问题在切换路径上
   基本消失；**指针用普通文件，禁用 symlink**（Windows 无开发者模式时创建失败）；
 - `snapshots/<源版本>-<时间戳>/` —— DSH_HOME 快照（§3.7；**命名 = 源版本**，
-  即切换前活跃版，R3-1 P1-3）；
+  即切换前活跃版）；
 - `failures/<version>.json` —— 失败现场记录（§3.7）；
 - `override.json` —— override 标记（原子写 + 损坏保留 *.corrupt，非秘密）；
-- **保留策略（无矛盾版本，R3-1 P1-1）**：受保护类版本——当前指针指向、known-good、
-  pending 指向、`.failed` 失败现场——**绝不逐出**；其余版本树由自动清理按上限
-  逐出；**用户显式选择安装过的版本树保留到显式清理**（registry yank 后缓存树仍
-  可用——「自由回滚」的物理基础）。即：「自动清理」只逐出**不受保护**类版本，
-  不与「保留到显式清理」冲突。
+- **保留策略（无矛盾版本）**：保留策略按「**三版本现场**」语义组织——可正常运行
+  版本、失败版本（保留现场）、尝试中的版本。受保护类版本——当前指针指向、
+  known-good、pending 指向、`.failed` 失败现场——**绝不逐出**；其余版本树由自动
+  清理按上限逐出；**用户显式选择安装过的版本树保留到显式清理**（registry yank 后
+  缓存树仍可用——「自由回滚」的物理基础）。即：「自动清理」只逐出**不受保护**类
+  版本，不与「保留到显式清理」冲突。
 - **恢复内建**：写 `reset-builtin` intent → 停机/快照 → 原子清 `current` →
   内建锚全量探针；失败回旧指针并恢复快照，成功才删除 override/journal（连带
   pending）。dev/env 覆盖下的语义见 §3.5/§3.6。
 
-### 3.3 应用时机 = 下次启动的异步相位（R3-1 P2-7）
+### 3.3 应用时机 = 下次启动的异步相位
 
-**不在模块级 `resolveDshWorkspace` 里做快照/切换**。pending 应用移入 **whenReady
-后的异步启动相位**，**固定顺序**：
+**不在模块级 `resolveDshWorkspace` 里做快照/切换，也不在退出路径上做切换**。
+pending 应用移入 **whenReady 后的异步启动相位**，**固定顺序**：
 
 ```
 reaper（回收孤儿实例）→ 快照 DSH_HOME（§3.7，断言无存活写者的静止拷贝）→
@@ -162,13 +109,12 @@ reaper（回收孤儿实例）→ 快照 DSH_HOME（§3.7，断言无存活写�
 - `resolveDshWorkspace` 改造为**读取 current 指针**（override 生效时），保持同步
   轻量。
 
-### 3.4 激活门控与回退（自由选择模型的唯一安全网，R3-1 P2-4/P2-8/P2-12）
+### 3.4 激活门控与回退（自由选择模型的唯一安全网）
 
 换树后、宣布生效前跑探针列表（全部复用现有设施，**全部只读、无副作用**；
 与钉住上游 0.1.5-alpha.2 wire 对齐，`REQUIRED_ACTIVATION_PROBES` 七项
 （4 项官方 + 3 项 chamber 宿主域，见 `activation-gate.ts`），slash
-端点；探针响应与**会话数据量彻底解耦**——2026-12 定稿选项 A：会话面探针换为
-固定小体积身份方法）：
+端点；探针响应与**会话数据量彻底解耦**——会话面探针是固定小体积身份方法）：
 
 - `commands/execute` 以固定不存在 session 调用并精确期待 `session/not-found`，
   只验证 wire 解码且不进入 CommandRuntime；**身份探针
@@ -178,28 +124,28 @@ reaper（回收孤儿实例）→ 快照 DSH_HOME（§3.7，断言无存活写�
   0.1.2-rc.1）对其答 HTTP 404 → 探针层自动回退 legacy `session/list`（1 MiB
   上限，行为与旧版逐位一致，老树激活/回退照常通过），回退经可选 `warn` sink
   发 warning（两个生产 owner 未注入即静默——该层可见性由并行
-  control-plane `probeHostIdentity` 的 logger 兜底，见 STATUS 挂账③）；graph
+  control-plane `probeHostIdentity` 的 logger 兜底，见 STATUS）；graph
   通道 `clientGraph/graph`；host settings 只读 RPC `settings/describe`
-  （**B1：per-call 响应上限放宽至 16 MiB**，与 `SETTINGS_FILE_MAX_BYTES`
+  （**per-call 响应上限 = 16 MiB**，与 `SETTINGS_FILE_MAX_BYTES`
   对齐——合法大配置永不误伤；cap 经 seam `RuntimeProbeRpcOptions.maxResponseBytes`
   透传——desktop 直传 control-plane `call` 自动生效，gateway runtime-manager 两处
   call seam 同样转发，两端行为一致）；
   `gitWorktree/previewCreate` 以空输入精确期待
   `invalid-input`，在 Git 进程/仓库扫描前停止；
-  `archiveCleanup/probe`（design 24 第三 chamber 域，2026-12）零参执行，
+  `archiveCleanup/probe`（design 24 第三 chamber 域）零参执行，
   accept = 形态良好的 domain carrier（`ok:true` + 对象 value 健康；形态良好
   的 `ok:false` = 在位但异常 → fail-closed；无 legacy 回退）；
   `data.settings`
   **带既有 `$DSH_HOME` profile 数据 boot + 数据可读性探测**（settings.yaml 可
-  解析）。**`data.sessions` 随选项 A 移除**（2026-12 定稿）：探针不再读会话
+  解析）。**`data.sessions` 已移出探针集**：探针不读会话
   数据，会话存储健康不在激活契约内——`session/list` 与 `data.sessions` 双双
   退出探针集。`host.describe` 与 `workspace.list` 已随上游删除，不在
   探针集内；`clientGraph/graph`、`gitWorktree/previewCreate` 与
   `archiveCleanup/probe` 三个 chamber 域在
-  `hostDomains=false` 形态（2026-12，见下）跳过（该形态期望集 =
+  `hostDomains=false` 形态（见下）跳过（该形态期望集 =
   `PROBE_NAMES_WITHOUT_HOST_DOMAINS` 四项：commands/execute ·
   session/canOpenWorkspacePath · settings/describe · data.settings）。
-- **探针形态化（2026-12，design 17 §10；design 24 M2 修订为按域派生）**：
+- **探针形态化（design 17 §10；design 24 §7 C 的按域派生）**：
   `clientGraph/graph`、`gitWorktree/previewCreate` 与 `archiveCleanup/probe`
   三个 chamber 宿主域只在「种子缓存就绪」时验证——gateway 的宿主包由连接的
   桌面经 `/chamber/plugins` 同步（Phase 3），缓存缺包时托管 dsh 是纯 dsh。
@@ -212,26 +158,26 @@ reaper（回收孤儿实例）→ 快照 DSH_HOME（§3.7，断言无存活写�
   宿主层在下次桌面同步 + 受控重启后补上。
 - **探测窗口与裁决**：默认 ≤60s 超时；超时**不立即判失败**——进入「继续观察 +
   延迟裁决」（给慢迁移二次确认窗口），再失败才回退。
-- **回退目标（统一口径，R3-1 P2-4）**：**自动回退目标 = 切换前版本（若其曾探针
+- **回退目标（统一口径）**：**自动回退目标 = 切换前版本（若其曾探针
   通过或为 known-good），否则最近 known-good**——与 §5「切回旧指针」一致，绝不在
   两棵坏树间交替。
 - **known-good 维护**：显式 known-good 标记——探针通过 + **连续健康 24h
   且至少 1 次成功 boot** 才推进（离线墙钟时间不算健康时间）；「上一可运行版本」= 最近的
   known-good。**回退连续失败一次即落内建树 + 响亮终态**。
-- **延迟崩溃（F7）**：探针通过后 30s 才崩——**restart-exhausted（窗口内 M=5 次
+- **延迟崩溃**：探针通过后 30s 才崩——**restart-exhausted（窗口内 M=5 次
   重启，设计 02 §3.6；注意与连续探活失败阈值 N=20 区分）且激活树是 override →
   触发一次自动回退**（复用本路径），作为状态机分支。
 - **激活门控边界（诚实声明）**：探针是 **host 侧**探测；**渲染侧**（chamber
   前端 boot 实例 web 资产）不在门控内——渲染侧不兼容以首屏 boot 结果呈现（boot
   容错降级，设计 09 §3.5/§4），boot 失败则 fatal 覆盖层出现，用户经 settings 换
   版本恢复。
-- **隐式兼容下限（F15，措辞修正 R3-1 P2-12）**：探针 wire 形状随壳重基代漂移
+- **隐式兼容下限**：探针 wire 形状随壳重基代漂移
   （rc.8 `commands.execute` 增 `images` 参数先例——方向是新宿主拒旧客户端；反方向
   新客户端探测旧宿主同样有拒收面）；**基线以下版本探针失败风险高**（不承诺
   「必然」）——选择器对 chamber 兼容基线以下版本给提示「可能无法 boot，chamber
   已移出支持面」。
 
-### 3.5 `resolveDshWorkspace` 与失效规则（R3-1 P2-6；R3-3 UX-P1-F1）
+### 3.5 `resolveDshWorkspace` 与失效规则
 
 优先级：`DSH_CHAMBER_DSH_PATH`（env）→ userData override（未失效时）→
 `resourcesPath/vendor/dsh`（dev：ref-dsh → pkgDir/vendor/dsh → null）。override
@@ -242,7 +188,7 @@ override（未失效时）→ 内建锚（`--dsh-path` ?? `findDshWorkspace`）�
 `shellVersion` = gateway 包版本；"恢复内建" = 经 §3.3/§3.7 完整激活事务回落
 锚链，成功裁决才删除 override/journal。既有
 "仅设 `DSH_GATEWAY_DSH_PATH`"的部署行为不变（env 恒最高）。
-  - **2026-09 修订（gateway update 默认同步内建锚）**：gateway 发行与其配套 dsh
+  - **gateway update 的内建锚同步（部署纪律）**：gateway 发行与其配套 dsh
     基线（内建锚版本）同代发布，基线随 gateway 资产携带（`packages/gateway/
     package.json` 的 `dshAnchorVersion`；install-gateway.sh 常量 = release.yml
     env = 该字段，release-preflight 硬断言）。`install-gateway.sh update` 默认
@@ -265,7 +211,7 @@ override（未失效时）→ 内建锚（`--dsh-path` ?? `findDshWorkspace`）�
   过数据、内建 pin（`bundle-dsh` 兜底常量，当前 0.1.5-alpha.2，不随壳版本自动移动）可能读不了新格式数据；探测失败
   → **自动恢复上一 override 树（受保护类，仍在）+ 响亮提示**。「单调向前」**仅对
   壳版本成立**（§7）。
-  - **2026-09 修订（中断失效自愈，gateway/desktop 启动 F4 门）**：「durable 失效
+  - **中断失效自愈（gateway/desktop 启动 F4 门）**：「durable 失效
     = 回落裁决已提交」有一条例外——F4 首事务被中断且其 intent journal 丢失
     （如安装器健康超时回滚旧壳、旧壳消费新壳 journal）会把 durable 状态卡在
     「current 指针仍在旧树 + override 已失效 + 无 journal」：启动事务报干净、
@@ -278,19 +224,14 @@ override（未失效时）→ 内建锚（`--dsh-path` ?? `findDshWorkspace`）�
     fresh-transaction-supersedes 清除；settled 状态不触发）。兄弟 fail-closed
     状态（override 缺失 + 指针在、旧壳 builtin journal）不在自愈范围，保持各自
     的阻塞/恢复面。
-  - **2026-09 实机复核修订（gateway F4 启动门缺口，0.2.2 发布版）**：桌面与
-    gateway 两 owner 的 F4 启动门曾不一致——desktop 对「记录未失效 + shellVersion
-    失配」（fresh mismatch）无条件武装（main.ts），gateway 侧却要求 journal 缺失，
-    于是「带已应用 override（稳态 applied-monitoring journal）的健康升级」永不武装，
-    首个 startLocal 以 'current pointer has no matching active override' 崩溃
-    （.172 实机：0.2.1 升 0.2.2，安装器健康检查失败自动回滚）。修复（runtime-
-    manager.ts，desktop 对齐）：fresh mismatch 在 journal 为 missing /
-    applied-monitoring / intent（旧壳事务被 F4 intent 替换，desktop 同款）时武装；
+  - **gateway F4 启动门（与 desktop 对齐）**：两 owner 的门判据同一——fresh
+    mismatch（记录未失效 + shellVersion 失配）在 journal 为
+    missing / applied-monitoring / intent（旧壳事务被 F4 intent 替换）时武装；
     仅 live 事务 phase（prepared/switched/restoring…）不武装——旧壳在途事务保持
     各自的 journal-mismatch 阻塞 / rollback-continuation 语义（writeActivationIntent
     亦拒绝覆盖）。回归测试：runtime-routes.test.ts FRESH-shell 两例（稳态 journal
     + intent 替换）。
-- **失效的用户可见记录（R3-3 UX-P1-F1）**：壳更新导致运行时选择失效时，settings
+- **失效的用户可见记录**：壳更新导致运行时选择失效时，settings
   记录一行「因应用更新，dsh 运行时已回落内建 vX（原选择 vY 保留，可重新选用）」——
   用户的运行时选择**绝不无声消失**。
 - **pending 清除与重放**：pending 清除与探针裁决**同一次原子写**（override.json
@@ -299,115 +240,138 @@ override（未失效时）→ 内建锚（`--dsh-path` ?? `findDshWorkspace`）�
 - **恢复内建在 dev/env**：`DSH_CHAMBER_DSH_PATH` 优先于 override → UI 对 env 来源
   显示标记「(env)」且禁用版本 mutation；非 env 的 dev 来源仍走 reset-builtin
   完整事务，成功后回落现有 fallback 链。
-- **dev 工作流边界（2026-08 补）**：override 统一优先于 dev 的 ref-dsh 回退——dev
+- **dev 工作流边界**：override 统一优先于 dev 的 ref-dsh 回退——dev
   下若用户选/装了运行时版本，实例将从「跑 ref-dsh 源码」切换为「跑 npm 装好的树」；
   要持续用 ref-dsh 源码开发的，显式设 `DSH_CHAMBER_DSH_PATH`（env 恒最高优先）即可
   无视 override。dev 的 userData 由 `electron-dev.mjs --user-data-dir` 隔离到
   `packages/desktop/.dev-user-data`（已 gitignore），override/版本树/快照与打包版
   真实 userData 零交叉。
 
-### 3.6 状态机与 UI（R3-1 P2-7；R3-3 UX-P1-F2/F3/F4）
+### 3.6 状态机与 UI
 
-**状态转移表（实现与验收契约，含全部转移，R3-1 P2-7）**：
+**状态转移表（实现与验收契约，含全部转移）**：
 
 ```
 idle → checking → available → downloading → installing → installed/pending
-  →（下次启动）applying → applied | rollback | failed
-pending → [恢复内建]（清 pending，放弃切换）→ idle/checking（2026 audit R4 注：pending 另允许 apply-now 立即执行切换，addendum §5.1；恢复内建仍是唯一"中止待应用切换"逃生口）
+  →（下次启动或 [立即应用]）applying → applied | rollback | failed
+pending → [恢复内建]（清 pending，放弃切换）→ idle/checking
+pending → [立即应用]（addendum §5.1）→ applying；恢复内建仍是唯一"中止待应用切换"逃生口
 applying → 回退连续失败 → 落内建树（终态）
 applied → 下一周期 checking；rollback/failed → 终态（回滚后可再选版本）
 任意态 → error（网络/校验/安装/探测失败，带 error 分支）
 ```
 
 - **pending / applying 为终态门**：pending 期间除 [恢复内建]（连带清 pending）
-  外其余动作禁用；选择当前激活版本为无操作；**单飞守卫覆盖整个 install 窗口**；
-  apply 期间挂起周期/手动检查。
+  与 [立即应用]（addendum §5.1）外其余动作禁用；选择当前激活版本为无操作；
+  **单飞守卫覆盖整个 install 窗口**；apply 期间挂起周期/手动检查。
 - **gateway 安装与激活隔离分层**：`installing` 只锁 runtime writer/registry 变更并投影
   下载进度，当前 dsh proxy 与 feature consumers 保持可用；只有 snapshot→switch→probe
   的 activation quarantine 才令 `canExposeLocal=false` 并 detach dsh 派生 feature。
   candidate/rollback candidate 的瞬时 ready 在 probe verdict 前不得 attach，裁决结束
   必须显式按权威 connectionState 重同步，不能依赖可能已被消费的 ready edge。
-- **applying 相位门控（R3-3 UX-P1-F2）**：applying（快照分钟级）期间，connections
+- **applying 相位门控**：applying（快照分钟级）期间，connections
   本地卡片「启动」按钮与任何实例 spawn 入口**门控禁用**（状态行「应用 dsh vY…」），
   杜绝与「未决切换前绝不 spawn」竞态。
-- **快照失败的中止态（R3-3 UX-P1-F4）**：快照失败 → 中止本次 + **置「快照失败」
-  标记（settings 可见 + [重试应用] / [恢复内建] 动作），不再自动每启重试**——
+- **快照失败的中止态**：快照失败 → 中止本次 + **置「快照失败」
+  标记（settings 可见 + [重试应用] / [恢复内建] 动作），不自动每启重试**——
   磁盘持续不足时用户有明确出口，不反复延迟 spawn。
-- settings 落点（2026-09 用户拍板，per-server 化；dsh 直连不挂载修订）：dsh
-  运行时不再是 chamber 全局「通用」设置，而是**服务器相关配置**——在每个选中
+- **settings 落点（per-server 化；dsh 直连不挂载）**：dsh
+  运行时不是 chamber 全局「通用」设置，而是**服务器相关配置**——在每个选中
   服务器自己的设置段列表里、**agent 预设（agent-presets）之后**新增「dsh
   运行时」段（与 connections 段同款的 `settings.section` 注册模式，05 §5；
   本地实例 = 完整管理面，gateway 服务器 = 经反代触达该 gateway 的
   `/chamber/runtime` 面，§9.3；**dsh 本体（ssh/http）直连 = 不挂载**——远端
   运行时由 systemd 部署、无 chamber 运行时管理面，远端重启经 connections 卡
   的服务操作触达）。内容：
-  当前版本行（内建 vA / 用户选择 vB / env 标记）+ 版本选择器（registry 版本
+  当前版本行（激活版本 / 内建版本 / env 标记）+ 版本选择器（registry 版本
   列表，默认选中当前激活版本（默认态即内建版本），当前版本置顶，内建行带「内建」后缀，
   **离线时含缓存版本**——自由回滚的 UI 基础）+ 动作（更新到 vY / 回滚到 vZ /
-  恢复内建 / 重启 dsh）+ 失败记录行（失败原因 + 建议）+ 数据快照状态行。
-- **结果文案按分支（R3-3 UX-P1-F3，绝不无条件「数据已恢复」）**：
+  恢复内建 / 重启 dsh）+ 失败记录行（失败原因 + 建议）+ 数据快照与占用事实行。
+- **结果文案按分支（绝不无条件「数据已恢复」）**：
   - 完整恢复 →「dsh 运行时已回退 vX，数据已恢复」；
   - 半态（树已回旧、数据未恢复）→「运行时已回退 vX，**数据恢复失败**（保留现场
     .old），可重试恢复或联系排查」；
   - 启动补完失败（restore-in-progress 标记 + 快照缺失）→「数据恢复未完成（现场
     保留），请勿删除 userData 中的 dsh-runtime 目录」+ [重试恢复]。
-- **M4 验收要求（R3-3 终审建议）**：「**状态 × 可见动作 × 文案**」矩阵覆盖
+- **「状态 × 可见动作 × 文案」矩阵（UI 验收契约）**：矩阵覆盖
   全部状态（含 error / swap-attempted / 快照失败中止 / 半态 / 恢复失败），每行 =
-  该状态下可见的动作按钮与状态行文案；纯矩阵、UI 与主进程合法转移边表已接线。
+  该状态下可见的动作按钮与状态行文案；纯矩阵、UI 与主进程合法转移边表同源。
   损坏元数据的恢复能力也由主进程权威投影，renderer 不能伪造路径、版本或 capability。
 - **版本来源双读**：「内建 vA」（resourcesPath）+「激活 vX」（resolve 结果）；
-  `readDshVersion` 按 resolve 结果读取激活版本（M0 接线）。
+  `readDshVersion` 按 resolve 结果读取激活版本。
 - connections 本地实例卡片回显「dsh 运行时 vX」。
 - zh/en 文案走 `dsh-chamber.settings.bridge` 命名空间（**key 集由
   `typecheck:settings-bridge` 的 Record 类型强制；verify:i18n 只查文档对，不覆盖
-  插件文案——如需内容级防护为 locales.ts 建 hash-record 对，R3-4 F4**）。
+  插件文案——插件文案的内容级防护需为 locales.ts 建 hash-record 对**）。
 
-**前端显示规格（2026-08 用户拍板：registry 源用户自设 + 双版本区分显示；2026-09
-用户拍板：从「通用」迁为 per-server 段）**——两块显示面，单一口径（「内建 vA」=
-resourcesPath manifest；「激活 vX」= resolve 结果；「最新 vY」= registry metadata；
-「版本源」= chamber-settings.json，非秘密）：
+**前端显示规格（registry 源用户自设 + 双版本区分显示；per-server 段）**——两块
+显示面，单一口径（「内建 vA」= resourcesPath manifest 或 gateway 部署锚；
+「激活 vX」= resolve 结果；「最新 vY」= registry metadata；「版本源」=
+chamber-settings.json，非秘密）：
 
 **A. 每个服务器自己的设置段列表 →「dsh 运行时」段（agent-presets 之后）**：
 
 1. **版本概览行（双版本，呼应「运行期拉 + 打包内建」）**：
-   - 主行「dsh 运行时 v0.1.2（激活）」+ 来源 tag：`[内建]` / `[用户选择]` / `[env]`；
-   - 副行（仅当激活 ≠ 内建）「随应用内建 v0.1.2-rc.1」；gateway 宿主副行口径
+   - 主行「dsh 运行时 vX（激活）」**不带来源 tag 括号**——来源信息由下拉选项的
+     「· 内建」标记与 env 提示行承载；
+   - 副行（仅当激活 ≠ 内建）「随应用内建 vX」；gateway 宿主副行口径
      「部署锚 vX（`--dsh-path`/`DSH_GATEWAY_DSH_PATH`）」——gateway 的"内建"
      是部署者提供的锚，不是随包版本（§9.3/§7 口径）；
-   - env 来源时 tag 显 `(env)`，版本选择/registry/restore mutation 禁用，提示
+   - env 来源时显 `(env)` 提示行，版本选择/registry/restore mutation 禁用，提示
      「由 env 路径指定」；来源无关的 `[重启 dsh]` 在进程 ready/degraded 时仍可用
-     （desktop = `DSH_CHAMBER_DSH_PATH`；gateway = `DSH_GATEWAY_DSH_PATH`；
-     2026-12：desktop 落地此口径——修复原 main.ts 拒 env/只读平台重启的偏差，
-     与 gateway 行为一致）。
-2. **版本选择器**（下拉）：置顶当前版本（「当前」；内建版本行另加「内建」后缀）→
-   其余 registry 版本纯 semver 降序 → 离线时追加缓存版本（「已缓存」）；
-   **默认选中当前激活版本**（默认态即内建版本；2026-10 拍板，决策 11：不推荐
-   `dist-tags.latest`、不再钉位，不显示「推荐」与兼容基线警示后缀；`latest`/
-   `belowBaseline` 数据标记仍投影，仅不展示）。
-3. **动作**（依状态切换）：`[更新到 vY]`（较新）/ `[回滚到 vZ]`（较旧）/
-   `[恢复内建]`（清 override 含 pending）/ `[重启 dsh]`（见 8；运行中可用——
-   applying/pending/checking/downloading/installing 拒绝；env 源不禁 restart）；
-   pending/applying 期间除 `[恢复内建]` 外禁用（apply-now 例外见 addendum §5.1——2026 audit R4 注）；选当前版本 = 无操作。
-   （2026-12 追加：`[清理版本]` 常驻可清理入口、`[恢复回滚前数据]`、`[保留数据并
-   恢复内建]` 为恢复行动行按钮集；状态/快照/磁盘布局两分支同构，快照与磁盘行移至
-   段尾事实块（见 UI 修订注 D6-A）。）
-4. **版本源设置行**（registry 源用户自设）：下拉 `npmjs（默认）` / `npmmirror` /
-   `自定义…`；自定义走 §6 URL 白名单校验（origin 精确、拒绝 userinfo、decode
-   归一化）；附 `[检查更新]`（宿主进程执行一次检查：desktop 主进程 / gateway 进程，
-   metadata 请求 + 更新判定，失败回显原因）；
-   （2026-12：说明文字移除；版本源行统一为「只读当前源 + [检查更新] + [编辑] ⇄
-   编辑态 select + 自定义输入 + [应用/取消]」，桌面侧应用仍走原生确认。）
-5. **状态/进度行**（上下文驱动）：2026-12 修订——claim 类文案整体移除
-   （「已是最新版本 / 尚未检查更新 / 有可用更新 vY」不再出现）；机器状态由
-   版本行后**统一彩色徽标**表达（正常/检查中/下载中/安装中/待应用/应用中/回退中/
-   重启中/切换失败/快照失败/恢复受阻/启动受阻/操作失败/错误/元数据异常，绿/蓝/黄/
-   红四色）；详情行仅承载真实状态/操作/终态结果/失败（checking「检查更新中…」；
+     （desktop = `DSH_CHAMBER_DSH_PATH`；gateway = `DSH_GATEWAY_DSH_PATH`，
+     两 owner 行为一致）。
+2. **版本选择器**（下拉，以 `aria-label` 命名、不渲染独立字段 label）：置顶当前版本
+   （「当前」；内建版本行另加「内建」后缀）→ 其余 registry 版本纯 semver 降序 →
+   离线时追加缓存版本（「已缓存」）；**默认选中当前激活版本**（默认态即内建版本）：
+   不推荐 `dist-tags.latest`、不为其钉位，不显示「推荐」与兼容基线警示后缀——
+   `latest`/`belowBaseline` 数据标记仍投影，仅不展示。
+3. **动作**（依状态切换）：`[更新到 vY]`（较新）/ `[切换到 vZ]`（较旧）/
+   `[恢复内建]`（清 override 含 pending）/ `[重启 dsh]`（见 8）；pending/applying
+   期间除 `[恢复内建]`（与 addendum §5.1 的 `[立即应用]`）外禁用；选当前版本 =
+   无操作。展示纪律：
+   - 「更新到/切换到 vX」仅在所选版本 ≠ **当前激活版本**时显示（与当前激活一致时是
+     必然 no-op）；相位门控期间（downloading/installing/applying 等）按钮保留显示但
+     禁用（忙碌副本「正在安装…」+ 进度条），local/gateway 两分支同口径；
+   - 「恢复内建」仅在激活 ≠ 内建版本时显示（local 分支的 pending/applying/
+     snapshot-failed 展示性逃生口随主进程 allowedActions 裁决；gateway 分支的恢复门
+     只放行各自 retry/recover-metadata，restore-builtin 仅限普通 pending 与健康选择，
+     applying/snapshot-failed 等不显示；active/bundled 未知时保守显示）；
+   - 落位：「重启 dsh」在版本选择行（暂态不可用时禁用而非隐藏）、`[清理版本]` 在下方
+     恢复行动行，保证版本选择主行（select + 更新到 + 重启）任何 locale 下单行成立；
+     `[清理版本]` 常驻可清理入口，与 `[恢复回滚前数据]`、`[保留数据并恢复内建]`
+     同属恢复行动行按钮集。
+4. **版本源设置行**（registry 源用户自设）：只读当前源 + `[检查更新]` + `[编辑]`
+   ⇄ 编辑态（`npmjs（默认）` / `npmmirror` / `自定义…` + 自定义输入 + `[应用/取消]`；
+   桌面侧应用仍走原生确认）；自定义走 §6 URL 白名单校验（origin 精确、拒绝 userinfo、
+   decode 归一化）。`[检查更新]` 由宿主进程执行一次检查（desktop 主进程 / gateway
+   进程：metadata 请求 + 更新判定，失败回显原因）；块标题与字段标签去重（select 以
+   aria-label 命名），说明文字不渲染。
+5. **状态/进度行**（上下文驱动，不带块标题——「当前状态」h4 标题与
+   `dshRuntimeGroupStatus` 键已删除，状态事实行直接呈现，段内各块以发丝线分隔）：
+   claim 类文案整体移除（「已是最新版本 / 尚未检查更新 / 有可用更新 vY」不出现）；
+   机器状态由版本行后**统一彩色徽标**表达（正常/检查中/下载中/安装中/待应用/应用中/
+   回退中/重启中/切换失败/快照失败/恢复受阻/启动受阻/操作失败/错误/元数据异常，绿/蓝/
+   黄/红四色）；详情行仅承载真实状态/操作/终态结果/失败（checking「检查更新中…」；
    installing「安装 dsh vY…」；pending「将于下次启动切换到 vY」；applying
    「应用 dsh vY…」；applied「已更新到 vY」；rollback/failed 错误文案（脱敏））。
 6. **失败记录行**（仅失败时）：「vY 安装失败：<原因> — 建议升级 dsh-chamber / 重试」。
-7. **数据快照状态行**：「数据快照 N 份（最近 <时间>）」；快照失败态「快照失败：<原因>
-   [重试应用] [恢复内建]」。
-8. **重启 dsh**（2026-09 用户需求：刷新插件挂载）——`[重启 dsh]` 次按钮，
+   失败现场清除入口**仅本地**：desktop 经 `dsh-chamber:runtime-clear-failure`
+   trustedIpc 调共享核心 `clearRuntimeFailure`（保护集复核后显式删除对应
+   `failures/*.json`）；gateway 分支不提供清除按钮——无 `/chamber/runtime` 清除路由，
+   按仅 local 降级并登记偏差（见 STATUS）。
+7. **快照 + 运行时占用事实块**（`.runtimeDiskFacts`，紧凑 gap 4px；置于版本源块内容
+   之后、段尾，与版本源错误行同区域、发丝线分隔；local/gateway 两分支同构）：
+   快照行 = 标签 + 值（说明句 `dshRuntimeSnapshotHint` 不渲染），快照失败态
+   「快照失败：<原因> [重试应用] [恢复内建]」；磁盘行无独立标签，文案自身带头
+   「运行时占用 {total}」——**真实字节**：整棵 runtime 根 + `dsh-home.old*` 备份一次
+   walk、按 `(dev, ino)` 去重累计（消除硬链接双计）；`unclassifiedBytes` 未分类残留桶
+   计入不落入已知分类的条目，`totalBytes = Σ分类（含 unclassified）`，与真实可见字节
+   一致；`unclassifiedBytes>0` 时追加「，未分类残留 {n}」；数值 `.runtimeFactValue`
+   12px/600 加粗、标签 12px tertiary、行距收紧。**诚实边界**：APFS reflink/clone
+   共享物理块经 stat 不可识别（不同 inode），统计对 reflink 副本重复计数——与 macOS
+   `du` 行为一致的已知近似。
+8. **重启 dsh**（刷新插件挂载）——`[重启 dsh]` 次按钮，
    二次确认后执行**受控进程重启**（不是版本切换）：优雅停止（SIGTERM 进程组
    → 1s → SIGKILL，02 §3.7）→ 重新 spawn（同端口 / P+1 退让）→ 就绪探测。
    **刷新语义**（重启生效的一切，02 §2.6/设计 13）：chamber host 包 seed thunk
@@ -427,124 +391,85 @@ resourcesPath manifest；「激活 vX」= resolve 结果；「最新 vY」= regi
    Electron 壳无需重启：插件
    挂载在每次 dsh 进程 boot 时重新确定，不是 Electron 会话级事实（02 §2.6）。
 
-**UI 修订注（2026-12，纯展示层，不动状态机/动作矩阵；2026-12 复审修订措辞；settings 两页微调
-round（plan 24）再修订——D6-A 用户拍板）**：
-- 当前版本行删除来源 tag 括号（「（内建）/（用户选择）/（env）」）——来源信息
-  由下拉选项的「· 内建」标记与 env 提示行承载；
-- 「更新到/切换到 vX」仅在所选版本 ≠ **当前激活版本**时显示（与当前激活一致时是
-  必然 no-op）；相位门控期间（downloading/installing/applying 等）按钮保留显示但
-  禁用（忙碌副本「正在安装…」+ 进度条），local/gateway 两分支同口径；「恢复内建」
-  仅在激活 ≠ 内建版本时显示（local 分支的 pending/applying/snapshot-failed 展示性
-  逃生口随主进程 allowedActions 状态机裁决；gateway 分支 2026 audit R2 收窄——恢复门
-  只放行各自 retry/recover-metadata，restore-builtin 仅限普通 pending 与健康选择，
-  applying/snapshot-failed 等不再显示；active/bundled 未知时保守显示）；「重启 dsh」移入版本选择行（暂态不可用时禁用
-  而非隐藏）；「清理版本」移入下方恢复行动行，保证版本选择主行（select + 更新到 +
-  重启）任何 locale 下单行成立；
-- **「当前状态」h4 标题与 `dshRuntimeGroupStatus` 键删除**（状态事实行不带块标题直接
-  呈现，段内三块以发丝线分隔）；**「选择版本」字段 label 删除**（select 以
-  `aria-label={t('dshRuntimeSelectVersion')}` 保持可访问名称，键保留）；「版本源」块
-  标题与字段标签去重（select 以 aria-label 命名）；
-- chamber 下拉箭头统一为 `IconChevronDownOutline14`（appearance:none + 自定义
-  chevron，右缘与文字左缘对称；文字↔箭头净间隙 ≥6px）；
-- **快照 + 占用行（D6-A，2026-12 用户拍板，推翻本注旧「快照移入当前状态块」与「磁盘行
-  留版本源块末尾」两条）**：紧凑事实块（`.runtimeDiskFacts` gap 4px）整体移出「当前状态」，
-  置于「版本源」块内容之后、段尾（与版本源错误行同区域，发丝线分隔），local/gateway 两分支
-  同构。快照行 = 标签 + 值（说明句 `dshRuntimeSnapshotHint` 删除）；磁盘行无独立标签，文案
-  自身带头「运行时占用 {total}」（D 小项③ + D1-A 口径：真实字节——整棵 runtime 根 +
-  `dsh-home.old*` 备份一次 walk、按 `(dev, ino)` 去重累计，消除硬链接双计；
-  `unclassifiedBytes` 未分类残留桶计入不落入已知分类的条目，`totalBytes = Σ分类（含
-  unclassified）`，与真实可见字节一致；`unclassifiedBytes>0` 时追加「，未分类残留 {n}」；
-  诚实边界：APFS reflink/clone 共享物理块经 stat 不可识别（不同 inode），统计对 reflink
-  副本重复计数——与 macOS `du` 行为一致的已知近似）；数值 12px/600 加粗
-  （`.runtimeFactValue`）、标签 12px tertiary、行距收紧；
-- 失败现场清除入口（D3-A）**仅本地**：desktop 经 `dsh-chamber:runtime-clear-failure`
-  trustedIpc 调共享核心 `clearRuntimeFailure`（保护集复核后显式删除对应 `failures/*.json`）；
-  gateway 分支不加清除按钮——无现成 `/chamber/runtime` 清除路由，按 plan 24 A3 预案降级为
-  仅 local（登记偏差，见 STATUS/plan 24 实施偏差登记）；
-- 下拉文本字号不强统一（服务器下拉 13px/600 为导航选择器强调，运行时/表单字段 12px/400
-  为紧凑行——仅统一箭头词汇，本节下方样式规格中旧的 `.dropdownTrigger` 13px 描述以
-  2026-11 表单化改造的实现为准：`.runtimeField` radius 8px / bg layer-1 / 12px）。
-
-**B. connections 本地实例卡片**：加一行/chip「dsh v0.1.2」，读同一 resolve 结果，
-与 settings 块同源一致（M0 接线）。
+**B. connections 本地实例卡片**：加一行/chip「dsh vX」，读同一 resolve 结果，
+与 settings 块同源一致（桥未就绪时回落 `window.dshChamber.dshVersion`）。
 
 **页面结构与样式设计（per-server 段；对齐官方 settings-panel 设计语言）**：
 
-**页面结构（组件树，2026-09 per-server 修订）**：
+**页面结构（组件树，per-server 段）**：
 
 - settings 壳：`SettingsShell` 服务器下拉选中任一服务器后，该服务器的设置段
   列表在 **agent-presets（agent 预设）之后**追加 chamber 自研段「dsh 运行时」
   （子上下文 `settings.section`，id `dsh-runtime`、order 31；connections 为
   壳的固定 nav 入口、在分隔线之下，不占 ledger order——视觉顺序即
-  agent-presets → dsh-runtime）。**不再出现在 `__general`（通用）视图**——
+  agent-presets → dsh-runtime）。**不出现在 `__general`（通用）视图**——
   `GeneralView` 只保留设计 15 的控制组（启动与关闭 / 运行 / 更新），运行时块
-  从中移除。**2026-12（图驱动设置面修订，design 05 §5）**：该段仍按来源挂载在
+  不在其中。图驱动设置面（design 05 §5）：该段按来源挂载在
   该来源的 settings child ctx（`RUNTIME_SECTION_ID`，属基础集、参与 covered
-  lockstep）；child ctx 现在同时承载该来源自己的客户端插件贡献，故运行时段的
+  lockstep）；child ctx 同时承载该来源自己的客户端插件贡献，故运行时段的
   视觉位置不受影响，但其邻居可能包含第三方分节（带「插件」来源标记）。
 - 每服务器行为按来源分支（同一段、同一视觉，事实与动作随实例路由）：
   - **local**：完整管理面（本段显示规格 1–8 全量）；事实读主进程权威投影，
-    动作走既有 IPC（design 18 §3.6 状态机同口径）；重启 = 控制面事务接口
+    动作走既有 IPC（§3.6 状态机同口径）；重启 = 控制面事务接口
     `restartLocal()`（§9.3，与健康重启单飞行串行化）；
   - **gateway**：同一段内容，但事实与动作经该实例反代触达 gateway 的
     `/chamber/runtime`（`/api/i/gateway-<id>/chamber/runtime/*`，§9.3），
     不接触 token（design 17 §7.2/§12 纪律）；状态机文案矩阵同口径；
-    重启 = `POST /chamber/runtime/restart`。gateway 分支已落地完整 per-server
-    管理面：版本选择器、状态/失败、快照、更新/回滚/恢复内建、registry 与
-    restart 均经认证反代代理；剩余仅为 STATUS 登记的组件级与实机验收门禁
-    （§9.5），不再以缩减视图作为产品契约；
-   （2026-12：补齐 cleanup-version / restore-pre-rollback / recover-metadata 路由
-   与 metadata 健康投影，动作面与 desktop 对齐；清理/恢复/救援入口、彩色状态
-   徽标与快照+占用段尾事实块两分支同构；失败现场清除入口仅本地——偏差登记见
-   UI 修订注。）
+    重启 = `POST /chamber/runtime/restart`。gateway 分支是完整 per-server
+    管理面：版本选择器、状态/失败、快照、更新/回滚/恢复内建、registry、
+    restart、cleanup-version / restore-pre-rollback / recover-metadata 与
+    metadata 健康投影均经认证反代代理，动作面与 desktop 对齐；清理/恢复/救援
+    入口、彩色状态徽标与快照 + 占用段尾事实块两分支同构（失败现场清除入口仅
+    本地——见上文显示规格 6）。组件级与实机验收门禁见 STATUS（§9.5 同口径），
+    不以缩减视图作为产品契约。
   - **dsh（ssh/http 直连）**：**不挂载**——远端运行时由 systemd 部署、无
     chamber 运行时管理面、无 `/chamber` 通道（design 17 §3 能力差异表），
     该来源设置段不渲染 dsh-runtime 分节、无任何版本/重启动作；远端重启经
     connections 卡的服务操作（`restart_service`，03 §2.2）触达。
 - `DshRuntimeSection` 内部行序（自上而下，与上列显示规格一一对应）：
   ```
-  .runtimeSection（官方 settings-section 词汇：列向 gap 8px）
-    h3.sectionGroupTitle             「dsh 运行时」（官方段标题词汇）
-    .runtimeVersionRow               版本概览（主行 + 来源 tag + 内建副行）
-    .runtimeFieldRow                 版本选择器（field label + select）
-    .runtimeFieldRow                 版本源（field label + select + [检查更新]）
-    .runtimeActionsRow               动作按钮组（更新 / 回滚 / 恢复内建 / 重启 dsh）
-    .runtimeStatus                   状态/进度行（aria-live="polite"）
-    .runtimeFailureRow               失败记录（仅失败时，role="alert"；本地含清除按钮）
-    .runtimeDiskFacts                快照 + 运行时占用事实块（版本源块之后、段尾；
-                                      2026-12 D6-A，见 UI 修订注）
+  .generalGroup（官方 settings-section 词汇：列向 gap 8px）
+    h3.generalGroupTitle             「dsh 运行时」（官方段标题词汇）
+    .updateVersionRow                版本概览（主行 + 内建/部署锚副行）+ 状态徽标/详情行
+    .runtimeSelectRow                版本选择器 + [更新到/切换到] + [重启 dsh]（同一主行）
+    .generalRow（.runtimeField）     版本源（只读源 + [检查更新] + [编辑] ⇄ 编辑态）
+    .updateStatusLine                恢复行动行（恢复内建 / 清理版本 / 恢复回滚前数据 /
+                                     保留数据并恢复内建）+ 失败记录（role="alert"）
+    .runtimeProgressBlock            安装/应用进度（aria-live="polite"）
+    .runtimeDiskFacts                快照 + 运行时占用事实块（版本源块之后、段尾）
   ```
-- connections 壳：`ConnectionsSection` 的本地卡 `.localCard` → `.localMeta` 追加
-  一个版本 chip（`.mono` 字体），与端口 / label 同一行内联，不新增独立卡片区。
+- connections 壳：`ConnectionsSection` 的本地卡 `.localMeta` 行追加
+  一个 mono 字体版本 chip（与端口 / label 同一行内联，不新增独立卡片区）。
 
 **样式设计（全部走 `--dsw-alias-*` token，复用官方 settings-section 词汇）**：
 
-- 容器 `.runtimeSection`：与官方设置段同款列向 gap 8px；组标题复用官方
-  section 组标题词汇（12px / 600 / letter-spacing .06em / uppercase /
+- 容器 `.generalGroup`：与官方设置段同款列向 gap 8px；组标题 `.generalGroupTitle`
+  复用官方 section 组标题词汇（12px / 600 / letter-spacing .06em / uppercase /
   `--dsw-alias-label-tertiary`）。
-- 版本概览行 `.runtimeVersionRow`：flex / space-between / align-center /
-  gap 10px；主行 `.runtimeVersionLabel` 13px / primary；来源 tag `.sourceTag`
-  用 `.badge` 词汇（border-radius 999px / padding 1px 8px / 11px / border l2 /
-  tertiary）；内建副行 `.runtimeBundledRow` 12px / tertiary（= `.generalHint`）。
-- 字段行 `.runtimeFieldRow`：复用 `.generalRow`（列向 gap 6px，field label
-  `.generalFieldLabel` 14px / 500）；下拉 `.runtimeSelect` 用 `.dropdownTrigger`
-  词汇（border l2 / radius 10px / bg layer-3 / 13px，focus 时 border brand）。
-- 动作按钮：主按钮「更新到 vY」复用 `.updatePrimaryButton`（dense capsule 28px /
-  radius 14px / `--dsw-alias-button-primary-fill` / label-primary-foreground）；
-  次按钮「回滚到 vZ」「恢复内建」「重启 dsh」复用 `.updateButton`（透明 +
-  border l2 / radius 14px）；禁用态 opacity .4。
-- 状态/进度行 `.runtimeStatus`：block（aria-live，Chromium 不暴露 display:contents）；
-  `.runtimeStatusText` 13px / primary；失败行 `.runtimeFailureRow` 12px /
-  `--dsw-alias-state-error-primary`（= `.generalError`）；快照行 `.runtimeSnapshotRow`
-  12px / tertiary。
-- connections 本地卡版本 chip `.localVersion`：`.mono` 字体 / 12px /
-  `--dsw-alias-label-secondary`，插入 `.localMeta` 行尾。
+- 版本概览行 `.updateVersionRow` / `.updateRow`：flex / space-between /
+  align-center；主行 13px / primary；内建（gateway 为部署锚）副行与 env 提示行走
+  `.generalHint`（12px / tertiary）。
+- 字段行 `.generalRow` + `.runtimeField`：列向 gap 6px，field label
+  `.generalFieldLabel` 14px / 500；下拉 `.runtimeField`（radius 8px / bg layer-1 /
+  12px，focus 时 border brand）。**下拉文本字号不强统一**：服务器下拉 13px/600
+  为导航选择器强调，运行时/表单字段 12px/400 为紧凑行——只统一箭头词汇。
+- 下拉箭头统一 `IconChevronDownOutline14`（`.runtimeSelectChevron`，
+  appearance:none + 自定义 chevron，右缘与文字左缘对称；文字↔箭头净间隙 ≥6px）。
+- 动作按钮：主按钮（更新到/切换到 vY）复用 `.updatePrimaryButton`（dense capsule
+  28px / radius 14px / `--dsw-alias-button-primary-fill` / label-primary-foreground）；
+  次按钮（恢复内建 / 重启 dsh / 清理版本 / 恢复回滚前数据等）复用 `.updateButton`
+  （透明 + border l2 / radius 14px）；禁用态 opacity .4。
+- 状态/进度行 `.updateStatus`（block，aria-live，Chromium 不暴露 display:contents）：
+  `.updateStatusText` 13px / primary；失败行 `.generalError` 12px /
+  `--dsw-alias-state-error-primary`；hint 行 `.generalHint` 12px / tertiary。
+- connections 本地卡版本 chip：`.mono` 字体 / 12px / `--dsw-alias-label-secondary`，
+  插入 `.localMeta` 行尾。
 - 空/占位纪律：桥未水合时控件 disabled + 占位值，**绝不假「off」/ 假「已是最新」**
   （honest-signal 纪律沿用）；ssh 段无占位假控件——只显示说明行。
 - i18n：新增 key 全部入 `dsh-chamber.settings.bridge` 命名空间（`Record` 类型强制 +
-  `verify:i18n`）；zh/en 文案 key 集与 M4「状态 × 可见动作 × 文案」矩阵同源维护。
+  `verify:i18n`）；zh/en 文案 key 集与「状态 × 可见动作 × 文案」矩阵同源维护。
 
-### 3.7 用户数据保护（跨版本数据安全，R3-1 P1-3/P2-9）
+### 3.7 用户数据保护（跨版本数据安全）
 
 **事实基础**：运行时树与用户数据（DSH_HOME = `<userData>/state/dsh-home`）物理
 分离——切指针不动数据目录；chamber 自有数据完全不在切换链路上。真实风险只有：
@@ -558,19 +483,18 @@ round（plan 24）再修订——D6-A 用户拍板）**：
   `snapshots/<源版本>-<时间戳>/`（**源版本 = 切换前活跃版**）。**不变量：无快照
   不切指针**——快照失败（ENOSPC/权限）→ 中止 + 快照失败标记（§3.6）；
 - **数据可读性探测**（§3.4）：新版本启动后校验 settings.yaml 可解析（`data.settings`
-  行）；会话数据可读性不在契约内（2026-12 选项 A——探针不读会话数据，`data.sessions`
-  已移除）；
+  行）；会话数据可读性不在契约内（探针不读会话数据，`data.sessions` 已移出探针集）；
 - **失败回退 = 切回旧指针 + 恢复快照**。**恢复协议（两阶段 + 幂等补完）**：
   写 `restore-in-progress` 标记 → `DSH_HOME → DSH_HOME.old` → `snapshot →
-  DSH_HOME` → 删标记。**补完只按持久 phase 与精确路径状态推进（R3-1 P2-9）**，
-  不再以“目录非空”猜完成；快照缺失时保留 `.old` 与 marker 并响亮失败（§3.6
+  DSH_HOME` → 删标记。**补完只按持久 phase 与精确路径状态推进**，
+  不以“目录非空”猜完成；快照缺失时保留 `.old` 与 marker 并响亮失败（§3.6
   文案分支）。restore marker 通过有界 `O_NOFOLLOW` 描述符读取、单硬链接与父目录/
   inode 前后复验；dangling/external symlink、多硬链接或不安全 staging/home/backup
   目录一律视为未完成，绝不跟随、chmod 或清 marker。数据与树的回退**分别跟踪**
   （半态显式可辨）。`dsh-runtime`、`snapshots`、`pre-rollback` 与 DSH_HOME 父目录
   同样要求真实目录及稳定 parent identity；root symlink 时快照、遍历、prune/cleanup
   整轮 fail-closed，绝不向外部目录写入或删除。
-- **手动回滚数据语义（R3-1 P1-3，显式取舍）**：**手动回滚 = 恢复到目标版本上次
+- **手动回滚数据语义（显式取舍）**：**手动回滚 = 恢复到目标版本上次
   活跃期的数据**（= 该版本作为源版本时的快照）；回滚前**当前活跃数据暂存
   `<dsh-runtime>/pre-rollback/<时间戳>/`**（保留至下次切换，上限 1 份）——回滚不
   丢弃当前数据，且用户可反悔。目标版本无快照（保留范围外）→ 用当前数据 + 探针
@@ -597,61 +521,63 @@ round（plan 24）再修订——D6-A 用户拍板）**：
 保证**「新版本 dsh 一定能读懂旧数据」——数据迁移是 dsh 官方责任。读不懂走回退，
 数据仍在快照里。
 
-## 4. 运行期安装细节（R3-2 F1/F3/F4/F5/F6/F7/F11/F15/F21/F24；R3-5 P1-1/P1-2）
+## 4. 运行期安装细节
 
 - **内嵌 pnpm（新增运行时依赖，显式声明）**：desktop dependencies 增加 `pnpm`
   **钉精确版本 11.21.0（对齐 BUNDLE_PNPM_VERSION）**——AGENTS.md「不新增运行时
   依赖」纪律的刻意偏差（与 design 11 引入 electron-updater 同性质）；**放置位置
   定案 = extraResources（实体盘，非 asar 内）**——规避 asar 内 .cjs 仅 Electron-
-  node 可读、allowBuilds 生命周期子进程需继承 ELECTRON_RUN_AS_NODE 的整类问题
-  （R3-5 P1-1）；体积 npm 包实测 37MB → 删 artifacts 后 ~19MB（开发树记录）。
+  node 可读、allowBuilds 生命周期子进程需继承 ELECTRON_RUN_AS_NODE 的整类问题；
+  体积 npm 包实测 37MB → 删 artifacts 后 ~19MB（开发树记录）。
   spawn 用 `resolveNodeExecutable`（Electron 分支），直接 `node pnpm.cjs` 跨平台
   无需 shell；**install 子进程纳入 will-quit 回收**（与 transport 同款
-  TERMINATE_GRACE，work 目录记 pid 供启动清理判活，R3-2 F11）。
+  TERMINATE_GRACE，work 目录记 pid 供启动清理判活）。
 - **安装命令**：work manifest 先写
   `dependencies["@deepseek-ai/dsh"] = "file:./dsh-runtime-package.tgz"`，再执行
   `node <pnpm>/bin/pnpm.cjs install --config.node-linker=hoisted --store-dir
   <userData>/dsh-runtime/.pnpm-store --cache-dir <userData>/dsh-runtime/.pnpm-cache
-  --registry <所选源> --fetch-retries=0`（+ 壳级总超时，R3-2 F4/F5）。注：
+  --registry <所选源> --fetch-retries=0`（+ 壳级总超时）。注：
   `--no-update-notifier` 在 pnpm 11 已移除，命令中不含该旗标。
-- **源钉死（R3-2 F1，P1）**：用户 `~/.npmrc` 会被 pnpm 读取，可覆盖 registry
+- **源钉死**：用户 `~/.npmrc` 会被 pnpm 读取，可覆盖 registry
   使安装源漂移、供应链锚点与白名单矛盾——安装子进程 env **scrubbing**（只保留
   PATH 与 HTTP(S)/NO_PROXY 基础项，剥离用户 npm config/凭据）+ HOME 与
   XDG_CACHE_HOME 分别钉到 `<dsh-runtime>/.install-home` / `.xdg-cache` +
   **`NPM_CONFIG_USERCONFIG` 指向壳自管空文件** + **显式 `--registry`**。
-  **registry 源用户自设
-  （R3-2 F12，2026-08 用户拍板）**：检查/安装均由主进程 spawn 执行，registry 源
+  **registry 源用户自设**：检查/安装均由主进程 spawn 执行，registry 源
   在软件内由用户显式设置（settings「版本源」下拉：npmjs 默认 / 白名单镜像 /
   自定义 HTTPS registry，走 §6 URL 白名单校验，存 chamber-settings.json，非秘密）；
   **不做按 locale 的静默默认切换**——语言≠地理位置，且静默换 registry 等于静默换
   信任锚。默认 npmjs；用户切换后 metadata 与 integrity 一并来自所选源，信任边界
   显式可见。
-- **allowBuilds（R3-2 F6/F7，P1）**：白名单（node-pty/koffi/fs-ext/protobufjs/
-  @google/genai/@deepseek-ai/dsh-subprocess-local；fs-ext 为 0.1.3 线
-  session-persistence-jsonl 写租约 flock 引入）**单一来源常量**（bundle-dsh.mjs
-  与运行期安装器编译产物同源，R3-5 P2-3）；运行期 work 目录只写 `true`、**绝不写
-  `false`**（显式 false 实测静默跳过脚本，破坏 fail-safe）；**work 目录必须先写
-  pnpm-workspace.yaml 再跑 pnpm**（完全缺失 allowBuilds 配置实测硬失败），且
+- **allowBuilds（单一来源常量）**：`allow-builds.mjs` 是构建期
+  `bundle-dsh.mjs` 与运行期安装器共用的唯一来源——放行列表 6 项
+  （node-pty / koffi / fs-ext / protobufjs / @google/genai /
+  @deepseek-ai/dsh-subprocess-local；fs-ext 为 0.1.3 线 session-persistence-jsonl
+  写租约 flock 引入），另以显式否认列表登记 pnpm 11 `strictDepBuilds` 下必须显式
+  写 `false` 的 build-script 依赖（`msgpackr-extract`，语义 = 已评审并拒绝其在
+  安装期执行脚本）；两个生成点共用同一渲染器，漂移由测试钉死（放行 6 项）。
+  **work 目录必须先写 pnpm-workspace.yaml 再跑 pnpm**（完全缺失 allowBuilds
+  配置实测硬失败），且
   work 目录不得位于含 pnpm-workspace.yaml 的祖先下（向上探测实测报错）；**白名单
   miss 是硬失败**（实测 ERR_PNPM_IGNORED_BUILDS）→ 新 dsh 引入新 build-script
   依赖时安装失败，UI 给出「请升级 dsh-chamber」指引（「不等 chamber 发版」对这类
   版本不成立，诚实声明）；简略 packument 无 hasInstallScript（实测），且捆绑基线
   lockfile（`packages/desktop/vendor/dsh/pnpm-lock.yaml`）同样不记录
   `hasInstallScript` 字段——因此**无法从 lockfile 推导 build-script 覆盖**，白名单
-  覆盖以「单一来源常量 + 漂移钉死测试 + 白名单 miss 硬失败」三层兜底（allow-builds
-  测试钉死 6 项；新增 build-script 依赖的检测由真实安装的 ERR_PNPM_IGNORED_BUILDS
+  覆盖以「单一来源常量 + 漂移钉死测试 + 白名单 miss 硬失败」三层兜底（新增
+  build-script 依赖的检测由真实安装的 ERR_PNPM_IGNORED_BUILDS
   显式失败暴露，UI 引导升级，不静默跳过）。
-- **prune 打包纪律**：`packages/desktop/prune-runtime.mjs` 由 desktop `files`
-  显式枚举，打包态不依赖会被排除的根 `scripts/`；**版本切换 = current
+- **prune 打包纪律**：prune 规则在共享包 `packages/dsh-runtime/src/prune-runtime.mjs`
+  （`bundle-dsh.mjs` 与运行期安装器同一实现），打包产物自带、不依赖会被
+  desktop `files` 的 `!scripts/**` 排除的脚本目录；**版本切换 = current
   指针原子写（新小模块），不搬 bundle-swap 的目录
-  rename 交换**（那是 F12 否决的模型）；仅 §3.7 DSH_HOME 两阶段恢复借鉴
-  dest→backup→new→cleanup 模式（R3-1 P1-2）。
+  rename 交换**（该目录 rename 交换模型已否决）；仅 §3.7 DSH_HOME 两阶段恢复借鉴
+  dest→backup→new→cleanup 模式。
 - **供应链信任声明**：运行期安装执行白名单内依赖构建脚本；信任模型 = npm
   registry（钉源后）+ 精确版本 + integrity + 白名单 fail-safe；用户选择安装即
   显式接受。koffi optional dep 瞬时下载失败会 fallback 到 cmake 源码构建、无
-  toolchain 时硬失败——**安装失败重试一次并呈现 pnpm 日志摘要**（R3-2 F8）；
-  Windows Defender 实时扫描 ~33k 新文件拖慢首次安装属预期，UI 安装状态行注明
-  （R3-2 F17）。
+  toolchain 时硬失败——**安装失败重试一次并呈现 pnpm 日志摘要**；
+  Windows Defender 实时扫描 ~33k 新文件拖慢首次安装属预期，UI 安装状态行注明。
 - **浮动解析让步**：无 frozen lockfile → pnpm 解析最新传递依赖；冒烟（`bin.js
   --version` == 目标版本）+ 探针兜底；override 记录 resolvedVersion 与依赖快照。
 - **路径安全**：registry 返回的版本串进入任何路径前强制 EXACT_SEMVER 预校验 +
@@ -664,14 +590,14 @@ round（plan 24）再修订——D6-A 用户拍板）**：
   explicit-retained 版本，main 确认前后重读，writer fence 内再权威重读
   current/pending/journal/known-good/candidate/failure 保护集；受保护必须响亮拒绝。
   成功后执行 `pnpm store prune` 并刷新投影；维护清理保留最新 1 份已完成
-  restore backup，restore marker 损坏时 fail-closed（R3-2 F21）。
+  restore backup，restore marker 损坏时 fail-closed。
 - **manifest 发布时机**：prune + 冒烟之后写入精确版本、源、SRI 与关键文件
   SHA-256，原子发布（tmp + rename）为只读版本树，并在发布后复验；半成品目录绝不
-  当作已装，既有有效树绝不覆盖（R3-2 F15）。
-- **一次 source-bound 顶层下载（R3-2 F24）**：metadata 的
+  当作已装，既有有效树绝不覆盖。
+- **一次 source-bound 顶层下载**：metadata 的
   `{origin, version, tarball, integrity}` 先绑定；壳只下载该 tarball 一次并流式 SRI
   校验，随后 pnpm 从本地 `file:` spec 安装。pnpm 不再对顶层包发起 registry
-  解析/下载；这同时消除旧方案的「壳门禁下载一次 + pnpm 顶层再下载一次」。
+  解析/下载；这同时消除了「壳门禁下载一次 + pnpm 顶层再下载一次」的旧形态。
 - **registry metadata 用简略格式**（`Accept: application/vnd.npm.install-v1+
   json`，实测含 dist-tags.latest / dist.{tarball,integrity,unpackedSize}）；
   `dist-tags.latest` 缺失/畸形 → 回退 max semver 或报「无法推荐」。
@@ -679,22 +605,22 @@ round（plan 24）再修订——D6-A 用户拍板）**：
   传递依赖由 pnpm 按同一 registry metadata 的各自 integrity 校验，再由关键文件
   摘要、冒烟与激活探针兜底。
 
-## 5. 数据流与 UX（R3-1 P2-4 回退目标对齐）
+## 5. 数据流与 UX
 
 ```
 启动（延迟 15s）→ 静默读 registry metadata（不下载）
-  ├─ 有可用版本 → settings「dsh 运行时」块「当前 vX，最新 vY」
+  ├─ 有可用版本 → settings「dsh 运行时」段更新版本行 + 状态徽标（无 claim 类文案）
   │     ├─ [选择版本]（默认选中当前激活版本）→ 用户确认 → 绑定源/版本/tarball/SRI
   │     │   → 一次下载 + SRI → pnpm `file:` install + prune + 冒烟
   │     │   （状态行「安装 dsh vY…」）
-  │     │   → installed/pending（终态门）→ 下次启动异步相位：
+  │     │   → installed/pending（终态门）→ 下次启动异步相位（或用户 [立即应用]）：
   │     │     reaper → 快照 DSH_HOME（无快照不切换）→ 切指针 → spawn →
   │     │     探针门控（只读、有界窗口 + 延迟裁决）
   │     │       ├─ 通过 → applied（known-good 候选，数据无缝延续）
   │     │       └─ 失败 → 保留现场 + 回退目标（切换前版本或最近 known-good）+
   │     │           恢复快照（两阶段 + 幂等补完）+ settings 按分支文案
   │     └─ 不选择 → 永不下载（仅状态行）
-  ├─ 无新版本 → 「已是最新版本」
+  ├─ 无新版本 → 版本行/徽标如实反映，不发「已是最新版本」claim 文案
   └─ 失败（metadata/绑定/下载/SRI/安装/探测）→ 「无法检查更新/安装失败/已回退」
       （静默日志或响亮，绝不假成功）
 用户主动 [选择版本]（任意 registry 或缓存版本，含回滚）→ 同一条路径
@@ -706,7 +632,7 @@ round（plan 24）再修订——D6-A 用户拍板）**：
 恢复协议：restore-in-progress 标记 + 两阶段 rename + 幂等补完（§3.7）
 ```
 
-## 6. 安全与已知让步（R3-1 P2-13 引用修正；R3-5 P2-6）
+## 6. 安全与已知让步
 
 - **完整性**：顶层 tarball 一次 source-bound 下载并做 SRI；传递依赖由 pnpm 校验
   registry integrity；发布树再做关键文件摘要、冒烟/探针。版本选择器只允许
@@ -716,30 +642,32 @@ round（plan 24）再修订——D6-A 用户拍板）**：
 - **URL 白名单**：registry 域（metadata / tarball 最终 origin / **search 端点
   `/-/v1/search`**）同款校验结构（new URL + origin + userinfo 拒绝 + decode 后
   前缀），为 registry 域新写实例（`isAllowedReleaseUrl` 硬编码 github 不可复用）；
-  既有 `desktop_npm_search`（main.ts:1544 起）并入同一口径 + 行为保持测试
-  （R3-5 P2-6）。
-- **错误脱敏**：`sanitizeErrorText`（sanitize-error.ts:18 导出）提取为共享模块并
-  导出，评估相对路径覆盖。
+  既有 `desktop_npm_search` IPC 与它同一口径（`packages/dsh-runtime/src/registry-url.ts`）
+  并有行为保持测试。
+- **错误脱敏**：`sanitizeErrorText`（`sanitize-error.ts` 导出）为共享模块导出，
+  评估相对路径覆盖。
 - **出网面**：desktop = 仅主进程访问 npm registry；gateway = 仅 gateway 进程
   访问（§9.3），控制面与 spawn 的 dsh 子进程两侧都保持零出网、
-  loopback 闭环不变。**design 21 登记（2026-12，决策 1 落实）**：gateway 第三方
+  loopback 闭环不变。**design 21 登记**：gateway 第三方
   插件安装子进程随宿主受控出网（`dsh plugin add` 的 pnpm 子进程，env 白名单 =
   共享 `INSTALL_ENV_WHITELIST`（PATH+代理族）+ 私有目录 pins——`runtime-installer`
   与 gateway executor 同一常量；安装代码 = gateway 用户级等价，脚本默认允许，
   见 design 21 §6.1/§6.3）。
 - **隐私**：不携带用户/SSH 材料；失败记录仅版本/时间戳/探测结果/脱敏路径。
 - **已接受让步（用户拍板）**：无验证 + 自由选版本 = 壳可能跑在未重基的 dsh 上；
-  安全网 = 探针门控（含延迟裁决）+ known-good 终态 + 三版本现场 + 无快照不切换
+  不做「已验证/未验证」徽标、不区别对待版本。安全网 = 探针门控（含延迟裁决）+
+  known-good 终态 + 三版本现场 + 无快照不切换
   + 两阶段恢复 + pre-rollback 暂存 + 一键恢复 + 失败记录引导「升级应用求兼容」。
   boot 层版本漂移容忍（设计 09 §3.5/§4）作纵深防御。
 - **平台范围**：macOS/Linux 为 mutation 契约目标；Windows 仅展示只读状态，安装、
-  切换、回滚、清理等动作由 controller/main/UI 三层拒绝。只读为默认口径——验证
+  切换、回滚、清理等动作由 controller/main/UI 三层拒绝；只读为默认口径，不把未经
+  Windows 实机验证的恢复与进程组语义声明为可用。验证
   门 `DSH_CHAMBER_WINDOWS_RUNTIME_MUTATIONS=1`（严格 `'1'`、默认关、开发/CI 验证
-  专用）可开放 mutation，正式解锁待真实 Windows 验证记录（design 23 M2a/M2b）。
+  专用）可开放 mutation，正式解锁待真实 Windows 验证记录（design 23 §3）。
 - **单飞与幂等**：切换单飞守卫覆盖 install+apply 全程；选择当前版本无操作；周期/
   手动检查同路径；apply 期间挂起检查。
 
-## 7. 版本管理与数据兼容（R3-5 P2-1 版本集口径修正）
+## 7. 版本管理与数据兼容
 
 - **目录版本** = npm registry 中 chamber 侧可安装的 dsh 版本；**内建基线** = 当前
   安装捆绑的 dsh（随应用更新移动；gateway 宿主 = 部署者提供的 `--dsh-path`/
@@ -749,10 +677,11 @@ round（plan 24）再修订——D6-A 用户拍板）**：
 - **「单调向前」仅对壳版本成立**：应用整包更新后回落内建（新壳重基代）；运行时
   版本失效（用户选择）非单调向前——用户可显式选更旧版本，失效回落带数据可读性
   探测保护（§3.5）。
-- **chamber 发版版本集（口径修正）**：根包 + 全部非 fork
-  `@dsh-chamber/*` 包（当前 14 个）统一 bump；`release-preflight.mjs` 的数据驱动扫描与
-  release.yml 断言集是唯一权威，新增 chamber 包会自动纳入。两个
-  `@deepseek-ai/dsh-client-*` fork 保持上游基线版本。`packages/dsh-runtime` 虽随
+- **chamber 发版版本集**：根包 + 全部非 fork
+  `@dsh-chamber/*` 包（当前 16 个）统一 bump；`release-preflight.mjs` 的数据驱动扫描与
+  release.yml 断言集是唯一权威，新增 chamber 包会自动纳入。三个 fork 副本
+  （`@deepseek-ai/dsh-client-connection` / `dsh-client-web` / `dsh-api-gateway`）
+  保持上游基线版本。`packages/dsh-runtime` 虽随
   chamber 版本集锁步并嵌入 desktop/gateway 产物，但按 §9.6 D2 不作为独立 npm
   发布物；这与用户在 registry 中选择的 **dsh 运行时版本**仍完全正交。
 - 运行时替换后 `$DSH_HOME` 数据跨版本兼容：dsh 自身迁移责任；激活门控含数据
@@ -760,91 +689,70 @@ round（plan 24）再修订——D6-A 用户拍板）**：
 - 双更新通道并存（design 11 + 本设计）：不同存储路径、不同状态机；失效规则覆盖
   override 与 pending（含用户可见记录）。
 
-## 8. 实现分期（M0–M4）、当前判定与验收边界
+## 8. 验收与证据边界
 
-> 本节给出里程碑定义与当前判定摘要；**STATUS 是唯一权威进度记录**。`done`
-> 表示该里程碑的代码/自动化契约已闭环，`partial` 表示仍有明确未完成的实机证据或
-> 生产接线，不把“已有脚本”写成“已经跑过”。
+**验收装置与它们各自证明什么**：
 
-| 里程碑 | 当前判定 | 已落地 | 尚未声明完成的边界 |
-|---|---|---|---|
-| M0 版本显示 | **done** | 激活/内建版本双来源投影；settings 与 connections 本地卡回显；zh/en | — |
-| M1 平台前置验证 | **partial** | 内嵌 pnpm 与 extraResources/asar-unpack/afterPack 静态门；开发树 Electron-as-node 安装记录；macOS packaged smoke harness 可校验 pnpm、koffi、dsh CLI 与 entitlement | 本轮按用户要求不构建、签名、公证或运行真实 `.app`，因此没有 packaged smoke 结果；Windows mutation 不在范围内，保持只读 |
-| M2 获取/安装/磁盘数据面 | **done** | 简略 metadata、latest 回退、同源重定向、source binding、一次 tarball 下载 + SRI + pnpm `file:` install、allowBuilds、prune/冒烟/关键摘要/只读原子发布、全分类磁盘统计（含二阶恢复数据与 orphan）与 10 GiB 新安装软阈值、writer fence 内权威保护重读后清理、store prune/维护清理、IPC 与打包清单；loopback fake-registry 验收覆盖真实 pnpm 子进程 | fake-registry 使用开发树 Node/pnpm，不等价于 packaged Electron；该差异归 M1/M3 实机边界 |
-| M3 激活/回退/数据保护 | **partial** | whenReady 活路径、durable activation journal、reaper → 快照 → 指针 → spawn → 全量只读探针、一次延迟裁决、自动/手动回退、两阶段恢复与启动补完、F4/F7、24h + 1 boot 连续健康 known-good、快照/失败保留、writer fence 与进程组静默门 | 尚无真实 packaged Electron 壳中“安装候选 → 全探针 → 故障 → 回退/恢复”的端到端记录 |
-| M4 UI/状态矩阵 | **done** | 版本/源选择、检查/安装/回滚/恢复、失败与快照/磁盘投影、失效通知、平台/env 门控、状态 × 动作纯矩阵、i18n 与主进程合法转移边表；selection metadata 与普通损坏 recovery marker 均有无路径、主进程二次复核的显式恢复出口 | 不安全/不可读的 recovery marker 保持 fail-closed，属于安全终态而非自动修复能力 |
-
-> **M4 证据口径（2026-09 修订注，随后由五路评审修正）**：M4 的 UI 证据针对 §3.6 修订前的
-> 「通用」视图落点。per-server 段迁移（§3.6 修订）与「重启 dsh」动作**已随 §9 的
-> M5–M7 落地（2026-09，见 §9 状态与本段修订注 9/10、STATUS）**——M4 done 覆盖修订前
-> 矩阵与投影本身，per-server 化以 §9/STATUS 记录为准，不得把 M4 读成旧落点仍为当前实现。
-
-### 验收边界
-
-- `pnpm run acceptance:runtime:fake-registry` 已以 loopback `node:http` fixture 验证：
+- `pnpm run acceptance:runtime:fake-registry`：loopback `node:http` fixture 覆盖
   简略 packument、`latest` 缺失回退、metadata/tarball 302、精确同源绑定、单次顶层
-  tarball、SRI、真实 pnpm `file:` 安装、prune/冒烟与发布，结果以 STATUS 记录为准。
-- `pnpm run acceptance:runtime:mac-packaged` 是**可执行夹具，不是已有 PASS 记录**。
+  tarball、SRI、真实 pnpm `file:` 安装、prune/冒烟与发布。它使用开发树
+  Node/pnpm，**不等价于 packaged Electron**——该差异属于实机边界。
+- `pnpm run acceptance:runtime:mac-packaged` 是**可执行夹具，不是已有 PASS 记录**：
   它要求真实 `.app`，会用 packaged Electron 执行内嵌 pnpm、require koffi、执行 dsh
-  CLI 并检查 `disable-library-validation`。本轮用户明确不要求打包/签名/公证，故该项
-  作为验收边界保留，不列为本轮代码验收阻断，也不得写成已通过。
-- afterPack 的静态/fixture 测试只证明清单、entitlement 配置与断言逻辑；不能替代
-  `.app` 的 Mach-O、签名或原生模块运行结果。
-- Windows 明确为只读平台：可查看版本/状态，但不能安装、选择、应用、回滚或清理
-  运行时；不以未跑 Windows mutation 测试为本轮偏差，因为该能力不在契约内。
+  CLI 并检查 `disable-library-validation`；没有真实 `.app` 结果时不得写成已通过。
+- afterPack 的静态/fixture 测试只证明打包清单、entitlement 配置与断言逻辑；**不能
+  替代** `.app` 的 Mach-O、签名或原生模块运行结果。
+- 内嵌 pnpm 的 extraResources / asar-unpack / afterPack 静态门在打包清单层把关
+  （见 §4、§9.2）。
 
-### 仍开放但不阻断当前代码验收
+**平台证据口径**：Windows 为只读平台——可查看版本/状态，不能安装、选择、应用、回滚
+或清理运行时；未跑 Windows mutation 测试不构成本设计的偏差，因为该能力不在契约内。
 
-- 真实 `.app` 中运行 packaged smoke，以及更强的 packaged fake-registry 安装 + web
-  host + 全激活探针端到端；按用户要求本轮未执行。
-- 快照体积实测与可再生物排除优化、安装耗时/磁盘体积的更多机器样本。
-- 兼容基线下限随壳重基代维护。
+**尚未闭环的实机与验收项**（登记在 STATUS，本文不冒充结果）：真实 `.app` 中运行
+packaged smoke，以及更强的 packaged fake-registry 安装 + web host + 全激活探针端到端；
+真实 packaged Electron 壳内「安装候选 → 全探针 → 故障 → 回退/恢复」端到端；快照体积
+实测与可再生物排除优化；安装耗时/磁盘体积的更多机器样本；兼容基线下限随壳重基代维护。
 
 ## 9. 服务端化与共享核心（gateway 宿主 + desktop 迁移）
 
-> 状态：**已实现（M5–M7 落地，2026-09；剩余实机门禁见 STATUS）**。本节把本设计的运行时管理能力扩展到
-> gateway 服务端形态（修订 design 17 §2.1/§4/§8/§10/§11/§12/§13，S17–S20），
-> 并把实现核心从 desktop 主进程抽取为共享包。关键代码事实（已核对）：
-> control-plane 已有运行时切换 seam `getDshWorkspacePath()` / `canStartLocal()` /
-> `canExposeLocal()`（`packages/control-plane/src/index.ts:129-137`，desktop
-> `main.ts` 已完整使用）——版本切换路径 **control-plane 零改动**；「重启 dsh」
-> 动作额外需要一个**增量的 `restartLocal()` 事务接口**（§9.3，与健康状态机
-> 重启单飞行串行化，避免 stop/start 与健康自动重启交错）；gateway 的
-> `dshWorkspacePath` 目前是构造时固定字符串（`cli.ts` → `config.ts` →
-> `createControlPlane`）。
+> 本节把本设计的运行时管理能力扩展到 gateway 服务端形态（修订 design 17
+> §2.1/§4/§8/§10/§11/§12/§13，S17–S20），并把实现核心从 desktop 主进程抽取为共享包。
+> 关键代码事实：control-plane 已有运行时切换 seam
+> `getDshWorkspacePath()` / `canStartLocal()` / `canExposeLocal()`
+> （`createControlPlane` 的惰性 options，desktop `main.ts` 已完整使用）——版本切换路径
+> **control-plane 零改动**；「重启 dsh」动作另有一个**增量的 `restartLocal()` 事务接口**
+> （§9.3，与健康状态机重启单飞行串行化，避免 stop/start 与健康自动重启交错）；gateway
+> 的 `dshWorkspacePath` 是构造时固定字符串（`cli.ts` → `config.ts` →
+> `createControlPlane`），仅作内建锚与 boot 日志。
 
 ### 9.1 共享核心抽取：`packages/dsh-runtime`
 
-- 新 workspace 包 `@dsh-chamber/dsh-runtime`：**纯 Node 22+**，不 import
+- workspace 包 `@dsh-chamber/dsh-runtime`：**纯 Node 22+**，不 import
   Electron/desktop/gateway/control-plane；依赖方向 = desktop 与 gateway →
   `dsh-runtime`（dsh-runtime 无 chamber 依赖）；gateway 构建沿用
   `scripts/build.mjs` esbuild 模式与 control-plane 一起打入 `dist/`。
-- 迁入模块（自 `packages/desktop`，保持文件名与行为）：`dsh-runtime-updater`、
-  `runtime-installer`、`dsh-runtime-store`、`runtime-state-machine`、
-  `runtime-startup`、`apply-phase`、`override-lifecycle`、`activation-gate`、
-  `runtime-probes`、`runtime-metadata-recovery`、`runtime-operation-fence`、
-  `sanitize-error`，以及依赖模块 `snapshot-store`、`known-good-monitor`、
-  `restart-exhausted-rollback`、`version-safety`、`registry-url`、
-  `registry-integrity`、`registry-metadata`，外加 `allow-builds.mjs` 与
-  `prune-runtime.mjs`（allowBuilds 白名单与 prune 常量/规则，见 §9.4）。
-  desktop 改为 import/re-export
-  共享包，现有 runtime 测试
-  原样搬迁跟随（迁移期的行为等价证明）。allowBuilds 白名单、10 GiB 软阈值、
-  保留策略等**单一来源常量**随共享包搬迁。
+- 共享核心模块：`dsh-runtime-updater`、`runtime-installer`、`dsh-runtime-store`、
+  `runtime-state-machine`、`runtime-startup`、`apply-phase`、`override-lifecycle`、
+  `activation-gate`、`runtime-probes`、`runtime-metadata-recovery`、
+  `runtime-operation-fence`、`sanitize-error`，以及依赖模块 `snapshot-store`、
+  `known-good-monitor`、`restart-exhausted-rollback`、`version-safety`、
+  `registry-url`、`registry-integrity`、`registry-metadata`，外加
+  `allow-builds.mjs` 与 `prune-runtime.mjs`（allowBuilds 白名单与 prune
+  常量/规则，见 §4）。desktop 与 gateway 都 import 共享包；allowBuilds 白名单、
+  10 GiB 软阈值、保留策略等**单一来源常量**都在共享包内。
 - 宿主适配接口 `RuntimeHostAdapter`（**生产侧无实现者**：desktop 与 gateway 各自经
   `StartupDeps`/`ApplyDeps`/`InstallerDeps`/`ControllerDeps` 直接适配共享核心；
   该接口是**测试夹具契约**——`test/fake-adapter.ts` 实现它，`test/run-phase-fixture.ts`
-  以它为底座驱动共享包全部纯 Node 测试，2026-09 三轮据此保留（退役建议不成立）。
-  **核心裁决逻辑零分叉**，分叉只允许出现在适配器）。**本接口是草图**：
-  M5 实现时以 desktop 现有 `StartupDeps`/`ApplyDeps` 的并集 + gateway 需求
-  为权威定型，其中已确认必须覆盖的 seam——时钟注入（`now`/`nowMs`，
-  apply-phase 既有依赖）、abort 信号源（`runtimeOperationAbort` 既有）、
+  以它为底座驱动共享包全部纯 Node 测试。**核心裁决逻辑零分叉**，分叉只允许出现在
+  适配器）。**本接口是草图**：实际 seam 以 desktop 的
+  `StartupDeps`/`ApplyDeps` 并集 + gateway 需求为权威，其中必须覆盖的 seam 为——
+  时钟注入（`now`/`nowMs`，apply-phase 既有依赖）、abort 信号源
+  （`runtimeOperationAbort` 既有）、
   出网代理环境（install 子进程 env scrubbing 的 HTTP(S)/NO_PROXY 保留项）、
-  进度投影粒度（notify）、`restartHost()`（§9.3 事务重启）。**M5 交付物
-  强制包含一个纯 Node 的 fake host adapter 测试夹具**：共享包全部测试经该
-  夹具运行（不依赖 Electron/userData/IPC），desktop 与 gateway 的宿主绑定层
-  各自补一层薄适配测试——"现有测试原样搬迁"不成立（现测试耦合 desktop
-  fixture 与路径），行为等价证明 = 共享包测试 + 双宿主绑定层回归：
+  进度投影粒度（notify）、`restartHost()`（§9.3 事务重启）。**行为等价证明 =
+  共享包测试（经纯 Node fake host adapter 夹具运行，不依赖 Electron/userData/IPC）
+  + desktop 与 gateway 各自宿主绑定层的薄适配测试**——「现有测试原样搬迁」不成立
+  （现测试耦合 desktop fixture 与路径）：
 
 ```ts
 interface RuntimeHostAdapter {
@@ -864,7 +772,7 @@ interface RuntimeHostAdapter {
 }
 ```
 
-### 9.2 内嵌 pnpm 承载（决策 D1）
+### 9.2 内嵌 pnpm 承载
 
 - 定案"内嵌 pnpm 钉精确版本 11.21.0"（对齐 `BUNDLE_PNPM_VERSION`），禁止系统
   pnpm 漂移；desktop 维持 extraResources 副本（实体盘）；
@@ -872,7 +780,7 @@ interface RuntimeHostAdapter {
   pack 后 npm 安装会把 pnpm 装入依赖树（解压 ~37MB，运行前不删 artifacts——
   与 extraResources 裁剪版不同，属已知取舍）；pack/install smoke 必须覆盖
   "依赖安装成功 + `gateway --help`"；
-- **2026-11 修订（installer local 形态的打包内嵌）**：`install-gateway.sh` 的
+- **installer local 形态的打包内嵌**：`install-gateway.sh` 的
   local（默认）安装路径**只解包 tarball、从不安装 gateway 依赖**（与 global 的
   `npm install -g` 不同），因此运行期 pnpm 必须随包携带：`scripts/build.mjs`
   构建时把 `node_modules/pnpm` **解引用复制**进 `dist/pnpm`（isolated linker 下
@@ -901,8 +809,7 @@ work 目录）。权限纪律并入 design 17 §12（目录 0700、JSON/secret 0
 删除。manager dispose 先 abort 新入口并 fixed-point drain 完整 writer promise（含
 installer 后的 metadata tail、apply-now/F7/retry/restore/restart），最终停 host 后才
 删除 owner；disposed manager 的 status/registry 等入口直接拒绝，不能隔离或改写后继
-owner 的文件。违反部署纪律（如克隆 stateDir）仍是损坏风险。**design 21 插件写互斥
-（2026-12）**：第三方插件队列 executor 挂入同一 writer 族——managed profile 单写
+owner 的文件。违反部署纪律（如克隆 stateDir）仍是损坏风险。**design 21 插件写互斥**：第三方插件队列 executor 挂入同一 writer 族——managed profile 单写
 者租约 `beginProfileWrite`（count 制；`assertMutationIdle` 与全部 spawn 前的
 `beforeSpawnCheckpoint`（control-plane local-connection DI 缝，desktop 不接线、
 gateway index.ts 生产接线为 profile-write 检查）双向互斥；executor 子进程 pid 记入
@@ -946,7 +853,7 @@ const plane = createControlPlane({
 延迟裁决；通过 → 开放投影；失败 → 回退目标（切换前/最近 known-good）+ 快照
 恢复（两阶段 + 幂等补完）；快照失败 → 中止 + 可见标记（不自动每启重试）。
 无 pending 仅清理/补完。`stop()` 在等待 startupPromise 前即触发 lifecycle abort，
-随后 drain runtime writer（2026-12 剥离后 chamber 面除同步插件同步 put 外只读，
+随后 drain runtime writer（编排面剥离后 chamber 面除同步插件同步 put 外只读，
 Gateway feature mutation barrier 已不存在）；writer 静止并最终停 host/plane 后才
 释放 runtime owner 与外层 state lock。`spawnAndProbe`/`stopHost` = `plane.startLocal()`/
 `plane.stopLocal()`（既有 `PlaneHandle` seam）。探针清单同 §3.4 全量，共享包
@@ -982,43 +889,43 @@ ready——就绪窗口可达 90s），进度与结果经 `GET /chamber/runtime/
 | `POST /chamber/runtime/apply` | 置 pending（下次 gateway 重启应用） |
 | `POST /chamber/runtime/rollback` | 手动回滚（pre-rollback 暂存 + 快照语义同 §3.7） |
 | `POST /chamber/runtime/apply-now` | 立即执行待应用/已选版本的切换事务（18-addendum §5.1）：202 接受、结果经 status 轮询 |
-| `POST /chamber/runtime/cleanup-version` | 2026-12（desktop 对齐）：台账门 + 删除点保护集重读的一次性显式版本清理（§3.6 清理版本语义），随后消费 `store-prune-needed` 标记执行共享 store prune；成功解除磁盘软上限门 |
-| `POST /chamber/runtime/restore-pre-rollback` | 2026-12（desktop 对齐）：把最近一次手动回滚前暂存还原到 DSH_HOME（完整 → 恢复启动；half → restore-blocked 由 retry-restore 续作）；env 不禁（数据恢复来源无关） |
-| `POST /chamber/runtime/recover-metadata` | 2026-12（desktop 对齐）：FATAL 元数据救援——另存 DSH_HOME 副本 + 损坏元数据按原字节归档 + 内建锚全量只读探针通过后才恢复访问（marker-corrupt 走二阶 rescue）；失败保留持久记录可重试 |
+| `POST /chamber/runtime/cleanup-version` | 台账门 + 删除点保护集重读的一次性显式版本清理（§3.6 清理版本语义），随后消费 `store-prune-needed` 标记执行共享 store prune；成功解除磁盘软上限门（与 desktop 对齐） |
+| `POST /chamber/runtime/restore-pre-rollback` | 把最近一次手动回滚前暂存还原到 DSH_HOME（完整 → 恢复启动；half → restore-blocked 由 retry-restore 续作）；env 不禁（数据恢复来源无关，与 desktop 对齐） |
+| `POST /chamber/runtime/recover-metadata` | FATAL 元数据救援——另存 DSH_HOME 副本 + 损坏元数据按原字节归档 + 内建锚全量只读探针通过后才恢复访问（marker-corrupt 走二阶 rescue）；失败保留持久记录可重试（与 desktop 对齐） |
 | `POST /chamber/runtime/restore-builtin` | 写 `reset-builtin` intent 后执行与版本切换相同的数据安全事务：停机 → 快照 → 原子清指针 → 内建锚全量探针；失败切回旧指针并恢复快照，只有成功才删除 override/journal。snapshot-failed 恢复未改动来源，其余硬恢复阻塞保持 dsh 停机且管理面可轮询 |
 | `POST /chamber/runtime/retry-apply` | 恢复被中断的指针切换（swap-attempted）或快照失败（snapshot-failed）：清标志 → 重跑启动事务 → 干净时拉起 dsh（desktop retry-apply 对齐） |
 | `POST /chamber/runtime/retry-restore` | 从持久 journal 继续被中断的快照恢复（restore-half/restore-incomplete）：重跑启动事务续作 |
-| `POST /chamber/runtime/restart` | 受控重启 gateway 托管的 dsh 进程（§3.6 项 8：刷新插件挂载；指针不动、无快照/探针；ready 过渡订阅仅把权威状态转发给 runtime 管理器——2026-12 剥离后无 feature 面可 detach/attach）；202 接受、结果经 status().restart（running/ok/failed）+ operationError 轮询，resolve ≠ success |
-| `POST /chamber/runtime/start` | **停机恢复原语（design 21 决策 12，2026-12）**：仅 `stopped/error/restart-exhausted` 放行，受 canStartLocal/exposureQuarantine/单飞与 profile-write 栅栏守卫，**恢复门不可绕过**（recovery phase 与 phase-less `startupBlockedReason` 只开放各自 retry，FATAL 只开放 recover-metadata；restore-builtin 仅限 pending/健康选择——2026 audit R2 收窄，与桌面 blocked 面一致）；202 + status().start（running/ok/failed）+ operationError 轮询（resolve ≠ success）；r1 恢复闭环（停机移除插件后回到可启动入口）与 connections 卡片「启动实例」入口同源 |
+| `POST /chamber/runtime/restart` | 受控重启 gateway 托管的 dsh 进程（§3.6 项 8：刷新插件挂载；指针不动、无快照/探针；ready 过渡订阅仅把权威状态转发给 runtime 管理器——剥离后无 feature 面可 detach/attach）；202 接受、结果经 status().restart（running/ok/failed）+ operationError 轮询，resolve ≠ success |
+| `POST /chamber/runtime/start` | **停机恢复原语（design 21 决策 12）**：仅 `stopped/error/restart-exhausted` 放行，受 canStartLocal/exposureQuarantine/单飞与 profile-write 栅栏守卫，**恢复门不可绕过**（recovery phase 与 phase-less `startupBlockedReason` 只开放各自 retry，FATAL 只开放 recover-metadata；restore-builtin 仅限 pending/健康选择——与桌面 blocked 面一致）；202 + status().start（running/ok/failed）+ operationError 轮询（resolve ≠ success）；停机恢复闭环（移除插件后回到可启动入口）与 connections 卡片「启动实例」入口同源 |
 | `GET/PUT /chamber/runtime/registry` | registry 源设置（owner-only 0600；URL 白名单校验同 §6；仅文件真实缺失时回默认 npmjs；损坏/符号链接/硬链接隔离保留并响亮失败；原子写，激活/安装期间禁止换源） |
 
 普通 `phase:'pending'` 是 core + route + 两套 UI 的一致终态门：除
 `restore-builtin` 外，select/apply/rollback/cleanup-version/restore-pre-rollback/
 recover-metadata/retry/restart/registry mutation 全部拒绝
 `409 runtime_pending`；snapshot-failed/swap-attempted/restore-half 等持久记录虽可能仍含
-pending，但属于显式 recovery phase，只开放各自 retry（restore-builtin 仅限 pending/健康选择——2026 audit R2 收窄），不能被普通
+pending，但属于显式 recovery phase，只开放各自 retry（restore-builtin 仅限 pending/健康选择），不能被普通
 pending 分支吞掉或被 select 清除。
 
-状态机 × 可见动作 × 文案矩阵沿用 §3.6 M4 口径；`/chamber/` 浏览器页提供
+状态机 × 可见动作 × 文案矩阵沿用 §3.6 口径；`/chamber/` 浏览器页提供
 完整 runtime 块（实际/内建/选择版本、select/apply/rollback/restore/retry/restart、
 registry、进度、失败、restore/pre-rollback、快照与磁盘，规格同 §3.6）。Desktop
 settings-bridge 对固定身份做精确校验并透传同一投影，不能把普通 dsh 响应误认成
-Gateway runtime。**blocked 启动保持存活（2026-09 评审落地）**：启动事务返回
+Gateway runtime。**blocked 启动保持存活**：启动事务返回
 `swap-attempted`/`restore-half`/`restore-incomplete` 时 gateway **不**中止
 启动——管理面保持可轮询、托管 dsh 停机，`status().startupBlockedReason`
 投影原因，恢复面为 `retry-apply`/`retry-restore`（镜像 desktop
 blocked-but-alive 语义）；**元数据损坏（journal/current/override corrupt、
-journal-mismatch）2026-12 修订**：与桌面 blocked-but-alive 对齐——FATAL
+journal-mismatch）**：与桌面 blocked-but-alive 对齐——FATAL
 不再拒启整个 gateway，gateway 保持存活、托管 dsh 停机、管理面可轮询，
 恢复面 = `POST /chamber/runtime/recover-metadata`（归档证据 + 内建锚探针 +
-仅成功后恢复访问；探针失败保留持久记录可重试）。**r2 兜底链更正（design 21
-§6.8，审计 F4）**：`restore-builtin` **不能**治愈 profile_corrupt（它与 corrupt
+仅成功后恢复访问；探针失败保留持久记录可重试）。**兜底链（design 21
+§6.8）**：`restore-builtin` **不能**治愈 profile_corrupt（它与 corrupt
 profile 探同一 dsh-home、不随目标版本更换 dsh-home）——兜底 = operator runbook
 （从 `<stateDir>/dsh-runtime/snapshots/` 手工恢复 dsh-home 快照）；`start` 原语
 与 restart-exhausted 自动回退衔接（F7 auto-rollback 尾不在 start 窗口内重复触
 发——start 经同一 assertMutationIdle/恢复门）。**挂载点纪律（不随 ready
 detach）**：runtime 面是挂在 gateway dispatch 面的自有 runtime 控制器（与
-auth/dispatch 同级）——2026-12 剥离后没有 feature host（session index /
+auth/dispatch 同级）——剥离后没有 feature host（session index /
 approvals / notify / scheduler / git 均已删除），ready 过渡订阅只把权威状态
 转发给 runtime 管理器（`syncFeatures` 仅 `observeLocalState`），无 feature 面
 可 detach/attach。runtime 管理面管理的是 dsh
@@ -1040,44 +947,45 @@ npm registry（§6 已并入）；spawn 的 dsh 子进程与控制面保持零�
 「dsh 运行时」段对 `gateway` server 经 `/api/i/gateway-<id>/chamber/runtime/*`
 反代触达上述面（只读状态 + 远端动作），不接触 token（design 17 §7.2/§12 纪律）。
 
-### 9.4 desktop 迁移（迁移期）
+### 9.4 desktop 宿主装配
 
-- desktop 的 runtime 家族改为 import/re-export 共享包（§9.1 清单），宿主适配器
-  在 `main.ts` 装配（现有 `buildStartupDeps` 大部分直接由共享包提供，仅 §9.1
+- desktop 的 runtime 家族 import/re-export 共享包（§9.1 清单），宿主适配器
+  在 `main.ts` 装配（`buildStartupDeps` 大部分直接由共享包提供，仅 §9.1
   差异注入保留在 desktop）；
-- 行为等价证明：desktop 现有 runtime 测试全量回归；打包不变
-  （`prune-runtime.mjs`、extraResources pnpm 副本、`resolveDshWorkspace`
+- 行为等价证明：desktop runtime 测试全量回归 + 共享包测试；打包不变
+  （共享包 `prune-runtime.mjs`、extraResources pnpm 副本、`resolveDshWorkspace`
   优先级维持 §3.5 契约）；dev 隔离（`.dev-user-data`）不变。
 
-### 9.5 分期与验收（服务端化部分）
+### 9.5 验收门禁（服务端化）
 
-| 里程碑 | 内容 | 判定证据 |
-|---|---|---|
-| M5 共享核心 | §9.1 抽取 + fake host adapter 测试夹具 + desktop 适配装配 | 共享包测试经纯 Node fake adapter 全绿；desktop 绑定层回归全绿；共享包 typecheck/test |
-| M6 gateway 接线 | §9.3 解析链 + 控制面接线（含 `restartLocal()` 事务接口）+ 启动事务（先无管理面，env/锚可切换） | lifecycle 测试（启动顺序/失败回滚/stop 回收/restart 与健康重启单飞行交错）；CLI 契约测试 |
-| M7 管理面 | §9.3 `/chamber/runtime`（不随 ready detach 的 runtime 控制器）+ `/chamber/` 页面块 + §3.6 per-server 段（local/gateway 分支；dsh 直连不挂载） | 路由权限测试（含 restart 202/poll、applying 409、dsh 停机窗口 status 可轮询）；settings-bridge 回归；**fake-registry acceptance 的 gateway 形态移植与 ssh `restart_service` 回归为剩余门禁（STATUS 登记）** |
+自动化门禁：共享包/gateway typecheck+test；desktop 全量回归；
+`build:gateway` + pack/install smoke 含 pnpm 依赖；frozen lockfile；i18n；
+路由权限测试（含 restart 202/poll、applying 409、dsh 停机窗口 status 可轮询）；
+lifecycle 测试（启动顺序/失败回滚/stop 回收/restart 与健康重启单飞行交错）；
+CLI 契约测试；settings-bridge 回归。
 
-验收门禁：自动化（共享包/gateway typecheck+test；desktop 全量回归；
-`build:gateway` + pack/install smoke 含 pnpm 依赖；frozen lockfile；i18n）；
-实机（服务端安装候选 → 重启 gateway → 探针 → 故障注入回退 → DSH_HOME 数据
+实机门禁：服务端安装候选 → 重启 gateway → 探针 → 故障注入回退 → DSH_HOME 数据
 恢复（Linux server 记录）；生产 TLS 反代下 `/chamber/runtime` status 轮询与认证
-行为）；Windows 只读口径沿用（默认只读，`DSH_CHAMBER_WINDOWS_RUNTIME_MUTATIONS=1`
+行为；fake-registry acceptance 的 gateway 形态移植与 ssh `restart_service` 回归
+（见 STATUS 登记）。
+
+Windows 只读口径沿用（默认只读，`DSH_CHAMBER_WINDOWS_RUNTIME_MUTATIONS=1`
 验证门例外同桌面，正式解锁待真实 Windows 验证记录）。
 
-### 9.6 打包与依赖决策（D2/D3）
+### 9.6 打包与依赖纪律
 
-- **D2 `packages/dsh-runtime` 发版形态**：作为 desktop/gateway 的 workspace
-  依赖打入产物、不单独进 npm 发版集（推荐；若评审要求独立发版，需同步修订
-  §7 版本集口径与 release.yml 断言）；
-- **D3 lockfile 纪律**：新增 workspace 包与 pnpm 依赖后，按 AGENTS.md 用带
+- **`packages/dsh-runtime` 发版形态**：作为 desktop/gateway 的 workspace
+  依赖打入产物、不单独进 npm 发版集；若改为独立发版，需同步修订
+  §7 版本集口径与 release.yml 断言；
+- **lockfile 纪律**：新增 workspace 包与 pnpm 依赖后，按 AGENTS.md 用带
   vendor 树的现场重新生成 lockfile 并 frozen 验证（pnpm 11 prunes
   `vendor/harness-packages/@deepseek-ai/*` importer 记录的已知坑）；
-- **D4 依赖偏差登记（实现时）**：gateway 新增运行时依赖 `pnpm@11.21.0`
+- **依赖偏差登记**：gateway 新增运行时依赖 `pnpm@11.21.0`
   属于 AGENTS.md「不新增运行时依赖」纪律的显式偏差（与 design 11 引入
-  electron-updater、design 18 桌面引入 pnpm 同性质），实现 PR 须同步在
-  AGENTS.md 的 current set 登记。
+  electron-updater、design 18 桌面引入 pnpm 同性质），已在 AGENTS.md 的
+  runtime dependency current set 登记。
 
-### 9.7 安全不变量（单一权威 = design 17 §17 续号 S17–S20）
+### 9.7 安全不变量（权威 = design 17 §17 续号 S17–S20）
 
 本设计的安全不变量**不在两处重复表述**（防双处漂移，04 §7.1 同款纪律）：
 S17–S20 的权威表格在 `design/17-server-side-gateway.md` §17，本节只引用。
@@ -1088,12 +996,12 @@ S17–S20 的权威表格在 `design/17-server-side-gateway.md` §17，本节只
 
 ## 10. 关联文档
 
-- `01-overview.md` §3 文档地图（本文档编号 18，2026-08 新增）；
-- `docs/progress/STATUS.md`（design 18 条目）；
+- `01-overview.md` §3 文档地图（本文档编号 18）；
+- `docs/progress/STATUS.md`（design 18 条目：未闭环门禁与偏差登记）；
 - `17-server-side-gateway.md`（gateway 宿主的启动顺序/路由/状态目录/不变量
   修订，§9 的 gateway 面）；
-- 设计 11（应用本体更新——双通道并存见 §7；§8 版本集口径与 release.yml 对齐）；
-  设计 15（settings「通用」段承载——运行时块已迁出，见 §3.6 修订）；设计 14
+- 设计 11（应用本体更新——双通道并存见 §7；版本集口径与 release.yml 对齐）；
+  设计 15（settings「通用」段承载——运行时块不在其中，见 §3.6）；设计 14
   （退出生命周期——install 子进程回收与退出路径的衔接，§4）；设计 02 §3.5/§3.6
   （健康/restart-exhausted——§3.4 回退分支的宿主）；设计 09 §3.5/§4（版本漂移
   容忍，纵深防御）；设计 13（远端插件管理——远端 dsh 版本仍无关）；设计 05 §5

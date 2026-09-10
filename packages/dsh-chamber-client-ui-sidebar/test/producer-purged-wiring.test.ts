@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 /**
- * Producer wiring contract (design 24 §21). The sidebar producer lives in
+ * Producer wiring contract (design 24 §12). The sidebar producer lives in
  * `src/client/index.ts`, which imports React and CSS modules and therefore
  * cannot be imported by a node test; the stateful half is covered by
  * `purged-tracker.test.ts`, but the GLUE that calls it (observe → filter →

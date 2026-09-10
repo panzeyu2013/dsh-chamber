@@ -33,7 +33,7 @@ export const MAX_PLUGIN_SPEC_CHARS = 512
  * argv. Ranges (`>=1.2.3 <2`), `||`, wildcards, `npm:` aliases, `git+` /
  * URL specs and `file:`/`link:`/relative paths are all REFUSED here (they
  * are injection surface, or are materialized via a separate path, design 13
- * §4.6). The renderer's ADD_SPEC is a byte-identical hand mirror pinned by
+ * §3). The renderer's ADD_SPEC is a byte-identical hand mirror pinned by
  * the lockstep test.
  */
 export const PLUGIN_SPEC_PATTERN = /^(@[a-zA-Z0-9][a-zA-Z0-9._-]*\/)?[a-zA-Z0-9][a-zA-Z0-9._-]*(@(\^|~)?([0-9A-Za-z][0-9A-Za-z._+-]*|latest|next))?$/
@@ -42,7 +42,7 @@ export const PLUGIN_SPEC_PATTERN = /^(@[a-zA-Z0-9][a-zA-Z0-9._-]*\/)?[a-zA-Z0-9]
 export const PLUGIN_NAME_PATTERN = /^(@[a-zA-Z0-9][a-zA-Z0-9._-]*\/)?[a-zA-Z0-9][a-zA-Z0-9._-]*$/
 
 /**
- * The materialize-add `file:` spec whitelist (design 13 §4.6 / §7.2): only the
+ * The materialize-add `file:` spec whitelist (design 13 §7.2): only the
  * ABSOLUTE form of the materialized-tarball stable dir may reach the remote
  * `dsh plugin add` command — `<remote-home>/.dsh-chamber/plugins/<name>-<hash>.tgz`.
  * The path is constrained to the `.dsh-chamber/plugins/` subtree (the same

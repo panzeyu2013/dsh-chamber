@@ -1,16 +1,16 @@
 # 04 · 控制面 API 与数据模型（v1 定稿）
 
+> **状态：现行（控制面 API 面与持久化数据模型，2026-09）**——控制面对外暴露的
+> 全部 API 面 = **管理 REST**（health / connections / host logs）+ **每实例反代**
+> （契约与 03 §3 共享，本文 §4 给 HTTP 形状）+ **前端服务**（静态 dist +
+> `__DSH_BOOT__` 启动图清单）；未完成门禁见 `docs/progress/STATUS.md`。
 > v2 薄壳 API 面（sessions / projects / project-sessions / interactions / events
 > SSE / config / external / runtime 透传族）**全部删除**——这些业务由 dsh
 > 前端 runtime 经每实例反代消费（03 §3），控制面不再持有。
-> v1 控制面 API 面 = **管理 REST**（health / connections / host logs）+
-> **每实例反代**（契约与 03 §3 共享，本文 §4 给 HTTP 形状）+ **前端服务**
-> （静态 dist + `__DSH_BOOT__` 启动图清单）。
-> **[v1 收敛（2026-08-14）]** 认证/审计面（`/api/auth/*`、`/api/passkeys*`、
-> `/api/audit`）随模块整体移除——v1 无认证边界，全部端点匿名可达（仅
+> **无认证边界**：认证/审计面（`/api/auth/*`、`/api/passkeys*`、
+> `/api/audit`）随模块整体移除——全部端点匿名可达（仅
 > loopback 监听，05 §8 安全不变量）。**该匿名边界只约束普通 loopback
-> 控制面**；gateway 部署的认证面/凭据/审计见 `17-server-side-gateway.md`
-> （§7/§12/§13.4，2026-09 v2）。
+> 控制面**；gateway 部署的认证面/凭据/审计见 `17-server-side-gateway.md`。
 > 权威契约：`05-connection-manager.md` §7（控制面/桌面契约）；连接模型见
 > `03-connections-proxy.md`。
 
@@ -176,7 +176,8 @@ gateway 部署的认证（password/token/JWT cookie）、凭据存储（safeStor
 ```
 挂载：/api/i/<id>/*      id ∈ {local, dsh-<id>, gateway-<id>}（ssh-<id> legacy，17 §9.1）
 任意方法（GET/POST/PATCH/DELETE/…）全量透传，无方法白名单（05 §1）
-WS upgrade：/api/i/<id>/api/events.mux | events.host（剥前缀 → 实例 /api/…）
+WS upgrade：/api/i/<id>/api/remote.mux（上游 Typert Remote 流复用；剥前缀 → 实例 /api/remote.mux；
+            WS 路径集是白名单 WS_STREAM_PATHS，非流路径 404）
 SSE：text/event-stream 响应直通（不缓冲、不解析、不重封装）
 ```
 
@@ -196,6 +197,7 @@ SSE：text/event-stream 响应直通（不缓冲、不解析、不重封装）
 | 上游连接拒绝 / 请求失败 | 502 `{error, code:'upstream_failed'}`（脱敏） |
 | 上游空闲超时（默认 45s；长 RPC 豁免 30 分钟，见 03 §3.4） | 504 `{error, code:'upstream_timeout'}` |
 | id 未知 | 404 `{error, code:'instance_not_found'}` |
+| WS 路径不在 `WS_STREAM_PATHS` 白名单（唯一在册路径 `/api/remote.mux`） | 404 `{error, code:'instance_not_found'}`（upgrade 前拒绝，§4.1） |
 | 已声明请求体 > 300MiB、未知长度请求体 > 32MiB / 响应体 > 300MiB | 413 `{error, code:'body_too_large'}` / 取消上游流 + 413 |
 
 ### 4.3 响应头白名单
@@ -224,12 +226,20 @@ SSE：text/event-stream 响应直通（不缓冲、不解析、不重封装）
 
 ```ts
 interface WebBootGraph {
-  rev: string // 全图一致性锚（sha1-12）
+  rev: string // 全图一致性锚（sha1-12，覆盖 entries + batches）
   entries: {
     id: string // 条目名 == 包名（插件注册键）
-    url: string // bundle 端点（裸 URL，无 ?rev= 查询串——2026-08 双执行修复后移除）
+    url: string // bundle 端点（裸 URL，无 ?rev= 查询串——去掉查询串以修复延迟族双执行，见下）
     rev: string // bundle 内容哈希（sha1-12）
+    inject?: string[] // 工厂须先到达的依赖包行（缺席 = 无依赖）
+    external?: string[] // 本行向模块表请求的非基线 specifier（缺席 = 无）
     immediately?: boolean // 一阶段预取标记
+  }[]
+  batches: { // 初始 combo 描述符：每个 entry 恰属一个 batch
+    phase: 'bootstrap' | 'application'
+    url: string
+    rev: string
+    entries: string[]
   }[]
 }
 ```
@@ -244,8 +254,10 @@ interface WebBootGraph {
     `CHAMBER_COVERED_IDS` 去重并预加载剩余 bundle、经 boot.ts `extraRows`
     seam 合并进 boot rows——机制与构建链详见 05 §6 / 设计 09 §3.5；
   - **bundle URL 约定**：vite 产物 `/assets/chamber-<hash>.js`（**裸 URL，
-    无 `?rev=` 查询串**——2026-08 起 gen-boot-manifest 刻意去查询串修复延迟族
-    双执行，照抄旧 `?rev=` 写法会复现该 bug；gen-boot-manifest 按
+    无 `?rev=` 查询串**：chamber entry 的 chunk 图以裸引用共享提升出的工具，
+    带查询串会让浏览器把 boot 期加载与 chunk 图引用当成两个模块记录——加载延迟
+    chunk 时二次执行入口 bundle、延迟 ui-* 族不注册；文件名哈希已是不可变标记，
+    照抄旧 `?rev=` 写法会复现该故障。gen-boot-manifest 按
     `assets/chamber-*.js` 模式定位产物；vendor
     自身的默认路径 `/plugins/<id>/client.js` 仅为参考——wire 只要求
     id/url/rev 为字符串）。

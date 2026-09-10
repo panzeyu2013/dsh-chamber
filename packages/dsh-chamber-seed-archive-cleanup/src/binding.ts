@@ -1,12 +1,12 @@
 /**
- * The archiveCleanup host binding (design 24 §10/§14) and the per-domain
+ * The archiveCleanup host binding (design 24 §10) and the per-domain
  * single-flight gate — decorator-free module so the REAL factory and gate
  * run under plain node:test (the gateway class in index.ts keeps the TS
  * decorators and is exercised by typecheck + M4 boot E2E).
  *
  * Trust model: this code runs inside each dsh host process. All capability
  * views are structural over the OFFICIAL ctx services (verified against the
- * pinned vendor dsh-v0.1.5-alpha.2 b2e3b2a0 — design 24 §14); an unavailable
+ * pinned vendor dsh-v0.1.5-alpha.2 b2e3b2a0 — design 24 §10); an unavailable
  * surface refuses loudly with code `registry-unreadable`/`storage`, never a
  * guessed layout. Security-review dispositions (2026-12):
  *  - archived-set member removal runs INSIDE the registry's official
@@ -19,7 +19,7 @@
  *    dirs/artifacts fail closed (review Minor m2);
  *  - per-delete live guard refuses sessions that turned running (contract);
  *    a merely LOADED (idle) session is refused with code `loaded` unless the
- *    caller authorized `force` (2026-09 revision, design 24 §22);
+ *    caller authorized `force` (2026-09 revision, design 24 §3);
  *  - COMPLETENESS UNION (2026-12 blocker fix): neither official enumeration is
  *    authoritative alone — `SessionCorpus.listSessions` answers LIVE-ONLY with
  *    no error when its optional persistence binding is absent (vendor
@@ -188,7 +188,7 @@ function isMigrationTempFilename(name: string): boolean {
 }
 
 /* ------------------------------------------------------------------ */
-/* Binding implementation (design 24 §10/§14: branch b, verified).     */
+/* Binding implementation (design 24 §10: branch b, verified).     */
 /* ------------------------------------------------------------------ */
 
 export function headerToState(header: SessionHeaderLike): ArchivedSessionState {
@@ -405,7 +405,7 @@ export function makeHostBinding(ctx: HostCtxServices): ArchiveCleanupHost {
       //    malformed header) — NOT for every unreadable artifact: a corrupt
       //    zstd frame, a generation/header version mismatch, a too-new stored
       //    format version, or a non-ENOENT IO error all THROW (2026-09 二轮
-      //    vendor read; design 24 §22⑦). So this gate is fail-closed against
+      //    vendor read; design 24 §13 item 7). So this gate is fail-closed against
       //    thrown errors, while an artifact upstream itself calls "no session"
       //    clears the membership (its bytes are never deleted by this purge);
       //  - ANY failure (corrupt zstd, unsupported/too-new format, transport/IO,
@@ -501,7 +501,7 @@ export function makeHostBinding(ctx: HostCtxServices): ArchiveCleanupHost {
         if (dirStat.isSymbolicLink() || !dirStat.isDirectory()) {
           throw new ArchiveCleanupError('storage', `archiveCleanup: refusing a non-directory/symlinked session path for ${sessionId}`)
         }
-        // CROSS-PROCESS NOTE (design 24 §22): removing `session.lock` forfeits
+        // CROSS-PROCESS NOTE (design 24 §4 step 10): removing `session.lock` forfeits
         // the jsonl lease's cross-process exclusion (vendor lease.ts:17-19), so
         // this purge must never run while another process is writing the
         // session. The in-process live gate above covers RUNNING/LOADED agents;
@@ -618,7 +618,7 @@ export function makeHostBinding(ctx: HostCtxServices): ArchiveCleanupHost {
 
     async emitSessionRemoved() {
       // No official public event surface in the pinned tree — documented
-      // no-op (design 24 §10/§14; projection refresh rides the client
+      // no-op (design 24 §10; projection refresh rides the client
       // mutation-pull and the official startup header-index rebuild).
     },
 

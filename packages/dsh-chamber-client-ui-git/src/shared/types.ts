@@ -260,7 +260,7 @@ export type GitRecovery =
        *  MUST match the original byte-for-byte (host fingerprints it), or
        *  recovery is permanently stuck (review P1-1). */
       deleteBranch?: string
-      /** Same byte-identity requirement for a force removal (design 08 §6
+      /** Same byte-identity requirement for a force removal (design 08 §5.3
        *  amendment): the terminal replay re-sends the original flag. */
       discardChanges?: boolean
     }

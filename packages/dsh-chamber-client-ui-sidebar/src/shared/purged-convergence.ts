@@ -1,6 +1,6 @@
 /**
  * Bounded, verified convergence chain for purged-row suppression (design 24
- * §21). React-free and dependency-injected so the arm → verify → retry →
+ * §12). React-free and dependency-injected so the arm → verify → retry →
  * give-up behaviour is node-testable without a plugin host (the producer
  * itself imports React/CSS and cannot be imported by a node test).
  *
@@ -80,7 +80,7 @@ export interface PurgedConvergenceDeps {
    * One official session-list refresh. MUST be invoked as a method on the
    * service object (`service.refresh()`): `ClientSessions.refresh` is a
    * prototype method reading `this.manager`, so a detached call throws
-   * TypeError (2026-09 review BLOCKER — the §20 seam never actually ran).
+   * TypeError (2026-09 review BLOCKER — the §12 seam never actually ran).
    * Returns undefined when the official client exposes no refresh face.
    */
   refresh: () => Promise<unknown> | undefined

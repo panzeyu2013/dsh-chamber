@@ -28,7 +28,7 @@
  *    fails loudly even when main is absent. A schemaVersion-less legacy main
  *    is migrated in place by the onLoadValidate hook (its `migrated` flag);
  *    the migration persist writes the pre-migration document as the .bak so
- *    recovery re-runs the migration (design 03 §3.8A: old file retained as an
+ *    recovery re-runs the migration (design 03 §2.1: old file retained as an
  *    explicit backup).
  *
  * Revision semantics: the store owns the counter; every changed mutation
@@ -117,7 +117,7 @@ export interface JsonStorePersistOptions {
   backupDoc?: unknown
 }
 
-/** Diagnostics projection (design 03 §3.10 storage block). */
+/** Diagnostics projection. */
 export interface JsonStoreStatus {
   loaded: boolean
   schemaVersion: number | undefined

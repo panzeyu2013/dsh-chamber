@@ -2,7 +2,7 @@
  * Browser wire client. The plugin selects fixture or HTTP transport, provides
  * the shared RPC client, and lets API Gateway own the connection loop.
  *
- * ## chamber patch (dsh-chamber connection manager, design 05 §3.6; re-anchored
+ * ## chamber patch (dsh-chamber connection manager, design 05 §6; re-anchored
  * on upstream dsh-v0.1.5-alpha.2, 2026-09 re-anchor)
  *
  * Three chamber deltas only:

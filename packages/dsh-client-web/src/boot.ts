@@ -4,7 +4,7 @@
  * point after every client entry activates.
  * @module @deepseek-ai/dsh-client-web/src/boot
  *
- * > chamber patch (dsh-chamber connection manager, design 05 §3.6 / design 09):
+ * > chamber patch (dsh-chamber connection manager, design 05 §6 / design 09):
  * > the N-ctx sharing seam in {@link AppWebEntry.run} — one page hosts multiple
  * > shells (one per dsh instance); every boot after the first reuses the
  * > page-level module system from `window.__DSH_MODULES__` (see
@@ -108,7 +108,7 @@ function describeBootError(reason: unknown): string {
  */
 export interface AppWebEntryOptions extends BootSeams {
   /**
-   * ## chamber patch (dsh-chamber connection manager, design 05 §3.6)
+   * ## chamber patch (dsh-chamber connection manager, design 05 §6)
    *
    * Extra client-plugin rows from THIS instance's host boot graph
    * (per-instance: local and remote hosts compose different plugin sets —
@@ -231,7 +231,7 @@ export class AppWebEntry {
   }
 
   /**
-   * ## chamber patch (dsh-chamber connection manager, design 05 §3.6)
+   * ## chamber patch (dsh-chamber connection manager, design 05 §6)
    *
    * Public read handle on the settled runtime context: the chamber shell
    * dispatches per-instance session opens through `ctx.sessions` (the
@@ -297,7 +297,7 @@ export class AppWebEntry {
     // as the module-system bootstrap — see ensureWebModuleSystem) and the
     // ui-renderer entry (its factory is shell-static, registered on the shared
     // module table in ensureWebModuleSystem — chamber patch, rc.8 baseline
-    // alignment), then the manifest rows, then — chamber patch (design 05 §3.6 /
+    // alignment), then the manifest rows, then — chamber patch (design 05 §6 /
     // design 09) — the per-instance extra client-plugin rows from the host boot
     // graph. The extra bundles were already executed by the chamber shell, so
     // their factories are registered on the shared module table — loader.create

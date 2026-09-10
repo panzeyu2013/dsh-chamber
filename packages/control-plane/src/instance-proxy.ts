@@ -44,7 +44,7 @@
  * Diagnostics: plain counters (requests / failures / activeStreams) — no
  * sensitive data, no URLs.
  *
- * ## proxy-forward.ts split (design 17 §6.2, 方案 A)
+ * ## proxy-forward.ts split (design 17 §8, 方案 A)
  *
  * This module is now the thin shell: prefix parsing (`parseInstanceId` /
  * `parseInstancePath`), target resolution (`resolveTarget`) and the
@@ -309,7 +309,7 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
   const maxPendingWsHandshakes = deps.maxPendingWsHandshakes ?? MAX_PENDING_WS_HANDSHAKES
   const maxBufferedRequestBytes = deps.maxBufferedRequestBytes ?? MAX_BUFFERED_REQUEST_BYTES
   /** connectionId ('dsh:<id>' / 'gateway:<id>'; 'ssh:<id>' legacy alias of
-   * the dsh kind) → target record (design 05 §3.3 + design 17 §9.3). Local
+   * the dsh kind) → target record (design 05 §7.3 + design 17 §9.3). Local
    * is never registered — its baseUrl is derived from the managed dshPort. A
    * gateway record carries the optional bounded extra headers (Authorization
    * Bearer / Cookie dsh_gateway_session) injected at forward time, never in
@@ -548,7 +548,7 @@ export function createInstanceProxy(deps: InstanceProxyDeps): InstanceProxy {
     },
 
     /**
-     * Register a remote instance transport (design 05 §3.3 + design 17 §9.3):
+     * Register a remote instance transport (design 05 §7.3 + design 17 §9.3):
      * the desktop main process reports a ready target as connectionId
      * `dsh:<id>` or `gateway:<id>` plus the independent `opts.transport`
      * dimension (legacy `ssh:<id>` spelling remains SSH-only). Re-registration

@@ -1,5 +1,5 @@
 /**
- * Renderer REST client — narrowed to the design 05 §3.1 surface:
+ * Renderer REST client — narrowed to the design 05 §7.2 surface:
  * health, connections (local). Auth/audit routes were removed
  * with the control-plane auth removal (v1 consolidation); everything else
  * (sessions/projects/interactions/SSE/config/… passthrough, and the host

@@ -105,7 +105,7 @@ export const fieldCount = controlPlaneModule.fieldCount
 export const insertConflict = controlPlaneModule.insertConflict
 
 // Chamber host-package insert facts (host-graph-seed.ts, design 09 module A /
-// design 13 §4.6 — re-exported by the control-plane package index) — consumed
+// design 13 §3 — re-exported by the control-plane package index) — consumed
 // by plugin-sync, whose desktop-facing package-name/insert-id constants
 // derive from these so the local seed, the remote seed writer and
 // control-plane's own seed can never drift.

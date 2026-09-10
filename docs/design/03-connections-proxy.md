@@ -1,10 +1,9 @@
 # 03 · 连接模型与每实例通用反代（v1 定稿）
 
-> 连接模型与每实例通用反代（v1 定稿，2026-08-14；**连接模型随 design 17
-> 升级为 2026-09 v2**）：**连接模型**（本地 =
-> 控制面 catalog 单行；远程 = 桌面主进程注册表）+ **每实例通用反代**
-> `/api/i/<id>/*`（HTTP/WS/SSE 全量透传）。
-> **远程连接模型以 `17-server-side-gateway.md`（2026-09 v2）为权威**：
+> **状态：现行（连接模型与每实例反代，2026-09 起为连接模型 v2）**——**连接模型**
+> （本地 = 控制面 catalog 单行；远程 = 桌面主进程注册表）+ **每实例通用反代**
+> `/api/i/<id>/*`（HTTP/WS/SSE 全量透传）；未完成门禁见 `docs/progress/STATUS.md`。
+> **远程连接模型以 `17-server-side-gateway.md` 为权威**：
 > 目标类型 kind（dsh|gateway）× 传输方式 transport（ssh|http）× 认证 ×
 > 通道四维正交（17 §2）；本文 §2.2 注册表 schema 即 17 §9.1 的 v2 形态。
 > 薄壳时代 project 目录 / 适配器 / broker / 绑定 / 会话索引体系随 v2 整体
@@ -12,8 +11,8 @@
 > 权威契约：`05-connection-manager.md`（架构 / 路径 / PlaneHandle / IPC）；
 > 管理面端点与数据文件见 `04-control-plane-api-data.md`；进程托管见
 > `02-host-management-deployment.md`。
-> **[v1 收敛（2026-08-14）]** 无认证边界：`/api/i/*` 匿名可达（仅 loopback
-> 监听），反代不再是认证边界，而是诚实失败面（05 §8 安全不变量）。
+> **无认证边界**：`/api/i/*` 匿名可达（仅 loopback 监听），反代不再是认证边界，
+> 而是诚实失败面（05 §8 安全不变量）；gateway 连接自带的认证边界见 17 §6/§7.3。
 
 ---
 
@@ -162,8 +161,8 @@
   重启；多步 exec 每次下一次 spawn 前复验 generation，迟到日志、状态投影、
   `serviceActive` 与结果都不能跨代提交。kind/serviceName 变化还会把旧
   `serviceActive` 复位为未知。
-- **IPC 白名单**（renderer ↔ main，preload 限定）：全集见 05 §7.4（2026-08
-  已扩展插件编排面 `desktop_ssh_plugin_*`、`restart_service`、
+- **IPC 白名单**（renderer ↔ main，preload 限定）：全集见 05 §7.4（另含插件
+  编排面 `desktop_ssh_plugin_*`、`restart_service`、
   `seed_host_graph`、`status_changed` 等，不再在此枚举）。要点：
   `desktop_ssh_save_connection` 是 add/edit/非空凭据写的唯一入口；删除只走精确
   id-addressed `desktop_ssh_delete_connection(id)`（不存在 id 为幂等 no-op）；legacy
@@ -174,7 +173,7 @@
   `desktop_ssh_config_list`（`~/.ssh/config` 自动发现，非秘密投影：
   alias/hostName/user/port；SSH config 中的 IdentityFile/ProxyCommand/凭据材料绝不投影
   renderer；连接表单瞬时 write-only 凭据例外仍按上条事务处理）。
-- **liveness 纪律**（AGENTS.md 正确性不变量）：隧道 / 服务事实只来自
+- **liveness 纪律**（design 01 §5 权威边界纪律）：隧道 / 服务事实只来自
   "隧道相位 + systemd is-active"的实时判定，从不持久化"已连接"状态。
 - **就绪 = 隧道 TCP + dsh 身份握手**：TCP accept 只证明目标端口上有服务
   在听，不证明是 dsh。置 ready 前经 provider `verifyUp`（统一身份握手
@@ -183,10 +182,10 @@
   upgrade"）；与本地实例就绪判据同源，02 §3.2；**按 `spec.kind` 决定是否带
   认证头**——dsh 目标无认证头、gateway 目标可选认证头，探针认证矩阵见
   17 §9.2）验证远端真是目标——目标端口上跑非 dsh 服务时显式报错/降级，
-  **绝不呈现已连接**（假连接修复）。**确定性失败免重试**：目标**应答了**
+  **绝不呈现已连接**（拒绝假连接）。**确定性失败免重试**：目标**应答了**
   探测但证明不是（兼容的）目标（HTTP 非 200 / 错误信封 / 版本过老）→
   验证结果带 `terminal` 标记，第一次失败即落 error 终态（重试无法改变
-  应答）；仅连接错误/超时等瞬时失败走重连。**UI 类别区分（2026 修复）**：
+  应答）；仅连接错误/超时等瞬时失败走重连。**UI 类别区分**：
   终态投影的 `userActionKind` 区分失败类别——`'auth'`（传输层认证/主机
   密钥/spawn）提示修复 SSH 凭据；`'endpoint'`（实例层确定性探测失败——
   隧道本身正常、问题在远端 dsh 实例，如破坏性变更/版本不兼容）展示
@@ -195,7 +194,7 @@
   HTTP/WS 反代都必须在 TLS `secureConnect` 后先匹配 peer SPKI，匹配前不调用请求
   `write/end`、不发送 HTTP/WS handshake/header/credential/body 等任何应用层字节；
   mismatch 显式失败，目标服务看不到请求。无 pin 的标准 CA 路径不改变。
-- **两段式重连（2026-08 修订）**：瞬时失败先走**快速有界突发**（半开
+- **两段式重连**：瞬时失败先走**快速有界突发**（半开
   jitter 指数退避，1s→30s，至多 N=5 次），突发耗尽落 error（诚实红态）
   **但不停摆**——进入**慢速周期重探**（每 ~60s 一次全新隧道尝试，无上限）：
   瞬时故障是**时变**的（网络恢复、远端重启、服务拉起），「放弃」绝不能是
@@ -229,8 +228,9 @@
   HTTP(S)，HTTPS pin 在任何应用字节写出前验证。未知协议/target kind 必须
   fail-loud，不能先呈现“已注册”再在首请求失败。
 - **HTTP 全量透传**：任意方法（**无方法白名单**——05 §1），保持
-  method/body/headers；**WS upgrade** 直通（`events.mux` / `events.host`
-  双下行流）；**SSE 直通**（`text/event-stream` 响应不缓冲、不逐条解析、
+  method/body/headers；**WS upgrade** 直通（上游 Typert Remote 流复用
+  `/api/remote.mux`；WS 路径集是白名单 `WS_STREAM_PATHS`，非流路径 404）；
+  **SSE 直通**（`text/event-stream` 响应不缓冲、不逐条解析、
   不重封装）。
 - **前缀剥离后转发**：剩余路径锚定到实例的 `/api` 根——实例只认 `/api`
   前缀（dsh connection 的 node half 以 `API_PATH = '/api'` 注册整棵路由树，
@@ -239,8 +239,7 @@
 
 ```
 POST /api/i/<id>/api/session.list  → 实例 POST /api/session.list
-WS   /api/i/<id>/api/events.mux    → 实例 WS  /api/events.mux
-WS   /api/i/<id>/api/events.host   → 实例 WS  /api/events.host
+WS   /api/i/<id>/api/remote.mux    → 实例 WS  /api/remote.mux
 ```
 
 - 反代不改写上游内容；**认证头按 kind 白名单注入（17 §9.3）**：**dsh 目标
@@ -283,26 +282,27 @@ WS   /api/i/<id>/api/events.host   → 实例 WS  /api/events.host
 - **响应头白名单**（收敛上游头，防 hop-by-hop / 凭据泄露）：完整列表见
   **04 §4.3**（WS upgrade 101 所需头除外）。
 - **体积上限**：带可信 `Content-Length` 的请求体 ≤ 300MiB；未知长度/chunked 请求体
-  ≤ 32MiB（避免 chunks + concat 的双份峰值）；响应体 ≤ 300MiB（与上游 dsh 0.1.2-alpha.4
-  的 300MiB 请求体上限 / 200MiB 图片准入对齐：200MiB 图片 base64 膨胀
+  ≤ 32MiB（避免 chunks + concat 的双份峰值）；响应体 ≤ 300MiB（与上游 dsh 的
+  300MiB 请求体上限 / 200MiB 图片准入对齐，见 pinned vendor
+  `client/connection/http-bridge.ts`：200MiB 图片 base64 膨胀
   ~267.7MiB 后仍留余量；沿用 v2 runtime-proxy 语义；超限 → 413 / 取消上游
   流，显式而非截断静默）；请求体分片空闲超过
   30s → 408 并取消底层请求 iterator，不能用慢速上传长期占用代理槽位。
 - **请求头收敛**：剥离 cookie、authorization、proxy authentication、客户端
   `content-length` 与 hop-by-hop framing；代理完成有界缓冲后，仅按实际接收字节
-  重建 `content-length`。**压缩协商不跨代理（2026 audit M3b）**：请求侧剥离
+  重建 `content-length`。**压缩协商不跨代理**：请求侧剥离
   `accept-encoding`（上游恒 identity），响应白名单放行 `content-encoding`
   ——压缩标签必须随行，浏览器才能正确解码；反代不经手压缩字节。
 - **进程级资源预算**：并发 HTTP ≤ 64、活动 WS ≤ 64、待完成 WS 握手 ≤ 16、
   所有 proxy owner 共享的进程级缓冲请求体预算 ≤ 300MiB；健康 SSE ≤ 32。超额统一 503
   `resource_exhausted`，计数在断连/超时/错误/完成时幂等释放；HTTP server 在
   路由前另设 10s header、35s request、5s keep-alive 与 192 连接上限。
-- 非 SSE 上游响应使用 45s **空闲**超时（每个数据块重新计时；2026-08 由 10s
-  调高：chamber Git worktree host 的同步 git mutation 预算 30s，旧 10s 空闲
-  计时会在 host 已提交后截断慢速 `git worktree remove` 为 504，见设计 08
-  §6 修订与 STATUS），既阻止停滞流，也不误杀持续有进展的大响应；SSE/已
+- 非 SSE 上游响应使用 45s **空闲**超时（每个数据块重新计时；chamber Git worktree
+  host 的同步 git mutation 预算 30s，更短的空闲窗会在 host 已提交后截断慢速
+  `git worktree remove` 为 504，见设计 08 §5 与 STATUS），既阻止停滞流，也不误杀
+  持续有进展的大响应；SSE/已
   升级 WS 保持长连接语义。
-- **长 RPC 豁免（2026-09）**：`POST` 且上游 pathname **精确命中**
+- **长 RPC 豁免**：`POST` 且上游 pathname **精确命中**
   `LONG_RPC_PATHS`（当前 `/api/commands/execute` 与
   `/api/archiveCleanup/purge`）的 unary RPC 改用 `LONG_RPC_UPSTREAM_TIMEOUT_MS`
   （30 分钟）作**保险丝而非 SLA**，替代 45s 空闲窗。这类端点的宿主业务没有
@@ -326,13 +326,14 @@ WS   /api/i/<id>/api/events.host   → 实例 WS  /api/events.host
   ping（`WS_PING_INTERVAL_MS=30s`、`WS_PING_MISSES_BEFORE_TEARDOWN=1`，
   与 `ws` README 官方心跳示例对齐）；PongScanner 被动扫描、不消费字节；
   上游（宿主）腿刻意无心跳（活性由 SSH keepalive / socket error 覆盖）——
-  契约与参数见 14-sleep-background.md D4 扩展与 `ws-frames.ts`/`ws-heartbeat.ts`。
-  **直连腿例外（S2，2026-09）**：对**非 loopback 上游**（direct-http(s)
+  契约与参数见 14-sleep-background.md D4 与 `ws-frames.ts`/`ws-heartbeat.ts`。
+  **直连腿例外（S2）**：对**非 loopback 上游**（direct-http(s)
   目标，判别轴为解析后 baseUrl 的 host，含 gateway 与 dsh 两种 kind）经
   `instance-proxy` 启用 OS 级 TCP keepalive（初始空闲 30s；
   `tcpKeepAliveMsForUpstream`）——ssh 隧道腿恒为 loopback（由 ssh keepalive
   覆盖）、本地腿不受影响；应用层上游心跳仍不存在（TCP keepalive 是内核
-  层惰性探测；另注意 0.1.2 宿主侧 mux 自带 2s/2miss 心跳，见 14 D4 注，
+  层惰性探测；另注意宿主侧 mux 自带 2s/2miss 心跳，见 14 D4 注与 vendor
+  `api/gateway/stream-server.ts`，
   三者 30s 数值同值属巧合、理由各异，勿合并）。
 - 写路径背压（Node 双流适配，`res.write === false → waitForDrain`）；
   浏览器断连 → abort 上游（不泄漏 socket / 流资源）。

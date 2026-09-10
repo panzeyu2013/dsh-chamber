@@ -16,7 +16,7 @@
  *   <repo>/ref-dsh (falling back to the desktop vendor bundle when absent).
  * - port/host: the control plane's own HTTP bind (standalone default
  *   DEFAULT_CONTROL_PLANE_PORT).
- * - webDistDir: optional static frontend dist directory (design 05 §3.3).
+ * - webDistDir: optional static frontend dist directory (design 05 §7.3).
  *   When set, the plane serves / (index.html with the __DSH_BOOT__ manifest
  *   injected from <dist>/manifest.json) and the dist assets (index.html,
  *   /assets/*, /manifest.json, SPA fallback); when unset (standalone dev)
@@ -156,7 +156,7 @@ export function seedDshHomeDefaults(dshHome: string): boolean {
 /**
  * createControlPlane options (all optional; see the module docblock).
  * `corsOrigins` is the explicit cross-origin allowlist; `webDistDir`
- * enables the static frontend service (design 05 §3.3).
+ * enables the static frontend service (design 05 §7.3).
  */
 export interface ControlPlaneOptions {
   port?: number
@@ -574,7 +574,7 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
   // Per-instance reverse proxy (design 03 §3): /api/i/<id>/* HTTP/WS/SSE
   // passthrough, reachable without any session (v1); ssh transports are
   // registered by the desktop main process through the handle (design 05
-  // §3.3).
+  // §7.3).
   const instanceProxy = createInstanceProxy({
     logger,
     getLocalState: () => local.getState(),
@@ -712,7 +712,7 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
   let lifecycleEpoch = 0
 
   // ---------------------------------------------------------------------------
-  // Static frontend service (design 05 §3.3 / 04 §5): dist/ + __DSH_BOOT__,
+  // Static frontend service (design 05 §7.3 / 04 §5): dist/ + __DSH_BOOT__,
   // assembled in static-serving.ts. Anonymous like every other surface (v1
   // has no authentication). Disabled when webDistDir is not configured.
   // ---------------------------------------------------------------------------
@@ -997,7 +997,7 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
     },
 
     /**
-     * Register a remote instance transport (design 05 §3.3 + design 17 §9.3):
+     * Register a remote instance transport (design 05 §7.3 + design 17 §9.3):
      * the desktop main process reports a ready target as connectionId
      * `dsh:<id>` or `gateway:<id>` plus `opts.transport` (legacy
      * `ssh:<id>` spelling remains SSH-only) — the
@@ -1098,7 +1098,7 @@ export {
 } from './host-graph-seed.ts'
 export type { ChamberHostPackageDescriptor, HostPackageInsert } from './host-graph-seed.ts'
 export type { ApiCorsDecision, ApiCorsEvaluator, ApiRequest, ApiResponse, ApiSurface } from './api.ts'
-// Shared forwarding core (design 17 §6.2, 方案 A): extracted from
+// Shared forwarding core (design 17 §8, 方案 A): extracted from
 // instance-proxy.ts so `gateway-proxy.ts` reuses the same Host/Origin
 // rewrite + WS splice + limits/errors without forking.
 export * from './proxy-forward.ts'

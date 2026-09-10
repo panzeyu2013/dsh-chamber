@@ -1,9 +1,12 @@
-# 13 · 远程实例插件管理（远程 dsh plugin 编排；已实现，2026-08；设计 08 双包 seed 更新 2026-08-20）
+# 13 · 远程实例插件管理（远程 dsh plugin 编排）
 
-> **状态：已实现（2026-08，M1–M4 落地）**——实现基线以 git 历史与
-> CHANGELOG 为准；剩余项（本机 pnpm 依赖）见 `docs/progress/STATUS.md`。
-> 本文档补全此前散落于
-> 05 §7.4/§7.6、03 §2.2 与 STATUS 中的契约实体，成为该面的设计权威。
+> **状态：现行（ssh 后端插件编排；范围 = `{kind:'dsh', transport:'ssh'}` 目标，2026-12）**——
+> 本设计是 ssh 后端插件管理的既有行为权威：经桌面主进程 + provider exec 通道驱动远端
+> `dsh plugin` CLI，并做 chamber 宿主包的 ready-time 分发；模型与双后端契约的收敛权威在
+> design 21 §3。未完成门禁见 docs/progress/STATUS.md。
+>
+> 本设计补全此前散落于
+> 05 §7.4/§7.6、03 §2.2 与 STATUS 中的契约实体。
 > **范围（连接模型 v2，17 §2/§9.1）**：本面只服务
 > `{kind:'dsh', transport:'ssh'}` 目标——gateway 目标（http/ssh）的插件与
 > 编排面走 gateway 自身编排面（17 §10），不经本 exec 通道。
@@ -11,19 +14,19 @@
 > dsh 宿主插件系统本身。设计 08 增加的 Git 执行仍在远端 dsh 实例内；本设计
 > 只负责把 chamber 自带的 host package 分发过去，绝不增加 `ssh ... git ...`。
 >
-> **2026-12 收敛表述（design 21 §3，用户重申口径）**：ssh 与 gateway 不是
-> 「双通道各一套同权功能」，而是**单一插件管理模型、末段执行分叉**——UI、
+> **单一模型、末段执行分叉（design 21 §3）**：ssh 与 gateway 不是
+> 「双通道各一套同权功能」，而是**单一插件管理模型**——UI、
 > 流程、差异语义、状态机、文案与恢复能力全仓只有一份（ssh = 桌面主进程
 > exec 后端；gateway = 宿主 spawn 后端）；本设计各节是 ssh 后端的既有行为
-> 权威，design 21 是模型与双后端契约的收敛权威。**统一增量已落地**：ssh 已
-> 安装列表逐行移除（consistent 行缺口修复，经 apply remove）、remove/install
+> 权威，design 21 是模型与双后端契约的收敛权威。ssh 面按模型统一要求必备：
+> 已安装列表逐行移除（consistent 行缺口修复，经 apply remove）、remove/install
 > 保留名拒绝（@deepseek-ai/* + @dsh-chamber/*，与 gateway 同集，applyPlugins
 > 整批拒绝）、撤销 journal（SSH_PLUGIN_UNDO：变更前远端 spec 快照 +
 > 操作目标指纹绑定）、SSH_PLUGIN_LIST 掩码投影（redactRemotePluginManifest，
-> design 21 决策 18）；spec/name 白名单族单一来源迁
+> design 21 决策 18）；spec/name 白名单族单一来源在
 > `control-plane/src/plugin-spec.ts`（desktop 经 control-plane-module.ts 双路径
-> facade 与原 ssh-provider 再导出消费、gateway 经包导出直引——§7.2 权威归属
-> 变化，常量不可再在 ssh-provider 内重声明）。
+> facade 与原 ssh-provider 再导出消费、gateway 经包导出直引——§7.2 归属，
+> 常量不可再在 ssh-provider 内重声明）。
 
 ## 1. 动机与范围
 
@@ -64,25 +67,26 @@
   宿主包 `@dsh-chamber/dsh-chamber-seed-client-graph`（loader id `client-graph`）、
   `@dsh-chamber/dsh-chamber-seed-git-worktree`（loader id `git-worktree`）与
   `@dsh-chamber/dsh-chamber-seed-archive-cleanup`（loader id `archive-cleanup`，design
-  24，2026-12 起）落到远端
+  24）落到远端
   install-level fallback `profiles/node_modules`，再合并 web profile 的
   `cordis.patch.yml`。seed 由 `seedRemoteChamberHostPackages(exec, spec, seeds)`
   统一执行（单包/多包同一条路径，seed 表来自控制面注册表
-  `CHAMBER_HOST_PACKAGES`；手动 IPC `desktop_ssh_seed_host_graph` 复用同一实现
-  ——2026-09 单注册表收敛时删除了旧的单包 wrapper `seedRemoteHostGraph`）。
+  `CHAMBER_HOST_PACKAGES`；手动 IPC `desktop_ssh_seed_host_graph` 复用同一实现）。
 - `materialize`：本地路径包物化（pack → ssh 传输 → 远端 `add file:`）；
   `add file:` 走独立目录约束白名单分支（仅物化目录内绝对路径）。本地
   `pnpm pack` 固定 `--config.ignore-scripts=true`，选择目录只授权读取/传输，
   不授权执行包的 prepack/prepare/postpack 生命周期脚本。
+  本地 `dsh plugin` / `pnpm pack` 依赖本机 pnpm（`resolvePnpmBinDir` 扫描 PATH +
+  nvm/volta/homebrew，打包态 best-effort）。
 
-双包 seed 的顺序与失败语义固定：
+宿主包 seed 的顺序与失败语义固定：
 
-1. 先在本机预检所有可用包的 `package.json + dist/index.js`；第二包损坏时远端
+1. 先在本机预检所有可用包的 `package.json + dist/index.js`；任一包损坏时远端
    零调用。未构建的包被排除，也绝不产生悬空 loader row。
 2. 第一条远端调用只读
    `<remoteDshHome>/profiles/web/cordis.patch.yml`；文件缺失（profile 未初始化）
    或不是可安全追加的顶层 YAML list 时，在任何远端写入前 fail-loud。
-3. 对两包全部目标文件先做 quiet `cat` 与字节域 hash 比较；任一非 ENOENT
+3. 对全部目标包的全部目标文件先做 quiet `cat` 与字节域 hash 比较；任一非 ENOENT
    读取失败发生在第一笔写入之前。随后只写缺失/漂移文件到
    `<remoteDshHome>/profiles/node_modules/@dsh-chamber/<package>/`。
 4. 包文件全部成功后，才对 patch 做**一次**合并写。去重必须在同一 loader row
@@ -127,36 +131,31 @@
   restart）、`desktop_ssh_seed_host_graph`、`desktop_ssh_plugin_materialize_add`
   （`add file:`）、`desktop_ssh_plugin_materialize_add_pick`；
 - 本地：`desktop_local_plugin_list/add/remove` + `desktop_local_plugin_add_file`
-  （本地路径包物化——目录选择收敛后取代旧 `desktop_pick_directory` 通道，
-  2026-08 起不存在）；
+  （本地路径包/归档物化——取代已删除的 `desktop_pick_directory` 通道）；
 - 其他：`desktop_npm_search`（npm 搜索，best-effort）。
 
 ## 6. UI（连接设置页 · 插件管理）
 
-- **2026-09 修订（用户拍板：seed 了就必须在页面上可见，且不得写死）**：
+- **「chamber 内置（注入）」表由控制面注册表驱动，不得写死包名**：
   「chamber 内置（注入）」表由**控制面注册表**驱动——`CHAMBER_HOST_PACKAGES`
   （`packages/control-plane/src/host-graph-seed.ts`：insert id + 包名 + 存活探测
-  Remote）是唯一权威清单，desktop 的本地/远端注入态投影改为**逐包列表**
+  Remote）是唯一权威清单，desktop 的本地/远端注入态投影为**逐包列表**
   （`ChamberHostPackageState[]`，含 `insertId/name/probe/installed/patched/
   version/live`），UI 直接映射该列表渲染行；本地探测、ssh 探测、gateway
   seed-cache 漂移、gateway 同步包表、远端 seed 清单全部由同一清单派生。
-  起因：2026-12 加入第三个宿主包（design 24 `dsh-chamber-seed-archive-cleanup`）时，
-  seed/探测/同步/分类都补齐了，唯独该表与 desktop 注入态是写死的两行
-  （host-graph + git-worktree），导致已 seed 的包在页面上不可见；同时
-  `remoteNeedsSeed` 只校验两包，会让缺少第三个包的远端被误报「已注入」。
-  新增宿主包 = 在注册表加一行（页面、探测、同步自动覆盖）。
-- **2026-09 硬化轮（P1.4/P2.7）**：「chamber 内置（注入）」表的**行派生**从
-  `PluginDialog.tsx` 内联搬入纯函数 `deriveChamberRows`
+  新增宿主包 = 在注册表加一行（页面、探测、同步自动覆盖）；任何写死包名的行集
+  都会让已 seed 的包在页面上不可见，并让 `remoteNeedsSeed` 误报「已注入」。
+- **行派生为纯函数**：「chamber 内置（注入）」表的**行派生**是纯函数 `deriveChamberRows`
   （`plugin-inventory-text.ts`，locale-free：只回 label KEY 与版本 STRING，
-  绝不回 JSX/本地化文本），并由 `test/chamber-rows.test.ts` 表驱动覆盖完整输入
+  绝不回 JSX/本地化文本），由 `test/chamber-rows.test.ts` 表驱动覆盖完整输入
   矩阵（local/ssh/gateway/http × 清单有/无 × installed/patched/live ×
   seed-cache 漂移/缺项/整盘缺/未读 × 空 expected）。**数据源矩阵是契约**：
   LOCAL 目标的 expected 与本地列都读**它自己的 profile 清单**
   （`localList.chamber`），gateway/http/ssh 读桌面本机清单投影，ssh 在远端探测
   成功时优先远端清单；**空 expected 列表不得声称「seed cache 不存在」**。
-  gateway 的**客户端插件行**（移动端入口）改由 Loader inventory 中
+  gateway 的**客户端插件行**（移动端入口）由 Loader inventory 中
   `classifyChamberClientPlugin` 的分类派生（`@dsh-chamber/dsh-client-ui-*`
-  前缀，不再是写死的包名字面量）；inventory 不可用时渲染 unknown 行，
+  前缀，不是包名字面量）；inventory 不可用时渲染 unknown 行，
   绝不显示写死的包名。
 - 远端同步视图 + 本地列表视图；`plugin-diff` 一键应用本地清单。
 - chamber 内建注入可见化：`@dsh-chamber/dsh-chamber-seed-client-graph` 行显示
@@ -164,8 +163,7 @@
   package.json）；远端未注入时提供「注入」按钮。
 - 远端生效状态三态：经主进程隧道 RPC 探测（`probeChamberHostLive`——方法与参数
   取自控制面注册表描述符 `CHAMBER_HOST_PACKAGES[].probe`，每个宿主包走同一条
-  通用路径；旧的两条包名专用探测 `probeClientGraphLive`/`probeGitWorktreeLive`
-  已随单注册表收敛删除）——「已注入并已生效」/「已注入（重启后生效）」/「生效
+  通用路径）——「已注入并已生效」/「已注入（重启后生效）」/「生效
   状态未知」（无 ready 隧道或探测不可分类时）。本地侧按设计不单独探测
   （本地实例即 chamber 页面，boot 自身证明图通道）。
 - 注入结果写入实例环形缓冲日志（transport-manager `appendLog`，连接设置页
@@ -177,41 +175,41 @@
   host-graph 的 installed 投影冒充自身状态，而是按来源调用 `gitWorktree`
   Remote。缺包或尚未重启生效时保留明确的来源错误；ready-time 注入日志说明
   “重启后生效”，不得把 RPC 不可达渲染成空仓库。
-- **2026-12 收敛（design 21 §6.6，plan 24）**：插件管理对话框已合体为唯一
+- **单一模型视图**：插件管理对话框已合体为唯一
   `PluginDialog`（connections 包）——local / ssh+dsh / gateway / http 直连四来源按
   后端能力矩阵渲染同一组件，分叉仅在数据源与动作分发（design 21 §3 单一模型、
   末段执行分叉）；ssh 面的同步差异/添加/已安装列表逐行移除/撤销最近变更行为在
-  合体中逐字节保留；gateway 添加双通道（registry spec 直装 + 文件夹直推）接线、
-  「变更记录」区移除（后端 journal/备份保留）、恢复撤销仅 gateway；http 直连
+  合体中逐字节保留；gateway 添加双通道（registry spec 直装 + 文件夹/归档直推）接线、
+  「变更记录」区不在 UI 渲染（后端 journal/备份保留）、恢复撤销仅 gateway；http 直连
   只读不变。本节与 §5 IPC 面仍为 ssh/远端行为的权威契约。
 
 ## 7. 安全
 
-### 7.0 主进程确认与路径脱敏（2026-11 审计复核，09 §4 v1 缓解）
+### 7.0 主进程确认与路径脱敏
 
 - `desktop_ssh_plugin_materialize_add` / `desktop_local_plugin_add` /
   `desktop_local_plugin_remove` 在真正动作前须经主进程 `dialog.showMessageBox`
   确认（远程 bundle 与 chamber 页面同上下文，脚本不能静默驱动外传/安装/卸载）；
   取消返回 `{ok:true,cancelled:true}`（与 picker 取消同形）；无窗口 fail-closed；
   单飞防弹窗堆叠。文案构造为纯函数（`describe*Confirmation`，可单测）。
-- `desktop_ssh_plugin_apply` 的 **registry add/remove**（2026 final review）同样
+- `desktop_ssh_plugin_apply` 的 **registry add/remove** 同样
   须主进程确认——远端安装是持久执行面，与本地安装同类；取消返回
-  `{ok:true,cancelled:true}`（`SshPluginApplyIpcResult` 增补该变体，三处镜像
+  `{ok:true,cancelled:true}`（`SshPluginApplyIpcResult` 含该变体，镜像三处
   同步）。空 add/remove 的 apply 是 **no-op**（`applyPlugins` 仅在存在变更时
   重启），脚本无法借 plugin_apply 触发无变更重启。
-  > **2026-12 落地状态勘误（design 21 §10 ①）**：ssh plugin_apply/seed_host_
-  > graph/materialize_add(_pick) 主进程对话框**仍未实现**（仅 gateway
-  > gateway_plugin_apply/undo 与 ssh_plugin_undo 有确认；gateway materialize
-  > 为「pick 即意图」设计）——本节为设计意图（决策 14 桌面通道纪律），缺口
-  > 登记开放项，勿按已落地理解。
+  **当前实现状态**：确认链已落地在 gateway `gateway_plugin_apply`/undo 与 ssh
+  `ssh_plugin_undo`；**ssh 端 plugin_apply / seed_host_graph / materialize_add(_pick)
+  的主进程对话框尚未落地**（gateway materialize 按设计为「pick 即意图」）——
+  本节的确认要求是契约（决策 14 桌面通道纪律），该缺口登记为开放项
+  （design 21 §7）。
 - `desktop_local_plugin_list` 的依赖值投影脱敏：materialize 类（file:/link:/
   相对/绝对/`~/`）值掩码为 `file:<hidden>`（保持双端 materialize 分类与名称
   匹配语义），本地绝对路径不回显 renderer。主进程内部仍持有完整 manifest
   （`resolveLocalMaterializeDirectory` 等不受影响）。
-  > **2026-12 落地状态勘误（design 21 §10 ①/缺陷③）**：本地清单（LOCAL_PLUGIN_LIST）
-  > **保持原样透传**（本地 file: 绝对路径可经 IPC 进 renderer——登记缺陷③，修复另
-  > 行排期）；ssh 远端清单（SSH_PLUGIN_LIST）已经 redactRemotePluginManifest 掩码
-  > （与 gateway readManifest 同纪律）。
+  **当前实现状态**：ssh 远端清单（SSH_PLUGIN_LIST）已由 `redactRemotePluginManifest`
+  掩码（与 gateway readManifest 同纪律）；本地清单（LOCAL_PLUGIN_LIST）**仍原样透传**
+  （本地 file: 绝对路径可经 IPC 进 renderer，`redactLocalPluginManifest` 零生产调用点）——
+  已知偏差，登记于 design 21 §1 决策 18 与 §7。
 
 ### 7.1 双侧二次校验
 
@@ -232,6 +230,10 @@ renderer 提供的 add/remove spec 在主进程（plugin-sync）+ provider（exe
   1024 字符上限（null = 远端默认 `~/.dsh`）；renderer UX 门禁与主进程权威
   由 parity 测试防漂移；
 - `write-file` 目标前缀白名单 + 50MiB 大小上限。
+- spec/name 白名单族的**单一来源**是 control-plane 共享纯模块
+  `packages/control-plane/src/plugin-spec.ts`（desktop 经 control-plane-module.ts
+  双路径 facade 与原 ssh-provider 再导出消费、gateway 经包导出直引）——常量
+  不可再在 ssh-provider 内重声明。
 
 ### 7.3 字节域校验
 
@@ -239,21 +241,9 @@ renderer 提供的 add/remove spec 在主进程（plugin-sync）+ provider（exe
 整份远端内容保留为 stdoutBytes；普通白名单 `exec` 读取才返回 stdout/
 stdoutBytes。
 
-## 8. 分期
+### 7.4 本地子进程与退出所有权
 
-- **M1–M4 已落地（2026-08）**：exec `restart/run/write-file` + §7.2 白名单、
-  remoteDshHome 贯穿、plugin-sync 编排、10 个 IPC 通道（远端
-  plugin_list/plugin_apply/seed_host_graph/materialize_add/materialize_add_pick
-  + 本地 local_plugin_list/add/remove/add_file + npm_search）、前端
-  PluginSyncModal/PluginAddView/plugin-diff、chamber 内建注入可见化 +
-  生效三态。（历史基线；已由 PluginDialog 收敛——见 design 21 §6.6 落地状态，2026-12）
-- **设计 08 扩展已落地（2026-08-20）**：通用双 host-package seed、精确
-  id/name pair merge、ready-time 单飞注入与 packaged 双包复制；未改变
-  TransportExecAction/run 形状或普通插件 manifest schema。
-- **退出所有权（2026-08-28 merge review）**：本地 `pnpm pack` / `dsh plugin`
-  子进程由 plugin-sync 独立跟踪；will-quit 先注销 ready-time seed listener，
-  再终止并等待全部本地子进程（POSIX 独立进程组，Windows `taskkill /T /F`
-  进程树）。退出开始后拒绝新 local child；与 transport-manager 对远端 SSH
-  exec 的 disposeAsync 并行，统一受桌面 5s 退出硬上限兜底。
-- **剩余**：本地 `dsh plugin` / `pnpm pack` 依赖本机 pnpm
-  （`resolvePnpmBinDir` 扫描 PATH + nvm/volta/homebrew，打包态 best-effort）。
+本地 `pnpm pack` / `dsh plugin` 子进程由 plugin-sync 独立跟踪；will-quit 先注销
+ready-time seed listener，再终止并等待全部本地子进程（POSIX 独立进程组，Windows
+`taskkill /T /F` 进程树）。退出开始后拒绝新 local child；与 transport-manager 对远端
+SSH exec 的 disposeAsync 并行，统一受桌面 5s 退出硬上限兜底。

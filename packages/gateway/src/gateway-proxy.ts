@@ -4,7 +4,7 @@
  * non-management `/api/*` verbatim to `http://127.0.0.1:<localDshPort>` with
  * the SAME Host/Origin rewrite, WS splice, limits and error semantics as the
  * control-plane's per-instance proxy (shared `proxy-forward.ts`, design 17
- * §6.2 方案 A). Unlike instance-proxy, there is no `/api/i/<id>` prefix and no
+ * §8 方案 A). Unlike instance-proxy, there is no `/api/i/<id>` prefix and no
  * transports table: the target is always the managed local dsh.
  *
  * Structural shape fact of this deployment: this root mount and the

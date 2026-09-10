@@ -2,7 +2,7 @@
  * The /api URL prefix — single source for both halves of the web transport.
  * The node half registers this prefix on the web server.
  *
- * ## chamber patch (dsh-chamber connection manager, design 05 §3.6)
+ * ## chamber patch (dsh-chamber connection manager, design 05 §6)
  *
  * This is one of the only dsh source files modified by chamber: the browser
  * half learns a per-instance base path so every RPC path lands under the

@@ -36,7 +36,7 @@
  *   to the per-port rolling log so GET /api/host/logs has content even while
  *   the host itself is silent on stdio.
  *
- * External/claim takeover mode (v2 design 02 §3.6.2) is gone: external-claim
+ * External/claim takeover mode is gone: external-claim
  * was deleted with the thin-shell architecture (01 §4/§5) — the local
  * instance is always managed.
  */
@@ -305,7 +305,7 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, log
   let healthInFlight: Promise<void> | null = null
   /** Last health verdict within the result cache window ({at, ok, reason}). */
   let healthResultCache: { at: number; ok: boolean; reason?: string } | null = null
-  /** Single-flight restart sequence (design 02 §3.5.3). */
+  /** Single-flight restart sequence (design 02 §3.6). */
   let restartPromise: Promise<void> | null = null
   /** The spawn/readiness attempt currently capable of writing DSH_HOME. */
   let spawnAbortController: AbortController | null = null
@@ -469,7 +469,7 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, log
   /**
    * One real health probe (or the cached verdict when within
    * healthResultCacheMs — a burst of triggers shares one probe, design 02
-   * §3.5.2). Single-flight via runHealthCheck.
+   * §3.5). Single-flight via runHealthCheck.
    */
   async function performHealthCheck(source: string): Promise<void> {
     if (healthResultCache !== null && Date.now() - healthResultCache.at < healthResultCacheMs) {
@@ -551,7 +551,7 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, log
   }
 
   /**
-   * The restart sequence (design 02 §3.5.3/§3.5.4), single-flight: terminate
+   * The restart sequence (design 02 §3.6), single-flight: terminate
    * the residual child, respawn through deps.spawnDsh, back to ready. Failed
    * restarts loop with exponential backoff (1s → 60s). The restart count
    * inside the sliding window bounds the loop: at maxRestartsInWindow
@@ -666,7 +666,7 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, log
   /**
    * The child exit listener: a dead dsh must not stay ready. Process death
    * skips the failure counter and goes straight into the restart sequence
-   * (design 02 §3.5.2 进程死亡分支); during an in-flight restart the sequence
+   * (design 02 §3.5 进程死亡分支); during an in-flight restart the sequence
    * itself is driving the teardown, so nothing else is scheduled. A start()
    * in flight also suppresses the pseudo-restart: startImpl tears down the
    * previous child (`await child.stop()`) while `startPromise` is set, and

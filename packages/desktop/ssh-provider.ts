@@ -543,7 +543,7 @@ async function verifyGatewayWithPasswordViaTunnel(
 /**
  * One-shot RPC liveness probe of a chamber host Remote over the tunnel
  * endpoint (the exact wire shape the renderer's module-C boot uses, design
- * 09 §3.5 / design 08 §11.6). Reached through the generic
+ * 09 §3.5 / design 08 §6.3). Reached through the generic
  * probeChamberHostLive, whose method/args come from the control-plane
  * registry descriptor — every seeded host package, including any added later,
  * uses this one path. File presence alone (the `installed`/`patched` probe)
@@ -1540,7 +1540,7 @@ export function buildRemoteExecArgv(spec: TransportInstanceSpec, payload: Transp
     const specArg = argv[4]
     if (typeof specArg !== 'string') return null
     // `add` accepts the registry spec (design 13 §7.2) OR the main-process
-    // materialize `file:` absolute-tarball form (design 13 §4.6,
+    // materialize `file:` absolute-tarball form (design 13 §7.2,
     // MATERIALIZE_FILE_SPEC_PATTERN — renderer input can never reach this
     // branch: applyPlugins re-validates against PLUGIN_SPEC_PATTERN, which
     // refuses `file:`); `remove` is name-only.
@@ -1556,7 +1556,7 @@ export function buildRemoteExecArgv(spec: TransportInstanceSpec, payload: Transp
     // Whitelisted cat targets: the profile manifest + patch file, plus the
     // CONVERGED seed subtree `<home>/profiles/node_modules/@dsh-chamber/<pkg>/<file>`
     // — the same fixed surface resolveWriteTarget allows writes into, needed
-    // by the seed hash-skip read-back (design 13 §4.6). No wildcards, no
+    // by the seed hash-skip read-back (design 13 §3). No wildcards, no
     // `.`/`..` traversal (shared SEED_RELATIVE_PATTERN).
     const seedPrefix = `${home}/profiles/node_modules/@dsh-chamber/`
     const isSeedRead = argv[0].startsWith(seedPrefix)
@@ -1742,7 +1742,7 @@ function spawnRemote(
       }
       if (code !== 0) {
         // Run-class failures carry the redacted remote stderr text — the
-        // `cat` ENOENT signal (`profile not initialized`, design 13 §4.3) among
+        // `cat` ENOENT signal (`profile not initialized`, design 13 §4.1) among
         // others — bounded so a chatty remote never bloats the error. A QUIET
         // run (an expected-failure probe, e.g. the first-seed `cat` ENOENT) is
         // still an `ok:false` with the same error text — the caller's ENOENT

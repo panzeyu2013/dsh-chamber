@@ -48,7 +48,7 @@ interface GitWorktreeHostContext extends Context {
       readonly path: string
       readonly sessionIds: readonly unknown[]
     }>
-    /** Authoritative archived-session set (design 08 §6 amendment 2026-09): an
+    /** Authoritative archived-session set (design 08 §5.2 amendment 2026-09): an
      *  archived running session is INERT and must not block a worktree
      *  removal. The getter is read on every snapshot; a missing surface throws
      *  (the core maps it to `state-source-unavailable`), never an empty set. */

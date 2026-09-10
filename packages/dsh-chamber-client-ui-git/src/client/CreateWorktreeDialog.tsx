@@ -1,6 +1,6 @@
 /**
  * Create-worktree dialog, organized after OpenChamber's NewWorktreeDialog
- * (design 08 §11): New Branch / Existing Branch tabs, an auto-suggested
+ * (design 08 §4.2): New Branch / Existing Branch tabs, an auto-suggested
  * branch name (two-word slug), a worktree directory that auto-syncs from the
  * branch name until edited (with a reset action), the source branch shown as
  * an informative line ("New branch will be created from {source}"), the dsh

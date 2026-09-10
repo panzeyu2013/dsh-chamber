@@ -360,7 +360,7 @@ test('the IPC result unions carry identical FIELD SETS across the mirrors that n
   const aliasPairs: Array<[string, string, string]> = [
     ['SshMaterializeResult', 'SshMaterializeResult', 'SshMaterializeResult'],
     // SshSeedHostGraphResult carries NO cancelled arm: the main-process seed
-    // handler has no confirmation dialog or picker to dismiss (design 21 §10
+    // handler has no confirmation dialog or picker to dismiss (design 21 §7
     // open item) — included here so a cancelled widening drifts loudly.
     ['SshSeedHostGraphResult', 'SshSeedHostGraphResult', 'SshSeedHostGraphResult'],
     ['SshLocalPluginExecIpcResult', 'SshLocalPluginExecIpcResult', 'SshLocalPluginExecIpcResult'],

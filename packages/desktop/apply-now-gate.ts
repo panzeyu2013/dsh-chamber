@@ -26,7 +26,7 @@
  * The caller preflights `treeValid` with
  * `validateVersionTree(runtimeBaseDir, target).ok` when a target resolves: a
  * corrupt target tree must never start a stop/respawn cycle that is doomed to
- * fail (design 18 §2.2 gate list includes "target tree valid").
+ * fail (design 18 addendum §2.2 gate list includes "target tree valid").
  */
 
 export type ApplyNowGateInput = {

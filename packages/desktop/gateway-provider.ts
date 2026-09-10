@@ -862,7 +862,7 @@ export function verifyGatewayRuntimeIdentity(
     }, res => {
       res.on('error', () => {})
       // 401 = auth required / rejected; 403 = an origin/Host policy
-      // rejection (design 17 §5.3: Host→421, Origin→403) — the credentials
+      // rejection (design 17 §7.3: Host→421, Origin→403) — the credentials
       // may be fine but the gateway refuses this deployment's peer. Split
       // the guidance so a missing-token probe is not misreported as a token
       // problem, a policy misconfiguration is not a token problem, and a

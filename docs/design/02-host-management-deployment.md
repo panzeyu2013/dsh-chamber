@@ -1,26 +1,27 @@
 # 02 · 宿主管理（web profile）：本地 dsh 宿主进程的托管与部署形态
 
-> 本地 dsh 宿主进程的托管与部署形态（v1 定稿 2026-08-14；设计 08/09
-> host-package seed 接线更新 2026-08-20）：
+> **状态：现行（本地实例托管与部署形态，2026-12）**——控制面以 dsh 内置 web
+> profile 拉起本地宿主，并独占其生命周期（spawn → 就绪 → 健康 → 重启 → 优雅停止 →
+> 孤儿回收）；未完成门禁见 `docs/progress/STATUS.md`。
 >
-> - **profile 改用 dsh 内置 web profile**：`dsh --profile web --host 127.0.0.1
->   --port <port> --trusted-host 127.0.0.1:<port>`——不再生成/维护自建 profile
->   目录、业务 patch stack 或 glue 插件，端口不再随机分配，改为固定端口 +
->   占用重试（port+1）。唯一例外是设计 08/09 的**宿主包 loader overlay**：它只
->   把 chamber 自带的 host 包挂入官方 web profile（2026-12 起三个：client-graph /
-   git-worktree / archive-cleanup，见 §2.6），不接管宿主组装权威（§2.6）。
-> - **保留沿用**：spawn 生命周期、端口占用重试、pid 记录
+> - **profile 形态**：`dsh --profile web --host 127.0.0.1
+>   --port <port> --trusted-host 127.0.0.1:<port>`——不生成/维护自建 profile
+>   目录、业务 patch stack 或 glue 插件；端口固定（非随机），占用时按 port+1 有界
+>   退让。唯一例外是设计 08/09/24 的**宿主包 loader overlay**：它只
+>   把 chamber 自带的 host 包挂入官方 web profile（三个：client-graph /
+>   git-worktree / archive-cleanup，见 §2.6），不接管宿主组装权威（§2.6）。
+> - **契约范围**：spawn 生命周期、端口占用重试、pid 记录
 >   （ownerPid/ownerInstanceId/port/binary/profile/source/startedAt）、
 >   instance-id 仲裁、readiness（TCP + 统一身份探针）、健康七态状态机、
 >   reaper、host-logs 滚动日志、systemd 单元（部署形态，远程实例参考）、优雅停止。
-> - **删除**：slim profile 生成与维护、glue 插件、旧业务补丁层 HMR 分类与
->   `POST /api/config/reload`、external 接管 / claim、部署五形态（收为
->   桌面一体一形态）、README 快速连接承诺。
+> - **已删除的旧体系（不得回流）**：slim profile 生成与维护、glue 插件、旧业务
+>   补丁层 HMR 分类与 `POST /api/config/reload`、external 接管 / claim、部署五形态
+>   （收为桌面一体一形态）、README 快速连接承诺。
 >
 > 权威契约：`05-connection-manager.md`（架构 / PlaneHandle）；管理面端点见
 > `04-control-plane-api-data.md`；连接模型见 `03-connections-proxy.md`。
 > 服务端部署形态（gateway 单元 / http 直连）与远程连接模型 v2 见
-> `17-server-side-gateway.md`（2026-09 v2）。
+> `17-server-side-gateway.md`。
 
 ---
 
@@ -218,10 +219,16 @@ dsh --profile web [--patch <stateDir>/dsh-chamber-graph.patch.yml] \
   会话级工作区由前端 runtime 决定，与宿主 cwd 解耦。
 - **环境固定**（确定性 + 隐私）：`DSH_TELEMETRY_DISABLED=1`（任意非空值
   即禁用）；`DSH_PERMISSION_MODE=workspace-write`（显式固定默认）；
-  `SSH_CONNECTION=127.0.0.1 0 127.0.0.1 0`（目录选择交互 pin：宿主
-  directory-picker-auto 在 SSH 启动标记下解析 `browse`，托管宿主恒以
-  应用内目录对话框服务，绝不弹 OS 选择器——05 §4；dsh 源码中仅
-  directory-picker-auto 读取该变量，已核实无其他影响）；其余
+  `SSH_CONNECTION=127.0.0.1 0 127.0.0.1 0`（目录选择交互 pin：托管宿主恒以
+  应用内目录对话框服务，绝不弹 OS 选择器——05 §4）。该标记按
+  `launchedThroughSsh`（vendor `dsh-launch-environment`：非空
+  `SSH_CONNECTION` 或 `SSH_TTY`）被上游三处消费，均为可接受/需知情的副作用：
+  ① `host/directory-picker-auto` 解析 `browse`（本 pin 的目的）；② `bundle/web-app`
+  关闭浏览器自启 handoff（`handoffBrowser = openBrowser && !launchedThroughSsh`，
+  托管宿主不代开系统浏览器）；③ `host/open-in-app` 在 SSH 标记下不解析任何本机
+  应用（`resolveOpenInAppApps` 返回空表）——实例侧官方 open-in 应用目录因此为空
+  （本地来源的 open-in 入口由主进程 VS Code 覆盖承接，设计 20；「官方 host 行
+  dormant」为已登记项）；其余
   继承控制面环境；`DSH_HOME` **显式 pin 到 `<stateDir>/dsh-home`**
   （覆盖环境继承——控制面私有宿主 home，与系统用户 `~/.dsh` 不共享；
   首启缺省与 seedDshHomeDefaults 见下）；Electron 分支额外注入
@@ -289,7 +296,7 @@ ready
 ```
 
 - 写文件：`writeFileSync(tmp-<pid>) + renameSync` 原子替换；**写入失败时
-  （2026 audit H3）**清理已 spawn 的子进程（`killFailedSpawn`：进程组
+  **清理已 spawn 的子进程（`killFailedSpawn`：进程组
   SIGKILL → 确认退出 → 删记录）并使本次 spawn 尝试失败——绝不遗留无记录可
   追踪的 detached 进程；
 - 读取：跳过非 `.json`；解析失败或 `pid` 非整数 → 删文件（损坏即丢，不猜测）；
@@ -382,12 +389,12 @@ stopped ──spawn──► starting ──ready(§3.2)──► ready ──fa
 6. 窗口内（10min）重启次数 ≥ M（5）→ restart-exhausted：停止自动重启，
    状态由 live surface 暴露（不落 catalog），等待人工介入（POST /api/connections
    幂等启动或桌面设置页操作）；绝不无限重启循环
-7. **迟到的健康判定（2026 audit H2，契约）**：stop()/start() abort 在途健康
+7. **迟到的健康判定（契约）**：stop()/start() abort 在途健康
    探针（`generationSignal`）并等待其落定；任何在 `stopped`/`error` 态或
    start 在途时到达的失败判定一律惰性（不计数、不触发重启——start 在途时
    重启被抑制，防止双 spawn）；spawn 失败落在 stop() 之后（epoch 已变）也不得
    把 `stopped` 改回 `error`。
-8. **手工启动代次（2026-08 merge review）**：候选端口预检和 TCP 就绪轮询的
+8. **手工启动代次**：候选端口预检和 TCP 就绪轮询的
    每次 loopback connect 均有 1s 上限；预检超时按“端口归属不明/忙”保守跳过，
    不在未知端口上拉 detached host。stop() abort 当前 spawn 代次（端口预检、
    TCP 等待、身份探针就绪等待及最后 browse 能力探测均消费同一取消
@@ -472,7 +479,8 @@ Environment=DSH_PERMISSION_MODE=workspace-write
 # SSH 启动标记下解析 browse——远程实例恒以应用内目录对话框服务。不带此
 # 行的远程 darwin/win32 或有显示会话的 linux 宿主会解析 native，此时
 # host.listDirectory 返回 directory-picker/unavailable、新建工作区对话框
-# 不可用（headless linux 服务器无显示会话，缺行也天然 browse）。
+# 不可用（headless linux 服务器无显示会话，缺行也天然 browse）。该标记的
+# 另外两处上游消费（浏览器自启 handoff、实例侧官方 open-in 应用解析）见 §3.1。
 Environment=SSH_CONNECTION=127.0.0.1 0 127.0.0.1 0
 NoNewPrivileges=true
 PrivateTmp=true
@@ -481,7 +489,7 @@ PrivateTmp=true
 WantedBy=multi-user.target
 ```
 
-目录归属与无 root 形态（2026-08 重审；完整单元示例见 docs/deploy/remote-dsh-instance.md，与 README「服务器端部署」一致）：
+目录归属与无 root 形态（完整单元示例见 docs/deploy/remote-dsh-instance.md，与 README「服务器端部署」一致）：
 
 - **归属不变量**：dsh 默认把 home 放在运行账号自己的家目录（`~/.dsh`，
   即 `${DSH_HOME:-$HOME/.dsh}`）——**无需设置 `DSH_HOME`**，也不再有
@@ -556,10 +564,10 @@ gateway 目标即其入口本身（自带认证边界，17 §5.1/§6）。该形
 
 > 各条目以 5.x 编号供外部引用（STATUS「设计未决」按此引用）。
 
-### 5.1 Windows 路径退化(→ design 23 M1 已落地为契约)
+### 5.1 Windows 路径退化（契约见 design 23）
 
 `detached` 语义、进程组信号、`lsof` 均不可用——Windows 实现见
-`packages/control-plane/src/win-probes.ts`(design 23 M1):身份 = PowerShell CIM
+`packages/control-plane/src/win-probes.ts`(design 23):身份 = PowerShell CIM
 (命令行/PPID)、端口归属 = netstat、树终止 = `taskkill /T /F` + CIM 残余后代
 清扫;reaper/spawn-dsh 平台自适应接线,全部 fail-closed(不可证即保留/拒绝)。
 残余语义让步(妥协 F1/C6-C8):无 SIGTERM 握手 → 硬终止 + 事务恢复;身份证明
@@ -593,7 +601,7 @@ RING_BUFFER 行数/字节上限取桌面场景经验值（如
 `<stateDir>/dsh-home`（§3.1），多控制面实例共享同一 stateDir 时才
 共享该 home——会话 JSONL 追加式多写安全，settings 为 last-writer-wins
 文档由 dsh `settings-conflict` 仲裁；不同 stateDir 的实例互不相干。
-**服务器远程形态（§3.9）不再设置独立 `DSH_HOME`**（2026-08 重审）：
+**服务器远程形态（§3.9）不再设置独立 `DSH_HOME`**：
 远程实例以单元运行账号的身份直启 dsh，home 即该账号自己的 `~/.dsh`——
 dsh 本就是「一账号一 home、多 profile 共存」的模型
 （`$DSH_HOME/profiles/<name>`），web profile 与同账号其他 profile

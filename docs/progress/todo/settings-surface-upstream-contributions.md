@@ -1,7 +1,7 @@
 # todo · 设置面的上游声明式贡献通道（T3 提案）
 
 > 状态：**上游提案，未排期**。记录于 2026-12。伴随落地面 = chamber 侧「图驱动的
-> 每来源设置贡献集」（design 05 §5 / design 09 §6，2026-12 已落地）；本文只记录
+> 每来源设置贡献集」（design 05 §5 / design 09 §5，2026-12 已落地）；本文只记录
 > **需要上游 dsh 提供、chamber 无法自建**的那部分。
 
 ## 动机
@@ -62,7 +62,7 @@ context（design 05 §5 2026-12 修订）。这条路径有两个由上游形态
 `settingsSchema` / `locale` / `theme` / `remote.settings` / `remote.credentials` /
 `remote.llm` / `remote.pluginInventory`），并允许插件在清单里声明自己只依赖该子集
 （"settings-surface-safe"）。价值：插件作者知道写什么能跨宿主工作；宿主知道哪些插件
-可安全实例化。chamber 侧现在把这套契约写在 design 09 §6（作者契约），但**没有机器可
+可安全实例化。chamber 侧现在把这套契约写在 design 09 §5（作者契约），但**没有机器可
 读的声明**。
 
 ### P3 Remote descriptor 上线通道（或"设置面 Remote 子集"协议）

@@ -1662,7 +1662,7 @@ test('applyPlugins: a non-boolean restart is refused (string "false" must never 
   if (!result.ok) assert.match(result.error, /restart must be a boolean/)
 })
 
-test('applyPlugins: a known bundle add missing from the remote bundles layer → verified:false (design 13 §4.5 ④)', async () => {
+test('applyPlugins: a known bundle add missing from the remote bundles layer → verified:false (design 13 §3)', async () => {
   const exec: ExecFn = async (_id, action, payload) => {
     if (action === 'run' && payload?.op === 'exec' && payload.command === 'dsh') return ok()
     if (action === 'run' && payload?.op === 'exec' && payload.command === 'cat') {
@@ -1700,7 +1700,7 @@ test('applyPlugins: a known bundle add in dependencies AND bundles → verified:
 })
 
 // ============================================================================
-// seedRemoteChamberHostPackages — single-package edge cases (design 13 §4.6)
+// seedRemoteChamberHostPackages — single-package edge cases (design 13 §3)
 // ============================================================================
 
 function makeSeedExec(overrides: {
@@ -2005,10 +2005,10 @@ test('seedRemoteChamberHostPackages (single package): every probe cat is marked 
 })
 
 // ============================================================================
-// materializeAndAdd (design 13 §4.6)
+// materializeAndAdd (design 13 §3)
 // ============================================================================
 
-test('materializePluginsDir is the stable literal dir for every remoteDshHome (design 13 §4.6)', () => {
+test('materializePluginsDir is the stable literal dir for every remoteDshHome (design 13 §3)', () => {
   assert.equal(materializePluginsDir(null), '~/.dsh-chamber/plugins')
   assert.equal(materializePluginsDir('~/.dsh'), '~/.dsh-chamber/plugins')
   assert.equal(materializePluginsDir('/opt/dsh'), '~/.dsh-chamber/plugins')
@@ -2117,7 +2117,7 @@ test('materializeAndAdd: a write-file failure fails loud before the add', async 
   if (!result.ok) assert.match(result.error, /write-file failed/)
 })
 
-// materializeArchiveAndAdd (design 21 §10 archive-pick): a READY .tgz uploads
+// materializeArchiveAndAdd (design 21 §6.5 archive-pick): a READY .tgz uploads
 // verbatim — no local package.json read, no pnpm pack — through the same
 // write-file → remote $HOME → add file: tail.
 test('materializeArchiveAndAdd: archive bytes → write-file → remote $HOME → add file:<absolute>', async () => {
@@ -2385,7 +2385,7 @@ test('redactRemotePluginManifest: masks only the dependencies projection — err
 })
 
 // ---------------------------------------------------------------------------
-// Local folder-pick add gate (design 21 §10 缺陷①, plan 24 小项④)
+// Local folder-pick add gate (design 21 §6.5 缺陷①, plan 24 小项④)
 // ---------------------------------------------------------------------------
 
 test('isAllowedLocalFileSpec: absolute POSIX/Windows/UNC paths only — relative and control-char input refused', () => {
@@ -2413,7 +2413,7 @@ test('runLocalDshPlugin: a file: pick is refused without allowFileSpec and passe
 
     // With allowFileSpec (the MAIN-process folder-picker path, desktop_local_
     // plugin_add_file) the same pick passes the gate and proceeds to the
-    // workspace's (absent) dsh CLI entry — design 21 §10 缺陷① fixed.
+    // workspace's (absent) dsh CLI entry — design 21 §6.5 缺陷① fixed.
     const gated = await runLocalDshPlugin(dir, dir, 'add', 'file:/tmp/picked-folder', { allowFileSpec: true })
     assert.equal(gated.ok, false)
     assert.match(gated.error ?? '', /no dsh CLI entry found/)

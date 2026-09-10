@@ -1,5 +1,5 @@
 /**
- * Archive-manager purge decisions (design 24 §22).
+ * Archive-manager purge decisions (design 24 §5).
  *
  * Extracted from `ArchiveManagerDialog.tsx` (2026-09 fix round) so every
  * fail-closed rule is a PURE function of authoritative facts — node-testable
@@ -58,7 +58,7 @@ export interface PurgeNote {
 }
 
 /**
- * The pre-flight runtime gate (design 24 §22 residual risk): the force purge
+ * The pre-flight runtime gate (design 24 §13 item 13): the force purge
  * may delete a merely LOADED session, and the only protection against the
  * deleted writer recreating a header-less artifact is excluding the session
  * this client is currently viewing. The gate therefore requires the runtime
@@ -154,7 +154,7 @@ export function archivePurgeNote(run: ArchivePurgeFlowResult): PurgeNote {
     })
   }
   if ((result.clearedOrphanMembers ?? 0) > 0) {
-    // design 24 §20 residual ①: the run also converged archived-set members
+    // design 24 §12 F4: the run also converged archived-set members
     // that have no session record at all (no content, invisible to this list)
     // — report it so a sweep-only run is never silent.
     lines.push({
@@ -166,7 +166,7 @@ export function archivePurgeNote(run: ArchivePurgeFlowResult): PurgeNote {
     lines.push({ key: 'archive.purge.note.forcedLoaded', params: { count: result.forcedLoaded } })
   }
   if (result.forceUnsupported && result.skippedLoaded > 0) {
-    // HONEST LEGACY-HOST LINE (design 24 §22 compatibility leg): the host
+    // HONEST LEGACY-HOST LINE (design 24 §8 compatibility leg): the host
     // refused the force flag, so this run repeated with the legacy shape. The
     // clause is GATED on an actual skip — without it the note would claim a
     // loss that did not happen.

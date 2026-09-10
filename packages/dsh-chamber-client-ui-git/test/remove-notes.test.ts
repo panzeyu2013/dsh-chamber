@@ -70,7 +70,7 @@ test('the archived note names archived OR subagent-under-archived sessions in bo
   // A running SUBAGENT under an archived root is not itself archived, and a
   // FORK descendant is NOT inert at all (fork edges terminate the lineage) —
   // the copy must carry the SUBAGENT qualifier, never a bare "under an
-  // archived session" (design 08 §6; 2026-12 lens-D nit).
+  // archived session" (design 08 §5.2; 2026-12 lens-D nit).
   assert.match(zh.runningRemoveArchivedNote, /已归档、或位于已归档会话的子代理之下/)
   assert.match(en.runningRemoveArchivedNote, /ARCHIVED, or under a SUBAGENT of an archived session/)
   // The old-host copy must not claim archivedness at all.

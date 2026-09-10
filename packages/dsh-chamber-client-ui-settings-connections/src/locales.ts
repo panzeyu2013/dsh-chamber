@@ -319,7 +319,7 @@ export const zh = {
   startManagedDshOk: '已启动并恢复就绪',
   startManagedDshFailed: '启动失败：{error}',
   restartNeededHint: '变更已应用，重启实例后生效',
-  // UX 重构（design 21 §10 已登记；原 todo 落地后移出）：对账入口/事前警告/横幅指引/服务提示。
+  // UX 重构（design 21 §6.6 已登记；原 todo 落地后移出）：对账入口/事前警告/横幅指引/服务提示。
   pluginsDiffSummary: '与本地插件组合存在 {n} 处差异——展开对账',
   pluginsDiffCollapse: '收起对账',
   pluginsRestartUnconfiguredHint: '该实例未配置 systemd 服务：变更将只应用、不自动重启，需手动重启远端后才生效。',
@@ -655,7 +655,7 @@ export const en: Record<SettingsConnectionsKey, string> = {
   startManagedDshOk: 'Started and ready',
   startManagedDshFailed: 'Start failed: {error}',
   restartNeededHint: 'Applied; restart the instance to activate',
-  // UX rework (registered in design 21 §10; the todo entry was removed after landing): reconcile entry / pre-warning / banner guidance / service hint.
+  // UX rework (registered in design 21 §6.6; the todo entry was removed after landing): reconcile entry / pre-warning / banner guidance / service hint.
   pluginsDiffSummary: 'There are {n} differences vs the local plugin set \u2014 expand reconcile',
   pluginsDiffCollapse: 'Collapse reconcile',
   pluginsRestartUnconfiguredHint: 'No systemd service is configured on this instance: changes will be applied without an automatic restart \u2014 restart the remote manually for them to take effect.',

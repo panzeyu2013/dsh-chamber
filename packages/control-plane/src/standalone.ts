@@ -1,9 +1,8 @@
 #!/usr/bin/env node
 /**
- * Standalone control-plane server (design 02 §3.8 / §3.9.2 — the "server
- * serve" deployment shape).
+ * Standalone control-plane server (the "server serve" deployment shape).
  *
- * Boot order (design 02 §3.8): orphan reaper → spawn the managed host →
+ * Boot order: orphan reaper → spawn the managed host →
  * open the control-plane HTTP port. With the current createControlPlane
  * contract (index.ts), the reaper runs inside start() before the HTTP bind;
  * the managed local dsh host (web profile) is spawned on demand (first POST
@@ -31,7 +30,7 @@ import type { Logger } from './types.ts'
 const DEFAULT_PORT = DEFAULT_CONTROL_PLANE_PORT
 const DEFAULT_BIND = '127.0.0.1'
 
-const HELP = `dsh-chamber serve — standalone control plane (server deployment shape, design 02 §3.8)
+const HELP = `dsh-chamber serve — standalone control plane (server deployment shape)
 
 Boot order: orphan reaper (inside start()) → HTTP surface on --port. The
 managed local dsh host (web profile) is spawned on demand: first POST
@@ -198,7 +197,7 @@ async function main(): Promise<number | null> {
 
   try {
     // start() runs the orphan reaper first, then binds the HTTP surface
-    // (design 02 §3.8 step 1/4 — the reaper precedes any new spawn).
+    // (design 02 §3.4 — the reaper precedes any new spawn).
     await plane.start()
     logger.log(`boot: control plane listening on http://${args.bind}:${plane.port} (reaper ran, local host spawns on demand)`)
     return null // keep running

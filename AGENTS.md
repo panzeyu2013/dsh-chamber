@@ -2,98 +2,107 @@
 
 ## Purpose
 
-dsh-chamber is primarily the local desktop **connection manager** for dsh: the local dsh instance (web profile) is hosted by the control plane; dsh instances on remote servers are attached over SSH tunnels. The UI is the **dsh official frontend, source-reused and self-built** (single window, single frame; multiple instances coexist as N-ctx shells). The control plane owns connection management, per-instance same-origin reverse proxying, and static frontend serving (the desktop v1 control plane has no authentication/audit surface and remains loopback-only). Host-native capabilities (goals, jobs, terminals, settings, pluginInventory, …) remain the host and host-frontend's job — the control plane only attaches, never re-implements. **Session business is entirely the dsh frontend runtime's job; the desktop control plane consumes no host frames.**
+dsh-chamber is the local desktop **connection manager** for dsh. It hosts one local dsh instance
+(web profile) and attaches remote dsh instances over SSH tunnels, inside a single Electron window
+that runs the dsh official frontend — source-reused, self-built, one N-ctx shell per instance. The
+control plane owns connection management, per-instance same-origin reverse proxying and static
+frontend serving (v1: anonymous, loopback-only). Host-native capabilities (goals, jobs, terminals,
+settings, plugin inventory, …) stay the dsh host's and its frontend's job: the control plane
+attaches and serves, and never re-implements an execution surface. **Session business belongs
+entirely to the dsh frontend runtime — the desktop control plane consumes no host frames.**
 
-Design 17 adds a second, explicitly invoked **server deployment shape** in `packages/gateway`. It composes the same local-host manager behind an authenticated-by-default public request boundary; the explicit, loudly warned `--no-auth` override is a bounded trusted-network exception and never a silent fallback. Gateway is never auto-started or imported by the anonymous desktop control plane. **2026-12 (user decision): the gateway orchestration surface was stripped entirely** — approvals/questions stay native to dsh (the official frontend handles them), the cross-session scheduler, session index, server-side Git worktree records and feature switches no longer exist; the gateway is a shell (auth + reverse proxy) plus its host duties (design 18 §9 runtime management, credential panel) plus a **seed registry**: the chamber host packages (`dsh-chamber-seed-client-graph`, `dsh-chamber-seed-git-worktree`, `dsh-chamber-seed-archive-cleanup` — the last is design 24's bounded in-instance domain, see Instruction Order 3) are desktop-synced via `PUT /chamber/plugins` into `<stateDir>/chamber-plugins/` and seeded into the managed dsh profile at every spawn (version-locked to the connecting desktop; the activation probe skips the chamber host domains until a sync exists — `hostDomains`/`probeExpectedNames`), while `dsh-chamber-client-ui-mobile` is the single packaged exception (mobile access is bound to the gateway and has no desktop in the chain). The gateway never consumes session content and never becomes authoritative for dsh facts. This is a bounded product-shape exception, not permission to move those domains into `packages/control-plane` or the desktop renderer.
+`packages/gateway` is a second, explicitly invoked **server deployment shape** (design 17): the same
+local-host manager behind an authenticated-by-default public request boundary. It is never
+auto-started or imported by the desktop control plane, and it never becomes authoritative for dsh
+facts.
 
-This file contains only always-on repository rules and routing. Detailed design lives in `docs/design/`, progress in `docs/progress/`, and unimplemented feature ideas in `docs/progress/todo/`.
+This file is an action guide, not a record: it carries the purpose, the recording rules for
+`docs/progress/STATUS.md`, and the flows that have a fixed procedure. Design lives in `docs/design/`
+(entry point `01-overview.md`), unimplemented ideas in `docs/progress/todo/`.
 
-## Instruction Order
+## STATUS.md — what to record
 
-These steps are mandatory. Before editing, you **MUST**:
+`docs/progress/STATUS.md` is the repository's only progress record, and it holds **open** work only:
 
-1. Follow this root guide.
-2. Read the relevant design document (`docs/design/0X-*.md`) and the progress overview (`docs/progress/STATUS.md` — the only progress record).
-3. Follow the consolidation principles of `docs/design/01-overview.md`: anything the dsh host or its frontend already covers is attached/served by the control plane — **never re-implement an execution surface**; the desktop control plane does not consume host sessions; domains removed from scope (walkthrough, notification center/history, MCP, thin-shell chat UI, control-plane session/notification runtime, …) **must not return in any form**. The bounded exceptions are design 08's in-instance Git plugin, design 17's separately invoked gateway (shell + host duties + seed registry only; its orchestration surface was stripped 2026-12), design 19's Electron-native edge notification projection of existing renderer facts, and design 24's in-instance archived-session content-cleanup host domain (2026-12 user-approved exception motion, `docs/design/24-archived-session-cleanup.md` §2: purge of the archived set incl. subagent-origin descendants only — no unarchive, no non-archived deletion, no content retrieval/export/projection, no byte stats; the SOLE owner-approved exception (2026-09, §2 boundary 1) is the registry-global orphan sweep's transient existence probe — an official `sessionPersistence.stat(id)` read (pre-0.1.3-alpha.1 surface: `inspect(id)`) consumed only as a fail-closed boolean membership gate, never returned on any surface, never logged, never persisted; semantics mirror the upstream `sessions.delete` draft and the domain retires when upstream wire lands; explicitly **not a precedent** for other session-domain motions); none may leak an execution surface, session consumer, notification history, or authority into `packages/control-plane` or the desktop renderer.
-4. Honor documented deviations in module docs.
+- 未完成 / 部分完成 items, including real-machine / on-device acceptance gates still outstanding;
+- 设计未决 — open design questions;
+- 必要取舍 that still hold today: scope decisions (不做 / 推迟 / 移出) and known deviations or
+  degradations, each with the evidence that keeps it checkable (path, command, design reference).
 
-If these sources materially conflict, stop and resolve the conflict instead of silently choosing one.
+Change scope:
+
+- **Add** an entry when open work appears or a deviation is registered.
+- **Remove** the entry once the work lands or the deviation stops being true. The implemented
+  baseline then lives in git history, `CHANGELOG.md` and `docs/design/` — never as a "completed"
+  record in STATUS.md.
+- **Update** it when module ownership, contracts or invariants change. Nothing else obliges an edit.
+
+Do not record blindly. STATUS.md is not a log, a changelog draft or a verification report: no
+`✅ 已完成 / 已落地 / 已合入` narrative, no batch or round ledgers, no test counts or green-gate
+lists, no commit hashes, no retelling of how something was implemented, and no temporary "baseline
+alignment" blocks — those belong in the CHANGELOG release section. Record only what still carries
+decision value and is not already owned by a design document or `CHANGELOG.md`.
+
+## Execution Flows
+
+### Before release
+
+- Read and execute `docs/checklists/release-checklist.md` — any ❌ blocks the release (version
+  assertions, release preflight, changelog/i18n, the full test suite on the exact release commit,
+  build, tag, and a CI dry-run first).
+- Changes to packaged modules, build scripts, `build.files` or `extraResources` additionally require
+  `docs/checklists/packaging-closure-checklist.md`.
+- The release workflow is policy-tested: `pnpm run test:release-workflow`.
+- `CHANGELOG.md` (with its `docs/CHANGELOG.en-US.md` mirror and the `verify:i18n` record) is written
+  at RELEASE time only — never add `[Unreleased]` entries while implementing.
+
+### Before a dsh (upstream) upgrade
+
+- Execute `docs/checklists/dsh-upgrade-checklist.md`, then the per-tag maintenance loop in
+  `docs/checklists/upstream-touchpoints.md` §7.
+- `docs/checklists/upstream-touchpoints.md` and `scripts/dev/verify-upstream-touchpoints.mjs`
+  (gates C1–C10, run in CI) are two sides of one registry — a change to either must be mirrored in
+  the other, and the pin-upgrade entry point reminds you of the freshness gate.
+
+### Before a pull request
+
+Read `CONTRIBUTING.md` and `.github/PULL_REQUEST_TEMPLATE.md`; complete the template with concrete,
+current evidence for the final PR HEAD. The reviewer must not have to reconstruct intent, affected
+surfaces, applicable guidance, validation, or failure/rollback considerations from the diff alone.
 
 ## Runtime Boundaries
 
-- `packages/control-plane` — connection-manager core: local host hosting (web-profile spawn/readiness/reaper/health/logs), management REST (`/health`, `/api/connections` local-only, `/api/host/logs`), per-instance generic reverse proxy (`/api/i/<id>/*` HTTP/WS/SSE passthrough; v1 anonymous, loopback-only — no auth/audit surface), static frontend serving (dist + `__DSH_BOOT__` manifest).
-- `packages/dsh-runtime` — the shared, host-agnostic dsh runtime version management core (design 18): version trees / `current` pointer / override / snapshots / failures / activation journal, source-bound npm install via embedded pinned pnpm, the activation transaction (cleanup → snapshot → atomic pointer switch → probe gate) and two-phase rollback/restore. Pure Node, no Electron/IPC; the desktop main process and the gateway server are its two owners, adapting it through the real DI seams `StartupDeps`/`ApplyDeps`/`InstallerDeps`/`ControllerDeps` (state root, builtin anchors, node/pnpm executables, spawnAndProbe, install-child reaping, platform gates; the transactional restart is a control-plane primitive — `PlaneHandle.restartLocal()`); `RuntimeHostAdapter` is a documented sketch, not the runtime seam. control-plane's version-switching path consumes only `getDshWorkspacePath`/`canStartLocal`/`canExposeLocal` and stays zero-change; the user-triggered dsh restart adds one transactional `restartLocal()` primitive (serialized with the health state machine's restart single-flight, design 18 §9.3); runtime state is never shared between owners.
-- `packages/renderer` — the self-built dsh frontend (source reuse): entry build (chamber composite entry), the pure-dsh first screen bridge host, generation-isolated N-ctx multi-instance orchestration, authoritative-roster-gated deep-link/notification activation, design 19 notification edge projection, boot manifest generation, and design 09 module C (per-instance host-graph merge + extra-entry preloading: `host-graph.ts` + `chamber-covered.ts`); the composite entry also owns the bounded `assertRequiredExtraRowServices` probe (`required-extra-rows.ts`) that names the extra rows whose services the composite's own first-screen inject sets require (today exactly one: `sidebarRight`, provided by the `ui-sidebar-right` row — the file-upload client is composite-covered and the `resources` seat is not injected by any composite plugin). The build additionally applies the **registered vendor patch set** (`packages/renderer/scripts/vendor-patches.mjs`, design 09 §3.6): exact-anchor, build-time rewrites of pinned vendor source for same-origin absolute URLs the N-ctx shell breaks (vendor files are never written; a drifted anchor fails the build, and touchpoint C9 re-checks the anchors against the pin).
-- `packages/dsh-client-connection` — in-repo copy of the official connection client with the per-entry base-path patch shared by its HTTP, WebSocket, and generic-RPC carriers (shadows the vendored workspace entry).
-- `packages/dsh-client-web` — in-repo copy of the official web shell with the rc.8 boot.ts class boot kernel re-based onto the rc.8 module system (incl. per-instance `extraRows`, `__ModuleLoader__`, synchronous `configureContext`, runtimeCtx getter, and awaitable async disposal seams, design 09 module D) (shadows the vendored workspace entry).
-- `packages/dsh-chamber-client-ui-sidebar` — the self-built sidebar plugin (copied ui-sidebar structure): multi-source session navigation + chamberBridge (`shared/aggregate-store.ts` generation-safe runtime/snapshot producers + per-instance unary client `shared/instance-api.ts`), the page-level client-plugin load kernel (`shared/client-plugin-loader.ts`: union-table combo/id dedupe, first-load-wins, timeout tombstones, per-source graph cache, cross-source mount facts) and the reserved settings-seat contract + takeover watchdog (`shared/settings-shell.ts`)，plus the alpha.2 `sidebar.brand.*` / `sidebar.panellist` holes (panel rows project `ctx.slots` registrations through `panel-source.ts` and select via a direct `ctx.layout.selectPanel`), replacing the official ui-sidebar registration (see 05 §6).
-- `packages/dsh-chamber-client-ui-layout` — the chamber self-built ui-layout shell fork (design 06): layout-store replacement persisting `sidebarWidth` into the sidebar's shared view-prefs store, plus the SOLE writer of document-level theme projection (one page-wide `ThemePresenter` behind an active-view-gated `document-theme.ts`, see 06 §4.6); it mirrors the alpha.2 slot model (`sidebar` / keyed root `main` / root `rightbar` / `shell.overlay`) and exposes the optional `ctx.layoutFacts` face (`getLayoutSnapshot` / `getCollapsed` / `subscribeLayout`, design 17 §18 mobile surface); replaces the official ui-layout registration.
-- `packages/dsh-chamber-client-ui-settings-connections` — the self-built connections settings plugin: the chamber-global connections page (local instance card + remote host CRUD/connect/systemd/logs, dsh design tokens, see 05 §5). It owns only the dictionary namespace + section component; the host-ctx `settings.section` registration was removed 2026-12 (no renderer in any shape — the shell's fixed `__connections` nav id renders the same component).
-- `packages/dsh-chamber-client-ui-settings-bridge` — the self-built settings SHELL plugin: replaces the official SettingsRoot registration (`sidebar.settings` at the RESERVED shadow priority -1000; the sidebar watchdog reports any registrant that goes below it) — a server dropdown over the selected instance's settings contributions plus the fixed chamber-global connections nav entry. **2026-12 (design 05 §5 revision): the contribution set is GRAPH-DRIVEN, not a static whitelist** — a base set (declaration chain, slots, locale, theme, official settings families, BridgeRows, per-source `dsh-runtime` section) plus the SELECTED SOURCE'S OWN client plugin graph (`clientGraph/graph` over the per-instance proxy, minus `CHAMBER_COVERED_IDS`), loaded through the page-level union module table (shared `client-plugin-loader.ts`, the same kernel the shell boot's `host-graph.ts` delegates to) and mounted per plugin with registrant attribution (`StoredEntry.registrant`), per-plugin containment, and honest diagnostics for every non-rendered contribution (inactive/missing services incl. nested `ctx.inject` waiters, failed loads/applies, non-plugin bundles, seats the shell deliberately does not render, contained render crashes via `slots.onEntryError`, cross-source module sharing, capability degradation for plugins subscribing to `remote.$on`). The per-server `dsh-runtime` settings.section (id `dsh-runtime`, after agent-presets; local = full runtime management, gateway = proxied `/chamber/runtime`, direct dsh targets (ssh/http) mount no section — the remote runtime is systemd-deployed; the runtime projections are a documented monorepo seam — the section imports the shared renderer projection `packages/renderer/src/runtime-management.ts` by relative path, no published dependency; every mounted source gets a restart-dsh action — control-plane `restartLocal()` or `/chamber/runtime/restart` — to refresh mounted plugins without restarting the Electron shell — design 18 §3.6/§9) (see 05 §5 sibling design discussion 2026-08 + 2026-12 revision; upstream declarative contributions remain a proposal: `docs/progress/todo/settings-surface-upstream-contributions.md`).
-- `packages/desktop` — Electron shell: single frame (`loadURL` the control-plane origin), trusted domain-scoped IPC, desktop open-in/deep-link routing and design 19's Electron-native notification projection; transport providers are selected by `ssh | http` independently from target kind `dsh | gateway` (design 17), with generation-fenced child/process lifecycles; the main process owns crash-safe metadata+write-only-credential save/delete transactions and design 18 runtime management.
-- `packages/dsh-chamber-seed-client-graph` — the chamber self-built host package (design 09 module A): exposes the instance's `clientModules.graph()` boot graph over a Typert Remote (read-only); committed esbuild artifact `dist/index.js` is seeded into profiles by the control plane (not a vendor source).
-- `packages/dsh-chamber-seed-git-worktree` — the chamber-bundled, per-instance Git worktree host plugin (design 08): domain-only Typert Remotes over authoritative `workspaceRegistry`/agent state; Git runs as the dsh instance OS user, never through renderer IPC or desktop SSH argv.
-- `packages/dsh-chamber-seed-archive-cleanup` — the chamber-bundled, per-instance archived-session content-cleanup host domain (design 24): `archiveCleanup/{preview,purge}` Typert Remotes (preview/probe zero-arg; purge takes an OPTIONAL `sessionIds` archived-member subset filter — 2026-09 wire amendment, design 24 §17 — and an OPTIONAL `force` flag, 2026-09 revision, design 24 §22: it additionally deletes merely LOADED (idle/attached) subtrees after the caller stopped their runs, while a RUNNING member is still refused) over authoritative `workspaceRegistry`/agents state; children-first purge of the archived set (incl. subagent-origin descendants; event emission is a documented no-op until the upstream wire — design 24 §14/§15), never touches non-archived or running content; committed esbuild artifact `dist/index.js` seeded like the other host packages (not a vendor source); retired on upstream delete wire.
-- `packages/dsh-chamber-client-ui-git` — the chamber-bundled Git worktree client plugin (design 08): `sidebar.workspace.git` topology plus safe create/remove sagas; facts/actions stay in a page-wide plugin coordinator and never become a control-plane execution surface.
-- `packages/dsh-chamber-client-ui-open-in` — the chamber-bundled desktop open-in client plugin (designs 16/20; Batch 3 unified): the per-session `conversation.session.header.utilities` entry renders the per-source view-model (`shared/open-in-view-model.ts`) — for LOCAL sources the instance's own official host catalog (`dsh-host-open-in-app`, reached through the per-instance proxy `<basePath>/open-in-app/*`, the absorbed official client: catalog protocol, bundle icons, label table, persisted choice) plus the desktop main-process VS Code override; for SSH-transport remotes only the main process's remote-capable VS Code entry (trusted preload IPC + exact-boot source-lifecycle proof); nothing for HTTP/unknown sources. It has no host plugin/seed of its own and never turns the control plane into an execution surface: the local launch executes inside the instance (official resolver + instance trust fence), the control plane only proxies verbatim with cookie injection, and the main process keeps no local-execution surface (vscode-only registry, no stat/openPath/reveal).
-- `packages/cli` — CLI thin shell (serve/status/connections/host logs).
-- `packages/gateway` — separately invoked server shape (design 17): authenticated-by-default public request boundary + single local-dsh proxy + host duties (design 18 §9 runtime management, credential panel) + the seed registry (desktop-synced host packages via `/chamber/plugins`, mobile packaged exception; the orchestration surface was stripped 2026-12). Its explicit `--no-auth` trusted-network override is loudly warned and never implicit. It reuses control-plane internals but may bind non-loopback only through the explicit HTTP/WS boundary evaluator capability; the ordinary control plane remains loopback-only.
-- `docs/design/` — design documents (01 is the entry point; 05 is the surface/architecture contract (v1); the v2-era thin-shell docs, old 05/10, were removed with the v4 consolidation).
-- `docs/progress/` — STATUS.md is the only writer of the overview.
+| Package | Responsibility |
+|---|---|
+| `packages/control-plane` | Connection-manager core: local host lifecycle (spawn/readiness/reaper/health/logs), management REST, per-instance generic reverse proxy (HTTP/WS/SSE), static frontend serving |
+| `packages/dsh-runtime` | Shared host-agnostic dsh runtime version management core (design 18); adapted by the desktop main process and the gateway, which never share runtime state |
+| `packages/renderer` | Self-built dsh frontend: composite entry build, per-instance host-graph merge and extra-entry preloading, N-ctx multi-instance orchestration, notification edge projection, boot manifest (designs 09, 19) |
+| `packages/dsh-client-connection` | In-repo copy of the official connection client plus the per-entry base-path patch |
+| `packages/dsh-client-web` | In-repo copy of the official web shell with the N-ctx boot re-base (design 09) |
+| `packages/dsh-api-gateway` | In-repo copy of the official api-gateway client half plus the per-entry base-path patch on its stream carrier |
+| `packages/dsh-chamber-client-ui-sidebar` | Self-built sidebar: multi-source session navigation, chamberBridge, the page-level client-plugin load kernel, settings-seat contract (design 05) |
+| `packages/dsh-chamber-client-ui-layout` | Self-built ui-layout shell fork: layout store persistence and the only document-level theme projection (design 06) |
+| `packages/dsh-chamber-client-ui-settings-connections` | Chamber-global connections settings page (design 05) |
+| `packages/dsh-chamber-client-ui-settings-bridge` | Self-built settings shell: server dropdown over the selected instance's graph-driven settings contributions (design 05) |
+| `packages/dsh-chamber-client-ui-git` | Git worktree client plugin (design 08); facts and actions stay client-side and never become a control-plane execution surface |
+| `packages/dsh-chamber-client-ui-open-in` | Desktop open-in client plugin (designs 16, 20) |
+| `packages/dsh-chamber-client-ui-mobile` | Packaged mobile client served by the gateway — the single packaged plugin exception (design 17) |
+| `packages/desktop` | Electron shell: single frame over the control-plane origin, trusted domain-scoped IPC, open-in/deep-link routing, edge notifications, crash-safe credential and runtime management |
+| `packages/dsh-chamber-seed-*` | Chamber host packages seeded into the managed instance: read-only client boot graph, in-instance Git worktree, archived-session content cleanup (designs 09, 08, 24) |
+| `packages/cli` | CLI thin shell (serve/status/connections/host logs) |
+| `packages/gateway` | Separately invoked server shape (design 17): authenticated-by-default public boundary, single local-dsh proxy, host duties, seed registry |
 
-## Always-On Constraints
+## Hard Facts
 
-- Do not modify external repositories. `vendor/harness-packages` is a read-only symlink tree into the **pinned git submodule** at `vendor/harness-checkout` (gitlink = fixed upstream commit, no fallbacks) — bootstrapped by the root `preinstall` (`scripts/dev/ensure-harness-vendor.mjs`, which hard-verifies submodule HEAD == `harness.commit` and asserts the link set matches the lockfile's vendor importers; `--check` for CI/diagnostics). Upgrade the harness pin **only** via `scripts/dev/update-vendor.mjs <tag>` (atomic: fetch+verify tag → checkout → rebuild links → regenerate lockfile → frozen verify); never bump `harness.commit` or the gitlink by hand. The lockfile must not be rewritten by non-frozen installs — `verifyDepsBeforeRun: false` and CI's `git diff --exit-code -- pnpm-lock.yaml` enforce that; `ref-dsh` and `ref-upstream` are local reference symlinks only and are **never committed**.
-- dsh version anchors are single-sourced: the committed bundled-runtime lockfile (`packages/desktop/vendor/dsh/pnpm-lock.yaml`, generated by `bundle:dsh`) owns the version, the six runtime anchors and the three fork copies must equal it, and every other *live* dsh version literal (production source, scripts, workflows, package manifests — as opposed to comments and test fixtures) must be registered in the C10 allowlist of `scripts/dev/verify-upstream-touchpoints.mjs` with a reason. Historical narration belongs in comments, never in shipped strings.
+- `vendor/harness-packages` is a read-only symlink tree into the pinned submodule
+  `vendor/harness-checkout`; upgrade the pin only via `scripts/dev/update-vendor.mjs <tag>`, never by
+  editing `harness.commit` or the gitlink. Of the dsh sources, only the chamber packages are ours to
+  change (see Runtime Boundaries).
 - Do not run git or GitHub commands unless the user explicitly asks.
-- Package manager is **pnpm** (`pnpm install`; scripts defined in `package.json` — run them via `pnpm run`). Do not add runtime dependencies unless explicitly requested (current set: `ws`, `electron-updater` (desktop auto-update, design 11), React/Vite, Electron, `pnpm` pinned 11.21.0 in desktop (design 18 embedded runtime installer) and in gateway (design 18 §9.2 D1, runtime install engine), plus the dsh client workspace packages; `node-pty` is a root devDependency for the dsh subprocess spawn-helper resolution shim). The TypeScript toolchain (`typescript`, `@types/*`) is a sanctioned devDependency set.
-- The only modifiable dsh sources are our chamber packages: the in-repo copies `packages/dsh-client-connection` (per-entry base paths across HTTP/WS/RPC), `packages/dsh-client-web` (the rc.8 N-ctx boot re-base with synchronous context configuration and async disposal) and `packages/dsh-api-gateway` (client-half fork with the per-entry base-path patch on the `/api/remote.mux` stream carrier, dsh v0.1.2-alpha.1 migration), the self-built client packages under `packages/dsh-chamber-client-ui-*`, and the chamber host packages `packages/dsh-chamber-seed-client-graph` / `packages/dsh-chamber-seed-git-worktree` / `packages/dsh-chamber-seed-archive-cleanup` (design 24); everything under `vendor/harness-packages` is untouched upstream source.
-- Tunnel URLs, private keys, and proxy configuration never enter the renderer, logs, or any persistence layer — only non-secret metadata projections (host/user/ports, localPort/phase) do; the control plane listens on loopback only. Credential values have only the sanctioned transient write-only form-input exceptions below: they are never returned, prefilled, or persisted by the renderer. Under design 05 §8 (2026-08; plaintext-file fallback per user decision), an optional per-host SSH password is collected transiently in the connections form and forwarded over IPC; the main process holds it in memory and mirrors it to `<userData>/ssh-passwords.json` (schema v2: value + SSH endpoint binding; regular file, no-follow/inode-checked, tightened to 0600 before read, atomic write) — never in the registry or logs and never returned to the renderer. A non-empty legacy unbound file is preserved as a unique `.unbound-*` recovery artifact and disabled until explicit re-entry. Each ssh child leases its own ephemeral owner-only 0700 askpass helper in a per-process `mkdtemp` directory; the helper is deleted only after that actual child exits/errors (removal/clear blocks new leases and requests deletion, startup reclaims crash leftovers). Password auth is gated off on platforms without reliable askpass support (Windows in v1). Design 17 applies the same write-only exception to independent gateway bearer-token and login-password fields: the settings form may collect them transiently and send them over trusted IPC; main stores them only in memory plus `<userData>/gateway-secrets.json` (schema v3: authoritative `safeStorage | plaintext` discriminator plus per-dimension gateway-target bindings; safeStorage preferred + honest 0600 plaintext fallback; the same no-follow/inode/read-mode discipline). Non-empty legacy values without target bindings are preserved and disabled until re-entry. Secrets never return to the renderer or registry and never enter logs: the token becomes the bounded `Authorization` header, the raw password is sent only in the bound gateway's `/auth/login` JSON body, and only the derived session `Cookie` enters proxy headers. Gateway sessions are owned by network origin/Host plus a stable connection-and-target scope; invalidation generations fence late login, bearer fallback, re-login, refresh, and ready registration, whose cookie/bearer proof must still be current. With an HTTPS SPKI pin, desktop login/probe and control-plane HTTP/WS forwarding dispatch no application bytes (including headers, credentials, body, or upgrade) before the peer key matches. Credentials are cleared before exact-id instance deletion; add/edit must use the main-owned transaction, legacy `instances_set` is an unchanged no-op only, and legacy setters are clear-only.
-- Keep changes minimal and preserve unrelated uncommitted changes.
-- Enforce security and correctness in core/runtime logic, not only through UI hiding or prompts.
-- Update owning documentation: when module ownership, contracts, or invariants change, update `docs/progress/STATUS.md`.
-- `CHANGELOG.md` is written at RELEASE time only (its `docs/CHANGELOG.en-US.md` mirror + `verify:i18n` move with it). In-flight work is recorded in `docs/progress/STATUS.md` — never add entries to the changelog's `[Unreleased]` section while implementing.
-
-## Correctness Invariants
-
-- Prefer authoritative state over heuristics: facts persisted by the host are only attached/served by the control plane — never authoritative.
-- Derive liveness from live channels, not persisted history (remote liveness = tunnel phase + probe, never a saved status).
-- Scope temporary fallbacks narrowly and clear them when authoritative state arrives.
-- Proxy honesty: an instance transport failure must never masquerade as empty success — no tunnel → explicit 503; proxy errors are explicit, never silent.
-- One failed entity must not erase or block unrelated complete entities.
-- Runtime differences must be intentional and visible in code (e.g., local vs SSH adapter differences).
-
-## Documentation Discovery
-
-Read the matching design and progress documents before changing a module:
-
-- `docs/design/01-overview.md` — entry point & consolidation principles
-- `docs/design/02-host-management-deployment.md` — host management (web profile)
-- `docs/design/03-connections-proxy.md` — connections & per-instance proxy
-- `docs/design/04-control-plane-api-data.md` — management API & data model
-- `docs/design/05-connection-manager.md` — surface & architecture contract (v1)
-- `docs/design/17-server-side-gateway.md` — authenticated server deployment shape and its bounded exceptions
-- `docs/design/18-dsh-runtime-version.md` — dsh runtime version management (authoritative behavior contract; §9 = gateway serverization + shared core, §3.6 = per-server settings section)
-- `docs/progress/STATUS.md` — incomplete/partially-complete items, open design issues & remaining deviations (implemented baselines live in git history / CHANGELOG / design docs)
-
-## Validation
-
-- Use `package.json` scripts as the command source of truth (run with `pnpm run`).
-- Test conventions: every test file is named `<subject>.test.ts` (`.test.mjs` for plain-JS script tests) — no bare-named tests. Platform-qualified scripts are the single source of truth for platform legs: each package's `test` remains the full canonical list (POSIX legs), and a package adds `test:win32` only for its win32-real/platform-neutral files (consumed by the Windows CI leg); extend the package manifest as Windows semantics land — never copy test file lists into workflow YAML. Test locations are `test/` (most packages), colocated with a flat package's sources (desktop), or `scripts/` for packaging-script tests; helper/fixture files inside `test/` stay bare (`fake-adapter.ts`, `run-phase-fixture.ts`, `utils.ts`) and are not tests. Each package owns its explicit `test` script file list (a deleted/renamed test fails the run — never a silent skip), and the root scripts forward via `pnpm --filter <pkg> run test`. Gateway fake request/response helpers live in `packages/gateway/test/utils.ts` — do not re-declare them locally.
-- Unit tests (the exact set CI runs): control-plane `pnpm run test:control-plane` (protocol / storage / browser-auth-cookie / m1-dsh-client / host-logs / manager-api / lifecycle / local-connection / spawn-dsh / instance-proxy / gateway-transport / ws-frames / static-serving / host-graph-seed / restart-local / rpc-envelope / cordis-inserts / reaper / html-inject-lockstep / win-probes / win32-lifecycle); gateway `pnpm run test:gateway`; desktop `pnpm run test:desktop` (connection transactions, transports, SSH/Gateway auth/session, runtime, renderer trust, plugin sync, IPC, native edges and packaging hooks); renderer `pnpm run test:renderer-shell`; Git plugins `pnpm run test:git` + `pnpm run test:host-git`; archived-session cleanup host domain `pnpm run test:host-archive-cleanup`; other client plugins `pnpm run test:sidebar` + `pnpm run test:layout` + `pnpm run test:settings-bridge` + `pnpm run test:connections` + `pnpm run test:client-web` + `pnpm run test:connection` + `pnpm run test:open-in` + `pnpm run test:mobile` + `pnpm run test:cli`.
-- Shared runtime core: `pnpm run test:runtime` (the extracted `packages/dsh-runtime` tests, pure Node) and `pnpm run typecheck:runtime` (`tsc -p packages/dsh-runtime/tsconfig.json --noEmit`; the shared core is outside the root `typecheck` program except as a transitive import of the desktop shims).
-- Client plugin type checks: `pnpm run typecheck:sidebar`, `typecheck:layout`, `typecheck:connections`, `typecheck:settings-bridge`, `typecheck:git`, `typecheck:open-in`, `typecheck:mobile` (the root `typecheck` program does NOT include the self-built plugins); copied dsh clients `pnpm run typecheck:client-web` + `pnpm run typecheck:connection` + `pnpm run typecheck:api-gateway` (only source-only vendor-graph diagnostics are filtered); host packages `pnpm run typecheck:host-graph` + `pnpm run typecheck:host-git` + `pnpm run typecheck:host-archive-cleanup`.
-- Integration: `pnpm run smoke` (auto-SKIPs when dsh is not installed — normal).
-- Frontend: `pnpm run build:renderer` must succeed (vite build over the dsh workspace source).
-- Desktop preload: `pnpm --filter @dsh-chamber/desktop run build:preload` must succeed (esbuild over the sandboxed CommonJS preload boundary; root `typecheck` is not a substitute).
-- Packaging: `pnpm run dist:desktop:mac`.
-- Gateway packaging: `pnpm run build:gateway` (= `build:dsh-runtime` + the gateway build; the pack step's `prepack` rebuilds anyway), then `pnpm --filter @dsh-chamber/gateway pack`; install the tarball into a clean temporary prefix and require `gateway --help` to succeed.
-- Gateway type check: `pnpm run typecheck:gateway`. CLI shell: `pnpm run test:cli`. Release workflow: `pnpm run test:release-workflow`. Upgrade tooling (pin preflight + lockfile vendor-record restore guard): `pnpm run test:upgrade-tools`.
-- i18n: `pnpm run verify:i18n` must not report DRIFTED pairs.
-- Lockfile: after any `pnpm-lock.yaml` regeneration, `pnpm install --frozen-lockfile` must pass. pnpm 11 prunes the `vendor/harness-packages/@deepseek-ai/*` importer records (symlinked workspace packages) when writing the lockfile from scratch, and its own frozen check then fails — the committed lockfile keeps those records (regenerate with the vendor tree present and verify frozen; do not commit a pruned lockfile).
-- Do not assume the absence of a JS type-check means no validation is needed; run focused tests, syntax checks, builds, or runtime validation for the touched surface.
-- Report exactly what was and was not validated. Static checks do not prove runtime, auth, protocol, or platform correctness.
-
-## Pull Request Handoff
-
-Before creating or updating a pull request, read `CONTRIBUTING.md` and `.github/PULL_REQUEST_TEMPLATE.md`. Complete the template with concrete, current evidence for the final PR HEAD; do not make the reviewer reconstruct intent, affected surfaces, applicable guidance, validation, or failure/rollback considerations from the diff alone.
+- Credentials and connection secrets never enter the renderer, logs or any persistence layer — only
+  the documented transient write-only form inputs (design 05 §8, design 17).
+- Package manager is pnpm, and runtime dependencies are not added without an explicit request
+  (current set: `ws`, `electron-updater`, React/Vite, Electron, the embedded pinned `pnpm`, the dsh
+  client workspace packages; `typescript` / `@types/*` are devDependencies).
+- Removed domains and the bounded exceptions (designs 08, 17, 19, 24 — narrowest boundaries in
+  design 24 §2) are stated in `docs/design/01-overview.md` §4 and §5.

@@ -364,9 +364,9 @@ class InstanceApiClient {
    * whole archived set (legacy zero-arg shape, `{args:{}}` — old hosts keep
    * working); present = delete only the listed archived members. A provided
    * EMPTY array deletes NO CONTENT (never the full-set interpretation) but —
-   * since design 24 §21 — the host still runs its registry-global orphan
-   * sweep, so an empty filter is not a zero-work request (2026-09 §4 step 4b).
-   * The OPTIONAL `force` flag (2026-09 revision, design 24 §22) additionally
+   * since design 24 §12 — the host still runs its registry-global orphan
+   * sweep, so an empty filter is not a zero-work request (2026-09 §4 step 5).
+   * The OPTIONAL `force` flag (2026-09 revision, design 24 §3) additionally
    * deletes subtrees that are merely LOADED in the host process; a RUNNING
    * member is still refused. Both carry the domain-missing 404 opt-in; purge
    * rides the long call budget (the host keeps running past a client timeout
@@ -549,7 +549,7 @@ function titleOf(summary: any): string | undefined {
  * read the empty set as "nothing archived": the archive manager shows an
  * honest degraded branch with NO destructive action (no list to select;
  * whole-set purge was retired with the standalone delete-all — 2026 user
- * decision, design 24 §18/§19) on snapshots
+ * decision, design 24 §6) on snapshots
  * that are not archive-set-authoritative. Acceptable only while the fallback
  * serves genuinely unmounted sources or the pre-baseline window; the mounted
  * path (which carries the archive set) must never be replaced by this
@@ -786,7 +786,7 @@ export interface ArchiveCleanupPurgeResult {
   /** Roots deleted DESPITE a loaded member because this run authorized force. */
   readonly forcedLoaded: number
   /** True when this run ASKED for force and the host refused the flag, so the
-   *  run was repeated with the legacy shape (design 24 §22 compatibility leg):
+   *  run was repeated with the legacy shape (design 24 §8 compatibility leg):
    *  loaded-but-idle subtrees were therefore skipped, and the caller must say
    *  so — the force intent is never dropped silently. */
   readonly forceUnsupported: boolean
@@ -794,7 +794,7 @@ export interface ArchiveCleanupPurgeResult {
   /** True when item errors were truncated at the host cap (1000). */
   readonly truncated: boolean
   /** Archived-set members removed by the host's registry-global ORPHAN SWEEP
-   *  this run (design 24 §20 residual ①): record-less ids that sat in the
+   *  this run (design 24 §12 F4): record-less ids that sat in the
    *  archived set with no content — membership-only removal, never counted in
    *  deletedSessions/deletedSubagents. Absent on older hosts / when zero. */
   readonly clearedOrphanMembers?: number
@@ -1008,7 +1008,7 @@ export async function purgeArchivedSessions(
  * needs: the running bits AND the SUBAGENT-origin parent edges of the same
  * rows.
  *
- * WHY lineage (2026-09 P1 closure round, design 24 §22): the host skips an
+ * WHY lineage (2026-09 P1 closure round, design 24 §5): the host skips an
  * archived TREE whose any member is running, and subagent-origin rows are
  * never listed by the archive manager — a running descendant is therefore
  * invisible in the UI and, with roots-only cancels, permanently undeletable.
@@ -1087,7 +1087,7 @@ export async function fetchSessionRunningLineage(client: InstanceApiClient): Pro
  * over the SAME read: every link has a row, and the chain ends at a row that
  * is not subagent-origin (a top-level session or a fork edge).
  *
- * WHY (2026-09 fail-closed round, design 24 §22.2): a PARTIALLY incomplete
+ * WHY (2026-09 fail-closed round, design 24 §5): a PARTIALLY incomplete
  * list — the vendor skips cwd-less cold records, and a subagent inherits its
  * parent's cwd only when the parent has one — silently drops an intermediate
  * ancestor's edge. The client would then neither exclude nor refuse the viewed
@@ -1114,7 +1114,7 @@ export function upwardChainComplete(sessionId: string, lineage: SessionRunningLi
   return true
 }
 
-/** Outcome of the pre-purge stop pass (design 24 §22). */
+/** Outcome of the pre-purge stop pass (design 24 §5). */
 export interface StopSessionsResult {
   /** Ids whose running turn was aborted by this pass (closure members). */
   readonly cancelled: readonly string[]
@@ -1123,7 +1123,7 @@ export interface StopSessionsResult {
   /** Per-id cancel failures (other than "not attached" = already not running). */
   readonly failures: readonly { readonly sessionId: string; readonly message: string }[]
   /** TRUE when the initial `session/list` read failed: the stop pass was
-   *  SKIPPED (caught, never thrown — design 24 §22) and the caller must then
+   *  SKIPPED (caught, never thrown — design 24 §5) and the caller must then
    *  REFUSE the force path because the closure is unknown. */
   readonly unavailable: boolean
   /** Requested roots REFUSED because an excluded id (the session currently
@@ -1143,7 +1143,7 @@ export interface StopSessionsResult {
  * descendants follow in edge order, so the cancel order is deterministic;
  * `seen` makes a malformed/cyclic parent chain terminate instead of looping.
  * Exported for the archive manager's closure-based current-session refusal
- * (design 24 §22) and for tests; it is the ONE closure definition both paths
+ * (design 24 §5) and for tests; it is the ONE closure definition both paths
  * share.
  */
 export function sessionPurgeClosure(
@@ -1169,7 +1169,7 @@ export function sessionPurgeClosure(
 /**
  * Stop the selected archived sessions' running turns before a purge, using
  * the official `session/cancel` wire — the "已归档的对话应该终止" semantics
- * (design 24 §22): the host's force purge may then delete the merely LOADED
+ * (design 24 §5): the host's force purge may then delete the merely LOADED
  * content, while a RUNNING member is still refused host-side (so this pass is
  * a best-effort accelerator, never the safety boundary).
  *
@@ -1206,7 +1206,7 @@ export async function stopSessionsForPurge(
     readonly attempts?: number
     readonly intervalMs?: number
     /** Ids that must never be cancelled and whose presence in a requested
-     *  root's closure refuses that root (design 24 §22). */
+     *  root's closure refuses that root (design 24 §5). */
     readonly exclude?: readonly string[]
   } = {},
 ): Promise<StopSessionsResult> {

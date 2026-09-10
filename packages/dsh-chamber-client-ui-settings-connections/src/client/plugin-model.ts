@@ -158,7 +158,7 @@ export interface SshApplyResultShape {
  *  renderer global.d.ts DesktopSshSurface.plugin_apply / desktop preload.cts
  *  SshPluginApplyIpcResult — ipc-surface-mirror.test.ts pins the producer
  *  union). NO `{ok:true,cancelled:true}` arm: the ssh apply handler has no
- *  confirmation dialog or picker to dismiss (design 21 §10 — the ssh apply
+ *  confirmation dialog or picker to dismiss (design 21 §7 — the ssh apply
  *  confirm gap is a registered open item), so the twin carries no cancelled
  *  arm — the gateway twin keeps it (classifyGatewayApplyResult). */
 export type SshApplyShape =
@@ -239,7 +239,7 @@ export function classifyGatewayApplyResult(result: GatewayApplyShape, attemptedO
 }
 
 /** Classify a plugin_apply (ssh) IPC result. ok:true with per-item failures
- *  is still an EXECUTED batch (single-item isolation, design 13 §4.5) with
+ *  is still an EXECUTED batch (single-item isolation, design 13 §3) with
  *  partial {done: applied, total: applied + failed} — skipped ops were never
  *  attempted and do not count toward the total. The ssh result carries no
  *  per-name success list, so the executed arm's removed/installed stay []
@@ -256,7 +256,7 @@ export function classifySshApplyResult(result: SshApplyShape, attemptedOps?: num
     return { failed: { error: result.error, partialDone: 0, partialTotal: attemptedOps ?? 0 } }
   }
   // No cancelled arm: plugin_apply has no cancellation path (the ssh apply
-  // confirm gap, design 21 §10) — the only cancelled producer is the gateway
+  // confirm gap, design 21 §7) — the only cancelled producer is the gateway
   // apply, classified by classifyGatewayApplyResult.
   const r = result.result
   const partial = r.failed.length > 0

@@ -25,7 +25,7 @@ const MUTATION_OUTPUT_CAP = 256 * 1024
 export const PREVIEW_TTL_MS = 5 * 60_000
 export const OPERATION_TTL_MS = 24 * 60 * 60_000
 export const SNAPSHOT_DEADLINE_MS = 20_000
-/** Discovery cache TTL (design 08 §11, OpenChamber parity): the per-workspace
+/** Discovery cache TTL (design 08 §2.1, OpenChamber parity): the per-workspace
  *  rev-parse and per-repository worktree-list/show-ref results are reused
  *  within this window when the workspace registry signature is unchanged, so
  *  unchanged sources skip the spawn storm on every 30s poll. Per-worktree
@@ -68,7 +68,7 @@ export interface AgentFact {
    *  `SessionStore.fork` set `parentSession` with NO origin). Only
    *  subagent-origin edges are lineage for the archived-aware running guard —
    *  a fork edge TERMINATES the walk, because a fork is an independent session
-   *  whose run must never be treated as inert (design 08 §6 amendment). */
+   *  whose run must never be treated as inert (design 08 §5.2 amendment). */
   readonly origin?: 'subagent'
 }
 
@@ -138,7 +138,7 @@ export interface GitWorktreeCoreOptions {
   readonly operationCapacity?: number
   /** Test seam for the non-cancelling snapshot response deadline. */
   readonly snapshotWallTimeoutMs?: number
-  /** Unified worktree root (design 08 §11): all chamber checkouts live under
+  /** Unified worktree root (design 08 §2.2): all chamber checkouts live under
    *  the dsh home (`$DSH_HOME/worktrees`, one subdirectory per repository) —
    *  outside any working tree so git status stays clean. Defaults from the
    *  instance's DSH_HOME (fallback: ~/.dsh). */
@@ -211,7 +211,7 @@ export interface RemoveInput {
   readonly operationId: string
   /** Optional: an UNREGISTERED worktree (no dsh workspace) is removed with
    *  this absent — the git-first removal then returns `next: 'none'` and the
-   *  client skips workspace.delete (design 08 §11, Plan A). */
+   *  client skips workspace.delete (design 08 §3.4, Plan A). */
   readonly workspaceId?: string
   /** Required when `workspaceId` is absent (UNREGISTERED removal): the exact
    *  worktree path — the workspace-based discovery cannot derive it. */
@@ -223,14 +223,14 @@ export interface RemoveInput {
     readonly head: string
   }
   /** Optional local branch to delete AFTER the worktree removal (design 08
-   *  §11 user decision): best-effort — a failure is reported honestly on the
+   *  §5.3 user decision): best-effort — a failure is reported honestly on the
    *  result and never rolls back the (already gone) worktree. */
   readonly deleteBranch?: string
   /** Explicit user authorization to DISCARD the worktree's uncommitted state
    *  (dirty/untracked files). When true, a dirty worktree is removed with
    *  `git worktree remove --force` instead of being rejected. The branch,
    *  commits and HEAD are never touched — only the working tree files are
-   *  discarded. Locked/running/identity guards are unchanged. (design 08 §6
+   *  discarded. Locked/running/identity guards are unchanged. (design 08 §5.3
    *  amendment, 2026-08 user decision) */
   readonly discardChanges?: boolean
 }
@@ -668,7 +668,7 @@ export function assertSafeGitArgv(args: readonly string[]): void {
   // Branch enumeration for the create dialog's existing-branch picker: a
   // fixed flag only, no user input in argv.
   if (verb === 'show-ref' && exact('--heads')) return
-  // Optional branch deletion after worktree removal (design 08 §11 user
+  // Optional branch deletion after worktree removal (design 08 §5.3 user
   // decision): fixed flags + a validated local branch name (no leading dash).
   if (verb === 'branch' && rest.length === 2 && rest[0] === '-D'
     && !rest[1]!.startsWith('-') && !rest[1]!.startsWith('/')) return
@@ -686,7 +686,7 @@ export function assertSafeGitArgv(args: readonly string[]): void {
     && /^[0-9a-fA-F]{40,64}$/u.test(rest[5]!)) return
   if (verb === 'worktree' && rest.length === 3 && rest[0] === 'remove' && rest[1] === '--'
     && isAbsolute(rest[2]!)) return
-  // Explicit discard of uncommitted state (design 08 §6 amendment, 2026-08
+  // Explicit discard of uncommitted state (design 08 §5.3 amendment, 2026-08
   // user decision): `worktree remove --force` is authorized only by the
   // `discardChanges` input flag — the fixed grammar here is the last line of
   // defense (the git runner itself never passes --force otherwise).
@@ -836,7 +836,7 @@ interface SourceSnapshot {
   readonly parentBySession: ReadonlyMap<string, string>
   /** Sessions whose header carries `origin: 'subagent'` (delegation children).
    *  A recorded parent edge of any OTHER session is fork lineage and is never
-   *  walked (design 08 §6 amendment). */
+   *  walked (design 08 §5.2 amendment). */
   readonly subagentOriginSessions: ReadonlySet<string>
   /** Rows whose `origin` is present but neither absent nor `'subagent'` (a
    *  pinned-vendor drift). Handled PER ROW — such a session is NOT
@@ -847,7 +847,7 @@ interface SourceSnapshot {
   readonly originDrift: readonly { readonly sessionId: string; readonly value: string }[]
   /** Running sessions that actually BLOCK a worktree removal: the non-inert
    *  ones (an archived session, or a SUBAGENT-origin descendant of an archived
-   *  ancestor, is inert — design 08 §6 amendment 2026-09). */
+   *  ancestor, is inert — design 08 §5.2 amendment 2026-09). */
   readonly blockingRunningIds: ReadonlySet<string>
 }
 
@@ -931,9 +931,9 @@ interface RemoveIntent {
   readonly head: string
   readonly sessionIds: readonly string[]
 
-  /** Optional local branch to delete after removal (design 08 §11). */
+  /** Optional local branch to delete after removal (design 08 §5.3). */
   readonly deleteBranch?: string
-  /** User-authorized discard of uncommitted state (design 08 §6 amendment):
+  /** User-authorized discard of uncommitted state (design 08 §5.3 amendment):
    *  dirty worktrees are removed with `git worktree remove --force`; the
    *  branch/commits/HEAD are never touched. Carried so replay/reconcile
    *  paths keep the identical fingerprint and the same force semantics. */
@@ -947,7 +947,7 @@ interface RemoveOperationRecord {
   state: 'ready' | 'removing' | 'uncertain' | 'removed'
   updatedAt: number
   attemptedRemove: boolean
-  /** Optional branch delete was attempted once (design 08 §11). */
+  /** Optional branch delete was attempted once (design 08 §5.3). */
   branchDeleteAttempted: boolean
   intent?: RemoveIntent
   promise?: Promise<RemoveResult>
@@ -1520,7 +1520,7 @@ export class GitWorktreeCore {
           for (const id of this.runningAtSnapshotPath(path, runningLocations)) {
             if (!runningSessionIds.includes(id)) runningSessionIds.push(id)
           }
-          // The BLOCKING subset (design 08 §6 amendment 2026-09): the running
+          // The BLOCKING subset (design 08 §5.2 amendment 2026-09): the running
           // sessions that actually gate removal. An old client that reads only
           // runningSessionIds stays conservative (blocks on any running
           // session); a new client uses this field.
@@ -2396,7 +2396,7 @@ export class GitWorktreeCore {
   }
 
   /** Best-effort optional branch deletion after a removal, once per
-   *  operation (design 08 §11 user decision). Called from every terminal
+   *  operation (design 08 §5.3 user decision). Called from every terminal
    *  removal path — including the target-absent replay paths — so a removal
    *  that committed before a failure still reports the branch outcome
    *  honestly (branchDeleted / branchDeleteFailed on the result). */
@@ -2519,7 +2519,7 @@ export class GitWorktreeCore {
     // the source registry between the final topology read and the git call
     // would let the guards evaluate an older listing. Reordering narrows the
     // reappearance window to the final topology read itself (still disclosed
-    // in design 08 §11.8); the mutation below is the record-only cleanup of a
+    // in design 08 §5.5); the mutation below is the record-only cleanup of a
     // row verified missing at that read.
     const state = await this.readSource()
     if (state.workspaces.some(candidate => resolve(candidate.path) === intent.path)) {
@@ -2651,7 +2651,7 @@ export class GitWorktreeCore {
     operation.attemptedRemove = true
     // `--force` is used ONLY under explicit user authorization
     // (input.discardChanges); it discards the working-tree files but never
-    // touches the branch, commits or HEAD (design 08 §6 amendment 2026-08;
+    // touches the branch, commits or HEAD (design 08 §5.3 amendment 2026-08;
     // a submodule checkout inside the worktree is discarded the same way —
     // its files are re-cloneable from the committed gitlink).
     const removeArgs = intent.discardChanges === true
@@ -2672,7 +2672,7 @@ export class GitWorktreeCore {
       // removed nothing — replaying the same refusal can never converge, so
       // surface a DETERMINISTIC error (retryable: false) that the client may
       // dismiss instead of wedging the source in an endless "uncertain
-      // outcome" recovery (design 08 §7; 2026-09 submodule report). Any
+      // outcome" recovery (design 08 §6.2; 2026-09 submodule report). Any
       // failed probe keeps the original retryable error.
       if (!(error instanceof GitWorktreeError) || error.code !== 'git-command-failed') throw error
       const reconciled = await this.topology(finalTopology.mainPath).catch(() => undefined)
@@ -2712,7 +2712,7 @@ export class GitWorktreeCore {
       || after.worktrees.some(worktree => worktree.path === intent.path)) {
       fail('postcondition-failed', 'Git still reports the removed worktree or repository identity changed')
     }
-    // Optional branch deletion (design 08 §11 user decision): best-effort,
+    // Optional branch deletion (design 08 §5.3 user decision): best-effort,
     // once per operation. A failure is honest (the worktree removal stands).
     await this.attemptBranchDelete(operation, intent, finalTopology.mainPath)
     return this.removeResult(operationIdValue, intent, replayed)
@@ -2906,12 +2906,12 @@ export class GitWorktreeCore {
   }
 
   /**
-   * TRUE when a running session is INERT for the running guards (design 08 §6
+   * TRUE when a running session is INERT for the running guards (design 08 §5.2
    * amendment, 2026-09 user decision): the session itself is ARCHIVED, or a
    * SUBAGENT-origin ancestor in its lineage is. An archived session is done —
    * its run must not block a worktree removal, and the removal never touches
    * it (stopping a run and purging content is the archive manager's job,
-   * design 24 §22.4). The chain is walked over the loaded agent rows (any
+   * design 24 §5). The chain is walked over the loaded agent rows (any
    * status), so a running subagent under an archived root is inert too.
    *
    * LINEAGE IS SUBAGENT-ORIGIN EDGES ONLY: `session.header.parentSession` is

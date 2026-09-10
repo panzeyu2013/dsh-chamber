@@ -316,7 +316,7 @@ var ArchiveCleanupCore = class {
    * therefore flip with candidate order for one selection — the UI never
    * selects hidden subagent rows, so presentation is unaffected.
    *
-   * SWEEP (design 24 §20 residual ①): independently of the filter, every run
+   * SWEEP (design 24 §4 step 5): independently of the filter, every run
    * clears archived-set members that are ORPHANS across the ENTIRE archived
    * set — ids with no session record in the run's authoritative snapshot
    * (`orphanArchivedMembers`). Historical no-directory members accumulated by
@@ -373,7 +373,7 @@ var ArchiveCleanupCore = class {
    * attached session) is deleted too — the caller MUST have terminated the
    * run first (client-orchestrated `session/cancel` before purge). A RUNNING
    * member is still refused unconditionally (a live writer recreates a
-   * header-less artifact through `open(path,"a")`, design 24 §22). Default
+   * header-less artifact through `open(path,"a")`, design 24 §3). Default
    * (absent) = the historical fail-closed behavior, byte-for-byte.
    */
   async purge(sessionIds, force = false) {

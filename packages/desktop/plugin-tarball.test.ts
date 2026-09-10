@@ -351,7 +351,7 @@ test('pluginNameFromFolder: an oversized package.json is refused, a plain-name r
 })
 
 // ---------------------------------------------------------------------------
-// classifyPluginPick (design 21 §10 archive-pick): a picked path becomes a
+// classifyPluginPick (design 21 §6.5 archive-pick): a picked path becomes a
 // source folder, or a ready .tgz archive with its bounded manifest — every
 // refusal is a loud structural error naming only the basename.
 // ---------------------------------------------------------------------------

@@ -53,7 +53,7 @@
 
 ### 修复
 
-- **归档清理后已删会话在侧边栏反复浮现（design 24 §21）**：purge 删除已归档
+- **归档清理后已删会话在侧边栏反复浮现（design 24 §12）**：purge 删除已归档
   会话内容后，官方客户端 `SessionManager.summaries` 不会刷新（宿主会话事件为
   文档化 no-op），而归档集合的收缩经官方 workspace follow 即时到达客户端，于是
   生产端推送把「收缩后的集合 + 陈旧的行」一起提交，已删会话以普通行渲染（点击报
@@ -68,7 +68,7 @@
   ④ 宿主**registry-global 孤儿清扫**（每次 purge 收尾清全集合无会话记录的成员：
   逐候选官方单 id 存在性校验 + 查询/持久化枚举并集 + 空/塌缩语料可信度门，
   只清集合成员、零新增删除语义，双重确认与 fail-closed）。
-  设计与进度见 design 24 §20/§21 与 `docs/progress/STATUS.md`。
+  设计与进度见 design 24 §12 与 `docs/progress/STATUS.md`。
 - **移动端 Web 访问面（design 17 §18）**：四类真机反馈的复修与加固（含独立
   交叉复核轮：6 条 lane 的代码/症状/控制面/文档/复现/最优性审查，P1 已修）。
   - **tooltip 悬停残留**：官方 ui-primitives `Tooltip` 的 tap 会合成
@@ -175,7 +175,7 @@
   applied-monitoring / intent 时武装，仅 live 事务 phase（prepared/switched/
   restoring…）不武装（旧壳在途事务保持 journal-mismatch 阻塞语义），回归
   测试 ×3。
-- **plugin sync/install QA 收口（design 21 §10 ⑱–㉒）** —— 同步 400 原因
+- **plugin sync/install QA 收口（design 21 §6.2/§6.3/§6.6 ⑱–㉒）** —— 同步 400 原因
   透传（旧网关不认识新宿主域不再裸 400，拒绝文案给升级指引；桌面把网关
   原因并入失败串）；materialize 202 后桌面侧 settle/受控重启对账（op 终态
   轮询 → POST 受控重启 → 就绪轮询，IPC outcome `{executed,restarted}`，
@@ -190,7 +190,7 @@
 
 ### 变更
 
-- **N-ctx 视图保留/回收 + 可见性门控（design 05 §1 注记/performance-baseline
+- **N-ctx 视图保留/回收 + 可见性门控（design 05 §4 注记/performance-baseline
   §10；性能第二阶段代码面 A/C/D）** —— 早期「booted 壳无限常驻（视图生命周期
   = 注册表条目生命周期）」收窄为 chamber 保留策略：local 恒留，隐藏壳最多
   保留 1 个（`RETAINED_HIDDEN_VIEWS`），超限回收「已 settle + 连续隐藏
@@ -207,12 +207,12 @@
   `scripts/perf/measure-ui.mjs` 稳态基线尺子（schema `measure-ui/v1`：
   DOM 节点分壳/堆/空闲长任务/合成输入帧间隔）。
 
-- **归档管理器按工作区分组、可折叠（design 24 §18/§19）** —— 移除独立
+- **归档管理器按工作区分组、可折叠（design 24 §6）** —— 移除独立
   「删除全部」：整集清理必须先显式全选再确认带计数的「删除选中」，purge
   永远携带明确 id 列表（降级/pending 视图无任何销毁动作）；列表按工作区
   分组（权威成员关系 → canonical cwd 兜底 → 未分组桶），组头复用导航折叠
   chrome + workspace accent + 三态组复选框，折叠为对话框本地视图态。
-- **归档管理器整体匹配轮（design 24 §19-6..9，dsh/仓库惯例对齐）** ——
+- **归档管理器整体匹配轮（design 24 §6，dsh/仓库惯例对齐）** ——
   危险确认改**对话框内两段式**（武装冻结列表输入 + 风险条：计数不可恢复
   文案/取消/确认删除；Esc 只解除武装绝不关框——capture 相位仲裁官方 Modal
   的 bubble Escape；取消/Esc 焦点回武装源控件）替代 OS window.confirm 与
@@ -221,7 +221,7 @@
   标题精确同列）；行删除钮并入模块 `.actionIcon` 语言（20px 纯色 hover +
   error ink 修饰）、hover/焦点环/小字号族共享规则表收口；四方只读分面评审
   （正确性/完整性/最优性/a11y）修复落地（焦点 rAF 回退、aria-checked=mixed
-  全选行、role=alert 文本化等），偏差与待目检项登记 §19-9。
+  全选行、role=alert 文本化等），偏差与待目检项登记 §13（第 17 条）。
 
 ## [0.2.2] - 2026-09-05
 
@@ -313,7 +313,7 @@
   分流：registered missing → 侧栏孤儿徽标 + `git worktree repair`；
   present-but-broken / 未注册 missing → repair/prune；locked →
   `git worktree unlock`；未注册行按因分发。
-- **侧边栏 Git 仓库组折叠与行尾 rest 态清理（design 08 §11.7，2026-09
+- **侧边栏 Git 仓库组折叠与行尾 rest 态清理（design 08 §3.3，2026-09
   用户决策）** —— 折叠 git main workspace 即整体隐藏其派生 worktree 行
   （纯展示派生、不写派生行折叠偏好；`hiddenByMainWorkspaceFold` 谓词带主行
   存在性守卫——主行注册消失时陈旧折叠偏好绝不锁死派生行）；折叠态拖放

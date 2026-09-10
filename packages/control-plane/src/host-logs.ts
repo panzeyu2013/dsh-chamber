@@ -2,7 +2,7 @@
  * Host log reading + spawn-diagnostics summary (module 03, host-management
  * deployment — the read side behind a coordinator-wired GET /api/host/logs).
  *
- * Rolling host logs (design 02 §3.2.1: "stdout/stderr 管道接入控制面滚动日志"):
+ * Rolling host logs (design 02 §3.8: "stdout/stderr 管道接入控制面滚动日志"):
  * the convention this module defines is one JSONL file per managed host at
  * <stateDir>/host-logs/<port>.log, one entry per line:
  *   {"ts":"<ISO 8601>","stream":"stdout|stderr","line":"<text>"}
@@ -569,7 +569,7 @@ function invalidArgumentError(message: string): CodedError {
 }
 
 /**
- * All valid spawn records from the managed-dsh registry (design 02 §3.4.1),
+ * All valid spawn records from the managed-dsh registry (design 02 §3.3),
  * newest first. Corrupt/pid-less records are skipped (registry discipline:
  * "解析失败或 pid 非整数 → 删文件，不猜测" — reads are read-only, so the
  * corrupt file is left for the reaper). Claim files (claim-<port>.json,

@@ -9,7 +9,7 @@
  * this plugin and the renderer App layer consume it, so the two former
  * copies can never drift again. This module keeps the plugin-side `cp`
  * method surface and the plugin-management IPC wrappers (design 13
- * §4.3/§4.5/§5.8), which stay local. Every value is non-secret: tunnel URLs
+ * §4.1/§3/§5), which stay local. Every value is non-secret: tunnel URLs
  * and SSH material never cross this module.
  */
 
@@ -93,7 +93,7 @@ export const cp = {
 }
 
 /**
- * Plugin-management IPC wrappers (design 13 §4.3/§4.5/§5.8). These ride the
+ * Plugin-management IPC wrappers (design 13 §4.1/§3/§5). These ride the
  * desktop SSH surface (window.dshChamber.desktopSsh.*) — the main process is
  * the only authority for exec/whitelisting/materialization; the renderer only
  * computes the view (plugin-diff.ts) and forwards explicit user intents.
@@ -115,7 +115,7 @@ export type RemotePluginListResult = { ok: true; manifest: RemotePluginManifest 
 /** plugin_apply (ssh) result — exactly the main-process SSH_PLUGIN_APPLY
  *  union (renderer global.d.ts DesktopSshSurface.plugin_apply / preload
  *  SshPluginApplyIpcResult). NO `{ok:true,cancelled:true}` arm: the ssh apply
- *  handler has no confirmation dialog or picker to dismiss (design 21 §10 —
+ *  handler has no confirmation dialog or picker to dismiss (design 21 §7 —
  *  the ssh apply confirm gap is a registered open item; the gateway apply
  *  union carries the cancelled arm instead), so this wrapper can never see a
  *  user-cancelled result (ipc-surface-mirror.test.ts pins the producer
@@ -175,7 +175,7 @@ export function pluginMaterializeAdd(id: string, name: string): Promise<SshMater
 }
 
 /** Pack/upload a user-picked local plugin source (dir or .tgz archive,
- *  design 21 §10 archive-pick) and install it remotely (pick-only). */
+ *  design 21 §6.5 archive-pick) and install it remotely (pick-only). */
 export function pluginMaterializeAddPick(id: string): Promise<SshMaterializeResult> {
   return desktopSsh().plugin_materialize_add_pick(id)
 }
@@ -268,7 +268,7 @@ export function gatewayPluginApply(id: string, input: GatewayPluginApplyInput): 
 }
 
 /** Pick a local plugin source (folder or .tgz archive) in MAIN and upload it
- *  to a gateway instance (pick-only, design 21 §6.5/§10 ⑧): cancelled = the
+ *  to a gateway instance (pick-only, design 21 §6.5): cancelled = the
  *  picker was dismissed; ok:true deferred = the gateway cached the install
  *  intent for the next ready edge (false = accepted onto the executor queue). */
 export function gatewayPluginMaterialize(id: string): Promise<GatewayPluginMaterializeIpcResult> {

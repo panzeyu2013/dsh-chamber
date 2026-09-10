@@ -114,7 +114,7 @@ export type RemoveBlockReason =
  * the worktree accounts sessions, removal is blocked ('runtime-unknown')
  * until the channel returns.
  *
- * The RUNNING reason reads the host's ARCHIVED-AWARE fact (design 08 §6
+ * The RUNNING reason reads the host's ARCHIVED-AWARE fact (design 08 §5.2
  * amendment, 2026-09 user decision): `blockingRunningSessionIds` names only
  * the running sessions that actually gate removal — archived sessions (and
  * sessions under an archived ancestor) are INERT and do not block. The field

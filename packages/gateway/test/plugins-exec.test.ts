@@ -154,7 +154,7 @@ test('scrubInstallEnv is a WHITELIST: only PATH/proxies survive; every ambient v
   }
   // HOME is dropped and NOT restored: pinning HOME would move pnpm's default
   // store away from the store the managed profile was provisioned against
-  // (pnpm 11 refuses every mutation on that mismatch — design 21 §10 ⑨).
+  // (pnpm 11 refuses every mutation on that mismatch — design 21 §6.3 ⑨).
   assert.equal(Object.hasOwn(result, 'HOME'), false, 'HOME must stay absent so pnpm falls back to the passwd home store')
   assert.equal(result.DSH_HOME, '/state/dsh-home')
   assert.equal(result.XDG_CACHE_HOME, '/state/chamber-plugins/third-party/.pnpm-cache')
@@ -369,7 +369,7 @@ test('env discipline reaches the spawn: pins applied, DSH_GATEWAY_*/npm_* stripp
 
   assert.equal(captured.DSH_HOME, join(h.stateDir, 'dsh-home'))
   // HOME stays absent (store alignment with the provisioned profile — the
-  // pnpm default store must never move, design 21 §10 ⑨).
+  // pnpm default store must never move, design 21 §6.3 ⑨).
   assert.equal(Object.hasOwn(captured, 'HOME'), false, 'HOME is never pinned into the mutation env')
   assert.equal(captured.XDG_CACHE_HOME, join(thirdParty, '.pnpm-cache'))
   assert.equal(captured.XDG_CONFIG_HOME, join(thirdParty, '.pnpm-xdg'))

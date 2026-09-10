@@ -1,5 +1,5 @@
 /**
- * Purged-session row suppression + convergence bookkeeping (design 24 §20
+ * Purged-session row suppression + convergence bookkeeping (design 24 §12
  * 修正轮, 2026-09 实机复核).
  *
  * WHY THIS EXISTS (实机根因，2026-09 复核): the cleanup purge deletes a
@@ -51,7 +51,7 @@
  *     transient-RPC-error holes of `refreshList()`. NOTE (2026-09 review
  *     BLOCKER): the refresh MUST be invoked as a method on the service object
  *     — `ClientSessions.refresh` is a prototype method reading `this.manager`,
- *     so the detached call the §20 seam used threw TypeError and never issued
+ *     so the detached call the §12 seam used threw TypeError and never issued
  *     an RPC at all.
  *
  * TOMBSTONE RELEASE RULE: an id is released when the raw summaries stop
@@ -63,7 +63,7 @@
  * closure review). The residual (a shrink that was NOT a content purge keeps a
  * row suppressed) is unreachable today: the host `clearIds` set is the only
  * in-tree removal path and the domain retires when the upstream delete wire
- * lands (design 24 §2/§21) — any future unarchive/delete wire that removes an
+ * lands (design 24 §2/§12) — any future unarchive/delete wire that removes an
  * id while its content exists MUST clear these tombstones, otherwise a live
  * row would stay hidden.
  */

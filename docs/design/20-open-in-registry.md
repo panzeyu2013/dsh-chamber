@@ -1,60 +1,54 @@
 # 20 · open-in 打开注册表（Finder 本地 + VS Code 本地/远程的统一打开面）
 
-> **状态：设计定稿；M0–M2 已实现，M3 自动化覆盖与最终 HEAD 复验已完成；
-> macOS 实机验收仍未完成（2026-08，见 §8/§9）。** 本文是设计 16
-> （VS Code 深链）的同族演进：把"会话头部 utilities 行的 vscode 按钮"升级为
-> **通用打开注册表**——每个"拉起方式"一个 provider，本地来源（`chamberInstanceId
-> === 'local'`）可打开 Finder（文件管理器），vscode 成为其中一个 provider（本地
-> `vscode://file/`、远程 `ssh-remote+`，行为零变化）。参考 openchamber 的
+> **状态：现行（open-in 打开注册表；本地实例官方宿主目录 + 桌面主进程 vscode 覆盖项，2026-09）**——
+> 本文是「统一打开面」的契约：每个「拉起方式」一个 provider，本地来源
+> （`chamberInstanceId === 'local'`）可打开本地文件管理器（Finder/资源管理器/文件管理器），
+> vscode 是其中一个 provider（本地 `vscode://file/`、远程 `ssh-remote+`）；未完成门禁
+> （macOS 实机验收）见 docs/progress/STATUS.md。
+>
+> 本文是设计 16（VS Code 深链）的同族演进：把"会话头部 utilities 行的 vscode 按钮"升级为
+> **通用打开注册表**。参考 openchamber 的
 > open-in-app 体系（`openInApps.ts` + `useOpenInAppsStore.ts` + `OpenInAppButton.tsx`
 > + electron `desktop_open_path`/`desktop_reveal_path`）：取其"finder 常驻、
 > 平台化命名、目录 → 打开文件管理器"语义，去其应用扫描/图标抓取/选择器重机制。
 >
-> 实现后曾经 **五路对抗复核**（安全契约 / 前端接线 / 测试质量 / 打包分发 / 集成
-> 等价，无 P0）与两轮修复。本轮全面契约复核又发现并修复/收敛新的边界；最终 HEAD
-> 的精确验证记录统一写在 `docs/progress/STATUS.md`。实机验收仍未完成（见 §8/§9）。
->
-> **命名统一注记（2026-09，Batch 1 / T2）**：chamber 自建包名统一为
-> `@dsh-chamber/dsh-chamber-client-ui-*`（目录不变）。本文正文/演进表中的包名
-> 已按现行名字更新，历史基线列（`@dsh-chamber/dsh-client-ui-vscode`）保留原样。
+> **命名统一注记**：chamber 自建包名统一为
+> `@dsh-chamber/dsh-chamber-client-ui-*`（目录不变）；本文正文的包名已按现行名字给出。
 >
 > **连接模型 v2 注记**：现行来源 id 为 `dsh-<id>` / `gateway-<id>`，`ssh-<id>`
 > 仅作 legacy 兼容映射；插件的来源解析与主进程来源代 proof 已按 design 17
-> §2.2/§9.1 落地，该迁移已是当前基线。
+> §2.2/§9.1 落地。
 >
-> **Batch 3 Phase 2 修订（2026-09，用户批准的红线修订；实现见
-> `packages/dsh-chamber-client-ui-open-in` + `packages/desktop/open-in.ts`）**：
-> 单一 header 入口改为消费 per-source 视图模型（`shared/open-in-view-model.ts`，
-> Phase 0 已落地）——
+> **per-source 视图模型（实现见 `packages/dsh-chamber-client-ui-open-in` +
+> `packages/desktop/open-in.ts`）**：单一 header 入口消费 per-source 视图模型
+> （`shared/open-in-view-model.ts`）——
 > - **本地来源**：实例自身官方宿主目录（`dsh-host-open-in-app`，随 a2 默认 web
 >   bundle 在）经**每实例代理** `<basePath>/open-in-app/{apps,icon/<id>,open}` 提供
 >   全量本地应用拾取器（真实 bundle 图标 + 官方 app.* 标签表 + 选择持久化，均已
->   吸收进本插件）；**同 id 裁决（§5.1「vscode 全家走 IPC 覆盖」+ r6「展示并集 + IPC 兜底」）**：主进程该项
+>   吸收进本插件）；**同 id 裁决**：主进程该项
 >   **可用**时它胜出（vscode 走 IPC，保留 `vscodeOpenInNewWindow`、来源代 proof 与深链 intent 推送）；
 >   主进程**不可用**时官方条目兜底（走实例路由，已装应用不隐藏）。
 > - **远程 ssh 来源**：仅桌面主进程的 remote-capable 项（VS Code Remote-SSH，
 >   主进程构造 `vscode://vscode-remote` URL，不经 chamber 隧道/凭据）。
 > - **http/畸形来源**：空。
-> - **红线**：本地 launch 的信任界由 trusted IPC 迁至实例官方路由（连接栅栏 +
+> - **红线**：本地 launch 的信任界在实例官方路由（连接栅栏 +
 >   白名单 + 绝对存在目录校验）；控制面仍零执行面（代理逐字透传 + cookie 注入）；
->   主进程**不再持有** finder/stat/openPath/reveal 的本地执行面（`OpenInApp`
->   注册表 vscode-only，`OpenInLaunchContext` 移除 stat/openPath/showItemInFolder）。
+>   主进程**不持有** finder/stat/openPath/reveal 的本地执行面（`OpenInApp`
+>   注册表 vscode-only，`OpenInLaunchContext` 无 stat/openPath/showItemInFolder）。
 >   真浏览器上下文的 OS 级 `dsh-chamber://open-vscode` 冷启动入口不变。
-> - 未实机验证项（[UNVERIFIABLE]，须实机）：官方 host 行随 a2 默认 profile 进入
->   托管实例、远程无 cookie 下 fence 行为、remote cwd 填充、图标缓存/CSP。
 
 ## 1. 目标与非目标
 
 ### 目标
 
-- **本地环境识别（Batch 3 Phase 2 修订）**：`sourceId === 'local'` 且 transport=`local`
+- **本地环境识别**：`sourceId === 'local'` 且 transport=`local`
   时可用集 = 实例官方宿主目录（official 池，全量本地应用）+ 桌面主进程 vscode 覆盖项
   （main 池；同 id 由**可用的** main 项胜出，否则 official 兜底）——≥2 → 图标按钮 + chevron 下拉选择；远程来源（现行
   `dsh-<id>` / `gateway-<id>`，兼容 legacy `ssh-<id>`）只有 transport=`ssh` 时
   可用 main 池的 vscode（`remoteCapable` 过滤，行为与 design 16 完全一致）；
   transport=`http` 没有 Remote-SSH authority，隐藏 open-in 按钮；
 - **注册表抽象**：主进程 `OpenInApp` provider 接口（id / displayKind /
-  remoteCapable / available / open）；Batch 3 Phase 2 起主进程注册表固定为 vscode。新增 app 的
+  remoteCapable / available / open）；主进程注册表固定为 vscode。新增 app 的
   执行与能力协商只增 provider，既有桥面/IPC 形状可不变；客户端按稳定的
   `displayKind`（`vscode` / `file-manager`）选择专用文案/图标，未知 kind 使用中性
   app 呈现，不会被误标为 Finder；
@@ -68,19 +62,19 @@
 
 ### 非目标（明确不做）
 
-- 不做 openchamber 式**自建应用扫描/图标抓取**：Batch 3 Phase 2 起本地应用目录、
+- 不做 openchamber 式**自建应用扫描/图标抓取**：本地应用目录、
   真实 bundle 图标与「选择持久化」直接**吸收官方 client**（实例宿主半边探测并
   服务，chamber 侧不新增扫描器）；
 - 不做 OS 深链 `dsh-chamber://open-finder`（本地应用拾取在应用内，无 OS 级诉求；
   deep-link handler 注册表已支持未来增补）；
-- 不做 copy-path / 在终端打开 / 更多 app（P2 候选，见 §9）。
+- 不做 copy-path / 在终端打开 / 更多 app（P2 候选，见 §8）。
 
 ## 2. 形态与分层
 
 ```text
 ┌─ 客户端插件 @dsh-chamber/dsh-chamber-client-ui-open-in（自 ui-vscode 重命名扩展）──┐
 │  单条目 open-in（order -1，会话头部 utilities 槽）→ OpenInButton           │
-│    条目 = buildOpenInViewModel({source, official, main})（Phase 0 决策面）  │
+│    条目 = buildOpenInViewModel({source, official, main})（决策面）           │
 │    本地：official（实例官方目录，经 <basePath>/open-in-app/*）+ main（vscode）│
 │    远程 ssh：仅 main 的 remoteCapable；http/畸形：空                        │
 │    ≥2 → 主图标按钮（记住的选择/默认 vscode）+ chevron 下拉                  │
@@ -143,7 +137,7 @@ platform: string | null   // 顶层，process.platform，非秘密（dsh-chamber
 ```
 
 - preload 的 `apps()` **解包 `{apps}` 信封**返回裸数组（声明即运行时形状）；
-- 插件以局部 `OpenInBridgeSurface` 结构子集 cast 消费（design 16 §10.2-⑤ 同款
+- 插件以局部 `OpenInBridgeSurface` 结构子集 cast 消费（design 16 §10-5 同款
   文档化偏离，不声明全局 Window 增强）。
 
 ## 4. 主进程核心（open-in.ts）
@@ -152,7 +146,7 @@ platform: string | null   // 顶层，process.platform，非秘密（dsh-chamber
 
 ```ts
 interface OpenInApp {
-  id: string                          // 'vscode'（Batch 3 Phase 2 起 vscode-only）
+  id: string                          // 'vscode'（vscode-only 注册表）
   displayKind: string                 // 'vscode' | 'file-manager' | future neutral kind
   remoteCapable: boolean              // 能否打开远程实例路径（仅 vscode 家族 true）
   available(ctx: OpenInLaunchContext): boolean
@@ -163,7 +157,7 @@ interface OpenInApp {
 
 `OpenInLaunchContext`（main.ts 组装，模块 electron-free 可单测）：
 `lookupInstance`（注册表实查）/ `vscodeAvailable` / `openVscodeUrl`（scheme 复验封装）。
-Batch 3 Phase 2 移除了 `stat` / `openPath` / `showItemInFolder` —— 本地文件管理器等
+主进程不含 `stat` / `openPath` / `showItemInFolder` —— 本地文件管理器等
 应用的执行面已迁至实例官方路由，主进程不再持有本地 launch 能力。
 
 `apps()` 也把同一 `OpenInLaunchContext` 逐项传给 provider 的 `available`；协商器不
@@ -189,20 +183,16 @@ Batch 3 Phase 2 移除了 `stat` / `openPath` / `showItemInFolder` —— 本地
 
 ### 4.3 Providers
 
-- **本地文件管理器等本地应用（Batch 3 Phase 2：已移出主进程）**：改由实例自身官方
+- **本地文件管理器等本地应用**：由实例自身官方
   宿主半边 `POST /open-in-app/open` 执行（实例进程内、按官方 resolver 的已安装
   应用目录与存在性校验），经每实例代理 `<basePath>/open-in-app/*` 到达——控制面
-  零代码、零执行面；主进程不再有 finder provider / stat / openPath / reveal 面；
+  零代码、零执行面；主进程不含 finder provider / stat / openPath / reveal 面，
+  也不调用 `shell.openPath`（Electron `shell.openPath` 的 void-reveal 与错误串
+  语义边界因此不再属于主进程契约）；
 - **vscode**：`available: (ctx) => ctx.vscodeAvailable()`；open 直通
   `runVscodeLaunch`（注册表实查 + authority 构造 + scheme 复验，零行为变化）；
   新窗口偏好经 ctx `vscodeOpenInNewWindow` 惰性读取并透传（chamber 设置，默认
   开 → 目标 URL 追加 `?windowId=_blank`，见设计 16 §3.3）。
-
-### 4.4 normalizeOpenPathError（Batch 3 Phase 2 已删除）
-
-该纯函数随 finder provider 一并移除：主进程不再调用 `shell.openPath`。历史说明：
-Electron `shell.openPath` 成功返回 `''`、失败返回错误串——曾提取为纯函数
-（`''`/非 string → null，非空串 → 原样）使该边界可单测。
 
 ## 5. 客户端插件（@dsh-chamber/dsh-chamber-client-ui-open-in）
 
@@ -213,7 +203,7 @@ Electron `shell.openPath` 成功返回 `''`、失败返回错误串——曾提�
   `configureContext` 闭包注入
   `chamberInstanceId/chamberBasePath/chamberSourceFingerprint/chamberTransport`；
   两个 base-path fork 的 `apply(ctx)` 各自读该 ctx 的 `chamberBasePath`
-  （2026-09 Batch 2 起不再经插件 config 传参）；open-in 只读本 ctx 的
+  （不经插件 config 传参）；open-in 只读本 ctx 的
   `chamberInstanceId`，
   不使用已删除的页面级 `chamber-knob.ts`/`window.__DSH_BASE_PATH__` boot 写入，
   N-ctx 交错 boot 不会串源；
@@ -251,22 +241,7 @@ Electron `shell.openPath` 成功返回 `''`、失败返回错误串——曾提�
   情况下主动侦测桥消失）；每个 IPC 条目严格校验，坏条目不抹掉合法 sibling；
   `refreshApps()` 绕过 memo 强制重探，probe epoch 阻止被取代的旧 flight 迟到覆盖新结果。
 
-## 6. 与 design 16 的关系（演进记录）
-
-| 维度 | design 16（历史基线） | design 20（现状） |
-|---|---|---|
-| 插件 | `@dsh-chamber/dsh-client-ui-vscode` | `@dsh-chamber/dsh-chamber-client-ui-open-in`（重命名） |
-| 按钮 | 单 vscode 图标按钮 | 单 `open-in` 条目；本地 = 官方目录 + vscode 下拉 / 远程单 vscode |
-| 桥面 | `vscode.availability()/open()` | `openIn.apps()/open()` + `platform` |
-| IPC | `vscode-availability` / `open-vscode` | `open-in-apps` / `open-in`（旧两通道已删除） |
-| 执行管线 | `runVscodeLaunch`（单 app） | `runOpenInLaunch` 注册表六步管线（vscode provider 包装前者） |
-| 深链 | `dsh-chamber://open-vscode` OS 级 | **不变**（OS 级只有 vscode 有 URL 语义，深链管线原样） |
-| intent 推送 | open-vscode 成功后推送 | open-in 对 vscode 成功时保留推送（与 OS 深链对齐；官方目录条目由实例侧执行，不推送） |
-
-design 16 文档保留为 OS 深链与 vscode 拉起的契约（§3.4/§5.2/§6.4 中的旧 IPC
-与桥面描述属历史基线，以本文为准）。
-
-## 7. 安全不变量
+## 6. 安全不变量
 
 - appId 精确白名单（不猜测、不归一化）；`openInApps` 模块私有，注册表数组与
   provider 运行时冻结；
@@ -278,7 +253,7 @@ design 16 文档保留为 OS 深链与 vscode 拉起的契约（§3.4/§5.2/§6.
 - path 校验在主进程完成；只调 `openVscodeUrl`（scheme 复验封装）；本地应用执行面
   在实例进程内（官方 resolver + 实例连接栅栏），主进程不再有 openPath/reveal 面；
   绝不 `shell.openExternal` 裸调用；
-- **红线修订（Batch 3 Phase 2）**：本地 launch 的信任界由 trusted IPC 迁至实例
+- **红线**：本地 launch 的信任界在实例
   官方路由——控制面只做无白名单逐字透传 + browser-auth cookie 注入（design 03
   §3.1），执行与白名单在实例进程内；控制面仍是零执行面，桌面主进程只保留
   VS Code（远程 URL 构造 + 深链 intent 推送）；
@@ -295,16 +270,11 @@ design 16 文档保留为 OS 深链与 vscode 拉起的契约（§3.4/§5.2/§6.
   按钮只能 loud 失败，不能操作同 id replacement；
 - 探测零副作用（纯 fs/PATH，绝不 spawn）。
 
-## 8. 验证门（M3）
-
-> 里程碑（M0–M3）：M0 主进程核心（open-in.ts + 用例套件）→ M1 IPC/桥面/info
-> platform → M2 插件重命名 + 下拉 UI + 锁步接线 → M3 验证门全绿 + 实机验收。
-> 与 design 16 §9 同款分期口径。
+## 7. 验证门
 
 - `test:desktop` 的 open-in/deep-link/renderer-trust 套件覆盖六步管线、精确 vscode URL、
-  门失败副作用 spy、path 非 string/空串、`normalizeOpenPathError` 四态、stat 缺失与
-  权限错误分类、hostile thrown value、来源 proof 生命周期及异步 ownership fence；
-  可用性由 ctx 注入，测试结果不依赖执行机器是否安装 VS Code；
+  门失败副作用 spy、path 非 string/空串、hostile thrown value、来源 proof 生命周期及
+  异步 ownership fence；可用性由 ctx 注入，测试结果不依赖执行机器是否安装 VS Code；
 - 全部插件 typecheck（open-in + sidebar/layout/connections/settings-bridge/git
   + client-web/connection + host-graph/host-git）、根 tsc、`build:renderer`、
   `test:renderer-shell`（含 shell 来源代生命周期）、
@@ -314,50 +284,42 @@ design 16 文档保留为 OS 深链与 vscode 拉起的契约（§3.4/§5.2/§6.
   协调器 single-flight/epoch/桥消失清理、首次 IPC reject 后有界恢复与三次耗尽
   fail-closed，以及菜单 40 次 bridge-hydration 轮询所依赖的纯键盘状态机；生产
   `build:renderer` 覆盖 owned menu 的 React/portal 接线；
-- **五路对抗复核（2026-08，无 P0）**：修复 P1×3（测试机器依赖、AGENTS.md 行号
-  前缀事故、锁文件再生漂移还原）+ P2×7（孤儿 IPC 删除、path 上移、载荷形状守卫、
-  openPath 边界提取、URL 断言强化、门失败 spy、folder hover）。
-- **2026-08-28 第一轮合并前复核（历史）**：补齐普通 `Error` 形态的 provider/宿主适配器
-  异常边界、修正 Electron
-  `openPath` reject 的重复错误前缀、菜单用 `selectedId` 标出当前默认 app，并拒绝
-  空 sourceId；后续补 hostile-error/registry 回归。Linux 同平台完整分发构建通过；
-  `dist:desktop:mac` 在 Linux 上按平台保护拒绝 `linux-x64` 内嵌运行时，macOS dmg/zip
-  仍须按 DEVELOPMENT 的宿主要求在 macOS（release CI: macos-latest）验证。
-- **2026-08-28 全面契约复核（当前轮）**：根模块所有权/05 架构清单已补登记；
-  错误描述器可抵御 getter/toString 二次 throw；capability 增 `displayKind` 并对未知
-  provider 中性呈现；来源/能力项/open 结果严格校验；owned ARIA menu 补齐键盘与
-  焦点语义；bridge hydration 轮询严格 40 次；真实 app probe 增最多 3 次尝试、
-  相邻尝试间隔 500ms 的有界恢复；主进程 capability provider probe 失败逐项 loud，
-  Finder stat 只把 ENOENT/ENOTDIR 视作缺失；
-  N-ctx 改为 per-entry Context 私有事实并以 same-id boot tail/async teardown 隔离；
-  shell 对 boot/run 与 session runtimeCtx/list/open 的 hostile thrown value 也会
-  loud 收敛并 settle，不会悬挂 Promise；最终再补 opaque proof、retiredIds 与异步
-  ownership fence，旧 ctx 不能把动作或激活路由到同 id replacement。自动化/Linux
-  构建仍不能代证 macOS 实机 M3；最终 HEAD 的测试数量与分发证据只见 STATUS。
+- 契约面（既有用例守护）：错误描述器可抵御 getter/toString 二次 throw；capability 含
+  `displayKind` 并对未知 provider 中性呈现；来源/能力项/open 结果严格校验；owned ARIA menu
+  的键盘与焦点语义；bridge hydration 轮询严格 40 次；真实 app probe 最多 3 次尝试、
+  相邻尝试间隔 500ms 的有界恢复；主进程 capability provider probe 失败逐项 loud；
+  per-entry Context 私有事实 + same-id boot tail/async teardown 隔离；shell 对 boot/run 与
+  session runtimeCtx/list/open 的 hostile thrown value loud 收敛并 settle，不悬挂 Promise；
+  opaque proof、retiredIds 与异步 ownership fence 保证旧 ctx 不能把动作或激活路由到
+  同 id replacement；
+- macOS 打包验证必须在 macOS 上做：`dist:desktop:mac` 在 Linux 上按平台保护拒绝
+  `linux-x64` 内嵌运行时（release CI: macos-latest）。
 
-## 9. 已知边界与实机验收
+## 8. 已知边界与实机验收
 
-- **Windows 盘符路径**（design 23 M4 已解锁）：本地实例（`instanceId='local'`）的
+- **Windows 盘符路径**（design 23）：本地实例（`instanceId='local'`）的
   工作区走 `validateLocalPath`（接受盘符/UNC）；远端 dsh 会话路径仍
-  `validateRemotePath` POSIX 口径；win32 实机验收见 design 23 §8；
-- **本地文件管理器面（Batch 3 Phase 2 已迁出主进程）**：`showItemInFolder`/
+  `validateRemotePath` POSIX 口径；win32 实机验收见 design 23 §7；
+- **本地文件管理器面**：`showItemInFolder`/
   `openPath` 的 Electron 边界（void reveal、错误串语义、Darwin LaunchServices 包分类）
-  现由实例自身官方 resolver 负责，主进程不再持有该面；历史边界说明见 git 历史与
-  design 16 §8；
+  由实例自身官方 resolver 负责，主进程不持有该面（边界说明见 design 16 §8）；
 - **apps 会话内记忆化**：协调器 memo 真实结果；打开下拉或窗口重新获得 focus 时
   `refreshApps()` 重探，会话中途装/卸 app 与持续探测失败后的恢复无需刷新页面；
   点击时主进程仍做活体复检兜底（loud）；
+- **未实机验证项（须实机）**：官方 host 行随 a2 默认 profile 进入托管实例、
+  远程无 cookie 下 fence 行为、remote cwd 填充、图标缓存/CSP；
 - **实机验收剩余**：macOS Finder/vscode:// 实际拉起、按钮+下拉在 vendor 头部
   utilities 行的定位/层叠（"Session log 同槽"为描述性主张）、N-ctx 混合渲染、
   OS 深链冷/热启动与打包态回归。
 
-## 10. 相关文档
+## 9. 相关文档
 
 - `docs/design/01-overview.md` §3（文档地图，本文条目 20）
 - `docs/design/16-vscode-deeplink.md`（母设计：OS 深链 + 槽位/门控/IPC 纪律；
-  本文的 vscode provider 与其共享管线）
+  本文的 vscode provider 与其共享管线；该文 §3.4/§5.2/§6.4 中的旧 IPC 与桥面描述
+  属历史基线，以本文 §3 契约为准）
 - `docs/design/05-connection-manager.md` §7（trustedIpc 围栏 / 安全不变量）
-- `docs/design/08-git-worktree-plugin.md` §8（客户端插件锁步模板）
+- `docs/design/08-git-worktree-plugin.md` §7（客户端插件锁步模板）
 - openchamber 参考：`packages/ui/src/lib/openInApps.ts`、
   `packages/ui/src/components/desktop/OpenInAppButton.tsx`、electron
   `desktop_open_path`/`desktop_reveal_path`

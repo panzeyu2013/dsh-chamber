@@ -163,7 +163,7 @@ test('purgeArchivedSessions decodes counts and per-item errors (partial failure 
   assert.equal(result.deletedSubagents, 2)
   assert.equal(result.skippedRunning, 1)
   assert.deepEqual(result.errors, [{ sessionId: 's2', code: 'storage', message: 'fake failure' }])
-  // The host's registry-global orphan sweep count (design 24 §20 residual ①)
+  // The host's registry-global orphan sweep count (design 24 §12 F4)
   // is absent when the host did not report it.
   assert.equal(result.clearedOrphanMembers, undefined)
 })

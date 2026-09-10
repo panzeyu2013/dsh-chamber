@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 
 /**
  * App-side wiring contract for the purged-row archive-set memory (design 24
- * §21 F3). `App.tsx` cannot be imported by a node test (it renders the whole
+ * §12 F3). `App.tsx` cannot be imported by a node test (it renders the whole
  * shell), and the 2026-09 second scan proved that a wrong ORDER in this
  * handler silently turns the remembered-baseline closure into dead code: if
  * the memory is updated BEFORE `planSessionListRefresh` reads it, the

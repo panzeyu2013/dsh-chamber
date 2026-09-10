@@ -1,6 +1,6 @@
 /**
  * PluginDialog.tsx — the single unified plugin-management dialog (plan 24
- * B1 / D5-A, design 21 §6.6 + §10 勘误⑥ closed): PluginSyncModal (local +
+ * B1 / D5-A, design 21 §6.6 勘误⑥ closed): PluginSyncModal (local +
  * ssh) and PluginInventoryView (gateway + http-direct) merged into one
  * component whose backend fork is confined to the data sources and the
  * action dispatch (design 21 §3 single-model matrix). Unified zones:
@@ -16,7 +16,7 @@
  *     「重新同步 chamber 组件」action live in this zone;
  *   ③ third-party plugin zone (installed list + per-row remove + add: spec
  *     input + npm search + local import — a plugin source folder OR a ready
- *     .tgz archive, design 21 §10 archive-pick; the macOS picker offers
+ *     .tgz archive, design 21 §6.5 archive-pick; the macOS picker offers
  *     both, Windows/Linux keep the folder dialog);
  *   ④ recovery/action row (gateway only: runtimeDown + undoForLatest →
  *     recovery banner + recoveryUninstallRestart through the remove confirm
@@ -399,7 +399,7 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
     }
   }, [])
 
-  /** Confirm-remove one plugin from the LOCAL dsh profile (design 13 §5.1). */
+  /** Confirm-remove one plugin from the LOCAL dsh profile (design 13 §5). */
   const confirmLocalRemove = useCallback(async (): Promise<void> => {
     if (localRemoveTarget === null || localRemoveBusy) return
     setLocalRemoveBusy(true)
@@ -505,7 +505,7 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
     }
   }, [isSsh, sshSpec, seedBusy, loadSync])
 
-  /** One-click restart (design 08 §11): the chamber host packages are seeded
+  /** One-click restart (design 08 §6.3): the chamber host packages are seeded
    *  and the insert is in place, but the RUNNING instance has not loaded
    *  them — restarting is the step that makes them live. Re-probes after. */
   const doRestartNow = useCallback(async (): Promise<void> => {
@@ -1040,7 +1040,7 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
     }
   }, [searchQuery])
 
-  // ---- ssh sync apply orchestration (design 13 §4.5, unchanged) ----
+  // ---- ssh sync apply orchestration (design 13 §3, unchanged) ----
   const toggleRow = useCallback((name: string): void => {
     if (applyingRef.current) return
     setChecked(prev => {
@@ -1327,7 +1327,7 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
   )
 
   /** The add section (spec + npm search + local import — a source folder or
-   *  a ready .tgz archive, design 21 §10 archive-pick) for the three writable
+   *  a ready .tgz archive, design 21 §6.5 archive-pick) for the three writable
    *  backends; http-direct renders no add surface (design 21 §3). */
   const addSection = isHttp
     ? null
@@ -1938,7 +1938,7 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
     )
   }
 
-  /** ssh 统一主视图（UX 重构 P1 / design 21 §10 登记偏离）：已安装列表 + 添加
+  /** ssh 统一主视图（UX 重构 P1 / design 21 §6.6 登记偏离）：已安装列表 + 添加
    *  区，与 gateway/local 骨架同构；legacy 整盘 diff 折叠为「对账」次级入口
    *  （rows/filter/apply/undo 语义逐字保留，仅默认收起）。 */
   const sshZone = isSsh

@@ -1,5 +1,5 @@
 /**
- * Per-workspace Git occupant (design 08 §11, workspace-centric discovery).
+ * Per-workspace Git occupant (design 08 §3.2, workspace-centric discovery).
  * The sidebar renders this seat twice per source:
  *  - once with `workspaceId === ''` (source scope) — the source-level alert
  *    strip: recovery (with retry — a pending recovery blocks every git action
@@ -323,7 +323,7 @@ export function SidebarWorkspaceGitLine({
             type="button"
             className={`${css.headerGitAction} git-ws-action`}
             // A dirty worktree is NOT disabled: the remove dialog collects an
-            // explicit discard-changes checkbox instead (design 08 §6
+            // explicit discard-changes checkbox instead (design 08 §5.3
             // amendment 2026-08). A worktree with RUNNING sessions is not
             // disabled either (2026-09 user decision): there is NO wire flag
             // to opt out of the host's RUNNING guard — the host re-checks and

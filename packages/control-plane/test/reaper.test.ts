@@ -1,5 +1,5 @@
 /**
- * Reaper unit tests (design 02 §3.4.2): the triple-verification reclaim
+ * Reaper unit tests (design 02 §3.4): the triple-verification reclaim
  * sequence — identity (ps command line), port ownership (lsof→ss→/proc,
  * fail-closed when every probe is unavailable), orphanhood (ppid 1 /
  * owner dead) — plus the killAndConfirm SIGTERM→SIGKILL sequence.

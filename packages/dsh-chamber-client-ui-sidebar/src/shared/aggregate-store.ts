@@ -146,7 +146,7 @@ export interface OpenSessionOutcome extends OpenSessionRequest {
  * Per-instance runtime facts projected by the sidebar plugin of the source's
  * own ctx (design 06 §4): current session id plus per-session live rows. The
  * plugin projects the source's session-list snapshot (minus the ids it has
- * tombstoned as purged — design 24 §21) —
+ * tombstoned as purged — design 24 §12) —
  * every listed session carries its live `running` bit (the App layer derives
  * the completed-but-unread dot from running→idle edges itself, see App.tsx),
  * completed/pending ride the vendor armed state as sparse extras, and
@@ -179,7 +179,7 @@ type OpenOutcomeListener = (outcome: OpenSessionOutcome) => void
 type RefreshListener = (sourceId: string) => void
 /**
  * Per-source session-list refresh request (archive-cleanup convergence, design
- * 24 §20): a source's MOUNTED ctx session summaries are the official client's
+ * 24 §12): a source's MOUNTED ctx session summaries are the official client's
  * in-memory rows, refreshed only on connection generations — content purged by
  * the chamber host domain never triggers an official event (documented no-op),
  * so the deleted rows linger in the summaries and resurface in the sidebar
@@ -192,7 +192,7 @@ type RefreshListener = (sourceId: string) => void
  * own chamberInstanceId matches the requested source. Fired by the App's
  * ghost-row convergence machine (planSessionListRefresh — every ready mounted
  * push whose removed-archived rows are still listed) and by the archive
- * manager after every purge settle — see design 24 §20 / App.tsx. Since §21
+ * manager after every purge settle — see design 24 §12 / App.tsx. Since §12
  * the PRODUCER also triggers the same verified chain directly from its own
  * archive-set shrink observation (the channel is a backstop, not the only
  * trigger), and the official refresh MUST be invoked as a method on the

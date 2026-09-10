@@ -18,11 +18,11 @@ export interface RemoveViewTarget {
   sessionIds: string[]
   /** The snapshot reports uncommitted state (modified/untracked files). A
    *  dirty worktree requires the user to explicitly authorize discarding
-   *  those files before removal (design 08 §6 amendment 2026-08). */
+   *  those files before removal (design 08 §5.3 amendment 2026-08). */
   dirty: boolean
   /** Sessions the snapshot reports RUNNING under this worktree (ALL of them —
    *  display fact). Running sessions are NEVER touched by a removal (2026-09
-   *  user decision, design 08 §6 amendment): nothing is stopped, cancelled or
+   *  user decision, design 08 §5.2 amendment): nothing is stopped, cancelled or
    *  deleted. Whether they BLOCK is the host's archived-aware fact
    *  (`blockingRunningSessionIds`, see RemoveWorktreeDialog's note logic);
    *  these ids drive the informational note. */
@@ -74,7 +74,7 @@ export function RemoveWorktreeDialog({
   const [deleteBranch, setDeleteBranch] = useState(false)
   /** Explicit authorization to DISCARD the worktree's uncommitted files
    *  (modified/untracked). The branch and its commits are never touched —
-   *  only the working-tree files are lost (design 08 §6 amendment 2026-08). */
+   *  only the working-tree files are lost (design 08 §5.3 amendment 2026-08). */
   const [discardChanges, setDiscardChanges] = useState(false)
   /** Set when the host refused with `worktree-submodules`: the row fact
    *  cannot know submodule presence, so the refusal surfaces in-dialog and
@@ -191,7 +191,7 @@ export function RemoveWorktreeDialog({
     try {
       // Both authorizations map to the same `discardChanges` wire flag: the
       // host force-removes (--force) only under explicit user consent —
-      // dirty files (design 08 §6) and/or a submodule checkout inside the
+      // dirty files (design 08 §5.3) and/or a submodule checkout inside the
       // worktree (2026-09) are discarded; branch/commits/HEAD untouched.
       const discardAuthorized = (needsDiscardConfirmation && discardChanges)
         || (submoduleBlock && discardSubmodules)

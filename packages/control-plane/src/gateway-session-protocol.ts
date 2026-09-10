@@ -30,9 +30,9 @@ export const GATEWAY_SESSION_TTL_SECONDS = 12 * 60 * 60
 /** Maximum cookie VALUE characters the proxy injection gate and the desktop
  *  login cache accept (design 17 §9.3: `Cookie` bounded to the name + 4096). */
 export const GATEWAY_SESSION_COOKIE_VALUE_MAX_CHARS = 4096
-/** Shared bearer token: minimum characters (design 17 §5.2). */
+/** Shared bearer token: minimum characters (design 17 §7.2). */
 export const GATEWAY_TOKEN_MIN_CHARS = 32
-/** Shared bearer token: maximum characters (design 17 §5.2). */
+/** Shared bearer token: maximum characters (design 17 §7.2). */
 export const GATEWAY_TOKEN_MAX_CHARS = 4096
 /** Token character set: visible ASCII only (never control bytes — header
  *  injection is impossible on the wire). */

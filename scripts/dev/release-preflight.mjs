@@ -27,7 +27,7 @@
  *
  * 约定：按「release-checklist.md §1.5（建议新增）」承接清单 §1/§2/§4/§5 的
  * 机械项；§3 完整单测不在此执行（见文末 NOTICE——必须在**精确 release
- * 提交**上重跑，参见 AGENTS.md 验证清单）。
+ * 提交**上重跑，参见 docs/checklists/release-checklist.md §3）。
  */
 
 import { execFileSync, spawnSync } from 'node:child_process'

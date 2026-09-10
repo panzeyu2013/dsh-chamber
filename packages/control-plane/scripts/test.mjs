@@ -25,7 +25,7 @@ import { fileURLToPath } from 'node:url'
 const PACKAGE_ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)))
 const TEST_DIR = join(PACKAGE_ROOT, 'test')
 
-/** AGENTS.md Validation — the authoritative control-plane unit-test set. */
+/** The authoritative control-plane unit-test set (docs/checklists/release-checklist.md §3). */
 const FILES = [
   'protocol.test.ts',
   'storage.test.ts',

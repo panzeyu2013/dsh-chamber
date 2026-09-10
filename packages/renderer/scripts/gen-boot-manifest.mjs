@@ -26,7 +26,7 @@
  *
  * revs are sha1 content hashes shortened to 12 hex (the dsh convention).
  * The control plane serves this file at /manifest.json and injects it into
- * the served index.html as `window.__DSH_BOOT__` (design 05 §3.3); until
+ * the served index.html as `window.__DSH_BOOT__` (design 05 §7.3); until
  * that injection exists the chamber boot refuses to start (missing
  * manifest → loud AppWebEntry rejection).
  *

@@ -20,13 +20,13 @@
  *    re-enumerate and converge (no uncollectable orphans);
  *  - running subtrees are skipped whole (fail-closed), never partially cut;
  *  - merely LOADED (idle) subtrees are skipped by default and deletable only
- *    under an explicit `force` purge (2026-09 revision, design 24 §22);
+ *    under an explicit `force` purge (2026-09 revision, design 24 §3);
  *  - per-session isolation: one failure lands in `errors` and never blocks
  *    the remaining sessions (AGENTS: one failed entity must not erase or
  *    block unrelated complete entities);
  *  - idempotent per session: an id no longer in the set, or content already
  *    gone, is a no-op ("missing"), so repeated purges converge to empty;
- *  - registry-global orphan sweep (design 24 §20 residual ①): every purge run
+ *  - registry-global orphan sweep (design 24 §4 step 5): every purge run
  *    ALSO clears archived-set members that have no session record across the
  *    ENTIRE archived set — not just the run's candidate subset. Membership of
  *    record-less ids is the whole operation (ZERO new content-deletion
@@ -83,7 +83,7 @@ export interface ArchivedSessionState {
  * revision, user motion: "已归档的对话应该终止，所以可以直接 cancel 再删"):
  *  - `running`: the agent is executing a turn — content deletion is NEVER
  *    allowed (the live writer recreates a header-less artifact through
- *    `open(path,"a")`, see design 24 §22), even under `force`;
+ *    `open(path,"a")`, see design 24 §3), even under `force`;
  *  - `loaded`: the agent/session is attached to the process but idle — the
  *    default guard refuses it too (fail-closed), while an explicit
  *    `force: true` purge may delete it because the caller has already
@@ -197,7 +197,7 @@ export interface PurgeResult {
   /** True when item errors were truncated at MAX_PURGE_ERROR_RECORDS. */
   readonly truncated?: boolean
   /** Archived-set members removed by the registry-global ORPHAN SWEEP this
-   *  run (design 24 §20 residual ①): ids that sat in the archived set with no
+   *  run (design 24 §4 step 5): ids that sat in the archived set with no
    *  session record at all. Present only when at least one member was swept
    *  AND the single official set write succeeded; absent means zero.
    *  DELIBERATELY NOT part of `deletedSessions`/`deletedSubagents` — those
@@ -390,7 +390,7 @@ export function liveSessionIdsOf(
 }
 
 /**
- * Registry-global ORPHAN SWEEP predicate (design 24 §20 residual ①): the
+ * Registry-global ORPHAN SWEEP predicate (design 24 §4 step 5): the
  * archived-set members with NO session record at all — no content to delete
  * and no row in any official session list, so they are unreachable through
  * the archive manager (which lists rows ∩ set) and accumulate forever.
@@ -636,7 +636,7 @@ export class ArchiveCleanupCore {
    * therefore flip with candidate order for one selection — the UI never
    * selects hidden subagent rows, so presentation is unaffected.
    *
-   * SWEEP (design 24 §20 residual ①): independently of the filter, every run
+   * SWEEP (design 24 §4 step 5): independently of the filter, every run
    * clears archived-set members that are ORPHANS across the ENTIRE archived
    * set — ids with no session record in the run's authoritative snapshot
    * (`orphanArchivedMembers`). Historical no-directory members accumulated by
@@ -693,7 +693,7 @@ export class ArchiveCleanupCore {
    * attached session) is deleted too — the caller MUST have terminated the
    * run first (client-orchestrated `session/cancel` before purge). A RUNNING
    * member is still refused unconditionally (a live writer recreates a
-   * header-less artifact through `open(path,"a")`, design 24 §22). Default
+   * header-less artifact through `open(path,"a")`, design 24 §3). Default
    * (absent) = the historical fail-closed behavior, byte-for-byte.
    */
   async purge(sessionIds?: readonly string[], force = false): Promise<PurgeResult> {
@@ -703,7 +703,7 @@ export class ArchiveCleanupCore {
     // just to be refused. A provided EMPTY array is a deliberate
     // delete-nothing CONTENT subset (never the full-set interpretation); the
     // run still proceeds to the registry-global orphan sweep, which is
-    // orthogonal to the filter (design 24 §20 residual ①) and deletes no
+    // orthogonal to the filter (design 24 §4 step 5) and deletes no
     // content.
     if (sessionIds !== undefined) {
       if (!Array.isArray(sessionIds)
@@ -739,7 +739,7 @@ export class ArchiveCleanupCore {
     // completed tree IN THE SAME RUN instead of lagging to a later orphan
     // pass. Only ids that were members at snapshot time are ever cleared.
     const archivedAtStart = new Set<string>(archivedIds)
-    // Registry-global orphan sweep CANDIDATES (design 24 §20 residual ①):
+    // Registry-global orphan sweep CANDIDATES (design 24 §4 step 5):
     // record-less members of the WHOLE archived set (the subset filter does
     // not limit this — that is the point of the sweep), taken from the same
     // authoritative snapshot the run already read. The defensive capacity
@@ -876,7 +876,7 @@ export class ArchiveCleanupCore {
         }
       }
     }
-    // ---- Registry-global orphan sweep (design 24 §20 residual ①) --------
+    // ---- Registry-global orphan sweep (design 24 §4 step 5) --------
     // A sweep candidate has no record in the SNAPSHOT — which is exactly the
     // inference that caused the 2026-12 blocker, because both bulk
     // enumerations can narrow silently. Three gates stand between a candidate

@@ -229,7 +229,7 @@ import * as UiModelSelection from '@deepseek-ai/dsh-client-ui-model-selection/cl
 // therefore made per boot, mirroring the host-side picker-auto resolution.
 // Chamber pins the `browse` interaction for EVERY managed host: the local
 // host is spawned with the SSH_CONNECTION launch marker (spawn-dsh.ts, design
-// 02 §3.2.1), which makes its directory-picker-auto resolve `browse` (the
+// 02 §3.1), which makes its directory-picker-auto resolve `browse` (the
 // resolver's "SSH launch → in-app browse" arm) — so host.listDirectory /
 // host.createDirectory are served locally; remote instances are deployed per
 // 02 §3.9 with the same unit-level pin (headless servers resolve `browse`

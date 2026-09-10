@@ -225,7 +225,7 @@ vendor/
 | [README.md](../README.md) | 用户使用（功能/安装/部署/FAQ） |
 | 本文件 `docs/DEVELOPMENT.md` | 开发：架构/构建/打包/CI/发布 |
 | [CONTRIBUTING.md](../CONTRIBUTING.md) | 贡献流程（测试/Commit/PR 契约） |
-| [AGENTS.md](../AGENTS.md) | 常驻仓库规则（包边界/约束/验证清单） |
+| [AGENTS.md](../AGENTS.md) | 常驻仓库规则（包职责/硬性约束/STATUS 记录要求） |
 | [CHANGELOG.md](../CHANGELOG.md) | 版本变更记录 |
 | [docs/design/01-overview.md](design/01-overview.md) | 设计入口与收拢原则 |
 | [docs/progress/STATUS.md](progress/STATUS.md) | 进度总览（唯一进度记录） |

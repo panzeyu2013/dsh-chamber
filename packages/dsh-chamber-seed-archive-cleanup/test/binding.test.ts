@@ -1,4 +1,4 @@
-/** Real-binding tests (design 24 §10/§14 + security/perf review 2026-12):
+/** Real-binding tests (design 24 §10 + security/perf review 2026-12):
  *  `src/binding.ts` is decorator-free, so the ACTUAL factory and gate run
  *  under node:test against in-memory service fakes + a real temp filesystem
  *  for the locate/remove content leg. The gateway class (index.ts) keeps TS
@@ -528,7 +528,7 @@ test('binding: an absent official mutation chain refuses loudly (no out-of-chain
 })
 
 test('binding sweep: a purge clears registry-global record-less members in ONE chained write alongside the real content deletion', async () => {
-  // End-to-end (design 24 §20 residual ①) over the REAL binding: one archived
+  // End-to-end (design 24 §4 step 5) over the REAL binding: one archived
   // member with content + two historical no-directory members. The sweep must
   // remove all three memberships in the SAME single chained setState, delete
   // ONLY the content-bearing member's artifact, and never touch a record.

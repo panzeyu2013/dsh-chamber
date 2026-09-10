@@ -1,5 +1,5 @@
 /**
- * node:test for the chamber apply seam (`src/client/index.ts`, design 05 §3.6/
+ * node:test for the chamber apply seam (`src/client/index.ts`, design 05 §6/
  * §4): the per-entry `chamberBasePath` bound on the entry Context reaches the
  * generic RPC carrier and the exposed `handle.basePath` — no plugin config and
  * no page-global knob participate (2026-09 Batch 2 retired the config-passing

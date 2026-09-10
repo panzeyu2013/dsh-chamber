@@ -8,67 +8,18 @@
 
 ## 未完成 / 部分完成（剩余验收）
 
-> **2026-09 dsh 基线对齐记录（0.1.5-alpha.2，临时驻留；发布收口时并入 CHANGELOG 后移除）**：
-> 源码线 pin → dsh-v0.1.5-alpha.2（b2e3b2a01258，`update-vendor.mjs` 原子升级；vendor 链接
-> 271→**284**，上游 +17/−4 包）；运行时线六锚 → 0.1.5-alpha.2（`bin.js --version` 冒烟通过）。
-> 上游两代槽位模型重写（`details`→`rightbar`(root)、中心列 `conversation`→**keyed `main`**、
-> `sidebar.panellist`、`usePanelInfo`/`useResource`、`ctx.layout.selectPanel`）已全量重放：
-> layout fork（eager 实例 + `LayoutController(actions, hasMainPanel)` + 嵌套 store + `layoutFacts.getCollapsed()`）、
-> sidebar fork（brand/panellist 声明与投影）、mobile 插件（`ROLE_SLOT_KEYS` + 退役胶囊打标与自绘右栏覆盖层）、
-> settings bridge 台账、三 fork 副本、renderer（`ui-dockkit` covered factory；C4 契约 13→15）。
-> **设计 24 四项真机缺陷已修**：`list()` 快照形状（真机 preview/purge 曾全挂）、`inspect`→`stat`、
-> 代际全量删除 + 未识别条目整单拒绝、退役无消费者的错误分类器（design 24 §2 与 AGENTS 措辞同步）。
-> **版本锚收口（2026-09 收口轮）**：dsh 版本单一来源 = `packages/desktop/vendor/dsh/package.json`，
-> 六锚 + 3 fork 副本必须等于它；生产源码/脚本/配置里的其他「活」版本字面量已全部清除或按
-> C10 白名单登记（历史叙述只留在注释/CHANGELOG/测试夹具里）。
-> **D3 已裁决并落地（2026-09 三轮，四轮补全）**：N-ctx 同源壳下**五处**同源绝对 URL（`ui-chat`
-> 的 `/api/file`、`client-file-upload` 的 `/api/session/uploadFileBinary`、`ui-deliverables`
-> 的 `/api/present.host|open`、`session-log-export` 的 `/api/session.export`）改为经构建期
-> vendor 补丁集走本实例前缀（design 09 §3.6，7 条/7 文件/21 锚点；门 = 触点表 C9 + 产物断言）；
-> 为让补丁覆盖上传/导出客户端，`client-file-upload` 与 `session-log-export` 转为 composite
-> covered（covered/factory **57/26**，探针清单收敛为 `sidebarRight`），并把 `dsh-client-ui-mobile`
-> 与官方 `ui-directory-picker-native` 登记为 page-own 跳过。**剩余**：ssh/http dsh 目标无 cookie 注入（实例侧 401），属既有认证面。
-> **剩余实机门禁（未验证）**：多来源 sleep/wake 与隐藏恢复、gateway 形态回归、右侧栏栈在真实
-> profile 下的装载时序与 `provideRoot` 时序（`useResource`/`usePanelInfo`/`chamberFileApiBase`）、
-> session v3 迁移在真实存储上的行为、open-in 官方 host 行随 a2 profile 进入托管实例。**既有失败已清零**：
-> dsh-runtime `runtimeDiskSummaryAsync` rich-fixture 阈值断言（ZFS 目录 st_size 平台差异）已由三轮把 fixture
-> 失败族文件改为 2 KiB 修好，`test:runtime` 全绿。
-> **待裁决项（三轮全部裁决完毕，决策矩阵 D1–D7）**：D3 = 构建期 vendor 补丁集（已落地）；
-> D4 = **保留** chamber open-in 插件（官方 client 为严格子集；契约镜像因源码态 vendor 无 `lib/`
-> 而保留，已登记理由）；D5 = **保留** PluginDialog，**待补 `update(name,version)` 动作**（唯一缺口，
-> 非缺陷）；`runtime-host-adapter` 退役**不采纳**（是测试夹具契约，非死代码）；`ALLOW_BUILDS` 的
-> `fs-ext` **保留**（回滚目标 0.1.3-alpha.2 仍依赖，实测删除即安装失败）。
->
-> **2026-09 dsh 基线对齐记录（0.1.3-alpha.2，临时驻留；发布收口时并入 CHANGELOG 后移除）**：
-> 源码线 pin → dsh-v0.1.3-alpha.2（82a5fd61a7，`update-vendor.mjs` 原子升级，tag 与远程一致；
-> vendor 链接 267→**271**（+3 上游包目录：client/ui-open-in-app、host/open-in-app、
-> util/package-manifest；0 删除）；锁文件重生成后 frozen 稳定）。上游相对 alpha.1 为小内容
-> 版本：fork 副本重放——connection 采纳 recovery-config 抽取（重连/就绪时序默认值迁入共享
-> schema：3s 慢握手告警 + 15s 硬期限中止代次、达到上限后持续重试取代终态 disconnected；
-> chamber 的 loopEpoch 代际守卫与 `CONNECTION_BACKOFF_MAX_MS` 导出当时保留（**Batch 2 已退役**，
-> 见下方 T2/重锚记录）、`basePath` 收敛为
-> chamber apply 配置成员；connection node 测试新增 schemastery 桩 loader——vendor lib 为
-> source-only）、api-gateway 与 web 仅版本行；三副本版本标记 → 0.1.3-alpha.2。**运行时线
-> 收口**：npm `@deepseek-ai/dsh@0.1.3-alpha.2` 已发布 → bundle-dsh 兜底常量、desktop vendor
-> 锁文件（`bundle:dsh --force --refresh-lockfile`）、release.yml env、install-gateway.sh、
-> gateway `dshAnchorVersion` 四锚 rc.1→alpha.2，`bin.js --version` 冒烟 = 0.1.3-alpha.2
-> （双线门关闭）。chamber-covered 增 `@deepseek-ai/dsh-client-ui-open-in-app` 一行（T1 §2.4）。
-> 验证：ensure --check（271）、frozen、根/各 typecheck、全套测试（连接 recovery/liveness
-> 回归）、build:renderer、verify:i18n、test:release-workflow 绿。既有失败登记：dsh-runtime
-> `runtimeDiskSummaryAsync` rich-fixture `>1024` 阈值断言（ZFS 目录 st_size≈3——平台性，
-> 非本次升级引入；async==sync 对等断言通过）。实机探针验证（`commands/execute attachments`
-> wire key；open-in 官方 host 行 dormant 处置）待实机实例后执行（见分支方案 §2.4/§2.5）。
-
-**分支任务登记（v0.1.3-alpha1 规划，2026-09；**方案已定稿，用户批准**；执行按批次推进——全量方案已按 todo 目录纪律退役（留存 git 历史，`git show 94fa1c6^:docs/progress/todo/branch-plan-v0.1.3-alpha1.md` 可取全文，绿门见其 §8））**：
-- **T1 追踪上游 alpha.2 —— ✅ Batch 0 已完成（2026-09）**：源码线升级（pin 82a5fd61a7、链接 271）+ fork 重放（connection recovery-config）+ 双线收口（四锚 rc.1→alpha.2）+ covered 一行，全量记录见上方基线对齐块与 CHANGELOG [Unreleased]；实机探针（attachments wire key、open-in host 行 dormant）结转待实机。
-- **T2 目录/包命名统一 —— ✅ Batch 1 已完成（2026-09）**：命名收口为「目录 == 包名非 scope 段」——6 个 client 插件包名 → `@dsh-chamber/dsh-chamber-client-ui-*`（目录不变）；3 个宿主种子目录+包名 → `dsh-chamber-seed-<loader-id>` / `@dsh-chamber/dsh-chamber-seed-<loader-id>`（loader id、激活探针域、发布计数 15 不变）；mobile（client-kind）、三 fork 副本（shadow）、基建包不动。同批：`.gitignore` committed-dist 负规则随 `git mv`、全树引用 sweep（含锁文件 importer / renderer covered·factory / gateway 同步表 / 桌面 seed / 测试夹具）、两处种子登记处 fail-loud 命名断言（`kind === 'host'` ⇒ `dsh-chamber-seed-<loader-id>`；控制面在 start 与每次 spawn 解析、gateway 在模块加载）、远端 `cordis.patch.yml` 旧名行一次性 fold（`foldLegacyHostInserts`，防 id-bound 永久硬失败）、宿主 dist 产物字节不变（包名不内嵌 bundle）。绿门：16 项 typecheck + 全套测试（control-plane / gateway / desktop + 各插件包，0 失败；计数不在此登记）+ build:renderer / build:host-packages / 桌面 build:control-plane·host-graph-package·preload + gateway build·pack·tarball `--help` 冒烟 + 锁文件 frozen 稳定 + verify:i18n / verify:workflows / verify-upstream-touchpoints（C1–C8）/ release-preflight --versions-only。既有失败登记不变（dsh-runtime ZFS rich-fixture）；另修 Batch 0 遗留：schemastery 桩补齐 a2 recovery schema 构造链（`test:connection` 转绿，提交 5685c9a）。
-- **fork 重锚 alpha.2 + 补丁最小化 —— ✅ Batch 2 已完成（2026-09）**：三 fork 以 dsh-v0.1.3-alpha.2 为锚逐文件复核。connection：`connection.ts`/`browser-auth.ts` 恢复逐字节上游（loopEpoch 守卫与 stop()+start() 退役，改原生 `reconnect()`/`setNetworkAvailable()`；`CONNECTION_BACKOFF_MAX_MS` 导出删除 → `liveness-triggers.ts` 内部 `DEFAULT_MIN_RESTART_INTERVAL_MS` + 离线门）；`basePath` 收敛 `apply(ctx)` 读 `ctx.chamberBasePath`（chamber-entry 不再传 config）；`createWebConnectionRpc` 去兼容重载；新增 `client-apply` 门 + 桩 loader 扩展。client-web：`base.css` 恢复逐字节上游（token 表移 renderer 入口 CSS，head 顺序不变）；seed/platform 散文收敛。api-gateway：`apply(ctx)` 直读 ctx（去 `ClientRemoteOptions`）。触点登记同步（pure 16/5/6）。绿门：16 项 typecheck + 全套测试 0 失败（仅既有 dsh-runtime ZFS rich-fixture 登记失败）+ build:renderer/desktop 三件/gateway/host-packages + verify:i18n/workflows/touchpoints（C1–C8）。**未验证（需实机）**：本地/SSH 实例的 sleep/wake、隐藏恢复、版本歪斜容忍、gateway 形态回归——无实机实例环境，未执行。
-- **T3 openin 插件统一 —— ✅ Batch 3 已完成（Phase 0 + Phase 2，2026-09）**：Phase 0 per-source 视图模型（official/main 双池 × 来源矩阵 + 显式抑制原因 + channel 去重 + 默认选中）。Phase 2：`source-adapter.ts` 统一「per-source 双池选择 + basePath 重映射 + per-entry 通道路由 + 选择持久化」，本地来源吸收官方 client（catalog 协议锁步镜像 / 真实 bundle 图标 / 官方 app.* 标签表并入单一 NS / 选择持久化 / busy·error 呈现），经每实例代理 `<basePath>/open-in-app/*` 由**实例进程内**执行；同 id 按 §5.1「vscode 全家走 IPC 覆盖」+ r6「展示并集 + IPC 兜底」裁决（主进程可用则走 IPC，保留新窗口策略/proof/intent；不可用则官方兜底）；桌面主进程收窄为 vscode-only（`OpenInApp` 注册表 + `OpenInLaunchContext` 去 stat/openPath/reveal；finder provider 与 classifyLocalPath/invokeOpenPath/normalizeOpenPathError 退役），本地 launch 信任界迁至实例官方路由（红线修订已登记 design 16/20/05 + AGENTS）。绿门：typecheck:open-in/root、test:open-in（9 个文件）、test:desktop、build:renderer/desktop 三件、verify:i18n/touchpoints。**未实机验证（[UNVERIFIABLE]）**：官方 host 行随 a2 默认 profile 进入托管实例、远程无 cookie 下 fence 行为、remote cwd 填充、图标缓存/CSP；以及 Batch 2 的实机回归项。
-- **T4 上游接触面跟踪清单 —— ✅ Batch 0.5 已完成（2026-09）**：登记文档 `docs/checklists/upstream-touchpoints.md`（逐 fork 纯度表 / 有意未镜像表 / 深引与 roster / 契约镜像 / 再生物 / 保鲜自动化 / 每 tag 维护循环 / PR 自检项）+ 保鲜脚本 `scripts/dev/verify-upstream-touchpoints.mjs`（C1 pure 字节恒等、C2 `--tags` 重放报告 advisory、C3 完整性、C4 roster + remote 契约 13（现为 15，见上方 0.1.5-alpha.2 基线记录）、C5 过期锚扫描、C6 EXCLUDED 存在性、C7 种子域锁步、C8 生成物重建-比对硬失败（CI post-install 跑））+ CI Bootstrap 后 fail-loud 步骤（C1/C3/C5/C6）+ update-vendor 完成提示 + PR 模板自检节。
-- **批次进度**：Batch 0（T1）✅ → Batch 0.5（T4）✅ → Batch 1（T2）✅ → Batch 2（fork 重锚）✅ → Batch 3（T3）✅（Phase 0 + Phase 2；实机项待验），每批独立提交与绿门。
-- **连接恢复加固（2026-09，Batch 2 后续；专项调研驱动）✅**：① 每来源就绪期限——新增 `recovery-policy.ts`，api-gateway fork 经 `connection.start(sinks, config)` 给 ssh/http 来源传 45s/5s（本地保持上游 15s/3s），消除「冷隧道握手超期→无限重试」；② `system-resume` 旁路离线门（页面冻结错过 `online` 时的唯一自救），`online`/可见性仍受门约束，共享 10s 去抖；③ 职责边界登记进 design 05 §6（连接层是 push 通道唯一重开者；禁止同实例 stop()+start()）；④ 上游动向只读调研：最新 tag `dsh-v0.1.5-alpha.1`，三 fork 客户端恢复模型零改动（仅 fixture / 宿主半 webServer 可选注入 / 新平台词 dockkit），升级注意项入触点表 §2.4；⑤ **聚合刷新陈旧阈值按传输分级（H3，2026-09 补）**——S2 watchdog 原为单一 120s 且只覆盖 direct-http；现 http 保留 120s（无上游应用心跳），**ssh 新增 300s 兜底**（隧道已有三层独立探测器，该臂只补应用级冻结），本地/未知来源不武装，unary 30s 拉取节奏不变。绿门：test:connection（含新增 3 例恢复策略 + 2 例唤醒旁路）/ typecheck:connection·api-gateway / test:desktop / test:renderer-shell / build:renderer / verify:i18n / verify-upstream-touchpoints。
-- **dsh 0.1.5 升级 —— ✅ 已完成（2026-09，pin `dsh-v0.1.5-alpha.2` b2e3b2a0）**：全量记录见本文件顶部基线块、`CHANGELOG.md` 与 `docs/checklists/dsh-upgrade-migration-audit.md`；与版本无关的准备与工具链一并留存——`msgpackr-extract` 构建脚本显式否认（根 pnpm-workspace + dsh-runtime `DENY_BUILDS`/单源渲染器 + 测试）；**升级流程两处卡点均已修**（① `update-vendor` gitlink 先 `git add vendor/harness-checkout`；② `restore-lockfile-vendor-records.mjs` 加「成员仍在链接集合」守卫，不再从 HEAD 复活已移除的 landlock 4 条）；**新增升级前只读预检** `scripts/dev/preflight-vendor-pin.mjs`（fork pure/replay/dropped + 深引 vendor seam + 上游包增删 + 新增 client 行 + 运行时 npm 状态；`--offline`/`--json`/`--fail-on-replay`），实测 0.1.5：变更 2552 文件、pure 5/重放 6/dropped 6、**seam 16 全在 `client/ui-layout/*`**、包 +15/−4、新增 client 行 **5**（含带 `dsh.client` 的 `dsh-api-workspace-files`——原清单漏此一行）。原「剩余主体」（layout fork 重放、5 个新 client 行 roster、平台词 `ui-dockkit`、connection/api-gateway 重放、运行时六锚、锁文件 271→284）已全部落地，逐文件决策与执行顺序见 `docs/checklists/dsh-upgrade-decision-matrix.md`。
-- **收尾（2026-09）**：五批次全部落地（Batch 0 / 0.5 / 1 / 2 / 3 Phase 0+2，各自独立提交与绿门），并经**四路独立只读审计 + 一轮复核审计**确认（1 处 MEDIUM 实质缺口——open-in 同 id 裁决与方案 §5.1「vscode 全家走 IPC 覆盖」相反——及全部 LOW 登记/文档项已修，提交 `d85bc51` / `3f9511e`）。**方案文件已退役**：`docs/progress/todo/branch-plan-v0.1.3-alpha1.md` 与其 todo README 条目按该目录纪律删除（全文留存 git 历史），执行结果记录见本块与 CHANGELOG [Unreleased]。**收尾补批（W1/W2/W3，2026-09，pin 仍 alpha.2）**：锁文件 vendor 记录修复脚本加移除守卫（+3 例单测）、新增升级前 pin 预检脚本（+5 例单测）、聚合刷新陈旧阈值按传输分级（ssh 新增 300s 兜底）；三者由根脚本 `pnpm run test:upgrade-tools` 与 CI 步骤覆盖。**实机门禁（未验证，需真实实例/桌面）**：Batch 2 的 sleep/wake、隐藏恢复、版本歪斜容忍、gateway 形态回归；Batch 3 的官方 host 行随 a2 默认 profile 进入托管实例、远程无 cookie 下 fence 行为、remote cwd 填充、图标缓存/CSP；以及既有实机探针（`commands/execute attachments` wire key、open-in 官方 host 行 dormant 处置）。
+- **实机门禁（未验证；缺真实实例 / 打包态环境）**：
+  - 多来源 sleep/wake 与隐藏恢复、版本歪斜容忍、gateway 形态回归；
+  - 右侧栏栈在真实 profile 下的装载时序与 `provideRoot` 时序（`useResource` /
+    `usePanelInfo` / `chamberFileApiBase`）、session v3 迁移在真实存储上的行为；
+  - open-in：官方 host 行随 alpha.2 默认 profile 进入托管实例、官方 host 行 dormant
+    处置、远程无 cookie 下 fence 行为、remote cwd 填充、图标缓存 / CSP；
+  - 实机探针：`commands/execute attachments` wire key。
+- **ssh/http dsh 目标无 cookie 注入（实例侧 401）**：五处同源绝对 URL 由构建期 vendor
+  补丁集走本实例前缀（design 09 §3.6）；ssh/http dsh 目标的 cookie 注入属既有认证面，
+  未覆盖。
+- **PluginDialog `update(name, version)` 动作缺失**：2026-09 裁决**保留** PluginDialog
+  本体，唯一缺口 = 尚未提供 `update(name, version)` 动作（非缺陷）。
 
 - **dsh 运行时版本管理（design 18 §3.6/§9）**：剩余——macOS 打包态 `.app` 内共享 dsh-runtime/内嵌 pnpm/koffi 与完整激活-故障回退-恢复链的实机；Linux
   server 同款端到端；Gateway 重启窗口的前端重连与 connections 的 SSH
@@ -76,7 +27,7 @@
   grace 与健康计时器交错的覆盖；settings-bridge 的 gateway React 组件级交互仍以纯
   函数/API 客户端测试代证；ZFS 下全新 pnpm store 克隆偶发 `ERR_PNPM_EAGAIN`
   （失败投影诚实可重试，系统化并发缓解未排期）。
-- **apply-now 立即应用（design 18 addendum §9.2 实机门禁）**：macOS 打包态 `.app`
+- **apply-now 立即应用（design 18 addendum 实机门禁）**：macOS 打包态 `.app`
   运行中全链；Linux server gateway 生产 TLS 下 POST apply-now → 202 → 停机窗口轮询
   → 探针 → 故障注入回退；`restartLocal()` 真实 grace × 健康计时器交错；Gateway
   restart 窗口前端重连；Windows 只读投影。
@@ -105,8 +56,9 @@
 - **归档清理与归档管理器（design 24）**：剩余**仅测试类**——打包版实机目检（含
   幽灵行不再浮现、点击不再 `session/not-found`）、探针依赖实例就绪（fail-closed，
   行保持抑制）、语义级接线以源码契约 + 目检代证、集合 >65,536 不清扫（容量边界）；
-  以及实机 **gateway/远程 dsh 形态**与打包版 UI 目检（§19-9 偏差/待目检并入该腿）。
-  **§22 force 轮剩余实机验收**：卡在提问的归档会话 → 管理器删除 → 停止 + 强制清理成功；旧宿主（无 `force` 参数）的回退 + 说明；
+  以及实机 **gateway/远程 dsh 形态**与打包版 UI 目检（视觉腿偏差/待目检并入该腿，见
+  design 24 §6 与 §13 第 17 条）。
+  **force 链剩余实机验收（design 24 §13）**：卡在提问的归档会话 → 管理器删除 → 停止 + 强制清理成功；旧宿主（无 `force` 参数）的回退 + 说明；
   运行中子代理后代所在归档树一次删除收敛；本机 5 个「已加载」残留
   （`d8ae9ae5`/`d4d9bdbf`/`c54461f6`/`32b74f4a`/`10d9124a`）一次删除收敛。
   **登记残余**：事件发射为文档化 no-op 直至上游 wire，域随上游 `sessions.delete`
@@ -114,32 +66,14 @@
   force 可能删到正在追加的档（「读私有 phase 字段」为否决方案）；归档集合在 run
   起点快照、窗口内不重读。可选增强（未排期）：PluginDialog 三态行、rowError
   本地化、已归档浏览区（todo 12 A）、`preview` 暴露孤儿计数。
-- **移动端 Web 访问面（design 17 §18）**：P1/P1.5/适配轮已实现。mobile 分支
-  已落地：visualViewport 键盘补偿替换 layer-5 pinning（frame 级
-  `data-mobile-kbd` + `--dsh-mobile-kbd-offset` + 底部锚定联动滚动）、
-  Enter 换行后 composer 内滚 caret reveal、设置 sheet 分区切换滚动重置与
-  chips 条滚动条隐藏。**2026-12 评审修复轮 + 交叉复核轮**（6 lane 独立审查：
-  代码/症状/控制面/文档/复现/最优性；复核发现的 P1 已修）：
-  - tooltip 规则定为 `(pointer: coarse) and (hover: none)` +
-    `button[aria-label] + [role="tooltip"][data-side]`（原全局隐藏会连带杀掉
-    4 处信息型气泡：聊天统计行 / 代理预设卡片描述 / 轨迹时间轴 span /
-    ≤620px 轨迹 kind 标签；第五处 turn-rail 预览无 `data-side`，结构性排除）；
-  - 键盘补偿：arm 按 frame 元素幂等（重挂重新打标 + 清理旧 frame 属性）、
-    可编辑焦点守卫（focusin/focusout 打点 + 提交期 composer 选区兜底 + 1.2s
-    宽限）、**缩放策略 = 只服务 composer**（原 `scale > 1.01` 一票否决会让
-    iOS 聚焦缩放后 composer 永久停在键盘后——复核 P1；抽屉 13px 搜索框已补
-    16px 底线从源头消除聚焦缩放）、量化 16px（死区 8–23px，原 48px 为
-    8–55px）、arm 期间归零 seat 底部安全区 padding；
-  - 设置滚动复位只认分区 chip（纯函数 `isSectionChipClick` + 单测）且门控
-    手机档（769–1023px 触控平板保留官方行为）；
-  - 测试：移动插件 **60** 用例（0.2.4 时为 67；alpha.2 迁移重写用例后为 60）。
-  **复核提出但本轮未做**（待实机证据或设计决策，均已登记 §18.6 门禁）：
+- **移动端 Web 访问面（design 17 §18；实现契约见 §18.3–§18.5，门禁见 §18.6）**：
+  **复核提出但尚未实施**（待实机证据或设计决策，均已登记 §18.6 门禁）：
   「移动中量化 + 静止吸附精确值」（现 16px 固定量化，实机看抖动再定）、
   设置分区滚动位置记忆（现为一律复位——tab 惯例，非严格更优：无稳定 section
   id、异步内容高度不足会钳到顶）、宽屏触控设备（iPad 横屏 1024px+）的键盘
   补偿（行为层与 CSS 同在 1023px 触屏档，扩展需设计决策）、原生 `title`
   长按气泡不抑制（刻意手势，且部分 title 是截断行的唯一全文入口）。
-  剩余——上述改动的**实机门禁**（§18.6：真机触控目标比例/抽屉开合/键盘遮挡
+  剩余——**实机门禁**（§18.6：真机触控目标比例/抽屉开合/键盘遮挡
   （含新补偿层的 iOS 时序与 Android WebView 盲区、**聚焦缩放后的打字正例**、
   缩放态平移不得引起抖动、捏合缩放负例、提交窗口不闪落、重挂 re-arm、
   死区 ≤23px）/安全区/汉堡不重叠/crumbs 换行/Session 日志图标化/iOS 单击
@@ -163,8 +97,8 @@
     菜单不关）。**本机日志复核结论**：gateway journal（9/04–9/09）只有 1 次
     浏览器腿心跳拆链 ⇒ 代理心跳不是主因；`audit.log` 无周期性 login（
     127.0.0.1 的 50–70s 突发为本机测试流量）；无周期性整页重载/SW 行为。
-    本轮新增**有界取证日志**（`proxy-forward.ts`：`WebSocket stream <id>
-    closed (<cause>, <ms>ms)`，cause 无括号、logger 抛异常不锁死拆链）以区分
+    有界**取证日志**（`proxy-forward.ts`：`WebSocket stream <id>
+    closed (<cause>, <ms>ms)`，cause 无括号、logger 抛异常不锁死拆链）用于区分
     实例侧判死与客户端主动重连；**归因边界**：cause 记「先观察到哪条腿结束」，
     代理主动撤销也会记成 `upstream close`。下一步：浏览器 DevTools 抓
     `remote.mux` 的 **close code + 节奏**（1006 链路断 / 4000 客户端重连）；
@@ -181,12 +115,12 @@
   win32/NSIS protocols/Defender/原生依赖实证；M2a runner 事务矩阵；**M2b UI 翻转
   （纪律：M2a 真实 win32 全绿前不做）**；M3/M4 实机矩阵与打包验证。M5/M6 发布面
   决策/演练待发布前（另见桌面端更新、发布/CI 条）。
-- **Linux 桌面（design 22）**：剩余实机门禁按 design 22 §8
+- **Linux 桌面（design 22）**：剩余实机门禁按 design 22 §7
   清单（GNOME X11+Wayland/KDE 抽验：XDG 自启、深链冷/热与 CHROME_DESKTOP/xdg-mime
   路由及升级后重注册、托盘/通知点击、safeStorage keyring、SSH 密码全链、运行时
   打包态全链、自动更新端到端、AppImage 沙箱与 Wayland 焦点；另复核 before-quit
   无头挂住行为）；release.yml dry_run 全链（需 GitHub 可达）；deb/arm64 后续。
-  已知未动项登记于 design 22 **§6**（裸 CLI stateDir 提示、pnpm home 边角、
+  已知未动项登记于 design 22 **§5**（裸 CLI stateDir 提示、pnpm home 边角、
   private-fs 严格 fsync 审计结论等）。
 - **桌面通知 / 未读徽标（design 19）**：通知剩余 macOS 权限/拒绝行为、点击打开、
   关窗/托盘/后台三形态与打包态实机；徽标剩余 macOS Dock 打包态三态（武装/解除/退役
@@ -196,7 +130,7 @@
   同源/跨来源/未常驻跳转与权威移除、折叠来源中目标、断连→重连重现、rail 不渲染、
   「还有 N 项」展开/收起与自动收起、展开内滚动（8 行上限）、拖拽尾随点击不误开、
   同会话内联重命名不打断、打包态。
-- **VS Code 深链 + open-in（designs 16/20；窗口策略已核查修复）**：剩余 macOS 实机
+- **VS Code 深链 + open-in（designs 16/20）**：剩余 macOS 实机
   验收——深链冷/热启动、打包态、托盘/退出在途、N-ctx、VS Code 缺失、`sshPort != 22`、
   本地官方应用下拉在 vendor 会话头部的定位/层叠、远程来源仅 VS Code（新窗口/复用两态在  打包态真机确认）。
 - **Git Worktree 插件（design 08）**：剩余真实远程 Linux + Git 仓库端到端（首次
@@ -210,10 +144,6 @@
   installed/patched/live 三态与「注入/重启」按钮行为、gateway seed-cache 漂移列。
 - **会话创建/fork 侧边栏收敛延迟修复**：剩余本地 + 远程 SSH 实例实机验收（行出现
   延迟、状态图标延迟、位置跳动）。
-- **chamber shell 内官方 bundle 的实例相对绝对路径（已知缺陷，2026-08 缓办决策）**：
-  官方 bundle 若绕过 patched carrier 以实例 origin 相对路径直请求会打到控制面自身；
-  已知实例 `dsh-session-log-export`（「导出会话日志」在 chamber 视图不可用）。用户
-  决策：不逐个临时 fork，待出现第二个同类特性时一次性建立 patched-copy 基础设施。
 - **发布/CI 基础设施**：test job 抽 reusable workflow 供 release.yml 复用（长期目标，
   现靠策略测试与人工同步，有漂移风险）；vendor submodule 剩余验收（Windows runner
   物化 + junction 建链、CI 真跑、release.yml 改动后 workflow_dispatch dry_run）；
@@ -225,19 +155,20 @@
 - **性能整改第二阶段（视图保留/后台门控/行窗口，2026 A/B/C/D）剩余实机验收**：
   剩余——打包版/带会话 dev 实例同环境 A/B（measure-ui：DOM 节点分壳/堆/空闲长任务/合成
   输入帧/预热壳数）+「打开→切走→重开 ×3 堆无净增长」（×3 需多次快照序列）；
-  验收表与语义偏差见 performance-baseline.md §10 与 design 05 §1 注记。已知取舍
+  验收表与语义偏差见 performance-baseline.md §10 与 design 05 §4 注记。已知取舍
   （登记）：被回收壳内运行中任务完成蓝点/通知边沿暂停至源重开（冷 boot 首报重
   播种）；侧栏聚合落 30s unary 兜底（05 §2.3）。
 - **SSH 密码一键免密引导与系统钥匙串（05 §8）**：未实现（现行为 endpoint-bound 0600
   明文镜像，见取舍）。
 - **模型额外参数 + 默认推理等级（design 07）**：wire 白名单无泛化透传、host 组合不
-  可注入、`agent-default-model` 未对客户端暴露——待上游解锁；`agent-default-model`
-  回显已解锁、实现另行排期。
+  可注入——待上游解锁；`agent-default-model` 客户端**可读可写**（`settings.describe`
+  不过滤 namespace，旧 `exposedNamespaces` 机制在当前 pin 已不存在，见 design 07 §2.4），
+  但回显/设置入口不在本蓝本范围内，**实现未排期**。
 
 ## 一致性债务与开放登记（低–中，未排期；均指回代码面注释/design 登记）
 
-- **设置面图驱动贡献集（2026-12 落地，design 05 §5 / 09 §4·§6；剩余登记）**：
-  桌面设置壳对选中来源的贡献集已改为「基础集 + 该来源自己的客户端插件图」
+- **设置面图驱动贡献集残余（design 05 §5 / 09 §4·§5；剩余登记）**：
+  桌面设置壳对选中来源的贡献集 = 「基础集 + 该来源自己的客户端插件图」
   （`clientGraph/graph` − `CHAMBER_COVERED_IDS`，经页面级 union 模块表装载，与 boot
   同一 kernel）。剩余与有意偏差：
   - **T2（真实 WS remote）未接线**：child ctx 的 `remote` 仍是手工 unary 面 +
@@ -265,7 +196,7 @@
     ④ **与官方前端/gateway 链不对称**：同一插件在实例自身前端（真 remote）可用、在桌面
     设置页不可用或陈旧（17 §10.5 同源）。
     **不是后果**：设置读写仍落目标宿主（`isLoopback` 固定 true → `persistence='host'`）；
-    官方分节功能完整；本次目标（每来源贡献来自自身图）已达成；扩展插件侧无静默。
+    官方分节功能完整；每来源贡献来自自身图（本主题的设计目标）；扩展插件侧无静默。
     **残余盲区**：①"渲染了但一直为空"且未调 `$on`、未崩溃的插件，与"该插件没有设置"
     不可区分；②官方分节的陈旧**不产生任何提示**（能力报告只覆盖扩展插件）。
     **不做 T2 的低成本缓解（候选，未实施）**：面板加「重新读取数据」动作（重跑
@@ -285,28 +216,9 @@
   - **壳不渲染的座位**：`settings.trigger/header/close/onboarding` 刻意不渲染，第三方
     贡献只报告不呈现；`settings.action` 保持「仅本地来源」限定。
   - **未实机验证**：无真实实例/打包态环境，第三方插件装载、双挂载副作用、遮蔽看门狗
-    与 `onEntryError` 诊断均只经单测（settings-extensions 22 例 / client-plugin-loader
-    10 例 / settings-shell 4 例 / nav-active 6 例 / base-plugins-lockstep 2 例）与静态走查
-    确认，待实机冒烟。基础集 ↔ covered 的 lockstep 不变量已由该测试机械强制
-    （此前仅为文档口径）。
+    与 `onEntryError` 诊断均只经单测与静态走查确认，待实机冒烟。
   - **上游提案未排期**：`contributes.settings` 声明式描述符 + 设置面服务契约 +
     descriptor 上线通道见 `docs/progress/todo/settings-surface-upstream-contributions.md`。
-  - **自审修复（2026-12，落地后两轮全量改动复查）**：
-    首轮：①**晚激活误报**——扩展集顺序挂载时，依赖「同一批中后挂载插件」提供的
-    服务的插件首轮被判 `inactive` 且**永久冻结**；现 `publish` 前按 live fiber 树
-    重分类（`mergeContributionVerdict`，保留归因事实、丢弃过期失败字段），补 2 例
-    单测；②`bridge-context.ts` 删除无人引用的 `OMITTED_SETTINGS_SEATS`/
-    `RENDERED_SETTINGS_SEATS`/类型再导出；③STATUS 计数校正。
-    次轮：④图缓存改为**恢复后**的最终行（`host-graph.ts` 原先把 pass-1 行入缓存，
-    重启跨越 boot 的实例会给面板留下 404 的陈旧 rev）；⑤装配失败路径先
-    `phase.cancel()` 再 dispose ctx（悬空 phase 不得触碰已释放上下文）；⑥
-    `internal/plugin` 观察者退订在已释放上下文上不得抛出。
-    复查同时确认：工作区无
-    计划外改动（受版本控制内容改动 36 个文件，逐项对应 P0–P3；`CHANGELOG.md`、
-    其英文镜像与 `docs/i18n-record.json` 仅 mtime 变化——本次新增条目已按
-    「仅发布时总结」规则移除，`verify:i18n` 一致）、构建产物
-    `packages/renderer/{.cache,src/generated}/` 属 gitignore、`pnpm-lock.yaml` 未被
-    改写、无调试残留与失效标识符引用。
 - 私有文件纪律三实现（cp `private-file.ts` 抛错式 vs dsh-runtime `private-fs.ts` kind
   结果式，同名异签）——统一需依赖方向裁定（design 18 §9.1）。
 - wire 载体（A–F）登记维持：P4-3 A↔C 传输层合并**裁定不合并**（前置 ①–⑦，任一项
@@ -341,8 +253,9 @@
   容器重启清掉），01:22 的非优雅死亡与 01:35 陈旧锁接管已解释为容器被外部非正常
   终止 + 网关自身的锁接管恢复，09-07 23:45:29 已解释为手工 install/update。
 - **N-ctx 文档级主题投影归属（design 06 §4.6）**：剩余=打包态实机目检——首屏、视图
-  切换与回收窗口的 checkbox 深浅，以及预热视图不再互踩主题。
-- **Git 来源分支候选（design 08 §11.5 尾条）**：剩余=打包态实机目检（判别期 harness
+  切换与回收窗口的 checkbox 深浅，以及预热视图不再互踩主题（验收前须
+  `pnpm run dist:desktop:mac` 重打包：安装态 `.app` 可能落后仓库一个构建）。
+- **Git 来源分支候选（design 08 §4.2 尾条）**：剩余=打包态实机目检（判别期 harness
   gateway 停机，wire 快照仅由 host 代码路径 + 宿主 git 事实推断）；unborn（零提交）
   仓库 `branches` 必空 + 默认 base 40 零直送 git 无 preview 门仍为代码面已知残留
   （实机无此形态）。
@@ -387,14 +300,21 @@
 - **N-ctx 单文档信任域**：连接远端实例让其前端与同一 renderer 文档内其他实例及高
   权限 preload bridge 共域；现有 main-frame/origin/proof/主进程确认只能缓解，真正
   横向隔离推迟到每实例独立 WebContents 架构。
-- **N-ctx 壳常驻语义收窄（2026 性能整改偏差，已登记代码注释与 design 05 §1）**：
-  05 §1/§4 的「booted 壳无限常驻 / 视图生命周期 = 注册表条目生命周期」收窄为
+- **N-ctx 壳常驻语义收窄（2026 性能整改偏差，已登记代码注释与 design 05 §4）**：
+  05 §4 的「booted 壳无限常驻 / 视图生命周期 = 注册表条目生命周期」收窄为
   chamber 保留策略——local 恒留，隐藏壳最多保留 RETAINED_HIDDEN_VIEWS=1，超限
   回收「已 settle + 连续隐藏 ≥60s」的最久者（回收 = dispose shell + 卸载壳，
   实例进程/连接不受影响，重开冷 boot）；被回收源不再自动预热直到用户点开。
   运行中任务的完成蓝点/通知边沿随壳回收暂停至重开（取舍登记，见上条目）。
 - **不做（v1）**：跨来源移动会话、单 store 真融合、控制面会话实时同步、远程实例
   管理 UI 外壳。**推迟**：flat 单列表模式（与「仅按来源分类」呈现原则有张力）。
+- **保留项（2026-09 裁决，仍有效）**：`ALLOW_BUILDS` 的 `fs-ext` **保留**（回滚目标
+  0.1.3-alpha.2 仍依赖，删除即安装失败；登记在 `pnpm-workspace.yaml` 与
+  `packages/dsh-runtime/src/allow-builds.mjs`）；`runtime-host-adapter` 退役**不采纳**
+  （是测试夹具契约，非死代码）；chamber open-in 插件**保留**并吸收官方 client
+  （官方 client 为严格子集），官方宿主协议/标签表以镜像 + 字节级锁步维护
+  （不直接 import 官方 `./shared`：该 export 指向 `lib/types/shared.js`，源码态 vendor
+  只有 `src/`）——登记见 design 20 与 `docs/checklists/upstream-touchpoints.md` §4。
 - **设置壳偏差**：未连接实例不装配子 ctx；stub remote 无 WS 失效流；壳不渲染官方
   SettingsRoot、子 ctx 懒装配；服务器选择器 body portal + viewport 翻转/钳位与内部
   滚动；离线远端仍可选并显示不可达占位与连接管理动作；chrome 跟随宿主 locale，子
@@ -446,80 +366,62 @@
     ——`shouldRetainPushedAggregate`——重连 ready-edge 不再整提交兜底降级视图；
     残留/历史降级视图由兜底看门狗限流触发 ctx 连接重连（`shouldRebaselineFallbackView`）
     重放 follow baseline 自愈）。
-  - **首屏「整源降级直到被点击」形态（2026-12 修复 + 实机判别补登记）**：0.2.3 性能
-    整改把「每个 ready 来源最终串行挂载」的旧通道移除后，首启只有 local 挂载 + 1 个
-    预热槽且不轮转、被回收来源在用户点击前禁预热，于是 N-1 个 ready 远程源**稳态
-    停留**在 unary 兜底视图（合成工作区分组 + 空归档集 ⇒ 已归档会话按普通行浮出、
-    无真实工作区动作），直到用户点该服务器（`selectView` 重挂载 → follow baseline）。
+  - **首屏「整源降级直到被点击」的登记残留（design 05 §2.3「首屏基线收割」；机制见
+    `packages/renderer/src/baseline-harvest.ts` 与 App 接线）**：0.2.3 性能整改移除
+    「每个 ready 来源最终串行挂载」旧通道后，首启只有 local 挂载 + 1 个预热槽且不
+    轮转、被回收来源在用户点击前禁预热，于是 N-1 个 ready 远程源**稳态停留**在
+    unary 兜底视图（合成工作区分组 + 空归档集 ⇒ 已归档会话按普通行浮出、无真实
+    工作区动作），直到用户点该服务器（`selectView` 重挂载 → follow baseline）；
     **全部自愈臂都要求 `mounted===true`**（`shouldRebaselineFallbackView`、S2 stale
-    臂、`planSessionListRefresh`），对首屏未挂载源永不生效；30s 看门狗只重复提交
-    同一份全量兜底，不会变权威。**修复（已实施，design 05 §2.3「首屏基线收割」）**：
-    `packages/renderer/src/baseline-harvest.ts` + App 接线——ready 未挂载源在同一
-    后台预热槽里挂一次、首个权威推送即回收（尝试上限 2、失败退避 120s、挂载后
-    `BOOT_TIMEOUT_MS+15s` 无推送且壳已 settle 判失败、另有绝对放弃上限回收并停用
-    挂死壳（同一上限也按挂载时刻、仅对未 settle 的挂载独立看管"在途挂载"本身，
-    且 shell.ts 对"等待上一代 boot"设**绝对**上限（前代起始 + 两个 boot 预算，
-    所有后继共享同一截止）——否则该源此后每次重挂都卡在 `previousInstanceBoot`
-    上（不可提前释放尾：尾持有 generation 记录，提前释放会让迟到前代同号注册覆盖
-    后继）；同族加固：页面的 producer 注册表按**代际栅栏**（`chamberBootGeneration`
-    经 ctx 注入），迟到的老 boot 注册作废、其 teardown 不再可能清空健康后继的通道；
-    放弃臂按**每个挂载视图的挂载时刻**判定（不只预热在途），活动/待开视图标记失败
-    让覆盖层与重试出现，重试换新容器并丢弃被取代的迟到 settle；
-    在途壳不计入 retention 的隐藏壳数，避免挤掉用户温壳）、用户点开即采用、
-    退役同源收敛；
-    **存在收割候选时独占后台槽**——温壳若
-    顶上来会以 `autoPrewarmed` 身份长期占位并让剩余源永远拿不到基线；托管 dsh
-    停机的 gateway 源不预热/不收割）。**剩余验收=打包态实机**（首启 N-1 源在收割窗
-    内出现真实分组与归档过滤、稳态无驻留壳、慢隧道/失败源退避不卡 boot 链、收割期
-    用户点击不被回收）。**登记残留**：①尝试耗尽仍未拿到基线的源（`harvestParked`）
-    **不再退回普通预热**（否则白拿第三次 boot 并长期占用唯一后台槽），它保持未挂载
-    并停在兜底视图，只能靠用户点击自愈；②已收割源的归档集在两次收割之间冻结（外部
-    客户端变更/未挂载源的设计 24 purge 需**用户点开（重挂载）**才可见——已满足基线的
-    源不再回到收割队列，与下条同族）；③首启每个
-    ready 源各付一次后台 boot（稳态 ≤1 壳不变，属性能取舍；启动窗口内用户首次点击
-    的排队概率上升，最坏受 60s boot 预算约束；**收割有独立预算线**——用户保留的
-    隐藏温壳不再永久挡死收割，代价是收割窗口内最坏多一个隐藏壳）；④**最后收割的
-    壳被保留为温壳**
-    （省掉一次预热 boot，且该源的挂载期状态事实保持在线），遇到新收割候选时由
-    `shouldReclaimHarvestedShell` 让位——"温壳长期占槽导致后续 ready 源无法收割"
-    的形态已闭合；⑤**降级列表的诚实标注已补**（`source.baselinePending`：`connected
-    && aggregateReady && archiveSetKnown !== true` 时就地提示"基线未就绪/降级列表"），
+    臂、`planSessionListRefresh`），对首屏未挂载源永不生效，30s 看门狗只重复提交
+    同一份全量兜底。首屏基线收割即针对该形态：ready 未挂载源在后台预热槽挂一次、
+    首个权威推送即回收（尝试上限 2、失败退避 120s；存在收割候选时独占后台槽，
+    托管 dsh 停机的 gateway 源不预热/不收割）。
+    **剩余验收=打包态实机**：首启 N-1 源在收割窗内出现真实分组与归档过滤、稳态无
+    驻留壳、慢隧道/失败源退避不卡 boot 链、收割期用户点击不被回收。
+    **登记残留**：①尝试耗尽仍未拿到基线的源（`harvestParked`）**不再退回普通预热**
+    （否则白拿第三次 boot 并长期占用唯一后台槽），保持未挂载并停在兜底视图，只能
+    靠用户点击自愈；②已收割源的归档集在两次收割之间冻结（外部客户端变更 / 未挂载
+    源的设计 24 purge 需**用户点开（重挂载）**才可见——已满足基线的源不再回到收割
+    队列，与下条同族）；③首启每个 ready 源各付一次后台 boot（稳态 ≤1 壳不变，属
+    性能取舍；启动窗口内用户首次点击的排队概率上升，最坏受 60s boot 预算约束；
+    **收割有独立预算线**——用户保留的隐藏温壳不再永久挡死收割，代价是收割窗口内
+    最坏多一个隐藏壳）；④**最后收割的壳被保留为温壳**（省掉一次预热 boot，且该源
+    的挂载期状态事实保持在线），遇到新收割候选时由 `shouldReclaimHarvestedShell`
+    让位；⑤**降级列表的诚实标注**（`source.baselinePending`：`connected &&
+    aggregateReady && archiveSetKnown !== true` 时就地提示"基线未就绪/降级列表"），
     托管 dsh 停机另有就地原因 + 恢复入口提示（`source.managedDown`，状态词复用既有
     `status.*`）。
-  - **gateway 形态 `ready` 不蕴含托管 dsh 就绪（2026-12 修复 + 实机判别补登记）**：
-    desktop 的 ready 只证明 gateway 进程活着（`ssh-provider.ts` 的 `verifyUp` 只探
-    `/chamber/runtime/status`），侧栏**不消费**该响应的 `connectionState`，因此托管
-    dsh 停机/重启窗口内 UI 无降级投影：`+` 建会话入口只在非 synthetic 真实工作区行
-    渲染、状态显示（运行环/pending/完成点）只存在于挂载 producer 推送，"transport
-    ready 而 dsh 已停"的窗口里按钮可点而背后不可用（dsh 直连目标无此问题——verify
-    直接探 dsh 本体）。**修复（已实施，`shared/managed-runtime.ts` + App 15s 前台
-    探针；判定走**独立字段** `managedRuntimeDown`，只在该源传输 `ready|degraded`
-    且探针报终态停机时为 true——绝不从合并后的 `phase` 反推，因为两套词表都含
-    `error`，反推会把隧道失败误诊为托管停机，2026-12 复查 BLOCKER）**：
-    gateway 来源的 `connectionState` 投影进该源——终态停机
-    （`stopped`/`error`/`restart-exhausted`）把 phase 换成该状态（侧栏既有状态点与
-    `status.stopped/error/restartExhausted` 文案直接复用，无新增文案）并置
-    `connected=false`（动作入口按既有语义禁用）；`starting`/`restarting` 同样投影进
-    phase 并折叠进 `connected=false`（dsh 未服务，动作只会 503；忙碌点仍显示，
-    侧栏另有 `source.managedStarting` 说明行）；`degraded` 保持传输态、按既有语义
-    呈现为**未连接**（`instanceConnected` 只认 `ready`，会话子树隐藏）；探针缺失/
-    非 200/代理失败一律 **fail open**
-    （绝不拿缺失探针隐藏健康来源）。**剩余验收=打包态实机**：真停托管 dsh 后侧栏
-    由绿转红且 `+` 禁用、重启后自动恢复；探针周期与 `/api/connections` 轮询叠加的
-    请求量目检。**登记残留**：①托管 dsh 停机**不门控 unary 兜底 watchdog**——从未
-    挂载的 down 源仍每 30s 拉一次（503 + 3s×5 重试突发），行虽已隐藏（权威事实已
-    在手上，可顺手接进 `collectReadySourceIds`，但该谓词被多处共用，需单独裁定）；
-    ②托管停机源的来源头**不再是可激活入口**（无 role/tabIndex/onClick，title/aria
-    改为说明原因；2026-12 复查 MAJOR-2）——实测该路径原本到不了失败覆盖层
+  - **gateway 形态 `ready` 不蕴含托管 dsh 就绪的登记残留（sidebar `shared/managed-runtime.ts`
+    + App 15s 前台探针）**：desktop 的 ready 只证明 gateway 进程活着
+    （`ssh-provider.ts` 的 `verifyUp` 只探 `/chamber/runtime/status`），侧栏**不消费**
+    该响应的 `connectionState`，因此托管 dsh 停机/重启窗口内 UI 无降级投影：`+`
+    建会话入口只在非 synthetic 真实工作区行渲染、状态显示（运行环/pending/完成点）
+    只存在于挂载 producer 推送，"transport ready 而 dsh 已停"的窗口里按钮可点而
+    背后不可用（dsh 直连目标无此问题——verify 直接探 dsh 本体）。现行投影：判定走
+    **独立字段** `managedRuntimeDown`（只在该源传输 `ready|degraded` 且探针报终态
+    停机时为 true——绝不从合并后的 `phase` 反推，两套词表都含 `error`，反推会把
+    隧道失败误诊为托管停机）；终态停机（`stopped`/`error`/`restart-exhausted`）把
+    phase 换成该状态并置 `connected=false`（动作入口按既有语义禁用）；`starting`/
+    `restarting` 同样投影并折叠进 `connected=false`（dsh 未服务，动作只会 503；
+    侧栏另有 `source.managedStarting` 说明行）；`degraded` 保持传输态、呈现为
+    **未连接**（`instanceConnected` 只认 `ready`，会话子树隐藏）；探针缺失/非 200/
+    代理失败一律 **fail open**（绝不拿缺失探针隐藏健康来源）。
+    **剩余验收=打包态实机**：真停托管 dsh 后侧栏由绿转红且 `+` 禁用、重启后自动
+    恢复；探针周期与 `/api/connections` 轮询叠加的请求量目检。
+    **登记残留**：①托管 dsh 停机**不门控 unary 兜底 watchdog**——从未挂载的 down
+    源仍每 30s 拉一次（503 + 3s×5 重试突发），行已隐藏；接进 `collectReadySourceIds`
+    需单独裁定（该谓词多处共用）；②托管停机源的来源头**不再是可激活入口**（无
+    role/tabIndex/onClick，title/aria 改为说明原因）——该路径原本到不了失败覆盖层
     （boot 成功、body 渲染空壳，vendor ConnectionBanner 无 owner），故就地补一行
-    原因 + 恢复入口（`source.managedDown`）；深链/通知仍可激活该源（App 侧按
-    注册表权威放行，落空则由失败覆盖层呈现）；③settings-bridge 在 `connected=false`
-    时把整个设置面板换成 `targetUnavailable`，对"托管 dsh 停机但隧道正常"文案不准确
-    ——**已改**：该形态改用 `managedDshDown`（"网关可达但托管 dsh 未运行"），
-    「管理连接」按钮既有；剩余=托管 dsh 停机的**恢复原语**（`/chamber/runtime/start`）
-    仍未从设置面板直达（现需走 connections 页的「启动实例」）。
+    原因 + 恢复入口（`source.managedDown`）；深链/通知仍可激活该源（App 侧按注册表
+    权威放行，落空则由失败覆盖层呈现）；③settings-bridge 在 `connected=false` 时把
+    整个设置面板换成 `targetUnavailable`；"托管 dsh 停机但隧道正常"形态已改用
+    `managedDshDown`（"网关可达但托管 dsh 未运行"），「管理连接」按钮既有；
+    **剩余** = 托管 dsh 停机的恢复原语（`/chamber/runtime/start`）仍未从设置面板
+    直达（现需走 connections 页的「启动实例」）。
   - **同一份文档的其它逐实例全局量（2026-12 复查登记，design 06 §4.6「同族残留」）**：
-    主题投影已收口为活动视图独占，但同族还有六处——①**文档级 `drop` 扇出（真实
+    主题投影为活动视图独占，但同族还有六处——①**文档级 `drop` 扇出（真实
     缺陷，未修）**：vendor `ui-attachment/ComposerAttachments` 在 document 上挂
     drop 且无归属判定，两个壳同时挂载时一张图会同时附到两个实例的草稿；②**`<html
     lang>` last-writer-wins（真实缺陷，未修，且被收割放大）**：vendor `locale` 每次
@@ -543,14 +445,14 @@
     周期性白 churn，见 App.tsx S2 臂注释 M1）。正确判别信号是**推送视图与 unary
     权威列表的分歧**（合并拉取时若 unary 会话行与推送视图不一致 ⇒ follow 流已陈旧
     ⇒ 触发一次限流 ctx 重连重放 baseline），需要新的分歧判定 + 限流记账；与
-    design 24 §20 幽灵行收敛共用"以 unary 为权威"的语义。排期未定。
+    design 24 §12 幽灵行收敛共用"以 unary 为权威"的语义。排期未定。
   - 推送通道死亡期间侧边栏成员关系/归档集冻结在最后推送（sessions 仍刷新、恢复推送
     自愈；冻结窗口内新归档/取消归档不可见）。
   - 兜底 cwd 派生分组限制：符号链接拼写（macOS /tmp vs /private/tmp）可能不匹配
     canonical-cwd 索引；未挂载来源的新建空工作区不可见（fail-closed 语义）。
   - git 工作树删除时 runtime 通道缺席 fail-closed（'runtime-unknown'）。
-  - unary 长命令豁免残余与治本（design 03 §3.4；豁免本体已随 0.2.3 落地，见
-    CHANGELOG [0.2.2]/[0.2.3]，不在此复述）：超 30 分钟保险丝的极端业务仍被
+  - unary 长命令豁免残余与治本（design 03 §3.4；豁免本体见 CHANGELOG
+    [0.2.2]/[0.2.3]，不在此复述）：超 30 分钟保险丝的极端业务仍被
     **显式截断（504 + abort）、操作未完成、会话一致性无损**（保险丝计数发布
     中非零即复访取值）；治本——上游把 `commands.execute` 改为受理即回、结果
     经会话事件流交付（验收：受理回执形状、终态错误分类、对等待 unary 语义的

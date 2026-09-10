@@ -64,7 +64,7 @@ import { isDeniedPluginName, MAX_PLUGIN_SPEC_CHARS, PLUGIN_NAME_PATTERN, PLUGIN_
 // ledger (owner-only 0600 atomic replace, owner-only parent).
 import { atomicWritePrivateFileNoFollow, ensurePrivateDirectoryNoFollow, readPrivateFileNoFollow } from './control-plane-module.ts'
 // Chamber host-package insert facts (host-graph-seed.ts single source, design
-// 09 module A / design 13 §4.6) — consumed through control-plane-module.ts
+// 09 module A / design 13 §3) — consumed through control-plane-module.ts
 // (the desktop dual-path facade) so the desktop-facing package-name/insert-id
 // constants below derive from control-plane's own seed and can never drift.
 import {
@@ -253,7 +253,7 @@ export const WEB_PROFILE = 'web'
 // HOST_ARCHIVE_CLEANUP_INSERT, consumed through control-plane-module.ts) —
 // the desktop keeps its established names because main.ts and the
 // cross-package tests import them from here; values can never drift from the
-// local profile seed (design 09 module A / design 13 §4.6).
+// local profile seed (design 09 module A / design 13 §3).
 export const CLIENT_GRAPH_PACKAGE_NAME = HOST_GRAPH_INSERT.name
 export const CLIENT_GRAPH_INSERT_ID = HOST_GRAPH_INSERT.id
 export const GIT_WORKTREE_PACKAGE_NAME = HOST_GIT_WORKTREE_INSERT.name
@@ -262,7 +262,7 @@ export const ARCHIVE_CLEANUP_PACKAGE_NAME = HOST_ARCHIVE_CLEANUP_INSERT.name
 export const ARCHIVE_CLEANUP_INSERT_ID = HOST_ARCHIVE_CLEANUP_INSERT.id
 
 /**
- * The two module-A seed files (design 09 module A / design 13 §4.6): the
+ * The two module-A seed files (design 09 module A / design 13 §3): the
  * install-level flat fallback carries package.json + dist/index.js — the same
  * set the local seed (control-plane host-graph-seed.ts HOST_GRAPH_SEED_FILES),
  * the remote seed writer and BOTH installed probes agree on. `installed`
@@ -322,7 +322,7 @@ export function packageNameFromSpec(spec: string): string | null {
 }
 
 // ============================================================================
-// Spec classification (design 13 §4.4)
+// Spec classification (design 13 §3)
 // ============================================================================
 
 export type SpecClass =
@@ -330,7 +330,7 @@ export type SpecClass =
   | { kind: 'materialize' }
   | { kind: 'unsyncable'; reason: string }
 
-/** `file:` / `link:` / relative / absolute path specs → materialize (design 13 §4.6). */
+/** `file:` / `link:` / relative / absolute path specs → materialize (design 13 §3). */
 export function isMaterializeSpec(spec: string): boolean {
   return /^(file:|link:|\.{1,2}\/|\/|~\/)/i.test(spec)
 }
@@ -483,8 +483,8 @@ export interface LocalPluginManifest {
   bundles: string[]
   clientLines: string[]
   /** Dependency names whose own package.json declares `dsh.bundle` (design 13
-   *  §4.4) — the "known bundle packages" the remote apply's bundles assertion
-   *  uses (design 13 §4.5 ④). */
+   *  §4.1) — the "known bundle packages" the remote apply's bundles assertion
+   *  uses (design 13 §3 ④). */
   bundleLines: string[]
   unsyncable: UnsyncableEntry[]
   /** Chamber-injected component state (design 09): always readable locally. */
@@ -564,7 +564,7 @@ function readManifestVersion(pkg: unknown): string | null {
 }
 
 /**
- * Classify one dependency's own package.json (design 13 §4.4): `dsh.bundle.patch`
+ * Classify one dependency's own package.json (design 13 §4.1): `dsh.bundle.patch`
  * → bundle, `dsh.client` → client, anything else → plain.
  */
 export type LocalPluginKind = 'bundle' | 'client' | 'plain'
@@ -591,7 +591,7 @@ export function classifyLocalDependency(pkg: unknown): LocalPluginKind {
 /**
  * Read the LOCAL profile manifest from the authoritative local dsh home
  * (`<localDshHome>/profiles/web/package.json` — NOT `dsh-chamber:info.dshHome`,
- * which currently drifts from the real spawn home, design 13 §2.2). Projects
+ * which currently drifts from the real spawn home, design 13 §4.2). Projects
  * `dependencies` + `dsh.profile.bundles`, classifies each dependency's
  * node_modules package as bundle/client/plain, and flags unsyncable dependency
  * VALUES (by the value grammar — ordinary `^1.0.0`/`~2.0.0` ranges are
@@ -686,7 +686,7 @@ export function localPluginList(localDshHome: string): LocalPluginManifest {
  * 09 §4) and could read them. The mask keeps a `file:` prefix so BOTH sides'
  * spec classifiers (main `isMaterializeSpec` / client `isPathSpec`) still
  * classify the value as materialize and the name-based diff matching
- * (plugin-diff.ts §4.5) keeps working unchanged.
+ * (plugin-diff.ts §6) keeps working unchanged.
  */
 export const MATERIALIZED_VALUE_MASK = 'file:<hidden>'
 
@@ -724,7 +724,7 @@ export function isRemoteFileValue(spec: string): boolean {
  * (file:-prefixed only — exactly the gateway `/chamber/plugins/installed`
  * semantics); the mask keeps the `file:` prefix so both sides' spec
  * classifiers still classify the value as materialize and the name-based diff
- * matching (plugin-diff.ts §4.5) keeps working unchanged. Names, bundles,
+ * matching (plugin-diff.ts §6) keeps working unchanged. Names, bundles,
  * profileExists, error and the chamber block pass through untouched. The
  * main-process-internal manifest (verifyApplied's post-change read-back, the
  * undo journal snapshot, materialize resolution) is NEVER projected — only
@@ -930,7 +930,7 @@ export type ChamberLiveProbe = (descriptor: ChamberHostPackageDescriptor) => Pro
  * `dsh plugin` pnpm relinks never prune) +
  * the profile's cordis.patch.yml inserts (reusing computeCordisPatchUpdate's
  * dedup rules, checked PER package — the host-graph insert present does not
- * prove the git-worktree insert present, design 08 §11). Three extra `cat`
+ * prove the git-worktree insert present, design 08 §6.3). Three extra `cat`
  * round-trips, all marked quiet (their ENOENT on a not-yet-seeded instance
  * is expected, never a log-panel error); ENOENT = that file not injected
  * (never an error); any other ssh failure is a loud probe error — never a
@@ -1069,7 +1069,7 @@ async function readJournalSnapshot(exec: ExecFn, spec: RemoteSpec): Promise<Reco
   return parseRemoteManifest(res.stdout ?? '').dependencies
 }
 
-/** In-flight apply guards (single-flight per instance, design 13 §4.5 ⑥). */
+/** In-flight apply guards (single-flight per instance, design 13 §3 ⑥). */
 const applyInFlight = new Set<string>()
 
 const VERIFY_READY_TIMEOUT_MS = 30_000
@@ -1091,7 +1091,7 @@ async function verifyReady(status: StatusFn, id: string, timeoutMs: number, inte
   }
 }
 
-/** Re-pull the remote manifest and assert the applied set landed (design 13 §4.5 ④). */
+/** Re-pull the remote manifest and assert the applied set landed (design 13 §3 ④). */
 async function verifyApplied(
   exec: ExecFn,
   spec: RemoteSpec,
@@ -1109,7 +1109,7 @@ async function verifyApplied(
     if (failedSpecs.has(s)) continue
     const name = packageNameFromSpec(s)
     if (name === null || !(name in deps)) return false
-    // design 13 §4.5 ④: a KNOWN bundle-declaring add must also land in the
+    // design 13 §3 ④: a KNOWN bundle-declaring add must also land in the
     // remote bundle activation layer (`dsh.profile.bundles`, which the
     // remote `dsh plugin` reconcile fills), not just in dependencies — the
     // layer a broken reconcile would silently skip.
@@ -1123,7 +1123,7 @@ async function verifyApplied(
 }
 
 /**
- * Apply a plugin-set change to one remote instance (design 13 §4.5):
+ * Apply a plugin-set change to one remote instance (design 13 §3):
  * ① re-validate add/remove against the §7.2 whitelists (never trust the
  *    renderer) and `restart` as a boolean;
  * ② remove then add, serial, per-item failure isolation;
@@ -1297,7 +1297,7 @@ export async function applyPlugins(
 }
 
 // ============================================================================
-// 4. seedRemoteChamberHostPackages (design 13 §4.6, M2)
+// 4. seedRemoteChamberHostPackages (design 13 §3, M2)
 // ============================================================================
 
 export interface ChamberHostPackageSeed {
@@ -1344,7 +1344,7 @@ export type CordisPatchUpdate =
 
 /**
  * Decide how to fold the chamber loader inserts into an existing
- * cordis.patch.yml (design 13 §4.6): dedup when already present; deterministic
+ * cordis.patch.yml (design 13 §3): dedup when already present; deterministic
  * rewrite for the `initProfile` template (comments + `[]`); append for a user
  * block-sequence list (never overwriting user rows); fail-loud for a non-list.
  * The inserts are REQUIRED (there is no single-package default any more: the
@@ -1458,7 +1458,7 @@ export type SeedRemoteHostPackagesResult =
 
 /**
  * Seed all built chamber host packages onto a remote instance (design 13
- * §4.6): ensure cordis.patch.yml carries their exact inserts (cat read-back
+ * §3): ensure cordis.patch.yml carries their exact inserts (cat read-back
  * dedup, append merge, non-list fail-loud), then write-file package.json +
  * dist/index.js into the install-level flat fallback
  * `<remoteDshHome>/profiles/node_modules/@dsh-chamber/...` (not the profile
@@ -1534,7 +1534,7 @@ export async function seedRemoteChamberHostPackages(
     }
   }
 
-  // Patch probe FIRST (fail-fast, design 13 §4.6): the cordis.patch.yml
+  // Patch probe FIRST (fail-fast, design 13 §3): the cordis.patch.yml
   // `cat` is the uninitialized-profile signal — a missing profile dir makes
   // it ENOENT, and computeCordisPatchUpdate(null) turns that into the loud
   // "remote profile is not initialized" error. Probing before any package
@@ -1612,12 +1612,12 @@ export async function seedRemoteChamberHostPackages(
 }
 
 // ============================================================================
-// 5. materializeAndAdd (design 13 §4.6, M2 — optional fallback)
+// 5. materializeAndAdd (design 13 §3, M2 — optional fallback)
 // ============================================================================
 
 export type MaterializeResult = { ok: true; spec: string; remotePath: string } | { ok: false; error: string }
 
-/** The materialized-tarball stable dir (design 13 §4.6): ALWAYS the literal
+/** The materialized-tarball stable dir (design 13 §3): ALWAYS the literal
  *  `~/.dsh-chamber/plugins` — the remote shell expands `~` at word start for
  *  the write-file `mkdir -p`/redirect, and the write-file target whitelist
  *  (ssh-provider resolveWriteTarget) accepts exactly this prefix. It is
@@ -1636,7 +1636,7 @@ const REMOTE_HOME_PATTERN = /^\/[a-zA-Z0-9._/-]+$/
 
 /**
  * Resolve a leading `~` in a remote path to the REMOTE user's home (design 13
- * §4.6: a word-middle `~` is not expanded by the remote shell/pnpm, so the
+ * §3: a word-middle `~` is not expanded by the remote shell/pnpm, so the
  * `file:` spec needs the absolute form). The home is read from the REMOTE
  * side via the whitelisted `printf %s $HOME` exec — never the LOCAL home
  * (which names a path that does not exist on the remote). Fail-loud when the
@@ -1927,7 +1927,7 @@ async function packDirectory(localDir: string): Promise<{ bytes: Buffer } | null
 }
 
 /**
- * Shared materialize tail (design 13 §4.6): write-file the given tarball to
+ * Shared materialize tail (design 13 §3): write-file the given tarball to
  * `~/.dsh-chamber/plugins/<name>-<hash>.tgz` (kept, never cleaned — pnpm
  * persists `file:` deps against it) → resolve the tarball's ABSOLUTE remote
  * path from the remote `$HOME` (never the local home) → `dsh plugin add
@@ -1972,7 +1972,7 @@ async function installRemoteTarball(
 }
 
 /**
- * Materialize a local-path plugin and install it remotely (design 13 §4.6):
+ * Materialize a local-path plugin and install it remotely (design 13 §3):
  * `pnpm pack` → write-file the tarball to `~/.dsh-chamber/plugins/<name>-<hash>.tgz`
  * (kept, never cleaned — pnpm persists `file:` deps against it) → resolve the
  * tarball's ABSOLUTE remote path from the remote `$HOME` (never the local
@@ -2019,7 +2019,7 @@ export async function materializeAndAdd(
 }
 
 /**
- * Materialize a READY `.tgz` plugin archive (design 21 §10 archive-pick) and
+ * Materialize a READY `.tgz` plugin archive (design 21 §6.5 archive-pick) and
  * install it remotely: the archive was picked by the main process and its
  * manifest already read (classifyPluginPick); the remote install tail is the
  * same as the folder flow's (write-file → remote `$HOME` → `add file:`), but
@@ -2046,7 +2046,7 @@ export async function materializeArchiveAndAdd(
 }
 
 // ============================================================================
-// 6. Local pnpm resolution + local `dsh plugin` exec (design 13 §5.1, M4)
+// 6. Local pnpm resolution + local `dsh plugin` exec (design 13 §5, M4)
 // ============================================================================
 
 function pathDelimiter(): string {
@@ -2093,7 +2093,7 @@ export interface LocalPluginExecResult {
 
 /**
  * Run `dsh plugin --profile web <add|remove> <spec>` against the LOCAL dsh home
- * (design 13 §5.1). Resolves the dsh CLI entry the same way the control plane
+ * (design 13 §5). Resolves the dsh CLI entry the same way the control plane
  * does (02 §3.1: installed `node_modules/@deepseek-ai/dsh/lib/bin.js`, else the
  * `apps/cli/src/bin.ts` source via tsx), spawns it under the right node
  * executable (Electron main → `process.execPath` + ELECTRON_RUN_AS_NODE=1 +
@@ -2104,7 +2104,7 @@ export interface LocalPluginExecResult {
  */
 /**
  * Local-only `file:` spec accepted for the MAIN-PROCESS folder-picker path
- * (design 13 §5.8). The selected path rides an argv array, never a shell, so
+ * (design 13 §5). The selected path rides an argv array, never a shell, so
  * ordinary Unicode/punctuation is safe and must work. Accept POSIX absolute,
  * Windows drive and UNC paths; refuse relative/control-character input.
  * `allowFileSpec` below is still required, so renderer-submitted specs cannot

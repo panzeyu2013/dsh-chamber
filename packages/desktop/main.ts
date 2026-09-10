@@ -249,7 +249,7 @@ process.on('unhandledRejection', (reason) => {
   fatalMainError(reason);
 });
 
-// Control-plane port (design 05 §3.3): the packaged app keeps the documented
+// Control-plane port (design 05 §7.3): the packaged app keeps the documented
 // default 17500; the dev launcher (electron-dev.mjs) runs with an isolated
 // user-data dir, so its control plane must also avoid the packaged app's port.
 // Dev starts at 17520 and auto-backs off to the first free port (parallel
@@ -313,7 +313,7 @@ function proxyTransport(transport: TransportInstanceSpec['transport']): 'ssh' | 
   throw new TypeError(`unsupported proxy transport: ${transport}`);
 }
 
-/** Outcome of the plugin-source picker (design 21 §10 archive-pick). */
+/** Outcome of the plugin-source picker (design 21 §6.5 archive-pick). */
 type PluginSourcePick =
   | { status: 'cancelled' }
   | { status: 'picked'; path: string };
@@ -322,13 +322,13 @@ type PluginSourcePick =
  * The shared plugin-source picker for the materialize flows (local / ssh /
  * gateway): a plugin SOURCE FOLDER or a ready `.tgz` plugin archive. The
  * dialog runs in the main process (pick-only discipline — the renderer can
- * never name a local path, design 13 §5.8 hardening); the picked path is
+ * never name a local path, design 13 §5 hardening); the picked path is
  * classified by classifyPluginPick in the caller. macOS NSOpenPanel can
  * offer files AND folders in one dialog (openFile + openDirectory);
  * Windows (FOS_PICKFOLDERS) and GTK file choosers cannot mix both modes, so
  * non-macOS keeps the folder-only dialog and the archive pick is macOS-v1
  * (a macOS-first platform limitation; Windows/Linux legs would need a
- * mode-switching dialog — see design 21 §10 ⑧, tracked with design 22/23).
+ * mode-switching dialog — see design 21 §6.5, tracked with design 22/23).
  */
 async function pickPluginSource(mainWindow: BrowserWindow): Promise<PluginSourcePick> {
   const combined = process.platform === 'darwin';
@@ -1806,7 +1806,7 @@ if (!gotTheLock) {
         // quarantined until the full probe verdict opens runtimeStartBlocked.
         canExposeLocal: () => !runtimeStartBlocked,
         // The built dsh frontend (renderer vite output) served by the control
-        // plane (design 05 §3.3): <pkg>/dist/web in dev and packaged (asar)
+        // plane (design 05 §7.3): <pkg>/dist/web in dev and packaged (asar)
         // alike (P2-4 isolation: renderer owns dist/web only; preload.cjs /
         // control-plane / host packages live beside it in dist/).
         webDistDir: path.join(pkgDir, 'dist', 'web'),
@@ -2297,10 +2297,10 @@ if (!gotTheLock) {
     const hostPackageSeeding = new ExactOwnershipRegistry();
     const readySeedEdges = new ReadyPhaseEdges();
     // The authoritative local dsh home is <userData>/state/dsh-home (the real
-    // spawn home, design 13 §2.2) — never dsh-chamber:info.dshHome.
+    // spawn home, design 13 §4.2) — never dsh-chamber:info.dshHome.
     // localDshHome was resolved before control-plane construction so the
     // startup transaction and every plugin action share one authoritative path.
-    // Host package sources for the remote seed (design 13 §4.6). Packaged
+    // Host package sources for the remote seed (design 13 §3). Packaged
     // builds carry copies under dist/; dev reads the same source dirs used by
     // the local control-plane seed.
     const moduleASourceDir = app.isPackaged
@@ -3540,7 +3540,7 @@ if (!gotTheLock) {
         return { ok: false as const, error: `gateway plugin apply failed: ${sanitizeErrorText(describeUnknownError(error))}` };
       }
     }));
-    // Gateway local materialize (design 21 §6.5/§10 ⑧ archive-pick): PICK-ONLY —
+    // Gateway local materialize (design 21 §6.5 archive-pick): PICK-ONLY —
     // the picker runs here in the main process, so a compromised renderer can
     // never drive the pack/upload surface to an arbitrary local path (the same
     // hardening as the ssh materialize_add_pick path). No separate confirmation
@@ -3567,7 +3567,7 @@ if (!gotTheLock) {
       // Pick-only (design 21 §6.5): the picker runs here in the main process,
       // so a compromised renderer can never drive the upload surface to an
       // arbitrary local path. The pick may be a plugin SOURCE FOLDER or a
-      // ready .tgz plugin archive (design 21 §10 archive-pick).
+      // ready .tgz plugin archive (design 21 §6.5 archive-pick).
       const picked = await pickPluginSource(mainWindow);
       if (picked.status === 'cancelled') return { ok: true as const, cancelled: true };
       // Post-pick re-check: the user browsed for a while — the registration
@@ -3758,9 +3758,9 @@ if (!gotTheLock) {
     }));
     // materialize_add_pick (add view): PICK-ONLY — the picker runs here in
     // the main process, so a compromised renderer can never drive the pack
-    // surface to an arbitrary local directory (design 13 §5.8 hardening).
+    // surface to an arbitrary local directory (design 13 §5 hardening).
     // The pick may be a plugin SOURCE FOLDER or a ready .tgz plugin archive
-    // (design 21 §10 archive-pick): a folder is packed locally and uploaded;
+    // (design 21 §6.5 archive-pick): a folder is packed locally and uploaded;
     // an archive uploads verbatim (no local pnpm pack runs).
     ipcMain.handle(IPC_CHANNELS.SSH_PLUGIN_MATERIALIZE_ADD_PICK, trustedIpc(async ({ id }) => {
       const target = findRemoteTarget(id);
@@ -3793,8 +3793,8 @@ if (!gotTheLock) {
     }));
     ipcMain.handle(IPC_CHANNELS.LOCAL_PLUGIN_ADD_FILE, trustedIpc(async () => {
       if (mainWindow === null || mainWindow.isDestroyed()) return { ok: false, error: 'no main window' };
-      // Local same-machine install (design 13 §5.8 pick-only, design 21
-      // §10 defect ① fix + archive-pick): the path was chosen through the
+      // Local same-machine install (design 13 §5 pick-only, design 21
+      // §6.5 defect ① fix + archive-pick): the path was chosen through the
       // MAIN-process picker — a plugin SOURCE FOLDER or a ready .tgz plugin
       // archive — so the `file:` spec is main-chosen; pass allowFileSpec so
       // runLocalDshPlugin admits it through isAllowedLocalFileSpec (absolute
@@ -3810,7 +3810,7 @@ if (!gotTheLock) {
       const classified = classifyPluginPick(picked.path);
       if (!classified.ok) return { ok: false, error: sanitizeErrorText(classified.error) };
       return runLocalPluginMutation('plugin:add-file', async (dshWorkspace) => {
-        // design 21 §10 缺陷① fix (plan 24 小项④): the main-process picker
+        // design 21 §6.5 缺陷① fix (plan 24 小项④): the main-process picker
         // IS the sanctioned file: source — pass the capability flag so
         // the picked absolute path passes runLocalDshPlugin's gate (without it
         // every file: pick was refused as an invalid add spec).
@@ -3821,9 +3821,9 @@ if (!gotTheLock) {
     ipcMain.handle(IPC_CHANNELS.LOCAL_PLUGIN_ADD, trustedIpc(async ({ spec: specArg }) => {
       // `file:` imports must go through the main-process local import picker
       // (desktop_local_plugin_add_file — a folder or a .tgz archive, design 21
-      // §10 ⑧); this spec channel only accepts registry specs so a compromised
+      // §6.5); this spec channel only accepts registry specs so a compromised
       // renderer can never drive the local install surface to an arbitrary
-      // path (design 13 §5.8 hardening).
+      // path (design 13 §5 hardening).
       if (typeof specArg === 'string' && specArg.startsWith('file:')) {
         return { ok: false, error: 'local file imports must use the local import picker' };
       }

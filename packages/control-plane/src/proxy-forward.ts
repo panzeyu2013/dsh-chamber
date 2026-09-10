@@ -1,5 +1,5 @@
 /**
- * Shared reverse-proxy forwarding core (design 17 §6.2, 方案 A).
+ * Shared reverse-proxy forwarding core (design 17 §8, 方案 A).
  *
  * Extracted from instance-proxy.ts so that gateway-proxy.ts reuses
  * the exact Host/Origin rewrite, header-stripping, error semantics, rate

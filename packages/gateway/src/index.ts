@@ -184,7 +184,7 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
     // config-ignored warnings for authoritative runtime credentials stay
     // silent.
     auth = createAuth(options.config.auth, store, logger)
-    // Loud, unmissable warning for the explicit S1 override (design 17 §3.1
+    // Loud, unmissable warning for the explicit S1 override (design 17 §5.1
     // deviation): anonymous external exposure is operator-opted-in. The
     // verdict is decided by the EFFECTIVE kind AFTER seeding (Phase 1/2): a
     // persisted runtime credential (source 'runtime') makes the deployment

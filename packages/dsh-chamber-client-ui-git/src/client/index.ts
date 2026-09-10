@@ -31,7 +31,7 @@ export function apply(ctx: ClientContext): void {
 
   const t = ctx.locale.bind(NS)
 
-  // Per-workspace occupant (design 08 §11): the sidebar renders this seat
+  // Per-workspace occupant (design 08 §3.1): the sidebar renders this seat
   // once per source (workspaceId '' = source alert strip) and once per
   // workspace group; the occurrence context arrives through the slot-inject
   // `useWorkspaceGitContext` hook (factory owned by the sidebar, git-agnostic).

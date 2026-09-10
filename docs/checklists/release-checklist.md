@@ -1,7 +1,7 @@
 # 发布前 Checklist
 
 > 面向发布者：按序执行，任何 ❌ 都阻断发布。依据：`.github/workflows/release.yml`、
-> `docs/DEVELOPMENT.md` §5、AGENTS.md 验证清单。命令前先
+> `docs/DEVELOPMENT.md` §5、本文件 §3。命令前先
 > `export PATH="$HOME/.nvm/versions/node/v24.20.0/bin:$PATH"`（node v24 / pnpm 11.21）。
 
 ## 发布流程总览
@@ -63,7 +63,7 @@ CI:    §7b dry_run 先行（新路径必须验证过一次）→ §7c 正式 ta
       DEVELOPMENT/CONTRIBUTING/CHANGELOG/THIRD_PARTY_NOTICES 任意文本后须
       `node scripts/dev/verify-i18n.mjs --write` 刷新）。
 
-## 3. 测试与类型检查（AGENTS.md 清单）
+## 3. 测试与类型检查
 
 - [ ] **全量测试套件在精确发布提交（`git rev-parse HEAD`）上运行**——上一提交的记录
       不算数。

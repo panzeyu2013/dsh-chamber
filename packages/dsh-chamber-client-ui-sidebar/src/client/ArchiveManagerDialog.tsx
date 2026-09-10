@@ -43,7 +43,7 @@
  * (the official Modal registers one document-level BUBBLE Escape listener
  * per open instance, so stacking a confirm modal over this dialog would
  * close BOTH layers on a single Escape — no official nested precedent,
- * design 24 §19-7). A destructive control therefore ARMS a confirm mode
+ * design 24 §6 item 7). A destructive control therefore ARMS a confirm mode
  * INSIDE this dialog: the rows freeze (checkboxes/trash disabled) and a
  * risk bar renders the counted irreversible copy with 取消 / 确认删除;
  * 取消 or Escape disarm it (Escape never closes the dialog while armed —
@@ -373,7 +373,7 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
    *  member (fail-closed), so the stop pass is an accelerator, never the
    *  safety boundary. The stop pass covers the CLOSURE of the selection
    *  (roots + transitive SUBAGENT-origin descendants) — a running descendant
-   *  has no row here, yet it blocks the whole archived tree (design 24 §22).
+   *  has no row here, yet it blocks the whole archived tree (design 24 §5).
    *  The session currently being viewed is excluded from the ROOTS and from
    *  any root whose CLOSURE contains it: its live writer would recreate a
    *  header-less artifact after deletion, and the host deletes the whole tree.
@@ -381,7 +381,7 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
    *  (`shared/archive-purge.ts`), which the node tests pin. */
   const runPurge = (sessionIds: readonly string[]): void => {
     if (busy) return
-    // RUNTIME-CHANNEL GUARD (design 24 §22 residual risk): the force path may
+    // RUNTIME-CHANNEL GUARD (design 24 §13 item 13): the force path may
     // delete a merely LOADED session, and the only protection against the
     // deleted writer recreating a header-less artifact is excluding the
     // session this client is currently viewing. That exclusion is read from
@@ -405,7 +405,7 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
         // unmounted, the host purge may have completed and chamberBridge's
         // App-side consumers are global/generation-fenced.
         chamberBridge.requestRefresh(server.id)
-        // design 24 §20: additionally ask this source's MOUNTED ctx to
+        // design 24 §12: additionally ask this source's MOUNTED ctx to
         // re-run its OFFICIAL session-list refresh — the host purge is
         // invisible to the official client summaries (events are no-ops), so
         // without it the deleted rows linger there and resurface in the
@@ -461,7 +461,7 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
   }
 
   /** Footer 删除选中: arm the confirm over the current selection — never a
-   *  whole-set `undefined` purge (design 24 §18). */
+   *  whole-set `undefined` purge (design 24 §6). */
   const deleteSelected = (opener: HTMLElement | null): void => {
     if (selected.size === 0) return
     requestDelete(opener, [...selected], null)
@@ -501,7 +501,7 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
   // input freezes (inputLocked = busy OR armed) so the counted copy can never
   // go stale — the selection/checkboxes cannot move under the armed promise.
   const inputLocked = busy || confirming !== null
-  // PRE-CLICK GATE (C#9, design 24 §22): the delete controls are DISABLED while
+  // PRE-CLICK GATE (C#9, design 24 §5): the delete controls are DISABLED while
   // the force path is refused (no runtime report, or an unknown current
   // session), with the refusal as their explanatory title — mirroring the git
   // dialog's runtime-unknown pre-hint. `runPurge` keeps the same gate as

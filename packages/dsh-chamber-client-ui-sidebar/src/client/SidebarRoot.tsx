@@ -987,8 +987,8 @@ export function SidebarRoot({
   }
 
   // chamber (06): fork a session at its last completed turn, refresh, and
-  // open the child — the official row-menu fork→open flow (设计 06 §0 原判
-  // 「回合尾部 forkAt 覆盖、侧边栏不做」本轮契约反转：行内 kebab 增加分叉入口).
+  // open the child — the official row-menu fork→open flow (设计 06 原判
+  // 「回合尾部 forkAt 覆盖、侧边栏不做」，现行契约见 design 05 §2.2：行内 kebab 增加分叉入口).
   // Wire session.fork 只收 { sessionId, atSeq? }（increaseTitle 非 wire
   // 字段），子会话标题 = 源标题；chamber 侧按官方 runtime service 移植的
   // increasedForkTitle 在 fork 成功后对子会话做标题递增 rename（经该来源
@@ -1199,7 +1199,7 @@ export function SidebarRoot({
   // full order, a no-op (vanished pieces / already in place) or blocked (a
   // drop that would split a contiguous repo family — e.g. a foreign workspace
   // into a worktree group's interior, or a worktree out of its own group;
-  // design 08 §11). A blocked/no-op verdict leaves the order untouched. A
+  // design 08 §3.3). A blocked/no-op verdict leaves the order untouched. A
   // MOVE of a git family's main carries the whole family (moved = main first,
   // then its worktrees): each member is re-anchored in order, one wire call
   // per member (insertWorkspaceBefore is single-row; the optimistic override
@@ -1509,9 +1509,9 @@ export function SidebarRoot({
         />
       )}
       {/* chamber (design 24 revision 2026-09): the per-source archive
-          manager — lists what is archived (grouped by workspace, §19) and
+          manager — lists what is archived (grouped by workspace, §6) and
           deletes per-row / selected rows (whole set only via the explicit
-          select-all checkbox — no standalone delete-all, §18). Mounted only
+          select-all checkbox — no standalone delete-all, §6). Mounted only
           while a target source is chosen. */}
       {archiveCleanupServerId !== null && (
         <ArchiveManagerDialog

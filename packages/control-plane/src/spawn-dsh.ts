@@ -23,15 +23,15 @@
  * Port strategy: fixed base DEFAULT_DSH_START_PORT (17510), one attempt per
  * port; a failed attempt (process exit, or no TCP listener within 90s, or a
  * failed host-identity probe) advances port+1 and respawns, at most 5 attempts.
- * Spawn uses detached=true (own process group, design 02 §3.5.5: the host
- * survives a control-plane crash and the orphan reaper reclaims it, §3.4.2);
+ * Spawn uses detached=true (own process group, design 02 §3.1: the host
+ * survives a control-plane crash and the orphan reaper reclaims it, §3.4);
  * stdout/stderr are forwarded to the control-plane log and the per-port
  * rolling log. The node executable is resolved, not assumed on PATH
  * (resolveNodeExecutable: plain node → process.execPath; Electron main →
  * process.execPath + ELECTRON_RUN_AS_NODE=1 + --expose-internals; PATH/
  * known-root fallbacks) — a GUI-launched packaged app has a minimal PATH
  *  and `spawn('node', …)` would fail with ENOENT. The spawned environment
- *  is pinned (design 02 §3.2.1):
+ *  is pinned (design 02 §3.1):
  *  DSH_TELEMETRY_DISABLED=1, DSH_PERMISSION_MODE=workspace-write, and
  *  SSH_CONNECTION=<loopback tuple> — the chamber-managed host is a local
  *  web profile whose directory-picker-auto (host/directory-picker-auto)
@@ -45,7 +45,7 @@
  *  0.1.2-alpha.4, where directory-picker-auto still reads it); `bundle/web-app` also probes SSH_CONNECTION/SSH_TTY via `launchedThroughSsh` (browser auto-open suppression — pre-existing at rc.8, harmless for chamber's own window), so the pin has no
  *  other effect.
  *  A pid
- *  record per design 02 §3.4.1 (pid/ownerPid/ownerInstanceId/port/binary/
+ *  record per design 02 §3.3 (pid/ownerPid/ownerInstanceId/port/binary/
  *  profile:'web'/source/startedAt) is atomically written under
  *  <stateDir>/managed-dsh/<pid>.json and cleaned up on exit.
  */
@@ -235,7 +235,7 @@ export function webProfileArgs(port: number, patchPath?: string): string[] {
 }
 
 /**
- * The managed-dsh pid record shape (design 02 §3.4.1), written atomically
+ * The managed-dsh pid record shape (design 02 §3.3), written atomically
  * under <stateDir>/managed-dsh/<pid>.json by writePidRecord. Extra fields
  * (e.g. ownerInstanceId) are appended; the fixed columns are always present.
  */
@@ -254,7 +254,7 @@ export interface PidRecord {
 }
 
 /**
- * Write the managed-dsh pid record for a spawned child (design 02 §3.4.1).
+ * Write the managed-dsh pid record for a spawned child (design 02 §3.3).
  * The write is atomic (tmp + rename). Caller-compatible: extra fields
  * (e.g. ownerInstanceId from the control-plane instance identity, §3.6.1)
  * are appended; the fixed columns are always present.
@@ -580,7 +580,7 @@ async function spawnAttempt({
   const nodeExec = resolveNodeExecutable()
   const child = spawn(nodeExec.file, [...nodeExec.args, ...entry.args], {
     cwd: dshWorkspacePath,
-    // Deterministic, privacy-pinned environment (design 02 §3.2.1);
+    // Deterministic, privacy-pinned environment (design 02 §3.1);
     // the Electron branch additionally injects ELECTRON_RUN_AS_NODE=1
     // so the app binary runs the CLI as a plain node process.
     // SSH_CONNECTION is the browse-interaction pin (see the module header):
@@ -597,7 +597,7 @@ async function spawnAttempt({
     }),
     stdio: ['ignore', 'pipe', 'pipe'],
     // Own process group: the host outlives a control-plane crash and the
-    // orphan reaper (design 02 §3.4.2) reclaims it. On Windows a detached
+    // orphan reaper (design 02 §3.4) reclaims it. On Windows a detached
     // child would otherwise get its own visible console window; windowsHide
     // keeps the managed host headless (harmless no-op on POSIX).
     detached: true,
@@ -685,7 +685,7 @@ async function spawnAttempt({
   try {
     // The entry token rides the ledger so the reaper can re-verify the live
     // process identity in BOTH layouts (installed bin.js path / dev source
-    // script) — design 02 §3.4.2.
+    // script) — design 02 §3.4.
     pidRecordWriter(stateDir, pid, port, process.pid, {
       ownerInstanceId,
       binary: entry.binary,

@@ -69,9 +69,9 @@ const FORKS = [
     upstream: 'packages/client/connection',
     patched: {
       'package.json': '[patch-add] 仅追加 chamber test 脚本（其余与上游一致；版本行随上游推进）',
-      'src/api-path.ts': '[patch-mod] 追加 resolveInstanceBasePath + 头部 chamber 说明（basePath 语义，design 05 §3.6）',
+      'src/api-path.ts': '[patch-mod] 追加 resolveInstanceBasePath + 头部 chamber 说明（basePath 语义，design 05 §6）',
       'src/client/connection.ts': '[patch-mod] 仅 erasableSyntaxOnly 显式字段改写（两个构造参数属性）+ 顶部 chamber 说明；其余逐字节上游（Batch 2 重锚：loopEpoch 守卫与 CONNECTION_BACKOFF_MAX_MS 导出退役，改由原生 reconnect/setNetworkAvailable）',
-      'src/client/index.ts': '[patch-mod] apply(ctx) 读 ctx.chamberBasePath → 载波装配（design 05 §3.6）+ SYSTEM_RESUME_EVENT/liveness 触发（design 14 D4）+ recovery-policy 转出（/client barrel）+ 头部 chamber 说明',
+      'src/client/index.ts': '[patch-mod] apply(ctx) 读 ctx.chamberBasePath → 载波装配（design 05 §6）+ SYSTEM_RESUME_EVENT/liveness 触发（design 14 D4）+ recovery-policy 转出（/client barrel）+ 头部 chamber 说明',
       'src/client/rpc.ts': '[patch-mod] basePath 前缀拼装 + WebConnectionRpcOptions（chamber 选项对象）+ 头部 chamber 说明',
       'tsconfig.client.json': '[patch-mod] chamber 构面：extends ../../tsconfig.json + vendor paths + files 列表（与上游 files 增量同步维护）',
       'tsconfig.host.json': '[patch-mod] 同上（host 构面）',
@@ -121,7 +121,7 @@ const FORKS = [
     upstream: 'packages/api/gateway',
     patched: {
       'package.json': '[patch-mod] description/peer 集裁剪（host 依赖 dropped）+ 版本行随上游推进',
-      'src/client/index.ts': '[patch-mod] apply(ctx) 读 ctx.chamberBasePath → /api/remote.mux 落到实例前缀 + start(sinks, recoveryOverridesForTransport(transport))（design 05 §3.6）',
+      'src/client/index.ts': '[patch-mod] apply(ctx) 读 ctx.chamberBasePath → /api/remote.mux 落到实例前缀 + start(sinks, recoveryOverridesForTransport(transport))（design 05 §6）',
       'src/client/stream-client.ts': '[patch-mod] per-entry basePath（流载波 URL 拼装）',
       'tsconfig.json': '[patch-mod] chamber 构面',
       'tsconfig.client.json': '[patch-mod] chamber client 构面',

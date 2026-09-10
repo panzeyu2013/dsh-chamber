@@ -1,5 +1,5 @@
 /**
- * Pure note/count derivation for the remove-worktree dialog (design 08 §6
+ * Pure note/count derivation for the remove-worktree dialog (design 08 §5.2
  * amendment, 2026-09 archived-aware running facts; 2026-12 review G1).
  *
  * The dialog's running-session notes were inline `filter`/length arithmetic in

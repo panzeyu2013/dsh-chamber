@@ -49,7 +49,7 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
     'sidebar.workspaces': { kind: 'single'; scope: 'root'; owner: SidebarSectionOwnerProps }
     /**
      * Per-workspace Git occupant rendered inside every workspace group of the
-     * browsing region (workspace-centric discovery, design 08 §11). The
+     * browsing region (workspace-centric discovery, design 08 §3.1). The
      * sidebar stays git-type-free: it renders the hole once per workspace
      * with an opaque occurrence context, and the chamber Git plugin occupies
      * it with the workspace's branch/create/remove line. Non-git workspaces

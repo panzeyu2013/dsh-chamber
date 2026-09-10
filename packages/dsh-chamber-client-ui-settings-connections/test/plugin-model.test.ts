@@ -224,7 +224,7 @@ test('gateway: ok:false without partial reports 0 done / 0 total (nothing ran)',
 // 3b. Apply-result normalization — ssh shape (plugin_apply union twin:
 // {ok:true,result}|{ok:false,error}; result reports COUNTS only —
 // applied/skipped/failed, never per-name success; no cancelled arm —
-// plugin_apply has no cancellation path, design 21 §10)
+// plugin_apply has no cancellation path, design 21 §7)
 // ---------------------------------------------------------------------------
 
 test('ssh: ok:true clean result executes with restarted/deferred passthrough; no name lists (counts-only result)', () => {

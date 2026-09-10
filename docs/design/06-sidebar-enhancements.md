@@ -1,30 +1,15 @@
-# 06 · 侧边栏增强（第三轮：搜索 / 拖拽排序 / 视图持久化 / 运行时事实通道）
+# 06 · 侧边栏增强（搜索 / 拖拽排序 / 视图持久化 / 运行时事实通道）
 
-> 本设计将 05 §9 中 1/3/5/6/7 项落地为 v1 形态；第 2 项（fork）
-> 已由官方 conversation 回合尾部分支动作（ui-conversation turn-tail
-> forkAt）覆盖（会话内），且 2026-08 起侧边栏会话行菜单也提供行内 fork
-> （wire `sessions.fork`，对齐官方 ui-workspace；两者并存，turn-tail 保留）；
-> 第 4 项（flat）维持推迟。
+> **状态：现行（v1 侧边栏增强契约，2026-12）**——本设计定义 chamber 自研侧边栏的
+> 搜索、来源内拖拽排序、视图偏好持久化与运行时事实通道（完成/待交互状态点、
+> 跨来源当前会话高亮、运行中子 agent 计数、会话待办区）；
+> 未完成门禁见 docs/progress/STATUS.md。
 > 本文档 + 05 为实现契约。
-
-> **状态：已实现（2026-08）**——实现记录与验证见 `docs/progress/STATUS.md`
-> （design 06 条目）；未落地项（flat）维持推迟。
-
-## 0. 范围与来源
-
-| 项 | 特性 | 状态 |
-|---|---|---|
-| 1 | 会话搜索（每来源） | 已落地（2026-08 扩展：本地元数据匹配 + 远程内容命中合并，本地优先、远程按投影可见集过滤） |
-| 3 | 会话/workspace 拖拽排序（来源内） | 已落地（2026-08：会话排序切换 manual↔updated；updated 下拖拽只写瞬态 override 不落 wire） |
-| 5 | 视图偏好 localStorage 持久化 | 已落地 |
-| 6 | 完成/待交互状态点（dot） | 已落地 |
-| 7 | 跨来源当前会话高亮 | 已落地 |
-| 2 | fork 会话 | **已实现（侧边栏行内，2026-08）**：会话行 kebab 菜单分叉会话（`sessions.fork` + increaseTitle → 打开子会话，对齐官方 ui-workspace；fork 成功后子会话标题递增 rename（对齐官方 increasedForkTitle，rename 失败非致命——子会话仍创建并打开）；官方 turn-tail `forkAt` 仍常驻可用，两者并存） |
-| 4 | flat 单列表模式 | 推迟：与 05 §2.1"仅按来源分类"呈现原则张力 |
-
-约束沿 05 §2.2/§9：不发明协议（只用 wire 既有方法）、不做跨来源移动
-（拖拽按来源在代码层阻断）、运行时事实只经通道投影（控制面/App 不持有
-会话权威）。
+> **约束**：不发明协议（只用 wire 既有方法）、不做跨来源移动
+> （拖拽按来源在代码层阻断）、运行时事实只经通道投影（控制面/App 不持有
+> 会话权威）。
+> fork 会话（侧边栏会话行 kebab 行内 fork + 官方 conversation turn-tail
+> `forkAt`）的契约在 05 §2.2/§9；flat 单列表模式维持推迟（§5）。
 
 ## 1. 会话搜索（每来源）
 
@@ -37,7 +22,7 @@
   再导出）；`hasMore` 提示用户缩小范围；AbortSignal 必传（30s 超时合并）。
 - 标题/workspace 标签**不上 wire**——由客户端从该来源的聚合快照解析
   （投影已携带 per-session title；workspace 标题或未分组标签兜底）。
-- **本地元数据匹配（2026-08 扩展）**：本地腿对投影**可见集**做标题/所属
+- **本地元数据匹配**：本地腿对投影**可见集**做标题/所属
   workspace 标题**子串匹配**（大小写不敏感；archived/subagent/blank 行不
   进入投影故不可能命中），命中按 recency 排序（纯函数
   `deriveLocalSearchMatches`）；远程腿 = wire `sessions.search` 内容命中，
@@ -52,14 +37,13 @@
 
 - **位置**：每来源分组头内搜索图标按钮（`sourceHeader` 内、状态徽标旁），
   点击展开为头下新行（胶囊式 input + 清除按钮），wide 态专属（rail 不做）。
-- **状态（2026-08 修订——共享控制器）**：每来源搜索状态与防抖 job 整体
+- **状态（共享控制器）**：每来源搜索状态与防抖 job 整体
   移入 `shared/search-state.ts` 共享单例（vite shared chunk，所有 ctx 的
   侧边栏同一实例）——`expandSearch`/`collapseSearch`/`setSearchQuery`/
   `clearSearch`/`getSearchStates`/`subscribeSearch`；组件只镜像渲染 + 持有
-  DOM ref（outside-click 包含判定与 focus）。取代早前「按 sourceId 分键的
-  per-shell state + 组件内 job effect」：任一来源侧边栏发起的搜索在视图
+  DOM ref（outside-click 包含判定与 focus）。任一来源侧边栏发起的搜索在视图
   切换后仍存活（可见侧边栏换 shell，共享状态不换）；job 单一所有者，杜绝
-  N 个 shell 对同一查询重复发起/互相中止（P2-6 语义原样保留：单来源击键
+  N 个 shell 对同一查询重复发起/互相中止（单来源击键
   不打扰其他来源在途搜索、30s 超时与「被替换」区分）。
 - **流程**：输入 → sanitize（去 `\0`、500 UTF-16 截断、trim）→ 空则回 idle；
   非空则建 `AbortController` → 250ms 防抖 → `searchSessions(client, query, signal)`
@@ -106,7 +90,7 @@
   dragover/drop preventDefault（官方 `useNativeDragAcceptance` 移植）——
   拖出列表外不表现为拒绝；行半区（上/下半）即 marker 词汇
   （`rowHalf`：clientY 与行中线比较）。
-- **拖柄排除按钮（2026-10 review，F3）**：workspace/source header 的
+- **拖柄排除按钮**：workspace/source header 的
   pointerdown 落在 header 内任意 button（折叠 / 排序 / 加工作区 / 搜索 /
   `+` / kebab / git 行内动作）上时，dragstart 即 preventDefault 取消拖拽
   （dragstart 的 target 是拖柄本身，故按压目标在 pointerdown 记录）——
@@ -128,11 +112,11 @@
 - **边界**：拖到折叠组无目标行（自然无 marker）；轮询刷新中途拖拽
   （状态引用 id 不引用下标，行仍存在则有效）；touch/键盘排序不支持
   （官方亦然，注明已知限制）。
-- **会话排序模式（2026-08，C档对齐官方）**：每来源排序偏好 manual（默认）|
+- **会话排序模式（对齐官方）**：每来源排序偏好 manual（默认）|
   updated（§3.1 `orderBy`，来源头 hover 操作簇排序按钮打开**显式菜单**——官方
-  ViewOptionsMenu 模式，勾选标记当前模式，取代早期盲切循环）。**updated =
-  手动序 + 活动置顶（官方 ui-workspace nextSessionOrderAccount 语义，2026-08
-  起不再是最初的"纯 recency 重排"）**：
+  ViewOptionsMenu 模式，勾选标记当前模式）。**updated =
+  手动序 + 活动置顶（官方 ui-workspace nextSessionOrderAccount 语义；不是
+  "纯 recency 重排"）**：
   - 每个 account（真实 workspace 与未分组桶各一，键 `${sourceId}/${workspaceId}`）
     持有持久化活动序（`updatedOrder`）与上次观测时间戳簿记
     （`sessionUpdatedAtByAccount`），由侧边栏推导 effect 一起写回（diff 守卫，
@@ -145,23 +129,23 @@
     wire、不 requestRefresh——官方「updated 排序时拖拽不落 wire」，promotion
     叠加其上）；未分组桶 updated 模式同样走 account 路径（manual 的
     `ungroupedOrder` 不受污染）。
-    **有意的偏差（对齐声明的边界，2026-08 review 明确）**：切回 manual 时
+    **有意的偏差（对齐声明的边界）**：切回 manual 时
     updated 模式下的拖拽位置**不保留**——manual 渲染 = override ?? wire，
     account 序被忽略，重新进入 updated 会整列 recency 重排。官方两种模式都
     渲染 account 序、拖拽跨模式保留；chamber 坚持 manual 的 wire 权威
-    （P2-5 / AGENTS.md 宿主事实权威原则），故 updated 模式是**活动视图**而
+    （design 01 §5 权威边界纪律），故 updated 模式是**活动视图**而
     非持久的手动排布层。
   - 投影签名（`serversProjectionSignature`）**纳入会话 updatedAt**——会话活动
-    时间戳变化会重发布投影，推导 effect 才能及时置顶（旧签名排除它是因为排序
-    已物化为行序；2026-08 起排序由 account 推导驱动，排除理由不再成立）。
-- **双击重命名（2026-08）**：workspace 头直接 dblclick 进入行内重命名
-  （头本身不可点击，无延迟）；**会话行单击立即打开（零延迟，2026-08
-  修订，对齐 OpenChamber 的 immediate-open 模型）**，双击重命名由
+    时间戳变化会重发布投影，推导 effect 才能及时置顶（排序由 account 推导
+    驱动，故该字段不可从签名排除）。
+- **双击重命名**：workspace 头直接 dblclick 进入行内重命名
+  （头本身不可点击，无延迟）；**会话行单击立即打开（零延迟，对齐
+  OpenChamber 的 immediate-open 模型）**，双击重命名由
   同会话 350ms 内的二次点击判定（全局 pending 槽，按 sessionId 键控，
   跨 N-ctx shell 共享——跨来源双击时可见 shell 在两次点击之间切换，
   逐树 ref 会看不到第一次点击）；误判的双击只造成幂等重开、绝不误入
   重命名；kebab 菜单 rename 保留为 a11y 兜底；外部点击取消 pending。
-  **行内形态（2026-12 修订）**：workspace 的重命名编辑框**嵌入 workspace
+  **行内形态**：workspace 的重命名编辑框**嵌入 workspace
   表头行本身**——标题/orphan 徽标/计数/git occupant/悬停动作原位替换为
   输入框 + 保存/取消，行首折叠钮与图标槽保留（行身份与位置不变，
   **不**在表头下方追加输入行，列表不因进入编辑而插入新行；编辑期行高
@@ -170,12 +154,12 @@
   重命名同样可见**（编辑框随表头渲染，不依赖展开），rename/delete/拖拽
   失败的 inline 错误行也不受折叠门控。会话行重命名保持整行替换为编辑行
   （行槽原位 swap，行内缩进同会话行）。
-  **2026-08 review 修订**：
+  **停冒泡控件的 pending 清理纪律**：
   - **任何 stopPropagation 控件必须自己 clearPendingClick**（折叠/新建/
     kebab/归档 + 来源头排序/加工作区/搜索）——React 的 stopPropagation
     同时停掉原生事件，document 级监听看不到这些点击，残留的 pending 会
     让窗口内下一次同会话点击误入重命名。
-  - **空白"新建会话"行不参与双击重命名**（P2-10 同款 `blank` 门控）——
+  - **空白"新建会话"行不参与双击重命名**（同款 `blank` 门控）——
     占位行无内容可改名，双击不得进入内联重命名（否则把暂存会话的改名
     写到 wire 上）。
   - **blank 行 ghost 槽（双击误中修复）**：双击空白行下方的真实会话时，
@@ -188,7 +172,7 @@
     同一截止点（本地时钟 + 一次性定时器）停止渲染——即便 App 下个轮询
     周期才重派生，隐形空位也不会残留。宽限期后行才消失/列表才可位移，
     已安全越过双击窗口。
-  - **跨 shell 滚动锚点同步（2026-08，`renderer/src/sidebar-scroll-sync.ts`，
+  - **跨 shell 滚动锚点同步（`renderer/src/sidebar-scroll-sync.ts`，
     App selectView 接线）**：切换来源（N-ctx）时恢复该来源上次的侧边栏滚动
     位置；ghost 行带 `data-chamber-ghost`，锚点捕获跳过之（仅 arming shell
     渲染该行，入站 shell 没有——锚到 ghost 会空转到 8s 截止）；入站 shell
@@ -204,10 +188,10 @@
   （stored 序优先、未知 id 按 wire 序追加——官方 `reconciledSessionOrder`/
   `orderedUngrouped` 移植），`test/derive.ts` 补用例。
 
-### 2.4 来源级收拢 + 来源显示序（2026-09，方案 1）
+### 2.4 来源级收拢 + 来源显示序
 
 - **来源级收拢（server 折叠）**：来源头左侧新增折叠开关（与 workspace 头
-  同款槽位：常态 **MONITOR 电脑字形**（2026-10 用户反馈：原 folder 字形与
+  同款槽位：常态 **MONITOR 电脑字形**（用户反馈定稿：原 folder 字形与
   workspace 文件夹图标重合易误解，改自绘 monitor——folder = workspace、
   monitor = server）、行 hover/focus 换入折叠 chevron，16px 槽位无位移），
   点击收拢该来源**整个 workspace 列表**（搜索胶囊、来源级 git
@@ -223,10 +207,10 @@
   `orderServersForDisplay(servers, stored)` 应用（存储序优先、未知 id
   跳过、未列出 id 按投影序尾随——新来源出现在列表底部直到被拖走）。
   rail 圆点同序渲染。来源从注册表删除后其 id 由写时裁剪清出（与
-  orderBy 同规则）。**2026-09 review 收窄**：dragend 时
+  orderBy 同规则）。**取消即放弃**：dragend 时
   `dropEffect === 'none'`（ESC 取消）不提交最后 marker——§2.2"drop/end
   提交最后 marker"在来源级收窄为"仅非取消的结束提交"（取消即放弃）。
-  **2026-10 review 再收窄（F1/F2）**：① dragend 时 `dataTransfer` 为
+  另有两条同向收窄的判据：① dragend 时 `dataTransfer` 为
   null（Safari 曾有该行为）同样视为取消——null 无法读取 dropEffect，
   `?.` 会把 `undefined !== 'none'` 误判为已提交（ESC 取消仍落盘）；
   ② 拖拽期间指针离开所有来源 section（document 级 dragover 目标不在
@@ -252,44 +236,42 @@
     sourceFolded?: Record<sourceId, boolean>,
     serverOrder?: string[] }
   ```
-- **sourceFolded / serverOrder（2026-09，方案 1）**：
+- **sourceFolded / serverOrder**：
   来源级收拢 + 来源显示序（见 §2.4）。均为可选字段——旧数据无字段即视为
   全展开 / 投影序，v 保持 1 不重播种；裁剪规则同 orderBy（本会话见过、
   现已消失的来源才裁）。
-- **updatedOrder / sessionUpdatedAtByAccount（2026-08 C档新增）**：updated 排序
+- **updatedOrder / sessionUpdatedAtByAccount**：updated 排序
   模式的活动序 account 与簿记（见 §2「会话排序模式」）。键与 folded 同为
   `${sourceId}/${workspaceId}`（未分组桶的 workspaceId 即
   `UNGROUPED_WORKSPACE_ID`），剪裁规则同 folded（本会话见过、现已消失的来源
   才裁）。manual 模式不读这两个字段；v 保持 1，旧数据无字段即视为从未进入
   updated。
-- **sidebarWidth（2026-08，ui-layout fork）**：`packages/dsh-chamber-client-ui-layout`
+- **sidebarWidth（ui-layout fork）**：`packages/dsh-chamber-client-ui-layout`
   （官方 ui-layout 壳插件的 chamber fork，仅替换 layout store）把侧栏宽度经本
   store 播种/回写——`init` 从 `getViewPrefs().sidebarWidth` 播种（钳位 vendor
   `[SIDEBAR_MIN, SIDEBAR_MAX]` 拖拽范围 [264,420]，从未拖过时回退
   `SIDEBAR_DEFAULT`），每次拖拽 `setSidebar` 经 `updateViewPrefs` 写回（同键
   `dsh-chamber.sidebar.v1`），所有 live boot 的 store 订阅并即时采纳；替换官方
   ui-layout 注册（见 05 §6）。
-- **orderBy（2026-08 新增）**：每来源会话排序偏好 `'manual' | 'updated'`，
+- **orderBy**：每来源会话排序偏好 `'manual' | 'updated'`，
   默认 `manual`；v 保持 1 兼容旧数据（旧数据无此键即视为全 manual，不重
-  播种），sanitize 丢弃非法值。**默认值决策（2026-08）**：默认 `manual`
-  （保持既有 wire 序呈现），与官方默认 `updated` 不同——有意取舍：多来源
-  列表下 wire 序即用户/宿主排好的序。**2026-08 C档修订**：v1 已实现官方
-  活动提升（promotion）语义（updated = 手动序 + 活动置顶，§2），"不实现
-  promotion"的旧理由不再成立；默认值仍取 manual（wire 序第一）。
+  播种），sanitize 丢弃非法值。**默认值 `manual`**（保持既有 wire 序呈现），
+  与官方默认 `updated` 不同——有意取舍：多来源列表下 wire 序即用户/宿主排好
+  的序。该默认值不因已实现官方活动提升（promotion）语义而改变：updated =
+  手动序 + 活动置顶（§2），但 wire 序仍是默认第一。
 - `shared/view-prefs.ts`：`loadViewPrefs()`/`saveViewPrefs(prefs)`，
   JSON 解析/写入 try/catch 兜底（非致命）、版本号不匹配即弃用重播种
   （官方 persist 引擎纪律）；纯函数，可单测。
-- **共享实时存储（2026-08 修订，跨 ctx 实时联动）**：在读写函数之上新增
+- **共享实时存储（跨 ctx 实时联动）**：在读写函数之上新增
   `getViewPrefs()`/`subscribeViewPrefs()`/`updateViewPrefs()`——模块级
   单例缓存（vite shared chunk，所有 ctx 的侧边栏共享同一实例）+ 写透
   localStorage + 通知全部订阅者。折叠/未分组序在**任一来源**的侧边栏里
-  变更即实时反映到**所有来源**的侧边栏，不再有每 ctx 陈旧副本、不再有
-  「B 写回时把 A 的新状态覆盖成旧值」的复活问题。**取代**早前「mount 读
-  一次 + 变化时合并写回、跨 ctx 不联动」模型（§5 已知取舍相应删除）。
+  变更即实时反映到**所有来源**的侧边栏，没有每 ctx 陈旧副本，也不存在
+  「B 写回时把 A 的新状态覆盖成旧值」的复活问题。
 - 裁剪规则（写入时）：**空投影不裁剪**（未就绪投影绝不抹掉用户偏好）；
   只裁**本会话内见过、现已从投影消失**的来源键（断连来源的折叠/未分组
   序保留，重连后恢复——渲染侧 `reconciledSessionOrder` 本就跳过未知 id）。
-  **seenSources 为会话内内存簿记（2026-08 复查修复），绝不从存储恢复**：
+  **seenSources 为会话内内存簿记，绝不从存储恢复**：
   持久化它会令重启后首个写周期（roster 未到、投影仅 local）把上一会话
   见过、当前尚未加载的远程来源误判为「已删除」而永久抹掉其偏好——正是
   本机制要防的启动窗口数据丢失；上一会话删除、本会话未写过的来源残留
@@ -316,9 +298,9 @@
   `updatedAt`；快照含 `current?: string`（当前会话 id）。
 - 每个实例 boot = 独立 ctx、独立 store；侧边栏插件在每个 ctx 都挂载，
   即每个来源都有一个可订阅自身运行时的事实生产者。
-- **插件 = 投影（2026-08 修订，远程完成未读蓝点修复；2026-09 补注）**：上报端只做
+- **插件 = 投影**：上报端只做
   快照投影——`current` + 每个列出会话的实时 `running` 位 + vendor 已武装的
-  `completed`/`pending`，除 design 24 §21 的**purged 墓碑抑制集 + 收敛链**
+  `completed`/`pending`，除 design 24 §12 的**purged 墓碑抑制集 + 收敛链**
   （唯一自持状态：内容已删的 id 从上报中过滤）外**不自持状态**。官方 `completed` 提醒只在
   「运行→空闲」边沿且会话**非本 ctx selected** 时武装，后台来源 shell 的
   selected 保持「最后打开」不随活动视图切换更新，会把后续完成误判为
@@ -328,7 +310,7 @@
   vendor 提醒同构，仅把「正在阅读」从「本 ctx selected」替换为「活动视图
   的 current 会话」）。App 侧状态机见 §4.2；插件侧无重复状态、不碰任何
   来源的 selection（无竞态、会话保活不受影响）。
-- **运行中子 agent 计数（2026-08 修订）**：除 running/completed/pending
+- **运行中子 agent 计数**：除 running/completed/pending
    外，插件另上报每父会话的 `runningSubagents`——vendor 纯函数
    `indexSubagentDescendants(byId)` 的 runningCount（经不间断 subagent 起源
    链统计的后代 running 数，官方 ui-workspace tree 的
@@ -368,31 +350,31 @@
 - 对账逻辑是**纯函数** `shared/derive.ts reconcileCompletedFacts`（单测见
   `test/derive.ts`）：App 在 `setCompletedBySource` 的函数式 updater 里调用
   它，且每份上报各自捕获 `prevRunning` 快照——同来源两次上报落在同一渲染
-  周期时按序组合，不会互相覆盖丢蓝点（2026-08 复查修复）。
+  周期时按序组合，不会互相覆盖丢蓝点。
 
 ### 4.3 UI 语义（状态指示）
 
 - 行尾为**固定 10px 状态槽**（非常驻身份点——来源身份由来源头折叠字形
-  accent + 激活左内边线 + rail 点承担；2026-10 起来源头身份圆点已移除）：
+  accent + 激活左内边线 + rail 点承担；来源头身份圆点已移除）：
   - 常态（不运行、未完成、无子 agent）：空槽，不显示任何图标（槽保留
     宽度，行右缘跨行对齐）；
   - 运行中：官方 `StateDot` **ongoing 圆环**
     （`--dsw-static-deepseek-450` 蓝色 chase ring）；
-  - **子 agent 运行中（2026-08 修订）**：同一 ongoing 圆环，tooltip/aria
+  - **子 agent 运行中**：同一 ongoing 圆环，tooltip/aria
     显示「N 个子代理运行中」——父回合已结束但后台子 agent 仍在工作时
     会话依旧"进行中"，**绝不在这个阶段亮起完成蓝点**（§4.5）；
   - 运行结束未读（completed）：**长显示圆点**（持久蓝色点，tooltip
     "已完成"）。
-  - **待交互（pending，2026-08 修订）**：不再与运行中同形——槽加宽至
+  - **待交互（pending）**：不与运行中同形——槽加宽至
     14px，按类型渲染**可辨识图标徽标**（会话在等用户，必须一眼可辨，
     ask-user 是动机场景）：`question` = 问号图标（business 蓝）、
     `plan-review` = 清单图标（business 蓝）、`approval` = 警示三角图标
     （warn 琥珀）。tooltip/aria 文案沿用
     `status.waitingAnswer/planReview/waitingApproval`。
-  - **配色（2026-08 修订）**：运行/completed 仍统一为 dsh 标准 ongoing
+  - **配色**：运行/completed 统一为 dsh 标准 ongoing
     蓝；**pending 徽标例外**——business（蓝）/warn（琥珀）两个 state
-    token 表达"等待回答/决策"与"等待批准"两级语义（06 §4.3 早前"全蓝"
-    决定对 pending 行有意撤回）。wire running 与通道事实并存：running 点
+    token 表达"等待回答/决策"与"等待批准"两级语义（pending 行有意不取全蓝）。
+    wire running 与通道事实并存：running 点
     保留（wire 权威），completed/pending 仅通道提供。
 - **悬停替换（真正替换，零占位）**：行/头操作在静止时 `display:none`（不占
   布局空间）——状态图标/徽标因此真正位于行/头末端；悬停时操作簇
@@ -404,17 +386,16 @@
 - **不再显示相对时间**：session 行不渲染"xx 前"时间单元格（`time.*`
   locale 键**保留供 hover 卡相对时间使用**；`relativeTimeBucket` 纯函数
   保留为共享工具）。
-  2026-08 确认：相对时间列**暂不回归**，维持移除（多来源密度 + 行尾状态槽
-  取代时间列）；若未来回归需同步修订 05 §2.1 的残留文案。
-- **当前会话高亮 = 全局单选（2026-08 修订）**：`server.runtime?.current`
+  相对时间列**暂不回归**，维持移除（多来源密度 + 行尾状态槽
+  取代时间列）；若未来回归需同步修订 05 §2.1 的文案。
+- **当前会话高亮 = 全局单选**：`server.runtime?.current`
   命中即高亮，但仅限**拥有当前可见 ctx 的来源**（渲染侧
   `server.id === chamberInstanceId` 门控）——各来源壳内"切换前最后一个"
-  会话不再全部高亮，全局只有一个高亮（正在查看的那个会话）。
-  （语义演进：第二轮"仅自身来源 useSyncExternalStore" → 第三轮"全来源
-  高亮" → 本轮收敛为全局单选；通道机制不变——组件不再直连 store，
+  会话不全部高亮，全局只有一个高亮（正在查看的那个会话）。
+  （通道机制不变——组件不直连 store，
   订阅逻辑在插件 apply 上报端；boot 首帧无上报前不高亮，随首次上报
   补齐。跨来源的 pending/completed 状态点不受影响，仍全来源呈现。）
-- **状态点优先级（2026-08 修订）**：
+- **状态点优先级**：
   **pending 徽标 > runningSubagents 运行环 > completed 点 > running 环**。
   completed/pending/runningSubagents 来自 runtime facts，`running` 来自完整
   aggregate snapshot；两者均由已挂载 ctx 的同一 sessions store 事件驱动，
@@ -432,7 +413,7 @@
   通道 running 位仍保留在 `InstanceRuntimeReport` 中，供 App 完成蓝点
   状态机（`reconcileCompletedFacts`）推导 running→idle 边沿（App 内部
   逻辑，非侧边栏渲染）。
-- **搜索结果行状态点（2026-08 修订）**：结果行经投影解析 running 位
+- **搜索结果行状态点**：结果行经投影解析 running 位
   （搜索命中会话必在投影可见集内，查得到即用投影位；查不到回落 false）——
   状态槽渲染优先级同树行（pending 徽标 > runningSubagents 环 > completed
   点 > running 环）；**running 环 snapshot 权威（与树行一致）：只取投影位，
@@ -445,7 +426,7 @@
 
 - `shared/aggregate-store.ts`（通道 + `ChamberServerAggregate.runtime?` +
   `runningSubagents` 行字段）、`client/index.ts`（订阅与投影上报 +
-  design 24 §21 的墓碑抑制/收敛链 +
+  design 24 §12 的墓碑抑制/收敛链 +
   `indexSubagentDescendants` 注入）、`App.tsx`（runtimeFacts +
   completedBySource 对账 + 合并 + 清理 + 激活兜底；runningSubagents 随
   事实行透传，状态机无需感知）、
@@ -454,7 +435,7 @@
   （`status.waitingApproval/planReview/waitingAnswer/completed` +
   `status.subagentsRunning.one/other`）。
 
-### 4.5 运行中子 agent（runningSubagents 圆环，2026-08 修复）
+### 4.5 运行中子 agent（runningSubagents 圆环）
 
 **问题**：agent 状态是二元的——`status = phase.kind === 'idle' |
 'maintenance' ? 'idle' : 'running'`，driver 在工具调用 await 期间不释放
@@ -492,9 +473,9 @@ await 中），我们单点只显示子 agent 计数文案，官方同快照显�
 聚合轮询陈旧（≤一个轮询周期）时 running 环与子 agent 环瞬时同形，
 取实时通道为真。
 
-### 4.6 文档级主题投影归属（N-ctx，2026-12）
+### 4.6 文档级主题投影归属（N-ctx）
 
-- **缺陷（已修）**：官方 `ThemePresenter`（vendor
+- **缺陷**：官方 `ThemePresenter`（vendor
   `packages/client/ui-layout/src/client/theme-presenter.ts`）把主题投影到
   **文档级**状态——`html{color-scheme}`（原生控件/滚动条）、
   `body[data-ds-dark-theme]`（token 调色板）、`--dsh-content-font-size`、
@@ -506,7 +487,7 @@ await 中），我们单点只显示子 agent 计数文案，官方同快照显�
   的 `body` 块，无属性即浅色）与 chamber 壳的 `:root{color-scheme}` 兜底
   拼在一起——「浅色界面 + 深色原生 checkbox」直到某次 theme/change 或重挂载
   才自愈（用户观察：点服务器/切主题后刷新才恢复）。
-- **归属规则（现行为）**：**主题**投影只由活动视图的实例写（其余文档级写入者
+- **归属规则**：**主题**投影只由活动视图的实例写（其余文档级写入者
   另见下方「同族残留」——本节结论仅覆盖主题这组全局量）。
   App 是「谁在屏上」的唯一权威，经 page-wide chamberBridge 发布
   （`setActiveSource`/`getActiveSource`/`onActiveSource`，`shared/aggregate-store.ts`）；
@@ -524,13 +505,7 @@ await 中），我们单点只显示子 agent 计数文案，官方同快照显�
   （活动视图发布，`useLayoutEffect` 保证绘制前生效）、`shared/aggregate-store.ts`
   （活动来源事实 + 单测）、`packages/renderer/src/styles.css`（兜底值，
   源码级钉子 `packages/renderer/test/theme-fallback.test.ts`）。
-- **验证**：单测（4 条投影规则 + 1 条源码级接线钉子 + 1 条通道语义 +
-  App 发布钉子 + CSS 兜底钉子）、`typecheck:layout`、`typecheck:sidebar`、
-  根 `typecheck`、`test:sidebar`、`test:layout`、`test:renderer-shell`、
-  `build:renderer` 均通过；**打包态实机目检未做**（首屏/切换/回收窗口的
-  checkbox 深浅、预热视图不互踩主题）。**注意**：安装态 `.app` 可能落后于
-  仓库一个构建——实机验收前必须 `pnpm run dist:desktop:mac` 重打包。
-- **同族残留（2026-12 复查登记，非本节修复面）**：同一份文档里还有其它
+- **同族残留（非本节修复面）**：同一份文档里还有其它
   document-global 状态被逐实例写/监听，属同一"N-ctx 单文档"缺陷族：
   ①**文档级 `drop` 扇出（真实缺陷）**——vendor `ui-attachment`
   `ComposerAttachments.tsx` 在 document 上挂 drop 监听且无 containment/活动视图
@@ -555,16 +530,18 @@ await 中），我们单点只显示子 agent 计数文案，官方同快照显�
 
 ## 5. 已知取舍与开放项（已决）
 
+- **flat 单列表模式：推迟（维持不排期）**——与 05 §2.1「仅按来源分类」呈现
+  原则有张力。
 - 跨实例 `dsh.sessions.current` localStorage 共享键（last-writer-wins）：
   接受——镜像运行时既有行为，通道原样携带。
-- **完成发生在来源 shell 首次观察之前仍无蓝点（2026-08 记录）**：App 侧
+- **完成发生在来源 shell 首次观察之前仍无蓝点**：App 侧
   蓝点与 vendor 提醒同受「首次观察只记录 running 位」规则——来源 shell
   尚未挂载（预热排队中/首次打开前）期间的完成边沿两者都看不到。空闲预热
   保证连接后尽快挂载，该窗口为「实例就绪 → shell boot 完成」；活动来源
   的完成即时可见（预热/打开必先挂载）。不做轮询级完成推导（10s 粒度会
   漏掉更短任务，且与「running 点 wire 权威、completed 仅通道提供」契约
   冲突）。
-- **App 侧蓝点跨断连保留（2026-08）**：上报事实（runtimeFacts）断连即清
+- **App 侧蓝点跨断连保留**：上报事实（runtimeFacts）断连即清
   （generation 级），App 自持的 completedBySource/prevRunning 跨断连保留
   ——断连期间完成的会话在重连后仍正确武装（prevRunning 持有断连前
   running=true，重连基线 running=false 触发边沿）；侧边栏断连时本就无行
@@ -573,12 +550,16 @@ await 中），我们单点只显示子 agent 计数文案，官方同快照显�
 - 拖拽无 touch/键盘：已知限制（官方亦然，Electron 桌面）。
 - 拖拽乐观重排不设回滚：pull 模型自愈 + inline 错误，接受。
 
-## 6. 验证计划
+## 6. 验证门
 
-- 纯函数单测：`reconciledSessionOrder`、`view-prefs` 读写、搜索 sanitize
-  （并入 `test/derive.ts` 或新增 test 文件，node:test 风格）。
-- `pnpm run typecheck`、`pnpm run build:renderer`、`pnpm run verify:i18n`
-  全绿；control-plane 套件不回退。
+- 纯函数单测：`reconciledSessionOrder`、`view-prefs` 读写/单例通知/裁剪、
+  搜索 sanitize、`todo-attention` 派生、`todo-prefs` 水合
+  （`test/derive.ts`、`test/view-prefs.ts`、`test/todo-attention.test.ts`、
+  `test/todo-prefs.test.ts`，node:test 风格）。
+- 包级门：`pnpm run typecheck`、根 `typecheck`、`typecheck:layout`、
+  `typecheck:sidebar`、`pnpm run build:renderer`、
+  `pnpm run verify:i18n`、`test:sidebar`、`test:layout`、
+  `test:renderer-shell`；control-plane 套件为回归门。
 
 ## 7. 样式定稿（设计）
 
@@ -589,22 +570,22 @@ await 中），我们单点只显示子 agent 计数文案，官方同快照显�
   chevron `--dsw-alias-label-caption`、来源头底色 `--dsw-specific-sidebar-fill`；
   不存在的 `--dsw-alias-accent/success/danger/input-fill` 一律不得使用。
 - **来源 accent**：每元素 `--dsh-source-accent` CSS 变量承载远程来源 hue
-  （**柔和色板 2026-10 用户反馈：`hsl(hue 34% 61%)`**，原 65%/52% 偏扎眼；
+（**柔和色板（用户反馈定稿）：`hsl(hue 34% 61%)`**；
   本地来源省略、回退默认 ink），用于来源头激活左
-  内边线与 rail 活动环（**2026-09 起 workspace 组 chevron 不再取来源
-  accent**——workspace 图标自带确定性 accent，见下条）。**2026-10 用户
-  反馈**：来源头身份**圆点移除**（折叠字形 accent 承担身份；rail 点保留）。
-- **workspace 图标 accent（2026-09，柔和化 2026-10 用户反馈）**：workspace
+  内边线与 rail 活动环（**workspace 组 chevron 不取来源
+  accent**——workspace 图标自带确定性 accent，见下条）。**来源头身份圆点移除**
+  （用户反馈；折叠字形 accent 承担身份；rail 点保留）。
+- **workspace 图标 accent**：workspace
   头行内联
   `--dsh-workspace-accent`（`.foldToggle` 基色/hover 同取，图标走
   currentColor）——色相 = `(serverId, 家族种子)` 哈希 × 137.508 黄金角
   步进 mod 360，明度 = 56/61/66%（第二哈希抖动，近色相兜底）；家族种子
   = `repoKey`（worktree 与主检出共享家族色相，主检出未注册/改名不漂移；
-  `mainWorkspaceId` 仅为无 repoKey 时的回退），worktree 降饱和 **21%**、
-  主检出/普通 workspace **34%**（原 62%/45% + 44–54% 明度偏扎眼——低饱和
-  高明的柔和色板，色相分布与家族层级不变）；未分组桶无 accent 回退
+`mainWorkspaceId` 仅为无 repoKey 时的回退），worktree 降饱和 **21%**、
+主检出/普通 workspace **34%**（低饱和高明的柔和色板，色相分布与家族
+层级不变）；未分组桶无 accent 回退
   caption ink。
-  **2026-10 review（F4）**：来源首个 git 快照发布前 accent 一律不渲染
+  来源首个 git 快照发布前 accent 一律不渲染
   （默认 ink）——git workspace 不会先出现独立色相再闪变为家族色相（启动
   瞬间的一次性闪变）；`isSourceGitFlagsLoaded` 后整源一次性落定最终色。
   无用户自定义、无持久化、**与选中态无关**（纯函数 `workspaceAccentStyle`，
@@ -612,11 +593,10 @@ await 中），我们单点只显示子 agent 计数文案，官方同快照显�
 - **当前会话高亮（对齐官方 selected 处理）**：session 行 = 官方
   `.sessionRow.selected` 的浅 `interactive-bg-hover` 色调（无 inset 阴影、
   无深色调、无标题加粗）；所在 workspace 组 = 无底色、图标色恒定
-  （2026-09：曾取来源 accent 的 `.groupContainsCurrent .foldToggle` 规则
-  已移除）——当前指示不重复编码于 workspace 级，两组高亮永不相邻融合，
+  （来源 accent 不参与 workspace 级高亮）——当前指示不重复编码于 workspace 级，两组高亮永不相邻融合，
   色调全为官方 token 浅档。
 - **排版**：字号下限 12px；会话标题 13/18——官方行 14px，13/18 是 chamber
-  多来源密度的刻意折中；来源身份点 8px（**2026-10 起仅 rail**——来源头
+  多来源密度的刻意折中；来源身份点 8px（**仅 rail**——来源头
   身份圆点已移除，见 §7 来源 accent 条），session 行首为
   固定 10px 状态槽（常态空）。
 - **行几何**：圆角 8px（来源头/workspace 头/会话行一致）；密度为多来源
@@ -641,7 +621,7 @@ await 中），我们单点只显示子 agent 计数文案，官方同快照显�
   展开期间该行操作保持可见（`.rowActionsVisible`）。行内图标按钮全量
   reset（`appearance:none`/`outline:none`/grid 居中，focus-visible 用
   brand 自绘环）——无 UA 外框、无偏移。
-- **悬停卡片（2026-08）**：workspace 头与真实会话行悬停显示官方
+- **悬停卡片**：workspace 头与真实会话行悬停显示官方
   `HoverCard` 移植卡片——workspace 卡 = 标题 + 会话数（投影无
   path/createdAt 故省略）；会话行卡 = 标题 + 相对时间 + 状态点列表 + 复制
   标题按钮（blank 行不显示时间）。disabled = 菜单打开、拖拽中或行内重命名
@@ -649,28 +629,28 @@ await 中），我们单点只显示子 agent 计数文案，官方同快照显�
   `renamingThisWorkspace` 任一成立即禁用——编辑期卡片不盖住行内输入框；
   该枚举描述 workspace 头卡片，会话行卡片在被重命名表单整行替换时不渲染，
   无需额外禁用条件）。
-- **a11y（2026-08）**：来源分组 `role="group"`、列表 `role="tree"`、
+- **a11y**：来源分组 `role="group"`、列表 `role="tree"`、
   workspace 头 `role="treeitem"` + `aria-expanded`、会话行 `role="treeitem"`
   + `aria-selected`、搜索结果行 `button` + `role="treeitem"`；来源头
   （非当前来源）`role="button"` 可键盘激活（Enter/Space 切换视图）。
-- **blank 行（2026-08）**：当前空白"新会话"行隐藏操作簇（kebab/分叉/归档，
-  对齐官方 `!row.blank &&` 门控）——空白行无重命名/分叉/归档语义。**2026-08
-  review 补充**：双击同样被 `blank` 门控（不进入内联重命名，见 §2.2）；离开
+- **blank 行**：当前空白"新会话"行隐藏操作簇（kebab/分叉/归档，
+  对齐官方 `!row.blank &&` 门控）——空白行无重命名/分叉/归档语义。双击同样
+  被 `blank` 门控（不进入内联重命名，见 §2.2）；离开
   current 后的 450ms 宽限期 ghost 占位机制见 §2.2（`visibility:hidden`
   非交互、保留布局位，`derive.ts armBlankGhost` + `.sessionGhost`）——双击
   窗口内列表绝不位移。
-- **会话状态指示（2026-08 修订）**：固定 10px 行尾状态槽——常态空、
+- **会话状态指示**：固定 10px 行尾状态槽——常态空、
   运行中 = 官方 `StateDot` ongoing 蓝圆环、运行结束未读 = 持久蓝圆点；
   **待交互（pending）= 14px 图标徽标**（问号/清单/警示三角）——几何与配色
   契约见 §4.3，本节只定稿 token：运行与 completed 颜色一律
   `--dsw-static-deepseek-450`，pending 徽标用
   `--dsw-alias-state-{business,warn}-primary`（不再有 green/red 状态色）；
   状态槽非身份标记（来源身份由来源头折叠字形 accent + 激活左内边线 +
-  rail 点承担——2026-10 用户反馈：来源头身份圆点已移除，连接状态点/转圈
+  rail 点承担——来源头身份圆点已移除，连接状态点/转圈
   保留在头部右端）。
 - **当前会话高亮（含 workspace 组标记）**：session 行 = 官方 selected 的
   浅 hover 色调（无阴影无加粗）；workspace 组 = 图标恒定自有色
-  （2026-09 起，曾取来源 accent 的 chevron 规则已移除）——无底色融合、
+  （chevron 不取来源 accent）——无底色融合、
   无深色调。
 - **嵌套缩进（收紧）**：workspace 列表距来源头 10+1+6 = 17px；session 行
   左 padding 26px——session 标题相对 workspace 标题（24px）深 18px，
@@ -684,7 +664,7 @@ await 中），我们单点只显示子 agent 计数文案，官方同快照显�
 
 ---
 
-## 8. 会话待办区（sidebar todo area，2026-12）
+## 8. 会话待办区（sidebar todo area）
 
 **问题**：会话数量多时，行尾状态指示（蓝点/琥珀徽章）随列表滚出视野，用户需要频繁
 上下滑动检查「哪个会话完成了 / 在等批准 / 在等回答」。桌面通知与 Dock 徽标已有，缺
@@ -760,12 +740,10 @@ onRequest`），**默认全开**——被动呈现（空时零占用），区别
   `settings-store.ts` 乐观 overlay 嵌套合并扩展 + zh/en 各 6 键）、sidebar 文案
   zh/en 各 5 键（`todo.*`）。
 
-### 8.5 行序与列（2026-12 用户反馈修订）
+### 8.5 行序与列
 
-初版行内标记为**状态前置、来源点行尾**（与普通会话行「行尾才是状态槽」相反），且
-左右缩进与会话行不齐。2026-12 用户反馈后对调并定格行列（代码注释与 §8.5 同步，无
-STATUS 新条目——视觉轮次按本仓库惯例只落在 design 文本 + 代码注释，打包态门禁覆盖
-实机复核）：
+**行列定格**（状态槽一律在行尾，与普通会话行同列；左右缩进与会话行对齐；
+代码注释与本节同步）：
 
 - **行序** = 行首来源点（多来源才渲染点；空槽恒占位，标题列不跳动，与来源头字形列
   同列）→ 标题 → **行尾状态槽**：直接复用会话行的 `.sessionStateSlot` /

@@ -46,7 +46,7 @@ declare module '@deepseek-ai/dsh-client-web' {
     loadBundle?: (url: string) => Promise<void>
   }
   /**
-   * chamber patch (05 §3.6 / design 09): mirror of boot.ts AppWebEntryOptions —
+   * chamber patch (design 05 §6 / design 09): mirror of boot.ts AppWebEntryOptions —
    * per-instance extra host-graph client-plugin rows (bundles pre-loaded by
    * the chamber shell; ids only merged into the boot rows here). dsh-v0.1.2-alpha.1
    * BootModuleRow alignment: the required `initialUrl` (the preloaded combo

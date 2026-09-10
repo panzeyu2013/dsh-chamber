@@ -1,11 +1,11 @@
 # dsh-chamber 设计总览（v1：多来源会话统一导航）
 
-> 本文是 dsh-chamber 设计体系的**入口与索引**。v1 定稿（2026-08-14）：
-> 软件 = dsh 的**桌面连接管理器**——Electron 包装 dsh 官方前端（避免纯
-> 浏览器形态），本地实例与远程服务器**同等接入**；界面 = **dsh 官方前端
-> 源码复用自建**，首屏直接进入 dsh 主界面（纯 dsh UI），**多来源的
-> session/workspace 在 dsh 原生侧边栏内平等呈现**（仅按来源分类，远程
-> 来源以颜色标注——codex 式"导航统一、执行按来源路由"）。
+> **状态：现行（设计体系入口与索引 · v1 定稿，2026-12）**——dsh-chamber 是 dsh 的
+> **桌面连接管理器**：Electron 包装 dsh 官方前端（避免纯浏览器形态），本地实例与
+> 远程服务器**同等接入**；界面 = **dsh 官方前端源码复用自建**，首屏直接进入 dsh
+> 主界面（纯 dsh UI），**多来源的 session/workspace 在 dsh 原生侧边栏内平等呈现**
+> （仅按来源分类，远程来源以颜色标注——codex 式"导航统一、执行按来源路由"）；
+> 未完成门禁见 `docs/progress/STATUS.md`。
 >
 > 桌面 v1 的认证/审计面已随收敛**整体移除**；桌面控制面 = 托管 + 反代 +
 > 静态服务，loopback-only、无认证边界。设计 17 另定义一个需显式启动、带强制认证
@@ -73,27 +73,29 @@ presets 页操作（copy/read/remove 经反代写远端文件）；部署内置�
 | # | 文档 | 状态 | 主题 |
 |---|---|---|---|
 | 01 | 本文 | 现行（入口） | 收拢原则 + 定位 + 移出项 |
-| 02 | [02-host-management-deployment.md](02-host-management-deployment.md) | 现行（核心） | web profile spawn、健康、reaper、日志、部署形态 |
-| 03 | [03-connections-proxy.md](03-connections-proxy.md) | 现行（核心） | 连接模型（本地 + 远程注册表）+ 每实例通用反代 |
-| 04 | [04-control-plane-api-data.md](04-control-plane-api-data.md) | 现行（核心） | 管理 REST、反代契约、前端服务（`__DSH_BOOT__`） |
+| 02 | [02-host-management-deployment.md](02-host-management-deployment.md) | 现行（核心） | 宿主管理（web profile）：本地 dsh 宿主进程的托管与部署形态（spawn、健康、reaper、日志、systemd 部署参考） |
+| 03 | [03-connections-proxy.md](03-connections-proxy.md) | 现行（核心） | 连接模型（本地 catalog 单行 + 远程注册表）+ 每实例通用反代 |
+| 04 | [04-control-plane-api-data.md](04-control-plane-api-data.md) | 现行（核心） | 管理 REST、反代 HTTP 形状、前端服务（`__DSH_BOOT__`）、数据模型 |
 | 05 | [05-connection-manager.md](05-connection-manager.md) | 现行（表面/架构，v1 权威） | 多来源会话统一导航、侧边栏插件、桥接层、N-ctx、控制面/桌面契约（§7）、安全不变量（§8） |
-| 06 | [06-sidebar-enhancements.md](06-sidebar-enhancements.md) | 现行（已实现，2026-08） | 侧边栏增强：搜索 / 拖拽排序 / 视图持久化 / 运行时事实通道 |
+| 06 | [06-sidebar-enhancements.md](06-sidebar-enhancements.md) | 现行（flat 单列表推迟） | 侧边栏增强：搜索 / 拖拽排序 / 视图持久化 / 运行时事实通道 |
 | 07 | [07-models-params.md](07-models-params.md) | 推迟（设计定稿，待上游解锁） | 模型额外参数 + 默认推理等级：链路事实、上游阻塞点、更新复查清单、实现蓝本 |
-| 08 | [08-git-worktree-plugin.md](08-git-worktree-plugin.md) | 现行（v1 实现，2026-08-20 自 todo 记录移入） | git worktree 独立插件：实例内 host Remote + 强制打包客户端插件 + `sidebar.workspace.git` 座位 + 安全创建/无归档删除 saga |
-| 09 | [09-client-plugin-runtime-loading.md](09-client-plugin-runtime-loading.md) | 现行（已实现，2026-08 方案 A；自 todo 记录移入） | dsh 客户端插件运行时加载：断点定位（官方机制完整、chamber 前端断链）+ 每实例合并宿主 boot 图（chamber host 包 `clientGraph/graph` + 控制面 `--patch` seed + 去重预加载 + boot.ts extraRows seam）+ 信任边界/分期 |
-| 10 | —（契约并入 [05](05-connection-manager.md) §2.3/§3） | 已实现（2026-08） | 侧边栏聚合改事件驱动：各来源 ctx 推投影取代 10s REST 轮询（30s 兜底仅覆盖无完整生产者来源）+ 05 §3 契约修订；不改上游 dsh |
-| 11 | [11-auto-update.md](11-auto-update.md) | 现行（已实现，2026-08；自 todo 记录移入） | 桌面端更新提示（dsh-chamber 自身，无弹窗、低打扰）：settings chamber 全局「更新」部分 + 静默检查、用户确认后下载、退出时安装（win/mac 一致，mac 安装腿需 Developer ID）、beta → stable 通道 |
-| 12 | [../progress/todo/12-todo-archived-sessions.md](../progress/todo/12-todo-archived-sessions.md) | todo（调研记录；已由 design 24 承接定稿并批准执行，2026-12） | 已归档会话管理（归档单向且不可见；删除动议已由 design 24 承接：chamber 宿主域 + server 行 hover 动作；B 特权层冻结结论保留） |
-| 13 | [13-remote-plugin-management.md](13-remote-plugin-management.md) | 现行（已实现，2026-08；M1–M4 落地） | 远程实例插件管理：一键应用本地插件清单 + 可视化添加（provider exec 通道 + spec 白名单 + remoteDshHome 远端路径基准） |
-| 14 | [14-sleep-background.md](14-sleep-background.md) | 现行（已实现（v1 范围），2026-08；自 todo 记录移入） | 睡眠/后台常驻：关窗行为（托盘/退出）、登录自启、唤醒即时重连、防休眠、退出保护 |
-| 15 | [15-chamber-settings-page.md](15-chamber-settings-page.md) | 现行（已实现（v1 范围），2026-08；自 todo 记录移入） | Chamber 设置页：settings 壳固定入口（连接/通用/更新），chamber 全局设置与实例配置平面分离 |
-| 16 | [16-vscode-deeplink.md](16-vscode-deeplink.md) | 已实现（M0–M2，2026-08） | VS Code OS 深链基线：`dsh-chamber://` 快速拉起本机 VS Code Remote-SSH 打开对应 server 目录；主进程 DeepLinkHandler 注册表 + VS Code 可用性探测 + 打包门控协议注册；应用内按钮/IPC 已演进为设计 17 的 open-in 面，无 host 插件/seed |
-| 17 | [17-server-side-gateway.md](17-server-side-gateway.md) | 现行（连接模型 v2 与 S21–S24 已实现，2026-09；实机门禁见 STATUS） | 独立启动的认证默认 server 形态（`--no-auth` 为显式可信网络例外）：单本地 dsh 公网接入、Desktop `gateway` target 与 gateway 自有派生编排；普通 control-plane 仍 loopback-only；连接模型 v2（四维正交 + S21–S24） |
-| 18 | [18-dsh-runtime-version.md](18-dsh-runtime-version.md) | 现行（共享核心、desktop/gateway 管理面与恢复事务已实现；打包/实机证据见 STATUS） | dsh 运行时版本管理：source-bound 安装、per-server 设置段、探针门控激活/回退、快照/失败现场与磁盘治理；§9 扩展 gateway 宿主（`/chamber/runtime` + 启动切换相位 + S17–S20） |
-| 19 | [19-notifications.md](19-notifications.md) | M1–M2 已实现；竞态自动化已完成，M3 macOS 权限/打包态实机待验（2026-09） | 桌面通知：session complete/ask/request 推送原生通知（设置可选项）。检测 = renderer 复用 06 §4 事实通道边沿检测（零控制面改动）；呈现 = 主进程 Electron Notification + 点击打开会话；设置 = chamber-settings.json 新增 `notifications` + **并入通用页「通知」控制组（无新设置入口，2026-09 用户拍板）**；OpenChamber 通知功能调研见文内 §2 |
-| 20 | [20-open-in-registry.md](20-open-in-registry.md) | 现行（M0–M3 已实现；Batch 3 统一：Phase 0 视图模型 + Phase 2 吸收官方 client，2026-09） | open-in 打开注册表（design 16 演进）：单一 header 入口按 per-source 视图模型选择通道——本地来源走实例官方宿主目录（`<basePath>/open-in-app/*`，实例进程内执行） + 主进程 VS Code 覆盖；远程 ssh 仅主进程 VS Code Remote；http/未知无入口。主进程注册表收窄 vscode-only（finder/stat/openPath/reveal 退役）+ 六步 loud 执行管线 + 能力协商 IPC；插件重命名 `dsh-chamber-client-ui-open-in`（2026-08 合并 main 时重编号 17→20，避开 design 17 gateway） |
-| 22 | [22-linux-desktop.md](22-linux-desktop.md) | 现行（2026-12 落地；实机门禁见 STATUS） | Linux 桌面支持：AppImage（x64）发行形态 + 自动更新形态门（可写 $APPIMAGE）、XDG/$APPIMAGE 桌面集成纪律（自启 + 每启重写的协议 .desktop）、node 兜底平台分表与目录 fsync 平台无关容错、release.yml build-linux 腿 |
-| 24 | [24-archived-session-cleanup.md](24-archived-session-cleanup.md) | 现行（已合入 main，2026-12；2026-09 修订轮 M4 本地实跑 + 归档管理器 revision 见 §17/STATUS；2026 delete-archived 分支修订——移除独立「删除全部」+ 按工作区分组折叠见 §18/§19；§19 条目 6–9 合入后修订——缩进容器化、整体匹配轮、两段式确认重构与四方分面评审处置；gateway/远程与打包版目检待验） | 已归档会话内容清理：第三个 chamber 宿主域 `archiveCleanup/{preview,purge}`（purge 带可选子集过滤，2026-09 修订；有界例外动议，AGENTS 已登记）+ 归档管理器对话框（server 行 hover 打开，逐条删除 / 显式全选后删除选中——无独立「删除全部」；按工作区分组、可折叠，§18/§19；销毁确认 = 对话框内两段式，§19-8/9）；探针期望集派生契约随 M2 修订 design 18 §3.4 |
+| 08 | [08-git-worktree-plugin.md](08-git-worktree-plugin.md) | 现行 | git worktree 独立插件：实例内 host Remote + 强制打包客户端插件 + `sidebar.workspace.git` 座位 + 安全创建/无归档删除 saga |
+| 09 | [09-client-plugin-runtime-loading.md](09-client-plugin-runtime-loading.md) | 现行 | dsh 客户端插件运行时加载：每实例合并宿主 boot 图（chamber host 包 `clientGraph/graph` + 控制面 `--patch` seed + 去重预加载 + boot.ts extraRows seam）+ 信任边界 |
+| 10 | —（契约并入 [05](05-connection-manager.md) §2.3/§3） | 现行 | 侧边栏聚合改事件驱动：各来源 ctx 推投影取代 10s REST 轮询（30s 兜底仅覆盖无完整生产者来源）；不改上游 dsh |
+| 11 | [11-auto-update.md](11-auto-update.md) | 现行 | 桌面端更新提示（dsh-chamber 自身，无弹窗、低打扰）：settings chamber 全局「更新」块 + 静默检查、用户确认后下载、退出时安装（win/mac/linux 一致，mac 安装腿需 Developer ID）、beta → stable 通道 |
+| 12 | [../progress/todo/12-todo-archived-sessions.md](../progress/todo/12-todo-archived-sessions.md) | todo（已由 design 24 承接） | 已归档会话管理（归档单向且不可见；删除动议由 design 24 承接：chamber 宿主域 + server 行 hover 动作；B 特权层冻结结论保留） |
+| 13 | [13-remote-plugin-management.md](13-remote-plugin-management.md) | 现行 | 远程实例插件管理：一键应用本地插件清单 + 可视化添加（provider exec 通道 + spec 白名单 + remoteDshHome 远端路径基准） |
+| 14 | [14-sleep-background.md](14-sleep-background.md) | 现行（v1 范围） | 睡眠/后台常驻：关窗行为（托盘/退出）、登录自启、唤醒即时重连、防休眠、退出保护 |
+| 15 | [15-chamber-settings-page.md](15-chamber-settings-page.md) | 现行（v1 平铺形态；统一设置页推迟） | Chamber 设置呈现：settings 壳固定入口（连接/通用），chamber 全局设置与实例配置平面分离 |
+| 16 | [16-vscode-deeplink.md](16-vscode-deeplink.md) | 现行（OS 深链契约；应用内打开面已演进为 design 20） | VS Code OS 深链：`dsh-chamber://` 快速拉起本机 VS Code Remote-SSH 打开对应 server 目录；主进程 DeepLinkHandler 注册表 + VS Code 可用性探测 + 打包门控协议注册；无 host 插件/seed |
+| 17 | [17-server-side-gateway.md](17-server-side-gateway.md) | 现行（连接模型 v2 + 认证边界；实机门禁见 STATUS） | 独立启动的认证默认 server 形态（`--no-auth` 为显式可信网络例外）：单本地 dsh 公网接入、Desktop `gateway` target 与 gateway 自有派生编排；普通 control-plane 仍 loopback-only |
+| 18 | [18-dsh-runtime-version.md](18-dsh-runtime-version.md)；增补 [18-addendum-apply-now.md](18-addendum-apply-now.md)（「立即应用」） | 现行（打包/实机证据见 STATUS） | dsh 运行时版本管理：source-bound 安装、per-server 设置段、探针门控激活/回退、快照/失败现场与磁盘治理；§9 扩展 gateway 宿主（`/chamber/runtime` + 启动切换相位） |
+| 19 | [19-notifications.md](19-notifications.md) | 现行（macOS 权限/打包态实机验收未完成） | 桌面通知：session complete/ask/request 推送原生通知（设置可选项）+ 未读徽标。检测 = renderer 复用 06 §4 事实通道边沿检测（零控制面改动）；呈现 = 主进程 Electron Notification + 点击打开会话；设置 = chamber-settings.json 新增 `notifications` + 并入通用页「通知」控制组（无新设置入口）；OpenChamber 通知功能调研见文内 §2 |
+| 20 | [20-open-in-registry.md](20-open-in-registry.md) | 现行 | open-in 打开注册表（design 16 演进）：单一 header 入口按 per-source 视图模型选择通道——本地来源走实例官方宿主目录（`<basePath>/open-in-app/*`，实例进程内执行）+ 主进程 VS Code 覆盖；远程 ssh 仅主进程 VS Code Remote；http/未知无入口。主进程注册表收窄 vscode-only + 六步 loud 执行管线 + 能力协商 IPC；插件 `dsh-chamber-client-ui-open-in` |
+| 21 | [21-gateway-plugin-parity.md](21-gateway-plugin-parity.md) | 现行（A/B/C；余留项见文内登记） | 统一插件管理模型与 gateway 连接对齐：单一插件管理模型、末段执行分叉（ssh exec / gateway 编排面） |
+| 22 | [22-linux-desktop.md](22-linux-desktop.md) | 现行（实机门禁见 STATUS） | Linux 桌面支持：AppImage（x64）发行形态 + 自动更新形态门（可写 $APPIMAGE）、XDG/$APPIMAGE 桌面集成纪律（自启 + 每启重写的协议 .desktop）、node 兜底平台分表与目录 fsync 平台无关容错、release.yml build-linux 腿 |
+| 23 | [23-windows-support.md](23-windows-support.md) | 未实现（代码项已落地；真实 runner/实机门禁未过） | Windows 支持：平台适配、运行时管理解锁纪律、妥协点与验收矩阵 |
+| 24 | [24-archived-session-cleanup.md](24-archived-session-cleanup.md) | 现行（gateway/远程与打包版目检待验） | 已归档会话内容清理：第三个 chamber 宿主域 `archiveCleanup/{preview,purge}`（purge 带可选子集过滤；有界例外动议，AGENTS 已登记）+ 归档管理器对话框（server 行 hover 打开，逐条删除 / 显式全选后删除选中——无独立「删除全部」；按工作区分组、可折叠；销毁确认 = 对话框内两段式）；探针期望集派生契约见 design 18 §3.4 |
 
 ---
 

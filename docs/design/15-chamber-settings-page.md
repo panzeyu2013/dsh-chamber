@@ -1,17 +1,15 @@
-# 15 · Chamber 设置呈现（v1 平铺形态已实现；统一设置页推迟，2026-08）
+# 15 · Chamber 设置呈现（settings 壳固定入口）
 
-> **状态：已实现（v1 范围，2026-08）——设计见本文；实现基线以 git 历史与
-> CHANGELOG 为准**。2026-08 范围缩减（用户拍板）：**移除 B 项**
-> （插件管理提级、新插件包、OpenChamber 式完整子分区），**两级分组导航推迟**；
-> v1 仅把设计 14 的 chamber 全局设置（A 项）**平铺**进 settings 壳的固定入口区。
-> **2026-08 修订 1（用户拍板）**：固定入口由 3 个收为 2 个——**更新并入「通用」**
-> （设计 11 的更新状态 + 「检查更新」按钮随 `__update` 入口一并迁入 `__general`
-> 视图，设计 11 §3.2 同步修订）。
-> **2026-08 修订 2（用户拍板）**：`__general` 内部按 OpenChamber 式控制组组织
-> （启动与关闭 / 运行 / 更新）；「退出确认」由只读说明改为可设开关
-> `quitConfirmation`（默认开，仅本地实例运行中时确认，远程隧道不影响关闭）。
+> **状态：现行（settings 壳平铺固定入口，v1 范围，2026-12）**——chamber 全局设置
+> 落 settings 壳的固定入口区，与实例配置平面严格分离；**统一 Chamber 设置页 /
+> 两级分组导航推迟（不排期）**；未完成门禁见 `docs/progress/STATUS.md`。
+> 范围契约：固定入口只有 `__connections`（连接）与 `__general`（通用，含设计 11
+> 的更新块、设计 14 的运行设置、通知与会话待办区控制组）；**移除 B 项**（插件管理
+> 提级、新插件包、OpenChamber 式完整子分区）。
+> 本文是 chamber 设置的**呈现面与权威边界**契约（数据权威见 D3）；设计 14 是睡眠/
+> 运行设置的来源，设计 11 是更新块，设计 19 是通知组，设计 06 §8 是会话待办区。
 
-## 1. 现状
+## 1. 壳形态（现状契约）
 
 - `SettingsShell`（`packages/dsh-chamber-client-ui-settings-bridge`）：服务器下拉
   （local 默认 + 远程按连接态着色）→ 选中实例官方段（models/agent-presets/
@@ -19,9 +17,9 @@
   `__connections`（连接）、`__general`（通用——含设计 11 的更新块）。
 - chamber 全局组件内嵌渲染（不占 child ctx、不依赖选中服务器连接）。
 - 插件管理在连接页内（`PluginSyncModal`/`PluginAddView`，经 `desktop_ssh_plugin_*`
-  IPC）。
+  IPC）——**不搬家**。
 
-## 2. v1 决策（平铺形态）
+## 2. 决策与契约（平铺形态）
 
 ### D1 固定入口平铺扩展
 
@@ -32,18 +30,21 @@
   落点**，按 OpenChamber 式**控制组**组织（组标题 + 平铺行，settings-panel
   设计语言）——
   - **启动与关闭**：关闭窗口行为（`windowCloseBehavior`：hide-to-tray / quit，
-    可设）；登录自启（`launchAtLogin`，可设；macOS/Windows/Linux，design 23 M4 win 已解锁）；
+    可设）；登录自启（`launchAtLogin`，可设；macOS/Windows/Linux，win 门已解锁）；
   - **运行**：保持唤醒（`keepAwake`，默认关）；退出确认（`quitConfirmation`，
-    2026-08 新增可设开关，默认开——仅本地实例运行中时确认，远程隧道不影响
-    关闭，更新已下载时豁免，见设计 14 D2 修订）；VS Code 新窗口
-    （`vscodeOpenInNewWindow`，2026-12 新增，默认开——会话目录在 VS Code 新
+    可设开关，默认开——仅本地实例运行中时确认，远程隧道不影响
+    关闭，更新已下载时豁免，见设计 14 D2）；VS Code 新窗口
+    （`vscodeOpenInNewWindow`，默认开——会话目录在 VS Code 新
     窗口打开，避免其运行中默认复用/替换最近活动窗口；见设计 16 §3.3）；
-  - **更新**（设计 11，2026-08 并入；组标题 + 导语 + 版本行 + 「检查更新」按钮
+  - **会话待办区**（sidebar todo area，契约见 D4 与设计 06 §8）；
+  - **通知**（设计 19 §3.4：主开关 + 通知时机 + 事件开关 + 发送测试通知）；
+  - **更新**（设计 11，并入；组标题 + 导语 + 版本行 + 「检查更新」按钮
     + 相位状态行）。
   - 样式与官方设置段一致（settings-panel 设计语言：标题 + 导语 + 分组标题 +
-    平铺行 + 胶囊按钮，`--dsw-alias-*` tokens）。
+    平铺行 + 胶囊按钮，`--dsw-alias-*` tokens）；控制组之间以分割线
+    （`--dsw-alias-border-l2` hairline）分隔。
   - 读主进程 `chamber-settings.json`（`dsh-chamber:settings-get/set` IPC + 变更 push）。
-- 插件管理维持现状（连接页内 Modal），**不搬家**；「关于」页 v1 不做。
+- 「关于」页 v1 不做。
 
 ### D2 推迟（不排期）：统一 Chamber 设置页 / 两级分组
 
@@ -62,45 +63,15 @@
 - 两组永不交叉：chamber 设置不进实例 dsh home；实例配置不投影到 chamber 固定
   入口。这是「更好的区分」的契约基础（即使 v1 只是平铺，区分依然成立）。
 
-## 3. 与既有设计的衔接
+### D4 会话待办区设置组（settings 契约）
 
-- 设计 11（更新）：更新块并入 `__general`（原 `__update` 固定入口移除）；
-  「检查更新」按钮经 `dsh-chamber:update-check` IPC（主进程同一条静默检查路径）。
-- 设计 14（睡眠/后台常驻）：全部运行设置落 `__general`。
-- 设计 05 §5：连接设置插件（`settings.section` id `connections`）注册不变；
-  chamber 固定入口是壳层结构，不新增官方 `settings.section` 注册。
-- 设计 13（插件管理）：IPC 面不动，视图维持现状。
-
-## 4. i18n / 测试 / 分期
-
-- **i18n**：扩展 `dsh-chamber.settings.bridge` 命名空间（通用设置文案，
-  zh/en；`verify:i18n` 必须通过）。
-- **测试**：`test:settings-bridge` 扩展（`__general` 入口渲染/active 解析/
-  壳装配隔离不变式；`update-gate`：检查按钮相位门）；`test:connections`
-  （plugin-diff）不变；`typecheck:settings-bridge`、`build:renderer`。
-- **M1**：`__general` 视图 + 平铺入口（接设计 14 M1–M3 设置项，随 14 各期
-  填充：M1 关窗行为 → M2 防休眠 → M3 登录自启）。
-- **推迟（不排期）**：两级分组导航、插件提级、关于页。
-- 验证清单：两个固定入口渲染、chamber 入口在服务器未连接时可用、设置读写经
-  主进程 store、与官方段互不污染、i18n 无 DRIFTED。
-
-## 5. 关联
-
-- 设计 14（睡眠/后台常驻）：`__general` 的内容来源；
-- 设计 11（自动更新）：更新块并入 `__general`；
-- `docs/progress/STATUS.md`（进度唯一记录）。
-
----
-
-## 6. 会话待办区设置组（2026-12 增补）
-
-「通用」（`__general`）在「运行」与「通知」组之间新增「会话待办区」组（sidebar todo
-area，契约见设计 06 §8）：主开关（无边框披露行）+ 展开后三类事件开关（会话完成时 /
+「通用」（`__general`）在「运行」与「通知」组之间是「会话待办区」组（sidebar todo
+area，交互与派生契约见设计 06 §8）：主开关（无边框披露行）+ 展开后三类事件开关（会话完成时 /
 代理提问时 / 审批请求时——与「通知」组事件开关共用同一组文案与事件行视觉，卡片内
-行）。2026-09 修订：两类事件开关**措辞统一**（待办区不再用「已完成未读的会话 /
-等待你回答的会话 / 等待你批准的会话」），待办区主开关与未读角标开关下不再渲染说明
+行）。两类事件开关**措辞统一**（待办区不用「已完成未读的会话 /
+等待你回答的会话 / 等待你批准的会话」等长句），待办区主开关与未读角标开关下不渲染说明
 行（开关标题自明）；事件行勾选框紧跟所属选项文字、宽布局下列间以竖分隔线分割（窄窗
-降列时无竖线，见 SettingsShell.module.css）。对应 chamber 全局设置新嵌套块：
+降列时无竖线，见 SettingsShell.module.css）。对应 chamber 全局设置嵌套块：
 
 ```ts
 ChamberSettings.sessionTodo: {
@@ -125,4 +96,30 @@ ChamberSettings.sessionTodo: {
   未水合回落默认——功能默认开，与「绝不假 off」占位纪律不冲突，因为本块的默认值
   本身就是开）。
 
-**关联（补 2026-12）**：设计 06 §8（会话待办区交互/派生契约）；设计 19 §3.4（通知组并入通用的先例：事件类别 vocabulary 复用 complete/ask/request）。
+## 3. 与既有设计的衔接
+
+- 设计 11（更新）：更新块并入 `__general`（原 `__update` 固定入口移除）；
+  「检查更新」按钮经 `dsh-chamber:update-check` IPC（主进程同一条静默检查路径）。
+- 设计 14（睡眠/后台常驻）：全部运行设置落 `__general`。
+- 设计 05 §5：连接设置插件（`settings.section` id `connections`）注册不变；
+  chamber 固定入口是壳层结构，不新增官方 `settings.section` 注册。
+- 设计 13（插件管理）：IPC 面不动，视图维持现状。
+
+## 4. i18n 与验证门
+
+- **i18n**：扩展 `dsh-chamber.settings.bridge` 命名空间（通用设置文案，
+  zh/en；`verify:i18n` 必须通过）。
+- **测试**：`test:settings-bridge`（`__general` 入口渲染/active 解析/
+  壳装配隔离不变式；`update-gate`：检查按钮相位门；会话待办区与通知设置纯函数）；
+  `test:connections`（plugin-diff）不变；`typecheck:settings-bridge`、`build:renderer`。
+- **推迟（不排期）**：两级分组导航、插件提级、关于页。
+- 验证清单：两个固定入口渲染、chamber 入口在服务器未连接时可用、设置读写经
+  主进程 store、与官方段互不污染、i18n 无 DRIFTED。
+
+## 5. 关联
+
+- 设计 14（睡眠/后台常驻）：`__general` 的内容来源；
+- 设计 11（自动更新）：更新块并入 `__general`；
+- 设计 06 §8（会话待办区交互/派生契约）、设计 19 §3.4（通知组并入通用的先例：
+  事件类别 vocabulary 复用 complete/ask/request）；
+- `docs/progress/STATUS.md`（进度唯一记录）。

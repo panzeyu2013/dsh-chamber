@@ -227,7 +227,7 @@ Test commands live in [CONTRIBUTING.md](../CONTRIBUTING.md) "Testing" and "Befor
 | [README.md](../README.md) | User docs (features/install/deploy/FAQ) |
 | This file `docs/DEVELOPMENT.md` | Development: architecture/build/package/CI/release |
 | [CONTRIBUTING.md](../CONTRIBUTING.md) | Contribution process (testing/commits/PR contract) |
-| [AGENTS.md](../AGENTS.md) | Always-on repository rules (package boundaries/constraints/validation) |
+| [AGENTS.md](../AGENTS.md) | Always-on repository rules (package map / hard constraints / STATUS recording rules) |
 | [CHANGELOG.md](../CHANGELOG.md) | Version history |
 | [docs/design/01-overview.md](design/01-overview.md) | Design entry point & consolidation principles |
 | [docs/progress/STATUS.md](progress/STATUS.md) | Progress overview (the only progress record) |

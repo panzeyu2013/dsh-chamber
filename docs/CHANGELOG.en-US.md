@@ -53,7 +53,7 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 ### Fixed
 
-- **Purged archived sessions kept resurfacing in the sidebar (design 24 §21).**
+- **Purged archived sessions kept resurfacing in the sidebar (design 24 §12).**
   After a purge deleted the content of archived sessions, the official client's
   `SessionManager.summaries` never refreshed (host session events are documented
   no-ops) while the archive-set shrink reached the client immediately through the
@@ -76,7 +76,7 @@ Release artifacts and per-release notes also live on the GitHub Releases page
   members across the WHOLE set: per-candidate official single-id existence check,
   union of the query/persistence enumerations, empty/collapsed-corpus credibility
   gates, membership-only with zero new content deletion, double-confirmed and
-  fail-closed). See design 24 §20/§21 and `docs/progress/STATUS.md`.
+  fail-closed). See design 24 §12 and `docs/progress/STATUS.md`.
 - **Mobile web surface (design 17 §18)**: rework and hardening for four
   device-reported problems, including an independent cross-check round (six
   lanes: code, symptom coverage, control plane, docs, reproduction, optimality;
@@ -224,7 +224,7 @@ Release artifacts and per-release notes also live on the GitHub Releases page
   LIVE-transaction phases (prepared/switched/restoring…) stay unarmed (an
   old shell's in-flight transaction keeps its journal-mismatch semantics);
   3 regression tests.
-- **Plugin sync/install QA closure (design 21 §10 ⑱–㉒)** — sync 400 reasons
+- **Plugin sync/install QA closure (design 21 §6.2/§6.3/§6.6 ⑱–㉒)** — sync 400 reasons
   are passed through (an older gateway that does not know a host package
   answers with a sanitized reason + upgrade hint instead of a bare 400; the
   desktop merges the gateway reason into the failure string); after a
@@ -244,7 +244,7 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 
 ### Changed
 
-- **N-ctx view retention/reclaim + visibility gating (design 05 §1 note /
+- **N-ctx view retention/reclaim + visibility gating (design 05 §4 note /
   performance-baseline §10; phase-2 perf items A/C/D code side)** — the early
   "booted shells persist forever (view lifetime = registry-entry lifetime)"
   semantics narrows to a chamber retention policy: local stays forever,
@@ -269,7 +269,7 @@ Release artifacts and per-release notes also live on the GitHub Releases page
   `measure-ui/v1`: per-shell DOM nodes / heap / idle long tasks / synthetic
   input frame intervals).
 - **Archive manager grouped by workspace and collapsible (design 24
-  §18/§19)** — the standalone "delete all" button is retired: clearing the
+  §6)** — the standalone "delete all" button is retired: clearing the
   whole set requires explicitly ticking select-all and confirming the
   counted delete-selected, so a purge always carries an explicit id list
   (degraded/pending views offer no destructive action); the listing groups
@@ -277,7 +277,7 @@ Release artifacts and per-release notes also live on the GitHub Releases page
   ungrouped bucket), group headers reuse the nav fold chrome + workspace
   accent with tri-state group checkboxes, and collapse is dialog-local view
   state.
-- **Archive manager matching round (design 24 §19-6..9, dsh/repo
+- **Archive manager matching round (design 24 §6, dsh/repo
   conventions)** — destructive confirms moved to an IN-DIALOG two-stage
   flow (arming freezes list input and shows a risk bar: counted
   irreversible copy / cancel / confirm-delete; Escape only disarms — a
@@ -292,7 +292,7 @@ Release artifacts and per-release notes also live on the GitHub Releases page
   read-only review (correctness/completeness/optimality/a11y) fix round
   landed (rAF focus return, explicit aria-checked=mixed select-all, text-
   only role=alert, …) with deviations and pending 目检 items recorded in
-  §19-9.
+  §13 (item 17).
 
 ## [0.2.2] - 2026-09-05
 
@@ -424,7 +424,7 @@ Release artifacts and per-release notes also live on the GitHub Releases page
   repair/prune; locked → `git worktree unlock`; unregistered rows split by
   cause.
 - **Sidebar git repo-group folding and rest-state row-end cleanup (design
-  08 §11.7, 2026-09 user decision)** — folding a git main workspace hides
+  08 §3.3, 2026-09 user decision)** — folding a git main workspace hides
   its derived worktree rows as one repo group (purely presentational — the
   derived rows' own fold prefs are untouched; the
   `hiddenByMainWorkspaceFold` predicate carries a main-row existence guard,

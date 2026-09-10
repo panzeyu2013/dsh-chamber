@@ -18,7 +18,7 @@
 - **M2b（纪律门禁：M2a 全绿前不做）**：`DSH_CHAMBER_WINDOWS_RUNTIME_MUTATIONS` 门控
   翻转（main.ts/dsh-runtime-controller/apply-now-gate/UI/i18n/版本 chip）；win32 测试
   diff 对照基线全归因；Windows 11 实机故障注入全链 + 只读投影文案移除。
-- **M3**：design 23 §8 实机矩阵全勾（托盘/关窗/唤醒/SSH 密钥隧道/updater stable+beta/
+- **M3**：design 23 §7 实机矩阵全勾（托盘/关窗/唤醒/SSH 密钥隧道/updater stable+beta/
   深链特殊字符 URL/防火墙 loopback 无弹窗/ACL 查询）+ 打包产物核对（图标/preload）。
 - **M4**：登录自启注册表实测/卸载残留（nsis-uninstall-cleanup）、深链冷热启动 + `&`
   字符 URL、open-in 盘符实机、NSIS protocols 实证（与 M0.5 合并）。

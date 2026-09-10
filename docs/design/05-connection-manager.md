@@ -1,13 +1,14 @@
-# 05 · 连接管理器形态（v1 定稿：多来源会话统一导航）
+# 05 · 连接管理器形态（v1：多来源会话统一导航）
 
-> 本软件 = dsh 的**桌面连接管理器**（v1 定稿，2026-08-14）：Electron 包装
-> dsh 官方前端，本地与远程实例同等接入；**多来源 session/workspace 在
-> dsh 原生侧边栏内平等呈现**（仅按来源分类，远程来源以颜色标注——codex
-> 式"导航统一、执行按来源路由"）。首屏 = 本地实例的完整 dsh shell
-> （纯 dsh UI，无 chamber 外壳）。
-> 控制面 = 托管 + 反代 + 静态服务（v1 无认证/审计，loopback-only）。
-> **连接模型 / 凭据 / 安全面以 `17-server-side-gateway.md`（2026-09
-> 连接模型 v2）为权威**：kind dsh|gateway × transport ssh|http × 认证 ×
+> **状态：现行（连接管理器 v1 形态与四方契约，2026-12）**——本软件 =
+> dsh 的**桌面连接管理器**：Electron 包装 dsh 官方前端，本地与远程实例
+> 同等接入，**多来源 session/workspace 在 dsh 原生侧边栏内平等呈现**（仅按
+> 来源分类，远程来源以颜色标注——codex 式"导航统一、执行按来源路由"）；
+> 首屏 = 本地实例的完整 dsh shell（纯 dsh UI，无 chamber 外壳）；控制面 =
+> 托管 + 反代 + 静态服务（v1 无认证/审计，loopback-only）；未完成门禁见
+> docs/progress/STATUS.md。
+> **连接模型 / 凭据 / 安全面以 `17-server-side-gateway.md`（连接模型 v2）为
+> 权威**：kind dsh|gateway × transport ssh|http × 认证 ×
 > 通道四维正交（17 §2）、注册表 schema v2（17 §9.1）、桌面凭据
 > safeStorage（17 §12）与安全不变量 S21–S24（17 §17）。
 > 本文档是 control-plane / desktop / renderer / 侧边栏插件四方契约。
@@ -51,17 +52,6 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
         远程目标：dsh（API 面 profile）或 gateway；按需使用 SSH+systemd 或 HTTP(S) 直连
 ```
 
-> **2026 性能整改语义注记（§1 形态图外部）**：早期"booted 壳无限常驻（视图
-> 生命周期 = 注册表条目生命周期）"在 v0.2.3+ 收窄为 chamber 保留策略——除
-> local 恒留外，隐藏壳最多保留 `RETAINED_HIDDEN_VIEWS=1` 个
-> （`src/retention.ts`），超限回收"已 settle + 连续隐藏 ≥60s"的最久者；
-> 回收 = dispose shell + 卸载 UI 壳（App 层 reclaimView，与注册表删除同
-> 原语），实例进程/隧道/后台任务不受影响，重开走冷 boot + entry 重放；被
-> 回收源的侧栏聚合落到 30s unary 兜底（§2.3 语义）。取舍：被回收壳内运行
-> 中任务的完成蓝点/通知边沿暂停至该源重开。预热/可见性门控等细节与偏差
-> 登记见 STATUS.md、performance-baseline.md §10 与本文件 §4 的原始语义
-> （§1 拓扑图为收窄后形态；偏差对照以本注与 STATUS 为准）。
-
 ## 2. 侧边栏契约（核心：多来源会话统一导航）
 
 ### 2.1 形态与呈现
@@ -78,8 +68,7 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
   文字、无状态文案）→ 该来源的
   workspace（组头）→ session 行（**嵌套缩进**于 workspace 之下）。未连接
   来源只显示分组头 + 状态点（无会话数据）。
-- 会话行带**运行指示点**（相对时间列不显示——见 06 §4.3，2026-08 确认
-  暂不回归）。
+- 会话行带**运行指示点**（相对时间列不显示——见 06 §4.3）。
 - **当前来源的当前会话行高亮**（含所在 workspace 组着色）：当前会话 id 经
   运行时事实通道（`server.runtime?.current`，06 §4）——每个来源自己的 ctx
   上报自身 `sessions.list` 快照投影，任意来源均可达，组件不订阅任何 store。
@@ -105,23 +94,27 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
   打开尝试 settle 后（成功，或 dispatch 预算耗尽失败——§4 两种终态报告之
   一），App 层经 `chamberBridge.reportOpenSessionOutcome` 回报每个侧边栏
   shell：失败文案在目标会话行内呈现（复用 session action-error 槽，低优先
-  级；10s 自动消退；再次点击/后续成功即提前清除）。2026-09 修订——此前
-  requestOpenSession 是单向通道，失败仅 console.error，用户切换视图后看到
-  的是未选中会话的目标服务器且无任何可见错误。
+  级；10s 自动消退；再次点击/后续成功即提前清除）。该回报是**必需**通道：
+  requestOpenSession 单向时失败仅 console.error，用户切换视图后看到的是
+  未选中会话的目标服务器且无任何可见错误。
 - **点击来源分组头**（非当前来源）= 切换活动来源视图：
   `chamberBridge.requestActivateSource(sourceId)` → App 层仅切换该来源
   shell（N-ctx），不打开会话。
 - **归档会话确认后立即从列表消失**：`archivedSessionIds` 过滤在 derive 层
   （`shared/derive.ts` 纯函数），不等聚合轮询。
-- 会话行悬停操作（v1 最小集，走该来源自己的 API）：重命名/归档（kebab
-  菜单 + 独立归档按钮）；workspace 行：新建会话（`+` 按钮，在该
+- 会话行悬停操作（v1 最小集，走该来源自己的 API）：重命名/归档/**fork**
+  （kebab 菜单 + 独立归档按钮）——行内 fork 走 wire `sessions.fork` + 标题
+  递增（increaseTitle，对齐官方 ui-workspace），成功后打开子会话，递增
+  rename 失败非致命（子会话仍创建并打开）；官方 conversation 回合尾部的
+  `turn-tail forkAt` 常驻可用，两者并存。workspace 行：新建会话（`+` 按钮，在该
   workspace 下创建并打开）、重命名、删除（kebab 菜单）。wire 缺失的
   方法不做（如删除会话），不发明协议——**design 24 受界例外**（2026-12
   用户批准，AGENTS 已登记）：来源头 hover 簇新增「删除已归档内容」动作，
   走 chamber 自有宿主域 `archiveCleanup/{preview,purge}`（第三个宿主包，
   实例进程内权威清除归档集内容含 subagent 级联；只删不读、运行中整棵
-  跳过、幂等；域缺失 404 给诚实文案；host binding 依 design 24 §10 vendor
-  核对后启用）。详见 design 24 与 05 §6 宿主包清单。
+  跳过、幂等；域缺失 404 给诚实文案；host binding 已按 design 24 §10 的 vendor
+  核对结论落地，见 `packages/dsh-chamber-seed-archive-cleanup/src/binding.ts`）。
+  详见 design 24 与 §6 宿主包清单。
 - 已连接来源提供"新建工作区"（来源头部 `+` 按钮）：打开该来源的应用内
   目录浏览对话框（§4
   同一 browse 表面，不做手敲路径表单），确认的路径走该来源的
@@ -129,9 +122,9 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
   服务器路径）。
 - 悬停操作与新建工作区成功后，经 chamberBridge.requestRefresh(sourceId)
   立即重拉该来源聚合（v1 轮询 + 操作后刷新）。
-- **v1 交互面扩展（2026-08，详见 06）**：来源头 hover 操作簇新增**会话排序
+- **交互面扩展（详见 06）**：来源头 hover 操作簇提供**会话排序
   切换**（显式排序菜单——官方 ViewOptionsMenu 模式，勾选标记当前模式，
-  取代早期盲切循环，06 §2.2）；workspace 头/会话行**双击重命名**
+  取代盲切循环，06 §2.2）；workspace 头/会话行**双击重命名**
   （会话行单击立即打开、二次点击进入重命名，06 §2.2）；workspace 头/会话行
   悬停显示**信息卡片**（标题/会话数/相对时间/状态点/复制标题，06 §7）。
 - New Session → 当前活动来源新建会话。
@@ -149,31 +142,35 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
   即撤回旧快照并清除内容签名，使同内容 reconnect baseline 也重新上报。远端 ctx
   的 host frames 仍经既有 SSH 隧道/实例反代 WebSocket 到达，**不增加协议、不修改上游 dsh**。
 - 只有未挂载或 reconnect baseline 不完整的 ready 来源使用 30s unary 兜底；所有
-  ready 来源都有完整生产者时不创建聚合定时器。连接/生产者状态变化立即重估，
-  用户动作的 `requestRefresh` 只对无完整生产者来源单次拉取；已挂载完整生产者由同一
-  host-store 变更直接推送，避免动作成功后再补 RPC。**2026-12 勘误（与
-  App.tsx 不符，design 24 评审发现）**：App 层 onRefresh 对每个 live 来源
-  无条件执行一次 mutation-pull（合并会话行、保留分组/归档集）——`requestRefresh`
-  不是 mounted 来源的 no-op；本段与 05 §3 同源旧句已过时，实际语义 =
-  mounted 来源以 host-store 事件推送为主 + requestRefresh 即时 unary pull
-  双通道。每个来源的 not-ready → ready
-  连接代边沿固定执行一次 unary：生产者会对同内容快照去重。**2026 勘误
-  （sidebar-hidden 合并后语义修订；修订记录在 STATUS 与 aggregate-refresh.ts）**：
-  App 断线分支不再清空已推送来源的聚合（`shouldRetainPushedAggregate`——行渲染
+  ready 来源都有完整生产者时不创建聚合定时器。连接/生产者状态变化立即重估；
+  用户动作的 `requestRefresh` 对**每个 live 来源**无条件执行一次即时
+  mutation-pull（合并会话行、保留分组/归档集）——不是 mounted 来源的 no-op：
+  mounted 来源以 host-store 事件推送为主、`requestRefresh` 即时 unary pull 为
+  并行第二通道。每个来源的 not-ready → ready
+  连接代边沿固定执行一次 unary：生产者会对同内容快照去重。App 断线分支
+  **不清空**已推送来源的聚合（`shouldRetainPushedAggregate`——行渲染
   以 connected 为门，断连不显示；ready-edge 拉取为 sessions-only merge，归档集/
   工作区不丢失）；稳定 ready 代亦非零轮询——30s unary 兜底 watchdog 对 stale
-  来源照常拉取，卡在降级视图（合成行）的来源由限流自愈臂重连并重放 workspace
+  来源照常拉取，卡在降级视图（合成行）的来源由限流自愈臂（S2）重连并重放 workspace
   follow，使 producer 重发带归档集的真实基线（`shouldRebaselineFallbackView`）。
+  **S2 臂的陈旧阈值按传输分级**（`packages/renderer/src/aggregate-refresh.ts`）：
+  `http` 直连 = 120s（上游腿无应用心跳、仅 ~10min OS TCP keepalive，app 级冻结
+  否则可长时间不可见——120s 是仍让健康空闲源每两分钟最多弹一次的最紧节奏）；
+  `ssh` 隧道 = 300s（隧道已有三个独立探活——反代浏览器腿 30s WS ping、host mux
+  2s/2-miss 心跳、ssh `ServerAliveInterval=30 × CountMax=3` ≈90s——故该臂只作
+  **最后手段**：较长阈值避免健康空闲隧道源每两分钟付一次 baseline 重放，仍能治愈
+  挺过全部心跳却停止推送的通道）；`local` 与未知传输取 `null`（本地聚合由权威直接
+  服务、无会冻结的推送通道；未知传输已在别处 fail-closed），该臂**不得触碰**它们。
   若该拉取瞬时失败，生产者的 loading 撤回 + idle baseline 重发负责恢复，不会永久停在
   error。推快照按来源序号使较旧在途 pull 失效。
-- **首屏基线收割（2026-12，`packages/renderer/src/baseline-harvest.ts`）**：
-  0.2.3 性能整改把"每个 ready 来源最终串行挂载"的旧通道移除后，首启只有 local
-  挂载 + 1 个预热槽且不轮转、被回收来源在用户点击前禁预热 ⇒ N-1 个 ready 远程源
+- **首屏基线收割（`packages/renderer/src/baseline-harvest.ts`）**：
+  首启只有 local 挂载 + 1 个预热槽且不轮转、被回收来源在用户点击前禁预热
+  （"每个 ready 来源最终串行挂载"的旧通道已移除）⇒ N-1 个 ready 远程源
   **稳态停留**在 unary 兜底视图（合成 cwd 分组 + 空归档集 ⇒ 已归档会话按普通行
   浮出、无真实工作区动作），而全部自愈臂都要求 `mounted===true`（至少推过一次
   快照），对从未挂载的来源永不生效。收割把这类来源在**同一个后台预热槽**里挂一次，
   拿到首个权威推送（真实分组 + 归档集，`archiveSetKnown:true`）即回收——回收后
-  来源转入已上线的"已回收来源"态（保留权威聚合，会话行由 30s unary merge 刷新）。
+  来源转入"已回收来源"态（保留权威聚合，会话行由 30s unary merge 刷新）。
   纪律：收割候选优先于普通预热且**不受**"回收后禁预热"抑制（抑制只为防止回收空转，
   不能把降级源永久钉住）；每源尝试上限 2 次、失败退避 120s、挂载后
   `BOOT_TIMEOUT_MS+15s` 无推送**且壳已 settle** 判失败并释放槽位（截止值由
@@ -200,10 +197,10 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
   `remaining` 恒 0，本会话剩余来源永远拿不到基线（一个失败源阻塞全部，违反
   正确性不变量）；**尝试耗尽且从未拿到基线**的源（`harvestParked`）不得退回
   普通预热——否则白拿第三次 boot 并同样长期占用唯一槽位；托管 dsh **终态停机或
-  瞬态 starting/restarting** 的 gateway 源（问题 B 的投影事实，`managedRuntimeUnusable`）
+  瞬态 starting/restarting** 的 gateway 源（投影事实 `managedRuntimeUnusable`）
   不预热/不收割——壳 boot 必然 503，只白烧尝试次数；用户点开正在收割的视图 = 采用（撤销收割意图，绝不回收）；来源退役时
-  账本同源收敛。稳态仍是 ≤1 个后台壳（与预热共享槽位）。**收割另有独立预算线**
-  （2026-12 复查）：用户保留的隐藏温壳会让普通预热的槽位预算恒为 0（retention
+  账本同源收敛。稳态仍是 ≤1 个后台壳（与预热共享槽位）。**收割另有独立预算线**：
+  用户保留的隐藏温壳会让普通预热的槽位预算恒为 0（retention
   只保 1 个隐藏壳），而收割壳是瞬时的（推送即回收 / 仅最后一个保留 / 有截止与
   放弃上限），不能被它永久挡死——否则用户点开过任何来源之后，后变 ready 的来源
   永远停在兜底视图；代价是最坏多一个隐藏壳（用户温壳 + 收割壳）在收割窗口内共存。
@@ -261,8 +258,8 @@ export const chamberBridge: {
   onOpenSessionOutcome(listener: (outcome: OpenSessionOutcome) => void): () => void  // 侧边栏订阅：失败行内呈现/成功清残留
   requestRefresh(sourceId: string): void                  // 侧边栏动作成功后调用
   onRefresh(listener: (sourceId: string) => void): () => void  // App 层订阅
-  requestSessionListRefresh(sourceId: string): void       // design 24 §20/§21：请求该来源挂载 ctx 重跑官方 session.list（purge 幽灵行收敛；§21 起由生产端校验式收敛链处理：reject/hung 有界重试，越界一律保持抑制——resolve 不构成权威）
-  onRequestSessionListRefresh(listener: (sourceId: string) => void): () => void // 各挂载 ctx 的 sidebar 插件订阅；仅 chamberInstanceId === sourceId 者动作（§21：插件自身观测到归档集收缩也会直接触发同一链，不依赖本通道送达）
+  requestSessionListRefresh(sourceId: string): void       // design 24 §12：请求该来源挂载 ctx 重跑官方 session.list（purge 幽灵行收敛；§12 由生产端校验式收敛链处理：reject/hung 有界重试，越界一律保持抑制——resolve 不构成权威）
+  onRequestSessionListRefresh(listener: (sourceId: string) => void): () => void // 各挂载 ctx 的 sidebar 插件订阅；仅 chamberInstanceId === sourceId 者动作（§12：插件自身观测到归档集收缩也会直接触发同一链，不依赖本通道送达）
   requestActivateSource(sourceId: string): void           // 点击来源分组头调用
   onActivateSource(listener: (sourceId: string) => void): () => void  // App 层订阅
   registerInstanceRuntimeProducer(sourceId: string, sourceFingerprint: string,
@@ -285,7 +282,7 @@ export const chamberBridge: {
   clearPluginDiagnostic(sourceId: string): void
   getPluginDiagnostics(): Readonly<Record<string, PluginGraphDiagnostic>>
   onPluginDiagnostic(listener: (sourceId: string, diagnostic: PluginGraphDiagnostic | undefined) => void): () => void
-  // 活动视图事实（2026-12，design 06 §4.6）：文档级状态（主题投影、后续的
+  // 活动视图事实（design 06 §4.6）：文档级状态（主题投影、后续的
   // lang 投影）只有活动视图的实例可以写，App 是「谁在屏上」的唯一权威。
   setActiveSource(sourceId: string | undefined): void     // 同值重发为 no-op；undefined = 未发布
   getActiveSource(): string | undefined                   // 未发布时 undefined（消费者 fail open）
@@ -310,8 +307,8 @@ export const chamberBridge: {
   （成功清残留失败文本；失败携带 §4 终态报告文案，行内呈现见 §2.2）。
 - 订阅 `onActivateSource` → 仅切换活动来源视图（不打开会话）。
 - 订阅 `onRefresh` → 每个 live 来源无条件执行一次即时 mutation-pull（与
-  §2.3 2026-12 勘误一致：mounted 来源 host-store 推送为主、requestRefresh
-  双通道并行，不是 mounted no-op）。
+  §2.3 同规：mounted 来源 host-store 推送为主、requestRefresh 即时 unary
+  pull 双通道并行，不是 mounted no-op）。
 - 订阅 `onRuntimeReport` → 把各来源的运行时事实合并进 `server.runtime`
   （仅附加、不覆盖轮询字段；来源断连即清，06 §4）。runtime 与 snapshot 两条
   producer 均以注册时单调 token + 主进程下发的 opaque `sourceFingerprint` 认领
@@ -322,8 +319,15 @@ export const chamberBridge: {
 - 订阅 `onInstanceSnapshot` → 以内容签名 identity-preserving 合并，并使旧 pull
   失效；订阅 `onPluginDiagnostic` → 合并到来源标题异常标记与插件设置页详情。
 
-## 4. N-ctx 与切换（沿用，机制按 perf T2 修订——见下并发语义注）
+## 4. N-ctx 多实例与视图切换
 
+- **视图保留策略（chamber retention）**：除 local 恒留外，隐藏壳最多保留
+  `RETAINED_HIDDEN_VIEWS=1` 个（`src/retention.ts`），超限回收"已 settle +
+  连续隐藏 ≥60s"的最久者；回收 = dispose shell + 卸载 UI 壳（App 层
+  reclaimView，与注册表删除同原语），实例进程/隧道/后台任务不受影响，重开走
+  冷 boot + entry 重放；被回收源的侧栏聚合落到 30s unary 兜底（§2.3）。
+  取舍：被回收壳内运行中任务的完成蓝点/通知边沿暂停至该源重开。预热/可见性
+  门控等细节与偏差登记见 STATUS.md、performance-baseline.md §10。
 - N 个 AppWebEntry（共享一份静态模块表，v1 允许各自创建）；每来源一个 shell，
   hide/show 切换，会话保活。**视图生命周期 = 注册表来源代生命周期**：来源删除，
   或 `kind/host/user/sshPort/remotePort` 任一传输身份字段变化，都会通过权威
@@ -338,7 +342,7 @@ export const chamberBridge: {
   遗留僵尸 ctx）；被回收的视图若是当前视图则回落到 local（常驻）。
   插件图诊断同样受 boot generation 门控：已取消/已被重试取代的旧 boot
   即使迟到完成 graph 请求，也不能覆盖新一代的诊断。
-- **boot 串行与 teardown 纪律（2026-08-28）**：页面级模块物化仍由全局 boot
+- **boot 串行与 teardown 纪律**：页面级模块物化仍由全局 boot
   chain 串行；某次 `run()` 60s 不 settle 时，全局 chain 只放行**其他 instance**，
   避免一个坏来源永久阻塞无关来源。相同 instance 另有 per-id boot tail：新代必须
   等前代 `run()` settle，并等其 `AppWebEntry.dispose()` 的异步 `ctx.fiber.dispose()`
@@ -350,7 +354,7 @@ export const chamberBridge: {
   runtime/snapshot producer token 则守住异步 effect cleanup。boot/run catch 必须用
   never-throw 描述器收敛任意 thrown value（含自身反射/字符串化也抛错的 Proxy），
   不能让 boot Promise 悬挂。
-- **切换实现（修正：即时隐藏 + View Transition + 骨架屏，content-visibility）**：
+- **切换实现（即时隐藏 + View Transition + 骨架屏，content-visibility）**：
   非活动视图用 `visibility:hidden + opacity:0 + pointer-events:none` 即时隐藏，
   且 `.instance-shell` 同时置 `content-visibility:hidden`——跳过整棵 shell 的
   style/layout/paint 并**缓存渲染状态**：隐藏期间内容未变的 shell 切回时
@@ -361,7 +365,7 @@ export const chamberBridge: {
   同步提交 React 状态）：旧视图先拍**静态快照**，新视图渲染就绪（reveal
   重排长任务完成）后短 crossfade（~250ms 浏览器默认）——隐藏期间仍在流式
   更新的 shell（活跃会话的 DOM 变更使缓存失效）的增量重排被旧快照遮盖，
-  任何时刻无黑帧。**2026-09 perf T2（键控单槽合并）修订并发语义**：
+  任何时刻无黑帧。**并发语义（键控单槽合并）**：
   `runViewTransition(update, key)` 按意图键（视图切换 'view' / settle 揭幕
   'settle'）各保留一个最新意图——同键突发连点只替换意图、被取代意图不进
   快照不起过渡节（实际过渡 ≤ 在途 1 节 + 补发 1 节），跨键按首达序 FIFO
@@ -370,17 +374,17 @@ export const chamberBridge: {
   过渡在途期间翻转时，不会出现"直通落地后被在途节的旧意图覆盖"。
   未就绪视图（首次打开/仍在 boot）进入**骨架屏**（`.instance-loading`）：全屏
   同底色 veil + 居中转圈/服务器名文案，`--dsw-alias-*` 主题 token 底色，z-index
-  盖住 shell 内 dsh 启动页——不再需要 opacity 隐藏技巧。**2026-09 perf T1
-  （D1=A）修订**：早期版本以固定 rail 56 + sidebar 224 = 280px 占位块模仿 dsh
-  布局几何；真实侧栏宽度由 layout store 持久化、用户可拖到任意值，曾拖宽的实例
-  每次 settle 揭幕都与假几何失配——默认观感路径被 View Transition 快照遮盖，
-  reduced-motion/降级路径则产生主区左缘位移、可入 CLS 数值分。卸几何后骨架零
+  盖住 shell 内 dsh 启动页——不再需要 opacity 隐藏技巧。**骨架屏无几何主张
+  （D1=A）**：骨架不以固定 rail 56 + sidebar 224 = 280px 占位块模仿 dsh
+  布局几何——真实侧栏宽度由 layout store 持久化、用户可拖到任意值，任何占位
+  几何都会在 settle 揭幕时失配（默认观感路径被 View Transition 快照遮盖，
+  reduced-motion/降级路径则产生主区左缘位移、可入 CLS 数值分）；骨架零
   布局主张、只承诺同底色占位，settle 后第二次 View Transition（键 'settle'）
   换入真实内容——可见视图经 `runViewTransition(..., 'settle')`、后台 boot 直落
   （无过渡，点击切入时的过渡由 App 层覆盖）；失败则 chamber 覆盖层呈现 + 重试 +
   服务器切换（见下），`bootInstanceShell` 的 settle 态经 `.then(setShell)` 落地。
-  **失败呈现修订（2026-08）**：
-   失败不再由各 InstanceView 自绘（旧 `.instance-fatal`，仅有重试、无导航），
+  **失败呈现**：
+   失败不由各 InstanceView 自绘（旧 `.instance-fatal`，仅有重试、无导航），
    而是由 App 在活动视图上统一渲染 `.fatal-overlay` 覆盖层——失败报告 +
    重试（`retryToken` 递增 → InstanceView 复位重 boot）+ **服务器切换行**
    （`.fatal-servers`：chamber 级逃生通道，不依赖任何 shell 挂载）。原因：
@@ -389,11 +393,11 @@ export const chamberBridge: {
    刷新），违反「一个实体的失败不得抹除/阻断无关健康实体」不变量。dsh 壳
    内自绘的失败页（`AppWebEntry` 加载页的 fail-loud 报告）也统一经
    `AppWebEntry.bootError`（拷贝包 seam）上浮为 chamber 可见的失败态
-   （shell.ts 失败分支 dispose 该 entry，重试干净重 boot）。**首启竞态修复
-   （2026-08，05 §4）**：模块表（`window.__DSH_MODULES__` + `__ModuleLoader__`
+   （shell.ts 失败分支 dispose 该 entry，重试干净重 boot）。**模块表安装顺序**：
+   模块表（`window.__DSH_MODULES__` + `__ModuleLoader__`
    sink）经 boot.ts 导出的幂等 `ensureWebModuleSystem` 在**任何 bundle 脚本
    执行前**装好（shell.ts 在 collectExtraRows 预加载之前调用，run() 经同一
-   helper 收编）——旧顺序下首个带额外行的 boot 会让官方 bundle 在 sink 安装
+   helper 收编）——否则首个带额外行的 boot 会让官方 bundle 在 sink 安装
    前求值、顶层交接抛错，boot 以难懂的 "cannot resolve" 失败。
    ready 远程实例**空闲预热**：按序一次一个后台
   boot（`instance-pending` 态仅 visibility 隐藏、保留 layout——vendor
@@ -412,7 +416,7 @@ export const chamberBridge: {
   loud reject，旧 runtime 永不能在 teardown 后迟到执行 open；runtimeCtx/list/open 的
   getter/调用若抛任意 hostile value，也必须经同一 never-throw 描述器 reject 并清理
   timer/cancel handle，不能把 timer-driven open 永久挂起。**sessions 服务就绪与列表
-  可见性共用同一轮询预算（2026-09 修复登记）**：boot settle（loader.await +
+  可见性共用同一轮询预算**：boot settle（loader.await +
   assertEntriesActive）只等 entry **根** fiber，`ctx.sessions` 由 composite 的
   **子** fiber 提供（child 在异步 api-remotes 命名空间 mount 后才激活）——queued
   open 的 flush（entries.set 同刻）或就绪窗内的点击可能落在 holder 已注册而
@@ -420,21 +424,21 @@ export const chamberBridge: {
   等待服务就绪与目标会话可见，绝不 fail-fast；deadline 到达才 loud reject，且区分
   两种终态报告（服务从未就绪 → 「boot 未完全就绪」；服务就绪但会话始终未列出 →
   「等待超时」）。终态失败文案经 `reportOpenSessionOutcome` 回报侧边栏并在
-  目标会话行内呈现（§2.2），不再是 console-only。修复前 fail-fast 使跨服务器
+  目标会话行内呈现（§2.2），不再 console-only——fail-fast 会让跨服务器
   冷壳/回收重 boot 后的首次会话点击在视图已切换后瞬间失败，用户落在目标服务器
   UI 而未选中会话（呈现为该 workspace 的新对话输入框）。
-- **每 entry Context 私有注入（2026-08-28 N-ctx 复核；2026-09 Batch 2 收敛）**：
+- **每 entry Context 私有注入**：
   `AppWebEntry` 提供 `configureContext(ctx)` seam；shell.ts 创建 entry 时用闭包把该
   视图自己的 `chamberInstanceId`、`chamberBasePath` 与主进程签发的
   `chamberSourceFingerprint` 写入其 cordis Context，chamber-entry 只做事实校验；
   **两个 base-path fork 的 `apply(ctx)` 各自从该 Context 读 `chamberBasePath`**
   （connection：RPC 载波 + `handle.basePath`；api-gateway：`/api/remote.mux` 路由），
-  不再经插件 config 传参。不同 entry 不再通过
-  `window.__DSH_BASE_PATH__` 或页面级 `chamber-knob.ts` 交换 boot 参数，因此并行/
+  不再经插件 config 传参。不同 entry 不通过
+  `window.__DSH_BASE_PATH__` 或页面级 `chamber-knob.ts`（已删除）交换 boot 参数，因此并行/
   交错 boot 不会串用来源或代理前缀；shell 在任何 graph/module 副作用之前仅接受
   精确 `local`、规范 `dsh-<raw-id>` / `gateway-<raw-id>` 或兼容迁移的 legacy
   `ssh-<raw-id>`（raw id 明确排除保留字 `local`），且强制 basePath 等于
-  `/api/i/<instanceId>`；`chamber-knob.ts` 随该修复删除。
+  `/api/i/<instanceId>`。
 - 目录选择面统一为应用内浏览对话框（browse）：**所有实例一律注册
   `UiDirectoryPickerBrowse`**，与宿主能力恒一致——本地宿主经 spawn 环境
   pin `SSH_CONNECTION`（02 §3.1）令其 directory-picker-auto 解析
@@ -446,26 +450,29 @@ export const chamberBridge: {
   unary client 驱动，见侧边栏包 README）。
 - 官方 ui-workspace 的 hero "Add workspace…" 与 chamber 侧边栏共用同一
   browse 表面，样式与交互完全统一（上游 one-route 哲学：不做手敲路径
-  表单——2026-07-31 one-route 简化与 2026-07-27 native picker note
-  明确否定手敲路径交互）。
+  表单——native picker note 与 one-route 简化均已否定手敲路径交互）。
 
 ## 5. 连接设备页
 
 - chamber 自研插件包 `packages/dsh-chamber-client-ui-settings-connections`
-  （`@dsh-chamber/dsh-chamber-client-ui-settings-connections`），注册进 dsh 设置模态
-  的 `settings.section` 槽（id `connections`，order 30，在 agent-presets 之后）。
-- 「dsh 运行时」段（design 18 §3.6/§9，2026-09 per-server 修订）：同为
-  chamber 自研 `settings.section`（id `dsh-runtime`，order 31），注册在选中
-  服务器的子上下文 ledger、紧随 agent-presets 渲染；**connections 是壳的
-  固定 nav 入口**（在分隔线之下、不占 ledger order），故「dsh 运行时」在
+  （`@dsh-chamber/dsh-chamber-client-ui-settings-connections`）：连接页是设置壳的
+  **固定 nav 入口**（`__connections`，在分隔线之下、不占 ledger order），**不是**
+  `settings.section` 注册——host-ctx 的 `settings.section` 注册已移除（消除
+  "第二个连接页"隐患），插件只提供该页的字典命名空间与分节组件
+  （`ConnectionsSection.tsx`）。
+- 「dsh 运行时」段（design 18 §3.6/§9，per-server）：chamber 自研
+  `settings.section`（id `dsh-runtime`，order 31，由设置壳 settings-bridge 注册，
+  `runtime-section-plugin.ts`），注册在选中
+  服务器的子上下文 ledger、紧随 agent-presets 渲染；connections 是壳的
+  固定 nav 入口，故「dsh 运行时」在
   视觉上位于 server 段列表内 agent-presets 之后。local = 完整运行时管理面，
   gateway = 经反代触达该 gateway 的 `/chamber/runtime`，**dsh 直连（ssh/http）
-  = 不挂载**（dsh 直连无 `/chamber` 面、无 ssh exec 管理通道——「ssh = 版本只读
-  行」为过期表述，2026-12 审计 F4 勘误：18 §3.6/AGENTS/design 17 §3 一致口径；
-  该来源设置段不渲染 dsh-runtime 分节）。**不再位于 chamber 全局「通用」视图**
+  = 不挂载**（dsh 直连无 `/chamber` 面、无 ssh exec 管理通道，该来源设置段
+  不渲染 dsh-runtime 分节；与 18 §3.6 / AGENTS / design 17 §3 同口径）。
+  **不再位于 chamber 全局「通用」视图**
   （design 15 的 `__general` 控制组不含运行时块）。
-- **「重启 dsh」动作只在本地与 gateway 两源**（2026-12 审计 F4 勘误——「三种来源
-  均含」为过期表述；design 18 §3.6 项 8，刷新插件挂载）：local = 控制面事务接口
+- **「重启 dsh」动作只在本地与 gateway 两源**（design 18 §3.6 项 8，刷新插件挂载）：
+  local = 控制面事务接口
   `restartLocal()`（design 18 §9.3，与健康状态机重启单飞行串行化——**不是**连接页
   裸 启动/停止 的组合）；gateway = `POST /chamber/runtime/restart`（经
   `/api/i/gateway-<id>/chamber/*` 反代，202 + status 轮询）+ `POST
@@ -478,7 +485,7 @@ export const chamberBridge: {
 - **职责划分**：连接页本地卡的 启动/停止 = 连接生命周期（开机常驻与否）；
   「dsh 运行时」段的 重启 dsh = 运行时维护（刷新插件挂载、恢复服务）——两者
   不合并、文案不混用（起停不改运行时事实，重启不改指针/版本）。
-- **每来源插件设置贡献集（2026-12 修订，权威口径）**：设置壳对「某来源自己的设置
+- **每来源插件设置贡献集（权威口径）**：设置壳对「某来源自己的设置
   贡献」改为**图驱动**——贡献源是该来源自己的客户端插件图，不再是壳里的静态清单。
   规则（实现见 `packages/dsh-chamber-client-ui-settings-bridge/src/client/`）：
   - **基础集**（`bridge-context.ts` `BASE_PLUGINS`，fail-loud）：声明链 + `slots` +
@@ -510,8 +517,8 @@ export const chamberBridge: {
     `settings-shell.ts` `SETTINGS_SHELL_SHADOW_PRIORITY = -1000`）；chamber 侧边栏
     监视 `sidebar.settings` 的 cell winner，若有注册者低于该区间（即顶掉设置壳）则
     `console.error` 报告（检测而非改写 slot 语义）。
-  - **D-5 关闭**：`settings-connections` 的 host-ctx `settings.section` 注册已删除
-    （该插件现只提供字典命名空间；固定入口 `__connections` 渲染同一组件）。
+  - **`settings-connections` 座位**：该插件只提供字典命名空间（无 host-ctx
+    `settings.section` 注册）；固定入口 `__connections` 渲染同一组件。
   - **信任与共享**：扩展插件代码在桌面渲染器内执行（与 design 09 §4 同一模型），
     执行面从「已打开 shell 的来源」扩到「设置面板打开的来源」，面板关闭即 dispose；
     页面模块表按 id first-load-wins 共享（一个模块实例可支撑多来源/多 fiber），
@@ -527,18 +534,18 @@ export const chamberBridge: {
   user@host:port + phase 徽标 + 隧道 localPort + serviceName + logSummary；
   连接/断开 + systemd 起停/查询 + 日志 Modal（logs/logs_clear）+ 编辑 +
   删除 + dashed"添加主机"卡 → Modal 表单）。
-- **design 21 增补（2026-12）**：卡片日志入口命名区分（「连接日志」= 本机连接
+- **design 21 插件管理面**：卡片日志入口命名区分（「连接日志」= 本机连接
   通道事件 / gateway 卡「网关主机日志」= 服务器侧 gateway 进程与托管 dsh spawn
   日志；图标去重）+ gateway 卡「重启 dsh」/「启动实例」动作（phase 门控 + 每卡
   单飞 + 共享 pollGatewayReady 轮询，多用户中断确认文案）+ **单一插件管理模型
-  视图（2026-12 plan 24 已合体为唯一 `PluginDialog` 组件）**：统一区域 = 诊断横幅
-  （状态名 + message 去重）→ chamber 内建组件表（client-graph / git-worktree /
-  mobile 移动端入口三行，badge 化；mobile 仅 gateway 源显示、标注网关随发行物
-  注入）→ 第三方插件区（已安装列表 + 逐行卸载 + 添加：spec 输入 + npm 搜索 +
+  视图（唯一 `PluginDialog` 组件）**：统一区域 = 诊断横幅
+  （状态名 + message 去重）→ chamber 内建组件表（宿主包注册表三行
+  client-graph / git-worktree / archive-cleanup，badge 化；另有 gateway 源才出现的
+  移动端 client 行，随发行物注入）→ 第三方插件区（已安装列表 + 逐行卸载 + 添加：spec 输入 + npm 搜索 +
   文件夹导入）→ 恢复/动作行；gateway 添加双通道（registry spec 直装 +
-  文件夹直推）已接线；「变更记录」区已移除（后端 journal/备份保留）；恢复撤销
+  文件夹直推）已接线；「变更记录」区不渲染（后端 journal/备份保留）；恢复撤销
   仅 gateway（崩溃/恢复态恢复横幅）；http 直连只读不变；恢复提示 r0–r4 文案双
-  后端同权；契约与余留见 design 21 §6.6/§10 勘误⑥⑦。
+  后端同权；契约与余留见 design 21 §6.6/§7。
 - 操作全走现有 `desktop_ssh_*` IPC 与 `/api/connections`；表单收非秘密
   元数据（id/label/kind/transport/insecureHttp/host/user/sshPort/remotePort/
   serviceName，id 白名单
@@ -574,12 +581,12 @@ export const chamberBridge: {
     `/api`），但 chamber 运行链不再写该全局。该接缝由
     `test:connection` 的 client-apply / carrier-assembly 行为门与独立
     `typecheck:connection` 源码门固定，不能只靠字符串/AST 检查；
-    **连接层职责边界（2026-09 加固登记）**：
+    **连接层职责边界**：
     ① **连接层是 push 通道（`/api/remote.mux`）的唯一重开者**——控制面/桌面各层只
     「发现」（心跳/探针/相位/看门狗）与「撤销或重注册传输」，从不重开一条流；mux 客户端
     （`dsh-api-gateway`）自身无退避，其重试节拍由连接循环的 `onReconnectRequested` 驱动。
     ② **禁止同实例 `stop()+start()`**：上游 `reconnect()` 已覆盖立即重连语义且不产生第二个
-    泵循环；若未来重新引入 stop+start，必须同时恢复代际守卫（Batch 2 退役的 loopEpoch）。
+    泵循环；若未来重新引入 stop+start，必须同时恢复代际守卫（`loopEpoch` 语义）。
     ③ **每来源恢复时序**由 `recovery-policy.ts` 决定并经上游支持的
     `connection.start(sinks, config)` 传入（远端 ssh/http 45s 就绪期限 / 5s 告警；本地与
     未知来源保持上游 15s/3s）——chamber 页面拿不到宿主注入的
@@ -597,9 +604,10 @@ export const chamberBridge: {
     （chamberBridge）+ `shared/instance-api.ts`（每实例 unary 客户端，
     App 层与插件共享一份，vite 共享 chunk）；
   - `packages/dsh-chamber-client-ui-settings-connections/`——自研连接设置插件
-    （§5，`settings.section` id `connections`）；
+    （§5，连接页固定入口 `__connections` 的字典命名空间与分节组件）；
   - `packages/dsh-chamber-client-ui-settings-bridge/`——自研设置壳插件（§5 同款
-    讨论，`sidebar.settings` 槽 priority -1 shadow 官方 SettingsRoot，
+    讨论，注册进 `sidebar.settings` 槽、以 `SETTINGS_SHELL_SHADOW_PRIORITY = -1000`
+    shadow 官方 SettingsRoot，
     服务器下拉 + 子 ctx 官方 settings 子集渲染）。子 ctx 缓存所有权绑定
     `(sourceId, sourceFingerprint)`：权威 roster 删除来源或在同 id 下更换 proof 时，
     立即退役并 dispose 所有受影响的已选/未选缓存；异步装配结果提交前再校验
@@ -610,16 +618,17 @@ export const chamberBridge: {
     全页单例 `ThemePresenter` + 按活动视图门控的 `document-theme.ts`，见设计 06
     §4.6；替换官方 ui-layout 注册）。
   - `packages/dsh-chamber-client-ui-git/`——设计 08 的 chamber 内建 Git
-    Worktree 插件：占用 `sidebar.git`，页面级 singleton 以 30s 单飞读取各实例
-    topology，并编排 create/workspace/session 与 Git-first remove saga；它不把
+    Worktree 插件：占用 per-workspace 座位 `sidebar.workspace.git`，页面级 singleton
+    以 30s 单飞读取各实例 topology，并编排 create/workspace/session 与 Git-first
+    remove saga；它不把
     Git 事实塞进 App aggregate，也不暴露任意 argv/path mutation。
   - `packages/dsh-chamber-client-ui-open-in/`——设计 16/20 的 chamber 内建桌面打开
-    插件（Batch 3 Phase 2 统一）：占用 `conversation.session.header.utilities`，
+    插件：占用 `conversation.session.header.utilities`，
     按当前 N-ctx 的 source 经 per-source 视图模型选择入口——**本地**来源走实例自身
     官方宿主目录（`dsh-host-open-in-app`，经每实例代理 `<basePath>/open-in-app/*`，
     执行在实例进程内）+ 桌面主进程的 VS Code 覆盖项；**远程 ssh** 来源只有主进程的
     VS Code Remote（trusted IPC + 来源代 proof）；http/未知来源无入口。无 host
-    插件、无 seed、无控制面执行面（主进程亦已收窄为 vscode-only，见设计 20 修订块）。
+    插件、无 seed、无控制面执行面（主进程亦已收窄为 vscode-only，见设计 20 §4.1/§4.3）。
 - 自研宿主包（随 chamber 分发、运行于每个 dsh 实例进程）：
   - `packages/dsh-chamber-seed-client-graph/`——设计 09 的只读 client boot graph Remote；
   - `packages/dsh-chamber-seed-git-worktree/`——设计 08 的领域限定 Git Remote，
@@ -658,7 +667,7 @@ export const chamberBridge: {
     （`webProfileArgs(port, patchPath?)`）；任一产物缺失只跳过对应行，不产生
     悬空 insert。远程 ready-time seed 同样一次探测/一次 overlay 合并写，见设计 13。
 
-## 7. 控制面 / 桌面契约（沿用，无认证面）
+## 7. 控制面 / 桌面契约（无认证面）
 
 ### 7.1 代理路径（唯一入口面）
 
@@ -688,7 +697,7 @@ instanceId}` +
 （`dsh:<id>` / `gateway:<id>`，17 §9.3））；`webDistDir?` 静态服务
 （`/`、`/assets/*`、`/manifest.json`、index.html 注入 `__DSH_BOOT__`）。
 
-### 7.4 IPC（preload 白名单；2026-08 扩展插件编排面，设计 13）
+### 7.4 IPC（preload 白名单；插件编排面见设计 13）
 
 - `dsh-chamber:info`；`desktop_ssh_instances_get`（spec v2：kind/
   transport/insecureHttp、sshPort、serviceName 与 remoteDshHome，03 §2.2）、
@@ -716,7 +725,7 @@ instanceId}` +
   推送 `dsh-chamber:system-resume`（OS 唤醒，载荷 `{timestamp}`，渲染端立即
   重连——设计 14 D4）；设计 19 的 notifications 嵌套设置仍属于该 chamber 全局面，
   不进入任何实例配置平面；
-- 桌面 open-in 面（设计 16/20；Batch 3 Phase 2 起主进程 vscode-only）：
+- 桌面 open-in 面（设计 16/20；主进程为 vscode-only）：
   `dsh-chamber:open-in-apps`（本机 app 能力协商，非秘密投影，现只投影 vscode）与
   `dsh-chamber:open-in`（appId/instanceId/path/sourceFingerprint 主进程统一校验后
   拉起 VS Code；本地文件管理器等应用由实例官方宿主路由执行，不经该 IPC）。`sourceFingerprint` 是主进程内存签发、随 roster 投影的
@@ -749,9 +758,11 @@ instanceId}` +
   见 13 §7.2）：`desktop_ssh_plugin_list/plugin_apply`（add/remove/restart，
   restart 需布尔值）、`desktop_local_plugin_list/add/remove`（本地实例插件）、
   `desktop_npm_search`（npm 搜索，best-effort）、`desktop_ssh_seed_host_graph`
-  （远端 seed 模块 A 宿主包）、`desktop_ssh_plugin_materialize_add`
-  （本地路径包物化：pack → ssh 传输 → 远端 `add file:`）、`desktop_pick_directory`
-  （主进程目录选择）；
+  （远端 seed 宿主包）、`desktop_ssh_plugin_materialize_add` 与
+  `desktop_ssh_plugin_materialize_add_pick`
+  （本地路径包物化：主进程 pick 目录 → pack → ssh 传输 → 远端 `add file:`；
+  renderer 不提供路径）、`desktop_gateway_plugin_materialize`（gateway 侧同款
+  主进程 pick + 直推）；
 - `desktop_ssh_status_changed` 推送（隧道相位即时投影）、
   `desktop_ssh_instances_changed` 推送（载荷 `{removedIds,retiredIds}`；`removedIds`
   仅物理删除，`retiredIds` = 删除 + 传输身份编辑，renderer 先同步退役旧来源代再重拉
@@ -798,10 +809,10 @@ instanceId}` +
   端点身份验证）。就绪判据（TCP + 目标身份握手）、两段式重连与 `verifyUp`
   **确定性验证失败免重试**（`terminal` 分类——目标应答了探测但证明不是
   兼容 dsh → 第一次失败即落 error 终态，仅瞬时失败走重连）的机制细节见
-  03 §2.2。**加固（2026 audit M2/M10）**：exec 子进程与隧道子进程同款
+  03 §2.2。**子进程加固**：exec 子进程与隧道子进程同款
   SIGTERM→SIGKILL 升级且 `disposeAsync` 等待两者全部退出（SIGTERM 忽略型
   ssh exec 不残留孤儿）；本地端口分配瞬时失败（临时端口耗尽）进入慢速
-  周期重探，不再永久停在 error。
+  周期重探，不停在 error。
 - registry 编辑以 transport + exec generation 隔离旧异步工作：`serviceName` 与
   `remoteDshHome` 都属于 live transport fields 和 exec identity，变化时先提升
   generation/`execEpoch`，撤销旧隧道/直连尝试与所有 exec child（SIGTERM→SIGKILL），
@@ -816,7 +827,7 @@ instanceId}` +
   端点 = 目标的 http(s) URL，scheme 由 `insecureHttp` 决定，两种 kind
   都服务——dsh 目标不注入认证头、gateway 目标按 spec kind 可注入
   `Authorization`，17 §2.1/§9.2）。
-- **exec 通道（2026-08 扩展，设计 13）**：`TransportExecPayload.op` 为
+- **exec 通道（设计 13）**：`TransportExecPayload.op` 为
   `'exec'`（systemctl `start/stop/is-active/restart`、远端命令 `run`——命令名
   白名单 `dsh|cat|printf` + argv/路径白名单 + shell 元字符拒绝（`base64 -d`/
   `mkdir -p` 仅存在于固定 write-file 管线，不是可分发命令），
@@ -835,7 +846,7 @@ instanceId}` +
   认证面（v1 无认证边界不变；gateway 目标的认证由注册 transport 头注入
   承载，17 §9.3）。
 
-### 7.7 窗口生命周期与崩溃恢复（2026-08-17 落地）
+### 7.7 窗口生命周期与崩溃恢复
 
 - **单窗口可重建**：窗口被关闭（macOS 红色按钮）后应用保持运行（darwin 的
   `window-all-closed` 不退出）；`app.on('activate')`（Dock 图标点击）、
@@ -848,8 +859,10 @@ instanceId}` +
 - **崩溃留痕**：`crashReporter`（`uploadToServer:false`）落盘
   `<userData>/Crashpad`；GPU/Utility 异常退出经 `child-process-gone` 记日志。
 
-## 8. 安全不变量（沿用 AGENTS.md）
+## 8. 安全不变量
 
+- 本节不变量与 `AGENTS.md`「Hard Facts」互为镜像（凭据纪律、loopback 边界），
+  两处同源；本节为契约正文。
 - 前端只连 127.0.0.1（本地 dsh 端口或隧道 localPort），**任何实例流量不直接
   出网（限定 renderer）**——renderer 只见非秘密投影，任何出网仅由主进程
   承载；**gateway http 直连例外**：直连端点为用户配置的 http(s) origin，
@@ -861,7 +874,7 @@ instanceId}` +
   投影**与 localPort/phase；ssh stderr 含密钥路径的行入环前脱敏（按行缓冲，
   跨 chunk 不绕过）；分类器可检查的单行上限为 64KiB，脱敏/分类后真正保留到每实例
   200 行 ring 的展示文本再裁到 4KiB，避免 32 个实例的最坏驻留内存按 64KiB/行放大；
-- **可选密码认证（唯一例外，2026-08 用户需求；明文文件兜底——用户决策）**：
+- **可选密码认证（唯一例外，用户需求；明文文件兜底——用户决策）**：
   表单密码字段为瞬时输入（编辑时永不回填），经 `desktop_ssh_save_connection`
   转发后主进程**内存持有 + 明文镜像 `<userData>/ssh-passwords.json`**
   （0600、`.tmp`+fsync+rename 原子写；残留 `.tmp` 无论原 mode 为何都先
@@ -906,8 +919,8 @@ instanceId}` +
   `unsafe-inline`；`script-src` 开放 `unsafe-eval`——官方 dsh module loader
   （vendored `@deepseek-ai/loader`）对 boot manifest `__jsExpr` 配置求值依赖
   `new Function(…eval…)`，缺它渲染层主包在模块求值期即抛 EvalError、静态骨架
-  永不进入 React，2026-08-20 实机排查）、`nosniff`、`DENY` frame、COOP 安全头。
-  Referrer policy 用 `same-origin` 而非 no-referrer（2026-09 实机定位：no-referrer
+  永不进入 React——实机排查确认）、`nosniff`、`DENY` frame、COOP 安全头。
+  Referrer policy 用 `same-origin` 而非 no-referrer（no-referrer
   下现代浏览器把同源表单提交的 Origin 序列化为 null，被本机来源门禁
   fail-closed 拒掉——登录/运维表单自锁；这些页面无跨站出站文档请求，同源策略
   对第三方同样不外泄 Referer，隐私意图不变）。
@@ -935,13 +948,12 @@ instanceId}` +
   S22（safeStorage 加密落盘）/ S23（SPKI 证书固定）/ S24（审计只记非秘密
   事件）见 design 17 §17。
 
-## 9. 分期
+## 9. 范围边界（推迟与不做）
 
-- 已落地范围：P1 基线（§2/§3）、P2 连接设备页（§5）、侧边栏完善三轮（06 §1-§7）。
-- **已实现（2026-08）**：fork 会话——官方 conversation 回合尾部分支动作
-  （turn-tail `forkAt`）常驻可用；侧边栏会话行 kebab 菜单亦提供行内 fork
-  （wire `sessions.fork`，对齐官方 ui-workspace）。
 - **推迟（维持不排期）**：flat 单列表模式（与"仅按来源分类"呈现原则有
   张力）。
 - 不做（v1）：跨来源移动会话、单 store 真融合（fork runtime）、会话实时
   推送同步、远程实例管理 UI 外壳。
+- fork 会话**在范围内**：官方 conversation 回合尾部分支动作（turn-tail
+  `forkAt`）常驻可用；侧边栏会话行 kebab 菜单亦提供行内 fork
+  （wire `sessions.fork`，对齐官方 ui-workspace），两者并存（§2.2）。

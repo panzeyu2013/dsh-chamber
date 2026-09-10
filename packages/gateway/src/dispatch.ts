@@ -14,7 +14,7 @@
  *   /auth/credentials        → auth.credentialProjection (Phase 2, non-secret)
  *   /api/connections, /api/host/*, /api/i/* → fall through (management)
  *   /chamber/runtime/*       → runtime controller (design 18 §9.3; NOT ready-gated)
- *   /chamber/*               → chamber surface (design 17 §8.5, 2026-12 strip)
+ *   /chamber/*               → chamber surface (design 17 §10, 2026-12 strip)
  *   / (mobile UA, opt-in)    → 302 to mobileEntryPath (design 17 §18 shunting)
  *   /plugins/*, /, /api/*(rest) → gateway-proxy → dsh
  */
@@ -433,7 +433,7 @@ export function createGatewayDispatch(
         // Token-only / no-auth deployment: browsers get a minimal HTML
         // explanation page (design 21 §5.3); API clients keep the JSON 404.
         // GET/HEAD carries no content-type, so an HTML Accept alone selects
-        // the page (design 21 §10.3); POST still negotiates via the
+        // the page (design 21 §6.2); POST still negotiates via the
         // form-urlencoded + HTML rule (design 21 §6.1). The copy varies by
         // auth kind: a `--no-auth` deployment has no token and must not claim
         // one (honest posture, design 17 §13.1).
@@ -692,7 +692,7 @@ export function createGatewayDispatch(
       await getRuntime().handle(req, res, pathname)
       return true
     }
-    // 4. Chamber surface (design 17 §8.5, 2026-12 strip + design 21 A1):
+    // 4. Chamber surface (design 17 §10, 2026-12 strip + design 21 A1):
     // /chamber/* is the gateway's own operations surface — channels
     // projection + browser dashboard assets + the desktop-synced plugin seed
     // cache + the managed-profile plugin read/write routes (installed/
