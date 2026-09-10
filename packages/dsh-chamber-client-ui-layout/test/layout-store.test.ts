@@ -5,28 +5,33 @@
  * vendor column geometry via the vendor source; real 150ms delay via node:test
  * mock timers), live cross-shell adoption with its guards (closed shells are
  * never re-opened, the initiating shell's echo terminates), reopen-restore
- * semantics, and the P3-nit no-op guard. `createLayoutStore` is exercised with
- * an injected environment (fake store engine + fake view-prefs store) — the
- * production wiring (stores.ts) is a thin default-environment shim over the
- * same factory.
+ * semantics, the P3-nit no-op guard, and the alpha.2 root-panel actions
+ * (`selectPanel`/`retainMainPanels`) plus the right-panel geometry actions.
+ * `createLayoutStore` is exercised with an injected environment (fake store
+ * engine + fake view-prefs store) — the production wiring (stores.ts) is a
+ * thin default-environment shim over the same factory, and the explicit
+ * `trackLayoutInstance` registration replaces the pre-alpha.2 `handle.create`
+ * patch (the vendor baseline now overrides `create` on the shared handle).
  */
 
 import { test, mock } from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  collapsedOf,
   createLayoutStore,
-  onLayoutInstance,
+  trackLayoutInstance,
   SIDEBAR_WRITE_DEBOUNCE_MS,
   type LayoutStoreEnvironment,
 } from '../src/client/store-core.ts'
 import {
   clampWidth,
+  RIGHTBAR_DEFAULT_RATIO,
+  RIGHTBAR_MAX_RATIO,
+  RIGHTBAR_MIN,
+  SIDEBAR_AUTO_COLLAPSE,
   SIDEBAR_DEFAULT,
   SIDEBAR_MIN,
   SIDEBAR_MAX,
-  DETAILS_DEFAULT,
-  DETAILS_MIN,
-  DETAILS_MAX,
 } from '../../../vendor/harness-packages/@deepseek-ai/dsh-client-ui-layout/src/client/columns.ts'
 
 // ---- fakes (the injected environment) ----
@@ -34,21 +39,27 @@ import {
 /**
  * Minimal engine with the real engine's semantics for this store's usage:
  * per-create fresh init(), draft-mutator update(), subscribe/getSnapshot,
- * and actions bound per instance. LayoutState is flat primitives, so a
- * shallow clone + apply is faithful to immer here.
+ * and actions bound per instance. LayoutState is two nested plain objects, so
+ * the draft clones both levels (immer's structural sharing equivalent here).
  */
 function fakeEngine<T>(decl: { init: () => T; actions: Record<string, (draft: T, ...params: unknown[]) => void> }) {
   return {
     spec: decl,
     create: () => {
       let state = decl.init()
+      const clone = (value: T): T => ({
+        ...value,
+        ...(typeof value === 'object' && value !== null && 'layoutInfo' in value
+          ? { layoutInfo: { ...(value as { layoutInfo: object }).layoutInfo } }
+          : {}),
+      }) as T
       const listeners = new Set<() => void>()
       const notify = () => { for (const listener of [...listeners]) listener() }
       const store = {
         getSnapshot: () => state,
         subscribe: (fn: () => void) => { listeners.add(fn); return () => { listeners.delete(fn) } },
         update: (mutator: (draft: T) => void) => {
-          const draft = { ...state }
+          const draft = clone(state)
           mutator(draft)
           state = draft
           notify()
@@ -113,8 +124,18 @@ function makeEnv(initial?: { sidebarWidth?: number }) {
   // exercises.
   const env = {
     defineStore: fakeEngine,
-    columns: { clampWidth, SIDEBAR_DEFAULT, SIDEBAR_MIN, SIDEBAR_MAX, DETAILS_DEFAULT, DETAILS_MIN, DETAILS_MAX },
+    columns: {
+      clampWidth,
+      SIDEBAR_DEFAULT,
+      SIDEBAR_MIN,
+      SIDEBAR_MAX,
+      SIDEBAR_AUTO_COLLAPSE,
+      RIGHTBAR_MIN,
+      RIGHTBAR_MAX_RATIO,
+      RIGHTBAR_DEFAULT_RATIO,
+    },
     viewPrefs,
+    initialViewportWidth: () => 1600,
   } as LayoutStoreEnvironment
   return { env, viewPrefs }
 }
@@ -124,15 +145,15 @@ function makeEnv(initial?: { sidebarWidth?: number }) {
 test('createLayoutStore seeds sidebar from the shared view-prefs width', () => {
   const { env } = makeEnv({ sidebarWidth: 360 })
   const instance = createLayoutStore(env).create()
-  assert.equal(instance.getSnapshot().sidebar, 360)
-  assert.equal(instance.getSnapshot().details, 0)
-  assert.equal(instance.getSnapshot().narrow, false)
-  assert.equal(instance.getSnapshot().narrowExpanded, false)
+  assert.equal(instance.getSnapshot().layoutInfo.sidebar, 360)
+  assert.equal(instance.getSnapshot().layoutInfo.rightbar, null)
+  assert.equal(instance.getSnapshot().layoutInfo.narrowExpanded, false)
+  assert.equal(instance.getSnapshot().panelInfo.activePanelId, null)
 })
 
 test('createLayoutStore seeds SIDEBAR_DEFAULT when no width was ever persisted', () => {
   const { env } = makeEnv()
-  assert.equal(createLayoutStore(env).create().getSnapshot().sidebar, SIDEBAR_DEFAULT)
+  assert.equal(createLayoutStore(env).create().getSnapshot().layoutInfo.sidebar, SIDEBAR_DEFAULT)
 })
 
 // ---- drag persistence (150ms trailing debounce) ----
@@ -143,7 +164,7 @@ test('a drag updates the store immediately and persists exactly once after the 1
     const { env, viewPrefs } = makeEnv()
     const instance = createLayoutStore(env).create()
     instance.actions.setSidebar(300)
-    assert.equal(instance.getSnapshot().sidebar, 300) // the STORE value is immediate
+    assert.equal(instance.getSnapshot().layoutInfo.sidebar, 300) // the STORE value is immediate
     assert.equal(viewPrefs.writeCount(), 0)           // nothing persisted yet
     mock.timers.tick(SIDEBAR_WRITE_DEBOUNCE_MS - 1)
     assert.equal(viewPrefs.writeCount(), 0)
@@ -178,7 +199,7 @@ test('setSidebar clamps into the vendor range before persisting', async () => {
     const { env, viewPrefs } = makeEnv()
     const instance = createLayoutStore(env).create()
     instance.actions.setSidebar(500)
-    assert.equal(instance.getSnapshot().sidebar, SIDEBAR_MAX)
+    assert.equal(instance.getSnapshot().layoutInfo.sidebar, SIDEBAR_MAX)
     mock.timers.tick(SIDEBAR_WRITE_DEBOUNCE_MS)
     assert.deepEqual(viewPrefs.writes(), [SIDEBAR_MAX])
     instance.actions.setSidebar(1)
@@ -195,16 +216,19 @@ test('a drag in one shell is adopted live by the other shells (cross-boot sync)'
   mock.timers.enable({ apis: ['setTimeout'] })
   try {
     const { env } = makeEnv({ sidebarWidth: 300 })
-    const a = createLayoutStore(env).create()
-    const b = createLayoutStore(env).create()
-    assert.equal(a.getSnapshot().sidebar, 300)
-    assert.equal(b.getSnapshot().sidebar, 300)
+    const handle = createLayoutStore(env)
+    const a = handle.create()
+    const b = handle.create()
+    trackLayoutInstance(env, a)
+    trackLayoutInstance(env, b)
+    assert.equal(a.getSnapshot().layoutInfo.sidebar, 300)
+    assert.equal(b.getSnapshot().layoutInfo.sidebar, 300)
     b.actions.setSidebar(360)
-    assert.equal(a.getSnapshot().sidebar, 300) // not yet — the write is still debounced
+    assert.equal(a.getSnapshot().layoutInfo.sidebar, 300) // not yet — the write is still debounced
     mock.timers.tick(SIDEBAR_WRITE_DEBOUNCE_MS)
     await Promise.resolve()                    // the adoption listener defers to a microtask
-    assert.equal(a.getSnapshot().sidebar, 360)
-    assert.equal(b.getSnapshot().sidebar, 360)
+    assert.equal(a.getSnapshot().layoutInfo.sidebar, 360)
+    assert.equal(b.getSnapshot().layoutInfo.sidebar, 360)
   } finally {
     mock.timers.reset()
   }
@@ -214,13 +238,16 @@ test('the initiating shell does not re-adopt its own echo — and the echo write
   mock.timers.enable({ apis: ['setTimeout'] })
   try {
     const { env, viewPrefs } = makeEnv({ sidebarWidth: 300 })
-    const a = createLayoutStore(env).create()
-    const b = createLayoutStore(env).create()
+    const handle = createLayoutStore(env)
+    const a = handle.create()
+    const b = handle.create()
+    trackLayoutInstance(env, a)
+    trackLayoutInstance(env, b)
     b.actions.setSidebar(360)
     mock.timers.tick(SIDEBAR_WRITE_DEBOUNCE_MS)
     await Promise.resolve()
-    assert.equal(b.getSnapshot().sidebar, 360) // b kept its own value
-    assert.equal(a.getSnapshot().sidebar, 360) // a adopted it
+    assert.equal(b.getSnapshot().layoutInfo.sidebar, 360) // b kept its own value
+    assert.equal(a.getSnapshot().layoutInfo.sidebar, 360) // a adopted it
     // b drags back onto the now-persisted width: the no-op guard skips the
     // persist/notify cycle instead of re-running updateViewPrefs.
     b.actions.setSidebar(360)
@@ -235,15 +262,42 @@ test('a closed shell is never re-opened by another shell\'s drag', async () => {
   mock.timers.enable({ apis: ['setTimeout'] })
   try {
     const { env } = makeEnv({ sidebarWidth: 300 })
-    const a = createLayoutStore(env).create()
-    const b = createLayoutStore(env).create()
+    const handle = createLayoutStore(env)
+    const a = handle.create()
+    const b = handle.create()
+    trackLayoutInstance(env, a)
+    trackLayoutInstance(env, b)
     a.actions.toggleSidebar() // close a
-    assert.equal(a.getSnapshot().sidebar, 0)
+    assert.equal(a.getSnapshot().layoutInfo.sidebar, 0)
     b.actions.setSidebar(400)
     mock.timers.tick(SIDEBAR_WRITE_DEBOUNCE_MS)
     await Promise.resolve()
-    assert.equal(a.getSnapshot().sidebar, 0) // stays closed
-    assert.equal(b.getSnapshot().sidebar, 400)
+    assert.equal(a.getSnapshot().layoutInfo.sidebar, 0) // stays closed
+    assert.equal(b.getSnapshot().layoutInfo.sidebar, 400)
+  } finally {
+    mock.timers.reset()
+  }
+})
+
+test('an untracked instance is never adopted into (registration is explicit)', async () => {
+  mock.timers.enable({ apis: ['setTimeout'] })
+  try {
+    const { env } = makeEnv({ sidebarWidth: 300 })
+    const handle = createLayoutStore(env)
+    const tracked = handle.create()
+    const untracked = handle.create()
+    trackLayoutInstance(env, tracked)
+    untracked.actions.setSidebar(360)
+    mock.timers.tick(SIDEBAR_WRITE_DEBOUNCE_MS)
+    await Promise.resolve()
+    assert.equal(tracked.getSnapshot().layoutInfo.sidebar, 360, 'tracked instance adopted the write')
+    assert.equal(untracked.getSnapshot().layoutInfo.sidebar, 360, 'writer keeps its own value')
+    // The writer was never registered: a later external write still reaches
+    // only the tracked instance.
+    env.viewPrefs.updateViewPrefs(prev => ({ ...prev, sidebarWidth: 320 }))
+    await Promise.resolve()
+    assert.equal(tracked.getSnapshot().layoutInfo.sidebar, 320)
+    assert.equal(untracked.getSnapshot().layoutInfo.sidebar, 360)
   } finally {
     mock.timers.reset()
   }
@@ -254,35 +308,100 @@ test('a closed shell is never re-opened by another shell\'s drag', async () => {
 test('toggleSidebar closes to 0 and reopens to the SHARED width, not the contract default', () => {
   const { env } = makeEnv({ sidebarWidth: 340 })
   const instance = createLayoutStore(env).create()
-  assert.equal(instance.getSnapshot().sidebar, 340)
+  assert.equal(instance.getSnapshot().layoutInfo.sidebar, 340)
   instance.actions.toggleSidebar()
-  assert.equal(instance.getSnapshot().sidebar, 0)
+  assert.equal(instance.getSnapshot().layoutInfo.sidebar, 0)
   instance.actions.toggleSidebar()
-  assert.equal(instance.getSnapshot().sidebar, 340) // the remembered shared width
+  assert.equal(instance.getSnapshot().layoutInfo.sidebar, 340) // the remembered shared width
 })
 
 test('toggleSidebar reopens to SIDEBAR_DEFAULT when nothing was ever persisted', () => {
   const { env } = makeEnv()
   const instance = createLayoutStore(env).create()
   instance.actions.toggleSidebar()
-  assert.equal(instance.getSnapshot().sidebar, 0)
+  assert.equal(instance.getSnapshot().layoutInfo.sidebar, 0)
   instance.actions.toggleSidebar()
-  assert.equal(instance.getSnapshot().sidebar, SIDEBAR_DEFAULT)
+  assert.equal(instance.getSnapshot().layoutInfo.sidebar, SIDEBAR_DEFAULT)
 })
 
 test('below the breakpoint the toggle flips narrowExpanded and never touches the width', () => {
   const { env } = makeEnv({ sidebarWidth: 340 })
   const instance = createLayoutStore(env).create()
-  instance.actions.setNarrow(true)
+  instance.actions.setViewportWidth(SIDEBAR_AUTO_COLLAPSE - 1)
   instance.actions.toggleSidebar()
-  assert.equal(instance.getSnapshot().narrowExpanded, true)
-  assert.equal(instance.getSnapshot().sidebar, 340)
+  assert.equal(instance.getSnapshot().layoutInfo.narrowExpanded, true)
+  assert.equal(instance.getSnapshot().layoutInfo.sidebar, 340)
   instance.actions.toggleSidebar()
-  assert.equal(instance.getSnapshot().narrowExpanded, false)
-  assert.equal(instance.getSnapshot().sidebar, 340)
-  instance.actions.setNarrow(false)
+  assert.equal(instance.getSnapshot().layoutInfo.narrowExpanded, false)
+  assert.equal(instance.getSnapshot().layoutInfo.sidebar, 340)
+  instance.actions.setViewportWidth(SIDEBAR_AUTO_COLLAPSE)
   instance.actions.toggleSidebar()
-  assert.equal(instance.getSnapshot().sidebar, 0) // wide toggle now closes
+  assert.equal(instance.getSnapshot().layoutInfo.sidebar, 0) // wide toggle now closes
+})
+
+test('setViewportWidth drops the narrow override only when the breakpoint is crossed', () => {
+  const { env } = makeEnv()
+  const instance = createLayoutStore(env).create()
+  instance.actions.setViewportWidth(SIDEBAR_AUTO_COLLAPSE - 1)
+  instance.actions.toggleSidebar()
+  assert.equal(instance.getSnapshot().layoutInfo.narrowExpanded, true)
+  // Same side of the breakpoint: the override survives.
+  instance.actions.setViewportWidth(SIDEBAR_AUTO_COLLAPSE - 10)
+  assert.equal(instance.getSnapshot().layoutInfo.narrowExpanded, true)
+  // Crossing the breakpoint clears it.
+  instance.actions.setViewportWidth(SIDEBAR_AUTO_COLLAPSE + 10)
+  assert.equal(instance.getSnapshot().layoutInfo.narrowExpanded, false)
+})
+
+// ---- root main-panel selection (alpha.2) ----
+
+test('selectPanel writes the active panel id and retainMainPanels clears an unregistered one', () => {
+  const { env } = makeEnv()
+  const instance = createLayoutStore(env).create()
+  instance.actions.selectPanel('workflow' as never)
+  assert.equal(instance.getSnapshot().panelInfo.activePanelId, 'workflow')
+  instance.actions.retainMainPanels(['conversation'])
+  assert.equal(instance.getSnapshot().panelInfo.activePanelId, null, 'unregistered panel cleared')
+  instance.actions.selectPanel('conversation' as never)
+  instance.actions.retainMainPanels(['conversation', 'workflow'])
+  assert.equal(instance.getSnapshot().panelInfo.activePanelId, 'conversation', 'registered panel retained')
+  instance.actions.selectPanel(null)
+  assert.equal(instance.getSnapshot().panelInfo.activePanelId, null)
+  // retainMainPanels never resurrects a selection.
+  instance.actions.retainMainPanels(['conversation'])
+  assert.equal(instance.getSnapshot().panelInfo.activePanelId, null)
+})
+
+// ---- right-panel geometry (alpha.2) ----
+
+test('rightbar actions clamp into the vendor range; open/close report presentation', () => {
+  const { env } = makeEnv()
+  const instance = createLayoutStore(env).create()
+  instance.actions.setViewportWidth(1600)
+  instance.actions.openRightbar(true, false)
+  assert.equal(instance.getSnapshot().layoutInfo.rightbar, Math.round(1600 * RIGHTBAR_DEFAULT_RATIO))
+  assert.equal(instance.getSnapshot().layoutInfo.rightbarShown, true)
+  assert.equal(instance.getSnapshot().layoutInfo.rightbarTrack, true)
+  instance.actions.setRightbar(9999)
+  assert.equal(instance.getSnapshot().layoutInfo.rightbar, Math.round(1600 * RIGHTBAR_MAX_RATIO))
+  instance.actions.setRightbar(1)
+  assert.equal(instance.getSnapshot().layoutInfo.rightbar, RIGHTBAR_MIN)
+  instance.actions.closeRightbar()
+  assert.equal(instance.getSnapshot().layoutInfo.rightbarShown, false)
+  assert.equal(instance.getSnapshot().layoutInfo.rightbarTrack, false)
+  // The px preference survives the close (upstream contract).
+  assert.equal(instance.getSnapshot().layoutInfo.rightbar, RIGHTBAR_MIN)
+})
+
+test('openRightbar on a narrow frame clears the narrow re-expand override', () => {
+  const { env } = makeEnv()
+  const instance = createLayoutStore(env).create()
+  instance.actions.setViewportWidth(SIDEBAR_AUTO_COLLAPSE - 1)
+  instance.actions.toggleSidebar()
+  assert.equal(instance.getSnapshot().layoutInfo.narrowExpanded, true)
+  instance.actions.openRightbar(false, true)
+  assert.equal(instance.getSnapshot().layoutInfo.narrowExpanded, false)
+  assert.equal(instance.getSnapshot().layoutInfo.rightbarFullscreen, true)
 })
 
 // ---- P3 nit: no-op guard on the persistence write ----
@@ -316,67 +435,70 @@ test('the no-op guard cancels a stale pending write when the drag returns to the
   }
 })
 
-// ---- details actions (unchanged vendor semantics, sanity) ----
+// ---- AppFrame collapsed derivation (shared by layoutFacts + the mobile plugin) ----
 
-test('details actions clamp into the vendor range; open/close write default/0', () => {
-  const { env } = makeEnv()
-  const instance = createLayoutStore(env).create()
-  instance.actions.openDetails()
-  assert.equal(instance.getSnapshot().details, DETAILS_DEFAULT)
-  instance.actions.setDetails(900)
-  assert.equal(instance.getSnapshot().details, DETAILS_MAX)
-  instance.actions.setDetails(1)
-  assert.equal(instance.getSnapshot().details, DETAILS_MIN)
-  instance.actions.closeDetails()
-  assert.equal(instance.getSnapshot().details, 0)
+test('collapsedOf mirrors AppFrame: wide uses the preference, narrow the override', () => {
+  const state = (layoutInfo: {
+    sidebar: number
+    viewportWidth: number
+    narrowExpanded: boolean
+  }) => ({
+    panelInfo: { activePanelId: null },
+    layoutInfo: {
+      ...layoutInfo,
+      rightbar: null,
+      rightbarShown: false,
+      rightbarTrack: false,
+      rightbarFullscreen: false,
+      rightbarInstant: false,
+    },
+  })
+  // Wide: the sidebar preference decides; narrowExpanded is meaningless.
+  assert.equal(collapsedOf(state({ sidebar: 0, viewportWidth: 1600, narrowExpanded: false }), SIDEBAR_AUTO_COLLAPSE), true)
+  assert.equal(collapsedOf(state({ sidebar: 280, viewportWidth: 1600, narrowExpanded: false }), SIDEBAR_AUTO_COLLAPSE), false)
+  assert.equal(collapsedOf(state({ sidebar: 0, viewportWidth: 1600, narrowExpanded: true }), SIDEBAR_AUTO_COLLAPSE), true)
+  // Narrow: auto-collapsed unless the manual override re-expands.
+  assert.equal(collapsedOf(state({ sidebar: 280, viewportWidth: SIDEBAR_AUTO_COLLAPSE - 1, narrowExpanded: false }), SIDEBAR_AUTO_COLLAPSE), true)
+  assert.equal(collapsedOf(state({ sidebar: 0, viewportWidth: SIDEBAR_AUTO_COLLAPSE - 1, narrowExpanded: true }), SIDEBAR_AUTO_COLLAPSE), false)
+  // Breakpoint boundary: exactly SIDEBAR_AUTO_COLLAPSE is WIDE.
+  assert.equal(collapsedOf(state({ sidebar: 280, viewportWidth: SIDEBAR_AUTO_COLLAPSE, narrowExpanded: true }), SIDEBAR_AUTO_COLLAPSE), false)
 })
 
-// ---- layout instance observers (design 17 §18 layoutFacts subscription
-// face) ----
-
-test('onLayoutInstance fires on every minted instance; unsubscribe stops it', () => {
-  const { env } = makeEnv()
-  const seen: string[] = []
-  const unsubscribe = onLayoutInstance(env, instance => { seen.push(String(instance.getSnapshot().sidebar)) })
-  const handle = createLayoutStore(env)
-  handle.create()
-  handle.create()
-  assert.equal(seen.length, 2, 'both mints observed')
-  unsubscribe()
-  handle.create()
-  assert.equal(seen.length, 2, 'no notification after unsubscribe')
-})
-
-test('onLayoutInstance deduplicates the same observer; per-env isolation', () => {
-  const { env: envA } = makeEnv()
-  const { env: envB } = makeEnv()
-  let a = 0
-  let b = 0
-  const observer = () => { a += 1 }
-  onLayoutInstance(envA, observer)
-  onLayoutInstance(envA, observer) // duplicate registration is a no-op
-  onLayoutInstance(envB, () => { b += 1 })
-  createLayoutStore(envA).create()
-  createLayoutStore(envB).create()
-  assert.equal(a, 1, 'deduped in envA')
-  assert.equal(b, 1, 'envB independent')
-})
-
-test('a throwing observer neither breaks handle.create() nor starves sibling observers', () => {
-  // Regression lock for the per-observer isolation in notifyInstanceObservers:
-  // without the guard, the throw would propagate out of the patched
-  // handle.create (failing the AppFrame render) and — landing before the
-  // once-per-env viewPrefs subscription is armed — permanently skip the
-  // cross-shell adoption.
-  const { env } = makeEnv()
-  let healthyCalls = 0
-  const throwing = (): void => { throw new Error('observer bug') }
-  onLayoutInstance(env, throwing)
-  onLayoutInstance(env, () => { healthyCalls += 1 })
-  const handle = createLayoutStore(env)
-  assert.doesNotThrow(() => handle.create(), 'a throwing observer must not fail the store instantiation')
-  assert.equal(healthyCalls, 1, 'the sibling observer still received the mint')
-  // The second mint keeps working too (the viewPrefs subscription was armed).
-  assert.doesNotThrow(() => handle.create())
-  assert.equal(healthyCalls, 2)
+test('one throwing instance does not starve the adoption fan-out', async () => {
+  mock.timers.enable({ apis: ['setTimeout'] })
+  const errors: unknown[][] = []
+  const realError = console.error
+  console.error = (...args: unknown[]) => { errors.push(args) }
+  try {
+    const { env } = makeEnv({ sidebarWidth: 300 })
+    const handle = createLayoutStore(env)
+    // Registration order IS the fan-out order. Healthy instances sit on BOTH
+    // sides of the throwing one, so a `break`-on-error implementation is
+    // caught whichever direction the loop walks (2026-09 round-3 W4-11).
+    const writer = handle.create()
+    const before = handle.create()
+    const broken = handle.create()
+    const after = handle.create()
+    trackLayoutInstance(env, writer)
+    trackLayoutInstance(env, before)
+    trackLayoutInstance(env, broken)
+    trackLayoutInstance(env, after)
+    assert.equal(before.getSnapshot().layoutInfo.sidebar, 300, 'before starts at the shared preference')
+    assert.equal(after.getSnapshot().layoutInfo.sidebar, 300, 'after starts at the shared preference')
+    broken.store.update = () => { throw new Error('store update exploded') }
+    writer.actions.setSidebar(360)
+    mock.timers.tick(SIDEBAR_WRITE_DEBOUNCE_MS)
+    // Flush the adoption microtask queued by the view-prefs notification.
+    await Promise.resolve()
+    assert.equal(writer.getSnapshot().layoutInfo.sidebar, 360, 'writer keeps its own value')
+    assert.equal(broken.getSnapshot().layoutInfo.sidebar, 300, 'the throwing instance is left untouched, not half-written')
+    assert.equal(before.getSnapshot().layoutInfo.sidebar, 360, 'the instance BEFORE the throwing one adopts')
+    assert.equal(after.getSnapshot().layoutInfo.sidebar, 360, 'the instance AFTER the throwing one still adopts (no starvation)')
+    // The throw is reported, not swallowed: exactly one adoption diagnostic.
+    const adoptionErrors = errors.filter(args => String(args[0]).includes('layout width adoption threw'))
+    assert.equal(adoptionErrors.length, 1, 'the adoption failure must be logged exactly once')
+  } finally {
+    console.error = realError
+    mock.timers.reset()
+  }
 })

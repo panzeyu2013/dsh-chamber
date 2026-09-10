@@ -1,11 +1,12 @@
 /**
  * The root entry's transient layout store: panel geometry as plain widths in
- * px (0 = closed). Module level exports the factory only — a module-level
- * handle would pin the store's identity in the module
- * cache (a de-facto singleton surviving plugin reloads). register() receives
- * the factory (exclusive use: the framework instantiates per entry), AppFrame
- * derives its PropsStore share from the return type, and the service face
- * receives the bound actions through the registration's inject hook.
+ * px (0 = closed) plus the root main-panel selection. Module level exports the
+ * factory only — a module-level handle would pin the store's identity in the
+ * module cache (a de-facto singleton surviving plugin reloads). The fork's
+ * assembly (`client/index.ts`) mints ONE instance eagerly and shares it with
+ * the registration, exactly like the upstream baseline, so `AppFrame` derives
+ * its `PropsStore` share from the return type and the service face receives
+ * the same bound actions.
  *
  * CHAMBER FORK (design 06 — sidebar width sharing): the vendor store is a
  * per-boot unpersisted preference, so a drag in one shell was invisible in
@@ -15,8 +16,8 @@
  * by every boot over the vite shared chunk, persisted under one versioned
  * localStorage key), writes every drag back into it, and has every live
  * instance subscribe to it so width changes propagate across boots live.
- * Only the sidebar width is shared/persisted: details, narrow and the
- * narrowExpanded override stay per-boot transient (the vendor contract).
+ * Only the sidebar width is shared/persisted: the right panel preference and
+ * the narrow override stay per-boot transient (the vendor contract).
  *
  * THIS FILE is the production WIRING (the default injected environment); the
  * factory logic itself lives in `store-core.ts` as a pure, dependency-
@@ -24,15 +25,14 @@
  */
 import { defineStore, type EngineStoreHandle } from '@deepseek-ai/dsh-client-store'
 import {
-  clampWidth, DETAILS_DEFAULT, DETAILS_MAX, DETAILS_MIN,
-  SIDEBAR_DEFAULT, SIDEBAR_MAX, SIDEBAR_MIN,
+  clampWidth, RIGHTBAR_DEFAULT_RATIO, RIGHTBAR_MAX_RATIO, RIGHTBAR_MIN,
+  SIDEBAR_AUTO_COLLAPSE, SIDEBAR_DEFAULT, SIDEBAR_MAX, SIDEBAR_MIN,
 } from '@deepseek-ai/dsh-client-ui-layout/src/client/columns.ts'
 import { getViewPrefs, subscribeViewPrefs, updateViewPrefs } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
 import {
   createLayoutStore as createStore,
-  onLayoutInstance,
+  trackLayoutInstance as trackInstance,
   type LayoutActions,
-  type LayoutInstanceObserver,
   type LayoutState,
   type LayoutStoreEnvironment,
 } from './store-core.ts'
@@ -46,11 +46,13 @@ const defaultEnvironment: LayoutStoreEnvironment = {
     SIDEBAR_DEFAULT,
     SIDEBAR_MIN,
     SIDEBAR_MAX,
-    DETAILS_DEFAULT,
-    DETAILS_MIN,
-    DETAILS_MAX,
+    SIDEBAR_AUTO_COLLAPSE,
+    RIGHTBAR_MIN,
+    RIGHTBAR_MAX_RATIO,
+    RIGHTBAR_DEFAULT_RATIO,
   },
   viewPrefs: { getViewPrefs, subscribeViewPrefs, updateViewPrefs },
+  initialViewportWidth: () => window.innerWidth,
 }
 
 /**
@@ -65,12 +67,13 @@ export function createLayoutStore(
 }
 
 /**
- * CHAMBER FORK (design 17 §18 — mobile surface): subscribe to every live
- * layout store instance (production environment). The mobile adaptation
- * plugin consumes this through the `layoutFacts` service (client/index.ts)
- * to drive narrow-screen state and the drawer without DOM attribute
- * observation. Returns an unsubscribe function.
+ * CHAMBER FORK (design 06 — shared width adoption): register the minted root
+ * instance with the production environment so a drag in any shell propagates
+ * to every live boot. The upstream baseline mints the instance inside `apply`
+ * and shares it with the registration; this fork's assembly calls this once
+ * with that same instance.
+ * @param instance - the root store instance minted by `client/index.ts`.
  */
-export function subscribeLayoutInstances(observer: LayoutInstanceObserver): () => void {
-  return onLayoutInstance(defaultEnvironment, observer)
+export function trackLayoutInstance(instance: Parameters<typeof trackInstance>[1]): void {
+  trackInstance(defaultEnvironment, instance)
 }

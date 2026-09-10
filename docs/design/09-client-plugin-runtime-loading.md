@@ -87,6 +87,18 @@ dsh 官方 web 的客户端插件链路是完整的（已核 vendor 源码）：
   `ui-*` 包（`chamber-entry.ts` 静态注册），宿主图里这些 id **跳过**，只加载
   chamber 复合未覆盖的新 entry（用户新装包）。去重集 = `CHAMBER_COVERED_IDS`
   （`packages/renderer/src/chamber-covered.ts`，见 §3.5）。
+- **反向依赖（2026-09 二轮登记；三轮收敛为 1 条，alpha.2）**：覆盖集解决的是
+  「复合行不需要宿主图」，但反向依赖仍在——复合内首屏家族的 cordis inject 成员
+  里，只有 `ui-chat` ← `sidebarRight`（`ui-sidebar-right` 行提供）仍来自**未覆盖**
+  行。二轮曾同时登记 `ui-conversation`/`api-session-controller` 的 `fileUpload`
+  与渲染期 `useResource` 座 `resources`：三轮把 `client-file-upload` **转为
+  covered**（见 §3.6，既是补丁落点也消除 extra-row 依赖），`resources` 则因
+  「非任何复合插件的 inject、且不可能单独缺失」被删除。宿主图通道降级（返回 `[]`）
+  或该行 apply 失败时，`ui-chat` 的 fiber 停在 PENDING、整个 apply 被跳过——会话视图
+  不注册——而 boot 仍报成功。`chamber-entry.ts` 的 `assertRequiredExtraRowServices`
+  （纯判定在 `required-extra-rows.ts`）在 5s 内探测并 `console.error` 点名 instance
+  + 服务（**诊断，非启动门**：gateway/移动形态可合法不加载该行）。清单变更须同步
+  `host-graph.ts` 的降级注释与 `docs/checklists/upstream-touchpoints.md` §3 登记行。
 - **覆盖集也是模块表的 factory 提供方（2026-08 修复）**：被跳过的覆盖行不是
   "不存在"，而是由复合 bundle 替代——共享模块表对 fetch bundle 的**同步 require
   边**只有 seed → statics → 已物化缓存（loadCache）→ 已注册 factory 一条解析路径
@@ -152,7 +164,7 @@ dsh 官方 web 的客户端插件链路是完整的（已核 vendor 源码）：
 | `packages/renderer` | `host-graph.ts`（`fetchHostGraph` wire 调用 + `dedupeHostEntries` 去重 + `toExtraRows` 注入反代前缀 + `collectExtraRows`/`preloadedExtraBundles`，AppWebEntry 构造前预加载额外 bundle，loadModuleBundle 依赖注入可测）+ `chamber-covered.ts`（去重集） |
 | `packages/dsh-client-web`（拷贝包） | `boot.ts` `AppWebEntryOptions.extraRows` seam：额外 entry id 合并进 boot rows（N-ctx 模块表共享 seam 的扩展，见 05 §6） |
 | 方案 A 附加 | 新 host 包 `packages/dsh-chamber-seed-client-graph`（Remote `clientGraph/graph` 暴露图）+ 控制面 `host-graph-seed.ts`（seed 模块 A 包进 profile + 物化 `--patch` overlay，`packages/control-plane`） |
-| 官方/宿主/vendor | 零改动 |
+| 官方/宿主/vendor | 文件零改动（**唯一例外**是 §3.6 的构建期 vendor 补丁集：不改文件、只在我们自己的 vite transform 里按精确锚点改写，上游漂移即构建失败） |
 
 ### 3.5 最终实现形态（落地契约）
 
@@ -301,6 +313,44 @@ dsh 官方 web 的客户端插件链路是完整的（已核 vendor 源码）：
   启动中/传输缺失）视为"无法判定"，永不写回。boot 仍是诊断的权威写入者；复检
   只是把已自愈的通道事实收敛为 `ok`，把仍坏的通道事实留在原样，等待下一次
   boot 或下一次复检。
+
+### 3.6 vendor 源码补丁集（构建期改写，2026-09 三轮 D3）
+
+N-ctx 同源壳要求每个实例的 API 走自己的反代前缀 `/api/i/<id>/*`。传输载波已由三个
+fork 副本覆盖（connection / web / api-gateway）；**非载波**的官方绝对 URL 没有接缝——
+`ui-chat` 的 `AssistantMarkdown` 用 `${window.location.origin}/api/file?path=…` 取
+Markdown 里的本地图片，在同源壳里 origin 是控制面，于是 404（用户可见的坏图）。
+
+裁决（以上游为准 + 最小侵入）：**不为一行 URL 去 fork 整个 `ui-chat`（82 文件 /
+~11.3k 行）**，改为登记式 vendor 补丁集：
+
+- 注册表 `packages/renderer/scripts/vendor-patches.mjs`：每条补丁 = 文件 + 理由 +
+  一到多处 `expect`→`replace`，`expect` 必须**恰好命中一次**（0 次或多次 = 构建期
+  抛错，绝不静默发出未打补丁的 bundle）。
+- 应用点：renderer 的 `deepseekSource().transform`（我们的 vite 配置），vendor 文件
+  **零写入**；模块 id 同时接受软链形式与 `realpathSync` 后的子模块形式（vite 实际
+  给的是后者）。
+- 落点（2026-09 三轮四处、四轮补第五处，共 7 个文件 / 21 处锚点）：
+  ① `ui-chat` 的 `chat/AssistantMarkdown.tsx` + `chat/AssistantNodeView.tsx` 读取新增
+  root 标准 **prop** `chamberFileApiBase`（chamber layout fork 经
+  `ctx.slots.provideRoot({ props })` 提供，值 = 本 entry 的 `ctx.chamberBasePath`；
+  vendor 的 scoped-slots 把 root 标准源合并进**每个**作用域的 standard props，所以
+  session 作用域的 chat 节点也能拿到）；② `client-file-upload` 的
+  `client/runtime.ts`（`/api/session/uploadFileBinary`）改从服务自身的 `ctx` 读
+  `chamberBasePath`——**该包已转为 composite covered**，因为 extra-row bundle 由实例
+  提供、永远不经过我们的构建；③④ `ui-deliverables` 的 `client/present-open.ts` +
+  `client/index.ts`（`/api/present.host|open`），控制器由 `apply(ctx)` 构造时接收
+  base path；⑤⑥ `session-log-export` 的 `client/controller.ts` + `client/index.ts`
+  （`/api/session.export`，控制器字段；该包转 **covered-deferred**，否则 extra-row bundle
+  不经过构建）。全部保留「base path 缺失 → 回落上游行为」的形状，读取一律用
+  `ctx.get('chamberBasePath')`（cordis 代理对未 provide 的服务**抛错**，属性读取会炸）。
+- 保鲜门：`verify-upstream-touchpoints.mjs` **C9** 对 pin 住的 vendor 文件逐锚点校验
+  （硬失败），`scripts/vendor-patches.test.mjs` 另在 CI 侧验证锚点唯一、改写后的函数
+  行为（含上游回落分支）与 id 形态匹配。
+
+登记纪律：新增补丁前先问「能否在 chamber 自己的包里修」；只有同源绝对 URL 一类
+硬假设才登记，并优先采用「可选的 chamber 标准 prop + 上游回落」的形状，使官方布局
+部署保持正确。
 
 ## 4. 信任模型与边界（写进设计即写进契约；已同步进代码注释）
 

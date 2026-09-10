@@ -32,7 +32,7 @@ export function assertSafeVersion(raw: string): string {
   const trimmed = raw.trim();
   if (!isSafeVersion(trimmed)) {
     throw new Error(
-      `不安全的 dsh 运行时版本串 ${JSON.stringify(raw)}：必须是精确 semver（如 0.1.1-rc.2）且不含 /、\\、..`,
+      `不安全的 dsh 运行时版本串 ${JSON.stringify(raw)}：必须是精确 semver（X.Y.Z[-prerelease]）且不含 /、\\、..`,
     );
   }
   return trimmed;

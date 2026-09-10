@@ -12,7 +12,7 @@
  * name a non-archived session (fail-closed invariant, enforced in core). The
  * domain never RETURNS session content and never touches non-archived
  * sessions; its ONLY content read is the registry-global orphan sweep's
- * fail-closed existence probe (`sessionPersistence.inspect`), consumed solely
+ * fail-closed existence probe (`sessionPersistence.stat`), consumed solely
  * as a boolean membership gate and never projected, logged or persisted —
  * the owner-approved exception recorded in design 24 §2 boundary 1.
  *
@@ -28,7 +28,7 @@
  * only unexpected internal failures escape as throws.
  *
  * HOST BINDING (design 24 §10/§14, verified against the pinned vendor
- * dsh-v0.1.2-rc.1 a66e4702, 2026-12): implemented in ./binding.ts —
+ * dsh-v0.1.5-alpha.2 b2e3b2a0, 2026-12): implemented in ./binding.ts —
  *  - archived set: `workspaceRegistry.archivedSessionIds` (public getter);
  *  - session states: the UNION by id of `sessionQuery.listSessions()` and
  *    `sessionPersistence.list()` + live `sessions/agents` — neither
@@ -40,9 +40,10 @@
  *  - content location: `sessionPersistence.locate(header)` (official
  *    absolute artifact path, no layout knowledge copied);
  *  - content EXISTENCE (the sweep's decisive gate): `sessionPersistence.
- *    inspect(id)` — the official single-id read resolves the artifact across
- *    all project dirs with cwd unknown; only the official not-found carrier
- *    may answer "no content", every other failure fails closed to "has
+ *    stat(id)` — the official single-id observation resolves the artifact
+ *    across all project dirs and generations with cwd unknown; only an
+ *    `undefined` answer may mean "no content", every thrown failure fails
+ *    closed to "has
  *    content" (2026-12 blocker fix);
  *  - archived-set member removal: NO public official primitive exists — the
  *    binding performs ONE single-state `setState` write INSIDE the official

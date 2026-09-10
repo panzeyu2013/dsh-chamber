@@ -10,6 +10,21 @@ conflicted: the official entry stays on the ledger and its `settings.*` children
 declarations remain valid. The chamber sidebar watches the seat's cell winner and
 reports (console) any registrant that goes below the reserved range.
 
+## alpha.2 ledger parity
+
+The child context declares no sidebar shell of its own, so it supplies the
+declaration chain with inert entries. That child set is kept **isomorphic with
+the official `ui-sidebar` entry** — `sidebar.brand.mark`, `sidebar.brand.name`,
+`sidebar.panellist`, `sidebar.workspaces`, `sidebar.settings`,
+`sidebar.footer.action` — so a section that targets any of those holes
+registers instead of failing on an undeclared slot. The standard-props kit also
+provides an empty `usePanelInfo` seat (stable snapshot reference) to keep the
+standard-prop SHAPE complete for any component that reads it; **no official
+settings component reads it today** (2026-09 二轮 source check: the only vendor
+readers are `ui-layout`'s frame/DocumentTitle and `ui-sidebar`'s panel row), and
+`useResource` is deliberately not seated for the same reason (add a seat the day
+a real consumer lands).
+
 ## Behavior
 
 - A server dropdown over the selected instance; the panel mounts a

@@ -8,6 +8,37 @@
 
 ## 未完成 / 部分完成（剩余验收）
 
+> **2026-09 dsh 基线对齐记录（0.1.5-alpha.2，临时驻留；发布收口时并入 CHANGELOG 后移除）**：
+> 源码线 pin → dsh-v0.1.5-alpha.2（b2e3b2a01258，`update-vendor.mjs` 原子升级；vendor 链接
+> 271→**284**，上游 +17/−4 包）；运行时线六锚 → 0.1.5-alpha.2（`bin.js --version` 冒烟通过）。
+> 上游两代槽位模型重写（`details`→`rightbar`(root)、中心列 `conversation`→**keyed `main`**、
+> `sidebar.panellist`、`usePanelInfo`/`useResource`、`ctx.layout.selectPanel`）已全量重放：
+> layout fork（eager 实例 + `LayoutController(actions, hasMainPanel)` + 嵌套 store + `layoutFacts.getCollapsed()`）、
+> sidebar fork（brand/panellist 声明与投影）、mobile 插件（`ROLE_SLOT_KEYS` + 退役胶囊打标与自绘右栏覆盖层）、
+> settings bridge 台账、三 fork 副本、renderer（`ui-dockkit` covered factory；C4 契约 13→15）。
+> **设计 24 四项真机缺陷已修**：`list()` 快照形状（真机 preview/purge 曾全挂）、`inspect`→`stat`、
+> 代际全量删除 + 未识别条目整单拒绝、退役无消费者的错误分类器（design 24 §2 与 AGENTS 措辞同步）。
+> **版本锚收口（2026-09 收口轮）**：dsh 版本单一来源 = `packages/desktop/vendor/dsh/package.json`，
+> 六锚 + 3 fork 副本必须等于它；生产源码/脚本/配置里的其他「活」版本字面量已全部清除或按
+> C10 白名单登记（历史叙述只留在注释/CHANGELOG/测试夹具里）。
+> **D3 已裁决并落地（2026-09 三轮，四轮补全）**：N-ctx 同源壳下**五处**同源绝对 URL（`ui-chat`
+> 的 `/api/file`、`client-file-upload` 的 `/api/session/uploadFileBinary`、`ui-deliverables`
+> 的 `/api/present.host|open`、`session-log-export` 的 `/api/session.export`）改为经构建期
+> vendor 补丁集走本实例前缀（design 09 §3.6，7 条/7 文件/21 锚点；门 = 触点表 C9 + 产物断言）；
+> 为让补丁覆盖上传/导出客户端，`client-file-upload` 与 `session-log-export` 转为 composite
+> covered（covered/factory **57/26**，探针清单收敛为 `sidebarRight`），并把 `dsh-client-ui-mobile`
+> 与官方 `ui-directory-picker-native` 登记为 page-own 跳过。**剩余**：ssh/http dsh 目标无 cookie 注入（实例侧 401），属既有认证面。
+> **剩余实机门禁（未验证）**：多来源 sleep/wake 与隐藏恢复、gateway 形态回归、右侧栏栈在真实
+> profile 下的装载时序与 `provideRoot` 时序（`useResource`/`usePanelInfo`/`chamberFileApiBase`）、
+> session v3 迁移在真实存储上的行为、open-in 官方 host 行随 a2 profile 进入托管实例。**既有失败已清零**：
+> dsh-runtime `runtimeDiskSummaryAsync` rich-fixture 阈值断言（ZFS 目录 st_size 平台差异）已由三轮把 fixture
+> 失败族文件改为 2 KiB 修好，`test:runtime` 全绿。
+> **待裁决项（三轮全部裁决完毕，决策矩阵 D1–D7）**：D3 = 构建期 vendor 补丁集（已落地）；
+> D4 = **保留** chamber open-in 插件（官方 client 为严格子集；契约镜像因源码态 vendor 无 `lib/`
+> 而保留，已登记理由）；D5 = **保留** PluginDialog，**待补 `update(name,version)` 动作**（唯一缺口，
+> 非缺陷）；`runtime-host-adapter` 退役**不采纳**（是测试夹具契约，非死代码）；`ALLOW_BUILDS` 的
+> `fs-ext` **保留**（回滚目标 0.1.3-alpha.2 仍依赖，实测删除即安装失败）。
+>
 > **2026-09 dsh 基线对齐记录（0.1.3-alpha.2，临时驻留；发布收口时并入 CHANGELOG 后移除）**：
 > 源码线 pin → dsh-v0.1.3-alpha.2（82a5fd61a7，`update-vendor.mjs` 原子升级，tag 与远程一致；
 > vendor 链接 267→**271**（+3 上游包目录：client/ui-open-in-app、host/open-in-app、
@@ -33,10 +64,10 @@
 - **T2 目录/包命名统一 —— ✅ Batch 1 已完成（2026-09）**：命名收口为「目录 == 包名非 scope 段」——6 个 client 插件包名 → `@dsh-chamber/dsh-chamber-client-ui-*`（目录不变）；3 个宿主种子目录+包名 → `dsh-chamber-seed-<loader-id>` / `@dsh-chamber/dsh-chamber-seed-<loader-id>`（loader id、激活探针域、发布计数 15 不变）；mobile（client-kind）、三 fork 副本（shadow）、基建包不动。同批：`.gitignore` committed-dist 负规则随 `git mv`、全树引用 sweep（含锁文件 importer / renderer covered·factory / gateway 同步表 / 桌面 seed / 测试夹具）、两处种子登记处 fail-loud 命名断言（`kind === 'host'` ⇒ `dsh-chamber-seed-<loader-id>`；控制面在 start 与每次 spawn 解析、gateway 在模块加载）、远端 `cordis.patch.yml` 旧名行一次性 fold（`foldLegacyHostInserts`，防 id-bound 永久硬失败）、宿主 dist 产物字节不变（包名不内嵌 bundle）。绿门：16 项 typecheck + 全套测试（control-plane / gateway / desktop + 各插件包，0 失败；计数不在此登记）+ build:renderer / build:host-packages / 桌面 build:control-plane·host-graph-package·preload + gateway build·pack·tarball `--help` 冒烟 + 锁文件 frozen 稳定 + verify:i18n / verify:workflows / verify-upstream-touchpoints（C1–C8）/ release-preflight --versions-only。既有失败登记不变（dsh-runtime ZFS rich-fixture）；另修 Batch 0 遗留：schemastery 桩补齐 a2 recovery schema 构造链（`test:connection` 转绿，提交 5685c9a）。
 - **fork 重锚 alpha.2 + 补丁最小化 —— ✅ Batch 2 已完成（2026-09）**：三 fork 以 dsh-v0.1.3-alpha.2 为锚逐文件复核。connection：`connection.ts`/`browser-auth.ts` 恢复逐字节上游（loopEpoch 守卫与 stop()+start() 退役，改原生 `reconnect()`/`setNetworkAvailable()`；`CONNECTION_BACKOFF_MAX_MS` 导出删除 → `liveness-triggers.ts` 内部 `DEFAULT_MIN_RESTART_INTERVAL_MS` + 离线门）；`basePath` 收敛 `apply(ctx)` 读 `ctx.chamberBasePath`（chamber-entry 不再传 config）；`createWebConnectionRpc` 去兼容重载；新增 `client-apply` 门 + 桩 loader 扩展。client-web：`base.css` 恢复逐字节上游（token 表移 renderer 入口 CSS，head 顺序不变）；seed/platform 散文收敛。api-gateway：`apply(ctx)` 直读 ctx（去 `ClientRemoteOptions`）。触点登记同步（pure 16/5/6）。绿门：16 项 typecheck + 全套测试 0 失败（仅既有 dsh-runtime ZFS rich-fixture 登记失败）+ build:renderer/desktop 三件/gateway/host-packages + verify:i18n/workflows/touchpoints（C1–C8）。**未验证（需实机）**：本地/SSH 实例的 sleep/wake、隐藏恢复、版本歪斜容忍、gateway 形态回归——无实机实例环境，未执行。
 - **T3 openin 插件统一 —— ✅ Batch 3 已完成（Phase 0 + Phase 2，2026-09）**：Phase 0 per-source 视图模型（official/main 双池 × 来源矩阵 + 显式抑制原因 + channel 去重 + 默认选中）。Phase 2：`source-adapter.ts` 统一「per-source 双池选择 + basePath 重映射 + per-entry 通道路由 + 选择持久化」，本地来源吸收官方 client（catalog 协议锁步镜像 / 真实 bundle 图标 / 官方 app.* 标签表并入单一 NS / 选择持久化 / busy·error 呈现），经每实例代理 `<basePath>/open-in-app/*` 由**实例进程内**执行；同 id 按 §5.1「vscode 全家走 IPC 覆盖」+ r6「展示并集 + IPC 兜底」裁决（主进程可用则走 IPC，保留新窗口策略/proof/intent；不可用则官方兜底）；桌面主进程收窄为 vscode-only（`OpenInApp` 注册表 + `OpenInLaunchContext` 去 stat/openPath/reveal；finder provider 与 classifyLocalPath/invokeOpenPath/normalizeOpenPathError 退役），本地 launch 信任界迁至实例官方路由（红线修订已登记 design 16/20/05 + AGENTS）。绿门：typecheck:open-in/root、test:open-in（9 个文件）、test:desktop、build:renderer/desktop 三件、verify:i18n/touchpoints。**未实机验证（[UNVERIFIABLE]）**：官方 host 行随 a2 默认 profile 进入托管实例、远程无 cookie 下 fence 行为、remote cwd 填充、图标缓存/CSP；以及 Batch 2 的实机回归项。
-- **T4 上游接触面跟踪清单 —— ✅ Batch 0.5 已完成（2026-09）**：登记文档 `docs/checklists/upstream-touchpoints.md`（逐 fork 纯度表 / 有意未镜像表 / 深引与 roster / 契约镜像 / 再生物 / 保鲜自动化 / 每 tag 维护循环 / PR 自检项）+ 保鲜脚本 `scripts/dev/verify-upstream-touchpoints.mjs`（C1 pure 字节恒等、C2 `--tags` 重放报告 advisory、C3 完整性、C4 roster + remote 契约 13、C5 过期锚扫描、C6 EXCLUDED 存在性、C7 种子域锁步、C8 生成物陈旧 advisory）+ CI Bootstrap 后 fail-loud 步骤（C1/C3/C5/C6）+ update-vendor 完成提示 + PR 模板自检节。
+- **T4 上游接触面跟踪清单 —— ✅ Batch 0.5 已完成（2026-09）**：登记文档 `docs/checklists/upstream-touchpoints.md`（逐 fork 纯度表 / 有意未镜像表 / 深引与 roster / 契约镜像 / 再生物 / 保鲜自动化 / 每 tag 维护循环 / PR 自检项）+ 保鲜脚本 `scripts/dev/verify-upstream-touchpoints.mjs`（C1 pure 字节恒等、C2 `--tags` 重放报告 advisory、C3 完整性、C4 roster + remote 契约 13（现为 15，见上方 0.1.5-alpha.2 基线记录）、C5 过期锚扫描、C6 EXCLUDED 存在性、C7 种子域锁步、C8 生成物重建-比对硬失败（CI post-install 跑））+ CI Bootstrap 后 fail-loud 步骤（C1/C3/C5/C6）+ update-vendor 完成提示 + PR 模板自检节。
 - **批次进度**：Batch 0（T1）✅ → Batch 0.5（T4）✅ → Batch 1（T2）✅ → Batch 2（fork 重锚）✅ → Batch 3（T3）✅（Phase 0 + Phase 2；实机项待验），每批独立提交与绿门。
 - **连接恢复加固（2026-09，Batch 2 后续；专项调研驱动）✅**：① 每来源就绪期限——新增 `recovery-policy.ts`，api-gateway fork 经 `connection.start(sinks, config)` 给 ssh/http 来源传 45s/5s（本地保持上游 15s/3s），消除「冷隧道握手超期→无限重试」；② `system-resume` 旁路离线门（页面冻结错过 `online` 时的唯一自救），`online`/可见性仍受门约束，共享 10s 去抖；③ 职责边界登记进 design 05 §6（连接层是 push 通道唯一重开者；禁止同实例 stop()+start()）；④ 上游动向只读调研：最新 tag `dsh-v0.1.5-alpha.1`，三 fork 客户端恢复模型零改动（仅 fixture / 宿主半 webServer 可选注入 / 新平台词 dockkit），升级注意项入触点表 §2.4；⑤ **聚合刷新陈旧阈值按传输分级（H3，2026-09 补）**——S2 watchdog 原为单一 120s 且只覆盖 direct-http；现 http 保留 120s（无上游应用心跳），**ssh 新增 300s 兜底**（隧道已有三层独立探测器，该臂只补应用级冻结），本地/未知来源不武装，unary 30s 拉取节奏不变。绿门：test:connection（含新增 3 例恢复策略 + 2 例唤醒旁路）/ typecheck:connection·api-gateway / test:desktop / test:renderer-shell / build:renderer / verify:i18n / verify-upstream-touchpoints。
-- **dsh 0.1.5 升级（在途，pin 仍 alpha.2）**：调研完成并已落地与版本无关的准备——`msgpackr-extract` 构建脚本显式否认（根 pnpm-workspace + dsh-runtime `DENY_BUILDS`/单源渲染器 + 测试）；**升级流程两处卡点均已修**（① `update-vendor` gitlink 先 `git add vendor/harness-checkout`；② `restore-lockfile-vendor-records.mjs` 加「成员仍在链接集合」守卫，不再从 HEAD 复活已移除的 landlock 4 条）；**新增升级前只读预检** `scripts/dev/preflight-vendor-pin.mjs`（fork pure/replay/dropped + 深引 vendor seam + 上游包增删 + 新增 client 行 + 运行时 npm 状态；`--offline`/`--json`/`--fail-on-replay`），实测 0.1.5：变更 2552 文件、pure 5/重放 6/dropped 6、**seam 16 全在 `client/ui-layout/*`**、包 +15/−4、新增 client 行 **5**（含带 `dsh.client` 的 `dsh-api-workspace-files`——原清单漏此一行）。剩余主体：**layout fork 重放**（上游把三栏模型改为 sidebar/center/rightbar，`DETAILS_*` 移除、`rightbar` 槽与 store 语义重写 → `typecheck:layout` 一升 pin 即红）+ **5 个新 client 行的 roster 裁决** + 平台词 `ui-dockkit` + connection/api-gateway 重放 + 运行时四锚 + 锁文件（271→282）。全量方案见 `docs/checklists/dsh-upgrade-checklist.md` §9（预检为第 0 步）。
+- **dsh 0.1.5 升级 —— ✅ 已完成（2026-09，pin `dsh-v0.1.5-alpha.2` b2e3b2a0）**：全量记录见本文件顶部基线块、`CHANGELOG.md` 与 `docs/checklists/dsh-upgrade-migration-audit.md`；与版本无关的准备与工具链一并留存——`msgpackr-extract` 构建脚本显式否认（根 pnpm-workspace + dsh-runtime `DENY_BUILDS`/单源渲染器 + 测试）；**升级流程两处卡点均已修**（① `update-vendor` gitlink 先 `git add vendor/harness-checkout`；② `restore-lockfile-vendor-records.mjs` 加「成员仍在链接集合」守卫，不再从 HEAD 复活已移除的 landlock 4 条）；**新增升级前只读预检** `scripts/dev/preflight-vendor-pin.mjs`（fork pure/replay/dropped + 深引 vendor seam + 上游包增删 + 新增 client 行 + 运行时 npm 状态；`--offline`/`--json`/`--fail-on-replay`），实测 0.1.5：变更 2552 文件、pure 5/重放 6/dropped 6、**seam 16 全在 `client/ui-layout/*`**、包 +15/−4、新增 client 行 **5**（含带 `dsh.client` 的 `dsh-api-workspace-files`——原清单漏此一行）。原「剩余主体」（layout fork 重放、5 个新 client 行 roster、平台词 `ui-dockkit`、connection/api-gateway 重放、运行时六锚、锁文件 271→284）已全部落地，逐文件决策与执行顺序见 `docs/checklists/dsh-upgrade-decision-matrix.md`。
 - **收尾（2026-09）**：五批次全部落地（Batch 0 / 0.5 / 1 / 2 / 3 Phase 0+2，各自独立提交与绿门），并经**四路独立只读审计 + 一轮复核审计**确认（1 处 MEDIUM 实质缺口——open-in 同 id 裁决与方案 §5.1「vscode 全家走 IPC 覆盖」相反——及全部 LOW 登记/文档项已修，提交 `d85bc51` / `3f9511e`）。**方案文件已退役**：`docs/progress/todo/branch-plan-v0.1.3-alpha1.md` 与其 todo README 条目按该目录纪律删除（全文留存 git 历史），执行结果记录见本块与 CHANGELOG [Unreleased]。**收尾补批（W1/W2/W3，2026-09，pin 仍 alpha.2）**：锁文件 vendor 记录修复脚本加移除守卫（+3 例单测）、新增升级前 pin 预检脚本（+5 例单测）、聚合刷新陈旧阈值按传输分级（ssh 新增 300s 兜底）；三者由根脚本 `pnpm run test:upgrade-tools` 与 CI 步骤覆盖。**实机门禁（未验证，需真实实例/桌面）**：Batch 2 的 sleep/wake、隐藏恢复、版本歪斜容忍、gateway 形态回归；Batch 3 的官方 host 行随 a2 默认 profile 进入托管实例、远程无 cookie 下 fence 行为、remote cwd 填充、图标缓存/CSP；以及既有实机探针（`commands/execute attachments` wire key、open-in 官方 host 行 dormant 处置）。
 
 - **dsh 运行时版本管理（design 18 §3.6/§9）**：剩余——macOS 打包态 `.app` 内共享 dsh-runtime/内嵌 pnpm/koffi 与完整激活-故障回退-恢复链的实机；Linux
@@ -101,7 +132,7 @@
     8–55px）、arm 期间归零 seat 底部安全区 padding；
   - 设置滚动复位只认分区 chip（纯函数 `isSectionChipClick` + 单测）且门控
     手机档（769–1023px 触控平板保留官方行为）；
-  - 测试：移动插件 **67** 用例（自 0.2.4 起 +15）。
+  - 测试：移动插件 **60** 用例（0.2.4 时为 67；alpha.2 迁移重写用例后为 60）。
   **复核提出但本轮未做**（待实机证据或设计决策，均已登记 §18.6 门禁）：
   「移动中量化 + 静止吸附精确值」（现 16px 固定量化，实机看抖动再定）、
   设置分区滚动位置记忆（现为一律复位——tab 惯例，非严格更优：无稳定 section

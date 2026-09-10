@@ -48,6 +48,13 @@ import {
   ensureRuntimeSubdirectoryNoFollow,
 } from './private-fs.ts'
 
+/**
+ * Version written into the synthetic install workdir's package.json. The
+ * stub is private and never published or resolved by version, so it only has
+ * to be a valid exact semver — named here so no bare literal floats in code.
+ */
+const INSTALL_STUB_VERSION = '0.0.0'
+
 export const DEFAULT_INSTALL_TIMEOUT_MS = 10 * 60 * 1000
 export const INSTALL_TERMINATE_GRACE_MS = 1_000
 export const INSTALL_OUTPUT_LIMIT_BYTES = 64 * 1024
@@ -1114,7 +1121,7 @@ export async function installRuntimeVersion(opts: InstallOptions): Promise<Insta
     writeState('preparing')
     atomicWriteRuntimeFileNoFollow(opts.baseDir, join(workDir, 'package.json'), `${JSON.stringify({
       name: 'dsh-runtime-install',
-      version: '0.0.0',
+      version: INSTALL_STUB_VERSION,
       private: true,
       dependencies: { '@deepseek-ai/dsh': 'file:./dsh-runtime-package.tgz' },
     }, null, 2)}\n`)

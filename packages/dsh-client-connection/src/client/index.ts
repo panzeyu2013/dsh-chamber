@@ -3,7 +3,7 @@
  * the shared RPC client, and lets API Gateway own the connection loop.
  *
  * ## chamber patch (dsh-chamber connection manager, design 05 §3.6; re-anchored
- * on upstream dsh-v0.1.3-alpha.2, 2026-09 Batch 2)
+ * on upstream dsh-v0.1.5-alpha.2, 2026-09 re-anchor)
  *
  * Three chamber deltas only:
  *  - `basePath` is read from the per-entry Context (`ctx.chamberBasePath`, the
@@ -152,7 +152,7 @@ export interface ClientTransportHooks {
 /** Page global carrying {@link ClientTransportHooks}; absent in the served web app. */
 interface ClientTransportGlobal {
   __DSH_TRANSPORT__?: ClientTransportHooks
-  /** Host-injected recovery bootstrap (v0.1.3-alpha.2 webserver index-inject). */
+  /** Host-injected recovery bootstrap (v0.1.5-alpha.2 webserver index-inject). */
   __DSH_CONNECTION_RECOVERY__?: unknown
 }
 

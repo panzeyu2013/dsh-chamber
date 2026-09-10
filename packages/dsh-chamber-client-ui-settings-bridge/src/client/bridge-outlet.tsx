@@ -52,6 +52,16 @@ const EMPTY_OBSERVABLE: HostObservable<unknown> = {
 }
 const emptyObservableHook = bridgeObservableHook(EMPTY_OBSERVABLE)
 
+/** alpha.2 panel-selection stub: the settings chain selects no main panel.
+ *  Stable snapshot — uSES compares by reference, so a fresh object per call
+ *  would re-render forever. */
+const EMPTY_PANEL_INFO_SNAPSHOT: { activePanelId: null } = { activePanelId: null }
+const EMPTY_PANEL_INFO: HostObservable<{ activePanelId: null }> = {
+  getSnapshot: () => EMPTY_PANEL_INFO_SNAPSHOT,
+  subscribe: () => () => {},
+}
+const panelInfoHook = bridgeObservableHook(EMPTY_PANEL_INFO)
+
 const noopSubscribe = (): (() => void) => () => {}
 
 /** Store-instance cache, root scope: one instance per registered handle. */
@@ -185,6 +195,12 @@ function renderEntry(
   const kit: InjectedProps = {
     useSessions: emptyObservableHook,
     useWorkspaces: emptyObservableHook,
+    // alpha.2 global standard seat: the settings chain declares no main-panel
+    // selection, so a component reading it sees "no panel selected" (null)
+    // instead of an undefined hook. `useResource` is deliberately NOT seated:
+    // no official settings component reads it today, and the repo rule is to
+    // add a seat only for a current consumer (add it here the day one lands).
+    usePanelInfo: panelInfoHook,
   }
   if (entry.locale !== undefined) {
     if (locale === undefined) {

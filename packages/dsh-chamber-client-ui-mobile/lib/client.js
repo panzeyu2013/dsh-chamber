@@ -67,8 +67,9 @@ var MOBILE_CSS = `
    send/stop/commands/ContextMeter, queue dock, goal bar, sidebar, message
    feedback, workspace rows, chat copy/branch) whose aria-label names the same
    action (3 of them phrase it slightly differently \u2014 workspace search \xD72,
-   trajectory load-earlier \u2014 same semantics; verified against the 0.1.2-rc.1
-   install, 2026-12 cross-check). Four informational bubbles are deliberately
+   trajectory load-earlier \u2014 same semantics; verified against the pinned
+   install at the 2026-09 re-anchor, see the module header). Four
+   informational bubbles are deliberately
    NOT hidden because their trigger has no accessible duplicate: the chat
    stats line (ui-chat:3853, ellipsized non-focusable div), the agent-preset
    card description (ui-agent-preset:960, line-clamp:4), the trajectory
@@ -93,9 +94,9 @@ var MOBILE_CSS = `
      explicitly locked so the center column is never squeezed into a 0-width
      track by the fixed sibling. IMPORTANT (P1-C): the official AppFrame
      sets NO explicit grid-column \u2014 with the sidebar fixed (out of flow),
-     auto-placement would put conversation into track 1 (0px) and details
-     into track 2 (full width). Both remaining columns must be pinned
-     explicitly. */
+     auto-placement would put the main column into track 1 (0px) and the
+     rightbar column into track 2 (full width). Both remaining columns must
+     be pinned explicitly. */
   [data-mobile-frame] {
     grid-template-columns: 0 minmax(0, 1fr) 0 !important;
   }
@@ -119,7 +120,7 @@ var MOBILE_CSS = `
     top: 0 !important;
     bottom: 0 !important;
     left: 0 !important;
-    z-index: 40;
+    z-index: 75;
     width: min(86vw, 280px) !important;
     box-shadow: var(--dsw-shadow-lv3, 0 12px 32px rgba(0, 0, 0, 0.08));
     transform: translateX(-105%);
@@ -142,7 +143,7 @@ var MOBILE_CSS = `
   }
 
   /* Drawer backdrop: dims the conversation behind the open drawer and \u2014 by
-     sitting above it (z-39 < drawer 40) \u2014 absorbs stray taps on the ~50px
+     sitting above it (z-74 < drawer 75) \u2014 absorbs stray taps on the ~50px
      live seam right of the drawer (the composer send button must not be
      hit while the drawer is open). Tap on the backdrop closes the drawer
      (the toggle component wires the click). */
@@ -150,47 +151,12 @@ var MOBILE_CSS = `
     display: block;
     position: fixed;
     inset: 0;
-    z-index: 39;
+    z-index: 74;
     background: var(--dsw-alias-bg-mask-1, rgba(0, 0, 0, 0.24));
     -webkit-backdrop-filter: var(--dsw-mask-blur, blur(2px));
     backdrop-filter: var(--dsw-mask-blur, blur(2px));
     border: none;
     padding: 0;
-  }
-
-  /* Details column \u2192 right-side overlay when opened (data-details-collapsed
-     removed): the official details/trajectory panel stays reachable on
-     touch. Design \xA718.4.3 offers two variants (bottom sheet / Status tab);
-     this implementation uses a THIRD form \u2014 a right-side overlay that
-     keeps the official DOM untouched (zero re-implementation). The grid's
-     third track stays 0 \u2014 the fixed column overlays the conversation.
-     transform: none while open (same containing-block rule as the
-     drawer). */
-  [data-mobile-role="details"] {
-    position: fixed !important;
-    top: 0 !important;
-    right: 0 !important;
-    bottom: 0 !important;
-    z-index: 38;
-    width: min(86vw, 320px) !important;
-    box-shadow: var(--dsw-shadow-lv3, 0 12px 32px rgba(0, 0, 0, 0.08));
-    transform: translateX(105%);
-    visibility: hidden;
-    transition:
-      transform var(--ds-transition-duration-slow, 0.3s) var(--ds-ease-in-out, cubic-bezier(0.4, 0, 0.2, 1)),
-      visibility 0s 0.3s;
-  }
-  [data-mobile-frame]:not([data-details-collapsed]) [data-mobile-role="details"] {
-    transform: none;
-    visibility: visible;
-    transition:
-      transform var(--ds-transition-duration-slow, 0.3s) var(--ds-ease-in-out, cubic-bezier(0.4, 0, 0.2, 1)),
-      visibility 0s;
-  }
-  @media (prefers-reduced-motion: reduce) {
-    [data-mobile-role="details"] {
-      transition: none;
-    }
   }
 
   /* Drag handles are desktop affordances (mouse resizing) \u2014 hidden on
@@ -210,6 +176,12 @@ var MOBILE_CSS = `
   [data-mobile-frame] [data-side]:not([role="tooltip"]) {
     display: none !important;
   }
+  /* Dockkit split affordances: pointer-drag chrome with no touch equivalent
+     (the right surface is fullscreen on this tier). */
+  [data-mobile-frame] [data-dockkit-divider],
+  [data-mobile-frame] [data-dockkit-split-button] {
+    display: none !important;
+  }
 
   /* Floating drawer toggle: the official sidebar toggle lives inside the
      sidebar DOM, which the off-canvas transform hides \u2014 this shell.overlay
@@ -223,7 +195,7 @@ var MOBILE_CSS = `
     position: fixed;
     top: max(10px, env(safe-area-inset-top, 0px));
     left: max(10px, env(safe-area-inset-left, 0px));
-    z-index: 41;
+    z-index: 76;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -372,10 +344,14 @@ var MOBILE_CSS = `
 @media (max-width: 768px) and (pointer: coarse) {
   /* Composer toolbar: one line. The official row wraps; force nowrap (the
      official 12px gap is kept \u2014 no gap override). */
-  [data-slot="conversation.composer.bar"] [class$="_row"] {
+  /* Infix match (production names are _<local>_<hash>_<idx>): this also hits
+     sibling rows whose local name ends in "row" inside the composer bar
+     subtree (e.g. the queue dock's .row), which is harmless today \u2014 those
+     rows declare no flex-wrap and carry no _trigger_ child. */
+  [data-slot="conversation.composer.bar"] [class*="_row_"] {
     flex-wrap: nowrap !important;
   }
-  [data-slot="conversation.composer.bar"] [class$="_row"] [class$="_trigger"],
+  [data-slot="conversation.composer.bar"] [class*="_row_"] [class*="_trigger_"],
   [data-slot="conversation.input.model"] button {
     max-width: 112px !important;
     flex: 0 1 auto !important;
@@ -529,31 +505,8 @@ var MOBILE_CSS = `
     font-size: max(16px, var(--dsh-content-font-size, 16px)) !important;
   }
 
-  /* "Session \u65E5\u5FD7" export capsule (official session-log-export, header
-     utilities): a 111px+ min-width pill that eats the whole phone title
-     row. Mobile users rarely export session ZIPs \u2014 compact it to a round
-     44px icon target (the stamp data-mobile-dismiss="session-log-export"
-     is applied by markup.ts when the capsule copy matches). The label span
-     is zeroed (font-size, not display:none) so the accessible name stays in
-     the tree; the official download icon grows to the target center. */
-  [data-mobile-dismiss="session-log-export"] {
-    width: 44px !important;
-    height: 44px !important;
-    min-width: 44px !important;
-    gap: 0 !important;
-    padding: 0 !important;
-    border-radius: 50% !important;
-  }
-  [data-mobile-dismiss="session-log-export"] span {
-    font-size: 0;
-  }
-  [data-mobile-dismiss="session-log-export"] svg {
-    width: 18px;
-    height: 18px;
-  }
-
   /* Scrolling body: contain the pull gesture. The composer seat is a FLOW
-     child of this scroller (official rc.1: scrollBody > [session slot,
+     child of this scroller (official shape since rc.1: scrollBody > [session slot,
      composerSeat]), so the official sheet declares NO padding-bottom here \u2014
      the bottom spacing lives on the InputBar root (8px) and the message
      column (16px), neither of which this rule touches. */
@@ -569,32 +522,11 @@ var PLUGIN_STYLE_TAG = "dsh-chamber-client-ui-mobile";
 var ROOT_SLOT_SELECTOR = '[data-slot="root"]';
 var MOBILE_FRAME_ATTR = "data-mobile-frame";
 var MOBILE_ROLE_ATTR = "data-mobile-role";
-var CONVERSATION_SESSION_HEADER_SLOT = "conversation.session.header";
-var SESSION_LOG_DISMISS_ATTR = "data-mobile-dismiss";
-var SESSION_LOG_DISMISS_VALUE = "session-log-export";
-var SESSION_LOG_EXPORT_LABELS = ["Session \u65E5\u5FD7", "Session log"];
-function isSessionLogExportButton(button) {
-  if (SESSION_LOG_EXPORT_LABELS.includes((button.textContent ?? "").trim())) {
-    return findDescendant(button, (el) => el !== button && isSvgElement(el)) !== null;
-  }
-  return false;
-}
-function isSvgElement(el) {
-  const tag = el.tag;
-  const tagName = el.tagName;
-  const name = typeof tag === "string" ? tag : tagName;
-  return typeof name === "string" && name.toLowerCase() === "svg";
-}
-function findDescendant(root, test) {
-  const stack = [];
-  for (const child of root.children) stack.push(child);
-  while (stack.length > 0) {
-    const current = stack.shift();
-    if (test(current)) return current;
-    for (const child of current.children) stack.push(child);
-  }
-  return null;
-}
+var ROLE_SLOT_KEYS = {
+  sidebar: "sidebar",
+  conversation: "main",
+  details: "rightbar"
+};
 function findFrame(root) {
   for (const child of root.children) {
     if (child !== null) return child;
@@ -613,40 +545,11 @@ function stampFrame(root) {
   const frame = findFrame(root);
   if (frame === null) return null;
   frame.setAttribute(MOBILE_FRAME_ATTR, "");
-  for (const slot of ["sidebar", "conversation", "details"]) {
-    const column = findColumn(frame, slot);
-    if (column !== null) column.setAttribute(MOBILE_ROLE_ATTR, slot);
+  for (const role of ["sidebar", "conversation", "details"]) {
+    const column = findColumn(frame, ROLE_SLOT_KEYS[role]);
+    if (column !== null) column.setAttribute(MOBILE_ROLE_ATTR, role);
   }
   return frame;
-}
-function stampSessionLogDismiss(frame) {
-  const conversation = findColumn(frame, "conversation");
-  if (conversation === null) return null;
-  const headerSlot = findHeaderSlot(conversation);
-  if (headerSlot === null) return null;
-  const buttons = headerSlot.querySelectorAll("button");
-  for (let index = 0; index < buttons.length; index++) {
-    const button = buttons[index];
-    const candidate = button;
-    if (isSessionLogExportButton(candidate)) {
-      button.setAttribute(SESSION_LOG_DISMISS_ATTR, SESSION_LOG_DISMISS_VALUE);
-      return button;
-    }
-  }
-  return null;
-}
-function findHeaderSlot(root) {
-  for (const child of root.children) {
-    if (child.getAttribute("data-slot") === CONVERSATION_SESSION_HEADER_SLOT) return child;
-    if (child.hasAttribute("data-conversation-scroll")) continue;
-    if (child.hasAttribute("data-composer-seat")) continue;
-    const nested = findHeaderSlot(child);
-    if (nested !== null) return nested;
-  }
-  return null;
-}
-function deriveCollapsed(snapshot) {
-  return snapshot.narrow ? !snapshot.narrowExpanded : snapshot.sidebar === 0;
 }
 function isStructuralTarget(target) {
   if (target === null || target === void 0) return false;
@@ -1061,7 +964,7 @@ function createLayoutFactSource(ctx) {
     const onTierChange2 = () => notify2();
     tier.addEventListener("change", onTierChange2);
     return {
-      getCollapsed: () => deriveCollapsed(facts.getLayoutSnapshot()),
+      getCollapsed: () => facts.getCollapsed(),
       getNarrow: () => tier.matches,
       subscribe: (listener) => {
         listeners2.add(listener);
@@ -1088,7 +991,7 @@ function createLayoutFactSource(ctx) {
     if (frame !== null) frameObserver.disconnect();
     frame = next;
     if (frame !== null) {
-      frameObserver.observe(frame, { attributes: true, attributeFilter: ["data-sidebar-collapsed", "data-details-collapsed"] });
+      frameObserver.observe(frame, { attributes: true, attributeFilter: ["data-sidebar-collapsed", "data-rightbar-collapsed"] });
     }
     notify();
   };
@@ -1103,6 +1006,8 @@ function createLayoutFactSource(ctx) {
   const onTierChange = () => notify();
   tier.addEventListener("change", onTierChange);
   return {
+    // Fail-safe null: no frame yet reads as "collapsed" (no scroll lock),
+    // which is the safe direction while the shell is still mounting.
     getCollapsed: () => frame === null || frame.hasAttribute("data-sidebar-collapsed"),
     getNarrow: () => tier.matches,
     subscribe: (listener) => {
@@ -1357,10 +1262,7 @@ function apply(ctx) {
     let frameAttributeObserver = null;
     const stamp = () => {
       const roots = document.querySelectorAll(ROOT_SLOT_SELECTOR);
-      for (const root of roots) {
-        const frame = stampFrame(root);
-        if (frame !== null) stampSessionLogDismiss(frame);
-      }
+      for (const root of roots) stampFrame(root);
       frameAttributeObserver?.disconnect();
       frameAttributeObserver = null;
       const frames = [];
@@ -1373,7 +1275,7 @@ function apply(ctx) {
       for (const frame of frames) {
         frameAttributeObserver.observe(frame, {
           attributes: true,
-          attributeFilter: ["data-sidebar-collapsed", "data-details-collapsed"]
+          attributeFilter: ["data-sidebar-collapsed", "data-rightbar-collapsed"]
         });
       }
     };

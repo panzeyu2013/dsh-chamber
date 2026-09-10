@@ -27,7 +27,9 @@
 
 > 2026-09 submodule 化后：**源码线**（构建期 vendor 树）由 git submodule
 > 固定 commit，升级唯一入口是 `scripts/dev/update-vendor.mjs`；**运行时线**
-> （打包进桌面的 `@deepseek-ai/dsh` npm 包）维持原有四常量。
+> （打包进桌面的 `@deepseek-ai/dsh` npm 包）维持六个锚（bundle-dsh 兜底常量、
+> desktop vendor 锁文件、release.yml env、install-gateway.sh、gateway
+> `dshAnchorVersion`、release-preflight `FORK_VERSION`）。
 
 - [ ] **源码线（submodule）**：`node scripts/dev/update-vendor.mjs <tag>` 原子升级
       （fetch+校验 tag → 切 submodule → 更新 `harness.commit` → 差量建链 →
@@ -42,7 +44,7 @@
       同步（此 env 仅存在于 release.yml，CI 不打包；若将来把打包 job 加回
       ci.yml，必须连同 ci.yml 一起同步）。
 - [ ] **安装脚本常量同步**：`scripts/install-gateway.sh` 内置
-      `DSH_CHAMBER_DSH_VERSION`（当前 `0.1.3-alpha.2`）→ 目标版本（与 release.yml
+      `DSH_CHAMBER_DSH_VERSION`（当前 `0.1.5-alpha.2`）→ 目标版本（与 release.yml
       的 env 同步；脚本默认安装该版本，用户可交互覆盖）。
 - [ ] 重建 vendor 树：`node scripts/dev/ensure-harness-vendor.mjs` → 链接数 = 目标
       版本包数（240 之类），无告警（submodule HEAD==pin）。
@@ -106,11 +108,23 @@
       chamber 是否消费、新包是否要动作）。
 - [ ] 后续升级（如 rc.2 → 更高）时复用本 checklist，并在 STATUS.md 记录增量。
 
-## 9. 在途：dsh-v0.1.5-alpha.1 升级（2026-09 调研完成，pin 仍 alpha.2）
+## 9. 已执行：dsh-v0.1.5-alpha.2 升级（2026-09，源码线 + 运行时线均已收口）
 
-> 状态：**未升级**（源码线/运行时线仍 0.1.3-alpha.2）。上游 `dsh-v0.1.5-alpha.1`
-> （5dda764e）已发布 npm；本节记录已完成的准备与剩余工作，供下一轮直接执行。
-> 全部结论来自只读调研（`ls-remote`/`fetch` 与逐文件 diff），未改动 pin。
+> 状态：**已升级**——源码线 pin = `b2e3b2a01258`（dsh-v0.1.5-alpha.2，vendor 链接 284），
+> 运行时线六锚 = 0.1.5-alpha.2（`bin.js --version` 冒烟通过）。本节保留为**执行记录**：
+> 调研结论、已落地的重放/修复与剩余实机门禁；完成细节见 CHANGELOG [Unreleased] 与
+> `docs/progress/STATUS.md` 的「2026-09 dsh 基线对齐记录（0.1.5-alpha.2）」。
+> 目标锚点从 `dsh-v0.1.5-alpha.1` 更新为 **`dsh-v0.1.5-alpha.2`**（上游 master HEAD，
+> npm `alpha` 已指向它）。
+> **2026-09 补充（两轮）**：
+> ① 全量差异对比（rc.1→alpha.2 + chamber 兼容评估，含前端显示差异、右栏栈服务注入硬点、
+> 设计 24 的 v3 代际残留）见
+> [`dsh-upgrade-diff-0.1.2-rc1-to-0.1.5.md`](dsh-upgrade-diff-0.1.2-rc1-to-0.1.5.md)；
+> ② **逐文件/逐函数决策矩阵**（8 个域、848 行文件级决策 + 15 条冲突 + 7 个裁决点，**三轮已全部裁决**）见
+> [`dsh-upgrade-decision-matrix.md`](dsh-upgrade-decision-matrix.md)。
+> 关键修正：alpha.2 又把中心列改为 keyed `main` 槽（`conversation` 槽消失）、官方 sidebar 新增
+> `sidebar.panellist`；`ALLOW_BUILDS` 的 `fs-ext` **不能删**（回滚目标仍依赖）；设计 24 有
+> **4** 个缺陷（含 `list()` 返回快照导致真机 preview/purge 全挂）。
 
 ### 9.1 已完成（已提交，与版本无关）
 - **`msgpackr-extract` 裁决**：0.1.5 线 store-index 依赖引入该原生加速器；pnpm 11
@@ -137,9 +151,14 @@
   `scripts/dev/preflight-vendor-pin.test.mjs`；两者由根脚本 `pnpm run test:upgrade-tools`
   + CI 步骤覆盖。
 
-### 9.2 剩余工作（按序）
+### 9.2 执行记录（原计划项 0–7，**现已全部落地**）
+
+> 下列序列是升级前的计划；每项均已执行，逐文件判定见
+> [`dsh-upgrade-migration-audit.md`](dsh-upgrade-migration-audit.md)，决策/动作见
+> [`dsh-upgrade-decision-matrix.md`](dsh-upgrade-decision-matrix.md)。
 0. **预检（先看清单再动 pin）**：`node scripts/dev/preflight-vendor-pin.mjs
-   dsh-v0.1.5-alpha.1 --offline`（实测输出见 §9.3）。
+   dsh-v0.1.5-alpha.1 --offline`（§9.3 的数字是 **0.1.3-alpha.2 → alpha.1** 那次运行；
+   今天从当前 pin 再跑会报 `b2e3b2a01258 → alpha.1`，数字自然不同）。
 1. **layout fork 重放（主体，规模门已触发）**：上游 0.1.5 把三栏模型改为
    sidebar/center/**rightbar** —— `columns.ts` 去 `DETAILS_*`（新增
    `RIGHTBAR_MIN`/`RIGHTBAR_MAX_RATIO`/`RIGHTBAR_DEFAULT_RATIO`，`CENTER_MIN` 640→400）、
@@ -155,35 +174,42 @@
    `ui-sidebar-right`、`ui-sidebar-files`、`ui-sidebar-textpreview`、
    `dsh-api-workspace-files`（`dsh.client.inject` = api-gateway +
    api-session-controller + client-resources）。
-   `ui-sidebar-right` 注入 `layout` 并占用新 `rightbar` 槽；files/textpreview 注入
-   `sidebarRightTabs` + `remote.workspaceFiles`。需决定 cover（chamber 不加载）或
-   load（接受官方右栏），并与 chamber 的 sidebar/layout fork 槽契约对齐；同步
-   `chamber-covered.ts`/factory 表/AGENTS/C4 期望。
-3. **平台词 `dsh-client-ui-dockkit`**：库（无 `dsh.client`），被上述三行依赖 →
-   必须采纳到 `client-web` 的 `platform.ts`/`seed.ts` + `package.json` 依赖
-   （已试通：typecheck 绿）。
+   `ui-sidebar-right` 注入 `layout` 并占用新 `rightbar` 槽；files/documentpreview 注入
+   `sidebarRightTabs` + `remote.workspaceFiles`。**裁决结果**：五行全部**不 cover、
+   继续走 host-graph 额外行**（首屏时序由 `assertRequiredExtraRowServices` 探针兜底）；
+   `ui-sidebar-textpreview` 在 alpha.2 改名为 `ui-sidebar-documentpreview`。
+3. ~~**平台词 `dsh-client-ui-dockkit` 采纳到 `client-web` 的 platform.ts/seed.ts + 依赖**~~
+   **裁决改为 covered factory**（不 seed、不加依赖；seed 会把 docking kit 拉进主图 eval，同
+   `ui-primitives` 的 C3 先例）——见 §9.3 与 diff 报告 §2.2；`platform.ts`/`seed.ts` 只留偏差注释。
 4. **connection / api-gateway 重放**：connection 纯文件照抄（READMEs、
    `src/index.ts` 宿主半 `webServer` 可选注入重构、`src/client/fixture.ts` +291）、
    `package.json` 版本 + 保留本仓 scripts；api-gateway 仅版本（client 半零改动）。
-5. **运行时四锚 + 捆绑**：npm `@deepseek-ai/dsh@0.1.5-alpha.1` 已发布 → 可双线收口
+5. **运行时六锚 + 捆绑**：npm `@deepseek-ai/dsh@0.1.5-alpha.2` 已发布 → 可双线收口
    （bundle-dsh 兜底常量、`vendor/dsh` 锁文件 `--force --refresh-lockfile`、
    release.yml env、install-gateway.sh、gateway `dshAnchorVersion`、
    release-preflight `FORK_VERSION`）。
-6. **锁文件**：vendor 成员 271 → 282（−4 landlock、+15：7 新包 + 5 `node-addon-system*`
-   + 3 其他），按 §4 纪律重生成 + 手工处理 landlock 复活记录。
+6. **锁文件**：vendor 成员 271 → **284**（净 +13 = +17/−4：新增含 `apps/desktop`、
+   `apps/desktop-host`、`native/system*` 6 个、`ui-sidebar-documentpreview`、
+   `fs/tool-present`、`util/chunked-list` 等；移除 landlock 系列 4 条），按 §4 纪律
+   重生成 + 处理 landlock 复活记录（守卫已修，见 §9.1）。
 7. 全量门禁（§6）+ 文档回写（§7）+ `verify:i18n` + 触点表 §2/§5 更新。
 
 ### 9.3 已证伪/确认的假设
 - 上游 connection **客户端恢复模型在 alpha.2→0.1.5 零改动**（我们的连接加固无上游
   等价物可采纳，`start(sinks, config)` 接缝在 0.1.5 的宿主半重构后依然存在）。
-- 新增 7 个包、4 个新 client 行、1 个平台词库；无新增 native 依赖（除
-  `msgpackr-extract`，已否认其构建脚本）。
+- 包集合 rc.1→alpha.2 净 **+13**（+17/−4，实测 vendor 链接 271→**284**）；新增 client 行 **5**
+  （`dsh-api-workspace-files`、`client-resources`、`ui-sidebar-{files,right,documentpreview}`；
+  `ui-sidebar-textpreview` 在 alpha.2 改名 `documentpreview`）；平台词库 **1**
+  （`ui-dockkit`，走 covered factory）；无新增 native 依赖（除 `msgpackr-extract`，
+  已否认其构建脚本）。
 - **预检实测**（`preflight-vendor-pin.mjs dsh-v0.1.5-alpha.1 --offline`，2026-09）：
   上游变更 2552 文件 → fork 面 pure 5 / 需人工重放 6（三个 `package.json` 版本行 +
   `client/web/src/platform.ts`·`seed.ts`·`tsconfig.json`）/ dropped 6；**seam 风险
-  16 个文件，全部落在 `packages/client/ui-layout/*`**（`AppFrame.tsx`/`columns.ts`/
-  `index.ts`/`service.ts`/`stores.ts`/`.module.css` + README 三件 + `package.json`）
+  16 个文件 = `packages/client/ui-layout/*` 15 个**（`AppFrame.tsx`/`columns.ts`/
+  `index.ts`/`service.ts`/`stores.ts`/`.module.css` + README 三件 + `package.json`）**+ 1 个
+  `packages/client/ui-renderer/package.json`**（版本行）
   —— 与 §9.2 第 1 项互为印证：layout fork 是唯一实质阻塞点。包集合 +15 / −4
   （landlock 系列），新增 client 行 5（`dsh-api-workspace-files`、`client-resources`、
   `ui-sidebar-{files,right,textpreview}` —— 比 §9.2 第 2 项多一行，roster 裁决需一并
-  覆盖），净 271 → 282 与 §9.2 第 6 项一致。
+  覆盖），净 271 → **284**（实测；alpha.1 时为 282，alpha.2 再加 `fs/tool-present`、
+  `util/chunked-list` 两个链接；`ui-sidebar-textpreview`→`documentpreview` 为改名不增链接）。

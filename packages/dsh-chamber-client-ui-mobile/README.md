@@ -12,9 +12,11 @@ drawer layout, touch targets, safe areas, PWA phased.
 
 - `src/index.ts` — host-half no-op entry (the seed gate requires `dist/index.js`);
 - `src/client/index.ts` — browser half: asset injection (viewport/stylesheet/
-  theme-color), frame + session-header stamping, layout-source-driven drawer
-  scroll lock, composer behavior, drawer tap self-heal, settings-sheet
-  section-switch polish, `shell.overlay` hamburger + backdrop;
+  theme-color), frame stamping (`ROLE_SLOT_KEYS` maps the plugin's roles onto
+  the alpha.2 slot keys `sidebar` / `main` / `rightbar`),
+  layout-source-driven drawer scroll lock, composer behavior, drawer tap
+  self-heal, settings-sheet section-switch polish, `shell.overlay` hamburger +
+  backdrop;
 - `src/client/styles.ts` — single stylesheet (fully media-query scoped,
   desktop untouched; official `--dsw-*`/`--ds-*` tokens only);
 - `src/client/markup.ts` / `composer.ts` / `layout-facts.ts` /
@@ -33,13 +35,12 @@ mobile surface on three axes, all covered structurally (no hashed classes):
 - **Clipped crumbs**: the official crumbs row is nowrap + overflow hidden, so
   long title chains and the lineage chips ("N 个子代理" catalog triggers)
   were silently cut — crumbs wrap instead of clip (per-crumb ellipsis stays);
-- **"Session 日志" export capsule** (official `session-log-export`, header
-  utilities): a ≥111px pill that eats the phone title row for a download
-  mobile users rarely make — on the phone tier it is compacted to a round
-  44px icon target. The capsule carries no stable attribute, so markup.ts
-  stamps it (`data-mobile-dismiss="session-log-export"`) by its official
-  bilingual copy + download-icon shape when the session header mounts
-  (idempotent, pruned search — the chat scroll body is never walked).
+- **"Session 日志" export capsule**: RETIRED at the alpha.2 re-anchor —
+  upstream now renders that control as a 28x28 icon button inside the header
+  more-actions menu, so the plugin no longer stamps it by copy. The right
+  column's mobile presentation is likewise upstream-owned: `ui-sidebar-right`
+  auto-fullscreens below 768px, so the plugin keeps only the grid lock for the
+  third track and no longer draws its own overlay.
 
 ## Settings sheet adaptation (phone tier)
 
@@ -174,19 +175,21 @@ pnpm run test:mobile
 
 ## Anchor baseline
 
-Official dsh **v0.1.2-alpha.4** DOM, empirically audited via CDP; the
-ui-layout AppFrame is byte-identical with the alpha.3 pin (alpha.4 anchor
-audit, harness pin 4e84901e): `data-sidebar-collapsed` present=collapsed /
-removed=expanded; the composer is a Lexical `[data-composer-input]` (no
-textarea); the settings dialog renders INSIDE the sidebar DOM (no body portal;
-the drawer open state must use `transform: none` — an identity transform still
-creates a containing block). The
-details column SHELL is resident from first paint while its
-`[data-slot=details]` outlet is session-gated — stamping re-triggers when
-the outlet mounts (markup.ts `isStructuralTarget`).
+Official dsh **v0.1.5-alpha.2** DOM, empirically audited via CDP and
+re-anchored when the vendored pin moved: `data-sidebar-collapsed`
+present=collapsed / removed=expanded; the centre column is the keyed **`main`**
+slot and the right column is **`rightbar`** (both column shells and their
+`[data-slot=…]` outlet wrappers are resident from first paint — the renderer
+emits the wrapper unconditionally; only the docking surface inside is
+registration-gated, so stamping converges on the shell, markup.ts
+`isStructuralTarget` + `ROLE_SLOT_KEYS`);
+the composer is a Lexical `[data-composer-input]` (no textarea); the settings
+dialog renders INSIDE the sidebar DOM (no body portal; the drawer open state
+must use `transform: none` — an identity transform still creates a containing
+block).
 
-The vendored base is now **v0.1.2-rc.1** (harness pin a66e470); the anchors
-above were re-verified against the rc.1 source (2026-12 review), which also
+The vendored base is now **v0.1.5-alpha.2** (harness pin b2e3b2a0); the anchors
+above were re-verified against the alpha.2 source (2026-09 re-anchor), which also
 established: the composer seat is a flow child of `[data-conversation-scroll]`
 (sticky only while the content overflows), `[data-input-scroll]` is the
 composer's inner scroller (`max-height: 336px`), the official

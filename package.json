@@ -39,7 +39,7 @@
     "verify:i18n": "node scripts/dev/verify-i18n.mjs",
     "verify:workflows": "node scripts/dev/verify-workflow-action-pins.mjs",
     "test:release-workflow": "node scripts/dev/release-workflow-policy.test.mjs",
-    "test:upgrade-tools": "node --test scripts/dev/preflight-vendor-pin.test.mjs scripts/dev/restore-lockfile-vendor-records.test.mjs",
+    "test:upgrade-tools": "node --test scripts/dev/preflight-vendor-pin.test.mjs scripts/dev/artifact-gate.test.mjs scripts/dev/restore-lockfile-vendor-records.test.mjs",
     "gen:notices": "node scripts/dev/gen-third-party-notices.mjs",
     "typecheck": "tsc --noEmit",
     "typecheck:runtime": "tsc -p packages/dsh-runtime/tsconfig.json --noEmit",

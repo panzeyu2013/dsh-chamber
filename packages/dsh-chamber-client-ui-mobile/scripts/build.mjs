@@ -35,9 +35,14 @@ const EXTERNALS = [
   '@dsh-chamber/*',
 ]
 
+// Absolute working dir = this package: esbuild renders source comments in
+// the bundle relative to it, so the committed artifacts are byte-identical
+// regardless of the caller's CWD (the host-package build.mjs carries the same
+// fix; the C8 gate rebuilds from the repo root and byte-compares).
 await build({
   entryPoints: [join(root, 'src/index.ts')],
   outfile: join(root, 'dist/index.js'),
+  absWorkingDir: root,
   bundle: true,
   format: 'esm',
   platform: 'node',
@@ -49,6 +54,7 @@ await build({
 await build({
   entryPoints: [join(root, 'src/client/index.ts')],
   outfile: join(root, 'lib/client.js'),
+  absWorkingDir: root,
   bundle: true,
   format: 'cjs',
   platform: 'browser',

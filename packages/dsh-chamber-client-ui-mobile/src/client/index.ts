@@ -3,30 +3,26 @@
  * OFFICIAL dsh web shell to touch/narrow viewports. Zero code copied from
  * community plugins — the mechanisms (attribute stamping, enter-to-newline,
  * editability recovery, layout-source-driven drawer) are re-implemented
- * against the empirical 0.1.2-alpha.4 DOM on the chamber base (the alpha.4
- * anchor audit re-verified the anchors; the ui-layout AppFrame is
- * byte-identical with the alpha.3 pin):
+ * against the empirical 0.1.5-alpha.2 DOM on the chamber base (centre column
+ * = keyed `main` slot, right column = `rightbar`; see markup.ts ROLE_SLOT_KEYS):
  *  - panel state comes from the two-tier layout source (layout-facts.ts):
  *    the chamber layout fork's `layoutFacts` service when present, the
  *    official `data-sidebar-collapsed` attribute observation otherwise —
  *    the gateway-hosted instance runs the OFFICIAL ui-layout (design 17
  *    §18.4 项 3 deployment-matrix exception);
  *  - frame stamping is per instance root (`[data-slot="root"]`),
- *    idempotent and remount-safe (项 2); the session-header chrome stamps
- *    (the "Session 日志" export capsule compact mark, markup.ts) ride the
- *    same re-stamp channels; the behavior effects are
+ *    idempotent and remount-safe (项 2); the behavior effects are
  *    document-level single-instance BY DESIGN (the gateway deployment is
  *    single-shell; a future multi-shell renderer mount must scope them);
  *  - the mobile tier activates on `(max-width:1023px) and (pointer:coarse)`
  *    (项 5) — the CSS is fully media-query scoped, desktop untouched.
  *
- *  Anchor-version note: the alpha.4 anchor audit (2026-09) describes the DOM
- *  shapes the mechanisms were built against; the vendored base is now
- *  0.1.2-rc.1 and the anchors were re-verified against the rc.1 source
- *  (2026-12 review). The dsh version actually injected into a gateway
+ *  Anchor-version note: the anchors were re-audited against the vendored
+ *  0.1.5-alpha.2 source at the 2026-09 re-anchor (the centre column moved to
+ *  the keyed `main` slot and the right column to `rightbar`, which is what
+ *  ROLE_SLOT_KEYS encodes). The dsh version actually injected into a gateway
  *  instance is decided by the dsh-runtime on the serving desktop/gateway —
- *  anchors must be re-audited when the vendored pin moves (markup.ts pins
- *  the stamped dictionary copy at rc.1 separately).
+ *  anchors must be re-audited when the vendored pin moves.
  */
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
@@ -38,7 +34,6 @@ import {
   ROOT_SLOT_SELECTOR,
   shouldRestamp,
   stampFrame,
-  stampSessionLogDismiss,
   type MutationLike,
 } from './markup.ts'
 import { createLayoutFactSource } from './layout-facts.ts'
@@ -139,12 +134,12 @@ export function apply(ctx: ClientContext): void {
   // thousands of deep childList batches that never match. The batch
   // decision is a pure function (shouldRestamp), unit-tested without a DOM.
   //
-  // alpha.4 anchor audit (2026-09): the official AppFrame renders the
-  // details column SHELL from first paint while its [data-slot="details"]
-  // outlet is session-gated (a3/a4 ui-layout byte-identical) — the old
-  // "details column appearing with a session" model was a with-session
-  // snapshot. The childList channel below (a) covers the outlet mounting
-  // into the resident shell; a separate frame-attribute channel (b) covers
+  // alpha.2 anchor audit (2026-09): the official AppFrame renders the right
+  // column SHELL and its [data-slot="rightbar"] outlet wrapper from first
+  // paint (`[data-rightbar-col]`; the renderer emits the wrapper
+  // unconditionally) — only the docking surface inside is registration-gated.
+  // The childList channel below (a) covers late content mounting into the
+  // resident shells; a separate frame-attribute channel (b) covers
   // attribute-only state flips and any deeper drift. The two channels are
   // deliberately independent: attribute records never reach the childList
   // batch decision.
@@ -154,20 +149,13 @@ export function apply(ctx: ClientContext): void {
     let frameAttributeObserver: MutationObserver | null = null
     const stamp = (): void => {
       const roots = document.querySelectorAll(ROOT_SLOT_SELECTOR)
-      for (const root of roots) {
-        const frame = stampFrame(root)
-        // Session-header chrome stamps (late-mounting, idempotent): the
-        // "Session 日志" export capsule gets the phone-tier compact mark.
-        // Runs on every structural/attribute re-stamp — it simply finds no
-        // header before a session mounts.
-        if (frame !== null) stampSessionLogDismiss(frame)
-      }
-      // (b) Frame state attributes (collapsed flags) drive the drawer/overlay
+      for (const root of roots) stampFrame(root)
+      // (b) Frame state attributes (collapsed flags) drive the drawer
       // geometry and can flip in the same commit as a session activation, or
       // on attribute-only paths the childList observer never sees. Re-attach
       // after every stamp so a remounted frame is observed; stampFrame never
       // writes these attributes, so there is no self-trigger loop. Frequency
-      // is user-action level (drawer open/close, details open) — zero
+      // is user-action level (drawer open/close, right surface open) — zero
       // streaming noise. NOTE: this observer channel is wiring-only and has
       // no unit test (no DOM/MutationObserver test base in this package) —
       // verified on device (§18.6); the pure batch decision below is the
@@ -184,7 +172,7 @@ export function apply(ctx: ClientContext): void {
       for (const frame of frames) {
         frameAttributeObserver.observe(frame, {
           attributes: true,
-          attributeFilter: ['data-sidebar-collapsed', 'data-details-collapsed'],
+          attributeFilter: ['data-sidebar-collapsed', 'data-rightbar-collapsed'],
         })
       }
     }

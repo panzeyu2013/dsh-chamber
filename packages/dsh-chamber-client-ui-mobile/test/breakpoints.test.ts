@@ -83,7 +83,38 @@ test('motion uses official tokens with a reduced-motion branch', () => {
 test('backdrop dims the conversation behind the open drawer', () => {
   assert.ok(MOBILE_CSS.includes('.dsh-mobile-backdrop'))
   assert.ok(MOBILE_CSS.includes('var(--dsw-alias-bg-mask-1'))
-  assert.ok(MOBILE_CSS.includes('z-index: 39'))
+  assert.ok(MOBILE_CSS.includes('z-index: 74'))
+})
+
+test('mobile layering pairs each selector with its own z-index', () => {
+  // Backdrop 74 < drawer 75 < toggle 76 must stay above the official
+  // fullscreen right panel (40), its float layer (60) and dockkit (70).
+  // Assert the SELECTOR→value pairing (not just that the numbers appear
+  // somewhere) so swapping two values fails.
+  const tier = normalizeTouchTier()
+  const drawer = cssBlock(tier, '[data-mobile-role="sidebar"]')
+  assert.ok(drawer !== null && drawer.includes('z-index: 75'), 'drawer must sit at 75')
+  const backdrop = cssBlock(tier, '[data-mobile-frame]:not([data-sidebar-collapsed]) .dsh-mobile-backdrop')
+  assert.ok(backdrop !== null && backdrop.includes('z-index: 74'), 'backdrop must sit at 74')
+  const toggle = cssBlock(tier, '.dsh-mobile-nav-toggle')
+  assert.ok(toggle !== null && toggle.includes('z-index: 76'), 'toggle must sit at 76')
+})
+
+test('the retired mechanisms leave no trace in the stylesheet', () => {
+  assert.ok(!MOBILE_CSS.includes('data-mobile-dismiss'), 'session-log stamping CSS must be gone')
+  // No self-drawn right-column overlay: the third track stays grid-locked and
+  // the official right surface owns the mobile presentation.
+  const tier = normalizeTouchTier()
+  const rightColumn = cssBlock(tier, '[data-mobile-role="details"]')
+  assert.ok(rightColumn !== null && rightColumn.includes('grid-column: 3'), 'the grid lock stays')
+  assert.ok(!/\[data-mobile-role="details"\][^{]*\{[^}]*position:\s*fixed/.test(tier), 'no self-drawn fixed overlay')
+  // Dockkit split chrome is hidden on touch.
+  assert.ok(MOBILE_CSS.includes('[data-dockkit-divider]'))
+  assert.ok(MOBILE_CSS.includes('[data-dockkit-split-button]'))
+  // The composer-bar row rules use the production class-name shape.
+  const phone = normalizePhoneTier()
+  assert.ok(phone.includes('[class*="_row_"]'))
+  assert.ok(phone.includes('[class*="_trigger_"]'))
 })
 
 test('settings full-screen rule targets the official settings dialog shape', () => {
@@ -143,6 +174,16 @@ test('non-settings aria-modal dialogs are edge-capped and editable fields keep t
 function normalizePhoneTier(): string {
   return MOBILE_CSS
     .slice(MOBILE_CSS.indexOf('@media (max-width: 768px)'))
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\s+/g, ' ')
+}
+
+/** The touch tier (1023px) with comments stripped and whitespace normalized —
+ *  the drawer/backdrop/toggle and the column grid locks live here, not on the
+ *  phone tier. */
+function normalizeTouchTier(): string {
+  return MOBILE_CSS
+    .slice(MOBILE_CSS.indexOf('@media (max-width: 1023px)'))
     .replace(/\/\*[\s\S]*?\*\//g, '')
     .replace(/\s+/g, ' ')
 }

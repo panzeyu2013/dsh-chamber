@@ -6,7 +6,7 @@
  *
  * Trust model: this code runs inside each dsh host process. All capability
  * views are structural over the OFFICIAL ctx services (verified against the
- * pinned vendor dsh-v0.1.2-rc.1 a66e4702 — design 24 §14); an unavailable
+ * pinned vendor dsh-v0.1.5-alpha.2 b2e3b2a0 — design 24 §14); an unavailable
  * surface refuses loudly with code `registry-unreadable`/`storage`, never a
  * guessed layout. Security-review dispositions (2026-12):
  *  - archived-set member removal runs INSIDE the registry's official
@@ -28,16 +28,16 @@
  *    absent sessions root (vendor session/session-persistence-jsonl/src/
  *    index.ts:507-544,893-904) — so `listHeaders` unions both surfaces by id
  *    and never drops a record either side reports;
- *  - AUTHORITATIVE EXISTENCE PROBE (2026-12 blocker fix): `hasStoredContent`
- *    asks the official `sessionPersistence.inspect(id)` — the jsonl backend
- *    resolves an id across ALL project directories when cwd is unknown
- *    (vendor session/session-persistence-jsonl/src/index.ts:227-234 findLog)
+ *  - AUTHORITATIVE EXISTENCE PROBE (2026-12 blocker fix; surface re-anchored
+ *    2026-09 to `stat(id)`): `hasStoredContent` asks the official
+ *    `sessionPersistence.stat(id)` — the jsonl backend resolves an id across
+ *    ALL project directories and ALL format generations when cwd is unknown
  *    — and fails closed to `true` on every error except the official
  *    not-found carrier.
  */
 
-import { rm, rmdir, lstat } from 'node:fs/promises'
-import { basename, dirname } from 'node:path'
+import { rm, rmdir, lstat, readdir } from 'node:fs/promises'
+import { basename, dirname, join } from 'node:path'
 import {
   ArchiveCleanupError,
   type ArchiveCleanupHost,
@@ -93,11 +93,14 @@ export interface HostCtxServices {
   readonly sessionPersistence?: {
     list?(signal?: unknown): Promise<readonly SessionHeaderLike[]>
     locate?(header: SessionHeaderLike): { kind?: string; path?: string } | undefined
-    /** Official single-session read (pinned `SessionPersistence.inspect(id,
-     *  signal)`) — the sweep's DECISIVE content-existence probe. Optional in
-     *  this structural view so a drifted/older host degrades to "never sweep"
-     *  instead of crashing (fail closed; see hasStoredContent below). */
-    inspect?(id: string, signal?: unknown): Promise<unknown>
+    /** Official single-session observation (`SessionPersistence.stat(id)`,
+     *  dsh >= 0.1.3-alpha.1): resolves the session across every project
+     *  directory and every immutable format generation, and answers
+     *  `undefined` when it does not exist — the sweep's DECISIVE
+     *  content-existence probe. Optional in this structural view so a
+     *  drifted/older host degrades to "never sweep" instead of crashing
+     *  (fail closed; see hasStoredContent below). */
+    stat?(id: string, options?: unknown): Promise<unknown>
   }
 }
 
@@ -130,24 +133,58 @@ function assertHeaderShape(header: unknown): void {
   if (h.origin !== undefined && h.origin !== 'subagent') malformed('origin', "exactly 'subagent' when present")
 }
 
+/** The jsonl backend's write-lease filename (vendor `LEASE_FILENAME`). */
+const LEASE_FILENAME = 'session.lock'
+
 /**
- * Structural identification of the official "no materialized durable log"
- * carrier (vendor session/session-persistence/src/errors.ts
- * `SessionPersistenceNotFoundError`, pinned dsh-v0.1.2-rc.1): an Error whose
- * `name` is exactly `SessionPersistenceNotFoundError` and whose `sessionId`
- * (when present) names the probed id.
- *
- * This binding deliberately does NOT import vendor internals (design 24 §10:
- * structural over official surfaces), so the match is on the RUNTIME SHAPE and
- * fails closed on every deviation: a different name, a non-Error throw, or a
- * `sessionId` that disagrees with the probe all mean "may have content".
+ * Is this version component canonical? Mirrors the vendor
+ * `parseSessionFormatLogFilename` exactly: `[1-9][0-9]*` AND a safe integer
+ * (vendor `Number.isSafeInteger` rejects an out-of-range version as
+ * non-canonical). Without the upper bound the whitelist would call
+ * `session.v99999999999999999999.jsonl` removable while the vendor calls it
+ * non-canonical — the opposite of the fail-closed direction the surrounding
+ * refusal relies on (2026-09 二轮 W1 N13).
  */
-function isPersistenceNotFoundError(error: unknown, sessionId: string): boolean {
-  if (!(error instanceof Error)) return false
-  if (error.name !== 'SessionPersistenceNotFoundError') return false
-  const reported = (error as { sessionId?: unknown }).sessionId
-  if (reported !== undefined && String(reported) !== sessionId) return false
-  return true
+function isCanonicalVersion(version: string | undefined): boolean {
+  return version === undefined || Number.isSafeInteger(Number(version))
+}
+
+/**
+ * Is this filename one canonical immutable generation artifact? Mirrors the
+ * vendor `sessionFormatLogFilename` + compression suffix: `session.jsonl`,
+ * `session.vN.jsonl` (N >= 1, no leading zero, safe integer) and either with a
+ * trailing `.zstd`. Version-zero-tagged and non-canonical names do not match.
+ */
+function isGenerationFilename(name: string): boolean {
+  const match = /^session(?:\.v([1-9][0-9]*))?\.jsonl(?:\.zstd)?$/.exec(name)
+  return match !== null && isCanonicalVersion(match[1])
+}
+
+/**
+ * Is this filename a leftover generation temp file? The jsonl backend
+ * publishes each generation via `link()`+`unlink()` from
+ * `<generation>.<12 hex>.tmp` in the same directory, so an interrupted write
+ * leaves one behind. It is this session's own artifact and belongs to the
+ * purge; anything else in the directory still refuses the whole operation.
+ * The version bound matches {@link isGenerationFilename}.
+ */
+function isGenerationTempFilename(name: string): boolean {
+  const match = /^session(?:\.v([1-9][0-9]*))?\.jsonl(?:\.zstd)?\.[0-9a-f]{12}\.tmp$/.exec(name)
+  return match !== null && isCanonicalVersion(match[1])
+}
+
+/**
+ * Is this filename a leftover MIGRATION staging file? The jsonl backend stages
+ * a vN->vM migration as `session.migration.<16 hex>.jsonl[.zstd].tmp` in the
+ * same Session directory (vendor `generation.ts` migration path; the token is
+ * `randomBytes(8).toString('hex')`), so an interrupted migration leaves one
+ * behind. It holds this session's own content (the migrated log), so the purge
+ * removes it with the rest; anything else still refuses the whole operation.
+ * 2026-09 二轮 (W2 F5): without this recognition a crashed migration made the
+ * session permanently unpurgeable (fail-closed refusal).
+ */
+function isMigrationTempFilename(name: string): boolean {
+  return /^session\.migration\.[0-9a-f]{16}\.jsonl(?:\.zstd)?\.tmp$/.test(name)
 }
 
 /* ------------------------------------------------------------------ */
@@ -195,7 +232,10 @@ export function assertHostSurface(ctx: HostCtxServices): void {
   const persistence = ctx.sessionPersistence
   const canEnumerate = (query !== undefined && typeof query.listSessions === 'function')
     || (persistence !== undefined && typeof persistence.list === 'function')
-  if (!canEnumerate || persistence === undefined || typeof persistence.locate !== 'function') {
+  // `locate` resolves the artifact directory and `stat` is the sweep's decisive
+  // existence probe; both are required by this domain (see hasStoredContent).
+  if (!canEnumerate || persistence === undefined || typeof persistence.locate !== 'function'
+    || typeof persistence.stat !== 'function') {
     throw new ArchiveCleanupError(
       'registry-unreadable',
       'archiveCleanup: the session enumeration/storage surface is not mounted with the expected shape',
@@ -283,24 +323,39 @@ export function makeHostBinding(ctx: HostCtxServices): ArchiveCleanupHost {
     let sawEnumeration = false
     if (query?.listSessions !== undefined) {
       const records = await query.listSessions()
-      if (Array.isArray(records)) {
-        for (const record of records) assertHeaderShape(record?.header)
-        for (const record of records) {
-          const header = record.header
-          if (!byId.has(header.id)) byId.set(header.id, header)
-        }
-        sawEnumeration = true
+      // A non-array answer is a drifted surface, NOT an empty corpus: taking
+      // it as "no sessions" would narrow the union silently and could clear a
+      // membership whose content still exists.
+      if (!Array.isArray(records)) {
+        throw new ArchiveCleanupError(
+          'registry-unreadable',
+          'archiveCleanup: sessionQuery.listSessions() did not answer an array — refusing the read (pinned-vendor surface drift)',
+        )
       }
+      for (const record of records) assertHeaderShape(record?.header)
+      for (const record of records) {
+        const header = record.header
+        if (!byId.has(header.id)) byId.set(header.id, header)
+      }
+      sawEnumeration = true
     }
     if (persistence?.list !== undefined) {
-      const headers = await persistence.list()
-      if (Array.isArray(headers)) {
-        for (const header of headers) assertHeaderShape(header)
-        for (const header of headers) {
-          if (!byId.has(header.id)) byId.set(header.id, header)
-        }
-        sawEnumeration = true
+      const snapshots = await persistence.list()
+      if (!Array.isArray(snapshots)) {
+        throw new ArchiveCleanupError(
+          'registry-unreadable',
+          'archiveCleanup: sessionPersistence.list() did not answer an array — refusing the read (pinned-vendor surface drift)',
+        )
       }
+      // dsh >= 0.1.3-alpha.1: list() answers SessionPersistenceSnapshot[] —
+      // the header is the snapshot's `header` field, not the record itself.
+      const headers = snapshots.map(snapshot => (snapshot as { header?: unknown } | undefined)?.header)
+      for (const header of headers) assertHeaderShape(header)
+      for (const header of headers) {
+        const typed = header as SessionHeaderLike
+        if (!byId.has(typed.id)) byId.set(typed.id, typed)
+      }
+      sawEnumeration = true
     }
     if (!sawEnumeration) {
       throw new ArchiveCleanupError(
@@ -335,34 +390,43 @@ export function makeHostBinding(ctx: HostCtxServices): ArchiveCleanupHost {
     },
 
     async hasStoredContent(sessionId: string) {
-      // DECISIVE per-candidate existence probe (2026-12 blocker fix). The
-      // official `sessionPersistence.inspect(id)` resolves the session through
-      // the backend's own id→artifact lookup: the pinned jsonl backend
-      // documents exactly this — `loadStored(id)`: "Read a stored prefix by id
-      // across all project directories when cwd is unknown" (vendor
-      // session/session-persistence-jsonl/src/index.ts:227-234, findLog scans
-      // the project dirs for the encoded id). An unknown cwd is therefore NOT
-      // a reason to report "no content".
+      // DECISIVE per-candidate existence probe (2026-12 blocker fix; re-anchored
+      // 2026-09 to dsh-v0.1.5-alpha.2). The official `sessionPersistence.stat(id)`
+      // resolves the session through the backend's own id -> artifact lookup
+      // across every project directory and every immutable format generation,
+      // and answers `undefined` when the id has no materialized log — an
+      // unknown cwd is therefore NOT a reason to report "no content".
       //
       // Fail-closed mapping:
-      //  - resolved inspection ⇒ true (the id still materializes);
-      //  - official SessionPersistenceNotFoundError ⇒ false — the ONLY answer
-      //    that may clear a membership;
-      //  - ANY other failure (corruption, unsupported format/version,
-      //    transport/IO, absent service, drifted error shape) ⇒ true;
-      //  - no inspect surface at all ⇒ true (the sweep then skips entirely).
+      //  - a resolved snapshot => true (the id still materializes);
+      //  - `undefined` => false — the ONLY answer that may clear a membership.
+      //    Upstream (jsonl backend) answers undefined for an absent log
+      //    (ENOENT) and for a head it cannot materialize (unparseable JSON /
+      //    malformed header) — NOT for every unreadable artifact: a corrupt
+      //    zstd frame, a generation/header version mismatch, a too-new stored
+      //    format version, or a non-ENOENT IO error all THROW (2026-09 二轮
+      //    vendor read; design 24 §22⑦). So this gate is fail-closed against
+      //    thrown errors, while an artifact upstream itself calls "no session"
+      //    clears the membership (its bytes are never deleted by this purge);
+      //  - ANY failure (corrupt zstd, unsupported/too-new format, transport/IO,
+      //    absent service, drifted method shape) => true;
+      //  - no stat surface at all => true (the sweep then skips entirely).
       // A false negative here would clear the membership of a session whose
       // content still exists — the exact blocker this probe closes.
-      const inspect = persistence?.inspect
-      if (typeof inspect !== 'function') return true
+      //
+      // The pre-alpha.1 `inspect(id)` surface this probe originally used no
+      // longer exists upstream; `stat` carries the same semantics (see the
+      // service face above).
+      const stat = persistence?.stat
+      if (typeof stat !== 'function') return true
       try {
         // Call AS A METHOD on the service object: the official persistence
         // implementations are instance-state classes (the same `this` trap
         // that broke a destructured `locate` on a real machine in 2026-09).
-        await inspect.call(persistence, sessionId)
+        const snapshot = await stat.call(persistence, sessionId)
+        return snapshot !== undefined && snapshot !== null
+      } catch {
         return true
-      } catch (error) {
-        return !isPersistenceNotFoundError(error, sessionId)
       }
     },
 
@@ -437,26 +501,56 @@ export function makeHostBinding(ctx: HostCtxServices): ArchiveCleanupHost {
         if (dirStat.isSymbolicLink() || !dirStat.isDirectory()) {
           throw new ArchiveCleanupError('storage', `archiveCleanup: refusing a non-directory/symlinked session path for ${sessionId}`)
         }
-        const artifactStat = await lstat(artifactPath).catch(() => undefined)
-        if (artifactStat === undefined) return 'missing'
-        if (artifactStat.isSymbolicLink() || artifactStat.isDirectory()) {
-          throw new ArchiveCleanupError('storage', `archiveCleanup: refusing a symlinked/non-file artifact for ${sessionId}`)
+        // CROSS-PROCESS NOTE (design 24 §22): removing `session.lock` forfeits
+        // the jsonl lease's cross-process exclusion (vendor lease.ts:17-19), so
+        // this purge must never run while another process is writing the
+        // session. The in-process live gate above covers RUNNING/LOADED agents;
+        // a second dsh process on the same sessions root is out of reach and is
+        // the caller's responsibility (the domain's contract says "stop the
+        // run first").
+        //
+        // dsh >= 0.1.3-alpha.1 keeps ONE FILE PER IMMUTABLE FORMAT GENERATION
+        // in this directory (`session.jsonl`, `session.vN.jsonl`, each with an
+        // optional `.zstd`) plus the write lease `session.lock`; `locate()`
+        // resolves only the CURRENT generation. Removing that single artifact
+        // would leave every older generation on disk while the session
+        // disappears from every official list — the opposite of a content
+        // purge. Delete every canonical generation file plus the lease and the
+        // two recognized temp classes (publish temp `<gen>.<12hex>.tmp`,
+        // migration staging `session.migration.<16hex>.jsonl[.zstd].tmp`), and
+        // refuse the whole operation on any OTHER entry so a drifted layout
+        // fails closed instead of half-deleting.
+        const entries = await readdir(dir, { withFileTypes: true })
+        const removable: string[] = []
+        for (const entry of entries) {
+          if (entry.isSymbolicLink() || entry.isDirectory() || !entry.isFile()) {
+            throw new ArchiveCleanupError(
+              'storage',
+              `archiveCleanup: refusing to purge ${sessionId}: unexpected ${entry.isDirectory() ? 'directory' : entry.isSymbolicLink() ? 'symlink' : 'special file'} ${entry.name} in the session directory`,
+            )
+          }
+          if (entry.name === LEASE_FILENAME || isGenerationFilename(entry.name)
+            || isGenerationTempFilename(entry.name) || isMigrationTempFilename(entry.name)) {
+            removable.push(join(dir, entry.name))
+            continue
+          }
+          throw new ArchiveCleanupError(
+            'storage',
+            `archiveCleanup: refusing to purge ${sessionId}: unrecognized entry ${entry.name} in the session directory (pinned-vendor layout drift — a partial purge would leave content behind)`,
+          )
         }
-        // Remove the exact official artifact (absolute path from locate — no
-        // layout knowledge copied). The parent directory is then reclaimed
-        // ONLY when it empties (non-recursive, best-effort): the artifact is
-        // the enumeration key, so its removal makes the session disappear
-        // from every official list; leftover session-local files never cause
-        // a project-root removal and a later purge re-runs as 'missing'.
-        try {
-          await rm(artifactPath, { force: false })
-        } catch (error) {
-          // Merge-round Nit N3: the artifact vanished between the lstat above
-          // and this rm (TOCTOU race with a concurrent purge in another ctx
-          // shell, or an external deletion) — the idempotent 'missing'
-          // outcome, never a per-item storage noise error.
-          if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 'missing'
-          throw error
+        if (removable.length === 0) return 'missing'
+        for (const path of removable) {
+          try {
+            await rm(path, { force: false })
+          } catch (error) {
+            // Merge-round Nit N3: the artifact vanished between the readdir
+            // above and this rm (TOCTOU race with a concurrent purge in
+            // another ctx shell, or an external deletion) — an already-gone
+            // generation is not an error; the directory is reclaimed below.
+            if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue
+            throw error
+          }
         }
         if (basename(dir) !== '' && basename(dir) !== '.' && basename(dir) !== '..') {
           try {
@@ -465,8 +559,8 @@ export function makeHostBinding(ctx: HostCtxServices): ArchiveCleanupHost {
             await rmdir(dir)
           } catch {
             // Non-empty leftover or race — fail closed by leaving the
-            // directory; the log artifact is already gone and the session no
-            // longer lists.
+            // directory; every canonical artifact is already gone and the
+            // session no longer lists.
           }
         }
         return 'deleted'
@@ -494,7 +588,7 @@ export function makeHostBinding(ctx: HostCtxServices): ArchiveCleanupHost {
         // mirroring the registry's own insertBefore mutation; official
         // persistence + publication path (in-process, no out-of-process edit
         // — todo-12-B risk does not apply). Guarded at runtime; version-
-        // pinned to dsh-v0.1.2-rc.1 (design 24 §10/§11).
+        // pinned to dsh-v0.1.5-alpha.2 (design 24 §10/§11).
         await reg.setState!({ initialized: true, workspaceIds, archivedSessionIds: next })
       }
       try {

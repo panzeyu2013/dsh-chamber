@@ -4,7 +4,7 @@
  * Two vendor-source-only seams are stubbed so the chamber node tests can load
  * the real plugin chain without the source-only vendor graph:
  *
- *  1. `@deepseek-ai/schemastery` — upstream v0.1.3-alpha.2 moved the recovery
+ *  1. `@deepseek-ai/schemastery` — upstream (0.1.3-alpha.2 onward) keeps the recovery
  *     config into `src/recovery-config.ts`, which imports schemastery at
  *     runtime. The vendored schemastery is source-only with a `lib/` export
  *     map, so bare-import resolution fails under plain Node (its source is also

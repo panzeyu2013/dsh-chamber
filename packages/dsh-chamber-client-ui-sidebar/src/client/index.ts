@@ -17,6 +17,7 @@ import {
   projectInstanceSnapshot,
   projectRuntimeFacts,
 } from '../shared/derive.ts'
+import { createPanelSource } from './panel-source.ts'
 import { createPurgeTracker } from '../shared/purged-tracker.ts'
 import { fetchInstanceSnapshot, getInstanceClient } from '../shared/instance-api.ts'
 import {
@@ -24,7 +25,8 @@ import {
 } from '../shared/settings-shell.ts'
 
 export type {
-  SidebarFooterActionOwnerProps, SidebarRootComponentProps, SidebarRootInjected,
+  SidebarBrandMarkOwnerProps, SidebarBrandNameOwnerProps, SidebarFooterActionOwnerProps,
+  SidebarPanelIconOwnerProps, SidebarPanelMetadata, SidebarRootComponentProps, SidebarRootInjected,
   SidebarSectionOwnerProps, SidebarSettingsOwnerProps, SidebarWorkspaceGitOwnerProps,
 } from './contract/slots.ts'
 export type { SidebarKey } from './locales.ts'
@@ -58,12 +60,28 @@ export function apply(ctx: ClientContext): void {
   const workspaceNavigation = ctx.get('uiWorkspace') as unknown as {
     startSession(workspaceId?: Parameters<SidebarRootInjected['startSession']>[0]): void
   }
+  // alpha.2 global panel axis: mirror `sidebar.panellist` registrations into a
+  // serializable snapshot the shell renders, and forward row clicks to
+  // `ctx.layout.selectPanel` (present in every supported layout: both the
+  // chamber fork and the alpha.2 official ui-layout declare it).
+  const panels = createPanelSource()
+  const syncPanels = (): void => { panels.sync(ctx.slots as Parameters<typeof panels.sync>[0]) }
+  ctx.effect(() => ctx.slots.subscribe('sidebar.panellist', syncPanels), 'dsh-chamber: sidebar panel entries')
+  ctx.effect(() => ctx.locale.subscribe(syncPanels), 'dsh-chamber: sidebar panel labels')
+
   const injectProps = (): SidebarRootInjected => ({
     // The shell's New Session button rides the Workspace UI's shared action
     // (current Session Workspace, then recent Workspace) — of THIS ctx, so it
     // always acts on the current source.
     startSession: (workspaceId) => { workspaceNavigation.startSession(workspaceId) },
     toggleSidebar: () => { ctx.layout.toggleSidebar() },
+    // alpha.2: select the global main panel addressed by a sidebar row. Direct
+    // call: a layout without `selectPanel` is a misconfiguration (the sidebar
+    // shell only ever loads beside the chamber layout fork, and the alpha.2
+    // official layout declares the method too), so it must fail loud rather
+    // than silently ignore the click.
+    selectPanel: (id) => { ctx.layout.selectPanel(id) },
+    hooks: { panels: panels.source },
     // chamber patch (05 §4): the renderer shell installs this immutable
     // per-entry fact before any plugin materializes.
     chamberInstanceId: (ctx as any).chamberInstanceId as string | undefined,
@@ -76,6 +94,9 @@ export function apply(ctx: ClientContext): void {
       name: 'sidebar',
       locale: NS,
       children: {
+        'sidebar.brand.mark': { kind: 'single', scope: 'root' },
+        'sidebar.brand.name': { kind: 'single', scope: 'root' },
+        'sidebar.panellist': { kind: 'list', scope: 'root' },
         'sidebar.workspaces': { kind: 'single', scope: 'root' },
         // chamber (08 §11): the per-workspace Git hole. The slot-level inject
         // factory is git-agnostic (closes over only the sidebar-owned
@@ -100,6 +121,9 @@ export function apply(ctx: ClientContext): void {
     }, SidebarRoot),
     'dsh-chamber: sidebar slot registration',
   )
+  // Upstream order: publish the (possibly already populated) panel list after
+  // the registration exists, so the first render sees it.
+  syncPanels()
 
   // chamber (2026-12 settings-surface extension): the chamber settings shell
   // owns `sidebar.settings` at the RESERVED shadow priority (sidebar shared

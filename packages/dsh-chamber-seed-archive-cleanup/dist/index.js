@@ -530,8 +530,8 @@ var ArchiveCleanupCore = class {
 };
 
 // src/binding.ts
-import { rm, rmdir, lstat } from "node:fs/promises";
-import { basename, dirname } from "node:path";
+import { rm, rmdir, lstat, readdir } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
 var BUSY_MESSAGE = "archiveCleanup is already running on this instance \u2014 retry after it settles";
 function assertHeaderShape(header) {
   if (header === null || typeof header !== "object") {
@@ -555,12 +555,20 @@ function assertHeaderShape(header) {
   }
   if (h.origin !== void 0 && h.origin !== "subagent") malformed("origin", "exactly 'subagent' when present");
 }
-function isPersistenceNotFoundError(error, sessionId) {
-  if (!(error instanceof Error)) return false;
-  if (error.name !== "SessionPersistenceNotFoundError") return false;
-  const reported = error.sessionId;
-  if (reported !== void 0 && String(reported) !== sessionId) return false;
-  return true;
+var LEASE_FILENAME = "session.lock";
+function isCanonicalVersion(version) {
+  return version === void 0 || Number.isSafeInteger(Number(version));
+}
+function isGenerationFilename(name) {
+  const match = /^session(?:\.v([1-9][0-9]*))?\.jsonl(?:\.zstd)?$/.exec(name);
+  return match !== null && isCanonicalVersion(match[1]);
+}
+function isGenerationTempFilename(name) {
+  const match = /^session(?:\.v([1-9][0-9]*))?\.jsonl(?:\.zstd)?\.[0-9a-f]{12}\.tmp$/.exec(name);
+  return match !== null && isCanonicalVersion(match[1]);
+}
+function isMigrationTempFilename(name) {
+  return /^session\.migration\.[0-9a-f]{16}\.jsonl(?:\.zstd)?\.tmp$/.test(name);
 }
 function headerToState(header) {
   assertHeaderShape(header);
@@ -583,7 +591,7 @@ function assertHostSurface(ctx) {
   const query = ctx.sessionQuery;
   const persistence = ctx.sessionPersistence;
   const canEnumerate = query !== void 0 && typeof query.listSessions === "function" || persistence !== void 0 && typeof persistence.list === "function";
-  if (!canEnumerate || persistence === void 0 || typeof persistence.locate !== "function") {
+  if (!canEnumerate || persistence === void 0 || typeof persistence.locate !== "function" || typeof persistence.stat !== "function") {
     throw new ArchiveCleanupError(
       "registry-unreadable",
       "archiveCleanup: the session enumeration/storage surface is not mounted with the expected shape"
@@ -636,24 +644,34 @@ function makeHostBinding(ctx) {
     let sawEnumeration = false;
     if (query?.listSessions !== void 0) {
       const records = await query.listSessions();
-      if (Array.isArray(records)) {
-        for (const record of records) assertHeaderShape(record?.header);
-        for (const record of records) {
-          const header = record.header;
-          if (!byId.has(header.id)) byId.set(header.id, header);
-        }
-        sawEnumeration = true;
+      if (!Array.isArray(records)) {
+        throw new ArchiveCleanupError(
+          "registry-unreadable",
+          "archiveCleanup: sessionQuery.listSessions() did not answer an array \u2014 refusing the read (pinned-vendor surface drift)"
+        );
       }
+      for (const record of records) assertHeaderShape(record?.header);
+      for (const record of records) {
+        const header = record.header;
+        if (!byId.has(header.id)) byId.set(header.id, header);
+      }
+      sawEnumeration = true;
     }
     if (persistence?.list !== void 0) {
-      const headers = await persistence.list();
-      if (Array.isArray(headers)) {
-        for (const header of headers) assertHeaderShape(header);
-        for (const header of headers) {
-          if (!byId.has(header.id)) byId.set(header.id, header);
-        }
-        sawEnumeration = true;
+      const snapshots = await persistence.list();
+      if (!Array.isArray(snapshots)) {
+        throw new ArchiveCleanupError(
+          "registry-unreadable",
+          "archiveCleanup: sessionPersistence.list() did not answer an array \u2014 refusing the read (pinned-vendor surface drift)"
+        );
       }
+      const headers = snapshots.map((snapshot) => snapshot?.header);
+      for (const header of headers) assertHeaderShape(header);
+      for (const header of headers) {
+        const typed = header;
+        if (!byId.has(typed.id)) byId.set(typed.id, typed);
+      }
+      sawEnumeration = true;
     }
     if (!sawEnumeration) {
       throw new ArchiveCleanupError(
@@ -681,13 +699,13 @@ function makeHostBinding(ctx) {
       return { running: [...facts.running], loaded: [...facts.loaded] };
     },
     async hasStoredContent(sessionId) {
-      const inspect = persistence?.inspect;
-      if (typeof inspect !== "function") return true;
+      const stat = persistence?.stat;
+      if (typeof stat !== "function") return true;
       try {
-        await inspect.call(persistence, sessionId);
+        const snapshot = await stat.call(persistence, sessionId);
+        return snapshot !== void 0 && snapshot !== null;
+      } catch {
         return true;
-      } catch (error) {
-        return !isPersistenceNotFoundError(error, sessionId);
       }
     },
     async deleteSessionContent(sessionId, cwd, force = false) {
@@ -731,16 +749,32 @@ function makeHostBinding(ctx) {
         if (dirStat.isSymbolicLink() || !dirStat.isDirectory()) {
           throw new ArchiveCleanupError("storage", `archiveCleanup: refusing a non-directory/symlinked session path for ${sessionId}`);
         }
-        const artifactStat = await lstat(artifactPath).catch(() => void 0);
-        if (artifactStat === void 0) return "missing";
-        if (artifactStat.isSymbolicLink() || artifactStat.isDirectory()) {
-          throw new ArchiveCleanupError("storage", `archiveCleanup: refusing a symlinked/non-file artifact for ${sessionId}`);
+        const entries = await readdir(dir, { withFileTypes: true });
+        const removable = [];
+        for (const entry of entries) {
+          if (entry.isSymbolicLink() || entry.isDirectory() || !entry.isFile()) {
+            throw new ArchiveCleanupError(
+              "storage",
+              `archiveCleanup: refusing to purge ${sessionId}: unexpected ${entry.isDirectory() ? "directory" : entry.isSymbolicLink() ? "symlink" : "special file"} ${entry.name} in the session directory`
+            );
+          }
+          if (entry.name === LEASE_FILENAME || isGenerationFilename(entry.name) || isGenerationTempFilename(entry.name) || isMigrationTempFilename(entry.name)) {
+            removable.push(join(dir, entry.name));
+            continue;
+          }
+          throw new ArchiveCleanupError(
+            "storage",
+            `archiveCleanup: refusing to purge ${sessionId}: unrecognized entry ${entry.name} in the session directory (pinned-vendor layout drift \u2014 a partial purge would leave content behind)`
+          );
         }
-        try {
-          await rm(artifactPath, { force: false });
-        } catch (error) {
-          if (error.code === "ENOENT") return "missing";
-          throw error;
+        if (removable.length === 0) return "missing";
+        for (const path of removable) {
+          try {
+            await rm(path, { force: false });
+          } catch (error) {
+            if (error.code === "ENOENT") continue;
+            throw error;
+          }
         }
         if (basename(dir) !== "" && basename(dir) !== "." && basename(dir) !== "..") {
           try {

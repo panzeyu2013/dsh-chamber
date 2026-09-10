@@ -120,6 +120,10 @@
 import type { Context } from '@deepseek-ai/cordis'
 
 import { CHAMBER_COVERED_FACTORY_IDS, CHAMBER_COVERED_IDS } from './chamber-covered.ts'
+import {
+  missingRequiredServices, requiredServiceProbeMessage,
+  REQUIRED_SERVICE_PROBE_DEADLINE_MS, REQUIRED_SERVICE_PROBE_INTERVAL_MS,
+} from './required-extra-rows.ts'
 import { isChamberSourceId } from './transport-source.ts'
 
 declare module '@deepseek-ai/cordis' {
@@ -158,6 +162,14 @@ import * as Store from '@deepseek-ai/dsh-client-store'
 // bundle loads, so this factory answers their `require(...ui-primitives)`
 // edges; run()'s own prefetch of this entry is then a module-cache hit.
 import * as UiPrimitives from '@deepseek-ai/dsh-client-ui-primitives'
+// alpha.2 (S2/S5 裁决): ui-dockkit is upstream's 9th PLATFORM_MODULES word and
+// is value-imported by ui-sidebar-right/-files/-documentpreview. The chamber
+// seed does NOT carry it (chunk-budget: seeding pulls the docking kit into the
+// main-graph eval, the same reason ui-primitives left the seed), so this
+// composite factory answers the require edges of the extra rows instead. It is
+// a pure library — no `dsh.client`, no `./client` — so it can never arrive as
+// a host-graph row and the "platform word must never be a row" invariant holds.
+import * as UiDockkit from '@deepseek-ai/dsh-client-ui-dockkit'
 import * as ApiSessionController from '@deepseek-ai/dsh-api-session-controller/client'
 import * as ApiWorkspaceController from '@deepseek-ai/dsh-api-workspace-controller/client'
 import * as Locale from '@deepseek-ai/dsh-client-locale/client'
@@ -190,6 +202,10 @@ import * as UiConversation from '@deepseek-ai/dsh-client-ui-conversation/client'
 // page until the deferred chunk arrives), ui-approval owns the composer
 // approval surface. ui-cordis (the new debug face) is deliberately NOT
 // registered — see chamber-covered.ts.
+// 2026-09 三轮: the upload client is covered (see chamber-covered.ts) so the
+// registered vendor patch can carry the per-entry base path; the host half
+// (the /api/session/uploadFileBinary route) stays an instance host row.
+import * as FileUpload from '@deepseek-ai/dsh-client-file-upload/client'
 import * as UiSession from '@deepseek-ai/dsh-client-ui-session/client'
 import * as UiChat from '@deepseek-ai/dsh-client-ui-chat/client'
 import * as UiApproval from '@deepseek-ai/dsh-client-ui-approval/client'
@@ -244,6 +260,7 @@ async function registerDeferred(ctx: Context): Promise<void> {
     workflowRun,
     deliverables,
     subagent,
+    sessionLogDownload,
     messageFeedback,
     plan,
     userQuestions,
@@ -292,6 +309,10 @@ async function registerDeferred(ctx: Context): Promise<void> {
     import('@deepseek-ai/dsh-client-ui-workflow-run/client'),
     import('@deepseek-ai/dsh-client-ui-deliverables/client'),
     import('@deepseek-ai/dsh-client-ui-subagent/client'),
+    // 2026-09 四轮: the session-log export client is covered so its registered
+    // vendor patch can carry the per-entry base path on `/api/session.export`
+    // (the host half keeps the route + /export command).
+    import('@deepseek-ai/dsh-session-log-export/client'),
     import('@deepseek-ai/dsh-client-ui-message-feedback/client'),
     import('@deepseek-ai/dsh-client-ui-plan/client'),
     import('@deepseek-ai/dsh-client-ui-user-questions/client'),
@@ -325,6 +346,7 @@ async function registerDeferred(ctx: Context): Promise<void> {
   ctx.plugin(workflowRun)
   ctx.plugin(deliverables)
   ctx.plugin(subagent)
+  ctx.plugin(sessionLogDownload)
   ctx.plugin(messageFeedback)
   ctx.plugin(plan)
   ctx.plugin(userQuestions)
@@ -462,6 +484,10 @@ export function apply(ctx: Context): void {
   // sets, so registration order carries no activation semantics.
   ctx.plugin(ApiSessionController)
   ctx.plugin(ApiWorkspaceController)
+  // Background file uploads (covers the host-graph row): ui-conversation and
+  // api-session-controller root-inject `fileUpload`, and the composite-bundled
+  // copy is the only one the vendor patch can fix (see chamber-covered.ts).
+  ctx.plugin(FileUpload)
   ctx.plugin(Locale)
   ctx.plugin(UiTheme)
   ctx.plugin(UiLayout)
@@ -492,6 +518,46 @@ export function apply(ctx: Context): void {
   void registerDeferred(ctx).catch((error) => {
     console.error('[chamber-entry] deferred plugin registration failed:', error)
   })
+
+  assertRequiredExtraRowServices(ctx)
+}
+
+/**
+ * alpha.2 required extra rows: `ui-sidebar-right` provides `ctx.sidebarRight`,
+ * which the composite's FIRST-SCREEN `ui-chat` declares in its cordis inject
+ * set, and `client-resources` provides `ctx.resources` for the global
+ * `useResource` hook. The composite registers ui-chat directly, so its fiber
+ * is not part of the boot kernel's loader sweep: if the extra row never
+ * applies, the fiber stays PENDING and the conversation surface disappears
+ * while the boot still reports success. Probe the services after the extra
+ * rows have had time to materialize and report loudly instead of failing
+ * silently.
+ *
+ * This is a diagnostic, not a boot gate: a gateway-hosted instance may
+ * legitimately run without the rows (the mobile deployment loads no sidebar
+ * surface), so the boot must not fail — the operator-facing log is the signal.
+ * The timer is owned by the ctx effect, so a torn-down instance stops probing.
+ * @param ctx - the per-entry client root context.
+ */
+function assertRequiredExtraRowServices(ctx: Context): void {
+  const started = Date.now()
+  const isProvided = (name: string): boolean =>
+    (ctx as { get: (key: string) => unknown }).get(name) !== undefined
+  const instanceId = (ctx as { chamberInstanceId?: string }).chamberInstanceId
+  ctx.effect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const probe = (): void => {
+      const missing = missingRequiredServices(isProvided)
+      if (missing.length === 0) return
+      if (Date.now() - started < REQUIRED_SERVICE_PROBE_DEADLINE_MS) {
+        timer = setTimeout(probe, REQUIRED_SERVICE_PROBE_INTERVAL_MS)
+        return
+      }
+      console.error(requiredServiceProbeMessage(missing, instanceId))
+    }
+    timer = setTimeout(probe, 0)
+    return () => { if (timer !== undefined) clearTimeout(timer) }
+  }, 'chamber-entry: required extra-row services probe')
 }
 
 /** The module-table handoff shape (wire contract, dsh-client-modules). */
@@ -566,6 +632,9 @@ const COVERED_FACTORIES: ReadonlyArray<readonly [id: string, factory: ClientPlug
   // bundle's evaluation before any extra-row load, so require edges land
   // here. Same shape as the store word: factory only, never ctx.plugin'd.
   ['@deepseek-ai/dsh-client-ui-primitives', coveredFactory(UiPrimitives)],
+  // alpha.2: the docking-kit word (see the import comment) — factory only,
+  // never ctx.plugin'd.
+  ['@deepseek-ai/dsh-client-ui-dockkit', coveredFactory(UiDockkit)],
   ['@deepseek-ai/dsh-api-session-controller', coveredFactory(ApiSessionController)],
   ['@deepseek-ai/dsh-api-workspace-controller', coveredFactory(ApiWorkspaceController)],
   ['@deepseek-ai/dsh-client-locale', coveredFactory(Locale)],
@@ -583,6 +652,7 @@ const COVERED_FACTORIES: ReadonlyArray<readonly [id: string, factory: ClientPlug
   ['@deepseek-ai/dsh-client-ui-session', coveredFactory(UiSession)],
   ['@deepseek-ai/dsh-client-ui-chat', coveredFactory(UiChat)],
   ['@deepseek-ai/dsh-client-ui-approval', coveredFactory(UiApproval)],
+  ['@deepseek-ai/dsh-client-file-upload', coveredFactory(FileUpload)],
   ['@deepseek-ai/dsh-client-ui-directory-picker-browse', coveredFactory(UiDirectoryPickerBrowse)],
 ]
 

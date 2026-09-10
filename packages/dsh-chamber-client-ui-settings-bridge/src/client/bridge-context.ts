@@ -265,6 +265,13 @@ const DECLARATION_PLUGIN: SettingsPlugin = {
     ctx.slots.register({
       name: 'sidebar',
       children: {
+        // Keep this child set isomorphic with the official ui-sidebar entry
+        // (alpha.2 adds brand.mark/brand.name/panellist): a child slot a real
+        // registrant targets must exist on the chain even when the bridge
+        // renders nothing there.
+        'sidebar.brand.mark': { kind: 'single', scope: 'root' },
+        'sidebar.brand.name': { kind: 'single', scope: 'root' },
+        'sidebar.panellist': { kind: 'list', scope: 'root' },
         'sidebar.settings': { kind: 'single', scope: 'root' },
         'sidebar.workspaces': { kind: 'single', scope: 'root' },
         'sidebar.footer.action': { kind: 'list', scope: 'root' },

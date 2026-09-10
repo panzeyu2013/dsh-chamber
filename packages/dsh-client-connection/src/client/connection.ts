@@ -1,7 +1,7 @@
 /** Connection generation readiness, cancellation, and continuous recovery.
  *
  * chamber patch (2026-09, Batch 2 re-anchor): verbatim upstream
- * dsh-v0.1.3-alpha.2 except the `erasableSyntaxOnly` explicit-field rewrite in
+ * dsh-v0.1.5-alpha.2 except the `erasableSyntaxOnly` explicit-field rewrite in
  * the constructor below. The pre-Batch-2 loopEpoch generation guard is retired
  * — the chamber liveness triggers now drive the native
  * `reconnect()`/`setNetworkAvailable()` recovery control instead of

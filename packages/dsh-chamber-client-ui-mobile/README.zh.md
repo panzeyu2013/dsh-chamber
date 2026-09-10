@@ -10,7 +10,8 @@ gateway 访问）真正可用——窄屏抽屉化布局、触控目标、安全
 
 - `src/index.ts` —— 宿主半空入口（seed gate 需要 `dist/index.js`）；
 - `src/client/index.ts` —— 浏览器半：assets 注入（viewport/stylesheet/
-  theme-color）、frame + 会话头打标、layoutFacts 驱动的抽屉滚动锁、
+  theme-color）、frame 打标（`ROLE_SLOT_KEYS` 把插件角色映射到 alpha.2 槽键
+  `sidebar` / `main` / `rightbar`）、layoutFacts 驱动的抽屉滚动锁、
   composer 行为、抽屉点击自愈、设置 sheet 分区切换打磨、
   `shell.overlay` 汉堡按钮 + 遮罩；
 - `src/client/styles.ts` —— 单文件样式（全部媒体查询作用域，桌面零影响；
@@ -29,12 +30,10 @@ gateway 访问）真正可用——窄屏抽屉化布局、触控目标、安全
 - **面包屑被裁**：官方 crumbs 行 nowrap + overflow hidden，长标题链与
   谱系 chip（「N 个子代理」目录触发器）会被静默截断——改为换行而非裁切
   （单段省略号保留）；
-- **「Session 日志」导出胶囊**（官方 `session-log-export`，header
-  utilities）：≥111px 的药丸在手机上吃满整行标题，而移动端基本不会导出——
-  手机档收成 44px 圆形图标目标。胶囊无稳定属性，markup.ts 在会话头挂载时
-  按官方双语文案 + 下载图标结构打标
-  （`data-mobile-dismiss="session-log-export"`；幂等、剪枝搜索——聊天滚动体
-  永不被遍历）。
+- **「Session 日志」导出胶囊**：alpha.2 重锚时**退役**——上游已把该控件改为
+  会话头 more-actions 菜单里的 28×28 图标按钮，插件不再按文案打标。右列的移动
+  呈现同样交给上游：`ui-sidebar-right` 在 <768px 自动全屏，插件只保留第三轨的
+  网格锁，不再自绘覆盖层。
 
 ## 设置页适配（手机档）
 
@@ -138,16 +137,16 @@ pnpm run test:mobile
 
 ## 锚点基线
 
-官方 dsh **v0.1.2-alpha.4** DOM 实测（CDP 审计；ui-layout AppFrame 与 alpha.3
-pin 逐字节一致，alpha.4 锚点审计，harness pin 4e84901e）：`data-sidebar-collapsed`
-折叠=存在/展开=移除；composer 为
-Lexical `[data-composer-input]`（无 textarea）；设置对话框渲染在侧边栏 DOM 内（无 body portal），
-抽屉打开态必须用 `transform: none`（identity transform 仍是 containing block）。
-details 列壳自首帧常驻、其 `[data-slot=details]` 出口按会话门控——出口挂载时打标
-重触发（markup.ts `isStructuralTarget`）。
+官方 dsh **v0.1.5-alpha.2** DOM 实测（CDP 审计，随 vendored pin 迁移重锚）：
+`data-sidebar-collapsed` 折叠=存在/展开=移除；中心列为 keyed **`main`** 槽、右列为
+**`rightbar`**（两个列壳及其 `[data-slot=…]` 出口包裹层都自首帧常驻——渲染器无条件
+输出该包裹层，只有其中的 docking 面按注册挂载，故打标在列壳上即收敛，见 markup.ts
+`isStructuralTarget` 与 `ROLE_SLOT_KEYS`）；composer 为 Lexical `[data-composer-input]`（无 textarea）；
+设置对话框渲染在侧边栏 DOM 内（无 body portal），抽屉打开态必须用
+`transform: none`（identity transform 仍是 containing block）。
 
-当前 vendored 基线为 **v0.1.2-rc.1**（harness pin a66e470）；上述锚点已对
-rc.1 源码复核（2026-12 review），并确认：composer seat 是
+当前 vendored 基线为 **v0.1.5-alpha.2**（harness pin b2e3b2a0）；上述锚点已对
+alpha.2 源码复核（2026-09 重锚），并确认：composer seat 是
 `[data-conversation-scroll]` 的流内子元素（仅内容溢出时才 sticky）、
 `[data-input-scroll]` 是 composer 的内部滚动器（`max-height: 336px`）、官方
 `revealSelection` 只在 `draft !== ""` 布尔翻转时运行、官方设置对话框**没有**

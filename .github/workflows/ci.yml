@@ -47,10 +47,19 @@ jobs:
         run: node scripts/dev/ensure-harness-vendor.mjs
       # Upstream-touchpoint registry gates (docs/checklists/upstream-touchpoints.md):
       # C1 pure fork files must stay byte-identical, C3 every fork/upstream file
-      # has a ruling, C5 anchors must not go stale, C6 EXCLUDED dirs must exist.
-      - name: Upstream touchpoint registry (C1/C3/C5/C6)
-        run: node scripts/dev/verify-upstream-touchpoints.mjs
+      # has a ruling, C5 anchors must not go stale, C6 EXCLUDED dirs must exist,
+      # C9 vendor patch anchors must match the pin. These are file-only, so they
+      # run before the install (fail fast). C8 (committed artifacts == sources)
+      # rebuilds with esbuild and therefore needs node_modules — it runs in the
+      # post-install step below; here it is explicitly advisory.
+      - name: Upstream touchpoint registry (C1/C3/C4/C5/C6/C7/C9/C10)
+        run: node scripts/dev/verify-upstream-touchpoints.mjs --no-artifact-rebuild
       - run: pnpm install --frozen-lockfile
+      # C8 deterministic artifact gate: rebuilds the committed host/mobile
+      # bundles in place, byte-compares, restores. A skipped build (missing
+      # esbuild) is a loud warning, never a silent pass.
+      - name: Committed artifacts match sources (C8 rebuild gate)
+        run: node scripts/dev/verify-upstream-touchpoints.mjs
       # The lockfile is the deterministic contract between the committed
       # workspace members and the resolution result; a non-frozen install
       # must never silently rewrite it (pnpm 11 prunes symlinked-member
@@ -197,10 +206,14 @@ jobs:
         run: node scripts/dev/ensure-harness-vendor.mjs
       # Upstream-touchpoint registry gates (docs/checklists/upstream-touchpoints.md):
       # C1 pure fork files must stay byte-identical, C3 every fork/upstream file
-      # has a ruling, C5 anchors must not go stale, C6 EXCLUDED dirs must exist.
-      - name: Upstream touchpoint registry (C1/C3/C5/C6)
-        run: node scripts/dev/verify-upstream-touchpoints.mjs
+      # has a ruling, C5 anchors must not go stale, C6 EXCLUDED dirs must exist,
+      # C9 vendor patch anchors must match the pin (file-only, pre-install).
+      - name: Upstream touchpoint registry (C1/C3/C5/C6/C9)
+        run: node scripts/dev/verify-upstream-touchpoints.mjs --no-artifact-rebuild
       - run: pnpm install --frozen-lockfile
+      # C8 deterministic artifact gate (see the linux leg): needs node_modules.
+      - name: Committed artifacts match sources (C8 rebuild gate)
+        run: node scripts/dev/verify-upstream-touchpoints.mjs
       - name: Assert lockfile not rewritten
         run: git diff --exit-code -- pnpm-lock.yaml
       - name: Type check (tsc + chamber host packages + gateway + runtime)

@@ -154,7 +154,12 @@ test('beta builder config inherits the complete stable package config and change
   const { getConfig } = builderRequire('app-builder-lib/out/util/config/config.js');
   const resolved = await getConfig(projectDir, 'electron-builder.beta.yml', null);
 
-  assert.equal(manifest.version, '0.2.4');
+  // The desktop manifest version is the released chamber version; asserting the
+  // LITERAL would break on every bump (2026-09 anchor sweep). The release
+  // preflight pins every chamber package to the root version, so compare
+  // against that single source instead.
+  const rootVersion = JSON.parse(readFileSync(new URL('../../../package.json', import.meta.url), 'utf8')).version;
+  assert.equal(manifest.version, rootVersion);
   assert.equal(resolved.appId, manifest.build.appId);
   assert.equal(resolved.productName, manifest.build.productName);
   assert.equal(resolved.afterPack, manifest.build.afterPack);

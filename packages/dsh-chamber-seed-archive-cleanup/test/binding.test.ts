@@ -27,12 +27,6 @@ function header(id: string, extra: Partial<{ cwd: string; parentSession: string;
  *  session/session-persistence/src/errors.ts SessionPersistenceNotFoundError
  *  (name + sessionId). The binding must identify it WITHOUT importing vendor
  *  internals. */
-function notFoundError(id: string): Error {
-  return Object.assign(new Error(`session "${id}" not found`), {
-    name: 'SessionPersistenceNotFoundError',
-    sessionId: id,
-  })
-}
 
 interface RegistryFake {
   archived: string[]
@@ -104,11 +98,16 @@ test('binding: official setState failures map to item code storage', async () =>
 })
 
 test('binding: deleteSessionContent refuses running (always) and loaded (unless forced)', async () => {
-  const ctx: HostCtxServices = {
-    agents: { list: () => [{ id: 'live-1', status: 'running' }, { id: 'idle-1', status: 'idle' }] },
-    sessionPersistence: { locate: h => ({ kind: 'jsonl', path: join(tmpdir(), 'x', h.id) }) },
-  }
-  const host = makeHostBinding(ctx)
+  // A unique temp dir: the previous hardcoded join(tmpdir(), 'x') collided
+  // with any real /tmp/x and turned the artifact leg into a false storage
+  // refusal (2026-09 audit).
+  const missingDir = mkdtempSync(join(tmpdir(), 'archive-cleanup-missing-'))
+  try {
+    const ctx: HostCtxServices = {
+      agents: { list: () => [{ id: 'live-1', status: 'running' }, { id: 'idle-1', status: 'idle' }] },
+      sessionPersistence: { locate: h => ({ kind: 'jsonl', path: join(missingDir, h.id) }) },
+    }
+    const host = makeHostBinding(ctx)
   await assert.rejects(() => host.deleteSessionContent('live-1', '/work'), (error: unknown) => {
     return error instanceof ArchiveCleanupError && error.code === 'running'
   })
@@ -136,6 +135,9 @@ test('binding: deleteSessionContent refuses running (always) and loaded (unless 
   await assert.rejects(() => host.deleteSessionContent('unknown-1'), (error: unknown) => {
     return error instanceof ArchiveCleanupError && error.code === 'registry-unreadable'
   })
+  } finally {
+    rmSync(missingDir, { recursive: true, force: true })
+  }
 })
 
 test('binding: a drifted agent status fails the live read loudly', async () => {
@@ -163,8 +165,15 @@ test('binding: content removal removes the official artifact and reclaims an emp
   try {
     const sessionDir = join(dir, 'proj', 's1')
     mkdirSync(sessionDir, { recursive: true })
-    const artifact = join(sessionDir, 'session.jsonl.zstd')
+    // dsh >= 0.1.3-alpha.1 keeps one file per immutable format generation plus
+    // the write lease; locate() resolves only the CURRENT generation, so a
+    // purge must remove every generation or the older content survives.
+    const olderGeneration = join(sessionDir, 'session.v2.jsonl')
+    const artifact = join(sessionDir, 'session.v3.jsonl')
+    const lease = join(sessionDir, 'session.lock')
+    writeFileSync(olderGeneration, '{}')
     writeFileSync(artifact, '{}')
+    writeFileSync(lease, '')
     const locate = (h: { id: string; cwd?: string }) => {
       assert.equal(h.id, 's1')
       return { kind: 'jsonl', path: join(h.cwd ?? '', 's1', 'session.jsonl.zstd') }
@@ -172,7 +181,9 @@ test('binding: content removal removes the official artifact and reclaims an emp
     const host = makeHostBinding({ sessionPersistence: { locate } })
     const outcome = await host.deleteSessionContent('s1', join(dir, 'proj'))
     assert.equal(outcome, 'deleted')
-    assert.equal(existsSync(artifact), false)
+    assert.equal(existsSync(artifact), false, 'current generation removed')
+    assert.equal(existsSync(olderGeneration), false, 'older generation removed too (no content left behind)')
+    assert.equal(existsSync(lease), false, 'write lease removed')
     assert.equal(existsSync(sessionDir), false, 'empty session dir reclaimed')
     assert.equal(existsSync(join(dir, 'proj')), true, 'project dir survives')
 
@@ -190,19 +201,162 @@ test('binding: content removal removes the official artifact and reclaims an emp
     })
     assert.equal(existsSync(real), true, 'symlink target untouched')
 
-    // Leftover session-local files keep the dir (rmdir ENOTEMPTY fail-closed)
-    // while the artifact itself is gone.
-    const stubborn = join(dir, 'proj2', 's3')
-    mkdirSync(stubborn, { recursive: true })
-    writeFileSync(join(stubborn, 'session.jsonl.zstd'), '{}')
-    writeFileSync(join(stubborn, 'metadata.json'), '{}')
+    // An UNRECOGNIZED entry in the session directory refuses the whole purge
+    // (fail closed): a partially-understood directory must never be deleted
+    // entry by entry, and a layout drift must not silently leave content.
+    const drifted = join(dir, 'proj2', 's3')
+    mkdirSync(drifted, { recursive: true })
+    writeFileSync(join(drifted, 'session.v3.jsonl'), '{}')
+    writeFileSync(join(drifted, 'metadata.json'), '{}')
     const stubHost = makeHostBinding({
-      sessionPersistence: { locate: h => ({ kind: 'jsonl', path: join(dir, 'proj2', h.id, 'session.jsonl.zstd') }) },
+      sessionPersistence: { locate: h => ({ kind: 'jsonl', path: join(dir, 'proj2', h.id, 'session.v3.jsonl') }) },
     })
-    const stubOutcome = await stubHost.deleteSessionContent('s3', join(dir, 'proj2'))
-    assert.equal(stubOutcome, 'deleted')
-    assert.equal(existsSync(stubborn), true, 'non-empty leftover dir kept (fail closed)')
-    assert.equal(existsSync(join(stubborn, 'session.jsonl.zstd')), false)
+    await assert.rejects(() => stubHost.deleteSessionContent('s3', join(dir, 'proj2')), (error: unknown) => {
+      return error instanceof ArchiveCleanupError && error.code === 'storage'
+        && /unrecognized entry metadata\.json/.test(error.message)
+    })
+    assert.equal(existsSync(join(drifted, 'session.v3.jsonl')), true, 'nothing removed on refusal')
+
+    // A leftover generation temp file (an interrupted publish) is this
+    // session's own artifact and purges with the rest.
+    const tempy = join(dir, 'proj4', 's5')
+    mkdirSync(tempy, { recursive: true })
+    writeFileSync(join(tempy, 'session.v3.jsonl'), '{}')
+    writeFileSync(join(tempy, 'session.v3.jsonl.0123456789ab.tmp'), '{}')
+    const tempHost = makeHostBinding({
+      sessionPersistence: { locate: h => ({ kind: 'jsonl', path: join(dir, 'proj4', h.id, 'session.v3.jsonl') }) },
+    })
+    assert.equal(await tempHost.deleteSessionContent('s5', join(dir, 'proj4')), 'deleted')
+    assert.equal(existsSync(tempy), false, 'generation + leftover temp removed, dir reclaimed')
+
+    // A leftover MIGRATION staging file (an interrupted vN->vM migration) is
+    // this session's own content staging and purges with the rest (2026-09
+    // 二轮 W2 F5: without recognition the session was permanently unpurgeable).
+    const migrated = join(dir, 'proj5', 's6')
+    mkdirSync(migrated, { recursive: true })
+    writeFileSync(join(migrated, 'session.v2.jsonl'), '{}')
+    writeFileSync(join(migrated, 'session.v3.jsonl'), '{}')
+    writeFileSync(join(migrated, 'session.migration.0123456789abcdef.jsonl.tmp'), '{}')
+    writeFileSync(join(migrated, 'session.migration.fedcba9876543210.jsonl.zstd.tmp'), '{}')
+    const migratedHost = makeHostBinding({
+      sessionPersistence: { locate: h => ({ kind: 'jsonl', path: join(dir, 'proj5', h.id, 'session.v3.jsonl') }) },
+    })
+    assert.equal(await migratedHost.deleteSessionContent('s6', join(dir, 'proj5')), 'deleted')
+    assert.equal(existsSync(migrated), false, 'generations + migration staging files removed, dir reclaimed')
+
+    // The staging name is matched exactly: a 12-hex (publish-token) length or
+    // an uppercase token is NOT the vendor shape and still refuses.
+    const nearMiss = join(dir, 'proj6', 's7')
+    mkdirSync(nearMiss, { recursive: true })
+    writeFileSync(join(nearMiss, 'session.v3.jsonl'), '{}')
+    writeFileSync(join(nearMiss, 'session.migration.0123456789ab.jsonl.tmp'), '{}')
+    const nearMissHost = makeHostBinding({
+      sessionPersistence: { locate: h => ({ kind: 'jsonl', path: join(dir, 'proj6', h.id, 'session.v3.jsonl') }) },
+    })
+    await assert.rejects(() => nearMissHost.deleteSessionContent('s7', join(dir, 'proj6')), (error: unknown) => {
+      return error instanceof ArchiveCleanupError && error.code === 'storage'
+        && /unrecognized entry session\.migration\.0123456789ab\.jsonl\.tmp/.test(error.message)
+    })
+    assert.equal(existsSync(join(nearMiss, 'session.v3.jsonl')), true, 'nothing removed on refusal')
+
+    // A legacy version-zero directory (`session.jsonl`) purges normally.
+    const legacy = join(dir, 'proj3', 's4')
+    mkdirSync(legacy, { recursive: true })
+    writeFileSync(join(legacy, 'session.jsonl.zstd'), '{}')
+    const legacyHost = makeHostBinding({
+      sessionPersistence: { locate: h => ({ kind: 'jsonl', path: join(dir, 'proj3', h.id, 'session.jsonl.zstd') }) },
+    })
+    assert.equal(await legacyHost.deleteSessionContent('s4', join(dir, 'proj3')), 'deleted')
+    assert.equal(existsSync(legacy), false, 'legacy generation dir reclaimed')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('binding: the purge refuses symlink/subdirectory entries and accepts every canonical generation name', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'archive-cleanup-shape-'))
+  try {
+    const locateFor = (project: string) => (h: { id: string; cwd?: string }) =>
+      ({ kind: 'jsonl', path: join(dir, project, h.id, 'session.v3.jsonl') })
+
+    // A symlinked entry inside the session directory refuses the whole purge.
+    const linkDir = join(dir, 'sym', 's1')
+    mkdirSync(linkDir, { recursive: true })
+    writeFileSync(join(linkDir, 'session.v3.jsonl'), '{}')
+    symlinkSync(join(linkDir, 'session.v3.jsonl'), join(linkDir, 'session.v2.jsonl'))
+    const linkHost = makeHostBinding({ sessionPersistence: { locate: locateFor('sym') } })
+    await assert.rejects(() => linkHost.deleteSessionContent('s1', join(dir, 'sym')), (error: unknown) => {
+      return error instanceof ArchiveCleanupError && error.code === 'storage' && /symlink/.test(error.message)
+    })
+    assert.equal(existsSync(join(linkDir, 'session.v3.jsonl')), true, 'nothing removed on refusal')
+
+    // A subdirectory entry refuses too.
+    const subDir = join(dir, 'sub', 's2')
+    mkdirSync(join(subDir, 'nested'), { recursive: true })
+    writeFileSync(join(subDir, 'session.v3.jsonl'), '{}')
+    const subHost = makeHostBinding({ sessionPersistence: { locate: locateFor('sub') } })
+    await assert.rejects(() => subHost.deleteSessionContent('s2', join(dir, 'sub')), (error: unknown) => {
+      return error instanceof ArchiveCleanupError && error.code === 'storage' && /directory/.test(error.message)
+    })
+
+    // Every canonical generation name is removable: v0 bare, vN, and both
+    // compressed forms; a leading-zero tag is NOT canonical and refuses.
+    const okDir = join(dir, 'ok', 's3')
+    mkdirSync(okDir, { recursive: true })
+    for (const name of ['session.jsonl', 'session.v2.jsonl', 'session.v3.jsonl.zstd', 'session.v12.jsonl.zstd']) {
+      writeFileSync(join(okDir, name), '{}')
+    }
+    const okHost = makeHostBinding({ sessionPersistence: { locate: locateFor('ok') } })
+    assert.equal(await okHost.deleteSessionContent('s3', join(dir, 'ok')), 'deleted')
+    assert.equal(existsSync(okDir), false, 'all canonical generations removed, dir reclaimed')
+
+    const zeroDir = join(dir, 'zero', 's4')
+    mkdirSync(zeroDir, { recursive: true })
+    writeFileSync(join(zeroDir, 'session.v0.jsonl'), '{}')
+    const zeroHost = makeHostBinding({ sessionPersistence: { locate: locateFor('zero') } })
+    await assert.rejects(() => zeroHost.deleteSessionContent('s4', join(dir, 'zero')), (error: unknown) => {
+      return error instanceof ArchiveCleanupError && error.code === 'storage' && /unrecognized entry session\.v0\.jsonl/.test(error.message)
+    })
+
+    // An out-of-range version is NOT canonical upstream either
+    // (`Number.isSafeInteger` in parseSessionFormatLogFilename), so the
+    // whitelist must refuse it instead of deleting it (2026-09 二轮 N13).
+    const hugeDir = join(dir, 'huge', 's5')
+    mkdirSync(hugeDir, { recursive: true })
+    writeFileSync(join(hugeDir, 'session.v99999999999999999999.jsonl'), '{}')
+    const hugeHost = makeHostBinding({ sessionPersistence: { locate: locateFor('huge') } })
+    await assert.rejects(() => hugeHost.deleteSessionContent('s5', join(dir, 'huge')), (error: unknown) => {
+      return error instanceof ArchiveCleanupError && error.code === 'storage'
+        && /unrecognized entry session\.v99999999999999999999\.jsonl/.test(error.message)
+    })
+    assert.equal(existsSync(join(hugeDir, 'session.v99999999999999999999.jsonl')), true, 'nothing removed on refusal')
+
+    // Near-miss names stay refused: uppercase suffix, leading-zero version, and
+    // a lease name that merely PREFIXES the real lease (2026-09 三轮 Q3 G1–G4).
+    for (const [project, name] of [
+      ['upper', 'session.v3.JSONL'],
+      ['zero', 'session.v01.jsonl'],
+      ['lease', 'session.lock.tmp'],
+    ] as const) {
+      const nearDir = join(dir, project, 's9')
+      mkdirSync(nearDir, { recursive: true })
+      writeFileSync(join(nearDir, 'session.v3.jsonl'), '{}')
+      writeFileSync(join(nearDir, name), '{}')
+      const nearHost = makeHostBinding({ sessionPersistence: { locate: locateFor(project) } })
+      await assert.rejects(() => nearHost.deleteSessionContent('s9', join(dir, project)), (error: unknown) => {
+        return error instanceof ArchiveCleanupError && error.code === 'storage'
+          && new RegExp(`unrecognized entry ${name.replace(/\./g, '\\.')}`).test(error.message)
+      })
+      assert.equal(existsSync(join(nearDir, 'session.v3.jsonl')), true, `${name}: nothing removed on refusal`)
+    }
+
+    // The boundary itself IS canonical (MAX_SAFE_INTEGER), matching vendor.
+    const maxDir = join(dir, 'max', 's6')
+    mkdirSync(maxDir, { recursive: true })
+    writeFileSync(join(maxDir, 'session.v9007199254740991.jsonl'), '{}')
+    const maxHost = makeHostBinding({ sessionPersistence: { locate: locateFor('max') } })
+    assert.equal(await maxHost.deleteSessionContent('s6', join(dir, 'max')), 'deleted')
+    assert.equal(existsSync(maxDir), false, 'a safe-integer version is canonical and purges')
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
@@ -395,13 +549,9 @@ test('binding sweep: a purge clears registry-global record-less members in ONE c
       sessionPersistence: {
         list: async () => [],
         locate: (h: { id: string; cwd?: string }) => ({ kind: 'jsonl', path: join(h.cwd ?? '', h.id, 'session.jsonl') }),
-        // The decisive existence probe (blocker fix): resolves only while the
-        // official artifact is materialized, throws the official not-found
-        // carrier otherwise.
-        inspect: async (id: string) => {
-          if (existsSync(join(projectDir, id, 'session.jsonl'))) return {}
-          throw notFoundError(id)
-        },
+        // The decisive existence probe: resolves only while the official
+        // artifact is materialized, answers undefined otherwise.
+        stat: async (id: string) => (existsSync(join(projectDir, id, 'session.jsonl')) ? { header: header(id) } : undefined),
       },
     } as never, registry))
     const core = new ArchiveCleanupCore(host)
@@ -427,11 +577,12 @@ test('binding sweep: a purge clears registry-global record-less members in ONE c
 
 test('binding: assertHostSurface passes on the full surface and refuses otherwise (probe leg)', () => {
   // Full surface (merge-round Minor-3 hardened the probe to the complete
-  // domain surface): registry + session enumeration + storage locate.
+  // domain surface): registry + session enumeration + storage locate + the
+  // `stat` existence probe the sweep depends on.
   assertHostSurface({
     workspaceRegistry: { archivedSessionIds: [], list: () => [], setState: async () => {} },
     sessionQuery: { listSessions: async () => [] },
-    sessionPersistence: { list: async () => [], locate: () => undefined },
+    sessionPersistence: { list: async () => [], locate: () => undefined, stat: async () => undefined },
   } as never)
   assert.throws(() => assertHostSurface({} as never), (error: unknown) => {
     return error instanceof ArchiveCleanupError && error.code === 'registry-unreadable'
@@ -452,6 +603,31 @@ test('binding: assertHostSurface passes on the full surface and refuses otherwis
   } as never), (error: unknown) => {
     return error instanceof ArchiveCleanupError && error.code === 'registry-unreadable'
   })
+  // …and without the decisive `stat` probe (the sweep's existence gate).
+  assert.throws(() => assertHostSurface({
+    workspaceRegistry: { archivedSessionIds: [], list: () => [], setState: async () => {} },
+    sessionQuery: { listSessions: async () => [] },
+    sessionPersistence: { list: async () => [], locate: () => undefined },
+  } as never), (error: unknown) => {
+    return error instanceof ArchiveCleanupError && error.code === 'registry-unreadable'
+  })
+})
+
+test('binding: a non-array enumeration leg refuses the read loudly (no silent narrowing)', async () => {
+  const host = makeHostBinding({
+    sessionQuery: { listSessions: async () => ({ not: 'an array' }) },
+  } as never)
+  await assert.rejects(() => host.listSessionStates(), (error: unknown) => {
+    return error instanceof ArchiveCleanupError && error.code === 'registry-unreadable'
+      && /did not answer an array/.test(error.message)
+  })
+  const host2 = makeHostBinding({
+    sessionPersistence: { list: async () => 'nope', locate: () => undefined, stat: async () => undefined },
+  } as never)
+  await assert.rejects(() => host2.listSessionStates(), (error: unknown) => {
+    return error instanceof ArchiveCleanupError && error.code === 'registry-unreadable'
+      && /did not answer an array/.test(error.message)
+  })
 })
 
 /* ------------------------------------------------------------------ */
@@ -459,49 +635,39 @@ test('binding: assertHostSurface passes on the full surface and refuses otherwis
 /* hasStoredContent existence probe, over the REAL binding + REAL core. */
 /* ------------------------------------------------------------------ */
 
-test('binding hasStoredContent: resolves ⇒ true; the official not-found carrier ⇒ false; every other outcome fails closed to true', async () => {
-  // 1. A resolved inspection ⇒ content is materializable.
-  assert.equal(await makeHostBinding({ sessionPersistence: { inspect: async () => ({}) } } as never).hasStoredContent('s1'), true)
-  // 2. The official carrier ⇒ no content. THE ONLY answer that may clear a
-  //    membership.
+test('binding hasStoredContent: a resolved snapshot ⇒ true; undefined ⇒ false; every other outcome fails closed to true', async () => {
+  // 1. A resolved stat snapshot ⇒ content is materializable.
   assert.equal(await makeHostBinding({
-    sessionPersistence: { inspect: async (id: string) => { throw notFoundError(id) } },
+    sessionPersistence: { stat: async () => ({ header: header('s1') }) },
+  } as never).hasStoredContent('s1'), true)
+  // 2. `undefined` ⇒ no materialized log. THE ONLY answer that may clear a
+  //    membership (dsh >= 0.1.3-alpha.1 `stat(id)`).
+  assert.equal(await makeHostBinding({
+    sessionPersistence: { stat: async () => undefined },
+  } as never).hasStoredContent('s1'), false)
+  assert.equal(await makeHostBinding({
+    sessionPersistence: { stat: async () => null },
   } as never).hasStoredContent('s1'), false)
   // 3. Corruption / format / transport / IO ⇒ true (fail closed).
   assert.equal(await makeHostBinding({
-    sessionPersistence: { inspect: async () => { throw new Error('corrupt session log') } },
+    sessionPersistence: { stat: async () => { throw new Error('corrupt session log') } },
   } as never).hasStoredContent('s1'), true)
-  // 4. A not-found-SHAPED error naming a different id ⇒ true.
+  // 4. A non-Error throw ⇒ true.
   assert.equal(await makeHostBinding({
-    sessionPersistence: { inspect: async () => { throw notFoundError('other') } },
+    sessionPersistence: { stat: async () => { throw 'nope' } },
   } as never).hasStoredContent('s1'), true)
-  // 4b. Identification is STRUCTURAL, not message-based: an unrelated error
-  //     whose message merely contains "not found" (an IO/ENOENT message) must
-  //     still fail closed, while a name-matched carrier is recognised
-  //     regardless of its message text.
-  assert.equal(await makeHostBinding({
-    sessionPersistence: { inspect: async () => { throw new Error('ENOENT: artifact not found') } },
-  } as never).hasStoredContent('s1'), true)
-  const renamedMessage = Object.assign(new Error('whatever'), { name: 'SessionPersistenceNotFoundError' })
-  assert.equal(await makeHostBinding({
-    sessionPersistence: { inspect: async () => { throw renamedMessage } },
-  } as never).hasStoredContent('s1'), false)
-  // 5. A non-Error throw ⇒ true.
-  assert.equal(await makeHostBinding({
-    sessionPersistence: { inspect: async () => { throw 'nope' } },
-  } as never).hasStoredContent('s1'), true)
-  // 6. No inspect surface at all (older/drifted host) ⇒ true — the sweep then
+  // 5. No stat surface at all (older/drifted host) ⇒ true — the sweep then
   //    skips entirely rather than guessing.
   assert.equal(await makeHostBinding({ sessionPersistence: { list: async () => [] } } as never).hasStoredContent('s1'), true)
   assert.equal(await makeHostBinding({} as never).hasStoredContent('s1'), true)
-  // 7. inspect runs AS A METHOD on the service (instance-state classes — the
+  // 6. stat runs AS A METHOD on the service (instance-state classes — the
   //    2026-09 detached-locate real-machine regression).
   const thisSensitive = {
     root: '/r',
-    async inspect(this: { root: string }, id: string) {
+    async stat(this: { root: string }, id: string) {
       assert.equal(this.root, '/r')
       assert.equal(id, 's1')
-      return {}
+      return { header: header('s1') }
     },
   }
   assert.equal(await makeHostBinding({ sessionPersistence: thisSensitive } as never).hasStoredContent('s1'), true)
@@ -524,12 +690,10 @@ test('binding union: a record only sessionPersistence.list reports survives and 
       // NARROWED live-only leg: knows nothing about persisted-1.
       sessionQuery: { listSessions: async () => [{ header: header('live-1') }] },
       sessionPersistence: {
-        list: async () => [header('persisted-1', { cwd: projectDir })],
+        // dsh >= 0.1.3-alpha.1: list() answers SessionPersistenceSnapshot[].
+        list: async () => [{ header: header('persisted-1', { cwd: projectDir }) }],
         locate: (h: { id: string; cwd?: string }) => ({ kind: 'jsonl', path: join(h.cwd ?? '', h.id, 'session.jsonl') }),
-        inspect: async (id: string) => {
-          if (existsSync(join(projectDir, id, 'session.jsonl'))) return {}
-          throw notFoundError(id)
-        },
+        stat: async (id: string) => (existsSync(join(projectDir, id, 'session.jsonl')) ? { header: header(id) } : undefined),
       },
     } as never, registry))
 
@@ -563,7 +727,7 @@ test('binding union: a failing enumeration leg refuses loudly instead of returni
     sessionPersistence: {
       list: async () => { throw new Error('fake: persistence list exploded') },
       locate: () => undefined,
-      inspect: async () => ({}),
+      stat: async () => ({ header: header('s1') }),
     },
   } as never, registry))
   await assert.rejects(() => host.listSessionStates(), /persistence list exploded/)
@@ -600,10 +764,7 @@ test('binding BLOCKER: a content-bearing member missing from BOTH bulk reads kee
         locate: (h: { id: string; cwd?: string }) => ({ kind: 'jsonl', path: join(h.cwd ?? '', h.id, 'session.jsonl') }),
         // The official id→artifact resolution (jsonl findLog across all
         // project dirs, cwd unknown): the artifacts are still there.
-        inspect: async (id: string) => {
-          if (existsSync(join(projectDir, id, 'session.jsonl'))) return {}
-          throw notFoundError(id)
-        },
+        stat: async (id: string) => (existsSync(join(projectDir, id, 'session.jsonl')) ? { header: header(id) } : undefined),
       },
     } as never, registry))
 
@@ -634,7 +795,8 @@ test('binding BLOCKER: a genuinely record-less member is still swept through the
       sessionPersistence: {
         list: async () => [],
         locate: () => undefined,
-        inspect: async (id: string) => { throw notFoundError(id) },
+        // No materialized log for the ghost: stat answers undefined.
+        stat: async () => undefined,
       },
     } as never, registry))
     const result = await new ArchiveCleanupCore(host).purge([])

@@ -165,7 +165,8 @@ reaper（回收孤儿实例）→ 快照 DSH_HOME（§3.7，断言无存活写�
 ### 3.4 激活门控与回退（自由选择模型的唯一安全网，R3-1 P2-4/P2-8/P2-12）
 
 换树后、宣布生效前跑探针列表（全部复用现有设施，**全部只读、无副作用**；
-与钉住上游 0.1.2-rc.1 wire 对齐，`REQUIRED_ACTIVATION_PROBES` 六项，slash
+与钉住上游 0.1.5-alpha.2 wire 对齐，`REQUIRED_ACTIVATION_PROBES` 七项
+（4 项官方 + 3 项 chamber 宿主域，见 `activation-gate.ts`），slash
 端点；探针响应与**会话数据量彻底解耦**——2026-12 定稿选项 A：会话面探针换为
 固定小体积身份方法）：
 
@@ -261,7 +262,7 @@ override（未失效时）→ 内建锚（`--dsh-path` ?? `findDshWorkspace`）�
   而非删除——F4「自动恢复上一 override 树」依赖记录存活；「恢复内建」仅在
   内建锚探针通过后显式删除。
 - **回落保护（F4）**：回落内建树后跑数据可读性探测——用户曾用较新运行时并迁移
-  过数据、内建 pin（默认 0.1.2-rc.1，不随壳移动）可能读不了新格式数据；探测失败
+  过数据、内建 pin（`bundle-dsh` 兜底常量，当前 0.1.5-alpha.2，不随壳版本自动移动）可能读不了新格式数据；探测失败
   → **自动恢复上一 override 树（受保护类，仍在）+ 响亮提示**。「单调向前」**仅对
   壳版本成立**（§7）。
   - **2026-09 修订（中断失效自愈，gateway/desktop 启动 F4 门）**：「durable 失效
@@ -830,7 +831,10 @@ round（plan 24）再修订——D6-A 用户拍板）**：
   共享包，现有 runtime 测试
   原样搬迁跟随（迁移期的行为等价证明）。allowBuilds 白名单、10 GiB 软阈值、
   保留策略等**单一来源常量**随共享包搬迁。
-- 宿主适配接口 `RuntimeHostAdapter`（desktop 与 gateway 各实现一份；
+- 宿主适配接口 `RuntimeHostAdapter`（**生产侧无实现者**：desktop 与 gateway 各自经
+  `StartupDeps`/`ApplyDeps`/`InstallerDeps`/`ControllerDeps` 直接适配共享核心；
+  该接口是**测试夹具契约**——`test/fake-adapter.ts` 实现它，`test/run-phase-fixture.ts`
+  以它为底座驱动共享包全部纯 Node 测试，2026-09 三轮据此保留（退役建议不成立）。
   **核心裁决逻辑零分叉**，分叉只允许出现在适配器）。**本接口是草图**：
   M5 实现时以 desktop 现有 `StartupDeps`/`ApplyDeps` 的并集 + gateway 需求
   为权威定型，其中已确认必须覆盖的 seam——时钟注入（`now`/`nowMs`，

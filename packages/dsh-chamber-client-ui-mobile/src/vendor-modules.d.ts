@@ -45,15 +45,25 @@ declare module '@deepseek-ai/dsh-client-ui-slots/client' {
 
 declare module '@deepseek-ai/dsh-client-ui-layout/client' {
   /** Layout facts face (design 17 §18) — provided per-ctx by the chamber
-   *  layout fork. */
+   *  layout fork. `getCollapsed()` is the AppFrame derivation itself, so the
+   *  plugin never restates the vendor breakpoint constant. */
   export interface LayoutFacts {
     getLayoutSnapshot(): LayoutState
+    getCollapsed(): boolean
     subscribeLayout(listener: () => void): () => void
   }
+  /** Store snapshot (loose mirror of the alpha.2 nested LayoutState). */
   export interface LayoutState {
-    sidebar: number
-    details: number
-    narrow: boolean
-    narrowExpanded: boolean
+    panelInfo: { activePanelId: string | null }
+    layoutInfo: {
+      sidebar: number
+      viewportWidth: number
+      narrowExpanded: boolean
+      rightbar: number | null
+      rightbarShown: boolean
+      rightbarTrack: boolean
+      rightbarFullscreen: boolean
+      rightbarInstant: boolean
+    }
   }
 }

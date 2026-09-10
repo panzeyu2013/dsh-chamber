@@ -20,6 +20,8 @@ declare module '@deepseek-ai/cordis' {
     emit(...args: any[]): unknown
     get(...args: any[]): unknown
     provide(...args: any[]): unknown
+    /** Cordis effect scope: the callback's returned disposer runs on fiber teardown. */
+    effect(fn: () => (() => void) | void, label?: string): void
     /**
      * chamber v1: per-instance sessions runtime face (loose mirror of ISessions
      * from @deepseek-ai/dsh-api-session-controller/client — the dsh-v0.1.2-alpha.1
@@ -108,6 +110,9 @@ declare module '@deepseek-ai/dsh-client-store'
 // chamber-entry.ts (covered factory, never ctx.plugin — see the seed.ts /
 // platform.ts deviation notes in dsh-client-web).
 declare module '@deepseek-ai/dsh-client-ui-primitives'
+// alpha.2: the docking-kit platform word the composite answers with a
+// covered factory (pure library — no cordis plugin, no ./client export).
+declare module '@deepseek-ai/dsh-client-ui-dockkit'
 declare module '@deepseek-ai/dsh-api-session-controller/client'
 declare module '@deepseek-ai/dsh-api-workspace-controller/client'
 declare module '@deepseek-ai/dsh-client-locale/client'
@@ -117,6 +122,12 @@ declare module '@deepseek-ai/dsh-api-gateway/client'
 declare module '@deepseek-ai/dsh-api-remotes/client'
 
 declare module '@deepseek-ai/dsh-client-ui-agent-preset/client'
+// 2026-09 三轮: covered so the registered vendor patch can carry the per-entry
+// base path on the upload URL (the host half stays an instance host row).
+declare module '@deepseek-ai/dsh-client-file-upload/client'
+// 2026-09 四轮: covered (deferred) so the registered vendor patch can carry the
+// per-entry base path on the export URL; the host half keeps the route/command.
+declare module '@deepseek-ai/dsh-session-log-export/client'
 declare module '@deepseek-ai/dsh-client-ui-approval/client'
 // rc.8 deferred-family client entries (design 09 §4; chamber-entry.ts
 // registerDeferred dynamic imports): attachment (composer + message-image
