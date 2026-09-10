@@ -40,7 +40,7 @@ import {
   closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync,
 } from 'node:fs'
 import { createRequire } from 'node:module'
-import { dirname, join, relative } from 'node:path'
+import { dirname, join, relative, sep } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { spawn, spawnSync } from 'node:child_process'
@@ -49,6 +49,22 @@ import { artifactGateVerdict, compareOutputs, restoreDir, snapshotDir } from './
 const ROOT = fileURLToPath(new URL('../..', import.meta.url))
 const SUBMODULE = join(ROOT, 'vendor', 'harness-checkout')
 const PIN_FILE = join(ROOT, 'harness.commit')
+
+/**
+ * Repo-relative path in the `/`-separated form every registry key uses.
+ *
+ * `relative()` returns the PLATFORM separator, so on Windows the walk output
+ * (`src\api-path.ts`) never matches the `/`-keyed `own`/`patched`/`dropped`
+ * tables, `within()` prefixes or the C10 `ALLOWED` allowlist — C1/C3 then
+ * reports every file as "未登记补丁 / 未登记 dropped / 未登记 own" and the
+ * Windows leg hard-fails (2026-09: `test-windows` step 8, 35 violations for the
+ * first fork alone, while the Linux leg on the same commit was green). Same
+ * normalization `preflight-vendor-pin.mjs` already applies.
+ * @param {string} from - absolute base directory.
+ * @param {string} to - absolute target path.
+ * @returns {string} - `/`-separated relative path.
+ */
+const repoRel = (from, to) => relative(from, to).split(sep).join('/')
 
 // ---------------------------------------------------------------------------
 // 触点登记（与 docs/checklists/upstream-touchpoints.md 的表同源；维护时两侧同步）
@@ -196,7 +212,7 @@ function collectFiles(root, excludePrefixes = []) {
   const walk = (dir) => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       const full = join(dir, entry.name)
-      const rel = relative(root, full)
+      const rel = repoRel(root, full)
       if (entry.isDirectory()) {
         if (entry.name === 'node_modules' || entry.name === 'lib' || entry.name === '.git'
           || excludePrefixes.some((p) => rel === p || rel.startsWith(`${p}/`))) continue
@@ -744,7 +760,7 @@ for (const fork of FORKS) {
     const walk = (dir) => {
       for (const entry of readdirSync(dir, { withFileTypes: true })) {
         const full = join(dir, entry.name)
-        const rel = relative(ROOT, full)
+        const rel = repoRel(ROOT, full)
         if (entry.isDirectory()) {
           if (IGNORED_LOCAL_ROOTS.some((prefix) => `${rel}/`.startsWith(prefix))) continue
           if (gitIgnoredPaths.has(`${rel}/`)) continue
@@ -778,7 +794,7 @@ for (const fork of FORKS) {
 
     const liveLiterals = (file) => {
       const src = readFileSync(file, 'utf8')
-      const rel = relative(ROOT, file)
+      const rel = repoRel(ROOT, file)
       if (/\.(ts|tsx|mjs|js)$/.test(file)) {
         if (transformSync === undefined) return undefined // esbuild unavailable: report a skip
         const code = transformSync(src, {
@@ -801,7 +817,7 @@ for (const fork of FORKS) {
     const skipped = []
     const seen = new Map()
     for (const file of candidates) {
-      const rel = relative(ROOT, file)
+      const rel = repoRel(ROOT, file)
       const found = liveLiterals(file)
       if (found === undefined) {
         skipped.push(rel)
