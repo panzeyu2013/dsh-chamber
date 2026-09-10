@@ -164,9 +164,11 @@ host 插件入口/半、上游 `tests/`、`tsdown.config.ts`、上游 README（a
   叙述只允许留在注释里；确有语义的具名常量（如 `HOST_IDENTITY_METHOD_SINCE`「身份探针自哪一代
   起注册」与其跨包镜像）按「上限 1 处 + 理由」登记在 C10 白名单。测试夹具里的合成版本视为
   fixture，不在扫描面内（`*/test/**`、`*.test.ts|mjs`）。**本地派生状态**同样不在扫描面内：
-  判定来源是 `.gitignore` 本身（门用 `git ls-files --others --ignored --exclude-standard --directory`
-  取该集合，git 缺席时退回脚本内同名静态清单），因为「fresh checkout 不存在」与「被忽略」是同一件事，
-  而只有 `.gitignore` 是其单一来源——当初的四个具名条目（`packages/desktop/release/` 打包产物、
+  判定来源是 `.gitignore` 本身（门用 `git ls-files --others --ignored --exclude-per-directory=.gitignore
+  --directory` 取该集合，git 缺席时**才**退回脚本内同名静态清单），因为「fresh checkout 不存在」与
+  「被忽略」是同一件事，
+  而只有 `.gitignore` 是其单一来源。**不用** `--exclude-standard`：它同时吃 `.git/info/exclude` 与
+  开发机全局 `core.excludesFile`，会让本地少扫、CI 多扫，正好抹掉 C10 想消掉的那条差异——当初的四个具名条目（`packages/desktop/release/` 打包产物、
   `packages/desktop/.dev-user-data/` dev 应用数据、`packages/gateway/host-packages/`、
   `packages/renderer/.cache/`）正是促成该规则的路径。**唯一的例外**是被忽略却**故意要扫**的
   `packages/desktop/vendor/dsh/package.json`（bundle 清单交叉校验，见上），所以文件级跳过只作用于

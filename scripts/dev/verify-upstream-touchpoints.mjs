@@ -735,35 +735,45 @@ for (const fork of FORKS) {
     // worktree red on literals inside an old packaged app or a dev dsh-home
     // checkout (2026-09 local replay: 232 hits, all 0.1.1-rc.2, zero in tracked
     // files). CI was unaffected because none of it exists there.
-    // .gitignore is the single source for that set, so ask git for it; the
-    // static list below is the fallback for a git-less run and documents the
-    // paths that motivated the rule. Ignored FILES are skipped in the general
-    // file branch only — `packages/desktop/vendor/dsh/package.json` is ignored
-    // yet deliberately scanned by the bundle-manifest cross-check above.
+    // .gitignore is the single source for that set, so ask git for it — and use
+    // ONLY that answer when git provided one. `--exclude-per-directory=.gitignore`
+    // (not `--exclude-standard`) keeps the set down to the repo's own ignore
+    // files: the standard form also swallows `.git/info/exclude` and the
+    // developer's global `core.excludesFile`, which would make a local run scan
+    // FEWER files than CI and hide an unregistered literal from the gate that
+    // exists to catch exactly that. The static list below is only the fallback
+    // for a git-less run (it documents the paths that motivated the rule).
+    // Ignored FILES are skipped in the general file branch only —
+    // `packages/desktop/vendor/dsh/package.json` is ignored yet deliberately
+    // scanned by the bundle-manifest cross-check above.
     const IGNORED_LOCAL_ROOTS = [
       'packages/desktop/release/', // electron-builder output (packaged app)
       'packages/desktop/.dev-user-data/', // dev-mode isolated app data (dsh-home worktrees, caches)
       'packages/gateway/host-packages/', // gateway build output (copied seed entries)
       'packages/renderer/.cache/', // renderer tooling cache (generated tsconfig)
     ]
-    /** repo-relative ignored paths ('dir/' entries included) or an empty set. */
-    const gitIgnoredPaths = (() => {
+    /** repo-relative ignored paths ('dir/' entries included), or null when git is unavailable. */
+    const gitIgnored = (() => {
       const result = spawnSync(
         'git',
-        ['-C', ROOT, 'ls-files', '--others', '--ignored', '--exclude-standard', '--directory'],
+        ['-C', ROOT, 'ls-files', '--others', '--ignored', '--exclude-per-directory=.gitignore', '--directory'],
         { encoding: 'utf8' },
       )
-      if (result.status !== 0 || typeof result.stdout !== 'string') return new Set()
+      if (result.status !== 0 || typeof result.stdout !== 'string') return null
       return new Set(result.stdout.split('\n').map((line) => line.trim()).filter((line) => line !== ''))
     })()
+    const isIgnoredDir = (rel) => (gitIgnored === null
+      ? IGNORED_LOCAL_ROOTS.some((prefix) => `${rel}/`.startsWith(prefix))
+      : gitIgnored.has(`${rel}/`))
+    const isIgnoredFile = (rel) => gitIgnored !== null && gitIgnored.has(rel)
+    if (gitIgnored === null) warn('C10：git 不可用，本地派生状态按静态兜底清单排除（.gitignore 仍是单一来源）')
     const candidates = []
     const walk = (dir) => {
       for (const entry of readdirSync(dir, { withFileTypes: true })) {
         const full = join(dir, entry.name)
         const rel = repoRel(ROOT, full)
         if (entry.isDirectory()) {
-          if (IGNORED_LOCAL_ROOTS.some((prefix) => `${rel}/`.startsWith(prefix))) continue
-          if (gitIgnoredPaths.has(`${rel}/`)) continue
+          if (isIgnoredDir(rel)) continue
           if (['node_modules', 'dist', 'lib', '.git', 'docs', 'coverage', 'generated'].includes(entry.name)) continue
           if (rel.startsWith('packages/desktop/vendor/') && entry.name !== 'dsh') continue
           if (rel === 'packages/desktop/vendor/dsh' || rel.startsWith('packages/desktop/vendor/dsh/')) {
@@ -782,7 +792,7 @@ for (const fork of FORKS) {
         if (entry.name.endsWith('.test.ts') || entry.name.endsWith('.test.mjs')) continue
         if (rel.includes('/test/') || rel.includes('/test-fixtures/')) continue
         if (rel === 'pnpm-lock.yaml') continue
-        if (gitIgnoredPaths.has(rel)) continue
+        if (isIgnoredFile(rel)) continue
         candidates.push(full)
       }
     }
