@@ -714,12 +714,24 @@ for (const fork of FORKS) {
       return out
     }
 
+    // Derived LOCAL state that a fresh checkout never has (all gitignored): the
+    // scan polices production source/scripts/config only, so walking these made
+    // a clean local worktree red on literals inside an old packaged app or a dev
+    // dsh-home checkout (2026-09 local replay: 232 hits, all 0.1.1-rc.2, zero in
+    // tracked files). CI was unaffected because none of them exist there.
+    const IGNORED_LOCAL_ROOTS = [
+      'packages/desktop/release/', // electron-builder output (packaged app)
+      'packages/desktop/.dev-user-data/', // dev-mode isolated app data (dsh-home worktrees, caches)
+      'packages/gateway/host-packages/', // gateway build output (copied seed entries)
+      'packages/renderer/.cache/', // renderer tooling cache (generated tsconfig)
+    ]
     const candidates = []
     const walk = (dir) => {
       for (const entry of readdirSync(dir, { withFileTypes: true })) {
         const full = join(dir, entry.name)
         const rel = relative(ROOT, full)
         if (entry.isDirectory()) {
+          if (IGNORED_LOCAL_ROOTS.some((prefix) => `${rel}/`.startsWith(prefix))) continue
           if (['node_modules', 'dist', 'lib', '.git', 'docs', 'coverage', 'generated'].includes(entry.name)) continue
           if (rel.startsWith('packages/desktop/vendor/') && entry.name !== 'dsh') continue
           if (rel === 'packages/desktop/vendor/dsh' || rel.startsWith('packages/desktop/vendor/dsh/')) {

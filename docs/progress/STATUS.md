@@ -297,6 +297,11 @@
   凭据仅内存驻留（每次连接重录）——S22 明文兜底仅限非 win32。
 - **Windows 发布身份让步**：x64 安装包未做 Authenticode 签名，SmartScreen 提示是
   已知取舍；feed sha512 只证明下载完整性，不等价于发行者签名。
+- **macOS 平台范围让步（不做 + 推迟）**：GitHub 已退役最后一个公开 Intel runner
+  （macos-13，其矩阵腿在每次 v0.1.0 运行中永久排队），v1 **不发布 macOS x64**——
+  mac 腿只有 `macos-latest`（arm64）；x64 侧另因 `bundle:dsh` 烘焙宿主平台的 dsh
+  运行时、交叉构建需 Rosetta 工具链工作而**推迟**（证据：`release.yml` mac 腿与
+  Linux 腿注释）。
 - **N-ctx 单文档信任域**：连接远端实例让其前端与同一 renderer 文档内其他实例及高
   权限 preload bridge 共域；现有 main-frame/origin/proof/主进程确认只能缓解，真正
   横向隔离推迟到每实例独立 WebContents 架构。

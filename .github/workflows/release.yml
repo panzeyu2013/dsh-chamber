@@ -365,7 +365,7 @@ jobs:
           # pack/publish an unvalidated commit under a validated tag (S16).
           ref: ${{ github.sha }}
           # Pinned harness source tree is a git submodule (gitlink ==
-          # harness.commit); shallow keeps the 240-package monorepo fast.
+          # harness.commit); shallow keeps the multi-hundred-package monorepo fast.
           submodules: true
       - uses: pnpm/action-setup@fe02b34f77f8bc703788d5817da081398fad5dd2 # v4.1.0
         with:
@@ -452,7 +452,7 @@ jobs:
           # commit under a validated tag.
           ref: ${{ github.sha }}
           # Pinned harness source tree is a git submodule (gitlink ==
-          # harness.commit); shallow keeps the 240-package monorepo fast.
+          # harness.commit); shallow keeps the multi-hundred-package monorepo fast.
           submodules: true
       - uses: pnpm/action-setup@fe02b34f77f8bc703788d5817da081398fad5dd2 # v4.1.0
         with:
@@ -625,7 +625,7 @@ jobs:
           # commit under a validated tag.
           ref: ${{ github.sha }}
           # Pinned harness source tree is a git submodule (gitlink ==
-          # harness.commit); shallow keeps the 240-package monorepo fast.
+          # harness.commit); shallow keeps the multi-hundred-package monorepo fast.
           submodules: true
       - uses: pnpm/action-setup@fe02b34f77f8bc703788d5817da081398fad5dd2 # v4.1.0
         with:
@@ -702,7 +702,7 @@ jobs:
           # commit under a validated tag.
           ref: ${{ github.sha }}
           # Pinned harness source tree is a git submodule (gitlink ==
-          # harness.commit); shallow keeps the 240-package monorepo fast.
+          # harness.commit); shallow keeps the multi-hundred-package monorepo fast.
           submodules: true
       - uses: pnpm/action-setup@fe02b34f77f8bc703788d5817da081398fad5dd2 # v4.1.0
         with:

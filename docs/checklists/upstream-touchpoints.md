@@ -135,7 +135,11 @@ host 插件入口/半、上游 `tests/`、`tsdown.config.ts`、上游 README（a
   生产源码/脚本/配置（非注释、非测试夹具、非产物）里**不得**再出现其他 dsh 版本字面量：历史
   叙述只允许留在注释里；确有语义的具名常量（如 `HOST_IDENTITY_METHOD_SINCE`「身份探针自哪一代
   起注册」与其跨包镜像）按「上限 1 处 + 理由」登记在 C10 白名单。测试夹具里的合成版本视为
-  fixture，不在扫描面内（`*/test/**`、`*.test.ts|mjs`）。
+  fixture，不在扫描面内（`*/test/**`、`*.test.ts|mjs`）。**本地派生状态**同样不在扫描面内
+  （`packages/desktop/release/` 打包产物、`packages/desktop/.dev-user-data/` dev 应用数据、
+  `packages/gateway/host-packages/`、`packages/renderer/.cache/`；均被 gitignore，fresh checkout
+  不存在）——2026-09 本地重放发现这些目录内残留的旧代际字面量会让**干净工作区**误红（232 处、
+  全为 0.1.1-rc.2、tracked 文件零命中），CI 因无这些目录而不受影响。
 - **vendor 源码补丁集（构建期改写，2026-09 三轮登记，design 09 §3.6）**：
   `packages/renderer/scripts/vendor-patches.mjs` 登记「同源绝对 URL」类硬假设的补丁，
   由 renderer 的 `deepseekSource().transform` 在构建期按**精确上游文本**改写，

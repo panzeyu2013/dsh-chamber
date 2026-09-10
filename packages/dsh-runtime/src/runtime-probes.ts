@@ -26,9 +26,7 @@
  * third wire argument was renamed `images` → `attachments` (`readonly
  * CommandSubmitAttachment[]` in the session-controller client projection;
  * host execute param `submittedAttachments`) — the probe payload below follows
- * the rename; upstream's generated typert wire key is not committed, so a
- * live 0.1.3 install re-verification is still owed before the runtime line
- * follows (see STATUS dsh 基线对齐记录).
+ * the rename.
  */
 import { constants } from 'node:fs'
 import { open } from 'node:fs/promises'

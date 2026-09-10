@@ -17,7 +17,7 @@ import { renderAllowBuildsBlock, pruneRuntimeArtifacts } from '@dsh-chamber/dsh-
  *   - 默认固定为经验证的精确版本（构建永不解析浮动 tag/range）
  *   - 此版本只属于桌面应用内嵌的本地 runtime，不要求远程 dsh 同版本；
  *     远程实例独立升级，只在连接时做协议能力兼容检查
- *   - 环境变量 DSH_CHAMBER_DSH_VERSION 只接受精确 semver（如 0.1.2-alpha.4）
+ *   - 环境变量 DSH_CHAMBER_DSH_VERSION 只接受精确 semver（形如 X.Y.Z-<stage>.N）
  *     用于显式升级验证；`latest`、range 与 URL 一律拒绝
  *   - 封装完成后 vendor/dsh/package.json 记录实际解析到的精确版本
  *     （dependencies["@deepseek-ai/dsh"]），可复现重建；--force 刷新当前 pin。

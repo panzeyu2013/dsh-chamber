@@ -2,7 +2,7 @@
 /**
  * update-vendor.mjs — 原子升级 dsh 源码 pin（submodule 化后的唯一升级入口）。
  *
- * 用法：node scripts/dev/update-vendor.mjs <tag>      # tag 如 dsh-v0.1.1-rc.2
+ * 用法：node scripts/dev/update-vendor.mjs <tag>   # tag 形如 dsh-vX.Y.Z-<stage>.N（如 dsh-v0.1.5-alpha.2）
  *
  * 流程（vendor/.vendor-update.lock 目录锁防并发；任一步失败即中止并打印
  * 恢复指引，不产生静默半提交状态）：

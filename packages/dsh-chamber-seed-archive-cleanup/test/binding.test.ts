@@ -333,11 +333,34 @@ test('binding: the purge refuses symlink/subdirectory entries and accepts every 
 
     // Near-miss names stay refused: uppercase suffix, leading-zero version, and
     // a lease name that merely PREFIXES the real lease (2026-09 三轮 Q3 G1–G4).
-    for (const [project, name] of [
-      ['upper', 'session.v3.JSONL'],
+    //
+    // The uppercase leg needs a CASE-SENSITIVE volume: on macOS's default APFS
+    // `session.v3.JSONL` and `session.v3.jsonl` are the SAME file, so writing
+    // both leaves a single canonical entry and the refusal has nothing to reject
+    // (2026-09 local-replay finding: red on macOS, green on Linux CI). Probe the
+    // volume instead of guessing from process.platform.
+    const caseProbe = join(dir, 'case-probe.tmp')
+    writeFileSync(caseProbe, '')
+    const caseSensitive = !existsSync(join(dir, 'CASE-PROBE.TMP'))
+    rmSync(caseProbe, { force: true })
+    const nearMissNames: [string, string][] = [
       ['zero', 'session.v01.jsonl'],
       ['lease', 'session.lock.tmp'],
-    ] as const) {
+    ]
+    if (caseSensitive) {
+      nearMissNames.unshift(['upper', 'session.v3.JSONL'])
+    } else {
+      // A case-insensitive volume collapses the two names into ONE canonical
+      // entry, so assert that collapsed layout still purges as canonical — the
+      // leg stays a real assertion instead of a silent skip.
+      const collapsedDir = join(dir, 'upper', 's9')
+      mkdirSync(collapsedDir, { recursive: true })
+      writeFileSync(join(collapsedDir, 'session.v3.jsonl'), '{}')
+      const collapsedHost = makeHostBinding({ sessionPersistence: { locate: locateFor('upper') } })
+      assert.equal(await collapsedHost.deleteSessionContent('s9', join(dir, 'upper')), 'deleted')
+      assert.equal(existsSync(collapsedDir), false, 'case-insensitive volume: the single canonical entry purges')
+    }
+    for (const [project, name] of nearMissNames) {
       const nearDir = join(dir, project, 's9')
       mkdirSync(nearDir, { recursive: true })
       writeFileSync(join(nearDir, 'session.v3.jsonl'), '{}')
