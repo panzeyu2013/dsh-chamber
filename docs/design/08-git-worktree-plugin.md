@@ -531,12 +531,21 @@ fresh-preflight -> git-removing -> git-removed
   「同时删除本地分支」（§5.3）。
 - **dirty**：删除图标不再禁用（仅 dirty），点击进入对话框后显示醒目警示
   （"该工作树有未提交的更改，将被永久丢弃；分支与已提交内容不受影响"）；
-  授权由**官方 `RiskConfirmation`** 收集（`RemoveWorktreeDialog.tsx:396`，
-  2026-09-11 upstream-alignment）：对话框内不再有勾选框，点「移除」时若尚缺授权
-  先弹出官方风险确认（警示图标 + 同上说明 + 自动聚焦的勾选框「我了解这些更改将被
-  丢弃，仅移除工作树（保留分支）」，主按钮在勾选前不可用），确认后以
-  `discardChanges: true` 重试同一删除；授权对话框打开期间删除对话框忽略关闭
-  （两个对话框各自在 document 上监听 Escape，`RemoveWorktreeDialog.tsx:201-205`）。
+  授权由**官方 `RiskConfirmation`** 收集（`RemoveWorktreeDialog.tsx:411`，
+  2026-09-11 upstream-alignment；单手势与撤销语义按 2026-09-11 review-fix F1 校正）：
+  对话框内不再有勾选框，点「移除」时若尚缺授权先弹出官方风险确认（警示图标 + 同上
+  说明 + 自动聚焦的勾选框「我了解这些更改将被丢弃，仅移除工作树（保留分支）」，
+  主按钮在勾选前不可用），**该门自己的 Confirm 就地执行这次删除**——一次手势即
+  `移除 → 勾选 → 确认`，确认后以 `discardChanges: true` 跑同一条删除路径，不需要
+  第二次「移除」。门本身**不**从「还缺哪个授权」推导开关（那个推导在勾选当刻即回到
+  空值，门会自灭、Confirm 成死代码）：它由点击「移除」时选定的**授权种类**
+  （`discard-gate.ts` 的 `nextDiscardGate`：先 dirty、后 submodule）持有，
+  `onConfirm`/`onCancel` 才释放（`RemoveWorktreeDialog.tsx:411-439`）。
+  **取消即撤销**：Cancel / 关闭 / 遮罩 / Escape 都会把这次门正在收集的那个授权
+  复位为未授权（`onCancel`，`RemoveWorktreeDialog.tsx:425-434`），因此退出确认
+  绝不会留下一个"已授权但没删"的脏状态——下一次「移除」重新打开同一门，用户不会
+  在事后被静默丢弃文件。授权对话框打开期间删除对话框忽略关闭（两个对话框各自在
+  document 上监听 Escape，`RemoveWorktreeDialog.tsx:215-222`）。
 - **含子模块**：行事实不含子模块信息，首次删除被 host 确定性拒绝
   （`worktree-submodules`，变更前、`retryable: false`、可关闭、不锁来源）后，
   对话框就地显示警示，点击「移除」重新打开同一官方 `RiskConfirmation`

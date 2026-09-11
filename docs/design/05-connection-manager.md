@@ -563,11 +563,19 @@ export const chamberBridge: {
    控制面不可达块同样是 `role="alert"`。**框架的 `Button` 走深路径导入**
    （`@deepseek-ai/dsh-client-ui-primitives/src/Button.tsx`，2026-09-11
    upstream-alignment）：包 barrel 同时带 primitives 的 markdown/CodeBlock 家族，
-   实测在本构建上把约 87 KB 带进主图（主图 raw 1,226,775 → 1,313,736，距
-   `packages/renderer/scripts/check-chunk-budgets.mjs` 的 C6 warn 门只剩 2.7%），
-   而深路径把它们留在 chamber 复合入口（1,986,884）——主图在 App 挂载前整体
+   T15 轮在本仓构建上实测 barrel 会把约 87 KB 带进**主图**（主图 raw
+   1,226,775 → 1,313,736，即 +86,961 B——该增量是 barrel 自身的属性，与本轮改动
+   无关），而深路径把它们留在 chamber 复合入口——主图在 App 挂载前整体
    求值，正是 `chamber-entry.ts` 的 C3 注记要把 ui-primitives 挡在主图外的那条
-   理由。**模块表安装顺序**：
+   理由。**本轮实测（2026-09-11 review-fix 树，`pnpm run build:renderer` 写入
+   `packages/desktop/dist/web/perf-sizes.json`，门值在
+   `packages/renderer/scripts/check-chunk-budgets.mjs`）**：主图 raw
+   **1,228,157**（gzip 339,212）对 `mainGraphRaw.warn = 1,350,000`，余量
+   121,843 B ≈ **9.0%**；chamber 复合入口 raw **1,989,208**（gzip 552,563）对
+   `chamberEntryRaw.warn = 2,000,000`，余量只剩 10,936 B ≈ **0.5%**（表头 CSS
+   244,059 对 warn 300,000）。即按本轮基线推算，barrel 形态的主图约 1.315 MB、
+   仍只在 warn 门内约 2.6%——深引的理由与 T15 当初一样成立；而复合入口距 warn 门
+   不足 1%，再加一个首屏家族就会触 warn（拆分需先评估）。**模块表安装顺序**：
    模块表（`window.__DSH_MODULES__` + `__ModuleLoader__`
    sink）经 boot.ts 导出的幂等 `ensureWebModuleSystem` 在**任何 bundle 脚本
    执行前**装好（shell.ts 在 collectExtraRows 预加载之前调用，run() 经同一
@@ -653,7 +661,18 @@ export const chamberBridge: {
   `/api/i/gateway-<id>/chamber/*` 反代，202 + status 轮询）+ `POST
   /chamber/runtime/start`（design 21 决策 12 停机恢复：stopped/error/
   restart-exhausted，卡片「启动实例」入口）。二次确认 + 状态行，与健康状态机
-  `restarting` 单飞行互斥、applying 期间禁用。ssh（dsh 直连）的 systemd
+  `restarting` 单飞行互斥、applying 期间禁用。**确认门只有一个**（2026-09-11
+  upstream-alignment T2；accept 时复验与时限见 2026-09-11 review-fix F2/F4b）：
+  本地重启与**全部** gateway 变更动作共用一个应用内官方 `Modal`
+  （`RuntimeConfirmDialog` + 纯机器 `confirm-machine.ts`）——武装不跑任何东西，
+  取消在 runner 被调用前丢请求，**accept 先按 live 事实复验**（每个 request 带
+  `stillValid`，与武装时同一个谓词、读每次渲染重写的 `liveFacts`；失败即
+  `outcome:'dropped'`，请求不落地、由本段错误行如实报「已过期」而不是静默），
+  因为对话框会跨过 `~3s` 的状态轮询；**gateway 侧动作另有一道 12 分钟墙钟上限**
+  （`REMOTE_ACTION_TIMEOUT_MS = REMOTE_STATUS_POLL_TIMEOUT_MS`(11 min) + 60s，
+  与轮询预算同源），因为 pending 期间对话框按设计忽略取消/Escape/遮罩，永不 settle
+  的动作会把人锁在里面；**本地腿（`restartLocal()` 经 IPC 到主进程事务）没有
+  abort 句柄**，该缺口登记在 STATUS。ssh（dsh 直连）的 systemd
   `restart_service` 属**连接管理面**（重启 gateway/dsh 服务本身，非插件模型动词，
   design 21 §3 目标语境差异登记），dsh（ssh/http）直连不挂载 dsh-runtime 段、无
   插件模型重启动作。（http 直连来源无任何重启动作，design 17 §3。）
@@ -740,6 +759,18 @@ export const chamberBridge: {
     hook 驱动，且两个同选一源的壳会重复挂载同一步骤。渲染走
     `BridgeEntryBoundary containAll slotKey="settings.onboarding"`（外来步骤崩溃也不
     夺走 chamber 的 `sidebar.settings` 座位）。
+    **两个坐标各管一半（2026-09-11 review-fix F1）**：活动视图门只门**挂载**
+    （`onboardingStage` 的 `step` = 两个事实的合取），**完成集的重置只跟 sessions
+    事实**（上游 `SettingsRoot` 的 reset effect 原文——
+    `if (onboardingActive) return; setCompletedOnboarding(new Set())`，而
+    `onboardingActive` 就是 sessions 选择器）：早先把活动视图门折进重置，于是一次
+    普通**切视图**就会抹掉全部确认，用户刚走完（或显式推迟）的步骤在切回来时重新挂载。
+    **残留（登记偏差）**：完成集本身是组件局部的，所以壳被**重新挂载**（App 回收该实例
+    再挂起）仍会从空集重跑——运行并未结束，上游会认为该步骤已确认；收口需要一份能跨
+    挂载存活的每实例状态（新的 chamberBridge/持久化通道），不在本轮范围。
+    两个坐标另各由**自己独立的 hook 调用**读取（合取写成
+    `useOnboardingActive(...) && useActiveView(...)` 会在 sessions 事实为 false 时短路
+    掉第二个 hook，是 React 明确拒绝的钩子序列）。
   - **`sectionsEmpty` 占位保留**：上游在空台账处渲染空的选项列（其单 ctx 壳不可能
     「有面板无分节」）；chamber 保留这句诚实占位，因为未发布的 `settings.section`
     台账是**可达的 N 来源状态**（该来源的设置簇尚未落到它自己的 boot ctx，或外来 dsh

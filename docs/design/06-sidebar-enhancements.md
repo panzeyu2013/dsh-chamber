@@ -602,15 +602,33 @@ await 中），我们单点只显示子 agent 计数文案，官方同快照显�
   搜索 sanitize、`todo-attention` 派生、`todo-prefs` 水合
   （`test/derive.ts`、`test/view-prefs.ts`、`test/todo-attention.test.ts`、
   `test/todo-prefs.test.ts`，node:test 风格）。
-- **上游对齐源文本锁（2026-09-11 upstream-alignment）**：
-  `test/upstream-alignment.test.ts`（读源码文本，注释先剥离，经
-  `test/source-lock.ts` + vendor 载入桩）钉住本批的对齐面——归档动词只在行菜单、
-  全包无原生 confirm、workspace 删除是官方 `Modal` chrome、completed 走官方
+- **上游对齐源文本锁（2026-09-11 upstream-alignment；review-fix 扩充）**：
+  `test/upstream-alignment.test.ts`（读源码文本，注释先剥离，只经
+  `test/source-lock.ts`——**不挂 vendor 载入桩**：包 `package.json` 的 test 脚本把
+  `node --import ./test/vendor-register.mjs`（→ `test/vendor-loader.mjs`）只接给
+  `test/panel-source.test.ts`，因为只有它要 import vendor 模块；
+  `upstream-alignment.test.ts` 以普通 `node test/…` 运行）钉住本批的对齐面——归档
+  动词只在行菜单、全包无原生 confirm、workspace 删除是官方 `Modal` chrome（含对话框内
+  `role="alert"` 失败行与「仅成功才关闭」）、**同一时刻至多一层 chamber Modal**（见下）、
+  completed 走官方
   `StateDot done`、行窗口是双向 disclosure、行菜单 `closeOnPointerLeave` 且非
   `compact`、`{name}` 参数化可访问名、活动定时任务标记的位置、`data-git-action`
   属性钩子（`:disabled` 在方括号之外）；行为面单测在函数旁边
   （`test/session-row-window.test.ts` 的 disclosure 窗口、`test/panel-source.test.ts`
   的 `createSnapshotStore` 投影与通知纪律）。
+- **同一时刻至多一层 chamber Modal（2026-09-11 review-fix finding 2，对称门）**：
+  官方 `Modal` **没有焦点陷阱**（vendor
+  `ui-primitives/src/Modal.tsx`：一层 body portal 遮罩 + 每个打开实例各自一个
+  document 级 **BUBBLE** Escape 监听），而「孤儿徽标」是常驻、可 Tab 到的按钮
+  （`ServerSection.tsx` 的 `cc.orphanBadge`，在 hover 簇之外），所以「导航行在遮罩
+  后面够不到、对话框不可能叠」这句旧说法**是错的**：键盘用户可 Tab 到任一遮罩之后
+  去武装第二层，两层各注册一个 Escape 监听、一次 Esc 双关（design 24 §6 项 7 正是
+  归档管理器拒绝第二层的理由）。真不变量因此落在**打开方**、不在遮罩：
+  `SidebarRoot.tsx` 的单一谓词 `otherChamberDialogOpen(self)` 被**全部三个打开方**
+  咨询——删除武装（`onDeleteWorkspace`）、归档管理器（`onOpenArchiveCleanup`）、
+  添加工作区浏览器（`openWorkspaceBrowser`；节 `ServerSection` 只拿得到这个带门的
+  opener，拿不到裸 setter）——每个子句排除自己那一层，故**任一方向**最多只可能有一层；
+  被拒的控件在该层消失（cancel / X / 遮罩 / Escape 均可）后立刻恢复，能力不丢。
 - 包级门：`pnpm run typecheck`、根 `typecheck`、`typecheck:layout`、
   `typecheck:sidebar`、`pnpm run build:renderer`、
   `pnpm run verify:i18n`、`test:sidebar`、`test:layout`、

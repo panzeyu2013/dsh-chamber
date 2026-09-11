@@ -106,17 +106,41 @@ bundle 未覆盖的 entry（方案 A，§3）。第 1、2 步在 chamber 托管�
   「服务 + 注入它的已注册插件」，并把判词经 shell 的
   `chamberReportBootDegraded` 上报（**仍是诊断，不是启动门**：gateway/移动形态可合法
   不加载该行）。
-  **被探测集合是派生的，不是手写清单（2026-09-11 upstream-alignment）**：首屏每个
+  **被探测集合是派生的，不是手写清单（2026-09-11 upstream-alignment；延迟簇入名单见
+  2026-09-11 review-fix）**：首屏每个
   挂载都经 `chamber-entry.ts` 的 `register(id, plugin)`，由各命名空间**导出的
   `inject` 面**推导并集（`registeredInjectMembers` / `injectedServices` /
   `missingInjectedServices`，`required-extra-rows.ts`）——这正是上游
   `assertEntriesActive` 读的事实 `Object.keys(entry.fiber.inject)`
   （`packages/client/web/src/boot.ts:138-158`，本仓副本
-  `packages/dsh-client-web/src/boot.ts` 另含版本容忍规则）；`register` 还用挂载
-  fiber 的 inject 面作**见证**：命名空间若不再导出 inject 面而 cordis 仍读到成员，
-  当场抛错（派生名单只会收缩、不会静默漏探，正是探针要堵的盲区）。延迟簇不进名单：
-  其 chunk 在探测开始时尚未求值，且延迟拆分不变式（模块头）已把它们的 inject 成员
-  固定在首屏服务内。名单成员变更即改 `chamber-entry.ts` 的 `register(...)` 调用，
+  `packages/dsh-client-web/src/boot.ts` 另含版本容忍规则）。
+  **延迟簇的成员同样进名单并被探测**（2026-09-11 review-fix，finding 1）：
+  `registerDeferred` 在每行 chunk 装载、`ctx.plugin(...)` 之后，把该行**自己导出的**
+  `inject` 面按首屏同一套归一化推进同一份名单，并在确有行挂载时
+  `probeRearm.reArm?.()` 重新武装一轮探测（探针在"干净判词"上会停）。此前延迟簇被明确
+  排除，理由是「其 chunk 在探测开始时尚未求值，且延迟拆分不变式（模块头）已把它们的
+  inject 成员固定在首屏服务内」——但那条不变式只是**假设**，探针存在的意义正是检查它，
+  于是 **11 个只出现在延迟面里的成员无人探测**：`remote.goals` / `remote.skills` /
+  `remote.messageFeedback` / `remote.sessionFeedback` / `remote.agentPresets` /
+  `remote.credentials` / `remote.llm` / `remote.pluginInventory` /
+  `remote.fileReferences` / `remote.sessionReferenceResolver`（由首屏 api-gateway /
+  api-remotes 对提供）与 `settingsSchema`（首屏 ui-settings 提供）；某个延迟家族的
+  provider 从未激活时，该家族只会**无声 pending**。现在探它们之所以安全，正因为延迟拆分
+  不变式本身——每个延迟成员的 provider 都是**首屏复合插件**，绝不是另一个延迟家族，所以
+  重新武装的那轮不可能把"尚未求值的兄弟 chunk"误判成"服务缺失"；跨行失败隔离也不变
+  （一行坏掉只赔掉自己那一族的探针覆盖并响亮 console.error，绝不阻断后续行挂载，
+  失败行改由 id 走失败诊断）。
+  `register` 仍用挂载 fiber 的 inject 面作**见证**，但其覆盖面**窄于一整类漂移**
+  （2026-09-11 review-fix 校正了原先"命名空间不再导出 inject 面即当场抛错"的说法）：
+  cordis 解出的注入表与这里推导的是**同一个表达式**
+  （`Inject.resolve(plugin.inject)`，vendor `cordis/src/registry.ts:330`），两者只会在
+  一种声明形态上分叉——inject 对象带 cordis 的 `symbols.checkProto` 标记
+  （`registry.ts:77-81`）时成员在原型上、`Object.keys` 看不见，这一种由当场抛错兜住；
+  而"命名空间干脆不再导出 `inject`"两侧**同时**为空（`plugin.inject` 都是 undefined），
+  不抛错、名单静默变小——这一类由 CI 表测试兜底
+  （`test/required-extra-rows.test.ts` 逐个注册 id 读其 client 入口并钉住所审计的
+  `inject` 面），那也是这种漂移唯一可见的地方。
+  名单成员变更即改 `chamber-entry.ts` 的 `register(...)` 调用，
   不维护第二张表；口径变更须同步 `host-graph.ts` 的降级注释与
   `docs/checklists/upstream-touchpoints.md` §2/§3 登记行。
 - **覆盖集也是模块表的 factory 提供方**：被跳过的覆盖行不是

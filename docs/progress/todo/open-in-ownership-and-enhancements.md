@@ -49,11 +49,16 @@
 - **S3 收窄为"复制路径"**（唯一保留的非启动出口）：在侧栏既有的复制模式上暴露工作区/会话路径
   —— 会话行数据已带 `cwd`（`sidebar/src/shared/instance-api.ts` 的 `SessionRow.cwd?`），
   侧栏既有的 `HoverCard` 已支持 `copyText`（今天只复制会话标题，
-  `ServerSection.tsx:1892`），因此**零新 IPC、零新依赖、纯渲染层**；
+  `ServerSection.tsx:2046`；该行的 `HoverCard` 本体 `:2027`），因此**零新 IPC、零新依赖、
+  纯渲染层**；
   "复制 `ssh user@host` / 复制 VS Code 深链"**不做**（形态见 §5 附录 A，若日后需要照此实施）；
 - **S4 多入口：不做**（2026-09-11 裁决，理由登记在 STATUS）：header 按钮与目标会话同排相邻，
-  侧栏入口边际价值有限；会话行**刻意没有 kebab**（OpenChamber parity，
-  `ServerSection.tsx:1188,1305`），加右键菜单要推翻一条既定决定；快捷键缺基建
+  侧栏入口边际价值有限；会话行的动作**已集中在一个 kebab 菜单里**（重命名/分叉/归档，
+  `ServerSection.tsx:1952-1977`；2026-09-11 T2a 起归档也在此菜单内），故"新增侧栏入口"
+  要么与该菜单重复、要么推翻它——**不要把"会话行刻意没有 kebab"当作理由**
+  （2026-09-11 review-fix 更正：该行自 T2a 起就有 kebab，旧句引的
+  `ServerSection.tsx:1188,1305` 也早已漂移；今天刻意无 kebab 的是 **worktree 派生的
+  workspace 行**，`ServerSection.tsx:1288-1290`）；快捷键缺基建
   （vendor 无 keybinding 注册表，只有聊天输入框自己的 keymap），自建 document 级监听还要处理
   "哪个 entry 是活跃视图"与 chord 冲突。若日后要做，形态见 §5 附录 B。
 
@@ -70,7 +75,8 @@
 > 保留 2026-09-11 复核时做的代码调研结论，供日后需要时直接实施，不必重新摸底。
 > 现状证据（复核时实测）：全仓 chamber 代码 `navigator.clipboard` / `writeText` **零调用者**
 > （`main.ts:5699-5713` 只是放行了 `clipboard-sanitized-write` 权限）；`execCommand('copy')`
-> 仅出现在 gateway 的独立安装页（`gateway/src/routes.ts:730`）；上游官方客户端只有一处槽位注册
+> 仅出现在 gateway 的独立安装页（`gateway/src/routes.ts:960`；行号随
+> 2026-09-11 review-fix 的确认对话框改动下移，原 `:730`）；上游官方客户端只有一处槽位注册
 > （`conversation.session.header.utilities`，id `open-in-app`，order -10），无剪贴板、无"无可用
 > 应用"出口（`controller.ts:39`：读取失败 ⇒ 空列表 ⇒ 完全不渲染按钮）⇒ **S3/S4 都是新增能力，
 > 不是"官方有而我们缺"**。
@@ -114,10 +120,10 @@
   落点二选一：**(a)** 侧栏既有 `sidebar/shared` 入口（本仓已有跨包导入先例，且带
   `assertSingletonModule` 单例纪律，倾向选它）；**(b)** open-in 包自己的页级入口
   （归属清晰，但新增"侧栏依赖功能插件"的包依赖方向）。
-- 入口优先级：**① 工作区头 kebab**（`ServerSection.tsx:1578` 的 workspace 行菜单 + `:1567`
+- 入口优先级：**① 工作区头 kebab**（`ServerSection.tsx:1613-1628` 的 workspace 行菜单 + `:1585`
   的 `+`「新建会话」已给出菜单与动作词汇，改动最小、不碰 parity）→ ② 会话行行菜单/右键
   （能力最有价值，但**会话行已有 kebab 菜单**——重命名/分叉/归档，2026-09-11 T2a 起归档
-  也在此菜单内，`ServerSection.tsx:1937-1959`；故这里不是"新建菜单"，而是"复用该菜单或
+  也在此菜单内，`ServerSection.tsx:1952-1977`；故这里不是"新建菜单"，而是"复用该菜单或
   给它加手势"，加不加待产品裁决）→ ③ 快捷键（只对**活跃** entry 生效；不要每个 entry ctx
   各注册一个监听）。
 - 无论哪条入口都必须复用同一组门（合并视图模型 ≥1 可用项；该行属于有具体路径的工作区），

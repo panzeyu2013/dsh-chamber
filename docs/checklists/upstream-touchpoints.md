@@ -142,10 +142,16 @@ host 插件入口/半、上游 `tests/`、`tsdown.config.ts`、上游 README（a
   导出的 `inject` 面，`injectedServices`/`missingInjectedServices`
   （`required-extra-rows.ts`）取并集后探测（上游 `assertEntriesActive` 的同一
   fact：`Object.keys(entry.fiber.inject)`，`packages/client/web/src/boot.ts:138-158`），
-  手写清单 `REQUIRED_EXTRA_ROW_SERVICES` 已删除；rc.1 该派生结果仍只命中
-  `sidebarRight` 一条。上游改首屏 inject 面时**无需再登记名字**，只要新的
-  provider 行不在复合覆盖集里，探针自动覆盖（权威说明在 `required-extra-rows.ts`
-  头注 + design 09 §3.2）。
+  手写清单 `REQUIRED_EXTRA_ROW_SERVICES` 已删除；**2026-09-11 review-fix 起延迟簇
+  也进这份名单**——每个延迟行 chunk 挂载时由 `registerDeferred` 把自己的 `inject`
+  面推进同一并集（故 11 个只出现在延迟面里的成员不再无声 pending），并在有行挂载时
+  重新武装一轮探测。rc.1 该派生结果在**风险集**上仍只命中
+  `sidebarRight` 一条（延迟成员全部由复合首屏插件提供，不扩大"唯一 provider 是
+  非覆盖行"的集合）。上游改**首屏或延迟家族**的 inject 面时**无需再登记名字**，
+  只要新的 provider 行不在复合覆盖集里，探针自动覆盖（权威说明在
+  `required-extra-rows.ts` 头注 + design 09 §3.2）；但"命名空间不再导出 `inject`"
+  这一种漂移派生面看不见，由 `packages/renderer/test/required-extra-rows.test.ts`
+  的逐 id 表测试钉住。
 - **历史动向记录（2026-09 只读调研，当时 pin 仍 82a5fd61a7cf）**：上游 tag
   `dsh-v0.1.5-alpha.1`（5dda764e）。三个 fork 的**客户端恢复模型零改动**
   （`connection/src/client/{connection,index}.ts` 未变；变的是 fixture、宿主半

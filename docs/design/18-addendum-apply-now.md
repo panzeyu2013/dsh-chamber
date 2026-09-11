@@ -142,7 +142,7 @@ promise 后才释放 owner/state lock——apply-now 在途收到 stop → journ
 - 点击后立即置 busy 并禁用整组，防同帧双击。
 
 ### 6.3 文案（zh / en）
-- 二次确认对话框（desktop 的 IPC 入口仍由 main 的原生 `confirmRuntimeMutation` 交付，不动；settings-bridge 面板自身的一切确认——含 gateway 源重启——统一走应用内官方 `Modal`，2026-09-11 upstream-alignment T2，原为 `window.confirm`；浏览器页为服务端动作无确认）：
+- 二次确认对话框（desktop 的 IPC 入口仍由 main 的原生 `confirmRuntimeMutation` 交付，不动；settings-bridge 面板自身的一切确认——含 gateway 源重启——统一走应用内官方 `Modal`，2026-09-11 upstream-alignment T2，原为 `window.confirm`；**浏览器页按动作分档**（2026-09-11 review-fix 收窄）：apply-now 等运行时动作由各自控件直接触发、**无二次确认**，但该页自有的一层应用内确认对话框确实存在，只服务**凭据移除**的两处门——标记/控制器/inert 与 Tab 陷阱见 design 17 §10.3）：
   - zh 标题：立即切换到 v{version}？正文：dsh 将立即重启并切换到 v{version}（约 30–90 秒）。进行中的会话会中断，你的数据不受影响；若切换失败，dsh 会自动回滚并保留现场。确认/取消：立即应用并重启 / 取消。
   - en：Switch to v{version} now? / dsh will restart immediately and switch to v{version} (about 30–90 seconds). In-progress sessions will be interrupted; your data is unaffected. If the switch fails, dsh rolls back automatically and retains the recovery state. / Apply and restart / Cancel.
 - 按钮/hint：pending 主按钮「立即应用 v{version} / Apply now v{version}」；pending hint 注明「切换将在下次启动生效；如需立即生效，点击『立即应用』（dsh 会短暂重启，约 30–90 秒）」；applying 窗口状态行「应用 dsh v{version}… 正在重启 / Applying dsh v{version}… restarting」。

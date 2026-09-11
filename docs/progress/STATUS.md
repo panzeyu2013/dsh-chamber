@@ -168,7 +168,9 @@
   的 `autoFullscreen = viewportWidth < 768`、`:371` 的 `track = shown && !autoFullscreen`）
   ⇒ 该档内展开的右栏既占不到全屏也不占轨道宽度；插件头注只声明了 `<768px` 那一半。② **`<768px` 全屏右栏（z-40）
   盖住 `shell.overlay`（z-20）内的抽屉开关与抽屉**——已按「官方全屏面拥有屏幕、抽屉让步」
-  登记为有意（`styles.ts:67-75`），但真机上是否读作损坏未判。
+  登记为有意（2026-09-11 review-fix 校正引文：`styles.ts` 的 STACKING SCOPE 注记
+  `:73-81`，其中 `:80-81` 即
+  "a fullscreen official surface owns the screen and the drawer yields"），但真机上是否读作损坏未判。
   剩余——**实机门禁**（§18.6：真机触控目标比例/抽屉开合/键盘遮挡
   （含新补偿层的 iOS 时序与 Android WebView 盲区、**聚焦缩放后的打字正例**、
   缩放态平移不得引起抖动、捏合缩放负例、提交窗口不闪落、重挂 re-arm、
@@ -231,12 +233,15 @@
 - **open-in 超集分批口径（2026-09-11 复核裁决，design 20 §7.2）**：官方两份原先都没有"无应用出口"
   与"第二入口"（上游客户端只有一处槽位注册、无剪贴板面，读取失败即不渲染按钮），因此这两项是
   新增能力而非缺失回填。裁决：**S3 收窄为「复制路径」**（侧栏既有 `HoverCard` 复制模式
-  `ServerSection.tsx:2011,2030` + 会话行已带 `SessionRow.cwd`（`shared/instance-api.ts`）⇒ 零新 IPC、
+  ——会话行本体 `ServerSection.tsx:2027`，其 `copyText` 在 `:2046`（2026-09-11
+  review-fix 复核引文）——+ 会话行已带
+  `SessionRow.cwd`（`shared/instance-api.ts`）⇒ 零新 IPC、
   纯渲染层）；**复制 `ssh user@host` / VS Code 深链与 S4（侧栏入口、快捷键）不做** —— 依据：
   header 按钮与目标会话同排相邻（侧栏再放一个入口对主流程零增量；会话行的动作已全在
   一个 kebab 菜单里——重命名/分叉/归档，2026-09-11 T2a 起归档也在此菜单内，
-  `ServerSection.tsx:1937-1959`，故"新增侧栏入口"要么与该菜单重复、要么推翻它；
-  worktree 派生的 workspace 行才是刻意无 kebab 的那类，`ServerSection.tsx:1406`）、
+  `ServerSection.tsx:1952-1977`，故"新增侧栏入口"要么与该菜单重复、要么推翻它；
+  worktree 派生的 workspace 行才是刻意无 kebab 的那类，`ServerSection.tsx:1288-1290`
+  （引文同批复核））、
   快捷键缺基建（vendor 无 keybinding
   注册表，客户端只有聊天输入框自己的 keymap），且三处"今天无按钮"的来源
   （gateway-over-http、无本地 VS Code 的 ssh 来源、零目录应用的本地实例）都不在主流程
@@ -295,16 +300,21 @@
   可注入——待上游解锁；`agent-default-model` 客户端**可读可写**（`settings.describe`
   不过滤 namespace，旧 `exposedNamespaces` 机制在当前 pin 已不存在，见 design 07 §2.4），
   但回显/设置入口不在本蓝本范围内，**实现未排期**。
-- **框架侧跨边界诊断文案仍未本地化（2026-09-11 上游对齐轮报告，未排期）**：框架
-  （`packages/renderer`）**自己渲染**的 chrome 文案已进 typed 字典
-  （`src/locales.ts`，T16），但**由别的包渲染**的字符串仍是框架侧中文逐字串——产出方
-  与渲染方不同包，两边都不能就地翻译：①`App.tsx:432` 的
-  `aggregate.error ?? '未知错误'` 进 `ChamberServerAggregate.aggregateError`，由侧栏
-  `ServerSection.tsx:1217-1218` 的错误分支渲染；②`App.tsx:2708`/`:2728` 的
-  `打开会话失败：…` 经 `chamberBridge.reportOpenSessionOutcome` 交回侧栏行内呈现
-  （同一文本同时 console.error；通知投递路径同源，另有 `:2760` 一句只进 console）。
-  对齐做法 = **reason code 协议 + 渲染包侧映射**（产出方只发码/结构化事实，渲染包用
-  自己语言环境出文案），实施前这些串保持中文。
+- **跨边界诊断文案：框架那一半已本地化，剩下的在框架之下（2026-09-11 上游对齐轮
+  报告；本地化范围按 2026-09-11 review-fix F4b 收窄，仍未排期）**：框架
+  （`packages/renderer`）**自己渲染**的 chrome 文案早已进 typed 字典
+  （`src/locales.ts`，T16），本轮把**由别的包渲染、但文字由框架拼好递出去**的三处也
+  收进同一字典、按**文档语言**取值（`frameText` + `readDocumentLocale`）：①
+  `App.tsx:448` 的 `aggregate.error ?? frameText(locale, 'error.unknown')` 进
+  `ChamberServerAggregate.aggregateError`，由侧栏 `ServerSection.tsx:1230-1231` 的
+  `role="alert"` 错误分支渲染；②`App.tsx:2729`（来源已离开注册表）与
+  `App.tsx:2758`（包裹底层错误的 `open.failed.detail`）经
+  `chamberBridge.reportOpenSessionOutcome` 交回侧栏行内呈现；③`App.tsx:2793`
+  的通知重放拒绝文本。**仍开放的边界**：②的 `{detail}` 装的是**框架之下**产生的文本
+  ——`shell.ts` 的打开失败诊断与 dsh 运行时自己的错误——那些站点没有 locale 席位，
+  所以英文文档下该从句仍是中文（`App.tsx:2749-2757` 的 BOUNDARY 注释即登记点）；
+  对齐做法仍是 **reason code 协议 + 渲染包侧映射**（产出方只发码/结构化事实，渲染包用
+  自己语言环境出文案），实施前该从句保持中文。
 
 ## 一致性债务与开放登记（低–中，未排期；均指回代码面注释/design 登记）
 
@@ -443,6 +453,15 @@
     （mobile 嵌套 `en:`/`zh:`，其余平铺），client-web/connection 用 git blob SHA-1 且注释
     指向**仓内不存在**的 `pnpm run verify-translation-pairing --write`。统一格式并纳入
     门禁是后续候选。
+- **gateway 运维页自身的失败分支不被测试夹具覆盖（2026-09-11 review-fix F4b 登记）**：
+  `packages/gateway/test/dashboard-harness.ts:432-435` 的 fetch spy 对每个它没有挂起的
+  请求**一律回 200**（`{ ok: true, status: 200 }`），因此页面脚本自己的 `request()`
+  非 2xx 分支（`packages/gateway/src/routes.ts:316-326`：拼
+  `Request failed (HTTP <n>)` 并挂 `code`/`httpStatus` 抛出）没有夹具驱动。失败路径的
+  测试改为直接供给该分支**产出的确切 Error 形状**
+  （`packages/gateway/test/feature-lifecycle.test.ts:479-486`），即断言的是"页面拿到
+  这个错误之后的映射"，不是"这个错误是怎么被构造出来的"；要覆盖构造面，需给夹具的
+  `respond` 增加 non-ok 响应能力（现在它只能抛错模拟网络错误）。
 
 ## 设计未决
 
@@ -549,32 +568,56 @@
   占位与连接管理动作（不触发挂载）；服务器选择器 body portal + viewport 翻转/钳位
   与内部滚动。
 - **2026-09-11 上游对齐轮引入的有意偏差（仍成立；各带理由与判据）**：
-  - **设置壳首启阶段额外以 active-view 为门**：官方 SettingsRoot 只按「当前会话为空
-    或仍 blank」挂载首个 `settings.onboarding` 步骤；chamber 再加一道**活动视图**门
-    （`SettingsShell.tsx` 的 `useOnboardingActive(sessionsSeatOf(props)) && useActiveView(chamberInstanceId)`，
-    `onboarding-hooks.ts:useActiveView` 读 App 既有发布的 active-view 事实
-    `chamberBridge.getActiveSource/onActiveSource`——非新通道）。理由：chamber 同时
-    挂载多个实例壳（活动视图 + 保留隐藏壳 + 面板目标壳），而首启对话框是文档级的
-    （portal + `#root` inert），不门控就会把别的实例的首启弹到用户正在看的视图上；
-    未发布（undefined）读作关。代价：挂载但隐藏的壳，其首启步骤推迟到它成为活动视图。
+  - **设置壳首启阶段：活动视图门只门挂载，完成集的重置只跟 sessions 事实**
+    （2026-09-11 review-fix F1 校正分割）：官方 SettingsRoot 只按「当前会话为空或仍
+    blank」挂载首个 `settings.onboarding` 步骤；chamber 另加一道**活动视图**门
+    （`SettingsShell.tsx` 调 `onboardingStage`，两个坐标各由**自己独立的 hook 调用**
+    读取——合取写成 `useOnboardingActive(...) && useActiveView(...)` 会短路掉第二个
+    hook，是 React 拒绝的钩子序列；`onboarding-hooks.ts:useActiveView` 读 App 既有
+    发布的 active-view 事实 `chamberBridge.getActiveSource/onActiveSource`——非新通道）。
+    理由：chamber 同时挂载多个实例壳（活动视图 + 保留隐藏壳 + 面板目标壳），而首启
+    对话框是文档级的（portal + `#root` inert），不门控就会把别的实例的首启弹到用户
+    正在看的视图上；未发布（undefined）读作关。代价：挂载但隐藏的壳，其首启步骤推迟
+    到它成为活动视图。**重置不再跟这道门**：完成集清空只由 sessions 事实触发
+    （上游 `SettingsRoot` 的 reset effect 原文，`onboarding.ts:onboardingStage` 的
+    `resetsCompleted = !sessionsActive`）——早先把活动视图折进重置，于是一次普通
+    切视图就抹掉全部确认，用户刚走完（或显式推迟）的步骤在切回来时重新挂载
+    （判据：`test/onboarding.test.ts` 的重放探针）。
+    **登记残留（本轮引入的开放项）**：完成集是**组件局部**的，故壳被**重新挂载**
+    （App 回收该实例再挂起）仍从空集重跑——运行并未结束，上游会认为该步骤已确认。
+    证据：审查方探针 + `SettingsShell.tsx` 中 `completedOnboarding` 的 RESIDUAL
+    注释；收口需要一份跨挂载存活的每实例状态（新的 chamberBridge/持久化通道），
+    不在本轮范围。
   - **`sectionsEmpty` 占位保留**（`SettingsShell.tsx` 的 `t('sectionsEmpty')`，两语
     字典键齐备）：上游单 ctx 壳永远到不了「有面板无分节」，chamber 的**未发布分节
     台账**却是可达的 N 来源状态（来源自己的 settings 簇尚未落进其 boot ctx，或外部
     dsh 目标插件图部分失败）；空白列会被读成「这台服务器没有设置」而不是「它的分节
     还没到」。
   - **框架失败屏深引 `ui-primitives/src/Button.tsx`（不引包 barrel）——打包预算决策**：
-    barrel 还带 primitives 的 markdown/CodeBlock 家族，实测把约 **87 KB** 搬进**主图**
-    （`packages/renderer/src/App.tsx` T15 注释：barrel 主图 raw 1,226,775 → 1,313,736，
-    距 C6 warn 门 `packages/renderer/scripts/check-chunk-budgets.mjs` 的
-    `mainGraphRaw.warn = 1,350,000` 仅 2.7%；深引让这些家族留在 chamber 入口
-    1,986,884）。主图在 App 挂载前整体求值——正是 `chamber-entry.ts` C3 注释要把
-    ui-primitives 挡在主图外的原因。
-  - **`Switch` 的披露属性挂包装元素**：`GeneralView.tsx` 的 `DisclosureSwitch` 把
-    `aria-expanded`/`aria-controls` 挂到包住官方 `Switch` 的 `span` 上，因为该原语
-    只收 `{checked, onChange, label, disabled, title, className}` 六个 props、**没有
-    属性透传**（`vendor/harness-checkout/packages/client/ui-primitives/src/Switch.tsx`）；
-    去掉这对属性会丢掉「这一行展开下方卡片」的关系（非披露行用原语本身，不带这两
-    个属性）。收口需上游给原语加透传。
+    barrel 还带 primitives 的 markdown/CodeBlock 家族，T15 轮实测把约 **87 KB** 搬进
+    **主图**（`packages/renderer/src/App.tsx` 的 T15 注释：barrel 主图 raw
+    1,226,775 → 1,313,736，即 +86,961 B；该增量是 barrel 自身的属性，与本轮改动
+    无关）；深引让这些家族留在 chamber 入口。**本轮实测（2026-09-11 review-fix 树，
+    `pnpm run build:renderer` 写 `packages/desktop/dist/web/perf-sizes.json`，门值在
+    `packages/renderer/scripts/check-chunk-budgets.mjs`）**：主图 raw **1,228,157**
+    对 `mainGraphRaw.warn = 1,350,000`，余量 ≈9.0%；chamber 入口 raw **1,989,208**
+    对 `chamberEntryRaw.warn = 2,000,000`，余量只剩 10,936 B ≈ **0.5%**（表头 CSS
+    244,059 对 warn 300,000）。主图在 App 挂载前整体求值——正是 `chamber-entry.ts`
+    C3 注释要把 ui-primitives 挡在主图外的原因；复合入口距 warn 门不足 1% 是本轮的
+    真实余量，再加一个首屏家族即触 warn。
+  - **`Switch` 的披露属性挂原语自己的控制节点（2026-09-11 review-fix F3 修正）**：
+    披露行（通知主开关 / 会话待办区开关）需要 `aria-expanded`/`aria-controls`，而官方
+    `Switch` 只收 `{checked, onChange, label, disabled, title, className}` 六个 props、
+    **没有属性透传**（`vendor/harness-checkout/packages/client/ui-primitives/src/Switch.tsx`）。
+    这对属性**不再挂包装 `<span>`**：无 role 的 `span`（role `generic`）不支持
+    `aria-expanded`（ARIA 1.2 只列 role-bearing 交互元素），而任何支持它的包装 role
+    都是 widget、会在开关外再套一层可交互控件。改由 `GeneralView.tsx` 的
+    `DisclosureSwitch`（`:151-174`，`useLayoutEffect`）经
+    `packages/dsh-chamber-client-ui-settings-bridge/src/client/disclosure-attrs.ts` 的
+    `applyDisclosureAttributes` **命令式写到原语自己的 `[role="switch"]` 按钮上**；
+    包装 `<span>` 现在不带任何 ARIA。收口仍需上游给原语加透传（届时删掉该模块）；
+    原语根节点即 `role="switch"` 按钮这一前提由
+    `test/upstream-alignment-locks.test.ts` 的 vendor 源文本 tripwire 钉住。
   - **侧栏行没有 schedule 事实，标记靠 chamber 自己把 `projectionValues.schedule`
     带过去**：上游行类型直接带 `hasActiveSchedule`（`vendor/harness-checkout/packages/client/ui-workspace/src/client/tree.ts:161-163`
     读同一个 `projectionValues.schedule`，消费点 `rows/Rows.tsx:468`（行内）与
@@ -605,9 +648,13 @@
     为 32px / `0.5px border-l2` / r18，而 pinned vendor 的
     `session-query/session-log-export/HeaderAction.module.css` 是 28px 圆形 + `border: none`
     + r28，官方 `ui-open-in-app/OpenInAppAction.module.css` 是 28px / r14 / `border-l4`
-    分体按钮——旧句「vendor Session log pill 逐字复用」不属实（**先于本轮**）：模块头
-    注释已改为陈述事实并标注差异，但 `.button` 规则上仍留着那句旧注释（**遗留，未修**，
-    与模块头自相矛盾，无行为影响）。是否对齐到上游其中一款是设计决策，非缺陷修复。
+    分体按钮，且 vendor `ui-conversation/ConversationRoot.module.css` 的
+    `.titleRow{min-height:30px}` 就是这条 28px 控件行的高度——chamber 的 pill 因此比它
+    所在的行**高 4px**，这是既有的 chamber 设计选择，不是任何一侧的复制品。旧句
+    「vendor Session log pill 逐字复用」不属实（先于本轮）；**本轮（2026-09-11
+    review-fix）已把模块头与 `.button` 规则上那句旧注释一并改为上述实测事实**（两处
+    现在陈述同一组数字，不再自相矛盾）。是否对齐到上游其中一款仍是设计决策，非缺陷
+    修复。
 - **Electron 二进制惰性安装**（每机器共享 dist，worktree 并行共用）；**dev 实例隔离**
   （独立 user-data、控制面端口 17520 起自动退避）。
 - **内建版本行引导（2026-12 决策，方案 2）**：选中与内建同版本行且未装受管树、
@@ -623,7 +670,15 @@
   `status()` metadata health 检测无缓存；metadata 恢复期 pnpm prune 子进程不可 abort
   （退出延迟）；desktop main.ts 的 RUNTIME_RESTART 等 handler 内联无单测（renderer
   镜像 + lockstep 代证）；env×FATAL（dormant corrupt selection）预路由为 desktop 独有
-  （gateway env override 经共享核心等效处理 + 激活探针门）。
+  （gateway env override 经共享核心等效处理 + 激活探针门）。**本轮新增偏差（2026-09-11
+  review-fix F4b）**：settings-bridge 的 gateway 侧动作现有 12 分钟墙钟上限
+  （`DshRuntimeSection.tsx` 的 `REMOTE_ACTION_TIMEOUT_MS = REMOTE_STATUS_POLL_TIMEOUT_MS`
+  (11 min，`sidebar/src/shared/gateway-runtime.ts:36`) + 60s，abort 挂在动作自己的
+  controller 上，超时以 `dshRuntimeActionTimeout` 报在本段错误行），因为确认后对话框
+  在 pending 期间按设计忽略取消/Escape/遮罩/关闭；**本地腿（`restartLocal()` 经 IPC 到
+  主进程事务）仍无 abort 句柄**（`DshRuntimeSection.tsx` 的 local 分支只
+  `await surface.restart()`），故同一个对话框在本地重启卡死时仍会永久 pending——收口
+  需要给该 IPC 事务加取消通道（主进程侧的事务中止语义），未排期。
 - **apply-now 门形态取舍**：desktop `evaluateApplyNowGate` 是纯投影门、gateway
   `applyNowPreflight` 是含副作用 preflight——输入与副作用各异，整门合一将推翻逐轮
   对齐语义，**不做整门合并**（两 owner 保留各自投影/执行层）。
@@ -721,7 +776,13 @@
     （`SettingsShell.module.css .dropdownList`，注释即写 "Body-portal list"）——
     `.instance-hidden` 只隐藏视图子树，A 的模态/菜单在程序化切换后仍盖住 B（2026-09-11
     对齐后逃逸面少一个成员：chamber 自有的 `AccessibleAppMenu`（portal 到 body）已删除，
-    open-in 改用的官方 `Menu` 不传 `portal`、渲染在原位）；同族 `DropOverlay` 每壳一份
+    open-in 改用的官方 `Menu` 不传 `portal`、渲染在原位；**同批新增一个成员**
+    （2026-09-11 review-fix 补记）：未注册行的
+    移除确认从原生 `window.confirm`（窗口级模态、无法被其它视图的层压住）改为应用内官方
+    `RiskConfirmation`——即 vendor `Modal`，body-portalled 层，因此同样落进本条的
+    「切换视图后仍盖住 B」形态；缓解是 `Modal.module.css` 的固定 `inset:0`
+    遮罩+居中卡（不会跑出视口、不会只有半个屏幕变暗），但**不是**活动视图门控）；
+    同族 `DropOverlay` 每壳一份
     （N 层遮罩，隐藏壳的禁用副本可能盖住活动壳的启用副本）；⑥主题样式表每壳各插
     6 个 `<style>`（同内容、随 fiber 移除，良性重复）。①②的修法同主题：按活动来源
     门控（②可纯 chamber 侧实现），需 seed/patch 路线裁定后实施。

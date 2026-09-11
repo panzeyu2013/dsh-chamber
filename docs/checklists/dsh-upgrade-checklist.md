@@ -38,11 +38,15 @@
        （改名/重构/事件改名是否被 chamber 消费）。
 - [ ] fork 副本上游改动面：`packages/client/connection`、`packages/client/web`、
        `packages/client/api-gateway` 的版本间 diff——判断「冲突需合并」vs「干净采纳」。
-- [ ] **首屏耦合审计**：上游新增/改名的官方 client 行若被复合首屏 inject，需同步
+- [ ] **首屏耦合审计**（2026-09-11 review-fix 收窄口径）：上游新增/改名的官方 client 行
+       若被复合首屏 inject，需同步
        host-graph 额外行的降级注释；**探针集合本身是派生的**（首屏 `register(id,
-       plugin)` 记录的 `inject` 面并集，见 `upstream-touchpoints.md` §2/§3 与
+       plugin)` 记录的 `inject` 面并集，**并随每个延迟行挂载时把它自己导出的 `inject`
+       面推进同一份名单**，见 `upstream-touchpoints.md` §2/§3 与
        design 09 §3.2），无需再往清单里加名字，但新 provider 行若不在复合覆盖集内
-       要确认探针能观测到它。
+       要确认探针能观测到它；另有一种派生面本身看不见的漂移须靠测试兜底——命名空间
+       **不再导出** `inject` 时两侧同时为空、不抛错，由
+       `packages/renderer/test/required-extra-rows.test.ts` 的逐 id 表测试钉住。
 
 ## 2. 双线 pin 一致性（源码线 + 运行时线）
 

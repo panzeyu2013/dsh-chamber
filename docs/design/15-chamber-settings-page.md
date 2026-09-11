@@ -68,15 +68,25 @@
     （`--dsw-alias-border-l2` hairline）分隔。
   - **控件用官方原语（2026-09-11 upstream-alignment）**：所有动作胶囊是
     `ui-primitives` `Button`（`variant="outline|primary" size="sm"`，含「发送测试
-    通知」），所有开关是官方 `Switch`（36×20 轨道 / 圆形 thumb / 120ms /
+    通知」）；**顶层开关行**是官方 `Switch`（36×20 轨道 / 圆形 thumb / 120ms /
     `aria-checked` 选中色 / **必填 `label`**，即本行的可访问名）——手写的
     `.generalSwitchInput`/`.generalSwitch`/`.generalSwitchThumb` 三件套已删除。
-    **已知取舍（chamber 适配）**：`Switch` 不透传任意属性（只收 `className`/`title`），
-    而「通知主开关」与
-    「会话待办区开关」是**披露行**（展开下方子设置卡），原先挂在 `input` 上的
-    `aria-expanded`/`aria-controls` 因此改挂外层包装盒（`DisclosureSwitch`，
-    `GeneralView.tsx:146-161`）——披露关系不静默丢失；未读角标开关不展开任何东西，
-    直接用原语本身。
+    **不是全部勾选面都换了原语**（2026-09-11 review-fix 收窄措辞）：卡片网格与通知
+    事件行里的勾选框仍是原生 `<input type="checkbox">`（`ToggleCard` /
+    `ToggleEvent`，`GeneralView.tsx:80-133`），整行 `<label>` 即命中区。
+    **已知取舍（chamber 适配；披露属性的落点按 2026-09-11 review-fix F3 校正）**：
+    `Switch` 不透传任意属性（只收 `checked`/`onChange`/`label`/`disabled`/`title`/
+    `className` 六个 props），而「通知主开关」与「会话待办区开关」是**披露行**
+    （展开下方子设置卡），需要 `aria-expanded`/`aria-controls`。**这对属性不再挂
+    外层包装盒**：无 role 的 `<span>`（role `generic`）根本不支持 `aria-expanded`，
+    而任何支持它的包装 role 都是 widget、会在开关外再套一层可交互控件
+    （`nested-interactive`）。因此由 `DisclosureSwitch`（`GeneralView.tsx:151-174`）
+    在挂载/披露态变化时经 `src/client/disclosure-attrs.ts` 的
+    `applyDisclosureAttributes` **命令式写到官方 `Switch` 自己的 `[role="switch"]`
+    按钮上**（`useLayoutEffect`，故从不渲染出缺关系的帧；`aria-expanded` 恒写，
+    `aria-controls` 只在卡片存在时写，避免指向已不存在的 id）——包装 `<span>` 现在
+    不带任何 ARIA，披露关系不静默丢失；未读角标开关不展开任何东西，直接用原语本身。
+    收口仍需上游给原语加属性透传（届时删掉该模块）。
   - 读主进程 `chamber-settings.json`（`dsh-chamber:settings-get/set` IPC + 变更 push）。
 - 「关于」页 v1 不做。
 

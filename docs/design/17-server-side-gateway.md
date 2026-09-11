@@ -735,6 +735,34 @@ Credentials 面板（驱动 §7.4 三个端点）：两行投影
 code 映射为可读文案（「输入当前密码以变更凭据」「不能移除最后一个凭据——先配置
 替代」等）；删除 **config 管理**维度时如实提示「removed for now — 重启后重新播种」。
 
+**页面内确认对话框（2026-09-11 upstream-alignment T2 建立；2026-09-11 review-fix
+F1/F2 补齐 `aria-modal` 的承诺）**：本页的破坏性动作不走浏览器原生 `confirm`
+（OS chrome 套不上本页词汇，也不可本地化），而是页面自带的一层：
+
+- **标记**（`routes.ts:227-236`）：`#confirm-backdrop.dialog-backdrop[hidden]` 内含
+  `#confirm-dialog`（`tabindex="-1"` + `role="dialog"` + `aria-modal="true"` +
+  `aria-labelledby="confirm-title"` / `aria-describedby="confirm-description"`）=
+  标题 + 正文 + `#confirm-pending`（`role="status" aria-live="polite"`）+ 动作行
+  `#confirm-actions`（Cancel + 危险色 Confirm）。两个背景地标
+  `<header id="page-header">` / `<main id="page-main">` 带 id，专供脚本施加 `inert`。
+- **控制器**（`routes.ts:723-866`，`confirmArmed` 单飞）：`armConfirmDialog` 填充
+  文案——**全部经 `textContent` 写入**，因此任何插值都不会被当作 HTML 解析——并把
+  焦点移进对话框（Cancel，最不破坏性的控件）；`acceptConfirmDialog` 恰好启动一次
+  runner，随后对话框变成不可取消的进度面；`dismissConfirmDialog`（Cancel / Escape /
+  遮罩点击）**什么都不做**：runner 在被调用前就被丢弃，不会有请求离开页面。
+- **`inert` + Tab 陷阱覆盖整个武装期**（F1）：武装即给两个地标置 `inert`，关闭时
+  **先**解除再交还焦点（`inert` 的调用控件拿不回焦点）；Tab 陷阱在动作 pending 期间
+  **仍然生效**——此时两个控件已 disabled、对话框内无环可绕，焦点被送到对话框容器
+  自身。`aria-modal="true"` 是页面必须兑现的承诺，不是一句声明：此前的实现在确认
+  被接受当刻就把陷阱关掉，Tab 于是走到页背后（`#open-dsh`、`#refresh`、
+  `#cred-change-password` 这个自身无确认的 POST 门，以及运行时的全部控件）。
+- **`aria-busy` 挂在动作行而非对话框**（F2）：`#confirm-pending` 是对话框的后代，
+  而辅助技术可能不播报 busy 子树内的变化，把忙碌标记挂在祖先会吞掉它本该伴随的
+  那条播报。
+- **使用面 = 凭据移除的两处**（`removePassword` / `removeToken`，`routes.ts:868`/
+  `:923`）；本页其余动作（apply-now / restart / registry…）仍由各自控件直接触发，
+  没有确认对话框。
+
 ### 10.4 桌面连接卡的 gateway 主机日志
 
 gateway 自己的控制面复用 control-plane 管理面（dispatch 在 dsh 代理 fallthrough
@@ -1360,17 +1388,31 @@ gateway 单壳面加载上游产物，该形态永远不出现。
   （Vite）的命名，从不属于实例 bundle——曾用的 `[class*="_<local>_"]` infix
   形式因此在生产里命中不到任何东西（2026-09 修复）。命名翻转时 fail-soft
   回官方网格，属记录在案的例外锚点族，后缀契约见 §18.4.2。**卡片网格不再由
-  chamber 降级（2026-09-11 upstream-alignment T17b）**：上游自己就带折叠断点
-  （`PluginInventorySettingsTab.module.css` 在 `max-width: 680px` 把 `.cards`
-  收成单列），chamber 原先那条强制单列只在 681–768px 窗口里与上游自己的
-  两列几何相矛盾，已删除——上游的断点就是唯一断点。弹窗内可编辑字段套用
+  chamber 降级（2026-09-11 upstream-alignment T17b；影响面按 2026-09-11 review-fix
+  F3 校正为两张网格）**：该手机档设置分区下有**两张各由上游拥有、规则却不同**的
+  卡片网格——
+  - `ui-settings-plugin-inventory/PluginInventorySettingsTab.module.css` 自己带折叠断点
+    （`@media (max-width: 680px)` 把 `.cards` 收成单列），chamber 原先那条强制单列
+    只在该网格的 **681–768px** 窗口里与上游自己的两列几何相矛盾；
+  - `ui-agent-preset/AgentPresetSection.module.css` **完全不带断点**：`.cards` 是
+    `repeat(auto-fill, minmax(268px, 1fr))`，外层 `.section` 上限 720px，于是从约
+    **580px** 视口宽起上游就渲染两列（两张 268px 卡 + 12px gap 需要 548px 的
+    options 内宽 = 视口 − 2×(16px + safe-area)）。对这张网格，被删掉的那条强制
+    单列改的是它**整个两列区间**的布局，即手机档约 **580–768px**，而不只是
+    681–768px。
+  两条都已删除（T17b）：每张网格的几何都由上游自己拥有，chamber 不覆盖——所以
+  「上游的断点就是唯一断点」不是本条的正当理由（上游对 Agent-presets 根本没有
+  断点，靠的是 auto-fill 自身；inventory 那一条才是断点）。弹窗内可编辑字段套用
   composer 同款 16px 聚焦缩放底线；
 - **会话头部（会话页顶部标题/面包屑行）**：官方 header 为桌面宽度 chrome，
   移动面三轴冲突全部以结构化锚点覆盖（不依赖哈希类名）——
   (a) 浮动抽屉开关（左上 44px，官方 `IconPanelLeftOutline16` 字形——不再是
-  自绘 CSS 汉堡，2026-09-11 upstream-alignment T17a；ARIA 也是官方形状：一个
-  随状态切换的 `aria-label`（官方 toggle 的 `toggle.open`/`toggle.collapse` 对）
-  + `aria-expanded`，**`aria-haspopup` 已删**——它声称一个无类型的弹层，而抽屉
+  自绘 CSS 汉堡，2026-09-11 upstream-alignment T17a；**可访问名**就是官方名：
+  随状态切换的 `aria-label`（官方 toggle 的 `toggle.open`/`toggle.collapse` 对）。
+  但它的 ARIA **不是官方那份属性表**——官方控件只带那一个 label（它就在自己被折叠
+  的侧栏内部），而这个画外替身另写一个自身为真的属性：`aria-expanded`（它显隐的
+  抽屉的披露状态）；2026-09-11 review-fix F4a 校正了"ARIA 也是官方形状"这句多算的
+  一个属性。**`aria-haspopup` 已删**——它声称一个无类型的弹层，而抽屉
   就是侧栏本体被移到画外；官方在真有弹层时才写类型，如设置触发器的
   `aria-haspopup="dialog"`）与头部内容重叠 → 头部预留左 gutter
   （`[data-slot="conversation.session.header"] > header` 直接子结构，
@@ -1582,8 +1624,10 @@ PWA / Web Push 社区实现机制（dsh-ui-mobile，jasondu，npm 0.1.8，MIT，
   - 设置（手机档）：竖排 nav 变顶部横向 chips 且分类可达/可滚动、Close 固定
     不随内容滚走（粘滞行仍由两条 `data-slot` 缝锚定）、各分区（General/Models/
     Agent presets/Plugins+inventory）
-    无横向溢出且 **Models 行 2×2 降级生效**（卡片网格的折叠归上游 680px 断点，
-    chamber 不再覆盖）、**弹层不出屏且官方几何自足**（含全幅图像 lightbox 不得被
+    无横向溢出且 **Models 行 2×2 降级生效**（卡片网格的折叠由上游自己的几何
+    负责，2026-09-11 review-fix F3 校正为两张网格：inventory 网格是上游的 680px
+    断点，Agent-presets 网格无断点、由
+    `auto-fill` 自身在约 580px 以下收成一列，chamber 都不覆盖）、**弹层不出屏且官方几何自足**（含全幅图像 lightbox 不得被
     限宽裁切）、
     输入框聚焦不触发页面缩放、键盘弹出不遮输入、深浅色与横竖屏走查、**分区
     chip 切换后 options 从顶部开始（且点 nav 标题/选项区不复位）**；
