@@ -80,7 +80,12 @@ export const zh = {
   restartManagedDshBusy: '重启中…',
   restartManagedDshOk: '已重启并恢复就绪',
   restartManagedDshAccepted: '重启已接受，实例仍在恢复中…',
+  // 409 拒绝的本地化投影（managed-restart.ts 的 classifyRuntimeRefusal）：核心
+  // 路由的英文 body.error 不再逐字上屏，只保留 code 以维持可诊断性。
+  restartRefusedNotRunning: '重启被拒绝：托管 dsh 未在运行（409 {code}）——请改用「启动实例」',
+  restartRefusedBusy: '重启被拒绝：运行时正忙或正在恢复（409 {code}），请稍后重试',
   restartNotConnected: '连接后可用',
+  restartNotRunning: '托管 dsh 未在运行——请先「启动实例」',
   restartApplyInPanel: '重启生效',
   restartGatewayService: '重启网关服务',
   restartServiceTip: '重启 gateway 服务（systemd）',
@@ -313,6 +318,10 @@ export const zh = {
   deferredOfflineNote: '将缓存并在实例就绪后自动安装；可能在你断开后执行',
   profileAbsentBanner: '实例尚未初始化，将缓存安装意图，实例就绪后自动安装',
   profileCorruptBanner: '托管实例的插件清单损坏（profile_corrupt）。请在网关侧恢复或重试',
+  // design 21 §6.2 读/写面共享栅栏（2026-12 接线）：读面 409 是「实例正在变更
+  // 插件」的可重试忙态——单独成键，既不与 profile_absent/profile_corrupt 同纹，
+  // 也不与「网关不可达/500」的读取失败同纹；{code} = 服务端拒绝码（无码回落 409）。
+  gatewayReadFencedBusy: '实例正在变更插件（409 {code}），插件清单暂不可读——请稍后点「刷新」重试',
   instanceNotReadyZone: '实例未就绪——chamber 区降级显示',
   installedFromMask: '本地副本',
   installedTab: '已安装',
@@ -330,7 +339,9 @@ export const zh = {
   startManagedDsh: '启动实例',
   startManagedDshBusy: '启动中…',
   startManagedDshOk: '已启动并恢复就绪',
+  startManagedDshAccepted: '启动已接受，实例仍在恢复中…',
   startManagedDshFailed: '启动失败：{error}',
+  startManagedDshRefused: '启动被拒绝：当前状态不可启动或运行时正忙（409 {code}），请刷新后重试',
   restartNeededHint: '变更已应用，重启实例后生效',
   // UX 重构（design 21 §6.6 已登记；原 todo 落地后移出）：对账入口/事前警告/横幅指引/服务提示。
   pluginsDiffSummary: '与本地插件组合存在 {n} 处差异——展开对账',
@@ -423,7 +434,13 @@ export const en: Record<SettingsConnectionsKey, string> = {
   restartManagedDshBusy: 'Restarting…',
   restartManagedDshOk: 'Restarted and ready',
   restartManagedDshAccepted: 'Restart accepted; the instance is still recovering…',
+  // Localized projection of the runtime routes' 409 refusals (managed-restart.ts
+  // classifyRuntimeRefusal): the core's English body.error is no longer shown
+  // verbatim — the code stays visible so a report is still diagnosable.
+  restartRefusedNotRunning: 'Restart refused: the managed dsh is not running (409 {code}) \u2014 use "Start instance" instead',
+  restartRefusedBusy: 'Restart refused: the runtime is busy or recovering (409 {code}); retry shortly',
   restartNotConnected: 'Available after connecting',
+  restartNotRunning: 'The managed dsh is not running \u2014 use "Start instance" first',
   restartApplyInPanel: 'Restart to apply',
   restartGatewayService: 'Restart gateway service',
   restartServiceTip: 'Restart the gateway service (systemd)',
@@ -662,6 +679,11 @@ export const en: Record<SettingsConnectionsKey, string> = {
   deferredOfflineNote: 'Will be cached and installed once the instance is ready \u2014 may run after you disconnect.',
   profileAbsentBanner: 'The instance is not initialized yet; the install intent will be cached and applied when it becomes ready.',
   profileCorruptBanner: 'The managed profile is corrupted (profile_corrupt). Restore or retry on the gateway.',
+  // design 21 §6.2 read/write fence (2026-12 wiring): a 409 on a read is the
+  // retryable "the instance is changing plugins" busy state — its own key, so
+  // it never renders as profile_absent/profile_corrupt nor as the
+  // gateway-unreachable/500 read failure; {code} = the server's refusal code.
+  gatewayReadFencedBusy: 'The instance is changing plugins (409 {code}); the plugin list is not readable right now \u2014 press Refresh to retry in a moment',
   instanceNotReadyZone: 'Instance not ready \u2014 chamber zone degraded',
   installedFromMask: 'Local copy',
   installedTab: 'Installed',
@@ -679,7 +701,9 @@ export const en: Record<SettingsConnectionsKey, string> = {
   startManagedDsh: 'Start instance',
   startManagedDshBusy: 'Starting…',
   startManagedDshOk: 'Started and ready',
+  startManagedDshAccepted: 'Start accepted; the instance is still recovering…',
   startManagedDshFailed: 'Start failed: {error}',
+  startManagedDshRefused: 'Start refused: the current state is not startable or the runtime is busy (409 {code}); refresh and retry',
   restartNeededHint: 'Applied; restart the instance to activate',
   // UX rework (registered in design 21 §6.6; the todo entry was removed after landing): reconcile entry / pre-warning / banner guidance / service hint.
   pluginsDiffSummary: 'There are {n} differences vs the local plugin set \u2014 expand reconcile',

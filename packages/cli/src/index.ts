@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 /**
- * dsh-chamber — DSH 控制面 CLI（v4 连接管理器薄壳命令面，05 §3.2 保留面）。
+ * dsh-chamber — DSH 控制面 CLI（v4 连接管理器薄壳命令面；管理面契约见
+ * docs/design/05-connection-manager.md §7.2 REST，命令面即该保留面的消费端）。
  *
- * 全部非 serve 命令消费控制面 REST（05 §3.2 / 04 §3 保留端点）：
+ * 全部非 serve 命令消费控制面 REST（05 §7.2；端点形状见
+ * docs/design/04-control-plane-api-data.md §3）：
  * - serve: 内嵌 @dsh-chamber/control-plane（createControlPlane），SIGINT/SIGTERM 优雅退出。
  * - 认证/审计：v1 收敛整体移除——无 auth/audit 子命令，控制面无登录面。
  * - 输出：人读表格；--json 时 JSON.stringify 原样输出。
@@ -74,10 +76,34 @@ interface ConnectionRow {
 interface ConnectionsResponse {
   connection: ConnectionRow | null
 }
+/** 写者静默诊断的写者行（GET /api/connections/local/writers，04 §3.2）。 */
+interface WriterRow {
+  name?: string
+  status?: string
+  pid?: number | null
+  reason?: string
+  takeOverAvailable?: boolean
+}
+/** 写者静默诊断响应（04 §3.2）：本地实例为何起不来。 */
+interface WriterDiagnosisResponse {
+  quiescent?: boolean
+  writers?: WriterRow[]
+  errors?: string[]
+}
+/** 写者接管响应（POST /api/connections/local/reclaim，04 §3.2）。 */
+interface ReclaimResponse {
+  reclaimed?: number[]
+  connection?: ConnectionRow | null
+  spawned?: boolean
+}
+/**
+ * 滚动日志行（实现形状为准，control-plane host-logs.ts parseLogLine）：
+ * JSONL 行带 ts/stream；raw passthrough 行两者都是 null（诚实的「无元数据」）。
+ */
 interface LogLine {
-  ts: number | string
-  stream?: string
-  line?: string
+  ts: string | null
+  stream: 'stdout' | 'stderr' | null
+  line: string
 }
 interface HostLogsResult {
   lines?: LogLine[]
@@ -95,6 +121,8 @@ function usage() {
   dsh-chamber connections add --kind local [--url URL] [--json]
   dsh-chamber connections rename --label L [--accent-color C] [--url URL] [--json]
   dsh-chamber connections remove [--url URL] [--json]
+  dsh-chamber connections writers [--url URL] [--json]
+  dsh-chamber connections reclaim [--url URL] [--json]
   dsh-chamber host status [--url URL] [--json]
   dsh-chamber host logs [--limit N] [--follow] [--url URL] [--json]
 
@@ -277,9 +305,24 @@ async function connectionsAddCommand(flags: FlagMap) {
   const kind = flags.get('kind')
   if (typeof kind !== 'string' || kind === '') throw new Error('connections add 需要 --kind local')
   const url = resolveUrl(flags)
-  const data = await request<{ connection: ConnectionRow | null; spawned?: boolean }>(
-    'POST', '/api/connections', { url, body: { kind } }
-  )
+  let data: { connection: ConnectionRow | null; spawned?: boolean }
+  try {
+    data = await request<{ connection: ConnectionRow | null; spawned?: boolean }>(
+      'POST', '/api/connections', { url, body: { kind } }
+    )
+  } catch (error) {
+    const apiError = asApiError(error)
+    // 写者静默闩锁（02 §3.4 / 04 §3.2）：控制面答 409 connection_busy 并带英文
+    // 诊断串——逐字透出对使用者没有可操作性，映射为中文并指向诊断子命令
+    // （DELETE 的 409 映射先例）。其余 409 保留状态码 + code。
+    if (apiError?.status === 409 && apiError.code === 'connection_busy') {
+      throw new Error('连接创建被拒绝：本地实例被 DSH_HOME 写者记录挡住（409 connection_busy）；用 dsh-chamber connections writers 查看阻塞写者')
+    }
+    if (apiError?.status === 409) {
+      throw new Error(`连接创建被拒绝（409${apiError.code === null ? '' : ` ${apiError.code}`}），请稍后重试`)
+    }
+    throw error
+  }
   if (flags.has('json')) {
     console.log(JSON.stringify(data, null, 2))
     return
@@ -330,6 +373,80 @@ async function connectionsRemoveCommand(flags: FlagMap) {
   console.log(data?.stopped === true ? '已停止 local 连接' : '停止失败：控制面未确认停止')
 }
 
+/**
+ * GET /api/connections/local/writers（04 §3.2）：写者静默诊断——本地实例为何
+ * 起不来（阻塞写者 pid/原因/可否接管）。控制面不带托管本地宿主时答 501。
+ */
+async function connectionsWritersCommand(flags: FlagMap) {
+  const url = resolveUrl(flags)
+  let data: WriterDiagnosisResponse
+  try {
+    data = await request<WriterDiagnosisResponse>('GET', '/api/connections/local/writers', { url })
+  } catch (error) {
+    if (asApiError(error)?.status === 501) {
+      throw new Error('控制面未托管本地宿主，无写者诊断（501 not_implemented）')
+    }
+    throw error
+  }
+  if (flags.has('json')) {
+    console.log(JSON.stringify(data, null, 2))
+    return
+  }
+  console.log(data?.quiescent === true
+    ? '写者静默：是（本地实例可启动）'
+    : '写者静默：否（本地实例被写者记录阻塞）')
+  const writers = Array.isArray(data?.writers) ? data.writers : []
+  if (writers.length === 0) {
+    console.log('（无写者记录）')
+  } else {
+    printTable(
+      ['名称', '状态', 'PID', '原因', '可接管'],
+      writers.map(writer => [
+        writer?.name ?? '',
+        writer?.status ?? '',
+        writer?.pid ?? '',
+        writer?.reason ?? '',
+        writer?.takeOverAvailable === true ? '是' : '否',
+      ])
+    )
+  }
+  for (const line of Array.isArray(data?.errors) ? data.errors : []) console.log(`- ${line}`)
+}
+
+/**
+ * POST /api/connections/local/reclaim（04 §3.2）：清理本状态目录自己的陈旧/孤儿
+ * 写者记录并重启本地实例；仍有活写者时控制面答 409 connection_busy。
+ */
+async function connectionsReclaimCommand(flags: FlagMap) {
+  const url = resolveUrl(flags)
+  let data: ReclaimResponse
+  try {
+    data = await request<ReclaimResponse>('POST', '/api/connections/local/reclaim', { url })
+  } catch (error) {
+    const apiError = asApiError(error)
+    if (apiError?.status === 409 && apiError.code === 'connection_busy') {
+      throw new Error('写者仍在运行，无法接管（409 connection_busy）；用 dsh-chamber connections writers 查看阻塞写者')
+    }
+    if (apiError?.status === 501) {
+      throw new Error('控制面未托管本地宿主，无法接管（501 not_implemented）')
+    }
+    throw error
+  }
+  if (flags.has('json')) {
+    console.log(JSON.stringify(data, null, 2))
+    return
+  }
+  const reclaimed = Array.isArray(data?.reclaimed) ? data.reclaimed : []
+  console.log(reclaimed.length === 0
+    ? '接管完成：无需清理写者记录'
+    : `接管完成：已清理 ${reclaimed.length} 条写者记录（pid ${reclaimed.join(', ')}）`)
+  printKeyValue({
+    connectionId: data?.connection?.id ?? 'local',
+    status: data?.connection?.status ?? 'unknown',
+    spawned: data?.spawned ?? false,
+  })
+}
+
 /** GET /health 的 dsh 子面（宿主状态/端口/错误）。 */
 async function hostStatusCommand(flags: FlagMap) {
   const url = resolveUrl(flags)
@@ -348,10 +465,38 @@ async function hostStatusCommand(flags: FlagMap) {
 
 const LOG_FOLLOW_INTERVAL_MS = 2000
 
+/** host logs 默认条数（04 §3.3 默认 200；薄壳沿用 100 的窄默认）。 */
+const DEFAULT_LOG_LIMIT = 100
+
+/** host logs 条数上限：control-plane host-logs.ts MAX_LIMIT。控制面对超限是
+ *  clamp（静默截断到 1000）而非报错，所以上限门必须在薄壳里——超限直接拒绝，
+ *  绝不让使用者以为拿到了完整日志。 */
+const MAX_LOG_LIMIT = 1000
+
+/** 缺失/无法解析字段的占位（与 stream 既有的 '?' 同族）。 */
+const LOG_FIELD_PLACEHOLDER = '?'
+
+/**
+ * 日志行时间戳 → ISO 文本。实现形状是 `ts: string | null`（raw passthrough
+ * 行为 null），任何非空字符串都可能不是可解析时间：解析不出来一律打占位——
+ * `new Date(null).toISOString()` 会编造 1970，`new Date(<非 ISO>).toISOString()`
+ * 抛 RangeError 直接杀掉 --follow，两者都不可接受。
+ */
+function formatLogTimestamp(ts: unknown): string {
+  if (typeof ts === 'string' && ts !== '') {
+    const parsed = new Date(ts)
+    if (!Number.isNaN(parsed.getTime())) return parsed.toISOString()
+  }
+  return LOG_FIELD_PLACEHOLDER
+}
+
 /** GET /api/host/logs（{lines:[{ts,stream,line}]}）；--follow 每 2s 轮询追加。 */
 async function hostLogsCommand(flags: FlagMap) {
-  const limit = flags.has('limit') ? Number(flags.get('limit')) : 100
+  const limit = flags.has('limit') ? Number(flags.get('limit')) : DEFAULT_LOG_LIMIT
   if (!Number.isInteger(limit) || limit < 1) throw new Error('host logs --limit 需要正整数')
+  if (limit > MAX_LOG_LIMIT) {
+    throw new Error(`host logs --limit 超出上限（最大 ${MAX_LOG_LIMIT}，收到 ${limit}）：控制面会把超限请求静默截断到 ${MAX_LOG_LIMIT} 行`)
+  }
   const url = resolveUrl(flags)
   const json = flags.has('json')
   async function fetchLogs(): Promise<HostLogsResult> {
@@ -367,7 +512,7 @@ async function hostLogsCommand(flags: FlagMap) {
       if (json) {
         console.log(JSON.stringify(entry))
       } else {
-        console.log(`[${new Date(entry?.ts).toISOString()}] [${entry?.stream ?? '?'}] ${entry?.line ?? ''}`)
+        console.log(`[${formatLogTimestamp(entry?.ts)}] [${entry?.stream ?? LOG_FIELD_PLACEHOLDER}] ${entry?.line ?? ''}`)
       }
     }
   }
@@ -407,7 +552,9 @@ async function main(argv: string[]) {
     if (positionals[0] === 'add') return connectionsAddCommand(flags)
     if (positionals[0] === 'rename') return connectionsRenameCommand(flags)
     if (positionals[0] === 'remove') return connectionsRemoveCommand(flags)
-    throw new Error('用法: dsh-chamber connections list | connections add --kind local | connections rename --label L | connections remove')
+    if (positionals[0] === 'writers') return connectionsWritersCommand(flags)
+    if (positionals[0] === 'reclaim') return connectionsReclaimCommand(flags)
+    throw new Error('用法: dsh-chamber connections list | connections add --kind local | connections rename --label L | connections remove | connections writers | connections reclaim')
   }
   if (command === 'host') {
     const { flags, positionals } = parseArgs(rest)

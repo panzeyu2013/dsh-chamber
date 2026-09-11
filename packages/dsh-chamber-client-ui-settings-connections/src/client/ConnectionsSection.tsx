@@ -49,7 +49,13 @@ import type { SettingsConnectionsKey } from '../locales.ts'
 import type { LocalWriterDiagnosisWire } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
 import { writerNotice, writerReasonKey } from './writer-diagnosis.ts'
 import { cp, type ConnectionSummary, type HealthResponse, type HostLogsResponse } from './control-plane.ts'
-import { classifyRestartError, serverRefusalText } from './managed-restart.ts'
+import {
+  applyRuntimeProbe,
+  classifyRestartError,
+  runtimeBlocksRestart,
+  runtimeRefusalText,
+  type RuntimeRefusalKey,
+} from './managed-restart.ts'
 import { PluginDialog, type PluginDialogTarget } from './PluginDialog.tsx'
 import { PluginDiagnosticLine } from './plugin-diagnostic.tsx'
 import type { PluginDiagnostic } from './plugin-diagnostic.ts'
@@ -119,6 +125,18 @@ const GATEWAY_RUNTIME_PROBE_INTERVAL_MS = 20_000
  *  §6.8 r1 / decision 12 — the /chamber/runtime/start route's own gate,
  *  runtime-routes.ts). */
 const STARTABLE_RUNTIME_STATES = new Set(['stopped', 'error', 'restart-exhausted'])
+
+/** 409 拒绝的本地化键（managed-restart.ts 的 kind → 键）：重启区分「托管 dsh
+ *  未在运行」（可行动作是启动）与「忙碌/恢复中」；启动只有一族（当前状态不可
+ *  启动或运行时正忙）。 */
+const RESTART_REFUSAL_KEYS: { notRunning: RuntimeRefusalKey; busy: RuntimeRefusalKey } = {
+  notRunning: 'restartRefusedNotRunning',
+  busy: 'restartRefusedBusy',
+}
+const START_REFUSAL_KEYS: { notRunning: RuntimeRefusalKey; busy: RuntimeRefusalKey } = {
+  notRunning: 'startManagedDshRefused',
+  busy: 'startManagedDshRefused',
+}
 
 /** 每卡受控重启/启动的结果行（design 21 §5.1/§6.8）：tone 'error' 以
  *  css.error + role="alert" 渲染（opError 同款红字），'ok' 以 css.hint +
@@ -639,12 +657,14 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
 
   /**
    * 受控重启 gateway 托管的 dsh（design 21 §5.1）：POST
-   * /api/i/gateway-<id>/chamber/runtime/restart —— 仅 202 接受；409/400 拒绝
-   * 逐字投影 body.error（serverRefusalText）。202 后按 shared pollGatewayReady
-   * 语义轮询 /chamber/runtime/status（1s/120s；restart failed / 终态 / 401/403/
-   * 404 快失败；超时诚实投影）。结果落在该卡独立结果行（restartNotes：
-   * tone 分流渲染，error = 红字 alert、ok = 灰字 status），
-   * 成功顺带刷新卡片状态投影。桌面零改动：写走既有反代（auth 主进程注入）。
+   * /api/i/gateway-<id>/chamber/runtime/restart —— 仅 202 接受。409 拒绝按
+   * managed-restart.ts 判定映射为本地化文案（未在运行 → 指向「启动实例」；
+   * 其余 = 忙碌/恢复中），非 409 维持 serverRefusalText 的逐字投影。202 后按
+   * shared pollGatewayReady 语义轮询 /chamber/runtime/status（1s/120s；
+   * restart failed / 终态 / 401/403/404 快失败；超时诚实投影）。结果落在该卡
+   * 独立结果行（restartNotes：tone 分流渲染，error = 红字 alert、ok = 灰字
+   * status），成功顺带刷新卡片状态投影。桌面零改动：写走既有反代（auth 主进程
+   * 注入）。
    */
   const restartManagedDsh = useCallback(async (spec: SshInstanceSpec): Promise<void> => {
     // 每卡独立单飞：同卡重复确认被门挡住；他卡在飞不受影响。
@@ -671,11 +691,11 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
       if (response.status !== 202) {
         let body: unknown = null
         try { body = await response.json() } catch { body = null }
-        note({ tone: 'error', text: serverRefusalText(body, response.status) })
+        note({ tone: 'error', text: runtimeRefusalText(body, response.status, RESTART_REFUSAL_KEYS, t) })
         return
       }
       try {
-        await pollGatewayReady(id, controller.signal)
+        await pollGatewayReady(id, controller.signal, { action: 'restart' })
         note({ tone: 'ok', text: t('restartManagedDshOk') })
         // 成功/失败刷新卡片状态投影（design 21 §5.1）：registry 不变，只重读
         // 各实例 phase/service 激活态。
@@ -706,34 +726,40 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
 
   /**
    * 托管 dsh runtime 探针（design 21 §6.8 r1）：GET /api/i/gateway-<id>/
-   *  chamber/runtime/status —— 只投影 connectionState（启动动作的门控输入）。
+   *  chamber/runtime/status —— 只投影 connectionState（重启/启动动作的门控输入）。
    *  /chamber 管理面挂宿主、非 ready-gated：托管 dsh 停机时宿主仍答 200，
    *  所以隧道 'ready' 与 runtime 'stopped' 可以并存，二者都必须诚实呈现。
-   *  失败/非 200 = 状态未知 —— 不写条目（启动按钮随之不渲染）；200 只更新
-   *  change 的卡（同值不重写，避免无谓渲染）。
+   *  探针失败（非 200 / 缺字段 / 传输错误）= 状态不可知：**删除该来源的运行期
+   *  条目**（applyRuntimeProbe(…, null)），旧值一律作废——保留陈旧 'stopped'
+   *  会让「启动实例」常驻而每次点击注定 409。fail-open 语义不变：缺条目 ≠ 停机，
+   *  探针缺失绝不隐藏健康来源（重启门只在确有终态答案时才禁用），只是「启动
+   *  实例」不再凭空出现（它要求确证的可启动态）。200 且值未变时不重写条目
+   *  （避免无谓渲染）。
    */
   const probeGatewayRuntime = useCallback(async (specId: string): Promise<void> => {
     let connectionState: string | null = null
     try {
       const response = await fetch(`/api/i/gateway-${specId}/chamber/runtime/status`)
-      if (response.status !== 200) return
-      const payload = await response.json() as { connectionState?: unknown } | null
-      connectionState = typeof payload?.connectionState === 'string' ? payload.connectionState : null
+      if (response.status === 200) {
+        const payload = await response.json() as { connectionState?: unknown } | null
+        connectionState = typeof payload?.connectionState === 'string' ? payload.connectionState : null
+      }
     } catch {
-      return
+      connectionState = null
     }
-    if (connectionState === null) return
-    setRuntimeConnectionById(prev => prev[specId] === connectionState ? prev : { ...prev, [specId]: connectionState })
+    setRuntimeConnectionById(prev => applyRuntimeProbe(prev, specId, connectionState))
   }, [])
 
   /** 「启动实例」（design 21 §6.8 r1 / decision 12, start 原语）：POST
-   *  /api/i/gateway-<id>/chamber/runtime/start —— 与 restart 同一 202 +
-   *  pollGatewayReady 语义（仅 stopped/error/restart-exhausted 可启动，
-   *  其余 409 body.error 逐字经 serverRefusalText；202 后共享轮询按
-   *  connectionState 收敛，start:'failed'/终态快失败、超时诚实投影）。
-   *  每卡独立单飞（startBusyIds）+ 与重启互斥；结果落 restartNotes 槽位
-   *  （同一张卡同一时刻只允许一个 runtime 动作在飞）。成功刷新卡片投影并
-   *  立即重探 runtime（按钮随 connectionState 收敛而消失）。
+   *  /api/i/gateway-<id>/chamber/runtime/start —— 与 restart 同一 202 + 轮询
+   *  语义，但轮询按 start 动作（{action:'start'}，读契约的 start 结果字段，见
+   *  gateway-runtime-poll.ts；停机态不会像 restart 那样被当作终态失败，因为启动
+   *  正是从 stopped 开始的）。仅 stopped/error/restart-exhausted 可启动，其余
+   *  409 按 classifyRuntimeRefusal 映射为本地化文案；start:'failed'/终态快失败、
+   *  超时 = 已接受仍在恢复（本地化，ok 语气）。每卡独立单飞（startBusyIds）+
+   *  与重启互斥；结果落 restartNotes 槽位（同一张卡同一时刻只允许一个 runtime
+   *  动作在飞）。成功刷新卡片投影并立即重探 runtime（按钮随 connectionState
+   *  收敛而消失）。
    */
   const startManagedDsh = useCallback(async (spec: SshInstanceSpec): Promise<void> => {
     if (startBusyIds[spec.id] === true) return
@@ -759,24 +785,24 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
       if (response.status !== 202) {
         let body: unknown = null
         try { body = await response.json() } catch { body = null }
-        note({ tone: 'error', text: serverRefusalText(body, response.status) })
+        note({ tone: 'error', text: runtimeRefusalText(body, response.status, START_REFUSAL_KEYS, t) })
         return
       }
       try {
-        await pollGatewayReady(id, controller.signal)
+        await pollGatewayReady(id, controller.signal, { action: 'start' })
         note({ tone: 'ok', text: t('startManagedDshOk') })
         void loadRemote()
         void probeGatewayRuntime(spec.id)
       } catch (err) {
         if (controller.signal.aborted) return
         const cls = classifyRestartError(err)
-        // accepted-timeout = 启动已接受、仍在恢复：轮询的英文超时串原样透出
-        // （error 语气；无 start 专用 zh 超时键；restartManagedDshAccepted 的
-        // 「重启」措辞对启动不准确，未借用 —— 未本地化文案登记接受，design 21
-        // §5.2）；其余 = 启动失败 + 逐字 detail（error 语气）。
-        note({ tone: 'error', text: cls.kind === 'accepted-timeout'
-          ? errorMessage(err)
-          : t('startManagedDshFailed').replace('{error}', cls.detail) })
+        // accepted-timeout = 启动已接受、仍在恢复（超时串已按 start 措辞，标记
+        // 与 restart 共用）→ 本地化说明，ok 语气：动作已被接受，仅提示仍在
+        // 恢复；其余 = 启动失败 + 轮询的 'start failed: …' detail（error 语气；
+        // 轮询侧的英文 detail 未本地化，design 21 §5.2 已登记）。
+        note(cls.kind === 'accepted-timeout'
+          ? { tone: 'ok', text: t('startManagedDshAccepted') }
+          : { tone: 'error', text: t('startManagedDshFailed').replace('{error}', cls.detail) })
       }
     } finally {
       setStartBusyIds(prev => {
@@ -1536,6 +1562,12 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                 const runtimeConnectionState = runtimeConnectionById[spec.id]
                 const runtimeStartable = runtimeConnectionState !== undefined
                   && STARTABLE_RUNTIME_STATES.has(runtimeConnectionState)
+                // 重启门（design 21 §6.3 / runtime-routes.ts /restart）：核心路由
+                // 只接受 ready/degraded，探针已给出其它终态时点击必然 409（停机态
+                // 的恢复面是「启动实例」）——按钮提前禁用，而不是放行一次注定被拒
+                // 的请求再把英文 body.error 抛给使用者。探针无答案（未探/已清条目）
+                // 不禁用：缺探针不得隐藏健康来源。
+                const restartBlocked = runtimeBlocksRestart(runtimeConnectionState)
                 const startBusy = startBusyIds[spec.id] === true
                 const serviceActive = status?.serviceActive
                 // systemd control rides the ssh transport (dsh or gateway
@@ -1639,10 +1671,16 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                           size="sm"
                           className={css.restartTip}
                           // D8（plan 24）：删除 data-tip（restartManagedDshTip
-                          // 用法移除）；aria-label 保留——busy/未连接时携带
-                          // 禁用原因，常态回退可见标签（restartManagedDsh）。
-                          aria-label={restartingIds[spec.id] === true ? t('restartManagedDshBusy') : !connected ? t('restartNotConnected') : t('restartManagedDsh')}
-                          disabled={specBusy || !connected || restartingIds[spec.id] === true || startBusyIds[spec.id] === true}
+                          // 用法移除）；aria-label 保留——busy/未连接/未运行时
+                          // 携带禁用原因，常态回退可见标签（restartManagedDsh）。
+                          aria-label={restartingIds[spec.id] === true
+                            ? t('restartManagedDshBusy')
+                            : !connected
+                              ? t('restartNotConnected')
+                              : restartBlocked
+                                ? t('restartNotRunning')
+                                : t('restartManagedDsh')}
+                          disabled={specBusy || !connected || restartBlocked || restartingIds[spec.id] === true || startBusyIds[spec.id] === true}
                           onClick={() => { setRestartConfirmFor(spec) }}
                         >
                           {restartingIds[spec.id] === true ? t('restartManagedDshBusy') : t('restartManagedDsh')}

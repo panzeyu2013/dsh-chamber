@@ -19,6 +19,7 @@ import {
   ARCHIVE_CLEANUP_PACKAGE,
   GIT_WORKTREE_PACKAGE,
   HOST_GRAPH_PACKAGE,
+  MOBILE_PACKAGE,
   chamberSeedDrift,
   type ChamberSeedDriftState,
 } from '../src/client/plugin-inventory-text.ts'
@@ -190,4 +191,18 @@ test('chamber package names mirror the control-plane registry (lockstep guard)',
   assert.equal(HOST_GRAPH_PACKAGE, '@dsh-chamber/dsh-chamber-seed-client-graph')
   assert.equal(GIT_WORKTREE_PACKAGE, '@dsh-chamber/dsh-chamber-seed-git-worktree')
   assert.equal(ARCHIVE_CLEANUP_PACKAGE, '@dsh-chamber/dsh-chamber-seed-archive-cleanup')
+})
+
+test('MOBILE_PACKAGE mirrors the packaged mobile client manifest name (lockstep guard)', () => {
+  // The mobile row is the single packaged CLIENT exception (design 21 §6.2):
+  // unlike the three host packages above there is no Node-side registry to
+  // compare against — its authority is the package manifest itself, which the
+  // gateway seeds and reports in its plugin inventory. The client constant is
+  // hand-mirrored, so a rename of the manifest (or of the constant) must fail
+  // here instead of silently turning the mobile row into a third-party row.
+  const manifest = JSON.parse(
+    readFileSync(join(import.meta.dirname, '../../dsh-chamber-client-ui-mobile/package.json'), 'utf8'),
+  ) as { name?: unknown }
+  assert.equal(manifest.name, MOBILE_PACKAGE,
+    'the packaged mobile manifest name and the client constant must stay in lockstep')
 })

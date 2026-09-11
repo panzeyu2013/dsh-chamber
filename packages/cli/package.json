@@ -7,7 +7,7 @@
     "dsh-chamber": "./src/index.ts"
   },
   "scripts": {
-    "test": "node test/follow-filter.test.ts"
+    "test": "node test/follow-filter.test.ts && node test/cli-contract.test.ts"
   },
   "license": "MIT",
   "dependencies": {

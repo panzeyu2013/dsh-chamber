@@ -13,7 +13,10 @@ import {
   gatewayPluginApply,
   gatewayPluginSync,
   gatewayTasks,
+  type GatewayInstalledProjection,
 } from '../src/client/control-plane.ts'
+import { gatewayReadFenceText, type GatewayReadFenceKey } from '../src/client/managed-restart.ts'
+import { en, zh } from '../src/locales.ts'
 
 /** Define the page origin the shared client reads (controlPlaneUrl prefers
  *  window.location.origin; the browser shell is served by the control plane). */
@@ -38,6 +41,26 @@ function stubFetch(status: number, body: unknown): { calls: FetchCall[]; restore
     calls.push({ url: String(input), init: init ?? {} })
     return Promise.resolve(new Response(typeof body === 'string' ? body : JSON.stringify(body), {
       status,
+      headers: { 'content-type': 'application/json' },
+    }))
+  }) as typeof fetch
+  return {
+    calls,
+    restore(): void { globalThis.fetch = original },
+  }
+}
+
+/** A stub that consumes its answers in order and repeats the LAST one for any
+ *  further call — the read fence's retry needs a 409 → 200 sequence, and the
+ *  repeat makes the retry BUDGET observable (calls.length stays finite). */
+function stubFetchSequence(answers: Array<{ status: number; body: unknown }>): { calls: FetchCall[]; restore(): void } {
+  const calls: FetchCall[] = []
+  const original = globalThis.fetch
+  globalThis.fetch = ((input: unknown, init?: RequestInit) => {
+    const answer = answers[Math.min(calls.length, answers.length - 1)]!
+    calls.push({ url: String(input), init: init ?? {} })
+    return Promise.resolve(new Response(JSON.stringify(answer.body), {
+      status: answer.status,
       headers: { 'content-type': 'application/json' },
     }))
   }) as typeof fetch
@@ -179,12 +202,14 @@ test('gatewayInstalled: 404 profile_absent and 500 profile_corrupt map to codes'
   const absent = stubFetch(404, { error: 'managed profile is not initialized', code: 'profile_absent' })
   try {
     assert.deepEqual(await gatewayInstalled('gw-prod'), { ok: false, code: 'profile_absent' })
+    assert.equal(absent.calls.length, 1, 'a mapped profile code is final — never retried')
   } finally {
     absent.restore()
   }
   const corrupt = stubFetch(500, { error: 'managed profile is corrupted', code: 'profile_corrupt' })
   try {
     assert.deepEqual(await gatewayInstalled('gw-prod'), { ok: false, code: 'profile_corrupt' })
+    assert.equal(corrupt.calls.length, 1, 'a corrupt profile is final — never retried')
   } finally {
     corrupt.restore()
     restoreOrigin()
@@ -199,6 +224,120 @@ test('gatewayInstalled: any other refusal (503 …) rethrows the ApiError, never
       assert.equal((err as { status?: number }).status, 503)
       return true
     })
+    assert.equal(stub.calls.length, 1, 'only the fence 409 retries — a 503 stays a loud read failure')
+  } finally {
+    stub.restore()
+    restoreOrigin()
+  }
+})
+
+/* ---- design 21 §6.2 读/写面共享栅栏 (2026-12 接线) ----------------------------
+ * The gateway withholds `GET /chamber/plugins/installed` with 409
+ * `runtime_busy` while a plugin mutation holds the managed-profile write lease.
+ * Before this wiring the client mapped only 404/500, so that 409 surfaced as a
+ * generic read failure ("请求失败 409 …") AND was never retried. The tests below
+ * pin both halves: a transient fence still yields the real projection with NO
+ * error path (the promise resolves → the dialog's .catch never runs → no error
+ * prompt), and a persistent fence yields the typed busy arm whose copy comes
+ * from the DEDICATED dictionary key — never a profile/read-error key. ---- */
+
+/** The fence refusal exactly as routes.ts answers it. */
+const fenceBody = {
+  error: 'managed profile write in flight (plugin mutation); the installed projection is fenced — retry after the task settles',
+  code: 'runtime_busy',
+}
+
+/** The fence locale key + its projection (the dialog's call shape). */
+const FENCE_KEY: GatewayReadFenceKey = 'gatewayReadFencedBusy'
+
+/** The read fence's arm, narrowed for the field access below (node:assert's
+ *  equal carries no asserts-signature, so the narrowing needs its own step). */
+type FenceArm = Extract<GatewayInstalledProjection, { ok: false; code: 'runtime_busy' }>
+
+function assertFenceArm(result: GatewayInstalledProjection): asserts result is FenceArm {
+  assert.equal(result.ok, false, 'a fenced read is never an ok shape')
+  assert.equal(result.code, 'runtime_busy')
+}
+
+test('gatewayInstalled: a fenced 409 then 200 lands the real projection, with no error path', async () => {
+  const restoreOrigin = withPageOrigin('http://127.0.0.1:17500')
+  const stub = stubFetchSequence([{ status: 409, body: fenceBody }, { status: 200, body: installedOkBody }])
+  try {
+    const result = await gatewayInstalled('gw-prod')
+    // Resolving (not rejecting) is exactly "no error prompt": the dialog's
+    // .catch — the only writer of installedError — never runs, and the ok arm
+    // renders the list.
+    assert.deepEqual(result, installedOkBody)
+    assert.equal('code' in result, false)
+    assert.equal(stub.calls.length, 2, 'exactly one bounded re-read — never an open-ended poll')
+    assert.deepEqual(stub.calls.map(call => call.url), [
+      'http://127.0.0.1:17500/api/i/gateway-gw-prod/chamber/plugins/installed',
+      'http://127.0.0.1:17500/api/i/gateway-gw-prod/chamber/plugins/installed',
+    ])
+  } finally {
+    stub.restore()
+    restoreOrigin()
+  }
+})
+
+test('gatewayInstalled: a persistent fence yields the busy arm + the DEDICATED key (never a read-error key)', async () => {
+  const restoreOrigin = withPageOrigin('http://127.0.0.1:17500')
+  const stub = stubFetchSequence([{ status: 409, body: fenceBody }])
+  try {
+    const result = await gatewayInstalled('gw-prod')
+    assert.deepEqual(result, { ok: false, code: 'runtime_busy', refusalCode: 'runtime_busy' })
+    assert.equal(stub.calls.length, 2, 'the retry budget is bounded: no request storm behind the dialog')
+    // The busy arm is neither a profile code nor an ok shape.
+    assertFenceArm(result)
+
+    // The copy is the fence KEY (asserted through the dictionary, not through a
+    // hardcoded English string) with the server code interpolated…
+    const text = gatewayReadFenceText(result.refusalCode, 409, FENCE_KEY, key => zh[key])
+    assert.equal(text, zh.gatewayReadFencedBusy.replace('{code}', 'runtime_busy'))
+    assert.match(text, /实例正在变更插件/u)
+    // …and NOTHING else: not the profile banners, not the raw ApiError text a
+    // read failure renders ("请求失败 409 /api/i/… （runtime_busy）：…").
+    assert.notEqual(text, zh.profileAbsentBanner)
+    assert.notEqual(text, zh.profileCorruptBanner)
+    assert.equal(/profile_absent|profile_corrupt/u.test(text), false)
+    assert.equal(/请求失败|HTTP/u.test(text), false)
+    // zh + en stay in sync (en is Record<SettingsConnectionsKey,string>, so a
+    // missing key already fails typecheck; this pins the {code} placeholder).
+    assert.match(en.gatewayReadFencedBusy, /\{code\}/u)
+    assert.notEqual(en.gatewayReadFencedBusy, zh.gatewayReadFencedBusy)
+  } finally {
+    stub.restore()
+    restoreOrigin()
+  }
+})
+
+test('gatewayInstalled: a body-less fenced 409 still yields the busy arm (status stands in for the code)', async () => {
+  const restoreOrigin = withPageOrigin('http://127.0.0.1:17500')
+  const stub = stubFetchSequence([{ status: 409, body: {} }])
+  try {
+    const result = await gatewayInstalled('gw-prod')
+    assert.deepEqual(result, { ok: false, code: 'runtime_busy', refusalCode: null })
+    assertFenceArm(result)
+    assert.equal(
+      gatewayReadFenceText(result.refusalCode, 409, FENCE_KEY, key => zh[key]),
+      zh.gatewayReadFencedBusy.replace('{code}', '409'),
+      'a codeless refusal renders the status — never a blank {code}',
+    )
+  } finally {
+    stub.restore()
+    restoreOrigin()
+  }
+})
+
+test('gatewayInstalled: an aborted read stays single-shot (an unmounted dialog fires no retry)', async () => {
+  const restoreOrigin = withPageOrigin('http://127.0.0.1:17500')
+  const controller = new AbortController()
+  controller.abort()
+  const stub = stubFetchSequence([{ status: 409, body: fenceBody }])
+  try {
+    const result = await gatewayInstalled('gw-prod', { signal: controller.signal })
+    assert.deepEqual(result, { ok: false, code: 'runtime_busy', refusalCode: 'runtime_busy' })
+    assert.equal(stub.calls.length, 1, 'the retry loop is aborted with the read that asked for it')
   } finally {
     stub.restore()
     restoreOrigin()
