@@ -196,7 +196,10 @@ var MOBILE_CSS = `
      display: none outside this tier kills the desktop ghost button \u2014 the
      official overlay layer renders entries unconditionally. Visual language
      follows the official icon buttons: transparent base, hover/active
-     fills from the alias tokens, focus ring in the business-primary color. */
+     fills from the alias tokens, focus ring in the business-primary color,
+     and the glyph in the official rail ink \u2014 the control IS the official
+     panel toggle glyph at the touch size (2026-09-11 upstream-alignment
+     T17a; the plugin draws no control of its own). */
   .dsh-mobile-nav-toggle {
     position: fixed;
     top: max(10px, env(safe-area-inset-top, 0px));
@@ -211,6 +214,7 @@ var MOBILE_CSS = `
     border: none;
     border-radius: 12px;
     background: transparent;
+    color: var(--dsw-alias-label-primary);
     cursor: pointer;
     touch-action: manipulation;
     -webkit-appearance: none;
@@ -226,24 +230,6 @@ var MOBILE_CSS = `
     outline: none;
     box-shadow: 0 0 0 2px var(--dsw-alias-state-business-primary);
   }
-  .dsh-mobile-nav-toggle-bars,
-  .dsh-mobile-nav-toggle-bars::before,
-  .dsh-mobile-nav-toggle-bars::after {
-    display: block;
-    width: 20px;
-    height: 2px;
-    border-radius: 2px;
-    background: var(--dsw-alias-label-primary);
-  }
-  .dsh-mobile-nav-toggle-bars { position: relative; }
-  .dsh-mobile-nav-toggle-bars::before,
-  .dsh-mobile-nav-toggle-bars::after {
-    content: '';
-    position: absolute;
-    left: 0;
-  }
-  .dsh-mobile-nav-toggle-bars::before { top: -6px; }
-  .dsh-mobile-nav-toggle-bars::after { top: 6px; }
   [data-mobile-frame]:not([data-sidebar-collapsed]) .dsh-mobile-nav-toggle {
     display: none;
   }
@@ -446,7 +432,17 @@ var MOBILE_CSS = `
     overflow-y: auto;
     overscroll-behavior: contain;
   }
-  [role="dialog"][aria-modal="true"]:has([data-slot="settings.header"]) > div:last-child > div:first-child {
+  /* Header row (actions + Close), anchored on the documented seams
+     [data-slot="settings.action"] + [data-slot="settings.close"] instead of
+     a positional div:first-child (2026-09-11 upstream-alignment T17c). Both
+     outlet wrappers are unconditional on their call sites, and the ROW is
+     the only element carrying both: the official shape is content > header >
+     (actions > action-outlet, close-button > close-outlet), so the actions
+     cell holds the action seam ALONE and the options cell holds only
+     [data-slot="settings.section"]. Descendant :has() keeps the anchor
+     insensitive to an extra wrapper level \u2014 the row stays sticky if upstream
+     nests either cell deeper, and the options cell can never match. */
+  [role="dialog"][aria-modal="true"]:has([data-slot="settings.header"]) > div:last-child > div:has([data-slot="settings.action"]):has([data-slot="settings.close"]) {
     flex: none;
     position: sticky;
     top: 0;
@@ -461,32 +457,22 @@ var MOBILE_CSS = `
     padding-bottom: calc(16px + env(safe-area-inset-bottom));
     padding-left: calc(16px + env(safe-area-inset-left));
   }
-  /* Section inner grids that assume desktop width. Official inner cells
+  /* Section inner grid that assumes desktop width. Official inner cells
      carry no stable attribute, so the local-name SUFFIX match
      (:is([class$="_<local>"], [class*="_<local> "]), production naming
      [hash]_[local]) is the documented exception; a naming flip fails SOFT \u2014
-     the official grid stays).
+     the official grid stays.
      - Models provider row (two text inputs + chevron + trash on one
        4-column line) \u2192 TWO equal columns: the four children auto-place
        2\xD72 (inputs on the first row, the two icon actions under them).
-     - ".cards" two-column grids \u2192 single column. Only ONE settings
-       section is mounted at a time under [data-slot="settings.section"],
-       so this reaches whichever page is open: the Plugins inventory
-       (repeat(2, \u2026) card grid) and, when the agent-presets section is
-       active, its auto-fill .cards (already single-column at phone
-       widths by auto-fit; forcing one column only changes 590-768px,
-       where two ~268px cards would otherwise fit). */
+     The card grids are NOT overridden: upstream owns their collapse
+     breakpoint itself \u2014 PluginInventorySettingsTab.module.css collapses
+     .cards to one column at max-width: 680px \u2014 so the chamber's former
+     681-768px one-card-per-row arm contradicted upstream's own
+     two-per-row geometry above 680px and was deleted (2026-09-11
+     upstream-alignment T17b). The upstream breakpoint is the only one. */
   [data-slot="settings.section"] :is([class$="_modelRow"], [class*="_modelRow "]) {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  }
-  [data-slot="settings.section"] :is([class$="_cards"], [class*="_cards "]) {
-    grid-template-columns: minmax(0, 1fr) !important;
-  }
-  /* Other aria-modal dialogs (onboarding steps, pickers) keep their own
-     chrome but must never touch the screen edges. The settings sheet above
-     is excluded (it owns the full screen). */
-  [role="dialog"][aria-modal="true"]:not(:has([data-slot="settings.header"])) {
-    max-width: calc(100vw - 24px) !important;
   }
   /* iOS focus zoom: any editable field below 16px triggers the automatic
      page zoom on focus. The composer already carries its own rule; the
@@ -497,6 +483,17 @@ var MOBILE_CSS = `
   [role="dialog"] textarea {
     font-size: max(16px, var(--dsh-content-font-size, 16px)) !important;
   }
+  /* No dialog-width rule of this plugin's own, deliberately: dialogs other
+     than the settings sheet are NOT capped (2026-09-11 upstream-alignment
+     T6). The tree has exactly three role="dialog" aria-modal="true"
+     producers, and each owns its viewport fit: the settings panel above
+     (this sheet), the ui-primitives Modal (Modal.module.css pins its Root to
+     inset 0 with a 24px padding and caps the Dialog at min(380px, 100%)),
+     and the ui-attachment ImageLightbox (a fixed full-bleed backdrop at
+     inset 0 whose mask is an absolute inset-0 layer). A blanket max-width is
+     over-constrained against inset: 0: the lightbox backdrop would shrink to
+     100vw-24px, left-anchored, leaving a 24px undimmed click-through strip
+     on the right. The official geometries are the fit. */
 
   /* Composer seat: respect the home-indicator inset. The official seat is
      sticky inside the scroll body; the padding keeps the input above the
@@ -1165,6 +1162,7 @@ function installSettingsSheetScrollReset(active) {
 
 // src/client/MobileNavToggle.tsx
 var import_react = require("react");
+var import_dsh_client_ui_primitives = require("@deepseek-ai/dsh-client-ui-primitives");
 var import_jsx_runtime = require("react/jsx-runtime");
 function findFrame3(root) {
   for (const child of root.children) {
@@ -1193,9 +1191,8 @@ function MobileNavToggle({ toggleSidebar, t }) {
         className: "dsh-mobile-nav-toggle",
         "aria-label": open ? t("dsh-chamber.mobile.drawer.close") : t("dsh-chamber.mobile.drawer.open"),
         "aria-expanded": open,
-        "aria-haspopup": "true",
         onClick: () => toggleSidebar(),
-        children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-mobile-nav-toggle-bars", "aria-hidden": "true" })
+        children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_dsh_client_ui_primitives.IconPanelLeftOutline16, { size: 18 })
       }
     ),
     /* @__PURE__ */ (0, import_jsx_runtime.jsx)(

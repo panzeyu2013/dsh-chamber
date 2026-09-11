@@ -39,6 +39,23 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
   } & Record<string, unknown>
 }
 
+// `ui-primitives` is a client BASELINE module (`PLATFORM_MODULES` in
+// vendor/harness-checkout/packages/client/web/src/platform.ts), so a dynamic
+// bundle requests it without declaring a package dependency — the same table
+// entry that answers `react` and `ui-slots`. The mobile plugin consumes
+// exactly one face: the official panel glyph the official sidebar toggle
+// draws (2026-09-11 upstream-alignment T17a).
+declare module '@deepseek-ai/dsh-client-ui-primitives' {
+  import type { ReactElement } from 'react'
+  /** Official icon face: glyphs take size + className and draw currentColor. */
+  export interface IconProps {
+    size?: number
+    className?: string
+  }
+  /** ic_ds_panel_left_outline_16 — the official sidebar toggle glyph. */
+  export const IconPanelLeftOutline16: (props: IconProps) => ReactElement | null
+}
+
 // No `'@deepseek-ai/dsh-client-ui-slots/client'` block: upstream `ui-slots`
 // exports only `.`, `./src/*` and `./package.json`, so that specifier is not
 // resolvable and nothing in this plugin imports it (2026-09 audit). The

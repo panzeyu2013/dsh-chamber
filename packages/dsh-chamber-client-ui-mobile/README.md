@@ -15,8 +15,16 @@ drawer layout, touch targets, safe areas, PWA phased.
   theme-color), frame stamping (`ROLE_SLOT_KEYS` maps the plugin's roles onto
   the alpha.2 slot keys `sidebar` / `main` / `rightbar`),
   layout-source-driven drawer scroll lock, composer behavior, drawer tap
-  self-heal, settings-sheet section-switch polish, `shell.overlay` hamburger +
-  backdrop;
+  self-heal, settings-sheet section-switch polish, `shell.overlay` drawer
+  toggle (the official panel glyph) + backdrop. The toggle IS the official
+  control, not a look-alike (2026-09-11 upstream-alignment T17a): it renders
+  `IconPanelLeftOutline16` — the glyph the official sidebar toggle draws, from
+  the `ui-primitives` client baseline module, so the bundle needs no package
+  dependency for it — and carries the official ARIA shape, a state-carrying
+  `aria-label` with no `aria-haspopup`. The retired CSS hamburger and its
+  `aria-haspopup="true"` claim are gone; the touch tier keeps what the
+  official control cannot give it (the 44px floating box and the
+  tap-absorbing backdrop);
 - `src/client/styles.ts` — single stylesheet (fully media-query scoped,
   desktop untouched; official `--dsw-*`/`--ds-*` tokens only);
 - `src/client/markup.ts` / `composer.ts` / `layout-facts.ts` /
@@ -30,7 +38,7 @@ The conversation session header (`conversation.session.header` outlet — the
 official title/crumbs row) is desktop-width chrome that collides with the
 mobile surface on three axes, all covered structurally (no hashed classes):
 
-- **Toggle overlap**: the floating hamburger (top-left 44px) sat on top of
+- **Toggle overlap**: the floating drawer toggle (top-left 44px) sat on top of
   the header content — the header gets a reserved gutter (`padding-left`);
 - **Clipped crumbs**: the official crumbs row is nowrap + overflow hidden, so
   long title chains and the lineage chips ("N 个子代理" catalog triggers)
@@ -55,21 +63,34 @@ rules restructure it structurally (slot/role anchors only):
   chips** (44px touch targets, safe-area top padding);
 - **Pinned chrome, scrolling options**: the content header row (actions +
   Close) no longer scrolls away — only the section options area scrolls
-  (bottom safe-area padding);
-- **Section grid degradation**: the Models provider row (4-column line of
-  two inputs + two icon actions) degrades to 2×2 and the Plugins-inventory
-  two-column card grid to a single column. Official inner cells carry no
-  stable attribute, so these two use the documented local-name suffix
-  exception `:is([class$="_<local>"], [class*="_<local> "])` — production
-  naming in the instance bundle is `[hash]_[local]` (upstream cssModules
-  pattern, `vendor/harness-checkout/packages/client/tsdown.client.ts:517`;
-  observed in the shipped bundles as `JObwrW_row`, `zGbnIq_modelRow`,
-  `qSYn7G_cards`), so only the suffix arm can match. `_<local>_<hash>_<idx>`
-  is the CHAMBER shell's own Vite naming, never the instance bundle's; the
-  old `[class*="_<local>_"]` infix form therefore matched nothing and a
-  naming flip fails SOFT — the official grid stays;
-- **Other `aria-modal` dialogs** (onboarding steps, pickers) are capped to
-  `100vw - 24px` (the sheet itself owns the full screen);
+  (bottom safe-area padding). The pinned row is anchored on the documented
+  `[data-slot="settings.action"]` + `[data-slot="settings.close"]` seams
+  rather than a positional first child (2026-09-11 upstream-alignment T17c);
+- **Section grid degradation**: only the Models provider row (4-column line of
+  two inputs + two icon actions) degrades to 2×2, through the documented
+  local-name suffix exception `:is([class$="_<local>"], [class*="_<local> "])`
+  — production naming in the instance bundle is `[hash]_[local]` (upstream
+  cssModules pattern,
+  `vendor/harness-checkout/packages/client/tsdown.client.ts:517`; observed in
+  the shipped bundles as `JObwrW_row`, `zGbnIq_modelRow`, `qSYn7G_cards`), so
+  only the suffix arm can match. `_<local>_<hash>_<idx>` is the CHAMBER
+  shell's own Vite naming, never the instance bundle's; the old
+  `[class*="_<local>_"]` infix form therefore matched nothing and a naming
+  flip fails SOFT — the official grid stays. The card grids are NOT touched:
+  upstream collapses `PluginInventorySettingsTab` `.cards` to one column at
+  `max-width: 680px` itself, so the chamber's former 681–768px
+  one-card-per-row arm only contradicted upstream's own two-per-row geometry
+  and was deleted (2026-09-11 upstream-alignment T17b);
+- **Dialogs other than the settings sheet are not restyled**. The phone tier
+  no longer caps `aria-modal` dialogs at `100vw - 24px` (2026-09-11
+  upstream-alignment T6): the tree has exactly three `role="dialog"`
+  `aria-modal="true"` producers and each owns its fit — this sheet, the
+  ui-primitives `Modal` (its root pads 24px and the dialog is
+  `min(380px, 100%)`), and the `ui-attachment` `ImageLightbox`, a fixed
+  full-bleed backdrop at `inset: 0` whose mask is an absolute `inset: 0`
+  layer. `max-width` beside `inset: 0` is over-constrained: the lightbox
+  backdrop shrank to `100vw - 24px`, left-anchored, leaving a 24px undimmed
+  click-through strip on the right;
 - **iOS focus zoom**: editable fields inside dialogs get the composer's
   16px floor (`max(16px, var(--dsh-content-font-size, 16px))`).
 

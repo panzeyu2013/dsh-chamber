@@ -59,9 +59,9 @@ test('every rule lives inside a media query (desktop byte-identical)', () => {
   )
 })
 
-test('the hamburger has an explicit desktop default: none (no ghost button)', () => {
+test('the drawer toggle has an explicit desktop default: none (no ghost button)', () => {
   // The media-query-free default hides both overlay entries; the touch tier
-  // flips the hamburger to inline-flex.
+  // flips the toggle to inline-flex.
   const outside = MOBILE_CSS.slice(0, MOBILE_CSS.indexOf('@media (max-width: 1023px)'))
   assert.ok(outside.includes('.dsh-mobile-nav-toggle,'))
   assert.ok(outside.includes('.dsh-mobile-backdrop'))
@@ -127,6 +127,9 @@ test('the retired mechanisms leave no trace in the stylesheet', () => {
   assert.ok(phone.includes(':is([class$="_row"], [class*="_row "])'))
   assert.ok(phone.includes(':is([class$="_trigger"], [class*="_trigger "])'))
   assert.ok(!/\[class\*="_[A-Za-z]+_"\]/.test(phone), 'no infix local-name selectors remain in the phone tier')
+  // 2026-09-11 upstream-alignment T17a: the CSS hamburger is retired with the
+  // official panel glyph; no self-drawn control may come back.
+  assert.ok(!MOBILE_CSS.includes('dsh-mobile-nav-toggle-bars'), 'the CSS hamburger must be gone')
 })
 
 test('settings full-screen rule targets the official settings dialog shape', () => {
@@ -153,28 +156,70 @@ test('settings sheet stacks vertically with a pinned header and scrolling option
   // ever scrolls; the options area is the inner scroller.
   const content = cssBlock(phone, `${sheet} > div:last-child`)
   assert.ok(content !== null && content.includes('overflow-y: auto;'), 'content column stays a fallback scroller')
-  const headerRow = cssBlock(phone, `${sheet} > div:last-child > div:first-child`)
+  // The header row is anchored on the documented [data-slot="settings.action"]
+  // + [data-slot="settings.close"] seams, NOT on a positional div:first-child
+  // (2026-09-11 upstream-alignment T17c): the official actions cell holds the
+  // action outlet one level down and the close button holds the close outlet,
+  // so the row is the only element carrying both.
+  const headerRow = cssBlock(
+    phone,
+    `${sheet} > div:last-child > div:has([data-slot="settings.action"]):has([data-slot="settings.close"])`,
+  )
   assert.ok(headerRow !== null && headerRow.includes('position: sticky;'), 'header row is pinned (sticky)')
   assert.ok(headerRow !== null && headerRow.includes('flex: none;'), 'header row never grows')
+  const positionalHeader = cssBlock(phone, `${sheet} > div:last-child > div:first-child`)
+  assert.equal(positionalHeader, null, 'the sticky row must not be anchored on a positional child index')
   const options = cssBlock(phone, `${sheet} > div:last-child > div:last-child`)
   assert.ok(options !== null && options.includes('overflow-y: auto;'), 'options area is the inner scroller')
 })
 
-test('settings section inner grids degrade to two/single column (hash-insensitive local names)', () => {
+test('settings section inner grids: only the Models provider row degrades (cards stay upstream-owned)', () => {
   // Suffix match on the production name shape `[hash]_[local]` (plus the
   // multi-class arm) — see the composer-tier case above for why the infix
   // form was dead (2026-09 audit, P1).
   const phone = normalizePhoneTier()
   const modelRow = cssBlock(phone, '[data-slot="settings.section"] :is([class$="_modelRow"], [class*="_modelRow "])')
   assert.ok(modelRow !== null && modelRow.includes('grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);'))
-  const cards = cssBlock(phone, '[data-slot="settings.section"] :is([class$="_cards"], [class*="_cards "])')
-  assert.ok(cards !== null && cards.includes('grid-template-columns: minmax(0, 1fr) !important;'))
+  // 2026-09-11 upstream-alignment T17b: the ".cards" arm is DELETED — upstream
+  // collapses PluginInventorySettingsTab .cards itself at max-width 680px, so
+  // the chamber's forced single column only contradicted upstream's own
+  // two-per-row geometry in the 681-768px window.
+  assert.ok(!phone.includes('_cards'), 'the chamber must not override the upstream card-grid breakpoint')
 })
 
-test('non-settings aria-modal dialogs are edge-capped and editable fields keep the 16px floor', () => {
+test('no blanket aria-modal cap: official dialog geometries own the viewport fit (T6)', () => {
+  // 2026-09-11 upstream-alignment T6: the phone tier used to cap EVERY
+  // non-settings aria-modal dialog at `100vw - 24px`. That is
+  // over-constrained against ui-attachment's ImageLightbox, whose
+  // role=dialog backdrop is `position: fixed; inset: 0` (a full-bleed layer
+  // with an absolute inset-0 mask): max-width shrank it to 100vw-24px,
+  // left-anchored, leaving a 24px undimmed click-through strip on the right.
+  // The other two aria-modal producers already fit themselves (the settings
+  // panel owns this sheet; the ui-primitives Modal root pads 24px and caps
+  // its dialog at min(380px, 100%)). No rule may re-introduce a blanket cap.
+  const code = stripComments(MOBILE_CSS)
+  assert.ok(
+    !/\[role="dialog"\]\[aria-modal="true"\]:not\(/.test(code),
+    'no blanket aria-modal cap (the settings sheet :has() rules are the only aria-modal anchors)',
+  )
+  // The only max-width an aria-modal rule may set is the sheet RELEASING its
+  // own desktop cap (`none`); anything numeric is a viewport-fit override.
+  const ariaModalMaxWidths = [...code.matchAll(/aria-modal="true"[^{]*\{([^}]*)\}/g)]
+    .flatMap(rule => [...rule[1].matchAll(/max-width:\s*([^;]+)/g)].map(value => value[1].trim()))
+  assert.deepEqual(ariaModalMaxWidths, ['none !important'], 'no aria-modal dialog may be width-capped')
+  // Every aria-modal rule that remains belongs to the settings sheet.
+  const ariaModalSelectors = [...code.matchAll(/([^{}]+)\{/g)]
+    .map(match => (match[1] ?? '').trim())
+    .filter(selector => selector.includes('aria-modal'))
+  assert.ok(ariaModalSelectors.length > 0, 'the settings sheet anchors must stay')
+  for (const selector of ariaModalSelectors) {
+    assert.ok(
+      selector.includes(':has([data-slot="settings.header"])'),
+      `only settings-sheet rules may anchor on aria-modal: ${selector}`,
+    )
+  }
+  // The 16px focus-zoom floor for dialog fields stays.
   const phone = normalizePhoneTier()
-  const capped = cssBlock(phone, '[role="dialog"][aria-modal="true"]:not(:has([data-slot="settings.header"]))')
-  assert.ok(capped !== null && capped.includes('max-width: calc(100vw - 24px) !important;'))
   const fields = cssBlock(
     phone,
     '[role="dialog"] input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), '

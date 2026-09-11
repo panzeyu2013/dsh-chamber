@@ -13,7 +13,12 @@ gateway 访问）真正可用——窄屏抽屉化布局、触控目标、安全
   theme-color）、frame 打标（`ROLE_SLOT_KEYS` 把插件角色映射到 alpha.2 槽键
   `sidebar` / `main` / `rightbar`）、layoutFacts 驱动的抽屉滚动锁、
   composer 行为、抽屉点击自愈、设置 sheet 分区切换打磨、
-  `shell.overlay` 汉堡按钮 + 遮罩；
+  `shell.overlay` 抽屉开关（官方面板图标）+ 遮罩。该开关**就是**官方控件而非
+  仿制品（2026-09-11 upstream-alignment T17a）：渲染 `IconPanelLeftOutline16`
+  ——官方侧边栏开关所用的图标，取自 `ui-primitives` 客户端 baseline 模块，
+  因此 bundle 无需为此声明依赖——并采用官方 ARIA 形态：带状态的 `aria-label`，
+  无 `aria-haspopup`。退役的 CSS 汉堡与其 `aria-haspopup="true"` 断言一并删除；
+  触屏档只保留官方控件给不了的部分（44px 浮动盒与吸收误触的遮罩）；
 - `src/client/styles.ts` —— 单文件样式（全部媒体查询作用域，桌面零影响；
   只用官方 `--dsw-*`/`--ds-*` token）；
 - `src/client/markup.ts` / `composer.ts` / `layout-facts.ts` /
@@ -25,7 +30,7 @@ gateway 访问）真正可用——窄屏抽屉化布局、触控目标、安全
 会话头（`conversation.session.header` 出口——官方标题/面包屑行）是桌面宽度
 的 chrome，与移动面在三个轴向上冲突，全部以结构化选择器覆盖（不猜哈希类名）：
 
-- **汉堡重叠**：浮动汉堡（左上 44px）压在头部内容上——头部预留左侧 gutter
+- **开关重叠**：浮动抽屉开关（左上 44px）压在头部内容上——头部预留左侧 gutter
   （`padding-left`）；
 - **面包屑被裁**：官方 crumbs 行 nowrap + overflow hidden，长标题链与
   谱系 chip（「N 个子代理」目录触发器）会被静默截断——改为换行而非裁切
@@ -45,19 +50,29 @@ gateway 访问）真正可用——窄屏抽屉化布局、触控目标、安全
 - **纵向堆叠全屏 sheet**：panel 改 `flex-direction: column`；nav rail 变
   顶部横条——标题 + **可横向滚动的分区 chips**（44px 触控目标，顶部安全区）；
 - **chrome 固定、选项区滚动**：内容列 header（actions + Close）不再随内容
-  滚走——只有分区 options 区滚动（底部安全区补边）；
-- **分区内网格降级**：Models 的 provider 行（两输入 + 两图标一行的 4 列
-  grid）降为 2×2；Plugins inventory 两列卡片网格降为单列。官方内部格子无
-  稳定属性，这两条使用文档化的**局部名后缀**例外
+  滚走——只有分区 options 区滚动（底部安全区补边）。固定行锚定在文档化的
+  `[data-slot="settings.action"]` + `[data-slot="settings.close"]` 缝上，而非
+  位置化的首个子元素（2026-09-11 upstream-alignment T17c）；
+- **分区内网格降级**：只有 Models 的 provider 行（两输入 + 两图标一行的 4 列
+  grid）降为 2×2，使用文档化的**局部名后缀**例外
   `:is([class$="_<local>"], [class*="_<local> "])`——实例 bundle 的生产命名是
   `[hash]_[local]`（上游 cssModules 规则，
   `vendor/harness-checkout/packages/client/tsdown.client.ts:517`；产物实测
   `JObwrW_row`/`zGbnIq_modelRow`/`qSYn7G_cards`），只有后缀臂能命中。
   `_<local>_<hash>_<idx>` 是 **chamber 自建壳（Vite）**的命名，从不属于实例
   bundle；此前的 `[class*="_<local>_"]` infix 形式因此命中不到任何东西，命名
-  翻转时 fail-soft——保持官方网格；
-- **其他 `aria-modal` 弹层**（引导步骤、选择器）限宽 `100vw - 24px`
-  （设置 sheet 本身已占满全屏）；
+  翻转时 fail-soft——保持官方网格。卡片网格不再覆盖：上游
+  `PluginInventorySettingsTab` 自己就在 `max-width: 680px` 把 `.cards` 收为
+  单列，chamber 旧有的 681–768px 单列臂只与上游自己的两列几何相矛盾，已删除
+  （2026-09-11 upstream-alignment T17b）；
+- **设置 sheet 之外的弹层不再改写**：手机档不再给 `aria-modal` 弹层限宽
+  `100vw - 24px`（2026-09-11 upstream-alignment T6）：全树恰好三个
+  `role="dialog"` + `aria-modal="true"` 产出点，各自负责自己的视口适配——
+  本 sheet、ui-primitives `Modal`（root 补 24px 内边距、dialog 为
+  `min(380px, 100%)`）、以及 `ui-attachment` 的 `ImageLightbox`（`inset: 0`
+  的 fixed 全幅背板，遮罩是 absolute `inset: 0` 层）。`inset: 0` 旁边再给
+  `max-width` 是过约束：灯箱背板被压成 `100vw - 24px` 且左对齐，右侧留下
+  24px 未变暗、可点击穿透的条带；
 - **iOS 聚焦缩放**：弹窗内可编辑字段套用 composer 同款 16px 底线
   （`max(16px, var(--dsh-content-font-size, 16px))`）。
 
