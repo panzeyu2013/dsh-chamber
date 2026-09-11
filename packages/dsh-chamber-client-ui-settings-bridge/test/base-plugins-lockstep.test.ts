@@ -25,6 +25,18 @@ test('the chamber runtime section registers from the bridge plugin on the source
   assert.equal(isBasePluginId('@dsh-chamber/dsh-chamber-client-ui-settings-bridge'), true)
 })
 
+test('the composite mount context classifies as official (cordis name inheritance)', () => {
+  // The stamp is the registrant fiber's name and cordis inherits an unnamed
+  // fiber's name from its nearest NAMED ancestor, so anything the chamber
+  // composite mounts bare is stamped `@dsh-chamber/app` — a chamber-owned mount
+  // context, never a plugin. The deferred rows themselves now mount under their
+  // package ids (chamber-entry.ts registerDeferred, locked by
+  // packages/renderer/test/required-extra-rows.test.ts); this entry keeps a bare
+  // mount from being accused of being third-party.
+  assert.equal(isBasePluginId('@dsh-chamber/app'), true)
+  assert.equal(isPluginProvidedRow({ registrant: '@dsh-chamber/app' }, isBasePluginId), false)
+})
+
 test('a plugin-provided row is marked; an official or unattributed row is not', () => {
   assert.equal(isPluginProvidedRow({ registrant: '@acme/x' }, isBasePluginId), true)
   assert.equal(isPluginProvidedRow({ registrant: '@deepseek-ai/dsh-client-ui-settings-models' }, isBasePluginId), false)

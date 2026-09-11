@@ -370,7 +370,23 @@ async function registerDeferred(
       failed.push(outcome.id)
       continue
     }
-    ctx.plugin(outcome.plugin)
+    // Mount with the ROW ID as the fiber name (2026-09-11 fix, design 05 §5):
+    // a slot entry's provenance stamp is the registrant fiber's name
+    // (ui-renderer `SlotRegistry._register`: `options.registrant ??
+    // ctx.fiber.name`), and cordis gives an UNNAMED fiber the name of its
+    // nearest NAMED ancestor (`Fiber.name` walks up, else `'root'`). Mounted
+    // bare, every row here inherited `@dsh-chamber/app` and the settings shell
+    // therefore stamped every composite-provided `settings.section` with that
+    // name — not an official/chamber PACKAGE id — and marked every one of them
+    // 「插件」(`isPluginProvidedRow`). The upstream web boot names every graph
+    // row by its id (`loader.create({ name: row.id })`), and the old child-ctx
+    // bridge did the same for its base set; this keeps the composite on that
+    // convention so a section's registrant is the package that provided it.
+    // (`DEFERRED_ROWS` types each chunk as `Promise<unknown>` — the id roster is
+    // the contract, not the module shapes — so the cordis object-plugin shape is
+    // asserted here.)
+    const loaded = outcome.plugin as { apply: (ctx: Context, config?: never) => void; inject?: string[] }
+    ctx.plugin({ ...loaded, name: outcome.id })
   }
   if (failed.length === 0) return
   const message = deferredRegistrationFailureMessage(failed, ctx.chamberInstanceId)

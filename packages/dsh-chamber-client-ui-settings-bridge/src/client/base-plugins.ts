@@ -20,6 +20,19 @@ export const RUNTIME_SECTION_ID = 'dsh-runtime'
  * The registrants the shell renders as OFFICIAL (never marked "plugin"):
  * the official settings family mounted by the chamber composite plus the
  * chamber's own shell/section registrations.
+ *
+ * The stamp being compared is the registrant FIBER's name (ui-renderer
+ * `SlotRegistry._register`: `options.registrant ?? ctx.fiber.name`), and cordis
+ * names an UNNAMED fiber after its nearest NAMED ancestor (`Fiber.name`), so a
+ * row mounted bare is stamped with its mount context, not its own package:
+ * - a graph row the instance's host serves is mounted by the loader as
+ *   `loader.create({ name: row.id })` → the row's package id ✔;
+ * - a row the chamber's own composite mounts is mounted by
+ *   `chamber-entry.ts registerDeferred` with `name: <row id>` (2026-09-11 fix —
+ *   it used to be unnamed and every such section was stamped `@dsh-chamber/app`)
+ *   ✔;
+ * - anything the composite mounts bare still inherits `@dsh-chamber/app`, which
+ *   is a chamber-owned mount context and therefore official too.
  */
 export const OFFICIAL_SECTION_REGISTRANTS: readonly string[] = [
   '@deepseek-ai/dsh-client-ui-settings',
@@ -31,6 +44,9 @@ export const OFFICIAL_SECTION_REGISTRANTS: readonly string[] = [
   '@deepseek-ai/dsh-client-ui-settings-plugin-inventory',
   '@deepseek-ai/dsh-client-ui-agent-preset',
   '@dsh-chamber/dsh-chamber-client-ui-settings-bridge',
+  // The chamber composite's own app fiber: the inherited name of anything the
+  // composite mounts without one (see above). Chamber-owned, so never a plugin.
+  '@dsh-chamber/app',
   // Unnamed registrations (the declaration chain's inert entries) are stamped
   // 'root' by cordis; they never occupy a settings seat.
   'root',

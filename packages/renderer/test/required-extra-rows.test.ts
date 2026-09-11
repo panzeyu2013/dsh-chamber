@@ -131,3 +131,20 @@ test('chamber-entry wires the deferred roster, the per-row isolation and the nam
   assert.match(entry, /degradedSeam\(message\)/, 'the report must reach the shell degrade seam')
   assert.match(entry, /void registerDeferred\(ctx, degradedSeam\)\.catch/, 'a deferred failure must still never block the boot')
 })
+
+test('deferred rows mount with their row id as the fiber name (nav provenance)', () => {
+  const entry = readSource('../src/chamber-entry.ts')
+  // A slot entry's provenance stamp is its registrant FIBER's name
+  // (ui-renderer registry.ts: `options.registrant ?? ctx.fiber.name`), and
+  // cordis names an unnamed fiber after its nearest NAMED ancestor
+  // (cordis fiber.ts `get name()`, else 'root'). Mounted bare, every row here
+  // inherited `@dsh-chamber/app`, so the settings shell stamped every
+  // composite-provided `settings.section` with a name that is not an
+  // official/chamber PACKAGE id and marked each row「插件」. The upstream loader
+  // names graph rows by id (`loader.create({ name: row.id })`); this pins the
+  // composite to the same convention.
+  assert.match(entry, /ctx\.plugin\(\{ \.\.\.\w+, name: outcome\.id \}\)/,
+    'a deferred row must be mounted with its row id as the fiber name')
+  assert.doesNotMatch(entry, /ctx\.plugin\((?:outcome\.plugin|loaded)\)/,
+    'a bare mount loses the row identity and mislabels every settings section as plugin-provided')
+})
