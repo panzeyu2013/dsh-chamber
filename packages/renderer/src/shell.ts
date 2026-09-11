@@ -30,7 +30,7 @@
 
 
 
-import { AppWebEntry, ensureWebModuleSystem } from '@deepseek-ai/dsh-client-web'
+import { AppWebEntry, ensureWebModuleSystem, FIBER_STATE } from '@deepseek-ai/dsh-client-web'
 import type { Context } from '@deepseek-ai/cordis'
 
 import { parseAuthoritativeSourceFingerprint } from './deep-link-activation.ts'
@@ -76,6 +76,61 @@ function describeShellError(reason: unknown): string {
  * 68s total deadline and receive at most this much remaining dispatch time. */
 const OPEN_WAIT_MS = 8000
 const OPEN_RETRY_MS = 400
+
+/** The loader-entry face {@link collectFailedEntries} reads (loose mirror of the
+ *  vendored cordis Entry reached through `ctx.loader.entries()`). */
+export interface BootLoaderEntryFace {
+  options: { name: string }
+  fiber?: { state: number }
+}
+
+/**
+ * The plugin ids that did NOT activate in a failed boot — the item list the
+ * official failure report shows (2026-09-11 upstream-alignment T15).
+ *
+ * Upstream derives it twice from the same source: its post-settle sweep names
+ * every entry whose root fiber is not active (`assertEntriesActive`, vendor
+ * packages/client/web/src/boot.ts:138-158 — the chamber copy carries the same
+ * loop plus the version-tolerance split) and its framework-free boot page
+ * renders one item per failed entry id (boot-page.ts, `Failed to load
+ * plugins`). The chamber's overlay replaced that in-shell page (design 05 §4:
+ * the failed entry is disposed so a retry re-boots the container cleanly), so
+ * the SAME live loader is read here, BEFORE teardown, and the ids travel to the
+ * App on the ShellState it already receives — no new channel, no invented list.
+ *
+ * Tolerated rows (the per-instance EXTRA host-graph rows, whose version skew
+ * must never fail a boot — see the chamber fork's `boot-tolerance.ts`) are
+ * excluded: upstream's report lists failures, not tolerated degradations, and
+ * an extra row's own failure is already reported per id through the plugin
+ * diagnostic and the boot page's `failed` state while the boot succeeds.
+ * @param ctx - the failed boot's runtime context (still live; undefined when
+ *   the boot failed before a Context existed, e.g. a module-system failure).
+ * @param tolerated - ids whose non-activation is tolerated (extra rows).
+ * @returns the non-active entry ids in loader order, deduped; [] when the
+ *   loader is unreachable or every entry activated.
+ */
+export function collectFailedEntries(
+  ctx: { loader?: { entries(): readonly BootLoaderEntryFace[] } } | undefined,
+  tolerated: ReadonlySet<string> = new Set(),
+): string[] {
+  if (ctx === undefined) return []
+  let entries: readonly BootLoaderEntryFace[]
+  try {
+    // Both the context read and the loader call are external code: a hostile
+    // proxy must not turn a failure report into a second failure.
+    entries = ctx.loader?.entries() ?? []
+  } catch {
+    return []
+  }
+  const out: string[] = []
+  for (const entry of entries) {
+    const name = entry?.options?.name
+    if (typeof name !== 'string' || name === '' || tolerated.has(name)) continue
+    if (entry.fiber !== undefined && entry.fiber.state === FIBER_STATE.ACTIVE) continue
+    if (!out.includes(name)) out.push(name)
+  }
+  return out
+}
 
 /**
  * How long one boot may hold the serialized queue before the chain moves on.
@@ -156,6 +211,18 @@ export interface ShellState {
    * failure-presentation revision) — null on a clean settle.
    */
   error: string | null
+  /**
+   * The plugin ids of a FAILED boot, as the official report lists them
+   * (2026-09-11 upstream-alignment T15): every loader entry of the failed boot
+   * that did not activate, in loader order. Upstream's boot page renders
+   * exactly this list (`Failed to load plugins` + one item per id,
+   * packages/client/web/src/boot-page.ts) and its post-settle sweep names the
+   * same entries in the failure message (`assertEntriesActive`); the chamber
+   * overlay replaced that page, so the sweep is read here — see
+   * {@link collectFailedEntries}. Omitted (or empty) when the boot failed
+   * before any loader entry existed (module-system/manifest failures).
+   */
+  failedEntries?: string[]
   /**
    * The boot settled with a KNOWN gap that the App is expected to self-heal
    * (2026-09-10, sidebarRight 彻底修复):
@@ -629,13 +696,31 @@ export function bootInstanceShell(
       // a run() rejection.
       const bootFailure = entry.bootError
       if (bootFailure !== undefined) {
+        // T15 (2026-09-11 upstream-alignment): read the failed loader entries
+        // NOW — the context is live until teardownEntry disposes it — so the
+        // chamber overlay can list the same plugin ids the official report
+        // does (collectFailedEntries). The read is guarded like every other
+        // external boundary here: a hostile runtimeCtx getter must not replace
+        // the boot's OWN failure report with a second failure.
+        let failedEntries: string[] = []
+        try {
+          failedEntries = collectFailedEntries(
+            entry.runtimeCtx,
+            new Set(extraRows.map(row => row.id)),
+          )
+        } catch (error) {
+          console.error(`[shell] instance ${instanceId} failed-entry sweep unavailable:`, error)
+        }
         await teardownEntry(instanceId, entry, 'failed boot')
         if (bootGenerations.get(instanceId) === gen) {
           rejectPendingOpens(instanceId, bootFailure)
           // 与 catch 分支同代际门控：teardown await 期间可能换代。
           perfMark(PERF_MARKS.shellBootFailed, instanceId)
         }
-        return { instanceId, basePath, booted: false, booting: false, error: bootFailure, degraded: null } satisfies ShellState
+        return {
+          instanceId, basePath, booted: false, booting: false, error: bootFailure, degraded: null,
+          ...(failedEntries.length === 0 ? {} : { failedEntries }),
+        } satisfies ShellState
       }
       // An older timed-out boot may have begun teardown while this entry ran.
       // Drain it before registration, again making the final barrier/holder

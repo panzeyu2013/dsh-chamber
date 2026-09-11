@@ -17,11 +17,22 @@ export class AppWebEntry {
   // (runtimeCtx present, child-fiber service not yet registered) — shell.ts
   // treats that as a transient poll state.
   readonly runtimeCtx: undefined | {
+    loader?: { entries(): ReadonlyArray<{ options: { name: string }; fiber?: { state: number } }> }
     sessions?: {
       list: { getSnapshot(): { byId: Record<string, unknown> } }
       open(sessionId: string): void
     }
   }
+}
+
+/** Fiber-state mirror (loader-status.ts): the sweep compares against ACTIVE. */
+export const FIBER_STATE: {
+  PENDING: 0
+  LOADING: 1
+  ACTIVE: 2
+  FAILED: 3
+  DISPOSED: 4
+  UNLOADING: 5
 }
 
 /** C3 gate face (mirror of vendor-modules.d.ts ensureWebModuleSystem return slice). */
@@ -50,6 +61,10 @@ export function __testSetSessionsAvailable(value: boolean): void
 export function __testSetSessionsReadError(value: unknown | undefined): void
 export function __testSetSessionsSnapshotError(value: unknown | undefined): void
 export function __testSetSessionsOpenError(value: unknown | undefined): void
+/** The failed boot's loader entries (T15 sweep face). */
+export function __testSetLoaderEntries(
+  value: ReadonlyArray<{ options: { name: string }; fiber?: { state: number } }> | undefined,
+): void
 export function __testResetLifecycle(): void
 export function __testEventLog(): string[]
 export function __testResetEventLog(): void

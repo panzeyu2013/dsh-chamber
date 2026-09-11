@@ -10,6 +10,9 @@
  * it is test-only — the build/typecheck never load it.
  */
 let bootError = undefined
+// Loader-entry face of the failed boot (T15): tests hand in the exact sweep
+// result the chamber overlay must turn into a plugin-id list.
+let loaderEntries = []
 let runError = undefined
 let moduleSystemError = undefined
 let disposedCount = 0
@@ -33,6 +36,16 @@ let sessionsAvailable = true
 let sessionsReadError = undefined
 let sessionsSnapshotError = undefined
 let sessionsOpenError = undefined
+
+/** Fiber-state mirror (loader-status.ts): the sweep compares against ACTIVE. */
+export const FIBER_STATE = {
+  PENDING: 0,
+  LOADING: 1,
+  ACTIVE: 2,
+  FAILED: 3,
+  DISPOSED: 4,
+  UNLOADING: 5,
+}
 
 export class AppWebEntry {
   constructor(el, options) {
@@ -92,9 +105,10 @@ export class AppWebEntry {
   get runtimeCtx() {
     if (this.disposed) return undefined
     if (sessionsReadError !== undefined) throw sessionsReadError
-    if (!sessionsAvailable) return { sessions: undefined }
+    if (!sessionsAvailable) return { sessions: undefined, loader: { entries: () => loaderEntries } }
     const label = this.label
     return {
+      loader: { entries: () => loaderEntries },
       sessions: {
         list: {
           getSnapshot() {
@@ -266,6 +280,11 @@ export function __testSetSessionsOpenError(value) {
   sessionsOpenError = value
 }
 
+/** The failed boot's loader entries (T15 sweep: `{ options.name, fiber.state }`). */
+export function __testSetLoaderEntries(value) {
+  loaderEntries = value ?? []
+}
+
 export function __testResetLifecycle() {
   for (const gate of allRunGates) gate.release()
   for (const gate of allDisposeGates) gate.release()
@@ -285,6 +304,7 @@ export function __testResetLifecycle() {
   sessionsSnapshotError = undefined
   sessionsOpenError = undefined
   chamberPrefetchError = undefined
+  loaderEntries = []
 }
 
 /** Event log: 'ensure' (module-system install) vs 'fetch' (host-graph channel) call order. */

@@ -85,6 +85,24 @@ import {
   type SourceOwnershipToken,
 } from './deep-link-activation.ts'
 import { openInstanceSession, reconnectInstanceConnection, disposeAllShells, disposeInstanceShell, type ShellState } from './shell.ts'
+// T15 (2026-09-11 upstream-alignment): the official Button atom (U
+// ui-primitives/src/Button.tsx) replaces the chamber's own `.btn` chrome in
+// every frame-level failure screen. Imported BY DEEP SOURCE PATH, the form the
+// chamber ui-layout / ui-sidebar / settings-bridge tables already use for an
+// internal module: the package BARREL also carries the primitives' markdown /
+// CodeBlock families, and measured on this very build the barrel import moves
+// ~87 KB of them into the MAIN graph (main graph raw 1,226,775 → 1,313,736, i.e.
+// to within 2.7% of the C6 warn gate) while the deep path leaves them in the
+// chamber entry (1,986,884). The main graph evaluates before App mount, which is
+// exactly what the C3 note in chamber-entry.ts keeps ui-primitives out of.
+import { Button } from '@deepseek-ai/dsh-client-ui-primitives/src/Button.tsx'
+// T16 (2026-09-11 upstream-alignment): frame copy lives in ONE typed locale
+// dictionary (locales.ts); the frame reads the document language the official
+// locale service keeps in sync (see that module's header).
+import {
+  frameText, readDocumentLocale, subscribeDocumentLocale,
+  type FrameKey, type FrameLocale,
+} from './locales.ts'
 import { BOOT_TIMEOUT_MS } from './boot-budget.ts'
 import { planDegradedRetries } from './degraded-retry.ts'
 import { runViewTransition } from './view-transition.ts'
@@ -200,6 +218,9 @@ const MAX_PENDING_ROSTER_NOTIFICATION_OPENS = 64
 
 const LOCAL_INSTANCE_ID = 'local'
 
+/** Stable empty list for boots whose failure carries no loader entries (T15). */
+const NO_FAILED_ENTRIES: readonly string[] = []
+
 type DeepLinkDelivery = RendererDeliveryCoordinates & {
   /** Raw id is retained while the first authoritative v2 kind roster is unavailable. */
   rawInstanceId: string
@@ -283,6 +304,10 @@ function deriveServers(
   managedRuntime: Record<string, string | null>,
   workspaceEcho: WorkspaceEchoLedger,
   openIntents: Readonly<Record<string, string>>,
+  // T16 (2026-09-11 upstream-alignment): the local source's fallback label is
+  // frame copy (the connection row may carry no label), so it comes from the
+  // frame's dictionary in the locale the frame renders in.
+  locale: FrameLocale,
 ): ChamberServerAggregate[] {
   const servers: ChamberServerAggregate[] = []
   const now = Date.now()
@@ -409,7 +434,8 @@ function deriveServers(
     if (pluginDiagnostics[id] !== undefined) entry.pluginDiagnostic = pluginDiagnostics[id]
     servers.push(entry)
   }
-  push('local', 'local', LOCAL_INSTANCE_ID, (connections ?? [])[0]?.label ?? '本地实例', 'local')
+  push('local', 'local', LOCAL_INSTANCE_ID,
+    (connections ?? [])[0]?.label ?? frameText(locale, 'source.local'), 'local')
   for (const instance of remoteInstances) {
     // The persisted/runtime target kind is independent of the transport.
     // `ssh` is accepted only as the legacy spelling of a dsh target.
@@ -451,18 +477,25 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, Error
 
   render(): React.ReactNode {
     if (this.state.error) {
+      // T16 (2026-09-11 upstream-alignment): frame copy rides the typed locale
+      // dictionary; a class component reads the locale through the module
+      // reader (it cannot own a hook).
+      const locale = readDocumentLocale()
       return (
         <div className="fatal">
-          <div className="fatal-title">界面发生错误</div>
+          <div className="fatal-title">{frameText(locale, 'error.ui.title')}</div>
           <div className="fatal-message">{String(this.state.error?.message || this.state.error)}</div>
-          <button
-            className="btn"
+          {/* T15 (2026-09-11 upstream-alignment): the official Button atom —
+              the chamber-invented `.btn` chrome (and its own palette entry) is
+              gone. */}
+          <Button
+            variant="outline"
             onClick={() => {
               this.setState({ error: null })
             }}
           >
-            重试
-          </button>
+            {frameText(locale, 'action.retry')}
+          </Button>
         </div>
       )
     }
@@ -471,6 +504,15 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, Error
 }
 
 export default function App() {
+  // T16 (2026-09-11 upstream-alignment): the frame owns no `t` seat, so it
+  // renders its own copy from the typed dictionary in locales.ts, in the locale
+  // the DOCUMENT declares — `<html lang>` is written by the booted shell's
+  // official locale service (syncDocumentLanguage), and the subscription makes a
+  // locale change inside dsh re-render the frame chrome (the same value
+  // readDocumentLocale() reads, so out-of-render copy cannot drift from it).
+  const locale = useSyncExternalStore(subscribeDocumentLocale, readDocumentLocale)
+  const t = useCallback((key: FrameKey, params?: Readonly<Record<string, string>>) =>
+    frameText(locale, key, params), [locale])
   const [health, setHealth] = useState<HealthResponse | null>(null)
   const [healthError, setHealthError] = useState<string | null>(null)
   // 健康失败首次出现的时间戳：致命屏要求错误**持续**存在（宽容瞬时抖动/
@@ -736,8 +778,8 @@ export default function App() {
   // chamberBridge 投影（05 §3）：health/remoteStatus/aggregates 任一变化后
   // 派生并发布；首帧（health 未就绪）即发布 connected=false 的分组。
   const servers = useMemo(
-    () => deriveServers(health, connections, remoteInstances, remoteStatus, aggregates, hostFacts, runtimeFacts, completedBySource, activeView, pluginDiagnostics, managedRuntime, workspaceEcho, openIntents),
-    [health, connections, remoteInstances, remoteStatus, aggregates, hostFacts, runtimeFacts, completedBySource, activeView, pluginDiagnostics, managedRuntime, workspaceEcho, openIntents],
+    () => deriveServers(health, connections, remoteInstances, remoteStatus, aggregates, hostFacts, runtimeFacts, completedBySource, activeView, pluginDiagnostics, managedRuntime, workspaceEcho, openIntents, locale),
+    [health, connections, remoteInstances, remoteStatus, aggregates, hostFacts, runtimeFacts, completedBySource, activeView, pluginDiagnostics, managedRuntime, workspaceEcho, openIntents, locale],
   )
   // chamberBridge publish 签名闸（2026-08 perf pass）：servers 在每次依赖变化
   // 时都会重建（含聚合快照上报/兜底、30s 注册表轮询、状态推送的恒新对象），但
@@ -2418,7 +2460,9 @@ export default function App() {
         basePath: instanceBasePath(id),
         booted: false,
         booting: false,
-        error: `实例启动超时：挂载后 ${Math.round(HARVEST_ABANDON_MS / 1000)} 秒未收到任何响应（可重试或切换来源）`,
+        error: frameText(readDocumentLocale(), 'fatal.harvestTimeout', {
+          seconds: String(Math.round(HARVEST_ABANDON_MS / 1000)),
+        }),
         // 超时是失败态，不是降级态：自愈重挂由失败覆盖层的「重试」负责。
         degraded: null,
       },
@@ -3268,24 +3312,28 @@ export default function App() {
       }
       notifiedCompleteRef.current[sourceId] = deduped.notified
       if (deduped.edges.length > 0) {
-        // 事件组装（设计 19 §3.3）：固定文案（zh 字面量，沿 App.tsx 既有
-        // 风格）；label/title 取渲染期镜像（本 effect 依赖 []，拿不到
-        // state/useMemo 闭包）。桥未就绪（window.dshChamber 异步出现）静默
+        // 事件组装（设计 19 §3.3）：文案来自 App 框架的 typed 字典
+        // （locales.ts，T16 2026-09-11 upstream-alignment）；本 effect 依赖
+        // []，拿不到 render 作用域的 `t`，因此在事件组装时读取当前文档语言
+        // （与 render 侧同一个读法：readDocumentLocale）。label/title 取渲染期
+        // 镜像（同上）。桥未就绪（window.dshChamber 异步出现）静默
         // 跳过——边沿是低频事件，错过早期事件可接受，不报错刷屏。组装块
         // 与蓝点对账隔离：任何异常不得吞掉该份上报的蓝点推进（try/finally
         // 保底，主链路 notify 本身有 catch）。
         try {
           const bridge = window.dshChamber?.notifications
           if (bridge !== undefined) {
+            const copyLocale = readDocumentLocale()
             const label = serverLabelsRef.current[sourceId] ?? sourceId
             const aggregate = aggregatesRef.current[sourceId]
             const sessionTitle = (sessionId: string) =>
-              aggregate?.sessions.find(session => session.sessionId === sessionId)?.title ?? '未命名会话'
+              aggregate?.sessions.find(session => session.sessionId === sessionId)?.title
+              ?? frameText(copyLocale, 'session.untitled')
             for (const edge of deduped.edges) {
               const title =
-                edge.kind === 'complete' ? '会话已完成'
-                : edge.kind === 'ask' ? '代理正在等待你的回答'
-                : '代理请求你的批准'
+                edge.kind === 'complete' ? frameText(copyLocale, 'notification.sessionComplete')
+                : edge.kind === 'ask' ? frameText(copyLocale, 'notification.awaitingAnswer')
+                : frameText(copyLocale, 'notification.awaitingApproval')
               const body = `${label} · ${sessionTitle(edge.sessionId)}`
               // 正在屏幕上查看的会话豁免（与 OpenChamber requireHidden 同语义；
               // 单窗口下 renderer 的 document.hasFocus() 与主进程
@@ -3456,7 +3504,13 @@ const HEALTH_ERROR_GRACE_MS = 10_000
   // 活动视图的 shell 失败报告（05 §4 失败呈现修订）：boot 失败 settle 后由
   // InstanceView 上报终态；只有失败态（error 非空）触发覆盖层——booting/
   // 成功态由骨架屏/真实 UI 呈现。
-  const activeShellError = shellStates[activeView]?.error ?? null
+  const activeShellState = shellStates[activeView]
+  const activeShellError = activeShellState?.error ?? null
+  // T15 (2026-09-11 upstream-alignment): the failed boot's plugin ids, as the
+  // official report lists them (shell.ts collectFailedEntries reads the failed
+  // boot's own loader sweep). Empty for failures that produced no loader entry
+  // (module-system/manifest), which keeps today's report-only overlay.
+  const activeShellFailedEntries = activeShellState?.failedEntries ?? NO_FAILED_ENTRIES
 
   return (
     <ErrorBoundary>
@@ -3493,7 +3547,8 @@ const HEALTH_ERROR_GRACE_MS = 10_000
               sourceFingerprint={sourceFingerprint}
               transport={transport}
               active={activeView === viewId}
-              label={serverLabels[viewId] ?? (viewId === LOCAL_INSTANCE_ID ? '本地实例' : viewId)}
+              label={serverLabels[viewId] ?? (viewId === LOCAL_INSTANCE_ID ? t('source.local') : viewId)}
+              locale={locale}
               onSettled={handleInstanceSettled}
               onStateChange={handleShellState}
               retryToken={retryTokens[viewId]}
@@ -3545,12 +3600,27 @@ const HEALTH_ERROR_GRACE_MS = 10_000
             之上（下方 JSX 顺序在后）。 */}
         {activeShellError !== null && (
           <div className="fatal fatal-overlay">
+            {/* T15 (2026-09-11 upstream-alignment): the failure report carries
+                the SAME content the official report does — a title, the boot
+                failure text, and the plugin ids that did not activate (the
+                shell reads them off the failed boot's own loader sweep and the
+                ids ride ShellState, never a new channel). The chamber cover
+                itself stays (design 05 §2.2.1 gate 2 + §4: navigation lives
+                inside the shell, so a failed boot needs this escape hatch). */}
             <div role="alert">
-              <div className="fatal-title">实例启动失败</div>
+              <div className="fatal-title">{t('fatal.boot.title')}</div>
               <div className="fatal-message">{activeShellError}</div>
+              {activeShellFailedEntries.length > 0 && (
+                <div className="fatal-entries">
+                  <div className="fatal-entries-title">{t('fatal.entries.title')}</div>
+                  {activeShellFailedEntries.map(entryId => (
+                    <div key={entryId} className="fatal-entry">{entryId}</div>
+                  ))}
+                </div>
+              )}
             </div>
-            <button
-              className="btn primary"
+            <Button
+              variant="primary"
               onClick={() => {
                 // 重试 = 重新 boot 该视图；error/degraded 隧道同时立即再试，
                 // ready 但会话/远端已死的来源立即探测一次（与 selectView
@@ -3561,21 +3631,21 @@ const HEALTH_ERROR_GRACE_MS = 10_000
                 setRetryTokens(prev => ({ ...prev, [activeView]: (prev[activeView] ?? 0) + 1 }))
               }}
             >
-              重试
-            </button>
+              {t('action.retry')}
+            </Button>
             {servers.length > 1 && (
               <div className="fatal-servers">
-                <span className="muted small">切换到其他服务器：</span>
+                <span className="muted small">{t('action.switchServer')}</span>
                 {servers.map(server => (
                   server.id === activeView ? null : (
-                    <button
+                    <Button
                       key={server.id}
-                      className="btn"
+                      variant="outline"
                       onClick={() => selectView(server.id)}
                     >
                       {/* 空 label 回退 id，避免出现无标签的切换按钮 */}
                       {server.label !== '' ? server.label : server.id}
-                    </button>
+                    </Button>
                   )
                 ))}
               </div>
@@ -3584,17 +3654,23 @@ const HEALTH_ERROR_GRACE_MS = 10_000
         )}
         {controlUnreachable && (
           <div className="fatal fatal-overlay">
-            <div className="fatal-title">无法连接控制面</div>
-            <div className="fatal-message">{healthError}</div>
-            <button
-              className="btn primary"
+            {/* a11y nit of the same audit (2026-09-11 upstream-alignment): the
+                fatal overlay is an alert like its boot-failure sibling — a
+                screen reader must announce the control-plane loss without a
+                focus move. */}
+            <div role="alert">
+              <div className="fatal-title">{t('fatal.controlPlane.title')}</div>
+              <div className="fatal-message">{healthError}</div>
+            </div>
+            <Button
+              variant="primary"
               onClick={() => {
                 void refreshHealth()
                 void refreshConnections()
               }}
             >
-              重试
-            </button>
+              {t('action.retry')}
+            </Button>
           </div>
         )}
       </div>

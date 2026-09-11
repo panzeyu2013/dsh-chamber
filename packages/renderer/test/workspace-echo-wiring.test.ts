@@ -66,7 +66,7 @@ test('the projection merges the echo at the single derive choke point', () => {
   )
   assert.match(
     app,
-    /\) => deriveServers\([\s\S]*?workspaceEcho(?:, openIntents)?\),\n    \[health, [^\]]*workspaceEcho(?:, openIntents)?\],/,
+    /\) => deriveServers\([\s\S]*?workspaceEcho(?:, openIntents)?(?:, locale)?\),\n    \[health, [^\]]*workspaceEcho(?:, openIntents)?(?:, locale)?\],/,
     'the ledger must be both a derive input and a memo dependency, otherwise the echoed row never paints',
   )
 })

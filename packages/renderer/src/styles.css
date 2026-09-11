@@ -22,15 +22,16 @@
   /* chamber 外壳 chrome 自有色板（深色，独立于 dsh 的 --dsw-* token 表；本页
      是 N-ctx 连接管理壳，不随 dsh 主题切换）。只保留实际被消费的条目——
      2026-09 死代码清扫删除了从未被 var() 引用的 --panel / --green / --yellow
-     / --gray；新增颜色前先确认消费点，verify:styles 的 S6 会拦下无人使用的声明。 */
+     / --gray；新增颜色前先确认消费点，verify:styles 的 S6 会拦下无人使用的声明。
+     2026-09-11 upstream-alignment（T15）：--panel-2 / --accent-dim 随自造
+     `.btn` 一并删除——失败屏按钮改用官方 Button 原子（token 化），没有别的
+     消费点。 */
   color-scheme: light;
   --bg: #0f1115;
-  --panel-2: #1b2029;
   --border: #262c38;
   --text: #e6e9ef;
   --muted: #8b94a7;
   --accent: #4f8cff;
-  --accent-dim: #2b4a80;
   --red: #f85149;
 }
 
@@ -186,38 +187,11 @@ body {
   }
 }
 
-/* ---------- 按钮 ---------- */
-
-.btn {
-  border: 1px solid var(--border);
-  background: var(--panel-2);
-  color: var(--text);
-  border-radius: 6px;
-  padding: 6px 12px;
-  font-size: 13px;
-  cursor: pointer;
-  transition: background 0.15s, border-color 0.15s;
-}
-
-.btn:hover:not(:disabled) {
-  background: #222834;
-  border-color: #333b4a;
-}
-
-.btn:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-
-.btn.primary {
-  background: var(--accent-dim);
-  border-color: var(--accent);
-  color: #fff;
-}
-
-.btn.primary:hover:not(:disabled) {
-  background: var(--accent);
-}
+/* ---------- 按钮 ----------
+   2026-09-11 upstream-alignment（T15）：chamber 自造的 `.btn` 色板与规则全部
+   删除——框架级失败屏的重试/切换按钮改用官方 Button 原子
+  （ui-primitives/src/Button.tsx，token 化的 --dsw-alias-button-* 家族）。随
+   之删除的 --panel-2 / --accent-dim 只被 .btn 消费（S6 无死声明）。 */
 
 /* ---------- 通用 ---------- */
 
@@ -239,11 +213,19 @@ body {
   justify-content: center;
   gap: 10px;
   padding: 16px;
+  /* 2026-09-11 upstream-alignment（T15）：失败面改用设计系统——官方 Button
+     原子 + --dsw-alias-* 别名（upstream 自己的框架无关启动/失败页也是
+     `background: var(--dsw-alias-bg-base, …)`）。因此这一层必须跟随文档主题
+     取底色，否则浅色主题下 token 化的按钮标签会落在 chamber 暗色底上
+     （旧自造 .btn 用自有色板，正是为了在暗底上可读）。token 表未落地时回退
+     chamber 暗色，与 .instance-view / .instance-loading 同一写法。 */
+  background: var(--dsw-alias-bg-base, var(--bg));
 }
 
 .fatal-title {
   font-size: 18px;
   font-weight: 600;
+  color: var(--dsw-alias-label-primary, var(--text));
 }
 
 /* 覆盖式致命屏：视图保持挂载（会话保活 + 无僵尸 ctx），控制面不可达时
@@ -252,14 +234,55 @@ body {
   position: absolute;
   inset: 0;
   z-index: 1000;
-  background: var(--bg);
+  background: var(--dsw-alias-bg-base, var(--bg));
 }
 
 .fatal-message {
-  color: var(--red);
+  color: var(--dsw-alias-state-error-primary, var(--red));
   font-size: 13px;
   max-width: 640px;
   text-align: center;
+  overflow-wrap: anywhere;
+}
+
+/* 失败插件清单（T15 2026-09-11 upstream-alignment）：upstream 的失败报告逐项
+   列出未激活的插件 id（boot-page.ts `Failed to load plugins` + 每 id 一行；
+   boot-page.module.css 里标题用正文字体、条目用等宽字体 + 次级标签色）。
+   chamber 覆盖层由 shell 的同一份 loader sweep 取到同一事实
+   （ShellState.failedEntries），因此这里复刻那份呈现：块整体居中（跟随覆盖层
+   排版），条目左对齐以免长包名反复换行难读。 */
+.fatal-entries {
+  display: flex;
+  flex-direction: column;
+  align-self: center;
+  gap: 2px;
+  margin-top: 6px;
+  max-width: 640px;
+  text-align: left;
+}
+
+.fatal-entries-title {
+  font-size: 14px;
+  line-height: 22px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-primary, var(--text));
+}
+
+.fatal-entry {
+  font-family: var(
+    --ds-font-family-code,
+    'SF Mono',
+    'JetBrains Mono',
+    'Fira Code',
+    Consolas,
+    'Liberation Mono',
+    Menlo,
+    Courier,
+    monospace
+  );
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-secondary, var(--muted));
   overflow-wrap: anywhere;
 }
 

@@ -21,17 +21,19 @@ import { chamberBridge } from '../../dsh-chamber-client-ui-sidebar/src/shared/ag
 // Test knobs — same module instance shell.ts sees (the loader maps the bare
 // specifier to this URL; the relative import resolves to the same file).
 import {
+  FIBER_STATE,
   __testConfiguredContexts, __testDisposedCount, __testEventLog,
   __testEntryStates, __testOpenedSessions, __testQueueDisposeGate, __testQueueRunGate,
   __testResetConfiguredContexts, __testResetDisposed, __testResetEventLog,
   __testResetLifecycle, __testSetSessionsAvailable, __testSetSessionsListed,
   __testSetSessionsOpenError, __testSetSessionsReadError,
-  __testSetSessionsSnapshotError,
+  __testSetSessionsSnapshotError, __testSetLoaderEntries,
   __testSetBootError, __testSetChamberPrefetchError, __testSetModuleSystemError, __testSetRunError,
 } from '../test-fixtures/dsh-client-web.mjs'
 
 const shellModule = await import('../src/shell.ts')
 const {
+  collectFailedEntries,
   disposeAllShells, disposeInstanceShell, INSTANCE_TAIL_WAIT_CAP_MS, openInstanceSession,
   tailWaitRemainingMs,
 } = shellModule
@@ -122,6 +124,87 @@ test('bootInstanceShell: a resolved-but-failed run (bootError set) settles as a 
     restoreFetch()
     restoreWindow()
   }
+})
+
+test('bootInstanceShell: the failure report names the plugin ids that did not activate (T15)', async () => {
+  // 2026-09-11 upstream-alignment (T15): upstream's boot page lists one item per
+  // failed plugin id (boot-page.ts `Failed to load plugins`) and its post-settle
+  // sweep names the same entries. The chamber overlay replaced that in-shell
+  // page, so the shell reads the SAME live loader (ctx.loader.entries(), the
+  // sweep's own source) before teardown and projects the ids on the ShellState
+  // the App already consumes.
+  const restoreFetch = stubUnavailableGraph()
+  const restoreWindow = stubWindow()
+  __testResetDisposed()
+  __testSetBootError('web boot: 2 entries did not activate\n@deepseek-ai/dsh-client-ui-tool: pending (waiting for service: sidebarRight)')
+  __testSetRunError(undefined)
+  __testSetLoaderEntries([
+    { options: { name: '@dsh-chamber/app' }, fiber: { state: FIBER_STATE.ACTIVE } },
+    { options: { name: '@deepseek-ai/dsh-client-ui-tool' }, fiber: { state: FIBER_STATE.PENDING } },
+    // No fiber = the import failed (upstream projects exactly this as a failure).
+    { options: { name: '@scope/third-party' } },
+    { options: { name: '@scope/third-party' } },
+  ])
+  try {
+    const state = await bootInstanceShell('ssh-test-fail-ids', '/api/i/ssh-test-fail-ids', {} as HTMLElement, () => {})
+    assert.equal(state.booted, false)
+    assert.deepEqual(state.failedEntries,
+      ['@deepseek-ai/dsh-client-ui-tool', '@scope/third-party'],
+      'the non-active entry ids travel in loader order, deduped')
+  } finally {
+    __testSetLoaderEntries(undefined)
+    __testSetBootError(undefined)
+    restoreFetch()
+    restoreWindow()
+  }
+})
+
+test('bootInstanceShell: a hostile runtimeCtx read never replaces the boot failure report (T15)', async () => {
+  // The sweep is an external-boundary read: the failure report the shell
+  // already holds must survive a throwing runtimeCtx getter (same discipline as
+  // describeShellError / the dispatchOpen hostile-read arm) — otherwise the
+  // overlay would show the trap's error instead of the boot failure.
+  const restoreFetch = stubUnavailableGraph()
+  const restoreWindow = stubWindow()
+  __testResetDisposed()
+  __testSetBootError('web boot: 1 entry did not activate')
+  __testSetRunError(undefined)
+  __testSetSessionsReadError(new Error('hostile runtimeCtx trap'))
+  try {
+    const state = await bootInstanceShell('ssh-test-fail-hostile', '/api/i/ssh-test-fail-hostile', {} as HTMLElement, () => {})
+    assert.equal(state.booted, false)
+    assert.equal(state.error, 'web boot: 1 entry did not activate', 'the boot report survives')
+    assert.equal(state.failedEntries, undefined, 'no list is invented when the sweep cannot be read')
+  } finally {
+    __testSetSessionsReadError(undefined)
+    __testSetLoaderEntries(undefined)
+    __testSetBootError(undefined)
+    restoreFetch()
+    restoreWindow()
+  }
+})
+
+test('collectFailedEntries mirrors the official sweep and tolerates extra rows', () => {
+  // Pure sweep (the boot path above exercises it through the fixture): only
+  // non-active entries are reported, tolerated (per-instance extra) rows never
+  // fail a boot, and a hostile loader read can never turn a failure report into
+  // a second failure.
+  const entries = [
+    { options: { name: 'a' }, fiber: { state: FIBER_STATE.ACTIVE } },
+    { options: { name: 'b' }, fiber: { state: FIBER_STATE.PENDING } },
+    { options: { name: 'c' }, fiber: { state: FIBER_STATE.FAILED } },
+    { options: { name: 'extra' }, fiber: { state: FIBER_STATE.FAILED } },
+    { options: { name: 'd' } },
+    { options: { name: 'd' } },
+  ]
+  assert.deepEqual(
+    collectFailedEntries({ loader: { entries: () => entries } }, new Set(['extra'])),
+    ['b', 'c', 'd'],
+  )
+  assert.deepEqual(collectFailedEntries({ loader: { entries: () => entries } }), ['b', 'c', 'extra', 'd'])
+  assert.deepEqual(collectFailedEntries(undefined), [])
+  assert.deepEqual(collectFailedEntries({}), [])
+  assert.deepEqual(collectFailedEntries({ loader: { entries() { throw new Error('hostile loader') } } }), [])
 })
 
 test('bootInstanceShell: a clean run settles booted with no error and keeps the entry', async () => {

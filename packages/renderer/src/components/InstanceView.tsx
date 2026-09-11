@@ -37,6 +37,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { bootInstanceShell, shellStateIdle, type ChamberTransport, type ShellState } from '../shell.ts'
 import { runViewTransition } from '../view-transition.ts'
+import { frameText, type FrameLocale } from '../locales.ts'
 
 export interface InstanceViewProps {
   instanceId: string
@@ -48,6 +49,12 @@ export interface InstanceViewProps {
   active: boolean
   /** 服务器显示名（骨架屏文案）。 */
   label: string
+  /**
+   * 框架文案语言（T16 2026-09-11 upstream-alignment）：框架没有 `t` 席位，
+   * App 用 locales.ts 的 typed 字典按文档语言解析后传入（本组件只渲染，
+   * 不自己读文档语言，保证同一帧内所有 chamber chrome 用同一语言）。
+   */
+  locale: FrameLocale
   /** boot settle 回调（成功或失败均触发）：App 用于预热队列推进。 */
   onSettled?: (instanceId: string) => void
   /**
@@ -82,8 +89,8 @@ export interface InstanceViewProps {
 }
 
 export default function InstanceView({
-  instanceId, basePath, sourceFingerprint, transport, active, label, onSettled, onStateChange, retryToken,
-  waitForServing, holdVeil,
+  instanceId, basePath, sourceFingerprint, transport, active, label, locale, onSettled, onStateChange,
+  retryToken, waitForServing, holdVeil,
 }: InstanceViewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const startedRef = useRef(false)
@@ -166,9 +173,13 @@ export default function InstanceView({
       {veilVisible && (
         <div className="instance-loading" aria-busy="true">
           <div className="instance-loading-main">
-            <div className="instance-loading-spinner" />
-            <div className="instance-loading-title">正在加载 {label}…</div>
-            <div className="instance-loading-hint">首次打开需加载完整界面</div>
+            {/* a11y (2026-09-11 upstream-alignment nit): the spinner is pure
+                decoration — the adjacent title already announces the state, so
+                it must stay out of the accessibility tree
+                (aria-busy on the veil carries the busy fact). */}
+            <div className="instance-loading-spinner" aria-hidden="true" />
+            <div className="instance-loading-title">{frameText(locale, 'boot.loading', { label })}</div>
+            <div className="instance-loading-hint">{frameText(locale, 'boot.loadingHint')}</div>
           </div>
         </div>
       )}

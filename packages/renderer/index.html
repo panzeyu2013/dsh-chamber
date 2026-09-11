@@ -77,7 +77,12 @@
         <div class="dsh-boot-inner">
           <div class="dsh-boot-spinner" aria-hidden="true"></div>
           <div class="dsh-boot-brand">dsh-chamber</div>
-          <div class="dsh-boot-hint">正在启动…</div>
+          <!-- T16（2026-09-11 upstream-alignment）：静态骨架的文案是「服务端 markup
+               的默认语言」那一份（本文件声明 lang="zh-CN"，与 locales.ts 的兜底
+               语言同源）——它不是框架代码，读不到 typed 字典；main.tsx 在 React
+               mount 前用字典的 'boot.starting' 覆盖它，因此英文文档立即拿到英文。
+               data-chamber-boot-hint 是该覆盖的唯一挂钩。 -->
+          <div class="dsh-boot-hint" data-chamber-boot-hint>正在启动…</div>
         </div>
       </div>
     </div>

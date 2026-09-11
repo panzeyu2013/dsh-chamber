@@ -33,6 +33,19 @@ declare module '@deepseek-ai/cordis' {
       open(id: string): void
       list: { getSnapshot(): { byId?: Record<string, unknown> } }
     }
+    /**
+     * Cordis Loader (mounted by dsh-client-web boot.ts runPluginBoot: `await
+     * ctx.plugin(Loader)`). Only the boot-failure sweep reads it (shell.ts
+     * collectFailedEntries, T15 2026-09-11 upstream-alignment — the same
+     * `ctx.loader.entries()` sweep upstream's assertEntriesActive reads), so
+     * the mirror stays minimal: entry name + root fiber state.
+     */
+    loader?: {
+      entries(): readonly {
+        options: { name: string }
+        fiber?: { state: number }
+      }[]
+    }
   }
   class Context {
     constructor()
@@ -95,6 +108,22 @@ declare module '@deepseek-ai/dsh-client-web' {
      */
     import(specifier: string): Promise<unknown>
   }
+  /**
+   * Fiber-state mirror (packages/dsh-client-web/src/loader-status.ts, itself a
+   * value mirror of cordis's const enum): the failed-boot sweep compares a
+   * loader entry's root fiber against ACTIVE, exactly as upstream's
+   * assertEntriesActive does (T15 2026-09-11 upstream-alignment — shell.ts
+   * collectFailedEntries). The real package exports this value; the ambient
+   * mirror only narrows it to the member the renderer reads.
+   */
+  export const FIBER_STATE: {
+    PENDING: 0
+    LOADING: 1
+    ACTIVE: 2
+    FAILED: 3
+    DISPOSED: 4
+    UNLOADING: 5
+  }
   /** The web shell kernel consumed by shell.ts (boot.ts). */
   export class AppWebEntry {
     constructor(el: HTMLElement, options?: AppWebEntryOptions)
@@ -117,8 +146,39 @@ declare module '@deepseek-ai/dsh-client-connection/client'
 declare module '@deepseek-ai/dsh-client-store'
 // C3 (2026-09 性能审计): the ui-primitives platform word imported BARE by
 // chamber-entry.ts (covered factory, never ctx.plugin — see the seed.ts /
-// platform.ts deviation notes in dsh-client-web).
+// platform.ts deviation notes in dsh-client-web). The frame's own use of this
+// package (the official Button atom, T15) goes through the deep `src/` specifier
+// declared below instead, so the barrel's markdown/highlight families stay out of
+// the main graph.
 declare module '@deepseek-ai/dsh-client-ui-primitives'
+
+/**
+ * The official Button atom, imported by the FRAME (App.tsx) by DEEP SOURCE PATH
+ * (T15 2026-09-11 upstream-alignment: the failure/retry chrome is the design
+ * system's — U ui-primitives/src/Button.tsx + its --dsw-alias-button-* tokens —
+ * not chamber's invented `.btn`). The deep form is the repo's established way to
+ * reach one internal module instead of a barrel: the ui-layout fork, the sidebar
+ * and the settings bridge all declare `@deepseek-ai/<pkg>/src/...` specifiers in
+ * their own ambient tables (e.g. ui-layout/src/vendor-modules.d.ts:138), and
+ * vite.config.mjs `dsh-chamber-deepseek-source` resolves the form to source.
+ * MEASURED reason (this build): the barrel import moves ~87 KB of primitives
+ * markdown/CodeBlock code into the main graph (raw 1,226,775 → 1,313,736,
+ * against the C6 warn gate 1,350,000) for one component. The mirror is
+ * deliberately minimal, like every other declaration in this file.
+ */
+declare module '@deepseek-ai/dsh-client-ui-primitives/src/Button.tsx' {
+  import type { ButtonHTMLAttributes, ReactNode } from 'react'
+  /** Visual variant, each backed by its --dsw-alias-button-* token family. */
+  export type ButtonVariant = 'primary' | 'ghost' | 'outline' | 'toolbar'
+  export function Button(props: {
+    variant?: ButtonVariant
+    size?: 'md' | 'sm'
+    icon?: ReactNode
+    className?: string | undefined
+    children?: ReactNode
+  } & ButtonHTMLAttributes<HTMLButtonElement>): ReactNode
+}
+
 // alpha.2: the docking-kit platform word the composite answers with a
 // covered factory (pure library — no cordis plugin, no ./client export).
 declare module '@deepseek-ai/dsh-client-ui-dockkit'
