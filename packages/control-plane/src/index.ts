@@ -1211,10 +1211,12 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
 
 export { resolveNodeExecutable, sanitizeManagedDshEnv, spawnDsh } from './spawn-dsh.ts'
 // Unary RPC remains the ordinary control-plane client. Design 17's separately
-// invoked gateway also composes the bounded server-response and event-stream
-// helpers; exporting those helpers does not add a desktop session consumer.
-export { call, probeHostIdentity, respond, openEventStream, RpcBusinessError, RpcTransportError } from './dsh-client.ts'
-export type { ProbeHostIdentityOptions, ServerRequest } from './dsh-client.ts'
+// invoked gateway composes the same unary client (runtime-manager.ts) — the
+// retired client-response/event-stream helpers (respond/openEventStream) were
+// deleted with the control-plane session-runtime domain, not re-exported
+// (2026-09-11 review).
+export { call, probeHostIdentity, RpcBusinessError, RpcTransportError } from './dsh-client.ts'
+export type { ProbeHostIdentityOptions } from './dsh-client.ts'
 // The dsh RPC wire envelope single source (A2 cross-package protocol
 // single-sourcing): envelope construction, server-response parse/validation
 // and the raw node:http unary carrier shared with the desktop probes
