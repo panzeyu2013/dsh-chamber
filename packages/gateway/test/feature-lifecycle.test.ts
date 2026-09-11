@@ -13,6 +13,14 @@
  * executed against the DOM/fetch harness in dashboard-harness.ts, so the
  * cancel/confirm semantics are covered behaviourally rather than by text.
  *
+ * 2026-09-11 review-fix: F1 locks the modal's reachability for the WHOLE armed
+ * lifetime — including the pending window, where both controls are disabled
+ * and the trap used to switch itself off — through the harness's emulated Tab
+ * move (`pressKey` performs the browser's own focus move unless the page
+ * prevented it). F2 keeps the busy flag off the live region's ancestor. F4b
+ * asserts the recorded request path SET per scenario, because the responder's
+ * throw for an unexpected path is swallowed by the page's own catch.
+ *
  * Run directly: node packages/gateway/test/feature-lifecycle.test.ts
  */
 import { test } from 'node:test'
@@ -27,7 +35,7 @@ import type { ApiRequest, ApiResponse } from '@dsh-chamber/control-plane'
 import { createChamberPlugins, SYNCED_ARTIFACT_MAX_BYTES, SYNCED_PACKAGE_MAX_BYTES } from '../src/plugins.ts'
 import { createChamberInstalled } from '../src/plugins-installed.ts'
 import { createChamberSurface } from '../src/routes.ts'
-import { createDashboardHarness, type DashboardHarness } from './dashboard-harness.ts'
+import { createDashboardHarness, type DashboardHarness, type DashboardRequest } from './dashboard-harness.ts'
 import { FakeRequest, FakeResponse, stubPluginTasks } from './utils.ts'
 
 const logger = {
@@ -184,12 +192,45 @@ const RUNTIME_STATUS = {
 
 const REMOVAL_PATHS = { password: '/auth/change-password', token: '/auth/change-token' } as const
 
+/** Every path the page requests while it boots and renders the credentials /
+ *  runtime panels. A scenario's allowed set is this baseline plus the removal
+ *  path it actually drives. */
+const BASELINE_PATHS = ['/auth/credentials', '/chamber/runtime/status', '/chamber/runtime/versions'] as const
+
+/** The elements Tab may hold while the confirmation dialog is open. */
+const DIALOG_FOCUS_IDS = new Set(['confirm-dialog', 'confirm-cancel', 'confirm-accept'])
+
+/** The page-behind controls the review found keyboard-reachable during the
+ *  pending window: the header link, Refresh, and the credential/runtime
+ *  controls — #cred-change-password among them, a POST gate with no
+ *  confirmation of its own. */
+const BACKGROUND_FOCUS_IDS = new Set([
+  'open-dsh', 'refresh', 'cred-current-password', 'cred-new-password', 'cred-change-password',
+  'cred-remove-password', 'cred-rotate-token', 'cred-remove-token', 'cred-token-value',
+  'runtime-version', 'runtime-select', 'runtime-apply', 'runtime-apply-now', 'runtime-rollback',
+  'runtime-restore', 'runtime-retry-apply', 'runtime-retry-restore', 'runtime-restart',
+  'runtime-start', 'runtime-registry', 'runtime-registry-save',
+])
+
+/** The requests a scenario may issue, and nothing else: the responder throws
+ *  for an unexpected path, but the page's own catch turns that into a status
+ *  line — so the RECORDED set is what has to be asserted, not the responder's
+ *  reaction to it (2026-09-11 review-fix F4b). */
+function assertOnlyPaths(page: DashboardHarness, allowed: readonly string[]): void {
+  for (const path of new Set(page.requests.map(request => request.path))) {
+    assert.ok(allowed.includes(path), 'the page issued an unexpected request: ' + path)
+  }
+}
+
 /** Boot the SERVED dashboard script (harness.ts) with the configured
  * credentials of `configured`, and fill the current-password proof field.
- * Removal requests are held so the pending window stays observable. */
+ * Removal requests are held so the pending window stays observable — unless
+ * `answerRemoval` takes them over, which is how the failure path below runs
+ * the page's own error handling (2026-09-11 review-fix F4b). */
 async function dashboardWithCredentials(
   t: { after(fn: () => void): void },
   configured: { password: boolean; token: boolean } = { password: true, token: true },
+  answerRemoval?: (request: DashboardRequest) => unknown,
 ) {
   const host = surface(t)
   const html = (await handle(host, 'GET', '/chamber/')).chunks.join('')
@@ -197,7 +238,7 @@ async function dashboardWithCredentials(
   const page = createDashboardHarness({
     html,
     script,
-    hold: [REMOVAL_PATHS.password, REMOVAL_PATHS.token],
+    hold: answerRemoval === undefined ? [REMOVAL_PATHS.password, REMOVAL_PATHS.token] : [],
     respond: request => {
       if (request.path === '/auth/credentials') {
         return {
@@ -210,6 +251,7 @@ async function dashboardWithCredentials(
       const removal = request.path === REMOVAL_PATHS.password ? 'password' : 'token'
       if ((request.path === REMOVAL_PATHS.password || request.path === REMOVAL_PATHS.token)
         && request.body?.remove === true) {
+        if (answerRemoval !== undefined) return answerRemoval(request)
         configured[removal] = false
         return { changed: true, kind: removal, removed: true }
       }
@@ -250,10 +292,17 @@ test('the served dashboard gates credential removal on an in-page dialog and car
   // The dialog is the PAGE's own markup: the role/aria contract plus the
   // existing panel/danger/status vocabulary (no second visual language).
   assert.match(html, /<div id="confirm-backdrop" class="dialog-backdrop" hidden>/)
-  assert.match(html, /id="confirm-dialog" class="panel dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-description"/)
+  assert.match(html, /id="confirm-dialog" class="panel dialog" tabindex="-1" role="dialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-description"/)
   assert.match(html, /<p id="confirm-pending" class="status" role="status" aria-live="polite"><\/p>/)
   assert.match(html, /<button id="confirm-cancel" type="button">Cancel<\/button>/)
   assert.match(html, /<button id="confirm-accept" class="danger" type="button"><\/button>/)
+  // 2026-09-11 review-fix F1/F2: the two background landmarks carry ids (the
+  // script makes them inert), the dialog container is the pending focus target,
+  // and the busy flag has its own row so it never sits on an ancestor of the
+  // live region.
+  assert.match(html, /<header id="page-header">/)
+  assert.match(html, /<main id="page-main">/)
+  assert.match(html, /<div id="confirm-actions" class="actions">/)
   // Title and description start EMPTY by design: the script fills them through
   // textContent, so interpolated copy is never parsed as HTML.
   assert.match(html, /<h2 id="confirm-title"><\/h2>/)
@@ -305,7 +354,7 @@ test('remove password: cancel performs nothing, confirm issues exactly one reque
   assert.equal(page.byId('confirm-accept').className, 'danger',
     'the destructive button carries the page danger styling')
   assert.equal(page.byId('confirm-pending').textContent, '')
-  assert.equal(page.byId('confirm-dialog').getAttribute('aria-busy'), null)
+  assert.equal(page.byId('confirm-actions').getAttribute('aria-busy'), null)
   assert.equal(page.activeElementId(), 'confirm-cancel')
   page.click('confirm-cancel')
 
@@ -344,7 +393,13 @@ test('remove password: cancel performs nothing, confirm issues exactly one reque
     'the pending state is announced on the dialog role="status" line')
   assert.equal(page.byId('credentials-status').textContent, 'Removing password…',
     'the page status line keeps reporting the same busy copy')
-  assert.equal(page.byId('confirm-dialog').getAttribute('aria-busy'), 'true')
+  // 2026-09-11 review-fix F2: the busy flag rides the actions row. On the
+  // dialog element it would sit on an ANCESTOR of #confirm-pending, and AT may
+  // ignore changes inside a busy subtree — swallowing the pending announcement
+  // this same task just wrote.
+  assert.equal(page.byId('confirm-actions').getAttribute('aria-busy'), 'true')
+  assert.equal(page.byId('confirm-dialog').getAttribute('aria-busy'), null,
+    'the busy flag must never sit on an ancestor of the live region it accompanies')
   assert.equal(page.byId('confirm-accept').disabled, true)
   assert.equal(page.byId('confirm-cancel').disabled, true)
   assert.equal(page.byId('confirm-accept').textContent, 'Removing password…')
@@ -364,7 +419,8 @@ test('remove password: cancel performs nothing, confirm issues exactly one reque
   assert.equal(page.byId('cred-current-password').value, '')
   assert.equal(page.byId('confirm-pending').textContent, '', 'the dialog is cleared for the next arm')
   assert.equal(page.byId('confirm-accept').textContent, '')
-  assert.equal(page.byId('confirm-dialog').getAttribute('aria-busy'), null)
+  assert.equal(page.byId('confirm-actions').getAttribute('aria-busy'), null)
+  assertOnlyPaths(page, [...BASELINE_PATHS, path])
 })
 
 test('remove token: cancel performs nothing, confirm issues exactly one request (2026-09-11 upstream-alignment T2)', async t => {
@@ -394,7 +450,8 @@ test('remove token: cancel performs nothing, confirm issues exactly one request 
   assert.equal(issued[0].method, 'POST')
   assert.deepEqual(issued[0].body, { remove: true, currentPassword: 'current-secret' })
   assert.equal(page.byId('confirm-pending').textContent, 'Removing token…')
-  assert.equal(page.byId('confirm-dialog').getAttribute('aria-busy'), 'true')
+  assert.equal(page.byId('confirm-actions').getAttribute('aria-busy'), 'true')
+  assert.equal(page.byId('confirm-dialog').getAttribute('aria-busy'), null)
 
   await page.release()
   assert.equal(page.dialogOpen(), false)
@@ -416,6 +473,132 @@ test('the credential-removal guards still refuse before the dialog opens (2026-0
   assert.equal(page.dialogOpen(), false)
   assert.equal(page.byId('credentials-status').textContent, 'No password is configured — nothing to remove.')
   assert.deepEqual(page.requestsTo(REMOVAL_PATHS.password), [])
+  assertOnlyPaths(page, BASELINE_PATHS)
+})
+
+test('a failed removal reports the mapped failure copy and closes the dialog (2026-09-11 review-fix F4b)', async t => {
+  // The harness's spy answers 200 for every request it does not hold, so the
+  // page's failure path had never run. `answerRemoval` supplies the error the
+  // page's own request() builds for a non-ok response — an Error carrying the
+  // wire code — and the page's catch has to map it to operator copy.
+  const { page, configured } = await dashboardWithCredentials(t, { password: true, token: true }, () => {
+    throw Object.assign(new Error('Request failed (HTTP 401)'), { code: 'invalid_credentials' })
+  })
+  const path = REMOVAL_PATHS.password
+
+  page.click('cred-remove-password')
+  page.click('confirm-accept')
+  await page.settle()
+  assert.equal(page.requestsTo(path).length, 1, 'exactly one POST reached the wire')
+  assert.equal(page.dialogOpen(), false, 'the dialog never outlives the action it announced')
+  assert.equal(page.byId('credentials-status').textContent,
+    'The current password is missing or incorrect.',
+    'the wire code is mapped to operator copy, not echoed as a raw failure')
+  assert.equal(page.byId('credentials-status').className, 'status error',
+    'the failure rides the page status styling')
+  assert.match(page.byId('password-projection').textContent, /^Configured \(source: runtime\)/,
+    'a refused removal changes nothing')
+  assert.equal(configured.password, true)
+  assert.equal(page.activeElementId(), 'cred-remove-password',
+    'focus comes back to the invoking control after a failure too')
+  assertOnlyPaths(page, [...BASELINE_PATHS, path])
+})
+
+// ---------------------------------------------------------------------------
+// The modal's reachability, pending window included (2026-09-11 review-fix F1)
+// ---------------------------------------------------------------------------
+test('the dialog keeps the page behind out of reach for its whole armed lifetime (2026-09-11 review-fix F1)', async t => {
+  const { page } = await dashboardWithCredentials(t)
+  const path = REMOVAL_PATHS.password
+  const invoke = 'cred-remove-password'
+
+  // Positive control for every assertion below: the harness's Tab really does
+  // walk the document's tab order, and the first two stops ARE the escape
+  // routes the review named — the header link and Refresh. Without this, "Tab
+  // never reached the page behind" would hold for a harness that moved no
+  // focus at all.
+  assert.equal(page.activeElementId(), null, 'nothing is focused after boot')
+  page.pressKey('Tab')
+  assert.equal(page.activeElementId(), 'open-dsh', 'the harness walks the document tab order')
+  page.pressKey('Tab')
+  assert.equal(page.activeElementId(), 'refresh')
+
+  // Armed: aria-modal="true" is enforced, not merely claimed — both background
+  // landmarks are inert, so the header link, Refresh, the credential controls
+  // (including #cred-change-password, which has no gate of its own) and every
+  // runtime control are out of the tab order, the accessibility tree and
+  // pointer reach.
+  page.click(invoke)
+  assert.equal(page.dialogOpen(), true)
+  assert.equal(page.byId('page-header').getAttribute('inert'), '')
+  assert.equal(page.byId('page-main').getAttribute('inert'), '')
+  assert.equal(page.activeElementId(), 'confirm-cancel')
+  // The trap cycles the dialog's two controls — through the harness's real Tab
+  // move, which lands on #open-dsh instead when the page does not trap.
+  page.pressKey('Tab')
+  assert.equal(page.activeElementId(), 'confirm-accept')
+  page.pressKey('Tab')
+  assert.equal(page.activeElementId(), 'confirm-cancel')
+  page.pressKey('Tab', { shiftKey: true })
+  assert.equal(page.activeElementId(), 'confirm-accept')
+
+  // Accepted: the action is on the wire and unanswered, both controls are
+  // disabled, and the browser hands focus to <body> — the window in which the
+  // trap used to switch itself off and Tab walked the page behind, exactly
+  // while a scrypt verify or a store write had the operator waiting.
+  page.click('confirm-accept')
+  await page.settle()
+  assert.equal(page.requestsTo(path).length, 1, 'the accepted action is on the wire and unanswered')
+  assert.equal(page.byId('confirm-accept').disabled, true)
+  assert.equal(page.byId('confirm-cancel').disabled, true)
+  assert.equal(page.activeElementId(), null,
+    'disabling the focused control hands focus to <body>, where an untrapped Tab starts walking')
+  assert.equal(page.byId('page-header').getAttribute('inert'), '')
+  assert.equal(page.byId('page-main').getAttribute('inert'), '')
+
+  // The union that matters: no Tab step may hand focus to the page behind —
+  // the walk that reached #open-dsh and #refresh a moment ago.
+  for (let step = 0; step < 6; step += 1) {
+    page.pressKey('Tab')
+    const reached = page.activeElementId()
+    assert.ok(!BACKGROUND_FOCUS_IDS.has(reached ?? ''),
+      'Tab reached the page behind the modal (step ' + step + ': ' + String(reached) + ')')
+  }
+  page.pressKey('Tab', { shiftKey: true })
+  assert.ok(!BACKGROUND_FOCUS_IDS.has(page.activeElementId() ?? ''),
+    'Shift+Tab reached the page behind the modal')
+
+  // The shipped contract is stronger than that union: focus stays INSIDE the
+  // dialog. inert and the trap are both kept on purpose — inert is the
+  // enforcement a browser honours, the trap is the portable equivalent for an
+  // engine without inert support and for a Tab that starts on the container —
+  // so this asserts the pair rather than either mechanism alone.
+  page.pressKey('Tab')
+  assert.equal(page.activeElementId(), 'confirm-dialog',
+    'with both controls disabled, Tab lands on the dialog container (tabindex="-1")')
+  assert.ok(DIALOG_FOCUS_IDS.has(page.activeElementId() ?? ''))
+
+  // The dialog is still the only live surface, and closing it hands the
+  // background and the focus back together.
+  page.pressKey('Escape')
+  page.click('confirm-cancel')
+  assert.equal(page.dialogOpen(), true, 'a dismiss stays ignored while the action runs')
+  assert.equal(page.requestsTo(path).length, 1)
+
+  await page.release()
+  assert.equal(page.dialogOpen(), false)
+  assert.equal(page.byId('page-header').getAttribute('inert'), null,
+    'the background comes back when the dialog closes')
+  assert.equal(page.byId('page-main').getAttribute('inert'), null)
+  assert.equal(page.activeElementId(), invoke,
+    'focus returns to the invoking button — inert is lifted first, so it can take focus')
+  assertOnlyPaths(page, [...BASELINE_PATHS, path])
+
+  // And the handed-back page really is reachable again: with no dialog listener
+  // left, Tab walks on to the next control of the credentials panel.
+  page.pressKey('Tab')
+  assert.equal(page.activeElementId(), 'cred-rotate-token',
+    'a closed dialog no longer holds the keyboard')
 })
 
 test('PWA and mobile assets keep serving', async t => {

@@ -144,11 +144,11 @@ const CHAMBER_APP_HTML = `<!doctype html>
   </style>
 </head>
 <body>
-  <header>
+  <header id="page-header">
     <div><h1>dsh gateway</h1><p class="subtle">Authenticated operations</p></div>
-    <div class="header-actions"><a class="button" href="/">Open dsh</a><button id="refresh" type="button">Refresh</button></div>
+    <div class="header-actions"><a id="open-dsh" class="button" href="/">Open dsh</a><button id="refresh" type="button">Refresh</button></div>
   </header>
-  <main>
+  <main id="page-main">
     <section class="panel" aria-labelledby="credentials-title">
       <h2 id="credentials-title">Credentials</h2>
       <p id="credentials-status" class="status" role="status">Loading…</p>
@@ -215,13 +215,21 @@ const CHAMBER_APP_HTML = `<!doctype html>
        reads as an alien layer over it, and is not localizable — the same
        reason the chamber's other admin surfaces were converted. The title and
        description are deliberately empty here: app.js fills them through
-       textContent, so no interpolated copy is ever parsed as HTML. -->
+       textContent, so no interpolated copy is ever parsed as HTML.
+       2026-09-11 review-fix F1/F2: the two background landmarks carry ids so
+       the script can make them inert for the dialog's whole armed lifetime
+       (aria-modal="true" is a promise the page has to keep, not a claim); the
+       dialog container carries tabindex="-1" as the focus target while an
+       accepted action runs and both controls are disabled; and the busy flag
+       rides the actions row (#confirm-actions), never an ancestor of the
+       #confirm-pending live region, whose announcement a busy subtree may
+       swallow. -->
   <div id="confirm-backdrop" class="dialog-backdrop" hidden>
-    <div id="confirm-dialog" class="panel dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-description">
+    <div id="confirm-dialog" class="panel dialog" tabindex="-1" role="dialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-description">
       <h2 id="confirm-title"></h2>
       <p id="confirm-description" class="body"></p>
       <p id="confirm-pending" class="status" role="status" aria-live="polite"></p>
-      <div class="actions">
+      <div id="confirm-actions" class="actions">
         <button id="confirm-cancel" type="button">Cancel</button>
         <button id="confirm-accept" class="danger" type="button"></button>
       </div>
@@ -686,17 +694,46 @@ const CHAMBER_APP_JS = `(function () {
   // #confirm-* markup driven by plain DOM calls; all operator-visible copy is
   // written through textContent, never parsed as HTML.
   //
-  // One armed request at a time. ARMING fills the dialog and moves focus INTO
-  // it (Cancel, the least destructive control, takes the initial focus).
-  // CANCEL or Escape dismisses it and performs NOTHING: the runner is dropped
-  // before it is ever called, so no request leaves the page. CONFIRM launches
-  // the runner EXACTLY once and the dialog becomes a non-dismissible progress
-  // surface (both controls disabled, aria-busy set, the pending line announced
-  // through role="status") until the action settles; the action owns its own
+  // One armed request at a time. ARMING fills the dialog, makes the page
+  // behind it inert and moves focus INTO it (Cancel, the least destructive
+  // control, takes the initial focus). CANCEL or Escape dismisses it and
+  // performs NOTHING: the runner is dropped before it is ever called, so no
+  // request leaves the page. CONFIRM launches the runner EXACTLY once and the
+  // dialog becomes a non-dismissible progress surface (both controls disabled,
+  // the actions row marked busy, the pending line announced through
+  // role="status") until the action settles; the action owns its own
   // success/failure reporting, so this page's existing status lines stay the
   // single report.
+  //
+  // 2026-09-11 review-fix F1: the background is inert for the WHOLE armed
+  // lifetime, and the Tab trap covers the pending window too. Before this, the
+  // trap switched itself off the moment a confirm was accepted: with both
+  // controls disabled the browser drops focus to <body>, and Tab walked the
+  // page behind — the header link, #refresh, #cred-change-password (a real
+  // POST gate with no confirmation of its own) and every runtime control —
+  // exactly while a scrypt verify or a store write had the operator waiting.
+  // inert is the enforcement a browser honours; the trap stays as the
+  // portable equivalent, so an engine without inert (or a Tab that starts on
+  // the dialog container) still cannot leave the dialog.
+  // 2026-09-11 review-fix F2: the busy flag rides the actions row, NOT this
+  // dialog element: #confirm-pending is a descendant of the dialog, and
+  // assistive technology may ignore changes inside a busy subtree, which would
+  // swallow the very announcement the flag accompanies.
   // -------------------------------------------------------------------------
   var confirmArmed = null;
+
+  // The page behind the dialog: the two body-level landmarks. Both carry ids
+  // in the served markup so inert can be applied and — more importantly —
+  // removed again before focus is handed back to the invoking control.
+  var CONFIRM_BACKGROUND_IDS = ['page-header', 'page-main'];
+
+  function setBackgroundInert(on) {
+    for (var i = 0; i < CONFIRM_BACKGROUND_IDS.length; i += 1) {
+      var landmark = byId(CONFIRM_BACKGROUND_IDS[i]);
+      if (on) landmark.setAttribute('inert', '');
+      else landmark.removeAttribute('inert');
+    }
+  }
 
   function confirmElements() {
     return {
@@ -705,6 +742,7 @@ const CHAMBER_APP_JS = `(function () {
       title: byId('confirm-title'),
       description: byId('confirm-description'),
       pending: byId('confirm-pending'),
+      actions: byId('confirm-actions'),
       cancel: byId('confirm-cancel'),
       accept: byId('confirm-accept')
     };
@@ -719,7 +757,10 @@ const CHAMBER_APP_JS = `(function () {
     document.removeEventListener('keydown', confirmKeydown, true);
     var parts = confirmElements();
     parts.backdrop.hidden = true;
-    parts.dialog.removeAttribute('aria-busy');
+    // The background comes back BEFORE the focus hand-off: an inert invoking
+    // control cannot take focus (2026-09-11 review-fix F1).
+    setBackgroundInert(false);
+    parts.actions.removeAttribute('aria-busy');
     parts.title.textContent = '';
     parts.description.textContent = '';
     parts.pending.textContent = '';
@@ -743,7 +784,11 @@ const CHAMBER_APP_JS = `(function () {
     if (armed === null || armed.pending) return;
     armed.pending = true;
     var parts = confirmElements();
-    parts.dialog.setAttribute('aria-busy', 'true');
+    // 2026-09-11 review-fix F2: the busy flag goes on the ACTIONS ROW, not on
+    // the dialog: the pending line below is a descendant of the dialog, and a
+    // busy subtree is exactly what assistive technology may refuse to
+    // announce.
+    parts.actions.setAttribute('aria-busy', 'true');
     parts.accept.disabled = true;
     parts.cancel.disabled = true;
     parts.accept.textContent = armed.pendingLabel;
@@ -765,12 +810,21 @@ const CHAMBER_APP_JS = `(function () {
       dismissConfirmDialog();
       return;
     }
-    if (event.key !== 'Tab' || confirmArmed.pending) return;
-    // aria-modal="true" promises the page behind is unreachable, so Tab cycles
-    // the dialog's two controls (Cancel, then the destructive Confirm) instead
-    // of walking back out into the page (2026-09-11 upstream-alignment T2).
+    if (event.key !== 'Tab') return;
+    // The trap covers the WHOLE armed lifetime (2026-09-11 review-fix F1).
+    // While an accepted action runs, both controls are disabled and there is
+    // nothing inside the dialog to cycle: focus — which the disabled control
+    // handed to <body> — goes to the dialog container (tabindex="-1") and
+    // stays there. The pre-accept branch cycles the dialog's two controls
+    // (Cancel, then the destructive Confirm) instead of walking back out into
+    // the page. aria-modal="true" promises the page behind is unreachable, so
+    // this branch must never fall through to the browser's own Tab move.
     event.preventDefault();
     var parts = confirmElements();
+    if (confirmArmed.pending) {
+      parts.dialog.focus();
+      return;
+    }
     var order = [parts.cancel, parts.accept];
     var step = event.shiftKey ? -1 : 1;
     order[(order.indexOf(document.activeElement) + step + order.length) % order.length].focus();
@@ -799,8 +853,12 @@ const CHAMBER_APP_JS = `(function () {
     parts.accept.textContent = request.confirmLabel;
     parts.accept.disabled = false;
     parts.cancel.disabled = false;
-    parts.dialog.removeAttribute('aria-busy');
+    parts.actions.removeAttribute('aria-busy');
     parts.backdrop.hidden = false;
+    // aria-modal="true" is a promise: from this moment until close, the page
+    // behind the dialog is out of the tab order, out of the accessibility
+    // tree and out of pointer reach (2026-09-11 review-fix F1).
+    setBackgroundInert(true);
     document.addEventListener('keydown', confirmKeydown, true);
     // Focus moves INTO the dialog, onto the least destructive control: the
     // destructive button is never the default action of a modal.
