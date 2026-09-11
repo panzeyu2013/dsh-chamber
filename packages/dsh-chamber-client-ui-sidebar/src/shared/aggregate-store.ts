@@ -143,6 +143,23 @@ export interface OpenSessionOutcome extends OpenSessionRequest {
 }
 
 /**
+ * One successful workspace creation issued from the sidebar for a source whose
+ * shell may not be mounted (design 05 §2.2 revision 2026-12). The sidebar owns
+ * the directory-browser flow and therefore the ONLY trustworthy "this
+ * workspace now exists on that host" fact available without a shell: the
+ * unary `workspace.create` result. It publishes that fact here so the App
+ * layer can echo the row into the projection immediately
+ * (shared/workspace-echo.ts) while the authoritative `workspace/follow`
+ * baseline converges later — for an unmounted source the unary fallback cannot
+ * express an empty workspace at all (no session carries its cwd yet).
+ */
+export interface WorkspaceCreatedFact {
+  sourceId: string
+  workspaceId: string
+  path: string
+}
+
+/**
  * Per-instance runtime facts projected by the sidebar plugin of the source's
  * own ctx (design 06 §4): current session id plus per-session live rows. The
  * plugin projects the source's session-list snapshot (minus the ids it has
@@ -199,6 +216,8 @@ type RefreshListener = (sourceId: string) => void
  * service object (`ctx.sessions.refresh()` — a detached call loses `this`).
  */
 type SessionListRefreshListener = (sourceId: string) => void
+/** One successful sidebar-issued workspace creation (see WorkspaceCreatedFact). */
+type WorkspaceCreatedListener = (fact: WorkspaceCreatedFact) => void
 type SourceListener = (sourceId: string) => void
 type SettingsTargetListener = (sourceId: string | undefined) => void
 /** Page-wide active-view fact: the source whose shell is on screen, undefined until the App publishes. */
@@ -220,6 +239,7 @@ const openListeners = new Set<OpenListener>()
 const openOutcomeListeners = new Set<OpenOutcomeListener>()
 const refreshListeners = new Set<RefreshListener>()
 const sessionListRefreshListeners = new Set<SessionListRefreshListener>()
+const workspaceCreatedListeners = new Set<WorkspaceCreatedListener>()
 const activateSourceListeners = new Set<SourceListener>()
 const settingsTargetListeners = new Set<SettingsTargetListener>()
 const activeSourceListeners = new Set<ActiveSourceListener>()
@@ -337,6 +357,25 @@ export const chamberBridge = {
     sessionListRefreshListeners.add(listener)
     return () => {
       sessionListRefreshListeners.delete(listener)
+    }
+  },
+
+  /**
+   * Sidebar call after a successful `workspace.create`: publish the host
+   * workspace identity so the App layer can echo the row into that source's
+   * projection without waiting for a mount (`withWorkspaceEcho`). The App
+   * layer remains the only owner of the projection; this channel is a
+   * one-way fact, never a request to mutate the host.
+   */
+  reportWorkspaceCreated(fact: WorkspaceCreatedFact): void {
+    for (const listener of [...workspaceCreatedListeners]) listener(fact)
+  },
+
+  /** App-layer subscription to workspace-creation facts; returns the unsubscribe. */
+  onWorkspaceCreated(listener: WorkspaceCreatedListener): () => void {
+    workspaceCreatedListeners.add(listener)
+    return () => {
+      workspaceCreatedListeners.delete(listener)
     }
   },
 

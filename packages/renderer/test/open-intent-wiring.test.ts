@@ -54,7 +54,7 @@ test('the sidebar projection gates the current session on the pending intent', (
   )
   assert.match(
     app,
-    /managedRuntime, openIntents\),\n    \[health, connections, remoteInstances, remoteStatus, aggregates, hostFacts, runtimeFacts, completedBySource, activeView, pluginDiagnostics, managedRuntime, openIntents\],/,
+    /managedRuntime, workspaceEcho, openIntents\),\n    \[health, connections, remoteInstances, remoteStatus, aggregates, hostFacts, runtimeFacts, completedBySource, activeView, pluginDiagnostics, managedRuntime, workspaceEcho, openIntents\],/,
     'the intent must be a derive input, otherwise the gate never re-evaluates',
   )
 })

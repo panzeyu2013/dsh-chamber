@@ -36,6 +36,7 @@ import {
   emptyAggregate,
   fetchInstanceSnapshot,
   fetchManagedRuntimeState,
+  forgetPendingWorkspaces,
   getInstanceClient,
   getOpenIntentsSnapshot,
   instanceSnapshotSignature,
@@ -44,6 +45,8 @@ import {
   managedRuntimeUnusable,
   mergeRuntimeFacts,
   projectableCurrent,
+  reconcilePendingWorkspaces,
+  recordPendingWorkspace,
   releaseInstanceClient,
   releaseOpenIntent,
   reconcileCompletedFacts,
@@ -51,11 +54,14 @@ import {
   serversProjectionSignature,
   shouldHoldViewVeil,
   subscribeOpenIntent,
+  sweepPendingWorkspaces,
+  withWorkspaceEcho,
   type ChamberServerAggregate,
   type InstanceAggregate,
   type InstanceRuntimeReport,
   type InstanceSnapshot,
   type PluginGraphDiagnostic,
+  type WorkspaceEchoLedger,
 } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
 import { detectNotificationEdges, dedupeCompleteEdges, type SessionFacts } from './notification-edges.ts'
 import { projectBadgeCount } from './badge-count.ts'
@@ -272,6 +278,7 @@ function deriveServers(
   activeViewId: string,
   pluginDiagnostics: Record<string, PluginGraphDiagnostic | undefined>,
   managedRuntime: Record<string, string | null>,
+  workspaceEcho: WorkspaceEchoLedger,
   openIntents: Readonly<Record<string, string>>,
 ): ChamberServerAggregate[] {
   const servers: ChamberServerAggregate[] = []
@@ -345,7 +352,18 @@ function deriveServers(
       // blank-row currentness branch (and the sidebar ghost-key arming on the
       // REAL source id) actually fires; the ungrouped bucket title is
       // display-only (''), overridden by the sidebar's own t('list.ungrouped').
-      workspaces = deriveServerWorkspaces(aggregate, id, '', current)
+      //
+      // chamber (2026-12, design 05 §2.2 revision): the workspace-creation echo
+      // rides the SAME projection pass — one choke point for every workspace
+      // row (derived or echoed), so the echo needs no second copy inside the
+      // aggregate. `withWorkspaceEcho` is identity-preserving for an absent or
+      // empty ledger, leaving this derive byte-identical to before.
+      workspaces = deriveServerWorkspaces(
+        withWorkspaceEcho(aggregate, workspaceEcho[id]),
+        id,
+        '',
+        current,
+      )
       // Archive-manager metadata (design 24 revision 2026-09): archived rows
       // of this source's snapshot ride the same aggregate; the manager UI
       // never issues its own session read. archiveSetKnown is the provenance
@@ -653,6 +671,33 @@ export default function App() {
     aggregateRetryTimersRef.current.delete(sourceId)
   }, [])
   const [pluginDiagnostics, setPluginDiagnostics] = useState<Record<string, PluginGraphDiagnostic | undefined>>({})
+  // 工作区创建回声（2026-12，design 05 §2.2 修订）：侧栏在某来源上用 unary
+  // `workspace.create` 建好工作区后，把宿主 workspaceId 上报到这里；App 在
+  // **投影那一个**汇合点（deriveServers）把该行并入，直到权威 `workspace/follow`
+  // push 覆盖它。为什么需要：未挂载来源只有 unary 兜底（工作区靠会话 cwd 反推，
+  // 新空工作区没有会话 ⇒ 结构上不可见），已推送来源的工作区集又被冻结
+  // （commitAggregatePull 的 mounted merge），所以 requestRefresh 无论哪条分支
+  // 都刷不出这一行——真机表现为"必须手动点一下那个服务器"。
+  // state 供渲染触发，ref 供事件侧同步读（与 snapshotSources/snapshotSourcesRef 同纪律）。
+  const [workspaceEcho, setWorkspaceEcho] = useState<WorkspaceEchoLedger>({})
+  const workspaceEchoRef = useRef<WorkspaceEchoLedger>({})
+  const updateWorkspaceEcho = useCallback((next: WorkspaceEchoLedger): void => {
+    workspaceEchoRef.current = next
+    setWorkspaceEcho(next)
+  }, [])
+  /**
+   * Expire echoes past their TTL. Called from every tick that can change what a
+   * source's workspace list SHOULD contain — a new creation, an authoritative
+   * mount push, and each fallback pull — because an echo whose convergence never
+   * arrives (a source that is never mounted again, a workspace deleted on the
+   * host by another client) has no other clock: sweeping only inside the create
+   * handler would let such an entry live for the rest of the session. Identity
+   * preserving, so a sweep that expires nothing costs no re-render.
+   */
+  const sweepWorkspaceEcho = useCallback((): void => {
+    const next = sweepPendingWorkspaces(workspaceEchoRef.current, Date.now())
+    if (next !== workspaceEchoRef.current) updateWorkspaceEcho(next)
+  }, [updateWorkspaceEcho])
   // 会话打开意图（2026-12，design 05 §2.2 修订；真机问题 1）：App 是唯一写者
   // （openSession 的 arm/release），槽位本身在 sidebar 包的 shared/open-intent.ts
   // ——它是跨 ctx 单例，因为 boot 期早开臂要在**目标实例自己的 ctx 内**读它。
@@ -688,8 +733,8 @@ export default function App() {
   // chamberBridge 投影（05 §3）：health/remoteStatus/aggregates 任一变化后
   // 派生并发布；首帧（health 未就绪）即发布 connected=false 的分组。
   const servers = useMemo(
-    () => deriveServers(health, connections, remoteInstances, remoteStatus, aggregates, hostFacts, runtimeFacts, completedBySource, activeView, pluginDiagnostics, managedRuntime, openIntents),
-    [health, connections, remoteInstances, remoteStatus, aggregates, hostFacts, runtimeFacts, completedBySource, activeView, pluginDiagnostics, managedRuntime, openIntents],
+    () => deriveServers(health, connections, remoteInstances, remoteStatus, aggregates, hostFacts, runtimeFacts, completedBySource, activeView, pluginDiagnostics, managedRuntime, workspaceEcho, openIntents),
+    [health, connections, remoteInstances, remoteStatus, aggregates, hostFacts, runtimeFacts, completedBySource, activeView, pluginDiagnostics, managedRuntime, workspaceEcho, openIntents],
   )
   // chamberBridge publish 签名闸（2026-08 perf pass）：servers 在每次依赖变化
   // 时都会重建（含聚合快照上报/兜底、30s 注册表轮询、状态推送的恒新对象），但
@@ -1126,6 +1171,9 @@ export default function App() {
       delete prevRuntimeFactsRef.current[sourceId]
       delete notifiedCompleteRef.current[sourceId]
     }
+    // 工作区创建回声账本随来源生命周期收敛（同纪律：同 id 重新注册 = 新来源代，
+    // 上一代的回声不得在新代里残留成幽灵工作区行）。
+    updateWorkspaceEcho(forgetPendingWorkspaces(workspaceEchoRef.current, retired))
     // 打开意图同纪律：被删除来源的在途意图必须撤掉，否则新一代会在投影门/揭示门
     // 上被上一代的 open 永久压住（那是两个"永远不释放"的闸门）。
     clearOpenIntents(retired)
@@ -1296,6 +1344,10 @@ export default function App() {
       if (!stillCurrent()) return
       delete aggregateFailuresRef.current[instanceId]
       clearAggregateRetry(instanceId)
+      // 工作区回声的 TTL 也挂在这条 unary 兜底链上（2026-12）：未挂载来源没有
+      // 挂载 push 可依，30s 兜底拉取是它唯一的周期时钟——否则一条永远不会被
+      // 权威列表覆盖的回声（例如工作区已在别处被删除）会一直留在投影里。
+      sweepWorkspaceEcho()
       // identity-preserving：快照内容未变（兜底/手动刷新常态）则复用旧 state 对象
       // ——避免恒新对象驱动 servers 重新派生并触发 publish 签名闸后面的全量
       // 侧边栏重渲染（2026-08 perf pass）。错误分支保持无条件覆盖（error 文本
@@ -1358,7 +1410,7 @@ export default function App() {
       // session/list cwd 事实，workspace.list 已删）。
       scheduleRetry()
     }
-  }, [clearAggregateRetry, refreshHealth])
+  }, [clearAggregateRetry, refreshHealth, sweepWorkspaceEcho])
 
   /**
    * Run a bounded refresh wave: at most AGGREGATE_POLL_CONCURRENCY concurrent
@@ -2885,6 +2937,28 @@ export default function App() {
   }, [refreshAggregate])
 
   /**
+   * 工作区创建回声（2026-12，design 05 §2.2 修订；真机问题 2）：
+   * 侧栏在建好工作区后上报宿主 workspaceId，App 记入渲染端账本并把该行并入
+   * 投影（deriveServers 的单一汇合点）。权威收敛点只有两个：
+   * - 该来源挂载壳的 push 列出同一 workspaceId / 同一路径的真实 id ⇒ 账本条目
+   *   立即清除（reconcilePendingWorkspaces，见 onInstanceSnapshot）；
+   * - 来源离开注册表 / TTL 到期 ⇒ 随生命周期收敛。
+   * 这里只记录、不拉取：侧栏在自己的 create 成功后照旧 `requestRefresh`，两条
+   * 通道职责不重叠（本通道是"我刚刚造了它"的事实，刷新是"其它行要更新"）。
+   */
+  useEffect(() => {
+    return chamberBridge.onWorkspaceCreated((fact) => {
+      const { sourceId } = fact
+      if (sourceId !== LOCAL_INSTANCE_ID && !liveServerIdsRef.current.has(sourceId)) return
+      const owner = sourceLifecyclesRef.current!.capture(sourceId)
+      if (owner === null) return
+      const now = Date.now()
+      let ledger = sweepPendingWorkspaces(workspaceEchoRef.current, now)
+      ledger = recordPendingWorkspace(ledger, sourceId, { workspaceId: fact.workspaceId, path: fact.path }, now)
+      if (ledger !== workspaceEchoRef.current) updateWorkspaceEcho(ledger)
+    })
+  }, [updateWorkspaceEcho])
+  /**
    * Mounted source ctxs publish the same complete snapshot shape as the unary
    * fallback. A push invalidates any older in-flight pull before committing.
    * A withdrawal (`undefined`) means the source's arrival baselines have not
@@ -2931,6 +3005,18 @@ export default function App() {
         return { ...prev, [sourceId]: true }
       })
       if (snapshot === undefined) return
+      // 工作区创建回声的权威收敛点（2026-12，design 05 §2.2 修订）：挂载壳自己的
+      // follow baseline / upsert 列出了这个工作区（同 workspaceId，或同路径的真实
+      // id）⇒ 账本条目立刻退休，投影随之只剩权威行。刻意放在下面的 ready 门之前：
+      // push 里的工作区身份来自该来源自己的 follow 基线，与聚合是否已提交无关。
+      {
+        // TTL first, then retire whatever the authoritative list now covers: the
+        // mounted push is the echo's convergence signal, so an entry it lists has
+        // no job left and must not survive as a duplicate.
+        const swept = sweepPendingWorkspaces(workspaceEchoRef.current, Date.now())
+        const reconciled = reconcilePendingWorkspaces(swept, sourceId, snapshot.workspaces)
+        if (reconciled !== workspaceEchoRef.current) updateWorkspaceEcho(reconciled)
+      }
       // A mounted ctx can deliver a late store notification after its
       // transport generation died. Keep producer ownership, but never let
       // that notification overwrite the authoritative not-connected row;

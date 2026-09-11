@@ -616,8 +616,10 @@ export async function fetchInstanceSnapshot(client: InstanceApiClient): Promise<
   return { workspaces, sessions, archivedSessionIds: [], archiveSetKnown: false }
 }
 
-/** Trailing path segment ('' for root); the cwd-derived group title. */
-function basenameOf(cwd: string): string {
+/** Trailing path segment ('' for root); the cwd-derived group title. Shared
+ *  with the workspace-echo row builder (shared/workspace-echo.ts), so a locally
+ *  echoed workspace renders the same title its cwd-derived group would. */
+export function basenameOf(cwd: string): string {
   const trimmed = cwd.replace(/[\\/]+$/, '')
   const separator = Math.max(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\'))
   const base = separator === -1 ? trimmed : trimmed.slice(separator + 1)
