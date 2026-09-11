@@ -214,12 +214,16 @@ export const CHAMBER_COVERED_IDS: readonly string[] = [
   // loaded — page-own, no factory.
   '@deepseek-ai/dsh-client-hmr',
   // dsh-v0.1.3-alpha.2: the official open-in client row (ui-open-in-app).
-  // Chamber composes its own open-in surface (dsh-chamber-client-ui-open-in,
-  // designs 16/17/20) at the same conversation utility slot — an official
-  // row materialized from the host graph would add a second entry. Skipped
-  // like the other page-own official rows: the official button's availability
-  // probe fails inside the chamber shell and the entry self-hides (double
-  // guard, branch-plan T3 Phase 1). Page-own, no factory.
+  // 2026-09-11 (fork & supersede, design 20 §2.2): our
+  // dsh-chamber-client-ui-open-in is a SUPERSET of this client and REPLACES
+  // its registration at the same conversation utility slot — an official row
+  // materialized from the host graph would add a second entry. Skipped like
+  // the other page-own official rows (ui-sidebar / ui-layout), and the
+  // rationale is now replacement, not the older "the official button
+  // self-hides under the N-ctx shell" double guard: the local app catalog is
+  // served by our own instance host package
+  // (@dsh-chamber/dsh-chamber-seed-open-in), never by the official host half.
+  // Page-own, no factory.
   '@deepseek-ai/dsh-client-ui-open-in-app',
 ]
 

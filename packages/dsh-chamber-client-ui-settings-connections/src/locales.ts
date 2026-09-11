@@ -305,6 +305,9 @@ export const zh = {
   chamberBadgeNotInjected: '未注入',
   chamberBadgeUnknown: '未知',
   chamberBadgeFailed: '加载失败',
+  // 本地形态专用行（design 20 §6：open-in host 域只注入本地实例）——在远端/网关
+  // 目标上渲染它，而不是「未注入」：那里缺它不是故障，是设计。
+  chamberBadgeLocalOnly: '本地形态专用',
   // 内建表「版本」列表头（plan 24 B1.5）。
   pluginsColVersion: '版本',
   // Phase-5 A keys（design 21 §6.6 键表清单）：单一模型视图（已安装列表/恢复面）文案。
@@ -665,6 +668,10 @@ export const en: Record<SettingsConnectionsKey, string> = {
   chamberBadgeNotInjected: 'Not injected',
   chamberBadgeUnknown: 'Unknown',
   chamberBadgeFailed: 'Failed to load',
+  // Local-shape-only row (design 20 §6: the open-in host domain is injected
+  // into the local instance only) — rendered on remote/gateway targets instead
+  // of "Not injected": absent there by design, not by fault.
+  chamberBadgeLocalOnly: 'Local shape only',
   // Built-in table "version" column header (plan 24 B1.5).
   pluginsColVersion: 'Version',
   // Phase-5 A keys (design 21 §6.6 key table): unified model view (installed list / recovery surface) copy.

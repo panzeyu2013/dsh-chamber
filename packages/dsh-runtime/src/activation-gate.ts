@@ -55,16 +55,24 @@ export const REQUIRED_ACTIVATION_PROBES = [
 ] as const;
 
 /** The chamber host domains (clientGraph/graph + gitWorktree/previewCreate +
- *  archiveCleanup/probe). 2026-12 shape-awareness: the gateway shape only
- *  verifies them once a connecting desktop has synced its host packages into
- *  the seed cache — a fresh gateway hosts a plain dsh whose activation must
- *  pass without them. Design 24 §7 C: M2 replaces the binary hostDomains
- *  switch with a per-spawn derivation from the actually seeded entries; the
- *  typed subtraction below keeps the reduced set in lockstep meanwhile. */
+ *  archiveCleanup/probe + openInApp/probe). 2026-12 shape-awareness: the
+ *  gateway shape only verifies them once a connecting desktop has synced its
+ *  host packages into the seed cache — a fresh gateway hosts a plain dsh whose
+ *  activation must pass without them. Design 24 §7 C: M2 replaces the binary
+ *  hostDomains switch with a per-spawn derivation from the actually seeded
+ *  entries; the typed subtraction below keeps the reduced set in lockstep
+ *  meanwhile.
+ *
+ *  `openInApp/probe` backs a LOCAL-shape-only registry row (design 20 §6): the
+ *  desktop never syncs that package to a remote target or a gateway, so there
+ *  it is simply never part of the derived expectation. The name stays listed
+ *  here because the gateway's load-time pin compares this set with its
+ *  registry-derived (complete) probe map wholesale. */
 export const HOST_DOMAIN_PROBE_NAMES = [
   'clientGraph/graph',
   'gitWorktree/previewCreate',
   'archiveCleanup/probe',
+  'openInApp/probe',
 ] as const;
 
 // Typed subtraction: the filter keeps the literal-typed tuple elements, so a

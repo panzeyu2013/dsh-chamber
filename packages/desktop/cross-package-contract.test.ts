@@ -22,7 +22,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 // Desktop consumption entry: the dual-path facade (packaged → compiled
@@ -50,6 +50,8 @@ import {
   GIT_WORKTREE_INSERT_ID,
   GIT_WORKTREE_PACKAGE_NAME,
   localPluginList,
+  OPEN_IN_INSERT_ID,
+  OPEN_IN_PACKAGE_NAME,
   SEED_FILES,
 } from './plugin-sync.ts'
 import { syncedPluginUploadFiles } from './gateway-provider.ts'
@@ -72,6 +74,9 @@ import { HOST_IDENTITY_METHOD, LEGACY_HOST_PROBE_METHOD } from './control-plane-
 const CLIENT_GRAPH = { id: CLIENT_GRAPH_INSERT_ID, name: CLIENT_GRAPH_PACKAGE_NAME }
 const GIT_WORKTREE = { id: GIT_WORKTREE_INSERT_ID, name: GIT_WORKTREE_PACKAGE_NAME }
 const ARCHIVE_CLEANUP = { id: ARCHIVE_CLEANUP_INSERT_ID, name: ARCHIVE_CLEANUP_PACKAGE_NAME }
+// The local-shape-only row (design 20 §6) — part of the registry and of the
+// LOCAL profile's overlay, never of a remote seed (design 20 §6 sync points).
+const OPEN_IN = { id: OPEN_IN_INSERT_ID, name: OPEN_IN_PACKAGE_NAME }
 
 test('the control-plane facade selects packaged artifacts without importing Electron in pure Node', () => {
   assert.equal(isPackagedElectronRuntime({}), false, 'pure Node must use the workspace package')
@@ -103,11 +108,13 @@ const GOLDEN_OVERLAY = `- insert:
       name: '@dsh-chamber/dsh-chamber-seed-git-worktree'
     - id: archive-cleanup
       name: '@dsh-chamber/dsh-chamber-seed-archive-cleanup'
+    - id: open-in
+      name: '@dsh-chamber/dsh-chamber-seed-open-in'
 `
 
 test('the desktop-consumed insert render is byte-identical to control-plane for the same input (A2)', () => {
-  const desktop = desktopRenderCordisInserts([CLIENT_GRAPH, GIT_WORKTREE, ARCHIVE_CLEANUP])
-  const plane = planeRenderCordisInserts([CLIENT_GRAPH, GIT_WORKTREE, ARCHIVE_CLEANUP])
+  const desktop = desktopRenderCordisInserts([CLIENT_GRAPH, GIT_WORKTREE, ARCHIVE_CLEANUP, OPEN_IN])
+  const plane = planeRenderCordisInserts([CLIENT_GRAPH, GIT_WORKTREE, ARCHIVE_CLEANUP, OPEN_IN])
   assert.equal(desktop, GOLDEN_OVERLAY, 'the desktop-consumed render drifted from the golden overlay bytes')
   assert.equal(plane, GOLDEN_OVERLAY, 'the control-plane render drifted from the golden overlay bytes')
   assert.equal(desktop, plane, 'the desktop and control-plane renders must be byte-identical for the same input')
@@ -118,6 +125,7 @@ test('computeCordisPatchUpdate embeds the shared render bytes verbatim (the fold
     { insertId: CLIENT_GRAPH_INSERT_ID, packageName: CLIENT_GRAPH_PACKAGE_NAME },
     { insertId: GIT_WORKTREE_INSERT_ID, packageName: GIT_WORKTREE_PACKAGE_NAME },
     { insertId: ARCHIVE_CLEANUP_INSERT_ID, packageName: ARCHIVE_CLEANUP_PACKAGE_NAME },
+    { insertId: OPEN_IN_INSERT_ID, packageName: OPEN_IN_PACKAGE_NAME },
   ])
   assert.equal('error' in update, false)
   if ('error' in update || !update.write) return
@@ -267,7 +275,7 @@ test('the local `--patch` overlay filename comes from the control-plane export, 
     const projection = localPluginList(localDshHome)
     assert.equal(projection.chamber.ok, true)
     if (!projection.chamber.ok) return
-    assert.deepEqual(projection.chamber.packages.map(entry => entry.patched), [true, true, true],
+    assert.deepEqual(projection.chamber.packages.map(entry => entry.patched), [true, true, true, true],
       'the local overlay probe must resolve the overlay through the SHARED filename (control-plane HOST_GRAPH_PATCH_FILENAME)')
     // Renamed: a desktop that re-hardcoded its own filename would still report
     // "patched" here, so this half proves the filename really is shared.
@@ -275,9 +283,59 @@ test('the local `--patch` overlay filename comes from the control-plane export, 
     const renamed = localPluginList(localDshHome)
     assert.equal(renamed.chamber.ok, true)
     if (!renamed.chamber.ok) return
-    assert.deepEqual(renamed.chamber.packages.map(entry => entry.patched), [false, false, false],
+    assert.deepEqual(renamed.chamber.packages.map(entry => entry.patched), [false, false, false, false],
       'the overlay probe must read exactly the shared filename')
   } finally {
     rmSync(stateDir, { recursive: true, force: true })
   }
+})
+
+/** The `interface <name> { … }` body of one source file (the lockstep gate
+ *  below parses declarations, never values — the three declarations involved
+ *  live in three runtimes: desktop main, renderer browser code, client plugin). */
+function interfaceBody(source: string, name: string): string {
+  const match = new RegExp(`interface ${name} \\{([\\s\\S]*?)\\n\\}`).exec(source)
+  assert.ok(match !== null, `interface ${name} not found in the parsed source`)
+  return match[1]!
+}
+
+/** Field names declared by an interface body (comments and blanks dropped). */
+function interfaceFields(body: string): string[] {
+  return body
+    .split('\n')
+    .map(line => line.replace(/\/\/.*$/, '').trim())
+    .filter(line => line !== '' && !line.startsWith('*') && !line.startsWith('/*'))
+    // `readonly` is a modifier, not part of the field name (the client mirror
+    // declares every field readonly; the desktop projection does not).
+    .map(line => /^(?:readonly\s+)?([A-Za-z_$][\w$]*)\??\s*:/.exec(line)?.[1])
+    .filter((name): name is string => name !== undefined)
+}
+
+test('the chamber host-package state field set is identical across its three declarations (design 20 §6)', () => {
+  // The SAME wire object is declared three times on purpose (three runtimes, no
+  // shared import path): plugin-sync.ts projects it, renderer/global.d.ts types
+  // it for the preload bridge, and the settings plugin mirrors it structurally
+  // for its pure projections. 2026-09-11: the open-in `localOnly` field landed
+  // in two of the three and the renderer's wire type silently missed it — the
+  // name-set drift gate could not see a FIELD. This is that gate.
+  const repoRoot = join(import.meta.dirname, '..', '..')
+  const desktopFields = interfaceFields(interfaceBody(
+    readFileSync(join(import.meta.dirname, 'plugin-sync.ts'), 'utf8'), 'ChamberHostPackageState'))
+  const rendererFields = interfaceFields(interfaceBody(
+    readFileSync(join(repoRoot, 'packages', 'renderer', 'src', 'global.d.ts'), 'utf8'), 'ChamberHostPackageState'))
+  const clientFields = interfaceFields(interfaceBody(
+    readFileSync(join(repoRoot, 'packages', 'dsh-chamber-client-ui-settings-connections', 'src', 'client',
+      'plugin-inventory-text.ts'), 'utf8'), 'ChamberPackageState'))
+  assert.deepEqual([...desktopFields].sort(), [...rendererFields].sort(),
+    'renderer/global.d.ts must declare exactly the desktop projection fields')
+  // The FOURTH declaration of this wire object — preload.cts — is pinned to
+  // the renderer copy by ipc-surface-mirror.test.ts (L3 shape guard), so the
+  // whole four-way set is transitively covered by the two gates together.
+  //
+  // The client plugin legitimately omits `probe` (documented: unused by its
+  // projection, and the omission keeps that module importable by the plain-node
+  // suite), so it is a SUBSET — never a superset with invented fields.
+  const clientOnly = clientFields.filter(field => !desktopFields.includes(field))
+  assert.deepEqual(clientOnly, [], 'the client mirror must not invent fields the desktop never projects')
+  assert.deepEqual(desktopFields.filter(field => !clientFields.includes(field)), ['probe'])
 })

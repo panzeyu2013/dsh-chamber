@@ -22,9 +22,9 @@ export const zh = {
   managedDshStarting: '该实例的托管 dsh 正在启动，就绪后本面板自动恢复。',
   localNotReady: '本地实例尚未就绪，可在「连接」中启动。',
   sectionsEmpty: '该实例没有可显示的内容（可能正在启动，稍后自动出现）。',
-  // 2026-12 插件设置面（图驱动的每来源贡献集）：nav 入口 + 诊断文案。
-  pluginsNav: '插件设置',
-  pluginsTitle: '插件设置',
+  // 2026-12 插件设置组装面（图驱动的每来源贡献集）；2026-09 起由连接页在
+  // 该来源自己的服务器卡片内呈现（不再占 nav 槽位），文案仍归本命名空间。
+  assemblyTitle: '插件设置诊断',
   pluginsIntro: '以下内容来自该实例自己的插件清单：只有该实例实际安装的客户端插件才会出现在这里。',
   pluginsLoading: '正在加载该实例的插件设置…',
   pluginsEmpty: '该实例没有第三方插件设置。',
@@ -281,9 +281,10 @@ export const en: Record<keyof typeof zh, string> = {
   managedDshStarting: 'This instance\'s managed dsh is starting; this panel recovers automatically once it is ready.',
   localNotReady: 'The local instance is not ready yet — start it in Connections.',
   sectionsEmpty: 'Nothing to show yet (the instance may still be starting — it appears automatically).',
-  // 2026-12 plugin settings surface (graph-driven per-source contribution set).
-  pluginsNav: 'Plugin settings',
-  pluginsTitle: 'Plugin settings',
+  // 2026-12 plugin settings assembly surface (graph-driven per-source
+  // contribution set); rendered inside that source's own server card on the
+  // connections page since 2026-09 (no nav slot of its own).
+  assemblyTitle: 'Plugin settings diagnostics',
   pluginsIntro: 'The following comes from this instance\'s own plugin list: only client plugins actually installed on this instance appear here.',
   pluginsLoading: 'Loading this instance\'s plugin settings…',
   pluginsEmpty: 'This instance has no third-party plugin settings.',

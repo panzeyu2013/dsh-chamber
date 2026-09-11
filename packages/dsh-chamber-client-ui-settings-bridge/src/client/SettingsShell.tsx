@@ -32,7 +32,6 @@ import { GeneralView } from './GeneralView.tsx'
 import {
   CONNECTIONS_SECTION_ID,
   GENERAL_SECTION_ID,
-  PLUGINS_SECTION_ID,
   resolveActiveSection,
   type SectionNavRow,
 } from './nav-active.ts'
@@ -46,10 +45,7 @@ import {
   mountBridgeSession, sectionRows, type BridgeSession,
 } from './bridge-context.ts'
 import { isBasePluginId } from './base-plugins.ts'
-import {
-  extensionNotices, isPluginProvidedRow,
-} from './settings-extensions.ts'
-import { ExtensionsView } from './ExtensionsView.tsx'
+import { isPluginProvidedRow, toAssemblyReport } from './settings-extensions.ts'
 import {
   nextMountRetryDelayMs,
 } from './mount-retry.ts'
@@ -400,7 +396,9 @@ function SettingsPanel({
   )
   // The selected source's own plugin contributions (2026-12): the extension
   // phase streams in after the base chain, so this snapshot drives the nav
-  // count, the provenance marks and the diagnostics view.
+  // provenance marks and the settings-assembly report handed to the
+  // connections page (2026-09 relocation: the report is rendered inside that
+  // source's own server card instead of owning a settings nav slot).
   const extensionSubscribe = useMemo(
     () => (selectedSession === undefined ? (() => () => {}) : selectedSession.extensions.subscribe),
     [selectedSession],
@@ -412,9 +410,11 @@ function SettingsPanel({
       [selectedSession],
     ),
   )
-  const extensionNoticesCount = useMemo(
-    () => (extensionSnapshot === undefined ? 0 : extensionNotices(extensionSnapshot).length),
-    [extensionSnapshot],
+  const assemblyReport = useMemo(
+    () => (selectedId === undefined || extensionSnapshot === undefined
+      ? undefined
+      : toAssemblyReport(selectedId, extensionSnapshot)),
+    [selectedId, extensionSnapshot],
   )
   const [refreshing, setRefreshing] = useState(false)
   const refreshExtensions = useCallback((): void => {
@@ -434,14 +434,11 @@ function SettingsPanel({
     ? t('connectionsNav')
     : active === GENERAL_SECTION_ID
       ? t('generalNav')
-      : active === PLUGINS_SECTION_ID
-        ? t('pluginsTitle')
-        : rows.find(row => row.id === active)?.label ?? t('title')
+      : rows.find(row => row.id === active)?.label ?? t('title')
   // The header sub-line names the selected server for SERVER-OWNED content
-  // only (the chamber-global connections/general/plugin pages are
-  // server-independent — implying a server there would mislead).
+  // only (the chamber-global connections/general pages are server-independent
+  // — implying a server there would mislead).
   const headerSub = active !== CONNECTIONS_SECTION_ID && active !== GENERAL_SECTION_ID
-    && active !== PLUGINS_SECTION_ID
     ? selected?.label ?? ''
     : ''
   // Per-source client-plugin runtime diagnostics, keyed by source id
@@ -535,22 +532,6 @@ function SettingsPanel({
           </div>
           <div className={css.navDivider} />
           <div className={css.navList}>
-            {/* Plugin diagnostics (2026-12): rendered only when the selected
-                source's own plugin list produced something to say — an
-                unconditional row would be noise on every instance. */}
-            {(extensionNoticesCount > 0 || extensionSnapshot?.state === 'loading') && (
-              <button
-                key={PLUGINS_SECTION_ID}
-                type="button"
-                className={clsx(css.navCell, active === PLUGINS_SECTION_ID && css.active)}
-                aria-current={active === PLUGINS_SECTION_ID ? 'true' : undefined}
-                onClick={() => onSelectSection(PLUGINS_SECTION_ID)}
-              >
-                <IconPersonalizationOutline16 className={css.navIcon} size={16} />
-                <span className={css.navLabel}>{t('pluginsNav')}</span>
-                {extensionNoticesCount > 0 && <span className={css.pluginTag}>{extensionNoticesCount}</span>}
-              </button>
-            )}
             <button
               key={CONNECTIONS_SECTION_ID}
               type="button"
@@ -611,8 +592,19 @@ function SettingsPanel({
           <div className={css.options}>
             {active === CONNECTIONS_SECTION_ID ? (
               /* Chamber-global connection management: independent of the
-                 selected server (never refetched on server switch). */
-              <ConnectionsSection t={connectionsT} pluginDiagnostics={pluginDiagnostics} onRecheckDiagnostic={recheckDiagnostic} />
+                 selected server (never refetched on server switch). The
+                 SELECTED source's settings-assembly report rides along
+                 (2026-09 relocation) and renders inside that source's own
+                 card — see settings-assembly-diagnostics.tsx. */
+              <ConnectionsSection
+                t={connectionsT}
+                pluginDiagnostics={pluginDiagnostics}
+                onRecheckDiagnostic={recheckDiagnostic}
+                assemblyReport={assemblyReport}
+                assemblyT={t}
+                onRefreshAssembly={refreshExtensions}
+                assemblyRefreshing={refreshing}
+              />
             ) : active === GENERAL_SECTION_ID ? (
               /* Chamber-global runtime settings (design 14 D7 / design 15):
                  close-window behavior / launch at login / keep awake / quit
@@ -620,15 +612,6 @@ function SettingsPanel({
                  independent of the selected server. The update status (design
                  11) lives inside this section too. */
               <GeneralView t={t} />
-            ) : active === PLUGINS_SECTION_ID ? (
-              /* The selected source's own plugin contributions (2026-12):
-                 what loaded, what did not, and why. Never silent. */
-              <ExtensionsView
-                t={t}
-                snapshot={extensionSnapshot}
-                onRefresh={refreshExtensions}
-                refreshing={refreshing}
-              />
             ) : selectedId === undefined || selected === undefined ? (
               <p className={css.placeholder}>{t('noServers')}</p>
             ) : !selected.connected ? (

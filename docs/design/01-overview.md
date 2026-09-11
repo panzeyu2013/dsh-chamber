@@ -91,7 +91,7 @@ presets 页操作（copy/read/remove 经反代写远端文件）；部署内置�
 | 17 | [17-server-side-gateway.md](17-server-side-gateway.md) | 现行（连接模型 v2 + 认证边界；实机门禁见 STATUS） | 独立启动的认证默认 server 形态（`--no-auth` 为显式可信网络例外）：单本地 dsh 公网接入、Desktop `gateway` target 与 gateway 自有派生编排；普通 control-plane 仍 loopback-only |
 | 18 | [18-dsh-runtime-version.md](18-dsh-runtime-version.md)；增补 [18-addendum-apply-now.md](18-addendum-apply-now.md)（「立即应用」） | 现行（打包/实机证据见 STATUS） | dsh 运行时版本管理：source-bound 安装、per-server 设置段、探针门控激活/回退、快照/失败现场与磁盘治理；§9 扩展 gateway 宿主（`/chamber/runtime` + 启动切换相位） |
 | 19 | [19-notifications.md](19-notifications.md) | 现行（macOS 权限/打包态实机验收未完成） | 桌面通知：session complete/ask/request 推送原生通知（设置可选项）+ 未读徽标。检测 = renderer 复用 06 §4 事实通道边沿检测（零控制面改动）；呈现 = 主进程 Electron Notification + 点击打开会话；设置 = chamber-settings.json 新增 `notifications` + 并入通用页「通知」控制组（无新设置入口）；OpenChamber 通知功能调研见文内 §2 |
-| 20 | [20-open-in-registry.md](20-open-in-registry.md) | 现行 | open-in 打开注册表（design 16 演进）：单一 header 入口按 per-source 视图模型选择通道——本地来源走实例官方宿主目录（`<basePath>/open-in-app/*`，实例进程内执行）+ 主进程 VS Code 覆盖；远程 ssh 仅主进程 VS Code Remote；http/未知无入口。主进程注册表收窄 vscode-only + 六步 loud 执行管线 + 能力协商 IPC；插件 `dsh-chamber-client-ui-open-in` |
+| 20 | [20-open-in-registry.md](20-open-in-registry.md) | 现行 | open-in 打开面（design 16 演进；**2026-09-11 fork & supersede**）：官方两份都不使用——宿主半 fork 进实例内 seed 包（`@dsh-chamber/dsh-chamber-seed-open-in`：本机全量目录 + 真实图标 + 拉起，localOnly），客户端半由 `@dsh-chamber/dsh-chamber-client-ui-open-in` 承接为官方超集。单一 header 入口按 per-source 视图模型选通道：本地走实例内 Remote、远程 ssh 走主进程 VS Code Remote、http/未知无入口；主进程注册表 vscode-only + 六步 loud 管线 + 能力协商 IPC。无 vendor 补丁、无 spawn/overlay 改动 |
 | 21 | [21-gateway-plugin-parity.md](21-gateway-plugin-parity.md) | 现行（A/B/C；余留项见文内登记） | 统一插件管理模型与 gateway 连接对齐：单一插件管理模型、末段执行分叉（ssh exec / gateway 编排面） |
 | 22 | [22-linux-desktop.md](22-linux-desktop.md) | 现行（实机门禁见 STATUS） | Linux 桌面支持：AppImage（x64）发行形态 + 自动更新形态门（可写 $APPIMAGE）、XDG/$APPIMAGE 桌面集成纪律（自启 + 每启重写的协议 .desktop）、node 兜底平台分表与目录 fsync 平台无关容错、release.yml build-linux 腿 |
 | 23 | [23-windows-support.md](23-windows-support.md) | 未实现（代码项已落地；真实 runner/实机门禁未过） | Windows 支持：平台适配、运行时管理解锁纪律、妥协点与验收矩阵 |
@@ -121,6 +121,13 @@ presets 页操作（copy/read/remove 经反代写远端文件）；部署内置�
 > 桌面同源的 dsh 运行时版本管理（design 18 共享核心 + `/chamber/runtime` 面），
 > 不新增执行面、control-plane 版本切换零改动（「重启 dsh」另增事务化
 > `restartLocal()` 接口，design 18 §9.3）、P3 移出项不回流。
+>
+> **2026-09-11 追加（design 20 §2.2/§6）**：open-in 裁决为 **fork & supersede**——官方宿主半
+> 的 fork `packages/dsh-chamber-seed-open-in` 是**第四个实例内宿主域**（命名空间 `openInApp`，
+> **仅本地形态 seed**：`localOnly`，不同步到远程/gateway）。边界收窄为：只做「本机应用目录探测 +
+> 真实 bundle 图标 + 一次拉起」，只接受 catalog 白名单 id 与绝对**目录**（`isDirectory()` 校验），
+> 无读取面、无任意 argv、无本地文件级打开；控制面仍是零执行面，桌面主进程仍是 vscode-only。
+> 该域由我们自己的客户端插件消费（官方两份都不加载/不被调用），不构成会话域或执行面先例。
 
 这里移出的是宿主已经覆盖的“通知中心”UI/历史/管理域；设计 19 的桌面原生边沿
 通知只投影 renderer 已有的每实例运行时事实，不建立控制面通知消费者、历史或中心，

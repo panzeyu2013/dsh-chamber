@@ -1177,7 +1177,7 @@
   gap: 4px;
 }
 
-/* ---- 插件设置诊断面（2026-12，图驱动的每来源贡献集）---- */
+/* ---- 插件分节来源标记（2026-12，图驱动的每来源贡献集）---- */
 
 /* nav 行上的来源标记：第三方插件提供的分节（官方/自研基础集不显示）。 */
 .pluginTag {
@@ -1189,57 +1189,4 @@
   line-height: 16px;
   color: var(--dsw-alias-label-tertiary);
   background: var(--dsw-alias-bg-module-platform);
-}
-
-.pluginsView {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  min-width: 0;
-}
-
-.pluginsIntro {
-  margin: 0;
-  font-size: 12px;
-  line-height: 18px;
-  color: var(--dsw-alias-label-tertiary);
-}
-
-.pluginsToolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.pluginsCount {
-  font-size: 12px;
-  line-height: 18px;
-  font-weight: 600;
-  color: var(--dsw-alias-label-primary);
-}
-
-.noticeList {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.noticeItem {
-  padding: 8px 10px;
-  border-radius: 8px;
-  font-size: 12px;
-  line-height: 18px;
-  color: var(--dsw-alias-label-secondary);
-  background: var(--dsw-alias-bg-module-platform);
-  overflow-wrap: anywhere;
-}
-
-/* 通道级不可用（图不可达）比单插件状态更醒目。 */
-.noticeWarn {
-  color: var(--dsw-alias-label-primary);
-  border: 1px solid var(--dsw-alias-state-error-primary);
 }

@@ -4,14 +4,17 @@
  * VS Code deep-link module (design 16): vscode is ONE provider of a registry
  * whose apps are looked up by id.
  *
- * Batch 3 Phase 2 (2026-09): the provider set is deliberately vscode-only.
- * The local file manager (and every other local application) now comes from
- * the INSTANCE's own official open-in catalog (`dsh-host-open-in-app`, reached
- * through the per-instance proxy), so the main process no longer carries
- * finder/stat/openPath/reveal IPC surfaces — the local launch trust boundary
- * moved from trusted IPC to the instance's own authenticated host route, and
- * the main process keeps only what the instance cannot do: constructing the
- * VS Code remote URL for SSH sources from the chamber's registry facts.
+ * Batch 3 Phase 2 (2026-09), revised by design 20 §2.2 (fork & supersede,
+ * 2026-09-11): the provider set is deliberately vscode-only. The local file
+ * manager (and every other local application) is served by the INSTANCE's own
+ * chamber host domain — `@dsh-chamber/dsh-chamber-seed-open-in` (the fork of
+ * upstream's open-in host half), reached by the client plugin over that
+ * instance's generic RPC — so the main process no longer carries
+ * finder/stat/openPath/reveal IPC surfaces, and it never calls the official
+ * host half either: the local launch trust boundary lives in the instance
+ * process, and the main process keeps only what the instance cannot do —
+ * constructing the VS Code remote URL for SSH sources from the chamber's
+ * registry facts.
  *
  * The registry mirrors two established philosophies:
  * - transport-provider.ts's "new source = new provider": each app is a
@@ -124,10 +127,12 @@ const vscodeApp = Object.freeze<OpenInApp>({
 })
 
 /**
- * The fixed-order registry. Batch 3 Phase 2: vscode only — the local file
- * manager and every other local application come from the instance's own
- * official open-in catalog over the per-instance proxy (the instance performs
- * those launches; the main process never regains a local-execution surface).
+ * The fixed-order registry. Batch 3 Phase 2, revised by design 20 §2.2:
+ * vscode only — the local file manager and every other local application come
+ * from the instance's own chamber host domain
+ * (`@dsh-chamber/dsh-chamber-seed-open-in`), which the client plugin reaches
+ * over that instance's generic RPC (the instance performs those launches; the
+ * main process never regains a local-execution surface).
  */
 const openInApps: readonly OpenInApp[] = Object.freeze([vscodeApp])
 

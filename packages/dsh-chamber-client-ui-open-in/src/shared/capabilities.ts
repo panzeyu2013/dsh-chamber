@@ -168,13 +168,14 @@ export function buildOpenInLaunchRequest(
 /**
  * Source-aware capability filter kept pure for deterministic client tests.
  * Since Batch 3 Phase 0 this delegates to the per-source view-model
- * (`open-in-view-model.ts`): the official catalog pool is absent here (the
- * current UI has no host-catalog channel yet), so the main pool decides — the
- * returned apps are the input objects in view-model order.
+ * (`open-in-view-model.ts`): this helper folds the main-process pool only (the
+ * instance-hosted local pool is supplied by the adapter, not here), so the
+ * main pool decides — the returned apps are the input objects in view-model
+ * order.
  */
 export function usableOpenInApps(apps: readonly OpenInApp[] | null, source: OpenInSource): OpenInApp[] {
   const pool = apps ?? []
-  const model = buildOpenInViewModel({ source, officialEntries: null, mainEntries: pool })
+  const model = buildOpenInViewModel({ source, localEntries: null, mainEntries: pool })
   const byId = new Map(pool.map(app => [app.id, app]))
   return model.entries
     .map(entry => byId.get(entry.id))

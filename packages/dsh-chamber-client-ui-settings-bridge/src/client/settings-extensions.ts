@@ -683,6 +683,48 @@ export function extensionNotices(snapshot: ExtensionSnapshot): SettingsNotice[] 
 }
 
 /**
+ * One source's settings-assembly report: the cross-package DTO the settings
+ * shell hands to the connections page, which renders it INSIDE that source's
+ * server card (2026-09 relocation, user decision).
+ *
+ * WHY the report has no settings nav slot of its own: its SUBJECT is one
+ * selected source while its OWNER is the chamber shell, so it fits neither nav
+ * group — the first group is the selected source's own `settings.section`
+ * ledger (provenance = that source's plugin graph, see `sectionRows`), and the
+ * second is chamber-global state that must stay server-independent
+ * (connections / general). As a card block it is scoped by construction: it is
+ * rendered on exactly the card whose source id it names.
+ */
+export interface SettingsAssemblyReport {
+  /** The source this snapshot belongs to ('local' | '<kind>-<id>'). */
+  sourceId: string
+  /** The extension phase's state for that source. */
+  state: ExtensionState
+  /** Kept rows considered by the phase (the "N plugins" count). */
+  total: number
+  /** Why the phase produced nothing (`unavailable` only). */
+  reason?: string
+  /** The honest line list (stable reading order, see {@link extensionNotices}). */
+  notices: readonly SettingsNotice[]
+}
+
+/**
+ * Project a live extension snapshot into the connections-page report.
+ * @param sourceId - the source the snapshot belongs to (the card key).
+ * @param snapshot - the live extension snapshot.
+ * @returns the report handed across the package boundary.
+ */
+export function toAssemblyReport(sourceId: string, snapshot: ExtensionSnapshot): SettingsAssemblyReport {
+  return {
+    sourceId,
+    state: snapshot.state,
+    total: snapshot.total,
+    ...(snapshot.reason === undefined ? {} : { reason: snapshot.reason }),
+    notices: extensionNotices(snapshot),
+  }
+}
+
+/**
  * The provenance of one nav row: a non-base registrant means a plugin (not the
  * chamber's own base set) provided this section, and the UI marks it as such.
  * @param row - the projected nav row.

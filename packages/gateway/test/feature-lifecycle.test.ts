@@ -173,6 +173,11 @@ test('chamber plugins sync caches desktop-provided host packages (2026-12 Phase 
       { name: '@dsh-chamber/dsh-chamber-seed-client-graph', version: null },
       { name: '@dsh-chamber/dsh-chamber-seed-git-worktree', version: null },
       { name: '@dsh-chamber/dsh-chamber-seed-archive-cleanup', version: null },
+      // The projection is REGISTRY-DERIVED, so a new host package row appears
+      // here without a gateway edit. The open-in row (design 20 §6) is
+      // `localOnly`: it is in the derived whitelist but the desktop never
+      // uploads it, so its cache — and therefore its version — stays absent.
+      { name: '@dsh-chamber/dsh-chamber-seed-open-in', version: null },
     ],
   })
 
@@ -188,6 +193,7 @@ test('chamber plugins sync caches desktop-provided host packages (2026-12 Phase 
       { name: '@dsh-chamber/dsh-chamber-seed-client-graph', version: '1.2.3' },
       { name: '@dsh-chamber/dsh-chamber-seed-git-worktree', version: null },
       { name: '@dsh-chamber/dsh-chamber-seed-archive-cleanup', version: null },
+      { name: '@dsh-chamber/dsh-chamber-seed-open-in', version: null },
     ],
   })
 
@@ -242,6 +248,11 @@ test('chamber plugins upload enforces the body and per-file size bounds', async 
       { name: '@dsh-chamber/dsh-chamber-seed-client-graph', version: null },
       { name: '@dsh-chamber/dsh-chamber-seed-git-worktree', version: null },
       { name: '@dsh-chamber/dsh-chamber-seed-archive-cleanup', version: null },
+      // The projection is REGISTRY-DERIVED, so a new host package row appears
+      // here without a gateway edit. The open-in row (design 20 §6) is
+      // `localOnly`: it is in the derived whitelist but the desktop never
+      // uploads it, so its cache — and therefore its version — stays absent.
+      { name: '@dsh-chamber/dsh-chamber-seed-open-in', version: null },
     ],
   })
 

@@ -1,0 +1,27 @@
+{
+  "name": "@dsh-chamber/dsh-chamber-seed-open-in",
+  "description": "Per-dsh-instance open-in host domain (design 20 §6, fork & supersede): the local application catalog, real bundle icons and directory launches over openInApp/{probe,apps,icon,open}",
+  "version": "0.2.4",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "exports": {
+    ".": "./dist/index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist/index.js"
+  ],
+  "license": "MIT",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node --experimental-transform-types --import ./test/vendor-register.mjs test/core.test.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "workspace:^",
+    "@deepseek-ai/dsh-native-command": "workspace:^",
+    "@deepseek-ai/dsh-subprocess": "workspace:^",
+    "@deepseek-ai/dsh-typert-protocol": "workspace:^"
+  }
+}

@@ -16,6 +16,17 @@
   plugins/…，child ctx 桥）→ `navDivider` → **固定 chamber 全局入口平铺**：
   `__connections`（连接）、`__general`（通用——含设计 11 的更新块）。
 - chamber 全局组件内嵌渲染（不占 child ctx、不依赖选中服务器连接）。
+- **每来源「设置组装诊断」不占 nav 槽位（2026-09 用户拍板）**：该报告由设置壳产出
+  （`settings-extensions.ts` `toAssemblyReport`），由**连接页在所选来源自己的服务器
+  卡片**内呈现（`settings-assembly-diagnostics.tsx`，与既有「客户端插件状态」同处
+  一地）。原因：它的 **subject 是单个来源、owner 是壳**——既不是该来源账本里的
+  `settings.section` 贡献（第一组的定义是"来源自己贡献了什么"），也不是与服务器
+  无关的 chamber 全局状态（第二组的契约），放进任何一组都会破坏该组的语义。
+  壳侧渲染规则：仅当卡片 id == 报告 `sourceId` 时渲染（无陈旧报告、切来源即消失）。
+  **可见性规则随之改变（有意）**：原 nav 行只在"有话说"时出现（无条件行 = 每个实例
+  的噪音）；而卡片块恒显示——它只出现在所选来源那一张卡上，一行摘要（"N 个插件 ·
+  已全部加载"）在服务器管理面是信息而非噪音，且让「重新加载」（重取插件图 +
+  reconcile）这条自助路径始终可达。
 - 插件管理在连接页内（`PluginSyncModal`/`PluginAddView`，经 `desktop_ssh_plugin_*`
   IPC）——**不搬家**。
 
@@ -26,6 +37,10 @@
 - divider 下固定入口为 2 个：`__connections` / `__general`（通用设置）。
   **更新（设计 11）不再单列入口**——并入 `__general` 视图底部（`UpdateSection`
   控制组：当前版本 + 「检查更新」按钮 + 低调状态行，见设计 11 §3.2）。
+  **第三个入口的历史（2026-09 退役）**：`__plugins`（每来源设置组装诊断）曾作为
+  固定项存在（2026-12 引入），现已移入连接页该服务器卡片；固定项集合因此回到
+  2 个，且 `FIXED_SECTION_IDS` 是机器可读的权威（`nav-active.ts`，由
+  `nav-active.test.ts` 钉死）。
 - `__general` 视图（`GeneralView`，settings-bridge 壳内）：**设计 14 全部设置
   落点**，按 OpenChamber 式**控制组**组织（组标题 + 平铺行，settings-panel
   设计语言）——
@@ -100,6 +115,9 @@ ChamberSettings.sessionTodo: {
 
 - 设计 11（更新）：更新块并入 `__general`（原 `__update` 固定入口移除）；
   「检查更新」按钮经 `dsh-chamber:update-check` IPC（主进程同一条静默检查路径）。
+- 设计 09 §5（插件设置组装诊断）：原 `__plugins` 固定入口移除（2026-09），报告改由
+  连接页在该来源的服务器卡片内呈现——**这不是"插件提级"**（§4 仍推迟不排期），
+  提级指把官方 `settings.section` 的 plugins 段抬成独立入口，与本次归位无关。
 - 设计 14（睡眠/后台常驻）：全部运行设置落 `__general`。
 - 设计 05 §5：连接设置插件（`settings.section` id `connections`）注册不变；
   chamber 固定入口是壳层结构，不新增官方 `settings.section` 注册。
@@ -109,12 +127,15 @@ ChamberSettings.sessionTodo: {
 
 - **i18n**：扩展 `dsh-chamber.settings.bridge` 命名空间（通用设置文案，
   zh/en；`verify:i18n` 必须通过）。
-- **测试**：`test:settings-bridge`（`__general` 入口渲染/active 解析/
-  壳装配隔离不变式；`update-gate`：检查按钮相位门；会话待办区与通知设置纯函数）；
-  `test:connections`（plugin-diff）不变；`typecheck:settings-bridge`、`build:renderer`。
+- **测试**：`test:settings-bridge`（`__general` 入口渲染/active 解析/固定项集合/
+  壳装配隔离不变式/`connections-section-mirror` 环境镜像漂移门；`update-gate`：
+  检查按钮相位门；会话待办区与通知设置纯函数）；`test:connections`（plugin-diff +
+  `settings-assembly-diagnostics` 纯函数）；`typecheck:settings-bridge`、
+  `typecheck:connections`、`build:renderer`。
 - **推迟（不排期）**：两级分组导航、插件提级、关于页。
-- 验证清单：两个固定入口渲染、chamber 入口在服务器未连接时可用、设置读写经
-  主进程 store、与官方段互不污染、i18n 无 DRIFTED。
+- 验证清单：两个固定入口渲染（`__plugins` 不再是固定项）、chamber 入口在服务器
+  未连接时可用、设置读写经主进程 store、与官方段互不污染、设置组装诊断只在
+  所选来源的服务器卡片内出现、i18n 无 DRIFTED。
 
 ## 5. 关联
 

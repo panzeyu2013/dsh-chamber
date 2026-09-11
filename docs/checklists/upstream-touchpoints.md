@@ -152,7 +152,8 @@ host 插件入口/半、上游 `tests/`、`tsdown.config.ts`、上游 README（a
   桩 loader（`scripts/dev/test-connection-loader.mjs` 等）——不新增裸运行时 vendor 依赖。
 - covered/factory：`packages/renderer/src/chamber-covered.ts`（CHAMBER_COVERED_IDS /
   CHAMBER_COVERED_FACTORY_IDS）；chamber-entry 执行期断言 map==列表；新增官方 client 行须
-  登记 covered（precedent：ui-open-in-app 行随 a2 登记）。删包 fail-loud 哨兵在 verify 脚本 C4。
+  登记 covered（precedent：ui-open-in-app 行随 a2 登记；该行现行理由 = 官方注册被
+  chamber fork **替换**，见设计 20 §2.2）。删包 fail-loud 哨兵在 verify 脚本 C4。
 - typert remote 装配：`vendor/…/dsh-api-remotes/src/client/index.ts` 契约 == **15**（集合与顺序；gen-typert-remotes
   与 C4 双向断言）；上游新增 remote 包 = 先裁决（是否 chamber 消费/镜像）再登记。
 - **版本锚与「活」版本字面量（2026-09 四轮登记，门 = C10）**：dsh 运行时版本的**单一来源**
@@ -207,14 +208,14 @@ host 插件入口/半、上游 `tests/`、`tsdown.config.ts`、上游 README（a
 | dsh-runtime（激活探针域） | `HOST_DOMAIN_PROBE_NAMES` ↔ gateway `HOST_PACKAGE_PROBE_DOMAINS` | C7 + gateway 运行时 fail-loud |
 | interaction/commands（`commands/execute` 第三参数） | 激活探针载荷的键名 == 上游 `execute(agent, line, submittedAttachments, signal)` 的参数名（`images` ≤0.1.2；**自 0.1.3-alpha.1 起各代皆为 `submittedAttachments`**，`attachments` 从不是上游线名） | `runtime-probes.test.ts`：读 vendor 签名逐字比对 + 夹具按真实 typert gateway 校验参数键集（**2026-09 实机：0.1.3-alpha.1 升级时写错的 `attachments` 使每条激活探针失败、每次首装本地实例被隔离，直至验收轮才发现**） |
 | dsh-host-webserver（index-inject） | `__DSH_CONNECTION_RECOVERY__` 全局注入（connection host 半） | fork C1（src/index.ts pure） |
-| dsh-host-open-in-app（官方 open-in 宿主路由） | chamber open-in 插件本地镜像 `shared/open-in-app-protocol.ts`（三条路由 + 载荷形状）与 `locales.ts` 的 `app.*` 标签表。**为何不直接 import 官方 `./shared`（2026-09 三轮裁决）**：该 export 指向 `lib/types/shared.js`，源码态 vendor 只有 `src/`，本仓 tsconfig 又排除 `vendor/**` ⇒ 镜像 + 字节级锁步是可行等价物 | open-in 插件 `test/open-in-app-protocol.test.ts`（读 vendor `shared.ts`/`OpenInAppAction.tsx` 逐字比对） |
+| dsh-host-open-in-app + dsh-client-ui-open-in-app（官方 open-in 两份） | **chamber fork（已落地）**（设计 20 §2.2/§6，2026-09-11 fork & supersede）：宿主半 `packages/dsh-chamber-seed-open-in/`（fork 自上游 `packages/host/open-in-app`，pin `183f08e9…` = dsh-v0.1.5-rc.1；`src/{catalog,resolver,icons}.ts` 逐字节 `pure`，`src/{shared,index}.ts` `patched`，`src/core.ts`/`scripts/`/`test/`/`dist/index.js` `own`，上游 `src/internals.ts`/`README*`/`tsdown.config.ts`/`tests/` `dropped`）、客户端半 `packages/dsh-chamber-client-ui-open-in/`（自有 wire 镜像 `shared/open-in-wire.ts` + 自有 `app.*` 标签表，取代原路由/标签镜像）。官方两份都不加载/不调用：官方 client 行沿用 page-own 跳过，官方 host 行保持挂载但无调用方 | **已登记 verify 脚本的 `FORKS` 表**（与本文档 §4 同源，`versionAnchor: 'chamber'`）：C1（未登记差异即硬失败）/ C3（每文件必须有 pure·patched·own·dropped 分类）/ C5（版本锚豁免：seed 包随 chamber 发版，不与上游版本相等）——上游漂移会在门里直接红；有意分歧逐条写在 `patched`/`dropped` 原因里（删 SSH 休眠门、HTTP 路由 → typert Remote `openInApp/*`、Config 形状、协议与标签所有权），fork 自身 `test/` 覆盖解析/校验/图标逻辑，跨半契约由客户端 `test/open-in-wire-lockstep.test.ts` 钉住 |
 
 ## 5. 再生物登记
 
 | 再生物 | 源 | 提交纪律 |
 |---|---|---|
 | renderer typert 工件（gen-typert-remotes 输出） | vendor typert/remote 源码 | **构建期生成、`.gitignore` 忽略，不提交**（`renderer/src/generated/`；升级后由 `build:renderer` 重生成） |
-| host dist ×3（`dist/index.js`）+ `dsh-runtime/dist/index.js` + mobile `dist/index.js`/`lib/index.js`/`lib/client.js`(+map) | chamber host 包 src / dsh-runtime src / mobile src | `build:host-packages` / `build:dsh-runtime` / mobile `build` 后提交（C8 共 5 组）。C8 **重建-比对硬失败**盯陈旧（mobile 产物由 gateway 逐字节 seed，陈旧即线上锚点失效）；两个 build 脚本都带 `absWorkingDir`，产物与调用者 CWD 无关 |
+| host dist ×4（`dist/index.js`，含 seed-open-in）+ `dsh-runtime/dist/index.js` + mobile `dist/index.js`/`lib/index.js`/`lib/client.js`(+map) | chamber host 包 src / dsh-runtime src / mobile src | `build:host-packages` / `build:dsh-runtime` / mobile `build` 后提交（C8 共 6 组）。C8 **重建-比对硬失败**盯陈旧（mobile 产物由 gateway 逐字节 seed，陈旧即线上锚点失效）；两个 build 脚本都带 `absWorkingDir`，产物与调用者 CWD 无关 |
 | boot manifest / perf-sizes | build:renderer | 构建产物 diff 随批审查 |
 | schemastery 桩 loader（connection/web 测试） | vendor source-only 现实 | 新增 vendor 运行时导入面时同步补桩 |
 
@@ -226,7 +227,7 @@ host 插件入口/半、上游 `tests/`、`tsdown.config.ts`、上游 README（a
   C5 过期锚扫描 / C6 EXCLUDED 存在性 —— **CI 在 Bootstrap 后 fail-loud**；
 - C4 roster（covered/factory 哨兵 + remote 契约 15 的集合与顺序）—— 本地/CI 均可；
 - C7 种子域锁步、C8 **提交态生成物 == src**（重建-比对，硬失败；写后原样还原，`--no-artifact-rebuild` 退回 mtime advisory）、C9 **vendor 补丁锚唯一命中**（硬失败）、C10 **版本锚一致性 + 活版本字面量白名单**（硬失败：运行时版本单一来源 = **已提交**的 `packages/desktop/vendor/dsh/pnpm-lock.yaml`，见 §3；同目录 `package.json` 被 gitignore、属派生本地状态，仅本地存在时与锁文件交叉校验；六锚 + 3 fork 必须等于该锁文件；生产源码/脚本/配置里出现未登记的「活」版本字面量即红——历史叙述只能留在注释里，具名诊断常量按上限 1 处白名单登记）—— CI 与本地均跑（CI 分 pre/post-install 两段）。
-- C2 `--tags <old> <new>`：tag 间三 fork 面重放报告（advisory），升级前先跑。
+- C2 `--tags <old> <new>`：tag 间**全部已登记 fork 面**的重放差异报告（advisory；C2 遍历 `FORKS` 全表，故三条 shadow 副本与 `seed-open-in` 都在内），升级前先跑。
 - `scripts/dev/preflight-vendor-pin.mjs <tag>`（只读，§7 第 0 步）：C2 的**超集**——
   额外报深引 vendor seam 文件、上游包集合增删、新增 client 行、运行时 npm 状态；
   纯函数单测随 `pnpm run test:upgrade-tools` 在 CI 跑。

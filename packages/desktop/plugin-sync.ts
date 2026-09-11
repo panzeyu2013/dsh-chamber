@@ -69,7 +69,7 @@ import { atomicWritePrivateFileNoFollow, ensurePrivateDirectoryNoFollow, readPri
 // constants below derive from control-plane's own seed and can never drift.
 import {
   CHAMBER_HOST_PACKAGES, HOST_ARCHIVE_CLEANUP_INSERT, HOST_GIT_WORKTREE_INSERT, HOST_GRAPH_INSERT,
-  HOST_GRAPH_PATCH_FILENAME, HOST_PACKAGE_SEED_FILES,
+  HOST_GRAPH_PATCH_FILENAME, HOST_OPEN_IN_INSERT, HOST_PACKAGE_SEED_FILES,
   type ChamberHostPackageDescriptor, type HostPackageInsert, type HostPackageSeedFile,
 } from './control-plane-module.ts'
 // ssh unified increments (design 21 §6.4, plan Phase 5): the reserved-name
@@ -251,7 +251,8 @@ export const DEFAULT_REMOTE_DSH_HOME = '~/.dsh'
 export const WEB_PROFILE = 'web'
 // Chamber host-package seed facts: the id/name pairs are control-plane's own
 // (host-graph-seed.ts HOST_GRAPH_INSERT / HOST_GIT_WORKTREE_INSERT /
-// HOST_ARCHIVE_CLEANUP_INSERT, consumed through control-plane-module.ts) —
+// HOST_ARCHIVE_CLEANUP_INSERT / HOST_OPEN_IN_INSERT, consumed through
+// control-plane-module.ts) —
 // the desktop keeps its established names because main.ts and the
 // cross-package tests import them from here; values can never drift from the
 // local profile seed (design 09 module A / design 13 §3).
@@ -261,6 +262,11 @@ export const GIT_WORKTREE_PACKAGE_NAME = HOST_GIT_WORKTREE_INSERT.name
 export const GIT_WORKTREE_INSERT_ID = HOST_GIT_WORKTREE_INSERT.id
 export const ARCHIVE_CLEANUP_PACKAGE_NAME = HOST_ARCHIVE_CLEANUP_INSERT.name
 export const ARCHIVE_CLEANUP_INSERT_ID = HOST_ARCHIVE_CLEANUP_INSERT.id
+/** The open-in host domain (design 20 §6) — a `localOnly` registry row: it is
+ *  seeded into the local profile and never travels to a remote target or a
+ *  gateway (see `ChamberHostPackageSeed.localOnly`). */
+export const OPEN_IN_PACKAGE_NAME = HOST_OPEN_IN_INSERT.name
+export const OPEN_IN_INSERT_ID = HOST_OPEN_IN_INSERT.id
 
 /**
  * The module-A seed files (design 09 module A / design 13 §3): the
@@ -446,6 +452,14 @@ export interface ChamberHostPackageState {
    * already proves its channels; only remote targets get a separate probe.
    */
   live: boolean | null
+  /**
+   * The registry row is meaningful for the LOCAL instance shape only (design
+   * 20 §6). On a remote target the row is reported with `installed:false` /
+   * `patched:false` WITHOUT any remote call, and the plugin view renders
+   * "local shape only" from this flag instead of "not injected": the package
+   * is absent by design there, never missing by fault.
+   */
+  localOnly?: boolean
 }
 
 /**
@@ -669,6 +683,13 @@ export function localPluginList(localDshHome: string): LocalPluginManifest {
         patched: localOverlayCarriesInsert(localDshHome, descriptor.insert),
         version: readManifestVersion(readDependencyManifest(profileDir, descriptor.insert.name)),
         live: null,
+        // The local profile is exactly where a local-shape-only row IS
+        // meaningful, so the flag is reported as the registry declares it and
+        // the view distinguishes it from a missing package on remote targets
+        // (design 20 §6). Absent = an ordinary row: the field is only written
+        // when it is true, so a normal row's shape stays byte-identical to the
+        // pre-open-in projection (the desktop tests pin these objects whole).
+        ...(descriptor.localOnly === true ? { localOnly: true as const } : {}),
       })),
     },
   }
@@ -966,6 +987,23 @@ async function probeRemoteChamber(
 
   const packages: ChamberHostPackageState[] = []
   for (const descriptor of CHAMBER_HOST_PACKAGES) {
+    // Local-shape-only rows (design 20 §6) are not part of a remote instance's
+    // contract: report the row with the flag and make NO remote call. Probing
+    // would cost three exec round-trips per row to learn nothing, and the
+    // result would read "not injected" for a rule rather than a fault.
+    if (descriptor.localOnly === true) {
+      packages.push({
+        insertId: descriptor.insert.id,
+        name: descriptor.insert.name,
+        probe: descriptor.probe.method,
+        installed: false,
+        patched: false,
+        version: null,
+        live: null,
+        localOnly: true,
+      })
+      continue
+    }
     // Every DECLARED seed file is probed (SEED_FILES — the shared control-plane
     // tuple, so a third seed file is read here the moment it lands there
     // instead of the probe reporting "installed" over a missing file), and the
@@ -1302,6 +1340,12 @@ export interface ChamberHostPackageSeed {
   packageName: string
   sourceDir: string
   label: string
+  /** Registry rows marked local-shape-only (design 20 §6: the open-in host
+   *  domain) are never seeded to a remote instance or a gateway — the domain
+   *  acts on the machine the user is sitting at. The caller passes them with
+   *  an empty sourceDir, and this flag makes the intent explicit instead of
+   *  relying on that emptiness. */
+  localOnly?: true
 }
 
 export interface ChamberHostPackageSeedState {
@@ -1485,7 +1529,13 @@ export async function seedRemoteChamberHostPackages(
 
   const seenInsertIds = new Set<string>()
   const seenPackageNames = new Set<string>()
-  for (const seed of seeds) {
+  // Local-shape-only rows never travel (design 20 §6): the open-in host domain
+  // launches applications on the machine the user is sitting at, so a remote
+  // instance must not receive it. Dropping them here — before validation,
+  // preflight and every remote call — keeps the rule in one place; the caller
+  // also passes no source dir for them (`chamberHostSourceDirs`).
+  const portable = seeds.filter(seed => seed.localOnly !== true)
+  for (const seed of portable) {
     if (!/^[a-zA-Z0-9._-]+$/.test(seed.insertId)
       || !/^@dsh-chamber\/[a-zA-Z0-9._-]+$/.test(seed.packageName)) {
       return { ok: false, error: `invalid chamber host package seed: ${JSON.stringify({ id: seed.insertId, name: seed.packageName })}` }
@@ -1500,7 +1550,7 @@ export async function seedRemoteChamberHostPackages(
   // Only a built dist/index.js makes a package available. A checkout may have
   // the source directory without its artifact; that is "not shipped", so it
   // must not create a dangling loader row.
-  const available = seeds.filter(seed => existsSync(join(seed.sourceDir, 'dist', 'index.js')))
+  const available = portable.filter(seed => existsSync(join(seed.sourceDir, 'dist', 'index.js')))
   if (available.length === 0) return { ok: true, wrote: false, patched: false, packages: [] }
 
   // Preflight every local byte before touching the remote. In particular, a

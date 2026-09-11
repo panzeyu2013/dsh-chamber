@@ -59,6 +59,7 @@ import {
   HOST_ARCHIVE_CLEANUP_INSERT,
   HOST_GIT_WORKTREE_INSERT,
   HOST_GRAPH_INSERT,
+  HOST_OPEN_IN_INSERT,
   type SeedEntry,
 } from './host-graph-seed.ts'
 import type { Logger } from './types.ts'
@@ -114,6 +115,14 @@ export const DEFAULT_HOST_GIT_WORKTREE_PACKAGE_SOURCE_DIR = join(REPO_ROOT, 'pac
 /** Default source for the chamber in-host archived-session cleanup domain
  *  package (design 24; packaged runtimes pass the bundled location). */
 export const DEFAULT_HOST_ARCHIVE_CLEANUP_PACKAGE_SOURCE_DIR = join(REPO_ROOT, 'packages', 'dsh-chamber-seed-archive-cleanup')
+
+/**
+ * Default source for the chamber in-host open-in domain package (design 20 §6;
+ * the fork of upstream's open-in host half — packaged runtimes pass the
+ * bundled location). LOCAL shape only: the row is marked `localOnly` in the
+ * registry, so no remote target and no gateway ever receives it.
+ */
+export const DEFAULT_HOST_OPEN_IN_PACKAGE_SOURCE_DIR = join(REPO_ROOT, 'packages', 'dsh-chamber-seed-open-in')
 
 /**
  * Default dsh workspace: <repo root>/ref-dsh when present, otherwise the
@@ -208,6 +217,13 @@ export interface ControlPlaneOptions {
    * two host packages; absent source (or no committed dist) = skipped.
    */
   hostArchiveCleanupPackageSourceDir?: string
+  /**
+   * Chamber in-host open-in domain package source (design 20 §6). Same
+   * built-artifact gate and profile seed lifecycle as the other host packages;
+   * absent source (or no committed dist) = skipped. This row is `localOnly`:
+   * the local profile is the only shape that ever receives it.
+   */
+  hostOpenInPackageSourceDir?: string
   /**
    * Seed registry (2026-12 interface): additional chamber seed entries beyond
    * the three base host packages (client-graph / git-worktree /
@@ -467,6 +483,8 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
     ?? DEFAULT_HOST_GIT_WORKTREE_PACKAGE_SOURCE_DIR
   const hostArchiveCleanupPackageSourceDir = options.hostArchiveCleanupPackageSourceDir
     ?? DEFAULT_HOST_ARCHIVE_CLEANUP_PACKAGE_SOURCE_DIR
+  const hostOpenInPackageSourceDir = options.hostOpenInPackageSourceDir
+    ?? DEFAULT_HOST_OPEN_IN_PACKAGE_SOURCE_DIR
   // Seed registry (2026-12): the base chamber host packages are DERIVED from
   // the authoritative registry (CHAMBER_HOST_PACKAGES — insert row, package
   // name and probe domain all come from that one list; a hand-written
@@ -475,8 +493,8 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
   // looked up by insert id — the public option names are unchanged. Any extra
   // entry (client-plugin slots like the gateway mobile stub) is appended; an
   // extra entry that re-declares a base package's id WINS over the base entry
-  // (last-writer-wins by loader id): the gateway passes the three host
-  // packages as desktop-synced extra entries, so once its seed cache is
+  // (last-writer-wins by loader id): the gateway passes the host
+  // packages it has synced as desktop-synced extra entries, so once its seed cache is
   // populated the synced copies replace the packaged defaults — the base
   // rows exist only to preserve the legacy desktop shape (no
   // extraSeedEntries → no shadowing).
@@ -484,6 +502,7 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
     [HOST_GRAPH_INSERT.id, hostGraphPackageSourceDir],
     [HOST_GIT_WORKTREE_INSERT.id, hostGitWorktreePackageSourceDir],
     [HOST_ARCHIVE_CLEANUP_INSERT.id, hostArchiveCleanupPackageSourceDir],
+    [HOST_OPEN_IN_INSERT.id, hostOpenInPackageSourceDir],
   ])
   const seedEntries = (): SeedEntry[] => {
     const byId = new Map<string, SeedEntry>()
@@ -1251,6 +1270,7 @@ export {
   // single-sourcing). Cross-side equality is pinned by
   // packages/desktop/cross-package-contract.test.ts.
   HOST_GRAPH_PATCH_FILENAME,
+  HOST_OPEN_IN_INSERT,
   HOST_PACKAGE_SEED_FILES,
   HOST_SEED_PACKAGE_PREFIX,
 } from './host-graph-seed.ts'

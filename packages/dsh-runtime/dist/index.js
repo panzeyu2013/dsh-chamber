@@ -131,7 +131,8 @@ var REQUIRED_ACTIVATION_PROBES = [
 var HOST_DOMAIN_PROBE_NAMES = [
   "clientGraph/graph",
   "gitWorktree/previewCreate",
-  "archiveCleanup/probe"
+  "archiveCleanup/probe",
+  "openInApp/probe"
 ];
 var HOST_DOMAIN_PROBE_NAME_SET = new Set(HOST_DOMAIN_PROBE_NAMES);
 var PROBE_NAMES_WITHOUT_HOST_DOMAINS = REQUIRED_ACTIVATION_PROBES.filter((name) => !HOST_DOMAIN_PROBE_NAME_SET.has(name));

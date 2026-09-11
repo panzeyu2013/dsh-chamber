@@ -123,7 +123,7 @@ settings-bridge 按来源 kind 装配子 ctx，同一设置页对不同来源显
 | 派生会话摘要 | 无（会话业务由 dsh 前端直接呈现） | 无 | **无（随编排面剥离**——索引随 feature host 移除） |
 | 跨会话调度 | 无 | 无 | **无（随编排面剥离**——dsh 没有定时能力，gateway 不添加） |
 | Git worktree 编排 | 有（design 08 实例内插件） | 有（同左） | **无服务器侧记录（随编排面剥离**；侧边栏走 design 08 实例内插件——托管 dsh 由网关 seed chamber 宿主包，本地/gateway 同一通道） |
-| chamber 宿主包 seed（client-graph / git-worktree / archive-cleanup） | 远程 seed（design 13 插件同步） | **无**（seed 门控 `kind==='dsh' && transport==='ssh'`，http 直连无 ssh 通道） | **桌面同步**：`PUT /chamber/plugins` 上传 → 缓存 `<stateDir>/chamber-plugins/` → 每次 spawn 经控制面 seed 注入托管 profile；版本跟随连接的桌面 |
+| chamber 宿主包 seed（client-graph / git-worktree / archive-cleanup；open-in 为 `localOnly`，桌面从不上传） | 远程 seed（design 13 插件同步） | **无**（seed 门控 `kind==='dsh' && transport==='ssh'`，http 直连无 ssh 通道） | **桌面同步**：`PUT /chamber/plugins` 上传 → 缓存 `<stateDir>/chamber-plugins/` → 每次 spawn 经控制面 seed 注入托管 profile；版本跟随连接的桌面 |
 | 移动适配插件（`dsh-chamber-client-ui-mobile`） | 不适用 | 不适用 | **打包 seed（例外**：移动访问绑定 gateway、无桌面在场，插件随 gateway 发行物分发） |
 
 装配规则（design 17 契约）：**gateway 连接** → 仅挂载 dsh-runtime 代理分节
@@ -675,7 +675,8 @@ connection-target scope 所有的目标；
 
 三个 chamber
 宿主包（`dsh-chamber-seed-client-graph`、`dsh-chamber-seed-git-worktree`、`dsh-chamber-seed-archive-cleanup`
-（design 24））不随 gateway 发行物
+（design 24）；`dsh-chamber-seed-open-in`（design 20 §6）虽在派生白名单里，但注册表标
+`localOnly`，桌面从不上传——其缓存目录恒缺席，spawn 时按既有规则跳过）不随 gateway 发行物
 分发——连接的桌面经 `PUT /chamber/plugins` 上传自己的副本（包名白名单 + 文件
 大小上限 + `package.json` 名称/版本校验，原子 0600 写入 `<stateDir>/
 chamber-plugins/<scope 剥离 slug>/`（如 `chamber-plugins/dsh-chamber-seed-client-graph`，

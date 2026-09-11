@@ -30,6 +30,7 @@ import {
   HOST_ARCHIVE_CLEANUP_INSERT,
   HOST_GIT_WORKTREE_INSERT,
   HOST_ARCHIVE_CLEANUP_PACKAGE_NAME,
+  HOST_OPEN_IN_PACKAGE_NAME,
   HOST_GIT_WORKTREE_PACKAGE_NAME,
   HOST_GRAPH_INSERT,
   HOST_GRAPH_PACKAGE_NAME,
@@ -525,6 +526,7 @@ test('createControlPlane.startLocal() seeds the host package and materializes th
     hostGraphPackageSourceDir: source,
     hostGitWorktreePackageSourceDir: join(dir, 'no-git-package'),
     hostArchiveCleanupPackageSourceDir: join(dir, 'no-archive-cleanup-package'),
+    hostOpenInPackageSourceDir: join(dir, 'no-open-in-package'),
     logger: silentLogger,
     localConnectionDeps: healthyLocalConnectionDeps,
   })
@@ -558,6 +560,7 @@ test('createControlPlane.startLocal() seeds both host packages behind one merged
     hostGraphPackageSourceDir: graphSource,
     hostGitWorktreePackageSourceDir: gitSource,
     hostArchiveCleanupPackageSourceDir: join(dir, 'no-archive-cleanup-package'),
+    hostOpenInPackageSourceDir: join(dir, 'no-open-in-package'),
     logger: silentLogger,
     localConnectionDeps: healthyLocalConnectionDeps,
   })
@@ -574,7 +577,7 @@ test('createControlPlane.startLocal() seeds both host packages behind one merged
   }
 })
 
-test('createControlPlane.startLocal() seeds ALL THREE host packages behind one merged overlay (design 24 M3 lockstep leg)', async t => {
+test('createControlPlane.startLocal() seeds ALL FOUR host packages behind one merged overlay (design 24 M3 / design 20 §6 lockstep leg)', async t => {
   const dir = tempDir(t)
   const graphSource = stageSource(t, 'export const graph = 1\n')
   const gitSource = tempDir(t)
@@ -585,6 +588,10 @@ test('createControlPlane.startLocal() seeds ALL THREE host packages behind one m
   mkdirSync(join(archiveSource, 'dist'), { recursive: true })
   writeFileSync(join(archiveSource, 'package.json'), JSON.stringify({ name: HOST_ARCHIVE_CLEANUP_PACKAGE_NAME }))
   writeFileSync(join(archiveSource, 'dist', 'index.js'), 'export const archiveCleanup = 1\n')
+  const openInSource = tempDir(t)
+  mkdirSync(join(openInSource, 'dist'), { recursive: true })
+  writeFileSync(join(openInSource, 'package.json'), JSON.stringify({ name: HOST_OPEN_IN_PACKAGE_NAME }))
+  writeFileSync(join(openInSource, 'dist', 'index.js'), 'export const openIn = 1\n')
   const plane = createControlPlane({
     stateDir: dir,
     port: 0,
@@ -592,6 +599,7 @@ test('createControlPlane.startLocal() seeds ALL THREE host packages behind one m
     hostGraphPackageSourceDir: graphSource,
     hostGitWorktreePackageSourceDir: gitSource,
     hostArchiveCleanupPackageSourceDir: archiveSource,
+    hostOpenInPackageSourceDir: openInSource,
     logger: silentLogger,
     localConnectionDeps: healthyLocalConnectionDeps,
   })
@@ -617,6 +625,14 @@ test('createControlPlane.startLocal() seeds ALL THREE host packages behind one m
       readFileSync(join(dir, 'dsh-home', 'profiles', 'web', 'node_modules', HOST_ARCHIVE_CLEANUP_PACKAGE_NAME, 'dist', 'index.js'), 'utf8'),
       'export const archiveCleanup = 1\n',
     )
+    assert.ok(overlay.includes(`- id: open-in`), 'the local-shape-only open-in row is seeded into the local profile')
+    assert.ok(overlay.includes(`name: '${HOST_OPEN_IN_PACKAGE_NAME}'`), 'fourth package named')
+    assert.ok(registrySource.includes(`probe: { method: 'openInApp/probe'`), 'the open-in registry row names its probe endpoint')
+    assert.ok(registrySource.includes('localOnly: true'), 'the open-in row is marked local-shape-only (design 20 §6)')
+    assert.equal(
+      readFileSync(join(dir, 'dsh-home', 'profiles', 'web', 'node_modules', HOST_OPEN_IN_PACKAGE_NAME, 'dist', 'index.js'), 'utf8'),
+      'export const openIn = 1\n',
+    )
   } finally {
     await plane.stop()
   }
@@ -635,6 +651,7 @@ test('createControlPlane.startLocal() reuses an exact user profile row without a
     hostGraphPackageSourceDir: source,
     hostGitWorktreePackageSourceDir: join(dir, 'no-git-package'),
     hostArchiveCleanupPackageSourceDir: join(dir, 'no-archive-cleanup-package'),
+    hostOpenInPackageSourceDir: join(dir, 'no-open-in-package'),
     logger: silentLogger,
     localConnectionDeps: healthyLocalConnectionDeps,
   })
@@ -664,6 +681,7 @@ test('createControlPlane.startLocal() rejects a profile loader collision before 
     hostGraphPackageSourceDir: source,
     hostGitWorktreePackageSourceDir: join(dir, 'no-git-package'),
     hostArchiveCleanupPackageSourceDir: join(dir, 'no-archive-cleanup-package'),
+    hostOpenInPackageSourceDir: join(dir, 'no-open-in-package'),
     logger: silentLogger,
     localConnectionDeps: healthyLocalConnectionDeps,
   })
@@ -690,6 +708,7 @@ test('createControlPlane.startLocal() keeps the v4 baseline when dist/index.js i
     hostGraphPackageSourceDir: source,
     hostGitWorktreePackageSourceDir: join(dir, 'no-git-package'),
     hostArchiveCleanupPackageSourceDir: join(dir, 'no-archive-cleanup-package'),
+    hostOpenInPackageSourceDir: join(dir, 'no-open-in-package'),
     logger: silentLogger,
     localConnectionDeps: healthyLocalConnectionDeps,
   })
@@ -721,6 +740,7 @@ test('createControlPlane.startLocal() merges extra seed entries (client plugin) 
     hostGraphPackageSourceDir: graphSource,
     hostGitWorktreePackageSourceDir: join(dir, 'no-git-package'),
     hostArchiveCleanupPackageSourceDir: join(dir, 'no-archive-cleanup-package'),
+    hostOpenInPackageSourceDir: join(dir, 'no-open-in-package'),
     extraSeedEntries: [{
       insert: { id: 'mobile', name: '@dsh-chamber/dsh-client-ui-mobile' },
       kind: 'client',
@@ -759,6 +779,7 @@ test('createControlPlane.startLocal() skips an absent extra seed entry (stub) wi
     hostGraphPackageSourceDir: source,
     hostGitWorktreePackageSourceDir: join(dir, 'no-git-package'),
     hostArchiveCleanupPackageSourceDir: join(dir, 'no-archive-cleanup-package'),
+    hostOpenInPackageSourceDir: join(dir, 'no-open-in-package'),
     extraSeedEntries: [{
       insert: { id: 'mobile', name: '@dsh-chamber/dsh-client-ui-mobile' },
       kind: 'client',
@@ -873,6 +894,7 @@ test('createControlPlane.startLocal() lets an extra seed entry shadow the base h
     hostGraphPackageSourceDir: baseSource,
     hostGitWorktreePackageSourceDir: join(dir, 'no-git-package'),
     hostArchiveCleanupPackageSourceDir: join(dir, 'no-archive-cleanup-package'),
+    hostOpenInPackageSourceDir: join(dir, 'no-open-in-package'),
     extraSeedEntries: [{
       insert: HOST_GRAPH_INSERT,
       kind: 'host',
@@ -950,6 +972,7 @@ test('the seed registry refuses a non-canonical host entry before any profile wr
     hostGraphPackageSourceDir: stageSource(t),
     hostGitWorktreePackageSourceDir: join(dir, 'no-git-package'),
     hostArchiveCleanupPackageSourceDir: join(dir, 'no-archive-cleanup-package'),
+    hostOpenInPackageSourceDir: join(dir, 'no-open-in-package'),
     extraSeedEntries: [{
       insert: { id: 'client-graph', name: '@dsh-chamber/dsh-host-client-graph' },
       kind: 'host',

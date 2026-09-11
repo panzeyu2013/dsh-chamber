@@ -19,6 +19,8 @@ build/
 !packages/dsh-chamber-seed-git-worktree/dist/index.js
 !packages/dsh-chamber-seed-archive-cleanup/dist/
 !packages/dsh-chamber-seed-archive-cleanup/dist/index.js
+!packages/dsh-chamber-seed-open-in/dist/
+!packages/dsh-chamber-seed-open-in/dist/index.js
 # The shared runtime core's dist/index.js is likewise a committed esbuild
 # artifact: the desktop shims statically import the package main (dist) in
 # dev AND packaged mode, so a clean checkout must carry it. Regenerate via

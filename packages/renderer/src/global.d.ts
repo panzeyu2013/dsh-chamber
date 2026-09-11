@@ -193,7 +193,10 @@ export type SshExecIpcResult = SshStatusProjection | { error: string }
  *  restart still pending (false) / not probed (null; local side stays null). */
 /** One chamber host package's per-target state (mirror of the desktop's
  *  plugin-sync.ts). The EXPECTED set is the control-plane registry, so a new
- *  host package appears in the plugin-management page without a UI change. */
+ *  host package appears in the plugin-management page without a UI change.
+ *  The field set is pinned to the desktop projection by
+ *  `packages/desktop/cross-package-contract.test.ts` (2026-09-11: the
+ *  `localOnly` field below was added there after a silent miss). */
 export interface ChamberHostPackageState {
   insertId: string
   name: string
@@ -202,6 +205,12 @@ export interface ChamberHostPackageState {
   patched: boolean
   version: string | null
   live: boolean | null
+  /** The registry row is meaningful for the LOCAL instance shape only (design
+   *  20 §6: the open-in host domain). Remote/gateway/http targets report it
+   *  with `installed:false` and no probe; the plugin table renders "local
+   *  shape only" from this flag instead of "not injected" — absent by design
+   *  there, not by fault. Absent = an ordinary row. */
+  localOnly?: boolean
 }
 
 /** Probe outcome: ok:false = the injection state could not be read (remote ssh

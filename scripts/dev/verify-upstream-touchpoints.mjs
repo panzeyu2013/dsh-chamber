@@ -7,17 +7,21 @@
  * 内置模块 + 同目录两个 helper（artifact-gate.mjs / verify-upstream-touchpoints-args.mjs）。
  * exit-code 语义：0 全部通过（或 --help）/ 1 有门硬失败 / 2 用法错误。
  *   C1  纯文件字节恒等（fork 副本中未登记补丁的文件必须与上游锚逐字节一致）
- *   C2  --tags <old> <new>：上游两 tag 间三 fork 面的重放差异报告（advisory）
+ *       —— 对 shadow 副本与 chamber-named fork（如 seed-open-in）同等生效
+ *   C2  --tags <old> <new>：上游两 tag 间全部已登记 fork 面（FORKS 全表，含非 shadow
+ *       的 seed-open-in）的重放差异报告（advisory）
  *   C3  完整性：fork 每文件有分类（pure/patched/own），上游每文件有裁决
  *       （mirrored/dropped）；漏分类/新文件漏裁决 = 硬失败
  *   C4  roster：typert remote 装配契约 == 15（集合与顺序）、covered/factory 存在性、
  *       删包 fail-loud（存在性哨兵列表）
- *   C5  过期锚扫描：三 fork package.json 版本 == 上游同文件版本；
+ *   C5  过期锚扫描：shadow fork 的 package.json 版本 == 上游同文件版本
+ *       （versionAnchor: "chamber" 的 fork 豁免——见 FORKS 表）；
  *       submodule HEAD == harness.commit
- *   C6  EXCLUDED 上游存在性（ensure-harness-vendor 排除的三个 fork 源目录）
+ *   C6  EXCLUDED 上游存在性（ensure-harness-vendor 排除的三个 shadow fork 源目录；
+ *       非 shadow 的 fork（如 seed-open-in）必须留在 vendor 树作 C1 锚）
  *   C7  种子域锁步：gateway HOST_PACKAGE_PROBE_DOMAINS 值集 ==
  *       dsh-runtime HOST_DOMAIN_PROBE_NAMES 列表（文本双门；运行时已有 fail-loud）
- *   C8  提交态生成物 == src（确定性重建-比对，硬失败）：host dist ×3 +
+ *   C8  提交态生成物 == src（确定性重建-比对，硬失败）：host dist ×4 +
  *       mobile dist/lib 四件；重建后字节不同 = 产物陈旧。写后原样还原，
  *       `--no-artifact-rebuild` 退回 mtime advisory（fresh checkout 会误报）
  *   C9  vendor 源码补丁锚（硬失败）：`packages/renderer/scripts/vendor-patches.mjs`
@@ -174,6 +178,45 @@ const FORKS = [
       'tsconfig.host.json': 'host 构面不镜像',
     },
   },
+  {
+    // design 20 §6 (fork & supersede, 2026-09-11): the open-in HOST half is
+    // forked into a chamber seed package that runs inside the managed
+    // instance. Unlike the three shadow copies above, this fork keeps the
+    // upstream PACKAGE NAME out of the workspace (the vendor tree must keep
+    // `packages/host/open-in-app` as this fork's diff anchor — do NOT add it
+    // to EXCLUDED_UPSTREAM_DIRS), so it lives under its own name and is
+    // versioned with chamber releases: `versionAnchor: 'chamber'` exempts it
+    // from the C5 upstream-version equality below.
+    name: 'seed-open-in',
+    rel: 'packages/dsh-chamber-seed-open-in',
+    upstream: 'packages/host/open-in-app',
+    versionAnchor: 'chamber',
+    patched: {
+      'package.json': '[patch-mod] chamber seed package（自有名字/版本/构建入口；upstream 名与发布面不复制）',
+      'tsconfig.json': '[patch-mod] chamber 构面（vendor paths + 本包 files）',
+      'src/shared.ts': '[patch-mod] wire 契约家：上游三条 webServer 路由常量 → typert Remote 方法名 + 域载体（design 20 §4.1/§6.1）',
+      'src/index.ts': '[patch-mod] typert 门面取代 webServer 路由 + Config schema + SSH 休眠门（design 20 §6.1）',
+    },
+    own: {
+      'src/core.ts': 'chamber 域核心：上游 apply() 的目录/图标/拉起状态机（去掉路由与 SSH 门）',
+      'scripts/build.mjs': 'chamber esbuild 产物构建',
+      'dist/index.js': 'chamber 提交态产物（C8 逐字节重建-比对；上游无对应文件）',
+    },
+    ownPrefix: ['test/'],
+    ownNotes: {
+      'test/': 'chamber 自有测试（域契约 + 载荷拒绝矩阵 + vendor stub loader）',
+    },
+    dropped: [
+      'README.md', 'README.zh.md', 'README.i18n.yaml',
+      'src/internals.ts', 'tsdown.config.ts', 'tests/',
+    ],
+    droppedNotes: {
+      'src/internals.ts': '上游测试接缝（本包的接缝走 OpenInAppCore 构造注入，不需要它）',
+      'README*': '上游 README 不携带（fork 描述在 package.json/源码首页）',
+      'tsdown.config.ts': '上游打包配置（本包走 scripts/build.mjs）',
+      'tests/': '上游测试不镜像（本包 test/ 覆盖域契约）',
+    },
+  },
 ]
 
 /** ensure-harness-vendor EXCLUDED（fork 影子覆盖的上游包）——C6 存在性哨兵。 */
@@ -318,7 +361,12 @@ for (const fork of FORKS) {
   } else {
     console.log(`✓ [${fork.name}] C1/C3: pure=${pure} patched=${patchedKeys.size} own=${forkFiles.length - pure - patchedKeys.size} dropped=${fork.dropped.length}`)
   }
-  if (upPkg.version !== forkPkg.version) {
+  // Version anchor: the three shadow copies carry the UPSTREAM version (they
+  // stand in for the upstream package of the same name). A fork that lives
+  // under its own chamber name and ships with chamber releases opts out
+  // (`versionAnchor: 'chamber'`) — its bytes/classification are still pinned
+  // by C1/C3, only the version equality is waived.
+  if ((fork.versionAnchor ?? 'upstream') === 'upstream' && upPkg.version !== forkPkg.version) {
     fail(`C5 [${fork.name}] fork 版本 ${forkPkg.version} != 上游 ${upPkg.version}（过期锚——升级/重锚后应同步）`)
   }
 }
@@ -329,7 +377,7 @@ for (const fork of FORKS) {
   if (head.status !== 0 || head.stdout.trim() !== pin) {
     fail(`C5 submodule HEAD != harness.commit（${pin.slice(0, 12)}）——请走 update-vendor.mjs`)
   } else {
-    console.log(`✓ C5 锚: harness.commit = ${pin.slice(0, 12)}，三 fork 版本与上游一致`)
+    console.log(`✓ C5 锚: harness.commit = ${pin.slice(0, 12)}，shadow fork 版本与上游一致`)
   }
 }
 
@@ -476,6 +524,13 @@ for (const fork of FORKS) {
     {
       script: 'packages/dsh-chamber-seed-archive-cleanup/scripts/build.mjs',
       outputs: ['packages/dsh-chamber-seed-archive-cleanup/dist/index.js'],
+    },
+    {
+      // design 20 §6: the open-in host domain (fork of upstream's open-in host
+      // half) is seeded into the local profile the same way, so its committed
+      // bundle must equal a fresh rebuild too.
+      script: 'packages/dsh-chamber-seed-open-in/scripts/build.mjs',
+      outputs: ['packages/dsh-chamber-seed-open-in/dist/index.js'],
     },
     {
       // The shared runtime core's committed bundle (the desktop/gateway
