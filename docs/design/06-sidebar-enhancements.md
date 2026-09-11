@@ -55,8 +55,12 @@
   （远程内容命中携带，同会话双命中时补入）；点击 →
   `chamberBridge.requestOpenSession`。
   状态行：loading → `search.pending`；error → `search.unavailable` 横幅
-   （**本地命中仍显示**——内容搜索失败不吞本地元数据命中）；
+   （**本地命中仍显示**——内容搜索失败不吞本地元数据命中；2026-09-11 文案补齐
+   「仅显示名称匹配」）；
   空 → `search.noMatches`；`hasMore` → `search.hasMore`（n=20 取常量）。
+  **结果树可访问名**：`role="tree"` + `search.results.aria`
+  （浏览树同批补名，§7 a11y）；命中行在标题后与树行同样渲染活动定时任务标记
+  （§4.3，2026-09-11 upstream-alignment T7）。
 - **取舍**：聚合拉取失败（`aggregateError`）的来源隐藏搜索入口（标题无法
   解析，且与"错误行替换列表"一致）；已挂载来源标题随 store 事件即时更新；仅未挂载或
   reconnect baseline 不完整的来源可能在 30s 兜底窗口内暂显兜底名。
@@ -156,7 +160,7 @@
   （行槽原位 swap，行内缩进同会话行）。
   **停冒泡控件的 pending 清理纪律**：
   - **任何 stopPropagation 控件必须自己 clearPendingClick**（折叠/新建/
-    kebab/归档 + 来源头排序/加工作区/搜索）——React 的 stopPropagation
+    kebab（含归档动词）+ 来源头排序/添加工作区/搜索）——React 的 stopPropagation
     同时停掉原生事件，document 级监听看不到这些点击，残留的 pending 会
     让窗口内下一次同会话点击误入重命名。
   - **空白"新建会话"行不参与双击重命名**（同款 `blank` 门控）——
@@ -206,7 +210,8 @@
   `nextServerOrder`（no-op 返回 null，单测覆盖）；渲染期
   `orderServersForDisplay(servers, stored)` 应用（存储序优先、未知 id
   跳过、未列出 id 按投影序尾随——新来源出现在列表底部直到被拖走）。
-  rail 圆点同序渲染。来源从注册表删除后其 id 由写时裁剪清出（与
+  rail 来源按钮同序渲染（§7；2026-09-11 起 rail 每来源一个具名可操作按钮，
+  颜色点与活动环的几何不变）。来源从注册表删除后其 id 由写时裁剪清出（与
   orderBy 同规则）。**取消即放弃**：dragend 时
   `dropEffect === 'none'`（ESC 取消）不提交最后 marker——§2.2"drop/end
   提交最后 marker"在来源级收窄为"仅非取消的结束提交"（取消即放弃）。
@@ -296,6 +301,8 @@
 - `ctx.sessions.list`（ObservableSnapshot）行字段：`running`、`completed?`、
   `pendingInteraction?: 'approval'|'plan-review'|'question'`、`blank`、
   `updatedAt`；快照含 `current?: string`（当前会话 id）。
+  （「蓝点」是这条完成未读事实的既有叫法；它渲染出来的是官方 `StateDot done`
+  绿点，见 §4.3——名称沿用，颜色不是。）
 - 每个实例 boot = 独立 ctx、独立 store；侧边栏插件在每个 ctx 都挂载，
   即每个来源都有一个可订阅自身运行时的事实生产者。
 - **插件 = 投影**：上报端只做
@@ -363,24 +370,41 @@
   - **子 agent 运行中**：同一 ongoing 圆环，tooltip/aria
     显示「N 个子代理运行中」——父回合已结束但后台子 agent 仍在工作时
     会话依旧"进行中"，**绝不在这个阶段亮起完成蓝点**（§4.5）；
-  - 运行结束未读（completed）：**长显示圆点**（持久蓝色点，tooltip
-    "已完成"）。
+  - 运行结束未读（completed）：官方 `StateDot state="done"` 圆点
+    （10px；绿色 = `--dsw-alias-state-success-primary`，vendor
+    `ui-primitives/StateDot.module.css` `[data-state='done']`，tooltip
+    "已完成"）——2026-09-11 upstream-alignment T10：此前那枚手绘 6px 品牌蓝点
+    与 ongoing 环同色，读起来像第二个"进行中"标记；列表行与待办区共用同一标记。
+  - **活动定时任务标记（2026-09-11 upstream-alignment T7）**：行标题之后渲染官方
+    `ActiveScheduleIndicator` 同形标记（16px 闹钟字形 + `role="img"`，可访问名与
+    title 都是本地化 `schedule.active`，行本身仍是唯一动作），事实 = 该会话
+    `projectionValues.schedule` 非空（`derive.ts hasActiveScheduleOf`，
+    镜像 vendor ui-workspace `tree.ts:161-163`）。**稀疏字段**：只有真有活动定时
+    任务的行发布 `hasActiveSchedule`，且该位纳入 `instanceSnapshotSignature`
+    （否则置位/清位重发布同一份字节会被 producer 去重闸吞掉、标记冻结在首见值）；
+    未挂载来源的 unary 兜底行读 `projections.values` 的同一事实。无定时任务的
+    行零足迹——行距/几何不变。
   - **待交互（pending）**：不与运行中同形——槽加宽至
     14px，按类型渲染**可辨识图标徽标**（会话在等用户，必须一眼可辨，
     ask-user 是动机场景）：`question` = 问号图标（business 蓝）、
     `plan-review` = 清单图标（business 蓝）、`approval` = 警示三角图标
     （warn 琥珀）。tooltip/aria 文案沿用
     `status.waitingAnswer/planReview/waitingApproval`。
-  - **配色**：运行/completed 统一为 dsh 标准 ongoing
-    蓝；**pending 徽标例外**——business（蓝）/warn（琥珀）两个 state
+  - **配色**：运行 = dsh 标准 ongoing 蓝（`--dsw-static-deepseek-450`）；
+    completed = 官方 `StateDot done` 的 success 绿（见上）；**pending 徽标**——
+    business（蓝）/warn（琥珀）两个 state
     token 表达"等待回答/决策"与"等待批准"两级语义（pending 行有意不取全蓝）。
     wire running 与通道事实并存：running 点
     保留（wire 权威），completed/pending 仅通道提供。
 - **悬停替换（真正替换，零占位）**：行/头操作在静止时 `display:none`（不占
   布局空间）——状态图标/徽标因此真正位于行/头末端；悬停时操作簇
   `display:inline-flex` 换入、状态槽 `display:none` 换出（session 行：
-  状态环 ↔ kebab+归档；来源头：连接状态 ↔ 搜索 + 新建工作区 `+`；
-  workspace：会话数徽标 ↔ `+` + kebab）。胶囊展开/菜单展开时操作簇保持
+  状态环 ↔ **kebab 菜单**（重命名/分叉/归档——2026-09-11 upstream-alignment
+  T2a：归档动词移入行菜单，行内不再有第二个归档按钮，因为归档只隐藏行、从不
+  触碰会话日志，故既不破坏性也无确认门）；来源头：连接状态 ↔ 排序菜单 + 搜索 +
+  添加工作区（官方 project-add 字形，`IconProjectAddOutline16`）；
+  workspace：会话数徽标 ↔ `+`（新建会话）+ kebab（重命名/删除））。胶囊展开/
+  菜单展开时操作簇保持
   显示（`.sourceActionsVisible`/`.rowActionsVisible`，`:has` 同步换出
   状态槽）。
 - **不再显示相对时间**：session 行不渲染"xx 前"时间单元格（`time.*`
@@ -431,7 +455,11 @@
   completedBySource 对账 + 合并 + 清理 + 激活兜底；runningSubagents 随
   事实行透传，状态机无需感知）、
   `SidebarRoot.tsx` + `sidebar-chamber.module.css`（dot 状态类 + 高亮 +
-  runningSubagents 分支）、`locales.ts`
+  runningSubagents 分支 + `.scheduleIndicator` + `.railDotButton`）、
+  `shared/derive.ts`（`hasActiveScheduleOf`；`hasActiveSchedule` 进
+  `instanceSnapshotSignature`）、`shared/instance-api.ts`（unary 兜底行读
+  `projections.values` 的同一事实）、`shared/session-row-window.ts`
+  （`sessionRowWindow` + `sessionRowDisclosure`）、`locales.ts`
   （`status.waitingApproval/planReview/waitingAnswer/completed` +
   `status.subagentsRunning.one/other`）。
 
@@ -513,14 +541,25 @@ await 中），我们单点只显示子 agent 计数文案，官方同快照显�
   草稿（修法需 vendor patch 路线：按 event.target 归属或按活动来源门控）；
   ②**`<html lang>` last-writer-wins（真实缺陷）**——vendor `locale` 每次 boot
   写 `documentElement.lang` 且无 teardown 回收，预热实例的 dsh locale 为 en 时
-  会把可见的中文文档翻成 `lang=en`（连带影响 runtime 分节的本地化）；
+  会把可见的中文文档翻成 `lang=en`（连带影响 runtime 分节的本地化）；**2026-09-11
+  upstream-alignment T16 后影响面更大**：App 框架自己的 chrome 文案
+  （骨架屏/失败屏/通知标题，`renderer/src/locales.ts`）也按该属性解析——即框架
+  文案与文档语言同源、也同受这条缺陷牵动（缓冲是"下一次投影/locale 变更即自愈"，
+  与 ④ 同型）；
   ③**`document.title`（已被主进程掩盖）**——每个壳的 DocumentTitle 竞争写/清，
   桌面主进程冻结标题故当前不可见；④**`--dsh-content-font-size` 播种**
   （vendor `bootstrapFontSize` 读 body 变量）会读到"上一个 applier"的值，
-  下一次投影自愈；⑤**portal 逃逸（真实缺陷，未修）**——vendor
-  `ui-primitives/Modal`（含 backdrop）与 chamber 的 SettingsShell/AppMenu 都
+  下一次投影自愈；⑤**portal 逃逸（真实缺陷，部分收窄）**——vendor
+  `ui-primitives/Modal`（含 backdrop）与 chamber 的 SettingsShell 都
   portal 到 `document.body`，而 `.instance-hidden` 只隐藏视图子树：视图 A 里
   打开的模态在程序化切换（深链/通知/注册表回落）后仍盖在 B 上，直到 A 被回收；
+  **唯一已收窄的一处是 open-in 的 chevron 菜单**（2026-09-11 upstream-alignment，
+  design 20 §5）：菜单本体是官方 `ui-primitives` `Menu`（同样 portal 到 body），
+  但 chamber 保留的 N-ctx 归属守卫 `instance-view-guard.ts` 在打开的菜单所属
+  `.instance-view` 失活（`instance-hidden`/`instance-pending`/`hidden`/
+  `aria-hidden`/断开）时立刻关闭它，因此隐藏视图的菜单不会随视图复活、也不会
+  让击键落到隐藏视图上；SettingsShell 的 Modal 与其它官方 portal 面仍是上面的
+  未修形态；
   同族 `ui-attachment/DropOverlay` 由每个挂载中的 ComposerAttachments 各渲染
   一份（N 层遮罩，隐藏视图的禁用副本可能盖在活动视图的启用副本之上）；
   ⑥**主题样式表重复**——vendor `installThemeStyles` 每个实例 ctx 各插 6 个
@@ -563,6 +602,15 @@ await 中），我们单点只显示子 agent 计数文案，官方同快照显�
   搜索 sanitize、`todo-attention` 派生、`todo-prefs` 水合
   （`test/derive.ts`、`test/view-prefs.ts`、`test/todo-attention.test.ts`、
   `test/todo-prefs.test.ts`，node:test 风格）。
+- **上游对齐源文本锁（2026-09-11 upstream-alignment）**：
+  `test/upstream-alignment.test.ts`（读源码文本，注释先剥离，经
+  `test/source-lock.ts` + vendor 载入桩）钉住本批的对齐面——归档动词只在行菜单、
+  全包无原生 confirm、workspace 删除是官方 `Modal` chrome、completed 走官方
+  `StateDot done`、行窗口是双向 disclosure、行菜单 `closeOnPointerLeave` 且非
+  `compact`、`{name}` 参数化可访问名、活动定时任务标记的位置、`data-git-action`
+  属性钩子（`:disabled` 在方括号之外）；行为面单测在函数旁边
+  （`test/session-row-window.test.ts` 的 disclosure 窗口、`test/panel-source.test.ts`
+  的 `createSnapshotStore` 投影与通知纪律）。
 - 包级门：`pnpm run typecheck`、根 `typecheck`、`typecheck:layout`、
   `typecheck:sidebar`、`pnpm run build:renderer`、
   `pnpm run verify:i18n`、`test:sidebar`、`test:layout`、
@@ -632,15 +680,29 @@ await 中），我们单点只显示子 agent 计数文案，官方同快照显�
   断连即清空该来源搜索状态（重连从干净状态开始）。
 - **行内操作（图标化 + 悬停替换）**：workspace 组头 = `+`（新建会话）+
   三点竖排 kebab 菜单（重命名/删除，`Menu` primitive portal 模式），
-  悬停时替换会话数徽标；session 行 = 三点 kebab 菜单（重命名）+ 独立归档
-  图标按钮（悬停替换行尾状态槽；**session 不显示相对时间**）；**新建工作区**
-  = 来源头部 `+`（与搜索图标
-  并排成簇，悬停替换连接状态槽，胶囊展开时簇保持可见；文案只在
-  aria/title，无列表行）。替换为真正 display 交换（静止不占位，状态图标
+  悬停时替换会话数徽标；session 行 = **三点 kebab 菜单三项（重命名/分叉/归档，
+  归档不再有独立图标按钮）**（悬停替换行尾状态槽；**session 不显示相对时间**）；
+  **添加工作区**
+  = 来源头部按钮（官方 project-add 字形，与搜索/排序图标
+  并排成簇，悬停替换连接状态槽，胶囊展开时簇保持可见；文案在 aria 与**官方
+  `Tooltip`**——同批把来源头四个动作（排序/添加工作区/搜索/归档清理）从原生
+  `title` 换成设计系统 Tooltip，`ServerSection.tsx:914,941,963,1001`，行与
+  状态槽仍用原生 title，无列表行）。替换为真正 display 交换（静止不占位，状态图标
   真正居行/头末尾）。kebab
   展开期间该行操作保持可见（`.rowActionsVisible`）。行内图标按钮全量
   reset（`appearance:none`/`outline:none`/grid 居中，focus-visible 用
-  brand 自绘环）——无 UA 外框、无偏移。
+  brand 自绘环）——无 UA 外框、无偏移。**菜单形态照上游**（2026-09-11
+  upstream-alignment T12）：行菜单一律 `closeOnPointerLeave`、**不再用
+  `compact`**（上游行菜单两者都不设、`ViewOptionsMenu` 用 `dense`，
+  vendor ui-workspace `Rows.tsx:174,487` / `WorkspaceBrowser.tsx:192-197`）；
+  排序菜单改用 `dense` 与官方 ViewOptionsMenu 同形。
+- **会话行窗口与展开条（2026-09-11 upstream-alignment T11）**：每个 workspace 只
+  展开前 N 行（`sessionRowWindow`），其余由展开条揭示。展开条是**双向
+  disclosure**：`aria-expanded` 报告状态，展开后同一个控件给出
+  `sessions.collapse`（收起），隐藏计数由与展开位无关的
+  `sessionRowDisclosure` 窗口算出——若按展开后的 hiddenCount 决定去留，点开一次
+  就再无收起入口（一次性展开）；文案取上游 `sessions.expand` /
+  `sessions.collapse`。
 - **悬停卡片**：workspace 头与真实会话行悬停显示官方
   `HoverCard` 移植卡片——workspace 卡 = 标题 + 会话数（投影无
   path/createdAt 故省略）；会话行卡 = 标题 + 相对时间 + 状态点列表 + 复制
@@ -649,24 +711,39 @@ await 中），我们单点只显示子 agent 计数文案，官方同快照显�
   `renamingThisWorkspace` 任一成立即禁用——编辑期卡片不盖住行内输入框；
   该枚举描述 workspace 头卡片，会话行卡片在被重命名表单整行替换时不渲染，
   无需额外禁用条件）。
-- **a11y**：来源分组 `role="group"`、列表 `role="tree"`、
+- **a11y**：来源分组 `role="group"`、列表 `role="tree"`（**浏览树带可访问名
+  `section.sessions`**，与搜索结果树 `search.results.aria` 成对，2026-09-11
+  upstream-alignment T7）、
   workspace 头 `role="treeitem"` + `aria-expanded`、会话行 `role="treeitem"`
   + `aria-selected`、搜索结果行 `button` + `role="treeitem"`；来源头
   （非当前来源）`role="button"` 可键盘激活（Enter/Space 切换视图）。
-- **blank 行**：当前空白"新会话"行隐藏操作簇（kebab/分叉/归档，
+  **行级动作的可访问名带行名（2026-09-11 upstream-alignment T5）**：新建会话
+  `action.newSession.aria`、workspace kebab `action.menu.workspace`、会话 kebab
+  `action.menu.session` 都以 `{name}` 参数带上行标题（上游
+  `actions.newSession.aria`/`actions.workspace.aria`/`actions.session.aria`）——
+  一排读作同一句「新建会话/更多操作」的名字对 AT 毫无信息。**折叠 rail 每来源一个
+  具名可操作按钮**（T7）：`aria-label` = 来源名 + 激活提示（复用来源头的
+  `sourceHeaderTitle`/`sourceHeaderActivatable` 单一判定）、当前来源
+  `aria-current`、**非当前且不可激活**（托管停机等）的来源 `aria-disabled` 且点击
+  不动作；颜色点与活动环仍是
+  内层 span 的既有几何（点 8px、间距 12px 不变），点/环 `aria-hidden`。
+- **blank 行**：当前空白"新会话"行隐藏操作簇（kebab——重命名/分叉/归档全在其内，
   对齐官方 `!row.blank &&` 门控）——空白行无重命名/分叉/归档语义。双击同样
   被 `blank` 门控（不进入内联重命名，见 §2.2）；离开
   current 后的 450ms 宽限期 ghost 占位机制见 §2.2（`visibility:hidden`
   非交互、保留布局位，`derive.ts armBlankGhost` + `.sessionGhost`）——双击
   窗口内列表绝不位移。
 - **会话状态指示**：固定 10px 行尾状态槽——常态空、
-  运行中 = 官方 `StateDot` ongoing 蓝圆环、运行结束未读 = 持久蓝圆点；
+  运行中 = 官方 `StateDot` ongoing 蓝圆环、运行结束未读 = 官方
+  `StateDot state="done"` success 绿圆点（2026-09-11 upstream-alignment T10，
+  手绘品牌蓝点已退役）；
   **待交互（pending）= 14px 图标徽标**（问号/清单/警示三角）——几何与配色
-  契约见 §4.3，本节只定稿 token：运行与 completed 颜色一律
-  `--dsw-static-deepseek-450`，pending 徽标用
-  `--dsw-alias-state-{business,warn}-primary`（不再有 green/red 状态色）；
+  契约见 §4.3，本节只定稿 token：运行 = `--dsw-static-deepseek-450`、
+  completed = `--dsw-alias-state-success-primary`（官方 StateDot done 的取色），
+  pending 徽标用
+  `--dsw-alias-state-{business,warn}-primary`；
   状态槽非身份标记（来源身份由来源头折叠字形 accent + 激活左内边线 +
-  rail 点承担——来源头身份圆点已移除，连接状态点/转圈
+  rail 按钮/色点承担——来源头身份圆点已移除，连接状态点/转圈
   保留在头部右端）。
 - **当前会话高亮（含 workspace 组标记）**：session 行 = 官方 selected 的
   浅 hover 色调（无阴影无加粗）；workspace 组 = 图标恒定自有色
@@ -676,9 +753,10 @@ await 中），我们单点只显示子 agent 计数文案，官方同快照显�
   左 padding 26px——session 标题相对 workspace 标题（24px）深 18px，
   server→session 标题级联 ~59px（原 73px）；会话级重命名表单与错误行
   同缩进。
-- **拖拽鲁棒性**：行内控件（kebab/归档/`+`/折叠/搜索/来源头激活）复用
+- **拖拽鲁棒性**：行内控件（kebab/`+`/折叠/搜索/添加工作区/来源头激活/rail 来源
+  按钮）复用
   `suppressClickRef` 抑制拖拽结束后的尾随 click（拖到按钮上不会误触发
-  确认弹窗/菜单/建会话/切视图）；`rowHalf` 对零高行防御；chamber 列表
+  确认对话框/菜单/建会话/切视图）；`rowHalf` 对零高行防御；chamber 列表
   区域包一层 `ChamberListBoundary`——意外渲染错误只让列表区显示错误
   文本，绝不带走整个 shell（应用级 ErrorBoundary 不再触发）。
 
@@ -686,7 +764,7 @@ await 中），我们单点只显示子 agent 计数文案，官方同快照显�
 
 ## 8. 会话待办区（sidebar todo area）
 
-**问题**：会话数量多时，行尾状态指示（蓝点/琥珀徽章）随列表滚出视野，用户需要频繁
+**问题**：会话数量多时，行尾状态指示（完成绿点/琥珀徽章）随列表滚出视野，用户需要频繁
 上下滑动检查「哪个会话完成了 / 在等批准 / 在等回答」。桌面通知与 Dock 徽标已有，缺
 一个**常驻、免滚动**的侧边栏内呈现面。
 
@@ -732,11 +810,11 @@ await 中），我们单点只显示子 agent 计数文案，官方同快照显�
 状态 · 来源 · 工作区）、多来源时的来源色点与既有 current 高亮提供。业界同构
 （GitHub/Linear inbox：跳转与树可见性解耦，树状态归用户；显式 reveal 仅 IDE 有、不入 v1）。
 
-### 8.3 设置（chamber 全局，通用页新组）
+### 8.3 设置（chamber 全局，客户端页新组）
 
 `sessionTodo` 嵌套块（`ChamberSessionTodoSettings`：`enabled/onComplete/onAsk/
 onRequest`），**默认全开**——被动呈现（空时零占用），区别于通知的 opt-in 默认关。
-通用页「运行」与「通知」组之间新增「会话待办区」组：主开关（无边框披露行）+ 展开后
+客户端页「运行」与「通知」组之间新增「会话待办区」组：主开关（无边框披露行）+ 展开后
 三类事件开关（卡片内行，通知组同节奏）。持久化在主进程 chamber-settings.json（白名单
 + 嵌套校验 + 损坏保留纪律同 notifications；main `applySettingsPatch` 嵌套 deep-merge）；
 三处类型镜像（preload ↔ renderer 由 ipc-surface-mirror 守护；desktop store 为
@@ -767,7 +845,9 @@ onRequest`），**默认全开**——被动呈现（空时零占用），区别
 
 - **行序** = 行首来源点（多来源才渲染点；空槽恒占位，标题列不跳动，与来源头字形列
   同列）→ 标题 → **行尾状态槽**：直接复用会话行的 `.sessionStateSlot` /
-  `.sessionStateSlotPending`（10/14px 槽）与 `.stateCompleted`/`.statePending*` 标记，
+  `.sessionStateSlotPending`（10/14px 槽）与官方 `StateDot`
+  （`state="ongoing"`/`state="done"`，2026-09-11 起 completed 不再用本地
+  `.stateCompleted` 类——该类已从样式表删除）与 `.statePending*` 标记，
   蓝点/徽章与会话行行尾**同列同像素带**（两行容器共享同一右缘与 8px 滚动条槽位，
   任意宽度成立；展开溢出时待办区自身滚动条带经 `.todoRows` 的 −8/+8 外扩保持在
   内容右侧，不压尾槽）。

@@ -129,15 +129,23 @@ host 插件入口/半、上游 `tests/`、`tsdown.config.ts`、上游 README（a
   唯一滚动/行定位锚点）。composite 比实例旧一代时，该行失去独立滚动区、代码行
   定位失效（纯文本仍可用）——即 C3「不 seed ui-primitives、由 covered factory 回答」
   这一偏差在版本歪斜下从「体积优化」升级为「可见功能面」。
-- **契约镜像补充（alpha.2 新增，2026-09 复核）**：composite 首屏 `ui-chat` 的 cordis
-  inject 新增 `sidebarRight`（由 host-graph extra row `ui-sidebar-right` 提供）与
-  `resources`（`client-resources` 行）——chamber-entry 新增
+- **契约镜像补充（alpha.2 新增，2026-09 复核；2026-09-11 名单改为派生）**：
+  composite 首屏 `ui-chat` 的 cordis inject 新增 `sidebarRight`（由 host-graph extra
+  row `ui-sidebar-right` 提供）与 `resources`（`client-resources` 行）——chamber-entry 的
   `assertRequiredExtraRowServices` 有界探针（纯判定在 `src/required-extra-rows.ts`，
-  定时器挂 ctx 生命周期）。该「首屏依赖 extra row 服务」耦合是本表 §4 之外的**新触点类别**：
-  上游新增 client 行若被复合首屏 inject，需同步登记并在探针集合里加名。
+  定时器挂 ctx 生命周期）因此在首屏 settle 后点名仍未被 provide 的服务。该
+  「首屏依赖 extra row 服务」耦合是本表 §4 之外的**新触点类别**：
+  上游新增 client 行若被复合首屏 inject，需同步登记。
   **后续收敛（勿按本条误读现状）**：`fileUpload` 于三轮转为 covered、`resources`
-  于四轮以「非 inject 座、与 sidebarRight 同源」删除——探针集合现为
-  `['sidebarRight']` 一条（权威在 `required-extra-rows.ts` 头注）；rc.1 该集合不变。
+  于四轮以「非 inject 座、与 sidebarRight 同源」删除；**探针集合自 2026-09-11 起
+  完全派生**——`chamber-entry.ts` 的 `register(id, plugin)` 记录每个首屏命名空间
+  导出的 `inject` 面，`injectedServices`/`missingInjectedServices`
+  （`required-extra-rows.ts`）取并集后探测（上游 `assertEntriesActive` 的同一
+  fact：`Object.keys(entry.fiber.inject)`，`packages/client/web/src/boot.ts:138-158`），
+  手写清单 `REQUIRED_EXTRA_ROW_SERVICES` 已删除；rc.1 该派生结果仍只命中
+  `sidebarRight` 一条。上游改首屏 inject 面时**无需再登记名字**，只要新的
+  provider 行不在复合覆盖集里，探针自动覆盖（权威说明在 `required-extra-rows.ts`
+  头注 + design 09 §3.2）。
 - **历史动向记录（2026-09 只读调研，当时 pin 仍 82a5fd61a7cf）**：上游 tag
   `dsh-v0.1.5-alpha.1`（5dda764e）。三个 fork 的**客户端恢复模型零改动**
   （`connection/src/client/{connection,index}.ts` 未变；变的是 fixture、宿主半
@@ -188,14 +196,20 @@ host 插件入口/半、上游 `tests/`、`tsdown.config.ts`、上游 README（a
   `ctx.get('chamberBasePath')`（cordis 代理对未 provide 的服务是抛错而非 undefined）。
   门：**C9**（锚点必须唯一命中，漂移即硬失败）+ `scripts/vendor-patches.test.mjs`
   （锚点/行为/id 形态）。新增补丁前先问「能否在 chamber 自己的包里修」。
-- **复合首屏 ← 未覆盖官方行（反向依赖，2026-09 二轮登记；三轮收敛为 1 条）**：
+- **复合首屏 ← 未覆盖官方行（反向依赖，2026-09 二轮登记；三轮收敛为 1 条；
+  2026-09-11 起为派生集合）**：
   `ui-chat` ← `sidebarRight`（`ui-sidebar-right` 行提供）。二轮曾把 `fileUpload`
   （`ui-conversation`/`api-session-controller` 根 inject）与 `resources`（渲染期
   `useResource` 座，非 inject）列入；三轮把 `client-file-upload` **改为 covered**
   （既消除 extra row 依赖，也让构建期补丁能覆盖它的同源绝对 URL）并删掉 `resources`
-  这一条不成立的理由。登记点 = `packages/renderer/src/required-extra-rows.ts` 的
-  `REQUIRED_EXTRA_ROW_SERVICES` + `required-extra-rows.test.ts`；上游新增/改名首屏
-  inject 成员时，先在此清单与 `host-graph.ts` 降级注释同步（design 09 §3.2）。
+  这一条不成立的理由。登记点 = `packages/renderer/src/chamber-entry.ts` 的
+  `register(id, plugin)` 调用表（每个首屏挂载记录该命名空间导出的 `inject` 面）
+  + `packages/renderer/src/required-extra-rows.ts` 的
+  `registeredInjectMembers`/`injectedServices`/`missingInjectedServices`
+  + `required-extra-rows.test.ts`；集合本身**派生**、不再手写（原
+  `REQUIRED_EXTRA_ROW_SERVICES` 已删除）。上游新增/改名首屏 inject 成员时，
+  两侧（`host-graph.ts` 降级注释 + 本行）按 design 09 §3.2 复核即可——探针自动覆盖
+  新的未覆盖 provider。
 - `remotePackagesFromAssembly`（renderer/scripts/typert-remote-contract.mjs）为装配契约唯一入口。
 
 ## 4. contract-mirror 登记（按上游属主分组）

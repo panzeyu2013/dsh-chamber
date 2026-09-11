@@ -182,9 +182,23 @@ provider（本地目录不再是主进程的事，也不再是"官方宿主行"�
   与深链 intent 推送），main 不可用时本地池兜底（已装应用不隐藏）；
 - **门控三进**（任一不满足 → 渲染 null）：① 桥就绪且过滤后可用集非空；② 本 header 的
   `sessionId` 属于有路径的工作区；③ hooks 无条件先执行（`open-in-gates.ts`）；
-- **交互**：1 个 app → 纯图标按钮；≥2 → 主图标按钮 + chevron + chamber-owned
-  `AccessibleAppMenu`（body portal、roving tabindex、`menuitemradio`/`aria-checked`、
-  Escape 回 trigger、portal 绑定所属 `.instance-view` 生命周期）；
+- **交互**：1 个 app → 纯图标按钮；≥2 → 主图标按钮 + chevron + **官方
+  `ui-primitives` `Menu`**（`autoFocus` 焦点转移与方向键/Home/End 导航、
+  `dense` 行、`selection="fill"` 选中填充、菜单项 `icon` 带真实应用图标，
+  `OpenInButton.tsx:337-360`；props 面与 pin 的 `Menu.tsx`/`Tooltip.tsx` 对齐见
+  `src/vendor-modules.d.ts:15-64`；2026-09-11 upstream-alignment）。按钮与 chevron
+  的提示是同一 pin 的设计系统 `Tooltip`，**不再用原生 `title`**；chevron 自带
+  `aria-haspopup="menu"` / `aria-expanded`，并在每次打开时重探目录（原 bespoke
+  菜单的 `onOpening` 语义搬到 trigger，`OpenInButton.tsx:389-400`）。**唯一留在
+  插件内的菜单逻辑是 N-ctx 归属** `instance-view-guard.ts`：菜单打开期间它观察
+  trigger 的祖先链，所属 `.instance-view` 一旦带上 `instance-hidden`/
+  `instance-pending`/`hidden`/`aria-hidden` 或断开连接即关闭菜单
+  （`instance-view-guard.ts:49-58,164-181`）——本壳一页挂多个 `.instance-view`，
+  隐藏视图里的残留打开态不得随视图复活，击键也不得落到隐藏视图上；
+- **失败呈现**：拉起失败不再只写 `console.error`，原因随按钮的 error 装饰**就地
+  可见**：按钮可访问名切成「打开失败」，`Tooltip` 显示「{openFailed}{原因}」（域
+  载体的 error 文本，或传输层异常消息），随 error 装饰 2 s 后一并清除
+  （`OpenInButton.tsx:232,294-310,312-318`）；
 - **记忆**：**per-source 键**（`choice-store.ts`），并对"记忆值在本上下文不可用"降级到默认项；
   官方键 `dsh.open-in-app.choice` 不再被任何一方写入（官方客户端从不加载），因此不存在同页同 origin 的键冲突；
 - **通道命名**：`OpenInChannel = 'local' | 'main'`——本地池由**实例内的我们自己**服务，
@@ -306,12 +320,13 @@ provider（本地目录不再是主进程的事，也不再是"官方宿主行"�
 |---|---|---|
 | 1 | 远程 ssh 来源：VS Code Remote URL（主进程构造，权威 IPC + 来源代 proof） | 已有 |
 | 2 | 每来源独立记忆 + 记忆值可用性降级 | 已有 |
-| 3 | chamber-owned 可访问性菜单（roving tabindex / `menuitemradio` / portal 生命周期） | 已有 |
+| 3 | 菜单用官方 `ui-primitives` `Menu`（焦点转移/方向键导航/`dense`/填充选中/项图标）+ 设计系统 `Tooltip`；插件内只留 N-ctx 归属守卫 `instance-view-guard.ts`（`.instance-view` 隐藏/断开即关闭） | **收窄**（2026-09-11 upstream-alignment：原 chamber-owned `AccessibleAppMenu` 已删除） |
 | 4 | 与启动标记解耦：任何 runtime 版本、任何 chamber 形态下本地目录都可用 | 本设计 |
 | 5 | 远程 provider 家族（Insiders / Cursor / Windsurf / JetBrains Gateway / `ssh://` 终端） | todo（S1，每个新增项需一次实机 scheme 验证） |
 | 6 | 远程**文件级**打开（只是 URL 构造；本地仍目录限定） | todo（S2） |
 | 7 | 无应用来源的诚实出口（复制远端路径 / 复制 `ssh user@host` / 复制深链，零执行面） | **收窄**（2026-09-11）：只保留「复制路径」——侧栏既有 `HoverCard` 复制模式 + 会话行已带 `SessionRow.cwd`，零新 IPC；复制 ssh 命令/深链不做（形态留档 todo §5 附录 A） |
 | 8 | 多入口共用同一执行管线（侧栏会话行右键、快捷键；`runOpenInLaunch` 已是单一管线） | **不做**（2026-09-11 裁决，理由与证据见 STATUS；形态留档 todo §5 附录 B） |
+| 9 | 拉起失败原因**用户可见**（`Tooltip` 就地呈现域错误/传输异常，随 error 装饰清除；原先只写 console + 原生 `title`） | 已有（2026-09-11） |
 
 ### 7.3 明确不做（本轮）
 
@@ -328,6 +343,12 @@ provider（本地目录不再是主进程的事，也不再是"官方宿主行"�
 - `packages/dsh-chamber-client-ui-open-in/src/shared/open-in-app-protocol.ts`（官方路由镜像）+
   其 `test/open-in-app-protocol.test.ts` → 由 `shared/open-in-wire.ts` +
   `test/open-in-wire-lockstep.test.ts` 取代；
+- 客户端 bespoke 菜单三件套 `src/client/AccessibleAppMenu.tsx` +
+  `AccessibleAppMenu.module.css` + `src/client/menu-navigation.ts` 及其
+  `test/menu-navigation.test.ts`（2026-09-11 upstream-alignment）→ 由官方
+  `ui-primitives` `Menu`（焦点转移/方向键导航/`dense`/填充选中/项图标/portal）+
+  `Tooltip` 取代；只有 N-ctx 归属留在插件内（新增
+  `src/client/instance-view-guard.ts` + `test/instance-view-guard.test.ts`，§5）；
 - `docs/checklists/upstream-touchpoints.md` §4 的 "dsh-host-open-in-app 契约镜像"行 → 改为 fork 行；
 - 原方案里的 vendor 补丁 / composite covered+factory / `--no-open` / spawn env 剥离 /
   picker pin overlay / 按 transport 分流注册：**全部不再需要**（§2）；
@@ -341,7 +362,8 @@ provider（本地目录不再是主进程的事，也不再是"官方宿主行"�
   `dist/index.js` 为 `own`，上游 `src/internals.ts`/`README*`/`tsdown.config.ts`/`tests/` 为
   `dropped`；
 - 客户端：`src/client/local-catalog.ts`（新）、`src/shared/open-in-wire.ts`（新）、
-  `test/{local-catalog,open-in-wire-lockstep,open-in-labels}.test.ts`（新），
+  `src/client/instance-view-guard.ts`（新，N-ctx 归属守卫，§5）、
+  `test/{local-catalog,open-in-wire-lockstep,open-in-labels,instance-view-guard}.test.ts`（新），
   `client/{source-adapter,choice-store,index,open-in-gates,OpenInButton}.tsx?` 与
   `shared/{open-in-view-model,capabilities}.ts`、`src/locales.ts` 改写（§4.2/§5）；
 - 接线面：§6.2 的八处 + 插件页的 `localOnly` 呈现（`plugin-inventory-text.ts` +
@@ -356,6 +378,7 @@ provider（本地目录不再是主进程的事，也不再是"官方宿主行"�
 | seed 单测 | `pnpm run test:host-open-in` | 探针零宿主动作、菜单顺序、SSH 标记回归（目录仍解析）、图标 base64/不可用、`open` 的 argv 与全部拒绝分支、ENOENT 重解析恰好两次、`domainResult` 只吞已知错误 |
 | 跨包 wire 契约 | `test/open-in-wire-lockstep.test.ts`（客户端包） | 命名空间、四个方法名与其全限定常量、`@Remote` 面、错误码集合、图标媒体类型 —— 全部读 seed 源码文本 |
 | 标签覆盖 | `test/open-in-labels.test.ts`（客户端包） | fork 的 `catalog.ts` 每个 id 都有 zh+en 标签，且标签表无多余行 |
+| 菜单归属守卫 | `test/instance-view-guard.test.ts`（客户端包） | `menuOwnerAllowsInteraction` 的 fail-closed 真值表（断连 / 隐藏 class / `hidden` / `aria-hidden` / 不可见任一不满足即关闭）；纯函数，不依赖浏览器 DOM |
 | 本地池 wire 纪律 | `test/local-catalog.test.ts`（客户端包） | 参数名（`app`/`path`）、载体解析、fail-closed、`data:` URL 允许表、拉起错误映射 |
 | 适配器行为 | `test/source-adapter.test.ts` | 双池合并、图标 boot 缓存（刷新不重复请求）、per-entry 通道路由、无载波时诚实降级 |
 | 记忆 | `test/choice-store.test.ts` | per-source 键、来源隔离、旧全页键只读迁移、畸形 id 不写键 |

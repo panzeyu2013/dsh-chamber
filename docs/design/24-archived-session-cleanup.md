@@ -142,7 +142,9 @@ archiveCleanup/purge({sessionIds?, force?}) → 同上
   同一收尾批量写移除）。
 - **可选 `force` 语义**：缺省 = 既有 fail-closed 行为，逐字节不变；
   `force: true` = 只放过「**已加载（idle/attached）**」子树，**running 永远拒绝**
-  （含 force）。**归档交互不动**（侧边栏归档按钮、确认文案、归档语义均保持原样）；
+  （含 force）。**归档语义不动**（哪些会话被归档、级联与 wire 面均保持原样；
+  交互形态在 2026-09-11 upstream-alignment T2a 变了：归档动词移入会话行 kebab
+  菜单、且不再弹确认——见 design 05 §2.2 / 06 §7）；
   force 的改动全部落在**删除侧**，并且是「**先停止、再删除**」——不放松任何
   安全守卫的判据。结果口径按 `skippedRunning`（真 running）/`skippedLoaded`
   （已加载未运行）/`forcedLoaded`（本次强制删除的树根）拆分，`PreviewResult`

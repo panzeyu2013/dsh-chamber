@@ -458,10 +458,14 @@ chamber-settings.json，非秘密）：
   为导航选择器强调，运行时/表单字段 12px/400 为紧凑行——只统一箭头词汇。
 - 下拉箭头统一 `IconChevronDownOutline14`（`.runtimeSelectChevron`，
   appearance:none + 自定义 chevron，右缘与文字左缘对称；文字↔箭头净间隙 ≥6px）。
-- 动作按钮：主按钮（更新到/切换到 vY）复用 `.updatePrimaryButton`（dense capsule
-  28px / radius 14px / `--dsw-alias-button-primary-fill` / label-primary-foreground）；
-  次按钮（恢复内建 / 重启 dsh / 清理版本 / 恢复回滚前数据等）复用 `.updateButton`
-  （透明 + border l2 / radius 14px）；禁用态 opacity .4。
+- 动作按钮：主按钮（更新到/切换到 vY）与次按钮（恢复内建 / 重启 dsh / 清理版本 /
+  恢复回滚前数据等）**一律用官方 `ui-primitives` `Button`**（2026-09-11
+  upstream-alignment T9）：主 = `variant="primary" size="sm"`（28px capsule /
+  radius 14 / `--dsw-alias-button-primary-fill` / label-primary-foreground）、
+  次 = `variant="outline" size="sm"`（透明 + border l2），禁用态 opacity .4——
+  这正是原先手写 `.updatePrimaryButton` / `.updateButton` 抄的那套配方，两条本地
+  规则已删除；本包共 36 处调用点（`DshRuntimeSection.tsx` 29 / `UpdateSection.tsx` 6 /
+  `GeneralView.tsx` 1「发送测试通知」）。
 - 状态/进度行 `.updateStatus`（block，aria-live，Chromium 不暴露 display:contents）：
   `.updateStatusText` 13px / primary；失败行 `.generalError` 12px /
   `--dsw-alias-state-error-primary`；hint 行 `.generalHint` 12px / tertiary。

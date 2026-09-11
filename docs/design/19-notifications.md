@@ -169,11 +169,15 @@ interface NotificationRequest {
   与 OpenChamber `requireHidden && isAnyWindowFocused()` 同语义；单窗口下
   renderer 的 `document.hasFocus()` 与主进程 `isAnyWindowFocused()` 等价，主进程
   再查一次作为权威）。
-- 文案（v1 固定，renderer 组装，zh 字面量——沿 App.tsx 既有风格；i18n 列为扩展）：
-  - complete：「会话已完成」/ `{来源 label} · {会话标题}`
-  - ask：「代理正在等待你的回答」/ `{来源 label} · {会话标题}`
-  - request：「代理请求你的批准」/ `{来源 label} · {会话标题}`
-  - 会话标题查 `aggregates[sourceId]`（无标题/空白会话回落「未命名会话」）。
+- 文案（v1 固定，renderer 组装）——**2026-09-11 upstream-alignment T16：不再用
+  zh 字面量**，改取 App 框架的 typed 字典 `packages/renderer/src/locales.ts`（框架
+  自身没有 `t` 席位，按**文档语言** `<html lang>` 用 `readDocumentLocale()` 解析；
+  该 effect 依赖为 `[]`，拿不到 render 作用域的 `t`，故在事件组装时读同一事实）：
+  - complete：「会话已完成」/ `{来源 label} · {会话标题}`（`notification.sessionComplete`）
+  - ask：「代理正在等待你的回答」/ `{来源 label} · {会话标题}`（`notification.awaitingAnswer`）
+  - request：「代理请求你的批准」/ `{来源 label} · {会话标题}`（`notification.awaitingApproval`）
+  - 会话标题查 `aggregates[sourceId]`（无标题/空白会话回落「未命名会话」，
+    即 `session.untitled`）。
 - 发送：`window.dshChamber?.notifications?.notify(payload)`；桥未就绪静默跳过 +
   console.warn（与 desktopSsh 桥探测同节奏，500ms 探测已有先例）。
 - `sourceFingerprint` 来自生产该份 runtime facts 的 ctx：local 固定为 `local`，远程
@@ -292,9 +296,10 @@ interface ChamberSettings {
 
 **设置 UI**（`packages/dsh-chamber-client-ui-settings-bridge`）：
 
-- 决策（用户拍板，实现以此为准）：**并入 `__general` 通用页**，新增
+- 决策（用户拍板，实现以此为准）：**并入 `__general`（客户端 / Desktop 页；
+  2026-09-11 由「通用」改名，见 design 15 §D1）**，新增
   「通知」控制组（不新增设置壳固定入口——设计 15 平铺形态的入口数保持
-  2 个不变）；通用页各控制组之间用**分割线**（`.generalGroup + …` hairline，
+  2 个不变）；客户端页各控制组之间用**分割线**（`.generalGroup + …` hairline，
   `--dsw-alias-border-l2`）分隔，通知组插在「运行/会话待办区」与「更新」之间。
   备选（未采纳）：独立 `__notifications` 固定入口。
 - 通知组内容（settings-panel 设计语言 + `settings-store` 复用）：
@@ -411,7 +416,7 @@ completedBySource（App 完成未读蓝点集，06 §4.1，只读复用——徽
   判定，win32 上 setBadgeCount 恒为 undefined，专属原因不被泛化吞掉）。
 - **设置**：`notifications.badgeEnabled`（默认 **true**——被动指示，镜像蓝点
   「始终开启」与 OpenChamber 默认开启；与横幅主开关 `enabled` 独立）。设置 UI
-  在通用页「通知」组加一条始终可见的无边框开关行（主开关下方、子设置卡上方），
+  在客户端页「通知」组加一条始终可见的无边框开关行（主开关下方、子设置卡上方），
   不增加边框层数；zh/en i18n。
 - **renderer 推送**：`[completedBySource, runtimeFacts]` effect 每次变化推当前
   计数（蓝点武装/阅读解除/来源退役/子代理计数归零自然驱动徽标增减；通道-only

@@ -1174,7 +1174,7 @@ settings-bridge/git/open-in）依旧不注入。机制上无需新能力：控�
                     chamber 移动适配插件（窄屏 media query 生效）
                        ├─ 布局覆盖：三栏 → 单栏、侧边栏 → 抽屉
                        ├─ 触控：目标 ≥44px、touch-action、100dvh/安全区
-                       ├─ 弹层/设置/轨迹：限宽、全屏、可滚动
+                       ├─ 弹层/设置/轨迹：全屏、可滚动（弹层限宽归官方几何）
                        └─ PWA：manifest/SW/安装引导（分期）
 ```
 
@@ -1300,11 +1300,12 @@ append-only 无删除方法），走 dsh 实例自身 host 插件（`ctx.inject(
 目前只承载「粘滞 tooltip 气泡抑制」这一条装饰性规则——它是粗指针产物而非
 窄视口产物（iPad 横屏 1024px+ 同样点按），且必须与两个宽度档一起被
 「所有规则都在媒体查询内」的回归测试覆盖。
-**「不猜官方哈希类名」是原则，唯一的类名例外是后缀契约**（§18.4.3 的分区网格
-两条）：实例 bundle 的 CSS Modules 生产命名是 `[hash]_[local]`（上游
+**「不猜官方哈希类名」是原则，唯一的类名例外是后缀契约**（§18.4.3 的 Models
+provider 行一条；2026-09-11 upstream-alignment 后只剩这一条——原先用于
+`.cards` 的那条已删除）：实例 bundle 的 CSS Modules 生产命名是 `[hash]_[local]`（上游
 `vendor/harness-checkout/packages/client/tsdown.client.ts:517` 的
 `cssModules: { pattern: '[hash]_[local]' }`；0.1.5-rc.1 产物实测
-`JObwrW_row`/`zGbnIq_modelRow`/`qSYn7G_cards`），局部名只在**末尾或后随空格**出现，
+`JObwrW_row`/`zGbnIq_modelRow`），局部名只在**末尾或后随空格**出现，
 故只能用 `:is([class$="_<local>"], [class*="_<local> "])`；`_<local>_<hash>_<idx>`
 是 **chamber 自建壳（Vite 默认 `generateScopedName`）**的命名，mobile 插件只在
 gateway 单壳面加载上游产物，该形态永远不出现。
@@ -1318,12 +1319,20 @@ gateway 单壳面加载上游产物，该形态永远不出现。
   （mobile-adapt 弃 transform 用 left 位移；mobile-shell 用合成器动画且故意
   不写 will-change）。**chamber 的 ui-layout fork 若把设置对话框移出侧边栏
   portal 可根除**——这是 fork 路线优于外部插件的直接收益；
-- **弹层限宽**：`max-width: calc(100vw - 24px)`（菜单/面板/卡片统一；实现取
-  24px 留更宽余量）；
+- **弹层限宽：不做统一 blanket 限宽（2026-09-11 upstream-alignment T6）**。
+  手机档曾对**所有**非设置 `aria-modal` 弹层加 `max-width: calc(100vw - 24px)`，
+  该规则被删除：它对官方全幅图像 lightbox（ui-attachment `ImageLightbox`，
+  `role="dialog"` 的 backdrop 是 `position:fixed; inset:0` + 内部 `inset-0` 遮罩）
+  是过度约束——限宽后 backdrop 只剩 `100vw-24px` 且左对齐，屏幕右侧留下 24px
+  未变暗、可点穿的条带。树里只有三个 `role="dialog" aria-modal="true"` 生产者，
+  各自自带视口适配：设置面板（本插件全屏）、ui-primitives `Modal`（root 钉
+  `inset:0` 并留 24px 内边距、dialog 上限 `min(380px, 100%)`）、
+  `ImageLightbox`（全幅）——官方几何本身就是适配，插件不再叠加自己的限宽；
 - **设置面板全屏**：`fixed inset:0` + 内容纵向滚动 + safe-area 补边（P1 实现
   nav 未做横向滚动——官方 nav 条目窄屏可接受，需补时追加 `overflow-x` 规则）；结构识别
-  （`[aria-modal]` + nav 首子元素）打标是外部插件的妥协，chamber 在 fork 内
-  直接打标；
+  不靠位置索引：设置面板的判定锚是官方 `[data-slot="settings.header"]`，粘滞行锚是
+  文档化的 `[data-slot="settings.action"]` + `[data-slot="settings.close"]` 两缝
+  （详见下条），chamber 在自己的 fork/插件里直接打标；
 - **输入工具行单行**：`flex-wrap: nowrap` + 触发器限宽 112px + 字号 12px；
 - **设置整页适配（手机档 ≤768px；平板 >768 保留桌面弹窗
   几何；实机门禁 §18.6）**：取代上条 **chamber P1** 取舍（只全屏 + 整列滚动、
@@ -1331,26 +1340,39 @@ gateway 单壳面加载上游产物，该形态永远不出现。
   手机档把 panel 改 `flex-direction: column` 全屏堆叠：nav rail 变顶部横条
   （标题 + **横向滚动分区 chips**，44px 触控，顶部安全区）；内容列 header
   （actions+Close）以 `position: sticky` 固定不再随内容滚走（P1 的"整个
-  content 滚动"会让 Close 滚出屏），内容列自身保留**兜底纵向滚动**
+  content 滚动"会让 Close 滚出屏），**该行的选择器锚在文档化的两条缝上**
+  （2026-09-11 upstream-alignment T17c）：
+  `… > div:last-child > div:has([data-slot="settings.action"]):has([data-slot="settings.close"])`
+  ——官方形状是 content > header >（actions > action 出口、close 按钮 > close
+  出口），只有这一行同时带两条缝，actions 格单独持有 action 缝、options 格只持有
+  `settings.section`，因此位置无关（上游把任一格再嵌深一层也不会失配），
+  也绝不会误中 options 格；内容列自身保留**兜底纵向滚动**
   （官方子结构 header+options 精确匹配时仅 options 内滚，永不双重滚动；
   结构漂移时兜底滚动 + sticky header，杜绝硬锁死），options 区纵向滚动并
   补底部安全区；导航条与 options 的左右 padding 带
-  `env(safe-area-inset-left/right)`（刘海横屏）；分区内网格降级：
-  Models provider 行 4 列 grid → 2×2、Plugins inventory 两列卡片 → 单列。
-  官方内部格子无稳定属性，两处使用文档化的**局部名后缀**匹配
+  `env(safe-area-inset-left/right)`（刘海横屏）；分区内网格降级只剩**一条**：
+  Models provider 行 4 列 grid → 2×2。官方内部格子无稳定属性，这一处使用文档化的
+  **局部名后缀**匹配
   `:is([class$="_<local>"], [class*="_<local> "])`——实例 bundle 的
   CSS Modules 生产命名是 `[hash]_[local]`（上游 `tsdown.client.ts:517`；
-  产物实测 `JObwrW_row`/`zGbnIq_modelRow`/`qSYn7G_cards`），局部名可能不在
+  产物实测 `JObwrW_row`/`zGbnIq_modelRow`），局部名可能不在
   末位，故后缀 + 后随空格两臂并用；`_<local>_<hash>_<idx>` 是 chamber 自建壳
   （Vite）的命名，从不属于实例 bundle——曾用的 `[class*="_<local>_"]` infix
   形式因此在生产里命中不到任何东西（2026-09 修复）。命名翻转时 fail-soft
-  回官方网格，属记录在案的例外锚点族，后缀契约见 §18.4.2；其他
-  `aria-modal` 弹层（onboarding 步骤/选择器）
-  限宽 `100vw-24px`；弹窗内可编辑字段套用 composer 同款 16px 聚焦缩放
-  底线；
+  回官方网格，属记录在案的例外锚点族，后缀契约见 §18.4.2。**卡片网格不再由
+  chamber 降级（2026-09-11 upstream-alignment T17b）**：上游自己就带折叠断点
+  （`PluginInventorySettingsTab.module.css` 在 `max-width: 680px` 把 `.cards`
+  收成单列），chamber 原先那条强制单列只在 681–768px 窗口里与上游自己的
+  两列几何相矛盾，已删除——上游的断点就是唯一断点。弹窗内可编辑字段套用
+  composer 同款 16px 聚焦缩放底线；
 - **会话头部（会话页顶部标题/面包屑行）**：官方 header 为桌面宽度 chrome，
   移动面三轴冲突全部以结构化锚点覆盖（不依赖哈希类名）——
-  (a) 浮动汉堡（左上 44px）与头部内容重叠 → 头部预留左 gutter
+  (a) 浮动抽屉开关（左上 44px，官方 `IconPanelLeftOutline16` 字形——不再是
+  自绘 CSS 汉堡，2026-09-11 upstream-alignment T17a；ARIA 也是官方形状：一个
+  随状态切换的 `aria-label`（官方 toggle 的 `toggle.open`/`toggle.collapse` 对）
+  + `aria-expanded`，**`aria-haspopup` 已删**——它声称一个无类型的弹层，而抽屉
+  就是侧栏本体被移到画外；官方在真有弹层时才写类型，如设置触发器的
+  `aria-haspopup="dialog"`）与头部内容重叠 → 头部预留左 gutter
   （`[data-slot="conversation.session.header"] > header` 直接子结构，
   `padding-left` 同步让出 tab 行）；
   (b) 官方 crumbs 行 nowrap + overflow hidden 会静默截断长标题链/谱系
@@ -1369,7 +1391,7 @@ gateway 单壳面加载上游产物，该形态永远不出现。
   官方右栏栈自带移动呈现（`ui-sidebar-right` 在 <768px
   自动全屏、`position:fixed; inset:0`），自绘覆盖层与之重复且打架，插件只保留第三轨
   的网格锁（`[data-mobile-role="details"] { grid-column: 3 }`）。**层级范围**：
-  插件的抽屉/遮罩/汉堡（z-74/75/76）挂在官方 `shell.overlay`
+  插件的抽屉/遮罩/抽屉开关（z-74/75/76）挂在官方 `shell.overlay`
   层内，而该层是 `position:absolute; z-index:20` 的**独立栈上下文**——三者因此压在
   框架内容与普通右栏列（z-10）之上，但**低于官方全屏右栏（z-40）与浮动面板宿主
   （z-60）**。这是有意的：官方全屏面板接管屏幕时，移动抽屉让位（要跨栈必须把节点
@@ -1554,12 +1576,15 @@ PWA / Web Push 社区实现机制（dsh-ui-mobile，jasondu，npm 0.1.8，MIT，
     时间轴与 kind 标签的悬停气泡仍可读（信息型气泡保留）；轨迹 turn-rail
     预览（901–1023px 触控平板）不受影响；接鼠标的触控设备 hover 气泡恢复；
     桌面宽度零变化；**原生 `title` 长按气泡为已登记取舍**（刻意手势，不抑制）；
-  - 会话头：汉堡不重叠头部内容、crumbs 长链/chip 换行不裁切、「Session 日志」
+  - 会话头：抽屉开关不重叠头部内容、crumbs 长链/chip 换行不裁切、「Session 日志」
     手机档图标化且可点；抽屉里单击会话行即切换（iOS Safari 自愈生效）、
     切换不弹键盘（composer 意图焦点不受影响）；
   - 设置（手机档）：竖排 nav 变顶部横向 chips 且分类可达/可滚动、Close 固定
-    不随内容滚走、各分区（General/Models/Agent presets/Plugins+inventory）
-    无横向溢出且模型行/卡片网格降级生效、onboarding 等弹层不出屏可滚动、
+    不随内容滚走（粘滞行仍由两条 `data-slot` 缝锚定）、各分区（General/Models/
+    Agent presets/Plugins+inventory）
+    无横向溢出且 **Models 行 2×2 降级生效**（卡片网格的折叠归上游 680px 断点，
+    chamber 不再覆盖）、**弹层不出屏且官方几何自足**（含全幅图像 lightbox 不得被
+    限宽裁切）、
     输入框聚焦不触发页面缩放、键盘弹出不遮输入、深浅色与横竖屏走查、**分区
     chip 切换后 options 从顶部开始（且点 nav 标题/选项区不复位）**；
   - PWA：manifest 生效、SW 注册、安装引导（分期验收）。

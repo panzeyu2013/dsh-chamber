@@ -39,8 +39,10 @@
 - [ ] fork 副本上游改动面：`packages/client/connection`、`packages/client/web`、
        `packages/client/api-gateway` 的版本间 diff——判断「冲突需合并」vs「干净采纳」。
 - [ ] **首屏耦合审计**：上游新增/改名的官方 client 行若被复合首屏 inject，需同步
-       host-graph 额外行与 `assertRequiredExtraRowServices` 探针集合
-       （见 `upstream-touchpoints.md` §3）。
+       host-graph 额外行的降级注释；**探针集合本身是派生的**（首屏 `register(id,
+       plugin)` 记录的 `inject` 面并集，见 `upstream-touchpoints.md` §2/§3 与
+       design 09 §3.2），无需再往清单里加名字，但新 provider 行若不在复合覆盖集内
+       要确认探针能观测到它。
 
 ## 2. 双线 pin 一致性（源码线 + 运行时线）
 

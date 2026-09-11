@@ -100,14 +100,22 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
 - **点击来源分组头**（非当前来源）= 切换活动来源视图：
   `chamberBridge.requestActivateSource(sourceId)` → App 层仅切换该来源
   shell（N-ctx），不打开会话。
-- **归档会话确认后立即从列表消失**：`archivedSessionIds` 过滤在 derive 层
+- **归档会话立即从列表消失，且无确认**（2026-09-11 upstream-alignment T2a）：
+  归档动词在会话行的 kebab 菜单里，执行即提交（上游明确理由：归档只让该行隐藏、
+  从不触碰会话日志，故既不破坏性也无需确认，vendor ui-workspace `Rows.tsx:412-421`）；
+  `archivedSessionIds` 过滤在 derive 层
   （`shared/derive.ts` 纯函数），不等聚合轮询。
-- 会话行悬停操作（v1 最小集，走该来源自己的 API）：重命名/归档/**fork**
-  （kebab 菜单 + 独立归档按钮）——行内 fork 走 wire `sessions.fork` + 标题
+- 会话行悬停操作（v1 最小集，走该来源自己的 API）：重命名/**fork**/归档
+  （**kebab 菜单三项**；行内不再有独立归档按钮——2026-09-11 upstream-alignment
+  T2a）——行内 fork 走 wire `sessions.fork` + 标题
   递增（increaseTitle，对齐官方 ui-workspace），成功后打开子会话，递增
   rename 失败非致命（子会话仍创建并打开）；官方 conversation 回合尾部的
   `turn-tail forkAt` 常驻可用，两者并存。workspace 行：新建会话（`+` 按钮，在该
-  workspace 下创建并打开）、重命名、删除（kebab 菜单）。wire 缺失的
+  workspace 下创建并打开）、重命名、删除（kebab 菜单）。**workspace 删除用应用内
+  官方 `Modal` 确认**（2026-09-11 upstream-alignment T2b）：outline 取消 + outline
+  危险确认 + 一句说明 + `role="status"` 进行行，确认后才发 wire 调用；孤儿
+  workspace（路径已消失、只删注册）走同一确认、只换说明句——**全包不再有
+  `window.confirm`**（OS 样式弹窗无法使用 alias token）。wire 缺失的
   方法不做（如删除会话），不发明协议——**design 24 受界例外**（2026-12
   用户批准，AGENTS 已登记）：来源头 hover 簇新增「删除已归档内容」动作，
   走 chamber 自有宿主域 `archiveCleanup/{preview,purge}`（design 24 引入的宿主包，
@@ -115,7 +123,8 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
   跳过、幂等；域缺失 404 给诚实文案；host binding 已按 design 24 §10 的 vendor
   核对结论落地，见 `packages/dsh-chamber-seed-archive-cleanup/src/binding.ts`）。
   详见 design 24 与 §6 宿主包清单。
-- 已连接来源提供"新建工作区"（来源头部 `+` 按钮）：打开该来源的应用内
+- 已连接来源提供"添加工作区"（来源头部按钮，官方 project-add 字形
+  `IconProjectAddOutline16`，2026-09-11 upstream-alignment T7）：打开该来源的应用内
   目录浏览对话框（§4
   同一 browse 表面，不做手敲路径表单），确认的路径走该来源的
   workspace.create（路径须为该实例宿主上已存在的目录；远程路径 = 远端
@@ -514,7 +523,16 @@ export const chamberBridge: {
   过渡在途期间翻转时，不会出现"直通落地后被在途节的旧意图覆盖"。
   未就绪视图（首次打开/仍在 boot）进入**骨架屏**（`.instance-loading`）：全屏
   同底色 veil + 居中转圈/服务器名文案，`--dsw-alias-*` 主题 token 底色，z-index
-  盖住 shell 内 dsh 启动页——不再需要 opacity 隐藏技巧。**骨架屏无几何主张
+  盖住 shell 内 dsh 启动页——不再需要 opacity 隐藏技巧。**骨架/框架文案进 typed
+  字典（T16，2026-09-11 upstream-alignment）**：框架（App / InstanceView /
+  `index.html` 的静态首帧）自身没有 `t` 席位，其 chrome 文案集中在
+  `packages/renderer/src/locales.ts`（zh 为键集权威 + en 完整校验），按
+  **文档语言** `document.documentElement.lang` 解析——官方 locale 服务
+  `syncDocumentLanguage` 是该属性的唯一写入者；未设置时回落到**服务端 markup
+  自己的默认**（`index.html` 的 `lang="zh-CN"`）而非 OS 语言。`index.html`
+  的静态骨架文案由 `main.tsx` 在 React 挂载前用同一字典覆盖（`data-chamber-boot-hint`
+  是唯一挂钩），因此英文文档首帧即英文。转圈是纯装饰（`aria-busy` 承载忙碌事实），
+  已 `aria-hidden`。**骨架屏无几何主张
   （D1=A）**：骨架不以固定 rail 56 + sidebar 224 = 280px 占位块模仿 dsh
   布局几何——真实侧栏宽度由 layout store 持久化、用户可拖到任意值，任何占位
   几何都会在 settle 揭幕时失配（默认观感路径被 View Transition 快照遮盖，
@@ -533,7 +551,23 @@ export const chamberBridge: {
    刷新），违反「一个实体的失败不得抹除/阻断无关健康实体」不变量。dsh 壳
    内自绘的失败页（`AppWebEntry` 加载页的 fail-loud 报告）也统一经
    `AppWebEntry.bootError`（拷贝包 seam）上浮为 chamber 可见的失败态
-   （shell.ts 失败分支 dispose 该 entry，重试干净重 boot）。**模块表安装顺序**：
+   （shell.ts 失败分支 dispose 该 entry，重试干净重 boot）。**失败报告内容与官方
+   同源（T15，2026-09-11 upstream-alignment）**：覆盖层除标题 + boot 失败文本外，
+   还列出该次 boot 里**未激活的插件 id**（官方失败页 `Failed to load plugins` 的同
+   一份清单）：`shell.ts` 的 `collectFailedEntries` 在 entry 销毁**之前**读仍存活的
+   loader（上游 `assertEntriesActive` 的同一 fact，`packages/client/web/src/boot.ts:138-158`），
+   id 搭已有的 `ShellState.failedEntries` 到 App——不新开通道；被容忍的 per-instance
+   extra row 不在清单内（版本歪斜不得判 boot 失败）。失败/控制面不可达两块文案与
+   重试/切换按钮同批改为框架 typed 字典（`renderer/src/locales.ts`，按文档语言
+   解析——框架自身没有 `t` 席位）+ 官方 `Button variant="primary|outline"`，
+   控制面不可达块同样是 `role="alert"`。**框架的 `Button` 走深路径导入**
+   （`@deepseek-ai/dsh-client-ui-primitives/src/Button.tsx`，2026-09-11
+   upstream-alignment）：包 barrel 同时带 primitives 的 markdown/CodeBlock 家族，
+   实测在本构建上把约 87 KB 带进主图（主图 raw 1,226,775 → 1,313,736，距
+   `packages/renderer/scripts/check-chunk-budgets.mjs` 的 C6 warn 门只剩 2.7%），
+   而深路径把它们留在 chamber 复合入口（1,986,884）——主图在 App 挂载前整体
+   求值，正是 `chamber-entry.ts` 的 C3 注记要把 ui-primitives 挡在主图外的那条
+   理由。**模块表安装顺序**：
    模块表（`window.__DSH_MODULES__` + `__ModuleLoader__`
    sink）经 boot.ts 导出的幂等 `ensureWebModuleSystem` 在**任何 bundle 脚本
    执行前**装好（shell.ts 在 collectExtraRows 预加载之前调用，run() 经同一
@@ -586,7 +620,7 @@ export const chamberBridge: {
   按 02 §3.9 部署（单元含同款 pin；headless linux 服务器无显示会话，
   缺行也天然 browse）；OS 原生选择器（native）对 chamber 用户永不出现，
   添加工作区的唯一路由 = 应用内对话框 pick 一个宿主目录（含弹窗内新建
-  文件夹）。侧边栏"新建工作区"打开的就是同一对话框，按来源分派（每来源
+  文件夹）。侧边栏"添加工作区"打开的就是同一对话框，按来源分派（每来源
   unary client 驱动，见侧边栏包 README）。
 - 官方 ui-workspace 的 hero "Add workspace…" 与 chamber 侧边栏共用同一
   browse 表面，样式与交互完全统一（上游 one-route 哲学：不做手敲路径
@@ -610,7 +644,7 @@ export const chamberBridge: {
   gateway = 经反代触达该 gateway 的 `/chamber/runtime`，**dsh 直连（ssh/http）
   = 不挂载**（dsh 直连无 `/chamber` 面、无 ssh exec 管理通道，该来源设置段
   不渲染 dsh-runtime 分节；与 18 §3.6 / AGENTS / design 17 §3 同口径）。
-  **不再位于 chamber 全局「通用」视图**
+  **不再位于 chamber 全局「客户端」视图**
   （design 15 的 `__general` 控制组不含运行时块）。
 - **「重启 dsh」动作只在本地与 gateway 两源**（design 18 §3.6 项 8，刷新插件挂载）：
   local = 控制面事务接口
@@ -653,7 +687,17 @@ export const chamberBridge: {
     渲染条目：标准座 + `t`（该来源 locale face 的命名空间）+ `useStore`/`actions`
     + `renderSlot`（子座位）+ 条目 `inject` 面 + owner props。**座位来自该来源自己的
     渲染器绑定**，绝不伪造空桩：某个座缺席是那台服务器的事实，不是可以补一个空
-    observable 的缺口。
+    observable 的缺口。observable 管线用上游 `bindings.tsx` 导出的 `observableHook`
+    （vendor `ui-renderer/src/client/bindings.tsx:57`；不再自带 per-source 选择器
+    hook 缓存），nav 行标签用上游导出的 `resolveSlotLabel`
+    （vendor `ui-slots/src/index.ts:620`；不再内联同一规则）——2026-09-11
+    upstream-alignment。
+    **槽锚点与单元派发照上游（2026-09-11 upstream-alignment）**：每个槽渲染点外面恒有
+    `<div data-slot="<key>">`（`display:contents`，不占布局），那是官方样式表寻址的
+    稳定缝（如 `settings.general.item` 的 `> :last-child` 规则）；它挂在**出口**上而
+    不是派发结果上——胜出条目、fallback、占用但无胜出者的**死单元**、未声明槽都在这层
+    内渲染，锚点不随注册抖动闪断。死单元渲染可寻址的 `<div data-slot-error="<key>">`，
+    与「该键从未注册」的 fallback 区分开（纯判定 `cell-dispatch.ts`）。
   - **归因不上面**：`StoredEntry.registrant`（cordis fiber-name 戳）**不渲染**——上游
     官方壳也只渲染 `navIcon(row.id)` + 分节标签，该戳在上游是纯诊断字段（控制台
     错误文本 + 动态 cordis 崩溃归因）。本仓因此退役了曾经的「插件」来源标记
@@ -670,14 +714,41 @@ export const chamberBridge: {
     渲染一帧）。
   - **座位矩阵**：壳渲染 `settings.section` + `settings.action`（action 保持既有
     「仅本地来源」限定），子座位（`settings.general.item` / `plugins.tab` / keyed 卡片）
-    随所属分节渲染；`trigger/header/close` 属**壳 chrome**（自绘标题/关闭/触发器），
-    `settings.onboarding` 则是**内容座**（官方 `ui-settings-models` 真的往里注册首启
-    引导步骤）——chamber 壳不实现官方 onboarding 协调器，故它同样不被渲染。这三类
-    都不由壳渲染，且组装诊断块退役后**不再逐条报告**：某来源插件贡献的 onboarding
-    步骤在桌面面板里不会出现，这是已知的最小可见性损失（见 STATUS.md 残余登记）。
+    随所属分节渲染；`trigger/header/close` 属**壳 chrome**，`settings.onboarding`
+    由壳**自己协调**（2026-09-11 upstream-alignment，见下一条）。
+    壳 chrome 与上游对齐（同批）：面板圆角 **32px**（上游
+    `SettingsRoot.module.css` 的 `.panel` 规则本体，此前抄的 r24 来自该规则的过时
+    注释）、触发器行 **42px**（上游 `.triggerRow`/`.trigger`；chamber 只渲染按钮，
+    故把行距折进按钮）、关闭后把焦点还给触发器（上游 `wasOpen` effect）、头部
+    **不再重复分节标题**（每个内容分支自己渲染 `<h2>`，壳只留「选中服务器」副行——
+    chamber 的 N 来源补充）。chamber 全局入口从「通用」改名 **「客户端 / Desktop」**
+    （`clientNav`）：官方分节 `general.nav` 本身就叫「通用设置 / General」，同名会让
+    两个不同的面在 nav 上不可分辨；nav 单元与页面自己的 `<h2>` 共用这一个键，不会
+    「导航一个名字、页面另一个名字」。
+  - **`settings.onboarding` 协调器（chamber 的 N 来源适配，2026-09-11
+    upstream-alignment）**：上游 `SettingsRoot` 在**当前会话为 blank 或缺席**时挂载
+    该台账里**有序的第一个未完成步骤**，并以步骤自己的 owner props
+    （`stepId` / `complete` / `openSection`）渲染——步骤组件住在同一个 boot ctx 里，
+    自带 ctx 读取、就绪门与对话框 chrome（`#root` inert 归它），壳不为该阶段画任何
+    自己的东西。chamber 壳**就是**该实例 ctx 的 `sidebar.settings` occupant，因此只
+    协调**自己 ctx** 的台账 + 自己 ctx 的 `useSessions` 座（与上游同源的两个事实，
+    无新通道），并额外串一道 App 发布的**活动视图事实**
+    （`chamberBridge.getActiveSource`，与 ui-layout 的文档级主题投影同一道门）：本壳
+    一页挂多个实例壳，而首启对话框是文档级的（portal 到 body + 持有 `#root` inert），
+    不串门就会把另一个实例的首启弹到当前视图上；未发布（undefined）读作关闭——无理由
+    的模态比晚一帧更糟。**刻意不是"按选中来源"协调**：跨 ctx 的步骤只能靠跨 ctx 的
+    hook 驱动，且两个同选一源的壳会重复挂载同一步骤。渲染走
+    `BridgeEntryBoundary containAll slotKey="settings.onboarding"`（外来步骤崩溃也不
+    夺走 chamber 的 `sidebar.settings` 座位）。
+  - **`sectionsEmpty` 占位保留**：上游在空台账处渲染空的选项列（其单 ctx 壳不可能
+    「有面板无分节」）；chamber 保留这句诚实占位，因为未发布的 `settings.section`
+    台账是**可达的 N 来源状态**（该来源的设置簇尚未落到它自己的 boot ctx，或外来 dsh
+    目标的插件图部分失败），空列会被读成「这台服务器没有设置」。
   - **错误containment**：外来条目（该来源自己的插件贡献）的渲染失败经
     `BridgeEntryBoundary containAll` 收口成 `<div data-slot-error="…">`，绝不夺走
     chamber 自己的 `sidebar.settings` 条目（那会回落到没有服务器下拉的官方 SettingsRoot）。
+    该崩溃面连同胜出/fallback/死单元/未声明四条派发路径都在同一 `[data-slot="<key>"]`
+    锚点内（见上「槽锚点」）。
   - **保留优先级 + 看门狗**：设置壳注册在保留 shadow 优先级（shared face
     `settings-shell.ts` `SETTINGS_SHELL_SHADOW_PRIORITY = -1000`）；chamber 侧边栏
     监视 `sidebar.settings` 的 cell winner，若有注册者低于该区间（即顶掉设置壳）则

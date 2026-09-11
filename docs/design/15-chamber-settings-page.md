@@ -3,9 +3,10 @@
 > **状态：现行（settings 壳平铺固定入口，v1 范围，2026-12）**——chamber 全局设置
 > 落 settings 壳的固定入口区，与实例配置平面严格分离；**统一 Chamber 设置页 /
 > 两级分组导航推迟（不排期）**；未完成门禁见 `docs/progress/STATUS.md`。
-> 范围契约：固定入口只有 `__connections`（连接）与 `__general`（通用，含设计 11
-> 的更新块、设计 14 的运行设置、通知与会话待办区控制组）；**移除 B 项**（插件管理
-> 提级、新插件包、OpenChamber 式完整子分区）。
+> 范围契约：固定入口只有 `__connections`（连接）与 `__general`（**客户端 / Desktop**，
+> 2026-09-11 由「通用」改名以避免与官方 `general.nav`（通用设置 / General）同名；
+> 含设计 11 的更新块、设计 14 的运行设置、通知与会话待办区控制组）；**移除 B 项**
+> （插件管理提级、新插件包、OpenChamber 式完整子分区）。
 > 本文是 chamber 设置的**呈现面与权威边界**契约（数据权威见 D3）；设计 14 是睡眠/
 > 运行设置的来源，设计 11 是更新块，设计 19 是通知组，设计 06 §8 是会话待办区。
 
@@ -15,7 +16,9 @@
   （local 默认 + 远程按连接态着色）→ **选中来源自己 boot ctx 的 `settings.section`
   台账**（models/agent-presets/plugins/… 及该来源自己的第三方分节，2026-12 完整桥接
   修订，见设计 05 §5）→ `navDivider` → **固定 chamber 全局入口平铺**：
-  `__connections`（连接）、`__general`（通用——含设计 11 的更新块）。
+  `__connections`（连接）、`__general`（客户端——含设计 11 的更新块）。
+- 壳 chrome 与上游对齐（2026-09-11 upstream-alignment，细节见设计 05 §5）：头部
+  不再重复分节标题、触发器行 42px、面板圆角 32px、关闭后焦点还给触发器。
 - chamber 全局组件内嵌渲染（不依赖选中服务器连接）。
 - **每来源「设置组装诊断」块已退役（2026-12 完整桥接修订）**：设置面不再为选中来源
   二次装载插件，也就不存在需要报告的「未激活/未落座/能力降级」。仍然真实、仍然可见的
@@ -35,7 +38,11 @@
 
 ### D1 固定入口平铺扩展
 
-- divider 下固定入口为 2 个：`__connections` / `__general`（通用设置）。
+- divider 下固定入口为 2 个：`__connections` / `__general`（**客户端 / Desktop**，
+  `clientNav`；2026-09-11 改名——官方分节 `general.nav` 也叫「通用设置 / General」，
+  同名会让两个不同的面在 nav 上不可分辨，而本页是 chamber 全局的桌面客户端设置：
+  关闭行为 / 自启 / 保持唤醒 / 退出确认 / 更新。nav 单元与页面自身 `<h2>` 共用这一个
+  键，不出现「导航一个名字、页面另一个名字」）。
   **更新（设计 11）不再单列入口**——并入 `__general` 视图底部（`UpdateSection`
   控制组：当前版本 + 「检查更新」按钮 + 低调状态行，见设计 11 §3.2）。
   **第三个入口的历史（2026-09 退役）**：`__plugins`（每来源设置组装诊断）曾作为
@@ -59,6 +66,17 @@
   - 样式与官方设置段一致（settings-panel 设计语言：标题 + 导语 + 分组标题 +
     平铺行 + 胶囊按钮，`--dsw-alias-*` tokens）；控制组之间以分割线
     （`--dsw-alias-border-l2` hairline）分隔。
+  - **控件用官方原语（2026-09-11 upstream-alignment）**：所有动作胶囊是
+    `ui-primitives` `Button`（`variant="outline|primary" size="sm"`，含「发送测试
+    通知」），所有开关是官方 `Switch`（36×20 轨道 / 圆形 thumb / 120ms /
+    `aria-checked` 选中色 / **必填 `label`**，即本行的可访问名）——手写的
+    `.generalSwitchInput`/`.generalSwitch`/`.generalSwitchThumb` 三件套已删除。
+    **已知取舍（chamber 适配）**：`Switch` 不透传任意属性（只收 `className`/`title`），
+    而「通知主开关」与
+    「会话待办区开关」是**披露行**（展开下方子设置卡），原先挂在 `input` 上的
+    `aria-expanded`/`aria-controls` 因此改挂外层包装盒（`DisclosureSwitch`，
+    `GeneralView.tsx:146-161`）——披露关系不静默丢失；未读角标开关不展开任何东西，
+    直接用原语本身。
   - 读主进程 `chamber-settings.json`（`dsh-chamber:settings-get/set` IPC + 变更 push）。
 - 「关于」页 v1 不做。
 
@@ -81,7 +99,7 @@
 
 ### D4 会话待办区设置组（settings 契约）
 
-「通用」（`__general`）在「运行」与「通知」组之间是「会话待办区」组（sidebar todo
+「客户端」（`__general`）在「运行」与「通知」组之间是「会话待办区」组（sidebar todo
 area，交互与派生契约见设计 06 §8）：主开关（无边框披露行）+ 展开后三类事件开关（会话完成时 /
 代理提问时 / 审批请求时——与「通知」组事件开关共用同一组文案与事件行视觉，卡片内
 行）。两类事件开关**措辞统一**（待办区不用「已完成未读的会话 /
@@ -127,18 +145,21 @@ ChamberSettings.sessionTodo: {
 
 ## 4. i18n 与验证门
 
-- **i18n**：扩展 `dsh-chamber.settings.bridge` 命名空间（通用设置文案，
+- **i18n**：扩展 `dsh-chamber.settings.bridge` 命名空间（客户端页文案，
   zh/en；`verify:i18n` 必须通过）。
 - **测试**：`test:settings-bridge`（`__general` 入口渲染/active 解析/固定项集合/
   壳装配隔离不变式/`connections-section-mirror` 环境镜像漂移门/每实例面注册表与
-  完整桥接源码锁；`update-gate`：
+  完整桥接源码锁/`cell-dispatch`（槽单元派发：胜出、fallback、占用但无胜出者的
+  死单元、未声明）/`onboarding`（协调器真值表：blank 或缺席才活跃、有序取第一个
+  未完成、完成集推进）/`upstream-alignment-locks`（本批源码锁）；`update-gate`：
   检查按钮相位门；会话待办区与通知设置纯函数）；`test:connections`（plugin-diff 等）；
   `typecheck:settings-bridge`、
   `typecheck:connections`、`build:renderer`。
 - **推迟（不排期）**：两级分组导航、插件提级、关于页。
 - 验证清单：两个固定入口渲染（`__plugins` 不再是固定项）、chamber 入口在服务器
   未连接时可用、设置读写经主进程 store、与官方段互不污染、选中来源自己的分节台账
-  渲染（含第三方分节带「插件」标记）、i18n 无 DRIFTED。
+  渲染（第三方分节与官方分节同形——「插件」来源标记已于 2026-09-11 退役，
+  `section-rows.ts` 头注）、i18n 无 DRIFTED。
 
 ## 5. 关联
 

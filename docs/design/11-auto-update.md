@@ -104,8 +104,9 @@
   idle）→ 经 preload IPC（`dsh-chamber:update-state` invoke 查询 + `update-state-changed`
   push）→ settings 壳渲染。
 - **挂载位置**：settings 壳（`packages/dsh-chamber-client-ui-settings-bridge`）
-  的**「通用」段内**（`__general` 固定入口 → `GeneralView` 底部嵌入 `UpdateSection`
-  控制组）——原独立的 `__update` 固定入口已并入「通用」，
+  的**「客户端」段内**（`__general` 固定入口 → `GeneralView` 底部嵌入 `UpdateSection`
+  控制组）——原独立的 `__update` 固定入口已并入「客户端」（2026-09-11 由「通用」
+  改名，避免与官方 `general.nav`（通用设置）同名，见 design 15），
   固定入口区结构（`__connections` / `__general`）与并入决策以**设计 15** 为权威，
   本节不重复。「更新」控制组 = `UpdateSection` 组件（`update-store.ts` 模块单例
   订阅，N-ctx 共享）。内容小、只读一个 IPC 状态 → 无需
@@ -138,7 +139,7 @@
   - 失败文案脱敏：`UpdateState.error` 以 `[path]` 替换绝对路径，完整错误只留主进程日志。
 - zh/en 文案走 `dsh-chamber.settings.bridge` 命名空间（`verify:i18n` 通过；beta 通道
   标注与安装受阻原因同样本地化）；样式用
-  普通列表行（dsh design tokens），不加高亮——与「通用」段一致采用
+  普通列表行（dsh design tokens），不加高亮——与「客户端」段一致采用
   settings-panel 控制组/胶囊按钮词汇。
 - **IPC 面**：`dsh-chamber:update-state`（invoke 查询）、`update-state-changed`
   （push）、`update-check`、`update-download`、`update-restart`、`open-release`；
@@ -203,7 +204,7 @@ electron-updater 6.x **安装成功后从不删除**下载产物（`DownloadedUp
 
 ```
 启动（延迟 15s）→ 静默检查（autoDownload: false，仅发现请求、无包下载）
-  ├─ 有新版 → settings「通用」段更新组一行状态「新版本 vY」+ [更新] 按钮
+  ├─ 有新版 → settings「客户端」段更新组一行状态「新版本 vY」+ [更新] 按钮
   │     ├─ 用户点击 → 后台自动下载（进度经 IPC → 状态行 下载中…）
   │     └─ 不点击 → 永不下载（仅状态行）
   │  下载完成 → 「已下载，退出时安装」+ [重启并安装]（仅 macOS/Windows——
@@ -214,7 +215,7 @@ electron-updater 6.x **安装成功后从不删除**下载产物（`DownloadedUp
   ├─ 无新版 → 「已是最新版本」
   └─ 失败 → 「无法检查更新」（静默写主进程日志，绝不假成功）
 用户主动点击 [检查更新] → 同一条检查路径（update-check IPC，仍不下载）
-每 6h 周期静默复查；settings「通用」段的更新组 = 唯一可见面
+每 6h 周期静默复查；settings「客户端」段的更新组 = 唯一可见面
 ```
 
 - **失败语义**：检查/下载/校验/安装任何失败 → 静默或 settings 内响亮（安装失败

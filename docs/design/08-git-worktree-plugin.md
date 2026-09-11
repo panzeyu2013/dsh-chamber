@@ -206,9 +206,17 @@ slot，不由 renderer App 直接 import 领域组件。
   焦点 / kebab 揭示的动作与工作区管理对话框呈现；主 checkout 也不显示 chip
   （root 组只显示项目名）。行内动作图标 16px；空 workspace 的组体显示
   "该工作区暂无会话"提示行。
-- **行内动作揭示 pointer-safe**：字面量类 `git-ws-action`（主行「分支+」创建 /
-  worktree 行删除）与**折叠字形交换**（workspace folder/branch ↔ chevron、
-  source monitor ↔ chevron、rename 期抑制）的触发是 **`:has(:focus-visible)`**
+- **行内动作揭示 pointer-safe**：动作按钮的样式钩子是 **`data-git-action` 属性**
+  （主行「分支+」创建 / worktree 行删除，`SidebarWorkspaceGitLine.tsx:387,400`），
+  由 sidebar 侧的 hover / `:has(:focus-visible)` / kebab 展开
+  （`.rowActionsVisible`）三条规则揭示（`sidebar-chamber.module.css:958-960`，禁用
+  态 `.42` 同钩子见 974-976），occupant 自身也在 `:has(:focus-visible)` 下按同一
+  钩子揭示（`SidebarGit.module.css:192`）。**不用字面量类名**：属性选择器不被
+  CSS Modules 哈希，跨包模块才能匹配同一钩子（本仓既有规则见
+  `packages/dsh-chamber-client-ui-mobile/src/client/styles.ts:10-20`；
+  2026-09-11 upstream-alignment，原 `git-ws-action` 全局类名已退役）。
+  它与**折叠字形交换**（workspace folder/branch ↔ chevron、
+  source monitor ↔ chevron、rename 期抑制）的触发都是 **`:has(:focus-visible)`**
   而非 `:focus-within`——揭示状态只有三种：hover、kebab 展开
   （`.rowActionsVisible`）、键盘焦点。原因：Chromium
   在 mousedown 时聚焦被点按钮，点击折叠钮后焦点留在行内 → `:focus-within` 持续
@@ -279,8 +287,12 @@ slot，不由 renderer App 直接 import 领域组件。
 ### 3.4 未注册工作树与孤儿 workspace（Plan A：显示全部 worktree）
 
 - **未注册工作树按仓库分散到 repo 组末尾**（名称=目录 basename、与派生
-  workspace 一致的行样式：分支图标 + 名称 + 健康徽标），无已注册 workspace
-  的仓库在列表末尾渲染其未注册块；数据经 flags 存储的每来源仓库布局
+  workspace 一致的行样式：分支图标 + 名称 + 健康徽标；非 ready 行的状态胶囊是
+  官方 `Tag tone="warning"`（`SidebarWorkspaceGitLine.tsx:208`，官方 11px/17px
+  胶囊词汇，本模块只保留占位类 `SidebarGit.module.css:69`）——原先手写胶囊的中性
+  填充与行自身 hover 填充同值，指针悬停时整块消失，2026-09-11 upstream-alignment），
+  无已注册 workspace 的仓库在列表末尾渲染其未注册块；数据经 flags 存储的每来源
+  仓库布局
   （`RepoGitLayout`）发布，侧栏以 `repoKey` 上下文第三次挂载该座位，
   occupant 渲染行与动作（"新建会话"= adopt 懒注册、"删除"= 未注册删除）。
 - **未注册删除**：host `RemoveInput.workspaceId` 可选 + `path` 必填，
@@ -487,8 +499,9 @@ fresh-preflight -> git-removing -> git-removed
   绕过（linked worktree 的子模块 gitdir 位于其 admin git dir 的
   `modules/` 下，与 git 判据一致）。host 在最终变更前镜像该守卫：
   - 含子模块工作树未授权丢弃 → 确定性拒绝码 `worktree-submodules`
-    （`retryable: false` 显式标记），**不发起任何 git 变更**；对话框就地
-    呈现子模块丢弃授权（勾选后 `discardChanges: true` → `--force`）——子模块
+    （`retryable: false` 显式标记），**不发起任何 git 变更**；对话框（经官方
+    `RiskConfirmation`，§5.4）呈现子模块丢弃授权（勾选后 `discardChanges: true`
+    → `--force`）——子模块
     工作区文件与 dirty 文件同属「显式授权才丢弃」的一类（gitlink 已提交，
     内容可重新检出），分支/提交/HEAD、身份/锁/running 守卫全部不变；
   - 守卫 best-effort：`.git` 指针不可读时读作"无子模块"；git 的 index
@@ -517,13 +530,18 @@ fresh-preflight -> git-removing -> git-removed
   `false`，每次打开/换目标重置）——**不勾选即不隐式归档/不自动归档**；另可选
   「同时删除本地分支」（§5.3）。
 - **dirty**：删除图标不再禁用（仅 dirty），点击进入对话框后显示醒目警示
-  （"该工作树有未提交的更改，将被永久丢弃；分支与已提交内容不受影响"）+
-  勾选框「我了解这些更改将被丢弃，仅移除工作树（保留分支）」；未勾选时确认按钮
-  禁用，勾选后才发送 `discardChanges: true`。
+  （"该工作树有未提交的更改，将被永久丢弃；分支与已提交内容不受影响"）；
+  授权由**官方 `RiskConfirmation`** 收集（`RemoveWorktreeDialog.tsx:396`，
+  2026-09-11 upstream-alignment）：对话框内不再有勾选框，点「移除」时若尚缺授权
+  先弹出官方风险确认（警示图标 + 同上说明 + 自动聚焦的勾选框「我了解这些更改将被
+  丢弃，仅移除工作树（保留分支）」，主按钮在勾选前不可用），确认后以
+  `discardChanges: true` 重试同一删除；授权对话框打开期间删除对话框忽略关闭
+  （两个对话框各自在 document 上监听 Escape，`RemoveWorktreeDialog.tsx:201-205`）。
 - **含子模块**：行事实不含子模块信息，首次删除被 host 确定性拒绝
   （`worktree-submodules`，变更前、`retryable: false`、可关闭、不锁来源）后，
-  对话框就地显示警示 + 勾选框「我了解该工作树中的子模块检出将被丢弃，仅移除
-  工作树（保留分支）」；勾选后同一 `discardChanges` 授权重试 → host `--force`
+  对话框就地显示警示，点击「移除」重新打开同一官方 `RiskConfirmation`
+  （勾选框「丢弃该工作树中的子模块检出」）；勾选后同一 `discardChanges` 授权重试
+  → host `--force`
   一步删除（主路径）。终端备选需删除该工作树残留的子模块 git 目录——
   **实测（git 2.50.1）`git submodule deinit -f --all` 不会清空 admin `modules/`，
   守卫依旧拒绝**，文案如实提示。
@@ -551,8 +569,12 @@ fresh-preflight -> git-removing -> git-removed
   current（blank 例外）→ runtime-unknown → running → locked → unhealthy → dirty →
   status-unknown**：`current` / `runtime-unknown` 都在 `running` **之前**，因此过时
   或「仅已归档」的 running 事实无法绕过二者。
-- **未注册行删除**用 `window.confirm`，无对话框授权流：沿用 dirty 的不对称——
-  确定性拒绝 + host 英文提示（终端删除 modules 目录或 `--force`）。未注册块的
+- **未注册行删除**走**应用内官方 `RiskConfirmation`**（`SidebarWorkspaceGitLine.tsx:262`，
+  2026-09-11 upstream-alignment；该行原本用原生 `window.confirm`，无法使用 alias
+  token）：行内删除按钮只武装确认（勾选框「我了解该移除不可撤销」，主按钮在勾选前
+  不可用，每次关闭都重置），确认后才发出移除。该行**仍无对话框授权流**——dirty 沿用
+  不对称：移除不携带 `discardChanges`，确定性拒绝 + host 英文提示（终端删除 modules
+  目录或 `--force`）。未注册块的
   **missing 行**（§5.5）删除按钮不再硬禁用：行文案明示这是「残留记录清理」
   （等效该记录的 `git worktree prune`，不涉及任何文件或分支），确认文案单独
   措辞；adopt（新建会话）对 missing 行保持禁用。

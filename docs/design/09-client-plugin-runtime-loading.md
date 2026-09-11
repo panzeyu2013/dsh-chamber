@@ -79,7 +79,7 @@ bundle 未覆盖的 entry（方案 A，§3）。第 1、2 步在 chamber 托管�
   `ui-*` 包（`chamber-entry.ts` 静态注册），宿主图里这些 id **跳过**，只加载
   chamber 复合未覆盖的新 entry（用户新装包）。去重集 = `CHAMBER_COVERED_IDS`
   （`packages/renderer/src/chamber-covered.ts`，见 §3.5）。
-- **反向依赖（现行仅 1 条）**：覆盖集解决的是
+- **反向依赖（现行仅 1 条；名单自 2026-09-11 起为派生）**：覆盖集解决的是
   「复合行不需要宿主图」，但反向依赖仍在——复合内首屏家族的 cordis inject 成员
   里，只有 `ui-chat` ← `sidebarRight`（`ui-sidebar-right` 行提供）来自**未覆盖**
   行（`ui-conversation`/`api-session-controller` 的 `fileUpload` 依赖已随
@@ -101,11 +101,24 @@ bundle 未覆盖的 entry（方案 A，§3）。第 1、2 步在 chamber 托管�
   `instance_unavailable` / `dsh_not_ready` 这类**冷启动拒绝**上等来源并重试一次，
   不再把"实例还在启动"报成"插件图不可达"；终态来源（error/stopped/
   restart-exhausted）与未知来源**立即**失败，真实原因照旧呈现。
-  `chamber-entry.ts` 的 `assertRequiredExtraRowServices`（纯判定在
-  `required-extra-rows.ts`）在 5s 内探测、点名并把判词经 shell 的
+  `chamber-entry.ts` 的 `assertRequiredExtraRowServices`（名字不变；纯判定在
+  `required-extra-rows.ts`）在 5s 内探测**派生并集**里仍未被 provide 的服务，点名
+  「服务 + 注入它的已注册插件」，并把判词经 shell 的
   `chamberReportBootDegraded` 上报（**仍是诊断，不是启动门**：gateway/移动形态可合法
-  不加载该行）。清单变更须同步 `host-graph.ts` 的降级注释与
-  `docs/checklists/upstream-touchpoints.md` §3 登记行。
+  不加载该行）。
+  **被探测集合是派生的，不是手写清单（2026-09-11 upstream-alignment）**：首屏每个
+  挂载都经 `chamber-entry.ts` 的 `register(id, plugin)`，由各命名空间**导出的
+  `inject` 面**推导并集（`registeredInjectMembers` / `injectedServices` /
+  `missingInjectedServices`，`required-extra-rows.ts`）——这正是上游
+  `assertEntriesActive` 读的事实 `Object.keys(entry.fiber.inject)`
+  （`packages/client/web/src/boot.ts:138-158`，本仓副本
+  `packages/dsh-client-web/src/boot.ts` 另含版本容忍规则）；`register` 还用挂载
+  fiber 的 inject 面作**见证**：命名空间若不再导出 inject 面而 cordis 仍读到成员，
+  当场抛错（派生名单只会收缩、不会静默漏探，正是探针要堵的盲区）。延迟簇不进名单：
+  其 chunk 在探测开始时尚未求值，且延迟拆分不变式（模块头）已把它们的 inject 成员
+  固定在首屏服务内。名单成员变更即改 `chamber-entry.ts` 的 `register(...)` 调用，
+  不维护第二张表；口径变更须同步 `host-graph.ts` 的降级注释与
+  `docs/checklists/upstream-touchpoints.md` §2/§3 登记行。
 - **覆盖集也是模块表的 factory 提供方**：被跳过的覆盖行不是
   "不存在"，而是由复合 bundle 替代——共享模块表对 fetch bundle 的**同步 require
   边**只有 seed → statics → 已物化缓存（loadCache）→ 已注册 factory 一条解析路径
@@ -168,7 +181,7 @@ bundle 未覆盖的 entry（方案 A，§3）。第 1、2 步在 chamber 托管�
 
 | 面 | 改动（现行） |
 |---|---|
-| `packages/renderer` | `host-graph.ts`（`fetchHostGraph` wire 调用 + `dedupeHostEntries` 去重 + `toExtraRows` 注入反代前缀 + `collectExtraRows`，AppWebEntry 构造前预加载额外 bundle，`loadModuleBundle` 依赖注入可测）+ `chamber-covered.ts`（去重集）+ `required-extra-rows.ts`（inject 依赖点名）；页面级一次性加载与 rev 认领由共享 kernel（shared face `client-plugin-loader.ts`）维护 |
+| `packages/renderer` | `host-graph.ts`（`fetchHostGraph` wire 调用 + `dedupeHostEntries` 去重 + `toExtraRows` 注入反代前缀 + `collectExtraRows`，AppWebEntry 构造前预加载额外 bundle，`loadModuleBundle` 依赖注入可测）+ `chamber-covered.ts`（去重集）+ `required-extra-rows.ts`（首屏 inject 并集派生 + 缺失服务点名，§3.2）；页面级一次性加载与 rev 认领由共享 kernel（shared face `client-plugin-loader.ts`）维护 |
 | `packages/dsh-client-web`（拷贝包） | `boot.ts` `AppWebEntryOptions.extraRows` seam：额外 entry id 合并进 boot rows（N-ctx 模块表共享 seam 的扩展，见 05 §6） |
 | 方案 A 附加 | host 包 `packages/dsh-chamber-seed-client-graph`（Remote `clientGraph/graph` 暴露图）+ 控制面 `host-graph-seed.ts`（seed 宿主包进 profile + 物化 `--patch` overlay，`packages/control-plane`）；打包态分发：desktop main 传 `hostGraphPackageSourceDir = pkgDir/dist/host-graph-package`（asar 内，`build-host-graph-package.mjs` 产出、electron-builder `files` 含 `dist/**/*`），开发态走 repo 源码树 |
 | 官方/宿主/vendor | 文件零改动（**唯一例外**是 §3.6 的构建期 vendor 补丁集：不改文件、只在我们自己的 vite transform 里按精确锚点改写，上游漂移即构建失败） |
@@ -192,6 +205,18 @@ bundle 未覆盖的 entry（方案 A，§3）。第 1、2 步在 chamber 托管�
   每次调用直接返回 `this.ctx.clientModules.graph()`（无本地缓存——图在插件 fiber
   事件间是稳定对象，读即单一事实源）；`static inject=['clientModules']` 保证排在
   client-modules 宿主行之后启动。
+- **图的行校验照上游、解析本身刻意更宽（A4，2026-09-11 upstream-alignment）**：
+  `host-graph.ts` 的字段校验改用上游自己那两个纯 wire helper
+  （`optionalStringArray` / `stripClientSuffix`，`manifest.ts`；后者取代此前内联的
+  `endsWith('/client')` 切片），但**解析仍是本地的、且刻意比上游
+  `parseBootManifest` 松**（`manifest.ts:167-256`）：上游要把整个
+  `window.__DSH_BOOT__` manifest 解成两个消费视图，因此额外要求 `batches` 是数组
+  （:186-188）、每个 entry 必须恰好属于某个 initial-load batch（:238-253）；chamber
+  只读 `entries`（多 id combo 的 `batches` 被忽略——每行自带单 id combo url，见
+  `toExtraRows`），所以**没有 batches、或某行没被宿主排进 batch 的图，仍是可用的
+  chamber 图**，不得因此判 boot 失败（`host-graph.ts:185-198` 注释）。本地解析
+  检查的每一项就是上游检查的那一项；present-but-malformed 的可选字段现在**抛错**
+  而不再静默丢弃（丢 `external` 会藏掉延迟依赖诊断唯一要指认的那条 require 边）。
 - **--patch seed（模块 B）**：`ensureSeedPackage(dshHome, packageName, sourceDir)` 把宿主
   包（package.json + dist/index.js）幂等分发进（同一入口按控制面注册表
   `CHAMBER_HOST_PACKAGES` 逐包分发；旧单包入口 `ensureHostGraphPackage` 已删除）
