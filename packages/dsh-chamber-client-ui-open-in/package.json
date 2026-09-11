@@ -26,7 +26,7 @@
     }
   },
   "scripts": {
-    "test": "node test/capabilities.test.ts && node test/coordinator.test.ts && node test/menu-navigation.test.ts && node test/open-in-gates.test.ts && node test/open-in-view-model.test.ts && node test/local-catalog.test.ts && node test/choice-store.test.ts && node test/open-in-wire-lockstep.test.ts && node test/open-in-labels.test.ts && node test/source-adapter.test.ts"
+    "test": "node test/capabilities.test.ts && node test/coordinator.test.ts && node test/instance-view-guard.test.ts && node test/open-in-gates.test.ts && node test/open-in-view-model.test.ts && node test/local-catalog.test.ts && node test/choice-store.test.ts && node test/open-in-wire-lockstep.test.ts && node test/open-in-labels.test.ts && node test/source-adapter.test.ts"
   },
   "license": "MIT",
   "peerDependencies": {

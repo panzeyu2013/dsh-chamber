@@ -28,9 +28,13 @@
   width: 32px;
   height: 32px;
   padding: 0;
-  /* The vendor "Session log" pill's border/radius values, reused verbatim —
-     the hairline outline keeps the icon button visible on the white header
-     (transparent base) exactly like its native neighbour. */
+  /* The HEADER ROW's own vocabulary (32px row, 0.5px --dsw-alias-border-l2
+     hairline, r18, transparent base) — see this module's header: the values are
+     the row's, NOT a copy of the pinned vendor session-log button (28px circle /
+     border none) nor of the official ui-open-in-app action (28px / r14 /
+     border-l4). The hairline keeps the icon button visible on the white header
+     exactly like its native neighbour. (2026-09-11 upstream-alignment: the old
+     "reused verbatim" wording contradicted that header.) */
   border: 0.5px solid var(--dsw-alias-border-l2);
   border-radius: 18px;
   background: transparent;
