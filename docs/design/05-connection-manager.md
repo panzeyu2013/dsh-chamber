@@ -129,6 +129,93 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
   悬停显示**信息卡片**（标题/会话数/相对时间/状态点/复制标题，06 §7）。
 - New Session → 当前活动来源新建会话。
 
+#### 2.2.1 打开意图与工作区回声（2026-12 修订；两项真机反馈）
+
+> 背景：N-ctx 下"用户意图"比官方运行时的默认收敛**到得晚**，两条真实反馈都由
+> 此产生：①切到远程 server 的会话时先闪出一个"新会话"；②在某来源上新建工作区
+> 后不立刻出现，必须手动点一下那个服务器。
+
+**打开意图（open intent）= 唯一事实源**：`App.openSession` 是所有打开路径的唯一
+漏斗（侧栏点击、通知点击、深链、待办条、git 插件）。它在切视图**之前** arm 一条
+意图、在本次 open settle（成功或终态失败）后**按 sessionId 守卫地**释放——守卫
+保证"点 X 后马上点 Y"时 X 的迟到 `finally` 不撤掉 Y 的闸门。意图槽位是
+**跨 ctx 单例**（`packages/dsh-chamber-client-ui-sidebar/src/shared/open-intent.ts`，
+与 `pending-click.ts` 同款：目标实例自己的 ctx 内也要读它），App 经
+`useSyncExternalStore` 绑定。它同时驱动三道闸门：
+
+1. **投影门**：意图在途**且该来源的 current 不是请求的那个会话**时，该来源不投影
+   `runtimeFacts.current`（`projectableCurrent`）。否则冷 boot 期间官方初始导航策略
+   给自己选中的 blank 会话会被投影成一行高亮的"新会话"（06 §4.3 的 `(!blank ||
+   current)` 规则），下一次分发后又消失——正是①的可见形态。**幂等重开不受影响**：
+   `current` 已经是要打开的那个会话时投影本就正确，为一次分发把高亮摘掉再装回去是
+   纯闪烁、零信息（`pending !== current` 才抑制）。
+2. **揭示门**：壳体**显示的会话不是请求的那个**时，目标视图的 boot 遮罩在干净
+   settle 之后继续保留（`shouldHoldViewVeil`，App 判定后把布尔值交给
+   `InstanceView` 合成 `!settled || holdVeil`）。两个输入只有 App 有：壳状态镜像
+   （settled/failed）与**原始** runtime current（投影门要隐藏的正是那个值，所以绝不
+   能从投影结果反推）。三条边界：
+   - 壳失败 ⇒ 永不持有（失败呈现归 App 覆盖层；也避免一个排在永不 settle 的 boot
+     后面的 open 把遮罩按 68s 队列预算钉住）；
+   - 已经显示请求会话 ⇒ 不遮（幂等重开；或 boot 期早开臂已抢先——此时 settle 即揭幕，
+     比等 App 分发更快）；
+   - 遮罩生命周期由 open 请求自身界定（dispatch 8s 预算 + App 的 `finally` 释放），
+     不存在挂死的加载层；**不会**因为"有在途 open"就给一个已经渲染好的温壳盖遮罩。
+3. **boot 期早开臂**：目标 ctx 内的侧栏插件读**活**意图，在 sessions 列表可寻址
+   的瞬间调用本 ctx 的 `sessions.open`
+   （`packages/dsh-chamber-client-ui-sidebar/src/client/early-open.ts`：预算 8s、
+   50ms 节奏、按 id 探针（不物化 id 集合）、一次成功即退位、绝不自行上报终态——
+   终态报告归 App 分发）。
+   它抢的是官方 `UiWorkspaceService.watchNavigation()` 的初始导航策略：该策略
+   需要 workspace + session **两条**基线 ready 才会"复用或新建（宿主侧
+   `session.create`！）blank 会话并打开"，而本臂只需要 session 列表。
+   **诚实边界**：因此它只在 workspace follow 基线晚于 session 列表时取胜（隧道下
+   常见但**不保证**）；策略已先落地时 blank 会话已在宿主上存在，挡住可见性的
+   是上面两道闸门，而不是这条臂。
+4. **被取代的请求不得再开**（`packages/renderer/src/shell.ts` 的
+   `lastRequestedSession`）：同一来源的 open 请求是**最后意图胜出**流，而官方
+   `sessions.open` 只是一次普通 select——一个用户已经离开的旧请求会把壳**翻回**
+   旧会话。冷 boot 期两次点击同来源（X 后 Y）时两者都在队列里，settle 的 FIFO
+   flush 会先开 X，而早开臂此时已经把 Y 打开了，于是可见 Y→X→Y 抖动。分发器
+   因此丢弃被更新的请求：静默 resolve（被放弃不是失败，行内错误面归最新那次），
+   记录随来源退役清除。首请求永远照常分发（记录为空时不判定）。
+
+**工作区回声（workspace echo）**：侧栏在某来源上建好工作区后（unary
+`workspace.create` 返回宿主 workspaceId），经 `chamberBridge.reportWorkspaceCreated`
+上报，App 记入渲染端账本（不持久化 / 不轮询 / 不写宿主），并在**投影的唯一汇合点**
+（`deriveServerWorkspaces` 之前套一层 `withWorkspaceEcho`）把该行并入。为什么
+必须回声：未挂载来源只有 unary 兜底（工作区分组由会话 cwd 反推——**刚建的空
+工作区没有任何会话，结构上不可见**），已推送来源的工作区集又被
+`commitAggregatePull` 的 mounted merge 冻结、且 `planAggregateRefreshes` 根本不再
+unary 轮询它——所以新建后那次 `requestRefresh` 两条分支都刷不出这一行。回声
+**不是第二事实源**：
+
+- 权威行**按 id 胜出**，该 id 出现在挂载 push 里即从账本退休
+  （`reconcilePendingWorkspaces`，在 ready 门**之前**执行：工作区身份来自该来源
+  自己的 follow 基线，与聚合是否已提交无关）；
+- **同 path 的合成组被原位替换**（真实 id 胜出；否则该目录一旦有会话就会渲染
+  两行）；同 path 的真实行（别的 id）胜出且账本条目退休；
+- 条目随来源生命周期 / TTL（10min）收敛（TTL 挂在三处时钟上：本次 create、权威
+  push、以及未挂载来源唯一的 30s unary 兜底拉取）；回声行**不带 `synthetic`**——
+  它的 id 是真的，工作区级动作照常可用。
+- **替换的真实代价（已登记）**：换的是行的**身份**，因此按
+  `sourceId/workspaceId` 键控的 per-workspace 视图偏好（折叠态、未分组序）不会跟随
+  新 id——旧合成键留在存储里不再命中（渲染侧跳过未知 id，属既有已接受残渣），该组
+  可能一次性由折叠变展开。纯外观、一次性，且换来的是"不会渲染同一目录两行"。
+- **与 git 行的联动（顺带生效，非新机制）**：Git 插件本就按"投影里的工作区 id 集合
+  变化"即时刷新（`workspaceKeyOf`——"新增/删除工作区必须立刻刷新，否则 git 行要等
+  30s 轮询"），而它的取数是 unary（`/api/i/<id>/api/gitWorktree/*`，未挂载来源同样
+  可用）。回声让投影的 id 集合发生变化，因此新建工作区的 **git 行也随之立即出现**，
+  而不是等用户点开该来源。
+
+**登记残余（本修订不解决）**：
+
+- 未被早开臂抢先时，宿主上仍会留下一个 blank 会话（同一工作区复用，不增长；后台
+  预热 / 基线收割 boot 本来也会各造一个）。根治需要上游把"当前会话选择"的持久化
+  按 shell 作用域拆开——见 `docs/progress/todo/client-store-scoping-upstream.md`；
+- 未挂载来源的**工作区集合**仍然只有"回声 + 挂载 push"两个来源：别处创建 / 改名 /
+  删除的工作区、以及工作区**顺序**，仍要等该来源被挂载（用户点开）才收敛——这是
+  §2.3 已登记的降级面；本修订刻意不引入"每次变更付一次后台 boot"的收敛臂。
+
 ### 2.3 数据纪律
 
 - 会话/workspace 数据**只来自各实例自己的 API**（经 `/api/i/<id>/*` 同源
@@ -211,6 +298,23 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
   ——保持在线），但它一旦遇到新的收割候选必须**让位**
   （`shouldReclaimHarvestedShell`）——否则温壳会以 `autoPrewarmed` 身份长期占住
   唯一槽位，后变 ready 的来源永远拿不到基线。
+- **未挂载来源的 unary 兜底表达不了"空工作区"**（2026-12 修订，§2.2.1）：
+  `fetchInstanceSnapshot` 只调 `session.list`，工作区分组由会话 cwd 反推
+  （`__cwd__:` 合成行）——刚建好、没有任何会话的工作区在结构上不可见；已推送过的
+  来源更彻底：聚合保留 pushed 工作区集（mounted merge），且
+  `planAggregateRefreshes` 只刷新"刚 ready"或"从未推送过"的来源，对它连 unary
+  轮询都不再发生。因此"新建工作区后侧栏要等用户点开该服务器才出现"不是刷新时机
+  问题，而是**读通道缺失**：权威工作区集合只存在于挂载壳的 `workspace/follow`
+  基线（宿主把 `upsert` 广播给所有活跃 follower），chamber 侧的补法是用户自己
+  那次创建的回声（§2.2.1）——不新增 wire 读通道，也不把工作区事实搬进控制面。
+- **本修订的代码落点**：`packages/dsh-chamber-client-ui-sidebar/src/shared/open-intent.ts`
+  （意图槽 + 投影/揭示纯规则）、`.../src/shared/workspace-echo.ts`（回声账本 +
+  union/去重纯规则）、`.../src/client/early-open.ts`（boot 期早开臂）、
+  `.../src/client/index.ts`（每个 ctx 挂一次早开臂）、
+  `.../src/client/SidebarRoot.tsx`（create 成功后上报回声）、
+  `packages/renderer/src/App.tsx`（arm/release、账本与退休、投影门、揭示门判定、
+  holdVeil 传入）、`packages/renderer/src/components/InstanceView.tsx`（遮罩合成）、
+  `packages/renderer/src/shell.ts`（被取代请求的丢弃：`lastRequestedSession`）。
 
 ## 3. 桥接层（chamberBridge，renderer 共享单例）
 
