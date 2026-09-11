@@ -31,10 +31,34 @@ test('the composite mount context classifies as official (cordis name inheritanc
   // composite mounts bare is stamped `@dsh-chamber/app` — a chamber-owned mount
   // context, never a plugin. The deferred rows themselves now mount under their
   // package ids (chamber-entry.ts registerDeferred, locked by
-  // packages/renderer/test/required-extra-rows.test.ts); this entry keeps a bare
-  // mount from being accused of being third-party.
+  // packages/renderer/test/required-extra-rows.test.ts).
   assert.equal(isBasePluginId('@dsh-chamber/app'), true)
   assert.equal(isPluginProvidedRow({ registrant: '@dsh-chamber/app' }, isBasePluginId), false)
+})
+
+test('chamber ownership is decided by npm scope, not by an id enumeration', () => {
+  // The same chamber package can be stamped under different names depending on
+  // the mounting path: the composite mount context (`@dsh-chamber/app`), its own
+  // package id when the composite mounts it by id, or its package id when an
+  // INSTANCE serves it as a graph row (every chamber client-UI package ships a
+  // `dsh.client` manifest, so the instance's own frontend / the mobile-gateway
+  // shape mounts them that way). Enumerating ids covers only the paths someone
+  // remembered; the scope covers all of them.
+  for (const id of [
+    '@dsh-chamber/app',
+    '@dsh-chamber/dsh-chamber-client-ui-settings-bridge',
+    '@dsh-chamber/dsh-chamber-client-ui-git',
+    '@dsh-chamber/dsh-chamber-client-ui-open-in',
+    '@dsh-chamber/dsh-chamber-seed-open-in',
+  ]) {
+    assert.equal(isBasePluginId(id), true, `${id} is chamber-owned and must not be marked`)
+  }
+  // The scope rule must be a SCOPE rule, not a substring match: a third-party
+  // package cannot acquire the prefix, and a lookalike must stay a plugin.
+  for (const id of ['@dsh-chamber-fake/x', '@acme/dsh-chamber-client-ui-git', 'dsh-chamber', 'dyn/@acme/foo']) {
+    assert.equal(isBasePluginId(id), false, `${id} is not chamber-owned`)
+    assert.equal(isPluginProvidedRow({ registrant: id }, isBasePluginId), true)
+  }
 })
 
 test('a plugin-provided row is marked; an official or unattributed row is not', () => {

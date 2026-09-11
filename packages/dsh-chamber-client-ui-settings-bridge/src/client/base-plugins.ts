@@ -18,21 +18,34 @@ export const RUNTIME_SECTION_ID = 'dsh-runtime'
 
 /**
  * The registrants the shell renders as OFFICIAL (never marked "plugin"):
- * the official settings family mounted by the chamber composite plus the
- * chamber's own shell/section registrations.
+ * the UPSTREAM official settings family, plus — by npm scope, see
+ * {@link CHAMBER_SCOPE} — every chamber-owned package.
  *
  * The stamp being compared is the registrant FIBER's name (ui-renderer
  * `SlotRegistry._register`: `options.registrant ?? ctx.fiber.name`), and cordis
  * names an UNNAMED fiber after its nearest NAMED ancestor (`Fiber.name`), so a
- * row mounted bare is stamped with its mount context, not its own package:
- * - a graph row the instance's host serves is mounted by the loader as
- *   `loader.create({ name: row.id })` → the row's package id ✔;
+ * row mounted bare is stamped with its mount context, not its own package. A
+ * registrant can therefore arrive under several DIFFERENT strings for the same
+ * package, depending on the path that mounted it:
+ * - a graph row the instance's host serves (an installed PLUGIN) is mounted by
+ *   the shell loader as `loader.create({ name: row.id })`, and the row id IS the
+ *   package name (vendor `dsh-client-modules` `graphRow(packageName, …)`) → the
+ *   package id ✔;
  * - a row the chamber's own composite mounts is mounted by
  *   `chamber-entry.ts registerDeferred` with `name: <row id>` (2026-09-11 fix —
- *   it used to be unnamed and every such section was stamped `@dsh-chamber/app`)
- *   ✔;
- * - anything the composite mounts bare still inherits `@dsh-chamber/app`, which
- *   is a chamber-owned mount context and therefore official too.
+ *   it used to be unnamed, so every composite-provided section was stamped
+ *   `@dsh-chamber/app` and mislabelled「插件」) ✔;
+ * - the chamber's own client-UI packages ALSO ship `dsh.client` manifests, so in
+ *   a shape where the composite is not the one serving them (the instance's own
+ *   frontend, the mobile/gateway shape) the same package arrives as an instance
+ *   row instead — same package, different mount, still chamber-owned ✔;
+ * - anything the composite mounts bare inherits `@dsh-chamber/app`.
+ *
+ * That is why chamber ownership is decided by SCOPE, not by enumerating ids: an
+ * enumeration only covers the paths someone remembered. Only UPSTREAM ids are
+ * listed explicitly — the chamber's own ids are covered by the scope rule, and
+ * the npm scope is ownable by construction (nobody else can publish
+ * `@dsh-chamber/*`).
  */
 export const OFFICIAL_SECTION_REGISTRANTS: readonly string[] = [
   '@deepseek-ai/dsh-client-ui-settings',
@@ -43,18 +56,32 @@ export const OFFICIAL_SECTION_REGISTRANTS: readonly string[] = [
   '@deepseek-ai/dsh-client-ui-settings-plugins',
   '@deepseek-ai/dsh-client-ui-settings-plugin-inventory',
   '@deepseek-ai/dsh-client-ui-agent-preset',
-  '@dsh-chamber/dsh-chamber-client-ui-settings-bridge',
-  // The chamber composite's own app fiber: the inherited name of anything the
-  // composite mounts without one (see above). Chamber-owned, so never a plugin.
-  '@dsh-chamber/app',
   // Unnamed registrations (the declaration chain's inert entries) are stamped
   // 'root' by cordis; they never occupy a settings seat.
   'root',
 ]
 
+/**
+ * The chamber's own npm scope. Every package under it is OURS by construction —
+ * the composite's app mount context (`@dsh-chamber/app`), the client-UI
+ * packages (`@dsh-chamber/dsh-chamber-client-ui-*`), the instance-side seeds —
+ * whichever mounting path produced the registrant stamp. A third-party plugin
+ * can never acquire this prefix, so it is the reliable half of the
+ * classification; the upstream list above is the part that must be maintained by
+ * hand when the settings family grows.
+ */
+const CHAMBER_SCOPE = '@dsh-chamber/'
+
 const OFFICIAL_SET = new Set(OFFICIAL_SECTION_REGISTRANTS)
 
-/** True for a registrant the shell renders as an official/chamber section. */
+/**
+ * True for a registrant the shell renders as an official/chamber section: an
+ * upstream official id, `root`, or ANY id under the chamber's own npm scope —
+ * the last one regardless of which mounting path produced the stamp (composite
+ * mount context, an instance row serving a chamber client-UI package, a seed).
+ * @param id - the registrant stamp (a cordis fiber name).
+ * @returns true when the row must not be marked "plugin".
+ */
 export function isBasePluginId(id: string): boolean {
-  return OFFICIAL_SET.has(id)
+  return OFFICIAL_SET.has(id) || id.startsWith(CHAMBER_SCOPE)
 }
