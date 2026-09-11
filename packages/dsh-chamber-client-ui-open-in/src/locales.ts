@@ -1,9 +1,14 @@
 /**
- * Copy owned by the chamber open-in plugin (design 16 + open-in extension;
- * Batch 3 Phase 2 absorbs the official `open-in-app` dictionaries — product
- * labels and button copy — into this single chamber namespace, so the unified
- * entry needs no second locale registration and the ~40 `app.*` labels track
- * the upstream table verbatim).
+ * Copy owned by the chamber open-in plugin (design 16 + design 20).
+ *
+ * The dictionaries started as the official `open-in-app` client's copy and
+ * product-label table; since the fork & supersede ruling (design 20 §2.2) THIS
+ * file is the owner rather than a mirror — the official client never loads, and
+ * the `app.*` labels must cover exactly the catalog ids our host domain can
+ * answer (`packages/dsh-chamber-seed-open-in/src/catalog.ts`), which
+ * `test/open-in-labels.test.ts` pins. Product names still track upstream's
+ * spelling where an id is shared, so a user sees the same application names the
+ * official surface would show.
  */
 export const zh = {
   /** Neutral entry label (slot registrant diagnostics — not user-facing). */
@@ -17,12 +22,14 @@ export const zh = {
   openFailed: '打开失败：',
   bridgeUnavailable: '桌面桥不可用',
   invalidResponse: '桌面桥返回了无效结果',
-  /** Official button copy (absorbed): main-button tooltip / title template. */
+  /** The instance-hosted catalog is unavailable for this source (no carrier/host domain). */
+  catalogUnavailable: '实例内打开目录服务不可用',
+  /** Split-button copy: main-button tooltip / title template. */
   openTitle: '在 {app} 中打开工作目录',
   openTooltip: '在本地打开',
   openError: '打开失败',
   menuToggle: '选择打开方式',
-  /** Catalog product names, mirrored verbatim from the official dictionary. */
+  /** Catalog product names (one entry per id our host catalog can answer). */
   'app.cursor': 'Cursor',
   'app.vscode': 'VS Code',
   'app.vscodeinsiders': 'VS Code Insiders',
@@ -71,6 +78,7 @@ export const en: Record<OpenInKey, string> = {
   openFailed: 'Failed to open: ',
   bridgeUnavailable: 'desktop bridge unavailable',
   invalidResponse: 'desktop bridge returned an invalid result',
+  catalogUnavailable: 'the in-instance open catalog is unavailable',
   openTitle: 'Open workspace in {app}',
   openTooltip: 'Open locally',
   openError: 'Failed to open',
@@ -114,10 +122,12 @@ export const en: Record<OpenInKey, string> = {
 export type OpenInKey = keyof typeof zh
 
 /**
- * Label key per catalog id (absorbed from the official client's table): the
- * button renders only ids it can name, so a host catalog extension without a
- * matching dictionary entry stays invisible instead of showing a raw id.
- * Ids outside this table still render through `titleGeneric`.
+ * Label key per catalog id — the table is OURS now (design 20 §5): our host
+ * domain's catalog (`packages/dsh-chamber-seed-open-in/src/catalog.ts`) is the
+ * authority on which ids can appear, and `test/open-in-labels.test.ts` fails
+ * when an id has no zh+en label. Ids outside this table still render through
+ * `titleGeneric`, so a catalog extension degrades to a raw id instead of
+ * disappearing.
  */
 export const OPEN_IN_APP_LABEL_KEY: Record<string, OpenInKey | undefined> = {
   finder: 'app.finder',

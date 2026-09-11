@@ -88,7 +88,7 @@ surfaces, applicable guidance, validation, or failure/rollback considerations fr
 | `packages/dsh-chamber-client-ui-open-in` | Desktop open-in client plugin (designs 16, 20) |
 | `packages/dsh-chamber-client-ui-mobile` | Packaged mobile client served by the gateway — the single packaged plugin exception (design 17) |
 | `packages/desktop` | Electron shell: single frame over the control-plane origin, trusted domain-scoped IPC, open-in/deep-link routing, edge notifications, crash-safe credential and runtime management |
-| `packages/dsh-chamber-seed-*` | Chamber host packages seeded into the managed instance: read-only client boot graph, in-instance Git worktree, archived-session content cleanup (designs 09, 08, 24) |
+| `packages/dsh-chamber-seed-*` | Chamber host packages seeded into the managed instance: read-only client boot graph, in-instance Git worktree, archived-session content cleanup, in-instance open-in catalog/icons/launch (designs 09, 08, 24, 20) |
 | `packages/cli` | CLI thin shell (serve/status/connections/host logs) |
 | `packages/gateway` | Separately invoked server shape (design 17): authenticated-by-default public boundary, single local-dsh proxy, host duties, seed registry |
 
@@ -104,5 +104,6 @@ surfaces, applicable guidance, validation, or failure/rollback considerations fr
 - Package manager is pnpm, and runtime dependencies are not added without an explicit request
   (current set: `ws`, `electron-updater`, React/Vite, Electron, the embedded pinned `pnpm`, the dsh
   client workspace packages; `typescript` / `@types/*` are devDependencies).
-- Removed domains and the bounded exceptions (designs 08, 17, 19, 24 — narrowest boundaries in
-  design 24 §2) are stated in `docs/design/01-overview.md` §4 and §5.
+- Removed domains and the bounded exceptions (designs 08, 17, 19, 20, 24 — narrowest boundaries in
+  design 24 §2, and for the open-in host domain in design 20 §6.3) are stated in
+  `docs/design/01-overview.md` §4 and §5.

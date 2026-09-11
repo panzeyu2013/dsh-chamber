@@ -12,19 +12,22 @@
  *
  * Presentation matrix (see `shared/open-in-view-model.ts`, the single decision
  * surface):
- *  - LOCAL sources render the instance's own host catalog (the absorbed
- *    official channel: real bundle icons over the per-instance proxy) plus the
- *    desktop main-process provider (the VS Code override);
+ *  - LOCAL sources render the instance-hosted application catalog (the chamber
+ *    host domain `openInApp/*` in `packages/dsh-chamber-seed-open-in`: real
+ *    bundle icons over the instance's own RPC channel) plus the desktop
+ *    main-process provider (the VS Code override);
  *  - SSH-transport remote sources render the main provider's remote-capable
  *    apps only (VS Code Remote-SSH);
  *  - HTTP/unknown sources render nothing.
  * ≥2 entries render the main button (remembered/default selection) plus a
  * chevron menu; exactly one renders the plain icon button; zero renders null.
  *
- * Absorbed from the official `open-in-app` client: the catalog protocol +
- * icon URLs (`official-catalog.ts`), the product-label table and button copy
- * (`../locales.ts`), the persisted choice (`choice-store.ts`), and the busy/
- * error dress of the split button (delayed busy paint, decaying error).
+ * Superset of the official `open-in-app` client (design 20 §7): the catalog and
+ * its real icons (`local-catalog.ts`), the product-label table and button copy
+ * (`../locales.ts`), the persisted choice (`choice-store.ts`, per source here),
+ * the busy/error dress of the split button (delayed busy paint, decaying
+ * error), plus what upstream never had — remote sources through the desktop
+ * main-process provider, source-scoped memory and the remote deeplink carrier.
  *
  * Two gates (design 16 §6.3), ANY failure → render null (never a dead button):
  *  1. the merged view-model has ≥1 usable entry (unknown/probe-failed →
@@ -53,19 +56,19 @@ export interface OpenInInjected {
   sourceFingerprint: string
   /** Bound translator for the plugin namespace. */
   t: Translate
-  /** Current merged per-source view-model (official + main pools). */
+  /** Current merged per-source view-model (local + main pools). */
   getViewModel(): OpenInViewModel
-  /** Subscribe to view-model changes (pool probes, choice). */
+  /** Subscribe to view-model changes (pool probes, icons, choice). */
   subscribe(listener: () => void): () => void
   /** Re-probe both pools (menu open / window focus). */
   refresh(): Promise<void>
   /** Launch one entry through its channel; rejects on failure. */
   launch(entry: OpenInViewEntry, path: string): Promise<OpenInResult>
-  /** The persisted app choice ('' before the first pick). */
+  /** The persisted app choice for THIS source ('' before the first pick). */
   getChoice(): string
-  /** Remember a picked app id. */
+  /** Remember a picked app id for THIS source. */
   choose(appId: string): void
-  /** Host-served icon URL for an official entry, null when the source has no official channel. */
+  /** Cached catalog icon `data:` URL for a local entry; null while unknown or absent. */
   iconUrl(appId: string): string | null
   /** Host platform string ('darwin' | 'win32' | 'linux' | …) or null. */
   platform: string | null

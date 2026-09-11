@@ -324,7 +324,8 @@ chamberProvision=seed_host_graph、restartToApply/startFromStopped=restart_servi
 ### 6.6 UI：单一模型视图
 `PluginDialog.tsx`（connections 包）是唯一插件对话框：local / ssh+dsh / gateway / http 直连四来源共用同一组件，
 后端分叉仅在数据源与动作分发；区域顺序 = 诊断横幅（bannerProjection 去重）→
-chamber 内建表（registry 驱动的三个宿主包行 client-graph / git-worktree / archive-cleanup，badge 化；
+chamber 内建表（registry 驱动的宿主包行——当前四行 client-graph / git-worktree / archive-cleanup /
+open-in，其中 open-in 标 `localOnly`，非本地目标渲染「本地形态专用」，badge 化；
 移动客户端行 mobile 仅 gateway 源显示、标注网关随发行物注入）→ 第三方区（已安装 + 逐行卸载 + 添加：
 spec 输入 + npm 搜索 + 本地导入）→ 恢复/动作行；
 http 直连只读。

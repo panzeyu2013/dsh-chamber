@@ -1,12 +1,7 @@
 var __defProp = Object.defineProperty;
 var __getOwnPropNames = Object.getOwnPropertyNames;
-var __esm = (fn, res, err) => function __init() {
-  if (err) throw err[0];
-  try {
-    return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
-  } catch (e) {
-    throw err = [e], e;
-  }
+var __esm = (fn, res) => function __init() {
+  return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
 };
 var __export = (target, all) => {
   for (var name in all)
@@ -131,7 +126,8 @@ var REQUIRED_ACTIVATION_PROBES = [
 var HOST_DOMAIN_PROBE_NAMES = [
   "clientGraph/graph",
   "gitWorktree/previewCreate",
-  "archiveCleanup/probe"
+  "archiveCleanup/probe",
+  "openInApp/probe"
 ];
 var HOST_DOMAIN_PROBE_NAME_SET = new Set(HOST_DOMAIN_PROBE_NAMES);
 var PROBE_NAMES_WITHOUT_HOST_DOMAINS = REQUIRED_ACTIVATION_PROBES.filter((name) => !HOST_DOMAIN_PROBE_NAME_SET.has(name));

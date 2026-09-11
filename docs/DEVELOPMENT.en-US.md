@@ -63,8 +63,9 @@ mount loader rows; they neither interpret Git facts nor execute Git over SSH.
 | `packages/dsh-chamber-client-ui-layout` | Self-built ui-layout shell fork (layout-store replacement persisting sidebarWidth) |
 | `packages/dsh-chamber-seed-client-graph` | Host-side package: read-only exposure of the instance's client-plugin boot graph over a Typert Remote |
 | `packages/dsh-chamber-client-ui-git` | Chamber-bundled Git worktree client: sidebar slot, per-instance topology, create/remove sagas; never executes Git directly |
-| `packages/dsh-chamber-client-ui-open-in` | Chamber-bundled open-in client plugin: session-header utilities open button (local Finder + local/remote VS Code via the main-process OpenInApp registry + `dsh-chamber://` deep link) |
+| `packages/dsh-chamber-client-ui-open-in` | Chamber-bundled open-in client plugin (a superset of the official client, whose registration it replaces): session-header utilities open button — local app catalog + local/remote VS Code via the main-process OpenInApp registry + `dsh-chamber://` deep link |
 | `packages/dsh-chamber-seed-git-worktree` | In-instance host package: authoritative workspace/agent guards plus constrained, local-only Git worktree lifecycle |
+| `packages/dsh-chamber-seed-open-in` | In-instance host package (local shape only): fork of the upstream `dsh-host-open-in-app` serving the local app catalog, real bundle icons and launches over the `openInApp/*` Typert Remote (design 20 §6) |
 
 ## 2. Environment setup
 
@@ -183,7 +184,9 @@ packages/
   dsh-chamber-seed-git-worktree/
                             In-instance Git worktree host Remote (guards + constrained Git)
   dsh-chamber-client-ui-open-in/
-                            Open-in client plugin (session-header Finder/VS Code open)
+                            Open-in client plugin (session-header local app / VS Code open)
+  dsh-chamber-seed-open-in/
+                            In-instance open-in host Remote (local app catalog + icons + launches; local shape only)
 docs/
   design/                   Design documents (01 is the entry point; 05 is the surface/architecture contract (v1))
   todo/                     Unimplemented feature ideas (one file each; implemented historical design records are kept here, see todo/README.md)

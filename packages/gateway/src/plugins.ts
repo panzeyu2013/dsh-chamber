@@ -1,8 +1,9 @@
 /**
  * Gateway seed-cache for desktop-synced chamber host packages (design 17
- * §9.3, 2026-12 Phase 3): the three chamber host packages
- * (dsh-chamber-seed-client-graph, dsh-chamber-seed-git-worktree, dsh-chamber-seed-archive-cleanup —
- * the last added 2026-12, design 24) are no longer shipped inside
+ * §9.3, 2026-12 Phase 3): the chamber host packages
+ * (dsh-chamber-seed-client-graph, dsh-chamber-seed-git-worktree,
+ * dsh-chamber-seed-archive-cleanup — the latter added 2026-12, design 24 —
+ * plus dsh-chamber-seed-open-in, design 20 §6) are no longer shipped inside
  * the gateway package — a connecting desktop uploads its own copies through
  * the authenticated `PUT /chamber/plugins` surface, and the gateway caches
  * them under `<stateDir>/chamber-plugins/<name>/` for the control-plane seed
@@ -16,9 +17,13 @@
  * activationProbeNamesForDomains; an empty cache yields the reduced base
  * set, not the binary hostDomains flag of the older runtime seam); the
  * syncing desktop then restarts dsh so the seeded profile picks the
- * packages up.
+ * packages up. The open-in row is `localOnly` in the registry: it stays in
+ * the derived syncable map (the load-time pin compares that map with
+ * `HOST_DOMAIN_PROBE_NAMES` wholesale) but the desktop never uploads it, so
+ * its cache directory simply stays absent and the seed skips it.
  *
- * Security: package names are whitelisted (the three host packages only); every
+ * Security: package names are whitelisted (the registry-derived host packages
+ * only); every
  * cache write is an atomic 0600 no-follow write under the 0700 stateDir
  * discipline; file sizes are bounded; package.json must parse and its `name`
  * must match the requested entry. The mobile client-plugin slot is NOT

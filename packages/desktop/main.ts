@@ -1824,6 +1824,13 @@ if (!gotTheLock) {
         hostArchiveCleanupPackageSourceDir: app.isPackaged
           ? path.join(pkgDir, 'dist', 'host-archive-cleanup-package')
           : path.join(repoRoot, 'packages', 'dsh-chamber-seed-archive-cleanup'),
+        // The open-in host domain (design 20 §6) is a LOCAL-shape-only seed:
+        // the local profile is the only target that ever receives it, so it is
+        // absent from `chamberHostSourceDirs` below (the remote seed list and
+        // the gateway upload both read that map).
+        hostOpenInPackageSourceDir: app.isPackaged
+          ? path.join(pkgDir, 'dist', 'host-open-in-package')
+          : path.join(repoRoot, 'packages', 'dsh-chamber-seed-open-in'),
       });
       await controlPlane.start();
     } catch (err) {
@@ -2323,6 +2330,11 @@ if (!gotTheLock) {
       [CLIENT_GRAPH_PACKAGE_NAME]: moduleASourceDir,
       [GIT_WORKTREE_PACKAGE_NAME]: gitWorktreeHostSourceDir,
       [ARCHIVE_CLEANUP_PACKAGE_NAME]: archiveCleanupHostSourceDir,
+      // Registry rows marked `localOnly` are deliberately ABSENT here: this map
+      // feeds the two REMOTE consumers (the ssh seed list and the gateway sync
+      // upload), and a local-shape-only domain must never reach another machine.
+      // Their local source dir is passed to the control plane separately
+      // (hostOpenInPackageSourceDir, design 20 §6).
     };
     const chamberHostPackageSeeds: ChamberHostPackageSeed[] = CHAMBER_HOST_PACKAGES.map(descriptor => ({
       insertId: descriptor.insert.id,
@@ -2332,6 +2344,9 @@ if (!gotTheLock) {
       // dist/index.js) instead of writing a dangling loader row.
       sourceDir: chamberHostSourceDirs[descriptor.insert.name] ?? '',
       label: descriptor.insert.id,
+      // The registry's ownership flag travels with the seed so the remote
+      // writer drops the row explicitly (never "seeded because a path appeared").
+      ...(descriptor.localOnly === true ? { localOnly: true as const } : {}),
     }));
     type RemoteTarget = {
       spec: RemoteSpec

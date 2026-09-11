@@ -173,6 +173,12 @@ export interface ChamberHostPackageState {
   patched: boolean
   version: string | null
   live: boolean | null
+  /** The registry row is meaningful for the LOCAL instance shape only (design
+   *  20 §6: the open-in host domain). Remote/gateway/http targets report it
+   *  with `installed:false` and no probe; the plugin table renders "local
+   *  shape only" from this flag instead of "not injected" — absent by design
+   *  there, not by fault. Absent = an ordinary row. */
+  localOnly?: boolean
 }
 /** Chamber-injected component state (design 09): ok:false = unreadable (loud,
  *  never a silent "not injected"). The preload mirror of plugin-sync.ts /

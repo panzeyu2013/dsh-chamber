@@ -1,6 +1,6 @@
 /**
  * Per-source open-in view-model unit tests (Batch 3 Phase 0, design 20 §2):
- * the presentation matrix over the official (host catalog) and main (desktop
+ * the presentation matrix over the instance-hosted (local) catalog and main (desktop
  * IPC) pools, the channel-priority dedup, the explicit suppression reasons and
  * the default selection. Plain node:test — the module is pure over plain data.
  */
@@ -25,14 +25,14 @@ function ids(model: OpenInViewModel): string[] {
   return model.entries.map(entry => entry.id)
 }
 
-test('view-model / local: official catalog then main provider, channel order preserved', () => {
+test('view-model / local: instance catalog then main provider, channel order preserved', () => {
   const model = buildOpenInViewModel({
     source: source('local', 'local'),
-    officialEntries: [FINDER, TERMINAL],
+    localEntries: [FINDER, TERMINAL],
     mainEntries: [VSCODE],
   })
   assert.deepEqual(ids(model), ['finder', 'terminal', 'vscode'])
-  assert.deepEqual(model.entries.map(entry => entry.channel), ['official', 'official', 'main'])
+  assert.deepEqual(model.entries.map(entry => entry.channel), ['local', 'local', 'main'])
   assert.deepEqual(model.entries.map(entry => entry.order), [0, 1, 2])
   assert.deepEqual(model.suppressed, [])
   assert.equal(model.visible, true)
@@ -43,35 +43,35 @@ test('view-model / local: official catalog then main provider, channel order pre
 test('view-model / local: an AVAILABLE main override owns the id (vscode goes through IPC)', () => {
   const model = buildOpenInViewModel({
     source: source('local', 'local'),
-    officialEntries: [VSCODE],
+    localEntries: [VSCODE],
     mainEntries: [VSCODE],
   })
   assert.deepEqual(ids(model), ['vscode'])
   assert.equal(model.entries[0].channel, 'main', 'approved §5.1: vscode 全家走 IPC 覆盖')
-  assert.deepEqual(model.suppressed, [{ id: 'vscode', channel: 'official', reason: 'duplicate-app-id' }])
+  assert.deepEqual(model.suppressed, [{ id: 'vscode', channel: 'local', reason: 'duplicate-app-id' }])
 })
 
-test('view-model / local: an UNAVAILABLE main override leaves the official entry as the fallback (union + IPC 兜底)', () => {
+test('view-model / local: an UNAVAILABLE main override leaves the local entry as the fallback (union + IPC 兜底)', () => {
   const model = buildOpenInViewModel({
     source: source('local', 'local'),
-    officialEntries: [VSCODE, FINDER],
+    localEntries: [VSCODE, FINDER],
     mainEntries: [{ id: 'vscode', displayKind: 'vscode', remoteCapable: true, available: false }],
   })
   assert.deepEqual(ids(model), ['vscode', 'finder'])
-  assert.deepEqual(model.entries.map(entry => entry.channel), ['official', 'official'])
+  assert.deepEqual(model.entries.map(entry => entry.channel), ['local', 'local'])
   assert.deepEqual(model.suppressed, [{ id: 'vscode', channel: 'main', reason: 'app-unavailable' }])
 })
 
-test('view-model / remote ssh: main channel only, every official candidate reported', () => {
+test('view-model / remote ssh: main channel only, every local candidate reported', () => {
   const model = buildOpenInViewModel({
     source: source('dsh-edge-west', 'ssh'),
-    officialEntries: [FINDER, VSCODE],
+    localEntries: [FINDER, VSCODE],
     mainEntries: [FINDER, VSCODE, TERMINAL],
   })
   assert.deepEqual(ids(model), ['vscode'])
   assert.deepEqual(model.suppressed, [
-    { id: 'finder', channel: 'official', reason: 'source-not-local' },
-    { id: 'vscode', channel: 'official', reason: 'source-not-local' },
+    { id: 'finder', channel: 'local', reason: 'source-not-local' },
+    { id: 'vscode', channel: 'local', reason: 'source-not-local' },
     { id: 'finder', channel: 'main', reason: 'app-not-remote-capable' },
     { id: 'terminal', channel: 'main', reason: 'app-not-remote-capable' },
   ])
@@ -81,7 +81,7 @@ test('view-model / remote ssh: main channel only, every official candidate repor
 test('view-model / remote ssh: an unavailable remote-capable app is reported, not silently dropped', () => {
   const model = buildOpenInViewModel({
     source: source('gateway-edge-west', 'ssh'),
-    officialEntries: null,
+    localEntries: null,
     mainEntries: [GHOST, VSCODE],
   })
   assert.deepEqual(ids(model), ['vscode'])
@@ -91,14 +91,14 @@ test('view-model / remote ssh: an unavailable remote-capable app is reported, no
 test('view-model / http transport: nothing renders, both pools are suppressed with the transport reason', () => {
   const model = buildOpenInViewModel({
     source: source('dsh-direct', 'http'),
-    officialEntries: [FINDER],
+    localEntries: [FINDER],
     mainEntries: [VSCODE],
   })
   assert.deepEqual(ids(model), [])
   assert.equal(model.visible, false)
   assert.equal(model.defaultEntryId, undefined)
   assert.deepEqual(model.suppressed, [
-    { id: 'finder', channel: 'official', reason: 'transport-not-ssh' },
+    { id: 'finder', channel: 'local', reason: 'transport-not-ssh' },
     { id: 'vscode', channel: 'main', reason: 'transport-not-ssh' },
   ])
 })
@@ -111,7 +111,7 @@ test('view-model / malformed or inconsistent sources are unknown-source (fail-cl
     { sourceId: 'local', instanceId: 'local', local: true, transport: 'ssh' } as const,
   ]
   for (const candidate of malformed) {
-    const model = buildOpenInViewModel({ source: candidate, officialEntries: [FINDER], mainEntries: [VSCODE] })
+    const model = buildOpenInViewModel({ source: candidate, localEntries: [FINDER], mainEntries: [VSCODE] })
     assert.deepEqual(ids(model), [], JSON.stringify(candidate))
     assert.deepEqual(
       model.suppressed.map(entry => entry.reason),
@@ -122,13 +122,13 @@ test('view-model / malformed or inconsistent sources are unknown-source (fail-cl
 })
 
 test('view-model / null pools are unknown, never an empty success', () => {
-  const model = buildOpenInViewModel({ source: source('local', 'local'), officialEntries: null, mainEntries: null })
+  const model = buildOpenInViewModel({ source: source('local', 'local'), localEntries: null, mainEntries: null })
   assert.deepEqual(ids(model), [])
   assert.deepEqual(model.suppressed, [])
   assert.equal(model.visible, false)
 })
 
 test('view-model / the local default falls back to the first entry without VS Code', () => {
-  const model = buildOpenInViewModel({ source: source('local', 'local'), officialEntries: [FINDER, TERMINAL], mainEntries: null })
+  const model = buildOpenInViewModel({ source: source('local', 'local'), localEntries: [FINDER, TERMINAL], mainEntries: null })
   assert.equal(model.defaultEntryId, 'finder')
 })

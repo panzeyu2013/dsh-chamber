@@ -12,8 +12,11 @@
   - 多来源 sleep/wake 与隐藏恢复、版本歪斜容忍、gateway 形态回归；
   - 右侧栏栈在真实 profile 下的装载时序与 `provideRoot` 时序（`useResource` /
     `usePanelInfo` / `chamberFileApiBase`）、session v3 迁移在真实存储上的行为；
-  - open-in：官方 host 行随当前 pin（rc.1）默认 profile 进入托管实例、官方 host 行 dormant
-    处置、远程无 cookie 下 fence 行为、remote cwd 填充、图标缓存 / CSP；
+  - open-in：实例进程内的 chamber host 包（`@dsh-chamber/dsh-chamber-seed-open-in`，本地形态
+    专用）的**两代 runtime 装载探针**（`ctx.subprocess` 在旧 runtime 的 web profile 是否挂载是
+    当前最大未验证风险）、真实图标抽取一致性与 `openInApp/icon` 的 base64/缓存/CSP 实测、
+    远程无 cookie 下 fence 行为、remote cwd 填充（设计 20 §6/§10、
+    `docs/progress/todo/open-in-ownership-and-enhancements.md` §1/§2）；
   - **实例写者静默门拦住自动启动后的恢复路径（同上验收）**：shell 被 `SIGKILL`/孤儿 dsh
     占住 DSH_HOME 时，控制面如实拒绝（`409 connection_busy`：writer quiescence is not
     proven）+ connections 页就地解释，但「启动/停止」按钮在此状态下**点不动**（状态停在
@@ -154,9 +157,21 @@
   同源/跨来源/未常驻跳转与权威移除、折叠来源中目标、断连→重连重现、rail 不渲染、
   「还有 N 项」展开/收起与自动收起、展开内滚动（8 行上限）、拖拽尾随点击不误开、
   同会话内联重命名不打断、打包态。
+- **open-in 超集分批口径（2026-09-11 复核裁决，design 20 §7.2）**：官方两份原先都没有"无应用出口"
+  与"第二入口"（上游客户端只有一处槽位注册、无剪贴板面，读取失败即不渲染按钮），因此这两项是
+  新增能力而非缺失回填。裁决：**S3 收窄为「复制路径」**（侧栏既有 `HoverCard` 复制模式
+  `ServerSection.tsx:1892` + 会话行已带 `SessionRow.cwd`（`shared/instance-api.ts`）⇒ 零新 IPC、
+  纯渲染层）；**复制 `ssh user@host` / VS Code 深链与 S4（侧栏入口、快捷键）不做** —— 依据：
+  header 按钮与目标会话同排相邻、会话行**刻意无 kebab**（OpenChamber parity，
+  `ServerSection.tsx:1188,1305`，加右键菜单需推翻既定决定）、快捷键缺基建（vendor 无 keybinding
+  注册表，客户端只有聊天输入框自己的 keymap），且三处"今天无按钮"的来源
+  （gateway-over-http、无本地 VS Code 的 ssh 来源、零目录应用的本地实例）都不在主流程
+  （远程 dsh + VS Code Remote）上。完整形态留档
+  `docs/progress/todo/open-in-ownership-and-enhancements.md` §5 附录 A/B。
 - **VS Code 深链 + open-in（designs 16/20）**：剩余 macOS 实机
   验收——深链冷/热启动、打包态、托盘/退出在途、N-ctx、VS Code 缺失、`sshPort != 22`、
-  本地官方应用下拉在 vendor 会话头部的定位/层叠、远程来源仅 VS Code（新窗口/复用两态在  打包态真机确认）。
+  本地应用下拉（实例内 host 包）在 vendor 会话头部的定位/层叠、远程来源仅 VS Code
+  （新窗口/复用两态在打包态真机确认）。
 - **Git Worktree 插件（design 08）**：剩余真实远程 Linux + Git 仓库端到端（首次
   ready-time seed 后重启生效、并发 session 删除竞态、Git LFS/filter 与恢复边界）；
   剩余实机验收——运行中会话（未归档）→ 删除被拒并给出诚实文案；同会话归档后 →
@@ -225,13 +240,13 @@
     不可区分；②官方分节的陈旧**不产生任何提示**（能力报告只覆盖扩展插件）。
     **不做 T2 的低成本缓解（候选，未实施）**：面板加「重新读取数据」动作（重跑
     `settings.describe`；现有「重新加载」只重取插件图）；并把"面板内不自动刷新"的语义
-    写进诊断页文案（现仅对第三方 `$on` 订阅提示）。
+    写进组装诊断块文案（现仅对第三方 `$on` 订阅提示）。
   - **依赖闭包扩展默认关**（`DEPENDENCY_CLOSURE_ENABLED=false`，机制与测试已就绪）：
     把扩展行 `inject` 声明的 covered 依赖作为 provider 先挂进同一 ctx；默认关闭是
     有意决策（未激活插件已如实列出缺失服务），按实测证据逐个放行。
   - **模块级状态共享**：页面模块表按 id first-load-wins，同一模块实例可支撑多来源/
     多 fiber（宿主实例另有 boot ctx 副本 = 双挂载）。契约 = 插件模块级无状态；跨来源
-    共享事实在诊断页报告，但不构成隔离保证。
+    共享事实在组装诊断块（设置 → 连接 → 该来源卡片）报告，但不构成隔离保证。
   - **bundle CSS 页面驻留**：模块表只给 `<style>` 打 `data-plugin` 标记，回收仅发生在
     被 chamber 排除的 HMR 行 → 来源插件的样式一旦加载即驻留到页面结束（与 boot 路径
     同一事实，不假装可隔离）。
@@ -340,10 +355,7 @@
 - **保留项（2026-09 裁决，仍有效）**：`ALLOW_BUILDS` 的 `fs-ext` **保留**（回滚目标
   0.1.3-alpha.2 仍依赖，删除即安装失败；登记在 `pnpm-workspace.yaml` 与
   `packages/dsh-runtime/src/allow-builds.mjs`）；`runtime-host-adapter` 退役**不采纳**
-  （是测试夹具契约，非死代码）；chamber open-in 插件**保留**并吸收官方 client
-  （官方 client 为严格子集），官方宿主协议/标签表以镜像 + 字节级锁步维护
-  （不直接 import 官方 `./shared`：该 export 指向 `lib/types/shared.js`，源码态 vendor
-  只有 `src/`）——登记见 design 20 与 `docs/checklists/upstream-touchpoints.md` §4。
+  （是测试夹具契约，非死代码）。
 - **设置壳偏差**：未连接实例不装配子 ctx；stub remote 无 WS 失效流；壳不渲染官方
   SettingsRoot、子 ctx 懒装配；服务器选择器 body portal + viewport 翻转/钳位与内部
   滚动；离线远端仍可选并显示不可达占位与连接管理动作；chrome 跟随宿主 locale，子

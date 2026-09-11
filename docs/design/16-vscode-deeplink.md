@@ -12,8 +12,9 @@
 > **与设计 20 的分界**：应用内按钮/桥面/IPC 均为设计 20 的 open-in 面
 > （`open-in-apps` / `open-in`；旧的 `dsh-chamber:open-vscode` /
 > `vscode-availability` 两通道与 `window.dshChamber.vscode` 桥面已随旧插件删除），
-> 本地目录探测与 launch 由实例自身官方宿主半边（`dsh-host-open-in-app`）经
-> 每实例代理 `<basePath>/open-in-app/*` 执行，主进程 open-in 注册表**收窄为
+> 本地目录探测与 launch 由**实例进程内的 chamber host 包**
+> （`@dsh-chamber/dsh-chamber-seed-open-in`——2026-09-11 起 fork 取代官方宿主半，
+> 见设计 20 §6）经实例自身的通用 RPC 通道执行，主进程 open-in 注册表**收窄为
 > vscode-only**（`finder`/`stat`/`openPath`/`showItemInFolder` 面退役）。
 > 本文 §7.2 的锁步清单与 §6 的槽位/门控纪律是两者共用的接线模板
 > （设计 20 §5/§3 为其现行形态）。
@@ -47,7 +48,7 @@
 ┌─ 客户端插件 @dsh-chamber/dsh-chamber-client-ui-open-in（编译期打包，08 同款）─┐
 │  conversation.session.header.utilities 条目：会话头部 utilities 行内按钮      │
 │  （order -1，排在 vendor "Session log" 左侧；placement 见 §6.1）              │
-│  coordinator 单例：应用清单/可用性事实（主进程 + 实例官方目录，单飞共享）      │
+│  coordinator 单例：应用清单/可用性事实（主进程 + 实例内 host 包，单飞共享）  │
 │  门控（§6.3）：来源可用应用集非空 ∧ 该 header 的会话属于有 path 的工作区，     │
 │  否则渲染 null；本地来源走 `vscode://file/`、远程 ssh 走 `ssh-remote+`         │
 │  零 @dsh-chamber 依赖（仅 peer 依赖 vendor 包）                               │
@@ -280,7 +281,7 @@ detectVscodeAvailability(platform): { available: boolean }
 ### 6.2 coordinator（单例，git 插件同款模式）
 
 - 模块级单例：`attach()` 首/末 retain 拥有唯一订阅与探测；
-- **应用集/可用性事实**（主进程 + 实例官方目录）：单飞拉取一次，跨 N-ctx 共享；
+- **应用集/可用性事实**（主进程 + 实例内 chamber host 包）：单飞拉取一次，跨 N-ctx 共享；
 - **当前工作区路径读自身 ctx**：`ctx.chamberInstanceId` +
   header 的 session/workspaces 选择器，**不走 chamberBridge
   跨 ctx join**——本包因此零 @dsh-chamber 依赖（仅 peer 依赖 vendor 包）。

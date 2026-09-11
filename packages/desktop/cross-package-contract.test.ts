@@ -22,6 +22,8 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 // Desktop consumption entry: the dual-path facade (packaged → compiled
 // control-plane, dev/tests → workspace source).
 import {
@@ -146,4 +148,54 @@ test('the dsh-runtime activation set and the control-plane identity method stay 
     'session/list must not re-enter the activation probe set')
   assert.equal(probeSet.includes('data.sessions'), false,
     'data.sessions must not re-enter the activation probe set')
+})
+
+/** The `interface <name> { … }` body of one source file (the lockstep gate
+ *  below parses declarations, never values — the three declarations involved
+ *  live in three runtimes: desktop main, renderer browser code, client plugin). */
+function interfaceBody(source: string, name: string): string {
+  const match = new RegExp(`interface ${name} \\{([\\s\\S]*?)\\n\\}`).exec(source)
+  assert.ok(match !== null, `interface ${name} not found in the parsed source`)
+  return match[1]!
+}
+
+/** Field names declared by an interface body (comments and blanks dropped). */
+function interfaceFields(body: string): string[] {
+  return body
+    .split('\n')
+    .map(line => line.replace(/\/\/.*$/, '').trim())
+    .filter(line => line !== '' && !line.startsWith('*') && !line.startsWith('/*'))
+    // `readonly` is a modifier, not part of the field name (the client mirror
+    // declares every field readonly; the desktop projection does not).
+    .map(line => /^(?:readonly\s+)?([A-Za-z_$][\w$]*)\??\s*:/.exec(line)?.[1])
+    .filter((name): name is string => name !== undefined)
+}
+
+test('the chamber host-package state field set is identical across its three declarations (design 20 §6)', () => {
+  // The SAME wire object is declared three times on purpose (three runtimes, no
+  // shared import path): plugin-sync.ts projects it, renderer/global.d.ts types
+  // it for the preload bridge, and the settings plugin mirrors it structurally
+  // for its pure projections. 2026-09-11: the open-in `localOnly` field landed
+  // in two of the three and the renderer's wire type silently missed it — the
+  // name-set drift gate could not see a FIELD. This is that gate.
+  const repoRoot = join(import.meta.dirname, '..', '..')
+  const desktopFields = interfaceFields(interfaceBody(
+    readFileSync(join(import.meta.dirname, 'plugin-sync.ts'), 'utf8'), 'ChamberHostPackageState'))
+  const rendererFields = interfaceFields(interfaceBody(
+    readFileSync(join(repoRoot, 'packages', 'renderer', 'src', 'global.d.ts'), 'utf8'), 'ChamberHostPackageState'))
+  const clientFields = interfaceFields(interfaceBody(
+    readFileSync(join(repoRoot, 'packages', 'dsh-chamber-client-ui-settings-connections', 'src', 'client',
+      'plugin-inventory-text.ts'), 'utf8'), 'ChamberPackageState'))
+  assert.deepEqual([...desktopFields].sort(), [...rendererFields].sort(),
+    'renderer/global.d.ts must declare exactly the desktop projection fields')
+  // The FOURTH declaration of this wire object — preload.cts — is pinned to
+  // the renderer copy by ipc-surface-mirror.test.ts (L3 shape guard), so the
+  // whole four-way set is transitively covered by the two gates together.
+  //
+  // The client plugin legitimately omits `probe` (documented: unused by its
+  // projection, and the omission keeps that module importable by the plain-node
+  // suite), so it is a SUBSET — never a superset with invented fields.
+  const clientOnly = clientFields.filter(field => !desktopFields.includes(field))
+  assert.deepEqual(clientOnly, [], 'the client mirror must not invent fields the desktop never projects')
+  assert.deepEqual(desktopFields.filter(field => !clientFields.includes(field)), ['probe'])
 })

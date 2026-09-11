@@ -74,13 +74,13 @@ test('launch instance id: canonical dsh/gateway and legacy ssh prefixes are stri
   assert.equal(rawInstanceIdForLaunch('gateway-edge-west'), 'edge-west')
 })
 
-test('mark selection: only official entries use the host catalog icon; the IPC override keeps its product mark', () => {
-  assert.equal(markKindFor({ channel: 'official', displayKind: 'vscode' }, true), 'catalog-icon')
-  assert.equal(markKindFor({ channel: 'official', displayKind: 'vscode' }, false), 'vscode')
+test('mark selection: only local entries use the catalog icon; the IPC override keeps its product mark', () => {
+  assert.equal(markKindFor({ channel: 'local', displayKind: 'vscode' }, true), 'catalog-icon')
+  assert.equal(markKindFor({ channel: 'local', displayKind: 'vscode' }, false), 'vscode')
   assert.equal(markKindFor({ channel: 'main', displayKind: 'vscode' }, true), 'vscode',
-    'a main-channel entry must never render a catalog URL (404 placeholder would replace the product mark)')
+    'a main-channel entry must never render a catalog icon (a missing icon would replace the product mark)')
   assert.equal(markKindFor({ channel: 'main', displayKind: 'vscode' }, false), 'vscode')
   assert.equal(markKindFor({ channel: 'main', displayKind: 'file-manager' }, true), 'file-manager')
-  assert.equal(markKindFor({ channel: 'official', displayKind: 'terminal' }, false), 'generic')
+  assert.equal(markKindFor({ channel: 'local', displayKind: 'terminal' }, false), 'generic')
   assert.equal(markKindFor({ channel: 'main', displayKind: 'unknown-family' }, true), 'generic')
 })

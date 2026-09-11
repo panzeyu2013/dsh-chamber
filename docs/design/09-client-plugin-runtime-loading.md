@@ -335,7 +335,12 @@ fork 副本覆盖（connection / web / api-gateway）；**非载波**的官方�
 Markdown 里的本地图片，在同源壳里 origin 是控制面，于是 404（用户可见的坏图）。
 
 裁决（以上游为准 + 最小侵入）：**不为一行 URL 去 fork 整个 `ui-chat`（82 文件 /
-~11.3k 行）**，改为登记式 vendor 补丁集：
+~11.3k 行）**，改为登记式 vendor 补丁集。
+
+**本集合不含 open-in**：桌面打开面的本地目录自 2026-09-11 起改由实例进程内的
+chamber host 包提供（`dsh-chamber-seed-open-in`，设计 20 §2.2/§6 的 fork & supersede），
+既不读官方路由也无需任何同源 URL 补丁；客户端半是我们自己的插件，
+base path 从每个 entry 的私有 ctx 取。
 
 - 注册表 `packages/renderer/scripts/vendor-patches.mjs`：每条补丁 = 文件 + 理由 +
   一到多处 `expect`→`replace`，`expect` 必须**恰好命中一次**（0 次或多次 = 构建期
@@ -391,8 +396,13 @@ Markdown 里的本地图片，在同源壳里 origin 是控制面，于是 404�
 - **设置面贡献通道**：settings 页 `slots.inject('settings.section')` 通道**已接线**——
   桌面设置壳对选中来源装载其客户端插件图行（扣除 covered），把第三方插件的设置贡献
   渲染进设置面板（design 05 §5）。口径：**贡献源 = 来源自己的插件图**；未被渲染的
-  贡献（未激活/失败/壳不渲染的座位）必须在设置面板的「插件设置」诊断页可见，不得
-  静默消失。上游若要摆脱「必须实例化才知道贡献」的限制（当前 child ctx 的 `remote`
+  贡献（未激活/失败/壳不渲染的座位）必须在**设置 → 连接 → 该来源的服务器卡片**内的
+  「插件设置诊断」块可见（2026-09 归位：此前它占一个 settings nav 槽位，但该报告的
+  subject 是单个来源、owner 是壳，两组都不属于它——见 design 15 §1），不得静默消失。
+  生产端 = `settings-extensions.ts` `toAssemblyReport`（DTO）+ 壳传入自己的
+  param-capable `t`；渲染端 = `settings-connections/src/client/settings-assembly-diagnostics.*`
+  （纯函数 + 视图分离，纯函数由 `test/settings-assembly-diagnostics.test.ts` 钉死）。
+  上游若要摆脱「必须实例化才知道贡献」的限制（当前 child ctx 的 `remote`
   仍是手工 unary 面），见 T3 提案
   `docs/progress/todo/settings-surface-upstream-contributions.md`。
 - 版本漂移：宿主图 rev 与 chamber 复合 bundle 的合并是 union 语义，不要求

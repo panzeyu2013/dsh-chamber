@@ -57,8 +57,9 @@ Git worktree 功能由 chamber-bundled client 插件与**每实例内** host 插
 | `packages/dsh-chamber-client-ui-layout` | 自研 ui-layout 壳 fork（layout store 替换，持久化 sidebarWidth） |
 | `packages/dsh-chamber-seed-client-graph` | 宿主侧包：经 Typert Remote 只读暴露实例的客户端插件 boot 图 |
 | `packages/dsh-chamber-client-ui-git` | chamber 内建 Git worktree 客户端：sidebar 座位、每实例拓扑、创建/删除 saga；不直接执行 Git |
-| `packages/dsh-chamber-client-ui-open-in` | chamber 内建 open-in 客户端插件：会话头部 utilities 槽打开按钮（本地 Finder + 本地/远程 VS Code，主进程 OpenInApp 注册表 + `dsh-chamber://` 深链） |
+| `packages/dsh-chamber-client-ui-open-in` | chamber 内建 open-in 客户端插件（官方客户端半的**超集**，并**替换**其注册）：会话头部 utilities 槽打开按钮——本地应用目录 + 本地/远程 VS Code，主进程 OpenInApp 注册表 + `dsh-chamber://` 深链 |
 | `packages/dsh-chamber-seed-git-worktree` | 实例内 host 包：按 workspace/agent 权威校验并执行受限、本地-only Git worktree 生命周期 |
+| `packages/dsh-chamber-seed-open-in` | 实例内 host 包（仅本地形态）：上游 `dsh-host-open-in-app` 的 fork，经 `openInApp/*` Typert Remote 提供本机应用目录、真实 bundle 图标与拉起（design 20 §6） |
 
 ## 2. 环境搭建
 
@@ -180,7 +181,9 @@ packages/
   dsh-chamber-client-ui-git/
                             Git worktree 客户端（sidebar + coordinator + saga）
   dsh-chamber-client-ui-open-in/
-                            open-in 客户端插件（会话头部 Finder/VS Code 打开）
+                            open-in 客户端插件（会话头部本地应用 / VS Code 打开）
+  dsh-chamber-seed-open-in/
+                            实例内 open-in host Remote（本机应用目录 + 图标 + 拉起；仅本地形态）
   dsh-chamber-seed-git-worktree/
                             实例内 Git worktree host Remote（权威校验 + 受限 Git）
 docs/

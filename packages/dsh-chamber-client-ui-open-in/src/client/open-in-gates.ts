@@ -35,7 +35,7 @@ export function usableAppsForSource(
   // input hardening — no behavior change for reachable inputs.
   if (typeof sourceId !== 'string') return []
   const source = sourceFromLooseFacts(sourceId, transport)
-  const model = buildOpenInViewModel({ source, officialEntries: null, mainEntries: apps })
+  const model = buildOpenInViewModel({ source, localEntries: null, mainEntries: apps })
   const byId = new Map(apps.map(app => [app.id, app]))
   return model.entries
     .map(entry => byId.get(entry.id))
@@ -75,19 +75,19 @@ export function workspacePathForSession(
 export type OpenInMarkKind = 'catalog-icon' | 'vscode' | 'file-manager' | 'generic'
 
 /**
- * Mark selection (Batch 3 Phase 2): ONLY official-channel entries use the
- * host-served catalog icon (real bundle art, 404 → generic fallback); a
+ * Mark selection (design 20 §5): ONLY local-channel entries use the
+ * host-served catalog icon (real bundle art, absent → generic fallback); a
  * main-channel entry always keeps its chamber presentation — the VS Code
  * product mark for the IPC override, the neutral folder for file managers,
- * the generic square otherwise. Passing a catalog URL for a main entry would
- * silently swap the VS Code mark for a 404 placeholder whenever the instance's
+ * the generic square otherwise. Passing a catalog icon for a main entry would
+ * silently swap the VS Code mark for a placeholder whenever the instance's
  * catalog does not list that app.
  */
 export function markKindFor(
-  entry: { readonly channel: 'official' | 'main'; readonly displayKind: string },
+  entry: { readonly channel: 'local' | 'main'; readonly displayKind: string },
   hasCatalogIcon: boolean,
 ): OpenInMarkKind {
-  if (entry.channel === 'official' && hasCatalogIcon) return 'catalog-icon'
+  if (entry.channel === 'local' && hasCatalogIcon) return 'catalog-icon'
   if (entry.displayKind === 'vscode') return 'vscode'
   if (entry.displayKind === 'file-manager') return 'file-manager'
   return 'generic'

@@ -1775,8 +1775,8 @@ async function syncPackagesInto(stateDir: string, names: readonly string[]): Pro
   }
 }
 
-test('the registry derivation covers every chamber host package (never a shrunk three-row copy)', () => {
-  assert.ok(HOST_PACKAGE_NAMES.length >= 3, 'the registry must still carry the three base host packages')
+test('the registry derivation covers every chamber host package (never a shrunk row copy)', () => {
+  assert.ok(HOST_PACKAGE_NAMES.length >= 3, 'the registry must still carry the base host packages')
   assert.equal(HOST_PACKAGE_NAMES.length, SYNCABLE_HOST_PACKAGES.length,
     'the syncable list is the registry')
   assert.equal(HOST_PACKAGE_DOMAINS.length, HOST_PACKAGE_NAMES.length)

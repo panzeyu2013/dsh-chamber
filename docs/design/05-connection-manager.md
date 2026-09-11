@@ -110,7 +110,7 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
   workspace 下创建并打开）、重命名、删除（kebab 菜单）。wire 缺失的
   方法不做（如删除会话），不发明协议——**design 24 受界例外**（2026-12
   用户批准，AGENTS 已登记）：来源头 hover 簇新增「删除已归档内容」动作，
-  走 chamber 自有宿主域 `archiveCleanup/{preview,purge}`（第三个宿主包，
+  走 chamber 自有宿主域 `archiveCleanup/{preview,purge}`（design 24 引入的宿主包，
   实例进程内权威清除归档集内容含 subagent 级联；只删不读、运行中整棵
   跳过、幂等；域缺失 404 给诚实文案；host binding 已按 design 24 §10 的 vendor
   核对结论落地，见 `packages/dsh-chamber-seed-archive-cleanup/src/binding.ts`）。
@@ -317,7 +317,9 @@ export const chamberBridge: {
   `retireInstanceProducers(sourceId)` 撤销 token/cache 并广播 withdraw；旧 ctx 随后的
   异步 `report/clear` 全部失效，即使 replacement 尚未注册也不能污染同 id 新代。
 - 订阅 `onInstanceSnapshot` → 以内容签名 identity-preserving 合并，并使旧 pull
-  失效；订阅 `onPluginDiagnostic` → 合并到来源标题异常标记与插件设置页详情。
+  失效；订阅 `onPluginDiagnostic` → 合并到来源标题异常标记与**连接页该来源卡片上的
+  插件状态行**（`plugin-diagnostic.tsx`；2026-09 校正：代码里它从不去设置壳的
+  组装诊断块，后者报的是 child ctx 装配结果，两者是不同事实面）。
 
 ## 4. N-ctx 多实例与视图切换
 
@@ -501,7 +503,9 @@ export const chamberBridge: {
     rev 冲突事实），再逐个 `ctx.plugin({...ns, name: row.id})` 挂进同一 child ctx。
   - **归因**用 cordis 的 fiber-name 戳（`StoredEntry.registrant`）：第三方分节在 nav
     上带「插件」来源标记，绝不与官方分节混淆。
-  - **诚实报告**（`settings-extensions.ts` + 壳内「插件设置」诊断页）：未激活
+  - **诚实报告**（生产端 `settings-extensions.ts` `toAssemblyReport`；渲染端=连接页
+    中**该来源的服务器卡片**内的「插件设置诊断」块，2026-09 归位，见 design 15 §1）：
+    未激活
     （列出缺失服务，含嵌套 `ctx.inject` 后代 fiber）、加载/挂载失败、非插件 bundle、
     注册到壳不渲染的座位（`settings.trigger/header/close/onboarding`）、分节渲染崩溃
     （`slots.onEntryError`）、跨来源模块实例共享、以及**能力降级**（插件订阅
@@ -539,8 +543,8 @@ export const chamberBridge: {
   日志；图标去重）+ gateway 卡「重启 dsh」/「启动实例」动作（phase 门控 + 每卡
   单飞 + 共享 pollGatewayReady 轮询，多用户中断确认文案）+ **单一插件管理模型
   视图（唯一 `PluginDialog` 组件）**：统一区域 = 诊断横幅
-  （状态名 + message 去重）→ chamber 内建组件表（宿主包注册表三行
-  client-graph / git-worktree / archive-cleanup，badge 化；另有 gateway 源才出现的
+  （状态名 + message 去重）→ chamber 内建组件表（注册表驱动的宿主包行，
+  当前四行 client-graph / git-worktree / archive-cleanup / open-in，badge 化；另有 gateway 源才出现的
   移动端 client 行，随发行物注入）→ 第三方插件区（已安装列表 + 逐行卸载 + 添加：spec 输入 + npm 搜索 +
   文件夹导入）→ 恢复/动作行；gateway 添加双通道（registry spec 直装 +
   文件夹直推）已接线；「变更记录」区不渲染（后端 journal/备份保留）；恢复撤销
@@ -623,12 +627,14 @@ export const chamberBridge: {
     remove saga；它不把
     Git 事实塞进 App aggregate，也不暴露任意 argv/path mutation。
   - `packages/dsh-chamber-client-ui-open-in/`——设计 16/20 的 chamber 内建桌面打开
-    插件：占用 `conversation.session.header.utilities`，
-    按当前 N-ctx 的 source 经 per-source 视图模型选择入口——**本地**来源走实例自身
-    官方宿主目录（`dsh-host-open-in-app`，经每实例代理 `<basePath>/open-in-app/*`，
-    执行在实例进程内）+ 桌面主进程的 VS Code 覆盖项；**远程 ssh** 来源只有主进程的
-    VS Code Remote（trusted IPC + 来源代 proof）；http/未知来源无入口。无 host
-    插件、无 seed、无控制面执行面（主进程亦已收窄为 vscode-only，见设计 20 §4.1/§4.3）。
+    插件（**2026-09-11 用户裁决：fork & supersede**）：占用
+    `conversation.session.header.utilities`，按当前 N-ctx 的 source 经 per-source
+    视图模型选择入口——**本地**来源走**实例进程内的 chamber host 包**
+    （`@dsh-chamber/dsh-chamber-seed-open-in`，见下「自研宿主包」）+ 桌面主进程的
+    VS Code 覆盖项；**远程 ssh** 来源只有主进程的 VS Code Remote（trusted IPC +
+    来源代 proof）；http/未知来源无入口。官方客户端行沿用 page-own 跳过纪律
+    （我们的 fork **替换**官方注册），官方宿主行保持挂载但永不被调用；无控制面执行面
+    （主进程亦已收窄为 vscode-only，见设计 20 §2.2/§4）。
 - 自研宿主包（随 chamber 分发、运行于每个 dsh 实例进程）：
   - `packages/dsh-chamber-seed-client-graph/`——设计 09 的只读 client boot graph Remote；
   - `packages/dsh-chamber-seed-git-worktree/`——设计 08 的领域限定 Git Remote，
@@ -639,6 +645,11 @@ export const chamberBridge: {
     经宿主权威状态 children-first 级联清除归档集内容（含 subagent 起源后代、
     官方事件发射），只删不读、绝不触碰运行中/未归档内容；上游 delete wire
     落地后退役。
+  - `packages/dsh-chamber-seed-open-in/`——**设计 20 §6（本地形态专用，`localOnly`）**：
+    上游 `dsh-host-open-in-app` 宿主半的 fork（本机应用目录 + 真实 bundle 图标 +
+    绝对目录校验 + 拉起，`openInApp/{probe,apps,icon,open}`），删去上游的 SSH 休眠门、
+    `webServer` 路由与连接栅栏（改走实例自身通用 RPC 通道）；不读启动标记，
+    因此与目录选择 pin 解耦。
 - 前端入口复用 `packages/renderer/`：vite 构建时把 workspace 包 alias 到源码；
   `chamber-entry.ts` 复合 entry 挂整棵 dsh 客户端树（connection→typert→
   gateway→remotes→runtime→locale→theme→**layout（chamber ui-layout fork 替换
@@ -657,12 +668,13 @@ export const chamberBridge: {
     + 页面自有 id）去重，预加载剩余 bundle
     （`/api/i/<id>/plugins/<pkg>/client.js?rev=…`），经 boot.ts `extraRows` seam
     合并进 boot rows（详见设计 09）。
-  - **三 host 包与 seed（设计 08/09/24）**：`packages/dsh-chamber-seed-client-graph`、
-    `packages/dsh-chamber-seed-git-worktree` 与 `packages/dsh-chamber-seed-archive-cleanup`
-    都提交 esbuild `dist/index.js`
+  - **host 包与 seed（设计 08/09/20/24）**：`packages/dsh-chamber-seed-client-graph`、
+    `packages/dsh-chamber-seed-git-worktree`、`packages/dsh-chamber-seed-archive-cleanup`
+    与 `packages/dsh-chamber-seed-open-in`（后者 `localOnly`：只 seed 进本地 profile，
+    不进远端 seed 也不随 gateway 上传，design 20 §6）都提交 esbuild `dist/index.js`
     （`@deepseek-ai/*` external）；控制面 `host-graph-seed.ts` 幂等 seed 所有
     已构建包进 `$DSH_HOME/profiles/web/node_modules/@dsh-chamber/*/`，并把
-    `client-graph` / `git-worktree` / `archive-cleanup` insert 合并到单一
+    `client-graph` / `git-worktree` / `archive-cleanup` / `open-in` insert 合并到单一
     `<stateDir>/dsh-chamber-graph.patch.yml`。每次 spawn 注入同一 `--patch`
     （`webProfileArgs(port, patchPath?)`）；任一产物缺失只跳过对应行，不产生
     悬空 insert。远程 ready-time seed 同样一次探测/一次 overlay 合并写，见设计 13。

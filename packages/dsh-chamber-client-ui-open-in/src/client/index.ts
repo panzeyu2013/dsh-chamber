@@ -1,10 +1,15 @@
 /**
- * Chamber open-in client plugin (design 16 + open-in extension + Batch 3
- * Phase 2 unification): ONE header utility entry that opens the current
- * session's workspace in an installed app, over the per-source view-model —
- * the instance's own host catalog for LOCAL sources (absorbed official
- * channel) and the desktop main-process provider (VS Code, and the remote
- * deeplink carrier for SSH targets).
+ * Chamber open-in client plugin (design 16 + design 20 fork & supersede):
+ * ONE header utility entry that opens the current session's workspace in an
+ * installed app, over the per-source view-model —
+ *
+ *  - **LOCAL sources**: the instance-hosted application catalog served by the
+ *    chamber host domain `openInApp/*` (`packages/dsh-chamber-seed-open-in`,
+ *    the fork of upstream's open-in host half) through this entry's own
+ *    connection carrier (design 20 §4.2), merged with the desktop
+ *    main-process provider (the available-provider override);
+ *  - **remote ssh sources**: only the desktop main-process provider (the VS
+ *    Code Remote deeplink carrier).
  *
  * Registered into the OFFICIAL conversation header utilities slot
  * (`conversation.session.header.utilities`, the same right-aligned row as the
@@ -14,20 +19,21 @@
  * now lays out inline beside the vendor utilities instead of floating on the
  * frame layer. The slot is session-scoped, so the component receives the
  * per-header `sessionId` and the framework's global `useWorkspaces` hook —
- * no direct ctx store access (inject face stays `['slots', 'locale']`).
+ * no direct ctx store access.
  *
- * Per-entry facts ride this ctx (`chamberInstanceId`, `chamberBasePath`,
- * `chamberSourceFingerprint`, `chamberTransport`, all provided by
- * chamber-entry/shell.ts): the source id and transport decide the matrix, the
- * base path scopes the official host-catalog requests to this instance's
- * proxy prefix, and the fingerprint is the exact-boot proof the trusted main
- * process verifies before a launch.
+ * Per-entry facts ride this ctx (`chamberInstanceId`, `chamberTransport`,
+ * `chamberSourceFingerprint`, all provided by chamber-entry/shell.ts): the
+ * source id and transport decide the matrix, and the fingerprint is the
+ * exact-boot proof the trusted main process verifies before a launch. The
+ * instance channel's base path is NOT read here any more: the connection
+ * carrier prefixes it (design 20 §4.2/§5).
  */
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 // Type-only import activates the locale service's Context merge.
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import { OpenInButton, type OpenInInjected } from './OpenInButton.tsx'
 import { createOpenInSourceAdapter } from './source-adapter.ts'
+import type { OpenInAppRpcCall } from './local-catalog.ts'
 import { getOpenInChoice, setOpenInChoice, subscribeOpenInChoice } from './choice-store.ts'
 import { en, zh, type OpenInKey } from '../locales.ts'
 import {
@@ -52,7 +58,36 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 export const OPEN_IN_HEADER_SLOT = 'conversation.session.header.utilities' as const
 const NS = 'dsh-chamber.open-in'
 
-export const inject = ['slots', 'locale']
+export const inject = ['slots', 'locale', 'connection']
+
+/**
+ * The client connection service this entry owns (typed locally: the connection
+ * package's full face lives in the reused `@deepseek-ai/dsh-client-connection`
+ * fork, and this package only needs the generic RPC carrier).
+ */
+interface OpenInConnectionService {
+  readonly rpc: {
+    call(channel: string, endpoint: string, payload: unknown, signal?: AbortSignal): Promise<unknown>
+  }
+}
+
+/**
+ * Bind this entry's generic-RPC carrier to the `openInApp` channel.
+ *
+ * The carrier is the connection fork's `rpc.call('/api', endpoint, payload,
+ * signal)`: it prefixes the per-entry base path itself (`chamberBasePath`,
+ * design 05 §6), rides the same transport, cookie and trust fence as every
+ * other instance API, and takes the argument envelope as its payload
+ * (`{args: {<parameter name>: …}}`, design 20 §4.1).
+ * @param ctx - the per-entry client context.
+ * @returns the call seam, or undefined when the connection service is absent
+ *   (the local pool then stays empty instead of the button breaking).
+ */
+export function openInRpcCarrier(ctx: ClientContext): OpenInAppRpcCall | undefined {
+  const service = (ctx as unknown as { connection?: OpenInConnectionService }).connection
+  if (service === undefined || typeof service.rpc?.call !== 'function') return undefined
+  return (endpoint, args, signal) => service.rpc.call('/api', endpoint, { args }, signal)
+}
 
 export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-chamber: open-in dictionaries')
@@ -74,18 +109,25 @@ export function apply(ctx: ClientContext): void {
 
   const t = ctx.locale.bind(NS) as Translate
 
-  // Per-source adapter (Batch 3 Phase 2, plan §5.2): owns the dual-pool
-  // selection (official host catalog for LOCAL sources + the page-wide main
-  // pool), the per-entry base-path remapping of every official request/icon
-  // URL, the per-entry channel routing (official → instance host route; main →
-  // trusted preload IPC with the exact-boot proof) and the persisted choice.
+  // Per-source adapter (design 20 §5): owns the dual-pool selection (the
+  // instance-hosted catalog for LOCAL sources + the page-wide main pool), the
+  // per-entry channel routing (local → the instance's own generic RPC carrier,
+  // including icons; main → trusted preload IPC with the exact-boot proof) and
+  // the persisted choice.
   const adapter = createOpenInSourceAdapter({
     source,
     sourceFingerprint,
     translate: t,
-    basePath: (ctx as { chamberBasePath?: string }).chamberBasePath,
+    rpc: openInRpcCarrier(ctx),
     mainPool: { get: getOpenInApps, subscribe: subscribeOpenIn, refresh: refreshApps },
-    choice: { get: getOpenInChoice, set: setOpenInChoice, subscribe: subscribeOpenInChoice },
+    // The remembered app is per source (design 20 §5): one page serves every
+    // source, so a shared key would let a remote target overwrite the local
+    // choice (and vice versa).
+    choice: {
+      get: () => getOpenInChoice(source.sourceId),
+      set: (appId: string) => { setOpenInChoice(source.sourceId, appId) },
+      subscribe: subscribeOpenInChoice,
+    },
     platform: bridgePlatform(),
   })
   ctx.effect(() => () => adapter.dispose(), 'dsh-chamber: open-in adapter')

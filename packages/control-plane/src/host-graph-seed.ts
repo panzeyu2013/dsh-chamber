@@ -62,10 +62,16 @@ export const HOST_GIT_WORKTREE_PACKAGE_NAME = '@dsh-chamber/dsh-chamber-seed-git
  *  (design 24: `archiveCleanup/{preview,purge}`). */
 export const HOST_ARCHIVE_CLEANUP_PACKAGE_NAME = '@dsh-chamber/dsh-chamber-seed-archive-cleanup'
 
-/** Loader ids for the three chamber-owned host packages. */
+/** Chamber-owned host package that serves the local open-in domain in-host
+ *  (design 20 §6, the fork of upstream's open-in host half:
+ *  `openInApp/{probe,apps,icon,open}`). LOCAL shape only — see `localOnly`. */
+export const HOST_OPEN_IN_PACKAGE_NAME = '@dsh-chamber/dsh-chamber-seed-open-in'
+
+/** Loader ids for the chamber-owned host packages. */
 export const HOST_GRAPH_INSERT_ID = 'client-graph'
 export const HOST_GIT_WORKTREE_INSERT_ID = 'git-worktree'
 export const HOST_ARCHIVE_CLEANUP_INSERT_ID = 'archive-cleanup'
+export const HOST_OPEN_IN_INSERT_ID = 'open-in'
 
 /** A host package row that can be rendered into the shared loader overlay. */
 export interface HostPackageInsert {
@@ -86,6 +92,11 @@ export const HOST_GIT_WORKTREE_INSERT: HostPackageInsert = {
 export const HOST_ARCHIVE_CLEANUP_INSERT: HostPackageInsert = {
   id: HOST_ARCHIVE_CLEANUP_INSERT_ID,
   name: HOST_ARCHIVE_CLEANUP_PACKAGE_NAME,
+}
+
+export const HOST_OPEN_IN_INSERT: HostPackageInsert = {
+  id: HOST_OPEN_IN_INSERT_ID,
+  name: HOST_OPEN_IN_PACKAGE_NAME,
 }
 
 /**
@@ -109,6 +120,18 @@ export interface ChamberHostPackageDescriptor {
    *  and every probe must be cheap: a 404 from the dsh gateway deterministically
    *  means "boot row not loaded yet" (injected, restart pending). */
   readonly probe: { readonly method: string; readonly args: unknown }
+  /**
+   * The domain is meaningful for the LOCAL instance shape only (design 20 §6):
+   * a host domain that acts on the machine the user is sitting at has nothing
+   * to serve on a remote server, and seeding it there would put an unused
+   * launcher surface on someone else's host. Honoured at the SYNC points (the
+   * desktop's remote upload/probe and, thereby, every gateway's synced cache)
+   * and by the plugin-management page, which shows "local shape only" instead
+   * of claiming the package is missing; the derived probe maps and
+   * `HOST_DOMAIN_PROBE_NAMES` stay COMPLETE, because the gateway's load-time
+   * set-equality pin compares them wholesale.
+   */
+  readonly localOnly?: true
 }
 
 /** The chamber host packages in seed order (the authoritative registry). */
@@ -116,6 +139,7 @@ export const CHAMBER_HOST_PACKAGES: readonly ChamberHostPackageDescriptor[] = [
   { insert: HOST_GRAPH_INSERT, probe: { method: 'clientGraph/graph', args: {} } },
   { insert: HOST_GIT_WORKTREE_INSERT, probe: { method: 'gitWorktree/previewCreate', args: { input: {} } } },
   { insert: HOST_ARCHIVE_CLEANUP_INSERT, probe: { method: 'archiveCleanup/probe', args: {} } },
+  { insert: HOST_OPEN_IN_INSERT, probe: { method: 'openInApp/probe', args: {} }, localOnly: true },
 ]
 
 /**
@@ -168,13 +192,16 @@ assertChamberHostRegistry()
  * that drive the seed file set and the future source resolution only.
  *
  * Consumers:
- * - desktop control plane: the three host packages as base entries
+ * - desktop control plane: the host packages as base entries
  *   (`hostGraphPackageSourceDir` / `hostGitWorktreePackageSourceDir` /
- *   `hostArchiveCleanupPackageSourceDir` options — design 24);
- * - gateway: the same three host packages as desktop-synced entries plus
- *   `extraSeedEntries` — the mobile slot (`@dsh-chamber/dsh-client-ui-mobile`,
- *   kind 'client') is a stub whose packaged source dir ships on the mobile
- *   branch; until then an absent sourceDir is a warned skip, never an error.
+ *   `hostArchiveCleanupPackageSourceDir` / `hostOpenInPackageSourceDir`
+ *   options — designs 24 and 20 §6);
+ * - gateway: the same rows as desktop-synced entries plus `extraSeedEntries`
+ *   — the mobile slot (`@dsh-chamber/dsh-client-ui-mobile`, kind 'client') is
+ *   a stub whose packaged source dir ships on the mobile branch; until then an
+ *   absent sourceDir is a warned skip, never an error. Rows marked
+ *   `localOnly` are never synced, so their cache directory stays absent and
+ *   the same skip path applies on that shape.
  */
 export type SeedEntryKind = 'host' | 'client'
 
@@ -213,7 +240,8 @@ export interface SeedEntry {
    *  NOT live on the INSERT constants themselves), the gateway's
    *  SYNCABLE_HOST_PACKAGES and HOST_PACKAGE_PROBE_DOMAINS, and
    *  `HOST_DOMAIN_PROBE_NAMES` in
-   *  packages/dsh-runtime/src/activation-gate.ts (same three domains). */
+   *  packages/dsh-runtime/src/activation-gate.ts (the same domain set, which
+   *  stays complete even for `localOnly` rows — see the descriptor's note). */
   probeDomains?: readonly string[]
 }
 

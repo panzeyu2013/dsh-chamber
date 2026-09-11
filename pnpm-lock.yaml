@@ -400,6 +400,21 @@ importers:
         specifier: ^1.1.0
         version: 1.1.0
 
+  packages/dsh-chamber-seed-open-in:
+    dependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:^
+        version: link:../../vendor/harness-packages/@deepseek-ai/cordis
+      '@deepseek-ai/dsh-native-command':
+        specifier: workspace:^
+        version: link:../../vendor/harness-packages/@deepseek-ai/dsh-native-command
+      '@deepseek-ai/dsh-subprocess':
+        specifier: workspace:^
+        version: link:../../vendor/harness-packages/@deepseek-ai/dsh-subprocess
+      '@deepseek-ai/dsh-typert-protocol':
+        specifier: workspace:^
+        version: link:../../vendor/harness-packages/@deepseek-ai/dsh-typert-protocol
+
   packages/dsh-client-connection:
     dependencies:
       '@deepseek-ai/dsh-credentials':

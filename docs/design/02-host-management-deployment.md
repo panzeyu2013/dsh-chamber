@@ -150,10 +150,12 @@ dsh 自身 wire / vendor 源码为权威），
   `dshPort` 已属于另一活着的托管记录 → 按 P+1 继续重试或报告冲突，**不杀
   进程**（先注册先托管）。
 
-### 2.6 chamber host 包的 seed 与单一 loader overlay（设计 08/09；2026-12 起三个 host 包）
+### 2.6 chamber host 包的 seed 与单一 loader overlay（设计 08/09/20/24；2026-12 起四个 host 包）
 
 官方 web profile 仍是宿主组装权威；chamber 只追加自身拥有、边界明确的
-host package（2026-12 起为三个，第三个见 design 24）：
+host package（2026-12 起为四个：client-graph / git-worktree / archive-cleanup（design 24）/
+open-in（design 20 §6，注册表标 `localOnly`——只进本地 profile，远端 seed 与 gateway
+上传都跳过它））：
 
 | loader id | package | 实例内职责 |
 |---|---|---|
@@ -226,9 +228,9 @@ dsh --profile web [--patch <stateDir>/dsh-chamber-graph.patch.yml] \
   ① `host/directory-picker-auto` 解析 `browse`（本 pin 的目的）；② `bundle/web-app`
   关闭浏览器自启 handoff（`handoffBrowser = openBrowser && !launchedThroughSsh`，
   托管宿主不代开系统浏览器）；③ `host/open-in-app` 在 SSH 标记下不解析任何本机
-  应用（`resolveOpenInAppApps` 返回空表）——实例侧官方 open-in 应用目录因此为空
-  （本地来源的 open-in 入口由主进程 VS Code 覆盖承接，设计 20；「官方 host 行
-  dormant」为已登记项）；其余
+  应用（`resolveOpenInAppApps` 返回空表）——**自 2026-09-11 起该消费者与我们无关**：
+  本地打开面由实例进程内的 chamber host 包提供（设计 20 §2.2/§6，fork & supersede），
+  官方宿主行保持挂载但永不被调用，因此标记回到「仅目录选择 pin」的唯一目的；其余
   继承控制面环境；`DSH_HOME` **显式 pin 到 `<stateDir>/dsh-home`**
   （覆盖环境继承——控制面私有宿主 home，与系统用户 `~/.dsh` 不共享；
   首启缺省与 seedDshHomeDefaults 见下）；Electron 分支额外注入
@@ -480,7 +482,8 @@ Environment=DSH_PERMISSION_MODE=workspace-write
 # 行的远程 darwin/win32 或有显示会话的 linux 宿主会解析 native，此时
 # host.listDirectory 返回 directory-picker/unavailable、新建工作区对话框
 # 不可用（headless linux 服务器无显示会话，缺行也天然 browse）。该标记的
-# 另外两处上游消费（浏览器自启 handoff、实例侧官方 open-in 应用解析）见 §3.1。
+# 另一处上游消费（浏览器自启 handoff）见 §3.1；第三处（实例侧官方 open-in 应用
+# 解析）虽仍读该标记，但 chamber 自 2026-09-11 起不再使用官方宿主行（设计 20 §6）。
 Environment=SSH_CONNECTION=127.0.0.1 0 127.0.0.1 0
 NoNewPrivileges=true
 PrivateTmp=true
@@ -556,7 +559,7 @@ gateway 目标即其入口本身（自带认证边界，17 §5.1/§6）。该形
 | 孤儿回收安全模型 | 参考实现 `managed-process-registry.js`（记录在案 → 重验 → owner 死才杀） | 移植 + 改造：命令串含 `--profile web`、lsof 端口归属校验（§3.4） |
 | 健康监控 / 重启 / 背压 | 参考实现 `lifecycle.js`（共享失败计数、节流、单飞行重启、端口释放） | 探活载荷换统一身份方法；删"忙会话宽限"（§2.4/§3.5） |
 | 优雅退出 | dsh profile-boot（SIGTERM dispose） | SIGTERM 进程组 → SIGKILL 兜底（§3.7） |
-| chamber host 包附着 | `@dsh-chamber/dsh-chamber-seed-client-graph` + `@dsh-chamber/dsh-chamber-seed-git-worktree` + `@dsh-chamber/dsh-chamber-seed-archive-cleanup`（design 24） | 按构建产物 seed + 单一 loader overlay；只分发，不消费 graph/Git/归档清理业务（§2.6） |
+| chamber host 包附着 | `@dsh-chamber/dsh-chamber-seed-client-graph` + `@dsh-chamber/dsh-chamber-seed-git-worktree` + `@dsh-chamber/dsh-chamber-seed-archive-cleanup`（design 24）+ `@dsh-chamber/dsh-chamber-seed-open-in`（design 20 §6，仅本地形态） | 按构建产物 seed + 单一 loader overlay；只分发，不消费 graph/Git/归档清理/open-in 业务（§2.6） |
 
 ---
 
