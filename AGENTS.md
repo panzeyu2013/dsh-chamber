@@ -103,6 +103,9 @@ surfaces, applicable guidance, validation, or failure/rollback considerations fr
   the documented transient write-only form inputs (design 05 §8, design 17).
 - Package manager is pnpm, and runtime dependencies are not added without an explicit request
   (current set: `ws`, `electron-updater`, React/Vite, Electron, the embedded pinned `pnpm`, the dsh
-  client workspace packages; `typescript` / `@types/*` are devDependencies).
+  client workspace packages; `typescript` / `@types/*` / `node-pty` are devDependencies — `node-pty`
+  is the root resolution target for `@deepseek-ai/dsh-subprocess-local`'s workspace postinstall
+  (`pnpm-workspace.yaml` allowBuilds note + `scripts/dev/ensure-harness-vendor.mjs` shim), not a
+  runtime dependency of the chamber tree; it heads the runtime tree's `ALLOW_BUILDS`).
 - Removed domains and the bounded exceptions (designs 08, 17, 19, 24 — narrowest boundaries in
   design 24 §2) are stated in `docs/design/01-overview.md` §4 and §5.

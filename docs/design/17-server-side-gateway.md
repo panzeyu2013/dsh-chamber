@@ -1299,6 +1299,14 @@ append-only 无删除方法），走 dsh 实例自身 host 插件（`ctx.inject(
 目前只承载「粘滞 tooltip 气泡抑制」这一条装饰性规则——它是粗指针产物而非
 窄视口产物（iPad 横屏 1024px+ 同样点按），且必须与两个宽度档一起被
 「所有规则都在媒体查询内」的回归测试覆盖。
+**「不猜官方哈希类名」是原则，唯一的类名例外是后缀契约**（§18.4.3 的分区网格
+两条）：实例 bundle 的 CSS Modules 生产命名是 `[hash]_[local]`（上游
+`vendor/harness-checkout/packages/client/tsdown.client.ts:517` 的
+`cssModules: { pattern: '[hash]_[local]' }`；0.1.5-rc.1 产物实测
+`JObwrW_row`/`zGbnIq_modelRow`/`qSYn7G_cards`），局部名只在**末尾或后随空格**出现，
+故只能用 `:is([class$="_<local>"], [class*="_<local> "])`；`_<local>_<hash>_<idx>`
+是 **chamber 自建壳（Vite 默认 `generateScopedName`）**的命名，mobile 插件只在
+gateway 单壳面加载上游产物，该形态永远不出现。
 
 **18.4.3 布局覆盖要点（实证验证过的坑）**
 
@@ -1328,10 +1336,15 @@ append-only 无删除方法），走 dsh 实例自身 host 插件（`ctx.inject(
   补底部安全区；导航条与 options 的左右 padding 带
   `env(safe-area-inset-left/right)`（刘海横屏）；分区内网格降级：
   Models provider 行 4 列 grid → 2×2、Plugins inventory 两列卡片 → 单列。
-  官方内部格子无稳定属性，两处使用**哈希不敏感 `[class*="_<local>_"]`
-  局部名匹配**（生产命名 `_<local>_<hash>_<idx>` 已实证；命名翻转时
-  fail-soft 回官方网格，属记录在案的例外锚点族，与 `[class$=_…]` 后缀
-  契约同待实机固定）；其他 `aria-modal` 弹层（onboarding 步骤/选择器）
+  官方内部格子无稳定属性，两处使用文档化的**局部名后缀**匹配
+  `:is([class$="_<local>"], [class*="_<local> "])`——实例 bundle 的
+  CSS Modules 生产命名是 `[hash]_[local]`（上游 `tsdown.client.ts:517`；
+  产物实测 `JObwrW_row`/`zGbnIq_modelRow`/`qSYn7G_cards`），局部名可能不在
+  末位，故后缀 + 后随空格两臂并用；`_<local>_<hash>_<idx>` 是 chamber 自建壳
+  （Vite）的命名，从不属于实例 bundle——曾用的 `[class*="_<local>_"]` infix
+  形式因此在生产里命中不到任何东西（2026-09 修复）。命名翻转时 fail-soft
+  回官方网格，属记录在案的例外锚点族，后缀契约见 §18.4.2；其他
+  `aria-modal` 弹层（onboarding 步骤/选择器）
   限宽 `100vw-24px`；弹窗内可编辑字段套用 composer 同款 16px 聚焦缩放
   底线；
 - **会话头部（会话页顶部标题/面包屑行）**：官方 header 为桌面宽度 chrome，

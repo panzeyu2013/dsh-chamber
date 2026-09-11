@@ -204,7 +204,7 @@ http+dsh 直连无按钮。
 | 路由 | 语义 |
 |---|---|
 | `GET /chamber/plugins` | chamber 宿主包种子缓存投影（§2.4） |
-| `GET /chamber/plugins/installed` | 模型 readManifest 的 gateway 实现（packages/gateway/src/plugins-installed.ts）：`{dependencies: name→spec（file: 值以 MATERIALIZED_VALUE_MASK 掩码，保留 file: 前缀供 name 基 diff；gateway 本地路径不进 renderer）, bundles, profileExists, error?}`；scope 过滤由**模型层**做（UI 与路由同源，见 §6.7）。语义：profile 缺失 → **404** `{error:'managed profile is not initialized', code:'profile_absent'}`；解析失败 → **500** `{error:'managed profile is corrupted', code:'profile_corrupt'}`（细节仅宿主日志）；method GET-only 405；**读与写面共享栅栏** |
+| `GET /chamber/plugins/installed` | 模型 readManifest 的 gateway 实现（packages/gateway/src/plugins-installed.ts）：`{dependencies: name→spec（file: 值以 MATERIALIZED_VALUE_MASK 掩码，保留 file: 前缀供 name 基 diff；gateway 本地路径不进 renderer）, bundles, profileExists, error?}`；scope 过滤由**模型层**做（UI 与路由同源，见 §6.7）。语义：profile 缺失 → **404** `{error:'managed profile is not initialized', code:'profile_absent'}`；解析失败 → **500** `{error:'managed profile is corrupted', code:'profile_corrupt'}`（细节仅宿主日志）；method GET-only 405；**读与写面共享栅栏**：写面在飞（执行器忙或有 journal `pending` op = profile-write 租约持有期间）→ **409 `runtime_busy`**（可重试，与 /chamber/runtime 的租约拒绝同码；deferred 意图无写者、不算在飞，停机态 read 照常 200/404） |
 | `PUT /chamber/plugins/install` | body `{name, spec}`：spec 白名单族（**模型层常量单一来源在 control-plane 共享纯模块** `plugin-spec.ts`：desktop 经双路径 facade control-plane-module.ts 与打包产物同源、gateway 直接引用；渲染端 ADD_SPEC 手写镜像由**锁步测试**守护）；**保留名拒绝**（@dsh-chamber/*、seed/overlay 名与官方域，与 remove 拒绝集一致、与对话框行过滤一致）；202 异步、队列串行 + 单写者栅栏；队列忙 → 409（code 见表）；输入错 → 400；profile 缺失 → deferred；执行失败 → 任务面持久投影 |
 | `PUT /chamber/plugins/materialize` | 文件夹或 `.tgz` 直推：**独立流式上传读体**（不复用 8 MiB readUploadJsonBody；≤32 MiB、413+destroy、解包大小/文件数上限防膨胀）；name/version 校验 + 保留名拒绝；落 `chamber-plugins/third-party/<escaped>/<name>-<hash>.tgz`（0700/0600/原子 no-follow）；idle → `add file:`；否则 deferred |
 | `POST /chamber/plugins/remove` | body `{name}`：installed 投影内名字 + 保留名拒绝（模型层一致）；202 异步；**停机态可用**；不在 installed 名单内 → 409 `not_installed`/`no_manifest` |
@@ -378,11 +378,16 @@ http 直连只读。
   - **r1 停机（stopped/error/restart-exhausted）**：停机态移除（执行窗口含停机态；installed 纯文件读）→
     **「启动实例」= start 原语（决策 12）**——卡片/视图给出明确动作 + 文案「已移除 <name>，正在重新引导…」；
     失败 → 诚实回 error + 提示（可再次移除/查看连接日志）；ssh 后端同动作映射 restart_service；
-  - **r2 profile 损坏（profile_corrupt）**：视图横幅（journal 最近一笔 + 「撤销最近变更」）→ 停机 → preImage
-    回滚（两文件成对校验）→ 残留名字 remove → start/restart；无备份（外部损坏）→ **正确兜底链**：
+  - **r2 profile 损坏（profile_corrupt）——v1 只有前半段，回滚面列二期**：v1 已实现 = 诚实投影
+    `profile_corrupt`（GET installed 500）+ 视图横幅（journal 最近一笔）+ 停机态 remove/start（r1）；
+    **「撤销最近变更」/ 停机 → preImage 回滚（两文件成对校验）/ 残留名字 remove → start/restart
+    属二期，v1 未实现**：gateway 无 undo 路由，journal 的 preImage 备份只有写入方、零运行时恢复消费方
+    （plugins-journal.ts）——与 §7「r2 走 runbook」、STATUS 的 C-F7 条目同口径，不得读作已实现。
+    无备份（外部损坏）→ **正确兜底链**：
     restore-builtin **不能**治愈 corrupt profile（它探同一 dsh-home——restoreBuiltin 走共用
-    `executeStartupTransaction`，dsh-home 不随目标版本更换）——兜底改为
-    operator runbook（从 `<stateDir>/dsh-runtime/snapshots/` 手工恢复 dsh-home 快照）；可选恢复路由列二期；
+    `executeStartupTransaction`，dsh-home 不随目标版本更换）——v1 兜底 = operator runbook
+    （从 `<stateDir>/dsh-runtime/snapshots/` 手工恢复 dsh-home 快照）；恢复路由（snapshot restore /
+    preImage 回滚）列二期；
   - r3 脚本风险：登记（决策 13/20），恢复阶梯不承诺覆盖安装在 dsh-home 之外的持久物（cron/rc 等）——如实说明；
   - r4 宿主不可达：机器级 runbook；二期提供 `gateway plugin` 操作员子命令（list/remove/rollback 复用同一
     executor+journal 核心；现 CLI 除 serve 外只有 auth 操作子命令 status/reset-password/clear）；
@@ -403,7 +408,11 @@ chamber 移动端参与第三方管理；安装期脚本默认禁行与 OS 用�
 ## 7. 决策遗留 / 开放项
 - scripts 默认允许下的 env 最小化实测：`dsh plugin add` 的 pnpm 是否读取 profile/.npmrc、是否向
   子进程暴露 npm 令牌环境——据实收紧 §6.3 纪律（实测结果可回调，不允许扩大暴露）；
-- 恢复路由（snapshot restore）进 v1 与否（默认二期，r2 走 runbook）；
+- 恢复路由（snapshot restore / r2 的 preImage 回滚）进 v1 与否（默认二期，v1 的 r2 走 runbook；**未实现**，见 §6.8 r2）；
+- `GET /chamber/plugins/installed` 的写面在飞 409 `runtime_busy`（§6.2）：服务端栅栏与客户端消费方均已接线
+  （readManifest 对该 409 做一次短退避有界重试，仍忙时以专用本地化忙态呈现，不谎报成功；桌面主进程 apply 路径
+  另等 op 终态 `gateway-provider.ts waitForOpsToSettle`）。仍开放的是**长时栅栏**（真实安装数秒至数分钟、或另一
+  客户端持租约）不在前端轮询，只交给既有「刷新」节奏——是否需要轮询面未决；
 - journal 操作者归因的 UI 呈现粒度（默认 tooltip 级；当前未渲染，见 §6.6 已知余留）；
 - ssh 端 `plugin_apply` / `seed_host_graph` / `materialize_add(_pick)` 的主进程确认对话框缺口
   （design 13 §7.0 的设计意图；确认链只覆盖 gateway apply/undo 与 ssh undo）——补齐并登记；
@@ -432,7 +441,7 @@ chamber 移动端参与第三方管理；安装期脚本默认禁行与 OS 用�
   executor 注入式 spawn（exit-code 夹具 + env 纪律断言）、白名单/保留名（control-plane 单一来源在 gateway+desktop
   双跑 + 渲染镜像锁步测试）、pollGatewayReady 用例；
 - A gateway 子矩阵：spec 白名单族/保留名拒绝/202 异步/批量 partial/remove 只删 installed 集内且执行时复核/
-  profile_absent → deferred/profile_corrupt → preImage 回滚（原子对）/queue_busy/queue_full/start 原语（停机态门 + 恢复门
+  profile_absent → deferred/profile_corrupt 诚实投影（r2 的 preImage 回滚列二期，v1 走 runbook）/queue_busy/queue_full/start 原语（停机态门 + 恢复门
   不被绕过 + 202/poll + 失败诚实）/上传流式上限与解包/任务面持久与对账（含投影无 childPid、file: spec 掩码）/
   读面栅栏一致/磁盘预检/生命周期排空
   （dispose/quiesce/stop kill 子进程测试）；并发强度以**慢关 spawn + 租约时序**证明（microtask-close 夹具

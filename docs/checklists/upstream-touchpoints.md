@@ -220,7 +220,8 @@ host 插件入口/半、上游 `tests/`、`tsdown.config.ts`、上游 README（a
 
 ## 6. 保鲜自动化
 
-`node scripts/dev/verify-upstream-touchpoints.mjs`（除 C8 在**正常路径**下「重建-比对后原样还原」外只读；中断/并发/额外产物路径由整目录快照 + SIGINT/SIGTERM 处理器 + `wx` 独占锁兜底，exit-code 语义）：
+`node scripts/dev/verify-upstream-touchpoints.mjs`（除 C8 在**正常路径**下「重建-比对后原样还原」外只读；中断/并发/额外产物路径由整目录快照 + SIGINT/SIGTERM 处理器 + `wx` 独占锁兜底）：
+- **参数守卫与退出码（2026-12 review P2；措辞与脚本头注同源）**：默认模式会**就地重建并还原**提交态生成物（唯一写盘路径），因此任何未知参数/位置参数都由 `verify-upstream-touchpoints-args.mjs` 判为用法错误——`--help`/`-h` = 打印权威用法文本、**exit 0，不跑任何门、不写盘**；未知参数（如拼错的 `--no-artifact-rebuid`）、位置参数、重复 flag 或 `--tags` 缺值 = **exit 2（用法错误）且不先跑门**；门硬失败 = exit 1；全部通过 = exit 0。一个拼错的 flag 以前会被静默忽略并照跑全量写盘门，故这里是响亮失败而非容错。判定逻辑是纯函数（单测 `verify-upstream-touchpoints-args.test.mjs`）。
 - C1 pure 字节恒等 / C3 完整性（fork 每文件分类、上游每文件裁决，漏 = 硬失败）/
   C5 过期锚扫描 / C6 EXCLUDED 存在性 —— **CI 在 Bootstrap 后 fail-loud**；
 - C4 roster（covered/factory 哨兵 + remote 契约 15 的集合与顺序）—— 本地/CI 均可；

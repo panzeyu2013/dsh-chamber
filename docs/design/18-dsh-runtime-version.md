@@ -555,7 +555,12 @@ chamber-settings.json，非秘密）：
   @deepseek-ai/dsh-subprocess-local；fs-ext 为 0.1.3 线 session-persistence-jsonl
   写租约 flock 引入），另以显式否认列表登记 pnpm 11 `strictDepBuilds` 下必须显式
   写 `false` 的 build-script 依赖（`msgpackr-extract`，语义 = 已评审并拒绝其在
-  安装期执行脚本）；两个生成点共用同一渲染器，漂移由测试钉死（放行 6 项）。
+  安装期执行脚本）——该条由上游**私有桌面应用**构建面引入（`apps/desktop` 的种子
+  脚本用 `msgpackr`；`msgpackr-extract` 是其可选原生加速器，上游 `packages/**`
+  无 msgpackr 依赖），运行时闭包不含它（已提交的
+  `packages/desktop/vendor/dsh/pnpm-lock.yaml` 对 `msgpackr*` 零命中）⇒ 在运行时树
+  是**惰性的防御性 false**，不是已发生的拒绝；两个生成点共用同一渲染器，漂移由测试
+  钉死（放行 6 项）。
   **work 目录必须先写 pnpm-workspace.yaml 再跑 pnpm**（完全缺失 allowBuilds
   配置实测硬失败），且
   work 目录不得位于含 pnpm-workspace.yaml 的祖先下（向上探测实测报错）；**白名单

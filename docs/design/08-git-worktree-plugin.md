@@ -80,9 +80,15 @@ session 或 delete 副作用。
   （branch/detached/unborn：unborn = porcelain 全零 HEAD + branch ref）、
   `attention`（从工作树 git-dir 的 MERGE_HEAD/REBASE_HEAD/rebase-*、
   CHERRY_PICK_HEAD/REVERT_HEAD/BISECT_LOG 探测，经注入的 fs 抽象，
-  尽力而为）、`upstream`/`ahead`/`behind`（本地 ref 事实，永不 fetch）与
-  `orphaned`（`workspace-path-failed` 标记，注册 workspace 路径已消失）。
+  尽力而为）、`upstream`/`ahead`/`behind`（本地 ref 事实，永不 fetch）。
   客户端解码强制校验这些字段（对旧 host 包 fail-closed）。
+- **孤儿 workspace（`orphaned` 是客户端投影，不是快照行字段）**：注册 workspace
+  的路径不可解析时，host 在快照 `errors` 里加一条**逐行诊断**错误项——路径消失
+  是 `path-unavailable`（`GitWorktreeError` 码），非 `GitWorktreeError` 的**兜底
+  码**是 `workspace-path-failed`，两者都带 `workspaceId`；客户端
+  （`packages/dsh-chamber-client-ui-git/src/shared/coordinator.ts`）据此把该
+  workspace 的 flags **合并**为 `orphaned: true`（保留既有 worktree 身份），
+  行显示"已消失"徽标。
 - **running 投影（加性）**：`runningSessionIds` 仍是**全部**运行中会话
   （展示事实）；`blockingRunningSessionIds` = 其中**非 INERT** 者（§5.2）。
   只读旧字段的客户端保持保守（任一运行中即阻塞）。
@@ -280,9 +286,10 @@ slot，不由 renderer App 直接 import 领域组件。
 - **未注册删除**：host `RemoveInput.workspaceId` 可选 + `path` 必填，
   git-first 移除保留身份/脏/锁/主守卫，`RemoveResult.next: 'none'` 时客户端
   跳过 workspace.delete 与归档（无会话）；operationId 幂等/重放复用。
-- **孤儿 workspace**：快照 `workspace-path-failed` 标记 `orphaned: true`，
-  行显示"已消失"徽标；删除弹专门确认（"工作树已不存在，仅删除其注册，
-  会话保留并转未分组"）后仅 `workspace.delete`。
+- **孤儿 workspace**：快照以带 `workspaceId` 的逐行诊断（路径消失是
+  `path-unavailable`，兜底 `workspace-path-failed`）报告；客户端据此投影
+  `orphaned: true`（见 §2.1），行显示"已消失"徽标；删除弹专门确认（"工作树已不
+  存在，仅删除其注册，会话保留并转未分组"）后仅 `workspace.delete`。
 - **竞态**：adopt 前 fresh 快照复核；未注册外部删除自愈消失；注册后外部删除
   进入孤儿流程。
 - **注册/删除预检的宽容度**：预检对路径不可解析的无关 workspace 宽容跳过
@@ -433,12 +440,15 @@ fresh-preflight -> git-removing -> git-removed
   其余守卫（main/locked/身份/expected/dirty/submodule/
   `assertNoOtherWorkspaceWithin`）一律照旧。
 - **集合读取的响亮失败**：归档集合读不到（getter 缺失/非数组
-  或读取抛错）→ `state-source-unavailable`，集合元素漂移（非字符串/空串）或
-  agent `origin` 值漂移 → `state-source-invalid`：snapshot 以响亮 `sourceError`
+  或读取抛错）→ `state-source-unavailable`，集合元素漂移（非字符串/空串）→
+  `state-source-invalid`：snapshot 以响亮 `sourceError`
   返回、mutation 腿直接抛错，**绝不当作空集合**（空集合会把每个已归档会话重新
   变成阻塞项），集合元素也**绝不 `String()` 强转**（强转会把漂移元素伪装成合法
   成员）。该判据**绝不缓存、绝不降级**：每次 `readSource` 都重新读
   `workspaceRegistry.archivedSessionIds`。
+  **agent 行的列漂移不在此列**：`origin`/`status`/`cwd` 三列都**逐行**处理
+  （`agent-origin-unknown`/`agent-status-unknown`/`agent-cwd-unknown`
+  SnapshotError），未知 `status` 按 running、不可解析的 `cwd` 保持阻塞（§6.4）。
 - **起因（保留为语义依据）**：归档是**软隐藏**（上游 `archiveSession` 只把 id
   追加进 `archivedSessionIds`），**不会**停止运行；会话卡在 `ask_user_question`
   （agent 相位持续 running）时归档反而让它从侧边栏消失、失去任何停止入口，
@@ -661,8 +671,11 @@ fresh-preflight -> git-removing -> git-removed
   subagent-origin」处理 ⇒ 该边终止、会话照旧阻塞（fail-closed，且与上游一致：
   缺 `origin` 的上游同样无法证明是 delegation 子会话）。代价是这类历史子会话不会
   因已归档祖先而 INERT，其停止/清理需在归档管理器或会话侧处理。
-- **来源面漂移分两类**：`origin` **值**漂移**逐行**处理并留响亮诊断
-  （`agent-origin-unknown` SnapshotError），不会拖垮整个域；而**真正损坏的
+- **来源面漂移分两类**：agent **行**的列漂移**逐行**处理并留响亮诊断——
+  `origin` 值（`agent-origin-unknown`）、`status` 值（`agent-status-unknown`，
+  按 running 读取）、`cwd` 值（`agent-cwd-unknown`；该行位置未知，故在严格删除
+  腿上以 `running-agent-cwd-unavailable` 拒绝任何删除，绝不假设它不在目标内），
+  都不会拖垮整个域；而**真正损坏的
   来源面**（`archivedSessionIds` 非数组/元素非字符串、workspace 行畸形等）仍让整次
   读取以可重试的 `state-source-*` 失败告终——此时没有任何 mutation 被尝试；若同一
   删除此前已产生「未决（uncertain outcome）」恢复项，该恢复项保留到来源面修好

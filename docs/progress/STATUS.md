@@ -28,14 +28,15 @@
   根因 = 该 gateway 是 2026-09「Batch 1 naming unification」之前的构建：`GET /chamber/plugins`
   实测只返回 `@dsh-chamber/dsh-host-client-graph`、`@dsh-chamber/dsh-host-git-worktree`
   （v0.2.4，两项），而现仓清单名是 `dsh-chamber-seed-*` 三项
-  （`packages/gateway/src/plugins.ts:44-55` 从 control-plane 的 `CHAMBER_HOST_PACKAGES`
+  （`packages/gateway/src/plugins.ts:49-56` 从 control-plane 的 `CHAMBER_HOST_PACKAGES`
   派生并做命名钉死）——未知包名即 400。gateway 会在 body 里回 sanitized 原因
-  （`unsyncableMessage`，`plugins.ts:112-115` → `routes.ts:1003-1010`），桌面侧只透出
-  code、丢掉原因，诊断断在这里；两侧任一的处置（就地重建 gateway / 桌面透出 body
-  原因）尚未排期。
-
-- **PluginDialog `update(name, version)` 动作缺失**：2026-09 裁决**保留** PluginDialog
-  本体，唯一缺口 = 尚未提供 `update(name, version)` 动作（非缺陷）。
+  （`unsyncableMessage`，`plugins.ts:144-147`（抛出点 `:186`/`:221`）→
+  `routes.ts:1045-1057`；`sanitizeRouteError` 的 `keep` 词表保证 scoped 包名不被路径
+  规则抹成 `[path]`，`sanitize-route-error.ts:20-26`），桌面侧把该原因经 sanitize 并入
+  失败（`gateway-provider.ts:1448-1460`，`error` 于 `:1487-1488` 返回，经
+  `GATEWAY_PLUGIN_SYNC` IPC `main.ts:3462-3464` 到渲染器），诊断不再断在 code。
+  剩余 open = **就地重建旧 gateway 未排期**（改名后的种子包只能等该 gateway 升到带
+  `dsh-chamber-seed-*` 清单的版本；桌面侧不做旧名回退播种）。
 
 - **dsh 运行时版本管理（design 18 §3.6/§9）**：剩余——macOS 打包态 `.app` 内共享 dsh-runtime/内嵌 pnpm/koffi 与完整激活-故障回退-恢复链的实机；Linux
   server 同款端到端；Gateway 重启窗口的前端重连与 connections 的 SSH
@@ -43,6 +44,36 @@
   grace 与健康计时器交错的覆盖；settings-bridge 的 gateway React 组件级交互仍以纯
   函数/API 客户端测试代证；ZFS 下全新 pnpm store 克隆偶发 `ERR_PNPM_EAGAIN`
   （失败投影诚实可重试，系统化并发缓解未排期）。
+- **`protobufjs` / `@google/genai` 放行与上游裁决分歧（待 M2 首装门禁证据，2026-12
+  登记）**：上游 `vendor/harness-checkout/pnpm-workspace.yaml:40-43` 对两者记 `false`
+  并注明其生命周期脚本是 no-op（原文「those are no-ops we don't need, so we deny
+  them」），本仓运行时 `ALLOW_BUILDS` 记 `true`（`packages/dsh-runtime/src/allow-builds.mjs:18-19`，
+  差异理由见同文件 `:41-43`）。**对齐需一次真实 M2 全新安装的实测证据**（脚本是否真
+  no-op、运行时闭包是否真需要执行），在此之前保留放行；`allow-builds.mjs` 的注释已指向
+  本条。
+- **连接 fork 的 `ownsGeneration()` 守卫是"无行为见证"的纵深防御（2026-12 登记）**：
+  `packages/dsh-client-connection/src/client/index.ts` 的 liveness 接线层已由
+  `test/client-start-liveness-wiring.test.ts` 覆盖（resume 绕过离线门、stop 拆卸全部监听、
+  两道单飞门响亮失败、唤醒 burst 收敛），但 :387 的 `if (!ownsGeneration()) return` 无法被
+  任何测试见证：其唯一可能生效的路径是 `registerGenerationSource` 的 disposer（`:336-341`
+  释放 owner 却不拆触发器），而该路径必经 `releaseOwner`（`:298-305`）调 `controller.stop()`，
+  `ConnectionController.reconnect()` 在 `!running` 时首行即返回（`connection.ts:130-131`）⇒
+  删掉守卫行为逐字节相同（实测：删守卫后 7/7 全绿、专用探针输出 `diff` 无差异）。**不要为它补
+  测试**（那会是新的假绿）；待裁决：留作纵深防御，或按死代码评估删除（`:354`/`:361` 两处同类）。
+- **隐藏 span 的阈值语义只由触发器单元覆盖（2026-12 登记）**：接线层不断言
+  `visibilitychange` 隐藏 ≥30s 的真时序（`start()` 不传 `now`/`hiddenReconnectThresholdMs`，
+  `index.ts:379-401`），真测需实等 ≥30s。接线层只覆盖该 listener 的装配/拆卸；阈值语义由
+  `test/liveness-triggers.test.ts` 单元覆盖。漂移面为零（接线不传该选项），如需接线层也见红则
+  需给该调用加可选注入——按缺口严重性未做。
+- **gateway 运维页缺三个变更入口（design 21 §7 runbook 口径，2026-12 登记）**：
+  `packages/gateway/src/routes.ts` 内嵌运维页的 `RUNTIME_PATHS`（`:224-236`）只含
+  status/versions/select/apply/apply-now/rollback/restore-builtin/retry-apply/
+  retry-restore/restart/start/registry，**没有 `recover-metadata` / `cleanup-version` /
+  `restore-pre-rollback`**（页面上亦无按钮），而三条路由本身存在
+  （`packages/gateway/src/runtime-routes.ts:346`/`:362`/`:376`，路由表 `:498` 也列出）。
+  后果：FATAL metadata 阻塞下 `recover-metadata` 是唯一不被拒的变更路由
+  （`runtime-routes.ts:164-194` 门文本即「only recover-metadata is allowed」、
+  `:203`），无头部署只能 curl 该端点——UI 入口待补。
 - **apply-now 立即应用（design 18 addendum 实机门禁）**：macOS 打包态 `.app`
   运行中全链；Linux server gateway 生产 TLS 下 POST apply-now → 202 → 停机窗口轮询
   → 探针 → 故障注入回退；`restartLocal()` 真实 grace × 健康计时器交错；Gateway
@@ -86,9 +117,23 @@
   标题为空串（侧栏显示占位「未命名会话」）时渲染成 `归档「」？`——`blank` 标记为假而
   `title` 为空的会话走不到 `t('session.new')` 回退；判据 = `SidebarRoot.tsx:1026` 的
   `t('confirm.archive', { title })` 调用点未对空标题取占位。
-  **清理残留（同上验收）**：单删成功后 `storages/session_projcache/sessions/<id>.json`
-  仍留一份 4 KB 缓存档（该档 `title` 已清、聚合缓存已移除）——主题档是否随清理回收，
-  待设计裁决（缓存，非权威面）。
+  **清理残留（同上验收；design 24 §13 口径，待裁决两条）**：① 单删成功后
+  `storages/session_projcache/sessions/<id>.json` 仍留一份 4 KB 缓存档（该档 `title`
+  已清、聚合缓存已移除）——主题档是否随清理回收未决（缓存，非权威面）：purge 只处理
+  `dirname(persistence.locate(header).path)` 下的代际/发布暂存/迁移暂存/租约文件
+  （`packages/dsh-chamber-seed-archive-cleanup/src/binding.ts:483-488` 定位、`:524-567`
+  读取目录 + 白名单删除），实测该包 `src/` 对 `projcache` **零命中**，上游该域
+  （`packages/session/session-projection-cache`）也没有随会话内容删除回收单档的入口。
+  ② **会话迁移在飞时 purge 可能留一代窗口（内容面，尚未登记的窗口）**：迁移不是新建
+  目录，而是在**同一会话目录内**由并发 write-open 发布后继代际
+  （上游 `session-persistence-jsonl/src/index.ts:363-377` 的 claimWrite→lease→
+  `publishStoredMigration`，落地点 `generation.ts:829` 的 `link(staged, currentPath)`）；
+  purge 先 `readdir` 一次（`binding.ts:524`）再逐个 `rm`（`:544-554`），该 `link` 若在
+  枚举之后落地，则本次删除不覆盖它，随后的 `rmdir` 以 ENOTEMPTY 失败并被**吞掉**
+  （`:556-566` 的 try/catch）却仍 `return 'deleted'`（`:567`）——归档成员关系被清除、内容
+  仍可读，且成员集不再含它 ⇒ 后续 purge 不再收敛。与 §13⑨（租约面，已登记）、
+  §13⑬（force 删除后残档）同族但**是内容面**；判据 = 迁移进行中执行 purge。是否加
+  守卫（写租约删除时机 / 二次枚举 / rmdir 失败不改判）待裁决。
 - **移动端 Web 访问面（design 17 §18；实现契约见 §18.3–§18.5，门禁见 §18.6）**：
   **复核提出但尚未实施**（待实机证据或设计决策，均已登记 §18.6 门禁）：
   「移动中量化 + 静止吸附精确值」（现 16px 固定量化，实机看抖动再定）、
@@ -96,6 +141,16 @@
   id、异步内容高度不足会钳到顶）、宽屏触控设备（iPad 横屏 1024px+）的键盘
   补偿（行为层与 CSS 同在 1023px 触屏档，扩展需设计决策）、原生 `title`
   长按气泡不抑制（刻意手势，且部分 title 是截断行的唯一全文入口）。
+  **两处几何残留（2026-12 审查登记，需真机判定）**：① **769–1023px 触屏档第三轨被
+  压 0**——触屏档 `@media (max-width: 1023px) and (pointer: coarse)` 把 grid 钉成
+  `0 minmax(0,1fr) 0` 且 details 落第三轨
+  （`packages/dsh-chamber-client-ui-mobile/src/client/styles.ts:128-144`），但上游的
+  全屏替身只在 `<768px` 成立
+  （`vendor/harness-checkout/packages/client/ui-sidebar-right/src/client/shell/SidebarRight.tsx:364`
+  的 `autoFullscreen = viewportWidth < 768`、`:371` 的 `track = shown && !autoFullscreen`）
+  ⇒ 该档内展开的右栏既占不到全屏也不占轨道宽度；插件头注只声明了 `<768px` 那一半。② **`<768px` 全屏右栏（z-40）
+  盖住 `shell.overlay`（z-20）内的汉堡/抽屉**——已按「官方全屏面拥有屏幕、抽屉让步」
+  登记为有意（`styles.ts:61-69`），但真机上是否读作损坏未判。
   剩余——**实机门禁**（§18.6：真机触控目标比例/抽屉开合/键盘遮挡
   （含新补偿层的 iOS 时序与 Android WebView 盲区、**聚焦缩放后的打字正例**、
   缩放态平移不得引起抖动、捏合缩放负例、提交窗口不闪落、重挂 re-arm、
@@ -104,7 +159,7 @@
   **移动端 git 侧边栏**（桌面链 chamber sidebar + `sidebar.workspace.git`
   座席为桌面专有形态，gateway 链官方 sidebar 无该座席；接入需装配矩阵第二
   客户端例外 + 移动交互设计，列为下一阶段）；DOM 锚点审计剩余（details 打标
-  缺口修复的**接线仅实机可验**、`[class$=_…]` 后缀命名契约测试固定、composer
+  缺口修复的**接线仅实机可验**、composer
   锚点 fixture 化、Android 键盘盲区真机门禁）；P2（PWA 安装 + SW 壳离线，
   per-instance scope，尊重官方「不完整离线」立场）；P3（公网认证流转
   正式化 + Web Push；先行形态 = 内网/可信网络 `--no-auth`/tailscale）。
@@ -130,9 +185,11 @@
     复核否决的替代：**解析 close 帧（opcode 0x8）**——实例侧用
     `socket.terminate()` 不发 close 帧，解析器对目标场景盲；若日志不足，改用
     上游 ping 间隔计数（~15 行，复用 PongScanner）。另注意：桌面渲染器的 idle
-    重连看门狗只按 `transport === 'http'` 过滤（`App.tsx:1422`），**gateway
-    目标也吃 ~2min 一次的连接 bounce**——「桌面也发生」若指桌面 chamber App，
-    此即现成解释。
+    重连看门狗只按 transport 过滤（`packages/renderer/src/App.tsx:1459` 注释、
+    `:1482` 轴说明，判据落 `:1502` 调 `reconnectStalenessMsForTransport`，
+    阈值表 `aggregate-refresh.ts:119-123`：http 120s / ssh 300s / local 与未知
+    跳过），**gateway 目标（dsh 与 gateway 两种 kind 同为 direct-http）也吃
+    ~2min 一次的连接 bounce**——「桌面也发生」若指桌面 chamber App，此即现成解释。
 - **Windows 首版（design 23）**：剩余全为**外部门禁**，台账见 `docs/progress/todo/windows-v1.md`  （已剪为剩余项清单；windows-baseline.md 首跑数据待填）：真实 Windows runner
   首跑绿（test-windows 腿，含 submodule 物化 + junction 建链）；M0.5 上游 dsh
   win32/NSIS protocols/Defender/原生依赖实证；M2a runner 事务矩阵；**M2b UI 翻转
@@ -195,8 +252,10 @@
   （`clientGraph/graph` − `CHAMBER_COVERED_IDS`，经页面级 union 模块表装载，与 boot
   同一 kernel）。剩余与有意偏差：
   - **T2（真实 WS remote）未接线**：child ctx 的 `remote` 仍是手工 unary 面 +
-    `$on` no-op；依赖宿主事件推送的插件由其订阅被记录并**如实报告**「不会自动刷新」
-    （`CAPABILITY_REMOTE_EVENTS`）。全量接线需在 child ctx 内挂载官方 connection /
+    `$on` no-op；三种能力面（`$on` 订阅 / `$mount` / `$stream`）由 stub 按调用者归属
+    记录并在「插件设置」诊断页**如实逐条报告**（`CAPABILITY_REMOTE_EVENTS` /
+    `CAPABILITY_REMOTE_MOUNT` / `CAPABILITY_REMOTE_STREAM`，`$mount`/`$stream` 为具名
+    抛出占位——`$dispatch` 已删，官方 remote 从无该成员）。全量接线需在 child ctx 内挂载官方 connection /
     api-gateway / api-remotes（第二条 WS/来源 + 生命周期 fencing），且失败模式从
     「面板降级」变成「基础链 5s 门失败 → 整个面板失败」——故按需推进，触发条件与
     取舍见 design 09 §4 与 T3 提案；未接线期间不得声称保真等价。
@@ -208,10 +267,20 @@
     重新 `settings.describe`）。影响面**含官方分节**（不只是第三方插件）：别处
     （另一窗口 / CLI / gateway 其他用户 / 该实例自身前端）的改动在面板内不可见。
     这是**预先存在**的降级（旧 stub 同为 no-op），非本次引入。
-    ② **11 个 Remote 命名空间缺席**（官方客户端挂 14 份生成 Remote / 17 个命名空间：
+    ② **13 个 Remote 命名空间缺席**（官方客户端挂 15 份生成 Remote / 19 个命名空间：
     `workspace`/`commands`/`goals`/`skills`/`subagents`/`fileUploads`/`fileReferences`/
-    `directoryPicker`/`dynamicCordisRunner`/`messageFeedback`/`sessionReferenceResolver`
-    等），child ctx 只有 6 个且 `session`/`pluginInventory` 为子集 → inject 缺失可**事前**
+    `directoryPicker`/`dynamicCordisRunner`/`messageFeedback`/`sessionReferenceResolver`/
+    `sessionFeedback`/`workspaceFiles`——前 15 份贡献见
+    `vendor/harness-checkout/packages/api/remotes/src/client/index.ts:150-159` 与本地锁步表
+    `packages/renderer/scripts/typert-remote-contract.mjs:21-37`；19 = 这 15 个包内带
+    `@Remote` 的 `TypertRemoteService` 子类总数（三份贡献各带多个命名空间：
+    `api/session-controller` 3 个 = `session`/`fileReferences`/`skills`、
+    `api/settings-controller` 2 个 = `settings`/`credentials`、
+    `api/workspace-controller` 2 个 = `workspace`/`directoryPicker`）），
+    child ctx 只有 6 个（`packages/dsh-chamber-client-ui-settings-bridge/src/client/bridge-context.ts`
+    的 `remoteFaces()` 与其后的 `ctx.provide('remote.*')` 六项：`settings`/
+    `credentials`/`llm`/`agentPresets`/`session`/`pluginInventory`）且
+    `session`/`pluginInventory` 为子集 → inject 缺失可**事前**
     报告（fiber PENDING + 缺失服务名），不 inject 直接调用则**调用时**失败（contained +
     渲染崩溃报告）。
     ③ **`connection` 是假面**：无 `state` 可观察量、`rpc` 为空对象、`start()` 为 no-op、
@@ -244,6 +313,37 @@
     descriptor 上线通道见 `docs/progress/todo/settings-surface-upstream-contributions.md`。
 - 私有文件纪律三实现（cp `private-file.ts` 抛错式 vs dsh-runtime `private-fs.ts` kind
   结果式，同名异签）——统一需依赖方向裁定（design 18 §9.1）。
+- **`install-gateway.sh` 的 dsh 锚走 npm 安装（design 18 §4 单一来源的域外点，2026-12
+  登记）**：`scripts/install-gateway.sh:1180`（升级路径另见 `:1271`）以
+  `npm install --prefix <anchor_dir> @deepseek-ai/dsh@<version>` 安装内建锚——npm 没有
+  pnpm 11 的 `strictDepBuilds`，故**不经过** `packages/dsh-runtime/src/allow-builds.mjs`
+  的单源裁决（另两个同源生成点：`packages/dsh-runtime/src/runtime-installer.ts:1129` 与
+  `packages/desktop/scripts/bundle-dsh.mjs:128` 都经 `renderAllowBuildsBlock()`）。触发
+  条件：该脚本安装到带安装期脚本的新依赖时，放行/否认集在此路径上不可见；一致性靠
+  `dsh-upgrade-checklist.md` 的人工复核条，无机械锁步。
+- **`client-web` fork 的未使用依赖 `@deepseek-ai/dsh-client-ui-theme`（待锁文件窗口，
+  2026-12 登记）**：`packages/dsh-client-web/package.json:29` 仍声明该 workspace 依赖，
+  但 fork 的 `src/` 对它的引用已全部退役（token 表改由 `packages/renderer/src/styles.css`
+  引入，见 CHANGELOG「五份 ui-theme token 表」条）。**不能只删 package.json 一行**：
+  锁文件 importer（`pnpm-lock.yaml:452` 起的 `packages/dsh-client-web` 段含该
+  `link:` 条目，`:466-468`）不匹配会让 frozen 安装失败 ⇒ 删除必须与锁文件重生成同批。
+- **layout fork 的共享 `ThemePresenter` 永不回收（登记残留，2026-12）**：
+  `packages/dsh-chamber-client-ui-layout/src/client/index.ts:52-56` 用模块级单例
+  `documentThemePresenter ??= new ThemePresenter()`，实例 teardown 不 dispose——有意
+  （vendor `dispose()` 会无条件收回全部文档级写入并抹掉活动视图的调色板，见
+  `document-theme.ts:5-9`）。残留事实：最后一个壳卸载后文档仍留 `html{color-scheme}`、
+  `body[data-ds-dark-theme]` token 与 theme-color meta（正是「投影属于下一个活动视图」
+  的代价）。
+- **`sidebar.workspaces` 声明但壳从不渲染（2026-12 审查登记）**：
+  `packages/dsh-chamber-client-ui-sidebar/src/client/contract/slots.ts:44-49` 声明该座、
+  `src/client/index.ts` 的 `ctx.slots.register` 子键表里 claim（`:50-52` 注明保留声明
+  只是为了 ui-workspace 的注册不失败），但 `SidebarRoot.tsx` 只渲染
+  `sidebar.brand.mark/brand.name/panellist/footer.action/settings` 与 `sidebar.workspace.git`
+  （`:291`/`:1371`/`:1377`/`:1393`/`:1491`/`:1494`，workspace-git 见 `:321`），
+  浏览区由自有多来源列表取代官方 occupant（`:1434-1436` 注释）。触发条件：任何第三方
+  插件往该座注册——注册**成功且无报告**，页面上永不出现（与设置面「壳不渲染的座位
+  必须报告」的纪律相反）。待裁决：撤掉该声明（改为不 claim，让注册响亮失败）或在
+  诊断面报告该座的注册者；两条都需要 slot 语义裁定。
 - wire 载体（A–F）登记维持：P4-3 A↔C 传输层合并**裁定不合并**（前置 ①–⑦，任一项
   未决前不动 A/C 传输面）；E（git-api）禁改（见 `wire-common.ts` 注，P4-1/2/3/N6）。
 - sanitize 语义矩阵（core/desktop/gateway/installer 四成员）与 win-probes↔
@@ -251,7 +351,12 @@
 - dashboard（gateway 浏览器运维页）仍为独立第三份运行时 UI，不共享 sidebar 的
   parse/poll 核心（D-2，共享核心迁移列后续）。
 - C-F7 undo 语义不对称：ssh「撤销=恢复」vs gateway v1 undoForLatest（仅最新 ok
-  install→remove）；服务端 preImage 备份无运行时恢复消费方（design 21 §6.8 r2–r4 二期）。
+  install→remove，`dsh-chamber-client-ui-settings-connections/src/client/plugin-model.ts:488-499`
+  的 `undoForLatest`）；服务端 `preImage` 备份只被保留与引用计数回收
+  （`packages/gateway/src/plugins-journal.ts:13-22`、`:241-247`），**没有任何运行时
+  恢复消费方**——r2 的 preImage 回滚与 r4 的操作员子命令都是 **design 21 §6.8 r2/r4
+  二期，未实现**（§6.8 r2 与 §7 的措辞已对齐：兜底是 operator runbook，恢复路由
+  默认二期）。
 - C-F8 `GET /chamber/plugins/installed` 裸读未入写栅栏（撕裂读仅 loud 500）。
 - C-F12 desktop 本地 plugin add 子进程 env 未 scrub（gateway executor 与共享 runtime
   installer 已白名单化）。
@@ -259,8 +364,13 @@
 - A-U3 desktop `SETTINGS_SET` 无 busy/pending/env 门（env 维度放行为有意；busy/pending
   维度对称性待决策）；A-F16 `DSH_HOME` 布局默认偏 desktop（共享推导点防误读登记）。
 - dual-host 语义下沉延后：activation-facts/startup-verdict 映射、restart 拒绝织、
-  apply-now 门（整门合并不做，见下取舍）、identity-probe 腿——4 个分歧位以 ruling
-  注释登记在代码面，统一需新 dsh-runtime 公开导出（dist 锁）或行为裁定。
+  apply-now 门（整门合并不做，见下取舍）、identity-probe 腿——其中**只有 3 处以
+  ruling 注释登记在代码面**（activation-facts 孪生对
+  `packages/desktop/main.ts` 的 `readActivationFacts()`「ACTIVATION-FACTS DIVERGENCE」
+  注（`:4360`）+ `packages/gateway/src/runtime-manager.ts:950`，
+  identity-leg `packages/dsh-runtime/src/runtime-probes.ts:390`），restart 拒绝织与
+  apply-now 门无代码注记（后者取舍只在本文档下条）；统一需新 dsh-runtime 公开导出
+  （dist 锁）或行为裁定。
 - 0.2.2 审查跟进残留（低优 UX）：会话行动作仍 hover-only（键盘/触屏无揭示路径）；
   仓库组折叠 × 会话待办条带张力（确认产品意图后过滤或文档化）；chamber 表最坏徽标
   组合窄窗可能横向撑破（实机目检后定）；en 单数文案、行移除 aria-label 覆盖可见
@@ -318,6 +428,17 @@
 
 ## 范围决策与必要取舍（不做 / 推迟 / 移出 / 偏差）
 
+- **git 客户端与宿主的错误码重叠是「有意的显式例外」（design 08，2026-12 登记）**：
+  `path-unavailable` / `workspace-path-unavailable` 同时是宿主可重试码与客户端确定性
+  拒绝码——客户端把它们从宿主 `RETRYABLE_CODES`
+  （`packages/dsh-chamber-seed-git-worktree/src/core.ts:392,400`）提升为确定性
+  （`packages/dsh-chamber-client-ui-git/src/shared/git-api.ts:95-98` 的
+  `DETERMINISTIC_HOST_RETRYABLE_OVERRIDES`，理由见 `:79-94`）：两者都出自宿主
+  `existingPath` 探针，重放只会再跑同一失败探针并把有行动价值的拒绝换成永远重放的
+  恢复项。宿主保留可重试是**因为同一码也会在已提交删除之后的
+  `reconcileBoundRemove` 里出现**（`core.ts:2504-2595`）。该重叠由
+  `packages/dsh-chamber-client-ui-git/test/host-client-lockstep.test.ts:286-296` 显式
+  钉死（未登记的漂移即红）⇒ 属性是**取舍**，不是缺陷。
 - **移出项（P3 硬纪律）**：匿名 control-plane 的认证/审计、薄壳聊天/会话列表/审批
   弹窗、控制面会话 runtime/统一索引、连接 broker/绑定、walkthrough、通知中心/历史、
   MCP、文件夹/笔记、web 预览、目标/终端等不得回流。设计 17 的独立 Gateway 认证/
@@ -520,6 +641,18 @@
     激活/身份探针（runtime-probes 以伪 session 直连宿主期待同步
     `session/not-found` 信封）须平行迁移（探针走直连端口不经代理、与豁免窗口
     无交集）。
+- **代理 300MiB 响应体上限 ⇒ 大会话导出为已知降级（2026-12 登记）**：控制面非 SSE
+  响应体上限 `MAX_RESPONSE_BODY_BYTES = 300 * 1024 * 1024`
+  （`packages/control-plane/src/proxy-forward.ts:50`，与上游 0.1.2 线 300MiB 请求上限
+  同口径）；声明长度超限在 `:877-884` 直接 413 `body_too_large`，流式超限在
+  `:951-960` 销毁 upstream 并按 headers 是否已发决定 413 或断链。上游
+  `session-log-export` 的 `/api/session.export` 返回**完整 ZIP 流**
+  （`vendor/harness-checkout/packages/session-query/session-log-export/src/index.ts:42`
+  路径常量、`:150-166` 响应构造），chamber 已把它补丁到本实例前缀（CHANGELOG
+  D3 五处之一）故用户在 UI 上可直接触发。触发条件：单会话响应体（DEFLATE 后 ZIP，
+  `descendants=true` 时含全部 subagent 代际）> 300MiB ⇒ 下载中断/413，无分片逃生口。
+  不修：抬高上限同时抬内存与带宽预算（同文件 `MAX_BUFFERED_REQUEST_BYTES` 口径），
+  上游改分片/可恢复下载后才消除。
 - **平台词偏差 C3（2026-09 性能审计，已登记 dsh-client-web platform.ts /
   seed.ts / renderer chamber-entry.ts / shell.ts 注释）**：上游 `PLATFORM_MODULES`
   仍列 `@deepseek-ai/dsh-client-ui-primitives`，chamber 自建平台集不再 seed 该词
@@ -530,7 +663,9 @@
   bundle 的 primitives require 由该工厂回答；残余窄竞态 = shell 侧 chamber
   prefetch 失败后 create 期并发 materialize（extra loud 降级、重试自愈，
   见 chamber-entry 头注）——非静默。实测（build 产物快照 2026-09，终版 dist
-  见 perf-sizes.json 与 performance-baseline.md 字节快照节）：主图
+  见 `packages/desktop/dist/web/perf-sizes.json`（`build:renderer` 产物，被下次
+  build 覆写；读取方 `packages/renderer/scripts/check-chunk-budgets.mjs:36`）与
+  performance-baseline.md 字节快照节）：主图
   1,403,568 → 1,185,439 raw（−218KB / −77KB gzip），chamber 入口净 +217KB
   → C4 后再 −176KB（分步再着色）；vendor 栈仍经内核 onboarding 静态链留在
   主图（部分收益，剩余面待内核懒化）。
