@@ -19,6 +19,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { stripComments } from './source-text.ts'
 
 const read = (rel: string): string =>
   readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8')
@@ -120,5 +121,56 @@ test('the echo TTL ticks on every clock the App owns (create, push, fallback pul
     app,
     /\}, \[clearAggregateRetry, refreshHealth, sweepWorkspaceEcho\]\)/,
     'the pull path must depend on the sweep helper it calls',
+  )
+})
+
+test('the echo’s withdraw/rewrite facts (removed / renamed) are fenced and go through the same ledger path', () => {
+  // 2026-09-11 review S3 + F4: a create-only echo has no exit. A row the user
+  // deletes right after creating it stays a GHOST — the authoritative push only
+  // retires entries it LISTS, so a workspace it cannot show until the 10-min TTL
+  // is unreachable — and a rename looks like a no-op (the ledger derives the
+  // title from the path). These two subscriptions are the fix; every link is a
+  // silent no-op when it goes missing, so each one is pinned. Comments are
+  // stripped before matching: the invariants are described in the prose right
+  // above the code, so a raw-text lock could be satisfied by a comment
+  // (panel-wiring.test.ts precedent).
+  const code = stripComments(read('../src/App.tsx'))
+  const handlers = new Map<string, string>()
+  for (const name of ['onWorkspaceRemoved', 'onWorkspaceRenamed']) {
+    const at = code.indexOf(`return chamberBridge.${name}((fact) => {`)
+    assert.notEqual(at, -1, `${name} must stay subscribed (the sidebar publishes it; nobody else owns the ledger)`)
+    // The subscription must be RETURNED: the effect's cleanup is the bridge's
+    // own unsubscribe, so an unmounted App cannot keep writing the ledger.
+    const end = code.indexOf('}, [updateWorkspaceEcho])', at)
+    assert.notEqual(end, -1, `${name} must keep the create fact's effect shape (unsubscribe returned, ledger dep)`)
+    handlers.set(name, code.slice(at, end))
+  }
+  for (const [name, body] of handlers) {
+    assert.match(
+      body,
+      /if \(sourceId !== LOCAL_INSTANCE_ID && !liveServerIdsRef\.current\.has\(sourceId\)\) return/,
+      `${name} must drop a source that left the registry (same fence as onWorkspaceCreated)`,
+    )
+    assert.match(
+      body,
+      /const owner = sourceLifecyclesRef\.current!\.capture\(sourceId\)/,
+      `${name} must capture the source lifecycle — a stale fact must not enter a new incarnation's ledger`,
+    )
+    assert.match(body, /if \(owner === null\) return/, `${name} must not write the ledger without an owner`)
+    assert.match(
+      body,
+      /if \((?:next|ledger) !== workspaceEchoRef\.current\) updateWorkspaceEcho\((?:next|ledger)\)/,
+      `${name} must write through the identity-preserving updateWorkspaceEcho path (the App stays the only owner)`,
+    )
+  }
+  assert.match(
+    handlers.get('onWorkspaceRemoved')!,
+    /let ledger = sweepPendingWorkspaces\(workspaceEchoRef\.current, Date\.now\(\)\)\s*ledger = removePendingWorkspace\(ledger, sourceId, \{ workspaceId: fact\.workspaceId, path: fact\.path \}\)/,
+    'a removal sweeps (it changes what the list SHOULD contain) and drops the pending row by host id AND path (the id may never have been recorded)',
+  )
+  assert.match(
+    handlers.get('onWorkspaceRenamed')!,
+    /renamePendingWorkspace\(\s*workspaceEchoRef\.current,\s*sourceId,\s*fact\.workspaceId,\s*fact\.title,\s*\)/,
+    'a rename must rewrite the pending row’s title instead of leaving the path-derived one',
   )
 })

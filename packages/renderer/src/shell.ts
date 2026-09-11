@@ -330,11 +330,40 @@ const pendingOpens = new PendingOpenQueue(QUEUED_OPEN_TIMEOUT_MS)
  * this map is the renderer-side record of the per-source request stream — the
  * dispatcher drops requests it has already superseded (see dispatchOpen). It
  * deliberately survives the settle of the request that set it: a stale request
- * may reach its dispatch only after the newer one finished. Cleared when the
- * source's shell is torn down (a same-id re-add is a new generation whose
- * requests must not be judged against the previous incarnation's).
+ * may reach its dispatch only after the newer one finished.
+ *
+ * Cleared by {@link disposeInstanceShell} and {@link disposeAllShells} — the
+ * paths that retire a source's shell — so a same-id re-add is a new generation
+ * whose first open is not judged against the previous incarnation's request.
+ *
+ * The boot-failure / replacement paths deliberately do NOT clear it
+ * (2026-09-11 review F5, doc narrowed to what the code does): the displaced
+ * holder, the "boot failed after registration" teardown and the
+ * pre-registration failure branches reject that instance's QUEUED opens but
+ * leave this record. That is inert, because a dispatch is always preceded by
+ * the write of its OWN request ({@link openInstanceSession} writes before it
+ * dispatches or enqueues), so the record can differ from the request being
+ * dispatched only when a NEWER request has since been recorded — which is
+ * exactly the supersession this map exists to express. The doc used to claim
+ * the record is cleared "when the source's shell is torn down", which those
+ * paths made untrue.
  */
 const lastRequestedSession = new Map<string, string>()
+
+/**
+ * Test-only seam: read one source's supersede record ({@link lastRequestedSession}).
+ *
+ * Why the record needs a seam at all (2026-09-11 review F4(b)): its retirement
+ * is NOT observable through the public surface. Every dispatch is preceded by
+ * the write of its own request, so a re-added source's first open overwrites the
+ * leftover record before anything can compare it — a purely behavioral test of
+ * "the re-added source still opens" passes even with the retirement removed
+ * (mutation-verified). Asserting the record itself is the only way to pin the
+ * invariant the map's doc states.
+ */
+export function __testLastRequestedSession(instanceId: string): string | undefined {
+  return lastRequestedSession.get(instanceId)
+}
 
 export function shellStateIdle(instanceId: string, basePath: string): ShellState {
   return { instanceId, basePath, booted: false, booting: false, error: null, degraded: null }
@@ -891,8 +920,10 @@ function dispatchOpen(
         return
       }
       // 2026-12（design 05 §2.2 修订）——被取代的请求不得再开：同一来源的 open
-      // 请求是"最后意图胜出"流（每次用户点击、通知、深链都经 openInstanceSession
-      // 登记），而官方 `sessions.open` 就是一次普通 select，一个用户已经离开的旧
+      // 请求是"最后意图胜出"流（登记入口是 App.openSession 的两个调用点：侧栏
+      // `chamberBridge.onOpenSession` 订阅与通知 runner——2026-09-11 review F5 更正：
+      // 深链不经本函数，它只激活视图，settlePendingDeepLinkActivation → selectView），
+      // 而官方 `sessions.open` 就是一次普通 select，一个用户已经离开的旧
       // 请求会把壳**翻回**旧会话：连点两个会话时可见 X→Y→X/Y 抖动，而 boot 期早开臂
       // 让"最新意图"在 boot 期间就已打开，settle 时的 FIFO flush 会先开旧的那个。
       // 静默 resolve：被放弃的请求不是失败，失败面与行内错误归最新那次请求。

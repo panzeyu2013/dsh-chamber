@@ -49,6 +49,9 @@ import {
   recordPendingWorkspace,
   releaseInstanceClient,
   releaseOpenIntent,
+  // 2026-09-11 review S3: the withdraw/rewrite half of the workspace echo.
+  removePendingWorkspace,
+  renamePendingWorkspace,
   reconcileCompletedFacts,
   runtimeReportSignature,
   serversProjectionSignature,
@@ -2660,9 +2663,22 @@ export default function App() {
     if (instanceId !== LOCAL_INSTANCE_ID && !liveServerIdsRef.current.has(instanceId)) {
       throw new Error(`打开会话失败：来源 ${instanceId} 已不在注册表`)
     }
-    armOpenIntent(instanceId, sessionId)
-    selectView(instanceId)
+    // INVARIANT (2026-09-11 review F1): arm and release are ONE pair owned by
+    // this try/finally, and the arm is the FIRST statement inside the `try` —
+    // nothing may ever be inserted between them. `selectView` can throw
+    // synchronously (view-transition plumbing), so an arm placed before the
+    // `try` latches the intent for the whole generation: the source's projected
+    // `current` stays suppressed and, once the shell settles elsewhere, the
+    // loading veil is pinned forever (the finally that would release is the one
+    // statement the throw skips).
+    // Arming stays BEFORE selectView (the gates must be active the moment the
+    // view switches, or the target shell's self-selected blank session is
+    // projected for a frame). A synchronous throw from the switch now also
+    // reports through the wrapped open-failure text below — accurate, the user's
+    // session open is what failed.
     try {
+      armOpenIntent(instanceId, sessionId)
+      selectView(instanceId)
       await openInstanceSession(instanceId, sessionId)
     } catch (err) {
       throw new Error(`打开会话失败：${errorMessage(err)}`)
@@ -2956,6 +2972,49 @@ export default function App() {
       let ledger = sweepPendingWorkspaces(workspaceEchoRef.current, now)
       ledger = recordPendingWorkspace(ledger, sourceId, { workspaceId: fact.workspaceId, path: fact.path }, now)
       if (ledger !== workspaceEchoRef.current) updateWorkspaceEcho(ledger)
+    })
+  }, [updateWorkspaceEcho])
+  /**
+   * 回声的**撤下 / 改写**通道（2026-12，design 05 §2.2 修订；2026-09-11 review S3）：
+   * 只有 create 事实的回声没有退场机制——创建后又在侧栏删掉会留一行幽灵，且
+   * **权威挂载 push 也退不掉它**（push 只调和"它列出了什么"，列不出的行无事发生，
+   * 幽灵要挂到 10 分钟 TTL；而那一行带真实 host id，工作区级动作在宿主上
+   * fail-closed `workspace/not-found`），
+   * 重命名则因为账本只按路径生成 title 而看起来像没生效。两条通道都是单向事实，
+   * 与 onWorkspaceCreated 同栅栏（活跃来源 + 生命周期捕获），并且经**同一个**
+   * updateWorkspaceEcho 写入：App 仍是投影的唯一写者，账本之外没有第二份状态。
+   * 纯账本改写（removePendingWorkspace / renamePendingWorkspace）保持同一性——
+   * 无匹配条目时返回同一引用，不触发重渲染。
+   */
+  useEffect(() => {
+    return chamberBridge.onWorkspaceRemoved((fact) => {
+      const { sourceId } = fact
+      if (sourceId !== LOCAL_INSTANCE_ID && !liveServerIdsRef.current.has(sourceId)) return
+      const owner = sourceLifecyclesRef.current!.capture(sourceId)
+      if (owner === null) return
+      // The removal is another tick that can change what that source's list
+      // SHOULD contain, so it carries the same TTL sweep as the create fact
+      // (whose doc enumerates these ticks): the retired entry itself is dropped
+      // eagerly by removePendingWorkspace, the sweep covers the entries whose
+      // convergence never came. Identity-preserving, so a no-op costs no render.
+      let ledger = sweepPendingWorkspaces(workspaceEchoRef.current, Date.now())
+      ledger = removePendingWorkspace(ledger, sourceId, { workspaceId: fact.workspaceId, path: fact.path })
+      if (ledger !== workspaceEchoRef.current) updateWorkspaceEcho(ledger)
+    })
+  }, [updateWorkspaceEcho])
+  useEffect(() => {
+    return chamberBridge.onWorkspaceRenamed((fact) => {
+      const { sourceId } = fact
+      if (sourceId !== LOCAL_INSTANCE_ID && !liveServerIdsRef.current.has(sourceId)) return
+      const owner = sourceLifecyclesRef.current!.capture(sourceId)
+      if (owner === null) return
+      const next = renamePendingWorkspace(
+        workspaceEchoRef.current,
+        sourceId,
+        fact.workspaceId,
+        fact.title,
+      )
+      if (next !== workspaceEchoRef.current) updateWorkspaceEcho(next)
     })
   }, [updateWorkspaceEcho])
   /**
@@ -3409,6 +3468,23 @@ const HEALTH_ERROR_GRACE_MS = 10_000
           const sourceFingerprint = sourceLifecyclesRef.current!.capture(viewId)?.fingerprint
           const transport = servers.find(server => server.id === viewId)?.transport
           if (sourceFingerprint === undefined || transport === undefined) return null
+          /**
+           * 2026-09-11 review S1: the "nothing legitimate on screen" input of the
+           * reveal gate. Read from data this view ALREADY has — the RAW runtime
+           * current (never the gated projection, which the veil itself hides) and
+           * the source's own aggregate, whose session rows carry the runtime's
+           * `blank` flag (`InstanceAggregate.sessions`, projected by
+           * projectInstanceSnapshot). No extra fetch: the mounted ctx pushes that
+           * snapshot, and the unary fallback fills it for unmounted sources.
+           * UNKNOWN ⇒ true on purpose: a session the aggregate does not list yet
+           * (cold boot, the push has not landed) must keep the veil, which is the
+           * pre-fix cold-boot behaviour. Only a KNOWN non-blank current session
+           * makes this false — the warm-shell case the veil used to cover for up
+           * to the whole 8s open budget.
+           */
+          const currentSessionId = runtimeFacts[viewId]?.current
+          const blankCurrent = currentSessionId === undefined
+            || (aggregates[viewId]?.sessions.find(session => session.sessionId === currentSessionId)?.blank ?? true)
           return (
             <InstanceView
               key={viewId}
@@ -3425,10 +3501,11 @@ const HEALTH_ERROR_GRACE_MS = 10_000
               // chamber (2026-12, design 05 §2.2 revision): the reveal gate. The
               // boot window is covered by the view's own `!settled` veil; this
               // boolean extends the hold past a clean settle for exactly as long
-              // as the shell would NOT show the requested session. Both inputs
-              // live in the App: the shell's settled/failed mirror and the RAW
+              // as the shell would NOT show the requested session. Every input
+              // lives in the App: the shell's settled/failed mirror, the RAW
               // runtime current (never the gated projection value — the gate
-              // exists to hide that very value).
+              // exists to hide that very value) and that view's own blank flag
+              // (blankCurrent, below).
               //
               // Deliberately NOT "any pending open": a view that already shows
               // the requested session (idempotent re-open, or the boot-ctx
@@ -3436,9 +3513,16 @@ const HEALTH_ERROR_GRACE_MS = 10_000
               // must not veil at all, and a warm visible shell that is switching
               // between two REAL sessions resolves synchronously — holding a veil
               // there would hide a working UI for no reason.
+              //
+              // 2026-09-11 review S1: "shows nothing legitimate" is a REQUIRED
+              // input of the shared rule (blankCurrent) — the hold is
+              // `pendingIntent && !failed && !showsRequestedSession &&
+              // blankCurrent`, i.e. the veil covers only a blank (cold "新会话")
+              // or unknown current session, never a warm shell showing a real one.
               holdVeil={shouldHoldViewVeil({
                 failed: (shellStates[viewId]?.error ?? null) !== null,
                 pendingIntent: openIntents[viewId] !== undefined,
+                blankCurrent,
                 // `openIntents[viewId] !== undefined` is spelled out here on
                 // purpose: without it, "no current AND no intent" would read as
                 // "already showing the requested session" (undefined ===

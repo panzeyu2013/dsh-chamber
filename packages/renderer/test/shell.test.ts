@@ -1417,3 +1417,100 @@ test('openInstanceSession: a request superseded by a newer one on the same sourc
     restoreWindow()
   }
 })
+
+test('openInstanceSession: the supersede record is PER SOURCE — an open on another source never swallows this one', async (t) => {
+  // 2026-09-11 review F4(a): the supersede rule is "last intent wins WITHIN one
+  // source" (design 05 §2.2 revision). A single page-wide "last requested
+  // session" would make two different servers interfere: clicking a session on B
+  // while A's cold-boot open is still queued would drop A's request silently at
+  // its flush (no error, no row report — the user's click just does nothing).
+  // Both requests are queued BEFORE either source boots, so the flush order is
+  // the only thing the dispatcher sees and the cross-source mistake is visible.
+  const sourceA = 'ssh-test-supersede-per-source-a'
+  const sourceB = 'ssh-test-supersede-per-source-b'
+  const restoreFetch = stubReadyGraph()
+  const restoreWindow = stubWindow()
+  __testResetLifecycle()
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
+  try {
+    const openA = openInstanceSession(sourceA, 'session-AX')
+    const openB = openInstanceSession(sourceB, 'session-BY')
+    const stateA = await bootInstanceShell(sourceA, `/api/i/${sourceA}`, {} as HTMLElement, () => {})
+    const stateB = await bootInstanceShell(sourceB, `/api/i/${sourceB}`, {} as HTMLElement, () => {})
+    assert.equal(stateA.booted, true)
+    assert.equal(stateB.booted, true)
+    await Promise.all([openA, openB])
+    t.mock.timers.tick(1_000)
+    assert.deepEqual(
+      __testOpenedSessions(),
+      [
+        { label: 'entry-1', sessionId: 'session-AX' },
+        { label: 'entry-2', sessionId: 'session-BY' },
+      ],
+      'each source must open its OWN requested session; a shared record would drop A as "superseded" by B',
+    )
+  } finally {
+    disposeInstanceShell(sourceA)
+    disposeInstanceShell(sourceB)
+    __testResetLifecycle()
+    t.mock.timers.reset()
+    restoreFetch()
+    restoreWindow()
+  }
+})
+
+test('openInstanceSession: the request record is dropped for a same-id re-add — the new incarnation is never judged superseded', async (t) => {
+  // 2026-09-11 review F4(b): this is the invariant disposeInstanceShell's own
+  // comment states ("a same-id re-add is a new generation, and its first open
+  // must not be judged as superseded by the previous incarnation's last
+  // request").
+  //
+  // The record is asserted DIRECTLY (`__testLastRequestedSession`), because the
+  // behavior alone cannot see it: every dispatch follows the write of its own
+  // request, so the re-added source's first open overwrites the leftover record
+  // before the supersede check can compare it. A behavioral-only version of this
+  // test passes with the retirement deleted (mutation-verified 2026-09-11) — it
+  // would be a lock that proves nothing. The user-visible half (the re-added
+  // source's first open still reaches the runtime) is asserted too.
+  const instanceId = 'ssh-test-supersede-readd'
+  const restoreFetch = stubReadyGraph()
+  const restoreWindow = stubWindow()
+  __testResetLifecycle()
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
+  try {
+    const first = await bootInstanceShell(instanceId, `/api/i/${instanceId}`, {} as HTMLElement, () => {})
+    assert.equal(first.booted, true)
+    await openInstanceSession(instanceId, 'session-X')
+    assert.equal(
+      shellModule.__testLastRequestedSession(instanceId),
+      'session-X',
+      'a live shell records the session it was asked to open',
+    )
+    assert.deepEqual(__testOpenedSessions(), [{ label: 'entry-1', sessionId: 'session-X' }])
+
+    // The source leaves the registry and comes back under the SAME id.
+    disposeInstanceShell(instanceId)
+    assert.equal(
+      shellModule.__testLastRequestedSession(instanceId),
+      undefined,
+      'the record retires with the source — the new incarnation must not inherit the old request',
+    )
+    const second = await bootInstanceShell(instanceId, `/api/i/${instanceId}`, {} as HTMLElement, () => {})
+    assert.equal(second.booted, true)
+    await openInstanceSession(instanceId, 'session-Y')
+    assert.deepEqual(
+      __testOpenedSessions(),
+      [
+        { label: 'entry-1', sessionId: 'session-X' },
+        { label: 'entry-2', sessionId: 'session-Y' },
+      ],
+      'the re-added source’s first open must reach the runtime, never be judged against the previous incarnation',
+    )
+  } finally {
+    disposeInstanceShell(instanceId)
+    __testResetLifecycle()
+    t.mock.timers.reset()
+    restoreFetch()
+    restoreWindow()
+  }
+})
