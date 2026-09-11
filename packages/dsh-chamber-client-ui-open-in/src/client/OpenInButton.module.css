@@ -4,15 +4,18 @@
    right-aligned utilities row (beside the vendor "Session log" pill) — no
    absolute positioning: the header's own flow layout orders it and no
    frame-level anchor can collide with the header content. The pill carries the
-   header row's own vocabulary — 32px row height, a 0.5px
+   chamber pill vocabulary — 32px row height, a 0.5px
    --dsw-alias-border-l2 hairline, 18px radius, transparent base, hover tint,
    focus ring — so the two adjacent controls read as one row of matching
-   pills. (The values are the header row's, NOT a copy of the pinned vendor
-   session-log button: session-log-export/HeaderAction.module.css is a 28px
-   circle with `border: none` and a 28px radius, and the official
-   ui-open-in-app action is a 28px / r14 / border-l4 split button. This pill
-   predates both; aligning it to either is a design decision, not a defect
-   fix.) */
+   pills. (Measured against the pinned vendor: the official header control row
+   is 28px — ui-open-in-app/OpenInAppAction.module.css "matches the header's
+   28px control row", session-log-export/HeaderAction.module.css "28px round
+   header icon button", ui-conversation/ConversationRoot.module.css
+   `.titleRow{min-height:30px}`. This pill is therefore 4px TALLER than the
+   pinned row it sits in; that is a pre-existing chamber design choice, not a
+   copy of either neighbour and not a defect fix. 2026-09-11 review-fix: the
+   earlier wording claimed these values were "the header row's own", which the
+   vendor sources above contradict.) */
 
 /* The two-button group (main icon button + chevron) reads as one control. */
 .group {
@@ -28,13 +31,14 @@
   width: 32px;
   height: 32px;
   padding: 0;
-  /* The HEADER ROW's own vocabulary (32px row, 0.5px --dsw-alias-border-l2
-     hairline, r18, transparent base) — see this module's header: the values are
-     the row's, NOT a copy of the pinned vendor session-log button (28px circle /
-     border none) nor of the official ui-open-in-app action (28px / r14 /
-     border-l4). The hairline keeps the icon button visible on the white header
-     exactly like its native neighbour. (2026-09-11 upstream-alignment: the old
-     "reused verbatim" wording contradicted that header.) */
+  /* The chamber pill vocabulary (32px, 0.5px --dsw-alias-border-l2 hairline,
+     r18, transparent base) — see this module's header: the values are NOT the
+     pinned vendor's (28px control row; session-log's 28px circle with
+     `border: none`; the official ui-open-in-app action's 28px / r14 /
+     border-l4), they are 4px taller by design. The hairline keeps the icon
+     button visible on the white header exactly like its neighbour.
+     (2026-09-11 review-fix: both this rule and the header now state the
+     measured facts instead of contradicting each other.) */
   border: 0.5px solid var(--dsw-alias-border-l2);
   border-radius: 18px;
   background: transparent;

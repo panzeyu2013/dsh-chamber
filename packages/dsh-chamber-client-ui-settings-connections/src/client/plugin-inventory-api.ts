@@ -18,11 +18,13 @@
  * (`@dsh-chamber/dsh-chamber-client-ui-sidebar/shared`, wire-common.ts) — the SAME
  * source copy the renderer bundles; the envelope/server-response
  * classification ('plugin-inventory:' validation + snapshot ok-value shaping)
- * stays local, while the C≡D wrapWireError fold + 503 instance_unavailable
+ * stays local, while the wrapWireError fold + 503 instance_unavailable
  * classifier come from the shared wire-error module of the same face (a
  * policy-free constructor + predicate — the shared kernel itself still
  * performs no classification, and A/B/F keep their own actions/copies per
- * the wire-common audit).
+ * the wire-common audit; 2026-09-11 review-fix: the audit's carrier C was
+ * deleted with the 2026-12 complete-bridge revision and has no successor, so
+ * the fold is D's copy only — see sidebar shared/wire-common.ts's carrier list).
  * Self-contained on purpose (the package's loose-ambient typecheck pattern):
  * the wire types below are structural mirrors of the vendored
  * `@deepseek-ai/dsh-host-plugin-inventory` types; no dsh package import.
