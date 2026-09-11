@@ -13,8 +13,10 @@
  *
  *  - T2c: unregistered-worktree removal never uses `window.confirm`; the
  *    authorization is an in-app `RiskConfirmation`.
- *  - T14: `RiskConfirmation` gates the dirty/submodule discard, and the status
- *    capsule is the official `Tag` (no hand-rolled capsule palette).
+ *  - T14: `RiskConfirmation` gates the dirty/submodule discard — rendering from
+ *    the gate's HELD kind, never from the derivation the acknowledgement box
+ *    clears (2026-09-11 review-fix, F1/F2) — and the status capsule is the
+ *    official `Tag` (no hand-rolled capsule palette).
  *  - T3: the sidebar's reveal hook is the `data-git-action` attribute on BOTH
  *    sides (this package emits it; this package's sheet and the sidebar's
  *    sheet select it).
@@ -105,11 +107,64 @@ test('T2c: the unregistered removal authorizes through RiskConfirmation', () => 
 test('T14: RiskConfirmation gates both discard authorizations of the remove dialog', () => {
   const dialog = stripComments(source('../src/client/RemoveWorktreeDialog.tsx'))
   assert.match(dialog, /import \{[^}]*RiskConfirmation[^}]*\} from '@deepseek-ai\/dsh-client-ui-primitives'/s)
-  assert.ok(dialog.includes('pendingDiscardAuthorization'), 'the pending authorization decides the gate')
-  assert.ok(
-    dialog.includes("pendingDiscardAuthorization === 'submodule'") && dialog.includes("? t('submoduleDiscardWarning')"),
-    'the submodule refusal drives the same gate',
+
+  // The gate's OWN state decides whether it is up: the kind chosen when
+  // `Remove` opened it is HELD until its cancel or confirm releases it. The
+  // pending derivation answers `null` the very moment the acknowledgement box
+  // is ticked (case-tested in `test/discard-gate.test.ts`), so a gate rendering
+  // from it dismisses itself under the user's cursor and leaves `onConfirm`
+  // unreachable — the removal then needs a second `Remove` click
+  // (2026-09-11 review-fix, F1).
+  assert.match(dialog, /open=\{discardGateOpen !== null\}/u, 'the gate renders from the held gate state')
+  assert.doesNotMatch(
+    dialog,
+    /open=\{[^}]*pendingDiscardAuthorization/u,
+    'the gate must never render from the pending derivation — ticking the box clears it',
   )
+  // The held kind decides the gate's copy AND the box it binds, so a gate left
+  // over from the other authorization can never look like the right one.
+  for (const prop of ['title', 'description', 'acknowledgeLabel', 'acknowledged']) {
+    assert.match(
+      dialog,
+      new RegExp(`${prop}=\\{discardGateOpen === 'submodule' \\?`, 'u'),
+      `${prop} must follow the held gate kind`,
+    )
+  }
+  assert.match(
+    dialog,
+    /onAcknowledgedChange=\{\(acknowledged\) => \{\s*if \(discardGateOpen === 'submodule'\) setDiscardSubmodules\(acknowledged\)\s*else setDiscardChanges\(acknowledged\)/u,
+    'the box writes the acknowledgement of the held kind',
+  )
+
+  const gate = dialog.slice(dialog.indexOf('<RiskConfirmation'))
+  const cancel = gate.slice(gate.indexOf('onCancel={'), gate.indexOf('onConfirm={'))
+  assert.match(cancel, /setDiscardGateOpen\(null\)/u, 'cancel/close/Escape (onCancel) releases the gate')
+  const confirm = gate.slice(gate.indexOf('onConfirm={'))
+  assert.match(
+    confirm,
+    /setDiscardGateOpen\(null\)[\s\S]{0,80}void runRemove\(\)/u,
+    'the gate confirm performs the removal — ONE gesture (click Remove, tick, Confirm)',
+  )
+
+  // A refusal only ARMS the matching authorization: it states the warning and
+  // the NEXT `Remove` click opens the gate (design 08 §5.4). Only the click may
+  // open it, and only with the kind the derivation answered.
+  const opens = [...dialog.matchAll(/setDiscardGateOpen\(([^)]*)\)/gu)].map(match => match[1].trim())
+  assert.ok(opens.length >= 4, 'the gate state has its open, reset, cancel and confirm sites')
+  for (const argument of opens) {
+    assert.ok(
+      argument === 'null' || argument === 'pendingDiscardAuthorization',
+      `only the remove click may open the gate (saw setDiscardGateOpen(${argument}))`,
+    )
+  }
+  assert.ok(
+    opens.includes('pendingDiscardAuthorization'),
+    'the remove click opens the gate with the kind the derivation answered',
+  )
+  // A refusal still arms the gate for the next click without closing the dialog.
+  assert.ok(dialog.includes('setFreshDirty(true)'), 'a fresh dirty preflight arms the dirty gate')
+  assert.ok(dialog.includes('setSubmoduleBlock(true)'), 'the submodule refusal arms the submodule gate')
+
   // The hand-rolled checkbox gate is gone: no checkbox bound to the discard
   // state, and the confirm button no longer disables on it.
   assert.ok(!/checked=\{discardChanges\}/u.test(dialog), 'the in-dialog discard checkbox must be deleted')
@@ -119,14 +174,19 @@ test('T14: RiskConfirmation gates both discard authorizations of the remove dial
     'confirmDisabled must not carry the discard gate any more',
   )
   // Both authorizations still map onto the single `discardChanges` wire flag —
-  // the capability the host's `--force` path requires is unchanged.
+  // the capability the host's `--force` path requires is unchanged. The truth
+  // table itself is case-tested in `test/discard-gate.test.ts`.
   assert.match(
     dialog,
-    /discardAuthorized = \(needsDiscardConfirmation && discardChanges\)\s*\|\| \(submoduleBlock && discardSubmodules\)/u,
+    /import \{ discardAuthorized, nextDiscardGate \} from '\.\.\/shared\/discard-gate\.ts'/u,
+    'the dialog takes both decisions from the pure, case-tested module',
   )
-  // A refusal still re-opens the gate without closing the dialog.
-  assert.ok(dialog.includes('setFreshDirty(true)'), 'a fresh dirty preflight keeps force-showing the gate')
-  assert.ok(dialog.includes('setSubmoduleBlock(true)'), 'the submodule refusal keeps force-showing the gate')
+  assert.match(dialog, /pendingDiscardAuthorization = nextDiscardGate\(gateFacts\)/u)
+  assert.match(
+    dialog,
+    /\.\.\.\(discardAuthorized\(gateFacts\) \? \{ discardChanges: true \} : \{\}\)/u,
+    'the removal carries discardChanges: true only under an explicit acknowledgement',
+  )
 })
 
 test('T14: the status capsule is the official Tag, not a hand-rolled capsule', () => {

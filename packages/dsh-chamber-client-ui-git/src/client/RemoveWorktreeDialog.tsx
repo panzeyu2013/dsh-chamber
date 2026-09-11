@@ -7,6 +7,8 @@ import { GitSagaError } from '../shared/saga.ts'
 import { GitWorktreeRpcError } from '../shared/git-api.ts'
 import { collectSessionClosure } from '../shared/git-facts.ts'
 import { removeFailureCode, removeFailureCopyKey, removeRunningNotes } from '../shared/remove-notes.ts'
+import { discardAuthorized, nextDiscardGate } from '../shared/discard-gate.ts'
+import type { DiscardGateFacts, DiscardGateKind } from '../shared/discard-gate.ts'
 import type { WorkspaceGitInjected } from './injected.ts'
 import css from './SidebarGit.module.css'
 
@@ -41,9 +43,11 @@ interface RemoveSessionFacts {
 }
 /** The host refusal `worktree-submodules` is a DETERMINISTIC pre-mutation
  *  rejection (the target still exists; nothing was removed — the saga never
- *  mints a recovery for it). The dialog re-opens the submodule discard
- *  acknowledgement so the user can retry with `discardChanges` (--force)
- *  without closing (2026-09). */
+ *  mints a recovery for it). The dialog states the submodule warning and ARMS
+ *  the submodule discard authorization; the NEXT `Remove` click opens the
+ *  acknowledgement (the refusal itself does not open it), so the user can retry
+ *  with `discardChanges` (--force) without closing (2026-09; wording corrected
+ *  2026-09-11 review-fix, F3a). */
 function isSubmoduleRefusal(error: unknown): boolean {
   const original = error instanceof GitSagaError ? error.original : error
   return original instanceof GitWorktreeRpcError && original.code === 'worktree-submodules'
@@ -80,25 +84,31 @@ export function RemoveWorktreeDialog({
   const [discardChanges, setDiscardChanges] = useState(false)
   /** Set when the host refused with `worktree-submodules`: the row fact
    *  cannot know submodule presence, so the refusal surfaces in-dialog and
-   *  re-opens a dedicated discard authorization (the same --force path,
-   *  which git requires to bypass its submodule guard). */
+   *  ARMS a dedicated discard authorization (the same --force path, which git
+   *  requires to bypass its submodule guard) that the next `Remove` click
+   *  opens. */
   const [submoduleBlock, setSubmoduleBlock] = useState(false)
   const [discardSubmodules, setDiscardSubmodules] = useState(false)
   const [removeError, setRemoveError] = useState<string | null>(null)
   /** Set when the removal succeeded but the optional branch delete failed. */
   const [branchDeleteFailed, setBranchDeleteFailed] = useState(false)
-  /** The discard authorization is collected by the official
-   *  `RiskConfirmation` — a separate in-app dialog whose primary action stays
-   *  unavailable until the acknowledgement box is checked — instead of the
-   *  hand-rolled in-dialog checkbox gate (2026-09-11 upstream-alignment, T14). */
-  const [discardGateOpen, setDiscardGateOpen] = useState(false)
+  /** The discard authorization the official `RiskConfirmation` is currently
+   *  collecting — the gate's own state, holding the KIND chosen when `Remove`
+   *  opened it (`null` = no gate). It is deliberately NOT derived from
+   *  `pendingDiscardAuthorization` below: that derivation goes back to `null`
+   *  the instant the acknowledgement box is ticked, so a gate opened from it
+   *  would dismiss itself before its confirm could run — leaving `onConfirm`
+   *  dead code and forcing a second `Remove` click (2026-09-11 review-fix,
+   *  F1). `onCancel`/`onConfirm` release it. */
+  const [discardGateOpen, setDiscardGateOpen] = useState<DiscardGateKind | null>(null)
 
   const busy = source?.busy !== undefined
   const actionLocked = busy || source?.recovery !== undefined
   /** Set when the FRESH preflight inside removeWorktree reported dirty even
-   *  though the dialog's row fact was stale-clean — re-open the discard
-   *  acknowledgement so the user can authorize and retry without closing
-   *  (review 2026-08 P2-1). */
+   *  though the dialog's row fact was stale-clean — the dialog states the
+   *  warning and ARMS the discard acknowledgement; the NEXT `Remove` click
+   *  opens it, so the user can authorize and retry without closing (review
+   *  2026-08 P2-1; wording corrected 2026-09-11 review-fix, F3a). */
   const [freshDirty, setFreshDirty] = useState(false)
   /** A dirty worktree needs the discard acknowledgement before the removal
    *  sends `discardChanges`. */
@@ -123,18 +133,21 @@ export function RemoveWorktreeDialog({
    *  the explanation, mirroring the row's runtime-unknown hard block, instead
    *  of only refusing after the user confirms. */
   const runtimeUnknownBlock = !runtimeKnown && target !== null && target.sessionIds.length > 0
-  /** Which discard authorization this removal still needs. Both map to the
-   *  same `discardChanges` wire flag (the host's `--force`): the dirty working
-   *  tree (design 08 §5.3) and the submodule checkouts Git refuses to remove
-   *  without force (2026-09, refusal code `worktree-submodules`). The dialog
-   *  itself no longer gates on them — it states the warning, and clicking
-   *  confirm opens the acknowledgement dialog. */
-  const pendingDiscardAuthorization: 'dirty' | 'submodule' | null =
-    needsDiscardConfirmation && !discardChanges
-      ? 'dirty'
-      : submoduleBlock && !discardSubmodules
-        ? 'submodule'
-        : null
+  /** Which discard authorization a `Remove` click still has to collect
+   *  (the pure `nextDiscardGate`): the dirty working tree (design 08 §5.3) or
+   *  the submodule checkouts Git refuses to remove without force (2026-09,
+   *  refusal code `worktree-submodules`). The dialog itself never gates the
+   *  removal on it — it states the warning in place, and clicking `Remove`
+   *  OPENS the acknowledgement dialog for the kind this answers. It is read at
+   *  CLICK time only: the gate itself renders from the held `discardGateOpen`
+   *  kind (2026-09-11 review-fix, F1). */
+  const gateFacts: DiscardGateFacts = {
+    needsDiscardConfirmation,
+    discardChanges,
+    submoduleBlock,
+    discardSubmodules,
+  }
+  const pendingDiscardAuthorization = nextDiscardGate(gateFacts)
   const confirmDisabled = actionLocked || target === null || branchDeleteFailed
     // Unknown session impact must block a destructive delete — the
     // user might unknowingly drop unarchived sessions (review P2-6).
@@ -151,7 +164,7 @@ export function RemoveWorktreeDialog({
     setFreshDirty(false)
     setSubmoduleBlock(false)
     setDiscardSubmodules(false)
-    setDiscardGateOpen(false)
+    setDiscardGateOpen(null)
     setSessionFacts(null)
     setSessionFactsError(null)
     setRemoveError(null)
@@ -204,7 +217,7 @@ export function RemoveWorktreeDialog({
     // Both dialogs listen for Escape on the document, so without this the
     // dismissal of the risk acknowledgement on top would also close the
     // removal dialog behind it and lose the pending authorization.
-    if (discardGateOpen) return
+    if (discardGateOpen !== null) return
     onClose()
   }
 
@@ -216,12 +229,10 @@ export function RemoveWorktreeDialog({
       // host force-removes (--force) only under explicit user consent —
       // dirty files (design 08 §5.3) and/or a submodule checkout inside the
       // worktree (2026-09) are discarded; branch/commits/HEAD untouched.
-      const discardAuthorized = (needsDiscardConfirmation && discardChanges)
-        || (submoduleBlock && discardSubmodules)
       const result = await removeWorktree(sourceId, target, {
         archiveSessions,
         ...(deleteBranch && target.branch !== null ? { deleteBranch: target.branch } : {}),
-        ...(discardAuthorized ? { discardChanges: true } : {}),
+        ...(discardAuthorized(gateFacts) ? { discardChanges: true } : {}),
       })
       // Honest outcome (2026-08 client review): a failed branch delete keeps
       // the dialog open with an explanation — the worktree removal stands.
@@ -233,11 +244,11 @@ export function RemoveWorktreeDialog({
     } catch (error) {
       // Surface the failure in-dialog; recovery (ambiguous failures) also
       // renders on the per-workspace line so the source can never stay locked.
-      // A fresh-preflight dirty rejection re-opens the discard
-      // acknowledgement (review 2026-08 P2-1), and the deterministic
-      // `worktree-submodules` refusal re-opens the submodule discard
-      // authorization (2026-09) — both so the user can authorize and retry
-      // without closing.
+      // A fresh-preflight dirty rejection (review 2026-08 P2-1) and the
+      // deterministic `worktree-submodules` refusal (2026-09) ARM the matching
+      // discard authorization and state its warning: the NEXT `Remove` click
+      // opens the acknowledgement (the refusal itself does not open it), so the
+      // user can authorize and retry without closing.
       if (error instanceof WorktreeDirtyError) {
         setFreshDirty(true)
         setRemoveError(error instanceof Error ? error.message : String(error))
@@ -247,11 +258,10 @@ export function RemoveWorktreeDialog({
       } else {
         // Host refusals a user can hit from this dialog get LOCALIZED copy
         // (review G1-4: `running-agent` used to surface as the raw English
-        // host string). The fresh-preflight `worktree-dirty` refusal also
-        // force-shows the discard acknowledgement, exactly like
-        // WorktreeDirtyError — the user can authorize and retry without
-        // closing. Unmapped codes keep the host's own message (honest, if
-        // English).
+        // host string). The fresh-preflight `worktree-dirty` refusal also ARMS
+        // the discard acknowledgement, exactly like WorktreeDirtyError — the
+        // user can authorize and retry without closing. Unmapped codes keep the
+        // host's own message (honest, if English).
         const code = removeFailureCode(error)
         if (code === 'worktree-dirty') setFreshDirty(true)
         const key = removeFailureCopyKey(code)
@@ -279,10 +289,12 @@ export function RemoveWorktreeDialog({
               disabled={confirmDisabled}
               onClick={() => {
                 // The discard authorization is the gateway's, not this dialog's:
-                // confirm opens the acknowledgement dialog while it is missing
-                // (2026-09-11 upstream-alignment, T14).
+                // while one is still missing, `Remove` OPENS the official
+                // acknowledgement for that kind and holds it in state; the
+                // removal then runs from the gate's own confirm (2026-09-11
+                // upstream-alignment T14; review-fix F1).
                 if (pendingDiscardAuthorization !== null) {
-                  setDiscardGateOpen(true)
+                  setDiscardGateOpen(pendingDiscardAuthorization)
                   return
                 }
                 void runRemove()
@@ -389,27 +401,39 @@ export function RemoveWorktreeDialog({
       {/* Official risk acknowledgement (upstream `RiskConfirmation`): warning
           icon + description + autofocused checkbox, and a primary confirm that
           stays unavailable until it is checked. Both discard authorizations
-          (dirty working tree, submodule checkout) ride it; authorizing then
-          retries through the SAME `discardChanges` flag the host requires
-          (`--force`), and a fresh refusal re-opens it without closing the
-          dialog (2026-09-11 upstream-alignment, T14). */}
+          (dirty working tree, submodule checkout) ride it; the KIND held in
+          `discardGateOpen` — chosen by the `Remove` click that opened the gate
+          — decides its copy, its box and which acknowledgement it sets, and
+          confirming then retries the SAME removal through the single
+          `discardChanges` flag the host requires (`--force`). One gesture per
+          authorization: `Remove` → gate → tick → Confirm removes
+          (2026-09-11 upstream-alignment T14; review-fix F1). */}
       <RiskConfirmation
-        open={discardGateOpen && pendingDiscardAuthorization !== null}
-        title={pendingDiscardAuthorization === 'submodule' ? t('submoduleDiscardTitle') : t('dirtyDiscardTitle')}
-        description={pendingDiscardAuthorization === 'submodule' ? t('submoduleDiscardWarning') : t('dirtyDiscardWarning')}
-        acknowledgeLabel={pendingDiscardAuthorization === 'submodule' ? t('submoduleDiscardLabel') : t('dirtyDiscardLabel')}
+        open={discardGateOpen !== null}
+        title={discardGateOpen === 'submodule' ? t('submoduleDiscardTitle') : t('dirtyDiscardTitle')}
+        description={discardGateOpen === 'submodule' ? t('submoduleDiscardWarning') : t('dirtyDiscardWarning')}
+        acknowledgeLabel={discardGateOpen === 'submodule' ? t('submoduleDiscardLabel') : t('dirtyDiscardLabel')}
         cancelLabel={t('cancel')}
         closeLabel={t('close')}
         confirmLabel={t('removeConfirm')}
-        acknowledged={pendingDiscardAuthorization === 'submodule' ? discardSubmodules : discardChanges}
+        acknowledged={discardGateOpen === 'submodule' ? discardSubmodules : discardChanges}
         disabled={actionLocked}
         onAcknowledgedChange={(acknowledged) => {
-          if (pendingDiscardAuthorization === 'submodule') setDiscardSubmodules(acknowledged)
+          if (discardGateOpen === 'submodule') setDiscardSubmodules(acknowledged)
           else setDiscardChanges(acknowledged)
         }}
-        onCancel={() => { setDiscardGateOpen(false) }}
+        onCancel={() => {
+          // Cancel / close / mask / Escape revokes the acknowledgement this
+          // gate was collecting: backing out of the confirmation must leave the
+          // removal gated, so the next `Remove` click re-opens the same gate
+          // instead of removing on a box the user then declined (2026-09-11
+          // review-fix, F1).
+          if (discardGateOpen === 'submodule') setDiscardSubmodules(false)
+          else setDiscardChanges(false)
+          setDiscardGateOpen(null)
+        }}
         onConfirm={() => {
-          setDiscardGateOpen(false)
+          setDiscardGateOpen(null)
           void runRemove()
         }}
       />
