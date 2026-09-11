@@ -1327,8 +1327,33 @@ export function createChamberSurface(deps: ChamberSurfaceDeps): ChamberSurface {
     return true
   }
 
-  // Everything on this surface is read-only; a stale-but-authenticated
-  // request can still read. No mutation admission fence exists (2026-12).
+  // `/chamber/*` is NOT read-only, and a managed-profile mutation fence DOES
+  // exist (2026-09-11 review, replacing the retired 2026-12 "Everything on
+  // this surface is read-only … No mutation admission fence exists" claim —
+  // the same file carries the A1 write routes and consults that fence).
+  // Behind dispatch.ts's mandatory auth gate the gateway's public boundary is
+  // the `/` proxy to the managed dsh (gateway-proxy.ts), the gateway-owned
+  // READ routes handled above (channels / plugins seed cache / tasks /
+  // installed projections + dashboard assets), and the write families: the
+  // third-party plugin MANAGEMENT surface (design 21 §1/§6.2 A1) and the
+  // separately dispatched /chamber/runtime controller (design 18 §9.3).
+  // The write routes are PUT /chamber/plugins (the design 17 §10.2 desktop
+  // host-package seed cache — a synchronous atomic gateway-owned write with no
+  // async tail) plus the design 21 §6.2 A1 trio PUT …/install (registry
+  // spec), POST …/remove and PUT …/materialize, which are executed through the
+  // managed dsh's OWN CLI (plugins-exec.ts spawns `plugin --profile web
+  // add|remove …` under the recorded env discipline): the gateway owns no
+  // plugin execution surface of its own, so plugin state stays a dsh fact.
+  // Admission is the managed-profile write lease, admitted
+  // explicitly rather than duplicated — the orchestrator (deps.tasks) takes
+  // the runtime-manager profile-write lease (design 21 decision 6, the same
+  // single-writer fence restart/apply share, re-checked at
+  // beforeSpawnCheckpoint in index.ts), and the READ side is fenced by that
+  // same lease: GET /chamber/plugins/installed answers 409 runtime_busy while
+  // a mutation is in flight (pluginProfileWriteInFlight above, design 21
+  // §6.2). No further server-side admission gate exists — a fully
+  // authenticated caller is trusted at /chamber/runtime action level (design
+  // 21 decision 14).
   void logger
   void channels
 

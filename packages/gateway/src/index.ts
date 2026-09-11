@@ -406,9 +406,15 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
     throw error
   }
   function syncFeatures(status: string): void {
-    // 2026-12 strip: the chamber surface is read-only and has no readiness
-    // coupling — the ready-transition subscription now only forwards the
-    // authoritative state to the runtime manager (design 18 §9.3).
+    // Readiness coupling is real here (2026-09-11 review, replacing the
+    // retired 2026-12 "the chamber surface is read-only and has no readiness
+    // coupling" claim): that surface carries the design 21 §6.2 A1
+    // third-party plugin MANAGEMENT writes (install/materialize/remove,
+    // executed through the managed dsh's own CLI — plugins-exec.ts) and the
+    // /chamber/runtime controller, so this subscription has two duties —
+    // first forward the authoritative state to the runtime manager (design
+    // 18 §9.3), then drain the deferred plugin intents below (design 21
+    // decisions 7/8: the ready/degraded edge IS the execution window).
     runtimeManager?.observeLocalState?.(status)
     // Design 21 §6.3 deferred-intent drain (plan Phase 4.4): install/
     // materialize intents persisted while the runtime was busy, the manager
