@@ -1,5 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import {
   BundleLoadTimeoutError, collectExtraRows, dedupeHostEntries, fetchHostGraph,
   findDeferredExternalDependencies, toExtraRows,
@@ -7,6 +8,7 @@ import {
 } from '../src/host-graph.ts'
 import { CHAMBER_COVERED_FACTORY_IDS, CHAMBER_COVERED_IDS } from '../src/chamber-covered.ts'
 import { DEFERRED_EXTRA_ROW_IDS } from '../src/required-extra-rows.ts'
+import { normalize, stripComments } from './source-text.ts'
 
 // 0.1.2 wire shape: extra-bundle URLs are `/plugins/??<id>&rev=…` combos
 // (review-round9c P2-1) — the old `/plugins/<id>/client.js?rev=` shape 404s
@@ -68,7 +70,6 @@ test('fetchHostGraph: carries the row `external` requests (BootModuleRow parity)
   const stub = stubFetch(200, envelope([
     row('@scope/pkg-ext', { external: ['@deepseek-ai/dsh-client-ui-tool/client', '@deepseek-ai/dsh-client-ui-dockkit'] }),
     row('@scope/pkg-no-ext'),
-    row('@scope/pkg-bad-ext', { external: ['ok', 7] as unknown as string[] }),
   ]))
   try {
     const rows = await fetchHostGraph('/api/i/local')
@@ -77,7 +78,38 @@ test('fetchHostGraph: carries the row `external` requests (BootModuleRow parity)
       '@deepseek-ai/dsh-client-ui-tool/client', '@deepseek-ai/dsh-client-ui-dockkit',
     ])
     assert.equal(rows[1]!.external, undefined, 'an omitted wire field stays omitted')
-    assert.equal(rows[2]!.external, undefined, 'a malformed field is dropped, never merged (same rule as inject)')
+  } finally {
+    stub.restore()
+  }
+})
+
+test('fetchHostGraph: a malformed optional field throws (A4: upstream optionalStringArray)', async () => {
+  // 2026-09-11 upstream-alignment (A4): the optional string-array fields are
+  // validated by upstream's own helper (manifest.ts `optionalStringArray`), the
+  // one its `parseBootManifest` uses for this same wire. A present-but-malformed
+  // field therefore fails the fetch LOUD (the boot then degrades to no profile
+  // plugins with a named diagnostic) instead of being dropped silently — a
+  // silently dropped `external` would erase the one unsatisfiable require edge
+  // the deferred-dependency diagnostic exists to name.
+  for (const bad of [
+    { external: ['ok', 7] as unknown as string[] },
+    { inject: 'slots' as unknown as string[] },
+  ]) {
+    const stub = stubFetch(200, envelope([row('@scope/pkg-bad', bad)]))
+    try {
+      await assert.rejects(
+        () => fetchHostGraph('/api/i/local'),
+        /must be a string array/,
+        `a malformed ${Object.keys(bad)[0]} must throw, never merge`,
+      )
+    } finally {
+      stub.restore()
+    }
+  }
+  // A malformed `immediately` is the same class of wire error.
+  const stub = stubFetch(200, envelope([row('@scope/pkg-bad-flag', { immediately: 'yes' as unknown as boolean })]))
+  try {
+    await assert.rejects(() => fetchHostGraph('/api/i/local'), /immediately/)
   } finally {
     stub.restore()
   }
@@ -1107,6 +1139,41 @@ test('collectExtraRows: an awaitBeforeLoad rejection fails the boot loud without
       /chamber eval gate failed/,
     )
     assert.equal(loaded, false)
+  } finally {
+    stub.restore()
+  }
+})
+
+test('A4: the wire helpers are upstream\'s own and the parse stays entries-only', async () => {
+  const source = normalize(stripComments(
+    readFileSync(new URL('../src/host-graph.ts', import.meta.url), 'utf8'),
+  ))
+  // The deep vendor specifier is deliberate: manifest.ts is the browser-safe
+  // contract face of the pinned dsh-client-modules (zero runtime imports), and
+  // the renderer has no install-tree copy of it — the plain-node run of this
+  // very file must resolve the real module without a bundler or ambient table.
+  assert.match(
+    source,
+    /import \{ optionalStringArray, stripClientSuffix \} from '\.\.\/\.\.\/\.\.\/vendor\/harness-packages\/@deepseek-ai\/dsh-client-modules\/src\/client\/manifest\.ts'/,
+    'the row validators must come from upstream, not from a local copy',
+  )
+  assert.match(source, /optionalStringArray\(subject, 'inject', row\.inject\)/)
+  assert.match(source, /optionalStringArray\(subject, 'external', row\.external\)/)
+  assert.match(source, /const id = stripClientSuffix\(request\)/, 'the kernel-key normalization is upstream\'s helper')
+  assert.doesNotMatch(source, /endsWith\('\/client'\)/, 'the previously inlined suffix strip is retired')
+
+  // The LOCAL parse stays deliberately looser than upstream's
+  // `parseBootManifest` (manifest.ts:167-256): it reads the wire's `entries`
+  // only, so neither a missing graph-level `rev` nor the absent `batches` /
+  // per-entry batch membership (:238-253) may fail a chamber boot's plugin set.
+  const stub = stubFetch(200, {
+    rpcId: 'r1',
+    result: { ok: true, value: { entries: [{ id: '@scope/only', url: '/plugins/only', rev: 'r1' }] } },
+  })
+  try {
+    assert.deepEqual(await fetchHostGraph('/api/i/local'), [
+      { id: '@scope/only', url: '/plugins/only', rev: 'r1' },
+    ], 'an entries-only graph is a usable chamber graph')
   } finally {
     stub.restore()
   }

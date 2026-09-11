@@ -26,7 +26,10 @@
  * wire carriers such as the sidebar's instance-api.ts):
  * the wire shapes here are the fetch-carrier envelope and the graph rows
  * (vendor dsh-client-modules src/client/manifest.ts `WebBootEntry` /
- * `WebBootGraph` are the authoritative shapes). The plugin-graph diagnostic
+ * `WebBootGraph` are the authoritative shapes; the two pure WIRE HELPERS of
+ * that module — `optionalStringArray` / `stripClientSuffix` — are imported by
+ * real-source relative path, A4 2026-09-11 upstream-alignment). The
+ * plugin-graph diagnostic
  * types are the chamber shared face (sidebar shared/aggregate-store.ts, A4
  * single source) — imported below and re-exported, never re-declared.
  *
@@ -47,6 +50,16 @@
  */
 
 import { CHAMBER_COVERED_IDS } from './chamber-covered.ts'
+// A4 (2026-09-11 upstream-alignment): the boot-graph wire validators are
+// UPSTREAM's own — never a hand-rolled copy. manifest.ts is the browser-safe
+// contract face of the pinned dsh-client-modules (zero runtime imports), the
+// very module whose `parseBootManifest` consumes this same wire shape, and it
+// is imported HERE by real-source relative path for the same reason the sidebar
+// shared kernel is (below): the renderer has no install-tree copy of the dsh
+// packages, and its plain-node tests (host-graph.test.ts, no module loader)
+// must resolve the real module without a bundler. Keep the local parse LOOSER
+// than upstream's — see the fetchHostGraph comment.
+import { optionalStringArray, stripClientSuffix } from '../../../vendor/harness-packages/@deepseek-ai/dsh-client-modules/src/client/manifest.ts'
 // The deferred-covered roster (review F1): the covered ids whose module-table
 // factory exists only AFTER the boot settled — the single authority host-graph
 // shares with the composite entry (chamber-entry.ts asserts its own roster
@@ -172,6 +185,19 @@ class HostGraphChannelError extends Error {
  * (the caller degrades to no extras and logs), and malformed envelopes/rows
  * throw (bad data must never be silently merged — a wrong graph is a boot
  * hazard, not a candidate for guesswork).
+ *
+ * A4 (2026-09-11 upstream-alignment) — how this parse relates to upstream's:
+ * the field validation rides upstream's own helpers (`optionalStringArray`,
+ * `stripClientSuffix`; manifest.ts, imported above), but the PARSE ITSELF stays
+ * local and is deliberately LOOSER than upstream's `parseBootManifest`
+ * (manifest.ts:167-256): upstream parses the whole `window.__DSH_BOOT__`
+ * manifest into its two consumer views and therefore also requires `batches` to
+ * be an array (:186-188) and EVERY entry to belong to exactly one initial-load
+ * batch (:238-253). The chamber reads `entries` only — the graph's multi-id
+ * combo `batches` are ignored (each row carries its own single-id combo url;
+ * see toExtraRows) — so a graph without batches, or with an entry the host did
+ * not schedule into one, is still a usable chamber graph and must not fail the
+ * boot's plugin set. Everything the local parse DOES check is upstream's check.
  */
 export async function fetchHostGraph(basePath: string): Promise<HostGraphRow[] | null> {
   // Shared transport byte (P4-2): URL join + client-request envelope + POST +
@@ -219,20 +245,33 @@ export async function fetchHostGraph(basePath: string): Promise<HostGraphRow[] |
       throw new Error('宿主启动图：entry 不是对象')
     }
     const row = raw as Record<string, unknown>
+    const where = typeof row.id === 'string' ? `"${row.id}"` : JSON.stringify(row)
     if (typeof row.id !== 'string' || typeof row.url !== 'string' || typeof row.rev !== 'string') {
-      throw new Error(`宿主启动图：entry ${JSON.stringify(row)} 必须携带 string id/url/rev`)
+      throw new Error(`宿主启动图：entry ${where} 必须携带 string id/url/rev`)
+    }
+    // A4 (2026-09-11 upstream-alignment): the optional fields are validated by
+    // UPSTREAM's helper (manifest.ts `optionalStringArray`, which upstream's own
+    // `parseBootManifest` uses for this exact wire). Present-but-malformed now
+    // THROWS instead of being dropped silently: a wrong graph is a boot hazard,
+    // not a candidate for guesswork (this module's contract), and a dropped
+    // `external` would hide the one require edge the deferred-dependency
+    // diagnostic exists to name.
+    const subject = `boot graph entry ${where}`
+    const inject = optionalStringArray(subject, 'inject', row.inject)
+    const external = optionalStringArray(subject, 'external', row.external)
+    if (row.immediately !== undefined && typeof row.immediately !== 'boolean') {
+      throw new Error(`宿主启动图：entry ${where} 的 immediately 必须是 boolean`)
     }
     rows.push({
       id: row.id,
       url: row.url,
       rev: row.rev,
-      // Optional wire fields, carried through when well-formed and dropped
-      // otherwise (same rule for all three). `inject`/`immediately` are
+      // Optional wire fields, carried through when well-formed (same rule for
+      // all three; a malformed one throws above). `inject`/`immediately` are
       // informational for the merge; `external` is LOAD-BEARING (2026-12 review
-      // F1): it is the field the deferred-dependency diagnostic below reads, so
-      // dropping it would hide an unsatisfiable require edge.
-      ...(Array.isArray(row.inject) && row.inject.every(i => typeof i === 'string') ? { inject: row.inject as string[] } : {}),
-      ...(Array.isArray(row.external) && row.external.every(i => typeof i === 'string') ? { external: row.external as string[] } : {}),
+      // F1): it is the field the deferred-dependency diagnostic below reads.
+      ...(inject === undefined ? {} : { inject: [...inject] }),
+      ...(external === undefined ? {} : { external: [...external] }),
       ...(typeof row.immediately === 'boolean' ? { immediately: row.immediately } : {}),
     })
   }
@@ -315,9 +354,11 @@ export function toExtraRows(rows: readonly HostGraphRow[], basePath: string): Ex
  * without a round trip, so it names the miss here instead.
  *
  * Requests are matched in their canonical (suffix-stripped) form, exactly as
- * the kernel does (`stripClientSuffix`, vendor manifest.ts:156): a
- * `@scope/pkg/client` request and a bare `@scope/pkg` request are the same
- * module-table key. Requests onto kept peer extras (preloaded by the same call)
+ * the kernel does: a `@scope/pkg/client` request and a bare `@scope/pkg`
+ * request are the same module-table key. The normalization is UPSTREAM's own
+ * `stripClientSuffix` (manifest.ts:156-158, A4 2026-09-11 upstream-alignment —
+ * this used to inline the same `endsWith('/client')` slice here). Requests onto
+ * kept peer extras (preloaded by the same call)
  * or onto registered first-screen factories are NOT reported — this page does
  * satisfy them.
  * @param rows - the kept rows (the merge's output, dedupe + url rewrite done).
@@ -332,7 +373,7 @@ export function findDeferredExternalDependencies(
   for (const row of rows) {
     const hits: string[] = []
     for (const request of row.external) {
-      const id = request.endsWith('/client') ? request.slice(0, -'/client'.length) : request
+      const id = stripClientSuffix(request)
       if (!deferred.has(id) || hits.includes(id)) continue
       hits.push(id)
     }
@@ -484,14 +525,12 @@ export interface CollectExtraRowsDeps {
  *
  * Degrades to [] when the graph CHANNEL fails (fetch throws — network /
  * non-2xx / malformed graph): the boot proceeds without extra plugins. That is
- * NOT a complete shell any more (2026-09 二轮, alpha.2 sources): exactly ONE
- * inject member of the composite's own first-screen families is provided by a
- * non-covered official row — `sidebarRight`, required by ui-chat and provided
- * by ui-sidebar-right. The authority for that set (and for why the two former
- * members are gone: `fileUpload` became composite-covered, `resources` is a
- * rendering-time seat injected by that same non-covered row and provided by a
- * separate row) is `required-extra-rows.ts` REQUIRED_EXTRA_ROW_SERVICES — read
- * it there, never from a copy of the list. On a degrade that fiber stays
+ * NOT a complete shell any more (2026-09 二轮, alpha.2 sources): the composite's
+ * own first-screen families inject services that a non-covered official row
+ * provides (the derived probe roster — `required-extra-rows.ts`, the single
+ * authority since the A1 2026-09-11 upstream-alignment; the motivating member
+ * is `sidebarRight`, injected by ui-chat and provided by ui-sidebar-right). On
+ * a degrade such a fiber stays
  * PENDING, so the conversation view disappears while boot still reports
  * success; the `assertRequiredExtraRowServices` probe in chamber-entry.ts turns
  * that into a loud, named diagnostic (design 09 §3.2). A 503
