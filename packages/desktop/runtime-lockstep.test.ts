@@ -18,7 +18,9 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { allowedActions } from '@dsh-chamber/dsh-runtime'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { allowedActions, RuntimeOperationFence } from '@dsh-chamber/dsh-runtime'
 import {
   runtimeAllowedActions,
   type RuntimeAction,
@@ -252,4 +254,282 @@ test('renderer compareSemver stays lockstep with the shared compareRuntimeVersio
     assert.equal(compareSemver(a, b), compareRuntimeVersions(a, b), `${a} vs ${b}`)
     assert.equal(compareSemver(b, a), compareRuntimeVersions(b, a), `${b} vs ${a}`)
   }
+})
+
+// ===========================================================================
+// main.ts `runtimeActionAllowed` — the three DESKTOP-ONLY guards in front of
+// the shared core (P3).
+//
+// Every matrix above models only the shared core (`allowedActions`), while
+// main.ts evaluates three further guards BEFORE it (main.ts:5220-5249):
+//   1. `managementSupported === false && action !== 'retry-restore'` → reject:
+//      a read-only platform keeps exactly ONE escape (finish a crash-
+//      interrupted data restore). This is the desktop's one relaxation over the
+//      shared core — the core has no notion of an unsupported platform, so on
+//      its own it would still advertise the whole version-management matrix
+//      there. No assertion covered that cell before this block.
+//   2. `action === 'recover-metadata' && state.source === 'env'` → reject,
+//      evaluated BEFORE the blocked branch, so an env-selected tree cannot
+//      reach the terminal metadata escape even in the blocked cells main's own
+//      matrix would open.
+//   3. `runtimeWriterFence.busy && !applyingReset` → reject everything except
+//      the applying-reset escape (reset-builtin while applying, non-env, with
+//      an override).
+//
+// main.ts cannot be imported here (it pulls Electron), so the gate is
+// TRANSCRIBED below and held to the real source by the structural pins at the
+// bottom of this file — the transcription cannot silently outlive the code it
+// mirrors, and each guard's behavioural cells are asserted. The writer fence is
+// NOT transcribed: `RuntimeOperationFence` is the real shared class from
+// @dsh-chamber/dsh-runtime, driven for real (only `busy` is read by main).
+// `restart-dsh` does NOT ride this gate at all: it has its own IPC handler
+// (main.ts:5161-5179) whose gate deliberately does not refuse read-only
+// platforms or env sources — see the restart-gate assertions.
+// ===========================================================================
+
+/** Every action the desktop gate can be asked about, in the shared core's own
+ *  declaration order. */
+const RUNTIME_ACTIONS: readonly RuntimeAction[] = [
+  'check', 'select-version', 'install', 'apply-now', 'reset-builtin', 'retry-apply',
+  'retry-restore', 'cleanup-version', 'recover-metadata', 'restore-pre-rollback', 'restart-dsh',
+]
+
+/**
+ * Transcription of main.ts's `runtimeActionAllowed` (main.ts:5220-5249):
+ * the three desktop-only guards, then the blocked matrix, then the shared
+ * `allowedActions` fall-through. Keep in step with the structural pins below.
+ */
+function desktopActionAllowed(
+  action: RuntimeAction,
+  state: RuntimeState,
+  options: { writerFenceBusy?: boolean } = {},
+): boolean {
+  if (state.managementSupported === false && action !== 'retry-restore') return false
+  if (action === 'recover-metadata' && state.source === 'env') return false
+  const applyingReset = action === 'reset-builtin'
+    && state.phase === 'applying'
+    && state.source !== 'env'
+    && state.hasOverride === true
+  if ((options.writerFenceBusy ?? false) && !applyingReset) return false
+  if (state.runtimeBlocked === true) {
+    if (action === 'retry-restore') {
+      return state.canRetryRestore === true && (state.phase === 'rollback' || state.phase === 'failed')
+    }
+    if (action === 'recover-metadata') {
+      return (state.canRetryRestore !== true || state.restoreOutcome === 'incomplete')
+        && state.canRecoverMetadata === true
+        && (state.metadataHealth === 'selection-corrupt'
+          || state.metadataHealth === 'recovery-in-progress'
+          || state.metadataHealth === 'recovery-marker-corrupt')
+        && (state.phase === 'idle' || state.phase === 'failed')
+    }
+    if (action === 'retry-apply') {
+      return state.canRetryApply === true && (state.phase === 'snapshot-failed' || state.phase === 'failed')
+    }
+    return applyingReset
+  }
+  return allowedActions(state.phase, {
+    canRetryApply: state.canRetryApply,
+    canRetryRestore: state.canRetryRestore,
+    canRecoverMetadata: state.canRecoverMetadata,
+  }).includes(action)
+}
+
+/** Transcription of the RUNTIME_RESTART handler's own gate (main.ts:5171-5175)
+ *  — the gate `restart-dsh` really rides, which never asks about
+ *  `managementSupported` or `source`. */
+function desktopRestartAllowed(
+  state: RuntimeState,
+  options: { writerFenceBusy?: boolean; runtimeOperation?: boolean } = {},
+): boolean {
+  const busyPhase = state.phase === 'checking' || state.phase === 'downloading'
+    || state.phase === 'installing' || state.phase === 'applying' || state.phase === 'pending'
+  return !((options.runtimeOperation ?? false)
+    || (options.writerFenceBusy ?? false)
+    || busyPhase
+    || state.runtimeBlocked === true
+    || state.phase === 'snapshot-failed')
+}
+
+/** The actions of RUNTIME_ACTIONS the desktop gate accepts (`restart-dsh`
+ *  excluded — it never reaches this gate in main.ts). */
+function desktopAcceptedActions(state: RuntimeState, options: { writerFenceBusy?: boolean } = {}): RuntimeAction[] {
+  return RUNTIME_ACTIONS.filter(action => action !== 'restart-dsh' && desktopActionAllowed(action, state, options))
+}
+
+test('the unsupported-platform guard admits exactly the retry-restore escape, and only it (main.ts:5222)', () => {
+  for (const phase of PHASES) {
+    for (const caps of [{}, { canRetryRestore: true }] as Array<Partial<RuntimeState>>) {
+      const state = rendererState(phase, { ...caps, source: 'user', managementSupported: false })
+      const expected = caps.canRetryRestore === true && (phase === 'rollback' || phase === 'failed')
+        ? ['retry-restore']
+        : []
+      assert.deepEqual(
+        desktopAcceptedActions(state),
+        expected,
+        `${phase} ${JSON.stringify(caps)}: a read-only platform keeps exactly the recovery escape`,
+      )
+      // The narrowing is desktop-only and real: the shared core alone (what
+      // `mainActions` models) has no notion of an unsupported platform and
+      // still advertises the version-management matrix there. Every action it
+      // additionally offers is refused by THIS guard alone — lifting the flag
+      // accepts it again.
+      for (const action of mainActions(phase, state)) {
+        if (action === 'retry-restore' || expected.includes(action)) continue
+        assert.equal(
+          desktopActionAllowed(action, { ...state, managementSupported: true }),
+          true,
+          `${phase}: '${action}' must be refused by the unsupported-platform guard alone`,
+        )
+      }
+      // UI ⊆ main on this branch, and the platform-independent restart button
+      // is covered by its own gate (the renderer shows it here).
+      const shown = runtimeAllowedActions(state)
+      for (const action of shown) {
+        assert.ok(
+          action === 'restart-dsh' || expected.includes(action),
+          `${phase}: renderer shows '${action}' but the desktop gate rejects it`,
+        )
+      }
+      if (shown.includes('restart-dsh')) {
+        assert.equal(
+          desktopRestartAllowed(state),
+          true,
+          `${phase}: the renderer's restart button must ride main's RUNTIME_RESTART gate`,
+        )
+      }
+    }
+  }
+})
+
+test('the env guard refuses recover-metadata in exactly the blocked cells main would otherwise open (main.ts:5223)', () => {
+  const blocked = (overrides: Partial<RuntimeState> = {}): RuntimeState => rendererState('idle', {
+    runtimeBlocked: true,
+    runtimeBlockedReason: 'journal corrupt',
+    canRecoverMetadata: true,
+    metadataHealth: 'selection-corrupt',
+    ...overrides,
+  })
+  const envState = blocked({ source: 'env' })
+  const userState = blocked({ source: 'user' })
+  // The blocked matrix (and the shared `idle` + canRecoverMetadata cell) would
+  // admit it: the env guard is the ONLY difference between these twins.
+  assert.equal(mainActions('idle', userState).includes('recover-metadata'), true,
+    'the shared core has no source notion — this cell is open without the desktop guard')
+  assert.equal(desktopActionAllowed('recover-metadata', userState), true)
+  assert.equal(desktopActionAllowed('recover-metadata', envState), false,
+    'an env-selected tree must not reach the terminal metadata escape')
+  assert.equal(runtimeAllowedActions(envState).includes('recover-metadata'), false,
+    'the renderer hides it on the same state (both sides agree)')
+
+  // Permanent-incomplete twin on a retryable phase: main's blocked matrix
+  // opens BOTH the retry and the terminal escape; env keeps only the retry.
+  const userIncomplete = blocked({ phase: 'failed', source: 'user', canRetryRestore: true, restoreOutcome: 'incomplete' })
+  assert.deepEqual(desktopAcceptedActions(userIncomplete), ['retry-restore', 'recover-metadata'])
+  const envIncomplete = blocked({ phase: 'failed', source: 'env', canRetryRestore: true, restoreOutcome: 'incomplete' })
+  assert.deepEqual(desktopAcceptedActions(envIncomplete), ['retry-restore'],
+    'env removes the terminal escape but keeps the half-restore retry')
+  assert.deepEqual(runtimeAllowedActions(envIncomplete), ['retry-restore'],
+    'the renderer matches the env guard on the same state')
+})
+
+test('the writer fence refuses every runtime action except the applying-reset escape (main.ts:5224-5228)', () => {
+  // The REAL shared fence (main.ts holds one RuntimeOperationFence instance).
+  const fence = new RuntimeOperationFence()
+  const lease = fence.tryAcquire('runtime:check')
+  assert.notEqual(lease, null, 'the fence must hand out an uncontended lease')
+  try {
+    assert.equal(fence.busy, true)
+    const idle = rendererState('idle', { source: 'user' })
+    // Without the fence the shared core accepts the whole idle matrix …
+    assert.ok(mainActions('idle', idle).length > 0, 'the shared core accepts actions here')
+    // … with the fence held, the desktop gate accepts NONE of them.
+    assert.deepEqual(desktopAcceptedActions(idle, { writerFenceBusy: fence.busy }), [],
+      'a held writer fence must refuse every runtime action')
+    // The ONE escape: reset-builtin while applying, non-env, with an override
+    // (the queued reset-builtin behind an in-flight apply transaction).
+    const applying = rendererState('applying', { source: 'user', hasOverride: true })
+    assert.equal(desktopActionAllowed('reset-builtin', applying, { writerFenceBusy: fence.busy }), true)
+    // … and each of its three conditions is load-bearing.
+    assert.equal(desktopActionAllowed('reset-builtin', { ...applying, source: 'env' }, { writerFenceBusy: fence.busy }), false)
+    assert.equal(desktopActionAllowed('reset-builtin', { ...applying, hasOverride: false }, { writerFenceBusy: fence.busy }), false)
+    assert.equal(desktopActionAllowed('reset-builtin', { ...applying, phase: 'idle' }, { writerFenceBusy: fence.busy }), false)
+    // The renderer agrees about the escape's precondition (it hides
+    // reset-builtin without an override, and on env).
+    assert.equal(runtimeAllowedActions({ ...applying, hasOverride: false }).includes('reset-builtin'), false)
+    assert.equal(runtimeAllowedActions({ ...applying, source: 'env', hasOverride: false }).includes('reset-builtin'), false)
+    // Releasing the fence restores the shared matrix: the fence is the cause.
+    lease?.release()
+    assert.equal(fence.busy, false)
+    assert.equal(desktopActionAllowed('check', idle, { writerFenceBusy: fence.busy }), true)
+    assert.equal(desktopActionAllowed('reset-builtin', applying, { writerFenceBusy: fence.busy }), true)
+  } finally {
+    lease?.release()
+  }
+})
+
+// ---- structural pins: the transcription above must keep matching main.ts ----
+
+/** The balanced `{ … }` block that starts at `open`. */
+function balancedBlock(source: string, open: number): string {
+  assert.notEqual(open, -1, 'block start not found')
+  let depth = 0
+  for (let index = open; index < source.length; index += 1) {
+    if (source[index] === '{') depth += 1
+    else if (source[index] === '}') {
+      depth -= 1
+      if (depth === 0) return source.slice(open, index + 1)
+    }
+  }
+  assert.fail('unbalanced block in main.ts')
+}
+
+/** The body of the `const <name> = (…) => { … }` arrow function. */
+function arrowFunctionBody(source: string, name: string): string {
+  const start = source.indexOf(`const ${name} = `)
+  assert.notEqual(start, -1, `${name} is gone from main.ts`)
+  return balancedBlock(source, source.indexOf('{', start))
+}
+
+const desktopMain = readFileSync(join(import.meta.dirname, '..', '..', 'packages', 'desktop', 'main.ts'), 'utf8')
+
+test('main.ts still orders the three desktop-only guards before the shared core, unchanged (P3)', () => {
+  const body = arrowFunctionBody(desktopMain, 'runtimeActionAllowed')
+  const unsupportedGuard = body.indexOf("state.managementSupported === false && action !== 'retry-restore'")
+  const envGuard = body.indexOf("action === 'recover-metadata' && state.source === 'env'")
+  const fenceGuard = body.indexOf('runtimeWriterFence.busy && !applyingReset')
+  const applyingReset = body.indexOf("const applyingReset = action === 'reset-builtin'")
+  const blockedBranch = body.indexOf('if (state.runtimeBlocked === true)')
+  const sharedCall = body.indexOf('allowedActions(state.phase')
+  for (const [label, index] of [
+    ['the unsupported-platform guard', unsupportedGuard],
+    ['the env guard', envGuard],
+    ['the writer-fence guard', fenceGuard],
+    ['the applying-reset escape', applyingReset],
+    ['the blocked branch', blockedBranch],
+    ['the shared allowedActions fall-through', sharedCall],
+  ] as ReadonlyArray<readonly [string, number]>) {
+    assert.notEqual(index, -1, `${label} is gone from main.ts runtimeActionAllowed — re-derive the transcription in this file`)
+  }
+  assert.ok(
+    unsupportedGuard < envGuard && envGuard < applyingReset && applyingReset < fenceGuard
+      && fenceGuard < blockedBranch && blockedBranch < sharedCall,
+    'the guard order changed: the cells this file covers must be re-derived',
+  )
+})
+
+test('main.ts keeps restart-dsh on its own gate, outside the unsupported-platform guard (P3)', () => {
+  const handleStart = desktopMain.indexOf('ipcMain.handle(IPC_CHANNELS.RUNTIME_RESTART')
+  assert.notEqual(handleStart, -1, 'the RUNTIME_RESTART handler is gone from main.ts')
+  const handler = balancedBlock(desktopMain, desktopMain.indexOf('{', handleStart))
+  assert.match(handler, /const busyPhase = state\.phase === 'checking'/,
+    'the restart gate must keep refusing the busy phases')
+  assert.match(handler, /runtimeWriterFence\.busy \|\| busyPhase/,
+    'the restart gate must keep refusing a held writer fence')
+  assert.equal(handler.includes("managementSupported === false && action !== 'retry-restore'"), false,
+    'restart-dsh must not ride the unsupported-platform guard (it is a platform-independent process action)')
+  // And the model agrees: the renderer's unsupported-platform restart button
+  // is accepted by the restart gate.
+  assert.equal(desktopRestartAllowed(rendererState('idle', { source: 'user', managementSupported: false })), true)
+  assert.equal(desktopRestartAllowed(rendererState('applying', { source: 'user', managementSupported: false })), false)
 })

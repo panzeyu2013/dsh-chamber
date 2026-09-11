@@ -83,6 +83,21 @@ assert.match(linuxBuild, /latest-linux\.yml/)
 assert.match(workflow, /make_latest=false/)
 assert.match(workflow, /make_latest=true/)
 assert.match(workflow, /needs: \[create-release, build-gateway, build-macos, build-windows, build-linux\]/)
+// The release path validates itself because a tag push runs ci.yml and
+// release.yml in PARALLEL — publishing an untested commit must be impossible.
+// The list below therefore has to track ci.yml's gate set: the 2026-12 review
+// P2 found gates that only ci.yml ran (design-token conformance, upgrade
+// tooling, the third-party-notices diff, the desktop packaging sub-builds, and
+// the upstream-touchpoint registry/C8 gate), so a release could ship a commit
+// that the push path would have rejected.
+const CI_ALIGNED_GATES = [
+  'pnpm run verify:styles',
+  'pnpm run test:upgrade-tools',
+  'node scripts/dev/gen-third-party-notices.mjs',
+  'pnpm --filter @dsh-chamber/desktop run build:control-plane',
+  'pnpm --filter @dsh-chamber/desktop run build:preload',
+  'pnpm --filter @dsh-chamber/desktop run build:host-graph-package',
+]
 for (const requiredGate of [
   'pnpm run typecheck:gateway',
   'pnpm run typecheck:runtime',
@@ -93,12 +108,40 @@ for (const requiredGate of [
   'pnpm run test:control-plane',
   'pnpm run test:open-in',
   'pnpm run typecheck:connection',
+  ...CI_ALIGNED_GATES,
 ]) {
   assert.ok(
     validation.includes(requiredGate),
     `release validation must include the CI gate: ${requiredGate}`,
   )
 }
+// The upstream-touchpoint registry gate runs in TWO passes, and both are
+// load-bearing: a substring check on the script path alone would pass with
+// either one missing, so pin the exact command lines AND their order relative
+// to the install (the advisory pass is file-only and must fail fast before it;
+// the C8 rebuild pass needs esbuild from node_modules and must come after).
+const upstreamGateRuns = validation.match(/^\s+run: node scripts\/dev\/verify-upstream-touchpoints\.mjs.*$/gm) ?? []
+assert.equal(
+  upstreamGateRuns.length,
+  2,
+  `release validation must run the upstream gate exactly twice (advisory + C8 rebuild), found ${upstreamGateRuns.length}`,
+)
+const advisoryGate = validation.indexOf('run: node scripts/dev/verify-upstream-touchpoints.mjs --no-artifact-rebuild')
+const rebuildGate = validation.indexOf('run: node scripts/dev/verify-upstream-touchpoints.mjs\n')
+const installStep = validation.indexOf('run: pnpm install --frozen-lockfile')
+assert.notEqual(advisoryGate, -1, 'release validation must run the upstream gate in --no-artifact-rebuild mode')
+assert.notEqual(rebuildGate, -1, 'release validation must run the upstream gate in its default (C8 rebuild) mode')
+assert.ok(
+  advisoryGate < installStep && installStep < rebuildGate,
+  'the upstream gate must run file-only before the install and its C8 rebuild pass after it (ci.yml order)',
+)
+// Regenerating the notices file is not a gate by itself — the committed file
+// must be proven current, on both the English mirror and the canonical one.
+assert.match(
+  validation,
+  /git diff --exit-code -- THIRD_PARTY_NOTICES\.md docs\/THIRD_PARTY_NOTICES\.en-US\.md/,
+  'release validation must assert the regenerated third-party notices are committed',
+)
 assert.equal(releaseChannel('1.2.3'), 'latest')
 assert.equal(releaseChannel('1.2.3-beta.1'), 'beta')
 assert.equal(releaseChannel('1.2.3-beta.0'), 'beta')

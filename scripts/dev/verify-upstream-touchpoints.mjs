@@ -3,7 +3,9 @@
  * verify-upstream-touchpoints.mjs — 上游触点保鲜门（T4，docs/checklists/
  * upstream-touchpoints.md 的机器侧）。
  *
- * 只读、仅内置模块、exit-code 语义：
+ * 只读，唯一例外是默认模式的 C8（就地重建-还原生成物，见该条）；依赖只有 node
+ * 内置模块 + 同目录两个 helper（artifact-gate.mjs / verify-upstream-touchpoints-args.mjs）。
+ * exit-code 语义：0 全部通过（或 --help）/ 1 有门硬失败 / 2 用法错误。
  *   C1  纯文件字节恒等（fork 副本中未登记补丁的文件必须与上游锚逐字节一致）
  *   C2  --tags <old> <new>：上游两 tag 间三 fork 面的重放差异报告（advisory）
  *   C3  完整性：fork 每文件有分类（pure/patched/own），上游每文件有裁决
@@ -21,18 +23,26 @@
  *   C9  vendor 源码补丁锚（硬失败）：`packages/renderer/scripts/vendor-patches.mjs`
  *       注册的每处 expect 必须在 pin 住的上游文件里恰好命中一次——重锚后
  *       上游文本一漂移即红，避免「补丁静默失效」
- *   C10 版本锚一致性 + 活版本字面量白名单（硬失败）：运行时版本从
- *       `packages/desktop/vendor/dsh/package.json` 单一来源读出，六锚 / 三 fork
- *       副本必须等于它；生产源码（非注释、非测试、非产物）里出现任何其他
- *       dsh 版本字面量即红——历史叙述只能留在注释里
+ *   C10 版本锚一致性 + 活版本字面量白名单（硬失败）：运行时版本从**已提交**的
+ *       `packages/desktop/vendor/dsh/pnpm-lock.yaml`（`@deepseek-ai/dsh` 的
+ *       specifier）单一来源读出，六锚 / 三 fork 副本必须等于它；同目录
+ *       `packages/desktop/vendor/dsh/package.json` 被 gitignore、属派生本地状态，
+ *       仅在其存在时与锁文件交叉校验；生产源码（非注释、非测试、非产物）里出现
+ *       任何其他 dsh 版本字面量即红——历史叙述只能留在注释里
  *
  * 登记纪律：给某个文件打 chamber 补丁 = 在 FORKS.patched 里登记（含原因）；
  * 新增 chamber 自有文件 = own；上游文件有意不镜像 = dropped。任何对 pure
  * 文件的修改都会在此硬失败——升级/重锚后同步登记表（每 tag 维护循环见文档 §7）。
  *
- * 用法：
+ * 用法（`--help` 打印权威文本；未知参数 = 用法错误 exit 2，绝不静默跑默认模式）：
  *   node scripts/dev/verify-upstream-touchpoints.mjs            # C1/C3–C10
+ *   node scripts/dev/verify-upstream-touchpoints.mjs --no-artifact-rebuild
  *   node scripts/dev/verify-upstream-touchpoints.mjs --tags <old> <new>  # +C2
+ *   node scripts/dev/verify-upstream-touchpoints.mjs --help
+ *
+ * 参数守卫（2026-12 review P2）：默认模式会**就地重建并还原**生成物（唯一写盘
+ * 路径），因此任何未知参数/位置参数都由 verify-upstream-touchpoints-args.mjs
+ * 判为用法错误并 exit 2——一个拼错的 flag 以前会被静默忽略并照跑全量写盘门。
  */
 
 import { createHash } from 'node:crypto'
@@ -45,6 +55,7 @@ import { tmpdir } from 'node:os'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { spawn, spawnSync } from 'node:child_process'
 import { artifactGateVerdict, compareOutputs, restoreDir, snapshotDir } from './artifact-gate.mjs'
+import { USAGE_EXIT_CODE, VERIFY_USAGE, parseVerifyArgs } from './verify-upstream-touchpoints-args.mjs'
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url))
 const SUBMODULE = join(ROOT, 'vendor', 'harness-checkout')
@@ -229,6 +240,32 @@ function collectFiles(root, excludePrefixes = []) {
 function within(rel, prefixes) {
   return prefixes.some((p) => (p.endsWith('/') ? rel.startsWith(p) : rel === p))
 }
+
+// ---------------------------------------------------------------------------
+// 0 —— 参数守卫（在任何门、任何写盘动作之前；2026-12 review P2）
+//
+// 守卫必须最先执行：默认模式的 C8 会就地重建-还原生成物，而 `--help` 与用法
+// 错误都必须在不碰任何文件的前提下返回。判定逻辑单测在
+// verify-upstream-touchpoints-args.test.mjs（纯函数 + 子进程回归）。
+// ---------------------------------------------------------------------------
+const args = parseVerifyArgs(process.argv.slice(2))
+
+if (args.help) {
+  console.log(VERIFY_USAGE)
+  process.exit(0)
+}
+
+if (args.errors.length > 0) {
+  console.error('✗ verify-upstream-touchpoints: 参数用法错误（未执行任何门、未写盘）:')
+  for (const error of args.errors) console.error(`  - ${error}`)
+  console.error(`\n${VERIFY_USAGE}`)
+  process.exit(USAGE_EXIT_CODE)
+}
+
+/** C8 advisory 模式：绝不写盘（CI install 前那段就是靠它）。 */
+const noArtifactRebuild = args.noArtifactRebuild
+/** C2 的 tag 区间（advisory），由守卫保证「恰好两个值」。 */
+const tagRange = args.tags
 
 const pin = readPin()
 
@@ -460,7 +497,7 @@ for (const fork of FORKS) {
       ],
     },
   ]
-  if (process.argv.includes('--no-artifact-rebuild')) {
+  if (noArtifactRebuild) {
     // Advisory fallback: mtime is unreliable on fresh checkouts — say so.
     const stale = []
     for (const group of groups) {
@@ -874,9 +911,8 @@ for (const fork of FORKS) {
 
 // C2 —— tag 重放报告（advisory）
 {
-  const tagIndex = process.argv.indexOf('--tags')
-  if (tagIndex !== -1 && process.argv[tagIndex + 2] !== undefined) {
-    const [oldTag, newTag] = process.argv.slice(tagIndex + 1, tagIndex + 3)
+  if (tagRange !== null) {
+    const [oldTag, newTag] = tagRange
     const dirs = FORKS.map((f) => f.upstream)
     const result = spawnSync('git', ['-C', SUBMODULE, 'diff', '--stat', oldTag, newTag, '--', ...dirs], { encoding: 'utf8' })
     console.log(`\n[C2] 上游 ${oldTag} → ${newTag} 触点面差异（advisory）：`)

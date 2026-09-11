@@ -91,9 +91,12 @@ jobs:
       - name: Release workflow safety policy
         run: pnpm run test:release-workflow
       # Upgrade tooling (pin preflight classification + lockfile vendor-record
-      # restore guard): advisory tooling, but its classification drives real
-      # pin-bump decisions, so the pure helpers are pinned here.
-      - name: Upgrade tooling unit tests (pin preflight / lockfile restore guard)
+      # restore guard + the upstream gate's CLI argument guard): advisory
+      # tooling, but its classification drives real pin-bump decisions, and the
+      # argument guard is what keeps a mistyped flag from silently triggering
+      # the gate's in-place artifact rebuild — so the pure helpers are pinned
+      # here.
+      - name: Upgrade tooling unit tests (pin preflight / lockfile restore guard / upstream gate CLI guard)
         run: pnpm run test:upgrade-tools
       - name: Shared runtime core unit tests (packages/dsh-runtime)
         run: pnpm run test:runtime
@@ -139,8 +142,31 @@ jobs:
       # release.yml's build jobs only package and structurally verify the
       # bundle (vendor/dsh presence + platform) — a smoke pass against the
       # freshly bundled runtime is not wired up anywhere.
-      - name: Smoke test
-        run: pnpm run smoke
+      #
+      # 2026-12 review P2 — the SKIP is a documented contract of the smoke
+      # entry (packages/control-plane/test/smoke.test.ts: "dsh unavailable …
+      # exits 0"), so it must NOT be turned into a red gate here; that would
+      # make every ordinary push red and the release path could not run it at
+      # all. Instead the step accepts exactly TWO outcomes and refuses every
+      # other one: an explicit `SMOKE PASS`, or an explicit `SKIP: …` whose
+      # reason is echoed as a workflow notice (visible in the run summary
+      # instead of a green step that proves nothing). A silent exit 0 — the
+      # failure mode that made this step unreadable — now fails the job.
+      # `set -euo pipefail` is explicit (not inherited from the runner's shell
+      # wrapper) so a real smoke failure can neither be swallowed by `tee` nor
+      # fall through to a later command.
+      - name: Smoke test (explicit SKIP, never an implicit pass)
+        run: |
+          set -euo pipefail
+          pnpm run smoke | tee /tmp/dsh-chamber-smoke.log
+          if grep -q '^SMOKE PASS$' /tmp/dsh-chamber-smoke.log; then
+            echo "smoke exercised the control plane against a real dsh runtime"
+          elif grep -q '^SKIP: ' /tmp/dsh-chamber-smoke.log; then
+            echo "::notice title=smoke SKIPPED (not exercised)::$(grep -m1 '^SKIP: ' /tmp/dsh-chamber-smoke.log)"
+          else
+            echo "::error title=smoke produced neither a pass nor a skip::pnpm run smoke exited 0 without printing 'SMOKE PASS' or 'SKIP: <reason>'"
+            exit 1
+          fi
       - name: Renderer build
         run: pnpm run build:renderer
       # Host-package esbuild bundles (dsh-chamber-seed-client-graph /
@@ -244,6 +270,11 @@ jobs:
       # legs; each package's test:win32 lists its win32-real / platform-
       # neutral gates and is extended as Windows semantics land (M2b) — in
       # the package, next to the tests, never here.
+      # The three manifests are also reachable as one root fan-out
+      # (`pnpm run test:win32`, root package.json — 2026-12 review P2: without
+      # it the Windows list could not be reproduced from a local checkout at
+      # all). This leg keeps the three named steps so a failure names the
+      # owning package.
       - name: dsh-runtime test:win32 manifest
         run: pnpm --filter @dsh-chamber/dsh-runtime run test:win32
       - name: control-plane test:win32 manifest (real CIM/netstat/taskkill integration)

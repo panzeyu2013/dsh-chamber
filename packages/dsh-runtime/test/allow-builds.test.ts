@@ -19,7 +19,10 @@ test('ALLOW_BUILDS: 可 import 且数组内容正确（6 项，与设计 18 §4 
 });
 
 test('DENY_BUILDS: 显式否认项（strictDepBuilds 下未列出即硬失败，必须登记）', () => {
-  assert.deepEqual(DENY_BUILDS, ['msgpackr-extract']);
+  // node-addon-require-builtin rides the published closure (41 lockfile hits)
+  // but ships NO install lifecycle script at 0.1.4 — the entry is defensive
+  // parity with the upstream pnpm-workspace deny list (2026-09 audit).
+  assert.deepEqual(DENY_BUILDS, ['msgpackr-extract', 'node-addon-require-builtin']);
 });
 
 test('renderAllowBuildsBlock: 放行项 true、否认项 false，两个生成点共用同一渲染', () => {

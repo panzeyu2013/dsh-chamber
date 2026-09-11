@@ -125,6 +125,206 @@ function interfaceMethodSignatures(source: string, typeName: string): string[] {
   return signatures.sort()
 }
 
+// ---------------------------------------------------------------------------
+// 2026-12 review P2: the five surfaces that had NEITHER a golden nor a mirror
+// comparison (systemResume / openIn / deepLink / notifications / badge) join
+// the same golden + signature matrix as ssh/update/settings/runtime.
+//
+// These surfaces are the only ones whose mirrors name their inline payloads
+// differently (preload declares `NotificationOpenRequest`, the renderer spells
+// the same callback object out inline), so the shared helpers above cannot
+// compare them: `interfaceMethodSignatures` is documented flat-single-line-only
+// and would throw on the renderer's multi-line literal. The helpers below
+// normalize away exactly that surface-syntax difference — and nothing else:
+//   * a locally declared named type is expanded to its declaration, so a named
+//     alias and its inline mirror compare equal;
+//   * an inline `{…}` object literal's members are sorted, and its `;` and
+//     newline separators are unified, so field ORDER is not part of the contract;
+//   * PARAMETER NAMES are dropped (TypeScript's structural typing ignores them,
+//     and the renderer deliberately names the notification click listener
+//     `listener` where preload says `callback`); parameter TYPES stay ordered.
+//  Every other difference — a method removed/renamed, a parameter type, a
+//  return type, a field added/removed/retyped — still fails (see the
+//  self-honesty test below).
+// ---------------------------------------------------------------------------
+
+/** Locally declared interfaces and type aliases of one source file, mapped to
+ *  their inline text form (`{ member; member }` / union literal). */
+function localTypeDeclarations(source: string): Map<string, string> {
+  const declarations = new Map<string, string>()
+  for (const match of source.matchAll(/\binterface ([A-Za-z_][A-Za-z0-9_]*)\b/g)) {
+    declarations.set(match[1], `{ ${splitMembers(stripComments(interfaceBlock(source, match[1]))).join('; ')} }`)
+  }
+  for (const match of source.matchAll(/\btype ([A-Za-z_][A-Za-z0-9_]*) =([^\n]*)/g)) {
+    const body = match[2].trim()
+    // An object-shaped alias opens a block on its own line — reuse the balanced
+    // scan so nested members survive; every other alias is a single-line union.
+    declarations.set(match[1], body === '' || body.startsWith('{')
+      ? `{ ${splitMembers(stripComments(interfaceBlock(source, match[1]))).join('; ')} }`
+      : body)
+  }
+  return declarations
+}
+
+/** Replace every locally declared type reference in `text` by its declaration
+ *  (`NotificationKind` → `'complete' | …`), recursively, cycle-safe. */
+function expandLocalTypes(text: string, declarations: Map<string, string>, seen: Set<string> = new Set()): string {
+  let out = text
+  for (const [name, body] of declarations) {
+    if (seen.has(name) || !new RegExp(`\\b${name}\\b`).test(out)) continue
+    const nested = new Set([...seen, name])
+    out = out.replace(new RegExp(`\\b${name}\\b`, 'g'), () => expandLocalTypes(body, declarations, nested))
+  }
+  return out
+}
+
+/** Canonical type text: inline object literals get sorted, `;`-unified members
+ *  (innermost first, so nesting survives) and all whitespace collapses. */
+function canonicalTypeText(text: string): string {
+  let out = text
+  for (let pass = 0; pass < 8; pass += 1) {
+    const next = out.replace(/\{([^{}]*)\}/g, (_all, inner: string) => {
+      const members = inner.split(/[;\n]/).map(member => member.replace(/\s+/g, ' ').trim()).filter(member => member !== '')
+      return `{ ${members.sort().join('; ')} }`
+    })
+    if (next === out) break
+    out = next
+  }
+  return out.replace(/\s+/g, ' ').trim()
+}
+
+/** Split on a separator that sits outside every bracket pair. */
+function splitTopLevel(text: string, separator: string): string[] {
+  const parts: string[] = []
+  let depth = 0
+  let current = ''
+  for (const char of text) {
+    if ('{([<'.includes(char)) depth += 1
+    else if ('})]>'.includes(char)) depth -= 1
+    if (char === separator && depth === 0) {
+      parts.push(current)
+      current = ''
+      continue
+    }
+    current += char
+  }
+  parts.push(current)
+  return parts.map(part => part.trim()).filter(part => part !== '')
+}
+
+/** Split an interface/type-literal block into member declarations. A boundary
+ *  is a newline or `;` at bracket depth 0 — so a multi-line inline object
+ *  literal stays part of its own member instead of being mis-read as two. */
+function splitMembers(block: string): string[] {
+  const members: string[] = []
+  let depth = 0
+  let current = ''
+  for (const char of block) {
+    if ('{([<'.includes(char)) depth += 1
+    else if ('})]>'.includes(char)) depth -= 1
+    if (depth <= 0 && (char === '\n' || char === ';')) {
+      if (current.trim() !== '') members.push(current.trim())
+      current = ''
+      continue
+    }
+    current += char
+  }
+  if (current.trim() !== '') members.push(current.trim())
+  return members
+}
+
+/** One normalized method declaration: parameter TYPES in order (names are not
+ *  part of a structural contract) plus the return type. */
+interface SurfaceMethodEntry {
+  name: string
+  parameters: string[]
+  result: string
+}
+
+/** Normalized method declarations of one block: `;`/newline-separated members
+ *  with named types expanded and inline literals canonicalized. A non-method
+ *  member is surfaced LOUDLY (never skipped). */
+function blockMethodEntries(source: string, block: string): SurfaceMethodEntry[] {
+  const declarations = localTypeDeclarations(source)
+  const entries: SurfaceMethodEntry[] = []
+  for (const member of splitMembers(stripComments(block))) {
+    const name = /^([a-zA-Z_][a-zA-Z0-9_]*)\s*\(/.exec(member)
+    if (name === null) {
+      throw new Error(`non-method member the surface signature guard cannot compare: "${member}"`)
+    }
+    const open = member.indexOf('(', name[1].length)
+    let depth = 0
+    let close = -1
+    for (let i = open; i < member.length; i += 1) {
+      if (member[i] === '(') depth += 1
+      else if (member[i] === ')') {
+        depth -= 1
+        if (depth === 0) { close = i; break }
+      }
+    }
+    const rest = close === -1 ? '' : member.slice(close + 1).trim()
+    if (!rest.startsWith(':')) {
+      throw new Error(`${name[1]} has no single-line parameter list / return type: "${member}"`)
+    }
+    entries.push({
+      name: name[1],
+      parameters: splitTopLevel(member.slice(open + 1, close), ',').map(parameter => {
+        const named = /^([a-zA-Z_][a-zA-Z0-9_]*)\s*\??\s*:\s*([\s\S]+)$/.exec(parameter)
+        return canonicalTypeText(expandLocalTypes(named === null ? parameter : named[2], declarations))
+      }),
+      result: canonicalTypeText(expandLocalTypes(rest.slice(1).trim(), declarations)),
+    })
+  }
+  return entries
+}
+
+/** Normalized signatures of the methods declared in one block: `name(T1, T2): R`. */
+function blockMethodSignatures(source: string, block: string): string[] {
+  return blockMethodEntries(source, block)
+    .map(entry => `${entry.name}(${entry.parameters.join(', ')}): ${entry.result}`)
+    .sort()
+}
+
+/** Normalized method signatures of a named interface/type-literal declaration. */
+function surfaceMethodSignatures(source: string, typeName: string): string[] {
+  return blockMethodSignatures(source, interfaceBlock(source, typeName))
+}
+
+/** Normalized `name?: T` field signatures of one block (named types expanded,
+ *  inline literals canonicalized — so `kind: NotificationKind` and the
+ *  renderer's inline union compare equal). */
+function blockFieldSignatures(source: string, block: string): string[] {
+  const declarations = localTypeDeclarations(source)
+  const signatures: string[] = []
+  for (const member of splitMembers(stripComments(block))) {
+    const match = /^([a-zA-Z_][a-zA-Z0-9_]*)(\??)\s*:\s*([\s\S]+)$/.exec(member)
+    if (match === null) throw new Error(`non-field member the payload guard cannot compare: "${member}"`)
+    signatures.push(`${match[1]}${match[2]}: ${canonicalTypeText(expandLocalTypes(match[3], declarations))}`)
+  }
+  return signatures.sort()
+}
+
+/** Normalized field signatures of a named interface/type-literal declaration. */
+function typeFieldSignatures(source: string, typeName: string): string[] {
+  return blockFieldSignatures(source, interfaceBlock(source, typeName))
+}
+
+/** The balanced `{…}` block following the first occurrence of `marker`. */
+function blockAfter(source: string, marker: string): string {
+  const at = source.indexOf(marker)
+  assert.notEqual(at, -1, `marker not found in the source: ${marker}`)
+  const open = source.indexOf('{', at)
+  let depth = 0
+  for (let i = open; i < source.length; i += 1) {
+    if (source[i] === '{') depth += 1
+    else if (source[i] === '}') {
+      depth -= 1
+      if (depth === 0) return source.slice(open + 1, i)
+    }
+  }
+  throw new Error(`unbalanced block after marker: ${marker}`)
+}
+
 /** Normalized body text of a single-line `type X = …` alias (union literals
  *  such as UpdatePhase), for exact cross-file comparisons. */
 function typeAliasBody(source: string, typeName: string): string {
@@ -296,6 +496,173 @@ test('UpdateSurface and SettingsSurface stay in lockstep across preload and rend
       interfaceMethodSignatures(preload, surface),
       `${surface} renderer mirror method signatures drifted`,
     )
+  }
+})
+
+// ---------------------------------------------------------------------------
+// 2026-12 review P2: the five bridge surfaces that had NEITHER a golden NOR a
+// mirror comparison. `preload.cts` ↔ `renderer/src/global.d.ts` is the same
+// hand-mirrored contract as ssh/update/settings/runtime, but a drift here was
+// invisible: a renamed `badge.set`, a dropped `deepLink.ack`, a retyped
+// `openIn.open` argument or a widened notification payload all type-checked in
+// both packages. They now pass through the full matrix — golden method sets for
+// BOTH mirrors, normalized signature lockstep, and a payload golden that also
+// catches a drift synchronized across both mirrors.
+// ---------------------------------------------------------------------------
+
+/** The five surfaces this section owns (the rest are covered above). */
+const P2_SURFACES = ['SystemResumeSurface', 'OpenInSurface', 'DeepLinkSurface', 'NotificationSurface', 'BadgeSurface']
+
+/** Payload declarations the five surfaces are built from. The preload side is
+ *  authoritative and declares all four; the renderer spells the notification
+ *  click payload (NotificationOpenRequest) inline inside `onOpen` — that leg is
+ *  covered by the surface signature matrix below, and this golden covers the
+ *  named leg plus every payload name the renderer does declare. */
+const P2_PAYLOAD_GOLDEN: Record<string, string[]> = {
+  OpenInAppInfo: ['available: boolean', 'displayKind: string', 'id: string', 'remoteCapable: boolean'],
+  DeepLinkIntent: ['attempt: number', 'deliveryId: number', 'instanceId: string', 'path: string', 'sourceFingerprint: string'],
+  NotificationRequest: [
+    'body: string', "kind: 'complete' | 'ask' | 'request' | 'test'", 'requireHidden: boolean',
+    'sessionId: string', 'sourceFingerprint: string', 'sourceId: string', 'title: string',
+  ],
+  NotificationOpenRequest: ['attempt: number', 'deliveryId: number', 'sessionId: string', 'sourceFingerprint: string', 'sourceId: string'],
+}
+
+test('the five remaining surfaces match their GOLDEN method baselines in BOTH mirrors (P2 golden guard)', () => {
+  const golden: Record<string, string[]> = {
+    SystemResumeSurface: ['onResume'],
+    OpenInSurface: ['apps', 'open'],
+    DeepLinkSurface: ['ack', 'onIntent', 'ready'],
+    NotificationSurface: ['ack', 'notify', 'onOpen', 'ready'],
+    BadgeSurface: ['set'],
+  }
+  for (const surface of P2_SURFACES) {
+    const expected = [...golden[surface]].sort()
+    assert.deepEqual(interfaceMethodNames(preload, surface), expected,
+      `preload.cts ${surface} drifted from the golden baseline`)
+    // The renderer leg is deliberately checked against the SAME golden: a
+    // method deleted from both mirrors in one commit still fails here.
+    assert.deepEqual(interfaceMethodNames(renderer, surface), expected,
+      `renderer global.d.ts ${surface} drifted from the golden baseline`)
+  }
+})
+
+test('the five remaining surfaces keep identical normalized signatures across preload and renderer (P2 — type-sensitive drift guard)', () => {
+  for (const surface of P2_SURFACES) {
+    const authoritative = surfaceMethodSignatures(preload, surface)
+    assert.ok(authoritative.length > 0, `${surface} produced no comparable signature — the guard would pass vacuously`)
+    assert.deepEqual(surfaceMethodSignatures(renderer, surface), authoritative,
+      `${surface} renderer mirror drifted from the preload contract (parameter types / return type / inline payload shape)`)
+  }
+  // The bridge itself is part of the same contract: a surface exposed on one
+  // side and forgotten on the other must fail loudly.
+  const bridgeFields = interfaceFieldSignatures(preload, 'DshChamberBridge')
+  assert.deepEqual(
+    interfaceFieldSignatures(renderer, 'DshChamberBridge'),
+    bridgeFields,
+    'DshChamberBridge field set drifted across the preload/renderer mirrors',
+  )
+  for (const surface of P2_SURFACES) {
+    assert.ok(bridgeFields.some(field => field.endsWith(`:${surface}`)),
+      `DshChamberBridge must expose ${surface}`)
+  }
+})
+
+test('the open-in / deep-link / notification payloads pin their exact field signatures (P2 — golden + mirror)', () => {
+  const declaresNamedType = (source: string, name: string) =>
+    new RegExp(`\\b(?:interface|type) ${name}\\b`).test(source)
+  for (const [name, expected] of Object.entries(P2_PAYLOAD_GOLDEN)) {
+    assert.deepEqual(typeFieldSignatures(preload, name), expected, `${name} drifted from the golden baseline`)
+    if (declaresNamedType(renderer, name)) {
+      assert.deepEqual(typeFieldSignatures(renderer, name), expected,
+        `${name} renderer mirror drifted from the golden baseline`)
+    }
+  }
+})
+
+test('the surface signature helper itself detects drift and tolerates the mirror syntax differences (P2 self-honesty)', () => {
+  // Before trusting the matrix above, pin what it can and cannot see: a
+  // synchronized rewrite must never slip through the normalizations.
+  const surface = (body: string) => `interface P { v: string }\ninterface S {\n${body}\n}`
+  const baseline = surface([
+    "  doThing(payload: P, mode: 'x' | 'y'): Promise<{ ok: true } | { ok: false; error: string }>",
+    '  onEvent(callback: (p: P) => void): () => void',
+  ].join('\n'))
+  const signatures = (source: string) => surfaceMethodSignatures(source, 'S')
+  assert.deepEqual(signatures(baseline), [
+    "doThing({ v: string }, 'x' | 'y'): Promise<{ ok: true } | { error: string; ok: false }>",
+    'onEvent((p: { v: string }) => void): () => void',
+  ])
+  // 1. A method removed, 2. renamed.
+  const withoutOnEvent = surface("  doThing(payload: P, mode: 'x' | 'y'): Promise<{ ok: true } | { ok: false; error: string }>")
+  assert.notDeepEqual(signatures(withoutOnEvent), signatures(baseline), 'a removed method must fail')
+  assert.notDeepEqual(signatures(baseline.replace('onEvent', 'onEventX')), signatures(baseline), 'a renamed method must fail')
+  // 3. Parameter type, 4. return type, 5. payload field type drift.
+  const driftedParameter = surface([
+    "  doThing(payload: P, mode: 'x' | 'z'): Promise<{ ok: true } | { ok: false; error: string }>",
+    '  onEvent(callback: (p: P) => void): () => void',
+  ].join('\n'))
+  assert.notDeepEqual(signatures(driftedParameter), signatures(baseline), 'a parameter union drift must fail')
+  assert.notDeepEqual(signatures(baseline.replace('Promise<{ ok: true } | { ok: false; error: string }>', 'Promise<boolean>')), signatures(baseline),
+    'a return type drift must fail')
+  assert.notDeepEqual(signatures(baseline.replace('interface P { v: string }', 'interface P { v: number }')), signatures(baseline),
+    'a payload field type drift must fail')
+  // 6. Field ORDER inside an inline literal is not part of the contract…
+  const reordered = surface([
+    "  doThing(payload: P, mode: 'x' | 'y'): Promise<{ ok: true } | { error: string; ok: false }>",
+    '  onEvent(callback: (p: P) => void): () => void',
+  ].join('\n'))
+  assert.deepEqual(signatures(reordered), signatures(baseline), 'field order must not be part of the compared signature')
+  // …nor is the parameter NAME (the renderer names the notification click
+  // listener `listener` where preload says `callback`), nor is a named alias vs
+  // the same shape spelled inline across lines (the actual renderer mirror).
+  const renamedParam = baseline.replace('callback:', 'listener:')
+  assert.deepEqual(signatures(renamedParam), signatures(baseline), 'parameter names are not part of a structural contract')
+  const inlineMultiLine = surface([
+    "  doThing(payload: P, mode: 'x' | 'y'): Promise<{ ok: true } | {",
+    '    error: string',
+    '    ok: false',
+    '  }>',
+    '  onEvent(listener: (p: {',
+    '    v: string',
+    '  }) => void): () => void',
+  ].join('\n'))
+  assert.deepEqual(signatures(inlineMultiLine), signatures(baseline),
+    'a named alias and its inline multi-line mirror must compare equal')
+  // 7. A non-method member is surfaced loudly instead of being skipped.
+  assert.throws(() => signatures(surface('  v: string')), /non-method member/)
+})
+
+test("the open-in plugin's private bridge face stays a structural subset of the renderer OpenInSurface (P2)", () => {
+  // packages/dsh-chamber-client-ui-open-in/src/shared/coordinator.ts declares
+  // its own loose `window.dshChamber.openIn` face on purpose (the plugin stays
+  // out of the renderer's global Window augmentation merge and re-validates the
+  // IPC answer through parseOpenInApps). A local face is only safe while it
+  // keeps tracking the public one: a preload change to OpenInSurface.open's
+  // arity/types would silently pass the plugin's typecheck, because nothing
+  // else in this repo relates the two declarations. Pin the relationship here
+  // (a re-export from the renderer types was rejected: it would pull the whole
+  // renderer global augmentation into the plugin's program, which is exactly
+  // what the local face exists to avoid).
+  const coordinator = readFileSync(
+    join(ROOT, 'packages/dsh-chamber-client-ui-open-in/src/shared/coordinator.ts'),
+    'utf8',
+  )
+  const privateEntries = blockMethodEntries(coordinator, blockAfter(coordinator, 'openIn?:'))
+  const publicEntries = blockMethodEntries(renderer, interfaceBlock(renderer, 'OpenInSurface'))
+  assert.deepEqual(
+    privateEntries.map(entry => entry.name).sort(),
+    publicEntries.map(entry => entry.name).sort(),
+    'the plugin bridge face no longer mirrors the OpenInSurface method set',
+  )
+  for (const entry of privateEntries) {
+    const publicEntry = publicEntries.find(candidate => candidate.name === entry.name)
+    assert.deepEqual(entry.parameters, publicEntry?.parameters,
+      `OpenInBridgeSurface.${entry.name} parameter types drifted from OpenInSurface.${entry.name}`)
+    // Documented looseness, pinned so it stays DELIBERATE: the plugin never
+    // trusts a typed IPC answer, it parses the unknown result itself.
+    assert.equal(entry.result, 'Promise<unknown>',
+      `OpenInBridgeSurface.${entry.name} must keep consuming the raw IPC answer (Promise<unknown>)`)
   }
 })
 

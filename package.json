@@ -40,7 +40,7 @@
     "verify:styles": "node scripts/dev/verify-style-tokens.mjs",
     "verify:workflows": "node scripts/dev/verify-workflow-action-pins.mjs",
     "test:release-workflow": "node scripts/dev/release-workflow-policy.test.mjs",
-    "test:upgrade-tools": "node --test scripts/dev/preflight-vendor-pin.test.mjs scripts/dev/artifact-gate.test.mjs scripts/dev/restore-lockfile-vendor-records.test.mjs",
+    "test:upgrade-tools": "node --test scripts/dev/preflight-vendor-pin.test.mjs scripts/dev/artifact-gate.test.mjs scripts/dev/restore-lockfile-vendor-records.test.mjs scripts/dev/verify-upstream-touchpoints-args.test.mjs",
     "gen:notices": "node scripts/dev/gen-third-party-notices.mjs",
     "typecheck": "tsc --noEmit",
     "typecheck:runtime": "tsc -p packages/dsh-runtime/tsconfig.json --noEmit",
@@ -74,6 +74,7 @@
     "test:connection": "pnpm --filter @deepseek-ai/dsh-client-connection run test",
     "test:cli": "pnpm --filter @dsh-chamber/cli run test",
     "test:gateway": "pnpm --filter @dsh-chamber/gateway run test",
+    "test:win32": "pnpm --filter @dsh-chamber/dsh-runtime run test:win32 && pnpm --filter @dsh-chamber/control-plane run test:win32 && pnpm --filter @dsh-chamber/desktop run test:win32",
     "release:preflight": "node scripts/dev/release-preflight.mjs",
     "typecheck:api-gateway": "node scripts/dev/typecheck-api-gateway.mjs"
   },

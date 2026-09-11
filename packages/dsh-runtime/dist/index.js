@@ -3747,7 +3747,7 @@ var ALLOW_BUILDS = [
   "@google/genai",
   "@deepseek-ai/dsh-subprocess-local"
 ];
-var DENY_BUILDS = ["msgpackr-extract"];
+var DENY_BUILDS = ["msgpackr-extract", "node-addon-require-builtin"];
 function renderAllowBuildsBlock() {
   return [
     ...ALLOW_BUILDS.map((name) => `  ${JSON.stringify(name)}: true`),

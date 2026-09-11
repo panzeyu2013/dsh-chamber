@@ -290,7 +290,23 @@ jobs:
           cache: pnpm
       - name: Bootstrap vendor tree (verify pin + ensure links)
         run: node scripts/dev/ensure-harness-vendor.mjs
+      # Upstream-touchpoint registry gates (docs/checklists/upstream-touchpoints.md),
+      # exactly as ci.yml runs them — in TWO passes, both required:
+      #   1. here, before the install: C1/C3–C10 are file-only, so a drift fails
+      #      fast without node_modules (`--no-artifact-rebuild` = C8 mtime
+      #      advisory, and nothing is written);
+      #   2. below, after the install: the default mode re-runs everything AND
+      #      executes C8 (rebuild the committed host/mobile/dsh-runtime bundles
+      #      and byte-compare, hard failure, then restore). C8 is the gate most
+      #      easily defeated by "edited src, forgot to rebuild the artifact", so
+      #      a release must never be the first place it runs (2026-12 review P2).
+      - name: Upstream touchpoint registry (C1/C3/C4/C5/C6/C7/C9/C10)
+        run: node scripts/dev/verify-upstream-touchpoints.mjs --no-artifact-rebuild
       - run: pnpm install --frozen-lockfile
+      # C8 deterministic artifact gate (see the step above): rebuilds in place,
+      # byte-compares, restores. Needs node_modules/esbuild, hence post-install.
+      - name: Committed artifacts match sources (C8 rebuild gate)
+        run: node scripts/dev/verify-upstream-touchpoints.mjs
       - name: Assert lockfile not rewritten
         run: git diff --exit-code -- pnpm-lock.yaml
       - name: Type check (tsc + chamber host packages + gateway + runtime)
@@ -303,8 +319,17 @@ jobs:
           pnpm run typecheck:runtime
       - name: i18n pair consistency
         run: pnpm run verify:i18n
+      # Upstream design-token conformance (S1–S7) — same gate as ci.yml's push
+      # path; needs the bootstrapped vendor tree above (2026-12 review P2: the
+      # release validation job silently omitted it).
+      - name: Upstream design-token conformance (S1–S7)
+        run: pnpm run verify:styles
       - name: Release workflow safety policy
         run: pnpm run test:release-workflow
+      # Upgrade tooling (pin preflight classification / lockfile vendor-record
+      # restore guard / upstream-gate CLI argument guard) — same gate as ci.yml.
+      - name: Upgrade tooling unit tests
+        run: pnpm run test:upgrade-tools
       - name: Shared runtime core unit tests
         run: pnpm run test:runtime
       - name: Control-plane unit tests
@@ -341,6 +366,19 @@ jobs:
         run: |
           pnpm run build:renderer
           pnpm run build:host-packages
+      # Desktop packaging sub-steps — ci.yml's "Desktop build sub-steps" gate
+      # (2026-12 review P2: a release must not be the first place a broken
+      # control-plane/preload/host-package build surfaces).
+      - name: Desktop build sub-steps
+        run: |
+          pnpm --filter @dsh-chamber/desktop run build:control-plane
+          pnpm --filter @dsh-chamber/desktop run build:preload
+          pnpm --filter @dsh-chamber/desktop run build:host-graph-package
+      # Third-party notices must track the installed dependency set; a stale
+      # committed file blocks the release (ci.yml's "Third-party notices
+      # current"). Regenerating alone is not a gate — the diff assertion is.
+      - name: Third-party notices current
+        run: node scripts/dev/gen-third-party-notices.mjs && git diff --exit-code -- THIRD_PARTY_NOTICES.md docs/THIRD_PARTY_NOTICES.en-US.md
 
 
   build-gateway:
