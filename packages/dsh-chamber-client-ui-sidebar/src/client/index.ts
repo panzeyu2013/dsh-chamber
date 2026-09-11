@@ -440,17 +440,34 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(() => {
     const chamberInstanceId = (ctx as any).chamberInstanceId as string | undefined
     if (typeof chamberInstanceId !== 'string' || chamberInstanceId === '') return () => {}
+    // 2026-09-11 review F3: this arm MUTATES the host (`sessions.open`) on a
+    // page-wide, sourceId-KEYED intent, so it must prove the source identity
+    // exactly like the runtime-facts producer above (the same immutable Context
+    // proof shell.ts binds, `isValidProducerSourceFingerprint`): without the
+    // guard, an intent slot naming this source id from a previous incarnation —
+    // or from a wholly unrelated boot that happens to share the id — would be
+    // opened inside whichever shell is mounted here now.
+    const chamberSourceFingerprint = (ctx as any).chamberSourceFingerprint as string | undefined
+    if (!isValidProducerSourceFingerprint(chamberInstanceId, chamberSourceFingerprint)) return () => {}
     return startEarlyOpenArm({
       instanceId: chamberInstanceId,
       readIntent: () => getOpenIntent(chamberInstanceId),
-      /** A missing/throwing face retires the arm silently: the same ctx's
+      /** An absent/hostile face retires the arm silently: the same ctx's
        *  runtime-facts producer already warns loudly for that defect, and this
        *  arm is best-effort by contract. `false` (face readable, id absent)
        *  keeps the arm polling. */
       isAddressable: (sessionId) => {
         try {
           const snapshot = ctx.sessions.list.getSnapshot() as { byId?: Record<string, unknown> } | undefined
-          if (snapshot?.byId === undefined) return false
+          // 2026-09-11 review F2: an ABSENT face (no service list observable, or
+          // a snapshot without a `byId` map) ⇒ `undefined` = "retire silently",
+          // which is this arm's contract. Deliberately NOT routed through
+          // `resolveInstanceListFace`: that helper WARNS loudly, and the same
+          // ctx's runtime-facts producer already runs it (and warns) for the
+          // service-face defect, while the arm is best-effort/silent by contract
+          // — do not "fix" this into the helper. A readable-but-EMPTY face
+          // (`byId: {}`) is `false` (keep polling), handled by the next line.
+          if (snapshot?.byId === undefined) return undefined
           return snapshot.byId[sessionId] !== undefined
         } catch {
           return undefined

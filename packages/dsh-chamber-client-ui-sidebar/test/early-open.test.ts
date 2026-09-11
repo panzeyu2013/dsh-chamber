@@ -6,10 +6,11 @@
  *
  * The arm is driven through injected clock/timer seams, so every contract is
  * asserted deterministically: one open per arm, the retry cadence, the live
- * intent read (a released intent must stop the arm, a replaced one must open
- * the NEWER session), the bounded deadline, a missing list face, and a refused
- * open (warn once, never throw, never report an outcome — the App owns the
- * terminal report).
+ * intent read (an intent armed AFTER the first read must still be opened, a
+ * replaced one must open the NEWER session), the deadline as the ONLY
+ * retirement of an absent slot, the bounded deadline, a missing list face, a
+ * THROWING probe (2026-09-11 review F1/F2), and a refused open (warn once,
+ * never throw, never report an outcome — the App owns the terminal report).
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -21,6 +22,7 @@ function harness(overrides: Partial<EarlyOpenArmDeps> = {}) {
   const opened: string[] = []
   const warnings: string[] = []
   let clock = 1_000
+  let scheduled = 0
   let queue: { at: number; callback: () => void }[] = []
   const deps: EarlyOpenArmDeps = {
     instanceId: 'ssh-b',
@@ -30,6 +32,7 @@ function harness(overrides: Partial<EarlyOpenArmDeps> = {}) {
     warn: (message) => { warnings.push(message) },
     now: () => clock,
     setTimer: (callback, ms) => {
+      scheduled += 1
       const handle = { at: clock + ms, callback }
       queue.push(handle)
       queue.sort((left, right) => left.at - right.at)
@@ -45,6 +48,8 @@ function harness(overrides: Partial<EarlyOpenArmDeps> = {}) {
     opened,
     warnings,
     get pendingTimers() { return queue.length },
+    /** Total cadence ticks ever scheduled — the cost of an armed boot. */
+    get scheduledTimers() { return scheduled },
     /** Advance the clock and fire everything due (one pass per due timer). */
     advance(ms: number) {
       const target = clock + ms
@@ -60,13 +65,43 @@ function harness(overrides: Partial<EarlyOpenArmDeps> = {}) {
   }
 }
 
-test('no live intent → the arm retires immediately, schedules nothing and opens nothing', () => {
-  const h = harness()
+test('an intent armed AFTER the arm first read the slot is still opened (an absent slot is "not yet")', () => {
+  // 2026-09-11 review F1: the first `attempt()` runs synchronously at plugin
+  // apply — BEFORE the user can click — so retiring on the first absent read
+  // killed the arm for a boot already in flight when the click landed, and the
+  // official navigation policy then created a blank session on the host (the
+  // exact cost the arm exists to avoid). Design 05 §2.2.1 gate 3 sanctions only
+  // two retirements: a successful open and the 8s deadline.
+  let intent: string | undefined
+  let listed = false
+  const h = harness({ readIntent: () => intent, isAddressable: () => listed })
   const dispose = startEarlyOpenArm(h.deps)
+  assert.deepEqual(h.opened, [], 'nothing was pending at apply time')
+  assert.equal(h.pendingTimers, 1, 'an absent slot keeps the 50ms cadence instead of retiring the arm')
+  // The user clicks a session of this source while its boot is still running.
+  intent = 's1'
+  listed = true
+  h.advance(EARLY_OPEN_RETRY_MS)
+  assert.deepEqual(h.opened, ['s1'], 'the arm must still preempt for a click that landed after the first read')
+  assert.equal(h.pendingTimers, 0, 'one open per arm: no further polling')
+  dispose()
+})
+
+test('a boot that never receives an intent polls to the deadline, opens nothing, and costs 160 ticks', () => {
+  let reads = 0
+  const h = harness({ readIntent: () => { reads += 1; return undefined } })
+  const dispose = startEarlyOpenArm(h.deps)
+  assert.equal(reads, 1, 'the synchronous first attempt')
+  h.advance(EARLY_OPEN_BUDGET_MS)
   assert.deepEqual(h.opened, [])
-  assert.equal(h.pendingTimers, 0, 'a background prewarm/harvest boot must cost zero timers')
-  h.advance(EARLY_OPEN_BUDGET_MS * 2)
-  assert.deepEqual(h.opened, [])
+  assert.deepEqual(h.warnings, [])
+  assert.equal(h.pendingTimers, 0, 'only the 8s deadline retires a boot with no intent')
+  assert.equal(
+    h.scheduledTimers,
+    EARLY_OPEN_BUDGET_MS / EARLY_OPEN_RETRY_MS,
+    'the documented cost of the F1 rule: 160 cheap polls per boot',
+  )
+  assert.equal(reads, h.scheduledTimers + 1, 'one read per tick, plus the first synchronous one')
   dispose()
 })
 
@@ -110,7 +145,7 @@ test('the session list arriving later is picked up on the retry cadence', () => 
   dispose()
 })
 
-test('the intent is read LIVE: a released intent stops the arm, a replaced one opens the newer session', () => {
+test('the intent is read LIVE: a replaced intent opens the newer session, a released one is "nothing pending"', () => {
   let intent: string | undefined = 's1'
   let listed = false
   const h = harness({ readIntent: () => intent, isAddressable: () => listed })
@@ -121,10 +156,15 @@ test('the intent is read LIVE: a released intent stops the arm, a replaced one o
   h.advance(EARLY_OPEN_RETRY_MS)
   assert.deepEqual(h.opened, ['s2'], 'the arm must follow the last request, never a stale capture')
 
-  const released = harness({ readIntent: () => intent, isAddressable: () => listed })
-  intent = undefined  // App released it (its own dispatch settled first)
+  // The App's own dispatch settled first and released the slot (2026-09-11
+  // review F1): the arm has nothing to preempt, but it is NOT retired — a click
+  // that lands later in the same boot window must still be served.
+  const released = harness({ readIntent: () => undefined, isAddressable: () => true })
   const disposeReleased = startEarlyOpenArm(released.deps)
   assert.deepEqual(released.opened, [])
+  assert.equal(released.pendingTimers, 1, 'an absent slot is "not yet" — only the deadline retires the arm')
+  released.advance(EARLY_OPEN_BUDGET_MS)
+  assert.deepEqual(released.opened, [], 'nothing was ever requested')
   assert.equal(released.pendingTimers, 0)
   dispose()
   disposeReleased()
@@ -137,6 +177,29 @@ test('a missing or hostile list face retires the arm silently (the producer owns
   assert.deepEqual(missing.warnings, [], 'best-effort arm: no duplicate warning for the same ctx defect')
   assert.equal(missing.pendingTimers, 0)
   disposeMissing()
+})
+
+test('a THROWING addressability probe retires the arm silently instead of escaping the timer callback', () => {
+  // 2026-09-11 review F2: `attempt()` is a timer body — an escaped throw left no
+  // tick, no warning and no open, i.e. the arm died with no trace at all.
+  let hostile = false
+  const h = harness({
+    readIntent: () => 's1',
+    isAddressable: () => {
+      if (hostile) throw new Error('list face is hostile')
+      return false
+    },
+  })
+  const dispose = startEarlyOpenArm(h.deps)
+  assert.equal(h.pendingTimers, 1, 'the first, non-throwing attempt keeps polling')
+  hostile = true
+  h.advance(EARLY_OPEN_RETRY_MS)   // the throw happens inside a TIMER callback
+  assert.deepEqual(h.opened, [])
+  assert.deepEqual(h.warnings, [], 'retire silently: the producer owns the loud report for this defect')
+  assert.equal(h.pendingTimers, 0, 'the arm retires instead of leaving a dead cadence behind')
+  h.advance(EARLY_OPEN_BUDGET_MS)
+  assert.deepEqual(h.opened, [])
+  dispose()
 })
 
 test('the deadline bounds the arm: a session that never becomes addressable stops polling', () => {

@@ -7,7 +7,9 @@
  * Covered: the arm/replace/release lifecycle (including the session-id-guarded
  * release that keeps a NEWER click alive), retirement, subscriber fan-out with
  * per-listener isolation, and the two pure gates the App and the view render
- * from (current projection + veil hold).
+ * from (current projection + veil hold). The veil rule is pinned on all four of
+ * its inputs (2026-09-11 review S1): `blankCurrent` is what keeps a warm shell
+ * from being covered by an opaque loading veil.
  */
 
 import { test } from 'node:test'
@@ -125,29 +127,39 @@ test('projectableCurrent: only the active view projects a current, and never one
   )
 })
 
-test('shouldHoldViewVeil: holds only while the shell would show something other than the requested session', () => {
+test('shouldHoldViewVeil: holds only while the view would show NOTHING legitimate (2026-09-11 review S1)', () => {
   assert.equal(
-    shouldHoldViewVeil({ failed: false, pendingIntent: true, showsRequestedSession: false }),
+    shouldHoldViewVeil({ failed: false, pendingIntent: true, showsRequestedSession: false, blankCurrent: true }),
     true,
-    'cold boot (or any state where the requested session is not current) holds the veil',
+    'cold boot: the requested session is not current and the view is blank — the hold hides the blank row',
   )
   assert.equal(
-    shouldHoldViewVeil({ failed: false, pendingIntent: true, showsRequestedSession: true }),
+    shouldHoldViewVeil({ failed: false, pendingIntent: true, showsRequestedSession: false, blankCurrent: false }),
+    false,
+    'a WARM shell showing a legitimate session must not be covered by the opaque veil (design 05:162)',
+  )
+  assert.equal(
+    shouldHoldViewVeil({ failed: false, pendingIntent: true, showsRequestedSession: true, blankCurrent: false }),
     false,
     'already showing the requested session → reveal now (idempotent re-open, or the early-open arm won)',
   )
   assert.equal(
-    shouldHoldViewVeil({ failed: true, pendingIntent: true, showsRequestedSession: false }),
+    shouldHoldViewVeil({ failed: false, pendingIntent: true, showsRequestedSession: true, blankCurrent: true }),
     false,
-    'a failed boot keeps the failure overlay in charge (and must not pin the veil for the 68s queued-open budget)',
+    'the showsRequestedSession exclusion wins over a blankness flag that disagrees with it',
   )
   assert.equal(
-    shouldHoldViewVeil({ failed: false, pendingIntent: false, showsRequestedSession: false }),
+    shouldHoldViewVeil({ failed: true, pendingIntent: true, showsRequestedSession: false, blankCurrent: true }),
+    false,
+    'a failed boot keeps the failure overlay in charge (and must not pin the veil for the 68s queued-open budget) — even when blank',
+  )
+  assert.equal(
+    shouldHoldViewVeil({ failed: false, pendingIntent: false, showsRequestedSession: false, blankCurrent: true }),
     false,
     'no open in flight → the shell reveals at settle',
   )
   assert.equal(
-    shouldHoldViewVeil({ failed: false, pendingIntent: false, showsRequestedSession: true }),
+    shouldHoldViewVeil({ failed: false, pendingIntent: false, showsRequestedSession: true, blankCurrent: false }),
     false,
     'no open in flight at all',
   )

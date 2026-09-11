@@ -173,13 +173,18 @@ export function projectableCurrent(
 }
 
 /**
- * Reveal gate for the incoming view (design 05 §2.2 revision).
+ * Reveal gate for the incoming view (design 05 §2.2 revision; 2026-09-11
+ * review S1).
  *
  * The shell must not be revealed until it shows what the user asked for. The
  * boot window itself is already covered by the existing boot veil
  * (`InstanceView`: `!settled || holdVeil`); this rule extends the hold past a
- * clean settle for exactly as long as the requested session is NOT the one the
- * shell would show. Two deliberate exclusions:
+ * clean settle for exactly as long as the view would show NOTHING legitimate
+ * while an open is in flight.
+ *
+ * The exact rule: hold iff an open is in flight AND the shell did not fail AND
+ * it does not already show the requested session AND the view is blank
+ * (`blankCurrent`). Three deliberate exclusions:
  *
  * - a FAILED shell never holds (the App's failure overlay owns that
  *   presentation, and an open queued behind a boot that never settles would
@@ -187,22 +192,35 @@ export function projectableCurrent(
  * - a view that already shows the requested session never holds — that covers
  *   the idempotent re-open AND the case where the boot-ctx early-open arm
  *   preempted the runtime's initial selection (the requested session is current
- *   from the moment the shell settles, so the veil lifts immediately).
+ *   from the moment the shell settles, so the veil lifts immediately);
+ * - a WARM shell showing a legitimate session never holds, even while an open
+ *   for another session is still in flight: that view's `blankCurrent` is false.
+ *   Without this input the rule covered a rendered, working view with the opaque
+ *   loading veil for up to the 8s dispatch budget — design 05 §2.2.1 gate 2
+ *   promises the opposite (一个已经渲染出正确内容的温壳不会被盖). The cold-boot
+ *   case keeps its veil: the runtime has not selected the requested session yet
+ *   and its current session is undefined/blank, so `blankCurrent` is true and
+ *   the hold hides exactly the blank "新会话" row the gate exists for.
  *
  * @param opts.failed - the shell settled with a boot failure.
  * @param opts.pendingIntent - an open request for this view is in flight.
  * @param opts.showsRequestedSession - the shell is settled AND its current
  *   session is the requested one (the raw runtime fact, never the gated
  *   projection value).
+ * @param opts.blankCurrent - the view shows nothing legitimate: its current
+ *   session is undefined or blank. The App passes `true` when that is UNKNOWN,
+ *   so the cold-boot window fails closed toward holding the veil.
  */
 export function shouldHoldViewVeil(opts: {
   failed: boolean
   pendingIntent: boolean
   showsRequestedSession: boolean
+  blankCurrent: boolean
 }): boolean {
   if (opts.pendingIntent !== true) return false
   if (opts.failed === true) return false
-  return opts.showsRequestedSession !== true
+  if (opts.showsRequestedSession === true) return false
+  return opts.blankCurrent === true
 }
 
 /** Test-only: drop every slot (node tests share the module instance). */
