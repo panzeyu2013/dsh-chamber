@@ -14,11 +14,23 @@
     // (layout/git/connections precedent); tsc only type-checks here (root
     // noEmit + tsdown bundles); outDir is a mirror. The connections-section
     // ambient mapping is UNRELATED and stays.
+    //
+    // 2026-09-11 upstream-alignment A3: the renderer's `src/client/bindings.tsx`
+    // deep specifier is mapped to its own ambient face too. Deep `./src/*`
+    // specifiers otherwise resolve to the REAL vendor source, and that module
+    // reads host/binding types (`ui-slots/src/renderer.ts`) the chamber's loose
+    // `ui-slots` ambient mirror deliberately does not carry — mapping it keeps
+    // the consumed surface explicit (one factory) instead of mirroring the
+    // renderer's internal type web; vite still resolves the real TSX at build
+    // time (packages/renderer/vite.config.mjs `deepseekSource`).
     "rootDir": "../..",
     "outDir": "lib/types",
     "paths": {
       "@dsh-chamber/dsh-chamber-client-ui-settings-connections/section": [
         "./src/ambient/connections-section.d.ts"
+      ],
+      "@deepseek-ai/dsh-client-ui-renderer/src/client/bindings.tsx": [
+        "./src/ambient/renderer-bindings.d.ts"
       ]
     }
   },

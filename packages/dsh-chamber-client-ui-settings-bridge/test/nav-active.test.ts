@@ -8,6 +8,15 @@
  * owner 是 chamber 壳，两组都不属于它），现由连接页在该服务器卡片内呈现；
  * 本文件因此只守 connections/general 两个固定 id，并显式钉死「退役的 id
  * 不再是固定项」——否则它会作为普通 ledger id 走回落分支。
+ *
+ * MUST run through the test-only vendor loader (2026-09-11 upstream-alignment
+ * A2): `section-rows.ts` now VALUE-imports upstream's exported
+ * `resolveSlotLabel` from `@deepseek-ai/dsh-client-ui-slots`, whose vendored
+ * package.json points at an unbuilt `lib/`:
+ *
+ *   node --import ./test/vendor-register.mjs test/nav-active.test.ts
+ *
+ * (the package's `test` script already does).
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -77,5 +86,22 @@ test('nav rows carry id/order/label only — no provenance tag (upstream form)',
   assert.deepEqual(sectionRows({ entries: () => entries }), [
     { id: 'models', order: 20, label: '模型' },
     { id: 'acme', order: 40, label: 'Acme' },
+  ]);
+});
+
+test('sectionRows resolves thunked labels through upstream resolveSlotLabel (A2)', () => {
+  // Official registrants declare `label: () => t('nav')` and re-register with a
+  // fresh thunk on locale change; the projection must read the thunk at row
+  // time — upstream's exported resolveSlotLabel does exactly that, and it is
+  // what this module now imports instead of a local copy.
+  const entries = [
+    { options: { id: 'models', order: 20, label: () => '模型' } },
+    { options: { id: 'acme', order: 40 } },
+  ];
+  assert.deepEqual(sectionRows({ entries: () => entries }), [
+    { id: 'models', order: 20, label: '模型' },
+    // A registrant that declared no label projects to the empty string, never
+    // to "undefined" (upstream `resolveSlotLabel(...) ?? ''`).
+    { id: 'acme', order: 40, label: '' },
   ]);
 });

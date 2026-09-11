@@ -52,11 +52,54 @@ from retention reclaim); closing the panel releases both guarantees.
 - A source that is not mounted yet shows the "starting this instance's
   frontend" intermediate state; an unreachable source shows the existing
   unavailable placeholder plus the connections route, and triggers no mount.
-- Fixed chamber-global **Connections** and **General** nav entries: the
+- Fixed chamber-global **Connections** and **Desktop** nav entries: the
   connections page renders the settings-connections section from the chamber
-  packages; the general page renders chamber-global runtime settings (design
+  packages; the desktop page renders chamber-global runtime settings (design
   14 D7/15 — quit confirmation / launch at login / keep awake + the design 11
-  update status).
+  update status). The second entry was named "General" until the 2026-09-11
+  upstream alignment: the OFFICIAL section is the one named 通用设置/General, so
+  the chamber-global desktop-client page and its nav cell are renamed
+  `客户端` / `Desktop` (one dictionary key serves both).
+- The shell also coordinates its OWN boot ctx's `settings.onboarding` stage
+  (upstream SettingsRoot parity): the first ordered, not-yet-completed step
+  mounts while that ctx's current session is blank or absent, and the step's own
+  component (registered in that ctx) owns its readiness gate, its ctx reads and
+  its dialog chrome — the shell paints none of it. The stage is per-ctx on
+  purpose: it is driven by the ctx's own sessions seat (`props.useSessions`) and
+  its own ledger, never by the panel's selected source (two mounted shells
+  selecting the same source would otherwise mount the same step twice), and it
+  is gated on the chamber's App-published active-view fact — several instance
+  shells are mounted at once, and a first-run dialog is document-global.
+- Every bridged outlet renders inside the official `[data-slot="<key>"]` anchor
+  (`display: contents`; the wrapper rides the outlet, not the dispatch outcome),
+  so official stylesheets that address a slot's children — General's
+  trailing-separator rule in `ui-settings-general/GeneralSection.module.css` —
+  match inside this panel exactly as they do in the instance's own frontend. A
+  cell whose registrations all abdicated keeps its addressable crash face
+  (`<div data-slot-error="<key>">`) instead of collapsing into the owner's
+  fallback.
+- Controls and shared symbols come from upstream: the toggle is `ui-primitives`'
+  `Switch` (36×20, required accessible name), every action capsule and every
+  confirmation dialog is `ui-primitives` (`Button`, and the `Modal` the dsh
+  runtime section confirms through — title + description + outline Cancel +
+  error-toned confirm, with an aria-live pending row while the action runs), the
+  nav projection resolves labels with upstream's exported `resolveSlotLabel`,
+  and the outlet binds hooks with the renderer's exported `observableHook`.
+  Chrome geometry follows upstream's rules (42px trigger row, r32 panel, one page
+  title per page — the section body renders its own heading — and closing the
+  dialog returns focus to the trigger); the server sub-line and the empty-ledger
+  placeholder are the deliberate N-source additions.
+- The「dsh 运行时」section confirms every destructive action — the restart on both
+  shapes and all seven gateway mutations — through ONE in-app dialog
+  (`RuntimeConfirmDialog` over the official `Modal`, driven by the pure
+  `confirm-machine.ts` machine: arming runs nothing, a cancel performs nothing,
+  and an accept launches exactly one runner). The earlier split (native confirm
+  on the desktop shape, `window.confirm` on the gateway shape) is gone: native
+  chrome cannot ride the panel's `--dsw-alias-*` vocabulary or its multi-shell
+  document, and the gateway shape has no native dialog at all. Which layer
+  confirms an action is otherwise unchanged — the local apply-now transaction is
+  still confirmed inside the local runtime surface, so the panel never
+  double-asks.
 - Config facts stay on the target host: no chamber-side persistence, no new
   control-plane API.
 

@@ -6,19 +6,23 @@
    connections section view. Every color resolves through a `--dsw-alias-*`
    token. Deviation from the official shell geometry: the nav rail scrolls
    (overflow-y) with an 8px bottom pad so the last entry clears the panel's
-   24px corner radius. */
+   32px corner radius. */
 
 /* ---- sidebar trigger (official chrome rhythm) ---- */
 
+/* 2026-09-11 upstream-alignment T7: the trigger row is upstream's 42px row
+   (SettingsRoot.module.css `.triggerRow` + `.trigger`). The chamber renders the
+   button alone, so the wrapper's row metrics (100%+4px wide, 4px/-2px margin)
+   are folded into it; `.trigger.rail` below keeps upstream's railRow box. */
 .trigger {
   flex: none;
   display: flex;
   align-items: center;
   gap: 8px;
-  width: calc(100% + 8px);
-  height: 34px;
-  margin: 4px -4px 4px;
-  padding: 6px 2px 6px 10px;
+  width: calc(100% + 4px);
+  height: 42px;
+  margin: 4px -2px;
+  padding: 0 10px 0 8px;
   box-sizing: border-box;
   border: none;
   border-radius: 12px;
@@ -82,13 +86,15 @@
   width: 800px;
   height: min(800px, calc(100vh - 48px));
   max-width: calc(100vw - 48px);
-  border-radius: 24px;
+  /* 2026-09-11 upstream-alignment「small invented bits」: upstream's actual rule
+     is r32 (SettingsRoot.module.css `.panel`) — the r24 the chamber copied came
+     from that rule's stale comment (which claims the Modal treatment). The
+     panel now matches the rule, not the comment. The hairline stroke still
+     rides the shadow at the default l4 stroke color, exactly as upstream leaves
+     it — no border of its own to double-draw the outline. */
+  border-radius: 32px;
   overflow: hidden;
   background: var(--dsw-alias-bg-layer-2);
-  /* Elevated surface, official Modal treatment (ui-primitives/Modal.module.css
-     `.dialog`: r24 + layer-2 fill + elevation-prominent). The hairline stroke
-     rides the shadow at the default l4 stroke color, exactly as Modal leaves
-     it — no border of its own to double-draw the outline. */
   box-shadow: var(--dsw-elevation-prominent);
   /* Elevated surface: the scrollbar thumb takes the l2 elevation tokens. */
   --dsh-scrollbar-thumb: var(--dsw-alias-scrollbar-bg-l2);
@@ -377,25 +383,11 @@
   box-sizing: border-box;
 }
 
-/* Header context block: active section label + selected server (fills the
-   left side that used to sit empty for remote/unavailable states). */
-.headerText {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-}
-
-.headerTitle {
-  font-size: 14px;
-  line-height: 20px;
-  font-weight: 600;
-  color: var(--dsw-alias-label-primary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
+/* Header context (2026-09-11 upstream-alignment T7): upstream's header holds
+   only the `settings.action` seat + close, because each section renders its own
+   <h2> — so the chamber keeps exactly ONE page title too. What remains here is
+   the server sub-line (the N-source addition) that names the selected server
+   above server-owned content. */
 .headerSub {
   font-size: 11px;
   line-height: 16px;
@@ -773,67 +765,16 @@
   animation: contentFadeIn var(--ds-transition-duration) var(--ds-ease-in-out);
 }
 
-/* ---- 通知主开关（官方 switch 词汇，SubagentModelSelectionCard）----
-   36x20 轨道（关 = border-l3、开 = 官方业务蓝）+ 16px 圆形 thumb
-   （label-primary-foreground，translateX 16px，120ms）。底层仍是原生
-   checkbox（role=switch），整行 label 可点。 */
+/* ---- 通知主开关（2026-09-11 upstream-alignment T9）----
+   开关本身是官方 ui-primitives `Switch`（36x20 轨道 / 16px thumb / 120ms /
+   aria-checked 选中色 = 品牌主色），本文件不再复制它的样式——原先的
+   .generalSwitchInput / .generalSwitch / .generalSwitchThumb 三件套（原生
+   checkbox + role=switch + 手写轨道）已删除。这里只剩包装盒：布局占位，
+   并在披露行（DisclosureSwitch）上承载 aria-expanded / aria-controls。 */
 
 .generalSwitchBox {
-  position: relative;
   flex: none;
   display: inline-flex;
-}
-
-.generalSwitchInput {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  margin: 0;
-  opacity: 0;
-  cursor: pointer;
-}
-
-.generalSwitchInput:disabled {
-  cursor: default;
-}
-
-.generalSwitch {
-  box-sizing: border-box;
-  display: block;
-  width: 36px;
-  height: 20px;
-  padding: 2px;
-  border-radius: 10px;
-  background: var(--dsw-alias-border-l3);
-  transition: background 120ms ease;
-}
-
-.generalSwitchInput:checked + .generalSwitch {
-  background: var(--dsw-alias-state-business-primary);
-}
-
-.generalSwitchThumb {
-  display: block;
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  corner-shape: round;
-  background: var(--dsw-alias-label-primary-foreground);
-  transition: transform 120ms ease;
-}
-
-.generalSwitchInput:checked + .generalSwitch .generalSwitchThumb {
-  transform: translateX(16px);
-}
-
-.generalSwitchInput:focus-visible + .generalSwitch {
-  outline: 2px solid var(--dsw-alias-brand-primary);
-  outline-offset: 2px;
-}
-
-.generalSwitchInput:disabled + .generalSwitch {
-  opacity: 0.5;
 }
 
 .generalDisabled {
@@ -877,6 +818,31 @@
   gap: 10px;
 }
 
+/* Action capsules (2026-09-11 upstream-alignment T9): the hand-rolled
+   `.updateButton` / `.updatePrimaryButton` rules are gone — every call site
+   renders the shared ui-primitives `Button` (`variant="outline|primary"
+   size="sm"`), whose `.sm`/`.outline`/`.primary` recipe is exactly this
+   geometry (28px capsule, 12px/18px, 0 10px, r14) at the official token
+   values. Layout-only helpers below stay. */
+
+/* Destructive-action confirmation (2026-09-11 upstream-alignment T2): the dsh
+   runtime section confirms through the official ui-primitives Modal, so this
+   file only sets the compact dialog width and the error tone of the shared
+   Button's `.outline` capsule — geometry, focus and hover stay the primitive's.
+   Same two declarations the connections section's confirm dialogs use. */
+.deleteDialog {
+  width: min(480px, 100%);
+}
+
+.deleteConfirm:not(:disabled) {
+  border-color: var(--dsw-alias-state-error-primary);
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.deleteConfirm:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover-danger);
+}
+
 .updateRow {
   margin: 0;
   font-size: 13px;
@@ -902,60 +868,8 @@
   color: var(--dsw-alias-label-primary);
 }
 
-/* Secondary dense capsule (row-actions size). */
-.updateButton {
-  box-sizing: border-box;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  height: 28px;
-  padding: 0 10px;
-  border: 0.5px solid var(--dsw-alias-border-l2);
-  border-radius: 14px;
-  background: transparent;
-  cursor: pointer;
-  font-family: inherit;
-  font-size: 12px;
-  line-height: 18px;
-  color: var(--dsw-alias-label-primary);
-}
-
-.updateButton:hover:not(:disabled) {
-  background: var(--dsw-alias-interactive-bg-hover);
-}
-
-.updateButton:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
-
-/* Primary dense capsule: the user-confirmed download action. */
-.updatePrimaryButton {
-  box-sizing: border-box;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  height: 28px;
-  padding: 0 10px;
-  border: none;
-  border-radius: 14px;
-  background: var(--dsw-alias-button-primary-fill);
-  cursor: pointer;
-  font-family: inherit;
-  font-size: 12px;
-  line-height: 18px;
-  color: var(--dsw-alias-label-primary-foreground);
-}
-
-.updatePrimaryButton:hover:not(:disabled) {
-  background: var(--dsw-alias-button-primary-hover);
-}
-
-.updatePrimaryButton:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
-
+/* Secondary dense capsule (row-actions size) — the shared Button `.outline .sm`
+   recipe; see the note above this block. */
 .updateLink {
   font-size: 12px;
   line-height: 18px;
@@ -1076,8 +990,9 @@
 }
 
 /* Form-shaped select/input for the runtime section (2026-11): a boxed field
-   with border + background, deliberately DISTINCT from the capsule buttons
-   (.updateButton) so a dropdown is recognizable as an input.
+   with border + background, deliberately DISTINCT from the capsule action
+   buttons (the shared ui-primitives Button) so a dropdown is recognizable as an
+   input.
    2026-12 有意不统一：字段字号 12px vs 服务器下拉 13px/600——服务器下拉是
    导航选择器（强调选中项），运行时字段是紧凑表单行；只统一箭头词汇。 */
 .runtimeField {

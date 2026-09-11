@@ -12,7 +12,11 @@ export const zh = {
   serverOffline: '离线',
   manageConnections: '前往连接管理',
   connectionsNav: '连接',
-  generalNav: '通用',
+  // 2026-09-11 upstream-alignment T8：官方分节 general.nav 也叫「通用设置」，
+  // 本页是 chamber 全局的桌面客户端设置（关闭行为 / 自启 / 保持唤醒 / 退出确认 /
+  // 更新），因此改名「客户端」——nav 单元与页面自身标题共用这一个键
+  // （GeneralView 的 h2），不会出现「导航叫一个名字、页面叫另一个名字」。
+  clientNav: '客户端',
   noServers: '暂无可管理的实例。请在「连接」中启动本地实例或注册远程主机。',
   loadingServers: '正在加载实例…',
   targetUnavailable: '该实例当前不可达，其配置存储在该实例的宿主机器上，建立连接后可编辑。',
@@ -27,7 +31,6 @@ export const zh = {
   sectionsEmpty: '该实例没有可显示的内容（可能正在启动，稍后自动出现）。',
   current: '当前',
   close: '关闭',
-  generalTitle: '通用',
   generalGroupLifecycle: '启动与关闭',
   generalGroupRuntime: '运行',
   generalGroupSessionTodo: '会话待办区',
@@ -170,13 +173,16 @@ export const zh = {
   dshRuntimeCleanupCandidatesLabel: '可清理的已安装版本',
   dshRuntimeCleanupConfirmTitle: '清理 dsh 运行时 {version}？',
   dshRuntimeCleanupConfirmBody: '仅删除该不可变版本树并回收 pnpm store；当前、待应用、回退、known-good 与失败现场保护版本不会被删除。',
-  // 恢复回滚前数据（2026-12 gateway 对齐；桌面侧同文案走原生确认）。
+  // 恢复回滚前数据（2026-12 gateway 对齐；2026-09-11 upstream-alignment T2：
+  // 两种形态一律走本段唯一的应用内确认对话框，文案键不变）。
   dshRuntimeRestorePreRollbackConfirmTitle: '恢复回滚前数据？',
   dshRuntimeRestorePreRollbackConfirmBody: '将停止 dsh，把当前 DSH_HOME 保留为 dsh-home.old，再用最近一次手动回滚前保存的数据覆盖恢复。',
-  // 元数据救援（2026-12 gateway 对齐；桌面侧同文案走原生确认）。
+  // 元数据救援（2026-12 gateway 对齐；2026-09-11 T2：同一个应用内对话框）。
   dshRuntimeRecoverMetadataConfirmTitle: '保留数据并恢复内建 dsh？',
   dshRuntimeRecoverMetadataConfirmBody: '将停止实例，先另存一份完整 DSH_HOME 副本并把损坏的运行时元数据按原始字节归档，再用内建 dsh 执行完整只读探针；只有探针全部通过才会恢复访问。',
-  // 恢复行动行确认（2026-12 review：gateway 补齐与桌面原生确认同深度的窗口确认）。
+  // 恢复行动行确认（2026-12 review；2026-09-11 T2：原先 gateway 用原生
+  // 原生浏览器确认框补齐确认深度，现统一为本段唯一的应用内对话框——原生 chrome
+  // 套不上面板的 --dsw-alias-* 词汇，gateway 形态也根本没有原生对话框）。
   dshRuntimeRestoreBuiltinConfirmTitle: '恢复内建 dsh 运行时？',
   dshRuntimeRestoreBuiltinConfirmBody: '将停止实例并清除用户运行时指针；版本树与快照仍保留。',
   dshRuntimeRetryApplyConfirmTitle: '重试应用 dsh 运行时？',
@@ -251,7 +257,11 @@ export const en: Record<keyof typeof zh, string> = {
   serverOffline: 'Offline',
   manageConnections: 'Manage connections',
   connectionsNav: 'Connections',
-  generalNav: 'General',
+  // 2026-09-11 upstream-alignment T8: the official `general.nav` section is also
+  // named "General" in English, so this chamber-global desktop-client page
+  // (close behavior / launch at login / keep awake / quit confirmation / update)
+  // is renamed "Desktop". One key serves both the nav cell and the page's own h2.
+  clientNav: 'Desktop',
   noServers: 'Nothing to manage yet. Start the local instance or register a remote host in Connections.',
   loadingServers: 'Loading instances…',
   targetUnavailable: 'This instance is not reachable right now. Its config lives on the instance host machine; connect first to edit.',
@@ -262,7 +272,6 @@ export const en: Record<keyof typeof zh, string> = {
   sectionsEmpty: 'Nothing to show yet (the instance may still be starting — it appears automatically).',
   current: 'Current',
   close: 'Close',
-  generalTitle: 'General',
   generalGroupLifecycle: 'Startup & exit',
   generalGroupRuntime: 'Runtime',
   generalGroupSessionTodo: 'Session todo',
@@ -409,16 +418,19 @@ export const en: Record<keyof typeof zh, string> = {
   dshRuntimeCleanupCandidatesLabel: 'Cleanable installed versions',
   dshRuntimeCleanupConfirmTitle: 'Clean up dsh runtime {version}?',
   dshRuntimeCleanupConfirmBody: 'Deletes only that immutable version tree and reclaims the pnpm store. Current, pending, rollback, known-good and failure-evidence protected versions are never deleted.',
-  // Pre-rollback data restore (2026-12 gateway parity; desktop uses the same
-  // copy in its native dialog).
+  // Pre-rollback data restore (2026-12 gateway parity; 2026-09-11
+  // upstream-alignment T2: both shapes use this section's single in-app
+  // confirmation dialog, keys unchanged).
   dshRuntimeRestorePreRollbackConfirmTitle: 'Restore pre-rollback data?',
   dshRuntimeRestorePreRollbackConfirmBody: 'dsh will stop, the current DSH_HOME is preserved as dsh-home.old, and the data saved before the latest manual rollback is restored over it.',
-  // Metadata rescue (2026-12 gateway parity; desktop uses the same copy in
-  // its native dialog).
+  // Metadata rescue (2026-12 gateway parity; 2026-09-11 T2: the same in-app dialog).
   dshRuntimeRecoverMetadataConfirmTitle: 'Preserve data and restore bundled dsh?',
   dshRuntimeRecoverMetadataConfirmBody: 'dsh will stop. A full DSH_HOME copy is preserved first and the corrupt runtime metadata is archived byte-for-byte; then the bundled dsh runs the complete read-only probe set. Access returns only after every probe passes.',
-  // Recovery-row confirms (2026-12 review: gateway mirrors the desktop native
-  // confirmation depth with window.confirm).
+  // Recovery-row confirms (2026-12 review; 2026-09-11 T2: the gateway shape used
+  // to mirror the desktop confirmation depth with a native browser confirm. Now
+  // every shape confirms through this section's single in-app dialog — native
+  // chrome cannot ride the panel's `--dsw-alias-*` vocabulary, and the gateway
+  // shape has no native dialog at all.)
   dshRuntimeRestoreBuiltinConfirmTitle: 'Restore bundled dsh runtime?',
   dshRuntimeRestoreBuiltinConfirmBody: 'dsh will stop and the user runtime pointer is cleared; version trees and snapshots are retained.',
   dshRuntimeRetryApplyConfirmTitle: 'Retry applying the dsh runtime?',

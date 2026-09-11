@@ -17,6 +17,12 @@
  * self-built (the official `settings.header`/`close` seats are chrome, not
  * content). Every section's config fact still lives on the selected
  * instance's host machine.
+ *
+ * 2026-09-11 upstream-alignment batch (T3/T7/T8): the shell also coordinates
+ * its OWN ctx's `settings.onboarding` stage (./onboarding.ts, upstream
+ * SettingsRoot parity), the trigger row keeps upstream's 42px geometry and
+ * returns focus to the trigger on close, and the content header no longer
+ * repeats a title the section body already renders.
  */
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import type { FocusEvent as ReactFocusEvent, KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react'
@@ -50,6 +56,11 @@ import {
   type RenderableSettingsSourceFace,
 } from './settings-source-face.ts'
 import { BridgeEntryBoundary, BridgeOutlet, useLocaleRevision } from './bridge-outlet.tsx'
+import type { BridgeStandardSeats } from './bridge-outlet.tsx'
+import {
+  nextOnboardingStep, sessionsSeatOf,
+} from './onboarding.ts'
+import { useActiveView, useOnboardingActive, useOnboardingSteps } from './onboarding-hooks.ts'
 import css from './SettingsShell.module.css'
 import {
   filterServerRows,
@@ -358,19 +369,13 @@ function SettingsPanel({
   // Active resolution (nav-active.ts): chamber-global fixed ids win; a
   // server-section id that left the ledger falls back to the first row.
   const active = resolveActiveSection(activeId, rows)
-  // Header context (2026-11): the active section label on the left; the
-  // selected server name sits under it ONLY for server-owned content (the
-  // chamber-global 连接/通用 pages are server-independent — implying a server
-  // there would mislead). Fills the header that used to sit empty for remote
-  // and unavailable states.
-  const headerTitle = active === CONNECTIONS_SECTION_ID
-    ? t('connectionsNav')
-    : active === GENERAL_SECTION_ID
-      ? t('generalNav')
-      : rows.find(row => row.id === active)?.label ?? t('title')
-  // The header sub-line names the selected server for SERVER-OWNED content
-  // only (the chamber-global connections/general pages are server-independent
-  // — implying a server there would mislead).
+  // Header context (2026-11, revised 2026-09-11 upstream-alignment T7): the
+  // selected server name sits under the header ONLY for server-owned content
+  // (the chamber-global connections/client pages are server-independent —
+  // implying a server there would mislead). The active section's TITLE is NOT
+  // repeated here: every content branch renders its own heading (the official
+  // sections their `<h2>`, the chamber-global pages theirs), so upstream has
+  // exactly one title per page and the chamber keeps that rule.
   const headerSub = active !== CONNECTIONS_SECTION_ID && active !== GENERAL_SECTION_ID
     ? selected?.label ?? ''
     : ''
@@ -476,16 +481,15 @@ function SettingsPanel({
               onClick={() => onSelectSection(GENERAL_SECTION_ID)}
             >
               <IconSettingsOutline16 className={css.navIcon} size={16} />
-              <span className={css.navLabel}>{t('generalNav')}</span>
+              <span className={css.navLabel}>{t('clientNav')}</span>
             </button>
           </div>
         </nav>
         <div className={css.content}>
           <div className={css.header}>
-            <div className={css.headerText}>
-              <span className={css.headerTitle}>{headerTitle}</span>
-              {headerSub !== '' && <span className={css.headerSub}>{headerSub}</span>}
-            </div>
+            {/* Server sub-line (chamber N-source addition; T7 keeps it while
+                dropping the duplicated page title). */}
+            {headerSub !== '' && <span className={css.headerSub}>{headerSub}</span>}
             <div className={css.actions}>
               {/* The official open-document action ("打开配置文件") is a
                   HOST-MACHINE file operation (native opener): it renders for
@@ -559,6 +563,16 @@ function SettingsPanel({
                  server so a server switch remounts the wrapper and replays
                  the fade-in. */
               rows.length === 0 ? (
+                /* 2026-09-11 upstream-alignment「small invented bits」: upstream
+                   renders an EMPTY options column here (its single-ctx shell can
+                   never show the panel without sections). The chamber keeps the
+                   honest placeholder deliberately — an unpublished section
+                   ledger is a REACHABLE N-source state (a source whose settings
+                   cluster has not landed in its own boot ctx, or a foreign dsh
+                   target whose plugin graph partially failed), and a bare blank
+                   column would read as "this server has no settings" instead of
+                   "its sections are not here yet". t('sectionsEmpty') is
+                   therefore retained copy, not invented chrome. */
                 <div key={selectedId} className={css.contentFade}>
                   <p className={css.placeholder}>{t('sectionsEmpty')}</p>
                 </div>
@@ -641,9 +655,21 @@ export function SettingsShell(props: SettingsShellProps) {
 
   useEffect(() => subscribeServers(() => setServers(getServers())), [])
 
+  // 2026-09-11 upstream-alignment T7: closing the dialog returns focus to the
+  // trigger it was opened from (upstream SettingsRoot's wasOpen effect). The
+  // restore runs AFTER the close commit, when the dialog can no longer own
+  // focus.
+  const triggerButton = useRef<HTMLButtonElement | null>(null)
+  const wasOpen = useRef(open)
+  useEffect(() => {
+    if (wasOpen.current && !open) triggerButton.current?.focus()
+    wasOpen.current = open
+  }, [open])
+
   // Seat publication: the seats are stable per (binding, source), so the effect
   // re-publishes only when the renderer swaps one (locale/root binding change)
-  // — not on every render.
+  // — not on every render. The same object is handed to this ctx's OWN
+  // onboarding outlet below (one materialization, two readers).
   const useSessions = props.useSessions
   const useWorkspaces = props.useWorkspaces
   const usePanelInfo = props.usePanelInfo
@@ -653,20 +679,21 @@ export function SettingsShell(props: SettingsShellProps) {
     const base = props.chamberFileApiBase
     return base === undefined ? undefined : { chamberFileApiBase: base }
   }, [props.chamberFileApiBase])
-  useEffect(() => {
-    if (chamberInstanceId === undefined) return () => {}
-    return publishSettingsSourceSeats(chamberInstanceId, {
-      ...(useSessions === undefined ? {} : { useSessions }),
-      ...(useWorkspaces === undefined ? {} : { useWorkspaces }),
-      ...(usePanelInfo === undefined ? {} : { usePanelInfo }),
-      ...(useResource === undefined ? {} : { useResource }),
-      ...(useSessionPendingInteraction === undefined ? {} : { useSessionPendingInteraction }),
-      ...(rootProps === undefined ? {} : { props: rootProps }),
-    })
-  }, [
-    chamberInstanceId, useSessions, useWorkspaces, usePanelInfo, useResource,
+  const ownSeats = useMemo<BridgeStandardSeats>(() => ({
+    ...(useSessions === undefined ? {} : { useSessions }),
+    ...(useWorkspaces === undefined ? {} : { useWorkspaces }),
+    ...(usePanelInfo === undefined ? {} : { usePanelInfo }),
+    ...(useResource === undefined ? {} : { useResource }),
+    ...(useSessionPendingInteraction === undefined ? {} : { useSessionPendingInteraction }),
+    ...(rootProps === undefined ? {} : { props: rootProps }),
+  }), [
+    useSessions, useWorkspaces, usePanelInfo, useResource,
     useSessionPendingInteraction, rootProps,
   ])
+  useEffect(() => {
+    if (chamberInstanceId === undefined) return () => {}
+    return publishSettingsSourceSeats(chamberInstanceId, ownSeats)
+  }, [chamberInstanceId, ownSeats])
 
   // The App layer publishes the first projection asynchronously; if the
   // settings trigger opened first, backfill the selection once servers
@@ -710,9 +737,57 @@ export function SettingsShell(props: SettingsShellProps) {
     setActiveId(undefined)
   }, [])
 
+  // ---- settings.onboarding stage (2026-09-11 upstream-alignment T3) ----
+  //
+  // Upstream's SettingsRoot mounts the first not-yet-completed ordered
+  // `settings.onboarding` entry while the CURRENT SESSION is blank or absent,
+  // and paints no chrome of its own. Chamber parity is read from exactly the
+  // two facts upstream reads, both already delivered to this component:
+  //
+  // - the CTX'S OWN ledger: this shell is that instance's `sidebar.settings`
+  //   occupant, and the ctx-side half of its face (slots + locale) is published
+  //   by this package's own `apply` in that ctx (settings-source-face.ts);
+  // - the CTX'S OWN sessions seat: `props.useSessions` — the same seat the
+  //   shell publishes for the panel (upstream: `useSessions` from
+  //   PropsRuntime). No seat is invented, and no new fact channel is added.
+  //
+  // The stage is deliberately per-ctx, NOT per selected source: a foreign
+  // ctx's step would have to be driven through a foreign hook, and two mounted
+  // shells selecting the same source would mount the same step twice. It is also
+  // gated on the chamber's active-view fact — the chamber mounts several
+  // instance shells at once, and the step's dialog is document-global, so a
+  // hidden shell must never pop another instance's first-run stage. The
+  // per-source panel rendering above is untouched.
+  const ownFace = getSettingsSourceFace(chamberInstanceId)
+  const ownSlots = ownFace?.slots
+  const onboardingSteps = useOnboardingSteps(ownSlots)
+  const onboardingActive = useOnboardingActive(sessionsSeatOf(props)) && useActiveView(chamberInstanceId)
+  const [completedOnboarding, setCompletedOnboarding] = useState<ReadonlySet<string>>(() => new Set())
+  const onboardingStep = onboardingActive
+    ? nextOnboardingStep(onboardingSteps, completedOnboarding)
+    : undefined
+  // A new blank-session run starts the stage over (upstream reset effect).
+  useEffect(() => {
+    if (onboardingActive) return
+    setCompletedOnboarding(new Set())
+  }, [onboardingActive])
+  const completeOnboardingStep = useCallback((id: string) => {
+    setCompletedOnboarding((previous) => {
+      if (previous.has(id)) return previous
+      return new Set([...previous, id])
+    })
+  }, [])
+  // `openSection` is the step's own route into the panel: the same two pieces
+  // of viewing state the nav cell drives (upstream openSection).
+  const openSection = useCallback((id: string) => {
+    setActiveId(id)
+    setOpen(true)
+  }, [])
+
   return (
     <>
       <button
+        ref={triggerButton}
         type="button"
         className={clsx(css.trigger, !wide && css.rail)}
         // The rail (narrow) form renders the icon only, so the accessible name
@@ -740,6 +815,28 @@ export function SettingsShell(props: SettingsShellProps) {
           t={t}
           connectionsT={connectionsT}
         />
+      )}
+      {/* Exactly ONE step mounts, from this ctx's own ledger, with this ctx's
+          own renderer-bound seats; the step component owns its ctx reads, its
+          readiness gate and its dialog chrome (`#root` inert ownership lives
+          there, not here). containAll keeps a crashed foreign step inside a
+          `<div data-slot-error="settings.onboarding">` instead of abdicating
+          the chamber-owned `sidebar.settings` seat. */}
+      {onboardingStep !== undefined && ownSlots !== undefined && (
+        <BridgeEntryBoundary containAll slotKey="settings.onboarding">
+          <BridgeOutlet
+            slots={ownSlots}
+            locale={ownFace?.locale}
+            standard={ownSeats}
+            slotKey="settings.onboarding"
+            ownerProps={{
+              stepId: onboardingStep.id,
+              complete: () => { completeOnboardingStep(onboardingStep.id) },
+              openSection,
+            }}
+            opts={{ only: onboardingStep.id }}
+          />
+        </BridgeEntryBoundary>
       )}
     </>
   )

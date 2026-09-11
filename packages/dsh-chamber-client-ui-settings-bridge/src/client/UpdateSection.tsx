@@ -11,9 +11,15 @@
  * the download starts only after the explicit click (autoDownload stays off
  * in the main process). All state is the non-secret projection pushed by the
  * desktop main process over the update bridge (update-store.ts).
+ *
+ * 2026-09-11 upstream-alignment T9: every action capsule in this file is the
+ * shared ui-primitives `Button` (`variant="outline|primary" size="sm"`), the
+ * exact recipe the hand-rolled `.updateButton` / `.updatePrimaryButton` rules
+ * copied — the local rules are gone.
  */
 import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
 import type { MouseEvent as ReactMouseEvent } from 'react'
+import { Button } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { SettingsBridgeKey } from '../locales.ts'
 import type { UpdateState } from '../ambient/update-bridge.d.ts'
 import {
@@ -115,9 +121,9 @@ function StatusRow({
                 ? t('updateAvailableBeta', { version: latestVersion ?? '' })
                 : t('updateAvailable', { version: latestVersion ?? '' })}
             </span>
-            <button type="button" className={css.updatePrimaryButton} onClick={onUpdate} disabled={busy}>
+            <Button variant="primary" size="sm" onClick={onUpdate} disabled={busy}>
               {t('updateAction')}
-            </button>
+            </Button>
             {releaseLink}
           </div>
         )
@@ -147,9 +153,9 @@ function StatusRow({
             return (
               <div className={css.updateStatusLine}>
                 <span className={css.updateStatusText}>{t('updateRestartFailed', { error: update.restartFailureText })}</span>
-                <button type="button" className={css.updatePrimaryButton} onClick={onRestart} disabled={busy}>
+                <Button variant="primary" size="sm" onClick={onRestart} disabled={busy}>
                   {t('updateRestartAction')}
-                </button>
+                </Button>
                 {releaseLink}
               </div>
             )
@@ -167,9 +173,9 @@ function StatusRow({
             return (
               <div className={css.updateStatusLine}>
                 <span className={css.updateStatusText}>{t('updateRestarting')}</span>
-                <button type="button" className={css.updatePrimaryButton} onClick={onRestart} disabled>
+                <Button variant="primary" size="sm" onClick={onRestart} disabled>
                   {t('updateRestartAction')}
-                </button>
+                </Button>
                 {releaseLink}
               </div>
             )
@@ -181,9 +187,9 @@ function StatusRow({
           return (
             <div className={css.updateStatusLine}>
               <span className={css.updateStatusText}>{t('updateDownloaded')}</span>
-              <button type="button" className={css.updatePrimaryButton} onClick={onRestart} disabled={busy}>
+              <Button variant="primary" size="sm" onClick={onRestart} disabled={busy}>
                 {t('updateRestartAction')}
-              </button>
+              </Button>
               {releaseLink}
             </div>
           )
@@ -207,9 +213,9 @@ function StatusRow({
         return latestVersion !== null ? (
           <div className={css.updateStatusLine}>
             <span className={css.updateStatusText}>{t('updateDownloadFailed')}</span>
-            <button type="button" className={css.updatePrimaryButton} onClick={onUpdate} disabled={busy}>
+            <Button variant="primary" size="sm" onClick={onUpdate} disabled={busy}>
               {t('updateAction')}
-            </button>
+            </Button>
           </div>
         ) : (
           <p className={css.updateStatusText}>{t('updateCheckFailed')}</p>
@@ -296,9 +302,9 @@ export function UpdateSection({ t }: { t: UpdateTranslate }) {
       <h3 className={css.generalGroupTitle}>{t('updateTitle')}</h3>
       <div className={css.updateVersionRow}>
         <p className={css.updateRow}>{t('updateCurrentVersion', { version: currentVersion ?? '—' })}</p>
-        <button type="button" className={css.updateButton} onClick={onCheck} disabled={checkDisabled}>
+        <Button variant="outline" size="sm" onClick={onCheck} disabled={checkDisabled}>
           {t('updateCheckAction')}
-        </button>
+        </Button>
       </div>
       {update !== null && (
         <StatusRow update={update} busyKind={busyKind} onUpdate={onUpdate} onRestart={onRestart} t={t} />

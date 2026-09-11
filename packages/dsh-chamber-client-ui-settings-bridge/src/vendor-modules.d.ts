@@ -5,6 +5,14 @@
  * with the exact surface this package consumes; the standalone
  * `typecheck:settings-bridge` script keeps this package's own code checked.
  * Keep in sync with what the src/client modules actually import.
+ *
+ * The renderer's `src/client/bindings.tsx` (2026-09-11 upstream-alignment A3:
+ * the bridge uses the OFFICIAL `observableHook` instead of re-implementing it)
+ * is the one exception: a DEEP `./src/*` specifier resolves to the real vendor
+ * source, and that module reads host/binding faces this file's loose ui-slots
+ * mirror deliberately does not carry — so it is declared in
+ * src/ambient/renderer-bindings.d.ts and mapped through this package's tsconfig
+ * `paths` instead of being mirrored here.
  */
 
 declare module '@deepseek-ai/cordis' {
@@ -163,11 +171,6 @@ declare module '@deepseek-ai/dsh-client-ui-theme/client' {
   export function apply(ctx: Context): void
 }
 
-declare module '@deepseek-ai/dsh-client-ui-renderer/src/client/bind' {
-  import type { HostObservable, SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
-  export function bindSnapshotSelector<T>(source: HostObservable<T>): SnapshotSelectorHook<T>
-}
-
 declare module '@deepseek-ai/dsh-client-ui-settings/client' {
   import type { Context } from '@deepseek-ai/cordis'
   import type { SettingsPathOpView } from '@deepseek-ai/dsh-api-remotes/client'
@@ -298,10 +301,41 @@ declare module '@deepseek-ai/dsh-client-ui-primitives' {
     autoFocus?: boolean
     icon?: ReactNode
     className?: string
+    title?: string
     onClick?: () => void
     children?: ReactNode
   }
   export function Button(props: ButtonProps): ReactNode
+  /**
+   * Two-state toggle, 36×20 (2026-09-11 upstream-alignment T9): track/thumb/
+   * transition/focus are the official vocabulary the chamber's hand-rolled
+   * switch copied; `label` is required, so the control cannot ship unnamed.
+   */
+  export function Switch(props: {
+    checked: boolean
+    onChange: (next: boolean) => void
+    label: string
+    disabled?: boolean
+    title?: string
+    className?: string
+  }): ReactNode
+  /**
+   * Centered, body-portaled dialog over a blurred mask (2026-09-11
+   * upstream-alignment T2: the ONE confirmation surface the dsh runtime section
+   * uses). `closeLabel` is required — the atoms own no fallback copy.
+   */
+  export function Modal(props: {
+    open: boolean
+    /** Escape, mask click and the header close button. */
+    onClose: () => void
+    title: string
+    closeLabel: string
+    description?: string
+    children?: ReactNode
+    footer?: ReactNode
+    className?: string
+    contentClassName?: string
+  }): ReactNode
   export interface IconProps {
     size?: number
     className?: string
