@@ -22,8 +22,10 @@ import { Component, useMemo, useSyncExternalStore, type FC, type ReactNode } fro
 // 2026-09-11 upstream-alignment A3: the official observableHook, not a second
 // copy of it. bindings.tsx also creates three React contexts at module load
 // (host / root binding / scope binding) — the import is an edge inside the one
-// renderer build graph the bridge already shares (it deep-imports the sibling
-// `bind` module), never a duplicated runtime.
+// renderer build graph the bridge already shares. 2026-09-11 review-fix F4d: the
+// bridge imports ONLY this module (the sibling `bind` module it deep-imports is
+// the VENDOR module's own edge — `bindings.tsx` imports `./bind.ts` — and this
+// package has no ambient declaration for it, because nothing here imports it).
 import { observableHook } from '@deepseek-ai/dsh-client-ui-renderer/src/client/bindings.tsx'
 import type {
   HostObservable, LocaleFace, RenderOpts, StoredEntry, StoreInstanceLike, Translate,

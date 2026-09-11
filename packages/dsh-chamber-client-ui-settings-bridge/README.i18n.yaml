@@ -4,5 +4,13 @@
 # hashes here (manually verified with `shasum -a 256`).
 # Chamber package (design discussion 2026-08): created on 2026-08-15 with the
 # 1a spec sweep — descriptions of the self-built settings shell (zh = key source).
-README.md: 9a56f857b619530b02b29640709624a221e4335cdb746f23708f6175791ed42c
-README.zh.md: c8b9e69ca5fd587ce1d38493ee9307aab25e6065b0286bc19ee54ff8b51b6b5e
+# Re-recorded 2026-09-11 (review-fix round, docs lane): three claims were brought in line
+# with the code, both sides compared claim by claim first — (1) the onboarding active-view
+# gate covers MOUNTING only, while the completed set resets on the sessions fact alone
+# (a view switch no longer wipes acknowledgements; a shell remount still restarts the run,
+# registered residual); (2) a disclosure row's `aria-expanded`/`aria-controls` are written
+# onto the primitive's OWN `role="switch"` node via `src/client/disclosure-attrs.ts`; (3) an
+# accept re-validates the armed request against live facts, and the gateway-legged actions
+# carry a 12-minute ceiling. Only then were both hashes recomputed with `sha256sum`.
+README.md: 66257f3fabc5c048f2240432f84e27ef95ec337de3d2f557b3f195c65fe127f1
+README.zh.md: b7224331228672924f0c05184ad1129ff442e48297f16a40e4cd1e50cd37aaaa

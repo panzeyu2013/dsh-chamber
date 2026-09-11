@@ -769,8 +769,9 @@
    开关本身是官方 ui-primitives `Switch`（36x20 轨道 / 16px thumb / 120ms /
    aria-checked 选中色 = 品牌主色），本文件不再复制它的样式——原先的
    .generalSwitchInput / .generalSwitch / .generalSwitchThumb 三件套（原生
-   checkbox + role=switch + 手写轨道）已删除。这里只剩包装盒：布局占位，
-   并在披露行（DisclosureSwitch）上承载 aria-expanded / aria-controls。 */
+   checkbox + role=switch + 手写轨道）已删除。这里只剩布局盒子，不带任何
+   ARIA：披露关系（aria-expanded / aria-controls）由 DisclosureSwitch 写到
+   原语自己的 role=switch 按钮上（2026-09-11 review F3）。 */
 
 .generalSwitchBox {
   flex: none;

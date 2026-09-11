@@ -56,7 +56,7 @@
  * (dev without tray) disables the hide-to-tray option — hiding a window the
  * user could not recover would strand the app.
  */
-import { useCallback, useId, useRef, useState, useSyncExternalStore } from 'react'
+import { useCallback, useId, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 import clsx from 'clsx'
 import { Button, Switch } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { SettingsBridgeKey } from '../locales.ts'
@@ -66,6 +66,7 @@ import { notificationsOf, notificationsPatch } from './notifications-settings.ts
 import { sessionTodoOf, sessionTodoPatch } from './session-todo-settings.ts'
 import { SegmentedControl } from './SegmentedControl.tsx'
 import { UpdateSection } from './UpdateSection.tsx'
+import { applyDisclosureAttributes } from './disclosure-attrs.ts'
 import css from './SettingsShell.module.css'
 
 /** The shell's bound translate (params supported). */
@@ -132,16 +133,20 @@ function ToggleEvent({
 }
 
 /**
- * Disclosure switch row control (2026-09-11 upstream-alignment T9): the shared
+ * Disclosure switch row control (2026-09-11 upstream-alignment T9; the
+ * disclosure placement corrected by the 2026-09-11 review, F3): the shared
  * `Switch` primitive — the official 36×20 track/thumb/transition/focus
  * vocabulary this row used to hand-roll — plus the disclosure relationship the
  * row carries, because this switch unfolds the sub-settings card below it.
  *
- * The primitive owns the control's own ARIA (role=switch, aria-checked, and the
- * required accessible name) and exposes no attribute pass-through, so the
- * disclosure pair rides this wrapper: `aria-expanded` (the state) and
- * `aria-controls` (the card it unfolds). Dropping them silently would lose the
- * relationship the row carries today.
+ * WHERE the pair lives: the wrapper stays a pure layout box, and
+ * `aria-expanded` / `aria-controls` are written onto the primitive's OWN control
+ * node through `applyDisclosureAttributes` (that module records why no wrapper
+ * role can carry them: the supported roles are all widgets, and a widget around
+ * the switch would nest two interactive controls). The primitive keeps ownership
+ * of `role="switch"`, `aria-checked` and the accessible name, so the control
+ * itself is untouched for pointer and keyboard users and the row stays a
+ * `<label>` (whole-row click → the labelled control, unchanged by this fix).
  */
 function DisclosureSwitch({
   label, checked, disabled, expanded, controls, onChange,
@@ -153,8 +158,16 @@ function DisclosureSwitch({
   controls: string | undefined
   onChange: (next: boolean) => void
 }) {
+  const box = useRef<HTMLSpanElement | null>(null)
+  // Applied before paint (and re-applied whenever the disclosure state or the
+  // card id changes, and on every mount), so the control never renders a frame in
+  // which the relationship it carries is missing.
+  useLayoutEffect(() => {
+    const control = box.current?.querySelector<HTMLElement>('[role="switch"]') ?? null
+    applyDisclosureAttributes(control, expanded, controls)
+  }, [expanded, controls])
   return (
-    <span className={css.generalSwitchBox} aria-expanded={expanded} aria-controls={controls}>
+    <span ref={box} className={css.generalSwitchBox}>
       <Switch checked={checked} label={label} disabled={disabled === true} onChange={onChange} />
     </span>
   )
@@ -390,8 +403,9 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
 
         {/* 主开关: 官方 Switch 原语（role=switch / aria-checked / 必需的可访问
             名称），整行即 label（整行可点）；未水合骨架态整行变淡。
-            aria-expanded/aria-controls 挂在 DisclosureSwitch 包装上，指向展开的
-            子设置卡（2026-09-11 upstream-alignment T9）。 */}
+            aria-expanded/aria-controls 由 DisclosureSwitch 写到原语自己的
+            role=switch 按钮上（2026-09-11 review F3：无 role 的包装 span 上
+            这两个属性对辅助技术是无效的），指向展开的子设置卡。 */}
         <label className={clsx(css.generalSwitchRow, !hydrated && css.generalDisabled)}>
           <div className={css.generalCardText}>
             <span className={css.generalFieldLabel}>{t('generalNotificationsEnabled')}</span>

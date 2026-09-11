@@ -189,6 +189,10 @@ export const zh = {
   dshRuntimeRetryApplyConfirmBody: '将停止实例并从持久化事务安全续作。',
   dshRuntimeRetryRestoreConfirmTitle: '重试恢复 dsh 数据？',
   dshRuntimeRetryRestoreConfirmBody: '将停止实例并从已记录的快照事务继续恢复。',
+  // 应用内确认对话框的两条诚实回执（2026-09-11 review F2/F4b）：确认点击时动作
+  // 的前提已经不成立（对话框开着时状态轮询推进了），或动作超过整体时限被中止。
+  dshRuntimeConfirmStale: '该动作的前提已改变（状态在确认期间更新了），本次操作未执行。请查看当前状态后重试。',
+  dshRuntimeActionTimeout: '操作超时：服务端在限定时间内没有返回结果，已中止本次请求。请查看当前状态后重试。',
   // gateway 托管的内建锚口径（design 18 §3.6 A1：副行「部署锚 vX」）。
   dshRuntimeDeployAnchorRow: '部署锚',
   dshRuntimeRegistryLabel: '版本源',
@@ -437,6 +441,12 @@ export const en: Record<keyof typeof zh, string> = {
   dshRuntimeRetryApplyConfirmBody: 'dsh will stop and resume from the durable transaction.',
   dshRuntimeRetryRestoreConfirmTitle: 'Retry restoring dsh data?',
   dshRuntimeRetryRestoreConfirmBody: 'dsh will stop and resume the recorded snapshot-restore transaction.',
+  // The in-app confirmation dialog's two honest receipts (2026-09-11 review
+  // F2/F4b): the action's precondition no longer holds at the confirm click (the
+  // status poll moved on while the dialog was open), or the action exceeded its
+  // overall ceiling and was aborted.
+  dshRuntimeConfirmStale: 'This action’s precondition changed while you were confirming (the status moved on), so nothing was executed. Check the current state and retry.',
+  dshRuntimeActionTimeout: 'The operation timed out: the server did not answer within the limit, so the request was aborted. Check the current state and retry.',
   // Gateway-hosted builtin anchor wording (design 18 §3.6 A1: 副行「部署锚」).
   dshRuntimeDeployAnchorRow: 'Deployment anchor',
   dshRuntimeRegistryLabel: 'Version source',

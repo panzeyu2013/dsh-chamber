@@ -22,7 +22,10 @@
  * its OWN ctx's `settings.onboarding` stage (./onboarding.ts, upstream
  * SettingsRoot parity), the trigger row keeps upstream's 42px geometry and
  * returns focus to the trigger on close, and the content header no longer
- * repeats a title the section body already renders.
+ * repeats a title the section body already renders. The 2026-09-11 review (F1)
+ * split the stage's two axes: the active-view fact gates MOUNTING only, while
+ * the completed set resets on the sessions fact alone — see the stage comment
+ * below for the remount residual this leaves open.
  */
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import type { FocusEvent as ReactFocusEvent, KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react'
@@ -58,7 +61,7 @@ import {
 import { BridgeEntryBoundary, BridgeOutlet, useLocaleRevision } from './bridge-outlet.tsx'
 import type { BridgeStandardSeats } from './bridge-outlet.tsx'
 import {
-  nextOnboardingStep, sessionsSeatOf,
+  onboardingStage, sessionsSeatOf,
 } from './onboarding.ts'
 import { useActiveView, useOnboardingActive, useOnboardingSteps } from './onboarding-hooks.ts'
 import css from './SettingsShell.module.css'
@@ -753,24 +756,50 @@ export function SettingsShell(props: SettingsShellProps) {
   //
   // The stage is deliberately per-ctx, NOT per selected source: a foreign
   // ctx's step would have to be driven through a foreign hook, and two mounted
-  // shells selecting the same source would mount the same step twice. It is also
-  // gated on the chamber's active-view fact — the chamber mounts several
-  // instance shells at once, and the step's dialog is document-global, so a
-  // hidden shell must never pop another instance's first-run stage. The
-  // per-source panel rendering above is untouched.
+  // shells selecting the same source would mount the same step twice. MOUNTING is
+  // additionally gated on the chamber's active-view fact — the chamber mounts
+  // several instance shells at once, and the step's dialog is document-global, so
+  // a hidden shell must never pop another instance's first-run stage. That gate
+  // does NOT touch the completed set (2026-09-11 review-fix F1). The per-source
+  // panel rendering above is untouched.
   const ownFace = getSettingsSourceFace(chamberInstanceId)
   const ownSlots = ownFace?.slots
   const onboardingSteps = useOnboardingSteps(ownSlots)
-  const onboardingActive = useOnboardingActive(sessionsSeatOf(props)) && useActiveView(chamberInstanceId)
+  // Both coordinates are read by their OWN unconditional hook call (2026-09-11
+  // review-fix F1): the composite used to be written as
+  // `useOnboardingActive(...) && useActiveView(...)`, which short-circuits the
+  // SECOND hook call whenever the sessions fact is false — a hook sequence that
+  // changes on a routine fact flip (the seat leaving `loading`, the session
+  // stopping being blank) and the one shape React refuses outright.
+  const sessionsOnboardingActive = useOnboardingActive(sessionsSeatOf(props))
+  const onboardingInActiveView = useActiveView(chamberInstanceId)
   const [completedOnboarding, setCompletedOnboarding] = useState<ReadonlySet<string>>(() => new Set())
-  const onboardingStep = onboardingActive
-    ? nextOnboardingStep(onboardingSteps, completedOnboarding)
-    : undefined
-  // A new blank-session run starts the stage over (upstream reset effect).
+  // The stage itself is the pure projection in ./onboarding.ts: MOUNTING is the
+  // conjunction of the two facts, the RESET is the sessions fact alone.
+  const onboardingStageState = onboardingStage({
+    steps: onboardingSteps,
+    completed: completedOnboarding,
+    sessionsActive: sessionsOnboardingActive,
+    inActiveView: onboardingInActiveView,
+  })
+  const onboardingStep = onboardingStageState.step
+  // A new blank-session run starts the stage over — the SESSIONS fact alone
+  // (upstream SettingsRoot.tsx's reset effect), never the composite: a view
+  // switch is not a new run, and resetting on the composite re-mounted an
+  // acknowledged or explicitly deferred step over a still-blank session
+  // (2026-09-11 review-fix F1; the probe is replayed in test/onboarding.test.ts).
+  //
+  // RESIDUAL (registered deviation, 2026-09-11 review-fix F1): this set is
+  // component-local, so a REMOUNT of this shell — the App reclaims the instance
+  // and mounts it again — starts an empty set and re-mounts the step upstream
+  // would still consider acknowledged, even though the run never ended. Closing
+  // that needs per-instance state surviving the mount (a chamberBridge/persisted
+  // channel keyed by instance, i.e. a NEW fact channel), which is not part of
+  // this round. The view-switch axis above is fixed; this axis is not.
   useEffect(() => {
-    if (onboardingActive) return
+    if (!onboardingStageState.resetsCompleted) return
     setCompletedOnboarding(new Set())
-  }, [onboardingActive])
+  }, [onboardingStageState.resetsCompleted])
   const completeOnboardingStep = useCallback((id: string) => {
     setCompletedOnboarding((previous) => {
       if (previous.has(id)) return previous

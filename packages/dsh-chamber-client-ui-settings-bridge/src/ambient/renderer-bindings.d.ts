@@ -12,8 +12,11 @@
  * runtime vite resolves it into the real vendor source
  * (`packages/renderer/vite.config.mjs` `deepseekSource`: every
  * `@deepseek-ai/<pkg>/src/*` specifier maps into the vendor tree, so the module
- * rides the one shared chunk the bridge's sibling `bind` import already
- * belongs to).
+ * rides the one shared chunk the bridge’s renderer imports already belong to).
+ * 2026-09-11 review-fix F4d: this package imports ONLY `bindings.tsx`; the
+ * sibling `bind` module it deep-imports belongs to the vendor module’s own edge
+ * (`bindings.tsx` imports `./bind.ts`), and no ambient declaration for it exists
+ * here because nothing in this package imports it.
  *
  * MIRROR WARNING: this face mirrors the REAL factory (WeakMap-cached
  * `bindSnapshotSelector(source)` per source). If upstream changes that

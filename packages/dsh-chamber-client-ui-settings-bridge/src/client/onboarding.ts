@@ -93,6 +93,61 @@ export function nextOnboardingStep(
   return steps.find(step => !completed.has(step.id))
 }
 
+/** Everything one derivation of the stage reads. */
+export interface OnboardingStageInput {
+  /** This ctx's ordered ledger steps. */
+  steps: readonly OnboardingStep[]
+  /** Step ids already completed in this active run. */
+  completed: ReadonlySet<string>
+  /** This ctx's OWN sessions fact (upstream's readiness selector result). */
+  sessionsActive: boolean
+  /** The App-published active-view fact: this ctx is the view on screen. */
+  inActiveView: boolean
+}
+
+/** One derivation of the stage: what mounts, and whether the run ended. */
+export interface OnboardingStage {
+  /** The step to mount this render, or undefined while nothing mounts. */
+  step: OnboardingStep | undefined
+  /** Whether the completed set must be dropped — the sessions fact alone says so. */
+  resetsCompleted: boolean
+}
+
+/**
+ * Derive the stage from its two independent facts.
+ *
+ * MOUNTING is their conjunction. Upstream mounts the step on the sessions fact
+ * alone (SettingsRoot.tsx), and the chamber adds the App-published active-view
+ * fact as the second coordinate: several instance shells are mounted at once and
+ * the step's first-run dialog is document-global, so a hidden shell must never
+ * pop another instance's stage over the view the user is looking at.
+ *
+ * The RESET is the sessions fact ALONE — upstream's own effect
+ * (`if (onboardingActive) return; setCompletedOnboarding(new Set())`), where
+ * `onboardingActive` IS the sessions selector. 2026-09-11 review-fix F1: folding
+ * the active-view gate into the reset let a plain VIEW SWITCH wipe every
+ * acknowledgement, so the step the user had just completed (or explicitly
+ * deferred — both shipped steps call `complete()` while the session stays blank)
+ * re-mounted the moment the view came back.
+ *
+ * Residual, deliberately outside this projection: the completed set itself is
+ * component-local, so a shell REMOUNT (the App reclaims and re-mounts the
+ * instance) still starts a fresh run. Closing that needs per-instance state that
+ * survives the mount (a new fact channel), not a different derivation here.
+ * @param input - the two facts, the ledger steps and the run's completed set.
+ * @returns the step to mount and whether the completed set must be reset.
+ */
+export function onboardingStage({
+  steps, completed, sessionsActive, inActiveView,
+}: OnboardingStageInput): OnboardingStage {
+  return {
+    step: sessionsActive && inActiveView
+      ? nextOnboardingStep(steps, completed)
+      : undefined,
+    resetsCompleted: !sessionsActive,
+  }
+}
+
 /**
  * Read the sessions seat the renderer handed this shell. The chamber's loose
  * ambient face erases `PropsRuntime` to `Record<string, unknown>`, so the

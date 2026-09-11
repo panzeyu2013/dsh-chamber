@@ -69,7 +69,12 @@ from retention reclaim); closing the panel releases both guarantees.
   its own ledger, never by the panel's selected source (two mounted shells
   selecting the same source would otherwise mount the same step twice), and it
   is gated on the chamber's App-published active-view fact — several instance
-  shells are mounted at once, and a first-run dialog is document-global.
+  shells are mounted at once, and a first-run dialog is document-global. That gate
+  covers MOUNTING only: the completed set resets on the sessions fact ALONE
+  (2026-09-11 review-fix F1 — a plain view switch no longer wipes a step the user
+  finished or explicitly deferred). Registered residual: the set is
+  component-local, so a shell REMOUNT still starts the run over; closing that
+  needs per-instance state that survives the mount.
 - Every bridged outlet renders inside the official `[data-slot="<key>"]` anchor
   (`display: contents`; the wrapper rides the outlet, not the dispatch outcome),
   so official stylesheets that address a slot's children — General's
@@ -79,7 +84,11 @@ from retention reclaim); closing the panel releases both guarantees.
   (`<div data-slot-error="<key>">`) instead of collapsing into the owner's
   fallback.
 - Controls and shared symbols come from upstream: the toggle is `ui-primitives`'
-  `Switch` (36×20, required accessible name), every action capsule and every
+  `Switch` (36×20, required accessible name; a disclosure row's
+  `aria-expanded`/`aria-controls` are written by this package onto the primitive's
+  OWN `role="switch"` node — `src/client/disclosure-attrs.ts` — because the
+  primitive exposes no attribute pass-through and a role-less wrapper cannot carry
+  `aria-expanded` at all, 2026-09-11 review-fix F3), every action capsule and every
   confirmation dialog is `ui-primitives` (`Button`, and the `Modal` the dsh
   runtime section confirms through — title + description + outline Cancel +
   error-toned confirm, with an aria-live pending row while the action runs), the
@@ -93,7 +102,13 @@ from retention reclaim); closing the panel releases both guarantees.
   shapes and all seven gateway mutations — through ONE in-app dialog
   (`RuntimeConfirmDialog` over the official `Modal`, driven by the pure
   `confirm-machine.ts` machine: arming runs nothing, a cancel performs nothing,
-  and an accept launches exactly one runner). The earlier split (native confirm
+  and an accept launches exactly one runner — after re-validating the armed
+  request against the LIVE facts, so a request whose gates closed while the dialog
+  was open is dropped and reported instead of reaching the wire; the gateway-legged
+  actions also carry a 12-minute wall-clock ceiling, the 11-minute status-poll
+  budget plus a one-minute margin, since a pending dialog deliberately ignores
+  cancel/Escape/mask — 2026-09-11 review-fix F2/F4b). The earlier split (native
+  confirm
   on the desktop shape, `window.confirm` on the gateway shape) is gone: native
   chrome cannot ride the panel's `--dsw-alias-*` vocabulary or its multi-shell
   document, and the gateway shape has no native dialog at all. Which layer

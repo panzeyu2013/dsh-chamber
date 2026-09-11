@@ -47,14 +47,20 @@ settings 失效通知，以及真的 `useSessions` / `useWorkspaces` / `usePanel
   ctx 读取与对话框外壳，壳不画任何自带 chrome。该阶段刻意按 ctx 而非按面板选中
   来源：它由该 ctx 自己的 sessions 座（`props.useSessions`）与该 ctx 自己的台账
   驱动——否则两个挂载中的壳选中同一来源时会重复挂载同一步骤；同时以 App 发布的
-  active-view 事实为门（同一时刻挂载着多个实例壳，而首启对话框是文档级的）。
+  active-view 事实为门（同一时刻挂载着多个实例壳，而首启对话框是文档级的）。该门只管
+  **挂载**：完成集的重置只跟 sessions 事实（2026-09-11 review-fix F1——一次普通切视图
+  不再清掉用户已走完或已显式推迟的步骤）。登记残留：完成集是组件局部的，壳被**重新
+  挂载**仍会从头再跑一遍；收口需要能跨挂载存活的每实例状态。
 - 每个桥接出口都渲染在官方 `[data-slot="<key>"]` 锚点里（`display: contents`；
   包装随**出口**而非分发结果），因此按槽子元素寻址的官方样式表——General 的
   末行去分隔线规则（`ui-settings-general/GeneralSection.module.css`）——在
   本面板内与该实例自身前端一样生效。整格注册全部 abdicate 时保留可寻址的
   crash face（`<div data-slot-error="<key>">`），而不是塌进 owner 的 fallback。
 - 控件与共享符号一律来自上游：开关是 `ui-primitives` 的 `Switch`（36×20，
-  label 必填）；每个动作胶囊与每个确认对话框都来自 `ui-primitives`（`Button`，以及
+  label 必填；披露行的 `aria-expanded`/`aria-controls` 由本包写到**原语自己的**
+  `role="switch"` 节点上——`src/client/disclosure-attrs.ts`，因为原语没有属性透传、
+  而无 role 的包装盒根本不支持 `aria-expanded`，2026-09-11 review-fix F3）；
+  每个动作胶囊与每个确认对话框都来自 `ui-primitives`（`Button`，以及
   「dsh 运行时」段确认所用的 `Modal`——标题 + 描述 + outline 取消 + 错误色确认，
   动作在途时给出 aria-live 的 pending 行）；导航投影用上游导出的
   `resolveSlotLabel` 解析标签；出口用渲染器导出的 `observableHook` 绑定 hook。
@@ -64,7 +70,11 @@ settings 失效通知，以及真的 `useSessions` / `useWorkspaces` / `usePanel
 - 「dsh 运行时」段的每个破坏性动作——两种形态的重启，以及 gateway 侧全部七个
   变更动作——都走**同一个应用内对话框**（`RuntimeConfirmDialog` 承官方 `Modal`，
   由纯 `confirm-machine.ts` 状态机驱动：arm 不执行任何动作、取消什么都不做、
-  确认只启动一个 runner）。此前的分裂（桌面形态用原生确认、gateway 形态用
+  确认只启动一个 runner——**启动前先按 live 事实复验**被武装的请求，门在对话框打开
+  期间关上的动作会被丢弃并如实报错、绝不落到 wire 上；gateway 侧动作另有 **12 分钟**
+  墙钟上限（= 11 分钟状态轮询预算 + 1 分钟余量），因为 pending 期间对话框按设计忽略
+  取消/Escape/遮罩——2026-09-11 review-fix F2/F4b）。此前的分裂（桌面形态用原生确认、
+  gateway 形态用
   `window.confirm`）已移除：原生 chrome 既套不上面板的 `--dsw-alias-*` 词汇，也
   不属于这个多壳文档，而 gateway 形态根本没有原生对话框。确认由哪一层负责其余部分
   不变——本地 apply-now 事务仍由本地运行时面自己确认，面板不会二次追问。
