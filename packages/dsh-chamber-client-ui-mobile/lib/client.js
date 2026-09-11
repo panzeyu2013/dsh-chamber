@@ -465,12 +465,22 @@ var MOBILE_CSS = `
      - Models provider row (two text inputs + chevron + trash on one
        4-column line) \u2192 TWO equal columns: the four children auto-place
        2\xD72 (inputs on the first row, the two icon actions under them).
-     The card grids are NOT overridden: upstream owns their collapse
-     breakpoint itself \u2014 PluginInventorySettingsTab.module.css collapses
-     .cards to one column at max-width: 680px \u2014 so the chamber's former
-     681-768px one-card-per-row arm contradicted upstream's own
-     two-per-row geometry above 680px and was deleted (2026-09-11
-     upstream-alignment T17b). The upstream breakpoint is the only one. */
+     The card grids are NOT overridden: upstream owns both of them, and they
+     are TWO grids under this very section with two DIFFERENT upstream rules
+     (2026-09-11 review-fix F3 \u2014 the deleted arm's blast radius had been
+     recorded for one grid only):
+     - PluginInventorySettingsTab.module.css collapses its .cards itself at
+       max-width: 680px, so the chamber's former arm only contradicted
+       upstream there in the 681-768px window;
+     - ui-agent-preset AgentPresetSection.module.css declares NO breakpoint at
+       all \u2014 its .cards is repeat(auto-fill, minmax(268px, 1fr)) inside a
+       .section capped at 720px, so upstream renders TWO columns from about
+       580px of viewport width (two 268px cards plus the 12px gap need 548px
+       inside the options box = viewport minus 2x(16px + safe-area)). For that
+       grid the deleted arm changed the layout across its WHOLE two-column
+       range, about 580-768px of the phone tier, not just 681-768px.
+     The arm was deleted for both grids (2026-09-11 upstream-alignment T17b) \u2014
+     upstream's geometry is the only geometry for each of them. */
   [data-slot="settings.section"] :is([class$="_modelRow"], [class*="_modelRow "]) {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   }

@@ -12,11 +12,16 @@
  * 2026-09-11 upstream-alignment T17a: the control is the OFFICIAL glyph
  * (`IconPanelLeftOutline16`, the panel icon the official sidebar toggle
  * draws — ui-sidebar SidebarRoot.tsx) instead of a hand-drawn CSS
- * hamburger, and it carries the official ARIA shape: one state-carrying
- * `aria-label` (the official toggle's own `toggle.open` / `toggle.collapse`
- * label pair) plus the disclosure state. `aria-haspopup="true"` is gone: it
- * claimed an untyped popup, while the drawer is the sidebar itself rendered
- * off-canvas — where upstream has a real popup it names the type
+ * hamburger, and its accessible NAME is the official one: the official
+ * toggle's own `toggle.open` / `toggle.collapse` label pair. Its ARIA is not
+ * the official attribute LIST — the official control carries that label
+ * alone, because it sits inside the sidebar it collapses — so this
+ * out-of-canvas substitute adds one truthful attribute of its own:
+ * `aria-expanded`, the disclosure state of the drawer the button shows and
+ * hides (2026-09-11 review-fix F4a: the earlier "carries the official ARIA
+ * shape" wording claimed one attribute too many). `aria-haspopup="true"` is
+ * gone: it claimed an untyped popup, while the drawer is the sidebar itself
+ * rendered off-canvas — where upstream has a real popup it names the type
  * (`aria-haspopup="dialog"` on the settings trigger). The touch tier keeps
  * only what the official control cannot give it: the 44px floating box and
  * the tap-absorbing backdrop.

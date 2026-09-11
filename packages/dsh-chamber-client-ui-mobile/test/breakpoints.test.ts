@@ -180,11 +180,15 @@ test('settings section inner grids: only the Models provider row degrades (cards
   const phone = normalizePhoneTier()
   const modelRow = cssBlock(phone, '[data-slot="settings.section"] :is([class$="_modelRow"], [class*="_modelRow "])')
   assert.ok(modelRow !== null && modelRow.includes('grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);'))
-  // 2026-09-11 upstream-alignment T17b: the ".cards" arm is DELETED — upstream
-  // collapses PluginInventorySettingsTab .cards itself at max-width 680px, so
-  // the chamber's forced single column only contradicted upstream's own
-  // two-per-row geometry in the 681-768px window.
-  assert.ok(!phone.includes('_cards'), 'the chamber must not override the upstream card-grid breakpoint')
+  // 2026-09-11 upstream-alignment T17b: the ".cards" arm is DELETED. TWO card
+  // grids live under this section, on two different upstream rules: the
+  // inventory grid collapses itself at max-width 680px (so the chamber arm
+  // only ever contradicted upstream inside 681-768px), while the Agent-presets
+  // grid (`repeat(auto-fill, minmax(268px, 1fr))`, no upstream breakpoint) is
+  // two-column from about 580px of viewport width — the chamber arm changed
+  // ITS layout across about 580-768px, which the previous one-grid note did
+  // not cover (2026-09-11 review-fix F3).
+  assert.ok(!phone.includes('_cards'), 'the chamber must not override either upstream card grid')
 })
 
 test('no blanket aria-modal cap: official dialog geometries own the viewport fit (T6)', () => {

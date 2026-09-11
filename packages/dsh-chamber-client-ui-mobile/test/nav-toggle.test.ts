@@ -5,12 +5,16 @@
  * official sidebar toggle, and it must BE that control rather than a
  * hand-drawn look-alike: the official panel glyph
  * (`IconPanelLeftOutline16`, ui-primitives — a client baseline module, so the
- * bundle requests it without a package dependency) and the official ARIA
- * shape (one state-carrying `aria-label`, no `aria-haspopup`). The former CSS
- * hamburger and its `aria-haspopup="true"` claim are retired; this spec locks
- * both, plus the parts the touch tier genuinely owns (the 44px box and the
- * tap-absorbing backdrop). Source-text assertions are the family convention
- * for a component whose DOM behavior is device-gated (design 17 §18.6).
+ * bundle requests it without a package dependency) and the official state
+ * label (one state-carrying `aria-label`, no `aria-haspopup`) plus the
+ * disclosure state this out-of-canvas substitute needs of its own — the
+ * official control carries the label alone, so the claim under test is
+ * "official name + one truthful attribute", never "the official attribute
+ * list" (2026-09-11 review-fix F4a). The former CSS hamburger and its
+ * `aria-haspopup="true"` claim are retired; this spec locks both, plus the
+ * parts the touch tier genuinely owns (the 44px box and the tap-absorbing
+ * backdrop). Source-text assertions are the family convention for a component
+ * whose DOM behavior is device-gated (design 17 §18.6).
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -39,13 +43,13 @@ test('the toggle draws the official panel glyph from the ui-primitives baseline'
   assert.match(CODE, /<IconPanelLeftOutline16 size=\{18\} \/>/, 'the glyph renders at the official rail size')
 })
 
-test('the toggle carries the official ARIA shape: state label + disclosure state, no haspopup', () => {
+test('the toggle carries the official state label plus its own disclosure state, and no haspopup', () => {
   const tag = toggleTag()
   const ariaAttributes = [...tag.matchAll(/\baria-[a-z]+(?==)/g)].map(match => match[0])
   assert.deepEqual(
     ariaAttributes,
     ['aria-label', 'aria-expanded'],
-    'only the accessible name and the disclosure state may be claimed',
+    'only the official accessible name and the disclosure state may be claimed',
   )
   // The retired claim is asserted on the COMMENT-STRIPPED source: the module
   // header names aria-haspopup while explaining why it is gone, and prose must

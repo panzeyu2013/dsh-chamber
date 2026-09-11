@@ -20,8 +20,12 @@ drawer layout, touch targets, safe areas, PWA phased.
   control, not a look-alike (2026-09-11 upstream-alignment T17a): it renders
   `IconPanelLeftOutline16` — the glyph the official sidebar toggle draws, from
   the `ui-primitives` client baseline module, so the bundle needs no package
-  dependency for it — and carries the official ARIA shape, a state-carrying
-  `aria-label` with no `aria-haspopup`. The retired CSS hamburger and its
+  dependency for it — and it carries the official state-carrying `aria-label`
+  pair with no `aria-haspopup`. Its ARIA is the official NAME plus one
+  truthful attribute of its own, not the official attribute list (2026-09-11
+  review-fix F4a): the official toggle carries that label alone, because it
+  sits inside the sidebar it collapses, while this out-of-canvas substitute
+  also declares `aria-expanded`. The retired CSS hamburger and its
   `aria-haspopup="true"` claim are gone; the touch tier keeps what the
   official control cannot give it (the 44px floating box and the
   tap-absorbing backdrop);
@@ -76,11 +80,19 @@ rules restructure it structurally (slot/role anchors only):
   only the suffix arm can match. `_<local>_<hash>_<idx>` is the CHAMBER
   shell's own Vite naming, never the instance bundle's; the old
   `[class*="_<local>_"]` infix form therefore matched nothing and a naming
-  flip fails SOFT — the official grid stays. The card grids are NOT touched:
-  upstream collapses `PluginInventorySettingsTab` `.cards` to one column at
-  `max-width: 680px` itself, so the chamber's former 681–768px
-  one-card-per-row arm only contradicted upstream's own two-per-row geometry
-  and was deleted (2026-09-11 upstream-alignment T17b);
+  flip fails SOFT — the official grid stays. The card grids are NOT touched,
+  and they are **two** grids under this section with two different upstream
+  rules (2026-09-11 review-fix F3): `PluginInventorySettingsTab` `.cards`
+  collapses to one column at `max-width: 680px` itself, while `ui-agent-preset`
+  (`AgentPresetSection.module.css`) declares no breakpoint at all — its
+  `.cards` is `repeat(auto-fill, minmax(268px, 1fr))` inside a `.section`
+  capped at 720px, so upstream renders two columns from about 580px of
+  viewport width (two 268px cards plus the 12px gap need 548px inside the
+  options box: the viewport minus 2×(16px + safe-area)). The chamber's former
+  one-card-per-row arm therefore changed the Agent-presets layout across its
+  whole two-column range, about 580–768px of the phone tier — not only the
+  681–768px window the inventory grid's own breakpoint leaves. It was deleted
+  for both grids (2026-09-11 upstream-alignment T17b);
 - **Dialogs other than the settings sheet are not restyled**. The phone tier
   no longer caps `aria-modal` dialogs at `100vw - 24px` (2026-09-11
   upstream-alignment T6): the tree has exactly three `role="dialog"`

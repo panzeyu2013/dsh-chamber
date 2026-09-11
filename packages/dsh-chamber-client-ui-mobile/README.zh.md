@@ -16,9 +16,13 @@ gateway 访问）真正可用——窄屏抽屉化布局、触控目标、安全
   `shell.overlay` 抽屉开关（官方面板图标）+ 遮罩。该开关**就是**官方控件而非
   仿制品（2026-09-11 upstream-alignment T17a）：渲染 `IconPanelLeftOutline16`
   ——官方侧边栏开关所用的图标，取自 `ui-primitives` 客户端 baseline 模块，
-  因此 bundle 无需为此声明依赖——并采用官方 ARIA 形态：带状态的 `aria-label`，
-  无 `aria-haspopup`。退役的 CSS 汉堡与其 `aria-haspopup="true"` 断言一并删除；
-  触屏档只保留官方控件给不了的部分（44px 浮动盒与吸收误触的遮罩）；
+  因此 bundle 无需为此声明依赖——可访问名沿用官方那对带状态的 `aria-label`，
+  且无 `aria-haspopup`。其 ARIA 是**官方名称 + 一个属于自己的真实属性**，而非
+  官方属性表（2026-09-11 review-fix F4a 修正了此前「采用官方 ARIA 形态」这一
+  多算一个属性的说法）：官方开关只带那个 label（它就在自己所折叠的侧栏内部），
+  而本画外替身另外声明 `aria-expanded`。退役的 CSS 汉堡与其
+  `aria-haspopup="true"` 断言一并删除；触屏档只保留官方控件给不了的部分
+  （44px 浮动盒与吸收误触的遮罩）；
 - `src/client/styles.ts` —— 单文件样式（全部媒体查询作用域，桌面零影响；
   只用官方 `--dsw-*`/`--ds-*` token）；
 - `src/client/markup.ts` / `composer.ts` / `layout-facts.ts` /
@@ -61,10 +65,16 @@ gateway 访问）真正可用——窄屏抽屉化布局、触控目标、安全
   `JObwrW_row`/`zGbnIq_modelRow`/`qSYn7G_cards`），只有后缀臂能命中。
   `_<local>_<hash>_<idx>` 是 **chamber 自建壳（Vite）**的命名，从不属于实例
   bundle；此前的 `[class*="_<local>_"]` infix 形式因此命中不到任何东西，命名
-  翻转时 fail-soft——保持官方网格。卡片网格不再覆盖：上游
+  翻转时 fail-soft——保持官方网格。卡片网格不再覆盖，且本分区下存在**两个**卡片
+  网格、上游规则各不相同（2026-09-11 review-fix F3）：
   `PluginInventorySettingsTab` 自己就在 `max-width: 680px` 把 `.cards` 收为
-  单列，chamber 旧有的 681–768px 单列臂只与上游自己的两列几何相矛盾，已删除
-  （2026-09-11 upstream-alignment T17b）；
+  单列；而 `ui-agent-preset`（`AgentPresetSection.module.css`）**没有任何
+  断点**——其 `.cards` 是 `.section`（上限 720px）内的
+  `repeat(auto-fill, minmax(268px, 1fr))`，因此从约 580px 视口宽起上游就是
+  两列（两张 268px 卡 + 12px 间距需要 options 盒内 548px = 视口 −
+  2×(16px + 安全区)）。chamber 旧有的单列臂对该网格改动的是它**整个两列
+  区间**，即手机档约 580–768px，而不只是库存网格自身断点留下的 681–768px
+  窗口。两处网格的单列臂都已删除（2026-09-11 upstream-alignment T17b）；
 - **设置 sheet 之外的弹层不再改写**：手机档不再给 `aria-modal` 弹层限宽
   `100vw - 24px`（2026-09-11 upstream-alignment T6）：全树恰好三个
   `role="dialog"` + `aria-modal="true"` 产出点，各自负责自己的视口适配——
