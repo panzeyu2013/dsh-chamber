@@ -324,6 +324,18 @@ export function __testShellLifecycleOwnerCounts(): {
 /** Session opens requested before boot; their original promises settle on dispatch. */
 const pendingOpens = new PendingOpenQueue(QUEUED_OPEN_TIMEOUT_MS)
 
+/**
+ * The LAST session each instance was asked to open (2026-12, design 05 §2.2
+ * revision). Every open request enters through {@link openInstanceSession}, so
+ * this map is the renderer-side record of the per-source request stream — the
+ * dispatcher drops requests it has already superseded (see dispatchOpen). It
+ * deliberately survives the settle of the request that set it: a stale request
+ * may reach its dispatch only after the newer one finished. Cleared when the
+ * source's shell is torn down (a same-id re-add is a new generation whose
+ * requests must not be judged against the previous incarnation's).
+ */
+const lastRequestedSession = new Map<string, string>()
+
 export function shellStateIdle(instanceId: string, basePath: string): ShellState {
   return { instanceId, basePath, booted: false, booting: false, error: null, degraded: null }
 }
@@ -763,6 +775,10 @@ function withBootTimeout(promise: Promise<ShellState>): Promise<void> {
  * flush).
  */
 export function openInstanceSession(instanceId: string, sessionId: string): Promise<void> {
+  // Record the request stream BEFORE dispatching (2026-12, design 05 §2.2
+  // revision): the dispatcher drops requests a newer one has superseded, and the
+  // record must already hold THIS request when its own dispatch starts.
+  lastRequestedSession.set(instanceId, sessionId)
   const holder = entries.get(instanceId)
   if (holder !== undefined) return dispatchOpen(instanceId, holder, sessionId)
   return pendingOpens.enqueue(instanceId, sessionId)
@@ -872,6 +888,17 @@ function dispatchOpen(
       if (settled) return
       if (entries.get(instanceId) !== holder) {
         fail(new Error(`实例 ${instanceId} shell 已失效，会话 ${sessionId} 未打开`))
+        return
+      }
+      // 2026-12（design 05 §2.2 修订）——被取代的请求不得再开：同一来源的 open
+      // 请求是"最后意图胜出"流（每次用户点击、通知、深链都经 openInstanceSession
+      // 登记），而官方 `sessions.open` 就是一次普通 select，一个用户已经离开的旧
+      // 请求会把壳**翻回**旧会话：连点两个会话时可见 X→Y→X/Y 抖动，而 boot 期早开臂
+      // 让"最新意图"在 boot 期间就已打开，settle 时的 FIFO flush 会先开旧的那个。
+      // 静默 resolve：被放弃的请求不是失败，失败面与行内错误归最新那次请求。
+      if (lastRequestedSession.get(instanceId) !== undefined
+        && lastRequestedSession.get(instanceId) !== sessionId) {
+        succeed()
         return
       }
       if (Date.now() >= deadline) {
@@ -990,6 +1017,10 @@ export function disposeInstanceShell(instanceId: string): void {
   // registry-removed source after this holder is torn down.
   const currentGeneration = bootGenerations.get(instanceId) ?? 0
   cancelledBoots.set(instanceId, Math.max(cancelledBoots.get(instanceId) ?? 0, currentGeneration))
+  // The request-stream record retires with the source: a same-id re-add is a new
+  // generation, and its first open must not be judged as superseded by the
+  // previous incarnation's last request (design 05 §2.2 revision).
+  lastRequestedSession.delete(instanceId)
   const holder = entries.get(instanceId)
   if (holder !== undefined) {
     entries.delete(instanceId)
@@ -1020,6 +1051,7 @@ export function disposeAllShells(): void {
     cancelledBoots.set(instanceId, gen)
     scheduleInstanceLifecycleOwnerCleanup(instanceId)
   }
+  lastRequestedSession.clear()
   pendingOpens.rejectAll(new Error('全部实例 shell 已释放，排队的会话未打开'))
 }
 

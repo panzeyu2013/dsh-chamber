@@ -69,11 +69,21 @@ export interface InstanceViewProps {
    * 静默少一片插件（`ui-chat` 会因此永久 PENDING、对话视图不注册）。
    */
   waitForServing?: (instanceId: string) => Promise<boolean>
+  /**
+   * 打开意图揭示门（2026-12，design 05 §2.2 修订；真机问题 1）：由 App 用共享纯规则
+   * `shouldHoldViewVeil` 判定后传入的**最终判定**——遮罩在干净 settle 之后继续保留，
+   * 直到该壳显示的会话就是要打开的那个为止（规则与两个输入都在 App：壳状态镜像 +
+   * 原始 runtime current；本组件只负责合成 `!settled || holdVeil`）。冷 boot 期间官方
+   * 初始导航策略会新建并打开一个 blank 会话，而排队中的 open 要等
+   * session-controller 子 fiber + 一次 400ms 重试才分发；壳失败时 App 永远传 false
+   * （失败呈现归 App 覆盖层所有），因此遮罩不会挂住。
+   */
+  holdVeil?: boolean
 }
 
 export default function InstanceView({
   instanceId, basePath, sourceFingerprint, transport, active, label, onSettled, onStateChange, retryToken,
-  waitForServing,
+  waitForServing, holdVeil,
 }: InstanceViewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const startedRef = useRef(false)
@@ -134,6 +144,11 @@ export default function InstanceView({
   }, [retryToken, instanceId, basePath, onStateChange])
 
   const settled = shell.booted || shell.error !== null
+  // 2026-12（design 05 §2.2 修订）：遮罩 = boot 期（未 settle）**或** App 判定的
+  // 打开意图揭示门。判定规则（含"壳已经显示请求的会话就不遮"与"壳失败不遮"）在
+  // sidebar 包 shared/open-intent.ts 内单测覆盖；遮罩的生命周期由 open promise
+  // 自身界定（dispatchOpen 8s 预算 + App 的 finally 释放），不会出现挂住的加载层。
+  const veilVisible = !settled || holdVeil === true
   const viewClass = active
     ? 'instance-view'
     : settled
@@ -148,7 +163,7 @@ export default function InstanceView({
           "一容器一 root" 不变量）。旧容器随 key 变更被 React 摘除，挂死尝试
           写进的是已脱离文档的节点。 */}
       <div key={retryToken ?? 0} ref={containerRef} className="instance-shell" />
-      {!settled && (
+      {veilVisible && (
         <div className="instance-loading" aria-busy="true">
           <div className="instance-loading-main">
             <div className="instance-loading-spinner" />
