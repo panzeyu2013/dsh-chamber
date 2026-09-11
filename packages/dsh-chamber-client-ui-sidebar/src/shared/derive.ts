@@ -40,8 +40,13 @@ export const UNGROUPED_WORKSPACE_ID = '__ungrouped__'
 /** Canonical-path equality key: trailing separators normalized only. No
  *  fs.realpath in the browser, so symlinked spellings (e.g. macOS /tmp →
  *  /private/tmp) can still miss — documented limitation; unmatched sessions
- *  fall back to the ungrouped bucket, which remains the honest fallback. */
-function canonicalPathKey(value: string): string {
+ *  fall back to the ungrouped bucket, which remains the honest fallback.
+ *
+ *  Exported because the workspace echo must match a host-CANONICAL create path
+ *  (`fs.realpath` on the host — `instance-mutation-values.ts`) against a
+ *  cwd-derived synthetic group path: raw equality missed trailing-separator
+ *  spellings and rendered one directory twice (workspace-echo.ts). */
+export function canonicalPathKey(value: string): string {
   return value.replace(/[\\/]+$/, '')
 }
 

@@ -11,11 +11,13 @@
  * moment ago has NO sessions yet, so it appears in no session's cwd and is
  * structurally INVISIBLE in that projection; the row only shows up after the
  * user clicks the server (mount → follow baseline). A previously-pushed source
- * is worse: its aggregate keeps the pushed workspace set frozen (the mounted
- * merge in `commitAggregatePull` replaces sessions only) and
- * `planAggregateRefreshes` never unary-polls a pushed source at all — so the
- * `requestRefresh` the sidebar fires after a successful create cannot surface
- * the row either way.
+ * is worse: a source that was pushed and is no longer mounted (reclaimed) never
+ * unary-polls again — `planAggregateRefreshes` skips pushed sources — and the
+ * 30s unary merge that does run for never-pushed sources replaces sessions only,
+ * so its pushed workspace set stays frozen. The `requestRefresh` the sidebar
+ * fires after a successful create therefore cannot surface the row either way.
+ * (A source whose shell IS mounted needs no echo: its own follow push carries
+ * the new workspace — the echo is merely redundant there.)
  *
  * The echo closes that window with a fact the user's own action already
  * produced: a successful `workspace.create` returns the HOST workspace id
@@ -33,9 +35,22 @@
  *   (fold state, ungrouped order) do not follow it: the old synthetic key stays
  *   in the store unused (render-side lookup skips unknown ids — the documented
  *   accepted residue) and the group can appear expanded once. Cosmetic,
- *   one-time, and strictly better than the duplicate row it prevents;
+ *   one-time, and strictly better than the duplicate row it prevents. The
+ *   replacement carries the replaced row's `sessionIds` (2026-09-11 review B1):
+ *   an echo with no membership would drop the directory's sessions into
+ *   未分组 for the whole TTL;
  * - a REAL row with the same path but another id wins (host identity is
  *   authoritative) and the echo row is not rendered at all;
+ * - the SIDEBAR's own later actions on that same workspace are echoed too, on
+ *   the same one-way channel (2026-09-11 review S3): a successful
+ *   `workspace.delete` retires the entry ({@link removePendingWorkspace}) and a
+ *   successful `workspace.rename` patches its title
+ *   ({@link renamePendingWorkspace}). Both are needed for exactly the unmounted
+ *   source the echo exists for: without the removal fact a create → delete left
+ *   a GHOST row that even an authoritative mount push could not retire
+ *   (reconciliation only drops echoes the baseline already covers) and kept
+ *   real-id actions enabled for the whole TTL, and without the rename fact the
+ *   rename looked like a no-op because an echo's title is `basenameOf(path)`;
  * - entries expire ({@link PENDING_WORKSPACE_TTL_MS}) and retire with their
  *   source ({@link forgetPendingWorkspaces}), so a create whose convergence
  *   never arrives cannot pin a phantom row for the rest of the session.
@@ -45,6 +60,7 @@
  */
 import type { InstanceAggregate, WorkspaceRow } from './instance-api.ts'
 import { basenameOf } from './instance-api.ts'
+import { canonicalPathKey } from './derive.ts'
 import { assertSingletonModule } from './singleton.ts'
 
 assertSingletonModule('workspace-echo')
@@ -53,7 +69,12 @@ assertSingletonModule('workspace-echo')
 export interface PendingWorkspace {
   workspaceId: string
   path: string
-  /** Display title (path basename — the same rule the cwd-derived groups use). */
+  /**
+   * Display title — the path basename at record time (the same rule the
+   * cwd-derived groups use). A later successful rename replaces it with the
+   * user's own title ({@link renamePendingWorkspace}), so it is NOT
+   * re-derivable from `path`.
+   */
   title: string
   /** Epoch ms the echo was recorded; the TTL anchor. */
   at: number
@@ -88,8 +109,11 @@ export function workspaceEchoRow(pending: PendingWorkspace): WorkspaceRow {
  * Record one successful `workspace.create`. Idempotent per path: the host
  * reuses an existing registration at the same path (`created: false` in the
  * create result) and may return the same id twice, so an equal re-record
- * replaces the previous entry instead of stacking a duplicate row. Returns the
- * input ledger unchanged when the recorded entry is already identical.
+ * replaces the previous entry instead of stacking a duplicate row. The
+ * replacement always rebuilds the ledger — including for a byte-identical
+ * re-record, whose TTL anchor is refreshed (see the note below); only a create
+ * reaches this entry point, never a render or a clock tick, so the rebuilt
+ * identity costs one publish.
  */
 export function recordPendingWorkspace(
   ledger: WorkspaceEchoLedger,
@@ -98,22 +122,19 @@ export function recordPendingWorkspace(
   now: number,
 ): WorkspaceEchoLedger {
   const rows = ledger[sourceId] ?? []
-  const previous = rows.find(row => row.path === created.path || row.workspaceId === created.workspaceId)
+  const key = canonicalPathKey(created.path)
   const next: PendingWorkspace = {
     workspaceId: created.workspaceId,
     path: created.path,
     title: basenameOf(created.path),
     at: now,
   }
-  if (
-    previous !== undefined
-    && previous.workspaceId === next.workspaceId
-    && previous.path === next.path
-    && previous.title === next.title
-  ) {
-    return ledger
-  }
-  const kept = rows.filter(row => row.path !== created.path && row.workspaceId !== created.workspaceId)
+  // The anchor is refreshed even when the entry is otherwise identical: this
+  // runs once per create (never per render), so identity preservation buys
+  // nothing, while a stale anchor would make a fresh action's echo — a host
+  // that reuses an existing registration returns `created: false` — expire
+  // seconds after the user asked for it.
+  const kept = rows.filter(row => canonicalPathKey(row.path) !== key && row.workspaceId !== created.workspaceId)
   return { ...ledger, [sourceId]: [...kept, next] }
 }
 
@@ -151,14 +172,69 @@ export function reconcilePendingWorkspaces(
   for (const row of authoritative) {
     if (row.synthetic === true) continue
     realIds.add(row.workspaceId)
-    realPaths.add(row.path)
+    realPaths.add(canonicalPathKey(row.path))
   }
-  const kept = rows.filter(row => !realIds.has(row.workspaceId) && !realPaths.has(row.path))
+  const kept = rows.filter(row => !realIds.has(row.workspaceId) && !realPaths.has(canonicalPathKey(row.path)))
   if (kept.length === rows.length) return ledger
   const next: Record<string, readonly PendingWorkspace[]> = { ...ledger }
   if (kept.length === 0) delete next[sourceId]
   else next[sourceId] = kept
   return next
+}
+
+/**
+ * Retire the echo of one DELETED workspace — the withdraw half of the echo
+ * (2026-09-11 review S3). Matching is by EITHER identity: the host
+ * `workspaceId` (the primary key — the create result returned it, and the row's
+ * delete action carries it) or the same canonical path. The path is
+ * best-effort: `key.path` is empty when the source's mounted snapshot has not
+ * reported the workspace, and an empty path carries no path information at all,
+ * so it never matches (only the id does).
+ *
+ * Identity-preserving: a ledger with nothing matching (unknown source, or no
+ * row carrying the id/path) is returned by reference, so the App's publish
+ * signature gate stays quiet on a redundant fact.
+ */
+export function removePendingWorkspace(
+  ledger: WorkspaceEchoLedger,
+  sourceId: string,
+  key: { workspaceId: string; path: string },
+): WorkspaceEchoLedger {
+  const rows = ledger[sourceId]
+  if (rows === undefined || rows.length === 0) return ledger
+  const pathKey = key.path === '' ? undefined : canonicalPathKey(key.path)
+  const kept = rows.filter(row =>
+    row.workspaceId !== key.workspaceId
+    && (pathKey === undefined || canonicalPathKey(row.path) !== pathKey))
+  if (kept.length === rows.length) return ledger
+  const next: Record<string, readonly PendingWorkspace[]> = { ...ledger }
+  if (kept.length === 0) delete next[sourceId]
+  else next[sourceId] = kept
+  return next
+}
+
+/**
+ * Patch the title of one echo after a successful `workspace.rename` — the patch
+ * half of the echo (2026-09-11 review S3). An echo row's title is its path
+ * basename, so this is the only way a renamed workspace shows its new name
+ * before the source mounts. Identity-preserving when the source/id is absent or
+ * the recorded title already matches.
+ */
+export function renamePendingWorkspace(
+  ledger: WorkspaceEchoLedger,
+  sourceId: string,
+  workspaceId: string,
+  title: string,
+): WorkspaceEchoLedger {
+  const rows = ledger[sourceId]
+  if (rows === undefined || rows.length === 0) return ledger
+  let changed = false
+  const next = rows.map((row) => {
+    if (row.workspaceId !== workspaceId || row.title === title) return row
+    changed = true
+    return { ...row, title }
+  })
+  return changed ? { ...ledger, [sourceId]: next } : ledger
 }
 
 /** Retire the echoes of sources that left the registry (same-id re-add = new generation). */
@@ -203,31 +279,40 @@ export function withWorkspaceEcho(
   for (const row of rows) {
     if (row.synthetic === true) continue
     realIds.add(row.workspaceId)
-    realPaths.add(row.path)
+    realPaths.add(canonicalPathKey(row.path))
   }
   const echoByPath = new Map<string, PendingWorkspace>()
   for (const entry of pending) {
     if (realIds.has(entry.workspaceId)) continue
-    if (realPaths.has(entry.path)) continue
-    echoByPath.set(entry.path, entry)
+    const key = canonicalPathKey(entry.path)
+    if (realPaths.has(key)) continue
+    echoByPath.set(key, entry)
   }
   if (echoByPath.size === 0) return aggregate
   let replaced = false
   const nextRows: WorkspaceRow[] = []
   for (const row of rows) {
-    const echo = row.synthetic === true ? echoByPath.get(row.path) : undefined
+    const echo = row.synthetic === true ? echoByPath.get(canonicalPathKey(row.path)) : undefined
     if (echo === undefined) {
       nextRows.push(row)
       continue
     }
-    echoByPath.delete(row.path)
-    nextRows.push(workspaceEchoRow(echo))
+    echoByPath.delete(canonicalPathKey(row.path))
+    // B1 (2026-09-11 review): a replaced group keeps its MEMBERSHIP. Sessions
+    // reach a group only through `workspace.sessionIds` (derive.ts), so an echo
+    // row carrying `sessionIds: []` dropped every member of that directory into
+    // 未分组 for the echo's whole TTL (10 min), and each 30s unary pull
+    // re-created the synthetic group only to be replaced again. The cwd-derived
+    // membership is the best local knowledge until the mount push supplies the
+    // host's own row, which carries exactly these members for that directory.
+    nextRows.push({ ...workspaceEchoRow(echo), sessionIds: row.sessionIds })
     replaced = true
   }
   const appended: WorkspaceRow[] = []
   for (const entry of pending) {
-    if (!echoByPath.has(entry.path)) continue
-    if (echoByPath.get(entry.path) !== entry) continue
+    const key = canonicalPathKey(entry.path)
+    if (!echoByPath.has(key)) continue
+    if (echoByPath.get(key) !== entry) continue
     appended.push(workspaceEchoRow(entry))
   }
   if (!replaced && appended.length === 0) return aggregate

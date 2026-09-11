@@ -1030,6 +1030,18 @@ export function SidebarRoot({
     })
   }
 
+  /**
+   * Best-effort workspace path for a withdraw fact (2026-09-11 review S3). The
+   * sidebar projection (`ChamberServerWorkspace`) carries no path, so the only
+   * local source is the mounted ctx's own snapshot report on the bridge — read
+   * BEFORE the wire call, while the row is still listed. An unmounted source has
+   * none and needs none: `removePendingWorkspace` matches the echo by
+   * `workspaceId`, which the row's delete action carries.
+   */
+  const workspacePathForFact = (sourceId: string, workspaceId: string): string =>
+    chamberBridge.getInstanceSnapshots()[sourceId]?.workspaces
+      .find(row => row.workspaceId === workspaceId)?.path ?? ''
+
   const onDeleteWorkspace = (server: ChamberServerAggregate, workspaceId: string, title: string): void => {
     // An ORPHANED workspace (path gone) needs an explicit confirm —
     // the deletion only removes the durable registration.
@@ -1039,7 +1051,16 @@ export function SidebarRoot({
       return
     }
     runAction(`${server.id}/workspace/${workspaceId}/delete`, async () => {
+      const path = workspacePathForFact(server.id, workspaceId)
       await deleteWorkspace(getInstanceClient(server.id), workspaceId)
+      // chamber (2026-09-11 review S3, design 05 §2.2.1): the WITHDRAW half of
+      // the workspace echo. An unmounted source has no authoritative baseline
+      // listing this workspace, so `reconcilePendingWorkspaces` cannot retire
+      // the echoed row — without this fact a create → delete left a ghost row
+      // with real-id actions enabled until the TTL. Published for the ROW's own
+      // source (the source the create handler published for), never for the
+      // publishing shell.
+      chamberBridge.reportWorkspaceRemoved({ sourceId: server.id, workspaceId, path })
       chamberBridge.requestRefresh(server.id)
     })
   }
@@ -1051,7 +1072,18 @@ export function SidebarRoot({
     runAction(`${target.sourceId}/${target.kind}/${target.id}/rename`, async () => {
       const client = getInstanceClient(target.sourceId)
       if (target.kind === 'session') await renameSession(client, target.id, target.value)
-      else await renameWorkspace(client, target.id, target.value)
+      else {
+        await renameWorkspace(client, target.id, target.value)
+        // chamber (2026-09-11 review S3, design 05 §2.2.1): the PATCH half of
+        // the workspace echo — an echo row's title is `basenameOf(path)`, so on
+        // a source whose shell is not mounted the rename used to look like a
+        // no-op until the mount push arrived.
+        chamberBridge.reportWorkspaceRenamed({
+          sourceId: target.sourceId,
+          workspaceId: target.id,
+          title: target.value,
+        })
+      }
       chamberBridge.requestRefresh(target.sourceId)
     })
   }

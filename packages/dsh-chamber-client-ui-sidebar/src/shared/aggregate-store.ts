@@ -160,6 +160,36 @@ export interface WorkspaceCreatedFact {
 }
 
 /**
+ * One successful sidebar-issued workspace deletion (2026-09-11 review S3) —
+ * the WITHDRAW half of the workspace echo. The sidebar owns `workspace.delete`
+ * for the same sources it can create on, and without this fact the echo has no
+ * way to be retired: for a source whose shell is not mounted there is no
+ * authoritative baseline that lists the workspace yet, so
+ * `reconcilePendingWorkspaces` cannot match it, and the deleted row survives as
+ * a GHOST with real-id actions enabled until the 10-minute TTL. `path` is
+ * best-effort (empty when the source's mounted snapshot has not reported the
+ * workspace) — the ledger matches by `workspaceId` as well.
+ */
+export interface WorkspaceRemovedFact {
+  sourceId: string
+  workspaceId: string
+  path: string
+}
+
+/**
+ * One successful sidebar-issued workspace rename (2026-09-11 review S3) — the
+ * PATCH half of the workspace echo. An echo row's title is `basenameOf(path)`,
+ * so a rename against a not-yet-mounted source looked like a no-op (the row
+ * kept the path basename until the mount push landed). The sidebar owns
+ * `workspace.rename`, so it publishes the new title here.
+ */
+export interface WorkspaceRenamedFact {
+  sourceId: string
+  workspaceId: string
+  title: string
+}
+
+/**
  * Per-instance runtime facts projected by the sidebar plugin of the source's
  * own ctx (design 06 §4): current session id plus per-session live rows. The
  * plugin projects the source's session-list snapshot (minus the ids it has
@@ -218,6 +248,10 @@ type RefreshListener = (sourceId: string) => void
 type SessionListRefreshListener = (sourceId: string) => void
 /** One successful sidebar-issued workspace creation (see WorkspaceCreatedFact). */
 type WorkspaceCreatedListener = (fact: WorkspaceCreatedFact) => void
+/** One successful sidebar-issued workspace deletion (see WorkspaceRemovedFact). */
+type WorkspaceRemovedListener = (fact: WorkspaceRemovedFact) => void
+/** One successful sidebar-issued workspace rename (see WorkspaceRenamedFact). */
+type WorkspaceRenamedListener = (fact: WorkspaceRenamedFact) => void
 type SourceListener = (sourceId: string) => void
 type SettingsTargetListener = (sourceId: string | undefined) => void
 /** Page-wide active-view fact: the source whose shell is on screen, undefined until the App publishes. */
@@ -240,6 +274,8 @@ const openOutcomeListeners = new Set<OpenOutcomeListener>()
 const refreshListeners = new Set<RefreshListener>()
 const sessionListRefreshListeners = new Set<SessionListRefreshListener>()
 const workspaceCreatedListeners = new Set<WorkspaceCreatedListener>()
+const workspaceRemovedListeners = new Set<WorkspaceRemovedListener>()
+const workspaceRenamedListeners = new Set<WorkspaceRenamedListener>()
 const activateSourceListeners = new Set<SourceListener>()
 const settingsTargetListeners = new Set<SettingsTargetListener>()
 const activeSourceListeners = new Set<ActiveSourceListener>()
@@ -376,6 +412,45 @@ export const chamberBridge = {
     workspaceCreatedListeners.add(listener)
     return () => {
       workspaceCreatedListeners.delete(listener)
+    }
+  },
+
+  /**
+   * Sidebar call after a successful `workspace.delete`: publish the fact so the
+   * App layer can retire the echo row of that workspace
+   * (`removePendingWorkspace`). Same one-way shape as the create counterpart,
+   * and the only retirement path for an echo whose source never mounted: no
+   * authoritative baseline lists the workspace yet, so reconciliation cannot
+   * match it and the deleted row would stay visible with real-id actions
+   * enabled until the TTL.
+   */
+  reportWorkspaceRemoved(fact: WorkspaceRemovedFact): void {
+    for (const listener of [...workspaceRemovedListeners]) listener(fact)
+  },
+
+  /** App-layer subscription to workspace-removal facts; returns the unsubscribe. */
+  onWorkspaceRemoved(listener: WorkspaceRemovedListener): () => void {
+    workspaceRemovedListeners.add(listener)
+    return () => {
+      workspaceRemovedListeners.delete(listener)
+    }
+  },
+
+  /**
+   * Sidebar call after a successful `workspace.rename`: publish the new title
+   * so the App layer can patch the echo row (`renamePendingWorkspace`). An echo
+   * row's title is derived from its path, so without this fact the rename
+   * looked like a no-op on an unmounted source until the mount push arrived.
+   */
+  reportWorkspaceRenamed(fact: WorkspaceRenamedFact): void {
+    for (const listener of [...workspaceRenamedListeners]) listener(fact)
+  },
+
+  /** App-layer subscription to workspace-rename facts; returns the unsubscribe. */
+  onWorkspaceRenamed(listener: WorkspaceRenamedListener): () => void {
+    workspaceRenamedListeners.add(listener)
+    return () => {
+      workspaceRenamedListeners.delete(listener)
     }
   },
 
