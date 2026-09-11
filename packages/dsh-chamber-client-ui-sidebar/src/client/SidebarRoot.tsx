@@ -1098,8 +1098,21 @@ export function SidebarRoot({
         return next
       })
       createWorkspace(browseClient, path)
-        .then(() => {
+        .then((created) => {
           setAddingWorkspace(null)
+          // chamber (2026-12, design 05 §2.2 revision): publish the HOST
+          // workspace identity so the App can echo the row immediately. It is
+          // the only trustworthy "this workspace exists on that host" fact
+          // reachable without a mounted shell: the unary fallback derives its
+          // groups from session cwds (a brand-new workspace has none yet) and a
+          // previously-pushed source keeps its workspace set frozen — without
+          // the echo the row only appeared after the user clicked that server
+          // (2026-12 field report).
+          chamberBridge.reportWorkspaceCreated({
+            sourceId,
+            workspaceId: created.workspaceId,
+            path: created.path,
+          })
           chamberBridge.requestRefresh(sourceId)
         })
         .catch((reason: unknown) => {

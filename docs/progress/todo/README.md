@@ -14,6 +14,7 @@
 | 3 | [windows-v1.md](windows-v1.md) | Windows v1 剩余外部门禁与取舍（design 23 companion；代码项已就绪） | 外部门禁待真实 runner/实机 |
 | 4 | [settings-surface-upstream-contributions.md](settings-surface-upstream-contributions.md) | 设置面的上游声明式贡献通道（T3 提案：`dsh.client.contributes.settings` / 设置面服务契约 / descriptor 上线通道）；chamber 侧**不再需要**它们——2026-12 完整桥接修订后设置面直接渲染来源自己 boot ctx 的台账（design 05 §5 / 09 §4），三条降级为「通用宿主复用」提案 | 上游提案，未排期；已非 chamber 前置 |
 | 5 | [open-in-ownership-and-enhancements.md](open-in-ownership-and-enhancements.md) | open-in **实机验收与超集分批**（fork & supersede 已落地，契约见 design 20）：真机验收九项、`ctx.subprocess` 旧 runtime 探针等开放项、分批结论（S1/S2 待排期；S3 收窄为「复制路径」；S4 不做）+ §5 附录留档的完整形态 | 实施已完成；本表剩真机 + S1/S2 + 可选小批次 |
+| 6 | [client-store-scoping-upstream.md](client-store-scoping-upstream.md) | 上游：N-壳宿主下持久化 selection（`dsh.sessions.current`）需按 shell/入口作用域——它是"每次冷 boot 都新建空白会话"的根因；chamber 侧无法根治（vendor store 不在 fork 副本内，逐入口 localStorage 代理不安全），已用本地回显缓解（design 05 §2.2 修订） | 上游提案，未排期 |
 
 ## 纪律
 

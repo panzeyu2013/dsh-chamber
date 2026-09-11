@@ -10,6 +10,10 @@ import { indexSubagentDescendants } from '../shared/subagent-lineage.ts'
 import type { SidebarRootInjected } from './contract/slots.ts'
 import { SidebarRoot } from './SidebarRoot.tsx'
 import { resolveInstanceListFace } from './instance-list-face.ts'
+import {
+  getOpenIntent,
+} from '../shared/open-intent.ts'
+import { startEarlyOpenArm } from './early-open.ts'
 import { en, zh, type SidebarKey } from './locales.ts'
 import { chamberBridge, isValidProducerSourceFingerprint } from '../shared/aggregate-store.ts'
 import {
@@ -427,4 +431,35 @@ export function apply(ctx: ClientContext): void {
       runtimeProducer.clear()
     }
   }, 'dsh-chamber: sidebar runtime facts report')
+
+  // chamber patch (2026-12, design 05 §2.2 revision; 2026-12 field report
+  // problem 1): the BOOT-TIME early-open arm. The decision logic (deadline,
+  // give-up, refused-open handling, live-intent read) lives in
+  // ./early-open.ts and is unit-tested there; this effect only supplies the
+  // ctx-bound seams and ties the arm's life to the ctx.
+  ctx.effect(() => {
+    const chamberInstanceId = (ctx as any).chamberInstanceId as string | undefined
+    if (typeof chamberInstanceId !== 'string' || chamberInstanceId === '') return () => {}
+    return startEarlyOpenArm({
+      instanceId: chamberInstanceId,
+      readIntent: () => getOpenIntent(chamberInstanceId),
+      /** A missing/throwing face retires the arm silently: the same ctx's
+       *  runtime-facts producer already warns loudly for that defect, and this
+       *  arm is best-effort by contract. `false` (face readable, id absent)
+       *  keeps the arm polling. */
+      isAddressable: (sessionId) => {
+        try {
+          const snapshot = ctx.sessions.list.getSnapshot() as { byId?: Record<string, unknown> } | undefined
+          if (snapshot?.byId === undefined) return false
+          return snapshot.byId[sessionId] !== undefined
+        } catch {
+          return undefined
+        }
+      },
+      // Method call on the service object, never a detached reference (same
+      // discipline as the official refresh() seam in the producer above).
+      open: (sessionId) => { ctx.sessions.open(sessionId) },
+      warn: (message) => { console.warn(`[chamber] ${message}`) },
+    })
+  }, 'dsh-chamber: boot-time session open intent')
 }

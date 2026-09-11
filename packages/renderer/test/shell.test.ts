@@ -1364,3 +1364,56 @@ test('C3 gate: a chamber prefetch rejection is swallowed — the boot still sett
     restoreFetch()
   }
 })
+
+test('openInstanceSession: a request superseded by a newer one on the same source resolves quietly and never opens', async (t) => {
+  // 2026-12 (design 05 §2.2 revision): per-source open requests are a
+  // last-intent-wins stream, and the queued (cold-boot) path is where they can
+  // actually race: both clicks land in the pending queue, the settle flush then
+  // walks them in FIFO order. The boot-ctx early-open arm has already opened the
+  // LATEST intent during boot, so dispatching the abandoned older request would
+  // visibly flip the shell back (Y→X→Y). The dispatcher must drop it: resolve
+  // quietly (it is not a failure — the row error surface belongs to the newest
+  // request) and never call sessions.open for it.
+  const instanceId = 'ssh-test-superseded-open'
+  const restoreFetch = stubReadyGraph()
+  const restoreWindow = stubWindow()
+  __testResetLifecycle()
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
+  try {
+    // Two clicks on a source that is still booting: both are queued.
+    const stale = openInstanceSession(instanceId, 'session-X')
+    const fresh = openInstanceSession(instanceId, 'session-Y')
+    const state = await bootInstanceShell(instanceId, `/api/i/${instanceId}`, {} as HTMLElement, () => {})
+    assert.equal(state.booted, true)
+    await Promise.all([stale, fresh])
+    // The flush dispatches the queue in order; X must be skipped and Y opened.
+    // The extra tick proves no stray poller re-opens the abandoned session later.
+    t.mock.timers.tick(1_000)
+    assert.deepEqual(
+      __testOpenedSessions(),
+      [{ label: 'entry-1', sessionId: 'session-Y' }],
+      'the superseded request must resolve without ever touching the runtime',
+    )
+
+    // A repeat of the CURRENT session stays openable (idempotent re-open): the
+    // supersession check compares against the last request, not against an
+    // "already opened once" marker.
+    await openInstanceSession(instanceId, 'session-Y')
+    assert.deepEqual(__testOpenedSessions(), [
+      { label: 'entry-1', sessionId: 'session-Y' },
+      { label: 'entry-1', sessionId: 'session-Y' },
+    ])
+
+    // With no newer request in play, a pre-boot queued open still dispatches:
+    // the check must never swallow the FIRST request of a source.
+    const third = openInstanceSession(instanceId, 'session-Z')
+    await third
+    assert.deepEqual(__testOpenedSessions().at(-1), { label: 'entry-1', sessionId: 'session-Z' })
+  } finally {
+    disposeInstanceShell(instanceId)
+    __testResetLifecycle()
+    t.mock.timers.reset()
+    restoreFetch()
+    restoreWindow()
+  }
+})
