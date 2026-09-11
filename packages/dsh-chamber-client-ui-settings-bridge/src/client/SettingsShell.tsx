@@ -43,6 +43,7 @@ import {
   chamberBridge, isChannelClassDiagnostic, recheckPluginGraphDiagnostic,
 } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
 import { sectionRows } from './section-rows.ts'
+import { nestedModalOwnsEscape } from './escape-owner.ts'
 import {
   getSettingsSourceFace, publishSettingsSourceSeats, settingsSourceFaceReady,
   settingsSourceFaceRevision, subscribeSettingsSourceFaces,
@@ -312,17 +313,18 @@ function SettingsPanel({
   // Document-level Escape closes the panel (official mirror); the server
   // dropdown's own Escape stopPropagation keeps a dropdown-open Escape from
   // reaching here.
+  const panelRef = useRef<HTMLDivElement | null>(null)
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.key !== 'Escape') return
-      // A child modal/dialog (aria-modal — official dsh Modal overlays incl.
-      // the connections plugin dialogs) owns Escape while it is open: closing
-      // the whole panel underneath a modal's first Esc would swallow the
-      // modal's own close intent (2026 dev-QA observation). The panel itself
-      // is not aria-modal, so the query cannot self-match; when a modal is
-      // open its own Escape handling runs (registered later on the document)
-      // and closes just that layer.
-      if (document.querySelector('[aria-modal="true"]') !== null) return
+      // A modal OTHER than this panel owns Escape while it is open (nested
+      // official Modal overlays incl. the connections plugin dialogs, or
+      // another layer's overlay): closing the whole panel underneath it would
+      // swallow the modal's own close intent (2026 dev-QA observation). The
+      // panel itself IS aria-modal, so the panel NODE must be excluded by
+      // identity — a blanket `[aria-modal="true"]` query self-matched and made
+      // Escape a no-op (2026-09-11 fix; see ./escape-owner.ts).
+      if (nestedModalOwnsEscape(document.querySelectorAll('[aria-modal="true"]'), panelRef.current)) return
       onClose()
     }
     document.addEventListener('keydown', onKeyDown)
@@ -430,7 +432,7 @@ function SettingsPanel({
   return (
     <div className={css.overlay} role="presentation">
       <div className={css.mask} aria-hidden="true" onClick={onClose} />
-      <div className={css.panel} role="dialog" aria-modal="true" aria-labelledby={titleId}>
+      <div ref={panelRef} className={css.panel} role="dialog" aria-modal="true" aria-labelledby={titleId}>
         <nav className={css.nav}>
           <div className={css.navTitle} id={titleId}>{t('title')}</div>
           <ServerDropdown
@@ -713,6 +715,10 @@ export function SettingsShell(props: SettingsShellProps) {
       <button
         type="button"
         className={clsx(css.trigger, !wide && css.rail)}
+        // The rail (narrow) form renders the icon only, so the accessible name
+        // must come from the label the official trigger slot also carries
+        // (vendor SettingsRoot.tsx: `aria-label={t('trigger')}`).
+        aria-label={t('trigger')}
         aria-haspopup="dialog"
         aria-expanded={open}
         onClick={() => { setOpen(true) }}
