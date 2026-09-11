@@ -22,7 +22,8 @@
  * missing its built `./client` bundle fails loud on the host AND here — never
  * silently dropped.
  *
- * Self-contained on purpose (no dsh package types, mirroring bridge-api.ts):
+ * Self-contained on purpose (no dsh package types, like the other self-built
+ * wire carriers such as the sidebar's instance-api.ts):
  * the wire shapes here are the fetch-carrier envelope and the graph rows
  * (vendor dsh-client-modules src/client/manifest.ts `WebBootEntry` /
  * `WebBootGraph` are the authoritative shapes). The plugin-graph diagnostic
@@ -125,7 +126,7 @@ export interface ExtraModuleRow {
   external: string[]
 }
 
-/** The fetch-carrier wire envelope (as consumed by bridge-api.ts). */
+/** The fetch-carrier wire envelope (the shape every self-built carrier sends). */
 interface HostGraphEnvelope {
   rpcId: string
   result: {

@@ -176,7 +176,9 @@ bundle 未覆盖的 entry（方案 A，§3）。第 1、2 步在 chamber 托管�
 ### 3.5 加载契约（端点、seed 与去重集）
 
 - **端点契约（全局固定，其他 chamber 模块依赖）**：namespace `clientGraph`、
-  method `graph` → wire 端点 `clientGraph/graph`。调用形状与既有 bridge-api 同款：
+  method `graph` → wire 端点 `clientGraph/graph`。调用形状与既有自建载体同款
+  （如侧边栏 `instance-api.ts`；曾与之同款的 settings-bridge `bridge-api.ts` 已随
+  2026-12 完整桥接修订删除）：
   `POST {base}/api/clientGraph/graph`（`{base}` = `/api/i/<id>` 反代前缀），body =
   `{type:'client-request', rpcId: crypto.randomUUID(), method:'clientGraph/graph',
   payload:{args:{}}}`，响应 envelope `{rpcId, result:{ok, value?, error?}}`。
