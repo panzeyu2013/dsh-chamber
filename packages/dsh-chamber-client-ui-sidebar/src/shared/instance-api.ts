@@ -9,7 +9,12 @@
  * `/api/i/<id>/api/<endpoint>`, and parses the `server-response`
  * `{ok, value | error}` result — the exact wire the upstream
  * `ClientConnectionRpc.call('/api', endpoint, {args}, signal)` produces
- * (packages/client/connection/src/client/rpc.ts).
+ * (`vendor/harness-checkout/packages/client/connection/src/client/rpc.ts:34`;
+ * this repo's base-path-patched copy of the same implementation is
+ * `packages/dsh-client-connection/src/client/rpc.ts:61`).
+ * 2026-09-11 review-fix: both citations are spelled so they resolve from this
+ * repo. The retired form gave the upstream monorepo's own layout bare, which
+ * exists only inside the pinned vendor checkout and resolved to nothing here.
  *
  * Lives in this package's shared/ so the chamber App layer (renderer main
  * entry) and the sidebar plugin consume one copy (vite shared chunk, design

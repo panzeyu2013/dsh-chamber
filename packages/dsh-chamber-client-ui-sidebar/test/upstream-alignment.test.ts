@@ -60,11 +60,37 @@ test('T2a: archive is one row-menu verb, never a second hover button', () => {
   assert.ok(sessionMenu.includes("label: t('menu.archiveSession')"), 'the archive entry uses upstream copy')
   assert.ok(sessionMenu.includes('<IconArchiveOutline20 size={16} />'), 'the archive entry uses the 20-native glyph')
   assert.ok(
-    sessionMenu.includes("onArchiveSession(server, session.id, sessionTitleText)"),
+    sessionMenu.includes('onArchiveSession(server, session.id)'),
     'selecting archive must run the same handler the old button ran',
   )
+  // 2026-09-11 review-fix finding 5d: the third argument is dead (the confirm
+  // that consumed the title is gone), so no caller may pass one again.
+  assert.equal(
+    sessionMenu.includes('onArchiveSession(server, session.id,'),
+    false,
+    'the retired title argument must not come back',
+  )
   // No separate archive affordance survives in the row's action cluster.
-  const rowActions = sectionCode.slice(sectionCode.indexOf('cc.rowActions'), sectionCode.indexOf('Trailing state slot'))
+  // 2026-09-11 review-fix finding 4: both bounds are CODE tokens (comments are
+  // stripped before this file slices) and both are asserted. The retired bound
+  // was the JSX comment "Trailing state slot", which stripComments removes →
+  // indexOf = -1 → the slice silently ran to end-of-file, so these assertions
+  // read "anywhere after the first cc.rowActions" (an accidental broadening
+  // with a misleading failure message) instead of "inside the session row's
+  // action cluster". The cluster opens at the cc.rowActions that belongs to the
+  // session row — the LAST one before the session menu's anchor — and closes at
+  // that row's trailing cc.sessionStateSlot.
+  const sessionMenuAnchor = sectionCode.indexOf("t('action.menu.session'")
+  assert.ok(sessionMenuAnchor >= 0, 'the session menu anchor must exist (region bound)')
+  const rowActionsFrom = sectionCode.lastIndexOf('cc.rowActions', sessionMenuAnchor)
+  const rowActionsTo = sectionCode.indexOf('cc.sessionStateSlot', rowActionsFrom)
+  assert.ok(rowActionsFrom >= 0, 'the session row action cluster anchor (cc.rowActions) must exist')
+  assert.ok(rowActionsTo > rowActionsFrom, 'the session row trailing slot anchor (cc.sessionStateSlot) must exist AFTER the cluster')
+  const rowActions = sectionCode.slice(rowActionsFrom, rowActionsTo)
+  // The region is the CLUSTER, not the file: a lock that silently widened to
+  // end-of-file would also pass these two negatives for the wrong reason.
+  assert.ok(rowActions.includes("id: 'archive'"), 'the region must contain the session row menu (archive is a menu verb there)')
+  assert.ok(rowActions.length < sectionCode.length / 2, 'the region must stay a local cluster, not the rest of the file')
   assert.equal(rowActions.includes("t('action.archive')"), false, 'no standalone archive button may remain')
   assert.equal(rowActions.includes('<IconArchiveOutline20 size={14} />'), false, 'no standalone archive glyph may remain')
   // ...while the verb stays REACHABLE: kebab + archive + fork + rename all live
@@ -92,22 +118,117 @@ test('T2b: workspace delete confirm is the in-app Modal, with upstream chrome', 
   assert.ok(rootCode.includes('chamberBridge.reportWorkspaceRemoved({ sourceId: target.sourceId, workspaceId: target.workspaceId, path })'), 'the workspace-echo withdraw fact must survive')
   assert.ok(rootCode.includes('chamberBridge.requestRefresh(target.sourceId)'), 'the post-delete refresh must survive')
   // Modal chrome (upstream WorkspaceBrowser.tsx:1393-1418): title + description
-  // + outline cancel/destructive pair + a role="status" pending line.
+  // + outline cancel/destructive pair + a role="status" pending line + a
+  // role="alert" failure line.
   const modal = rootCode.slice(rootCode.indexOf('<Modal\n'), rootCode.indexOf('</Modal>'))
   assert.ok(modal.includes("title={t('delete.workspace')}"), 'the dialog title is upstream delete.workspace copy')
   assert.ok(modal.includes("description: deleteTarget.orphaned"), 'the orphan case keeps its own sentence')
   assert.ok(modal.includes("t('delete.desc', { name: deleteTarget.title })"), 'the normal case rides upstream delete.desc')
-  assert.ok(modal.includes("t('confirm.deleteOrphan', { title: deleteTarget.title })"), 'the orphan sentence stays keyed')
+  // 2026-09-11 review-fix finding 5e: the DESCRIPTION is a statement. The
+  // long-standing `confirm.deleteOrphan` question (trailing "？") stays where it
+  // belongs — the orphan badge's native title in the nav (asserted below).
+  assert.ok(modal.includes("t('delete.descOrphan', { name: deleteTarget.title })"), 'the orphan description is its own statement key')
+  assert.equal(modal.includes("t('confirm.deleteOrphan'"), false, 'the badge\'s question must not be the dialog description')
+  for (const dict of [dictionarySide(locales, 'zh'), dictionarySide(locales, 'en')]) {
+    const orphanDescription = /'delete\.descOrphan': '([^']*)'/.exec(dict)
+    assert.ok(orphanDescription, 'both dictionaries must declare the orphan dialog description')
+    assert.equal(orphanDescription[1].includes('？'), false, 'the dialog description must be a statement, not a question')
+    assert.equal(orphanDescription[1].includes('?'), false, 'the dialog description must be a statement, not a question')
+  }
+  assert.ok(
+    sectionCode.includes("title={t('confirm.deleteOrphan', { title: workspace.title })}"),
+    'the orphan badge keeps its own native title',
+  )
   assert.ok(modal.includes('variant="outline"'), 'both footer buttons are outline (upstream danger pair)')
   assert.ok(modal.includes('className={cc.archiveManagerDanger}'), 'the destructive button rides the danger ink')
   assert.ok(modal.includes('disabled={deletePending}'), 'the dialog locks while the delete is in flight')
   assert.ok(modal.includes('role="status"'), 'the pending row is a live status region')
   assert.ok(modal.includes("t('delete.pending')"), 'the pending row uses upstream copy')
+  // 2026-09-11 review-fix finding 3: a FAILED delete reports INSIDE the dialog
+  // (upstream WorkspaceBrowser.tsx:1417-1418) and the dialog stays open — the
+  // row-keyed inline error has no surface once the deleted row unmounted.
+  assert.ok(
+    modal.includes('{deleteError !== null && <div className={cc.deleteError} role="alert">{deleteError}</div>}'),
+    'the dialog must render the failure as a role="alert" line',
+  )
+  assert.ok(rootCode.includes('const [deleteError, setDeleteError] = useState<string | null>(null)'), 'the failure message must be shell state')
+  const confirmDelete = rootCode.slice(rootCode.indexOf('const confirmDeleteWorkspace = ()'), rootCode.indexOf('const commitRename = ()'))
+  assert.ok(
+    normalize(confirmDelete).includes("setDeleteError(reason instanceof Error ? reason.message : String(reason))"),
+    'the failure message must reach the dialog',
+  )
+  assert.ok(
+    normalize(confirmDelete).includes('throw reason'),
+    'the failure must still be rethrown so the keyed rowErrors line keeps reporting it',
+  )
+  assert.ok(normalize(confirmDelete).includes('if (ok) dismissDeleteWorkspace()'), 'the dialog closes on SUCCESS only')
+  assert.equal(
+    normalize(confirmDelete).includes('setDeletePending(false) dismissDeleteWorkspace()'),
+    false,
+    'a settled FAILURE must not auto-close the dialog (that is the invisible-failure defect)',
+  )
+  assert.ok(
+    normalize(rootCode).includes('if (deleteTarget === null || deletePending || deleteError !== null) return'),
+    'a reported failure must survive its source dropping (the alert is the only explanation left)',
+  )
   // The dialog is mounted with the source liveness guard and focus discipline
   // the archive manager uses (opening must not strand a keyboard user).
   assert.ok(rootCode.includes('deleteBodyRef.current?.focus()'), 'focus must land inside the dialog')
   assert.ok(rootCode.includes('if (server === undefined || !server.connected) setDeleteTarget(null)'), 'a dead source must drop the armed confirm')
   assert.ok(rootCode.includes('if (opener !== null && opener.isConnected) opener.focus()'), 'closing must restore focus to the opener')
+  // 2026-09-11 review-fix finding 2: the retired "can never stack" claim was
+  // false — the orphan badge is an always-rendered tabbable button OUTSIDE the
+  // hover cluster and the official Modal has no focus trap, so every opener
+  // must gate. The both-directions lock lives in its own test below.
+})
+
+test('finding 2: at most ONE chamber dialog layer, in BOTH orderings', () => {
+  // ONE rule, consulted by every opener (SidebarRoot `otherChamberDialogOpen`):
+  // each clause excludes the caller's own layer, so all three sites share the
+  // rule instead of keeping three copies that can drift apart.
+  const predicate = rootCode.slice(
+    rootCode.indexOf('function otherChamberDialogOpen('),
+    rootCode.indexOf('const openWorkspaceBrowser = ('),
+  )
+  assert.ok(predicate.length > 0, 'the shared one-layer rule must exist')
+  for (const [layer, state] of [
+    ["'delete'", 'deleteTarget !== null'],
+    ["'archive'", 'archiveCleanupServerId !== null'],
+    ["'browser'", 'addingWorkspace !== null'],
+  ] as const) {
+    assert.ok(
+      normalize(predicate).includes(`self !== ${layer} && ${state}`),
+      `the rule must cover the ${layer} layer`,
+    )
+  }
+  // Every opener consults it, inside its OWN handler, BEFORE it arms/opens the
+  // layer — so the two REVERSE directions (archive manager / add-workspace
+  // browser opened on top of an armed delete confirm) are as guarded as the arm.
+  const handler = (from: string, to: string): string => {
+    const at = rootCode.indexOf(from)
+    assert.ok(at >= 0, `${from} must exist (lock region bound)`)
+    const end = rootCode.indexOf(to, at)
+    assert.ok(end > at, `${to} must follow ${from} (lock region bound)`)
+    return rootCode.slice(at, end)
+  }
+  const openers = [
+    ['the workspace-delete arm', handler('const onDeleteWorkspace = (', 'const dismissDeleteWorkspace = ('), "if (otherChamberDialogOpen('delete')) return", 'setDeleteTarget({'],
+    ['the archive manager opener', handler('const onOpenArchiveCleanup = (', 'const closeArchiveCleanup = ('), "if (otherChamberDialogOpen('archive')) return", 'setArchiveCleanupServerId(server.id)'],
+    ['the add-workspace opener', handler('const openWorkspaceBrowser = (', 'const onOpenArchiveCleanup = ('), "if (otherChamberDialogOpen('browser')) return", 'setAddingWorkspace(sourceId)'],
+  ] as const
+  for (const [name, code, guard, action] of openers) {
+    const guardAt = code.indexOf(guard)
+    assert.ok(guardAt >= 0, `${name} must refuse while another chamber dialog layer is up`)
+    assert.ok(code.indexOf(action) > guardAt, `${name}'s gate must precede the layer it opens`)
+  }
+  // The reachable control this whole invariant exists for is still rendered
+  // outside the hover cluster…
+  assert.ok(sectionCode.includes('className={cc.orphanBadge}'), 'the reachable badge must still render outside the hover cluster')
+  // …and the section cannot poke the raw setter anymore: the shell hands it the
+  // GUARDED opener as the only add-workspace entry (capability preserved — the
+  // `+` still opens the browser whenever no other layer is up).
+  assert.equal(sectionCode.includes('setAddingWorkspace('), false, 'the section must ride the guarded opener, not the raw setter')
+  assert.ok(sectionCode.includes('openWorkspaceBrowser(server.id)'), 'the source-header `+` must ride the guarded opener')
 })
 
 test('T5: the row-action accessible names are {name}-parameterized and used', () => {
@@ -322,6 +443,16 @@ test('T7 active-Schedule marker: rendered at the upstream position, both row kin
   assert.ok(
     derive.includes('...(hasActiveScheduleOf(row.projectionValues) ? { hasActiveSchedule: true as const } : {}),'),
     'the mounted projection carries the fact from projectionValues',
+  )
+  // 2026-09-11 review-fix finding 1: the fact must ALSO ride the PROJECTION
+  // signature (serversProjectionSignature), which BOTH publish gates read
+  // (App.tsx before chamberBridge.publish, and this shell's own subscription).
+  // Non-sparse on purpose — that row is a change detector, never persisted —
+  // so a schedule-only flip moves the bytes even when nothing else does (the
+  // behavioural proof lives in derive.test.ts).
+  assert.ok(
+    derive.includes('hasActiveSchedule: x.hasActiveSchedule === true,'),
+    'the projection signature row carries the schedule fact (change detector, non-sparse)',
   )
 })
 

@@ -2247,6 +2247,48 @@ test('serversProjectionSignature: archivedSessions and archiveSetKnown participa
   assert.equal(serversProjectionSignature([degraded] as never), serversProjectionSignature([makeServer({ archivedSessions: [], archiveSetKnown: false })] as never))
 })
 
+// 2026-09-11 review-fix finding 1: the active-Schedule marker is rendered by
+// the sidebar row, and a schedule/change log record moves NOTHING else in the
+// projection row (updatedAt is max(createdAt, lastPromptAt), untouched by a
+// schedule record) — so the fact must move serversProjectionSignature, which
+// BOTH publish gates read (App.tsx before chamberBridge.publish, and this
+// shell's own subscription). Without it the marker freezes at its first-seen
+// value until an unrelated change re-publishes.
+test('serversProjectionSignature: a schedule-only flip republishes, reverting restores identical bytes', () => {
+  const makeServer = (hasActiveSchedule: boolean) => ({
+    id: 'local',
+    sourceFingerprint: 'fp',
+    kind: 'local' as const,
+    transport: 'local' as const,
+    label: 'local',
+    connected: true,
+    phase: 'ready',
+    workspaces: [{
+      id: 'w1',
+      title: 'Work',
+      // Everything else byte-identical: the schedule bit is the only delta.
+      sessions: [{ id: 's1', title: 'One', running: false, blank: false, updatedAt: 5, hasActiveSchedule }],
+    }],
+  })
+  const idle = serversProjectionSignature([makeServer(false)] as never)
+  const armed = serversProjectionSignature([makeServer(true)] as never)
+  assert.notEqual(idle, armed, 'gaining an active schedule must move the publish gate')
+  // ...and losing it again returns the EXACT original bytes, so the gate can
+  // never latch on a phantom difference.
+  assert.equal(idle, serversProjectionSignature([makeServer(false)] as never))
+  // A row that never carries the key at all is the same fact as an explicit
+  // false (both are "no active schedule") — the non-sparse form is stable.
+  const keyless = serversProjectionSignature([{
+    ...makeServer(false),
+    workspaces: [{
+      id: 'w1',
+      title: 'Work',
+      sessions: [{ id: 's1', title: 'One', running: false, blank: false, updatedAt: 5 }],
+    }],
+  }] as never)
+  assert.equal(keyless, idle, 'a key-less row and an explicit false must publish identical bytes')
+})
+
 // ---------------------------------------------------------------------------
 // 2026-09-11 upstream-alignment T7: the active-Schedule fact, end to end
 // (session projection → snapshot → signature gate → rendered row).

@@ -75,6 +75,11 @@ export const zh = {
   // delete.pending).
   'delete.workspace': '删除工作区',
   'delete.desc': '将把“{name}”从工作区列表中移除。文件夹与会话记录会保留，其会话将显示在“未分组”下。',
+  // 2026-09-11 review-fix finding 5e: the orphan case's dialog DESCRIPTION —
+  // a statement, unlike `confirm.deleteOrphan` below, which is a question with
+  // a trailing "？" and stays where it always was: the orphan badge's native
+  // `title` in the nav (ServerSection.tsx). Same fact, two registers.
+  'delete.descOrphan': '将把“{name}”从工作区列表中移除：它的文件夹已不存在，因此只删除 workspace 注册；会话记录会保留，其会话将显示在“未分组”下。',
   'delete.pending': '正在删除工作区…',
   'confirm.deleteOrphan': '「{title}」的工作树已不存在，仅删除其 workspace 注册（会话保留并转未分组）？',
   'list.empty': '暂无已连接来源',
@@ -208,6 +213,9 @@ export const en = {
   'menu.archiveSession': 'Archive session',
   'delete.workspace': 'Delete workspace',
   'delete.desc': 'This removes “{name}” from the workspace list. The folder and session logs will be kept. Its sessions will appear under Ungrouped.',
+  // 2026-09-11 review-fix finding 5e: statement form for the dialog's orphan
+  // description; `confirm.deleteOrphan` below stays the badge's title.
+  'delete.descOrphan': 'This removes “{name}” from the workspace list: its folder no longer exists, so only the workspace registration is deleted. Session logs will be kept and its sessions will appear under Ungrouped.',
   'delete.pending': 'Deleting workspace…',
   'confirm.deleteOrphan': 'The worktree of "{title}" no longer exists — delete only its workspace registration (sessions are kept and become Ungrouped)?',
   'list.empty': 'No connected sources',

@@ -81,12 +81,21 @@ chamber 自研侧边栏插件（设计 05 §2）：拷贝官方 ui-sidebar 外�
   `chamberBridge.requestRefresh(sourceId)`——App 层立即重拉该来源快照。
 - 工作区删除由**应用内 `Modal`** 确认，绝不用原生 OS 确认框（后者骑不上
   alias token）：上游 chrome——标题与说明句取上游字典键
-  `delete.workspace`/`delete.desc`（孤儿态保留自己那句既有文案）、outline 取消 +
-  outline 破坏性动作、wire 调用在途时一条 `role="status"` 的 `delete.pending` 行。
+  `delete.workspace`/`delete.desc`（孤儿态用自己那句陈述文案
+  `delete.descOrphan`）、outline 取消 +
+  outline 破坏性动作、wire 调用在途时一条 `role="status"` 的 `delete.pending` 行，
+  以及**删除失败**时对话框**内**一条 `role="alert"` 行——该行未关闭前对话框不关
+  （按行的内联错误行照旧保留，但被删行已卸载后它无处可显，上游同样在对话框里报失败）。
   打开时焦点落进对话框、
-  关闭时回到开启者；来源消失或断开即撤销已武装的确认；任何时刻只有**一层**
-  对话框（官方 Modal 每开一个实例注册一个 document 级 Escape 监听——与归档
-  管理器登记的理由同源）。
+  关闭时回到开启者；来源消失或断开即撤销已武装的确认——**除非**对话框里正显示一条已报告
+  的失败：那条 `role="alert"` 此时是仅存的解释，故随对话框保留到用户自行关闭
+  （2026-09-11 review-fix）。任何时刻最多只有**一层**
+  chamber Modal，而这条保证是加在**开启点**上的**对称闸门**、不是关于遮罩的说法：官方
+  Modal 没有焦点陷阱，nav 在每一层遮罩之后仍可 Tab 到（含始终渲染的孤儿徽标与来源头
+  控件）——因此三个开启点（武装本确认、打开归档管理器、打开添加工作区浏览器）在其余任
+  一层已打开时都被拒绝，与用户先够到哪一个无关。两层 Modal 会各自注册 document 级
+  Escape 监听、一次 Escape 关掉两层——这正是归档管理器自己拒绝第二层的理由。什么也没
+  失去：每一层都可关闭（取消 / X / 遮罩 / Escape），被拒的控件在另一层消失的那一刻立即可用。
 - 行操作的可访问名带上它作用的**那一行**
   （`action.newSession.aria` / `action.menu.workspace` / `action.menu.session`，
   上游的 `{name}` 参数化形式）：一排只报「更多操作」的控件对 AT 等于没说。
@@ -109,7 +118,8 @@ chamber 自研侧边栏插件（设计 05 §2）：拷贝官方 ui-sidebar 外�
   会话，`chamberBridge.requestActivateSource`）；归档后会话立即从列表
   消失（`archivedSessionIds` 过滤在 `shared/derive.ts` derive 层）。
 - 折叠 rail 为每个来源渲染一个**命名的可操作按钮**（官方 `Tooltip` +
-  `aria-label`、当前来源 `aria-current`、不可激活来源 `aria-disabled` 且名称取
+  `aria-label`、当前来源 `aria-current`、**非当前**且不可激活的来源
+  `aria-disabled`——当前来源同样不是激活目标，但它用 `aria-current` 标记；名称取
   来源头自己的拒绝理由），取代此前只有 `title` 的惰性色点——因此 rail 上也能
   切换来源；彩色点与活动 accent 环一字未改（含几何）。
 

@@ -17,10 +17,17 @@ import type { HostObservable } from '@deepseek-ai/dsh-client-ui-slots'
 import type { MainPanelId } from '@deepseek-ai/dsh-client-ui-layout/client'
 // 2026-09-11 upstream-alignment A5: the observable plumbing is the store
 // engine's, not hand-rolled — upstream builds this exact projection with
-// `createSnapshotStore` (vendor packages/client/store/src/index.ts:103,
-// ui-sidebar/src/client/index.ts:3,46) and the composite bundle compiles that
-// factory for this package (the renderer aliases @deepseek-ai/* to vendor
-// source; `instance-list-face.ts` already type-imports the same module).
+// `createSnapshotStore`
+// (vendor/harness-checkout/packages/client/store/src/index.ts:103, and its own
+// use of it at
+// vendor/harness-checkout/packages/client/ui-sidebar/src/client/index.ts:3,46),
+// and the composite bundle compiles that factory for this package (the renderer
+// aliases @deepseek-ai/* to vendor source; `instance-list-face.ts` already
+// type-imports the same module).
+// 2026-09-11 review-fix (stale-path sweep): the citations used to give the bare
+// upstream-monorepo layout with only a "vendor" prefix, which resolves to
+// nothing from this repo root; both facts and both line numbers were
+// re-verified against the pinned checkout and are unchanged.
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
 import type { SidebarPanelMetadata } from './contract/slots.ts'
 

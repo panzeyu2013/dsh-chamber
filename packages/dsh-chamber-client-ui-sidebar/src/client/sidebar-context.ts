@@ -158,13 +158,19 @@ export interface SidebarSectionContextValue {
    *  offers per-row / multi-select purges; whole-set deletion goes through
    *  the explicit select-all checkbox — no standalone delete-all). */
   onOpenArchiveCleanup: (server: ChamberServerAggregate) => void
-  /** Source-header add-workspace entry (opens the directory browser). */
-  setAddingWorkspace: Dispatch<SetStateAction<string | null>>
+  /** Source-header add-workspace entry (opens the directory browser).
+   *  2026-09-11 review-fix finding 2 (symmetric closure): this is the shell's
+   *  GUARDED opener, not the raw state setter — it refuses while another
+   *  chamber dialog layer is up, so the section cannot stack a second Modal by
+   *  calling it. Closing stays the shell's own business (`browseClose`). */
+  openWorkspaceBrowser: (sourceId: string) => void
 
   /** Row actions over the source's own unary API. */
   openSession: (serverId: string, sessionId: string) => void
   onNewSession: (server: ChamberServerAggregate, workspaceId: string) => void
-  onArchiveSession: (server: ChamberServerAggregate, sessionId: string, title: string) => void
+  /** 2026-09-11 review-fix finding 5d: no title parameter — the archive verb
+   *  runs immediately (T2a), so nothing consumes a title here. */
+  onArchiveSession: (server: ChamberServerAggregate, sessionId: string) => void
   onForkSession: (server: ChamberServerAggregate, session: { id: string; title: string }) => void
   onDeleteWorkspace: (server: ChamberServerAggregate, workspaceId: string, title: string) => void
 }

@@ -838,6 +838,10 @@ export function runtimeReportSignature(
  *   exclusion rationale no longer holds.
  * - the runtime portion is restricted to sessions visible in the projection
  *   (hidden sessions' facts never re-render the list).
+ * - 2026-09-11 review-fix finding 1: the per-session active-Schedule fact
+ *   (hasActiveSchedule) is a rendered fact that can flip ALONE — the sidebar
+ *   row renders the marker, and a schedule/change log record moves no other
+ *   field in this signature — so the row below carries it.
  * The App layer gates chamberBridge.publish on this signature — a poll tick
  * whose rendered content did not change must not re-render every shell's
  * sidebar; the sidebar subscription re-checks it as defense in depth.
@@ -901,6 +905,16 @@ export function serversProjectionSignature(servers: readonly ChamberServerAggreg
           blank: x.blank === true,
           // Render-relevant: updated-mode ordering derives from it.
           updatedAt: x.updatedAt ?? null,
+          // 2026-09-11 review-fix finding 1: the active-Schedule marker is a
+          // RENDERED fact (SessionSection renders it right after the row title),
+          // so it must move this signature — otherwise a schedule/change that
+          // flips nothing else (a schedule log record does not touch the row's
+          // updatedAt, which is max(createdAt, lastPromptAt)) republishes
+          // byte-identical content, both publish gates drop it (App.tsx and
+          // this shell's own subscription), and the marker can freeze at its
+          // first-seen value. Non-sparse on purpose: this row is a change
+          // detector, never persisted, so a stable false is free.
+          hasActiveSchedule: x.hasActiveSchedule === true,
         })),
       })),
       // Archive-manager metadata rides the publish gate too: a purge while

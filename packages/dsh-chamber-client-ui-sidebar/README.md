@@ -105,14 +105,28 @@ The shell declares and renders the three holes the alpha.2 official
   the App layer re-pulls that source's snapshot immediately.
 - Workspace delete is confirmed by an in-app `Modal`, never by a native OS
   confirm (which cannot ride the alias tokens): upstream chrome — its
-  `delete.workspace` title and `delete.desc` description keys (the orphaned
-  case keeps its own long-standing wording), an outline cancel + outline
-  destructive pair, and a `role="status"` `delete.pending` line while the wire
-  call is in flight. Focus lands inside the dialog when it opens and returns to
-  the opener when it closes; a source that vanishes or disconnects drops the
-  armed confirm; only ONE dialog layer is ever up (the official Modal registers
-  one document-level Escape listener per open instance — the same reason the
-  archive manager records).
+  `delete.workspace` title, its `delete.desc` description (the orphaned case
+  carries its own statement copy, `delete.descOrphan`), an outline cancel +
+  outline destructive pair, a `role="status"` `delete.pending` line while the
+  wire call is in flight, and — when the delete FAILS — a `role="alert"` line
+  INSIDE the dialog, which stays open until dismissed (the row-keyed inline
+  error line stays too, but it has no surface once the deleted row unmounted,
+  and upstream reports the failure in the dialog as well). Focus lands inside
+  the dialog when it opens and returns to the opener when it closes; a source
+  that vanishes or disconnects drops the armed confirm — EXCEPT while a reported
+  failure is on screen, whose in-dialog `role="alert"` is then the only
+  explanation left and therefore stays until the user dismisses the dialog
+  (2026-09-11 review-fix). At most ONE chamber
+  Modal layer is ever up, and that guarantee is a SYMMETRIC GATE on the
+  openers, not a claim about the mask: the official Modal has no focus trap, so
+  the nav stays tabbable behind every mask — the always-rendered orphan badge
+  and the source-header controls included — and all three openers (arming this
+  confirm, opening the archive manager, opening the add-workspace browser)
+  refuse while any of the other layers is up, in whichever order the user
+  reaches them. Two layers would each register a document Escape listener and
+  close on one Escape — the reason the archive manager itself refuses a second
+  layer. Nothing is lost: every layer is dismissible (cancel / X / mask /
+  Escape), so a refused control works again the moment the other one is gone.
 - Row-action accessible names carry the ROW they act on
   (`action.newSession.aria` / `action.menu.workspace` / `action.menu.session`,
   upstream's `{name}`-parameterized form): a per-row control named with a bare
@@ -141,7 +155,9 @@ The shell declares and renders the three holes the alpha.2 official
   the session immediately (`archivedSessionIds` filtered in `shared/derive.ts`).
 - The collapsed rail renders one NAMED, operable button per source (official
   `Tooltip` + `aria-label`, `aria-current` on the active source, `aria-disabled`
-  on a source that cannot be activated — a managed-down source's name is the
+  on a NON-active source that cannot be activated — the active source is not an
+  activation target either and is marked with `aria-current` instead; a
+  managed-down source's name is the
   header's own refusal) instead of the former inert title-only dot, so a source
   can also be switched from the rail; the coloured dot and the active accent
   ring are unchanged, geometry included.

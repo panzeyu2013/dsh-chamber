@@ -229,7 +229,10 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
     setRenaming,
     commitRename,
     onOpenArchiveCleanup,
-    setAddingWorkspace,
+    // 2026-09-11 review-fix finding 2 (symmetric closure): the GUARDED
+    // add-workspace opener — the shell refuses it while another chamber dialog
+    // layer is up, so this section can never stack a second Modal.
+    openWorkspaceBrowser,
     openSession,
     onNewSession,
     onArchiveSession,
@@ -947,7 +950,7 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                             event.stopPropagation()
                             if (suppressClickRef.current) return
                             clearPendingClick()
-                            setAddingWorkspace(server.id)
+                            openWorkspaceBrowser(server.id)
                           }}
                         >
                           {/* chamber (design 05 §2.2): adding a WORKSPACE, not a
@@ -1176,9 +1179,19 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                                     {/* 2026-09-11 upstream-alignment T7: upstream's
                                         search row carries the marker right after
                                         the title, inside the heading (vendor
-                                        ui-workspace Rows.tsx:351), and hides it
-                                        for blank rows (same gate as the row
-                                        actions there). */}
+                                        ui-workspace Rows.tsx:351), fed by
+                                        tree.ts:161-163. 2026-09-11 review-fix
+                                        finding 5b: this row applies NO blank gate
+                                        of its own — the projection helper
+                                        (`projectedHasActiveSchedule`) is the only
+                                        gate, and it is false for a session the
+                                        projection does not list. Upstream's
+                                        SearchResultItem has no blank gate either
+                                        and SearchResultNode carries no `blank`
+                                        field: blank (provisional new-session)
+                                        rows are excluded from content search by
+                                        the query itself (vendor tree.ts:156-159),
+                                        so there is nothing to gate here. */}
                                     {projectedHasActiveSchedule(item.sessionId) && (
                                       <SessionScheduleIndicator label={t('schedule.active')} />
                                     )}
@@ -1930,7 +1943,10 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                                           } else if (id === 'fork') {
                                             onForkSession(server, session)
                                           } else if (id === 'archive') {
-                                            onArchiveSession(server, session.id, sessionTitleText)
+                                            // 2026-09-11 review-fix finding 5d:
+                                            // no title argument — the verb runs
+                                            // immediately (T2a) and nothing reads it.
+                                            onArchiveSession(server, session.id)
                                           }
                                         }}
                                         items={[

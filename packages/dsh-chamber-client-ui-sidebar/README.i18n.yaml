@@ -12,5 +12,21 @@
 # rail renders named operable buttons, header controls ride the official Tooltip and the
 # browse tree is labelled. Claim-by-claim comparison (Interactions bullet list, Structure
 # bullets) came first; only then were both hashes recomputed with `sha256sum`.
-README.md: db1a1e746699127d8ac7f10ac6f305b3802deb3ca05e50f344648c5ca74539e4
-README.zh.md: f3648e62b4ed3afd4994ddb89ebf0fda6092e9c7f77dc4de0614b6575f044cef
+# Re-recorded again (2026-09-11 review-fix round, findings 2/3/5c/5e): the same comparison
+# duty, this time for the workspace-delete bullet (in-dialog role="alert" failure that keeps
+# the dialog open, the statement-form orphan description key `delete.descOrphan`, and the
+# "arming is gated on no other chamber dialog" invariant replacing the false "can never
+# stack" claim) plus the rail bullet's aria-disabled clarification (a NON-active
+# non-activatable source; the active one rides aria-current). Nothing else changed.
+# Re-recorded again (2026-09-11 review-fix round, second half — the invariant is now TOTAL):
+# the same workspace-delete bullet states the symmetric opener gate instead of the
+# arm-only one — at most ONE chamber Modal layer, all three openers (arm the confirm /
+# archive manager / add-workspace browser) refusing while any other layer is up, either
+# order; both sides re-compared claim by claim (six claims each) before hashing.
+# Re-recorded again (2026-09-11 review-fix round, docs lane): ONE further claim in the same
+# bullet was brought in line with the code — the source-vanish auto-drop of the armed
+# confirm is SUSPENDED while a reported failure is on screen (the in-dialog
+# `role="alert"` is then the only surviving explanation, `SidebarRoot.tsx`'s effect reads
+# `deleteError`). Both sides re-read against that bullet and rehashed.
+README.md: ddb8900781102785a7c3a1f5053ba6e684f1a8024d949eff327ef5b5d83cd57c
+README.zh.md: 3f080a926c00833ae62792d021ea10850d0e2a0810b8d2b9db212e9900591b54

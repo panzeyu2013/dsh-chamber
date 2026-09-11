@@ -4,9 +4,17 @@
  * unary 调用机件:
  * - A packages/dsh-chamber-client-ui-sidebar/src/shared/instance-api.ts
  * - B packages/dsh-chamber-client-ui-sidebar/src/shared/plugin-graph-recheck.ts
- * - C packages/dsh-chamber-client-ui-settings-bridge/src/client/bridge-api.ts
- *     ⚠ 该载体已随 2026-12 完整桥接修订删除（设置面不再自行发 unary 调用）；
- *     下文涉及 C 的行号与同体结论均为**审计时点基线**，不是现存文件。
+ * - C（**历史载体：无现存文件，本文件所有 C 引用都是审计时点基线**）
+ *     settings-bridge 曾自建的桥接 unary 客户端。2026-09-11 review-fix 复核：
+ *     该模块随 2026-12 完整桥接修订被删除——设置面不再自建 unary 调用（设置页
+ *     改为渲染所选来源**自己 boot-ctx** 的 settings.section 座位，design 05 §5），
+ *     最近一轮桥接改造仍保持这一形态；**没有任何接替它的模块**，故此处不再写
+ *     历史路径。下文 C 的行号、同体结论、「C/D 消费共享件」与「四载体(C/D/B/F)」
+ *     这类计数描述的都是审计/改引时点的那个载体（当时确实存在），不是今日代码。
+ *     今日真正消费本文件共享件的载体：A（`instance-api.ts` 取 mintRpcId）、
+ *     B（`plugin-graph-recheck.ts`）、D（settings-connections 的
+ *     `plugin-inventory-api.ts` 经 shared 面）与 F（`renderer/src/host-graph.ts`
+ *     直接 import postUnary + 分类件）；E 仍仅参考，不收其任何实现。
  * - D packages/dsh-chamber-client-ui-settings-connections/src/client/plugin-inventory-api.ts
  * - E packages/dsh-chamber-client-ui-git/src/shared/git-api.ts(仅参考——本模块不收 E 的任何实现)
  * - F packages/renderer/src/host-graph.ts(仅参考)
@@ -19,9 +27,10 @@
  *   收窄签名不同——B: `Record<string, unknown>`,C/D: `Record<PropertyKey,
  *   unknown>`,E: `Record<string, any>`;本文件取 B 的签名(本包内唯一消费
  *   方的原签名)。A 与 F 无本地 isRecord(F 用内联 typeof 检查)。
- *   (改引后注:C/D 的本地同体副本已撤销,改为经 shared 面消费本副本——两处
- *   调用点只做字符串键读取,`Record<PropertyKey, unknown>` 与 `Record<string,
- *   unknown>` 收窄在该面上无行为差异;E 属禁改包,仍留本地。)
+ *   (改引后注:D 的本地同体副本已撤销,改为经 shared 面消费本副本;C 的那份同体
+ *   副本随其载体整体删除（2026-09-11 review-fix 复核，见文件头 C 条）——今日唯一
+ *   消费方是 D，其调用点只做字符串键读取,`Record<PropertyKey, unknown>` 与
+ *   `Record<string, unknown>` 收窄在该面上无行为差异;E 属禁改包,仍留本地。)
  *
  * - mintRpcId:正文逐字来自 A(instance-api.ts mintRpcId)——crypto.randomUUID
  *   主路径与 B/C/D/F 各处的裸 `crypto.randomUUID()` 等价(B: plugin-graph-
@@ -120,9 +129,11 @@ export function mintRpcId(): string {
  * 改引后注(无新编号——对上述登记的事实增补):C/D 各自手写的本地 wrapWireError
  * 折行与 503 instance_unavailable 分支经逐字核对同体;其纯件部分——无选项错误
  * 构造器 + 503 谓词/守卫——已收进同包 shared/wire-error.ts(经 shared 面导出),
- * C/D 改为消费该共享件。这符合 P4-2 选项规则:签名无新选项、任何载体的动作与
- * 文案零变化。动作差异仍按本段与文末 P4-3 裁定留在载体本地:A 的类身份折行/
- * 中止直通、B/F 的「不可判定」与 resolve-null 路径均未收编。
+ * D 改为消费该共享件。2026-09-11 review-fix 复核:C 侧的同一改动随该载体一起消失
+ * (2026-12 完整桥接修订删除该模块,无接替者——见文件头 C 条),今日该共享件的唯一
+ * 消费方是 D。这不改本段结论:P4-2 选项规则(签名无新选项、当时各载体的动作与
+ * 文案零变化)是改引时点的判定。动作差异仍按本段与文末 P4-3 裁定留在载体本地:
+ * A 的类身份折行/中止直通、B/F 的「不可判定」与 resolve-null 路径均未收编。
  * ------------------------------------------------------------------------ */
 
 /** Bounded-unary budget of every postUnary call — the byte-identical
@@ -246,7 +257,8 @@ export function classifyGraphChannelFailure(classification: string): 'not-inject
 /* ---------------------------------------------------------------------------
  * P4-3 登记(N6 续,2026-09):「C bridge-api 传输层落回 A instance-api」等价性
  * 分析 → 裁定不合并。行号以本次改引时为准(A = sidebar instance-api.ts,
- * C = settings-bridge bridge-api.ts)。逐维核对结论:
+ * C = settings-bridge **当时**自建的 bridge-api.ts——该模块随后在 2026-12 完整
+ * 桥接修订中删除，见文件头 C 条;本段是审计时点的等价性记录)。逐维核对结论:
  *
  * - 信封协议:两方 wire 请求体逐字同形({type:'client-request', rpcId, method,
  *   payload:{args:{参数名:…}}}——A 的命名空间访问器先在 payload 层包

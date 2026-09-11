@@ -15,14 +15,19 @@
    channel-reported current-session row highlight (official selected tint)
    and its workspace-group accent-chevron marker (any source, 06 §4),
    per-session state indicators in a fixed trailing slot (normal = empty;
-   running/pending = the official dsh ongoing blue ring; completed-but-unread
-   = a persistent blue dot — the slot is NOT a server-identity marker, 06
+   running = the official dsh ongoing blue ring; pending = a 14px icon badge;
+   completed-but-unread
+   = the official `StateDot state="done"` green dot — 2026-09-11
+   upstream-alignment T10, the bespoke brand dot is gone — the slot is NOT a
+   server-identity marker, 06
    §4.3), no relative-time cells (sessions show no "x前" text), per-source
    search capsule + results (06 §1), HTML5 drag markers (session
    rows and workspace groups, 2px rule, 06 §2.2), hover icon actions
    (workspace header: `+` new-session + three-dot kebab menu with
-   rename/delete; session row: three-dot kebab menu with rename + a
-   dedicated archive button), inline rename, the snapshot-fetch error line
+   rename/delete; session row: three-dot kebab menu with
+   rename/fork/archive — 2026-09-11 upstream-alignment T2a moved archive INTO
+   that menu, so no dedicated archive button exists), inline rename, the
+   snapshot-fetch error line
    and inline failure text. Rides the official shell geometry (SidebarRoot
    column, fold states); this sheet owns only the region content. */
 
@@ -317,8 +322,9 @@
    identity). It sits at the row's RIGHT edge (trailing the hover actions,
    never replaced by them). Fixed 10px slot (always laid out, empty for the
    normal state) so row right edges stay aligned across states. Running
-   renders the official StateDot ongoing ring; completed-but-unread renders a
-   persistent dot. Pending interactions (approval / plan-review / question)
+   renders the official StateDot ongoing ring; completed-but-unread renders the
+   official StateDot `done` (green) tone — 2026-09-11 upstream-alignment T10,
+   not the retired bespoke dot. Pending interactions (approval / plan-review / question)
    widen the slot to 14px and render a distinguishable icon badge INSTEAD of
    the running ring — a session waiting for the user must be recognizable at
    a glance (question `?`, plan-review checklist, approval warning triangle;
@@ -844,7 +850,7 @@
      a deliberate choice (05 §2). */
   padding: 3px 4px 3px 26px;
   /* FIXED height (26px = 3px pad + 20px actions + 3px pad, border-box): the
-     hover swap (state slot -> kebab/archive actions, 10/18px -> 20px
+     hover swap (state slot -> the row's kebab action cluster, 10px -> 20px
      content) must NOT change the row height. A content-sized row grows
      2px on hover (24 -> 26); under a moving pointer the engine hit-tests
      the row's hover against a stale frame while the element under the
@@ -990,8 +996,10 @@
   display: none;
 }
 
-/* Icon action button (the `+`, the three-dot kebab trigger, the archive
-   button): 20px hit area around the 14px glyph. The full reset (appearance/
+/* Icon action button (the `+`, the three-dot kebab trigger —
+   2026-09-11 upstream-alignment T2a removed the third instance, the dedicated
+   archive button, whose verb now rides the session row's kebab menu): 20px hit
+   area around the 14px glyph. The full reset (appearance/
    outline/line-height/font-size) kills every UA chrome artifact — Safari's
    button chrome and the click-focus ring must never draw a frame around the
    button; the grid centering pins the glyph to the exact center regardless
@@ -1755,6 +1763,20 @@
   font-size: 12px;
   line-height: 18px;
   color: var(--dsw-alias-label-secondary);
+}
+
+/* 2026-09-11 review-fix finding 3: the workspace-delete failure INSIDE the
+   dialog (role="alert"), mirroring upstream's WorkspaceBrowser.module.css
+   .renameError (8px top margin, 12/18px, the error token) — the row-keyed
+   inline error line stays, but it has no surface once the deleted row has
+   unmounted, which is why the dialog reports the failure itself. */
+.deleteError {
+  margin-top: 8px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-state-error-primary);
+  white-space: normal;
+  word-break: break-word;
 }
 
 /* Footer action bar (official Modal footer): status/count left, destructive
