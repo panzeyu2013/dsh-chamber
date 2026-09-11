@@ -5,16 +5,17 @@
  * the centered modal panel keep the official panel geometry (figma
  * 501:29947), but the nav rail is re-aimed: a SERVER dropdown on top
  * (local default; searchable portal, all rows selectable, connection state
- * colored green/red) over the SELECTED server's official settings
- * sections, and the options column renders that server's official section
- * content through the child cordis context bridge (bridge-context.ts). The
+ * colored green/red) over the SELECTED server's OWN settings sections. The
+ * options column renders that server's own ledger through this panel — the
+ * source's own boot ctx, its own registrations, its own renderer-bound seats
+ * (settings-source-face.ts, design 05 §5 2026-12 完整桥接修订). The
  * chamber-global connections surface is a FIXED nav entry below a divider —
  * it never follows the selected server and renders the official
  * ConnectionsSection as a full options-column view when active.
  *
- * Deliberate omissions vs the official shell: onboarding steps and the
- * settings.header/action seats are not rendered (the header title and close
- * are self-built); every section's config fact still lives on the selected
+ * Chrome stays chamber-owned: the header title and close button are
+ * self-built (the official `settings.header`/`close` seats are chrome, not
+ * content). Every section's config fact still lives on the selected
  * instance's host machine.
  */
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
@@ -39,25 +40,21 @@ import {
   getServers, subscribeServers, type BridgeServerRow,
 } from './bridge-servers.ts'
 import {
-  isChannelClassDiagnostic, recheckPluginGraphDiagnostic,
+  chamberBridge, isChannelClassDiagnostic, recheckPluginGraphDiagnostic,
 } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
-import {
-  mountBridgeSession, sectionRows, type BridgeSession,
-} from './bridge-context.ts'
+import { sectionRows, isPluginProvidedRow } from './section-rows.ts'
 import { isBasePluginId } from './base-plugins.ts'
-import { isPluginProvidedRow, toAssemblyReport } from './settings-extensions.ts'
 import {
-  nextMountRetryDelayMs,
-} from './mount-retry.ts'
+  getSettingsSourceFace, publishSettingsSourceSeats, settingsSourceFaceReady,
+  settingsSourceFaceRevision, subscribeSettingsSourceFaces,
+  type RenderableSettingsSourceFace,
+} from './settings-source-face.ts'
 import { BridgeEntryBoundary, BridgeOutlet, useLocaleRevision } from './bridge-outlet.tsx'
 import css from './SettingsShell.module.css'
 import {
   filterServerRows,
   serverDropdownPlacement,
-  sourceFingerprintIsCurrent,
-  staleOwnedSessionIds,
 } from './server-selector.ts'
-import { runtimeServerProjectionKey } from './runtime-source.ts'
 
 /** Registration-side business face for the chamber settings shell. */
 export interface SettingsShellInjected {
@@ -76,31 +73,6 @@ export type SettingsShellProps =
 
 /** The local instance id (always selectable, even while its host is not ready). */
 const LOCAL_INSTANCE_ID = 'local'
-
-/**
- * Per-selection session-mount retry ledger: `failures` counts consecutive
- * child-ctx mount rejections for one `(id, sourceFingerprint)` owner (0 =
- * none; empty strings = no selection). The source-incarnation binding gives
- * both a selection switch and a same-id replacement a FRESH budget even when
- * the previous owner burned its attempts; the schedule itself lives in
- * mount-retry.ts (bounded backoff, ~15s worst-case wait, fail-loud at the
- * bound).
- */
-interface MountRetryLedger {
-  id: string
-  sourceFingerprint: string
-  failures: number
-}
-
-function resetMountRetryLedger(
-  current: MountRetryLedger,
-  id: string,
-  sourceFingerprint: string,
-): MountRetryLedger {
-  return current.id === id && current.sourceFingerprint === sourceFingerprint && current.failures === 0
-    ? current
-    : { id, sourceFingerprint, failures: 0 }
-}
 
 /** Nav glyph by section id; unknown ids fall back to the settings gear (official mirror). */
 function navIcon(id: string): ReactNode {
@@ -123,11 +95,6 @@ function defaultSelection(
     return chamberInstanceId
   }
   return servers.find(server => server.connected)?.id ?? servers[0]?.id
-}
-
-/** Human text for any rejection (transport or business). */
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
 }
 
 /**
@@ -324,13 +291,15 @@ function ServerDropdown({
  * The modal panel: mask + panel; nav rail (server dropdown + sections) + options column.
  */
 function SettingsPanel({
-  servers, selectedId, sessions, sessionError, activeId, onSelectSection, onClose,
+  servers, selectedId, face, faceStarting, activeId, onSelectSection, onClose,
   onSelectServer, chamberInstanceId, t, connectionsT,
 }: {
   servers: readonly BridgeServerRow[]
   selectedId: string | undefined
-  sessions: Record<string, BridgeSession>
-  sessionError: string | null
+  /** The selected source's own settings face (its boot-ctx ledger + seats), when renderable. */
+  face: RenderableSettingsSourceFace | undefined
+  /** Selected source is connected but its shell has not published a face yet (booting). */
+  faceStarting: boolean
   activeId: string | undefined
   onSelectSection: (id: string) => void
   onClose: () => void
@@ -366,62 +335,25 @@ function SettingsPanel({
   useEffect(() => { closeButton.current?.focus() }, [])
 
   const selected = servers.find(server => server.id === selectedId)
-  // A cache row is renderable only for the exact authoritative source
-  // incarnation. The passive cleanup below disposes stale rows, but this
-  // synchronous render guard prevents even one frame of old settings from
-  // appearing after a same-id replacement.
-  const selectedCandidate = selectedId === undefined ? undefined : sessions[selectedId]
-  const selectedSession = selectedCandidate !== undefined
-    && selected !== undefined
-    && selectedCandidate.sourceFingerprint === selected.sourceFingerprint
-    && selectedCandidate.runtimeProjectionKey === runtimeServerProjectionKey(selected)
-    ? selectedCandidate
-    : undefined
 
-  // The selected server's section ledger, live while the panel is open.
-  // Stable subscribe/getSnapshot closures per session (no resubscribe churn
-  // on unrelated re-renders — official per-face cache pattern).
+  // The selected server's OWN section ledger — the registry of that
+  // instance's boot ctx, live while the panel is open. Stable
+  // subscribe/getSnapshot closures per face (no resubscribe churn on
+  // unrelated re-renders — official per-face cache pattern).
+  const sourceSlots = face?.slots
   const sectionSubscribe = useMemo(
-    () => (fn: () => void) => selectedSession === undefined ? () => {} : selectedSession.slots.subscribe('settings.section', fn),
-    [selectedSession],
+    () => (fn: () => void) => sourceSlots === undefined ? () => {} : sourceSlots.subscribe('settings.section', fn),
+    [sourceSlots],
   )
   const sectionVersion = useSyncExternalStore(
     sectionSubscribe,
-    useMemo(() => () => selectedSession === undefined ? 0 : selectedSession.slots.getVersion('settings.section'), [selectedSession]),
+    useMemo(() => () => sourceSlots === undefined ? 0 : sourceSlots.getVersion('settings.section'), [sourceSlots]),
   )
-  const localeRevision = useLocaleRevision(selectedSession?.locale)
+  const localeRevision = useLocaleRevision(face?.locale)
   const rows: SectionNavRow[] = useMemo(
-    () => (selectedSession === undefined ? [] : sectionRows(selectedSession.slots)),
-    [selectedSession, sectionVersion, localeRevision],
+    () => (sourceSlots === undefined ? [] : sectionRows(sourceSlots)),
+    [sourceSlots, sectionVersion, localeRevision],
   )
-  // The selected source's own plugin contributions (2026-12): the extension
-  // phase streams in after the base chain, so this snapshot drives the nav
-  // provenance marks and the settings-assembly report handed to the
-  // connections page (2026-09 relocation: the report is rendered inside that
-  // source's own server card instead of owning a settings nav slot).
-  const extensionSubscribe = useMemo(
-    () => (selectedSession === undefined ? (() => () => {}) : selectedSession.extensions.subscribe),
-    [selectedSession],
-  )
-  const extensionSnapshot = useSyncExternalStore(
-    extensionSubscribe,
-    useMemo(
-      () => (selectedSession === undefined ? () => undefined : selectedSession.extensions.getSnapshot),
-      [selectedSession],
-    ),
-  )
-  const assemblyReport = useMemo(
-    () => (selectedId === undefined || extensionSnapshot === undefined
-      ? undefined
-      : toAssemblyReport(selectedId, extensionSnapshot)),
-    [selectedId, extensionSnapshot],
-  )
-  const [refreshing, setRefreshing] = useState(false)
-  const refreshExtensions = useCallback((): void => {
-    if (selectedSession === undefined || refreshing) return
-    setRefreshing(true)
-    void selectedSession.refreshExtensions().finally(() => { setRefreshing(false) })
-  }, [selectedSession, refreshing])
   // Active resolution (nav-active.ts): chamber-global fixed ids win; a
   // server-section id that left the ledger falls back to the first row.
   const active = resolveActiveSection(activeId, rows)
@@ -564,20 +496,19 @@ function SettingsPanel({
               {/* The official open-document action ("打开配置文件") is a
                   HOST-MACHINE file operation (native opener): it renders for
                   the LOCAL instance only and is suppressed for remote
-                  servers (the config there lives on the remote machine).
-                  The whole outlet is wrapped in an ALL-CONTAINING entry
-                  boundary (containAll) — this is the child-ctx → host seam:
-                  ANY failure in this bridged surface (entry render, outlet
-                  frame, or a BridgeAssemblyError from child-ctx content) is
-                  contained to a `<div data-slot-error="settings.action">`
-                  and can never abdicate the entire `sidebar.settings` entry
-                  (which would fall the shell back to the official
-                  SettingsRoot with no server dropdown). */}
-              {selectedId === LOCAL_INSTANCE_ID && selectedSession !== undefined && (
+                  servers (the config there lives on the remote machine). The
+                  outlet is wrapped in an ALL-CONTAINING entry boundary
+                  (containAll): a failure in that foreign entry is contained to
+                  a `<div data-slot-error="settings.action">` and can never
+                  abdicate the chamber-owned `sidebar.settings` entry (which
+                  would fall the shell back to the official SettingsRoot with
+                  no server dropdown). */}
+              {selectedId === LOCAL_INSTANCE_ID && face !== undefined && (
                 <BridgeEntryBoundary containAll slotKey="settings.action">
                   <BridgeOutlet
-                    slots={selectedSession.slots}
-                    locale={selectedSession.locale}
+                    slots={face.slots}
+                    locale={face.locale}
+                    standard={face.seats}
                     slotKey="settings.action"
                     ownerProps={{}}
                   />
@@ -592,18 +523,12 @@ function SettingsPanel({
           <div className={css.options}>
             {active === CONNECTIONS_SECTION_ID ? (
               /* Chamber-global connection management: independent of the
-                 selected server (never refetched on server switch). The
-                 SELECTED source's settings-assembly report rides along
-                 (2026-09 relocation) and renders inside that source's own
-                 card — see settings-assembly-diagnostics.tsx. */
+                 selected server (never refetched on server switch), with that
+                 server's own plugin-graph health rendered inside its card. */
               <ConnectionsSection
                 t={connectionsT}
                 pluginDiagnostics={pluginDiagnostics}
                 onRecheckDiagnostic={recheckDiagnostic}
-                assemblyReport={assemblyReport}
-                assemblyT={t}
-                onRefreshAssembly={refreshExtensions}
-                assemblyRefreshing={refreshing}
               />
             ) : active === GENERAL_SECTION_ID ? (
               /* Chamber-global runtime settings (design 14 D7 / design 15):
@@ -635,10 +560,8 @@ function SettingsPanel({
                   {t('manageConnections')}
                 </button>
               </div>
-            ) : sessionError !== null ? (
-              <p className={css.placeholder}>{sessionError}</p>
-            ) : selectedSession !== undefined ? (
-              /* The selected server's own session: normal content, keyed by
+            ) : face !== undefined ? (
+              /* The selected server's own ledger: normal content, keyed by
                  server so a server switch remounts the wrapper and replays
                  the fade-in. */
               rows.length === 0 ? (
@@ -648,18 +571,19 @@ function SettingsPanel({
               ) : (
                 active !== undefined && (
                   <div key={selectedId} className={css.contentFade}>
-                    {/* Child-ctx → host seam: the selected server's official
-                        section content. containAll keeps EVERY child-ctx
-                        failure (an ordinary render crash or a
-                        BridgeAssemblyError from the bridged entries — e.g.
-                        renderSlot for an undeclared slot, a missing locale
-                        face) inside a `<div data-slot-error="settings.section">`;
-                        it can never escape to abdicate the chamber-owned
-                        shell (falling back to the official SettingsRoot). */}
+                    {/* The selected server's OWN section content, rendered
+                        with that server's own renderer-bound seats. containAll
+                        keeps every failure of a foreign entry (an ordinary
+                        render crash or a BridgeAssemblyError from a miswired
+                        entry — e.g. renderSlot for an undeclared slot) inside a
+                        `<div data-slot-error="settings.section">`; it can never
+                        escape to abdicate the chamber-owned shell (falling back
+                        to the official SettingsRoot). */}
                     <BridgeEntryBoundary containAll slotKey="settings.section">
                       <BridgeOutlet
-                        slots={selectedSession.slots}
-                        locale={selectedSession.locale}
+                        slots={face.slots}
+                        locale={face.locale}
+                        standard={face.seats}
                         slotKey="settings.section"
                         ownerProps={{ close: onClose }}
                         opts={{ only: active }}
@@ -669,15 +593,15 @@ function SettingsPanel({
                 )
               )
             ) : (
-              /* Uncached server (first visit, or a slow target): switch to
-                 the loading intermediate state IMMEDIATELY — honest signal,
-                 no stale content wait; the per-server cache makes repeat
-                 switches instant. The distinct key remounts the wrapper so
-                 the ready content below replays its fade-in. */
+              /* Connected, but that server's shell has not published its
+                 settings face yet: its frontend is still booting (the App
+                 mounts it for this panel — see chamberBridge.setSettingsTarget).
+                 The distinct key remounts the wrapper so the ready content
+                 replays its fade-in. */
               <div key={`loading-${selectedId}`} className={css.contentFade}>
                 <div className={css.loadingView}>
                   <IconLoadingOutline16 className={css.loadingSpinner} size={16} aria-hidden="true" />
-                  <p className={css.placeholder}>{t('loadingServers')}</p>
+                  <p className={css.placeholder}>{faceStarting ? t('sourceStarting') : t('loadingServers')}</p>
                 </div>
               </div>
             )}
@@ -689,12 +613,30 @@ function SettingsPanel({
 }
 
 /**
- * Render the settings trigger and the bridged panel.
+ * Render the settings trigger and the panel.
+ *
+ * Complete-bridge contract (design 05 §5, 2026-12 修订): the panel renders the
+ * SELECTED source's OWN boot-ctx `settings.section` ledger with that source's
+ * OWN renderer-bound seats. Two things make that possible and both live here:
+ *
+ * 1. this component is that source's `sidebar.settings` occupant, so the
+ *    renderer hands it the complete standard kit — it publishes those seats
+ *    under its own `chamberInstanceId` (`publishSettingsSourceSeats`);
+ * 2. it asks the App layer to keep the selected source's shell MOUNTED while
+ *    the panel is open (`chamberBridge.setSettingsTarget`) — the mounted shell
+ *    IS the surface, and a closed panel releases the hold.
+ *
+ * Nothing is mounted twice and no service is stubbed, so a third-party plugin
+ * that is active in that instance's own frontend is active here too, with its
+ * real `remote`, live settings events and real session/workspace/resource
+ * seats.
  * @param props - composed slot props (sidebar.settings seat).
  */
 export function SettingsShell(props: SettingsShellProps) {
   // The ambient slot face is erased (Record<string, unknown>); the real
-  // sidebar.settings owner share is `{ wide: boolean }`.
+  // sidebar.settings owner share is `{ wide: boolean }` and the standard seats
+  // arrive beside it (useSessions / useWorkspaces / usePanelInfo /
+  // useResource / useSessionPendingInteraction / root props).
   const wide = props.wide === true
   const { t, connectionsT, chamberInstanceId } = props
   const [open, setOpen] = useState(false)
@@ -702,22 +644,35 @@ export function SettingsShell(props: SettingsShellProps) {
   const [servers, setServers] = useState<BridgeServerRow[]>(() => getServers())
   const [selectedId, setSelectedId] = useState<string | undefined>(() =>
     defaultSelection(getServers(), chamberInstanceId))
-  // Per-source-incarnation child ctx cache (keep-alive while the panel is
-  // open): repeat switches to the same `(id, proof)` owner are instant.
-  const [sessions, setSessions] = useState<Record<string, BridgeSession>>({})
-  const sessionsRef = useRef<Record<string, BridgeSession>>({})
-  // Updated during render so a Promise that settles before passive-effect
-  // cleanup still cannot commit against a superseded roster proof.
-  const serversRef = useRef<BridgeServerRow[]>(servers)
-  serversRef.current = servers
-  const [sessionError, setSessionError] = useState<string | null>(null)
-  const [retryNonce, setRetryNonce] = useState(0)
-  // Auto-retry ledger for the CURRENT selection's session mount (bounded
-  // backoff — see MountRetryLedger / mount-retry.ts). Bumping the state
-  // re-runs the mount effect, which re-attempts the SAME mount path.
-  const [mountRetry, setMountRetry] = useState<MountRetryLedger>({ id: '', sourceFingerprint: '', failures: 0 })
 
   useEffect(() => subscribeServers(() => setServers(getServers())), [])
+
+  // Seat publication: the seats are stable per (binding, source), so the effect
+  // re-publishes only when the renderer swaps one (locale/root binding change)
+  // — not on every render.
+  const useSessions = props.useSessions
+  const useWorkspaces = props.useWorkspaces
+  const usePanelInfo = props.usePanelInfo
+  const useResource = props.useResource
+  const useSessionPendingInteraction = props.useSessionPendingInteraction
+  const rootProps = useMemo(() => {
+    const base = props.chamberFileApiBase
+    return base === undefined ? undefined : { chamberFileApiBase: base }
+  }, [props.chamberFileApiBase])
+  useEffect(() => {
+    if (chamberInstanceId === undefined) return () => {}
+    return publishSettingsSourceSeats(chamberInstanceId, {
+      ...(useSessions === undefined ? {} : { useSessions }),
+      ...(useWorkspaces === undefined ? {} : { useWorkspaces }),
+      ...(usePanelInfo === undefined ? {} : { usePanelInfo }),
+      ...(useResource === undefined ? {} : { useResource }),
+      ...(useSessionPendingInteraction === undefined ? {} : { useSessionPendingInteraction }),
+      ...(rootProps === undefined ? {} : { props: rootProps }),
+    })
+  }, [
+    chamberInstanceId, useSessions, useWorkspaces, usePanelInfo, useResource,
+    useSessionPendingInteraction, rootProps,
+  ])
 
   // The App layer publishes the first projection asynchronously; if the
   // settings trigger opened first, backfill the selection once servers
@@ -729,211 +684,32 @@ export function SettingsShell(props: SettingsShellProps) {
     }
   }, [servers, selectedId, chamberInstanceId])
 
+  // Keep the selected source mounted while the panel is open (and release the
+  // hold on close/unmount): an unmounted source has no ledger to render.
+  useEffect(() => {
+    if (!open) return () => {}
+    chamberBridge.setSettingsTarget(selectedId)
+    return () => { chamberBridge.setSettingsTarget(undefined) }
+  }, [open, selectedId])
+
   // NOTE: no active-reset on server switch — the connections page is
   // server-independent and stays put; a section id that left the new
   // server's ledger falls back to its first row via the derived `active`.
   const selected = servers.find(server => server.id === selectedId)
   const selectedConnected = selected?.connected ?? false
-  const selectedSourceFingerprint = selected?.sourceFingerprint
-  const selectedRuntimeProjection = useMemo(() => selected === undefined ? null : ({
-    id: selected.id,
-    sourceFingerprint: selected.sourceFingerprint,
-    kind: selected.kind,
-    transport: selected.transport,
-    ...(selected.rawId === undefined ? {} : { rawId: selected.rawId }),
-    ...(selected.dshVersion === undefined ? {} : { dshVersion: selected.dshVersion }),
-  }), [selected?.id, selected?.sourceFingerprint, selected?.kind, selected?.transport, selected?.rawId, selected?.dshVersion])
-  const selectedRuntimeProjectionKey = selectedRuntimeProjection === null
-    ? null
-    : runtimeServerProjectionKey(selectedRuntimeProjection)
 
-  // Child ctx keep-alive: sessions assemble lazily per server while the
-  // panel is open; closing (or an unreachable target) releases everything.
-  // Switching to an UNCACHED server shows the loading intermediate state
-  // IMMEDIATELY (the user never waits on stale content — the cache only
-  // makes repeat switches instant).
-  const releaseAllSessions = useCallback(() => {
-    const all = sessionsRef.current
-    sessionsRef.current = {}
-    for (const session of Object.values(all)) void session.dispose().catch(() => {})
-  }, [])
+  // Face subscription: the registry revision is the uSES snapshot.
+  useSyncExternalStore(subscribeSettingsSourceFaces, settingsSourceFaceRevision)
+  const face = getSettingsSourceFace(selectedId)
+  // A face is renderable only for the exact authoritative source incarnation:
+  // delete/re-add or a transport-identity edit replaces the source under the
+  // same id, and the previous ctx's ledger must never render for the new one.
+  const faceMatchesIncarnation = face !== undefined
+    && face.sourceFingerprint !== undefined
+    && face.sourceFingerprint === selected?.sourceFingerprint
+  const usableFace = faceMatchesIncarnation && settingsSourceFaceReady(face) ? face : undefined
 
-  // Release on component unmount (slot re-render / host boot teardown) —
-  // never leak child contexts outside the panel lifetime.
-  useEffect(() => () => { releaseAllSessions() }, [releaseAllSessions])
-
-  // Cache ownership follows the authoritative roster, not the stable source
-  // id. Delete/re-add and transport-identity edits can replace a source under
-  // the same id; retire every affected child ctx (including unselected cache
-  // rows) before it can be reused by the replacement.
-  useEffect(() => {
-    const staleIds = staleOwnedSessionIds(sessionsRef.current, servers)
-    if (staleIds.length === 0) return
-    const next = { ...sessionsRef.current }
-    for (const sourceId of staleIds) {
-      const stale = next[sourceId]
-      delete next[sourceId]
-      if (stale !== undefined) void stale.dispose().catch(() => {})
-    }
-    sessionsRef.current = next
-    setSessions(next)
-  }, [servers])
-
-  useEffect(() => {
-    if (!open
-      || selectedId === undefined
-      || selectedSourceFingerprint === undefined
-      || selectedRuntimeProjection === null
-      || selectedRuntimeProjectionKey === null) {
-      // Panel closed (or the selection is being re-anchored): release every
-      // child ctx and clear the projection-facing state. The retry ledger
-      // resets too — a reopen is a fresh context (no-op when already reset).
-      releaseAllSessions()
-      setSessions({})
-      setSessionError(null)
-      setMountRetry(current => resetMountRetryLedger(
-        current,
-        selectedId ?? '',
-        selectedSourceFingerprint ?? '',
-      ))
-      return
-    }
-    if (!selectedConnected) {
-      // The SELECTED target became unreachable: release only its session —
-      // other servers' cached sessions survive a tunnel blip. The retry
-      // ledger resets too: a connection transition is a fresh context, so an
-      // exhausted budget from before the blip must not suppress retries
-      // after the tunnel is back.
-      const dropped = sessionsRef.current[selectedId]
-      if (dropped !== undefined) {
-        const next = { ...sessionsRef.current }
-        delete next[selectedId]
-        sessionsRef.current = next
-        setSessions(next)
-        void dropped.dispose().catch(() => {})
-      }
-      setSessionError(null)
-      setMountRetry(current => resetMountRetryLedger(current, selectedId, selectedSourceFingerprint))
-      return
-    }
-    // Already mounted for this selection: nothing to do (cache hit) — but
-    // clear any error left by a PREVIOUS server's failed mount so the
-    // cached content is never shadowed by a foreign error. The ledger resets
-    // as well (content is live again: any later failure starts fresh).
-    const cached = sessionsRef.current[selectedId]
-    if (cached !== undefined) {
-      if (cached.sourceFingerprint === selectedSourceFingerprint
-        && cached.runtimeProjectionKey === selectedRuntimeProjectionKey) {
-        setSessionError(null)
-        setMountRetry(current => resetMountRetryLedger(current, selectedId, selectedSourceFingerprint))
-        return
-      }
-      // Target transport / raw identity / live version changed under the
-      // same source id. Rebuild the child ledger so dsh+http removes the
-      // runtime section and ssh actions never retain an old host id.
-      const next = { ...sessionsRef.current }
-      delete next[selectedId]
-      sessionsRef.current = next
-      setSessions(next)
-      void cached.dispose().catch(() => {})
-    }
-    let cancelled = false
-    // Explicit DOM timer id: `ReturnType<typeof window.setTimeout>` picks the
-    // node global overload via the `Window & typeof globalThis` intersection.
-    let retryTimer: number | undefined
-    setSessionError(null)
-    const projectionStillCurrent = (): boolean => {
-      const currentServer = serversRef.current.find(server => server.id === selectedId)
-      return currentServer?.connected === true
-        && sourceFingerprintIsCurrent(serversRef.current, selectedId, selectedSourceFingerprint)
-        && runtimeServerProjectionKey(currentServer) === selectedRuntimeProjectionKey
-    }
-    mountBridgeSession(selectedRuntimeProjection).then((mounted) => {
-      if (cancelled || !projectionStillCurrent()) {
-        void mounted.dispose().catch(() => {})
-        return
-      }
-      // A newer same-owner attempt may already have filled the cache. Never
-      // let a later-settling Promise overwrite that committed child ctx.
-      const incumbent = sessionsRef.current[selectedId]
-      if (incumbent !== undefined
-        && incumbent.sourceFingerprint === selectedSourceFingerprint
-        && incumbent.runtimeProjectionKey === selectedRuntimeProjectionKey) {
-        void mounted.dispose().catch(() => {})
-        return
-      }
-      if (incumbent !== undefined) void incumbent.dispose().catch(() => {})
-      sessionsRef.current = { ...sessionsRef.current, [selectedId]: mounted }
-      setSessions(sessionsRef.current)
-      // Mount succeeded: reset the retry ledger (no-op when already reset) —
-      // a LATER failure starts a fresh budget instead of inheriting this
-      // one's burned attempts.
-      setMountRetry(current => resetMountRetryLedger(current, selectedId, selectedSourceFingerprint))
-    }).catch((error: unknown) => {
-      if (cancelled || !projectionStillCurrent()) return
-      setSessionError(errorMessage(error))
-      // Bounded-backoff auto-retry of the SAME mount path (issue 6 彻底修复,
-      // W2 residual gap P2): a transient not-ready burst (the selected host
-      // mid-boot/restart) can reject the child-ctx mount, and the error
-      // state had NO auto-recovery while the panel stayed open (only
-      // re-click / connection transition / reopen recovered) — which could
-      // strand the settings content in error. Retry with a capped schedule
-      // (1s, 2s, 4s, 8s — ~15s worst-case wait; see mount-retry.ts for the
-      // rationale) so the content recovers by itself once the target is
-      // ready. The budget is per-selection and bounded (MOUNT_RETRY_ATTEMPTS
-      // total attempts), so a genuinely dead target still fails loud. Every
-      // exit path — success, unmount, panel close, selection change,
-      // connection transition — clears the pending timer (cleanup below).
-      const failures = mountRetry.id === selectedId
-        && mountRetry.sourceFingerprint === selectedSourceFingerprint
-        ? mountRetry.failures + 1
-        : 1
-      const delay = nextMountRetryDelayMs(failures)
-      if (delay !== null) {
-        retryTimer = window.setTimeout(() => {
-          // Bump the ledger (always a fresh object, so the effect re-runs)
-          // → the SAME mount path is re-attempted. The ledger read in the
-          // NEXT catch is this bumped value, so the backoff advances
-          // 1s → 2s → 4s → 8s across consecutive failures.
-          if (
-            !cancelled
-            && projectionStillCurrent()
-          ) {
-            setMountRetry({ id: selectedId, sourceFingerprint: selectedSourceFingerprint, failures })
-          }
-        }, delay)
-      }
-    })
-    return () => {
-      cancelled = true
-      if (retryTimer !== undefined) window.clearTimeout(retryTimer)
-    }
-  }, [
-    open,
-    selectedId,
-    selectedConnected,
-    selectedSourceFingerprint,
-    selectedRuntimeProjection,
-    selectedRuntimeProjectionKey,
-    retryNonce,
-    mountRetry,
-    releaseAllSessions,
-  ])
-
-  const selectServer = useCallback((id: string) => {
-    // Offline rows remain selectable: the content column owns the explicit
-    // unavailable placeholder and the route to connection management.
-    if (id === selectedId && sessionError !== null) {
-      // Retry path: bump the nonce so the mount effect re-runs without
-      // flashing an undefined selection (no noServers frame). The retry
-      // ledger resets too — a user-initiated retry restarts the auto-retry
-      // budget (no-op when already reset).
-      setMountRetry(current => resetMountRetryLedger(current, id, selectedSourceFingerprint ?? ''))
-      setRetryNonce(nonce => nonce + 1)
-      return
-    }
-    setSelectedId(id)
-  }, [selectedId, selectedSourceFingerprint, sessionError])
+  const selectServer = useCallback((id: string) => { setSelectedId(id) }, [])
 
   const close = useCallback(() => {
     setOpen(false)
@@ -956,8 +732,8 @@ export function SettingsShell(props: SettingsShellProps) {
         <SettingsPanel
           servers={servers}
           selectedId={selectedId}
-          sessions={sessions}
-          sessionError={sessionError}
+          face={usableFace}
+          faceStarting={selectedConnected && usableFace === undefined}
           activeId={activeId}
           onSelectSection={setActiveId}
           onClose={close}

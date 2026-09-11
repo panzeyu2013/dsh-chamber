@@ -33,10 +33,6 @@ const CALL_SITE_PROPS: readonly string[] = [
   't',
   'pluginDiagnostics',
   'onRecheckDiagnostic',
-  'assemblyReport',
-  'assemblyT',
-  'onRefreshAssembly',
-  'assemblyRefreshing',
 ];
 
 test('connections-section mirror: every call-site prop exists in the ambient mirror', () => {
@@ -56,48 +52,5 @@ test('connections-section mirror: every call-site prop is accepted by the real c
       new RegExp(`^\\s*${prop}\\??:`, 'm').test(real),
       `the real ConnectionsSection no longer declares the prop "${prop}" (${REAL})`,
     );
-  }
-});
-
-test('connections-section mirror: the assembly report mirror keeps the producer contract', () => {
-  const mirror = readFileSync(MIRROR, 'utf8');
-  const producer = readFileSync(
-    join(ROOT, 'packages/dsh-chamber-client-ui-settings-bridge/src/client/settings-extensions.ts'),
-    'utf8',
-  );
-  for (const field of ['sourceId', 'state', 'total', 'notices']) {
-    assert.ok(new RegExp(`^\\s*${field}\\??:`, 'm').test(mirror), `mirror lost report field "${field}"`);
-    assert.ok(new RegExp(`^\\s*${field}\\??:`, 'm').test(producer), `producer lost report field "${field}"`);
-  }
-});
-
-/**
- * Keys the assembly block asks THIS shell's dictionary for. They cannot be
- * type-checked across the package boundary (the block receives a translate
- * function, not the dictionary), so the contract is pinned textually — the
- * same reasoning as the mirror gate above.
- */
-test('assembly block: every copy key it renders exists in the shell dictionary (zh + en)', () => {
-  const view = readFileSync(
-    join(ROOT, 'packages/dsh-chamber-client-ui-settings-connections/src/client/settings-assembly-diagnostics.tsx'),
-    'utf8',
-  );
-  const pure = readFileSync(
-    join(ROOT, 'packages/dsh-chamber-client-ui-settings-connections/src/client/settings-assembly-diagnostics.ts'),
-    'utf8',
-  );
-  const locales = readFileSync(join(ROOT, 'packages/dsh-chamber-client-ui-settings-bridge/src/locales.ts'), 'utf8');
-  const used = new Set(
-    [...`${view}\n${pure}`.matchAll(/\bt\('([A-Za-z0-9_]+)'/g)].map(match => match[1]!),
-  );
-  assert.ok(used.size >= 8, `expected the block to render its own copy, found ${used.size} keys`);
-  // The producer's notice keys travel as data; every one must be in the shell
-  // dictionary too.
-  for (const key of ['pluginsUnavailable', 'noticeInactive', 'noticeFailed', 'noticeOmittedSeat', 'noticeCrash', 'noticeShared', 'noticeCapability', 'noticeRevConflict']) {
-    used.add(key);
-  }
-  for (const key of used) {
-    const declarations = [...locales.matchAll(new RegExp(`^\\s*${key}:`, 'gm'))].length;
-    assert.equal(declarations, 2, `"${key}" must be declared in BOTH dictionaries (zh + en), found ${declarations}`);
   }
 });

@@ -1,32 +1,27 @@
 /**
- * The chamber settings surface's BASE plugin ids (2026-12).
+ * Registrant provenance for the chamber settings shell (2026-12 完整桥接修订).
  *
- * Pure data on purpose — NO cordis import: the child-context assembly
- * (`bridge-context.ts`) mounts these packages, and the lockstep test asserts
- * them against the renderer's composite-covered set
- * (`packages/renderer/src/chamber-covered.ts`).
+ * The panel renders the SELECTED source's own boot-ctx `settings.section`
+ * ledger, so a nav row's registrant is a cordis fiber name: an official
+ * settings-family package, the chamber's own shell/runtime section, or a
+ * third-party plugin. Rows whose registrant is NOT listed here are marked as
+ * plugin-provided in the nav — the honest provenance mark, not a mount list.
  *
- * THE INVARIANT (load-bearing): every id here must be in `CHAMBER_COVERED_IDS`.
- * A base plugin that is NOT covered would also arrive in the source's extension
- * set (graph rows minus covered), i.e. the same package would be mounted twice
- * on one child context — cordis rejects the duplicate service/slot registration
- * and the plugin is reported failed for no reason. `base-plugins-lockstep.test.ts`
- * enforces the subset relation mechanically.
+ * History: this module used to carry `BASE_PLUGIN_IDS` — the fixed plugin set
+ * the detached child context mounted. That context is gone (nothing is mounted
+ * twice and no service is stubbed any more), so the list is now only a
+ * CLASSIFICATION set; it no longer constrains what may be mounted.
  */
 
-/** The chamber's lazy agent-preset section id (its bundle is a deferred chunk). */
-export const AGENT_PRESET_ID = '@deepseek-ai/dsh-client-ui-agent-preset'
-
-/** The chamber-owned per-source runtime section pseudo-id (attributed as base). */
-export const RUNTIME_SECTION_ID = 'dsh-chamber:runtime-section'
+/** The chamber's own per-instance「dsh 运行时」section id (registered by this package). */
+export const RUNTIME_SECTION_ID = 'dsh-runtime'
 
 /**
- * The BASE plugin set ids the child context mounts (infrastructure + the
- * official settings families + the chamber replacements + the per-source
- * runtime section). The SELECTED SOURCE's own plugins are the EXTENSION set and
- * never appear here.
+ * The registrants the shell renders as OFFICIAL (never marked "plugin"):
+ * the official settings family mounted by the chamber composite plus the
+ * chamber's own shell/section registrations.
  */
-export const BASE_PLUGIN_IDS: readonly string[] = [
+export const OFFICIAL_SECTION_REGISTRANTS: readonly string[] = [
   '@deepseek-ai/dsh-client-ui-settings',
   '@deepseek-ai/dsh-client-locale',
   '@deepseek-ai/dsh-client-ui-theme',
@@ -34,17 +29,16 @@ export const BASE_PLUGIN_IDS: readonly string[] = [
   '@deepseek-ai/dsh-client-ui-settings-models',
   '@deepseek-ai/dsh-client-ui-settings-plugins',
   '@deepseek-ai/dsh-client-ui-settings-plugin-inventory',
+  '@deepseek-ai/dsh-client-ui-agent-preset',
   '@dsh-chamber/dsh-chamber-client-ui-settings-bridge',
-  AGENT_PRESET_ID,
-  RUNTIME_SECTION_ID,
   // Unnamed registrations (the declaration chain's inert entries) are stamped
   // 'root' by cordis; they never occupy a settings seat.
   'root',
 ]
 
-const BASE_ID_SET = new Set(BASE_PLUGIN_IDS)
+const OFFICIAL_SET = new Set(OFFICIAL_SECTION_REGISTRANTS)
 
-/** True for the chamber's own base registrations (used to filter seat reports). */
+/** True for a registrant the shell renders as an official/chamber section. */
 export function isBasePluginId(id: string): boolean {
-  return BASE_ID_SET.has(id)
+  return OFFICIAL_SET.has(id)
 }

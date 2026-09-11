@@ -386,30 +386,22 @@ base path 从每个 entry 的私有 ctx 取。
   宿主 `ClientModuleRegistry` 激活即 fail-loud，chamber 侧同样报错不静默）。
 - entry id 冲突 → 显式去重（§3.3）；`inject` 边缺失 → 官方机制已有的 loud 失败，
   不降级。
-- **设置面按需装载（新增边界）**：桌面设置壳为**选中来源**装载其
-  插件图行（design 05 §5），执行面因此从「已打开 shell 的来源」扩到
-  「设置面板打开的来源」。边界约束：①插件在该来源的 settings child ctx 中实例化，
-  面板关闭 / 切换来源即 dispose（副作用被面板生命周期封顶）；②bundle 的 `<style>`
-  一旦加载即页面驻留（模块表只打标记，只有被 chamber 排除的 HMR 行会回收）——与
-  boot 路径同一事实，不假装可隔离；③页面模块表按 id **first-load-wins** 共享，
-  同一模块实例可支撑多来源/多 fiber，因此**插件必须模块级无状态**（状态进
-  `ctx.effect`/服务），跨来源共享事实在设置面板的诊断页如实报告；④未覆盖的
-  Remote 命名空间调用会在调用时失败（child ctx 的 `remote` 是手工面），由 entry
-  boundary + `slots.onEntryError` 捕获并报告，绝不静默；⑤装载走与 boot 完全相同的
-  页面级 kernel（shared face `client-plugin-loader.ts`），`host-graph.ts` 只保留
-  boot 策略（fail-loud + 一次恢复）。
+- **设置面不装载插件（2026-12 完整桥接修订）**：桌面设置壳**不再**为选中来源
+  二次装载任何插件行。设置面渲染的是该来源自己 boot ctx 的 `settings.section`
+  台账与它自己的标准座（design 05 §5），所以：①执行面回到「已打开/被面板要求挂载的
+  来源自己的 ctx」，面板只保证该 ctx **挂在屏外也保持挂载**（`chamberBridge.setSettingsTarget`），
+  关闭面板即撤除该保证；②没有第二次实例化 ⇒ 没有重复注册、没有跨来源模块共享报告、
+  没有「未激活」报告，插件作者契约回到普通插件契约（模块级无状态仍是好习惯，
+  但不再是设置面引入的额外约束）；③面板**不再**读 `clientGraph/graph`、**不再**经
+  页面级 kernel 装载 bundle，`client-plugin-loader.ts` 的每实例图缓存只服务 boot 路径；
+  ④来源自己的 `remote` 就是真 remote（WS 流在），不存在手工面与能力降级；
+  ⑤未挂载完成的来源显示「正在启动该实例的前端」中间态，绝不伪造内容。
 - **设置面贡献通道**：settings 页 `slots.inject('settings.section')` 通道**已接线**——
-  桌面设置壳对选中来源装载其客户端插件图行（扣除 covered），把第三方插件的设置贡献
-  渲染进设置面板（design 05 §5）。口径：**贡献源 = 来源自己的插件图**；未被渲染的
-  贡献（未激活/失败/壳不渲染的座位）必须在**设置 → 连接 → 该来源的服务器卡片**内的
-  「插件设置诊断」块可见（2026-09 归位：此前它占一个 settings nav 槽位，但该报告的
-  subject 是单个来源、owner 是壳，两组都不属于它——见 design 15 §1），不得静默消失。
-  生产端 = `settings-extensions.ts` `toAssemblyReport`（DTO）+ 壳传入自己的
-  param-capable `t`；渲染端 = `settings-connections/src/client/settings-assembly-diagnostics.*`
-  （纯函数 + 视图分离，纯函数由 `test/settings-assembly-diagnostics.test.ts` 钉死）。
-  上游若要摆脱「必须实例化才知道贡献」的限制（当前 child ctx 的 `remote`
-  仍是手工 unary 面），见 T3 提案
-  `docs/progress/todo/settings-surface-upstream-contributions.md`。
+  第三方插件的设置贡献在**它自己那台实例**的 ctx 上注册（与该实例自己的前端完全同一份
+  注册），桌面设置壳渲染该台账，因此「插件设置用不上/看不到」这一类问题由构造消除
+  （design 05 §5）。上游声明式贡献描述符 / 设置面服务契约 / Remote descriptor 上行通道
+  仍是可选提案（`docs/progress/todo/settings-surface-upstream-contributions.md`），
+  不再是完整桥接的前置条件。
 - 版本漂移：宿主图 rev 与 chamber 复合 bundle 的合并是 union 语义，不要求
   两图同 rev（chamber 复合由 chamber 构建管，宿主图由实例插件集管）。壳版本
   落后/超前于后端时，多出的核心行以"特性缺席"运行（§3.5 apply 降级），绝不使

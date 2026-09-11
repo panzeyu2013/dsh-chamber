@@ -10,46 +10,47 @@ conflicted: the official entry stays on the ledger and its `settings.*` children
 declarations remain valid. The chamber sidebar watches the seat's cell winner and
 reports (console) any registrant that goes below the reserved range.
 
-## alpha.2 ledger parity
+## Complete bridge (2026-12 revision)
 
-The child context declares no sidebar shell of its own, so it supplies the
-declaration chain with inert entries. That child set is kept **isomorphic with
-the official `ui-sidebar` entry** — `sidebar.brand.mark`, `sidebar.brand.name`,
-`sidebar.panellist`, `sidebar.workspaces`, `sidebar.settings`,
-`sidebar.footer.action` — so a section that targets any of those holes
-registers instead of failing on an undeclared slot. The standard-props kit also
-provides an empty `usePanelInfo` seat (stable snapshot reference) to keep the
-standard-prop SHAPE complete for any component that reads it; **no official
-settings component reads it today** (2026-09 二轮 source check: the only vendor
-readers are `ui-layout`'s frame/DocumentTitle and `ui-sidebar`'s panel row), and
-`useResource` is deliberately not seated, and 0.1.5's `client/resources` row IS a
-real consumer — the seat cannot be added from here: a child ctx's root read face
-(hooks/keyedHooks/props) is public only as a TYPE, and the sole delivery channel
-is the renderer install contract (`ui-renderer/src/client/registry.ts` hostFace /
-`renderSlot('root')`), so seating it would mean becoming that ctx's renderer.
-Consequently every `provideRoot` contribution is recorded and reported as an
-unseated root seat on the 「插件设置」 diagnostics page instead (2026-09 audit).
+The panel renders the **selected source's own settings surface** — the
+`settings.section` ledger of that source's own boot cordis context, with the
+standard seats that context's own renderer bound (`settings-source-face.ts`).
+Nothing is mounted twice and no service is stubbed, so a third-party plugin that
+is active in that instance's own frontend is active here too, with its real
+`remote` (WS event stream), live settings invalidation, and real
+`useSessions` / `useWorkspaces` / `usePanelInfo` / `useResource` seats. The
+retired alternative — a detached child context mounting a reduced copy of the
+source's plugin graph — is what produced "settings not activated: missing
+services", "root seat not seated" and the capability-degradation reports; those
+diagnostics are gone with it.
+
+Two halves make a source renderable, published per instance:
+
+- the bridge plugin's `apply` (one per instance boot ctx) publishes the ctx's
+  `slots` registry, `locale` face and authoritative `chamberSourceFingerprint`;
+- that instance's settings shell component — the `sidebar.settings` occupant,
+  hence the one chamber entry the renderer hands the complete standard kit to —
+  publishes those seats.
+
+The panel only renders a face whose `sourceFingerprint` matches the roster's
+current incarnation for that source id. While the panel is open it asks the App
+layer to keep that source's shell MOUNTED (`chamberBridge.setSettingsTarget`:
+mount off-screen if needed — never switching the active view — and exclude it
+from retention reclaim); closing the panel releases both guarantees.
 
 ## Behavior
 
-- A server dropdown over the selected instance; the panel mounts a
-  **per-instance child cordis context** whose plugin set is **graph-driven**
-  (2026-12 revision, design 05 §5): a base set (declaration chain, slots,
-  locale, theme, official settings families, BridgeRows, the per-source
-  "dsh runtime" section) plus **the selected source's own client plugin graph**
-  (`clientGraph/graph`, minus the covered rows, loaded through the page-level
-  union module table and mounted one by one into the same child context). The
-  bridge only proxies the existing settings/credentials/llm RPC surface; a
-  selected gateway server additionally mounts the per-server "dsh runtime"
-  section (design 18 §3.6/§9.3, proxying `/chamber/runtime` — version
-  select/apply/rollback/restart).
-- **Honest reporting**: plugin-provided sections carry a provenance tag, and
-  every non-rendered contribution (inactive with its missing services, failed
-  load/apply, seats the shell does not render, contained render crashes,
-  cross-source module-instance sharing, capability degradation for plugins
-  subscribing to `remote.$on`) is listed on the "plugin settings" diagnostics
-  page — nothing disappears silently. "Reload" re-reads the graph and reconciles
-  (the base set is never rebuilt).
+- A server dropdown over the selected instance; the options column renders that
+  instance's own sections, with third-party sections carrying a provenance tag
+  (`base-plugins.ts` is a CLASSIFICATION set: official family / chamber shell vs
+  plugin-provided). A gateway source's own ledger additionally carries the
+  per-server "dsh runtime" section, which this package registers on that
+  instance's ctx (design 18 §3.6/§9.3, proxying `/chamber/runtime` — version
+  select/apply/rollback/restart); it is derived from projected capability facts
+  and reported (never thrown) when a projection is malformed.
+- A source that is not mounted yet shows the "starting this instance's
+  frontend" intermediate state; an unreachable source shows the existing
+  unavailable placeholder plus the connections route, and triggers no mount.
 - Fixed chamber-global **Connections** and **General** nav entries: the
   connections page renders the settings-connections section from the chamber
   packages; the general page renders chamber-global runtime settings (design
@@ -78,11 +79,11 @@ unseated root seat on the 「插件设置」 diagnostics page instead (2026-09 a
 
 - The bridge outlet supports root+keyed slots (`settings.plugin.item`,
   entryKey dispatch + fallback, mirroring the official scoped-slots contract).
-- Every bridged outlet (the local-only `settings.action` and the
-  selected-instance `settings.section` content outlet) is contained in the
-  child-ctx → host seam by `<BridgeEntryBoundary containAll>` — child content
-  never abdicates wholesale to the official SettingsRoot (bridge-owned
-  assembly errors still fail loud).
+- Every outlet this shell renders (the local-only `settings.action` and the
+  selected-instance `settings.section` content outlet) is contained by
+  `<BridgeEntryBoundary containAll>` — the source's own plugin content never
+  abdicates wholesale to the official SettingsRoot (bridge-owned assembly errors
+  still fail loud).
 
 ## i18n
 

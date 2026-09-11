@@ -400,14 +400,16 @@ chamber-settings.json，非秘密）：
 
 - settings 壳：`SettingsShell` 服务器下拉选中任一服务器后，该服务器的设置段
   列表在 **agent-presets（agent 预设）之后**追加 chamber 自研段「dsh 运行时」
-  （子上下文 `settings.section`，id `dsh-runtime`、order 31；connections 为
-  壳的固定 nav 入口、在分隔线之下，不占 ledger order——视觉顺序即
+  （`settings.section`，id `RUNTIME_SECTION_ID = 'dsh-runtime'`、order 31；
+  connections 为壳的固定 nav 入口、在分隔线之下，不占 ledger order——视觉顺序即
   agent-presets → dsh-runtime）。**不出现在 `__general`（通用）视图**——
   `GeneralView` 只保留设计 15 的控制组（启动与关闭 / 运行 / 更新），运行时块
-  不在其中。图驱动设置面（design 05 §5）：该段按来源挂载在
-  该来源的 settings child ctx（`RUNTIME_SECTION_ID`，属基础集、参与 covered
-  lockstep）；child ctx 同时承载该来源自己的客户端插件贡献，故运行时段的
-  视觉位置不受影响，但其邻居可能包含第三方分节（带「插件」来源标记）。
+  不在其中。完整桥接设置面（design 05 §5，2026-12 修订）：该段由本包在**该来源
+  自己的 boot ctx** 上注册（`settings-bridge` 的 `apply`，随 `chamberBridge`
+  roster 投影 reconcile），因此与官方 `settings.section`、该来源自己的第三方
+  分节同处一份台账——运行时段的视觉位置不受影响，其邻居可能包含第三方分节
+  （带「插件」来源标记）。投影不可识别时**只报告不抛错**（`console.error`，
+  该 ctx 是那台实例自己的前端）。
 - 每服务器行为按来源分支（同一段、同一视觉，事实与动作随实例路由）：
   - **local**：完整管理面（本段显示规格 1–8 全量）；事实读主进程权威投影，
     动作走既有 IPC（§3.6 状态机同口径）；重启 = 控制面事务接口

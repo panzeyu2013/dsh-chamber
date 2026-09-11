@@ -12,14 +12,17 @@
 ## 1. 壳形态（现状契约）
 
 - `SettingsShell`（`packages/dsh-chamber-client-ui-settings-bridge`）：服务器下拉
-  （local 默认 + 远程按连接态着色）→ 选中实例官方段（models/agent-presets/
-  plugins/…，child ctx 桥）→ `navDivider` → **固定 chamber 全局入口平铺**：
+  （local 默认 + 远程按连接态着色）→ **选中来源自己 boot ctx 的 `settings.section`
+  台账**（models/agent-presets/plugins/… 及该来源自己的第三方分节，2026-12 完整桥接
+  修订，见设计 05 §5）→ `navDivider` → **固定 chamber 全局入口平铺**：
   `__connections`（连接）、`__general`（通用——含设计 11 的更新块）。
-- chamber 全局组件内嵌渲染（不占 child ctx、不依赖选中服务器连接）。
-- **每来源「设置组装诊断」不占 nav 槽位（2026-09 用户拍板）**：该报告由设置壳产出
-  （`settings-extensions.ts` `toAssemblyReport`），由**连接页在所选来源自己的服务器
-  卡片**内呈现（`settings-assembly-diagnostics.tsx`，与既有「客户端插件状态」同处
-  一地）。原因：它的 **subject 是单个来源、owner 是壳**——既不是该来源账本里的
+- chamber 全局组件内嵌渲染（不依赖选中服务器连接）。
+- **每来源「设置组装诊断」块已退役（2026-12 完整桥接修订）**：设置面不再为选中来源
+  二次装载插件，也就不存在需要报告的「未激活/未落座/能力降级」。仍然真实、仍然可见的
+  是连接页该来源卡片上的「客户端插件状态」（`pluginDiagnostic`，来自 boot/extra-row
+  诊断通道）。历史记录（2026-09 归位）保留在 git 与 CHANGELOG：该报告曾由设置壳产出
+  （`toAssemblyReport`）并由**连接页在所选来源自己的服务器卡片**内呈现。原因：它的
+  **subject 是单个来源、owner 是壳**——既不是该来源账本里的
   `settings.section` 贡献（第一组的定义是"来源自己贡献了什么"），也不是与服务器
   无关的 chamber 全局状态（第二组的契约），放进任何一组都会破坏该组的语义。
   壳侧渲染规则：仅当卡片 id == 报告 `sourceId` 时渲染（无陈旧报告、切来源即消失）。
@@ -115,9 +118,10 @@ ChamberSettings.sessionTodo: {
 
 - 设计 11（更新）：更新块并入 `__general`（原 `__update` 固定入口移除）；
   「检查更新」按钮经 `dsh-chamber:update-check` IPC（主进程同一条静默检查路径）。
-- 设计 09 §5（插件设置组装诊断）：原 `__plugins` 固定入口移除（2026-09），报告改由
-  连接页在该来源的服务器卡片内呈现——**这不是"插件提级"**（§4 仍推迟不排期），
-  提级指把官方 `settings.section` 的 plugins 段抬成独立入口，与本次归位无关。
+- 设计 09 §5（设置面装载边界）：2026-12 完整桥接修订后设置面**不装载插件**，
+  组装诊断块随之退役；原 `__plugins` 固定入口的移除（2026-09）与其归位史保留在
+  git/CHANGELOG——**这不是"插件提级"**（§4 仍推迟不排期），提级指把官方
+  `settings.section` 的 plugins 段抬成独立入口。
 - 设计 14（睡眠/后台常驻）：全部运行设置落 `__general`。
 - 设计 05 §5：连接设置插件（`settings.section` id `connections`）注册不变；
   chamber 固定入口是壳层结构，不新增官方 `settings.section` 注册。
@@ -134,8 +138,8 @@ ChamberSettings.sessionTodo: {
   `typecheck:connections`、`build:renderer`。
 - **推迟（不排期）**：两级分组导航、插件提级、关于页。
 - 验证清单：两个固定入口渲染（`__plugins` 不再是固定项）、chamber 入口在服务器
-  未连接时可用、设置读写经主进程 store、与官方段互不污染、设置组装诊断只在
-  所选来源的服务器卡片内出现、i18n 无 DRIFTED。
+  未连接时可用、设置读写经主进程 store、与官方段互不污染、选中来源自己的分节台账
+  渲染（含第三方分节带「插件」标记）、i18n 无 DRIFTED。
 
 ## 5. 关联
 

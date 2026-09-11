@@ -46,6 +46,19 @@
   `GATEWAY_PLUGIN_SYNC` IPC `main.ts:3462-3464` 到渲染器），诊断不再断在 code。
   剩余 open = **就地重建旧 gateway 未排期**（改名后的种子包只能等该 gateway 升到带
   `dsh-chamber-seed-*` 清单的版本；桌面侧不做旧名回退播种）。
+- **`install` 就地重装不同步 dsh 锚基线（2026-09-10 `.172` 实机，待裁）**：
+  `install-gateway.sh` 的 `--dsh-upgrade/--no-dsh-upgrade` 只对 `update` 生效
+  （`:3674-3676` 在 install 下仅 warn「安装按脚本常量装锚」），而 install 复用已存在的
+  受控锚（`:1137` 决策注释、`:2292` 复用日志）⇒ 新 gateway 覆盖旧部署后，锚与托管
+  dsh 可能仍停旧代。此时 gateway 的壳升级自愈事务（F4，design 18 §3.5；
+  `packages/gateway/src/runtime-manager.ts:1049`）按自身基线发 `commands/execute` 的
+  `submittedAttachments`（`packages/dsh-runtime/src/runtime-probes.ts:25-38`：该名自
+  0.1.3-alpha.1 起，0.1.2 线为 `images`；载荷 `:483-495`），对旧代运行时实测回
+  `gateway/arguments-invalid` ⇒ 探针必败、实例被停并留下 `gateway runtime startup
+  blocked: swap-attempted; managed dsh left stopped`（`packages/gateway/src/index.ts:486`）。
+  就地收口 = 把锚升到目标基线后让该事务重跑（数据与 pre-swap 快照不受影响，
+  `data/dsh-runtime/snapshots/`）。**待裁**：`install` 是否该像 `update` 一样校验/同步锚
+  基线——否则每次就地重装都要人工判断运行时是否落后。
 
 - **dsh 运行时版本管理（design 18 §3.6/§9）**：剩余——macOS 打包态 `.app` 内共享 dsh-runtime/内嵌 pnpm/koffi 与完整激活-故障回退-恢复链的实机；Linux
   server 同款端到端；Gateway 重启窗口的前端重连与 connections 的 SSH
@@ -268,70 +281,32 @@
 
 ## 一致性债务与开放登记（低–中，未排期；均指回代码面注释/design 登记）
 
-- **设置面图驱动贡献集残余（design 05 §5 / 09 §4·§5；剩余登记）**：
-  桌面设置壳对选中来源的贡献集 = 「基础集 + 该来源自己的客户端插件图」
-  （`clientGraph/graph` − `CHAMBER_COVERED_IDS`，经页面级 union 模块表装载，与 boot
-  同一 kernel）。剩余与有意偏差：
-  - **T2（真实 WS remote）未接线**：child ctx 的 `remote` 仍是手工 unary 面 +
-    `$on` no-op；三种能力面（`$on` 订阅 / `$mount` / `$stream`）由 stub 按调用者归属
-    记录并在「插件设置」诊断页**如实逐条报告**（`CAPABILITY_REMOTE_EVENTS` /
-    `CAPABILITY_REMOTE_MOUNT` / `CAPABILITY_REMOTE_STREAM`，`$mount`/`$stream` 为具名
-    抛出占位——`$dispatch` 已删，官方 remote 从无该成员）。全量接线需在 child ctx 内挂载官方 connection /
-    api-gateway / api-remotes（第二条 WS/来源 + 生命周期 fencing），且失败模式从
-    「面板降级」变成「基础链 5s 门失败 → 整个面板失败」——故按需推进，触发条件与
-    取舍见 design 09 §4 与 T3 提案；未接线期间不得声称保真等价。
-    **未接线的具体后果（2026-12 登记，用户问询后补全）**：
-    ① **面板常开期间数据不自动刷新**——官方 settings 镜像的刷新触发点是
-    `settings/document-updated` / `connection/reset`（vendor ui-settings index.ts:62-69），
-    两者在 child ctx 都不发生，且**无轮询**；面板内 child ctx 按来源缓存复用，故
-    「切走再切回」同样不刷新，唯一自动恢复路径是**关闭面板重开**（重新装配 →
-    重新 `settings.describe`）。影响面**含官方分节**（不只是第三方插件）：别处
-    （另一窗口 / CLI / gateway 其他用户 / 该实例自身前端）的改动在面板内不可见。
-    这是**预先存在**的降级（旧 stub 同为 no-op），非本次引入。
-    ② **13 个 Remote 命名空间缺席**（官方客户端挂 15 份生成 Remote / 19 个命名空间：
-    `workspace`/`commands`/`goals`/`skills`/`subagents`/`fileUploads`/`fileReferences`/
-    `directoryPicker`/`dynamicCordisRunner`/`messageFeedback`/`sessionReferenceResolver`/
-    `sessionFeedback`/`workspaceFiles`——前 15 份贡献见
-    `vendor/harness-checkout/packages/api/remotes/src/client/index.ts:150-159` 与本地锁步表
-    `packages/renderer/scripts/typert-remote-contract.mjs:21-37`；19 = 这 15 个包内带
-    `@Remote` 的 `TypertRemoteService` 子类总数（三份贡献各带多个命名空间：
-    `api/session-controller` 3 个 = `session`/`fileReferences`/`skills`、
-    `api/settings-controller` 2 个 = `settings`/`credentials`、
-    `api/workspace-controller` 2 个 = `workspace`/`directoryPicker`）），
-    child ctx 只有 6 个（`packages/dsh-chamber-client-ui-settings-bridge/src/client/bridge-context.ts`
-    的 `remoteFaces()` 与其后的 `ctx.provide('remote.*')` 六项：`settings`/
-    `credentials`/`llm`/`agentPresets`/`session`/`pluginInventory`）且
-    `session`/`pluginInventory` 为子集 → inject 缺失可**事前**
-    报告（fiber PENDING + 缺失服务名），不 inject 直接调用则**调用时**失败（contained +
-    渲染崩溃报告）。
-    ③ **`connection` 是假面**：无 `state` 可观察量、`rpc` 为空对象、`start()` 为 no-op、
-    `$host.home` 为 undefined → 读连接状态/走 generic RPC 的插件表现同上（缺服务或崩溃）。
-    ④ **与官方前端/gateway 链不对称**：同一插件在实例自身前端（真 remote）可用、在桌面
-    设置页不可用或陈旧（17 §10.5 同源）。
-    **不是后果**：设置读写仍落目标宿主（`isLoopback` 固定 true → `persistence='host'`）；
-    官方分节功能完整；每来源贡献来自自身图（本主题的设计目标）；扩展插件侧无静默。
-    **残余盲区**：①"渲染了但一直为空"且未调 `$on`、未崩溃的插件，与"该插件没有设置"
-    不可区分；②官方分节的陈旧**不产生任何提示**（能力报告只覆盖扩展插件）。
-    **不做 T2 的低成本缓解（候选，未实施）**：面板加「重新读取数据」动作（重跑
-    `settings.describe`；现有「重新加载」只重取插件图）；并把"面板内不自动刷新"的语义
-    写进组装诊断块文案（现仅对第三方 `$on` 订阅提示）。
-  - **依赖闭包扩展默认关**（`DEPENDENCY_CLOSURE_ENABLED=false`，机制与测试已就绪）：
-    把扩展行 `inject` 声明的 covered 依赖作为 provider 先挂进同一 ctx；默认关闭是
-    有意决策（未激活插件已如实列出缺失服务），按实测证据逐个放行。
-  - **模块级状态共享**：页面模块表按 id first-load-wins，同一模块实例可支撑多来源/
-    多 fiber（宿主实例另有 boot ctx 副本 = 双挂载）。契约 = 插件模块级无状态；跨来源
-    共享事实在组装诊断块（设置 → 连接 → 该来源卡片）报告，但不构成隔离保证。
-  - **bundle CSS 页面驻留**：模块表只给 `<style>` 打 `data-plugin` 标记，回收仅发生在
-    被 chamber 排除的 HMR 行 → 来源插件的样式一旦加载即驻留到页面结束（与 boot 路径
-    同一事实，不假装可隔离）。
-  - **执行面扩张已登记**：装载发生在「设置面板打开的来源」（原先仅「已打开 shell 的
-    来源」）；面板关闭 / 切换来源即 dispose。design 09 §4 已写为契约。
-  - **壳不渲染的座位**：`settings.trigger/header/close/onboarding` 刻意不渲染，第三方
-    贡献只报告不呈现；`settings.action` 保持「仅本地来源」限定。
-  - **未实机验证**：无真实实例/打包态环境，第三方插件装载、双挂载副作用、遮蔽看门狗
-    与 `onEntryError` 诊断均只经单测与静态走查确认，待实机冒烟。
-  - **上游提案未排期**：`contributes.settings` 声明式描述符 + 设置面服务契约 +
-    descriptor 上线通道见 `docs/progress/todo/settings-surface-upstream-contributions.md`。
+- **设置面残余登记（design 05 §5，2026-12 完整桥接修订后剩余项）**：
+  设置壳渲染**选中来源自己 boot ctx 的 `settings.section` 台账**与该 ctx 渲染器
+  绑定的标准座（面注册表 `settings-source-face.ts`）。原「缩小版 child ctx」的全部
+  残余（T2 手工 remote、13 个 Remote 命名空间缺席、面板不自动刷新、模块级状态共享、
+  「未激活/未落座/能力降级」诊断、`DEPENDENCY_CLOSURE_ENABLED` 依赖闭包、
+  `mount-retry` 自动重试）随该 ctx 一并删除——不再有第二次挂载，故这些条目不再成立。
+  剩余与有意偏差：
+  - **面板要求该来源的壳处于挂载中**：面由该来源自己的壳发布，故面板打开期间经
+    `chamberBridge.setSettingsTarget` 让 App 保证「未挂载则后台挂载（**不切
+    active view**）、已挂载则不被保留策略回收」；面板关闭即撤除。代价：编辑某来源
+    设置会付一次该来源壳的 boot（与在该来源自己的前端里编辑同一件事），来源壳
+    boot 失败时面板只显示不可达/启动中中间态，**不再**有独立于 shell 的降级渲染面。
+  - **壳 chrome 仍自绘**：`settings.trigger/header/close/onboarding` 属壳 chrome
+    （自绘标题/关闭/触发器），不由壳渲染；`settings.action` 保持「仅本地来源」限定。
+    这两条是 UI 形态决定，不是可用性降级；它们不再进入「未渲染贡献必须报告」的
+    清单（该清单随组装诊断块退役，见下）。
+  - **组装诊断块退役**：`toAssemblyReport` / `settings-extensions.ts` /
+    `settings-assembly-diagnostics.*` 及其 i18n 键已删除——完整桥接下没有
+    「装不上」的插件可报。仍然真实的诊断留在连接页该来源卡片上：客户端插件图
+    boot 健康（`pluginDiagnostic`，boot/extra-row 通道）。
+  - **上游可选提案**：`contributes.settings` 声明式描述符 + 设置面服务契约 +
+    Remote descriptor 上线通道仍是上游提案（未排期），但**不再是完整桥接的前置**，
+    见 `docs/progress/todo/settings-surface-upstream-contributions.md`。
+  - **未实机验证（2026-12 修订后仍待）**：完整桥接路径（面发布/跨来源渲染/目标保持
+    挂载）目前只经单测 + 源码锁 + `build:renderer` 构建门确认；面板在真实多来源
+    （本地 + 远程 + gateway 混合）与打包态下的实机冒烟仍待执行。
 - 私有文件纪律三实现（cp `private-file.ts` 抛错式 vs dsh-runtime `private-fs.ts` kind
   结果式，同名异签）——统一需依赖方向裁定（design 18 §9.1）。
 - **`install-gateway.sh` 的 dsh 锚走 npm 安装（design 18 §4 单一来源的域外点，2026-12
@@ -499,10 +474,11 @@
   0.1.3-alpha.2 仍依赖，删除即安装失败；登记在 `pnpm-workspace.yaml` 与
   `packages/dsh-runtime/src/allow-builds.mjs`）；`runtime-host-adapter` 退役**不采纳**
   （是测试夹具契约，非死代码）。
-- **设置壳偏差**：未连接实例不装配子 ctx；stub remote 无 WS 失效流；壳不渲染官方
-  SettingsRoot、子 ctx 懒装配；服务器选择器 body portal + viewport 翻转/钳位与内部
-  滚动；离线远端仍可选并显示不可达占位与连接管理动作；chrome 跟随宿主 locale，子
-  ctx 跟随目标实例 locale。
+- **设置壳偏差**：壳不渲染官方 SettingsRoot（自绘 chrome：标题/关闭/触发器）；
+  面板渲染的是选中来源自己 boot ctx 的台账，因此该来源的壳必须挂载（面板打开期间
+  由 App 保证：未挂载则后台挂载、已挂载则不被回收）；离线远端仍可选并显示不可达
+  占位与连接管理动作（不触发挂载）；服务器选择器 body portal + viewport 翻转/钳位
+  与内部滚动。
 - **默认排序 `manual`（06 §3.1）**：按 wire 顺序，与官方默认 `updated` 不同，是
   有意产品取舍。**窗口标题冻结**：桌面原生标题固定 `dsh-chamber`。
 - **样式 token 对齐后的两处未对齐（2026-09 风格对齐轮登记，均为有意/待裁）**：
@@ -699,8 +675,8 @@
   registerDeferred，+6 import 站点）。语义：可观测瞬态仅「设置入口缺席
   ≈1 chunk 往返」（页面首个实例首冷启一次性，其后模块缓存同 tick 解析；
   六家同 tick 注册，无中间「官方 SettingsRoot 空壳」帧）；每服设置面板
-  内容经 child ctx（bridge-context mountBridgeSession）独立装载，不受
-  boot-ctx 时序影响。失败面（登记）：任一 import 失败 → 整个簇本 boot 缺失
+  内容**就是**该来源 boot ctx 自己的台账（2026-12 完整桥接修订），因此受该来源
+  boot 时序影响：未挂载完成的来源显示「正在启动该实例的前端」中间态。失败面（登记）：任一 import 失败 → 整个簇本 boot 缺失
   （含 connections CRUD、dsh-runtime 管理与更新），console loud 无重试、
   靠 shell 重 boot——与既有 deferred 家族同模式；按家族 allSettled 独立
   注册为候选改进（bridge 失败可落官方降级面）。

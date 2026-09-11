@@ -509,6 +509,12 @@ export default function App() {
   // 点开（selectView 清除）或来源从注册表删除（retireSources 清除）——否则
   // prewarmEligible 会立刻把刚回收的源重新 boot，回收空转（见 reclaimView）。
   const prewarmSuppressedRef = useRef<Set<string>>(new Set())
+  // 设置面板目标来源（design 05 §5，2026-12 完整桥接修订）：面板渲染的是**选中
+  // 来源自己的 boot ctx 台账**，所以该来源的壳必须挂载着。面板打开期间由 App
+  // 保证两件事——未挂载则后台挂载（不切 active view），已挂载则排除出保留策略
+  // 回收候选（否则隐藏 60s 后壳被拆，面板正在编辑的设置面随之消失）。面板关闭
+  // (`undefined`) 即撤除这两条保证。
+  const settingsTargetRef = useRef<string | undefined>(undefined)
   // 首屏基线收割（design 05 §2.3 / baseline-harvest.ts）：ready 但从未挂载过的
   // 来源在后台预热槽里挂一次，拿到首个权威推送即回收——否则它稳态停留在
   // unary 兜底视图（合成分组 + 空归档集）直到用户点击。harvestStateRef 是
@@ -2455,7 +2461,13 @@ export default function App() {
       prewarmOriginIds: new Set(autoPrewarmedRef.current),
       now: Date.now(),
     })
-    for (const id of candidates) reclaimView(id)
+    // 设置面板正在编辑的来源不可回收（design 05 §5，2026-12 完整桥接修订）：
+    // 面板渲染的是该来源自己 boot ctx 的台账，拆掉壳 = 正在编辑的设置面消失。
+    // 过滤而非改判定：面板关闭后该源重新成为普通保留候选。
+    for (const id of candidates) {
+      if (id === settingsTargetRef.current) continue
+      reclaimView(id)
+    }
   }, [mountedViews, reclaimView, settledViewIds])
 
   // 定时器/事件驱动的检查需要最新闭包：ref 镜像（同 pollAggregatesRef 纪律）。
@@ -2665,6 +2677,26 @@ export default function App() {
       selectView(sourceId)
     })
   }, [selectView])
+
+  /**
+   * 设置面板目标来源（design 05 §5，2026-12 完整桥接修订）：面板渲染选中来源
+   * 自己的 boot ctx 台账，因此该来源的壳必须挂载。这里只做"挂载 + 保留"，绝不
+   * 切换 active view——下拉选服务器不等于把用户正在看的视图换掉（与
+   * `requestActivateSource` 的分工：后者是用户点了侧栏来源头部）。
+   * 未在权威 roster 里的 id 不挂载（已退役来源不得被重新 boot）；面板对离线
+   * 来源本就不设目标（它显示不可达占位）。
+   */
+  useEffect(() => {
+    return chamberBridge.onSettingsTarget((sourceId) => {
+      settingsTargetRef.current = sourceId
+      if (sourceId === undefined) return
+      if (sourceId !== LOCAL_INSTANCE_ID && !liveServerIdsRef.current.has(sourceId)) return
+      // 曾经因闲置被回收而被抑制预热的来源，被面板显式选中 = 再次有使用意图。
+      prewarmSuppressedRef.current.delete(sourceId)
+      autoPrewarmedRef.current.delete(sourceId)
+      setMountedViews(prev => (prev.includes(sourceId) ? prev : [...prev, sourceId]))
+    })
+  }, [])
 
   /** VS Code OS 深链（design 16 §2，hold/replay）：先注册监听，再以 ready()
    *  通知主进程放行归一化 intent；冷启动/重载期间的成功启动不会丢失来源激活。

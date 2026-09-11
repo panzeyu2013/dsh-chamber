@@ -21,32 +21,20 @@ export const zh = {
   managedDshDown: '网关可达，但该实例的托管 dsh 未运行。请在「连接」中启动该实例后重试。',
   managedDshStarting: '该实例的托管 dsh 正在启动，就绪后本面板自动恢复。',
   localNotReady: '本地实例尚未就绪，可在「连接」中启动。',
+  // 2026-12 完整桥接：面板渲染选中来源自己的设置面，因此该来源的前端必须挂载；
+  // 已连接但还未挂载完成时给出"正在启动该来源"的诚实中间态。
+  sourceStarting: '正在启动该实例的前端，就绪后本面板自动显示它自己的设置分节。',
   sectionsEmpty: '该实例没有可显示的内容（可能正在启动，稍后自动出现）。',
   // 2026-12 插件设置组装面（图驱动的每来源贡献集）；2026-09 起由连接页在
   // 该来源自己的服务器卡片内呈现（不再占 nav 槽位），文案仍归本命名空间。
-  assemblyTitle: '插件设置诊断',
-  pluginsIntro: '以下内容来自该实例自己的插件清单：只有该实例实际安装的客户端插件才会出现在这里。',
   pluginsLoading: '正在加载该实例的插件设置…',
-  pluginsEmpty: '该实例没有第三方插件设置。',
   pluginsRefresh: '重新加载',
-  pluginsRefreshing: '正在重新加载…',
-  pluginsUnavailable: '无法读取该实例的插件清单：{error}',
-  pluginsCount: '{count} 个插件',
-  pluginsAllLoaded: '插件设置已全部加载。',
   pluginTag: '插件',
-  noticeInactive: '{plugin} 的设置未激活：缺少服务 {missing}',
-  noticeFailed: '{plugin} 的设置加载失败：{detail}',
-  noticeOmittedSeat: '{plugin} 注册了「{seat}」，桌面设置壳不渲染该位置',
   // 2026-12 复查 4b：子上下文的根座（root hooks/keyedHooks/props）未落座——
   // 该读面只交付给已安装的渲染器，桥接 outlet 无法消费（见 bridge-outlet.tsx
   // 与 settings-extensions.ts 的 RootSeatLedger），因此必须显式列出。
-  noticeRootSeat: '{plugin} 提供了根座「{seat}」，桌面设置面未落座：依赖它的设置项不会出现',
-  noticeCrash: '{plugin} 的设置界面渲染出错：{detail}',
-  noticeShared: '{plugin} 的模块实例已由其他实例（{sources}）加载，模块级状态可能被共享',
   // 2026-12：不再假定「宿主事件推送」这一种能力——能力面现含 $on / $mount /
   // $stream（settings-extensions.ts 的 CAPABILITY_*），文案必须对三者都成立。
-  noticeCapability: '{plugin} 使用了桌面设置面不提供的能力（{capability}）：对应的设置可能无法自动刷新',
-  noticeRevConflict: '{plugin} 的 bundle 版本与页面已加载的版本不同（{kind}），已复用先加载的版本：重启该实例（或对齐两个实例的 dsh 运行时版本）后可切换',
   current: '当前',
   close: '关闭',
   generalTitle: '通用',
@@ -280,28 +268,14 @@ export const en: Record<keyof typeof zh, string> = {
   managedDshDown: 'The gateway is reachable, but this instance\'s managed dsh is not running. Start the instance in Connections, then retry.',
   managedDshStarting: 'This instance\'s managed dsh is starting; this panel recovers automatically once it is ready.',
   localNotReady: 'The local instance is not ready yet — start it in Connections.',
+  sourceStarting: 'Starting this instance\'s frontend; its own settings sections appear here once it is ready.',
   sectionsEmpty: 'Nothing to show yet (the instance may still be starting — it appears automatically).',
   // 2026-12 plugin settings assembly surface (graph-driven per-source
   // contribution set); rendered inside that source's own server card on the
   // connections page since 2026-09 (no nav slot of its own).
-  assemblyTitle: 'Plugin settings diagnostics',
-  pluginsIntro: 'The following comes from this instance\'s own plugin list: only client plugins actually installed on this instance appear here.',
   pluginsLoading: 'Loading this instance\'s plugin settings…',
-  pluginsEmpty: 'This instance has no third-party plugin settings.',
   pluginsRefresh: 'Reload',
-  pluginsRefreshing: 'Reloading…',
-  pluginsUnavailable: 'Unable to read this instance\'s plugin list: {error}',
-  pluginsCount: '{count} plugin(s)',
-  pluginsAllLoaded: 'All plugin settings loaded.',
   pluginTag: 'Plugin',
-  noticeInactive: '{plugin} could not activate its settings: missing service(s) {missing}',
-  noticeFailed: '{plugin} failed to load its settings: {detail}',
-  noticeOmittedSeat: '{plugin} registered into "{seat}", which the desktop settings shell does not render',
-  noticeRootSeat: '{plugin} provided root seat "{seat}", which this settings surface does not seat: settings depending on it will not appear',
-  noticeCrash: '{plugin} crashed while rendering its settings: {detail}',
-  noticeShared: '{plugin}\'s module instance is also loaded by other instances ({sources}); module-level state may be shared',
-  noticeCapability: '{plugin} used a capability this settings surface does not provide ({capability}): its settings may not refresh automatically',
-  noticeRevConflict: '{plugin} serves a different bundle rev than the one already loaded on this page ({kind}); the loaded version is reused — restart that instance (or align the two instances\' dsh runtime versions) to switch',
   current: 'Current',
   close: 'Close',
   generalTitle: 'General',

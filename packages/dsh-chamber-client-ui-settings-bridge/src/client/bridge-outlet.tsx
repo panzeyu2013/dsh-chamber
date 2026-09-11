@@ -21,7 +21,16 @@ import { bindSnapshotSelector } from '@deepseek-ai/dsh-client-ui-renderer/src/cl
 import type {
   HostObservable, LocaleFace, RenderOpts, SnapshotSelectorHook, StoredEntry, StoreInstanceLike, Translate,
 } from '@deepseek-ai/dsh-client-ui-slots'
-import type { SlotRegistry } from '@deepseek-ai/dsh-client-ui-renderer/client'
+import type { SettingsSourceSlots } from './settings-source-face.ts'
+
+/**
+ * The ledger read face the outlet drives. Structural on purpose: it is the
+ * public read API of an `@deepseek-ai/dsh-client-ui-renderer` SlotRegistry
+ * (entries / entriesOfSlot / getVersion / subscribe / spec / onEntryError), so
+ * the outlet can render ANY source's registry — the selected instance's own
+ * boot-ctx ledger since the 2026-12 complete-bridge revision.
+ */
+export type BridgeLedger = SettingsSourceSlots
 
 /** Type-erased component props share (mirror of the official render boundary). */
 type InjectedProps = Record<string, unknown>
@@ -44,23 +53,39 @@ function bridgeObservableHook<T>(source: HostObservable<T>): SnapshotSelectorHoo
   return hook as SnapshotSelectorHook<T>
 }
 
-/** Standard-hook stubs: bridged settings sections never read session/workspace state. */
-const EMPTY_SNAPSHOT: Record<string, never> = {}
-const EMPTY_OBSERVABLE: HostObservable<unknown> = {
-  getSnapshot: () => EMPTY_SNAPSHOT,
-  subscribe: () => () => {},
+/**
+ * Standard seats one source's entries are rendered with. They are the seats
+ * the INSTANCE'S OWN renderer bound for its ctx's root scope — the settings
+ * shell publishes the ones it received (settings-source-face.ts), so a
+ * rendered section sees exactly the seats it would see in that instance's own
+ * frontend: `useSessions` / `useWorkspaces` / `usePanelInfo` / `useResource`
+ * / `useSessionPendingInteraction` plus the root `props` compartment
+ * (`chamberFileApiBase`). Absent members stay absent — the panel never invents
+ * a substitute observable for a source that did not provide one.
+ */
+export interface BridgeStandardSeats {
+  useSessions?: unknown
+  useWorkspaces?: unknown
+  usePanelInfo?: unknown
+  useResource?: unknown
+  useSessionPendingInteraction?: unknown
+  props?: Record<string, unknown>
 }
-const emptyObservableHook = bridgeObservableHook(EMPTY_OBSERVABLE)
 
-/** alpha.2 panel-selection stub: the settings chain selects no main panel.
- *  Stable snapshot — uSES compares by reference, so a fresh object per call
- *  would re-render forever. */
-const EMPTY_PANEL_INFO_SNAPSHOT: { activePanelId: null } = { activePanelId: null }
-const EMPTY_PANEL_INFO: HostObservable<{ activePanelId: null }> = {
-  getSnapshot: () => EMPTY_PANEL_INFO_SNAPSHOT,
-  subscribe: () => () => {},
+/** Materialize the seat subset into the props share a section component reads. */
+function seatProps(standard: BridgeStandardSeats | undefined): InjectedProps {
+  if (standard === undefined) return {}
+  return {
+    ...(standard.props ?? {}),
+    ...(standard.useSessions === undefined ? {} : { useSessions: standard.useSessions }),
+    ...(standard.useWorkspaces === undefined ? {} : { useWorkspaces: standard.useWorkspaces }),
+    ...(standard.usePanelInfo === undefined ? {} : { usePanelInfo: standard.usePanelInfo }),
+    ...(standard.useResource === undefined ? {} : { useResource: standard.useResource }),
+    ...(standard.useSessionPendingInteraction === undefined
+      ? {}
+      : { useSessionPendingInteraction: standard.useSessionPendingInteraction }),
+  }
 }
-const panelInfoHook = bridgeObservableHook(EMPTY_PANEL_INFO)
 
 const noopSubscribe = (): (() => void) => () => {}
 
@@ -157,8 +182,9 @@ function cachedRootInject(entry: StoredEntry, actions: object | undefined): Inje
 
 /** renderSlot binding for an entry's declared children (authorization checks, then an outlet). */
 function boundRenderSlot(
-  slots: SlotRegistry,
+  slots: BridgeLedger,
   locale: LocaleFace | undefined,
+  standard: BridgeStandardSeats | undefined,
   entry: StoredEntry,
 ): (key: string, owner: object, opts?: RenderOpts) => ReactNode {
   return (key, owner, opts) => {
@@ -170,12 +196,13 @@ function boundRenderSlot(
       throw new BridgeAssemblyError(`bridge: slot '${key}' is declared '${declared.kind}', not 'list' or 'keyed' — unsupported by the bridge outlet`)
     }
     if (declared.scope !== 'root') {
-      throw new BridgeAssemblyError(`bridge: slot '${key}' is declared scope '${declared.scope}', not 'root' — the bridge outlet has no session scope`)
+      throw new BridgeAssemblyError(`bridge: slot '${key}' is declared scope '${declared.scope}', not 'root' — the bridge outlet renders root-scope settings slots only`)
     }
     return (
       <BridgeOutlet
         slots={slots}
         locale={locale}
+        standard={standard}
         slotKey={key}
         ownerProps={owner}
         opts={opts}
@@ -186,37 +213,19 @@ function boundRenderSlot(
 
 /** Render one root-scope entry: standard kit + t seat + store pair + renderSlot + inject + owner. */
 function renderEntry(
-  slots: SlotRegistry,
+  slots: BridgeLedger,
   locale: LocaleFace | undefined,
+  standard: BridgeStandardSeats | undefined,
   entry: StoredEntry,
   ownerProps: object,
 ): ReactNode {
   const Comp = entry.component as FC<InjectedProps>
-  const kit: InjectedProps = {
-    useSessions: emptyObservableHook,
-    useWorkspaces: emptyObservableHook,
-    // alpha.2 global standard seat: the settings chain declares no main-panel
-    // selection, so a component reading it sees "no panel selected" (null)
-    // instead of an undefined hook.
-    //
-    // Root standard sources contributed on the CHILD context (`hooks` /
-    // `keyedHooks` / `props`) are deliberately NOT seated, and this is a judged
-    // limit rather than an oversight (2026-12 review 4b): the root read face is
-    // public as a TYPE (`ui-slots/src/renderer.ts:127,189`), but its only
-    // delivery channel is the renderer-installation contract — the registry
-    // keeps its binding factory private and hands the host to the INSTALLED
-    // renderer inside `renderSlot('root', …)`
-    // (`ui-renderer/src/client/registry.ts:465`, `:358`), so a non-renderer
-    // consumer can only reach it by installing itself as this context's
-    // renderer. Concretely, `client/resources` contributes
-    // `keyedHooks.resource` (the `useResource` seat,
-    // `client/resources/src/client/index.ts:38-40`) and stays unseated here.
-    // The diagnostics page names every such seat instead of hiding it (the
-    // child registry records each PUBLIC `provideRoot` call — RootSeatLedger
-    // in bridge-context.ts, rendered through extensionNotices); seat it here
-    // only together with a public read path upstream.
-    usePanelInfo: panelInfoHook,
-  }
+  // The seats come from the SOURCE'S OWN renderer binding: they are handed to
+  // this panel by that source's settings shell (settings-source-face.ts), so a
+  // section reads the same session/workspace/panel/resource seats it reads in
+  // that instance's own frontend. Missing members stay missing — inventing an
+  // empty observable would hide a genuinely absent source.
+  const kit: InjectedProps = seatProps(standard)
   if (entry.locale !== undefined) {
     if (locale === undefined) {
       throw new BridgeAssemblyError(`bridge: entry declares locale namespace '${entry.locale}' but no locale face is installed`)
@@ -230,7 +239,7 @@ function renderEntry(
     kit['actions'] = store.actions
   }
   if (entry.children !== undefined) {
-    kit['renderSlot'] = boundRenderSlot(slots, locale, entry)
+    kit['renderSlot'] = boundRenderSlot(slots, locale, standard, entry)
   }
   const injected = cachedRootInject(entry, actions)
   return <Comp {...kit} {...injected} {...ownerProps} />
@@ -310,19 +319,25 @@ function entryKeyOf(entry: StoredEntry): number {
 }
 
 /**
- * Render one root-scope LIST or KEYED slot from a child settings context:
+ * Render one root-scope LIST or KEYED slot from a settings ledger:
  * ledger version subscription + locale revision + entries (shadowing
  * winners) in order, `only` id filter for the nav→section dispatch. KEYED
  * slots dispatch the single entry whose `options.key` matches
  * `opts.entryKey`, else the fallback. Subscribe/getVersion closures are
  * memoized per (slots, slotKey) — no resubscribe churn on unrelated
  * re-renders (official per-face cache pattern).
+ *
+ * Since the 2026-12 complete-bridge revision the ledger is the SELECTED
+ * SOURCE's own boot-ctx registry and `standard` carries that source's own
+ * renderer-bound seats, so an entry renders with the props it would have in
+ * that instance's own frontend.
  */
 export function BridgeOutlet({
-  slots, locale, slotKey, ownerProps, opts,
+  slots, locale, standard, slotKey, ownerProps, opts,
 }: {
-  slots: SlotRegistry
+  slots: BridgeLedger
   locale: LocaleFace | undefined
+  standard?: BridgeStandardSeats
   slotKey: string
   ownerProps: object
   opts?: RenderOpts
@@ -338,13 +353,13 @@ export function BridgeOutlet({
   if (spec.kind === 'keyed') {
     // One card per key (official keyed dispatch): the entry registered with
     // the requested key renders through the boundary. A miss is natural
-    // empty — the chamber bridge has no shadowing, so the official
-    // occupied-but-absent deadCell corner collapses to the fallback branch.
+    // empty — shadowing winners already collapsed the ledger, so the official
+    // occupied-but-absent deadCell corner falls to the fallback branch.
     const entry = [...slots.entriesOfSlot(slotKey)].find(e => e.options.key === opts?.entryKey)
     if (!entry) return <>{opts?.fallback ?? null}</>
     return (
       <BridgeEntryBoundary key={entryKeyOf(entry)} slotKey={slotKey}>
-        {renderEntry(slots, locale, entry, ownerProps)}
+        {renderEntry(slots, locale, standard, entry, ownerProps)}
       </BridgeEntryBoundary>
     )
   }
@@ -355,7 +370,7 @@ export function BridgeOutlet({
     <>
       {entries.map(entry => (
         <BridgeEntryBoundary key={entryKeyOf(entry)} slotKey={slotKey}>
-          {renderEntry(slots, locale, entry, ownerProps)}
+          {renderEntry(slots, locale, standard, entry, ownerProps)}
         </BridgeEntryBoundary>
       ))}
     </>

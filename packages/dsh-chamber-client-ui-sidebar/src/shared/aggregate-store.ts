@@ -200,6 +200,7 @@ type RefreshListener = (sourceId: string) => void
  */
 type SessionListRefreshListener = (sourceId: string) => void
 type SourceListener = (sourceId: string) => void
+type SettingsTargetListener = (sourceId: string | undefined) => void
 /** Page-wide active-view fact: the source whose shell is on screen, undefined until the App publishes. */
 type ActiveSourceListener = (sourceId: string | undefined) => void
 type RuntimeReportListener = (
@@ -220,6 +221,7 @@ const openOutcomeListeners = new Set<OpenOutcomeListener>()
 const refreshListeners = new Set<RefreshListener>()
 const sessionListRefreshListeners = new Set<SessionListRefreshListener>()
 const activateSourceListeners = new Set<SourceListener>()
+const settingsTargetListeners = new Set<SettingsTargetListener>()
 const activeSourceListeners = new Set<ActiveSourceListener>()
 const runtimeReportListeners = new Set<RuntimeReportListener>()
 const snapshotReportListeners = new Set<SnapshotReportListener>()
@@ -348,6 +350,27 @@ export const chamberBridge = {
     activateSourceListeners.add(listener)
     return () => {
       activateSourceListeners.delete(listener)
+    }
+  },
+
+  /**
+   * Settings-panel call: the source whose settings surface is on screen
+   * (`undefined` when the panel closed). The App layer answers by MOUNTING
+   * that source's shell if it is not mounted yet and by holding it out of the
+   * retention harvest while it stays the target — the panel renders that
+   * source's OWN boot-ctx ledger (design 05 §5, 2026-12 完整桥接修订), so the
+   * mounted shell IS the surface. Activation is deliberately not implied: the
+   * active view keeps following the user, not the dropdown.
+   */
+  setSettingsTarget(sourceId: string | undefined): void {
+    for (const listener of [...settingsTargetListeners]) listener(sourceId)
+  },
+
+  /** App-layer subscription to settings-target changes; returns the unsubscribe. */
+  onSettingsTarget(listener: SettingsTargetListener): () => void {
+    settingsTargetListeners.add(listener)
+    return () => {
+      settingsTargetListeners.delete(listener)
     }
   },
 

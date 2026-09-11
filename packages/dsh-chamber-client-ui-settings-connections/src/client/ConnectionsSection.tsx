@@ -59,8 +59,6 @@ import {
 import { PluginDialog, type PluginDialogTarget } from './PluginDialog.tsx'
 import { PluginDiagnosticLine } from './plugin-diagnostic.tsx'
 import type { PluginDiagnostic } from './plugin-diagnostic.ts'
-import { SettingsAssemblyDiagnosticsFor } from './settings-assembly-diagnostics.tsx'
-import type { AssemblyTranslate, SettingsAssemblyReportView } from './settings-assembly-diagnostics.ts'
 import { formatGatewayUrl, parseGatewayUrl } from './gateway-url.ts'
 import { actionHintKey } from './action-hint.ts'
 import {
@@ -110,18 +108,6 @@ export type ConnectionsSectionProps =
      *  comes from the host (settings-bridge) — this section only asks.
      *  Absent outside the chamber shell. */
     onRecheckDiagnostic?: (sourceId: string) => void
-    /** The SELECTED source's settings-assembly report (2026-09 relocation):
-     *  rendered inside exactly the card it names (see
-     *  `settings-assembly-diagnostics.tsx`). Absent outside the chamber shell. */
-    assemblyReport?: SettingsAssemblyReportView | undefined
-    /** The settings shell's translate over ITS OWN dictionary namespace — the
-     *  report's copy (intro/count/notices/refresh) lives there, params
-     *  supported. Absent outside the chamber shell. */
-    assemblyT?: AssemblyTranslate | undefined
-    /** Ask the shell to re-read the source's plugin graph and reconcile. */
-    onRefreshAssembly?: (() => void) | undefined
-    /** A reconcile refresh is in flight. */
-    assemblyRefreshing?: boolean | undefined
   }
 
 /** Host-log page size (04 §3.3: default 200, cap 1000). */
@@ -404,7 +390,6 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
   // the report's copy belongs to the shell's namespace, so the block renders
   // it here instead of re-declaring it in this dictionary (same shape as the
   // host-computed `restartNote` text above).
-  const { assemblyReport, assemblyT, onRefreshAssembly, assemblyRefreshing } = props
   // Per-instance input ids (useId): the dialog renders inside N-ctx panels in
   // the SAME document — static ids would alias across panels. One id per
   // credential/pin field; the transport branches render one set at a time.
@@ -1507,13 +1492,6 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                 ? <p className={css.hint}>{runtimeState.runtimeBlockedReason ?? t('localRuntimeBlocked')}</p>
                 : null}
           <PluginDiagnosticLine diagnostic={pluginDiagnostics?.['local']} t={t} />
-          <SettingsAssemblyDiagnosticsFor
-            sourceId="local"
-            report={assemblyReport}
-            t={assemblyT}
-            onRefresh={onRefreshAssembly}
-            refreshing={assemblyRefreshing}
-          />
           <div className={css.logArea}>
             <div className={css.logHead}>
               <button
@@ -1681,13 +1659,6 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                       ? <p className={css.hint}>{t('serviceUnconfiguredHint')}</p>
                       : null}
                     <PluginDiagnosticLine diagnostic={pluginDiagnostics?.[`${spec.kind}-${spec.id}`]} t={t} />
-                    <SettingsAssemblyDiagnosticsFor
-                      sourceId={`${spec.kind}-${spec.id}`}
-                      report={assemblyReport}
-                      t={assemblyT}
-                      onRefresh={onRefreshAssembly}
-                      refreshing={assemblyRefreshing}
-                    />
                     <Button
                       variant={connected ? 'outline' : 'primary'}
                       size="sm"
