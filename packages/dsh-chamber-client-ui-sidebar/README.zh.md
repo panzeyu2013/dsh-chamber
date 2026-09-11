@@ -25,7 +25,8 @@ chamber 自研侧边栏插件（设计 05 §2）：拷贝官方 ui-sidebar 外�
 - 来源分组 → workspace 组 → session 行。所有来源（local + 每个注册的远程
   实例）在**同一张平列表**里仅按来源分组呈现：来源组头（标签 + 连接状态
   徽标，当前来源高亮）→ workspace 组 → session 行。远程来源按来源 id 派生
-  稳定 accent 色（hue 哈希）；本地来源用默认色。rail 渲染来源色点。
+  稳定 accent 色（hue 哈希）；本地来源用默认色。rail 渲染来源色点
+  （2026-09-11 上游对齐起为每个来源一个命名的可操作按钮，见「交互」）。
 - 不属任何 workspace 的游离会话落在来源末位合成的一个**未分组**桶（仅
   session 行，无 workspace 操作）；blank 行只在它们**既是该来源当前会话、
   又真的被投影**期间进入列表（以 "New Session" 呈现）——该来源还有指向
@@ -37,9 +38,14 @@ chamber 自研侧边栏插件（设计 05 §2）：拷贝官方 ui-sidebar 外�
 - 已连接来源的聚合拉取失败时，以错误文本代替 workspace 列表呈现——绝不
   冒充"无工作区"；未连接来源只显示分组头 + 状态提示；全部来源断开时显示
   空态提示。
-- 会话行带**运行指示点**（wire `sessions.list.running`）；不渲染相对时间
-  单元格（06 §4.3——`relativeTimeBucket` 仅保留为共享工具）；状态点优先级
-  与当前会话高亮（全局单选）见下方"第三轮（设计 06）"。
+- 会话行带**运行指示点**（wire `sessions.list.running`），完成未读用官方
+  `StateDot` 的 `done` 色——与固定待办条带同一枚标记（此前自绘的 6px 品牌蓝点
+  读作第二个「进行中」，已删除，2026-09-11 upstream-alignment T10）；不渲染
+  相对时间单元格（06 §4.3——`relativeTimeBucket` 仅保留为共享工具）。行所属
+  会话的 `schedule` 投影非空时，标题与尾随单元格之间渲染官方 active-Schedule
+  标记（16px 闹钟字形、`role="img"`、可访问名 `schedule.active`），搜索结果行
+  同样如此；该事实稀疏，其余行的几何一字不动。状态点优先级与当前会话高亮
+  （全局单选）见下方"第三轮（设计 06）"。
 - workspace 组可**折叠**（组头 chevron + 会话数徽标）；折叠状态持久化于
   localStorage 视图偏好（`dsh-chamber.sidebar.v1`）。
 - 来源组同样可**折叠**（2026-09，设计 06 §2.4）：每个来源分组头左侧槽位为
@@ -65,10 +71,35 @@ chamber 自研侧边栏插件（设计 05 §2）：拷贝官方 ui-sidebar 外�
 
 - 点击会话行 → `chamberBridge.requestOpenSession(sourceId, sessionId)`；
   App 层切到该来源的 shell 并打开会话。
-- 悬停操作（v1 最小集，走该来源自己的 unary wire 客户端
-  `shared/instance-api.ts`）：会话重命名/归档；workspace 新建会话/重命名/
-  删除。失败内联呈现，绝不静默。每个成功操作后触发
+- 行操作（v1 最小集，走该来源自己的 unary wire 客户端
+  `shared/instance-api.ts`）**全部收在行菜单里**：会话 = 重命名/分叉/归档；
+  真实 workspace = 行内 `+` 新建会话（worktree 行也有）+ kebab 里的重命名/
+  删除（仅非 worktree 行——派生 worktree 刻意无 kebab，OpenChamber parity）。
+  不再有第二个悬停按钮——会话行的归档是**菜单项**且**立即执行、无确认**：
+  归档只隐藏该行、从不触及会话日志（上游把归档排除在确认家族之外的同一理由）。
+  失败内联呈现，绝不静默。每个成功操作后触发
   `chamberBridge.requestRefresh(sourceId)`——App 层立即重拉该来源快照。
+- 工作区删除由**应用内 `Modal`** 确认，绝不用原生 OS 确认框（后者骑不上
+  alias token）：上游 chrome——标题与说明句取上游字典键
+  `delete.workspace`/`delete.desc`（孤儿态保留自己那句既有文案）、outline 取消 +
+  outline 破坏性动作、wire 调用在途时一条 `role="status"` 的 `delete.pending` 行。
+  打开时焦点落进对话框、
+  关闭时回到开启者；来源消失或断开即撤销已武装的确认；任何时刻只有**一层**
+  对话框（官方 Modal 每开一个实例注册一个 document 级 Escape 监听——与归档
+  管理器登记的理由同源）。
+- 行操作的可访问名带上它作用的**那一行**
+  （`action.newSession.aria` / `action.menu.workspace` / `action.menu.session`，
+  上游的 `{name}` 参数化形式）：一排只报「更多操作」的控件对 AT 等于没说。
+  无标题会话在行内与可访问名里解析到同一个 `list.unnamed` 占位。
+- 行窗口是**双向披露**：还有隐藏行时条带给 `sessions.expand {n}`（上游文案），
+  展开后**同一个**控件给 `sessions.collapse` 并上报 `aria-expanded`——隐藏计数
+  取自与展开无关的窗口，故收起入口不会被自己的那次展开吃掉。
+- 菜单与来源头控件按上游：行菜单传 `closeOnPointerLeave`、从不使用原语的
+  `compact` 形态（164px 卡片、26px 行、12px 标签）；来源头四个控件（排序/添加
+  工作区/搜索/归档管理器）改骑官方
+  `Tooltip`（不再借用原生 `title`），添加工作区用官方 project-add 字形；排序
+  菜单取上游 ViewOptionsMenu 形态（`dense` + portal + `align="end"`，标签报出
+  当前模式）。浏览树带上可访问名 `section.sessions`，与搜索结果树一致。
 - 新建工作区：每个已连接来源打开同一个应用内目录浏览对话框（browse
   directory-picker 表面，设计 05 §4），按该来源的 unary client 驱动
   （`host.listDirectory`/`host.createDirectory`）；确认路径后走**该实例**的
@@ -77,6 +108,10 @@ chamber 自研侧边栏插件（设计 05 §2）：拷贝官方 ui-sidebar 外�
 - 点击非当前来源的分组头 → 切换活动 N-ctx 视图到该来源 shell（不打开
   会话，`chamberBridge.requestActivateSource`）；归档后会话立即从列表
   消失（`archivedSessionIds` 过滤在 `shared/derive.ts` derive 层）。
+- 折叠 rail 为每个来源渲染一个**命名的可操作按钮**（官方 `Tooltip` +
+  `aria-label`、当前来源 `aria-current`、不可激活来源 `aria-disabled` 且名称取
+  来源头自己的拒绝理由），取代此前只有 `title` 的惰性色点——因此 rail 上也能
+  切换来源；彩色点与活动 accent 环一字未改（含几何）。
 
 ## 打开意图闸门与工作区回声（design 05 §2.2.1，2026-12）
 

@@ -32,7 +32,9 @@ The shell declares and renders the three holes the alpha.2 official
   highlighted); remote sources carry a stable accent derived from the source
   id (hue hash), local keeps the default ink (the old header identity DOT is
   gone — 2026-10 user feedback; identity rides the fold-glyph accent, the
-  active left inset and the rail dots); the rail renders the source color dots.
+  active left inset and the rail dots); the rail renders the source color dots
+  (one named, operable button per source since the 2026-09-11 upstream
+  alignment — see Interactions).
 - Sessions outside every workspace trail in one synthetic ungrouped bucket at
   the source's end (sessions only, no workspace actions); blank rows surface
   only while they are the source's current session (rendered as "New Session")
@@ -47,11 +49,19 @@ The shell declares and renders the three holes the alpha.2 official
   of the workspace list — never masquerading as "no workspaces". Disconnected
   sources render header + status icon only (dot/spinner, phase on
   hover/aria, no status text); all disconnected → empty hint.
-- Live sessions carry a running dot (`sessions.list.running`); no relative
-  time cell is rendered (06 §4.3 — `relativeTimeBucket` stays as a shared
-  tool only). State-dot priority and the current-session highlight
-  (single-selection) are described under "Chamber third round (design 06)"
-  below.
+- Live sessions carry a running dot (`sessions.list.running`), and a
+  completed-but-unread session carries the official `StateDot` `done` tone —
+  the same mark the pinned session-todo strip renders (the bespoke 6 px
+  brand-blue dot read as a second "running" mark and is gone, 2026-09-11
+  upstream-alignment T10); no relative time cell is rendered (06 §4.3 —
+  `relativeTimeBucket` stays as a shared tool only). A row whose session
+  carries an active
+  `schedule` projection renders the official active-Schedule marker (16 px
+  alarm glyph, `role="img"`, localized `schedule.active` accessible name)
+  between its title and the trailing cells, in the search-result rows too; the
+  fact is sparse, so every other row's geometry is untouched. State-dot
+  priority and the current-session highlight (single-selection) are described
+  under "Chamber third round (design 06)" below.
 - Workspace groups fold via the header chevron (session-count badge); fold
   state persists in localStorage view prefs (`dsh-chamber.sidebar.v1`).
 - Source groups fold the same way (2026-09, design 06 §2.4): each source
@@ -82,10 +92,45 @@ The shell declares and renders the three holes the alpha.2 official
 
 - Session row click → `chamberBridge.requestOpenSession(sourceId, sessionId)`;
   the App layer switches to that source's shell and opens the session.
-- Hover actions (v1 minimal set over the source's own unary wire client,
-  `shared/instance-api.ts`): session rename/archive; workspace
-  new-session/rename/delete. Failures surface inline, never silently; every
-  success triggers `chamberBridge.requestRefresh(sourceId)` — the App layer re-pulls that source's snapshot immediately.
+- Row actions (v1 minimal set over the source's own unary wire client,
+  `shared/instance-api.ts`) all live in the ROW MENUS: session = rename / fork /
+  archive; real workspace = a `+` new-session in the row (worktree rows
+  included) plus rename / delete behind the kebab — non-worktree rows only,
+  since a derived worktree deliberately keeps no kebab (OpenChamber parity).
+  There is no second hover button: the session row's archive verb is a MENU
+  ENTRY and it runs IMMEDIATELY, with no confirmation, because archiving only
+  hides the row and never touches the session log (upstream's own reason for
+  keeping archive out of the confirm family). Failures surface inline, never
+  silently; every success triggers `chamberBridge.requestRefresh(sourceId)` —
+  the App layer re-pulls that source's snapshot immediately.
+- Workspace delete is confirmed by an in-app `Modal`, never by a native OS
+  confirm (which cannot ride the alias tokens): upstream chrome — its
+  `delete.workspace` title and `delete.desc` description keys (the orphaned
+  case keeps its own long-standing wording), an outline cancel + outline
+  destructive pair, and a `role="status"` `delete.pending` line while the wire
+  call is in flight. Focus lands inside the dialog when it opens and returns to
+  the opener when it closes; a source that vanishes or disconnects drops the
+  armed confirm; only ONE dialog layer is ever up (the official Modal registers
+  one document-level Escape listener per open instance — the same reason the
+  archive manager records).
+- Row-action accessible names carry the ROW they act on
+  (`action.newSession.aria` / `action.menu.workspace` / `action.menu.session`,
+  upstream's `{name}`-parameterized form): a per-row control named with a bare
+  "more actions" tells AT nothing. An untitled session resolves to the same
+  `list.unnamed` placeholder in the row and in its accessible name.
+- The session-row window is a TWO-WAY disclosure: while rows are hidden the
+  strip offers `sessions.expand {n}` (upstream copy), and once expanded the
+  SAME control offers `sessions.collapse` and reports `aria-expanded` — its
+  hidden count comes from an expansion-independent window, so the collapse
+  entry point survives its own expansion.
+- Menus and header controls follow upstream: row menus pass
+  `closeOnPointerLeave` and never the primitive's `compact` form (164px card,
+  26px rows, 12px labels); the source header's four controls (sort / add
+  workspace / search / archive manager) ride the official `Tooltip` instead of
+  a borrowed native `title`, and add-workspace draws the official project-add
+  glyph; the sort menu is upstream's view-options form (`dense`, portal,
+  `align="end"`, its label naming the active mode). The browse tree carries the
+  accessible name `section.sessions`, exactly like its search-results sibling.
 - Add workspace: each connected source opens one in-app directory-browser
   dialog (the browse directory-picker surface, design 05 §4) driven over THAT
   source's unary client (`host.listDirectory`/`host.createDirectory`); a confirmed
@@ -94,6 +139,12 @@ The shell declares and renders the three holes the alpha.2 official
 - A non-current source's header click switches the active N-ctx view without
   opening a session (`chamberBridge.requestActivateSource`); archiving hides
   the session immediately (`archivedSessionIds` filtered in `shared/derive.ts`).
+- The collapsed rail renders one NAMED, operable button per source (official
+  `Tooltip` + `aria-label`, `aria-current` on the active source, `aria-disabled`
+  on a source that cannot be activated — a managed-down source's name is the
+  header's own refusal) instead of the former inert title-only dot, so a source
+  can also be switched from the rail; the coloured dot and the active accent
+  ring are unchanged, geometry included.
 
 ## Open-intent gates and the workspace echo (design 05 §2.2.1, 2026-12)
 

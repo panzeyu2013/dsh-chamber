@@ -22,6 +22,10 @@
  * vendor-modules.d.ts ambient overlay (P4-4, 2026-09).
  */
 import { DirectoryBrowseError } from './directory-browse-error.ts'
+// 2026-09-11 upstream-alignment T7: one derivation for the active-Schedule fact
+// (shared by this module's unary row build and derive.ts's mounted-store
+// projection). derive.ts type-imports this module only, so no runtime cycle.
+import { hasActiveScheduleOf } from './derive.ts'
 import {
   decodeSessionCreateValue, decodeWorkspaceCreateValue, decodeWorkspaceDeleteValue,
 } from './instance-mutation-values.ts'
@@ -59,6 +63,14 @@ export interface SessionRow {
   updatedAt?: number
   running: boolean
   blank: boolean
+  /**
+   * 2026-09-11 upstream-alignment T7: the session owns at least one ACTIVE
+   * schedule (upstream `SessionNode.hasActiveSchedule`, derived from
+   * `projectionValues.schedule` — vendor ui-workspace tree.ts:161-163). SPARSE:
+   * present only when true, so the snapshot signature stays byte-identical for
+   * the (overwhelmingly common) sessions without a schedule.
+   */
+  hasActiveSchedule?: boolean
   /** Coarse durable origin (wire: absent or 'subagent'); subagent rows never surface in navigation. */
   origin?: 'subagent'
   cwd?: string
@@ -578,6 +590,12 @@ export async function fetchInstanceSnapshot(client: InstanceApiClient): Promise<
     if (title !== undefined) row.title = title
     if (typeof summary.cwd === 'string' && summary.cwd !== '') row.cwd = summary.cwd
     if (typeof summary.parentSessionId === 'string') row.parentSessionId = summary.parentSessionId
+    // 2026-09-11 upstream-alignment T7: the unary wire row publishes the
+    // registered projections (`projections.values`, the very block `titleOf`
+    // above reads) — the schedule fact rides it, so an unmounted source's
+    // fallback view reports the marker exactly like the mounted store path
+    // (projectInstanceSnapshot) does. Absent/unknown = no active schedule.
+    if (hasActiveScheduleOf(summary?.projections?.values)) row.hasActiveSchedule = true
     return [row]
   })
   // cwd-derived workspace groups: group visible sessions by canonical cwd;

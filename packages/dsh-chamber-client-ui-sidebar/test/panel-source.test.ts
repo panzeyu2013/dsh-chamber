@@ -2,6 +2,17 @@
  * Global panel projection tests (alpha.2 `sidebar.panellist`): the ledger is
  * the authority, the projection is serializable metadata sorted by order with
  * registration order as the tiebreak, and it notifies only on real change.
+ *
+ * MUST run through the test-only vendor loader (2026-09-11 upstream-alignment
+ * A5): `src/client/panel-source.ts` now VALUE-imports the dsh store engine
+ * (`@deepseek-ai/dsh-client-store` → createSnapshotStore, upstream ui-sidebar
+ * wiring), whose vendored package.json points at an unbuilt `lib/`. The loader
+ * maps that specifier to the same vendor source the vite composite aliases, so
+ * these tests exercise the real factory:
+ *
+ *   node --import ./test/vendor-register.mjs test/panel-source.test.ts
+ *
+ * (the package's `test` script already does).
  */
 
 import { test } from 'node:test'
@@ -72,4 +83,29 @@ test('subscribers fire only when the projection actually changes', () => {
   source.sync(makeSlots([]))
   assert.equal(notifications, 3)
   assert.deepEqual(source.source.getSnapshot(), [])
+})
+
+// 2026-09-11 upstream-alignment A5: 投影的可观察面必须是 dsh store engine 的
+// createSnapshotStore 产物（上游 ui-sidebar 同款接线），不再是本包手搓的
+// listener Set。该工厂只在 engine 产物上存在 `set`/`update`——两个方法都在，
+// 就证明「手搓快照」没有复活；同时 `set` 走 plain array，React 看到的仍是
+// 普通数组（不是 immer draft 的形态）。
+test('the observable face is the store engine product (createSnapshotStore)', () => {
+  const panelSource = createPanelSource()
+  const { sync } = panelSource
+  const engine = panelSource.source as unknown as { set?: unknown; update?: unknown }
+  assert.equal(typeof engine.set, 'function', 'createSnapshotStore products carry set()')
+  assert.equal(typeof engine.update, 'function', 'createSnapshotStore products carry update()')
+  sync(makeSlots([{ id: 'engine', order: 1, label: 'Engine' }]))
+  const snapshot = panelSource.source.getSnapshot()
+  assert.ok(Array.isArray(snapshot), 'the projection stays a plain array')
+  assert.deepEqual(snapshot.map(panel => panel.id), ['engine'])
+  // Notify-on-change survives the engine swap: the engine's set() is called
+  // only after the row comparison, so an identical re-sync publishes nothing.
+  let notifications = 0
+  panelSource.source.subscribe(() => { notifications += 1 })
+  sync(makeSlots([{ id: 'engine', order: 1, label: 'Engine' }]))
+  assert.equal(notifications, 0)
+  sync(makeSlots([{ id: 'engine', order: 1, label: 'Renamed' }]))
+  assert.equal(notifications, 1)
 })

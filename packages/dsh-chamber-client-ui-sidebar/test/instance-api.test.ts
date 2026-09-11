@@ -879,3 +879,32 @@ test('stopSessionsForPurge without lineage facts stays roots-only (a parent is n
   assert.deepEqual(cancelled, ['root'], 'no edges => only the requested roots are cancelled')
   assert.deepEqual(result.stillRunning, [])
 })
+
+// 2026-09-11 upstream-alignment T7: the unary fallback publishes the session's
+// registered projections (`projections.values` — the same block `titleOf`
+// reads), so an unmounted source's rows carry the active-Schedule fact exactly
+// like the mounted-store projection (derive.ts projectInstanceSnapshot) does.
+test('fetchInstanceSnapshot carries the active-Schedule fact from the wire projections block', async () => {
+  const client = {
+    session: {
+      list: async () => ({
+        ok: true as const,
+        value: {
+          items: [
+            summary({ sessionId: 'scheduled', projections: { values: { schedule: [{ id: 'sch1' }] } } }),
+            summary({ sessionId: 'idle-empty', projections: { values: { schedule: [] } } }),
+            summary({ sessionId: 'no-bag' }),
+            // Defensive: a non-array projection value is not an active set.
+            summary({ sessionId: 'odd', projections: { values: { schedule: 'sch1' } } }),
+          ],
+        },
+      }),
+    },
+  }
+  const snapshot = await fetchInstanceSnapshot(client as never)
+  const byId = new Map(snapshot.sessions.map(row => [row.sessionId, row]))
+  assert.equal(byId.get('scheduled')?.hasActiveSchedule, true, 'a non-empty schedule marks the row')
+  assert.equal('hasActiveSchedule' in (byId.get('idle-empty') ?? {}), false, 'an empty schedule stays key-free')
+  assert.equal('hasActiveSchedule' in (byId.get('no-bag') ?? {}), false, 'a missing bag stays key-free')
+  assert.equal('hasActiveSchedule' in (byId.get('odd') ?? {}), false, 'a non-array value stays key-free')
+})

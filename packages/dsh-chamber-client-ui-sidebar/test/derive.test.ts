@@ -16,6 +16,7 @@ import {
   deriveLocalSearchMatches,
   deriveServerWorkspaces,
   groupArchivedRows,
+  hasActiveScheduleOf,
   instanceSnapshotSignature,
   MEMBERSHIP_GRACE_MS,
   mergeRuntimeFacts,
@@ -2244,4 +2245,114 @@ test('serversProjectionSignature: archivedSessions and archiveSetKnown participa
   // …and identical inputs stay identical (null normalization).
   assert.equal(serversProjectionSignature([plain] as never), serversProjectionSignature([makeServer()] as never))
   assert.equal(serversProjectionSignature([degraded] as never), serversProjectionSignature([makeServer({ archivedSessions: [], archiveSetKnown: false })] as never))
+})
+
+// ---------------------------------------------------------------------------
+// 2026-09-11 upstream-alignment T7: the active-Schedule fact, end to end
+// (session projection → snapshot → signature gate → rendered row).
+// ---------------------------------------------------------------------------
+
+test('hasActiveScheduleOf mirrors upstream: any non-empty schedule array means active', () => {
+  // vendor ui-workspace tree.ts:161-163 — `(projectionValues?.schedule?.length ?? 0) > 0`.
+  assert.equal(hasActiveScheduleOf(undefined), false, 'no projection bag = no active schedule')
+  assert.equal(hasActiveScheduleOf({}), false, 'a bag without the key = no active schedule')
+  assert.equal(hasActiveScheduleOf({ schedule: [] }), false, 'an empty active set is not active')
+  assert.equal(hasActiveScheduleOf({ schedule: [{ id: 'sch1' }] }), true, 'one active schedule is active')
+  // Defensive wire shapes: a non-array value (unknown-typed bag) is not a claim.
+  assert.equal(hasActiveScheduleOf({ schedule: 'sch1' }), false, 'a non-array value is not an active set')
+  assert.equal(hasActiveScheduleOf({ schedule: null }), false, 'null is not an active set')
+})
+
+test('projectInstanceSnapshot carries hasActiveSchedule sparsely (present only when active)', () => {
+  const workspaceState = {
+    items: [workspace('w1', 'Work', ['scheduled', 'plain'])],
+    archivedSessionIds: [],
+    state: 'idle',
+    phase: 'ready',
+  }
+  const sessionState = {
+    ids: ['scheduled', 'plain'],
+    phase: 'ready',
+    byId: {
+      scheduled: {
+        id: 'scheduled',
+        title: 'With schedule',
+        running: false,
+        blank: false,
+        // The mounted store's SessionSummary.projectionValues bag.
+        projectionValues: { schedule: [{ id: 'sch1' }] },
+      },
+      plain: {
+        id: 'plain',
+        title: 'No schedule',
+        running: false,
+        blank: false,
+        projectionValues: { schedule: [] },
+      },
+    },
+  }
+  const projected = projectInstanceSnapshot(workspaceState, sessionState)
+  assert.ok(projected !== undefined)
+  assert.deepEqual(projected.sessions, [
+    {
+      sessionId: 'scheduled',
+      running: false,
+      blank: false,
+      hasActiveSchedule: true,
+      title: 'With schedule',
+    },
+    // No key at all: the sparse form keeps every other row's bytes (and the
+    // producer's signature gate) exactly as they were before this fact existed.
+    { sessionId: 'plain', running: false, blank: false, title: 'No schedule' },
+  ])
+})
+
+test('a schedule change republishes: the snapshot signature carries the fact', () => {
+  const idle = snapshot(
+    [workspace('w1', 'Work', ['s1'])],
+    [session('s1', 5, { title: 'One' })],
+  )
+  const armed = snapshot(
+    [workspace('w1', 'Work', ['s1'])],
+    [{ ...session('s1', 5, { title: 'One' }), hasActiveSchedule: true }],
+  )
+  assert.notEqual(
+    instanceSnapshotSignature(idle),
+    instanceSnapshotSignature(armed),
+    'gaining an active schedule must change the signature (else the producer dedupe suppresses the row update)',
+  )
+  // ...and losing it again returns to the EXACT original bytes (undefined is
+  // dropped by JSON.stringify, so schedule-less rows are byte-stable).
+  assert.equal(instanceSnapshotSignature(idle), instanceSnapshotSignature(
+    snapshot([workspace('w1', 'Work', ['s1'])], [{ ...session('s1', 5, { title: 'One' }), hasActiveSchedule: undefined }]),
+  ))
+})
+
+test('deriveServerWorkspaces threads the schedule fact into workspace rows and the ungrouped bucket', () => {
+  const withSchedule = { ...session('in-ws', 5, { title: 'In workspace' }), hasActiveSchedule: true }
+  const strayScheduled = { ...session('stray', 6, { title: 'Stray' }), hasActiveSchedule: true }
+  const result = deriveServerWorkspaces(
+    snapshot(
+      [workspace('w1', 'Work', ['in-ws'])],
+      [withSchedule, strayScheduled],
+    ),
+    'local',
+    '未分组',
+    undefined,
+    1_000,
+  )
+  const workspaceRows = result.find(group => group.id === 'w1')?.sessions ?? []
+  const ungroupedRows = result.find(group => group.id === UNGROUPED_WORKSPACE_ID)?.sessions ?? []
+  assert.equal(workspaceRows[0]?.hasActiveSchedule, true, 'the workspace-member row carries the fact')
+  assert.equal(ungroupedRows[0]?.id, 'stray')
+  assert.equal(ungroupedRows[0]?.hasActiveSchedule, true, 'the ungrouped stray carries the fact too')
+  // A schedule-less session never gains the key (sparse both ways).
+  const plain = deriveServerWorkspaces(
+    snapshot([workspace('w1', 'Work', ['plain'])], [session('plain', 5, { title: 'Plain' })]),
+    'local',
+    '未分组',
+    undefined,
+    1_000,
+  )
+  assert.equal('hasActiveSchedule' in (plain[0]?.sessions[0] ?? {}), false, 'an ordinary row stays key-free')
 })

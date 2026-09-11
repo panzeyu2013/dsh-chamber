@@ -27,20 +27,25 @@
  * rows show a state indicator in a fixed TRAILING slot at the row's very end
  * (normal = empty; running = the official dsh ongoing blue RING; pending
  * interactions = a distinguishable 14px icon badge — question `?`,
- * plan-review checklist, approval warning triangle; completed-but-unread = a
- * persistent blue DOT — the slot is not a
+ * plan-review checklist, approval warning triangle; completed-but-unread = the
+ * official StateDot `done` DOT — 2026-09-11 upstream-alignment T10, the
+ * bespoke brand-blue 6px dot is gone — the slot is not a
  * server-identity marker; identity rides the source header accent (fold
  * glyph + active inset) and the rail dots — the old header identity DOT was
  * removed (user feedback)). Hover swaps
  * are TRUE replacements: the actions take no layout space at rest
  * (display:none), so the state icon really sits at the end; hovering swaps
- * the state slot for the kebab+archive actions (source header: status ↔
- * sort menu + search+`+`; workspace header: count ↔ `+`+kebab). Hover actions are
+ * the state slot for the row actions (source header: status ↔
+ * sort menu + search + add-workspace; workspace header: count ↔ `+`+kebab).
+ * Hover actions are
  * icon-based: a
  * workspace header carries a `+`
  * (new session) and a three-dot kebab menu (rename/delete); a session row
- * carries a three-dot kebab menu (rename) plus a dedicated archive button;
- * the add-workspace `+` lives in the source header (source-level creation,
+ * carries a three-dot kebab menu whose entries are rename / fork / archive —
+ * 2026-09-11 upstream-alignment T2a: the archive verb lives in the row menu
+ * (a second hover button is upstream's explicit anti-pattern, and archiving
+ * needs no confirm because it only hides the row);
+ * the add-workspace button lives in the source header (source-level creation,
  * next to the per-source search). Actions run over that
  * source's own unary API (v1
  * minimal set: session rename/archive; workspace new-session/rename/delete);
@@ -60,7 +65,9 @@
  * surfaces on the main surface (the connections settings page carries the
  * detailed logSummary)); with every source disconnected the list appends
  * the empty hint under the groups. The rail
- * renders the source color dots. Workspace groups fold/unfold via a header
+ * renders one named, operable button per source (the source color dot + the
+ * active accent ring are unchanged; 2026-09-11 upstream-alignment T7).
+ * Workspace groups fold/unfold via a header
  * chevron toggle; fold state + ungrouped order live in ONE shared live store
  * (view prefs, 06 §3: getViewPrefs/subscribeViewPrefs/
  * updateViewPrefs — single vite-shared instance across every ctx's sidebar,
@@ -120,13 +127,29 @@
 import { Component, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from 'react'
 import clsx from 'clsx'
 import {
-  BrandWordmark, FishLogo, IconNewChatOutline16, IconPanelLeftOutline16, Tooltip,
+  BrandWordmark, Button, FishLogo, IconNewChatOutline16, IconPanelLeftOutline16, Modal, Tooltip,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { SidebarPanelMetadata, SidebarRootComponentProps } from './contract/slots.ts'
 
 /** Root panel-selection snapshot (alpha.2 `ctx.layout` / `usePanelInfo`). */
 interface PanelInfoSnapshot {
   readonly activePanelId: string | null
+}
+
+/**
+ * One armed workspace-delete confirmation (2026-09-11 upstream-alignment T2b).
+ * The subject is resolved at ARM time (the row may unmount while the
+ * confirmation is up — upstream's own reason for keeping the delete dialog
+ * separate from the row, vendor ui-workspace WorkspaceBrowser.tsx:1088-1090).
+ */
+interface WorkspaceDeleteTarget {
+  /** Source owning the workspace row. */
+  sourceId: string
+  workspaceId: string
+  /** Row title, used in the dialog copy. */
+  title: string
+  /** The workspace's path is gone: only its registration is deleted. */
+  orphaned: boolean
 }
 
 /** Selector hook over the panel selection (framework-bound prop). */
@@ -158,7 +181,9 @@ import {
 import { clearPendingClick, isClickInsidePendingRow } from '../shared/pending-click.ts'
 import { getWorkspaceGitFlag, getWorkspaceGitFlagsVersion, subscribeWorkspaceGitFlags } from '../shared/workspace-git-flags.ts'
 import { resolveWorkspaceDrop } from '../shared/workspace-drag-order.ts'
-import { ServerSection } from './ServerSection.tsx'
+// The source-header activation contract is shared with the collapsed rail's
+// per-source dot buttons (2026-09-11 upstream-alignment T7) — one definition.
+import { ServerSection, sourceHeaderActivatable, sourceHeaderTitle } from './ServerSection.tsx'
 import {
   SidebarSectionContext, sourceAccentStyle, workspaceDropEnv,
   type RenameTarget, type ServerDragState, type SessionDragState, type SidebarSectionContextValue,
@@ -884,7 +909,7 @@ export function SidebarRoot({
   // standalone button (2026 user decision): "delete everything" means
   // ticking the select-all checkbox and confirming the counted
   // delete-selected, so a purge never covers rows the dialog could not list.
-  // Supersedes the v1 server-row preview → window.confirm → purge-everything
+  // Supersedes the v1 server-row preview → native confirm → purge-everything
   // flow (design 24 §6 as merged); destructive calls stay confirm-gated
   // INSIDE the dialog.
   const [archiveCleanupServerId, setArchiveCleanupServerId] = useState<string | null>(null)
@@ -919,16 +944,31 @@ export function SidebarRoot({
   /** Run one keyed action; the returned promise resolves AFTER the action
    *  settled (a rejection already wrote its message into rowErrors) — callers
    *  use it to serialize dependent commits. */
-  const runAction = (key: string, action: () => Promise<void>): Promise<void> => {
+  const runAction = (key: string, action: () => Promise<void>): Promise<void> =>
+    runActionWithOutcome(key, action).then(() => {})
+
+  /**
+   * runAction's outcome-reporting twin (2026-09-11 upstream-alignment T2b):
+   * identical key discipline and rowErrors surface, but it resolves with
+   * whether the action settled WITHOUT error — the workspace-delete confirm
+   * needs that to know when its pending Modal may close. runAction keeps its
+   * settle-promise contract for every existing caller (the per-source order
+   * commit chain `await`s it).
+   */
+  const runActionWithOutcome = (key: string, action: () => Promise<void>): Promise<boolean> => {
     setRowErrors((prev) => {
       const next = { ...prev }
       delete next[key]
       return next
     })
-    return action().catch((reason: unknown) => {
-      const message = reason instanceof Error ? reason.message : String(reason)
-      setRowErrors((prev) => ({ ...prev, [key]: message }))
-    })
+    return action().then(
+      () => true,
+      (reason: unknown) => {
+        const message = reason instanceof Error ? reason.message : String(reason)
+        setRowErrors((prev) => ({ ...prev, [key]: message }))
+        return false
+      },
+    )
   }
 
   const openSession = (serverId: string, sessionId: string): void => {
@@ -1022,8 +1062,15 @@ export function SidebarRoot({
     })
   }
 
-  const onArchiveSession = (server: ChamberServerAggregate, sessionId: string, title: string): void => {
-    if (!window.confirm(t('confirm.archive', { title }))) return
+  // chamber (06 §2.2 + 2026-09-11 upstream-alignment T2a): archive runs
+  // IMMEDIATELY — no confirmation dialog. Upstream states the reason
+  // explicitly: archiving only hides the row (the session log is never
+  // touched), so it is not destructive and needs no confirm (vendor
+  // ui-workspace Rows.tsx:412-421). The verb rides the session row MENU, not a
+  // second hover button (same reference); the action gating (drag-end trailing
+  // click suppression + pending-click clear at the call site) and the keyed
+  // rowErrors reporting are unchanged.
+  const onArchiveSession = (server: ChamberServerAggregate, sessionId: string, _title: string): void => {
     runAction(`${server.id}/session/${sessionId}/archive`, async () => {
       await archiveSession(getInstanceClient(server.id), sessionId)
       chamberBridge.requestRefresh(server.id)
@@ -1042,17 +1089,85 @@ export function SidebarRoot({
     chamberBridge.getInstanceSnapshots()[sourceId]?.workspaces
       .find(row => row.workspaceId === workspaceId)?.path ?? ''
 
+  /**
+   * 2026-09-11 upstream-alignment T2b: the ARMED workspace-delete confirm.
+   * Upstream renders this as an in-app Modal (vendor ui-workspace
+   * WorkspaceBrowser.tsx:1393-1418 — outline cancel + outline destructive
+   * confirm, a description sentence, and a role="status" pending line), never
+   * as an OS-styled native confirm, which cannot ride the alias tokens. The
+   * state lives on the SHELL (not per row) for upstream's own reason: the
+   * deleted row may unmount while the confirmation is still in flight.
+   * Exactly ONE dialog: the nav rows are unreachable behind an open Modal's
+   * mask, so this confirm can never stack over the archive manager's dialog
+   * (the official Modal registers one document-level Escape listener per open
+   * instance — two layers would close on a single Escape; design 24 §6 item 7).
+   */
+  const [deleteTarget, setDeleteTarget] = useState<WorkspaceDeleteTarget | null>(null)
+  const [deletePending, setDeletePending] = useState(false)
+  /** Keyboard focus lands inside the dialog on arm (the official Modal moves no
+   *  focus itself); the opener is remembered so closing hands focus back —
+   *  native confirm did both, and dropping them would strand a keyboard user
+   *  behind the mask. */
+  const deleteBodyRef = useRef<HTMLDivElement | null>(null)
+  const deleteOpenerRef = useRef<HTMLElement | null>(null)
+  useEffect(() => {
+    if (deleteTarget === null) return
+    deleteBodyRef.current?.focus()
+  }, [deleteTarget])
+  /** The confirm may only stay armed over a live source (mirrors the archive
+   *  manager's guard): a source that vanishes or disconnects drops it — a
+   *  delete against a dead instance would fail into the void. */
+  useEffect(() => {
+    if (deleteTarget === null || deletePending) return
+    const server = servers.find(candidate => candidate.id === deleteTarget.sourceId)
+    if (server === undefined || !server.connected) setDeleteTarget(null)
+  }, [servers, deleteTarget, deletePending])
+
   const onDeleteWorkspace = (server: ChamberServerAggregate, workspaceId: string, title: string): void => {
-    // An ORPHANED workspace (path gone) needs an explicit confirm —
-    // the deletion only removes the durable registration.
-    if (getWorkspaceGitFlag(server.id, workspaceId)?.orphaned === true) {
-      if (!window.confirm(t('confirm.deleteOrphan', { title }))) return
-    } else if (!window.confirm(t('confirm.delete', { title }))) {
-      return
-    }
-    runAction(`${server.id}/workspace/${workspaceId}/delete`, async () => {
-      const path = workspacePathForFact(server.id, workspaceId)
-      await deleteWorkspace(getInstanceClient(server.id), workspaceId)
+    // Arming the confirm is the ONLY effect here — the wire call happens in
+    // confirmDeleteWorkspace, so nothing destructive can run before the user
+    // accepts the dialog.
+    if (deletePending) return
+    deleteOpenerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    setDeleteTarget({
+      sourceId: server.id,
+      workspaceId,
+      title,
+      // An ORPHANED workspace (path gone) only loses its durable registration
+      // — its own description sentence states that, behind the same single
+      // confirm.
+      orphaned: getWorkspaceGitFlag(server.id, workspaceId)?.orphaned === true,
+    })
+  }
+
+  /** Unconditional dismissal (the confirm path already cleared the pending
+   *  flag in the same batch, so it cannot consult the render-closure value). */
+  const dismissDeleteWorkspace = (): void => {
+    setDeleteTarget(null)
+    requestAnimationFrame(() => {
+      const opener = deleteOpenerRef.current
+      deleteOpenerRef.current = null
+      if (opener !== null && opener.isConnected) opener.focus()
+    })
+  }
+
+  const closeDeleteWorkspace = (): void => {
+    if (deletePending) return
+    dismissDeleteWorkspace()
+  }
+
+  /** Accept the armed confirm: run the SAME keyed action as before (identical
+   *  rowErrors reporting), keep the dialog pending while the wire call is in
+   *  flight, and close it once the action settled — success or failure alike,
+   *  so a failure is never hidden behind a modal (its inline row error stays
+   *  the surviving surface, the shell's existing reporting). */
+  const confirmDeleteWorkspace = (): void => {
+    const target = deleteTarget
+    if (target === null || deletePending) return
+    setDeletePending(true)
+    void runActionWithOutcome(`${target.sourceId}/workspace/${target.workspaceId}/delete`, async () => {
+      const path = workspacePathForFact(target.sourceId, target.workspaceId)
+      await deleteWorkspace(getInstanceClient(target.sourceId), target.workspaceId)
       // chamber (2026-09-11 review S3, design 05 §2.2.1): the WITHDRAW half of
       // the workspace echo. An unmounted source has no authoritative baseline
       // listing this workspace, so `reconcilePendingWorkspaces` cannot retire
@@ -1060,8 +1175,11 @@ export function SidebarRoot({
       // with real-id actions enabled until the TTL. Published for the ROW's own
       // source (the source the create handler published for), never for the
       // publishing shell.
-      chamberBridge.reportWorkspaceRemoved({ sourceId: server.id, workspaceId, path })
-      chamberBridge.requestRefresh(server.id)
+      chamberBridge.reportWorkspaceRemoved({ sourceId: target.sourceId, workspaceId: target.workspaceId, path })
+      chamberBridge.requestRefresh(target.sourceId)
+    }).then(() => {
+      setDeletePending(false)
+      dismissDeleteWorkspace()
     })
   }
 
@@ -1513,18 +1631,48 @@ export function SidebarRoot({
           </div>
           </>
         ) : (
+          /* 2026-09-11 upstream-alignment T7: the rail renders one NAMED,
+             operable button per source (upstream rail controls are buttons with
+             an accessible name, vendor ui-sidebar SidebarRoot.tsx:63-68) — the
+             inert title-only span is gone. The status display is unchanged: the
+             coloured source dot and the active-source accent ring still paint on
+             the inner span, with the exactly same geometry and pitch.
+             Operability mirrors the wide source header: activating a remote,
+             usable source asks the App layer to switch the N-ctx view, the
+             current source is marked aria-current, and a managed-down source
+             stays non-activatable (its reason rides the accessible name — the
+             header's own refusal, 2026-12 review MAJOR-2). */
           <div className={cc.railDots}>
-            {orderedServers.map((server) => (
-              <span
-                key={server.id}
-                className={clsx(
-                  cc.railDot,
-                  server.id === chamberInstanceId && cc.railDotActive,
-                )}
-                style={{ ...sourceDotStyle(server), ...sourceAccentStyle(server) }}
-                title={server.label}
-              />
-            ))}
+            {orderedServers.map((server) => {
+              const active = server.id === chamberInstanceId
+              const hint = sourceHeaderTitle(server, chamberInstanceId, t)
+              const activatable = sourceHeaderActivatable(server, chamberInstanceId)
+              const label = hint === undefined ? server.label : `${server.label} · ${hint}`
+              return (
+                <Tooltip key={server.id} label={label} side="right" delayMs={500}>
+                  <button
+                    type="button"
+                    className={cc.railDotButton}
+                    aria-label={label}
+                    aria-current={active ? 'true' : undefined}
+                    aria-disabled={!active && !activatable ? true : undefined}
+                    onClick={() => {
+                      if (!activatable) return
+                      chamberBridge.requestActivateSource(server.id)
+                    }}
+                  >
+                    <span
+                      className={clsx(cc.railDot, active && cc.railDotActive)}
+                      style={{ ...sourceDotStyle(server), ...sourceAccentStyle(server) }}
+                      // Decorative: the button's own aria-label carries the
+                      // source identity + activation hint (upstream panel rows
+                      // hide their glyph slot the same way).
+                      aria-hidden="true"
+                    />
+                  </button>
+                </Tooltip>
+              )
+            })}
           </div>
         )}
         </ChamberListBoundary>
@@ -1565,6 +1713,46 @@ export function SidebarRoot({
           onClose={closeArchiveCleanup}
         />
       )}
+      {/* chamber (2026-09-11 upstream-alignment T2b): the workspace-delete
+          confirmation — the in-app Modal that replaced the retired native
+          confirm dialog (upstream chrome: outline cancel + outline destructive
+          confirm, a description sentence, a role="status" pending line,
+          vendor ui-workspace WorkspaceBrowser.tsx:1393-1418). Mounted only
+          while a target is armed; the row that opened it may already be gone. */}
+      <Modal
+        open={deleteTarget !== null}
+        onClose={closeDeleteWorkspace}
+        closeLabel={t('action.cancel')}
+        title={t('delete.workspace')}
+        {...deleteTarget === null
+          ? {}
+          : {
+            description: deleteTarget.orphaned
+              // The orphan case keeps its own long-standing sentence (the only
+              // deletion that removes a registration without a folder).
+              ? t('confirm.deleteOrphan', { title: deleteTarget.title })
+              : t('delete.desc', { name: deleteTarget.title }),
+          }}
+        footer={(
+          <>
+            <Button variant="outline" disabled={deletePending} onClick={closeDeleteWorkspace}>
+              {t('action.cancel')}
+            </Button>
+            <Button
+              variant="outline"
+              className={cc.archiveManagerDanger}
+              disabled={deletePending}
+              onClick={confirmDeleteWorkspace}
+            >
+              {t('delete.workspace')}
+            </Button>
+          </>
+        )}
+      >
+        <div ref={deleteBodyRef} tabIndex={-1}>
+          {deletePending && <div className={cc.deleteStatus} role="status">{t('delete.pending')}</div>}
+        </div>
+      </Modal>
     </div>
   )
 }

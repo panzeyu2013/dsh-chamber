@@ -15,6 +15,13 @@
  */
 import type { HostObservable } from '@deepseek-ai/dsh-client-ui-slots'
 import type { MainPanelId } from '@deepseek-ai/dsh-client-ui-layout/client'
+// 2026-09-11 upstream-alignment A5: the observable plumbing is the store
+// engine's, not hand-rolled — upstream builds this exact projection with
+// `createSnapshotStore` (vendor packages/client/store/src/index.ts:103,
+// ui-sidebar/src/client/index.ts:3,46) and the composite bundle compiles that
+// factory for this package (the renderer aliases @deepseek-ai/* to vendor
+// source; `instance-list-face.ts` already type-imports the same module).
+import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
 import type { SidebarPanelMetadata } from './contract/slots.ts'
 
 /** One ledger entry as this projection reads it (loose: the slots seam). */
@@ -42,7 +49,10 @@ export interface PanelSource {
 /** Resolve a possibly-thunked ledger label at read time. Inlined mirror of
  *  the vendor `resolveSlotLabel` (ui-slots): this package deliberately avoids a
  *  runtime value import of the slots package beyond what it already consumes,
- *  and the rule is a one-liner (`typeof === 'function' ? label() : label`). */
+ *  and the rule is a one-liner (`typeof === 'function' ? label() : label`).
+ *  2026-09-11 upstream-alignment A2: audit recommendation is KEEP with this
+ *  reason (the vite-composited bundle inlines value imports, and the slots
+ *  package is the renderer's seam, not this shell's). */
 function labelOf(label: string | (() => string) | undefined): string | undefined {
   return typeof label === 'function' ? label() : label
 }
@@ -51,11 +61,19 @@ function labelOf(label: string | (() => string) | undefined): string | undefined
  * Build the sidebar's global-panel projection. Entries without an id are
  * skipped (a list entry must name the main key it addresses); the label falls
  * back to the id so a row is never nameless.
+ *
+ * 2026-09-11 upstream-alignment A5: the snapshot/subscribe plumbing is the dsh
+ * store engine's `createSnapshotStore` — the same construction upstream's
+ * ui-sidebar uses (vendor ui-sidebar/src/client/index.ts:46). Only the chamber
+ * projection inside `sync` is this package's (the id filter + label fallback +
+ * order sort), and the notify-only-on-change rule stays OURS: `set` is called
+ * only after the shallow row comparison below, so React sees exactly the array
+ * identity behaviour it saw before (`set` with a plain array — never `update`,
+ * whose immer draft + dev freeze would change what React observes).
  * @returns the projection handle.
  */
 export function createPanelSource(): PanelSource {
-  let current: readonly SidebarPanelMetadata[] = []
-  const listeners = new Set<() => void>()
+  const panels = createSnapshotStore<readonly SidebarPanelMetadata[]>([])
 
   const sync = (slots: SlotsReader): void => {
     const next = slots.entriesOfSlot('sidebar.panellist')
@@ -65,23 +83,13 @@ export function createPanelSource(): PanelSource {
         return [{ id: id as MainPanelId, order: entry.options.order ?? 0, label: labelOf(entry.options.label) ?? id }]
       })
       .sort((a, b) => a.order - b.order)
-    const previous = current
+    const previous = panels.getSnapshot()
     if (previous.length === next.length && previous.every((panel, index) => {
       const candidate = next[index] as SidebarPanelMetadata
       return panel.id === candidate.id && panel.order === candidate.order && panel.label === candidate.label
     })) return
-    current = next
-    for (const listener of listeners) listener()
+    panels.set(next)
   }
 
-  return {
-    source: {
-      getSnapshot: () => current,
-      subscribe: listener => {
-        listeners.add(listener)
-        return () => { listeners.delete(listener) }
-      },
-    },
-    sync,
-  }
+  return { source: panels, sync }
 }

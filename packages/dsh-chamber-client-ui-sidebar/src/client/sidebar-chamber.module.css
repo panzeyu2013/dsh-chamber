@@ -355,14 +355,33 @@
   color: var(--dsw-alias-state-warn-primary);
 }
 
-.stateCompleted {
+/* Active-Schedule marker (2026-09-11 upstream-alignment T7): the official
+   ActiveScheduleIndicator box — a 16px alarm-clock glyph in a 16x20 flex-none
+   slot, tertiary ink (vendor ui-workspace Rows.module.css .scheduleIndicator).
+   DELIBERATE deviation, documented: upstream also sets `margin-right: 6px`
+   (its search heading has no gap, and its search variant trades that margin
+   for a 4px left one). Chamber's .sessionRow and .searchResultHeading already
+   carry their own 6px gap, so the marker contributes NO margin here — adding
+   upstream's margin on top would double the gap and break the hand-fixed
+   chamber row pitch (26px row / 3px padding / gap 6). The 20px box height
+   matches the row's action cluster, so a scheduled row keeps the same 26px
+   height and no other row's pitch moves (the marker is absent, i.e. zero
+   footprint, for every session without an active schedule). */
+.scheduleIndicator {
+  display: inline-flex;
   flex: none;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  corner-shape: round;
-  background: var(--dsw-static-deepseek-450);
+  width: 16px;
+  height: 20px;
+  align-items: center;
+  justify-content: center;
+  color: var(--dsw-alias-label-tertiary);
 }
+
+/* .stateCompleted is GONE (2026-09-11 upstream-alignment T10): the
+   completed-but-unread dot is the official StateDot `done` tone
+   (--dsw-alias-state-success-primary, vendor ui-primitives
+   StateDot.module.css .dot[data-state='done']) at both render sites — the
+   session rows (ServerSection) and the pinned todo strip (SessionTodoArea). */
 
 /* Hover cards (official HoverCard port): the vendor primitive portals
    the card to document.body with its own surface (#2C2C2E in both themes —
@@ -931,9 +950,14 @@
   display: inline-flex;
 }
 
-.workspaceHeader:hover :global(.git-ws-action),
-.workspaceHeader:has(:focus-visible) :global(.git-ws-action),
-.workspaceHeader:has(.rowActionsVisible) :global(.git-ws-action) {
+/* 2026-09-11 upstream-alignment（git 侧同批：`git-ws-action` → data-* 钩子）：
+   样式钩子用 data 属性（本仓 mobile 包记录的规则，
+   packages/dsh-chamber-client-ui-mobile/src/client/styles.ts:10-20，design 08 §3.2
+   描述的就是这条 hover/kebab 揭示），属性选择器不被 CSS Modules 哈希，
+   所以跨包选择器只在属性形式上成立。 */
+.workspaceHeader:hover [data-git-action],
+.workspaceHeader:has(:focus-visible) [data-git-action],
+.workspaceHeader:has(.rowActionsVisible) [data-git-action] {
   display: inline-flex;
 }
 
@@ -945,10 +969,11 @@
 
 /* The git occupant's disabled actions must stay visibly disabled even when
    revealed (the reveal rules set display; these keep the disabled opacity on
-   every reveal path — client review P3-6/P3-1). */
-.workspaceHeader:hover :global(.git-ws-action:disabled),
-.workspaceHeader:has(:focus-visible) :global(.git-ws-action:disabled),
-.workspaceHeader:has(.rowActionsVisible) :global(.git-ws-action:disabled) {
+   every reveal path — client review P3-6/P3-1). Same data-* hook as the reveal
+   rules above (2026-09-11 upstream-alignment). */
+.workspaceHeader:hover [data-git-action]:disabled,
+.workspaceHeader:has(:focus-visible) [data-git-action]:disabled,
+.workspaceHeader:has(.rowActionsVisible) [data-git-action]:disabled {
   opacity: .42;
 }
 
@@ -1037,6 +1062,9 @@
    its keyboard cue is the glyph swap) — the dialog rule below is the §19-5
    a11y improvement, sharing constants, not nav parity. */
 .actionIcon:focus-visible,
+/* 2026-09-11 upstream-alignment T7: the rail's per-source dot buttons join the
+   same shared ring table (they are icon-family controls in the rail). */
+.railDotButton:focus-visible,
 .archiveManagerGroupHeader .foldToggle:focus-visible {
   outline: 1px solid var(--dsw-alias-brand-primary);
   outline-offset: 1px;
@@ -1229,7 +1257,14 @@
   color: var(--dsw-alias-label-tertiary);
 }
 
-/* Rail state: source color dots only (05 §2.1 — codex-style compact rail). */
+/* Rail state: one control per source (05 §2.1 — codex-style compact rail).
+   2026-09-11 upstream-alignment T7: the rail dots are named, operable BUTTONS
+   (upstream rail controls are buttons with an accessible name, vendor
+   ui-sidebar SidebarRoot.tsx:63-68) instead of inert title-only spans. The dot
+   itself is unchanged: the button is a bare hit target and the coloured source
+   dot + active accent ring stay on the inner span, exactly as before.
+   The button is 16px with a -4px vertical margin, so the dot pitch (8px dot +
+   12px gap) and the dot's own geometry are untouched. */
 .railDots {
   flex: 1;
   display: flex;
@@ -1237,6 +1272,20 @@
   align-items: center;
   gap: 12px;
   padding-top: 8px;
+}
+
+.railDotButton {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  margin: -4px 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
 }
 
 .railDot {
@@ -1476,8 +1525,8 @@
 
 /* In-dialog two-stage confirm bar (2026 refactor; ArchiveManagerDialog
    module doc): rendered INSIDE the panel — above the view content — while a
-   destructive action is armed. Single Modal, no second layer, no native
-   window.confirm. Danger-tinted wash uses the color-mix-over-token pattern
+   destructive action is armed. Single Modal, no second layer, no native OS
+   confirm dialog. Danger-tinted wash uses the color-mix-over-token pattern
    (.actionIcon.sortActive's brand wash precedent); the icon is error ink
    (official RiskConfirmation vocabulary), the message rides label-primary;
    the action pair is the official Button sm atoms — 取消 renders first so
@@ -1696,6 +1745,16 @@
   display: block;
   padding: 4px 2px;
   color: var(--dsw-alias-state-error-primary);
+}
+
+/* Workspace-delete confirm (2026-09-11 upstream-alignment T2b): the in-app
+   Modal that replaced the retired native confirm — upstream's
+   WorkspaceBrowser.module.css .deleteStatus metrics for the in-flight
+   role="status" line. */
+.deleteStatus {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-secondary);
 }
 
 /* Footer action bar (official Modal footer): status/count left, destructive

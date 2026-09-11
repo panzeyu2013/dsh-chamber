@@ -35,7 +35,21 @@ export interface ChamberServerWorkspace {
    * (ungrouped-bucket parity).
    */
   synthetic?: boolean
-  sessions: { id: string; title: string; running?: boolean; updatedAt?: number; blank?: boolean }[]
+  sessions: {
+    id: string
+    title: string
+    running?: boolean
+    updatedAt?: number
+    blank?: boolean
+    /**
+     * 2026-09-11 upstream-alignment T7: the session owns at least one active
+     * schedule — projected from the session's `schedule` projection
+     * (`derive.ts hasActiveScheduleOf`, upstream ui-workspace tree.ts:161-163)
+     * so the row can render the official active-Schedule marker. Sparse: absent
+     * means no active schedule.
+     */
+    hasActiveSchedule?: boolean
+  }[]
 }
 
 export interface ChamberServerAggregate {

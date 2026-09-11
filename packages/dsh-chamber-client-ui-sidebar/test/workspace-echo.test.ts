@@ -361,12 +361,19 @@ test('wiring: SidebarRoot publishes both facts after the successful wire call, f
   // two publishes are silent no-ops when they go missing — the pure helpers
   // above would then never be called and the reviewed ghost/no-op bugs return.
   // 2026-09-11 review S3.
+  // 2026-09-11 upstream-alignment T2b: the delete call lives in the ACCEPTED
+  // in-app confirm (the armed subject is `deleteTarget`, addressed through its
+  // own `target` fields) — the ordering contract below is unchanged, and the
+  // extra assertion pins that nothing deletes before the user accepts.
   const source = readFileSync(new URL('../src/client/SidebarRoot.tsx', import.meta.url), 'utf8')
   const code = source.replace(/\s+/g, ' ')
-  const deleteAt = code.indexOf('await deleteWorkspace(getInstanceClient(server.id), workspaceId)')
-  const removedAt = code.indexOf('chamberBridge.reportWorkspaceRemoved({ sourceId: server.id, workspaceId, path })')
-  const refreshAfterDelete = code.indexOf('chamberBridge.requestRefresh(server.id)', removedAt)
+  const acceptAt = code.indexOf('const confirmDeleteWorkspace = ()')
+  const deleteAt = code.indexOf('await deleteWorkspace(getInstanceClient(target.sourceId), target.workspaceId)')
+  const removedAt = code.indexOf('chamberBridge.reportWorkspaceRemoved({ sourceId: target.sourceId, workspaceId: target.workspaceId, path })')
+  const refreshAfterDelete = code.indexOf('chamberBridge.requestRefresh(target.sourceId)', removedAt)
+  assert.notEqual(acceptAt, -1, 'the accepted-confirm handler must exist')
   assert.notEqual(deleteAt, -1, 'the delete wire call must exist')
+  assert.ok(deleteAt > acceptAt, 'the delete must run only inside the accepted confirm (never at arm time)')
   assert.ok(removedAt > deleteAt, 'the removal fact is published only after the host accepted the delete')
   assert.ok(refreshAfterDelete > removedAt, 'the refresh that owns every other row stays')
   const renameAt = code.indexOf('await renameWorkspace(client, target.id, target.value)')

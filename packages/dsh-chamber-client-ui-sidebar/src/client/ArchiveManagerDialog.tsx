@@ -2,7 +2,7 @@
  * chamber archive manager dialog (design 24 §6, revision 2026-09; delete-all
  * retirement 2026 — see the VIEW MODES note below).
  *
- * Replaces the v1 server-row preview → window.confirm → purge-everything
+ * Replaces the v1 server-row preview → native confirm → purge-everything
  * flow: the dialog LISTS what is archived (title + project label per row,
  * sourced from ChamberServerAggregate.archivedSessions — metadata of the
  * source's own snapshot, no session read of its own) and offers
@@ -36,10 +36,11 @@
  * filter (the host intersects the filter with the authoritative archived
  * set, so the dialog can never delete a non-archived session). Every
  * destructive action is confirm-gated by an IN-DIALOG two-stage confirm
- * (2026 refactor, THIS module's scope — sibling surfaces (nav delete flows)
- * still ride window.confirm per their own records): no native window.confirm
- * here (an OS-styled dialog cannot ride the alias tokens and reads as an
- * alien chrome layer over this app), and no second Modal layer
+ * (2026 refactor, THIS module's scope; the nav's workspace-delete flow carries
+ * its own in-app confirm Modal — 2026-09-11 upstream-alignment T2b): no native
+ * OS confirm dialog anywhere in this package (an OS-styled dialog cannot ride
+ * the alias tokens and reads as an alien chrome layer over this app), and no
+ * second Modal layer
  * (the official Modal registers one document-level BUBBLE Escape listener
  * per open instance, so stacking a confirm modal over this dialog would
  * close BOTH layers on a single Escape — no official nested precedent,
@@ -98,9 +99,11 @@
  * workspaceAccentStyle helper — so a group stays visually bound to its
  * workspace row in the session list.
  *
- * Error/info text is zh-hardcoded inline (the sidebar's established inline
- * rowError precedent — design 24 §5 decision); buttons and confirms ride
- * the locale dictionaries.
+ * COPY (2026-09-11 upstream-alignment, finding 11): every product-visible
+ * string in this dialog rides this package's typed locale dictionaries
+ * (upstream packages/client/AGENTS.md), including the two that used to be
+ * inline zh literals (the busy-refusal line and the in-flight 正在删除… status).
+ * Only wire error text still passes through untranslated, by policy.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { MouseEvent as ReactMouseEvent } from 'react'
@@ -435,8 +438,11 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
         chamberBridge.requestSessionListRefresh(server.id)
         if (!mountedRef.current) return
         const message = error instanceof Error ? error.message : String(error)
+        // 2026-09-11 upstream-alignment（finding 11）：`busy:` 分支的说明文案进
+        // 字典（上游 client/AGENTS.md：产品可见文案一律在类型化字典里）；线
+        // 协议原文（非 busy 的 message）按政策原样透出，不翻译。
         const friendly = message.startsWith('busy:')
-          ? '该实例正在执行另一处清理，请稍后重试。'
+          ? t('archive.manager.busyOther')
           : message
         setNote({ kind: 'error', text: friendly })
       } finally {
@@ -528,7 +534,8 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
             {busy && (
               <>
                 <IconLoadingOutline16 className={cc.statusSpinner} size={13} />
-                正在删除…
+                {/* 2026-09-11 upstream-alignment（finding 11）：内联 zh 文案进字典。 */}
+                {t('archive.manager.deleting')}
               </>
             )}
           </span>

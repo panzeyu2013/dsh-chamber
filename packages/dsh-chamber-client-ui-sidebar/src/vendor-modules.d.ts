@@ -32,6 +32,24 @@ declare module '@deepseek-ai/dsh-client-store' {
     subscribe(listener: () => void): () => void
   }
   export type SnapshotSelectorHook<T> = <S>(sel: (s: T) => S, eq?: (a: S, b: S) => boolean) => S
+  /**
+   * Writable snapshot store (2026-09-11 upstream-alignment A5): the engine's
+   * bare data face — `getSnapshot`/`subscribe` plus `set` (wholesale replace)
+   * and `update` (immer draft). The sidebar's panel projection rides
+   * `createSnapshotStore` + `set`, exactly like upstream's ui-sidebar
+   * (vendor ui-sidebar/src/client/index.ts:46).
+   */
+  export interface SnapshotStore<T> extends ObservableSnapshot<T> {
+    /** Replace the state wholesale (dev-frozen). */
+    set(next: T): void
+    /** Mutate the state through an immer draft. */
+    update(mutator: (draft: T) => void): void
+  }
+  /** Create a snapshot store (init state; optional flush mode / persistence). */
+  export function createSnapshotStore<T>(
+    init: T,
+    opts?: { flush?: 'raf' | 'sync'; persist?: { name: string } },
+  ): SnapshotStore<T>
 }
 
 declare module '@deepseek-ai/dsh-api-session-controller/client' {
@@ -206,6 +224,14 @@ declare module '@deepseek-ai/dsh-client-ui-primitives' {
   export const IconBranchOutline16: (props: any) => ReactElement | null
   /** Per-source session sort toggle (06 §7): IconPersonalizationOutline16 glyph. */
   export const IconPersonalizationOutline16: (props: any) => ReactElement | null
+  /** Add-workspace affordance (2026-09-11 upstream-alignment T7): the official
+   *  project-add glyph (vendor icons/index.tsx `IconProjectAddOutline16`) — a
+   *  workspace is a project, not a generic `+`. */
+  export const IconProjectAddOutline16: (props: any) => ReactElement | null
+  /** Active-Schedule marker glyph (2026-09-11 upstream-alignment T7): the same
+   *  alarm clock upstream's ActiveScheduleIndicator wraps (vendor
+   *  ui-workspace Rows.tsx:284-296). */
+  export const IconAlarmClockOutline16: (props: any) => ReactElement | null
   /** Workspace header folder glyph (08 §11 project-row parity). */
   export const IconFolderOpenOutline16: (props: any) => ReactElement | null
   /**

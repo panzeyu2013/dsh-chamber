@@ -37,6 +37,28 @@ assertSingletonModule('derive')
 /** Synthetic id of the trailing group that collects sessions outside every workspace. */
 export const UNGROUPED_WORKSPACE_ID = '__ungrouped__'
 
+/**
+ * Active-Schedule fact of one session (2026-09-11 upstream-alignment T7).
+ *
+ * Mirrors the official derivation verbatim — upstream reads the session's
+ * registered `schedule` projection and asks whether anything is active:
+ * `(session.projectionValues?.schedule?.length ?? 0) > 0`
+ * (vendor ui-workspace/src/client/tree.ts:161-163, consumed by
+ * `{row.hasActiveSchedule && <ActiveScheduleIndicator/>}` at Rows.tsx:468).
+ * The value is unknown-typed here (a wire projection bag), so the array test
+ * replaces upstream's optional chaining on a typed `readonly ScheduleRecord[]`:
+ * absent / not-an-array / empty all mean "no active schedule" — never a claim
+ * about the future, only about the projection the list row carried.
+ * @param projectionValues - the row's `projectionValues` bag (mounted store) or `projections.values` (unary wire), or undefined.
+ * @returns true when the bag carries a non-empty `schedule` array.
+ */
+export function hasActiveScheduleOf(
+  projectionValues: Readonly<Record<string, unknown>> | undefined,
+): boolean {
+  const schedule = projectionValues?.schedule
+  return Array.isArray(schedule) && schedule.length > 0
+}
+
 /** Canonical-path equality key: trailing separators normalized only. No
  *  fs.realpath in the browser, so symlinked spellings (e.g. macOS /tmp →
  *  /private/tmp) can still miss — documented limitation; unmatched sessions
@@ -561,6 +583,13 @@ export function projectInstanceSnapshot(
       running?: boolean
       blank?: boolean
       updatedAt?: number
+      /**
+       * The row's projection bag (2026-09-11 upstream-alignment T7): the
+       * mounted store's `SessionSummary.projectionValues`. Read for the
+       * active-Schedule fact only — the same field upstream's tree reads
+       * (vendor ui-workspace tree.ts:161-163).
+       */
+      projectionValues?: Readonly<Record<string, unknown>>
     }>
     phase?: string
   },
@@ -642,6 +671,11 @@ export function projectInstanceSnapshot(
         ...(typeof row.updatedAt === 'number' ? { updatedAt: row.updatedAt } : {}),
         running: row.running === true,
         blank: row.blank === true,
+        // 2026-09-11 upstream-alignment T7: sparse — the fact rides the row only
+        // when the session actually owns an active schedule, so every other
+        // row's snapshot bytes (and the producer's signature gate) are
+        // untouched (see instanceSnapshotSignature).
+        ...(hasActiveScheduleOf(row.projectionValues) ? { hasActiveSchedule: true as const } : {}),
         ...(row.cwd !== undefined ? { cwd: row.cwd } : {}),
         ...(row.title !== undefined ? { title: row.title } : {}),
         ...(row.parentId !== undefined ? { parentSessionId: String(row.parentId) } : {}),
@@ -715,6 +749,13 @@ export function instanceSnapshotSignature(
       at: row.updatedAt,
       r: row.running,
       b: row.blank,
+      // 2026-09-11 upstream-alignment T7: the schedule fact MUST ride the
+      // signature — otherwise a session gaining/losing its active schedule
+      // republishes identical bytes and the producer's dedupe gate suppresses
+      // the row update (the marker would freeze at its first-seen value).
+      // `undefined` serializes away, so schedule-less rows keep exactly the
+      // bytes they had before this field existed.
+      h: row.hasActiveSchedule,
       o: row.origin,
       t: row.title,
       c: row.cwd,
@@ -1442,6 +1483,10 @@ export function deriveServerWorkspaces(
         // Sparse flag: only blank (provisional new-session) rows carry it, so
         // the sidebar can render the localized New Session label instead.
         ...(session.blank ? { blank: true } : {}),
+        // 2026-09-11 upstream-alignment T7: the active-Schedule fact rides into
+        // the row the sidebar renders (sparse, upstream name — see
+        // hasActiveScheduleOf).
+        ...(session.hasActiveSchedule === true ? { hasActiveSchedule: true } : {}),
       })
     }
     workspaces.push({
@@ -1485,6 +1530,8 @@ export function deriveServerWorkspaces(
         running: session.running,
         updatedAt: session.updatedAt,
         ...(session.blank ? { blank: true } : {}),
+        // Same sparse active-Schedule carry as the workspace-member rows above.
+        ...(session.hasActiveSchedule === true ? { hasActiveSchedule: true } : {}),
       })),
     })
   }

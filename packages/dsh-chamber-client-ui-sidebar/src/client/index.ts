@@ -103,6 +103,20 @@ export function apply(ctx: ClientContext): void {
   // `ctx.slots.inject(key, () => ctx.slots.register(…))`), which also removes
   // the contribution when the parent declaration collapses and re-runs it after
   // a redeclaration (HMR). The effect keeps owning the wait.
+  // A6 (2026-09-11 upstream-alignment, audit recommendation: KEEP with this
+  // reason): the runtime children declaration below stays CHAMBER-OWNED instead
+  // of being imported from the upstream client entry. Two independent reasons:
+  // (1) the official bundle never loads in a chamber boot — the chamber
+  // composite builds this package's own entry, so upstream's `apply`/children
+  // table cannot be executed here, and importing it for its data alone would
+  // pull a whole client plugin (its apply, its inject list, its registrations)
+  // into this bundle; (2) upstream's `LocaleNamespaceMap` declares `sidebar:
+  // SidebarKey` from ITS locales module, and this package declares the same map
+  // entry from its OWN key union — the two unions are different by design (the
+  // chamber shell carries multi-source copy upstream never has), so a second
+  // declaration in one program is a type collision. The declaration is
+  // therefore duplicated here, deliberately, and the divergence is exactly the
+  // chamber list's own holes (`sidebar.workspace.git`).
   ctx.effect(
     () => ctx.slots.inject('sidebar', () => ctx.slots.register({
       name: 'sidebar',

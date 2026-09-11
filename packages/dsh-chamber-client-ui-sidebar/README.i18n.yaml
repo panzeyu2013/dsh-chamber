@@ -4,5 +4,13 @@
 # hashes here (manually verified with `shasum -a 256`).
 # Chamber package (design 05 §2): the official ui-sidebar README copies were replaced on
 # 2026-08-15 by descriptions of the self-built multi-source sidebar plugin (zh = key source).
-README.md: 736ff746ff0bea20937dc255199dea04ae20ebe7c25d9334e25f61bc69032473
-README.zh.md: bcf16cef85900ce79bfc575e290bc46b5f369d4807add13a65063fe75ea0e4b1
+# Re-recorded 2026-09-11 (upstream-alignment record duty): both sides were rewritten
+# together for the same behavioural change set — the row actions moved into the row
+# menus (archive is a menu verb running WITHOUT a confirm), workspace delete is now an
+# in-app Modal, completed rows carry the official StateDot `done` tone, the row window
+# is a two-way disclosure, row-action accessible names are `{name}`-parameterized, the
+# rail renders named operable buttons, header controls ride the official Tooltip and the
+# browse tree is labelled. Claim-by-claim comparison (Interactions bullet list, Structure
+# bullets) came first; only then were both hashes recomputed with `sha256sum`.
+README.md: db1a1e746699127d8ac7f10ac6f305b3802deb3ca05e50f344648c5ca74539e4
+README.zh.md: f3648e62b4ed3afd4994ddb89ebf0fda6092e9c7f77dc4de0614b6575f044cef
