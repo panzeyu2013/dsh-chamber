@@ -27,15 +27,16 @@
  */
 
 import { existsSync, mkdirSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import {
   CHAMBER_HOST_PACKAGES,
+  HOST_PACKAGE_SEED_FILES,
   assertHostSeedInsertNaming,
   atomicWritePrivateFileNoFollow,
   ensurePrivateDirectoryNoFollow,
   readPrivateFileNoFollow,
 } from '@dsh-chamber/control-plane'
-import type { Logger } from '@dsh-chamber/control-plane'
+import type { HostPackageSeedFile, Logger } from '@dsh-chamber/control-plane'
 import { HOST_DOMAIN_PROBE_NAMES } from '@dsh-chamber/dsh-runtime'
 
 /** Cache root under the gateway stateDir. */
@@ -83,10 +84,34 @@ export const SYNCED_PACKAGE_MAX_BYTES = 64 * 1024
 export const SYNCED_ARTIFACT_MAX_BYTES = 4 * 1024 * 1024
 export const SYNCED_VERSION_MAX_CHARS = 128
 
-export interface SyncedPluginFiles {
-  'package.json': string
-  'dist/index.js': string
+/**
+ * The upload/cache file set — DERIVED from the control-plane seed tuple
+ * (`HOST_PACKAGE_SEED_FILES`, host-graph-seed.ts), never a hand-written pair:
+ * the syncing desktop's PUT payload and this cache therefore speak one set.
+ * The pre-fix shape (this interface + the desktop's literal pair) accepted two
+ * keys, cached two files and still answered 200/changed:true, so a third seed
+ * file landed nowhere while the managed dsh kept booting without it.
+ */
+export const SYNCED_PLUGIN_FILES: readonly HostPackageSeedFile[] = HOST_PACKAGE_SEED_FILES
+
+/** Wire shape of one upload: every declared seed file, keyed by its
+ *  package-relative path. A mapped type over the shared union, so the
+ *  `/chamber/plugins` route's upload object (and any other producer) fails to
+ *  compile the moment the tuple gains a member it does not carry. */
+export type SyncedPluginFiles = { [K in HostPackageSeedFile]: string }
+
+/** Per-file cache size bound, keyed by the shared union: the manifest stays
+ *  small, a built entry is a bundle. A new declared file with no bound here is
+ *  a compile error instead of an unbounded cache write. */
+const SYNCED_FILE_MAX_BYTES: Record<HostPackageSeedFile, number> = {
+  'package.json': SYNCED_PACKAGE_MAX_BYTES,
+  'dist/index.js': SYNCED_ARTIFACT_MAX_BYTES,
 }
+
+/** The declared member carrying the package manifest (the name/version anchor
+ *  this cache validates). Typed by the shared union, so removing package.json
+ *  from the seed set is a compile error rather than a silent validation skip. */
+const MANIFEST_SEED_FILE: HostPackageSeedFile = 'package.json'
 
 export interface ChamberPlugins {
   /** Non-secret cached projection: name + version per synced host package. */
@@ -102,10 +127,14 @@ function slugFor(name: string): string | null {
 }
 
 /** Validation failure (route maps to 400). Persistence failures (fs errors)
- * carry no such code and must map to 500 — see the /chamber/plugins route. */
-function invalidInput(message: string): Error & { code: 'invalid_input' } {
-  const error = new Error(message) as Error & { code: 'invalid_input' }
+ * carry no such code and must map to 500 — see the /chamber/plugins route.
+ * `keep` hands the route's sanitizer the caller's own non-secret vocabulary
+ * (sanitize-route-error.ts): a scoped package name would otherwise be redacted
+ * into `[path]` by the path rules, losing the reason the 400 carries. */
+function invalidInput(message: string, keep: readonly string[] = []): Error & { code: 'invalid_input'; keep?: readonly string[] } {
+  const error = new Error(message) as Error & { code: 'invalid_input'; keep?: readonly string[] }
   error.code = 'invalid_input'
+  if (keep.length > 0) error.keep = keep
   return error
 }
 
@@ -137,7 +166,7 @@ export function createChamberPlugins(stateDir: string, logger: Logger): ChamberP
   function cachedVersion(name: string): string | null {
     const dir = packageDir(name)
     if (dir === null) return null
-    const manifest = readCacheFile(join(dir, 'package.json'), SYNCED_PACKAGE_MAX_BYTES)
+    const manifest = readCacheFile(join(dir, MANIFEST_SEED_FILE), SYNCED_PACKAGE_MAX_BYTES)
     if (manifest === null) return null
     try {
       const parsed = JSON.parse(manifest) as { version?: unknown }
@@ -154,18 +183,27 @@ export function createChamberPlugins(stateDir: string, logger: Logger): ChamberP
 
     async put(name, files) {
       const slug = slugFor(name)
-      if (slug === null) throw invalidInput(unsyncableMessage(name))
-      const manifestText = files['package.json']
-      const artifactText = files['dist/index.js']
-      if (typeof manifestText !== 'string' || typeof artifactText !== 'string') {
-        throw invalidInput('plugin upload must carry package.json and dist/index.js')
+      if (slug === null) throw invalidInput(unsyncableMessage(name), [name])
+      // Presence + size validation over the SHARED seed file set: every
+      // declared file must ride the upload. A missing member is refused here
+      // instead of being dropped while the route still answered
+      // 200/changed:true (the drift this replaces).
+      const declared: Array<{ relative: HostPackageSeedFile; text: string }> = []
+      for (const relative of SYNCED_PLUGIN_FILES) {
+        const text = files[relative]
+        if (typeof text !== 'string') {
+          throw invalidInput(`plugin upload must carry ${SYNCED_PLUGIN_FILES.join(' and ')}`)
+        }
+        declared.push({ relative, text })
       }
-      if (Buffer.byteLength(manifestText) > SYNCED_PACKAGE_MAX_BYTES) {
-        throw invalidInput('plugin package.json exceeds the size bound')
+      for (const { relative, text } of declared) {
+        if (Buffer.byteLength(text) > SYNCED_FILE_MAX_BYTES[relative]) {
+          throw invalidInput(relative === MANIFEST_SEED_FILE
+            ? 'plugin package.json exceeds the size bound'
+            : `plugin ${relative} exceeds the size bound`)
+        }
       }
-      if (Buffer.byteLength(artifactText) > SYNCED_ARTIFACT_MAX_BYTES) {
-        throw invalidInput('plugin dist/index.js exceeds the size bound')
-      }
+      const manifestText = files[MANIFEST_SEED_FILE]
       let manifest: { name?: unknown; version?: unknown }
       try {
         manifest = JSON.parse(manifestText) as { name?: unknown; version?: unknown }
@@ -180,23 +218,32 @@ export function createChamberPlugins(stateDir: string, logger: Logger): ChamberP
         throw invalidInput('plugin package.json version is missing or oversized')
       }
       const dir = packageDir(name)
-      if (dir === null) throw invalidInput(unsyncableMessage(name))
+      if (dir === null) throw invalidInput(unsyncableMessage(name), [name])
       // Atomic 0600 publication under the 0700 cache root (no-follow
       // discipline; a pnpm operation may prune the profile target, but never
-      // this gateway-owned cache).
+      // this gateway-owned cache). Every declared file's own final parent is
+      // materialized (dist/ for the built entry) as a real directory, never a
+      // symlink.
       mkdirSync(cacheRoot, { recursive: true, mode: 0o700 })
       ensurePrivateDirectoryNoFollow(cacheRoot, 0o700, { existingMode: 'preserve' })
       ensurePrivateDirectoryNoFollow(dir, 0o700, { existingMode: 'preserve' })
-      const distDir = join(dir, 'dist')
-      ensurePrivateDirectoryNoFollow(distDir, 0o700, { existingMode: 'preserve' })
-      const targetManifest = join(dir, 'package.json')
-      const targetArtifact = join(distDir, 'index.js')
-      const currentManifest = readCacheFile(targetManifest, SYNCED_PACKAGE_MAX_BYTES)
-      const currentArtifact = readCacheFile(targetArtifact, SYNCED_ARTIFACT_MAX_BYTES)
-      const changed = currentManifest !== manifestText || currentArtifact !== artifactText
+      for (const { relative } of declared) {
+        const parent = dirname(join(dir, relative))
+        if (parent !== dir) {
+          ensurePrivateDirectoryNoFollow(parent, 0o700, { existingMode: 'preserve' })
+        }
+      }
+      const targets = declared.map(entry => ({
+        relative: entry.relative,
+        text: entry.text,
+        target: join(dir, entry.relative),
+        current: readCacheFile(join(dir, entry.relative), SYNCED_FILE_MAX_BYTES[entry.relative]),
+      }))
+      const changed = targets.some(entry => entry.current !== entry.text)
       if (!changed) return { changed }
-      atomicWritePrivateFileNoFollow(targetManifest, manifestText, { mode: 0o600 })
-      atomicWritePrivateFileNoFollow(targetArtifact, artifactText, { mode: 0o600 })
+      for (const entry of targets) {
+        atomicWritePrivateFileNoFollow(entry.target, entry.text, { mode: 0o600 })
+      }
       logger.log(`chamber-plugins: synced ${name} v${manifest.version}`)
       return { changed }
     },

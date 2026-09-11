@@ -13,8 +13,17 @@
  *     leaf/directory, oversized) or does not parse (invalid JSON, non-object)
  *     → profile_corrupt with the evidence in `error`. A torn read caught by
  *     the private-file stable-snapshot discipline (a non-atomic in-place
- *     rewrite) also lands here — loud, until the design 21 §6.2 read/write
- *     fence of the A1 executor (plan Phase 4) serializes writers.
+ *     rewrite) also lands here. The design 21 §6.2 read/write fence is
+ *     DELIVERED, not pending: the A1 executor (plan Phase 4) serializes the
+ *     gateway's own writers behind the runtime-manager profile-write lease,
+ *     and the read route consults that fence before reading (routes.ts
+ *     `pluginProfileWriteInFlight` → retryable 409 runtime_busy while a
+ *     mutation is queued or running). This read module stays a pure
+ *     projection — it takes no lease and never blocks; the fence lives one
+ *     layer up, at the route. A tear that still reaches here is therefore
+ *     evidence of a writer OUTSIDE the gateway's fence (an operator-run
+ *     `dsh plugin add` against the managed profile, or the managed dsh's own
+ *     boot-time profile write during a spawn) and stays loud on purpose.
  *
  * Masking: dependency VALUES that are local-path `file:` specs would name
  * gateway-local paths and must never leave this read — each is replaced with

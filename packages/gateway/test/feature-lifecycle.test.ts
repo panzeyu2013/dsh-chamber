@@ -199,6 +199,12 @@ test('chamber plugins sync caches desktop-provided host packages (2026-12 Phase 
   const badName = await upload({ name: '@dsh-chamber/dsh-client-ui-mobile', files: { 'package.json': manifest, 'dist/index.js': artifact } })
   assert.equal(badName.status, 400)
   assert.equal(badName.json().code, 'invalid_input')
+  // …and the echoed REASON must still name the refused package: the scoped name
+  // is path-shaped, so it is redacted into `[path]` unless the route keeps it
+  // (2026-09 audit — the desktop saw `"@dsh-chamber[path]` and could not tell
+  // which package the old gateway refused).
+  assert.match(String(badName.json().error), /"@dsh-chamber\/dsh-client-ui-mobile"/)
+  assert.doesNotMatch(String(badName.json().error), /\[path\]/)
   const mismatched = await upload({ name: '@dsh-chamber/dsh-chamber-seed-client-graph', files: { 'package.json': JSON.stringify({ name: 'other', version: '1.0.0' }), 'dist/index.js': artifact } })
   assert.equal(mismatched.status, 400)
   const malformed = await upload({ name: '@dsh-chamber/dsh-chamber-seed-client-graph', files: { 'package.json': 'not json', 'dist/index.js': artifact } })

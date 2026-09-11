@@ -10,7 +10,9 @@
  *                                  (2026-12 Phase 3: GET projection + PUT
  *                                  upload);
  *   - `/chamber/plugins/installed` — managed web-profile plugin projection
- *                                   (design 21 §6.2, A0 read surface);
+ *                                   (design 21 §6.2, A0 read surface; shares
+ *                                   the A1 write fence → retryable 409 while a
+ *                                   profile write is in flight);
  *   - `/chamber/plugins/tasks`    — mutation task projection (journal ops +
  *                                   deferred intents + executor busy, design
  *                                   21 §6.2; plan Phase 4.4);
@@ -882,6 +884,45 @@ function submitRefusalStatus(code: string): number {
   return 409
 }
 
+/** Read-side half of the design 21 §6.2 "读与写面共享栅栏": true while a
+ * plugin mutation holds the managed-profile write fence, i.e. while the A0
+ * installed projection must not be published.
+ *
+ * Why the tasks projection is the fence seam: the orchestrator takes the
+ * runtime-manager `ProfileWriteLease` at submit acceptance and releases it
+ * from the op's per-op TERMINAL hook (plugins-tasks.ts submitWithLease), and
+ * the executor writes the journal pending record synchronously inside the
+ * same enqueue call that precedes the worker (plugins-exec.ts enqueue). An op
+ * is therefore journal-`pending` for exactly the lifetime of its lease —
+ * including the queued-but-not-yet-running window right after the 202, which
+ * is the window a client reads in — while `busy` (executor workerBusy) covers
+ * only the mutation child currently running. Both are read: `busy ||
+ * <a pending op>`.
+ *
+ * Deliberately NOT fenced: deferred intents (no lease, no writer — design 21
+ * §6.8 r1 keeps the installed read available while the managed dsh is
+ * stopped, and a deferred install must never fence that recovery surface),
+ * and writers outside this gateway's fence (an operator running `dsh plugin
+ * add` against the managed profile, or the managed dsh's own boot-time
+ * profile write during a spawn) — that tear is exactly what the projection's
+ * `profile_corrupt` outcome reports.
+ *
+ * Observation only, never a lease acquisition: the manifest read that follows
+ * is synchronous (readPrivateFileNoFollow), so no in-process writer can start
+ * between the probe and the read. A failing projection must not take the read
+ * down (it is the §6.8 r1 recovery surface), so the probe fails OPEN with a
+ * loud warn — the read's own profile_absent/profile_corrupt outcomes remain
+ * the honest signal for the manifest itself. */
+function pluginProfileWriteInFlight(tasks: ChamberSurfacePluginTasks, logger: Logger): boolean {
+  try {
+    const projection = tasks.tasks()
+    return projection.busy || projection.tasks.some(op => op.status === 'pending')
+  } catch (error) {
+    logger.warn(`chamber-plugins-installed: write-fence probe failed, reading unfenced: ${String(error)}`)
+    return false
+  }
+}
+
 /** Answer an accepted (202) submission: enqueued ops carry opId; deferred
  * intents carry intentId + deferred:true (the task projection exposes the
  * intent until the ready-edge drain picks it up). */
@@ -1005,9 +1046,16 @@ export function createChamberSurface(deps: ChamberSurfaceDeps): ChamberSurface {
             // path or credential), not a bare code: a syncing desktop that
             // meets an older gateway must see why its package was refused
             // (e.g. "unsyncable package … — this gateway release does not
-            // know it"), instead of an unexplained 400.
+            // know it"), instead of an unexplained 400. The thrower may hand
+            // over its own non-secret vocabulary (`error.keep`): a scoped
+            // package name is path-shaped and would otherwise be redacted to
+            // `[path]`, erasing exactly the fact this message carries.
             const detail = error instanceof Error && error.message !== '' ? error.message : 'invalid_input'
-            jsonResponse(res, 400, { error: sanitizeRouteError(detail), code: 'invalid_input' })
+            const keep = (error as { keep?: unknown }).keep
+            jsonResponse(res, 400, {
+              error: sanitizeRouteError(detail, Array.isArray(keep) ? keep.filter(entry => typeof entry === 'string') as string[] : []),
+              code: 'invalid_input',
+            })
             return true
           }
           // Any other throw is a persistence failure (fs write, permissions,
@@ -1040,9 +1088,24 @@ export function createChamberSurface(deps: ChamberSurfaceDeps): ChamberSurface {
     //                             code:'profile_corrupt'} (detail logged, not
     //                             echoed — it may name stateDir-internal
     //                             paths)
+    //   write in flight    → 409 {code:'runtime_busy'} — the shared read/write
+    //                             fence (§6.2): a mutation holds the managed-
+    //                             profile write lease, so the manifest on disk
+    //                             is mid-change and any projection published
+    //                             now would be stale or torn. Retryable (the
+    //                             lease family's code — the same 409
+    //                             /chamber/runtime answers while a plugin
+    //                             mutation holds that lease).
     // file: dependency values are already masked by the projection module.
     if (pathname === '/chamber/plugins/installed' || pathname === '/chamber/plugins/installed/') {
       if (req.method !== 'GET') return methodNotAllowed(res)
+      if (pluginProfileWriteInFlight(deps.tasks, logger)) {
+        jsonResponse(res, 409, {
+          error: 'managed profile write in flight (plugin mutation); the installed projection is fenced — retry after the task settles',
+          code: 'runtime_busy',
+        })
+        return true
+      }
       const projection = deps.installed.read()
       if (!projection.ok) {
         if (projection.code === 'profile_absent') {

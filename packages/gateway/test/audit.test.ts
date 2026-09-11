@@ -367,6 +367,139 @@ test('no audit file configured → login still works and nothing is written', as
 })
 
 // ---------------------------------------------------------------------------
+// auth-gate rejection audit (design 17 §13.4.4: 认证成功/失败（401/403 分类）)
+// ---------------------------------------------------------------------------
+
+/** Drive one request through the dispatch middleware (public host authority
+ * unless the caller overrides it). */
+async function runRequest(
+  dispatch: ReturnType<typeof setup>['dispatch'],
+  method: string,
+  path: string,
+  headers: Record<string, string> = {},
+  body?: string,
+): Promise<FakeResponse> {
+  const req = new FakeRequest(method, path, { host: 'gateway.example:3000', ...headers })
+  const res = new FakeResponse()
+  const pending = dispatch.middleware(req as unknown as ApiRequest, res as unknown as ApiResponse, new URL(req.url, 'http://localhost'), {} as never)
+  queueMicrotask(() => {
+    if (body !== undefined) req.emit('data', Buffer.from(body))
+    req.emit('end')
+  })
+  await pending
+  return res
+}
+
+test('auth-gate rejections are audited once each: 400/401/403/421 with code + client + path category only', async t => {
+  const dir = tmpDir('gateway-audit-gate-')
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const file = join(dir, 'audit.log')
+  const BEARER = 'Bearer BEARER-SECRET-VALUE'
+  const QUERY = 'capability=QUERY-SECRET-VALUE'
+  const auth: AuthProvider = {
+    kind: 'password',
+    async verify() { return null },
+  }
+  const { dispatch } = setup(auth, file)
+
+  // 401 — no valid credential, on a query-bearing API path: neither the
+  // submitted bearer nor the query string may reach the trail.
+  const unauthorized = await runRequest(dispatch, 'GET', `/api/connections?${QUERY}`, { authorization: BEARER })
+  assert.equal(unauthorized.status, 401)
+  // 403 — valid authority, cross-site initiator origin.
+  const forbidden = await runRequest(dispatch, 'POST', '/api/i/local/chamber/plugins/installed', { origin: 'https://evil.example' })
+  assert.equal(forbidden.status, 403)
+  // 421 — an authority this gateway does not answer for.
+  const misdirected = await runRequest(dispatch, 'GET', '/api/connections', { host: 'attacker.example' })
+  assert.equal(misdirected.status, 421)
+  // 400 — duplicate Authorization field lines (raw-header boundary).
+  const malformed = new FakeRequest('GET', '/plugins/index.js', { host: 'gateway.example:3000' })
+  Object.assign(malformed, { rawHeaders: ['authorization', 'Bearer one', 'authorization', 'Bearer two'] })
+  const malformedRes = new FakeResponse()
+  const pendingMalformed = dispatch.middleware(
+    malformed as unknown as ApiRequest,
+    malformedRes as unknown as ApiResponse,
+    new URL(malformed.url, 'http://localhost'),
+    {} as never,
+  )
+  queueMicrotask(() => { malformed.emit('end') })
+  await pendingMalformed
+  assert.equal(malformedRes.status, 400)
+
+  const events = readEvents(file)
+  assert.deepEqual(events.map(event => event.event), [
+    'auth_rejected', 'auth_rejected', 'auth_rejected', 'auth_rejected',
+  ])
+  assert.deepEqual(events.map(event => event.detail), [
+    'code:unauthorized,client:203.0.113.8,path:api',
+    'code:origin_forbidden,client:203.0.113.8,path:api',
+    'code:misdirected_request,client:203.0.113.8,path:api',
+    'code:bad_request,client:203.0.113.8,path:plugins',
+  ])
+  assert.deepEqual(events.map(event => event.kind), ['gateway', 'gateway', 'gateway', 'gateway'])
+  // The whitelist serializer's field set stays fixed.
+  assert.deepEqual(Object.keys(events[0]!).sort(), ['detail', 'event', 'kind', 'ts'])
+  const raw = readFileSync(file, 'utf8')
+  assert.equal(raw.includes('BEARER-SECRET-VALUE'), false, 'the refused credential never enters the audit log')
+  assert.equal(raw.includes('QUERY-SECRET-VALUE'), false, 'the request query never enters the audit log')
+  assert.equal(raw.includes('/api/connections'), false, 'the concrete path is replaced by its category')
+  assert.equal(raw.includes('evil.example'), false, 'the refused Origin value is not echoed into the audit detail')
+})
+
+test('a rejected request writes exactly one event; a successful login adds no gate rejection (no double audit)', async t => {
+  const dir = tmpDir('gateway-audit-gate-once-')
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const file = join(dir, 'audit.log')
+  const auth: AuthProvider = {
+    kind: 'password',
+    async verify() { return null },
+    async login() { return { setCookie: 'dsh_gateway_session=abc; Path=/; HttpOnly' } },
+  }
+  const { dispatch } = setup(auth, file)
+
+  const rejected = await runRequest(dispatch, 'GET', '/api/connections')
+  assert.equal(rejected.status, 401)
+  assert.deepEqual(readEvents(file).map(event => event.event), ['auth_rejected'])
+
+  // /auth/login is PUBLIC: the auth gate never runs for it, so a successful
+  // login records its own login_success and nothing else.
+  const login = await runLogin(dispatch, 'correct horse battery staple')
+  assert.equal(login.status, 302)
+  assert.deepEqual(readEvents(file).map(event => event.event), ['auth_rejected', 'login_success'])
+
+  // A repeated refusal is one event per refusal (no coalescing, no duplicates
+  // from the same request): two refusals → two events.
+  const second = await runRequest(dispatch, 'GET', '/api/connections')
+  assert.equal(second.status, 401)
+  assert.deepEqual(readEvents(file).map(event => event.event), ['auth_rejected', 'login_success', 'auth_rejected'])
+})
+
+test('no audit file configured → gate rejections still answer without writing', async t => {
+  const dir = tmpDir('gateway-audit-gate-none-')
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const file = join(dir, 'audit.log')
+  const auth: AuthProvider = { kind: 'password', async verify() { return null } }
+  const config = parseGatewayConfig({
+    host: '0.0.0.0',
+    port: 3000,
+    uiPassword: 'correct-horse-battery',
+    publicOrigin: 'http://gateway.example:3000',
+    corsOrigins: ['capacitor://localhost'],
+  }, '/tmp/gateway-audit-state-gate-none', '/tmp/dsh')
+  const dispatch = createGatewayDispatch(
+    auth,
+    () => ({ async handleHttp() {}, async handleUpgrade() {}, closeAllStreams() {} }) as never,
+    () => ({ async handle() { return true }, start() {}, stop() {} }) as never,
+    (() => ({ async handle() { return false } })) as never,
+    silentLogger,
+    createGatewayRequestPolicy(config),
+  )
+  const res = await runRequest(dispatch, 'GET', '/api/connections')
+  assert.equal(res.status, 401)
+  assert.throws(() => statSync(file), /ENOENT/)
+})
+
+// ---------------------------------------------------------------------------
 // credential_changed / credential_change_rejected event shapes (Phase 2)
 // ---------------------------------------------------------------------------
 

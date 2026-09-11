@@ -69,13 +69,18 @@ function writeManifest(stateDir: string, text: string): void {
   writeFileSync(join(profileDir(stateDir), 'package.json'), text)
 }
 
-function surface(_t: { after(fn: () => void): void }, stateDir: string): ReturnType<typeof createChamberSurface> {
+function surface(
+  _t: { after(fn: () => void): void },
+  stateDir: string,
+  tasks: ReturnType<typeof stubPluginTasks> = stubPluginTasks(),
+  loggerForSurface: typeof logger = logger,
+): ReturnType<typeof createChamberSurface> {
   return createChamberSurface({
-    logger,
+    logger: loggerForSurface,
     channels,
     plugins: createChamberPlugins(stateDir, logger),
     installed: createChamberInstalled(stateDir),
-    tasks: stubPluginTasks(),
+    tasks,
     stateDir,
   })
 }
@@ -349,4 +354,101 @@ test('route: GET /chamber/plugins (seed-cache projection) still works; unknown s
   const deep = await handle(host, 'GET', '/chamber/plugins/installed/extra')
   assert.equal(deep.status, 404)
   assert.deepEqual(deep.json(), { error: 'not_found', code: 'not_found' })
+})
+
+// ---------------------------------------------------------------------------
+// Route level: the shared read/write fence (design 21 §6.2 读与写面共享栅栏,
+// C-F8) — the read consults the A1 write surface's in-flight state and answers
+// the lease family's retryable 409 instead of publishing a stale/torn
+// projection.
+// ---------------------------------------------------------------------------
+
+/** One journal op as the tasks projection shapes it (the fence reads only
+ * `status`; the rest keeps the projection structurally honest). */
+function journalOp(status: 'pending' | 'ok' | 'failed' | 'blocked'): Record<string, unknown> {
+  return { id: `op-${status}`, ts: Date.now(), kind: 'install', name: 'alpha', preImage: null, status }
+}
+
+function tasksProjection(overrides: {
+  busy?: boolean
+  ops?: Array<Record<string, unknown>>
+  deferred?: Array<Record<string, unknown>>
+  throws?: boolean
+}): ReturnType<typeof stubPluginTasks> {
+  return stubPluginTasks({
+    tasks: () => {
+      if (overrides.throws === true) throw new Error('journal store unavailable')
+      return {
+        tasks: (overrides.ops ?? []) as never,
+        deferred: (overrides.deferred ?? []) as never,
+        busy: overrides.busy ?? false,
+      }
+    },
+  })
+}
+
+test('route: a write in flight fences the read → 409 runtime_busy (retryable), never a projection', async t => {
+  const stateDir = scratch(t)
+  // No manifest at all: the fence must be consulted BEFORE the projection, so
+  // the answer is the fence 409 — not profile_absent (a 404 would tell the
+  // client "nothing is installed" while a write is mid-flight).
+  for (const inFlight of [
+    tasksProjection({ busy: true }),
+    // Queued-but-not-running window (the window a client reads in right after
+    // the 202): the executor is idle, yet the op holds the profile-write lease.
+    tasksProjection({ busy: false, ops: [journalOp('pending')] }),
+  ]) {
+    const host = surface(t, stateDir, inFlight)
+    const response = await handle(host, 'GET', '/chamber/plugins/installed')
+    assert.equal(response.status, 409)
+    const body = response.json()
+    assert.equal(body.code, 'runtime_busy', 'the lease family code, not a new one')
+    assert.match(body.error, /write in flight/)
+    assert.match(body.error, /retry/, 'the refusal must state its retryable contract')
+  }
+
+  // Same fence on the trailing-slash form.
+  writeManifest(stateDir, JSON.stringify({ dependencies: { a: '^1.0.0' } }))
+  const fenced = await handle(surface(t, stateDir, tasksProjection({ busy: true })), 'GET', '/chamber/plugins/installed/')
+  assert.equal(fenced.status, 409)
+})
+
+test('route: no write in flight → 200 unchanged (terminal ops, deferred intents, idle executor)', async t => {
+  const stateDir = scratch(t)
+  writeManifest(stateDir, JSON.stringify({
+    dependencies: { a: '^1.0.0', 'local': 'file:../thing' },
+    dsh: { profile: { bundles: ['a'] } },
+  }))
+  const expected = {
+    ok: true,
+    dependencies: { a: '^1.0.0', 'local': MATERIALIZED_VALUE_MASK },
+    bundles: ['a'],
+    profileExists: true,
+  }
+  const idle = [
+    tasksProjection({}),
+    tasksProjection({ busy: false, ops: [journalOp('ok'), journalOp('failed'), journalOp('blocked')] }),
+    // A deferred intent holds NO lease and has NO writer (design 21 §6.8 r1
+    // keeps the installed read — "installed 纯文件读" — available while the
+    // instance is stopped): it must never fence the read.
+    tasksProjection({ deferred: [{ id: 'int-1', ts: Date.now(), kind: 'install', name: 'later' }] }),
+  ]
+  for (const tasks of idle) {
+    const response = await handle(surface(t, stateDir, tasks), 'GET', '/chamber/plugins/installed')
+    assert.equal(response.status, 200)
+    assert.deepEqual(response.json(), expected)
+  }
+})
+
+test('route: a failing fence probe is loud but fail-open (the §6.8 r1 recovery read stays available)', async t => {
+  const stateDir = scratch(t)
+  writeManifest(stateDir, JSON.stringify({ dependencies: { a: '^1.0.0' } }))
+  const warnings: string[] = []
+  const capturing = { log() {}, warn(message: string) { warnings.push(message) }, error() {} }
+  const host = surface(t, stateDir, tasksProjection({ throws: true }), capturing as never)
+  const response = await handle(host, 'GET', '/chamber/plugins/installed')
+  assert.equal(response.status, 200, 'the read itself still answers')
+  assert.equal(response.json().dependencies.a, '^1.0.0')
+  assert.equal(warnings.length, 1)
+  assert.match(warnings[0] ?? '', /write-fence probe failed, reading unfenced/)
 })

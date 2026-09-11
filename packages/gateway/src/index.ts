@@ -14,6 +14,7 @@ import { FATAL_STARTUP_BLOCK_REASONS } from '@dsh-chamber/dsh-runtime'
 import {
   CHAMBER_HOST_PACKAGES,
   DEFAULT_STATE_DIR,
+  HOST_PACKAGE_SEED_FILES,
   createControlPlane,
   defaultDshWorkspacePath,
   type Logger,
@@ -345,7 +346,12 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
           kind: 'client',
           source: 'packaged',
           sourceDir: join(gatewayHostPackagesDir, 'dsh-chamber-client-ui-mobile'),
-          seedFiles: ['package.json', 'dist/index.js', 'lib/index.js', 'lib/client.js', 'lib/client.js.map'],
+          // The base set is the SHARED seed tuple (control-plane
+          // HOST_PACKAGE_SEED_FILES — the same set the desktop PUTs into the
+          // sync cache and the control-plane seeds locally); only the client
+          // half's extra files are declared here. A base file added to the
+          // shared tuple therefore reaches this packaged seed too.
+          seedFiles: [...HOST_PACKAGE_SEED_FILES, 'lib/index.js', 'lib/client.js', 'lib/client.js.map'],
         },
       ],
       getDshWorkspacePath: () => {

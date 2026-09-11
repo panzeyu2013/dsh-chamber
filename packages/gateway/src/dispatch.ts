@@ -17,6 +17,13 @@
  *   /chamber/*               → chamber surface (design 17 §10, 2026-12 strip)
  *   / (mobile UA, opt-in)    → 302 to mobileEntryPath (design 17 §18 shunting)
  *   /plugins/*, /, /api/*(rest) → gateway-proxy → dsh
+ *
+ * Audit (design 17 §13.4.4, S24): every auth-boundary rejection — the
+ * 400/403/421 request-policy refusals and the 401 verdicts of the gate itself,
+ * on HTTP and on WS upgrades alike — appends one non-secret `auth_rejected`
+ * event (code + client + path CATEGORY; the login surface keeps its own
+ * login_* classification). The deliberate exclusions are listed on
+ * `auditAuthRejection` below.
  */
 
 import {
@@ -48,6 +55,26 @@ function isPublicRequest(method: string | undefined, pathname: string): boolean 
  * broad and forgeable — this is routing sugar only, never a security boundary
  * (the auth gate stays the only boundary, S1/S2). */
 const MOBILE_UA_PATTERN = /Mobile|Android|iPhone|iPad|iPod/i
+
+/** Path CATEGORY for audit details (design 17 §13.4.4/S24): a request target
+ * may carry a capability token or a session-bearing query string, so the audit
+ * trail records only the coarse surface class — never the concrete path, never
+ * the query. */
+function auditPathCategory(pathname: string): string {
+  if (pathname === '/api' || pathname.startsWith('/api/')) return 'api'
+  if (pathname === '/plugins' || pathname.startsWith('/plugins/')) return 'plugins'
+  if (pathname === '/chamber' || pathname.startsWith('/chamber/')) return 'chamber'
+  if (pathname.startsWith('/auth/')) return 'auth'
+  return 'root'
+}
+
+/** The non-secret client identifier the login/credential events use: the
+ * boundary-derived client address, falling back to the socket peer (both are
+ * IPs, never a header value the client fully controls beyond XFF on trusted
+ * proxies). */
+function clientIdent(clientAddress: string | undefined, socketAddr: string | undefined): string {
+  return clientAddress !== undefined && clientAddress !== '' ? clientAddress : socketAddr ?? ''
+}
 
 function shouldRedirectToLogin(req: ApiRequest, pathname: string, auth: AuthProvider): boolean {
   if (auth.kind !== 'password' && auth.kind !== 'password+token') return false
@@ -327,6 +354,43 @@ export function createGatewayDispatch(
     return true
   }
 
+  /**
+   * S24 authentication-face audit (design 17 §13.4.4: 认证成功/失败（401/403
+   * 分类）): one NON-SECRET event per rejection at the gateway's auth boundary.
+   * The record carries the machine code the client received, the client
+   * identifier and a path CATEGORY — never a credential, never the
+   * Authorization/Cookie header value, never the concrete path or its query
+   * string (the serializer whitelist enforces the field set; this function
+   * keeps the VALUES clean).
+   *
+   * Deliberately NOT audited, so the gap is a decision and not an oversight:
+   *   - the 302 to the login page for an anonymous document navigation (a
+   *     first visit, not an authentication failure) and the login surface
+   *     itself (it audits its own login_success/login_* classification);
+   *   - 503 auth_busy (a capacity refusal of the verifier, not a verdict —
+   *     recorded per login attempt already, and auditing it per request would
+   *     let the gate's saturation overwrite the trail);
+   *   - the post-admission 401 of a request admitted by a credential
+   *     generation that a mutation has since revoked (rejectStaleHttp): a
+   *     consequence of the rotation, whose cause is already audited as
+   *     credential_changed.
+   */
+  function auditAuthRejection(
+    code: string,
+    clientAddress: string | undefined,
+    socketAddr: string | undefined,
+    pathname?: string,
+  ): void {
+    if (auditFile === undefined || auditFile === null) return
+    const client = `client:${clientIdent(clientAddress, socketAddr)}`
+    appendAuditEvent(auditFile, {
+      ts: new Date().toISOString(),
+      event: 'auth_rejected',
+      kind: 'gateway',
+      detail: pathname === undefined ? `code:${code},${client}` : `code:${code},${client},path:${auditPathCategory(pathname)}`,
+    })
+  }
+
   const middleware: GatewayDispatch['middleware'] = async (req, res, url, ctx) => {
     const pathname = url.pathname
     let authenticatedPrincipal: AuthPrincipal | null = null
@@ -335,6 +399,10 @@ export function createGatewayDispatch(
     // public paths and OPTIONS. Its result also supplies sanitized auth facts.
     const decision = requestPolicy.evaluate(req)
     if (!decision.allowed) {
+      // The public boundary's own rejection (400 malformed headers / 421
+      // authority / 403 origin) is an authentication-face event per §13.4.4 —
+      // non-secret code + client + path category only.
+      auditAuthRejection(decision.code, decision.clientAddress, req.socket?.remoteAddress, pathname)
       sendBoundaryRejection(res, req, decision)
       return true
     }
@@ -397,6 +465,7 @@ export function createGatewayDispatch(
           res.end()
           return true
         }
+        auditAuthRejection('unauthorized', decision.clientAddress, req.socket?.remoteAddress, pathname)
         jsonResponse(res, 401, { error: 'unauthorized', code: 'unauthorized' })
         return true
       }
@@ -404,6 +473,7 @@ export function createGatewayDispatch(
       // Reject that stale verdict and register the downstream synchronously
       // before any route-specific await creates another rotation window.
       if (!principalIsCurrent(principal)) {
+        auditAuthRejection('unauthorized', decision.clientAddress, req.socket?.remoteAddress, pathname)
         jsonResponse(res, 401, { error: 'unauthorized', code: 'unauthorized' })
         return true
       }
@@ -751,6 +821,9 @@ export function createGatewayDispatch(
     const rawTarget = req.url ?? '/'
     if (!rawTarget.startsWith('/') || rawTarget.startsWith('//')
       || rawTarget.includes('\\') || rawTarget.includes('#')) {
+      // The target is malformed, so there is no path category to record —
+      // code + client only (same §13.4.4 audit as the HTTP boundary).
+      auditAuthRejection('bad_request', undefined, req.socket?.remoteAddress)
       rejectWs(socket, 400, 'invalid request target', 'bad_request')
       return true
     }
@@ -758,6 +831,7 @@ export function createGatewayDispatch(
     // 0. The exact same public boundary applies before every WS route.
     const decision = requestPolicy.evaluate(req)
     if (!decision.allowed) {
+      auditAuthRejection(decision.code, decision.clientAddress, req.socket?.remoteAddress, pathname)
       rejectWs(socket, decision.status, decision.code === 'bad_request' ? 'malformed request headers'
         : decision.code === 'misdirected_request' ? 'misdirected request'
           : 'request origin is not allowed', decision.code)
@@ -779,10 +853,12 @@ export function createGatewayDispatch(
       throw error
     }
     if (principal === null) {
+      auditAuthRejection('unauthorized', decision.clientAddress, req.socket?.remoteAddress, pathname)
       rejectWs(socket, 401, 'unauthorized')
       return true
     }
     if (!principalIsCurrent(principal)) {
+      auditAuthRejection('unauthorized', decision.clientAddress, req.socket?.remoteAddress, pathname)
       rejectWs(socket, 401, 'unauthorized')
       return true
     }
