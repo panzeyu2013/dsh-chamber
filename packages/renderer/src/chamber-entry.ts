@@ -307,9 +307,12 @@ const DEFERRED_ROWS: ReadonlyArray<readonly [id: string, load: () => Promise<unk
   // from the module cache, possibly before settle); there is no
   // intermediate "official root without sections" frame (all six register
   // in one synchronous continuation after the single load sweep). The
-  // per-server panel content loads through each selected server's child ctx
-  // (bridge-context mountBridgeSession) and is unaffected by this boot-ctx
-  // timing. Failure semantics (2026-12 review F2): the cluster is no longer
+  // per-source settings panel renders THIS boot ctx's own settings.section
+  // ledger (2026-12 完整桥接修订), so this boot-ctx timing IS the panel's
+  // gate: until the cluster lands, the selected source shows the honest
+  // "starting this instance's frontend" intermediate state — the panel does
+  // NOT load any content of its own (no child ctx, no bundle). Failure
+  // semantics (2026-12 review F2): the cluster is no longer
   // all-or-nothing — each row loads in isolation, so one failed chunk costs
   // exactly its own family (a failed bridge no longer takes the whole
   // cluster, including the chamber-global connections surface, down with

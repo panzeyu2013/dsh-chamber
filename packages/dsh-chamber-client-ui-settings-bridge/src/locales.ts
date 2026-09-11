@@ -25,16 +25,8 @@ export const zh = {
   // 已连接但还未挂载完成时给出"正在启动该来源"的诚实中间态。
   sourceStarting: '正在启动该实例的前端，就绪后本面板自动显示它自己的设置分节。',
   sectionsEmpty: '该实例没有可显示的内容（可能正在启动，稍后自动出现）。',
-  // 2026-12 插件设置组装面（图驱动的每来源贡献集）；2026-09 起由连接页在
-  // 该来源自己的服务器卡片内呈现（不再占 nav 槽位），文案仍归本命名空间。
-  pluginsLoading: '正在加载该实例的插件设置…',
-  pluginsRefresh: '重新加载',
+  // nav 行的来源角标：注册者既不是官方设置家族、也不是 chamber 壳时为真。
   pluginTag: '插件',
-  // 2026-12 复查 4b：子上下文的根座（root hooks/keyedHooks/props）未落座——
-  // 该读面只交付给已安装的渲染器，桥接 outlet 无法消费（见 bridge-outlet.tsx
-  // 与 settings-extensions.ts 的 RootSeatLedger），因此必须显式列出。
-  // 2026-12：不再假定「宿主事件推送」这一种能力——能力面现含 $on / $mount /
-  // $stream（settings-extensions.ts 的 CAPABILITY_*），文案必须对三者都成立。
   current: '当前',
   close: '关闭',
   generalTitle: '通用',
@@ -270,11 +262,8 @@ export const en: Record<keyof typeof zh, string> = {
   localNotReady: 'The local instance is not ready yet — start it in Connections.',
   sourceStarting: 'Starting this instance\'s frontend; its own settings sections appear here once it is ready.',
   sectionsEmpty: 'Nothing to show yet (the instance may still be starting — it appears automatically).',
-  // 2026-12 plugin settings assembly surface (graph-driven per-source
-  // contribution set); rendered inside that source's own server card on the
-  // connections page since 2026-09 (no nav slot of its own).
-  pluginsLoading: 'Loading this instance\'s plugin settings…',
-  pluginsRefresh: 'Reload',
+  // Nav-row provenance badge: true when the registrant is neither the official
+  // settings family nor the chamber shell.
   pluginTag: 'Plugin',
   current: 'Current',
   close: 'Close',

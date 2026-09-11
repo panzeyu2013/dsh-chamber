@@ -144,7 +144,7 @@ function parsePresetGroup(value: unknown): AgentPresetPluginGroup {
 }
 
 /** Validate the server-response envelope and project its `result` (mirror of
- *  the official parseConnectionResponse / settings-bridge bridge-api). */
+ *  the official parseConnectionResponse / instance-api). */
 function parseRemoteResult(value: unknown): { ok: true; value: PluginInventorySnapshot } | { ok: false; error: PluginInventoryRpcFailure } {
   if (!isRecord(value) || value.type !== 'server-response' || !isString(value.rpcId)) {
     throw new TypeError('plugin-inventory: invalid server-response envelope')

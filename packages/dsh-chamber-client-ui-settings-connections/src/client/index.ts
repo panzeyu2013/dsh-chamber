@@ -48,11 +48,13 @@ export function apply(ctx: ClientContext): void {
   // `settings.section` registration is GONE. It never had a renderer in any
   // shape — the desktop chamber settings shell renders ConnectionsSection
   // through its fixed nav id (`__connections`, SettingsShell.tsx +
-  // nav-active.ts CONNECTIONS_SECTION_ID) and the per-source child contexts
-  // (bridge-context mountBridgeSession) never mount this plugin. The settings
+  // nav-active.ts CONNECTIONS_SECTION_ID), and since the 2026-12
+  // complete-bridge revision the panel renders the SELECTED source's own
+  // settings ledger instead of assembling a second plugin set, so nothing
+  // mounts this plugin anywhere else. The settings
   // cluster is registered all-or-nothing (chamber-entry registerDeferred), so
   // the entry could not even serve as a fallback for a failed settings-shell
   // chunk: that failure drops this plugin's registration too. Keeping the
   // ledger clean also removes the "second connections page" hazard if a
-  // host-ctx ledger rendering path ever appears.
+  // source-ctx ledger rendering path ever appears.
 }

@@ -1,17 +1,18 @@
 /**
  * Settings shell nav resolution (design 15 v1 flat form) — pure, testable.
  *
- * The nav rail has TWO groups: the SELECTED server's sections (the child-ctx
- * ledger — official families plus the source's own plugin contributions,
- * 2026-12) and the fixed chamber-GLOBAL entries below the divider (connections
- * / general — the update status lives inside the General section, design 11).
- * A server-section id that left the ledger falls back to the first row.
+ * The nav rail has TWO groups: the SELECTED server's sections (that source's
+ * OWN boot-ctx `settings.section` ledger — official families plus the source's
+ * own plugin contributions, 2026-12 完整桥接修订) and the fixed chamber-GLOBAL
+ * entries below the divider (connections / general — the update status lives
+ * inside the General section, design 11). A server-section id that left the
+ * ledger falls back to the first row.
  *
  * 2026-09 修订（用户拍板）：曾经的第三个固定入口 `__plugins`（该来源的设置
  * 组装诊断）**不再占用 nav 槽位**——它的 subject 是「当前选中的来源」而不是
  * chamber 全局，却又不是该来源账本里的贡献，放进任何一组都会破坏该组的语义。
- * 现由连接页在**该服务器的卡片**上就地呈现（`settings-assembly-diagnostics`），
- * 与既有的「客户端插件状态」同处一地。
+ * **2026-12 完整桥接修订**：设置面不再二次装载插件，该诊断块连同它的生产端
+ * （`toAssemblyReport`）整体退役——历史记录见 git 与 CHANGELOG，design 15 §1。
  *
  * 2026-12 修订（用户拍板）：网关编排分区从桌面设置页整体移除——审批/提问
  * 由侧边栏既有事实通道呈现，网关自有投影（会话/调度/worktree）归网关
@@ -30,7 +31,7 @@ export const FIXED_SECTION_IDS: readonly string[] = [
   GENERAL_SECTION_ID,
 ]
 
-/** One nav row of the SELECTED server's settings sections (child ctx ledger projection). */
+/** One nav row of the SELECTED source's settings sections (its own boot-ctx ledger projection). */
 export interface SectionNavRow {
   id: string
   order: number

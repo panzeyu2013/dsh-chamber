@@ -43,9 +43,7 @@ declare module '@deepseek-ai/cordis' {
 /**
  * Service base class (cordis service.ts): registering through the constructor
  * makes every method call CALLER-bound — `this.ctx` inside a method is the
- * calling plugin's context, which is how the settings bridge attributes a
- * plugin's `remote.$on(...)` subscriptions to that plugin (2026-12 capability
- * report).
+ * calling plugin's context.
  */
 declare module '@deepseek-ai/cordis' {
   export class Service<T = never> {
@@ -63,15 +61,15 @@ declare module '@deepseek-ai/dsh-client-ui-renderer/client' {
     constructor(ctx: Context)
     /**
      * The context a service method is called through: the cordis service proxy
-     * binds it to the CALLER's context at call time, which is how
-     * bridge-context.ts attributes a request to the plugin that made it.
+     * binds it to the CALLER's context at call time.
      */
     ctx: Context
     register(options: Record<string, unknown>, component: unknown): () => void
     /**
      * Install one root standard-source contribution (upstream
      * `RootStandardSourceContribution`: `hooks` / `keyedHooks` / `props`).
-     * bridge-context.ts's recording subclass overrides it and delegates.
+     * The source's own renderer installs it; the bridge only reads the seats
+     * that instance's settings shell received (`settings-source-face.ts`).
      */
     provideRoot(contribution: Record<string, unknown>): () => void
     inject(key: string, callback: () => void | Iterable<() => void>): () => void
@@ -81,10 +79,9 @@ declare module '@deepseek-ai/dsh-client-ui-renderer/client' {
     subscribe(key: string, fn: () => void): () => void
     spec(key: string): { kind: string; scope: string } | undefined
     /**
-     * Entry-render supervision seam (2026-12 settings extension): observe every
-     * render-time entry failure the boundaries contain, with the entry's
-     * registrant stamp — the honest diagnostic source for a plugin whose
-     * section renders but crashes.
+     * Entry-render supervision seam: observe every render-time entry failure
+     * the boundaries contain, with the entry's registrant stamp (the seam the
+     * bridge's own `BridgeEntryBoundary` mirrors).
      */
     onEntryError(fn: (key: string, entry: StoredEntry, error: unknown, info: { abdicated: boolean }) => void): () => void
     installLocale(face: LocaleFace): void

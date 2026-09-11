@@ -1,30 +1,35 @@
 # todo · 设置面的上游声明式贡献通道（T3 提案）
 
-> 状态：**上游提案，未排期**。记录于 2026-12。伴随落地面 = chamber 侧「图驱动的
-> 每来源设置贡献集」（design 05 §5 / design 09 §5，2026-12 已落地）；本文只记录
-> **需要上游 dsh 提供、chamber 无法自建**的那部分。
+> 状态：**上游提案，未排期**。记录于 2026-12；**2026-12 完整桥接修订后降级为
+> 「通用宿主复用」提案**——chamber 侧不再需要它们：桌面设置面直接渲染选中来源
+> 自己 boot ctx 的 `settings.section` 台账与该 ctx 渲染器绑定的标准座
+> （design 05 §5 / 09 §4），既不二次装载插件、也不提供缩小服务集，因此下文三条
+> 「上游硬边界」对 chamber 已全部消失。保留本文的理由是**其他宿主**（任何想在
+> 不实例化插件的前提下渲染贡献、或想拿到一份文档化设置面服务契约的宿主）仍会撞上
+> 同样三条边界。历史动机（child-ctx 时代的 chamber 侧驱动）保留在 git/CHANGELOG。
 
-## 动机
+## 动机（历史驱动已退役，边界对通用宿主仍成立）
 
-chamber 桌面设置壳把「某来源自己的设置贡献」做成**图驱动**：读该实例的
-`clientGraph/graph`，把非 covered 行的客户端插件装载进该来源的 settings child
-context（design 05 §5 2026-12 修订）。这条路径有两个由上游形态决定的硬边界：
+chamber 曾把「某来源自己的设置贡献」做成**图驱动**：读该实例的 `clientGraph/graph`，
+把非 covered 行的客户端插件装载进该来源的 settings child context（design 05 §5
+2026-12 修订；该 child context 已于完整桥接修订删除）。那条路径有两个由上游形态
+决定的硬边界：
 
 1. **贡献是代码，不是数据**：`dsh.client` 清单只有 `inject` / `platform`
    （vendor `dsh-client-modules` `manifest.ts`），没有 `contributes.*` 描述符。
-   于是任何重宿主面（chamber 设置壳、未来的其他宿主）**必须实例化插件**才能知道
+   于是任何重宿主面（未来的其他宿主）**必须实例化插件**才能知道
    它贡献了什么，无法事先判断、无法按需装载。
-2. **没有设置面服务契约**：child context 只能提供 settings 面所需的最小服务集
-   （`slots` / `locale` / `theme` / `settingsScope` / 六个 unary Remote 命名空间）。
-   插件的 root `inject` 一旦包含会话族服务（`sessions` / `uiConversation` …），它
-   就永远不激活——chamber 侧只能把它记为 `inactive` 并列出缺失服务
-   （`settings-extensions.ts` `missingInjectNames`），用户看不到它的设置。
+2. **没有设置面服务契约**：一个自建宿主面只能提供它自己拼的服务集，插件 root
+   `inject` 一旦包含该宿主没有的服务（旧 chamber 形态下是会话族 `sessions` /
+   `uiConversation` …），插件就不激活——宿主要么把它记为 `inactive` 并列出缺失
+   服务，要么（chamber 现在的做法）干脆**复用插件自己那台实例的 ctx**，于是这条
+   提案对 chamber 不再必要，对「必须自建 ctx」的宿主仍然必要。
 3. **泛型 Remote 客户端不可行**：客户端 Remote 贡献由**生成物**提供
    （`TypertRemoteContribution`），`TypertLocalRegistry/RemoteRegistry.list()` 是
    进程内注册表；协议类型与 api-gateway 客户端中**未见 descriptor 上线通道**
    （2026-12 调研，`dsh-typert-protocol/src/types.ts`、`packages/dsh-api-gateway/src/client/`）。
-   因此 child context 的 `remote` 只能是手工面：插件调用其他命名空间会在**调用时**
-   失败（被 entry boundary 与 `onEntryError` 捕获并报告，不会静默）。
+   因此自建 ctx 的宿主只能提供手工 `remote` 面：插件调用其他命名空间会在**调用时**
+   失败（旧 chamber 形态由 entry boundary 与 `onEntryError` 捕获并报告，不会静默）。
 
 ## 提议（三条，按价值排序）
 

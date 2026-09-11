@@ -28,9 +28,9 @@
  *
  * The page module table serves one module instance per plugin id to every
  * source (first-load-wins), so this registry is page-global by construction —
- * the same fact that lets the bridge package keep one unary client per
- * instance (bridge-api.ts). Publisher and reader are both this package's own
- * client bundle, so no cross-package shared face is needed.
+ * the same page-global fact that makes a single `chamberBridge` projection
+ * visible to every instance's shell. Publisher and reader are both this
+ * package's own client bundle, so no cross-package shared face is needed.
  */
 
 /** One registered entry of a slots ledger (structural: no upstream type import). */

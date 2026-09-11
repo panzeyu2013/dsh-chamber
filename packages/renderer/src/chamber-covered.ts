@@ -178,8 +178,9 @@ export const CHAMBER_COVERED_IDS: readonly string[] = [
   // ── settingsScope). Ids stay covered: loading any row again from the host
   // ── graph would double-register once the deferred chunk registers it.
   // ── 可观测瞬态仅「设置入口缺席 ≈1 chunk 往返」（页面首个实例首冷启一次
-  // ── 性；其后模块缓存同 tick 解析）；面板内容经所选服务器 child ctx
-  // ── 独立装载（bridge-context），不受 boot-ctx 时序影响；簇级失败面见
+  // ── 性；其后模块缓存同 tick 解析）；面板内容**就是**该来源 boot ctx 自己的
+  // ── settings.section 台账（2026-12 完整桥接修订），因此受本簇时序门控：
+  // ── 未落地时面板显示「正在启动该实例的前端」中间态；簇级失败面见
   // ── chamber-entry.ts registerDeferred 注释。
   '@deepseek-ai/dsh-client-ui-settings-general',
   '@deepseek-ai/dsh-client-ui-settings-models',

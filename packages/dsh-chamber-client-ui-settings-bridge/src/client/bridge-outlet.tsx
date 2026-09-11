@@ -1,20 +1,20 @@
 /**
  * Bridge outlet: a minimal re-implementation of the official slot render
  * pipeline (dsh-client-ui-renderer/src/client/scoped-slots.tsx) covering exactly the
- * root-scope LIST and KEYED slots the child settings context declares
+ * root-scope LIST and KEYED slots the settings surface declares
  * (settings.section / settings.general.item / settings.plugins.tab list;
- * settings.plugin.item keyed). The official renderer is boot-root-anchored
- * (`renderRoot('root')` requires the sessions/workspaces services the child
- * context deliberately omits), so the bridge renders entries itself: same
- * kit synthesis (t seat / useStore+actions / renderSlot binding / standard
- * hooks), same inject face normalization, same ledger-version subscription.
- * Scope kinds other than root+list/keyed throw BridgeAssemblyError (no
- * session scope exists in a bridged settings surface) — a miswired surface
- * must fail loud, never render empty by design. That fail-loud policy is
- * scoped to the chamber's OWN wiring: the settings shell wraps every
- * bridged outlet in `<BridgeEntryBoundary containAll>` (see the boundary
- * below) so a child-ctx assembly error is contained at the host seam and
- * can never abdicate the chamber-owned shell.
+ * settings.plugin.item keyed). The ledger is the SELECTED source's own boot-ctx
+ * registry (2026-12 完整桥接修订), whose renderer is anchored on `renderRoot`
+ * for its own root tree — so the bridge renders entries itself, with the
+ * source's own renderer-bound seats: same kit synthesis (t seat /
+ * useStore+actions / renderSlot binding / standard hooks), same inject face
+ * normalization, same ledger-version subscription. Scope kinds other than
+ * root+list/keyed throw BridgeAssemblyError (the settings surface declares
+ * root scope only) — a miswired surface must fail loud, never render empty by
+ * design. That fail-loud policy is scoped to the chamber's OWN wiring: the
+ * settings shell wraps every bridged outlet in `<BridgeEntryBoundary
+ * containAll>` (see the boundary below) so a foreign entry's assembly error is
+ * contained at the host seam and can never abdicate the chamber-owned shell.
  */
 import { Component, useMemo, useSyncExternalStore, type FC, type ReactNode } from 'react'
 import { bindSnapshotSelector } from '@deepseek-ai/dsh-client-ui-renderer/src/client/bind'
@@ -256,13 +256,13 @@ export class BridgeAssemblyError extends Error {}
  * crash face (same shape as the official `<div data-slot-error>`) so a
  * silent blank never passes for an empty section.
  *
- * `containAll` flips the policy for the child-ctx → host seam: the chamber
+ * `containAll` flips the policy for the foreign-entry → host seam: the chamber
  * settings shell wraps every top-level `BridgeOutlet` it renders in
- * `<BridgeEntryBoundary containAll slotKey="…">` so NO child-ctx error —
+ * `<BridgeEntryBoundary containAll slotKey="…">` so NO foreign entry error —
  * assembly or ordinary — can escape the shell. The bridged content is a
- * DIFFERENT author (the official settings plugins running in the child
- * context): one misbehaving entry (an entry calling renderSlot for an
- * undeclared slot, a missing locale face, …) must never be able to abdicate
+ * DIFFERENT author (the plugins running in the SELECTED source's ctx): one
+ * misbehaving entry (an entry calling renderSlot for an undeclared slot, a
+ * missing locale face, …) must never be able to abdicate
  * the chamber-owned `sidebar.settings` shell to the hosting boot's
  * boundary, which would permanently fall the entry back to the official
  * SettingsRoot (no server dropdown). The chamber's OWN shell wiring stays

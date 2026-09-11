@@ -466,9 +466,9 @@
 
 /* Server-switch intermediate state: the content column switches to a
    dedicated loading view IMMEDIATELY (honest signal, no stale-content wait
-   on slow targets); the per-server child ctx cache makes repeat switches
-   instant (no intermediate at all). The wrapper fade (keyed per server)
-   replays on each server switch, smoothing the swap. */
+   on slow targets); a source whose shell is already mounted renders its own
+   published face at once (no intermediate at all). The wrapper fade (keyed
+   per server) replays on each server switch, smoothing the swap. */
 .contentFade {
   animation: contentFadeIn var(--ds-transition-duration) var(--ds-ease-in-out);
 }
@@ -1105,7 +1105,7 @@
 
 /* ---- 统一下拉箭头（2026-12）----
    Chamber 的 select 一律 appearance:none + 官方 IconChevronDownOutline14
-   （与 bridge-rows 的 Menu 下拉同图标词汇）；箭头右缘 inset 与文字左缘
+   （服务器下拉/运行时段与连接表单同一图标词汇）；箭头右缘 inset 与文字左缘
    （.runtimeField padding 10px）对称，pointer-events:none 保证点击落在
    select 本体。仅作用于 select 修饰类——.runtimeField 同时用于 URL 输入框，
    不能带箭头样式。 */

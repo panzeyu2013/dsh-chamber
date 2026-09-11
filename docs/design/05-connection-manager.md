@@ -318,8 +318,8 @@ export const chamberBridge: {
   异步 `report/clear` 全部失效，即使 replacement 尚未注册也不能污染同 id 新代。
 - 订阅 `onInstanceSnapshot` → 以内容签名 identity-preserving 合并，并使旧 pull
   失效；订阅 `onPluginDiagnostic` → 合并到来源标题异常标记与**连接页该来源卡片上的
-  插件状态行**（`plugin-diagnostic.tsx`；2026-09 校正：代码里它从不去设置壳的
-  组装诊断块，后者报的是 child ctx 装配结果，两者是不同事实面）。
+  插件状态行**（`plugin-diagnostic.tsx`；它报的是客户端插件图 boot 健康，与设置面
+  是否可渲染是不同事实面——设置壳的装配诊断块已于 2026-12 完整桥接修订退役）。
 
 ## 4. N-ctx 多实例与视图切换
 
@@ -463,9 +463,10 @@ export const chamberBridge: {
   "第二个连接页"隐患），插件只提供该页的字典命名空间与分节组件
   （`ConnectionsSection.tsx`）。
 - 「dsh 运行时」段（design 18 §3.6/§9，per-server）：chamber 自研
-  `settings.section`（id `dsh-runtime`，order 31，由设置壳 settings-bridge 注册，
-  `runtime-section-plugin.ts`），注册在选中
-  服务器的子上下文 ledger、紧随 agent-presets 渲染；connections 是壳的
+  `settings.section`（id `dsh-runtime`，order 31，由设置壳 settings-bridge 的
+  `registerRuntimeSection` 注册），注册在**该来源自己 boot ctx 的 ledger** 上
+  （2026-12 完整桥接修订；随 `chamberBridge` roster 投影 reconcile）、紧随
+  agent-presets 渲染；connections 是壳的
   固定 nav 入口，故「dsh 运行时」在
   视觉上位于 server 段列表内 agent-presets 之后。local = 完整运行时管理面，
   gateway = 经反代触达该 gateway 的 `/chamber/runtime`，**dsh 直连（ssh/http）
@@ -528,8 +529,11 @@ export const chamberBridge: {
     渲染一帧）。
   - **座位矩阵**：壳渲染 `settings.section` + `settings.action`（action 保持既有
     「仅本地来源」限定），子座位（`settings.general.item` / `plugins.tab` / keyed 卡片）
-    随所属分节渲染；`trigger/header/close/onboarding` 属**壳 chrome**（自绘标题/关闭/
-    触发器），仍不由壳渲染。
+    随所属分节渲染；`trigger/header/close` 属**壳 chrome**（自绘标题/关闭/触发器），
+    `settings.onboarding` 则是**内容座**（官方 `ui-settings-models` 真的往里注册首启
+    引导步骤）——chamber 壳不实现官方 onboarding 协调器，故它同样不被渲染。这三类
+    都不由壳渲染，且组装诊断块退役后**不再逐条报告**：某来源插件贡献的 onboarding
+    步骤在桌面面板里不会出现，这是已知的最小可见性损失（见 STATUS.md 残余登记）。
   - **错误containment**：外来条目（该来源自己的插件贡献）的渲染失败经
     `BridgeEntryBoundary containAll` 收口成 `<div data-slot-error="…">`，绝不夺走
     chamber 自己的 `sidebar.settings` 条目（那会回落到没有服务器下拉的官方 SettingsRoot）。
@@ -623,10 +627,11 @@ export const chamberBridge: {
   - `packages/dsh-chamber-client-ui-settings-bridge/`——自研设置壳插件（§5 同款
     讨论，注册进 `sidebar.settings` 槽、以 `SETTINGS_SHELL_SHADOW_PRIORITY = -1000`
     shadow 官方 SettingsRoot，
-    服务器下拉 + 子 ctx 官方 settings 子集渲染）。子 ctx 缓存所有权绑定
-    `(sourceId, sourceFingerprint)`：权威 roster 删除来源或在同 id 下更换 proof 时，
-    立即退役并 dispose 所有受影响的已选/未选缓存；异步装配结果提交前再校验
-    捕获的 proof 与当前 roster，迟到的旧代结果只 dispose、不进入缓存。
+    服务器下拉 + 渲染选中来源自己 boot ctx 的 `settings.section` 台账，条目用该 ctx
+    渲染器绑定的标准座）。面的所有权绑定 `(sourceId, sourceFingerprint)`：权威 roster
+    删除来源或在同 id 下更换 proof 时，旧面立即不可渲染（面板只在 face 指纹与 roster
+    同一字段相等时渲染），来源重 boot 时由新 ctx 的 `apply` 重新发布；发布/撤除都按
+    slots/locale 身份校验，迟到的旧代撤除不会清掉新代的面。
   - `packages/dsh-chamber-client-ui-layout/`——官方 ui-layout 壳插件的 chamber
     fork（①替换 layout store：`sidebarWidth` 经侧边栏共享 view-prefs store
     播种/回写，钳位 [264,420]，覆盖 id；②**文档级主题投影的唯一写入者**：

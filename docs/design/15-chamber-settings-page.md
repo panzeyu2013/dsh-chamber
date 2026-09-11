@@ -132,9 +132,10 @@ ChamberSettings.sessionTodo: {
 - **i18n**：扩展 `dsh-chamber.settings.bridge` 命名空间（通用设置文案，
   zh/en；`verify:i18n` 必须通过）。
 - **测试**：`test:settings-bridge`（`__general` 入口渲染/active 解析/固定项集合/
-  壳装配隔离不变式/`connections-section-mirror` 环境镜像漂移门；`update-gate`：
-  检查按钮相位门；会话待办区与通知设置纯函数）；`test:connections`（plugin-diff +
-  `settings-assembly-diagnostics` 纯函数）；`typecheck:settings-bridge`、
+  壳装配隔离不变式/`connections-section-mirror` 环境镜像漂移门/每实例面注册表与
+  完整桥接源码锁；`update-gate`：
+  检查按钮相位门；会话待办区与通知设置纯函数）；`test:connections`（plugin-diff 等）；
+  `typecheck:settings-bridge`、
   `typecheck:connections`、`build:renderer`。
 - **推迟（不排期）**：两级分组导航、插件提级、关于页。
 - 验证清单：两个固定入口渲染（`__plugins` 不再是固定项）、chamber 入口在服务器

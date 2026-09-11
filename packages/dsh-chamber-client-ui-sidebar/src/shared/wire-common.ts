@@ -5,6 +5,8 @@
  * - A packages/dsh-chamber-client-ui-sidebar/src/shared/instance-api.ts
  * - B packages/dsh-chamber-client-ui-sidebar/src/shared/plugin-graph-recheck.ts
  * - C packages/dsh-chamber-client-ui-settings-bridge/src/client/bridge-api.ts
+ *     ⚠ 该载体已随 2026-12 完整桥接修订删除（设置面不再自行发 unary 调用）；
+ *     下文涉及 C 的行号与同体结论均为**审计时点基线**，不是现存文件。
  * - D packages/dsh-chamber-client-ui-settings-connections/src/client/plugin-inventory-api.ts
  * - E packages/dsh-chamber-client-ui-git/src/shared/git-api.ts(仅参考——本模块不收 E 的任何实现)
  * - F packages/renderer/src/host-graph.ts(仅参考)

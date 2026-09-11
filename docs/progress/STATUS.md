@@ -293,10 +293,13 @@
     active view**）、已挂载则不被保留策略回收」；面板关闭即撤除。代价：编辑某来源
     设置会付一次该来源壳的 boot（与在该来源自己的前端里编辑同一件事），来源壳
     boot 失败时面板只显示不可达/启动中中间态，**不再**有独立于 shell 的降级渲染面。
-  - **壳 chrome 仍自绘**：`settings.trigger/header/close/onboarding` 属壳 chrome
-    （自绘标题/关闭/触发器），不由壳渲染；`settings.action` 保持「仅本地来源」限定。
-    这两条是 UI 形态决定，不是可用性降级；它们不再进入「未渲染贡献必须报告」的
-    清单（该清单随组装诊断块退役，见下）。
+  - **未渲染座位的可见性损失**：`settings.trigger/header/close` 属壳 chrome（自绘
+    标题/关闭/触发器），`settings.onboarding` 是**内容座**（官方 `ui-settings-models`
+    真的往里注册首启引导步骤）但 chamber 壳不实现官方 onboarding 协调器——三者都不由
+    壳渲染；`settings.action` 保持「仅本地来源」限定。前两条是 UI 形态决定，第三条
+    （onboarding）是**真实的可见性损失**：该座位的贡献既不渲染、也不再逐条报告
+    （原「未渲染贡献必须报告」清单随组装诊断块退役，见下）。触发条件：某来源插件注册
+    onboarding 步骤、用户期望在桌面面板看到它。
   - **组装诊断块退役**：`toAssemblyReport` / `settings-extensions.ts` /
     `settings-assembly-diagnostics.*` 及其 i18n 键已删除——完整桥接下没有
     「装不上」的插件可报。仍然真实的诊断留在连接页该来源卡片上：客户端插件图

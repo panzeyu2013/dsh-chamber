@@ -385,11 +385,9 @@ function GatewaySpkiField({ draft, onChange, fieldError, fieldId, t }: {
  */
 export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
   const { t, pluginDiagnostics, onRecheckDiagnostic } = props
-  // Settings-assembly diagnostics (2026-09 relocation): the settings shell
-  // passes the SELECTED source's report plus its own param-capable translate —
-  // the report's copy belongs to the shell's namespace, so the block renders
-  // it here instead of re-declaring it in this dictionary (same shape as the
-  // host-computed `restartNote` text above).
+  // 每来源「设置组装诊断」块已于 2026-12 完整桥接修订退役（设置面不再二次装载
+  // 插件，没有"装不上"可报）——本组件只消费上图三个 prop。仍然真实的诊断留在
+  // 该来源卡片上的「客户端插件状态」（pluginDiagnostics，boot/extra-row 通道）。
   // Per-instance input ids (useId): the dialog renders inside N-ctx panels in
   // the SAME document — static ids would alias across panels. One id per
   // credential/pin field; the transport branches render one set at a time.

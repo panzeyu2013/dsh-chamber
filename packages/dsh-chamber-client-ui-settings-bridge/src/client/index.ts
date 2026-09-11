@@ -4,10 +4,12 @@
  * LOWER priority than the official SettingsRoot registration, so the
  * official shell is shadowed (never conflicts — the official entry stays on
  * the ledger and its settings.* children declarations remain valid). The
- * shell itself (SettingsShell.tsx) mounts a child cordis context per selected
- * server and renders the chamber-global connections surface as a fixed nav
- * entry — no chamber-side persistence, no new control-plane API; every
- * configuration fact stays on the target host.
+ * shell itself (SettingsShell.tsx) renders the SELECTED source's OWN boot-ctx
+ * `settings.section` ledger with the seats that ctx's own renderer bound —
+ * nothing is mounted twice and no service is stubbed (2026-12 完整桥接修订,
+ * design 05 §5) — and renders the chamber-global connections surface as a
+ * fixed nav entry. No chamber-side persistence, no new control-plane API;
+ * every configuration fact stays on the target host.
  */
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 // Type-only: pulls the locale plugin's Context merge (ctx.locale).

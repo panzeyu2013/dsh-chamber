@@ -43,7 +43,8 @@
  *   low-key status (UpdateSection).
  *
  * （design 18 §3.6：dsh 运行时块已自本视图迁出——per-server「dsh 运行时」
- *  settings.section，见 runtime-section-plugin.ts。）
+ *  settings.section，现由 index.ts 的 registerRuntimeSection 注册在该实例
+ *  自己的 boot ctx 台账上。）
  *
  * Every mutation goes through the main-process settings IPC (settings-store),
  * which overlays the patch OPTIMISTICALLY — the control reflects the click in
