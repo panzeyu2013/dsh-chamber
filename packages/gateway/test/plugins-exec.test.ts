@@ -33,6 +33,7 @@ import {
 } from '../src/plugins-exec.ts'
 import type { EnqueueResult, OnOpTerminal, SpawnFn } from '../src/plugins-exec.ts'
 import { backupDirFor, createPluginsJournal, thirdPartyRoot } from '../src/plugins-journal.ts'
+import { PNPM_SHIM_DIR } from '../src/pnpm-entry.ts'
 import type { JournalLogger } from '../src/plugins-journal.ts'
 import { makeSpawnHarness, waitFor } from './plugins-tasks-fixtures.ts'
 
@@ -91,6 +92,16 @@ function makeExecHarness(
     ...(options.canRunPollMs === undefined ? {} : { canRunPollMs: options.canRunPollMs }),
     ...(options.onTerminal === undefined ? {} : { onTerminal: options.onTerminal }),
     ...(options.cliLaunch === undefined ? {} : { cliLaunch: options.cliLaunch }),
+  })
+  // A failed assertion must fail FAST. FakeChild only emits 'close' when the
+  // test closes it (`kill()` emits only with closeOnKill), so a test that throws
+  // before closing its child leaves the worker — and the whole `node --test`
+  // process — waiting forever (observed 2026-09 while adding the pnpm-shim
+  // assertion: the suite hung instead of reporting a failure). Close every fake
+  // child first (a second close is a no-op), then dispose the executor.
+  t.after(() => {
+    for (const call of harness.calls) call.child.close(0)
+    void exec.dispose()
   })
   return { stateDir, profileDir, journal, exec, harness, manifestText, lockText }
 }
@@ -363,9 +374,14 @@ test('env discipline reaches the spawn: pins applied, DSH_GATEWAY_*/npm_* stripp
   })
 
   const h = makeExecHarness(t)
+  const thirdParty = thirdPartyRoot(h.stateDir)
+  const shimDir = join(thirdParty, PNPM_SHIM_DIR)
+  // Premises that make the PATH assertion below meaningful: neither the
+  // ambient PATH nor the state dir carries the shim before an op runs.
+  assert.equal((process.env.PATH ?? '').includes(shimDir), false, 'the shim dir is never inherited from the ambient PATH')
+  assert.equal(existsSync(shimDir), false, 'nothing creates the shim before an op runs')
   await enqueueOk(h.exec, { kind: 'install', name: 'pkg-env', spec: 'pkg-env@1' })
   const captured = h.harness.calls[0]!.options.env!
-  const thirdParty = thirdPartyRoot(h.stateDir)
 
   assert.equal(captured.DSH_HOME, join(h.stateDir, 'dsh-home'))
   // HOME stays absent (store alignment with the provisioned profile — the
@@ -385,6 +401,14 @@ test('env discipline reaches the spawn: pins applied, DSH_GATEWAY_*/npm_* stripp
     assert.equal(existsSync(join(thirdParty, '.pnpm-home')), false, '.pnpm-home is no longer created (store alignment, §10 ⑨)')
   }
   assert.equal(readFileSync(join(thirdParty, '.npmrc-empty'), 'utf8'), '', 'NPM_CONFIG_USERCONFIG points at an empty file')
+
+  // The child PATH starts with the gateway's own pnpm shim: `dsh plugin`
+  // forwards to a literal `pnpm` on PATH, and a host provisioned with npm
+  // alone must still be able to seed/mutate the managed profile (2026-09
+  // audit, P1). Without this the op answers 127 "pnpm not found on PATH".
+  assert.ok(captured.PATH?.startsWith(shimDir), `child PATH must start with the pnpm shim (${String(captured.PATH)})`)
+  assert.ok(existsSync(join(shimDir, process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm')), 'the shim executable exists')
+  assert.match(readFileSync(join(shimDir, process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm'), 'utf8'), /pnpm\.cjs/)
 
   h.harness.calls[0]!.child.close(0)
   await waitFor(() => h.journal.recent()[0]?.status === 'ok', 'op ok')
