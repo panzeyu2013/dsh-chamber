@@ -23,6 +23,7 @@ import {
   omittedSeatContributions,
   parseClientGraphRows,
   projectExtensionRows,
+  toAssemblyReport,
   type ExtensionSnapshot,
   type FiberLike,
   type PluginContribution,
@@ -303,4 +304,35 @@ test('mergeContributionVerdict: a late failure replaces an optimistic active ver
   const previous: PluginContribution = { id: 'flaky', state: 'active', seats: ['settings.section'] };
   const merged = mergeContributionVerdict(previous, { id: 'flaky', state: 'failed', error: 'boom' }, []);
   assert.deepEqual(merged, { id: 'flaky', state: 'failed', seats: [], error: 'boom' });
+});
+
+// ── settings-assembly report (2026-09 relocation to the connections card) ──
+
+test('toAssemblyReport: names its source and carries state/total plus the notice list', () => {
+  const report = toAssemblyReport('gateway-office', snapshot({
+    total: 2,
+    contributions: [
+      { id: 'ok-plugin', state: 'active', seats: ['settings.section'] },
+      { id: 'broken-plugin', state: 'failed', error: 'boom' },
+    ],
+  }));
+  assert.equal(report.sourceId, 'gateway-office');
+  assert.equal(report.total, 2);
+  assert.deepEqual(report.notices.map(notice => notice.key), ['noticeFailed']);
+  assert.equal(report.notices[0]?.params?.plugin, 'broken-plugin');
+  // The report is a pure projection: no extra bookkeeping fields beyond the
+  // contract the connections card renders (a stale field would be dead weight).
+  assert.deepEqual(Object.keys(report).sort(), ['notices', 'sourceId', 'state', 'total']);
+});
+
+test('toAssemblyReport: a settled source with nothing to report stays empty (no invented lines)', () => {
+  const report = toAssemblyReport('local', snapshot({ total: 1, contributions: [{ id: 'quiet', state: 'active' }] }));
+  assert.deepEqual(report.notices, []);
+  assert.equal(report.total, 1);
+});
+
+test('toAssemblyReport: the unavailable state carries its reason through the notice params', () => {
+  const report = toAssemblyReport('local', snapshot({ state: 'unavailable', reason: 'HTTP 404' }));
+  assert.equal(report.state, 'unavailable');
+  assert.deepEqual(report.notices, [{ key: 'pluginsUnavailable', params: { error: 'HTTP 404' } }]);
 });
