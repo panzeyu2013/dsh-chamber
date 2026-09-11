@@ -15,7 +15,7 @@
   "license": "MIT",
   "scripts": {
     "build": "node scripts/build.mjs",
-    "test": "node --experimental-transform-types --import ./test/vendor-register.mjs test/core.test.ts",
+    "test": "node test/vendor-paths-lockstep.test.ts && node --experimental-transform-types --import ./test/vendor-register.mjs test/core.test.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "peerDependencies": {

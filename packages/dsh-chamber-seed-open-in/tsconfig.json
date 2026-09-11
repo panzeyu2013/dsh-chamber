@@ -18,7 +18,18 @@
     "noUnusedLocals": false,
     "noUnusedParameters": false,
     "paths": {
-      "@deepseek-ai/*": ["../../vendor/harness-packages/@deepseek-ai/*/src/index.ts"]
+      "@deepseek-ai/*": ["../../vendor/harness-packages/@deepseek-ai/*/src/index.ts"],
+      // 通配映射把 vendor 包解析到**源码**（workspace 成员不发布 lib/，其
+      // package.json `types` 指向未构建产物），于是上游源码自身的 registry
+      // 依赖也进入本程序：可达集里经 dsh-subprocess 拉到 dsh-http-proxy，其
+      // `src/install.ts` 直接 import 'undici'。pnpm 不会把 registry 依赖链进
+      // 符号链接的 vendor checkout（同 seed-client-graph 的
+      // @standard-schema/spec 注释），全新安装后解析失败——CI 的
+      // typecheck:host-open-in 就是 4 处 TS2307（vendor/…/dsh-http-proxy/src/
+      // install.ts:10/144/194/209）。按同一先例映射到 pnpm 虚拟store中由
+      // 已提交锁文件钉住的路径（undici 8.10.0 = dsh-http-proxy /
+      // dsh-web-fetch-http 的依赖版本）；pin 升级改动该版本时此路径必须同步。
+      "undici": ["../../node_modules/.pnpm/undici@8.10.0/node_modules/undici"]
     }
   },
   "include": ["src/**/*.ts", "test/**/*.ts"]

@@ -431,8 +431,12 @@ for (const fork of FORKS) {
   if (!existsSync(assemblyEntry)) {
     fail(`C4 找不到上游装配面 ${relative(ROOT, assemblyEntry)} — 该面被删除/改名时必须重审 typert 契约（不能静默跳过）`)
   } else {
+    // pathToFileURL, never a raw path: Node's ESM loader only accepts file:/
+    // data:/node: URLs, and a bare Windows path reads as the scheme 'd:' —
+    // `import('D:\\a\\…')` crashed this gate instantly on the test-windows leg
+    // (ERR_UNSUPPORTED_ESM_URL_SCHEME) while staying green on POSIX.
     const { remotePackagesFromAssembly, remoteMountPackages, EXPECTED_REMOTE_PACKAGES } = await import(
-      join(ROOT, 'packages/renderer/scripts/typert-remote-contract.mjs')
+      pathToFileURL(join(ROOT, 'packages/renderer/scripts/typert-remote-contract.mjs')).href
     )
     let remotes
     let mounted
@@ -707,7 +711,7 @@ for (const fork of FORKS) {
 // C9 —— vendor 源码补丁锚（design 09 §3.6；硬失败）
 {
   const { VENDOR_PATCHES, checkVendorPatchSources } = await import(
-    join(ROOT, 'packages/renderer/scripts/vendor-patches.mjs')
+    pathToFileURL(join(ROOT, 'packages/renderer/scripts/vendor-patches.mjs')).href
   )
   const results = checkVendorPatchSources()
   const broken = results.filter(result => !result.ok)

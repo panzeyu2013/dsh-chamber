@@ -17,7 +17,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { statSync } from 'node:fs'
+import { readFileSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { USAGE_EXIT_CODE, VERIFY_USAGE, parseVerifyArgs } from './verify-upstream-touchpoints-args.mjs'
@@ -107,4 +107,42 @@ test('--help prints the usage text, runs no gate and exits 0', () => {
   assert.doesNotMatch(result.stdout, /[✓] C\d/, '--help must short-circuit before the gates')
   assert.doesNotMatch(result.stdout, /C8 提交态生成物/, '--help must never reach the rebuild gate')
   assert.equal(statSync(witnessArtifact).mtimeMs, before, '--help must not touch any artifact')
+})
+
+/** Argument text of every `await import(...)` call in a source file (balanced-paren scan). */
+function dynamicImportArguments(source) {
+  const args = []
+  const marker = 'await import('
+  let from = 0
+  for (;;) {
+    const at = source.indexOf(marker, from)
+    if (at === -1) return args
+    let depth = 1
+    let i = at + marker.length
+    const start = i
+    while (i < source.length && depth > 0) {
+      if (source[i] === '(') depth += 1
+      else if (source[i] === ')') depth -= 1
+      i += 1
+    }
+    args.push(source.slice(start, i - 1))
+    from = i
+  }
+}
+
+test('every dynamic import in the gate goes through pathToFileURL (Windows ESM scheme trap)', () => {
+  // Regression lock for the test-windows leg: Node's ESM loader accepts only
+  // file:/data:/node: URLs, so `import(join(ROOT, 'x.mjs'))` reads a Windows
+  // absolute path as the scheme 'd:' and the gate dies instantly with
+  // ERR_UNSUPPORTED_ESM_URL_SCHEME — while staying green on every POSIX leg
+  // (2026-09-11 CI: C1/C3/C4 green, then the C4 assembly-contract import).
+  const args = dynamicImportArguments(readFileSync(scriptPath, 'utf8'))
+  assert.ok(args.length >= 3, `expected the gate's dynamic imports, found ${args.length}`)
+  for (const argument of args) {
+    assert.match(
+      argument,
+      /pathToFileURL\(/,
+      `a dynamic import must not take a raw path (import(${argument.trim().replace(/\s+/g, ' ')})）`,
+    )
+  }
 })
