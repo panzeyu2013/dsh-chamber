@@ -2426,13 +2426,27 @@ if (!gotTheLock) {
       // twice — a packaged/repo path fix has to land in one place).
       return CHAMBER_HOST_PACKAGES.flatMap(descriptor => {
         const dir = chamberHostSourceDirs[descriptor.insert.name];
-        return dir === undefined
-          ? []
-          : [{
-            name: descriptor.insert.name,
-            packageJsonPath: path.join(dir, 'package.json'),
-            distIndexPath: path.join(dir, 'dist', 'index.js'),
-          }];
+        if (dir === undefined) {
+          // NEVER silent (a registry entry with no desktop source dir used to
+          // disappear here without a trace). This is the ssh seed list's
+          // graceful skip inverted: there, an empty sourceDir is a deliberate
+          // "not shipped here" that seedRemoteChamberHostPackages skips; here
+          // the omission means the package is silently MISSING from the
+          // gateway seed upload, so the gateway's seed cache never carries it,
+          // the managed instance cannot serve it (its host domain 404s) and
+          // the UI shows no hint. Loud, with the missing name and that
+          // consequence — the fix is a new entry in chamberHostSourceDirs.
+          console.warn(
+            `[dsh-chamber] chamber host package ${descriptor.insert.name} (${descriptor.insert.id}) has no desktop source dir in chamberHostSourceDirs: `
+            + 'it is NOT uploaded to the gateway seed cache, so the gateway-hosted instance cannot load it (its host domain 404s) and no UI surface reports the gap',
+          );
+          return [];
+        }
+        return [{
+          name: descriptor.insert.name,
+          packageJsonPath: path.join(dir, 'package.json'),
+          distIndexPath: path.join(dir, 'dist', 'index.js'),
+        }];
       });
     };
     // Resolves the awaited sync outcome for the caller (the manual

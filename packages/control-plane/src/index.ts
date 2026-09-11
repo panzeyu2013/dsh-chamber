@@ -1244,9 +1244,17 @@ export {
   HOST_ARCHIVE_CLEANUP_INSERT,
   HOST_GIT_WORKTREE_INSERT,
   HOST_GRAPH_INSERT,
+  // The seeded file set + the local `--patch` overlay filename: forwarded so
+  // EVERY naming of either fact (desktop remote seed / install probes /
+  // gateway upload, overlay resolution) derives from host-graph-seed.ts
+  // instead of re-typing a literal (A2 cross-package protocol
+  // single-sourcing). Cross-side equality is pinned by
+  // packages/desktop/cross-package-contract.test.ts.
+  HOST_GRAPH_PATCH_FILENAME,
+  HOST_PACKAGE_SEED_FILES,
   HOST_SEED_PACKAGE_PREFIX,
 } from './host-graph-seed.ts'
-export type { ChamberHostPackageDescriptor, HostPackageInsert } from './host-graph-seed.ts'
+export type { ChamberHostPackageDescriptor, HostPackageInsert, HostPackageSeedFile } from './host-graph-seed.ts'
 export type { ApiCorsDecision, ApiCorsEvaluator, ApiRequest, ApiResponse, ApiSurface } from './api.ts'
 // Shared forwarding core (design 17 §8, 方案 A): extracted from
 // instance-proxy.ts so `gateway-proxy.ts` reuses the same Host/Origin

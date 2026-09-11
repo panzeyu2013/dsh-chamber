@@ -69,7 +69,8 @@ import { atomicWritePrivateFileNoFollow, ensurePrivateDirectoryNoFollow, readPri
 // constants below derive from control-plane's own seed and can never drift.
 import {
   CHAMBER_HOST_PACKAGES, HOST_ARCHIVE_CLEANUP_INSERT, HOST_GIT_WORKTREE_INSERT, HOST_GRAPH_INSERT,
-  type ChamberHostPackageDescriptor, type HostPackageInsert,
+  HOST_GRAPH_PATCH_FILENAME, HOST_PACKAGE_SEED_FILES,
+  type ChamberHostPackageDescriptor, type HostPackageInsert, type HostPackageSeedFile,
 } from './control-plane-module.ts'
 // ssh unified increments (design 21 §6.4, plan Phase 5): the reserved-name
 // deny + row assembly helpers (parseSpecName / buildSshApplyRows /
@@ -262,28 +263,25 @@ export const ARCHIVE_CLEANUP_PACKAGE_NAME = HOST_ARCHIVE_CLEANUP_INSERT.name
 export const ARCHIVE_CLEANUP_INSERT_ID = HOST_ARCHIVE_CLEANUP_INSERT.id
 
 /**
- * The two module-A seed files (design 09 module A / design 13 §3): the
- * install-level flat fallback carries package.json + dist/index.js — the same
- * set the local seed (control-plane host-graph-seed.ts HOST_GRAPH_SEED_FILES),
- * the remote seed writer and BOTH installed probes agree on. `installed`
- * means BOTH files are present; a package.json alone is a half-injected
- * module A (the boot row could not resolve) and must not report "installed".
+ * The module-A seed files (design 09 module A / design 13 §3): the
+ * install-level flat fallback carries the SAME set the local seed
+ * (control-plane host-graph-seed.ts HOST_PACKAGE_SEED_FILES) and both
+ * installed probes agree on — DERIVED from that export through
+ * control-plane-module.ts, never re-typed here (a hand-copied pair is how the
+ * remote seed writer and the desktop→gateway upload could drift apart).
+ * `installed` means EVERY declared file is present; a package.json alone is a
+ * half-injected module A (the boot row could not resolve) and must not report
+ * "installed".
  */
-const SEED_FILES = ['package.json', 'dist/index.js'] as const
+export const SEED_FILES: readonly HostPackageSeedFile[] = HOST_PACKAGE_SEED_FILES
 
 /**
- * The local `--patch` overlay filename (design 09 方案 A, module B). The
- * single source of truth is `packages/control-plane/src/host-graph-seed.ts`
- * (`HOST_GRAPH_PATCH_FILENAME`); the desktop mirrors the constant here
- * because it is not part of the control-plane package's public index (the
- * package exports the seed functions, not the filename) and the local
- * overlay probe (localPluginList) is a pure-module surface — the mirror is
- * pinned by the overlay probes in plugin-sync.test.ts. The overlay lives
- * next to the dsh home (`<stateDir>/dsh-chamber-graph.patch.yml` where the
- * managed dsh home is `<stateDir>/dsh-home`), so `dirname(localDshHome)`
- * locates it.
+ * The seed member carrying the package manifest — the member the probes parse
+ * for the installed version. Typed by the shared union (not a bare string), so
+ * dropping package.json from the seed set is a compile error here instead of a
+ * silent null version.
  */
-const HOST_GRAPH_PATCH_FILENAME = 'dsh-chamber-graph.patch.yml'
+const MANIFEST_SEED_FILE: HostPackageSeedFile = 'package.json'
 
 /** Resolve the effective remote dsh home (`~/.dsh` when not configured). */
 export function remoteHome(remoteDshHome: string | null): string {
@@ -431,7 +429,8 @@ export interface ChamberHostPackageState {
   name: string
   /** Remote probed for liveness ('namespace/method'). */
   probe: string
-  /** Both seed files (package.json + dist/index.js) present at the target. */
+  /** Every declared seed file (SEED_FILES, the control-plane seed tuple)
+   *  present at the target. */
   installed: boolean
   /** The target's loader overlay carries this exact insert row. */
   patched: boolean
@@ -801,18 +800,22 @@ export function describePluginApplyConfirmation(info: {
 }
 
 /**
- * Whether the local `--patch` overlay (control-plane host-graph-seed.ts
- * `dsh-chamber-graph.patch.yml`, beside the managed dsh home) actually
- * carries the git-worktree loader row. Presence of the overlay file alone
- * does not prove it: the overlay is regenerated per spawn with only the rows
- * whose built artifacts exist, so a stale overlay can predate the git
- * package. Unreadable/absent → false (never a guessed "patched").
+ * Whether the local `--patch` overlay actually carries one chamber loader row
+ * (design 09 方案 A, module B). The overlay filename is the control-plane's
+ * own export (`HOST_GRAPH_PATCH_FILENAME`, host-graph-seed.ts, consumed
+ * through control-plane-module.ts — never a desktop-side mirror) and the
+ * overlay lives next to the dsh home (`<stateDir>/dsh-chamber-graph.patch.yml`
+ * where the managed dsh home is `<stateDir>/dsh-home`), so
+ * `dirname(localDshHome)` locates it.
+ *
+ * Presence of the overlay file alone does not prove the row is mounted: the
+ * overlay is regenerated per spawn with only the rows whose built artifacts
+ * exist, so a stale overlay can predate a package. Unreadable/absent → false
+ * (never a guessed "patched"). The overlay is a single file for every chamber
+ * host package, so presence is judged per package (a stale overlay from before
+ * a package existed carries the older rows only — the same half-injected state
+ * the remote probe's per-package insert check detects).
  */
-/** True when the local overlay carries ONE exact chamber insert row. The
- *  overlay is a single file for every chamber host package, so presence is
- *  judged per package (a stale overlay from before a package existed carries
- *  the older rows only — the same half-injected state the remote probe's
- *  per-package insert check detects). */
 function localOverlayCarriesInsert(localDshHome: string, insert: HostPackageInsert): boolean {
   const overlayPath = join(dirname(localDshHome), HOST_GRAPH_PATCH_FILENAME)
   if (!existsSync(overlayPath)) return false
@@ -923,20 +926,20 @@ export type ChamberLiveProbe = (descriptor: ChamberHostPackageDescriptor) => Pro
 
 /**
  * Read-only probe of the chamber-injected host-graph state on a remote
- * instance (design 09 module A+B): module A's TWO seed files (package.json +
- * dist/index.js — the same SEED_FILES set seedRemoteChamberHostPackages
- * writes) at the install-level flat fallback
+ * instance (design 09 module A+B): module A's seed files (SEED_FILES — the
+ * control-plane seed tuple; package.json + dist/index.js today, the same set
+ * seedRemoteChamberHostPackages writes) at the install-level flat fallback
  * (`<home>/profiles/node_modules/…`, the layer that seed writes and
  * `dsh plugin` pnpm relinks never prune) +
  * the profile's cordis.patch.yml inserts (reusing computeCordisPatchUpdate's
  * dedup rules, checked PER package — the host-graph insert present does not
- * prove the git-worktree insert present, design 08 §6.3). Three extra `cat`
- * round-trips, all marked quiet (their ENOENT on a not-yet-seeded instance
- * is expected, never a log-panel error); ENOENT = that file not injected
- * (never an error); any other ssh failure is a loud probe error — never a
- * silent "not injected". `installed` requires BOTH files: a package.json
- * without dist/index.js is a half-installed module A (the boot row could not
- * resolve) and must not report "installed".
+ * prove the git-worktree insert present, design 08 §6.3). One `cat` per
+ * declared seed file, all marked quiet (their ENOENT on a not-yet-seeded
+ * instance is expected, never a log-panel error); ENOENT = that file not
+ * injected (never an error); any other ssh failure is a loud probe error —
+ * never a silent "not injected". `installed` requires EVERY declared file: a
+ * package.json without dist/index.js is a half-installed module A (the boot
+ * row could not resolve) and must not report "installed".
  *
  * Additionally parses each package's own VERSION from the package.json it
  * already cats, and — when a `liveProbe` is supplied (the desktop main's
@@ -963,29 +966,23 @@ async function probeRemoteChamber(
 
   const packages: ChamberHostPackageState[] = []
   for (const descriptor of CHAMBER_HOST_PACKAGES) {
-    const pkgPath = `${home}/profiles/node_modules/${descriptor.insert.name}/package.json`
-    const indexPath = `${home}/profiles/node_modules/${descriptor.insert.name}/dist/index.js`
-    const pkgRes = await exec(spec.id, 'run', { op: 'exec', command: 'cat', argv: [pkgPath], quiet: true })
-    let pkgInstalled: boolean
+    // Every DECLARED seed file is probed (SEED_FILES — the shared control-plane
+    // tuple, so a third seed file is read here the moment it lands there
+    // instead of the probe reporting "installed" over a missing file), and the
+    // manifest member additionally supplies the installed version.
+    let installed = true
     let version: string | null = null
-    if (pkgRes.ok) {
-      pkgInstalled = true
-      version = parsePackageVersion(pkgRes.stdout ?? '')
-    } else if (ENOENT_PATTERN.test(pkgRes.error)) {
-      pkgInstalled = false
-    } else {
-      return { ok: false, error: `${descriptor.insert.name} probe failed: ${pkgRes.error}` }
+    for (const relative of SEED_FILES) {
+      const filePath = `${home}/profiles/node_modules/${descriptor.insert.name}/${relative}`
+      const res = await exec(spec.id, 'run', { op: 'exec', command: 'cat', argv: [filePath], quiet: true })
+      if (res.ok) {
+        if (relative === MANIFEST_SEED_FILE) version = parsePackageVersion(res.stdout ?? '')
+      } else if (ENOENT_PATTERN.test(res.error)) {
+        installed = false
+      } else {
+        return { ok: false, error: `${descriptor.insert.name} probe failed: ${res.error}` }
+      }
     }
-    const indexRes = await exec(spec.id, 'run', { op: 'exec', command: 'cat', argv: [indexPath], quiet: true })
-    let indexInstalled: boolean
-    if (indexRes.ok) {
-      indexInstalled = true
-    } else if (ENOENT_PATTERN.test(indexRes.error)) {
-      indexInstalled = false
-    } else {
-      return { ok: false, error: `${descriptor.insert.name} probe failed: ${indexRes.error}` }
-    }
-    const installed = pkgInstalled && indexInstalled
 
     // Per-package insert presence: the chamber boot rows live in the SAME
     // cordis.patch.yml, but one can predate another (a machine seeded before

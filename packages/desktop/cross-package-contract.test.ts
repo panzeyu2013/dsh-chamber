@@ -22,16 +22,23 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 // Desktop consumption entry: the dual-path facade (packaged → compiled
 // control-plane, dev/tests → workspace source).
 import {
   buildClientRequest as desktopBuildClientRequest,
+  HOST_GRAPH_PATCH_FILENAME as facadeHostGraphPatchFilename,
+  HOST_PACKAGE_SEED_FILES as facadeSeedFiles,
   isPackagedElectronRuntime,
   renderCordisInserts as desktopRenderCordisInserts,
 } from './control-plane-module.ts'
 // The control-plane authoritative package (the cross-package contract target).
 import {
   buildClientRequest as planeBuildClientRequest,
+  HOST_GRAPH_PATCH_FILENAME as planeHostGraphPatchFilename,
+  HOST_PACKAGE_SEED_FILES as planeSeedFiles,
   renderCordisInserts as planeRenderCordisInserts,
 } from '@dsh-chamber/control-plane'
 import {
@@ -42,7 +49,19 @@ import {
   computeCordisPatchUpdate,
   GIT_WORKTREE_INSERT_ID,
   GIT_WORKTREE_PACKAGE_NAME,
+  localPluginList,
+  SEED_FILES,
 } from './plugin-sync.ts'
+import { syncedPluginUploadFiles } from './gateway-provider.ts'
+// The gateway's usage points of the same seed set (design 17): the upload/cache
+// file set of the sync surface. Imported as source (the desktop↔gateway
+// cross-package lockstep pattern already used by plugin-tarball.test.ts) —
+// module load only runs the registry/probe-domain naming pins, no I/O.
+import {
+  createChamberPlugins,
+  SYNCED_PLUGIN_FILES,
+  type SyncedPluginFiles,
+} from '../gateway/src/plugins.ts'
 // The shared dsh-runtime activation-probe set (the desktop shims re-export
 // the package main → dist; this import therefore pins the COMMITTED bundle).
 import { REQUIRED_ACTIVATION_PROBES } from '@dsh-chamber/dsh-runtime'
@@ -146,4 +165,119 @@ test('the dsh-runtime activation set and the control-plane identity method stay 
     'session/list must not re-enter the activation probe set')
   assert.equal(probeSet.includes('data.sessions'), false,
     'data.sessions must not re-enter the activation probe set')
+})
+
+// ---------------------------------------------------------------------------
+// Seeded host-package FILE SET: one source, four consumers (P2).
+//
+// The seed file set used to be hand-copied in four places (control-plane's
+// private tuple, the desktop's remote seed/probe pair, the gateway upload
+// body, the gateway cache). The consequence was silent: adding a third seed
+// file on one side let the desktop PUT two keys, the gateway answer
+// 200/changed:true, and the remote boot miss the file with nobody reporting
+// it. These assertions pin all four sides to the control-plane export, item by
+// item, and prove each side REALLY consumes it (not merely that two literals
+// happen to match today).
+// ---------------------------------------------------------------------------
+
+/** Golden seed file set — regenerate ONLY when the change is deliberately made
+ *  on the control-plane side and every consumer follows it. */
+const GOLDEN_SEED_FILES = ['package.json', 'dist/index.js']
+
+test('the seeded file set is single-sourced: control-plane export ≡ desktop writer/probe ≡ desktop gateway upload ≡ gateway cache (A2)', () => {
+  const plane = [...planeSeedFiles]
+  assert.deepEqual(plane, GOLDEN_SEED_FILES,
+    'the control-plane seed tuple drifted from the golden set: all four sides below must move together')
+  // The desktop consumes the tuple through the dual-path facade, which must
+  // FORWARD it (the packaged desktop cannot import the workspace package).
+  assert.deepEqual([...facadeSeedFiles], plane,
+    'control-plane-module.ts must forward HOST_PACKAGE_SEED_FILES, not re-declare it')
+  // Side 2 — the desktop remote seed writer + both install probes.
+  const desktopSeedFiles = [...SEED_FILES]
+  assert.deepEqual(desktopSeedFiles, plane,
+    'the desktop seed/probe file set (plugin-sync.ts SEED_FILES) drifted from the control-plane export')
+  // Side 3 — the desktop `PUT /chamber/plugins` payload keys.
+  const upload = syncedPluginUploadFiles({
+    name: '@dsh-chamber/dsh-chamber-seed-client-graph',
+    packageJson: '{"name":"x","version":"0.0.0"}',
+    distIndex: 'export {}\n',
+  })
+  const uploadKeys = Object.keys(upload)
+  assert.deepEqual(uploadKeys, plane,
+    'the desktop gateway upload payload keys (gateway-provider.ts) drifted from the control-plane export')
+  // Side 4 — the gateway upload/cache file set.
+  const gatewaySeedFiles = [...SYNCED_PLUGIN_FILES]
+  assert.deepEqual(gatewaySeedFiles, plane,
+    'the gateway seed/upload file set (gateway/src/plugins.ts) drifted from the control-plane export')
+  // Element-by-item (not just lengths): a one-sided rename must fail even when
+  // both sides still carry the same NUMBER of files.
+  for (let index = 0; index < plane.length; index += 1) {
+    assert.equal(desktopSeedFiles[index], plane[index], `desktop seed file #${index} drifted`)
+    assert.equal(uploadKeys[index], plane[index], `desktop upload key #${index} drifted`)
+    assert.equal(gatewaySeedFiles[index], plane[index], `gateway seed file #${index} drifted`)
+  }
+  // The upload carries the real bytes under the derived keys (key derivation
+  // never invents an empty/placeholder payload).
+  assert.equal(upload['package.json'], '{"name":"x","version":"0.0.0"}')
+  assert.equal(upload['dist/index.js'], 'export {}\n')
+})
+
+test('the gateway sync cache requires EVERY declared seed file and caches every one of them (no silent two-key accept)', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'chamber-seed-set-'))
+  const silent = { log() {}, warn() {}, error() {} }
+  const name = '@dsh-chamber/dsh-chamber-seed-client-graph'
+  try {
+    const plugins = createChamberPlugins(stateDir, silent)
+    const complete = { 'package.json': JSON.stringify({ name, version: '0.0.1' }), 'dist/index.js': 'export {}\n' }
+    assert.deepEqual(await plugins.put(name, complete), { changed: true })
+    // Every declared member landed in the cache (derived from the shared set).
+    for (const relative of [...SYNCED_PLUGIN_FILES]) {
+      assert.equal(existsSync(join(stateDir, 'chamber-plugins', 'dsh-chamber-seed-client-graph', relative)), true,
+        `the gateway cache did not write seed file ${relative}`)
+    }
+    // A caller that drops a declared key (an older/other-shaped desktop) is
+    // refused loudly instead of being accepted with the file silently missing.
+    const dropped = { ...complete } as Record<string, string>
+    delete dropped[[...SYNCED_PLUGIN_FILES][1]]
+    await assert.rejects(
+      () => plugins.put(name, dropped as unknown as SyncedPluginFiles),
+      /plugin upload must carry package\.json and dist\/index\.js/,
+      'a dropped seed key must be refused, never cached as a partial package',
+    )
+    // Idempotence is unchanged: the same bytes are not a change.
+    assert.deepEqual(await plugins.put(name, complete), { changed: false })
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('the local `--patch` overlay filename comes from the control-plane export, not a desktop mirror (A2)', () => {
+  assert.equal(facadeHostGraphPatchFilename, planeHostGraphPatchFilename,
+    'control-plane-module.ts must forward HOST_GRAPH_PATCH_FILENAME (the packaged desktop cannot import the workspace package)')
+  assert.equal(planeHostGraphPatchFilename, 'dsh-chamber-graph.patch.yml',
+    'the overlay filename drifted: the control-plane seed writes this file and every reader resolves it')
+  const stateDir = mkdtempSync(join(tmpdir(), 'chamber-overlay-name-'))
+  try {
+    // The overlay lives BESIDE the managed dsh home (<stateDir>/dsh-home).
+    const localDshHome = join(stateDir, 'dsh-home')
+    mkdirSync(join(localDshHome, 'profiles', 'web'), { recursive: true })
+    writeFileSync(join(localDshHome, 'profiles', 'web', 'package.json'), '{"dependencies":{}}')
+    const overlayPath = join(stateDir, planeHostGraphPatchFilename)
+    writeFileSync(overlayPath, GOLDEN_OVERLAY)
+    const projection = localPluginList(localDshHome)
+    assert.equal(projection.chamber.ok, true)
+    if (!projection.chamber.ok) return
+    assert.deepEqual(projection.chamber.packages.map(entry => entry.patched), [true, true, true],
+      'the local overlay probe must resolve the overlay through the SHARED filename (control-plane HOST_GRAPH_PATCH_FILENAME)')
+    // Renamed: a desktop that re-hardcoded its own filename would still report
+    // "patched" here, so this half proves the filename really is shared.
+    renameSync(overlayPath, join(stateDir, 'renamed.patch.yml'))
+    const renamed = localPluginList(localDshHome)
+    assert.equal(renamed.chamber.ok, true)
+    if (!renamed.chamber.ok) return
+    assert.deepEqual(renamed.chamber.packages.map(entry => entry.patched), [false, false, false],
+      'the overlay probe must read exactly the shared filename')
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
 })

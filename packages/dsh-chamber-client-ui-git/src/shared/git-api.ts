@@ -42,34 +42,65 @@ export function isAmbiguousGitRpcFailure(error: unknown): boolean {
     || error.retryable === true
 }
 
-/** Preflight/deterministic rejections that can NEVER have committed a
- *  mutation: surfacing them as an ambiguous recovery would replay the same
- *  failure forever and lock the whole source (review P2-1). They become a
- *  plain actionError instead — the user fixes the cause and retries. */
+/**
+ * Preflight/deterministic rejections that can NEVER have committed a mutation:
+ * surfacing them as an ambiguous recovery would replay the same failure
+ * forever and lock the whole source (review P2-1). They become a plain
+ * actionError instead — the user fixes the cause and retries.
+ *
+ * LOCKSTEP POINT (host classification): `RETRYABLE_CODES` in
+ * `packages/dsh-chamber-seed-git-worktree/src/core.ts` is the codes the host
+ * serializes with `retryable: true` (outcome unverified). This set must stay
+ * disjoint from it except for {@link DETERMINISTIC_HOST_RETRYABLE_OVERRIDES},
+ * and must cover every code the host proves to be a pre-mutation refusal. The
+ * cross-package test `test/host-client-lockstep.test.ts` fails on any other
+ * divergence, so a code added or renamed on either side must be mirrored here.
+ */
+export const DETERMINISTIC_GIT_REJECTION_CODES: ReadonlySet<string> = new Set([
+  'invalid-input',
+  'unsafe-path',
+  'expected-mismatch',
+  'workspace/not-found',
+  'worktree-not-found',
+  'main-worktree',
+  'worktree-locked',
+  'worktree-dirty',
+  'worktree-submodules',
+  'nested-workspace',
+  'workspace-registered',
+  'workspace-path-unavailable',
+  'path-unavailable',
+  'running-agent',
+  'worktree-invalid',
+  'branch-exists',
+  'branch-not-found',
+])
+
+/**
+ * Host-RETRYABLE codes this client deliberately classifies as deterministic
+ * anyway (review P2-1): both come from the host's filesystem probe
+ * (`existingPath`), so replaying the same operation re-runs the same failing
+ * probe. Treating them as ambiguous replaces the actionable refusal with a
+ * recovery entry that replays forever and wedges the source. The host keeps
+ * them retryable because the same code can also surface from a post-mutation
+ * reconcile, but the client's only actionable outcome is the refusal — and an
+ * explicit host `retryable: false` (isProvenPreMutationRefusal) remains the
+ * proof that clears a pending recovery.
+ *
+ * LOCKSTEP POINT: `test/host-client-lockstep.test.ts` asserts this set is
+ * EXACTLY the overlap between {@link DETERMINISTIC_GIT_REJECTION_CODES} and the
+ * host's `RETRYABLE_CODES` — an undeclared overlap (or a host code that stops
+ * overlapping without this list being updated) fails the suite.
+ */
+export const DETERMINISTIC_HOST_RETRYABLE_OVERRIDES: ReadonlySet<string> = new Set([
+  'path-unavailable',
+  'workspace-path-unavailable',
+])
+
+/** True for a host code the browser refuses to replay (see
+ *  {@link DETERMINISTIC_GIT_REJECTION_CODES}). */
 export function isDeterministicGitRejection(error: unknown): boolean {
-  if (!(error instanceof GitWorktreeRpcError)) return false
-  switch (error.code) {
-    case 'invalid-input':
-    case 'unsafe-path':
-    case 'expected-mismatch':
-    case 'workspace/not-found':
-    case 'worktree-not-found':
-    case 'main-worktree':
-    case 'worktree-locked':
-    case 'worktree-dirty':
-    case 'worktree-submodules':
-    case 'nested-workspace':
-    case 'workspace-registered':
-    case 'workspace-path-unavailable':
-    case 'path-unavailable':
-    case 'running-agent':
-    case 'worktree-invalid':
-    case 'branch-exists':
-    case 'branch-not-found':
-      return true
-    default:
-      return false
-  }
+  return error instanceof GitWorktreeRpcError && DETERMINISTIC_GIT_REJECTION_CODES.has(error.code)
 }
 
 export interface CreateWorktreeInput {

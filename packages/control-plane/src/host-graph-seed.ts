@@ -301,8 +301,30 @@ export function missingHostPackageInserts(
   return missing
 }
 
-/** Files seeded from each chamber host package (its complete runtime surface). */
-const HOST_PACKAGE_SEED_FILES = ['package.json', 'dist/index.js'] as const
+/**
+ * Files seeded from each chamber host package (its complete runtime surface) —
+ * the SINGLE SOURCE for every side that names that file set: this module's
+ * local profile seed, the desktop's remote seed writer + install probes
+ * (plugin-sync.ts), the desktop's gateway upload payload
+ * (gateway-provider.ts) and the gateway's sync cache + packaged mobile seed
+ * (gateway plugins.ts / index.ts). Before this export each side hand-copied
+ * the pair, so a third seed file would have been written locally while the
+ * desktop→gateway PUT carried two keys and the gateway still answered
+ * 200/changed:true (the remote boot then missed a file with nobody reporting
+ * it).
+ *
+ * ORDER IS PART OF THE CONTRACT: the manifest first (the member every reader
+ * parses for name/version), the built entry second — the gateway cache writes
+ * in this order and the upload payload is keyed in it.
+ */
+export const HOST_PACKAGE_SEED_FILES = ['package.json', 'dist/index.js'] as const
+
+/** One package-relative seed file path. Every consumer keys its per-file
+ *  table (byte source / size bound) by this union, so a member added to the
+ *  tuple above is a compile error on each side that cannot serve it — never a
+ *  silently dropped member. */
+export type HostPackageSeedFile = (typeof HOST_PACKAGE_SEED_FILES)[number]
+
 const MAX_SEED_TARGET_BYTES = 64 * 1024 * 1024
 
 /** Stable target read. Only true absence is a cache miss; unsafe, oversized,
