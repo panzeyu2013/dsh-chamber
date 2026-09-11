@@ -138,6 +138,8 @@ const CHAMBER_APP_HTML = `<!doctype html>
     select,.text-input{min-height:2rem;padding:.35rem .55rem;border:1px solid #484f58;border-radius:.4rem;background:#0d1117;color:#e6edf3;font:inherit}.runtime-controls{display:grid;grid-template-columns:minmax(12rem,1fr) auto;gap:.55rem}.runtime-controls .actions{grid-column:1/-1}.runtime-registry{display:grid;grid-template-columns:minmax(12rem,1fr) auto;gap:.55rem}.runtime-facts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.55rem}.runtime-facts .item{padding:.6rem}
     .list{display:flex;flex-direction:column;gap:.6rem}.item{display:flex;flex-direction:column;gap:.35rem;padding:.75rem;border-radius:.55rem;background:#0d1117;overflow-wrap:anywhere}.item-head{display:flex;justify-content:space-between;gap:.75rem;align-items:baseline}.item-head strong{min-width:0}.meta,code{color:#8b949e;font-size:.75rem;overflow-wrap:anywhere;white-space:pre-wrap}.body{font-size:.86rem;white-space:pre-wrap;overflow-wrap:anywhere}.status{min-height:1.2rem;font-size:.8rem}.status.error,.error{color:#ff7b72}.empty{padding:.5rem 0;color:#8b949e;font-size:.85rem}
     .token-reveal{display:flex;flex-direction:column;gap:.5rem}.token-reveal[hidden]{display:none}.token-reveal textarea{width:100%;min-height:6rem;resize:vertical;font-family:ui-monospace,SFMono-Regular,monospace;font-size:.78rem}
+    /* 2026-09-11 upstream-alignment T2: the confirmation dialog reuses this page's panel/actions/status vocabulary (.panel + .actions + .danger); only the modal shell is new. */
+    .dialog-backdrop{position:fixed;inset:0;z-index:3;display:flex;align-items:center;justify-content:center;padding:1rem;background:rgba(1,4,9,.72)}.dialog-backdrop[hidden]{display:none}.dialog{width:min(30rem,100%);max-height:calc(100vh - 2rem);overflow:auto}.dialog .actions{justify-content:flex-end}
     @media(max-width:760px){header{align-items:flex-start}main{grid-template-columns:1fr}.wide{grid-column:auto}.header-actions{justify-content:flex-end}.runtime-controls,.runtime-registry,.runtime-facts{grid-template-columns:1fr}}
   </style>
 </head>
@@ -207,6 +209,24 @@ const CHAMBER_APP_HTML = `<!doctype html>
       <p id="runtime-action-status" class="status" role="status"></p>
     </section>
   </main>
+  <!-- 2026-09-11 upstream-alignment T2: this page's own confirmation dialog.
+       The two credential removals below used to gate on the browser's native
+       confirmation popup, whose OS chrome cannot ride this page's vocabulary,
+       reads as an alien layer over it, and is not localizable — the same
+       reason the chamber's other admin surfaces were converted. The title and
+       description are deliberately empty here: app.js fills them through
+       textContent, so no interpolated copy is ever parsed as HTML. -->
+  <div id="confirm-backdrop" class="dialog-backdrop" hidden>
+    <div id="confirm-dialog" class="panel dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-description">
+      <h2 id="confirm-title"></h2>
+      <p id="confirm-description" class="body"></p>
+      <p id="confirm-pending" class="status" role="status" aria-live="polite"></p>
+      <div class="actions">
+        <button id="confirm-cancel" type="button">Cancel</button>
+        <button id="confirm-accept" class="danger" type="button"></button>
+      </div>
+    </div>
+  </div>
   <script defer src="/chamber/app.js"></script>
 </body>
 </html>
@@ -653,24 +673,166 @@ const CHAMBER_APP_JS = `(function () {
       status('credentials', 'Password changed.', false);
     } catch (error) { status('credentials', credentialErrorText(error), true); }
   }
-  async function removePassword() {
+  // -------------------------------------------------------------------------
+  // In-page confirmation dialog (2026-09-11 upstream-alignment T2).
+  //
+  // Both credential removals used to gate on the browser's native
+  // confirmation popup: OS-styled chrome that cannot ride this page's own
+  // visual vocabulary (panel/actions/status/danger), reads as an alien layer
+  // over it, and cannot be localized — the same reason the chamber's other
+  // admin surfaces were converted (the settings bridge's confirmations are now
+  // one in-app dialog built from the official design-system primitive). This
+  // page is deliberately dependency-free, so the dialog is the page's own
+  // #confirm-* markup driven by plain DOM calls; all operator-visible copy is
+  // written through textContent, never parsed as HTML.
+  //
+  // One armed request at a time. ARMING fills the dialog and moves focus INTO
+  // it (Cancel, the least destructive control, takes the initial focus).
+  // CANCEL or Escape dismisses it and performs NOTHING: the runner is dropped
+  // before it is ever called, so no request leaves the page. CONFIRM launches
+  // the runner EXACTLY once and the dialog becomes a non-dismissible progress
+  // surface (both controls disabled, aria-busy set, the pending line announced
+  // through role="status") until the action settles; the action owns its own
+  // success/failure reporting, so this page's existing status lines stay the
+  // single report.
+  // -------------------------------------------------------------------------
+  var confirmArmed = null;
+
+  function confirmElements() {
+    return {
+      backdrop: byId('confirm-backdrop'),
+      dialog: byId('confirm-dialog'),
+      title: byId('confirm-title'),
+      description: byId('confirm-description'),
+      pending: byId('confirm-pending'),
+      cancel: byId('confirm-cancel'),
+      accept: byId('confirm-accept')
+    };
+  }
+
+  // Close the dialog and hand focus back to the control that opened it (the
+  // invoking button), so the keyboard flow resumes where the operator left it.
+  function closeConfirmDialog() {
+    var armed = confirmArmed;
+    if (armed === null) return;
+    confirmArmed = null;
+    document.removeEventListener('keydown', confirmKeydown, true);
+    var parts = confirmElements();
+    parts.backdrop.hidden = true;
+    parts.dialog.removeAttribute('aria-busy');
+    parts.title.textContent = '';
+    parts.description.textContent = '';
+    parts.pending.textContent = '';
+    parts.accept.textContent = '';
+    parts.accept.disabled = false;
+    parts.cancel.disabled = false;
+    if (armed.returnFocus !== null && typeof armed.returnFocus.focus === 'function') armed.returnFocus.focus();
+  }
+
+  // A dismiss while the accepted action is running is ignored: the dialog is a
+  // progress surface then, and closing it would imply a cancellation that does
+  // not exist.
+  function dismissConfirmDialog() {
+    if (confirmArmed === null || confirmArmed.pending) return;
+    closeConfirmDialog();
+  }
+
+  function acceptConfirmDialog() {
+    var armed = confirmArmed;
+    // A second accept — a same-frame double click included — launches nothing.
+    if (armed === null || armed.pending) return;
+    armed.pending = true;
+    var parts = confirmElements();
+    parts.dialog.setAttribute('aria-busy', 'true');
+    parts.accept.disabled = true;
+    parts.cancel.disabled = true;
+    parts.accept.textContent = armed.pendingLabel;
+    // The pending state is announced on the dialog's own role="status" line
+    // (a scrypt verify or a store write takes a moment; the dialog says so
+    // instead of looking inert).
+    parts.pending.textContent = armed.pendingLabel;
+    // The runner starts one microtask later, so a synchronous throw is caught
+    // like any other failure, and its promise settlement (success or failure)
+    // is what closes the dialog — the modal can never outlive the action it
+    // announced.
+    Promise.resolve().then(armed.run).then(closeConfirmDialog, closeConfirmDialog);
+  }
+
+  function confirmKeydown(event) {
+    if (confirmArmed === null) return;
+    if (event.key === 'Escape' || event.key === 'Esc') {
+      event.preventDefault();
+      dismissConfirmDialog();
+      return;
+    }
+    if (event.key !== 'Tab' || confirmArmed.pending) return;
+    // aria-modal="true" promises the page behind is unreachable, so Tab cycles
+    // the dialog's two controls (Cancel, then the destructive Confirm) instead
+    // of walking back out into the page (2026-09-11 upstream-alignment T2).
+    event.preventDefault();
+    var parts = confirmElements();
+    var order = [parts.cancel, parts.accept];
+    var step = event.shiftKey ? -1 : 1;
+    order[(order.indexOf(document.activeElement) + step + order.length) % order.length].focus();
+  }
+
+  // Arm the page's ONE in-app confirmation (2026-09-11 upstream-alignment T2):
+  // nothing runs before the operator confirms, and the copy the dialog shows is
+  // the gate's own (title = the question, description = the consequence).
+  function armConfirmDialog(request) {
+    if (confirmArmed !== null) return;
+    confirmArmed = {
+      pending: false,
+      pendingLabel: request.pendingLabel,
+      run: request.run,
+      // Focus memory: the invoking button is passed explicitly (a click does
+      // not focus a button in every browser), with the currently focused
+      // control as the fallback.
+      returnFocus: request.opener !== undefined && request.opener !== null ? request.opener : document.activeElement
+    };
+    var parts = confirmElements();
+    // Every interpolated string goes through textContent — the dialog can
+    // never turn copy (or a server message) into markup.
+    parts.title.textContent = request.title;
+    parts.description.textContent = request.description;
+    parts.pending.textContent = '';
+    parts.accept.textContent = request.confirmLabel;
+    parts.accept.disabled = false;
+    parts.cancel.disabled = false;
+    parts.dialog.removeAttribute('aria-busy');
+    parts.backdrop.hidden = false;
+    document.addEventListener('keydown', confirmKeydown, true);
+    // Focus moves INTO the dialog, onto the least destructive control: the
+    // destructive button is never the default action of a modal.
+    parts.cancel.focus();
+  }
+
+  function removePassword() {
     if (credentialSnapshot.password === null) { status('credentials', 'No password is configured — nothing to remove.', true); return; }
-    if (!window.confirm('Remove the gateway password? The password login is invalidated immediately.')) return;
-    var current = byId('cred-current-password').value;
-    if (current.length === 0) { status('credentials', 'Enter the current password to remove the gateway password.', true); return; }
-    hideTokenReveal();
-    status('credentials', 'Removing password…', false);
-    try {
-      await request(AUTH_PATHS.changePassword, { method: 'POST', body: { remove: true, currentPassword: current } });
-      // A config-managed credential is re-seeded on the next restart — say
-      // so instead of implying a permanent removal (design 17 §7.4 seeding).
-      var wasConfigManaged = credentialSnapshot.password !== null && credentialSnapshot.password.source === 'config';
-      byId('cred-current-password').value = '';
-      await loadCredentials();
-      status('credentials', wasConfigManaged
-        ? 'Password removed for now — it is managed by deployment config and will be re-seeded on the next gateway restart.'
-        : 'Password removed.', false);
-    } catch (error) { status('credentials', credentialErrorText(error), true); }
+    armConfirmDialog({
+      title: 'Remove the gateway password?',
+      description: 'The password login is invalidated immediately.',
+      confirmLabel: 'Remove password',
+      pendingLabel: 'Removing password…',
+      opener: byId('cred-remove-password'),
+      run: async function () {
+        var current = byId('cred-current-password').value;
+        if (current.length === 0) { status('credentials', 'Enter the current password to remove the gateway password.', true); return; }
+        hideTokenReveal();
+        status('credentials', 'Removing password…', false);
+        try {
+          await request(AUTH_PATHS.changePassword, { method: 'POST', body: { remove: true, currentPassword: current } });
+          // A config-managed credential is re-seeded on the next restart — say
+          // so instead of implying a permanent removal (design 17 §7.4 seeding).
+          var wasConfigManaged = credentialSnapshot.password !== null && credentialSnapshot.password.source === 'config';
+          byId('cred-current-password').value = '';
+          await loadCredentials();
+          status('credentials', wasConfigManaged
+            ? 'Password removed for now — it is managed by deployment config and will be re-seeded on the next gateway restart.'
+            : 'Password removed.', false);
+        } catch (error) { status('credentials', credentialErrorText(error), true); }
+      }
+    });
   }
   async function rotateToken() {
     if (credentialSnapshot.password !== null && byId('cred-current-password').value.length === 0) {
@@ -700,28 +862,36 @@ const CHAMBER_APP_JS = `(function () {
         : 'Token rotated — shown once, store it now.', durabilityUnknown);
     } catch (error) { status('credentials', credentialErrorText(error), true); }
   }
-  async function removeToken() {
+  function removeToken() {
     if (credentialSnapshot.token === null) { status('credentials', 'No token is configured — nothing to remove.', true); return; }
     if (credentialSnapshot.password === null) {
       status('credentials', 'This gateway has no password; remove the token from a bearer-token client instead.', true);
       return;
     }
-    if (!window.confirm('Remove the gateway token? Authenticated API and desktop clients are disconnected immediately.')) return;
-    var current = byId('cred-current-password').value;
-    if (current.length === 0) { status('credentials', 'Enter the current password to remove the gateway token.', true); return; }
-    hideTokenReveal();
-    status('credentials', 'Removing token…', false);
-    try {
-      await request(AUTH_PATHS.changeToken, { method: 'POST', body: { remove: true, currentPassword: current } });
-      // A config-managed credential is re-seeded on the next restart — say
-      // so instead of implying a permanent removal (design 17 §7.4 seeding).
-      var wasConfigManaged = credentialSnapshot.token !== null && credentialSnapshot.token.source === 'config';
-      byId('cred-current-password').value = '';
-      await loadCredentials();
-      status('credentials', wasConfigManaged
-        ? 'Token removed for now — it is managed by deployment config and will be re-seeded on the next gateway restart.'
-        : 'Token removed.', false);
-    } catch (error) { status('credentials', credentialErrorText(error), true); }
+    armConfirmDialog({
+      title: 'Remove the gateway token?',
+      description: 'Authenticated API and desktop clients are disconnected immediately.',
+      confirmLabel: 'Remove token',
+      pendingLabel: 'Removing token…',
+      opener: byId('cred-remove-token'),
+      run: async function () {
+        var current = byId('cred-current-password').value;
+        if (current.length === 0) { status('credentials', 'Enter the current password to remove the gateway token.', true); return; }
+        hideTokenReveal();
+        status('credentials', 'Removing token…', false);
+        try {
+          await request(AUTH_PATHS.changeToken, { method: 'POST', body: { remove: true, currentPassword: current } });
+          // A config-managed credential is re-seeded on the next restart — say
+          // so instead of implying a permanent removal (design 17 §7.4 seeding).
+          var wasConfigManaged = credentialSnapshot.token !== null && credentialSnapshot.token.source === 'config';
+          byId('cred-current-password').value = '';
+          await loadCredentials();
+          status('credentials', wasConfigManaged
+            ? 'Token removed for now — it is managed by deployment config and will be re-seeded on the next gateway restart.'
+            : 'Token removed.', false);
+        } catch (error) { status('credentials', credentialErrorText(error), true); }
+      }
+    });
   }
   function copyToken() {
     var textarea = byId('cred-token-value');
@@ -762,6 +932,18 @@ const CHAMBER_APP_JS = `(function () {
   byId('cred-rotate-token').addEventListener('click', function () { void rotateToken(); });
   byId('cred-remove-token').addEventListener('click', function () { void removeToken(); });
   byId('cred-copy-token').addEventListener('click', copyToken);
+  // The confirmation dialog's own controls (2026-09-11 upstream-alignment T2):
+  // Cancel dismisses (a cancel performs NOTHING), Confirm launches the armed
+  // runner exactly once, and a click on the mask outside the dialog dismisses
+  // the same way — the affordance the chamber's other in-app dialogs have
+  // (the settings bridge's Modal closes on mask click), and the only one a
+  // touch device without an Escape key would otherwise miss. Registered ONCE:
+  // the dialog is re-armed many times, and the listeners must not accumulate.
+  byId('confirm-cancel').addEventListener('click', dismissConfirmDialog);
+  byId('confirm-accept').addEventListener('click', acceptConfirmDialog);
+  byId('confirm-backdrop').addEventListener('click', function (event) {
+    if (event.target === byId('confirm-backdrop')) dismissConfirmDialog();
+  });
   byId('refresh').addEventListener('click', function () { void Promise.allSettled([refreshRuntime(), loadCredentials()]); });
   void Promise.allSettled([refreshRuntime(), loadCredentials()]);
   setInterval(function () { void loadRuntimeStatus(); }, 3000);
