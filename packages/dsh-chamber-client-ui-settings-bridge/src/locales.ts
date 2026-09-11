@@ -25,8 +25,6 @@ export const zh = {
   // 已连接但还未挂载完成时给出"正在启动该来源"的诚实中间态。
   sourceStarting: '正在启动该实例的前端，就绪后本面板自动显示它自己的设置分节。',
   sectionsEmpty: '该实例没有可显示的内容（可能正在启动，稍后自动出现）。',
-  // nav 行的来源角标：注册者既不是官方设置家族、也不是 chamber 壳时为真。
-  pluginTag: '插件',
   current: '当前',
   close: '关闭',
   generalTitle: '通用',
@@ -262,9 +260,6 @@ export const en: Record<keyof typeof zh, string> = {
   localNotReady: 'The local instance is not ready yet — start it in Connections.',
   sourceStarting: 'Starting this instance\'s frontend; its own settings sections appear here once it is ready.',
   sectionsEmpty: 'Nothing to show yet (the instance may still be starting — it appears automatically).',
-  // Nav-row provenance badge: true when the registrant is neither the official
-  // settings family nor the chamber shell.
-  pluginTag: 'Plugin',
   current: 'Current',
   close: 'Close',
   generalTitle: 'General',

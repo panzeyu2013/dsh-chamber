@@ -408,7 +408,8 @@ chamber-settings.json，非秘密）：
   自己的 boot ctx** 上注册（`settings-bridge` 的 `apply`，随 `chamberBridge`
   roster 投影 reconcile），因此与官方 `settings.section`、该来源自己的第三方
   分节同处一份台账——运行时段的视觉位置不受影响，其邻居可能包含第三方分节
-  （带「插件」来源标记）。投影不可识别时**只报告不抛错**（`console.error`，
+  （与官方分节同形，无来源标记；见 design 05 §5）。投影不可识别时**只报告不抛错**
+  （`console.error`，
   该 ctx 是那台实例自己的前端）。
 - 每服务器行为按来源分支（同一段、同一视觉，事实与动作随实例路由）：
   - **local**：完整管理面（本段显示规格 1–8 全量）；事实读主进程权威投影，

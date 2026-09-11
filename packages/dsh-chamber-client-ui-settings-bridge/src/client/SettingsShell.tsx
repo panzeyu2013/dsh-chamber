@@ -42,8 +42,7 @@ import {
 import {
   chamberBridge, isChannelClassDiagnostic, recheckPluginGraphDiagnostic,
 } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
-import { sectionRows, isPluginProvidedRow } from './section-rows.ts'
-import { isBasePluginId } from './base-plugins.ts'
+import { sectionRows } from './section-rows.ts'
 import {
   getSettingsSourceFace, publishSettingsSourceSeats, settingsSourceFaceReady,
   settingsSourceFaceRevision, subscribeSettingsSourceFaces,
@@ -452,13 +451,6 @@ function SettingsPanel({
               >
                 {navIcon(row.id)}
                 <span className={css.navLabel}>{row.label}</span>
-                {/* Provenance (2026-12): a non-base registrant means this
-                    section came from the SELECTED source's own plugin list,
-                    not from the chamber's base set — never let a plugin-provided
-                    surface pass for an official one. */}
-                {isPluginProvidedRow(row, isBasePluginId) && (
-                  <span className={css.pluginTag} title={row.registrant}>{t('pluginTag')}</span>
-                )}
               </button>
             ))}
           </div>

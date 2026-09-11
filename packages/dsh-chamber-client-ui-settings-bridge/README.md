@@ -41,9 +41,10 @@ from retention reclaim); closing the panel releases both guarantees.
 ## Behavior
 
 - A server dropdown over the selected instance; the options column renders that
-  instance's own sections, with third-party sections carrying a provenance tag
-  (`base-plugins.ts` is a CLASSIFICATION set: official family / chamber shell vs
-  plugin-provided). A gateway source's own ledger additionally carries the
+  instance's own sections exactly as its own frontend does (icon + label; the
+  ledger's `registrant` stamp is diagnostics-only upstream and is not rendered —
+  the old chamber-side「插件」provenance tag was retired 2026-09-11). A gateway
+  source's own ledger additionally carries the
   per-server "dsh runtime" section, which this package registers on that
   instance's ctx (design 18 §3.6/§9.3, proxying `/chamber/runtime` — version
   select/apply/rollback/restart); it is derived from projected capability facts

@@ -1177,16 +1177,5 @@
   gap: 4px;
 }
 
-/* ---- 插件分节来源标记（2026-12，图驱动的每来源贡献集）---- */
-
-/* nav 行上的来源标记：第三方插件提供的分节（官方/自研基础集不显示）。 */
-.pluginTag {
-  flex: none;
-  margin-left: auto;
-  padding: 0 6px;
-  border-radius: 6px;
-  font-size: 11px;
-  line-height: 16px;
-  color: var(--dsw-alias-label-tertiary);
-  background: var(--dsw-alias-bg-module-platform);
-}
+/* （2026-09-11 退役：nav 行的「插件」来源标记 —— 上游只渲染图标+标签、
+   `registrant` 仅用于诊断，本仓不再自造反标。）*/

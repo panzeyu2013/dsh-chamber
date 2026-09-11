@@ -28,8 +28,9 @@ settings 失效通知，以及真的 `useSessions` / `useWorkspaces` / `usePanel
 
 ## 行为
 
-- 服务器下拉选择；配置列渲染该实例自己的分节，第三方分节带「插件」来源标记
-  （`base-plugins.ts` 是**分类集**：官方家族 / chamber 壳 vs 插件提供）。gateway
+- 服务器下拉选择；配置列渲染该实例自己的分节，**与该实例自己的前端完全同形**
+  （图标 + 标签；台账的 `registrant` 戳在上游仅用于诊断、不渲染——本仓曾经的
+  「插件」来源标记已于 2026-09-11 退役）。gateway
   来源自己的台账额外带 per-server「dsh 运行时」段——由本包在**该实例自己的 ctx**
   上注册（design 18 §3.6/§9.3，代理 `/chamber/runtime`，版本选择/应用/回滚/重启）；
   其能力由投影事实推导，投影畸形时只报告（`console.error`）不抛错。

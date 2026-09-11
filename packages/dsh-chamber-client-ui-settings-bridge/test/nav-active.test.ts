@@ -19,6 +19,7 @@ import {
   resolveActiveSection,
   type SectionNavRow,
 } from '../src/client/nav-active.ts';
+import { sectionRows } from '../src/client/section-rows.ts';
 
 const rows: SectionNavRow[] = [
   { id: 'models', order: 10, label: 'Models' },
@@ -61,7 +62,20 @@ test('FIXED_SECTION_IDS: exactly the two chamber-global entries (design 15 contr
   assert.deepEqual([...FIXED_SECTION_IDS], [CONNECTIONS_SECTION_ID, GENERAL_SECTION_ID]);
 });
 
-test('SectionNavRow: carries the registrant stamp for provenance marking', () => {
-  const pluginRow: SectionNavRow = { id: 'x', order: 1, label: 'X', registrant: 'some-plugin' };
-  assert.equal(pluginRow.registrant, 'some-plugin');
+test('nav rows carry id/order/label only — no provenance tag (upstream form)', () => {
+  const row: SectionNavRow = { id: 'x', order: 1, label: 'X' };
+  assert.deepEqual(Object.keys(row).sort(), ['id', 'label', 'order']);
+  // A ledger entry's `registrant` stamp is DIAGNOSTICS-ONLY upstream (the
+  // official shell renders `navIcon(row.id)` + the label and nothing else), so
+  // the projection drops it: a plugin-provided section must look exactly like an
+  // official one, in this panel as in the instance's own frontend. The old
+  // chamber-side「插件」provenance tag is retired (2026-09-11).
+  const entries = [
+    { options: { id: 'models', order: 20, label: '模型' }, registrant: '@deepseek-ai/dsh-client-ui-settings-models' },
+    { options: { id: 'acme', order: 40, label: 'Acme' }, registrant: '@acme/dsh-plugin-acme' },
+  ];
+  assert.deepEqual(sectionRows({ entries: () => entries }), [
+    { id: 'models', order: 20, label: '模型' },
+    { id: 'acme', order: 40, label: 'Acme' },
+  ]);
 });

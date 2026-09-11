@@ -8,6 +8,13 @@
  * per-instance「dsh 运行时」section through the settings-bridge plugin running
  * in that same ctx. This module only projects those registrations into nav
  * rows — it mounts nothing and owns no lifecycle.
+ *
+ * A row carries id / order / label and NOTHING else, matching what the official
+ * shell renders (`ui-settings-general` SettingsRoot: `navIcon(row.id)` + the
+ * label). Upstream carries the registrant stamp for DIAGNOSTICS only and never
+ * renders it, so neither do we: a plugin-provided section looks exactly like an
+ * official one here, as it does in the instance's own frontend (2026-09-11
+ * decision — the old chamber-side「插件」provenance tag is gone).
  */
 import type { SectionNavRow } from './nav-active.ts'
 
@@ -15,7 +22,6 @@ import type { SectionNavRow } from './nav-active.ts'
 export interface SectionLedger {
   entries(key: string): readonly {
     options: { id?: string; order?: number; label?: string | (() => string) }
-    registrant?: string
   }[]
 }
 
@@ -32,23 +38,7 @@ export function sectionRows(slots: SectionLedger): SectionNavRow[] {
         id: entry.options.id ?? '',
         order: entry.options.order ?? 0,
         label: raw === undefined || raw === null ? '' : String(raw),
-        ...(entry.registrant === undefined ? {} : { registrant: entry.registrant }),
       }
     })
     .sort((a, b) => a.order - b.order)
-}
-
-/**
- * The provenance of one nav row: a non-base registrant means a plugin (not the
- * official settings family or the chamber's own shell) provided this section,
- * and the UI marks it as such.
- * @param row - the projected nav row.
- * @param isBasePluginId - the base-id predicate.
- * @returns true when a plugin (not the base set) contributed the row.
- */
-export function isPluginProvidedRow(
-  row: { registrant?: string },
-  isBasePluginId: (id: string) => boolean,
-): boolean {
-  return row.registrant !== undefined && !isBasePluginId(row.registrant)
 }

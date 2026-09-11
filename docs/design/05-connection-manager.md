@@ -516,8 +516,11 @@ export const chamberBridge: {
     + `renderSlot`（子座位）+ 条目 `inject` 面 + owner props。**座位来自该来源自己的
     渲染器绑定**，绝不伪造空桩：某个座缺席是那台服务器的事实，不是可以补一个空
     observable 的缺口。
-  - **归因**用 cordis 的 fiber-name 戳（`StoredEntry.registrant`）：第三方分节在 nav
-    上带「插件」来源标记（`base-plugins.ts` 只是**分类集**，不再是挂载清单）。
+  - **归因不上面**：`StoredEntry.registrant`（cordis fiber-name 戳）**不渲染**——上游
+    官方壳也只渲染 `navIcon(row.id)` + 分节标签，该戳在上游是纯诊断字段（控制台
+    错误文本 + 动态 cordis 崩溃归因）。本仓因此退役了曾经的「插件」来源标记
+    （2026-09-11，用户拍板）：插件提供的分节与官方分节在 nav 上完全同形，与实例
+    自己的前端一致。
   - **来源必须在挂载中**：面由该来源自己的壳发布，所以面板打开期间 App 层保证该来源
     的壳**已挂载**——`chamberBridge.setSettingsTarget(sourceId)`（面板→App 单通道）
     未挂载则后台挂载（**不切 active view**），已挂载则排除出保留策略回收候选

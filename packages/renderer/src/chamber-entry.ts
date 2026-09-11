@@ -370,21 +370,18 @@ async function registerDeferred(
       failed.push(outcome.id)
       continue
     }
-    // Mount with the ROW ID as the fiber name (2026-09-11 fix, design 05 §5):
-    // a slot entry's provenance stamp is the registrant fiber's name
-    // (ui-renderer `SlotRegistry._register`: `options.registrant ??
-    // ctx.fiber.name`), and cordis gives an UNNAMED fiber the name of its
-    // nearest NAMED ancestor (`Fiber.name` walks up, else `'root'`). Mounted
-    // bare, every row here inherited `@dsh-chamber/app` and the settings shell
-    // therefore stamped every composite-provided `settings.section` with that
-    // name — not an official/chamber PACKAGE id — and marked every one of them
-    // 「插件」(`isPluginProvidedRow`). The upstream web boot names every graph
-    // row by its id (`loader.create({ name: row.id })`), and the old child-ctx
-    // bridge did the same for its base set; this keeps the composite on that
-    // convention so a section's registrant is the package that provided it.
-    // (`DEFERRED_ROWS` types each chunk as `Promise<unknown>` — the id roster is
-    // the contract, not the module shapes — so the cordis object-plugin shape is
-    // asserted here.)
+    // Mount with the ROW ID as the fiber name (2026-09-11): cordis gives an
+    // UNNAMED fiber the name of its nearest NAMED ancestor (`Fiber.name` walks
+    // up, else `'root'`), so mounting these rows bare made every fiber in the
+    // cluster report as `@dsh-chamber/app` — in cordis error text, in the
+    // crash-attribution index, and (until the nav provenance tag was retired)
+    // in the settings panel, which read the same stamp. The upstream web boot
+    // names every graph row by its id (`loader.create({ name: row.id })`), and
+    // the old child-ctx bridge did the same for its base set; this keeps the
+    // composite on that convention so a fiber's name is the package it belongs
+    // to. (`DEFERRED_ROWS` types each chunk as `Promise<unknown>` — the id
+    // roster is the contract, not the module shapes — so the cordis
+    // object-plugin shape is asserted here.)
     const loaded = outcome.plugin as { apply: (ctx: Context, config?: never) => void; inject?: string[] }
     ctx.plugin({ ...loaded, name: outcome.id })
   }

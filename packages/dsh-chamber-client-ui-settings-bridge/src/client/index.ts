@@ -62,6 +62,13 @@ const SHADOW_PRIORITY = SETTINGS_SHELL_SHADOW_PRIORITY
 export const inject = ['slots', 'locale']
 
 /**
+ * The「dsh 运行时」`settings.section` id this package registers on the source's
+ * own boot ctx (order 31, right after agent-presets; design 18 §3.6/§9.3).
+ * Exported because it is the section's cross-module identity (design 05 §5).
+ */
+export const RUNTIME_SECTION_ID = 'dsh-runtime'
+
+/**
  * Register the chamber settings shell once the `sidebar.settings` declaration
  * is on the ledger.
  * @param ctx - client root context.
@@ -157,7 +164,7 @@ function registerRuntimeSection(
       }
       dispose = ctx.slots.register({
         name: 'settings.section',
-        id: 'dsh-runtime',
+        id: RUNTIME_SECTION_ID,
         order: 31,
         label: () => localeFace.bind(NS)('runtimeNav'),
         locale: NS,

@@ -4,5 +4,5 @@
 # hashes here (manually verified with `shasum -a 256`).
 # Chamber package (design discussion 2026-08): created on 2026-08-15 with the
 # 1a spec sweep — descriptions of the self-built settings shell (zh = key source).
-README.md: d160fac1dbd67955d281463403a36202764133f6a5bd52e76ef3878b4579cf4e
-README.zh.md: d8a41350a8564d930be4ede3c9b04f351d8182cdc6b35d94d3d1c99f1b130122
+README.md: 678284c3f87cf3aa4da61db3209401b7f194cfebd46283dd1374d9a0cceb4020
+README.zh.md: 4a7db545f61083a73385a67069d16dc48a1c27c3c19d6a221ab3855e2b64db56

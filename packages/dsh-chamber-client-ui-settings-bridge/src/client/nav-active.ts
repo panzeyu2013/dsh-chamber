@@ -36,8 +36,6 @@ export interface SectionNavRow {
   id: string
   order: number
   label: string
-  /** The registrant stamp (cordis fiber name); a non-base value = plugin-provided. */
-  registrant?: string
 }
 
 /**
