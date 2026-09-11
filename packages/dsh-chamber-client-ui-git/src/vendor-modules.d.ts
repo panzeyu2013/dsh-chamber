@@ -70,6 +70,27 @@ declare module '@deepseek-ai/dsh-client-ui-primitives' {
     contentClassName?: string
   }
   export function Modal(props: ModalProps): ReactNode
+  /** Read-only capsule badge (upstream `Tag.tsx`), used for the unregistered
+   *  worktree's status capsule (2026-09-11 upstream-alignment, T14). */
+  export type TagTone = 'outline' | 'solid' | 'neutral' | 'quiet' | 'success' | 'info' | 'warning' | 'danger'
+  export function Tag(props: { tone?: TagTone; className?: string | undefined; children?: ReactNode }): ReactNode
+  /** Controlled risk acknowledgement dialog (upstream `RiskConfirmation.tsx`):
+   *  the primary action stays unavailable until `acknowledged` is true. */
+  export interface RiskConfirmationProps {
+    open: boolean
+    title: string
+    description: string
+    acknowledgeLabel: string
+    cancelLabel: string
+    closeLabel: string
+    confirmLabel: string
+    acknowledged: boolean
+    disabled?: boolean
+    onAcknowledgedChange: (acknowledged: boolean) => void
+    onCancel: () => void
+    onConfirm: () => void
+  }
+  export function RiskConfirmation(props: RiskConfirmationProps): ReactNode
   export function IconBranchOutline16(props?: { size?: number; className?: string }): ReactNode
   export function IconLoadingOutline16(props?: { size?: number; className?: string }): ReactNode
   export function IconPlusOutline16(props?: { size?: number; className?: string }): ReactNode

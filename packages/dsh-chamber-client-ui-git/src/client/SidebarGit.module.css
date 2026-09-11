@@ -59,23 +59,15 @@
   font-weight: 500;
 }
 
+/* Placement of the row's status capsule only. The capsule itself is the
+   official `Tag` primitive (11px/17px, tonal palette), which documents that a
+   render site may still position a tag with its own class. The hand-rolled
+   capsule this replaced (10px/14px, padding 0 5px,
+   `--dsw-alias-interactive-bg-hover` fill) vanished under the pointer: its
+   neutral fill equalled the row's own hover fill
+   (2026-09-11 upstream-alignment, T14). */
 .unregisteredStatus {
   flex: none;
-  padding: 0 5px;
-  border-radius: 999px;
-  corner-shape: round;
-  background: var(--dsw-alias-interactive-bg-hover);
-  color: var(--dsw-alias-label-secondary);
-  font-size: 10px;
-  line-height: 14px;
-}
-
-/* Warn tone of the status capsule, on the official Tag's warning recipe
-   (ui-primitives/Tag.module.css `[data-tone='warning']`): one token drives
-   fill and text via a 12% self-tint. */
-.unregisteredStatusWarn {
-  background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 12%, transparent);
-  color: var(--dsw-alias-state-warn-primary);
 }
 
 .unregisteredSpacer {
@@ -164,17 +156,22 @@
 
 /* OpenChamber-style row actions: hidden at rest; revealed together with the
    row's own "+"/kebab cluster when the whole workspace row is hovered (the
-   sidebar css reveals :global(.git-ws-action) on .workspaceHeader:hover /
+   sidebar css reveals the `[data-git-action]` hook on .workspaceHeader:hover /
    :has(:focus-visible) / kebab-open). Keyboard focus on the occupant also
    reveals. The reveal is pointer-safe (2026-09): it never keys on plain
    :focus-within, which Chromium's mousedown-focus would keep matched after
    a pointer click — a folded row would then keep its occupant action
    visible at rest next to the session count. */
+/* The reveal hook is a `data-*` attribute, never a literal class
+   (2026-09-11 upstream-alignment, T3: the chamber's own rule, mobile
+   styles.ts:10-20 — attribute selectors are not hashed by CSS modules, so the
+   sidebar can match the same hook from its own module, which a global class
+   name only pretended to do). */
 /* The resting state is HIDDEN — display:none lives on the button's own
    module class (specificity 0,1,0) so it can never be beaten by a later
    same-specificity rule; every reveal rule (0,3,0)+ overrides it. Also out
    of the Tab order / a11y tree, like the sidebar's own rowActions.
-   (2026-08 fix: hiding via :global(.git-ws-action) lost to
+   (2026-08 fix: hiding via the hook class lost to
    .headerGitAction's inline-flex on equal specificity — actions showed at
    rest.) */
 .headerGitAction {
@@ -192,7 +189,7 @@
   cursor: pointer;
 }
 
-.headerGit:has(:focus-visible) :global(.git-ws-action) {
+.headerGit:has(:focus-visible) [data-git-action] {
   display: inline-flex;
 }
 
