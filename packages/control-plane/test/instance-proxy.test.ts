@@ -33,6 +33,18 @@ import { pongFrame } from './utils.ts'
 const quietLogger = { log: () => {}, warn: () => {}, error: () => {} }
 const GATEWAY_AUTHORIZATION = `Bearer ${'t'.repeat(32)}`
 
+/**
+ * The upstream browser-auth cookie NAME for one request authority
+ * (harness `packages/client/connection/src/browser-auth.ts` cookieName):
+ * `dsh-auth-` + base64url(sha256(authority)), authority = the request Host.
+ * Written per the upstream algorithm here — never copied from what the proxy
+ * happens to send — so an upstream rename, or a Host rewrite that no longer
+ * matches the authority the cookie was minted for, turns these tests red.
+ */
+function browserAuthCookieName(authority: string): string {
+  return `dsh-auth-${createHash('sha256').update(authority).digest('base64url')}`
+}
+
 // ---------------------------------------------------------------------------
 // Fakes
 // ---------------------------------------------------------------------------
@@ -278,19 +290,24 @@ test('0.1.2 combo URLs keep their trailing slash through parseInstancePath', asy
 
 test('local mapping forwards the 0.1.2 browser-auth cookie when bootstrapped', async () => {
   // review-round3c P0: the renderer's unary + mux calls reach the instance
-  // through the proxy, which injects the spawn-minted cookie.
-  const host = `http://127.0.0.1:${DEFAULT_DSH_START_PORT}`
+  // through the proxy, which injects the spawn-minted cookie. The upstream
+  // gate keys the cookie NAME to the request authority, so the injected name
+  // must be the name derived from the Host the proxy forwards — the same
+  // authority the launch-token exchange was minted for (design 03 §3.1).
+  const authority = `127.0.0.1:${DEFAULT_DSH_START_PORT}`
+  const host = `http://${authority}`
   const { proxy, upstream } = makeProxy({ state: 'ready', port: DEFAULT_DSH_START_PORT })
   try {
-    registerAuthCookie(host, 'browser-auth=session-value')
+    registerAuthCookie(host, `${browserAuthCookieName(authority)}=session-value`)
     const res = fakeResponse()
     await proxy.handleHttp(
       fakeRequest('/api/i/local/api/session/list', 'POST', { 'content-type': 'application/json' }, '{"rpcId":"r1","method":"session/list"}'),
       res,
     )
     assert.equal(res.status, 200)
-    const call = upstream.calls[0]
-    assert.equal((call.options.headers as Record<string, string>).cookie, 'browser-auth=session-value')
+    const headers = upstream.calls[0].options.headers as Record<string, string>
+    assert.equal(headers.host, authority, 'the upstream Host is the instance authority')
+    assert.equal(headers.cookie, `${browserAuthCookieName(headers.host)}=session-value`)
   } finally {
     clearAuthCookie(host)
   }
@@ -518,12 +535,12 @@ test('local WS upgrade carries the 0.1.2 browser-auth cookie when bootstrapped',
     httpRequest: upstream.fn,
   })
   try {
-    registerAuthCookie('http://127.0.0.1:17510', 'browser-auth=sess')
+    registerAuthCookie('http://127.0.0.1:17510', `${browserAuthCookieName('127.0.0.1:17510')}=sess`)
     const socket = fakeSocket()
     await proxy.handleUpgrade(fakeRequest('/api/i/local/api/remote.mux', 'GET'), socket, Buffer.alloc(0))
     assert.equal(upstream.calls.length, 1)
     const headers = upstream.calls[0].options.headers as Record<string, string>
-    assert.equal(headers.cookie, 'browser-auth=sess')
+    assert.equal(headers.cookie, `${browserAuthCookieName(headers.host)}=sess`)
   } finally {
     clearAuthCookie('http://127.0.0.1:17510')
   }

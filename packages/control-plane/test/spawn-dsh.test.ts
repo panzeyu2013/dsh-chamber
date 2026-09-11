@@ -10,9 +10,13 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { execFileSync } from 'node:child_process'
-import { EventEmitter } from 'node:events'
+import { createHash } from 'node:crypto'
+import { EventEmitter, once } from 'node:events'
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { createServer } from 'node:http'
 import { join } from 'node:path'
+import type { IncomingMessage, ServerResponse } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import {
   formatChildOutputChunk,
   killFailedSpawn,
@@ -23,10 +27,32 @@ import {
   DEFAULT_DSH_START_PORT,
   MAX_CHILD_OUTPUT_CHUNK_BYTES,
 } from '../src/spawn-dsh.ts'
-import { authCookieFor, clearAuthCookie } from '../src/browser-auth-cookie.ts'
+import { authCookieFor, clearAuthCookie, exchangeLaunchToken } from '../src/browser-auth-cookie.ts'
 import { tempDir } from './utils.ts'
 
 const silentLogger = { log() {}, warn() {}, error() {} }
+
+/**
+ * The upstream browser-auth cookie NAME for one request authority
+ * (harness `packages/client/connection/src/browser-auth.ts` cookieName):
+ * `dsh-auth-` + base64url(sha256(authority)), authority = the request Host.
+ * Written per the upstream algorithm here — never copied from what the
+ * spawn code happens to produce — so a rename or a different authority
+ * source upstream turns these tests red instead of silently agreeing.
+ */
+function browserAuthCookieName(authority: string): string {
+  return `dsh-auth-${createHash('sha256').update(authority).digest('base64url')}`
+}
+
+/**
+ * The same algorithm as it runs INSIDE the fake dsh child (a plain CJS
+ * script): the host mints its cookie from the Host header it actually
+ * received, exactly like the real BrowserAuth.authorizeIndex does.
+ */
+const FAKE_DSH_COOKIE_NAME_JS = [
+  "const { createHash } = require('node:crypto')",
+  "const authCookieName = host => 'dsh-auth-' + createHash('sha256').update(host).digest('base64').replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=+$/, '')",
+]
 
 /** A fake dsh CLI entry under a fake workspace (node runs it directly). */
 function writeFakeDshEntry(dshWorkspacePath: string, body: string): string {
@@ -255,17 +281,18 @@ test('spawnDsh: the 0.1.2 browser-auth bootstrap mints the cookie and the host-i
   const stateDir = tempDir()
   const dshWorkspacePath = join(stateDir, 'ws')
   writeFakeDshEntry(dshWorkspacePath, [
+    ...FAKE_DSH_COOKIE_NAME_JS,
     "const { createServer } = require('node:http')",
     "const args = process.argv.slice(2)",
     "const port = Number(args[args.indexOf('--port') + 1])",
     "console.log('dsh web: http://127.0.0.1:' + port + '/?token=launch-1')",
     "createServer((req, res) => {",
     "  if (req.url === '/?token=launch-1') {",
-    "    res.writeHead(303, { location: '/', 'set-cookie': 'browser-auth=sess; Max-Age=3600; Path=/; HttpOnly; SameSite=Strict' })",
+    "    res.writeHead(303, { location: '/', 'set-cookie': authCookieName(req.headers.host) + '=sess; Max-Age=3600; Path=/; HttpOnly; SameSite=Strict' })",
     "    res.end(); return",
     "  }",
     "  if (req.url === '/api/session/canOpenWorkspacePath') {",
-    "    if ((req.headers.cookie || '').includes('browser-auth=sess')) {",
+    "    if ((req.headers.cookie || '').includes(authCookieName(req.headers.host) + '=sess')) {",
     "      let body = ''",
     "      req.on('data', c => { body += c })",
     "      req.on('end', () => {",
@@ -292,7 +319,10 @@ test('spawnDsh: the 0.1.2 browser-auth bootstrap mints the cookie and the host-i
     })
     assert.equal(spawned.port > 0, true)
     const cookie = authCookieFor(`http://127.0.0.1:${spawned.port}`)
-    assert.equal(cookie, 'browser-auth=sess')
+    // The name is the authority-bound upstream name for THIS instance, not an
+    // arbitrary fake: the exchange authority (127.0.0.1:<port>) is exactly the
+    // authority the proxy later forwards as Host.
+    assert.equal(cookie, `${browserAuthCookieName(`127.0.0.1:${spawned.port}`)}=sess`)
     // The SpawnAttemptResult child must be reaped by the caller.
     spawned.child.kill()
     await new Promise<void>(resolve => spawned.child.once('exit', () => resolve()))
@@ -329,6 +359,72 @@ test('spawnDsh: a gated host with no launch token fails loud with the browser-au
   }
 })
 
+test('spawnDsh: a 401 that arrives before the launch-token line re-arms the bounded wait instead of failing the attempt', async () => {
+  // 0.1.2 wire ordering (harness client/connection + bundle/web-app): the /api
+  // routes answer 401 as soon as the listener is up, while the
+  // `dsh web: <url>?token=…` line is printed only after the loader settles.
+  // The first bounded window therefore expires with no token at all; the
+  // attempt must re-arm ONE fresh window inside the 90s listen budget instead
+  // of throwing on the first 401 (review P2). The fake host answers the FIRST
+  // identity probe 401 after a delay that is well past the injected window,
+  // and prints the token line only after that 401 is answered — the exact
+  // ordering the re-arm exists for.
+  const stateDir = tempDir()
+  const dshWorkspacePath = join(stateDir, 'ws')
+  const authBootstrapWaitMs = 300
+  const firstProbe401DelayMs = 700
+  const tokenLineDelayAfter401Ms = 150
+  writeFakeDshEntry(dshWorkspacePath, [
+    ...FAKE_DSH_COOKIE_NAME_JS,
+    "const { createServer } = require('node:http')",
+    "const args = process.argv.slice(2)",
+    "const port = Number(args[args.indexOf('--port') + 1])",
+    `const firstProbe401DelayMs = ${firstProbe401DelayMs}`,
+    `const tokenLineDelayAfter401Ms = ${tokenLineDelayAfter401Ms}`,
+    "let printedTokenLine = false",
+    "const printTokenLine = () => {",
+    "  if (printedTokenLine) return",
+    "  printedTokenLine = true",
+    "  process.stdout.write('dsh web: http://127.0.0.1:' + port + '/?token=late-token\\n')",
+    "}",
+    "const server = createServer((req, res) => {",
+    "  if (req.url === '/?token=late-token') {",
+    "    res.writeHead(303, { location: '/', 'set-cookie': authCookieName(req.headers.host) + '=sess; Max-Age=3600; Path=/; HttpOnly; SameSite=Strict' })",
+    "    res.end(); return",
+    "  }",
+    "  if (req.url === '/api/session/canOpenWorkspacePath') {",
+    "    if ((req.headers.cookie || '').includes(authCookieName(req.headers.host) + '=sess')) {",
+    "      let body = ''; req.on('data', c => { body += c }); req.on('end', () => {",
+    "        res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ type: 'server-response', rpcId: JSON.parse(body).rpcId, result: { ok: true, value: true } })) })",
+    "      return",
+    "    }",
+    // The /api surface is up (401) long before the readiness line exists.
+    "    setTimeout(() => { res.writeHead(401); res.end('unauthorized'); setTimeout(printTokenLine, tokenLineDelayAfter401Ms) }, firstProbe401DelayMs); return",
+    "  }",
+    "  res.writeHead(404); res.end()",
+    "})",
+    "server.listen(port, '127.0.0.1')",
+    '',
+  ].join('\n'))
+  const controller = new AbortController()
+  try {
+    const spawned = await spawnDsh({
+      stateDir, dshHome: join(stateDir, 'home'), dshWorkspacePath, logger: silentLogger, signal: controller.signal, authBootstrapWaitMs,
+    })
+    assert.equal(
+      authCookieFor(`http://127.0.0.1:${spawned.port}`),
+      `${browserAuthCookieName(`127.0.0.1:${spawned.port}`)}=sess`,
+      'the late launch-token line is exchanged into the authority-bound cookie',
+    )
+    spawned.child.kill()
+    await new Promise<void>(resolve => spawned.child.once('exit', () => resolve()))
+  } finally {
+    controller.abort()
+    clearAuthCookie(`http://127.0.0.1:${DEFAULT_DSH_START_PORT}`)
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
 test('spawnDsh: a readiness line split across chunks is still fully redacted and usable', async () => {
   // review-round7a P2-4: the token URL line may arrive in several stdio
   // chunks — the scanner must wait for the complete line and the forward
@@ -337,6 +433,7 @@ test('spawnDsh: a readiness line split across chunks is still fully redacted and
   const stateDir = tempDir()
   const dshWorkspacePath = join(stateDir, 'ws')
   writeFakeDshEntry(dshWorkspacePath, [
+    ...FAKE_DSH_COOKIE_NAME_JS,
     "const { createServer } = require('node:http')",
     "const args = process.argv.slice(2)",
     "const port = Number(args[args.indexOf('--port') + 1])",
@@ -344,7 +441,7 @@ test('spawnDsh: a readiness line split across chunks is still fully redacted and
     "process.stdout.write('dsh web: http://127.0.0.1:' + port + '/?to')",
     "process.stdout.write('ken=launch-secret (LAN: http://10.0.0.5:' + port + '/?token=launch-secret)\\n')",
     "createServer((req, res) => {",
-    "  if (req.url === '/?token=launch-secret') { res.writeHead(303, { location: '/', 'set-cookie': 'browser-auth=sess; Max-Age=3600; Path=/; HttpOnly; SameSite=Strict' }); res.end(); return }",
+    "  if (req.url === '/?token=launch-secret') { res.writeHead(303, { location: '/', 'set-cookie': authCookieName(req.headers.host) + '=sess; Max-Age=3600; Path=/; HttpOnly; SameSite=Strict' }); res.end(); return }",
     "  if (req.url === '/api/session/canOpenWorkspacePath') {",
     "    let body = ''; req.on('data', c => { body += c }); req.on('end', () => {",
     "      res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ type: 'server-response', rpcId: JSON.parse(body).rpcId, result: { ok: true, value: true } })) })",
@@ -366,7 +463,7 @@ test('spawnDsh: a readiness line split across chunks is still fully redacted and
       throw new Error(`spawn failed; logged: ${JSON.stringify(logged.slice(0, 10))}; cause: ${String(error)}`)
     }
     // The full token was reconstructed across the split → cookie minted.
-    assert.equal(authCookieFor(`http://127.0.0.1:${spawned.port}`), 'browser-auth=sess')
+    assert.equal(authCookieFor(`http://127.0.0.1:${spawned.port}`), `${browserAuthCookieName(`127.0.0.1:${spawned.port}`)}=sess`)
     const logLines = logged.join('\n')
     assert.equal(logLines.includes('launch-secret'), false)
     assert.equal(/token=[^\s]*launch-secret/.test(logLines), false)
@@ -386,12 +483,13 @@ test('spawnDsh: the launch token never reaches the control-plane log or host-log
   const stateDir = tempDir()
   const dshWorkspacePath = join(stateDir, 'ws')
   writeFakeDshEntry(dshWorkspacePath, [
+    ...FAKE_DSH_COOKIE_NAME_JS,
     "const { createServer } = require('node:http')",
     "const args = process.argv.slice(2)",
     "const port = Number(args[args.indexOf('--port') + 1])",
     "console.log('dsh web: http://127.0.0.1:' + port + '/?token=launch-secret (LAN: http://10.0.0.5:' + port + '/?token=launch-secret)')",
     "createServer((req, res) => {",
-    "  if (req.url === '/?token=launch-secret') { res.writeHead(303, { location: '/', 'set-cookie': 'browser-auth=sess; Max-Age=3600; Path=/; HttpOnly; SameSite=Strict' }); res.end(); return }",
+    "  if (req.url === '/?token=launch-secret') { res.writeHead(303, { location: '/', 'set-cookie': authCookieName(req.headers.host) + '=sess; Max-Age=3600; Path=/; HttpOnly; SameSite=Strict' }); res.end(); return }",
     "  if (req.url === '/api/session/canOpenWorkspacePath') {",
     "    let body = ''; req.on('data', c => { body += c }); req.on('end', () => {",
     "      res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ type: 'server-response', rpcId: JSON.parse(body).rpcId, result: { ok: true, value: true } })) })",
@@ -492,6 +590,69 @@ test('spawnDsh: an old runtime tree (only session/list, no launch token) spawns 
     controller.abort()
     clearAuthCookie(`http://127.0.0.1:${DEFAULT_DSH_START_PORT}`)
     rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Launch-token exchange states (browser-auth-cookie.ts). The exchange is the
+// spawn bootstrap's only credential source, so its accept/reject states are
+// asserted here next to the bootstrap tests. Upstream
+// (packages/client/connection/src/browser-auth.ts authorizeIndex) answers a
+// correct token with 303 + `location: '/'` + Set-Cookie and every other index
+// request with a plain-text 401.
+// ---------------------------------------------------------------------------
+
+/** Answer one launch-token exchange exactly as `answer` says; null when no mint. */
+async function exchangeAgainst(answer: (req: IncomingMessage, res: ServerResponse) => void): Promise<string | null> {
+  const server = createServer(answer)
+  server.listen(0, '127.0.0.1')
+  await once(server, 'listening')
+  const { port } = server.address() as AddressInfo
+  try {
+    return await exchangeLaunchToken(`http://127.0.0.1:${port}`, 'launch-1')
+  } finally {
+    server.close()
+  }
+}
+
+test('exchangeLaunchToken mints only for the upstream 303 + location "/" answer', async () => {
+  let minted = ''
+  assert.equal(await exchangeAgainst((req, res) => {
+    minted = `${browserAuthCookieName(String(req.headers.host))}=session-value`
+    res.writeHead(303, {
+      'cache-control': 'no-store',
+      location: '/',
+      'set-cookie': `${minted}; Max-Age=2592000; Path=/; HttpOnly; SameSite=Strict`,
+    })
+    res.end()
+  }), minted)
+  assert.equal(minted.startsWith('dsh-auth-'), true)
+
+  // A 200 that merely carries Set-Cookie is not the exchange answer (a host
+  // that serves the index for anyone must never hand this process a credential).
+  assert.equal(await exchangeAgainst((req, res) => {
+    res.writeHead(200, {
+      'content-type': 'text/html',
+      'set-cookie': `${browserAuthCookieName(String(req.headers.host))}=session-value; Path=/`,
+    })
+    res.end('<html></html>')
+  }), null)
+
+  // The upstream refusal (wrong or absent token) is a bare 401.
+  assert.equal(await exchangeAgainst((_req, res) => {
+    res.writeHead(401, { 'content-type': 'text/plain; charset=utf-8' })
+    res.end('dsh web authentication required; reopen the URL printed by dsh web.\n')
+  }), null)
+
+  // 303 with a location that does not normalize to the clean index is not the mint.
+  for (const location of ['/elsewhere', '/api/session/list', '::x', '']) {
+    assert.equal(await exchangeAgainst((req, res) => {
+      res.writeHead(303, {
+        location,
+        'set-cookie': `${browserAuthCookieName(String(req.headers.host))}=session-value; Path=/`,
+      })
+      res.end()
+    }), null, `303 with location ${JSON.stringify(location)} must not mint a cookie`)
   }
 })
 

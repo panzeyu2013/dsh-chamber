@@ -62,10 +62,18 @@ export function extractLaunchToken(url: string): string | undefined {
 
 /**
  * Perform the launch-token exchange: `GET /?token=<token>` with redirects
- * disabled. The host answers the index request with 303 + Set-Cookie; the
- * cookie name derives from the request authority, which is the same
- * `127.0.0.1:<port>` authority the proxy forwards with. Returns the
- * `name=value` cookie pair, or null when the host did not mint one.
+ * disabled. Only the upstream acceptance answer counts as a mint: a correct
+ * token gets `303` + `location: '/'` + Set-Cookie, and every other index
+ * request gets a plain-text 401 (browser-auth.ts authorizeIndex) — so any
+ * other status, a missing/unusable Location, or a redirect that does not
+ * normalize to the clean index path yields null instead of registering a
+ * credential the host never issued. The cookie name derives from the request
+ * authority, which is the same `127.0.0.1:<port>` authority the proxy
+ * forwards as Host.
+ * @param baseUrl - origin of the spawned host, e.g. http://127.0.0.1:17510.
+ * @param token - launch token from the `dsh web:` readiness line.
+ * @param signal - optional cancellation for the exchange request.
+ * @returns the `name=value` cookie pair, or null when the host did not mint one.
  */
 export async function exchangeLaunchToken(
   baseUrl: string,
@@ -75,6 +83,17 @@ export async function exchangeLaunchToken(
   const url = new URL('/', baseUrl)
   url.searchParams.set('token', token)
   const response = await fetch(url, { redirect: 'manual', signal })
+  if (response.status !== 303) return null
+  const location = response.headers.get('location')
+  if (location === null || location === '') return null
+  let redirectPath: string
+  try {
+    redirectPath = new URL(location, url).pathname
+  } catch {
+    // An unparseable Location is not the documented clean-index redirect.
+    return null
+  }
+  if (redirectPath !== '/') return null
   const setCookie = response.headers.get('set-cookie')
   if (setCookie === null || setCookie === '') return null
   const pair = setCookie.split(';', 1)[0]

@@ -124,7 +124,8 @@ export const MAX_SPAWN_ATTEMPTS = 5
 
 /** How long a spawned host gets to open its TCP listener. */
 export const LISTEN_WAIT_MS = 90_000
-const AUTH_BOOTSTRAP_WAIT_MS = 15_000 // 0.1.2 browser-auth: bounded wait for the `dsh web:` launch-token line (printUrl defaults true).
+/** 0.1.2 browser-auth: bounded wait for the `dsh web:` launch-token line (printUrl defaults true). One readiness attempt may consume TWO windows: a 401 that arrives before the line re-arms it once. */
+const AUTH_BOOTSTRAP_WAIT_MS = 15_000
 
 /** Bound every loopback connect attempt so startup and shutdown cannot hang
  * behind a socket that neither connects nor errors (for example, a local
@@ -347,7 +348,8 @@ interface SpawnAttemptOptions {
    *  set this via DSH_GATEWAY_DSH_PORT (design 17 §3). */
   dshPortBase?: number
   /** Bounded wait for the `dsh web:` launch-token line (default
-   *  AUTH_BOOTSTRAP_WAIT_MS). Test seam — the retry cycle multiplies it. */
+   *  AUTH_BOOTSTRAP_WAIT_MS). Test seam — one attempt can consume two
+   *  windows (the 401 re-arm). */
   authBootstrapWaitMs?: number
   signal?: AbortSignal
   pidRecordWriter: typeof writePidRecord
@@ -643,11 +645,20 @@ async function spawnAttempt({
   // token — the bootstrap then yields no cookie and old-wire operation is
   // unchanged. The cookie itself never leaves this process's memory.
   // Object property (never CFA-narrowed): the executor assigns it inside the
-  // promise, the bootstrap finally reads it — TS control-flow analysis would
-  // narrow a plain `let` to its initializer at the later read.
+  // promise, the readiness phase's finally reads it — TS control-flow analysis
+  // would narrow a plain `let` to its initializer at the later read.
   const dshWebScanner: { cleanup: (() => void) | null } = { cleanup: null }
+  // Whether the readiness line has settled (a URL line was seen, or stdout
+  // ended). An UNSETTLED scanner is the only state in which the line can still
+  // arrive, so it is the sole condition under which the bootstrap wait is
+  // re-armed by the host-identity probe's 401 answer.
+  const dshWebLine: { settled: boolean } = { settled: false }
   const dshWebUrlPromise = new Promise<string | null>(resolve => {
     let stdoutTail = ''
+    const settle = (value: string | null) => {
+      dshWebLine.settled = true
+      resolve(value)
+    }
     const onStdout = (chunk: Buffer) => {
       // RAW bytes, never the log formatter: formatChildOutputChunk trims the
       // chunk end, which would swallow the space before `(LAN: …)` at a chunk
@@ -660,13 +671,13 @@ async function spawnAttempt({
         const url = parseDshWebUrlLine(stdoutTail)
         if (url !== undefined) {
           cleanup()
-          resolve(url)
+          settle(url)
         }
       }
     }
     const onStdoutEnd = () => {
       cleanup()
-      resolve(null)
+      settle(null)
     }
     const cleanup = () => {
       child.stdout.off('data', onStdout)
@@ -783,13 +794,26 @@ async function spawnAttempt({
   // 0.1.2 browser-auth bootstrap (review-round3c P0) — CONCURRENT, never
   // delaying the probe: wait for the `dsh web:` URL line, exchange the launch
   // token for the session cookie and register it for this baseUrl. The probe
-  // loop runs immediately; a 401 answer (the new-wire gate) awaits this
-  // promise. Old hosts (no token in the line / no line) resolve null and the
-  // probe proceeds without a cookie — pre-0.1.2 hosts never gate.
-  // Resolution: 'minted' | failure message. A gated host (401) with no
-  // minted cookie is unrecoverable — the probe loop throws the explicit
-  // browser-auth error instead of grinding to the 90s window.
-  const authBootstrapPromise = (async (): Promise<'minted' | string> => {
+  // loop runs immediately; a 401 answer (the new-wire gate) awaits this wait.
+  // Old hosts (no token in the line / no line) resolve without a cookie and
+  // the probe proceeds without one — pre-0.1.2 hosts never gate.
+  // ONE readiness budget covers the whole phase: TCP listener, identity probe
+  // and both browser-auth windows (LISTEN_WAIT_MS).
+  const controller = new AbortController()
+  const onGenerationAbort = () => controller.abort()
+  if (signal?.aborted) controller.abort()
+  else signal?.addEventListener('abort', onGenerationAbort, { once: true })
+  const probeTimer = setTimeout(() => controller.abort(), LISTEN_WAIT_MS)
+  /**
+   * One bounded wait for the `dsh web:` launch-token line plus its exchange.
+   * Resolution: 'minted' | failure message. Re-armable: the 0.1.2 host mounts
+   * its /api routes (401) before the loader settles and prints the line
+   * (client/connection + bundle/web-app boot order), so the probe's first 401
+   * can arrive with the line still outstanding — the caller may call this a
+   * second time with a fresh window instead of failing the attempt. A line
+   * that WAS seen is final and never re-armed.
+   */
+  const waitForLaunchToken = async (): Promise<'minted' | string> => {
     const bootstrapController = new AbortController()
     const bootstrapTimer = setTimeout(() => bootstrapController.abort(), authBootstrapWaitMs ?? AUTH_BOOTSTRAP_WAIT_MS)
     const onSpawnAbort = () => bootstrapController.abort()
@@ -797,13 +821,19 @@ async function spawnAttempt({
     else signal?.addEventListener('abort', onSpawnAbort, { once: true })
     const onChildExit = () => bootstrapController.abort()
     child.once('exit', onChildExit)
+    // The readiness budget outranks a window: an expired 90s budget must not
+    // leave a re-armed window waiting behind it.
+    const onBudgetAbort = () => bootstrapController.abort()
+    if (controller.signal.aborted) bootstrapController.abort()
+    else controller.signal.addEventListener('abort', onBudgetAbort, { once: true })
     try {
-      const webUrl = await Promise.race([
-        dshWebUrlPromise,
-        new Promise<string | null>(resolve => {
-          bootstrapController.signal.addEventListener('abort', () => resolve(null), { once: true })
-        }),
-      ])
+      // A signal that is already aborted must settle the race immediately: a
+      // listener attached after the abort event never fires.
+      const whenAborted = (abortSignal: AbortSignal): Promise<string | null> => new Promise(resolve => {
+        if (abortSignal.aborted) resolve(null)
+        else abortSignal.addEventListener('abort', () => resolve(null), { once: true })
+      })
+      const webUrl = await Promise.race([dshWebUrlPromise, whenAborted(bootstrapController.signal)])
       const token = webUrl === null ? undefined : extractLaunchToken(webUrl)
       if (token === undefined) {
         if (webUrl !== null) log('host prints a web URL without a launch token — pre-0.1.2 wire (or token suppressed), no auth cookie needed')
@@ -821,13 +851,12 @@ async function spawnAttempt({
     } finally {
       clearTimeout(bootstrapTimer)
       signal?.removeEventListener('abort', onSpawnAbort)
+      controller.signal.removeEventListener('abort', onBudgetAbort)
       child.off('exit', onChildExit)
       bootstrapController.abort()
-      // The URL line arrives once (or never); the scanner listeners must not
-      // ride the whole instance lifetime (review-round4a P2).
-      dshWebScanner.cleanup?.()
     }
-  })()
+  }
+  const authBootstrapPromise = waitForLaunchToken()
   // The TCP listener comes up before the connection plugin's /api routes are
   // mounted; a unary probe can 404 briefly. Retry until it succeeds or the
   // listen window expires. Readiness speaks the unified host-identity probe
@@ -837,12 +866,15 @@ async function spawnAttempt({
   // probeHostIdentity (1 MiB cap, warn), so pre-0.1.2-rc.1 runtime trees
   // keep passing readiness exactly as before — the fixed-size identity
   // answer never grows with session data.
-  const controller = new AbortController()
-  const onGenerationAbort = () => controller.abort()
-  if (signal?.aborted) controller.abort()
-  else signal?.addEventListener('abort', onGenerationAbort, { once: true })
-  const probeTimer = setTimeout(() => controller.abort(), LISTEN_WAIT_MS)
   let lastProbeError: unknown
+  let bootstrapRearmed = false
+  // The LATEST bootstrap outcome, not the first window's: after a successful
+  // re-arm the original promise still holds the expired-window failure, and
+  // re-reading it would mislabel any later 401 as "bootstrap failed" even
+  // though a cookie was minted (2026-09 audit). A later 401 with a minted
+  // cookie now falls through to the retry loop and ends as the honest probe
+  // error when the readiness budget expires.
+  let lastAuthOutcome: 'minted' | string | null = null
   try {
     for (;;) {
       if (controller.signal.aborted) {
@@ -858,7 +890,22 @@ async function spawnAttempt({
         }
         if (controller.signal.aborted) throw probeError
         if (probeError instanceof RpcTransportError && probeError.status === 401) {
-          const authOutcome = await authBootstrapPromise
+          if (lastAuthOutcome === null) lastAuthOutcome = await authBootstrapPromise
+          let authOutcome: 'minted' | string = lastAuthOutcome
+          // The 0.1.2 host answers /api with 401 as soon as the listener is up
+          // and prints `dsh web: <url>?token=…` only after its loader settles,
+          // so the FIRST 401 can arrive while the launch-token line is still
+          // outstanding. Re-arm ONE fresh bounded window inside the readiness
+          // budget instead of failing the attempt on that first answer. A host
+          // that HAS printed its line (with a token — refused exchange — or
+          // without one) is final: no re-arm, and a host that never prints one
+          // still fails loud below.
+          if (authOutcome !== 'minted' && !bootstrapRearmed && !dshWebLine.settled) {
+            bootstrapRearmed = true
+            log('browser-auth: no launch token yet when the host answered 401 — re-arming the bootstrap window once')
+            authOutcome = await waitForLaunchToken()
+            lastAuthOutcome = authOutcome
+          }
           if (authOutcome !== 'minted') {
             logger.warn(`[dsh:${port}] browser-auth bootstrap failed (${authOutcome}); the host-identity probe will 401 on the 0.1.2 wire`)
             throw new Error(`dsh spawn attempt on port ${port} failed: instance requires the 0.1.2 browser-auth cookie, but the bootstrap failed (${authOutcome})`)
@@ -878,6 +925,10 @@ async function spawnAttempt({
   } finally {
     clearTimeout(probeTimer)
     signal?.removeEventListener('abort', onGenerationAbort)
+    // The URL line arrives once (or never), and no window can be re-armed
+    // after this readiness phase: the scanner listeners must not ride the
+    // whole instance lifetime (review-round4a P2).
+    dshWebScanner.cleanup?.()
   }
   // Best-effort browse-capability probe (design 05 §4): the in-app directory
   // dialog needs the host to serve `browse`. A native-capability host — a
@@ -1042,7 +1093,8 @@ export interface SpawnDshOptions {
    *  set this via DSH_GATEWAY_DSH_PORT (design 17 §3). */
   dshPortBase?: number
   /** Bounded wait for the `dsh web:` launch-token line (default
-   *  AUTH_BOOTSTRAP_WAIT_MS). Test seam — the retry cycle multiplies it. */
+   *  AUTH_BOOTSTRAP_WAIT_MS). Test seam — one attempt can consume two
+   *  windows (the 401 re-arm). */
   authBootstrapWaitMs?: number
   signal?: AbortSignal
   /** Injectable ledger writer for deterministic lifecycle-failure tests. */
