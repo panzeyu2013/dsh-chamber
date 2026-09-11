@@ -93,8 +93,13 @@
   （倾向不带）。
 - 客户端：视图模型需要新增**第三类结局**（可复制的出口），门控按 reason 精细区分 ——
   有具体路径 + 该来源无法启动（`transport-not-ssh` / `unknown-source`）才出复制项，
-  "本地实例坏了"仍必须隐藏；出口落在既有 `AccessibleAppMenu`（同一套可访问性语义），
-  新增 zh/en 文案；剪贴板被拒时把文本显示成可选中输入框（不静默失败）。
+  "本地实例坏了"仍必须隐藏；出口落在既有官方 `ui-primitives` `Menu`（2026-09-11
+  upstream-alignment 后的现状：open-in 菜单 = `open/autoFocus/dense/selection="fill"/align="end"`
+  + `items: MenuItem{id,label,icon}[]`，主按钮与 chevron 按钮组成 anchor；chamber 自有的
+  `AccessibleAppMenu` 三件套已删除，只留 N-ctx 归属守卫
+  `src/client/instance-view-guard.ts`）——复制项就是该 `items` 数组的一员，走同一个
+  `onSelect` 分发与同一套可访问性语义，文案进本包自己的 typed 字典；剪贴板被拒时把文本
+  显示成可选中输入框（不静默失败）。
 - 验收：纯函数（reason→出口映射、门控不被放宽）；管线（link 与 launch 同一组拒绝分支）；
   IPC 面锁步（`ipc-surface-mirror`）；实机两条（粘贴结果、无应用来源下按钮位置）。
 
@@ -109,9 +114,12 @@
   落点二选一：**(a)** 侧栏既有 `sidebar/shared` 入口（本仓已有跨包导入先例，且带
   `assertSingletonModule` 单例纪律，倾向选它）；**(b)** open-in 包自己的页级入口
   （归属清晰，但新增"侧栏依赖功能插件"的包依赖方向）。
-- 入口优先级：**① 工作区头 kebab**（`ServerSection.tsx:1288,1342,1591` 已有菜单与动作词汇，
-  改动最小、不碰 parity）→ ② 会话行右键（能力最有价值但推翻"会话行无菜单"的既定决定，
-  需产品裁决）→ ③ 快捷键（只对**活跃** entry 生效；不要每个 entry ctx 各注册一个监听）。
+- 入口优先级：**① 工作区头 kebab**（`ServerSection.tsx:1578` 的 workspace 行菜单 + `:1567`
+  的 `+`「新建会话」已给出菜单与动作词汇，改动最小、不碰 parity）→ ② 会话行行菜单/右键
+  （能力最有价值，但**会话行已有 kebab 菜单**——重命名/分叉/归档，2026-09-11 T2a 起归档
+  也在此菜单内，`ServerSection.tsx:1937-1959`；故这里不是"新建菜单"，而是"复用该菜单或
+  给它加手势"，加不加待产品裁决）→ ③ 快捷键（只对**活跃** entry 生效；不要每个 entry ctx
+  各注册一个监听）。
 - 无论哪条入口都必须复用同一组门（合并视图模型 ≥1 可用项；该行属于有具体路径的工作区），
   并走同一个客户端适配器 → `runOpenInLaunch` → provider，**不允许**侧栏另建直接 IPC 短路；
   报告语义与 header 一致。

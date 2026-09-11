@@ -135,10 +135,6 @@
   force 可能删到正在追加的档（「读私有 phase 字段」为否决方案）；归档集合在 run
   起点快照、窗口内不重读。可选增强（未排期）：PluginDialog 三态行、rowError
   本地化、已归档浏览区（todo 12 A）、`preview` 暴露孤儿计数。
-  **单删确认的空标题文案（2026-09 rc.1 验收实机所见）**：行内归档确认取自会话标题，
-  标题为空串（侧栏显示占位「未命名会话」）时渲染成 `归档「」？`——`blank` 标记为假而
-  `title` 为空的会话走不到 `t('session.new')` 回退；判据 = `SidebarRoot.tsx:1026` 的
-  `t('confirm.archive', { title })` 调用点未对空标题取占位。
   **清理残留（同上验收；design 24 §13 口径，待裁决两条）**：① 单删成功后
   `storages/session_projcache/sessions/<id>.json` 仍留一份 4 KB 缓存档（该档 `title`
   已清、聚合缓存已移除）——主题档是否随清理回收未决（缓存，非权威面）：purge 只处理
@@ -166,17 +162,17 @@
   **两处几何残留（2026-12 审查登记，需真机判定）**：① **769–1023px 触屏档第三轨被
   压 0**——触屏档 `@media (max-width: 1023px) and (pointer: coarse)` 把 grid 钉成
   `0 minmax(0,1fr) 0` 且 details 落第三轨
-  （`packages/dsh-chamber-client-ui-mobile/src/client/styles.ts:128-144`），但上游的
+  （`packages/dsh-chamber-client-ui-mobile/src/client/styles.ts:134-151`），但上游的
   全屏替身只在 `<768px` 成立
   （`vendor/harness-checkout/packages/client/ui-sidebar-right/src/client/shell/SidebarRight.tsx:364`
   的 `autoFullscreen = viewportWidth < 768`、`:371` 的 `track = shown && !autoFullscreen`）
   ⇒ 该档内展开的右栏既占不到全屏也不占轨道宽度；插件头注只声明了 `<768px` 那一半。② **`<768px` 全屏右栏（z-40）
-  盖住 `shell.overlay`（z-20）内的汉堡/抽屉**——已按「官方全屏面拥有屏幕、抽屉让步」
-  登记为有意（`styles.ts:61-69`），但真机上是否读作损坏未判。
+  盖住 `shell.overlay`（z-20）内的抽屉开关与抽屉**——已按「官方全屏面拥有屏幕、抽屉让步」
+  登记为有意（`styles.ts:67-75`），但真机上是否读作损坏未判。
   剩余——**实机门禁**（§18.6：真机触控目标比例/抽屉开合/键盘遮挡
   （含新补偿层的 iOS 时序与 Android WebView 盲区、**聚焦缩放后的打字正例**、
   缩放态平移不得引起抖动、捏合缩放负例、提交窗口不闪落、重挂 re-arm、
-  死区 ≤23px）/安全区/汉堡不重叠/crumbs 换行/Session 日志图标化/iOS 单击
+  死区 ≤23px）/安全区/抽屉开关不重叠/crumbs 换行/Session 日志图标化/iOS 单击
   切换/设置手机档走查（含分区切换重置）/刘海横屏/深层谱系高度等）；
   **移动端 git 侧边栏**（桌面链 chamber sidebar + `sidebar.workspace.git`
   座席为桌面专有形态，gateway 链官方 sidebar 无该座席；接入需装配矩阵第二
@@ -207,8 +203,8 @@
     复核否决的替代：**解析 close 帧（opcode 0x8）**——实例侧用
     `socket.terminate()` 不发 close 帧，解析器对目标场景盲；若日志不足，改用
     上游 ping 间隔计数（~15 行，复用 PongScanner）。另注意：桌面渲染器的 idle
-    重连看门狗只按 transport 过滤（`packages/renderer/src/App.tsx:1459` 注释、
-    `:1482` 轴说明，判据落 `:1502` 调 `reconnectStalenessMsForTransport`，
+    重连看门狗只按 transport 过滤（`packages/renderer/src/App.tsx:1614-1627`
+    的轴说明，判据落 `:1634` 调 `reconnectStalenessMsForTransport`，
     阈值表 `aggregate-refresh.ts:119-123`：http 120s / ssh 300s / local 与未知
     跳过），**gateway 目标（dsh 与 gateway 两种 kind 同为 direct-http）也吃
     ~2min 一次的连接 bounce**——「桌面也发生」若指桌面 chamber App，此即现成解释。
@@ -235,10 +231,13 @@
 - **open-in 超集分批口径（2026-09-11 复核裁决，design 20 §7.2）**：官方两份原先都没有"无应用出口"
   与"第二入口"（上游客户端只有一处槽位注册、无剪贴板面，读取失败即不渲染按钮），因此这两项是
   新增能力而非缺失回填。裁决：**S3 收窄为「复制路径」**（侧栏既有 `HoverCard` 复制模式
-  `ServerSection.tsx:1892` + 会话行已带 `SessionRow.cwd`（`shared/instance-api.ts`）⇒ 零新 IPC、
+  `ServerSection.tsx:2011,2030` + 会话行已带 `SessionRow.cwd`（`shared/instance-api.ts`）⇒ 零新 IPC、
   纯渲染层）；**复制 `ssh user@host` / VS Code 深链与 S4（侧栏入口、快捷键）不做** —— 依据：
-  header 按钮与目标会话同排相邻、会话行**刻意无 kebab**（OpenChamber parity，
-  `ServerSection.tsx:1188,1305`，加右键菜单需推翻既定决定）、快捷键缺基建（vendor 无 keybinding
+  header 按钮与目标会话同排相邻（侧栏再放一个入口对主流程零增量；会话行的动作已全在
+  一个 kebab 菜单里——重命名/分叉/归档，2026-09-11 T2a 起归档也在此菜单内，
+  `ServerSection.tsx:1937-1959`，故"新增侧栏入口"要么与该菜单重复、要么推翻它；
+  worktree 派生的 workspace 行才是刻意无 kebab 的那类，`ServerSection.tsx:1406`）、
+  快捷键缺基建（vendor 无 keybinding
   注册表，客户端只有聊天输入框自己的 keymap），且三处"今天无按钮"的来源
   （gateway-over-http、无本地 VS Code 的 ssh 来源、零目录应用的本地实例）都不在主流程
   （远程 dsh + VS Code Remote）上。完整形态留档
@@ -296,6 +295,16 @@
   可注入——待上游解锁；`agent-default-model` 客户端**可读可写**（`settings.describe`
   不过滤 namespace，旧 `exposedNamespaces` 机制在当前 pin 已不存在，见 design 07 §2.4），
   但回显/设置入口不在本蓝本范围内，**实现未排期**。
+- **框架侧跨边界诊断文案仍未本地化（2026-09-11 上游对齐轮报告，未排期）**：框架
+  （`packages/renderer`）**自己渲染**的 chrome 文案已进 typed 字典
+  （`src/locales.ts`，T16），但**由别的包渲染**的字符串仍是框架侧中文逐字串——产出方
+  与渲染方不同包，两边都不能就地翻译：①`App.tsx:432` 的
+  `aggregate.error ?? '未知错误'` 进 `ChamberServerAggregate.aggregateError`，由侧栏
+  `ServerSection.tsx:1217-1218` 的错误分支渲染；②`App.tsx:2708`/`:2728` 的
+  `打开会话失败：…` 经 `chamberBridge.reportOpenSessionOutcome` 交回侧栏行内呈现
+  （同一文本同时 console.error；通知投递路径同源，另有 `:2760` 一句只进 console）。
+  对齐做法 = **reason code 协议 + 渲染包侧映射**（产出方只发码/结构化事实，渲染包用
+  自己语言环境出文案），实施前这些串保持中文。
 
 ## 一致性债务与开放登记（低–中，未排期；均指回代码面注释/design 登记）
 
@@ -311,13 +320,13 @@
     active view**）、已挂载则不被保留策略回收」；面板关闭即撤除。代价：编辑某来源
     设置会付一次该来源壳的 boot（与在该来源自己的前端里编辑同一件事），来源壳
     boot 失败时面板只显示不可达/启动中中间态，**不再**有独立于 shell 的降级渲染面。
-  - **未渲染座位的可见性损失**：`settings.trigger/header/close` 属壳 chrome（自绘
-    标题/关闭/触发器），`settings.onboarding` 是**内容座**（官方 `ui-settings-models`
-    真的往里注册首启引导步骤）但 chamber 壳不实现官方 onboarding 协调器——三者都不由
-    壳渲染；`settings.action` 保持「仅本地来源」限定。前两条是 UI 形态决定，第三条
-    （onboarding）是**真实的可见性损失**：该座位的贡献既不渲染、也不再逐条报告
-    （原「未渲染贡献必须报告」清单随组装诊断块退役，见下）。触发条件：某来源插件注册
-    onboarding 步骤、用户期望在桌面面板看到它。
+  - **座位渲染归属（2026-09-11 修订）**：`settings.trigger/header/close` 属壳 chrome
+    （自绘触发器/关闭），不由壳渲染，`settings.action` 保持「仅本地来源」限定——UI
+    形态决定。`settings.onboarding` **不再缺失**：本壳统筹**自己 boot ctx** 台账的
+    首启阶段（首个按 order 排序、尚未完成的步骤；步骤自带就绪门与对话框 chrome，
+    壳不画），见「范围决策」的新偏差登记——该阶段额外以 active-view 事实为门，故
+    挂载但隐藏的壳不会弹文档级首启对话框，其步骤推迟到该视图被激活。原「未渲染贡献
+    必须报告」清单仍随组装诊断块退役（见下）。
   - **组装诊断块退役**：`toAssemblyReport` / `settings-extensions.ts` /
     `settings-assembly-diagnostics.*` 及其 i18n 键已删除——完整桥接下没有
     「装不上」的插件可报。仍然真实的诊断留在连接页该来源卡片上：客户端插件图
@@ -326,8 +335,9 @@
     Remote descriptor 上线通道仍是上游提案（未排期），但**不再是完整桥接的前置**，
     见 `docs/progress/todo/settings-surface-upstream-contributions.md`。
   - **未实机验证（2026-12 修订后仍待）**：完整桥接路径（面发布/跨来源渲染/目标保持
-    挂载）目前只经单测 + 源码锁 + `build:renderer` 构建门确认；面板在真实多来源
-    （本地 + 远程 + gateway 混合）与打包态下的实机冒烟仍待执行。
+    挂载）与 2026-09-11 新增的首启阶段（文档级模态 + `#root` inert 归属）目前只经
+    单测 + 源码锁 + `build:renderer` 构建门确认；面板在真实多来源（本地 + 远程 +
+    gateway 混合）与打包态下的实机冒烟仍待执行。
 - 私有文件纪律三实现（cp `private-file.ts` 抛错式 vs dsh-runtime `private-fs.ts` kind
   结果式，同名异签）——统一需依赖方向裁定（design 18 §9.1）。
 - **`install-gateway.sh` 的 dsh 锚走 npm 安装（design 18 §4 单一来源的域外点，2026-12
@@ -356,8 +366,9 @@
   `src/client/index.ts` 的 `ctx.slots.register` 子键表里 claim（`:50-52` 注明保留声明
   只是为了 ui-workspace 的注册不失败），但 `SidebarRoot.tsx` 只渲染
   `sidebar.brand.mark/brand.name/panellist/footer.action/settings` 与 `sidebar.workspace.git`
-  （`:291`/`:1371`/`:1377`/`:1393`/`:1491`/`:1494`，workspace-git 见 `:321`），
-  浏览区由自有多来源列表取代官方 occupant（`:1434-1436` 注释）。触发条件：任何第三方
+  （`brand.mark` `:1534`、rail 侧同座 `:1556`；`brand.name` `:1540`；`panellist` `:316`；
+  `footer.action` `:1684`；`settings` `:1687`；workspace-git 座席注册见 `:347`），
+  浏览区由自有多来源列表取代官方 occupant（`:1598` 注释）。触发条件：任何第三方
   插件往该座注册——注册**成功且无报告**，页面上永不出现（与设置面「壳不渲染的座位
   必须报告」的纪律相反）。待裁决：撤掉该声明（改为不 claim，让注册响亮失败）或在
   诊断面报告该座的注册者；两条都需要 slot 语义裁定。
@@ -418,12 +429,16 @@
     1px→0.5px 后 `docs/design/16-vscode-deeplink.md:266` 仍写 1px——三处均已人工改正，
     但**没有门禁会再拦下一次**（`.md` 不在 `STYLE_FILE`，且设计文档不是 i18n 对）。
   - **包级 `README.i18n.yaml` 哈希记录**：`verify:i18n` 只管根目录 5 对文档，包级记录
-    是纯人工纪律（文件头自述），故仍有漂移：`dsh-chamber-client-ui-settings-connections`
-    的两侧，记录哈希与文件不符——它是 mobile / settings-bridge / connections / sidebar
-    四个 sha256 记录包中**唯一**漂移者（复核：逐包
-    `sha256sum packages/<pkg>/README.md packages/<pkg>/README.zh.md` 对比记录；先于本轮
-    改动，属既有）。修复前提是**先人工复核该包中英两版内容仍对等**再重录——直接按当前
-    文件重算等于给未经复核的内容盖章。
+    是纯人工纪律（文件头自述）。2026-09-11 上游对齐轮按各记录文件头的义务逐包处置：
+    settings-connections 是本轮改动前的**唯一**漂移者（两侧记录与文件都不符；复核命令 =
+    逐包 `git show HEAD:packages/<pkg>/README[-.zh].md | sha256sum` 对比
+    `HEAD:packages/<pkg>/README.i18n.yaml` 的记录值，当时只有该包两侧不一致），先人工
+    复核中英两版内容仍对等（同分区表、同条目、同次序）再重录；sidebar 随本包 README
+    改动重录；settings-bridge 与 mobile 随各自文档改动重录。复核结论 = 四个 sha256
+    记录包（mobile / settings-bridge / connections / sidebar）**当前全部与文件一致**
+    （复核命令：逐包 `sha256sum packages/<pkg>/README.md packages/<pkg>/README.zh.md`
+    对比记录，无漂移者）。纪律不变：改任一侧必须同步另一侧并重录两值——直接按当前文件
+    重算等于给未经复核的内容盖章。
   - 三种记录格式并存加剧漂移：mobile / settings-bridge / connections / sidebar 用 sha256
     （mobile 嵌套 `en:`/`zh:`，其余平铺），client-web/connection 用 git blob SHA-1 且注释
     指向**仓内不存在**的 `pnpm run verify-translation-pairing --write`。统一格式并纳入
@@ -525,27 +540,74 @@
   0.1.3-alpha.2 仍依赖，删除即安装失败；登记在 `pnpm-workspace.yaml` 与
   `packages/dsh-runtime/src/allow-builds.mjs`）；`runtime-host-adapter` 退役**不采纳**
   （是测试夹具契约，非死代码）。
-- **设置壳偏差**：壳不渲染官方 SettingsRoot（自绘 chrome：标题/关闭/触发器）；
+- **设置壳偏差**：壳不渲染官方 SettingsRoot（自绘 chrome：触发器行 + 面板 + 关闭；
+  2026-09-11 T7 起面板内容标题不再由壳重复——各分节/页面自己渲染 `<h2>`，与上游
+  「每页一个标题」同规则；触发器行取上游 42px 行高、面板 r32、关闭时焦点回到触发
+  按钮，均为上游规则而非自造值）；
   面板渲染的是选中来源自己 boot ctx 的台账，因此该来源的壳必须挂载（面板打开期间
   由 App 保证：未挂载则后台挂载、已挂载则不被回收）；离线远端仍可选并显示不可达
   占位与连接管理动作（不触发挂载）；服务器选择器 body portal + viewport 翻转/钳位
   与内部滚动。
+- **2026-09-11 上游对齐轮引入的有意偏差（仍成立；各带理由与判据）**：
+  - **设置壳首启阶段额外以 active-view 为门**：官方 SettingsRoot 只按「当前会话为空
+    或仍 blank」挂载首个 `settings.onboarding` 步骤；chamber 再加一道**活动视图**门
+    （`SettingsShell.tsx` 的 `useOnboardingActive(sessionsSeatOf(props)) && useActiveView(chamberInstanceId)`，
+    `onboarding-hooks.ts:useActiveView` 读 App 既有发布的 active-view 事实
+    `chamberBridge.getActiveSource/onActiveSource`——非新通道）。理由：chamber 同时
+    挂载多个实例壳（活动视图 + 保留隐藏壳 + 面板目标壳），而首启对话框是文档级的
+    （portal + `#root` inert），不门控就会把别的实例的首启弹到用户正在看的视图上；
+    未发布（undefined）读作关。代价：挂载但隐藏的壳，其首启步骤推迟到它成为活动视图。
+  - **`sectionsEmpty` 占位保留**（`SettingsShell.tsx` 的 `t('sectionsEmpty')`，两语
+    字典键齐备）：上游单 ctx 壳永远到不了「有面板无分节」，chamber 的**未发布分节
+    台账**却是可达的 N 来源状态（来源自己的 settings 簇尚未落进其 boot ctx，或外部
+    dsh 目标插件图部分失败）；空白列会被读成「这台服务器没有设置」而不是「它的分节
+    还没到」。
+  - **框架失败屏深引 `ui-primitives/src/Button.tsx`（不引包 barrel）——打包预算决策**：
+    barrel 还带 primitives 的 markdown/CodeBlock 家族，实测把约 **87 KB** 搬进**主图**
+    （`packages/renderer/src/App.tsx` T15 注释：barrel 主图 raw 1,226,775 → 1,313,736，
+    距 C6 warn 门 `packages/renderer/scripts/check-chunk-budgets.mjs` 的
+    `mainGraphRaw.warn = 1,350,000` 仅 2.7%；深引让这些家族留在 chamber 入口
+    1,986,884）。主图在 App 挂载前整体求值——正是 `chamber-entry.ts` C3 注释要把
+    ui-primitives 挡在主图外的原因。
+  - **`Switch` 的披露属性挂包装元素**：`GeneralView.tsx` 的 `DisclosureSwitch` 把
+    `aria-expanded`/`aria-controls` 挂到包住官方 `Switch` 的 `span` 上，因为该原语
+    只收 `{checked, onChange, label, disabled, title, className}` 六个 props、**没有
+    属性透传**（`vendor/harness-checkout/packages/client/ui-primitives/src/Switch.tsx`）；
+    去掉这对属性会丢掉「这一行展开下方卡片」的关系（非披露行用原语本身，不带这两
+    个属性）。收口需上游给原语加透传。
+  - **侧栏行没有 schedule 事实，标记靠 chamber 自己把 `projectionValues.schedule`
+    带过去**：上游行类型直接带 `hasActiveSchedule`（`vendor/harness-checkout/packages/client/ui-workspace/src/client/tree.ts:161-163`
+    读同一个 `projectionValues.schedule`，消费点 `rows/Rows.tsx:468`（行内）与
+    `:351`（搜索结果行）），chamber 的行数据来自 `sessions.list` 投影，故
+    `shared/derive.ts:hasActiveScheduleOf` 读挂载路径的 `projectionValues.schedule`
+    与 unary 路径的 `projections.values.schedule`，稀疏带进
+    `ChamberServerWorkspace.sessions[].hasActiveSchedule`，并进
+    `instanceSnapshotSignature`（不进签名则增减计划重发同字节、标记会冻在首见值）。
+    第二半同属偏差：`sidebar-chamber.module.css .scheduleIndicator` 不带上游的
+    `margin-right: 6px`（chamber 的 `.sessionRow` 已有自己的 6px gap，叠加会破坏
+    26px 行距；无计划的行走零占位）。
 - **默认排序 `manual`（06 §3.1）**：按 wire 顺序，与官方默认 `updated` 不同，是
   有意产品取舍。**窗口标题冻结**：桌面原生标题固定 `dsh-chamber`。
-- **样式 token 对齐后的两处未对齐（2026-09 风格对齐轮登记，均为有意/待裁）**：
-  - **菜单圆角 12px vs 上游 20px**：`AccessibleAppMenu.module.css .menu` 与
-    `SettingsShell.module.css .dropdownList` 是官方 `ui-primitives/Menu.module.css .list`
-    的逐项移植（218/360px 宽、4px 内边距、`--dsw-specific-menu`、l1 stroke 重绑、
-    elevated-prominent、z-index 1100/1200 全同），唯余 `border-radius: 12px`
-    vs 上游 `20px`（`PopupSelectView` 同为 20px；上游该行注释写 "r12" 属过期注释，
-    代码为准）。属圆角而非边框，本轮未动，改 2 行即可。
+- **样式 token 对齐后的两处未对齐（2026-09 风格对齐轮登记，均为有意/待裁；
+  2026-09-11 收窄第一处）**：
+  - **菜单圆角 12px vs 上游 20px**：只剩 `SettingsShell.module.css .dropdownList`
+    （服务器下拉，body portal 列表）——它仍是官方
+    `ui-primitives/Menu.module.css .list` 的逐项移植（4px 内边距、`border: 0` +
+    发丝线在 elevation 阴影内、l1 stroke 重绑、elevated-prominent），唯余
+    `border-radius: 12px` vs 上游 `20px`（`Menu.module.css:17` 为 20px，该文件头注释
+    写 "r12" 属过期注释、代码为准；`ui-commands/PopupSelectView.module.css:28` 同为
+    20px）。宽度与 z-index 不再是移植项：上游 218/360px 仍在 vendor `.list` 上，
+    chamber 的副本（`AccessibleAppMenu.module.css`）与其 z-index 1100 随
+    2026-09-11 对齐删除（open-in 改用官方 `Menu`），`.dropdownList` 作为 portal 列表
+    由 server-selector 按 viewport 钳位（`min-width: 0` / `max-width: none`）、
+    z-index 1200 盖过模态层。属圆角而非边框，改 1 行即可。
   - **open-in header pill 规格不对应任何 pinned vendor 面**：`OpenInButton.module.css`
     为 32px / `0.5px border-l2` / r18，而 pinned vendor 的
     `session-query/session-log-export/HeaderAction.module.css` 是 28px 圆形 + `border: none`
     + r28，官方 `ui-open-in-app/OpenInAppAction.module.css` 是 28px / r14 / `border-l4`
-    分体按钮——旧注释自称「vendor Session log pill 逐字复用」不属实（**先于本轮**，
-    本轮 1px→0.5px 后已把注释改为陈述事实并标注差异）。是否对齐到上游其中一款是
-    设计决策，非缺陷修复。
+    分体按钮——旧句「vendor Session log pill 逐字复用」不属实（**先于本轮**）：模块头
+    注释已改为陈述事实并标注差异，但 `.button` 规则上仍留着那句旧注释（**遗留，未修**，
+    与模块头自相矛盾，无行为影响）。是否对齐到上游其中一款是设计决策，非缺陷修复。
 - **Electron 二进制惰性安装**（每机器共享 dist，worktree 并行共用）；**dev 实例隔离**
   （独立 user-data、控制面端口 17520 起自动退避）。
 - **内建版本行引导（2026-12 决策，方案 2）**：选中与内建同版本行且未装受管树、
@@ -653,9 +715,13 @@
     boot 写且无 teardown 回收，预热/收割实例的 en locale 会把可见文档翻成 `lang=en`；
     ③`document.title` 竞争写（被桌面主进程冻结标题掩盖，当前不可见）；④
     `--dsh-content-font-size` 播种读到上一个 applier 的值（下次投影自愈）；
-    ⑤**portal 逃逸（真实缺陷，未修）**：vendor `ui-primitives/Modal`（含 backdrop）
-    与 chamber SettingsShell/AppMenu portal 到 `document.body`，`.instance-hidden`
-    只隐藏视图子树——A 的模态在程序化切换后仍盖住 B；同族 `DropOverlay` 每壳一份
+    ⑤**portal 逃逸（真实缺陷，未修）**：portal 到 `document.body` 的使用者 = vendor
+    `ui-primitives/Modal`（含 backdrop）、官方 `Menu` 的 portal 形态（侧栏来源头排序
+    菜单与行菜单）与 chamber SettingsShell 的服务器下拉
+    （`SettingsShell.module.css .dropdownList`，注释即写 "Body-portal list"）——
+    `.instance-hidden` 只隐藏视图子树，A 的模态/菜单在程序化切换后仍盖住 B（2026-09-11
+    对齐后逃逸面少一个成员：chamber 自有的 `AccessibleAppMenu`（portal 到 body）已删除，
+    open-in 改用的官方 `Menu` 不传 `portal`、渲染在原位）；同族 `DropOverlay` 每壳一份
     （N 层遮罩，隐藏壳的禁用副本可能盖住活动壳的启用副本）；⑥主题样式表每壳各插
     6 个 `<style>`（同内容、随 fiber 移除，良性重复）。①②的修法同主题：按活动来源
     门控（②可纯 chamber 侧实现），需 seed/patch 路线裁定后实施。
