@@ -51,11 +51,20 @@ declare module '@deepseek-ai/dsh-client-web' {
    * the chamber shell; ids only merged into the boot rows here). dsh-v0.1.2-alpha.1
    * BootModuleRow alignment: the required `initialUrl` (the preloaded combo
    * url — the chamber merge preloads each entry's own combo, so it equals the
-   * row url) and `inject` (empty — the composite covers the whole official
-   * shell, extras have no inject edges to arrive).
+   * row url), `inject` (empty — the composite covers the whole official shell,
+   * extras have no inject edges to arrive) and `external` (the module
+   * specifiers the row's factory will require at create time; the real kernel
+   * type requires it, so the mirror must not omit it — 2026-09 audit).
    */
   export interface AppWebEntryOptions extends BootSeams {
-    extraRows?: { id: string; url: string; initialUrl: string; rev: string; inject: string[] }[]
+    extraRows?: {
+      id: string
+      url: string
+      initialUrl: string
+      rev: string
+      inject: string[]
+      external: string[]
+    }[]
     /** Per-entry context initializer; called before loader/plugin materialization. */
     configureContext?: (ctx: Context) => void
   }

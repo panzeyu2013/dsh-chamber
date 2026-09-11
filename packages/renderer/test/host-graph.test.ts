@@ -1,10 +1,12 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  BundleLoadTimeoutError, collectExtraRows, dedupeHostEntries, fetchHostGraph, toExtraRows,
+  BundleLoadTimeoutError, collectExtraRows, dedupeHostEntries, fetchHostGraph,
+  findDeferredExternalDependencies, toExtraRows,
   type ExtraModuleRow, type HostGraphRow,
 } from '../src/host-graph.ts'
 import { CHAMBER_COVERED_FACTORY_IDS, CHAMBER_COVERED_IDS } from '../src/chamber-covered.ts'
+import { DEFERRED_EXTRA_ROW_IDS } from '../src/required-extra-rows.ts'
 
 // 0.1.2 wire shape: extra-bundle URLs are `/plugins/??<id>&rev=…` combos
 // (review-round9c P2-1) — the old `/plugins/<id>/client.js?rev=` shape 404s
@@ -51,6 +53,31 @@ test('fetchHostGraph: success resolves the entries, carrying optional fields', a
       { id: '@scope/pkg-a', url: '/plugins/??@scope/pkg-a&rev=abc123', rev: 'abc123', inject: ['@deepseek-ai/dsh-client-store'], immediately: true },
       { id: '@deepseek-ai/dsh-client-hmr', url: '/plugins/??@deepseek-ai/dsh-client-hmr&rev=abc123', rev: 'abc123' },
     ])
+  } finally {
+    stub.restore()
+  }
+})
+
+test('fetchHostGraph: carries the row `external` requests (BootModuleRow parity)', async () => {
+  // Review F1 (P2): the wire field used to be dropped at parse, so an extra
+  // row's exact non-inject module requests never reached the merge — and the
+  // one case the chamber merge cannot satisfy (a request onto a covered id
+  // whose family the composite registers only AFTER the boot settles, i.e. the
+  // deferred cluster) was therefore invisible. The field is preserved now and
+  // the deferred-dependency diagnostic below matches against it.
+  const stub = stubFetch(200, envelope([
+    row('@scope/pkg-ext', { external: ['@deepseek-ai/dsh-client-ui-tool/client', '@deepseek-ai/dsh-client-ui-dockkit'] }),
+    row('@scope/pkg-no-ext'),
+    row('@scope/pkg-bad-ext', { external: ['ok', 7] as unknown as string[] }),
+  ]))
+  try {
+    const rows = await fetchHostGraph('/api/i/local')
+    assert.ok(rows !== null, 'a 200 envelope with entries never resolves null')
+    assert.deepEqual(rows[0]!.external, [
+      '@deepseek-ai/dsh-client-ui-tool/client', '@deepseek-ai/dsh-client-ui-dockkit',
+    ])
+    assert.equal(rows[1]!.external, undefined, 'an omitted wire field stays omitted')
+    assert.equal(rows[2]!.external, undefined, 'a malformed field is dropped, never merged (same rule as inject)')
   } finally {
     stub.restore()
   }
@@ -290,8 +317,127 @@ test('toExtraRows: injects the per-instance base path into root-relative urls an
       initialUrl: '/api/i/ssh-42/plugins/??@scope/pkg&rev=abc123',
       rev: 'abc123',
       inject: [],
+      external: [],
     },
   ])
+})
+
+test('toExtraRows: passes `external` through to the kernel row (never dropped, never invented)', () => {
+  // Review F1 (P2): the kernel row type (BootModuleRow) carries `external` as a
+  // required array; the merge mirrors it exactly — the parsed requests when the
+  // wire had them, [] when it did not.
+  const out = toExtraRows([
+    row('@scope/ext', { external: ['@deepseek-ai/dsh-client-ui-tool/client'] }),
+    row('@scope/no-ext'),
+    // A poisoned host graph must not steer the loader off-origin: the row is
+    // still dropped whole, external or not.
+    row('@scope/bad-url', { url: 'https://cdn.example/plugins/p.js', external: ['x'] }),
+  ], '/api/i/local')
+  assert.deepEqual(out, [
+    {
+      id: '@scope/ext',
+      url: '/api/i/local/plugins/??@scope/ext&rev=abc123',
+      initialUrl: '/api/i/local/plugins/??@scope/ext&rev=abc123',
+      rev: 'abc123',
+      inject: [],
+      external: ['@deepseek-ai/dsh-client-ui-tool/client'],
+    },
+    {
+      id: '@scope/no-ext',
+      url: '/api/i/local/plugins/??@scope/no-ext&rev=abc123',
+      initialUrl: '/api/i/local/plugins/??@scope/no-ext&rev=abc123',
+      rev: 'abc123',
+      inject: [],
+      external: [],
+    },
+  ])
+})
+
+test('findDeferredExternalDependencies: names the rows whose `external` requests a deferred-covered id', () => {
+  // The deferred cluster (chamber-entry registerDeferred) is COVERED — its rows
+  // are filtered out of the host graph — but has no module-table factory until
+  // its chunk registers, after the boot settled. A synchronous require of such
+  // an id inside an extra bundle's factory therefore misses the table during
+  // create (upstream system.ts makeRequire), which is exactly what this
+  // predicate surfaces by name.
+  const deferredId = DEFERRED_EXTRA_ROW_IDS[0]!
+  const otherDeferredId = DEFERRED_EXTRA_ROW_IDS[1]!
+  const coveredFactoryId = CHAMBER_COVERED_FACTORY_IDS[0]!
+  const rows: ExtraModuleRow[] = [
+    {
+      id: 'a', url: '/plugins/a', initialUrl: '/plugins/a', rev: 'r', inject: [],
+      // The `/client` subpath form (upstream stripClientSuffix) and the bare id
+      // are the SAME dependency: reported once, in its stripped form.
+      external: [`${deferredId}/client`, deferredId, `${coveredFactoryId}/client`],
+    },
+    { id: 'b', url: '/plugins/b', initialUrl: '/plugins/b', rev: 'r', inject: [], external: [otherDeferredId] },
+    { id: 'c', url: '/plugins/c', initialUrl: '/plugins/c', rev: 'r', inject: [], external: ['@scope/kept-peer'] },
+    { id: 'd', url: '/plugins/d', initialUrl: '/plugins/d', rev: 'r', inject: [], external: [] },
+  ]
+  assert.deepEqual(findDeferredExternalDependencies(rows), [
+    { rowId: 'a', dependencies: [deferredId] },
+    { rowId: 'b', dependencies: [otherDeferredId] },
+  ])
+  assert.ok(!CHAMBER_COVERED_FACTORY_IDS.includes(deferredId), 'a deferred id must NOT be a registered factory')
+})
+
+test('collectExtraRows: an `external` request onto a deferred-covered id reports the NAMED diagnostic', async () => {
+  const id = '@scope/f1-needs-deferred-tool'
+  const stub = stubFetch(200, envelope([
+    row(id, { external: ['@deepseek-ai/dsh-client-ui-tool/client'] }),
+  ]))
+  const consoleCapture = captureConsoleError()
+  const diagnostics: { state: string; pluginId?: string; message?: string }[] = []
+  try {
+    const rows = await collectExtraRows('local', '/api/i/local', {
+      loadModuleBundle: async () => {},
+      reportDiagnostic: (_sourceId, next) => { diagnostics.push(next) },
+    })
+    assert.equal(rows.length, 1)
+    assert.deepEqual(rows[0]!.external, ['@deepseek-ai/dsh-client-ui-tool/client'], 'the field survives the merge')
+    // Not the silent 'ok': the page-level diagnostic names the row and the
+    // dependency this boot can never satisfy (bundle-load-failed is the only
+    // "this row cannot materialize" state in the shared diagnostic union, and
+    // it is a boot fact — a channel recheck must never heal it away).
+    assert.equal(diagnostics.length, 1)
+    assert.equal(diagnostics[0]!.state, 'bundle-load-failed')
+    assert.equal(diagnostics[0]!.pluginId, id)
+    assert.match(diagnostics[0]!.message ?? '', /@deepseek-ai\/dsh-client-ui-tool/)
+    assert.match(diagnostics[0]!.message ?? '', /deferred|延迟/)
+    // The console line is the operator's copy of the same fact — never the
+    // ONLY channel (the diagnostic above is the durable one).
+    assert.match(consoleCapture.messages.join('\n'), /@scope\/f1-needs-deferred-tool/)
+    assert.match(consoleCapture.messages.join('\n'), /@deepseek-ai\/dsh-client-ui-tool/)
+  } finally {
+    stub.restore()
+    consoleCapture.restore()
+  }
+})
+
+test('collectExtraRows: external edges this page CAN satisfy stay unflagged (diagnostic ok)', async () => {
+  // A first-screen covered id (the composite registers its factory before any
+  // row materializes) and a kept peer extra (preloaded by this very call) are
+  // both resolvable — no diagnostic, no console noise.
+  const peerId = '@scope/f1-kept-peer'
+  const consumerId = '@scope/f1-kept-consumer'
+  const stub = stubFetch(200, envelope([
+    row(consumerId, { external: [`${CHAMBER_COVERED_FACTORY_IDS[0]!}/client`, peerId] }),
+    row(peerId),
+  ]))
+  const consoleCapture = captureConsoleError()
+  const diagnostics: { state: string }[] = []
+  try {
+    const rows = await collectExtraRows('local', '/api/i/local', {
+      loadModuleBundle: async () => {},
+      reportDiagnostic: (_sourceId, next) => { diagnostics.push(next) },
+    })
+    assert.equal(rows.length, 2)
+    assert.deepEqual(diagnostics.map(diagnostic => diagnostic.state), ['ok'])
+    assert.deepEqual(consoleCapture.messages, [])
+  } finally {
+    stub.restore()
+    consoleCapture.restore()
+  }
 })
 
 test('dedupe + toExtraRows compose into the shell merge (covered rows never leak to preload)', () => {
@@ -310,6 +456,7 @@ test('dedupe + toExtraRows compose into the shell merge (covered rows never leak
       initialUrl: '/api/i/local/plugins/??@deepseek-ai/dsh-client-ui-cordis&rev=abc123',
       rev: 'abc123',
       inject: [],
+      external: [],
     },
   ])
 })
@@ -499,8 +646,8 @@ test('collectExtraRows: keeps non-covered rows and preloads each once (real cove
   try {
     const rows = await collectExtraRows('local', '/api/i/local', { loadModuleBundle: async url => { loaded.push(url) } })
     assert.deepEqual(rows, [
-      { id: '@scope/p1', url: '/api/i/local/plugins/??@scope/p1&rev=abc123', initialUrl: '/api/i/local/plugins/??@scope/p1&rev=abc123', rev: 'abc123', inject: [] },
-      { id: '@scope/p2', url: '/api/i/local/plugins/??@scope/p2&rev=abc123', initialUrl: '/api/i/local/plugins/??@scope/p2&rev=abc123', rev: 'abc123', inject: [] },
+      { id: '@scope/p1', url: '/api/i/local/plugins/??@scope/p1&rev=abc123', initialUrl: '/api/i/local/plugins/??@scope/p1&rev=abc123', rev: 'abc123', inject: [], external: [] },
+      { id: '@scope/p2', url: '/api/i/local/plugins/??@scope/p2&rev=abc123', initialUrl: '/api/i/local/plugins/??@scope/p2&rev=abc123', rev: 'abc123', inject: [], external: [] },
     ])
     assert.deepEqual(loaded.sort(), [
       '/api/i/local/plugins/??@scope/p1&rev=abc123',
@@ -751,6 +898,7 @@ test('collectExtraRows: a transient load failure is healed inside the same boot;
       initialUrl: '/api/i/local/plugins/??@scope/retry-plugin&rev=abc123',
       rev: 'abc123',
       inject: [],
+      external: [],
     }])
     // Second boot: marked after the success → the loader is not re-triggered.
     await collectExtraRows('local', '/api/i/local', { loadModuleBundle })
@@ -785,6 +933,7 @@ test('collectExtraRows: SAME instance id at a different rev reuses the loaded fa
       initialUrl: '/api/i/local/plugins/@scope/rev-plugin/client.js?rev=revB',
       rev: 'revB',
       inject: [],
+      external: [],
     }])
     assert.deepEqual(loaded, ['/api/i/local/plugins/@scope/rev-plugin/client.js?rev=revA'])
     assert.equal(diagnostic?.state, 'restart-required')
