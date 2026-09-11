@@ -97,9 +97,14 @@ export {
 /**
  * chamber patch (design 14 D4): the window event the chamber shell dispatches
  * on OS wake-from-sleep (the App layer re-broadcasts the main-process
- * `system-resume` IPC push as this window event). SINGLE canonical definition —
- * the renderer App layer imports it from here so the two sides can never
- * drift apart (a drift would silently break the immediate-reconnect chain).
+ * `system-resume` IPC push as this window event). This is the canonical VALUE;
+ * the renderer App layer cannot import it (it resolves this fork through a
+ * deep source alias, so it spells the literal instead — see
+ * `packages/renderer/src/App.tsx` and its note). The two spellings therefore
+ * drift-check rather than share a symbol: `test/client-apply.test.ts` and
+ * `packages/desktop/ipc-surface-mirror.test.ts` pin the literal on both sides
+ * (2026-09 audit — the earlier comment claimed a shared import that does not
+ * exist).
  */
 export const SYSTEM_RESUME_EVENT = 'dsh-chamber:system-resume'
 
@@ -300,6 +305,10 @@ export function apply(ctx: Context): void {
   }
   const handle: ConnectionHandle = {
     isLoopback: transport?.ownsHost === true || pageLocation === undefined || isLoopbackHostname(pageLocation.hostname),
+    // Diagnostic surface only: the gateway fork reads `ctx.chamberBasePath` and
+    // keeps its own base path, so this field's only consumers are this package's
+    // tests (2026-09 audit). Kept rather than removed so the handle stays
+    // inspectable in a live ctx.
     basePath,
     generation: {
       getSnapshot: () => generation,

@@ -206,7 +206,13 @@ export function trackLayoutInstance(env: LayoutStoreEnvironment, instance: Layou
           // Adoption deliberately bypasses `setSidebar`: it must not re-run
           // the persistence write (the width is already persisted) and it
           // leaves `rightbarInstant` alone (no geometry gesture happened).
-          currentInstance.store.update((d) => { d.layoutInfo.sidebar = width })
+          // The width is re-clamped on the way IN as well (2026-09 audit): a
+          // preference written by an older build or hand-edited localStorage
+          // must not put the store outside the vendor drag range, or the
+          // stored value and every rendering consumer would disagree.
+          currentInstance.store.update((d) => {
+            d.layoutInfo.sidebar = env.columns.clampWidth(width, env.columns.SIDEBAR_MIN, env.columns.SIDEBAR_MAX)
+          })
         } catch (error) {
           console.error('[dsh-chamber] layout width adoption threw:', error)
         }
@@ -333,7 +339,10 @@ export function createLayoutStore(env: LayoutStoreEnvironment): EngineStoreHandl
         // chamber fork: reopening expands to the SHARED persisted width (the
         // vendor contract default would fight a user's remembered width);
         // closing writes 0 without persisting it — the width preference only
-        // ever records an OPEN drag.
+        // ever records an OPEN drag. Documented deviation from the vendor
+        // `ILayout.toggleSidebar` JSDoc ("closed ⟷ contract default width"),
+        // which cannot be edited here (their source is deep-imported); the
+        // behaviour is pinned by test/layout-store.test.ts.
         else d.layoutInfo.sidebar = d.layoutInfo.sidebar === 0 ? prefsSidebarWidth() : 0
       },
       // Crossing the breakpoint in either direction drops the override: the

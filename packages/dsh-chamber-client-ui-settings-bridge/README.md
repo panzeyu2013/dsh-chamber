@@ -22,8 +22,13 @@ provides an empty `usePanelInfo` seat (stable snapshot reference) to keep the
 standard-prop SHAPE complete for any component that reads it; **no official
 settings component reads it today** (2026-09 二轮 source check: the only vendor
 readers are `ui-layout`'s frame/DocumentTitle and `ui-sidebar`'s panel row), and
-`useResource` is deliberately not seated for the same reason (add a seat the day
-a real consumer lands).
+`useResource` is deliberately not seated, and 0.1.5's `client/resources` row IS a
+real consumer — the seat cannot be added from here: a child ctx's root read face
+(hooks/keyedHooks/props) is public only as a TYPE, and the sole delivery channel
+is the renderer install contract (`ui-renderer/src/client/registry.ts` hostFace /
+`renderSlot('root')`), so seating it would mean becoming that ctx's renderer.
+Consequently every `provideRoot` contribution is recorded and reported as an
+unseated root seat on the 「插件设置」 diagnostics page instead (2026-09 audit).
 
 ## Behavior
 

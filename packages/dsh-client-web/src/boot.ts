@@ -484,10 +484,18 @@ export function ensureWebModuleSystem(seams?: BootSeams): ClientModuleSystem {
   // into live registration once create switches the facade). If a real
   // preloaded registration exists (a future host preload), keep it — it is
   // the same package's ordinary bundle and the facade materializes it.
-  if (!target.pendingQueue.some(registration => registration.id === MODULES_ID)) {
+  // The facade contract carries a registration queue. A host that installed a
+  // LIVE-mode facade instead makes these reads an opaque TypeError, so state
+  // the requirement once with the reason (2026-09 audit — the composite cannot
+  // work in live mode, which is why the queue-mode facade is installed above).
+  const pendingQueue = target.pendingQueue
+  if (!Array.isArray(pendingQueue)) {
+    throw new Error('dsh-chamber: the page module-loader facade has no registration queue — a live-mode facade was installed by the host, but the chamber composite requires queue mode')
+  }
+  if (!pendingQueue.some(registration => registration.id === MODULES_ID)) {
     target.load({ id: MODULES_ID, factory: () => ModulesClient })
   }
-  if (!target.pendingQueue.some(registration => registration.id === UI_RENDERER_ID)) {
+  if (!pendingQueue.some(registration => registration.id === UI_RENDERER_ID)) {
     target.load({ id: UI_RENDERER_ID, factory: () => UiRenderer })
   }
 

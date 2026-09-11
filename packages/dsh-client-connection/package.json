@@ -61,6 +61,6 @@
     "@deepseek-ai/dsh-util-values": "workspace:^"
   },
   "scripts": {
-    "test": "node test/api-path.test.ts && node test/carrier-assembly.test.ts && node test/recovery-policy.test.ts && node --import ../../scripts/dev/test-connection-register.mjs test/liveness-triggers.test.ts && node --import ../../scripts/dev/test-connection-register.mjs test/client-apply.test.ts"
+    "test": "node test/api-path.test.ts && node test/carrier-assembly.test.ts && node test/recovery-policy.test.ts && node --import ../../scripts/dev/test-connection-register.mjs test/liveness-triggers.test.ts && node --import ../../scripts/dev/test-connection-register.mjs test/client-apply.test.ts && node --import ../../scripts/dev/test-connection-register.mjs test/client-start-liveness-wiring.test.ts"
   }
 }

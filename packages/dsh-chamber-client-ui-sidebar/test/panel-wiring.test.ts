@@ -112,6 +112,24 @@ test('the registration declares every child and wires the panel projection', () 
   assert.ok(compactIndex.includes('selectPanel: (id) => { ctx.layout.selectPanel(id) }'), 'row clicks must call the layout service directly')
 })
 
+test('the registration rides the slots.inject declaration gate (upstream form)', () => {
+  // 2026-12 review P3: a bare `ctx.slots.register` into an undeclared key
+  // throws, and this shell's parent slot ('sidebar', declared by the layout's
+  // 'root' entry) can be declared AFTER this plugin's apply. The upstream
+  // ui-sidebar / ui-settings-general / ui-conversation shape waits for the
+  // declaration through `ctx.slots.inject` instead of depending on apply
+  // order; the wait must stay inside the existing registration effect.
+  const compact = normalize(stripComments(index))
+  assert.ok(
+    compact.includes("ctx.slots.inject('sidebar', () => ctx.slots.register({"),
+    "the sidebar must register through ctx.slots.inject('sidebar', …), not a bare register into a parent declaration",
+  )
+  assert.ok(
+    compact.includes("SidebarRoot)), 'dsh-chamber: sidebar slot registration',"),
+    'the inject wait must stay inside the labeled registration effect',
+  )
+})
+
 test('the shell renders the brand holes and the panel rows', () => {
   assert.ok(root.includes("renderSlot('sidebar.brand.mark', { size: 24 }"), 'the brand mark hole must render (with its fallback)')
   assert.ok(root.includes("renderSlot('sidebar.brand.name'"), 'the brand name hole must render')

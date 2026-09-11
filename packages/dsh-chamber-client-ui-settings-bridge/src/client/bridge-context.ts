@@ -3,8 +3,10 @@
  * design discussion 2026-08; graph-driven extension 2026-12): an INDEPENDENT
  * root Context (no parent inheritance — full service isolation from the
  * hosting boot) with a fake `connection` (per-instance unary client +
- * loopback=true) and a stub `remote` (no WS stream; invalidation
- * subscriptions become no-ops). The official settings plugin subset runs on
+ * loopback=true) and a stub `remote` (no WS stream: forwarded-event
+ * subscriptions become no-ops, `$mount`/`$stream` are named failures — 2026-12
+ * review 4a — and every one of those requests is recorded for the capability
+ * report). The official settings plugin subset runs on
  * this ctx, so every registered section/row binds its controllers and
  * settings scopes to the TARGET instance's RPC surface; the hosting boot's own
  * ledger/scope/events are untouched.
@@ -29,6 +31,11 @@
  * that is reported as `inactive` with the exact missing service names instead
  * of silently rendering nothing. The chamber's own General-page rows for those
  * session-family settings are supplied by the self-built BridgeRows plugin.
+ *
+ * Reported degradations (2026-12): remote capability requests attributed to
+ * their requester (`$on` no-op, `$mount`/`$stream` named failures) and the root
+ * standard sources contributed on this context, which the bridge outlet cannot
+ * seat (see `BridgeSlotRegistry` / `RootSeatLedger`).
  *
  * Teardown: dispose() unloads the root fiber (all plugin effects, slot
  * registrations, and settings-scope subscriptions) and cancels an in-flight
@@ -69,6 +76,12 @@ import {
 } from './runtime-source.ts'
 import {
   EMPTY_EXTENSION_SNAPSHOT,
+  CAPABILITY_REMOTE_EVENTS,
+  CAPABILITY_REMOTE_MOUNT,
+  CAPABILITY_REMOTE_STREAM,
+  REMOTE_MOUNT_UNAVAILABLE,
+  REMOTE_STREAM_UNAVAILABLE,
+  RootSeatLedger,
   classifyContribution,
   contributedSeats,
   mergeContributionVerdict,
@@ -82,6 +95,7 @@ import {
   type ExtensionSnapshot,
   type FiberLike,
   type PluginContribution,
+  type RemoteCapabilityUse,
 } from './settings-extensions.ts'
 
 export interface FakeConnectionHandle {
@@ -141,10 +155,27 @@ class BridgeConnectionService extends Service implements FakeConnectionHandle {
  * that relies on them must learn that its settings will not live-update
  * (silent no-op = "no changes", which is exactly the masquerade the chamber's
  * proxy-honesty invariant forbids).
+ *
+ * Surface (2026-12 review 4a): the members mirror upstream `ClientRemote` —
+ * `TypertClientRemote.$mount`/`$on`
+ * (`vendor/harness-checkout/packages/typert/protocol/src/types.ts:311-325`)
+ * plus `$stream`/`$host`
+ * (`vendor/harness-checkout/packages/api/gateway/src/client/index.ts:104-123`).
+ * `$mount` and `$stream` are NAMED PLACEHOLDERS: this surface has neither a
+ * Typert client to mount generated contributions against nor a WebSocket
+ * carrier, so both fail with a reason the caller can act on instead of the
+ * `undefined is not a function` a missing member would produce, and the
+ * attempt is recorded in the capability report. The former `$dispatch` member
+ * is REMOVED: no consumer anywhere in this repository, and no counterpart in
+ * upstream `ClientRemote` — a face the official remote never had must not be
+ * masqueraded here.
  */
 class BridgeRemoteService extends Service {
-  /** The forwarded-event keys subscribed so far, attributed to the caller's fiber name. */
-  readonly subscriptions = new Map<string, Set<string>>()
+  /**
+   * Caller-attributed capability requests (capability id → caller fiber name →
+   * requested keys): the honest source of the capability report.
+   */
+  readonly capabilityUse = new Map<string, Map<string, Set<string>>>()
 
   private readonly onChange: (() => void) | undefined
 
@@ -168,22 +199,100 @@ class BridgeRemoteService extends Service {
    * @returns a disposer that removes the recorded subscription.
    */
   $on(key: string, _fn: (...args: never[]) => void): () => void {
-    const owner = (this.ctx as { fiber?: { name?: string } }).fiber?.name ?? 'root'
-    const keys = this.subscriptions.get(owner) ?? new Set<string>()
-    keys.add(key)
-    this.subscriptions.set(owner, keys)
-    this.onChange?.()
-    return () => {
-      const current = this.subscriptions.get(owner)
-      if (current === undefined) return
-      current.delete(key)
-      if (current.size === 0) this.subscriptions.delete(owner)
-      this.onChange?.()
-    }
+    const owner = callerName(this.ctx)
+    this.recordUse(CAPABILITY_REMOTE_EVENTS, owner, key)
+    return () => { this.dropUse(CAPABILITY_REMOTE_EVENTS, owner, key) }
   }
 
-  /** No-op dispatch (nothing is forwarded into the child context). */
-  $dispatch(_event: unknown, _args: unknown[]): void {}
+  /**
+   * Named placeholder for upstream `ClientRemote.$mount`: this panel mounts a
+   * fixed plugin set on its own child context, so a generated Remote
+   * contribution cannot be mounted here.
+   * @param contribution - the requested contribution (recorded, never mounted).
+   * @throws Error with {@link REMOTE_MOUNT_UNAVAILABLE} — never resolves.
+   * @returns never: the call throws synchronously, so an awaiting plugin
+   *   reports the reason through its own fiber instead of silently hanging.
+   */
+  $mount(contribution: unknown): Promise<never> {
+    this.recordUse(CAPABILITY_REMOTE_MOUNT, callerName(this.ctx), optionName(contribution, 'package'))
+    throw new Error(REMOTE_MOUNT_UNAVAILABLE)
+  }
+
+  /**
+   * Named placeholder for upstream `ClientRemote.$stream`: there is no
+   * WebSocket carrier behind this panel.
+   * @param options - the requested stream options (recorded, never opened).
+   * @throws Error with {@link REMOTE_STREAM_UNAVAILABLE}.
+   * @returns never: the call throws synchronously (upstream returns a live
+   *   stream object, which cannot exist here).
+   */
+  $stream(options: unknown): never {
+    this.recordUse(CAPABILITY_REMOTE_STREAM, callerName(this.ctx), optionName(options, 'name'))
+    throw new Error(REMOTE_STREAM_UNAVAILABLE)
+  }
+
+  /** Record one capability request and notify the report. */
+  private recordUse(capability: string, owner: string, key: string): void {
+    const perOwner = this.capabilityUse.get(capability) ?? new Map<string, Set<string>>()
+    const keys = perOwner.get(owner) ?? new Set<string>()
+    keys.add(key)
+    perOwner.set(owner, keys)
+    this.capabilityUse.set(capability, perOwner)
+    this.onChange?.()
+  }
+
+  /** Drop one recorded request (the `$on` disposer path). */
+  private dropUse(capability: string, owner: string, key: string): void {
+    const perOwner = this.capabilityUse.get(capability)
+    if (perOwner === undefined) return
+    const keys = perOwner.get(owner)
+    if (keys === undefined) return
+    keys.delete(key)
+    if (keys.size === 0) perOwner.delete(owner)
+    if (perOwner.size === 0) this.capabilityUse.delete(capability)
+    this.onChange?.()
+  }
+}
+
+/** The calling plugin's fiber name, or `root` when the caller is unattributed. */
+function callerName(ctx: Context): string {
+  return (ctx as unknown as { fiber?: { name?: string } }).fiber?.name ?? 'root'
+}
+
+/**
+ * The diagnostic key recorded for one capability request.
+ * @param value - the request argument (a contribution or stream options object).
+ * @param field - the naming field upstream declares (`package` / `name`).
+ * @returns the field value, or a stable placeholder when the caller omitted it.
+ */
+function optionName(value: unknown, field: string): string {
+  const raw = (value as Record<string, unknown> | null | undefined)?.[field]
+  return typeof raw === 'string' && raw.length > 0 ? raw : `unattributed-${field}`
+}
+
+/**
+ * The child context's slot registry, extended with the root standard-source
+ * ledger (2026-12 review 4b).
+ *
+ * WHY record instead of read: the root read face (hooks/keyedHooks/props) is
+ * declared public as a TYPE but delivered only through the renderer-install
+ * contract — `SlotRegistry.hostFace()` is private and the host reaches a
+ * renderer from `renderSlot('root', …)`
+ * (`vendor/harness-checkout/packages/client/ui-renderer/src/client/registry.ts:465,358`;
+ * `ui-slots/src/renderer.ts:127,189,208`). The bridge outlet is not this
+ * context's renderer, so it seats none of those sources; recording every
+ * PUBLIC `provideRoot` call makes the degradation addressable on the
+ * diagnostics page instead of leaving it a silent gap. The override delegates
+ * — it never re-implements the registration.
+ */
+class BridgeSlotRegistry extends SlotRegistry {
+  /** Root standard sources contributed on this child context. */
+  readonly rootSeats = new RootSeatLedger()
+
+  override provideRoot(contribution: Record<string, unknown>): () => void {
+    this.rootSeats.record(callerName(this.ctx), contribution)
+    return super.provideRoot(contribution)
+  }
 }
 
 /** The rendered side of one bridged instance: the live child context and its service faces. */
@@ -391,6 +500,11 @@ function contributionsEqual(a: readonly PluginContribution[], b: readonly Plugin
       && (entry.seats ?? []).join(',') === (other.seats ?? []).join(',')
       && (entry.missing ?? []).join(',') === (other.missing ?? []).join(',')
       && (entry.sharedWith ?? []).join(',') === (other.sharedWith ?? []).join(',')
+      // Capabilities are part of the report: a mid-session `$on`/`$mount`/
+      // `$stream` request changes ONLY this field, and a comparison that
+      // ignored it would leave the new degradation unpublished (the store
+      // would see "nothing changed").
+      && (entry.capabilities ?? []).join(',') === (other.capabilities ?? []).join(',')
   })
 }
 
@@ -423,11 +537,12 @@ export async function mountBridgeSession(server: RuntimeServerProjection): Promi
   try {
     const api = getBridgeApiClient(instanceId)
     // Both faces are cordis SERVICES (2026-12): service method calls are
-    // caller-bound, so a plugin's `ctx.remote.$on(...)` can be attributed to
-    // that plugin's fiber — the honest source of the capability report.
-    let onRemoteSubscription: (() => void) | undefined
+    // caller-bound, so a plugin's `ctx.remote.$on(...)` / `$mount(...)` /
+    // `$stream(...)` can be attributed to that plugin's fiber — the honest
+    // source of the capability report.
+    let onRemoteRequest: (() => void) | undefined
     new BridgeConnectionService(ctx, api)
-    const remote = new BridgeRemoteService(ctx, api, () => { onRemoteSubscription?.() })
+    const remote = new BridgeRemoteService(ctx, api, () => { onRemoteRequest?.() })
     // The stub `remote` carries every namespace the mounted official plugins'
     // injects wait on (`remote.settings`, `remote.credentials`, `remote.llm`,
     // `remote.agentPresets`, `remote.session`, `remote.pluginInventory`) — the
@@ -454,11 +569,16 @@ export async function mountBridgeSession(server: RuntimeServerProjection): Promi
     ]
     const fibers = [
       ctx.plugin(DECLARATION_PLUGIN),
-      ctx.plugin(SlotRegistry),
+      // The recording registry: it owns the child ledger AND records every
+      // root standard source contributed here (see BridgeSlotRegistry).
+      ctx.plugin(BridgeSlotRegistry),
       ...plugins.map(entry => ctx.plugin({ ...entry.plugin, name: entry.id })),
     ] as readonly { state: number; await(): Promise<unknown> }[]
     await waitForActive(fibers)
     const slots = ctx.get('slots') as SlotRegistry
+    // Empty ledger when the service is not this assembly's recording registry:
+    // an absent record reports nothing, it must never throw here.
+    const rootSeats = (slots as unknown as { rootSeats?: RootSeatLedger }).rootSeats ?? new RootSeatLedger()
     const extensions = new ExtensionStore()
     // Entry-render crashes on this child context (a bridged plugin's section
     // throwing while rendering) are contained by the outlet boundary; the
@@ -481,13 +601,14 @@ export async function mountBridgeSession(server: RuntimeServerProjection): Promi
       instanceId,
       sourceFingerprint: server.sourceFingerprint,
       basePath: `/api/i/${instanceId}`,
-      remoteSubscriptions: remote.subscriptions,
+      capabilityUse: remote.capabilityUse,
+      rootSeats,
     })
-    // A plugin subscribing to forwarded host events mid-session (or during
-    // its apply, after the phase published) updates the report: the surface
-    // must never let "no events" pass for "no changes".
+    // A plugin asking for a remote capability mid-session (or during its apply,
+    // after the phase published) updates the report: the surface must never let
+    // "no events" pass for "no changes".
     phase = extensionPhase
-    onRemoteSubscription = () => { extensionPhase.republish() }
+    onRemoteRequest = () => { extensionPhase.republish() }
     // Fire-and-forget: the panel is usable as soon as the BASE chain is up,
     // and extension sections stream in (the ledger is reactive).
     void extensionPhase.start()
@@ -525,8 +646,10 @@ interface ExtensionPhaseOptions {
   instanceId: string
   sourceFingerprint: string
   basePath: string
-  /** Caller-attributed `remote.$on` keys per plugin id (capability report). */
-  remoteSubscriptions: ReadonlyMap<string, ReadonlySet<string>>
+  /** Caller-attributed `remote.$on`/`$mount`/`$stream` requests (the capability report). */
+  capabilityUse: RemoteCapabilityUse
+  /** Root standard sources contributed on this child context (the unseated-root-seat report). */
+  rootSeats: RootSeatLedger
 }
 
 /**
@@ -591,7 +714,7 @@ class ExtensionPhase {
   republish(): void {
     const snapshot = this.options.store.getSnapshot()
     if (snapshot.contributions.length === 0) return
-    this.publish({ contributions: decorateContributions(snapshot.contributions, this.options.remoteSubscriptions) })
+    this.publish({ contributions: decorateContributions(snapshot.contributions, this.options.capabilityUse) })
   }
 
   private publish(next: Partial<ExtensionSnapshot>): void {
@@ -600,8 +723,15 @@ class ExtensionPhase {
       ...next,
       contributions: this.reclassify(decorateContributions(
         next.contributions ?? this.options.store.getSnapshot().contributions,
-        this.options.remoteSubscriptions,
+        this.options.capabilityUse,
       )),
+      // Recomputed on EVERY publish (not only on the 'ready' transition): a
+      // plugin that activates late can register into an unrendered seat or
+      // provide a root standard source after the first ready snapshot.
+      omittedSeats: [
+        ...omittedSeatContributions(this.options.slots, isBasePluginId),
+        ...this.options.rootSeats.omittedSeats(isBasePluginId),
+      ],
       crashes: [...this.options.crashes],
     })
   }
@@ -633,7 +763,7 @@ class ExtensionPhase {
   private async run(force: boolean): Promise<void> {
     if (this.cancelled || this.running) return
     this.running = true
-    const { slots, instanceId, sourceFingerprint, basePath } = this.options
+    const { instanceId, sourceFingerprint, basePath } = this.options
     try {
       const loader = clientPluginLoader()
       if (loader === null || loader.modules === undefined) {
@@ -720,11 +850,12 @@ class ExtensionPhase {
         mountedNow.push(conflict === undefined ? mounted : { ...mounted, revConflict: conflict })
       }
       if (this.cancelled) return
+      // omittedSeats are derived by publish() from the live ledger + root-seat
+      // ledger, so this transition cannot report a stale set.
       this.publish({
         state: 'ready',
         total: rows.length,
         contributions: [...retained, ...mountedNow],
-        omittedSeats: omittedSeatContributions(slots, isBasePluginId),
         signature,
       })
     } catch (error) {

@@ -193,7 +193,11 @@ export function archivePurgeNote(run: ArchivePurgeFlowResult): PurgeNote {
       params: { sessionId: failure.sessionId, message: failure.message },
     })
   }
-  if (result.truncated === true && result.errors.length >= 1000) {
+  // `truncated` IS the caps-reached signal (the host sets it from its own
+  // MAX_PURGE_ERROR_RECORDS); the old `errors.length >= 1000` re-encoded that
+  // host constant here with no lockstep gate, so a host-side change would have
+  // silently dropped the note (2026-09 audit).
+  if (result.truncated === true) {
     lines.push({ key: 'archive.purge.note.truncated' })
   }
   if (result.errors.length > 0) {

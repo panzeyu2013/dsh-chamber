@@ -37,9 +37,15 @@ export const zh = {
   noticeInactive: '{plugin} 的设置未激活：缺少服务 {missing}',
   noticeFailed: '{plugin} 的设置加载失败：{detail}',
   noticeOmittedSeat: '{plugin} 注册了「{seat}」，桌面设置壳不渲染该位置',
+  // 2026-12 复查 4b：子上下文的根座（root hooks/keyedHooks/props）未落座——
+  // 该读面只交付给已安装的渲染器，桥接 outlet 无法消费（见 bridge-outlet.tsx
+  // 与 settings-extensions.ts 的 RootSeatLedger），因此必须显式列出。
+  noticeRootSeat: '{plugin} 提供了根座「{seat}」，桌面设置面未落座：依赖它的设置项不会出现',
   noticeCrash: '{plugin} 的设置界面渲染出错：{detail}',
   noticeShared: '{plugin} 的模块实例已由其他实例（{sources}）加载，模块级状态可能被共享',
-  noticeCapability: '{plugin} 依赖宿主事件推送（{capability}），桌面设置面不提供：该设置不会自动刷新',
+  // 2026-12：不再假定「宿主事件推送」这一种能力——能力面现含 $on / $mount /
+  // $stream（settings-extensions.ts 的 CAPABILITY_*），文案必须对三者都成立。
+  noticeCapability: '{plugin} 使用了桌面设置面不提供的能力（{capability}）：对应的设置可能无法自动刷新',
   noticeRevConflict: '{plugin} 的 bundle 版本与页面已加载的版本不同（{kind}），已复用先加载的版本：重启该实例（或对齐两个实例的 dsh 运行时版本）后可切换',
   current: '当前',
   close: '关闭',
@@ -290,9 +296,10 @@ export const en: Record<keyof typeof zh, string> = {
   noticeInactive: '{plugin} could not activate its settings: missing service(s) {missing}',
   noticeFailed: '{plugin} failed to load its settings: {detail}',
   noticeOmittedSeat: '{plugin} registered into "{seat}", which the desktop settings shell does not render',
+  noticeRootSeat: '{plugin} provided root seat "{seat}", which this settings surface does not seat: settings depending on it will not appear',
   noticeCrash: '{plugin} crashed while rendering its settings: {detail}',
   noticeShared: '{plugin}\'s module instance is also loaded by other instances ({sources}); module-level state may be shared',
-  noticeCapability: '{plugin} relies on host event push ({capability}), which this settings surface does not provide: its settings will not refresh automatically',
+  noticeCapability: '{plugin} used a capability this settings surface does not provide ({capability}): its settings may not refresh automatically',
   noticeRevConflict: '{plugin} serves a different bundle rev than the one already loaded on this page ({kind}); the loaded version is reused — restart that instance (or align the two instances\' dsh runtime versions) to switch',
   current: 'Current',
   close: 'Close',

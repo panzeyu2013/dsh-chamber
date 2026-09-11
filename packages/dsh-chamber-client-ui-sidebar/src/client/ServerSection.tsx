@@ -36,6 +36,7 @@ import {
   type SourceSearchState,
 } from '../shared/search-state.ts'
 import { clearPendingClick, noteSessionRowClick } from '../shared/pending-click.ts'
+import { MANAGED_RUNTIME_TRANSIENT_STATES } from '../shared/managed-runtime.ts'
 import { openErrorKey } from '../shared/open-outcome.ts'
 import { getSourceRepoLayouts, getWorkspaceGitFlag, hiddenByMainWorkspaceFold, isSourceGitFlagsLoaded } from '../shared/workspace-git-flags.ts'
 import { resolveWorkspaceDrop } from '../shared/workspace-drag-order.ts'
@@ -119,7 +120,10 @@ function sourceHeaderActivatable(server: ChamberServerAggregate, chamberInstance
   // （App 侧同样按 managedRuntimeUnusable 拒绝预热/收割），头部不应承诺切换。
   const managedUnusable = server.managedRuntimeDown === true
     || (server.kind === 'gateway'
-      && (server.phase === 'starting' || server.phase === 'restarting'))
+      // Shared constant, not a second literal set (2026-09 audit): the
+      // transient states live in managed-runtime.ts, and a set that grows
+      // there must reach this header without a second edit.
+      && (MANAGED_RUNTIME_TRANSIENT_STATES as readonly string[]).includes(server.phase))
   return server.id !== chamberInstanceId && !managedUnusable
 }
 
@@ -1838,7 +1842,7 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                                         onClick={() => {
                                           if (suppressClickRef.current) return
                                           clearPendingClick()
-                                          onArchiveSession(server, session.id, session.blank === true ? t('session.new') : session.title)
+                                          onArchiveSession(server, session.id, session.blank === true ? t('session.new') : (session.title || t('list.unnamed')))
                                         }}
                                       >
                                         <IconArchiveOutline20 size={14} />

@@ -197,9 +197,24 @@ function renderEntry(
     useWorkspaces: emptyObservableHook,
     // alpha.2 global standard seat: the settings chain declares no main-panel
     // selection, so a component reading it sees "no panel selected" (null)
-    // instead of an undefined hook. `useResource` is deliberately NOT seated:
-    // no official settings component reads it today, and the repo rule is to
-    // add a seat only for a current consumer (add it here the day one lands).
+    // instead of an undefined hook.
+    //
+    // Root standard sources contributed on the CHILD context (`hooks` /
+    // `keyedHooks` / `props`) are deliberately NOT seated, and this is a judged
+    // limit rather than an oversight (2026-12 review 4b): the root read face is
+    // public as a TYPE (`ui-slots/src/renderer.ts:127,189`), but its only
+    // delivery channel is the renderer-installation contract — the registry
+    // keeps its binding factory private and hands the host to the INSTALLED
+    // renderer inside `renderSlot('root', …)`
+    // (`ui-renderer/src/client/registry.ts:465`, `:358`), so a non-renderer
+    // consumer can only reach it by installing itself as this context's
+    // renderer. Concretely, `client/resources` contributes
+    // `keyedHooks.resource` (the `useResource` seat,
+    // `client/resources/src/client/index.ts:38-40`) and stays unseated here.
+    // The diagnostics page names every such seat instead of hiding it (the
+    // child registry records each PUBLIC `provideRoot` call — RootSeatLedger
+    // in bridge-context.ts, rendered through extensionNotices); seat it here
+    // only together with a public read path upstream.
     usePanelInfo: panelInfoHook,
   }
   if (entry.locale !== undefined) {

@@ -8,8 +8,14 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   CAPABILITY_REMOTE_EVENTS,
+  CAPABILITY_REMOTE_MOUNT,
+  CAPABILITY_REMOTE_STREAM,
+  REMOTE_MOUNT_UNAVAILABLE,
+  REMOTE_STREAM_UNAVAILABLE,
+  RootSeatLedger,
   classifyContribution,
   contributedSeats,
   decorateContributions,
@@ -26,6 +32,7 @@ import {
   type ExtensionSnapshot,
   type FiberLike,
   type PluginContribution,
+  type RemoteCapabilityUse,
 } from '../src/client/settings-extensions.ts';
 
 // ── row projection ────────────────────────────────────────────────────────
@@ -230,7 +237,9 @@ test('extensionNotices: a capability-degraded plugin is reported (no silent no-o
   const contributions: PluginContribution[] = [
     { id: 'pushy', state: 'active', seats: ['settings.section'] },
   ];
-  const decorated = decorateContributions(contributions, new Map([['pushy', new Set(['settings/document-updated'])]]));
+  const decorated = decorateContributions(contributions, new Map([
+    [CAPABILITY_REMOTE_EVENTS, new Map([['pushy', new Set(['settings/document-updated'])]])],
+  ]));
   assert.deepEqual(decorated[0]?.capabilities, [CAPABILITY_REMOTE_EVENTS]);
   const notices = extensionNotices(snapshot({ contributions: decorated, total: 1 }));
   assert.deepEqual(notices.map(notice => notice.key), ['noticeCapability']);
@@ -304,3 +313,213 @@ test('mergeContributionVerdict: a late failure replaces an optimistic active ver
   const merged = mergeContributionVerdict(previous, { id: 'flaky', state: 'failed', error: 'boom' }, []);
   assert.deepEqual(merged, { id: 'flaky', state: 'failed', seats: [], error: 'boom' });
 });
+
+// ── stub-remote capability report (2026-12 review 4a) ─────────────────────
+
+test('the remote placeholders name the channel they cannot provide', () => {
+  // The child context has no WS carrier and mounts its plugin set itself, so
+  // `$mount`/`$stream` are NAMED placeholders: a plugin that asks for one must
+  // get a reason it can act on, never an undefined-is-not-a-function crash.
+  assert.match(REMOTE_MOUNT_UNAVAILABLE, /^settings panel has no remote mount channel/);
+  assert.match(REMOTE_STREAM_UNAVAILABLE, /^settings panel has no remote stream channel/);
+});
+
+test('decorateContributions: each stub-remote capability is stamped on its requester', () => {
+  const contributions: PluginContribution[] = [
+    { id: 'pushy', state: 'active' },
+    { id: 'mounter', state: 'active' },
+    { id: 'streamer', state: 'active' },
+    { id: 'quiet', state: 'active' },
+  ];
+  const use: RemoteCapabilityUse = new Map([
+    [CAPABILITY_REMOTE_EVENTS, new Map([['pushy', new Set(['settings/document-updated'])]])],
+    [CAPABILITY_REMOTE_MOUNT, new Map([['mounter', new Set(['@acme/remote'])]])],
+    [CAPABILITY_REMOTE_STREAM, new Map([['streamer', new Set(['/acme/stream'])]])],
+  ]);
+  const decorated = decorateContributions(contributions, use);
+  assert.deepEqual(decorated[0]?.capabilities, [CAPABILITY_REMOTE_EVENTS]);
+  assert.deepEqual(decorated[1]?.capabilities, [CAPABILITY_REMOTE_MOUNT]);
+  assert.deepEqual(decorated[2]?.capabilities, [CAPABILITY_REMOTE_STREAM]);
+  assert.equal(decorated[3]?.capabilities, undefined, 'a plugin that asked for nothing stays unmarked');
+});
+
+test('decorateContributions: an attributed-but-empty key set is not a capability use', () => {
+  const decorated = decorateContributions(
+    [{ id: 'quiet', state: 'active' }],
+    new Map([[CAPABILITY_REMOTE_MOUNT, new Map([['quiet', new Set<string>()]])]]),
+  );
+  assert.equal(decorated[0]?.capabilities, undefined);
+});
+
+test('decorateContributions: capability order is the diagnostic display order, not map order', () => {
+  const contributions: PluginContribution[] = [{ id: 'both', state: 'active' }];
+  const use: RemoteCapabilityUse = new Map([
+    [CAPABILITY_REMOTE_STREAM, new Map([['both', new Set(['/s'])]])],
+    [CAPABILITY_REMOTE_EVENTS, new Map([['both', new Set(['settings/document-updated'])]])],
+  ]);
+  assert.deepEqual(
+    decorateContributions(contributions, use)[0]?.capabilities,
+    [CAPABILITY_REMOTE_EVENTS, CAPABILITY_REMOTE_STREAM],
+  );
+});
+
+test('extensionNotices: a mount-degraded plugin is reported, never silently swallowed', () => {
+  const decorated = decorateContributions(
+    [{ id: 'mounter', state: 'active', seats: ['settings.section'] }],
+    new Map([[CAPABILITY_REMOTE_MOUNT, new Map([['mounter', new Set(['@acme/remote'])]])]]),
+  );
+  const notices = extensionNotices(snapshot({ contributions: decorated, total: 1 }));
+  assert.deepEqual(notices.map(notice => notice.key), ['noticeCapability']);
+  assert.equal(notices[0]?.params?.capability, CAPABILITY_REMOTE_MOUNT);
+});
+
+// ── unseated root standard sources (2026-12 review 4b) ────────────────────
+
+test('RootSeatLedger: records every compartment member, attributed to its contributor', () => {
+  const ledger = new RootSeatLedger();
+  ledger.record('@acme/plugin', {
+    hooks: { panelInfo: {} },
+    keyedHooks: { resource: () => undefined },
+    props: { chamberFileApiBase: '/api/i/local' },
+  });
+  assert.deepEqual(ledger.entries(), [{
+    owner: '@acme/plugin',
+    seats: ['root.hooks.panelInfo', 'root.keyedHooks.resource', 'root.props.chamberFileApiBase'],
+  }]);
+});
+
+test('RootSeatLedger: a non-base contributor becomes one omitted-seat row per unseated seat', () => {
+  const ledger = new RootSeatLedger();
+  ledger.record('@deepseek-ai/dsh-client-resources', { keyedHooks: { resource: () => undefined } });
+  assert.deepEqual(ledger.omittedSeats(id => id === 'base-plugin'), [
+    { seat: 'root.keyedHooks.resource', pluginId: '@deepseek-ai/dsh-client-resources', kind: 'root-standard-source' },
+  ]);
+  assert.deepEqual(ledger.omittedSeats(id => id === '@deepseek-ai/dsh-client-resources'), [],
+    'the chamber base set is filtered out exactly like the other omitted-seat rows');
+});
+
+test('extensionNotices: an unseated root seat gets its own explicit line', () => {
+  const ledger = new RootSeatLedger();
+  ledger.record('@deepseek-ai/dsh-client-resources', { keyedHooks: { resource: () => undefined } });
+  const notices = extensionNotices(snapshot({
+    total: 1,
+    contributions: [{ id: '@deepseek-ai/dsh-client-resources', state: 'active', seats: ['settings.section'] }],
+    omittedSeats: ledger.omittedSeats(() => false),
+  }));
+  assert.deepEqual(notices.map(notice => notice.key), ['noticeRootSeat']);
+  assert.equal(notices[0]?.params?.plugin, '@deepseek-ai/dsh-client-resources');
+  assert.equal(notices[0]?.params?.seat, 'root.keyedHooks.resource');
+});
+
+test('extensionNotices: an unrendered SLOT seat keeps its own line (the two are not merged)', () => {
+  const notices = extensionNotices(snapshot({
+    omittedSeats: [{ seat: 'settings.trigger', pluginId: 'third-party' }],
+  }));
+  assert.deepEqual(notices.map(notice => notice.key), ['noticeOmittedSeat']);
+});
+
+test('RootSeatLedger: repeated contributions from one owner accumulate on that owner', () => {
+  const ledger = new RootSeatLedger();
+  ledger.record('plugin-a', { hooks: { one: {} } });
+  ledger.record('plugin-a', { hooks: { two: {} } });
+  assert.deepEqual(ledger.entries(), [{ owner: 'plugin-a', seats: ['root.hooks.one', 'root.hooks.two'] }]);
+});
+
+test('RootSeatLedger: an empty or malformed contribution records nothing', () => {
+  const ledger = new RootSeatLedger();
+  ledger.record('plugin-a', undefined);
+  ledger.record('plugin-a', {});
+  ledger.record('plugin-a', { hooks: 'not-an-object' });
+  ledger.record('plugin-a', { hooks: { ok: {} }, keyedHooks: null });
+  assert.deepEqual(ledger.entries(), [{ owner: 'plugin-a', seats: ['root.hooks.ok'] }]);
+});
+
+// ── source-text locks for the stub remote and the bridge outlet ───────────
+
+test('the stub remote answers $mount/$stream with the named reason and drops $dispatch', () => {
+  const context = code('../src/client/bridge-context.ts');
+  assert.ok(context.includes('throw new Error(REMOTE_MOUNT_UNAVAILABLE)'),
+    '$mount must fail with the named reason, never resolve to undefined');
+  assert.ok(context.includes('throw new Error(REMOTE_STREAM_UNAVAILABLE)'),
+    '$stream must fail with the named reason, never return undefined');
+  assert.ok(context.includes('$mount(') && context.includes('$stream('),
+    'both upstream ClientRemote members must exist as named placeholders');
+  // Upstream ClientRemote = TypertClientRemote ($mount/$on) + $stream/$host
+  // (vendor/harness-checkout/packages/api/gateway/src/client/index.ts:104-123,
+  // packages/typert/protocol/src/types.ts:311-325): `$dispatch` is not part of
+  // that face and had no consumer in this repository.
+  assert.ok(!context.includes('$dispatch'), 'the never-upstream $dispatch stub must be gone');
+  assert.ok(context.includes('readonly $host = { home: undefined, isLoopback: true }'),
+    'the fixed host facts stay (they ARE upstream)');
+});
+
+test('the child slot registry records root contributions through the PUBLIC provideRoot', () => {
+  const context = code('../src/client/bridge-context.ts');
+  assert.ok(context.includes('class BridgeSlotRegistry extends SlotRegistry'),
+    'the child context must mount the recording registry subclass');
+  assert.ok(context.includes('return super.provideRoot(contribution)'),
+    'the recording must delegate, never re-implement, provideRoot');
+  assert.ok(!context.includes('_rootSource') && !context.includes('hostFace'),
+    'the record must not reach for the private root-binding members');
+  assert.ok(context.includes('rootSeats'),
+    'the ledger must reach the extension phase (the diagnostics rows)');
+});
+
+test('the outlet kit seats only hooks it can prove and never the root read face', () => {
+  const outlet = code('../src/client/bridge-outlet.tsx');
+  for (const seat of ['useSessions: emptyObservableHook', 'useWorkspaces: emptyObservableHook', 'usePanelInfo: panelInfoHook']) {
+    assert.ok(outlet.includes(seat), `the kit must keep ${seat}`);
+  }
+  for (const privateReach of ['keyedHooks', 'provideRoot', 'host.root', 'slots.root', '_rootSource', 'install(']) {
+    assert.ok(!outlet.includes(privateReach),
+      `the outlet must not consume the root read face (${privateReach}) — it is delivered only to the installed renderer`);
+  }
+});
+
+test('the extension store notices a capability-only change (the report would else be invisible)', () => {
+  const context = code('../src/client/bridge-context.ts');
+  assert.ok(/contributionsEqual[\s\S]*capabilities/.test(context),
+    'contributionsEqual must compare capabilities, or a mid-session capability request never republishes');
+});
+
+/** Read one package source file as text. */
+function source(relative: string): string {
+  return readFileSync(new URL(relative, import.meta.url), 'utf8');
+}
+
+/**
+ * Read one package source file with comments removed: these locks must not be
+ * satisfiable — or defeated — by prose.
+ * @param relative - path relative to this test file.
+ * @returns the code text.
+ */
+function code(relative: string): string {
+  const text = source(relative);
+  let out = '';
+  let quote: string | undefined;
+  let line = false;
+  let block = false;
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    const next = text[i + 1];
+    if (line) {
+      if (ch === '\n') { line = false; out += ch } else out += ' ';
+      continue;
+    }
+    if (block) {
+      if (ch === '*' && next === '/') { block = false; out += '  '; i += 1 } else out += ch === '\n' ? ch : ' ';
+      continue;
+    }
+    if (quote !== undefined) {
+      out += ch;
+      if (ch === '\\') { out += next ?? ''; i += 1; continue }
+      if (ch === quote) quote = undefined;
+      continue;
+    }
+    if (ch === '/' && next === '/') { line = true; out += '  '; i += 1; continue }
+    if (ch === '/' && next === '*') { block = true; out += '  '; i += 1; continue }
+    if (ch === '"' || ch === "'" || ch === '`') { quote = ch; out += ch; continue }
+    out += ch;
+  }
+  return out;
+}

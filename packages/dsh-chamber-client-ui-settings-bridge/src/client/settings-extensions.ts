@@ -64,9 +64,11 @@ export interface PluginContribution {
   sharedWith?: readonly string[]
   /**
    * Child-context capabilities this plugin asked for but the surface cannot
-   * provide (2026-12). Today the only entry is `remote-events`: the plugin
-   * subscribed to forwarded host events (`ctx.remote.$on`), which the settings
-   * child context answers as a no-op — its settings will not live-update.
+   * provide (2026-12): forwarded host events (`ctx.remote.$on`), a mounted
+   * Remote contribution (`ctx.remote.$mount`) and a Remote stream
+   * (`ctx.remote.$stream`) — the child context answers `$on` as a no-op and
+   * the two channel members as named failures. A plugin relying on any of them
+   * will not live-update (see {@link CAPABILITY_REMOTE_EVENTS} and friends).
    */
   capabilities?: readonly string[]
   /**
@@ -87,31 +89,152 @@ export interface PluginContribution {
   revConflict?: 'restart' | 'version'
 }
 
-/** The capability id for "subscribed to forwarded host events". */
+/** The capability id for "subscribed to forwarded host events" (`remote.$on`). */
 export const CAPABILITY_REMOTE_EVENTS = 'remote-events'
+
+/** The capability id for "mounts a Remote contribution" (`remote.$mount`). */
+export const CAPABILITY_REMOTE_MOUNT = 'remote-mount'
+
+/** The capability id for "opens a Remote stream" (`remote.$stream`). */
+export const CAPABILITY_REMOTE_STREAM = 'remote-stream'
+
+/** Every capability this surface reports, in diagnostic display order. */
+export const REMOTE_CAPABILITIES: readonly string[] = [
+  CAPABILITY_REMOTE_EVENTS,
+  CAPABILITY_REMOTE_MOUNT,
+  CAPABILITY_REMOTE_STREAM,
+]
+
+/**
+ * Why `remote.$mount` cannot work on this surface: the child context mounts a
+ * fixed plugin set of its own and has no Typert client to mount a generated
+ * Host-for-Client contribution against.
+ */
+export const REMOTE_MOUNT_UNAVAILABLE = 'settings panel has no remote mount channel: this panel mounts a fixed '
+  + 'plugin set on its own child context, so a generated Remote contribution cannot be mounted here'
+
+/**
+ * Why `remote.$stream` cannot work on this surface: there is no WebSocket
+ * carrier behind the settings panel, so no logical stream can be opened.
+ */
+export const REMOTE_STREAM_UNAVAILABLE = 'settings panel has no remote stream channel: this panel has no '
+  + 'WebSocket carrier, so forwarded host events and live streams are unavailable here'
+
+/**
+ * Caller-attributed capability requests observed on the child context:
+ * capability id → (plugin id → the keys it asked for). Built by the stub
+ * remote's services, which are caller-bound, so each request is attributed to
+ * the fiber that made it.
+ */
+export type RemoteCapabilityUse = ReadonlyMap<string, ReadonlyMap<string, ReadonlySet<string>>>
 
 /**
  * Stamp each contribution with the capabilities its plugin actually used.
  * @param contributions - the phase's verdicts.
- * @param subscriptions - caller-attributed `remote.$on` keys per plugin id.
- * @returns the same verdicts with `capabilities` filled in.
+ * @param use - caller-attributed capability requests (see {@link RemoteCapabilityUse}).
+ * @returns the same verdicts with `capabilities` filled in, in {@link REMOTE_CAPABILITIES} order.
  */
 export function decorateContributions(
   contributions: readonly PluginContribution[],
-  subscriptions: ReadonlyMap<string, ReadonlySet<string>>,
+  use: RemoteCapabilityUse,
 ): PluginContribution[] {
   return contributions.map((contribution) => {
-    const keys = subscriptions.get(contribution.id)
-    if (keys === undefined || keys.size === 0) return contribution
-    const merged = new Set([...(contribution.capabilities ?? []), CAPABILITY_REMOTE_EVENTS])
-    return { ...contribution, capabilities: [...merged] }
+    const used = REMOTE_CAPABILITIES.filter(capability =>
+      (use.get(capability)?.get(contribution.id)?.size ?? 0) > 0)
+    if (used.length === 0) return contribution
+    const merged = new Set([...(contribution.capabilities ?? []), ...used])
+    return { ...contribution, capabilities: [...merged].sort(
+      (a, b) => REMOTE_CAPABILITIES.indexOf(a) - REMOTE_CAPABILITIES.indexOf(b)) }
   })
 }
 
-/** A third-party entry registered into a seat the chamber shell does not render. */
+/**
+ * One contribution the chamber shell cannot render. Two kinds share the row:
+ * a third-party entry registered into a SLOT the shell does not render, and
+ * (2026-12 review 4b) a root standard-source compartment member contributed on
+ * the child context, which the bridge outlet cannot seat — `seat` is then
+ * `root.hooks.<name>` / `root.keyedHooks.<name>` / `root.props.<name>`.
+ */
 export interface OmittedSeatContribution {
   seat: string
   pluginId: string
+  /**
+   * `slot` (default) = an entry in an unrendered slot;
+   * `root-standard-source` = a member of the root read face the outlet cannot
+   * seat. The two report through different diagnostics lines.
+   */
+  kind?: 'slot' | 'root-standard-source'
+}
+
+/** One contributor's root standard-source seats, as recorded by the child registry. */
+export interface RootSeatRecord {
+  /** Compartment-qualified seat keys, in `hooks`, `keyedHooks`, `props` order. */
+  seats: readonly string[]
+  /** Fiber name of the contributing plugin (or `root` when the caller is unattributed). */
+  owner: string
+}
+
+/**
+ * Ledger of the root standard sources contributed on the CHILD context
+ * (`ctx.slots.provideRoot`), and of the fact that the bridge outlet seats
+ * none of them.
+ *
+ * WHY this exists instead of reading the root binding: the binding is public
+ * as a TYPE, but its only delivery channel is the renderer-installation
+ * contract — `SlotRegistry.hostFace()` is private and the host reaches a
+ * renderer through `renderSlot('root', …)`
+ * (`vendor/harness-checkout/packages/client/ui-renderer/src/client/registry.ts:465`,
+ * `:358`; `ui-slots/src/renderer.ts:127,189,208`), so a non-renderer consumer
+ * can only reach it by installing itself as the child context's renderer. The
+ * outlet therefore renders its own kit and this ledger makes the degradation
+ * ADDRESSABLE: every seat a plugin provided and the shell cannot seat is
+ * listed on the diagnostics page instead of disappearing.
+ */
+export class RootSeatLedger {
+  private readonly byOwner = new Map<string, string[]>()
+
+  /**
+   * Record one contribution's seats, attributed to its contributor.
+   * @param owner - the contributing plugin's fiber name (`root` when unattributed).
+   * @param contribution - the `provideRoot` argument (unknown shape: only its compartment keys are read).
+   */
+  record(owner: string, contribution: unknown): void {
+    const source = (contribution ?? {}) as Record<string, unknown>
+    const seats: string[] = []
+    for (const compartment of ['hooks', 'keyedHooks', 'props'] as const) {
+      const members = source[compartment]
+      if (typeof members !== 'object' || members === null) continue
+      for (const name of Object.keys(members)) seats.push(`root.${compartment}.${name}`)
+    }
+    if (seats.length === 0) return
+    const existing = this.byOwner.get(owner) ?? []
+    const merged = new Set([...existing, ...seats])
+    this.byOwner.set(owner, [...merged])
+  }
+
+  /**
+   * The recorded contributions.
+   * @returns one record per contributor, in first-contribution order.
+   */
+  entries(): RootSeatRecord[] {
+    return [...this.byOwner].map(([owner, seats]) => ({ owner, seats: [...seats] }))
+  }
+
+  /**
+   * The diagnostics rows: one per seat a plugin provided that this shell does
+   * not seat. Base-plugin contributions are excluded, exactly like the other
+   * omitted-seat rows (the chamber's own set is mounted under explicit ids).
+   * @param isBasePluginId - predicate identifying the chamber's own base plugins.
+   * @returns the omitted-seat rows, in contribution order.
+   */
+  omittedSeats(isBasePluginId: (id: string) => boolean): OmittedSeatContribution[] {
+    const rows: OmittedSeatContribution[] = []
+    for (const record of this.entries()) {
+      if (isBasePluginId(record.owner)) continue
+      for (const seat of record.seats) rows.push({ seat, pluginId: record.owner, kind: 'root-standard-source' })
+    }
+    return rows
+  }
 }
 
 /** One entry-render crash observed on the child context (`slots.onEntryError`). */
@@ -132,6 +255,7 @@ export interface ExtensionSnapshot {
   /** Kept rows (after covered filtering + URL safety) considered by this phase. */
   total: number
   contributions: readonly PluginContribution[]
+  /** Contributions the shell cannot render: unrendered slot seats + unseated root standard sources. */
   omittedSeats: readonly OmittedSeatContribution[]
   crashes: readonly EntryCrash[]
   /** Sorted id set of the kept rows (rebuild/reconcile key). */
@@ -479,6 +603,7 @@ export type SettingsNoticeKey =
   | 'noticeInactive'
   | 'noticeFailed'
   | 'noticeOmittedSeat'
+  | 'noticeRootSeat'
   | 'noticeCrash'
   | 'noticeShared'
   | 'noticeCapability'
@@ -494,8 +619,9 @@ export interface SettingsNotice {
 /**
  * Project an extension snapshot into the honest, human-readable notice list.
  * Nothing that failed to render may stay invisible: every inactive/failed/
- * skipped contribution, every omitted-seat registration, every contained
- * render crash and every cross-source module-sharing fact becomes one line.
+ * skipped contribution, every omitted-seat registration (including the root
+ * standard sources this surface cannot seat), every contained render crash and
+ * every cross-source module-sharing fact becomes one line.
  * @param snapshot - the live extension snapshot.
  * @returns the notices, in a stable reading order.
  */
@@ -543,7 +669,9 @@ export function extensionNotices(snapshot: ExtensionSnapshot): SettingsNotice[] 
     }
   }
   for (const omitted of snapshot.omittedSeats) {
-    notices.push({ key: 'noticeOmittedSeat', params: { plugin: omitted.pluginId, seat: omitted.seat } })
+    notices.push(omitted.kind === 'root-standard-source'
+      ? { key: 'noticeRootSeat', params: { plugin: omitted.pluginId, seat: omitted.seat } }
+      : { key: 'noticeOmittedSeat', params: { plugin: omitted.pluginId, seat: omitted.seat } })
   }
   for (const crash of snapshot.crashes) {
     notices.push({

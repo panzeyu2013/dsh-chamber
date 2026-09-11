@@ -61,7 +61,19 @@ declare module '@deepseek-ai/dsh-client-ui-renderer/client' {
   /** Slot registry service (moved here from the dissolved dsh-client-runtime). */
   export class SlotRegistry {
     constructor(ctx: Context)
+    /**
+     * The context a service method is called through: the cordis service proxy
+     * binds it to the CALLER's context at call time, which is how
+     * bridge-context.ts attributes a request to the plugin that made it.
+     */
+    ctx: Context
     register(options: Record<string, unknown>, component: unknown): () => void
+    /**
+     * Install one root standard-source contribution (upstream
+     * `RootStandardSourceContribution`: `hooks` / `keyedHooks` / `props`).
+     * bridge-context.ts's recording subclass overrides it and delegates.
+     */
+    provideRoot(contribution: Record<string, unknown>): () => void
     inject(key: string, callback: () => void | Iterable<() => void>): () => void
     entries(key: string): readonly StoredEntry[]
     entriesOfSlot(key: string): readonly StoredEntry[]

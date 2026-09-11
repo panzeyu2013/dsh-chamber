@@ -4,12 +4,12 @@ import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 // Type-only: pulls the SlotRegistry service merge (ctx.slots).
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
-import type { ObservableSnapshot } from '@deepseek-ai/dsh-client-store'
 import type { SessionListState } from '@deepseek-ai/dsh-api-session-controller/client'
 import type { WorkspaceSnapshot } from '@deepseek-ai/dsh-api-workspace-controller/client'
 import { indexSubagentDescendants } from '../shared/subagent-lineage.ts'
 import type { SidebarRootInjected } from './contract/slots.ts'
 import { SidebarRoot } from './SidebarRoot.tsx'
+import { resolveInstanceListFace } from './instance-list-face.ts'
 import { en, zh, type SidebarKey } from './locales.ts'
 import { chamberBridge, isValidProducerSourceFingerprint } from '../shared/aggregate-store.ts'
 import {
@@ -89,8 +89,18 @@ export function apply(ctx: ClientContext): void {
     // directory-picker package (mounted in every boot) owns this namespace.
     directoryBrowserT: ctx.locale.bind('directory-browser'),
   })
+  // The parent declaration gate (2026-12 review P3): `'sidebar'` is declared by
+  // the layout's 'root' entry, whose apply order against this plugin is not
+  // fixed — a bare `ctx.slots.register` into it throws whenever the layout has
+  // not registered yet, and the sidebar shell would simply be missing. Upstream
+  // waits for the declaration instead (`ui-sidebar/src/client/index.ts:73`,
+  // `ui-conversation/src/client/apply.ts:388`,
+  // `ui-settings-general/src/client/index.ts:146` — all
+  // `ctx.slots.inject(key, () => ctx.slots.register(…))`), which also removes
+  // the contribution when the parent declaration collapses and re-runs it after
+  // a redeclaration (HMR). The effect keeps owning the wait.
   ctx.effect(
-    () => ctx.slots.register({
+    () => ctx.slots.inject('sidebar', () => ctx.slots.register({
       name: 'sidebar',
       locale: NS,
       children: {
@@ -118,7 +128,7 @@ export function apply(ctx: ClientContext): void {
         'sidebar.footer.action': { kind: 'list', scope: 'root' },
       },
       inject: injectProps,
-    }, SidebarRoot),
+    }, SidebarRoot)),
     'dsh-chamber: sidebar slot registration',
   )
   // Upstream order: publish the (possibly already populated) panel list after
@@ -172,8 +182,16 @@ export function apply(ctx: ClientContext): void {
     const chamberSourceFingerprint = (ctx as any).chamberSourceFingerprint as string | undefined
     if (typeof chamberInstanceId !== 'string'
       || !isValidProducerSourceFingerprint(chamberInstanceId, chamberSourceFingerprint)) return () => {}
-    const sessionsList = (ctx.sessions as unknown as { list: ObservableSnapshot<SessionListState> }).list
-    const workspacesList = (ctx.workspaces as unknown as { list: ObservableSnapshot<WorkspaceSnapshot> }).list
+    // 2026-12 review P2: both list faces are read through the same guarded
+    // path as the `refresh()` seam below — a ctx that carries the services
+    // without their observables (or whose proxy throws for the member) must
+    // WARN and skip the whole producer registration, never register producers
+    // that can never report or die on the first snapshot read.
+    const sessionsList = resolveInstanceListFace<SessionListState>(
+      chamberInstanceId, 'sessions', () => ctx.sessions)
+    const workspacesList = resolveInstanceListFace<WorkspaceSnapshot>(
+      chamberInstanceId, 'workspaces', () => ctx.workspaces)
+    if (sessionsList === undefined || workspacesList === undefined) return () => {}
     // 代际事实由 shell 的 configureContext 注入：页面的 producer 注册表按注册
     // 顺序授权，挂死后恢复的老 boot 会夺走生产权（2026-12 复查 BLOCKER）。
     const bootGeneration = (ctx as any).chamberBootGeneration as number | undefined

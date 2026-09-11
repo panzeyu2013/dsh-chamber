@@ -133,9 +133,9 @@ test('projectInstanceSnapshot synthesizes workspace membership from cwd facts wh
     ids: ['s1', 's2', 's3'],
     phase: 'ready',
     byId: {
-      s1: { id: 's1', title: 'One', cwd: '/w1', running: false, blank: false },
-      s2: { id: 's2', title: 'Two', cwd: '/w1', running: false, blank: false },
-      s3: { id: 's3', title: 'Three', cwd: '/nowhere', running: false, blank: false },
+      s1: { id: 's1', title: 'One', cwd: '/w1', running: false, blank: false, updatedAt: 3 },
+      s2: { id: 's2', title: 'Two', cwd: '/w1', running: false, blank: false, updatedAt: 2 },
+      s3: { id: 's3', title: 'Three', cwd: '/nowhere', running: false, blank: false, updatedAt: 1 },
     },
   }
   const projected = projectInstanceSnapshot(workspaceState, sessionState)
