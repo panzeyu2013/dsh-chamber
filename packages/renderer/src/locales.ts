@@ -33,6 +33,16 @@
  * the served markup's own default is `zh-CN` (index.html). Only the document is
  * observed, never `navigator.language`: the user's choice inside dsh is
  * authoritative, and an English document must produce English chrome.
+ *
+ * 2026-09-11 review-fix (finding 4e): "an English document" only exists AFTER a
+ * shell booted — on a COLD load the served markup declares `lang="zh-CN"`
+ * (index.html:2) and no locale service has run yet, so every frame reader
+ * resolves zh and the first copy the user sees is always the served one (which
+ * is also what the static skeleton in index.html already carries, so the
+ * pre-mount rewrite in main.tsx is a no-op on that path). The dictionary takes
+ * over the moment the document language actually changes — a booted shell
+ * projecting its locale, or a control-plane markup that declares another
+ * language — which is exactly the subscription below.
  */
 
 /** Languages this frame carries copy for. */
@@ -55,6 +65,15 @@ export const zh = {
   'boot.starting': '正在启动…',
   /** App-frame crash screen (ErrorBoundary) title. */
   'error.ui.title': '界面发生错误',
+  /** Aggregate-error fallback when the control plane reports a failure with no message
+   *  (rendered verbatim by the sidebar's source alert). */
+  'error.unknown': '未知错误',
+  /** Open-session failure the App throws itself: the source left the registry. */
+  'open.failed.sourceGone': '打开会话失败：来源 {source} 已不在注册表',
+  /** Open-session failure wrapping the underlying error text; `{detail}` is that text. */
+  'open.failed.detail': '打开会话失败：{detail}',
+  /** Replayed notification whose source was removed and rebuilt; the open is dropped. */
+  'open.failed.sourceRebuilt': '来源 {source} 已被移除并以新代重建，旧通知未打开',
   /** Instance boot-failure overlay title (design 05 §4). */
   'fatal.boot.title': '实例启动失败',
   /** Heading of the failed-plugin list (upstream's boot page: 'Failed to load plugins'). */
@@ -86,6 +105,10 @@ export const en: Record<FrameKey, string> = {
   'boot.loadingHint': 'The full interface loads on first open',
   'boot.starting': 'Starting…',
   'error.ui.title': 'Interface error',
+  'error.unknown': 'Unknown error',
+  'open.failed.sourceGone': 'Failed to open the session: source {source} is no longer registered',
+  'open.failed.detail': 'Failed to open the session: {detail}',
+  'open.failed.sourceRebuilt': 'Source {source} was removed and rebuilt as a new generation; the stale notification was not opened',
   'fatal.boot.title': 'Instance failed to start',
   'fatal.entries.title': 'Failed to load plugins',
   'fatal.controlPlane.title': 'Cannot reach the control plane',

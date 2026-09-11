@@ -608,6 +608,12 @@ export function bootInstanceShell(
   ).then(() => {
     const runTask = bootChain.then(async () => {
     let staleEntry: AppWebEntry | undefined
+    // 2026-09-11 review-fix (finding 4g): hoisted out of the try so the catch
+    // arm below can apply the SAME tolerated-row filter the T15 sweep uses
+    // (see collectFailedEntries). It stays `[]` until the rows resolved, and an
+    // entry can only exist after that, so the catch arm's filter is never
+    // guessing.
+    let extraRows: ExtraModuleRow[] = []
     try {
       let blocked: ReturnType<typeof blockedBoot>
 
@@ -637,7 +643,6 @@ export function bootInstanceShell(
         }
       }
 
-      let extraRows: ExtraModuleRow[]
       if (eagerExtraRows !== undefined) {
         extraRows = await eagerExtraRows
       } else {
@@ -765,6 +770,23 @@ export function bootInstanceShell(
       // run() 不再拒绝（rc.8 形状：一切失败经 bootError 上浮），catch 兜底
       // 构造期/挂载期的同步异常——若 entry 已在容器上画过加载页或挂载过 UI，
       // 先 dispose（移除 boot DOM / 卸载 React root），重试才能干净重 boot。
+      // 2026-09-11 review-fix（finding 4g）：这条兜底路径同样要带上失败插件清单。
+      // 它确实（罕见地）可达：`entry.run()` 在 rc.8 形状下解析失败，但构造器
+      // （AppWebEntry/new）或 run() 之前的行解析仍可能同步抛出，此时 live ctx
+      // 已经存在、loader 也可能已物化过条目——正是 T15 想在同一 ShellState 上
+      // 呈现的那批 id。读取与 try 分支同规矩：teardown 前读、整段 try 包裹
+      // （hostile getter 不得把 boot 的失败报告换成第二个失败），容忍集合同样
+      // 来自已解析的 extra rows（entry 只可能在它们解析后存在）。ctx 尚未存在
+      // （构造期抛出）时 collectFailedEntries 返回 []，于是不发明清单。
+      let caughtFailedEntries: string[] = []
+      try {
+        caughtFailedEntries = collectFailedEntries(
+          staleEntry?.runtimeCtx,
+          new Set(extraRows.map(row => row.id)),
+        )
+      } catch (error) {
+        console.error(`[shell] instance ${instanceId} failed-entry sweep unavailable:`, error)
+      }
       if (staleEntry !== undefined) {
         const registered = entries.get(instanceId)
         if (registered?.entry === staleEntry) {
@@ -781,7 +803,10 @@ export function bootInstanceShell(
         rejectPendingOpens(instanceId, message)
         perfMark(PERF_MARKS.shellBootFailed, instanceId)
       }
-      return { instanceId, basePath, booted: false, booting: false, error: message, degraded: null } satisfies ShellState
+      return {
+        instanceId, basePath, booted: false, booting: false, error: message, degraded: null,
+        ...(caughtFailedEntries.length === 0 ? {} : { failedEntries: caughtFailedEntries }),
+      } satisfies ShellState
     }
     })
     // 页面级链推进用超时护栏：一个永不 settle 的 boot 在

@@ -45,7 +45,9 @@ test('the frame dictionaries are complete, parallel and non-empty', () => {
   // The frame's chrome the audit named must be dictionary-owned, in both locales.
   for (const key of [
     'action.retry', 'action.switchServer', 'boot.loading', 'boot.loadingHint', 'boot.starting',
-    'error.ui.title', 'fatal.boot.title', 'fatal.entries.title', 'fatal.controlPlane.title',
+    'error.ui.title', 'error.unknown',
+    'open.failed.sourceGone', 'open.failed.detail', 'open.failed.sourceRebuilt',
+    'fatal.boot.title', 'fatal.entries.title', 'fatal.controlPlane.title',
     'fatal.harvestTimeout', 'source.local', 'session.untitled',
     'notification.sessionComplete', 'notification.awaitingAnswer', 'notification.awaitingApproval',
   ] as FrameKey[]) {
@@ -100,6 +102,12 @@ test('every audited frame string is dictionary-owned (no inline literals remain)
     '界面发生错误', '实例启动失败', '无法连接控制面', '切换到其他服务器', '正在加载',
     '首次打开需加载完整界面', '未命名会话', '会话已完成', '代理正在等待你的回答',
     '代理请求你的批准', '实例启动超时',
+    // 2026-09-11 review-fix (finding 4b): the open-session failure texts and the
+    // aggregate-error fallback the previous audit missed — the frame ASSEMBLES
+    // them and they cross into the sidebar (ServerSection's source alert,
+    // ArchiveManagerDialog, the open-session rejection shown by the sidebar), so
+    // they are frame-owned copy, not plugin copy.
+    '未知错误', '打开会话失败', '已不在注册表', '旧通知未打开', '已被移除并以新代重建',
   ]
   for (const [file, source] of Object.entries(frameSources)) {
     for (const literal of retired) {
@@ -115,6 +123,14 @@ test('every audited frame string is dictionary-owned (no inline literals remain)
     "frameText(readDocumentLocale(), 'fatal.harvestTimeout'",
     "frameText(copyLocale, 'session.untitled')", "frameText(copyLocale, 'notification.sessionComplete')",
     "frameText(copyLocale, 'notification.awaitingAnswer')", "frameText(copyLocale, 'notification.awaitingApproval')",
+    // 2026-09-11 review-fix (finding 4b): the derive has a render locale in
+    // scope (its parameter) and uses it; the three thrown open-session texts are
+    // assembled outside any render, so they read the document language at throw
+    // time through the module's out-of-render reader.
+    "frameText(locale, 'error.unknown')",
+    "frameText(readDocumentLocale(), 'open.failed.sourceGone', { source: instanceId })",
+    "frameText(readDocumentLocale(), 'open.failed.detail', { detail: errorMessage(err) })",
+    "frameText(readDocumentLocale(), 'open.failed.sourceRebuilt', { source: open.sourceId })",
   ]) {
     assert.ok(app.includes(call), `App.tsx must render copy through ${call}`)
   }
@@ -158,6 +174,25 @@ test('the failure chrome rides the design system (T15: official Button, --dsw-* 
   assert.ok(css.includes('background: var(--dsw-alias-bg-base, var(--bg))'))
   assert.ok(css.includes('color: var(--dsw-alias-state-error-primary, var(--red))'))
   assert.ok(css.includes('color: var(--dsw-alias-label-primary, var(--text))'))
+  // 2026-09-11 review-fix (finding 2): the design-platform default for
+  // --dsw-alias-bg-base is WHITE (design-platform.css:157; the dark values only
+  // apply under body[data-ds-dark-theme], which a BOOTED shell projects), so the
+  // first-run / no-shell failure chrome is light — every colour on it must be a
+  // token, never the chamber dark palette. `.muted` (the switch-server line) was
+  // the leftover: #8b94a7 on white ≈ 3.0:1.
+  assert.ok(css.includes('.muted {') && css.includes('color: var(--dsw-alias-label-secondary, var(--muted))'),
+    'every colour of the failure chrome must follow the document theme (finding 2)')
+  assert.ok(!/\.muted\s*\{\s*color:\s*var\(--muted\)/.test(css),
+    'the chamber dark palette must not colour text on the theme-following overlay')
+  // 2026-09-11 review-fix (finding 4c): a long failed-plugin list must scroll
+  // instead of pushing the title/Retry out of a centred, non-scrolling overlay
+  // (.app is overflow:hidden).
+  assert.ok(/\.fatal-entries \{[^}]*max-height:[^;]*;[^}]*overflow: auto;/.test(css),
+    'the failed-entry list needs max-height + overflow:auto (finding 4c)')
+  // 2026-09-11 review-fix (finding 2 附带): the last dead rules of this file —
+  // zero consumers repo-wide — are gone (S6 would flag unused declarations; a
+  // dead rule in a rewritten file is residue).
+  assert.ok(!css.includes('pane-empty'), '.pane-empty / .pane-empty-title have no consumer and must stay deleted')
 })
 
 test('the two a11y nits are fixed (decorative spinner, alert overlays)', () => {

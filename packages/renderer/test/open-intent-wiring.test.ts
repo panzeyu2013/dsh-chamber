@@ -79,10 +79,15 @@ test('the sidebar projection gates the current session on the pending intent', (
     /const current = projectableCurrent\(\s*activeViewId,\s*id,\s*runtimeFacts\[id\]\?\.current,\s*openIntents\[id\],\s*\)/,
     'the gate must receive the REQUESTED SESSION (not a boolean): an idempotent re-open must keep its highlight',
   )
+  // 2026-09-11 review-fix (finding 4f): `locale` is a REQUIRED part of both the
+  // call and the memo deps — it was matched as optional here, so a mutation that
+  // dropped it from either place kept this lock green while the frame copy in the
+  // derive (the local source's fallback label, T16) would freeze in the locale of
+  // the first render.
   assert.match(
     app,
-    /managedRuntime, workspaceEcho, openIntents(?:, locale)?\),\n    \[health, connections, remoteInstances, remoteStatus, aggregates, hostFacts, runtimeFacts, completedBySource, activeView, pluginDiagnostics, managedRuntime, workspaceEcho, openIntents(?:, locale)?\],/,
-    'the intent must be a derive input, otherwise the gate never re-evaluates',
+    /managedRuntime, workspaceEcho, openIntents, locale\),\n    \[health, connections, remoteInstances, remoteStatus, aggregates, hostFacts, runtimeFacts, completedBySource, activeView, pluginDiagnostics, managedRuntime, workspaceEcho, openIntents, locale\],/,
+    'the intent AND the frame locale must be derive inputs and memo dependencies',
   )
 })
 

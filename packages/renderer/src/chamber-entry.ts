@@ -351,10 +351,19 @@ const DEFERRED_ROWS: ReadonlyArray<readonly [id: string, load: () => Promise<unk
  * @param ctx - the per-entry client root context.
  * @param degradedSeam - the shell's post-settle degrade reporter (see
  *   {@link createDegradedSeam}).
+ * @param registered - the composite's live probe roster (see the `register`
+ *   helper): every row that mounts here ADDS its namespace's exported inject
+ *   face, so the deferred members are probed too (2026-09-11 review-fix,
+ *   finding 1) instead of pending invisibly.
+ * @param probeRearm - the probe's re-arm hand-off; called once after the
+ *   cluster registered, so the already-armed probe pass picks the new members
+ *   up even when it had stopped on a clean verdict.
  */
 async function registerDeferred(
   ctx: Context,
   degradedSeam: (message: string) => void,
+  registered: RegisteredPluginInject[],
+  probeRearm: ProbeRearmSlot,
 ): Promise<void> {
   // Chunks are fetched in PARALLEL (one cluster, one round of requests — the
   // LCP reason the split exists) but each row keeps its own verdict.
@@ -366,6 +375,7 @@ async function registerDeferred(
     }
   }))
   const failed: string[] = []
+  let mounted = 0
   for (const outcome of settled) {
     if (!outcome.ok) {
       failed.push(outcome.id)
@@ -385,7 +395,37 @@ async function registerDeferred(
     // object-plugin shape is asserted here.)
     const loaded = outcome.plugin as { apply: (ctx: Context, config?: never) => void; inject?: string[] }
     ctx.plugin({ ...loaded, name: outcome.id })
+    // 2026-09-11 review-fix (finding 1): the row's OWN exported inject face
+    // enters the probe roster now that its namespace is materialized — the
+    // declaration the fiber above is waiting on, recorded exactly the way the
+    // first-screen `register` helper records one. Two disciplines the mount above
+    // must not inherit from that helper:
+    //  - the normalization is EAGER (the same call `register` uses), so a face
+    //    the normalizer rejects fails HERE rather than inside the probe's timer a
+    //    moment later (an uncaught throw in that callback would escape the
+    //    diagnostic entirely);
+    //  - it is guarded PER ROW: this cluster's whole point (2026-12 review F2) is
+    //    that one bad row costs exactly its own family, so an unreadable face
+    //    loses that row's probe coverage (loudly) and never the mounting of the
+    //    rows after it.
+    // A FAILED row adds nothing at all — its members are reported by id through
+    // the failure diagnostic below instead.
+    try {
+      registered.push({ id: outcome.id, inject: registeredInjectMembers(outcome.id, loaded.inject) })
+    } catch (error) {
+      console.error(
+        `[chamber-entry] deferred plugin ${outcome.id} exports an unreadable inject face; its services stay unprobed:`,
+        error,
+      )
+    }
+    mounted += 1
   }
+  // One re-armed probe pass (review-fix finding 1): the probe stops on a clean
+  // verdict, so a roster that grew after that verdict needs an explicit nudge.
+  // Only when a row actually mounted — with an unchanged roster the re-arm would
+  // buy nothing and only re-run the same poll. The slot is empty in hosts where
+  // the probe never installed (plain-node tests), hence the optional call.
+  if (mounted > 0) probeRearm.reArm?.()
   if (failed.length === 0) return
   const message = deferredRegistrationFailureMessage(failed, ctx.chamberInstanceId)
   console.error(
@@ -581,20 +621,51 @@ export function apply(ctx: Context): void {
   // call on purpose: a family added here is probed automatically, one removed
   // here stops being probed, and the recorded id is the mount identity (the
   // package / boot-graph id the fiber is named by), never a second service
-  // list. The deferred cluster is NOT part of the roster: its chunks are not
-  // evaluated when the probe starts, and the deferred-split invariant
-  // (module header) fixes every one of their inject members to first-screen
-  // services, which the union already covers.
+  // list.
+  //
+  // 2026-09-11 review-fix (finding 1): the deferred cluster joins the SAME
+  // roster as each of its chunks mounts (registerDeferred below), and one probe
+  // pass is re-armed when it does. Before this round those members were probed
+  // by NOTHING: the derived union carries only the first-screen declarations,
+  // and 11 members live exclusively in deferred faces — `remote.goals`,
+  // `remote.skills`, `remote.messageFeedback`, `remote.sessionFeedback`,
+  // `remote.agentPresets`, `remote.credentials`, `remote.llm`,
+  // `remote.pluginInventory`, `remote.fileReferences`,
+  // `remote.sessionReferenceResolver` (mounted by the first-screen
+  // api-gateway/api-remotes pair) and `settingsSchema` (provided by the
+  // first-screen ui-settings) — so a deferred family whose composite-provided
+  // provider never activated pended with no diagnostic at all, the exact
+  // silent-gap class this probe exists to close. The deferred-split invariant
+  // (module header) is what makes that probing safe: every deferred member's
+  // provider is a FIRST-SCREEN COMPOSITE plugin, never another deferred family,
+  // so a re-armed pass can never mistake a not-yet-evaluated sibling chunk for a
+  // missing service.
   const registered: RegisteredPluginInject[] = []
+  /** The probe's re-arm hand-off (see {@link assertRequiredExtraRowServices});
+   *  filled in when the probe's effect installs, before the deferred cluster can
+   *  possibly finish loading its chunks. */
+  const probeRearm: ProbeRearmSlot = {}
   const register = (id: string, plugin: object): void => {
     // The mounted fiber's OWN normalized inject map is upstream's source of
     // truth (`Object.keys(entry.fiber.inject)`, the sweep's fact). It is read
     // here as a WITNESS only — never as the roster: the roster is derived from
     // the namespace's exported `inject` face (the declaration this composite
-    // registered). If a namespace ever stopped exporting that face while cordis
-    // still read one off the plugin (e.g. the declaration moved onto a plugin
-    // object), the derived roster would silently SHRINK — exactly the blind spot
-    // this probe exists to close — so that drift fails THIS entry loud instead.
+    // registered).
+    // 2026-09-11 review-fix (finding 3): the witness is NARROWER than the first
+    // version of this comment claimed, and the claim is corrected rather than
+    // repeated. Cordis resolves the fiber's map from the SAME expression this
+    // helper derives from (`Inject.resolve(plugin.inject)`, vendor cordis
+    // registry.ts:330), so the two can only diverge for ONE declaration form:
+    // an inject object carrying cordis's `symbols.checkProto` marker
+    // (registry.ts:63-87), where the members sit on the object's PROTOTYPE and
+    // `Object.keys(plugin.inject)` cannot see them. That case is what the throw
+    // below catches. A namespace that simply STOPS EXPORTING `inject` yields an
+    // empty roster entry AND an empty witness (`plugin.inject` is undefined on
+    // both sides) — no throw, roster silently smaller. That class is covered by
+    // the CI table test instead (test/required-extra-rows.test.ts reads every
+    // registered id's client entry and pins its audited face), which is the only
+    // place a drift is visible: this runtime check cannot know what a namespace
+    // "should" export without the hand-written roster the round retired.
     // (`ctx.plugin` returns the fiber; a shape that carries no inject map — or a
     // cordis that returned the context instead — yields no witness and no
     // false alarm.)
@@ -659,11 +730,22 @@ export function apply(ctx: Context): void {
   // with the required-service probe below, so both post-settle verdicts land on
   // the one channel the App self-heals from.
   const degradedSeam = createDegradedSeam(ctx)
-  void registerDeferred(ctx, degradedSeam).catch((error) => {
+  void registerDeferred(ctx, degradedSeam, registered, probeRearm).catch((error) => {
     console.error('[chamber-entry] deferred plugin registration failed:', error)
   })
 
-  assertRequiredExtraRowServices(ctx, degradedSeam, registered)
+  assertRequiredExtraRowServices(ctx, degradedSeam, registered, probeRearm)
+}
+
+/**
+ * The probe's re-arm hand-off (2026-09-11 review-fix, finding 1): `apply` owns
+ * the slot, the probe effect fills it, and `registerDeferred` calls it once the
+ * deferred cluster has extended the roster. Empty until the effect installs and
+ * empty again after teardown, so an optional call is the whole contract.
+ */
+interface ProbeRearmSlot {
+  /** Run one more probe pass now; absent before install / after teardown. */
+  reArm?: () => void
 }
 
 /**
@@ -684,7 +766,10 @@ export function apply(ctx: Context): void {
  * per fiber in its post-settle sweep — vendor
  * packages/client/web/src/boot.ts:138-158), and the pure union/missing/message
  * rules live in required-extra-rows.ts, the single authority, next to the
- * deferred-cluster diagnostic that shares this seam.
+ * deferred-cluster diagnostic that shares this seam. Since the 2026-09-11
+ * review-fix (finding 1) the deferred cluster extends the very same roster when
+ * its chunks mount and re-arms one pass here, so a deferred family whose
+ * composite-provided service never activated is named too.
  *
  * This is a diagnostic, not a boot gate: a gateway-hosted instance may
  * legitimately run without the rows (the mobile deployment loads no sidebar
@@ -694,12 +779,16 @@ export function apply(ctx: Context): void {
  * @param degradedSeam - the shell's post-settle degrade reporter (see
  *   {@link createDegradedSeam}).
  * @param registered - the first-screen plugins this apply mounted, in
- *   registration order (roster source; see the `register` helper).
+ *   registration order, EXTENDED in place by every deferred row that mounts
+ *   later (roster source; see the `register` helper and `registerDeferred`).
+ * @param probeRearm - the re-arm hand-off the deferred cluster calls once it has
+ *   extended the roster (2026-09-11 review-fix, finding 1).
  */
 function assertRequiredExtraRowServices(
   ctx: Context,
   degradedSeam: (message: string) => void,
   registered: readonly RegisteredPluginInject[],
+  probeRearm: ProbeRearmSlot,
 ): void {
   const started = Date.now()
   const isProvided = (name: string): boolean =>
@@ -707,6 +796,9 @@ function assertRequiredExtraRowServices(
   const instanceId = (ctx as { chamberInstanceId?: string }).chamberInstanceId
   ctx.effect(() => {
     let timer: ReturnType<typeof setTimeout> | undefined
+    /** The last verdict's service set: a re-armed pass must not re-report it
+     *  verbatim (one report per fact is what the App's self-heal consumes). */
+    let reportedSignature: string | undefined
     const probe = (): void => {
       const missing = missingInjectedServices(registered, isProvided)
       if (missing.length === 0) return
@@ -714,6 +806,9 @@ function assertRequiredExtraRowServices(
         timer = setTimeout(probe, REQUIRED_SERVICE_PROBE_INTERVAL_MS)
         return
       }
+      const signature = missing.map(entry => entry.service).join('\u0000')
+      if (signature === reportedSignature) return
+      reportedSignature = signature
       const message = requiredServiceProbeMessage(missing, instanceId)
       console.error(message)
       // 2026-09-10: a mount whose conversation view never registers has to be
@@ -724,8 +819,26 @@ function assertRequiredExtraRowServices(
       // rows — the same effect a full page reload had).
       degradedSeam(message)
     }
+    // Re-arm (2026-09-11 review-fix, finding 1): one extra pass over the roster
+    // the deferred cluster just extended. `started` is deliberately NOT reset —
+    // the deadline is an invariant of the BOOT ("every probed service must have
+    // materialized within 5s of apply"), and the deferred members' providers are
+    // first-screen composite plugins that mounted long before the cluster's
+    // chunks arrived, so re-armed members get exactly the same window as the
+    // first-screen ones (a verdict for the pre-cluster members is therefore
+    // never delayed either). A pass that finds the same set the last verdict
+    // already named reports nothing (`reportedSignature`), while a NEW member
+    // that is missing gets its own report — the App's self-heal is marked once
+    // per ready epoch, so that is one more fact, never one more re-boot.
+    probeRearm.reArm = () => {
+      if (timer !== undefined) clearTimeout(timer)
+      timer = setTimeout(probe, 0)
+    }
     timer = setTimeout(probe, 0)
-    return () => { if (timer !== undefined) clearTimeout(timer) }
+    return () => {
+      if (timer !== undefined) clearTimeout(timer)
+      if (probeRearm.reArm !== undefined) probeRearm.reArm = undefined
+    }
   }, 'chamber-entry: required extra-row services probe')
 }
 

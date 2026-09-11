@@ -195,8 +195,17 @@ body {
 
 /* ---------- 通用 ---------- */
 
+/* 2026-09-11 review-fix（finding 2）：`.muted` 是失败/控制面覆盖层里唯一的
+   「次级标签」色，唯一消费点是失败屏的服务器切换行（App.tsx 的
+   `<span className="muted small">`）。它曾直接读 chamber 自有暗色板
+   （--muted:#8b94a7），而覆盖层的底色早已改为文档主题 token
+   （.fatal/.fatal-overlay 的 --dsw-alias-bg-base）——默认（未被任何已 boot
+   的 shell 投影 data-ds-dark-theme 时，含首启/无壳场景）该 token 是**白底**，
+   于是这行落在白底上只有约 3.0:1（旧暗底上是 6.6:1）。改用设计系统的次级标签
+   别名，与 .fatal-entry 同一写法；token 表未落地时仍回退 chamber 暗色，
+   与失败屏其余规则一致。 */
 .muted {
-  color: var(--muted);
+  color: var(--dsw-alias-label-secondary, var(--muted));
 }
 
 .small {
@@ -218,7 +227,14 @@ body {
      `background: var(--dsw-alias-bg-base, …)`）。因此这一层必须跟随文档主题
      取底色，否则浅色主题下 token 化的按钮标签会落在 chamber 暗色底上
      （旧自造 .btn 用自有色板，正是为了在暗底上可读）。token 表未落地时回退
-     chamber 暗色，与 .instance-view / .instance-loading 同一写法。 */
+     chamber 暗色，与 .instance-view / .instance-loading 同一写法。
+     2026-09-11 review-fix（finding 2）：这条规则的后果要一起读——默认（无任何
+     已 boot 的 shell 投影 data-ds-dark-theme：首启、控制面不可达、boot 失败）
+     该 token 是白底（design-platform.css:157，深色覆盖只在
+     body[data-ds-dark-theme] 下，design-platform.css:250）。因此失败/控制面
+     覆盖层里**不允许**残留 chamber 自有暗色板的颜色：本文件的 .muted 已改
+     token（见上），其余颜色全部走 --dsw-alias-*；.fatal-title/.fatal-message/
+     .fatal-entries-title/.fatal-entry 与 Button 原子本就走 token，安全。 */
   background: var(--dsw-alias-bg-base, var(--bg));
 }
 
@@ -258,6 +274,13 @@ body {
   gap: 2px;
   margin-top: 6px;
   max-width: 640px;
+  /* 2026-09-11 review-fix（finding 4c）：清单必须自己滚动。.fatal 是居中的
+     flex column，.app 是 overflow:hidden，覆盖层本身也没有 overflow——清单
+     一长（上游 sweep 可能给出多个未激活 id）就整块溢出视口，两端被居中裁掉：
+     标题与重试按钮一起不可见且没有滚动条。给清单一个上界 + 自身滚动，列表变长
+     时只滚动列表，重试/切换逃生通道始终留在屏幕上。 */
+  max-height: min(40vh, 320px);
+  overflow: auto;
   text-align: left;
 }
 
@@ -298,23 +321,11 @@ body {
   margin-top: 4px;
 }
 
-.pane-empty {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  height: 100%;
-  min-height: 200px;
-  color: var(--muted);
-  text-align: center;
-}
-
-.pane-empty-title {
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--text);
-}
+/* 2026-09-11 review-fix（finding 2 附带 / 死代码清扫）：`.pane-empty` 与
+   `.pane-empty-title` 在此删除——全仓 grep 已无消费者（该规则在 d4d9ed1 时
+   就已经没有消费者，早于 T15 重写失败屏），并顺手移除了失败/空态面上最后一处
+   chamber 自有暗色板颜色（--muted / --text 在 token 底上同样有 finding 2 的
+   对比度隐患）。verify:styles 的 S6 会拦回无人使用的声明。 */
 
 /* ---------- 会话行渲染挂起（2026-08 perf pass，已回退） ----------
    曾在 [data-chat-flow-key]（vendor ChatView 的 .flowItem 行）上使用

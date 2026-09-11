@@ -389,12 +389,24 @@ test('bootInstanceShell: a throwing run settles as a failure (legacy rejection p
   __testResetDisposed()
   __testSetBootError(undefined)
   __testSetRunError(new Error('loader exploded'))
+  // 2026-09-11 review-fix (finding 4g): this last-resort arm names the failed
+  // loader entries too — the same live-loader read the bootError arm performs,
+  // taken before teardown and filtered by the same extra-row tolerance set. The
+  // ctx is disposed further down in this same arm, so a sweep that ran after
+  // teardown (or that was forgotten entirely) shows up here as an empty list.
+  __testSetLoaderEntries([
+    { options: { name: '@dsh-chamber/app' }, fiber: { state: FIBER_STATE.ACTIVE } },
+    { options: { name: '@deepseek-ai/dsh-client-ui-tool' }, fiber: { state: FIBER_STATE.PENDING } },
+  ])
   try {
     const state = await bootInstanceShell('ssh-test-throw-3', '/api/i/ssh-test-throw-3', {} as HTMLElement, () => {})
     assert.equal(state.booted, false)
     assert.equal(state.error, 'loader exploded')
+    assert.deepEqual(state.failedEntries, ['@deepseek-ai/dsh-client-ui-tool'],
+      'the rejection arm must list the non-active entries like the bootError arm')
     assert.equal(__testDisposedCount(), 1)
   } finally {
+    __testSetLoaderEntries(undefined)
     __testSetRunError(undefined)
     restoreFetch()
     restoreWindow()

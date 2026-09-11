@@ -64,10 +64,14 @@ test('the projection merges the echo at the single derive choke point', () => {
     /workspaces = deriveServerWorkspaces\(\s*withWorkspaceEcho\(aggregate, workspaceEcho\[id\]\),\s*id,\s*'',\s*current,\s*\)/,
     'the echo merges into the aggregate BEFORE the workspace derive (one place, no second state copy)',
   )
+  // 2026-09-11 review-fix (finding 4f): `locale` is REQUIRED in both places, not
+  // an optional suffix — a mutation that dropped it from the call or the memo
+  // deps used to keep this lock green (the echoed row would still paint, but the
+  // frame copy the derive assembles would freeze in its first-render locale).
   assert.match(
     app,
-    /\) => deriveServers\([\s\S]*?workspaceEcho(?:, openIntents)?(?:, locale)?\),\n    \[health, [^\]]*workspaceEcho(?:, openIntents)?(?:, locale)?\],/,
-    'the ledger must be both a derive input and a memo dependency, otherwise the echoed row never paints',
+    /\) => deriveServers\([\s\S]*?workspaceEcho, openIntents, locale\),\n    \[health, [^\]]*workspaceEcho, openIntents, locale\],/,
+    'the ledger plus the frame locale must be both derive inputs and memo dependencies, otherwise the echoed row never paints',
   )
 })
 

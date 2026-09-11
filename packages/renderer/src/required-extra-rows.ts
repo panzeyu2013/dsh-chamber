@@ -1,11 +1,12 @@
 /**
  * Extra-row facts the chamber composite entry must reason about (alpha.2 +
- * 2026-12 review fix): which host-graph-only services the composite's own
- * first-screen plugins require, and which covered ids the composite registers
- * only AFTER the boot settled. Both facts are needed by code that cannot import
- * chamber-entry.ts (its imports resolve to source, so neither the node tests nor
- * host-graph.ts may pull it in) — the entry reconciles its own roster against
- * {@link DEFERRED_EXTRA_ROW_IDS} at apply time instead.
+ * 2026-12 review fix): which services the composite's own plugins require — the
+ * first-screen families from the start, the deferred families as their chunks
+ * mount (2026-09-11 review-fix, finding 1) — and which covered ids the composite
+ * registers only AFTER the boot settled. Both facts are needed by code that
+ * cannot import chamber-entry.ts (its imports resolve to source, so neither the
+ * node tests nor host-graph.ts may pull it in) — the entry reconciles its own
+ * roster against {@link DEFERRED_EXTRA_ROW_IDS} at apply time instead.
  *
  * ## 1. The required-service probe roster (A1, 2026-09-11 upstream-alignment)
  *
@@ -29,15 +30,39 @@
  *  - {@link registeredInjectMembers} normalizes one namespace's exported
  *    `inject` (array form `['a','b']`, or cordis's name→config map form — its
  *    KEYS are the services, exactly what `Object.keys(fiber.inject)` yields);
- *  - {@link missingInjectedServices} probes the union through
+ *  - {@link injectedServices} is the union in registration order — the probed
+ *    roster itself, and the order authority {@link missingInjectedServices}
+ *    walks (one definition of "the roster", used by production, not a test-only
+ *    helper: 2026-09-11 review-fix, finding 4a);
+ *  - {@link missingInjectedServices} probes that union through
  *    `ctx.get(name) === undefined` and keeps, per missing service, WHICH
  *    registered plugins inject it;
  *  - {@link requiredServiceProbeMessage} names both.
  *
+ * 2026-09-11 review-fix (finding 1): the roster is no longer first-screen-only.
+ * The deferred cluster used to be excluded on the strength of the split
+ * invariant alone, which left 11 members probed by NOTHING — `remote.goals`,
+ * `remote.skills`, `remote.messageFeedback`, `remote.sessionFeedback`,
+ * `remote.agentPresets`, `remote.credentials`, `remote.llm`,
+ * `remote.pluginInventory`, `remote.fileReferences`,
+ * `remote.sessionReferenceResolver` and `settingsSchema` appear in deferred
+ * `inject` faces but in no first-screen one. Each of them is provided by a
+ * FIRST-SCREEN COMPOSITE plugin (the api-gateway/api-remotes generated-remote
+ * mounts, and ui-settings for `settingsSchema`), which is why the deferred split
+ * stays safe — but "the provider is first-screen" is exactly the assumption a
+ * probe exists to check, so `chamber-entry.ts` now feeds every deferred row's
+ * face into the same roster as it mounts and re-arms one probe pass. The
+ * per-id faces this derivation is fed from are CI-pinned against the sources
+ * (`required-extra-rows.test.ts`): a namespace that stops exporting its
+ * declaration is a visible test failure, never a silently smaller roster.
+ *
  * What that derivation yields in the pinned tree (2026-09-11 audit over every
  * root `inject` of every composite first-screen namespace) is ONE service whose
  * only provider is a non-covered host-graph row — plus the kernel-adopted
- * renderer's `slots`, which the shell always materializes:
+ * renderer's `slots`, which the shell always materializes. The deferred members
+ * the roster also carries (finding 1) do not widen that risk set: every one of
+ * them is provided by a COMPOSITE first-screen plugin, so no non-covered row can
+ * be their only provider:
  *
  *  - `sidebarRight` (injected by `ui-chat`, vendor
  *    `ui-chat/src/client/apply.ts:47-50`) is provided ONLY by the non-covered
@@ -128,7 +153,9 @@ export function registeredInjectMembers(id: string, inject: unknown): string[] {
 /**
  * The union of the registered plugins' inject members, in registration order
  * (first occurrence wins), ignoring the plugins that inject nothing. This IS
- * the probed roster: it is derived, never maintained.
+ * the probed roster: it is derived, never maintained — and it is the roster's
+ * ORDER authority, consumed by {@link missingInjectedServices} (2026-09-11
+ * review-fix, finding 4a: the union is production code, not a test-only seam).
  * @param plugins - the composite's registered plugins, in registration order.
  * @returns the service names to probe, deduped.
  */
@@ -147,6 +174,10 @@ export function injectedServices(plugins: readonly RegisteredPluginInject[]): st
  * each with the registered plugins that inject it (A1: upstream's
  * `Object.keys(entry.fiber.inject).filter(service => ctx.get(service) ===
  * undefined)`, lifted from the per-fiber sweep to the composite's own roster).
+ *
+ * The service order — and therefore the verdict's readability — is
+ * {@link injectedServices}: one union rule for the whole module, so a change to
+ * "what the roster is" can never apply to the probe but miss the diagnostic.
  * @param plugins - the composite's registered plugins, in registration order.
  * @param isProvided - membership test over the live ctx service store.
  * @returns one entry per missing service, in roster order (empty when complete).
@@ -155,20 +186,20 @@ export function missingInjectedServices(
   plugins: readonly RegisteredPluginInject[],
   isProvided: (name: string) => boolean,
 ): MissingRequiredService[] {
-  const out: MissingRequiredService[] = []
-  const index = new Map<string, MissingRequiredService>()
+  const injectors = new Map<string, string[]>()
   for (const plugin of plugins) {
     for (const service of registeredInjectMembers(plugin.id, plugin.inject)) {
-      let entry = index.get(service)
-      if (entry === undefined) {
-        entry = { service, injectedBy: [] }
-        index.set(service, entry)
-        out.push(entry)
-      }
-      if (!entry.injectedBy.includes(plugin.id)) entry.injectedBy.push(plugin.id)
+      const known = injectors.get(service)
+      if (known === undefined) injectors.set(service, [plugin.id])
+      else if (!known.includes(plugin.id)) known.push(plugin.id)
     }
   }
-  return out.filter(entry => !isProvided(entry.service))
+  const out: MissingRequiredService[] = []
+  for (const service of injectedServices(plugins)) {
+    if (isProvided(service)) continue
+    out.push({ service, injectedBy: injectors.get(service) ?? [] })
+  }
+  return out
 }
 
 /**

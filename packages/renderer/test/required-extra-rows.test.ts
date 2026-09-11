@@ -12,7 +12,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import {
   chamberEntryDiagnosticMessage,
   deferredRegistrationFailureMessage,
@@ -29,6 +29,8 @@ import { normalize, stripComments } from './source-text.ts'
 
 const readSource = (rel: string): string =>
   readFileSync(new URL(rel, import.meta.url), 'utf8')
+const sourceExists = (rel: string): boolean =>
+  existsSync(new URL(rel, import.meta.url))
 
 // ── A1 (2026-09-11 upstream-alignment): the probe roster is DERIVED from the
 // ── inject faces of the plugins the composite registered — upstream's own fact
@@ -94,18 +96,249 @@ test('requiredServiceProbeMessage names each service, its injectors, the deadlin
   assert.ok(!withoutInstance.includes('instance'), 'an unknown instance adds no clause')
 })
 
-test('the composite derives its roster and still registers the ui-chat inject face the probe exists for', () => {
-  // The derived roster is only as true as the vendor declarations behind it:
-  // ui-chat root-injects `sidebarRight` (vendor ui-chat/src/client/apply.ts),
-  // whose ONLY provider is the non-covered `ui-sidebar-right` host-graph row.
-  // If upstream ever drops that member the probe loses its motivating case —
-  // this lock makes that a visible fact, never a silent shrink.
-  const uiChat = readSource('../../../vendor/harness-packages/@deepseek-ai/dsh-client-ui-chat/src/client/apply.ts')
-  const declared = /export const inject = \[([^\]]*)\]/.exec(uiChat)?.[1] ?? ''
-  assert.ok(declared.includes('sidebarRight'), 'ui-chat must still declare sidebarRight in its inject face')
+// ── Finding 3 (2026-09-11 review-fix): the roster's SOURCE audit ────────────
+//
+// The derived roster is only as true as the declarations behind it, and until
+// this round nothing read them: the spec locked ui-chat's face alone, while the
+// runtime witness (chamber-entry.ts `register`) CANNOT see the class this test
+// exists for — cordis resolves the fiber's inject map from the very same
+// expression the derivation reads (`Inject.resolve(plugin.inject)`), so a
+// namespace that stops exporting `inject` yields an empty face on BOTH sides:
+// no throw, a silently smaller roster, and every family injecting the lost
+// members pends forever with no diagnostic. Only a source audit can catch that,
+// so this test resolves each registered id's client entry the way
+// chamber-entry.ts imports it, derives the faces through the PRODUCTION
+// normalizer, and pins:
+//
+//  - every registered id's face equals its audited face (a face that changes —
+//    in this repo or upstream at the next pin — is a visible, reviewable fact,
+//    the same discipline the host-graph/factory rosters follow);
+//  - every registered id still EXPORTS a face at all (the silent-shrink hole);
+//  - the derived union is a superset of the services the probe must cover,
+//    `sidebarRight` among them — the miss the probe exists for (ui-chat's face,
+//    whose only provider is the non-covered `ui-sidebar-right` row);
+//  - the deferred-only members (finding 1) are exactly the audited 11, so the
+//    roster extension is load-bearing and never quietly grows a new gap class.
+//
+// Maintenance at an upstream pin: re-audit the two tables below against the new
+// sources (the pin-upgrade checklist already sends the reader to the
+// `register(...)` calls) — the failure message names the id and both faces.
+
+/** Client-entry candidates inside one package, in the order chamber-entry's
+ *  namespace import resolves them (the two apply.ts entries re-export `inject`
+ *  through index.ts; every other package declares it in index.ts). */
+const CLIENT_ENTRY_CANDIDATES = ['src/client/apply.ts', 'src/client/index.ts', 'src/client/index.tsx']
+
+/** The source file a registered package id's client entry lives in (vendor
+ *  symlink tree first, then the in-repo forks: dsh-client-connection and
+ *  dsh-api-gateway are chamber copies, not vendor packages). */
+function clientEntrySource(id: string): string {
+  const base = id.slice(id.indexOf('/') + 1)
+  const roots = [`../../../vendor/harness-packages/${id}`, `../../../packages/${base}`]
+  for (const root of roots) {
+    for (const rel of CLIENT_ENTRY_CANDIDATES) {
+      const file = `${root}/${rel}`
+      if (sourceExists(file)) return file
+    }
+  }
+  throw new Error(`no client entry source found for ${id} — check the vendor/in-repo layout this test resolves against`)
+}
+
+/** The namespace's exported `inject` face, read from its client entry source.
+ *  `undefined` when the source declares none — the silent-shrink hole. */
+function faceFromSource(id: string, file: string): unknown {
+  const match = /export const inject[^=]*=\s*(\[[\s\S]*?\]|\{[\s\S]*?\n\})/.exec(readSource(file))
+  if (match === null) return undefined
+  try {
+    return new Function(`return (${match[1]})`)() as unknown
+  } catch (error) {
+    throw new Error(`inject face of ${id} (${file}) is not a literal this audit can read: ${String(error)}`)
+  }
+}
+
+/**
+ * The audited inject face of every FIRST-SCREEN namespace `chamber-entry.ts`
+ * registers, in registration order (id → members). This is the audit finding 3
+ * asks for; the derived union below is computed from the SOURCES and compared
+ * against it, never copied from it.
+ */
+const AUDITED_FIRST_SCREEN_FACES: ReadonlyArray<readonly [id: string, members: readonly string[]]> = [
+  ['@deepseek-ai/dsh-client-connection', []],
+  ['@deepseek-ai/dsh-typert-registry', []],
+  ['@deepseek-ai/dsh-api-gateway', ['typert', 'connection']],
+  ['@deepseek-ai/dsh-api-remotes', ['remote']],
+  ['@deepseek-ai/dsh-api-session-controller',
+    ['connection', 'fileUpload', 'typert', 'remote', 'remote.commands', 'remote.session', 'remote.subagents']],
+  ['@deepseek-ai/dsh-api-workspace-controller', ['remote', 'remote.workspace']],
+  ['@deepseek-ai/dsh-client-file-upload', ['remote']],
+  ['@deepseek-ai/dsh-client-locale', ['slots', 'remote', 'settingsScope']],
+  ['@deepseek-ai/dsh-client-ui-theme', ['slots', 'locale', 'remote', 'settingsScope']],
+  ['@dsh-chamber/dsh-chamber-client-ui-layout', ['slots', 'theme', 'locale']],
+  ['@dsh-chamber/dsh-chamber-client-ui-sidebar',
+    ['slots', 'layout', 'sessions', 'workspaces', 'uiSession', 'uiWorkspace', 'locale']],
+  ['@dsh-chamber/dsh-chamber-client-ui-git', ['slots', 'locale']],
+  ['@dsh-chamber/dsh-chamber-client-ui-open-in', ['slots', 'locale', 'connection']],
+  ['@deepseek-ai/dsh-client-ui-settings', ['remote', 'remote.settings']],
+  ['@deepseek-ai/dsh-client-ui-conversation',
+    ['slots', 'sessions', 'fileUpload', 'uiSession', 'uiWorkspace', 'locale', 'settingsScope']],
+  ['@deepseek-ai/dsh-client-ui-commands', ['inputTriggers', 'sessions', 'remote', 'remote.commands', 'locale']],
+  ['@deepseek-ai/dsh-client-ui-input-trigger', ['sessions', 'locale']],
+  ['@deepseek-ai/dsh-client-ui-workspace',
+    ['slots', 'sessions', 'workspaces', 'locale', 'remote', 'remote.directoryPicker', 'layout']],
+  ['@deepseek-ai/dsh-client-ui-model-selection', ['commandUi', 'locale', 'sessions', 'slots', 'remote', 'remote.session']],
+  ['@deepseek-ai/dsh-client-ui-session', ['sessions', 'slots']],
+  ['@deepseek-ai/dsh-client-ui-chat',
+    ['slots', 'sessions', 'uiSession', 'uiConversation', 'locale', 'settingsScope', 'remote', 'remote.session', 'sidebarRight']],
+  ['@deepseek-ai/dsh-client-ui-approval', ['sessions', 'remote', 'uiSession', 'slots', 'locale']],
+  ['@deepseek-ai/dsh-client-ui-directory-picker-browse', ['slots', 'uiWorkspace', 'locale']],
+]
+
+/**
+ * The services the probe MUST cover (the audited floor of the derived union,
+ * independent of which family happens to declare them): the sole non-covered
+ * provider case (`sidebarRight`), the primary composition words, and the
+ * frame's own chrome dependencies. Subset assertion — a new member is allowed,
+ * a lost one is not.
+ */
+const AUDITED_REQUIRED_SERVICES: readonly string[] = [
+  'slots', 'locale', 'sessions', 'workspaces', 'connection', 'remote', 'typert', 'fileUpload',
+  'uiSession', 'uiConversation', 'uiWorkspace', 'layout', 'theme', 'settingsScope',
+  'commandUi', 'inputTriggers', 'remote.session', 'sidebarRight',
+]
+
+/**
+ * The deferred inject members that NO first-screen face declares (finding 1).
+ * Each one's provider is a first-screen COMPOSITE plugin (the generated-remote
+ * mounts behind api-remotes, ui-settings for `settingsSchema`) — which is why
+ * the deferred split stays safe, and exactly the assumption the roster
+ * extension stopped taking on faith.
+ */
+const AUDITED_DEFERRED_ONLY_SERVICES: readonly string[] = [
+  'remote.goals', 'remote.skills', 'remote.messageFeedback', 'remote.sessionFeedback',
+  'remote.agentPresets', 'remote.credentials', 'remote.llm', 'remote.pluginInventory',
+  'remote.fileReferences', 'remote.sessionReferenceResolver', 'settingsSchema',
+]
+
+/** The `register(...)` calls of chamber-entry.ts, in order: [id, local import name]. */
+function registeredPlugins(): Array<[string, string]> {
   const entry = readSource('../src/chamber-entry.ts')
-  assert.match(entry, /register\('@deepseek-ai\/dsh-client-ui-chat', UiChat\)/,
-    'the composite must register ui-chat through the roster-recording helper')
+  const imports = new Map<string, string>()
+  for (const match of entry.matchAll(/^import \* as (\w+) from '([^']+)'$/gm)) {
+    imports.set(match[1]!, match[2]!)
+  }
+  const out: Array<[string, string]> = []
+  for (const match of entry.matchAll(/register\('([^']+)', (\w+)\)/g)) {
+    const spec = imports.get(match[2]!)
+    assert.ok(spec !== undefined, `registered id ${match[1]} has no namespace import — the roster source is the import`)
+    out.push([match[1]!, spec!])
+  }
+  return out
+}
+
+/** The `DEFERRED_ROWS` ids of chamber-entry.ts, in order (id + chunk specifier). */
+function deferredPlugins(): Array<[string, string]> {
+  const entry = readSource('../src/chamber-entry.ts')
+  const out: Array<[string, string]> = []
+  for (const match of entry.matchAll(/\['([^']+)', \(\) => import\('([^']+)'\)\]/g)) {
+    out.push([match[1]!, match[2]!])
+  }
+  return out
+}
+
+test('every registered first-screen namespace still exports its audited inject face', () => {
+  const registered = registeredPlugins()
+  assert.equal(registered.length, AUDITED_FIRST_SCREEN_FACES.length,
+    'the audited face table must cover every register(...) call — a new family is a new audit')
+  for (const [index, [id]] of registered.entries()) {
+    const [auditedId, auditedMembers] = AUDITED_FIRST_SCREEN_FACES[index]!
+    assert.equal(id, auditedId, `registration order changed: ${id} is not at index ${index} in the audited table`)
+    const file = clientEntrySource(id)
+    const face = faceFromSource(id, file)
+    assert.notEqual(face, undefined,
+      `${id} (${file}) no longer exports an inject face — the derived roster would shrink SILENTLY `
+      + '(cordis reads undefined too, so no runtime witness can catch it): restore the export or re-audit this spec')
+    // The PRODUCTION normalizer, fed the source's own declaration: what the
+    // composite would record is what the table audits.
+    assert.deepEqual(registeredInjectMembers(id, face), [...auditedMembers],
+      `${id}'s inject face (${file}) changed — re-audit the roster and update AUDITED_FIRST_SCREEN_FACES`)
+  }
+})
+
+test('the derived union covers every audited required service (sidebarRight included)', () => {
+  // The union is computed from the SOURCES through the production rules — the
+  // same derivation chamber-entry.ts performs at apply time — so this fails when
+  // the real faces lose a member, not merely when the table drifts.
+  const roster: RegisteredPluginInject[] = registeredPlugins().map(([id]) => {
+    const file = clientEntrySource(id)
+    return { id, inject: faceFromSource(id, file) }
+  })
+  const union = injectedServices(roster)
+  for (const service of AUDITED_REQUIRED_SERVICES) {
+    assert.ok(union.includes(service),
+      `the derived roster lost ${service} — the probe would never report its miss (union: ${JSON.stringify(union)})`)
+  }
+  // The motivating case, spelled out: ui-chat's `sidebarRight`, provided ONLY by
+  // the non-covered ui-sidebar-right host-graph row.
+  const chat = roster.find(plugin => plugin.id === '@deepseek-ai/dsh-client-ui-chat')
+  assert.deepEqual(registeredInjectMembers('ui-chat', chat?.inject).includes('sidebarRight'), true)
+  // And the probe's behaviour on that roster: everything provided except
+  // sidebarRight reports exactly that service with its injectors, and nothing
+  // else (the healthy arm a full union must produce).
+  const missing = missingInjectedServices(roster, name => name !== 'sidebarRight')
+  assert.deepEqual(missing.map(entry => entry.service), ['sidebarRight'])
+  assert.ok(missing[0]!.injectedBy.includes('@deepseek-ai/dsh-client-ui-chat'))
+  assert.deepEqual(missingInjectedServices(roster, () => true), [])
+})
+
+test('the deferred cluster carries exactly the audited deferred-only inject members (finding 1)', () => {
+  // The roster extension is load-bearing only if these members really are absent
+  // from every first-screen face: this pins BOTH directions, so a future
+  // first-screen family that starts declaring one of them (making the extension
+  // redundant) and a new deferred-only member (a new silent-gap candidate) are
+  // both visible here instead of in a field report.
+  const firstScreen = injectedServices(registeredPlugins().map(([id]) => {
+    const file = clientEntrySource(id)
+    return { id, inject: faceFromSource(id, file) }
+  }))
+  const deferredRoster: RegisteredPluginInject[] = deferredPlugins().map(([id, spec]) => {
+    const file = clientEntrySource(spec.replace(/\/client$/, ''))
+    return { id, inject: faceFromSource(id, file) }
+  })
+  const deferredOnly = injectedServices(deferredRoster).filter(service => !firstScreen.includes(service))
+  assert.deepEqual([...deferredOnly].sort(), [...AUDITED_DEFERRED_ONLY_SERVICES].sort(),
+    'the deferred-only inject members changed — re-audit finding 1\'s list (chamber-entry.ts comment + this spec)')
+  // Each audited member is named by a deferred family, and the probe reports it
+  // with that family once the deferred roster is part of the probed set: the
+  // behaviour the re-armed pass exists for.
+  const fullRoster = [
+    ...registeredPlugins().map(([id]) => ({ id, inject: faceFromSource(id, clientEntrySource(id)) })),
+    ...deferredRoster,
+  ]
+  const missing = missingInjectedServices(fullRoster, name => !AUDITED_DEFERRED_ONLY_SERVICES.includes(name))
+  assert.deepEqual([...missing.map(entry => entry.service)].sort(), [...AUDITED_DEFERRED_ONLY_SERVICES].sort())
+  for (const entry of missing) {
+    assert.ok(entry.injectedBy.length > 0, `${entry.service} must name the deferred family injecting it`)
+    for (const id of entry.injectedBy) {
+      assert.ok(DEFERRED_EXTRA_ROW_IDS.includes(id),
+        `${entry.service} is injected by ${id}, which is not a deferred row — the deferred-only audit is stale`)
+    }
+  }
+  // Spot-check the reviewer's own example: `remote.goals` comes from ui-goal.
+  assert.deepEqual(missing.find(entry => entry.service === 'remote.goals')?.injectedBy,
+    ['@deepseek-ai/dsh-client-ui-goal'])
+})
+
+test('a roster that grows after the probe started is probed (finding 1: the live array + the re-arm)', () => {
+  // The probe's roster is the SAME array apply() passed in; registerDeferred
+  // pushes into it as each chunk mounts (source-text lock below). This is the
+  // decision-side half: a member added after construction is probed like any
+  // other, which is what makes the re-armed pass worth its one extra poll.
+  const roster: RegisteredPluginInject[] = [{ id: '@deepseek-ai/dsh-client-ui-chat', inject: ['slots'] }]
+  assert.deepEqual(missingInjectedServices(roster, name => name === 'slots'), [])
+  roster.push({ id: '@deepseek-ai/dsh-client-ui-goal', inject: ['slots', 'remote.goals'] })
+  assert.deepEqual(missingInjectedServices(roster, name => name === 'slots'), [
+    { service: 'remote.goals', injectedBy: ['@deepseek-ai/dsh-client-ui-goal'] },
+  ])
 })
 
 // ── Review F2: the deferred cluster's failures are reported BY ID through the
@@ -182,7 +415,23 @@ test('chamber-entry wires the deferred roster, the per-row isolation and the nam
   // still no boot gate (the registration is fire-and-forget).
   assert.match(entry, /deferredRegistrationFailureMessage\(/, 'the failed id set must be reported by name')
   assert.match(entry, /degradedSeam\(message\)/, 'the report must reach the shell degrade seam')
-  assert.match(entry, /void registerDeferred\(ctx, degradedSeam\)\.catch/, 'a deferred failure must still never block the boot')
+  assert.match(entry, /void registerDeferred\(ctx, degradedSeam, registered, probeRearm\)\.catch/,
+    'a deferred failure must still never block the boot')
+  // 2026-09-11 review-fix (finding 1): the deferred rows extend the LIVE probe
+  // roster with their own exported inject face, and one probe pass is re-armed
+  // once the cluster registered — without both, a deferred family whose
+  // composite-provided service never activated pends with no diagnostic. The
+  // recording is normalized EAGERLY and per-row guarded, so a bad face cannot
+  // surface as an uncaught throw inside the probe timer, nor cost the rows after
+  // it their mount.
+  assert.match(entry, /registered\.push\(\{ id: outcome\.id, inject: registeredInjectMembers\(outcome\.id, loaded\.inject\) \}\)/,
+    'each mounted deferred row must feed its namespace inject face into the probed roster')
+  assert.match(entry, /deferred plugin \$\{outcome\.id\} exports an unreadable inject face/,
+    'an unreadable deferred face must be logged per row, never thrown out of the cluster loop')
+  assert.match(entry, /if \(mounted > 0\) probeRearm\.reArm\?\.\(\)/,
+    'the roster growth must re-arm one probe pass (the probe stops on a clean verdict)')
+  assert.match(entry, /probeRearm\.reArm = \(\) => \{/,
+    'the probe must publish its re-arm hook for the deferred cluster')
 })
 
 test('deferred rows mount with their row id as the fiber name', () => {
@@ -234,8 +483,8 @@ test('chamber-entry derives the probed roster from the registered namespaces (no
   // The probe consumes exactly that roster, and the old hardcoded list is gone.
   assert.match(entry, /missingInjectedServices\(registered, isProvided\)/,
     'the probe must test the derived inject union, never a local list')
-  assert.match(entry, /assertRequiredExtraRowServices\(ctx, degradedSeam, registered\)/,
-    'the derived roster must reach the probe')
+  assert.match(entry, /assertRequiredExtraRowServices\(ctx, degradedSeam, registered, probeRearm\)/,
+    'the derived roster must reach the probe (with the re-arm hand-off, finding 1)')
   assert.doesNotMatch(entry, /REQUIRED_EXTRA_ROW_SERVICES/, 'the hand-written roster constant is retired')
   assert.doesNotMatch(entry, /requiredServiceProbeMessage\(isProvided/, 'the probe must pass the missing set, not a predicate')
 })

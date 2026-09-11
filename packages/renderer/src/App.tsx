@@ -90,11 +90,20 @@ import { openInstanceSession, reconnectInstanceConnection, disposeAllShells, dis
 // every frame-level failure screen. Imported BY DEEP SOURCE PATH, the form the
 // chamber ui-layout / ui-sidebar / settings-bridge tables already use for an
 // internal module: the package BARREL also carries the primitives' markdown /
-// CodeBlock families, and measured on this very build the barrel import moves
-// ~87 KB of them into the MAIN graph (main graph raw 1,226,775 → 1,313,736, i.e.
-// to within 2.7% of the C6 warn gate) while the deep path leaves them in the
-// chamber entry (1,986,884). The main graph evaluates before App mount, which is
-// exactly what the C3 note in chamber-entry.ts keeps ui-primitives out of.
+// CodeBlock families, and the T15-round measurement on this build had the barrel
+// import move ~87 KB of them into the MAIN graph (main graph raw 1,226,775 →
+// 1,313,736 at that measurement, i.e. within 2.7% of the C6 warn gate) while the
+// deep path leaves them in the chamber entry. The main graph evaluates before App
+// mount, which is exactly what the C3 note in chamber-entry.ts keeps
+// ui-primitives out of.
+// 2026-09-11 review-fix (finding 4d): the round's notes quoted the T15-round
+// figures as if they were current. Re-measured with `pnpm run build:renderer` on
+// the final review-fix tree (all round fixes applied): main graph raw 1,228,157
+// · chamber entry raw 1,989,208. The entry therefore sits
+// 0.5% under its 2 MB warn gate, and the main graph ~9% under its 1.35 MB one
+// (check-chunk-budgets.mjs) — the deep path matters at least as much as it did
+// when T15 chose it. The ~87 KB barrel delta is a property of the barrel, not of
+// this round's edits.
 import { Button } from '@deepseek-ai/dsh-client-ui-primitives/src/Button.tsx'
 // T16 (2026-09-11 upstream-alignment): frame copy lives in ONE typed locale
 // dictionary (locales.ts); the frame reads the document language the official
@@ -429,7 +438,13 @@ function deriveServers(
       if (merged !== undefined) entry.runtime = merged
     }
     if (aggregate !== undefined && aggregate.state === 'error') {
-      entry.aggregateError = aggregate.error ?? '未知错误'
+      // 2026-09-11 review-fix (finding 4b): this fallback is frame-owned copy —
+      // it is rendered verbatim by the sidebar's source alert and the archive
+      // dialog (ServerSection.tsx role="alert", ArchiveManagerDialog.tsx), i.e.
+      // it crosses the frame→plugin boundary as a finished string, so it must
+      // come from the frame dictionary in the frame's locale like every other
+      // audited string (the previous round's audit missed it).
+      entry.aggregateError = aggregate.error ?? frameText(locale, 'error.unknown')
     }
     if (pluginDiagnostics[id] !== undefined) entry.pluginDiagnostic = pluginDiagnostics[id]
     servers.push(entry)
@@ -2705,7 +2720,12 @@ export default function App() {
     // 与 selectView 同款注册表守卫：来源已删除时拒绝入队——否则 open 会
     // 挂进 pendingOpens 永不分发（视图不再挂载，dispose 已执行），留死键。
     if (instanceId !== LOCAL_INSTANCE_ID && !liveServerIdsRef.current.has(instanceId)) {
-      throw new Error(`打开会话失败：来源 ${instanceId} 已不在注册表`)
+      // 2026-09-11 review-fix (finding 4b): the open-failure texts are thrown
+      // across the frame→plugin boundary (the sidebar renders whatever text the
+      // rejected promise carries), so the FRAME-OWNED part is dictionary copy in
+      // the document locale; read at throw time, since no render scope owns it
+      // (locales.ts readDocumentLocale — the module's out-of-render reader).
+      throw new Error(frameText(readDocumentLocale(), 'open.failed.sourceGone', { source: instanceId }))
     }
     // INVARIANT (2026-09-11 review F1): arm and release are ONE pair owned by
     // this try/finally, and the arm is the FIRST statement inside the `try` —
@@ -2725,7 +2745,16 @@ export default function App() {
       selectView(instanceId)
       await openInstanceSession(instanceId, sessionId)
     } catch (err) {
-      throw new Error(`打开会话失败：${errorMessage(err)}`)
+      // 2026-09-11 review-fix (finding 4b): dictionary copy around a raw cause —
+      // `{detail}` is the underlying error text, which stays whatever the
+      // crossing boundary produced. BOUNDARY (deliberate, open work for the docs
+      // lane): that text is assembled BELOW the frame — shell.ts's open-failure
+      // diagnostics (`实例 … 无法打开会话：…`, the list/open deadlines) and the
+      // dsh runtime's own errors — and none of those sites owns a locale seat, so
+      // an English document still sees a Chinese detail clause here. The frame's
+      // half is dictionary copy; translating another module's error text would be
+      // a second, drifting copy of it.
+      throw new Error(frameText(readDocumentLocale(), 'open.failed.detail', { detail: errorMessage(err) }))
     } finally {
       releaseOpenIntent(instanceId, sessionId)
     }
@@ -2757,7 +2786,10 @@ export default function App() {
       },
       open => {
         if (!sourceLifecyclesRef.current!.owns(open.sourceOwner)) {
-          throw new Error(`来源 ${open.sourceId} 已被移除并以新代重建，旧通知未打开`)
+          // 2026-09-11 review-fix (finding 4b): same dictionary rule as the two
+          // open-failure texts above — the notification runner's rejection text
+          // is surfaced by the sidebar, so the frame's half is dictionary copy.
+          throw new Error(frameText(readDocumentLocale(), 'open.failed.sourceRebuilt', { source: open.sourceId }))
         }
         return openSession(open.sourceId, open.sessionId)
       },
