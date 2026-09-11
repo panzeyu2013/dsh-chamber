@@ -39,9 +39,10 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
   } & Record<string, unknown>
 }
 
-declare module '@deepseek-ai/dsh-client-ui-slots/client' {
-  /** Client slots module augmentation target. */
-}
+// No `'@deepseek-ai/dsh-client-ui-slots/client'` block: upstream `ui-slots`
+// exports only `.`, `./src/*` and `./package.json`, so that specifier is not
+// resolvable and nothing in this plugin imports it (2026-09 audit). The
+// `…-ui-layout/client` block below IS a real export and stays.
 
 declare module '@deepseek-ai/dsh-client-ui-layout/client' {
   /** Layout facts face (design 17 §18) — provided per-ctx by the chamber

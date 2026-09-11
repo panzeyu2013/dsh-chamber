@@ -170,8 +170,9 @@ var MOBILE_CSS = `
      [data-side] (no role), the conversation width strips carry
      [data-width-handle]; the ui-primitives Tooltip bubble also carries
      [data-side] for placement and must NOT be hidden (role="tooltip"
-     exclusion). Attribute anchors replace the legacy hashed-suffix rules
-     ([class$="_handle"]) that cannot match production class naming.
+     exclusion). Attribute anchors replace the legacy [class$="_handle"]
+     local-name rule here: the attribute seams are stable by contract, while a
+     local-name suffix match would also catch unrelated handles.
      FUTURE-FRAGILE ANCHOR NOTE (2026-12 audit): the [data-side] exclusion
      was verified safe across the whole tree at audit time \u2014 no other
      [data-side] carriers beyond the AppFrame handles / width strips /
@@ -349,14 +350,15 @@ var MOBILE_CSS = `
 @media (max-width: 768px) and (pointer: coarse) {
   /* Composer toolbar: one line. The official row wraps; force nowrap (the
      official 12px gap is kept \u2014 no gap override). */
-  /* Infix match (production names are _<local>_<hash>_<idx>): this also hits
-     sibling rows whose local name ends in "row" inside the composer bar
-     subtree (e.g. the queue dock's .row), which is harmless today \u2014 those
-     rows declare no flex-wrap and carry no _trigger_ child. */
-  [data-slot="conversation.composer.bar"] [class*="_row_"] {
+  /* Local-name SUFFIX match (production names are [hash]_[local]): the dual
+     arm covers multi-class elements. It also hits sibling rows whose local name
+     ends in "row" inside the composer bar subtree (e.g. the queue dock's
+     .row), which is harmless today \u2014 those rows declare no flex-wrap and carry
+     no _trigger child. */
+  [data-slot="conversation.composer.bar"] :is([class$="_row"], [class*="_row "]) {
     flex-wrap: nowrap !important;
   }
-  [data-slot="conversation.composer.bar"] [class*="_row_"] [class*="_trigger_"],
+  [data-slot="conversation.composer.bar"] :is([class$="_row"], [class*="_row "]) :is([class$="_trigger"], [class*="_trigger "]),
   [data-slot="conversation.input.model"] button {
     max-width: 112px !important;
     flex: 0 1 auto !important;
@@ -460,10 +462,10 @@ var MOBILE_CSS = `
     padding-left: calc(16px + env(safe-area-inset-left));
   }
   /* Section inner grids that assume desktop width. Official inner cells
-     carry no stable attribute \u2014 the [class*="_<local>_"] local-name match
-     is the documented hash-insensitive exception (naming
-     "_<local>_<hash>_<idx>" verified on the production bundle; a naming
-     flip fails SOFT \u2014 the official grid stays).
+     carry no stable attribute, so the local-name SUFFIX match
+     (:is([class$="_<local>"], [class*="_<local> "]), production naming
+     [hash]_[local]) is the documented exception; a naming flip fails SOFT \u2014
+     the official grid stays).
      - Models provider row (two text inputs + chevron + trash on one
        4-column line) \u2192 TWO equal columns: the four children auto-place
        2\xD72 (inputs on the first row, the two icon actions under them).
@@ -474,10 +476,10 @@ var MOBILE_CSS = `
        active, its auto-fill .cards (already single-column at phone
        widths by auto-fit; forcing one column only changes 590-768px,
        where two ~268px cards would otherwise fit). */
-  [data-slot="settings.section"] [class*="_modelRow_"] {
+  [data-slot="settings.section"] :is([class$="_modelRow"], [class*="_modelRow "]) {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   }
-  [data-slot="settings.section"] [class*="_cards_"] {
+  [data-slot="settings.section"] :is([class$="_cards"], [class*="_cards "]) {
     grid-template-columns: minmax(0, 1fr) !important;
   }
   /* Other aria-modal dialogs (onboarding steps, pickers) keep their own

@@ -59,10 +59,15 @@ rules restructure it structurally (slot/role anchors only):
 - **Section grid degradation**: the Models provider row (4-column line of
   two inputs + two icon actions) degrades to 2×2 and the Plugins-inventory
   two-column card grid to a single column. Official inner cells carry no
-  stable attribute, so these two use the documented hash-insensitive
-  `[class*="_<local>_"]` local-name exception (production naming
-  `_<local>_<hash>_<idx>`; a naming flip fails SOFT — the official grid
-  stays);
+  stable attribute, so these two use the documented local-name suffix
+  exception `:is([class$="_<local>"], [class*="_<local> "])` — production
+  naming in the instance bundle is `[hash]_[local]` (upstream cssModules
+  pattern, `vendor/harness-checkout/packages/client/tsdown.client.ts:517`;
+  observed in the shipped bundles as `JObwrW_row`, `zGbnIq_modelRow`,
+  `qSYn7G_cards`), so only the suffix arm can match. `_<local>_<hash>_<idx>`
+  is the CHAMBER shell's own Vite naming, never the instance bundle's; the
+  old `[class*="_<local>_"]` infix form therefore matched nothing and a
+  naming flip fails SOFT — the official grid stays;
 - **Other `aria-modal` dialogs** (onboarding steps, pickers) are capped to
   `100vw - 24px` (the sheet itself owns the full screen);
 - **iOS focus zoom**: editable fields inside dialogs get the composer's

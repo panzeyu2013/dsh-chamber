@@ -118,10 +118,15 @@ test('the retired mechanisms leave no trace in the stylesheet', () => {
   // Dockkit split chrome is hidden on touch.
   assert.ok(MOBILE_CSS.includes('[data-dockkit-divider]'))
   assert.ok(MOBILE_CSS.includes('[data-dockkit-split-button]'))
-  // The composer-bar row rules use the production class-name shape.
+  // The composer-bar row rules use the production class-name shape:
+  // `[hash]_[local]` (upstream cssModules pattern), matched by SUFFIX with a
+  // multi-class arm. The old infix form `[class*="_row_"]` matched nothing in
+  // the instance bundle — `_<local>_<hash>_<idx>` is the chamber shell's Vite
+  // naming, never the served bundle's (2026-09 audit, P1).
   const phone = normalizePhoneTier()
-  assert.ok(phone.includes('[class*="_row_"]'))
-  assert.ok(phone.includes('[class*="_trigger_"]'))
+  assert.ok(phone.includes(':is([class$="_row"], [class*="_row "])'))
+  assert.ok(phone.includes(':is([class$="_trigger"], [class*="_trigger "])'))
+  assert.ok(!/\[class\*="_[A-Za-z]+_"\]/.test(phone), 'no infix local-name selectors remain in the phone tier')
 })
 
 test('settings full-screen rule targets the official settings dialog shape', () => {
@@ -156,10 +161,13 @@ test('settings sheet stacks vertically with a pinned header and scrolling option
 })
 
 test('settings section inner grids degrade to two/single column (hash-insensitive local names)', () => {
+  // Suffix match on the production name shape `[hash]_[local]` (plus the
+  // multi-class arm) — see the composer-tier case above for why the infix
+  // form was dead (2026-09 audit, P1).
   const phone = normalizePhoneTier()
-  const modelRow = cssBlock(phone, '[data-slot="settings.section"] [class*="_modelRow_"]')
+  const modelRow = cssBlock(phone, '[data-slot="settings.section"] :is([class$="_modelRow"], [class*="_modelRow "])')
   assert.ok(modelRow !== null && modelRow.includes('grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);'))
-  const cards = cssBlock(phone, '[data-slot="settings.section"] [class*="_cards_"]')
+  const cards = cssBlock(phone, '[data-slot="settings.section"] :is([class$="_cards"], [class*="_cards "])')
   assert.ok(cards !== null && cards.includes('grid-template-columns: minmax(0, 1fr) !important;'))
 })
 

@@ -48,9 +48,14 @@ gateway 访问）真正可用——窄屏抽屉化布局、触控目标、安全
   滚走——只有分区 options 区滚动（底部安全区补边）；
 - **分区内网格降级**：Models 的 provider 行（两输入 + 两图标一行的 4 列
   grid）降为 2×2；Plugins inventory 两列卡片网格降为单列。官方内部格子无
-  稳定属性，这两条使用文档化的哈希不敏感 `[class*="_<local>_"]`
-  例外（生产命名为 `_<local>_<hash>_<idx>`；命名翻转时 fail-soft——保持
-  官方网格）；
+  稳定属性，这两条使用文档化的**局部名后缀**例外
+  `:is([class$="_<local>"], [class*="_<local> "])`——实例 bundle 的生产命名是
+  `[hash]_[local]`（上游 cssModules 规则，
+  `vendor/harness-checkout/packages/client/tsdown.client.ts:517`；产物实测
+  `JObwrW_row`/`zGbnIq_modelRow`/`qSYn7G_cards`），只有后缀臂能命中。
+  `_<local>_<hash>_<idx>` 是 **chamber 自建壳（Vite）**的命名，从不属于实例
+  bundle；此前的 `[class*="_<local>_"]` infix 形式因此命中不到任何东西，命名
+  翻转时 fail-soft——保持官方网格；
 - **其他 `aria-modal` 弹层**（引导步骤、选择器）限宽 `100vw - 24px`
   （设置 sheet 本身已占满全屏）；
 - **iOS 聚焦缩放**：弹窗内可编辑字段套用 composer 同款 16px 底线
