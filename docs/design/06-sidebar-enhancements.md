@@ -533,7 +533,14 @@ await 中），我们单点只显示子 agent 计数文案，官方同快照显�
 - **flat 单列表模式：推迟（维持不排期）**——与 05 §2.1「仅按来源分类」呈现
   原则有张力。
 - 跨实例 `dsh.sessions.current` localStorage 共享键（last-writer-wins）：
-  接受——镜像运行时既有行为，通道原样携带。
+  接受——镜像运行时既有行为，通道原样携带。**随之而来的代价（已登记，不是
+  纯中性）**：共享键使每个壳冷 boot 时都"没有可恢复的会话"，官方初始导航策略
+  随即在其最近工作区复用/新建（宿主侧 `session.create`）一个 blank 会话并打开
+  ——包括后台预热/基线收割这类用户没点过的挂载。chamber 侧的打开意图三闸门只
+  消除**用户可感的中间态**，不阻止那次 create；偏差登记见 design 05 §2.2.1
+  「登记残余」与 STATUS「远端宿主上的空白会话残留」，根治提案（上游给持久化
+  selection 加 shell/入口作用域）见
+  `docs/progress/todo/client-store-scoping-upstream.md`。
 - **完成发生在来源 shell 首次观察之前仍无蓝点**：App 侧
   蓝点与 vendor 提醒同受「首次观察只记录 running 位」规则——来源 shell
   尚未挂载（预热排队中/首次打开前）期间的完成边沿两者都看不到。空闲预热

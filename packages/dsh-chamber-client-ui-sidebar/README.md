@@ -34,9 +34,13 @@ The shell declares and renders the three holes the alpha.2 official
   gone — 2026-10 user feedback; identity rides the fold-glyph accent, the
   active left inset and the rail dots); the rail renders the source color dots.
 - Sessions outside every workspace trail in one synthetic ungrouped bucket at
-  the source's end (sessions only, no workspace actions); blank rows DO surface
-  while they are the source's current session (rendered as "New Session") and
-  during the 450 ms ghost grace after they lose it (06 §2.2 / 05 §2.1);
+  the source's end (sessions only, no workspace actions); blank rows surface
+  only while they are the source's current session (rendered as "New Session")
+  and that current is ACTUALLY projected — while this source has an open intent
+  for a DIFFERENT session the projection gate withholds `current` altogether
+  (`projectableCurrent`, 05 §2.2.1), so the blank session the runtime
+  self-selects mid-boot never enters the list; a blank row that lost current
+  keeps its slot for the 450 ms ghost grace (06 §2.2 / 05 §2.1);
   subagent-origin sessions never surface in the navigation list
   (`shared/derive.ts`).
 - A connected source whose snapshot fetch failed shows the error text instead
@@ -90,6 +94,35 @@ The shell declares and renders the three holes the alpha.2 official
 - A non-current source's header click switches the active N-ctx view without
   opening a session (`chamberBridge.requestActivateSource`); archiving hides
   the session immediately (`archivedSessionIds` filtered in `shared/derive.ts`).
+
+## Open-intent gates and the workspace echo (design 05 §2.2.1, 2026-12)
+
+This package owns the page-wide open-intent slot (`shared/open-intent.ts` — the
+same vite-shared singleton discipline as `pending-click.ts`, because the target
+instance's own ctx must read it too) together with the pure rules the App layer
+consumes, plus the workspace-echo ledger rules (`shared/workspace-echo.ts`) and
+their publish site (`client/SidebarRoot.tsx`). Two user-visible surfaces follow:
+
+- **Intent gates.** A source with an in-flight open projects its `current` only
+  when that current IS the requested session (`projectableCurrent`), so the
+  blank "New Session" row the runtime self-selects during a cold boot never
+  flashes before the requested one lands; an idempotent re-open keeps its
+  highlight. On the incoming view the boot veil is held past a clean settle
+  exactly while the shell does NOT yet show the requested session
+  (`shouldHoldViewVeil`) — a view that already shows it (idempotent re-open, or
+  the boot-time early-open arm `client/early-open.ts` having preempted the
+  runtime) is never veiled, and a failed shell never holds.
+- **Echoed workspace row.** A workspace created from this sidebar renders in
+  the list immediately, before any mounted baseline can carry it: the row
+  carries the real host id (never `synthetic`, so workspace-level actions stay
+  available), replaces a same-path synthetic group in place, and is handed over
+  to the authoritative row once that source's push lists it (05 §2.2.1). The
+  same channel carries the withdraw/patch halves — `reportWorkspaceRemoved`
+  after a successful `workspace.delete` (without it a create → delete on an
+  unmounted source leaves a real-id ghost row until the TTL) and
+  `reportWorkspaceRenamed` with the new title after a successful
+  `workspace.rename` (an echo row's title is the path basename, so the rename
+  otherwise looks like a no-op) — and the App applies both to that one ledger.
 
 ## Data discipline
 

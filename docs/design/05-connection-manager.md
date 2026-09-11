@@ -135,8 +135,12 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
 > 此产生：①切到远程 server 的会话时先闪出一个"新会话"；②在某来源上新建工作区
 > 后不立刻出现，必须手动点一下那个服务器。
 
-**打开意图（open intent）= 唯一事实源**：`App.openSession` 是所有打开路径的唯一
-漏斗（侧栏点击、通知点击、深链、待办条、git 插件）。它在切视图**之前** arm 一条
+**打开意图（open intent）= 唯一事实源**：`App.openSession` 是所有**带 sessionId** 的
+打开路径的唯一漏斗——侧栏点击、待办条、git 插件都经
+`chamberBridge.requestOpenSession` 进 App 的 `onOpenSession` 订阅，通知点击走通知
+runner，App.tsx 里恰好这两处调用点。**深链不在其中**：深链载荷没有 sessionId
+（16 §2），`settlePendingDeepLinkActivation` 只 `selectView` 激活该来源视图、不打开
+会话，故它既不 arm 意图也不受本节的闸门约束。意图在切视图**之前** arm 一条
 意图、在本次 open settle（成功或终态失败）后**按 sessionId 守卫地**释放——守卫
 保证"点 X 后马上点 Y"时 X 的迟到 `finally` 不撤掉 Y 的闸门。意图槽位是
 **跨 ctx 单例**（`packages/dsh-chamber-client-ui-sidebar/src/shared/open-intent.ts`，
@@ -145,7 +149,7 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
 
 1. **投影门**：意图在途**且该来源的 current 不是请求的那个会话**时，该来源不投影
    `runtimeFacts.current`（`projectableCurrent`）。否则冷 boot 期间官方初始导航策略
-   给自己选中的 blank 会话会被投影成一行高亮的"新会话"（06 §4.3 的 `(!blank ||
+   给自己选中的 blank 会话会被投影成一行高亮的"新会话"（本文件 §2.1 的 `(!blank ||
    current)` 规则），下一次分发后又消失——正是①的可见形态。**幂等重开不受影响**：
    `current` 已经是要打开的那个会话时投影本就正确，为一次分发把高亮摘掉再装回去是
    纯闪烁、零信息（`pending !== current` 才抑制）。
@@ -159,7 +163,12 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
    - 已经显示请求会话 ⇒ 不遮（幂等重开；或 boot 期早开臂已抢先——此时 settle 即揭幕，
      比等 App 分发更快）；
    - 遮罩生命周期由 open 请求自身界定（dispatch 8s 预算 + App 的 `finally` 释放），
-     不存在挂死的加载层；**不会**因为"有在途 open"就给一个已经渲染好的温壳盖遮罩。
+     不存在挂死的加载层；持有的判据是两条规则（`shouldHoldViewVeil`）：①有在途
+     open ∧ 未失败 ∧ **屏上显示的会话 ≠ 请求的会话**；②**屏上没有正当内容**（该视图
+     的 current 未定或为 blank 会话——未知按 blank 处理，冷 boot 因此照旧被遮）。
+     "屏上仍是别的那一个"是这条闸门存在的理由；而**一个已经渲染出正确内容的温壳不会
+     被盖**（与上条同源），且温壳正显示用户在读的真实会话时，切换请求不再用不透明加载
+     层把它整个盖住 8s（2026-09-11 review：原判据缺第②条，会把温暖壳连现有会话一起遮）。
 3. **boot 期早开臂**：目标 ctx 内的侧栏插件读**活**意图，在 sessions 列表可寻址
    的瞬间调用本 ctx 的 `sessions.open`
    （`packages/dsh-chamber-client-ui-sidebar/src/client/early-open.ts`：预算 8s、
@@ -182,7 +191,11 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
 **工作区回声（workspace echo）**：侧栏在某来源上建好工作区后（unary
 `workspace.create` 返回宿主 workspaceId），经 `chamberBridge.reportWorkspaceCreated`
 上报，App 记入渲染端账本（不持久化 / 不轮询 / 不写宿主），并在**投影的唯一汇合点**
-（`deriveServerWorkspaces` 之前套一层 `withWorkspaceEcho`）把该行并入。为什么
+（`deriveServerWorkspaces` 之前套一层 `withWorkspaceEcho`）把该行并入。同一通道也
+承载**撤销/改名回声**（见 §3）：该来源的 `workspace.delete` / `workspace.rename` 成功后，
+侧栏分别经 `reportWorkspaceRemoved` / `reportWorkspaceRenamed` 上报，App 只把事实施加
+到该账本（`removePendingWorkspace` 删条目 / `renamePendingWorkspace` 改标题）——照旧
+不新增读通道、不写宿主。为什么
 必须回声：未挂载来源只有 unary 兜底（工作区分组由会话 cwd 反推——**刚建的空
 工作区没有任何会话，结构上不可见**），已推送来源的工作区集又被
 `commitAggregatePull` 的 mounted merge 冻结、且 `planAggregateRefreshes` 根本不再
@@ -198,9 +211,11 @@ unary 轮询它——所以新建后那次 `requestRefresh` 两条分支都刷�
   push、以及未挂载来源唯一的 30s unary 兜底拉取）；回声行**不带 `synthetic`**——
   它的 id 是真的，工作区级动作照常可用。
 - **替换的真实代价（已登记）**：换的是行的**身份**，因此按
-  `sourceId/workspaceId` 键控的 per-workspace 视图偏好（折叠态、未分组序）不会跟随
-  新 id——旧合成键留在存储里不再命中（渲染侧跳过未知 id，属既有已接受残渣），该组
-  可能一次性由折叠变展开。纯外观、一次性，且换来的是"不会渲染同一目录两行"。
+  `sourceId/workspaceId` 键控的 per-workspace 视图偏好（折叠态 `folded`、updated 模式的
+  `updatedOrder`/`sessionUpdatedAtByAccount`）不会跟随新 id——旧合成键留在存储里不再命中
+  （渲染侧跳过未知 id，属既有已接受残渣），该组可能一次性由折叠变展开；未分组序
+  `ungroupedOrder` 只按 sourceId 键控，不受本次替换影响。纯外观、一次性，且换来的是
+  "不会渲染同一目录两行"。
 - **与 git 行的联动（顺带生效，非新机制）**：Git 插件本就按"投影里的工作区 id 集合
   变化"即时刷新（`workspaceKeyOf`——"新增/删除工作区必须立刻刷新，否则 git 行要等
   30s 轮询"），而它的取数是 unary（`/api/i/<id>/api/gitWorktree/*`，未挂载来源同样
@@ -308,7 +323,9 @@ unary 轮询它——所以新建后那次 `requestRefresh` 两条分支都刷�
   基线（宿主把 `upsert` 广播给所有活跃 follower），chamber 侧的补法是用户自己
   那次创建的回声（§2.2.1）——不新增 wire 读通道，也不把工作区事实搬进控制面。
 - **本修订的代码落点**：`packages/dsh-chamber-client-ui-sidebar/src/shared/open-intent.ts`
-  （意图槽 + 投影/揭示纯规则）、`.../src/shared/workspace-echo.ts`（回声账本 +
+  （意图槽 + 投影/揭示纯规则）、`.../src/shared/aggregate-store.ts`（桥接单例 +
+  回声事实通道：`WorkspaceCreatedFact`/`reportWorkspaceCreated` 等）、
+  `.../src/shared/workspace-echo.ts`（回声账本 +
   union/去重纯规则）、`.../src/client/early-open.ts`（boot 期早开臂）、
   `.../src/client/index.ts`（每个 ctx 挂一次早开臂）、
   `.../src/client/SidebarRoot.tsx`（create 成功后上报回声）、
@@ -343,6 +360,9 @@ interface ChamberServerAggregate {
   updatedAt: number
 }
 interface OpenSessionRequest { sourceId: string; sessionId: string }
+interface WorkspaceCreatedFact { sourceId: string; workspaceId: string; path: string }
+interface WorkspaceRemovedFact { sourceId: string; workspaceId: string; path: string }  // path 尽力而为（快照未报告该行时为空串；账本同时按 workspaceId 匹配）
+interface WorkspaceRenamedFact { sourceId: string; workspaceId: string; title: string }
 interface InstanceRuntimeReport {
   current?: string                // 当前会话 id（06 §4.3 全局单选高亮）
   sessions: Record<string, {
@@ -362,6 +382,12 @@ export const chamberBridge: {
   onOpenSessionOutcome(listener: (outcome: OpenSessionOutcome) => void): () => void  // 侧边栏订阅：失败行内呈现/成功清残留
   requestRefresh(sourceId: string): void                  // 侧边栏动作成功后调用
   onRefresh(listener: (sourceId: string) => void): () => void  // App 层订阅
+  reportWorkspaceCreated(fact: WorkspaceCreatedFact): void     // 侧栏 create 成功后上报宿主 workspaceId（§2.2.1 回声事实；单向，绝不请求宿主改动）
+  onWorkspaceCreated(listener: (fact: WorkspaceCreatedFact) => void): () => void  // App 层订阅：并入回声账本
+  reportWorkspaceRemoved(fact: WorkspaceRemovedFact): void     // 侧栏 delete 成功后上报（撤销回声）
+  onWorkspaceRemoved(listener: (fact: WorkspaceRemovedFact) => void): () => void
+  reportWorkspaceRenamed(fact: WorkspaceRenamedFact): void     // 侧栏 rename 成功后上报（改名回声）
+  onWorkspaceRenamed(listener: (fact: WorkspaceRenamedFact) => void): () => void
   requestSessionListRefresh(sourceId: string): void       // design 24 §12：请求该来源挂载 ctx 重跑官方 session.list（purge 幽灵行收敛；§12 由生产端校验式收敛链处理：reject/hung 有界重试，越界一律保持抑制——resolve 不构成权威）
   onRequestSessionListRefresh(listener: (sourceId: string) => void): () => void // 各挂载 ctx 的 sidebar 插件订阅；仅 chamberInstanceId === sourceId 者动作（§12：插件自身观测到归档集收缩也会直接触发同一链，不依赖本通道送达）
   requestActivateSource(sourceId: string): void           // 点击来源分组头调用
@@ -413,6 +439,14 @@ export const chamberBridge: {
 - 订阅 `onRefresh` → 每个 live 来源无条件执行一次即时 mutation-pull（与
   §2.3 同规：mounted 来源 host-store 推送为主、requestRefresh 即时 unary
   pull 双通道并行，不是 mounted no-op）。
+- 订阅 `onWorkspaceCreated` → 记入渲染端**工作区回声账本**（只记录、不拉取：
+  侧栏自己的 create 成功后照旧 `requestRefresh`，两条通道职责不重叠；权威收敛
+  点是挂载 push 的 `reconcilePendingWorkspaces`，见 §2.2.1）。同族的
+  `onWorkspaceRemoved` / `onWorkspaceRenamed` 是**同一账本**的撤销/改名回声：
+  App 分别经 `removePendingWorkspace` / `renamePendingWorkspace` 就地删条目 /
+  改标题——没有它们，未挂载来源的 create → delete 会留下一个挂着真 id 动作的
+  幽灵行直到 TTL 到期，未挂载来源的 rename 则看起来完全没生效（回声行标题是
+  `basenameOf(path)`）。
 - 订阅 `onRuntimeReport` → 把各来源的运行时事实合并进 `server.runtime`
   （仅附加、不覆盖轮询字段；来源断连即清，06 §4）。runtime 与 snapshot 两条
   producer 均以注册时单调 token + 主进程下发的 opaque `sourceFingerprint` 认领

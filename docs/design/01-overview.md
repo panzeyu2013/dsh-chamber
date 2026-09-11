@@ -111,10 +111,12 @@ presets 页操作（copy/read/remove 经反代写远端文件）；部署内置�
 | 连接注入适配器 / broker / 绑定 | **移除** | 远程实例由桌面主进程注册表管理，不再 seed 控制面 |
 | 协议层深挖文档/委托映射独立文档 | **移除（文档）** | 协议细节以 dsh 自身 wire 与 vendor 源码为权威；处置映射并入本文 §4 |
 | walkthrough、通知中心、MCP、文件夹/笔记、web 预览、目标/终端渲染等宿主 UI 职责面 | **不变（移出）** | 宿主原生覆盖，控制面只接入/服务 |
-| 跨会话调度/审批通知投影 | **桌面移出；gateway 有界例外** | design 17 只消费控制帧/权威摘要并驱动既有 dsh API；不消费 session 内容、不实现聊天 runtime。**2026-12 修订（用户拍板）**：gateway 编排面整体剥离——审批/提问经侧边栏既有事实通道呈现（与本地/ssh 实例同一通道），调度/会话索引/服务器侧 worktree 记录/功能开关全部移除；gateway 只剩认证壳 + 反代 + runtime 管理（design 18 §9）+ 凭据面板 + 种子注册表（宿主包由桌面同步、mobile 打包例外，design 17 §10） |
+| 跨会话调度/审批通知投影 | **桌面移出；gateway 有界例外** | design 17 只消费控制帧/权威摘要并驱动既有 dsh API；不消费 session 内容、不实现聊天 runtime。**2026-12 修订（用户拍板）**：gateway 编排面整体剥离——审批/提问经侧边栏既有事实通道呈现（与本地/ssh 实例同一通道），调度/会话索引/服务器侧 worktree 记录/功能开关全部移除；gateway 只剩认证壳 + 反代 + runtime 管理（design 18 §9）+ 凭据面板 + 种子注册表（宿主包由桌面同步、mobile 打包例外，design 17 §10）+ **第三方插件管理写面**（design 21 A1 裁决：`installed`/`install`/`remove`/`materialize`/`tasks`，串行队列 + 持久 journal + 单写者租约，契约见 design 17 §10.2 与 design 21 §6.2/§6.3） |
 | git/GitHub | **插件化** | design 08 实例内插件是唯一实现（本地/ssh/gateway 同通道，宿主包由控制面/远程同步/gateway 种子注入）；gateway 服务器侧 worktree 记录已随编排面剥离（2026-12） |
 
-> **有界例外**：design 08 的插件与 design 17 的独立 gateway 是两个显式边界。
+> **有界例外（与 AGENTS.md 同列：designs 08 / 17 / 19 / 20 / 24）**：design 08 的实例内
+> Git 插件、design 17 的独立 gateway、design 19 的桌面原生边沿通知投影、design 20 的
+> 可信 open-in 边缘能力与 design 24 的实例内归档清理宿主域是全部显式窄边界。
 > `packages/control-plane` 本身仍不建立 Git/会话索引、不运行 Git、不认证；Desktop
 > 仍仅接入/分发。gateway 的派生状态丢失后必须能从 dsh 权威重建，且 gateway 进程
 > 未显式启动时这些域完全不存在。design 18 §9 是 17/18 的有界扩展：gateway 获得与
@@ -128,6 +130,12 @@ presets 页操作（copy/read/remove 经反代写远端文件）；部署内置�
 > 真实 bundle 图标 + 一次拉起」，只接受 catalog 白名单 id 与绝对**目录**（`isDirectory()` 校验），
 > 无读取面、无任意 argv、无本地文件级打开；控制面仍是零执行面，桌面主进程仍是 vscode-only。
 > 该域由我们自己的客户端插件消费（官方两份都不加载/不被调用），不构成会话域或执行面先例。
+>
+> **2026-12 追加（design 24 §2）**：`archiveCleanup/{preview,purge,probe}` 是实例内归档
+> 清理宿主域（宿主包 `packages/dsh-chamber-seed-archive-cleanup`，控制面只把该宿主包随
+> 种子同步进实例图，见 `packages/control-plane/src/host-graph-seed.ts`）：只删不读、
+> 运行中整棵跳过、幂等，域缺失 404 给诚实文案；控制面不持有归档事实、不新增执行面，
+> 最窄边界表述见 design 24 §2。
 
 这里移出的是宿主已经覆盖的“通知中心”UI/历史/管理域；设计 19 的桌面原生边沿
 通知只投影 renderer 已有的每实例运行时事实，不建立控制面通知消费者、历史或中心，

@@ -418,14 +418,16 @@
     1px→0.5px 后 `docs/design/16-vscode-deeplink.md:266` 仍写 1px——三处均已人工改正，
     但**没有门禁会再拦下一次**（`.md` 不在 `STYLE_FILE`，且设计文档不是 i18n 对）。
   - **包级 `README.i18n.yaml` 哈希记录**：`verify:i18n` 只管根目录 5 对文档，包级记录
-    是纯人工纪律（文件头自述），故**已漂移**：`dsh-chamber-client-ui-settings-bridge`
-    的 `README.md`、`dsh-chamber-client-ui-settings-connections` 与
-    `dsh-chamber-client-ui-sidebar` 的两侧，记录哈希与文件不符（**先于本轮改动**，已用
-    `git status` 确认这 3 包的 README 本轮未被触碰）。修复前提是**先人工复核该包中英
-    两版内容仍对等**再重录——直接按当前文件重算等于给未经复核的内容盖章。
-  - 三种记录格式并存加剧漂移：mobile/settings-bridge 用 sha256（前者嵌套 `en:`/`zh:`、
-    后者平铺），client-web/connection 用 git blob SHA-1 且注释指向**仓内不存在**的
-    `pnpm run verify-translation-pairing --write`。统一格式并纳入门禁是后续候选。
+    是纯人工纪律（文件头自述），故仍有漂移：`dsh-chamber-client-ui-settings-connections`
+    的两侧，记录哈希与文件不符——它是 mobile / settings-bridge / connections / sidebar
+    四个 sha256 记录包中**唯一**漂移者（复核：逐包
+    `sha256sum packages/<pkg>/README.md packages/<pkg>/README.zh.md` 对比记录；先于本轮
+    改动，属既有）。修复前提是**先人工复核该包中英两版内容仍对等**再重录——直接按当前
+    文件重算等于给未经复核的内容盖章。
+  - 三种记录格式并存加剧漂移：mobile / settings-bridge / connections / sidebar 用 sha256
+    （mobile 嵌套 `en:`/`zh:`，其余平铺），client-web/connection 用 git blob SHA-1 且注释
+    指向**仓内不存在**的 `pnpm run verify-translation-pairing --write`。统一格式并纳入
+    门禁是后续候选。
 
 ## 设计未决
 
@@ -443,8 +445,10 @@
 - **`__DSH_BOOT__` 随 dsh 版本漂移**：manifest 形状继续以 vendor `parseBootManifest`
   为准维护。
 - **未挂载来源是否需要一条只读 `workspace/follow` 流（2026-12 提出，未决）**：
-  它是一次性消灭"未挂载来源整源降级"（合成 cwd 分组 + 空归档集 + 工作区集合滞后，
-  见上两条取舍）的**架构级**解法，但代价真实：侧栏给未挂载来源用的是纯 fetch unary
+  它是一次性消灭"未挂载来源整源降级"的**架构级**解法——该降级面的各项登记：
+  合成 cwd 分组 / 空归档集见「unary 兜底归档过滤无 wire 源」与「首屏『整源降级
+  直到被点击』的登记残留」，工作区集合滞后见「未挂载来源的工作区集合只有『回声 +
+  挂载 push』」。代价真实：侧栏给未挂载来源用的是纯 fetch unary
   客户端（`shared/instance-api.ts`），流需要新增 WS/SSE 传输 + 世代/重连/`baseline`-once
   语义 + 与挂载推送的去重；且它等于在侧栏里再实现一份"前端运行时的会话/工作区读通道"，
   触碰 AGENTS 的"控制面/侧栏不重实现执行面"边界。**当前不走**（本地回声已覆盖用户可感

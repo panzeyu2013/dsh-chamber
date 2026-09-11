@@ -13,12 +13,14 @@ dsh 前端壳（各自独立 cordis ctx / store / React 树，经
 上游的"当前会话"选择是**页面级单键持久化**：
 
 - `@deepseek-ai/dsh-api-session-controller`（pin `0.1.5-rc.1`，客户端半）
-  `new SessionRuntime(...)`：`createSnapshotStore({}, { persist: { name:
-  'dsh.sessions.current' } })`；
-- `@deepseek-ai/dsh-client-store` 的 `attachPersistence`：直接读写
+  `SessionRuntime` 构造里 `createSnapshotStore({}, { persist: { name:
+  'dsh.sessions.current' } })`（`packages/api/session-controller/src/client/sessions/service.ts:225-228`）；
+- `@deepseek-ai/dsh-client-store` 的 `attachPersistence`
+  （`packages/client/store/src/index.ts:146`）：直接读写
   `localStorage.getItem(name)` / `setItem(name, …)`，**没有 scope 维度**；
 - 投影时该 selection 会被校验后**回写或清空**：`current === undefined` 时
-  `this.selection.set({})`（清掉共享键），有 current 时写回该 current。
+  `this.selection.set({})`（清掉共享键），有 current 时写回该 current
+  （`packages/api/session-controller/src/client/sessions/service.ts:628-645`）。
 
 后果（chamber 实机）：
 
@@ -37,7 +39,7 @@ dsh 前端壳（各自独立 cordis ctx / store / React 树，经
 ## 现状对照（chamber 侧）
 
 - 已落地的 chamber 侧缓解（不改变上游事实面）：
-  `docs/design/05-connection-manager.md` §2.2 修订——open 意图的本地回显
+  `docs/design/05-connection-manager.md` §2.2.1 修订——open 意图的本地回显
   （揭示门 / 投影门 / boot 意图早开），把"用户可感的中间态"消掉。
 - **无法在 chamber 侧根治**：该 store 属于 vendor 树（
   `@deepseek-ai/dsh-client-store` / `@deepseek-ai/dsh-api-session-controller`
@@ -47,22 +49,28 @@ dsh 前端壳（各自独立 cordis ctx / store / React 树，经
 
 ## 上游最小改法（提案）
 
-`dsh-client-store` 已经支持 scope：`defineStore` 的持久化键是
+`dsh-client-store` 已经支持 scope：持久化键带 scope 后缀的逻辑在
+`defineStore.create(scopeKey)` 里——
 `persistKey = scopeKey === undefined ? decl.persist : \`${decl.persist}.${scopeKey}\``
-（`packages/client/runtime/src/client/contract/store.ts`，rc.5 树同名逻辑）。
-缺的只是**调用点传 scope**：
+（vendor 树内 `packages/client/store/src/index.ts:221-224`，pin `183f08e9` = `dsh-v0.1.5-rc.1`；
+上游把它从 `packages/client/runtime/src/client/contract/store.ts` 改名迁到此处，
+`packages/client/runtime` 整包其后已被删除）。缺的只是**调用点传 scope**：
+`createSnapshotStore` 本身没有 scope 参数（同上 `:103-105`），
+`SessionRuntime` 的 selection 正是直接由它建的（`createSnapshotStore({}, { persist: { name:
+'dsh.sessions.current' } })`，不经过 `defineStore`）：
 
 1. 给"每个 entry/壳一份"的 store 一个 scope 来源（宿主注入的
    `basePath` / instance id 最自然；chamber 已把它作为 `chamberBasePath`
    注入每个 entry 的 ctx，官方侧可等价地用 boot 参数或 connection 的 base
    path）；
-2. `SessionRuntime` 的 selection 持久化键带上该 scope
-   （`dsh.sessions.current.<scope>`）；
+2. 给该调用点的持久化名加 scope 后缀，或用 `defineStore.create(scope)`
+   重建该 store（`dsh.sessions.current.<scope>`）——两条路都要求上游先接受
+   "selection 的持久化身份含入口 scope"；
 3. `current === undefined` 的**清空分支只清自己的 scope**（这一条比第 2 条更
    关键：它是跨实例破坏的来源）。
 
 收益：每个壳恢复"自己上次的会话"，初始导航策略不再凭空建空白会话；chamber
-侧的 A1′ 早开臂也会从"抢时间"退化为"锦上添花"。
+侧的 boot 期早开臂（`client/early-open.ts`）也会从"抢时间"退化为"锦上添花"。
 
 ## 开放问题
 

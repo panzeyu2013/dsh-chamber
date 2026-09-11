@@ -7,6 +7,19 @@ chamber 自研侧边栏插件（设计 05 §2）：拷贝官方 ui-sidebar 外�
 插件注册进 layout 的 `sidebar` 槽，**替换官方 ui-sidebar 注册**（官方包在
 `vendor/harness-packages` 保持原样，永不进启动图）。
 
+## alpha.2 扩展孔位（品牌 + 全局面板）
+
+外壳声明并渲染 alpha.2 官方 `ui-sidebar` 新增的三个孔位，使上游/第三方的注册
+永不悬空：
+
+- `sidebar.brand.mark` / `sidebar.brand.name`——左上品牌行；chamber 字标保持
+  mark 回退，name 孔位无占用时不渲染内容（rail 同样渲染 mark 孔位）。
+- `sidebar.panellist`（list）——全局主面板行。`src/client/panel-source.ts` 把
+  槽位台账镜像为 `{id, order, label}` 元数据（label thunk 读取时解析、仅在
+  变化时通知），外壳为每条渲染一行 `PanelRow`，点击调用
+  `ctx.layout.selectPanel(id)`。上游出厂为空列表，故该区默认不可见；投影与
+  接线由 `test/panel-source.test.ts` 与 `test/panel-wiring.test.ts` 钉死。
+
 ## 结构
 
 - 来源分组 → workspace 组 → session 行。所有来源（local + 每个注册的远程
@@ -14,9 +27,12 @@ chamber 自研侧边栏插件（设计 05 §2）：拷贝官方 ui-sidebar 外�
   徽标，当前来源高亮）→ workspace 组 → session 行。远程来源按来源 id 派生
   稳定 accent 色（hue 哈希）；本地来源用默认色。rail 渲染来源色点。
 - 不属任何 workspace 的游离会话落在来源末位合成的一个**未分组**桶（仅
-  session 行，无 workspace 操作）；**blank 行在它们仍是该来源当前会话期间
-  （以 "New Session" 呈现）以及失去 current 后 450ms ghost 宽限期内会进入
-  列表**（06 §2.2 / 05 §2.1）；subagent 来源的子会话不进入导航列表
+  session 行，无 workspace 操作）；blank 行只在它们**既是该来源当前会话、
+  又真的被投影**期间进入列表（以 "New Session" 呈现）——该来源还有指向
+  **别的**会话的在途 open 时投影门整体不投影 `current`
+  （`projectableCurrent`，05 §2.2.1），运行时 boot 期间自选的 blank 会话
+  因此不入列表；失去 current 的 blank 行另有 450ms ghost 宽限期保住占位
+  （06 §2.2 / 05 §2.1）；subagent 来源的子会话不进入导航列表
   （`shared/derive.ts`）。
 - 已连接来源的聚合拉取失败时，以错误文本代替 workspace 列表呈现——绝不
   冒充"无工作区"；未连接来源只显示分组头 + 状态提示；全部来源断开时显示
@@ -61,6 +77,28 @@ chamber 自研侧边栏插件（设计 05 §2）：拷贝官方 ui-sidebar 外�
 - 点击非当前来源的分组头 → 切换活动 N-ctx 视图到该来源 shell（不打开
   会话，`chamberBridge.requestActivateSource`）；归档后会话立即从列表
   消失（`archivedSessionIds` 过滤在 `shared/derive.ts` derive 层）。
+
+## 打开意图闸门与工作区回声（design 05 §2.2.1，2026-12）
+
+本包持有页面级打开意图槽（`shared/open-intent.ts`——与 `pending-click.ts` 同款
+vite shared 单例纪律，因为目标实例自己的 ctx 也要读它）及其供 App 层消费的纯
+规则，以及工作区回声账本规则（`shared/workspace-echo.ts`）与上报点
+（`client/SidebarRoot.tsx`）。由此有两个用户可见面：
+
+- **意图闸门**：某来源有在途 open 时，只有它的当前会话**就是**请求的那个
+  会话才投影 `current`（`projectableCurrent`）——冷 boot 期间运行时自选的
+  blank「新建会话」行因此不会抢在请求的会话之前闪出；幂等重开保持高亮。
+  目标视图侧，boot 遮罩在干净 settle 之后继续持有的唯一情形是壳体**尚未**
+  显示请求的会话（`shouldHoldViewVeil`）——已经显示它的视图（幂等重开、或
+  boot 期早开臂 `client/early-open.ts` 已抢先）永不被遮，失败的壳也永不持有。
+- **回声工作区行**：从本侧栏新建的工作区立刻出现在列表里，不等任何挂载基线
+  带来它：该行带真实宿主 id（**不带 `synthetic`**，故工作区级动作照常可用）、
+  与同路径合成组相遇时原位替换后者，并在该来源 push 列出它后交由权威行接管
+  （05 §2.2.1）。同一通道还承载撤销/改名两半：`workspace.delete` 成功后
+  `reportWorkspaceRemoved`（没有它，未挂载来源上的 create → delete 会留下一个
+  带真 id 的幽灵行直到 TTL 到期）、`workspace.rename` 成功后
+  `reportWorkspaceRenamed` 带新标题（回声行标题是路径 basename，否则改名前
+  看起来完全没生效）——两者都由 App 施加到同一个账本。
 
 ## 数据纪律
 
