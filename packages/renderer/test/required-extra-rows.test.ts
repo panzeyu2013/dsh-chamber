@@ -17,43 +17,95 @@ import {
   chamberEntryDiagnosticMessage,
   deferredRegistrationFailureMessage,
   DEFERRED_EXTRA_ROW_IDS,
-  missingRequiredServices,
+  injectedServices,
+  missingInjectedServices,
+  registeredInjectMembers,
   requiredServiceProbeMessage,
-  REQUIRED_EXTRA_ROW_SERVICES,
   REQUIRED_SERVICE_PROBE_DEADLINE_MS,
+  type RegisteredPluginInject,
 } from '../src/required-extra-rows.ts'
 import { CHAMBER_COVERED_FACTORY_IDS, CHAMBER_COVERED_IDS } from '../src/chamber-covered.ts'
+import { normalize, stripComments } from './source-text.ts'
 
 const readSource = (rel: string): string =>
   readFileSync(new URL(rel, import.meta.url), 'utf8')
 
-test('the required set names exactly the extra-row-only service a composite plugin injects', () => {
-  // 2026-09 三轮: `fileUpload` was removed (the upload client is now covered by
-  // the composite) and `resources` was removed — ui-sidebar-right INJECTS
-  // `resources` (vendor ui-sidebar-right/src/client/index.ts:76) and the row is
-  // itself non-covered, so a missing `resources` provider can only ever show up
-  // together with the `sidebarRight` miss this set already probes.
-  assert.deepEqual([...REQUIRED_EXTRA_ROW_SERVICES], ['sidebarRight'])
+// ── A1 (2026-09-11 upstream-alignment): the probe roster is DERIVED from the
+// ── inject faces of the plugins the composite registered — upstream's own fact
+// ── (`Object.keys(entry.fiber.inject)`, vendor packages/client/web/src/
+// ── boot.ts:138-158), lifted from the per-fiber sweep to the composite's
+// ── children, which that sweep cannot see.
+
+test('registeredInjectMembers reads both cordis inject shapes and fails loud on anything else', () => {
+  assert.deepEqual(registeredInjectMembers('p', undefined), [])
+  assert.deepEqual(registeredInjectMembers('p', null), [])
+  assert.deepEqual(registeredInjectMembers('p', ['slots', 'locale']), ['slots', 'locale'])
+  // The map form (cordis registry.ts `Inject.resolve`): the KEYS are the
+  // services — exactly what upstream reads off `fiber.inject`.
+  assert.deepEqual(registeredInjectMembers('p', { slots: null, locale: { some: 'config' } }), ['slots', 'locale'])
+  // A namespace whose inject face cannot be read must NOT be silently treated
+  // as "injects nothing": that would shrink the probed set without a trace.
+  assert.throws(() => registeredInjectMembers('@scope/pkg', 'slots'), /non-array\/non-map inject face/)
+  assert.throws(() => registeredInjectMembers('@scope/pkg', ['slots', 7]), /non-string member/)
 })
 
-test('missingRequiredServices reports unprovided services in declaration order', () => {
-  const none = missingRequiredServices(() => false)
-  assert.deepEqual(none, ['sidebarRight'])
-  assert.deepEqual(missingRequiredServices(name => name === 'sidebarRight'), [])
-  assert.deepEqual(missingRequiredServices(() => true), [])
-  // A caller-supplied set is honoured (probe reuse for future rows).
-  assert.deepEqual(missingRequiredServices(name => name === 'a', ['a', 'b']), ['b'])
+test('injectedServices is the deduped union in registration order', () => {
+  const plugins: RegisteredPluginInject[] = [
+    { id: 'a', inject: ['sessions', 'slots'] },
+    { id: 'b', inject: ['slots', 'locale'] },
+    { id: 'c', inject: undefined },
+    { id: 'd', inject: ['sidebarRight'] },
+  ]
+  assert.deepEqual(injectedServices(plugins), ['sessions', 'slots', 'locale', 'sidebarRight'])
+  assert.deepEqual(injectedServices([]), [])
 })
 
-test('requiredServiceProbeMessage names the services, the deadline, and the instance', () => {
-  const withInstance = requiredServiceProbeMessage(['sidebarRight'], 'local')
+test('missingInjectedServices names each unprovided service AND the registered plugins injecting it', () => {
+  const plugins: RegisteredPluginInject[] = [
+    { id: '@deepseek-ai/dsh-client-ui-chat', inject: ['slots', 'sessions', 'sidebarRight'] },
+    { id: '@deepseek-ai/dsh-client-ui-approval', inject: ['sessions', 'sidebarRight'] },
+  ]
+  // The live ctx service store: everything but `sidebarRight` is provided.
+  const isProvided = (name: string): boolean => name !== 'sidebarRight'
+  assert.deepEqual(missingInjectedServices(plugins, isProvided), [
+    { service: 'sidebarRight', injectedBy: ['@deepseek-ai/dsh-client-ui-chat', '@deepseek-ai/dsh-client-ui-approval'] },
+  ])
+  // A complete roster reports nothing (the probe's healthy arm).
+  assert.deepEqual(missingInjectedServices(plugins, () => true), [])
+  // The consequence the probe exists for: the sole non-covered provider row.
+  assert.deepEqual(
+    missingInjectedServices([{ id: '@deepseek-ai/dsh-client-ui-chat', inject: ['sidebarRight'] }], () => false),
+    [{ service: 'sidebarRight', injectedBy: ['@deepseek-ai/dsh-client-ui-chat'] }],
+  )
+})
+
+test('requiredServiceProbeMessage names each service, its injectors, the deadline and the instance', () => {
+  const missing = [{ service: 'sidebarRight', injectedBy: ['@deepseek-ai/dsh-client-ui-chat'] }]
+  const withInstance = requiredServiceProbeMessage(missing, 'local')
   assert.ok(withInstance.includes('instance local'), 'the instance id must be named when known')
   assert.ok(withInstance.includes('sidebarRight'), 'the missing service must be named')
+  assert.ok(withInstance.includes('injected by @deepseek-ai/dsh-client-ui-chat'),
+    'the registered plugin injecting it must be named')
+  assert.ok(withInstance.includes('still unprovided after'), 'the deadline phrasing is kept')
   assert.ok(withInstance.includes(`${REQUIRED_SERVICE_PROBE_DEADLINE_MS}ms`), 'the deadline must be named')
-  assert.ok(withInstance.includes('conversation view may stay unregistered'), 'the consequence must be stated')
-  assert.ok(withInstance.includes('ui-sidebar-right'), 'the responsible row must be named')
-  const withoutInstance = requiredServiceProbeMessage(['sidebarRight'])
+  assert.ok(withInstance.includes('PENDING'), 'the consequence (the fibers stay pending) must be stated')
+  assert.ok(withInstance.includes('NOT blocked'), 'the diagnostic-not-gate contract must be stated')
+  const withoutInstance = requiredServiceProbeMessage(missing)
   assert.ok(!withoutInstance.includes('instance'), 'an unknown instance adds no clause')
+})
+
+test('the composite derives its roster and still registers the ui-chat inject face the probe exists for', () => {
+  // The derived roster is only as true as the vendor declarations behind it:
+  // ui-chat root-injects `sidebarRight` (vendor ui-chat/src/client/apply.ts),
+  // whose ONLY provider is the non-covered `ui-sidebar-right` host-graph row.
+  // If upstream ever drops that member the probe loses its motivating case —
+  // this lock makes that a visible fact, never a silent shrink.
+  const uiChat = readSource('../../../vendor/harness-packages/@deepseek-ai/dsh-client-ui-chat/src/client/apply.ts')
+  const declared = /export const inject = \[([^\]]*)\]/.exec(uiChat)?.[1] ?? ''
+  assert.ok(declared.includes('sidebarRight'), 'ui-chat must still declare sidebarRight in its inject face')
+  const entry = readSource('../src/chamber-entry.ts')
+  assert.match(entry, /register\('@deepseek-ai\/dsh-client-ui-chat', UiChat\)/,
+    'the composite must register ui-chat through the roster-recording helper')
 })
 
 // ── Review F2: the deferred cluster's failures are reported BY ID through the
@@ -67,8 +119,9 @@ test('chamberEntryDiagnosticMessage is the one line shape both diagnostics share
   assert.equal(chamberEntryDiagnosticMessage('something happened'), '[chamber-entry] something happened')
   // The probe message is built THROUGH it (a refactor of the existing line, not
   // a rewrite): same prefix, same instance clause position.
-  assert.ok(requiredServiceProbeMessage(['sidebarRight'], 'local').startsWith('[chamber-entry] (instance local) '))
-  assert.ok(requiredServiceProbeMessage(['sidebarRight']).startsWith('[chamber-entry] required extra-row service(s)'))
+  const missing = [{ service: 'sidebarRight', injectedBy: ['@deepseek-ai/dsh-client-ui-chat'] }]
+  assert.ok(requiredServiceProbeMessage(missing, 'local').startsWith('[chamber-entry] (instance local) '))
+  assert.ok(requiredServiceProbeMessage(missing).startsWith('[chamber-entry] composite service(s)'))
 })
 
 test('deferredRegistrationFailureMessage names every failed id, the instance and the consequence', () => {
@@ -145,4 +198,44 @@ test('deferred rows mount with their row id as the fiber name', () => {
     'a deferred row must be mounted with its row id as the fiber name')
   assert.doesNotMatch(entry, /ctx\.plugin\((?:outcome\.plugin|loaded)\)/,
     'a bare mount loses the row identity in every fiber-name diagnostic')
+})
+
+// ── A1 wiring: every first-screen mount goes through the roster-recording
+// ── helper, so registration and probed set can never drift apart.
+
+test('chamber-entry derives the probed roster from the registered namespaces (no hand-written service list)', () => {
+  const entry = normalize(stripComments(readSource('../src/chamber-entry.ts')))
+  // The helper IS the registration path: one call mounts the plugin AND records
+  // the id + the namespace's exported inject face…
+  assert.match(entry, /const register = \(id: string, plugin: object\): void => \{/,
+    'the register helper must mount and record in one step')
+  assert.match(entry, /const fiber = ctx\.plugin\(plugin\) as unknown as \{ inject\?: unknown \} \| undefined/,
+    'the mount happens inside the helper, so no bare ctx.plugin can bypass the roster')
+  assert.match(entry, /const declared = registeredInjectMembers\(id, \(plugin as \{ inject\?: unknown \}\)\.inject\)/,
+    'the roster source is the namespace export, normalized by the shared helper')
+  assert.match(entry, /registered\.push\(\{ id, inject: declared \}\)/,
+    'the derived declaration (never a local service list) is what the probe receives')
+  // …and the fiber's own inject map is a WITNESS: a namespace whose declaration
+  // stopped being exported (so the derivation would silently shrink) fails loud.
+  assert.match(
+    entry,
+    /plugin \$\{id\} mounts an inject set \$\{JSON\.stringify\(witnessKeys\)\} that its namespace does not export/,
+    'a derivation blind spot must fail the entry loud, never shrink the roster silently',
+  )
+  // No bare first-screen mount can bypass the roster: the only ctx.plugin calls
+  // left are the helper's own (`plugin`) and the deferred cluster's named object
+  // form (whose chunks are not evaluated when the probe runs).
+  const args = [...entry.matchAll(/ctx\.plugin\(([^)]*)/g)].map(match => match[1]!.trim())
+  assert.ok(args.length > 0, 'the composite must still register plugins')
+  for (const arg of args) {
+    assert.ok(arg.startsWith('plugin') || arg.startsWith('{'),
+      `a bare ctx.plugin(${arg}…) bypasses the derived roster — mount it through register()`)
+  }
+  // The probe consumes exactly that roster, and the old hardcoded list is gone.
+  assert.match(entry, /missingInjectedServices\(registered, isProvided\)/,
+    'the probe must test the derived inject union, never a local list')
+  assert.match(entry, /assertRequiredExtraRowServices\(ctx, degradedSeam, registered\)/,
+    'the derived roster must reach the probe')
+  assert.doesNotMatch(entry, /REQUIRED_EXTRA_ROW_SERVICES/, 'the hand-written roster constant is retired')
+  assert.doesNotMatch(entry, /requiredServiceProbeMessage\(isProvided/, 'the probe must pass the missing set, not a predicate')
 })

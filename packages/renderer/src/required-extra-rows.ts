@@ -7,46 +7,53 @@
  * host-graph.ts may pull it in) — the entry reconciles its own roster against
  * {@link DEFERRED_EXTRA_ROW_IDS} at apply time instead.
  *
- * ## 1. Required extra-row services (the probe roster)
+ * ## 1. The required-service probe roster (A1, 2026-09-11 upstream-alignment)
  *
- * The chamber composite registers the first-screen plugins directly, so their
- * fibers are NOT part of the boot kernel's loader sweep. Exactly ONE service
- * they require is provided only by a non-covered host-graph row (2026-09 round-3
- * audit over every root `inject` of every composite plugin):
+ * Upstream derives this fact PER FIBER once the boot settled: `assertEntriesActive`
+ * (vendor `packages/client/web/src/boot.ts:138-158`) walks
+ * `ctx.loader.entries()` and, for every entry whose fiber is still pending,
+ * reports `Object.keys(entry.fiber.inject).filter(service => ctx.get(service)
+ * === undefined)`. The chamber's own copy of that sweep is
+ * `packages/dsh-client-web/src/boot.ts` (plus the version-tolerance rules in
+ * its `boot-tolerance.ts`).
  *
- *  - `ui-chat` root-injects `sidebarRight` (vendor
- *    `ui-chat/src/client/apply.ts:47-50`), and the ONLY provider is the
- *    non-covered `ui-sidebar-right` row — `ctx.reflect.provide('sidebarRight',
- *    …)`, vendor `ui-sidebar-right/src/client/index.ts:109`.
+ * The PROBE still has to exist here: the composite mounts its first-screen
+ * plugins with a direct `ctx.plugin()` call, so their fibers are children of
+ * the entry fiber, NOT loader entries — upstream's sweep cannot see them, and a
+ * pending child is invisible to a boot that reports success. What no longer
+ * exists is an INVENTED roster: `chamber-entry.ts` derives the probed service
+ * set from the `inject` face of the very namespaces it registered (the same
+ * declaration upstream reads off the fiber), and this module owns the pure
+ * union / missing-set / message rules:
  *
- * When that row never applies, the `ui-chat` fiber stays PENDING, its whole
- * `apply` is skipped, and the conversation view stays unregistered while the
- * boot still reports success — this module owns the decision and the message,
- * and `chamber-entry.ts` owns the timer (tied to the ctx lifecycle).
+ *  - {@link registeredInjectMembers} normalizes one namespace's exported
+ *    `inject` (array form `['a','b']`, or cordis's name→config map form — its
+ *    KEYS are the services, exactly what `Object.keys(fiber.inject)` yields);
+ *  - {@link missingInjectedServices} probes the union through
+ *    `ctx.get(name) === undefined` and keeps, per missing service, WHICH
+ *    registered plugins inject it;
+ *  - {@link requiredServiceProbeMessage} names both.
  *
- * History (keep the reasoning; the list must stay minimal and true):
- *  - `fileUpload` was listed in round 2 because `ui-conversation`'s and
- *    `api-session-controller`'s root injects require it (a composite-covered
- *    plugin requiring a host-graph-only service — the probe's own case). Round 3
- *    COVERED the upload client in the composite (its vendor bundle needs the
- *    registered base-path patch), so the composite now provides it — the entry
- *    was removed.
- *  - `resources` was listed on a FALSE premise ("the same row provides
- *    `resources` and `sidebarRight`"). The mirror is the other way round:
- *    `ui-sidebar-right` INJECTS `resources` (vendor
- *    `ui-sidebar-right/src/client/index.ts:73-76`: `export const inject =
- *    ['slots', 'layout', 'locale', 'resources']`), and the provider is the
- *    SEPARATE `client-resources` host-graph row (`ctx.reflect.provide(
- *    'resources', resources)`, vendor `dsh-client-resources/src/client/index.ts:34`).
- *    The probe set still needs only `sidebarRight`, but for the right reason: no
- *    COVERED first-screen plugin injects `resources` at its apply root, so a
- *    missing `resources` provider can only ever be observed through the
- *    non-covered `ui-sidebar-right` row pending on it — which is exactly the
- *    `sidebarRight` miss this roster already probes (that row is the provider of
- *    `sidebarRight` in the same `apply`).
- *    MAINTENANCE: if an upstream version ever makes a COVERED first-screen
- *    plugin inject `resources` directly, that miss becomes independently
- *    observable and `'resources'` must be added back here.
+ * What that derivation yields in the pinned tree (2026-09-11 audit over every
+ * root `inject` of every composite first-screen namespace) is ONE service whose
+ * only provider is a non-covered host-graph row — plus the kernel-adopted
+ * renderer's `slots`, which the shell always materializes:
+ *
+ *  - `sidebarRight` (injected by `ui-chat`, vendor
+ *    `ui-chat/src/client/apply.ts:47-50`) is provided ONLY by the non-covered
+ *    `ui-sidebar-right` row — `ctx.reflect.provide('sidebarRight', …)`, vendor
+ *    `ui-sidebar-right/src/client/index.ts:109`. When that row never applies,
+ *    the `ui-chat` fiber stays PENDING, its whole `apply` is skipped, and the
+ *    conversation view stays unregistered while the boot still reports success.
+ *
+ * History (keep the reasoning): the roster used to be the hand-written list
+ * `['sidebarRight']`, and this module carried manual notes for the two entries
+ * that ever left it — `fileUpload` (listed in round 2, then COMPOSITE-COVERED in
+ * round 3, so the composite provides it) and `resources` (listed on a false
+ * premise: `ui-sidebar-right` INJECTS `resources`, and its provider is the
+ * separate non-covered `client-resources` row — no composite first-screen
+ * namespace injects it, so it never entered the derived union either). Both
+ * facts now fall out of the derivation instead of out of a maintained list.
  *
  * ## 2. The deferred-covered roster (review F1/F2, 2026-12)
  *
@@ -71,8 +78,98 @@
  *    module table's factory branch, upstream `system.ts` `makeRequire`).
  */
 
-/** Services the composite's first-screen plugins require from extra rows. */
-export const REQUIRED_EXTRA_ROW_SERVICES = ['sidebarRight'] as const
+/**
+ * One plugin the composite registered with `ctx.plugin()`, paired with the id
+ * it was registered under. `inject` is that plugin namespace's exported cordis
+ * declaration VERBATIM (the composite never rewrites it).
+ */
+export interface RegisteredPluginInject {
+  /** The id the composite mounted the plugin under (package / boot-graph id). */
+  id: string
+  /** The namespace's exported `inject` face, as imported. */
+  inject: unknown
+}
+
+/** One probed service that is still unprovided, with its registered injectors. */
+export interface MissingRequiredService {
+  /** The service name the fiber waits on. */
+  service: string
+  /** Registered plugin ids whose `inject` face names it (registration order). */
+  injectedBy: string[]
+}
+
+/**
+ * Normalize one namespace's exported cordis `inject` declaration into its
+ * service names — the same set cordis hands to the fiber and upstream reads as
+ * `Object.keys(entry.fiber.inject)`.
+ *
+ * Two legal shapes (vendor cordis `registry.ts` `Inject.resolve`): an ARRAY of
+ * service names, or a name→config MAP whose KEYS are the services (the object
+ * form's values configure interception, they are not extra members). A
+ * namespace that exports anything else cannot be trusted as a roster source and
+ * fails LOUD here: silently reading `[]` out of it would shrink the probed set
+ * without a trace, which is exactly the blind spot this roster exists to close.
+ * @param id - the registered plugin id (diagnostic subject).
+ * @param inject - the namespace's exported `inject` value.
+ * @returns the declared service names (empty when the plugin injects nothing).
+ */
+export function registeredInjectMembers(id: string, inject: unknown): string[] {
+  if (inject === undefined || inject === null) return []
+  if (Array.isArray(inject)) {
+    if (inject.some(member => typeof member !== 'string')) {
+      throw new Error(`chamber-entry: plugin ${id} exports a non-string member in its inject array`)
+    }
+    return [...(inject as string[])]
+  }
+  if (typeof inject === 'object') return Object.keys(inject as Record<string, unknown>)
+  throw new Error(`chamber-entry: plugin ${id} exports a non-array/non-map inject face (${typeof inject})`)
+}
+
+/**
+ * The union of the registered plugins' inject members, in registration order
+ * (first occurrence wins), ignoring the plugins that inject nothing. This IS
+ * the probed roster: it is derived, never maintained.
+ * @param plugins - the composite's registered plugins, in registration order.
+ * @returns the service names to probe, deduped.
+ */
+export function injectedServices(plugins: readonly RegisteredPluginInject[]): string[] {
+  const out: string[] = []
+  for (const plugin of plugins) {
+    for (const service of registeredInjectMembers(plugin.id, plugin.inject)) {
+      if (!out.includes(service)) out.push(service)
+    }
+  }
+  return out
+}
+
+/**
+ * Which of the registered plugins' injected services are still unprovided,
+ * each with the registered plugins that inject it (A1: upstream's
+ * `Object.keys(entry.fiber.inject).filter(service => ctx.get(service) ===
+ * undefined)`, lifted from the per-fiber sweep to the composite's own roster).
+ * @param plugins - the composite's registered plugins, in registration order.
+ * @param isProvided - membership test over the live ctx service store.
+ * @returns one entry per missing service, in roster order (empty when complete).
+ */
+export function missingInjectedServices(
+  plugins: readonly RegisteredPluginInject[],
+  isProvided: (name: string) => boolean,
+): MissingRequiredService[] {
+  const out: MissingRequiredService[] = []
+  const index = new Map<string, MissingRequiredService>()
+  for (const plugin of plugins) {
+    for (const service of registeredInjectMembers(plugin.id, plugin.inject)) {
+      let entry = index.get(service)
+      if (entry === undefined) {
+        entry = { service, injectedBy: [] }
+        index.set(service, entry)
+        out.push(entry)
+      }
+      if (!entry.injectedBy.includes(plugin.id)) entry.injectedBy.push(plugin.id)
+    }
+  }
+  return out.filter(entry => !isProvided(entry.service))
+}
 
 /**
  * Probe deadline. The extra rows load after the composite and their applies
@@ -136,29 +233,31 @@ export function chamberEntryDiagnosticMessage(detail: string, instanceId?: strin
 }
 
 /**
- * Which required services are still unprovided.
- * @param isProvided - membership test over the live ctx service store.
- * @param required - services to check (defaults to {@link REQUIRED_EXTRA_ROW_SERVICES}).
- * @returns the missing service names, in declaration order.
- */
-export function missingRequiredServices(
-  isProvided: (name: string) => boolean,
-  required: readonly string[] = REQUIRED_EXTRA_ROW_SERVICES,
-): string[] {
-  return required.filter(name => !isProvided(name))
-}
-
-/**
  * Build the operator-facing diagnostic for a still-missing set.
- * @param missing - the missing service names.
+ *
+ * A1 (2026-09-11 upstream-alignment): the line names every missing service WITH
+ * the registered plugins that inject it, so the responsible surface is readable
+ * straight from the line (upstream's sweep prints the same pairing per pending
+ * fiber). It stays what it always was: a post-settle DIAGNOSTIC, never a boot
+ * gate — the boot has already settled successfully, and a gateway/mobile shape
+ * legitimately omits host-graph rows.
+ * @param missing - the missing services with their registered injectors.
  * @param instanceId - the per-entry instance id, when known.
- * @returns one line naming the services, the instance, and the consequence.
+ * @returns one line naming each service, its injectors, the instance and the
+ *   consequence.
  */
-export function requiredServiceProbeMessage(missing: readonly string[], instanceId?: string): string {
+export function requiredServiceProbeMessage(
+  missing: readonly MissingRequiredService[],
+  instanceId?: string,
+): string {
+  const detail = missing
+    .map(entry => `${entry.service} (injected by ${entry.injectedBy.join(', ')})`)
+    .join('; ')
   return chamberEntryDiagnosticMessage(
-    `required extra-row service(s) missing after ${REQUIRED_SERVICE_PROBE_DEADLINE_MS}ms: `
-    + `${missing.join(', ')} — the ui-sidebar-right host-graph row did not apply; `
-    + 'the conversation view may stay unregistered (ui-chat pends on sidebarRight)',
+    `composite service(s) still unprovided after ${REQUIRED_SERVICE_PROBE_DEADLINE_MS}ms: ${detail} — `
+    + 'every registered plugin injecting them stays PENDING, so the surfaces those fibers mount never register '
+    + '(a missing provider here is an extra host-graph row or a kernel service that never activated); '
+    + 'the boot is NOT blocked',
     instanceId,
   )
 }

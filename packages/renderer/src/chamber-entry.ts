@@ -128,8 +128,9 @@ import { CHAMBER_COVERED_FACTORY_IDS, CHAMBER_COVERED_IDS } from './chamber-cove
 import {
   deferredRegistrationFailureMessage,
   DEFERRED_EXTRA_ROW_IDS,
-  missingRequiredServices, requiredServiceProbeMessage,
+  missingInjectedServices, registeredInjectMembers, requiredServiceProbeMessage,
   REQUIRED_SERVICE_PROBE_DEADLINE_MS, REQUIRED_SERVICE_PROBE_INTERVAL_MS,
+  type RegisteredPluginInject,
 } from './required-extra-rows.ts'
 import { isChamberSourceId } from './transport-source.ts'
 
@@ -571,10 +572,50 @@ export function apply(ctx: Context): void {
   // api-gateway: apply(ctx) → Remote stream mux route), so the prefix is bound
   // per entry through configureContext, never through plugin config or a
   // page-global knob (2026-09 Batch 2: the config-passing form was retired).
-  ctx.plugin(ConnectionPlugin)
-  ctx.plugin(TypertRegistry)
-  ctx.plugin(ApiGateway)
-  ctx.plugin(ApiRemotes)
+  //
+  // A1 (2026-09-11 upstream-alignment): every first-screen registration also
+  // RECORDS what its namespace injects, and the required-service probe below
+  // probes exactly that union — the same declaration upstream reads off
+  // `Object.keys(entry.fiber.inject)` in its post-settle sweep (vendor
+  // packages/client/web/src/boot.ts:138-158). Registration and roster are one
+  // call on purpose: a family added here is probed automatically, one removed
+  // here stops being probed, and the recorded id is the mount identity (the
+  // package / boot-graph id the fiber is named by), never a second service
+  // list. The deferred cluster is NOT part of the roster: its chunks are not
+  // evaluated when the probe starts, and the deferred-split invariant
+  // (module header) fixes every one of their inject members to first-screen
+  // services, which the union already covers.
+  const registered: RegisteredPluginInject[] = []
+  const register = (id: string, plugin: object): void => {
+    // The mounted fiber's OWN normalized inject map is upstream's source of
+    // truth (`Object.keys(entry.fiber.inject)`, the sweep's fact). It is read
+    // here as a WITNESS only — never as the roster: the roster is derived from
+    // the namespace's exported `inject` face (the declaration this composite
+    // registered). If a namespace ever stopped exporting that face while cordis
+    // still read one off the plugin (e.g. the declaration moved onto a plugin
+    // object), the derived roster would silently SHRINK — exactly the blind spot
+    // this probe exists to close — so that drift fails THIS entry loud instead.
+    // (`ctx.plugin` returns the fiber; a shape that carries no inject map — or a
+    // cordis that returned the context instead — yields no witness and no
+    // false alarm.)
+    const fiber = ctx.plugin(plugin) as unknown as { inject?: unknown } | undefined
+    const witness = fiber?.inject
+    const witnessKeys = witness !== null && typeof witness === 'object' && !Array.isArray(witness)
+      ? Object.keys(witness as Record<string, unknown>)
+      : []
+    const declared = registeredInjectMembers(id, (plugin as { inject?: unknown }).inject)
+    if (declared.length === 0 && witnessKeys.length > 0) {
+      throw new Error(
+        `chamber-entry: plugin ${id} mounts an inject set ${JSON.stringify(witnessKeys)} that its namespace does not export — `
+        + 'the derived required-service roster would silently lose them (see required-extra-rows.ts)',
+      )
+    }
+    registered.push({ id, inject: declared })
+  }
+  register('@deepseek-ai/dsh-client-connection', ConnectionPlugin)
+  register('@deepseek-ai/dsh-typert-registry', TypertRegistry)
+  register('@deepseek-ai/dsh-api-gateway', ApiGateway)
+  register('@deepseek-ai/dsh-api-remotes', ApiRemotes)
   // Provider group (dsh-client-runtime dissolved): the store is a platform
   // word (covered factory only, no plugin); the api controllers provide
   // ctx.sessions / ctx.workspaces; ui-session / ui-chat / ui-approval are the
@@ -582,36 +623,36 @@ export function apply(ctx: Context): void {
   // mounts the generated Remote namespaces (`remote.session` etc.) that the
   // controllers' inject lists require — cordis fibers wait on the inject
   // sets, so registration order carries no activation semantics.
-  ctx.plugin(ApiSessionController)
-  ctx.plugin(ApiWorkspaceController)
+  register('@deepseek-ai/dsh-api-session-controller', ApiSessionController)
+  register('@deepseek-ai/dsh-api-workspace-controller', ApiWorkspaceController)
   // Background file uploads (covers the host-graph row): ui-conversation and
   // api-session-controller root-inject `fileUpload`, and the composite-bundled
   // copy is the only one the vendor patch can fix (see chamber-covered.ts).
-  ctx.plugin(FileUpload)
-  ctx.plugin(Locale)
-  ctx.plugin(UiTheme)
-  ctx.plugin(UiLayout)
-  ctx.plugin(UiSidebar)
-  ctx.plugin(UiGit)
-  ctx.plugin(UiOpenIn)
-  ctx.plugin(UiSettings)
-  ctx.plugin(UiConversation)
+  register('@deepseek-ai/dsh-client-file-upload', FileUpload)
+  register('@deepseek-ai/dsh-client-locale', Locale)
+  register('@deepseek-ai/dsh-client-ui-theme', UiTheme)
+  register('@dsh-chamber/dsh-chamber-client-ui-layout', UiLayout)
+  register('@dsh-chamber/dsh-chamber-client-ui-sidebar', UiSidebar)
+  register('@dsh-chamber/dsh-chamber-client-ui-git', UiGit)
+  register('@dsh-chamber/dsh-chamber-client-ui-open-in', UiOpenIn)
+  register('@deepseek-ai/dsh-client-ui-settings', UiSettings)
+  register('@deepseek-ai/dsh-client-ui-conversation', UiConversation)
   // First-screen (2026-08 review fix): ui-model-selection's root inject
   // requires `commandUi` (commands) and commands requires `inputTriggers`
   // (input-trigger) — see the import comments above.
-  ctx.plugin(UiCommands)
-  ctx.plugin(UiInputTrigger)
-  ctx.plugin(UiWorkspace)
-  ctx.plugin(UiModelSelection)
+  register('@deepseek-ai/dsh-client-ui-commands', UiCommands)
+  register('@deepseek-ai/dsh-client-ui-input-trigger', UiInputTrigger)
+  register('@deepseek-ai/dsh-client-ui-workspace', UiWorkspace)
+  register('@deepseek-ai/dsh-client-ui-model-selection', UiModelSelection)
   // dsh-v0.1.2-alpha.1 conversation families (first-screen; see the import
   // comments above).
-  ctx.plugin(UiSession)
-  ctx.plugin(UiChat)
-  ctx.plugin(UiApproval)
+  register('@deepseek-ai/dsh-client-ui-session', UiSession)
+  register('@deepseek-ai/dsh-client-ui-chat', UiChat)
+  register('@deepseek-ai/dsh-client-ui-approval', UiApproval)
   // Directory-picker surface: the `browse` face for every instance (see the
   // import comment above) — the host pins the browse capability per spawn, so
   // the client surface and the host capability never disagree.
-  ctx.plugin(UiDirectoryPickerBrowse)
+  register('@deepseek-ai/dsh-client-ui-directory-picker-browse', UiDirectoryPickerBrowse)
   // Deferred families: fetch their chunks in the background and register them
   // once loaded — never awaited (the entry must settle with only the
   // first-screen families evaluated; see module header). The seam is shared
@@ -622,24 +663,28 @@ export function apply(ctx: Context): void {
     console.error('[chamber-entry] deferred plugin registration failed:', error)
   })
 
-  assertRequiredExtraRowServices(ctx, degradedSeam)
+  assertRequiredExtraRowServices(ctx, degradedSeam, registered)
 }
 
 /**
- * alpha.2 required extra rows: the non-covered `ui-sidebar-right` row provides
- * `ctx.sidebarRight`, which the composite's FIRST-SCREEN `ui-chat` declares in
- * its cordis inject set (vendor ui-chat/src/client/apply.ts:47-50). The
- * composite registers ui-chat directly, so its fiber is not part of the boot
- * kernel's loader sweep: if the extra row never applies, the fiber stays
+ * The post-settle required-service probe (alpha.2; roster DERIVED since the A1
+ * 2026-09-11 upstream-alignment).
+ *
+ * The concrete miss this exists for: the non-covered `ui-sidebar-right` row
+ * provides `ctx.sidebarRight`, which the composite's FIRST-SCREEN `ui-chat`
+ * declares in its cordis inject set (vendor ui-chat/src/client/apply.ts:47-50).
+ * The composite registers ui-chat directly, so its fiber is not part of the
+ * boot kernel's loader sweep: if that row never applies, the fiber stays
  * PENDING and the conversation surface disappears while the boot still reports
- * success. Probe the service after the extra rows have had time to materialize
+ * success. Probe the services after the extra rows have had time to materialize
  * and report loudly instead of failing silently.
  *
- * The required set — and why it is ONLY `sidebarRight` (the `resources` seat
- * the same row injects is a separate provider row, see the module header of
- * required-extra-rows.ts, the single authority) — lives in
- * required-extra-rows.ts, next to the deferred-cluster diagnostic that shares
- * this seam.
+ * The probed set is NOT a list here either: it is the union of the `inject`
+ * faces of the plugins `register()` above mounted (upstream's own fact, read
+ * per fiber in its post-settle sweep — vendor
+ * packages/client/web/src/boot.ts:138-158), and the pure union/missing/message
+ * rules live in required-extra-rows.ts, the single authority, next to the
+ * deferred-cluster diagnostic that shares this seam.
  *
  * This is a diagnostic, not a boot gate: a gateway-hosted instance may
  * legitimately run without the rows (the mobile deployment loads no sidebar
@@ -648,8 +693,14 @@ export function apply(ctx: Context): void {
  * @param ctx - the per-entry client root context.
  * @param degradedSeam - the shell's post-settle degrade reporter (see
  *   {@link createDegradedSeam}).
+ * @param registered - the first-screen plugins this apply mounted, in
+ *   registration order (roster source; see the `register` helper).
  */
-function assertRequiredExtraRowServices(ctx: Context, degradedSeam: (message: string) => void): void {
+function assertRequiredExtraRowServices(
+  ctx: Context,
+  degradedSeam: (message: string) => void,
+  registered: readonly RegisteredPluginInject[],
+): void {
   const started = Date.now()
   const isProvided = (name: string): boolean =>
     (ctx as { get: (key: string) => unknown }).get(name) !== undefined
@@ -657,7 +708,7 @@ function assertRequiredExtraRowServices(ctx: Context, degradedSeam: (message: st
   ctx.effect(() => {
     let timer: ReturnType<typeof setTimeout> | undefined
     const probe = (): void => {
-      const missing = missingRequiredServices(isProvided)
+      const missing = missingInjectedServices(registered, isProvided)
       if (missing.length === 0) return
       if (Date.now() - started < REQUIRED_SERVICE_PROBE_DEADLINE_MS) {
         timer = setTimeout(probe, REQUIRED_SERVICE_PROBE_INTERVAL_MS)
