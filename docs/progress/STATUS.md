@@ -474,6 +474,16 @@
   （`packages/gateway/test/feature-lifecycle.test.ts:479-486`），即断言的是"页面拿到
   这个错误之后的映射"，不是"这个错误是怎么被构造出来的"；要覆盖构造面，需给夹具的
   `respond` 增加 non-ok 响应能力（现在它只能抛错模拟网络错误）。
+- **归档保护的"候选根闭包"方向缺一条测试（2026-09 正确性审查登记，低）**：保护集只与
+  **候选根自己的**子树闭包比对（design 24 §4 step 3b 即此口径；`core.ts` 的 `resolvePlan`
+  先算闭包、再判保护、最后判 liveness），因此**被保护会话的 archived 子代**若自己也是候选
+  根，不会被祖先的保护覆盖——它按自己的闭包与 liveness 判定，可能被单独删除。这与「被保护
+  **子代**保护其祖先整树」的方向相反，但**是合同写明的单向性，不是缺陷**；可达性上客户端
+  也表达不出该组合：`sessionIds` 是必填数组（`instance-api.ts` 的 `purgeArchivedSessions`）
+  且对话框要求非空选择，域层的"无过滤全删"进不来，隐藏子代理行同样不可被选择
+  （`test/core.test.ts` 的 subset 用例注释即此口径）。缺口只在测试：两个方向各有用例
+  （`test/core.test.ts:1302` 保护根、`:1315` 保护子代），唯独"受保护祖先 + 其 archived
+  子代候选"没有——**将来若给任何入口开放无过滤清理、或让子代理行可选，先补这条锁再放行**。
 
 ## 设计未决
 
@@ -554,6 +564,26 @@
   不阻止那次 create；根治必须上游给持久化 selection 加 shell/入口作用域
   （`docs/progress/todo/client-store-scoping-upstream.md`，含最小改法）。同工作区复用
   使其**不增长**，故按已知降级接受。
+- **复合首屏 `ui-chat` 的 extra-row 依赖在「老代实例」上整面失败：会话面静默缺席
+  （2026-09-12 实机定位，仍成立）**：composite 首屏 `ui-chat` inject `sidebarRight`，其唯一
+  provider 是**未覆盖**的 extra row `@deepseek-ai/dsh-client-ui-sidebar-right`
+  （`docs/checklists/upstream-touchpoints.md` §2「反向依赖」触点；覆盖集
+  `packages/renderer/src/chamber-covered.ts`）。实例侧图谱缺该行 ⇒ `ui-chat` 永远 PENDING
+  ⇒ **会话面（消息/轨迹）从不注册**：侧栏会话行、会话头部（标题/子代理计数/模式）与
+  composer 全部正常，**主栏只剩 composer、正文全空**，且无任何用户可见错误——只有控制台
+  一行 `[chamber-entry] … still unprovided after 5000ms: sidebarRight`
+  （`packages/renderer/src/required-extra-rows.ts`），而降级自愈（`degraded-retry`）对
+  **结构性**缺席无效。实机读数（运行中的 0.3.0-beta.1 安装态，直读宿主图谱
+  `POST /api/i/<id>/api/clientGraph/graph` 与 `/api/i/<id>/chamber/runtime/status`）：
+  六个 gateway 来源中 5 个仍跑 **dsh 0.1.2-rc.1**（图谱 47 行，缺 `sidebar-right` /
+  `sidebar-files` / `documentpreview` / `client-resources` / `api-workspace-files` /
+  `client-file-upload` 六行），点其会话行 ⇒ `conversation.session` 槽 0 字符；跑 0.1.5-rc.1 的
+  `test-http`（55 行）与本地实例（53 行）同一操作正常渲染。**性质**：这是「composite 与实例
+  同代」这一隐含前提的失效，且**没有降级通道**——`ui-chat` 属 composite 静态注册的覆盖集，
+  不能按来源回落到宿主自带的旧行（老代实例自己的 `ui-chat` 行正是被覆盖集丢弃的那一行）。
+  **收口**：①把老 gateway 就地升到 0.1.5-rc.1 锚（`install-gateway.sh update`，与下方
+  「就地重建旧 gateway 未排期」同源；`test-http` 已证明可行）；②chamber 侧把「该来源代际
+  过旧」变成用户可见的诚实提示，而不是静默空栏（未排期）。
 - **未挂载来源的工作区集合只有"回声 + 挂载 push"（2026-12 登记，design 05 §2.2.1）**：
   新建工作区由用户自己那次 create 的**回声**立即呈现；但**别处**创建/改名/删除的
   工作区与工作区**顺序**仍要等该来源被挂载（用户点开）才收敛。同类中的两处更具体的
