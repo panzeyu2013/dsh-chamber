@@ -422,8 +422,9 @@ fresh-preflight -> git-removing -> git-removed
 工作树删除**不停、不取消、不隐式归档、也不删除任何会话**（「先归档（含子会话）」
 是删除对话框里**显式、默认关闭**的独立勾选项，§5.4）；**运行中的会话仍然阻塞
 删除，除非它已归档（或其经 subagent-origin 边链到的祖先已归档）**——归档即
-「已了结」，其运行不再挡住工作树删除，而它的停止与内容清理只属于归档管理器（design
-24 §5）。
+「已了结」，其运行不再挡住工作树删除，而它的停止与内容清理只属于归档侧（design
+24 §5：本 saga 的 pre-remove 归档**不**停止，仍由归档管理器的删除前停止兜底；
+chamber 侧边栏的归档动词自 2026-09 起**就地**终止该会话与 subagent 闭包）。
 
 - **判据（宿主侧，`assertNoRunningSessions` / `assertNoRunningAtPath` 共用；
   同一条判据作用于所有 mutation 腿——首次删除、rollbackCreate 的 path 腿
