@@ -52,7 +52,7 @@
 - **S3 收窄为"复制路径"**（唯一保留的非启动出口）：在侧栏既有的复制模式上暴露工作区/会话路径
   —— 会话行数据已带 `cwd`（`sidebar/src/shared/instance-api.ts` 的 `SessionRow.cwd?`），
   侧栏既有的 `HoverCard` 已支持 `copyText`（今天只复制会话标题，
-  `ServerSection.tsx:2046`；该行的 `HoverCard` 本体 `:2027`），因此**零新 IPC、零新依赖、
+  `ServerSection.tsx:2073`；该行的 `HoverCard` 本体 `:2027`），因此**零新 IPC、零新依赖、
   纯渲染层**；
   "复制 `ssh user@host` / 复制 VS Code 深链"**不做**（形态见 §5 附录 A，若日后需要照此实施）；
 - **S4 多入口：不做**（2026-09-11 裁决，理由登记在 STATUS）：header 按钮与目标会话同排相邻，

@@ -16,8 +16,8 @@
  * be updated together — that pairing is pinned by
  * `test/connections-section-mirror.test.ts` (the mirror had no gate before).
  * Structural note: the real component keeps
- * pluginDiagnostics/onRecheckDiagnostic/assembly* in its extra-props block (not
- * the injected business face); the mirror lumps them into
+ * pluginDiagnostics/bootGaps/onRecheckDiagnostic/assembly* in its extra-props
+ * block (not the injected business face); the mirror lumps them into
  * ConnectionsSectionInjected for call-site convenience — harmless because the
  * call site passes them positionally, but keep the member names in sync with
  * the real Props.
@@ -33,6 +33,14 @@ export interface ConnectionsSectionInjected {
   t: (key: SettingsConnectionsKey) => string
   /** Renderer-published per-instance plugin diagnostics (local card). */
   pluginDiagnostics?: Readonly<Record<string, { state: string; message?: string } | undefined>>
+  /** Renderer-published per-instance settled-boot gaps, keyed like the
+   *  diagnostics above (2026-12, design 05 §4 「降级呈现」). */
+  bootGaps?: Readonly<Record<string, {
+    kind: string
+    services?: readonly string[]
+    injectedBy?: readonly string[]
+    failedIds?: readonly string[]
+  } | undefined>>
   /** Host-provided CHANNEL-class diagnostic self-heal recheck (design 09
    *  §3.5): the section's plugin dialogs ask the host when their banner is a
    *  channel fact; the host owns the shared store write-back. */

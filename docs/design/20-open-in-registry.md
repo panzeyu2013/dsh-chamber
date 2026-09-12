@@ -33,9 +33,9 @@
   经 trusted IPC 落地；远程路径**绝不**进入本地文件系统面；
 - **N-ctx 正确性**：每个 `AppWebEntry` 的私有 cordis Context 提供
   `chamberInstanceId` / `chamberBasePath` / `chamberTransport` / `chamberSourceFingerprint`
-  （声明 `chamber-entry.ts:137-152`，读取与校验 `chamber-entry.ts:590-593`，安装
-  `shell.ts:312-315`），以及**页级机器目录** `chamberMachineCatalog`（同一个 reader 对象
-  注入每个 entry，`shell.ts:320`，§4.2）——入口只读自己 ctx 上的事实，不读任何页面级可变
+  （声明 `chamber-entry.ts:138-149`，读取与校验 `chamber-entry.ts:607-610`，安装
+  `shell.ts:328-331`），以及**页级机器目录** `chamberMachineCatalog`（同一个 reader 对象
+  注入每个 entry，`shell.ts:336`，§4.2）——入口只读自己 ctx 上的事实，不读任何页面级可变
   全局值；（后两个页级事实 `chamberBootGeneration` / `chamberReportBootDegraded` 沿用
   "消费方宽松 cast"的既有惯例，故未进那份声明。）
 - **官方超集**：官方那一份能做的我们都能做，且**不依赖**上游运行时行为（§7）。

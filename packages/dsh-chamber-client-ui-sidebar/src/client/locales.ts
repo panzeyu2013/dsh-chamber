@@ -98,6 +98,13 @@ export const zh = {
   'source.managedDown': '托管 dsh 不可用（{state}）：请在 设置 → 连接 中启动该实例后重试。',
   'source.baselinePending': '会话基线尚未就绪：当前为降级列表（已归档会话可能显示为普通行）。',
   'source.managedStarting': '托管 dsh 正在启动（{state}）：就绪后自动恢复。',
+  // 2026-12（05 §4「降级呈现」第二批）：该来源的壳 boot 成功但已知缺口——事实是
+  // 结构化的（kind + 服务/插件 id），文案由本包自己出，不接收框架拼好的句子。
+  // 与上面三条共用同一个 sourceNote live region（一个来源只应有一个），按优先级取一条。
+  'source.bootGap.generic': '该服务器前端能力受限：部分界面可能缺席。',
+  'source.bootGap.graphUnavailable': '该服务器前端能力受限：本次挂载没有加载它的前端插件（会话正文等界面可能缺席）。',
+  'source.bootGap.requiredServicesMissing': '该服务器前端能力受限：没有提供本次页面所需的前端服务（{services}）。',
+  'source.bootGap.deferredRegistrationFailed': '该服务器前端能力受限：{n} 个前端插件家族没有注册成功。',
   'search.sessions.aria': '搜索会话',
   'search.placeholder': '搜索会话…',
   'search.clear': '清除搜索',
@@ -226,6 +233,10 @@ export const en = {
   'source.managedDown': 'Managed dsh unavailable ({state}): start this instance in Settings → Connections, then retry.',
   'source.baselinePending': 'Session baseline not ready: this is a degraded list (archived sessions may appear as ordinary rows).',
   'source.managedStarting': 'Managed dsh is starting ({state}): it recovers automatically once ready.',
+  'source.bootGap.generic': 'This server’s interface is limited: some surfaces may be missing.',
+  'source.bootGap.graphUnavailable': 'This server’s interface is limited: this mount loaded none of its frontend plugins (surfaces such as the conversation body may be missing).',
+  'source.bootGap.requiredServicesMissing': 'This server’s interface is limited: it did not provide the frontend service(s) this page needs ({services}).',
+  'source.bootGap.deferredRegistrationFailed': 'This server’s interface is limited: {n} frontend plugin family/families did not register.',
   'search.sessions.aria': 'Search sessions',
   'search.placeholder': 'Search sessions…',
   'search.clear': 'Clear search',

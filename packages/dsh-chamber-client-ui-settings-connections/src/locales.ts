@@ -191,6 +191,15 @@ export const zh = {
   pluginDiagnosticBundleFailed: 'bundle 加载失败',
   pluginDiagnosticRestartRequired: '需要重启',
   pluginDiagnosticInstanceVersionConflict: '实例间插件版本不同',
+  // 2026-12（05 §4「降级呈现」第二批）：boot 成功但已知缺口（结构化事实来自
+  // chamberBridge 投影的 bootGap）。与上面的「客户端插件状态」是两条不同的事实
+  // ——图通道 ok 不代表服务都在，所以缺口在场时不渲染 ok 那一行。
+  bootGapLabel: '前端能力受限',
+  bootGapGeneric: '部分界面可能缺席',
+  bootGapGraphUnavailable: '本次挂载没有加载该实例的前端插件（会话正文等界面可能缺席）',
+  bootGapRequiredServicesMissing: '没有提供本页所需的前端服务（{services}）；等待它们的界面不会注册',
+  bootGapDeferredRegistrationFailed: '{n} 个前端插件家族没有注册成功（它们的界面与插槽本次缺失）',
+  bootGapHint: '常见原因：该实例的 dsh 运行时与本次页面所需的前端插件不匹配。在「本地实例」或该连接的设置中打开 dsh 运行时 分节，升级/对齐到一致版本；随后重新挂载该来源——就绪来源通常会自动重挂一次，也可以在该来源页面上用「重试」。重开只是重新挂载，缺口仍在时此提示会再次出现。',
   pluginsOpen: '管理插件',
   pluginsTitle: '插件',
   pluginsLoading: '正在读取插件清单…',
@@ -550,6 +559,12 @@ export const en: Record<SettingsConnectionsKey, string> = {
   pluginDiagnosticBundleFailed: 'Bundle load failed',
   pluginDiagnosticRestartRequired: 'Restart required',
   pluginDiagnosticInstanceVersionConflict: 'Instance plugin versions differ',
+  bootGapLabel: 'Interface limited',
+  bootGapGeneric: 'Some surfaces may be missing',
+  bootGapGraphUnavailable: 'This mount loaded none of the instance’s frontend plugins (surfaces such as the conversation body may be missing)',
+  bootGapRequiredServicesMissing: 'It did not provide the frontend service(s) this page needs ({services}); the surfaces waiting on them never register',
+  bootGapDeferredRegistrationFailed: '{n} frontend plugin family/families did not register (their surfaces and slots are missing here)',
+  bootGapHint: 'Common cause: this instance’s dsh runtime does not match the frontend plugins this page needs. Open the dsh runtime section in the settings of the local instance or of that connection and upgrade/align to a matching version; then re-mount that source — a ready source usually re-mounts once by itself, and the source page offers “Retry”. Re-mounting alone does not fix it, so the notice returns if the gap is still there.',
   pluginsOpen: 'Manage plugins',
   pluginsTitle: 'Plugins',
   pluginsLoading: 'Reading plugin manifests…',

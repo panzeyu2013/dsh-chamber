@@ -121,7 +121,16 @@ export default function InstanceView({
     // 不得覆盖新尝试已经落地的健康状态。
     const bootToken = bootTokenRef.current + 1
     bootTokenRef.current = bootToken
-    void bootInstanceShell(instanceId, basePath, el, setShell, sourceFingerprint, transport, { waitForServing }).then((next) => {
+    void bootInstanceShell(instanceId, basePath, el, setShell, sourceFingerprint, transport, {
+      waitForServing,
+      // 结算后补发的事实（5s 探针判词、延迟簇失败）必须到达 **App**（2026-12
+      // BLOCKER 修复）：shell 的 onState 形参是本视图的 React setter，只发它
+      // 就只重渲染本视图（settled 已为真，DOM 无变化），App 的 shellStates 镜像
+      // ——横幅、侧栏/连接页投射、每 ready 世代一次的自愈全都读它——永远收不到。
+      // 因此单列一条 App 向的汇道，且只由这条**过栅栏的结算后路径**调用：boot
+      // 自身的结算前发布（before、被取代/阻塞的失败）仍不进 App 镜像。
+      onRepublish: onStateChange === undefined ? undefined : (id, next) => onStateChange(id, next),
+    }).then((next) => {
       // 卸载后到达的 settle 一律丢弃（视图已回收，App 已清理该视图状态；
       // 陈旧上报会污染重加视图的失败覆盖层判定）；被更新的尝试取代的迟到
       // settle 同样丢弃。

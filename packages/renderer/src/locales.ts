@@ -61,6 +61,32 @@ export const zh = {
   'boot.loading': '正在加载 {label}…',
   /** Shell-level veil hint under the title. */
   'boot.loadingHint': '首次打开需加载完整界面',
+  /** Settled-boot gap notice title (design 05 §4 「降级呈现」): the source's own
+   *  interface is reachable, but part of its frontend never registered. */
+  'bootGap.title': '该来源的前端能力受限',
+  /** Gap body: the source never served its client plugin graph inside the boot
+   *  window, so this mount loaded none of its frontend plugins. */
+  'bootGap.body.graphUnavailable': '该来源在启动窗口内没有提供客户端插件图，本次挂载没有加载它的前端插件；依赖这些插件的界面（例如会话正文）不会出现。',
+  /** Gap body: the graph arrived, but a service the page's own frontend injects
+   *  was never provided, so the fibers waiting on it never activated. */
+  'bootGap.body.requiredServicesMissing': '该来源没有提供本次页面所需的前端服务，等待这些服务的界面（例如会话正文）不会注册。',
+  /** Gap body: a deferred frontend plugin family never registered this boot. */
+  'bootGap.body.deferredRegistrationFailed': '本次挂载有前端插件家族没有注册成功，它们提供的界面与插槽在本次挂载里缺失。',
+  /** Label of the missing-service list in the gap notice (structured facts follow). */
+  'bootGap.services': '缺少的服务',
+  /** Label of the injector list in the gap notice. */
+  'bootGap.injectedBy': '等待它们的插件',
+  /** Label of the unregistered-plugin list in the gap notice. */
+  'bootGap.failedPlugins': '未注册的插件',
+  /** Gap next-step line while the self-heal will still re-mount this mount. */
+  'bootGap.action.autoRetry': '该来源就绪后会自动重挂一次；若重挂后仍然如此，需要在该来源上处理。',
+  /** Gap next-step line otherwise. Deliberately says 常见原因 — the app cannot
+   *  prove the cause — and deliberately asserts no COMPLETED re-mount: this line
+   *  is also what renders in the one frame between arming the self-heal and the
+   *  re-mount resetting the state, where "已重挂过" would not be true yet. */
+  'bootGap.action.manual': '若仍然如此，需要在该来源上处理。常见原因：该来源的 dsh 运行时与本次页面所需的前端插件不匹配（版本较旧或缺少插件）——在该来源上升级或对齐 dsh 运行时。',
+  /** Label of the raw producer diagnostic line shown under the gap copy. */
+  'bootGap.detail': '诊断',
   /** Static first-frame skeleton hint (index.html; re-applied by main.tsx). */
   'boot.starting': '正在启动…',
   /** App-frame crash screen (ErrorBoundary) title. */
@@ -103,6 +129,16 @@ export const en: Record<FrameKey, string> = {
   'action.switchServer': 'Switch to another server:',
   'boot.loading': 'Loading {label}…',
   'boot.loadingHint': 'The full interface loads on first open',
+  'bootGap.title': 'This source’s interface is limited',
+  'bootGap.body.graphUnavailable': 'This source did not serve its client plugin graph inside the boot window, so this mount loaded none of its frontend plugins; the surfaces that depend on them (the conversation body, for example) will not appear.',
+  'bootGap.body.requiredServicesMissing': 'This source did not provide a frontend service this page needs, so the surfaces waiting on it (the conversation body, for example) never register.',
+  'bootGap.body.deferredRegistrationFailed': 'A frontend plugin family failed to register in this mount, so the surfaces and slots it provides are missing here.',
+  'bootGap.services': 'Missing services',
+  'bootGap.injectedBy': 'Plugins waiting on them',
+  'bootGap.failedPlugins': 'Plugins that did not register',
+  'bootGap.action.autoRetry': 'It will be re-mounted once automatically when the source becomes ready; if the gap survives that, it has to be handled on that source.',
+  'bootGap.action.manual': 'If the gap persists, it has to be handled on that source. Common cause: that source’s dsh runtime does not match the frontend plugins this page needs (older version, or plugins missing) — upgrade or align the dsh runtime there.',
+  'bootGap.detail': 'Diagnostic',
   'boot.starting': 'Starting…',
   'error.ui.title': 'Interface error',
   'error.unknown': 'Unknown error',

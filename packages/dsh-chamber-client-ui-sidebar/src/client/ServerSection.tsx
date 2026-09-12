@@ -25,6 +25,7 @@ import {
   IconSearchOutline16, IconTrashOutline16, IconWarningOutline16, Menu, StateDot, Tooltip,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { SidebarKey } from './locales.ts'
+import { sourceBootGapNote } from './source-boot-gap.ts'
 import { IconMonitorOutline16 } from './icons.tsx'
 import { chamberBridge, type ChamberServerAggregate, type ChamberServerWorkspace } from '../shared/aggregate-store.ts'
 import {
@@ -151,8 +152,7 @@ export function sourceHeaderTitle(
 /** Whether a source header is an activation affordance (not self, not
  *  managed-down). Exported beside {@link sourceHeaderTitle} for the rail's
  *  named source buttons (2026-09-11 upstream-alignment T7). */
-export function sourceHeaderActivatable(server: ChamberServerAggregate, chamberInstanceId: string | undefined): boolean {
-  // 终态停机与瞬态 starting/restarting 都不可激活：两者的壳 boot 必然 503
+export function sourceHeaderActivatable(server: ChamberServerAggregate, chamberInstanceId: string | undefined): boolean {  // 终态停机与瞬态 starting/restarting 都不可激活：两者的壳 boot 必然 503
   // （App 侧同样按 managedRuntimeUnusable 拒绝预热/收割），头部不应承诺切换。
   const managedUnusable = server.managedRuntimeDown === true
     || (server.kind === 'gateway'
@@ -433,25 +433,46 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
   const sortModeKey: SidebarKey = viewPrefs.orderBy?.[server.id] === 'updated' ? 'orderBy.updated' : 'orderBy.manual'
   const sortLabel = `${t('action.sort')} · ${t(sortModeKey)}`
   // 来源级"数据不可信"说明：单一定居 live region（见下方 sourceNote 的渲染与
-  // CSS :empty）。两条说明互斥（managedDown ⇒ connected=false），所以一个区域
-  // 足够；内容变化时既有的 live region 才可被 AT 播报（"插入即带内容"不会播报，
+  // CSS :empty）。一个来源只应有一个 live region（2026-12 复查 NIT），所以降级
+  // 说明也**并入同一条**，按优先级取一句：托管不可用 > 前端能力受限（boot 缺口）
+  // > 托管瞬态 > 基线未就绪。前两条不互斥（来源可能既停机、壳里又留着上一次挂载
+  // 的缺口事实），故顺序即优先级；缺口事实来自本来源当前挂载的壳，仅在挂载/预热过
+  // 的来源上存在（STATUS 已登记的覆盖边界）。
+  // 内容变化时既有的 live region 才可被 AT 播报（"插入即带内容"不会播报，
   // 2026-12 复查 MINOR）。
   // 托管瞬态：必须**按 kind 限定**——本地 /health 的词表同样含 starting/
   // restarting（2026-12 复查 MAJOR），只判 phase 会给本地源挂上网关专属文案。
   const managedTransient = server.kind === 'gateway'
     && (server.phase === 'starting' || server.phase === 'restarting')
+  const bootGapNote = sourceBootGapNote(server, t)
+  // The gap branch is selected by CONSTRUCTION (a boolean), never by comparing
+  // the rendered strings: the note text is dictionary copy and comparing it
+  // would silently mis-tone the line the day two branches share a sentence.
+  const noteIsBootGap = server.managedRuntimeDown !== true && bootGapNote !== ''
   const sourceNote = server.managedRuntimeDown === true
     ? t('source.managedDown', { state: t(sourceStatusLabelKey(server)) })
-    : managedTransient
-      // 托管 dsh 正在启动：此刻 connected=false 会隐藏整棵会话子树，必须说明，
-      // 否则重启网关时侧栏整组凭空消失（2026-12 复查 MINOR）。
-      ? t('source.managedStarting', { state: t(sourceStatusLabelKey(server)) })
-      : server.connected && server.aggregateReady === true && server.archiveSetKnown !== true
-        ? t('source.baselinePending')
-        : ''
-  // 说明行是否携带了状态词（决定状态点要不要让出 live region 角色）。任何说明行
-  // 在场时点都让位：一个来源只应有一个 live region（2026-12 复查 NIT）。
-  const noteCarriesPhase = sourceNote !== ''
+    : noteIsBootGap
+      ? bootGapNote
+      : managedTransient
+        // 托管 dsh 正在启动：此刻 connected=false 会隐藏整棵会话子树，必须说明，
+        // 否则重启网关时侧栏整组凭空消失（2026-12 复查 MINOR）。
+        ? t('source.managedStarting', { state: t(sourceStatusLabelKey(server)) })
+        : server.connected && server.aggregateReady === true && server.archiveSetKnown !== true
+          ? t('source.baselinePending')
+          : ''
+  // 两个门必须分开（下方状态点注释即其判据，2026-12 复查 MINOR 的落地）：
+  // ①**live region 角色**：任何说明行在场，点就让位（一个来源只应有一个 live
+  //   region——见渲染处的 `role={sourceNote === '' ? 'status' : undefined}`）；
+  // ②**状态词的承载**：只有把 `{state}` 写进句子的说明行才接管 aria-label——
+  //   目前只有 managedDown 与 managedStarting 携带 phase；baselinePending 与
+  //   降级说明（boot 缺口）都**不含** phase，点必须继续用 aria-label 承担它。
+  // 2026-12：降级说明接入后，原来的 `sourceNote !== ''` 会让有缺口的来源在 a11y 树里
+  // 丢掉状态词（点既无 role 也无 label），故按判据改为按"是否携带 phase"取值。
+  // …but "carries the state word" depends on WHICH note won the cascade above: a
+  // gateway source that is transient (starting/restarting) AND degraded renders
+  // the GAP sentence, so the dot must keep its aria-label there — the transient
+  // branch never got to speak (2026-12 review, folded in the gap branch).
+  const noteCarriesPhase = server.managedRuntimeDown === true || (managedTransient && !noteIsBootGap)
   // 每个已挂载壳各有一份侧栏 DOM（同一来源会出现多份）：id 必须按壳限定，
   // 否则 aria-describedby 可能解析到另一份（隐藏壳）的同名节点。
   const sourceNoteId = `chamber-source-note-${chamberInstanceId ?? 'unknown'}-${server.id}`
@@ -1035,7 +1056,17 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                     状态就地说明——避免托管 dsh 停机时只剩"空面板 + 红点"，
                     以及把 unary 兜底的降级列表当真实列表读。状态词复用既有
                     `status.*` 文案，不引入新词。 */}
-                <div id={sourceNoteId} className={cc.sourceNote} role="status" aria-live="polite">
+                {/* 缺口说明是这条 live region 的一个分支；但**活动来源**（本壳就是它的
+                    侧栏）的同一事实已由框架面的 `.boot-gap` 横幅以 role="status" 播报，
+                    再播一次就是同一件事说两遍。故仅对"自己这一行"的缺口说明把区域降为
+                    aria-live="off"（文本仍可被浏览/读屏逐行读到，视觉警示不变）；
+                    其它行的缺口仍要播报——那些来源没有横幅，侧栏是唯一用户面。 */}
+                <div
+                  id={sourceNoteId}
+                  className={clsx(cc.sourceNote, noteIsBootGap && cc.sourceNoteBootGap)}
+                  role="status"
+                  aria-live={noteIsBootGap && server.id === chamberInstanceId ? 'off' : 'polite'}
+                >
                   {sourceNote}
                 </div>
                 {/* chamber (打开失败可见性): with the source folded no session

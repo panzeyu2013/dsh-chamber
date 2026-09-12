@@ -107,7 +107,7 @@ import {
   type ChamberRowDescriptor,
   type ThirdPartyLiveState,
 } from './plugin-inventory-text.ts'
-import { bannerProjection, pluginDiagnosticTone, type PluginDiagnostic } from './plugin-diagnostic.ts'
+import { bannerProjection, bootGapText, pluginDiagnosticTone, type PluginDiagnostic, type ServerBootGap } from './plugin-diagnostic.ts'
 import css from './ConnectionsSection.module.css'
 
 /** The §7.2 add-spec whitelist: `name`, `@scope/name`, or `name@<safe version>`. */
@@ -227,10 +227,13 @@ export type PluginDialogTarget =
  *   restart-exhausted} — the recovery undo surface is gated on it.
  * @param props.onClose - close (gated while nested confirms are open).
  */
-export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runtimeDown, onClose }: {
+export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnostic, runtimeDown, onClose }: {
   t: (key: SettingsConnectionsKey) => string
   target: PluginDialogTarget
   diagnostic?: PluginDiagnostic | undefined
+  /** The instance's settled-boot gap (2026-12, design 05 §4), from the bridge
+   *  projection. A DIFFERENT fact from `diagnostic` — see PluginDiagnosticLine. */
+  bootGap?: ServerBootGap | undefined
   onRecheckDiagnostic?: () => void
   runtimeDown?: boolean
   onClose: () => void
@@ -2064,6 +2067,19 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
               <strong>{diagnosticBanner.title}</strong>
               {diagnosticBanner.detail !== null ? <span>{t('partialSep')}{diagnosticBanner.detail}</span> : null}
             </p>
+          )
+          : null}
+        {bootGap !== undefined
+          ? (
+            <>
+              <p className={clsx(css.pluginDiagnostic, css.pluginDiagnosticDetail, css.pluginDiagnosticWarn)} role="status">
+                <strong>{t('bootGapLabel')}：{bootGapText(bootGap, t)}</strong>
+                {/* Services already ride the sentence; only the failed-id list is
+                    appended (the sentence carries the count, the span the ids). */}
+                {(bootGap.failedIds ?? []).length > 0 ? <span>{t('partialSep')}{(bootGap.failedIds ?? []).join(', ')}</span> : null}
+              </p>
+              <p className={css.hint}>{t('bootGapHint')}</p>
+            </>
           )
           : null}
         {diagnostic !== undefined && diagnostic.state === 'instance-version-conflict' && (isLocal || isGateway)

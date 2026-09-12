@@ -1371,6 +1371,24 @@ test('serversProjectionSignature ignores the per-call updatedAt stamp but tracks
     serversProjectionSignature([server('ssh-r1', { rawId: 'other' })]),
     'raw IPC identity is part of the bridge contract',
   )
+  // 降级事实同样进发布门（2026-12，05 §4「降级呈现」第二批）：来源行的降级说明与
+  // 连接页口径都从这条投影读，缺口单独翻转必须移动签名字节，否则提示冻结在上
+  // 一代（例如自愈成功、缺口消失后来源行仍挂着旧警示）。
+  assert.notEqual(
+    serversProjectionSignature([server('ssh-r1')]),
+    serversProjectionSignature([server('ssh-r1', { bootGap: { kind: 'graph-unavailable' } })]),
+    'a gap-only flip must republish (the source row renders it)',
+  )
+  assert.notEqual(
+    serversProjectionSignature([server('ssh-r1', { bootGap: { kind: 'graph-unavailable' } })]),
+    serversProjectionSignature([server('ssh-r1', { bootGap: { kind: 'required-services-missing', services: ['sidebarRight'] } })]),
+    'a different kind (or a different payload) is a different gap',
+  )
+  assert.equal(
+    serversProjectionSignature([server('ssh-r1', { bootGap: { kind: 'graph-unavailable' } })]),
+    serversProjectionSignature([server('ssh-r1', { bootGap: { kind: 'graph-unavailable', services: [], injectedBy: [], failedIds: [] } })]),
+    'absent and empty structured fields are the same fact (the projection normalizes them)',
+  )
   assert.notEqual(
     serversProjectionSignature([server('ssh-r1')]),
     serversProjectionSignature([server('ssh-r1', { dshVersion: '1.2.3' })]),

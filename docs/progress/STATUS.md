@@ -28,6 +28,13 @@
     `starting`、端口 0），实际恢复 = 优雅重启应用（reaper 才 prove quiescence）。
     优雅退出本身正常（日志 `will-quit 清理完成`），仅硬杀后出现。（本条说的是**实例本身**
     起不来；视图侧「半死挂载」已由取图等就绪 + 降级自愈覆盖，见 design 09 §3.2。）
+  - **降级提示的目检/实机腿（05 §4「降级呈现」，2026-12）**：结构性缺口（宿主图缺
+    `ui-sidebar-right` 一类）下三处座位是否一致——活动视图横幅 ~5s 出现、随自愈重挂
+    消失并以"若仍然如此…"文案回来；侧栏来源行并入既有单一 live region 后不重复播报、
+    警示色可读；连接页卡片不再同时出现「正常」与「能力受限」；提示非阻断（侧栏/会话头/
+    composer 可用）与 `role="status"` 的实际观感；以及与 body portal 的叠压关系。
+    目前只经单测 + 源码锁确认，**未在真机判**；无真实老代来源时只能判"未判"
+    （`docs/checklists/gui-acceptance-checklist.md` §3）。
 - **ssh/http dsh 目标无 cookie 注入（实例侧 401）**：五处同源绝对 URL 由构建期 vendor
   补丁集走本实例前缀（design 09 §3.6）；ssh/http dsh 目标的 cookie 注入属既有认证面，
   未覆盖。
@@ -252,7 +259,7 @@
 - **open-in 超集分批口径（2026-09-11 复核裁决，design 20 §7.2）**：官方两份原先都没有"无应用出口"
   与"第二入口"（上游客户端只有一处槽位注册、无剪贴板面，读取失败即不渲染按钮），因此这两项是
   新增能力而非缺失回填。裁决：**S3 收窄为「复制路径」**（侧栏既有 `HoverCard` 复制模式
-  ——会话行本体 `ServerSection.tsx:2027`，其 `copyText` 在 `:2046`（2026-09-11
+  ——会话行本体 `ServerSection.tsx:2054`，其 `copyText` 在 `:2073`（2026-09-11
   review-fix 复核引文）——+ 会话行已带
   `SessionRow.cwd`（`shared/instance-api.ts`）⇒ 零新 IPC、
   纯渲染层）；**复制 `ssh user@host` / VS Code 深链与 S4（侧栏入口、快捷键）不做** —— 依据：
@@ -327,16 +334,21 @@
   （`packages/renderer`）**自己渲染**的 chrome 文案早已进 typed 字典
   （`src/locales.ts`，T16），本轮把**由别的包渲染、但文字由框架拼好递出去**的三处也
   收进同一字典、按**文档语言**取值（`frameText` + `readDocumentLocale`）：①
-  `App.tsx:448` 的 `aggregate.error ?? frameText(locale, 'error.unknown')` 进
-  `ChamberServerAggregate.aggregateError`，由侧栏 `ServerSection.tsx:1230-1231` 的
-  `role="alert"` 错误分支渲染；②`App.tsx:2729`（来源已离开注册表）与
-  `App.tsx:2758`（包裹底层错误的 `open.failed.detail`）经
-  `chamberBridge.reportOpenSessionOutcome` 交回侧栏行内呈现；③`App.tsx:2793`
+  `App.tsx:455` 的 `aggregate.error ?? frameText(locale, 'error.unknown')` 进
+  `ChamberServerAggregate.aggregateError`，由侧栏 `ServerSection.tsx:1257-1262` 的
+  `role="alert"` 错误分支渲染；②`App.tsx:2754`（来源已离开注册表）与
+  `App.tsx:2783`（包裹底层错误的 `open.failed.detail`）经
+  `chamberBridge.reportOpenSessionOutcome` 交回侧栏行内呈现；③`App.tsx:2818`
   的通知重放拒绝文本。**仍开放的边界**：②的 `{detail}` 装的是**框架之下**产生的文本
   ——`shell.ts` 的打开失败诊断与 dsh 运行时自己的错误——那些站点没有 locale 席位，
-  所以英文文档下该从句仍是中文（`App.tsx:2749-2757` 的 BOUNDARY 注释即登记点）；
+  所以英文文档下该从句仍是中文（`App.tsx:2774-2782` 的 BOUNDARY 注释即登记点）；
   对齐做法仍是 **reason code 协议 + 渲染包侧映射**（产出方只发码/结构化事实，渲染包用
-  自己语言环境出文案），实施前该从句保持中文。
+  自己语言环境出文案），实施前该从句保持中文。**2026-12 增补（同条口径，同一处对齐
+  做法）**：降级事实的**侧栏来源行与连接页卡片只收到结构化事实**
+  （`bootGap.kind` + `services`/`injectedBy`/`failedIds`，不含产出方句子），各自用本包
+  字典出文案；**仍留在框架之下的只有活动视图横幅的诊断行**
+  （`.boot-gap-detail`，产出方在 `host-graph.ts` / `required-extra-rows.ts` 的中文原文），
+  框架只按字典出正文、**不翻译也不解析**它。
 
 ## 一致性债务与开放登记（低–中，未排期；均指回代码面注释/design 登记）
 
@@ -522,6 +534,35 @@
 
 ## 范围决策与必要取舍（不做 / 推迟 / 移出 / 偏差）
 
+- **降级事实的覆盖边界（2026-12，做完全部座位后仍成立的取舍）**：降级提示已覆盖
+  三个座位（活动视图横幅、侧栏来源行、连接页卡片与插件对话框；事实 =
+  `ChamberServerAggregate.bootGap`，见 design 05 §4「降级呈现」）。仍不覆盖：
+  ①**图通道硬失败**（404 `not-injected` / 网络错）：`host-graph.ts` 只在"启动窗口
+  耗尽"那条路径调 `onGraphUnavailable`，该形态**不进** `ShellState.degraded`
+  ⇒ 无横幅、无自愈，只有连接页的 `pluginDiagnostic` 呈现（有意如此：重挂取同一张
+  图，自愈对它无效；若要给它横幅，须先给该 kind 声明 `retryable: false`）；
+  ②**未激活/未预热来源**：无壳 ⇒ 无事实 ⇒ 无提示（侧栏只对已挂载/预热过的来源
+  显示降级行）；③**来源壳被回收**时 `clearPluginDiagnostic` 与 shellStates 同批
+  清除，缺口行随之消失，直到下次激活重挂后由 5s 探针重新报出；④**事实是单槽**：
+  `ShellState.degraded` 只持一条，**后报的覆盖先报的**——一次 boot 里延迟簇失败
+  （~0ms）与探针判词（5s）可以同时成立，用户面只显示后一条（两条都在 `console.error`）。
+  要同时显示须把事实改成列表，会外溢到投影字段、三处渲染与重试计划，暂不做；
+  该语义由 `shell.test.ts` 的 seam 用例钉住（同载荷重复=不重发、换 kind=替换）；
+  ⑤侧栏来源行只有说明**没有动作**：重挂入口在框架横幅（活动来源）与失败覆盖层，
+  bridge 没有"重挂某来源"的请求通道；新增它等于给用户面新开一条跨包通道
+  （跨包只允许既有事实通道），故不做。
+- **sidebar / layout 的 `bundle` 在 chamber 树内不可运行（2026-12 登记，偏差）**：
+  两个包的 `tsdown.config.ts` 是官方客户端包模板的拷贝，导入的 `clientBundle` 属于
+  **上游树**（`packages/client/tsdown.client.ts`，`packages/dsh-client-web/src/platform.ts:22`
+  与 `packages/renderer/src/chamber-entry.ts:110` 均按此名引用），本配置只在包位于
+  `packages/client/<name>/` 时可解析；`pnpm --filter @dsh-chamber/dsh-chamber-client-ui-sidebar
+  run bundle` 因缺该文件与 `tsdown` 依赖（全仓 package.json 与 `pnpm-lock.yaml` 均无）必然失败。
+  本仓**不构建也不消费**这两个包的 `lib/`：树内消费全部走 source
+  （`exports["./client"]`/`["./shared"]` → `src/**`；renderer 经 vite 别名、测试经
+  `scripts/dev/test-shell-loader.mjs`），C8 产物清单与 CI 均不含它们。要打通发布路径须先定
+  "谁构建、在哪构建"（上游共享配置 + tsdown 依赖 + 锁文件），故**不**在 chamber 树内补一个
+  本仓无法验证、且面向 public 包（sidebar `publishConfig.access=public`）的构建契约；
+  两个配置文件头已写明该契约，避免后来者把它当成本仓可直跑的构建。
 - **git 客户端与宿主的错误码重叠是「有意的显式例外」（design 08，2026-12 登记）**：
   `path-unavailable` / `workspace-path-unavailable` 同时是宿主可重试码与客户端确定性
   拒绝码——客户端把它们从宿主 `RETRYABLE_CODES`
@@ -839,6 +880,9 @@
     `RiskConfirmation`——即 vendor `Modal`，body-portalled 层，因此同样落进本条的
     「切换视图后仍盖住 B」形态；缓解是 `Modal.module.css` 的固定 `inset:0`
     遮罩+居中卡（不会跑出视口、不会只有半个屏幕变暗），但**不是**活动视图门控）；
+    **2026-12 补记**：降级提示（05 §4「降级呈现」的 `.boot-gap-layer`）是普通文档流内层
+    （`z-index: 900` < 失败覆盖层 1000），因此**同样会被 body portal 盖住**——它不新增
+    逃逸成员，只是又一个受本条影响的 chamber chrome 面（验收按"既有边界"判，不当新缺陷）；
     同族 `DropOverlay` 每壳一份
     （N 层遮罩，隐藏壳的禁用副本可能盖住活动壳的启用副本）；⑥主题样式表每壳各插
     6 个 `<style>`（同内容、随 fiber 移除，良性重复）。①②的修法同主题：按活动来源

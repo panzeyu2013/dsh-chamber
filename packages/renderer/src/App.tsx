@@ -114,6 +114,10 @@ import {
 } from './locales.ts'
 import { BOOT_TIMEOUT_MS } from './boot-budget.ts'
 import { planDegradedRetries } from './degraded-retry.ts'
+// Settled-boot gap → render decision (design 05 §4 「降级呈现」). The pure module
+// owns the copy key, the retry verdict and the "will the self-heal re-mount
+// this?" rule; the frame only maps its keys through `t`.
+import { bootGapNotice, toServerBootGap } from './boot-gap.ts'
 import { runViewTransition } from './view-transition.ts'
 import { captureSidebarScrollAnchor, restoreSidebarScroll } from './sidebar-scroll-sync.ts'
 import {
@@ -310,6 +314,10 @@ function deriveServers(
   completedBySource: Record<string, Record<string, boolean>>,
   activeViewId: string,
   pluginDiagnostics: Record<string, PluginGraphDiagnostic | undefined>,
+  // 2026-12（05 §4「降级呈现」第二批）：降级事实要过投影给侧栏来源行与连接页，
+  // 所以 shellStates 与 pluginDiagnostics 一样是 derive 的输入——只读
+  // `degraded`，失败态（error）不进这条投影。
+  shellStates: Record<string, ShellState | undefined>,
   managedRuntime: Record<string, string | null>,
   workspaceEcho: WorkspaceEchoLedger,
   openIntents: Readonly<Record<string, string>>,
@@ -447,6 +455,10 @@ function deriveServers(
       entry.aggregateError = aggregate.error ?? frameText(locale, 'error.unknown')
     }
     if (pluginDiagnostics[id] !== undefined) entry.pluginDiagnostic = pluginDiagnostics[id]
+    // Settled-boot gap（2026-12）：结构化事实过桥，渲染方（侧栏来源行 / 连接页）
+    // 各出各的文案；生产者的诊断句子不过界。
+    const bootGap = shellStates[id]?.degraded
+    if (bootGap !== undefined && bootGap !== null) entry.bootGap = toServerBootGap(bootGap)
     servers.push(entry)
   }
   push('local', 'local', LOCAL_INSTANCE_ID,
@@ -793,8 +805,8 @@ export default function App() {
   // chamberBridge 投影（05 §3）：health/remoteStatus/aggregates 任一变化后
   // 派生并发布；首帧（health 未就绪）即发布 connected=false 的分组。
   const servers = useMemo(
-    () => deriveServers(health, connections, remoteInstances, remoteStatus, aggregates, hostFacts, runtimeFacts, completedBySource, activeView, pluginDiagnostics, managedRuntime, workspaceEcho, openIntents, locale),
-    [health, connections, remoteInstances, remoteStatus, aggregates, hostFacts, runtimeFacts, completedBySource, activeView, pluginDiagnostics, managedRuntime, workspaceEcho, openIntents, locale],
+    () => deriveServers(health, connections, remoteInstances, remoteStatus, aggregates, hostFacts, runtimeFacts, completedBySource, activeView, pluginDiagnostics, shellStates, managedRuntime, workspaceEcho, openIntents, locale),
+    [health, connections, remoteInstances, remoteStatus, aggregates, hostFacts, runtimeFacts, completedBySource, activeView, pluginDiagnostics, shellStates, managedRuntime, workspaceEcho, openIntents, locale],
   )
   // chamberBridge publish 签名闸（2026-08 perf pass）：servers 在每次依赖变化
   // 时都会重建（含聚合快照上报/兜底、30s 注册表轮询、状态推送的恒新对象），但
@@ -820,9 +832,10 @@ export default function App() {
   useEffect(() => {
     const phases = Object.fromEntries(servers.map(server => [server.id, server.phase]))
     const plan = planDegradedRetries({
-      degraded: Object.entries(shellStates)
-        .filter(([, state]) => state.degraded !== null)
-        .map(([instanceId]) => instanceId),
+      // 只把「settled 且带缺口」的挂载送进计划，并**带上 kind**：可重试性由
+      // 事实自己的裁决表决定（boot-gap.ts），而不是由这里的调用方猜。
+      degraded: Object.entries(shellStates).flatMap(([instanceId, state]) =>
+        state.degraded === null ? [] : [{ instanceId, kind: state.degraded.kind }]),
       phaseOf: (instanceId) => phases[instanceId],
       retried: degradedRetriedRef.current,
     })
@@ -2134,6 +2147,19 @@ export default function App() {
       console.warn(`[renderer] ready-state reverify ${rawId} failed`)
     })
   }, [])
+
+  /**
+   * 重试一个视图（05 §4）：升格为唯一入口，失败覆盖层与降级提示共用同一套
+   * 三段式——重挂该视图 + error/degraded 隧道立即再试 + ready 但会话/远端已死
+   * 的来源立即探测一次。自己写一套会漏掉最后那条探测臂（重试会因隧道故障或
+   * 死会话原地失败）。令牌递增驱动 InstanceView 复位重 boot；来源非 ready 时
+   * 前两段是 no-op，语义仍正确。
+   */
+  const retryView = useCallback((viewId: string) => {
+    probeRemoteReady(viewId)
+    ensureRemoteConnected(viewId)
+    setRetryTokens(prev => ({ ...prev, [viewId]: (prev[viewId] ?? 0) + 1 }))
+  }, [ensureRemoteConnected, probeRemoteReady])
 
   /** 视图切换（设计 05 §4）：经 View Transition 包装（view-transition.ts）——
    * 旧视图静态快照保持到新视图渲染就绪，随后短 crossfade；reveal 重排期间
@@ -3554,6 +3580,23 @@ const HEALTH_ERROR_GRACE_MS = 10_000
   // boot's own loader sweep). Empty for failures that produced no loader entry
   // (module-system/manifest), which keeps today's report-only overlay.
   const activeShellFailedEntries = activeShellState?.failedEntries ?? NO_FAILED_ENTRIES
+  // 降级呈现（2026-12, 05 §4）：活动视图 boot 成功但已知缺口时，给出现场说明。
+  // 只有 error 为空的降级态才渲染——boot 失败覆盖层已独占失败态（结构互斥，
+  // 见 shell.ts：settled 的 degraded 蕴含 booted && error === null）。**但控制面
+  // 不可达覆盖层与壳状态无关**，上面的条件管不住它，故渲染处再加一道
+  // `!controlUnreachable`：否则横幅会被那张不透明覆盖层盖住却仍可聚焦/播报
+  // （2026-12 review MINOR）。
+  // 「会自动重挂吗」由 boot-gap.ts 的纯判定给出：来源 ready 且本 ready 世代
+  // 还没重挂过，才允许承诺自动重挂（self-heal 从不触碰非 ready 来源）。
+  const activeShellGap = activeShellState !== undefined && activeShellState.error === null
+    ? activeShellState.degraded
+    : null
+  const activeBootGap = activeShellGap === null
+    ? null
+    : bootGapNotice(activeShellGap, {
+        phase: servers.find(server => server.id === activeView)?.phase,
+        retried: degradedRetriedRef.current[activeView] === true,
+      })
 
   return (
     <ErrorBoundary>
@@ -3641,6 +3684,45 @@ const HEALTH_ERROR_GRACE_MS = 10_000
             无关的健康实体）。仅活动视图渲染；非活动视图失败在激活时呈现。
             控制面不可达（controlUnreachable）是更高层的全局条件，渲染在其
             之上（下方 JSX 顺序在后）。 */}
+        {activeBootGap !== null && !controlUnreachable && (
+          <div className="boot-gap-layer">
+            {/* 降级呈现（2026-12, 05 §4）：boot 成功但整个面缺席时的现场说明。
+                非模态、不阻断——侧栏/会话头/composer/切换来源全部照常，命中测试
+                只落在卡片本身（层 pointer-events:none）。role="status" 而非
+                "alert"：本通知不夺焦点也不打断读屏，且 kind 并不能判定"暂时"
+                还是"结构性"（图通道竞态与结构性缺行同 kind），用 alert 会把
+                几秒的竞态当成事故播报。文案全部来自框架字典；产出方的原文只作
+                诊断行（跨边界诊断文案规则，STATUS）。 */}
+            <div className="boot-gap" role="status">
+              <div className="boot-gap-title">{t('bootGap.title')}</div>
+              <div className="boot-gap-body">{t(activeBootGap.bodyKey)}</div>
+              {activeBootGap.services.length > 0 && (
+                <div className="boot-gap-facts">
+                  {t('bootGap.services')}: {activeBootGap.services.join(', ')}
+                  {activeBootGap.injectedBy.length > 0
+                    ? ` · ${t('bootGap.injectedBy')}: ${activeBootGap.injectedBy.join(', ')}`
+                    : ''}
+                </div>
+              )}
+              {activeBootGap.failedIds.length > 0 && (
+                <div className="boot-gap-facts">
+                  {t('bootGap.failedPlugins')}: {activeBootGap.failedIds.join(', ')}
+                </div>
+              )}
+              <div className="boot-gap-action">
+                {t(activeBootGap.autoRetryArmed ? 'bootGap.action.autoRetry' : 'bootGap.action.manual')}
+              </div>
+              {activeBootGap.detail !== '' && (
+                <div className="boot-gap-detail">{t('bootGap.detail')}: {activeBootGap.detail}</div>
+              )}
+              {activeBootGap.retryable && (
+                <Button variant="outline" onClick={() => retryView(activeView)}>
+                  {t('action.retry')}
+                </Button>
+              )}
+            </div>
+          </div>
+        )}
         {activeShellError !== null && (
           <div className="fatal fatal-overlay">
             {/* T15 (2026-09-11 upstream-alignment): the failure report carries
@@ -3668,10 +3750,8 @@ const HEALTH_ERROR_GRACE_MS = 10_000
                 // 重试 = 重新 boot 该视图；error/degraded 隧道同时立即再试，
                 // ready 但会话/远端已死的来源立即探测一次（与 selectView
                 // 同语义——boot 失败若由隧道故障或死会话引起，不重连/不探测
-                // 则重试只会再次失败）。
-                probeRemoteReady(activeView)
-                ensureRemoteConnected(activeView)
-                setRetryTokens(prev => ({ ...prev, [activeView]: (prev[activeView] ?? 0) + 1 }))
+                // 则重试只会再次失败）。与降级提示共用唯一入口 retryView。
+                retryView(activeView)
               }}
             >
               {t('action.retry')}

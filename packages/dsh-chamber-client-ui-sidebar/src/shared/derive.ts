@@ -23,7 +23,7 @@
  * No React, no DOM — plain-node unit-testable (see test/derive.test.ts).
  */
 import type { InstanceSnapshot, SearchRow, SessionRow, WorkspaceRow } from './instance-api.ts'
-import type { ChamberServerAggregate, ChamberServerWorkspace, InstanceRuntimeReport } from './aggregate-store.ts'
+import type { ChamberServerAggregate, ChamberServerWorkspace, InstanceRuntimeReport, ServerBootGap } from './aggregate-store.ts'
 import { assertSingletonModule } from './singleton.ts'
 
 // `blankGhostUntil` below is CROSS-BOUNDARY shared state — armed by the
@@ -908,6 +908,31 @@ export function runtimeReportSignature(
 }
 
 /**
+ * Field-GENERIC identity of a settled-boot gap for publish signatures: every
+ * payload field takes part (so a field added to the fact later cannot freeze a
+ * subscription), fields are order-normalized, array order is preserved (roster
+ * order is meaningful) — and "no payload" is one thing: an absent field, an
+ * empty array, `null` and an empty string all encode to nothing, so a producer
+ * that omits vs materializes an empty field cannot churn the gate. The
+ * producer's sentence is not part of the projection at all.
+ */
+function gapSignature(gap: ServerBootGap | undefined): string | null {
+  if (gap === undefined) return null
+  const encode = (value: unknown): string | null => {
+    if (value === undefined || value === null || value === '') return null
+    if (Array.isArray(value)) return value.length === 0 ? null : `[${value.map(item => String(item)).join('\u0000')}]`
+    return JSON.stringify(value)
+  }
+  return Object.entries(gap)
+    .flatMap(([key, value]) => {
+      const encoded = encode(value)
+      return encoded === null ? [] : [`${key}=${encoded}`]
+    })
+    .sort()
+    .join('\u0001')
+}
+
+/**
  * Render-relevant projection signature of the merged multi-source
  * projection. Covers everything the sidebar (and the settings bridge)
  * renders or uses as a lifecycle boundary — and nothing else:
@@ -929,6 +954,7 @@ export function runtimeReportSignature(
  * whose rendered content did not change must not re-render every shell's
  * sidebar; the sidebar subscription re-checks it as defense in depth.
  */
+
 export function serversProjectionSignature(servers: readonly ChamberServerAggregate[]): string {
   // JSON encoding (not delimiter concatenation): titles/labels are
   // user-controlled text (sidebar renameSession) and may contain any
@@ -974,6 +1000,12 @@ export function serversProjectionSignature(servers: readonly ChamberServerAggreg
         message: server.pluginDiagnostic.message ?? null,
         pluginId: server.pluginDiagnostic.pluginId ?? null,
       },
+      // bootGap is RENDERED (the source row's warning line) AND consumed by the
+      // settings-bridge's connections card, so a gap-only flip must move the
+      // bytes: non-sparse, like pluginDiagnostic above. Field-GENERIC encoding —
+      // see gapSignature (a hand-written field list here would let a payload
+      // field added later freeze the sidebar silently).
+      bootGap: gapSignature(server.bootGap),
       runtime: runtime === '' ? null : runtime,
       workspaces: server.workspaces.map(w => ({
         id: w.id,

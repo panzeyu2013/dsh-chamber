@@ -45,7 +45,11 @@ function allRules(flat: string): { selector: string; body: string }[] {
 /** A rule selector that qualifies `target` (compound/descendant) — not a pseudo-element. */
 function mentions(selector: string, target: string): boolean {
   const escaped = target.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  return new RegExp(`${escaped}(?![\\w-])(?!::)`).test(selector)
+  // BOTH sides of the match are fenced, so `target` has to be a type selector:
+  // with a trailing-only guard, an unrelated chamber class name matches — the
+  // boot-gap banner's `.boot-gap-body` (and any class ending in `body`, e.g.
+  // `.somebody`) reads as "this rule qualifies the body element".
+  return new RegExp(`(?<![\\w-])${escaped}(?![\\w-])(?!::)`).test(selector)
 }
 
 /**
