@@ -1,7 +1,7 @@
 {
   "name": "@dsh-chamber/dsh-chamber-client-ui-open-in",
   "description": "Chamber-bundled open-in client plugin (designs 16/20 + Batch 3 unification): one header entry over the per-source view-model — the page-level machine catalog (installed apps and their real icons, read once from the local instance) plus the source's launch carrier (the machine host domain, or the desktop main-process VS Code provider for a remote SSH target)",
-  "version": "0.3.0-beta.1",
+  "version": "0.3.0-beta.2",
   "private": true,
   "type": "module",
   "main": "lib/index.js",
