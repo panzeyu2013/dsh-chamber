@@ -28,7 +28,7 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node test/breakpoints.test.ts && node test/nav-toggle.test.ts && node test/drawer-taps.test.ts && node test/markup.test.ts && node test/settings-sheet.test.ts && node test/composer.test.ts"
+    "test": "node test/css-source.test.ts && node test/breakpoints.test.ts && node test/nav-toggle.test.ts && node test/drawer-taps.test.ts && node test/markup.test.ts && node test/settings-sheet.test.ts && node test/composer.test.ts"
   },
   "license": "MIT",
   "devDependencies": {

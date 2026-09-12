@@ -171,28 +171,90 @@
   id、异步内容高度不足会钳到顶）、宽屏触控设备（iPad 横屏 1024px+）的键盘
   补偿（行为层与 CSS 同在 1023px 触屏档，扩展需设计决策）、原生 `title`
   长按气泡不抑制（刻意手势，且部分 title 是截断行的唯一全文入口）。
-  **两处几何残留（2026-12 审查登记，需真机判定）**：① **769–1023px 触屏档第三轨被
-  压 0**——触屏档 `@media (max-width: 1023px) and (pointer: coarse)` 把 grid 钉成
-  `0 minmax(0,1fr) 0` 且 details 落第三轨
-  （`packages/dsh-chamber-client-ui-mobile/src/client/styles.ts:134-151`），但上游的
-  全屏替身只在 `<768px` 成立
-  （`vendor/harness-checkout/packages/client/ui-sidebar-right/src/client/shell/SidebarRight.tsx:364`
-  的 `autoFullscreen = viewportWidth < 768`、`:371` 的 `track = shown && !autoFullscreen`）
-  ⇒ 该档内展开的右栏既占不到全屏也不占轨道宽度；插件头注只声明了 `<768px` 那一半。② **`<768px` 全屏右栏（z-40）
-  盖住 `shell.overlay`（z-20）内的抽屉开关与抽屉**——已按「官方全屏面拥有屏幕、抽屉让步」
-  登记为有意（2026-09-11 review-fix 校正引文：`styles.ts` 的 STACKING SCOPE 注记
-  `:73-81`，其中 `:80-81` 即
-  "a fullscreen official surface owns the screen and the drawer yields"），但真机上是否读作损坏未判。
+  **2026-09-13 复审后的开放项（代码已按此调整，判据待实机）**：① **触屏档右栏
+  呈现与抽屉让位**——该档现在自己给官方面板全屏呈现
+  （`packages/dsh-chamber-client-ui-mobile/src/client/styles.ts:175-230`，锚点是面板自己的
+  `data-sidebar-right-panel`：面板不在 details 列的直接子层——slot 出口是
+  `display:contents`，落在出口上的定位规则是静默 no-op；规则刻意**不**用
+  frame 的「已展开」标志门控，否则收起动画中途会掉回常规宽度），并在面板展开期间让
+  抽屉/开关/遮罩隐去（同文件 `:360-392`，`visibility: hidden` 同时移出 Tab 序）。
+  **让位需要两条臂**：`data-rightbar-collapsed` 是上游的**轨道**标志
+  （`cols.rightbar === 0`，而 `track = shown && !autoFullscreen`），手机档已展开的
+  面板同样上报 track=false ⇒ 只用轨道臂会让手机完全不让位，第二条臂改用
+  `[data-rightbar-fullscreen]`（`openRightbar`/`closeRightbar` 成对读写）。
+  同一条呈现规则已带 iOS 安全区（`env(safe-area-inset-*)`——面板满幅而内容内缩）
+  与 `box-sizing: border-box`（面板自身无 border-box、全树无全局 reset，
+  content-box 下 `inset:0 + width:100%` 会连 inset 一起撑宽、刘海侧控件被切出屏）；
+  768–1023 档内面板自带的**模式控件被隐藏**（该档呈现已钉死为全屏，push↔fullscreen
+  翻转成为 no-op；<768 保留，因为上游把它当「收起」用）；面板子树带
+  `overscroll-behavior: contain`。待判：769–1023 档的观感、面板自带退出控件
+  （现 44px）是否够用、关闭面板后抽屉回到原开合态是否可接受、真机上刘海 /
+  home indicator 是否仍压内容、键盘已弹起时打开面板是否应主动 blur composer
+  （现沿用上游：焦点与输入仍留在面板之后）；
+  ② **新并入 44px 底线的表面**——会话头视图 tab
+  （chat + trajectory 无条件注册 ⇒ 恒有两个，`styles.ts:430-448`）抬到 44px 后
+  头部随之增高、tab 条改为**换行**（滚动容器会裁掉活动 tab 那条外伸 1px 的指示条）
+  后「第三个视图」的可达性、右栏 dockkit 条（`styles.ts:470-520`：chips/加号/分屏/
+  面板 chrome 并入底线，chip 的 20px 关闭控件**刻意排除**并重新居中、条内**按钮**用
+  border-box 让 44 指盒尺寸——chips 保持 content-box，否则会把 dockkit 实测的 chip
+  最小值从 100px 降到 80px 而放宽分屏判定）随控件长高后的观感；会话头座席的底线
+  仍落在**内容盒**上（既有臂保持出厂几何 ⇒ 带内边距图标按钮约 56px、头部行较高），
+  若真机读作过厚可把三条头部臂一起改 border-box；③ **未适配的官方浮面**
+  （本次只登记、未改代码）：dockkit 浮动面板出生矩形 380×300 @ (160,120)、
+  无视图夹取、宿主 z-60 高于本插件所有层
+  （`vendor/harness-checkout/packages/client/ui-dockkit/src/engine/constraints.ts`），
+  手机上创建即可能部分出屏；`ContextMeter` 面板固定 264px、绝对定位贴 trigger
+  右侧（`ui-conversation/src/client/skeleton/ContextMeter.module.css:41-58`），
+  窄屏余量未实测；④ **上游 `touch-action: none` 与 chips 横滚的冲突**：dockkit
+  条与其 chips 行都声明 `touch-action: none`（为 chip 拖拽保留），chips 溢出时
+  手指无法滚动该行——属上游行为，是否需要 chamber 补丁（会与拖拽手势争用同一
+  手势）待设计决策；⑤ **CDP 设备模拟验收缺失**（design §18.6 明确要求
+  「CDP 设备模拟 + 真机抽检」，而 `scripts/gui-acceptance/` 只有桌面 walkthrough，
+  无 `Emulation.setDeviceMetricsOverride` / touch 模拟）⇒ 上述几何只能靠真机发现，
+  建议加 mobile 走查模式（设备尺寸 + `pointer:coarse` + 触控模拟，断言抽屉开合/
+  设置手机档/无横向溢出/composer 不被键盘遮挡）；⑥ **pin 前瞻**：上游 npm `next`
+  已是 `0.1.5-rc.2`（client 包已发布，`latest` 仍为 `0.1.5-rc.1`）——pin 前移须按
+  `packages/dsh-chamber-client-ui-mobile/README.md`「Anchor baseline」重审锚点
+  （风险集中在 ui-layout frame 与 settings/composer 结构）；⑦ **iOS 键盘补偿期
+  「回到底部」控件仍在键盘后**：`ui-chat` 的该控件按 `--dsh-composer-height`
+  （≈ seat `offsetHeight`）+16px 定位（`ChatView.module.css:189-193`），而补偿改的是
+  seat 的 sticky `bottom`（高度不变）⇒ 键盘弹出且用户上滚时它落在键盘之后。该控件
+  **没有任何属性锚点**（只有 `aria-label` 文案，本插件的锚点纪律禁止按文案匹配），
+  两条候选路：请上游补一个属性锚点（登记到 `docs/checklists/upstream-touchpoints.md`
+  的触点/深引面），或由插件在 arm 期间改写 `--dsh-composer-height`——后者与上游
+  seat/scrollport 的 ResizeObserver 写同一变量，存在互相覆盖的竞态，需设计决策；
+  ⑧ **回车换行的 caret reveal 时序（iOS 待判）**：`execCommand` 后插件立即测量
+  caret 并滚动（`composer.ts` `revealCaretInComposerScroll`），而 Lexical 的 DOM
+  归并在 mutation 的 microtask 里（`LexicalMutations`）——若归并改变了 caret 位置，
+  这次揭示可能落空（表现为：输入框已到最大高度时回车换行仍停在折叠线以下）。
+  进程顺序上无法断定，留作实机判据（正例：composer 撑满后回车，新行必须在可视区）；
+  ⑨ **layer-2 恢复在 WebKit 的 blur 语义下可能不可达（CANNOT-VERIFY）**：恢复要求
+  翻转瞬间 `input === document.activeElement`，而 WebKit 在 `contenteditable="false"`
+  时可能自行 blur——若如此，该层静默失效（无副作用，仅少一层保险）；⑩ **iPad 接
+  触控板/鼠标时的档位（文档假设待验）**：本档整层以 `pointer: coarse` 门控，文档假设
+  接外设只翻转 `hover`（tooltip 规则让位）而不翻转 `pointer`；若 iPadOS 把主指针报成
+  fine，移动档整体退场（回落到上游窄窗形态：56px rail + 自动折叠，非损坏但非移动
+  形态）——实机确认一次即可；⑪ **档位边界与多任务（待实机）**：768/1024 两个边界
+   在 Split View / Stage Manager / 旋转的连续拖拽中可在手势中途翻转呈现（<768 上游
+   全屏机制、768–1023 本插件全屏机制、≥1024 整档退场）；另 768–979 且抽屉已展开
+   （`narrowExpanded` ⇒ sidebarPreference 280）时上游解得 `cols.rightbar=0`、面板
+   为 0 宽并**自收起**（`SidebarRight.tsx` 的 `canShow` 分支）——这一组合需确认观感；
+   ⑫ **让位与官方模态的叠加（待判）**：设置页渲染在侧边栏 DOM 内（无 body portal），
+   若面板在其打开时被展开，抽屉整棵子树被 `visibility: hidden` 隐藏 ⇒ 文档停留在
+   「有 `aria-modal` 但对话框不可见」的状态（焦点/键盘留在其中）；此外面板展开时
+   composer 若仍持焦，iOS 键盘不收起、输入继续进入面板之后的 composer（现沿用上游
+   行为，未加 blur）；两者都需真机决定是否补处理。
   剩余——**实机门禁**（§18.6：真机触控目标比例/抽屉开合/键盘遮挡
   （含新补偿层的 iOS 时序与 Android WebView 盲区、**聚焦缩放后的打字正例**、
   缩放态平移不得引起抖动、捏合缩放负例、提交窗口不闪落、重挂 re-arm、
-  死区 ≤23px）/安全区/抽屉开关不重叠/crumbs 换行/Session 日志图标化/iOS 单击
-  切换/设置手机档走查（含分区切换重置）/刘海横屏/深层谱系高度等）；
+  死区 ≤23px）/安全区/抽屉开关不重叠/crumbs 换行/iOS 单击
+  切换/设置手机档走查（含分区切换重置）/刘海横屏/深层谱系高度等；
   **移动端 git 侧边栏**（桌面链 chamber sidebar + `sidebar.workspace.git`
   座席为桌面专有形态，gateway 链官方 sidebar 无该座席；接入需装配矩阵第二
   客户端例外 + 移动交互设计，列为下一阶段）；DOM 锚点审计剩余（details 打标
   缺口修复的**接线仅实机可验**、composer
-  锚点 fixture 化、Android 键盘盲区真机门禁）；P2（PWA 安装 + SW 壳离线，
+  锚点 fixture 化（纯判定函数已入单测，DOM 绑定安装器仍只有实机门禁）、
+  Android 键盘盲区真机门禁）；P2（PWA 安装 + SW 壳离线，
   per-instance scope，尊重官方「不完整离线」立场）；P3（公网认证流转
   正式化 + Web Push；先行形态 = 内网/可信网络 `--no-auth`/tailscale）。
   - **连接稳定性（未修复，取证中；2026-12 评审证据）**：机制已源码级确认——

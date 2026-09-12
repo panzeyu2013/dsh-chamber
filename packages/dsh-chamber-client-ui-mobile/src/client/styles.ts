@@ -38,11 +38,12 @@
  *
  * Breakpoints (design 17 §18.4.2):
  *  - `(max-width: 1023px) and (pointer: coarse)` — the touch tier: the
- *    sidebar rail becomes an overlay drawer, the right column is hidden,
- *    the conversation takes the full width, touch targets get the 44px
- *    floor. The `pointer: coarse` guard is the "PC leak" lesson (a desktop
- *    window narrower than 1024 must NOT get the mobile UI) — applied to
- *    BOTH tiers and mirrored in the JS behavior layer.
+ *    sidebar rail becomes an overlay drawer, a shown right panel is presented
+ *    fullscreen (and the drawer yields to it), the conversation takes the
+ *    full width, touch targets get the 44px floor. The `pointer: coarse`
+ *    guard is the "PC leak" lesson (a desktop window narrower than 1024 must
+ *    NOT get the mobile UI) — applied to BOTH tiers and mirrored in the JS
+ *    behavior layer.
  *  - `(max-width: 768px) and (pointer: coarse)` — the phone tier: composer
  *    toolbar single line, popups constrained to the viewport, settings as a
  *    stacked full-screen sheet (nav strip + pinned close + scrolling
@@ -66,19 +67,31 @@
  *    REMOVED when expanded — `:not([data-sidebar-collapsed])` is the open
  *    drawer condition.
  *  - `data-rightbar-collapsed` is the alpha.2 rename of the details column
- *    flag; the right column is now a docking surface with its own
- *    `<768px` fullscreen presentation (upstream), so this stylesheet no
- *    longer re-presents it — the third track stays locked at 0 and the
- *    official surface owns the overlay.
- *  - STACKING SCOPE (2026-09 二轮): this plugin's fixed layers (drawer 75,
- *    backdrop 74, hamburger 76) are mounted inside the official
- *    `shell.overlay` layer, which is `position: absolute; z-index: 20` — a
- *    stacking context of its own. The tiers therefore order correctly among
- *    THEMSELVES and above the frame content / normal rightbar column (z-10),
- *    but they can never paint above a sibling stacking context: the official
- *    fullscreen rightbar (z-40) and the floating-panel host (z-60) cover them.
- *    Intentional: a fullscreen official surface owns the screen and the
- *    drawer yields. Escaping would require a body-level portal (not done).
+ *    flag, and it means "the column has NO retained track" —
+ *    `cols.rightbar === 0`, AppFrame.tsx — NOT "the panel is hidden": the
+ *    occupant only asks for a track at >= 768px (`track = shown &&
+ *    !autoFullscreen`, SidebarRight.tsx), so a shown panel on the phone tier
+ *    still reports track=false and the attribute IS present. Two different
+ *    questions therefore use two different keys: the fullscreen PRESENTATION
+ *    below is not gated at all (the panel's own `data-sidebar-right-panel`
+ *    state is the anchor), while the DRAWER yield uses both shown signals —
+ *    `:not([data-rightbar-collapsed])` for the pushed track and
+ *    `[data-rightbar-fullscreen]` (set by `openRightbar`, cleared by
+ *    `closeRightbar`) for the auto-fullscreen phone case. Keying the yield on
+ *    the track flag alone silently left phones un-yielded (2026-09-13
+ *    review-fix, round 3).
+ *  - STACKING SCOPE (2026-09 二轮, 2026-09-13 review-fix): this plugin's
+ *    fixed layers (drawer 75, backdrop 74, toggle 76) are mounted inside the
+ *    official `shell.overlay` layer, which is `position: absolute;
+ *    z-index: 20` — a stacking context of its own. The tiers therefore order
+ *    correctly among THEMSELVES and above the frame content / normal rightbar
+ *    column (z-10), but they can never paint above a sibling stacking context:
+ *    the official fullscreen rightbar (z-40) and the floating-panel host
+ *    (z-60) cover them. Intentional — and since the right panel IS the
+ *    fullscreen surface on this tier, the drawer now stands down explicitly
+ *    while it is shown (hidden + out of the tab order) instead of staying
+ *    focusable behind it. Escaping would require a body-level portal (not
+ *    done).
  *  - ONBOARDING/directory dialogs portal to a body-level root
  *    (`div._root_15u5s_2`), but the SETTINGS dialog renders INSIDE the
  *    sidebar DOM (sidebar.settings slot, no body portal) — the drawer's
@@ -156,6 +169,60 @@ export const MOBILE_CSS = `
     grid-column: 3;
   }
 
+  /* Right panel: upstream presents it fullscreen only BELOW 768px
+     ('autoFullscreen = viewportWidth < 768') and otherwise pushes the centre
+     through its own track — but this tier pins the third track to 0, so at
+     769-1023px the panel drew at its normal width (313-460px, about two fifths
+     of the content column and 41-45% of the viewport) straight over the
+     transcript: no track, no fullscreen
+     covered with no way to make room (2026-09-13 review-fix, the STATUS
+     geometry residue). Give the whole touch tier the presentation upstream
+     reserves for phones: the official panel fills the frame.
+     NOT gated on the frame's shown flag: the close report lands in the same
+     commit as the slide-out (SidebarRight reports shown:false immediately when
+     the panel leaves), so a frame-gated rule would drop the fullscreen box
+     mid-animation and the panel would shrink to its normal width while sliding
+     out. The HIDDEN state needs no gate either — upstream hides the panel with
+     transform: translateX(100%) + visibility: hidden, and an inset:0 box of
+     full width sits exactly one viewport to the right, invisible and
+     untouchable. The frame attribute stays the right key for the DRAWER yield
+     below, which must follow the panel's shown state rather than its box.
+     ANCHOR: the panel is NOT the column's direct child — it sits under the
+     rightbar slot's [data-slot="rightbar"] outlet wrapper, and every outlet
+     wrapper is display:contents (ui-renderer scoped-slots ANCHOR_STYLE),
+     so a positional rule on the wrapper is a silent no-op (the first cut of
+     this very fix landed there). Target the panel's own upstream state
+     attribute instead, scoped to the column. z-40 is upstream's own
+     fullscreen layer ('[data-sidebar-right-panel=fullscreen]'), kept so the
+     official stacking order is unchanged. */
+  [data-mobile-role="details"] [data-sidebar-right-panel] {
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+    width: 100% !important;
+    max-width: none !important;
+    border: none;
+    /* The padding below must not add to that 100%: the panel declares no
+       box-sizing of its own and the tree has NO global border-box reset, so a
+       content-box panel with left:0 + width:100% runs the right offset over
+       and paints insets WIDER than the viewport (content cut on the notch
+       side). */
+    box-sizing: border-box;
+    /* iOS safe areas, in the SAME rule because they matter exactly while the
+       panel is fullscreen: this plugin injects viewport-fit=cover (touch
+       tier), so inset:0 runs edge to edge — on a notched iPhone in LANDSCAPE
+       the width falls in the 769-1023px band and the notch/sensor housing sits
+       over the panel's left or right edge, with the home indicator under its
+       bottom. Upstream's fullscreen presenter carries no env(safe-area-inset-*)
+       of its own (ui-sidebar-right), while every other full-bleed chamber
+       surface on this tier does (drawer, settings sheet, composer seat); the
+       surface still paints full-bleed (background covers the padding box). */
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-right: env(safe-area-inset-right, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    padding-left: env(safe-area-inset-left, 0px);
+  }
+
   /* Sidebar → fixed overlay drawer, off-canvas by default. translateX(-105%)
      keeps the shadow out of view; the open state is driven purely by the
      official frame attribute (no JS state, no React). Motion uses the
@@ -231,10 +298,15 @@ export const MOBILE_CSS = `
   [data-mobile-frame] [data-side]:not([role="tooltip"]) {
     display: none !important;
   }
-  /* Dockkit split affordances: pointer-drag chrome with no touch equivalent
-     (the right surface is fullscreen on this tier). */
-  [data-mobile-frame] [data-dockkit-divider],
-  [data-mobile-frame] [data-dockkit-split-button] {
+  /* Dockkit split affordances: the DIVIDER is pointer-drag chrome with no
+     touch equivalent (a split ratio cannot be dragged on this tier). The
+     SPLIT BUTTON is not: upstream renders it as a plain 'button' whose
+     'onClick' splits the pane and which disables ITSELF when the pane cannot
+     split, so hiding it removed a usable affordance on a false premise —
+     the "the right surface is fullscreen here" half was untrue at 769-1023px
+     as well (2026-09-13 review-fix; the tier now presents that surface
+     fullscreen, see the right-panel rule above). */
+  [data-mobile-frame] [data-dockkit-divider] {
     display: none !important;
   }
 
@@ -283,6 +355,50 @@ export const MOBILE_CSS = `
     display: none;
   }
 
+  /* Right panel OPEN ⇒ the drawer YIELDS (a shown right panel owns the screen
+     on this tier — it is presented fullscreen above): the floating toggle and
+     the backdrop stand down, and an open drawer goes 'visibility: hidden' —
+     the same mechanism the closed drawer uses, which also drops it out of the
+     tab order (WCAG 2.4.3) instead of leaving nav rows and the settings seat
+     focusable behind the panel (2026-09-13 review-fix).
+     TWO ARMS, because "the panel is shown" is NOT one attribute:
+       - :not([data-rightbar-collapsed]) is upstream's TRACK flag
+         (cols.rightbar === 0, AppFrame.tsx) and the seat only asks for a
+         track at >= 768px (track = shown && !autoFullscreen,
+         SidebarRight.tsx:371) — so on the phone tier a SHOWN panel still
+         reports track=false and this arm is inert there;
+       - [data-rightbar-fullscreen] is the seat's FULLSCREEN report, set by
+         openRightbar(track, fullscreen) and cleared by closeRightbar()
+         (ui-layout stores.ts:133-141), so it is present exactly while a
+         fullscreen (i.e. every phone-tier) panel is shown.
+     Together they cover every shown state on this tier; keying on the track
+     flag alone silently left phones un-yielded.
+     ORDER MATTERS: these selectors tie on specificity with the open-drawer /
+     backdrop rules above, so this block must stay AFTER them. */
+  [data-mobile-frame]:not([data-rightbar-collapsed]) .dsh-mobile-nav-toggle,
+  [data-mobile-frame][data-rightbar-fullscreen] .dsh-mobile-nav-toggle,
+  [data-mobile-frame]:not([data-rightbar-collapsed]) .dsh-mobile-backdrop,
+  [data-mobile-frame][data-rightbar-fullscreen] .dsh-mobile-backdrop {
+    display: none;
+  }
+  [data-mobile-frame]:not([data-rightbar-collapsed]) [data-mobile-role="sidebar"],
+  [data-mobile-frame][data-rightbar-fullscreen] [data-mobile-role="sidebar"] {
+    visibility: hidden;
+  }
+
+  /* The panel's MODE control cannot change anything in the 768-1023px band any
+     more: this tier forces the fullscreen presentation above, so upstream's
+     push<->fullscreen flip (and the label it flips with it) is inert —
+     pressing "exit fullscreen" would leave the panel fullscreen. It is hidden
+     exactly there. BELOW 768px it stays: upstream's autoFullscreen branch turns
+     that same click into "collapse the panel" (SidebarRight.tsx), a real
+     affordance. The separate collapse control is untouched in both bands. */
+  @media (min-width: 768px) {
+    [data-mobile-frame] [data-sidebar-right-mode] {
+      display: none !important;
+    }
+  }
+
   /* Conversation session header: the floating toggle (44px, top-left) must
      never overlap the header content. The header is the DIRECT child of the
      session-header slot outlet (anchor-audited shape: outlet wrapper >
@@ -306,22 +422,106 @@ export const MOBILE_CSS = `
     white-space: normal;
   }
 
+  /* Session-header view tabs ('role="tablist"'): 'tabs.length > 1' is the
+     NORM, not an edge case — ui-chat and ui-trajectory both register a
+     conversation view unconditionally, and both ship in the default web
+     bundle. The official tab box is 13px text on a 25px box and the strip
+     neither wraps nor scrolls, while the frame clips overflow
+     (AppFrame.module.css 'overflow: hidden') — a third view or a longer
+     (en) label would be simply unreachable. The strip WRAPS rather than
+     scrolling: a scroll container would clip the active tab's 2px bar, which
+     upstream draws 1px past the tab box to end flush with the header's bottom
+     rule (overflow-x:auto also forces overflow-y to compute to auto). The
+     44px floor grows the tab box — with box-sizing so the floor means the BOX
+     (the official tab pads 9px at the bottom, so a content-box floor would be
+     53px); the header's 'min-height: 76px' is a FLOOR, so the row follows
+     instead of clipping (its sidebar-strip alignment figure is a desktop
+     concern — on this tier the sidebar is a drawer). */
+  [data-slot="conversation.session.header"] [role="tablist"] {
+    flex-wrap: wrap;
+  }
+  [data-slot="conversation.session.header"] [role="tab"] {
+    display: inline-flex;
+    align-items: center;
+    box-sizing: border-box;
+    min-height: 44px;
+  }
+
   /* Touch targets: high-frequency controls get the 44px floor (Apple HIG;
      WCAG 2.5.8 ≥24px is exceeded). The official toolbar/sidebar buttons are
      28-36px (desktop-mouse sizes) — unusable on touch. Icon-only buttons
      also get a width floor; text buttons (composer bar) keep their natural
-     width. Menu/popup items and settings entries get the same floor. */
+     width. Menu/popup items and settings entries get the same floor.
+     The SEAT list is explicit and grows with upstream: the 2026-09-13
+     review-fix added the header's utilities + corner seats and the right
+     panel's dockkit strip, which the earlier three-seat list left at their
+     desktop sizes (28px) while the panel became a primary mobile surface.
+     The strip's CHIP-CLOSE control is excluded on purpose: upstream floats it
+     at 20px inside the chip (absolute, top-right, pointer-events gated by
+     hover/active), so the floor would inflate it into a 44px box over the
+     chip's label — the chip itself is the 44px target and closing stays
+     reachable from the chip menu. */
   [data-slot="conversation.composer.bar"] button,
   [data-slot="sidebar"] button,
   [data-slot="conversation.session.header.actions"] button,
+  [data-slot="conversation.session.header.utilities"] button,
+  [data-slot="conversation.session.header.corner"] button,
   [data-slot="settings.section"] button,
+  [data-sidebar-right-panel] [data-dockkit-strip] button:not([data-dockkit-tab-close]),
+  [data-sidebar-right-panel] [data-dockkit-strip] [role="tab"],
   [role="menuitem"], [role="option"] {
     min-height: 44px;
   }
   [data-slot="sidebar"] button,
   [data-slot="conversation.session.header.actions"] button,
+  [data-slot="conversation.session.header.utilities"] button,
+  [data-slot="conversation.session.header.corner"] button,
+  [data-sidebar-right-panel] [data-dockkit-strip] button:not([data-dockkit-tab-close]),
   [role="menuitem"], [role="option"] {
     min-width: 44px;
+  }
+  /* The strip itself is 28px tall by upstream contract: let it grow with the
+     controls instead of clipping them. (The chip row does NOT become
+     finger-pannable: upstream declares touch-action:none on the strip, the
+     chip row AND the chips to own the drag gesture, so an overflowing chip is
+     reached by ACTIVATING a neighbour — the kit scrolls the active chip into
+     view — never by panning. Anything else would fight the tab drag.)
+     box-sizing applies to the strip's BUTTONS only: their chrome icons declare
+     28px boxes WITH 6px padding, so the floor must mean the BOX — otherwise 44
+     becomes 56 and the strip grows 12px for nothing. The CHIPS stay
+     content-box on purpose: they pad horizontally only (44px is 44px either
+     way), while dockkit MEASURES the chip minimum as min-width + padding
+     under content-box (ui-dockkit/components/measure.ts chipMinimum) — forcing
+     border-box there would silently lower that measured minimum from 100px to
+     80px and make the pane-split "halves fit" rule more permissive than
+     upstream intends. Scoped to this new seat: the pre-existing
+     header-actions arm is left exactly as shipped, so the header row keeps the
+     geometry it was verified with (its floor therefore lands on the CONTENT
+     box: padded icon buttons render ~56px, and the header row grows with
+     them — a device-judged tradeoff, see STATUS). */
+  [data-sidebar-right-panel] [data-dockkit-strip] {
+    height: auto;
+    min-height: 44px;
+  }
+  [data-sidebar-right-panel] [data-dockkit-strip] button:not([data-dockkit-tab-close]) {
+    box-sizing: border-box;
+  }
+  /* The chip's close control was laid out for a 28px chip (top: 4px); the
+     44px chip leaves it hanging at the top edge, so it is centred in the box
+     it now lives in. Its 20px size, opacity and pointer-events gating stay
+     upstream's (the chip itself is the 44px target, and closing also lives in
+     the chip menu). */
+  [data-sidebar-right-panel] [data-dockkit-tab-close] {
+    top: 50%;
+    transform: translateY(-50%);
+  }
+  /* A fullscreen panel owns the whole screen on this tier, so its inner
+     scrollers must not chain their overscroll to the document behind it
+     (rubber-band + dynamic-toolbar movement under a fixed surface). Same
+     containment the conversation scrollport already declares on the phone
+     tier; Safari 16+ honours it, older WebKit ignores it harmlessly. */
+  [data-sidebar-right-panel] * {
+    overscroll-behavior: contain;
   }
 
   /* touch-action: the composer contenteditable and inputs get

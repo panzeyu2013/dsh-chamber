@@ -40,9 +40,92 @@ gateway 访问）真正可用——窄屏抽屉化布局、触控目标、安全
   谱系 chip（「N 个子代理」目录触发器）会被静默截断——改为换行而非裁切
   （单段省略号保留）；
 - **「Session 日志」导出胶囊**：alpha.2 重锚时**退役**——上游已把该控件改为
-  会话头 more-actions 菜单里的 28×28 图标按钮，插件不再按文案打标。右列的移动
-  呈现同样交给上游：`ui-sidebar-right` 在 <768px 自动全屏，插件只保留第三轨的
-  网格锁，不再自绘覆盖层。
+  会话头 more-actions 菜单里的 28×28 图标按钮，插件不再按文案打标。右列保留第三轨
+  的网格锁、不自绘覆盖层——面板的呈现仍是官方那一套，只是在整档触屏宽度上重新按
+  **全屏**呈现（只加网格锁会让 769–1023px 档被常规宽度的面板盖住；见下节
+  「右栏与抽屉的共存」）。
+- **视图 tab**：`tabs.length > 1` 是**常态**而非边角——`ui-chat` 与
+  `ui-trajectory` 都无条件注册 `conversation.view`，且都在默认 web bundle 里。
+  官方 tab 是 13px 文字 + 25px 盒，而 tab 条既不换行也不滚动、frame 又裁掉溢出
+  （`AppFrame.module.css` 的 `overflow: hidden`）⇒ 出现第三个视图或更长的
+  （英文）标签就会被彻底裁掉：触屏档把 tab 盒抬到 44px 触控底线
+  （`box-sizing: border-box`，否则官方 9px 下内边距会把它变成 53px；头部的
+  `min-height: 76px` 是**下限**，行高随内容增长），并让 tab 条**换行**。
+  选择换行而非滚动是刻意的：滚动容器会把另一轴强制算成 `auto`，从而裁掉活动
+  tab 那条 2px 指示条——上游特意把它画到 tab 盒外 1px，好与头部底线齐平。
+
+## 右栏与抽屉的共存（触屏档）
+
+上游只在 **<768px** 自动把右栏全屏（`autoFullscreen = viewportWidth < 768`，
+`SidebarRight.tsx`），其余宽度靠自己的轨道挤压中列。而触屏档把该轨道钉成 0
+（侧栏已抽屉化、会话占满宽度），于是 769–1023px 之间官方面板会以**常规宽度**
+（313–460px，约合正文列四成、视口宽度 41–45%）直接盖在会话之上：既没有轨道，也没有
+全屏，也没有让位的办法（STATUS 几何残留 ①）。因此触屏档**自己给官方面板
+全屏呈现**：
+`[data-mobile-role="details"] [data-sidebar-right-panel]`
+→ `position: fixed; inset: 0; z-index: 40`（z-40 即上游自己的全屏层）。
+
+**这条规则刻意不加「已展开」门控**（`data-rightbar-collapsed`）：座位在滑出动画的
+**同一个 commit** 里就上报 `shown: false`，加了门控会让全屏盒在动画中途失效、
+面板在滑出时先缩回常规宽度。隐藏态本来也不需要门控——上游用
+`transform: translateX(100%)` + `visibility: hidden` 隐藏，而满宽 `inset: 0`
+的盒子正好落在视口右侧一屏之外，看不见也点不到。正因如此，安全区 inset 与
+`box-sizing: border-box` 都写在同一条规则里：面板自身没有声明 box-sizing，
+全树也没有全局 border-box reset，content-box 的 `left: 0` + `width: 100%` 会让
+inset 把盒子撑得比视口更宽（横屏时刘海一侧、也就是条尾控件会被切到屏外）。
+
+**锚点注记**：面板**不是**该列的直接子节点——每个 slot 渲染点都会把输出包在
+`[data-slot="<key>"]` 出口里，而出口的样式是 `display: contents`
+（ui-renderer `scoped-slots.tsx` 的 `ANCHOR_STYLE`），因此对「列的子元素」施加
+定位规则是**静默 no-op**——本修复的第一版正好踩在这里；规则现改为瞄准面板自己的
+上游状态属性（`data-sidebar-right-panel`，由 `SidebarRight.tsx` 产出）并以
+details 列限定作用域。断点单测把这几半全部钉住：目标是面板、不是出口包裹层、
+规则无门控、选择器唯一。
+
+同一条规则还承载 iOS 安全区（`env(safe-area-inset-*)`）：本插件在触屏档注入
+`viewport-fit=cover`，于是 `inset: 0` 是无边界的——横屏刘海 iPhone 同样落在这一
+档，刘海压住一条竖边、home indicator 压住底边。**手机档（上游自己就全屏的那一档）
+同样受益**：规则无门控，两档都拿到 inset。上游的全屏呈现自身不带任何 inset，而本档
+其他全幅 chamber 面（抽屉、设置 sheet、composer seat）都带；面板表面仍满幅绘制
+（背景覆盖 padding box），只是内容内缩。
+
+已展开的面板接管屏幕，因此抽屉**让位**：浮动开关与遮罩退场，已打开的抽屉转为
+`visibility: hidden`——与关闭态同一机制，同时把它移出 Tab 序（WCAG 2.4.3），
+而不是把导航行与设置座留在面板之后仍可聚焦。这里**必须两条臂**，因为「面板已展开」
+不是一个属性：`data-rightbar-collapsed` 是上游的**轨道**标志
+（`cols.rightbar === 0`），而座位只在 ≥768px 才申请轨道
+（`track = shown && !autoFullscreen`）——手机档已展开的面板照样上报 track=false，
+只靠这条臂就会让手机完全不让位；第二条臂用 `[data-rightbar-fullscreen]`，它由
+`openRightbar`/`closeRightbar` 成对设置与清除，即「全屏面板已展开」期间恒存在。
+**顺序有语义**：这些选择器与打开态规则同特异性，必须排在其后（打开态自身的
+`visibility 0s` 过渡保证隐藏是即时的）。
+
+768–1023px 这一档里，面板自己的**模式控件被隐藏**：本档把呈现钉死为全屏，上游的
+push↔fullscreen 翻转（连同一起翻转的文案）已无法改变任何东西——点「退出全屏」也会
+留在全屏。**低于 768px 时它保留**，因为上游 `autoFullscreen` 分支会把同一次点击
+变成「收起面板」。两个档位里，独立的收起控件都不受影响。
+
+面板的 dockkit 条并入 44px 触控底线（条本身随控件长高——`height: auto;
+min-height: 44px`——而不是把 44px 的 chip 裁在 28px 的行里），会话头的
+utilities 与 corner 座同样并入。在 dockkit 条上，这个底线指的是**盒**尺寸
+（`box-sizing: border-box`，且只作用于条上的**按钮**）：chrome 图标声明的是
+28px 盒 + 6px 内边距，content-box 下 44 会变成 56、条高白长 12px。
+**chips 刻意保持 content-box**：它们只有横向内边距，而 dockkit 在 content-box 下
+把 chip 最小值实测为 `min-width + padding`（`measure.ts` 的 `chipMinimum`）——
+强行改成 border-box 会把这个实测值从 100px 降到 80px，从而让分屏的「两半是否放得下」
+判定比上游更宽松。chip 自带的**关闭控件刻意排除**在底线之外：上游把它 20px 浮在
+chip 内（absolute、`pointer-events` 由 hover/active 门控），套上底线会把它撑成
+44px 盖住 chip 标签——chip 自身就是 44px 目标，关闭仍可从 chip 菜单到达；它现在
+只是被重新居中到更高的盒子里。
+**分屏按钮不再隐藏**：上游把它渲染为普通
+click 控件、pane 不可分屏时自行 `disabled`，此前的整条隐藏基于错误的
+「pointer-drag chrome」前提，等于删掉一个可用能力；`[data-dockkit-divider]`
+仍然隐藏——那一个才是真正的拖拽 chrome（分隔条隐藏后，触屏分屏得到的是上游的等分，
+而不是可拖拽比例）。整个面板子树还声明了 `overscroll-behavior: contain`：全屏面板
+独占屏幕，其内部滚动不得把 overscroll 链到身后的文档。
+一条**待实机判定**：会话头座席的底线落在**内容盒**上（既有臂保持出厂几何），
+于是带内边距的图标按钮渲染成约 56px 的盒子、头部行随之变高——若真机上读作
+顶部 chrome 过厚，可把三条头部臂一起改为 border-box（44px）。
 
 ## 设置页适配（手机档）
 
@@ -152,6 +235,29 @@ Tooltip 用法中 27 处是带 aria-label 的按钮，标签命名同一动作�
   arm 以 **frame 元素**为单位幂等：renderer 重挂替换 AppFrame 而键盘仍开着时，
   新 frame 会被重新打标（旧 frame 的插件属性被清理），不会把 composer 留在
   键盘后面。
+- **Enter 属于编辑器**：composer 的常驻 div 同时充当「无工作区」选择器触发器
+  ——无工作区时它绑定 `editor = null`，于是渲染成 `contenteditable="false"`，
+  却仍带 `[data-composer-input]`、`tabIndex=0` 与官方那段负责打开选择器的
+  React `onKeyDown`。document capture 的 Enter 处理器现在要求
+  `contenteditable="true"`，该激活因此得以保留（此前拦下它既没插入任何字符，
+  又吞掉了选择器自己的 Enter——丢一条键盘路径而没换来换行）。Shift+Enter 仍是
+  官方换行；官方的**加速和弦**（Ctrl/Cmd+Enter——`keymap.ts` 把
+  `event.ctrlKey || event.metaKey` 交给提交策略，用于翻转 queue↔steer）原样放行：
+  接硬件键盘时（iPad 场景）换行并非该手势的语义。
+- **编辑态是「读出来的」，不是猜的**：React 在**节点尚未插入**时就写好
+  `contenteditable`，因此「出生即锁定」的 composer 不产生任何 mutation 记录
+  ——旧的 `lastEditable = true` / `lockedSince = 0` 猜测使 layer-2 恢复与 30s
+  自愈在它们本应服务的那类状态上永远无法生效。两者现在都从已挂载的 DOM 取种子
+  （恢复层另外读取 mutation 的 `oldValue`，因此即使观察者从未见过该元素挂载，
+  也能识别真正的 `false → true` 翻转）。
+- **自愈只对「卡住的提交」生效**：自愈时钟仅在 composer 既不可编辑、其自身的
+  `data-phase` 又是 `adjudicating`/`submitting`（官方 input machine 的在飞相位）
+  时走表。因长期合法原因而不可编辑的 composer——removed / inert / 无会话的
+  选择器节点 / owner 阻断 / 父端离线的 continuable 子会话——永不启动时钟，
+  因此恢复不会去强写 `contenteditable="true"` 对抗上游仍然持有的阻断
+  （何况 Lexical 自己的 `setEditable(false)` 闸门仍关着，强写只会得到一个
+  半可编辑的 DOM）。**出生即卡住**的 composer 仍被覆盖：发现它卡住的那次点按
+  即启动时钟。
 - **Enter 换行的光标揭示**：移动端 Enter=换行路径插入的换行绕过了官方
   keymap 管线，其 caret reveal 不会执行——composer 超过最大高度后新行可能
   落在其内部滚动窗的折叠线以下。每次插入后在 `[data-input-scroll]` 内揭示
@@ -187,3 +293,22 @@ alpha.2 源码复核（2026-09 重锚），并在 rc.1 上复验成立（rc.1 �
 `revealSelection` 只在 `draft !== ""` 布尔翻转时运行、官方设置对话框**没有**
 任何宽度媒体查询、服务端 viewport meta 从不带 `interactive-widget`（由本
 插件客户端注入，触屏档门控）。
+
+2026-09-13 review-fix 对同一 pin 复核的是 vendored **源码**（不再只依赖 CDP 实测
+DOM），并为上述锚点集补了五条、各带产出文件：面板自己的
+`data-sidebar-right-panel` 状态属性——全屏呈现规则真正瞄准的对象，因为两者之间那层
+slot 出口是 `display: contents`（`SidebarRight.tsx`、
+`ui-renderer/scoped-slots.tsx`），且刻意**不**搭配 frame 的「已展开」标志，好让
+收起动画保住自己的盒子；frame 的 `data-rightbar-collapsed`（**轨道**标志）与
+`data-rightbar-fullscreen`（座位的全屏上报）作为抽屉让位的**两个**「已展开」判据
+（`AppFrame.tsx`、`ui-layout/stores.ts`）——手机档已展开的面板其轨道标志为假；
+右栏 dockkit 条 `[data-dockkit-strip]`——28px 的
+chips、加号/分屏与面板 chrome 按钮，以及被排除的 20px `[data-dockkit-tab-close]`
+——作为触控底线座（`TabPanel.tsx`、
+`SidebarRight.tsx`）；会话头的 `role="tablist"` 条
+（`ConversationSession.tsx`，只要会话多于一个视图就渲染，实际恒在）。同时确认了
+本插件**不得**锚定的东西：`[data-dockkit-split-button]` 是 click 按钮而非拖拽
+chrome；`[role="menu"] [role="menuitem"][aria-selected]` 高亮信号在本 pin 不存在
+（ui-primitives `Menu` 不发 `aria-selected`，且它会把焦点移入菜单，其 Enter 根本
+到不了 document 处理器）；全树仍恰好三个 `aria-modal` 产出点与三个 `data-side`
+载体（两个 AppFrame/ConversationRoot 拖拽把手 + 那颗恒为 `role="tooltip"` 的气泡）。

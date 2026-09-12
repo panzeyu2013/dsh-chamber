@@ -20,10 +20,28 @@ export const TOUCH_TIER_QUERY = '(max-width: 1023px) and (pointer: coarse)'
  *  touch tier: the stacked sheet it resets is phone-tier CSS only. */
 export const PHONE_TIER_QUERY = '(max-width: 768px) and (pointer: coarse)'
 
-function isComposerInput(target: EventTarget | null): boolean {
-  // closest(): the keydown target is usually a leaf node inside the
-  // contenteditable (a text span), not the editor element itself.
-  return target instanceof Element && target.closest(COMPOSER_INPUT_SELECTOR) !== null
+/** The editability face the gate reads (real `Element` satisfies it). */
+export interface EditableFace {
+  readonly contentEditable?: string
+}
+
+/**
+ * Is this the composer's EDITOR — `contenteditable="true"` — rather than the
+ * resident node wearing the composer's attributes? The official InputBar keeps
+ * ONE div for both states: with no workspace it binds `editor = null`, so
+ * `contentEditable` renders false while the div still carries
+ * `[data-composer-input]` and, while the workspace-trigger branch is active
+ * (`workspaceTrigger = inert && !removed && onRequestWorkspace !== undefined`),
+ * `tabIndex=0` plus the official React `onKeyDown`
+ * that opens the workspace picker (`onWorkspaceKeyDown`, which accepts Enter or
+ * Space). The mobile Enter
+ * handler runs at document capture and stops propagation, so intercepting that
+ * state swallowed the picker's own keyboard activation (Enter) while inserting
+ * nothing — the editability gate keeps the interception on the real editor
+ * only. Pure — unit-tested (2026-09-13 review-fix).
+ */
+export function isEditableComposer(input: EditableFace | null | undefined): boolean {
+  return input !== null && input !== undefined && input.contentEditable === 'true'
 }
 
 /**
@@ -31,10 +49,18 @@ function isComposerInput(target: EventTarget | null): boolean {
  * keymap's Enter arbitration picks the highlighted item — the mobile
  * enter-to-newline must NOT swallow that (P2-2). Only intercept when no
  * highlighted menu is open.
+ *
+ * The trigger menu is the only producer that matters: it keeps focus in the
+ * composer and publishes its highlight through `aria-activedescendant` /
+ * `role=option[aria-selected]`. The retired `[role="menu"]
+ * [role="menuitem"][aria-selected]` arm could never match — the ui-primitives
+ * Menu renders its items WITHOUT `aria-selected` (Menu.tsx) and moves focus
+ * into the menu, so a menuitem's Enter never reaches this document handler at
+ * all (2026-09-13 review-fix).
  */
 function hasHighlightedMenuOpen(): boolean {
   const highlighted = document.querySelector(
-    '[data-trigger-menu] [aria-activedescendant], [data-trigger-menu] [role="option"][aria-selected="true"], [role="menu"] [role="menuitem"][aria-selected="true"]',
+    '[data-trigger-menu] [aria-activedescendant], [data-trigger-menu] [role="option"][aria-selected="true"]',
   )
   return highlighted !== null
 }
@@ -76,6 +102,12 @@ function createComposingGuard(): { isComposingNow(): boolean; attach(): () => vo
  * fires the submit handler regardless — so preventDefault alone still
  * SENDS. The capture-phase handler must stopPropagation to keep the event
  * away from Lexical's root listener entirely.
+ *
+ * Scope: only the composer's EDITOR (`contenteditable="true"`) is
+ * intercepted. The same div doubles as the no-workspace picker trigger while
+ * it renders non-editable, and that state owns Enter through the official
+ * React handler — stopping the event there broke the picker instead of
+ * inserting a line (see isEditableComposer).
  */
 export function installEnterToNewline(): () => void {
   const composing = createComposingGuard()
@@ -84,8 +116,20 @@ export function installEnterToNewline(): () => void {
   const onKeyDown = (event: KeyboardEvent): void => {
     if (event.key !== 'Enter' || event.shiftKey || event.isComposing || event.keyCode === 229) return
     if (event.repeat) return
+    // The official ACCELERATED chord is Ctrl/Cmd+Enter — the keymap calls
+    // `submit(event.ctrlKey || event.metaKey)` and the submission policy flips
+    // queue↔steer on it (input/editor/keymap.ts, input/submission-policy.ts).
+    // A newline is not what that gesture means, so it passes through
+    // untouched; the chord only exists with a hardware keyboard, which on
+    // iOS means an iPad with one attached.
+    if (event.ctrlKey || event.metaKey) return
     if (composing.isComposingNow()) return
-    if (!isComposerInput(event.target)) return
+    const input = event.target instanceof Element ? event.target.closest(COMPOSER_INPUT_SELECTOR) : null
+    // Editability gate: the no-workspace picker state wears the same attribute
+    // with `contenteditable="false"` and owns Enter itself (see
+    // isEditableComposer). Interception without an editor inserts nothing and
+    // would swallow that activation.
+    if (!(input instanceof HTMLElement) || !isEditableComposer(input)) return
     // A highlighted menu option must keep the official Enter arbitration
     // (P2-2): selecting the highlighted item beats inserting a newline.
     if (hasHighlightedMenuOpen()) return
@@ -104,7 +148,6 @@ export function installEnterToNewline(): () => void {
     // fallback runs ONLY when both commands failed AND the content is
     // byte-identical to the fingerprint (a false-negative command that
     // already inserted must never be double-inserted).
-    const input = event.target instanceof Element ? event.target.closest(COMPOSER_INPUT_SELECTOR) : null
     const fingerprint = composerFingerprint(input)
     const ok = document.execCommand('insertLineBreak')
     if (!ok) {
@@ -233,26 +276,80 @@ function revealCaretInComposerScroll(input: Element | null): void {
   if (delta !== 0) scrollHost.scrollTop += delta
 }
 
+/** Did an editability mutation flip the composer from non-editable to
+ *  editable, while it holds focus? `recordOldValues` carries the observed
+ *  attribute before-images (`attributeOldValue`), the tracked-state pair the
+ *  in-memory fallback. Pure — unit-tested. */
+export function isEditabilityFlipToEditable(
+  editableNow: boolean,
+  focused: boolean,
+  previousEditable: boolean | null,
+  recordOldValues: readonly (string | null)[],
+): boolean {
+  if (!editableNow || !focused) return false
+  return previousEditable === false || recordOldValues.includes('false')
+}
+
 /**
  * Minimal editability recovery (IME ladder layer 2): when the composer
  * flips back to editable while still focused, the IME may stay closed (a
  * focus event is not re-fired by the official component). Blur + refocus on
  * the flip restores the keyboard. Anchored on the official
  * `contenteditable` attribute (the ONE writer of editability).
+ *
+ * The flip is read from the mutation's `oldValue` plus a state seeded FROM
+ * THE DOM: React writes `contenteditable` on the detached element, so a
+ * composer that mounts non-editable produces no record at all — the earlier
+ * `lastEditable = true` guess then read the first genuine flip as "no
+ * change" and skipped the recovery (2026-09-13 review-fix).
  */
+/** MutationObserver options for the editability-recovery channel, exported so
+ *  a test can pin the load-bearing option: WITHOUT `attributeOldValue` the
+ *  `false -> true` flip is invisible for any composer the observer never saw
+ *  mount, and the layer silently does nothing (2026-09-13 review-fix). */
+export const EDITABILITY_MUTATION_OPTIONS: MutationObserverInit = {
+  attributes: true,
+  attributeFilter: ['contenteditable'],
+  subtree: true,
+  attributeOldValue: true,
+}
+
 export function installEditabilityRecovery(root: ParentNode = document): () => void {
-  let lastEditable = true
-  const observer = new MutationObserver(() => {
+  let current: HTMLElement | null = null
+  let lastEditable: boolean | null = null
+  const query = (): HTMLElement | null => {
     const input = root.querySelector(COMPOSER_INPUT_SELECTOR)
-    if (!(input instanceof HTMLElement)) return
+    return input instanceof HTMLElement ? input : null
+  }
+  const seed = (input: HTMLElement | null): void => {
+    current = input
+    lastEditable = input === null ? null : input.contentEditable === 'true'
+  }
+  // Seed from what is on screen, never from an assumption: the composer may
+  // already be mounted (and locked) when this installer runs.
+  seed(query())
+  const observer = new MutationObserver(records => {
+    const input = query()
+    if (input === null) {
+      seed(null)
+      return
+    }
     const editable = input.contentEditable === 'true'
-    if (editable && !lastEditable && input === document.activeElement) {
+    // A FRESH element (session switch, keyed remount) re-seeds instead of
+    // reporting a flip: its previous state was never observed.
+    const previous = input === current ? lastEditable : editable
+    if (isEditabilityFlipToEditable(
+      editable,
+      input === document.activeElement,
+      previous,
+      records.map(record => record.oldValue),
+    )) {
       input.blur()
       input.focus({ preventScroll: true })
     }
-    lastEditable = editable
+    seed(input)
   })
-  observer.observe(root, { attributes: true, attributeFilter: ['contenteditable'], subtree: true })
+  observer.observe(root, EDITABILITY_MUTATION_OPTIONS)
   return () => observer.disconnect()
 }
 
@@ -710,42 +807,144 @@ export function installKeyboardCompensation(root: ParentNode = document): () => 
 
 /**
  * Composer self-heal (design 17 §18.4.4, P1.5): if the composer stays
- * non-editable for BUSY_STUCK_MS while the user actively taps it, force a
- * recovery (blur → restore contenteditable → refocus). The official
- * component is the writer of editability, so this only fires on a genuine
- * stuck state (30s), never during a normal submit; a failed recovery leaves
- * the DOM untouched.
+ * non-editable INSIDE A SUBMISSION WINDOW for BUSY_STUCK_MS while the user
+ * actively taps it, force a recovery (blur → restore contenteditable →
+ * refocus). The official component is the writer of editability, so this only
+ * fires on a genuine stuck submit; a failed recovery leaves the DOM untouched.
  */
 export const BUSY_STUCK_MS = 30_000
 
+/** The composer's own phase values that mean a submission is IN FLIGHT — the
+ *  official input machine's `adjudicating` / `submitting` (`input/machine.ts`,
+ *  the same pair `machineBusy` is built from), published by the composer node
+ *  as `data-phase` (its other values are `inert`, `plain` and `claimed`). */
+export const BUSY_COMPOSER_PHASES: readonly string[] = ['adjudicating', 'submitting']
+
+/** Is the composer inside a submission window? Pure — unit-tested. */
+export function isComposerSubmitBusy(phase: string | null | undefined): boolean {
+  return phase !== null && phase !== undefined && BUSY_COMPOSER_PHASES.includes(phase)
+}
+
+/** The official component's own lock marker on the composer node:
+ *  `aria-disabled={editorDisabled || undefined}` where
+ *  `editorDisabled = removed || (locked && !workspaceTrigger)`. It is the
+ *  discriminator the phase cannot see — a block (`blocked`, `parentOffline`,
+ *  `removed`, no session) is `locked` INDEPENDENTLY of `machineBusy`, so it
+ *  renders non-editable *during* a submission too, and must never be
+ *  force-unlocked. Pure over the element face — unit-tested. */
+export function isOfficiallyDisabled(input: { getAttribute(name: string): string | null }): boolean {
+  return input.getAttribute('aria-disabled') === 'true'
+}
+
+/**
+ * The self-heal clock: 0 unless the composer is non-editable, inside a
+ * submission window, AND not officially disabled; otherwise the time that
+ * state was FIRST seen.
+ *
+ * All three halves are load-bearing:
+ *  - the PHASE gate scopes the recovery to a stuck SUBMIT (what it exists for);
+ *  - the DISABLED gate covers the overlap the phase alone cannot see: upstream
+ *    keeps `locked = removed || inert || !live || blocked || parentOffline`
+ *    INDEPENDENT of `machineBusy`, so an owner block or an offline parent that
+ *    arrives during a submission renders non-editable + busy — and a
+ *    force-unlock there would fight a live official block (Lexical's own
+ *    `setEditable(false)` gate stays closed, so it produces a half-editable
+ *    DOM). `aria-disabled` is the official component's own expression of that
+ *    lock (`editorDisabled = removed || (locked && !workspaceTrigger)`);
+ *  - seeding from the DOM rather than from a mutation covers the composer that
+ *    MOUNTS stuck (React writes `contenteditable` before insertion, so no
+ *    record exists).
+ * Pure — unit-tested.
+ */
+export function lockClock(
+  editable: boolean,
+  busy: boolean,
+  disabled: boolean,
+  since: number,
+  now: number,
+): number {
+  if (editable || !busy || disabled) return 0
+  return since === 0 ? now : since
+}
+
+/** The recovery decision, re-evaluated against the LIVE state before any DOM
+ *  write: the composer must still be non-editable, still inside a submission
+ *  window, still not officially disabled, and the clock must have run for the
+ *  full window. Pure — unit-tested (the installer used to inline this). */
+export function shouldRecoverStuckComposer(facts: {
+  readonly editable: boolean
+  readonly busy: boolean
+  readonly disabled: boolean
+  readonly elapsedMs: number
+}): boolean {
+  return !facts.editable && facts.busy && !facts.disabled && facts.elapsedMs >= BUSY_STUCK_MS
+}
+
+/** MutationObserver options for the self-heal channel, exported so a test can
+ *  pin all three load-bearing attributes: a stuck submit is editability +
+ *  phase + the official disabled marker together, and dropping any one of them
+ *  either misses the state or fires against a legitimate lock. */
+export const SELF_HEAL_MUTATION_OPTIONS: MutationObserverInit = {
+  attributes: true,
+  attributeFilter: ['contenteditable', 'data-phase', 'aria-disabled'],
+  subtree: true,
+}
+
 export function installComposerSelfHeal(root: ParentNode = document): () => void {
+  let current: HTMLElement | null = null
   let lockedSince = 0
-  const observer = new MutationObserver(() => {
+  const query = (): HTMLElement | null => {
     const input = root.querySelector(COMPOSER_INPUT_SELECTOR)
-    if (!(input instanceof HTMLElement)) return
-    const editable = input.contentEditable === 'true'
-    if (!editable) {
-      if (lockedSince === 0) lockedSince = Date.now()
-    } else {
+    return input instanceof HTMLElement ? input : null
+  }
+  const sync = (input: HTMLElement | null, now = Date.now()): void => {
+    if (input === null) {
+      current = null
+      lockedSince = 0
+      return
+    }
+    // A fresh element restarts the clock from its own state: what happened
+    // before it appeared is not observable.
+    if (input !== current) {
+      current = input
       lockedSince = 0
     }
-  })
+    lockedSince = lockClock(
+      input.contentEditable === 'true',
+      isComposerSubmitBusy(input.dataset.phase),
+      isOfficiallyDisabled(input),
+      lockedSince,
+      now,
+    )
+  }
+  // Install-time seed + attribute channel (editability, phase AND the official
+  // disabled marker: a stuck submit is the three of them together).
+  sync(query())
+  const observer = new MutationObserver(() => sync(query()))
   const onPointerDown = (event: PointerEvent): void => {
     if (event.pointerType === 'mouse') return
-    const input = root.querySelector(COMPOSER_INPUT_SELECTOR)
-    if (!(input instanceof HTMLElement)) return
-    if (!input.contains(event.target as Node)) return
+    const input = query()
+    if (input === null || !input.contains(event.target as Node)) return
+    // A composer that mounted stuck has no mutation to start its clock: the
+    // tap that finds it stuck starts it, so the NEXT tap past the window
+    // recovers instead of never.
+    sync(input)
     if (lockedSince === 0) return
-    if (Date.now() - lockedSince < BUSY_STUCK_MS) return
-    // User actively tapped a stuck composer — force recovery.
+    // Re-evaluate against the live state: only a state that is still a stuck
+    // submit may be recovered (2026-09-13 review-fix).
+    const recover = shouldRecoverStuckComposer({
+      editable: input.contentEditable === 'true',
+      busy: isComposerSubmitBusy(input.dataset.phase),
+      disabled: isOfficiallyDisabled(input),
+      elapsedMs: Date.now() - lockedSince,
+    })
     lockedSince = 0
-    const editable = input.contentEditable === 'true'
-    if (editable) return
+    if (!recover) return
     input.blur()
     input.contentEditable = 'true'
     input.focus({ preventScroll: true })
   }
-  observer.observe(root, { attributes: true, attributeFilter: ['contenteditable'], subtree: true })
+  observer.observe(root, SELF_HEAL_MUTATION_OPTIONS)
   document.addEventListener('pointerdown', onPointerDown, true)
   return () => {
     observer.disconnect()
