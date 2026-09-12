@@ -164,6 +164,28 @@ test('binding: deleteSessionContent refuses running (always) and loaded (unless 
   }
 })
 
+test('binding: deleteSessionContent refuses a PROTECTED id before any live/liveness leg (invariant guard)', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'archive-cleanup-protected-'))
+  try {
+    writeFileSync(join(dir, 'session.jsonl'), '{}\n')
+    const host = makeHostBinding({
+      agents: { list: () => [{ id: 'idle-1', status: 'idle' }] },
+      sessionPersistence: {
+        locate: h => (h.id === 'idle-1' ? { kind: 'jsonl', path: join(dir, 'session.jsonl') } : undefined),
+      },
+    })
+    const protectedIds = new Set(['idle-1'])
+    await assert.rejects(() => host.deleteSessionContent('idle-1', dir, true, protectedIds), (error: unknown) => {
+      return error instanceof ArchiveCleanupError && error.code === 'protected'
+    })
+    assert.equal(existsSync(join(dir, 'session.jsonl')), true, 'the guard runs before any filesystem mutation')
+    // A protected id outside the set is unaffected (the set only ever narrows).
+    assert.equal(await host.deleteSessionContent('other-1', dir, true, protectedIds), 'missing')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('binding: a drifted agent status fails the live read loudly', async () => {
   const host = makeHostBinding({
     agents: { list: () => [{ id: 'a', status: 'waiting' }] },

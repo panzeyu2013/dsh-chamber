@@ -167,7 +167,7 @@ import {
 import {
   archiveSession, createHostDirectory, createSession, createWorkspace, deleteWorkspace,
   forkSession, getInstanceClient, insertSessionBefore, insertWorkspaceBefore, listHostDirectory,
-  renameSession, renameWorkspace, searchSessions,
+  renameSession, renameWorkspace, searchSessions, stopArchivedSubtree,
 } from '../shared/instance-api.ts'
 import { DirectoryBrowser } from '@deepseek-ai/dsh-client-ui-directory-picker-browse/client/DirectoryBrowser.tsx'
 import { ArchiveManagerDialog } from './ArchiveManagerDialog.tsx'
@@ -1126,6 +1126,22 @@ export function SidebarRoot({
   const onArchiveSession = (server: ChamberServerAggregate, sessionId: string): void => {
     runAction(`${server.id}/session/${sessionId}/archive`, async () => {
       await archiveSession(getInstanceClient(server.id), sessionId)
+      // 2026-09 归档即终止（user motion「已归档的对话应该终止」，与删除侧同一
+      // 纪律）：归档成功后**就地**停止该会话及其 subagent 闭包。归档会把"正在
+      // 查看"的选中清空（vendor `clearArchivedCurrent`），卡在提问/权限的回合
+      // 因此永远等不到回答——不终止就会变成永久 running 的僵尸，之后任何一次
+      // 删除都会被 running 守卫整树跳过。停止是 advisory：归档已生效，停止失败
+      // 只告警（删除侧还会再停一次），绝不回滚归档——连同"停止腿自身抛错"也
+      // 一并吞掉并告警：归档动作已成功，它不得被一个建议性失败改判为失败。
+      try {
+        const stop = await stopArchivedSubtree(getInstanceClient(server.id), sessionId)
+        if (stop.unavailable || stop.stillRunning.length > 0) {
+          console.warn(`[chamber] archived ${sessionId} on ${server.id} but its subtree did not settle:`,
+            stop.unavailable ? 'session list unreadable' : `still running: ${stop.stillRunning.join(', ')}`)
+        }
+      } catch (error) {
+        console.warn(`[chamber] archived ${sessionId} on ${server.id} but the stop pass threw (advisory):`, error)
+      }
       chamberBridge.requestRefresh(server.id)
     })
   }

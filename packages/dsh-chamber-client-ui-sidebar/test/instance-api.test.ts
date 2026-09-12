@@ -114,6 +114,7 @@ import {
   previewArchiveCleanup,
   purgeArchivedSessions,
   sessionPurgeClosure,
+  stopArchivedSubtree,
   stopSessionsForPurge,
   upwardChainComplete,
   type SessionRunningLineage,
@@ -158,7 +159,7 @@ test('purgeArchivedSessions decodes counts and per-item errors (partial failure 
       'not-an-object',
     ],
   })
-  const result: ArchiveCleanupPurgeResult = await purgeArchivedSessions(client as never)
+  const result: ArchiveCleanupPurgeResult = await purgeArchivedSessions(client as never, ['s1'])
   assert.equal(result.deletedSessions, 1)
   assert.equal(result.deletedSubagents, 2)
   assert.equal(result.skippedRunning, 1)
@@ -170,11 +171,11 @@ test('purgeArchivedSessions decodes counts and per-item errors (partial failure 
 
 test('purgeArchivedSessions carries the orphan-sweep count when the host reports it', async () => {
   const client = cleanupClient({ deletedSessions: 0, clearedOrphanMembers: 3 })
-  const result: ArchiveCleanupPurgeResult = await purgeArchivedSessions(client as never)
+  const result: ArchiveCleanupPurgeResult = await purgeArchivedSessions(client as never, ['s1'])
   assert.equal(result.deletedSessions, 0)
   assert.equal(result.clearedOrphanMembers, 3)
   // A malformed/negative count degrades to absent, never to a fabricated zero.
-  const malformed = await purgeArchivedSessions(cleanupClient({ clearedOrphanMembers: -2 }) as never)
+  const malformed = await purgeArchivedSessions(cleanupClient({ clearedOrphanMembers: -2 }) as never, ['s1'])
   assert.equal(malformed.clearedOrphanMembers, undefined)
 })
 
@@ -193,7 +194,7 @@ test('archiveCleanup business failures decode the NESTED domain carrier (securit
   await assert.rejects(() => previewArchiveCleanup(client as never), (error: unknown) => {
     return error instanceof Error && error.message.startsWith('busy:')
   })
-  await assert.rejects(() => purgeArchivedSessions(client as never), (error: unknown) => {
+  await assert.rejects(() => purgeArchivedSessions(client as never, ['s1']), (error: unknown) => {
     return error instanceof Error && error.message.startsWith('registry-unreadable:')
   })
   // RPC-level ok:false (transport refusal) keeps the same shape.
@@ -202,7 +203,7 @@ test('archiveCleanup business failures decode the NESTED domain carrier (securit
       purge: async () => ({ ok: false as const, error: { code: 'unclaimed', message: 'x', details: {} } }),
     },
   }
-  await assert.rejects(() => purgeArchivedSessions(refusedTransport as never), (error: unknown) => {
+  await assert.rejects(() => purgeArchivedSessions(refusedTransport as never, ['s1']), (error: unknown) => {
     return error instanceof Error && error.message.startsWith('unclaimed:')
   })
 })
@@ -237,7 +238,7 @@ test('malformed nested domain carriers FAIL LOUD — never decode into empty cou
     }
     const run = c.via === 'preview'
       ? () => previewArchiveCleanup(client as never)
-      : () => purgeArchivedSessions(client as never)
+      : () => purgeArchivedSessions(client as never, ['s1'])
     await assert.rejects(run, (error: unknown) => {
       return error instanceof Error && error.message.startsWith('归档清理域返回了畸形结果')
     }, c.name)
@@ -340,16 +341,16 @@ test('purge/preview wrappers map no-response outcomes to honest retry copy (desi
     },
   }
   await assert.rejects(() => previewArchiveCleanup(timeoutClient as never), /预览超时或网络中断，请重试/)
-  await assert.rejects(() => purgeArchivedSessions(timeoutClient as never), /可能仍在进行.*重复执行是安全的/)
+  await assert.rejects(() => purgeArchivedSessions(timeoutClient as never, ['s1']), /可能仍在进行.*重复执行是安全的/)
   await assert.rejects(() => previewArchiveCleanup(networkClient as never), /预览超时或网络中断，请重试/)
-  await assert.rejects(() => purgeArchivedSessions(networkClient as never), /可能仍在进行.*重复执行是安全的/)
+  await assert.rejects(() => purgeArchivedSessions(networkClient as never, ['s1']), /可能仍在进行.*重复执行是安全的/)
   // A deterministic business failure still surfaces verbatim (never remapped).
   const refused = {
     archiveCleanup: {
       purge: async () => ({ ok: true as const, value: { ok: false as const, error: { code: 'registry-unreadable', message: 'unreadable', details: {} } } }),
     },
   }
-  await assert.rejects(() => purgeArchivedSessions(refused as never), (error: unknown) => {
+  await assert.rejects(() => purgeArchivedSessions(refused as never, ['s1']), (error: unknown) => {
     return error instanceof Error && error.message.startsWith('registry-unreadable:')
   })
   // A proxy 504 upstream_timeout is an uncertain outcome (the host may still
@@ -359,7 +360,7 @@ test('purge/preview wrappers map no-response outcomes to honest retry copy (desi
       purge: async () => { throw new Error('实例不可达：transport failure for endpoint: HTTP 504 upstream_timeout') },
     },
   }
-  await assert.rejects(() => purgeArchivedSessions(proxiedTimeout as never), /可能仍在进行.*重复执行是安全的/)
+  await assert.rejects(() => purgeArchivedSessions(proxiedTimeout as never, ['s1']), /可能仍在进行.*重复执行是安全的/)
 })
 
 test('503 classification: not-ready answers surface as InstanceUnavailableError (not-ready prefix)', async () => {
@@ -379,7 +380,7 @@ test('503 classification: not-ready answers surface as InstanceUnavailableError 
   }
 })
 
-test('purgeArchivedSessions forwards the optional subset filter; no filter keeps the zero-arg shape (2026-09 wire amendment)', async () => {
+test('purgeArchivedSessions always sends {sessionIds, force:true, protectSessionIds} — one shape, no legacy legs (2026-09 protection amendment)', async () => {
   const originalFetch = globalThis.fetch
   const bodies: string[] = []
   try {
@@ -392,7 +393,18 @@ test('purgeArchivedSessions forwards the optional subset filter; no filter keeps
         rpcId: envelope.rpcId,
         result: {
           ok: true,
-          value: { ok: true, value: { deletedSessions: 1, deletedSubagents: 0, skippedRunning: 0, errors: [] } },
+          value: {
+            ok: true,
+            value: {
+              deletedSessions: 1,
+              deletedSubagents: 0,
+              skippedRunning: 0,
+              skippedLoaded: 0,
+              forcedLoaded: 1,
+              skippedProtected: 2,
+              errors: [],
+            },
+          },
         },
       }), {
         status: 200,
@@ -401,20 +413,21 @@ test('purgeArchivedSessions forwards the optional subset filter; no filter keeps
     }) as typeof fetch
 
     const client = getInstanceClient('local')
-    const withFilter = await purgeArchivedSessions(client, ['s1', 's2'])
-    assert.equal(withFilter.deletedSessions, 1)
-    const all = await purgeArchivedSessions(client)
-    assert.equal(all.deletedSessions, 1)
-    assert.equal(bodies.length, 2)
+    const result = await purgeArchivedSessions(client, ['s1', 's2'], ['s9'])
+    assert.equal(result.deletedSessions, 1)
+    assert.equal(result.forcedLoaded, 1)
+    assert.equal(result.skippedProtected, 2, 'the host-reported protected-tree count is decoded')
+    assert.equal(bodies.length, 1, 'exactly one call — no skew retry leg exists')
     const argsOf = (raw: string): unknown => (JSON.parse(raw) as { payload?: unknown }).payload
-    assert.deepEqual(argsOf(bodies[0] as string), { args: { sessionIds: ['s1', 's2'] } })
-    assert.deepEqual(argsOf(bodies[1] as string), { args: {} })
+    assert.deepEqual(argsOf(bodies[0] as string), {
+      args: { sessionIds: ['s1', 's2'], force: true, protectSessionIds: ['s9'] },
+    })
   } finally {
     globalThis.fetch = originalFetch
   }
 })
 
-test('purgeArchivedSessions: an explicit EMPTY selection sends the subset shape (never the zero-arg all)', async () => {
+test('purgeArchivedSessions: no protectable session still sends the same shape with an empty protected set', async () => {
   const originalFetch = globalThis.fetch
   const bodies: string[] = []
   try {
@@ -438,204 +451,28 @@ test('purgeArchivedSessions: an explicit EMPTY selection sends the subset shape 
     const client = getInstanceClient('local')
     const result = await purgeArchivedSessions(client, [])
     assert.equal(result.deletedSessions, 0)
-    assert.equal(bodies.length, 1)
+    assert.equal(result.skippedProtected, 0, 'an absent count decodes to 0, never undefined')
     const payload = (JSON.parse(bodies[0] as string) as { payload?: unknown }).payload
-    // [] is the client/host delimiter for "delete nothing" — it MUST NOT be
-    // normalized to the undefined (delete ALL) shape.
-    assert.deepEqual(payload, { args: { sessionIds: [] } })
+    // [] is the delimiter for "delete nothing" and MUST NOT be normalized to a
+    // whole-set request; the protected set is explicit and empty.
+    assert.deepEqual(payload, { args: { sessionIds: [], force: true, protectSessionIds: [] } })
   } finally {
     globalThis.fetch = originalFetch
   }
 })
 
-test('purgeArchivedSessions: an OLD zero-param host refuses the subset filter with an honest restart hint (2026-09 review round)', async () => {
-  const originalFetch = globalThis.fetch
-  const seenArgs: unknown[] = []
-  try {
-    // Host answers the RPC-level business refusal the generic gateway
-    // produces for an unknown args key on a zero-param method.
-    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const envelope = JSON.parse(String(init?.body ?? '{}')) as { payload?: { args?: unknown }; rpcId?: string }
-      seenArgs.push(envelope.payload?.args)
-      return new Response(JSON.stringify({
-        type: 'server-response',
-        rpcId: envelope.rpcId,
-        result: {
-          ok: false,
-          error: {
-            code: 'gateway/arguments-invalid',
-            message: 'typert gateway: archiveCleanup/purge: args fields do not match the descriptor: unexpected "sessionIds"',
-            details: {},
-          },
-        },
-      }), {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-      })
-    }) as typeof fetch
-
-    const client = getInstanceClient('local')
-    await assert.rejects(
-      () => purgeArchivedSessions(client, ['s1']),
-      (error: unknown) => error instanceof Error && error.message.includes('版本过旧'),
-    )
-    assert.deepEqual(seenArgs, [{ sessionIds: ['s1'] }])
-  } finally {
-    globalThis.fetch = originalFetch
+test('purgeArchivedSessions surfaces a host args refusal verbatim (no compatibility fallback exists)', async () => {
+  const refused = {
+    archiveCleanup: {
+      purge: async () => ({
+        ok: true as const,
+        value: { ok: false as const, error: { code: 'gateway/arguments-invalid', message: 'unexpected "protectSessionIds"', details: {} } },
+      }),
+    },
   }
-})
-
-// ---------------------------------------------------------------------------
-// 2026-09 revision ("已归档的对话应该终止"): stop-then-purge. The manager
-// cancels the selected sessions' running turns through the OFFICIAL
-// session/cancel wire, waits for them to leave the running set, and then
-// purges with force so the host may delete merely LOADED content.
-// ---------------------------------------------------------------------------
-
-test('purgeArchivedSessions forwards force and decodes the split skip counts', async () => {
-  const originalFetch = globalThis.fetch
-  const bodies: string[] = []
-  try {
-    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const raw = String(init?.body ?? '')
-      bodies.push(raw)
-      const envelope = JSON.parse(raw) as { rpcId?: string }
-      return new Response(JSON.stringify({
-        type: 'server-response',
-        rpcId: envelope.rpcId,
-        result: {
-          ok: true,
-          value: {
-            ok: true,
-            value: {
-              deletedSessions: 2,
-              deletedSubagents: 1,
-              skippedRunning: 0,
-              skippedLoaded: 1,
-              forcedLoaded: 2,
-              errors: [],
-            },
-          },
-        },
-      }), { status: 200, headers: { 'content-type': 'application/json' } })
-    }) as typeof fetch
-
-    const client = getInstanceClient('local')
-    const result = await purgeArchivedSessions(client, ['s1'], true)
-    assert.equal(result.forcedLoaded, 2)
-    assert.equal(result.skippedLoaded, 1)
-    assert.equal(result.forceUnsupported, false, 'a host that accepts force is never marked as refusing it')
-    const payload = (JSON.parse(bodies[0] as string) as { payload?: unknown }).payload
-    assert.deepEqual(payload, { args: { sessionIds: ['s1'], force: true } })
-  } finally {
-    globalThis.fetch = originalFetch
-  }
-})
-
-// 2026-09 P1 round: an instance whose dsh predates the force flag refuses the
-// WHOLE call. Dropping force (the shape that host accepts) keeps deletion
-// working; the result must MARK it so the manager can say honestly that
-// loaded-but-idle subtrees were skipped.
-test('purgeArchivedSessions retries ONCE without force when an old host refuses the flag, and marks the result', async () => {
-  const originalFetch = globalThis.fetch
-  const payloads: unknown[] = []
-  try {
-    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const envelope = JSON.parse(String(init?.body ?? '{}')) as { rpcId?: string; payload?: { args?: Record<string, unknown> } }
-      payloads.push(envelope.payload)
-      if (envelope.payload?.args?.force === true) {
-        return new Response(JSON.stringify({
-          type: 'server-response',
-          rpcId: envelope.rpcId,
-          result: {
-            ok: false,
-            error: {
-              code: 'gateway/arguments-invalid',
-              message: 'typert gateway: archiveCleanup/purge: args fields do not match the descriptor: unexpected "force"',
-              details: {},
-            },
-          },
-        }), { status: 200, headers: { 'content-type': 'application/json' } })
-      }
-      return new Response(JSON.stringify({
-        type: 'server-response',
-        rpcId: envelope.rpcId,
-        result: {
-          ok: true,
-          value: {
-            ok: true,
-            value: { deletedSessions: 1, deletedSubagents: 0, skippedRunning: 0, skippedLoaded: 3, forcedLoaded: 0, errors: [] },
-          },
-        },
-      }), { status: 200, headers: { 'content-type': 'application/json' } })
-    }) as typeof fetch
-
-    const result = await purgeArchivedSessions(getInstanceClient('local'), ['s1'], true)
-    assert.equal(result.forceUnsupported, true, 'the caller must be able to tell the user force was not honored')
-    assert.equal(result.skippedLoaded, 3, 'the legacy run skipped the loaded-but-idle subtree')
-    assert.deepEqual(payloads, [
-      { args: { sessionIds: ['s1'], force: true } },
-      { args: { sessionIds: ['s1'] } },
-    ], 'exactly one legacy-shape retry, never a silent drop of the force shape')
-  } finally {
-    globalThis.fetch = originalFetch
-  }
-})
-
-test('purgeArchivedSessions: a host too old for force AND the subset filter still gets the honest restart hint', async () => {
-  const originalFetch = globalThis.fetch
-  let calls = 0
-  try {
-    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
-      calls += 1
-      const envelope = JSON.parse(String(init?.body ?? '{}')) as { rpcId?: string }
-      return new Response(JSON.stringify({
-        type: 'server-response',
-        rpcId: envelope.rpcId,
-        result: {
-          ok: false,
-          error: { code: 'gateway/arguments-invalid', message: 'args fields do not match the descriptor', details: {} },
-        },
-      }), { status: 200, headers: { 'content-type': 'application/json' } })
-    }) as typeof fetch
-
-    await assert.rejects(
-      () => purgeArchivedSessions(getInstanceClient('local'), ['s1'], true),
-      (error: unknown) => error instanceof Error && error.message.includes('不支持强制删除'),
-    )
-    assert.equal(calls, 2, 'one force attempt + one legacy retry, then the honest refusal')
-  } finally {
-    globalThis.fetch = originalFetch
-  }
-})
-
-test('purgeArchivedSessions: an OLD host without the force flag answers an honest restart hint', async () => {
-  const originalFetch = globalThis.fetch
-  try {
-    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const envelope = JSON.parse(String(init?.body ?? '{}')) as { rpcId?: string }
-      return new Response(JSON.stringify({
-        type: 'server-response',
-        rpcId: envelope.rpcId,
-        result: {
-          ok: false,
-          error: {
-            code: 'gateway/arguments-invalid',
-            message: 'typert gateway: archiveCleanup/purge: args fields do not match the descriptor: unexpected "force"',
-            details: {},
-          },
-        },
-      }), { status: 200, headers: { 'content-type': 'application/json' } })
-    }) as typeof fetch
-
-    const client = getInstanceClient('local')
-    await assert.rejects(
-      () => purgeArchivedSessions(client, ['s1'], true),
-      (error: unknown) => error instanceof Error && error.message.includes('不支持强制删除'),
-    )
-  } finally {
-    globalThis.fetch = originalFetch
-  }
+  await assert.rejects(() => purgeArchivedSessions(refused as never, ['s1'], ['s9']), (error: unknown) => {
+    return error instanceof Error && error.message.startsWith('gateway/arguments-invalid:')
+  })
 })
 
 test('cancelSession posts the official session/cancel request shape', async () => {
@@ -686,7 +523,7 @@ test('fetchSessionRunningLineage keeps subagent rows but only SUBAGENT-origin ed
     'only origin === "subagent" is lineage: the fork edge is never followed')
 })
 
-test('stopSessionsForPurge: cancels only running ids, waits for settle, reports leftovers', async () => {
+test('stopSessionsForPurge asks EVERY closure member to cancel; only observed-running ones count as stopped (2026-09 maintenance-phase scope)', async () => {
   const cancelled: string[] = []
   let running = new Set(['s1', 's2', 'child-1'])
   const client = {} as never
@@ -697,8 +534,11 @@ test('stopSessionsForPurge: cancels only running ids, waits for settle, reports 
     attempts: 3,
     intervalMs: 1,
   })
-  assert.deepEqual(cancelled, ['s1', 's2'])
-  assert.deepEqual(result.cancelled, ['s1', 's2'])
+  // s3 is NOT running, yet it is asked to cancel: a maintenance phase
+  // (compaction/schedule) reports `idle` while it still appends to the log, and
+  // a cancel is the only client-side way to abort it before a content purge.
+  assert.deepEqual(cancelled, ['s1', 's2', 's3'])
+  assert.deepEqual(result.cancelled, ['s1', 's2'], 'the user-visible count stays honest')
   assert.deepEqual(result.stillRunning, [])
   assert.deepEqual(result.failures, [])
   assert.equal(result.unavailable, false)
@@ -736,7 +576,7 @@ test('stopSessionsForPurge catches a failed session/list read (never throws) and
   assert.deepEqual(result.stillRunning, [])
   assert.deepEqual(result.failures, [])
   assert.equal(result.unavailable, true,
-    'caught, never thrown — the caller refuses the force path on an unknown closure')
+    'caught, never thrown — the caller proceeds with the purge and the host running guard is the safety net')
   assert.equal(result.lineage, null, 'no lineage facts were read')
   assert.deepEqual(result.refusedRoots, [])
 })
@@ -810,8 +650,8 @@ test('stopSessionsForPurge cancels the running CLOSURE and waits for the whole c
     attempts: 3,
     intervalMs: 1,
   })
-  assert.deepEqual(cancelled, ['child', 'grand'],
-    'an invisible running descendant (and its own child) is cancelled; unrelated running ids are never touched')
+  assert.deepEqual(cancelled, ['root', 'child', 'grand'],
+    'every closure member is asked (the root included); unrelated running ids are never touched')
   assert.deepEqual(result.cancelled, ['child', 'grand'])
   assert.deepEqual(result.stillRunning, [], 'the wait covers every closure member')
   assert.deepEqual(result.failures, [])
@@ -826,8 +666,8 @@ test('stopSessionsForPurge never cancels a running FORK of the selected root (F3
     delay: async () => {},
     attempts: 1,
   })
-  assert.deepEqual(cancelled, ['child', 'grand'],
-    'only the subagent closure is cancelled: the fork (and its own subagent child) live in another tree')
+  assert.deepEqual(cancelled, ['root', 'child', 'grand'],
+    'only the subagent closure is asked: the fork (and its own subagent child) live in another tree')
   assert.deepEqual(result.cancelled, ['child', 'grand'])
 })
 
@@ -878,6 +718,111 @@ test('stopSessionsForPurge without lineage facts stays roots-only (a parent is n
   })
   assert.deepEqual(cancelled, ['root'], 'no edges => only the requested roots are cancelled')
   assert.deepEqual(result.stillRunning, [])
+})
+
+test('stopSessionsForPurge surfaces a LISTED member\'s failed cancel (a maintenance phase reports idle, so its failure must not be swallowed)', async () => {
+  // `idle-listed` is not in the running set, but it HAS a list row — i.e. it can
+  // be mid-maintenance (vendor agent loop reports `idle` during compaction) and
+  // still appending to the log. Its cancel failure is the dangerous case.
+  const parents = new Map<string, string>()
+  const lineage: SessionRunningLineage = {
+    running: new Set(['root']),
+    parents,
+    listed: new Set(['root', 'idle-listed']),
+    subagentIds: new Set(),
+  }
+  const result = await stopSessionsForPurge({} as never, ['root', 'idle-listed', 'cold-gone'], {
+    fetchRunning: async () => lineage,
+    cancel: async (_client, sessionId) => {
+      if (sessionId === 'root') return
+      throw new Error(`refused: ${sessionId}`)
+    },
+    delay: async () => {},
+    attempts: 1,
+    intervalMs: 1,
+  })
+  assert.deepEqual(result.cancelled, ['root'])
+  assert.deepEqual(result.failures.map(failure => failure.sessionId), ['idle-listed'],
+    'a listed member\'s failure is surfaced; the unlisted (cold) member\'s is a documented no-op')
+})
+
+test('stopSessionsForPurge keeps INPUT order under the bounded cancel fan-out', async () => {
+  const ids = ['r1', 'r2', 'r3', 'r4', 'r5', 'r6', 'r7', 'r8']
+  const lineage: SessionRunningLineage = {
+    running: new Set(ids),
+    parents: new Map(),
+    listed: new Set(ids),
+    subagentIds: new Set(),
+  }
+  const result = await stopSessionsForPurge({} as never, ids, {
+    fetchRunning: async () => lineage,
+    // Reverse completion order: the last id resolves first. Accounting must
+    // still follow the requested order (the note/counts stay deterministic).
+    cancel: async (_client, sessionId) => {
+      const reverseDelay = (ids.length - ids.indexOf(sessionId)) * 2
+      await new Promise<void>(resolve => { setTimeout(resolve, reverseDelay) })
+    },
+    delay: async () => {},
+    attempts: 1,
+    intervalMs: 1,
+  })
+  assert.deepEqual(result.cancelled, ids, 'input order, not completion order')
+})
+
+test('stopSessionsForPurge: requireCompleteExcludeChain cancels NOTHING when the viewed session\'s upward chain is unresolvable (2026-09)', async () => {
+  const cancelled: string[] = []
+  // `grand` is a subagent whose parent ROW IS MISSING from this read (the
+  // vendor session list skips cwd-less cold records): the client cannot prove
+  // which selected roots contain it, so no tree may be cancelled (the host
+  // protects it anyway; cancelling would abort a live turn of a tree that will
+  // not be deleted).
+  const lineage: SessionRunningLineage = {
+    running: new Set(['root', 'child']),
+    parents: new Map([['grand', 'child']]),
+    listed: new Set(['root', 'grand']),
+    subagentIds: new Set(['grand', 'child']),
+  }
+  const result = await stopSessionsForPurge(lineageClient(LINEAGE_ROWS) as never, ['root'], {
+    fetchRunning: async () => lineage,
+    cancel: async (_client, sessionId) => { cancelled.push(sessionId) },
+    delay: async () => {},
+    attempts: 1,
+    exclude: ['grand'],
+    requireCompleteExcludeChain: true,
+  })
+  assert.deepEqual(cancelled, [], 'an unresolvable viewed-session chain cancels nothing')
+  assert.deepEqual(result.cancelled, [])
+  assert.deepEqual(result.refusedRoots, [])
+  assert.equal(result.unavailable, false, 'the read itself succeeded — this is a scope decision, not a failure')
+})
+
+test('stopSessionsForPurge: a COMPLETE viewed-session chain keeps the cancel pass running (2026-09)', async () => {
+  const cancelled: string[] = []
+  // Real rows: grand → child → root, so the chain resolves and root's closure
+  // is known not to contain `sibling`.
+  const lineage = await fetchSessionRunningLineage(lineageClient(LINEAGE_ROWS) as never)
+  const result = await stopSessionsForPurge(lineageClient(LINEAGE_ROWS) as never, ['sibling'], {
+    fetchRunning: async () => lineage,
+    cancel: async (_client, sessionId) => { cancelled.push(sessionId) },
+    delay: async () => {},
+    attempts: 1,
+    exclude: ['grand'],
+    requireCompleteExcludeChain: true,
+  })
+  assert.deepEqual(cancelled, ['sibling'], 'the unrelated root is still stopped')
+  assert.deepEqual(result.refusedRoots, [])
+})
+
+test('stopArchivedSubtree: the archive-time stop is the exclusion-free closure pass (advisory, never throws)', async () => {
+  // A failed lineage read must resolve to the advisory `unavailable` outcome —
+  // the archive already happened, so the stop never throws and never rolls it
+  // back (the delete-time pass tries again later).
+  const result = await stopArchivedSubtree({
+    session: { list: async () => { throw new Error('session/list exploded') } },
+  } as never, 'root')
+  assert.equal(result.unavailable, true)
+  assert.deepEqual(result.cancelled, [])
+  assert.equal(result.lineage, null)
 })
 
 // 2026-09-11 upstream-alignment T7: the unary fallback publishes the session's

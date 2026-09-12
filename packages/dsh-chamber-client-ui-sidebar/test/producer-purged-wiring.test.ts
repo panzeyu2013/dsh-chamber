@@ -168,3 +168,32 @@ function captureWarnings(body: () => void): string[] {
   }
   return warnings
 }
+
+// ---------------------------------------------------------------------------
+// 2026-09 protection amendment: the client-side refusal API is GONE from the
+// shared flow (the host owns the invariants), and the archive verb stops the
+// subtree. Source pins on the shape, in the same spirit as the purge wiring
+// above.
+// ---------------------------------------------------------------------------
+
+test('the purge flow module has no refusal gate and always force-purges with the protected id', () => {
+  const read = (relative: string): string => readFileSync(new URL(relative, import.meta.url), 'utf8')
+  const flow = read('../src/shared/archive-purge.ts')
+  assert.equal(/purgeRefusalReason/.test(flow), false, 'the retired pre-flight gate must not come back')
+  assert.match(flow, /const protect = viewedSessionId === undefined \? \[\] : \[viewedSessionId\]/,
+    'the protection set is derived from the viewed id')
+  assert.match(flow, /requireCompleteExcludeChain: viewedSessionId !== undefined/,
+    'the cancel pass is gated on being able to prove the viewed session outside the closure')
+  const api = readFileSync(new URL('../src/shared/instance-api.ts', import.meta.url), 'utf8')
+  assert.match(api,
+    /client\.archiveCleanup\.purge\(sessionIds, true, protectSessionIds\)/,
+    'force is ALWAYS on and the protected set always travels')
+  assert.match(api, /export async function stopArchivedSubtree\(/,
+    'the archive-time stop must exist as a named, documented seam')
+})
+
+test('a no-op purge run keeps the user\'s selection (only a removal clears it)', () => {
+  const dialog = readFileSync(new URL('../src/client/ArchiveManagerDialog.tsx', import.meta.url), 'utf8')
+  assert.match(dialog, /if \(outcome\.kind === 'info' && purgeRemovedContent\(run\)\) \{/,
+    'the selection clear must be gated on an actual removal — a protection/skip-only run stays one click from retry')
+})

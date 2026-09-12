@@ -72,7 +72,7 @@
 | 通知与未读徽标、Dock/托盘/任务栏三形态 | design 19 |
 | open-in 拉起外部应用、图标、深链冷热启动 | design 16、20 §6/§10 |
 | Git worktree 全链（真实远程 Linux 仓库） | design 08 |
-| 归档管理器与 force 清理链 | design 24 §13 |
+| 归档管理器与 force 清理链（含 2026-09 保护修正三态：无会话打开仍可删 + 顶部降级说明行 / 正在查看的会话所在树被 `skippedProtected` 跳过 / 归档即终止） | design 24 §5、§13 |
 | gateway 形态（生产 TLS、`/chamber/*`、移动端） | design 17、21 §9 |
 | 移动端 Web 面（真机触控档、安全区、键盘） | design 17 §18.6 |
 | Linux 桌面 / Windows 首版 | design 22 §7、23 |
