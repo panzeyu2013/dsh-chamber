@@ -155,9 +155,14 @@ function kindStatusKey(kind: TodoAttentionKind): SidebarKey {
   }
 }
 
-/** Title fallback: unnamed copy matches the session rows. */
+/** Official display label (I3): the entry carries the resolved title, so the
+ *  unnamed copy only survives as a defensive fallback for a pre-revision entry
+ *  object — a session whose title the host could not read shows its project
+ *  directory name, exactly like the session rows. */
 function titleOf(entry: TodoAttentionEntry, t: TodoTranslate): string {
-  return entry.title !== undefined && entry.title !== '' ? entry.title : t('list.unnamed')
+  return entry.displayTitle !== undefined && entry.displayTitle !== ''
+    ? entry.displayTitle
+    : (entry.title !== undefined && entry.title !== '' ? entry.title : t('list.unnamed'))
 }
 
 function TodoRow({

@@ -164,6 +164,13 @@
   仍可读，且成员集不再含它 ⇒ 后续 purge 不再收敛。与 §13⑨（租约面，已登记）、
   §13⑬（force 删除后残档）同族但**是内容面**；判据 = 迁移进行中执行 purge。是否加
   守卫（写租约删除时机 / 二次枚举 / rmdir 失败不改判）待裁决。
+- **会话列表标签（客户端修复；前任记录愈合域已撤回）**：标签链为官方
+  `title → basename(cwd) → 会话 id`（侧边栏单点 resolver），「未命名会话」只剩
+  归档管理器 durable 名列与行不在投影时的通知回落两处；`+` 复用 workspace 既有空白
+  成员（上游 `connectWorkspace` 同谓词）。原计划的实例内前任记录愈合宿主域发布前
+  **撤回**（规格与 vendor 证据保留在 git 历史）：未归档、标题读不出的历史行**仍会
+  出现**，按项目目录名标注（绝不显示为「未命名会话」），不需要时须用户自行归档；
+  标签修复本身不再有超出日常使用的实机验收项。
 - **移动端 Web 访问面（design 17 §18；实现契约见 §18.3–§18.5，门禁见 §18.6）**：
   **复核提出但尚未实施**（待实机证据或设计决策，均已登记 §18.6 门禁）：
   「移动中量化 + 静止吸附精确值」（现 16px 固定量化，实机看抖动再定）、
@@ -270,8 +277,11 @@
   已归档根下 → 不阻塞。归档管理器是唯一「停止运行中回合 → 清理已归档内容」的入口。
 - **远程实例插件管理（design 13）**：本地 `dsh plugin`/`pnpm pack` 依赖
   `resolvePnpmBinDir` 对 PATH/nvm/volta/homebrew 的 best-effort 探测——需打包态实机。
-  剩余实机验收：本地/ssh/gateway/http 四来源的 chamber 表行数=3、archive-cleanup 的
-  installed/patched/live 三态与「注入/重启」按钮行为、gateway seed-cache 漂移列。
+  剩余实机验收：本地/ssh/gateway/http 四来源的 chamber 表行数（注册表现有 **4 行**：
+  client-graph / git-worktree / archive-cleanup / open-in；open-in 为
+  `localOnly`，只出现在本地目标，远程/gateway 目标为 3 行）、archive-cleanup 的
+  installed/patched/live 三态与「注入/重启」按钮行为、
+  gateway seed-cache 漂移列。
 - **会话创建/fork 侧边栏收敛延迟修复**：剩余本地 + 远程 SSH 实例实机验收（行出现
   延迟、状态图标延迟、位置跳动）。
 - **打开意图 / 工作区回声两项真机反馈的实机验收（design 05 §2.2.1，2026-12）**：

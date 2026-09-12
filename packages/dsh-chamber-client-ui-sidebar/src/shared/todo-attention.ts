@@ -26,6 +26,7 @@
  *   order) is preserved. The caller slices the cap (3 +「还有 N 项」).
  */
 import type { ChamberServerAggregate } from './aggregate-store.ts'
+import { sessionDisplayTitle } from './derive.ts'
 
 /** The attention kinds the todo area renders. `completed` = completed-but-
  *  unread (the blue-dot merged state); the other three are the vendor pending
@@ -33,13 +34,17 @@ import type { ChamberServerAggregate } from './aggregate-store.ts'
 export type TodoAttentionKind = 'approval' | 'plan-review' | 'question' | 'completed'
 
 /** One derived todo entry. Presentation fields (title/workspace) ride the
- *  projection rows — the component falls back to its own unnamed copy when
- *  the title is empty. */
+ *  projection rows; `displayTitle` is the official resolved label (I3), so the
+ *  component never falls back to the unnamed copy for a session whose title the
+ *  host could not read. */
 export interface TodoAttentionEntry {
   sourceId: string
   sessionId: string
   kind: TodoAttentionKind
+  /** Durable title projection ('' when the session has none). */
   title: string
+  /** Official display label — never empty (see derive.ts sessionDisplayTitle). */
+  displayTitle: string
   workspaceTitle?: string
   /** Last-activity epoch ms (row fact; absent when the wire gave none). */
   updatedAt?: number
@@ -91,6 +96,11 @@ export function deriveTodoAttention(
             sessionId: session.id,
             kind: pending,
             title: session.title ?? '',
+            displayTitle: sessionDisplayTitle({
+              displayTitle: session.displayTitle,
+              title: session.title,
+              sessionId: session.id,
+            }),
           }
           if (session.updatedAt !== undefined) entry.updatedAt = session.updatedAt
           if (workspace.title !== undefined && workspace.title !== '') entry.workspaceTitle = workspace.title
@@ -110,6 +120,11 @@ export function deriveTodoAttention(
           sessionId: session.id,
           kind: 'completed',
           title: session.title ?? '',
+          displayTitle: sessionDisplayTitle({
+            displayTitle: session.displayTitle,
+            title: session.title,
+            sessionId: session.id,
+          }),
         }
         if (session.updatedAt !== undefined) entry.updatedAt = session.updatedAt
         if (workspace.title !== undefined && workspace.title !== '') entry.workspaceTitle = workspace.title

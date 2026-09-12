@@ -94,7 +94,7 @@ export interface ChamberSurface {
 }
 
 /** Bounded JSON body reader for the plugin-sync upload (2026-12 Phase 3).
- * Cap: 8 MiB — two host packages, each up to 4 MiB artifact + manifest, as
+ * Cap: 8 MiB — a host package's artifact (up to 4 MiB) + manifest, as
  * JSON strings. An oversized body is answered 413 and the request socket is
  * destroyed instead of drained (a slow authenticated upload must not pin the
  * connection). */

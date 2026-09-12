@@ -225,10 +225,11 @@ jobs:
         if: steps.classify.outputs.code == 'true'
         run: pnpm run build:renderer
       # Host-package esbuild bundles (dsh-chamber-seed-client-graph /
-      # dsh-chamber-seed-git-worktree / dsh-chamber-seed-archive-cleanup
-      # dist/index.js) only used to build in release — their esbuild entry/
-      # external mapping is an independent failure mode, so the push path
-      # validates them too (2026 round-3 review).
+      # dsh-chamber-seed-git-worktree / dsh-chamber-seed-archive-cleanup /
+      # dsh-chamber-seed-open-in — dist/index.js) only used to build in
+      # release — their esbuild entry/external mapping is an independent
+      # failure mode, so the push path validates them too (2026 round-3
+      # review).
       - name: Host package builds
         if: steps.classify.outputs.code == 'true'
         run: pnpm run build:host-packages

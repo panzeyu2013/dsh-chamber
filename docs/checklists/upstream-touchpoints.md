@@ -18,7 +18,7 @@
 | vendor 链接数 | 284（ensure-harness-vendor 断言 == 锁文件 importer 集合） |
 | typert remote 装配契约 | 15（C4；+command-feedback/+workspace-files） |
 | covered / factory | **57 / 26**（live 计数；factory ⊆ covered，chamber-entry 锁步断言；+`ui-dockkit`、+`client-file-upload` covered factory，四轮再 +`session-log-export`（deferred）与两个 page-own 跳过 id） |
-| 种子域 | `clientGraph/graph`、`gitWorktree/previewCreate`、`archiveCleanup/probe`（C7 双门） |
+| 种子域 | `clientGraph/graph`、`gitWorktree/previewCreate`、`archiveCleanup/probe`、`openInApp/probe`（C7 双门） |
 
 ## 1. 标记约定（每文件分类）
 

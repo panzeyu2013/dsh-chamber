@@ -214,7 +214,7 @@ export interface ControlPlaneOptions {
   /**
    * Chamber in-host archived-session cleanup domain package source (design
    * 24). Same built-artifact gate and profile seed lifecycle as the other
-   * two host packages; absent source (or no committed dist) = skipped.
+   * host packages; absent source (or no committed dist) = skipped.
    */
   hostArchiveCleanupPackageSourceDir?: string
   /**
@@ -226,8 +226,8 @@ export interface ControlPlaneOptions {
   hostOpenInPackageSourceDir?: string
   /**
    * Seed registry (2026-12 interface): additional chamber seed entries beyond
-   * the three base host packages (client-graph / git-worktree /
-   * archive-cleanup) — the seam for browser-side chamber client plugins
+   * the four base host packages (client-graph / git-worktree /
+   * archive-cleanup / open-in) — the seam for browser-side chamber client plugins
    * in hosted frontends (e.g. the gateway mobile slot). Every entry rides the
    * same built-artifact gate, profile seed lifecycle and `--patch` overlay as
    * the host packages; kind 'client' entries carry no probe coupling. A null/

@@ -65,6 +65,7 @@ mount loader rows; they neither interpret Git facts nor execute Git over SSH.
 | `packages/dsh-chamber-client-ui-git` | Chamber-bundled Git worktree client: sidebar slot, per-instance topology, create/remove sagas; never executes Git directly |
 | `packages/dsh-chamber-client-ui-open-in` | Chamber-bundled open-in client plugin (a superset of the official client, whose registration it replaces): session-header utilities open button — local app catalog + local/remote VS Code via the main-process OpenInApp registry + `dsh-chamber://` deep link |
 | `packages/dsh-chamber-seed-git-worktree` | In-instance host package: authoritative workspace/agent guards plus constrained, local-only Git worktree lifecycle |
+| `packages/dsh-chamber-seed-archive-cleanup` | In-instance host package: archived-session content cleanup `archiveCleanup/{preview,purge,probe}` (delete-only, idempotent; design 24) |
 | `packages/dsh-chamber-seed-open-in` | In-instance host package (local shape only): fork of the upstream `dsh-host-open-in-app` serving the local app catalog, real bundle icons and launches over the `openInApp/*` Typert Remote (design 20 §6) |
 
 ## 2. Environment setup
@@ -123,7 +124,7 @@ pnpm run dev:desktop         # full window: control plane + dsh frontend + deskt
 ```bash
 pnpm run build:host-packages # build both host-graph and host-git-worktree packages
 pnpm run build:renderer      # build the dsh-frontend bundle (vite over the dsh workspace source)
-pnpm run build:desktop       # two host packages → renderer → control-plane/copy → preload → bundle:dsh
+pnpm run build:desktop       # host packages → renderer → control-plane/copy → preload → bundle:dsh
 pnpm run dist:desktop:mac    # package the macOS app (dmg + zip)
 pnpm run dist:desktop:win    # package the Windows app (nsis + zip; must run on Windows — dsh runtime bundling is platform-specific)
 ```
@@ -185,6 +186,8 @@ packages/
                             Git worktree client (sidebar + coordinator + sagas)
   dsh-chamber-seed-git-worktree/
                             In-instance Git worktree host Remote (guards + constrained Git)
+  dsh-chamber-seed-archive-cleanup/
+                            In-instance archive-cleanup host Remote (design 24)
   dsh-chamber-client-ui-open-in/
                             Open-in client plugin (session-header local app / VS Code open)
   dsh-chamber-seed-open-in/

@@ -876,7 +876,7 @@ test('ensureSeedPackage rejects malformed seedFiles entries fail-loud', t => {
 })
 
 test('createControlPlane.startLocal() lets an extra seed entry shadow the base host package (no duplicate rows)', async t => {
-  // 2026-12 regression: the gateway re-declares the two host packages as
+  // 2026-12 regression: the gateway re-declares the synced host packages as
   // desktop-synced extra entries. When the synced cache exists, the extra
   // entry must REPLACE the legacy base entry — never produce two overlay
   // rows with the same loader identity (renderCordisInserts would throw

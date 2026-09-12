@@ -60,8 +60,9 @@ bundle 未覆盖的 entry（方案 A，§3）。第 1、2 步在 chamber 托管�
   侧，非 vendor），注册一个 Remote 暴露 `clientModules.graph()`（宿主 ctx 上
   `clientModules` 服务现成）。控制面在本地 profile seed 该行（`--patch` overlay，
   模块 B）——先例：`seedDshHomeDefaults` 已 seed `settings.yaml`。本文的模块 A
-  为单包；同 seed 机制的 chamber 宿主包现为三个（+git-worktree（设计 08）、
-  +archive-cleanup（设计 24）），机制同构、清单以 05 §6/02 §2.6 为权威。**包分发
+  为单包；同 seed 机制的 chamber 宿主包现为四个（+git-worktree（设计 08）、
+  +archive-cleanup（设计 24）、+open-in（设计 20 §6，
+  `localOnly`）），机制同构、清单以 05 §6/02 §2.6 为权威。**包分发
   契约**：seed 时
   控制面把模块 A 包（package.json + dist/index.js）裸包拷贝进
   `profiles/web/node_modules/@dsh-chamber/dsh-chamber-seed-client-graph/`（免 pnpm 的裸包

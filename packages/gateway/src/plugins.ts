@@ -265,7 +265,7 @@ export function createChamberPlugins(stateDir: string, logger: Logger): ChamberP
  *  activation unprobed (the same drift class the dsh-runtime
  *  activationProbeNamesForDomains unknown-name throw guards; the map miss is
  *  source-level metadata drift). Must stay in sync with
- *  HOST_DOMAIN_PROBE_NAMES in packages/dsh-runtime (same three domains).
+ *  HOST_DOMAIN_PROBE_NAMES in packages/dsh-runtime (the same domain set).
  *  @param stateDir - gateway state root; presence is checked per package at
  *    <stateDir>/chamber-plugins/<scope-stripped name>/dist/index.js.
  *  @param packages - the syncable host package list to derive over (the

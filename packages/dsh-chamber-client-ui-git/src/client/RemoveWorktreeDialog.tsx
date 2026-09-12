@@ -197,8 +197,11 @@ export function RemoveWorktreeDialog({
           ? []
           : server.workspaces.flatMap(workspace => workspace.sessions)
             .filter(session => visibleRoots.includes(session.id))
-            // Session ids as keys: titles repeat constantly (P2-3).
-            .map(session => ({ id: session.id, title: session.title }))
+            // The RESOLVED label (design 05 §2.1), never the durable title alone:
+            // a session labeled by its project directory must not render an
+            // empty list item here. Session ids as keys: titles repeat
+            // constantly (P2-3).
+            .map(session => ({ id: session.id, title: session.displayTitle }))
         setSessionFacts({
           direct: visibleRoots.length,
           closure: closure.length,

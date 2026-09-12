@@ -283,8 +283,8 @@ function expectedGitValidationMiss(value: unknown): boolean {
  *  answer a well-formed domain carrier — ok:true with an object value is
  *  healthy; a well-formed ok:false (binding-pending / registry-unreadable /
  *  busy) is present-but-abnormal and fails closed with a distinct message in
- *  the probe leg itself (a business answer on empty input is never a
- *  protocol success). */
+ *  the probe leg itself (a business answer on empty input is never a protocol
+ *  success). */
 function archiveCleanupProbeShape(value: unknown): 'ok' | 'business-failure' | 'malformed' {
   if (!objectValue(value)) return 'malformed'
   const domain = value as Record<string, unknown>

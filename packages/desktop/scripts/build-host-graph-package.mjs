@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
  * build-host-graph-package.mjs — 把 chamber 自带的 host 包（2026-12 起四个：
- * client-graph / git-worktree / archive-cleanup（design 24）/ open-in
- * （design 20 §6，仅本地形态））的可分发形态（package.json + 已构建
- * dist/）拷贝进 desktop/dist/，供打包态本地控制面 seed 使用。脚本名保留，
+ * client-graph / git-worktree / archive-cleanup（design 24）
+ * / open-in（design 20 §6，仅本地形态））的可分发形态（package.json +
+ * 已构建 dist/）拷贝进 desktop/dist/，供打包态本地控制面 seed 使用。脚本名保留，
  * 避免破坏现有 build 调用方。
  *
  * 背景（设计 09 §3.5）：控制面 seed 时把 host 包分发进本地 profile 的
@@ -26,7 +26,8 @@ const repoRoot = join(desktopDir, '..', '..')
  *  desktop/dist/ (packaged source dirs the local control-plane seed reads
  *  from; the remote SSH seed consumes the same paths through main.ts's
  *  `chamberHostSourceDirs`, which deliberately omits the local-only open-in
- *  row). Stable-ordered client-graph, git-worktree, archive-cleanup, open-in;
+ *  row). Stable-ordered client-graph, git-worktree, archive-cleanup,
+ *  open-in;
  *  each `label` mirrors the desktop seed-row label used by
  *  main.ts (note: row 1's label 'host-graph' differs from its loader insert
  *  id 'client-graph' — labels are NOT insert ids) and the outDir basename is

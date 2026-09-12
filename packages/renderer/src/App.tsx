@@ -3358,9 +3358,20 @@ export default function App() {
             const copyLocale = readDocumentLocale()
             const label = serverLabelsRef.current[sourceId] ?? sourceId
             const aggregate = aggregatesRef.current[sourceId]
-            const sessionTitle = (sessionId: string) =>
-              aggregate?.sessions.find(session => session.sessionId === sessionId)?.title
-              ?? frameText(copyLocale, 'session.untitled')
+            // I3 (official display label): the row's resolved displayTitle first,
+            // then the durable title — a session whose title the host could not
+            // read is named by its project directory, exactly like its row. The
+            // localized untitled copy survives ONLY for the genuinely absent row
+            // (no aggregate / the session is not in the projection): there the
+            // frame truly has no label fact, and this site stays dictionary-owned
+            // (frame-locale audit T15).
+            const sessionTitle = (sessionId: string) => {
+              const row = aggregate?.sessions.find(session => session.sessionId === sessionId)
+              const display = row?.displayTitle
+              if (display !== undefined && display !== '') return display
+              if (row?.title !== undefined && row.title !== '') return row.title
+              return frameText(copyLocale, 'session.untitled')
+            }
             for (const edge of deduped.edges) {
               const title =
                 edge.kind === 'complete' ? frameText(copyLocale, 'notification.sessionComplete')

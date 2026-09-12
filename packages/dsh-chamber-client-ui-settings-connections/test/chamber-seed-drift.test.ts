@@ -197,7 +197,7 @@ test('chamber package names mirror the control-plane registry (lockstep guard)',
 
 test('MOBILE_PACKAGE mirrors the packaged mobile client manifest name (lockstep guard)', () => {
   // The mobile row is the single packaged CLIENT exception (design 21 §6.2):
-  // unlike the three host packages above there is no Node-side registry to
+  // unlike the host packages above there is no Node-side registry to
   // compare against — its authority is the package manifest itself, which the
   // gateway seeds and reports in its plugin inventory. The client constant is
   // hand-mirrored, so a rename of the manifest (or of the constant) must fail

@@ -11,10 +11,12 @@ import assert from 'node:assert/strict'
 import {
   armBlankGhost,
   armMembershipGrace,
+  basenameOf,
   BLANK_GHOST_GRACE_MS,
   deriveArchivedSessions,
   deriveLocalSearchMatches,
   deriveServerWorkspaces,
+  findReusableBlankSession,
   groupArchivedRows,
   hasActiveScheduleOf,
   instanceSnapshotSignature,
@@ -36,6 +38,7 @@ import {
   sanitizeSearchQuery,
   serversProjectionSignature,
   SEARCH_QUERY_MAX_CODE_UNITS,
+  sessionDisplayTitle,
   UNGROUPED_WORKSPACE_ID,
   __resetBlankGhostsForTests,
   __resetMembershipGracesForTests,
@@ -46,7 +49,7 @@ import type { ChamberServerAggregate, InstanceRuntimeReport } from '../src/share
 function session(
   id: string,
   updatedAt = 0,
-  extra: Partial<Pick<SessionRow, 'blank' | 'origin' | 'title' | 'running' | 'parentSessionId' | 'cwd'>> = {},
+  extra: Partial<Pick<SessionRow, 'blank' | 'origin' | 'title' | 'displayTitle' | 'running' | 'parentSessionId' | 'cwd'>> = {},
 ): SessionRow {
   return { sessionId: id, updatedAt, running: false, blank: false, ...extra }
 }
@@ -83,7 +86,7 @@ test('projectInstanceSnapshot requires complete reconnect baselines and maps ctx
   }
   assert.deepEqual(projectInstanceSnapshot(workspaceState, sessionState), {
     workspaces: [workspace('w1', 'Work', ['s1', 'sub'])],
-    sessions: [{ sessionId: 's1', updatedAt: 42, running: true, blank: false, cwd: '/w1', title: 'One' }],
+    sessions: [{ sessionId: 's1', updatedAt: 42, running: true, blank: false, cwd: '/w1', title: 'One', displayTitle: 'One' }],
     archivedSessionIds: ['old'],
     // Mounted baseline = authoritative archive set (2026-09 review round).
     archiveSetKnown: true,
@@ -110,7 +113,7 @@ test('projectInstanceSnapshot requires complete reconnect baselines and maps ctx
   ), undefined)
   assert.deepEqual(projectInstanceSnapshot(workspaceState, sessionState), {
     workspaces: [workspace('w1', 'Work', ['s1', 'sub'])],
-    sessions: [{ sessionId: 's1', updatedAt: 42, running: true, blank: false, cwd: '/w1', title: 'One' }],
+    sessions: [{ sessionId: 's1', updatedAt: 42, running: true, blank: false, cwd: '/w1', title: 'One', displayTitle: 'One' }],
     archivedSessionIds: ['old'],
     // Mounted baseline = authoritative archive set (2026-09 review round).
     archiveSetKnown: true,
@@ -192,7 +195,7 @@ test('blank sessions are hidden from workspaces and from the ungrouped bucket wh
     '',
   )
   assert.equal(result.length, 1)
-  assert.deepEqual(result[0].sessions, [{ id: 'a', title: '', running: false, updatedAt: 1 }])
+  assert.deepEqual(result[0].sessions, [{ id: 'a', title: '', displayTitle: 'a', running: false, updatedAt: 1 }])
   assert.equal(result[0].ungrouped, undefined)
 })
 
@@ -225,8 +228,8 @@ test('a blank session surfaces while it is the current session (official !blank 
     'b',
   )
   assert.deepEqual(result[0].sessions, [
-    { id: 'a', title: '', running: false, updatedAt: 1 },
-    { id: 'b', title: '', running: false, updatedAt: 2, blank: true },
+    { id: 'a', title: '', displayTitle: 'a', running: false, updatedAt: 1 },
+    { id: 'b', title: '', displayTitle: 'b', running: false, updatedAt: 2, blank: true },
   ])
 })
 
@@ -241,7 +244,7 @@ test('a blank-current session not accounted by any workspace trails in the ungro
     'blank',
   )
   assert.equal(result.length, 2)
-  assert.deepEqual(result[1].sessions, [{ id: 'blank', title: '', running: false, updatedAt: 300, blank: true }])
+  assert.deepEqual(result[1].sessions, [{ id: 'blank', title: '', displayTitle: 'blank', running: false, updatedAt: 300, blank: true }])
 })
 
 test('blank rows carry the sparse blank flag; ordinary rows never do', () => {
@@ -268,7 +271,7 @@ test('a non-current blank session stays hidden even when another blank session i
     '',
     'b2',
   )
-  assert.deepEqual(result[0].sessions, [{ id: 'b2', title: '', running: false, updatedAt: 2, blank: true }])
+  assert.deepEqual(result[0].sessions, [{ id: 'b2', title: '', displayTitle: 'b2', running: false, updatedAt: 2, blank: true }])
 })
 
 // ---- blank-row ghost slot (2026-08 review: double-click mis-target fix) ----
@@ -292,8 +295,8 @@ test('a departed blank session keeps its layout slot (ghost) while the grace is 
     1000 + BLANK_GHOST_GRACE_MS - 1,
   )
   assert.deepEqual(result[0].sessions, [
-    { id: 'a', title: '', running: false, updatedAt: 1 },
-    { id: 'b', title: '', running: false, updatedAt: 2, blank: true },
+    { id: 'a', title: '', displayTitle: 'a', running: false, updatedAt: 1 },
+    { id: 'b', title: '', displayTitle: 'b', running: false, updatedAt: 2, blank: true },
   ])
 })
 
@@ -312,7 +315,7 @@ test('the ghost grace expires at BLANK_GHOST_GRACE_MS: the departed blank row th
     'a',
     1000 + BLANK_GHOST_GRACE_MS,
   )
-  assert.deepEqual(result[0].sessions, [{ id: 'a', title: '', running: false, updatedAt: 1 }])
+  assert.deepEqual(result[0].sessions, [{ id: 'a', title: '', displayTitle: 'a', running: false, updatedAt: 1 }])
 })
 
 test('a departed blank row hides immediately when no ghost was armed (pre-grace behavior)', () => {
@@ -326,7 +329,7 @@ test('a departed blank row hides immediately when no ghost was armed (pre-grace 
     '',
     'a',
   )
-  assert.deepEqual(result[0].sessions, [{ id: 'a', title: '', running: false, updatedAt: 1 }])
+  assert.deepEqual(result[0].sessions, [{ id: 'a', title: '', displayTitle: 'a', running: false, updatedAt: 1 }])
 })
 
 test('the ghost also holds a departed blank stray in the ungrouped bucket', () => {
@@ -343,7 +346,7 @@ test('the ghost also holds a departed blank stray in the ungrouped bucket', () =
     1200,
   )
   assert.equal(result.length, 2)
-  assert.deepEqual(result[1].sessions, [{ id: 'blank', title: '', running: false, updatedAt: 300, blank: true }])
+  assert.deepEqual(result[1].sessions, [{ id: 'blank', title: '', displayTitle: 'blank', running: false, updatedAt: 300, blank: true }])
 })
 
 test('arming the ghost never surfaces a NON-blank session (the map only affects blank rows)', () => {
@@ -362,8 +365,8 @@ test('arming the ghost never surfaces a NON-blank session (the map only affects 
   // Real sessions are always visible regardless of the map; the current blank
   // stays visible through the currentness rule.
   assert.deepEqual(result[0].sessions, [
-    { id: 'a', title: '', running: false, updatedAt: 1 },
-    { id: 'b', title: '', running: false, updatedAt: 2, blank: true },
+    { id: 'a', title: '', displayTitle: 'a', running: false, updatedAt: 1 },
+    { id: 'b', title: '', displayTitle: 'b', running: false, updatedAt: 2, blank: true },
   ])
 })
 
@@ -384,8 +387,8 @@ test('a refreshed arm extends the ghost (a later real transition wins over an ea
     2100, // inside the FRESH grace, past the stale one
   )
   assert.deepEqual(result[0].sessions, [
-    { id: 'a', title: '', running: false, updatedAt: 1 },
-    { id: 'b', title: '', running: false, updatedAt: 2, blank: true },
+    { id: 'a', title: '', displayTitle: 'a', running: false, updatedAt: 1 },
+    { id: 'b', title: '', displayTitle: 'b', running: false, updatedAt: 2, blank: true },
   ])
 })
 
@@ -415,7 +418,7 @@ test('the ghost grace is SOURCE-scoped — a cloned UUID on another source never
     undefined,
     1200,
   )
-  assert.deepEqual(resultA[0].sessions, [{ id: 'clone-uuid', title: '', running: false, updatedAt: 2, blank: true }])
+  assert.deepEqual(resultA[0].sessions, [{ id: 'clone-uuid', title: '', displayTitle: 'clone-uuid', running: false, updatedAt: 2, blank: true }])
 })
 
 // ---- membership grace (create + bounded first-observation fork grace) ----
@@ -438,7 +441,7 @@ test('a just-created session is skipped from the ungrouped bucket while the memb
     1500,
   )
   assert.equal(result.length, 1)
-  assert.deepEqual(result[0].sessions, [{ id: 'a', title: '', running: false, updatedAt: 1 }])
+  assert.deepEqual(result[0].sessions, [{ id: 'a', title: '', displayTitle: 'a', running: false, updatedAt: 1 }])
 })
 
 test('the membership grace never hides a session its workspace already accounts', () => {
@@ -458,8 +461,8 @@ test('the membership grace never hides a session its workspace already accounts'
   // window (the grace only suppresses the STRAY placement).
   assert.equal(result.length, 1)
   assert.deepEqual(result[0].sessions, [
-    { id: 'new', title: '', running: false, updatedAt: 500 },
-    { id: 'a', title: '', running: false, updatedAt: 1 },
+    { id: 'new', title: '', displayTitle: 'new', running: false, updatedAt: 500 },
+    { id: 'a', title: '', displayTitle: 'a', running: false, updatedAt: 1 },
   ])
 })
 
@@ -478,7 +481,7 @@ test('the membership grace expires at MEMBERSHIP_GRACE_MS: the stray then surfac
   )
   assert.equal(atExpiry.length, 2)
   assert.equal(atExpiry[1].ungrouped, true)
-  assert.deepEqual(atExpiry[1].sessions, [{ id: 'new', title: '', running: false, updatedAt: 500 }])
+  assert.deepEqual(atExpiry[1].sessions, [{ id: 'new', title: '', displayTitle: 'new', running: false, updatedAt: 500 }])
 })
 
 test('an unarmed session still surfaces as a stray (grace only affects armed ids)', () => {
@@ -494,7 +497,7 @@ test('an unarmed session still surfaces as a stray (grace only affects armed ids
     1500,
   )
   assert.equal(result.length, 2)
-  assert.deepEqual(result[1].sessions, [{ id: 'stray', title: '', running: false, updatedAt: 500 }])
+  assert.deepEqual(result[1].sessions, [{ id: 'stray', title: '', displayTitle: 'stray', running: false, updatedAt: 500 }])
 })
 
 test('a refreshed arm extends the membership grace (a later mutation wins over an earlier stale arm)', () => {
@@ -530,7 +533,7 @@ test('the membership grace is source-scoped: an arm on one source never suppress
     1500,
   )
   assert.equal(result.length, 2)
-  assert.deepEqual(result[1].sessions, [{ id: 'session-5', title: '', running: false, updatedAt: 500 }])
+  assert.deepEqual(result[1].sessions, [{ id: 'session-5', title: '', displayTitle: 'session-5', running: false, updatedAt: 500 }])
 })
 
 test('a fork child of a workspace-accounted parent is initially skipped by a bounded first-observation grace', () => {
@@ -551,7 +554,7 @@ test('a fork child of a workspace-accounted parent is initially skipped by a bou
     1500,
   )
   assert.equal(result.length, 1)
-  assert.deepEqual(result[0].sessions, [{ id: 'parent', title: '', running: false, updatedAt: 10 }])
+  assert.deepEqual(result[0].sessions, [{ id: 'parent', title: '', displayTitle: 'parent', running: false, updatedAt: 10 }])
 })
 
 test('a published fork child surfaces ungrouped when workspace attach has not landed by grace expiry', () => {
@@ -579,7 +582,7 @@ test('a published fork child surfaces ungrouped when workspace attach has not la
   )
   assert.equal(expired.length, 2)
   assert.equal(expired[1].ungrouped, true)
-  assert.deepEqual(expired[1].sessions, [{ id: 'child', title: '', running: false, updatedAt: 500 }])
+  assert.deepEqual(expired[1].sessions, [{ id: 'child', title: '', displayTitle: 'child', running: false, updatedAt: 500 }])
 
   // An expired candidate remains expired while present; repeated derives
   // must not silently re-arm another three-second hiding window.
@@ -660,8 +663,8 @@ test('a fork child of an UNACCOUNTED parent stays visible in the ungrouped bucke
   )
   assert.equal(result.length, 2)
   assert.deepEqual(result[1].sessions, [
-    { id: 'stray-child', title: '', running: false, updatedAt: 500 },
-    { id: 'stray-parent', title: '', running: false, updatedAt: 40 },
+    { id: 'stray-child', title: '', displayTitle: 'stray-child', running: false, updatedAt: 500 },
+    { id: 'stray-parent', title: '', displayTitle: 'stray-parent', running: false, updatedAt: 40 },
   ])
 })
 
@@ -696,7 +699,7 @@ test('subagent sessions are hidden from workspaces and from the ungrouped bucket
     '',
   )
   assert.equal(result.length, 1)
-  assert.deepEqual(result[0].sessions, [{ id: 'a', title: '', running: false, updatedAt: 1 }])
+  assert.deepEqual(result[0].sessions, [{ id: 'a', title: '', displayTitle: 'a', running: false, updatedAt: 1 }])
 })
 
 test('workspace membership maps in sessionIds order with titles from the snapshot', () => {
@@ -717,9 +720,9 @@ test('workspace membership maps in sessionIds order with titles from the snapsho
       id: 'w1',
       title: 'Alpha',
       sessions: [
-        { id: 's3', title: 'Three', running: false, updatedAt: 30 },
-        { id: 's1', title: 'One', running: false, updatedAt: 10 },
-        { id: 's2', title: 'Two', running: false, updatedAt: 20 },
+        { id: 's3', title: 'Three', displayTitle: 'Three', running: false, updatedAt: 30 },
+        { id: 's1', title: 'One', displayTitle: 'One', running: false, updatedAt: 10 },
+        { id: 's2', title: 'Two', displayTitle: 'Two', running: false, updatedAt: 20 },
       ],
     },
   ])
@@ -747,9 +750,9 @@ test('visible sessions not accounted by any workspace trail in one ungrouped buc
   assert.equal(ungrouped.title, '')
   assert.equal(ungrouped.ungrouped, true)
   assert.deepEqual(ungrouped.sessions, [
-    { id: 'y', title: '', running: false, updatedAt: 200 },
-    { id: 'z', title: '', running: false, updatedAt: 200 },
-    { id: 'x', title: '', running: false, updatedAt: 100 },
+    { id: 'y', title: '', displayTitle: 'y', running: false, updatedAt: 200 },
+    { id: 'z', title: '', displayTitle: 'z', running: false, updatedAt: 200 },
+    { id: 'x', title: '', displayTitle: 'x', running: false, updatedAt: 100 },
   ])
 })
 
@@ -786,7 +789,7 @@ test('members not present in the session list are skipped without breaking works
     'srv-a',
     '',
   )
-  assert.deepEqual(result[0].sessions, [{ id: 'a', title: 'A', running: false, updatedAt: 1 }])
+  assert.deepEqual(result[0].sessions, [{ id: 'a', title: 'A', displayTitle: 'A', running: false, updatedAt: 1 }])
 })
 
 test('archived sessions are hidden from workspaces and from the ungrouped bucket', () => {
@@ -800,7 +803,7 @@ test('archived sessions are hidden from workspaces and from the ungrouped bucket
     '',
   )
   assert.equal(result.length, 1)
-  assert.deepEqual(result[0].sessions, [{ id: 'a', title: '', running: false, updatedAt: 1 }])
+  assert.deepEqual(result[0].sessions, [{ id: 'a', title: '', displayTitle: 'a', running: false, updatedAt: 1 }])
   assert.equal(result[0].ungrouped, undefined)
 })
 
@@ -815,8 +818,8 @@ test('archived members keep their accounting slot: only non-archived strays surf
     '',
   )
   assert.equal(result.length, 2)
-  assert.deepEqual(result[0].sessions, [{ id: 'a', title: '', running: false, updatedAt: 1 }])
-  assert.deepEqual(result[1].sessions, [{ id: 'x', title: '', running: false, updatedAt: 3 }])
+  assert.deepEqual(result[0].sessions, [{ id: 'a', title: '', displayTitle: 'a', running: false, updatedAt: 1 }])
+  assert.deepEqual(result[1].sessions, [{ id: 'x', title: '', displayTitle: 'x', running: false, updatedAt: 3 }])
 })
 
 test('running and updatedAt pass through to workspace members and strays', () => {
@@ -833,10 +836,10 @@ test('running and updatedAt pass through to workspace members and strays', () =>
     '',
   )
   assert.deepEqual(result[0].sessions, [
-    { id: 'a', title: 'A', running: true, updatedAt: 42 },
-    { id: 'b', title: '', running: false, updatedAt: 7 },
+    { id: 'a', title: 'A', displayTitle: 'A', running: true, updatedAt: 42 },
+    { id: 'b', title: '', displayTitle: 'b', running: false, updatedAt: 7 },
   ])
-  assert.deepEqual(result[1].sessions, [{ id: 's', title: '', running: true, updatedAt: 99 }])
+  assert.deepEqual(result[1].sessions, [{ id: 's', title: '', displayTitle: 's', running: true, updatedAt: 99 }])
 })
 
 test('relativeTimeBucket boundaries mirror the official relativeTime algorithm', () => {
@@ -1329,7 +1332,7 @@ function server(id: string, overrides: Partial<ChamberServerAggregate> = {}): Ch
     label: id,
     connected: true,
     phase: 'ready',
-    workspaces: [{ id: 'w1', title: 'Work', sessions: [{ id: 's1', title: 'One', running: false, updatedAt: 1 }] }],
+    workspaces: [{ id: 'w1', title: 'Work', sessions: [{ id: 's1', title: 'One', displayTitle: 'One', running: false, updatedAt: 1 }] }],
     updatedAt: 0,
     ...overrides,
   }
@@ -1381,7 +1384,7 @@ test('serversProjectionSignature ignores the per-call updatedAt stamp but tracks
     serversProjectionSignature(a),
     serversProjectionSignature([
       server('local'),
-      server('ssh-r1', { workspaces: [{ id: 'w1', title: 'Work', sessions: [{ id: 's1', title: 'One', running: false, updatedAt: 999 }] }] }),
+      server('ssh-r1', { workspaces: [{ id: 'w1', title: 'Work', sessions: [{ id: 's1', title: 'One', displayTitle: 'One', running: false, updatedAt: 999 }] }] }),
     ]),
   )
   // The same session with the same updatedAt still signs identically.
@@ -1389,7 +1392,7 @@ test('serversProjectionSignature ignores the per-call updatedAt stamp but tracks
     serversProjectionSignature(a),
     serversProjectionSignature([
       server('local'),
-      server('ssh-r1', { workspaces: [{ id: 'w1', title: 'Work', sessions: [{ id: 's1', title: 'One', running: false, updatedAt: 1 }] }] }),
+      server('ssh-r1', { workspaces: [{ id: 'w1', title: 'Work', sessions: [{ id: 's1', title: 'One', displayTitle: 'One', running: false, updatedAt: 1 }] }] }),
     ]),
   )
   // Runtime facts of sessions NOT visible in the projection (subagent-origin /
@@ -1428,7 +1431,7 @@ test('serversProjectionSignature ignores the per-call updatedAt stamp but tracks
   assert.notEqual(serversProjectionSignature(a), serversProjectionSignature([server('local', { phase: 'starting' }), server('ssh-r1')]))
   assert.notEqual(serversProjectionSignature(a), serversProjectionSignature([
     server('local'),
-    server('ssh-r1', { workspaces: [{ id: 'w1', title: 'Work', sessions: [{ id: 's1', title: 'One', running: true, updatedAt: 1 }] }] }),
+    server('ssh-r1', { workspaces: [{ id: 'w1', title: 'Work', sessions: [{ id: 's1', title: 'One', displayTitle: 'One', running: true, updatedAt: 1 }] }] }),
   ]))
   assert.notEqual(serversProjectionSignature(a), serversProjectionSignature([
     server('local'),
@@ -1448,8 +1451,8 @@ test('serversProjectionSignature JSON-encodes titles: user-controlled separators
       id: 'w1',
       title: 'Work',
       sessions: [
-        { id: 's1', title: 'a', running: false },
-        { id: 's2', title: 'b', running: false },
+        { id: 's1', title: 'a', displayTitle: 'a', running: false },
+        { id: 's2', title: 'b', displayTitle: 'b', running: false },
       ],
     }],
   })]
@@ -1457,7 +1460,7 @@ test('serversProjectionSignature JSON-encodes titles: user-controlled separators
     workspaces: [{
       id: 'w1',
       title: 'Work',
-      sessions: [{ id: 's1', title: 'a,0:0,0,s2:b', running: false }],
+      sessions: [{ id: 's1', title: 'a,0:0,0,s2:b', displayTitle: 'a,0:0,0,s2:b', running: false }],
     }],
   })]
   assert.notEqual(serversProjectionSignature(twoRows), serversProjectionSignature(forgedSingleRow))
@@ -1469,8 +1472,8 @@ test('serversProjectionSignature JSON-encodes titles: user-controlled separators
         id: 'w1',
         title: 'Work',
         sessions: [
-          { id: 's1', title: 'a', running: false },
-          { id: 's2', title: 'b', running: false },
+          { id: 's1', title: 'a', displayTitle: 'a', running: false },
+          { id: 's2', title: 'b', displayTitle: 'b', running: false },
         ],
       }],
     })]),
@@ -2267,7 +2270,7 @@ test('serversProjectionSignature: a schedule-only flip republishes, reverting re
       id: 'w1',
       title: 'Work',
       // Everything else byte-identical: the schedule bit is the only delta.
-      sessions: [{ id: 's1', title: 'One', running: false, blank: false, updatedAt: 5, hasActiveSchedule }],
+      sessions: [{ id: 's1', title: 'One', displayTitle: 'One', running: false, blank: false, updatedAt: 5, hasActiveSchedule }],
     }],
   })
   const idle = serversProjectionSignature([makeServer(false)] as never)
@@ -2283,7 +2286,7 @@ test('serversProjectionSignature: a schedule-only flip republishes, reverting re
     workspaces: [{
       id: 'w1',
       title: 'Work',
-      sessions: [{ id: 's1', title: 'One', running: false, blank: false, updatedAt: 5 }],
+      sessions: [{ id: 's1', title: 'One', displayTitle: 'One', running: false, blank: false, updatedAt: 5 }],
     }],
   }] as never)
   assert.equal(keyless, idle, 'a key-less row and an explicit false must publish identical bytes')
@@ -2342,10 +2345,11 @@ test('projectInstanceSnapshot carries hasActiveSchedule sparsely (present only w
       blank: false,
       hasActiveSchedule: true,
       title: 'With schedule',
+      displayTitle: 'With schedule',
     },
     // No key at all: the sparse form keeps every other row's bytes (and the
     // producer's signature gate) exactly as they were before this fact existed.
-    { sessionId: 'plain', running: false, blank: false, title: 'No schedule' },
+    { sessionId: 'plain', running: false, blank: false, title: 'No schedule', displayTitle: 'No schedule' },
   ])
 })
 
@@ -2397,4 +2401,287 @@ test('deriveServerWorkspaces threads the schedule fact into workspace rows and t
     1_000,
   )
   assert.equal('hasActiveSchedule' in (plain[0]?.sessions[0] ?? {}), false, 'an ordinary row stays key-free')
+})
+
+// --- I3: the official display-label resolver ---------------------------------
+// One rule (`sessionDisplayTitle`) replaces the bare durable title at every
+// row surface, so "unknown title" can never render 「未命名会话」 again. The
+// ladder is upstream's: title → canonical cwd basename → session id.
+
+test('sessionDisplayTitle follows the official ladder and treats empty as absent', () => {
+  assert.equal(sessionDisplayTitle({ title: 'Real title', sessionId: 'session-1' }), 'Real title')
+  // A predecessor record's title row is an EMPTY string (not undefined): the
+  // official label for that row is the project directory name.
+  assert.equal(
+    sessionDisplayTitle({ title: '', cwdBasename: 'dsh-chamber', sessionId: 'session-1' }),
+    'dsh-chamber',
+  )
+  assert.equal(
+    sessionDisplayTitle({ cwdBasename: 'dsh-chamber', sessionId: 'session-1' }),
+    'dsh-chamber',
+  )
+  // Last resort: the raw session id — never an empty string, never the
+  // "untitled" copy.
+  assert.equal(sessionDisplayTitle({ sessionId: 'session-1' }), 'session-1')
+  assert.equal(sessionDisplayTitle({ title: '', cwdBasename: '', sessionId: 'session-1' }), 'session-1')
+  // A producer-resolved displayTitle wins outright.
+  assert.equal(
+    sessionDisplayTitle({ displayTitle: 'Resolved', title: 'Durable', sessionId: 'session-1' }),
+    'Resolved',
+  )
+  // ...but an empty producer value falls through the ladder.
+  assert.equal(
+    sessionDisplayTitle({ displayTitle: '', title: 'Durable', sessionId: 'session-1' }),
+    'Durable',
+  )
+})
+
+test('basenameOf keeps the trailing-segment contract the echo and cwd groups share', () => {
+  assert.equal(basenameOf('/Users/x/project'), 'project')
+  assert.equal(basenameOf('/Users/x/project/'), 'project')
+  assert.equal(basenameOf('C:\\Users\\x\\project'), 'project')
+  assert.equal(basenameOf('/'), '/')
+})
+
+test('deriveServerWorkspaces labels an unreadable-title row with its directory name', () => {
+  // The I3 regression: a session whose title projection is unreadable (a
+  // predecessor cache record) used to arrive as title === '' and every surface
+  // rendered 「未命名会话」. The derived row must carry the cwd basename.
+  const result = deriveServerWorkspaces(
+    snapshot(
+      [workspace('w1', 'Work', ['untitled'])],
+      [session('untitled', 5, { cwd: '/Users/x/dsh-chamber' })],
+    ),
+    'local',
+    '未分组',
+    undefined,
+    1_000,
+  )
+  const row = result.find(group => group.id === 'w1')?.sessions[0]
+  assert.equal(row?.title, '', 'the durable title stays empty — rename/fork copy must not see a fallback')
+  assert.equal(row?.displayTitle, 'dsh-chamber', 'the official label is the directory name')
+})
+
+test('deriveServerWorkspaces falls back to the session id when even the cwd is unknown', () => {
+  const result = deriveServerWorkspaces(
+    snapshot([workspace('w1', 'Work', ['nowhere'])], [session('nowhere', 5)]),
+    'local',
+    '未分组',
+    undefined,
+    1_000,
+  )
+  assert.equal(result[0]?.sessions[0]?.displayTitle, 'nowhere')
+})
+
+test('the ungrouped bucket applies the same official label', () => {
+  const result = deriveServerWorkspaces(
+    snapshot([], [session('stray', 5, { cwd: '/Users/x/project' })]),
+    'local',
+    '未分组',
+    undefined,
+    1_000,
+  )
+  assert.equal(result[0]?.sessions[0]?.displayTitle, 'project')
+})
+
+test('the mounted projection carries the vendor displayTitle verbatim', () => {
+  const workspaceState = {
+    items: [workspace('w1', 'Work', ['s1'])],
+    archivedSessionIds: [],
+    state: 'idle',
+    phase: 'ready',
+  }
+  const sessionState = {
+    ids: ['s1'],
+    phase: 'ready',
+    // The mounted store resolves the label itself; the chamber carries it.
+    byId: { s1: { id: 's1', title: 'One', cwd: '/w1', running: false, blank: false, displayTitle: 'Vendor label' } },
+  }
+  const projected = projectInstanceSnapshot(workspaceState, sessionState)
+  assert.equal(projected?.sessions[0]?.displayTitle, 'Vendor label')
+})
+
+test('a displayTitle-only change republishes: the label rides the signature', () => {
+  const before = snapshot(
+    [workspace('w1', 'Work', ['s1'])],
+    [{ ...session('s1', 5), displayTitle: 'a' }],
+  )
+  const after = snapshot(
+    [workspace('w1', 'Work', ['s1'])],
+    [{ ...session('s1', 5), displayTitle: 'b' }],
+  )
+  assert.notEqual(
+    instanceSnapshotSignature(before),
+    instanceSnapshotSignature(after),
+    'a label flip (e.g. the title projection landing, or a healed predecessor record) must republish',
+  )
+})
+
+// --- I2: reuse-or-create for "+" ---------------------------------------------
+// The chamber's "+" always issued session/create; upstream resolves the
+// workspace's existing blank row first (connectWorkspace) and only creates when
+// there is none. These tests pin the copied predicate and its derive wiring.
+
+test('findReusableBlankSession mirrors the official connectWorkspace predicate', () => {
+  const workspace = { path: '/w1', sessionIds: ['blank', 'other'] }
+  const blank = (id: string, extra: Partial<SessionRow> = {}): SessionRow => ({
+    sessionId: id,
+    running: false,
+    blank: true,
+    cwd: '/w1',
+    ...extra,
+  })
+  // The reusable row.
+  assert.equal(findReusableBlankSession(workspace, [blank('blank')], new Set()), 'blank')
+  // Non-blank, foreign cwd, non-member, archived, subagent and fork-child rows
+  // are all skipped — in upstream's order.
+  assert.equal(findReusableBlankSession(workspace, [{ ...blank('blank'), blank: false }], new Set()), undefined)
+  assert.equal(findReusableBlankSession(workspace, [blank('blank', { cwd: '/elsewhere' })], new Set()), undefined)
+  assert.equal(findReusableBlankSession({ path: '/w1', sessionIds: [] }, [blank('blank')], new Set()), undefined)
+  assert.equal(findReusableBlankSession(workspace, [blank('blank')], new Set(['blank'])), undefined)
+  assert.equal(findReusableBlankSession(workspace, [blank('blank', { origin: 'subagent' })], new Set()), undefined)
+  assert.equal(findReusableBlankSession(workspace, [blank('blank', { parentSessionId: 'p' })], new Set()), undefined)
+  // FIRST match wins (wire order), like upstream.
+  assert.equal(
+    findReusableBlankSession(workspace, [blank('blank'), blank('other', { cwd: '/w1' })], new Set()),
+    'blank',
+  )
+})
+
+test('the derived workspace carries the reuse resolution over the RAW snapshot', () => {
+  // The blank row is NOT visible in navigation (it is not current), so the
+  // reuse candidate can only come from the raw snapshot — the whole point.
+  const reused = deriveServerWorkspaces(
+    {
+      ...snapshot([workspace('w1', 'Work', ['blank'])], [session('blank', 5, { blank: true, cwd: '/w1' })]),
+      archiveSetKnown: true,
+    },
+    'local',
+    '未分组',
+    undefined,
+    1_000,
+  )
+  const row = reused.find(group => group.id === 'w1')
+  assert.equal(row?.reusableBlankSessionId, 'blank')
+  assert.deepEqual(row?.sessions, [], 'the reusable row stays hidden while it is not the current session')
+})
+
+test('reuse is withheld when the archive set is unknown (unary fallback)', () => {
+  const unknown = deriveServerWorkspaces(
+    snapshot([workspace('w1', 'Work', ['blank'])], [session('blank', 5, { blank: true, cwd: '/w1' })]),
+    'local',
+    '未分组',
+    undefined,
+    1_000,
+  )
+  assert.equal(
+    'reusableBlankSessionId' in (unknown[0] ?? {}),
+    false,
+    'an unknown archive set could make an archived row look reusable — create instead',
+  )
+})
+
+test('reuse never picks an archived blank row', () => {
+  const archived = deriveServerWorkspaces(
+    {
+      ...snapshot([workspace('w1', 'Work', ['blank'])], [session('blank', 5, { blank: true, cwd: '/w1' })]),
+      archivedSessionIds: ['blank'],
+      archiveSetKnown: true,
+    },
+    'local',
+    '未分组',
+    undefined,
+    1_000,
+  )
+  assert.equal(archived[0]?.reusableBlankSessionId, undefined)
+})
+
+test('reuse is not offered for synthetic cwd-derived groups', () => {
+  const synthetic = deriveServerWorkspaces(
+    {
+      ...snapshot(
+        [{ ...workspace('__cwd__:/w1', 'w1', ['blank']), synthetic: true }],
+        [session('blank', 5, { blank: true, cwd: '/w1' })],
+      ),
+      archiveSetKnown: true,
+    },
+    'local',
+    '未分组',
+    undefined,
+    1_000,
+  )
+  assert.equal('reusableBlankSessionId' in (synthetic[0] ?? {}), false)
+})
+
+// ---- 2026-09 review fixes: label/reuse facts must move the projection gate ----
+
+test('serversProjectionSignature moves for a label-only change (healed row must republish)', () => {
+  // The sidebar's own subscription drops updates whose projection signature is
+  // unchanged (SidebarRoot.tsx), so any RENDERED fact must be signed. The row
+  // renders `displayTitle`, and a healed predecessor row can flip id → project
+  // directory with no durable-title change: that flip must republish.
+  const base = server('local')
+  const relabeled = server('local', {
+    workspaces: [{
+      id: 'w1',
+      title: 'Work',
+      sessions: [{ id: 's1', title: 'One', displayTitle: 'dsh-chamber', running: false, updatedAt: 1 }],
+    }],
+  })
+  assert.notEqual(serversProjectionSignature([base]), serversProjectionSignature([relabeled]))
+})
+
+test('serversProjectionSignature moves for a reuse-only change ("+" must see the new candidate)', () => {
+  // A blank non-current row is INVISIBLE in navigation, so a reuse candidate can
+  // appear/disappear without changing any other signed byte. Without this the
+  // sidebar would keep a stale resolution and mint a duplicate empty session.
+  const base = server('local')
+  const reusable = server('local', {
+    workspaces: [{
+      id: 'w1',
+      title: 'Work',
+      reusableBlankSessionId: 'blank-1',
+      sessions: [{ id: 's1', title: 'One', displayTitle: 'One', running: false, updatedAt: 1 }],
+    }],
+  })
+  assert.notEqual(serversProjectionSignature([base]), serversProjectionSignature([reusable]))
+  // Sparse on the wire, stable in the signature: absent and explicit-null are
+  // the same fact.
+  const explicitNull = server('local', {
+    workspaces: [{
+      id: 'w1',
+      title: 'Work',
+      reusableBlankSessionId: undefined,
+      sessions: [{ id: 's1', title: 'One', displayTitle: 'One', running: false, updatedAt: 1 }],
+    }],
+  })
+  assert.equal(serversProjectionSignature([base]), serversProjectionSignature([explicitNull]))
+})
+
+test('deriveLocalSearchMatches matches the DISPLAY label the row renders (2026-09 review)', () => {
+  // Upstream matches the display title (ui-workspace tree.ts). A row labeled by
+  // its project directory — the motivating case of the label fix — must be findable
+  // by that directory, not only by its durable title.
+  const rows = snapshot(
+    [workspace('w1', 'Other', ['a'])],
+    [session('a', 10, { cwd: '/Users/me/dsh-chamber', displayTitle: 'dsh-chamber' })],
+  )
+  assert.deepEqual(deriveLocalSearchMatches(rows, 'dsh-chamber'), [{ sessionId: 'a', snippet: '' }])
+  // The durable title is still matched when present.
+  const titled = snapshot(
+    [workspace('w1', 'Other', ['a'])],
+    [session('a', 10, { cwd: '/x', title: 'My Session', displayTitle: 'My Session' })],
+  )
+  assert.deepEqual(deriveLocalSearchMatches(titled, 'my session'), [{ sessionId: 'a', snippet: '' }])
+})
+
+test('sessionDisplayTitle: separator-only cwd and null fields fall through to the id', () => {
+  // Upstream `workspaceTitleOf('/')` is '' and `displayTitleOf` then returns the
+  // session id — never the raw separators.
+  assert.equal(sessionDisplayTitle({ cwdBasename: '/', sessionId: 'sid' }), 'sid')
+  assert.equal(sessionDisplayTitle({ cwdBasename: '///', sessionId: 'sid' }), 'sid')
+  assert.equal(sessionDisplayTitle({ cwdBasename: '\\', sessionId: 'sid' }), 'sid')
+  // A JSON producer can deliver null; it is not a label.
+  assert.equal(sessionDisplayTitle({ displayTitle: null as never, title: null as never, sessionId: 'sid' }), 'sid')
+  assert.equal(sessionDisplayTitle({ cwdBasename: 'proj', sessionId: 'sid' }), 'proj')
 })

@@ -375,6 +375,11 @@ export function SidebarRoot({
   // leaves. A pointer that returns within that window cancels the pending
   // hide rather than restarting from a hidden bar.
   const column = useRef<HTMLDivElement>(null)
+  /** Per-workspace in-flight "+" resolution (upstream `connectWorkspace`'s
+   *  `connecting` map): a second click joins the first instead of creating a
+   *  second empty session. Keyed like the row-error key
+   *  `<source>/workspace/<id>/new`. */
+  const newSessionRef = useRef(new Map<string, Promise<void>>())
   const [pointerInside, setPointerInside] = useState(false)
   const lingerTimer = useRef<number | undefined>(undefined)
   const armLinger = (): void => {
@@ -1101,13 +1106,39 @@ export function SidebarRoot({
   }
 
   const onNewSession = (server: ChamberServerAggregate, workspaceId: string): void => {
-    runAction(`${server.id}/workspace/${workspaceId}/new`, async () => {
+    // Upstream's `connectWorkspace` keeps a per-workspace in-flight map
+    // (`connecting`) and returns the SAME promise to a second caller, so a
+    // double click can never mint two sessions (vendor ui-workspace/src/client/
+    // navigation.ts:116-131). The sidebar needs the same guard: both clicks read
+    // the same pre-create snapshot, so without it each one issues
+    // `session/create` and one of the two empty rows is invisible garbage
+    // forever — the exact I2 defect this handler exists to remove.
+    const key = `${server.id}/workspace/${workspaceId}/new`
+    const inFlight = newSessionRef.current.get(key)
+    if (inFlight !== undefined) return
+    const task = runAction(key, async () => {
+      // Reuse first, EXACTLY like upstream: reopen an existing blank member of
+      // this workspace; only create when there is none. The candidate comes from
+      // the projection (`findReusableBlankSession` over the raw snapshot), which
+      // is why the projection signature above must move when it changes.
+      const reusable = server.workspaces
+        .find(workspace => workspace.id === workspaceId)?.reusableBlankSessionId
+      if (reusable !== undefined) {
+        // No refresh needed: the row already exists in the projection; opening
+        // it makes it the current (and therefore visible) blank row.
+        chamberBridge.requestOpenSession(server.id, reusable)
+        return
+      }
       const client = getInstanceClient(server.id)
       const sessionId = await createSession(client, workspaceId)
       // 05 §2.2: created under this workspace, then open it on that source.
       // The App layer re-pulls the snapshot so the new session shows here.
       chamberBridge.requestRefresh(server.id)
       chamberBridge.requestOpenSession(server.id, sessionId)
+    })
+    newSessionRef.current.set(key, task)
+    void task.finally(() => {
+      if (newSessionRef.current.get(key) === task) newSessionRef.current.delete(key)
     })
   }
 
