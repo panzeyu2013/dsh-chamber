@@ -3,13 +3,17 @@
  * ONE header utility entry that opens the current session's workspace in an
  * installed app, over the per-source view-model —
  *
- *  - **LOCAL sources**: the instance-hosted application catalog served by the
- *    chamber host domain `openInApp/*` (`packages/dsh-chamber-seed-open-in`,
- *    the fork of upstream's open-in host half) through this entry's own
- *    connection carrier (design 20 §4.2), merged with the desktop
- *    main-process provider (the available-provider override);
- *  - **remote ssh sources**: only the desktop main-process provider (the VS
- *    Code Remote deeplink carrier).
+ *  - the **machine catalog** (installed apps + their real bundle icons + local
+ *    launches) is read ONCE per page from the LOCAL instance's `openInApp/*`
+ *    host domain (`packages/dsh-chamber-seed-open-in`, the fork of upstream's
+ *    open-in host half) by the renderer shell and injected into every entry as
+ *    `chamberMachineCatalog` (design 20 §5): "what is installed on this
+ *    machine" is a machine fact, exactly as it is upstream, where the page's
+ *    own host answers it;
+ *  - **this source's launch capability** selects from that catalog: a LOCAL
+ *    source launches on the machine directly, a remote ssh source keeps only
+ *    the desktop main-process provider's `remoteCapable` entries (the VS Code
+ *    Remote deeplink carrier).
  *
  * Registered into the OFFICIAL conversation header utilities slot
  * (`conversation.session.header.utilities`, the same right-aligned row as the
@@ -24,16 +28,16 @@
  * Per-entry facts ride this ctx (`chamberInstanceId`, `chamberTransport`,
  * `chamberSourceFingerprint`, all provided by chamber-entry/shell.ts): the
  * source id and transport decide the matrix, and the fingerprint is the
- * exact-boot proof the trusted main process verifies before a launch. The
- * instance channel's base path is NOT read here any more: the connection
- * carrier prefixes it (design 20 §4.2/§5).
+ * exact-boot proof the trusted main process verifies before a launch. This
+ * entry owns NO connection carrier of its own any more (2026-09-12): the
+ * machine catalog's transport belongs to the page, not to a source.
  */
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 // Type-only import activates the locale service's Context merge.
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import { OpenInButton, type OpenInInjected } from './OpenInButton.tsx'
 import { createOpenInSourceAdapter } from './source-adapter.ts'
-import type { OpenInAppRpcCall } from './local-catalog.ts'
+import type { MachineCatalog } from './machine-catalog.ts'
 import { getOpenInChoice, setOpenInChoice, subscribeOpenInChoice } from './choice-store.ts'
 import { en, zh, type OpenInKey } from '../locales.ts'
 import {
@@ -58,36 +62,7 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 export const OPEN_IN_HEADER_SLOT = 'conversation.session.header.utilities' as const
 const NS = 'dsh-chamber.open-in'
 
-export const inject = ['slots', 'locale', 'connection']
-
-/**
- * The client connection service this entry owns (typed locally: the connection
- * package's full face lives in the reused `@deepseek-ai/dsh-client-connection`
- * fork, and this package only needs the generic RPC carrier).
- */
-interface OpenInConnectionService {
-  readonly rpc: {
-    call(channel: string, endpoint: string, payload: unknown, signal?: AbortSignal): Promise<unknown>
-  }
-}
-
-/**
- * Bind this entry's generic-RPC carrier to the `openInApp` channel.
- *
- * The carrier is the connection fork's `rpc.call('/api', endpoint, payload,
- * signal)`: it prefixes the per-entry base path itself (`chamberBasePath`,
- * design 05 §6), rides the same transport, cookie and trust fence as every
- * other instance API, and takes the argument envelope as its payload
- * (`{args: {<parameter name>: …}}`, design 20 §4.1).
- * @param ctx - the per-entry client context.
- * @returns the call seam, or undefined when the connection service is absent
- *   (the local pool then stays empty instead of the button breaking).
- */
-export function openInRpcCarrier(ctx: ClientContext): OpenInAppRpcCall | undefined {
-  const service = (ctx as unknown as { connection?: OpenInConnectionService }).connection
-  if (service === undefined || typeof service.rpc?.call !== 'function') return undefined
-  return (endpoint, args, signal) => service.rpc.call('/api', endpoint, { args }, signal)
-}
+export const inject = ['slots', 'locale']
 
 export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-chamber: open-in dictionaries')
@@ -109,16 +84,21 @@ export function apply(ctx: ClientContext): void {
 
   const t = ctx.locale.bind(NS) as Translate
 
-  // Per-source adapter (design 20 §5): owns the dual-pool selection (the
-  // instance-hosted catalog for LOCAL sources + the page-wide main pool), the
-  // per-entry channel routing (local → the instance's own generic RPC carrier,
-  // including icons; main → trusted preload IPC with the exact-boot proof) and
-  // the persisted choice.
+  // The machine catalog is a PAGE fact (built once by the renderer shell for
+  // the LOCAL instance, design 20 §5); this entry reads it from its own Context
+  // and never builds a per-source copy. Absent = no machine reader on this page
+  // (the machine pool then stays empty rather than the button breaking).
+  const machineCatalog = (ctx as { chamberMachineCatalog?: MachineCatalog }).chamberMachineCatalog ?? null
+
+  // Per-source adapter (design 20 §5): owns the rendered-set merge (the page's
+  // machine catalog + the page-wide main pool) and the per-entry channel
+  // routing (local → the machine's own host domain, main → trusted preload IPC
+  // with the exact-boot proof), plus the persisted choice.
   const adapter = createOpenInSourceAdapter({
     source,
     sourceFingerprint,
     translate: t,
-    rpc: openInRpcCarrier(ctx),
+    machineCatalog,
     mainPool: { get: getOpenInApps, subscribe: subscribeOpenIn, refresh: refreshApps },
     // The remembered app is per source (design 20 §5): one page serves every
     // source, so a shared key would let a remote target overwrite the local
@@ -139,7 +119,6 @@ export function apply(ctx: ClientContext): void {
   // (see OpenInButton props).
   const injected = (): OpenInInjected => ({
     source,
-    sourceFingerprint,
     t,
     getViewModel: adapter.getViewModel,
     subscribe: adapter.subscribe,

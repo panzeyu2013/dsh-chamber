@@ -177,7 +177,7 @@ const AUDITED_FIRST_SCREEN_FACES: ReadonlyArray<readonly [id: string, members: r
   ['@dsh-chamber/dsh-chamber-client-ui-sidebar',
     ['slots', 'layout', 'sessions', 'workspaces', 'uiSession', 'uiWorkspace', 'locale']],
   ['@dsh-chamber/dsh-chamber-client-ui-git', ['slots', 'locale']],
-  ['@dsh-chamber/dsh-chamber-client-ui-open-in', ['slots', 'locale', 'connection']],
+  ['@dsh-chamber/dsh-chamber-client-ui-open-in', ['slots', 'locale']],
   ['@deepseek-ai/dsh-client-ui-settings', ['remote', 'remote.settings']],
   ['@deepseek-ai/dsh-client-ui-conversation',
     ['slots', 'sessions', 'fileUpload', 'uiSession', 'uiWorkspace', 'locale', 'settingsScope']],

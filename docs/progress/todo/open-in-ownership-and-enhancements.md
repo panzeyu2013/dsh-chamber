@@ -16,7 +16,9 @@
    `DSH_PERMISSION_MODE=workspace-write` 不拦（预期不受影响，需实测确认）；
 4. **无应用环境**：干净容器 / headless Linux 下目录为空 ⇒ 按钮诚实隐藏（不是空下拉、不是报错）；
 5. **远程来源**：ssh 目标只有 VS Code（新窗口/复用两态都与既有深链语义一致），
-   且**不出现**本地目录项（`source-not-local` 抑制在真机上生效）；
+   且**不出现**本地目录项（`source-not-local` 抑制在真机上生效）；图标必须与本地来源的
+   VS Code 逐像素相同（同一个页级机器目录，design 20 §4.2/§5），且本机**没有**装 VS Code 时
+   该条目整体不渲染；
 6. **插件管理页**：本地目标显示该行已注入；ssh/gateway/http 目标显示"本地形态专用"
    （绝不是"未注入"），且远端 `~/.dsh` 下**没有**该包的目录与 loader 行；
 7. **N-ctx 混合渲染**：本地 + 远程 + gateway 三种 ctx 同页时，按钮的图标/菜单/记忆互不串台；
@@ -29,7 +31,8 @@
 - **`ctx.subprocess` 在旧 runtime 的 web profile 是否挂载**：本包 `static inject = ['subprocess']`，
   而 control-plane 把"产物在但加载失败"视为打包缺陷（刻意不跳过）⇒ 若旧 runtime 的 web profile
   没有该服务，该实例 boot 会失败。**先跑装载探针再接第二台 runtime**；
-- `openInApp/icon` 的 base64 体积/缓存/CSP 实测（备选方案：回到"仅图标一条实例路由"，届时复评）；
+- 机器目录的 base64 体积/CSP 实测（2026-09-12 起图标由**页级机器目录**读一次、每 id 一次，
+  见 design 20 §4.2：要量的是"一页一份目录 + N 个图标"，含远来源同页时的实际开销）；
 - Windows 盘符/UNC 路径在 host 侧 `isAbsolute`/`isDirectory` 口径下的行为（design 23）；
 - 第三方编辑器 URL scheme 语义（Cursor / Windsurf / JetBrains Gateway / Insiders）逐个人工验证
   —— S1 的前置条件；

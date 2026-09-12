@@ -42,11 +42,45 @@ import {
   installClientPluginLoader, retireSourceClientGraph,
 } from '../../dsh-chamber-client-ui-sidebar/src/shared/client-plugin-loader.ts'
 import { chamberBridge, type PluginGraphDiagnostic } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
+// Page-level machine catalog + the page-level instance client it reads through:
+// both are pure modules with no vendor/runtime links, so the isolated shell
+// test resolves them the same way it resolves the sidebar's loader above.
+import {
+  createMachineCatalog, type MachineCatalog,
+} from '../../dsh-chamber-client-ui-open-in/src/client/machine-catalog.ts'
+import { getInstanceClient } from '../../dsh-chamber-client-ui-sidebar/src/shared/instance-api.ts'
 import { PendingOpenQueue } from './pending-open-queue.ts'
 import { PERF_MARKS, perfMark } from './perf-marks.ts'
 
 const CHAMBER_BOOT = '@dsh-chamber/app'
 export type ChamberTransport = 'local' | 'ssh' | 'http'
+
+/**
+ * The page's ONE machine application catalog (design 20 §5).
+ *
+ * "Which apps are installed on this machine, what do their icons look like and
+ * how do you launch them" describes the MACHINE, not the source on screen:
+ * upstream can read it from `location.origin` because one page is served by one
+ * host, while this page attaches N instances. The chamber therefore reads it
+ * once, from the LOCAL instance's own api base path (`/api/i/local`, the same
+ * route, generic-RPC envelope, cookie and trust fence every entry uses), and
+ * injects the settled catalog into every entry's Context — so a remote-ssh
+ * entry's VS Code is drawn with the machine's real bundle art instead of a
+ * bundled snapshot, and no entry re-reads the host for itself.
+ *
+ * Created on the first entry boot and shared by every later one (one page, one
+ * machine). A failing read is fail-closed inside the catalog (empty pool), so a
+ * stopped local instance degrades the marks to upstream's rounded square
+ * instead of breaking a boot.
+ */
+let pageMachineCatalog: MachineCatalog | null = null
+
+function machineCatalogForPage(): MachineCatalog {
+  pageMachineCatalog ??= createMachineCatalog({
+    call: (endpoint, args, signal) => getInstanceClient('local').callUnary(endpoint, args, signal),
+  })
+  return pageMachineCatalog
+}
 
 /** Convert an arbitrary thrown value into a stable diagnostic without ever
  * throwing again. External runtime stores/plugins may throw proxies whose
@@ -279,6 +313,11 @@ export function createChamberContextSetup(
     ctx.provide('chamberBasePath', basePath)
     ctx.provide('chamberSourceFingerprint', sourceFingerprint)
     ctx.provide('chamberTransport', transport)
+    // The machine catalog is a page fact, not a per-source one: every entry
+    // reads the same instance the shell built for the LOCAL instance (design 20
+    // §5) — the machine's installed apps and their icons are what a remote
+    // source's VS Code mark needs, and its own instance can never serve them.
+    ctx.provide('chamberMachineCatalog', machineCatalogForPage())
     // 代际事实（2026-12 复查 BLOCKER）：页面的 producer 注册表按注册顺序
     // 授权，一个挂死后又恢复的老 boot 会夺走生产权，其 teardown clear 会把
     // 健康后继的通道永久清空。消费者（侧栏 producer 注册）用它做代际栅栏。

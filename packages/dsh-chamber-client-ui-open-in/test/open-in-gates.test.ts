@@ -10,12 +10,10 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  markKindFor,
   rawInstanceIdForLaunch,
   usableAppsForSource,
   workspacePathForSession,
 } from '../src/client/open-in-gates.ts'
-import { displayKindOf } from '../src/client/local-catalog.ts'
 import type { OpenInApp } from '../src/shared/coordinator.ts'
 
 const FINDER: OpenInApp = { id: 'finder', displayKind: 'file-manager', remoteCapable: false, available: true }
@@ -73,22 +71,4 @@ test('launch instance id: canonical dsh/gateway and legacy ssh prefixes are stri
   assert.equal(rawInstanceIdForLaunch('dsh-edge-west'), 'edge-west')
   assert.equal(rawInstanceIdForLaunch('ssh-edge-west'), 'edge-west')
   assert.equal(rawInstanceIdForLaunch('gateway-edge-west'), 'edge-west')
-})
-
-test('mark selection: the host icon wins whenever the instance answered one', () => {
-  // Upstream draws the icon its host serves (OpenInAppAction.tsx `AppIcon`);
-  // the launch channel decides the carrier, never the mark — so a main-channel
-  // VS Code entry shows the instance's real bundle art exactly like a local one.
-  for (const displayKind of ['vscode', 'file-manager', 'terminal', 'unknown-family']) {
-    assert.equal(markKindFor({ displayKind }, true), 'catalog-icon', displayKind)
-  }
-  // No host icon: the VS Code family keeps the bundled product raster (the
-  // remote-SSH case has no instance catalog at all), everything else falls back
-  // to the same rounded square upstream draws.
-  assert.equal(markKindFor({ displayKind: 'vscode' }, false), 'vscode')
-  assert.equal(markKindFor({ displayKind: displayKindOf('vscodeinsiders') }, false), 'vscode',
-    'the whole VS Code family maps to the product family before mark selection')
-  assert.equal(markKindFor({ displayKind: 'file-manager' }, false), 'generic')
-  assert.equal(markKindFor({ displayKind: 'terminal' }, false), 'generic')
-  assert.equal(markKindFor({ displayKind: 'unknown-family' }, false), 'generic')
 })

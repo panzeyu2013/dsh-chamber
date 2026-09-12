@@ -321,6 +321,30 @@ class InstanceApiClient {
   }
 
   /**
+   * One generic unary Remote call whose payload IS the wire argument map.
+   *
+   * Page-level escape hatch for a consumer that owns a domain but not a
+   * per-entry Context: the machine-scoped open-in catalog (design 20 §5) reads
+   * the LOCAL instance's `openInApp/*` domain from the page, because that
+   * catalog describes the machine, not the source on screen. The domain's own
+   * wire stays with its owner (`packages/dsh-chamber-client-ui-open-in`); this
+   * method only supplies the base path (`/api/i/<id>`), the browser-auth
+   * handling of the per-instance proxy, the timeout and the error vocabulary —
+   * exactly what every accessor below gets.
+   * @param endpoint - slash endpoint on this instance (`openInApp/apps`).
+   * @param args - argument map, i.e. the remote method's named parameters.
+   * @param signal - optional caller cancellation, combined with the budget.
+   * @returns the flat `{ok,value}|{ok,error}` envelope; transport failures throw.
+   */
+  async callUnary(
+    endpoint: string,
+    args: Readonly<Record<string, unknown>>,
+    signal?: AbortSignal,
+  ): Promise<UnaryResult<unknown>> {
+    return this.call(endpoint, { args }, signal)
+  }
+
+  /**
    * session-controller unary Remotes (v0.1.2-alpha.1 `@Remote` names). Every
    * call wraps the request object in the wire `{args:{...}}` envelope — the
    * host gateway rejects any other payload shape. The args keys must be the

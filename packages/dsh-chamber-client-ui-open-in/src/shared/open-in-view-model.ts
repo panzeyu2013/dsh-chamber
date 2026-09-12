@@ -43,7 +43,9 @@ export type OpenInSuppressionReason =
   | 'unknown-source'
   /** A non-local source whose transport cannot carry remote launches. */
   | 'transport-not-ssh'
-  /** The instance-hosted (local) catalog exists for LOCAL sources only. */
+  /** A non-local source cannot launch the machine's own apps: the machine
+   *  catalog is read for every source (design 20 §4.2), but an app that opens
+   *  on THIS machine is only launchable from the source that owns it. */
   | 'source-not-local'
   /** The app is not installed/available right now. */
   | 'app-unavailable'

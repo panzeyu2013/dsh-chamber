@@ -33,7 +33,11 @@
   经 trusted IPC 落地；远程路径**绝不**进入本地文件系统面；
 - **N-ctx 正确性**：每个 `AppWebEntry` 的私有 cordis Context 提供
   `chamberInstanceId` / `chamberBasePath` / `chamberTransport` / `chamberSourceFingerprint`
-  （`chamber-entry.ts:138,449-467`、`shell.ts:214`），入口不读任何页面级可变全局值；
+  （声明 `chamber-entry.ts:137-152`，读取与校验 `chamber-entry.ts:590-593`，安装
+  `shell.ts:312-315`），以及**页级机器目录** `chamberMachineCatalog`（同一个 reader 对象
+  注入每个 entry，`shell.ts:320`，§4.2）——入口只读自己 ctx 上的事实，不读任何页面级可变
+  全局值；（后两个页级事实 `chamberBootGeneration` / `chamberReportBootDegraded` 沿用
+  "消费方宽松 cast"的既有惯例，故未进那份声明。）
 - **官方超集**：官方那一份能做的我们都能做，且**不依赖**上游运行时行为（§7）。
 
 ### 非目标（明确不做）
@@ -75,6 +79,13 @@
 fork & supersede 让前两条彻底消失（不再需要动 spawn 环境、不再需要把官方客户端拉进复合），
 第三条也从"前提"降为"不再相关"。
 
+**2026-09-12 补注（第 2 条的机器级复活）**：上游那条"目录/图标由承载页面的 host 回答"的
+不变量，在**机器级**上仍然是对的——只是本壳有 N 个 host，需要点名"哪一个是机器 host"。
+答案是把页面上的机器 host 钉为**本地实例**：渲染壳建唯一一份 `chamberMachineCatalog`（§4.2）
+注入每个 entry。它**不新增传输面**：走的是本地 entry 自己那条 `/api/i/local` 通用 RPC，
+信封/cookie/栅栏逐字相同；插件因此不再持有 connection 载波，`inject` 从
+`['slots','locale','connection']` 收敛为 `['slots','locale']`。
+
 ### 2.2 与既有 pin 的关系（不变式）
 
 - `SSH_CONNECTION=127.0.0.1 0 127.0.0.1 0` 回到**唯一原有的目的**：目录选择交互 pin
@@ -92,14 +103,14 @@ fork & supersede 让前两条彻底消失（不再需要动 spawn 环境、不�
 ```text
 ┌─ 客户端插件 @dsh-chamber/dsh-chamber-client-ui-open-in（复合首屏，设计 08/09 同款）──┐
 │  open-in 头部入口（order -10 = 官方值，会话头部 utilities 槽）→ OpenInButton        │
-│    条目 = buildOpenInViewModel({source, local, main})（决策面）                      │
-│    local 来源：本机目录池（我们的实例内 host 包）+ main 池（vscode，同 id 可用者胜出）│
-│    ssh 来源：仅 main 池的 remoteCapable；http/畸形：空                                │
+│    条目 = buildOpenInViewModel({source, local=机器目录, main})（决策面）             │
+│    机器目录：页级读一次（本机实例的 host 包）；main 池同 id 可用者胜出                 │
+│    local 来源：全量机器目录；ssh 来源：仅 main 池的 remoteCapable；http/畸形：空       │
 │    ≥1 → 官方分体按钮（记住的选择/默认 vscode）+ chevron 下拉（官方唯一形态）          │
 │    门控：桥就绪 ∧ 可用集非空 ∧ 工作区有路径（fail-closed）                             │
-│    下拉打开/窗口 focus 时 refresh()                                                  │
+│    下拉打开时 refresh()（窗口 focus 只释放 main 池的 memo，coordinator.ts:142）      │
 └───────────┬──────────────────────────────────────┬──────────────────────────────────┘
-            │ local 通道：实例内 Remote（每 entry 私有 ctx 的 base path）│ main 通道：IPC ×2（trustedIpc）
+            │ local 通道：页级机器目录（渲染壳注入 → /api/i/local）│ main 通道：IPC ×2（trustedIpc）
 ┌─ 实例进程内 chamber host 包（seed，本地形态）──────────────┐ ┌─ 桌面主进程 packages/desktop/open-in.ts ─┐
 │  @dsh-chamber/dsh-chamber-seed-open-in （fork 自上游宿主半）│ │  OpenInApp 注册表 [vscode]（vscode-only） │
 │  Remote 命名空间 openInApp：                              │ │  vscode：remoteCapable=true；            │
@@ -144,32 +155,41 @@ fork & supersede 让前两条彻底消失（不再需要动 spawn 环境、不�
 
 ### 4.2 客户端消费
 
-- 客户端插件在**每个 entry 的私有 ctx** 内调用实例：`src/client/index.ts` 的
-  `openInRpcCarrier(ctx)` 把载波装配成 `(endpoint, args, signal) =>
-  ctx.connection.rpc.call('/api', endpoint, { args }, signal)`
-  —— `connection` 客户端服务由 `packages/dsh-client-connection/src/client/index.ts:402`
-  提供，`rpc.call(channel, endpoint, payload, signal)` 见 `src/client/rpc.ts:61`，
-  **per-entry base path 已在 `createWebConnectionRpc({basePath})` 内前缀**
-  （`rpc.ts:44-59`，值来自 `ctx.chamberBasePath`）⇒ 不需要任何 URL 拼接补丁，插件也**不再读**
-  `chamberBasePath`；代价是插件新增 `connection` 注入依赖（该服务是复合首屏成员，恒在）；
-  载体缺失/未就绪时 `openInRpcCarrier` 返回 undefined 或调用失败 ⇒ 本地池为空、按钮诚实隐藏
-  （fail-closed），不阻塞其它池；
+- **机器目录是页级事实，读一次**（2026-09-12 修正）：目录/图标/拉起描述的是**这台机器**，
+  不是屏幕上的来源。上游从不区分二者——一页只由一个 host 承载，所以它的 client 从
+  `location.origin` 读 `apps`/`icon/<id>`；本页挂载 N 个实例，于是由渲染壳
+  （`packages/renderer/src/shell.ts` 的 `machineCatalogForPage()`）用**页级实例客户端**
+  `getInstanceClient('local').callUnary(...)`（`sidebar/shared/instance-api.ts`）对**本地实例**
+  建**唯一一份** `createMachineCatalog(...)`，并作为 per-entry 事实
+  `ctx.provide('chamberMachineCatalog', …)` 注入**每一个** entry（本地与远程一视同仁）；
+- 传输面**零新增**：`callUnary(endpoint, args, signal)` 与每个 entry 自己的连接载波走**同一条**
+  URL（`/api/i/local/api/<endpoint>`）、同一 `client-request` 信封、同一
+  `browser-auth` cookie 与同一宿主栅栏（`instance-api.ts` 与 `client/rpc.ts:61` 的信封逐字相同），
+  只是把 base path 钉在 `local` 上——因此**插件侧不再持有 connection 载波**：
+  `inject` 从 `['slots','locale','connection']` 收敛为 `['slots','locale']`（该插件现在只消费
+  自己 ctx 上的事实）；
 - 载荷/响应形状校验在 `src/client/local-catalog.ts` 逐项执行：域载体必须是
   `{ok:true,value}|{ok:false,error:{code,message}}`，`apps` 必须是字符串数组（坏条目/重复只丢
-  自己，不抹掉合法 sibling），任何形状不明的回答一律 fail-closed；
-- 图标：`src/client/source-adapter.ts` 按 app id 做 **boot 级缓存**（成功与失败都缓存：缺失的
-  图标不会被每次渲染重复请求），目录探测成功后立即预取；`icon()` 回答的
+  自己，不抹掉合法 sibling），任何形状不明的回答一律 fail-closed；本地实例未就绪时调用失败
+  ⇒ 目录为空、按钮诚实隐藏（fail-closed），不阻塞 main 池，也不阻塞任何 boot；
+- 图标缓存与预取归**页级** `src/client/machine-catalog.ts` 所有（成功与失败都缓存：缺失的
+  图标不会被每次渲染重复请求；跨来源只取一次，不再按来源各存一份）；`icon()` 回答的
   `{mime, dataBase64}` 只在 `OPEN_IN_APP_ICON_MIME_ALLOWLIST`（= 上游 `icons.ts` 的
   `contentType` 并集 `image/png` / `image/svg+xml`）内拼成 `data:` URL，缓存未命中/失败时返回
-  null，按钮渲染 §5 的兜底 mark（含 main 通道的 VS Code 条目——缓存里有真图标就用真图标；
-  CSP 面见 §10）。**预取是"急切"且按 id 恰好一次的取舍**（2026-09-12 复核）：实例目录只含
-  宿主真解析到的应用（本机常见 3–8 个），一次预取换来"按钮不闪兜底 mark / 菜单秒开 /
-  刷新不重取"；代价是首次 boot 时 N 个 id 的 base64 过 RPC、宿主侧 N×(`plutil`+`sips`)
-  每个实例生命周期一次——上游相反（每个 `<img>` 懒加载、逐行 pop-in），在"用户从不打开
-  菜单"时更省；改为"只预取视图模型会渲染的 id"经核算是空操作（local 来源的目录 id 要么
-  以 local 条目渲染、要么被可用的 main 覆盖后以**同一个 id** 渲染，都要图标），故保持急切。
-  批次**串行排队**（不是 `??=` 单飞）：菜单打开/窗口 focus 触发的 refresh 若撞上在途批次，
+  null，按钮渲染 §5 的兜底 mark（CSP 面见 §10）。**预取是"急切"且按 id 恰好一次的取舍**：
+  机器目录只含宿主真解析到的应用（本机常见 3–8 个），一次预取换来"按钮不闪兜底 mark /
+  菜单秒开 / 刷新不重取"；代价是首次 boot 时 N 个 id 的 base64 过 RPC、宿主侧 N×
+  (`plutil`+`sips`) 每个实例生命周期一次——上游相反（每个 `<img>` 懒加载、逐行 pop-in），
+  在"用户从不打开菜单"时更省；改为"只预取视图模型会渲染的 id"经核算是空操作（来源的渲染
+  集合要么是机器目录条目、要么是被可用的 main 覆盖后**同一个 id**，都要图标），故保持急切。
+  批次**串行排队**（不是 `??=` 单飞）：菜单打开（或本机 entry 的 boot）触发的 refresh 若撞上在途批次，
   它发现的新 id 不会被丢掉；批次运行时再查一次缓存，已答过的 id 不重复请求；
+  单飞只包住 **id 读取**（`apps()`），不包住图标尾巴——否则图标阶段到达的 refresh 会并入
+  一次已经定好应用列表的探测。**"恰好一次"只对图标成立**：同一时刻只有一次在途 id 探测
+  （并发 boot 的 entry 共享它），但串行 boot 的每个 entry、以及每次菜单打开
+  都会再探一次 id——`apps()` 在宿主侧走的是缓存过的可见性解析，图标则按 id 命中页级缓存
+  不重取，所以代价是几次廉价 RPC 而不是重复搬运 base64（官方同样每次打开菜单都重取一次
+  `GET /open-in-app/apps`）；
 
 ### 4.3 桌面主进程面（不变）
 
@@ -187,24 +207,27 @@ provider（本地目录不再是主进程的事，也不再是"官方宿主行"�
 
 - **来源解析**：只接受精确 `local`、`dsh-<id>`、`gateway-<id>` 或迁移期 legacy `ssh-<id>`，
   并显式拒绝 `ssh-local`/`dsh-local`/`gateway-local`、空/越界/非法字符；同时要求 ctx 的
-  `chamberTransport` 与 `local|ssh|http` 契约匹配（`src/client/index.ts:64-73`）；
-- **视图模型**（`shared/open-in-view-model.ts`，实现面）：`{source, local, main}` 三池
+  `chamberTransport` 与 `local|ssh|http` 契约匹配（`src/client/index.ts:74-83`）；
+- **视图模型**（`shared/open-in-view-model.ts`，实现面）：`{source, 机器池, main}` 三输入
   合一 —— 同 id 裁决 = **可用的 main 项胜出**（保留 `vscodeOpenInNewWindow`、来源代 proof
-  与深链 intent 推送），main 不可用时本地池兜底（已装应用不隐藏）；
+  与深链 intent 推送），main 不可用时机器条目兜底（已装应用不隐藏）。机器池由**每个**来源
+  读同一份页级目录（§4.2），但**能不能用**仍由来源决定：非本地来源只保留 main 池声明
+  `remoteCapable` 的条目（`source-not-local` / `app-not-remote-capable` 两条既有抑制），
+  所以远程来源的渲染集合与改动前逐条一致，变的只是图标的来源；
 - **门控三进**（任一不满足 → 渲染 null）：① 桥就绪且过滤后可用集非空；② 本 header 的
   `sessionId` 属于有路径的工作区；③ hooks 无条件先执行（`open-in-gates.ts`）；
 - **交互**：可用集 ≥1 → 官方那条分体按钮（主图标按钮 + chevron + **官方
   `ui-primitives` `Menu`**）——官方没有单条目形态，本入口也不再有；
   `Menu` 的 `autoFocus` 焦点转移与方向键/Home/End 导航、
   `dense` 行、`selection="fill"` 选中填充、菜单项 `icon` 带真实应用图标，
-  `OpenInButton.tsx:351-422`；props 面与 pin 的 `Menu.tsx`/`Tooltip.tsx` 对齐见
+  `OpenInButton.tsx:316-401`；props 面与 pin 的 `Menu.tsx`/`Tooltip.tsx` 对齐见
   `src/vendor-modules.d.ts:26-73`；2026-09-11 upstream-alignment）。**呈现规格取官方
   open-in 分体按钮**（2026-09-12 彻底统一：28px / `border-l4` / r14 容器、主按钮
   15px mark、设计系统 `IconChevronDownOutline14` size 11、菜单行 18px mark、官方圆角
   方块回落；逐条对照见 design 16 §6.1 与 `OpenInButton.module.css`）。按钮与 chevron
   的提示是同一 pin 的设计系统 `Tooltip`，**不再用原生 `title`**；chevron 自带
   `aria-haspopup="menu"` / `aria-expanded`，并在每次打开时重探目录（原 bespoke
-  菜单的 `onOpening` 语义搬到 trigger，`OpenInButton.tsx:391-419`）。**唯一留在
+  菜单的 `onOpening` 语义搬到 trigger，`OpenInButton.tsx:368-396`）。**唯一留在
   插件内的菜单逻辑是 N-ctx 归属** `instance-view-guard.ts`：菜单打开期间它观察
   trigger 的祖先链，所属 `.instance-view` 一旦带上 `instance-hidden`/
   `instance-pending`/`hidden`/`aria-hidden` 或断开连接即关闭菜单
@@ -213,28 +236,31 @@ provider（本地目录不再是主进程的事，也不再是"官方宿主行"�
 - **失败呈现**：拉起失败不再只写 `console.error`，原因随按钮的 error 装饰**就地
   可见**：按钮可访问名切成「打开失败」，`Tooltip` 显示「{openFailed}{原因}」（域
   载体的 error 文本，或传输层异常消息），随 error 装饰 2 s 后一并清除
-  （`OpenInButton.tsx:252,310-327,332-337`）；
+  （`OpenInButton.tsx:298-304,309-314`）；
 - **记忆**：**per-source 键**（`choice-store.ts`），并对"记忆值在本上下文不可用"降级到默认项；
   官方键 `dsh.open-in-app.choice` 不再被任何一方写入（官方客户端从不加载），因此不存在同页同 origin 的键冲突；
-- **通道命名**：`OpenInChannel = 'local' | 'main'`——本地池由**实例内的我们自己**服务，
-  不再叫 `official`（这个池从"官方宿主半"换成了"我们的 fork"，旧名会误导读者）；
-- **本地池的协议**：由 §4.1 的 Remote 面提供，实现面是 `client/local-catalog.ts`
-  （目录/图标/拉起的全部 wire 解析）与 `client/index.ts` 的 `openInRpcCarrier`。此前的
-  "官方路由吸收"实现（`client/official-catalog.ts`）已退役；
+- **通道命名**：`OpenInChannel = 'local' | 'main'`——`local` 指"由实例内的我们自己服务、
+  在这台机器上拉起"，不再叫 `official`（这个池从"官方宿主半"换成了"我们的 fork"，旧名会
+  误导读者）；它同时决定**拉起载体**（实例域 vs 可信 IPC），不决定图标（§5 图标契约）；
+- **机器池的协议**：由 §4.1 的 Remote 面提供，实现面是 `client/local-catalog.ts`
+  （目录/图标/拉起的全部 wire 解析）与 `client/machine-catalog.ts`（页级缓存/预取/通知）；
+  传输由渲染壳注入（§4.2），插件侧不再持有载波。此前的"官方路由吸收"实现
+  （`client/official-catalog.ts`）已退役；
 - **协议头镜像**：`shared/open-in-wire.ts` 是客户端侧的命名空间/方法名/错误码/媒体类型镜像
   （客户端是浏览器包，不能 import Node 侧的 seed 包），由
   `test/open-in-wire-lockstep.test.ts` 读 seed 的 `src/shared.ts` + `src/index.ts` 逐项钉住
   （命名空间、四个方法名、`@Remote` 面、错误码集合、图标媒体类型）；
-- **图标契约**：`iconUrl(appId): string | null`（`OpenInButton` 的 prop 形状**不变**）现在读的
-  是 boot 级缓存里的 `data:` URL；缓存由适配器预取并在到达时通知订阅者。
-  **选图规则与官方同一条管线**（2026-09-12 彻底统一，`markKindFor` 只看"实例是否答过这个
-  id"，与通道无关）：有宿主图标就用宿主真图标（main 通道的 VS Code 条目也一样）；
-  没有时 VS Code 家族用仓库内产品图标兜底（remote ssh 无实例目录池的情形；该资源 64px，
-  15/18px 下 2×/3× 都不放大），其余用官方圆角方块；缓存未命中且宿主无图标前先渲染该
-  兜底 mark。失败同样入缓存，因此缺失图标不会每次渲染重复请求；
-  **解码失败记忆按"本次 boot 的 sourceFingerprint + app id"分作用域**（`failedIcons`）——
-  本壳一页多来源，某个实例的坏图标不得连累另一来源的同名 app，也不得跨该来源的下一次
-  boot 存活；
+- **图标契约**：`iconUrl(appId): string | null`（`OpenInButton` 的 prop 形状**不变**）读的是
+  **页级机器目录**缓存里的 `data:` URL；缓存由 `machine-catalog.ts` 预取并在到达时通知
+  各 entry 的适配器。
+  **选图规则收敛成官方那一条**（2026-09-12）：机器目录答过这个 id ⇒ 真图标（**任何来源、
+  任何通道**，远程来源的 VS Code 条目也一样）；答不出（抽取失败 / 本机实例未就绪）
+  ⇒ 官方圆角方块——**chamber 不再有任何自有 mark**（此前的 VS Code 产品位图、
+  `VscodeMark`、`'vscode'` mark kind、`assets.d.ts` 与 64px 资源全部删除）。"本机没装
+  VS Code ⇒ 该条目根本不渲染"（`vscodeAvailable()` 是本机探测），所以需要 mark 时真图标
+  总能取到；
+  **解码失败记忆按图标 URL 去重**（`failedIcons`）：一页只读一份机器目录，同一个 URL 在
+  每个来源的按钮里都是同一批字节，失败记住一次即处处回落，不再逐来源重解码；
 - **默认项是有意的自有取值**：`open-in-view-model.ts` 的 `defaultEntryId` = 第一个 VS Code
   条目，否则第一项（2026-09-12 复核确认保留）；官方同位置取的是**宿主菜单顺序里的第一个
   可用 app**（macOS 上通常是 Finder），这是本入口与官方唯一的"呈现级"行为差异；
@@ -336,7 +362,9 @@ provider（本地目录不再是主进程的事，也不再是"官方宿主行"�
 
 ### 7.1 与官方等价（现已具备）
 
-本机全量应用目录；真实 bundle 图标（**选图管线与官方同源**：有宿主图标就用，与通道无关）；
+本机全量应用目录（由**本地实例**按机器级事实回答，页级读一次，见 §4.2）；真实 bundle 图标
+（**选图管线与官方同源**：机器目录答过就用，与通道、来源都无关——远程来源的 VS Code 用的
+就是本机那份真图，仓库内已无任何位图资源）；
 官方同款 `app.*` 标签；选择持久化；会话头部 utilities 槽位与"Session log 左侧"的排序
 （`order: -10` = 官方值）；目录限定打开。**控件呈现逐条等于官方**（2026-09-12 彻底统一）：
 28px / `border-l4` / r14 分体容器、主按钮 15px mark、设计系统 chevron `size 11`、菜单行
@@ -383,7 +411,11 @@ chevron，不因只有一个 app 少画 chevron）。
 - 原方案里的 vendor 补丁 / composite covered+factory / `--no-open` / spawn env 剥离 /
   picker pin overlay / 按 transport 分流注册：**全部不再需要**（§2）；
 - `packages/renderer/src/chamber-covered.ts:216-227` 的注释理由改写（page-own 的原因从
-  "官方自隐藏"改为"我们的 fork 替换官方注册"）。
+  "官方自隐藏"改为"我们的 fork 替换官方注册"）；
+- **2026-09-12 机器目录修正的退役面**：`src/client/vscode-icon.png`（VS Code 位图资源）、
+  `src/assets.d.ts`（包内已无 bundle 资源可声明）、组件内的 `VscodeMark` 与
+  `open-in-gates.ts` 的 `markKindFor`/`OpenInMarkKind`（`'vscode'` mark kind）——全部删除：
+  机器目录就是图标来源，缺图一律回官方圆角方块。
 
 **新增/改写**：
 
@@ -393,9 +425,15 @@ chevron，不因只有一个 app 少画 chevron）。
   `dropped`；
 - 客户端：`src/client/local-catalog.ts`（新）、`src/shared/open-in-wire.ts`（新）、
   `src/client/instance-view-guard.ts`（新，N-ctx 归属守卫，§5）、
-  `test/{local-catalog,open-in-wire-lockstep,open-in-labels,instance-view-guard}.test.ts`（新），
+  `src/client/machine-catalog.ts`（新，**页级机器目录**：一次探测/每 id 一次图标/串行批次/
+  通知，§4.2）、
+  `test/{local-catalog,machine-catalog,open-in-wire-lockstep,open-in-labels,instance-view-guard}.test.ts`（新），
   `client/{source-adapter,choice-store,index,open-in-gates,OpenInButton}.tsx?` 与
   `shared/{open-in-view-model,capabilities}.ts`、`src/locales.ts` 改写（§4.2/§5）；
+- 页级接线（2026-09-12）：`packages/renderer/src/shell.ts` 建唯一一份机器目录并
+  `ctx.provide('chamberMachineCatalog', …)`；传输复用
+  `packages/dsh-chamber-client-ui-sidebar/src/shared/instance-api.ts` 的公开
+  `getInstanceClient('local').callUnary(...)`（同一信封/路由/栅栏，零新增传输面）；
 - 接线面：§6.2 的八处 + 插件页的 `localOnly` 呈现（`plugin-inventory-text.ts` +
   `global.d.ts` + 设置页文案 `chamberBadgeLocalOnly`）。
 
@@ -409,8 +447,10 @@ chevron，不因只有一个 app 少画 chevron）。
 | 跨包 wire 契约 | `test/open-in-wire-lockstep.test.ts`（客户端包） | 命名空间、四个方法名与其全限定常量、`@Remote` 面、错误码集合、图标媒体类型 —— 全部读 seed 源码文本 |
 | 标签覆盖 | `test/open-in-labels.test.ts`（客户端包） | fork 的 `catalog.ts` 每个 id 都有 zh+en 标签，且标签表无多余行 |
 | 菜单归属守卫 | `test/instance-view-guard.test.ts`（客户端包） | `menuOwnerAllowsInteraction` 的 fail-closed 真值表（断连 / 隐藏 class / `hidden` / `aria-hidden` / 不可见任一不满足即关闭）；纯函数，不依赖浏览器 DOM |
-| 本地池 wire 纪律 | `test/local-catalog.test.ts`（客户端包） | 参数名（`app`/`path`）、载体解析、fail-closed、`data:` URL 允许表、拉起错误映射 |
-| 适配器行为 | `test/source-adapter.test.ts` | 双池合并、图标 boot 缓存（刷新不重复请求）、per-entry 通道路由、无载波时诚实降级 |
+| 机器池 wire 纪律 | `test/local-catalog.test.ts`（客户端包） | 参数名（`app`/`path`）、载体解析、fail-closed、`data:` URL 允许表、拉起错误映射 |
+| 机器目录缓存 | `test/machine-catalog.test.ts`（客户端包） | boot 一次探测 + 每 id 恰好一次图标（刷新不重取）、串行批次（在途批次期间发现的 id 不丢）、单飞只包 id 读取且并发 caller 共享、通知顺序、失败 fail-closed |
+| 适配器行为 | `test/source-adapter.test.ts` | 机器池 × main 池合并、**远程来源用机器图标**、per-entry 通道路由、无机器目录时诚实降级、订阅释放 |
+| 页级注入契约 | `test/shell.test.ts`（renderer） | 两个 entry 拿到**同一个** `chamberMachineCatalog` 实例（页级事实，非 per-entry 副本） |
 | 记忆 | `test/choice-store.test.ts` | per-source 键、来源隔离、旧全页键只读迁移、畸形 id 不写键 |
 | 桌面投影 | `test:desktop`（plugin-sync/open-in/cross-package-contract/renderer-trust） | 远端 seed 丢弃 `localOnly` 行、远端探针对该行零调用、本地投影携带 `localOnly`、打包行集 |
 | 状态对象字段集 | `cross-package-contract.test.ts`（新增门）+ `ipc-surface-mirror.test.ts`（L3） | 同一个 wire 状态对象有**四份声明**（`plugin-sync.ts` 投影 / `renderer/global.d.ts` / `preload.cts` / 客户端 `ChamberPackageState`）：前两者与 client 由新门三向比对（client 允许只少 `probe`），preload ↔ renderer 由既有 L3 门覆盖 ⇒ 四向全闭合。**加 `localOnly` 时正是 renderer 与 preload 两处漏了**，两道门各抓一处 |

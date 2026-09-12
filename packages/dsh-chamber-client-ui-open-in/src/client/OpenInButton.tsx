@@ -41,15 +41,13 @@
  * chevron's own `border-left` hairline, an 18px mark in the menu rows and
  * upstream's own rounded-square fallback glyph for an app whose icon the host
  * does not serve (`OpenInButton.module.css` carries the rule-by-rule mapping).
- * Everything chamber-specific is behaviour, never a second visual language.
- * The one chamber-only mark left is the bundled VS Code raster
- * (`vscode-icon.png`): the official pipeline draws the host-served bundle icon,
- * which this client also prefers for EVERY channel (a main-process entry
- * included); the raster is the fallback for the VS Code family when no host
- * icon exists — the case upstream cannot reach, because its only icon source is
- * the host (a remote SSH source has no instance catalog). It renders through
- * upstream's own `img` treatment at upstream's sizes (15px button / 18px menu;
- * that asset's resolution note lives on `VscodeMark`).
+ * Everything chamber-specific is behaviour, never a second visual language —
+ * including the marks: the pipeline draws the icon of the app the MACHINE
+ * resolved (the page's machine catalog, design 20 §5), for every channel and
+ * every source, exactly as upstream draws whatever icon its host serves. The
+ * selection is therefore one question — did the catalog answer this id? — and
+ * the miss draws upstream's own rounded square; the chamber keeps no mark and
+ * no mark table of its own.
  *
  * Two gates (design 16 §6.3), ANY failure → render null (never a dead button):
  *  1. the merged view-model has ≥1 usable entry (unknown/probe-failed →
@@ -64,28 +62,27 @@ import { useEffect, useRef, useState } from 'react'
 import {
   IconChevronDownOutline14, Menu, Tooltip, type MenuItem,
 } from '@deepseek-ai/dsh-client-ui-primitives'
-import vscodeIcon from './vscode-icon.png'
 import { useInstanceViewDismissal } from './instance-view-guard.ts'
 import type { Translate } from '../shared/coordinator.ts'
 import type { OpenInResult, OpenInSource } from '../shared/capabilities.ts'
 import type { OpenInViewEntry, OpenInViewModel } from '../shared/open-in-view-model.ts'
 import { OPEN_IN_APP_LABEL_KEY } from '../locales.ts'
-import { markKindFor, workspacePathForSession } from './open-in-gates.ts'
+import { workspacePathForSession } from './open-in-gates.ts'
 import styles from './OpenInButton.module.css'
 
 /** Injected face the plugin supplies: per-boot source id + bound translator. */
 export interface OpenInInjected {
   /** Strictly parsed per-boot source with orthogonal target id and transport. */
   source: OpenInSource
-  /** Immutable identity of this exact boot, never read from a latest-roster global. */
-  sourceFingerprint: string
   /** Bound translator for the plugin namespace. */
   t: Translate
   /** Current merged per-source view-model (local + main pools). */
   getViewModel(): OpenInViewModel
   /** Subscribe to view-model changes (pool probes, icons, choice). */
   subscribe(listener: () => void): () => void
-  /** Re-probe both pools (menu open / window focus). */
+  /** Re-probe both pools on menu open. (Window focus releases only the
+   *  page-wide MAIN pool memo — `coordinator.ts`'s hydration recovery — while
+   *  the machine catalog is re-probed by this call and by each entry's boot.) */
   refresh(): Promise<void>
   /** Launch one entry through its channel; rejects on failure. */
   launch(entry: OpenInViewEntry, path: string): Promise<OpenInResult>
@@ -125,35 +122,17 @@ const ERROR_DECAY_MS = 2_000
 
 /** Rendered size of the app mark inside the main button — the official
  *  client's own `AppIcon` size (`OpenInAppAction.tsx`: `size={15}` inside the
- *  28px split). The bundled raster is 64px: beyond 3x at this size, so no DPR
- *  upscales it; the host-icon path normally covers this entry anyway (see
- *  `markKindFor`). */
+ *  28px split). */
 const BUTTON_MARK_SIZE = 15
 /** Rendered size of the app mark in a menu row (the official plugin's 18px
  *  leading icon, `OpenInAppAction.tsx`: `icon: <AppIcon … size={18}/>`). */
 const MENU_MARK_SIZE = 18
 
-/** The official Visual Studio Code product icon (64px raster extracted from the
- *  installed app's `Code.icns` by the host's own command, `sips -s format png
- *  -Z 64`). Microsoft trademark — used here as nominative reference for a button
- *  whose only function is "open in VS Code" (user decision 2026-08); implies no
- *  endorsement. Rendered through the same `img` treatment as every catalog icon
- *  (`.mark`, `object-fit: contain`).
- *  Resolution: 64px covers both rendered sizes at 2x and 3x (30/36 and 45/54
- *  device px), and the extraction's framing is identical to the 128px art the
- *  host serves for the same app (same ink ratio), so this fallback mark matches
- *  the host-icon path's apparent size. */
-function VscodeMark({ size }: { size: number }) {
-  return (
-    <img className={styles.mark} src={vscodeIcon} alt="" width={size} height={size} draggable={false} aria-hidden="true" />
-  )
-}
-
 /** Upstream's own fallback glyph (`OpenInAppAction.tsx` `AppIcon`): the single
  *  rounded square it draws for an application whose icon the host does not
  *  serve — a catalog family this client version cannot name, a file manager
- *  with no bundle icon, or a main-channel entry with no icon bytes. Its
- *  geometry and class treatment are upstream's verbatim; the colour is
+ *  with no bundle icon, or an id the machine catalog answered with no pixels.
+ *  Its geometry and class treatment are upstream's verbatim; the colour is
  *  inherited (label-primary in the button, the menu row's own icon colour in
  *  the list), never set here. */
 function GenericAppMark({ size }: { size: number }) {
@@ -173,18 +152,17 @@ function GenericAppMark({ size }: { size: number }) {
   )
 }
 
-/** Installations whose icon image already failed this page, keyed
- *  `sourceFingerprint:appId` (a broken icon is not re-attempted on every menu
- *  open — absorbed from the official client). The scope is this page's exact
- *  boot, not the bare app id: one shell stacks several sources, and a decode
- *  failure inside one instance must not degrade the same app id in another
- *  (nor survive that source's next boot, which may serve different pixels). */
+/** Icon URLs whose image already failed to decode this page (a broken icon is
+ *  not re-attempted on every menu open — absorbed from the official client).
+ *  The key is the URL, not the app id: one page reads ONE machine catalog, so
+ *  the same URL stands for the same bytes in every source's button, and a
+ *  failure remembered once must fall back everywhere instead of re-decoding per
+ *  source. */
 const failedIcons = new Set<string>()
 
-/** One official catalog entry's real bundle icon with the generic fallback. */
-function CatalogIcon({ scope, id, url, size }: { scope: string; id: string; url: string; size: number }) {
-  const key = `${scope}:${id}`
-  const [failed, setFailed] = useState(failedIcons.has(key))
+/** One machine-catalog entry's real bundle icon with the generic fallback. */
+function CatalogIcon({ url, size }: { url: string; size: number }) {
+  const [failed, setFailed] = useState(failedIcons.has(url))
   if (failed) return <GenericAppMark size={size} />
   return (
     <img
@@ -196,7 +174,7 @@ function CatalogIcon({ scope, id, url, size }: { scope: string; id: string; url:
       draggable={false}
       aria-hidden="true"
       onError={() => {
-        failedIcons.add(key)
+        failedIcons.add(url)
         setFailed(true)
       }}
     />
@@ -222,24 +200,15 @@ function appLabel(entry: OpenInViewEntry, t: Translate, platform: string | null)
   return t('titleGeneric', { app: entry.id })
 }
 
-/** The mark for one entry: the host's own art when the instance answered it,
- *  else the family raster (VS Code) or upstream's square. `scope` keys the
- *  per-page decode-failure memory (see `failedIcons`). */
-function appMark(entry: OpenInViewEntry, iconUrl: string | null, size: number, scope: string) {
-  switch (markKindFor(entry, iconUrl !== null)) {
-    case 'catalog-icon':
-      return <CatalogIcon scope={scope} id={entry.id} url={iconUrl as string} size={size} />
-    case 'vscode':
-      return <VscodeMark size={size} />
-    default:
-      return <GenericAppMark size={size} />
-  }
+/** The mark for one entry: the machine's own art when the catalog answered the
+ *  id, else upstream's square — the whole selection, with no family in it. */
+function appMark(iconUrl: string | null, size: number) {
+  return iconUrl === null ? <GenericAppMark size={size} /> : <CatalogIcon url={iconUrl} size={size} />
 }
 
 export function OpenInButton({
   t,
   sessionId,
-  sourceFingerprint,
   useWorkspaces,
   getViewModel,
   subscribe,
@@ -353,7 +322,7 @@ export function OpenInButton({
   const items: MenuItem[] = entries.map(entry => ({
     id: entry.id,
     label: appLabel(entry, t, platform),
-    icon: appMark(entry, iconUrl(entry.id), MENU_MARK_SIZE, sourceFingerprint),
+    icon: appMark(iconUrl(entry.id), MENU_MARK_SIZE),
   }))
   return (
     <Menu
@@ -393,7 +362,7 @@ export function OpenInButton({
               }}
               aria-label={title}
             >
-              {appMark(activeEntry, iconUrl(activeEntry.id), BUTTON_MARK_SIZE, sourceFingerprint)}
+              {appMark(iconUrl(activeEntry.id), BUTTON_MARK_SIZE)}
             </button>
           </Tooltip>
           <button

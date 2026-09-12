@@ -583,7 +583,10 @@ export function apply(ctx: Context): void {
   // chamber patch (05 §4): shell.ts installs immutable per-entry identity and
   // base-path facts through AppWebEntry.configureContext before any plugin can
   // materialize. Do not fall back to page-global knobs: a timed-out boot may
-  // settle while a later instance is also booting.
+  // settle while a later instance is also booting. Alongside those per-entry
+  // facts the shell also installs the PAGE-level machine catalog
+  // (`chamberMachineCatalog`, design 20 §4.2) — the same reader object in every
+  // entry, because the machine's installed apps are not a per-source fact.
   const chamberInstanceId = ctx.chamberInstanceId
   const chamberBasePath = ctx.chamberBasePath
   const chamberSourceFingerprint = ctx.chamberSourceFingerprint

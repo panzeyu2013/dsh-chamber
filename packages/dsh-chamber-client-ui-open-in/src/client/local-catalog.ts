@@ -6,15 +6,15 @@
  * (`packages/dsh-chamber-seed-open-in`, the fork of upstream's open-in host
  * half). This module is the browser half of that contract: it owns the wire
  * parsing and nothing else — the transport is an injected call, which in
- * production is the connection carrier's generic RPC
- * (`ctx.connection.rpc.call('/api', …)`, base path and trust fence included).
+ * production is the page's machine catalog reading the LOCAL instance through
+ * the page-level instance client (`sidebar/shared/instance-api.ts`, the same
+ * route, envelope and trust fence every entry uses — design 20 §4.2/§5).
  *
  * Fail-closed, like the surrounding button: an unreachable, refusing, drifted
  * or hostile host reads as an EMPTY catalog and never as a thrown UI; a failed
- * icon reads as "no icon", which the button renders through its own fallback
- * mark (the VS Code product raster for that family, upstream's rounded square
- * otherwise — see `markKindFor`); only a launch
- * rejects, because that is the one outcome the user must see.
+ * icon reads as "no icon", which the button renders through upstream's rounded
+ * square (the catalog answered no pixels for that id); only a launch rejects,
+ * because that is the one outcome the user must see.
  */
 import type { OpenInApp } from '../shared/capabilities.ts'
 import {

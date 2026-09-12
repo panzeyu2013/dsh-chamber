@@ -283,18 +283,18 @@ detectVscodeAvailability(platform): { available: boolean }
   彻底统一）——utilities 行按 `order` 升序排列（默认 0），因此 open-in 按钮排在
   "Session log"（order 0）**左侧**，session-log 保持在最右侧，且与任何第三方条目
   的相对次序与官方一致；
-- **图标**：**宿主送来的真实 bundle 图标优先，与官方同一条管线**（`markKindFor`
-  只看"实例是否答过这个 id 的图标"，与通道无关；main 通道的 VS Code 条目同样用实例
-  的真图标）——按官方 `img.icon` 的同一处理：`flex: none` + `object-fit: contain`，
-  非正方形图标被留白而不是拉伸；菜单行 18px、主按钮 15px（两者都是官方尺寸）。
-  宿主没有图标时：VS Code 家族回落到仓库内的**官方产品图标资源**（用宿主自己的抽图
-  命令从安装的 `Visual Studio Code.app` 的 `Code.icns` 提取 **64px** PNG →
-  `vscode-icon.png`，vite 内联为 data URL）——这正是 remote ssh 来源的情形（没有实例
-  目录池，官方没有等价通道），不用手绘近似 logo。64px 在 15px 主按钮与 18px 菜单行下
-  都超过 3×（30/36 与 45/54 设备像素），且抽图取景与宿主为同一 app 送出的 128px 图
-  完全一致（同墨迹占比），所以这条兜底 mark 的表观尺寸与宿主图标路径一致；
-  其余一律回落**官方那颗圆角方块**（`viewBox 0 0 24 24`、`stroke-width 1.8`、`r5`，
-  颜色继承所在槽）——chamber 不再有文件夹/四宫格等自造 mark；
+- **图标**：**宿主送来的真实 bundle 图标，与官方同一条管线**（选图只问一件事：机器目录
+  答过这个 id 吗——与通道、来源、应用家族都无关）——按官方 `img.icon` 的同一处理：
+  `flex: none` + `object-fit: contain`，非正方形图标被留白而不是拉伸；菜单行 18px、
+  主按钮 15px（两者都是官方尺寸）。**"装了哪些应用、图标是什么"是机器级事实**：
+  上游由承载页面的那个 host 直接回答（client 读 `location.origin` 的
+  `/open-in-app/icon/<id>`），本壳一页挂 N 个实例，于是由渲染壳对**本地实例**读一次
+  （design 20 §4.2 的页级机器目录）并注入每个 entry——所以 remote ssh 来源的 VS Code
+  条目现在画的就是本机那份真实 bundle 图，**仓库内不再有 VS Code 位图资源、也不再有
+  `VscodeMark`/`'vscode'` mark kind**（2026-09-12 删除）。本机没装 VS Code 时这个条目
+  根本不渲染（`vscodeAvailable()` 是本机探测），所以需要 mark 时真图标总能取到；真的
+  取不到（抽取失败 / 本机实例未就绪）就回落**官方那颗圆角方块**（`viewBox 0 0 24 24`、
+  `stroke-width 1.8`、`r5`，颜色继承所在槽）——chamber 不再有任何自造 mark；
 - **`shell.overlay` 槽保留在 layout fork 中**（`AppFrame.tsx` 渲染
   `<div data-shell-overlay>`，层 `position:absolute; inset:0; z-index:20`，
   `.overlayLayer > * { pointer-events: auto }`），现由 mobile 客户端插件的抽屉开关

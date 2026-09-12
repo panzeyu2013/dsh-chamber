@@ -65,6 +65,7 @@ function stripComments(code: string): string {
 const button = stripComments(source('../src/client/OpenInButton.tsx'))
 const guard = stripComments(source('../src/client/instance-view-guard.ts'))
 const client = stripComments(source('../src/client/index.ts'))
+const gates = stripComments(source('../src/client/open-in-gates.ts'))
 
 test('menu owner guard fails closed for hidden, pending, or disconnected N-ctx state', () => {
   const active: MenuOwnerSnapshot = {
@@ -111,13 +112,13 @@ test('the bespoke accessible menu is replaced by the official Menu primitive', (
     assert.ok(button.includes(prop), `the official Menu must be opened with ${prop}`)
   }
   // Row icons: the app marks the button shows, at the primitive's icon size.
-  assert.match(button, /const items: MenuItem\[\] = entries\.map\(entry => \(\{[\s\S]*?icon: appMark\(entry, iconUrl\(entry\.id\), MENU_MARK_SIZE, sourceFingerprint\)/u)
-  // The decode-failure memory is scoped to this page's exact boot, never the
-  // bare app id: one shell stacks several sources, and a broken icon in one
-  // instance must not degrade the same app id in another (nor outlive that
-  // source's next boot).
-  assert.ok(button.includes('const key = `${scope}:${id}`'), 'the failed-icon memory is source-scoped')
-  assert.ok(button.includes('failedIcons.add(key)'), 'failures are recorded under the scoped key')
+  assert.match(button, /const items: MenuItem\[\] = entries\.map\(entry => \(\{[\s\S]*?icon: appMark\(iconUrl\(entry\.id\), MENU_MARK_SIZE\)/u)
+  // The decode-failure memory is keyed by the icon URL, not by app id or
+  // source: the page reads ONE machine catalog, so the same URL means the same
+  // bytes in every source's button and a failure must fall back everywhere
+  // instead of re-decoding once per source (2026-09-12 machine-catalog move).
+  assert.ok(button.includes('useState(failedIcons.has(url))'), 'the failed-icon memory is keyed by the icon URL')
+  assert.ok(button.includes('failedIcons.add(url)'), 'failures are recorded under that URL')
   // 2026-09-12 thorough unification: upstream's split button is the ONLY form
   // (one app and ten apps render the same control), so the one-entry plain
   // button is gone and the chevron is unconditional.
@@ -137,6 +138,28 @@ test('the control is the official split button, never a chamber variant', () => 
   )
   assert.ok(!button.includes('viewBox="0 0 16 16"'), 'no hand-drawn chevron geometry')
   assert.ok(!button.includes('folderMark'), 'the chamber-only folder mark is retired')
+  // 2026-09-12: the machine catalog (read once per page from the LOCAL instance)
+  // is the only icon source, so the bundled raster, its mark component and the
+  // VS Code mark kind are all gone — a missing icon is upstream's square.
+  assert.ok(!button.includes('VscodeMark'), 'the bundled VS Code raster mark is retired')
+  assert.ok(!button.includes('vscode-icon'), 'the raster asset import is retired')
+  // Mark selection is ONE question about the machine catalog's answer: the
+  // display family no longer selects anything, so the selector is gone from the
+  // gates module and the component decides on the URL alone.
+  assert.ok(!button.includes('markKindFor'), 'no display-family mark selector survives')
+  assert.ok(!gates.includes('markKindFor'), 'the gates module no longer owns a mark table')
+  assert.match(button, /function appMark\(iconUrl: string \| null, size: number\)/u,
+    'the mark is chosen by the catalog answer alone')
+  assert.ok(
+    button.includes('return iconUrl === null ? <GenericAppMark size={size} /> : <CatalogIcon url={iconUrl} size={size} />'),
+    "a miss draws upstream's square, a hit the machine's art",
+  )
+  const clientDir = new URL('../src/client/', import.meta.url)
+  assert.ok(!readdirSync(clientDir).includes('vscode-icon.png'), 'the raster asset itself is deleted')
+  assert.ok(
+    !readdirSync(new URL('../src/', import.meta.url)).includes('assets.d.ts'),
+    'the dead asset declaration module is deleted (no bundle asset is imported any more)',
+  )
   assert.ok(button.includes('const BUTTON_MARK_SIZE = 15'), 'the button mark uses the official 15px size')
   assert.ok(button.includes('const MENU_MARK_SIZE = 18'), 'the menu mark uses the official 18px size')
   assert.ok(button.includes('viewBox="0 0 24 24"'), "the fallback mark is upstream's rounded square")

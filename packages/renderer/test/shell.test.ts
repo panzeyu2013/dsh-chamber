@@ -330,18 +330,36 @@ test('createChamberContextSetup: immutable entry facts cannot cross when boots a
   // A resumes late. Each closure must still install only its own facts.
   configureB(b.ctx)
   configureA(a.ctx)
-  assert.deepEqual(a.facts, {
+  const entryFacts = (facts: Record<string, unknown>): Record<string, unknown> => ({
+    chamberInstanceId: facts.chamberInstanceId,
+    chamberBasePath: facts.chamberBasePath,
+    chamberSourceFingerprint: facts.chamberSourceFingerprint,
+    chamberTransport: facts.chamberTransport,
+  })
+  assert.deepEqual(entryFacts(a.facts), {
     chamberInstanceId: 'ssh-instance-a',
     chamberBasePath: '/api/i/ssh-instance-a',
     chamberSourceFingerprint: testSourceFingerprint('ssh-instance-a'),
     chamberTransport: 'ssh',
   })
-  assert.deepEqual(b.facts, {
+  assert.deepEqual(entryFacts(b.facts), {
     chamberInstanceId: 'ssh-instance-b',
     chamberBasePath: '/api/i/ssh-instance-b',
     chamberSourceFingerprint: testSourceFingerprint('ssh-instance-b'),
     chamberTransport: 'ssh',
   })
+  // The machine catalog is a PAGE fact (design 20 §5): "what is installed on
+  // this machine" is read once from the LOCAL instance and every entry — a
+  // remote-ssh one included — receives the exact same reader, never a copy.
+  assert.ok(a.facts.chamberMachineCatalog !== undefined, 'every entry is handed the machine catalog')
+  assert.equal(a.facts.chamberMachineCatalog, b.facts.chamberMachineCatalog,
+    'two entries share one page-level machine reader')
+  // …and the fact set stays exactly these five: the strict whole-object check
+  // this replaced must not silently admit a new per-entry fact.
+  assert.deepEqual(Object.keys(a.facts).sort(), [
+    'chamberBasePath', 'chamberInstanceId', 'chamberMachineCatalog',
+    'chamberSourceFingerprint', 'chamberTransport',
+  ])
   assert.throws(() => createChamberContextSetup(' ', '/api/i/ '), /empty instance id/)
   for (const sourceId of [
     'remote-1', 'ssh-', 'ssh-local', 'ssh-bad/id', 'ssh-a.b', `ssh-${'a'.repeat(65)}`,
