@@ -16,11 +16,18 @@
  * the bundle compiles, never a stand-in. Same pattern as the sidebar package's
  * `test/vendor-loader.mjs` (2026-09-11 upstream-alignment A5). Never used by
  *
- * RESOLUTION ROOT: mapped through the WORKSPACE MEMBER path
- * (`vendor/harness-packages/@deepseek-ai/…`), not the raw submodule path — only
- * the member directory carries that vendor package's linked dependencies, which
- * is what a bare import inside the vendor source needs to resolve (2026-09-12 CI
- * fix; see the sidebar loader's header for the CI failure this class produced).
+ * RESOLUTION ROOT (2026-09-12 CI fix): mapped through the WORKSPACE MEMBER path
+ * (`vendor/harness-packages/@deepseek-ai/…`) rather than the raw submodule path
+ * — the member is the tree `pnpm-workspace.yaml` declares and the one
+ * `packages/renderer/src/host-graph.ts` uses. This mapping is safe here because
+ * the mapped module graph carries NO bare runtime specifier (every non-relative
+ * import in `ui-slots/src/index.ts`, `./renderer.ts` and `./contract.ts` is
+ * `import type`, erased before resolution); verified with the member's
+ * `node_modules` hidden. The sidebar package's loader (same day) maps to a local
+ * double instead, because ITS target imports bare `zustand`/`immer` — see its
+ * header for the CI failure (run 34667681904) this class produced.
+ *
+ * Never used by the build, the bundle, or the typecheck.
  * the build, the bundle, or the typecheck.
  */
 

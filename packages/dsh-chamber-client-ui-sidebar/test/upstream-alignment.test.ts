@@ -507,19 +507,16 @@ function findInTree(dir: string, needle: string): string[] {
   return hits
 }
 
-test('the test-only vendor loader maps through the WORKSPACE MEMBER path (CI regression)', () => {
-  // 2026-09-12 CI fix: mapping `@deepseek-ai/dsh-client-store` to the raw
-  // submodule path made the suite pass only where a stray
-  // `vendor/harness-checkout/node_modules` happened to exist; on CI the vendor
-  // source's bare `zustand`/`immer` imports could not resolve
-  // (ERR_MODULE_NOT_FOUND, run 34667229056). The workspace member directory
-  // (`vendor/harness-packages/@deepseek-ai/…`) is the one that carries the
-  // linked dependencies — the same form `packages/renderer/src/host-graph.ts`
-  // and the layout package's test already use. Comments are stripped first so
-  // the loader's own explanation of the wrong form cannot satisfy or break this.
+test('the test-only vendor loader stays environment-free (CI regression)', () => {
+  // 2026-09-12 CI fix: mapping the specifier to vendor SOURCE made the suite
+  // depend on the vendored member's install shape — it passed locally (stray
+  // vendor node_modules) and failed in CI with `ERR_MODULE_NOT_FOUND: zustand`
+  // (run 34667681904). The loader now maps to a local contract-faithful double;
+  // the REAL import stays pinned on the production side (the A5 lock) and is
+  // resolved for real by `pnpm run build:renderer`.
   const loader = stripComments(source('../test/vendor-loader.mjs'))
-  assert.match(loader, /vendor\/harness-packages\/@deepseek-ai\/dsh-client-store\/src\/index\.ts/,
-    'the loader must map the specifier to the workspace member path')
-  assert.doesNotMatch(loader, /harness-checkout\/packages\//,
-    'the raw submodule path has no linked dependencies and fails on CI')
+  assert.match(loader, /'\.\/vendor-store-double\.mjs'/, 'the loader must map to the local double')
+  assert.doesNotMatch(loader, /vendor\//, 'the loader must not resolve anything under vendor/ (environment-dependent)')
+  assert.match(source('../test/vendor-store-double.mjs'), /export function createSnapshotStore/,
+    'the double must implement the engine factory the projection consumes')
 })

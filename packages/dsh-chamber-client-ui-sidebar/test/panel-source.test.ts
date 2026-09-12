@@ -4,11 +4,14 @@
  * registration order as the tiebreak, and it notifies only on real change.
  *
  * MUST run through the test-only vendor loader (2026-09-11 upstream-alignment
- * A5): `src/client/panel-source.ts` now VALUE-imports the dsh store engine
- * (`@deepseek-ai/dsh-client-store` → createSnapshotStore, upstream ui-sidebar
- * wiring), whose vendored package.json points at an unbuilt `lib/`. The loader
- * maps that specifier to the same vendor source the vite composite aliases, so
- * these tests exercise the real factory:
+ * A5): `src/client/panel-source.ts` VALUE-imports the dsh store engine
+ * (`@deepseek-ai/dsh-client-store` → createSnapshotStore, the wiring upstream's
+ * ui-sidebar uses). The vendored package cannot be imported by a plain node run
+ * (unbuilt lib/, and its source needs vendor-installed zustand/immer), so the
+ * test loader maps the specifier to `test/vendor-store-double.mjs`, a
+ * contract-faithful double; the production import is pinned by a source lock
+ * (test/upstream-alignment.test.ts, A5) and resolved for real by
+ * `pnpm run build:renderer`. 2026-09-12 CI fix.
  *
  *   node --import ./test/vendor-register.mjs test/panel-source.test.ts
  *
@@ -85,12 +88,12 @@ test('subscribers fire only when the projection actually changes', () => {
   assert.deepEqual(source.source.getSnapshot(), [])
 })
 
-// 2026-09-11 upstream-alignment A5: 投影的可观察面必须是 dsh store engine 的
-// createSnapshotStore 产物（上游 ui-sidebar 同款接线），不再是本包手搓的
-// listener Set。该工厂只在 engine 产物上存在 `set`/`update`——两个方法都在，
-// 就证明「手搓快照」没有复活；同时 `set` 走 plain array，React 看到的仍是
-// 普通数组（不是 immer draft 的形态）。
-test('the observable face is the store engine product (createSnapshotStore)', () => {
+// 2026-09-11 upstream-alignment A5（2026-09-12 CI 修正措辞）：投影的可观察面按
+// dsh store engine 的 createSnapshotStore 契约构造（上游 ui-sidebar 同款接线），
+// 不再是本包手搓的 listener Set。测试经 test/vendor-store-double.mjs 断言该契约
+// （`set`/`update` 齐备、`set` 走 plain array、仅真实变化才通知）；生产侧接线由
+// 源码锁（upstream-alignment A5）与 `build:renderer` 的真实解析共同保证。
+test('the observable face follows the store engine contract (createSnapshotStore)', () => {
   const panelSource = createPanelSource()
   const { sync } = panelSource
   const engine = panelSource.source as unknown as { set?: unknown; update?: unknown }
