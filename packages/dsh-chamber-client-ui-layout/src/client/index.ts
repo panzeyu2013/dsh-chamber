@@ -15,7 +15,7 @@
  * (`@deepseek-ai/dsh-client-ui-layout/src/client/…` — resolved to source by
  * the renderer's deepseekSource plugin) and the store to THIS fork's
  * `stores.ts` (shared + persisted sidebar width). Everything else mirrors the
- * upstream `dsh-v0.1.5-rc.1` client index — `inject: ['slots', 'theme',
+ * upstream `dsh-v0.1.5-rc.2` client index — `inject: ['slots', 'theme',
  * 'locale']`, the eager root instance shared with the registration
  * (`store: { ...handle, create: () => instance }`), the SlotMap merges
  * (`sidebar` / keyed `main` / `rightbar` / `shell.overlay`),

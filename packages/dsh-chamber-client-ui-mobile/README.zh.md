@@ -167,11 +167,12 @@ pnpm run test:mobile
 
 ## 锚点基线
 
-官方 dsh **v0.1.5-rc.1** DOM 实测（CDP 审计在 v0.1.5-alpha.2 完成，随 vendored pin
-迁移重锚）——下列锚点在 rc.1 树中仍全部成立；rc.1 的客户端改动（`ui-sidebar-*` 的
-guide/preview 行、`ui-primitives` 的 `CodeBlock` 包装层、`ui-chat` 统计对话框、
-`ui-dockkit` CSS 的两处 `z-index`、slot-catalog 文档指针）既不涉及下述锚点的产出源，
-也不改变本插件叠层所对位的层：
+官方 dsh **v0.1.5-rc.2** DOM 实测（CDP 审计在 v0.1.5-alpha.2 完成，随 vendored pin
+迁移重锚）——下列锚点在 rc.2 树中仍全部成立；alpha.2 → rc.1 的客户端改动（`ui-sidebar-*`
+的 guide/preview 行、`ui-primitives` 的 `CodeBlock` 包装层、`ui-chat` 统计对话框、
+`ui-dockkit` CSS 的两处 `z-index`、slot-catalog 文档指针）与 rc.1 → rc.2 的改动
+（`ui-{chat,deliverables,message-feedback,primitives}` 的反馈弹窗、交付卡与代码文件图标
+精修）既不涉及下述锚点的产出源，也不改变本插件叠层所对位的层：
 `data-sidebar-collapsed` 折叠=存在/展开=移除；中心列为 keyed **`main`** 槽、右列为
 **`rightbar`**（两个列壳及其 `[data-slot=…]` 出口包裹层都自首帧常驻——渲染器无条件
 输出该包裹层，只有其中的 docking 面按注册挂载，故打标在列壳上即收敛，见 markup.ts
@@ -179,8 +180,8 @@ guide/preview 行、`ui-primitives` 的 `CodeBlock` 包装层、`ui-chat` 统计
 设置对话框渲染在侧边栏 DOM 内（无 body portal），抽屉打开态必须用
 `transform: none`（identity transform 仍是 containing block）。
 
-当前 vendored 基线为 **v0.1.5-rc.1**（harness pin 183f08e9c6dd）；上述锚点已对
-alpha.2 源码复核（2026-09 重锚），并在 rc.1 上复验成立（rc.1 的客户端改动见上，
+当前 vendored 基线为 **v0.1.5-rc.2**（harness pin fb2c4b9e698e）；上述锚点已对
+alpha.2 源码复核（2026-09 重锚），并在 rc.2 上复验成立（rc.1 → rc.2 的客户端改动见上，
 不触及这些锚点与本插件的叠层对位），复核同时确认：composer seat 是
 `[data-conversation-scroll]` 的流内子元素（仅内容溢出时才 sticky）、
 `[data-input-scroll]` 是 composer 的内部滚动器（`max-height: 336px`）、官方

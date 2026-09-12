@@ -7,7 +7,7 @@
  * Trust model: this code runs inside each dsh host process. All capability
  * views are structural over the OFFICIAL ctx services (audited at the then-pin
  * dsh-v0.1.5-alpha.2 b2e3b2a0, whose session surfaces are unchanged at the
- * current pin rc.1 183f08e9c6dd — design 24 §10); an unavailable
+ * current pin rc.2 fb2c4b9e698e — design 24 §10); an unavailable
  * surface refuses loudly with code `registry-unreadable`/`storage`, never a
  * guessed layout. Security-review dispositions (2026-12):
  *  - archived-set member removal runs INSIDE the registry's official

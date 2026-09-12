@@ -3,8 +3,8 @@
  * sheet injected at apply() as `<style data-plugin="…">`. Anchors are the
  * OFFICIAL stable attributes confirmed against the dsh 0.1.5-alpha.2 DOM
  * (CDP empirical audit, re-anchored when the vendored pin moved — that audit
- * generation is alpha.2; at the current pin 0.1.5-rc.1 those emitting files are
- * unchanged, so the anchors still hold: the centre
+ * generation is alpha.2; at the current pin 0.1.5-rc.2 those emitting files are
+ * unchanged (re-checked across rc.1 → rc.2), so the anchors still hold: the centre
  * column is the keyed `main` slot, the right column is `rightbar`, and the
  * frame carries `data-sidebar-collapsed` / `data-rightbar-collapsed`) plus
  * the plugin's own `data-mobile-*` stamps — no hashed class names except the
@@ -17,7 +17,8 @@
  * global class it used to be; this header is the package that states it. Production CSS-modules naming in the
  * instance bundle is `[hash]_[local]` (upstream cssModules pattern, verified
  * on the shipped 0.1.5-rc.1 bundles: `JObwrW_row`, `zGbnIq_modelRow`,
- * `qSYn7G_cards`), so a local name is matched by SUFFIX through
+ * `qSYn7G_cards`; the emitting packages are untouched at 0.1.5-rc.2), so a local
+ * name is matched by SUFFIX through
  * `:is([class$="_<local>"], [class*="_<local> "])` — the second arm covers
  * elements that carry several classes, where the local name is not last.
  * The earlier `[class*="_<local>_"]` infix form matched NOTHING in production:

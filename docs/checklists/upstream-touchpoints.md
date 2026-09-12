@@ -5,16 +5,15 @@
 > 机器侧门 = `scripts/dev/verify-upstream-touchpoints.mjs`（C1–C10；CI 两条腿在 Bootstrap 后 pre-install 跑
 > `--no-artifact-rebuild`（C1/C3–C10，C8 advisory）、post-install 跑完整门（C8 重建-比对硬失败）；C2 本地 advisory）；
 > 本文件与脚本内的登记表**同源**，改动时两侧同步。
-> 基准：本表以 **dsh-v0.1.5-rc.1（183f08e9c6dd，harness.commit）** 与 fork 版本标记
-> 0.1.5-rc.1 为锚（C5 校验）；每次重锚后本表随维护循环刷新（§0 基线速查同步）。
+> 基准值不在本表：源码线 pin 的单一来源是 `harness.commit`（== submodule gitlink），运行时锚的
+> 单一来源是 `packages/desktop/vendor/dsh/pnpm-lock.yaml` 的 `@deepseek-ai/dsh` specifier，
+> fork 版本以各 fork `package.json` 为准（对拍门 = C5/C10）。本表只登记**结构性触点与判据**；
+> 每次重锚按 §7 循环复核结构，逐 tag 的升级叙述写 `CHANGELOG.md` 发布节与 git 历史。
 
-## 0. 基线速查
+## 0. 结构速查（只登记结构与判据，不记录版本值）
 
-| 项 | 当前值 |
+| 项 | 值 / 判据 |
 |---|---|
-| 源码线 pin（harness.commit == submodule gitlink） | `183f08e9c6dde7e36cd2318eaee70b0da08fb35e`（dsh-v0.1.5-rc.1） |
-| 运行时线锚（npm `@deepseek-ai/dsh`） | 0.1.5-rc.1（bundle-dsh 兜底 / desktop vendor 锁文件 / release.yml env / install-gateway.sh / gateway `dshAnchorVersion` / release-preflight `FORK_VERSION`） |
-| fork 版本标记 ×3 | 0.1.5-rc.1（connection / client-web / api-gateway） |
 | vendor 链接数 | 284（ensure-harness-vendor 断言 == 锁文件 importer 集合） |
 | typert remote 装配契约 | 15（C4；+command-feedback/+workspace-files） |
 | covered / factory | **57 / 26**（live 计数；factory ⊆ covered，chamber-entry 锁步断言；+`ui-dockkit`、+`client-file-upload` covered factory，四轮再 +`session-log-export`（deferred）与两个 page-own 跳过 id） |
@@ -67,7 +66,7 @@ CSS `packages/renderer/src/styles.css` 引入）+ client 构面未列出的小�
 |---|---|---|
 | `package.json` | [patch-mod] | 描述/测试脚本/deps·peerDeps·files 面差异；版本行随上游 |
 | `README.md` / `README.zh.md` / `README.i18n.yaml` | [own-divergent] | chamber 说明（N-ctx boot kernel），非上游镜像（脚本同在 patched 桶，标签一致） |
-| `src/boot.ts` | [patch-mod] | rc.8 N-ctx boot kernel（extraRows / `__ModuleLoader__` / configureContext / 异步 dispose） |
+| `src/boot.ts` | [patch-mod] | N-ctx boot kernel（extraRows / `__ModuleLoader__` / configureContext / 异步 dispose） |
 | `src/index.ts` | [patch-mod] | 入口差异（module-system 宿主接线） |
 | `src/platform.ts` | [patch-mod] | PLATFORM_MODULES / 静态表 chamber 接线（C3 偏差：ui-primitives 不 seed） |
 | `src/seed.ts` | [patch-mod] | seed 行 chamber 接线（extraRows / `__ModuleLoader__`；C3 偏差同步） |
@@ -94,71 +93,30 @@ pure **6**（以脚本计数为准）。
 ### 2.4 有意未镜像表（跨 fork 汇总）
 
 host 插件入口/半、上游 `tests/`、`tsdown.config.ts`、上游 README（api-gateway）、构建产物
-`lib/`。每次 delta 日志（升级重放时追记）：
-- dsh-v0.1.3-alpha.1：connection 流式 body 路由/fixture session-format v2 重放；api-gateway
-  journal-stream 无游标 notification 帧；web 版本行。
-- dsh-v0.1.3-alpha.2：connection recovery-config 抽取重放（本表 §2.1）；api-gateway/web 版本行。
-- dsh-v0.1.5-alpha.2（b2e3b2a01258，**已升级**）：connection 纯文件重放（README×3 +
-  `src/client/fixture.ts` + `src/index.ts` 宿主半 webServer 可选注入，实测 fork-pure）、
-  client-web 版本行 + `ui-dockkit` 偏差注释（走 covered factory，不 seed；上游
-  `tsconfig.json` 的 `../ui-dockkit` reference 有意不镜像——chamber 构面用 paths，无
-  references）、api-gateway 版本行；客户端外壳两代槽位模型重放见 `CHANGELOG.md`
-  发布节与 design 05 §2 / design 06 的槽位模型契约。
-- dsh-v0.1.5-rc.1（183f08e9c6dd，**已升级**）：三个 fork 副本**仅版本行**——上游
-  counterpart 的 `src/` 零改动（connection 连 README/宿主半都未动，client-web 的
-  `platform.ts`/`seed.ts`/`boot.ts` 未动，api-gateway 仅版本行），实测 preflight
-  pure 0 / 需重放 3（即三个 `package.json`）/ dropped 0。上游 workspace 成员集合不变
-  （vendor 链接仍 **284**：三个同名 fork 与 `website`/`examples`/`python` 三个根一律不镜像，
-  同时含上游 `vendor/*` 根的 cordis 家族 9 个成员）、**无新增 client 行、`dsh.client` 元数据零变化**（官方 client
-  行 **57** 条，两侧集合与元数据逐字相同：47 条由 composite covered、10 条走 extra row）、vendor 补丁集 7 文件 / 21 锚点零漂移、深引 seam
-  （`ui-layout`/`ui-renderer`）仅 `package.json` 版本行。唯一非版本 manifest 变更 =
-  `dsh-llm-deepseek` 新增 `@deepseek-ai/dsh-attachment-local`（host 半依赖，chamber
-  构建面不消费；其锁文件 importer 记录由 `update-vendor` 重生成时带上，见
-  `dsh-upgrade-checklist.md` §4）。上游实质源码改动（23 文件）全部落在不被 chamber
-  构建面接管的面上：`ui-sidebar-{files,right,documentpreview}` 三行的 guide/preview
-  精修（extra row，由实例侧 bundle 提供；含 `definition.ts`→`.tsx` 包内改名）、
-  `ui-chat` StatsPills 的条件统计行、`ui-primitives` `CodeBlock` 新增
-  `contentRef` + `[data-code-block-content]` 包装、`ui-dockkit` 两条 `z-index`、
-  `cordis-client-runner` 的 slot-catalog 文档指针；base bundle 默认模型
-  `deepseek-v4-flash` → **`deepseek-flash`**（见 CHANGELOG 发布节）。新登记：
-  `SidebarRightGuideEntry.description?`（可选，纯增量）、`sidebar.right.tab.document`
-  槽 props 新增**必填** `scrollportRef`（chamber 未实现该槽渲染器）。
-- **平台词 `ui-primitives` 的跨代耦合（rc.1 新增，登记于 STATUS）**：实例侧
-  `ui-sidebar-documentpreview` 的代码预览现在**行为上依赖**与 composite 同代的
-  `ui-primitives`（`CodeBlock` 的 `contentRef` 经 `[data-code-block-content]` 成为其
-  唯一滚动/行定位锚点）。composite 比实例旧一代时，该行失去独立滚动区、代码行
-  定位失效（纯文本仍可用）——即 C3「不 seed ui-primitives、由 covered factory 回答」
-  这一偏差在版本歪斜下从「体积优化」升级为「可见功能面」。
-- **契约镜像补充（alpha.2 新增，2026-09 复核；2026-09-11 名单改为派生）**：
-  composite 首屏 `ui-chat` 的 cordis inject 新增 `sidebarRight`（由 host-graph extra
-  row `ui-sidebar-right` 提供）与 `resources`（`client-resources` 行）——chamber-entry 的
-  `assertRequiredExtraRowServices` 有界探针（纯判定在 `src/required-extra-rows.ts`，
-  定时器挂 ctx 生命周期）因此在首屏 settle 后点名仍未被 provide 的服务。该
-  「首屏依赖 extra row 服务」耦合是本表 §4 之外的**新触点类别**：
-  上游新增 client 行若被复合首屏 inject，需同步登记。
-  **后续收敛（勿按本条误读现状）**：`fileUpload` 于三轮转为 covered、`resources`
-  于四轮以「非 inject 座、与 sidebarRight 同源」删除；**探针集合自 2026-09-11 起
-  完全派生**——`chamber-entry.ts` 的 `register(id, plugin)` 记录每个首屏命名空间
-  导出的 `inject` 面，`injectedServices`/`missingInjectedServices`
-  （`required-extra-rows.ts`）取并集后探测（上游 `assertEntriesActive` 的同一
-  fact：`Object.keys(entry.fiber.inject)`，`packages/client/web/src/boot.ts:138-158`），
-  手写清单 `REQUIRED_EXTRA_ROW_SERVICES` 已删除；**2026-09-11 review-fix 起延迟簇
-  也进这份名单**——每个延迟行 chunk 挂载时由 `registerDeferred` 把自己的 `inject`
-  面推进同一并集（故 11 个只出现在延迟面里的成员不再无声 pending），并在有行挂载时
-  重新武装一轮探测。rc.1 该派生结果在**风险集**上仍只命中
-  `sidebarRight` 一条（延迟成员全部由复合首屏插件提供，不扩大"唯一 provider 是
-  非覆盖行"的集合）。上游改**首屏或延迟家族**的 inject 面时**无需再登记名字**，
-  只要新的 provider 行不在复合覆盖集里，探针自动覆盖（权威说明在
-  `required-extra-rows.ts` 头注 + design 09 §3.2）；但"命名空间不再导出 `inject`"
-  这一种漂移派生面看不见，由 `packages/renderer/test/required-extra-rows.test.ts`
-  的逐 id 表测试钉住。
-- **历史动向记录（2026-09 只读调研，当时 pin 仍 82a5fd61a7cf）**：上游 tag
-  `dsh-v0.1.5-alpha.1`（5dda764e）。三个 fork 的**客户端恢复模型零改动**
-  （`connection/src/client/{connection,index}.ts` 未变；变的是 fixture、宿主半
-  `src/index.ts` 的 `webServer` 可选注入重构、README/版本行）；`client/web` 新增平台词
-  `@deepseek-ai/dsh-client-ui-dockkit`（+ 保留 ui-primitives）。**升级时注意**：
-  dockkit 是「平台词还是 host-graph 行」必须先裁决（seed 词 = 行 ⇒ 启动失败，本仓
-  的 C3 不变量），宿主半的 `webServer` 可选注入会影响 connection 宿主半的重放。
+`lib/` 一律不镜像。本表**不记录逐 tag 的升级叙述**（那属于 `CHANGELOG.md` 发布节与 git 历史）；
+升级时按下列**判据**裁决，判据本身随重锚复核：
+
+- **fork 面**：上游 counterpart 的 `src/` 有改动 ⇒ 逐文件重放并更新 §2.1–§2.3 的分类与原因；
+  只有 `package.json` 版本行变化 ⇒ 仅同步版本标记（C5 对拍）。
+- **上游 workspace 成员增删**：vendor 链接集合与根 `pnpm-lock.yaml` 随之变化；新增成员按 §5
+  裁决是否属再生物，删除成员须确认 `restore-lockfile-vendor-records.mjs` 的守卫已跳过该记录
+  （见 `dsh-upgrade-checklist.md` §4）。
+- **「首屏依赖 extra row 服务」触点（结构性，与 tag 无关）**：composite 首屏插件的 cordis
+  `inject` 若由**未覆盖**的 extra row 提供，该行不挂载时首屏永远 PENDING。探针集合自
+  2026-09-11 起**完全派生**——`chamber-entry.ts` 的 `register(id, plugin)` 与
+  `registerDeferred` 记录每个（首屏与延迟）命名空间导出的 `inject` 面，
+  `injectedServices`/`missingInjectedServices`（`required-extra-rows.ts`）取并集后探测
+  （上游同 fact：`Object.keys(entry.fiber.inject)`）。上游改 inject 面**无需登记名字**；
+  唯一派生面看不见的漂移（命名空间不再导出 `inject`）由
+  `packages/renderer/test/required-extra-rows.test.ts` 的逐 id 表钉住。
+- **平台词偏离的跨代耦合（后果登记于 `docs/progress/STATUS.md`）**：`ui-primitives` 不 seed、
+  由 covered factory 回答（C3 偏差）；实例侧 `ui-sidebar-documentpreview` 的代码预览**行为上
+  依赖**与 composite 同代的 `ui-primitives`（`CodeBlock` 的 `contentRef` 与
+  `[data-code-block-content]` 是其唯一滚动/行定位锚点）。composite 比实例旧一代时该行失去
+  独立滚动区与行定位（纯文本仍可用）——版本歪斜把这条体积优化变成可见功能面。
+- **平台词 vs host-graph 行**：`client/web` 的平台词表（`platform.ts`/`seed.ts`）与 host-graph
+  行是互斥裁决——把行当平台词 seed 会让启动失败（C3 不变量）；上游新增平台词时先裁决归属。
+  宿主半的 `webServer` 可选注入会影响 connection 宿主半的重放，须逐面复核。
 
 ## 3. deep-import 与 roster 登记
 
@@ -188,7 +146,7 @@ host 插件入口/半、上游 `tests/`、`tsdown.config.ts`、上游 README（a
   `packages/renderer/.cache/`）正是促成该规则的路径。**唯一的例外**是被忽略却**故意要扫**的
   `packages/desktop/vendor/dsh/package.json`（bundle 清单交叉校验，见上），所以文件级跳过只作用于
   常规分支，不越过该特例——2026-09 本地重放发现这些目录内残留的旧代际字面量会让**干净工作区**误红
-  （232 处、全为 0.1.1-rc.2、tracked 文件零命中），CI 因无这些目录而不受影响。
+  （tracked 文件零命中），CI 因无这些目录而不受影响。
 - **vendor 源码补丁集（构建期改写，2026-09 三轮登记，design 09 §3.6）**：
   `packages/renderer/scripts/vendor-patches.mjs` 登记「同源绝对 URL」类硬假设的补丁，
   由 renderer 的 `deepseekSource().transform` 在构建期按**精确上游文本**改写，
@@ -226,9 +184,9 @@ host 插件入口/半、上游 `tests/`、`tsdown.config.ts`、上游 README（a
 | dsh-api-session-controller | api-gateway fork journal-stream 帧（无游标 notification） | fork 重放 + 升级复验 |
 | client/connection（recovery） | recovery-config 共享 schema（`DEFAULT_MIN_RESTART_INTERVAL_MS` 10_000 == schema 默认 backoffMaxMs） | liveness-triggers 钉值 + C1 |
 | dsh-runtime（激活探针域） | `HOST_DOMAIN_PROBE_NAMES` ↔ gateway `HOST_PACKAGE_PROBE_DOMAINS` | C7 + gateway 运行时 fail-loud |
-| interaction/commands（`commands/execute` 第三参数） | 激活探针载荷的键名 == 上游 `execute(agent, line, submittedAttachments, signal)` 的参数名（`images` ≤0.1.2；**自 0.1.3-alpha.1 起各代皆为 `submittedAttachments`**，`attachments` 从不是上游线名） | `runtime-probes.test.ts`：读 vendor 签名逐字比对 + 夹具按真实 typert gateway 校验参数键集（**2026-09 实机：0.1.3-alpha.1 升级时写错的 `attachments` 使每条激活探针失败、每次首装本地实例被隔离，直至验收轮才发现**） |
+| interaction/commands（`commands/execute` 第三参数） | 激活探针载荷的键名 == 上游 `execute(agent, line, submittedAttachments, signal)` 的参数名（现行各代皆为 `submittedAttachments`；历史线曾用 `images`，`attachments` 从不是上游线名） | `runtime-probes.test.ts`：读 vendor 签名逐字比对 + 夹具按真实 typert gateway 校验参数键集（**2026-09 实机：一次升级中写错的 `attachments` 使每条激活探针失败、每次首装本地实例被隔离，直至验收轮才发现**） |
 | dsh-host-webserver（index-inject） | `__DSH_CONNECTION_RECOVERY__` 全局注入（connection host 半） | fork C1（src/index.ts pure） |
-| dsh-host-open-in-app + dsh-client-ui-open-in-app（官方 open-in 两份） | **chamber fork（已落地）**（设计 20 §2.2/§6，2026-09-11 fork & supersede）：宿主半 `packages/dsh-chamber-seed-open-in/`（fork 自上游 `packages/host/open-in-app`，pin `183f08e9…` = dsh-v0.1.5-rc.1；`src/{catalog,resolver,icons}.ts` 逐字节 `pure`，`src/{shared,index}.ts` `patched`，`src/core.ts`/`scripts/`/`test/`/`dist/index.js` `own`，上游 `src/internals.ts`/`README*`/`tsdown.config.ts`/`tests/` `dropped`）、客户端半 `packages/dsh-chamber-client-ui-open-in/`（自有 wire 镜像 `shared/open-in-wire.ts` + 自有 `app.*` 标签表，取代原路由/标签镜像）。官方两份都不加载/不调用：官方 client 行沿用 page-own 跳过，官方 host 行保持挂载但无调用方 | **已登记 verify 脚本的 `FORKS` 表**（与本文档 §4 同源，`versionAnchor: 'chamber'`）：C1（未登记差异即硬失败）/ C3（每文件必须有 pure·patched·own·dropped 分类）/ C5（版本锚豁免：seed 包随 chamber 发版，不与上游版本相等）——上游漂移会在门里直接红；有意分歧逐条写在 `patched`/`dropped` 原因里（删 SSH 休眠门、HTTP 路由 → typert Remote `openInApp/*`、Config 形状、协议与标签所有权），fork 自身 `test/` 覆盖解析/校验/图标逻辑，跨半契约由客户端 `test/open-in-wire-lockstep.test.ts` 钉住 |
+| dsh-host-open-in-app + dsh-client-ui-open-in-app（官方 open-in 两份） | **chamber fork（已落地）**（设计 20 §2.2/§6，2026-09-11 fork & supersede）：宿主半 `packages/dsh-chamber-seed-open-in/`（fork 自上游 `packages/host/open-in-app`；`src/{catalog,resolver,icons}.ts` 逐字节 `pure`，`src/{shared,index}.ts` `patched`，`src/core.ts`/`scripts/`/`test/`/`dist/index.js` `own`，上游 `src/internals.ts`/`README*`/`tsdown.config.ts`/`tests/` `dropped`）、客户端半 `packages/dsh-chamber-client-ui-open-in/`（自有 wire 镜像 `shared/open-in-wire.ts` + 自有 `app.*` 标签表，取代原路由/标签镜像）。官方两份都不加载/不调用：官方 client 行沿用 page-own 跳过，官方 host 行保持挂载但无调用方 | **已登记 verify 脚本的 `FORKS` 表**（与本文档 §4 同源，`versionAnchor: 'chamber'`）：C1（未登记差异即硬失败）/ C3（每文件必须有 pure·patched·own·dropped 分类）/ C5（版本锚豁免：seed 包随 chamber 发版，不与上游版本相等）——上游漂移会在门里直接红；有意分歧逐条写在 `patched`/`dropped` 原因里（删 SSH 休眠门、HTTP 路由 → typert Remote `openInApp/*`、Config 形状、协议与标签所有权），fork 自身 `test/` 覆盖解析/校验/图标逻辑，跨半契约由客户端 `test/open-in-wire-lockstep.test.ts` 钉住 |
 
 ## 5. 再生物登记
 
@@ -265,15 +223,16 @@ host 插件入口/半、上游 `tests/`、`tsdown.config.ts`、上游 README（a
    —— 一次给出「fork pure/replay/dropped + 深引 vendor seam 文件 + 上游包增删 +
    新增 client 行 + 运行时 npm 状态」；`--fail-on-replay` 可当硬门。
    （工具与 C2 的分工：C2 只报 fork 面，本脚本额外覆盖 seam 与 roster 面；
-   2026-09 加，0.1.5 的 layout 阻塞点即由此显式暴露。）
-1. 登记：STATUS/本表加「追踪 <tag>」行，读 C2 报告；
+   2026-09 加，layout 阻塞点即由此显式暴露。）
+1. 读 C2 报告逐面裁决；仍 open 的偏差登记进 `docs/progress/STATUS.md`——本表只更新结构登记行，
+   不记版本值、不加「追踪 <tag>」行；
 2. `node scripts/dev/update-vendor.mjs <tag>`（原子升级 + 锁文件重生成）；
 3. C2 触点报告（`--tags old new`）→ 逐文件裁决：重放 [pure]/[patch-*] 或改登记；
 4. fork 重放 + 版本标记同步（三副本 → 新版本）；
 5. roster pass：covered/factory 存在性、typert 契约、新增官方行裁决；
 6. 契约复验：contract-mirror 表逐行（§4）+ 相关测试；
 7. 运行时线单独提交（bundle-dsh 刷新 + 四锚 + bin.js 冒烟）；
-8. 文档回写：CHANGELOG/STATUS/本表 §0 基线速查刷新 + i18n 重录。
+8. 文档回写：CHANGELOG/STATUS + 本表**结构登记行**刷新（版本值不进 checklist）+ i18n 重录。
 
 ## 8. PR 评审清单条目
 

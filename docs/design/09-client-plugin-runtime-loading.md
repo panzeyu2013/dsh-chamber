@@ -459,7 +459,7 @@ base path 从每个 entry 的私有 ctx 取。
   落后/超前于后端时，多出的核心行以"特性缺席"运行（§3.5 apply 降级），绝不使
   实例 boot 失败。
 - **壳与后端必须同代（当前基线）**：受管 vendor 源以 `harness.commit` 的 pin 为
-  单一事实来源——当前 pin = dsh `0.1.5-rc.1`（`packages/desktop/vendor/dsh/
+  单一事实来源——当前 pin = dsh `0.1.5-rc.2`（`packages/desktop/vendor/dsh/
   pnpm-lock.yaml` 的 `@deepseek-ai/dsh` specifier 同值），三个 fork 副本与
   `release-preflight.mjs` 的 `FORK_VERSION` 同步；vendor 树是仓库内 git submodule
   （gitlink = pin，升级走 `scripts/dev/update-vendor.mjs <tag>`）。宿主 wire 只增

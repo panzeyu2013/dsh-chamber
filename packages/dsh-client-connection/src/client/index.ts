@@ -4,7 +4,7 @@
  *
  * ## chamber patch (dsh-chamber connection manager, design 05 §6; re-anchored
  * on upstream dsh-v0.1.5-alpha.2 at the 2026-09 re-anchor — that upstream file is
- * byte-identical at the current pin dsh-v0.1.5-rc.1)
+ * byte-identical at the current pin dsh-v0.1.5-rc.2)
  *
  * Three chamber deltas only:
  *  - `basePath` is read from the per-entry Context (`ctx.chamberBasePath`, the

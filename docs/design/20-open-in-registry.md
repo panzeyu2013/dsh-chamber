@@ -71,7 +71,7 @@
    图标 404 ⇒ 只有把它拉进复合（covered + factory）并加构建期 vendor 补丁与 subpath seam 才能修好。
 3. **效果依赖实例 runtime 的版本**。官方 open-in 行自 **dsh-v0.1.3-alpha.2** 才存在
    （`packages/renderer/src/chamber-covered.ts:216` 的登记）。本仓当前的**运行时锚与源码 pin 都已是
-   0.1.5-rc.1**（单一来源 `packages/desktop/vendor/dsh/pnpm-lock.yaml`，`bundle-dsh.mjs:79`
+   0.1.5-rc.2**（单一来源 `packages/desktop/vendor/dsh/pnpm-lock.yaml`，`bundle-dsh.mjs:79`
    的兜底常量同值）——所以这一条**不是**主要理由；但**已发布的旧内置 runtime 仍有该缺口**：
    实测 `/Applications/dsh-chamber.app`（v0.2.4）携带的是 `@deepseek-ai/dsh@0.1.2-rc.1`，
    在那个 runtime 上按 1+2 实施的结果依然只是"兜底"。fork & supersede 不依赖该行是否存在。
@@ -470,7 +470,7 @@ chevron，不因只有一个 app 少画 chevron）。
   **C3** = 每个上游文件必须有 pure/patched/own/dropped 裁决（上游新增文件漏裁决即红）、
   **C2** = tag 重放差异报告自动纳入本 fork 面（advisory）。
   **版本锚已豁免**：C5 的规则是 `fork/package.json.version == 上游同文件版本`——三个既有 copy 包
-  正是这样携带上游版本（实测 0.1.5-rc.1），而 seed 包随 chamber 发版 bump（实测 0.2.4，
+  正是这样携带上游版本（实测 0.1.5-rc.2），而 seed 包随 chamber 发版 bump（实测 0.2.4，
   与 `dsh-runtime`/其他 seed 一致）。`FORKS` 每条登记现有
   `versionAnchor: 'upstream' | 'chamber'`（既有三条 = upstream，本 fork = chamber），
   C5 只对 `upstream` 做相等比较；脚本头注、C5 的日志文案与触点表 §4 已同步改写。
@@ -490,7 +490,7 @@ chevron，不因只有一个 app 少画 chevron）。
 - **两代 runtime 的依赖面（已核对，留档）**：本 fork 需要 `@deepseek-ai/dsh-native-command`
   （`canOpenNativePath` / `openNativePath` / `runNativeCommand` / `NativeCommandRunner`）与
   `@deepseek-ai/dsh-subprocess`（`scrubbedParentEnv`）——两者在**已发布的内置 runtime
-  0.1.2-rc.1** 与**当前的 pin 0.1.5-rc.1** 上都存在且导出名一致；`runNativeCommand` 是模块导入
+  0.1.2-rc.1** 与**当前的 pin 0.1.5-rc.2** 上都存在且导出名一致；`runNativeCommand` 是模块导入
   而非注入服务，因此本包只需 `subprocess` 一个注入（供 `resolveExecutable` 用）。
   **仍未验证**：`ctx.subprocess` 服务在旧 runtime 的 web profile 中是否挂载——本行加载失败会
   让该实例 boot 失败（control-plane 视"产物在但坏了"为打包缺陷，刻意不跳过），所以实施时必须

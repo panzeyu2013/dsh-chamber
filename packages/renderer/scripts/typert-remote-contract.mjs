@@ -11,7 +11,7 @@
 /**
  * The pinned assembly contract: every remote package the official
  * `dsh-api-remotes` client half VALUE-imports, in assembly order
- * (dsh-v0.1.5-rc.1 = 15 rows). SINGLE SOURCE for both consumers — the
+ * (dsh-v0.1.5-rc.2 = 15 rows). SINGLE SOURCE for both consumers — the
  * lockstep test (`typert-remote-contract.test.mjs`) and the upgrade touchpoint
  * gate (`scripts/dev/verify-upstream-touchpoints.mjs` C4). A same-length swap
  * (one package added while another is removed, or a reorder) must not pass

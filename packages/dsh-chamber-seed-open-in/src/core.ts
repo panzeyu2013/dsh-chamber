@@ -3,7 +3,7 @@
  * (design 20 §6; own file, upstream has no counterpart).
  *
  * This is upstream's `apply()` body (`@deepseek-ai/dsh-host-open-in-app`,
- * pin 183f08e9 = dsh-v0.1.5-rc.1, `src/index.ts:138-183,241-310`) with the
+ * pin fb2c4b9e = dsh-v0.1.5-rc.2, `src/index.ts:138-183,241-310`) with the
  * two transport/trust responsibilities removed and nothing else changed:
  *
  *   - **no SSH dormancy gate**: upstream resolves an EMPTY catalog whenever the

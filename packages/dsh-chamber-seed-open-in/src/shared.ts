@@ -5,7 +5,7 @@
  *
  * ## chamber fork divergence (design 20 §6.1, fork & supersede 2026-09-11)
  *
- * Upstream (`@deepseek-ai/dsh-host-open-in-app`, pin 183f08e9 = dsh-v0.1.5-rc.1)
+ * Upstream (`@deepseek-ai/dsh-host-open-in-app`, pin fb2c4b9e = dsh-v0.1.5-rc.2)
  * publishes three `webServer` route paths and their HTTP payloads here, and the
  * official browser half imports them over the `./shared` subpath. The chamber
  * fork replaces that transport: the catalog, icons and launches are served over
