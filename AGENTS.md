@@ -55,6 +55,13 @@ decision value and is not already owned by a design document or `CHANGELOG.md`.
 - The release workflow is policy-tested: `pnpm run test:release-workflow`.
 - `CHANGELOG.md` (with its `docs/CHANGELOG.en-US.md` mirror and the `verify:i18n` record) is written
   at RELEASE time only — never add `[Unreleased]` entries while implementing.
+- `CHANGELOG.md` records **only the difference between adjacent formal releases** (`X.Y.Z` against the
+  previous `X.Y.Z`): what someone running the previous formal release sees changed. A section still has
+  to exist for a beta (`release.yml` extracts it as the release body), but its content obeys the same
+  rule. The internal path taken to get there — intermediate dsh pins, beta-to-beta deltas, batch/round
+  codenames, gate counts, lockfile-regeneration notes, verification reports — never goes in: it belongs
+  to git history, the per-tag registry in `docs/checklists/upstream-touchpoints.md`, and
+  `docs/progress/STATUS.md`.
 
 ### Before a dsh (upstream) upgrade
 
