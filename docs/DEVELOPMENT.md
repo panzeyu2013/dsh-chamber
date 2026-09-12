@@ -156,6 +156,8 @@ pnpm run dist:desktop:win    # 打包 Windows 应用（nsis + zip；须在 Windo
   commit+tag → **workflow_dispatch dry_run 先行**（新增/修改的 workflow/脚本
   路径/action SHA 必须先 dry-run 验证过一次）→ 正式 tag push。
   详细步骤见发布 checklist。
+- **推送路径的判类（2026-09）**：`ci.yml` 的 linux 链按事件分档——**分支 push/PR**：纯文档变更（`docs/**`、根级 prose 白名单；判类器 `scripts/dev/classify-ci-changes.mjs`）只跑 file-only 门（action SHA 门禁、i18n、设计 token、上游触点登记表、release-workflow 策略、工具单测），跳过 install / typecheck / 单测 / 构建 / 打包冒烟与 windows 腿；代码变更照旧全跑。**tag push**：linux 链整体让位——`release.yml` 的 `validation` 是它的机械超集，该契约由 `release-workflow-policy.test.mjs` **从 ci.yml 派生**断言（往 ci.yml 加门禁而忘了 release.yml 会直接红灯），windows 腿照跑（release 没有 win32 语义腿）。判类器 fail-safe：无法证明是 prose 一律按代码跑；prose 白名单被 policy test 冻结，放宽必须显式改那个测试。
+- `ci.yml` 用 `concurrency: ci-${{ github.ref }}` 串行化同 ref 的推送，且**只取消 PR 的旧运行**：分支推送排队——纯文档推送若取消前一轮，会让被它跟随的那个代码提交彻底失去验证（判类器已让文档推送不跑重活，但没有"零验证"这一档）。`release.yml` 保持 `release-publish` + `cancel-in-progress: false`，绝不取消可能已建 draft 的发布。
 - 两个 workflow 都在 install 之前按 `harness.commit` 固定提交引导 vendor 源码树。
 
 ## 6. 仓库结构
