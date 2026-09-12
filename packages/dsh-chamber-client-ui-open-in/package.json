@@ -1,7 +1,7 @@
 {
   "name": "@dsh-chamber/dsh-chamber-client-ui-open-in",
   "description": "Chamber-bundled open-in client plugin (designs 16/20 + Batch 3 unification): one header entry over the per-source view-model \u2014 the instance official host catalog for local sources plus the desktop main-process VS Code provider (local + remote SSH)",
-  "version": "0.2.4",
+  "version": "0.3.0-beta.1",
   "private": true,
   "type": "module",
   "main": "lib/index.js",

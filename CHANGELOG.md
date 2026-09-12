@@ -11,7 +11,17 @@
 > English: [docs/CHANGELOG.en-US.md](docs/CHANGELOG.en-US.md)
 
 
-## [Unreleased]
+## [0.3.0-beta.1] - 2026-09-12
+
+### 新增
+
+- **GUI 验收工具箱与流程清单（`pnpm run acceptance:gui`；清单见 `docs/checklists/gui-acceptance-checklist.md`）**：GUI 验收此前没有规范化文档或可复用步骤——判据散在 `docs/design/*`（各域门禁）、`docs/progress/STATUS.md`（开放实机项）与 `scripts/perf`（性能尺子，非功能验收），每轮都要重新发明且无法回归。清单只写**流程 + 指针**（四条腿：机械 A/B、目检、打包态；每行给检查 id 与 design/STATUS 依据，不复述判据，避免出现第二份会漂移的台账）；工具箱**零新依赖**（Node 内置 `WebSocket`/`fetch`），分纯判据层 `checks.mjs`（16 个单测进 linux test job）与驱动层 `probe`（`--live` 只读探测运行中的应用，安装态亦可）/`walkthrough`（`--attach`/`--dev` 的 CDP 走查 + 截图）/`launch`/`run`。断言只用仓库既有 DOM 契约（`[data-instance]`、`[data-chamber-section|row]`、`[data-slot]`/`[data-slot-error]`、设置导航 `dialog nav [class*="navList"] > button`），不新增测试钩子、不靠文案匹配；点击白名单只含设置导航项与首启关闭动作，按不到任何变更控件。已登记容忍（冷启动 `clientGraph/graph` 503 = design 09 §3.2、页面自身重订阅的 `net::ERR_ABORTED`、上游 cordis 启动日志、实例未就绪时实例面转 INFO = design 18 §3.4）写在工具箱 README——要放宽先改文档，不在代码里猜。
+- **open-in 宿主半 fork 为实例内 seed 包（design 20 §2.1、§6.3）**：Phase 2 的「让官方两份在 N-ctx 壳里跑通」被三条独立证据否掉（托管实例注入的 `SSH_CONNECTION` 目录选择 pin 被上游三处共用、官方客户端半假定同源绝对路径、官方行依赖实例 runtime 版本），改为 **fork & supersede**：新增 `packages/dsh-chamber-seed-open-in/`（上游 `host/open-in-app` 的 fork；`catalog`/`resolver`/`icons` 逐字节 pure），三条有意分歧写进源码首页——删 SSH 休眠门、HTTP 路由 + 自建连接栅栏换成 typert Remote `openInApp/{probe,apps,icon,open}` 域载体、Config schema 换成常量；客户端本地池改走实例自身通用 RPC。这是既有注册表纪律的又一有界例外。
+- **设置面改为完整桥接（design 05 §5，2026-12 修订）**：设置壳不再为选中来源装配「缩小版前端」，而是渲染**该来源自己 boot ctx** 的 `settings.section` 台账，条目用该 ctx 自己渲染器绑定的标准座渲染——插件在实例自身前端 active，在这里就同样 active（真 remote WS 事件流、实时 settings 失效通知、真的 `useSessions`/`useWorkspaces`/`usePanelInfo`/`useResource` 座），上游 `ui-agent-preset` 的创作入口因此与实例本地一致。由每实例面注册表（`settings-source-face.ts`）两半齐备才可渲染，化身指纹须与权威 roster 相同；面板打开期间保证该来源壳保持挂载（**不切 active view**），关闭即撤除，离线来源仍显示不可达占位且不触发挂载。
+- **侧栏：未挂载来源新建的工作区立即可见 + 打开意图契约**：真机反馈「在 A 来源给 B 来源新建工作区，该行不出现，必须点开 B 才刷新」。改法是把侧栏自己那次 unary `workspace.create` 的成功结果当作「该工作区现在存在于那个宿主上」的唯一可信事实上报（`chamberBridge.reportWorkspaceCreated`），并在投影的**唯一汇合点**并入（不新增第二个权威，权威仍是挂载壳的 follow 基线），附三类退休条件：同 `workspaceId`/同路径的真实 push、来源离开注册表、10 分钟 TTL（挂在本次 create、权威 push、30s unary 兜底拉取三处时钟）。同批加固打开意图三闸门：早开臂持续读意图、校验来源身份、工作区回声的会话归属（契约登记于 design 05 §2.2.1）。
+- **归档清理：force purge、归档感知的 worktree 移除与单一宿主包注册表（design 24 §22、design 08）**：归档清理新增 force/loaded 语义（运行中与已加载的会话整棵跳过，`resolvePlan` 除 `skippedRunning` 外同时报 `skippedLoaded`），并与 registry-global 孤儿清扫共用一次运行（`readAuthoritativeState` 同时给出 `liveFacts` 与 `snapshotRecordCount`，存活排除集取 running ∪ loaded）；Git worktree 的删除改为归档感知；三个 chamber 宿主包（client-graph / git-worktree / archive-cleanup）统一到**单一注册表**来源，gateway 与控制面的清单不再各写一份。
+- **上游触点登记表 + 保鲜门（T4）与设计 token 合规门（S1–S7）**：新增 `docs/checklists/upstream-touchpoints.md`（逐文件纯度登记 [pure]/[patch-add]/[patch-mod]/[patch-comment]/[own-divergent]/[own]/[dropped]、dropped 表、深引/roster 段、契约镜像表、产物登记、每 tag 的 8 步维护环）与 `scripts/dev/verify-upstream-touchpoints.mjs`（C1 pure 字节相等 / C2 tag 间重放报告 / C3 完整性 / C4 roster 哨兵 / C5 锚点扫描 / C6 排除目录存在性 / C7 种子域锁步 / C8 产物陈旧度 / C9-C10 锚点与活字面量），两个维护面互为镜像、CI 两腿都在 vendor 引导后即跑；另有 `verify:styles`（上游设计 token 合规门，发丝线/浮层阴影/命名空间 S1–S7）与 `PULL_REQUEST_TEMPLATE` 的触点自检段。
+- **写者静默闩锁的会话内再证明与「清理并接管」（design 02 §3.4）**：启动扫描只在「零 kept 且零 errors」时打开闩锁，且**只在启动时跑一次**——记录一旦在会话中途变陈旧，闩锁再也打不开，表现为硬杀后「本地实例起不来」（`POST /api/connections` 恒 409、启动/停止点不动、只能重启应用）。现将两种关闭原因分开：**扫描判定**类在拒绝启动前做有界再证明（单飞 + 2s 冷却；孤儿已退出的常见情形无需任何用户动作即恢复），**写入期终止失败**类（`onWriterQuiescenceUnknown`）任何扫描都无法证明、对本平面生命周期粘滞并明确提示重启；`runReaper` 增 `takeover` 模式与条目级结论（`reason`/`takeOverAvailable`），只清**本状态目录自己**的陈旧/孤儿写者，owner 仍活的另一实例永不受影响；连接页据此提供显式「清理并接管」。
 
 ### 变更
 
@@ -60,6 +70,9 @@
   - **升级前 pin 预检（新增 `scripts/dev/preflight-vendor-pin.mjs`，只读）**：对目标 tag 与当前 pin 做 diff，一次给出「三个 fork 副本按 pure/需人工重放/dropped 分类 + chamber 深引的 vendor seam 文件 + 上游包集合增删 + 新增 client 行 + 运行时是否已发布 npm」，支持 `--offline`/`--json`/`--fail-on-replay`（advisory 工具，不改工作树、不动 submodule HEAD）。对 `dsh-v0.1.5-alpha.1` 实测：变更 2552 文件 → pure 5 / 重放 6 / dropped 6、**seam 16（全部落在 `packages/client/ui-layout/*`）**、包 +15 / −4（landlock）、新增 client 行 5。这把 0.1.5 踩过的坑（先升 pin 才发现三栏模型重写 → `typecheck:layout` 立刻红）提前成「动 pin 前先看清单」的流程第 0 步。
   - **锁文件 vendor 记录修复脚本加移除守卫（修复）**：`restore-lockfile-vendor-records.mjs` 原先无条件从 HEAD 复活被 pnpm 剪掉的 importer 记录；上游在 0.1.5 移除 workspace 成员（landlock 4 条）后，脚本会把已不存在的成员补回，frozen 安装随即以「锁文件有、链接缺」失败。现按 `vendor/harness-packages/@deepseek-ai/<name>` 链接存在性（含断链）跳过并打印清单。新增根脚本 `pnpm run test:upgrade-tools`（两个脚本测试）+ CI 步骤。
   - **聚合刷新陈旧阈值按传输分级（H3）**：sidebar 聚合的 S2 重连 watchdog 原为单一 120s 且**只覆盖 direct-http 来源**；现按来源传输取阈值——http 保留 120s（浏览器腿有控制面 30s WS ping，上游腿无应用心跳、仅约 10min OS TCP keepalive，需较紧的自愈），**ssh 新增 300s 兜底**（隧道已有三层独立探测器：代理 30s/1 miss WS ping、宿主 mux 2s/2 misses、SSH keepalive 30×3≈90s，该臂只补「应用级冻结」这一层，阈值必须显著长于 http 以免空闲健康隧道每两分钟付一次基线重放），本地/未知来源不武装（`AGGREGATE_RECONNECT_HTTP_STALE_MS`/`AGGREGATE_RECONNECT_SSH_STALE_MS` + `reconnectStalenessMsForTransport`）；unary 30s 拉取节奏不变，watchdog 始终是「拉取的补充」。新增单测 2 例（http/ssh 阈值与 local/未知跳过）。
+
+- **设置面来源标记退役与归属判定**：nav 行的「插件」来源标记退役，回到上游形态；归属判定改按 npm scope。
+- **提交信息语言（贡献规范）**：`CONTRIBUTING.md` 明确**提交信息一律英文**（subject 与 body 都是英文），历史中文提交是既有事实、不作先例；代码注释、设计文档与 PR 正文不受此限。
 
 ### 修复
 
@@ -113,6 +126,15 @@
   - 测试：移动插件 **60** 用例（0.2.4 时为 67；alpha.2 迁移重写 markup/drawer 用例后为 60——arm 决策/档位
     常量/设置 chip 判定/粗指针 tooltip 规则与声明体/抽屉 16px 底线）、
     control-plane `instance-proxy` 72 用例（+1，拆链日志契约）。
+
+- **网关管理页的可访问性与请求边界**：确认控件改为**页内可访问对话框**（不再用夺焦的原生 confirm），待决期保持焦点封闭并修正 `aria-busy` 归属；请求边界收口——400 原因保真（不被改写成笼统码）、读面栅栏、auth 审计；`dsh plugin` 子进程的 `PATH` 上提供 gateway 自带的 pnpm，宿主无 pnpm 时插件任务不再失败。
+- **Git worktree 改用上游原语**：自绘确认控件与自绘标签换成官方确认对话框与标签原语（外观/键盘/语义随上游一致）；风险确认闸门改为**一次手势生效**并加锁（原先连续确认会把同一次操作反复要求确认）。
+- **桌面：打包钩子与 dev 启动**：`beforePack` 会把 `node_modules/@dsh-chamber/dsh-runtime` 从 workspace 链接换成 dist-only 实体目录（Windows junction 上 electron-builder 不跟随链接），但此前没有任何钩子还原——打包后工作区丢类型面，根 `typecheck` 与 `typecheck:gateway` 级联 TS7016、`build:preload` 失败，且 `pnpm install --frozen-lockfile` 修不回来。现 materialize/restore 拆为可测函数并在 exit/SIGINT/SIGTERM/SIGHUP 还原（SIGKILL 留下的污染由下一次打包治愈，目标已是实体目录时同样注册）；`dev` 启动不再每次重建渲染层。
+- **CLI 与 dsh 运行时探针对齐真实契约**：`cli` 的运行期门与读面按真实契约修正；`dsh-runtime` 的 `commands/execute` 探针线名对齐并透出探针失败原因、UNC 路径脱敏、终止裁决点名失败探针（探针文本的保留词覆盖 legacy 方法名），`gateway` 的壳升级事务据此可判读失败原因。
+- **renderer / sidebar / settings 审查轮修复**：失败呈现改走设计系统并统一外壳文案；打开意图与揭示门的接线加固（切换来源时不再露出目标壳自建的空白会话）；侧栏早开臂持续读意图并校验来源身份、工作区回声的会话归属修正；设置面归属判定改按 **npm scope**（而非枚举本仓 id），服务器设置行不再被误标「插件」，并恢复设置面板 Escape 关闭。
+- **测试可移植性与 CI 形态**：`test:host-archive-cleanup` 的「大写后缀 near-miss」用例在**大小写不敏感文件系统**（macOS APFS 默认 / Windows NTFS）上本就不成立，现按运行时探测分支；两个测试专用 ESM loader 原先把 specifier 映射到裸 submodule 路径或工作区成员路径，使单测依赖**本机 vendor 安装形态**（CI 上 `zustand` 解析失败、`Cannot find package`），现将「跑真实 vendor 源码」的用例改为按契约的 store double，真实解析仍由源码锁与 `build:renderer` 把关；`purged-tracker` 的「到此为止恰好一次刷新」否定断言原先与真实 `retryMs` 计时器赛跑（CI 上 `2 !== 1`），现全部走注入时钟并把「无遗留计时器」钉进断言；另修 `test-windows` 门禁崩溃与 `host-open-in` 的 undici 类型落点。
+- **移动端卡片网格口径与 ARIA 说明修正**（承接 design 17 §18 移动面）。
+
 
 ## [0.2.4] - 2026-09-09
 

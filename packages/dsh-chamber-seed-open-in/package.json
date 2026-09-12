@@ -1,7 +1,7 @@
 {
   "name": "@dsh-chamber/dsh-chamber-seed-open-in",
   "description": "Per-dsh-instance open-in host domain (design 20 §6, fork & supersede): the local application catalog, real bundle icons and directory launches over openInApp/{probe,apps,icon,open}",
-  "version": "0.2.4",
+  "version": "0.3.0-beta.1",
   "private": true,
   "type": "module",
   "main": "dist/index.js",
