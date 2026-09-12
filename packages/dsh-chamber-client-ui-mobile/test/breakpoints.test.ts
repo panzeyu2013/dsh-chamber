@@ -107,17 +107,97 @@ test('mobile layering pairs each selector with its own z-index', () => {
   assert.ok(toggle !== null && toggle.includes('z-index: 76'), 'toggle must sit at 76')
 })
 
+test('the shown right panel is presented fullscreen on the touch tier', () => {
+  // 2026-09-13 review-fix (STATUS geometry residue ①): upstream presents the
+  // panel fullscreen only below 768px, while this tier pins its track to 0 —
+  // so at 769-1023px it used to draw at its normal width straight over the
+  // transcript. The tier now presents it fullscreen (and the drawer yields).
+  const tier = normalizeTouchTier()
+  const column = cssBlock(tier, '[data-mobile-role="details"]')
+  assert.ok(column !== null && column.includes('grid-column: 3'), 'the grid lock stays')
+  // ANCHOR: the slot outlet wrapper (`display: contents`) is the column's
+  // direct child, so the rule must target the PANEL — a wrapper-level rule is
+  // a silent no-op and this assertion is what pins that. The rule must also
+  // stay UNGATED by the frame's shown flag: the close report lands in the same
+  // commit as the slide-out, so a frame-gated rule would drop the fullscreen
+  // box mid-animation (the hidden panel is already off-canvas upstream).
+  const shown = cssBlock(
+    tier,
+    '[data-mobile-role="details"] [data-sidebar-right-panel]',
+  )
+  assert.ok(shown !== null, 'the panel must be re-presented fullscreen')
+  assert.ok(shown.includes('position: fixed;'), 'the panel fills the frame')
+  assert.ok(shown.includes('inset: 0;'))
+  assert.ok(shown.includes('width: 100% !important;'), 'the inline normal width must yield')
+  assert.ok(shown.includes('z-index: 40;'), "upstream's own fullscreen layer")
+  const frameGated = cssBlock(
+    tier,
+    '[data-mobile-frame]:not([data-rightbar-collapsed]) [data-mobile-role="details"] [data-sidebar-right-panel]',
+  )
+  assert.equal(frameGated, null, 'the presentation must not be frame-gated (close animation)')
+  const wrapperRule = cssBlock(
+    tier,
+    '[data-mobile-role="details"] > *',
+  )
+  assert.equal(wrapperRule, null, 'the outlet wrapper must never be the target (display: contents)')
+  const bareRighthandCol = cssBlock(
+    tier,
+    '[data-mobile-frame]:not([data-rightbar-collapsed]) [data-mobile-role="details"]',
+  )
+  assert.equal(bareRighthandCol, null, 'the column itself must not be repositioned')
+  // iOS: the plugin injects viewport-fit=cover, so the fullscreen panel needs
+  // the safe-area insets upstream's presenter does not carry — a notched
+  // iPhone in landscape is 769-1023px wide, i.e. exactly this band.
+  for (const side of ['top', 'right', 'bottom', 'left']) {
+    assert.ok(shown.includes(`padding-${side}: env(safe-area-inset-${side}, 0px);`), `${side} inset`)
+  }
+  // ...and the padding must not add to the 100% width: the panel declares no
+  // box-sizing and the tree has no global border-box reset (2026-09-13).
+  assert.ok(shown.includes('box-sizing: border-box;'), 'insets must not widen the panel past the viewport')
+  // The pinned selectors must be UNIQUE: at equal specificity the cascade's
+  // last occurrence wins, so a duplicated rule would silently override the
+  // pinned one while every assertion above still passed (test hardening).
+  for (const selector of [
+    '[data-mobile-role="details"] [data-sidebar-right-panel]',
+    '[data-mobile-role="details"]',
+    '[data-slot="conversation.session.header"] [role="tablist"]',
+  ]) {
+    assert.equal(countBlocks(tier, selector), 1, `duplicate rule for ${selector}`)
+  }
+  // The yield is ORDERED after the open-drawer rules it ties with, for BOTH of
+  // its arms — and it must carry the phone-band arm, because
+  // `data-rightbar-collapsed` is upstream's TRACK flag: a shown panel below
+  // 768px reports track=false, so keying the yield on the track flag alone
+  // left phones un-yielded (2026-09-13 review-fix, round 3).
+  const openDrawer = tier.indexOf('[data-mobile-frame]:not([data-sidebar-collapsed]) [data-mobile-role="sidebar"]')
+  const openBackdrop = tier.indexOf('[data-mobile-frame]:not([data-sidebar-collapsed]) .dsh-mobile-backdrop')
+  const yieldDrawerTrack = tier.indexOf('[data-mobile-frame]:not([data-rightbar-collapsed]) [data-mobile-role="sidebar"]')
+  const yieldDrawerFull = tier.indexOf('[data-mobile-frame][data-rightbar-fullscreen] [data-mobile-role="sidebar"]')
+  const yieldBackdropFull = tier.indexOf('[data-mobile-frame][data-rightbar-fullscreen] .dsh-mobile-backdrop')
+  assert.ok(openDrawer !== -1 && yieldDrawerTrack > openDrawer, 'the drawer yield must follow the open rule')
+  assert.ok(openBackdrop !== -1 && yieldBackdropFull > openBackdrop, 'the backdrop yield must follow the open rule')
+  assert.ok(yieldDrawerFull !== -1, 'the phone-band (auto-fullscreen) yield arm is missing')
+  // The drawer rule is a multi-arm list, so the block is anchored on its LAST
+  // arm (the arm that carries the opening brace) and the first arm is checked
+  // by its comma-terminated form.
+  assert.ok(tier.includes('[data-mobile-frame]:not([data-rightbar-collapsed]) [data-mobile-role="sidebar"],'),
+    'the track-arm of the drawer yield is missing')
+  const yieldDrawerBlock = cssBlock(tier, '[data-mobile-frame][data-rightbar-fullscreen] [data-mobile-role="sidebar"]')
+  assert.ok(yieldDrawerBlock !== null && yieldDrawerBlock.includes('visibility: hidden;'),
+    'the drawer must leave the tab order behind the panel (both arms)')
+  const yieldFullBlock = cssBlock(tier, '[data-mobile-frame][data-rightbar-fullscreen] [data-mobile-role="sidebar"]')
+  assert.ok(yieldFullBlock !== null && yieldFullBlock.includes('visibility: hidden;'),
+    'the phone-band arm must hide the drawer too')
+})
+
 test('the retired mechanisms leave no trace in the stylesheet', () => {
   assert.ok(!MOBILE_CSS.includes('data-mobile-dismiss'), 'session-log stamping CSS must be gone')
-  // No self-drawn right-column overlay: the third track stays grid-locked and
-  // the official right surface owns the mobile presentation.
-  const tier = normalizeTouchTier()
-  const rightColumn = cssBlock(tier, '[data-mobile-role="details"]')
-  assert.ok(rightColumn !== null && rightColumn.includes('grid-column: 3'), 'the grid lock stays')
-  assert.ok(!/\[data-mobile-role="details"\][^{]*\{[^}]*position:\s*fixed/.test(tier), 'no self-drawn fixed overlay')
-  // Dockkit split chrome is hidden on touch.
+  // Dockkit drag chrome is hidden on touch — and ONLY drag chrome: the split
+  // button is a plain click control upstream disables itself, so the earlier
+  // blanket hide removed a usable affordance (2026-09-13 review-fix).
   assert.ok(MOBILE_CSS.includes('[data-dockkit-divider]'))
-  assert.ok(MOBILE_CSS.includes('[data-dockkit-split-button]'))
+  assert.ok(!stripComments(MOBILE_CSS).includes('[data-dockkit-split-button]'),
+    'the split button must not be hidden')
   // The composer-bar row rules use the production class-name shape:
   // `[hash]_[local]` (upstream cssModules pattern), matched by SUFFIX with a
   // multi-class arm. The old infix form `[class*="_row_"]` matched nothing in
@@ -130,6 +210,84 @@ test('the retired mechanisms leave no trace in the stylesheet', () => {
   // 2026-09-11 upstream-alignment T17a: the CSS hamburger is retired with the
   // official panel glyph; no self-drawn control may come back.
   assert.ok(!MOBILE_CSS.includes('dsh-mobile-nav-toggle-bars'), 'the CSS hamburger must be gone')
+})
+
+test('touch targets cover the seats added by the 2026-09-13 review-fix', () => {
+  const tier = normalizeTouchTier()
+  const stripButton = '[data-sidebar-right-panel] [data-dockkit-strip] button:not([data-dockkit-tab-close])'
+  const heightFloor = cssBlock(tier, [
+    '[data-slot="conversation.composer.bar"] button,',
+    '[data-slot="sidebar"] button,',
+    '[data-slot="conversation.session.header.actions"] button,',
+    '[data-slot="conversation.session.header.utilities"] button,',
+    '[data-slot="conversation.session.header.corner"] button,',
+    '[data-slot="settings.section"] button,',
+    `${stripButton},`,
+    '[data-sidebar-right-panel] [data-dockkit-strip] [role="tab"],',
+    '[role="menuitem"], [role="option"]',
+  ].join(' '))
+  assert.ok(heightFloor !== null && heightFloor.includes('min-height: 44px;'),
+    'the header utilities/corner and the right-panel strip carry the height floor')
+  const widthFloor = cssBlock(tier, [
+    '[data-slot="sidebar"] button,',
+    '[data-slot="conversation.session.header.actions"] button,',
+    '[data-slot="conversation.session.header.utilities"] button,',
+    '[data-slot="conversation.session.header.corner"] button,',
+    `${stripButton},`,
+    '[role="menuitem"], [role="option"]',
+  ].join(' '))
+  assert.ok(widthFloor !== null && widthFloor.includes('min-width: 44px;'), 'icon-only buttons carry the width floor')
+  // The chip's own close control must stay OUT of the floor: upstream floats
+  // it at 20px inside the 44px chip, so inflating it would cover the label.
+  assert.ok(!new RegExp(`\\[data-dockkit-strip\\] button[^:]*[,{]`).test(stripComments(MOBILE_CSS)),
+    'no bare [data-dockkit-strip] button arm may remain')
+  const strip = cssBlock(tier, '[data-sidebar-right-panel] [data-dockkit-strip]')
+  assert.ok(strip !== null && strip.includes('height: auto;'), 'the strip grows with its controls')
+  const stripBox = cssBlock(
+    tier,
+    '[data-sidebar-right-panel] [data-dockkit-strip] button:not([data-dockkit-tab-close])',
+  )
+  assert.ok(stripBox !== null && stripBox.includes('box-sizing: border-box;'),
+    'the floor means the BOX on padded strip buttons (44, not 56)')
+  assert.equal(
+    countBlocks(tier, '[data-sidebar-right-panel] [data-dockkit-strip] button:not([data-dockkit-tab-close])'),
+    1,
+    'the box-sizing rule is unique (a second one could override the first)',
+  )
+  // ...but NOT on the chips: dockkit measures the chip minimum as
+  // `min-width + padding` under content-box (measure.ts chipMinimum), so
+  // forcing border-box there would lower it from 100px to 80px and loosen the
+  // pane-split room rule. BOTH shapes count: a chip rule of its own AND a chip
+  // arm appended to the box-sizing list (the comma form a regex cannot see).
+  assert.ok(!/\[data-dockkit-strip\] \[role="tab"\]\s*\{/.test(stripComments(tier)),
+    'the chips must not get a box-sizing rule of their own')
+  assert.ok(!stripBox.includes('[role="tab"]'),
+    'the chips must not be appended to the box-sizing list either')
+  assert.ok(tier.includes('[data-sidebar-right-panel] [data-dockkit-strip] [role="tab"],'),
+    'the chips DO belong to the 44px min-height seat list')
+  const closeControl = cssBlock(tier, '[data-sidebar-right-panel] [data-dockkit-tab-close]')
+  assert.ok(closeControl !== null && closeControl.includes('translateY(-50%)'),
+    'the 20px close control is re-centred in the 44px chip')
+  // Session-header view tabs: 44px box (border-box, so the official 9px bottom
+  // padding does not make it 53) + a strip that WRAPS instead of clipping
+  // (ui-chat + ui-trajectory register unconditionally). Wrapping, not
+  // scrolling: a scroll container would clip the active bar upstream draws 1px
+  // past the tab box.
+  const tabs = cssBlock(tier, '[data-slot="conversation.session.header"] [role="tab"]')
+  assert.ok(tabs !== null && tabs.includes('min-height: 44px;'), 'view tabs carry the touch floor')
+  assert.ok(tabs.includes('box-sizing: border-box;'), 'the floor means the box, not box+padding')
+  const tablist = cssBlock(tier, '[data-slot="conversation.session.header"] [role="tablist"]')
+  assert.ok(tablist !== null && tablist.includes('flex-wrap: wrap;'), 'the tab strip wraps')
+  assert.ok(!stripComments(MOBILE_CSS).includes('role="tablist"]::-webkit-scrollbar'),
+    'the tab strip is not a scroll container (it would clip the active bar)')
+  // The panel's mode control is inert in the 768-1023 band (this tier forces
+  // the fullscreen presentation, so upstream's push<->fullscreen flip changes
+  // nothing) and must be hidden exactly there; below 768px it stays, because
+  // upstream's autoFullscreen branch turns that click into "collapse".
+  const narrowBand = tier.slice(tier.indexOf('@media (min-width: 768px)'))
+  const modeControl = cssBlock(narrowBand, '[data-mobile-frame] [data-sidebar-right-mode]')
+  assert.ok(modeControl !== null && modeControl.includes('display: none !important;'),
+    'the inert mode control must be hidden in the 768-1023 band')
 })
 
 test('settings full-screen rule targets the official settings dialog shape', () => {
@@ -232,24 +390,40 @@ test('no blanket aria-modal cap: official dialog geometries own the viewport fit
   assert.ok(fields !== null && fields.includes('max(16px, var(--dsh-content-font-size, 16px)) !important;'))
 })
 
-/** The phone tier, whitespace-normalized with comments stripped: whitespace
+/** The phone tier (its own media block only), comments stripped: whitespace
  *  and formatting changes never break the assertions; comments (which may
  *  quote declarations) never satisfy them. */
 function normalizePhoneTier(): string {
-  return MOBILE_CSS
-    .slice(MOBILE_CSS.indexOf('@media (max-width: 768px)'))
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/\s+/g, ' ')
+  return sliceTier('@media (max-width: 768px)')
 }
 
 /** The touch tier (1023px) with comments stripped and whitespace normalized —
  *  the drawer/backdrop/toggle and the column grid locks live here, not on the
- *  phone tier. */
+ *  phone tier. It ends where the phone tier begins: slicing from the 1023px
+ *  marker to the END OF THE SHEET would also contain every phone-tier rule, so
+ *  a rule moved into the phone block would keep satisfying "touch tier"
+ *  assertions (2026-09-13 review-fix, test hardening). */
 function normalizeTouchTier(): string {
+  return sliceTier('@media (max-width: 1023px)', '@media (max-width: 768px)')
+}
+
+/** One media block, from its marker to the next marker (or the sheet's end),
+ *  comments stripped and whitespace normalized. Nested blocks stay inside. */
+function sliceTier(start: string, end?: string): string {
+  const from = MOBILE_CSS.indexOf(start)
+  assert.ok(from !== -1, `media block not found: ${start}`)
+  const to = end === undefined ? -1 : MOBILE_CSS.indexOf(end, from)
   return MOBILE_CSS
-    .slice(MOBILE_CSS.indexOf('@media (max-width: 1023px)'))
+    .slice(from, to === -1 ? undefined : to)
     .replace(/\/\*[\s\S]*?\*\//g, '')
     .replace(/\s+/g, ' ')
+}
+
+/** How many rules in `css` start with exactly `selector {` — the cascade's
+ *  last occurrence wins at equal specificity, so a pinned selector must be
+ *  unique or the assertion is inspecting the wrong one. */
+function countBlocks(css: string, selector: string): number {
+  return css.split(`${selector} {`).length - 1
 }
 
 /** The CSS block `selector { … }` (normalized form), or null. Anchored on the
@@ -266,9 +440,15 @@ function cssBlock(css: string, selector: string): string | null {
   return css.slice(at, close + 1)
 }
 
-test('safe-area tokens present on the phone tier', () => {
-  assert.ok(MOBILE_CSS.includes('env(safe-area-inset-bottom)'))
-  assert.ok(MOBILE_CSS.includes('env(safe-area-inset-top)'))
+test('safe-area insets sit on the rules that paint full-bleed', () => {
+  // Scoped + comment-stripped: the assertion must not be satisfiable by prose
+  // or by an unrelated rule quoting `env()` (2026-09-13 test hardening).
+  const phone = normalizePhoneTier()
+  const composerSeat = cssBlock(phone, '[data-composer-seat]')
+  assert.ok(composerSeat !== null && composerSeat.includes('env(safe-area-inset-bottom'),
+    'composer seat clears the home indicator')
+  const toggle = cssBlock(normalizeTouchTier(), '.dsh-mobile-nav-toggle')
+  assert.ok(toggle !== null && toggle.includes('env(safe-area-inset-top'), 'drawer toggle clears the island')
 })
 
 test('composer font keeps the official content-size preference above 16px', () => {

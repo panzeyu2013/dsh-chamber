@@ -1429,15 +1429,37 @@ gateway 单壳面加载上游产物，该形态永远不出现。
   `touch-action` 需给 textarea 恢复 `auto`（否则吞光标）；
 - **轨迹详情**：移动端改底部悬浮卡（`bottom` 抬到输入区上方，`min(52vh,460px)`），
   或新增 Status 标签页承载统计（mobile-shell 思路）。右侧覆盖层形态
-  （`data-details-collapsed` 移除时 details 列 `position:fixed; right:0`）**已退役**：
-  官方右栏栈自带移动呈现（`ui-sidebar-right` 在 <768px
-  自动全屏、`position:fixed; inset:0`），自绘覆盖层与之重复且打架，插件只保留第三轨
-  的网格锁（`[data-mobile-role="details"] { grid-column: 3 }`）。**层级范围**：
+  （`data-details-collapsed` 移除时 details 列 `position:fixed; right:0`）**已退役**；
+  但「只保留第三轨网格锁、右栏呈现全交官方」在 2026-09-13 复审时被判定不足以覆盖
+  769–1023px：上游只在 `<768px` 自动全屏（`ui-sidebar-right` 的
+  `autoFullscreen = viewportWidth < 768`、`track = shown && !autoFullscreen`），
+  而该档把第三轨钉成 0 ⇒ 展开的面板以常规宽度（视口 769–1023 时为 313–460px，
+  约正文列的 40–45%）直接盖在会话上，既不占轨道也不全屏。**现决策**：触屏档自己给
+  官方面板全屏呈现
+  （`[data-mobile-role="details"] [data-sidebar-right-panel]`
+  → `position:fixed; inset:0; z-index:40`；z-40 即上游自己的全屏层），网格锁
+  （`[data-mobile-role="details"] { grid-column: 3 }`）不变。该规则**刻意不加「已展开」
+  门控**：座席在滑出动画同一 commit 上报 `shown:false`，门控会让全屏盒在动画中途失效；
+  隐藏态由上游自己的 `translateX(100%) + visibility:hidden` 承担，无需门控。安全区
+  （`env(safe-area-inset-*)`）与 `box-sizing:border-box` 写在同一条规则里：面板自身与
+  全树都没有 border-box，content-box 的 `inset:0 + width:100%` 会连 inset 一起撑宽。
+  **锚点注记**：面板不是
+  该列的直接子节点——每个 slot 渲染点都把输出包在 `[data-slot="<key>"]` 出口里，
+  而出口是 `display:contents`（ui-renderer `scoped-slots.tsx` 的 `ANCHOR_STYLE`），
+  因此对「列的子元素」施加定位规则是**静默 no-op**（本修复第一版即踩此坑）；
+  规则瞄准面板自己的上游状态属性并以 details 列限定作用域。**层级范围与抽屉让位**：
   插件的抽屉/遮罩/抽屉开关（z-74/75/76）挂在官方 `shell.overlay`
   层内，而该层是 `position:absolute; z-index:20` 的**独立栈上下文**——三者因此压在
   框架内容与普通右栏列（z-10）之上，但**低于官方全屏右栏（z-40）与浮动面板宿主
-  （z-60）**。这是有意的：官方全屏面板接管屏幕时，移动抽屉让位（要跨栈必须把节点
-  移到 body 级 portal，未做）。
+  （z-60）**；因此面板展开期间抽屉**显式让位**：开关与遮罩 `display:none`、已打开
+  的抽屉 `visibility:hidden`（与关闭态同一机制，同时把它移出 Tab 序），不再留可聚焦
+  的面板后内容。**让位需要两条臂**：`data-rightbar-collapsed` 是上游的**轨道**标志
+  （`cols.rightbar === 0`），而 `track = shown && !autoFullscreen` ⇒ 手机档（<768，
+  上游自动全屏）已展开的面板照样上报 track=false，只用轨道臂会让手机完全不让位；
+  第二条臂用座的 `data-rightbar-fullscreen`（`openRightbar`/`closeRightbar` 成对读写）。
+  768–1023 档内面板自带的**模式控件隐藏**（该档呈现已钉死 ⇒ push↔fullscreen 翻转成为
+  no-op；<768 保留，因上游把它当「收起」用），面板子树声明 `overscroll-behavior:
+  contain`。要跨栈仍须把节点移到 body 级 portal，未做。
 
 **18.4.4 行为层（移动端复杂度的真正核心）**
 
@@ -1596,13 +1618,40 @@ PWA / Web Push 社区实现机制（dsh-ui-mobile，jasondu，npm 0.1.8，MIT，
 
 ### 18.6 验收门禁
 
-- 自动化：移动插件 typecheck/test（布局纯函数、断点、SW 注册逻辑）、gateway
+- 自动化：移动插件 typecheck/test（布局纯函数、断点、编辑态门控与自愈时钟、
+  SW 注册逻辑）、gateway
   UA 路由测试（含伪造 UA 负例）、插件 PWA 资产经 gateway 透传后的 HEAD/GET
   测试（`/pwa/*`、`/sw.js` 可达且内容正确、未注入形态下 gateway 占位不注册
   SW）；
-- 实机（移动视口清单，CDP 设备模拟 + 真机抽检）：
-  - 触控目标 ≥44px 比例、无横向溢出、抽屉开合、弹层不出屏、设置全屏可滚动、
+- 实机（移动视口清单，CDP 设备模拟 + 真机抽检；设备模拟部分**尚无工具**，见
+  STATUS 的 2026-09-13 开放项 ⑤）：
+  - 触控目标 ≥44px 比例（**座席清单**：composer bar / sidebar / 会话头
+    actions+utilities+corner / settings.section / 右栏 dockkit 条 chips+按钮 /
+    menuitem+option）、无横向溢出、抽屉开合、弹层不出屏、设置全屏可滚动、
     输入行单行、安全区/100dvh、键盘不遮挡输入区；
+  - 右栏与抽屉（2026-09-13 决策的实机判据）：展开的右栏在 769–1023px 档
+    **全屏**呈现（不再以常规宽度悬挂在会话上）、面板自带退出控件可点、
+    面板展开期间抽屉与开关不可见且**不在 Tab 序**——**两档都要走查**：<768
+    手机档（上游自身全屏、本插件补齐 inset，让位靠 `data-rightbar-fullscreen`
+    臂）与 769–1023 档（本插件全屏 + 轨道臂）；768–1023 档内面板自带的**模式
+    控件不可见**（该档呈现已钉死、翻转是 no-op）、关闭面板后抽屉回到原开合态
+    可接受、dockkit 条并入 44px 后条高与观感（chips 保持 content-box 以免放宽
+    分屏判定；**chips 行由上游 `touch-action:none` 持有，不得期望手指横滚**，
+    越界 chip 只能靠激活邻居滚入视野）、面板子树 `overscroll-behavior:contain`
+    生效（滚动到底不得带动身后文档/工具栏）、会话头座席底线落在内容盒
+    （图标按钮约 56px、头部行较高，读作过厚则三条臂一起改 border-box）、
+    官方浮动面板
+    （380×300 @ (160,120)、z-60）与 `ContextMeter` 264px 面板在窄屏是否出屏
+    （已登记为未适配，见 STATUS ③④）、**iOS 安全区**：横屏刘海机刘海不得压住
+    面板内容、home indicator 不得压住底部行（面板已带 `env(safe-area-inset-*)`
+    且 `box-sizing:border-box`，`viewport-fit=cover` 由本插件注入；真机先读
+    `getComputedStyle(panel).boxSizing` 与 `getBoundingClientRect().width`
+    对比 `visualViewport.width`）、键盘已弹起时打开面板的焦点归属
+    （现沿用上游：焦点与输入留在面板之后，是否补 blur 待判）、
+    面板在抽屉已展开的 768–979 档是否被上游 `canShow` 自收起（观感待判）、
+    设置页在抽屉内被让位隐藏时的「不可见 `aria-modal`」组合（见 STATUS ⑫）、
+    Split View / Stage Manager / 旋转跨越 768 与 1024 边界时呈现不得在手势中途跳变
+    （见 STATUS ⑪）；
   - 键盘补偿：iOS 键盘弹出后 composer 停在键盘顶上方且**不
     常驻气泡**；捏合缩放（双指放大）**不得**抬升 composer（缩放守卫）；键盘
     服务于设置/提问字段时不得抬升 composer（焦点守卫）；**iOS 聚焦缩放后的
@@ -1611,15 +1660,28 @@ PWA / Web Push 社区实现机制（dsh-ui-mobile，jasondu，npm 0.1.8，MIT，
     （缩放态只服务 composer 的取舍需实机确认）；提交（`submitting`）窗口内
     seat 不得闪落；会话切换/reconnect settle 重挂 seat 后 composer 仍在键盘
     上方（幂等 arm）；**arm 期间 seat 与键盘顶之间的死区应 ≤23px**（16px 量化
-    的正例，刘海机上还须确认安全区归零无双重间距）；Android WebView 无
-    `interactive-widget` 时同样生效；
+    的正例，刘海机上还须确认安全区归零无双重间距）；arm 期间「回到底部」控件
+    必须仍可点到（现落在 `--dsh-composer-height` 之后，见 STATUS ⑦）；
+    Android WebView 无 `interactive-widget` 时同样生效；无工作区态按 Enter
+    **打开工作区选择器**（编辑态门控的正例）、**iPad 接硬件键盘时 Ctrl/Cmd+Enter
+    仍走官方加速提交**（不得被换成换行）、**卡住的提交**（不可编辑 +
+    `data-phase` 为 adjudicating/submitting 满 30s）点按可自愈，而**合法锁定态**
+    （owner 阻断 / 父端离线 / 无会话选择器节点）点按**不得**被强解锁（自愈范围
+    的正/负例）；carry 一个待判：撑满后的回车换行必须把新行带进可视区
+    （caret reveal 与 Lexical 归并的时序，见 STATUS ⑧）；
+  - 外设与档位：iPad 接触控板/鼠标时本档是否仍以 `pointer: coarse` 成立
+    （文档假设只翻转 `hover`；若翻转 `pointer`，移动档退场回落上游窄窗形态，
+    见 STATUS ⑩）；
   - tooltip：点按发送/停止/指令/ContextMeter/队列/侧边栏等
     带 aria-label 的按钮后**无**残留气泡；聊天统计行/代理预设卡片描述/轨迹
     时间轴与 kind 标签的悬停气泡仍可读（信息型气泡保留）；轨迹 turn-rail
     预览（901–1023px 触控平板）不受影响；接鼠标的触控设备 hover 气泡恢复；
     桌面宽度零变化；**原生 `title` 长按气泡为已登记取舍**（刻意手势，不抑制）；
-  - 会话头：抽屉开关不重叠头部内容、crumbs 长链/chip 换行不裁切、「Session 日志」
-    手机档图标化且可点；抽屉里单击会话行即切换（iOS Safari 自愈生效）、
+  - 会话头：抽屉开关不重叠头部内容、crumbs 长链/chip 换行不裁切、视图 tab
+    （chat+trajectory 常驻）44px 且**换行**不裁切——活动 tab 那条外伸 1px 的
+    指示条必须仍与头部底线齐平（早期 `overflow-x:auto` 会把滚动容器的另一轴
+    算成 `auto` 从而裁掉它）、头部随 tab 盒增高；抽屉里单击会话行即切换
+    （iOS Safari 自愈生效）、
     切换不弹键盘（composer 意图焦点不受影响）；
   - 设置（手机档）：竖排 nav 变顶部横向 chips 且分类可达/可滚动、Close 固定
     不随内容滚走（粘滞行仍由两条 `data-slot` 缝锚定）、各分区（General/Models/

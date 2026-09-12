@@ -50,9 +50,120 @@ mobile surface on three axes, all covered structurally (no hashed classes):
 - **"Session 日志" export capsule**: RETIRED at the alpha.2 re-anchor —
   upstream now renders that control as a 28x28 icon button inside the header
   more-actions menu, so the plugin no longer stamps it by copy. The right
-  column's mobile presentation is likewise upstream-owned: `ui-sidebar-right`
-  auto-fullscreens below 768px, so the plugin keeps only the grid lock for the
-  third track and no longer draws its own overlay.
+  column keeps the grid lock for the third track and draws no overlay of its
+  own — the panel's presentation stays the official one, re-presented
+  fullscreen across the whole touch tier (a bare grid lock left the
+  769-1023px band covered by a normal-width panel; see "Right panel & drawer
+  coexistence").
+- **View tabs**: `tabs.length > 1` is the NORM, not an edge case — `ui-chat`
+  and `ui-trajectory` both register a `conversation.view` unconditionally and
+  both ship in the default web bundle. The official tab is 13px text on a 25px
+  box and the strip neither wraps nor scrolls while the frame clips overflow
+  (`AppFrame.module.css` `overflow: hidden`), so a third view or a longer (en)
+  label would be unreachable: the touch tier grows the tab box to the 44px
+  floor (`box-sizing: border-box`, so the official 9px bottom padding does not
+  make it 53; the header's `min-height: 76px` is a FLOOR, so the row follows)
+  and lets the strip WRAP. Wrapping rather than scrolling is deliberate: a
+  scroll container forces the other axis to `auto` and would clip the active
+  tab's 2px bar, which upstream draws 1px past the tab box to end flush with
+  the header's bottom rule.
+
+## Right panel & drawer coexistence (touch tier)
+
+Upstream presents the right panel fullscreen only BELOW 768px
+(`autoFullscreen = viewportWidth < 768`, `SidebarRight.tsx`) and otherwise
+pushes the centre through its own track. The touch tier pins that track to 0
+(the sidebar is a drawer, the conversation takes the full width), so between
+769 and 1023px the official panel used to draw at its normal width — 313-460px,
+about two-fifths of the content column (41-45% of the viewport width) — straight
+over the transcript: no
+track, no fullscreen, no way to make room (STATUS geometry residue ①). The tier
+therefore presents the official panel fullscreen itself
+(`[data-mobile-role="details"] [data-sidebar-right-panel]`
+→ `position: fixed; inset: 0; z-index: 40`, upstream's own fullscreen layer).
+
+The rule is deliberately NOT gated on the frame's shown flag
+(`data-rightbar-collapsed`): the seat reports `shown: false` in the SAME commit
+as the slide-out, so a frame-gated rule would drop the fullscreen box
+mid-animation and the panel would shrink to its normal width while sliding out.
+The hidden state needs no gate — upstream hides the panel with
+`transform: translateX(100%)` + `visibility: hidden`, and a full-width `inset: 0`
+box sits exactly one viewport to the right, invisible and untouchable. That is
+also why the safe-area insets live in this same block, and why it declares
+`box-sizing: border-box`: the panel carries no box-sizing of its own and the
+tree has no global border-box reset, so a content-box panel with `left: 0` +
+`width: 100%` would paint its insets WIDER than the viewport (the notch-side
+content, i.e. the strip-end controls, cut off-screen in landscape).
+
+The panel is NOT the column's direct child: every slot render site wraps its
+output in a `[data-slot="<key>"]` outlet whose style is `display: contents`
+(ui-renderer `scoped-slots.tsx`, `ANCHOR_STYLE`), so a positional rule on the
+column's child is a silent no-op — the first cut of this fix landed exactly
+there, and the rule now targets the panel's own upstream state attribute
+(`data-sidebar-right-panel`, emitted by `SidebarRight.tsx`) scoped to the
+details column. The breakpoint test pins all of it: the panel is the target,
+the outlet wrapper is not, the rule stays ungated, and the selector is unique.
+
+That rule also carries the iOS safe-area insets (`env(safe-area-inset-*)`),
+in the same block because they matter exactly while the panel is fullscreen:
+this plugin injects `viewport-fit=cover` on the touch tier, so `inset: 0` runs
+edge to edge — a notched iPhone in LANDSCAPE falls in the same band, with the
+notch over one vertical edge and the home indicator under the bottom. That
+applies on the PHONE tier too, which is the band upstream itself presents
+fullscreen: the rule is ungated, so both bands get the insets. Upstream's
+fullscreen presenter carries none of its own; the drawer, the settings sheet
+and the composer seat on this tier all do. The surface still paints full-bleed —
+the background covers the padding box — only its content moves inside.
+
+A shown panel owns the screen, so the drawer YIELDS: the floating toggle and the
+backdrop stand down, and an open drawer goes `visibility: hidden` — the same
+mechanism the closed drawer uses, which also drops it out of the tab order
+(WCAG 2.4.3) instead of leaving nav rows and the settings seat focusable behind
+the panel. This needs TWO selector arms, because "the panel is shown" is not one
+attribute: `data-rightbar-collapsed` is upstream's TRACK flag
+(`cols.rightbar === 0`) and the seat only asks for a track at >= 768px
+(`track = shown && !autoFullscreen`), so a shown panel on the PHONE tier still
+reports track=false and that arm alone would leave phones un-yielded; the second
+arm keys on `[data-rightbar-fullscreen]`, which `openRightbar`/`closeRightbar`
+set and clear, i.e. present exactly while a fullscreen panel is shown. ORDER
+MATTERS: these selectors tie on specificity with the open-drawer / backdrop
+rules, so they sit after them (the open rule's `visibility 0s` transition keeps
+the hide immediate).
+
+In the 768-1023px band the panel's own MODE control is hidden: this tier pins
+the fullscreen presentation, so upstream's push↔fullscreen flip (and the label
+that flips with it) cannot change anything any more — pressing "exit fullscreen"
+would leave the panel fullscreen. Below 768px it stays, because upstream's
+`autoFullscreen` branch turns that same click into "collapse the panel". The
+separate collapse control is untouched in both bands.
+
+The panel's dockkit strip joins the 44px touch floor (the strip itself grows
+with its controls — `height: auto; min-height: 44px` — instead of clipping a
+44px chip in a 28px row), as do the session header's utilities and corner seats.
+On the strip the floor means the BOX (`box-sizing: border-box`, on the strip's
+BUTTONS only): the chrome icons declare 28px boxes with 6px padding, so a
+content-box floor would turn 44 into 56 and grow the strip for nothing. The
+CHIPS stay content-box on purpose — they pad horizontally only, and dockkit
+measures the chip minimum as `min-width + padding` under content-box
+(`measure.ts` `chipMinimum`), so forcing border-box there would lower that
+measured minimum from 100px to 80px and loosen the pane-split room rule.
+The chip's own CLOSE control is deliberately excluded from the floor: upstream
+floats it at 20px inside the chip (absolute, `pointer-events` gated by
+hover/active), so the floor would inflate it into a 44px box over the chip's
+label — the chip itself is the 44px target and closing stays reachable from the
+chip menu; it is only re-centred in the taller box it now lives in.
+The split BUTTON is no longer hidden: upstream renders it as a plain click
+control that disables itself when the pane cannot split, so the earlier blanket
+hide removed a usable affordance on a false "pointer-drag chrome" premise; the
+`[data-dockkit-divider]` arm stays hidden — that one really is drag-only chrome
+(and with the divider hidden, a touch split gets upstream's even halves rather
+than a draggable ratio). The whole panel subtree also declares
+`overscroll-behavior: contain`: a fullscreen panel owns the screen, so its inner
+scrollers must not chain their overscroll into the document behind it.
+One device-judged note: the header-seat floor lands on the CONTENT box (the
+pre-existing arm was left as shipped), so padded icon buttons render ~56px boxes
+and the header row grows with them — if that reads as too much chrome on a
+phone, the three header arms can move to border-box together (44px).
 
 ## Settings sheet adaptation (phone tier)
 
@@ -196,6 +307,36 @@ trajectory turn-rail preview, `aria-describedby`-referenced) carries no
   remount that replaces the AppFrame while the keyboard stays open re-stamps
   the new frame (and cleans the old one) instead of leaving the composer
   behind the keyboard.
+- **Enter belongs to the editor**: the composer's resident div doubles as the
+  no-workspace picker trigger — with no workspace it binds `editor = null`, so
+  it renders `contenteditable="false"` while still carrying
+  `[data-composer-input]`, `tabIndex=0` and the official React `onKeyDown` that
+  opens the picker. The document-capture Enter handler now requires
+  `contenteditable="true"`, so that activation survives (intercepting it
+  inserted nothing AND swallowed the picker's Enter — one keyboard path lost,
+  no line break gained). Shift+Enter keeps the official line break, and the
+  official ACCELERATED chord (Ctrl/Cmd+Enter — `keymap.ts` passes
+  `event.ctrlKey || event.metaKey` into the submission policy, which flips
+  queue↔steer) passes through untouched: with a hardware keyboard attached
+  (the iPad case) a newline is not what that gesture means.
+- **Editability state is SEEDED, never assumed**: React writes
+  `contenteditable` on the DETACHED element, so a composer that mounts locked
+  produces no mutation record at all — the old `lastEditable = true` /
+  `lockedSince = 0` guesses could therefore never arm the layer-2 recovery or
+  the 30s self-heal on the very states they exist for. Both now seed from the
+  mounted DOM (the recovery also reads the mutation's `oldValue`, so a genuine
+  `false → true` flip is recognised even for an element the observer never saw
+  mount).
+- **The self-heal only fights a STUCK SUBMIT**: its clock runs only while the
+  composer is non-editable AND its own `data-phase` is `adjudicating` or
+  `submitting` (the official input machine's in-flight phases). A composer that
+  is non-editable for a long-lived legitimate reason — removed / inert /
+  no-session picker node / owner-blocked / a continuable child whose parent is
+  offline — never starts the clock, so the recovery cannot force
+  `contenteditable="true"` against a block upstream still holds (Lexical's own
+  `setEditable(false)` gate would stay closed anyway, leaving a half-editable
+  DOM). A composer that MOUNTS already stuck is still covered: the tap that
+  finds it stuck starts the clock.
 - **Enter-newline caret reveal**: a newline inserted by the mobile
   Enter=换行 path bypasses the official keymap pipeline, whose caret reveal
   never runs — when the composer has grown past its max height the new line
@@ -243,3 +384,29 @@ composer's inner scroller (`max-height: 336px`), the official
 settings dialog has NO width-based media query at all, and the served
 viewport meta never carries `interactive-widget` (this plugin injects it
 client-side, touch-tier gated).
+
+The 2026-09-13 review-fix re-audited the same pin against the vendored SOURCE
+(not only the CDP-observed DOM) and extended that set with five anchors, each
+with its emitting file: the panel's own `data-sidebar-right-panel` state
+attribute — the thing the fullscreen presentation actually targets, since the
+slot outlet wrapper in between is `display: contents` (`SidebarRight.tsx`,
+`ui-renderer/scoped-slots.tsx`), and it is deliberately used WITHOUT the frame's
+shown flag so the close animation keeps its box; the frame's
+`data-rightbar-collapsed` (the TRACK flag) and `data-rightbar-fullscreen` (the
+seat's fullscreen report) as the two shown keys for the DRAWER yield
+(`AppFrame.tsx`, `ui-layout/stores.ts`) — the track flag alone is false for a
+shown phone-tier panel; the
+right panel's dockkit strip `[data-dockkit-strip]` — 28px chips, add/split and
+panel-chrome buttons, and the excluded 20px `[data-dockkit-tab-close]` — as a
+touch-floor seat (`TabPanel.tsx`,
+`SidebarRight.tsx`); and the
+session header's `role="tablist"` strip, rendered whenever a session has more
+than one view and therefore always in practice (`ConversationSession.tsx`). It
+also verified what the plugin must NOT anchor on: `[data-dockkit-split-button]`
+is a click button, not drag chrome; the `[role="menu"]
+[role="menuitem"][aria-selected]` highlight signal does not exist at this pin
+(the ui-primitives `Menu` emits no `aria-selected`, and it moves focus into the
+menu, so its Enter never reaches a document handler); and the tree still has
+exactly three `aria-modal` producers and exactly three `data-side` carriers
+(the two AppFrame/ConversationRoot drag handles and the always-`role="tooltip"`
+bubble).
