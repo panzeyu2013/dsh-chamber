@@ -327,10 +327,26 @@ jobs:
         run: pnpm run verify:styles
       - name: Release workflow safety policy
         run: pnpm run test:release-workflow
+      # Action-pin resolution over the network (release-preflight --actions-only):
+      # the file-only pin check above cannot see a pin that points at a
+      # non-existent upstream commit. GITHUB_TOKEN here is the runner's own
+      # read-only token, used only to stay clear of anonymous API rate limits —
+      # it is not a release credential, so the dry-run scrub contract (no
+      # signing/npm/GH_TOKEN material) is untouched. Without it the check still
+      # works against the anonymous limit.
+      - name: Workflow action pins resolve upstream (release-preflight --actions-only)
+        run: node scripts/dev/release-preflight.mjs --actions-only
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       # Upgrade tooling (pin preflight classification / lockfile vendor-record
       # restore guard / upstream-gate CLI argument guard) — same gate as ci.yml.
-      - name: Upgrade tooling unit tests
+      - name: Dev tooling unit tests (CI change classifier included)
         run: pnpm run test:upgrade-tools
+      # The GUI acceptance toolbox's pure judgement layer (the driving layer
+      # needs a display, so it stays a local gate — see
+      # docs/checklists/gui-acceptance-checklist.md).
+      - name: GUI acceptance toolbox unit tests
+        run: pnpm run test:gui-acceptance
       - name: Shared runtime core unit tests
         run: pnpm run test:runtime
       - name: Control-plane unit tests
@@ -364,6 +380,10 @@ jobs:
           pnpm run test:open-in
           pnpm run test:mobile
           pnpm run test:cli
+      # Shared runtime core build: the gateway tarball packs it, so a broken
+      # runtime build must fail here rather than inside the packaging leg.
+      - name: Shared runtime core build (gateway tarball prerequisite)
+        run: pnpm run build:dsh-runtime
       - name: Renderer + host package builds
         run: |
           pnpm run build:renderer

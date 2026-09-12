@@ -11,6 +11,17 @@ on:
     tags: ['v*']
   pull_request:
 
+# Cancel superseded runs for pull requests (iterative pushes), but QUEUE branch
+# pushes: with the change classifier below, a prose-only follow-up push runs
+# only the file-only gates — if it also cancelled the run before it, the code
+# commit it followed would end up with no validation at all, which is worse than
+# a queued run. Release publication has its own workflow and group
+# (release-publish, cancel-in-progress: false); cancelling a CI run can never
+# weaken a release gate, because release.yml re-validates its own commit.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   # Validation chain only — no desktop packaging (fast). Packaging is built and
   # published exclusively by release.yml (tag v* / workflow_dispatch), where the
@@ -20,6 +31,14 @@ jobs:
   # DSH_CHAMBER_DSH_VERSION and failed every run with ERR_PNPM_OUTDATED_LOCKFILE
   # — if packaging jobs ever return to CI, their version env must be synced too.
   test:
+    # Tag pushes run RELEASE validation (release.yml), which is a mechanical
+    # superset of this chain — see the alignment contract in
+    # scripts/dev/release-workflow-policy.test.mjs. Running it twice on the same
+    # commit buys nothing, so this job steps aside for tags. The Windows leg
+    # below deliberately keeps running on tags: release.yml has no
+    # win32-semantics leg, so it is the only place those contracts are checked
+    # for a release commit.
+    if: github.ref_type != 'tag'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -29,6 +48,21 @@ jobs:
           # pins an exact commit, so the submodule is materialized at that
           # commit regardless of clone depth.
           submodules: true
+          # The change classifier diffs the pushed range, so the two endpoints
+          # must exist locally.
+          fetch-depth: 0
+      # Decide whether the expensive chain (install → type checks → unit suites
+      # → builds → gateway pack) is relevant for this push. The file-only gates
+      # below are NOT gated: a prose change still gets the gates that can see it
+      # (i18n drift lives in prose). The classifier fails safe — anything it
+      # cannot prove to be prose counts as code.
+      - name: Classify the change (prose-only pushes skip the expensive chain)
+        id: classify
+        env:
+          CI_BEFORE: ${{ github.event.before }}
+          CI_AFTER: ${{ github.sha }}
+          CI_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: node scripts/dev/classify-ci-changes.mjs
       - name: Verify workflow action pins
         run: node scripts/dev/verify-workflow-action-pins.mjs
       - uses: pnpm/action-setup@fe02b34f77f8bc703788d5817da081398fad5dd2 # v4.1.0
@@ -55,18 +89,22 @@ jobs:
       - name: Upstream touchpoint registry (C1/C3/C4/C5/C6/C7/C9/C10)
         run: node scripts/dev/verify-upstream-touchpoints.mjs --no-artifact-rebuild
       - run: pnpm install --frozen-lockfile
+        if: steps.classify.outputs.code == 'true'
       # C8 deterministic artifact gate: rebuilds the committed host/mobile
       # bundles in place, byte-compares, restores. A skipped build (missing
       # esbuild) is a loud warning, never a silent pass.
       - name: Committed artifacts match sources (C8 rebuild gate)
+        if: steps.classify.outputs.code == 'true'
         run: node scripts/dev/verify-upstream-touchpoints.mjs
       # The lockfile is the deterministic contract between the committed
       # workspace members and the resolution result; a non-frozen install
       # must never silently rewrite it (pnpm 11 prunes symlinked-member
       # importer records). Fail the run if it moved.
       - name: Assert lockfile not rewritten
+        if: steps.classify.outputs.code == 'true'
         run: git diff --exit-code -- pnpm-lock.yaml
       - name: Type check (tsc + chamber host packages + gateway)
+        if: steps.classify.outputs.code == 'true'
         run: |
           pnpm run typecheck
           pnpm run typecheck:host-graph
@@ -97,7 +135,7 @@ jobs:
       # argument guard is what keeps a mistyped flag from silently triggering
       # the gate's in-place artifact rebuild — so the pure helpers are pinned
       # here.
-      - name: Upgrade tooling unit tests (pin preflight / lockfile restore guard / upstream gate CLI guard)
+      - name: Dev tooling unit tests (pin preflight / lockfile restore guard / upstream gate CLI guard / CI change classifier)
         run: pnpm run test:upgrade-tools
       # The GUI acceptance toolbox's judgement layer only: the driving layer needs
       # a display plus a running app, so it stays a local gate
@@ -106,16 +144,22 @@ jobs:
       - name: GUI acceptance toolbox unit tests (pure judgement layer)
         run: pnpm run test:gui-acceptance
       - name: Shared runtime core unit tests (packages/dsh-runtime)
+        if: steps.classify.outputs.code == 'true'
         run: pnpm run test:runtime
       - name: Control-plane unit tests
+        if: steps.classify.outputs.code == 'true'
         run: pnpm run test:control-plane
       - name: Desktop unit tests (lifecycle / transports / credentials / runtime / native edges)
+        if: steps.classify.outputs.code == 'true'
         run: pnpm run test:desktop
       - name: Gateway unit tests
+        if: steps.classify.outputs.code == 'true'
         run: pnpm run test:gateway
       - name: Renderer shell unit tests
+        if: steps.classify.outputs.code == 'true'
         run: pnpm run test:renderer-shell
       - name: Client plugin type checks (sidebar / git / layout / connections / settings-bridge / client-web / connection / api-gateway / open-in / mobile)
+        if: steps.classify.outputs.code == 'true'
         run: |
           pnpm run typecheck:sidebar
           pnpm run typecheck:git
@@ -128,6 +172,7 @@ jobs:
           pnpm run typecheck:open-in
           pnpm run typecheck:mobile
       - name: Client and host plugin unit tests (sidebar / layout / git / settings-bridge / connections / client-web / connection / open-in / mobile)
+        if: steps.classify.outputs.code == 'true'
         run: |
           pnpm run test:sidebar
           pnpm run test:layout
@@ -164,6 +209,7 @@ jobs:
       # wrapper) so a real smoke failure can neither be swallowed by `tee` nor
       # fall through to a later command.
       - name: Smoke test (explicit SKIP, never an implicit pass)
+        if: steps.classify.outputs.code == 'true'
         run: |
           set -euo pipefail
           pnpm run smoke | tee /tmp/dsh-chamber-smoke.log
@@ -176,6 +222,7 @@ jobs:
             exit 1
           fi
       - name: Renderer build
+        if: steps.classify.outputs.code == 'true'
         run: pnpm run build:renderer
       # Host-package esbuild bundles (dsh-chamber-seed-client-graph /
       # dsh-chamber-seed-git-worktree / dsh-chamber-seed-archive-cleanup
@@ -183,12 +230,14 @@ jobs:
       # external mapping is an independent failure mode, so the push path
       # validates them too (2026 round-3 review).
       - name: Host package builds
+        if: steps.classify.outputs.code == 'true'
         run: pnpm run build:host-packages
       # Desktop packaging sub-steps (control-plane bundle / preload / host
       # package) run in CI too — a PR breaking them must not wait for a
       # release to surface (bundle:dsh stays release-only: it bakes the host
       # platform's dsh runtime).
       - name: Desktop build sub-steps
+        if: steps.classify.outputs.code == 'true'
         run: |
           pnpm --filter @dsh-chamber/desktop run build:control-plane
           pnpm --filter @dsh-chamber/desktop run build:preload
@@ -196,8 +245,10 @@ jobs:
       # Third-party notices must track the installed dependency set; a
       # stale committed file fails the push (2026 review).
       - name: Third-party notices current
+        if: steps.classify.outputs.code == 'true'
         run: node scripts/dev/gen-third-party-notices.mjs && git diff --exit-code -- THIRD_PARTY_NOTICES.md docs/THIRD_PARTY_NOTICES.en-US.md
       - name: Gateway package build and installed CLI smoke
+        if: steps.classify.outputs.code == 'true'
         run: |
           pnpm run build:dsh-runtime
           mkdir -p /tmp/dsh-gateway-pack /tmp/dsh-gateway-install
@@ -232,8 +283,21 @@ jobs:
           # acceptance: submodule materialization + junction link creation on
           # a real Windows runner (this job IS that acceptance).
           submodules: true
+          # The change classifier diffs the pushed range, so both endpoints must exist locally.
+          fetch-depth: 0
       - name: Verify workflow action pins
         run: node scripts/dev/verify-workflow-action-pins.mjs
+      # Same classifier as the linux leg. This job KEEPS running for tag pushes
+      # (release.yml has no win32-semantics leg), so its condition ORs the tag
+      # case in: a prose-only branch push skips the windows runner entirely, a
+      # tag push always runs it.
+      - name: Classify the change (prose-only pushes skip the win32 contracts)
+        id: classify
+        env:
+          CI_BEFORE: ${{ github.event.before }}
+          CI_AFTER: ${{ github.sha }}
+          CI_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: node scripts/dev/classify-ci-changes.mjs
       - uses: pnpm/action-setup@fe02b34f77f8bc703788d5817da081398fad5dd2 # v4.1.0
         with:
           version: 11.21.0
@@ -245,20 +309,26 @@ jobs:
       # ordering rationale as the linux leg; ensure-harness-vendor.mjs already
       # creates junctions on win32).
       - name: Bootstrap vendor tree (verify pin + ensure links)
+        if: steps.classify.outputs.code == 'true' || github.ref_type == 'tag'
         run: node scripts/dev/ensure-harness-vendor.mjs
       # Upstream-touchpoint registry gates (docs/checklists/upstream-touchpoints.md):
       # C1 pure fork files must stay byte-identical, C3 every fork/upstream file
       # has a ruling, C5 anchors must not go stale, C6 EXCLUDED dirs must exist,
       # C9 vendor patch anchors must match the pin (file-only, pre-install).
       - name: Upstream touchpoint registry (C1/C3/C5/C6/C9)
+        if: steps.classify.outputs.code == 'true' || github.ref_type == 'tag'
         run: node scripts/dev/verify-upstream-touchpoints.mjs --no-artifact-rebuild
       - run: pnpm install --frozen-lockfile
+        if: steps.classify.outputs.code == 'true' || github.ref_type == 'tag'
       # C8 deterministic artifact gate (see the linux leg): needs node_modules.
       - name: Committed artifacts match sources (C8 rebuild gate)
+        if: steps.classify.outputs.code == 'true' || github.ref_type == 'tag'
         run: node scripts/dev/verify-upstream-touchpoints.mjs
       - name: Assert lockfile not rewritten
+        if: steps.classify.outputs.code == 'true' || github.ref_type == 'tag'
         run: git diff --exit-code -- pnpm-lock.yaml
       - name: Type check (tsc + chamber host packages + gateway + runtime)
+        if: steps.classify.outputs.code == 'true' || github.ref_type == 'tag'
         run: |
           pnpm run typecheck
           pnpm run typecheck:host-graph
@@ -270,6 +340,7 @@ jobs:
       # Upstream design-token conformance (S1–S7) — see the linux leg. File-only
       # and platform-neutral, so it runs here too.
       - name: Upstream design-token conformance (S1–S7)
+        if: steps.classify.outputs.code == 'true' || github.ref_type == 'tag'
         run: pnpm run verify:styles
       # Windows leg consumes each package's platform manifest — `test:win32`
       # scripts in package.json are the single source of truth (structural
@@ -285,8 +356,11 @@ jobs:
       # all). This leg keeps the three named steps so a failure names the
       # owning package.
       - name: dsh-runtime test:win32 manifest
+        if: steps.classify.outputs.code == 'true' || github.ref_type == 'tag'
         run: pnpm --filter @dsh-chamber/dsh-runtime run test:win32
       - name: control-plane test:win32 manifest (real CIM/netstat/taskkill integration)
+        if: steps.classify.outputs.code == 'true' || github.ref_type == 'tag'
         run: pnpm --filter @dsh-chamber/control-plane run test:win32
       - name: desktop test:win32 manifest (real icacls)
+        if: steps.classify.outputs.code == 'true' || github.ref_type == 'tag'
         run: pnpm --filter @dsh-chamber/desktop run test:win32

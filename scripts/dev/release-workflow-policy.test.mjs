@@ -2,6 +2,14 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { compareReleaseVersions, releaseChannel } from './release-semver.mjs'
 
+
+/** Slice one job's text out of a workflow file (top-level job keys are 2-space indented). */
+function jobBlock(text, name) {
+  const match = text.match(new RegExp(`\\n  ${name}:\\n([\\s\\S]*?)(?=\\n  [a-z][a-z0-9-]*:\\n|$)`))
+  assert.ok(match, `workflow must define a ${name} job`)
+  return match[1]
+}
+
 const workflow = readFileSync(new URL('../../.github/workflows/release.yml', import.meta.url), 'utf8')
 const desktopPackage = JSON.parse(
   readFileSync(new URL('../../packages/desktop/package.json', import.meta.url), 'utf8'),
@@ -90,31 +98,119 @@ assert.match(workflow, /needs: \[create-release, build-gateway, build-macos, bui
 // tooling, the third-party-notices diff, the desktop packaging sub-builds, and
 // the upstream-touchpoint registry/C8 gate), so a release could ship a commit
 // that the push path would have rejected.
-const CI_ALIGNED_GATES = [
-  'pnpm run verify:styles',
-  'pnpm run test:upgrade-tools',
-  'node scripts/dev/gen-third-party-notices.mjs',
-  'pnpm --filter @dsh-chamber/desktop run build:control-plane',
-  'pnpm --filter @dsh-chamber/desktop run build:preload',
-  'pnpm --filter @dsh-chamber/desktop run build:host-graph-package',
-]
-for (const requiredGate of [
-  'pnpm run typecheck:gateway',
-  'pnpm run typecheck:runtime',
-  'pnpm run test:gateway',
-  'pnpm run test:runtime',
-  'pnpm run test:release-workflow',
-  'pnpm run test:cli',
-  'pnpm run test:control-plane',
-  'pnpm run test:open-in',
-  'pnpm run typecheck:connection',
-  ...CI_ALIGNED_GATES,
-]) {
+// ---------------------------------------------------------------- mechanical
+// alignment contract (2026-09)
+//
+// The release validation chain and the push chain used to be two hand-written
+// lists kept aligned by a hand-written list of gate names HERE. That is how a
+// gate added to ci.yml alone slips through: `test:gui-acceptance` did exactly
+// that. So the contract is now derived FROM ci.yml — every gate command the push
+// path runs must appear in release validation, or be listed in EXEMPT with the
+// reason and where its coverage lives instead.
+const ciWorkflow = readFileSync(new URL('../../.github/workflows/ci.yml', import.meta.url), 'utf8')
+const ciTestJob = jobBlock(ciWorkflow, 'test')
+
+/** Every gate command a job runs: `run:` blocks, inline or multi-line. */
+function gateCommands(jobText) {
+  const commands = new Set()
+  for (const raw of jobText.split('\n')) {
+    let line = raw.trim()
+    if (line === '' || line.startsWith('#')) continue
+    line = line.replace(/^-\s+/, '').replace(/^run:\s*/, '')
+    if (['|', '>', '|-', '>-'].includes(line)) continue
+    for (const [pattern, normalize] of [
+      [/^pnpm run ([A-Za-z0-9:_-]+)/, match => `pnpm run ${match[1]}`],
+      [/^pnpm --filter (\S+) run ([A-Za-z0-9:_-]+)/, match => `pnpm --filter ${match[1]} run ${match[2]}`],
+      [/^node (scripts\/[^\s]+\.mjs)/, match => `node ${match[1]}`],
+      [/^(git diff --exit-code -- [^\s]+)/, match => match[1]],
+    ]) {
+      const match = line.match(pattern)
+      if (match) { commands.add(normalize(match)); break }
+    }
+  }
+  return [...commands].sort()
+}
+
+/**
+ * Gates the push path runs that release validation deliberately does NOT: each
+ * entry names the reason and where the coverage lives instead. A gate that is
+ * simply missing is a failure, not an exemption.
+ */
+const EXEMPT = new Map([
+  ['pnpm run smoke', 'the release path has never wired smoke (ci.yml says so at its own step): a checkout carries no bundled dsh runtime, so it would only print SKIP. Real gap — a post-bundle smoke inside the build legs — is a separate change, not a silent exemption.'],
+  ['node scripts/dev/classify-ci-changes.mjs', 'push-path plumbing, not a gate: it only decides whether the expensive chain is worth running, and release validation always runs that chain in full, so there is nothing to classify.'],
+])
+
+const missingGates = gateCommands(ciTestJob).filter(gate => !validation.includes(gate) && !EXEMPT.has(gate))
+assert.deepEqual(
+  missingGates,
+  [],
+  `release validation must run every gate the push path runs (or list it in EXEMPT with a reason). Missing: ${missingGates.join(', ')}`,
+)
+// An exemption that stops being needed must be removed, not left to rot: the
+// gate is either back in the push path or now covered by validation.
+for (const gate of EXEMPT.keys()) {
   assert.ok(
-    validation.includes(requiredGate),
-    `release validation must include the CI gate: ${requiredGate}`,
+    gateCommands(ciTestJob).includes(gate),
+    `EXEMPT lists ${gate}, but the push path no longer runs it — drop the exemption`,
+  )
+  assert.ok(
+    !validation.includes(gate),
+    `EXEMPT lists ${gate}, but release validation runs it now — drop the exemption`,
   )
 }
+
+// ---------------------------------------------------------------- T1/T2/T3
+// The tag path must not run the push chain twice, but must not lose the leg
+// release.yml lacks either; the classifier must be frozen so widening the prose
+// allowlist (which SKIPS gates) cannot happen by accident.
+assert.match(
+  ciWorkflow,
+  /\n  test:\n(?:(?:[ \t]+#[^\n]*)?\n)*[ \t]+if:\s*github\.ref_type\s*!=\s*'tag'\n/,
+  'the linux push chain must step aside for tag pushes (release.yml validates those)',
+)
+const ciWindowsJob = jobBlock(ciWorkflow, 'test-windows')
+assert.ok(
+  !/^\s+if:\s*github\.ref_type\s*!=\s*'tag'\s*$/m.test(ciWindowsJob),
+  'the windows leg must KEEP running on tag pushes: release.yml has no win32-semantics leg',
+)
+for (const manifest of ['dsh-runtime', 'control-plane', 'desktop']) {
+  assert.ok(
+    ciWindowsJob.includes(`--filter @dsh-chamber/${manifest} run test:win32`),
+    `the windows leg must keep the ${manifest} test:win32 manifest`,
+  )
+}
+assert.match(
+  ciWorkflow,
+  /^concurrency:\n  group:\s*ci-\$\{\{\s*github\.ref\s*\}\}\n  cancel-in-progress:\s*\$\{\{\s*github\.event_name\s*==\s*'pull_request'\s*\}\}$/m,
+  'the push chain must serialize per ref and cancel ONLY pull-request runs: cancelling a branch push could drop the validation of a code commit when a prose-only push follows it (the classifier spares prose the heavy chain, so nothing would re-validate that commit)',
+)
+assert.ok(
+  classifiesHeavySteps(ciTestJob) >= 15,
+  'the heavy push chain must be gated by the change classifier (steps.classify.outputs.code)',
+)
+
+/** Count the heavy steps the classifier can skip. */
+function classifiesHeavySteps(jobText) {
+  return [...jobText.matchAll(/^\s+if:\s*steps\.classify\.outputs\.code\s*==\s*'true'\s*$/gm)].length
+}
+
+// The prose allowlist decides what SKIPS the heavy chain, so freeze it here:
+// widening it must be a deliberate edit to this assertion.
+const classifier = readFileSync(new URL('./classify-ci-changes.mjs', import.meta.url), 'utf8')
+const prefixes = classifier.match(/export const PROSE_ONLY_PREFIXES = \[([^\]]*)\]/)
+const files = classifier.match(/export const PROSE_ONLY_FILES = \[([^\]]*)\]/)
+assert.ok(prefixes && files, 'the classifier must export its prose allowlist')
+assert.deepEqual(
+  [...prefixes[1].matchAll(/'([^']+)'/g)].map(match => match[1]),
+  ['docs/'],
+  'prose prefixes decide which pushes skip gates — widen deliberately, in this test',
+)
+assert.deepEqual(
+  [...files[1].matchAll(/'([^']+)'/g)].map(match => match[1]),
+  ['README.md', 'AGENTS.md', 'CONTRIBUTING.md', 'CHANGELOG.md', 'LICENSE', 'SECURITY.md', 'CODE_OF_CONDUCT.md'],
+  'prose files decide which pushes skip gates — widen deliberately, in this test',
+)
 // The upstream-touchpoint registry gate runs in TWO passes, and both are
 // load-bearing: a substring check on the script path alone would pass with
 // either one missing, so pin the exact command lines AND their order relative
