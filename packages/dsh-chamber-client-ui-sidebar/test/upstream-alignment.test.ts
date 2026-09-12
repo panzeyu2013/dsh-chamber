@@ -506,3 +506,20 @@ function findInTree(dir: string, needle: string): string[] {
   walk(base)
   return hits
 }
+
+test('the test-only vendor loader maps through the WORKSPACE MEMBER path (CI regression)', () => {
+  // 2026-09-12 CI fix: mapping `@deepseek-ai/dsh-client-store` to the raw
+  // submodule path made the suite pass only where a stray
+  // `vendor/harness-checkout/node_modules` happened to exist; on CI the vendor
+  // source's bare `zustand`/`immer` imports could not resolve
+  // (ERR_MODULE_NOT_FOUND, run 34667229056). The workspace member directory
+  // (`vendor/harness-packages/@deepseek-ai/…`) is the one that carries the
+  // linked dependencies — the same form `packages/renderer/src/host-graph.ts`
+  // and the layout package's test already use. Comments are stripped first so
+  // the loader's own explanation of the wrong form cannot satisfy or break this.
+  const loader = stripComments(source('../test/vendor-loader.mjs'))
+  assert.match(loader, /vendor\/harness-packages\/@deepseek-ai\/dsh-client-store\/src\/index\.ts/,
+    'the loader must map the specifier to the workspace member path')
+  assert.doesNotMatch(loader, /harness-checkout\/packages\//,
+    'the raw submodule path has no linked dependencies and fails on CI')
+})

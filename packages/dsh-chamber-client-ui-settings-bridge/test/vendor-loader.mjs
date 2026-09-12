@@ -15,6 +15,12 @@
  * loader maps it to that same source path: the tests exercise the very function
  * the bundle compiles, never a stand-in. Same pattern as the sidebar package's
  * `test/vendor-loader.mjs` (2026-09-11 upstream-alignment A5). Never used by
+ *
+ * RESOLUTION ROOT: mapped through the WORKSPACE MEMBER path
+ * (`vendor/harness-packages/@deepseek-ai/…`), not the raw submodule path — only
+ * the member directory carries that vendor package's linked dependencies, which
+ * is what a bare import inside the vendor source needs to resolve (2026-09-12 CI
+ * fix; see the sidebar loader's header for the CI failure this class produced).
  * the build, the bundle, or the typecheck.
  */
 
@@ -24,7 +30,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 const SOURCES = new Map([
   [
     '@deepseek-ai/dsh-client-ui-slots',
-    '../../../vendor/harness-checkout/packages/client/ui-slots/src/index.ts',
+    '../../../vendor/harness-packages/@deepseek-ai/dsh-client-ui-slots/src/index.ts',
   ],
 ])
 

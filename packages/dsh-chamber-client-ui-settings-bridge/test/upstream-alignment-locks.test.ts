@@ -432,3 +432,15 @@ test('F4b: one gateway action is bounded by the controller it already owns', () 
   assert.ok(/signal: restartController\.signal/.test(runtime),
     'the gateway restart POST rides the same bounded controller as its readiness poll');
 });
+
+test('the test-only vendor loader maps through the WORKSPACE MEMBER path (CI regression)', () => {
+  // 2026-09-12 CI fix, same class as the sidebar package's lock: a bare import
+  // inside the mapped vendor source only resolves when the mapping goes through
+  // `vendor/harness-packages/@deepseek-ai/…` (the workspace member, which owns
+  // the linked dependencies), never the raw submodule path.
+  const loader = stripComments(readFileSync(new URL('../test/vendor-loader.mjs', import.meta.url), 'utf8'))
+  assert.match(loader, /vendor\/harness-packages\/@deepseek-ai\/dsh-client-ui-slots\/src\/index\.ts/,
+    'the loader must map the specifier to the workspace member path')
+  assert.doesNotMatch(loader, /harness-checkout\/packages\//,
+    'the raw submodule path has no linked dependencies and fails on CI')
+})
