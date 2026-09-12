@@ -60,8 +60,7 @@ decision value and is not already owned by a design document or `CHANGELOG.md`.
   to exist for a beta (`release.yml` extracts it as the release body), but its content obeys the same
   rule. The internal path taken to get there — intermediate dsh pins, beta-to-beta deltas, batch/round
   codenames, gate counts, lockfile-regeneration notes, verification reports — never goes in: it belongs
-  to git history, the per-tag registry in `docs/checklists/upstream-touchpoints.md`, and
-  `docs/progress/STATUS.md`.
+  to git history and, while still open, `docs/progress/STATUS.md`.
 
 ### Before a dsh (upstream) upgrade
 
@@ -70,6 +69,12 @@ decision value and is not already owned by a design document or `CHANGELOG.md`.
 - `docs/checklists/upstream-touchpoints.md` and `scripts/dev/verify-upstream-touchpoints.mjs`
   (gates C1–C10, run in CI) are two sides of one registry — a change to either must be mirrored in
   the other, and the pin-upgrade entry point reminds you of the freshness gate.
+- `docs/checklists/*` are **procedure only**: no version values — no pinned tags, commits, current
+  baseline snapshots or per-tag delta logs — belong in them. The current anchor's single sources are
+  `harness.commit` (source line), `packages/desktop/vendor/dsh/pnpm-lock.yaml` (runtime line) and each
+  fork's `package.json`; a tag's upgrade narrative goes to the `CHANGELOG.md` release section, and
+  still-open deviations to `docs/progress/STATUS.md`. `upstream-touchpoints.md` keeps only the
+  structural registry (file classifications, contract mirrors, artifacts, gate criteria).
 
 ### Before a pull request
 

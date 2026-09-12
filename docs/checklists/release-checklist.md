@@ -19,7 +19,7 @@ CI:    §7b dry_run 先行（新路径必须验证过一次）→ §7c 正式 ta
 ## 0. 版本与内容确认
 
 - [ ] 目标版本号只允许 canonical stable `X.Y.Z` 或 beta `X.Y.Z-beta.N`（如
-      `0.2.0-beta.3`）；`alpha`、`rc` 与其他 prerelease 必须 fail closed；changelog
+      `X.Y.Z-beta.N`）；`alpha`、`rc` 与其他 prerelease 必须 fail closed；changelog
       无 `[Unreleased]` 待收尾条目。
 - [ ] 发布内容（功能/迁移/修复）已全部合入发布分支且本地无未提交改动。
 - [ ] 自上次发布以来**修改过任何 workflow / 脚本路径 / action SHA** → 先安排
@@ -31,11 +31,11 @@ CI:    §7b dry_run 先行（新路径必须验证过一次）→ §7c 正式 ta
       （数据驱动，见 §1.5；release.yml 复用同一 preflight 扫描器硬断言根 +
       全部非 fork chamber 包，新增包自动纳入）。
 - [ ] fork 副本例外：`@deepseek-ai/dsh-client-connection` / `dsh-client-web` /
-      `dsh-api-gateway` 版本 = 上游基线版本（当前 `0.1.5-rc.1`），**不随发布
+      `dsh-api-gateway` 版本 = 上游基线版本，**不随发布
       版本**；release.yml
       同样经 preflight 硬断言该基线。
 - [ ] **安装脚本 dsh 版本常量**：`scripts/install-gateway.sh` 内置的
-      `DSH_CHAMBER_DSH_VERSION`（当前 `0.1.5-rc.1`）与
+      `DSH_CHAMBER_DSH_VERSION` 与
       `.github/workflows/release.yml` 的 `env.DSH_CHAMBER_DSH_VERSION`、
       `packages/gateway/package.json` 的 `dshAnchorVersion` 三者一致
       ——dsh 运行时版本变更时必须同步改脚本常量与 gateway 包字段
@@ -79,7 +79,7 @@ CI:    §7b dry_run 先行（新路径必须验证过一次）→ §7c 正式 ta
 - [ ] 类型检查全套：`typecheck` + `typecheck:sidebar/layout/connections/settings-bridge/git/open-in/client-web/connection/host-graph/host-git`
 - [ ] **旧版本号残留扫描**：`grep -rn "<上一发布版本>" packages/*/test* packages/*/*.test.ts packages/*/scripts/*.test.mjs`
       为空（测试硬编码旧 shellVersion 会在 bump 后误触发 F4 壳升级路径；`after-pack-adhoc-sign.test.mjs`
-      的版本钉曾因未纳入扫描在 0.2.0 失配）。
+      的版本钉曾因未纳入扫描而失配）。
 
 ## 4. 构建
 
