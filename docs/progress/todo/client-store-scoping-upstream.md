@@ -12,7 +12,7 @@ dsh 前端壳（各自独立 cordis ctx / store / React 树，经
 
 上游的"当前会话"选择是**页面级单键持久化**：
 
-- `@deepseek-ai/dsh-api-session-controller`（pin `0.1.5-rc.1`，客户端半）
+- `@deepseek-ai/dsh-api-session-controller`（pin `0.1.5-rc.2`，客户端半）
   `SessionRuntime` 构造里 `createSnapshotStore({}, { persist: { name:
   'dsh.sessions.current' } })`（`packages/api/session-controller/src/client/sessions/service.ts:225-228`）；
 - `@deepseek-ai/dsh-client-store` 的 `attachPersistence`
@@ -52,7 +52,7 @@ dsh 前端壳（各自独立 cordis ctx / store / React 树，经
 `dsh-client-store` 已经支持 scope：持久化键带 scope 后缀的逻辑在
 `defineStore.create(scopeKey)` 里——
 `persistKey = scopeKey === undefined ? decl.persist : \`${decl.persist}.${scopeKey}\``
-（vendor 树内 `packages/client/store/src/index.ts:221-224`，pin `183f08e9` = `dsh-v0.1.5-rc.1`；
+（vendor 树内 `packages/client/store/src/index.ts:221-224`，pin `fb2c4b9e` = `dsh-v0.1.5-rc.2`；
 上游把它从 `packages/client/runtime/src/client/contract/store.ts` 改名迁到此处，
 `packages/client/runtime` 整包其后已被删除）。缺的只是**调用点传 scope**：
 `createSnapshotStore` 本身没有 scope 参数（同上 `:103-105`），

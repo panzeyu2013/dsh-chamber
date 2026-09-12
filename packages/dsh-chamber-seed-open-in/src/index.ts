@@ -2,7 +2,7 @@
  * Per-instance open-in host gateway (design 20 §6, fork & supersede).
  *
  * WHAT THIS IS — the chamber fork of upstream's open-in host half
- * (`@deepseek-ai/dsh-host-open-in-app`, pin 183f08e9 = dsh-v0.1.5-rc.1),
+ * (`@deepseek-ai/dsh-host-open-in-app`, pin fb2c4b9e = dsh-v0.1.5-rc.2),
  * running INSIDE each managed local dsh instance as a seeded host package. It
  * answers the local application catalog, the applications' real bundle icons
  * and the launch of one directory in one installed application, so the chamber

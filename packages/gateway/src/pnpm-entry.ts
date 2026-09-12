@@ -5,7 +5,7 @@
  * Why this exists: the managed `dsh plugin` CLI is a thin pnpm forwarder —
  * upstream spawns a literal `pnpm` from PATH and answers 127
  * ("pnpm not found on PATH") when the server has none
- * (`apps/cli/src/plugin.ts`, verified against the pinned dsh-v0.1.5-rc.1). The
+ * (`apps/cli/src/plugin.ts`, verified against the pinned dsh-v0.1.5-rc.2). The
  * gateway ships the pinned pnpm as a bare `dist/pnpm/bin/pnpm.cjs` script (used
  * by the runtime installer through {@link resolvePnpmEntry}), which is not an
  * executable named `pnpm` and therefore invisible to a PATH lookup. A gateway

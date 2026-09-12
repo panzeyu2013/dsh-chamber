@@ -1268,7 +1268,7 @@ settings-bridge/git/open-in）依旧不注入。机制上无需新能力：控�
 > 文件**（MIT 许可仅保证可阅读，不作为代码来源），只吸收以下设计决策后按
 > chamber 基座完整重写。**重写输入（chamber 自身特性，社区单实例插件均未
 > 处理过）**：
-> 1. **dsh 基线 v0.1.5-rc.1**（harness pin 183f08e9c6dd；`dsh-client-web` fork
+> 1. **dsh 基线 v0.1.5-rc.2**（harness pin fb2c4b9e698e；`dsh-client-web` fork
 >    提供 `__ModuleLoader__`、`extraRows`、异步 dispose 缝）：插件按 chamber
 >    现有 `dsh-chamber-client-ui-*` 模板与构建体系写，不采用任何社区的构建
 >    形态（tsdown/内联 CSS 等）；
@@ -1321,7 +1321,7 @@ append-only 无删除方法），走 dsh 实例自身 host 插件（`ctx.inject(
 （`data-mobile-nav="…"` 自有标记 + `[class$="_…"]`）。**chamber 走第三条路且
 更稳**：已 fork `dsh-client-web` 与 `ui-layout`（AGENTS.md 允许改源码的 chamber
 包），可在 fork 内直接加 `data-*` 钩子，不猜选择器；版本随 dsh 基线
-（v0.1.5-rc.1，harness pin 183f08e9c6dd）对齐 + 回归测试。断点锚定官方
+（v0.1.5-rc.2，harness pin fb2c4b9e698e）对齐 + 回归测试。断点锚定官方
 `SIDEBAR_AUTO_COLLAPSE`（<1024px）为主断点（mobile-shell 同款），768px 为
 手机档（mobile-adapt 同款），420/359px 微调可选。**档位表第三条**：宽度无关的
 **chrome 档** `(pointer: coarse) and (hover: none)`，
@@ -1332,7 +1332,7 @@ append-only 无删除方法），走 dsh 实例自身 host 插件（`ctx.inject(
 provider 行一条；2026-09-11 upstream-alignment 后只剩这一条——原先用于
 `.cards` 的那条已删除）：实例 bundle 的 CSS Modules 生产命名是 `[hash]_[local]`（上游
 `vendor/harness-checkout/packages/client/tsdown.client.ts:517` 的
-`cssModules: { pattern: '[hash]_[local]' }`；0.1.5-rc.1 产物实测
+`cssModules: { pattern: '[hash]_[local]' }`；0.1.5-rc.1 产物实测（该配置文件 rc.2 未改）
 `JObwrW_row`/`zGbnIq_modelRow`），局部名只在**末尾或后随空格**出现，
 故只能用 `:is([class$="_<local>"], [class*="_<local> "])`；`_<local>_<hash>_<idx>`
 是 **chamber 自建壳（Vite 默认 `generateScopedName`）**的命名，mobile 插件只在
