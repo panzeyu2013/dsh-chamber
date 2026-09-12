@@ -28,5 +28,12 @@
 # confirm is SUSPENDED while a reported failure is on screen (the in-dialog
 # `role="alert"` is then the only surviving explanation, `SidebarRoot.tsx`'s effect reads
 # `deleteError`). Both sides re-read against that bullet and rehashed.
-README.md: ddb8900781102785a7c3a1f5053ba6e684f1a8024d949eff327ef5b5d83cd57c
-README.zh.md: 3f080a926c00833ae62792d021ea10850d0e2a0810b8d2b9db212e9900591b54
+# Re-recorded again (2026-09 review round, the completed-mark decision; both sides
+# carried together): the status bullet now states that completed-but-unread renders
+# the chamber brand-blue `.stateCompleted` dot again and WHY the official `StateDot`
+# `done` tone is not used — that tone's `--dsw-alias-state-success-primary` is the
+# source header's connection-dot token, so "session finished, unread" and "server
+# connected" painted the same green. The same single claim was re-read on the zh and
+# en sides before rehashing both. Nothing else changed.
+README.md: d20dca3a255cea70ba5e73182f32e8fab611dd6d9489d8d9aa1187783592e39a
+README.zh.md: f8a842b27a3adc15bdd9888efc8452ea87afdfb07936ee5f1548f3a182c2f95b

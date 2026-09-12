@@ -1018,7 +1018,10 @@ workspace follow `{type:'archived'}` 立即到达客户端（`api/workspace-cont
 16. **desktop 激活恒全量 vs seed 产物门**为设计内取舍（构建期 preflight 兜底），
     不修；
 17. **归档管理器 a11y/视觉残余**（模块级偏差，视觉腿复核）：行删除钮 20px 命中
-    < WCAG 2.2 2.5.8 的 24px（模块图标按钮语言全局标准，为语言合并的结果）；
+    < WCAG 2.2 2.5.8 的 24px（模块图标按钮语言全局标准，为语言合并的结果；
+    同一语言下的 git 未注册 worktree 行内动作也在 2026-09 batch 1 的 G1 收敛到
+    20px——`packages/dsh-chamber-client-ui-git/src/client/SidebarGit.module.css`
+    的 `.unregisteredAction`，同一偏差登记，见 design 08 §3.4）；
     武装期行 dim 0.6 × trash .42 ≈ 0.25 复合（token 对比度仍 ≥ AA——
     冻结核的意图反馈）；9% wash 强度与深浅主题可读性；风险条 SR 播报顺序
     （NVDA/VO）；窄卡换行与矮视口裁剪（<~480-540px）；行 aria 标签在重复/

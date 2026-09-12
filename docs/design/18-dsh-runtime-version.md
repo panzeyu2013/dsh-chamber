@@ -454,8 +454,10 @@ chamber-settings.json，非秘密）：
   `.generalHint`（12px / tertiary）。
 - 字段行 `.generalRow` + `.runtimeField`：列向 gap 6px，field label
   `.generalFieldLabel` 14px / 500；下拉 `.runtimeField`（radius 8px / bg layer-1 /
-  12px，focus 时 border brand）。**下拉文本字号不强统一**：服务器下拉 13px/600
-  为导航选择器强调，运行时/表单字段 12px/400 为紧凑行——只统一箭头词汇。
+  12px，focus 时 border brand）。**下拉文本字号不强统一**：服务器下拉**触发器** 13px/600
+  为导航选择器强调（菜单行本身在 2026-09 batch 1 的 E4 对齐官方 dense item：
+  14px/22px、min-height 34px、r10），运行时/表单字段 12px/400 为紧凑行——
+  只统一箭头词汇。
 - 下拉箭头统一 `IconChevronDownOutline14`（`.runtimeSelectChevron`，
   appearance:none + 自定义 chevron，右缘与文字左缘对称；文字↔箭头净间隙 ≥6px）。
 - 动作按钮：主按钮（更新到/切换到 vY）与次按钮（恢复内建 / 重启 dsh / 清理版本 /

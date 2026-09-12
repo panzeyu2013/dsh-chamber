@@ -287,9 +287,13 @@ slot，不由 renderer App 直接 import 领域组件。
 ### 3.4 未注册工作树与孤儿 workspace（Plan A：显示全部 worktree）
 
 - **未注册工作树按仓库分散到 repo 组末尾**（名称=目录 basename、与派生
-  workspace 一致的行样式：分支图标 + 名称 + 健康徽标；非 ready 行的状态胶囊是
+  workspace 一致的行样式：26px 行 / r8 / 名称 14px-600-次级色 + 20px 行内动作钮
+  ——2026-09 batch 1 G1 收口，其中 20px 命中 < WCAG 2.2 2.5.8 的 24px 属模块
+  图标按钮语言的既有权衡，与归档管理器同一登记，见 design 24 §12 第 17 条；
+  行内动作钮命中区见 `SidebarGit.module.css` 的 `.unregisteredAction`：分支图标 +
+  名称 + 健康徽标；非 ready 行的状态胶囊是
   官方 `Tag tone="warning"`（`SidebarWorkspaceGitLine.tsx:208`，官方 11px/17px
-  胶囊词汇，本模块只保留占位类 `SidebarGit.module.css:69`）——原先手写胶囊的中性
+  胶囊词汇，本模块只保留占位类 `.unregisteredStatus`）——原先手写胶囊的中性
   填充与行自身 hover 填充同值，指针悬停时整块消失，2026-09-11 upstream-alignment），
   无已注册 workspace 的仓库在列表末尾渲染其未注册块；数据经 flags 存储的每来源
   仓库布局

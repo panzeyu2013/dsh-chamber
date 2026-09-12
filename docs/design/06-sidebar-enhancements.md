@@ -153,7 +153,9 @@
   表头行本身**——标题/orphan 徽标/计数/git occupant/悬停动作原位替换为
   输入框 + 保存/取消，行首折叠钮与图标槽保留（行身份与位置不变，
   **不**在表头下方追加输入行，列表不因进入编辑而插入新行；编辑期行高
-  放宽（进入/退出编辑时下方内容 ±6px 一次性位移）、折叠字形 hover 切换
+  放宽（2026-09 batch 1 A11 后输入框为官方行内 14/20 + `padding: 0 2px`，
+  即 21px 盒：编辑期表头只长 ≈1px，不再是此前的 ±6px（按旧 25px 盒实测为 +5px）；进入/退出编辑时下方内容
+  仍是一次性、单向位移）、折叠字形 hover 切换
   抑制、悬停卡片禁用）；因此**折叠态 workspace 的 kebab
   重命名同样可见**（编辑框随表头渲染，不依赖展开），rename/delete/拖拽
   失败的 inline 错误行也不受折叠门控。会话行重命名保持整行替换为编辑行
@@ -301,8 +303,8 @@
 - `ctx.sessions.list`（ObservableSnapshot）行字段：`running`、`completed?`、
   `pendingInteraction?: 'approval'|'plan-review'|'question'`、`blank`、
   `updatedAt`；快照含 `current?: string`（当前会话 id）。
-  （「蓝点」是这条完成未读事实的既有叫法；它渲染出来的是官方 `StateDot done`
-  绿点，见 §4.3——名称沿用，颜色不是。）
+  （「蓝点」是这条完成未读事实的既有叫法；它渲染出来的是 §4.3 的 chamber
+  品牌蓝点——名称与颜色都回到蓝。）
 - 每个实例 boot = 独立 ctx、独立 store；侧边栏插件在每个 ctx 都挂载，
   即每个来源都有一个可订阅自身运行时的事实生产者。
 - **插件 = 投影**：上报端只做
@@ -370,11 +372,22 @@
   - **子 agent 运行中**：同一 ongoing 圆环，tooltip/aria
     显示「N 个子代理运行中」——父回合已结束但后台子 agent 仍在工作时
     会话依旧"进行中"，**绝不在这个阶段亮起完成蓝点**（§4.5）；
-  - 运行结束未读（completed）：官方 `StateDot state="done"` 圆点
-    （10px；绿色 = `--dsw-alias-state-success-primary`，vendor
-    `ui-primitives/StateDot.module.css` `[data-state='done']`，tooltip
-    "已完成"）——2026-09-11 upstream-alignment T10：此前那枚手绘 6px 品牌蓝点
-    与 ongoing 环同色，读起来像第二个"进行中"标记；列表行与待办区共用同一标记。
+  - 运行结束未读（completed）：**chamber 品牌蓝点**（`.stateCompleted`，6px 实心
+    圆点、`background: var(--dsw-static-deepseek-450)`，居中于 10px 状态槽；
+    tooltip/aria "已完成"）——列表行与待办条带共用这一个类。**这是与官方的
+    有意偏差**：官方 `StateDot state="done"`（10px，success 绿
+    `--dsw-alias-state-success-primary` = `--dsw-static-green-500` `#22C55E`）
+    的取色与**来源头连接状态绿点同一 token**（`sidebar-chamber.module.css`
+    `.statusOk`），同一侧栏里"会话完成未读"与"服务器已连接"会同色，
+    故 2026-09 用户裁决**不用官方 done 色**。与运行中的关系：二者同属品牌蓝
+    （ongoing 环的 `--dsh-state-ongoing` 也是 `--dsw-static-deepseek-450`），
+    但**静态 6px 实心点 vs 官方 10px 八格动画追逐环**在形状与动效上可区分，
+    且都不会被误读为头部的绿/红连接点。
+    **版本沿革**：≤0.2.4 自绘 6px 品牌蓝点 → 0.3.0-beta.1（2026-09-12，
+    upstream-alignment T10）换成官方 `done` 绿点 → 2026-09 用户裁决**回到品牌
+    蓝点**（本轮）。换色只动外观：武装/解除它的事实（完成未读）与通知边沿
+    逻辑始终未变；`test/upstream-alignment.test.ts` 的 T10 锁按本裁决改钉
+    （蓝点必须存在、`StateDot state="done"` 不得回归、运行环仍是官方 ongoing）。
   - **活动定时任务标记（2026-09-11 upstream-alignment T7）**：行标题之后渲染官方
     `ActiveScheduleIndicator` 同形标记（16px 闹钟字形 + `role="img"`，可访问名与
     title 都是本地化 `schedule.active`，行本身仍是唯一动作），事实 = 该会话
@@ -390,8 +403,15 @@
     `plan-review` = 清单图标（business 蓝）、`approval` = 警示三角图标
     （warn 琥珀）。tooltip/aria 文案沿用
     `status.waitingAnswer/planReview/waitingApproval`。
+    **定稿（2026-09 用户核查裁决）**：官方对三种 pending 一律渲染
+    `StateDot state="warning"`（10px 琥珀圆点，**形状不区分类别**，只有悬停卡与
+    读屏文本区分）；chamber **保留**上面的图标徽标形态，不随上游对齐而改。
+    同批确认：ongoing（运行中/子代理进行中）与官方**同组件、同默认 10px**；
+    completed 按上面的裁决用 chamber 品牌蓝点（与官方 `done` 绿点是有意偏差，
+    理由 = 与来源头连接绿点同 token）——本节即这两条裁决的记录。
   - **配色**：运行 = dsh 标准 ongoing 蓝（`--dsw-static-deepseek-450`）；
-    completed = 官方 `StateDot done` 的 success 绿（见上）；**pending 徽标**——
+    completed = 同一品牌蓝的 6px 实心点（见上，**不取**官方 `done` 的 success
+    绿——它与来源头 `.statusOk` 同色）；**pending 徽标**——
     business（蓝）/warn（琥珀）两个 state
     token 表达"等待回答/决策"与"等待批准"两级语义（pending 行有意不取全蓝）。
     wire running 与通道事实并存：running 点
@@ -610,8 +630,9 @@ await 中），我们单点只显示子 agent 计数文案，官方同快照显�
   `upstream-alignment.test.ts` 以普通 `node test/…` 运行）钉住本批的对齐面——归档
   动词只在行菜单、全包无原生 confirm、workspace 删除是官方 `Modal` chrome（含对话框内
   `role="alert"` 失败行与「仅成功才关闭」）、**同一时刻至多一层 chamber Modal**（见下）、
-  completed 走官方
-  `StateDot done`、行窗口是双向 disclosure、行菜单 `closeOnPointerLeave` 且非
+  completed 走 chamber
+  品牌蓝点（2026-09 裁决，官方 `done` 绿点因与来源头连接点同 token 被否）、
+  行窗口是双向 disclosure、行菜单 `closeOnPointerLeave` 且非
   `compact`、`{name}` 参数化可访问名、活动定时任务标记的位置、`data-git-action`
   属性钩子（`:disabled` 在方括号之外）；行为面单测在函数旁边
   （`test/session-row-window.test.ts` 的 disclosure 窗口、`test/panel-source.test.ts`
@@ -682,7 +703,12 @@ await 中），我们单点只显示子 agent 计数文案，官方同快照显�
   动作照常可用；与同路径的合成组相遇时**原位替换**后者（绝不重复渲染同一目录）。
   来源挂载壳的权威 push 列出该 id（或同路径真实行）后，回声行由权威行接管。
 - **排版**：字号下限 12px；会话标题 13/18——官方行 14px，13/18 是 chamber
-  多来源密度的刻意折中；来源身份点 8px（**仅 rail**——来源头
+  多来源密度的刻意折中；**墨色照官方**（2026-09 batch 1 A1）：**会话行标题**常驻
+  `label-primary`（此前静止次级、hover 才转主色——官方 `.title` 从不降级；
+  待办条带行同期跟随，§8）。**搜索结果标题同期跟随**（2026-09 batch 1 A1
+  follow-up：`.searchResultTitle` 也改为常驻 `label-primary` 并删掉 hover 覆盖——
+  结果行承载的同样是会话标题）；仍归 §1.2/B2 待决的只剩**字号与结果行几何**
+  （12/18 与结果行内距），墨色不再是例外；来源身份点 8px（**仅 rail**——来源头
   身份圆点已移除，见 §7 来源 accent 条），session 行首为
   固定 10px 状态槽（常态空）。
 - **行几何**：圆角 8px（来源头/workspace 头/会话行一致）；密度为多来源
@@ -697,7 +723,11 @@ await 中），我们单点只显示子 agent 计数文案，官方同快照显�
   显示；全部断开时保留各来源分组、空态提示为列表底部一行；
   断连即清空该来源搜索状态（重连从干净状态开始）。
 - **行内操作（图标化 + 悬停替换）**：workspace 组头 = `+`（新建会话）+
-  三点竖排 kebab 菜单（重命名/删除，`Menu` primitive portal 模式），
+  官方 16px 横排三点 kebab 菜单（重命名/删除，`Menu` primitive portal 模式；
+  **2026-09 batch 1 A8 修订**：此前把 primitives 的横排省略号旋转 90° 成竖排
+  14px，现按官方原样渲染 16px 横排，`.actionIcon` 20×20 命中盒不变；
+  同簇的 `+` 同期由 14px 提到官方 16px，动作簇间距同步为官方
+  `Rows .rowActions` 的 12px，A8b），
   悬停时替换会话数徽标；session 行 = **三点 kebab 菜单三项（重命名/分叉/归档，
   归档不再有独立图标按钮）**（悬停替换行尾状态槽；**session 不显示相对时间**）；
   **添加工作区**
@@ -714,8 +744,12 @@ await 中），我们单点只显示子 agent 计数文案，官方同快照显�
   `compact`**（上游行菜单两者都不设、`ViewOptionsMenu` 用 `dense`，
   vendor ui-workspace `Rows.tsx:174,487` / `WorkspaceBrowser.tsx:192-197`）；
   排序菜单改用 `dense` 与官方 ViewOptionsMenu 同形。
-- **会话行窗口与展开条（2026-09-11 upstream-alignment T11）**：每个 workspace 只
-  展开前 N 行（`sessionRowWindow`），其余由展开条揭示。展开条是**双向
+- **会话行窗口与展开条（2026-09-11 upstream-alignment T11；2026-09 batch 1 A10
+  补几何）**：每个 workspace 只
+  展开前 N 行（`sessionRowWindow`），其余由展开条揭示。展开条采用官方
+  `sessionOverflowButton` 的几何：28px 高 / r8 / `0 12px 0 26px`（左内距取
+  chamber 自己的会话标题列 26px，官方为 28px）/ 12px 字 / hover 停留次级色；
+  此前是 3px 4px 内距、无高度无圆角的纯文本行。展开条是**双向
   disclosure**：`aria-expanded` 报告状态，展开后同一个控件给出
   `sessions.collapse`（收起），隐藏计数由与展开位无关的
   `sessionRowDisclosure` 窗口算出——若按展开后的 hiddenCount 决定去留，点开一次
@@ -752,12 +786,12 @@ await 中），我们单点只显示子 agent 计数文案，官方同快照显�
   非交互、保留布局位，`derive.ts armBlankGhost` + `.sessionGhost`）——双击
   窗口内列表绝不位移。
 - **会话状态指示**：固定 10px 行尾状态槽——常态空、
-  运行中 = 官方 `StateDot` ongoing 蓝圆环、运行结束未读 = 官方
-  `StateDot state="done"` success 绿圆点（2026-09-11 upstream-alignment T10，
-  手绘品牌蓝点已退役）；
+  运行中 = 官方 `StateDot` ongoing 蓝圆环、运行结束未读 = **chamber 品牌蓝点**
+   `.stateCompleted`（6px 实心；2026-09 用户裁决回到蓝点，官方 `done` 绿点因
+   与来源头连接绿点同 token 被否——沿革与理由见 §4.3）；
   **待交互（pending）= 14px 图标徽标**（问号/清单/警示三角）——几何与配色
   契约见 §4.3，本节只定稿 token：运行 = `--dsw-static-deepseek-450`、
-  completed = `--dsw-alias-state-success-primary`（官方 StateDot done 的取色），
+  completed = `--dsw-static-deepseek-450`（同一品牌蓝，形状区分），
   pending 徽标用
   `--dsw-alias-state-{business,warn}-primary`；
   状态槽非身份标记（来源身份由来源头折叠字形 accent + 激活左内边线 +
@@ -861,18 +895,24 @@ onRequest`），**默认全开**——被动呈现（空时零占用），区别
 **行列定格**（状态槽一律在行尾，与普通会话行同列；左右缩进与会话行对齐；
 代码注释与本节同步）：
 
+- **行几何（2026-09 batch 1 C2）**：行高 26px + 2px 间距（间距由 `.todoRows` 的
+  flex gap 提供，行自身 `margin: 0`；「还有 N 项」是该容器之外的兄弟节点，用自身
+  2px 外边距接同一节奏）、计数 pill 12px——
+  与会话行同节距、同 12px 字号下限（§7 排版条），兑现下一条的"同列同像素带"。
 - **行序** = 行首来源点（多来源才渲染点；空槽恒占位，标题列不跳动，与来源头字形列
   同列）→ 标题 → **行尾状态槽**：直接复用会话行的 `.sessionStateSlot` /
-  `.sessionStateSlotPending`（10/14px 槽）与官方 `StateDot`
-  （`state="ongoing"`/`state="done"`，2026-09-11 起 completed 不再用本地
-  `.stateCompleted` 类——该类已从样式表删除）与 `.statePending*` 标记，
+  `.sessionStateSlotPending`（10/14px 槽）与标记类——
+  `StateDot state="ongoing"`（运行中/子代理）、`.stateCompleted`
+  （完成未读的品牌蓝点；2026-09 用户裁决恢复，官方 `done` 绿点因与来源头连接点
+  同 token 被否，见 §4.3）与 `.statePending*` 标记，
   蓝点/徽章与会话行行尾**同列同像素带**（两行容器共享同一右缘与 8px 滚动条槽位，
   任意宽度成立；展开溢出时待办区自身滚动条带经 `.todoRows` 的 −8/+8 外扩保持在
   内容右侧，不压尾槽）。
 - **文字列** = 40px（来源标签列）：表头标题、「还有 N 项」与行标题同列；表头计数
   pill 右缘与行尾状态槽/工作区计数同列。
-- **墨色** = 会话行纪律：静止次级、hover 主色；行与「还有 N 项」按钮均带 brand
-  focus-visible 自绘环（§7）。
+- **墨色** = 会话行纪律：**静止即主色**（2026-09 batch 1 A1 起会话行标题常驻
+  `label-primary`，条带行同期跟随；hover 只画行底色）；行与「还有 N 项」按钮均带
+  brand focus-visible 自绘环（§7）。
 - **a11y 取舍（记录）**：装饰性槽位 aria-hidden；可访问名 = 状态 · 标题 · 来源
   （region 名带条目数）；tooltip = 完整标题 + 状态 · 来源 · 工作区——截断标题由此
   可复现（vendor tooltip 无 aria-describedby，hover 卡片不进读屏，不重复播报）。

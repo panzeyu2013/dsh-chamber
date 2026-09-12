@@ -38,9 +38,12 @@ chamber 自研侧边栏插件（设计 05 §2）：拷贝官方 ui-sidebar 外�
 - 已连接来源的聚合拉取失败时，以错误文本代替 workspace 列表呈现——绝不
   冒充"无工作区"；未连接来源只显示分组头 + 状态提示；全部来源断开时显示
   空态提示。
-- 会话行带**运行指示点**（wire `sessions.list.running`），完成未读用官方
-  `StateDot` 的 `done` 色——与固定待办条带同一枚标记（此前自绘的 6px 品牌蓝点
-  读作第二个「进行中」，已删除，2026-09-11 upstream-alignment T10）；不渲染
+- 会话行带**运行指示点**（wire `sessions.list.running`），完成未读用**chamber
+  品牌蓝点**（`.stateCompleted`，6px 实心）——与固定待办条带同一枚标记，**不取**
+  官方 `StateDot` 的 `done` 绿：该色与来源头连接状态绿点同 token
+  （`--dsw-alias-state-success-primary`），"会话完成未读"与"服务器已连接"会同色
+  （2026-09 用户裁决；沿革：≤0.2.4 品牌蓝点 → 0.3.0-beta.1 T10 官方绿点 →
+  本轮回到蓝点，06 §4.3）；不渲染
   相对时间单元格（06 §4.3——`relativeTimeBucket` 仅保留为共享工具）。行所属
   会话的 `schedule` 投影非空时，标题与尾随单元格之间渲染官方 active-Schedule
   标记（16px 闹钟字形、`role="img"`、可访问名 `schedule.active`），搜索结果行

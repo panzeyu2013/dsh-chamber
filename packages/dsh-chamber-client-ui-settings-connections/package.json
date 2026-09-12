@@ -1,6 +1,6 @@
 {
   "name": "@dsh-chamber/dsh-chamber-client-ui-settings-connections",
-  "description": "Chamber connections settings section plugin (design 05 \u00a75): local instance card (health / connections row / host logs) + remote host management (registry CRUD, connect/disconnect, on-demand systemd control, ring-buffer logs)",
+  "description": "Chamber connections settings section plugin (design 05 §5): local instance card (health / connections row / host logs) + remote host management (registry CRUD, connect/disconnect, on-demand systemd control, ring-buffer logs)",
   "version": "0.3.0-beta.1",
   "publishConfig": {
     "access": "public"
@@ -60,6 +60,6 @@
     "lib/types/**/*.d.ts"
   ],
   "scripts": {
-    "test": "node test/plugin-diagnostic.test.ts && node test/plugin-inventory.test.ts && node test/plugin-inventory-text.test.ts && node test/chamber-rows.test.ts && node test/writer-diagnosis.test.ts && node test/action-hint.test.ts && node test/plugin-diff.test.ts && node test/connection-form.test.ts && node test/save-host.test.ts && node test/host-validation.test.ts && node test/control-plane.test.ts && node test/managed-restart.test.ts && node test/runtime-gate.test.ts && node test/runtime-gate-wiring.test.ts && node test/installed-fence-wiring.test.ts && node test/gateway-start-poll.test.ts && node test/chamber-seed-drift.test.ts && node test/plugin-model.test.ts"
+    "test": "node test/plugin-diagnostic.test.ts && node test/plugin-inventory.test.ts && node test/plugin-inventory-text.test.ts && node test/chamber-rows.test.ts && node test/writer-diagnosis.test.ts && node test/action-hint.test.ts && node test/plugin-diff.test.ts && node test/connection-form.test.ts && node test/save-host.test.ts && node test/host-validation.test.ts && node test/control-plane.test.ts && node test/managed-restart.test.ts && node test/runtime-gate.test.ts && node test/runtime-gate-wiring.test.ts && node test/installed-fence-wiring.test.ts && node test/gateway-start-poll.test.ts && node test/chamber-seed-drift.test.ts && node test/plugin-model.test.ts && node test/batch1-visual-locks.test.ts"
   }
 }

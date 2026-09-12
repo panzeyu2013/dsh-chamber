@@ -272,21 +272,37 @@ test('T5: the row-action accessible names are {name}-parameterized and used', ()
   assert.equal(locales.includes("'action.delete':"), false, 'the dead generic action.delete key must be gone')
 })
 
-test('T10: completed rides the official StateDot `done` tone, no bespoke dot', () => {
+test('T10 (2026-09 amended): completed is the chamber blue dot, running keeps the official ring', () => {
+  // The 2026-09-11 alignment round swapped this mark to the official
+  // `StateDot state="done"`; the 2026-09 user decision RESTORED the pre-T10
+  // chamber dot — `done`'s `--dsw-alias-state-success-primary` green is the
+  // very token of the source header's own connection dot (`.statusOk`), so
+  // completion and "server connected" painted the same colour in one sidebar.
+  // Rationale and geometry: design 06 §4.3 + the stylesheet note.
   assert.ok(
-    sectionCode.includes('return <StateDot state="done" size={10} />'),
-    'the session row completed dot must be StateDot done',
+    sectionCode.includes('return <span className={cc.stateCompleted} />'),
+    'the session row completed mark must be the restored chamber blue dot',
   )
   assert.ok(
-    stripComments(source('../src/client/SessionTodoArea.tsx')).includes('<StateDot state="done" size={10} />'),
-    'the pinned todo strip renders the same official done dot',
+    stripComments(source('../src/client/SessionTodoArea.tsx')).includes('<span className={cc.stateCompleted} />'),
+    'the pinned todo strip renders the same blue dot',
   )
-  assert.equal(chamberCode.includes('.stateCompleted'), false, 'the bespoke .stateCompleted class must be deleted')
-  assert.equal(sectionCode.includes('cc.stateCompleted'), false, 'no render site may reference the dead class')
+  assert.ok(
+    sectionCode.includes('return <StateDot state="ongoing" size={10} />'),
+    'running / running-subagents must keep the official StateDot ongoing ring',
+  )
   assert.equal(
-    stripComments(source('../src/client/SessionTodoArea.tsx')).includes('cc.stateCompleted'),
+    sectionCode.includes('<StateDot state="done"'),
     false,
-    'no render site may reference the dead class',
+    'the official done tone must not come back (it collides with .statusOk)',
+  )
+  assert.ok(
+    chamberCode.includes('.stateCompleted'),
+    'the stylesheet must define the restored blue dot class',
+  )
+  assert.ok(
+    chamberCode.includes('background: var(--dsw-static-deepseek-450)'),
+    'the restored dot rides the brand blue the ongoing ring uses',
   )
 })
 

@@ -245,7 +245,9 @@
      spec rejects. The stroke rebinds one step lighter than the default l4,
      as every menu surface does. */
   border: 0;
-  border-radius: 12px;
+  /* Official Menu `.list` radius (2026-09 batch 1, E4): 20px, closing the
+     "12px vs upstream 20px" deviation STATUS used to register. */
+  border-radius: 20px;
   background: var(--dsw-alias-bg-layer-3);
   --dsw-elevation-stroke-color: var(--dsw-alias-border-l1);
   box-shadow: var(--dsw-elevation-prominent);
@@ -297,11 +299,17 @@
   min-width: 0;
   width: 100%;
   box-sizing: border-box;
-  padding: 7px 10px;
+  /* Official Menu item geometry (2026-09 batch 1, E4): the dense variant the
+     official view-options menu uses — 34px tall (padding-block 5px on top of
+     the 22px line box), 14px/22px label, 10px per-row radius. Replaces the
+     30px/13px/r8 chamber row that read a size smaller than every other menu. */
+  min-height: 34px;
+  padding: 5px 10px;
   border: none;
-  border-radius: 8px;
+  border-radius: 10px;
   background: transparent;
-  font-size: 13px;
+  font-size: 14px;
+  line-height: 22px;
   color: var(--dsw-alias-label-primary);
   cursor: pointer;
   text-align: left;
@@ -598,9 +606,12 @@
    行范式为「文字在左/上、控件在右/下」的紧凑卡片：短开关组用双列卡片
    网格（.generalGrid + .generalCard，auto-fit 窄面板自动降列），单选对用
    滑块式分段控件（SegmentedControl，选中态为官方业务蓝），通知事件开关
-   用一行迷你卡片（.generalEventGrid）。卡片是官方设置面板的既有关卡词汇
-   （ModelsSection.rowCard：border-l2 + bg-layer-3 + r12）。控件形态仍为
-   原生 checkbox/radio（滑块/开关是纯装饰层）。 */
+   用一行迷你卡片（.generalEventGrid）。卡片沿用官方设置面板的卡片词汇，
+   但**不是**逐值复制：官方 `ModelsSection.rowCard` 实际是
+   `border-l4 + r16 + 无底色`（本注释 2026-09 batch 1 E1 纠错，此前写成
+   border-l2/bg-layer-3/r12 与官方不符）；chamber 保留自己的
+   `r12 + bg-layer-3` 底色（双列紧凑网格需要卡片有面），只把发丝线对齐到
+   官方 `border-l4`。控件形态仍为原生 checkbox/radio（滑块/开关是纯装饰层）。 */
 
 /* 双列紧凑卡片网格（短开关组：启动与关闭 / 运行）。min() 下限让极窄窗口
    单列时能收缩到列宽而非撑破（panel overflow:hidden 会裁切）。 */
@@ -625,7 +636,7 @@
   gap: 8px;
   min-width: 0;
   padding: 12px 14px;
-  border: 0.5px solid var(--dsw-alias-border-l2);
+  border: 0.5px solid var(--dsw-alias-border-l4);
   border-radius: 12px;
   background: var(--dsw-alias-bg-layer-3);
 }
@@ -671,7 +682,8 @@
    滑块滑向选中项、选中文字反白。列宽按内容自适应。 */
 
 /* 通知主开关行（披露头，2026-12 边框修订）：无边框无底色——它只是子设置卡
-   的展开开关，不再是独立卡片。行布局与 .generalLine 相同（文字左、控件右；
+   的展开开关，不再是独立卡片。行布局与 .generalLinePlain 相同（文字左、控件右；
+   （2026-09 batch 1 N1 follow-up：原注释引用的 .generalLine 在本包并不存在。）
    flex-wrap 让极窄窗口下控件换行而非被 panel 裁切）。2026-12 复审：水平
    14px 内距与子设置卡（.generalNotifyCard padding 12px 14px）对齐，行高
    抬到 ~32px 与事件行同节奏；hover 填充给出「可点」暗示。 */
@@ -750,8 +762,9 @@
   gap: 10px;
 }
 
-/* 启用通知后展开的子设置容器（2026-12 边框修订）：通知组唯一的外边框卡片
-   （border-l2 + layer-3 + r12，与既有 .generalLine 卡同词汇）——主开关是
+/* 启用通知后展开的子设置容器（2026-12 边框修订；2026-09 batch 1 E1 follow-up
+   把描边并到 l4）：通知组唯一的外边框卡片（border-l4 + layer-3 + r12，与
+   .generalCard 同词汇）——主开关是
    无边框披露行，内部行（通知时机 / 事件开关 / 测试按钮）不再自带边框。
    挂载淡入保留。 */
 .generalNotifyCard {
@@ -759,7 +772,9 @@
   flex-direction: column;
   gap: 10px;
   padding: 12px 14px;
-  border: 0.5px solid var(--dsw-alias-border-l2);
+  /* Same card hairline as .generalCard (2026-09 batch 1, E1 follow-up: this
+     card was missed on the first pass, leaving two card families on one page). */
+  border: 0.5px solid var(--dsw-alias-border-l4);
   border-radius: 12px;
   background: var(--dsw-alias-bg-layer-3);
   animation: contentFadeIn var(--ds-transition-duration) var(--ds-ease-in-out);
@@ -955,14 +970,17 @@
   display: inline-flex;
   align-items: center;
   box-sizing: border-box;
-  height: 18px;
+  /* Official Tag metrics + hairline (2026-09 batch 1 F1 follow-up: the
+     connections page moved to 11px/17px + l4 and this pill stayed on 11/16 + l2,
+     so two settings pages rendered two different pills). */
+  height: 20px;
   margin-left: 8px;
   padding: 1px 8px;
-  border: 0.5px solid var(--dsw-alias-border-l2);
+  border: 0.5px solid var(--dsw-alias-border-l4);
   border-radius: 999px;
   corner-shape: round;
   font-size: 11px;
-  line-height: 16px;
+  line-height: 17px;
   color: var(--dsw-alias-label-tertiary);
 }
 
@@ -994,8 +1012,9 @@
    with border + background, deliberately DISTINCT from the capsule action
    buttons (the shared ui-primitives Button) so a dropdown is recognizable as an
    input.
-   2026-12 有意不统一：字段字号 12px vs 服务器下拉 13px/600——服务器下拉是
-   导航选择器（强调选中项），运行时字段是紧凑表单行；只统一箭头词汇。 */
+   2026-12 有意不统一：字段字号 12px vs 服务器下拉**触发器** 13px/600——服务器
+   下拉是导航选择器（强调选中项，其菜单行已按官方 dense item 为 14/22，见 E4），
+   运行时字段是紧凑表单行；只统一箭头词汇。 */
 .runtimeField {
   box-sizing: border-box;
   height: 28px;

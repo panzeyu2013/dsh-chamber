@@ -50,10 +50,14 @@ The shell declares and renders the three holes the alpha.2 official
   sources render header + status icon only (dot/spinner, phase on
   hover/aria, no status text); all disconnected → empty hint.
 - Live sessions carry a running dot (`sessions.list.running`), and a
-  completed-but-unread session carries the official `StateDot` `done` tone —
-  the same mark the pinned session-todo strip renders (the bespoke 6 px
-  brand-blue dot read as a second "running" mark and is gone, 2026-09-11
-  upstream-alignment T10); no relative time cell is rendered (06 §4.3 —
+  completed-but-unread session carries the **chamber brand-blue dot**
+  (`.stateCompleted`, 6 px solid) — the same mark the pinned session-todo strip
+  renders. It deliberately does NOT use the official `StateDot` `done` tone:
+  that tone's `--dsw-alias-state-success-primary` is the very token of the
+  source header's connection dot, so "session finished, unread" and "server
+  connected" painted the same green (2026-09 user decision; history: brand-blue
+  dot ≤0.2.4 → official `done` green in 0.3.0-beta.1 (T10) → brand blue again,
+  06 §4.3); no relative time cell is rendered (06 §4.3 —
   `relativeTimeBucket` stays as a shared tool only). A row whose session
   carries an active
   `schedule` projection renders the official active-Schedule marker (16 px
