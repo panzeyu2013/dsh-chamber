@@ -220,7 +220,7 @@ test('bootInstanceShell: a clean run settles booted with no error and keeps the 
     assert.equal(state.error, null)
     assert.equal(__testDisposedCount(), 0)
     const [facts] = __testConfiguredContexts() as [Record<string, unknown>]
-    const { chamberReportBootDegraded, ...immutableFacts } = facts
+    const { chamberReportBootDegraded, chamberMachineCatalog, ...immutableFacts } = facts
     assert.deepEqual(immutableFacts, {
       chamberInstanceId: 'ssh-test-clean-2',
       chamberBasePath: '/api/i/ssh-test-clean-2',
@@ -232,6 +232,11 @@ test('bootInstanceShell: a clean run settles booted with no error and keeps the 
     // 降级上报缝（2026-09-10）：条目里的必需服务探针经它把「挂载已知不完整」
     // 交给 App（App 据此在该来源 ready 后自动重挂），必须随每个 boot 一起提供。
     assert.equal(typeof chamberReportBootDegraded, 'function')
+    // 页级机器目录（design 20 §5）：一次读取、注入每个条目（ssh 来源也一样），
+    // 同为运行时面而非每来源事实，因此与降级上报缝一样单独断言。
+    const machineCatalog = chamberMachineCatalog as { entries?: unknown; iconUrl?: unknown }
+    assert.equal(typeof machineCatalog.entries, 'function', 'every boot hands the entry the page machine catalog')
+    assert.equal(typeof machineCatalog.iconUrl, 'function')
   } finally {
     __testResetConfiguredContexts()
     restoreFetch()

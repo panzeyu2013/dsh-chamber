@@ -90,8 +90,12 @@ test('machine catalog: a refresh during an in-flight icon batch must not drop th
   // EVERY call for the first id waits on the SAME gate: a regression that
   // re-requests an already-answered id then fails on the assertion below
   // instead of deadlocking the suite on a promise nobody releases.
-  let openGate: (() => void) | null = null
-  const gate = new Promise<void>((resolve) => { openGate = resolve })
+  // The resolver is collected in an array rather than a narrowed `let`: this
+  // file type-checks under `pnpm run typecheck:open-in` (a CI gate), and the
+  // executor's assignment is invisible to the checker's narrowing, which types
+  // a bare `let gate: (() => void) | null = null` as `null` → `never` here.
+  const openGate: Array<() => void> = []
+  const gate = new Promise<void>((resolve) => { openGate.push(resolve) })
   const w = wire({
     apps: () => ids,
     icons: { finder: png('FINDER'), vscode: png('VSCODE') },
@@ -103,7 +107,7 @@ test('machine catalog: a refresh during an in-flight icon batch must not drop th
   ids.push('vscode')
   const refresh = machine.refresh()
   await settle()
-  openGate?.()
+  for (const release of openGate.splice(0)) release()
   await refresh
   assert.deepEqual(w.calls.icons, ['finder', 'vscode'],
     'the id the refresh discovered is fetched too, and the answered id is not re-requested')
