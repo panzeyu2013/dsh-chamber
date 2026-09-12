@@ -1238,7 +1238,7 @@ export const gatewayProvider: TransportProvider = {
 
 // ---------------------------------------------------------------------------
 // Desktop-synced chamber host packages (design 17 §9.3, 2026-12 Phase 3):
-// the gateway no longer ships the two chamber host packages; a connecting
+// the gateway no longer ships the synced chamber host packages; a connecting
 // desktop uploads its own copies through the authenticated
 // `PUT /chamber/plugins` surface. The sync is best-effort and idempotent —
 // the client skips packages whose version already matches the gateway's

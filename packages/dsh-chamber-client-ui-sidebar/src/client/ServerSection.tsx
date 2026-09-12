@@ -98,6 +98,10 @@ function projectionToLocalSearchSnapshot(server: ChamberServerAggregate): Instan
       blank: session.blank === true,
       ...(session.updatedAt === undefined ? {} : { updatedAt: session.updatedAt }),
       ...(session.title === '' ? {} : { title: session.title }),
+      // The label is what search matches on, so the resolved display title
+      // rides the local snapshot (I3): a directory-named row is searchable by
+      // the name the user actually sees.
+      displayTitle: session.displayTitle,
     }))),
     archivedSessionIds: [],
   }
@@ -632,18 +636,22 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                 }
                 return wire
               }
-              // Search-result titles resolve from the source aggregate (title
+              // Search-result labels resolve from the source aggregate (title
               // may lag the latest snapshot by one poll — accepted, 06 §1.2).
+              // The official display label (I3), not the durable title: a hit
+              // whose title the host could not read renders the directory name.
               const searchRowLabel = (sessionId: string): { title: string; workspaceLabel: string | undefined } => {
                 for (const workspace of server.workspaces) {
                   const session = workspace.sessions.find(candidate => candidate.id === sessionId)
                   if (session === undefined) continue
                   return {
-                    title: session.title || t('list.unnamed'),
+                    title: session.displayTitle,
                     workspaceLabel: workspace.ungrouped === true ? t('list.ungrouped') : workspace.title,
                   }
                 }
-                return { title: t('list.unnamed'), workspaceLabel: undefined }
+                // Defensive: a hit outside every projected row still has an
+                // honest label — the official ladder's last resort (id).
+                return { title: sessionId, workspaceLabel: undefined }
               }
               // 搜索结果行的 running 位来自投影（mergeSearchResults
               // 的 visibleIds 过滤保证命中行一定在投影内，查得到即用投影位；查
@@ -1786,7 +1794,9 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                                 // resolution shared by the row label and the row
                                 // actions' accessible names (the blank label stays
                                 // rendered-only — a blank row carries no actions).
-                                const sessionTitleText = session.title || t('list.unnamed')
+                                // I3: the OFFICIAL display label (never empty),
+                                // so "unknown title" can never render 「未命名会话」.
+                                const sessionTitleText = session.displayTitle
                                 const sessionRow = (
                                   <div
                                     className={clsx(
@@ -2028,7 +2038,7 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                                       anchor={sessionRow}
                                       content={(
                                         <div className={cc.hoverContent}>
-                                          <div className={cc.hoverTitle}>{session.blank === true ? t('session.new') : (session.title || t('list.unnamed'))}</div>
+                                          <div className={cc.hoverTitle}>{session.blank === true ? t('session.new') : sessionTitleText}</div>
                                           {session.blank !== true && session.updatedAt !== undefined && session.updatedAt > 0 && (
                                             <div className={cc.hoverTime}>{hoverTimeLabel(session.updatedAt, now)}</div>
                                           )}
@@ -2043,7 +2053,7 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                                         </div>
                                       )}
                                       disabled={menuOpen[sessionKey] === true || sessionDrag !== null || workspaceDrag !== null || serverDrag !== null}
-                                      copyText={session.blank === true ? undefined : (session.title || t('list.unnamed'))}
+                                      copyText={session.blank === true ? undefined : sessionTitleText}
                                       copyLabel={t('action.copy')}
                                       copiedLabel={t('hover.copied')}
                                     />

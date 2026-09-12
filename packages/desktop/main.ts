@@ -2379,7 +2379,7 @@ if (!gotTheLock) {
       const result = await probe(descriptor);
       return ownsRemoteTarget(target) ? result : null;
     };
-    // Remote install-level fallback path shared by both chamber host packages.
+    // Remote install-level fallback path shared by the chamber host packages.
     const remoteHostPackageDir = (spec: RemoteSpec, packageName: string): string =>
       `${remoteHome(spec.remoteDshHome)}/profiles/node_modules/${packageName}`;
     const startAutomaticHostSeed = (id: string): void => {

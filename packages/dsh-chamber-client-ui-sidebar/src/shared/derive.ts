@@ -22,7 +22,7 @@
  *
  * No React, no DOM — plain-node unit-testable (see test/derive.test.ts).
  */
-import type { InstanceSnapshot, SearchRow } from './instance-api.ts'
+import type { InstanceSnapshot, SearchRow, SessionRow, WorkspaceRow } from './instance-api.ts'
 import type { ChamberServerAggregate, ChamberServerWorkspace, InstanceRuntimeReport } from './aggregate-store.ts'
 import { assertSingletonModule } from './singleton.ts'
 
@@ -57,6 +57,68 @@ export function hasActiveScheduleOf(
 ): boolean {
   const schedule = projectionValues?.schedule
   return Array.isArray(schedule) && schedule.length > 0
+}
+
+/**
+ * Trailing path segment ('' for root); the cwd-derived group title. Lives HERE
+ * (moved from shared/instance-api.ts) because the display-title resolver below
+ * needs it and every snapshot builder must share one implementation:
+ * instance-api value-imports this module, so this module may only type-import
+ * instance-api — a value import the other way would be a runtime cycle.
+ * instance-api re-exports `basenameOf` so existing importers keep their import
+ * site.
+ */
+export function basenameOf(cwd: string): string {
+  const trimmed = cwd.replace(/[\\/]+$/, '')
+  const separator = Math.max(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\'))
+  const base = separator === -1 ? trimmed : trimmed.slice(separator + 1)
+  return base === '' ? cwd : base
+}
+
+/**
+ * THE session display-label resolver — one rule, official semantics.
+ *
+ * Upstream splits the rule across two places: the renderer localizes a blank
+ * row (`blank ? t('session.new') : node.title`, vendor ui-workspace
+ * rows/Rows.tsx:26-28) and the projection chain is `title ?? basename(cwd) ??
+ * id` (`displayTitleOf`, vendor api-session-controller client
+ * sessions/service.ts:146-153, applied at :587). The chamber carried only the
+ * durable `title` half, so a row whose title the host could not read — a
+ * predecessor cache record without a readable title projection — fell through
+ * to 「未命名会话」 (`list.unnamed`) even though its official label is the
+ * project directory name. This resolver is the missing half.
+ *
+ * Ordering is the official one with EMPTY treated as absent: durable title,
+ * then the canonical cwd's basename, then the raw session id. It never returns
+ * an empty string, so an unknown title can never be rendered as the untitled
+ * copy again (invariant I3: a label never turns "unknown" into 「未命名」).
+ *
+ * `displayTitle` is a producer-resolved value that wins when present (the
+ * mounted vendor store's `SessionSummary.displayTitle`, or the unary builder's
+ * own chain); `cwdBasename` lets a caller that owns the cwd hand in the
+ * basename without this module importing instance-api.
+ *
+ * @param source - candidate label facts; only `sessionId` is required.
+ * @returns a non-empty display label.
+ */
+export function sessionDisplayTitle(source: {
+  displayTitle?: string | undefined
+  title?: string | undefined
+  cwdBasename?: string | undefined
+  sessionId: string
+}): string {
+  const { displayTitle, title, cwdBasename } = source
+  // `typeof === 'string'` (not `!== undefined`) because a JSON producer can
+  // deliver `null`, which is not a label and must fall through the ladder.
+  if (typeof displayTitle === 'string' && displayTitle !== '') return displayTitle
+  if (typeof title === 'string' && title !== '') return title
+  // A separator-only basename is the ROOT path's spelling ('/' , '///'), where
+  // the official `workspaceTitleOf` answers '' and `displayTitleOf` therefore
+  // falls through to the session id — never render the raw separators.
+  if (typeof cwdBasename === 'string' && cwdBasename !== '' && !/^[/\\]+$/.test(cwdBasename)) {
+    return cwdBasename
+  }
+  return source.sessionId
 }
 
 /** Canonical-path equality key: trailing separators normalized only. No
@@ -577,6 +639,12 @@ export function projectInstanceSnapshot(
     byId?: Record<string, {
       id: string
       title?: string
+      /**
+       * The mounted vendor store resolves the official display label itself
+       * (`SessionSummary.displayTitle`, vendor api-session-controller client
+       * sessions/service.ts:587) — carried verbatim into the snapshot row (I3).
+       */
+      displayTitle?: string
       cwd?: string
       parentId?: string
       origin?: 'subagent'
@@ -676,6 +744,15 @@ export function projectInstanceSnapshot(
         // row's snapshot bytes (and the producer's signature gate) are
         // untouched (see instanceSnapshotSignature).
         ...(hasActiveScheduleOf(row.projectionValues) ? { hasActiveSchedule: true as const } : {}),
+        // Official display label (I3): the mounted vendor store already
+        // resolved it; the resolver applies the cwd/id ladder only if a future
+        // producer drops the field.
+        displayTitle: sessionDisplayTitle({
+          displayTitle: row.displayTitle,
+          title: row.title,
+          ...(row.cwd === undefined ? {} : { cwdBasename: basenameOf(row.cwd) }),
+          sessionId: String(row.id),
+        }),
         ...(row.cwd !== undefined ? { cwd: row.cwd } : {}),
         ...(row.title !== undefined ? { title: row.title } : {}),
         ...(row.parentId !== undefined ? { parentSessionId: String(row.parentId) } : {}),
@@ -748,6 +825,12 @@ export function instanceSnapshotSignature(
       id: row.sessionId,
       at: row.updatedAt,
       r: row.running,
+      // The display label MUST ride the signature: the title projection lands
+      // asynchronously after creation (and a predecessor record's label flips
+      // when the heal rewrites it), so a label-only change has to republish —
+      // otherwise the producer's dedupe gate freezes the row at its first-seen
+      // label.
+      d: row.displayTitle,
       b: row.blank,
       // 2026-09-11 upstream-alignment T7: the schedule fact MUST ride the
       // signature — otherwise a session gaining/losing its active schedule
@@ -898,9 +981,22 @@ export function serversProjectionSignature(servers: readonly ChamberServerAggreg
         ungrouped: w.ungrouped === true,
         // Synthetic rows disable their mutation affordances in the sidebar.
         synthetic: w.synthetic === true,
+        // The reuse resolution is a RENDERED-BEHAVIOUR fact: "+" reads it to
+        // decide between reopening the existing blank row and creating one, and
+        // a blank non-current row is INVISIBLE in navigation — so a candidate
+        // appearing/disappearing alone would otherwise republish a byte-identical
+        // projection, both publish gates would drop it, and "+" would mint the
+        // very empty session this field exists to prevent (2026-09 review).
+        reusableBlankSessionId: w.reusableBlankSessionId ?? null,
         sessions: w.sessions.map(x => ({
           id: x.id,
           title: x.title,
+          // The resolved label is what the row RENDERS (`ServerSection` reads
+          // `displayTitle` for the label / hover / aria / copy text), so it must
+          // move this signature exactly like `hasActiveSchedule` below: a healed
+          // predecessor row can flip id → directory name with no durable-title
+          // change, and that label flip must republish (2026-09 review).
+          displayTitle: x.displayTitle,
           running: x.running === true,
           blank: x.blank === true,
           // Render-relevant: updated-mode ordering derives from it.
@@ -1201,9 +1297,18 @@ export function deriveLocalSearchMatches(snapshot: InstanceSnapshot, query: stri
   const matches: { sessionId: string; updatedAt?: number }[] = []
   for (const session of snapshot.sessions) {
     if (session.origin === 'subagent' || session.blank || archived.has(session.sessionId)) continue
-    const title = session.title
+    // The DISPLAY label is what the user reads on the row, so it is what the
+    // search must match (upstream `tree.ts` matches `sessionTitle(summary)`, the
+    // display title): a row labeled by its project directory must be findable by
+    // that directory, not only by its durable title.
+    const title = sessionDisplayTitle({
+      displayTitle: session.displayTitle,
+      title: session.title,
+      ...(session.cwd === undefined ? {} : { cwdBasename: basenameOf(session.cwd) }),
+      sessionId: session.sessionId,
+    })
     const workspaceTitle = workspaceTitleBySession.get(session.sessionId)
-    const titleHit = title !== undefined && title.toLowerCase().includes(q)
+    const titleHit = title.toLowerCase().includes(q)
     const workspaceHit = workspaceTitle !== undefined && workspaceTitle.toLowerCase().includes(q)
     if (!titleHit && !workspaceHit) continue
     matches.push(session)
@@ -1449,6 +1554,45 @@ export function groupArchivedRows(rows: readonly ArchivedSessionMetaRow[]): Arch
 }
 
 /**
+ * The official reuse-or-create predicate for one workspace ("+"/boot):
+ * upstream `uiWorkspace.connectWorkspace` returns the FIRST session that is
+ * blank, belongs to this workspace, lives in the workspace's own directory and
+ * is not archived (vendor ui-workspace/src/client/navigation.ts:119-126), and
+ * only creates one when no such row exists (:128). The chamber's "+" bypassed
+ * that resolution and always issued session/create, which is one of the two
+ * production paths that mint invisible empty sessions (I2).
+ *
+ * Readings are taken from the RAW snapshot, never from the visibility-filtered
+ * derived rows: a blank row is visible in navigation only while it is the
+ * current session (sessionVisible), so a derived-row search could never find
+ * the reusable row the official predicate is about.
+ *
+ * Chamber hardening on top of upstream's conditions (both are structural, not
+ * display policy): subagent children and fork children are never a reusable
+ * provisional row — creating a fresh session is the honest outcome there.
+ *
+ * @param workspace - the target workspace row (path + membership).
+ * @param sessions - the snapshot's full session rows, in wire order.
+ * @param archived - the snapshot's authoritative archived id set.
+ * @returns the reusable blank session id, or undefined when create is required.
+ */
+export function findReusableBlankSession(
+  workspace: Pick<WorkspaceRow, 'path' | 'sessionIds'>,
+  sessions: readonly SessionRow[],
+  archived: ReadonlySet<string>,
+): string | undefined {
+  for (const session of sessions) {
+    if (session.blank !== true) continue
+    if (session.cwd !== workspace.path) continue
+    if (session.origin === 'subagent' || session.parentSessionId !== undefined) continue
+    if (!workspace.sessionIds.includes(session.sessionId)) continue
+    if (archived.has(session.sessionId)) continue
+    return session.sessionId
+  }
+  return undefined
+}
+
+/**
  * Compute the sidebar workspace list for one instance snapshot.
  * @param snapshot - one InstanceAggregate-like pull (workspaces/sessions).
  * @param serverId - the source id ('local' | 'ssh-<id>'); scopes the
@@ -1492,6 +1636,14 @@ export function deriveServerWorkspaces(
       sessions.push({
         id: sessionId,
         title: session.title ?? '',
+        // Official display label (I3): a row whose title the host could not
+        // read renders its project directory name — never 「未命名会话」.
+        displayTitle: sessionDisplayTitle({
+          displayTitle: session.displayTitle,
+          title: session.title,
+          ...(session.cwd === undefined ? {} : { cwdBasename: basenameOf(session.cwd) }),
+          sessionId,
+        }),
         running: session.running,
         updatedAt: session.updatedAt,
         // Sparse flag: only blank (provisional new-session) rows carry it, so
@@ -1503,10 +1655,18 @@ export function deriveServerWorkspaces(
         ...(session.hasActiveSchedule === true ? { hasActiveSchedule: true } : {}),
       })
     }
+    // Official reuse-or-create resolution for this workspace's "+"/boot (I2).
+    // Requires an AUTHORITATIVE archive set: with the unary fallback's empty
+    // unknown set (archiveSetKnown false) an archived blank row would look
+    // reusable, so the honest degradation there is to create.
+    const reusableBlankSessionId = snapshot.archiveSetKnown === true && workspace.synthetic !== true
+      ? findReusableBlankSession(workspace, snapshot.sessions, archivedIds)
+      : undefined
     workspaces.push({
       id: workspace.workspaceId,
       title: workspace.title,
       sessions,
+      ...(reusableBlankSessionId === undefined ? {} : { reusableBlankSessionId }),
       // Display-only cwd-derived fallback groups (`__cwd__:` ids) keep their
       // marker so the sidebar can disable their mutation affordances.
       ...(workspace.synthetic === true ? { synthetic: true as const } : {}),
@@ -1541,6 +1701,13 @@ export function deriveServerWorkspaces(
       sessions: stray.map(session => ({
         id: session.sessionId,
         title: session.title ?? '',
+        // Same official display-label rule as the workspace-member rows above.
+        displayTitle: sessionDisplayTitle({
+          displayTitle: session.displayTitle,
+          title: session.title,
+          ...(session.cwd === undefined ? {} : { cwdBasename: basenameOf(session.cwd) }),
+          sessionId: session.sessionId,
+        }),
         running: session.running,
         updatedAt: session.updatedAt,
         ...(session.blank ? { blank: true } : {}),

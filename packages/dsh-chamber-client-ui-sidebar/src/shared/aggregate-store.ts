@@ -37,7 +37,16 @@ export interface ChamberServerWorkspace {
   synthetic?: boolean
   sessions: {
     id: string
+    /** Durable title projection — '' when the session has none. Rename/fork copy uses THIS. */
     title: string
+    /**
+     * Official display label (I3): `title ?? basename(cwd) ?? id`, resolved by
+     * `derive.ts sessionDisplayTitle` and NEVER empty. This is what row labels,
+     * hover copy, aria names and todo rows render — a session whose title the
+     * host could not read shows its project directory name, never
+     * 「未命名会话」.
+     */
+    displayTitle: string
     running?: boolean
     updatedAt?: number
     blank?: boolean
@@ -50,6 +59,15 @@ export interface ChamberServerWorkspace {
      */
     hasActiveSchedule?: boolean
   }[]
+  /**
+   * Official reuse-or-create resolution for this workspace's "+" (I2), computed
+   * by `derive.ts findReusableBlankSession` over the RAW snapshot: a blank,
+   * non-archived member session in the workspace's own directory that upstream
+   * `connectWorkspace` would reopen instead of creating another one. Absent
+   * means "create" — either no such row, or the archive set is unknown
+   * (unary fallback), where create is the honest degradation.
+   */
+  reusableBlankSessionId?: string
 }
 
 export interface ChamberServerAggregate {

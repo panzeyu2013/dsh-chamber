@@ -251,8 +251,8 @@ export const DEFAULT_REMOTE_DSH_HOME = '~/.dsh'
 export const WEB_PROFILE = 'web'
 // Chamber host-package seed facts: the id/name pairs are control-plane's own
 // (host-graph-seed.ts HOST_GRAPH_INSERT / HOST_GIT_WORKTREE_INSERT /
-// HOST_ARCHIVE_CLEANUP_INSERT / HOST_OPEN_IN_INSERT, consumed through
-// control-plane-module.ts) —
+// HOST_ARCHIVE_CLEANUP_INSERT / HOST_OPEN_IN_INSERT,
+// consumed through control-plane-module.ts) —
 // the desktop keeps its established names because main.ts and the
 // cross-package tests import them from here; values can never drift from the
 // local profile seed (design 09 module A / design 13 §3).

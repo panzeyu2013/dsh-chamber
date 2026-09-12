@@ -32,7 +32,8 @@
 - [ ] `build:renderer`：`dist/assets/*` 与 `manifest.json` 的 entries 一一
       对应（`__DSH_BOOT__` 指向真实存在的 bundle）。
 - [ ] host 包：`dsh-chamber-seed-client-graph` / `dsh-chamber-seed-git-worktree` /
-      `dsh-chamber-seed-archive-cleanup` / `dsh-chamber-seed-open-in` 的 `dist/index.js`
+      `dsh-chamber-seed-archive-cleanup` /
+      `dsh-chamber-seed-open-in` 的 `dist/index.js`
       与 `host-graph-seed.ts` 的 seed 源路径一致；`package.json` `files` 含 dist。
       前三个还随 `build:host-graph-package` 拷进 `desktop/dist/host-*-package`
       （远端 seed 与 gateway 上传读同一组路径）；**open-in 的 `dist/host-open-in-package`

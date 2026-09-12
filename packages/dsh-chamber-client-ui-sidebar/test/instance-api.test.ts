@@ -48,6 +48,39 @@ test('fetchInstanceSnapshot derives workspace groups from session cwd facts', as
   assert.equal(snapshot.archiveSetKnown, false)
 })
 
+test('fetchInstanceSnapshot resolves the official display label on the unary path', async () => {
+  // I3: the unary wire carries no displayTitle, so the builder applies the
+  // ladder itself — durable title, then the cwd basename, then the id. A row
+  // whose title the host could not read (title projection empty) must NOT
+  // arrive labelless: the sidebar would render 「未命名会话」 for it.
+  const client = {
+    session: {
+      list: async () => ({
+        ok: true as const,
+        value: {
+          items: [
+            summary({ sessionId: 'titled', cwd: '/work/a', projections: { values: { title: 'Real title' } } }),
+            // The REAL shape of a label-less predecessor record: the official
+            // title unit serves `null` (schema `string().min(1).nullable()`), and an
+            // empty string is impossible on the wire — both must resolve by ladder.
+            summary({ sessionId: 'untitled', cwd: '/work/dsh-chamber', projections: { values: { title: null } } }),
+            summary({ sessionId: 'empty-title', cwd: '/work/dsh-chamber', projections: { values: { title: '' } } }),
+            summary({ sessionId: 'nowhere' }),
+          ],
+        },
+      }),
+    },
+  }
+  const snapshot = await fetchInstanceSnapshot(client as never)
+  const byId = new Map(snapshot.sessions.map(row => [row.sessionId, row]))
+  assert.equal(byId.get('titled')?.displayTitle, 'Real title')
+  assert.equal(byId.get('titled')?.title, 'Real title', 'the durable title still rides alongside')
+  assert.equal(byId.get('untitled')?.title, undefined, 'an empty wire title is dropped from the durable field')
+  assert.equal(byId.get('untitled')?.displayTitle, 'dsh-chamber', 'the official label is the directory name')
+  assert.equal(byId.get('empty-title')?.displayTitle, 'dsh-chamber', 'an empty wire title resolves the same way')
+  assert.equal(byId.get('nowhere')?.displayTitle, 'nowhere', 'last resort: the raw session id')
+})
+
 test('fetchInstanceSnapshot surfaces no-cwd sessions ungrouped and keeps wire rows', async () => {
   const client = {
     session: {

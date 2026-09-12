@@ -147,7 +147,8 @@ reaper（回收孤儿实例）→ 快照 DSH_HOME（§3.7，断言无存活写�
   session/canOpenWorkspacePath · settings/describe · data.settings）。
 - **探针形态化（design 17 §10；design 24 §7 C 的按域派生）**：
   `clientGraph/graph`、`gitWorktree/previewCreate` 与 `archiveCleanup/probe`
-  三个 chamber 宿主域只在「种子缓存就绪」时验证——gateway 的宿主包由连接的
+  三个 chamber 宿主域只在「种子缓存就绪」时验证——
+  gateway 的宿主包由连接的
   桌面经 `/chamber/plugins` 同步（Phase 3），缓存缺包时托管 dsh 是纯 dsh。
   **期望集按本次 spawn 实际 seed 的宿主域派生**（`activationProbeNamesForDomains`
   于 dsh-runtime、`syncedHostDomainProbeNames` 于 gateway：空缓存 = 缩减
@@ -690,7 +691,7 @@ chamber-settings.json，非秘密）：
   版本失效（用户选择）非单调向前——用户可显式选更旧版本，失效回落带数据可读性
   探测保护（§3.5）。
 - **chamber 发版版本集**：根包 + 全部非 fork
-  `@dsh-chamber/*` 包（当前 16 个）统一 bump；`release-preflight.mjs` 的数据驱动扫描与
+  `@dsh-chamber/*` 包（当前 17 个）统一 bump；`release-preflight.mjs` 的数据驱动扫描与
   release.yml 断言集是唯一权威，新增 chamber 包会自动纳入。三个 fork 副本
   （`@deepseek-ai/dsh-client-connection` / `dsh-client-web` / `dsh-api-gateway`）
   保持上游基线版本。`packages/dsh-runtime` 虽随

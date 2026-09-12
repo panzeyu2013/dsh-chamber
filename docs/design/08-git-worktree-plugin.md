@@ -718,7 +718,7 @@ fresh-preflight -> git-removing -> git-removed
 
 - host 包与 client-graph 包一起进入本地 profile seed、远程 ready-time seed、
   desktop 打包资源和 loader patch；seed 继续只经已实现的受限
-  `run/write-file` 通道。两个 host 包都提交 esbuild `dist/index.js`
+  `run/write-file` 通道。四个 host 包都提交 esbuild `dist/index.js`
   （`@deepseek-ai/*` external）。
 - loader id 与 package name 在 profile 中是全局身份：单个 exact 既有 row 复用，
   同 id/异包、同包/异 id 或重复 exact row 都在写包/启动前 fail-loud，不追加出一个

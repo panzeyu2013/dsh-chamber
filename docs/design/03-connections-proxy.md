@@ -303,7 +303,7 @@ WS   /api/i/<id>/api/remote.mux    → 实例 WS  /api/remote.mux
   持续有进展的大响应；SSE/已
   升级 WS 保持长连接语义。
 - **长 RPC 豁免**：`POST` 且上游 pathname **精确命中**
-  `LONG_RPC_PATHS`（当前 `/api/commands/execute` 与
+  `LONG_RPC_PATHS`（当前 `/api/commands/execute`、
   `/api/archiveCleanup/purge`）的 unary RPC 改用 `LONG_RPC_UPSTREAM_TIMEOUT_MS`
   （30 分钟）作**保险丝而非 SLA**，替代 45s 空闲窗。这类端点的宿主业务没有
   上游时长上限（`/compact` → commands/execute → dsh-command-compact →

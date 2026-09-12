@@ -13,7 +13,16 @@ import { deriveTodoAttention, type TodoAttentionFilters } from '../src/shared/to
 const ALL: TodoAttentionFilters = { completed: true, ask: true, request: true }
 
 function session(id: string, extra: { title?: string; running?: boolean; updatedAt?: number } = {}) {
-  return { id, title: extra.title ?? `会话 ${id}`, running: extra.running, updatedAt: extra.updatedAt }
+  const title = extra.title ?? `会话 ${id}`
+  // The derived row carries the official display label (I3): the ladder over
+  // the fixture facts — title, then (no cwd in these fixtures) the row id.
+  return {
+    id,
+    title,
+    displayTitle: title !== '' ? title : id,
+    running: extra.running,
+    updatedAt: extra.updatedAt,
+  }
 }
 
 function workspace(id: string, sessions: ReturnType<typeof session>[]): ChamberServerWorkspace {
@@ -202,13 +211,20 @@ test('entries carry the title/workspace/updatedAt presentation facts when presen
   })
   const [entry] = deriveTodoAttention([s], { viewingSourceId: 'local', filters: ALL })
   assert.equal(entry?.title, '重构 API')
+  assert.equal(entry?.displayTitle, '重构 API', 'the official display label rides the entry too (I3)')
   assert.equal(entry?.workspaceTitle, '工作区 repo-a')
   assert.equal(entry?.updatedAt, 1234)
-  // An empty title stays empty — the component falls back to its own copy.
+  // An empty title stays empty in the DURABLE field — the component's unnamed
+  // copy is no longer reachable for it: the entry carries the official display
+  // label (here the row's id, since the derived row has no cwd fact), so the
+  // todo strip can never claim 「未命名会话」 for a session the host simply
+  // could not title.
   const untitled = server('local', [workspace('w', [session('s2', { title: '' })])], {
     sessions: { s2: { pending: 'question' } },
   })
-  assert.equal(deriveTodoAttention([untitled], { viewingSourceId: 'local', filters: ALL })[0]?.title, '')
+  const [untitledEntry] = deriveTodoAttention([untitled], { viewingSourceId: 'local', filters: ALL })
+  assert.equal(untitledEntry?.title, '')
+  assert.equal(untitledEntry?.displayTitle, 's2')
 })
 
 test('workspace rows without session runtime facts never produce entries (fact == projection row)', () => {

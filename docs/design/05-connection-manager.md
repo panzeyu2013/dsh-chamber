@@ -69,6 +69,15 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
   workspace（组头）→ session 行（**嵌套缩进**于 workspace 之下）。未连接
   来源只显示分组头 + 状态点（无会话数据）。
 - 会话行带**运行指示点**（相对时间列不显示——见 06 §4.3）。
+- **会话行标签 = 官方链**：`durable title → cwd 目录名 → 会话 id`，在侧边栏单点解析
+  （`packages/dsh-chamber-client-ui-sidebar/src/shared/derive.ts` 的 `sessionDisplayTitle`，
+  两个快照构造都经它接线，并作为必需字段 `SessionRow.displayTitle` 携带）；该字段进
+  **两个发布签名**（`instanceSnapshotSignature`、`serversProjectionSignature`），
+  标签单独变化也重发布。「未命名会话」只保留三处，且都是声明的例外：归档管理器的
+  durable 名列（design 24 语义）、待办条 `SessionTodoArea` 与通知体（`renderer/App.tsx`）
+  在该行完全不在投影里时的字典化兜底（后者受 frame-locale 审计 T15 约束）。
+- **`+` = 复用优先**：复用 workspace 中既有的空白成员（与上游 `connectWorkspace`
+  同谓词：存在可复用空白行即不新建），并按 workspace 维护在飞 promise 以防双击重复新建。
 - **当前来源的当前会话行高亮**（含所在 workspace 组着色）：当前会话 id 经
   运行时事实通道（`server.runtime?.current`，06 §4）——每个来源自己的 ctx
   上报自身 `sessions.list` 快照投影，任意来源均可达，组件不订阅任何 store。
@@ -830,7 +839,7 @@ export const chamberBridge: {
   ui-primitives（Button/Modal/Tooltip/Input/Pill/图标）。
 - 实例默认仍按注册表自动连接、本地自动启动；本页提供显式管理与诊断入口。
 
-## 6. 源码复用与构建链（拷贝补丁包 2 个 + 自研客户端插件 6 个 + 宿主包 3 个）
+## 6. 源码复用与构建链（拷贝补丁包 2 个 + 自研客户端插件 6 个 + 宿主包 4 个）
 
 - pnpm + `vendor/harness-packages` 符号链接（外部 dsh 源码，**永不修改**）；
   要修改的包必须拷入本仓 `packages/`。

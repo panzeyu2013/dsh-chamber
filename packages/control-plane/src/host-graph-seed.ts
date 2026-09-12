@@ -147,8 +147,8 @@ export const CHAMBER_HOST_PACKAGES: readonly ChamberHostPackageDescriptor[] = [
  * own a DISTINCT probe method, insert id and package name.
  *
  * The gateway's set-equality drift pin against dsh-runtime's
- * `HOST_DOMAIN_PROBE_NAMES` compares only the SET of domain values, so a 4th
- * row reusing an existing domain would pass it while the per-package
+ * `HOST_DOMAIN_PROBE_NAMES` compares only the SET of domain values, so a row
+ * reusing an existing domain would pass it while the per-package
  * activation-probe map silently became ambiguous (one domain standing for two
  * rows); duplicate loader identities are equally unrepresentable in the
  * overlay. Throws, never warns.

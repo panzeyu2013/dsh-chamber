@@ -124,7 +124,10 @@ export const UPSTREAM_TIMEOUT_MS = 45_000
  * upstream `commands.execute` whose outcome arrives over the session-event
  * stream (STATUS).
  */
-export const LONG_RPC_PATHS: readonly string[] = ['/api/commands/execute', '/api/archiveCleanup/purge']
+export const LONG_RPC_PATHS: readonly string[] = [
+  '/api/commands/execute',
+  '/api/archiveCleanup/purge',
+]
 
 /**
  * Long-RPC insurance fuse — deliberately generous, NOT an SLA, and NOT a

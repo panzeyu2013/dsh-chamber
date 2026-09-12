@@ -22,13 +22,13 @@
 │  ├─ 每实例反代：/api/i/local/* → 本地 dsh（web profile）                 │
 │  │              /api/i/dsh-<id>/*、/api/i/gateway-<id>/* → 已注册传输    │
 │  │              （普通桌面 v1 匿名可达，仅 loopback 监听）               │
-│  ├─ 本地实例托管（spawn/健康/reaper）+ 双 host 包 seed/单一 overlay       │
+│  ├─ 本地实例托管（spawn/健康/reaper）+ 四个 host 包 seed/单一 overlay     │
 │  └─ 静态前端服务（dist + __DSH_BOOT__ 清单）                             │
 ├───────────────────────────────────────────────────────────────────────┤
 │ 桌面主进程（desktop）                                                   │
 │  ├─ transport-manager：目标 dsh|gateway × 传输 ssh|http                 │
 │  │    SSH 隧道/systemd 或主进程 HTTP(S)，生命周期按 generation 隔离       │
-│  ├─ 远端 ready-time 双 host 包分发（不经 SSH 执行 Git）                  │
+│  ├─ 远端 ready-time host 包分发（不经 SSH 执行 Git；open-in 仅本地）    │
 │  ├─ 实例注册表：<userData>/ssh-instances.json                           │
 │  └─ IPC（preload 白名单）：dsh-chamber:info · desktop_ssh_*             │
 └───────────────────────────────────────────────────────────────────────┘
@@ -43,7 +43,7 @@ Git worktree 功能由 chamber-bundled client 插件与**每实例内** host 插
 
 | 包 | 职责（一行） |
 |---|---|
-| `packages/control-plane` | 连接管理器核心：web profile 宿主托管、双 host 包本地 seed/overlay、管理 REST、每实例反代、静态前端服务 |
+| `packages/control-plane` | 连接管理器核心：web profile 宿主托管、host 包本地 seed/overlay、管理 REST、每实例反代、静态前端服务 |
 | `packages/renderer` | 自建 dsh 前端（源码复用）：入口构建、纯 dsh 首屏桥接宿主、N-ctx 编排、启动图清单 |
 | `packages/desktop` | Electron 壳：单 frame、正交目标/传输 provider、远端 ready-time host 包分发、实例注册表、IPC、运行时管理与原生边缘能力 |
 | `packages/cli` | CLI 薄壳（serve/status/connections/host logs） |
@@ -59,6 +59,7 @@ Git worktree 功能由 chamber-bundled client 插件与**每实例内** host 插
 | `packages/dsh-chamber-client-ui-git` | chamber 内建 Git worktree 客户端：sidebar 座位、每实例拓扑、创建/删除 saga；不直接执行 Git |
 | `packages/dsh-chamber-client-ui-open-in` | chamber 内建 open-in 客户端插件（官方客户端半的**超集**，并**替换**其注册）：会话头部 utilities 槽打开按钮——本地应用目录 + 本地/远程 VS Code，主进程 OpenInApp 注册表 + `dsh-chamber://` 深链 |
 | `packages/dsh-chamber-seed-git-worktree` | 实例内 host 包：按 workspace/agent 权威校验并执行受限、本地-only Git worktree 生命周期 |
+| `packages/dsh-chamber-seed-archive-cleanup` | 实例内 host 包：已归档会话内容清理 `archiveCleanup/{preview,purge,probe}`（只删不读、幂等；design 24） |
 | `packages/dsh-chamber-seed-open-in` | 实例内 host 包（仅本地形态）：上游 `dsh-host-open-in-app` 的 fork，经 `openInApp/*` Typert Remote 提供本机应用目录、真实 bundle 图标与拉起（design 20 §6） |
 
 ## 2. 环境搭建
@@ -116,17 +117,17 @@ pnpm run dev:desktop         # 完整窗口：控制面 + dsh 前端 + 桌面壳
 ```bash
 pnpm run build:host-packages # 构建 host-graph + host-git-worktree 两个宿主包
 pnpm run build:renderer      # 构建 dsh 前端 bundle（vite 构建 dsh workspace 源码）
-pnpm run build:desktop       # 双 host 包 → renderer → 控制面/双包复制 → preload → bundle:dsh
+pnpm run build:desktop       # host 包 → renderer → 控制面/host 包复制 → preload → bundle:dsh
 pnpm run dist:desktop:mac    # 打包 macOS 应用（dmg + zip）
 pnpm run dist:desktop:win    # 打包 Windows 应用（nsis + zip；须在 Windows 上运行——dsh 运行时封装按平台区分）
 ```
 
 打包产物在 `packages/desktop/release/` 下（electron-builder `directories.output`）。正式发布的 macOS 腿必须具备五项 Apple/Developer ID 凭据：缺项会在任何 GitHub Release 变更前 fail-closed；构建后还必须通过 Developer ID 签名、公证、stapler 与 spctl 校验，任一失败都阻断 draft 公开 finalize。`workflow_dispatch dry_run` 即使仓库配置了正式 secrets，也会无条件清空签名/公证环境与 `GH_TOKEN`，使用 `--publish=never`，不创建/修改 Release、不上传资产，并由 afterPack 钩子产生 ad-hoc 签名验证包。Windows 首版仍未签名（SmartScreen 警告，design 11 §7 的明确权衡）。
 
-`build:desktop` 会把两个已构建 host 包复制到
-`packages/desktop/dist/host-graph-package/` 与
-`packages/desktop/dist/host-git-worktree-package/`；本地控制面从这里 seed
-打包态本地实例，桌面 ready-time 远端 seed 也复用同一份产物。
+`build:desktop` 会把已构建的 host 包（client-graph / git-worktree / archive-cleanup /
+open-in）复制到 `packages/desktop/dist/host-*-package/`；本地控制面从这里 seed
+打包态本地实例，桌面 ready-time 远端 seed 复用同一份产物（open-in 为 `localOnly`，只进本地
+seed，不进远端/gateway）。
 
 > Windows 安装慢/卡"正在安装"的排障（Windows Defender 逐文件扫描）见 README「常见问题」。
 
@@ -145,7 +146,7 @@ pnpm run dist:desktop:win    # 打包 Windows 应用（nsis + zip；须在 Windo
 
 ## 5. CI 与发布
 
-- `.github/workflows/ci.yml`：每次 push/PR 运行——纯验证链（frozen install → 根/gateway/runtime/两个 host 包/client 插件 typecheck → i18n → 控制面/runtime/desktop/gateway/renderer/client/host 单测〔含 `test:git`、`test:host-git`〕→ **workflow action SHA 门禁**（`release-preflight --actions-only`，2026-09 起）→ smoke〔未捆绑运行时 SKIP〕→ renderer/host/desktop 子构建 → gateway 打包安装冒烟〔`pack` → 临时 prefix 安装 → `gateway --help`〕），**不产出发布包**；桌面打包与真实 smoke 验证在 `release.yml`（tag/手动触发）进行。
+- `.github/workflows/ci.yml`：每次 push/PR 运行——纯验证链（frozen install → 根/gateway/runtime/host 包/client 插件 typecheck → i18n → 控制面/runtime/desktop/gateway/renderer/client/host 单测〔含 `test:git`、`test:host-git`〕→ **workflow action SHA 门禁**（`release-preflight --actions-only`，2026-09 起）→ smoke〔未捆绑运行时 SKIP〕→ renderer/host/desktop 子构建 → gateway 打包安装冒烟〔`pack` → 临时 prefix 安装 → `gateway --help`〕），**不产出发布包**；桌面打包与真实 smoke 验证在 `release.yml`（tag/手动触发）进行。
 - `.github/workflows/release.yml`：产出可分发的发布版——推送 `v*` tag（或手动运行，版本输入不带 `v`，可选 dry-run）。发布版本只允许 canonical stable `X.Y.Z` 或 beta `X.Y.Z-beta.N`，`alpha`/`rc`/其他 prerelease fail closed；stable 使用默认 desktop 打包配置且只发布 `latest.yml`/`latest-mac.yml`，beta 使用独立 `packages/desktop/electron-builder.beta.yml` 且只发布 `beta.yml`/`beta-mac.yml`，两通道资产互斥。正式流程先建 draft，构建 macOS arm64（v1 仅 Apple Silicon）与 Windows x64，完成上述 macOS fail-closed 校验后才翻转公开；dry-run 全程零 Release 写入。版本断言经 `release-preflight --versions-only` 动态覆盖根、全部非 fork chamber 包及三个 fork 基线；`CHANGELOG.md` 的 `## [<version>]` 段落被提取为发布正文（缺失会失败）。`validation` job 自验证 gateway/runtime typecheck+tests、关键 control-plane/desktop/renderer/plugin/CLI/policy 门禁；`build-gateway` 只在 GitHub Release 发布经干净临时前缀安装冒烟的 `.tgz` 与同名 `.tgz.sha256`，npm publish/dist-tag 延后。
 - **发布机械门禁（2026-09 起）**：`pnpm run release:preflight <版本>`
   （`scripts/dev/release-preflight.mjs`）——版本统一性（含 fork 副本与安装器 dsh
@@ -188,6 +189,8 @@ packages/
                             实例内 open-in host Remote（本机应用目录 + 图标 + 拉起；仅本地形态）
   dsh-chamber-seed-git-worktree/
                             实例内 Git worktree host Remote（权威校验 + 受限 Git）
+  dsh-chamber-seed-archive-cleanup/
+                            实例内归档清理 host Remote（design 24）
 docs/
   design/                   设计文档（01 为入口；05 为表面/架构契约（v1））
   progress/                 STATUS.md——唯一进度总览（只记未完成/部分完成项）
@@ -212,7 +215,7 @@ vendor/
 | `pnpm run build:host-graph` | 构建 host-graph 包（esbuild） |
 | `pnpm run build:host-git` | 构建实例内 Git worktree host 包（esbuild） |
 | `pnpm run build:host-packages` | 依次构建 host-graph 与 host-git-worktree |
-| `pnpm run build:desktop` | 双 host 包 + renderer + 控制面编译/双包复制 + preload + dsh 封装 |
+| `pnpm run build:desktop` | host 包 + renderer + 控制面编译/host 包复制 + preload + dsh 封装 |
 | `pnpm run typecheck:git` | 类型检查 Git worktree 客户端插件 |
 | `pnpm run typecheck:host-git` | 类型检查实例内 Git worktree host 包 |
 | `pnpm run test:git` | 运行 Git worktree 客户端插件测试 |

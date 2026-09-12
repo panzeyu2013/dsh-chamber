@@ -299,7 +299,7 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
       options.config.mobileUaRedirect === true,
       options.config.mobileEntryPath ?? DEFAULT_MOBILE_ENTRY_PATH,
     )
-    // Chamber seed registry (2026-12): the THREE host packages are DESKTOP-
+    // Chamber seed registry (2026-12): the THREE syncable host packages are DESKTOP-
     // SYNCED — the control-plane seeds them into the managed dsh profile from
     // the chamber-plugins cache, which a connecting desktop populates through
     // PUT /chamber/plugins (Phase 3). Until the first sync the cache is

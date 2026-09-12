@@ -286,7 +286,7 @@ provider（本地目录不再是主进程的事，也不再是"官方宿主行"�
    `packages/renderer/src/global.d.ts` 与 `packages/desktop/preload.cts` 的
    `ChamberHostPackageState`（两处都加 `localOnly?: boolean`——四份声明由 §9 的字段集门钉在一起）、
    `test/chamber-seed-drift.test.ts`（读 `host-graph-seed.ts` 断言名字集合与注册表行一一对应
-   ——**第 4 个包不加进去，该门直接红**）；远端探针在该行上**一次远端调用都不发**，
+   ——**新包不加进去，该门直接红**）；远端探针在该行上**一次远端调用都不发**，
    插件页对非本地目标渲染 `chamberBadgeLocalOnly`（本地形态专用），而不是"未注入"；
 7. 打包闭包：根 `build:host-open-in` / `typecheck:host-open-in` / `test:host-open-in`，
    `build:host-packages` 聚合，desktop 的 `HOST_PACKAGE_BUILD_ROWS` 加 `open-in` 行
@@ -384,7 +384,7 @@ provider（本地目录不再是主进程的事，也不再是"官方宿主行"�
 | 记忆 | `test/choice-store.test.ts` | per-source 键、来源隔离、旧全页键只读迁移、畸形 id 不写键 |
 | 桌面投影 | `test:desktop`（plugin-sync/open-in/cross-package-contract/renderer-trust） | 远端 seed 丢弃 `localOnly` 行、远端探针对该行零调用、本地投影携带 `localOnly`、打包行集 |
 | 状态对象字段集 | `cross-package-contract.test.ts`（新增门）+ `ipc-surface-mirror.test.ts`（L3） | 同一个 wire 状态对象有**四份声明**（`plugin-sync.ts` 投影 / `renderer/global.d.ts` / `preload.cts` / 客户端 `ChamberPackageState`）：前两者与 client 由新门三向比对（client 允许只少 `probe`），preload ↔ renderer 由既有 L3 门覆盖 ⇒ 四向全闭合。**加 `localOnly` 时正是 renderer 与 preload 两处漏了**，两道门各抓一处 |
-| 网关派生白名单 | `test:gateway`（feature-lifecycle / chamber-installed / runtime-routes） | `/chamber/plugins` 投影与上传白名单由注册表派生 ⇒ 第 4 行自动出现（本地形态专用行 `version` 恒 null）；gateway load 断言的域集 == `HOST_DOMAIN_PROBE_NAMES`（本机实测：该断言在 shim 解析到旧 runtime 时当场抛错，正是它应有的行为） |
+| 网关派生白名单 | `test:gateway`（feature-lifecycle / chamber-installed / runtime-routes） | `/chamber/plugins` 投影与上传白名单由注册表派生 ⇒ 该 localOnly 行自动出现（本地形态专用行 `version` 恒 null）；gateway load 断言的域集 == `HOST_DOMAIN_PROBE_NAMES`（本机实测：该断言在 shim 解析到旧 runtime 时当场抛错，正是它应有的行为） |
 | 注册表锁步 | `test:chamber-seed-drift.test.ts`（connections 包） | 客户端名字镜像 == `CHAMBER_HOST_PACKAGES` 行集 |
 | 文案 | `pnpm run verify:i18n` | 新文案 zh/en 双份与记录一致 |
 | 触点门 | `verify-upstream-touchpoints.mjs` | C7（四域锁步）+ C8（含新 seed dist，重建-比对 6 组）+ C9（vendor 补丁集不变：open-in 不新增补丁）+ 新 fork 的 C1/C3/C5（`FORKS` 行 + `versionAnchor: 'chamber'` 豁免，见 §10） |

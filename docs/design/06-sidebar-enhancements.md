@@ -50,8 +50,9 @@
   → 未中止则提交 ready/error。Escape 清空并收起；outside-click 仅在 query
   为空时收起（官方语义）。断连来源的搜索状态被裁剪（重连从干净收起态开始）。
 - **结果渲染**：query 非空时该来源的 `workspaceList` 整体替换为结果列表
-  （来源头与状态保留；折叠入口隐藏）。行 = 标题（聚合解析，
-  缺失兜底"未命名会话"）+ 所属 workspace 标签（本地命中行）+ snippet 行
+   （来源头与状态保留；折叠入口隐藏）。行 = 标题（聚合解析：官方链
+   `durable title → cwd 目录名 → 会话 id`，**永不为空**，见 design 05 §2.1）
+   + 所属 workspace 标签（本地命中行）+ snippet 行
   （远程内容命中携带，同会话双命中时补入）；点击 →
   `chamberBridge.requestOpenSession`。
   状态行：loading → `search.pending`；error → `search.unavailable` 横幅

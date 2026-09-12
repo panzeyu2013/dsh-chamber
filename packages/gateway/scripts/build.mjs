@@ -44,8 +44,9 @@ if (!existsSync(indexOut) || !existsSync(cliOut)) {
 chmodSync(cliOut, 0o755)
 
 // Ship the packaged chamber seed entries inside the gateway package
-// (2026-12): the two host packages (dsh-chamber-seed-client-graph / git-worktree) are
-// now DESKTOP-SYNCED (PUT /chamber/plugins → chamber-plugins cache) and no
+// (2026-12): the host packages (dsh-chamber-seed-client-graph /
+// git-worktree / archive-cleanup) are now DESKTOP-SYNCED
+// (PUT /chamber/plugins → chamber-plugins cache) and no
 // longer ship here; only packaged entries ride this directory. Today that is
 // the mobile client-plugin slot (dsh-chamber-client-ui-mobile, kind 'client',
 // design 17 §18): mobile access is bound to the gateway and has no desktop in

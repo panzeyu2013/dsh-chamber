@@ -30,12 +30,16 @@ import { DirectoryBrowseError } from './directory-browse-error.ts'
 // 2026-09-11 upstream-alignment T7: one derivation for the active-Schedule fact
 // (shared by this module's unary row build and derive.ts's mounted-store
 // projection). derive.ts type-imports this module only, so no runtime cycle.
-import { hasActiveScheduleOf } from './derive.ts'
+// I3: the display-title ladder and its basename helper live in derive.ts for
+// the same reason (one resolver, no cycle); `basenameOf` is re-exported below
+// so existing importers (workspace-echo.ts) keep their import site.
+import { basenameOf, hasActiveScheduleOf, sessionDisplayTitle } from './derive.ts'
 import {
   decodeSessionCreateValue, decodeWorkspaceCreateValue, decodeWorkspaceDeleteValue,
 } from './instance-mutation-values.ts'
 import { InstanceRpcError } from './instance-rpc-error.ts'
 import { mintRpcId } from './wire-common.ts'
+export { basenameOf } from './derive.ts'
 export { InstanceRpcError } from './instance-rpc-error.ts'
 
 /** One workspace row (WorkspaceView wire shape). */
@@ -68,6 +72,15 @@ export interface SessionRow {
   updatedAt?: number
   running: boolean
   blank: boolean
+  /**
+   * The official display label resolved at BUILD time — `title ?? basename(cwd)
+   * ?? id` (shared/derive.ts `sessionDisplayTitle`), never empty. Kept separate
+   * from `title`, which stays the durable title projection: rename/fork copy
+   * and the archive manager must not treat a directory-name fallback as a
+   * durable name. Absent on pre-revision producers; the derive layer then
+   * re-applies the ladder (I3: a label never renders 「未命名」 for "unknown").
+   */
+  displayTitle?: string
   /**
    * 2026-09-11 upstream-alignment T7: the session owns at least one ACTIVE
    * schedule (upstream `SessionNode.hasActiveSchedule`, derived from
@@ -294,8 +307,10 @@ class InstanceApiClient {
     if (response.status === 404 && options.notFoundAsDomainMissing === true) {
       const payload404 = await readNotFoundBody(response)
       if (payload404?.code !== 'instance_not_found') {
+        // The message names the METHOD: this opt-in belongs to the chamber host
+        // domains, and a 404 on one must never claim another is missing.
         throw new InstanceDomainMissingError(
-          '该实例未挂载 chamber 归档清理域：宿主包同步/seed 后需重启 dsh 生效',
+          `该实例未挂载 chamber 宿主域 ${endpoint}：宿主包同步/seed 后需重启 dsh 生效`,
         )
       }
     }
@@ -594,6 +609,16 @@ export async function fetchInstanceSnapshot(client: InstanceApiClient): Promise<
     const title = titleOf(summary)
     if (title !== undefined) row.title = title
     if (typeof summary.cwd === 'string' && summary.cwd !== '') row.cwd = summary.cwd
+    // Official display label (I3). The unary wire has no `displayTitle`, so the
+    // ladder is applied here, where the cwd is in hand: title → directory name
+    // → session id. A row whose title the host could not read (a predecessor
+    // cache record) therefore renders its project directory name instead of
+    // 「未命名会话」.
+    row.displayTitle = sessionDisplayTitle({
+      title,
+      ...(row.cwd === undefined ? {} : { cwdBasename: basenameOf(row.cwd) }),
+      sessionId: row.sessionId,
+    })
     if (typeof summary.parentSessionId === 'string') row.parentSessionId = summary.parentSessionId
     // 2026-09-11 upstream-alignment T7: the unary wire row publishes the
     // registered projections (`projections.values`, the very block `titleOf`
@@ -639,15 +664,10 @@ export async function fetchInstanceSnapshot(client: InstanceApiClient): Promise<
   return { workspaces, sessions, archivedSessionIds: [], archiveSetKnown: false }
 }
 
-/** Trailing path segment ('' for root); the cwd-derived group title. Shared
- *  with the workspace-echo row builder (shared/workspace-echo.ts), so a locally
- *  echoed workspace renders the same title its cwd-derived group would. */
-export function basenameOf(cwd: string): string {
-  const trimmed = cwd.replace(/[\\/]+$/, '')
-  const separator = Math.max(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\'))
-  const base = separator === -1 ? trimmed : trimmed.slice(separator + 1)
-  return base === '' ? cwd : base
-}
+// `basenameOf` MOVED to shared/derive.ts (the display-title resolver needs it,
+// and a value import in this direction would be a runtime cycle). It is
+// re-exported at the top of this module, so the workspace-echo row builder and
+// every existing importer keep their import site.
 
 async function callAndThrow(_client: InstanceApiClient, call: () => Promise<UnaryResult<any>>): Promise<UnaryResult<any>> {
   let result: UnaryResult<any>
