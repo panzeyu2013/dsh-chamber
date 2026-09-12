@@ -5,9 +5,41 @@ import { createPurgeTracker } from '../src/shared/purged-tracker.ts'
 const flush = (): Promise<void> => new Promise(resolve => setImmediate(resolve))
 
 /**
+ * Deterministic timer seam for the convergence chain (2026-09-12 CI fix).
+ *
+ * WHY: the chain's retry cadence (`retryMs`) and per-attempt watchdog are real
+ * timers by default, so a test that asserted "exactly one refresh so far" after
+ * a `setImmediate` flush raced the 1 ms retry — it passed on a fast machine and
+ * failed on a loaded CI runner (`purged-tracker.test.ts`, run 34668100002:
+ * `2 !== 1`). The tracker already accepts `schedule`/`cancel` ("tests inject fake
+ * timers"), so every test in this file now drives time explicitly instead of
+ * waiting on wall-clock milliseconds.
+ */
+function makeClock() {
+  let nextId = 1
+  const timers = new Map<number, { run: () => void; ms: number }>()
+  return {
+    /** The chain's `schedule` seam. */
+    schedule: (run: () => void, ms: number): number => { const id = nextId++; timers.set(id, { run, ms }); return id },
+    /** The chain's `cancel` seam. */
+    cancel: (id: unknown): void => { timers.delete(id as number) },
+    /** Number of armed timers (retries + watchdogs). */
+    get pending(): number { return timers.size },
+    /** Fire every currently armed timer once, in scheduling order. */
+    runPending(): number {
+      const batch = [...timers.entries()].sort((a, b) => a[0] - b[0])
+      timers.clear()
+      for (const [, timer] of batch) timer.run()
+      return batch.length
+    },
+  }
+}
+
+/**
  * Tracker harness: a fake official refresh whose outcome/lingering the test
  * controls, plus call/warn recording. `lingeringIds` models the official
- * summaries still listing the tombstoned ids.
+ * summaries still listing the tombstoned ids. Every harness carries the
+ * deterministic clock above, so no test in this file depends on wall-clock ms.
  */
 function tracker(options: {
   refresh?: () => Promise<unknown> | undefined
@@ -17,15 +49,18 @@ function tracker(options: {
 } = {}) {
   const calls: number[] = []
   const warns: string[] = []
+  const clock = makeClock()
   let n = 0
   const handle = createPurgeTracker({
     refresh: options.refresh ?? (() => { calls.push(n++); return Promise.resolve() }),
     listedSummaryIds: options.listedSummaryIds ?? (() => new Set<string>()),
     warn: (message) => { warns.push(message) },
+    schedule: clock.schedule,
+    cancel: clock.cancel,
     ...(options.maxAttempts === undefined ? {} : { maxAttempts: options.maxAttempts }),
     ...(options.retryMs === undefined ? {} : { retryMs: options.retryMs }),
   })
-  return { handle, calls, warns }
+  return { handle, calls, warns, clock }
 }
 
 test('tracker: the first observation never arms tombstones', () => {
@@ -121,24 +156,29 @@ test('tracker: converge() drives the chain; dispose() stops it', async () => {
 
 test('tracker: the chain sees the live suppression set through lingering()', async () => {
   // The official summaries still list g -> the chain retries; once the test
-  // stops listing it, the chain converges without a release valve.
+  // stops listing it, the chain converges without a release valve. The retry is
+  // fired through the injected clock, so "exactly one call so far" is a fact,
+  // not a race (2026-09-12 CI fix).
+  const clock = makeClock()
   let listed = new Set(['g'])
   const calls: number[] = []
   const handle = createPurgeTracker({
     refresh: () => { calls.push(1); return Promise.resolve() },
     listedSummaryIds: () => listed,
     warn: () => {},
+    schedule: clock.schedule,
+    cancel: clock.cancel,
     maxAttempts: 3,
     retryMs: 1,
   })
   handle.observeArchive(['g'])
   handle.observeArchive([])
   await flush()
-  assert.equal(calls.length, 1)
+  assert.equal(calls.length, 1, 'the arm publishes exactly one refresh with no timer fired')
   listed = new Set()
-  await new Promise(resolve => setTimeout(resolve, 5))
+  clock.runPending()
   await flush()
-  assert.equal(calls.length, 2)
+  assert.equal(calls.length, 2, 'the clock-driven retry converges')
   assert.equal(handle.active(), false)
 })
 
@@ -150,15 +190,18 @@ test('tracker: the suppression SURVIVES chain exhaustion (no release valve)', as
   const t = tracker({ maxAttempts: 2, retryMs: 1, listedSummaryIds: () => new Set(['g', 'live']) })
   t.handle.observeArchive(['g'])
   t.handle.observeArchive([])
-  await new Promise(resolve => setTimeout(resolve, 12))
   await flush()
-  assert.equal(t.calls.length, 2)
+  assert.equal(t.calls.length, 1)
+  t.clock.runPending()
+  await flush()
+  assert.equal(t.calls.length, 2, 'the second (final) attempt rides the injected clock')
   assert.deepEqual([...t.handle.suppressed()], ['g'])
   assert.deepEqual(t.handle.filter([{ sessionId: 'live' }, { sessionId: 'g' }]), [{ sessionId: 'live' }])
   assert.equal(t.warns.length, 1)
 })
 
 test('tracker: a probe-confirmed live id is released and re-published', async () => {
+  const clock = makeClock()
   let released = 0
   const handle = createPurgeTracker({
     refresh: () => Promise.resolve(),
@@ -166,13 +209,15 @@ test('tracker: a probe-confirmed live id is released and re-published', async ()
     probe: () => Promise.resolve(new Set(['g'])),
     onRelease: () => { released += 1 },
     warn: () => {},
+    schedule: clock.schedule,
+    cancel: clock.cancel,
     maxAttempts: 1,
     retryMs: 1,
   })
   handle.observeArchive(['g'])
   handle.observeArchive([])
   assert.deepEqual([...handle.suppressed()], ['g'])
-  await new Promise(resolve => setTimeout(resolve, 8))
+  clock.runPending()
   await flush()
   assert.equal(handle.suppressed().size, 0)
   assert.equal(released, 1)
@@ -180,17 +225,20 @@ test('tracker: a probe-confirmed live id is released and re-published', async ()
 })
 
 test('tracker: a probe that does not confirm the id keeps it suppressed', async () => {
+  const clock = makeClock()
   const handle = createPurgeTracker({
     refresh: () => Promise.resolve(),
     listedSummaryIds: () => new Set(['g']),
     probe: () => Promise.resolve(new Set(['other'])),
     warn: () => {},
+    schedule: clock.schedule,
+    cancel: clock.cancel,
     maxAttempts: 1,
     retryMs: 1,
   })
   handle.observeArchive(['g'])
   handle.observeArchive([])
-  await new Promise(resolve => setTimeout(resolve, 8))
+  clock.runPending()
   await flush()
   assert.deepEqual([...handle.suppressed()], ['g'])
 })
