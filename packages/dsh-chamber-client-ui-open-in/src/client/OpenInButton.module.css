@@ -1,157 +1,111 @@
-/* Open-in header utility button group (design 16 §6 + open-in extension,
-   placement fix 2026-08). Registered into the official conversation header
-   utilities slot, so this is a plain INLINE icon button in the header's
-   right-aligned utilities row (beside the vendor "Session log" pill) — no
-   absolute positioning: the header's own flow layout orders it and no
-   frame-level anchor can collide with the header content. The pill carries the
-   chamber pill vocabulary — 32px row height, a 0.5px
-   --dsw-alias-border-l2 hairline, 18px radius, transparent base, hover tint,
-   focus ring — so the two adjacent controls read as one row of matching
-   pills. (Measured against the pinned vendor: the official header control row
-   is 28px — ui-open-in-app/OpenInAppAction.module.css "matches the header's
-   28px control row", session-log-export/HeaderAction.module.css "28px round
-   header icon button", ui-conversation/ConversationRoot.module.css
-   `.titleRow{min-height:30px}`. This pill is therefore 4px TALLER than the
-   pinned row it sits in; that is a pre-existing chamber design choice, not a
-   copy of either neighbour and not a defect fix. 2026-09-11 review-fix: the
-   earlier wording claimed these values were "the header row's own", which the
-   vendor sources above contradict.) */
+/* Open-in header utility control (design 16 §6 + open-in extension, placement
+   fix 2026-08; **style parity revision 2026-09-12**).
 
-/* The two-button group (main icon button + chevron) reads as one control. */
-.group {
+   Registered into the official conversation header utilities slot
+   (`conversation.session.header.utilities`, the same right-aligned row as the
+   vendor "Session log" action), so this control adopts the OFFICIAL open-in
+   split button's own geometry rule for rule — copied from the pinned vendor
+   `@deepseek-ai/dsh-client-ui-open-in-app/lib/client.js`
+   (`OpenInAppAction.module.css`): `.split` 28px / `border-l4` / r14, `.main`
+   a 15px mark, `.chevron` an 11px mark behind a `border-left` hairline, menu
+   rows an 18px mark. That is exactly the row's own control height measured
+   against the pinned vendor: `session-log-export/HeaderAction.module.css`
+   `.moreButton{width:28px;height:28px;border:none;border-radius:28px}` and
+   `ui-conversation/ConversationRoot.module.css`
+   `.titleRow{min-height:30px}`. The earlier chamber-invented 32px / r18 /
+   `border-l2` pill stood 4px taller than both its row and its neighbour and
+   read as a different control family; it is gone, not restated.
+
+   Chamber-only affordances that remain (all of them extensions upstream never
+   had, none of them a style of its own): the failure tooltip, the per-source
+   remembered choice, the re-probe/arrow-key opening and the N-ctx dismissal.
+   The control's FORM is upstream's too — one split button for any non-empty app
+   set (upstream has no single-entry variant; the 2026-09-12 thorough-unification
+   pass deleted chamber's plain one-app button). No declaration here invents a
+   token, a size or a colour the pinned vendor surface does not already use.
+
+   Two deliberate SPELLING differences from the upstream text, both
+   computed-identical and verified against it: `0.5px` where upstream writes
+   `.5px` (this repo's convention — 30+ declarations), and `background: none`
+   where upstream writes `background: 0 0` (same longhand reset). Every other
+   declaration of `.split`/`.main`/`.chevron`/`.icon` matches upstream verbatim. */
+
+/* The control box (upstream `.split`): the ONLY element that draws the
+   hairline and the corner radius — the inner buttons stay borderless and are
+   clipped by `overflow: hidden`, which is what makes the two halves read as one
+   control. */
+.split {
+  box-sizing: border-box;
   display: inline-flex;
-  align-items: center;
-  flex: none;
+  height: 28px;
+  align-items: stretch;
+  overflow: hidden;
+  border: 0.5px solid var(--dsw-alias-border-l4);
+  border-radius: 14px;
+  font-family: var(--dsw-font-family);
 }
 
-.button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  /* The chamber pill vocabulary (32px, 0.5px --dsw-alias-border-l2 hairline,
-     r18, transparent base) — see this module's header: the values are NOT the
-     pinned vendor's (28px control row; session-log's 28px circle with
-     `border: none`; the official ui-open-in-app action's 28px / r14 /
-     border-l4), they are 4px taller by design. The hairline keeps the icon
-     button visible on the white header exactly like its neighbour.
-     (2026-09-11 review-fix: both this rule and the header now state the
-     measured facts instead of contradicting each other.) */
-  border: 0.5px solid var(--dsw-alias-border-l2);
-  border-radius: 18px;
-  background: transparent;
-  /* The official VS Code logo carries its own brand fill; hover feedback is
-     the background tint + a subtle brightness lift on the mark. */
-  cursor: pointer;
-  outline: none;
-  flex: none;
-}
-
-/* In the two-button group the main icon button and the chevron read as one
-   pill: the button drops its right border so the chevron's left border is
-   the single hairline divider between them. */
-.group .button {
-  border-radius: 18px 0 0 18px;
-  border-right: none;
-}
-
-.button:hover,
-.button:focus-visible {
-  background: var(--dsw-alias-interactive-bg-hover);
-}
-
-/* Launch phases (absorbed from the official split button): the busy dress is
-   delayed by the component (250ms), so it never flashes on a quick launch;
-   the error dress decays after 2s. */
-.button[data-state='busy'] {
-  color: var(--dsw-alias-label-dimmed);
-  cursor: wait;
-}
-
-.button[data-state='error'] {
-  box-shadow: inset 0 0 0 1px var(--dsw-alias-state-error-primary);
-}
-
-.button:hover img {
-  filter: brightness(1.15);
-}
-
-/* Folder mark hover feedback mirrors the VS Code mark's lift (a token-based
-   color shift — the SVG stroke is currentColor, so no filter is needed). */
-.button:hover .folderMark {
-  color: var(--dsw-alias-label-primary);
-}
-
-/* The official app icon is a rounded square: 20px inside the 32px pill keeps
-   a balanced 6px margin instead of the 16px icon's airy 8px ring. */
-.button img {
-  width: 20px;
-  height: 20px;
-  flex: none;
-  display: block;
-  user-select: none;
-}
-
-/* Keyboard focus ring (frontend-review P2-7): outline:none above needs an
-   explicit visible equivalent, not just a background tint. Vendor focus-ring
-   convention (--dsw-alias-state-business-primary). */
-.button:focus-visible {
-  outline: 2px solid var(--dsw-alias-state-business-primary);
-  outline-offset: 1px;
-}
-
-/* Neutral folder mark: inherits the button's text color (set below) so the
-   stroke follows the design token instead of a hardcoded brand color. */
-.folderMark {
-  display: block;
-  flex: none;
-  color: var(--dsw-alias-label-secondary);
-}
-
-.genericMark {
-  display: block;
-  flex: none;
-  color: var(--dsw-alias-label-secondary);
-}
-
-/* Chevron dropdown trigger (only when ≥2 apps are usable): a 16px chevron
-   inside the same pill, with the full pill border — its left edge doubles as
-   the hairline divider against the main icon button (which drops its right
-   border inside the group). */
+/* Main button and chevron share the row's own control type (upstream
+   `.main,.chevron`); the paddings differ per button below. */
+.button,
 .chevron {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 32px;
-  padding: 0;
-  border: 0.5px solid var(--dsw-alias-border-l2);
-  border-radius: 0 18px 18px 0;
-  background: transparent;
-  color: var(--dsw-alias-label-secondary);
+  gap: 5px;
+  color: var(--dsw-alias-label-primary);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 16px;
+  white-space: nowrap;
+  background: none;
+  border: 0;
   cursor: pointer;
-  outline: none;
-  flex: none;
 }
 
+/* Upstream `.main` padding: 7px + the 15px mark + 6px = the 28px square. */
+.button {
+  padding: 5px 6px 5px 7px;
+}
+
+/* The chevron's left hairline is the divider between the two halves (upstream
+   `.chevron`); disabled main buttons keep their pointer-free wait dress below,
+   so a busy launch never tints on hover (upstream `:hover:not(:disabled)`). */
+.chevron {
+  padding: 5px 6px 5px 4px;
+  border-left: 0.5px solid var(--dsw-alias-border-l4);
+  color: var(--dsw-alias-label-secondary);
+}
+
+.button:hover:not(:disabled),
+.button:focus-visible,
 .chevron:hover,
 .chevron:focus-visible {
   background: var(--dsw-alias-interactive-bg-hover);
 }
 
-.chevronMark {
-  display: block;
+/* Busy dress (the component delays it by 250ms so a quick launch never
+   flashes it) and the error ring, both verbatim upstream. */
+.button:disabled {
+  color: var(--dsw-alias-label-dimmed);
+  cursor: wait;
+}
+
+.button[data-state='error'] {
+  color: var(--dsw-alias-state-error-primary);
+  box-shadow: inset 0 0 0 1px var(--dsw-alias-state-error-primary);
+}
+
+/* The app mark fills the slot it is given and never shrinks; raster marks keep
+   their aspect ratio (`object-fit`) exactly as upstream `img.icon` does — a
+   non-square bundle icon (a Linux theme PNG/SVG, an unusual .icns) must be
+   letterboxed, never stretched. Sizing comes from the mark's own width/height
+   (15px in the button, 18px in the menu), so no rule pins it here. */
+.mark {
   flex: none;
-  transition: transform 120ms ease;
 }
 
-.chevron[aria-expanded='true'] .chevronMark {
-  transform: rotate(180deg);
-}
-
-.chevron:focus-visible {
-  outline: 2px solid var(--dsw-alias-state-business-primary);
-  outline-offset: 1px;
+img.mark {
+  object-fit: contain;
+  user-select: none;
+  display: block;
 }

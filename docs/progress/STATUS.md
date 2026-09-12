@@ -631,8 +631,7 @@
     26px 行距；无计划的行走零占位）。
 - **默认排序 `manual`（06 §3.1）**：按 wire 顺序，与官方默认 `updated` 不同，是
   有意产品取舍。**窗口标题冻结**：桌面原生标题固定 `dsh-chamber`。
-- **样式 token 对齐后的两处未对齐（2026-09 风格对齐轮登记，均为有意/待裁；
-  2026-09-11 收窄第一处）**：
+- **样式 token 对齐后的一处未对齐（2026-09 风格对齐轮登记，有意/待裁）**：
   - **菜单圆角 12px vs 上游 20px**：只剩 `SettingsShell.module.css .dropdownList`
     （服务器下拉，body portal 列表）——它仍是官方
     `ui-primitives/Menu.module.css .list` 的逐项移植（4px 内边距、`border: 0` +
@@ -644,17 +643,6 @@
     2026-09-11 对齐删除（open-in 改用官方 `Menu`），`.dropdownList` 作为 portal 列表
     由 server-selector 按 viewport 钳位（`min-width: 0` / `max-width: none`）、
     z-index 1200 盖过模态层。属圆角而非边框，改 1 行即可。
-  - **open-in header pill 规格不对应任何 pinned vendor 面**：`OpenInButton.module.css`
-    为 32px / `0.5px border-l2` / r18，而 pinned vendor 的
-    `session-query/session-log-export/HeaderAction.module.css` 是 28px 圆形 + `border: none`
-    + r28，官方 `ui-open-in-app/OpenInAppAction.module.css` 是 28px / r14 / `border-l4`
-    分体按钮，且 vendor `ui-conversation/ConversationRoot.module.css` 的
-    `.titleRow{min-height:30px}` 就是这条 28px 控件行的高度——chamber 的 pill 因此比它
-    所在的行**高 4px**，这是既有的 chamber 设计选择，不是任何一侧的复制品。旧句
-    「vendor Session log pill 逐字复用」不属实（先于本轮）；**本轮（2026-09-11
-    review-fix）已把模块头与 `.button` 规则上那句旧注释一并改为上述实测事实**（两处
-    现在陈述同一组数字，不再自相矛盾）。是否对齐到上游其中一款仍是设计决策，非缺陷
-    修复。
 - **Electron 二进制惰性安装**（每机器共享 dist，worktree 并行共用）；**dev 实例隔离**
   （独立 user-data、控制面端口 17520 起自动退避）。
 - **内建版本行引导（2026-12 决策，方案 2）**：选中与内建同版本行且未装受管树、

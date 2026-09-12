@@ -10,11 +10,14 @@
  *    per-instance base path, the browser-auth cookie and the trust fence);
  *    main entries ride the trusted preload IPC with the exact-boot source
  *    proof;
- *  - **the boot-level icon cache** for local entries: the host serves real
- *    bundle icons as base64 through the same channel, so each id is fetched at
- *    most once per boot (a failure is cached too — a missing icon must not be
- *    re-requested on every render) and the button keeps its neutral mark until
- *    the pixels arrive;
+ *  - **the boot-level icon cache** keyed by app id, filled from the instance's
+ *    own catalog: the host serves real bundle icons as base64 through the same
+ *    channel, so each id is fetched at most once per boot (a failure is cached
+ *    too — a missing icon must not be re-requested on every render) and the
+ *    button keeps its fallback mark until the pixels arrive. The cache is read
+ *    for EVERY channel (the main-process entry included): whichever channel
+ *    launches an app, the mark is the host's own art when the instance could
+ *    answer it (2026-09-12 thorough unification);
  *  - the persisted app choice.
  *
  * The React entry only consumes the resulting view-model plus this face, so the
@@ -78,7 +81,8 @@ export interface OpenInSourceAdapter {
   subscribe(listener: () => void): () => void
   refresh(): Promise<void>
   launch(entry: OpenInViewEntry, path: string): Promise<OpenInResult>
-  /** Cached icon `data:` URL for a local entry; null while unknown or absent. */
+  /** Cached host icon `data:` URL for an app id; null while unknown or when the
+   *  instance serves none (the mark then uses its own fallback). */
   iconUrl(appId: string): string | null
   getChoice(): string
   choose(appId: string): void
@@ -102,21 +106,41 @@ export function createOpenInSourceAdapter(deps: OpenInSourceAdapterDeps): OpenIn
   let localProbe: Promise<void> | null = null
   /** Boot-level icon cache: app id → data URL (null = the host serves none). */
   const icons = new Map<string, string | null>()
-  let iconFlight: Promise<void> | null = null
+  /**
+   * Tail of the icon-fetch queue. Batches are SERIALIZED rather than coalesced
+   * with a `??=` single-flight: a refresh during an in-flight batch (the chevron
+   * re-probes on every menu open and on window focus) can discover an id the
+   * running batch does not carry, and coalescing would silently drop it until
+   * the next refresh. Chaining keeps every discovered id, and the re-check at
+   * run time still avoids a second fetch for an id the previous batch answered.
+   * `LocalCatalog.icon` never rejects (it fails closed to null), so the queue
+   * needs no rejection handling to stay alive.
+   */
+  let iconFlight: Promise<void> = Promise.resolve()
   const listeners = new Set<() => void>()
   const emit = (): void => {
     for (const listener of [...listeners]) listener()
   }
 
-  /** Fetch the icons of the current catalog once per boot, per id. */
+  /**
+   * Fetch the icons of the given entries once per boot, per id, in serialized
+   * batches. Eager by design (design 20 §5): the catalog is small (only apps the
+   * host actually resolved), each id is fetched at most once, and having the
+   * pixels before the first render is what keeps the button from flashing a
+   * fallback mark — upstream instead lets each `<img>` load on demand and pops
+   * in. The eager set is exactly what the view-model can render.
+   */
   const prefetchIcons = (entries: readonly OpenInApp[]): Promise<void> => {
     if (local === null) return Promise.resolve()
     const wanted = entries.filter(entry => !icons.has(entry.id))
     if (wanted.length === 0) return Promise.resolve()
-    iconFlight ??= Promise.all(wanted.map(async (entry) => {
-      icons.set(entry.id, await local.icon(entry.id))
-    })).then(() => {
-      iconFlight = null
+    iconFlight = iconFlight.then(async () => {
+      // Re-check at run time: a queued batch may find its ids already answered.
+      const pending = wanted.filter(entry => !icons.has(entry.id))
+      if (pending.length === 0) return
+      await Promise.all(pending.map(async (entry) => {
+        icons.set(entry.id, await local.icon(entry.id))
+      }))
       emit()
     })
     return iconFlight

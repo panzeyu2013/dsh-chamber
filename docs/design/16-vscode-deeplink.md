@@ -47,7 +47,7 @@
 ```text
 ┌─ 客户端插件 @dsh-chamber/dsh-chamber-client-ui-open-in（编译期打包，08 同款）─┐
 │  conversation.session.header.utilities 条目：会话头部 utilities 行内按钮      │
-│  （order -1，排在 vendor "Session log" 左侧；placement 见 §6.1）              │
+│  （order -10，排在 vendor "Session log" 左侧；placement 见 §6.1）             │
 │  coordinator 单例：应用清单/可用性事实（主进程 + 实例内 host 包，单飞共享）  │
 │  门控（§6.3）：来源可用应用集非空 ∧ 该 header 的会话属于有 path 的工作区，     │
 │  否则渲染 null；本地来源走 `vscode://file/`、远程 ssh 走 `ssh-remote+`         │
@@ -263,16 +263,38 @@ detectVscodeAvailability(platform): { available: boolean }
 - 槽是 session 作用域：组件直接收到**本头部所属的 `sessionId`** 与框架全局
   `useWorkspaces` 选择器钩子（同一 store，侧边栏归组同源），**不直接读 ctx 的
   sessions/workspaces**（inject 声明保持 `['slots','locale']`）；
-- 按钮 CSS：行内 32×32 图标按钮，**样式与 vendor "Session log" pill 同款复用**
-  （`0.5px solid var(--dsw-alias-border-l2)` 描边、`border-radius: 18px`、透明底、
-  hover 主题 tint、focus 环），与头部工具行对齐；aria-label / tooltip /
-  键盘可聚焦保持；
-- **行内排序**：条目注册带 `order: -1`——utilities 行按 `order`
-  升序排列（默认 0），因此 open-in 按钮排在 "Session log"（order 0）**左侧**，
-  session-log 保持在最右侧；
-- **图标**：VS Code 入口用**官方产品图标资源**（从安装的
-  `Visual Studio Code.app` 的 `Code.icns` 提取 32px@2x PNG → `vscode-icon.png`，
-  vite 内联为 data URL），不用手绘近似 logo；
+- 按钮 CSS：**与官方 open-in 分体按钮同规格**（2026-09-12 样式对齐轮；逐条取自
+  pin 的 `@deepseek-ai/dsh-client-ui-open-in-app/lib/client.js`
+  `OpenInAppAction.module.css`）——`.split` 容器 28px 高、`0.5px solid
+  var(--dsw-alias-border-l4)` 描边、`border-radius: 14px`、`overflow: hidden`；
+  主按钮 15px mark（`padding: 5px 6px 5px 7px`），chevron 用设计系统
+  `IconChevronDownOutline14`（size 11，`padding: 5px 6px 5px 4px`），两半之间的
+  分隔线是 chevron 自己的 `border-left`（主按钮无边框）；hover 主题 tint 只在
+  `:hover:not(:disabled)` 上生效，busy 态 `label-dimmed` + `cursor: wait`，error
+  态 `inset 0 0 0 1px var(--dsw-alias-state-error-primary)`；不使用自造 focus 环
+  （与官方一致，保留浏览器默认环）。这样按钮与头部工具行**同一 28px 控件高度**
+  （vendor `session-log-export/HeaderAction.module.css`
+  `.moreButton{width:28px;height:28px;border:none;border-radius:28px}`、
+  `ui-conversation/ConversationRoot.module.css` `.titleRow{min-height:30px}`），
+  不再比所在行高 4px；aria-label / tooltip / 键盘可聚焦保持；
+  **形态只有官方那一种**：可用集 ≥1 就渲染同一条 `.split`（主按钮 + chevron 下拉，
+  官方没有单条目形态、也不因只有一个 app 少画 chevron）；
+- **行内排序**：条目注册带 `order: -10`（**官方 `open-in-app` 行的原值**，2026-09-12
+  彻底统一）——utilities 行按 `order` 升序排列（默认 0），因此 open-in 按钮排在
+  "Session log"（order 0）**左侧**，session-log 保持在最右侧，且与任何第三方条目
+  的相对次序与官方一致；
+- **图标**：**宿主送来的真实 bundle 图标优先，与官方同一条管线**（`markKindFor`
+  只看"实例是否答过这个 id 的图标"，与通道无关；main 通道的 VS Code 条目同样用实例
+  的真图标）——按官方 `img.icon` 的同一处理：`flex: none` + `object-fit: contain`，
+  非正方形图标被留白而不是拉伸；菜单行 18px、主按钮 15px（两者都是官方尺寸）。
+  宿主没有图标时：VS Code 家族回落到仓库内的**官方产品图标资源**（用宿主自己的抽图
+  命令从安装的 `Visual Studio Code.app` 的 `Code.icns` 提取 **64px** PNG →
+  `vscode-icon.png`，vite 内联为 data URL）——这正是 remote ssh 来源的情形（没有实例
+  目录池，官方没有等价通道），不用手绘近似 logo。64px 在 15px 主按钮与 18px 菜单行下
+  都超过 3×（30/36 与 45/54 设备像素），且抽图取景与宿主为同一 app 送出的 128px 图
+  完全一致（同墨迹占比），所以这条兜底 mark 的表观尺寸与宿主图标路径一致；
+  其余一律回落**官方那颗圆角方块**（`viewBox 0 0 24 24`、`stroke-width 1.8`、`r5`，
+  颜色继承所在槽）——chamber 不再有文件夹/四宫格等自造 mark；
 - **`shell.overlay` 槽保留在 layout fork 中**（`AppFrame.tsx` 渲染
   `<div data-shell-overlay>`，层 `position:absolute; inset:0; z-index:20`，
   `.overlayLayer > * { pointer-events: auto }`），现由 mobile 客户端插件的抽屉开关

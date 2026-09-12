@@ -16,10 +16,12 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 /**
  * UI primitives (the pinned vendor source the renderer bundles): the open-in
  * entry renders the OFFICIAL `Menu` (dense rows, fill selection, item icons,
- * focus transfer and arrow navigation through `autoFocus`) and the design
+ * focus transfer and arrow navigation through `autoFocus`), the design
  * system's `Tooltip` instead of the hand-rolled menu and the native `title`
- * bubble (2026-09-11 upstream-alignment, T13/T5). The face mirrors
- * `ui-primitives/src/Menu.tsx` + `Tooltip.tsx` at the pin.
+ * bubble (2026-09-11 upstream-alignment, T13/T5), and — since the 2026-09-12
+ * style-parity revision — the design system's own `IconChevronDownOutline14`
+ * for the chevron instead of a hand-drawn glyph. The face mirrors
+ * `ui-primitives/src/Menu.tsx` + `Tooltip.tsx` + the icon barrel at the pin.
  */
 declare module '@deepseek-ai/dsh-client-ui-primitives' {
   import type { ReactNode } from 'react'
@@ -62,4 +64,10 @@ declare module '@deepseek-ai/dsh-client-ui-primitives' {
     children: ReactNode
   }
   export function Tooltip(props: TooltipProps): ReactNode
+  export interface IconProps {
+    size?: number
+    className?: string
+  }
+  /** The menu/select chevron the official open-in chevron trigger uses at 11px. */
+  export function IconChevronDownOutline14(props?: IconProps): ReactNode
 }

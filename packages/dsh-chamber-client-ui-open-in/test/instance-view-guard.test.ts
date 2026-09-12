@@ -64,6 +64,7 @@ function stripComments(code: string): string {
 
 const button = stripComments(source('../src/client/OpenInButton.tsx'))
 const guard = stripComments(source('../src/client/instance-view-guard.ts'))
+const client = stripComments(source('../src/client/index.ts'))
 
 test('menu owner guard fails closed for hidden, pending, or disconnected N-ctx state', () => {
   const active: MenuOwnerSnapshot = {
@@ -100,19 +101,77 @@ test('the bespoke accessible menu is replaced by the official Menu primitive', (
   assert.ok(!files.includes('menu-navigation.ts'), 'the bespoke roving-focus module must be deleted')
   assert.ok(existsSync(new URL('instance-view-guard.ts', clientDir)), 'the N-ctx owner guard is the surviving piece')
 
-  assert.match(button, /import \{ Menu, Tooltip, type MenuItem \} from '@deepseek-ai\/dsh-client-ui-primitives'/u)
+  assert.match(
+    button,
+    /import \{\s*IconChevronDownOutline14, Menu, Tooltip, type MenuItem,\s*\} from '@deepseek-ai\/dsh-client-ui-primitives'/u,
+  )
   // Upstream's own menu composition (OpenInAppAction.tsx:181-198): dense rows,
   // fill selection, end alignment, focus transfer + arrow navigation.
   for (const prop of ['autoFocus', 'dense', 'selection="fill"', 'align="end"']) {
     assert.ok(button.includes(prop), `the official Menu must be opened with ${prop}`)
   }
   // Row icons: the app marks the button shows, at the primitive's icon size.
-  assert.match(button, /const items: MenuItem\[\] = entries\.map\(entry => \(\{[\s\S]*?icon: appMark\(entry, iconUrl\(entry\.id\), MENU_MARK_SIZE\)/u)
-  // The split-button flow is unchanged: exactly one entry still renders the
-  // plain icon button, the chevron still toggles the menu.
-  assert.ok(button.includes('if (entries.length === 1)'), 'the one-entry plain button stays')
+  assert.match(button, /const items: MenuItem\[\] = entries\.map\(entry => \(\{[\s\S]*?icon: appMark\(entry, iconUrl\(entry\.id\), MENU_MARK_SIZE, sourceFingerprint\)/u)
+  // The decode-failure memory is scoped to this page's exact boot, never the
+  // bare app id: one shell stacks several sources, and a broken icon in one
+  // instance must not degrade the same app id in another (nor outlive that
+  // source's next boot).
+  assert.ok(button.includes('const key = `${scope}:${id}`'), 'the failed-icon memory is source-scoped')
+  assert.ok(button.includes('failedIcons.add(key)'), 'failures are recorded under the scoped key')
+  // 2026-09-12 thorough unification: upstream's split button is the ONLY form
+  // (one app and ten apps render the same control), so the one-entry plain
+  // button is gone and the chevron is unconditional.
+  assert.ok(!button.includes('entries.length === 1'), 'upstream has no single-entry form; the split is unconditional')
   assert.ok(button.includes('aria-haspopup="menu"'), 'the chevron still advertises the menu')
   assert.ok(button.includes('aria-expanded={open}'), 'the chevron still reports the open state')
+})
+
+test('the control is the official split button, never a chamber variant', () => {
+  // 2026-09-12 thorough unification: geometry, marks, glyphs and fallbacks are
+  // upstream's (OpenInAppAction.module.css / OpenInAppAction.tsx at the pin).
+  // Sizes and shapes are locked here as source text because the component (and
+  // its CSS module) cannot be imported under the plain node runner.
+  assert.ok(
+    button.includes('<IconChevronDownOutline14 size={11} />'),
+    'the chevron must be the design-system icon at the official 11px size',
+  )
+  assert.ok(!button.includes('viewBox="0 0 16 16"'), 'no hand-drawn chevron geometry')
+  assert.ok(!button.includes('folderMark'), 'the chamber-only folder mark is retired')
+  assert.ok(button.includes('const BUTTON_MARK_SIZE = 15'), 'the button mark uses the official 15px size')
+  assert.ok(button.includes('const MENU_MARK_SIZE = 18'), 'the menu mark uses the official 18px size')
+  assert.ok(button.includes('viewBox="0 0 24 24"'), "the fallback mark is upstream's rounded square")
+  assert.ok(button.includes('strokeWidth="1.8"'), "the fallback mark keeps upstream's stroke weight")
+
+  const css = stripComments(source('../src/client/OpenInButton.module.css'))
+  for (const rule of [
+    'height: 28px',
+    'border: 0.5px solid var(--dsw-alias-border-l4)',
+    'border-radius: 14px',
+    'overflow: hidden',
+    'padding: 5px 6px 5px 7px',
+    'padding: 5px 6px 5px 4px',
+    'border-left: 0.5px solid var(--dsw-alias-border-l4)',
+    'object-fit: contain',
+    'flex: none',
+  ]) {
+    assert.ok(css.includes(rule), `the control must keep upstream's \`${rule}\``)
+  }
+  assert.ok(!css.includes('border-l2'), 'the chamber hairline token is retired')
+  assert.ok(!css.includes('18px'), 'the chamber pill radius is retired')
+})
+
+test('the registration mirrors the official row (order), with our own id', () => {
+  // 2026-09-12 thorough unification: `order: -10` is the official `open-in-app`
+  // row's own value (the official plugin registers `order: -10` at this same
+  // slot), so any third-party row sorts exactly as it would upstream.
+  assert.ok(client.includes("'conversation.session.header.utilities'"), 'the official header utilities slot')
+  assert.ok(client.includes('order: -10'), "the registration must keep upstream's -10 row order")
+  assert.ok(!client.includes('order: -1,'), 'the retired chamber order must not come back')
+  // The id deliberately stays chamber's own: the slot registry THROWS on a
+  // duplicate list id at the same priority, so reusing `open-in-app` would turn
+  // an accidentally materialized official row into a load failure.
+  assert.ok(client.includes("id: 'open-in'"), 'the entry keeps its own slot id')
+  assert.ok(!client.includes("id: 'open-in-app'"), "the official row's id must not be reused")
 })
 
 test('the .instance-view dismissal is the only bespoke menu behaviour kept', () => {
@@ -137,8 +196,8 @@ test('the .instance-view dismissal is the only bespoke menu behaviour kept', () 
 test('T5: the main button uses the design-system Tooltip and the existing dictionary keys', () => {
   assert.equal(
     [...button.matchAll(/<Tooltip label=\{tooltip\} side="bottom">/gu)].length,
-    2,
-    'both render paths (single entry, split button) wrap the main button in the tooltip',
+    1,
+    'upstream has one split-button form, so the main button is wrapped once',
   )
   // No native title bubble on the main icon button (the chevron keeps
   // upstream's own `title` + `aria-label` pair). The opening tag ends at the

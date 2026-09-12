@@ -21,8 +21,11 @@
 
 ### 目标
 
-- **单一入口、全来源**：一个 header 条目（`conversation.session.header.utilities`，id `open-in`，
-  order `-1`）按 per-source 视图模型决定可用集，不是每个来源一套按钮；
+- **单一入口、全来源**：一个 header 条目（`conversation.session.header.utilities`，
+  id `open-in`、order `-10`——order 取**官方那一行的原值**，id 保持自有：slot registry 对同
+  priority 的重复 `list` id **直接抛错**，若未来 boot graph 意外把官方那一行也装载进来，
+  自有 id 只会多出一个条目，而不会让本入口整体加载失败；2026-09-12 彻底统一轮）
+  按 per-source 视图模型决定可用集，不是每个来源一套按钮；
 - **local = 上游等价的全量本机目录**：Finder / 资源管理器 / 文件管理器 / Terminal / iTerm /
   Cursor / JetBrains … 全量拾取器 + **真实 bundle 图标** + 官方同款 `app.*` 标签 + 选择持久化，
   由**实例进程内的 chamber host 包**执行（官方宿主半的等价物，fork 自上游，见 §6）；
@@ -88,11 +91,11 @@ fork & supersede 让前两条彻底消失（不再需要动 spawn 环境、不�
 
 ```text
 ┌─ 客户端插件 @dsh-chamber/dsh-chamber-client-ui-open-in（复合首屏，设计 08/09 同款）──┐
-│  单条目 open-in（order -1，会话头部 utilities 槽）→ OpenInButton                     │
+│  open-in 头部入口（order -10 = 官方值，会话头部 utilities 槽）→ OpenInButton        │
 │    条目 = buildOpenInViewModel({source, local, main})（决策面）                      │
 │    local 来源：本机目录池（我们的实例内 host 包）+ main 池（vscode，同 id 可用者胜出）│
 │    ssh 来源：仅 main 池的 remoteCapable；http/畸形：空                                │
-│    ≥2 → 主图标按钮（记住的选择/默认 vscode）+ chevron 下拉；=1 → 纯图标按钮            │
+│    ≥1 → 官方分体按钮（记住的选择/默认 vscode）+ chevron 下拉（官方唯一形态）          │
 │    门控：桥就绪 ∧ 可用集非空 ∧ 工作区有路径（fail-closed）                             │
 │    下拉打开/窗口 focus 时 refresh()                                                  │
 └───────────┬──────────────────────────────────────┬──────────────────────────────────┘
@@ -158,7 +161,15 @@ fork & supersede 让前两条彻底消失（不再需要动 spawn 环境、不�
   图标不会被每次渲染重复请求），目录探测成功后立即预取；`icon()` 回答的
   `{mime, dataBase64}` 只在 `OPEN_IN_APP_ICON_MIME_ALLOWLIST`（= 上游 `icons.ts` 的
   `contentType` 并集 `image/png` / `image/svg+xml`）内拼成 `data:` URL，缓存未命中/失败时返回
-  null，按钮渲染中性图标（CSP 面见 §10）。
+  null，按钮渲染 §5 的兜底 mark（含 main 通道的 VS Code 条目——缓存里有真图标就用真图标；
+  CSP 面见 §10）。**预取是"急切"且按 id 恰好一次的取舍**（2026-09-12 复核）：实例目录只含
+  宿主真解析到的应用（本机常见 3–8 个），一次预取换来"按钮不闪兜底 mark / 菜单秒开 /
+  刷新不重取"；代价是首次 boot 时 N 个 id 的 base64 过 RPC、宿主侧 N×(`plutil`+`sips`)
+  每个实例生命周期一次——上游相反（每个 `<img>` 懒加载、逐行 pop-in），在"用户从不打开
+  菜单"时更省；改为"只预取视图模型会渲染的 id"经核算是空操作（local 来源的目录 id 要么
+  以 local 条目渲染、要么被可用的 main 覆盖后以**同一个 id** 渲染，都要图标），故保持急切。
+  批次**串行排队**（不是 `??=` 单飞）：菜单打开/窗口 focus 触发的 refresh 若撞上在途批次，
+  它发现的新 id 不会被丢掉；批次运行时再查一次缓存，已答过的 id 不重复请求；
 
 ### 4.3 桌面主进程面（不变）
 
@@ -182,14 +193,18 @@ provider（本地目录不再是主进程的事，也不再是"官方宿主行"�
   与深链 intent 推送），main 不可用时本地池兜底（已装应用不隐藏）；
 - **门控三进**（任一不满足 → 渲染 null）：① 桥就绪且过滤后可用集非空；② 本 header 的
   `sessionId` 属于有路径的工作区；③ hooks 无条件先执行（`open-in-gates.ts`）；
-- **交互**：1 个 app → 纯图标按钮；≥2 → 主图标按钮 + chevron + **官方
-  `ui-primitives` `Menu`**（`autoFocus` 焦点转移与方向键/Home/End 导航、
+- **交互**：可用集 ≥1 → 官方那条分体按钮（主图标按钮 + chevron + **官方
+  `ui-primitives` `Menu`**）——官方没有单条目形态，本入口也不再有；
+  `Menu` 的 `autoFocus` 焦点转移与方向键/Home/End 导航、
   `dense` 行、`selection="fill"` 选中填充、菜单项 `icon` 带真实应用图标，
-  `OpenInButton.tsx:337-360`；props 面与 pin 的 `Menu.tsx`/`Tooltip.tsx` 对齐见
-  `src/vendor-modules.d.ts:15-64`；2026-09-11 upstream-alignment）。按钮与 chevron
+  `OpenInButton.tsx:351-422`；props 面与 pin 的 `Menu.tsx`/`Tooltip.tsx` 对齐见
+  `src/vendor-modules.d.ts:26-73`；2026-09-11 upstream-alignment）。**呈现规格取官方
+  open-in 分体按钮**（2026-09-12 彻底统一：28px / `border-l4` / r14 容器、主按钮
+  15px mark、设计系统 `IconChevronDownOutline14` size 11、菜单行 18px mark、官方圆角
+  方块回落；逐条对照见 design 16 §6.1 与 `OpenInButton.module.css`）。按钮与 chevron
   的提示是同一 pin 的设计系统 `Tooltip`，**不再用原生 `title`**；chevron 自带
   `aria-haspopup="menu"` / `aria-expanded`，并在每次打开时重探目录（原 bespoke
-  菜单的 `onOpening` 语义搬到 trigger，`OpenInButton.tsx:389-400`）。**唯一留在
+  菜单的 `onOpening` 语义搬到 trigger，`OpenInButton.tsx:391-419`）。**唯一留在
   插件内的菜单逻辑是 N-ctx 归属** `instance-view-guard.ts`：菜单打开期间它观察
   trigger 的祖先链，所属 `.instance-view` 一旦带上 `instance-hidden`/
   `instance-pending`/`hidden`/`aria-hidden` 或断开连接即关闭菜单
@@ -198,7 +213,7 @@ provider（本地目录不再是主进程的事，也不再是"官方宿主行"�
 - **失败呈现**：拉起失败不再只写 `console.error`，原因随按钮的 error 装饰**就地
   可见**：按钮可访问名切成「打开失败」，`Tooltip` 显示「{openFailed}{原因}」（域
   载体的 error 文本，或传输层异常消息），随 error 装饰 2 s 后一并清除
-  （`OpenInButton.tsx:232,294-310,312-318`）；
+  （`OpenInButton.tsx:252,310-327,332-337`）；
 - **记忆**：**per-source 键**（`choice-store.ts`），并对"记忆值在本上下文不可用"降级到默认项；
   官方键 `dsh.open-in-app.choice` 不再被任何一方写入（官方客户端从不加载），因此不存在同页同 origin 的键冲突；
 - **通道命名**：`OpenInChannel = 'local' | 'main'`——本地池由**实例内的我们自己**服务，
@@ -211,8 +226,18 @@ provider（本地目录不再是主进程的事，也不再是"官方宿主行"�
   `test/open-in-wire-lockstep.test.ts` 读 seed 的 `src/shared.ts` + `src/index.ts` 逐项钉住
   （命名空间、四个方法名、`@Remote` 面、错误码集合、图标媒体类型）；
 - **图标契约**：`iconUrl(appId): string | null`（`OpenInButton` 的 prop 形状**不变**）现在读的
-  是 boot 级缓存里的 `data:` URL；缓存由适配器预取并在到达时通知订阅者（未命中先渲染中性图标），
-  失败同样入缓存，因此缺失图标不会每次渲染重复请求；
+  是 boot 级缓存里的 `data:` URL；缓存由适配器预取并在到达时通知订阅者。
+  **选图规则与官方同一条管线**（2026-09-12 彻底统一，`markKindFor` 只看"实例是否答过这个
+  id"，与通道无关）：有宿主图标就用宿主真图标（main 通道的 VS Code 条目也一样）；
+  没有时 VS Code 家族用仓库内产品图标兜底（remote ssh 无实例目录池的情形；该资源 64px，
+  15/18px 下 2×/3× 都不放大），其余用官方圆角方块；缓存未命中且宿主无图标前先渲染该
+  兜底 mark。失败同样入缓存，因此缺失图标不会每次渲染重复请求；
+  **解码失败记忆按"本次 boot 的 sourceFingerprint + app id"分作用域**（`failedIcons`）——
+  本壳一页多来源，某个实例的坏图标不得连累另一来源的同名 app，也不得跨该来源的下一次
+  boot 存活；
+- **默认项是有意的自有取值**：`open-in-view-model.ts` 的 `defaultEntryId` = 第一个 VS Code
+  条目，否则第一项（2026-09-12 复核确认保留）；官方同位置取的是**宿主菜单顺序里的第一个
+  可用 app**（macOS 上通常是 Finder），这是本入口与官方唯一的"呈现级"行为差异；
 - **记忆键 per-source**（`client/choice-store.ts`）：`dsh-chamber.open-in.choice.<sourceId>`，
   并对"记忆值在本上下文不可用"降级到默认项（按钮先按记忆找 active entry，找不到再用
   `defaultEntryId`）；迁移面：旧的全页键 `dsh.open-in-app.choice` 只被**读一次**作为
@@ -311,8 +336,13 @@ provider（本地目录不再是主进程的事，也不再是"官方宿主行"�
 
 ### 7.1 与官方等价（现已具备）
 
-本机全量应用目录；真实 bundle 图标；官方同款 `app.*` 标签；选择持久化；
-会话头部 utilities 槽位与"Session log 左侧"的排序；目录限定打开。
+本机全量应用目录；真实 bundle 图标（**选图管线与官方同源**：有宿主图标就用，与通道无关）；
+官方同款 `app.*` 标签；选择持久化；会话头部 utilities 槽位与"Session log 左侧"的排序
+（`order: -10` = 官方值）；目录限定打开。**控件呈现逐条等于官方**（2026-09-12 彻底统一）：
+28px / `border-l4` / r14 分体容器、主按钮 15px mark、设计系统 chevron `size 11`、菜单行
+18px mark、无边框主按钮 + chevron `border-left` 分隔线、`:hover:not(:disabled)` / busy /
+error 三种装饰、官方圆角方块回落，且**只有官方那一种形态**（可用集 ≥1 一律主按钮 +
+chevron，不因只有一个 app 少画 chevron）。
 
 ### 7.2 官方没有、我们有的
 

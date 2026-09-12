@@ -156,6 +156,47 @@ test('adapter / local: icons are fetched once per id and served from the boot ca
   adapter.dispose()
 })
 
+test('adapter / local: a refresh during an in-flight icon batch must not drop the ids it discovers', async () => {
+  const main = mainPool([])
+  // A catalog whose first icon call blocks until the test releases it, so the
+  // batch started by the boot probe is still in flight when the refresh lands.
+  const entries: OpenInApp[] = [FINDER]
+  const releases: Array<() => void> = []
+  const calls: CatalogCalls = { load: 0, launch: [], icons: [], factories: 0 }
+  const catalog: LocalCatalog = {
+    async load() {
+      calls.load += 1
+      return [...entries]
+    },
+    async icon(appId) {
+      calls.icons.push(appId)
+      if (appId === 'finder') await new Promise<void>((resolve) => { releases.push(resolve) })
+      return `data:image/png;base64,${appId.toUpperCase()}`
+    },
+    async launch() {},
+  }
+  const adapter = createOpenInSourceAdapter({
+    source: parseOpenInSource('local', 'local')!,
+    sourceFingerprint: 'local',
+    translate: t,
+    rpc: carrier,
+    mainPool: main.pool,
+    choice: choiceStore().store,
+    createLocal: () => catalog,
+  })
+  await settle()
+  assert.deepEqual(calls.icons, ['finder'], 'the boot probe starts the first batch')
+  entries.push(VSCODE)
+  const refresh = adapter.refresh()
+  await settle()
+  for (const release of releases.splice(0)) release()
+  await refresh
+  assert.deepEqual(calls.icons, ['finder', 'vscode'],
+    'the id the refresh discovered is fetched too, and the answered id is not re-requested')
+  assert.equal(adapter.iconUrl('vscode'), 'data:image/png;base64,VSCODE')
+  adapter.dispose()
+})
+
 test('adapter / local: local launches call the host domain, main launches ride the IPC proof', async () => {
   const main = mainPool([VSCODE])
   const { catalog, calls } = fakeCatalog([FINDER])

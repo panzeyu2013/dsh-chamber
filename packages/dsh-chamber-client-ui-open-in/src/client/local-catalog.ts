@@ -11,7 +11,9 @@
  *
  * Fail-closed, like the surrounding button: an unreachable, refusing, drifted
  * or hostile host reads as an EMPTY catalog and never as a thrown UI; a failed
- * icon reads as "no icon" (the button keeps its neutral mark); only a launch
+ * icon reads as "no icon", which the button renders through its own fallback
+ * mark (the VS Code product raster for that family, upstream's rounded square
+ * otherwise — see `markKindFor`); only a launch
  * rejects, because that is the one outcome the user must see.
  */
 import type { OpenInApp } from '../shared/capabilities.ts'

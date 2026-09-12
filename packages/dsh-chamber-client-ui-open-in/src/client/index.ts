@@ -153,11 +153,19 @@ export function apply(ctx: ClientContext): void {
 
   ctx.slots.inject(OPEN_IN_HEADER_SLOT, () => ctx.slots.register({
     name: OPEN_IN_HEADER_SLOT,
+    // Our own id, deliberately NOT the official row's `open-in-app`: the slot
+    // registry THROWS on a duplicate `list` id at the same priority
+    // (ui-slots `register`), so a future boot graph that materializes the
+    // official row would break this surface instead of merely duplicating it.
+    // Everything else about the registration is upstream's (order -10, same
+    // slot, same right-aligned position).
     id: 'open-in',
-    // Row order is ascending by `order` (default 0): -1 keeps the vendor
-    // "Session log" entry (order 0) pinned at the row's far RIGHT and places
-    // this button to its left (2026-08 user requirement).
-    order: -1,
+    // Row order is ascending by `order` (default 0). -10 is the official
+    // `open-in-app` row's own value (2026-09-12 thorough unification), which
+    // keeps the vendor "Session log" entry (order 0) pinned at the row's far
+    // RIGHT and places this button to its left (2026-08 user requirement) with
+    // upstream's exact ordering behaviour for any third-party row in between.
+    order: -10,
     // Neutral entry label (slot registrant diagnostics — the user-facing
     // tooltip/aria-label comes from the component per app, see OpenInButton).
     label: () => t('titleOpen'),

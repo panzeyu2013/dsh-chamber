@@ -23,6 +23,10 @@ import { buildOpenInViewModel } from '../shared/open-in-view-model.ts'
  * view-model (`shared/open-in-view-model.ts`) — the single decision surface
  * the unified open-in entry consumes; the returned apps are the input objects
  * in view-model order.
+ *
+ * The `channel` field survives on the view-model entry because it still decides
+ * the LAUNCH carrier (instance RPC vs trusted IPC); it no longer decides the
+ * mark (`markKindFor`).
  */
 export function usableAppsForSource(
   sourceId: string,
@@ -72,24 +76,29 @@ export function workspacePathForSession(
 }
 
 /** Which mark the header entry renders for one view-model entry. */
-export type OpenInMarkKind = 'catalog-icon' | 'vscode' | 'file-manager' | 'generic'
+export type OpenInMarkKind = 'catalog-icon' | 'vscode' | 'generic'
 
 /**
- * Mark selection (design 20 §5): ONLY local-channel entries use the
- * host-served catalog icon (real bundle art, absent → generic fallback); a
- * main-channel entry always keeps its chamber presentation — the VS Code
- * product mark for the IPC override, the neutral folder for file managers,
- * the generic square otherwise. Passing a catalog icon for a main entry would
- * silently swap the VS Code mark for a placeholder whenever the instance's
- * catalog does not list that app.
+ * Mark selection (design 20 §5): the host-served catalog icon wins whenever the
+ * instance answered one — for EVERY channel, exactly as upstream draws whatever
+ * icon its host serves (`OpenInAppAction.tsx` `AppIcon`). A main-channel entry
+ * is no exception: the id is the same application the local catalog resolves, so
+ * its real bundle art is strictly better than the bundled raster and keeps the
+ * mark pipeline upstream's. The launch channel still decides the CARRIER, never
+ * the mark. Only when the host serves no icon does the chamber fallback apply —
+ * the VS Code product raster for that family (the remote-SSH case, where there
+ * is no instance catalog at all, and the rare extraction failure), and
+ * upstream's own rounded square for everything else.
+ * @param entry - the view-model entry (only its `displayKind` reaches the mark).
+ * @param hasCatalogIcon - whether the boot icon cache holds a host icon for the id.
+ * @returns which of the three mark renderers to use.
  */
 export function markKindFor(
-  entry: { readonly channel: 'local' | 'main'; readonly displayKind: string },
+  entry: { readonly displayKind: string },
   hasCatalogIcon: boolean,
 ): OpenInMarkKind {
-  if (entry.channel === 'local' && hasCatalogIcon) return 'catalog-icon'
+  if (hasCatalogIcon) return 'catalog-icon'
   if (entry.displayKind === 'vscode') return 'vscode'
-  if (entry.displayKind === 'file-manager') return 'file-manager'
   return 'generic'
 }
 
