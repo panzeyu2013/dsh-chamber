@@ -125,10 +125,11 @@
 import type { Context } from '@deepseek-ai/cordis'
 
 import { CHAMBER_COVERED_FACTORY_IDS, CHAMBER_COVERED_IDS } from './chamber-covered.ts'
+import type { ShellDegradedFact } from './boot-gap.ts'
 import {
   deferredRegistrationFailureMessage,
   DEFERRED_EXTRA_ROW_IDS,
-  missingInjectedServices, registeredInjectMembers, requiredServiceProbeMessage,
+  missingInjectedServices, missingServiceFact, registeredInjectMembers, requiredServiceProbeMessage,
   REQUIRED_SERVICE_PROBE_DEADLINE_MS, REQUIRED_SERVICE_PROBE_INTERVAL_MS,
   type RegisteredPluginInject,
 } from './required-extra-rows.ts'
@@ -361,7 +362,7 @@ const DEFERRED_ROWS: ReadonlyArray<readonly [id: string, load: () => Promise<unk
  */
 async function registerDeferred(
   ctx: Context,
-  degradedSeam: (message: string) => void,
+  degradedSeam: (fact: ShellDegradedFact) => void,
   registered: RegisteredPluginInject[],
   probeRearm: ProbeRearmSlot,
 ): Promise<void> {
@@ -437,7 +438,17 @@ async function registerDeferred(
   // so the report rides a macrotask — the settle (microtask chain) has always
   // won by then, and a report that a torn-down instance never sees is a no-op
   // in the shell's entries lookup rather than a leak.
-  setTimeout(() => degradedSeam(message), 0)
+  //
+  // Own kind since 2026-12 (design 05 §4): this verdict shares the SEAM with the
+  // required-service probe but not its meaning — the probe names unprovided
+  // services, this one names row ids whose chunk never registered. Sharing one
+  // kind made the two facts indistinguishable to the frame's copy table and let
+  // the second report be dropped as a same-kind repeat.
+  setTimeout(() => degradedSeam({
+    kind: 'deferred-registration-failed',
+    message,
+    failedIds: [...failed],
+  }), 0)
 }
 
 /**
@@ -548,18 +559,24 @@ function assertDeferredRosterLockstep(): void {
  * The shell's post-settle degrade seam, resolved once per entry: the App
  * re-boots the instance on the next ready transition when it receives a fact
  * (2026-09-10 sidebarRight heal; 2026-12 the deferred-cluster report reuses the
- * same channel). Absent in plain-node tests / other hosts, and a throwing seam
- * must never break the caller, so the reporter wraps it.
+ * same channel) AND renders that fact as copy (design 05 §4 「降级呈现」).
+ * Absent in plain-node tests / other hosts, and a throwing seam must never break
+ * the caller, so the reporter wraps it.
+ *
+ * The fact travels WHOLE (kind + structured fields): the frame must never parse
+ * the diagnostic message to learn which service is missing. This module also
+ * never writes the fact itself — the seam is the only writer, so the shell's
+ * boot-generation fence applies to every producer.
  * @param ctx - the per-entry client root context.
  * @returns the reporter: logs nothing itself, never throws.
  */
-function createDegradedSeam(ctx: Context): (message: string) => void {
+function createDegradedSeam(ctx: Context): (fact: ShellDegradedFact) => void {
   // Shell-provided seam (shell.ts createChamberContextSetup): reports a
   // post-settle degrade to the App. Absent in plain-node tests / other hosts.
-  const reportBootDegraded = (ctx as { chamberReportBootDegraded?: (message: string) => void })
+  const reportBootDegraded = (ctx as { chamberReportBootDegraded?: (fact: ShellDegradedFact) => void })
     .chamberReportBootDegraded
-  return (message: string): void => {
-    try { reportBootDegraded?.(message) } catch (error) {
+  return (fact: ShellDegradedFact): void => {
+    try { reportBootDegraded?.(fact) } catch (error) {
       console.error('[chamber-entry] failed to report a post-settle degrade fact:', error)
     }
   }
@@ -789,7 +806,7 @@ interface ProbeRearmSlot {
  */
 function assertRequiredExtraRowServices(
   ctx: Context,
-  degradedSeam: (message: string) => void,
+  degradedSeam: (fact: ShellDegradedFact) => void,
   registered: readonly RegisteredPluginInject[],
   probeRearm: ProbeRearmSlot,
 ): void {
@@ -820,7 +837,11 @@ function assertRequiredExtraRowServices(
       // it through the shell seam: the App re-boots the instance on the next
       // ready transition (a fresh boot re-fetches the graph and re-applies the
       // rows — the same effect a full page reload had).
-      degradedSeam(message)
+      //
+      // Structured since 2026-12 (design 05 §4): the fact carries the service
+      // names and their injectors so the frame's copy can name what is missing
+      // (`sidebarRight`) instead of parsing the diagnostic line.
+      degradedSeam({ kind: 'required-services-missing', message, ...missingServiceFact(missing) })
     }
     // Re-arm (2026-09-11 review-fix, finding 1): one extra pass over the roster
     // the deferred cluster just extended. `started` is deliberately NOT reset —

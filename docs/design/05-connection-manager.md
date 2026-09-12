@@ -588,6 +588,47 @@ export const chamberBridge: {
   不依赖页面级 base-path/source 全局旋钮。
   不支持 content-visibility 的浏览器降级为保留 layout 的 visibility 方案
   （同样无闪烁）（styles.css `.instance-view.instance-hidden`）。
+  **降级呈现（2026-12 修订）**：boot **成功**但已知缺口（来源在启动窗口内没有
+  提供客户端插件图／图到了但复合首屏 inject 的服务始终没有 provide——典型是
+  `ui-chat` 等 `sidebarRight`，于是整个会话视图不注册）时，事实经
+  `ShellState.degraded`（`ShellDegradedFact`，形状在叶模块
+  `renderer/src/boot-gap.ts`）到 App——结算后的判词经 `bootInstanceShell` 的
+  `options.onRepublish`（InstanceView 转发 `onStateChange`；shell 的 `onState`
+  形参只是**视图本地 setter**，只发它 App 镜像收不到，三个座位与自愈会一起瞎掉），
+  结算前的判词按 boot 序号暂存并在 settle 时补放——由 App 在**活动视图**上渲染非阻断的
+  `.boot-gap` 横幅：标题 + 按 kind 的正文 + 结构化事实行（缺哪些服务、哪些插件
+  在等它们／哪些插件没注册）+ 下一步 + 产出方诊断原文 + 重试。三条纪律：
+  ①**归属**：文案属框架面，走 `renderer/src/locales.ts` typed 字典；产出方只发
+  kind 与结构化事实，诊断原文只作诊断行、不当文案（STATUS「跨边界诊断文案」）。
+  ②**可重试性由事实裁决**：`BOOT_GAP_POLICY` 是 `Record<kind, …>`，新增 kind
+  不带文案与 retryable 裁决即编译失败；`planDegradedRetries` 只重挂 retryable
+  的 kind（每 ready 世代一次，见 `degraded-retry.ts`）。③**不撒谎**：kind 不能
+  判定「暂时／结构性」，故文案一律"常见原因…"，且**只有在来源 ready 且本 ready
+  世代尚未重挂过**时才承诺"会自动重挂一次"（非 ready 时 self-heal 永不会来）；
+  a11y 用 `role="status"`（不是 `alert`——几秒的竞态不该打断读屏）。提示**非阻断**：
+  层 `pointer-events:none`、只有卡片接收命中；`z-index: 900` 明确低于
+  `.fatal-overlay` 的 1000，boot 失败态与它结构互斥；**控制面不可达**那张覆盖层与
+  壳状态无关，由 App 侧显式门（`!controlUnreachable`）拦住，不靠 z-index；
+  body portal（STATUS 已登记的未修
+  缺陷）仍可盖住它，属既有边界。重试与失败覆盖层**共用唯一入口** `retryView`
+  （探测 + 隧道再试 + 令牌递增），自己写一套会漏掉最后那条探测臂。
+  **降级事实的第二批座位（2026-12，同一修订）**：事实还经**既有投影通道**过桥——
+  `ChamberServerAggregate.bootGap`（结构化：`kind` + `services`/`injectedBy`/
+  `failedIds`，**不含**产出方诊断句），由 App 的 `deriveServers` 从
+  `shellStates[*].degraded` 投射，进 `serversProjectionSignature` 发布门（缺口单独
+  翻转必须重发布）。两个座位：①**侧栏来源行**（`ServerSection` 的 `sourceNote`）——
+  并入既有的**单一 live region**，按优先级 `托管不可用 > 前端能力受限 > 托管瞬态 >
+  基线未就绪` 取一句，`sourceNoteBootGap` 修饰类给警示色；**活动来源那一行**（本壳
+  自己的行）把区域降为 `aria-live="off"`——同一事实已由框架横幅播报，非活动行保持
+  `polite`（那些来源没有横幅，侧栏是唯一用户面）；②**连接页**
+  （`PluginDiagnosticLine` + 插件对话框）——与 `pluginDiagnostic` 是**两条独立事实**：
+  图通道的 `ok` 不代表服务都在（缺 `sidebarRight` 时图通道恰好是 `ok`），因此**缺口
+  在场时抑制 `ok` 那一行**（problem/info 照旧渲染），缺口行取**警示色**
+  （`pluginDiagnosticWarn`，与框架横幅、侧栏来源行同一色阶——同一事实不该三处两色），
+  并给 `bootGapHint` 行动提示
+  （与 `pluginDiagnosticVersionConflictHint` 同形）。词汇表由侧栏 shared 契约单点拥有
+  （`ServerBootGapKind`），渲染包只 import 类型、各出各的文案——即 STATUS
+  「跨边界诊断文案」那条"产出方发结构化事实、渲染方出文案"的落地形态。
 - `openInstanceSession(sourceId, sessionId)`（shell.ts）：boot 未就绪先入队，
   原调用 Promise 保持 pending；enqueue 当刻固定 **68s absolute deadline**（60s boot
   queue 预算 + 最多 8s session-list 可见性轮询），flush 不重置预算，只使用剩余时间

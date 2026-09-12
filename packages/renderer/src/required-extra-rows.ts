@@ -264,6 +264,33 @@ export function chamberEntryDiagnosticMessage(detail: string, instanceId?: strin
 }
 
 /**
+ * The STRUCTURED face of one probe verdict (2026-12, design 05 §4): the missing
+ * service names and the registered plugins that inject them.
+ *
+ * The producer stops flattening its fact into a sentence here. The user-facing
+ * copy is the frame's (`renderer/src/locales.ts`, keyed by the fact kind), and
+ * the frame may name WHICH service is missing — parsing it back out of the
+ * diagnostic line would be brittle. Order is the roster's
+ * ({@link missingInjectedServices}); `injectedBy` is the deduped union in
+ * first-seen order, so one plugin injecting two missing services is named once.
+ * @param missing - the missing services with their registered injectors.
+ * @returns the structured fact fields, never empty for a non-empty input.
+ */
+export function missingServiceFact(
+  missing: readonly MissingRequiredService[],
+): { services: string[]; injectedBy: string[] } {
+  const services: string[] = []
+  const injectedBy: string[] = []
+  for (const entry of missing) {
+    services.push(entry.service)
+    for (const id of entry.injectedBy) {
+      if (!injectedBy.includes(id)) injectedBy.push(id)
+    }
+  }
+  return { services, injectedBy }
+}
+
+/**
  * Build the operator-facing diagnostic for a still-missing set.
  *
  * A1 (2026-09-11 upstream-alignment): the line names every missing service WITH

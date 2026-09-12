@@ -392,6 +392,16 @@ function SettingsPanel({
     return map
   }, [servers])
 
+  // Per-source settled-boot gaps (2026-12, design 05 §4 「降级呈现」): keyed like
+  // the diagnostics above and handed to the same card. The graph channel can
+  // answer `ok` while a surface never registered, so the card needs this SEPARATE
+  // fact to avoid claiming everything is fine next to a missing conversation body.
+  const bootGaps = useMemo(() => {
+    const map: Record<string, BridgeServerRow['bootGap']> = {}
+    for (const server of servers) map[server.id] = server.bootGap
+    return map
+  }, [servers])
+
   // CHANNEL-class diagnostic self-heal pass (design 09 §3.5): the recorded
   // diagnostic describes the source's LAST shell boot; a 404 `not-injected` /
   // `graph-unreachable` can heal without a re-boot (e.g. the gateway's
@@ -529,6 +539,7 @@ function SettingsPanel({
               <ConnectionsSection
                 t={connectionsT}
                 pluginDiagnostics={pluginDiagnostics}
+                bootGaps={bootGaps}
                 onRecheckDiagnostic={recheckDiagnostic}
               />
             ) : active === GENERAL_SECTION_ID ? (

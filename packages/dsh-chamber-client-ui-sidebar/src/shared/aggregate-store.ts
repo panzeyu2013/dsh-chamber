@@ -118,7 +118,45 @@ export interface ChamberServerAggregate {
   dshVersion?: string
   /** Renderer-local client-plugin boot health for this source. */
   pluginDiagnostic?: PluginGraphDiagnostic
+  /**
+   * Settled-boot GAP of this source's mounted shell (2026-12, design 05 §4
+   * 「降级呈现」/ design 09 §3.2): the shell settled successfully while a whole
+   * surface is missing.
+   *
+   * A SEPARATE fact from {@link pluginDiagnostic} on purpose. The diagnostic
+   * channel describes the host boot-GRAPH channel (`ok` legitimately means "the
+   * graph was fetched and every row that arrived applied"); the classic gap —
+   * the graph arrived but `ui-chat`'s `sidebarRight` was never provided — leaves
+   * that channel at `ok` while the conversation view never registers. Overloading
+   * one channel with both meanings would either lie ("正常" next to an empty
+   * conversation) or make the recheck/self-heal classification ambiguous.
+   *
+   * Structured facts only (never the producer's diagnostic sentence): each
+   * rendering package writes its own copy from `kind` + the ids (STATUS
+   * 「跨边界诊断文案」). Absent = no gap reported for the current mount.
+   */
+  bootGap?: ServerBootGap
   updatedAt: number
+}
+
+/** Why a mounted shell is known to be incomplete (see {@link ChamberServerAggregate.bootGap}). */
+export type ServerBootGapKind =
+  | 'graph-unavailable'
+  | 'required-services-missing'
+  | 'deferred-registration-failed'
+
+/**
+ * The cross-package face of one settled-boot gap. Producers (the renderer's
+ * shell seam) hand these fields over; consumers render their own sentences.
+ */
+export interface ServerBootGap {
+  kind: ServerBootGapKind
+  /** `required-services-missing`: the unprovided composite services, roster order. */
+  services?: readonly string[]
+  /** `required-services-missing`: registered plugins injecting them, roster order. */
+  injectedBy?: readonly string[]
+  /** `deferred-registration-failed`: the row ids that never registered. */
+  failedIds?: readonly string[]
 }
 
 export type PluginGraphDiagnosticState =

@@ -65,6 +65,25 @@ test('settings roster signature tracks rendered pluginId but ignores timestamp-o
     serverProjectionSignature([{ ...base, managedRuntimeDown: true, updatedAt: 2 }]),
     serverProjectionSignature([{ ...base, managedRuntimeDown: true, updatedAt: 9 }]),
     'the timestamp stays excluded')
+  // Settled-boot gap（2026-12, 05 §4）：连接页卡片渲染它，所以缺口单独翻转必须
+  // 叫醒 subscribeServers——否则卡片冻结在上一代（自愈清掉缺口后仍显示"受限"）。
+  assert.notEqual(signature, serverProjectionSignature([{
+    ...base, bootGap: { kind: 'graph-unavailable' }, updatedAt: 2,
+  }]))
+  assert.notEqual(
+    serverProjectionSignature([{ ...base, bootGap: { kind: 'graph-unavailable' }, updatedAt: 2 }]),
+    serverProjectionSignature([{
+      ...base, bootGap: { kind: 'required-services-missing', services: ['sidebarRight'] }, updatedAt: 2,
+    }]),
+    'a different gap payload is a different rendered fact',
+  )
+  assert.equal(
+    serverProjectionSignature([{ ...base, bootGap: { kind: 'graph-unavailable' }, updatedAt: 2 }]),
+    serverProjectionSignature([{
+      ...base, bootGap: { kind: 'graph-unavailable', services: [], injectedBy: [], failedIds: [] }, updatedAt: 7,
+    }]),
+    'absent and empty structured fields are the same gap; the timestamp stays excluded',
+  )
 })
 
 test('the managed-down panel copy branch and its dictionary key are pinned', () => {

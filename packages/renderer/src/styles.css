@@ -33,6 +33,15 @@
   --muted: #8b94a7;
   --accent: #4f8cff;
   --red: #f85149;
+  /* 代码字体的**本仓兜底**：上游主题表声明 `--ds-font-family-code`，但框架自有
+     规则（下面的 .boot-gap-facts / .fatal-entry）在上游表缺席的路径里也必须能渲染，
+     所以回退值单点声明在这里，而不是两条规则各背一串九项字体链（2026-12 复查：
+     那个 token 名在本仓零声明，S1 的正则只扫 --dsw-/--dsh-，于是没人发现）。
+     刻意不直接声明 `--ds-font-family-code`：那是上游的名字，覆盖它会波及整个
+     dsh 界面的代码字体；这里只提供 `var(--ds-font-family-code, var(--chamber-…))`
+     的第二顺位。 */
+  --chamber-font-family-code: 'SF Mono', 'JetBrains Mono', 'Fira Code', Consolas,
+    'Liberation Mono', Menlo, Courier, monospace;
 }
 
 * {
@@ -244,6 +253,75 @@ body {
   color: var(--dsw-alias-label-primary, var(--text));
 }
 
+/* ---------- 降级提示（2026-12, 05 §4 「降级呈现」） ----------
+   boot 成功但已知缺口（会话正文这类整面缺席）时的现场说明。与失败覆盖层的
+   分工：失败覆盖层是 error 态、独占屏幕；这里是**非阻断**的顶部横幅——层
+   pointer-events:none、只有卡片自己接收命中测试，侧栏/会话头/composer/切换
+   来源全部照常可用。z-index 900 明确低于 .fatal-overlay 的 1000：失败态出现
+   时压住本提示——boot 失败态与它结构互斥（App 侧还要求 error === null），
+   **控制面不可达**那张覆盖层与壳状态无关，靠 App 侧的显式门（!controlUnreachable）
+   拦住，不是靠 z-index。
+
+   配色只用 token：边框走**状态色**（S3 对状态色边框要求 1px 恰好，且 S5 的
+   「中性边框 + 阴影」配对规则不适用于状态色），因此这里刻意不加 elevation
+   阴影——避免 S5 与"边框/阴影二选一"的取舍。 */
+.boot-gap-layer {
+  position: absolute;
+  top: 12px;
+  left: 0;
+  right: 0;
+  z-index: 900;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.boot-gap {
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start;
+  max-width: min(600px, calc(100% - 24px));
+  padding: 10px 12px;
+  /* 状态色边框 = 1px（S3 对状态色的要求）；回退走本文件既有的 --muted，
+     不写颜色字面量（S4 禁止 alias 回退里出现硬编码颜色）。 */
+  border: 1px solid var(--dsw-alias-state-warn-primary, var(--muted));
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-base, var(--bg));
+}
+
+.boot-gap-title {
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-primary, var(--text));
+}
+
+.boot-gap-body,
+.boot-gap-action {
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-secondary, var(--muted));
+  overflow-wrap: anywhere;
+}
+
+.boot-gap-facts {
+  font-family: var(--ds-font-family-code, var(--chamber-font-family-code));
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-secondary, var(--muted));
+  overflow-wrap: anywhere;
+}
+
+/* 产出方的诊断原文（框架之下的文本，按跨边界诊断文案规则只作诊断行）。 */
+.boot-gap-detail {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-tertiary, var(--muted));
+  overflow-wrap: anywhere;
+}
+
 /* 覆盖式致命屏：视图保持挂载（会话保活 + 无僵尸 ctx），控制面不可达时
    盖在上层遮断命中测试。 */
 .fatal-overlay {
@@ -292,17 +370,7 @@ body {
 }
 
 .fatal-entry {
-  font-family: var(
-    --ds-font-family-code,
-    'SF Mono',
-    'JetBrains Mono',
-    'Fira Code',
-    Consolas,
-    'Liberation Mono',
-    Menlo,
-    Courier,
-    monospace
-  );
+  font-family: var(--ds-font-family-code, var(--chamber-font-family-code));
   font-size: 12px;
   line-height: 18px;
   color: var(--dsw-alias-label-secondary, var(--muted));

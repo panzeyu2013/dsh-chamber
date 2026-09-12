@@ -93,9 +93,24 @@ bundle 未覆盖的 entry（方案 A，§3）。第 1、2 步在 chamber 托管�
   `SERVING_HEAL_BUDGET_MS`，App 侧门上限 60s），而不是在固定预算（10×500ms）用尽后
   丢掉整套 profile 客户端插件——冷启动与重启跨越窗口正是这样丢的；② 门也用尽、或该行
   仍不 apply 时 boot **不再静默**：发布 `graph-unreachable` 诊断 + `console.error`
-  点名 instance，并把 `ShellState.degraded`（`graph-unavailable` /
-  `required-services-missing`）交给 App，由 App 在该来源 ready 时**自动重挂一次**
+  点名 instance，并把 `ShellState.degraded`（当时两个 kind：`graph-unavailable` /
+  `required-services-missing`；2026-12 起另有 `deferred-registration-failed`，见下）
+  交给 App，由 App 在该来源 ready 时**自动重挂一次**
   （每个 ready 世代一次，纯判定在 `degraded-retry.ts`；此前只有整页 reload 能恢复）。
+  该事实自 2026-12 起**同时有用户面**：形状与呈现裁决在叶模块
+  `renderer/src/boot-gap.ts`（`Record<kind, …>` 强制每个 kind 带文案与 retryable
+  裁决），由 App 在活动视图渲染非阻断横幅，并作为**独立字段**
+  `ChamberServerAggregate.bootGap` 过既有投影通道给侧栏来源行与连接页卡片
+  （`pluginDiagnostic` 保持"图通道健康"语义不变：缺口在场时连接页抑制其 `ok` 行）
+  ——见 design 05 §4「降级呈现」。事实的投递（2026-12 修订）：结算前的判词随 settle
+  一起进 App；**结算后**的判词由 App 侧汇道投递（`bootInstanceShell` 的
+  `options.onRepublish`，InstanceView 接的就是它传给 `onStateChange` 的那个处理器）——
+  shell 的 `onState` 形参是**视图本地 setter**，只发它 App 的 `shellStates` 镜像收不到，
+  横幅/投射/自愈会一起瞎掉；尚未 settle 的判词按 boot 序号暂存、settle 时补放。
+  事实的**身份 = kind + 载荷**（同日修订）：延迟簇失败此前与探针判词共用
+  `required-services-missing`，`reportSettledDegrade` 的「同 kind 即重复」把第二条
+  判词静默丢弃；现在延迟簇有自己的 kind（`deferred-registration-failed` + 失败
+  id 集），探针载荷带结构化 `services`/`injectedBy`。
   ③ 同一道门被**设置壳**复用：`waitForSourceServing`（shared face
   `serving-gate.ts`，读 chamberBridge 投影的 `connected`）——桥的图读取在
   `instance_unavailable` / `dsh_not_ready` 这类**冷启动拒绝**上等来源并重试一次，

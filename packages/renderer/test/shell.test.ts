@@ -284,7 +284,9 @@ test('bootInstanceShell: the serving gate is threaded into the host-graph fetch 
 test('bootInstanceShell: a graph-less boot settles degraded and republishes a late probe verdict', async () => {
   // 2026-09-10（sidebarRight 彻底修复）：取图在启动窗口内拿不到时，boot 仍成功但
   // 必须带上「已知不完整」这个事实（App 据此在来源 ready 后自动重挂）；条目里
-  // 5s 必需服务探针的判词晚于 settle，经同一条 onState 缝补发。
+  // 5s 必需服务探针的判词晚于 settle：经 onState 补发给**视图**，并经
+  // options.onRepublish 投给 **App 镜像**（2026-12 BLOCKER 修复——只发前者时
+  // 横幅/侧栏投射/自愈全都收不到，见下方 republished 断言）。
   const restoreFetch = stubUnavailableGraph()
   const restoreWindow = stubWindow()
   __testResetDisposed()
@@ -292,20 +294,90 @@ test('bootInstanceShell: a graph-less boot settles degraded and republishes a la
   __testSetBootError(undefined)
   __testSetRunError(undefined)
   const states: Array<{ booted: boolean; degraded: { kind: string } | null }> = []
+  // 2026-12 BLOCKER fix: the post-settle verdict must reach the APP-owned sink as
+  // well, because the `onState` argument above is the view's local setter in
+  // production — publishing only through it left the banner, the sidebar/
+  // connections projection and the self-heal blind to 2 of the 3 kinds.
+  const republished: Array<{ booted: boolean; degraded: { kind: string } | null }> = []
   try {
     const state = await bootInstanceShell(
       'ssh-test-degrade-7', '/api/i/ssh-test-degrade-7', {} as HTMLElement,
       (next) => states.push(next as unknown as { booted: boolean; degraded: { kind: string } | null }),
+      undefined, undefined,
+      {
+        onRepublish: (_id, next) => {
+          republished.push(next as unknown as { booted: boolean; degraded: { kind: string } | null })
+        },
+      },
     )
     assert.equal(state.booted, true)
     assert.equal(state.error, null)
     assert.equal(state.degraded?.kind, 'graph-unavailable')
-    const ctx = __testConfiguredContexts().at(-1) as { chamberReportBootDegraded?: (message: string) => void }
+    const ctx = __testConfiguredContexts().at(-1) as {
+      chamberReportBootDegraded?: (fact: { kind: string; services?: readonly string[] }) => void
+    }
     assert.equal(typeof ctx.chamberReportBootDegraded, 'function', 'the entry needs the degrade seam')
-    ctx.chamberReportBootDegraded?.('required extra-row service(s) missing after 5000ms: sidebarRight')
+    // The seam carries the STRUCTURED fact (2026-12, design 05 §4): the frame
+    // renders its own copy from the kind + the named services, so a producer
+    // must not flatten its verdict into a sentence.
+    ctx.chamberReportBootDegraded?.({
+      kind: 'required-services-missing',
+      message: 'required extra-row service(s) missing after 5000ms: sidebarRight',
+      services: ['sidebarRight'],
+      injectedBy: ['@deepseek-ai/dsh-client-ui-chat'],
+    })
     const last = states.at(-1)!
     assert.equal(last.booted, true)
     assert.equal(last.degraded?.kind, 'required-services-missing')
+    assert.equal(
+      republished.at(-1)?.degraded?.kind,
+      'required-services-missing',
+      'the App-owned sink must receive the post-settle verdict (the user surfaces read the App mirror)',
+    )
+    assert.deepEqual(
+      (last.degraded as unknown as { services?: readonly string[] }).services,
+      ['sidebarRight'],
+      'the structured services must survive the republish (the copy names them)',
+    )
+    // Identity = kind + payload: an identical repeat (even with a drifting
+    // message, which the signature deliberately ignores) must not churn the
+    // App's state …
+    const published = states.length
+    ctx.chamberReportBootDegraded?.({
+      kind: 'required-services-missing',
+      message: 'a re-worded but structurally identical verdict',
+      services: ['sidebarRight'],
+      injectedBy: ['@deepseek-ai/dsh-client-ui-chat'],
+    })
+    assert.equal(states.length, published, 'an identical fact must not republish')
+    // The load-bearing half of the signature change (2026-12 falsification
+    // round): the SAME kind with a RICHER payload must republish. A kind-only
+    // comparison — the behaviour this change replaced — silently dropped it,
+    // which is exactly how the probe's re-armed pass lost its extra service.
+    ctx.chamberReportBootDegraded?.({
+      kind: 'required-services-missing',
+      message: 'the probe re-armed and named one more service',
+      services: ['sidebarRight', 'slots'],
+      injectedBy: ['@deepseek-ai/dsh-client-ui-chat'],
+    })
+    assert.equal(states.length, published + 1, 'a richer payload of the same kind must republish')
+    assert.deepEqual(
+      (states.at(-1)!.degraded as unknown as { services?: readonly string[] }).services,
+      ['sidebarRight', 'slots'],
+      'the richer verdict must be the recorded one',
+    )
+    // … while a DIFFERENT kind replaces the single slot (the last verdict wins;
+    // both producers stay on console — the bound is registered in STATUS).
+    ctx.chamberReportBootDegraded?.({
+      kind: 'deferred-registration-failed',
+      message: 'deferred plugin registration failed for 1 id(s): ui-tool',
+      failedIds: ['ui-tool'],
+    })
+    assert.equal(
+      states.at(-1)!.degraded?.kind,
+      'deferred-registration-failed',
+      'the fact slot is single: a new kind replaces the previous verdict',
+    )
   } finally {
     __testResetConfiguredContexts()
     restoreFetch()

@@ -84,10 +84,13 @@ test('the sidebar projection gates the current session on the pending intent', (
   // dropped it from either place kept this lock green while the frame copy in the
   // derive (the local source's fallback label, T16) would freeze in the locale of
   // the first render.
+  // 2026-12: `shellStates` joins BOTH lists for the same reason — the sidebar row
+  // and the connections card read the settled-boot gap off this projection, so a
+  // dropped input (or dep) freezes that warning at its first value.
   assert.match(
     app,
-    /managedRuntime, workspaceEcho, openIntents, locale\),\n    \[health, connections, remoteInstances, remoteStatus, aggregates, hostFacts, runtimeFacts, completedBySource, activeView, pluginDiagnostics, managedRuntime, workspaceEcho, openIntents, locale\],/,
-    'the intent AND the frame locale must be derive inputs and memo dependencies',
+    /managedRuntime, workspaceEcho, openIntents, locale\),\n    \[health, connections, remoteInstances, remoteStatus, aggregates, hostFacts, runtimeFacts, completedBySource, activeView, pluginDiagnostics, shellStates, managedRuntime, workspaceEcho, openIntents, locale\],/,
+    'the intent, the frame locale AND the shell gap facts must be derive inputs and memo dependencies',
   )
 })
 

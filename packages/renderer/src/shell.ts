@@ -35,6 +35,11 @@ import type { Context } from '@deepseek-ai/cordis'
 
 import { parseAuthoritativeSourceFingerprint } from './deep-link-activation.ts'
 import { BOOT_TIMEOUT_MS } from './boot-budget.ts'
+// The settled-boot gap fact + its identity live in the leaf module
+// (boot-gap.ts): chamber-entry.ts produces it, this module carries it, and the
+// App renders it — a leaf keeps that triangle acyclic (host-graph.ts is
+// imported below, so the type cannot live there either).
+import { bootGapSignature, type ShellDegradedFact } from './boot-gap.ts'
 import { isChamberSourceId, rawInstanceIdFromSourceId } from './transport-source.ts'
 import { BundleLoadTimeoutError, collectExtraRows, type ExtraModuleRow } from './host-graph.ts'
 import { CHAMBER_COVERED_IDS } from './chamber-covered.ts'
@@ -265,19 +270,30 @@ export interface ShellState {
    *    plugins — `ui-chat` pends on `sidebarRight`, the conversation view
    *    never registers.
    *  - `required-services-missing`: the graph WAS available but the required
-   *    extra-row service still never materialized (the 5s probe's verdict).
-   * Both are recoverable by a fresh boot once the source serves: the App
+   *    service still never materialized (the 5s probe's verdict).
+   *  - `deferred-registration-failed`: a deferred plugin family's chunk never
+   *    loaded, so the slots/services it declares stay undeclared this boot.
+   * All three are recoverable by a fresh boot once the source serves: the App
    * re-boots the instance on the ready transition instead of leaving a
-   * half-dead mount (previously only a manual page reload recovered).
+   * half-dead mount (previously only a manual page reload recovered), and the
+   * fact now ALSO has a user surface (2026-12, design 05 §4 「降级呈现」).
+   *
+   * SINGLE SLOT: the field holds ONE fact — the last one reported wins. Two
+   * producers can fire in one boot (the deferred cluster at ~0ms, the probe at
+   * 5s), so a boot that both loses a chunk AND misses a service shows only the
+   * later verdict to the user; both stay on `console.error`. Registered as a
+   * coverage bound in STATUS (a list-shaped fact would ripple into the
+   * projection, the three renderers and the retry plan).
    */
   degraded: ShellDegradedFact | null
 }
 
-/** Why a settled boot is known to be incomplete (see {@link ShellState.degraded}). */
-export interface ShellDegradedFact {
-  kind: 'graph-unavailable' | 'required-services-missing'
-  message: string
-}
+/**
+ * Re-exported for this module's consumers; the shape itself lives in the leaf
+ * module `boot-gap.ts` (shared with the producers in chamber-entry.ts and the
+ * App without an import cycle — see that module's header).
+ */
+export type { ShellDegradedFact } from './boot-gap.ts'
 
 /** One serialized boot queue shared by every instance (module/plugin discipline). */
 let bootChain: Promise<void> = Promise.resolve()
@@ -290,7 +306,7 @@ export function createChamberContextSetup(
   sourceFingerprint: string,
   transport: ChamberTransport = instanceId === 'local' ? 'local' : 'ssh',
   bootGeneration?: number,
-  reportRequiredServicesMissing?: (message: string) => void,
+  reportBootDegraded?: (fact: ShellDegradedFact) => void,
 ): (ctx: Pick<Context, 'provide'>) => void {
   if (instanceId.trim() === '') throw new Error('shell: empty instance id')
   if (!isChamberSourceId(instanceId)
@@ -322,11 +338,14 @@ export function createChamberContextSetup(
     // 授权，一个挂死后又恢复的老 boot 会夺走生产权，其 teardown clear 会把
     // 健康后继的通道永久清空。消费者（侧栏 producer 注册）用它做代际栅栏。
     if (bootGeneration !== undefined) ctx.provide('chamberBootGeneration', bootGeneration)
-    // The entry's required-service probe reports a post-settle degrade through
-    // this seam (2026-09-10): the App re-boots the instance instead of leaving
-    // a mount whose conversation view never registers.
-    if (reportRequiredServicesMissing !== undefined) {
-      ctx.provide('chamberReportBootDegraded', reportRequiredServicesMissing)
+    // The entry's post-settle producers (the 5s required-service probe and the
+    // deferred-cluster verdict) report a STRUCTURED gap through this seam
+    // (2026-09-10; structured 2026-12): the App re-boots the instance instead of
+    // leaving a mount whose conversation view never registers, and renders the
+    // same fact as copy. The fact travels whole — the frame never parses the
+    // diagnostic message to recover which service is missing.
+    if (reportBootDegraded !== undefined) {
+      ctx.provide('chamberReportBootDegraded', reportBootDegraded)
     }
   }
 }
@@ -346,6 +365,12 @@ export function createChamberContextSetup(
  * dispose — a same-commit reap always sees the pending boot's generation.
  */
 const bootGenerations = new Map<string, number>()
+
+/** Page-monotonic boot serial (never per-id, never reused): the post-settle fact
+ * path compares it, so a stale producer cannot pass an identity check by landing
+ * on a generation number that cleanup + a same-id re-boot handed out again
+ * (2026-12 review F4). Unlike `bootGenerations` it is never deleted. */
+let bootSerialCounter = 0
 const cancelledBoots = new Map<string, number>()
 
 type DispatchCancel = (error: Error) => void
@@ -357,28 +382,78 @@ interface ShellHolder {
   entry: AppWebEntry
   activeDispatchCancels: Set<DispatchCancel>
   /**
-   * The settle channel of the boot that installed this holder (2026-09-10):
-   * a degrade discovered AFTER settle (the required-service probe's 5s
-   * verdict) has to reach the App through the same `onState` seam, otherwise
-   * the App can never learn that a mounted shell is half-dead.
+   * Monotonic per-PAGE boot serial (never per-id, never reused): the pending
+   * replay and the holder identity both compare it, so a stale producer that
+   * survived an id's lifecycle-owner cleanup cannot pass the fence by landing on
+   * a REUSED generation number (2026-12 review F4).
+   */
+  serial: number
+  /**
+   * The VIEW's state channel (the 4th `bootInstanceShell` argument — in
+   * production the `InstanceView` React setter). A degrade discovered AFTER
+   * settle is republished here so the view's own copy of the state stays true;
+   * it is NOT what reaches the App — see `onRepublish` (2026-12: the original
+   * 2026-09-10 note claimed this seam carried the verdict to the App, and that
+   * claim was false for the whole life of the probe arm).
    */
   onState?: (next: ShellState) => void
+  /**
+   * App-facing sink for POST-SETTLE republishes (2026-12 BLOCKER fix). It is
+   * deliberately distinct from `onState`: that one is the VIEW's React setter,
+   * so publishing only through it re-rendered `InstanceView` and never reached
+   * the App's `shellStates` mirror — which is what the active-view banner, the
+   * sidebar/connections projection and the once-per-ready-epoch self-heal all
+   * read. Only this fenced post-settle path uses it, so the boot's own
+   * pre-settle publishes (`before`, superseded/blocked errors) still never reach
+   * the App mirror. Absent in the node tests, which boot without an App.
+   */
+  onRepublish?: (instanceId: string, next: ShellState) => void
   lastState?: ShellState
 }
 
 /**
- * Record a post-settle degrade on the live holder and republish the state.
- * No-op when the instance has no holder (never booted / disposed) or its boot
- * did not succeed — a failed boot already reports its own error.
+ * Facts that arrived BEFORE their boot settled (2026-12 review F2/F3). The
+ * holder only exists once `entry.run()` resolves, and a slow boot (cold SSH
+ * bundle/extra-row loads) can outlive the probe's 5s timer; the deferred
+ * cluster's report is a bare macrotask racing the same window. Dropping those
+ * lost the boot's only user-visible verdict (console.error was all that was
+ * left), so the newest fact per id waits here and is replayed at settle — keyed
+ * by the boot SERIAL, so only the boot that was loading can claim it. Cleared on
+ * teardown, cleanup and boot failure (a failed boot's surface is the overlay).
  */
-function reportSettledDegrade(instanceId: string, fact: ShellDegradedFact): void {
+const pendingDegrades = new Map<string, { serial: number; fact: ShellDegradedFact }>()
+
+/**
+ * Record a post-settle degrade on the live holder and republish the state.
+ * No-op when the instance has no holder (never booted / disposed), its boot did
+ * not succeed (a failed boot already reports its own error), or the SAME fact
+ * (kind + payload) is already recorded.
+ *
+ * Identity is {@link bootGapSignature}, not the kind alone: two producers used
+ * to share one kind and the probe's re-armed pass can name a LARGER missing set,
+ * so a kind-only comparison silently dropped the richer verdict (2026-12
+ * review). Payload equality still absorbs a repeated identical report.
+ */
+function reportSettledDegrade(instanceId: string, fact: ShellDegradedFact, serial: number): void {
   const holder = entries.get(instanceId)
-  if (holder?.lastState === undefined || holder.onState === undefined) return
+  // A holder of ANOTHER boot owns the slot: this fact is from a dead
+  // incarnation (its generation may even have been reused after cleanup) and must
+  // never spread that holder's `lastState` (2026-12 review F4).
+  if (holder !== undefined && holder.serial !== serial) return
+  if (holder?.lastState === undefined || holder.onState === undefined) {
+    // Still booting: hold the newest fact for the settle that is coming. Only a
+    // boot with this serial may claim it (F2/F3).
+    const pending = pendingDegrades.get(instanceId)
+    if (pending === undefined || pending.serial !== serial) pendingDegrades.set(instanceId, { serial, fact })
+    return
+  }
   if (!holder.lastState.booted) return
-  if (holder.lastState.degraded?.kind === fact.kind) return
+  const current = holder.lastState.degraded
+  if (current !== null && bootGapSignature(current) === bootGapSignature(fact)) return
   const next: ShellState = { ...holder.lastState, degraded: fact }
   holder.lastState = next
   holder.onState(next)
+  holder.onRepublish?.(instanceId, next)
 }
 
 /** The live AppWebEntry holder per booted instance (unmount on teardown). */
@@ -413,6 +488,9 @@ function scheduleInstanceLifecycleOwnerCleanup(instanceId: string): void {
     if (entries.has(instanceId)) return
     bootGenerations.delete(instanceId)
     cancelledBoots.delete(instanceId)
+    // A stash belongs to a boot that never settled; once the id is free it can
+    // only mislead a later incarnation (its serial can never match again).
+    pendingDegrades.delete(instanceId)
   })
 }
 
@@ -492,7 +570,16 @@ export function bootInstanceShell(
    * fetch wait for a still-starting source instead of losing its client
    * plugins (see host-graph.ts CollectExtraRowsDeps.waitForServing).
    */
-  options: { waitForServing?: (instanceId: string) => Promise<boolean> } = {},
+  options: {
+    waitForServing?: (instanceId: string) => Promise<boolean>
+    /**
+     * App-owned sink for post-settle republishes (2026-12 BLOCKER fix). The
+     * caller supplies the SAME handler it passes as `onStateChange`, because the
+     * shell's `onState` argument is the view's local setter and cannot reach the
+     * App's mirror.
+     */
+    onRepublish?: (instanceId: string, state: ShellState) => void
+  } = {},
 ): Promise<ShellState> {
   // C2 perf 埋点：boot 入口（含全局队列排队；注册表见 perf-marks.ts）。
   perfMark(PERF_MARKS.shellBootStart)
@@ -503,27 +590,38 @@ export function bootInstanceShell(
   // 也在 configureContext 之前，因为上下文要携带本次代际事实。
   const gen = (bootGenerations.get(instanceId) ?? 0) + 1
   bootGenerations.set(instanceId, gen)
+  // Page-monotonic boot serial: unlike `gen` (which restarts at 1 once an id's
+  // lifecycle owner is cleaned up) it is NEVER reused, so it is the identity the
+  // post-settle fact path compares (2026-12 review F4).
+  const serial = ++bootSerialCounter
   // Only the current, non-cancelled generation may publish: an old slow boot's
   // late failure must never overwrite a newer healthy mount's facts.
   const mayPublish = (): boolean =>
     bootGenerations.get(instanceId) === gen && (cancelledBoots.get(instanceId) ?? 0) < gen
   /**
-   * The two degrade facts of this boot, filled by the host-graph fetch and by
-   * the entry's required-service probe. `graphUnavailable` is known BEFORE the
-   * boot settles (it is part of the settled state); the probe's verdict arrives
-   * ~5s later and is republished through the holder (reportSettledDegrade).
+   * The degrade facts of this boot: `graphUnavailable` is known BEFORE the boot
+   * settles (it is part of the settled state); the entry's producers (the 5s
+   * required-service probe, the deferred-cluster verdict) arrive later and are
+   * republished through the holder (reportSettledDegrade).
    */
   let graphUnavailable: string | null = null
   const reportPluginDiagnostic = (sourceId: string, diagnostic: PluginGraphDiagnostic): void => {
     if (!mayPublish()) return
     chamberBridge.reportPluginDiagnostic(sourceId, diagnostic)
   }
-  const reportRequiredServicesMissing = (message: string): void => {
+  /**
+   * The ONE fenced writer for post-settle gaps. The producers live in
+   * chamber-entry.ts, which deliberately does NOT import chamberBridge: a gap
+   * fact must pass this generation fence, otherwise a superseded boot's late
+   * verdict could overwrite a healthy successor's state (both the console path
+   * and the user surface read the same fact).
+   */
+  const reportBootDegraded = (fact: ShellDegradedFact): void => {
     if (!mayPublish()) return
-    reportSettledDegrade(instanceId, { kind: 'required-services-missing', message })
+    reportSettledDegrade(instanceId, fact, serial)
   }
   const configureContext = createChamberContextSetup(
-    instanceId, basePath, sourceFingerprint, transport, gen, reportRequiredServicesMissing)
+    instanceId, basePath, sourceFingerprint, transport, gen, reportBootDegraded)
   const previousInstanceTail = instanceBootTails.get(instanceId)
   // 前代 boot 的起始时刻（绝对等待上限用）：必须在覆盖本代记录之前读取。
   const previousInstanceBootStartedAt = instanceBootStartedAt.get(instanceId)
@@ -793,8 +891,18 @@ export function bootInstanceShell(
           ? null
           : { kind: 'graph-unavailable', message: graphUnavailable },
       }
-      const holder: ShellHolder = { entry, activeDispatchCancels: new Set(), onState, lastState: settled }
+      const holder: ShellHolder = {
+        entry, activeDispatchCancels: new Set(), serial, onState, onRepublish: options.onRepublish, lastState: settled,
+      }
       entries.set(instanceId, holder)
+      // A verdict that arrived while this boot was still loading (F2/F3): the
+      // serial check is what keeps a dead incarnation's stash out of a healthy
+      // successor; anything else is dropped rather than carried over.
+      const pending = pendingDegrades.get(instanceId)
+      if (pending !== undefined) {
+        pendingDegrades.delete(instanceId)
+        if (pending.serial === serial) reportSettledDegrade(instanceId, pending.fact, serial)
+      }
       // 注册成功即清掉本实例的旧阈值：同 id 尾（有绝对上限）已让前代完成/被判
       // superseded，
       // current-generation 门又覆盖本代 await 期间被更新一代取代的情形；残留
@@ -842,6 +950,9 @@ export function bootInstanceShell(
         rejectPendingOpens(instanceId, message)
         perfMark(PERF_MARKS.shellBootFailed, instanceId)
       }
+      // The failure overlay owns the surface for a boot that never settled: a
+      // verdict stashed while it loaded must not linger for a later incarnation.
+      pendingDegrades.delete(instanceId)
       return {
         instanceId, basePath, booted: false, booting: false, error: message, degraded: null,
         ...(caughtFailedEntries.length === 0 ? {} : { failedEntries: caughtFailedEntries }),

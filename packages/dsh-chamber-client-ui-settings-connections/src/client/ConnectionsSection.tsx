@@ -58,7 +58,7 @@ import {
 } from './managed-restart.ts'
 import { PluginDialog, type PluginDialogTarget } from './PluginDialog.tsx'
 import { PluginDiagnosticLine } from './plugin-diagnostic.tsx'
-import type { PluginDiagnostic } from './plugin-diagnostic.ts'
+import type { PluginDiagnostic, ServerBootGap } from './plugin-diagnostic.ts'
 import { formatGatewayUrl, parseGatewayUrl } from './gateway-url.ts'
 import { actionHintKey } from './action-hint.ts'
 import {
@@ -103,6 +103,12 @@ export type ConnectionsSectionProps =
   & {
     /** Per-instance diagnostics keyed by source id ('local' | '<kind>-<id>'); optional outside the chamber shell. */
     pluginDiagnostics?: Readonly<Record<string, PluginDiagnostic | undefined>>
+    /** Per-instance settled-boot gaps keyed EXACTLY like `pluginDiagnostics`
+     *  (2026-12, design 05 §4 「降级呈现」). A separate fact from the plugin
+     *  diagnostic: the graph channel may answer `ok` while the page's own
+     *  surfaces never registered, so a card renders the gap INSTEAD of an `ok`
+     *  status line (see PluginDiagnosticLine). Absent outside the chamber shell. */
+    bootGaps?: Readonly<Record<string, ServerBootGap | undefined>>
     /** Self-heal recheck for CHANNEL-class diagnostics (design 09 §3.5):
      *  the host owns the shared plugin-diagnostic store, so the write-back
      *  comes from the host (settings-bridge) — this section only asks.
@@ -384,7 +390,7 @@ function GatewaySpkiField({ draft, onChange, fieldError, fieldId, t }: {
  * @returns the section.
  */
 export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
-  const { t, pluginDiagnostics, onRecheckDiagnostic } = props
+  const { t, pluginDiagnostics, bootGaps, onRecheckDiagnostic } = props
   // 每来源「设置组装诊断」块已于 2026-12 完整桥接修订退役（设置面不再二次装载
   // 插件，没有"装不上"可报）——本组件只消费上图三个 prop。仍然真实的诊断留在
   // 该来源卡片上的「客户端插件状态」（pluginDiagnostics，boot/extra-row 通道）。
@@ -1489,7 +1495,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
               : runtimeState?.runtimeBlocked === true
                 ? <p className={css.hint}>{runtimeState.runtimeBlockedReason ?? t('localRuntimeBlocked')}</p>
                 : null}
-          <PluginDiagnosticLine diagnostic={pluginDiagnostics?.['local']} t={t} />
+          <PluginDiagnosticLine diagnostic={pluginDiagnostics?.['local']} bootGap={bootGaps?.['local']} t={t} />
           <div className={css.logArea}>
             <div className={css.logHead}>
               <button
@@ -1656,7 +1662,11 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                     {spec.transport === 'ssh' && spec.serviceName === null && spec.kind === 'dsh'
                       ? <p className={css.hint}>{t('serviceUnconfiguredHint')}</p>
                       : null}
-                    <PluginDiagnosticLine diagnostic={pluginDiagnostics?.[`${spec.kind}-${spec.id}`]} t={t} />
+                    <PluginDiagnosticLine
+                      diagnostic={pluginDiagnostics?.[`${spec.kind}-${spec.id}`]}
+                      bootGap={bootGaps?.[`${spec.kind}-${spec.id}`]}
+                      t={t}
+                    />
                     <Button
                       variant={connected ? 'outline' : 'primary'}
                       size="sm"
@@ -2340,6 +2350,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
               t={t}
               target={pluginDialogFor}
               diagnostic={pluginDiagnostics?.[sourceKey]}
+              bootGap={bootGaps?.[sourceKey]}
               runtimeDown={runtimeDown}
               onClose={() => { setPluginDialogFor(null) }}
               onRecheckDiagnostic={onRecheckDiagnostic === undefined

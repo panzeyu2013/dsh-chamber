@@ -19,6 +19,7 @@ import {
   DEFERRED_EXTRA_ROW_IDS,
   injectedServices,
   missingInjectedServices,
+  missingServiceFact,
   registeredInjectMembers,
   requiredServiceProbeMessage,
   REQUIRED_SERVICE_PROBE_DEADLINE_MS,
@@ -94,6 +95,23 @@ test('requiredServiceProbeMessage names each service, its injectors, the deadlin
   assert.ok(withInstance.includes('NOT blocked'), 'the diagnostic-not-gate contract must be stated')
   const withoutInstance = requiredServiceProbeMessage(missing)
   assert.ok(!withoutInstance.includes('instance'), 'an unknown instance adds no clause')
+})
+
+test('missingServiceFact carries the verdict as structured facts, not as a sentence', () => {
+  // 2026-12 (design 05 §4): the frame renders its own copy and may NAME the
+  // missing service — recovering that by parsing the diagnostic line would be
+  // brittle by construction, so the producer hands the fields over.
+  const fact = missingServiceFact([
+    { service: 'sidebarRight', injectedBy: ['@deepseek-ai/dsh-client-ui-chat'] },
+    { service: 'slots', injectedBy: ['@deepseek-ai/dsh-client-ui-renderer', '@deepseek-ai/dsh-client-ui-chat'] },
+  ])
+  assert.deepEqual(fact.services, ['sidebarRight', 'slots'], 'roster order, one entry per service')
+  assert.deepEqual(
+    fact.injectedBy,
+    ['@deepseek-ai/dsh-client-ui-chat', '@deepseek-ai/dsh-client-ui-renderer'],
+    'the injector union is deduped (a plugin injecting two missing services is named once) in first-seen order',
+  )
+  assert.deepEqual(missingServiceFact([]), { services: [], injectedBy: [] })
 })
 
 // ── Finding 3 (2026-09-11 review-fix): the roster's SOURCE audit ────────────
@@ -414,7 +432,15 @@ test('chamber-entry wires the deferred roster, the per-row isolation and the nam
   // Reporting: the shared builder + the shell seam (never console-only), and
   // still no boot gate (the registration is fire-and-forget).
   assert.match(entry, /deferredRegistrationFailureMessage\(/, 'the failed id set must be reported by name')
-  assert.match(entry, /degradedSeam\(message\)/, 'the report must reach the shell degrade seam')
+  // 2026-12 (design 05 §4): the deferred cluster reports its OWN kind with the
+  // failed ids attached. Sharing the probe's kind made the two facts
+  // indistinguishable to the frame's copy table (and dropped the second one as a
+  // same-kind repeat).
+  assert.match(
+    entry,
+    /degradedSeam\(\{\s*kind: 'deferred-registration-failed',\s*message,\s*failedIds: \[\.\.\.failed\],\s*\}\)/,
+    'the report must reach the shell degrade seam as a structured fact of its own kind',
+  )
   assert.match(entry, /void registerDeferred\(ctx, degradedSeam, registered, probeRearm\)\.catch/,
     'a deferred failure must still never block the boot')
   // 2026-09-11 review-fix (finding 1): the deferred rows extend the LIVE probe
@@ -487,4 +513,12 @@ test('chamber-entry derives the probed roster from the registered namespaces (no
     'the derived roster must reach the probe (with the re-arm hand-off, finding 1)')
   assert.doesNotMatch(entry, /REQUIRED_EXTRA_ROW_SERVICES/, 'the hand-written roster constant is retired')
   assert.doesNotMatch(entry, /requiredServiceProbeMessage\(isProvided/, 'the probe must pass the missing set, not a predicate')
+  // 2026-12 (design 05 §4): the probe's verdict travels STRUCTURED — the kind
+  // plus the service/injector facts — through the shell seam, so the frame's
+  // copy can name the missing service instead of parsing the diagnostic line.
+  assert.match(
+    entry,
+    /degradedSeam\(\{ kind: 'required-services-missing', message, \.\.\.missingServiceFact\(missing\) \}\)/,
+    'the probe must report the structured fact (kind + services + injectors)',
+  )
 })

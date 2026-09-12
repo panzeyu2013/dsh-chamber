@@ -23,6 +23,7 @@ import { join } from 'node:path';
 const ROOT = join(import.meta.dirname, '..', '..', '..');
 const MIRROR = join(ROOT, 'packages/dsh-chamber-client-ui-settings-bridge/src/ambient/connections-section.d.ts');
 const REAL = join(ROOT, 'packages/dsh-chamber-client-ui-settings-connections/src/client/ConnectionsSection.tsx');
+const SHELL = join(ROOT, 'packages/dsh-chamber-client-ui-settings-bridge/src/client/SettingsShell.tsx');
 
 /**
  * Every prop the settings shell passes to <ConnectionsSection> (the call site
@@ -32,6 +33,7 @@ const REAL = join(ROOT, 'packages/dsh-chamber-client-ui-settings-connections/src
 const CALL_SITE_PROPS: readonly string[] = [
   't',
   'pluginDiagnostics',
+  'bootGaps',
   'onRecheckDiagnostic',
 ];
 
@@ -51,6 +53,33 @@ test('connections-section mirror: every call-site prop is accepted by the real c
     assert.ok(
       new RegExp(`^\\s*${prop}\\??:`, 'm').test(real),
       `the real ConnectionsSection no longer declares the prop "${prop}" (${REAL})`,
+    );
+  }
+});
+
+test('connections-section mirror: the shell actually PASSES every listed prop', () => {
+  // 2026-12 review (falsification): the two cases above only prove that both
+  // SIDES DECLARE the props — a prop could be dropped from the call site and the
+  // whole connections card surface would go dead with every test green. This
+  // case reads the call site the list claims to describe.
+  const shell = readFileSync(SHELL, 'utf8');
+  const start = shell.indexOf('<ConnectionsSection');
+  assert.ok(start >= 0, `the shell no longer renders <ConnectionsSection> (${SHELL})`);
+  const end = shell.indexOf('/>', start);
+  assert.ok(end > start, 'the <ConnectionsSection> element must be self-closing');
+  const callSite = shell.slice(start, end);
+  for (const prop of CALL_SITE_PROPS) {
+    assert.ok(
+      new RegExp(`(?:^|\\s)${prop}=`).test(callSite),
+      `the shell stopped passing "${prop}" to <ConnectionsSection> — the surface it feeds is dead`,
+    );
+  }
+  // …and the reverse direction: the shell must not pass a member the list does
+  // not track (a new prop would otherwise reach the component un-gated).
+  for (const match of callSite.matchAll(/(?:^|\s)([a-zA-Z][a-zA-Z0-9]*)=/g)) {
+    assert.ok(
+      CALL_SITE_PROPS.includes(match[1]!),
+      `"${match[1]}" is passed to <ConnectionsSection> but is not in CALL_SITE_PROPS`,
     );
   }
 });

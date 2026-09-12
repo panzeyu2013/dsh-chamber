@@ -457,6 +457,12 @@
   color: var(--dsw-alias-state-error-primary);
 }
 
+/* 降级缺口（2026-12 复查 NIT）：与框架横幅、侧栏来源行同一色阶——「前端能力受限」
+   是警示而非错误，此前这里借用了 problem 的错误红，同一事实在三处座位两种颜色。 */
+.pluginDiagnosticWarn {
+  color: var(--dsw-alias-state-warn-label);
+}
+
 .pluginDiagnosticInfo {
   color: var(--dsw-alias-label-secondary);
 }
