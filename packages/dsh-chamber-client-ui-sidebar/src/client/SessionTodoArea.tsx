@@ -43,7 +43,7 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import clsx from 'clsx'
 import {
-  IconChecklistOutline14, IconQuestionOutline14, IconWarningOutline16, StateDot, Tooltip,
+  IconChecklistOutline14, IconQuestionOutline14, IconWarningOutline16, Tooltip,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ChamberServerAggregate } from '../shared/aggregate-store.ts'
 import { sourceAccentColor } from '../shared/derive.ts'
@@ -232,11 +232,12 @@ function TodoRow({
           {entry.kind === 'approval' && <IconWarningOutline16 className={cc.statePendingApproval} />}
           {entry.kind === 'plan-review' && <IconChecklistOutline14 className={cc.statePendingPlan} />}
           {entry.kind === 'question' && <IconQuestionOutline14 className={cc.statePendingQuestion} />}
-          {/* 2026-09-11 upstream-alignment T10: the strip reuses the list rows'
-              state marks, so its completed dot is the official StateDot `done`
-              tone exactly like the rows' — the bespoke .stateCompleted class is
-              gone from the stylesheet. */}
-          {entry.kind === 'completed' && <StateDot state="done" size={10} />}
+          {/* 2026-09 user decision: the strip reuses the list rows' state marks,
+              so its completed entry carries the same chamber brand-blue
+              `.stateCompleted` dot as the rows (the official StateDot `done`
+              green was dropped: it equals the source header's connection dot
+              tone — see sidebar-chamber.module.css .stateCompleted). */}
+          {entry.kind === 'completed' && <span className={cc.stateCompleted} />}
         </span>
       </button>
     </Tooltip>

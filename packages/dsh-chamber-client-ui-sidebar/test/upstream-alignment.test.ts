@@ -272,21 +272,37 @@ test('T5: the row-action accessible names are {name}-parameterized and used', ()
   assert.equal(locales.includes("'action.delete':"), false, 'the dead generic action.delete key must be gone')
 })
 
-test('T10: completed rides the official StateDot `done` tone, no bespoke dot', () => {
+test('T10 (2026-09 amended): completed is the chamber blue dot, running keeps the official ring', () => {
+  // The 2026-09-11 alignment round swapped this mark to the official
+  // `StateDot state="done"`; the 2026-09 user decision RESTORED the pre-T10
+  // chamber dot — `done`'s `--dsw-alias-state-success-primary` green is the
+  // very token of the source header's own connection dot (`.statusOk`), so
+  // completion and "server connected" painted the same colour in one sidebar.
+  // Rationale and geometry: design 06 §4.3 + the stylesheet note.
   assert.ok(
-    sectionCode.includes('return <StateDot state="done" size={10} />'),
-    'the session row completed dot must be StateDot done',
+    sectionCode.includes('return <span className={cc.stateCompleted} />'),
+    'the session row completed mark must be the restored chamber blue dot',
   )
   assert.ok(
-    stripComments(source('../src/client/SessionTodoArea.tsx')).includes('<StateDot state="done" size={10} />'),
-    'the pinned todo strip renders the same official done dot',
+    stripComments(source('../src/client/SessionTodoArea.tsx')).includes('<span className={cc.stateCompleted} />'),
+    'the pinned todo strip renders the same blue dot',
   )
-  assert.equal(chamberCode.includes('.stateCompleted'), false, 'the bespoke .stateCompleted class must be deleted')
-  assert.equal(sectionCode.includes('cc.stateCompleted'), false, 'no render site may reference the dead class')
+  assert.ok(
+    sectionCode.includes('return <StateDot state="ongoing" size={10} />'),
+    'running / running-subagents must keep the official StateDot ongoing ring',
+  )
   assert.equal(
-    stripComments(source('../src/client/SessionTodoArea.tsx')).includes('cc.stateCompleted'),
+    sectionCode.includes('<StateDot state="done"'),
     false,
-    'no render site may reference the dead class',
+    'the official done tone must not come back (it collides with .statusOk)',
+  )
+  assert.ok(
+    chamberCode.includes('.stateCompleted'),
+    'the stylesheet must define the restored blue dot class',
+  )
+  assert.ok(
+    chamberCode.includes('background: var(--dsw-static-deepseek-450)'),
+    'the restored dot rides the brand blue the ongoing ring uses',
   )
 })
 
@@ -310,25 +326,35 @@ test('T11: the row window is a two-way disclosure with upstream copy', () => {
   assert.equal(sectionCode.includes('sessionRows.showMore'), false, 'the retired chamber key must be gone from the component')
 })
 
-test('T12: row menus ride upstream Menu props; the sort menu mirrors ViewOptionsMenu', () => {
-  // Row menus (workspace + session): closeOnPointerLeave, never compact.
+test('T12 (2026-09 amended): menus keep upstream interaction at chamber density', () => {
+  // Interaction stays upstream: row menus close on pointer leave, the sort menu
+  // keeps portal + align=end + the active-mode label.
   const sessionMenu = sessionRowMenu()
   assert.ok(sessionMenu.includes('closeOnPointerLeave'), 'the session row menu must close on pointer leave')
-  assert.equal(sessionMenu.includes('compact'), false, 'the session row menu must not use compact')
   const workspaceAnchor = sectionCode.indexOf("t('action.menu.workspace'")
   const workspaceMenu = sectionCode.slice(sectionCode.lastIndexOf('<Menu', workspaceAnchor), workspaceAnchor)
   assert.ok(workspaceMenu.includes('closeOnPointerLeave'), 'the workspace row menu must close on pointer leave')
-  assert.equal(workspaceMenu.includes('compact'), false, 'the workspace row menu must not use compact')
-  // The sort trigger follows the upstream view-options menu (dense + Tooltip).
-  assert.ok(sectionCode.includes('dense'), 'the sort menu must use upstream dense, not compact')
   assert.ok(
-    normalize(sectionCode).includes('<Menu dense portal align="end" open={sortMenuOpen === server.id}'),
-    'the sort menu must carry dense + portal + align=end',
+    normalize(sectionCode).includes('<Menu compact portal align="end" open={sortMenuOpen === server.id}'),
+    'the sort menu must carry compact + portal + align=end',
   )
-  // No Menu anywhere in this package may use compact again (comments stripped,
-  // so the explanatory notes above cannot satisfy — or break — the lock).
-  assert.equal(sectionCode.includes('compact'), false, 'no Menu may use compact')
-  assert.equal(rootCode.includes('compact'), false, 'no Menu may use compact')
+  // Density is chamber's call (STATUS「菜单密度 = chamber 档」, design 06 §7):
+  // T12's "never compact" was reverted in 2026-09 because the official default
+  // (40px items) and `dense` (34px) are sized against upstream's own 32px rows,
+  // not our 26px ones. All three call sites use the primitive's `compact`.
+  // Site-by-site, not a global count: a decoy `compact` line anywhere else in the
+  // file (say inside a template literal) must not stand in for a real call site.
+  const menuTags = [...sectionCode.matchAll(/<Menu\b/g)]
+    .map((match) => sectionCode.slice(match.index, sectionCode.indexOf('items=', match.index)))
+  assert.equal(menuTags.length, 3, 'the package renders exactly three menus')
+  for (const tag of menuTags) {
+    assert.match(tag, /(?:^|\s)compact(?:\s|$)/,
+      'every menu call site (session, workspace, sort) must pass compact')
+  }
+  const compactCount = sectionCode.match(/^\s*compact$/gm)?.length ?? 0
+  assert.equal(compactCount, 3, 'and no fourth compact may appear outside those sites')
+  assert.equal(/^\s*dense$/m.test(sectionCode), false, 'no menu may go back to the 34px dense variant')
+  assert.equal(rootCode.includes('dense'), false, 'no menu in this package may use dense')
 })
 
 test('T7: wording, glyph, tooltips, tree name and rail controls follow upstream', () => {

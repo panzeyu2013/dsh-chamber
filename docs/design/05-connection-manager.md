@@ -828,6 +828,20 @@ export const chamberBridge: {
   config Port，非空时隧道与 systemd exec 均带 `-p`）。
 - 样式遵循 dsh 设计语言：CSS modules + `--dsw-alias-*` token +
   ui-primitives（Button/Modal/Tooltip/Input/Pill/图标）。
+- **状态胶囊与告警条 = 官方 Tag tone 的淡底配方（2026-09 batch 1 F1/F2 登记，
+  含对比度实测）**：`.badgeOk/.badgeBad` 用
+  `color-mix(in srgb, var(--dsw-alias-state-{success,error}-primary) 10%, transparent)`
+  + 同色字，`.pluginKindClient` 用 warn 12%，告警条（`.recoveryBanner`/
+  `.writerBlocked`）用 warn 12% 淡底 + `state-warn-label` 字——与官方
+  `_tag_brmue_4[data-tone=success|danger|warning]` 逐字符同配方（此前是实心填充）。
+  **代价（按 pin 的 token 值用 WCAG 公式算，非浏览器实测）**：`.badgeBad` light
+  4.50→3.80、dark 4.35→3.28；`.recoveryBanner` warn 字 dark 4.99→3.99、light
+  2.79→2.55（light 侧改前即低于 AA）；`.badgeOk` dark 4.53、`.pluginKindClient`
+  dark 4.58。**本页表单字段同期对齐官方 Input 原子**（`.input`：32px / l4 /
+  r8 / 14-22，15 处；与 git 对话框的 `.fieldSelect`/`.fieldInput` 同族，
+  2026-09 batch 1 G3 follow-up）。即 **dark 侧错误胶囊与告警条跌破 4.5:1**，官方自身同款同值——
+  取"与官方一致"而接受该下降；若要 AA，把 light/dark 的字色改走
+  `state-*-label`（或在浅色主题下调深），属下一轮改动，勿当漏改收回。
 - 实例默认仍按注册表自动连接、本地自动启动；本页提供显式管理与诊断入口。
 
 ## 6. 源码复用与构建链（拷贝补丁包 2 个 + 自研客户端插件 6 个 + 宿主包 3 个）

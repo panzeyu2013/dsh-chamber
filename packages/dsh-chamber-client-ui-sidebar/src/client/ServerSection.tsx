@@ -343,9 +343,10 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
   // chamber (06 §4.3/§4.5): per-row STATE indicator — the leading slot is NOT
   // a server-identity marker (the source header dot owns identity). Normal
   // sessions show nothing; running sessions show the official StateDot
-  // ongoing RING; completed-but-unread sessions show the official StateDot
-  // `done` DOT (2026-09-11 upstream-alignment T10 — the bespoke 6px brand dot
-  // is gone).
+  // ongoing RING; completed-but-unread sessions show the chamber brand-blue
+  // 6px dot (`.stateCompleted`) — 2026-09 user decision, restoring the pre-T10
+  // mark so completion never shares the connection dot's green (see the
+  // completed branch below).
   // Pending interactions (approval / plan-review / question) render a
   // distinguishable 14px icon badge INSTEAD of the running ring — a session
   // waiting for the user must be recognizable at a glance. The caller wraps
@@ -403,12 +404,13 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
       return <StateDot state="ongoing" size={10} />
     }
     if (facts?.completed === true) {
-      // 2026-09-11 upstream-alignment T10: completed rides the OFFICIAL
-      // StateDot `done` tone (green, --dsw-alias-state-success-primary,
-      // vendor ui-primitives StateDot.module.css .dot[data-state='done']) —
-      // the hand-drawn 6px brand dot this used to paint was a chamber
-      // invention that read as a second "ongoing" mark.
-      return <StateDot state="done" size={10} />
+      // 2026-09 用户裁决：完成未读回到 chamber 品牌蓝点（.stateCompleted，6px）——
+      // 撤销 2026-09-11 upstream-alignment T10 换成的官方 StateDot `done`。
+      // 理由：`done` 的取色 `--dsw-alias-state-success-primary` 与来源头连接状态
+      // 绿点（`.statusOk` 同一 token）完全相同，"会话完成未读"与"服务器已连接"
+      // 在同一侧栏里同色。蓝点与运行中的官方 ongoing 环同属品牌蓝
+      // （`--dsw-static-deepseek-450`），但静态实心点 vs 8 格动画环形状/动效不同。
+      return <span className={cc.stateCompleted} />
     }
     return <StateDot state="ongoing" size={10} />
   }
@@ -892,13 +894,15 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                         bookkeeping + override drop). */}
                     {server.connected && (server.aggregateError === undefined || search?.expanded === true) && (
                       <Menu
-                        // 2026-09-11 upstream-alignment T12: the official
-                        // primitive's `compact` typography is not what upstream
-                        // ships here — its ViewOptionsMenu sets `dense`
-                        // (WorkspaceBrowser.tsx:192-197) and its row menus set
-                        // neither. Follow the ViewOptionsMenu form for this
-                        // trigger.
-                        dense
+                        // 2026-09 menu-density decision (P2-A, A-3): the
+                        // v0.2.4 release used the primitive's `compact` variant
+                        // here; T12 (2026-09-11) switched it to `dense` to copy
+                        // the ViewOptionsMenu, which made every menu row taller
+                        // than our own 26px list rows. Density is chamber's
+                        // call, so this is back to `compact` (26px rows, 12px
+                        // type) while the radius/background stay the official
+                        // ones the variant ships with.
+                        compact
                         portal
                         align="end"
                         open={sortMenuOpen === server.id}
@@ -1585,13 +1589,18 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                                           onNewSession(server, workspace.id)
                                         }}
                                       >
-                                        <IconPlusOutline16 size={14} />
+                                        <IconPlusOutline16 size={16} />
                                       </button>
                                       {!isWorktree && (
                                       <Menu
-                                        // 2026-09-11 upstream-alignment T12: upstream
-                                        // always passes closeOnPointerLeave and never
-                                        // compact (vendor ui-workspace Rows.tsx:174).
+                                        // 2026-09 menu-density decision (P2-A, A-2):
+                                        // `closeOnPointerLeave` stays (upstream
+                                        // behaviour, vendor ui-workspace
+                                        // Rows.tsx:174), but the variant returns to
+                                        // the v0.2.4 `compact` — T12 removed it and
+                                        // the rows grew from 26px/12px to the
+                                        // official default 40px/14px.
+                                        compact
                                         portal
                                         closeOnPointerLeave
                                         align="end"
@@ -1640,7 +1649,7 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                                               toggleMenu(workspaceKey)
                                             }}
                                           >
-                                            <IconEllipsisOutline16 className={cc.verticalDots} size={14} />
+                                            <IconEllipsisOutline16 size={16} />
                                           </button>
                                         )}
                                       />
@@ -1923,9 +1932,11 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                                       }}
                                     >
                                       <Menu
-                                        // 2026-09-11 upstream-alignment T12: upstream
-                                        // always passes closeOnPointerLeave and never
-                                        // compact (vendor ui-workspace Rows.tsx:487).
+                                        // 2026-09 menu-density decision (P2-A, A-1):
+                                        // same as the workspace menu above —
+                                        // `closeOnPointerLeave` kept (Rows.tsx:487),
+                                        // `compact` restored from v0.2.4.
+                                        compact
                                         portal
                                         closeOnPointerLeave
                                         align="end"
@@ -1968,8 +1979,14 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                                             // row (it never touches the session log),
                                             // so it is neither destructive nor
                                             // confirm-gated (vendor ui-workspace
-                                            // Rows.tsx:412-421). The 20-native glyph
-                                            // rides the menu's 16px icon slot.
+                                            // Rows.tsx:412-421). Glyph size is a
+                                            // deliberate optical exception to the
+                                            // compact slot: `compact` shrinks the
+                                            // icon slot to 14px, but the 20-native
+                                            // archive glyph stays at 16 so it keeps
+                                            // the same visual weight as the
+                                            // 16-native glyphs drawn at 14 beside
+                                            // it (the flex slot tolerates +2px).
                                             id: 'archive',
                                             label: t('menu.archiveSession'),
                                             icon: <IconArchiveOutline20 size={16} />,
@@ -1993,7 +2010,7 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                                               toggleMenu(sessionKey)
                                             }}
                                           >
-                                            <IconEllipsisOutline16 className={cc.verticalDots} size={14} />
+                                            <IconEllipsisOutline16 size={16} />
                                           </button>
                                         )}
                                       />

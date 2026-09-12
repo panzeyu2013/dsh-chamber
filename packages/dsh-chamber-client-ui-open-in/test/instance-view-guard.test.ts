@@ -106,9 +106,11 @@ test('the bespoke accessible menu is replaced by the official Menu primitive', (
     button,
     /import \{\s*IconChevronDownOutline14, Menu, Tooltip, type MenuItem,\s*\} from '@deepseek-ai\/dsh-client-ui-primitives'/u,
   )
-  // Upstream's own menu composition (OpenInAppAction.tsx:181-198): dense rows,
-  // fill selection, end alignment, focus transfer + arrow navigation.
-  for (const prop of ['autoFocus', 'dense', 'selection="fill"', 'align="end"']) {
+  // Upstream's own menu composition (OpenInAppAction.tsx:181-198): fill
+  // selection, end alignment, focus transfer + arrow navigation — with the
+  // chamber menu-density decision on top (2026-09: `compact` 26px/12px, never
+  // upstream's `dense`; design 06 §7, design 20 §1, batch2-visual-locks.test.ts).
+  for (const prop of ['autoFocus', 'compact', 'selection="fill"', 'align="end"']) {
     assert.ok(button.includes(prop), `the official Menu must be opened with ${prop}`)
   }
   // Row icons: the app marks the button shows, at the primitive's icon size.

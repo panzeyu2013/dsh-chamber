@@ -671,20 +671,37 @@
     第二半同属偏差：`sidebar-chamber.module.css .scheduleIndicator` 不带上游的
     `margin-right: 6px`（chamber 的 `.sessionRow` 已有自己的 6px gap，叠加会破坏
     26px 行距；无计划的行走零占位）。
+  - **会话状态标记：completed 与 pending 都是保留偏差（2026-09 用户裁决，
+    只记录不改）**：运行中/子代理进行中 = 官方 `StateDot` 同组件、同默认 10px
+    ongoing 追逐环（`ServerSection.tsx:404,414`）；**完成未读 = chamber 品牌蓝点**
+    `.stateCompleted`（6px 实心、`--dsw-static-deepseek-450`，居中于 10px 槽；
+    `ServerSection.tsx`、`SessionTodoArea.tsx`、`sidebar-chamber.module.css`）——
+    **不用**官方 `StateDot state="done"`：它的 `--dsw-alias-state-success-primary`
+    与来源头连接绿点 `.statusOk` **同一 token**，同一侧栏里"会话完成未读"与
+    "服务器已连接"会同色，用户 2026-09 裁决回到品牌蓝点（沿革：≤0.2.4 蓝点 →
+    0.3.0-beta.1 T10 换官方 done 绿 → 本轮回到蓝点；锁在
+    `test/upstream-alignment.test.ts` 的 T10）；与运行环同属品牌蓝，靠
+    "静态实心点 vs 8 格动画环"的形状/动效区分。**提问/计划待审/请求权限**
+    渲染 14px 图标徽标（问号/清单 business 蓝、警示三角 warn 琥珀；
+    `sidebar-chamber.module.css .statePending*`、`ServerSection.tsx:391-399`），
+    而官方是 `StateDot state="warning"`（10px 琥珀圆点、三种 pending 同形，
+    仅悬停卡与读屏文本区分）。chamber 保留图标徽标：会话在等用户时必须一眼可辨
+    （ask-user 是动机场景）；词表仍取官方 `status.waitingApproval/planReview/`
+    `waitingAnswer`。**用户已裁决不改**——后续上游对齐轮不得把这两处当漏改收掉。
+    判据/几何见 06 §4.3（两处裁决同节记录）。
 - **默认排序 `manual`（06 §3.1）**：按 wire 顺序，与官方默认 `updated` 不同，是
   有意产品取舍。**窗口标题冻结**：桌面原生标题固定 `dsh-chamber`。
-- **样式 token 对齐后的一处未对齐（2026-09 风格对齐轮登记，有意/待裁）**：
-  - **菜单圆角 12px vs 上游 20px**：只剩 `SettingsShell.module.css .dropdownList`
-    （服务器下拉，body portal 列表）——它仍是官方
-    `ui-primitives/Menu.module.css .list` 的逐项移植（4px 内边距、`border: 0` +
-    发丝线在 elevation 阴影内、l1 stroke 重绑、elevated-prominent），唯余
-    `border-radius: 12px` vs 上游 `20px`（`Menu.module.css:17` 为 20px，该文件头注释
-    写 "r12" 属过期注释、代码为准；`ui-commands/PopupSelectView.module.css:28` 同为
-    20px）。宽度与 z-index 不再是移植项：上游 218/360px 仍在 vendor `.list` 上，
-    chamber 的副本（`AccessibleAppMenu.module.css`）与其 z-index 1100 随
-    2026-09-11 对齐删除（open-in 改用官方 `Menu`），`.dropdownList` 作为 portal 列表
-    由 server-selector 按 viewport 钳位（`min-width: 0` / `max-width: none`）、
-    z-index 1200 盖过模态层。属圆角而非边框，改 1 行即可。
+- **菜单密度 = chamber 档，不跟随官方（2026-09 裁决）**：**所有 chamber 弹层菜单**
+  一律取"我们的"密度，不取官方默认 item（40px/14px）或 dense（34px/14px）——
+  session kebab / workspace kebab / 排序、git 创建对话框的字段下拉、open-in 的
+  应用菜单都走官方原语的 `compact`（26px/12px；open-in 原为 dense、git 原为默认档，
+  均于本轮改判，见 design 20 §1 与 design 08 §3.3），设置页服务器下拉用自己的
+  markup 而保留官方圆角/背景。判据、几何与取舍见
+  design 06 §7 / design 15 ④；证据：v0.2.4 的三处 `<Menu>` 全为 `compact`，
+  v0.3.0-beta.1 为 0 处 + 1 处 `dense`（`git show <tag>:…ServerSection.tsx`）。
+  **下一轮上游对齐不得**把这三个调用点改回官方默认/dense；锁在
+  `packages/dsh-chamber-client-ui-sidebar/test/`（`upstream-alignment.test.ts` 的菜单
+  一例 + `batch2-visual-locks.test.ts`）。
 - **Electron 二进制惰性安装**（每机器共享 dist，worktree 并行共用）；**dev 实例隔离**
   （独立 user-data、控制面端口 17520 起自动退避）。
 - **内建版本行引导（2026-12 决策，方案 2）**：选中与内建同版本行且未装受管树、

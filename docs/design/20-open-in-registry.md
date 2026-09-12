@@ -219,7 +219,8 @@ provider（本地目录不再是主进程的事，也不再是"官方宿主行"�
 - **交互**：可用集 ≥1 → 官方那条分体按钮（主图标按钮 + chevron + **官方
   `ui-primitives` `Menu`**）——官方没有单条目形态，本入口也不再有；
   `Menu` 的 `autoFocus` 焦点转移与方向键/Home/End 导航、
-  `dense` 行、`selection="fill"` 选中填充、菜单项 `icon` 带真实应用图标，
+  `compact` 行（2026-09 改判：`dense`/34px → `compact`/26px/12px，随 `菜单密度 = chamber 档`
+  的全仓裁决，见 design 06 §7）、`selection="fill"` 选中填充、菜单项 `icon` 带真实应用图标，
   `OpenInButton.tsx:316-401`；props 面与 pin 的 `Menu.tsx`/`Tooltip.tsx` 对齐见
   `src/vendor-modules.d.ts:26-73`；2026-09-11 upstream-alignment）。**呈现规格取官方
   open-in 分体按钮**（2026-09-12 彻底统一：28px / `border-l4` / r14 容器、主按钮
@@ -378,7 +379,7 @@ chevron，不因只有一个 app 少画 chevron）。
 |---|---|---|
 | 1 | 远程 ssh 来源：VS Code Remote URL（主进程构造，权威 IPC + 来源代 proof） | 已有 |
 | 2 | 每来源独立记忆 + 记忆值可用性降级 | 已有 |
-| 3 | 菜单用官方 `ui-primitives` `Menu`（焦点转移/方向键导航/`dense`/填充选中/项图标）+ 设计系统 `Tooltip`；插件内只留 N-ctx 归属守卫 `instance-view-guard.ts`（`.instance-view` 隐藏/断开即关闭） | **收窄**（2026-09-11 upstream-alignment：原 chamber-owned `AccessibleAppMenu` 已删除） |
+| 3 | 菜单用官方 `ui-primitives` `Menu`（焦点转移/方向键导航/`compact`/填充选中/项图标）+ 设计系统 `Tooltip`；插件内只留 N-ctx 归属守卫 `instance-view-guard.ts`（`.instance-view` 隐藏/断开即关闭） | **收窄**（2026-09-11 upstream-alignment：原 chamber-owned `AccessibleAppMenu` 已删除） |
 | 4 | 与启动标记解耦：任何 runtime 版本、任何 chamber 形态下本地目录都可用 | 本设计 |
 | 5 | 远程 provider 家族（Insiders / Cursor / Windsurf / JetBrains Gateway / `ssh://` 终端） | todo（S1，每个新增项需一次实机 scheme 验证） |
 | 6 | 远程**文件级**打开（只是 URL 构造；本地仍目录限定） | todo（S2） |
@@ -404,7 +405,7 @@ chevron，不因只有一个 app 少画 chevron）。
 - 客户端 bespoke 菜单三件套 `src/client/AccessibleAppMenu.tsx` +
   `AccessibleAppMenu.module.css` + `src/client/menu-navigation.ts` 及其
   `test/menu-navigation.test.ts`（2026-09-11 upstream-alignment）→ 由官方
-  `ui-primitives` `Menu`（焦点转移/方向键导航/`dense`/填充选中/项图标/portal）+
+  `ui-primitives` `Menu`（焦点转移/方向键导航/`compact`/填充选中/项图标/portal）+
   `Tooltip` 取代；只有 N-ctx 归属留在插件内（新增
   `src/client/instance-view-guard.ts` + `test/instance-view-guard.test.ts`，§5）；
 - `docs/checklists/upstream-touchpoints.md` §4 的 "dsh-host-open-in-app 契约镜像"行 → 改为 fork 行；

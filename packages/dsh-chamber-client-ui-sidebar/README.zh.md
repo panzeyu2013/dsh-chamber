@@ -38,9 +38,12 @@ chamber 自研侧边栏插件（设计 05 §2）：拷贝官方 ui-sidebar 外�
 - 已连接来源的聚合拉取失败时，以错误文本代替 workspace 列表呈现——绝不
   冒充"无工作区"；未连接来源只显示分组头 + 状态提示；全部来源断开时显示
   空态提示。
-- 会话行带**运行指示点**（wire `sessions.list.running`），完成未读用官方
-  `StateDot` 的 `done` 色——与固定待办条带同一枚标记（此前自绘的 6px 品牌蓝点
-  读作第二个「进行中」，已删除，2026-09-11 upstream-alignment T10）；不渲染
+- 会话行带**运行指示点**（wire `sessions.list.running`），完成未读用**chamber
+  品牌蓝点**（`.stateCompleted`，6px 实心）——与固定待办条带同一枚标记，**不取**
+  官方 `StateDot` 的 `done` 绿：该色与来源头连接状态绿点同 token
+  （`--dsw-alias-state-success-primary`），"会话完成未读"与"服务器已连接"会同色
+  （2026-09 用户裁决；沿革：≤0.2.4 品牌蓝点 → 0.3.0-beta.1 T10 官方绿点 →
+  本轮回到蓝点，06 §4.3）；不渲染
   相对时间单元格（06 §4.3——`relativeTimeBucket` 仅保留为共享工具）。行所属
   会话的 `schedule` 投影非空时，标题与尾随单元格之间渲染官方 active-Schedule
   标记（16px 闹钟字形、`role="img"`、可访问名 `schedule.active`），搜索结果行
@@ -103,12 +106,14 @@ chamber 自研侧边栏插件（设计 05 §2）：拷贝官方 ui-sidebar 外�
 - 行窗口是**双向披露**：还有隐藏行时条带给 `sessions.expand {n}`（上游文案），
   展开后**同一个**控件给 `sessions.collapse` 并上报 `aria-expanded`——隐藏计数
   取自与展开无关的窗口，故收起入口不会被自己的那次展开吃掉。
-- 菜单与来源头控件按上游：行菜单传 `closeOnPointerLeave`、从不使用原语的
-  `compact` 形态（164px 卡片、26px 行、12px 标签）；来源头四个控件（排序/添加
-  工作区/搜索/归档管理器）改骑官方
+- 菜单与来源头控件：交互按上游、**密度按 chamber**。三个菜单（session kebab /
+  workspace kebab / 排序）一律用原语的 `compact` 形态——这是 v0.2.4 的行为，
+  2026-09-11 对齐轮曾改成官方默认（40px 行 / 14px 标签）与 `dense`（34px），
+  比我们自己 26px 的列表行整整大一圈，故恢复；`closeOnPointerLeave` 保留。
+  来源头四个控件（排序/添加工作区/搜索/归档管理器）改骑官方
   `Tooltip`（不再借用原生 `title`），添加工作区用官方 project-add 字形；排序
-  菜单取上游 ViewOptionsMenu 形态（`dense` + portal + `align="end"`，标签报出
-  当前模式）。浏览树带上可访问名 `section.sessions`，与搜索结果树一致。
+  菜单保留 portal + `align="end"`，并由标签报出当前模式。浏览树带上可访问名
+  `section.sessions`，与搜索结果树一致。
 - 新建工作区：每个已连接来源打开同一个应用内目录浏览对话框（browse
   directory-picker 表面，设计 05 §4），按该来源的 unary client 驱动
   （`host.listDirectory`/`host.createDirectory`）；确认路径后走**该实例**的

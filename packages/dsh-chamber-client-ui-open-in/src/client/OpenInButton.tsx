@@ -22,7 +22,8 @@
  * ≥1 entries render the official split button — the main button
  * (remembered/default selection) plus the chevron menu, upstream's own single
  * form for any non-empty set; zero renders null.
- * The menu is the official `Menu` primitive (dense rows, fill selection, real
+ * The menu is the official `Menu` primitive (chamber `compact` rows — the
+ * 2026-09 menu-density decision, design 06 §7 — fill selection, real
  * app icons, focus transfer and arrow navigation through `autoFocus`), and the
  * button carries the design-system `Tooltip`; only the `.instance-view`-scoped
  * dismissal stays local (`instance-view-guard.ts`) because this shell stacks
@@ -328,7 +329,12 @@ export function OpenInButton({
     <Menu
       open={open}
       autoFocus
-      dense
+      // 2026-09 menu-density decision (P2-A, A-5): the upstream-alignment round
+      // had this on `dense` (34px items); every chamber popup menu now runs at
+      // the chamber scale (`compact`, 26px/12px). Everything else the alignment
+      // won stays: `autoFocus` focus transfer, arrow-key navigation,
+      // `selection="fill"`, item icons and the portal.
+      compact
       selection="fill"
       align="end"
       items={items}

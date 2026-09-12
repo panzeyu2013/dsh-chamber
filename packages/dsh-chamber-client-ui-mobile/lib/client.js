@@ -212,7 +212,13 @@ var MOBILE_CSS = `
     height: 44px;
     padding: 0;
     border: none;
-    border-radius: 12px;
+    /* Official rail-toggle silhouette (2026-09 batch 1, H2): the dsh sidebar's
+       own icon button is a circle (28/36px), so the phone's only way back to
+       navigation keeps that shape at the 44px touch size instead of becoming a
+       12px-cornered square. The corner-shape keyword is paired with the full
+       round radius (ui-theme smooths unpaired circles into squircles). */
+    border-radius: 50%;
+    corner-shape: round;
     background: transparent;
     color: var(--dsw-alias-label-primary);
     cursor: pointer;

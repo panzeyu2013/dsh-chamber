@@ -25,7 +25,13 @@
      / --gray；新增颜色前先确认消费点，verify:styles 的 S6 会拦下无人使用的声明。
      2026-09-11 upstream-alignment（T15）：--panel-2 / --accent-dim 随自造
      `.btn` 一并删除——失败屏按钮改用官方 Button 原子（token 化），没有别的
-     消费点。 */
+     消费点。
+     2026-09 阶段 2 裁决（替代原 B-6 计划）：`index.html` 的首屏骨架**继续用这份
+     深色外壳色板**，不跟随 `prefers-color-scheme`。原因：dsh 的主题是**按实例**
+     投影的（活动实例的 ui-layout presenter 在模块图加载后才写
+     `body[data-ds-dark-theme]`），骨架期不可知；用 OS 主题猜会在"浅色 OS + 深色
+     app"时制造反方向的闪色，而外壳 chrome 本来就是恒深色（见上）。骨架内联样式
+     与本文件重复这几个值是有意的：它必须在任何样式表/token 之前绘制。 */
   color-scheme: light;
   --bg: #0f1115;
   --border: #262c38;
@@ -49,13 +55,24 @@ body,
 body {
   background: var(--bg);
   color: var(--text);
-  font-family:
+  /* 2026-09 (P2-B, B-7): the dsh font stack wins once the theme module has
+     injected its tokens (this page paints before/while the shell chrome loads),
+     so the literal stack is the var() FALLBACK — written inside the var(),
+     exactly like the shell's other token reads (`var(--dsw-alias-bg-base,
+     var(--bg))`) and like `packages/dsh-client-web/src/base.css`. A trailing
+     `var(--dsw-font-family), system-ui, …` would instead be invalid-at-computed-
+     value-time until the token exists (var() is not a list participant: the
+     whole declaration drops), which flips the first paint to the UA serif.
+     The shell PALETTE stays chamber-owned and theme-independent by design. */
+  font-family: var(
+    --dsw-font-family,
     system-ui,
     -apple-system,
     'PingFang SC',
     'Microsoft YaHei',
     'Noto Sans CJK SC',
-    sans-serif;
+    sans-serif
+  );
   font-size: 14px;
   line-height: 1.5;
 }

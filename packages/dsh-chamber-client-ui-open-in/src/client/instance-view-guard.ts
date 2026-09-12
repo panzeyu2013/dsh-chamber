@@ -3,8 +3,8 @@
  *
  * The menu itself is the official `Menu` primitive (`@deepseek-ai/dsh-client-ui-primitives`),
  * which already owns focus transfer (`autoFocus`), roving arrow/Home/End
- * navigation, Escape-to-anchor, outside-pointer dismissal, placement, dense
- * rows, fill selection and item icons — the bespoke 458-line menu this module
+ * navigation, Escape-to-anchor, outside-pointer dismissal, placement, row
+ * density, fill selection and item icons — the bespoke 458-line menu this module
  * used to serve implemented those semantics by hand.
  *
  * What the primitive cannot know is THIS shell's shape: one page holds one

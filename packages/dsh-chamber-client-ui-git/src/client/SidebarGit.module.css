@@ -8,7 +8,7 @@
   flex: none;
   display: inline-flex;
   align-items: center;
-  gap: 2px;
+  gap: 4px;
   min-width: 0;
   max-width: 45%;
 }
@@ -35,8 +35,17 @@
   align-items: center;
   gap: 6px;
   min-width: 0;
+  /* Derived-workspace row geometry (2026-09 batch 1, G1): 26px row, 8px
+     corners. The 2px rhythm is owned by .unregisteredSection's flex gap, not by
+     a row margin — flex margins do not collapse, and a 2px margin on top of the
+     2px gap doubled the spacing the nav rows use (G1 follow-up). design 08:289
+     declares these rows match the derived workspace row, while the code drew a
+     6px-cornered improvisation. */
+  box-sizing: border-box;
+  height: 26px;
+  margin: 0;
   padding: 3px 4px;
-  border-radius: 6px;
+  border-radius: 8px;
 }
 
 .unregisteredRow:hover {
@@ -54,9 +63,13 @@
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-  color: var(--dsw-alias-label-primary);
-  font-size: 13px;
-  font-weight: 500;
+  /* Same type step as a derived workspace title (design 08 §3.3「图标与字体
+     层级」: workspace 标题 14px/600 主色、派生 workspace 降级次级色): 14/18,
+     600, demoted to secondary ink because the workspace is not registered. */
+  color: var(--dsw-alias-label-secondary);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 18px;
 }
 
 /* Placement of the row's status capsule only. The capsule itself is the
@@ -74,16 +87,40 @@
   flex: none;
 }
 
+/* 2026-09 (stage 3, G1-4): WCAG 2.2 2.5.8 target size. These two 20px icon
+   buttons keep their visual box — and the rows their heights — and grow an
+   invisible 24x24 hit box instead (`inset: -2px`). `.headerGit`'s cluster gap
+   therefore goes 2px -> 4px so two adjacent 24px boxes stay distinct; the
+   unregistered row's action has no neighbour within 24px at all, so its spacing
+   alternative already held and this only widens the comfortable area. */
+.headerGitAction,
+.unregisteredAction {
+  position: relative;
+}
+.headerGitAction::after,
+.unregisteredAction::after {
+  content: '';
+  position: absolute;
+  inset: -2px;
+}
+/* Disabled buttons still hit-test: never swallow a neighbour's pointer events. */
+.headerGitAction:disabled::after,
+.unregisteredAction:disabled::after {
+  pointer-events: none;
+}
+
 .unregisteredAction {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   flex: none;
-  width: 22px;
-  height: 22px;
+  /* Sidebar icon-button language (2026-09 batch 1, G1): the 20px box / 5px
+     corner every other in-row action uses. */
+  width: 20px;
+  height: 20px;
   padding: 0;
   border: 0;
-  border-radius: 6px;
+  border-radius: 5px;
   background: transparent;
   color: var(--dsw-alias-label-secondary);
   cursor: pointer;
@@ -231,13 +268,16 @@
   line-height: 16px;
 }
 
-/* Text inputs reuse the dsh Input atom (32px height, border-l2, bg-layer-1,
-   14px/22px, focus = brand-primary); only the radius is lifted to the
-   dialog's 12px control radius (matching the Menu list r12 and the chamber
-   settings cards) so fields do not read square against the modal's r24. The
-   atom stretches to the label's full width as a flex item of the column. */
+/* Text inputs reuse the dsh Input atom as-is: 32px height, `border-l4`,
+   bg-layer-1, 14px/22px, focus = brand-primary, and the atom's own 8px
+   corner. (The 2026-09 batch 1 G3 pass removed the old `border-radius: 12px`
+   lift AND corrected this comment, which had claimed `border-l2` — the atom
+   is l4. The select beside these fields takes the same tokens now, so the
+   stacked fields read as one control family; the dialog's own 12px language
+   stays with its tabs/cards, not with text fields.) The atom stretches to the
+   label's full width as a flex item of the column. */
 .fieldInput {
-  border-radius: 12px;
+  border-radius: 8px;
 }
 
 .formError {
@@ -425,7 +465,8 @@
 
 /* Custom select anchor (repo Menu primitive — same design language). Mirrors
    the dsh Input atom so the dropdown reads as a text field (32px, r8,
-   border-l2, bg-layer-1, 14px/22px, focus = brand-primary). */
+   border-l4, bg-layer-1, 14px/22px, focus = brand-primary) — the token name is
+   the atom's own (2026-09 batch 1, G3; it was written l2 here before). */
 .fieldSelect {
   display: flex;
   align-items: center;
@@ -435,8 +476,11 @@
   height: 32px;
   box-sizing: border-box;
   padding: 0 8px;
-  border: 0.5px solid var(--dsw-alias-border-l2);
-  border-radius: 12px;
+  /* Official Input atom (2026-09 batch 1, G3): l4 hairline + 8px corner. The
+     inputs above it in the same dialog are the official atom; this select was
+     the odd one out (the module note above also cited the wrong token). */
+  border: 0.5px solid var(--dsw-alias-border-l4);
+  border-radius: 8px;
   background: var(--dsw-alias-bg-layer-1);
   color: var(--dsw-alias-label-primary);
   font-family: inherit;

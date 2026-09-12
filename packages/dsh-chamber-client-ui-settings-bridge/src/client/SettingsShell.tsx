@@ -32,6 +32,7 @@ import type { FocusEvent as ReactFocusEvent, KeyboardEvent as ReactKeyboardEvent
 import { createPortal } from 'react-dom'
 import clsx from 'clsx'
 import {
+  Button,
   IconAgentPresetOutline16, IconChevronDownOutline14, IconCloseOutline16, IconDataOutline16, IconLinkOutline16,
   IconLoadingOutline16, IconPersonalizationOutline16, IconSettingsOutline14, IconSettingsOutline16,
 } from '@deepseek-ai/dsh-client-ui-primitives'
@@ -557,9 +558,17 @@ function SettingsPanel({
                         ? t('managedDshStarting')
                         : t('targetUnavailable')}
                 </p>
-                <button type="button" className={css.inlineAction} onClick={() => onSelectSection(CONNECTIONS_SECTION_ID)}>
+                {/* 2026-09 (P2-B, B-5b): design 15 §D1 requires the official
+                    Button for every action pill in this panel; this was the last
+                    self-drawn one (`variant="outline"`, size sm). */}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className={css.inlineAction}
+                  onClick={() => onSelectSection(CONNECTIONS_SECTION_ID)}
+                >
                   {t('manageConnections')}
-                </button>
+                </Button>
               </div>
             ) : face !== undefined ? (
               /* The selected server's own ledger: normal content, keyed by

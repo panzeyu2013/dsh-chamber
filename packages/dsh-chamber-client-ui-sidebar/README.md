@@ -50,10 +50,14 @@ The shell declares and renders the three holes the alpha.2 official
   sources render header + status icon only (dot/spinner, phase on
   hover/aria, no status text); all disconnected → empty hint.
 - Live sessions carry a running dot (`sessions.list.running`), and a
-  completed-but-unread session carries the official `StateDot` `done` tone —
-  the same mark the pinned session-todo strip renders (the bespoke 6 px
-  brand-blue dot read as a second "running" mark and is gone, 2026-09-11
-  upstream-alignment T10); no relative time cell is rendered (06 §4.3 —
+  completed-but-unread session carries the **chamber brand-blue dot**
+  (`.stateCompleted`, 6 px solid) — the same mark the pinned session-todo strip
+  renders. It deliberately does NOT use the official `StateDot` `done` tone:
+  that tone's `--dsw-alias-state-success-primary` is the very token of the
+  source header's connection dot, so "session finished, unread" and "server
+  connected" painted the same green (2026-09 user decision; history: brand-blue
+  dot ≤0.2.4 → official `done` green in 0.3.0-beta.1 (T10) → brand blue again,
+  06 §4.3); no relative time cell is rendered (06 §4.3 —
   `relativeTimeBucket` stays as a shared tool only). A row whose session
   carries an active
   `schedule` projection renders the official active-Schedule marker (16 px
@@ -137,13 +141,16 @@ The shell declares and renders the three holes the alpha.2 official
   SAME control offers `sessions.collapse` and reports `aria-expanded` — its
   hidden count comes from an expansion-independent window, so the collapse
   entry point survives its own expansion.
-- Menus and header controls follow upstream: row menus pass
-  `closeOnPointerLeave` and never the primitive's `compact` form (164px card,
-  26px rows, 12px labels); the source header's four controls (sort / add
-  workspace / search / archive manager) ride the official `Tooltip` instead of
-  a borrowed native `title`, and add-workspace draws the official project-add
-  glyph; the sort menu is upstream's view-options form (`dense`, portal,
-  `align="end"`, its label naming the active mode). The browse tree carries the
+- Menus and header controls keep upstream's interaction but chamber's density:
+  all three row/header menus (session kebab, workspace kebab, sort) pass the
+  primitive's `compact` form — the v0.2.4 behaviour, restored after the
+  2026-09-11 alignment round had switched them to the official default (40px
+  rows / 14px labels) and `dense` (34px), which read a full size larger than
+  our own 26px rows; `closeOnPointerLeave` stays. The source header's four
+  controls (sort / add workspace / search / archive manager) ride the official
+  `Tooltip` instead of a borrowed native `title`, add-workspace draws the
+  official project-add glyph, and the sort menu keeps the portal +
+  `align="end"`, its label naming the active mode. The browse tree carries the
   accessible name `section.sessions`, exactly like its search-results sibling.
 - Add workspace: each connected source opens one in-app directory-browser
   dialog (the browse directory-picker surface, design 05 §4) driven over THAT

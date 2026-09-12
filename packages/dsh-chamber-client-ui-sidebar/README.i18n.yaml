@@ -28,5 +28,24 @@
 # confirm is SUSPENDED while a reported failure is on screen (the in-dialog
 # `role="alert"` is then the only surviving explanation, `SidebarRoot.tsx`'s effect reads
 # `deleteError`). Both sides re-read against that bullet and rehashed.
-README.md: ddb8900781102785a7c3a1f5053ba6e684f1a8024d949eff327ef5b5d83cd57c
-README.zh.md: 3f080a926c00833ae62792d021ea10850d0e2a0810b8d2b9db212e9900591b54
+# Re-recorded again (2026-09 review round, the completed-mark decision; both sides
+# carried together): the status bullet now states that completed-but-unread renders
+# the chamber brand-blue `.stateCompleted` dot again and WHY the official `StateDot`
+# `done` tone is not used — that tone's `--dsw-alias-state-success-primary` is the
+# source header's connection-dot token, so "session finished, unread" and "server
+# connected" painted the same green. The same single claim was re-read on the zh and
+# en sides before rehashing both. Nothing else changed.
+# Re-recorded again (2026-09 phase 2, the menu-density decision): the menu bullet now
+# states that all three menus (session kebab / workspace kebab / sort) use the
+# primitive's `compact` form — the v0.2.4 behaviour, restored after the 2026-09-11
+# alignment round had moved them to the official default (40px rows / 14px labels) and
+# `dense` (34px), which read a full size larger than our own 26px rows;
+# `closeOnPointerLeave` stays. Justification and the abandoned-rounding trade-off live
+# in design 06 §7 and STATUS「菜单密度 = chamber 档」. The same single claim was re-read
+# on the zh and en sides before rehashing both. Nothing else changed.
+# Re-recorded once more in the same round: the sort-menu clause was restored to its
+# precise wording ("its label naming the active mode" / "由标签报出当前模式" — `orderBy.label`
+# names the section and the trigger's accessible name carries the active mode), an
+# audit finding about read-back ambiguity. Same single claim re-read on both sides.
+README.md: 62b415be83cb10d98dae64519c123eee0d56974381da4c94211ad8dbebccb804
+README.zh.md: f8da7102a3a791567cccdaec58998d7d6342e762345f1b9965e99b52083ca54a
