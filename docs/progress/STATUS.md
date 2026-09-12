@@ -649,6 +649,17 @@
     判据/几何见 06 §4.3（两处裁决同节记录）。
 - **默认排序 `manual`（06 §3.1）**：按 wire 顺序，与官方默认 `updated` 不同，是
   有意产品取舍。**窗口标题冻结**：桌面原生标题固定 `dsh-chamber`。
+- **菜单密度 = chamber 档，不跟随官方（2026-09 裁决）**：**所有 chamber 弹层菜单**
+  一律取"我们的"密度，不取官方默认 item（40px/14px）或 dense（34px/14px）——
+  session kebab / workspace kebab / 排序、git 创建对话框的字段下拉、open-in 的
+  应用菜单都走官方原语的 `compact`（26px/12px；open-in 原为 dense、git 原为默认档，
+  均于本轮改判，见 design 20 §1 与 design 08 §3.3），设置页服务器下拉用自己的
+  markup 而保留官方圆角/背景。判据、几何与取舍见
+  design 06 §7 / design 15 ④；证据：v0.2.4 的三处 `<Menu>` 全为 `compact`，
+  v0.3.0-beta.1 为 0 处 + 1 处 `dense`（`git show <tag>:…ServerSection.tsx`）。
+  **下一轮上游对齐不得**把这三个调用点改回官方默认/dense；锁在
+  `packages/dsh-chamber-client-ui-sidebar/test/`（`upstream-alignment.test.ts` 的菜单
+  一例 + `batch2-visual-locks.test.ts`）。
 - **样式 token 对齐后的未对齐项（2026-09 风格对齐轮登记，均为有意/待裁）**：
   - **open-in header pill 规格不对应任何 pinned vendor 面**：`OpenInButton.module.css`
     为 32px / `0.5px border-l2` / r18，而 pinned vendor 的

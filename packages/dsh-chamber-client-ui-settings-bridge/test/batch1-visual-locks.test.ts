@@ -38,12 +38,23 @@ function stripComments(code: string): string {
 
 const flat = stripComments(readFileSync(new URL('../src/client/SettingsShell.module.css', import.meta.url), 'utf8')).replace(/\s+/g, ' ')
 
+function ruleBodies(selector: string): string | undefined {
+  const bodies: string[] = []
+  for (const match of flat.matchAll(/([^{}]*?)\s*\{([^{}]*)\}/g)) {
+    const parts = match[1].split(/,(?![^(]*\))/).map((part) => part.trim())
+    // Push the raw contents and re-join with `;`: gluing whole bodies would fuse
+    // the previous body's `}` with the next declaration's property name.
+    if (parts.includes(selector)) bodies.push(match[2].trim())
+  }
+  return bodies.length === 0 ? undefined : `{${bodies.join('; ')}}`
+}
+
 function rule(selector: string): string {
-  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const match = new RegExp(`(?:^|[{},])\\s*${escaped}\\s*(?:,|\\{)`).exec(flat)
-  assert.notEqual(match, null, `${selector} must exist as a standalone selector`)
-  const open = flat.indexOf('{', match.index)
-  return flat.slice(open, flat.indexOf('}', open))
+  // Cascade order: EVERY rule whose selector list contains this selector, merged
+  // last-wins (see the batch-2 lock for the long form of this rationale).
+  const merged = ruleBodies(selector)
+  assert.notEqual(merged, undefined, `${selector} must exist as a selector`)
+  return merged as string
 }
 
 function decls(body: string): [string, string][] {
@@ -84,18 +95,15 @@ test('E1: settings cards carry the official l4 hairline (r12 + layer-3 kept)', (
   pin('E1 notify card', '.generalNotifyCard', { border: '0.5px solid var(--dsw-alias-border-l4)' })
 })
 
-test('E4: the server dropdown is the official Menu (list r20 + dense item)', () => {
-  // Official `Menu.module.css`: `.list{…border-radius:20px}`, `.item{…min-height:40px;
-  // padding:8px 10px;border-radius:10px;font-size:14px;line-height:22px}` and the
-  // dense variant `{min-height:34px;padding-block:5px}`.
+test('E4 (2026-09 amended): the server dropdown keeps the official Menu chrome', () => {
+  // Official `Menu.module.css`: `.list{…border-radius:20px}` and
+  // `.item{…border-radius:10px}` — the chrome this item won.
+  // The ITEM DENSITY is no longer pinned here: phase 2 (A-4) moved it back to the
+  // chamber scale (7px 10px / 13px / 18px, no 34px dense floor), so
+  // `test/batch2-visual-locks.test.ts` owns those numbers. Pinning both would
+  // make the two files contradict each other.
   pin('E4 list', '.dropdownList', { 'border-radius': '20px' })
-  pin('E4 item', '.dropdownItem', {
-    'min-height': '34px',
-    padding: '5px 10px',
-    'border-radius': '10px',
-    'font-size': '14px',
-    'line-height': '22px',
-  })
+  pin('E4 item', '.dropdownItem', { 'border-radius': '10px' })
 })
 
 test('F1 sibling: the runtime status pill uses the official Tag metrics', () => {

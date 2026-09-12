@@ -894,13 +894,15 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                         bookkeeping + override drop). */}
                     {server.connected && (server.aggregateError === undefined || search?.expanded === true) && (
                       <Menu
-                        // 2026-09-11 upstream-alignment T12: the official
-                        // primitive's `compact` typography is not what upstream
-                        // ships here — its ViewOptionsMenu sets `dense`
-                        // (WorkspaceBrowser.tsx:192-197) and its row menus set
-                        // neither. Follow the ViewOptionsMenu form for this
-                        // trigger.
-                        dense
+                        // 2026-09 menu-density decision (P2-A, A-3): the
+                        // v0.2.4 release used the primitive's `compact` variant
+                        // here; T12 (2026-09-11) switched it to `dense` to copy
+                        // the ViewOptionsMenu, which made every menu row taller
+                        // than our own 26px list rows. Density is chamber's
+                        // call, so this is back to `compact` (26px rows, 12px
+                        // type) while the radius/background stay the official
+                        // ones the variant ships with.
+                        compact
                         portal
                         align="end"
                         open={sortMenuOpen === server.id}
@@ -1591,9 +1593,14 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                                       </button>
                                       {!isWorktree && (
                                       <Menu
-                                        // 2026-09-11 upstream-alignment T12: upstream
-                                        // always passes closeOnPointerLeave and never
-                                        // compact (vendor ui-workspace Rows.tsx:174).
+                                        // 2026-09 menu-density decision (P2-A, A-2):
+                                        // `closeOnPointerLeave` stays (upstream
+                                        // behaviour, vendor ui-workspace
+                                        // Rows.tsx:174), but the variant returns to
+                                        // the v0.2.4 `compact` — T12 removed it and
+                                        // the rows grew from 26px/12px to the
+                                        // official default 40px/14px.
+                                        compact
                                         portal
                                         closeOnPointerLeave
                                         align="end"
@@ -1925,9 +1932,11 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                                       }}
                                     >
                                       <Menu
-                                        // 2026-09-11 upstream-alignment T12: upstream
-                                        // always passes closeOnPointerLeave and never
-                                        // compact (vendor ui-workspace Rows.tsx:487).
+                                        // 2026-09 menu-density decision (P2-A, A-1):
+                                        // same as the workspace menu above —
+                                        // `closeOnPointerLeave` kept (Rows.tsx:487),
+                                        // `compact` restored from v0.2.4.
+                                        compact
                                         portal
                                         closeOnPointerLeave
                                         align="end"
@@ -1970,8 +1979,14 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                                             // row (it never touches the session log),
                                             // so it is neither destructive nor
                                             // confirm-gated (vendor ui-workspace
-                                            // Rows.tsx:412-421). The 20-native glyph
-                                            // rides the menu's 16px icon slot.
+                                            // Rows.tsx:412-421). Glyph size is a
+                                            // deliberate optical exception to the
+                                            // compact slot: `compact` shrinks the
+                                            // icon slot to 14px, but the 20-native
+                                            // archive glyph stays at 16 so it keeps
+                                            // the same visual weight as the
+                                            // 16-native glyphs drawn at 14 beside
+                                            // it (the flex slot tolerates +2px).
                                             id: 'archive',
                                             label: t('menu.archiveSession'),
                                             icon: <IconArchiveOutline20 size={16} />,

@@ -184,9 +184,12 @@ provider（本地目录不再是主进程的事，也不再是"官方宿主行"�
   `sessionId` 属于有路径的工作区；③ hooks 无条件先执行（`open-in-gates.ts`）；
 - **交互**：1 个 app → 纯图标按钮；≥2 → 主图标按钮 + chevron + **官方
   `ui-primitives` `Menu`**（`autoFocus` 焦点转移与方向键/Home/End 导航、
-  `dense` 行、`selection="fill"` 选中填充、菜单项 `icon` 带真实应用图标，
+  `compact` 行、`selection="fill"` 选中填充、菜单项 `icon` 带真实应用图标，
   `OpenInButton.tsx:337-360`；props 面与 pin 的 `Menu.tsx`/`Tooltip.tsx` 对齐见
-  `src/vendor-modules.d.ts:15-64`；2026-09-11 upstream-alignment）。按钮与 chevron
+  `src/vendor-modules.d.ts:15-64`；2026-09-11 upstream-alignment）。**菜单行密度
+  2026-09 改判**：`dense`（34px）→ `compact`（26px/12px），与"菜单密度 = chamber 档"
+  的全仓裁决一致（design 06 §7 / STATUS）；原语、焦点转移、填充选中与项图标不变。
+  按钮与 chevron
   的提示是同一 pin 的设计系统 `Tooltip`，**不再用原生 `title`**；chevron 自带
   `aria-haspopup="menu"` / `aria-expanded`，并在每次打开时重探目录（原 bespoke
   菜单的 `onOpening` 语义搬到 trigger，`OpenInButton.tsx:389-400`）。**唯一留在
@@ -320,7 +323,7 @@ provider（本地目录不再是主进程的事，也不再是"官方宿主行"�
 |---|---|---|
 | 1 | 远程 ssh 来源：VS Code Remote URL（主进程构造，权威 IPC + 来源代 proof） | 已有 |
 | 2 | 每来源独立记忆 + 记忆值可用性降级 | 已有 |
-| 3 | 菜单用官方 `ui-primitives` `Menu`（焦点转移/方向键导航/`dense`/填充选中/项图标）+ 设计系统 `Tooltip`；插件内只留 N-ctx 归属守卫 `instance-view-guard.ts`（`.instance-view` 隐藏/断开即关闭） | **收窄**（2026-09-11 upstream-alignment：原 chamber-owned `AccessibleAppMenu` 已删除） |
+| 3 | 菜单用官方 `ui-primitives` `Menu`（焦点转移/方向键导航/`compact`/填充选中/项图标）+ 设计系统 `Tooltip`；插件内只留 N-ctx 归属守卫 `instance-view-guard.ts`（`.instance-view` 隐藏/断开即关闭） | **收窄**（2026-09-11 upstream-alignment：原 chamber-owned `AccessibleAppMenu` 已删除） |
 | 4 | 与启动标记解耦：任何 runtime 版本、任何 chamber 形态下本地目录都可用 | 本设计 |
 | 5 | 远程 provider 家族（Insiders / Cursor / Windsurf / JetBrains Gateway / `ssh://` 终端） | todo（S1，每个新增项需一次实机 scheme 验证） |
 | 6 | 远程**文件级**打开（只是 URL 构造；本地仍目录限定） | todo（S2） |
@@ -346,7 +349,7 @@ provider（本地目录不再是主进程的事，也不再是"官方宿主行"�
 - 客户端 bespoke 菜单三件套 `src/client/AccessibleAppMenu.tsx` +
   `AccessibleAppMenu.module.css` + `src/client/menu-navigation.ts` 及其
   `test/menu-navigation.test.ts`（2026-09-11 upstream-alignment）→ 由官方
-  `ui-primitives` `Menu`（焦点转移/方向键导航/`dense`/填充选中/项图标/portal）+
+  `ui-primitives` `Menu`（焦点转移/方向键导航/`compact`/填充选中/项图标/portal）+
   `Tooltip` 取代；只有 N-ctx 归属留在插件内（新增
   `src/client/instance-view-guard.ts` + `test/instance-view-guard.test.ts`，§5）；
 - `docs/checklists/upstream-touchpoints.md` §4 的 "dsh-host-open-in-app 契约镜像"行 → 改为 fork 行；

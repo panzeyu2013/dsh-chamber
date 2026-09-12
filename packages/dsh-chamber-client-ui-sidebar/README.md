@@ -141,13 +141,16 @@ The shell declares and renders the three holes the alpha.2 official
   SAME control offers `sessions.collapse` and reports `aria-expanded` — its
   hidden count comes from an expansion-independent window, so the collapse
   entry point survives its own expansion.
-- Menus and header controls follow upstream: row menus pass
-  `closeOnPointerLeave` and never the primitive's `compact` form (164px card,
-  26px rows, 12px labels); the source header's four controls (sort / add
-  workspace / search / archive manager) ride the official `Tooltip` instead of
-  a borrowed native `title`, and add-workspace draws the official project-add
-  glyph; the sort menu is upstream's view-options form (`dense`, portal,
-  `align="end"`, its label naming the active mode). The browse tree carries the
+- Menus and header controls keep upstream's interaction but chamber's density:
+  all three row/header menus (session kebab, workspace kebab, sort) pass the
+  primitive's `compact` form — the v0.2.4 behaviour, restored after the
+  2026-09-11 alignment round had switched them to the official default (40px
+  rows / 14px labels) and `dense` (34px), which read a full size larger than
+  our own 26px rows; `closeOnPointerLeave` stays. The source header's four
+  controls (sort / add workspace / search / archive manager) ride the official
+  `Tooltip` instead of a borrowed native `title`, add-workspace draws the
+  official project-add glyph, and the sort menu keeps the portal +
+  `align="end"`, its label naming the active mode. The browse tree carries the
   accessible name `section.sessions`, exactly like its search-results sibling.
 - Add workspace: each connected source opens one in-app directory-browser
   dialog (the browse directory-picker surface, design 05 §4) driven over THAT

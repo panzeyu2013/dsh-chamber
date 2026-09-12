@@ -299,17 +299,19 @@
   min-width: 0;
   width: 100%;
   box-sizing: border-box;
-  /* Official Menu item geometry (2026-09 batch 1, E4): the dense variant the
-     official view-options menu uses — 34px tall (padding-block 5px on top of
-     the 22px line box), 14px/22px label, 10px per-row radius. Replaces the
-     30px/13px/r8 chamber row that read a size smaller than every other menu. */
-  min-height: 34px;
-  padding: 5px 10px;
+  /* 2026-09 menu-density decision (P2-A, A-4): the batch-1 E4 pass copied the
+     official dense item (34px / 14px-22px), which is taller and larger than the
+     chamber scale this dropdown lives in. `padding: 7px 10px` and the 13px
+     label are the v0.2.4 release values; the 18px line box is explicit here
+     (chamber's 13/18 idiom — v0.2.4 inherited 1.5, so its rows sat at ~34px and
+     these are 32px). The official chrome won by E4 stays: 10px per-row radius,
+     r20 list, bg-layer-3 + elevation. */
+  padding: 7px 10px;
   border: none;
   border-radius: 10px;
   background: transparent;
-  font-size: 14px;
-  line-height: 22px;
+  font-size: 13px;
+  line-height: 18px;
   color: var(--dsw-alias-label-primary);
   cursor: pointer;
   text-align: left;

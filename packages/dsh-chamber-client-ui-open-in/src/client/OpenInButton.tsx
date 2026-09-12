@@ -346,7 +346,12 @@ export function OpenInButton({
     <Menu
       open={open}
       autoFocus
-      dense
+      // 2026-09 menu-density decision (P2-A, A-5): the upstream-alignment round
+      // had this on `dense` (34px items); every chamber popup menu now runs at
+      // the chamber scale (`compact`, 26px/12px). Everything else the alignment
+      // won stays: `autoFocus` focus transfer, arrow-key navigation,
+      // `selection="fill"`, item icons and the portal.
+      compact
       selection="fill"
       align="end"
       items={items}

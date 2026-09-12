@@ -1,6 +1,6 @@
 {
   "name": "@dsh-chamber/dsh-chamber-client-ui-open-in",
-  "description": "Chamber-bundled open-in client plugin (designs 16/20 + Batch 3 unification): one header entry over the per-source view-model \u2014 the instance official host catalog for local sources plus the desktop main-process VS Code provider (local + remote SSH)",
+  "description": "Chamber-bundled open-in client plugin (designs 16/20 + Batch 3 unification): one header entry over the per-source view-model — the instance official host catalog for local sources plus the desktop main-process VS Code provider (local + remote SSH)",
   "version": "0.3.0-beta.1",
   "private": true,
   "type": "module",
@@ -26,7 +26,7 @@
     }
   },
   "scripts": {
-    "test": "node test/capabilities.test.ts && node test/coordinator.test.ts && node test/instance-view-guard.test.ts && node test/open-in-gates.test.ts && node test/open-in-view-model.test.ts && node test/local-catalog.test.ts && node test/choice-store.test.ts && node test/open-in-wire-lockstep.test.ts && node test/open-in-labels.test.ts && node test/source-adapter.test.ts"
+    "test": "node test/capabilities.test.ts && node test/coordinator.test.ts && node test/instance-view-guard.test.ts && node test/open-in-gates.test.ts && node test/open-in-view-model.test.ts && node test/local-catalog.test.ts && node test/choice-store.test.ts && node test/open-in-wire-lockstep.test.ts && node test/open-in-labels.test.ts && node test/source-adapter.test.ts && node test/batch2-visual-locks.test.ts"
   },
   "license": "MIT",
   "peerDependencies": {
