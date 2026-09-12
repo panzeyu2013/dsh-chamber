@@ -204,6 +204,8 @@ vendor/
 |---|---|
 | `pnpm run dev:control-plane` | 启动控制面（管理 REST + 静态前端），端口 17500 |
 | `pnpm run dev:desktop` | Electron 壳：完整窗口（控制面 + dsh 前端 + 桌面壳） |
+| `pnpm run acceptance:gui` | GUI 验收（`--live` 只读探测运行中的应用／`--attach`／`--dev` 走查）；流程见 `docs/checklists/gui-acceptance-checklist.md`，工具箱边界见 `scripts/gui-acceptance/README.md` |
+| `pnpm run test:gui-acceptance` | 该工具箱纯判据层的单测（CI 跑；GUI 驱动层不进 CI） |
 | `pnpm run build:renderer` | 构建 dsh 前端 bundle |
 | `pnpm run build:host-graph` | 构建 host-graph 包（esbuild） |
 | `pnpm run build:host-git` | 构建实例内 Git worktree host 包（esbuild） |

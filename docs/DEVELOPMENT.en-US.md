@@ -206,6 +206,8 @@ vendor/
 |---|---|
 | `pnpm run dev:control-plane` | Start the control plane (management REST + static frontend) on port 17500 |
 | `pnpm run dev:desktop` | Electron shell: full window (control plane + dsh frontend + desktop shell) |
+| `pnpm run acceptance:gui` | GUI acceptance (`--live` read-only probes against the running app / `--attach` / `--dev` walkthrough); procedure in `docs/checklists/gui-acceptance-checklist.md`, toolbox boundaries in `scripts/gui-acceptance/README.md` |
+| `pnpm run test:gui-acceptance` | Unit tests for that toolbox's pure judgement layer (run in CI; the GUI-driving layer is not) |
 | `pnpm run build:renderer` | Build the dsh-frontend bundle |
 | `pnpm run build:host-graph` | Build the host-graph package (esbuild) |
 | `pnpm run build:host-git` | Build the in-instance Git worktree host package (esbuild) |

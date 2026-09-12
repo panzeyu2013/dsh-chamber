@@ -99,6 +99,12 @@ jobs:
       # here.
       - name: Upgrade tooling unit tests (pin preflight / lockfile restore guard / upstream gate CLI guard)
         run: pnpm run test:upgrade-tools
+      # The GUI acceptance toolbox's judgement layer only: the driving layer needs
+      # a display plus a running app, so it stays a local gate
+      # (docs/checklists/gui-acceptance-checklist.md). Every pass/fail predicate
+      # is pure and pinned here, exactly like the other scripts/ tools.
+      - name: GUI acceptance toolbox unit tests (pure judgement layer)
+        run: pnpm run test:gui-acceptance
       - name: Shared runtime core unit tests (packages/dsh-runtime)
         run: pnpm run test:runtime
       - name: Control-plane unit tests
