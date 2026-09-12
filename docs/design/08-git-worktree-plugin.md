@@ -289,7 +289,10 @@ slot，不由 renderer App 直接 import 领域组件。
 - **未注册工作树按仓库分散到 repo 组末尾**（名称=目录 basename、与派生
   workspace 一致的行样式：26px 行 / r8 / 名称 14px-600-次级色 + 20px 行内动作钮
   ——2026-09 batch 1 G1 收口，其中 20px 命中 < WCAG 2.2 2.5.8 的 24px 属模块
-  图标按钮语言的既有权衡，与归档管理器同一登记，见 design 24 §12 第 17 条；
+  图标按钮语言的既有权衡；**2026-09 阶段 3 G1-4 起不再低于 WCAG 2.2 2.5.8**：
+  `.headerGitAction` 与 `.unregisteredAction` 视觉盒仍 20px，但用不可见 `::after
+  { inset: -2px }` 把命中区扩到 24px（`.headerGit` 的簇间距同步 2px → 4px，保证两个
+  24px 盒不相交），见 design 24 §13 第 17 条与 design 06 §7；
   行内动作钮命中区见 `SidebarGit.module.css` 的 `.unregisteredAction`：分支图标 +
   名称 + 健康徽标；非 ready 行的状态胶囊是
   官方 `Tag tone="warning"`（`SidebarWorkspaceGitLine.tsx:208`，官方 11px/17px

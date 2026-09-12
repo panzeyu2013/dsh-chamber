@@ -14,6 +14,9 @@
          注意：骨架只改善 FCP/观感，不构成最终 LCP（被移除的候选会被过滤，且
          真实 UI 的元素更大），LCP 仍由真实首帧决定。 -->
     <style>
+      /* 骨架色板 = 外壳 chrome 的深色自有色板（src/styles.css 的 :root），刻意
+         不跟随 prefers-color-scheme：dsh 主题是按实例投影的、骨架期不可知，跟随
+         OS 只会在"浅色 OS + 深色 app"时制造反方向闪色。改这里的值要同步那边。 */
       html, body, #root { height: 100%; margin: 0; }
       body {
         background: #0f1115;

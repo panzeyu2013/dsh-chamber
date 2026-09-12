@@ -71,7 +71,7 @@
     通知」）；**顶层开关行**是官方 `Switch`（36×20 轨道 / 圆形 thumb / 120ms /
     `aria-checked` 选中色 / **必填 `label`**，即本行的可访问名）——手写的
     `.generalSwitchInput`/`.generalSwitch`/`.generalSwitchThumb` 三件套已删除。
-    **不是全部勾选面都换了原语**（2026-09-11 review-fix 收窄措辞）：卡片网格与通知
+  - **不是全部勾选面都换了原语**（2026-09-11 review-fix 收窄措辞）：卡片网格与通知
     事件行里的勾选框仍是原生 `<input type="checkbox">`（`ToggleCard` /
     `ToggleEvent`，`GeneralView.tsx:80-133`），整行 `<label>` 即命中区。
     **已知取舍（chamber 适配；披露属性的落点按 2026-09-11 review-fix F3 校正）**：
@@ -87,6 +87,25 @@
     `aria-controls` 只在卡片存在时写，避免指向已不存在的 id）——包装 `<span>` 现在
     不带任何 ARIA，披露关系不静默丢失；未读角标开关不展开任何东西，直接用原语本身。
     收口仍需上游给原语加属性透传（届时删掉该模块）。
+  - **2026-09 阶段 2 收口（本页控件语言与几何）**：① 面板内容区最后一个**自绘动作
+    胶囊**「前往连接管理」也换成官方 `Button`（`variant="outline" size="sm"`，
+    `SettingsShell.tsx` 的 `css.inlineAction` 只留布局 `margin-top/align-self`）——
+    §D1（§1「所有动作胶囊是 `ui-primitives` `Button`」）至此无例外（壳 chrome 的
+    下拉触发器/选项行、三个 nav 单元、关闭钮与轨道触发器仍按 §1 自绘）；② 开关/单选的"开"色统一为官方
+    `--dsw-alias-brand-primary`（官方 `Switch[aria-checked=true]` 的语言，深色即中性
+    白），不再用 business 蓝——同页两种"开"色的问题消失；分段控件的**几何保持
+    chamber 档**（26px/12px），只换色；③ 面板头取官方 `SettingsRoot .header` 的**对齐**（`align-items:flex-start`）与
+    54px 盒高（`justify-content:space-between` 保留），**纵向内距保留 chamber 的
+    `12px 14px 10px`**：官方 `padding:20px 14px 8px 10px` 是围绕官方 26px 内容行
+    写死的（54 = 20+8+26），我们的关闭控件 28px，照抄会变成 28+22 = **50px 内容盒
+    被 `min-height:54px` 撑到 56px**（即面板头整体变高 2px）；现配置下 28+22 = 50px
+    仍由 54px 下限兜住，与改前等高。**注意这是"对齐关键字"而非光学位置**：官方
+    20/8 内距把动作簇放在 y≈20，我们的 12/10 把它放在 y≈12（改前居中为 y≈14）——
+    要完全复刻官方光学位置，需要官方那颗 26px 的关闭控件（见上）；④ 服务器下拉**密度回到 v0.2.4 的语言**
+    （`padding:7px 10px` + 13px 字号为 v0.2.4 原值，行框显式 18px = 本仓 13/18 惯用；
+    v0.2.4 靠继承 1.5 行框 ≈34px，现在 32px），**保留** batch 1 E4 的
+    官方圆角/背景（item r10、列表 r20、`bg-layer-3` + elevation）——即"密度用
+    chamber、圆角背景参考官方"。
   - 读主进程 `chamber-settings.json`（`dsh-chamber:settings-get/set` IPC + 变更 push）。
 - 「关于」页 v1 不做。
 

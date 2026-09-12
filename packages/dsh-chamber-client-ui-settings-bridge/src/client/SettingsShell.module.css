@@ -385,11 +385,20 @@
 .header {
   flex: none;
   display: flex;
-  align-items: center;
   justify-content: space-between;
   gap: 8px;
+  /* 2026-09 (P2-B, B-5): the official settings header is
+     `height:54px; padding:20px 14px 8px 10px; align-items:flex-start` (decoded
+     pinned module `dsh-client-ui-settings-general/SettingsRoot.module.css`),
+     i.e. a 54px box around a 26px content row. OUR content row is 28px (the
+     close control is 28x28), so the official padding would make this header
+     28 + 28 = 56px — a 2px growth the density rule forbids. We therefore take
+     the official ALIGNMENT (`flex-start`, title and close at the top edge) and
+     keep our own vertical padding: content 28px + 22px padding = 50px, still
+     held at the 54px `min-height` — i.e. the header height is unchanged. */
   min-height: 54px;
   padding: 12px 14px 10px;
+  align-items: flex-start;
   box-sizing: border-box;
 }
 
@@ -451,20 +460,17 @@
 }
 
 .inlineAction {
+  /* Layout only (2026-09, P2-B B-5b): the control itself is the official
+     `Button` primitive now (`variant="outline"`, design 15 §D1), so this class
+     must not re-draw a second button chrome. */
   margin-top: 8px;
-  padding: 7px 12px;
-  border: 0.5px solid var(--dsw-alias-border-l2);
-  border-radius: 8px;
-  background: var(--dsw-alias-bg-layer-3);
-  color: var(--dsw-alias-label-primary);
-  cursor: pointer;
-  font: inherit;
+  align-self: flex-start;
 }
 
-.inlineAction:hover,
-.inlineAction:focus-visible {
-  border-color: var(--dsw-alias-brand-primary);
-}
+/* (the former `.inlineAction:hover/:focus-visible` border repaint is gone with the
+   self-drawn button: the official `Button variant="outline"` already ships
+   `border: .5px solid var(--dsw-alias-border-l3)` + a hover background, and a
+   `border-color` override here would have repainted that official outline.) */
 
 /* Server-switch intermediate state: the content column switches to a
    dedicated loading view IMMEDIATELY (honest signal, no stale-content wait
@@ -607,7 +613,7 @@
 /* ---- 通用 section 布局（紧凑卡片网格 + 全宽行）----
    行范式为「文字在左/上、控件在右/下」的紧凑卡片：短开关组用双列卡片
    网格（.generalGrid + .generalCard，auto-fit 窄面板自动降列），单选对用
-   滑块式分段控件（SegmentedControl，选中态为官方业务蓝），通知事件开关
+   滑块式分段控件（SegmentedControl，选中态 = 官方 `brand-primary` 中性填充），通知事件开关
    用一行迷你卡片（.generalEventGrid）。卡片沿用官方设置面板的卡片词汇，
    但**不是**逐值复制：官方 `ModelsSection.rowCard` 实际是
    `border-l4 + r16 + 无底色`（本注释 2026-09 batch 1 E1 纠错，此前写成
@@ -663,15 +669,18 @@
   margin: 0;
 }
 
-/* 卡片内的复选框（原生 checkbox + accent token）：accent 用官方业务蓝
-   （state-business-primary，deepseek-500/400），与页内滑块/开关的选中色
-   一致。 */
+/* 卡片内的复选框（原生 checkbox + accent token）：accent 用官方
+   `--dsw-alias-brand-primary`（2026-09 阶段 2 B-3 裁决，与页内滑块/开关的
+   "开/选中"色统一；浅色中性近黑、深色中性近白）。 */
 .generalCardCheck {
   flex: none;
   width: 16px;
   height: 16px;
   margin: 2px 0 0;
-  accent-color: var(--dsw-alias-state-business-primary);
+  /* 2026-09 (P2-B, B-3): the official Switch paints its checked state with
+     `--dsw-alias-brand-primary` (a neutral in both themes), not the business
+     blue — one "on" language per surface. */
+  accent-color: var(--dsw-alias-brand-primary);
   cursor: pointer;
 }
 
@@ -680,7 +689,7 @@
 }
 
 /* 分段单选（关闭窗口时 / 通知时机）为滑块式共享组件 SegmentedControl
-   （见 SegmentedControl.tsx / SegmentedControl.module.css）：轨道内蓝色
+   （见 SegmentedControl.tsx / SegmentedControl.module.css）：轨道内中性色
    滑块滑向选中项、选中文字反白。列宽按内容自适应。 */
 
 /* 通知主开关行（披露头，2026-12 边框修订）：无边框无底色——它只是子设置卡

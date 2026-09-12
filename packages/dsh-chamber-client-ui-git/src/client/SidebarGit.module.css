@@ -8,7 +8,7 @@
   flex: none;
   display: inline-flex;
   align-items: center;
-  gap: 2px;
+  gap: 4px;
   min-width: 0;
   max-width: 45%;
 }
@@ -85,6 +85,28 @@
 
 .unregisteredSpacer {
   flex: none;
+}
+
+/* 2026-09 (stage 3, G1-4): WCAG 2.2 2.5.8 target size. These two 20px icon
+   buttons keep their visual box — and the rows their heights — and grow an
+   invisible 24x24 hit box instead (`inset: -2px`). `.headerGit`'s cluster gap
+   therefore goes 2px -> 4px so two adjacent 24px boxes stay distinct; the
+   unregistered row's action has no neighbour within 24px at all, so its spacing
+   alternative already held and this only widens the comfortable area. */
+.headerGitAction,
+.unregisteredAction {
+  position: relative;
+}
+.headerGitAction::after,
+.unregisteredAction::after {
+  content: '';
+  position: absolute;
+  inset: -2px;
+}
+/* Disabled buttons still hit-test: never swallow a neighbour's pointer events. */
+.headerGitAction:disabled::after,
+.unregisteredAction:disabled::after {
+  pointer-events: none;
 }
 
 .unregisteredAction {

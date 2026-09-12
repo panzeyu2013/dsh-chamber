@@ -25,13 +25,12 @@ const TRACK_PADDING = 2
 const SEGMENT_GAP = 2
 
 /**
- * 滑块式分段单选（chamber 设置通用）：轨道内蓝色滑块滑向选中项，选中
- * 文字反白（label-primary-foreground），未选中灰字。
+ * 滑块式分段单选（chamber 设置通用）：轨道内滑块滑向选中项，选中文字反白
+ * （label-primary-foreground），未选中灰字。
  *
- * 选中色为官方业务蓝（--dsw-alias-state-business-primary，浅色
- * deepseek-500 / 深色 deepseek-400）——dsh 主题的 brand-primary 是中性
- * 黑/白，不适合做选中填充；反白文字在浅色为白、深色为近黑，两主题下与
- * 蓝色填充的对比度都达标。视觉语言参考官方 switch
+ * 选中填充为官方 `--dsw-alias-brand-primary`（2026-09 阶段 2 B-4 裁决，与官方
+ * `Switch[aria-checked=true]` 同一语言：浅色中性近黑 / 深色中性近白）；几何仍是
+ * chamber 档（26px 高 / 12px 字）。视觉语言参考官方 switch
  * （SubagentModelSelectionCard）与发送按钮（InputBar .primary：
  * info-fill 蓝底 + 白字形）。
  *

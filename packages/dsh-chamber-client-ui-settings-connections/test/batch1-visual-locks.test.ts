@@ -38,12 +38,23 @@ function stripComments(code: string): string {
 
 const flat = stripComments(readFileSync(new URL('../src/client/ConnectionsSection.module.css', import.meta.url), 'utf8')).replace(/\s+/g, ' ')
 
+function ruleBodies(selector: string): string | undefined {
+  const bodies: string[] = []
+  for (const match of flat.matchAll(/([^{}]*?)\s*\{([^{}]*)\}/g)) {
+    const parts = match[1].split(/,(?![^(]*\))/).map((part) => part.trim())
+    // Push the raw contents and re-join with `;`: gluing whole bodies would fuse
+    // the previous body's `}` with the next declaration's property name.
+    if (parts.includes(selector)) bodies.push(match[2].trim())
+  }
+  return bodies.length === 0 ? undefined : `{${bodies.join('; ')}}`
+}
+
 function rule(selector: string): string {
-  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const match = new RegExp(`(?:^|[{},])\\s*${escaped}\\s*(?:,|\\{)`).exec(flat)
-  assert.notEqual(match, null, `${selector} must exist as a standalone selector`)
-  const open = flat.indexOf('{', match.index)
-  return flat.slice(open, flat.indexOf('}', open))
+  // Cascade order: EVERY rule whose selector list contains this selector, merged
+  // last-wins (see the batch-2 lock for the long form of this rationale).
+  const merged = ruleBodies(selector)
+  assert.notEqual(merged, undefined, `${selector} must exist as a selector`)
+  return merged as string
 }
 
 function decls(body: string): [string, string][] {

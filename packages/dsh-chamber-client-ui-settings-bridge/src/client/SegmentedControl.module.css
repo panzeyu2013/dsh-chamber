@@ -1,7 +1,8 @@
-/* 滑块式分段单选（chamber 设置通用）：轨道 + 蓝色滑块滑向选中项，选中
-   文字反白。选中色为官方业务蓝（--dsw-alias-state-business-primary，
-   浅色 deepseek-500 / 深色 deepseek-400），与页内开关、复选框的选中色
-   一致——dsh 主题的 brand-primary 是中性黑/白，不适合做选中填充。
+/* 滑块式分段单选（chamber 设置通用）：轨道 + 滑块滑向选中项，选中文字反白。
+   选中填充 = 官方 `--dsw-alias-brand-primary`（2026-09 阶段 2 B-4 裁决；官方
+   `Switch[aria-checked=true]` 的同一语言：浅色为中性近黑、深色为中性近白），
+   与页内开关、复选框的 accent 同色。几何保持 chamber 档（26px / 12px），
+   只换色——原 business 蓝（state-business-primary）已不再用于"开/选中"态。
    滑块位置/宽度由组件 layout 测量（flex 列按内容自适应，不等宽），CSS
    只负责轨道/胶囊/文字与过渡。 */
 .segmented {
@@ -23,7 +24,9 @@
   top: 2px;
   bottom: 2px;
   border-radius: 8px;
-  background: var(--dsw-alias-state-business-primary);
+  /* 2026-09 (P2-B, B-4): official checked-state language is the neutral
+     `--dsw-alias-brand-primary`; the geometry stays chamber's (26px / 12px). */
+  background: var(--dsw-alias-brand-primary);
   transition: left 120ms ease, width 120ms ease;
   pointer-events: none;
 }
@@ -64,8 +67,8 @@
   background: var(--dsw-alias-interactive-bg-hover);
 }
 
-/* 选中项：蓝色滑块上的反白文字（foreground 在浅色为白、深色为近黑，
-   保证两主题下与蓝色填充的对比度）。 */
+/* 选中项：滑块上的反白文字（label-primary-foreground 在设计系统里正是"品牌填充
+   之上的前景"：浅色主题的近黑填充配白字、深色主题的近白填充配近黑字）。 */
 .segment input:checked + span {
   color: var(--dsw-alias-label-primary-foreground);
   font-weight: 500;

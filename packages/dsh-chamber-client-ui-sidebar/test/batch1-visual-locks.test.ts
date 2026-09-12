@@ -39,16 +39,23 @@ const section = stripComments(source('../src/client/ServerSection.tsx'))
 const flat = normalize(css)
 
 /** One rule's declarations, comment-free and whitespace-collapsed. */
+function ruleBodies(selector: string): string | undefined {
+  const bodies: string[] = []
+  for (const match of flat.matchAll(/([^{}]*?)\s*\{([^{}]*)\}/g)) {
+    const parts = match[1].split(/,(?![^(]*\))/).map((part) => part.trim())
+    // Push the raw contents and re-join with `;`: gluing whole bodies would fuse
+    // the previous body's `}` with the next declaration's property name.
+    if (parts.includes(selector)) bodies.push(match[2].trim())
+  }
+  return bodies.length === 0 ? undefined : `{${bodies.join('; ')}}`
+}
+
 function rule(selector: string): string {
-  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  // A whole selector list: at the start of the sheet or right after `}`, the
-  // selector, then `,` (list continues) or `{` (list ends). A longer class name
-  // (`…List`) or a compound prefix therefore cannot match.
-  const match = new RegExp(`(?:^|[{},])\\s*${escaped}\\s*(?:,|\\{)`).exec(flat)
-  assert.notEqual(match, null, `${selector} must exist as a standalone selector`)
-  const open = flat.indexOf('{', match.index)
-  const close = flat.indexOf('}', open)
-  return flat.slice(open, close)
+  // Cascade order: EVERY rule whose selector list contains this selector, merged
+  // last-wins (see the batch-2 lock for the long form of this rationale).
+  const merged = ruleBodies(selector)
+  assert.notEqual(merged, undefined, `${selector} must exist as a selector`)
+  return merged as string
 }
 
 /** Declarations of a rule body, in source order. */

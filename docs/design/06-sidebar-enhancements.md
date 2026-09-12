@@ -632,8 +632,9 @@ await 中），我们单点只显示子 agent 计数文案，官方同快照显�
   `role="alert"` 失败行与「仅成功才关闭」）、**同一时刻至多一层 chamber Modal**（见下）、
   completed 走 chamber
   品牌蓝点（2026-09 裁决，官方 `done` 绿点因与来源头连接点同 token 被否）、
-  行窗口是双向 disclosure、行菜单 `closeOnPointerLeave` 且非
-  `compact`、`{name}` 参数化可访问名、活动定时任务标记的位置、`data-git-action`
+  行窗口是双向 disclosure、行菜单 `closeOnPointerLeave` 且 `compact`
+  （`compact` 一项在 2026-09 阶段 2 由"非 compact"改回，见 §7 菜单密度裁决）、
+  `{name}` 参数化可访问名、活动定时任务标记的位置、`data-git-action`
   属性钩子（`:disabled` 在方括号之外）；行为面单测在函数旁边
   （`test/session-row-window.test.ts` 的 disclosure 窗口、`test/panel-source.test.ts`
   的 `createSnapshotStore` 投影与通知纪律）。
@@ -734,16 +735,46 @@ await 中），我们单点只显示子 agent 计数文案，官方同快照显�
   = 来源头部按钮（官方 project-add 字形，与搜索/排序图标
   并排成簇，悬停替换连接状态槽，胶囊展开时簇保持可见；文案在 aria 与**官方
   `Tooltip`**——同批把来源头四个动作（排序/添加工作区/搜索/归档清理）从原生
-  `title` 换成设计系统 Tooltip，`ServerSection.tsx:914,941,963,1001`，行与
+  `title` 换成设计系统 Tooltip（`ServerSection.tsx` 的四个 Tooltip 包装的头部按钮，
+  2026-09 起在 :921/:948/:970/:1008），行与
   状态槽仍用原生 title，无列表行）。替换为真正 display 交换（静止不占位，状态图标
   真正居行/头末尾）。kebab
   展开期间该行操作保持可见（`.rowActionsVisible`）。行内图标按钮全量
   reset（`appearance:none`/`outline:none`/grid 居中，focus-visible 用
-  brand 自绘环）——无 UA 外框、无偏移。**菜单形态照上游**（2026-09-11
-  upstream-alignment T12）：行菜单一律 `closeOnPointerLeave`、**不再用
-  `compact`**（上游行菜单两者都不设、`ViewOptionsMenu` 用 `dense`，
-  vendor ui-workspace `Rows.tsx:174,487` / `WorkspaceBrowser.tsx:192-197`）；
-  排序菜单改用 `dense` 与官方 ViewOptionsMenu 同形。
+  brand 自绘环）——无 UA 外框、无偏移。**菜单密度 = chamber 档（2026-09 阶段 2
+  裁决，取代 2026-09-11 T12 的"照上游"口径）**：三个菜单（session kebab /
+  workspace kebab / 排序）一律用原语 `compact`——item 26px / 12px（= 我们列表
+  行高），容器 r7/padding 2px/min-width 164、item r5；`closeOnPointerLeave`
+  保留（T12 的正确部分）。理由：T12 曾把行菜单改成官方默认（40px/14px）与
+  `dense`（34px），随 v0.3.0-beta.1 发布，但 **40px 是相对官方自己 32px 行高
+  的档位**，对着我们 26px 的行整整大一圈；v0.2.4 用的是 `compact`，本裁决即
+  **恢复发布行为**（证据：`git show v0.2.4:…/ServerSection.tsx` 三处 `<Menu>`
+  全为 `compact`；v0.3.0-beta.1 为 0 处 compact + 1 处 `dense`）。
+  **取舍**：`compact` 把圆角一并带回 r7/r5；pin 的 `Menu` 虽收 `className` 但只落在
+  根 `<span>` 上、**没有 list/item 钩子**，compact 规则里也没有 CSS 变量，故"26px 行
+  + r20/r10"不可得（不做 `:global` 覆盖哈希类名）。**compact 档里唯一低于 12px 的自家面**：排序菜单的 section
+  label（`{type:'label'}`，如「排序方式」）在 compact 下取官方原值
+  `padding:4px 7px; font-size:11px; line-height:16px`（dense 档是 12px）；这是**官方
+  compact 自带**的值、也是 v0.2.4 的原状，不是本仓新增的字号，故不计入 §排版
+  条的"低于 12px 站点"清单，但审计时不要误判为新偏差——两个 kebab 菜单无 label 项，
+  不受影响。compact 的另外两项连带：**item 图标槽 14px**（默认档 16px；本仓唯一的例外是
+  session 行菜单里的 **20-native 归档字形仍画 16px**——为了让它与旁边 16-native 的
+  重命名/分叉字形（画 14px）保持同一视觉重量，flex 槽容忍这 +2px，T2a 锁按 16 钉住）
+  与**列表最小宽 164px / 内距 2px**（默认档 218px / 4px），长标签的行菜单会因此更早
+  换行/截断。设置页服务器下拉是我们自己的 markup，因此那里两者兼得：
+  `padding:7px 10px` 与 `font-size:13px` 取 v0.2.4 原值，行框显式 18px（chamber 的
+  13/18 惯用，与列表标题同规格；v0.2.4 无显式行框、靠继承 1.5≈19.5px，故该项当时
+  约 34px、现在 32px——本批统一的是字号/内距语言，不追像素），圆角/背景 = 官方
+  （item r10、列表 r20 + `bg-layer-3` + elevation）。
+- **图标钮命中区（2026-09 阶段 3 G1-4）**：本页所有小于 24px 的图标按钮——行内
+  `.actionIcon`（20px）、来源头 `.searchButton`（20px）、搜索框 `.searchClear`（18px）、
+  折叠 `.foldToggle` / `.sourceFoldToggle`（16px）、轨道 `.railDotButton`（16px）——
+  **视觉盒与行高一律不变**，各自加一层不可见命中盒（`::after` 的 `inset` 分别
+  -2/-2/-3/-4/-4/-4px ⇒ 24×24），`disabled` 时 `pointer-events: none`。簇间距规则：
+  两个 24px 盒需相邻 ≥4px，故 `.sourceActions` 由 2px 提到 4px（`.rowActions` 12px 与
+  `.railDots` 12px 本就够）；16px 控件旁边是宽邻居（workspace 标题 / 来源名）时，
+  其中心距远超 24px，2.5.8 的 spacing 备选同样成立。锁见
+  `test/batch2-visual-locks.test.ts` 的 G1-4 一例。
 - **会话行窗口与展开条（2026-09-11 upstream-alignment T11；2026-09 batch 1 A10
   补几何）**：每个 workspace 只
   展开前 N 行（`sessionRowWindow`），其余由展开条揭示。展开条采用官方
@@ -895,6 +926,12 @@ onRequest`），**默认全开**——被动呈现（空时零占用），区别
 **行列定格**（状态槽一律在行尾，与普通会话行同列；左右缩进与会话行对齐；
 代码注释与本节同步）：
 
+- **条带边界（2026-09 阶段 2，B-1）**：`.todoArea` 取**下边一条**
+  `0.5px solid var(--dsw-alias-border-l2)`——与下方滚动列表分界，不引入第二套边框
+  语言（官方 TodoPanel 是 `.5px l1` 描边 + `--dsw-specific-tip` 底 + r12 的整卡，
+  我们只取"分隔"这一半）。**只保留下边线**（2026-09 审计裁决）：条带上方 8px 处是
+  自带圆角描边的 New Session 卡，上边线没有可分隔的邻居，且会随条带的
+  mount/unmount 忽隐忽现。
 - **行几何（2026-09 batch 1 C2）**：行高 26px + 2px 间距（间距由 `.todoRows` 的
   flex gap 提供，行自身 `margin: 0`；「还有 N 项」是该容器之外的兄弟节点，用自身
   2px 外边距接同一节奏）、计数 pill 12px——
