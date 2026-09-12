@@ -90,6 +90,7 @@ type(scope): subject
 - **type** — one of: `feat` (new capability), `fix` (bug fix), `chore` (build/tooling/maintenance), `docs`, `refactor`, `test`, `ci`, `perf`, `style` (formatting only), `revert`.
 - **scope** — optional, but prefer the affected package or area: `control-plane`, `renderer`, `desktop`, `sidebar`, `settings-bridge`, `cli`, `ci`, `docs`, `packaging`.
 - **subject** — imperative mood, no trailing period, ≤ 72 characters ("fix", not "fixed"; "add", not "adds").
+- **language (mandatory)** — **commit messages are always written in English**: both the subject and the body (the examples below are the canonical shape). The Chinese commits in this repository's history are a fact about the past, not a precedent; every commit added from this rule onward must be English, so upstream and outside contributors can search and cite it. Code comments, design documents and PR bodies are NOT covered by this rule and may stay Chinese.
 - **body** — when the change is not self-evident, explain the *what* and *why* after a blank line; reference the relevant design/progress document or issue where applicable.
 - **breaking changes** — append `!` after type/scope (e.g. `feat(desktop)!: ...`) or add a `BREAKING CHANGE:` footer, and describe the migration impact in the body.
 

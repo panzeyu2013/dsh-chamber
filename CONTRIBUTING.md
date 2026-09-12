@@ -90,6 +90,7 @@ type(scope): subject
 - **type（类型）**——取以下之一：`feat`（新功能）、`fix`（缺陷修复）、`chore`（构建/工具/维护）、`docs`、`refactor`、`test`、`ci`、`perf`、`style`（仅格式调整）、`revert`。
 - **scope（范围）**——可选，但建议写受影响的包或领域：`control-plane`、`renderer`、`desktop`、`sidebar`、`settings-bridge`、`cli`、`ci`、`docs`、`packaging`。
 - **subject（主题）**——祈使语气、句末不加句号、≤ 72 字符（用 "fix"，不用 "fixed"；用 "add"，不用 "adds"）。
+- **语言（强制）**——**提交信息一律用英文**：subject 与 body 都必须是英文（下列示例即规范形态）。仓库历史里的中文提交是既有事实，不作为先例；从本规则起新增提交必须英文，便于上游/外部贡献者检索与引用。代码注释、设计文档与 PR 正文不受此限，仍可用中文。
 - **body（正文）**——改动非自明时，空一行后说明**做了什么、为什么**；适用时引用相关设计/进度文档或 issue 编号。
 - **破坏性变更**——在 type/scope 后加 `!`（如 `feat(desktop)!: ...`）或加 `BREAKING CHANGE:` 脚注，并在正文说明迁移影响。
 
