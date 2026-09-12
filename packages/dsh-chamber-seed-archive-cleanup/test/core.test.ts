@@ -136,7 +136,20 @@ class FakeHost implements ArchiveCleanupHost {
     return failure.code
   }
 
-  async deleteSessionContent(sessionId: string, _cwd?: string, force = false): Promise<'deleted' | 'missing'> {
+  /** Protected sets the core passed into deleteSessionContent; the fake
+   *  refuses them exactly like the real binding's invariant guard. */
+  readonly protectedSeen = new Set<string>()
+
+  async deleteSessionContent(
+    sessionId: string,
+    _cwd?: string,
+    force = false,
+    protectedIds?: ReadonlySet<string>,
+  ): Promise<'deleted' | 'missing'> {
+    if (protectedIds !== undefined && protectedIds.has(sessionId)) {
+      for (const id of protectedIds) this.protectedSeen.add(id)
+      throw new ArchiveCleanupError('protected', `fake: ${sessionId} is protected`)
+    }
     const injected = this.consumeFailure(this.failDeletes, sessionId)
     if (injected !== null) {
       throw new ArchiveCleanupError(injected, `fake: delete failed for ${sessionId}`)
@@ -1266,4 +1279,129 @@ test('purge sweep G3: the per-run probe budget bounds one sweep, notes the trunc
   assert.equal(again.errors.length, 0)
   assert.equal(again.clearedOrphanMembers, 1)
   assert.equal(host.archived.size, 0)
+})
+
+// ---------------------------------------------------------------------------
+// protectSessionIds (2026-09 protection amendment): protection outranks every
+// liveness classification and `force`, matches the FULL subtree closure, and
+// can only ever shrink the deletion set.
+// ---------------------------------------------------------------------------
+
+/** Fixture: two independent archived trees (r1 → c1 → c1a, r2) plus a leaf. */
+function protectionHost(): FakeHost {
+  const host = new FakeHost()
+  host.archived.add('r1')
+  host.states.set('r1', state('r1'))
+  host.states.set('c1', subagent('c1', 'r1'))
+  host.states.set('c1a', subagent('c1a', 'c1'))
+  host.archived.add('r2')
+  host.states.set('r2', state('r2'))
+  return host
+}
+
+test('purge protection: a protected ROOT skips its whole tree and reports skippedProtected (membership kept)', async () => {
+  const host = protectionHost()
+  const core = new ArchiveCleanupCore(host)
+  const result = await core.purge(undefined, true, ['r1'])
+  assert.equal(result.skippedProtected, 1)
+  assert.equal(result.deletedSessions, 1, 'the unprotected tree is still deleted')
+  assert.equal(result.deletedSubagents, 0)
+  assert.deepEqual(host.deleteLog, ['r2'])
+  assert.equal(host.archived.has('r1'), true, 'the protected tree keeps its membership')
+  assert.equal(host.removedFromArchived.includes('r1'), false)
+  assert.equal(result.errors.length, 0)
+})
+
+test('purge protection: a protected SUBAGENT descendant protects its archived ancestor tree (closure match, not id match)', async () => {
+  const host = protectionHost()
+  const core = new ArchiveCleanupCore(host)
+  const result = await core.purge(['r1'], true, ['c1a'])
+  assert.equal(result.skippedProtected, 1)
+  assert.equal(result.deletedSessions, 0)
+  assert.deepEqual(host.deleteLog, [], 'no member of the protected closure is cut')
+  assert.equal(host.archived.has('r1'), true)
+})
+
+test('purge protection outranks running and loaded: the tree is counted protected, not skipped for liveness', async () => {
+  const host = protectionHost()
+  host.live.add('c1')
+  const core = new ArchiveCleanupCore(host)
+  const running = await core.purge(['r1'], true, ['c1a'])
+  assert.equal(running.skippedProtected, 1)
+  assert.equal(running.skippedRunning, 0)
+  assert.equal(running.skippedLoaded, 0)
+
+  const loadedHost = protectionHost()
+  loadedHost.loaded.add('r1')
+  const loaded = await new ArchiveCleanupCore(loadedHost).purge(['r1'], true, ['r1'])
+  assert.equal(loaded.skippedProtected, 1)
+  assert.equal(loaded.skippedLoaded, 0)
+  assert.equal(loaded.forcedLoaded, 0)
+  assert.deepEqual(loadedHost.deleteLog, [])
+})
+
+test('purge protection: unknown / non-archived protected ids are silent no-ops (fail-closed direction only)', async () => {
+  const host = protectionHost()
+  const core = new ArchiveCleanupCore(host)
+  const result = await core.purge(['r2'], true, ['never-archived', 'r1'])
+  assert.equal(result.deletedSessions, 1)
+  assert.equal(result.skippedProtected, 0, 'a protected id outside the candidate set is not a skip')
+  assert.deepEqual(host.deleteLog, ['r2'])
+  assert.equal(result.errors.length, 0)
+})
+
+test('purge protection: a protected ORPHAN member is never swept and never removed from the archived set', async () => {
+  const host = new FakeHost()
+  host.archived.add('keeper')
+  host.states.set('keeper', state('keeper'))
+  host.archived.add('ghost-protected')
+  const core = new ArchiveCleanupCore(host)
+  const result = await core.purge(['keeper'], true, ['ghost-protected'])
+  assert.equal(result.deletedSessions, 1)
+  assert.equal(result.clearedOrphanMembers, undefined)
+  assert.equal(host.archived.has('ghost-protected'), true, 'the sweep must not clear a protected membership')
+  assert.deepEqual(host.removalCalls, [['keeper']])
+})
+
+test('purge protection: a protected tree injected into the plan is skipped BEFORE any member deletion (tree-level re-check)', async () => {
+  const host = protectionHost()
+  // Simulate a plan bug: force the protected tree into plan.trees and assert
+  // the tree-level re-check refuses to START deleting it (no prefix deletions).
+  const core = new ArchiveCleanupCore(host)
+  const original = core['resolvePlan'].bind(core)
+  core['resolvePlan'] = ((...args: Parameters<typeof original>) => {
+    const plan = original(...args)
+    const tree = resolveDeletableTree('r1', host.states, indexChildren([...host.states.values()]), { running: host.live, loaded: host.loaded }, true)
+    if (tree !== null) plan.trees.unshift(tree)
+    return plan
+  }) as typeof core['resolvePlan']
+  const result = await core.purge(['r1'], true, ['r1'])
+  assert.deepEqual(host.deleteLog, [], 'no member of the injected protected tree is cut')
+  // 2 = the plan-level skip of the real candidate + the injected duplicate's
+  // tree-level refusal (the violation the re-check exists for).
+  assert.equal(result.skippedProtected, 2)
+  assert.equal(result.errors.length, 1)
+  assert.equal(result.errors[0]?.code, 'archive-set')
+  assert.match(result.errors[0]?.message ?? '', /invariant violation/)
+})
+
+test('purge protection: malformed / oversized protected filters refuse before any authoritative read', async () => {
+  const host = protectionHost()
+  const core = new ArchiveCleanupCore(host)
+  const isInvalid = (error: unknown): boolean => error instanceof ArchiveCleanupError && error.code === 'invalid-request'
+  await assert.rejects(core.purge(undefined, true, ['']), isInvalid)
+  await assert.rejects(core.purge(undefined, true, ['ok', 7 as unknown as string]), isInvalid)
+  await assert.rejects(core.purge(undefined, true, new Array(MAX_PURGE_SESSIONS + 1).fill('x')), isInvalid)
+  assert.equal(host.stateReadAttempts, 0, 'validation runs before the corpus read')
+  assert.equal(host.archivedListCalls, 0)
+  assert.deepEqual(host.deleteLog, [])
+})
+
+test('purge protection: an empty protected set keeps the historical behavior byte-for-byte', async () => {
+  const withEmpty = protectionHost()
+  const withoutArg = protectionHost()
+  const a = await new ArchiveCleanupCore(withEmpty).purge(undefined, true, [])
+  const b = await new ArchiveCleanupCore(withoutArg).purge(undefined, true)
+  assert.deepEqual(a, b)
+  assert.equal(a.skippedProtected, 0)
 })

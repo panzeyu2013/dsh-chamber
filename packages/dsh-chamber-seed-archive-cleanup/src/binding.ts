@@ -431,8 +431,24 @@ export function makeHostBinding(ctx: HostCtxServices): ArchiveCleanupHost {
       }
     },
 
-    async deleteSessionContent(sessionId: string, cwd?: string, force = false) {
+    async deleteSessionContent(
+      sessionId: string,
+      cwd?: string,
+      force = false,
+      protectedIds?: ReadonlySet<string>,
+    ) {
       try {
+        // INVARIANT GUARD (2026-09 protection amendment): the core's plan
+        // already skips every tree whose closure contains a protected id, so
+        // this can only fire on a core bug — and then it MUST abort, never
+        // delete. It sits on the deletion primitive itself so no future caller
+        // can route around the skip.
+        if (protectedIds?.has(sessionId) === true) {
+          throw new ArchiveCleanupError(
+            'protected',
+            `archiveCleanup: refusing to delete ${sessionId}: it is in the run's protected set (client-displayed session)`,
+          )
+        }
         // Live guard at deletion time (interface contract): never delete a
         // session that is RUNNING; a merely loaded (idle) session is refused
         // unless the caller authorized `force` (2026-09 revision — the caller
