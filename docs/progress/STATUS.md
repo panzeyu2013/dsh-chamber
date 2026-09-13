@@ -320,9 +320,10 @@
   同会话内联重命名不打断、打包态。
 - **open-in 超集分批口径（2026-09-11 复核裁决，design 20 §7.2）**：官方两份原先都没有"无应用出口"
   与"第二入口"（上游客户端只有一处槽位注册、无剪贴板面，读取失败即不渲染按钮），因此这两项是
-  新增能力而非缺失回填。裁决：**S3 收窄为「复制路径」**（侧栏既有 `HoverCard` 复制模式
-  ——会话行本体 `ServerSection.tsx:2054`，其 `copyText` 在 `:2073`（2026-09-11
-  review-fix 复核引文）——+ 会话行已带
+  新增能力而非缺失回填。裁决：**S3 收窄为「复制路径」**（侧栏既有悬停卡复制模式
+  ——会话行本体 `ServerSection.tsx:2088`，其 `copyText` 在 `:2107`（复制的值是
+  **会话标题** `sessionTitleText`，不是路径；workspace 卡刻意只读，见下文偏差条）
+  ——+ 会话行已带
   `SessionRow.cwd`（`shared/instance-api.ts`）⇒ 零新 IPC、
   纯渲染层）；**复制 `ssh user@host` / VS Code 深链与 S4（侧栏入口、快捷键）不做** —— 依据：
   header 按钮与目标会话同排相邻（侧栏再放一个入口对主流程零增量；会话行的动作已全在
@@ -616,30 +617,35 @@
 - **侧栏行悬停卡片由本仓自持（2026-09-13 登记，偏差；上游修掉竞态即可退役）**：
   workspace 头与会话行的 hover 卡片不再直接用 vendor 的 `ui-primitives/HoverCard`，
   改由 `packages/dsh-chamber-client-ui-sidebar/src/client/RowHoverCard.tsx` 渲染，
-  开合状态机在 `packages/dsh-chamber-client-ui-sidebar/src/shared/hover-intent.ts`。
-  不可回避的原因：vendor 版的开合以**上一次已提交的 `open`** 为准
+  开合状态机在 `.../src/shared/hover-intent.ts`。不可回避的原因：vendor 版是否
+  arm 宽限关闭由**上一次已提交的 `open`** 决定
   （`vendor/harness-checkout/packages/client/ui-primitives/src/HoverCard.tsx:183-188`：
   `clearTimer()` + `if (open) armClose()`），而本仓每个实例是一个大 React root
   （流式会话 + 侧栏 poll/`now` 轮询 + N-ctx 多壳共用调度器），dwell 定时器触发到
-  提交之间可差数十毫秒（实测 dwell→落笔：空闲 502–504ms，主线程忙 501–551ms）；
-  落在该窗口内的 pointerleave 什么也没 arm，卡片随后挂载而指针已经离开 ⇒ 再无
-  指针事件能关掉它，只能靠「再悬停该行并移开」清除。复现手法（CDP，无需改代码）：
-  在行元素上派发 `pointerover`，延时 496–510ms 派发 `pointerout`，然后统计
-  `document.body` 下 `position:fixed / width:244px / z-index:100` 的卡片是否残留
-  ——vendor 版 45 次采样残留 7 次（全部落在 496–510ms 这一带），本仓版本 0/45。
-  卡片盒（244 宽 / r12 / pad 12-16 / `--dsw-shadow-lv3` / `#2C2C2E`）、8px 右偏移、
-  上下夹取、200ms 宽限、按下即收与「点卡片复制」契约逐项照搬官方实现，故这是
-  **状态机替换**而非外观重做（design 06 §7 已同步修订）。机器同时是**唯一事实源**
-  （`isOpen()`/`subscribe`，组件经 `useSyncExternalStore` 渲染），因此还堵住了反向
-  错序：press/owner 禁用 与 dwell 的 open 互相错序提交时，卡片不会挂载成
-  「机器认为已关、之后所有 close 都成 no-op」的残留。相对官方原子另有**两处有意增量**：
-  ①同一文档只允许一张行卡片可见（页面级 slot；后开者关先开者，同时是「leave 根本没送达」
-  的自愈路径——窗口失焦、壳被隐藏/遮挡、列表在静止指针下移动）；②窗口 blur / 文档 hidden
-  关闭可见卡片（指针停在行上切走应用时浏览器不保证补发边界事件）。验证：
-  `node test/hover-intent.test.ts`（钉住「leave 落在提交窗口也不残留」、同页互斥、
-  slot 释放）、`node test/hover-card-wiring.test.ts`（钉住两处行卡片不再回到 vendor
-  原子、机器保持页面级 slot 与 blur/hidden 关闭）、GUI 走查 `W-4b`
-  （真实指针：悬停升起一张、移开消失），判据在两处均有登记。
+  提交之间可差数十毫秒；落在该窗口内的 pointerleave 什么也没 arm，卡片随后挂载而
+  指针已经离开 ⇒ 再无指针事件能关掉它，只能靠「再悬停该行并移开」清除。这是
+  **状态机替换**而非外观重做（卡盒 / 8px 偏移 / 宽限 / 按下即收 / 复制会话标题的
+  契约与上游等价；机器是**唯一事实源**：`isOpen()`/`subscribe`，组件经
+  `useSyncExternalStore` 渲染，故也不存在 press/禁用 与 dwell 的 open 错序提交的
+  反向残留）。有意保留的偏差与两处内容差异逐条见 design 06 §7，要点：页面级单卡
+  （后开者关先开者——这是「leave 根本没送达」的兜底，但**只在另一张卡打开时**生效：
+  承载该行的壳被隐藏/遮挡自身不会关卡片，N-ctx 视图隐藏另有 `dismissVisibleRowCard()`
+  收口）、窗口 blur / 文档 hidden 关闭、垂直不设上缘地板且锚点滚出视口即关、
+  `ResizeObserver` 重算定位、关闭路径自增 copyEpoch（上游 `close()` 的同一动作，
+  此前移植漏了它）；workspace 卡只读（投影无 path/createdAt ⇒ 上游「点卡复制 cwd」
+  入口连同其 a11y/键盘复制一并缺失），会话卡状态行 0–1（上游 1–2 且含常驻 idle 行）。
+  **退役条件 = 上游修掉该竞态**；判定已机器化：`scripts/dev/verify-upstream-touchpoints.mjs`
+  **C11**（登记行 = `docs/checklists/upstream-touchpoints.md` §4）在冻结 pin 上断言
+  竞态形状仍在 + 两个时间常数与 chamber 侧逐值锁步，形状一漂移或常数一失步即硬失败，
+  强制退役/再登记裁决——**上游一旦修掉，升级 pin 时本门先红**（登记时复核：上游
+  master 上 `HoverCard.tsx`/`pointer-grace.ts` 与 pin 逐字节一致，故偏差仍成立）。
+  仓内证据：单测 `packages/dsh-chamber-client-ui-sidebar/test/hover-intent.test.ts`
+  （提交窗口内 leave 也必然收、同页互斥、slot 释放）与 `.../test/hover-card-wiring.test.ts`；
+  实机走查 `scripts/gui-acceptance/walkthrough.mjs` 的 W-4b / **W-4b-race**（dwell+band
+  内移开不搁浅）/ W-4b-swap（互斥与自愈）/ W-4b-dismiss（blur/hidden 清卡，监听接线），
+  判据 = `scripts/gui-acceptance/checks.mjs` 的 `hoverCardVerdict`/`hoverRaceVerdict`。
+  早期定位用的 CDP 探针是未提交的临时脚本（`.tmp/` 已忽略），其速率/时延数字不作为
+  仓内证据。
 - **sidebar / layout 的 `bundle` 在 chamber 树内不可运行（2026-12 登记，偏差）**：
   两个包的 `tsdown.config.ts` 是官方客户端包模板的拷贝，导入的 `clientBundle` 属于
   **上游树**（`packages/client/tsdown.client.ts`，`packages/dsh-client-web/src/platform.ts:22`

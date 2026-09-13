@@ -10,14 +10,18 @@
  * Pinned here: the dwell boundary, the fire-time pointer-inside check that
  * cancels an open whose commit is still in flight, the UNCONDITIONAL grace
  * close (a pending or committed open always resolves closed once the pointer is
- * gone), re-entry inside the grace, press-dismiss, owner gating, and the
- * idempotent no-op close for a card that never opened.
+ * gone), re-entry inside the grace, press-dismiss, owner gating, the idempotent
+ * no-op close for a card that never opened, and `dismissVisibleRowCard()` — the
+ * page slot's external closer the renderer's view-hide path calls (a card
+ * portaled to `document.body` is not hidden by CSS-hiding the view that owns
+ * it).
  */
 
 import { afterEach, test, mock } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   createHoverIntent,
+  dismissVisibleRowCard,
   HOVER_CLOSE_GRACE_MS,
   HOVER_OPEN_DELAY_MS,
   type HoverIntent,
@@ -341,6 +345,74 @@ test('dispose frees the slot, so a card unmounted while open cannot dismiss the 
     mock.timers.tick(HOVER_OPEN_DELAY_MS)
     assert.equal(next.card, true)
     assert.deepEqual(unmounted.events, ['open'], 'the dead card must not be dismissed through a stale slot entry')
+  } finally {
+    mock.timers.reset()
+  }
+})
+
+test('dismissVisibleRowCard closes whichever card holds the page slot (the hidden-view closer)', () => {
+  mock.timers.enable({ apis: ['setTimeout'] })
+  try {
+    const h = harness()
+    h.intent.enter()
+    mock.timers.tick(HOVER_OPEN_DELAY_MS)
+    assert.equal(h.card, true)
+    // Called with NO handle: the card is portaled to document.body, so hiding
+    // the view that owns it delivers it no pointer event at all (DEFECT 3).
+    dismissVisibleRowCard()
+    assert.equal(h.card, false)
+    // Same close funnel as a leave/press: exactly one transition, published.
+    assert.deepEqual(h.events, ['open', 'close'])
+    // The slot was released, not just the card closed: a fresh enter opens
+    // again, and the dismissed machine can still take the slot.
+    h.intent.enter()
+    mock.timers.tick(HOVER_OPEN_DELAY_MS)
+    assert.equal(h.card, true)
+    assert.deepEqual(h.events, ['open', 'close', 'open'])
+  } finally {
+    mock.timers.reset()
+  }
+})
+
+test('dismissVisibleRowCard leaves a machine that does not hold the slot untouched', () => {
+  mock.timers.enable({ apis: ['setTimeout'] })
+  try {
+    const holder = harness()
+    const bystander = harness()
+    holder.intent.enter()
+    mock.timers.tick(HOVER_OPEN_DELAY_MS)
+    assert.equal(holder.card, true)
+    dismissVisibleRowCard()
+    assert.equal(holder.card, false)
+    assert.equal(bystander.card, false)
+    assert.deepEqual(bystander.events, [], 'a machine that never opened sees no transition')
+    // The bystander is fully functional afterwards: the closer closed one card,
+    // it did not disable the machine or corrupt the slot.
+    bystander.intent.enter()
+    mock.timers.tick(HOVER_OPEN_DELAY_MS)
+    assert.equal(bystander.card, true)
+    assert.deepEqual(bystander.events, ['open'])
+  } finally {
+    mock.timers.reset()
+  }
+})
+
+test('dismissVisibleRowCard is a no-op when nothing is open (and never claims the slot)', () => {
+  mock.timers.enable({ apis: ['setTimeout'] })
+  try {
+    const h = harness()
+    // The renderer calls it on every view-hide transition, including with no
+    // card on screen: it must not throw and must not take the slot itself.
+    dismissVisibleRowCard()
+    assert.deepEqual(h.events, [])
+    h.intent.enter()
+    mock.timers.tick(HOVER_OPEN_DELAY_MS)
+    assert.equal(h.card, true)
+    // The card that opened AFTER the no-op is the one a later dismiss closes —
+    // proof the no-op left `visibleCard` free rather than pointing at a corpse.
+    dismissVisibleRowCard()
+    assert.equal(h.card, false)
+    assert.deepEqual(h.events, ['open', 'close'])
   } finally {
     mock.timers.reset()
   }
