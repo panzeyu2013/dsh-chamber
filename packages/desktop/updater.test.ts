@@ -613,6 +613,113 @@ test('restartAndInstall arms quitAndInstall once the download completed (fire-an
   assert.equal(fake.quitAndInstallCalls, 1)
 })
 
+test('restartAndInstall fires the arming hook immediately before quitAndInstall, never on refusals', async () => {
+  // 2026-12 macOS close-order fix: the host's close-to-tray exception must be
+  // armed by the LAST synchronous instruction before quitAndInstall (macOS
+  // closes every window INSIDE that call), and only when the restart is really
+  // being armed — otherwise a refusal would arm a quit that never happens.
+  const fake = new FakeAutoUpdater()
+  const order: string[] = []
+  const controller = createUpdateController(
+    {
+      version: '0.1.5',
+      logger: silentLogger,
+      onQuitAndInstallArmed: () => order.push(`hook(quitAndInstallCalls=${fake.quitAndInstallCalls})`),
+    },
+    {
+      app: { isPackaged: true },
+      autoUpdater: fake,
+      platform: 'darwin',
+      linuxAppImage: null,
+      probeMacSignature: async () => true,
+    },
+  )
+  await new Promise(resolve => setTimeout(resolve, 0))
+  assert.equal(controller.state().installBlockedReason, null, 'the injected Developer ID probe cleared the mac gate')
+  fake.emit('update-available', { version: '0.2.0' })
+  assert.deepEqual(controller.restartAndInstall(), { ok: false, error: 'no downloaded update to install' })
+  assert.deepEqual(order, [], 'a phase refusal must never reach the hook')
+  fake.emit('update-downloaded', { version: '0.2.0' })
+  assert.deepEqual(controller.restartAndInstall(), { ok: true })
+  assert.deepEqual(order, ['hook(quitAndInstallCalls=0)'],
+    'the hook must run immediately BEFORE quitAndInstall — arming after the returned ok:true would be too late on macOS')
+  assert.equal(fake.quitAndInstallCalls, 1)
+  assert.deepEqual(controller.restartAndInstall(), { ok: false, error: 'restart already in progress' })
+  assert.equal(order.length, 1, 'the already-armed refusal must not re-fire the hook')
+})
+
+test('native autoUpdater before-quit-for-update is bridged to the host (close-order + quit fallback)', () => {
+  // 2026-12 macOS fix: Electron's native updater emits this INSIDE
+  // quitAndInstall(), before it closes every window — the host arms its
+  // close-to-tray exception and bounds the quit on it.
+  const fake = new FakeAutoUpdater()
+  const native = new EventEmitter()
+  const calls: string[] = []
+  createUpdateController(
+    { version: '0.1.5', logger: silentLogger, onNativeUpdaterQuitting: () => calls.push('native-quitting') },
+    {
+      app: { isPackaged: true },
+      autoUpdater: fake,
+      platform: 'darwin',
+      linuxAppImage: null,
+      nativeAutoUpdater: native,
+      probeMacSignature: async () => true,
+    },
+  )
+  assert.deepEqual(calls, [], 'the bridge must not fire without a native quit')
+  native.emit('before-quit-for-update')
+  native.emit('before-quit-for-update')
+  assert.deepEqual(calls, ['native-quitting', 'native-quitting'], 'every occurrence is reported (a late native quit must re-arm the host)')
+  // No callback (or no native updater at all — the Linux shape) is a silent
+  // no-op: the bridge must never manufacture host work on its own.
+  const other = new EventEmitter()
+  createUpdateController(
+    { version: '0.1.5', logger: silentLogger },
+    { app: { isPackaged: true }, autoUpdater: new FakeAutoUpdater(), platform: 'darwin', linuxAppImage: null, nativeAutoUpdater: other, probeMacSignature: async () => true },
+  )
+  other.emit('before-quit-for-update')
+})
+
+test('a native-updater subscription failure is loud but never breaks controller creation', () => {
+  const warnings: string[] = []
+  const controller = createUpdateController(
+    {
+      version: '0.1.5',
+      logger: { log: () => {}, warn: (...args: unknown[]) => warnings.push(args.join(' ')), error: () => {} },
+      onNativeUpdaterQuitting: () => { throw new Error('must never be reached') },
+    },
+    {
+      app: { isPackaged: false },
+      autoUpdater: new FakeAutoUpdater(),
+      platform: 'darwin',
+      linuxAppImage: null,
+      nativeAutoUpdater: { on() { throw new Error('no native updater here') } },
+    },
+  )
+  assert.equal(controller.state().phase, 'idle', 'the controller still works — the hook path covers the click itself')
+  assert.ok(warnings.some(line => line.includes('无法订阅原生更新器退出事件')), 'the failure is logged, not swallowed')
+})
+
+test('real-electron resolution is guarded: the electron package is never loaded outside the Electron runtime', () => {
+  // The `electron` npm specifier, when its dist/ is absent (the shared-dist
+  // worktree shape), SPAWNS A ~100MB BINARY DOWNLOAD on load. Every real-value
+  // path in updater.ts is therefore gated: tests inject deps, and a wiring bug
+  // that reaches the real branch must fail loudly instead of downloading.
+  if (process.versions.electron !== undefined) return // inside Electron the real branch is the legitimate one
+  assert.throws(
+    () => createUpdateController({ version: '0.1.5', logger: silentLogger }),
+    /unavailable outside the Electron runtime/,
+    'a controller without injected deps must refuse to load the electron package',
+  )
+  // Requesting the native quit bridge without an injected native updater
+  // resolves to null (no bridge) instead of loading the package.
+  const controller = createUpdateController(
+    { version: '0.1.5', logger: silentLogger, onNativeUpdaterQuitting: () => {} },
+    { app: { isPackaged: false }, autoUpdater: new FakeAutoUpdater(), platform: 'linux', linuxAppImage: null },
+  )
+  assert.equal(controller.state().phase, 'idle')
+})
+
 test('restartAndInstall failure (sync throw) keeps the downloaded row and releases the single-flight', () => {
   const { fake, controller } = makeController()
   fake.emit('update-available', { version: '0.2.0' })
@@ -686,6 +793,24 @@ test('restartAndInstall: quitAndInstall returning false without an event is a no
   assert.deepEqual(controller.restartAndInstall(), { ok: true })
   assert.equal(fake.quitAndInstallCalls, 2)
   assert.equal(controller.state().restartFailureText, undefined, 'a successful re-arm clears the stale carry')
+})
+
+test('restartAndInstall: every post-hook not-armed result republishes, even over a stale carry (host release rule)', () => {
+  // The host's close-to-tray exception (2026-12 macOS fix) is armed by the
+  // hook and released by a restartFailureText PUSH. A silent falsy return with
+  // a stale carry standing must therefore still publish — otherwise a host
+  // latch keyed on the push would stay armed forever.
+  const { fake, controller } = makeController()
+  fake.emit('update-downloaded', { version: '0.2.0' })
+  let publishes = 0
+  controller.subscribe(state => { if (state.restartFailureText !== undefined) publishes += 1 })
+  fake.quitAndInstallResult = false
+  assert.equal(controller.restartAndInstall().ok, false)
+  assert.equal(publishes, 1)
+  // The stale carry is still standing (only a successful arm clears it) — the
+  // second refusal must publish again instead of reusing it silently.
+  assert.equal(controller.restartAndInstall().ok, false)
+  assert.equal(publishes, 2, 'a post-hook refusal must always publish, never hide behind an earlier carry')
 })
 
 test('restartAndInstall: quitAndInstall dispatching error mid-call (real 6.8.9 sync shape) is a not-armed failure with the dispatched text', () => {

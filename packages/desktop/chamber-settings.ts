@@ -346,13 +346,28 @@ export function computeSupported(
  * is hide-to-tray, a recovery surface exists (tray on win/linux; Dock on
  * macOS), and no real quit is in flight. Never hide a window the user could
  * not get back to.
+ *
+ * `updateRestartArmed` (2026-12): the「重启并安装」leg has armed
+ * electron-updater's `quitAndInstall()` and the updater itself is closing the
+ * windows on its way out. That close MUST reach the window manager: on macOS
+ * Electron's `quitAndInstall()` closes every window FIRST and only quits after
+ * all of them are closed (`before-quit` therefore runs AFTER this close — the
+ * Electron 43.4.0 typings say so verbatim, and a real-machine probe on
+ * 43.4.0/darwin confirmed the `autoUpdater` `before-quit-for-update` event and
+ * the window `close` both arrive inside the `quitAndInstall()` call, before it
+ * returns and long before `before-quit`). A close swallowed here (hidden
+ * instead of closed) therefore aborts the whole install/relaunch chain: the
+ * page disappears, the process — with its local dsh child and SSH tunnels —
+ * stays alive forever, and the update never installs. While an update restart
+ * is armed this decision is always false, whatever `quitRequested` says.
  */
 export function shouldHideToTray(
   behavior: WindowCloseBehavior,
   recoveryAvailable: boolean,
   quitRequested: boolean,
+  updateRestartArmed = false,
 ): boolean {
-  return behavior === 'hide-to-tray' && recoveryAvailable && !quitRequested;
+  return behavior === 'hide-to-tray' && recoveryAvailable && !quitRequested && !updateRestartArmed;
 }
 
 /**

@@ -109,8 +109,10 @@
   restart 窗口前端重连；Windows 只读投影。
 - **桌面端更新（design 11 §9）**：用真实 Apple 凭据跑通一次发布 CI（Developer ID
   签名/公证/stapling/Gatekeeper）+ 双平台检查清单（确认前不下载、下载后退出安装、
-  mac quitAndInstall 原生 quit 语义断言）+ 打包态 quitAndInstall 端到端与缓存清理
-  （Linux AppImage 更新端到端另见 design 22 清单）。正式 macOS 发布缺凭据会在 Release
+  mac quitAndInstall 原生 quit 语义断言：窗口真正关闭、will-quit 清理先于新版本
+  启动、无孤儿进程、退出码 0、新版本自动启动）+ 打包态 quitAndInstall 端到端与缓存清理
+  （Linux AppImage 更新端到端另见 design 22 清单）；**签名正式包**上的端到端仍待
+  实机确证。正式 macOS 发布缺凭据会在 Release
   mutation 前阻断；仅 `dry_run` 允许 ad-hoc mac 构建。
 - **认证服务端 Gateway（design 17）**：剩余发布前实机门禁——生产 TLS 反代
   Host/Origin/XFF/Secure-cookie 与 SPKI pin 正/负例、真实 dsh `/api/remote.mux`

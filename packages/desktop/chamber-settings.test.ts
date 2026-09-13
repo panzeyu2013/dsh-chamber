@@ -305,6 +305,16 @@ test('shouldHideToTray: needs behavior + recovery surface + no quit in flight', 
   assert.equal(shouldHideToTray('quit', true, false), false);
 });
 
+test('shouldHideToTray: an armed update restart never hides (macOS quitAndInstall closes windows first)', () => {
+  // macOS: electron-updater's quitAndInstall closes every window BEFORE
+  // before-quit runs, so a hide here aborts the install/relaunch and leaves
+  // the process alive with no window (the 2026-12 real-machine defect).
+  assert.equal(shouldHideToTray('hide-to-tray', true, false, true), false, 'armed restart → the close must reach the window manager');
+  assert.equal(shouldHideToTray('hide-to-tray', true, true, true), false);
+  assert.equal(shouldHideToTray('hide-to-tray', true, false, false), true, 'not armed → normal hide-to-tray behavior');
+  assert.equal(shouldHideToTray('quit', true, false, true), false);
+});
+
 test('computeQuitRisk: only a running local instance triggers confirm (2026-08: remote tunnels never prompt)', () => {
   const local = computeQuitRisk({ quitConfirmation: true, localRunning: true, updateDownloadReady: false });
   assert.equal(local.needsConfirm, true);
