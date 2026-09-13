@@ -112,7 +112,9 @@ function getRealAutoUpdater(): AutoUpdaterLike {
 // this module there (the named export does not exist) and a dynamic one
 // yields undefined; require() returns the real electron module in the
 // Electron runtime and the path string under plain node (`app` → undefined)
-// — either way it never throws. Also resolved LAZILY: an injected test never
+// — require() itself never throws on either path. (The HARD GUARD below is a
+// deliberate throw of OUR OWN, not a property of resolving the specifier —
+// 2026-09-13 review C5.) Also resolved LAZILY: an injected test never
 // touches the real app.
 //
 // HARD GUARD (2026-12): the `electron` SPECIFIER must never be required
@@ -873,7 +875,18 @@ export function createUpdateController(options: UpdateControllerOptions, deps?: 
   // failures are loud-but-harmless: the arming hook still covers the click.
   if (nativeAutoUpdater !== null) {
     try {
-      nativeAutoUpdater.on('before-quit-for-update', () => options.onNativeUpdaterQuitting?.())
+      nativeAutoUpdater.on('before-quit-for-update', () => {
+        // The quit leg is REAL: the native updater is closing the windows on its
+        // way out, so the no-event stall watchdog must stand down FIRST. Its 60s
+        // deadline is anchored on the CLICK while the host's quit fallback is
+        // anchored on THIS event; a slow native staging (e.g. the event arriving
+        // 56s after the click) would otherwise let the watchdog fire during the
+        // quit leg, publish a stall, and make the host release the arming — which
+        // cancels the only thing that finishes the quit (2026-09-13 review B4:
+        // staged update not installed, window restored mid-exit).
+        clearRestartWatchdog()
+        options.onNativeUpdaterQuitting?.()
+      })
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       logger.warn('[updater] 无法订阅原生更新器退出事件（本次重启只能依赖 arming hook）：', sanitizeErrorText(message))

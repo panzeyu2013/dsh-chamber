@@ -680,6 +680,41 @@ test('native autoUpdater before-quit-for-update is bridged to the host (close-or
   other.emit('before-quit-for-update')
 })
 
+test('the native quit event stands the stall watchdog down (B4: the two deadlines are anchored differently)', async () => {
+  // The stall watchdog is armed on the CLICK; the host's quit fallback is armed
+  // on THIS native event. A slow native staging can therefore land the event
+  // inside the watchdog's last seconds — and a watchdog that fires mid-exit
+  // would publish a stall and make the host release the arming, cancelling the
+  // only thing that finishes the quit (staged update never installed, window
+  // restored during the exit).
+  const fake = new FakeAutoUpdater()
+  const native = new EventEmitter()
+  const calls: string[] = []
+  const controller = createUpdateController(
+    { version: '0.1.5', logger: silentLogger, onNativeUpdaterQuitting: () => calls.push('native-quitting') },
+    {
+      app: { isPackaged: true },
+      autoUpdater: fake,
+      platform: 'darwin',
+      linuxAppImage: null,
+      nativeAutoUpdater: native,
+      probeMacSignature: async () => true,
+      restartWatchdogMs: 40,
+    },
+  )
+  assert.equal(await waitFor(() => controller.state().installBlockedReason === null), true,
+    'the injected mac signature probe must clear the install block')
+  fake.emit('update-downloaded', { version: '0.2.0' })
+  assert.deepEqual(controller.restartAndInstall(), { ok: true }, 'the restart arms the fallback path')
+  native.emit('before-quit-for-update')
+  assert.deepEqual(calls, ['native-quitting'], 'the host is still told the native leg is quitting')
+  // Well past the grace: an uncleared watchdog would have pushed the stall text.
+  await new Promise(resolve => setTimeout(resolve, 140))
+  assert.equal(controller.state().restartFailureText, undefined,
+    'the native quit leg must not be reported as a stall — the watchdog has to be cleared on this event')
+  assert.deepEqual(controller.state().phase, 'downloaded')
+})
+
 test('a native-updater subscription failure is loud but never breaks controller creation', () => {
   const warnings: string[] = []
   const controller = createUpdateController(
