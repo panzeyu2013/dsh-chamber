@@ -900,7 +900,7 @@ ready——就绪窗口可达 90s），进度与结果经 `GET /chamber/runtime/
 
 | 路由 | 语义 |
 |---|---|
-| `GET /chamber/runtime/status` | 固定身份 `kind:'dsh-chamber-gateway-runtime'` + 实际生效版本/来源 tag（内建锚/用户选择/env）+ 状态机态 + pending + operation/restart + 失败记录（脱敏）+ restore/pre-rollback + 快照 + 安装进度 + 全分类磁盘统计 |
+| `GET /chamber/runtime/status` | 固定身份 `kind:'dsh-chamber-gateway-runtime'` + 实际生效版本/来源 tag（内建锚/用户选择/env）+ 状态机态 + pending + operation/restart + 失败记录（脱敏）+ restore/pre-rollback + 快照 + 安装进度 + 全分类磁盘统计。**该「实际生效版本」同时是插件安装代耦合校验的事实源**（design 21 §6.11 R2：官方 scope 安装必须与它精确同代，预发布字符串全等）——不得在插件写面另立版本读取路径 |
 | `GET /chamber/runtime/versions` | registry metadata（简略 packument）+ 全部有效缓存版本；离线仍返回缓存，当前 builtin 只标 active、不误标 cached |
 | `POST /chamber/runtime/select` | 绑定源/版本/tarball/SRI → 下载+SRI → pnpm `file:` install → prune → 冒烟 → 只读原子发布（异步 job，进度经 status 轮询） |
 | `POST /chamber/runtime/apply` | 置 pending（下次 gateway 重启应用） |
