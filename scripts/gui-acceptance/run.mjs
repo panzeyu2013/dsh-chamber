@@ -34,6 +34,7 @@ const { values } = parseArgs({
     'cp-port': { type: 'string', default: '17530' },
     'electron-arg': { type: 'string', multiple: true, default: [] },
     keep: { type: 'boolean', default: false },
+    'require-hover': { type: 'boolean', default: false },
     help: { type: 'boolean', default: false },
   },
   allowPositionals: false,
@@ -51,7 +52,8 @@ if (values.help) {
   --cdp-port <port>          CDP 端口（默认 9333）
   --cp-port <port>           --dev 的控制面端口（默认 17530）
   --electron-arg <arg>       追加 Electron 开关（可重复；沙箱内需 --electron-arg=--no-sandbox）
-  --keep                     --dev 结束后保留实例（默认关闭）`)
+  --keep                     --dev 结束后保留实例（默认关闭）
+  --require-hover            走查的 hover 腿必须真实执行：未执行（INFO）计为 FAIL（默认关闭）`)
   process.exit(0)
 }
 
@@ -62,6 +64,7 @@ const cpPort = Number(values['cp-port'])
 const sourceIds = values.sources === undefined ? undefined : values.sources.split(',').map(id => id.trim()).filter(Boolean)
 
 let failed = 0
+let info = 0
 let launched = null
 try {
   // --dev: the throwaway instance must exist before anything probes it.
@@ -91,8 +94,11 @@ try {
   if (mode === 'attach' || mode === 'dev') {
     // --dev runs on a throwaway instance: advancing the first-run wizard writes
     // only to that instance's own state. --attach never does (someone's real app).
-    const walked = await runWalkthrough({ cdpPort, outDir, advanceOnboarding: mode === 'dev' })
+    const walked = await runWalkthrough({
+      cdpPort, outDir, advanceOnboarding: mode === 'dev', requireHover: values['require-hover'],
+    })
     failed += walked.failed
+    info += walked.info
   }
 } finally {
   if (launched !== null && !values.keep) {
@@ -103,5 +109,8 @@ try {
   }
 }
 
-console.log(failed === 0 ? '\nGUI 验收：无 FAIL' : `\nGUI 验收：${failed} 项 FAIL`)
+// INFO means "not exercised": a green run must never read as full coverage, so
+// the count rides the summary. Exit-code semantics are unchanged (INFO ≠ FAIL).
+const infoNote = info === 0 ? '' : failed === 0 ? `（${info} 项 INFO 未执行）` : `（另有 ${info} 项 INFO 未执行）`
+console.log(failed === 0 ? `\nGUI 验收：无 FAIL${infoNote}` : `\nGUI 验收：${failed} 项 FAIL${infoNote}`)
 process.exit(failed === 0 ? 0 : 1)
