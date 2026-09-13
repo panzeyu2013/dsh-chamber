@@ -395,7 +395,7 @@ var ArchiveCleanupCore = class {
    * binding never re-enumerates the corpus. Completed roots (and any
    * archived descendants their completed trees covered) plus swept orphans
    * are removed from the archived set in a single official write after the
-   * whole run. The orphan sweep adds at most MAX_SWEEP_CONTENT_PROBES
+   * whole run — resident-retained roots are NOT (see RESIDENT RETENTION). The orphan sweep adds at most MAX_SWEEP_CONTENT_PROBES
    * single-id persistence reads (only for members that survived G1+G2).
    * Per-session failures land in `errors` (truncated at
    * MAX_PURGE_ERROR_RECORDS with `truncated`). The FIRST in-tree failure
@@ -412,6 +412,31 @@ var ArchiveCleanupCore = class {
    * member is still refused unconditionally (a live writer recreates a
    * header-less artifact through `open(path,"a")`, design 24 §3). Default
    * (absent) = the historical fail-closed behavior, byte-for-byte.
+   *
+   * RESIDENT RETENTION (2026-13 revision, design 24 §4 step 9): deleting the
+   * CONTENT of a session that is still attached to this process must not
+   * un-hide it. A completed tree whose liveness is `loaded`, or whose ROOT
+   * reported residency at its own deletion instant (a session attached after
+   * the tree recheck — e.g. opened by another client mid-run), keeps its
+   * archived membership and is reported in `residentRetainedRoots` instead of
+   * `completedRoots`, so it is excluded from the batched membership removal
+   * entirely (its covered archived descendants too). Rationale: the official
+   * session list is live-preferred (`sessionQuery.listSessions()` merges the
+   * durable scan with `ctx.sessions.list()`), so the row keeps being served
+   * after the files are gone; the archived set is what hides it on every
+   * surface. Clearing the membership there re-surfaced the just-deleted
+   * session in the workspace as an ordinary row (2026-13 user report). The
+   * guarantee is one-directional and fail-closed: retention only ever keeps a
+   * row hidden, never exposes one. Idempotent: a later run over content that
+   * is already gone reports 'missing' but retains again while the session
+   * stays resident; once the instance restarts the row is gone and the
+   * content-free members are converged by the orphan sweep below (they then
+   * have no record at all — a NON-live leftover may already be swept by an
+   * earlier run, while the still-resident member is excluded from the sweep
+   * for as long as it is live, so IT converges only after the process ends).
+   * NOTE: the run's batches never re-read the
+   * archived set, so a retained member stays archived exactly like a
+   * protected one.
    *
    * `protectSessionIds` (2026-09 contract amendment, replaces the retired
    * client-side pre-flight refusal): the ids the CALLING client may be
@@ -457,6 +482,7 @@ var ArchiveCleanupCore = class {
     };
     const completedRoots = [];
     const coveredArchivedMembers = [];
+    const residentRetainedRoots = [];
     for (const tree of plan.trees) {
       if (protectedIds.size > 0 && tree.order.some((member) => protectedIds.has(member))) {
         plan.skippedProtected += 1;
@@ -485,13 +511,17 @@ var ArchiveCleanupCore = class {
         continue;
       }
       let treeAborted = false;
+      let rootResident = false;
+      let rootDeleted = false;
       for (const sessionId of tree.order) {
         const state = statesBySession.get(sessionId);
         try {
-          const outcome = await this.host.deleteSessionContent(sessionId, state?.cwd, force, protectedIds);
+          const deletion = await this.host.deleteSessionContent(sessionId, state?.cwd, force, protectedIds);
           if (sessionId === tree.rootSessionId) {
-            if (outcome === "deleted") deletedSessions += 1;
-          } else if (outcome === "deleted") {
+            rootResident = deletion.resident;
+            rootDeleted = deletion.outcome === "deleted";
+            if (rootDeleted) deletedSessions += 1;
+          } else if (deletion.outcome === "deleted") {
             deletedSubagents += 1;
           }
           try {
@@ -512,8 +542,13 @@ var ArchiveCleanupCore = class {
       if (treeAborted) {
         continue;
       }
+      const retained = liveness === "loaded" || rootResident;
+      if (retained) {
+        residentRetainedRoots.push(tree.rootSessionId);
+        if (rootDeleted) forcedLoaded += 1;
+        continue;
+      }
       completedRoots.push(tree.rootSessionId);
-      if (liveness === "loaded") forcedLoaded += 1;
       for (const member of tree.order) {
         if (member !== tree.rootSessionId && archivedAtStart.has(member)) {
           coveredArchivedMembers.push(member);
@@ -572,7 +607,8 @@ var ArchiveCleanupCore = class {
       forcedLoaded,
       errors,
       ...truncated ? { truncated: true } : {},
-      ...clearedOrphanMembers > 0 ? { clearedOrphanMembers } : {}
+      ...clearedOrphanMembers > 0 ? { clearedOrphanMembers } : {},
+      ...residentRetainedRoots.length > 0 ? { residentRetainedRoots } : {}
     };
   }
 };
@@ -667,10 +703,21 @@ function liveSessionFacts(ctx) {
     loaded.add(id);
     if (status === "running") running.add(id);
   }
-  for (const session of ctx.sessions?.list?.() ?? []) {
-    if (session !== null && typeof session === "object" && typeof session.id === "string") {
-      loaded.add(String(session.id));
+  const sessions = ctx.sessions?.list?.();
+  if (sessions !== void 0 && !Array.isArray(sessions)) {
+    throw new ArchiveCleanupError(
+      "registry-unreadable",
+      "archiveCleanup: sessions.list() did not answer an array \u2014 refusing the read (a drifted live-store shape would hide attached sessions from the loaded guard)"
+    );
+  }
+  for (const session of sessions ?? []) {
+    if (session === null || typeof session !== "object" || typeof session.id !== "string") {
+      throw new ArchiveCleanupError(
+        "registry-unreadable",
+        "archiveCleanup: a live-store session entry has no string id \u2014 refusing the read (pinned-vendor drift)"
+      );
     }
+    loaded.add(String(session.id));
   }
   return { running, loaded };
 }
@@ -765,6 +812,7 @@ function makeHostBinding(ctx) {
           );
         }
         const facts = liveSessionFacts(ctx);
+        const resident = facts.loaded.has(sessionId);
         if (facts.running.has(sessionId)) {
           throw new ArchiveCleanupError("running", `archiveCleanup: ${sessionId} is running`);
         }
@@ -788,18 +836,18 @@ function makeHostBinding(ctx) {
           const headers = await listHeaders();
           header = headers.find((candidate) => candidate.id === sessionId);
         }
-        if (header === void 0) return "missing";
+        if (header === void 0) return { outcome: "missing", resident };
         const location = persistence.locate(header);
         const artifactPath = location?.path;
         if (typeof artifactPath !== "string" || artifactPath === "") {
-          return "missing";
+          return { outcome: "missing", resident };
         }
         const dir = dirname(artifactPath);
         const dirStat = await lstat(dir).catch((error) => {
           if (error.code === "ENOENT") return void 0;
           throw error;
         });
-        if (dirStat === void 0) return "missing";
+        if (dirStat === void 0) return { outcome: "missing", resident };
         if (dirStat.isSymbolicLink() || !dirStat.isDirectory()) {
           throw new ArchiveCleanupError("storage", `archiveCleanup: refusing a non-directory/symlinked session path for ${sessionId}`);
         }
@@ -821,7 +869,7 @@ function makeHostBinding(ctx) {
             `archiveCleanup: refusing to purge ${sessionId}: unrecognized entry ${entry.name} in the session directory (pinned-vendor layout drift \u2014 a partial purge would leave content behind)`
           );
         }
-        if (removable.length === 0) return "missing";
+        if (removable.length === 0) return { outcome: "missing", resident };
         for (const path of removable) {
           try {
             await rm(path, { force: false });
@@ -836,7 +884,7 @@ function makeHostBinding(ctx) {
           } catch {
           }
         }
-        return "deleted";
+        return { outcome: "deleted", resident };
       } catch (error) {
         if (error instanceof ArchiveCleanupError) throw error;
         throw new ArchiveCleanupError(
@@ -932,6 +980,9 @@ var ArchiveCleanupGateway = class extends (_a = TypertRemoteService, _preview_de
         skippedLoaded: value.skippedLoaded,
         skippedProtected: value.skippedProtected,
         forcedLoaded: value.forcedLoaded,
+        // 常驻保留（2026-13）：内容删了但会话仍活在本进程 ⇒ 成员关系保留、
+        // 行继续隐藏（直到该实例重启）。宿主审计必须能看到这条事实。
+        residentRetained: value.residentRetainedRoots?.length ?? 0,
         errorCount: value.errors.length
       });
       return value;

@@ -1877,6 +1877,31 @@
   text-overflow: ellipsis;
 }
 
+/* Residency tag (design 24 §4 step 9, 2026-13): this row's CONTENT was
+   deleted, but the session still lives in the instance process, so the host
+   kept its archived membership and the row stays hidden in the workspace
+   until that instance restarts. Informational ink only — it must read as
+   "done, waiting", never as an error (the deletion DID happen) and never as
+   an actionable control (there is nothing left to delete).
+   Layout (2026-13 review): the row is a nowrap flex line, so the tag must
+   YIELD before the title does — it is capped and ellipsized (full text on
+   hover via its title attribute), never a fixed block that squeezes the
+   session name off a narrow card. */
+.archiveManagerRowTag {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 45%;
+  padding: 0 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-secondary);
+  background: color-mix(in srgb, var(--dsw-alias-label-secondary) 10%, transparent);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* (The fold-toggle keyboard ring shares the .actionIcon:focus-visible
    constants table above — one rule list, no duplicate to sync.) */
 

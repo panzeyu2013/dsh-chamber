@@ -27,6 +27,13 @@ export const zh = {
   'archive.manager.groupSelectAria': '全选 / 取消全选「{title}」下已归档会话',
   'archive.manager.rowDeleteAria': '删除「{title}」',
   'archive.manager.rowUntitled': '未命名会话',
+  // 已清理但仍在本进程内存中的行（design 24 §4 step 9，2026-13 常驻保留修正）：
+  // 内容已删除、归档成员关系被保留（宿主仍供这一行），重启该实例后彻底消失。
+  'archive.manager.residentPurged': '内容已删除，待实例重启收敛',
+  // 行复选框的可访问名（a11y 复核 2026-13）：标签文本是独立 span，只会在浏览
+  // 模式被读到；聚焦复选框时必须把「已删除/待重启」一并播报，否则读屏用户看到的
+  // 只是"这行还在"。
+  'archive.manager.rowAriaResidentPurged': '「{title}」（内容已删除，待实例重启收敛）',
   'archive.manager.deleteSelected.one': '删除选中（{count}）',
   'archive.manager.deleteSelected.other': '删除选中（{count}）',
   'archive.manager.confirmSingle': '将永久删除已归档会话「{title}」及其子代理内容，此操作不可恢复。',
@@ -48,6 +55,9 @@ export const zh = {
   'archive.purge.note.protected': '已跳过 {count} 个归档树：其中包含你正在查看的会话（未删除——切换会话后重试，或稍后重试：归档后选中可能尚未清空）。',
   'archive.purge.note.deleted': '清理完成：删除 {sessions} 个会话 / {subagents} 个子代理内容。',
   'archive.purge.note.orphanMembers': '顺带清理了 {count} 条无内容的归档集合残留成员。',
+  // 2026-13 常驻保留修正：内容删了、但会话还活在实例进程里，宿主保留归档标记
+  // （行继续隐藏）——旧文案"强制删除"会让人以为列表里也没了。
+  'archive.purge.note.residentRetained': '其中 {count} 项内容已删除，但会话仍在本实例内存中——继续保持隐藏，重启该实例后彻底消失。',
   'archive.purge.note.forcedLoaded': '其中 {count} 项为进程内已加载的会话（强制删除）。',
   'archive.purge.note.skippedRunning': '已跳过 {count} 项仍在运行的会话（停止未生效；可稍后重试）。',
   'archive.purge.note.skippedLoaded': '已跳过 {count} 项本进程内已加载的会话（未删除）。',
@@ -176,6 +186,8 @@ export const en = {
   'archive.manager.groupSelectAria': 'Select / deselect all archived sessions in {title}',
   'archive.manager.rowDeleteAria': 'Delete "{title}"',
   'archive.manager.rowUntitled': 'Untitled session',
+  'archive.manager.residentPurged': 'Content deleted — clears when this instance restarts',
+  'archive.manager.rowAriaResidentPurged': '"{title}" (content deleted — clears when this instance restarts)',
   'archive.manager.deleteSelected.one': 'Delete selected ({count})',
   'archive.manager.deleteSelected.other': 'Delete selected ({count})',
   'archive.manager.confirmSingle': 'Permanently delete the archived session "{title}" and its subagent contents. This cannot be undone.',
@@ -190,6 +202,7 @@ export const en = {
   'archive.purge.note.protected': 'Skipped {count} archived tree(s): they contain the session you are viewing (not deleted — switch to another session and retry, or retry in a moment: the selection may not be cleared yet after archiving).',
   'archive.purge.note.deleted': 'Cleanup complete: deleted {sessions} session(s) / {subagents} subagent content(s).',
   'archive.purge.note.orphanMembers': 'Also cleared {count} record-less archived-set member(s) that had no content.',
+  'archive.purge.note.residentRetained': 'Content deleted for {count} of them, but those sessions are still in this instance\'s memory — they stay hidden and disappear for good once that instance restarts.',
   'archive.purge.note.forcedLoaded': '{count} of them were loaded in the process (force-deleted).',
   'archive.purge.note.skippedRunning': 'Skipped {count} session(s) that are still running (the stop did not take effect; retry later).',
   'archive.purge.note.skippedLoaded': 'Skipped {count} session(s) loaded in this process (not deleted).',
