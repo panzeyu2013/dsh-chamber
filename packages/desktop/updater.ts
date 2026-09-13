@@ -877,14 +877,25 @@ export function createUpdateController(options: UpdateControllerOptions, deps?: 
     try {
       nativeAutoUpdater.on('before-quit-for-update', () => {
         // The quit leg is REAL: the native updater is closing the windows on its
-        // way out, so the no-event stall watchdog must stand down FIRST. Its 60s
+        // way out, so the no-event stall watchdog must not fire DURING it. Its
         // deadline is anchored on the CLICK while the host's quit fallback is
-        // anchored on THIS event; a slow native staging (e.g. the event arriving
-        // 56s after the click) would otherwise let the watchdog fire during the
-        // quit leg, publish a stall, and make the host release the arming — which
+        // anchored on THIS event, so a slow native staging (e.g. the event
+        // arriving 56s after the click) would otherwise let the watchdog fire
+        // mid-exit, publish a stall, and make the host release the arming — which
         // cancels the only thing that finishes the quit (2026-09-13 review B4:
-        // staged update not installed, window restored mid-exit).
-        clearRestartWatchdog()
+        // staged update not installed, window restored during the exit).
+        //
+        // RE-ANCHOR, never disable (self-review round 2): this watchdog is the
+        // ONLY release for `restartInFlight` when the native leg neither quits
+        // nor errors — the `error` listener needs an event the macOS leg never
+        // emits. Clearing it outright left the single-flight armed forever
+        // whenever the leg stopped with the window alive (or the host declined
+        // to take over): the restart button then answered "restart already in
+        // progress" for the rest of the process, with no stall text and no retry.
+        // Restarting the same grace keeps both properties: it cannot fire inside
+        // the quit window, and a leg that never completes still ends in the
+        // honest stall surface with an in-place retry.
+        armRestartWatchdog()
         options.onNativeUpdaterQuitting?.()
       })
     } catch (error) {

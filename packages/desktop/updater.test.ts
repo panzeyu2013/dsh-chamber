@@ -680,13 +680,15 @@ test('native autoUpdater before-quit-for-update is bridged to the host (close-or
   other.emit('before-quit-for-update')
 })
 
-test('the native quit event stands the stall watchdog down (B4: the two deadlines are anchored differently)', async () => {
-  // The stall watchdog is armed on the CLICK; the host's quit fallback is armed
-  // on THIS native event. A slow native staging can therefore land the event
-  // inside the watchdog's last seconds — and a watchdog that fires mid-exit
-  // would publish a stall and make the host release the arming, cancelling the
-  // only thing that finishes the quit (staged update never installed, window
-  // restored during the exit).
+test('the native quit event RE-ANCHORS the stall watchdog: it must not fire mid-exit, but must still fire', async () => {
+  // Two properties, and a fix that only satisfies one is a bug:
+  //  (a) the Click-anchored 60s deadline must not land inside the native quit leg
+  //      (a stall push there makes the host release the arming and cancels the
+  //      only thing that finishes the quit — review B4);
+  //  (b) the watchdog stays the ONLY release for `restartInFlight` on a native leg
+  //      that neither quits nor errors, so it must still fire eventually —
+  //      disabling it leaves the restart button answering "already in progress"
+  //      for the rest of the process (self-review round 2).
   const fake = new FakeAutoUpdater()
   const native = new EventEmitter()
   const calls: string[] = []
@@ -699,20 +701,26 @@ test('the native quit event stands the stall watchdog down (B4: the two deadline
       linuxAppImage: null,
       nativeAutoUpdater: native,
       probeMacSignature: async () => true,
-      restartWatchdogMs: 40,
+      restartWatchdogMs: 1000,
     },
   )
   assert.equal(await waitFor(() => controller.state().installBlockedReason === null), true,
     'the injected mac signature probe must clear the install block')
   fake.emit('update-downloaded', { version: '0.2.0' })
   assert.deepEqual(controller.restartAndInstall(), { ok: true }, 'the restart arms the fallback path')
+  await new Promise(resolve => setTimeout(resolve, 600))
   native.emit('before-quit-for-update')
   assert.deepEqual(calls, ['native-quitting'], 'the host is still told the native leg is quitting')
-  // Well past the grace: an uncleared watchdog would have pushed the stall text.
-  await new Promise(resolve => setTimeout(resolve, 140))
+  // Past the CLICK-anchored deadline (1000ms), before the re-anchored one (1600ms).
+  await new Promise(resolve => setTimeout(resolve, 600))
   assert.equal(controller.state().restartFailureText, undefined,
-    'the native quit leg must not be reported as a stall — the watchdog has to be cleared on this event')
-  assert.deepEqual(controller.state().phase, 'downloaded')
+    'the watchdog must not publish a stall while the native quit leg is in flight — its deadline moves with the event')
+  // ...and it must still publish one: this is the flight's only release here.
+  assert.equal(await waitFor(() => controller.state().restartFailureText !== undefined), true,
+    'a native leg that never completes must still end in the honest stall surface')
+  assert.ok(controller.state().restartFailureText!.includes('stalled'), 'the watchdog text says the restart stalled')
+  assert.deepEqual(controller.restartAndInstall(), { ok: true },
+    'the release must leave an in-place retry available (never a permanently "in progress" restart)')
 })
 
 test('a native-updater subscription failure is loud but never breaks controller creation', () => {

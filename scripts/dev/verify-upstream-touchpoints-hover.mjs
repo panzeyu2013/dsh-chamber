@@ -518,23 +518,30 @@ function governedByCommittedOpen(body, at) {
  * identifier segment. Segment-wise (camelCase/underscore split) on purpose:
  * `pointerInside` / `insideRef` / `hoveringRef` all hit, while `disabled`,
  * `openDelayMs`, `clearTimer` and `cancelClose` — the identifiers the pinned
- * open path really uses — do not.
+ * open path really uses — do not. `current` is deliberately NOT in this list: a
+ * bare name containing it is not a pointer fact, and the ref-read rule below
+ * already covers every `x.current` that is actually READ.
  */
 const POINTER_PRESENCE_WORDS = new Set([
-  'inside', 'hover', 'hovering', 'hovered', 'within', 'present', 'current', 'over',
+  'inside', 'hover', 'hovering', 'hovered', 'within', 'present', 'over',
 ])
 
 /**
- * The pointer-presence signal in `text`, or null. A ref read (`x.current`) is
+ * The pointer-presence signal in `text`, or null. A ref READ (`x.current`) is
  * matched first because it is the characteristic shape of the fix — the pointer
  * flag has to be readable synchronously at dwell-fire time.
+ *
+ * A ref that is merely WRITTEN (`timerRef.current = null`, e.g. a callback
+ * clearing its own expired timer) is not a presence read and must not trip this
+ * rule: treating ordinary cleanup as "upstream fixed the race" would train the
+ * maintainer to weaken the gate (2026-09-13 round-2 self-review).
  * Scope note: only ever applied to a dwell timer's callback region, never to a
  * whole file — `pointer-grace.ts` reads `closeRef.current` legitimately.
  * @param {string} text - the dwell callback region (code-only).
  * @returns {string | null} the offending identifier/property read.
  */
 export function pointerPresenceSignal(text) {
-  const refRead = /\b[A-Za-z_$][\w$]*\s*\.\s*current\b/.exec(text)
+  const refRead = /\b[A-Za-z_$][\w$]*\s*\.\s*current\b(?!\s*=(?!=))/.exec(text)
   if (refRead !== null) return refRead[0]
   for (const match of text.matchAll(/[A-Za-z_$][\w$]*/g)) {
     const segments = match[0].split(/(?=[A-Z])|_/).filter((segment) => segment !== '')

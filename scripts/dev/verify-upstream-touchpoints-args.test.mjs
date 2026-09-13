@@ -345,6 +345,35 @@ test('C15 (OPEN side): a comment or a string naming an inside flag cannot trip t
   assert.equal(verdict.ok, true, verdict.failures.join('\n'))
 })
 
+test('C15 (OPEN side): clearing its own expired timer ref is cleanup, not a presence read', () => {
+  // The other false positive this rule must NOT have (round-2 self-review): an
+  // upstream refactor that nulls the expired timer ref inside the dwell callback
+  // is ordinary hygiene (`timerRef.current = null`). Failing the gate on it would
+  // push maintainers to weaken the gate instead of trusting it.
+  const text = withEnter(`      onPointerEnter={() => {
+        cancelClose()
+        if (open) return
+        clearTimer()
+        timerRef.current = setTimeout(() => { timerRef.current = null; setOpen(true) }, openDelayMs)
+      }}`)
+  const verdict = hoverPortVerdict(hoverSources({ upstreamHoverCard: { path: 'up/HoverCard.tsx', text } }))
+  assert.equal(verdict.ok, true, verdict.failures.join('\n'))
+})
+
+test('C15 (OPEN side): reading (not writing) a presence ref is still the fix shape', () => {
+  // …and the refinement must not have opened a hole: a READ of that ref is still
+  // the racy half being fixed, so the gate must still demand the decision.
+  const text = withEnter(`      onPointerEnter={() => {
+        cancelClose()
+        if (open) return
+        clearTimer()
+        timerRef.current = setTimeout(() => { if (!timerRef.current) return; setOpen(true) }, openDelayMs)
+      }}`)
+  const verdict = hoverPortVerdict(hoverSources({ upstreamHoverCard: { path: 'up/HoverCard.tsx', text } }))
+  assert.equal(verdict.ok, false, 'a guarded open must still force the retirement decision')
+  assert.match(verdict.failures.join('\n'), /竞态 OPEN 形状已变/)
+})
+
 test('C15 (OPEN side): a rewritten or ambiguous open path is drift, never a silent pass', () => {
   const rewritten = withEnter(`      onPointerEnter={() => {
         cancelClose()
