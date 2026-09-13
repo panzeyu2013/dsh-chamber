@@ -600,7 +600,11 @@ vendor 源码）+ 薄 Remote 门面（`index.ts`），编排逻辑：
   busy 整头 60% 变暗改为**仅复选框**变暗（折叠钮 busy 期仍可用，视图态）；
   purge 刷新卸载聚焦行后焦点落 body 的**回焦 panel 兜底 effect**（非 trap）；
   danger 动作 = 官方 Button outline + error ink；原生 checkbox +
-  accent-color（官方无 Checkbox 组件）；footer Button/icon/字体均走 alias token；
+  accent-color（官方无 Checkbox 组件）——**勾选取色 = dsh 业务蓝**
+  `--dsw-alias-state-business-primary`（2026-09 用户裁决：与设置页的"开/选中"态、
+  侧栏选中/完成未读蓝点同一语言；官方中性 `--dsw-alias-brand-primary` 浅色主题下
+  近黑，勾选态会发黑。证据：`sidebar-chamber.module.css .archiveManagerCheck`，
+  锁在 `test/batch2-visual-locks.test.ts`）；footer Button/icon/字体均走 alias token；
   spinner 13px（导航 12px）随所在行高；在途 spinner + `aria-busy`。
 - **运行结果内联呈现**（`role=status`/`role=alert`，zh 硬编码）：完成摘要
   （`deletedSessions+deletedSubagents > 0` 时「清理完成：删除 X 个会话 /

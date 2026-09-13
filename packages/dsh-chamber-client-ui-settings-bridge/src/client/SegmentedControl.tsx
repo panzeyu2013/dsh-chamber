@@ -28,9 +28,11 @@ const SEGMENT_GAP = 2
  * 滑块式分段单选（chamber 设置通用）：轨道内滑块滑向选中项，选中文字反白
  * （label-primary-foreground），未选中灰字。
  *
- * 选中填充为官方 `--dsw-alias-brand-primary`（2026-09 阶段 2 B-4 裁决，与官方
- * `Switch[aria-checked=true]` 同一语言：浅色中性近黑 / 深色中性近白）；几何仍是
- * chamber 档（26px 高 / 12px 字）。视觉语言参考官方 switch
+ * 选中填充为 dsh 业务蓝 `--dsw-alias-state-business-primary`
+ * （`--dsw-static-deepseek-500` / `-400`，浅色 #4176e6 / 深色 #679efe）——2026-09
+ * 用户裁决，撤销 2026-09 阶段 2 B-4 的「统一为官方中性 `--dsw-alias-brand-primary`」
+ * （该 token 浅色近黑 / 深色近白，浅色主题下选中态会发黑），与本页开关、复选框的
+ * "开"色统一；几何仍是 chamber 档（26px 高 / 12px 字）。视觉语言参考官方 switch
  * （SubagentModelSelectionCard）与发送按钮（InputBar .primary：
  * info-fill 蓝底 + 白字形）。
  *

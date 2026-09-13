@@ -87,14 +87,28 @@
     `aria-controls` 只在卡片存在时写，避免指向已不存在的 id）——包装 `<span>` 现在
     不带任何 ARIA，披露关系不静默丢失；未读角标开关不展开任何东西，直接用原语本身。
     收口仍需上游给原语加属性透传（届时删掉该模块）。
-  - **2026-09 阶段 2 收口（本页控件语言与几何）**：① 面板内容区最后一个**自绘动作
+  - **2026-09 阶段 2 收口（本页控件语言与几何；② 已由 2026-09 用户裁决撤销）**：① 面板内容区最后一个**自绘动作
     胶囊**「前往连接管理」也换成官方 `Button`（`variant="outline" size="sm"`，
     `SettingsShell.tsx` 的 `css.inlineAction` 只留布局 `margin-top/align-self`）——
     §D1（§1「所有动作胶囊是 `ui-primitives` `Button`」）至此无例外（壳 chrome 的
-    下拉触发器/选项行、三个 nav 单元、关闭钮与轨道触发器仍按 §1 自绘）；② 开关/单选的"开"色统一为官方
-    `--dsw-alias-brand-primary`（官方 `Switch[aria-checked=true]` 的语言，深色即中性
-    白），不再用 business 蓝——同页两种"开"色的问题消失；分段控件的**几何保持
-    chamber 档**（26px/12px），只换色；③ 面板头取官方 `SettingsRoot .header` 的**对齐**（`align-items:flex-start`）与
+    下拉触发器/选项行、三个 nav 单元、关闭钮与轨道触发器仍按 §1 自绘）；② 开关/单选的"开"色
+    **2026-09 用户裁决 = dsh 业务蓝** `--dsw-alias-state-business-primary`
+    （`--dsw-static-deepseek-500` / `-400`，浅色 #4176e6、深色 #679efe）——**撤销**
+    2026-09 阶段 2 的「统一为官方 `--dsw-alias-brand-primary`」：官方该 token 落在
+    中性档（浅色 `--dsw-static-neutral-bluish-1000` 近黑、深色
+    `--dsw-static-neutral-bluish-50` 近白），浅色主题下整页"开/选中"态发黑，与 dsh 蓝
+    相悖，也与侧栏选中态、Git 面板滑块的既有业务蓝语言不一致。落点：复选框
+    `accent-color`（`SettingsShell.module.css .generalCardCheck`）、分段滑块
+    （`SegmentedControl.module.css .thumb`）、官方 `Switch` 的开启轨道（同文件
+    `.panel [role='switch'][aria-checked='true']` 覆盖——特异性 0,3,0 胜过原语 0,2,0，
+    故不依赖打包顺序，且面板内由**来源自己 ctx** 渲染的官方分节同样覆盖；原语的
+    结构/轨道/thumb 位移/过渡/禁用透明度/焦点环一概保留）；连接页选中的筛选胶囊
+    （`ConnectionsSection.module.css .pluginPillActive`）与「dsh 运行时」段的进度填充
+    （两态：定宽 `.runtimeProgressBar` / 滑动条纹 `.runtimeProgressBarIndeterminate`；
+    6px 轨道仍是 `--dsw-alias-border-l2` 浅灰）同取该蓝。分段控件的
+    **几何保持 chamber 档**（26px/12px），只换色。锁：
+    `dsh-chamber-client-ui-settings-bridge/test/batch2-visual-locks.test.ts` 的
+    B-3/B-4（含开关覆盖规则本身）与进度填充两条；③ 面板头取官方 `SettingsRoot .header` 的**对齐**（`align-items:flex-start`）与
     54px 盒高（`justify-content:space-between` 保留），**纵向内距保留 chamber 的
     `12px 14px 10px`**：官方 `padding:20px 14px 8px 10px` 是围绕官方 26px 内容行
     写死的（54 = 20+8+26），我们的关闭控件 28px，照抄会变成 28+22 = **50px 内容盒

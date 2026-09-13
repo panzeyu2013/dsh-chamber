@@ -166,13 +166,38 @@ test('P2-A A-4: the server dropdown is chamber density on official chrome', () =
   pin('A-4 list', css, '.dropdownList', { 'border-radius': '20px' })
 })
 
-test('P2-B B-3/B-4: every "on" state uses the official neutral, at chamber geometry', () => {
-  pin('B-3 checkbox', css, '.generalCardCheck', { 'accent-color': 'var(--dsw-alias-brand-primary)' })
-  pin('B-4 segmented thumb', segmented, '.thumb', { background: 'var(--dsw-alias-brand-primary)' })
+test('B-3/B-4 (2026-09 user decision): every "on" state is the dsh business blue, at chamber geometry', () => {
+  // Reverses the phase-2 "one neutral on-language" pass: `--dsw-alias-brand-primary`
+  // is a NEUTRAL in the official palette (light `--dsw-static-neutral-bluish-1000`,
+  // dark `--dsw-static-neutral-bluish-50`), so a light-theme settings page painted
+  // every on/selected state near-black instead of dsh blue.
+  pin('B-3 checkbox', css, '.generalCardCheck', { 'accent-color': 'var(--dsw-alias-state-business-primary)' })
+  pin('B-4 segmented thumb', segmented, '.thumb', { background: 'var(--dsw-alias-state-business-primary)' })
+  // The official Switch primitive paints its checked track with that same neutral;
+  // the panel-scoped rule out-specifies the primitive's own `[aria-checked=true]`
+  // rule (0,3,0 vs 0,2,0, so build order cannot flip it) and covers the official
+  // sections the selected source's own ctx renders inside the panel.
+  pin('B-3 switch track', css, ".panel [role='switch'][aria-checked='true']", {
+    background: 'var(--dsw-alias-state-business-primary)',
+  })
   // Geometry must stay chamber's (the cancelled E3-C enlargement).
   pin('B-4 geometry', segmented, '.segment span', {
     height: '26px', 'font-size': '12px', 'line-height': '18px',
   })
+})
+
+test('2026-09 user decision: the runtime progress fill is the dsh business blue too', () => {
+  // The 「dsh 运行时」 segment's install/download progress fill (determinate and
+  // indeterminate) rides the same ruling as the on/selected states: the official
+  // neutral would paint a near-black bar in the light theme. The 6px track stays
+  // the neutral hairline token.
+  pin('progress fill', css, '.runtimeProgressBar', {
+    background: 'var(--dsw-alias-state-business-primary)',
+  })
+  pin('progress fill (indeterminate)', css, '.runtimeProgressBarIndeterminate', {
+    background: 'var(--dsw-alias-state-business-primary)',
+  })
+  pin('progress track', css, '.runtimeProgressTrack', { background: 'var(--dsw-alias-border-l2)' })
 })
 
 test('P2-B B-5/B-5b: official header alignment (at chamber height) and the official Button', () => {

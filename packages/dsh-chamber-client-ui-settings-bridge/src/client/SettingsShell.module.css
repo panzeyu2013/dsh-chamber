@@ -526,9 +526,12 @@
    Settings-panel design language, OpenChamber-style control groups: section
    title + intro, group headings (the connections-section groupHead
    vocabulary), compact cards + flat rows with label + hint, capsule buttons;
-   active states take the OFFICIAL business blue (--dsw-alias-state-business-
+   active states take the dsh business blue (--dsw-alias-state-business-
    primary, deepseek-500/400) — slider thumb, switch ON track, checkbox
-   accent; every color resolves through a `--dsw-alias-*` token. */
+   accent — 2026-09 用户裁决（撤销 2026-09 阶段 2 的"统一中性色"收口：官方
+   `--dsw-alias-brand-primary` 在中性档，浅色主题下整页"开"态会发黑）；switch
+   ON track 由本文件的 `.panel [role='switch'][aria-checked='true']` 覆盖官方原语。
+   Every color resolves through a `--dsw-alias-*` token. */
 
 .generalSection {
   display: flex;
@@ -613,7 +616,7 @@
 /* ---- 通用 section 布局（紧凑卡片网格 + 全宽行）----
    行范式为「文字在左/上、控件在右/下」的紧凑卡片：短开关组用双列卡片
    网格（.generalGrid + .generalCard，auto-fit 窄面板自动降列），单选对用
-   滑块式分段控件（SegmentedControl，选中态 = 官方 `brand-primary` 中性填充），通知事件开关
+   滑块式分段控件（SegmentedControl，选中态 = dsh 业务蓝，2026-09 用户裁决），通知事件开关
    用一行迷你卡片（.generalEventGrid）。卡片沿用官方设置面板的卡片词汇，
    但**不是**逐值复制：官方 `ModelsSection.rowCard` 实际是
    `border-l4 + r16 + 无底色`（本注释 2026-09 batch 1 E1 纠错，此前写成
@@ -669,18 +672,21 @@
   margin: 0;
 }
 
-/* 卡片内的复选框（原生 checkbox + accent token）：accent 用官方
-   `--dsw-alias-brand-primary`（2026-09 阶段 2 B-3 裁决，与页内滑块/开关的
-   "开/选中"色统一；浅色中性近黑、深色中性近白）。 */
+/* 卡片内的复选框（原生 checkbox + accent token）：accent 取 dsh 业务蓝
+   `--dsw-alias-state-business-primary`（`--dsw-static-deepseek-500` / `-400`，
+   浅色 #4176e6、深色 #679efe）。
+   2026-09 用户裁决：撤销 2026-09 阶段 2 B-3 的「统一为官方中性 brand-primary」。
+   官方 token 表里 `--dsw-alias-brand-primary` 是**中性色**（浅色
+   `--dsw-static-neutral-bluish-1000` 近黑、深色 `--dsw-static-neutral-bluish-50`
+   近白），照它取值会让浅色主题下整页的"开/选中"态发黑，而不是 dsh 蓝。本页的
+   复选框/分段滑块/开关与侧栏选中态、Git 面板滑块同取业务蓝（design 15 §D1②
+   已按同一裁决改回）。 */
 .generalCardCheck {
   flex: none;
   width: 16px;
   height: 16px;
   margin: 2px 0 0;
-  /* 2026-09 (P2-B, B-3): the official Switch paints its checked state with
-     `--dsw-alias-brand-primary` (a neutral in both themes), not the business
-     blue — one "on" language per surface. */
-  accent-color: var(--dsw-alias-brand-primary);
+  accent-color: var(--dsw-alias-state-business-primary);
   cursor: pointer;
 }
 
@@ -793,15 +799,35 @@
 
 /* ---- 通知主开关（2026-09-11 upstream-alignment T9）----
    开关本身是官方 ui-primitives `Switch`（36x20 轨道 / 16px thumb / 120ms /
-   aria-checked 选中色 = 品牌主色），本文件不再复制它的样式——原先的
+   aria-checked 选中色由原语自绘），本文件不复制它的样式——原先的
    .generalSwitchInput / .generalSwitch / .generalSwitchThumb 三件套（原生
    checkbox + role=switch + 手写轨道）已删除。这里只剩布局盒子，不带任何
    ARIA：披露关系（aria-expanded / aria-controls）由 DisclosureSwitch 写到
-   原语自己的 role=switch 按钮上（2026-09-11 review F3）。 */
+   原语自己的 role=switch 按钮上（2026-09-11 review F3）。
+   唯一的例外是"开"色：原语的选中轨道仍是官方中性
+   `--dsw-alias-brand-primary`，由下方 `.panel [role='switch'][aria-checked='true']`
+   一条规则重绘为业务蓝（2026-09 用户裁决），几何与其余状态依旧是原语的。 */
 
 .generalSwitchBox {
   flex: none;
   display: inline-flex;
+}
+
+/* 官方 `Switch` 原语的"开"色覆盖（2026-09 用户裁决，理由见 .generalCardCheck）：
+   原语自己的规则是 `[aria-checked=true]{background:var(--dsw-alias-brand-primary)}`
+   ——官方 token 表里那是中性色（浅色近黑、深色近白），与同页复选框/分段滑块的
+   业务蓝冲突（2026-09 阶段 2 曾反其道行之：把 chamber 自绘控件改成中性来迁就它，
+   结果浅色主题下整页"开"态发黑）。
+   这里在**面板范围内**重绘开启轨道，特异性 `.panel`(0,1,0) + `[role]`(0,1,0) +
+   `[aria-checked]`(0,1,0) = 0,3,0，胜过原语的 0,2,0，不依赖打包顺序；原语的结构、
+   36x20 轨道、thumb 位移、过渡、禁用透明度与焦点环一概保留（thumb 仍是
+   `--dsw-alias-label-primary-foreground`，在蓝底上即浅色主题白点/深色主题近黑点）。
+   作用域取面板而不是 chamber 自己的 `.generalSwitchBox`：面板里由**来源自己 ctx**
+   渲染的官方分节若带开关，也必须同色，否则同一页又是两种"开"色。
+   已知边界：文档级弹层（如首启 `settings.onboarding`，portal 到 `#root` 之外）
+   不在本作用域内，其内若有开关仍走上游中性。 */
+.panel [role='switch'][aria-checked='true'] {
+  background: var(--dsw-alias-state-business-primary);
 }
 
 .generalDisabled {
@@ -931,7 +957,12 @@
 }
 
 /* Live install progress: label above a slim track; determinate fill when the
-   registry declared content-length, sliding stripe otherwise. */
+   registry declared content-length, sliding stripe otherwise.
+   填充取色（2026-09 用户裁决，与复选框/分段滑块/开关同一裁决）：dsh 业务蓝
+   `--dsw-alias-state-business-primary`（`--dsw-static-deepseek-500` / `-400`），
+   不是官方中性 `--dsw-alias-brand-primary`——后者浅色主题下是近黑，下载/安装
+   进度会与"开/选中"态一起发黑。6px 轨道仍是 `--dsw-alias-border-l2` 浅灰；
+   定宽（有 content-length）与滑动条纹两态同色。 */
 .runtimeProgressBlock {
   display: flex;
   flex-direction: column;
@@ -955,7 +986,7 @@
 .runtimeProgressBar {
   height: 100%;
   border-radius: 3px;
-  background: var(--dsw-alias-brand-primary);
+  background: var(--dsw-alias-state-business-primary);
   transition: width .2s ease;
 }
 
@@ -966,7 +997,7 @@
   height: 100%;
   width: 40%;
   border-radius: 3px;
-  background: var(--dsw-alias-brand-primary);
+  background: var(--dsw-alias-state-business-primary);
   animation: runtimeProgressSlide 1.1s ease-in-out infinite;
 }
 

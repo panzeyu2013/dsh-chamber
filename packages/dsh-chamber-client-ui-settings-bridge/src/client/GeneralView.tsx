@@ -12,8 +12,9 @@
  * 运行 group is the three-column variant (.generalGridTriple — its three
  * short toggle cards stay on one row), the
  * two radio pairs (关闭窗口时 / 通知时机) render as slider-style segmented
- * controls (SegmentedControl: OFFICIAL business-blue thumb + inverted
- * selected text), the notification master toggle as the shared `Switch`
+ * controls (SegmentedControl: dsh business-blue thumb + inverted selected text,
+ * 2026-09 user decision — see SegmentedControl.tsx), the notification master
+ * toggle as the shared `Switch`
  * primitive (36x20 track + round thumb, role=switch, required accessible name —
  * 2026-09-11 upstream-alignment T9), and the three notification-event toggles
  * share one line of borderless rows (.generalEventRow). The notifications
