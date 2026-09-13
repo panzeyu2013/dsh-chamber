@@ -437,10 +437,70 @@
    connection-dot token (`.statusOk`), so completion and "server connected"
    painted one green. */
 
-/* Hover cards (official HoverCard port): the vendor primitive portals
-   the card to document.body with its own surface (#2C2C2E in both themes —
-   figma value, not a theme token); these classes style only the card CONTENT
-   (copy follows the official Rows.module.css hover-card treatment). */
+/* Row hover card (chamber-owned port, 2026-09-13): RowHoverCard portals the
+   card to document.body with the official HoverCard's card box — 244 wide, r12,
+   pad 12/16, the menu card's elevation, #2C2C2E in both themes (figma value,
+   not a theme token, exactly as ui-primitives/HoverCard.module.css declares
+   it). The atom is chamber-owned because the vendored one strands a card when
+   the pointer leaves inside its open-commit window; the measured defect is
+   documented in src/shared/hover-intent.ts. The card is hit-testable on
+   purpose: resting the pointer on it holds it open (the intent's grace close
+   dismisses it), and a press there starts a text selection instead of
+   dismissing. */
+.hoverAnchor {
+  position: relative;
+  display: block;
+}
+
+.hoverCard {
+  --chamber-hovercard-bg: #2C2C2E;
+  position: fixed;
+  z-index: 100;
+  box-sizing: border-box;
+  width: 244px;
+  padding: 12px 16px;
+  border-radius: 12px;
+  background: var(--chamber-hovercard-bg);
+  box-shadow: var(--dsw-shadow-lv3);
+}
+
+.hoverCardCopyable {
+  cursor: pointer;
+}
+
+.hoverCardCopyable:focus-visible {
+  outline: 2px solid var(--dsw-alias-state-business-primary);
+  outline-offset: 2px;
+}
+
+/* Copy feedback keeps the card's pre-copy height (the min-height inline style
+   pins the measured box), so the label swap cannot resize the card. */
+.hoverCardFeedback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.hoverCardCopied {
+  color: #FFFFFF;
+  font-size: 14px;
+  line-height: 20px;
+  text-align: center;
+}
+
+/* Announced-but-invisible copy status (the card content itself is not a live
+   region: its text is the row's own title, already read by the row). */
+.hoverCardStatus {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* Card CONTENT (the body every call site passes; copy follows the official
+   Rows.module.css hover-card treatment). */
 .hoverContent {
   display: flex;
   flex-direction: column;

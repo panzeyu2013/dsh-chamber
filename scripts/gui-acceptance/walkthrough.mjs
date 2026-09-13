@@ -19,7 +19,7 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { CdpSession, discoverPageTarget } from './cdp.mjs'
 import {
-  KNOWN_UPSTREAM_BOOT_NOISE, TOLERATED_REQUEST_FAILURES, createRecorder, partitionFailures,
+  KNOWN_UPSTREAM_BOOT_NOISE, TOLERATED_REQUEST_FAILURES, createRecorder, hoverCardVerdict, partitionFailures,
   renderMarkdown, summarizeNetFailures,
 } from './checks.mjs'
 
@@ -119,6 +119,33 @@ const CLICK_SIDEBAR_TOGGLE = `(() => {
   return before
 })()`
 
+
+/**
+ * A hoverable sidebar row, as a viewport point. Workspace headers and session
+ * rows are `[data-chamber-row][role="treeitem"]`; the source header deliberately
+ * carries no card and no treeitem role, so it is never selected here.
+ */
+const HOVER_ROW_POINT = `(() => {
+  const visible = el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 }
+  const rows = [...document.querySelectorAll('[data-chamber-row][role="treeitem"]')].filter(visible)
+  const fits = rows.find(el => {
+    const r = el.getBoundingClientRect()
+    return r.top > 4 && r.bottom < window.innerHeight - 8 && r.left >= 0 && r.right < window.innerWidth * 0.5
+  })
+  const row = fits ?? rows[0]
+  if (row === undefined) return null
+  row.scrollIntoView({ block: 'center' })
+  const r = row.getBoundingClientRect()
+  if (r.width <= 0 || r.height <= 0 || r.top < 0 || r.bottom > window.innerHeight) return null
+  return { x: Math.round(r.left + r.width * 0.6), y: Math.round(r.top + r.height / 2) }
+})()`
+
+/** Portaled row cards currently in the document (244px fixed card, z-index 100). */
+const CARD_COUNT = `[...document.body.querySelectorAll('*')].filter(el => {
+  const cs = getComputedStyle(el)
+  return cs.position === 'fixed' && Math.round(parseFloat(cs.width)) === 244 && cs.zIndex === '100'
+}).length`
+
 /**
  * Run the walkthrough.
  * @param opts.cdpPort CDP port of a dev instance (9333 by convention, scripts/perf/README.md)
@@ -199,6 +226,27 @@ export async function runWalkthrough({ cdpPort = 9333, outDir = '.tmp/gui-accept
     await sleep(settleMs)
     await shot('03b-sidebar-restored')
   }
+
+  // Row hover card (design 06 §7, id W-4b): dwelling on a cardable row raises
+  // one card and leaving clears it — the user-visible contract the chamber-owned
+  // atom exists for (a stranded card was the reported defect). Real pointer
+  // input: a synthetic DOM event would bypass the browser's own hit-testing.
+  const hoverPoint = await session.evaluate(HOVER_ROW_POINT)
+  const neutral = { x: Math.round(boot.viewport.width * 0.8), y: Math.round(boot.viewport.height * 0.7) }
+  let hoverFacts = { cardable: false, opened: null, closed: null }
+  if (hoverPoint !== null) {
+    await session.moveMouse(hoverPoint.x, hoverPoint.y)
+    await sleep(900)
+    const dwelling = await session.evaluate(CARD_COUNT)
+    await shot('03c-hover-card')
+    await session.moveMouse(neutral.x, neutral.y)
+    await sleep(700)
+    const afterLeave = await session.evaluate(CARD_COUNT)
+    hoverFacts = { cardable: true, opened: dwelling === 1, closed: afterLeave === 0 }
+  }
+  const hoverVerdict = hoverCardVerdict(hoverFacts)
+  rec.add('W-4b', '行悬停卡片：悬停升起、移开消失', hoverVerdict.ok,
+    `${hoverVerdict.evidence}${hoverPoint === null ? '' : ` point=${JSON.stringify(hoverPoint)}`}`)
 
   // Settings surface (skipped while a first-run modal still owns the screen).
   if (blockedByModal) {

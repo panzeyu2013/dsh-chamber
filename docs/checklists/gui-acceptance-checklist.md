@@ -47,6 +47,7 @@
 | 侧栏多来源结构（`[data-chamber-section]` / `[data-chamber-row]` / `[data-session-id]`） | `W-2` | design 05 §2、06 |
 | 首启模态可关闭/可走完（非首启记 INFO） | `W-3` | design 05 §5（onboarding 阶段） |
 | 侧栏折叠/展开（`aria-expanded` 导轨开关） | `W-4` | design 06（layout 持久化） |
+| 行悬停卡片：悬停升起一张、移开消失（实例无可悬停行时 INFO） | `W-4b` | design 06 §7（悬停卡片） |
 | 设置面从侧栏座席打开、插槽渲染且**无 `[data-slot-error]`** | `W-5`、`W-6` | design 05 §5（完整桥接） |
 | 设置导航项存在、每个设置页渲染内容、页面切换真的换内容 | `W-7`…`W-9` | design 05 §5 |
 | 真实 Escape 键关闭设置面 | `W-10` | design 05 §5 |

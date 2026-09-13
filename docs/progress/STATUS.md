@@ -613,6 +613,33 @@
   ⑤侧栏来源行只有说明**没有动作**：重挂入口在框架横幅（活动来源）与失败覆盖层，
   bridge 没有"重挂某来源"的请求通道；新增它等于给用户面新开一条跨包通道
   （跨包只允许既有事实通道），故不做。
+- **侧栏行悬停卡片由本仓自持（2026-09-13 登记，偏差；上游修掉竞态即可退役）**：
+  workspace 头与会话行的 hover 卡片不再直接用 vendor 的 `ui-primitives/HoverCard`，
+  改由 `packages/dsh-chamber-client-ui-sidebar/src/client/RowHoverCard.tsx` 渲染，
+  开合状态机在 `packages/dsh-chamber-client-ui-sidebar/src/shared/hover-intent.ts`。
+  不可回避的原因：vendor 版的开合以**上一次已提交的 `open`** 为准
+  （`vendor/harness-checkout/packages/client/ui-primitives/src/HoverCard.tsx:183-188`：
+  `clearTimer()` + `if (open) armClose()`），而本仓每个实例是一个大 React root
+  （流式会话 + 侧栏 poll/`now` 轮询 + N-ctx 多壳共用调度器），dwell 定时器触发到
+  提交之间可差数十毫秒（实测 dwell→落笔：空闲 502–504ms，主线程忙 501–551ms）；
+  落在该窗口内的 pointerleave 什么也没 arm，卡片随后挂载而指针已经离开 ⇒ 再无
+  指针事件能关掉它，只能靠「再悬停该行并移开」清除。复现手法（CDP，无需改代码）：
+  在行元素上派发 `pointerover`，延时 496–510ms 派发 `pointerout`，然后统计
+  `document.body` 下 `position:fixed / width:244px / z-index:100` 的卡片是否残留
+  ——vendor 版 45 次采样残留 7 次（全部落在 496–510ms 这一带），本仓版本 0/45。
+  卡片盒（244 宽 / r12 / pad 12-16 / `--dsw-shadow-lv3` / `#2C2C2E`）、8px 右偏移、
+  上下夹取、200ms 宽限、按下即收与「点卡片复制」契约逐项照搬官方实现，故这是
+  **状态机替换**而非外观重做（design 06 §7 已同步修订）。机器同时是**唯一事实源**
+  （`isOpen()`/`subscribe`，组件经 `useSyncExternalStore` 渲染），因此还堵住了反向
+  错序：press/owner 禁用 与 dwell 的 open 互相错序提交时，卡片不会挂载成
+  「机器认为已关、之后所有 close 都成 no-op」的残留。相对官方原子另有**两处有意增量**：
+  ①同一文档只允许一张行卡片可见（页面级 slot；后开者关先开者，同时是「leave 根本没送达」
+  的自愈路径——窗口失焦、壳被隐藏/遮挡、列表在静止指针下移动）；②窗口 blur / 文档 hidden
+  关闭可见卡片（指针停在行上切走应用时浏览器不保证补发边界事件）。验证：
+  `node test/hover-intent.test.ts`（钉住「leave 落在提交窗口也不残留」、同页互斥、
+  slot 释放）、`node test/hover-card-wiring.test.ts`（钉住两处行卡片不再回到 vendor
+  原子、机器保持页面级 slot 与 blur/hidden 关闭）、GUI 走查 `W-4b`
+  （真实指针：悬停升起一张、移开消失），判据在两处均有登记。
 - **sidebar / layout 的 `bundle` 在 chamber 树内不可运行（2026-12 登记，偏差）**：
   两个包的 `tsdown.config.ts` 是官方客户端包模板的拷贝，导入的 `clientBundle` 属于
   **上游树**（`packages/client/tsdown.client.ts`，`packages/dsh-client-web/src/platform.ts:22`

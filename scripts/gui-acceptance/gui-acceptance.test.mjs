@@ -11,7 +11,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   KNOWN_UPSTREAM_BOOT_NOISE, TOLERATED_REQUEST_FAILURES, createRecorder, deriveSourceIds,
-  hasSecurityHeaders, isHonestError, isInstanceIndex, isShellIndex, isWriterQuiescent, leakedFileContent,
+  hasSecurityHeaders, hoverCardVerdict, isHonestError, isInstanceIndex, isShellIndex, isWriterQuiescent, leakedFileContent,
   parseInstanceAssets, parsePluginLoaderUrls, parseShellAssets, partitionFailures, renderMarkdown,
   safeJson, summarize, summarizeNetFailures, writerEvidence,
 } from './checks.mjs'
@@ -168,4 +168,13 @@ test('report renders one table row per check and escapes pipes', () => {
 test('safeJson never throws on hostile input', () => {
   assert.equal(safeJson('{"a":1}').a, 1)
   for (const value of ['', 'nope', '<html>', undefined, '{"a":']) assert.equal(safeJson(value), null)
+})
+
+test('hover card verdict: opens and clears is a pass, a lingering card is a failure, no cardable row is INFO', () => {
+  assert.equal(hoverCardVerdict({ cardable: true, opened: true, closed: true }).ok, true)
+  assert.equal(hoverCardVerdict({ cardable: true, opened: true, closed: false }).ok, false)
+  assert.equal(hoverCardVerdict({ cardable: true, opened: false, closed: true }).ok, false)
+  const info = hoverCardVerdict({ cardable: false })
+  assert.equal(info.ok, null)
+  assert.match(info.evidence, /未执行/)
 })

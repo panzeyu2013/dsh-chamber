@@ -787,14 +787,37 @@ await 中），我们单点只显示子 agent 计数文案，官方同快照显�
   `sessionRowDisclosure` 窗口算出——若按展开后的 hiddenCount 决定去留，点开一次
   就再无收起入口（一次性展开）；文案取上游 `sessions.expand` /
   `sessions.collapse`。
-- **悬停卡片**：workspace 头与真实会话行悬停显示官方
-  `HoverCard` 移植卡片——workspace 卡 = 标题 + 会话数（投影无
-  path/createdAt 故省略）；会话行卡 = 标题 + 相对时间 + 状态点列表 + 复制
-  标题按钮（blank 行不显示时间）。disabled = 菜单打开、拖拽中或行内重命名
-  进行中（`menuOpen`/`sessionDrag`/`workspaceDrag`/`serverDrag`/
+- **悬停卡片**：workspace 头与真实会话行悬停显示卡片——workspace 卡 = 标题 +
+  会话数（投影无 path/createdAt 故省略）；会话行卡 = 标题 + 相对时间 + 状态点
+  列表 + 复制标题按钮（blank 行不显示时间）。disabled = 菜单打开、拖拽中或行内
+  重命名进行中（`menuOpen`/`sessionDrag`/`workspaceDrag`/`serverDrag`/
   `renamingThisWorkspace` 任一成立即禁用——编辑期卡片不盖住行内输入框；
   该枚举描述 workspace 头卡片，会话行卡片在被重命名表单整行替换时不渲染，
   无需额外禁用条件）。
+  - **实现归属（2026-09-13 修订）**：卡片由本包自己的
+    `client/RowHoverCard.tsx` 渲染，不再直接用 vendor 的
+    `ui-primitives HoverCard`。卡片盒（244 宽 / r12 / pad 12-16 /
+    `--dsw-shadow-lv3` / `#2C2C2E`）、8px 右偏移、上下夹取、200ms 宽限、
+    按下即收与「点卡片复制」契约全部照搬官方实现；只有**开合状态机**
+    换成 `shared/hover-intent.ts`。原因是 vendor 版的竞态
+    （`ui-primitives/HoverCard.tsx:183-188` 以**已提交的 `open`** 决定是否
+    arm 宽限：dwell 触发到提交之间实测 502–504ms 空闲 / 501–551ms 忙，
+    落在该窗口的 leave 什么都不 arm，卡片随后挂载而指针已离开，再无事件
+    能关掉它）：本包的机器以**同步的指针在场标志**为准（dwell 触发时复查、
+    leave 无条件 arm 宽限），与 React 提交时机无关；且**开合事实只有一份**
+    ——机器即 store（`isOpen()`/`subscribe`），组件经
+    `useSyncExternalStore` 直接渲染它，不把可见性镜像进组件 state，
+    因此也不存在"press/禁用 与 dwell 的 open 错序提交、卡片挂载而机器认为
+    已关"的反向残留（React 提交后会复查快照）。
+  - **两处有意增量（相对官方原子，2026-09-13）**：①**同一文档只允许一张行卡片
+    可见**（页面级 slot，跨 N-ctx 壳共享；后开者关掉先开者）——指针只可能在一处，
+    这同时是「leave 根本没送达」的自愈路径（窗口失焦、承载该行的壳被隐藏/遮挡、
+    列表在静止指针下移动）：此后任意一张卡片打开都会清掉它，包括另一个壳的侧栏；
+    ②**窗口 blur / 文档 hidden 关闭可见卡片**——指针停在行上切走应用时，浏览器
+    不保证补发边界事件。两条都在 `shared/hover-intent.ts` 内，由 node 用例
+    （同页互斥、slot 释放）与走查 `W-4b` 覆盖。vendor 源码在仓内只读，
+    故修正落在本包；上游修掉该竞态后即可退役这次移植（登记见
+    `docs/progress/STATUS.md`）。
 - **a11y**：来源分组 `role="group"`、列表 `role="tree"`（**浏览树带可访问名
   `section.sessions`**，与搜索结果树 `search.results.aria` 成对，2026-09-11
   upstream-alignment T7）、

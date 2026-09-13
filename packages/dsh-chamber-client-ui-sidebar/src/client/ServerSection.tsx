@@ -18,7 +18,7 @@ import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react'
 import clsx from 'clsx'
 import { SESSION_SEARCH_RESULT_LIMIT } from '@deepseek-ai/dsh-api-session-controller/client'
 import {
-  HoverCard, IconAlarmClockOutline16, IconArchiveOutline20, IconBranchOutline16, IconChecklistOutline14,
+  IconAlarmClockOutline16, IconArchiveOutline20, IconBranchOutline16, IconChecklistOutline14,
   IconChevronRightOutline14, IconCloseOutline16, IconEditOutline16, IconEllipsisOutline16,
   IconFolderOpenOutline16, IconLoadingOutline16,
   IconPersonalizationOutline16, IconPlusOutline16, IconProjectAddOutline16, IconQuestionOutline14,
@@ -27,6 +27,7 @@ import {
 import type { SidebarKey } from './locales.ts'
 import { sourceBootGapNote } from './source-boot-gap.ts'
 import { IconMonitorOutline16 } from './icons.tsx'
+import { RowHoverCard } from './RowHoverCard.tsx'
 import { chamberBridge, type ChamberServerAggregate, type ChamberServerWorkspace } from '../shared/aggregate-store.ts'
 import {
   deriveLocalSearchMatches, mergeSearchResults, orderUngroupedSessions, reconciledSessionOrder, relativeTimeBucket,
@@ -1742,7 +1743,7 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                               {workspace.ungrouped === true ? (
                                 workspaceHeader
                               ) : (
-                                <HoverCard
+                                <RowHoverCard
                                   anchor={workspaceHeader}
                                   copyLabel={t('action.copy')}
                                   copiedLabel={t('hover.copied')}
@@ -2082,7 +2083,7 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                                   && renaming.kind === 'session' && renaming.id === session.id ? (
                                     renameForm(session.title, 'sessionRow')
                                   ) : (
-                                    <HoverCard
+                                    <RowHoverCard
                                       anchor={sessionRow}
                                       content={(
                                         <div className={cc.hoverContent}>

@@ -217,3 +217,22 @@ export function renderMarkdown({ title, meta, results, netFailures = [], console
 function cell(text) {
   return String(text ?? '').replace(/\|/g, '\\|').replace(/\n/g, ' ').slice(0, 400)
 }
+
+/**
+ * Row hover card verdict (design 06 §7): dwelling on a cardable row must raise
+ * exactly one card, and moving the pointer away must clear it. A fresh instance
+ * may render only the source header — which carries no card by design — so
+ * "nothing to hover" is INFO, never a pass.
+ * @param facts - what the walkthrough observed.
+ * @param facts.cardable - whether a hoverable row existed at all.
+ * @param facts.opened - a card was visible while the pointer dwelt (or null when not observed).
+ * @param facts.closed - no card remained after the pointer left (or null when not observed).
+ * @returns `{ ok, evidence }` for the recorder (`ok === null` is INFO).
+ */
+export function hoverCardVerdict({ cardable, opened = null, closed = null }) {
+  if (!cardable) return { ok: null, evidence: '本次实例没有可悬停的行（只有来源头，按设计无卡片）→ 未执行' }
+  return {
+    ok: opened === true && closed === true,
+    evidence: `cardable=1 dwellingCard=${opened} clearedAfterLeave=${closed}`,
+  }
+}

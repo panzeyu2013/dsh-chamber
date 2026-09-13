@@ -11,7 +11,7 @@
 |---|---|
 | `run.mjs` | 单一入口：`--live` / `--attach` / `--dev` |
 | `probe.mjs` | `--live`：对**运行中的应用**做只读 HTTP/WS 探测（安装态亦可，无 CDP） |
-| `walkthrough.mjs` | CDP 界面走查：结构断言 + 截图 + 控制台/网络事实采集 |
+| `walkthrough.mjs` | CDP 界面走查：结构断言 + 截图 + 控制台/网络事实采集（含 `W-4b` 行悬停卡片的真实指针开合） |
 | `launch.mjs` | `--dev`：一次性 dev 实例（隔离 user-data、固定控制面端口、CDP 端口） |
 | `cdp.mjs` | 零依赖 CDP 客户端（Node 内置 `WebSocket`/`fetch`） |
 | `checks.mjs` | **纯判据层**：全部 pass/fail 逻辑在此，无 IO，故可在 CI 单测 |
@@ -44,6 +44,7 @@ pnpm run test:gui-acceptance                 # 纯判据单测（无需 GUI，CI
 | `[cordis-client-runner] … has no active Connection` | 记为**上游噪声**（原始文本仍入报告） | 上游 `cordis-client-runner/src/client/inspect-registry.ts` 启动期日志，非 chamber 缺陷 |
 | 首启向导（`settings.onboarding`） | `--dev` 会**走完**（优先点关闭动作，最多 4 步自动推进）；`--attach` **绝不代点**，记 INFO 并跳过设置面走查 | 推进向导会写实例自身状态：只允许发生在一次性实例上 |
 | 实例未就绪（`dsh.status != ready`） | 实例面检查（`IP-*`/`IN-1`/`CP-5`）转 **INFO** 并说明隔离期 503 属预期 | design 18 §3.4 |
+| 实例没有可悬停的侧栏行（只有来源头，按设计无卡片） | `W-4b` 记 **INFO** 并写明未执行 | design 06 §7（来源头不是卡片锚点） |
 | 安装态早于 2026-09-10（无 `/writers` 路由） | `CP-4` 记 INFO | 该路由由 9767853 引入 |
 
 `CP-4` 的判据是 `quiescent === true`（**不是** `writers` 为空）：扫描到的 `reclaimed` 孤儿会如实列出，只有 `kept`（无法回收）才代表有无法解释的活写者。

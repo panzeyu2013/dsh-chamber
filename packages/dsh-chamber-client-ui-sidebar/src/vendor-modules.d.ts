@@ -235,13 +235,12 @@ declare module '@deepseek-ai/dsh-client-ui-primitives' {
   /** Workspace header folder glyph (08 §11 project-row parity). */
   export const IconFolderOpenOutline16: (props: any) => ReactElement | null
   /**
-   * Delayed hover-preview card portaled to document.body (06 §7, official
-   * ui-primitives HoverCard): `anchor` renders in place, `content` floats in
-   * the card on hover dwell; `disabled` suppresses/close it; optional
-   * copyText/copyLabel/copiedLabel make the card an activation-copy affordance.
-   * Loose face (the vendor shape is the source of truth).
+   * Host clipboard write shared by the Web UI copy controls: prefers the async
+   * Clipboard API and falls back to `execCommand('copy')`; resolves true only
+   * when the host accepted the write. Used by the chamber-owned RowHoverCard
+   * (06 §7), which replaced the vendored HoverCard's activation-copy path.
    */
-  export const HoverCard: (props: any) => ReactElement | null
+  export const writeClipboard: (text: string) => Promise<boolean>
   /** Official dsh state dot: done/warning/ongoing/error (loose face). */
   export const StateDot: (props: any) => ReactElement | null
   /** Row action menu entry (row + optional icon/danger; loose face). */

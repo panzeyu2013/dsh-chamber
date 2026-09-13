@@ -150,6 +150,16 @@ export class CdpSession {
     return file
   }
 
+  /**
+   * A real pointer move (not a synthetic DOM event): hover surfaces only react
+   * to input the browser's own hit-testing produced.
+   * @param x - viewport x in CSS pixels.
+   * @param y - viewport y in CSS pixels.
+   */
+  async moveMouse(x, y) {
+    await this.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, button: 'none', buttons: 0, pointerType: 'mouse' })
+  }
+
   /** A real key event (not a synthetic DOM event) — the Escape path needs one. */
   async pressKey(key, code, virtualKeyCode) {
     for (const type of ['rawKeyDown', 'keyUp']) {
