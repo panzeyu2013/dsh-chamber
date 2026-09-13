@@ -4,8 +4,10 @@
  * timer/state pair. The defect it exists to kill is a commit race — the vendor
  * arms its grace close against the last COMMITTED `open`, so a pointerleave
  * handled while React's commit of the dwell timer was still pending armed
- * nothing and stranded the card on screen (measured reproduction:
- * `.tmp/hover-probe/race2-load.json`, documented in the module header).
+ * nothing and stranded the card on screen. The scratch probe that measured it
+ * is deliberately NOT cited as evidence (see the module header): the committed
+ * evidence is the cases below, the source locks in hover-card-wiring.test.ts,
+ * and the W-4b-race real-pointer leg.
  *
  * Pinned here: the dwell boundary, the fire-time pointer-inside check that
  * cancels an open whose commit is still in flight, the UNCONDITIONAL grace

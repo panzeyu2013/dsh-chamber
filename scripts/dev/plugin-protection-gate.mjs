@@ -151,14 +151,22 @@ function normalizeWhitespace(text) {
  * C12 判据。
  *
  * @param {{ profileSource: string | null, pluginSource: string | null }} input
- *   两个上游源码文本；null = 子模块未物化（调用方给出 note，不当违规——
- *   C1/C3/C5 已经会对缺失子模块响亮失败）。
+ *   两个上游源码文本；null = 该文件读不到。**全部**读不到 = 子模块未物化
+ *   （调用方给出 note，不当违规——C1/C3/C5 已经会对缺失子模块响亮失败）；
+ *   **部分**读不到 = 改名/搬移，是违规（2026-09-13 round-2 review F1：`plugin.ts`
+ *   搬走而 `profile.ts` 仍可读时，10 条锚点里的 4 条会被静默丢掉且连 note 都没有）。
  * @returns {{ violations: string[], notes: string[] }}
  */
 export function profileContractFindings({ profileSource, pluginSource }) {
   const violations = []
   const notes = []
   const sources = { profile: profileSource, plugin: pluginSource }
+  const owners = new Map()
+  for (const anchor of PROFILE_CONTRACT_ANCHORS) {
+    owners.set(anchor.file, (owners.get(anchor.file) ?? 0) + 1)
+  }
+  const unreadable = [...owners.keys()]
+    .filter((file) => sources[file] === null || sources[file] === undefined)
   let checked = 0
   for (const anchor of PROFILE_CONTRACT_ANCHORS) {
     const raw = sources[anchor.file]
@@ -169,7 +177,16 @@ export function profileContractFindings({ profileSource, pluginSource }) {
       violations.push(`上游 ${anchor.file} 源码缺少 profile 契约锚「${anchor.label}」（候选：${anchor.needles.join(' | ')}）`)
     }
   }
-  if (checked === 0) notes.push('C12 跳过：vendor/harness-checkout 未物化（CI 在 Bootstrap 后硬门）')
+  if (checked === 0) {
+    notes.push('C12 跳过：vendor/harness-checkout 未物化（CI 在 Bootstrap 后硬门）')
+  } else if (unreadable.length > 0) {
+    const lost = unreadable.reduce((sum, file) => sum + (owners.get(file) ?? 0), 0)
+    violations.push(
+      `C12 上游锚点所属文件读不到（${unreadable.join(', ')}）——${lost} 条锚点无法判定；`
+      + '树已部分物化，故按改名/搬移处理：核对 docs/checklists/upstream-touchpoints.md §6 的锚点登记'
+      + '与上游新路径后更新本门，绝不按通过处理',
+    )
+  }
   return { violations, notes }
 }
 
@@ -403,6 +420,31 @@ function literalUnionOf(signature) {
 }
 
 /**
+ * Literal union of a field signature, resolving a NAMED type alias declared in
+ * the same source (`role: PluginRowRole` + `export type PluginRowRole = 'a' | …`).
+ * The producer side declares `role` exactly that way, so a plain literal scan
+ * would drop it and compare only the two wire faces (2026-09-13 round-2 review
+ * F2). An unresolvable named type returns null and the caller treats it as drift
+ * — never as "this side does not count".
+ *
+ * The alias body ends at a blank line or at the next top-level declaration (the
+ * repo's style omits semicolons, so a `;`-terminated match cannot be assumed).
+ * @param {string} field - one interface member, e.g. `role: PluginRowRole`.
+ * @param {string} source - the whole source text the member came from.
+ * @returns {string[] | null} sorted literals, or null when not a literal union.
+ */
+function unionOfField(field, source) {
+  const direct = literalUnionOf(field)
+  if (direct !== null) return direct
+  const alias = field.split(':').slice(1).join(':').trim().replace(/\?$/, '')
+  if (!/^[A-Za-z_$][\w$]*$/.test(alias)) return null
+  const decl = new RegExp(
+    `\\btype\\s+${alias}\\b\\s*=([\\s\\S]*?)(?=\\n\\s*\\n|\\n\\s*(?:export|type|interface|declare|const|function|\\/\\*)|$)`,
+  ).exec(stripComments(source))
+  return decl === null ? null : literalUnionOf(decl[1])
+}
+
+/**
  * 嵌套行类型的字段名 + 字面量并集对照。比宿主接口那层**浅一层**：
  * 字段名集合必须一致；值域是字面量并集的字段（role / owner）并集也必须一致；
  * 其余字段的类型文本允许命名类型与字面量并集不同（`PluginRowRole` vs `'composition' | …`），
@@ -418,7 +460,10 @@ export function rowMirrorFindings({ producerSource, preloadSource, rendererSourc
       violations.push(`C14 ${mirror.fact}：行类型在 ${producer === null ? 'producer' : preload === null ? 'preload' : 'renderer'} 侧找不到声明`)
       continue
     }
-    const nameOf = (field) => field.split(':')[0].trim()
+    // Field NAME only: `owner?: …` and `owner: …` are the same field. Stripping
+    // the optional marker matters — the producer declares `owner?:`, so keeping
+    // the `?` made the whole owner arm dead code (2026-09-13 round-2 review F2).
+    const nameOf = (field) => field.split(':')[0].trim().replace(/\?$/, '')
     const producerNames = producer.map(nameOf)
     const preloadNames = preload.map(nameOf)
     const rendererNames = renderer.map(nameOf)
@@ -434,23 +479,38 @@ export function rowMirrorFindings({ producerSource, preloadSource, rendererSourc
         violations.push(`C14 ${mirror.fact}：${leftName} ↔ ${rightName} 行字段漂移（${leftName} 独有 ${onlyLeft.join(',') || '—'}；${rightName} 独有 ${onlyRight.join(',') || '—'}）`)
       }
     }
-    // 字面量并集字段（role / owner）：把三处的并集对齐，删值/加值都必须红。
+    // 字面量并集字段（role / owner）：三处的并集对齐，删值/加值都必须红。
+    // The producer declares `role: PluginRowRole` (a NAMED alias) while the wire
+    // faces inline the literals, so a plain literal scan dropped the producer side
+    // and compared only preload ↔ renderer — the alias is resolved here, and a
+    // side that declares the field with a union we cannot read is a violation
+    // instead of being silently excluded (round-2 review F2).
     for (const fieldName of ['role', 'owner']) {
-      const producerField = producer.find(field => nameOf(field) === fieldName)
-      if (producerField === undefined) continue
-      const preloadField = preload.find(field => nameOf(field) === fieldName)
-      const rendererField = renderer.find(field => nameOf(field) === fieldName)
-      const unions = [
-        ['producer', producerField === undefined ? null : literalUnionOf(producerField)],
-        ['preload', preloadField === undefined ? null : literalUnionOf(preloadField)],
-        ['renderer', rendererField === undefined ? null : literalUnionOf(rendererField)],
+      const sides = [
+        ['producer', producer.find(field => nameOf(field) === fieldName), producerSource],
+        ['preload', preload.find(field => nameOf(field) === fieldName), preloadSource],
+        ['renderer', renderer.find(field => nameOf(field) === fieldName), rendererSource],
       ]
-      const present = unions.filter(([, union]) => union !== null)
-      if (present.length < 2) continue
-      const reference = present[0][1].join('|')
-      for (const [side, union] of present) {
+      // Absent on every side: the field-name comparison above owns that case.
+      if (sides.every(([, field]) => field === undefined)) continue
+      const unions = sides.map(([side, field, source]) => [
+        side, field === undefined ? null : unionOfField(field, source),
+      ])
+      const unresolved = unions.filter(([side, union]) => union === null
+        && sides.find(([name]) => name === side)[1] !== undefined)
+      if (unresolved.length > 0) {
+        violations.push(
+          `C14 ${mirror.fact}.${fieldName}：${unresolved.map(([side]) => side).join('/')} 侧的字面量并集读不出来`
+          + '（命名类型未解析/写法漂移）——按漂移处理：把该类型展开成字面量并集，或同步扩展本门的别名解析',
+        )
+        continue
+      }
+      const declared = unions.filter(([, union]) => union !== null)
+      if (declared.length < 2) continue
+      const reference = declared[0][1].join('|')
+      for (const [side, union] of declared) {
         if (union.join('|') !== reference) {
-          violations.push(`C14 ${mirror.fact}.${fieldName}：${side} 的字面量并集与 ${present[0][0]} 不一致（${union.join(',')} vs ${present[0][1].join(',')}）`)
+          violations.push(`C14 ${mirror.fact}.${fieldName}：${side} 的字面量并集与 ${declared[0][0]} 不一致（${union.join(',')} vs ${declared[0][1].join(',')}）`)
         }
       }
     }

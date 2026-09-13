@@ -26,7 +26,8 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { USAGE_EXIT_CODE, VERIFY_USAGE, parseVerifyArgs } from './verify-upstream-touchpoints-args.mjs'
 import {
-  componentBody, dwellOpenTimers, hoverPortVerdict, racyGraceArmShape, racyOpenPathShape,
+  callbackStatements, componentBody, dwellOpenTimers, hoverPortVerdict, openCallbackDrift,
+  racyGraceArmShape, racyOpenPathShape,
   stripComments,
 } from './verify-upstream-touchpoints-hover.mjs'
 
@@ -304,15 +305,23 @@ test('C15 (OPEN side): the dwell callback opens without re-checking the pointer'
   assert.equal(timers.length, 1, 'exactly one dwell timer opens the card')
   assert.match(timers[0].callback, /setOpen\(true\)/)
   assert.equal(racyOpenPathShape(body).racy, true)
+  assert.deepEqual(callbackStatements(timers[0].callback), ['setOpen(true)'])
 })
 
-test('C15 (OPEN side): the minimal upstream fix on this end forces the retirement decision', () => {
-  // The fix direction that leaves `onPointerLeave` byte-identical: re-check a
-  // synchronous pointer-presence flag when the dwell fires.
+test('C15 (OPEN side): the callback is classified by SHAPE, so no naming scheme can slip through', () => {
+  // Round-2 review F2: a word blacklist only catches the names it lists, so the
+  // minimal upstream fix written as `isPointerOnAnchor` / `anchorContainsPointer`
+  // / `pointerState.on` passed the gate silently while the race was already gone.
+  // Statement-level classification catches every naming scheme.
   for (const guard of [
-    'if (!insideRef.current) return\n        setOpen(true)',
-    'if (!pointerInside) return\n        setOpen(true)',
+    'if (!insideRef.current) return',
+    'if (!pointerInside) return',
     'if (hoveringRef.current) setOpen(true)',
+    'if (!isPointerOnAnchor) return',
+    'if (!anchorContainsPointer) return',
+    'if (!pointerState.on) return',
+    'if (!pointerIsInAnchor) return',
+    'if (pointerIsOver) setOpen(true)',
   ]) {
     const text = withEnter(`      onPointerEnter={() => {
         cancelClose()
@@ -320,14 +329,75 @@ test('C15 (OPEN side): the minimal upstream fix on this end forces the retiremen
         clearTimer()
         timerRef.current = setTimeout(() => {
         ${guard}
+        setOpen(true)
         }, openDelayMs)
       }}`)
-    assert.equal(text.includes('if (open) armClose()'), true, 'the close side is untouched by this mutant')
     const verdict = hoverPortVerdict(hoverSources({ upstreamHoverCard: { path: 'up/HoverCard.tsx', text } }))
     assert.equal(verdict.ok, false, `OPEN-side fix must not pass: ${guard}`)
     assert.match(verdict.failures.join('\n'), /竞态 OPEN 形状已变/)
     assert.match(verdict.failures.join('\n'), /退役移植/)
   }
+})
+
+test('C15 (OPEN side): an unmount guard is reported as drift with a NEUTRAL diagnosis', () => {
+  // Round-2 review F1: `if (!mountedRef.current) return` is the commonest React
+  // unmount guard and has nothing to do with the pointer. The gate must still
+  // refuse to auto-pass it — it cannot tell it apart from a real presence check —
+  // but the diagnosis may NOT assert "upstream fixed the race", because acting on
+  // that claim would retire a port that is still needed.
+  const text = withEnter(`      onPointerEnter={() => {
+        cancelClose()
+        if (open) return
+        clearTimer()
+        timerRef.current = setTimeout(() => { if (!mountedRef.current) return; setOpen(true) }, openDelayMs)
+      }}`)
+  const verdict = hoverPortVerdict(hoverSources({ upstreamHoverCard: { path: 'up/HoverCard.tsx', text } }))
+  assert.equal(verdict.ok, false, 'a callback the gate cannot classify must not auto-pass')
+  const detail = verdict.failures.join('\n')
+  assert.match(detail, /mountedRef\.current/, 'the offending statement is quoted for the human')
+  assert.match(detail, /无法区分/, 'the diagnosis states the two possibilities instead of picking one')
+  assert.doesNotMatch(detail, /上游可能已从 OPEN 侧修掉竞态/,
+    'the superseded diagnosis asserted a fact the gate cannot know')
+})
+
+test('C15 (OPEN side): clearing its own expired timer ref is cleanup, not a statement to adjudicate', () => {
+  // An upstream refactor that nulls the expired timer ref inside the dwell
+  // callback is ordinary hygiene. Failing the gate on it would push maintainers
+  // to weaken the gate instead of trusting it.
+  const text = withEnter(`      onPointerEnter={() => {
+        cancelClose()
+        if (open) return
+        clearTimer()
+        timerRef.current = setTimeout(() => { timerRef.current = null; setOpen(true) }, openDelayMs)
+      }}`)
+  const verdict = hoverPortVerdict(hoverSources({ upstreamHoverCard: { path: 'up/HoverCard.tsx', text } }))
+  assert.equal(verdict.ok, true, verdict.failures.join('\n'))
+})
+
+test('C15 (OPEN side): a read-modify-write of any ref is drift, not cleanup', () => {
+  // `x.current += 1` READS the old value, so it is not the pure write the
+  // whitelist admits.
+  const text = withEnter(`      onPointerEnter={() => {
+        cancelClose()
+        if (open) return
+        clearTimer()
+        timerRef.current = setTimeout(() => { openEpochRef.current += 1; setOpen(true) }, openDelayMs)
+      }}`)
+  const verdict = hoverPortVerdict(hoverSources({ upstreamHoverCard: { path: 'up/HoverCard.tsx', text } }))
+  assert.equal(verdict.ok, false, 'a compound assignment must not count as cleanup')
+})
+
+test('C15 (OPEN side): the statement classifier is exact about bodies and splitting', () => {
+  assert.deepEqual(callbackStatements('() => { setOpen(true) }'), ['setOpen(true)'])
+  assert.deepEqual(callbackStatements('() => setOpen(true)'), ['setOpen(true)'])
+  assert.deepEqual(callbackStatements('() => { timerRef.current = null; setOpen(true) }'),
+    ['timerRef.current = null', 'setOpen(true)'])
+  // A `;` inside a nested call is not a statement boundary.
+  assert.deepEqual(callbackStatements('() => { log(a, b); setOpen(true) }'), ['log(a, b)', 'setOpen(true)'])
+  assert.equal(openCallbackDrift('() => { setOpen(true) }').drift, false)
+  assert.equal(openCallbackDrift('() => {}').drift, true, 'an empty callback opens nothing')
+  assert.equal(openCallbackDrift('() => { if (x) setOpen(true) }').drift, true,
+    'a conditional open is exactly the shape the port compensates for')
 })
 
 test('C15 (OPEN side): a comment or a string naming an inside flag cannot trip the rule', () => {
@@ -343,35 +413,6 @@ test('C15 (OPEN side): a comment or a string naming an inside flag cannot trip t
       }}`)
   const verdict = hoverPortVerdict(hoverSources({ upstreamHoverCard: { path: 'up/HoverCard.tsx', text } }))
   assert.equal(verdict.ok, true, verdict.failures.join('\n'))
-})
-
-test('C15 (OPEN side): clearing its own expired timer ref is cleanup, not a presence read', () => {
-  // The other false positive this rule must NOT have (round-2 self-review): an
-  // upstream refactor that nulls the expired timer ref inside the dwell callback
-  // is ordinary hygiene (`timerRef.current = null`). Failing the gate on it would
-  // push maintainers to weaken the gate instead of trusting it.
-  const text = withEnter(`      onPointerEnter={() => {
-        cancelClose()
-        if (open) return
-        clearTimer()
-        timerRef.current = setTimeout(() => { timerRef.current = null; setOpen(true) }, openDelayMs)
-      }}`)
-  const verdict = hoverPortVerdict(hoverSources({ upstreamHoverCard: { path: 'up/HoverCard.tsx', text } }))
-  assert.equal(verdict.ok, true, verdict.failures.join('\n'))
-})
-
-test('C15 (OPEN side): reading (not writing) a presence ref is still the fix shape', () => {
-  // …and the refinement must not have opened a hole: a READ of that ref is still
-  // the racy half being fixed, so the gate must still demand the decision.
-  const text = withEnter(`      onPointerEnter={() => {
-        cancelClose()
-        if (open) return
-        clearTimer()
-        timerRef.current = setTimeout(() => { if (!timerRef.current) return; setOpen(true) }, openDelayMs)
-      }}`)
-  const verdict = hoverPortVerdict(hoverSources({ upstreamHoverCard: { path: 'up/HoverCard.tsx', text } }))
-  assert.equal(verdict.ok, false, 'a guarded open must still force the retirement decision')
-  assert.match(verdict.failures.join('\n'), /竞态 OPEN 形状已变/)
 })
 
 test('C15 (OPEN side): a rewritten or ambiguous open path is drift, never a silent pass', () => {

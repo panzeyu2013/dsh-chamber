@@ -511,10 +511,12 @@ decide({op, name, version, runtimeVersion, P, profileState, source}):
   三种形态的差别只在**拒绝码与文案**：`'none'` 说的是「这个后端没有族事实源」，`'unavailable'`
   说的是「本该有、这次读不到」——操作者据此知道该不该修运行时树，而不是把它当成"这个包被组合保护"。
   **绝不**把「派生失败」退化成"没有保护"（那才是设计禁止的静默放行）。
+  空集同样按派生失败处理：`P` 的三个分量全空时 `deriveProtectedSet` 答 `ok:false`，绝不返回 "有效的空保护集"（否则 remove 面会连组合成员一起静默放行——2026-09-13 复核）。
   **判序**（2026-12 review 明确）：`B₀ ∪ S` 判名（R1）**先于**这条降级阶梯——那份事实永远可得，
   所以降级态下一个组合成员的 install 仍答 `protected`（不是 `protected-set-unavailable`），
   只有官 scope 且不在 `B₀ ∪ S` 内的名字才落到阶梯上。`profile_absent` 的 defer（R0）仍在两者之前，
   但延迟意图在 drain 时若撞上永不成立的决定会被**丢弃并记为失败 op**（绝不静默僵尸）。
+  「永不成立」只指名字/版本面的决定（`protected`/`needs-version`/`needs-exact-version`/`generation-mismatch`/`runtime-version-unknown`/格式类）；**网关自身的状态**（`protected-set-unavailable` = F 暂不可读、租约/队列窗口）不进这一集合，留在队列等下一条 ready/degraded 边重试——与 §6.2 的 503 口径一致（2026-09-13 复核）。
 
 #### 6.11.4 代耦合的完整兑现：装后复验（覆盖传递闭包）
 

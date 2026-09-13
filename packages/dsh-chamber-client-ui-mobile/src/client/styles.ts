@@ -17,26 +17,40 @@
  * global class it used to be; this header is the package that states it.
  *
  * THE ONE CLASS-NAME EXCEPTION, AND BOTH NAMING SHAPES (2026-09-13 review A2):
- * three ship-time anchors (the composer bar row + its model trigger, the
- * settings Models row) do target a compiled local name, so the arms must cover
- * BOTH shapes the same upstream sources can be built with:
- *   - local-first `_<local>_<hash>_<idx>` (e.g. `_row_4qrvp_55`) — what the
- *     PINNED bundles actually emit today. Measured, not assumed: the official
- *     package that ships with the pin
+ * three ship-time anchors (the composer bar row, the settings Models row) target
+ * a compiled local name, so the arms must cover BOTH shapes the same upstream
+ * sources can be built with:
+ *   - local-first `_<local>_<hash>_<idx>` — what the PINNED bundles actually
+ *     emit today. Measured, not assumed: the official package that ships with
+ *     the pin
  *     (`node_modules/@deepseek-ai/dsh-web-frontend/dist/assets/index-*.css`,
  *     0.1.5-rc.2) carries 251 unique names of this shape and ZERO of the other,
  *     and the chamber's own composite build (`packages/desktop/dist/web/
  *     assets/chamber-*.css`) is the same shape (904 unique);
  *   - hash-first `[hash]_[local]` (e.g. `JObwrW_row`) — the shape an earlier
  *     audit saw on the rc.1 bundles, kept as a suffix arm so a future build
- *     that flips back does not silently lose these three rules.
+ *     that flips back does not silently lose these rules.
  * The dual arm is therefore `:is([class$="_<local>"], [class*="_<local> "],
  * [class*="_<local>_"])`: suffix (single- and multi-class hash-first) plus
  * infix (every local-first form). An earlier revision asserted the infix form
  * "matched nothing" and dropped it — with the pinned bundles that left these
- * three rules matching nothing at all, i.e. exactly the silent desktop-geometry
+ * rules matching nothing at all, i.e. exactly the silent desktop-geometry
  * regression the audit set out to fix. The watchdog's own token query
  * (`official-hover-card.ts`) has always used the infix form for this reason.
+ *
+ * WHERE THE NAMES COME FROM (2026-09-13 round-2 review F4 — the arm shape is
+ * evidenced by the two builds above, NOT by the examples): the composer row is
+ * `_row_74m2c_240` (`flex-wrap:wrap; container-type:inline-size`) in the
+ * chamber's composite build; the pinned official bundle has no composer row at
+ * all (its whole sheet contains zero `flex-wrap:wrap` and zero
+ * `container-type:inline-size`), and the `_row_*` names it does carry belong to
+ * other modules (e.g. `_row_4qrvp_55` is a `.topLevelBracket` row,
+ * `_row_luwio_16` a plain flex row). The Models row is `_modelRow_16d5a_459`,
+ * also composite-build only. The model trigger is NOT class-matched any more:
+ * the seat's `div[data-slot="conversation.input.model"]` wrapper is the anchor
+ * (see the phone-tier rule below), because `_trigger_` names four different
+ * modules in the composite build and the row's trailing cluster also holds
+ * ContextMeter's 28px `flex:none` ring.
  *
  * VISUAL LANGUAGE: everything rides the official `--dsw-*`/`--ds-*` tokens
  * (no literal colors except token fallbacks); the drawer reuses the official
@@ -630,7 +644,16 @@ export const MOBILE_CSS = `
   [data-slot="conversation.composer.bar"] :is([class$="_row"], [class*="_row "], [class*="_row_"]) {
     flex-wrap: nowrap !important;
   }
-  [data-slot="conversation.composer.bar"] :is([class$="_row"], [class*="_row "], [class*="_row_"]) :is([class$="_trigger"], [class*="_trigger "], [class*="_trigger_"]),
+  /* Model trigger: truncate instead of overflowing. Scoped to the model SEAT,
+     not to every local name "trigger" in the row: the seat renders a
+     div[data-slot="conversation.input.model"] wrapper around ModelSelect's
+     button (upstream scoped-slots.tsx gives every slot an addressable wrapper),
+     while the row's trailing cluster also holds ContextMeter — same "trigger"
+     local name, but flex:none and width:28px. A class-name arm therefore capped
+     the 28px ring's max-width and overrode its flex:none, which the 2026-09
+     audit never intended (2026-09-13 round-2 review F5). The seat anchor is the
+     narrow one; test/breakpoints.test.ts pins both it and the absence of any
+     "trigger" class arm. */
   [data-slot="conversation.input.model"] button {
     max-width: 112px !important;
     flex: 0 1 auto !important;

@@ -72,7 +72,12 @@ class FakeManager implements GatewayRuntimeManagerLike {
     return this.mutationBusy
   }
 
+  /** Corrupt/unavailable runtime facts window (design 18): resolveWorkspace
+   *  throws, which the judgement reads as familySource 'unavailable'. */
+  resolveThrows = false
+
   resolveWorkspace() {
+    if (this.resolveThrows) throw new Error('runtime override metadata is corrupt')
     return { path: this.workspace, version: this.version, source: 'builtin' as const }
   }
 }
@@ -517,6 +522,49 @@ test('the drain drops a permanently-refused intent and records it as a failed op
   assert.ok(failed !== undefined, 'the refusal must be visible in the tasks projection')
   assert.equal(failed?.status, 'failed')
   assert.match(failed?.error ?? '', /protected/)
+})
+
+test('drain keeps a protected-set-unavailable intent deferred (gateway state, never a permanent drop)', async t => {
+  // routes.ts maps this code to 503 — "the caller may retry once the instance is
+  // up" — and design 21 §6.11.3 lists it as a retryable gateway state. It used to
+  // sit in PERMANENT_DRAIN_REFUSALS, so a queued official-scope install was
+  // deleted for good (only a failed op left) whenever the runtime facts were
+  // momentarily unavailable during the drain (2026-09-13 round-2 review F4).
+  const h = makeHarness(t)
+  // A queued official-scope intent, injected the same way the zombie test does it:
+  // this is the state an install reaches when it is deferred while no profile is up.
+  const deferredPath = deferredIntentsFilePath(h.stateDir)
+  mkdirSync(join(deferredPath, '..'), { recursive: true })
+  writeFileSync(deferredPath, JSON.stringify({
+    version: 1,
+    intents: [{
+      id: 'gateway-state-1',
+      ts: Date.now(),
+      kind: 'install',
+      name: '@deepseek-ai/dsh-cli-extra',
+      spec: '@deepseek-ai/dsh-cli-extra@0.1.5-rc.2',
+      version: '0.1.5-rc.2',
+    }],
+  }))
+  assert.equal(h.tasks.deferredIntents().length, 1)
+
+  // The runtime facts go away mid-window: the drain judges with familySource
+  // 'unavailable' ⇒ protected-set-unavailable.
+  h.manager.resolveThrows = true
+  assert.equal(await h.tasks.drainDeferred(), 0, 'a gateway-state refusal is not a successful drain')
+  assert.equal(h.tasks.deferredIntents().length, 1, 'the intent must stay queued for the next ready edge')
+  assert.equal(
+    h.tasks.tasks().tasks.some(op => op.name === '@deepseek-ai/dsh-cli-extra' && op.status === 'failed'),
+    false,
+    'nothing may be recorded as a failed op for a retryable gateway state',
+  )
+
+  // Facts return: the same intent drains normally, proving the defer was not a loss.
+  h.manager.resolveThrows = false
+  assert.equal(await h.tasks.drainDeferred(), 1)
+  assert.equal(h.tasks.deferredIntents().length, 0)
+  h.spawnCalls[0]!.child.close(0)
+  await waitFor(() => h.manager.held === 0, 'lease released')
 })
 
 test('absent profile defers install/materialize even with an ok lease; remove answers no_manifest', async t => {

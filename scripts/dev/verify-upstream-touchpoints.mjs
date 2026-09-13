@@ -44,13 +44,15 @@
  *       （如误用源码线 vendor 树）会让「能装官方 opt-in 层」当场失效
  *   C12 profile 契约锚（硬失败）：上游源码仍以 `dsh.profile.bundles` 承载层列表、
  *       以 `dsh.bundle.patch` 声明层、web 模板默认组合不变、profile workspace 仍是
- *       hoisted + 不自动装 peer；任一漂移 ⇒ 停升级、改派生（B₀ 快照）
+ *       hoisted + 不自动装 peer；任一漂移 ⇒ 停升级、改派生（B₀ 快照）。两个锚点文件都必须
+ *       可读：树部分物化时缺文件 = 改名/搬移（违规），只有整体未物化才降级为 note
  *   C13 播种注册表结构（硬失败）：`HOST_*_PACKAGE_NAME` 常量 ↔ `HOST_*_INSERT` 行 ↔
  *       `CHAMBER_HOST_PACKAGES` 注册表三面一一对应（S 分量与播种机制脱节即红）
  *   C14 manifest 三方镜像（硬失败）：`plugin-sync.ts`（producer）↔ `preload.cts` ↔
  *       `renderer/src/global.d.ts` 的字段集一致，**且**加性读面投影 `rows` 的**元素类型**
  *       三方一致（control-plane `PluginRow` ↔ preload/renderer `PluginRowProjection`：
- *       字段名 + role/owner 字面量并集；ipc-surface-mirror 只覆盖后两者）
+ *       字段名 + role/owner 字面量并集，`?` 不属于字段名，producer 的命名类型别名在同源内
+ *       解析后一起比较，声明了却读不出并集按违规；ipc-surface-mirror 只覆盖后两者）
  *   C15 悬停卡自持移植的上游退役门（硬失败；2026-09-13 登记）：chamber 的
  *       `RowHoverCard` + `shared/hover-intent.ts` 取代 vendor `HoverCard`，退役
  *       条件是「上游修掉 leave 落在 dwell→commit 窗口就残留的竞态」。本门在**冻结

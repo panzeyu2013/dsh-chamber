@@ -28,6 +28,63 @@ import { join } from 'node:path'
 
 const desktopMain = readFileSync(join(import.meta.dirname, 'main.ts'), 'utf8')
 
+/**
+ * Comment stripper (house implementation, same as the portability/visual-lock
+ * tests): quote-aware, so a `/*` inside a string never opens a block comment.
+ * The flag assertions below must not be satisfiable by a COMMENTED-OUT line —
+ * `// updaterQuitArmed = true;` is the commonest way to disable a fix while
+ * debugging (2026-09-13 round-2 review F3).
+ */
+function stripComments(code: string): string {
+  let out = ''
+  let quote: string | undefined
+  let line = false
+  let block = false
+  for (let i = 0; i < code.length; i += 1) {
+    const ch = code[i]
+    const next = code[i + 1]
+    if (line) { if (ch === '\n') { line = false; out += ch } else out += ' '; continue }
+    if (block) { if (ch === '*' && next === '/') { block = false; out += '  '; i += 1 } else out += ch === '\n' ? ch : ' '; continue }
+    if (quote !== undefined) {
+      out += ch
+      if (ch === '\\') { out += next ?? ''; i += 1; continue }
+      if (ch === quote) quote = undefined
+      continue
+    }
+    if (ch === '/' && next === '/') { line = true; out += '  '; i += 1; continue }
+    if (ch === '/' && next === '*') { block = true; out += '  '; i += 1; continue }
+    if (ch === '"' || ch === "'" || ch === '`') { quote = ch; out += ch; continue }
+    out += ch
+  }
+  return out
+}
+
+const desktopCode = stripComments(desktopMain)
+
+/**
+ * Top-level `;`-separated statements of a `{ … }` block, whitespace collapsed.
+ * Statement level, not substring: `if (false) updaterQuitArmed = true;` contains
+ * the literal but never runs, and that mutation used to survive this file.
+ */
+function blockStatements(block: string): string[] {
+  const inner = block.slice(1, -1)
+  const statements: string[] = []
+  let depth = 0
+  let start = 0
+  for (let i = 0; i < inner.length; i += 1) {
+    const ch = inner[i]
+    if (ch === '{' || ch === '(' || ch === '[') depth += 1
+    else if (ch === '}' || ch === ')' || ch === ']') depth -= 1
+    else if (ch === ';' && depth === 0) {
+      statements.push(inner.slice(start, i).replace(/\s+/g, ' ').trim())
+      start = i + 1
+    }
+  }
+  const tail = inner.slice(start).replace(/\s+/g, ' ').trim()
+  if (tail !== '') statements.push(tail)
+  return statements.filter((statement) => statement !== '')
+}
+
 /** The `{ … }` block that starts at or after `from` (balanced braces). */
 function balancedBlock(source: string, from: number): string {
   const open = source.indexOf('{', from)
@@ -104,20 +161,30 @@ test('main.ts: the arming flag really is set and really is released (the fix IS 
   // every wiring assertion above still passed (2026-09-13 review B3). The flag's
   // lifecycle is the fix, so it is asserted directly — the pure decisions it
   // feeds are behaviourally covered in chamber-settings.test.ts.
-  const declaration = /let updaterQuitArmed = false;/.exec(desktopMain)
+  //
+  // Round-2 review F3: matching the raw text made the guard blind to the two
+  // commonest ways to disable a line without deleting it. Comments are stripped
+  // and the assignment must be a TOP-LEVEL statement of the hook, so neither
+  // `// updaterQuitArmed = true;` nor `if (false) updaterQuitArmed = true;` passes.
+  const declaration = /let updaterQuitArmed = false;/.exec(desktopCode)
   assert.notEqual(declaration, null, 'the arming flag must start false at module scope')
-  const arm = balancedBlock(desktopMain, desktopMain.indexOf('function armUpdaterQuit('))
-  assert.match(arm, /if \(updaterQuitArmed\) return;/,
+  const armBlock = balancedBlock(desktopCode, desktopCode.indexOf('function armUpdaterQuit('))
+  const armStatements = blockStatements(armBlock)
+  assert.match(armBlock, /if \(updaterQuitArmed\) return;/,
     're-arming must be idempotent (a second native event must not restart the log line)')
-  assert.match(arm, /updaterQuitArmed = true;/,
-    'the arming hook must SET the flag — without this line nothing about the fix works')
-  const disarm = balancedBlock(desktopMain, desktopMain.indexOf('function disarmUpdaterQuit('))
-  assert.match(disarm, /if \(!updaterQuitArmed\) return;/,
+  assert.ok(armStatements.includes('updaterQuitArmed = true'),
+    'the arming hook must SET the flag as a top-level statement — deleting it, commenting it out '
+    + 'or wrapping it in dead code must all fail here, because without it nothing about the fix works')
+  const disarmBlock = balancedBlock(desktopCode, desktopCode.indexOf('function disarmUpdaterQuit('))
+  const disarmStatements = blockStatements(disarmBlock)
+  assert.match(disarmBlock, /if \(!updaterQuitArmed\) return;/,
     'releasing an unarmed leg must be a no-op (no spurious window restore)')
-  assert.match(disarm, /updaterQuitArmed = false;/,
-    'releasing must CLEAR the flag — otherwise the close-to-tray semantics never come back')
+  assert.ok(disarmStatements.includes('updaterQuitArmed = false'),
+    'releasing must CLEAR the flag as a top-level statement — otherwise the close-to-tray semantics '
+    + 'never come back')
   // Order matters inside the arm: the flag is set before anything else can run.
-  assert.ok(arm.indexOf('updaterQuitArmed = true;') < arm.indexOf('console.log'),
+  assert.match(armBlock, /console\.log/, 'the arm still logs the arming (the operator visible half)')
+  assert.ok(armBlock.indexOf('updaterQuitArmed = true') < armBlock.indexOf('console.log'),
     'the flag must be set before the log line, so the log never claims an arming that did not happen')
 })
 

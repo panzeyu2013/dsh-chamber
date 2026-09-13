@@ -88,7 +88,9 @@ export function runtimeFamilyFindings(names: readonly string[]): string[] {
 /** 官方 scope（代耦合规则的适用面）。 */
 export const OFFICIAL_SCOPE = '@deepseek-ai/'
 
-/** chamber scope（播种物与 chamber 自建包的域）。 */
+/** chamber scope（播种物与 chamber 自建包的域）。**不参与任何判定**：受保护集合按事实
+ *  派生（B₀ ∪ S ∪ F），「chamber 自建包一律拒绝」那套前缀规则已随 design 21 §6.11 退役
+ *  ——保留它只为表述包的归属，别拿它当门（2026-09-13 复核）。 */
 export const CHAMBER_SCOPE = '@dsh-chamber/'
 
 /**
@@ -170,6 +172,19 @@ export function deriveProtectedSet(facts: ProtectedFacts): ProtectedDerivation {
       if (typeof name !== 'string' || name === '') return { ok: false, reason: 'runtime family contains a non-string/empty name' }
       if (!names.has(name)) names.set(name, 'family')
     }
+  }
+  // The set must never be EMPTY (2026-09-13 round-2 review F3). `familyComplete`
+  // only says whether F contributed; it does not say whether P is non-empty, so an
+  // all-empty input (installationBundles: [], seedNames: [], familyNames: null)
+  // used to answer `ok:true` with zero names — and then `decidePluginMutation`
+  // allowed a remove of a composition member such as `@deepseek-ai/dsh-base`.
+  // The three production call sites cannot reach this today (B₀ defaults to the
+  // non-empty snapshot, S comes from the non-empty registry), but a future caller
+  // that reads the installation bundles from a profile can — and the failure mode
+  // is silent loss of protection, which is exactly what this module promises
+  // never to degrade into. Fail closed instead.
+  if (names.size === 0) {
+    return { ok: false, reason: 'protected set derived empty (installation/seed/family facts all empty)' }
   }
   return {
     ok: true,

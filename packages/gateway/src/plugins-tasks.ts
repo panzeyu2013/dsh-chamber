@@ -97,11 +97,18 @@ export const DRAIN_DEADLINE_MS = 10 * 60 * 1000
  * intent (and records a failed op) instead of retrying it on every ready edge
  * forever. Everything else (queue/lease/runtime windows, missing manifest) is
  * retryable and stays deferred.
+ *
+ * `protected-set-unavailable` is deliberately NOT here (2026-09-13 round-2
+ * review F4): it means the gateway could not derive the set yet — a runtime
+ * lockfile that is momentarily unavailable, a workspace that does not resolve —
+ * and both the HTTP mapping (`routes.ts`: 503, "the caller may retry once the
+ * instance is up") and design 21 §6.11.3 call it a retryable gateway state.
+ * Treating it as permanent deleted a queued install for good.
  */
 const PERMANENT_DRAIN_REFUSALS: ReadonlySet<PluginTaskRefusalCode> = new Set([
   'protected', 'needs-version', 'needs-exact-version', 'generation-mismatch',
   'runtime-version-unknown', 'invalid-name', 'invalid_name', 'invalid_spec',
-  'not_installed', 'protected-set-unavailable',
+  'not_installed',
 ])
 
 /** Durable deferred-install intent (install/materialize only; remove is

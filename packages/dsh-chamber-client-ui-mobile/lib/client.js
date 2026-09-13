@@ -555,7 +555,16 @@ var MOBILE_CSS = `
   [data-slot="conversation.composer.bar"] :is([class$="_row"], [class*="_row "], [class*="_row_"]) {
     flex-wrap: nowrap !important;
   }
-  [data-slot="conversation.composer.bar"] :is([class$="_row"], [class*="_row "], [class*="_row_"]) :is([class$="_trigger"], [class*="_trigger "], [class*="_trigger_"]),
+  /* Model trigger: truncate instead of overflowing. Scoped to the model SEAT,
+     not to every local name "trigger" in the row: the seat renders a
+     div[data-slot="conversation.input.model"] wrapper around ModelSelect's
+     button (upstream scoped-slots.tsx gives every slot an addressable wrapper),
+     while the row's trailing cluster also holds ContextMeter \u2014 same "trigger"
+     local name, but flex:none and width:28px. A class-name arm therefore capped
+     the 28px ring's max-width and overrode its flex:none, which the 2026-09
+     audit never intended (2026-09-13 round-2 review F5). The seat anchor is the
+     narrow one; test/breakpoints.test.ts pins both it and the absence of any
+     "trigger" class arm. */
   [data-slot="conversation.input.model"] button {
     max-width: 112px !important;
     flex: 0 1 auto !important;

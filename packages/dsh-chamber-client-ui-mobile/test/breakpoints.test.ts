@@ -214,7 +214,20 @@ test('the retired mechanisms leave no trace in the stylesheet', () => {
     return group[1]
   }
   armsOf('row')
-  armsOf('trigger')
+  // The composer's MODEL TRIGGER is anchored by its seat, never by a class name
+  // (2026-09-13 round-2 review F5): the local name "trigger" is shared by four
+  // modules in the composite build, and the row's trailing cluster also holds
+  // ContextMeter's 28px ring (flex:none) — a class arm capped its max-width and
+  // overrode its flex:none. The seat wrapper is addressable upstream
+  // (scoped-slots.tsx gives every slot a div[data-slot]), so the narrow anchor
+  // wins and the class arm must stay gone.
+  const truncation = cssBlock(phone, ['[data-slot="conversation.input.model"] button'])
+  assert.ok(truncation !== null && truncation.includes('max-width: 112px !important;'),
+    'the model trigger truncation must hang off the model SEAT anchor')
+  assert.ok(truncation.includes('flex: 0 1 auto !important;'),
+    'the seat rule must still let the trigger shrink (that is what stops the overflow)')
+  assert.ok(!/\[class\*="_trigger_?"?\]/.test(phone),
+    'no local-name "trigger" arm may come back: it also matches ContextMeter (review F5)')
   // 2026-09-11 upstream-alignment T17a: the CSS hamburger is retired with the
   // official panel glyph; no self-drawn control may come back.
   assert.ok(!MOBILE_CSS.includes('dsh-mobile-nav-toggle-bars'), 'the CSS hamburger must be gone')

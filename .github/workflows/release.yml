@@ -307,7 +307,7 @@ jobs:
         run: node scripts/dev/ensure-harness-vendor.mjs
       # Upstream-touchpoint registry gates (docs/checklists/upstream-touchpoints.md),
       # exactly as ci.yml runs them — in TWO passes, both required:
-      #   1. here, before the install: C1/C3–C14 are file-only, so a drift fails
+      #   1. here, before the install: C1/C3–C15 are file-only, so a drift fails
       #      fast without node_modules (`--no-artifact-rebuild` = C8 mtime
       #      advisory, and nothing is written);
       #   2. below, after the install: the default mode re-runs everything AND

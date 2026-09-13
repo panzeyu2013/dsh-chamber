@@ -81,6 +81,21 @@ test('deriveProtectedSet: 空 F / 非字符串 / 空名一律派生失败（fail
   assert.equal(emptyName.ok, false)
 })
 
+test('deriveProtectedSet: 派生出的 P 绝不可是空集（2026-09-13 round-2 review F3）', () => {
+  // An all-empty fact set used to answer `ok:true` with ZERO names, and
+  // `decidePluginMutation` then ALLOWED removing a composition member — while
+  // this module promises protection never silently degrades to nothing. Hence a
+  // fail-closed guard. No production path can reach it today (B₀ defaults to the
+  // non-empty snapshot, S comes from the non-empty registry); a future caller
+  // reading the installation bundles from a profile can.
+  const derived = deriveProtectedSet({ installationBundles: [], seedNames: [], familyNames: null })
+  assert.equal(derived.ok, false, 'an empty protected set must never be ok:true')
+  // The non-empty neighbours keep working: default B₀ alone, S alone, F alone.
+  assert.equal(deriveProtectedSet({ seedNames: [], familyNames: null }).ok, true)
+  assert.equal(deriveProtectedSet({ installationBundles: [], seedNames: ['@dsh-chamber/x'], familyNames: null }).ok, true)
+  assert.equal(deriveProtectedSet({ installationBundles: [], seedNames: [], familyNames: ['@deepseek-ai/dsh-base'] }).ok, true)
+})
+
 test('officialScope: 只认 @deepseek-ai/ 前缀', () => {
   assert.equal(officialScope('@deepseek-ai/dsh-base'), true)
   assert.equal(officialScope('@dsh-chamber/x'), false)

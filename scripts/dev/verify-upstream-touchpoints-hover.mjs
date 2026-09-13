@@ -514,40 +514,77 @@ function governedByCommittedOpen(body, at) {
 // ---------------------------------------------------------------------------
 
 /**
- * Words that name a SYNCHRONOUS pointer-presence fact when they appear as an
- * identifier segment. Segment-wise (camelCase/underscore split) on purpose:
- * `pointerInside` / `insideRef` / `hoveringRef` all hit, while `disabled`,
- * `openDelayMs`, `clearTimer` and `cancelClose` — the identifiers the pinned
- * open path really uses — do not. `current` is deliberately NOT in this list: a
- * bare name containing it is not a pointer fact, and the ref-read rule below
- * already covers every `x.current` that is actually READ.
+ * The dwell callback may contain exactly two kinds of statement: opening the
+ * card, and a plain write to a member slot (a callback clearing its OWN expired
+ * timer ref). Anything else is drift.
+ *
+ * Whitelist by SHAPE, never a blacklist of presence-looking words (2026-09-13
+ * round-2 review F1/F2). A word blacklist is wrong in both directions:
+ *   · it misfires — `if (!mountedRef.current) return` is the commonest React
+ *     unmount guard and has nothing to do with the pointer, yet the old rule
+ *     reported it as "upstream may have fixed the race";
+ *   · it leaks — `isPointerOnAnchor`, `anchorContainsPointer`, `pointerState.on`
+ *     name the very check this gate hunts for and match no word on any list.
+ * Classifying shape and reporting NEUTRALLY is the only version that is neither
+ * false nor silent: the gate cannot distinguish "upstream fixed the race" from
+ * "the callback grew a statement", so it says precisely that and hands the
+ * adjudication to a human (the failure tail spells out both outcomes).
  */
-const POINTER_PRESENCE_WORDS = new Set([
-  'inside', 'hover', 'hovering', 'hovered', 'within', 'present', 'over',
-])
+const OPEN_CALL = /^setOpen\s*\(\s*true\s*\)$/
+
+/** A plain WRITE to a member path (`timerRef.current = null`). Compound
+ *  assignments (`+=`, `||=`) read the old value, so they do not qualify. */
+const MEMBER_WRITE = /^(?:this|[A-Za-z_$][\w$]*)(?:\s*\.\s*[A-Za-z_$][\w$]*)*\s*=(?!=)/
 
 /**
- * The pointer-presence signal in `text`, or null. A ref READ (`x.current`) is
- * matched first because it is the characteristic shape of the fix — the pointer
- * flag has to be readable synchronously at dwell-fire time.
- *
- * A ref that is merely WRITTEN (`timerRef.current = null`, e.g. a callback
- * clearing its own expired timer) is not a presence read and must not trip this
- * rule: treating ordinary cleanup as "upstream fixed the race" would train the
- * maintainer to weaken the gate (2026-09-13 round-2 self-review).
- * Scope note: only ever applied to a dwell timer's callback region, never to a
- * whole file — `pointer-grace.ts` reads `closeRef.current` legitimately.
- * @param {string} text - the dwell callback region (code-only).
- * @returns {string | null} the offending identifier/property read.
+ * Top-level statements of an arrow/function callback body (nesting-aware `;`
+ * split, braces unwrapped, expression bodies kept whole).
+ * @param {string} callback - the timer's first-argument region (code-only).
+ * @returns {string[]} trimmed, non-empty statements.
  */
-export function pointerPresenceSignal(text) {
-  const refRead = /\b[A-Za-z_$][\w$]*\s*\.\s*current\b(?!\s*=(?!=))/.exec(text)
-  if (refRead !== null) return refRead[0]
-  for (const match of text.matchAll(/[A-Za-z_$][\w$]*/g)) {
-    const segments = match[0].split(/(?=[A-Z])|_/).filter((segment) => segment !== '')
-    if (segments.some((segment) => POINTER_PRESENCE_WORDS.has(segment.toLowerCase()))) return match[0]
+export function callbackStatements(callback) {
+  const text = callback.trim()
+  const arrow = text.indexOf('=>')
+  let body
+  if (arrow !== -1) {
+    body = text.slice(arrow + 2).trim()
+  } else {
+    const brace = text.indexOf('{')
+    body = brace === -1 ? text : text.slice(brace)
   }
-  return null
+  if (body.startsWith('{')) {
+    const end = matchingBrace(body, 0)
+    body = end === -1 ? body.slice(1) : body.slice(1, end)
+  }
+  const statements = []
+  let depth = 0
+  let start = 0
+  for (let index = 0; index < body.length; index += 1) {
+    const char = body[index]
+    if (char === '(' || char === '[' || char === '{') depth += 1
+    else if (char === ')' || char === ']' || char === '}') depth -= 1
+    else if (char === ';' && depth === 0) {
+      statements.push(body.slice(start, index).trim())
+      start = index + 1
+    }
+  }
+  statements.push(body.slice(start).trim())
+  return statements.filter((statement) => statement !== '')
+}
+
+/**
+ * Whether a dwell callback contains a statement the port cannot account for.
+ * @param {string} callback - the timer's first-argument region (code-only).
+ * @returns {{ drift: boolean, statement: string, detail: string }}
+ */
+export function openCallbackDrift(callback) {
+  const statements = callbackStatements(callback)
+  if (statements.length === 0) return { drift: true, statement: '', detail: 'dwell 回调体为空' }
+  for (const statement of statements) {
+    if (OPEN_CALL.test(statement) || MEMBER_WRITE.test(statement)) continue
+    return { drift: true, statement, detail: `回调里多出了「${statement}」` }
+  }
+  return { drift: false, statement: '', detail: '' }
 }
 
 /** Index of the first top-level `,` in `text` (nesting-aware), or -1. */
@@ -593,6 +630,9 @@ export function dwellOpenTimers(code) {
  * candidates (an ambiguous/duplicated open path) are both DRIFT, never a pass —
  * the day upstream fixes the race from this side, a maintainer must retire the
  * port or re-adjudicate it, and a structural rewrite deserves the same review.
+ * The same goes for a callback that has grown beyond "open the card (+ clean up
+ * its own timer ref)": the verdict says only that the shape moved, never which
+ * of the two it was.
  * @param {string} component - the `HoverCard` component body (code-only).
  * @returns {{ racy: boolean, detail: string }} verdict + human-readable detail.
  */
@@ -610,15 +650,15 @@ export function racyOpenPathShape(component) {
       detail: `有 ${timers.length} 处 setTimeout 回调会 setOpen(true)，生效点不唯一`,
     }
   }
-  const signal = pointerPresenceSignal(timers[0].callback)
-  if (signal !== null) {
+  const drift = openCallbackDrift(timers[0].callback)
+  if (drift.drift) {
     return {
       racy: false,
-      detail: `dwell 回调里出现了指针在场复查（${signal}）——`
-        + '上游可能已从 OPEN 侧修掉竞态',
+      detail: `${drift.detail}——本门只能按形状判定，无法区分「上游已在 dwell 触发时复查指针在场`
+        + '（竞态确已修）」与「回调只是长了一句（竞态仍在）」，故不自动放行：请贴回调原文人工裁决',
     }
   }
-  return { racy: true, detail: 'dwell 回调只做 setOpen(true)，OPEN 侧未复查指针在场' }
+  return { racy: true, detail: 'dwell 回调只做 setOpen(true)（至多清自己的 timer ref），OPEN 侧未复查指针在场' }
 }
 
 /**
