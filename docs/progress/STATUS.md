@@ -244,7 +244,7 @@
   「CDP 设备模拟 + 真机抽检」，而 `scripts/gui-acceptance/` 只有桌面 walkthrough，
   无 `Emulation.setDeviceMetricsOverride` / touch 模拟）⇒ 上述几何只能靠真机发现，
   建议加 mobile 走查模式（设备尺寸 + `pointer:coarse` + 触控模拟，断言抽屉开合/
-  设置手机档/无横向溢出/composer 不被键盘遮挡）；⑥ **pin 前瞻**：上游 npm `next`
+  设置手机档/无横向溢出/composer 不被键盘遮挡——**含** phone 档三条 local-name 规则（composer 行 nowrap、model seat 截断、Models 行）在 2026-09-13 修复后**首次真正命中元素**，而 2026-09-13 又把 model 截断从共享的 `_trigger_` 类名收窄到 model seat 锚点（该局部名在复合构建里有四个模块），收窄后的实际排布同样只在真机上可见）；⑥ **pin 前瞻**：上游 npm `next`
   已是 `0.1.5-rc.2`（client 包已发布，`latest` 仍为 `0.1.5-rc.1`）——pin 前移须按
   `packages/dsh-chamber-client-ui-mobile/README.md`「Anchor baseline」重审锚点
   （风险集中在 ui-layout frame 与 settings/composer 结构）；⑦ **iOS 键盘补偿期
