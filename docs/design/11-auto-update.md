@@ -90,7 +90,9 @@
   回归契约：`packages/desktop/update-restart-quit.test.ts`（main.ts 接线 + 武装标志
   生命周期）+ `chamber-settings.test.ts`（两个纯判定，含
   `shouldUpdaterQuitTakeOver` 的真值表）+ `updater.test.ts`（回调时序，含 native 退出
-  事件必须让停滞 watchdog stand down）；真实的 macOS 端到端仍是实机门禁（§9）。
+  事件必须把停滞 watchdog **重锚**——不是清除：它是该路径上单飞闸的唯一释放者，清掉就
+  会出现「永远 restart in progress」，重锚则既不会在退出腿中途误报停滞、又保证腿走不完
+  时仍有如实文案与就地重试）；真实的 macOS 端到端仍是实机门禁（§9）。
   **原生退出桥与兜底（同一条缺陷的另一半）**：控制器订阅 Electron 原生
   autoUpdater 的 `before-quit-for-update`（它就在 `quitAndInstall()` 内部、关窗之前
   发出——43.4.0/darwin 实测），经 `onNativeUpdaterQuitting` 回调宿主：①**每次**原生
