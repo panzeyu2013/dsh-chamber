@@ -86,10 +86,13 @@ async function rawUpload(
   bytes: Buffer,
   extraHeaders: Record<string, string> = {},
 ): Promise<{ res: FakeResponse; req: FakeRequest }> {
+  // Default identity = buildPluginTgz()'s own manifest: the route BINDS the
+  // headers to the archive's package/package.json (2026-12 review), so a helper
+  // that declared a different name would now (correctly) be refused.
   const req = new FakeRequest('PUT', '/chamber/plugins/materialize', {
     'content-length': String(bytes.length),
-    'x-plugin-name': 'upload-pkg',
-    'x-plugin-version': '1.2.3',
+    'x-plugin-name': 'fixture-plugin',
+    'x-plugin-version': '1.0.0',
     ...extraHeaders,
   })
   const res = new FakeResponse()
@@ -299,7 +302,7 @@ test('materialize: invalid archives → 400 tgz_invalid / cap codes; nothing sta
   assert.equal(canned.calls.length, 0)
 })
 
-test('materialize: header validation (name pattern/denied/version) → 400 before staging', async t => {
+test('materialize: header validation (name pattern/version) → 400 before staging; the protected judgement is the submit path\'s', async t => {
   const stateDir = scratchDir(t, 'gateway-mutations-')
   const host = surfaceWithTasks(stateDir, recordingTasks([]).tasks)
   const bytes = buildPluginTgz()
@@ -311,13 +314,39 @@ test('materialize: header validation (name pattern/denied/version) → 400 befor
   const versionedName = await rawUpload(host, bytes, { 'x-plugin-name': 'pkg@1.0.0' })
   assert.equal(versionedName.res.status, 400)
 
-  const denied = await rawUpload(host, bytes, { 'x-plugin-name': '@dsh-chamber/dsh-chamber-seed-client-graph' })
-  assert.equal(denied.res.status, 400)
-  assert.equal(denied.res.json().code, 'reserved')
+  // A protected name is NO LONGER refused here (design 21 §6.11.5): the route
+  // validates shape only and the authoritative protected-set + generation
+  // judgement runs in the submit path, which owns the runtime facts. The
+  // recording tasks below accept anything, so this upload proves the route
+  // hands the name through (the refusal itself is covered by
+  // plugins-tasks.test.ts against the real orchestrator).
+  const protectedName = await rawUpload(host, buildPluginTgz({ name: '@dsh-chamber/dsh-chamber-seed-client-graph' }),
+    { 'x-plugin-name': '@dsh-chamber/dsh-chamber-seed-client-graph' })
+  assert.notEqual(protectedName.res.status, 400, 'the route no longer refuses a protected name')
 
   const badVersion = await rawUpload(host, bytes, { 'x-plugin-version': 'v1.2' })
   assert.equal(badVersion.res.status, 400)
   assert.equal(badVersion.res.json().code, 'invalid_input')
+})
+
+test('materialize: the archive identity must equal the declared headers (no shadowed name)', async t => {
+  const stateDir = scratchDir(t, 'gateway-mutations-')
+  const host = surfaceWithTasks(stateDir, recordingTasks([]).tasks)
+  // The exact attack the protected-set judgement cannot see on its own: declare
+  // an innocent third-party name while the archive's manifest claims a protected
+  // one. pnpm installs the ARCHIVE's name (a direct profile dependency, exempt
+  // from the post-install verifier), so the route must refuse the mismatch.
+  const shadow = await rawUpload(host, buildPluginTgz({ name: '@deepseek-ai/dsh-base', version: '9.9.9' }),
+    { 'x-plugin-name': 'innocent-pkg', 'x-plugin-version': '1.2.3' })
+  assert.equal(shadow.res.status, 400)
+  assert.equal(shadow.res.json().code, 'identity_mismatch')
+  assert.match(shadow.res.json().error, /@deepseek-ai\/dsh-base@9\.9\.9/)
+  assert.equal(stagedTgz(stateDir, 'innocent-pkg'), null, 'nothing is staged for a refused identity')
+  // A document without any npm-pack manifest cannot be verified either.
+  const noManifest = await rawUpload(host, buildTgz([{ name: 'package/index.js', data: 'x' }]))
+  assert.equal(noManifest.res.status, 400)
+  assert.equal(noManifest.res.json().code, 'tgz_invalid')
+  assert.match(noManifest.res.json().error, /no readable npm-pack manifest/)
 })
 
 test('materialize: valid upload → staged 0600 archive under third-party/<slug>/ and submit file: spec → 202', async t => {
@@ -325,13 +354,15 @@ test('materialize: valid upload → staged 0600 archive under third-party/<slug>
   writeManifestFixture(stateDir, {})
   const canned = recordingTasks([{ ok: true, opId: 'op-mat', deferred: false }])
   const host = surfaceWithTasks(stateDir, canned.tasks)
-  const bytes = buildPluginTgz()
-  const { res } = await rawUpload(host, bytes)
+  // The archive's own identity must equal the declared headers (the route binds
+  // them), so this test declares both explicitly.
+  const bytes = buildPluginTgz({ name: 'upload-pkg', version: '1.2.3' })
+  const { res } = await rawUpload(host, bytes, { 'x-plugin-name': 'upload-pkg', 'x-plugin-version': '1.2.3' })
   assert.equal(res.status, 202)
   assert.deepEqual(res.json(), { accepted: true, opId: 'op-mat' })
 
   assert.equal(canned.calls.length, 1)
-  const staged = stagedTgz(stateDir)
+  const staged = stagedTgz(stateDir, 'upload-pkg')
   assert.ok(staged !== null, 'archive staged')
   if (staged !== null) {
     assert.match(staged, /upload-pkg-1\.2\.3-[0-9a-f]{8}\.tgz$/)
@@ -350,7 +381,7 @@ test('materialize: scoped names flatten to a safe slug (no traversal)', async t 
   const canned = recordingTasks([{ ok: true, opId: 'op-scope', deferred: false }])
   const host = surfaceWithTasks(stateDir, canned.tasks)
   const bytes = buildPluginTgz()
-  const { res } = await rawUpload(host, bytes, { 'x-plugin-name': '@scope/upload-pkg' })
+  const { res } = await rawUpload(host, buildPluginTgz({ name: '@scope/upload-pkg' }), { 'x-plugin-name': '@scope/upload-pkg' })
   assert.equal(res.status, 202)
   const staged = stagedTgz(stateDir, 'scope-upload-pkg')
   assert.ok(staged !== null)
@@ -362,7 +393,8 @@ test('materialize: deferred submission still stages the archive and answers 202 
   writeManifestFixture(stateDir, {})
   const canned = recordingTasks([{ ok: true, deferred: true, intentId: 'int-mat' }])
   const host = surfaceWithTasks(stateDir, canned.tasks)
-  const { res } = await rawUpload(host, buildPluginTgz())
+  const { res } = await rawUpload(host, buildPluginTgz({ name: 'upload-pkg', version: '1.2.3' }),
+    { 'x-plugin-name': 'upload-pkg', 'x-plugin-version': '1.2.3' })
   assert.equal(res.status, 202)
   assert.deepEqual(res.json(), { accepted: true, deferred: true, intentId: 'int-mat' })
   assert.ok(stagedTgz(stateDir) !== null, 'the archive survives for the later drain (spec points at it)')

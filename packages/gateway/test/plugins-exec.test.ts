@@ -20,6 +20,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   ERROR_DUPLICATE_PENDING,
+  ERROR_FAMILY_DRIFT,
   ERROR_RESTARTED_DURING_MUTATION,
   ERROR_RUNTIME_BUSY,
   ERROR_STARTING,
@@ -63,6 +64,7 @@ function makeExecHarness(
     logger?: JournalLogger
     onTerminal?: OnOpTerminal
     cliLaunch?: () => { argvPrefix: string[]; cwd?: string } | null
+    runtimeFacts?: () => { path: string; version: string | null } | null
   } = {},
 ): ExecHarness {
   const stateDir = mkdtempSync(join(tmpdir(), 'plugins-exec-'))
@@ -92,6 +94,7 @@ function makeExecHarness(
     ...(options.canRunPollMs === undefined ? {} : { canRunPollMs: options.canRunPollMs }),
     ...(options.onTerminal === undefined ? {} : { onTerminal: options.onTerminal }),
     ...(options.cliLaunch === undefined ? {} : { cliLaunch: options.cliLaunch }),
+    ...(options.runtimeFacts === undefined ? {} : { runtimeFacts: options.runtimeFacts }),
   })
   // A failed assertion must fail FAST. FakeChild only emits 'close' when the
   // test closes it (`kill()` emits only with closeOnKill), so a test that throws
@@ -509,6 +512,32 @@ test('starting/restarting probe states refuse the spawn after the preImage backu
   assert.equal(h.harness.calls.length, 1)
   h.harness.calls[0]!.child.close(0)
   await waitFor(() => h.journal.recent()[0]?.status === 'ok', 'ready op ok')
+})
+
+test('post-install family verification: a cross-generation shadow promoted into the profile fails the op loudly', async t => {
+  // A runtime workspace whose lockfile closure IS the family F (the core trio +
+  // a filler), plus an opt-in name that must NOT be F.
+  const workspace = mkdtempSync(join(tmpdir(), 'plugins-exec-ws-'))
+  t.after(() => rmSync(workspace, { recursive: true, force: true }))
+  const family = ['@deepseek-ai/dsh', '@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', '@deepseek-ai/dsh-session']
+  writeFileSync(join(workspace, 'pnpm-lock.yaml'),
+    ['lockfileVersion: \'9.0\'', 'packages:', ...family.map(entry => `  '${entry}@0.5.0':`)].join('\n'))
+  const h = makeExecHarness(t, { runtimeFacts: () => ({ path: workspace, version: '0.5.0' }) })
+  // The spawn fake "installs": promote a family copy of a DIFFERENT generation
+  // into the profile's top-level node_modules (what a shadow dependency does).
+  mkdirSync(join(h.profileDir, 'node_modules', '@deepseek-ai', 'dsh-base'), { recursive: true })
+  writeFileSync(join(h.profileDir, 'node_modules', '@deepseek-ai', 'dsh-base', 'package.json'),
+    JSON.stringify({ name: '@deepseek-ai/dsh-base', version: '9.9.9' }))
+  await enqueueOk(h.exec, { kind: 'install', name: 'shadow-pkg', spec: 'shadow-pkg@1' })
+  assert.equal(h.harness.calls.length, 1)
+  h.harness.calls[0]!.child.close(0)
+  await waitFor(() => h.journal.recent()[0]?.status === 'failed', 'family drift fails the op')
+  const op = h.journal.recent()[0]!
+  assert.match(op.error, new RegExp(ERROR_FAMILY_DRIFT))
+  // The finding's NAME survives sanitization (a scoped name is path-shaped and
+  // would otherwise be redacted) and the preImage is retained.
+  assert.match(op.error, /@deepseek-ai\/dsh-base/)
+  assert.equal(op.preImage, op.id)
 })
 
 test('post-mutation re-check: instance (re)started during the mutation is failed, never recorded ok', async t => {

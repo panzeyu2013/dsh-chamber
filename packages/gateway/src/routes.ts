@@ -51,7 +51,7 @@ import {
   type ApiResponse,
   type Logger,
 } from '@dsh-chamber/control-plane'
-import { isDeniedPluginName, PLUGIN_NAME_PATTERN } from '@dsh-chamber/control-plane'
+import { PLUGIN_NAME_PATTERN } from '@dsh-chamber/control-plane'
 import type { ChannelRegistry } from './channels.ts'
 import type { ChamberPlugins } from './plugins.ts'
 import type { ChamberInstalled } from './plugins-installed.ts'
@@ -1117,7 +1117,14 @@ async function readMaterializeBody(req: ApiRequest, maxBytes = MATERIALIZE_MAX_B
  * reserved failures are the client's (400); queue/runtime/state failures
  * are 409 (retryable). */
 function submitRefusalStatus(code: string): number {
-  if (code === 'invalid_name' || code === 'invalid_spec' || code === 'reserved') return 400
+  if (code === 'invalid_name' || code === 'invalid_spec' || code === 'reserved' || code === 'invalid-name') return 400
+  // Protected-set / generation refusals are client-visible 400s (design 21
+  // §6.11.3): the request is well-formed but must not be executed.
+  if (code === 'protected' || code === 'needs-version' || code === 'needs-exact-version'
+    || code === 'generation-mismatch' || code === 'runtime-version-unknown') return 400
+  // Derivation failure (missing runtime facts) is the GATEWAY's own state, not
+  // the client's mistake — the caller may retry once the instance is up.
+  if (code === 'protected-set-unavailable') return 503
   // A journal/deferred-store write failure is the GATEWAY's, never the
   // client's — 500 persistence_failed (design 21 §6.2 code table).
   if (code === 'persistence_failed') return 500
@@ -1461,17 +1468,37 @@ export function createChamberSurface(deps: ChamberSurfaceDeps): ChamberSurface {
         jsonResponse(res, 400, { error: 'invalid plugin name header (x-plugin-name)', code: 'invalid_input' })
         return true
       }
-      if (isDeniedPluginName(name)) {
+      // NOTE (design 21 §6.11.5): the protected-set + generation judgement is
+      // NOT duplicated here. The name-only shape check stays fast-fail, and
+      // the authoritative decision runs in the submit path
+      // (plugins-tasks.validateSubmission → decidePluginMutation), which owns
+      // the runtime facts. The header's version rides the submit input so the
+      // generation check sees it. A refused submit deletes the staged archive
+      // (staged-archive GC below).
+      if (typeof version !== 'string' || !PLUGIN_VERSION_PATTERN.test(version)) {
+        jsonResponse(res, 400, { error: 'invalid plugin version header (x-plugin-version)', code: 'invalid_input' })
+        return true
+      }
+      // Identity binding (2026-12 review, design 21 §6.2/§6.11): the headers are
+      // CLIENT-ASSERTED, and the protected-set judgement judges exactly those
+      // headers. pnpm installs the ARCHIVE's own name, so an archive whose
+      // `package/package.json` disagrees with (or is missing/oversized relative
+      // to) the headers would let a protected/official name into the profile as a
+      // direct dependency — exempt from the post-install verifier. The scan
+      // captured that manifest (bounded); require it to match, byte-for-byte on
+      // both fields.
+      if (scan.manifest === null) {
         jsonResponse(res, 400, {
-          error: 'plugin name is reserved (@deepseek-ai/* and @dsh-chamber/* cannot be installed or removed through the plugin model)',
-          // Code-name parity with the install/remove submit refusals
-          // (plugins-tasks.ts 'reserved' + design 21 §6.2 code table).
-          code: 'reserved',
+          error: `the archive carries no readable npm-pack manifest (package/package.json${scan.manifestError === undefined ? '' : `: ${scan.manifestError}`}) — the submitted name/version cannot be verified`,
+          code: 'tgz_invalid',
         })
         return true
       }
-      if (typeof version !== 'string' || !PLUGIN_VERSION_PATTERN.test(version)) {
-        jsonResponse(res, 400, { error: 'invalid plugin version header (x-plugin-version)', code: 'invalid_input' })
+      if (scan.manifest.name !== name || scan.manifest.version !== version) {
+        jsonResponse(res, 400, {
+          error: `the archive declares ${scan.manifest.name}@${scan.manifest.version}, but the request declares ${name}@${version}`,
+          code: 'identity_mismatch',
+        })
         return true
       }
       // Stage the archive (gateway-owned tree, 0700 dir + 0600 atomic
@@ -1491,7 +1518,7 @@ export function createChamberSurface(deps: ChamberSurfaceDeps): ChamberSurface {
       let result: PluginTaskSubmitResult
       try {
         result = await deps.tasks.submit(
-          { kind: 'materialize', name, spec: `file:${stagedPath}`, initiator: mutationInitiator(req) },
+          { kind: 'materialize', name, spec: `file:${stagedPath}`, version, initiator: mutationInitiator(req) },
         )
       } catch (error) {
         // The submission could not even be persisted (deferred store full/

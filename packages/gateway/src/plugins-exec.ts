@@ -63,14 +63,27 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   atomicWritePrivateFileNoFollow,
+  decidePluginMutation,
+  describeFamilyFindings,
+  registrySpecVersion,
+  resolveRuntimeFamily,
+  verifyProfileFamilyConsistency,
   ensurePrivateDirectoryNoFollow,
   readPrivateFileNoFollow,
 } from '@dsh-chamber/control-plane'
 import { INSTALL_ENV_WHITELIST, sanitizeInstallerOutput } from '@dsh-chamber/dsh-runtime'
-import { INSTALLED_PROFILE_DIR, INSTALLED_MANIFEST_MAX_BYTES, MANAGED_DSH_HOME_DIR } from './plugins-installed.ts'
+import { sanitizeRouteError } from './sanitize-route-error.ts'
+import {
+  deriveBootProtectedSet,
+  gatewayProtectedSet,
+  INSTALLED_PROFILE_DIR,
+  INSTALLED_MANIFEST_MAX_BYTES,
+  MANAGED_DSH_HOME_DIR,
+} from './plugins-installed.ts'
 import { backupDirFor, thirdPartyRoot } from './plugins-journal.ts'
 import { ensurePnpmOnPath, withPnpmOnPath } from './pnpm-entry.ts'
 import type { JournalLogger, JournalOp, JournalOpKind, JournalPending, JournalTerminalPatch, PluginsJournal } from './plugins-journal.ts'
+import type { PluginRefusalCode } from '@dsh-chamber/control-plane'
 
 /** Queue depth cap (design 21 §6.9: queue depth ≤ 8). */
 export const PLUGIN_QUEUE_CAP = 8
@@ -105,6 +118,8 @@ export const REFUSED_PROBE_STATES = ['starting', 'restarting'] as const
 export const ERROR_RUNTIME_BUSY = 'runtime busy; retry later'
 export const ERROR_STARTING = 'instance is starting/restarting'
 export const ERROR_RESTARTED_DURING_MUTATION = 'instance (re)started during the mutation; verify plugin state and retry'
+/** Post-install family verification failure (design 21 §6.11.4). */
+export const ERROR_FAMILY_DRIFT = 'installed, but the profile tree no longer matches the instance runtime'
 export const ERROR_DUPLICATE_PENDING = 'duplicate operation pending'
 export const ERROR_TIMED_OUT = 'mutation timed out'
 
@@ -396,6 +411,12 @@ export interface PluginExecDeps {
    * worker can process the item is race-free; this fallback serves
    * standalone/test callers. */
   onTerminal?: OnOpTerminal
+  /** Per-op runtime facts (design 21 §6.11.3/§6.11.4): the ACTIVE workspace path
+   *  + its effective version. Lazy (resolved per op) so a runtime switch between
+   *  ops is honored; the accessor may throw (corrupt override/pointer metadata)
+   *  and every call site guards it. Absent ⇒ no family facts (the decision
+   *  degrades conservatively, the verification is skipped loudly). */
+  runtimeFacts?: () => { path: string; version: string | null } | null
   /** Per-op real-CLI launch resolution (design 21 §6.3): the managed dsh
    * CLI is spawned as `node <entry> plugin …` from the ACTIVE runtime
    * workspace (`resolveWorkspace`). Resolved at every spawn so a runtime
@@ -654,8 +675,59 @@ export function createPluginsExec(deps: PluginExecDeps): PluginExec {
     return child
   }
 
+  /** Lazy, guarded runtime facts (see PluginExecDeps.runtimeFacts). */
+  function readRuntimeFacts(): { path: string; version: string | null } | null {
+    if (deps.runtimeFacts === undefined) return null
+    try {
+      return deps.runtimeFacts()
+    } catch (error) {
+      warn(`plugins-exec: runtime facts unavailable: ${messageOf(error)}`)
+      return null
+    }
+  }
+
+  /** The active family closure (F) for the post-install verification, or null. */
+  function activeFamilyNames(): readonly string[] | null {
+    const facts = readRuntimeFacts()
+    if (facts === null) return null
+    const family = resolveRuntimeFamily(facts.path)
+    return family.ok ? family.names : null
+  }
+
+  /**
+   * Execution-time re-judgement (design 21 §6.11.3): the submission-time
+   * judgement used the facts of that moment, while the CLI launch below resolves
+   * the workspace PER OP — an op queued behind a `/chamber/runtime` switch would
+   * otherwise install a layer pinned to the OLD generation (its own direct dep
+   * is exempt from the verifier, so nothing else would catch it). The same
+   * single-source decision runs again here with the per-op facts; a refusal
+   * fails the op honestly, before the pre-mutation backup.
+   */
+  function judgeAtExecution(item: QueueItem): { code: PluginRefusalCode; error: string } | null {
+    if (item.kind === 'remove') return null
+    const facts = readRuntimeFacts()
+    const set = facts === null ? null : gatewayProtectedSet(facts)
+    const decision = decidePluginMutation({
+      op: 'install',
+      name: item.name,
+      version: item.version ?? registrySpecVersion(item.spec ?? null),
+      runtimeVersion: facts === null ? null : facts.version,
+      derivation: { ok: true, set: set ?? deriveBootProtectedSet() },
+      profileState: 'ready',
+      familySource: set === null ? 'unavailable' : 'runtime',
+    })
+    if (decision.kind === 'allow' || decision.kind === 'defer') return null
+    return { code: decision.code, error: decision.error }
+  }
+
   async function runMutation(item: QueueItem): Promise<void> {
     const { opId, kind, name, spec } = item
+    // (0) Execution-time re-judgement (see judgeAtExecution).
+    const judged = judgeAtExecution(item)
+    if (judged !== null) {
+      complete(item, { status: 'failed', error: sanitize(`${judged.error} [${judged.code}]`) })
+      return
+    }
     // (1) Pre-mutation backup BEFORE anything touches the profile.
     try {
       const backupDir = backupDirFor(stateDir, opId)
@@ -741,6 +813,66 @@ export function createPluginsExec(deps: PluginExecDeps): PluginExec {
     if (isRefusedProbeState(after)) {
       complete(item, { status: 'failed', error: ERROR_RESTARTED_DURING_MUTATION })
       return
+    }
+    // (6) Post-install family verification (design 21 §6.11.4): R2 judged the
+    // direct spec only, but the resolved closure can hoist a runtime-family
+    // copy into the managed profile (an out-of-release name or another
+    // generation) — exactly the composition split no name-level rule can see.
+    // A violation fails the op LOUDLY; the preImage stays retained and the
+    // op's error carries the finding (design 21 §6.3 verification/rollback
+    // discipline — v1 runbook; the r2 automatic rollback column is unchanged).
+    if (kind !== 'remove') {
+      const familyNames = readRuntimeFacts() === null ? null : activeFamilyNames()
+      // An EMPTY family is a fact too (the runtime provides no official-scope
+      // packages): the verification still runs and then flags every non-direct
+      // official copy as outside-family — the tight direction. Only an
+      // unavailable fact source (null) skips, and that skip is logged.
+      // Read the version ONCE (a runtime switch between the verdict and the
+      // message must not produce a mismatched report — 2026-12 review).
+      const execRuntimeVersion = readRuntimeFacts()?.version ?? null
+      if (familyNames !== null) {
+        // A verifier crash (unreadable tree, racing removal) is an honest
+        // failure of THIS op — never a silent pass and never an opaque one.
+        const verdict = (() => {
+          try {
+            return verifyProfileFamilyConsistency({
+              profileDir: join(deps.stateDir, MANAGED_DSH_HOME_DIR, INSTALLED_PROFILE_DIR),
+              familyNames,
+              runtimeVersion: execRuntimeVersion,
+            })
+          } catch (error) {
+            return { ok: false as const, findings: [], crash: messageOf(error) }
+          }
+        })()
+        if (verdict.ok && verdict.skipped !== undefined) {
+          // Not a pass: the verification could not run. Loud, and the op still
+          // succeeds (the mutation itself was fine) — but the log tells the
+          // operator the profile tree was never proven consistent.
+          warn(`plugins-exec: family verification skipped for ${item.name}: ${verdict.skipped}`)
+        }
+        if (!verdict.ok) {
+          const detail = 'crash' in verdict && verdict.crash !== undefined
+            ? `verification could not run: ${verdict.crash}`
+            : describeFamilyFindings(verdict.findings, execRuntimeVersion)
+          // The finding NAMES are the actionable fact; a scoped package name is
+          // path-shaped and the generic sanitizer would redact it to `[path]`,
+          // erasing exactly that fact. Keep them explicitly (the same
+          // `error.keep` discipline the routes use) and log the raw names
+          // host-side so the operator can act on the journal entry.
+          warn(`${ERROR_FAMILY_DRIFT} for ${item.name}: ${detail}`)
+          const error = new Error(`${ERROR_FAMILY_DRIFT}: ${detail}`)
+          ;(error as { keep?: string[] }).keep = verdict.findings.map(finding => finding.name)
+          complete(item, {
+            status: 'failed',
+            error: sanitizeRouteError(error.message, (error as { keep?: string[] }).keep ?? []),
+          })
+          return
+        }
+      } else {
+        // No family facts on this wiring (tests/legacy): verification cannot
+        // run — recorded as a warning, never a silent pass.
+        warn('plugins-exec: family verification skipped (no runtime-family facts wired)')
+      }
     }
     complete(item, { status: 'ok' })
   }
