@@ -12,7 +12,7 @@ gateway 访问）真正可用——窄屏抽屉化布局、触控目标、安全
 - `src/client/index.ts` —— 浏览器半：assets 注入（viewport/stylesheet/
   theme-color）、frame 打标（`ROLE_SLOT_KEYS` 把插件角色映射到 alpha.2 槽键
   `sidebar` / `main` / `rightbar`）、layoutFacts 驱动的抽屉滚动锁、
-  composer 行为、抽屉点击自愈、设置 sheet 分区切换打磨、
+  composer 行为、抽屉点击自愈、设置 sheet 分区切换打磨、官方悬停卡片搁浅看护、
   `shell.overlay` 抽屉开关（官方面板图标）+ 遮罩。该开关**就是**官方控件而非
   仿制品（2026-09-11 upstream-alignment T17a）：渲染 `IconPanelLeftOutline16`
   ——官方侧边栏开关所用的图标，取自 `ui-primitives` 客户端 baseline 模块，
@@ -26,7 +26,8 @@ gateway 访问）真正可用——窄屏抽屉化布局、触控目标、安全
 - `src/client/styles.ts` —— 单文件样式（全部媒体查询作用域，桌面零影响；
   只用官方 `--dsw-*`/`--ds-*` token）；
 - `src/client/markup.ts` / `composer.ts` / `layout-facts.ts` /
-  `drawer-taps.ts` / `settings-sheet.ts` —— 纯逻辑 + 薄安装器（可单测）；
+  `drawer-taps.ts` / `settings-sheet.ts` / `official-hover-card.ts` ——
+  纯逻辑 + 薄安装器（可单测）；
 - `scripts/build.mjs` —— esbuild 两半构建（`dist/index.js` + `lib/client.js`）。
 
 ## 会话头部适配（触屏档）
@@ -198,6 +199,52 @@ Tooltip 用法中 27 处是带 aria-label 的按钮，标签命名同一动作�
 标签被收起）：它们保留 sticky-hover 的小瑕疵，而不是丢掉触控用户无法从别处读到
 的内容。第五处 `role="tooltip"`（轨迹 turn-rail 预览，被 `aria-describedby`
 引用）没有 `data-side`，被规则结构性排除。桌面零影响（媒体查询作用域）。
+
+同一档也抑制 chamber 页面里**手写的 `data-tip` 气泡**
+（`[data-tip]::after { display: none !important }`）——例如连接设置页的
+`.iconButton` / `.restartTip` 气泡（`ConnectionsSection.module.css`，`::after`
+上 `content: attr(data-tip)`，由 `:hover` / `:focus-visible` 控透明度）：同一个
+粗指针产物，只是换了一套词汇。13 处站点全部把该属性与 `aria-label` 配对（该包的
+`Button` prop 面已记这条配对），所以可访问名不丢；官方 bundle 里 `data-tip`
+属性为**零**，规则够不到任何官方面；且只隐藏伪元素——宿主按钮、盒子与标签原样
+保留。残留：两处 `.restartTip` 的提示承载的是**禁用原因**，本档因此失去可见的
+解释（原因仍在 `aria-label` 与 `disabled` 状态里）——与上面官方 Tooltip 规则
+一样的取舍，优于每次点按后粘在行上的气泡。
+
+## 官方悬停卡片搁浅（粗指针档）
+
+实例自带前端——也就是 gateway 档、本包唯一被加载的档——会话行渲染的是**官方**
+`ui-primitives` `HoverCard`；chamber 的替代实现（`RowHoverCard` + `hover-intent`
+状态机）只存在于复合页，而复合页从不加载本插件。官方原子的 200ms 宽限关闭由
+**上一次已提交的 `open`** 决定，因此落在提交窗口内的 leave 什么都不 arm，卡片随后
+挂载而指针已经离开；触屏上更是根本不派发 leave。卡片 portal 到 `document.body`
+（`position: fixed`、244px），宿主侧任何 CSS 也藏不住它。
+
+`official-hover-card.ts` 就是针对该档的文档级看护（与上面 tooltip 规则同一
+`(pointer: coarse) and (hover: none)` 门控——有 hover 能力的指针、以及全部桌面，
+都保持官方行为）。它从不触碰官方包：对一张按官方自身锚定几何
+（`card.left = wrapper.right + 8`；`card.top = wrapper.top`，或底夹的
+`card.bottom = innerHeight − 8`）与两个 CSS-module 类名 token
+（`_card_1b2ny_*` / `_root_1b2ny_*`）唯一匹配到某个 wrapper 的卡片，它在该 wrapper
+上派发**一次**冒泡 `pointerout`（无 related target）。React 的委托 enter/leave
+路径把它读作「指针离开了窗口」，执行 wrapper 的 `onPointerLeave`——卡片在 DOM 里
+即原子已提交的 `open` 为真——从而 arm 原子自己的宽限关闭；这 200ms 内真实的
+`pointerenter` 会再次取消它，因此真实用户输入永远优先。触发条件：`pointerdown`
+且其目标**与**坐标都证明在两个盒子之外（膨胀 2px）、`window.blur`、
+`visibilitychange → hidden`。看护不派发 click / pointerdown / 键盘事件，自己不 armed
+任何计时器，遇意外一律 fail-closed，可幂等安装，并由 `ctx.effect` 在一个
+`Symbol.for` 窗口守卫后安装/卸载。
+
+**残留现实——它不覆盖什么。**
+
+1. **直开的实例自带前端**（例如浏览器里的 `http://127.0.0.1:17510`）**没有任何
+   chamber 客户端插件**：本包在那里完全不被加载，所以搁浅缺陷在该 origin 上依然
+   存在，且无法从 chamber 侧缓解——那一档需要上游在 `ui-primitives` 里的修复
+   （与 chamber 为自己卡片在复合页做的是同一件事）。
+2. 在覆盖档内，两个页面状态触发也会关掉「指针在 blur/切标签页时物理停在行上」的
+   卡片；卡片会在下一次离开再进入（或点按）后重开，全程不涉及 click、导航或焦点。
+3. 类名 token 与 vendor 构建绑定，和本包其他锚点一样，pin 升级时必须重审。token
+   过期只会把看护降级为静默 no-op（永远匹配不到卡片），而**不会**误伤。
 
 ## 抽屉点击与键盘（触屏档）
 

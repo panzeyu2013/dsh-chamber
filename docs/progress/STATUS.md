@@ -646,6 +646,16 @@
   判据 = `scripts/gui-acceptance/checks.mjs` 的 `hoverCardVerdict`/`hoverRaceVerdict`。
   早期定位用的 CDP 探针是未提交的临时脚本（`.tmp/` 已忽略），其速率/时延数字不作为
   仓内证据。
+- **连接页手写 tooltip 未走 vendor `Tooltip`（2026-09-13 登记，偏差；a11y 仍 open）**：
+  `packages/dsh-chamber-client-ui-settings-connections/src/client/ConnectionsSection.module.css:320-375`
+  用 `data-tip` + `::after` 自绘气泡（`ConnectionsSection.tsx` 13 处 `data-tip=`），
+  不是 vendor `Tooltip`：气泡自身没有 `role="tooltip"` / `aria-describedby`（该包内
+  零命中）；每个 `data-tip` 站点都配了 `aria-label`，故按钮的可访问名不丢，缺的是
+  「气泡文本 ↔ 触发按钮」的**程序化关联**（读屏不会把这段说明作为描述播报）。
+  触屏侧已收口：粗指针抑制选择器除官方 `[role="tooltip"][data-side]` 外也覆盖
+  `[data-tip]::after`（`packages/dsh-chamber-client-ui-mobile/src/client/styles.ts:147-167`）。
+  **未决**：a11y 关联（补 `role="tooltip"`/`aria-describedby`，或改用 vendor
+  `Tooltip`）仍开放，故本条保留。
 - **sidebar / layout 的 `bundle` 在 chamber 树内不可运行（2026-12 登记，偏差）**：
   两个包的 `tsdown.config.ts` 是官方客户端包模板的拷贝，导入的 `clientBundle` 属于
   **上游树**（`packages/client/tsdown.client.ts`，`packages/dsh-client-web/src/platform.ts:22`
