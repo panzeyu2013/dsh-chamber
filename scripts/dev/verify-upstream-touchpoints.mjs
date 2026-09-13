@@ -49,7 +49,7 @@
  * 文件的修改都会在此硬失败——升级/重锚后同步登记表（每 tag 维护循环见文档 §7）。
  *
  * 用法（`--help` 打印权威文本；未知参数 = 用法错误 exit 2，绝不静默跑默认模式）：
- *   node scripts/dev/verify-upstream-touchpoints.mjs            # C1/C3–C10
+ *   node scripts/dev/verify-upstream-touchpoints.mjs            # C1/C3–C11
  *   node scripts/dev/verify-upstream-touchpoints.mjs --no-artifact-rebuild
  *   node scripts/dev/verify-upstream-touchpoints.mjs --tags <old> <new>  # +C2
  *   node scripts/dev/verify-upstream-touchpoints.mjs --help

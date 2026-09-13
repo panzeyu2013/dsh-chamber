@@ -19,14 +19,21 @@
  *      reached only under the committed `open` condition (an `if`/`&&`/`?:`
  *      test). One bare or differently-guarded occurrence means the premise may
  *      be gone and a human must adjudicate — it is NOT auto-passed;
- *   2. the two timing constants stay in lockstep with the chamber port
+ *   2. the racy OPEN shape is still there: the dwell timer that opens the card
+ *      re-checks NOTHING about the pointer (2026-09-13 review finding A1). The
+ *      race has two ends, and the minimal upstream fix on the OPEN end —
+ *      `if (!insideRef.current) return` inside the dwell callback — would leave
+ *      `onPointerLeave` byte-identical, so a close-side-only gate would keep
+ *      printing ✓ after the retirement condition was met. Zero dwell timers
+ *      (the open path was rewritten) and several candidates are DRIFT too;
+ *   3. the two timing constants stay in lockstep with the chamber port
  *      (upstream `POINTER_GRACE_MS` == chamber `HOVER_CLOSE_GRACE_MS`, upstream
  *      `openDelayMs` default == chamber `HOVER_OPEN_DELAY_MS`), each read from a
  *      UNIQUE assignment: zero matches and several distinct values are both
  *      hard failures, so a decoy or a second assignment can never be picked;
- *   3. either check failing is a HARD failure, so the day upstream fixes the
- *      race the maintainer is forced to decide — retire the port or re-register
- *      the deviation — instead of discovering it by accident.
+ *   4. any check failing is a HARD failure, so the day upstream fixes the
+ *      race — from either end — the maintainer is forced to decide: retire the
+ *      port or re-register the deviation, instead of discovering it by accident.
  *
  * DECOY DISCIPLINE (2026-09-13 adversarial review): the shape match and the
  * numeric parse both run on ONE `stripComments()` projection per file that keeps
@@ -502,6 +509,111 @@ function governedByCommittedOpen(body, at) {
   return false
 }
 
+// ---------------------------------------------------------------------------
+// Open-path (dwell) analysis — the OTHER half of the race
+// ---------------------------------------------------------------------------
+
+/**
+ * Words that name a SYNCHRONOUS pointer-presence fact when they appear as an
+ * identifier segment. Segment-wise (camelCase/underscore split) on purpose:
+ * `pointerInside` / `insideRef` / `hoveringRef` all hit, while `disabled`,
+ * `openDelayMs`, `clearTimer` and `cancelClose` — the identifiers the pinned
+ * open path really uses — do not.
+ */
+const POINTER_PRESENCE_WORDS = new Set([
+  'inside', 'hover', 'hovering', 'hovered', 'within', 'present', 'current', 'over',
+])
+
+/**
+ * The pointer-presence signal in `text`, or null. A ref read (`x.current`) is
+ * matched first because it is the characteristic shape of the fix — the pointer
+ * flag has to be readable synchronously at dwell-fire time.
+ * Scope note: only ever applied to a dwell timer's callback region, never to a
+ * whole file — `pointer-grace.ts` reads `closeRef.current` legitimately.
+ * @param {string} text - the dwell callback region (code-only).
+ * @returns {string | null} the offending identifier/property read.
+ */
+export function pointerPresenceSignal(text) {
+  const refRead = /\b[A-Za-z_$][\w$]*\s*\.\s*current\b/.exec(text)
+  if (refRead !== null) return refRead[0]
+  for (const match of text.matchAll(/[A-Za-z_$][\w$]*/g)) {
+    const segments = match[0].split(/(?=[A-Z])|_/).filter((segment) => segment !== '')
+    if (segments.some((segment) => POINTER_PRESENCE_WORDS.has(segment.toLowerCase()))) return match[0]
+  }
+  return null
+}
+
+/** Index of the first top-level `,` in `text` (nesting-aware), or -1. */
+function topLevelComma(text) {
+  let depth = 0
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index]
+    if (char === '(' || char === '[' || char === '{') { depth += 1; continue }
+    if (char === ')' || char === ']' || char === '}') { depth -= 1; continue }
+    if (char === ',' && depth === 0) return index
+  }
+  return -1
+}
+
+/**
+ * Every `setTimeout(` call in `code` whose FIRST argument opens the card
+ * (`setOpen(true)`), as `{ at, callback }` (callback = the first-argument
+ * region). Selection is semantic, not positional, so reformatting is tolerated
+ * while a rewritten open path (or a decoy timer that does not open) is not.
+ * @param {string} code - the `HoverCard` component body (code-only).
+ * @returns {{ at: number, callback: string }[]} the dwell timers found.
+ */
+export function dwellOpenTimers(code) {
+  const found = []
+  const pattern = /\bsetTimeout\s*\(/g
+  for (let match = pattern.exec(code); match !== null; match = pattern.exec(code)) {
+    const open = match.index + match[0].length - 1
+    const close = matchingParen(code, open)
+    if (close === -1) continue
+    const args = code.slice(open + 1, close)
+    const comma = topLevelComma(args)
+    const first = comma === -1 ? args : args.slice(0, comma)
+    if (/setOpen\s*\(\s*true\s*\)/.test(first)) found.push({ at: match.index, callback: first })
+  }
+  return found
+}
+
+/**
+ * Whether the OPEN path still lacks a pointer-presence re-check — i.e. whether
+ * the racy half this port compensates for is still there.
+ *
+ * STRICT on purpose: zero dwell timers (the open path was rewritten) and several
+ * candidates (an ambiguous/duplicated open path) are both DRIFT, never a pass —
+ * the day upstream fixes the race from this side, a maintainer must retire the
+ * port or re-adjudicate it, and a structural rewrite deserves the same review.
+ * @param {string} component - the `HoverCard` component body (code-only).
+ * @returns {{ racy: boolean, detail: string }} verdict + human-readable detail.
+ */
+export function racyOpenPathShape(component) {
+  const timers = dwellOpenTimers(component)
+  if (timers.length === 0) {
+    return {
+      racy: false,
+      detail: '找不到「dwell 定时器里 setOpen(true)」这一 OPEN 路径（已改写/移除）',
+    }
+  }
+  if (timers.length > 1) {
+    return {
+      racy: false,
+      detail: `有 ${timers.length} 处 setTimeout 回调会 setOpen(true)，生效点不唯一`,
+    }
+  }
+  const signal = pointerPresenceSignal(timers[0].callback)
+  if (signal !== null) {
+    return {
+      racy: false,
+      detail: `dwell 回调里出现了指针在场复查（${signal}）——`
+        + '上游可能已从 OPEN 侧修掉竞态',
+    }
+  }
+  return { racy: true, detail: 'dwell 回调只做 setOpen(true)，OPEN 侧未复查指针在场' }
+}
+
 /**
  * Whether EVERY call to the grace arm in `body` sits inside a conditional whose
  * test references the committed `open`. Matched semantically on code-only text
@@ -634,6 +746,16 @@ export function hoverPortVerdict({ upstreamHoverCard, upstreamPointerGrace, cham
           )
         }
       }
+      // ①b 竞态的另一半（OPEN 侧）：dwell 回调不得复查指针在场。只锁 CLOSE 侧
+      //     会漏掉「上游在 setOpen(true) 前加 inside 复查」这一最小修复——那时
+      //     onPointerLeave 一字不改，竞态其实已经没了，本门必须逼出退役裁决。
+      const openShape = racyOpenPathShape(component.text)
+      if (!openShape.racy) {
+        failures.push(
+          `C11 上游 HoverCard 的竞态 OPEN 形状已变：${openShape.detail}（${upstreamHoverCard.path}）——`
+          + RETIREMENT_TAIL,
+        )
+      }
     }
   }
 
@@ -695,7 +817,8 @@ export function hoverPortVerdict({ upstreamHoverCard, upstreamPointerGrace, cham
   return {
     ok: true,
     failures: [],
-    summary: '✓ C11 hover 移植保鲜: 上游竞态关闭形状仍在（onPointerLeave 以已提交的 open 守卫宽限）'
+    summary: '✓ C11 hover 移植保鲜: 上游竞态两侧形状仍在（OPEN: dwell 回调只 setOpen(true)、不复查指针在场；'
+      + 'CLOSE: onPointerLeave 以已提交的 open 守卫宽限）'
       + `；常数锁步 grace=${grace.upstreamValue}ms dwell=${dwell.upstreamValue}ms`
       + `（${upstreamHoverCard.path} / ${upstreamPointerGrace.path} ↔ ${chamberHoverIntent.path}）`,
   }

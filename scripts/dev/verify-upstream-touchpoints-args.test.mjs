@@ -26,7 +26,8 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { USAGE_EXIT_CODE, VERIFY_USAGE, parseVerifyArgs } from './verify-upstream-touchpoints-args.mjs'
 import {
-  componentBody, hoverPortVerdict, racyGraceArmShape, stripComments,
+  componentBody, dwellOpenTimers, hoverPortVerdict, racyGraceArmShape, racyOpenPathShape,
+  stripComments,
 } from './verify-upstream-touchpoints-hover.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -259,6 +260,22 @@ const PINNED_ON_POINTER_LEAVE = `      onPointerLeave={() => {
 /** The fixture card with its real close handler replaced (mutant helper). */
 const withHandler = (handler) => PINNED_HOVER_CARD.replace(PINNED_ON_POINTER_LEAVE, handler)
 
+/**
+ * The pin's real `onPointerEnter` attribute, verbatim — the OPEN half of the
+ * race (dwell timer → `setOpen(true)`, with no pointer re-check). Mutants below
+ * replace it whole: the gate's OPEN rule reads this region, and it is the region
+ * an upstream fix from that side would have to touch.
+ */
+const PINNED_ON_POINTER_ENTER = `      onPointerEnter={() => {
+        cancelClose()
+        if (open) return
+        clearTimer()
+        timerRef.current = setTimeout(() => { setOpen(true) }, openDelayMs)
+      }}`
+
+/** The fixture card with its real enter handler replaced (mutant helper). */
+const withEnter = (handler) => PINNED_HOVER_CARD.replace(PINNED_ON_POINTER_ENTER, handler)
+
 const CHAMBER_HOVER_INTENT = `export const HOVER_OPEN_DELAY_MS = 500
 /** Grace after the pointer leaves… */
 export const HOVER_CLOSE_GRACE_MS = 200
@@ -275,8 +292,80 @@ const hoverSources = (overrides = {}) => ({
 test('C11: the pinned racy shape passes and the locked timings are reported', () => {
   const verdict = hoverPortVerdict(hoverSources())
   assert.equal(verdict.ok, true, verdict.failures.join('\n'))
-  assert.match(verdict.summary, /竞态关闭形状仍在/)
+  assert.match(verdict.summary, /竞态两侧形状仍在/)
   assert.match(verdict.summary, /grace=200ms dwell=500ms/)
+})
+
+test('C11 (OPEN side): the dwell callback opens without re-checking the pointer', () => {
+  // The pinned open path, read directly: one dwell timer, and its callback does
+  // nothing but open. This is the half a close-side-only gate could not see.
+  const body = componentBody(stripComments(PINNED_HOVER_CARD), 'HoverCard').text
+  const timers = dwellOpenTimers(body)
+  assert.equal(timers.length, 1, 'exactly one dwell timer opens the card')
+  assert.match(timers[0].callback, /setOpen\(true\)/)
+  assert.equal(racyOpenPathShape(body).racy, true)
+})
+
+test('C11 (OPEN side): the minimal upstream fix on this end forces the retirement decision', () => {
+  // The fix direction that leaves `onPointerLeave` byte-identical: re-check a
+  // synchronous pointer-presence flag when the dwell fires.
+  for (const guard of [
+    'if (!insideRef.current) return\n        setOpen(true)',
+    'if (!pointerInside) return\n        setOpen(true)',
+    'if (hoveringRef.current) setOpen(true)',
+  ]) {
+    const text = withEnter(`      onPointerEnter={() => {
+        cancelClose()
+        if (open) return
+        clearTimer()
+        timerRef.current = setTimeout(() => {
+        ${guard}
+        }, openDelayMs)
+      }}`)
+    assert.equal(text.includes('if (open) armClose()'), true, 'the close side is untouched by this mutant')
+    const verdict = hoverPortVerdict(hoverSources({ upstreamHoverCard: { path: 'up/HoverCard.tsx', text } }))
+    assert.equal(verdict.ok, false, `OPEN-side fix must not pass: ${guard}`)
+    assert.match(verdict.failures.join('\n'), /竞态 OPEN 形状已变/)
+    assert.match(verdict.failures.join('\n'), /退役移植/)
+  }
+})
+
+test('C11 (OPEN side): a comment or a string naming an inside flag cannot trip the rule', () => {
+  // The mirror of the close-side decoy test: comments are stripped, so a note
+  // about the guard is not the guard. A false positive here would fail the gate
+  // on a cosmetic edit.
+  const text = withEnter(`      onPointerEnter={() => {
+        cancelClose()
+        if (open) return
+        clearTimer()
+        // upstream once considered: if (!insideRef.current) return
+        timerRef.current = setTimeout(() => { setOpen(true) }, openDelayMs)
+      }}`)
+  const verdict = hoverPortVerdict(hoverSources({ upstreamHoverCard: { path: 'up/HoverCard.tsx', text } }))
+  assert.equal(verdict.ok, true, verdict.failures.join('\n'))
+})
+
+test('C11 (OPEN side): a rewritten or ambiguous open path is drift, never a silent pass', () => {
+  const rewritten = withEnter(`      onPointerEnter={() => {
+        cancelClose()
+        if (open) return
+        clearTimer()
+        openSoon(openDelayMs)
+      }}`)
+  const missing = hoverPortVerdict(hoverSources({ upstreamHoverCard: { path: 'up/HoverCard.tsx', text: rewritten } }))
+  assert.equal(missing.ok, false, 'an unlocatable open path must not read as "race still present"')
+  assert.match(missing.failures.join('\n'), /竞态 OPEN 形状已变/)
+
+  const duplicated = withEnter(`      onPointerEnter={() => {
+        cancelClose()
+        if (open) return
+        clearTimer()
+        timerRef.current = setTimeout(() => { setOpen(true) }, openDelayMs)
+        otherRef.current = setTimeout(() => { setOpen(true) }, openDelayMs)
+      }}`)
+  const ambiguous = hoverPortVerdict(hoverSources({ upstreamHoverCard: { path: 'up/HoverCard.tsx', text: duplicated } }))
+  assert.equal(ambiguous.ok, false, 'two opening timers are ambiguous, not a pass')
+  assert.match(ambiguous.failures.join('\n'), /生效点不唯一/)
 })
 
 test('C11: a guard that only exists in a comment cannot satisfy the gate', () => {

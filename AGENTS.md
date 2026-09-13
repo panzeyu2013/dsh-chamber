@@ -67,7 +67,7 @@ decision value and is not already owned by a design document or `CHANGELOG.md`.
 - Execute `docs/checklists/dsh-upgrade-checklist.md`, then the per-tag maintenance loop in
   `docs/checklists/upstream-touchpoints.md` §7.
 - `docs/checklists/upstream-touchpoints.md` and `scripts/dev/verify-upstream-touchpoints.mjs`
-  (gates C1–C10, run in CI) are two sides of one registry — a change to either must be mirrored in
+  (gates C1–C11, run in CI) are two sides of one registry — a change to either must be mirrored in
   the other, and the pin-upgrade entry point reminds you of the freshness gate.
 - `docs/checklists/*` are **procedure only**: no version values — no pinned tags, commits, current
   baseline snapshots or per-tag delta logs — belong in them. The current anchor's single sources are
