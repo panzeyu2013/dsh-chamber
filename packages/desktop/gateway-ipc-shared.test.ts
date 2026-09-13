@@ -21,6 +21,15 @@ import {
 // parseSpecArg / pluginSpecName
 // ---------------------------------------------------------------------------
 
+test('parseSpecArg: official-scope specs PARSE client-side (the gateway owns the protected-set judgement)', () => {
+  // design 21 §6.11.5: for a gateway target the family facts live on the
+  // server, so the client layers validate SHAPE only. Whether an
+  // @deepseek-ai/* name may be installed/removed is the gateway's decide.
+  assert.deepEqual(parseSpecArg('@deepseek-ai/dsh-experimental-agent-team-profile@0.1.5-rc.2'),
+    { name: '@deepseek-ai/dsh-experimental-agent-team-profile' })
+  assert.deepEqual(parseSpecArg('@dsh-chamber/some-plugin@1.0.0'), { name: '@dsh-chamber/some-plugin' })
+})
+
 test('parseSpecArg: valid registry specs parse to their package name (bare, versioned, ranged, dist-tag, scoped)', () => {
   const cases: Array<[string, string]> = [
     ['alpha', 'alpha'],
@@ -43,7 +52,7 @@ test('parseSpecArg: valid registry specs parse to their package name (bare, vers
   }
 })
 
-test('parseSpecArg: file:/URL/alias/denied/malformed specs are refused client-side', () => {
+test('parseSpecArg: file:/URL/alias/malformed specs are refused client-side', () => {
   for (const spec of [
     'file:../pkg',
     'file:/abs/path.tgz',
@@ -54,8 +63,6 @@ test('parseSpecArg: file:/URL/alias/denied/malformed specs are refused client-si
     'alpha@>=1.0.0',
     'alpha@1.0.0 || 2.0.0',
     'alpha beta',
-    '@dsh-chamber/plugin',
-    '@deepseek-ai/plugin',
     'alpha@', // trailing @ — the whitelist has no empty version
     'alpha@^',
     '',
@@ -97,12 +104,16 @@ test('validateApplyPayload: shape/type/bounds mistakes are loud, never coerced',
   assert.match(tooLongItem.ok ? '' : tooLongItem.error, /invalid add spec/)
   const empty = validateApplyPayload({ add: [], remove: [] })
   assert.match(empty.ok ? '' : empty.error, /nothing to apply/)
-  // Invalid/denied/`file:` adds and invalid remove names are refused here.
-  for (const badAdd of ['file:/tmp/x.tgz', '@dsh-chamber/taken@1.0.0', 'not a spec', 7]) {
+  // Invalid-shape/`file:` adds and invalid remove names are refused here; a
+  // well-formed OFFICIAL-SCOPE item is a shape pass (the gateway refuses it, if
+  // it should, with its own protected/generation code).
+  assert.equal(validateApplyPayload({ add: ['@dsh-chamber/taken@1.0.0'], remove: [] }).ok, true)
+  assert.equal(validateApplyPayload({ add: [], remove: ['@deepseek-ai/taken'] }).ok, true)
+  for (const badAdd of ['file:/tmp/x.tgz', 'not a spec', 7]) {
     const result = validateApplyPayload({ add: [badAdd as string], remove: [] })
     assert.match(result.ok ? '' : result.error, /invalid add spec/, `add item ${JSON.stringify(badAdd)}`)
   }
-  for (const badRemove of ['@deepseek-ai/taken', 'bad name!', '', 'a@1.0.0', 7]) {
+  for (const badRemove of ['bad name!', '', 'a@1.0.0', 7]) {
     const result = validateApplyPayload({ add: [], remove: [badRemove as string] })
     assert.match(result.ok ? '' : result.error, /invalid remove name/, `remove item ${JSON.stringify(badRemove)}`)
   }

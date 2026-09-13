@@ -2,7 +2,9 @@
  * plugin-diff.ts unit tests (plain node:test, no dsh, no React): the four
  * actionable categories, version comparison, materialize name-matching
  * (local file: vs remote file: judged consistent, never a phantom update),
- * unsyncable classification, and the empty-manifest cases.
+ * unsyncable classification, the empty-manifest cases, and the §6.11.5
+ * protection boundary (protected/composition/seed rows never reach
+ * computePluginDiff's inputs).
  */
 
 import { test } from 'node:test'
@@ -15,7 +17,15 @@ import {
   rowAddArg,
   type PluginRowKind,
 } from '../src/client/plugin-diff.ts'
+import { actionableDependencies, type PluginRowShape } from '../src/client/plugin-model.ts'
 import type { LocalPluginManifest, RemotePluginManifest } from '../src/global.d.ts'
+
+/** Fixture projection: the manifest PLUS the additive §6.11.5 `rows` array this
+ *  package's structural twin declares. computePluginDiff itself never reads
+ *  `rows` — the boundary filter (actionableDependencies) does, and the tests
+ *  that exercise it pass rows explicitly; the default is an empty projection. */
+type LocalFixture = LocalPluginManifest & { rows: PluginRowShape[] }
+type RemoteFixture = RemotePluginManifest & { rows: PluginRowShape[] }
 
 function local(
   dependencies: Record<string, string>,
@@ -23,10 +33,11 @@ function local(
   clientLines: string[] = [],
   unsyncable: { name: string; reason: string }[] = [],
   bundleLines: string[] = [],
-): LocalPluginManifest {
+  rows: PluginRowShape[] = [],
+): LocalFixture {
   // chamber is orthogonal to the diff — the fixtures use a neutral not-injected
   // state; computePluginDiff never reads it.
-  return { dependencies, bundles, clientLines, bundleLines, unsyncable, chamber: { ok: true, packages: [] } }
+  return { dependencies, bundles, clientLines, bundleLines, unsyncable, rows, chamber: { ok: true, packages: [] } }
 }
 
 function remote(
@@ -34,14 +45,21 @@ function remote(
   bundles: string[] = [],
   profileExists = true,
   error?: string,
-): RemotePluginManifest {
+  rows: PluginRowShape[] = [],
+): RemoteFixture {
   return {
     dependencies,
     bundles,
     profileExists,
     ...(error === undefined ? {} : { error }),
+    rows,
     chamber: { ok: true, packages: [] },
   }
+}
+
+/** One wire-shaped row with third-party/unprotected defaults. */
+function pluginRow(partial: Partial<PluginRowShape> & { name: string }): PluginRowShape {
+  return { spec: '^1.0.0', version: null, role: 'third-party', protected: false, ...partial }
 }
 
 function byKind(result: ReturnType<typeof computePluginDiff>, kind: PluginRowKind): string[] {
@@ -249,4 +267,83 @@ test('classifySpec: path classification matches the main process (./ ../ only, n
   assert.deepEqual(byKind(result, 'unsyncable'), ['dot'])
   assert.deepEqual(byKind(result, 'materialize'), [])
   assert.deepEqual(byKind(result, 'missing'), [])
+})
+
+// ---------------------------------------------------------------------------
+// Protection boundary (design 21 §6.11.5 硬要求): computePluginDiff's inputs
+// only ever carry actionable rows — unprotected third-party / materialized,
+// after the backend's `rows` projection (or the §6.11.7 legacy fallback).
+// ---------------------------------------------------------------------------
+
+test('protection boundary: protected/composition/seed names never appear in diff.rows', () => {
+  const dependencies = {
+    '@deepseek-ai/dsh-base': '^0.1.0',
+    '@dsh-chamber/dsh-chamber-seed-client-graph': '^0.1.0',
+    'third-party-a': '^1.0.0',
+  }
+  const rows = [
+    pluginRow({ name: '@deepseek-ai/dsh-base', spec: '^0.1.0', role: 'composition', protected: true }),
+    pluginRow({ name: '@dsh-chamber/dsh-chamber-seed-client-graph', spec: '^0.1.0', role: 'seed', protected: true }),
+    pluginRow({ name: 'third-party-a', spec: '^1.0.0', role: 'third-party', protected: false }),
+  ]
+  const localProjection = local(dependencies, [], [], [], [], rows)
+  const remoteProjection = remote({}, [], true, undefined, rows)
+
+  // 未收窄的输入确实把组合/播种行当 missing（missing 默认勾选 ⇒ doApply 会把
+  // 它们变成 add spec 提交，后端整批拒绝）—— 这正是边界必须存在的原因。
+  const raw = computePluginDiff(localProjection, remoteProjection)
+  assert.deepEqual(byKind(raw, 'missing'), [
+    '@deepseek-ai/dsh-base',
+    '@dsh-chamber/dsh-chamber-seed-client-graph',
+    'third-party-a',
+  ])
+  assert.equal(defaultChecked(raw.rows.find(row => row.name === '@deepseek-ai/dsh-base')?.kind ?? 'consistent'), true)
+
+  // 收窄后（与 PluginDialog.loadSync 同一调用形状）：受保护/组合/播种名字绝不出现。
+  const filtered = computePluginDiff(
+    { ...localProjection, dependencies: actionableDependencies(dependencies, rows) },
+    { ...remoteProjection, dependencies: actionableDependencies({}, rows) },
+  )
+  assert.deepEqual(byKind(filtered, 'missing'), ['third-party-a'])
+  assert.equal(filtered.rows.length, 1)
+  for (const name of ['@deepseek-ai/dsh-base', '@dsh-chamber/dsh-chamber-seed-client-graph']) {
+    assert.equal(filtered.rows.some(row => row.name === name), false, `${name} must never appear in diff.rows`)
+  }
+})
+
+test('protection boundary: a protected REMOTE row never becomes an actionable remove (extra) row', () => {
+  const dependencies = { '@deepseek-ai/dsh-base': '^0.1.0', 'third-party-gone': '^1.0.0' }
+  const rows = [
+    pluginRow({ name: '@deepseek-ai/dsh-base', spec: '^0.1.0', role: 'composition', protected: true }),
+    pluginRow({ name: 'third-party-gone', spec: '^1.0.0', role: 'third-party', protected: false }),
+  ]
+  const filtered = computePluginDiff(
+    { ...local({}), dependencies: actionableDependencies({}, rows) },
+    { ...remote(dependencies), dependencies: actionableDependencies(dependencies, rows) },
+  )
+  assert.deepEqual(byKind(filtered, 'extra'), ['third-party-gone'])
+})
+
+test('protection boundary: a runtime-family member (protected, third-party role) is dropped too', () => {
+  const dependencies = { '@deepseek-ai/dsh-family-member': '^0.1.0', 'third-party-a': '^1.0.0' }
+  const rows = [
+    // F 成员（运行时线族）角色可能仍是 third-party —— protected 是唯一判据。
+    pluginRow({ name: '@deepseek-ai/dsh-family-member', spec: '^0.1.0', role: 'third-party', protected: true }),
+    pluginRow({ name: 'third-party-a', spec: '^1.0.0', role: 'third-party', protected: false }),
+  ]
+  const filtered = computePluginDiff(
+    { ...local(dependencies), dependencies: actionableDependencies(dependencies, rows) },
+    { ...remote({}), dependencies: actionableDependencies({}, rows) },
+  )
+  assert.deepEqual(byKind(filtered, 'missing'), ['third-party-a'])
+})
+
+test('protection boundary: a legacy (rows absent) projection keeps the legacyProtectedName filter', () => {
+  const dependencies = { '@deepseek-ai/dsh': '^0.1.0', 'third-party-a': '^1.0.0' }
+  const filtered = computePluginDiff(
+    { ...local({}), dependencies: actionableDependencies({}, null) },
+    { ...remote(dependencies), dependencies: actionableDependencies(dependencies, null) },
+  )
+  assert.deepEqual(byKind(filtered, 'extra'), ['third-party-a'])
+  assert.equal(filtered.rows.some(row => row.name === '@deepseek-ai/dsh'), false)
 })

@@ -33,7 +33,7 @@ import type {
   GatewayPluginApplyIpcResult, GatewayPluginApplyInput, GatewayPluginMaterializeIpcResult, GatewayPluginSyncIpcResult, LocalPluginManifest, NpmSearchPackage, PluginApplyInput, PluginApplyResult, RemotePluginManifest,
   SshExecIpcResult, SshLocalPluginExecIpcResult, SshMaterializeResult, SshPluginUndoIpcResult, SshSeedHostGraphResult,
 } from '../global.d.ts'
-import type { GatewayTasksShape } from './plugin-model.ts'
+import type { GatewayTasksShape, PluginRowShape } from './plugin-model.ts'
 
 /** 统一错误形状（design 04 D1：{error, code?}）+ HTTP 状态 + 响应体 + 限流提示。 */
 export type {
@@ -166,12 +166,21 @@ export interface ChamberSeedCacheProjection {
 
 /** GET /chamber/plugins/installed projection (design 21 §6.2 readManifest —
  *  the gateway implementation of the model readManifest verb): the managed
- *  web profile's (already masked) dependency map + bundles; HTTP 404/500 map
- *  to the absent/corrupt codes, the §6.2 read/write fence's 409 maps to the
- *  retryable busy arm (see gatewayInstalled), every other refusal stays a
- *  loud ApiError. */
+ *  web profile's (already masked) dependency map + bundles + the additive
+ *  §6.11.5 row projection; HTTP 404/500 map to the absent/corrupt codes, the
+ *  §6.2 read/write fence's 409 maps to the retryable busy arm (see
+ *  gatewayInstalled), every other refusal stays a loud ApiError.
+ *  `rows` is OPTIONAL on purpose: an in-place OLDER gateway answers without it
+ *  (version skew, §6.11.7), and the dialog then falls back to the legacy
+ *  dependencies filter + the "gateway is older" hint. */
 export type GatewayInstalledProjection =
-  | { ok: true; dependencies: Record<string, string>; bundles: string[]; profileExists: true }
+  | {
+    ok: true
+    dependencies: Record<string, string>
+    bundles: string[]
+    rows?: readonly PluginRowShape[]
+    profileExists: true
+  }
   | { ok: false; code: 'profile_absent' | 'profile_corrupt' }
   /** The §6.2 读/写面共享栅栏 (2026-12 接线): a plugin mutation held the
    *  managed-profile write lease, so the gateway withheld the projection with

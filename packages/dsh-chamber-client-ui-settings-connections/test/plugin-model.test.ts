@@ -1,75 +1,52 @@
 /**
  * plugin-model.ts unit tests (plain node:test, no dsh, no React): the pure
- * unified plugin-management model layer (design 21 §6.6 step ①) — the deny
- * mirror + its TEXTUAL lockstep against the control-plane single source,
- * intent ordering (remove-first / duplicates / net coalesce), apply-result
+ * unified plugin-management model layer (design 21 §6.6 step ①) — the legacy
+ * protection fallback (§6.11.7 — no longer a Node-side mirror), intent
+ * ordering (remove-first / duplicates / net coalesce), apply-result
  * normalization for both backends (gateway + ssh shapes as they really are on
  * the wire — incl. the ssh producer's fail-loud ok:true markers verified/
  * ready/readyNote, never collapsed into a clean success), the gateway task
- * projection → row model, the v1 ok-only undo derive, the denied-row filter
- * and the batch failure policy constant.
+ * projection → row model, the v1 ok-only undo derive, the protected-row
+ * projection + the §6.11.5 diff/apply boundary, and the batch failure policy
+ * constant.
  */
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import {
+  actionableDependencies,
   BATCH_FAILURE_POLICY,
   BATCH_POLICY_SENTENCE,
   classifyGatewayApplyResult,
   classifySshApplyResult,
   describeBatchPolicy,
-  filterDeniedRows,
-  isDeniedPluginName,
+  isActionableRow,
+  isRemovableRow,
+  legacyProtectedName,
   orderApplyOps,
   partialCounts,
+  pluginRowsOf,
+  projectInstalledRows,
   projectTasks,
+  sshSyncableDependencies,
   undoForLatest,
   UNDO_V1_POLICY,
   type ApplyOutcome,
   type GatewayApplyShape,
   type GatewayTasksShape,
+  type PluginRowShape,
   type SshApplyShape,
   type TaskRow,
 } from '../src/client/plugin-model.ts'
 
 // ---------------------------------------------------------------------------
-// 1. Deny mirror + lockstep (control-plane plugin-spec.ts is the single
-// source; the browser renderer keeps this hand mirror — ADD_SPEC precedent,
-// design 21 §6.2/§6.7).
+// 1. Legacy protection fallback (design 21 §6.11.7 — version skew only; the
+// former isDeniedPluginName mirror + its textual lockstep test are deleted,
+// the protected set P is the backend's projection now, §6.11.5).
 // ---------------------------------------------------------------------------
 
-/** The mirror test source files (textual compare, never an import of the
- *  Node-side control-plane module from a browser-bundle module). */
-const TEST_DIR = dirname(fileURLToPath(import.meta.url))
-const modelSource = () => readFileSync(join(TEST_DIR, '..', 'src', 'client', 'plugin-model.ts'), 'utf8')
-const pluginSpecSource = () => readFileSync(join(TEST_DIR, '..', '..', 'control-plane', 'src', 'plugin-spec.ts'), 'utf8')
-
-/** The single-line predicate body of an isDeniedPluginName declaration. */
-function denyPredicateBody(source: string, fileLabel: string): string {
-  const match = /export function isDeniedPluginName\(name: string\): boolean \{([\s\S]*?)\n\}/.exec(source)
-  if (match === null) {
-    assert.fail(`${fileLabel}: expected a single-line isDeniedPluginName body`)
-  }
-  return match[1].trim()
-}
-
-test('deny mirror lockstep: the renderer predicate body is byte-identical to control-plane plugin-spec.ts', () => {
-  const model = denyPredicateBody(modelSource(), 'plugin-model.ts')
-  const shared = denyPredicateBody(pluginSpecSource(), 'control-plane/src/plugin-spec.ts')
-  assert.equal(model, shared,
-    'plugin-model.ts isDeniedPluginName must stay a byte-identical hand mirror of control-plane plugin-spec.ts isDeniedPluginName (the renderer cannot import the Node-side module; change both sides together)')
-  // The extracted body must really be the two-prefix rule — guards a stale
-  // or unrelated match passing the byte compare trivially.
-  assert.match(model, /name\.startsWith\('@deepseek-ai\/'\)/)
-  assert.match(model, /name\.startsWith\('@dsh-chamber\/'\)/)
-  assert.equal(model, "return name.startsWith('@deepseek-ai/') || name.startsWith('@dsh-chamber/')")
-})
-
-test('deny mirror matrix: official and chamber domains denied, third-party allowed (design 21 decision 19)', () => {
-  for (const denied of [
+test('legacyProtectedName: the official and chamber domains stay refused on the fallback path', () => {
+  for (const refused of [
     '@deepseek-ai/dsh',
     '@deepseek-ai/dsh-client-ui-primitives',
     '@dsh-chamber/dsh-chamber-seed-client-graph',
@@ -78,20 +55,23 @@ test('deny mirror matrix: official and chamber domains denied, third-party allow
     '@dsh-chamber/dsh-client-ui-mobile',
     '@dsh-chamber/anything-else',
   ]) {
-    assert.equal(isDeniedPluginName(denied), true, `${denied} must be denied`)
+    assert.equal(legacyProtectedName(refused), true, `${refused} must be refused by the legacy fallback`)
   }
+  // 官方 opt-in 层（@deepseek-ai/dsh-experimental-*）在新投影里可装可卸，但旧
+  // 服务端仍按旧规则拒绝整个官方域 —— 回退路径不猜 opt-in 白名单（§6.11.7）。
+  assert.equal(legacyProtectedName('@deepseek-ai/dsh-experimental-x'), true)
   // A versioned full spec still matches by prefix when a caller forgets to
-  // extract the name first — same tolerated behavior as the shared source.
-  assert.equal(isDeniedPluginName('@dsh-chamber/pkg@1.0.0'), true)
+  // extract the name first.
+  assert.equal(legacyProtectedName('@dsh-chamber/pkg@1.0.0'), true)
   for (const allowed of [
     'third-party-plugin',
     '@scope/third-party',
     'dsh-plugin-x',
-    '@deepseek-ai', // no scope slash: not a scoped name — allowed, mirror-exact
+    '@deepseek-ai', // no scope slash: not a scoped name
     '@dsh-chamber',
     '',
   ]) {
-    assert.equal(isDeniedPluginName(allowed), false, `${JSON.stringify(allowed)} must not be denied`)
+    assert.equal(legacyProtectedName(allowed), false, `${JSON.stringify(allowed)} must not be refused`)
   }
 })
 
@@ -544,24 +524,168 @@ test('undoForLatest: empty rows and deferred-intent-only rows → none-executed'
 })
 
 // ---------------------------------------------------------------------------
-// 7. Reserved-row filter
+// 7. Protected rows: projection + the diff/apply boundary (design 21 §6.11.5)
 // ---------------------------------------------------------------------------
 
-test('filterDeniedRows: partitions name rows into allowed and denied (official + chamber domains)', () => {
-  const rows = [
-    { name: '@dsh-chamber/dsh-chamber-seed-client-graph', note: 'seed host package' },
-    { name: 'third-party-a', note: 'fine' },
-    { name: '@deepseek-ai/dsh', note: 'official' },
-    { name: 'third-party-b', note: 'fine' },
-    { name: '@scope/third-party', note: 'scoped but fine' },
-  ]
-  const { allowed, denied } = filterDeniedRows(rows)
-  assert.deepEqual(allowed.map(row => row.name), ['third-party-a', 'third-party-b', '@scope/third-party'])
-  assert.deepEqual(denied.map(row => row.name), ['@dsh-chamber/dsh-chamber-seed-client-graph', '@deepseek-ai/dsh'])
-  // Original array untouched; generic name-carrying shapes work.
-  assert.equal(rows.length, 5)
+/** One wire-shaped row with third-party/unprotected defaults. */
+function row(partial: Partial<PluginRowShape> & { name: string }): PluginRowShape {
+  return { spec: '^1.0.0', version: null, role: 'third-party', protected: false, ...partial }
+}
+
+test('pluginRowsOf: absent/non-array rows answer null (the §6.11.7 fallback trigger); an array comes back as a copy', () => {
+  assert.equal(pluginRowsOf(undefined), null)
+  assert.equal(pluginRowsOf(null), null)
+  assert.equal(pluginRowsOf({}), null)
+  assert.equal(pluginRowsOf({ rows: undefined }), null)
+  // 形状校验：非数组同样走回退，绝不抛（旧 producer 的意外载荷不是崩溃点）。
+  assert.equal(pluginRowsOf({ rows: 'nope' as unknown as PluginRowShape[] }), null)
+  const rows = [row({ name: 'a' })]
+  const copy = pluginRowsOf({ rows })
+  assert.deepEqual(copy, rows)
+  assert.notEqual(copy, rows, 'returns a shallow copy: callers may sort/iterate without touching the IPC payload')
 })
 
-test('filterDeniedRows: empty input stays empty on both sides', () => {
-  assert.deepEqual(filterDeniedRows([]), { allowed: [], denied: [] })
+test('isActionableRow: every UNPROTECTED row enters the diff boundary (layers included)', () => {
+  assert.equal(isActionableRow(row({ name: 't', role: 'third-party' })), true)
+  assert.equal(isActionableRow(row({ name: 'm', role: 'materialized' })), true)
+  // 角色不参与判据：用户自己加的层（layer）同样是用户内容，必须可同步——按角色收窄
+  // 会把它们从对账视图里静默抹掉（功能回归，2026-12 review 修正）。
+  assert.equal(isActionableRow(row({ name: 'l', role: 'layer' })), true)
+  assert.equal(isActionableRow(row({ name: 'u', role: 'unknown' })), true)
+  // protected 是后端判定：即使角色看起来像第三方（运行时线族的非层成员），
+  // 也绝不进 diff 输入（§6.11.5 硬要求）。
+  assert.equal(isActionableRow(row({ name: 'f', role: 'third-party', protected: true })), false)
+  assert.equal(isActionableRow(row({ name: 'c', role: 'composition', protected: true })), false)
+  assert.equal(isActionableRow(row({ name: 's', role: 'seed', protected: true })), false)
+})
+
+test('isRemovableRow: every unprotected row is removable (remove judges name ∈ P only) — layers included', () => {
+  assert.equal(isRemovableRow(row({ name: 't' })), true)
+  assert.equal(isRemovableRow(row({ name: 'l', role: 'layer' })), true)
+  assert.equal(isRemovableRow(row({ name: 'm', role: 'materialized' })), true)
+  // 受保护行一律不可移除（组合 / 播种 / 线族同判，§6.11.3 R1）。
+  assert.equal(isRemovableRow(row({ name: 'c', role: 'composition', protected: true })), false)
+  assert.equal(isRemovableRow(row({ name: 's', role: 'seed', protected: true })), false)
+  assert.equal(isRemovableRow(row({ name: 'f', role: 'layer', protected: true })), false)
+})
+
+test('actionableDependencies: rows mode keeps every unprotected dependency (layers included)', () => {
+  const rows = [
+    row({ name: '@deepseek-ai/dsh-base', role: 'composition', protected: true, spec: '^0.1.0' }),
+    row({ name: '@dsh-chamber/dsh-chamber-seed-client-graph', role: 'seed', protected: true, spec: null }),
+    row({ name: '@deepseek-ai/dsh-family-member', role: 'third-party', protected: true, spec: '^0.1.0' }),
+    row({ name: 'user-layer', role: 'layer', protected: false, spec: '^2.0.0' }),
+    row({ name: 'third-party-a', role: 'third-party', protected: false, spec: '^1.0.0' }),
+    row({ name: 'local-copy', role: 'materialized', protected: false, spec: 'file:../p' }),
+  ]
+  const dependencies = {
+    '@deepseek-ai/dsh-base': '^0.1.0',
+    '@dsh-chamber/dsh-chamber-seed-client-graph': '^0.1.0',
+    '@deepseek-ai/dsh-family-member': '^0.1.0',
+    'user-layer': '^2.0.0',
+    'third-party-a': '^1.0.0',
+    'local-copy': 'file:../p',
+  }
+  assert.deepEqual(actionableDependencies(dependencies, rows), {
+    'user-layer': '^2.0.0',
+    'third-party-a': '^1.0.0',
+    'local-copy': 'file:../p',
+  })
+})
+
+test('sshSyncableDependencies: the ssh transport filter drops official scope (whole-batch refusal), never user content', () => {
+  // 官方 scope 在 ssh 面上会被**整批**拒绝（§6.11.3 ssh 保守装面），所以对账输入必须
+  // 排除它；而用户自己加的层/第三方/物化行必须留下。
+  const rows = [
+    row({ name: '@deepseek-ai/dsh-base', role: 'composition', protected: true, spec: '^0.1.0' }),
+    row({ name: '@dsh-chamber/dsh-chamber-seed-client-graph', role: 'seed', protected: true, spec: null }),
+    // 本地官方 opt-in 层：非 protected（F 外），但 ssh 装不了 ⇒ 传输能力过滤掉。
+    row({ name: '@deepseek-ai/dsh-experimental-x', role: 'layer', protected: false, spec: '0.1.5-rc.2' }),
+    row({ name: 'user-layer', role: 'layer', protected: false, spec: '^2.0.0' }),
+    row({ name: 'third-party-a', role: 'third-party', protected: false, spec: '^1.0.0' }),
+    row({ name: 'local-copy', role: 'materialized', protected: false, spec: 'file:../p' }),
+  ]
+  const dependencies = Object.fromEntries(rows.map(entry => [entry.name, entry.spec ?? '^1.0.0']))
+  assert.deepEqual(sshSyncableDependencies(dependencies, rows), {
+    'user-layer': '^2.0.0',
+    'third-party-a': '^1.0.0',
+    'local-copy': 'file:../p',
+  })
+  // rows 缺失（旧 producer，§6.11.7）：legacy 回退同样滤掉官方 scope（旧前缀规则）。
+  assert.deepEqual(
+    Object.keys(sshSyncableDependencies({ 'pkg-a': '^1.0.0', '@deepseek-ai/old': '^1.0.0' }, null)),
+    ['pkg-a'],
+  )
+})
+
+test('actionableDependencies: the map is filtered, never extended by a row without a dependency entry', () => {
+  const rows = [row({ name: 'a', spec: '^9.9.9' }), row({ name: 'orphan', spec: '^1.0.0' })]
+  // 依赖表的值逐字保留（行里的 spec 不覆盖它）；没有依赖项的行绝不新增。
+  assert.deepEqual(actionableDependencies({ a: '^1.2.3' }, rows), { a: '^1.2.3' })
+  // 依赖项存在但投影里没有对应行 ⇒ 保守丢弃（绝不猜可操作性）。
+  assert.deepEqual(actionableDependencies({ ghost: '^1.0.0' }, []), {})
+  // 组合/播种行没有依赖值也不可操作 → 恒不产生依赖项。
+  assert.deepEqual(
+    actionableDependencies({}, [row({ name: 'c', role: 'composition', protected: true, spec: null })]),
+    {},
+  )
+})
+
+test('actionableDependencies: rows absent (old gateway) falls back to the legacyProtectedName filter', () => {
+  const dependencies = {
+    '@deepseek-ai/dsh': '^0.1.0',
+    '@dsh-chamber/dsh-client-ui-mobile': '^0.1.0',
+    'third-party-a': '^1.0.0',
+    '@scope/third-party': '^2.0.0',
+  }
+  assert.deepEqual(actionableDependencies(dependencies, null), {
+    'third-party-a': '^1.0.0',
+    '@scope/third-party': '^2.0.0',
+  })
+  // 空 rows 不是「缺失」：后端明确投影了空集 ⇒ 没有任何可操作行（绝不静默退回
+  // 按域名的旧过滤——新口径下官方 opt-in 层也可装卸）。
+  assert.deepEqual(actionableDependencies(dependencies, []), {})
+})
+
+test('projectInstalledRows: rows mode renders the backend UNION (composition/seed rows included, protected flagged)', () => {
+  const dependencies = { '@deepseek-ai/dsh-base': '^0.1.0', 'third-party-a': '^1.0.0' }
+  const rows = [
+    row({ name: '@deepseek-ai/dsh-base', role: 'composition', protected: true, version: '0.1.5' }),
+    row({ name: '@dsh-chamber/dsh-chamber-seed-client-graph', role: 'seed', protected: true, spec: null, version: '0.1.5' }),
+    row({ name: 'third-party-a' }),
+  ]
+  const projected = projectInstalledRows(dependencies, rows)
+  assert.equal(projected.legacy, false)
+  assert.deepEqual(projected.rows.map(view => view.name), [
+    '@deepseek-ai/dsh-base',
+    '@dsh-chamber/dsh-chamber-seed-client-graph',
+    'third-party-a',
+  ])
+  const base = projected.rows[0]
+  assert.equal(base.protected, true)
+  assert.equal(base.removable, false)
+  assert.equal(base.version, '0.1.5')
+  assert.equal(base.spec, '^0.1.0', 'the dependency value wins for rows that have one')
+  const seed = projected.rows[1]
+  assert.equal(seed.spec, null, 'a composition/seed row has no dependency entry — the cell falls back to the version')
+  assert.equal(seed.version, '0.1.5')
+  assert.equal(seed.removable, false)
+  assert.equal(seed.role, 'seed')
+  assert.equal(projected.rows[2].removable, true)
+})
+
+test('projectInstalledRows: rows absent falls back to the legacy dependencies filter and reports legacy:true', () => {
+  const projected = projectInstalledRows({
+    '@deepseek-ai/dsh': '^0.1.0',
+    '@dsh-chamber/dsh-client-ui-mobile': '^0.1.0',
+    'third-party-a': '^1.0.0',
+  }, null)
+  assert.equal(projected.legacy, true)
+  assert.deepEqual(projected.rows, [
+    { name: 'third-party-a', spec: '^1.0.0', version: null, role: 'unknown', protected: false, removable: true, legacy: true },
+  ])
+  // 空 rows（新后端投影了空集）不是回退：legacy:false、行集为空。
+  const empty = projectInstalledRows({ 'third-party-a': '^1.0.0' }, [])
+  assert.equal(empty.legacy, false)
+  assert.deepEqual(empty.rows, [])
 })

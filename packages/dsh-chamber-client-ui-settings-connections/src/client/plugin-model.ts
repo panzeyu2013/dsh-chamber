@@ -7,7 +7,8 @@
  * (remove before add), batch failure policy (the SINGLE definition shared by
  * the ssh and gateway flows), apply-result normalization for both backends,
  * the gateway task projection → row model, the v1 undo derive (撤销最近变更,
- * §6.4/§6.8 r2) and the reserved-name filter.
+ * §6.4/§6.8 r2) and the protected-row projection + the diff/apply boundary
+ * (§6.11.5, 2026-12 修订).
  *
  * Discipline notes:
  * - PURE + LOCALE-FREE: imports nothing, touches no window/ambient surface,
@@ -20,26 +21,30 @@
  *   them — every IPC/wire shape it consumes is declared as a LOCAL structural
  *   twin below, named *Shape, with the authority cited in the comment (the
  *   ipc-surface-mirror test in packages/desktop pins the preload ↔ renderer
- *   sides; these twins pin the renderer → model read). The reserved-name
- *   predicate is a hand mirror of the Node-side control-plane single source
- *   (packages/control-plane/src/plugin-spec.ts — the browser cannot import
- *   it), the ADD_SPEC precedent; a lockstep test (test/plugin-model.test.ts)
- *   pins the mirror textually.
+ *   sides; these twins pin the renderer → model read).
+ * - NO PROTECTION MIRROR (2026-12, design 21 §6.11.5): the protected set
+ *   `P = B₀ ∪ S ∪ F` is derived and projected by the BACKEND — the side that
+ *   can compute P (local/gateway = desktop main / gateway server; ssh =
+ *   desktop main) — and the renderer only renders `rows[].protected` /
+ *   `rows[].role`. The former isDeniedPluginName hand mirror of the Node-side
+ *   predicate and its textual lockstep test are DELETED (isDeniedPluginName /
+ *   filterDeniedRows no longer exist); the sole survivor is
+ *   `legacyProtectedName`, documented as the fallback policy for an UN-UPGRADED
+ *   gateway (§6.11.7), never a mirror of a Node-side function.
  */
 
 /* ---------------------------------------------------------------------------
- * 1. Reserved-name deny mirror (design 21 §6.2/§6.7 decision 19)
+ * 1. Legacy protection fallback (design 21 §6.11.7 — version skew only)
  * ---------------------------------------------------------------------------
- * Renderer hand-mirror of control-plane plugin-spec.ts isDeniedPluginName
- * (ADD_SPEC precedent: the web chain cannot import the Node-side module; the
- * lockstep test in test/plugin-model.test.ts compares the two predicate
- * bodies textually). Both the official domain (@deepseek-ai/*) and the
- * chamber domain (@dsh-chamber/* — seeded host packages, self-built client
- * plugins, the mobile exception) are chamber-managed and can never be
- * installed/removed through the plugin model. The prefix match stays correct
- * even if a versioned `@scope/name@ver` string reaches it.
+ * 旧就地在场的 gateway 不返回 `rows`（§6.11.5 的加性字段），渲染端此时没有
+ * 后端投影可消费，只能按旧口径兜底：官方域（@deepseek-ai/*）与本仓 chamber 域
+ * （@dsh-chamber/*）都从可操作行里滤掉——旧服务端的写面按旧规则拒绝它们，所以
+ * 绝不能给出一个必然被拒的按钮/勾选。这是**对未升级服务端的回退策略**，不是
+ * 任何 Node 侧函数的镜像；受保护集合 P 的判定权威在后端
+ * `control-plane/src/protected-plugins.ts`，渲染端只消费投影。gateway 全量
+ * 升级后本回退路径即可删除（§6.11.8 已登记的偏差）。
  */
-export function isDeniedPluginName(name: string): boolean {
+export function legacyProtectedName(name: string): boolean {
   return name.startsWith('@deepseek-ai/') || name.startsWith('@dsh-chamber/')
 }
 
@@ -499,18 +504,172 @@ export function undoForLatest(rows: readonly TaskRow[]): UndoLatest {
 }
 
 /* ---------------------------------------------------------------------------
- * 7. Reserved-row filter (design 21 §6.6 — the dialog's third-party filter)
+ * 7. Protected rows: read-side projection + the diff/apply boundary
+ *    (design 21 §6.11.5, 2026-12 修订)
  * ---------------------------------------------------------------------------
- * Partition any name-carrying row set (diff rows, installed rows, inventory
- * entries) into what the model may act on and what the reserved domains own.
+ * 后端三端各投影 `rows: PluginRow[]`（加性字段；`dependencies` 语义不变），
+ * 渲染端只消费。本节提供三件事：
+ * - projectInstalledRows：已安装列表的行投影。**行集必须是后端的并集投影**——
+ *   实测 live profile 的 `dependencies` 为空而 `bundles` 非空，组合成员根本不在
+ *   依赖表里；只渲染 dependencies 会让受保护行永远不可见。rows 缺失（旧
+ *   gateway，§6.11.7）时回退到 dependencies 旧过滤并置 legacy 标记。
+ * - actionableDependencies：computePluginDiff 的输入收窄（**硬要求**）。若把
+ *   组合/受保护行并进 diff 输入，`missing` 行默认勾选 ⇒ 一次普通第三方对账会把
+ *   `@deepseek-ai/dsh-base@…` 当 add 提交，后端整批拒绝（gateway 亦然）。
+ * - isActionableRow / legacyProtectedName：上面两条共用的行判据。
+ *
+ * 本模块**不重算保护集合**（`rows[].protected` 是后端判定）。唯一的域名前缀例外是
+ * `OFFICIAL_SCOPE_PREFIX` / `sshSyncableDependencies`：那是 ssh **传输能力**过滤
+ * （ssh 装面对官方 scope 整批拒绝），不是保护判定（§6.11.5/§6.11.3）。
  */
 
-export function filterDeniedRows<T extends { name: string }>(rows: readonly T[]): { allowed: T[]; denied: T[] } {
-  const allowed: T[] = []
-  const denied: T[] = []
-  for (const row of rows) {
-    if (isDeniedPluginName(row.name)) denied.push(row)
-    else allowed.push(row)
+/** 行角色（wire 契约的字面量并集；渲染端只渲染，绝不推导）。 */
+export type PluginRowRoleShape = 'composition' | 'seed' | 'layer' | 'third-party' | 'materialized' | 'unknown'
+
+/** 一行已安装事实的本地结构孪生（authority: renderer global.d.ts
+ *  `PluginRowProjection`（local/ssh 两侧 manifest 的 `rows`）/ control-plane
+ *  protected-plugins.ts 的 `PluginRow`（gateway 投影）；mirror discipline——
+ *  环境类型归 global.d.ts，纯模块读自己的孪生）。 */
+export interface PluginRowShape {
+  name: string
+  /** 声明的依赖值（file: 值由后端按各自掩码纪律处理）；组合/种子行无依赖项时
+   *  为 null。 */
+  spec: string | null
+  /** 能从已装清单读到的版本；读不到为 null（绝不作为判据）。 */
+  version: string | null
+  role: PluginRowRoleShape
+  /** 后端计算的受保护判定；渲染端绝不重算（§6.11.5）。 */
+  protected: boolean
+  owner?: 'installation' | 'chamber' | 'user'
+}
+
+/** 加性 `rows` 成员的载体孪生（可选：旧 gateway 不返回，§6.11.7）。 */
+export interface PluginRowsCarrierShape {
+  rows?: readonly PluginRowShape[] | undefined
+}
+
+/** 读清单上的加性行投影；缺失/非数组 → null（调用方走 §6.11.7 回退路径）。
+ *  返回浅拷贝：调用方可以自由遍历/排序而不动 IPC 载荷。 */
+export function pluginRowsOf(manifest: PluginRowsCarrierShape | null | undefined): PluginRowShape[] | null {
+  if (manifest === null || manifest === undefined) return null
+  const rows = manifest.rows
+  return Array.isArray(rows) ? [...rows] : null
+}
+
+/** diff/apply 边界的行判据（§6.11.5 硬要求）：只要后端判它**非受保护**，它就能进
+ *  对账面——`layer`（用户自己加的层）同样是用户内容，必须可同步；被排除的是组合/
+ *  播种/线族/受保护行（`protected` 已由后端算好）。
+ *
+ *  注意角色**不**参与判据：早先按 `role ∈ {third-party, materialized}` 收窄会把用户
+ *  后加的层从对账视图里静默抹掉（功能回归）。官方 scope 在 **ssh** 面上的不可装是
+ *  **传输能力**问题，由 `sshSyncableDependencies` 单独处理，不混进保护判据。 */
+export function isActionableRow(row: PluginRowShape): boolean {
+  return row.protected === false
+}
+
+/** ssh 对账面的输入收窄（§6.11.5 + §6.11.3 ssh 保守装面）：在
+ *  `actionableDependencies` 之上再排除官方 scope。原因是**传输能力**而非保护判定——
+ *  ssh 装面对官方 scope 一律整批拒绝（`familySource:'none'`），一个这样的行就会让
+ *  一次普通对账整体失效；保护判定始终以后端 `rows[].protected` 为准。
+ *  这是**传输能力**判据，不是保护判定：`protected` 始终等于「name ∈ P」（后端投影）；
+ *  官方 scope 行若不在 P 内则仍可移除（remove 只判 B₀ ∪ S），只是装不进 ssh。 */
+export function sshSyncableDependencies(
+  dependencies: Record<string, string>,
+  rows: readonly PluginRowShape[] | null,
+): Record<string, string> {
+  const actionable = actionableDependencies(dependencies, rows)
+  const syncable: Record<string, string> = {}
+  for (const [name, spec] of Object.entries(actionable)) {
+    if (name.startsWith(OFFICIAL_SCOPE_PREFIX)) continue
+    syncable[name] = spec
   }
-  return { allowed, denied }
+  return syncable
+}
+
+/** 官方 scope 前缀：**只**用于 ssh 对账面的传输能力过滤（见上），不是保护判定——
+ *  保护判定唯一来源是后端投影的 `rows[].protected`（§6.11.5）。 */
+export const OFFICIAL_SCOPE_PREFIX = '@deepseek-ai/'
+
+/**
+ * 已安装行的移除动作判据：写面只按 `name ∈ P` 拒绝 remove（§6.11.3 R1，remove 永不
+ * 判版本），所以非受保护行都能移除——与 `isActionableRow` **同一条判据**（2026-12
+ * review 后二者合一：早先按角色收窄 diff 是功能回归，见 isActionableRow 注释）。
+ * 保留名字是为了让调用点的语义自解释（移除按钮 vs 对账输入）。
+ */
+export const isRemovableRow = isActionableRow
+
+/** 把清单的 `dependencies` 收窄成 diff/apply 边界可操作的行（§6.11.5 硬要求）。
+ *  rows 可用时：只保留「存在对应行且 isActionableRow」的依赖项——严格是**过滤**
+ *  （绝不凭行新增依赖项）；rows 缺失（旧 gateway）时按 legacyProtectedName 回退。
+ *  依赖表的值逐字保留（与既有显示/提交值同源）。 */
+export function actionableDependencies(
+  dependencies: Record<string, string>,
+  rows: readonly PluginRowShape[] | null,
+): Record<string, string> {
+  const actionable: Record<string, string> = {}
+  if (rows === null) {
+    for (const [name, spec] of Object.entries(dependencies)) {
+      if (!legacyProtectedName(name)) actionable[name] = spec
+    }
+    return actionable
+  }
+  const byName = new Map(rows.map(row => [row.name, row]))
+  for (const [name, spec] of Object.entries(dependencies)) {
+    const row = byName.get(name)
+    if (row === undefined || !isActionableRow(row)) continue
+    actionable[name] = spec
+  }
+  return actionable
+}
+
+/** 已安装列表的一行视图（渲染端只读投影）。legacy 回退行的 role 为 'unknown'
+ *  （没有后端投影可消费），legacy 标记驱动「gateway 版本较低」提示。 */
+export interface InstalledRowView {
+  name: string
+  /** 依赖值；组合/播种行没有依赖项时为 null（渲染端落到版本格）。 */
+  spec: string | null
+  version: string | null
+  role: PluginRowRoleShape
+  protected: boolean
+  /** 是否渲染逐行移除按钮（见 isRemovableRow）。 */
+  removable: boolean
+  /** true = 该行来自旧服务端的 dependencies 回退（无 rows 投影，§6.11.7）。 */
+  legacy: boolean
+}
+
+/** 把清单/已安装投影投影成列表视图。rows 可用时按后端行序（含只存在于 rows 的
+ *  组合/播种行）；缺失时按 legacyProtectedName 过滤 dependencies，并按 legacy
+ *  标记回报（gateway 区据此渲染旧版本提示）。 */
+/**
+ * Project one zone's installed rows from a backend manifest. `rows: []` is
+ * AUTHORITATIVE (an empty result renders the empty state, never the legacy
+ * dependency fallback): the field is additive, so only its ABSENCE means "this
+ * backend is too old to project rows" — an empty array is a real answer, and
+ * re-deriving from `dependencies` would resurrect the protection mirror the
+ * renderer must not own (2026-12 review note).
+ */
+export function projectInstalledRows(
+  dependencies: Record<string, string>,
+  rows: readonly PluginRowShape[] | null,
+): { rows: InstalledRowView[]; legacy: boolean } {
+  if (rows === null) {
+    const legacyRows: InstalledRowView[] = []
+    for (const [name, spec] of Object.entries(dependencies)) {
+      if (legacyProtectedName(name)) continue
+      legacyRows.push({ name, spec, version: null, role: 'unknown', protected: false, removable: true, legacy: true })
+    }
+    return { rows: legacyRows, legacy: true }
+  }
+  return {
+    rows: rows.map(row => ({
+      name: row.name,
+      spec: dependencies[row.name] ?? row.spec ?? null,
+      version: row.version,
+      role: row.role,
+      protected: row.protected,
+      removable: isRemovableRow(row),
+      legacy: false,
+    })),
+    legacy: false,
+  }
 }

@@ -70,7 +70,6 @@ import {
   GATEWAY_TOKEN_MIN_CHARS,
   GATEWAY_TOKEN_VISIBLE_ASCII_PATTERN,
   HOST_PACKAGE_SEED_FILES,
-  isDeniedPluginName,
   PLUGIN_NAME_PATTERN,
   SPKI_PIN_MISMATCH_CODE,
   SPKI_PIN_PATTERN,
@@ -1624,7 +1623,10 @@ export async function gatewayChamberApplyBatch(params: {
     if (parseSpecArg(spec) === null) return { ok: false, error: `invalid add spec: ${JSON.stringify(spec)}` }
   }
   for (const name of remove) {
-    if (typeof name !== 'string' || !PLUGIN_NAME_PATTERN.test(name) || isDeniedPluginName(name)) {
+    // Shape only: whether the name may be removed is decided by the gateway's
+    // protected-set judgement (design 21 §6.11 — the family facts are
+    // server-side); a malformed item is a client mistake and refused here.
+    if (typeof name !== 'string' || !PLUGIN_NAME_PATTERN.test(name)) {
       return { ok: false, error: `invalid remove name: ${JSON.stringify(name)}` }
     }
   }
@@ -1979,7 +1981,7 @@ export async function gatewayChamberMaterialize(params: {
 }): Promise<GatewayChamberMaterializeResult> {
   const { url } = params
   const timeoutMs = params.requestTimeoutMs ?? GATEWAY_MATERIALIZE_TIMEOUT_MS
-  if (typeof params.name !== 'string' || !PLUGIN_NAME_PATTERN.test(params.name) || isDeniedPluginName(params.name)) {
+  if (typeof params.name !== 'string' || !PLUGIN_NAME_PATTERN.test(params.name)) {
     return { ok: false, error: 'invalid plugin name for the materialize upload' }
   }
   if (typeof params.version !== 'string' || !GATEWAY_PLUGIN_VERSION_PATTERN.test(params.version)) {

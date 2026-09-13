@@ -17,7 +17,10 @@ import { spawn } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
+  CHAMBER_SEED_NAMES,
   applyPlugins,
+  guardPluginMutation,
+  sshProtectionFacts,
   ARCHIVE_CLEANUP_INSERT_ID,
   ARCHIVE_CLEANUP_PACKAGE_NAME,
   classifyDependencyValue,
@@ -107,6 +110,26 @@ function chamberStateOf(chamber: ChamberInjectionState, name: string): { install
   return { installed: pkg.installed, patched: pkg.patched, version: pkg.version, live: pkg.live }
 }
 import type { ChamberHostPackageSeed, ExecFn, ExecResult, SshApplyJournalSink, StatusFn, RemoteSpec } from './plugin-sync.ts'
+import { buildSshApplyRows, defaultSshProtectionFacts } from './ssh-apply-rows.ts'
+import { PROFILE_BUNDLES_SNAPSHOT } from '../control-plane/src/protected-plugins.ts'
+
+/** Compact projection of a manifest's read-face rows (design 21 §6.11.5):
+ *  `name:role:protected[:spec]` order-preserving, so the union semantics stay
+ *  visible (composition/seed rows exist even when `dependencies` is empty). */
+const rowShape = (rows: readonly { name: string; role: string; protected: boolean; spec: string | null }[]): string[] =>
+  rows.map(row => `${row.name}:${row.role}:${row.protected}${row.spec === null ? '' : `:${row.spec}`}`)
+
+/** Assert a remotePluginList result's manifest minus `rows`, plus its rows. */
+function assertRemoteManifest(
+  result: Awaited<ReturnType<typeof remotePluginList>>,
+  expected: { ok: true; manifest: Record<string, unknown> },
+  expectedRows: string[],
+): void {
+  if (!result.ok) assert.fail(`expected ok, got ${result.error}`)
+  const { rows, ...manifest } = result.manifest
+  assert.deepEqual({ ok: true, manifest }, expected)
+  assert.deepEqual(rowShape(rows), expectedRows)
+}
 import type { TransportRunPayload } from './transport-provider.ts'
 import { NotificationSourceIncarnations } from './notifications.ts'
 
@@ -570,7 +593,7 @@ test('remotePluginList: parses dependencies + bundles from cat output', async ()
     return err(`unexpected cat ${payload?.argv?.[0]}`)
   }
   const result = await remotePluginList(exec, { id: 's1', remoteDshHome: null })
-  assert.deepEqual(result, {
+  assertRemoteManifest(result, {
     ok: true,
     manifest: {
       dependencies: { foo: '^1.0.0' },
@@ -584,12 +607,70 @@ test('remotePluginList: parses dependencies + bundles from cat output', async ()
         { insertId: 'open-in', name: OPEN_IN_PACKAGE_NAME, probe: 'openInApp/probe', installed: false, patched: false, version: null, live: null, localOnly: true },
       ] },
     },
+  }, [
+    // B₀ (installation-owned composition) + S (chamber seeds) + the remote's own
+    // third-party/layer row — the union the dialog must render.
+    '@deepseek-ai/dsh-base:composition:true',
+    '@deepseek-ai/dsh-web-app:composition:true',
+    `${ARCHIVE_CLEANUP_PACKAGE_NAME}:seed:true`,
+    `${CLIENT_GRAPH_PACKAGE_NAME}:seed:true`,
+    `${GIT_WORKTREE_PACKAGE_NAME}:seed:true`,
+    `${OPEN_IN_PACKAGE_NAME}:seed:true`,
+    'foo:layer:false:^1.0.0',
+  ])
+})
+
+test('remotePluginList: ssh rows keep `protected === name ∈ P` (the install conservatism is a write-face/capability fact)', async () => {
+  // design 21 §6.11.5 (2026-12 review revision): `protected` means EXACTLY "the write
+  // face refuses both directions" (name ∈ P = B₀ ∪ S here). An official-scope row that
+  // is NOT in P stays `protected: false` because the ssh REMOVE face allows removing it
+  // (remove judges B₀ ∪ S only) — marking it protected would hide a working action and
+  // print a false "protected by the composition" hint. The INSTALL conservatism is
+  // enforced by the write face (and kept out of the reconcile batch by the UI's ssh
+  // transport filter), not by a read-face lie.
+  const exec: ExecFn = async (_id, action, payload) => {
+    if (action === 'run' && payload?.op === 'exec' && payload.command === 'cat') {
+      const path = payload.argv?.[0] ?? ''
+      if (path.endsWith('/profiles/web/package.json')) {
+        return ok(JSON.stringify({
+          dependencies: {
+            'third-party-pkg': '^1.0.0',
+            '@deepseek-ai/dsh-experimental-x': '0.1.5-rc.2',
+            '@deepseek-ai/dsh-session': '^0.1.5-rc.2',
+          },
+          dsh: { profile: { bundles: ['third-party-pkg'] } },
+        }))
+      }
+      return err(`run command failed (exit 1): cat: ${path}: No such file or directory`)
+    }
+    return err(`unexpected ${action}`)
+  }
+  const result = await remotePluginList(exec, { id: 's1', remoteDshHome: null })
+  assert.equal(result.ok, true)
+  if (!result.ok) return
+  const byName = new Map(result.manifest.rows.map(row => [row.name, row]))
+  assert.equal(byName.get('third-party-pkg')?.protected, false, 'third-party rows stay actionable')
+  assert.equal(byName.get('third-party-pkg')?.role, 'layer')
+  // Official scope, NOT part of B₀ ∪ S ⇒ not protected (removable; install refused).
+  assert.equal(byName.get('@deepseek-ai/dsh-experimental-x')?.protected, false)
+  assert.equal(byName.get('@deepseek-ai/dsh-session')?.protected, false)
+  // The write face is what refuses the official install — asserted here so the
+  // asymmetry ("read face offers the remove, write face refuses the install") is
+  // pinned rather than implied.
+  const install = guardPluginMutation({
+    op: 'install', name: '@deepseek-ai/dsh-experimental-x', version: '0.1.5-rc.2', facts: sshProtectionFacts(),
   })
+  assert.equal(install.kind, 'refuse')
+  assert.equal(install.kind === 'refuse' ? install.code : null, 'protected')
+  const remove = guardPluginMutation({
+    op: 'remove', name: '@deepseek-ai/dsh-experimental-x', version: null, facts: sshProtectionFacts(),
+  })
+  assert.equal(remove.kind, 'allow', 'removing a stray official copy is restorative and stays allowed')
 })
 
 test('remotePluginList: ENOENT → profileExists:false, ssh failure → {ok:false}', async () => {
   const enoent: ExecFn = async () => err('cat: /home/u/.dsh/profiles/web/package.json: No such file or directory')
-  assert.deepEqual(
+  assertRemoteManifest(
     await remotePluginList(enoent, { id: 's1', remoteDshHome: null }),
     {
       ok: true,
@@ -605,6 +686,14 @@ test('remotePluginList: ENOENT → profileExists:false, ssh failure → {ok:fals
       ] },
       },
     },
+    [
+      '@deepseek-ai/dsh-base:composition:true',
+      '@deepseek-ai/dsh-web-app:composition:true',
+      `${ARCHIVE_CLEANUP_PACKAGE_NAME}:seed:true`,
+      `${CLIENT_GRAPH_PACKAGE_NAME}:seed:true`,
+      `${GIT_WORKTREE_PACKAGE_NAME}:seed:true`,
+      `${OPEN_IN_PACKAGE_NAME}:seed:true`,
+    ],
   )
   const sshDown: ExecFn = async () => err('the ssh exec could not reach the host (exit 255)')
   assert.deepEqual(
@@ -620,7 +709,7 @@ test('remotePluginList: a zh_CN-locale remote ENOENT ("没有那个文件或目�
   // ENOENT_PATTERN this surfaced as "git-worktree probe failed: run command
   // failed (exit 1): cat: …: 没有那个文件或目录" instead of 未注入.
   const zhEnoent: ExecFn = async () => err('run command failed (exit 1): cat: /home/zeyu/.dsh/profiles/node_modules/@dsh-chamber/dsh-chamber-seed-git-worktree/package.json: 没有那个文件或目录')
-  assert.deepEqual(
+  assertRemoteManifest(
     await remotePluginList(zhEnoent, { id: 's1', remoteDshHome: null }),
     {
       ok: true,
@@ -636,6 +725,14 @@ test('remotePluginList: a zh_CN-locale remote ENOENT ("没有那个文件或目�
       ] },
       },
     },
+    [
+      '@deepseek-ai/dsh-base:composition:true',
+      '@deepseek-ai/dsh-web-app:composition:true',
+      `${ARCHIVE_CLEANUP_PACKAGE_NAME}:seed:true`,
+      `${CLIENT_GRAPH_PACKAGE_NAME}:seed:true`,
+      `${GIT_WORKTREE_PACKAGE_NAME}:seed:true`,
+      `${OPEN_IN_PACKAGE_NAME}:seed:true`,
+    ],
   )
   // The ssh-provider's redaction re-attach path keeps the marker working for
   // a redacted zh_CN line too.
@@ -1129,9 +1226,11 @@ test('applyPlugins: a changed operational owner is not blocked by the reusable i
   )
 })
 
-test('applyPlugins: reserved names (@deepseek-ai/* + @dsh-chamber/*) refuse the WHOLE batch before any exec', async () => {
-  // Design 21 §6.4/decision 19: same deny set as the gateway — the refusal
-  // must happen before ANY remote change, and must LIST the denied names.
+test('applyPlugins: protected names refuse the WHOLE batch before any exec (design 21 §6.11)', async () => {
+  // ssh facts = B₀ ∪ S with NO family source: a chamber seed / composition
+  // member is `protected`, and ANY official-scope install is conservative-
+  // refused. The refusal must happen before ANY remote change and must name
+  // each refused row with its code.
   let execCalls = 0
   const exec: ExecFn = async () => {
     execCalls += 1
@@ -1139,30 +1238,46 @@ test('applyPlugins: reserved names (@deepseek-ai/* + @dsh-chamber/*) refuse the 
   }
   const spec: RemoteSpec = { id: 's1', remoteDshHome: null }
 
-  const chamberAdd = await applyPlugins(exec, readyStatus, spec, { add: ['@dsh-chamber/dsh-chamber-seed-client-graph@1.2.3'], remove: [] })
-  assert.equal(chamberAdd.ok, false)
-  if (!chamberAdd.ok) {
-    assert.match(chamberAdd.error, /reserved plugin name\(s\): @dsh-chamber\/dsh-chamber-seed-client-graph/)
+  const seedAdd = await applyPlugins(exec, readyStatus, spec, { add: ['@dsh-chamber/dsh-chamber-seed-client-graph@1.2.3'], remove: [] })
+  assert.equal(seedAdd.ok, false)
+  if (!seedAdd.ok) {
+    assert.match(seedAdd.error, /@dsh-chamber\/dsh-chamber-seed-client-graph \[protected\]/)
   }
 
-  const officialRemove = await applyPlugins(exec, readyStatus, spec, { add: [], remove: ['@deepseek-ai/ui'] })
-  assert.equal(officialRemove.ok, false)
-  if (!officialRemove.ok) {
-    assert.match(officialRemove.error, /reserved plugin name\(s\): @deepseek-ai\/ui/)
+  const compositionRemove = await applyPlugins(exec, readyStatus, spec, { add: [], remove: ['@deepseek-ai/dsh-base'] })
+  assert.equal(compositionRemove.ok, false)
+  if (!compositionRemove.ok) {
+    assert.match(compositionRemove.error, /@deepseek-ai\/dsh-base \[protected\]/)
   }
 
-  // A MIXED batch (valid rows alongside a denied one) is refused in full:
+  // ssh install face is conservative: an official-scope row is refused even
+  // when the name is NOT in B₀ ∪ S (no remote family facts can bound it).
+  const officialAdd = await applyPlugins(exec, readyStatus, spec, { add: ['@deepseek-ai/dsh-experimental-agent-team-profile@0.1.5-rc.2'], remove: [] })
+  assert.equal(officialAdd.ok, false)
+  if (!officialAdd.ok) {
+    assert.match(officialAdd.error, /@deepseek-ai\/dsh-experimental-agent-team-profile \[protected\]/)
+  }
+
+  // A MIXED batch (valid rows alongside a refused one) is refused in full:
   // the valid rows must never execute around the refused row.
   const mixed = await applyPlugins(exec, readyStatus, spec, {
-    add: ['fine-pkg@1.0.0', '@deepseek-ai/official@^2.0.0'],
-    remove: ['@dsh-chamber/host-git'],
+    add: ['fine-pkg@1.0.0', '@deepseek-ai/official@0.1.5-rc.2'],
+    remove: ['@dsh-chamber/dsh-chamber-seed-git-worktree'],
   })
   assert.equal(mixed.ok, false)
   if (!mixed.ok) {
     assert.match(mixed.error, /@deepseek-ai\/official/)
-    assert.match(mixed.error, /@dsh-chamber\/host-git/)
+    assert.match(mixed.error, /@dsh-chamber\/dsh-chamber-seed-git-worktree/)
   }
   assert.equal(execCalls, 0, 'no exec (not even a snapshot read) may run for a refused batch')
+
+  // Removal is judged by B₀ ∪ S alone: an unexpected official-scope row that is
+  // NOT part of the baseline may be removed (removing a shadow copy is
+  // restorative). The guard decides this without any exec — asserted directly
+  // on the shared assembly so the apply chain stays out of the picture.
+  const rows = buildSshApplyRows([], ['@deepseek-ai/dsh-session'], defaultSshProtectionFacts())
+  assert.deepEqual(rows.refusals, [])
+  assert.deepEqual(rows.rows.map(row => `${row.kind}:${row.name}`), ['remove:@deepseek-ai/dsh-session'])
 })
 
 test('applyPlugins: with a journal sink, every executed row records its PRE-CHANGE spec (snapshot first)', async () => {
@@ -1273,23 +1388,33 @@ test('applyPlugins: without a journal sink the historical exec sequence is uncha
   assert.deepEqual(order[0], 'dsh:add:pkg-a@^1.0.0', 'the first exec is the change itself — no snapshot read without a journal')
 })
 
-test('materializeAndAdd: a folder whose manifest claims a reserved name is refused before any exec', async () => {
+test('materializeAndAdd: a folder claiming a protected name (or an unpinned official one) is refused before any exec', async () => {
+  // ssh facts: B₀ ∪ S protection + conservative official-scope installs.
+  // A chamber *seed* name can never be smuggled in through a folder pick...
   const root = tempDir()
-  const pluginDir = join(root, 'pkg')
-  mkdirSync(pluginDir)
-  writeFileSync(join(pluginDir, 'package.json'), JSON.stringify({ name: '@dsh-chamber/evil-impersonator', version: '1.0.0' }))
   let execCalls = 0
   const exec: ExecFn = async () => {
     execCalls += 1
     return ok()
   }
-  const result = await materializeAndAdd(exec, { id: 's1', remoteDshHome: null }, pluginDir, async () => {
-    throw new Error('pack must not run for a denied materialize')
-  })
-  assert.equal(result.ok, false)
-  if (!result.ok) {
-    assert.match(result.error, /reserved plugin name\(s\): @dsh-chamber\/evil-impersonator/)
-  }
+  const noPack = async (): Promise<never> => { throw new Error('pack must not run for a refused materialize') }
+
+  const seedDir = join(root, 'seed')
+  mkdirSync(seedDir)
+  writeFileSync(join(seedDir, 'package.json'), JSON.stringify({ name: '@dsh-chamber/dsh-chamber-seed-client-graph', version: '1.0.0' }))
+  const seedPick = await materializeAndAdd(exec, { id: 's1', remoteDshHome: null }, seedDir, noPack)
+  assert.equal(seedPick.ok, false)
+  if (!seedPick.ok) assert.match(seedPick.error, /\[protected\]/)
+
+  // ...and an official-scope folder is refused on the ssh install face even
+  // when the name is not part of the baseline.
+  const officialDir = join(root, 'official')
+  mkdirSync(officialDir)
+  writeFileSync(join(officialDir, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh-experimental-agent-team-profile', version: '0.1.5-rc.2' }))
+  const officialPick = await materializeAndAdd(exec, { id: 's1', remoteDshHome: null }, officialDir, noPack)
+  assert.equal(officialPick.ok, false)
+  if (!officialPick.ok) assert.match(officialPick.error, /\[protected\]/)
+
   assert.equal(execCalls, 0, 'the remote write/add chain never runs')
 })
 
@@ -2155,14 +2280,22 @@ test('materializeArchiveAndAdd: archive bytes → write-file → remote $HOME �
   assert.equal(result.spec, addSpec)
 })
 
-test('materializeArchiveAndAdd: reserved names are refused before any exec; no pnpm pack ever runs', async () => {
+test('materializeArchiveAndAdd: protected / unpinned-official / malformed names are refused before any exec', async () => {
   const exec: ExecFn = async () => err('unexpected exec — a refused archive must not touch the remote')
   const bytes = Buffer.from([0x1f, 0x8b, 0x08])
-  for (const name of ['@dsh-chamber/taken', '@deepseek-ai/taken', 'bad name!', '']) {
+  // A chamber SEED name is protected; a non-seed `@dsh-chamber/*` name is NOT
+  // (the domain-prefix rule is retired — S is the fact) but still needs a
+  // well-formed shape.
+  for (const name of ['@dsh-chamber/dsh-chamber-seed-client-graph', 'bad name!', '']) {
     const result = await materializeArchiveAndAdd(exec, SEED_SPEC, { name, bytes })
     assert.equal(result.ok, false, name)
-    if (!result.ok) assert.match(result.error, /invalid package name|reserved/)
+    if (!result.ok) assert.match(result.error, /invalid package name|\[protected\]/)
   }
+  // Official scope on the ssh install face: conservative refusal regardless of
+  // the archive's declared version.
+  const official = await materializeArchiveAndAdd(exec, SEED_SPEC, { name: '@deepseek-ai/taken', version: '0.1.5-rc.2', bytes })
+  assert.equal(official.ok, false)
+  if (!official.ok) assert.match(official.error, /\[protected\]/)
 })
 
 test('materializeArchiveAndAdd: an oversized or empty archive is refused before any exec', async () => {
@@ -2249,6 +2382,51 @@ test('local plugin writer reaper kills a daemonized descendant after its group l
 // absolute paths, nor drive pack/install/remove silently).
 // ============================================================================
 
+test('localPluginList: rows union dependencies ∪ live bundles ∪ B₀ ∪ S with roles and protection', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'local-list-'))
+  try {
+    const profileDir = join(home, 'profiles', 'web')
+    mkdirSync(profileDir, { recursive: true })
+    writeFileSync(join(profileDir, 'package.json'), JSON.stringify({
+      name: 'web', version: '0.0.0',
+      dependencies: { 'third-party-pkg': '^1.0.0', 'materialized-pkg': 'file:/tmp/x' },
+      dsh: { profile: { bundles: ['third-party-pkg'] } },
+    }))
+    for (const name of ['third-party-pkg', 'materialized-pkg']) {
+      mkdirSync(join(profileDir, 'node_modules', name), { recursive: true })
+    }
+    writeFileSync(join(profileDir, 'node_modules', 'third-party-pkg', 'package.json'),
+      JSON.stringify({ name: 'third-party-pkg', version: '1.2.3', dsh: { bundle: { patch: './p.js' } } }))
+    const manifests = localPluginList(home, {
+      path: home, version: '0.1.5-rc.2',
+      familyNames: ['@deepseek-ai/dsh', '@deepseek-ai/dsh-session'],
+      familyComplete: true,
+    } as never)
+    const rows = new Map(manifests.rows.map(row => [row.name, row]))
+    // Dependency union, live bundle union, the composition snapshot and the
+    // chamber seeds must all be present (nothing silently dropped).
+    for (const name of ['third-party-pkg', 'materialized-pkg', ...PROFILE_BUNDLES_SNAPSHOT, ...CHAMBER_SEED_NAMES]) {
+      assert.ok(rows.has(name), `row missing for ${name}: ${[...rows.keys()].join(', ')}`)
+    }
+    assert.equal(rows.get('third-party-pkg')?.role, 'layer')
+    assert.equal(rows.get('materialized-pkg')?.role, 'materialized')
+    assert.equal(rows.get('third-party-pkg')?.protected, false)
+    assert.equal(rows.get(PROFILE_BUNDLES_SNAPSHOT[0]!)?.protected, true)
+    assert.equal(rows.get(PROFILE_BUNDLES_SNAPSHOT[0]!)?.role, 'composition')
+    assert.equal(rows.get(PROFILE_BUNDLES_SNAPSHOT[0]!)?.owner, 'installation')
+    assert.equal(rows.get(CHAMBER_SEED_NAMES[0]!)?.protected, true)
+    assert.equal(rows.get(CHAMBER_SEED_NAMES[0]!)?.owner, 'chamber')
+    // A family member that is NOT a direct dependency is protected but not a row
+    // unless it is installed; a direct family dependency is a row AND protected.
+    assert.equal(rows.has('@deepseek-ai/dsh-session'), false)
+    // Raw local values are NOT masked on this face (registered deviation: the
+    // local list still passes machine paths through; see STATUS).
+    assert.equal(rows.get('materialized-pkg')?.spec, 'file:/tmp/x')
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
 test('redactLocalPluginManifest: local-path spec values are masked, registry values untouched', () => {
   const manifest = {
     dependencies: {
@@ -2267,6 +2445,13 @@ test('redactLocalPluginManifest: local-path spec values are masked, registry val
       'url-dep': 'https://example.com/pkg.tgz',
     },
     bundles: ['file-dep'],
+    // The read-face rows MUST be masked by the same rule as `dependencies`
+    // (2026-12 review): `rows[].spec` is a second channel for the same value.
+    rows: [
+      { name: 'file-dep', spec: 'file:/Users/x/pkg', version: null, role: 'materialized', protected: false, owner: 'user' },
+      { name: 'registry-dep', spec: '^1.2.3', version: '1.2.3', role: 'third-party', protected: false, owner: 'user' },
+      { name: '@deepseek-ai/dsh-base', spec: null, version: '0.1.5', role: 'composition', protected: true, owner: 'installation' },
+    ],
     clientLines: ['link-dep'],
     bundleLines: ['file-dep'],
     unsyncable: [{ name: 'workspace-dep', reason: 'workspace protocol' }],
@@ -2296,6 +2481,13 @@ test('redactLocalPluginManifest: local-path spec values are masked, registry val
   assert.deepEqual(redacted.clientLines, ['link-dep'])
   assert.deepEqual(redacted.bundleLines, ['file-dep'])
   assert.deepEqual(redacted.unsyncable, [{ name: 'workspace-dep', reason: 'workspace protocol' }])
+  // ...and the rows channel carries the SAME masked values (no local path may
+  // reach the renderer through `rows[].spec`).
+  const rowOf = (name: string) => redacted.rows.find(row => row.name === name)
+  assert.equal(rowOf('file-dep')?.spec, MATERIALIZED_VALUE_MASK)
+  assert.equal(rowOf('registry-dep')?.spec, '^1.2.3')
+  assert.equal(rowOf('@deepseek-ai/dsh-base')?.spec, null)
+  assert.equal(rowOf('file-dep')?.role, 'materialized', 'masking must not change the role')
   assert.equal(redacted.chamber.ok, true)
 })
 
@@ -2413,6 +2605,37 @@ test('isAllowedLocalFileSpec: absolute POSIX/Windows/UNC paths only — relative
   assert.equal(isAllowedLocalFileSpec('file:'), false, 'empty selection')
   assert.equal(isAllowedLocalFileSpec('file:/tmp/x\nrm -rf'), false, 'control characters')
   assert.equal(isAllowedLocalFileSpec('plain-registry-spec'), false, 'no file: prefix')
+})
+
+test('runLocalDshPlugin: a deferred (profile-absent) judgement still reaches the CLI — the first add creates the profile', async () => {
+  // Regression guard (design 21 §6.11.3 R0): `defer` is NOT a refusal. The
+  // defense-in-depth guard inside runLocalDshPlugin used to treat every
+  // non-allow outcome as a refusal, which broke the very first install on a
+  // machine whose web profile does not exist yet.
+  const dir = tempDir()
+  try {
+    const deferred = await runLocalDshPlugin(dir, dir, 'add', 'third-party-pkg@1.0.0', {
+      protection: { familyNames: ['@deepseek-ai/dsh-base'], runtimeVersion: '0.1.5-rc.2', profileState: 'absent' },
+    })
+    assert.equal(deferred.ok, false)
+    assert.match(deferred.error ?? '', /no dsh CLI entry found/,
+      'a defer must fall through to the CLI lookup, never be reported as a refusal')
+
+    // A protected name is still stopped BEFORE any CLI lookup.
+    const refused = await runLocalDshPlugin(dir, dir, 'remove', '@deepseek-ai/dsh-base', {
+      protection: { familyNames: ['@deepseek-ai/dsh-base'], runtimeVersion: '0.1.5-rc.2' },
+    })
+    assert.equal(refused.ok, false)
+    assert.match(refused.error ?? '', /\[protected\]/)
+    // ...and so is an official-scope install without an exact same-generation pin.
+    const crossGen = await runLocalDshPlugin(dir, dir, 'add', '@deepseek-ai/dsh-experimental-x@0.1.4', {
+      protection: { familyNames: ['@deepseek-ai/dsh-base'], runtimeVersion: '0.1.5-rc.2' },
+    })
+    assert.equal(crossGen.ok, false)
+    assert.match(crossGen.error ?? '', /\[generation-mismatch\]/)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 })
 
 test('runLocalDshPlugin: a file: pick is refused without allowFileSpec and passes the gate with it', async () => {

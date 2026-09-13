@@ -9,9 +9,11 @@ import assert from 'node:assert/strict'
 import {
   buildSshApplyRows,
   buildSshUndoDecision,
-  describeReservedNameRefusal,
+  defaultSshProtectionFacts,
+  describePluginRefusals,
   describeSshUndoConfirmation,
   parseSpecName,
+  parseSpecVersion,
 } from './ssh-apply-rows.ts'
 import type { SshJournalOp } from './ssh-plugin-journal.ts'
 
@@ -58,38 +60,88 @@ test('parseSpecName: non-registry garbage is refused without throwing', () => {
 // buildSshApplyRows
 // ============================================================================
 
-test('buildSshApplyRows: parses row names and reports reserved names across add+remove', () => {
+test('buildSshApplyRows: install face is conservative, remove face judges B₀ ∪ S (design 21 §6.11)', () => {
   const result = buildSshApplyRows(
     ['pkg-a@^1.0.0', '@scope/pkg-b', '@dsh-chamber/dsh-chamber-seed-client-graph@1.2.3', '@deepseek-ai/ui@2.0.0'],
-    ['@dsh-chamber/git-worktree', 'plain-name', '@deepseek-ai/ui'],
+    ['@dsh-chamber/git-worktree', 'plain-name', '@deepseek-ai/ui', '@deepseek-ai/dsh-base'],
   )
-  assert.equal(result.rows.length, 7)
+  assert.equal(result.rows.length, 8)
   assert.deepEqual(result.rows.filter(row => row.name === null), [])
-  assert.deepEqual(result.refused.sort(), ['@deepseek-ai/ui', '@dsh-chamber/dsh-chamber-seed-client-graph', '@dsh-chamber/git-worktree'])
+  // Refused: the chamber SEED (protected) + every official-scope INSTALL
+  // (conservative — no remote family facts) + the composition member on remove.
+  assert.deepEqual(
+    result.refusals.map(refusal => `${refusal.name}:${refusal.decision.kind === 'refuse' ? refusal.decision.code : 'defer'}`),
+    [
+      '@dsh-chamber/dsh-chamber-seed-client-graph:protected',
+      '@deepseek-ai/ui:protected',
+      '@deepseek-ai/dsh-base:protected',
+    ],
+  )
+  // Allowed (not protected by B₀ ∪ S): a non-seed chamber name and an
+  // unexpected official-scope row may be REMOVED — removing a stray copy is
+  // restorative, never destructive.
+  assert.deepEqual(result.refusals.map(refusal => refusal.kind), ['add', 'add', 'remove'])
+})
+
+test('buildSshApplyRows: a deferred judgement is never reported as a batch refusal', () => {
+  // profileState 'absent' ⇒ decide returns defer. A deferral means "let the CLI
+  // create the profile", so the batch must NOT be refused (the preflight must
+  // not block a first install).
+  const facts = { ...defaultSshProtectionFacts(), profileState: 'absent' as const }
+  const result = buildSshApplyRows(['third-party-pkg@1.0.0'], [], facts)
+  assert.deepEqual(result.refusals, [])
+  assert.deepEqual(result.rows.map(row => row.name), ['third-party-pkg'])
 })
 
 test('buildSshApplyRows: tolerated unknown payload shapes (main preflight safety)', () => {
   const empty = buildSshApplyRows(undefined, undefined)
-  assert.deepEqual(empty, { rows: [], refused: [] })
+  assert.deepEqual(empty, { rows: [], refusals: [] })
   const notArrays = buildSshApplyRows('x', { remove: ['y'] })
-  assert.deepEqual(notArrays, { rows: [], refused: [] })
+  assert.deepEqual(notArrays, { rows: [], refusals: [] })
   const nonStrings = buildSshApplyRows([42, null, 'ok-pkg@1.0.0'], [['nested'], '@dsh-chamber/denied'])
   assert.deepEqual(nonStrings.rows, [
     { kind: 'add', spec: 'ok-pkg@1.0.0', name: 'ok-pkg' },
     { kind: 'remove', spec: '@dsh-chamber/denied', name: '@dsh-chamber/denied' },
   ])
-  assert.deepEqual(nonStrings.refused, ['@dsh-chamber/denied'])
+  // `@dsh-chamber/denied` is NOT a seed ⇒ not protected ⇒ no refusal (the
+  // domain-prefix rule is retired; S is the fact).
+  assert.deepEqual(nonStrings.refusals, [])
 })
 
 test('buildSshApplyRows: refused names are unique even when repeated across rows', () => {
-  const result = buildSshApplyRows(['@dsh-chamber/a@1.0.0', '@dsh-chamber/a@2.0.0'], ['@dsh-chamber/a'])
-  assert.deepEqual(result.refused, ['@dsh-chamber/a'])
+  const seed = '@dsh-chamber/dsh-chamber-seed-client-graph'
+  const result = buildSshApplyRows([`${seed}@1.0.0`, `${seed}@2.0.0`], [seed])
+  assert.equal(result.refusals.length, 1)
+  assert.equal(result.refusals[0]?.name, seed)
 })
 
-test('describeReservedNameRefusal: loud copy listing the denied names', () => {
-  const text = describeReservedNameRefusal(['@dsh-chamber/a', '@deepseek-ai/b'])
-  assert.match(text, /reserved plugin name\(s\): @dsh-chamber\/a、@deepseek-ai\/b/)
-  assert.match(text, /@deepseek-ai\/\* and @dsh-chamber\/\* cannot be installed or removed through the plugin model/)
+test('parseSpecVersion: registry specs carry their pinned value; bare/file specs do not', () => {
+  assert.equal(parseSpecVersion('pkg@1.2.3'), '1.2.3')
+  assert.equal(parseSpecVersion('@scope/pkg@0.1.5-rc.2'), '0.1.5-rc.2')
+  assert.equal(parseSpecVersion('@scope/pkg@^1.0.0'), '^1.0.0')
+  assert.equal(parseSpecVersion('@scope/pkg'), null)
+  assert.equal(parseSpecVersion('pkg'), null)
+  assert.equal(parseSpecVersion('file:/x/y.tgz'), null)
+  assert.equal(parseSpecVersion('pkg@'), null)
+})
+
+test('describePluginRefusals: loud copy naming each row and its refusal code', () => {
+  const refusals = buildSshApplyRows(
+    ['@deepseek-ai/experimental-layer@0.1.5-rc.2', 'pkg@1.0.0'],
+    ['@deepseek-ai/dsh-base'],
+  ).refusals
+  const text = describePluginRefusals(refusals)
+  assert.match(text, /@deepseek-ai\/experimental-layer \[protected\]/)
+  assert.match(text, /@deepseek-ai\/dsh-base \[protected\]/)
+})
+
+test('defaultSshProtectionFacts: B₀ ∪ S only — no family source', () => {
+  const facts = defaultSshProtectionFacts()
+  assert.equal(facts.runtimeVersion, null)
+  assert.equal(facts.profileState, 'ready')
+  assert.equal(facts.protectedSet?.names.has('@deepseek-ai/dsh-base'), true, 'B₀ is protected')
+  assert.equal(facts.protectedSet?.names.has('@dsh-chamber/dsh-chamber-seed-client-graph'), true, 'S is protected')
+  assert.equal(facts.protectedSet?.names.has('@deepseek-ai/dsh-session'), false, 'F is unknown on ssh ⇒ not in P')
 })
 
 // ============================================================================

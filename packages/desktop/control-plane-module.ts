@@ -130,11 +130,11 @@ export const CHAMBER_HOST_PACKAGES = controlPlaneModule.CHAMBER_HOST_PACKAGES
 export const HOST_PACKAGE_SEED_FILES = controlPlaneModule.HOST_PACKAGE_SEED_FILES
 export const HOST_GRAPH_PATCH_FILENAME = controlPlaneModule.HOST_GRAPH_PATCH_FILENAME
 
-// Plugin spec/name whitelist family + reserved-name deny predicate
+// Plugin spec/name whitelist family (the reserved-name deny predicate is retired;
+// `protected-plugins.ts` owns the judgement, design 21 §6.11)
 // (plugin-spec.ts, design 21 §6.2/§6.7 — the shared source for the desktop
 // main (ssh-provider re-export / plugin-sync) and the gateway executor) —
 // consumed by ssh-provider.ts and plugin-sync.ts.
-export const isDeniedPluginName = controlPlaneModule.isDeniedPluginName
 export const extractSpecName = controlPlaneModule.extractSpecName
 export const MATERIALIZE_FILE_SPEC_PATTERN = controlPlaneModule.MATERIALIZE_FILE_SPEC_PATTERN
 export const MAX_PLUGIN_SPEC_CHARS = controlPlaneModule.MAX_PLUGIN_SPEC_CHARS
@@ -142,6 +142,32 @@ export const PLUGIN_NAME_PATTERN = controlPlaneModule.PLUGIN_NAME_PATTERN
 export const PLUGIN_SPEC_PATTERN = controlPlaneModule.PLUGIN_SPEC_PATTERN
 export const RUN_STDOUT_MAX_BYTES = controlPlaneModule.RUN_STDOUT_MAX_BYTES
 export const WRITE_FILE_MAX_BYTES = controlPlaneModule.WRITE_FILE_MAX_BYTES
+
+// Protected-plugin set + generation coupling (protected-plugins.ts, design 21
+// §6.11) — the op-phased write-face decision (install/remove judge P alike;
+// remove never judges a version) and the read-face row projection consumed by
+// the desktop main's local/ssh plugin surfaces and the gateway. Same single
+// source as the whitelist family above.
+export const decidePluginMutation = controlPlaneModule.decidePluginMutation
+export const derivePluginRows = controlPlaneModule.derivePluginRows
+export const deriveProtectedSet = controlPlaneModule.deriveProtectedSet
+export const familyNamesFromLockfileClosure = controlPlaneModule.familyNamesFromLockfileClosure
+export const familyNamesFromRuntimeTree = controlPlaneModule.familyNamesFromRuntimeTree
+export const isExactVersion = controlPlaneModule.isExactVersion
+export const isMaterializedValue = controlPlaneModule.isMaterializedValue
+export const officialScope = controlPlaneModule.officialScope
+export const OFFICIAL_SCOPE = controlPlaneModule.OFFICIAL_SCOPE
+export const CHAMBER_SCOPE = controlPlaneModule.CHAMBER_SCOPE
+export const PROFILE_BUNDLES_SNAPSHOT = controlPlaneModule.PROFILE_BUNDLES_SNAPSHOT
+export const PLUGIN_MATERIALIZED_VALUE_MASK = controlPlaneModule.PLUGIN_MATERIALIZED_VALUE_MASK
+export const protectedReason = controlPlaneModule.protectedReason
+export const readInstalledVersion = controlPlaneModule.readInstalledVersion
+export const registrySpecVersion = controlPlaneModule.registrySpecVersion
+export const resolveRuntimeFamily = controlPlaneModule.resolveRuntimeFamily
+export const sameGeneration = controlPlaneModule.sameGeneration
+export const verifyProfileFamilyConsistency = controlPlaneModule.verifyProfileFamilyConsistency
+export const describeFamilyFindings = controlPlaneModule.describeFamilyFindings
+export const suggestExactSpec = controlPlaneModule.suggestExactSpec
 
 // Owner-private file primitives (private-file.ts, P2-2a) — consumed by the
 // desktop main's credential mirrors (ssh-provider / gateway-provider /
@@ -188,11 +214,26 @@ export type {
   ChamberHostPackageDescriptor,
   ClientRequestEnvelope,
   CordisInsert,
+  DecidePluginMutationInput,
+  DerivePluginRowsInput,
+  FamilyConsistencyFinding,
+  FamilyConsistencyVerdict,
   HostPackageInsert,
   HostPackageSeedFile,
   InsertConflictKind,
   ParsedInsertRow,
+  ParsedVersion,
+  PluginMutationDecision,
+  PluginMutationOp,
+  PluginRefusalCode,
+  PluginRow,
+  PluginRowRole,
+  ProtectedDerivation,
+  ProtectedFacts,
+  ProtectedSet,
+  ProtectedSource,
   RawUnaryOutcome,
+  RuntimeFamilyResolution,
   ServerResponseEnvelope,
   ServerResponseParse,
 } from '@dsh-chamber/control-plane'

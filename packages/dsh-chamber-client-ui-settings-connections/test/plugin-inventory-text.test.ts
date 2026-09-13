@@ -20,6 +20,7 @@ import {
   HOST_GRAPH_PACKAGE,
   MOBILE_PACKAGE,
   classifyInventoryEntry,
+  installedRowLiveState,
   localChamberBadge,
   remoteChamberBadge,
   thirdPartyEntries,
@@ -130,6 +131,24 @@ test('remoteChamberBadge: the raw cordis patch-insert report of a chamber row st
   ]
   assert.deepEqual(remoteChamberBadge(entries, MOBILE_PACKAGE), { labelKey: 'chamberBadgeLive', tone: 'ok' })
   assert.deepEqual(remoteChamberBadge(entries, GIT_WORKTREE_PACKAGE), { labelKey: 'chamberBadgeFailed', tone: 'danger' })
+})
+
+test('installedRowLiveState: protected composition/seed rows never claim a Loader state', () => {
+  // 受保护行（安装自带基线）从不是 Loader 客户端入口：对它们要 Loader 状态会在每次
+  // 打开对话框时给出假告警（2026-12 review；组合行在 §6.11.5 之后恒可见）。
+  const snapshot = { entries: [
+    { moduleName: 'third-party-live', enabled: true, fiberPhase: 'active' },
+  ] } as unknown as PluginInventorySnapshot
+  assert.equal(installedRowLiveState(snapshot, { name: '@deepseek-ai/dsh-base', protected: true, role: 'composition' }, true), null)
+  assert.equal(installedRowLiveState(snapshot, { name: '@dsh-chamber/dsh-chamber-seed-client-graph', protected: true, role: 'seed' }, true), null)
+  assert.equal(installedRowLiveState(snapshot, { name: 'x', protected: false, role: 'composition' }, true), null)
+  // 用户行照旧。
+  assert.deepEqual(installedRowLiveState(snapshot, { name: 'third-party-live', protected: false, role: 'layer' }, true),
+    { labelKey: 'thirdPartyLiveActive', tone: 'ok' })
+  assert.deepEqual(installedRowLiveState(snapshot, { name: 'missing-entry', protected: false, role: 'third-party' }, true),
+    { labelKey: 'thirdPartyLiveRestart', tone: 'warn' })
+  assert.equal(installedRowLiveState(snapshot, { name: 'missing-entry', protected: false, role: 'third-party' }, false), null)
+  assert.equal(installedRowLiveState(null, { name: 'third-party-live', protected: false, role: 'layer' }, true), null)
 })
 
 test('thirdPartyLiveState: only an enabled + active Loader entry claims live, never an unreadable snapshot', () => {
