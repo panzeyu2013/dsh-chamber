@@ -111,18 +111,45 @@ class FakeHost implements ArchiveCleanupHost {
     if (hook !== null && hook.attempt === this.stateReadAttempts) {
       for (const state of hook.states) this.states.set(state.sessionId, state)
     }
-    return [...this.states.values()]
+    // The REAL host record corpus is a UNION (sessionQuery.listSessions() ∪
+    // persistence.list()): its live leg keeps serving a header for every
+    // ATTACHED session even after that session's content is gone, so a resident
+    // member never becomes record-less while the process lives (vendor
+    // session-query corpus.ts). Model it — a fixture that returned only the
+    // durable states made a resident member look record-less on the rerun,
+    // which is what let the old "the rerun plans no tree and stays silent"
+    // assertion pass (2026-13 review).
+    const attached = new Set([...this.live, ...this.loaded])
+    const liveOnly = [...attached]
+      .filter(id => !this.states.has(id))
+      .map(id => ({ sessionId: id, running: this.live.has(id) } as ArchivedSessionState))
+    return [...this.states.values(), ...liveOnly]
   }
 
+  /** Fail ONLY the Nth live read (1-based). Used to fail the final pre-write
+   *  re-check while the run's earlier reads succeed. */
+  failLiveReadOnCall: number | null = null
+
   async listLiveSessionFacts(): Promise<{ running: string[]; loaded: string[] }> {
-    if (this.failLiveRead) throw new ArchiveCleanupError('registry-unreadable', 'fake: live read failed')
     this.liveListCalls += 1
+    if (this.failLiveRead || this.failLiveReadOnCall === this.liveListCalls) {
+      throw new ArchiveCleanupError('registry-unreadable', 'fake: live read failed')
+    }
     // Mirror the binding: running ⊆ loaded (a running agent is attached too).
     return { running: [...this.live], loaded: [...new Set([...this.live, ...this.loaded])] }
   }
 
+  /** Attach this id when the orphan sweep probes content — i.e. AFTER every
+   *  tree deletion and BEFORE the single archived-set write. That is the late
+   *  window the final live re-check exists for (2026-13 review). */
+  attachOnSweepProbe: string | null = null
+
   async hasStoredContent(sessionId: string): Promise<boolean> {
     this.probeCalls.push(sessionId)
+    if (this.attachOnSweepProbe !== null) {
+      this.loaded.add(this.attachOnSweepProbe)
+      this.attachOnSweepProbe = null
+    }
     const injected = this.consumeFailure(this.failContentProbes, sessionId)
     if (injected !== null) {
       throw new ArchiveCleanupError(injected, `fake: content probe failed for ${sessionId}`)
@@ -313,7 +340,7 @@ test('purge: loaded-only subtrees are skipped by default and deleted under force
   assert.equal(host.removedFromArchived.includes('s2'), false)
 })
 
-test('purge: a resident root whose content is already gone stays archived and silent on the rerun', async () => {
+test('purge: a resident root whose content is already gone re-affirms retention on the rerun', async () => {
   const host = buildHost()
   host.loaded.add('s2')
   const core = new ArchiveCleanupCore(host)
@@ -323,19 +350,22 @@ test('purge: a resident root whose content is already gone stays archived and si
   assert.equal(first.forcedLoaded, 1)
   assert.deepEqual(first.residentRetainedRoots, ['s2'])
 
-  // Second run: the content is gone. The id is now a LIVE RECORD-LESS archived
-  // member — the plan has no tree for it and the orphan sweep deliberately
-  // never touches a live member (fail-closed: "absent from the bulk corpus" is
-  // not proof of absent content), so nothing is deleted, nothing is reported
-  // and the membership stays (hidden) until the instance restarts.
+  // Second run: the content is gone but the session is STILL ATTACHED, and the
+  // real record corpus is a union whose live leg keeps serving its header — so
+  // the id is NOT record-less: the plan builds the tree again, this run's
+  // deletion reports 'missing', and the membership is retained (and reported)
+  // again. Only after the instance restarts does the id become record-less and
+  // get converged by the orphan sweep (2026-13 review: the earlier assertion
+  // here claimed the rerun planned no tree and reported nothing, which no real
+  // host does).
   const again = await core.purge(['s2'], true)
   assert.equal(again.deletedSessions, 0)
   assert.equal(again.forcedLoaded, 0)
   assert.deepEqual(again.errors, [])
-  assert.equal(again.residentRetainedRoots, undefined)
+  assert.deepEqual(again.residentRetainedRoots, ['s2'], 'retention is re-affirmed, not silently dropped')
   assert.equal(host.archived.has('s2'), true)
   assert.equal(host.removedFromArchived.includes('s2'), false)
-  assert.equal(host.states.has('s2'), false)
+  assert.equal(host.states.has('s2'), false, 'the durable record is gone; only the live leg serves it')
 })
 
 test('purge: a tree retained for residency keeps its covered archived descendants too (no partial membership)', async () => {
@@ -397,6 +427,44 @@ test('purge: a DESCENDANT that becomes resident after the tree recheck also reta
   // The CONTENT was still deleted, and the counts stay honest.
   assert.equal(result.deletedSubagents, 2, 'the s1 tree is a1 + a1a')
   assert.equal(result.deletedSessions, 1)
+})
+
+test('purge: an attach landing after the deletions but before the batched write keeps the membership', async () => {
+  const host = buildHost()
+  // The sweep runs after every tree deletion and before the single archived-set
+  // write (up to MAX_SWEEP_CONTENT_PROBES content probes), so it is the last
+  // window in which a session can attach while its root is already a completed
+  // tree. Without the final live re-check the membership was cleared there and
+  // the live-preferred corpus served the row again — the original symptom, one
+  // window later (2026-13 review).
+  host.attachOnSweepProbe = 's2'
+  const core = new ArchiveCleanupCore(host)
+
+  const result = await core.purge(['s2'], true)
+  assert.equal(host.loaded.has('s2'), true, 'the attach landed inside the window')
+  assert.equal(result.deletedSessions, 1, 'its content was deleted before it attached')
+  assert.equal(host.archived.has('s2'), true, 'the membership must survive: the row is being served again')
+  assert.equal(host.removedFromArchived.includes('s2'), false)
+  assert.deepEqual(result.residentRetainedRoots, ['s2'], 'reported, so the manager labels the row')
+  assert.equal(result.forcedLoaded, 1, 'its content WAS force-deleted while it was live')
+})
+
+test('purge: a failed FINAL live re-check clears nothing this run (fail-closed)', async () => {
+  const host = buildHost()
+  const core = new ArchiveCleanupCore(host)
+  // Reads: 1 snapshot + 1 per deletable tree (s1, s2) + 1 sweep confirmation +
+  // the final pre-write re-check. Fail only that last one.
+  host.failLiveReadOnCall = 5
+  const result = await core.purge()
+
+  // The deletions themselves already happened (they were decided and executed
+  // earlier in the run); what must NOT happen is clearing memberships while
+  // "nobody attached in the meantime" cannot be proven.
+  assert.equal(result.deletedSessions, 2)
+  assert.equal(host.removalCalls.length, 0, 'an unprovable window must clear nothing')
+  assert.deepEqual(host.archived, new Set(['s1', 's2', 's3', 's-orphan']), 'every membership survives')
+  assert.equal(result.clearedOrphanMembers, undefined)
+  assert.ok(result.errors.some(error => error.code === 'archive-set'), 'and the run records why')
 })
 
 test('purge: a NON-resident tree is still cleared normally (retention is residency-only)', async () => {
@@ -713,7 +781,8 @@ test('purge reads the state corpus once plus ONE orphan-sweep confirmation scan,
   assert.equal(result.errors.length, 0)
   assert.equal(result.clearedOrphanMembers, 1)
   assert.equal(host.stateListCalls, 1 + 1, 'snapshot scan + the ONE sweep confirmation scan (s-orphan exists)')
-  assert.equal(host.liveListCalls, 1 + 2 + 1, 'snapshot + one live refresh per deletable tree (s1, s2) + the sweep confirmation — running trees never enter the loop')
+  assert.equal(host.liveListCalls, 1 + 2 + 1 + 1,
+    'snapshot + one live refresh per deletable tree (s1, s2) + the sweep confirmation + the LAST re-check before the batched write (2026-13 review: the write may land minutes after the deletions, so nothing may be cleared without one final live read; the extra call reads the LIVE store/agent list only — never the durable corpus, whose scan count below is unchanged)')
   assert.equal(host.removalCalls.length, 1, 'archived-set removal is ONE batched write')
   assert.deepEqual(host.removalCalls[0], ['s1', 's2', 's-orphan'])
 })
@@ -726,7 +795,7 @@ test('purge: a converged set with no orphan members keeps the single-scan contra
   assert.equal(result.errors.length, 0)
   assert.equal(result.clearedOrphanMembers, undefined)
   assert.equal(host.stateListCalls, 1, 'no orphan candidates → no confirmation scan')
-  assert.equal(host.liveListCalls, 1 + 2)
+  assert.equal(host.liveListCalls, 1 + 2 + 1, 'same contract as above: the batched write is always preceded by one final live read')
   assert.deepEqual(host.removalCalls, [['s1', 's2']])
 })
 

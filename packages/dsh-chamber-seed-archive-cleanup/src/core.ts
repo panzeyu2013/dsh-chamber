@@ -1019,19 +1019,15 @@ export class ArchiveCleanupCore {
       // outer loop continues with the NEXT independent tree (per-session
       // isolation across trees unchanged).
       let treeAborted = false
-      // The ROOT's own deletion report: its residency at the deletion instant
-      // (not the plan-time snapshot) decides whether the membership may be
-      // cleared. The root is deleted LAST, so this is the widest-coverage fact
-      // available without a per-member pre-check (review F2).
-      let rootResident = false
+      // The root's content outcome feeds the force accounting below.
       let rootDeleted = false
       // Residency is collected for EVERY member, not just the root (2026-13
       // review, self-review round): a DESCENDANT attached after the tree-level
       // recheck reports `resident` at its own deletion instant too, and
       // ignoring that report completed the tree and cleared the membership of a
       // subagent the process still serves — the same re-surfacing symptom one
-      // level down. `rootResident` stays separate only for the force
-      // accounting below.
+      // level down. The root is deleted LAST, so its report covers the widest
+      // window, but any member's report retains the tree.
       let memberResident = false
       for (const sessionId of tree.order) {
         const state = statesBySession.get(sessionId)
@@ -1040,7 +1036,6 @@ export class ArchiveCleanupCore {
           const deletion = await this.host.deleteSessionContent(sessionId, state?.cwd, force, protectedIds)
           if (deletion.resident) memberResident = true
           if (sessionId === tree.rootSessionId) {
-            rootResident = deletion.resident
             rootDeleted = deletion.outcome === 'deleted'
             if (rootDeleted) deletedSessions += 1
           } else if (deletion.outcome === 'deleted') {
@@ -1207,13 +1202,52 @@ export class ArchiveCleanupCore {
       // the list. Skipping it leaves the id archived, so a later run still sees
       // it (convergent, never a silent un-archive).
       .filter(id => !protectedIds.has(id))
+    // ---- LAST LIVE RE-CHECK, immediately before the batched write ----------
+    // The retention decision for a tree was taken at ITS deletion instant, but
+    // this write happens after the whole run (including up to
+    // MAX_SWEEP_CONTENT_PROBES content probes), i.e. potentially minutes later
+    // with the client's budget. A session that attaches inside that window is
+    // served by the live-preferred corpus the moment its membership is cleared
+    // — the very symptom this revision exists to kill, one window later
+    // (2026-13 review). So the write is filtered by a FRESH read:
+    //  - an id the read reports live is NOT cleared (its membership is the only
+    //    thing hiding a row that is being served again). A completed ROOT among
+    //    them becomes a resident-retained root — its content really was removed
+    //    by this run — and is reported so the manager can label it; a live
+    //    covered descendant keeps its membership silently (subagent-origin rows
+    //    are never manager rows). Retention can leave a PARTIAL set in this
+    //    late window (the tree's non-live members still clear); that is the
+    //    fail-closed direction and is documented in design 24 §4 step 9;
+    //  - a FAILED read writes nothing at all and records a run-level note:
+    //    "cannot prove nobody attached" must never clear memberships.
+    let liveNow = new Set<string>()
+    let liveReadFailed = false
+    if (clearIds.length > 0) {
+      try {
+        const facts = await this.host.listLiveSessionFacts()
+        liveNow = new Set([...facts.running, ...facts.loaded].map(String))
+      } catch (error) {
+        if (!(error instanceof ArchiveCleanupError)) throw error
+        recordError('', 'archive-set', error.message)
+        liveReadFailed = true
+      }
+    }
+    for (const root of completedRoots) {
+      if (!clearIds.includes(root) || !liveNow.has(root)) continue
+      residentRetainedRoots.push(root)
+      // Its content WAS removed by this run while the session was live: the
+      // force accounting follows the retained root (same rule as the
+      // deletion-time retention above).
+      forcedLoaded += 1
+    }
+    const writeIds = liveReadFailed ? [] : clearIds.filter(id => !liveNow.has(id))
     let clearedOrphanMembers = 0
     if (clearIds.length > 0) {
       try {
-        await this.host.removeArchivedSessionIds(clearIds)
-        // Counted only after the single official write SUCCEEDED: a failed
-        // write leaves every id archived, so the honest swept count is zero.
-        clearedOrphanMembers = sweptOrphanMembers.length
+        if (writeIds.length > 0) await this.host.removeArchivedSessionIds(writeIds)
+        // Counted only after the single official write SUCCEEDED, and only for
+        // the swept members actually written (a late-retained id was not).
+        clearedOrphanMembers = sweptOrphanMembers.filter(id => writeIds.includes(id)).length
       } catch (error) {
         if (!(error instanceof ArchiveCleanupError)) throw error
         // Every listed id stays archived; the next purge re-runs them

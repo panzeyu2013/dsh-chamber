@@ -511,7 +511,6 @@ var ArchiveCleanupCore = class {
         continue;
       }
       let treeAborted = false;
-      let rootResident = false;
       let rootDeleted = false;
       let memberResident = false;
       for (const sessionId of tree.order) {
@@ -520,7 +519,6 @@ var ArchiveCleanupCore = class {
           const deletion = await this.host.deleteSessionContent(sessionId, state?.cwd, force, protectedIds);
           if (deletion.resident) memberResident = true;
           if (sessionId === tree.rootSessionId) {
-            rootResident = deletion.resident;
             rootDeleted = deletion.outcome === "deleted";
             if (rootDeleted) deletedSessions += 1;
           } else if (deletion.outcome === "deleted") {
@@ -584,11 +582,29 @@ var ArchiveCleanupCore = class {
       }
     }
     const clearIds = [.../* @__PURE__ */ new Set([...completedRoots, ...coveredArchivedMembers, ...sweptOrphanMembers])].filter((id) => !protectedIds.has(id));
+    let liveNow = /* @__PURE__ */ new Set();
+    let liveReadFailed = false;
+    if (clearIds.length > 0) {
+      try {
+        const facts = await this.host.listLiveSessionFacts();
+        liveNow = new Set([...facts.running, ...facts.loaded].map(String));
+      } catch (error) {
+        if (!(error instanceof ArchiveCleanupError)) throw error;
+        recordError("", "archive-set", error.message);
+        liveReadFailed = true;
+      }
+    }
+    for (const root of completedRoots) {
+      if (!clearIds.includes(root) || !liveNow.has(root)) continue;
+      residentRetainedRoots.push(root);
+      forcedLoaded += 1;
+    }
+    const writeIds = liveReadFailed ? [] : clearIds.filter((id) => !liveNow.has(id));
     let clearedOrphanMembers = 0;
     if (clearIds.length > 0) {
       try {
-        await this.host.removeArchivedSessionIds(clearIds);
-        clearedOrphanMembers = sweptOrphanMembers.length;
+        if (writeIds.length > 0) await this.host.removeArchivedSessionIds(writeIds);
+        clearedOrphanMembers = sweptOrphanMembers.filter((id) => writeIds.includes(id)).length;
       } catch (error) {
         if (!(error instanceof ArchiveCleanupError)) throw error;
         recordError("", "archive-set", error.message);

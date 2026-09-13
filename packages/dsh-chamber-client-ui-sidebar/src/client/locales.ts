@@ -57,7 +57,9 @@ export const zh = {
   'archive.purge.note.orphanMembers': '顺带清理了 {count} 条无内容的归档集合残留成员。',
   // 2026-13 常驻保留修正：内容删了、但会话还活在实例进程里，宿主保留归档标记
   // （行继续隐藏）——旧文案"强制删除"会让人以为列表里也没了。
-  'archive.purge.note.residentRetained': '其中 {count} 项内容已删除，但会话仍在本实例内存中——继续保持隐藏，重启该实例后彻底消失。',
+  // 自足文案（2026-13 review）：常驻成员在真实宿主上「重跑仍有记录」，此时本行会是
+  // 唯一一行（没有「清理完成：删除…」先行句），所以不得用「其中」指代前句。
+  'archive.purge.note.residentRetained': '{count} 项会话的内容已删除，但会话本身仍在本实例内存中——它们继续保持隐藏，重启该实例后彻底消失。',
   'archive.purge.note.forcedLoaded': '其中 {count} 项为进程内已加载的会话（强制删除）。',
   'archive.purge.note.skippedRunning': '已跳过 {count} 项仍在运行的会话（停止未生效；可稍后重试）。',
   'archive.purge.note.skippedLoaded': '已跳过 {count} 项本进程内已加载的会话（未删除）。',
@@ -202,7 +204,7 @@ export const en = {
   'archive.purge.note.protected': 'Skipped {count} archived tree(s): they contain the session you are viewing (not deleted — switch to another session and retry, or retry in a moment: the selection may not be cleared yet after archiving).',
   'archive.purge.note.deleted': 'Cleanup complete: deleted {sessions} session(s) / {subagents} subagent content(s).',
   'archive.purge.note.orphanMembers': 'Also cleared {count} record-less archived-set member(s) that had no content.',
-  'archive.purge.note.residentRetained': 'Content deleted for {count} of them, but those sessions are still in this instance\'s memory — they stay hidden and disappear for good once that instance restarts.',
+  'archive.purge.note.residentRetained': 'Content deleted for {count} session(s) that are still in this instance\'s memory — they stay hidden and disappear for good once that instance restarts.',
   'archive.purge.note.forcedLoaded': '{count} of them were loaded in the process (force-deleted).',
   'archive.purge.note.skippedRunning': 'Skipped {count} session(s) that are still running (the stop did not take effect; retry later).',
   'archive.purge.note.skippedLoaded': 'Skipped {count} session(s) loaded in this process (not deleted).',

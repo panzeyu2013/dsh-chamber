@@ -180,8 +180,20 @@ archiveCleanup/purge({sessionIds?, force?, protectSessionIds?}) → 同上
   别的客户端打开」的竞态；**根或任一成员**的报告都成立——只看根会漏掉「后代在树级
   重读之后才 attach」的同型竞态，2026-13 自查）。方向单一且 fail-closed：保留只可能让行继续隐藏，
   绝不可能让行浮出。**幂等**：重跑对已无内容的常驻成员报 `missing`，此时它已是
-  「无记录的常驻成员」——plan 无树、孤儿清扫按 fail-closed 不碰 live 成员，成员
-  关系继续保留（不可见、无用户影响）。收敛时机**分两类**（2026-13 review 的随机
+  「仍有记录的常驻成员」——记录语料是 `sessionQuery.listSessions() ∪
+  persistence.list()` 的并集，live 腿在内容删除后**仍克隆供出该 header**，所以进程
+  存活期间 plan 每次照建该树、本次删除报 `missing`、成员关系被**再次**保留并再次
+  出现在 `residentRetainedRoots`（客户端文案因此必须自足，见 §13⑳）；只有实例重启
+  后该 id 才真正「无记录」，此时孤儿清扫按 G3 `stat` 证明无内容而收敛（仍 live 的
+  成员继续被 live 排除挡在清扫之外，属 fail-closed）。**收敛的前提是实例至少还有一条
+  会话记录**：整个语料为空时 G1a（空语料不可信）永久跳过清扫，tombstone 会留存
+  （行不存在 ⇒ 用户不可见，每次 run 只多一条 `archive-set` 注记；§13⑳(a) 已知取舍，
+  真要收敛需另行裁决放行 G3 单 id 探针）。另外**批量写之前有一次最终 live 复核**
+  （2026-13 review）：复核认为仍 live 的 id 不写（完成的根改列 `residentRetainedRoots`、
+  被覆盖后代静默保留），复核读失败则整批不写并记 run 级注记——固定写窗口会比删除瞬间
+  晚数分钟（含最多 `MAX_SWEEP_CONTENT_PROBES` 次 `stat`），该窗口内 attach 的会话
+  否则仍会被摘掉成员关系；晚窗口可能留下**部分保留**（同树非常驻成员照常摘除），
+  方向仍是 fail-closed。收敛时机**分两类**（2026-13 review 的随机
   property 检查确认）：被覆盖、但**从未 attached** 的后代在**下一次 run** 就会被
   孤儿清扫（G3 `stat` 证明无内容）摘掉；**仍常驻的成员自身**在进程存活期间被
   live 排除挡在清扫之外，只在**实例重启后**的某次 run 收敛。宿主侧新增记账只有
