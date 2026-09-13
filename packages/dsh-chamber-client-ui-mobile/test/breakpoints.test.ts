@@ -207,7 +207,7 @@ test('the retired mechanisms leave no trace in the stylesheet', () => {
   // regression these rules exist to prevent. The infix arm is what makes them
   // apply today; the suffix arms stay for a build that flips back.
   const phone = normalizePhoneTier()
-  const armsOf = (local) => {
+  const armsOf = (local: string): string => {
     const group = new RegExp(`:is\\(([^)]*\\[class\\*="_${local}_"\\][^)]*)\\)`).exec(phone)
     assert.ok(group !== null, `the phone tier must cover the local-first _${local}_ shape`)
     assert.ok(group[1].includes(`[class$="_${local}"]`), `the hash-first _${local} arm must stay`)
@@ -221,7 +221,7 @@ test('the retired mechanisms leave no trace in the stylesheet', () => {
   // overrode its flex:none. The seat wrapper is addressable upstream
   // (scoped-slots.tsx gives every slot a div[data-slot]), so the narrow anchor
   // wins and the class arm must stay gone.
-  const truncation = cssBlock(phone, ['[data-slot="conversation.input.model"] button'])
+  const truncation = cssBlock(phone, '[data-slot="conversation.input.model"] button')
   assert.ok(truncation !== null && truncation.includes('max-width: 112px !important;'),
     'the model trigger truncation must hang off the model SEAT anchor')
   assert.ok(truncation.includes('flex: 0 1 auto !important;'),
