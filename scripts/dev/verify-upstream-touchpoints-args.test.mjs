@@ -4,7 +4,7 @@
  * Three parts, because they answer three different questions:
  *   0. PURE: `parseVerifyArgs` pins the accepted surface and every rejection
  *      reason (the gate script itself is a top-level program — importing it
- *      would run C1/C3–C11, so the decision logic lives in its own module, the
+ *      would run C1/C3–C15, so the decision logic lives in its own module, the
  *      same split artifact-gate.mjs uses).
  *   1. WIRING (subprocess): the script must actually consult the guard BEFORE
  *      any gate runs. That matters more than the parse result: the default mode
@@ -12,7 +12,7 @@
  *      ignored argument means a full write pass the caller never asked for. The
  *      regression therefore also asserts that a usage error leaves an artifact's
  *      mtime untouched and prints no gate marker.
- *   2. PURE: the C11 hover-port verdict (`verify-upstream-touchpoints-hover.mjs`)
+ *   2. PURE: the C15 hover-port verdict (`verify-upstream-touchpoints-hover.mjs`)
  *      — the machine judgment behind the "upstream fixes the race ⇒ retire the
  *      port" deviation. It rides this file, not a new one, because
  *      `package.json`'s `test:upgrade-tools` names its test files explicitly.
@@ -156,7 +156,7 @@ test('every dynamic import in the gate goes through pathToFileURL (Windows ESM s
 })
 
 // ---------------------------------------------------------------------------
-// C11 — hover-port verdict (pure). Second pure half, same rationale as above:
+// C15 — hover-port verdict (pure). Second pure half, same rationale as above:
 // the gate script is a top-level program, so the decision logic lives in
 // `verify-upstream-touchpoints-hover.mjs`. The coverage rides THIS file on
 // purpose — `package.json`'s `test:upgrade-tools` lists its test files
@@ -193,7 +193,7 @@ export function HoverCard({ anchor, openDelayMs = 500 }) {
 /**
  * The pin's real `pointer-grace.ts`, verbatim (the whole file, from
  * `harness.commit`; sha256 cba1529e052cf3ea09fd3851990219e2b80d61fa4b3d35da490f28ba9f9965c6).
- * C11 reads `POINTER_GRACE_MS` from exactly this text, so the constants side of
+ * C15 reads `POINTER_GRACE_MS` from exactly this text, so the constants side of
  * the fixture IS the pinned file.
  */
 const PINNED_POINTER_GRACE = `import { useCallback, useEffect, useRef } from 'react'
@@ -247,7 +247,7 @@ export function usePointerGrace(close: () => void): PointerGrace {
 
 /**
  * The pin's real `onPointerLeave` attribute, verbatim (comments included) — the
- * exact text C11's shape rule has to read. Mutants below are built by replacing
+ * exact text C15's shape rule has to read. Mutants below are built by replacing
  * `if (open) armClose()` inside it.
  */
 const PINNED_ON_POINTER_LEAVE = `      onPointerLeave={() => {
@@ -289,14 +289,14 @@ const hoverSources = (overrides = {}) => ({
   ...overrides,
 })
 
-test('C11: the pinned racy shape passes and the locked timings are reported', () => {
+test('C15: the pinned racy shape passes and the locked timings are reported', () => {
   const verdict = hoverPortVerdict(hoverSources())
   assert.equal(verdict.ok, true, verdict.failures.join('\n'))
   assert.match(verdict.summary, /竞态两侧形状仍在/)
   assert.match(verdict.summary, /grace=200ms dwell=500ms/)
 })
 
-test('C11 (OPEN side): the dwell callback opens without re-checking the pointer', () => {
+test('C15 (OPEN side): the dwell callback opens without re-checking the pointer', () => {
   // The pinned open path, read directly: one dwell timer, and its callback does
   // nothing but open. This is the half a close-side-only gate could not see.
   const body = componentBody(stripComments(PINNED_HOVER_CARD), 'HoverCard').text
@@ -306,7 +306,7 @@ test('C11 (OPEN side): the dwell callback opens without re-checking the pointer'
   assert.equal(racyOpenPathShape(body).racy, true)
 })
 
-test('C11 (OPEN side): the minimal upstream fix on this end forces the retirement decision', () => {
+test('C15 (OPEN side): the minimal upstream fix on this end forces the retirement decision', () => {
   // The fix direction that leaves `onPointerLeave` byte-identical: re-check a
   // synchronous pointer-presence flag when the dwell fires.
   for (const guard of [
@@ -330,7 +330,7 @@ test('C11 (OPEN side): the minimal upstream fix on this end forces the retiremen
   }
 })
 
-test('C11 (OPEN side): a comment or a string naming an inside flag cannot trip the rule', () => {
+test('C15 (OPEN side): a comment or a string naming an inside flag cannot trip the rule', () => {
   // The mirror of the close-side decoy test: comments are stripped, so a note
   // about the guard is not the guard. A false positive here would fail the gate
   // on a cosmetic edit.
@@ -345,7 +345,7 @@ test('C11 (OPEN side): a comment or a string naming an inside flag cannot trip t
   assert.equal(verdict.ok, true, verdict.failures.join('\n'))
 })
 
-test('C11 (OPEN side): a rewritten or ambiguous open path is drift, never a silent pass', () => {
+test('C15 (OPEN side): a rewritten or ambiguous open path is drift, never a silent pass', () => {
   const rewritten = withEnter(`      onPointerEnter={() => {
         cancelClose()
         if (open) return
@@ -368,7 +368,7 @@ test('C11 (OPEN side): a rewritten or ambiguous open path is drift, never a sile
   assert.match(ambiguous.failures.join('\n'), /生效点不唯一/)
 })
 
-test('C11: a guard that only exists in a comment cannot satisfy the gate', () => {
+test('C15: a guard that only exists in a comment cannot satisfy the gate', () => {
   // The shape the pin has, plus a comment claiming it — but the real handler
   // arms unconditionally. Comment stripping is what makes this fail loud.
   const text = PINNED_HOVER_CARD.replace(
@@ -383,7 +383,7 @@ test('C11: a guard that only exists in a comment cannot satisfy the gate', () =>
   assert.match(verdict.failures.join('\n'), /退役移植/)
 })
 
-test('C11: the day upstream arms on a ref (or unconditionally), the gate forces the decision', () => {
+test('C15: the day upstream arms on a ref (or unconditionally), the gate forces the decision', () => {
   for (const replacement of ['if (openRef.current) armClose()', 'armClose()']) {
     const text = PINNED_HOVER_CARD.replace('if (open) armClose()', replacement)
     const verdict = hoverPortVerdict(hoverSources({ upstreamHoverCard: { path: 'up/HoverCard.tsx', text } }))
@@ -391,7 +391,7 @@ test('C11: the day upstream arms on a ref (or unconditionally), the gate forces 
   }
 })
 
-test('C11: a Menu-style ternary handler is still read (and is still the racy shape)', () => {
+test('C15: a Menu-style ternary handler is still read (and is still the racy shape)', () => {
   const text = PINNED_HOVER_CARD.replace(
     `      onPointerLeave={() => {
         clearTimer()
@@ -405,7 +405,7 @@ test('C11: a Menu-style ternary handler is still read (and is still the racy sha
   assert.equal(verdict.ok, true, verdict.failures.join('\n'))
 })
 
-test('C11: a one-sided timing change fails and names both sides with both values', () => {
+test('C15: a one-sided timing change fails and names both sides with both values', () => {
   const upstreamDrift = hoverPortVerdict(hoverSources({
     upstreamPointerGrace: { path: 'up/pointer-grace.ts', text: 'export const POINTER_GRACE_MS = 250' },
   }))
@@ -425,7 +425,7 @@ test('C11: a one-sided timing change fails and names both sides with both values
   assert.match(chamberDrift.failures.join('\n'), /HOVER_OPEN_DELAY_MS = 400/)
 })
 
-test('C11: a renamed or dropped constant is a parse failure, never a silent pass', () => {
+test('C15: a renamed or dropped constant is a parse failure, never a silent pass', () => {
   const renamed = hoverPortVerdict(hoverSources({
     upstreamPointerGrace: { path: 'up/pointer-grace.ts', text: 'export const GRACE_MS = 200' },
   }))
@@ -439,7 +439,7 @@ test('C11: a renamed or dropped constant is a parse failure, never a silent pass
   assert.match(retired.failures.join('\n'), /解析不到 chamber chamber\/hover-intent\.ts 的 HOVER_CLOSE_GRACE_MS/)
 })
 
-test('C11: an unmaterialized pin tree is a hard failure, never "no race"', () => {
+test('C15: an unmaterialized pin tree is a hard failure, never "no race"', () => {
   const verdict = hoverPortVerdict(hoverSources({
     upstreamHoverCard: { path: 'up/HoverCard.tsx', text: null },
     upstreamPointerGrace: { path: 'up/pointer-grace.ts', text: null },
@@ -449,9 +449,9 @@ test('C11: an unmaterialized pin tree is a hard failure, never "no race"', () =>
   assert.match(verdict.failures.join('\n'), /读不到 上游 pointer-grace up\/pointer-grace\.ts/)
 })
 
-test('C11: the gate actually consults the verdict on the pinned tree (wiring scan)', () => {
+test('C15: the gate actually consults the verdict on the pinned tree (wiring scan)', () => {
   // The full gate cannot run in a bare worktree (an empty `vendor/harness-checkout`
-  // makes C1 throw before C11), so this scan is what proves the block is wired.
+  // makes C1 throw before C15), so this scan is what proves the block is wired.
   const source = readFileSync(scriptPath, 'utf8')
   assert.match(source, /import \{ HOVER_PORT_SOURCES, hoverPortVerdict \} from '\.\/verify-upstream-touchpoints-hover\.mjs'/)
   assert.match(source, /hoverPortVerdict\(\{/)
@@ -462,13 +462,13 @@ test('C11: the gate actually consults the verdict on the pinned tree (wiring sca
 })
 
 // ---------------------------------------------------------------------------
-// C11 adversarial-review regressions (2026-09-13): the three executed
+// C15 adversarial-review regressions (2026-09-13): the three executed
 // false-passes plus the reasoned "second component" hole. Each mutant below
 // fixes the race (or moves the timing) while leaving decoy text behind; the
 // hardened module must fail all of them.
 // ---------------------------------------------------------------------------
 
-test('C11 mutant (a): a decoy string cannot stand in for the missing guard', () => {
+test('C15 mutant (a): a decoy string cannot stand in for the missing guard', () => {
   // The race is FIXED (unconditional arm) but a log/telemetry string still
   // spells out the old shape. String literals are neutralized before matching,
   // so only the real code decides.
@@ -486,7 +486,7 @@ test('C11 mutant (a): a decoy string cannot stand in for the missing guard', () 
   assert.match(message, /退役移植/)
 })
 
-test('C11 mutant (b): an unrelated `open` expression in another statement does not guard the arm', () => {
+test('C15 mutant (b): an unrelated `open` expression in another statement does not guard the arm', () => {
   for (const handler of [
     // ASI form (no semicolons): the `&&` and the arm are different statements.
     `      onPointerLeave={() => {
@@ -505,7 +505,7 @@ test('C11 mutant (b): an unrelated `open` expression in another statement does n
   }
 })
 
-test('C11 mutant (c): a decoy string cannot be read as the timing constant', () => {
+test('C15 mutant (c): a decoy string cannot be read as the timing constant', () => {
   const text = `const NOTE = 'POINTER_GRACE_MS = 200'
 export const POINTER_GRACE_MS = 120
 `
@@ -520,7 +520,7 @@ export const POINTER_GRACE_MS = 120
   assert.doesNotMatch(message, /POINTER_GRACE_MS = 200 != /, 'the decoy value must never be compared')
 })
 
-test('C11: several distinct assignments are ambiguous — never silently one of them', () => {
+test('C15: several distinct assignments are ambiguous — never silently one of them', () => {
   const text = 'export const POINTER_GRACE_MS = 120\nexport const POINTER_GRACE_MS = 200\n'
   const verdict = hoverPortVerdict(hoverSources({
     upstreamPointerGrace: { path: 'up/pointer-grace.ts', text },
@@ -531,7 +531,7 @@ test('C11: several distinct assignments are ambiguous — never silently one of 
   assert.match(message, /诱饵\/重复赋值/)
 })
 
-test('C11: a decoy component above HoverCard cannot supply the guarded shape', () => {
+test('C15: a decoy component above HoverCard cannot supply the guarded shape', () => {
   // The shape check is scoped to the HoverCard component body, so a second
   // component carrying the old guarded handler cannot vouch for a fixed
   // HoverCard below it.
@@ -551,7 +551,7 @@ test('C11: a decoy component above HoverCard cannot supply the guarded shape', (
   assert.match(verdict.failures.join('\n'), /竞态关闭形状已变/)
 })
 
-test('C11: every legitimate guard form of the racy shape is still accepted', () => {
+test('C15: every legitimate guard form of the racy shape is still accepted', () => {
   for (const body of [
     'clearTimer(); if (open) armClose()',
     'clearTimer(); if (open) { armClose() }',
@@ -563,7 +563,7 @@ test('C11: every legitimate guard form of the racy shape is still accepted', () 
   }
 })
 
-test('C11: one bare occurrence among guarded ones is drift at the occurrence level', () => {
+test('C15: one bare occurrence among guarded ones is drift at the occurrence level', () => {
   for (const body of [
     'clearTimer(); armClose()',
     'clearTimer(); openRef.current && armClose()',
@@ -573,7 +573,7 @@ test('C11: one bare occurrence among guarded ones is drift at the occurrence lev
   }
 })
 
-test('C11: a negated or removed guard is drift, never the known shape', () => {
+test('C15: a negated or removed guard is drift, never the known shape', () => {
   // `!open` inverts the racy intent; a removed/renamed hook leaves no proven
   // arm. Both must force the adjudication.
   for (const body of ['clearTimer(); if (!open) armClose()', 'clearTimer(); !open && armClose()']) {
@@ -590,7 +590,7 @@ test('C11: a negated or removed guard is drift, never the known shape', () => {
   assert.match(verdict.failures.join('\n'), /找不到 usePointerGrace 的 arm 绑定/)
 })
 
-test('C11 mutant (d): a regex-literal decoy is neutralized like any other literal', () => {
+test('C15 mutant (d): a regex-literal decoy is neutralized like any other literal', () => {
   // The arm call is gone; only a regex literal spelling the old shape remains.
   const text = withHandler(`      onPointerLeave={() => {
         clearTimer()
@@ -609,7 +609,7 @@ test('C11 mutant (d): a regex-literal decoy is neutralized like any other litera
   assert.match(drifted.failures.join('\n'), /POINTER_GRACE_MS = 120/)
 })
 
-test('C11: a sign or comparison is never read as the constant value', () => {
+test('C15: a sign or comparison is never read as the constant value', () => {
   const negative = hoverPortVerdict(hoverSources({
     upstreamPointerGrace: { path: 'up/pointer-grace.ts', text: 'export const POINTER_GRACE_MS = -200' },
   }))
@@ -623,13 +623,13 @@ test('C11: a sign or comparison is never read as the constant value', () => {
   assert.match(comparison.failures.join('\n'), /解析不到上游 up\/pointer-grace\.ts 的 POINTER_GRACE_MS/)
 })
 
-test('C11: calling the arm through an alias is drift too (only direct calls are proven)', () => {
+test('C15: calling the arm through an alias is drift too (only direct calls are proven)', () => {
   // Fail-closed: an aliased arm cannot be proven guarded, so it must force the
   // adjudication rather than pass silently.
   assert.equal(racyGraceArmShape('const a = armClose; clearTimer(); a()', 'armClose').racy, false)
 })
 
-test('C11: comments and string/template literals are neutralized before matching', () => {
+test('C15: comments and string/template literals are neutralized before matching', () => {
   const stripped = stripComments(`const a = 'if (open) armClose()'
 const b = "POINTER_GRACE_MS = 200"
 const c = \`template armClose( and \${open && armClose()})\`
@@ -646,7 +646,7 @@ const d = armClose()
   assert.match(stripped, /const d = armClose\(\)/)
 })
 
-test('C11: a JSX closing tag is not mistaken for a regex (no code is swallowed)', () => {
+test('C15: a JSX closing tag is not mistaken for a regex (no code is swallowed)', () => {
   // Regression for the regex branch: `</span>` puts a `/` where a value may
   // start, but there is no closing `/` before the line ends — the text must be
   // kept verbatim, or the rest of the line (braces included) disappears and the
@@ -665,7 +665,7 @@ const z = 1
   assert.match(regex, /const z = 1/)
 })
 
-test('C11: the component scope is extracted by balanced braces', () => {
+test('C15: the component scope is extracted by balanced braces', () => {
   const code = stripComments(`function Other() { return null }
 export function HoverCard({ a }: { a: string }) {
   const nested = () => { return { b: 1 } }

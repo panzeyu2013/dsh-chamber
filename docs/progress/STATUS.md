@@ -642,7 +642,7 @@
   此前移植漏了它）；workspace 卡只读（投影无 path/createdAt ⇒ 上游「点卡复制 cwd」
   入口连同其 a11y/键盘复制一并缺失），会话卡状态行 0–1（上游 1–2 且含常驻 idle 行）。
   **退役条件 = 上游修掉该竞态**；判定已机器化：`scripts/dev/verify-upstream-touchpoints.mjs`
-  **C11**（登记行 = `docs/checklists/upstream-touchpoints.md` §4）在冻结 pin 上断言
+  **C15**（登记行 = `docs/checklists/upstream-touchpoints.md` §4）在冻结 pin 上断言
   竞态**两侧**形状仍在（CLOSE：`onPointerLeave` 的 arm 由已提交 `open` 守卫；OPEN：dwell
   回调不复查指针在场——后者是 2026-09-13 review A1 补上的盲区：只锁 CLOSE 侧时，上游在
   `setOpen(true)` 前加 inside 复查这一最小修复会让门静默放行）+ 两个时间常数与 chamber

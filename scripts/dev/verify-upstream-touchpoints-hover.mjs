@@ -1,5 +1,5 @@
 /**
- * Pure verdict for the C11 hover-port gate (design 06 §7; 2026-09-13).
+ * Pure verdict for the C15 hover-port gate (design 06 §7; 2026-09-13).
  *
  * WHY THIS EXISTS: the chamber sidebar draws its row hover cards with its own
  * `RowHoverCard` + `shared/hover-intent.ts` instead of the pinned
@@ -683,7 +683,7 @@ function excerpt(text, limit = 200) {
 
 /** Message for a source the gate could not read at all. */
 function unreadable(source, path) {
-  return `C11 读不到 ${source} ${path}（pin 树未物化/文件被删/改名）——本门必须在冻结 pin 上判定：`
+  return `C15 读不到 ${source} ${path}（pin 树未物化/文件被删/改名）——本门必须在冻结 pin 上判定：`
     + '先 ensure-harness-vendor（子模块物化）后重跑；若上游确实删除/改名了该文件，'
     + '按 docs/checklists/upstream-touchpoints.md §4 的登记行重审移植并同步本门'
 }
@@ -695,7 +695,7 @@ const RETIREMENT_TAIL = '上游可能已修掉「leave 落在 dwell→commit 窗
   + '或说明为何仍保留并更新本门与 docs/checklists/upstream-touchpoints.md §4 的登记行'
 
 /**
- * Decide C11 for one run.
+ * Decide C15 for one run.
  * @param {{ upstreamHoverCard: SourceFile, upstreamPointerGrace: SourceFile, chamberHoverIntent: SourceFile }} sources
  *   the three sources; `text: null` marks an unreadable file.
  * @returns {{ ok: boolean, failures: string[], summary: string }} verdict.
@@ -721,7 +721,7 @@ export function hoverPortVerdict({ upstreamHoverCard, upstreamPointerGrace, cham
     const component = componentBody(hoverCode, HOVER_CARD_COMPONENT)
     if (component === null) {
       failures.push(
-        `C11 上游 ${upstreamHoverCard.path} 里找不到 ${HOVER_CARD_COMPONENT} 组件体（结构漂移/改名）——`
+        `C15 上游 ${upstreamHoverCard.path} 里找不到 ${HOVER_CARD_COMPONENT} 组件体（结构漂移/改名）——`
         + `无法在组件范围内证明竞态形状仍在，按漂移处理：${RETIREMENT_TAIL}`,
       )
     } else {
@@ -729,7 +729,7 @@ export function hoverPortVerdict({ upstreamHoverCard, upstreamPointerGrace, cham
       if (handlers.length === 0) {
         const rawComponent = componentBody(upstreamHoverCard.text, HOVER_CARD_COMPONENT)
         failures.push(
-          `C11 上游 ${upstreamHoverCard.path} 的 ${HOVER_CARD_COMPONENT} 组件内找不到 onPointerLeave 处理器`
+          `C15 上游 ${upstreamHoverCard.path} 的 ${HOVER_CARD_COMPONENT} 组件内找不到 onPointerLeave 处理器`
           + `（结构漂移）${rawComponent === null ? '' : `；组件现为：${excerpt(rawComponent.text)}`}——`
           + `无法证明竞态形状仍在，按漂移处理：${RETIREMENT_TAIL}`,
         )
@@ -741,7 +741,7 @@ export function hoverPortVerdict({ upstreamHoverCard, upstreamPointerGrace, cham
         if (!shape.racy) {
           const rawHandler = jsxArrowHandler(upstreamHoverCard.text ?? '', 'onPointerLeave')
           failures.push(
-            `C11 上游 HoverCard 的竞态关闭形状已变：${shape.detail}（${upstreamHoverCard.path}`
+            `C15 上游 HoverCard 的竞态关闭形状已变：${shape.detail}（${upstreamHoverCard.path}`
             + `${rawHandler === null ? '' : `；onPointerLeave 现为：${excerpt(rawHandler.body)}`}）——${RETIREMENT_TAIL}`,
           )
         }
@@ -752,7 +752,7 @@ export function hoverPortVerdict({ upstreamHoverCard, upstreamPointerGrace, cham
       const openShape = racyOpenPathShape(component.text)
       if (!openShape.racy) {
         failures.push(
-          `C11 上游 HoverCard 的竞态 OPEN 形状已变：${openShape.detail}（${upstreamHoverCard.path}）——`
+          `C15 上游 HoverCard 的竞态 OPEN 形状已变：${openShape.detail}（${upstreamHoverCard.path}）——`
           + RETIREMENT_TAIL,
         )
       }
@@ -775,33 +775,33 @@ export function hoverPortVerdict({ upstreamHoverCard, upstreamPointerGrace, cham
     const chamberValue = chamberRead.value
     if (upstreamRead.distinct.length === 0) {
       failures.push(
-        `C11 解析不到上游 ${upstreamPath} 的 ${pair.upstream.name} = <数字>（${pair.meaning}）——`
+        `C15 解析不到上游 ${upstreamPath} 的 ${pair.upstream.name} = <数字>（${pair.meaning}）——`
         + '形状漂移/改名：不能证明锁步即按漂移处理，核对两侧实现后更新本门与 '
         + 'docs/checklists/upstream-touchpoints.md §4 的登记行，或退役移植',
       )
     } else if (upstreamRead.distinct.length > 1) {
       failures.push(
-        `C11 上游 ${upstreamPath} 的 ${pair.upstream.name} 有多个不同赋值（${upstreamRead.distinct.join(' / ')}）——`
+        `C15 上游 ${upstreamPath} 的 ${pair.upstream.name} 有多个不同赋值（${upstreamRead.distinct.join(' / ')}）——`
         + '不能判定锁步（诱饵/重复赋值），按漂移处理：核对哪一处是生效值后更新本门与 '
         + 'docs/checklists/upstream-touchpoints.md §4 的登记行，或退役移植',
       )
     }
     if (chamberRead.distinct.length === 0 && chamberHoverIntent.text !== null) {
       failures.push(
-        `C11 解析不到 chamber ${chamberHoverIntent.path} 的 ${pair.chamber.name} = <数字>（${pair.meaning}）——`
+        `C15 解析不到 chamber ${chamberHoverIntent.path} 的 ${pair.chamber.name} = <数字>（${pair.meaning}）——`
         + '移植的常数面改名/删除：若已退役移植，请同步移除本门与 '
         + 'docs/checklists/upstream-touchpoints.md §4 的登记行；否则恢复该导出',
       )
     } else if (chamberRead.distinct.length > 1) {
       failures.push(
-        `C11 chamber ${chamberHoverIntent.path} 的 ${pair.chamber.name} 有多个不同赋值`
+        `C15 chamber ${chamberHoverIntent.path} 的 ${pair.chamber.name} 有多个不同赋值`
         + `（${chamberRead.distinct.join(' / ')}）——生效值不唯一，不能判定锁步：`
         + '只保留一个默认导出，或同步更新本门与 docs/checklists/upstream-touchpoints.md §4 的登记行',
       )
     }
     if (upstreamValue !== null && chamberValue !== null && upstreamValue !== chamberValue) {
       failures.push(
-        `C11 悬停时间常数失步（${pair.meaning}）：上游 ${upstreamPath} 的 ${pair.upstream.name} = ${upstreamValue}`
+        `C15 悬停时间常数失步（${pair.meaning}）：上游 ${upstreamPath} 的 ${pair.upstream.name} = ${upstreamValue}`
         + ` != chamber ${chamberHoverIntent.path} 的 ${pair.chamber.name} = ${chamberValue}`
         + '——移植的前提是行为等价，两侧必须逐值一致：'
         + `要么把 chamber 的 ${pair.chamber.name} 对齐到上游的 ${upstreamValue}（再评估移植是否仍等价），`
@@ -817,7 +817,7 @@ export function hoverPortVerdict({ upstreamHoverCard, upstreamPointerGrace, cham
   return {
     ok: true,
     failures: [],
-    summary: '✓ C11 hover 移植保鲜: 上游竞态两侧形状仍在（OPEN: dwell 回调只 setOpen(true)、不复查指针在场；'
+    summary: '✓ C15 hover 移植保鲜: 上游竞态两侧形状仍在（OPEN: dwell 回调只 setOpen(true)、不复查指针在场；'
       + 'CLOSE: onPointerLeave 以已提交的 open 守卫宽限）'
       + `；常数锁步 grace=${grace.upstreamValue}ms dwell=${dwell.upstreamValue}ms`
       + `（${upstreamHoverCard.path} / ${upstreamPointerGrace.path} ↔ ${chamberHoverIntent.path}）`,

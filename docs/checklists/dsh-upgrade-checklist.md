@@ -137,7 +137,7 @@
       运行时的检出应打印 SKIP——冒烟门槛按 dsh CLI 入口存在性判定，仅有 lockfile
       的 `packages/desktop/vendor/dsh` 不算已安装）。
 - [ ] 触点与锚门禁：`node scripts/dev/verify-upstream-touchpoints.mjs` 全绿
-      （C1/C3–C11；`--no-artifact-rebuild` 可跳过产物重建）。
+      （C1/C3–C15；`--no-artifact-rebuild` 可跳过产物重建）。
 - [ ] 残留扫描：`grep -rn "<上一版 pin 的版本字面量>\|<上一版 commit 短哈希>" packages/ scripts/ harness.commit`
       （非 vendor/node_modules/产物）仅剩注释里的历史叙述——生产源码/脚本/配置里的
       「活」版本字面量必须登记在 C10 白名单。

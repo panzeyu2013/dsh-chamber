@@ -315,7 +315,7 @@ jobs:
       #      and byte-compare, hard failure, then restore). C8 is the gate most
       #      easily defeated by "edited src, forgot to rebuild the artifact", so
       #      a release must never be the first place it runs (2026-12 review P2).
-      - name: Upstream touchpoint registry (C1/C3/C4/C5/C6/C7/C9/C10 + C11)
+      - name: Upstream touchpoint registry (C1/C3/C4/C5/C6/C7/C9/C10 + C15)
         run: node scripts/dev/verify-upstream-touchpoints.mjs --no-artifact-rebuild
       - run: pnpm install --frozen-lockfile
       # C8 deterministic artifact gate (see the step above): rebuilds in place,

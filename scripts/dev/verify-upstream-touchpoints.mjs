@@ -34,7 +34,7 @@
  *       `packages/desktop/vendor/dsh/package.json` 被 gitignore、属派生本地状态，
  *       仅在其存在时与锁文件交叉校验；生产源码（非注释、非测试、非产物）里出现
  *       任何其他 dsh 版本字面量即红——历史叙述只能留在注释里
- *   C11 悬停卡自持移植的上游退役门（硬失败；2026-09-13 登记）：chamber 的
+ *   C15 悬停卡自持移植的上游退役门（硬失败；2026-09-13 登记）：chamber 的
  *       `RowHoverCard` + `shared/hover-intent.ts` 取代 vendor `HoverCard`，退役
  *       条件是「上游修掉 leave 落在 dwell→commit 窗口就残留的竞态」。本门在**冻结
  *       pin** 上读 ① 该竞态形状仍在（HoverCard 组件内 onPointerLeave 的**每一个**
@@ -49,7 +49,7 @@
  * 文件的修改都会在此硬失败——升级/重锚后同步登记表（每 tag 维护循环见文档 §7）。
  *
  * 用法（`--help` 打印权威文本；未知参数 = 用法错误 exit 2，绝不静默跑默认模式）：
- *   node scripts/dev/verify-upstream-touchpoints.mjs            # C1/C3–C11
+ *   node scripts/dev/verify-upstream-touchpoints.mjs            # C1/C3–C15
  *   node scripts/dev/verify-upstream-touchpoints.mjs --no-artifact-rebuild
  *   node scripts/dev/verify-upstream-touchpoints.mjs --tags <old> <new>  # +C2
  *   node scripts/dev/verify-upstream-touchpoints.mjs --help
@@ -979,7 +979,7 @@ for (const fork of FORKS) {
   }
 }
 
-// C11 —— 悬停卡自持移植的上游退役门（硬失败；2026-09-13 登记，design 06 §7）
+// C15 —— 悬停卡自持移植的上游退役门（硬失败；2026-09-13 登记，design 06 §7）
 //
 // chamber 的侧栏行卡片用自己的 `RowHoverCard` + `shared/hover-intent.ts` 取代
 // vendor 的 `ui-primitives HoverCard`：vendor 原子以**上一次已提交的 `open`**
@@ -1037,5 +1037,5 @@ if (hardFails > 0 || (process.exitCode ?? 0) !== 0) {
   process.exitCode = 1
   console.error(`\n✗ verify-upstream-touchpoints: ${hardFails} 项硬失败——见上。`)
 } else {
-  console.log('\n✓ verify-upstream-touchpoints 全部通过（C1/C3–C11）')
+  console.log('\n✓ verify-upstream-touchpoints 全部通过（C1/C3–C15）')
 }

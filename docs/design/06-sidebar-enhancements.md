@@ -822,7 +822,7 @@ await 中），我们单点只显示子 agent 计数文案，官方同快照显�
     可见性镜像进组件 state，因此也不存在"press/禁用 与 dwell 的 open 错序提交、
     卡片挂载而机器认为已关"的反向残留（React 提交后会复查快照）。
     vendor 源码在仓内只读，故修正落在本包；**退役条件 = 上游修掉该竞态**，
-    机器判据 = `scripts/dev/verify-upstream-touchpoints.mjs` C11（断言竞态**两侧**形状仍在：
+    机器判据 = `scripts/dev/verify-upstream-touchpoints.mjs` C15（断言竞态**两侧**形状仍在：
     CLOSE 侧 `onPointerLeave` 的 arm 仍由已提交 `open` 守卫，OPEN 侧 dwell 回调仍不复查
     指针在场——只锁 CLOSE 侧会漏掉「上游在 `setOpen(true)` 前加 inside 复查」这一最小修复，
     2026-09-13 review A1；外加时间常数逐值锁步），登记行见
