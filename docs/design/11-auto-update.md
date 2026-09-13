@@ -84,9 +84,13 @@
   `updaterQuitArmed`（关窗发生在该调用内部，返回后再置位已晚；拒绝路径不回调，
   因而没有需要回滚的「假武装」），武装期间 `shouldHideToTray` 恒 false；
   重启失败或停滞（一次性 `restartFailureText` / 相位离开 `downloaded`）立即撤回，
-  并把被更新关掉的窗口拉回主界面（失败/停滞文案的唯一诚实呈现面）。
-  回归契约：`packages/desktop/update-restart-quit.test.ts`（main.ts 接线）+
-  `chamber-settings.test.ts`（纯判定）+ `updater.test.ts`（回调时序）。
+  并把被更新关掉的窗口拉回主界面（失败/停滞文案的唯一诚实呈现面；窗口若是**重建**的，
+  同一次订阅的 `UPDATE_STATE_CHANGED` 推送会落在还没装监听的 renderer 上，呈现靠
+  renderer 挂载时的 `UPDATE_STATE` pull 补齐——2026-09-13 review C7b）。
+  回归契约：`packages/desktop/update-restart-quit.test.ts`（main.ts 接线 + 武装标志
+  生命周期）+ `chamber-settings.test.ts`（两个纯判定，含
+  `shouldUpdaterQuitTakeOver` 的真值表）+ `updater.test.ts`（回调时序，含 native 退出
+  事件必须让停滞 watchdog stand down）；真实的 macOS 端到端仍是实机门禁（§9）。
   **原生退出桥与兜底（同一条缺陷的另一半）**：控制器订阅 Electron 原生
   autoUpdater 的 `before-quit-for-update`（它就在 `quitAndInstall()` 内部、关窗之前
   发出——43.4.0/darwin 实测），经 `onNativeUpdaterQuitting` 回调宿主：①**每次**原生
@@ -95,7 +99,12 @@
   走正常 before-quit/will-quit 清理路径完成退出。**此刻自退是安全的**：该事件只在
   Squirrel 已完成 staging 后发出（MacUpdater 仅在 `squirrelDownloadedUpdate` 或原生
   `update-downloaded` 之后才调原生 quitAndInstall），退出即安装——这正是 §9 预案
-  「监听 native staging 完成后自行 `app.quit()`」的落地形态。原生 autoUpdater 的解析
+  「监听 native staging 完成后自行 `app.quit()`」的落地形态。**「原生腿关窗后走不到
+  `before-quit`」这一条仍是未复测的观察**（2026-09-13 review C4）：它是修复前取的
+  （当时关窗被 hide 吞掉、窗口从未真正关闭，退出序列自然到不了 `before-quit`），typing
+  只保证 `before-quit` 不在所有窗口关闭前发出。兜底在两种情形下都安全——`before-quit`
+  会到时 `quitRequested` 已置位，`shouldUpdaterQuitTakeOver` 直接返回 false——因此 §9 的
+  签名包实机门禁要顺带记录这一次观测。原生 autoUpdater 的解析
   严格门控在 Electron 运行时内（`process.versions.electron`）且仅在宿主提供回调时进行：
   `electron` 说明符在普通 node 下会解析到 npm 包，其加载在 dist 缺失时会触发 ~100MB
   二进制下载（实测踩中），绝不允许出现在测试路径上。

@@ -643,8 +643,11 @@
   入口连同其 a11y/键盘复制一并缺失），会话卡状态行 0–1（上游 1–2 且含常驻 idle 行）。
   **退役条件 = 上游修掉该竞态**；判定已机器化：`scripts/dev/verify-upstream-touchpoints.mjs`
   **C11**（登记行 = `docs/checklists/upstream-touchpoints.md` §4）在冻结 pin 上断言
-  竞态形状仍在 + 两个时间常数与 chamber 侧逐值锁步，形状一漂移或常数一失步即硬失败，
-  强制退役/再登记裁决——**上游一旦修掉，升级 pin 时本门先红**（登记时复核：上游
+  竞态**两侧**形状仍在（CLOSE：`onPointerLeave` 的 arm 由已提交 `open` 守卫；OPEN：dwell
+  回调不复查指针在场——后者是 2026-09-13 review A1 补上的盲区：只锁 CLOSE 侧时，上游在
+  `setOpen(true)` 前加 inside 复查这一最小修复会让门静默放行）+ 两个时间常数与 chamber
+  侧逐值锁步，形状一漂移或常数一失步即硬失败，
+  强制退役/再登记裁决——**上游一旦修掉（任一侧），升级 pin 时本门先红**（登记时复核：上游
   master 上 `HoverCard.tsx`/`pointer-grace.ts` 与 pin 逐字节一致，故偏差仍成立）。
   仓内证据：单测 `packages/dsh-chamber-client-ui-sidebar/test/hover-intent.test.ts`
   （提交窗口内 leave 也必然收、同页互斥、slot 释放）与 `.../test/hover-card-wiring.test.ts`；
@@ -1118,5 +1121,22 @@
   相邻所需的 ≥4px 下限，与 `.headerGit` / `.sourceActions` 同值；session 行的簇只有
   单个 kebab，间距无观感影响。**下一轮上游对齐不得**把它改回官方 12px；判据见
   design 06 §7「行内操作」条与 design 08 §3.2，锁在
-  `packages/dsh-chamber-client-ui-sidebar/test/batch1-visual-locks.test.ts`（A8b 同时
-  钉住 `.rowActions` 与 `.workspaceHeader` 两侧 = 4px，任一侧改回 12px 即失败）。
+  `packages/dsh-chamber-client-ui-sidebar/test/batch1-visual-locks.test.ts`（A8b 钉住
+  `.rowActions` = 4px——这一侧是本条偏差本体；`.workspaceHeader` 的 4px 是既有值
+  （基提交即 4px，本次未改），它作为簇的左边界一并入锁，任一侧变成 12px 都会红）。
+- **轨道来源点多于可视高度时被裁掉、无滚动入口（2026-09-13 审计登记，未修）**：
+  `SidebarRoot.module.css` 的 `.regionArea` 是 `flex: 1` + `overflow: hidden`，而
+  `.railDots`（`flex: 1`，无自己的 overflow/min-height）是它的子项——rail 态下没有滚动
+  容器。本次 4px 簇节奏把点距由 20px 提到 24px（`gap: 12 → 16` 抵消子项 `-4px 0`
+  margin，见 design 06 §7 的 G1-4 条），可容纳的来源数因此再少约 1/6，临界提前。**不做**
+  的原因是 rail 的滚动呈现是设计面（官方 rail 本身没有这一层），加 `overflow-y: auto`
+  会引入插件自绘滚动条；判据：`packages/dsh-chamber-client-ui-sidebar/test/batch2-visual-locks.test.ts`
+  钉住的 `.railDots { gap: 16px }` + `.railDotButton { margin: -4px 0 }` 两侧算式。
+- **footer 动作行 `gap: 4px` 是 chamber 对官方复制块的增量（2026-09-13 审计登记，偏差）**：
+  `sidebar.footer.action` 是 **list 座**（`sources` 见 design 05 §2），官方
+  `ui-sidebar/SidebarRoot.module.css` 的 `.footerActions` 只有 `display: flex`、无 gap，
+  多个 occupant 会零间距相接，故本仓补 4px（同时是 G1-4 两个 24px 命中盒的下限）。当前
+  座位无注册者 ⇒ 该 gap 对发布形态不可见，但**重抄官方块时必须带上**：判据
+  `packages/dsh-chamber-client-ui-sidebar/test/batch2-visual-locks.test.ts` 的
+  `.footerActions { gap: 4px }` 一例，纵向间距仍按官方契约由 occupant 自己的 margin 承担
+  （settings 触发器 `margin: 4px -2px` / rail `8px 0 10px`）。

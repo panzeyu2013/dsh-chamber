@@ -93,8 +93,12 @@ export function RowHoverCard({
 
   // One machine per card, created on the first render (its options are plain
   // values, so a later prop change cannot re-time a card already in flight) and
-  // reused across StrictMode's double-invoked effects: `dispose` only drops
-  // timers.
+  // reused across StrictMode's double-invoked effects. NOTE what `dispose`
+  // really does (2026-09-13 review C6): it drops both timers AND releases the
+  // page-global slot. Reusing the machine is still safe there only because a
+  // remount happens with `open === false` (the dwell has not fired yet) — moving
+  // `dispose()` into an effect with changing deps would release the slot of a
+  // card that is still on screen, i.e. a card no other card can dismiss.
   const intentRef = useRef<HoverIntent | null>(null)
   if (intentRef.current === null) intentRef.current = createHoverIntent({ disabled, openDelayMs })
   const intent = intentRef.current
@@ -174,12 +178,17 @@ export function RowHoverCard({
         intent.press()
         return
       }
-      if (r.bottom < 0 || r.top > window.innerHeight) {
+      if (r.bottom < 0 || r.top > window.innerHeight
+        || r.right < 0 || r.left > window.innerWidth) {
         // The anchor itself is off screen (scrolled past, or the list moved
         // under a stationary pointer): there is nothing to preview, and a
         // clamped card would float at an edge with no anchor to explain it.
         // Close through the machine — a plain render change could be
         // re-committed in the wrong order.
+        // Both axes, deliberately (2026-09-13 review C7c): the vertical case is
+        // the reachable one (the sidebar only scrolls vertically), and the
+        // horizontal arms are defensive symmetry so "off-screen anchor ⇒ close"
+        // stays a two-axis contract instead of a one-axis special case.
         intent.press()
         return
       }
@@ -196,6 +205,13 @@ export function RowHoverCard({
     // The wrapper's own box AND its containing block: a row inserted or removed
     // above this one moves the anchor without resizing it, and the container's
     // box is the closest observable signal for that reflow.
+    // Known bound (2026-09-13 review C7d, not reachable today): a reorder that
+    // swaps two same-size rows changes NEITHER box, and with no scroll/resize
+    // event there is nothing to observe — the card would keep the old
+    // coordinates until the next scroll or resize. Upstream has no observer at
+    // all, so this is strictly narrower than the atom it replaces; fixing it
+    // would mean observing the list's child order, which is not worth a
+    // MutationObserver for a transient mis-anchor.
     const observer = new ResizeObserver(place)
     const wrapper = rootRef.current
     /* v8 ignore next -- both refs are attached before this effect runs (the same assumption `place` makes). */

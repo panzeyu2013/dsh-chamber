@@ -176,8 +176,9 @@ export default function InstanceView({
   // .instance-hidden（上面 viewClass），而行悬浮卡被 portal 到 document.body——
   // 它**不在**本视图 DOM 内，所以 visibility:hidden + pointer-events:none 既不会
   // 把卡藏起来，也不会给卡送来任何指针事件：指针停在卡上时切视图，卡会一直画在
-  // 新视图之上，直到下一次指针移动（实测截图：
-  // .tmp/review/react-semantics/S12-view-hidden-card-still-visible.png）。
+  // 新视图之上，直到下一次指针移动（判据是仓内用例：
+  // packages/renderer/test/hover-card-view-hide-wiring.test.ts；设计侧见
+  // docs/design/06-sidebar-enhancements.md §7 的视图隐藏关闭条）。
   // 因此在**同一个 commit**（useLayoutEffect = 绘制前）显式关掉页级唯一那张卡。
   // 只认 active 的 true→false 跳变：后台预热/后台 boot 的视图挂载时本就是非活动
   // 态，若按"非活动即关"会把活动视图里用户正悬停的卡误关。

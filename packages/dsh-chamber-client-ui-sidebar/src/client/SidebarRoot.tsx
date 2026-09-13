@@ -1784,7 +1784,11 @@ export function SidebarRoot({
              an accessible name, vendor ui-sidebar SidebarRoot.tsx:63-68) — the
              inert title-only span is gone. The status display is unchanged: the
              coloured source dot and the active-source accent ring still paint on
-             the inner span, with the exactly same geometry and pitch.
+             the inner span; the span→button swap changed no geometry — the dot
+             PITCH was later moved on purpose (2026-09-13, 20 → 24px: the rail's
+             column gap 12 → 16px under the children's -4px vertical margins, so
+             two adjacent 24px hit boxes stop overlapping; see 06 §7's G1-4 note
+             and test/batch2-visual-locks.test.ts).
              Operability mirrors the wide source header: activating a remote,
              usable source asks the App layer to switch the N-ctx view, the
              current source is marked aria-current, and a managed-down source

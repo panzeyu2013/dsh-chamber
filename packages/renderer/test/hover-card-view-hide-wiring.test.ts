@@ -12,8 +12,9 @@
  * pointer-events: none` on the view (`styles.css:123-141`) — hide neither the
  * card nor its hit testing, and deliver it no pointer event at all. A card open
  * while the pointer rests on it therefore stayed painted over the incoming view
- * until the next pointer move (measured:
- * `.tmp/review/react-semantics/S12-view-hidden-card-still-visible.png`). The hide
+ * until the next pointer move (found in a real-Chrome harness during the
+ * 2026-09 review; that harness was scratch work and is deliberately NOT cited as
+ * repo evidence — this file and the unit cases below are the evidence). The hide
  * path must close it explicitly, in the SAME commit that applies the class (a
  * passive effect would leave one painted frame of stale card over the new view).
  *

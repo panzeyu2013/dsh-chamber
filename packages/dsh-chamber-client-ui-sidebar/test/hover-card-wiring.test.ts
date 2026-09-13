@@ -261,8 +261,8 @@ test('placement: no top floor, degenerate and off-screen anchors close, layout c
   )
   assert.match(
     flat,
-    /if \(r\.bottom < 0 \|\| r\.top > window\.innerHeight\) \{ intent\.press\(\) return \}/,
-    'an anchor outside the viewport must close the card through the machine, not pin it',
+    /if \(r\.bottom < 0 \|\| r\.top > window\.innerHeight \|\| r\.right < 0 \|\| r\.left > window\.innerWidth\) \{ intent\.press\(\) return \}/,
+    'an anchor outside the viewport must close the card through the machine, not pin it (both axes — the horizontal arms are defensive symmetry; the vertical pair is the reachable one)',
   )
   // Bottom-clamped like upstream AND floored at the viewport top: a partially
   // visible anchor can leave less room above it than the card is tall, and an
