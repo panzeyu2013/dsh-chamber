@@ -1090,3 +1090,15 @@
   证据：`docs/design/20-open-in-registry.md` §6.2/§9（插件页行集门）、
   `packages/dsh-chamber-client-ui-settings-connections/test/chamber-rows.test.ts` +
   `test/chamber-table-wiring.test.ts`（分类兜底由 `test/chamber-seed-drift.test.ts` 钉住）。
+- **workspace 头部行尾动作簇间距 = 4px，不跟随官方 12px（2026-09-13 用户报告登记，
+  偏差）**：`sidebar-chamber.module.css .rowActions` 的 `gap` 由官方
+  `Rows .rowActions` 的 12px（2026-09 batch 1 A8b）改为 **4px**。该 12px 描述的是
+  没有 git occupant 的两项簇，而本仓 workspace 头部行尾的可见簇是**三项**：occupant
+  的揭示态动作（`.headerGit`，同一行的兄弟 flex 子项，design 08 §3.2）是簇的最左
+  成员、落在头部自身的 4px 间距上，12px 因此落进**簇内部**、把一簇切成 4px + 12px
+  （用户报告：「`+` 与省略号之间的间隔明显更大」）。4px 同时是 G1-4 两个 24px 命中盒
+  相邻所需的 ≥4px 下限，与 `.headerGit` / `.sourceActions` 同值；session 行的簇只有
+  单个 kebab，间距无观感影响。**下一轮上游对齐不得**把它改回官方 12px；判据见
+  design 06 §7「行内操作」条与 design 08 §3.2，锁在
+  `packages/dsh-chamber-client-ui-sidebar/test/batch1-visual-locks.test.ts`（A8b 同时
+  钉住 `.rowActions` 与 `.workspaceHeader` 两侧 = 4px，任一侧改回 12px 即失败）。

@@ -1058,12 +1058,20 @@
   flex: none;
   display: none;
   align-items: center;
-  /* Official Rows `.rowActions` gap (2026-09 batch 1, A8b): the cluster holds
-     the `+` and the kebab on workspace headers, and official spaces them at
-     12px. The state slot / count badge these actions replace are already
-     swapped out while the cluster is visible, so the extra 10px never
-     competes with them. */
-  gap: 12px;
+  /* ONE visible cluster, ONE rhythm (2026-09-13 user report). The cluster's
+     real membership on a git workspace header is THREE buttons, not the
+     official two: the git occupant's revealed branch action (`[data-git-action]`
+     inside the sibling `.headerGit` span, SidebarGit.module.css) is the
+     cluster's leftmost member and sits in the HEADER's 4px gap. The official
+     `Rows .rowActions` 12px (2026-09 batch 1, A8b) therefore fell INSIDE one
+     cluster and split it 4px + 12px — the kebab read as detached
+     (「+ 与省略号之间的间隔明显更大」). The cluster now takes the header /
+     sheet icon rhythm: 4px is also the G1-4 floor two adjacent 24px hit boxes
+     need (.headerGit / .sourceActions carry the same value), and the session
+     row's cluster holds a single kebab, where any gap is inert. The state slot
+     / count badge these actions replace are swapped out while the cluster is
+     visible, so the gap never competes with them. */
+  gap: 4px;
 }
 
 .rowActionsVisible {
@@ -1173,13 +1181,17 @@
      .searchClear 18 -> 24 (-3px), .foldToggle/.sourceFoldToggle/
      .railDotButton 16 -> 24 (-4px)
 
-   Sizing rule for the clusters: two 24px boxes need a >=4px gap to stay distinct,
-   so `.sourceActions` (was 2px) and the git panel's `.headerGit` (was 2px, see
-   SidebarGit.module.css) are now 4px; `.rowActions` (12px) and `.railDots` (12px)
-   already cleared it. Where a 16px control sits next to a WIDE neighbour (the
-   workspace title / source name), the 4px rim lands inside the existing gap and
-   the neighbour's own target centre stays far beyond 24px, so 2.5.8's spacing
-   alternative holds there as well. */
+   Sizing rule for the clusters — stated as the invariant it really is: the gap
+   between two adjacent BORDER boxes must be >= 2 x inset (a 20px box with a -2px
+   rim: 4px; a 16px box with a -4px rim: 8px). `.sourceActions` (was 2px) and the
+   git panel's `.headerGit` (was 2px, see SidebarGit.module.css) are now 4px,
+   `.rowActions` sits ON that floor since the 2026-09-13 cluster-rhythm revision
+   (see its rule), and the rail's dots reach their 8px floor through a 16px
+   column gap — their -4px vertical margins shrink the pitch, so the column gap
+   alone never was the box gap (2026-09-13 audit, see `.railDots`). Where a 16px
+   control sits next to a WIDE neighbour (the workspace title / source name), the
+   4px rim lands inside the existing gap and the neighbour's own target centre
+   stays far beyond 24px, so 2.5.8's spacing alternative holds there as well. */
 .actionIcon,
 .searchButton,
 .searchClear,
@@ -1459,14 +1471,24 @@
    ui-sidebar SidebarRoot.tsx:63-68) instead of inert title-only spans. The dot
    itself is unchanged: the button is a bare hit target and the coloured source
    dot + active accent ring stay on the inner span, exactly as before.
-   The button is 16px with a -4px vertical margin, so the dot pitch (8px dot +
-   12px gap) and the dot's own geometry are untouched. */
+   The button is 16px with a -4px vertical margin, so the dot's own geometry is
+   untouched; the dot PITCH is this column gap + 8px (the margins are subtracted
+   from it), which is why the gap carries the hit-box floor below. */
 .railDots {
   flex: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 12px;
+  /* 2026-09-13 audit — the hit-box floor applies to the BORDER-box gap, not to
+     the column gap: the children's -4px vertical margins are subtracted from
+     the pitch, so two adjacent button boxes sit `gap - 8px` apart. A 16px box
+     carrying the shared -4px hit-box rim needs >= 8px between boxes (2 x inset)
+     or the two 24px hit boxes OVERLAP; the old 12px left 4px, i.e. each dot
+     stole 4px of its neighbour's target band (invisible, but it breaks the
+     G1-4 rule this sheet is written against — see the .actionIcon cluster
+     note). 16px is that floor exactly (16 - 8 = 8): the hit boxes touch without
+     overlapping, and the visible dot rhythm becomes 8px dot + 16px gap. */
+  gap: 16px;
   padding-top: 8px;
 }
 

@@ -685,9 +685,16 @@
   flex: none;
   width: 16px;
   height: 16px;
-  margin: 2px 0 0;
   accent-color: var(--dsw-alias-state-business-primary);
   cursor: pointer;
+}
+
+/* 2px 顶微调只在**顶对齐**的卡片头里成立（2026-09-13 间距审计）：16px 盒与
+   13/20 行框顶端对齐时，盒中心比文字视觉中心高 2px，这 2px 正是那笔补偿。
+   事件行（.generalEventRow）是单行 `align-items: center`，flex 已经把两者居中，
+   再带这笔补偿只会让勾选框比行中线低 1px——因此它按上下文归属，不再写在基类上。 */
+.generalCardHead .generalCardCheck {
+  margin: 2px 0 0;
 }
 
 .generalCardCheck:disabled {
@@ -762,8 +769,13 @@
   color: var(--dsw-alias-label-primary);
 }
 
-/* 三列并排时（内容宽 ≥ 3×150 + 2×8 分隔线间隙），后两列以 1px 竖线 +
-   内距与前一单元分割；降列布局不画竖线（首列/独行的竖线会悬空误导）。 */
+/* 三列并排时，后两列以 0.5px 发丝竖线 + 10px 内距与前一单元分割：单元之间
+   因此是 8px 网格间隙 + 0.5px 线 + 10px 内距 = 18.5px，而单元内「文字 ↔
+   勾选框」是行自身的 8px——这个不对称是刻意的，分割物是线而不是间距。
+   阈值：3 列 auto-fit 的精确下限 = 3×150 + 2×8 = 466px，代码取 470px（+4px
+   余量）——容器查询命中而 auto-fit 仍因亚像素舍入只排 2 列时，竖线会在降列
+   布局里悬空误导，余量正是挡住这种边界状态。
+   降列（一列/两列）时不画竖线，由行间距提供分割。 */
 @container (min-width: 470px) {
   .generalEventRow + .generalEventRow {
     border-left: 0.5px solid var(--dsw-alias-border-l2);
@@ -1016,6 +1028,10 @@
      connections page moved to 11px/17px + l4 and this pill stayed on 11/16 + l2,
      so two settings pages rendered two different pills). */
   height: 20px;
+  /* Inline spacing between the version text and the pill (2026-09-13 spacing
+     audit): the pill renders INSIDE the `.updateRow` paragraph, so the enclosing
+     `.updateVersionRow` 10px flex gap never reaches it — the two values answer
+     different pairs and cannot conflict. */
   margin-left: 8px;
   padding: 1px 8px;
   border: 0.5px solid var(--dsw-alias-border-l4);

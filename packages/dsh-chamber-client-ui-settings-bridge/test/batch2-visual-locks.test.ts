@@ -184,6 +184,13 @@ test('B-3/B-4 (2026-09 user decision): every "on" state is the dsh business blue
   pin('B-4 geometry', segmented, '.segment span', {
     height: '26px', 'font-size': '12px', 'line-height': '18px',
   })
+  // 2026-09-13 spacing audit: the checkbox's 2px top nudge is the TOP-ALIGNED card
+  // head's line-box compensation (16px box vs a 13/20 first line), so it hangs off
+  // the head's compound selector. The event row centres its items and must not
+  // inherit it — on the shared class it left the box 1px below the row's centre.
+  pin('B-3 checkbox head nudge', css, '.generalCardHead .generalCardCheck', { margin: '2px 0 0' })
+  assert.equal(/(?<![\w-])margin\s*:/.test(rule(css, '.generalCardCheck')), false,
+    'the shared checkbox class may not carry a context-specific margin again')
 })
 
 test('2026-09 user decision: the runtime progress fill is the dsh business blue too', () => {
