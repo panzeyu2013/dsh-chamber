@@ -84,10 +84,10 @@ test('main.ts: the native quit fallback is bounded, guarded, and released with t
   assert.match(arm, /armUpdaterQuit\(\)/, 'a native quit must re-arm the close-to-tray exception (a late native quit after a stall)')
   assert.match(arm, /setTimeout\(/, 'the fallback must be time-bounded')
   assert.match(arm, /UPDATER_QUIT_FALLBACK_MS/, 'the grace must be the named constant — never an inline literal')
-  assert.match(arm, /if \(quitRequested \|\| !updaterQuitArmed\) return;/,
-    'the fallback must stand down once the real quit runs or the arming was released')
-  assert.match(arm, /if \(mainWindow !== null && !mainWindow\.isDestroyed\(\)\) return;/,
-    'the fallback must never quit while a window is still open — only a window the update quit leg really closed justifies taking over')
+  assert.match(arm, /const windowAlive = mainWindow !== null && !mainWindow\.isDestroyed\(\)/,
+    'window liveness must be read at fire time — it is the predicate input proving the update leg really closed the window')
+  assert.match(arm, /shouldUpdaterQuitTakeOver\(quitRequested, updaterQuitArmed, windowAlive\)/,
+    'the three guards must go through the pure predicate (behavioural truth table in chamber-settings.test.ts)')
   assert.match(arm, /app\.quit\(\)/, 'the fallback must drive a real quit (the native macOS leg stops after closing windows)')
   assert.match(arm, /unref/, 'the fallback timer must never hold the process alive')
   const disarm = balancedBlock(desktopMain, desktopMain.indexOf('function disarmUpdaterQuit('))
@@ -96,6 +96,29 @@ test('main.ts: the native quit fallback is bounded, guarded, and released with t
   const handlerBody = balancedBlock(desktopMain, desktopMain.indexOf("app.on('window-all-closed'"))
   assert.match(handlerBody, /process\.platform !== 'darwin' \|\| chamberSettings\.windowCloseBehavior === 'quit'/,
     'window-all-closed must keep its darwin/hide-to-tray condition: the update quit leg relies on the bounded native fallback, never on a blanket quit here')
+})
+
+test('main.ts: the arming flag really is set and really is released (the fix IS the flag)', () => {
+  // Regression guard for the mutation that used to survive this file: deleting
+  // `updaterQuitArmed = true;` from the arming hook disabled the whole fix while
+  // every wiring assertion above still passed (2026-09-13 review B3). The flag's
+  // lifecycle is the fix, so it is asserted directly — the pure decisions it
+  // feeds are behaviourally covered in chamber-settings.test.ts.
+  const declaration = /let updaterQuitArmed = false;/.exec(desktopMain)
+  assert.notEqual(declaration, null, 'the arming flag must start false at module scope')
+  const arm = balancedBlock(desktopMain, desktopMain.indexOf('function armUpdaterQuit('))
+  assert.match(arm, /if \(updaterQuitArmed\) return;/,
+    're-arming must be idempotent (a second native event must not restart the log line)')
+  assert.match(arm, /updaterQuitArmed = true;/,
+    'the arming hook must SET the flag — without this line nothing about the fix works')
+  const disarm = balancedBlock(desktopMain, desktopMain.indexOf('function disarmUpdaterQuit('))
+  assert.match(disarm, /if \(!updaterQuitArmed\) return;/,
+    'releasing an unarmed leg must be a no-op (no spurious window restore)')
+  assert.match(disarm, /updaterQuitArmed = false;/,
+    'releasing must CLEAR the flag — otherwise the close-to-tray semantics never come back')
+  // Order matters inside the arm: the flag is set before anything else can run.
+  assert.ok(arm.indexOf('updaterQuitArmed = true;') < arm.indexOf('console.log'),
+    'the flag must be set before the log line, so the log never claims an arming that did not happen')
 })
 
 test('main.ts: the updater state subscription disarms on restart failure and restores the window', () => {

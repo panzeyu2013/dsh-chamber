@@ -189,6 +189,7 @@ import {
   computeSupported,
   readSettingsFile,
   shouldHideToTray,
+  shouldUpdaterQuitTakeOver,
   validatePatch,
   writeSettingsFile,
 } from './chamber-settings.ts';
@@ -731,7 +732,10 @@ let updateController: { state(): { phase: string; installBlockedReason: string |
 // quitAndInstall 在 macOS 上「先关闭全部窗口、再退出」（Electron 43.4.0 typings
 // AutoUpdater#before-quit-for-update 明文：before-quit 不会在窗口关闭前发出；本机
 // 对 43.4.0/darwin 的探针亦证实 autoUpdater 的 before-quit-for-update 与窗口
-// close 都发生在 quitAndInstall() 调用内部、远早于 before-quit），而 main.ts 的
+// close 都发生在 quitAndInstall() 调用内部、远早于 before-quit——「before-quit 晚于
+// 关窗」是 typings 的明文，而关窗当下被 hide 吞掉时退出序列根本走不到它，所以修复前
+// 那个「before-quit 从未到达」的观测不能当作原生腿的行为证据，见 armNativeUpdaterQuit），
+// 而 main.ts 的
 // 关窗到托盘（design 14 D1，默认 hide-to-tray）只在 quitRequested（由 before-quit
 // 置位）后才放行关窗——更新退出腿的关窗因此被 hide 吞掉：窗口消失、进程（连同本地
 // dsh 与隧道）永久留存、更新永不安装（用户实测症状）。
@@ -768,9 +772,13 @@ function disarmUpdaterQuit(reason: string): void {
  *  在 quitAndInstall 内部、关窗之前发出——43.4.0/darwin 实测）。两件事：
  *  1) 武装关窗豁免：这一次关窗属于安装退出腿，绝不能被 hide 吞掉（也覆盖
  *     「首次武装已被停滞 watchdog 撤回、原生退出迟到」的窗口）；
- *  2) 兜底自退：macOS 原生腿只关窗、不保证走到 app.quit()（实测关窗后
- *     before-quit 从未到达），进程会以「无窗口仍在运行」滞留。这里在宽限期后
- *     仍未退出就由主进程 app.quit() 走正常 before-quit/will-quit 清理路径。
+ *  2) 兜底自退：macOS 原生腿只关窗、不保证走到 app.quit()（修复前实测「关窗后
+ *     before-quit 从未到达」——注意该观测是在**旧**行为下取的：关窗当时被 hide
+ *     吞掉，窗口从未真正关闭，退出序列自然走不到 before-quit；修复后是否仍不到达
+ *     需要在签名包上重测一次，见 design 11 §9 的实机门禁），进程会以「无窗口仍在
+ *     运行」滞留。这里在宽限期后仍未退出就由主进程 app.quit() 走正常
+ *     before-quit/will-quit 清理路径。兜底本身在两种情形下都安全：before-quit 会到
+ *     时 `quitRequested` 已置位、兜底直接 stand down（见 shouldUpdaterQuitTakeOver）。
  *     此刻退出是安全的：该事件只在 Squirrel 已完成 staging 后发出
  *     （MacUpdater 仅在 squirrelDownloadedUpdate / 原生 update-downloaded 之后
  *     才调原生 quitAndInstall），退出即安装。 */
@@ -779,12 +787,12 @@ function armNativeUpdaterQuit(): void {
   if (updaterQuitFallback !== null) return;
   updaterQuitFallback = setTimeout(() => {
     updaterQuitFallback = null;
-    // 真退出已在途（before-quit 已置位）或失败路径已撤回武装：什么都不做。
-    if (quitRequested || !updaterQuitArmed) return;
-    // 只在「窗口确已被更新退出腿关掉」时接管退出：原生腿没走到关窗（或用户又从
-    // Dock 拉回了窗口）就绝不能在用户眼皮底下把应用拽下去——那种情况交给 60s
-    // 停滞 watchdog 如实呈现与恢复，而不是制造一次无预警退出。
-    if (mainWindow !== null && !mainWindow.isDestroyed()) return;
+    // 三个守卫（真退出已在途 / 武装已撤回 / 窗口仍在）是纯判定
+    // shouldUpdaterQuitTakeOver：只在「窗口确已被更新退出腿关掉」时接管退出——原生腿
+    // 没走到关窗（或用户又从 Dock 拉回了窗口）就绝不能在用户眼皮底下把应用拽下去，那种
+    // 情况交给 60s 停滞 watchdog 如实呈现与恢复，而不是制造一次无预警退出。
+    const windowAlive = mainWindow !== null && !mainWindow.isDestroyed();
+    if (!shouldUpdaterQuitTakeOver(quitRequested, updaterQuitArmed, windowAlive)) return;
     console.warn('[dsh-chamber] 原生更新退出腿未完成退出：进程仍在，改由主进程 app.quit()（已 staged 的更新随退出安装）');
     app.quit();
   }, UPDATER_QUIT_FALLBACK_MS);
@@ -4105,6 +4113,11 @@ if (!gotTheLock) {
       // updater.ts 的 'error' 分支）或相位离开 downloaded。两者都证明退出腿没有
       // 发生 —— 撤回武装（恢复正常关窗语义），并在窗口已被更新退出腿关掉时拉回
       // 主窗口，让设置页如实呈现失败文案与就地重试。
+      // 注意这一段 push 的落点（2026-09-13 review C7b）：disarmUpdaterQuit 可能**刚
+      // 重建**了主窗口，此时新 renderer 还没装上监听——webContents.send 不报错
+      // （attemptCommittedRegistryPush 记 sent=true），但这一帧收不到；真正的兜底是
+      // settings 面挂载时的 UPDATE_STATE pull（下面 ipcMain.handle 那一路），
+      // 所以「唯一诚实呈现面」是窗口本身，不是这一次推送。
       if (updaterQuitArmed
         && (updateState.restartFailureText !== undefined || updateState.phase !== 'downloaded')) {
         disarmUpdaterQuit(updateState.restartFailureText !== undefined ? 'restart failed' : `phase=${updateState.phase}`);

@@ -371,6 +371,39 @@ export function shouldHideToTray(
 }
 
 /**
+ * Whether the host must take the update quit over once the native leg's grace
+ * expired (2026-12 fix, `armNativeUpdaterQuit`).
+ *
+ * macOS's native `quitAndInstall()` closes every window and then, on the
+ * observed build, stops without reaching `app.quit()` — the process would sit
+ * there windowless with the update staged. The host therefore arms a bounded
+ * fallback when the native `before-quit-for-update` arrives; this predicate is
+ * its decision, kept pure so the three guards are testable instead of asserted
+ * as source text:
+ *
+ *  - a real quit already in flight owns the exit (`before-quit` ran): doing
+ *    anything here would race the normal teardown;
+ *  - an arming that was released (restart failed / stalled / the leg never
+ *    happened) must never be followed by a self-quit;
+ *  - and the window must be GONE. That is what proves the update leg really
+ *    closed it: a live window means either the native leg never got there or
+ *    the user pulled the app back from the Dock, and yanking a visible app out
+ *    from under the user is never acceptable — the stall watchdog owns that
+ *    case and reports it honestly.
+ * @param quitRequested - `before-quit` already ran (a real exit is in flight).
+ * @param updateRestartArmed - the update leg is still armed (not disarmed by a failure push).
+ * @param windowAlive - the main window exists and is not destroyed.
+ * @returns true when the fallback should call `app.quit()`.
+ */
+export function shouldUpdaterQuitTakeOver(
+  quitRequested: boolean,
+  updateRestartArmed: boolean,
+  windowAlive: boolean,
+): boolean {
+  return !quitRequested && updateRestartArmed && !windowAlive;
+}
+
+/**
  * Quit-risk projection (design 14 D2, 2026-08 修订): confirm before quitting
  * only while the LOCAL dsh instance is running (remote tunnels never prompt —
  * user decision) — EXCEPT when the user turned the confirmation off, or a

@@ -17,6 +17,7 @@ import {
   normalizeSettings,
   readSettingsFile,
   shouldHideToTray,
+  shouldUpdaterQuitTakeOver,
   validatePatch,
   writeSettingsFile,
 } from './chamber-settings.ts';
@@ -313,6 +314,20 @@ test('shouldHideToTray: an armed update restart never hides (macOS quitAndInstal
   assert.equal(shouldHideToTray('hide-to-tray', true, true, true), false);
   assert.equal(shouldHideToTray('hide-to-tray', true, false, false), true, 'not armed → normal hide-to-tray behavior');
   assert.equal(shouldHideToTray('quit', true, false, true), false);
+});
+
+test('shouldUpdaterQuitTakeOver: only a released-free, armed leg with the window already gone', () => {
+  // The `armNativeUpdaterQuit` fallback decision (2026-09-13 review B3): the
+  // native macOS leg closes the window and then stops without quitting, so the
+  // host takes over — but ONLY under all three conditions. Each row is a real
+  // failure mode: a quit already running must not be raced, a released arming
+  // (restart failed / stalled) must not be followed by a self-quit, and a live
+  // window means the user is looking at the app.
+  assert.equal(shouldUpdaterQuitTakeOver(false, true, false), true, 'armed + window gone + no quit → take over');
+  assert.equal(shouldUpdaterQuitTakeOver(true, true, false), false, 'a real quit is in flight → never race the teardown');
+  assert.equal(shouldUpdaterQuitTakeOver(false, false, false), false, 'the arming was released → never self-quit');
+  assert.equal(shouldUpdaterQuitTakeOver(false, true, true), false, 'the window is still there → the user owns the exit');
+  assert.equal(shouldUpdaterQuitTakeOver(true, false, true), false);
 });
 
 test('computeQuitRisk: only a running local instance triggers confirm (2026-08: remote tunnels never prompt)', () => {
