@@ -270,8 +270,12 @@ jobs:
   # must never publish an untested commit. Mirrors ci.yml's test job core.
   validation:
     runs-on: ubuntu-latest
+    # `actions: read` is for the CI proof below: it lists workflow runs/jobs
+    # through the API with the runner's own read-only token — never a release
+    # credential, so the dry-run scrub contract is untouched.
     permissions:
       contents: read
+      actions: read
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -279,6 +283,17 @@ jobs:
           # harness.commit); the gitlink pins an exact commit, so the submodule is
           # materialized at that commit regardless of depth.
           submodules: true
+      # Release CI proof (2026-09 CI-trigger revision): tag pushes no longer
+      # re-run ci.yml — the release must PROVE its commit already passed the full
+      # chain on main, including the windows leg release.yml has no equivalent of.
+      # It needs only this checked-out script (no node_modules), so it stays
+      # before the install: a commit main never validated fails immediately, one
+      # still in flight is waited for (bounded).
+      - name: Release commit passed CI on main (linux + windows legs)
+        env:
+          RELEASE_SHA: ${{ github.sha }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/dev/verify-release-ci-proof.mjs --sha "$RELEASE_SHA"
       - name: Verify workflow action pins
         run: node scripts/dev/verify-workflow-action-pins.mjs
       - uses: pnpm/action-setup@fe02b34f77f8bc703788d5817da081398fad5dd2 # v4.1.0

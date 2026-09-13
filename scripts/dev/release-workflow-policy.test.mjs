@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { compareReleaseVersions, releaseChannel } from './release-semver.mjs'
+import { judgeCandidates, judgeRun, pickCandidateRuns } from './verify-release-ci-proof.mjs'
 
 
 /** Slice one job's text out of a workflow file (top-level job keys are 2-space indented). */
@@ -161,18 +162,36 @@ for (const gate of EXEMPT.keys()) {
 }
 
 // ---------------------------------------------------------------- T1/T2/T3
-// The tag path must not run the push chain twice, but must not lose the leg
-// release.yml lacks either; the classifier must be frozen so widening the prose
-// allowlist (which SKIPS gates) cannot happen by accident.
-assert.match(
+// A release PROVES its commit passed CI instead of re-running the chain on the
+// tag (2026-09 CI-trigger revision). The old shape had the linux chain step aside
+// for tags while the windows leg re-ran the identical SHA — and tagging a commit
+// that never went through main skipped the linux chain entirely, so "no release
+// from an untested commit" rested on procedure rather than an assertion. Now
+// ci.yml has no tag path at all and release validation carries the proof. The
+// classifier must stay frozen so widening the prose allowlist (which SKIPS gates)
+// cannot happen by accident.
+assert.doesNotMatch(
   ciWorkflow,
-  /\n  test:\n(?:(?:[ \t]+#[^\n]*)?\n)*[ \t]+if:\s*github\.ref_type\s*!=\s*'tag'\n/,
-  'the linux push chain must step aside for tag pushes (release.yml validates those)',
+  /github\.ref_type/,
+  'ci.yml must not branch on tags anymore: a release proves its commit ran this chain on main instead of re-running it',
+)
+assert.doesNotMatch(
+  ciWorkflow,
+  /^\s+tags:\s*\[[^\]]*'v\*'[^\]]*\]\s*$/m,
+  'ci.yml must not trigger on tag pushes: release.yml owns the tag path and rejects a commit main never validated',
 )
 const ciWindowsJob = jobBlock(ciWorkflow, 'test-windows')
-assert.ok(
-  !/^\s+if:\s*github\.ref_type\s*!=\s*'tag'\s*$/m.test(ciWindowsJob),
-  'the windows leg must KEEP running on tag pushes: release.yml has no win32-semantics leg',
+// The proof names both legs explicitly, so release validation cannot pass on a
+// commit whose linux chain or windows leg never ran.
+assert.match(
+  validation,
+  /- name: Release commit passed CI on main[\s\S]{0,400}?run: node scripts\/dev\/verify-release-ci-proof\.mjs --sha/,
+  'release validation must prove the released commit passed ci.yml on main (linux + windows legs)',
+)
+assert.match(
+  validation,
+  /permissions:\n\s+contents: read\n\s+actions: read\n/,
+  'the proof lists workflow runs/jobs, so the validation job needs actions: read',
 )
 for (const manifest of ['dsh-runtime', 'control-plane', 'desktop']) {
   assert.ok(
@@ -264,5 +283,51 @@ assert.equal(
   4,
   'every build-job checkout must pin ref: ${{ github.sha }} to the validated workflow SHA',
 )
+
+// --------------------------------------------------------- proof decision logic
+// The proof gate's decision surface is pure, so every arm is covered here (the
+// network poll itself only runs in release.yml): green run with both legs, a run
+// still in flight, a failed run, a failed leg, a missing leg, and "a flaky
+// failure re-run green still proves the commit".
+const GREEN_RUN = {
+  id: 1,
+  status: 'completed',
+  conclusion: 'success',
+  html_url: 'https://example.test/run/1',
+  head_sha: 'a'.repeat(40),
+  event: 'push',
+  head_branch: 'main',
+  created_at: '2026-09-13T07:00:00Z',
+}
+const job = (name, conclusion) => ({ name, conclusion })
+assert.equal(judgeRun(GREEN_RUN, [job('test', 'success'), job('test-windows', 'success')]).state, 'ok')
+assert.equal(judgeRun(GREEN_RUN, [job('test', 'success'), job('test-windows', 'skipped')]).state, 'failed',
+  'a skipped windows leg does not prove the win32 contracts')
+assert.equal(judgeRun(GREEN_RUN, [job('test', 'success')]).state, 'failed',
+  'a run without the windows job is an incomplete chain, not a proof')
+assert.equal(judgeRun({ ...GREEN_RUN, status: 'in_progress', conclusion: null }, []).state, 'pending',
+  'a run still in flight keeps the release waiting instead of failing')
+assert.equal(judgeRun({ ...GREEN_RUN, conclusion: 'failure' }, []).state, 'failed')
+assert.equal(judgeRun(null, []).state, 'failed', 'a missing run entry must fail closed')
+assert.deepEqual(
+  pickCandidateRuns([
+    GREEN_RUN,
+    { ...GREEN_RUN, id: 2, event: 'pull_request' },
+    { ...GREEN_RUN, id: 3, head_branch: 'feature' },
+    { ...GREEN_RUN, id: 4, head_sha: 'b'.repeat(40) },
+  ], { sha: GREEN_RUN.head_sha, branch: 'main' }).map(run => run.id),
+  [1],
+  'only a push run on the base branch proves a release',
+)
+assert.equal(
+  judgeCandidates([GREEN_RUN, { ...GREEN_RUN, id: 5, created_at: '2026-09-13T06:00:00Z' }], new Map([
+    [5, [job('test', 'success'), job('test-windows', 'failure')]],
+    [1, [job('test', 'success'), job('test-windows', 'success')]],
+  ])).state,
+  'ok',
+  'a flaky failure that was re-run green still proves the commit',
+)
+assert.equal(judgeCandidates([{ ...GREEN_RUN, status: 'queued', conclusion: null }], new Map()).state, 'pending')
+assert.equal(judgeCandidates([], new Map()).state, 'pending', 'no run yet is "not proven yet", never a failure')
 
 console.log('release workflow policy: commit-bound, published-immutable, beta-isolated, signed, GitHub-only gateway')

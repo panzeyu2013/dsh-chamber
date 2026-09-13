@@ -122,6 +122,11 @@ CI:    §7b dry_run 先行（新路径必须验证过一次）→ §7c 正式 ta
       `git commit --amend --no-edit` + `git push --force-with-lease`）。
 - [ ] `git tag -a v<版本> -m "..."`（同 tag 重推前先删旧：`git tag -d v<版本> && git push origin :v<版本>`）。
 - [ ] **push 前最后再跑一次 `release:preflight`**（含 git 干净检查）。
+- [ ] **发布提交的 CI 证明**：`release.yml` 的 `validation` 会硬断言该提交在 `main` 上
+      有成功的完整 `ci.yml` 运行（linux `test` + `test-windows` 两腿都绿；运行中有界
+      等待，从未经过 `main` 或失败即阻断）。本地可先自查：
+      `GITHUB_TOKEN=<token> node scripts/dev/verify-release-ci-proof.mjs --sha <commit>`。
+      打 tag 前确认 main 的 CI 已收敛，避免 dry-run 在等待上耗时间。
 - [ ] **dry-run 先行**：`git push origin <分支>`（提交在分支上即可），
       然后 GitHub Actions 手动运行 `release.yml`（`workflow_dispatch`）：
       `version=<版本>`（不带 `v`，且仅 `X.Y.Z` / `X.Y.Z-beta.N`）、`dry_run=true` ——

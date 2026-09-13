@@ -1,14 +1,16 @@
 name: CI
 
 on:
+  # Branch pushes and PRs only (2026-09 CI-trigger revision): tag pushes used to
+  # run this chain as well. The linux leg stepped aside for tags (release.yml's
+  # validation is its mechanical superset) while the windows leg re-ran the
+  # identical SHA, and tagging a commit that never went through `main` skipped the
+  # linux chain entirely. A release now PROVES its commit passed here instead:
+  # release.yml's validation runs scripts/dev/verify-release-ci-proof.mjs, which
+  # requires a completed, successful ci.yml push run on main whose linux AND
+  # windows legs both passed.
   push:
     branches: [main]
-    # Tag pushes (v*) run the SAME validation chain — a release cannot be
-    # published from an untested commit. release.yml also carries its own
-    # release-local validation gate because tag-triggered workflows run in
-    # parallel; keeping both paths aligned prevents either workflow from being
-    # treated as proof for a different commit.
-    tags: ['v*']
   pull_request:
 
 # Cancel superseded runs for pull requests (iterative pushes), but QUEUE branch
@@ -31,14 +33,11 @@ jobs:
   # DSH_CHAMBER_DSH_VERSION and failed every run with ERR_PNPM_OUTDATED_LOCKFILE
   # — if packaging jobs ever return to CI, their version env must be synced too.
   test:
-    # Tag pushes run RELEASE validation (release.yml), which is a mechanical
-    # superset of this chain — see the alignment contract in
-    # scripts/dev/release-workflow-policy.test.mjs. Running it twice on the same
-    # commit buys nothing, so this job steps aside for tags. The Windows leg
-    # below deliberately keeps running on tags: release.yml has no
-    # win32-semantics leg, so it is the only place those contracts are checked
-    # for a release commit.
-    if: github.ref_type != 'tag'
+    # Branch pushes and PRs only — no tag trigger exists (see `on:` above).
+    # release.yml's validation mirrors this chain (the alignment contract is
+    # asserted in scripts/dev/release-workflow-policy.test.mjs) and proves its
+    # commit ran it here, on main, with this job and the windows leg green
+    # (verify-release-ci-proof.mjs names both jobs explicitly).
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -288,10 +287,11 @@ jobs:
           fetch-depth: 0
       - name: Verify workflow action pins
         run: node scripts/dev/verify-workflow-action-pins.mjs
-      # Same classifier as the linux leg. This job KEEPS running for tag pushes
-      # (release.yml has no win32-semantics leg), so its condition ORs the tag
-      # case in: a prose-only branch push skips the windows runner entirely, a
-      # tag push always runs it.
+      # Same classifier as the linux leg: a prose-only branch push skips the
+      # windows runner entirely. Releases never come here (there is no tag
+      # trigger) — they prove THIS job's success on main through
+      # verify-release-ci-proof.mjs, which is why the proof names `test-windows`
+      # explicitly: release.yml has no win32-semantics leg of its own.
       - name: Classify the change (prose-only pushes skip the win32 contracts)
         id: classify
         env:
@@ -310,26 +310,26 @@ jobs:
       # ordering rationale as the linux leg; ensure-harness-vendor.mjs already
       # creates junctions on win32).
       - name: Bootstrap vendor tree (verify pin + ensure links)
-        if: steps.classify.outputs.code == 'true' || github.ref_type == 'tag'
+        if: steps.classify.outputs.code == 'true'
         run: node scripts/dev/ensure-harness-vendor.mjs
       # Upstream-touchpoint registry gates (docs/checklists/upstream-touchpoints.md):
       # C1 pure fork files must stay byte-identical, C3 every fork/upstream file
       # has a ruling, C5 anchors must not go stale, C6 EXCLUDED dirs must exist,
       # C9 vendor patch anchors must match the pin (file-only, pre-install).
       - name: Upstream touchpoint registry (C1/C3/C5/C6/C9)
-        if: steps.classify.outputs.code == 'true' || github.ref_type == 'tag'
+        if: steps.classify.outputs.code == 'true'
         run: node scripts/dev/verify-upstream-touchpoints.mjs --no-artifact-rebuild
       - run: pnpm install --frozen-lockfile
-        if: steps.classify.outputs.code == 'true' || github.ref_type == 'tag'
+        if: steps.classify.outputs.code == 'true'
       # C8 deterministic artifact gate (see the linux leg): needs node_modules.
       - name: Committed artifacts match sources (C8 rebuild gate)
-        if: steps.classify.outputs.code == 'true' || github.ref_type == 'tag'
+        if: steps.classify.outputs.code == 'true'
         run: node scripts/dev/verify-upstream-touchpoints.mjs
       - name: Assert lockfile not rewritten
-        if: steps.classify.outputs.code == 'true' || github.ref_type == 'tag'
+        if: steps.classify.outputs.code == 'true'
         run: git diff --exit-code -- pnpm-lock.yaml
       - name: Type check (tsc + chamber host packages + gateway + runtime)
-        if: steps.classify.outputs.code == 'true' || github.ref_type == 'tag'
+        if: steps.classify.outputs.code == 'true'
         run: |
           pnpm run typecheck
           pnpm run typecheck:host-graph
@@ -341,7 +341,7 @@ jobs:
       # Upstream design-token conformance (S1–S7) — see the linux leg. File-only
       # and platform-neutral, so it runs here too.
       - name: Upstream design-token conformance (S1–S7)
-        if: steps.classify.outputs.code == 'true' || github.ref_type == 'tag'
+        if: steps.classify.outputs.code == 'true'
         run: pnpm run verify:styles
       # Windows leg consumes each package's platform manifest — `test:win32`
       # scripts in package.json are the single source of truth (structural
@@ -357,11 +357,11 @@ jobs:
       # all). This leg keeps the three named steps so a failure names the
       # owning package.
       - name: dsh-runtime test:win32 manifest
-        if: steps.classify.outputs.code == 'true' || github.ref_type == 'tag'
+        if: steps.classify.outputs.code == 'true'
         run: pnpm --filter @dsh-chamber/dsh-runtime run test:win32
       - name: control-plane test:win32 manifest (real CIM/netstat/taskkill integration)
-        if: steps.classify.outputs.code == 'true' || github.ref_type == 'tag'
+        if: steps.classify.outputs.code == 'true'
         run: pnpm --filter @dsh-chamber/control-plane run test:win32
       - name: desktop test:win32 manifest (real icacls)
-        if: steps.classify.outputs.code == 'true' || github.ref_type == 'tag'
+        if: steps.classify.outputs.code == 'true'
         run: pnpm --filter @dsh-chamber/desktop run test:win32
